@@ -1,0 +1,65 @@
+/*
+ * Copyright 2019 - 2022, iodé Technologies
+ *
+ * This file is part of the iode-snort project.
+ *
+ * iode-snort is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU Affero General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option) any
+ * later version.
+ *
+ * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+ * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+ * details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+cc_binary {
+    name: "iode-snort",
+    local_include_dirs: ["src"],
+    init_rc: ["iode-snort.rc"],
+    srcs: [
+        "src/Address.cpp",
+        "src/App.cpp",
+        "src/AppManager.cpp",
+        "src/AppStats.cpp",
+        "src/CmdLine.cpp",
+        "src/Control.cpp",
+        "src/CustomList.cpp",
+        "src/DefaultAppsManager.cpp",
+        "src/DnsListener.cpp",
+        "src/DnsRequest.cpp",
+        "src/Domain.cpp",
+        "src/DomainList.cpp",
+        "src/DomainManager.cpp",
+        "src/DomainStats.cpp",
+        "src/Host.cpp",
+        "src/HostManager.cpp",
+        "src/PackageListener.cpp",
+        "src/Packet.cpp",
+        "src/PacketListener.cpp",
+        "src/PacketManager.cpp",
+        "src/Saver.cpp",
+        "src/Settings.cpp",
+        "src/SocketIO.cpp",
+        "src/Stats.cpp",
+        "src/Streamable.cpp",
+        "src/Timer.cpp",
+        "src/iode-snort.cpp",
+    ],
+    cppflags: [
+        "-std=c++2a",
+	"-fexceptions",
+        "-Wall",
+        "-Werror",
+        "-g",
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+	"-Wno-unused-private-field"
+    ],
+    static_libs: ["libmnl", "libnetfilter_queue", "libnfnetlink"],
+    shared_libs: ["libcutils", "liblog", "libbase"],
+}
