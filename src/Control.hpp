@@ -155,6 +155,8 @@ private:
 
     void cmdDefaultAppsRemove(CmdParams &&params) const;
 
+    void cmdTopActivity(CmdParams &&params) const;
+
     void cmdUseCustomList(CmdParams &&params, bool useCustom) const;
 
     void cmdAddCustomDomain(CmdParams &&params, Stats::Color color) const;

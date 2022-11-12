@@ -57,7 +57,8 @@ void PacketManager::initIfaces() {
                     _ifaceBits[i->if_index] = WIFI;
                 }
                 break;
-            case 519:
+	    case 512:
+	    case 519:
                 _ifaceBits[i->if_index] = DATA;
                 break;
             case 65534:

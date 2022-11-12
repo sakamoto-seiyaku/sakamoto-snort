@@ -89,6 +89,7 @@ Control::Control() {
     _cmds.emplace("DEFAULTAPPS.LIST", make(&Control::cmdDefaultAppsList));
     _cmds.emplace("DEFAULTAPPS.INSTALL", make(&Control::cmdDefaultAppsInstall));
     _cmds.emplace("DEFAULTAPPS.REMOVE", make(&Control::cmdDefaultAppsRemove));
+    _cmds.emplace("TOPACTIVITY", make(&Control::cmdTopActivity));
     _cmds.emplace("CUSTOMLIST.ON", make(&Control::cmdUseCustomList, true));
     _cmds.emplace("CUSTOMLIST.OFF", make(&Control::cmdUseCustomList, false));
     _cmds.emplace("BLACKLIST.ADD", make(&Control::cmdAddCustomDomain, Stats::BLACK));
@@ -582,6 +583,20 @@ void Control::cmdDefaultAppsRemove(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     ack(params.out);
     defAppManager.remove(arg.string);
+}
+
+std::string topActivity;
+
+void Control::cmdTopActivity(CmdParams &&params) const {
+    const auto arg = readCmdArg(params.args);
+    if (arg.type == CmdArg::NONE) {
+        params.out << topActivity;
+    } else {
+        ack(params.out);
+        if (arg.type == CmdArg::STR) {
+            topActivity = arg.string;
+        }
+    }
 }
 
 void Control::cmdUseCustomList(CmdParams &&params, bool useCustom) const {
