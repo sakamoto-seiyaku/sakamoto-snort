@@ -17,7 +17,7 @@
 # along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
 #
 
-service iode-snort /system/bin/iode-snort
+service iode-snort /system_ext/bin/iode-snort
     class main
     user root
     socket iode-snort-control stream 0666 root root

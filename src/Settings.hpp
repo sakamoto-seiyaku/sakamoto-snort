@@ -33,7 +33,7 @@ private:
     static constexpr const char *_snortDir3 = _snortDir2;
     static inline const std::string _snortDir = "/data/snort/";
     static inline const std::string _saveDir = _snortDir + "save/";
-    static inline const std::string _defaultDirEtc = "/system/etc/iode-snort/";
+    static inline const std::string _defaultDirEtc = "/system_ext/etc/iode-snort/";
     static inline const std::string _telnetFile = _snortDir + "telnet";
 
 public:

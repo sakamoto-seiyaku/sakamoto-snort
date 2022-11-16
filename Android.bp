@@ -19,6 +19,7 @@
 
 cc_binary {
     name: "iode-snort",
+    system_ext_specific: true,
     local_include_dirs: ["src"],
     init_rc: ["iode-snort.rc"],
     srcs: [
