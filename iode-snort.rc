@@ -25,6 +25,7 @@ service iode-snort /system_ext/bin/iode-snort
     group root package_info
     disabled
 
-on post-fs-data
+on zygote-start
    mkdir /data/snort 0700 root root
+   setprop iode-snort.first_start true
    enable iode-snort
