@@ -586,14 +586,15 @@ void Control::cmdDefaultAppsRemove(CmdParams &&params) const {
 }
 
 std::string topActivity;
+std::mutex topmut;
 
 void Control::cmdTopActivity(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
-        params.out << topActivity;
+        params.out << "\"" << topActivity << "\"";
     } else {
-        ack(params.out);
         if (arg.type == CmdArg::STR) {
+            const std::lock_guard lock(topmut);
             topActivity = arg.string;
         }
     }
