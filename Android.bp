@@ -61,6 +61,6 @@ cc_binary {
         "-Wno-unused-variable",
 	"-Wno-unused-private-field"
     ],
-    static_libs: ["libmnl", "libnetfilter_queue", "libnfnetlink"],
+    static_libs: ["libmnl", "libnetfilter_queue", "libnfnetlink.system_ext"],
     shared_libs: ["libcutils", "liblog", "libbase"],
 }
