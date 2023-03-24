@@ -28,10 +28,19 @@ DomainList::~DomainList() {}
 uint8_t DomainList::blockMask(const std::string &domain) {
     const std::shared_lock_guard lock(_mutex);
     auto it = _domains.find(domain);
-    if (it == _domains.end()) {
-        return 0;
+    if (it != _domains.end()) {
+        return it->second;
     }
-    return it->second;
+    auto first = domain.find_first_of('.');
+    auto last = domain.find_last_of('.');
+    while (first != last) {
+	auto it = _domains.find(domain.substr(first + 1));
+	if (it != _domains.end()) {
+            return it->second;
+	}
+	first = domain.find_first_of('.', first + 1);
+    }
+    return 0;
 }
 
 bool DomainList::set(const std::string filename) { return add(filename, true); }
