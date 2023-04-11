@@ -19,6 +19,7 @@
 
 #include <dirent.h>
 
+#include <ActivityManager.hpp>
 #include <Settings.hpp>
 #include <AppManager.hpp>
 
@@ -76,6 +77,9 @@ void AppManager::updateStats(const Domain::Ptr &domain, const App::Ptr &app, con
     const auto bs = blocked ? Stats::BLOCK : Stats::AUTH;
     _stats.update(ts, cs, bs, val);
     app->updateStats(domain ? domain : domManager.anonymousDom(), ts, cs, bs, val);
+    if (ts == Stats::DNS) {
+        activityManager.update(app, false);
+    }
 }
 
 void AppManager::reset(const Stats::View view) {

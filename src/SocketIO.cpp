@@ -79,4 +79,6 @@ void SocketIO::format(std::stringstream &in, std::stringstream &out) {
         }
         c0 = c;
     }
+    in.clear();
+    in.seekg(0);
 }

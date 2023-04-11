@@ -20,6 +20,7 @@
 #include <sstream>
 #include <vector>
 
+#include <Activity.hpp>
 #include <DnsRequest.hpp>
 #include <Packet.hpp>
 #include <Streamable.hpp>
@@ -103,6 +104,7 @@ template <class Item> void Streamable<Item>::restore() {
     });
 }
 
+template class Streamable<Activity>;
 template class Streamable<DnsRequest>;
 template class Streamable<Packet<IPv4>>;
 template class Streamable<Packet<IPv6>>;

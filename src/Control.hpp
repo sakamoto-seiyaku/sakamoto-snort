@@ -125,6 +125,10 @@ private:
 
     void cmdStopPktStream(CmdParams &&params) const;
 
+    void cmdStartActivityStream(CmdParams &&params) const;
+
+    void cmdStopActivityStream(CmdParams &&params) const;
+    
     template <class... TypeStat>
     void cmdStatsTotal(CmdParams &&params, const Stats::View view, const TypeStat... ts) const;
 

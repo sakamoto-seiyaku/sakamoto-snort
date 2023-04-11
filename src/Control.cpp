@@ -24,6 +24,7 @@
 
 #include <iode-snort.hpp>
 #include <PackageListener.hpp>
+#include <ActivityManager.hpp>
 #include <DnsListener.hpp>
 #include <HostManager.hpp>
 #include <PacketManager.hpp>
@@ -84,6 +85,8 @@ Control::Control() {
     _cmds.emplace("DNSSTREAM.STOP", make(&Control::cmdStopDnsStream));
     _cmds.emplace("PKTSTREAM.START", make(&Control::cmdStartPktStream));
     _cmds.emplace("PKTSTREAM.STOP", make(&Control::cmdStopPktStream));
+    _cmds.emplace("ACTIVITYSTREAM.START", make(&Control::cmdStartActivityStream));
+    _cmds.emplace("ACTIVITYSTREAM.STOP", make(&Control::cmdStopActivityStream));
     _cmds.emplace("HOSTS", make(&Control::cmdHosts));
     _cmds.emplace("HOSTS.NAME", make(&Control::cmdHostsByName));
     _cmds.emplace("DEFAULTAPPS.LIST", make(&Control::cmdDefaultAppsList));
@@ -226,11 +229,13 @@ void Control::clientLoop(const int sockClient) const {
         bool pretty = false;
         cmdLine >> cmd;
         cmdLine.seekg(cmd.size());
-        if (cmd.back() == '!') {
+        if (cmd.size() > 0 && cmd.back() == '!') {
             pretty = true;
             cmd.pop_back();
         }
-        if (auto it = _cmds.find(cmd); it != _cmds.end()) {
+        if (cmd.size() == 0) {
+            ack(out);
+        } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
             const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
             if (it == resetall) {
                 const std::lock_guard lock(mutexListeners);
@@ -239,8 +244,6 @@ void Control::clientLoop(const int sockClient) const {
                 const std::shared_lock_guard lock(mutexListeners);
                 applyCmd();
             }
-        } else if (cmd.size() == 0) {
-            ack(out);
         } else {
             LOG(ERROR) << __FUNCTION__ << " - invalid command: '" << cmd << "'";
             out << "\"KO\"";
@@ -276,7 +279,7 @@ auto Control::readCmdArg(std::stringstream &args) { return readCmdArgs(args)[0];
 
 const App::Ptr Control::arg2app(const CmdArg &arg) {
     if (arg.type == CmdArg::INT) {
-        return appManager.find(arg.number);
+        return appManager.find(arg.number % 100000);
     } else if (arg.type == CmdArg::STR) {
         return appManager.find(arg.string);
     }
@@ -410,6 +413,7 @@ void Control::cmdBlockMask(CmdParams &&params) const {
         if (args.size() == 2 && args[1].type == CmdArg::INT) {
             if (const auto app = arg2app(args[0])) {
                 app->blockMask(args[1].number);
+                activityManager.update(app, true);
             }
         }
     }
@@ -491,6 +495,15 @@ void Control::cmdStartPktStream(CmdParams &&params) const {
 }
 
 void Control::cmdStopPktStream(CmdParams &&params) const { pktManager.stopStream(params.sockio); }
+
+void Control::cmdStartActivityStream(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    activityManager.startStream(params.sockio, params.pretty, 0, 0);
+}
+
+void Control::cmdStopActivityStream(CmdParams &&params) const {
+    activityManager.stopStream(params.sockio);
+}
 
 template <class... TypeStat>
 void Control::cmdStatsTotal(CmdParams &&params, const Stats::View view,
@@ -585,17 +598,11 @@ void Control::cmdDefaultAppsRemove(CmdParams &&params) const {
     defAppManager.remove(arg.string);
 }
 
-std::string topActivity;
-std::mutex topmut;
-
 void Control::cmdTopActivity(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::NONE) {
-        params.out << "\"" << topActivity << "\"";
-    } else {
-        if (arg.type == CmdArg::STR) {
-            const std::lock_guard lock(topmut);
-            topActivity = arg.string;
+    if (arg.type == CmdArg::INT) {
+        if (const auto app = arg2app(arg)) {
+            activityManager.make(app);
         }
     }
 }

@@ -27,6 +27,7 @@
 #include <DefaultAppsManager.hpp>
 #include <PacketListener.hpp>
 #include <PackageListener.hpp>
+#include <ActivityManager.hpp>
 #include <DnsListener.hpp>
 #include <Control.hpp>
 
@@ -36,6 +37,7 @@ DomainManager domManager;
 AppManager appManager;
 HostManager hostManager;
 PackageListener pkgListener;
+ActivityManager activityManager;
 DnsListener dnsListener;
 PacketManager pktManager;
 PacketListener<IPv4> pktListener4;

@@ -23,6 +23,8 @@ cc_binary {
     local_include_dirs: ["src"],
     init_rc: ["iode-snort.rc"],
     srcs: [
+        "src/Activity.cpp",
+        "src/ActivityManager.cpp",
         "src/Address.cpp",
         "src/App.cpp",
         "src/AppManager.cpp",

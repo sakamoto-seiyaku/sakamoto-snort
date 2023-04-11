@@ -79,6 +79,7 @@ public:
     static constexpr uint32_t pktStreamMaxHorizon = 3600 * 2;
     static constexpr std::time_t pktStreamDefaultHorizon = 600;
     static constexpr uint32_t pktStreamMinSize = 100;
+    static constexpr uint32_t activityNotificationIntervalMs = 30;
 
 private:
     Saver _saver{_saveFile};
