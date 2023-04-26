@@ -60,6 +60,9 @@ static void snort() {
     settings.start();
     {
         const std::lock_guard lock(mutexListeners);
+        Timer::set("defapps", "Default apps init time");
+        defAppManager.start();
+        Timer::get("defapps");
         std::thread threads[]{std::thread([&] {
                                   Timer::set("lists", "Domain lists init time");
                                   domManager.start();
@@ -74,11 +77,6 @@ static void snort() {
                                   appManager.restore();
                                   dnsListener.restore();
                                   Timer::get("restore");
-                              }),
-                              std::thread([&] {
-                                  Timer::set("defapps", "Default apps init time");
-                                  defAppManager.start();
-                                  Timer::get("defapps");
                               }),
                               std::thread([&] {
                                   Timer::set("dns", "DNS listener init time");
