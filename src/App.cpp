@@ -1,22 +1,9 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <sstream>
 #include <Settings.hpp>
 #include <App.hpp>
 
@@ -58,23 +45,22 @@ const std::pair<bool, Stats::Color> App::blocked(const Domain::Ptr &domain) {
     if (domain == nullptr || !settings.blockEnabled()) {
         return {false, Stats::GREY};
     }
+    const auto cs = domain->color();
     if (_useCustomList) {
         if (_customWhitelist.exists(domain)) {
-            return {false, Stats::WHITE};
+            return {false, cs};
         }
         if (_customBlacklist.exists(domain)) {
-            return {true, Stats::BLACK};
+            return {true, cs};
         }
         if (domManager.authorized(domain)) {
-            return {false, Stats::WHITE};
+            return {false, cs};
         }
         if (domManager.blocked(domain)) {
-            return {true, Stats::BLACK};
+            return {true, cs};
         }
     }
-    return {_blockMask & domain->blockMask(),
-            (_blockMask | settings.standardListBit) & domain->blockMask() ? Stats::BLACK
-                                                                          : Stats::GREY};
+    return {_blockMask & domain->blockMask(), cs};
 }
 
 void App::updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,
@@ -187,4 +173,26 @@ void App::printCustomLists(std::ostream &out) {
     out << "," << JSF("whitelist");
     _customWhitelist.print(out);
     out << "}";
+}
+
+void App::migrateV4V5(AppStats &globStats) {
+
+    auto migrate = [&](Stats::Color cs) {
+        for (auto it = domStats(cs).begin(); it != domStats(cs).end();) {
+            auto &[domain, stats] = *it;
+            auto newcs = domain->color();
+            if (cs != newcs) {
+                auto &newStats = domStats(newcs).try_emplace(domain).first->second;
+                newStats.migrateV4V5(stats);
+                _stats.migrateV4V5(stats, static_cast<Stats::Color>(cs), newcs);
+                globStats.migrateV4V5(stats, static_cast<Stats::Color>(cs), newcs);
+                it = domStats(cs).erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+
+    migrate(Stats::WHITE);
+    migrate(Stats::BLACK);
 }

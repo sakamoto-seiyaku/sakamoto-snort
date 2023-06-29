@@ -1,20 +1,6 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 #pragma once
@@ -40,6 +26,7 @@ public:
     std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
     static constexpr auto saveInterval = std::chrono::minutes(60);
     static constexpr uint8_t standardListBit = 1;
+    static constexpr uint8_t reinforcedListBit = 1 << 3;
     static constexpr uint8_t customListBit = 128;
 
     static constexpr const char *packagesList = "/data/system/packages.list";
@@ -70,7 +57,7 @@ public:
 
     static constexpr uint32_t controlCmdLen = 1000;
     static constexpr uint32_t controlBindTrials = 10;
-    static constexpr uint32_t controlClients = 100;
+    static constexpr uint32_t controlClients = 1000;
     static constexpr uint32_t controlPort = 60606;
 
     static constexpr uint32_t dnsStreamMaxHorizon = 3600 * 24;
@@ -79,11 +66,11 @@ public:
     static constexpr uint32_t pktStreamMaxHorizon = 3600 * 2;
     static constexpr std::time_t pktStreamDefaultHorizon = 600;
     static constexpr uint32_t pktStreamMinSize = 100;
-    static constexpr uint32_t activityNotificationIntervalMs = 30;
+    static constexpr uint32_t activityNotificationIntervalMs = 500;
 
 private:
     Saver _saver{_saveFile};
-    uint32_t _version = 4;
+    uint32_t _version = 7;
     uint32_t _savedVersion = 1;
     bool _firstStart = android::base::GetBoolProperty(_firstStartProp, true);
     bool _inetControl = std::ifstream(_telnetFile).is_open();

@@ -1,22 +1,8 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-
+ 
 #pragma once
 
 #include <Stats.hpp>
@@ -37,12 +23,16 @@ public:
 
     void migrateV1V2();
 
-private:
+    void migrateV4V5(const DomainStats &oldStats);
+
     uint64_t stat(const View view, const size_t ts, const size_t bs) const;
 
+private:
     bool hasDataType(const View view, const Type ts) const;
 
     void resetDay(const View view);
 
     void printType(std::ostream & out, const View view, const Type ts) const;
+
+    void printNotif(std::ostream & out) const;
 };

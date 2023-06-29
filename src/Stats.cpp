@@ -1,22 +1,8 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-
+ 
 #include <Saver.hpp>
 #include <Stats.hpp>
 
@@ -93,6 +79,12 @@ template <class T> void StatsTPL<T>::reset(const View view) {
 }
 
 template <class T> void StatsTPL<T>::reset() { std::memset(_stats, 0, sizeof(_stats)); }
+
+template <class T> void StatsTPL<T>::print(std::ostream &out) {
+    const std::shared_lock_guard lock(_mutex);
+    shift();
+    printNotif(out);
+}
 
 template <class T> void StatsTPL<T>::print(std::ostream &out, const View view) {
     const std::shared_lock_guard lock(_mutex);

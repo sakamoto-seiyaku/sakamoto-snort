@@ -1,22 +1,8 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-
+ 
 #pragma once
 
 #include <vector>
@@ -121,6 +107,8 @@ public:
 
     template <class... Args> void printAppStats(std::ostream &out, const Args... args);
 
+    template <class... Args> void printAppNotif(std::ostream &out);
+
     template <class... Args> void printDomainStats(std::ostream &out, const Args... args);
 
     template <class... TypeStats>
@@ -129,12 +117,14 @@ public:
 
     void printCustomLists(std::ostream &out);
 
+    void migrateV4V5(AppStats &globStats);
+
 private:
     App(const Uid uid, const FindDomainFun &&findDomain, const std::string &name,
         const NamesVec &names, const std::string &&saveFile, const std::uint8_t blockMask,
         const std::uint8_t blockIface, const bool useCustomList);
 
-    DomStatsMap &domStats(const Stats::Color cs) { return _domStats[cs - 1].first; }
+    DomStatsMap &domStats(const size_t cs) { return _domStats[cs - 1].first; }
 
     std::shared_mutex &mutex(const Stats::Color cs) { return _domStats[cs - 1].second; }
 
@@ -145,6 +135,13 @@ template <class... Args> void App::printAppStats(std::ostream &out, const Args..
     print(out, [&](App &app) {
         out << "," << JSF("stats");
         app._stats.print(out, args...);
+    });
+}
+
+template <class... Args> void App::printAppNotif(std::ostream &out) {
+    print(out, [&](App &app) {
+        out << "," << JSF("stats");
+        app._stats.print(out);
     });
 }
 

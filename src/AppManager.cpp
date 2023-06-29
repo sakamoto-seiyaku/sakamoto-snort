@@ -1,23 +1,10 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 #include <dirent.h>
+#include <sstream>
 
 #include <ActivityManager.hpp>
 #include <Settings.hpp>
@@ -77,9 +64,7 @@ void AppManager::updateStats(const Domain::Ptr &domain, const App::Ptr &app, con
     const auto bs = blocked ? Stats::BLOCK : Stats::AUTH;
     _stats.update(ts, cs, bs, val);
     app->updateStats(domain ? domain : domManager.anonymousDom(), ts, cs, bs, val);
-    if (ts == Stats::DNS) {
-        activityManager.update(app, false);
-    }
+    activityManager.update(app, false);
 }
 
 void AppManager::reset(const Stats::View view) {
@@ -174,4 +159,10 @@ void AppManager::printAppList(MAP &map, std::ostream &out, const std::string &su
         }
     }
     out << "]";
+}
+
+void AppManager::migrateV4V5() {
+    for (const auto &[_, app] : _byUid) {
+        app->migrateV4V5(_stats);
+    }
 }

@@ -1,22 +1,8 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-
+ 
 #include <DomainStats.hpp>
 
 DomainStats::DomainStats() {}
@@ -80,11 +66,25 @@ void DomainStats::printType(std::ostream &out, const View view, const Type ts) c
     out << "]";
 }
 
+void DomainStats::printNotif(std::ostream &out) const {}
+
 void DomainStats::migrateV1V2() {
     for (size_t vs = 0; vs < nbViews; ++vs) {
         for (size_t ts = 0; ts < nbTypes; ++ts) {
             _stats[vs][ts][AUTH] += _stats[vs][ts][BLOCK];
             _stats[vs][ts][BLOCK] = 0;
+        }
+    }
+}
+
+void DomainStats::migrateV4V5(const DomainStats &oldStats) {
+    for (size_t vs = 0; vs < nbViews - 1; ++vs) {
+        for (size_t ts = 0; ts < nbTypes; ++ts) {
+            for (size_t bs = 0; bs < nbBlocks; ++bs) {
+                _stats[vs][ts][bs] +=
+                    oldStats.stat(static_cast<Stats::View>(vs), static_cast<Stats::Type>(ts),
+                                  static_cast<Stats::Block>(bs));
+            }
         }
     }
 }

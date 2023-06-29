@@ -1,22 +1,8 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-
+ 
 #include <iomanip>
 
 #include <AppManager.hpp>
@@ -43,7 +29,8 @@ DnsRequest::~DnsRequest() {}
 
 void DnsRequest::print(std::ostream &out) const {
     out << "{" << JSF("app") << JSS(_app->name()) << "," << JSF("domain") << JSS(_domain->name())
-        << "," << JSF("color") << JSS(Stats::colorNames[_color]) << "," << JSF("blocked")
+        << "," << JSF("domMask") << static_cast<uint32_t>(_domain->blockMask()) << ","
+        << JSF("appMask") << static_cast<uint32_t>(_app->blockMask()) << "," << JSF("blocked")
         << JSB(_blocked) << "," << JSF("timestamp")
         << JSS(_timestamp.tv_sec << "." << std::setfill('0') << std::setw(9) << _timestamp.tv_nsec)
         << "}";

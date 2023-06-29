@@ -1,22 +1,8 @@
 /*
- * Copyright 2019 - 2022, iodé Technologies
- *
- * This file is part of the iode-snort project.
- *
- * iode-snort is free software: you can redistribute it and/or modify it under
- * the terms of the GNU Affero General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option) any
- * later version.
- *
- * iode-snort is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
- * A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
- * details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with iode-snort. If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-
+ 
 #include <AppStats.hpp>
 
 AppStats::AppStats() {}
@@ -80,4 +66,30 @@ void AppStats::printType(std::ostream &out, const View view, const Type ts) cons
         out << "]";
     }
     out << "}";
+}
+
+void AppStats::printNotif(std::ostream &out) const {
+    out << "{";
+    out << JSF("blackBlocked")
+        << stat(Stats::DAY0, Stats::DNS, Stats::BLACK, Stats::BLOCK) +
+               stat(Stats::DAY0, Stats::DNS, Stats::GREY, Stats::BLOCK);
+    out << "," << JSF("whiteBlocked") << stat(Stats::DAY0, Stats::DNS, Stats::WHITE, Stats::BLOCK);
+    out << "," << JSF("blackAuth") << stat(Stats::DAY0, Stats::DNS, Stats::BLACK, Stats::AUTH);
+    out << "," << JSF("whiteAuth") << stat(Stats::DAY0, Stats::DNS, Stats::WHITE, Stats::AUTH);
+    out << "," << JSF("authorized") << stat(Stats::DAY0, Stats::DNS, Stats::GREY, Stats::AUTH);
+    out << "," << JSF("rx") << stat(Stats::DAY0, Stats::RXB, Stats::ALLC, Stats::AUTH);
+    out << "," << JSF("tx") << stat(Stats::DAY0, Stats::TXB, Stats::ALLC, Stats::AUTH);
+    out << "}";
+}
+
+void AppStats::migrateV4V5(DomainStats &domStats, const Color cs1, const Color cs2) {
+    for (size_t vs = 0; vs < nbViews - 1; ++vs) {
+        for (size_t ts = 0; ts < nbTypes; ++ts) {
+            for (size_t bs = 0; bs < nbBlocks; ++bs) {
+                auto val = domStats.stat(static_cast<View>(vs), ts, bs);
+                _stats[vs][ts][cs1][bs] -= _stats[vs][ts][cs1][bs] >= val ? val : 0;
+                _stats[vs][ts][cs2][bs] += val;
+            }
+        }
+    }
 }
