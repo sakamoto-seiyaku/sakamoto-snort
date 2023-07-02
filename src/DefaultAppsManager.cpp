@@ -2,10 +2,11 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <android-base/properties.h>
-#include <sys/stat.h>
+#include <dirent.h>
 #include <fstream>
+#include <sys/stat.h>
 #include <thread>
 
 #include <iode-snort.hpp>
@@ -20,14 +21,22 @@ DefaultAppsManager::~DefaultAppsManager() {}
 void DefaultAppsManager::start() {
     std::unordered_map<std::string, DefApp> defapps;
 
-    if (std::ifstream in(settings.defaultAppsFile); in.is_open()) {
-        std::string app, dir;
-        uint32_t status;
-        bool removable;
-        uint32_t category;
-        while (in >> app >> dir >> status >> removable >> category) {
-            defapps.try_emplace(app, dir, static_cast<Status>(status), removable, category);
+    try {
+        std::ifstream in;
+        in.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+        in.open(settings.defaultAppsFile);
+        if (in.is_open()) {
+            std::string app, dir;
+            uint32_t status;
+            bool removable;
+            uint32_t category;
+            while (in.peek() != EOF && in >> app >> dir >> status >> removable >> category) {
+                defapps.try_emplace(app, dir, static_cast<Status>(status), removable, category);
+                in.seekg(1, std::ios_base::cur);
+            }
         }
+    } catch (std::ifstream::failure m_) {
+        defapps.clear();
     }
 
     if (std::ifstream in(settings.defaultAppsFileEtc); in.is_open()) {
@@ -41,48 +50,58 @@ void DefaultAppsManager::start() {
 
         while (in >> app >> appdir >> removable >> category) {
             auto it = defapps.find(app);
-            std::string dir;
-            bool found = false;
             if (it != defapps.end()) {
-                dir = it->second.dir;
+                const auto &app = it->first;
+                const auto &defapp = it->second;
+                std::string dir = defapp.dir;
+                bool found = false;
                 if (const std::ifstream exists(dir); exists.is_open()) {
                     found = true;
-                }
-            }
-            if (!found) {
-                for (const auto dir1 : {"/system", "/system_ext", "/system/product"}) {
-                    for (const auto dir2 : {"/app/", "/priv-app/"}) {
-                        dir = std::string(dir1) + dir2 + appdir;
-                        if (const std::ifstream exists(dir); exists.is_open()) {
-                            found = true;
+                } else {
+                    for (const auto dir1 : {"/system", "/system_ext", "/system/product"}) {
+                        for (const auto dir2 : {"/app/", "/priv-app/"}) {
+                            dir = std::string(dir1) + dir2 + appdir;
+                            if (const std::ifstream exists(dir); exists.is_open()) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (found) {
                             break;
                         }
                     }
-                    if (found) {
-                        break;
-                    }
                 }
-            }
-            if (found) {
-                status = INSTALLED;
-                if (it != defapps.end()) {
-                    const auto &defapp = it->second;
-                    if (!settings.firstStart()) {
-                        status = defapp.status;
-                    } else if (defapp.status == REMOVED || defapp.status == TOBEREMOVED) {
+                if (found) {
+                    status = defapp.status;
+                    if (status == REMOVED || status == TOBEREMOVED) {
                         if (removable) {
-                            CmdLine(settings.mountShell, "-o", "bind", "/mnt/iode/empty", dir)
-                                .exec();
+                            if (auto dirfd = opendir(dir.c_str())) {
+                                bool empty = true;
+                                dirent *de;
+                                while ((de = readdir(dirfd)) != nullptr) {
+                                    if (de->d_type == DT_REG) {
+                                        CmdLine(settings.mountShell, "-o", "bind",
+                                                "/mnt/iode/empty", dir)
+                                            .exec();
+                                        break;
+                                    }
+                                }
+                            }
+                            CmdLine(settings.pmShell, "disable", app).exec();
+                            CmdLine(settings.pmShell, "hide", app).exec();
                         }
                         status = REMOVED;
-                    } else if (defapp.status == TOBEINSTALLED) {
+                    } else if (status == TOBEINSTALLED) {
                         std::thread([=] {
-                            if (android::base::WaitForProperty("sys.boot_completed", "1")) {
-                                CmdLine(settings.pmShell, "install", "-g",
-                                        dir + "/" + appdir + ".apk")
-                                    .exec();
+                            if (!settings.firstStart()) {
+                                if (android::base::WaitForProperty("sys.boot_completed", "1")) {
+                                    CmdLine(settings.pmShell, "install", "-g",
+                                            dir + "/" + appdir + ".apk")
+                                        .exec();
+                                }
                             }
                         }).detach();
+                        status = INSTALLED;
                     }
                 }
                 _apps.try_emplace(app, dir, status, removable, category);
