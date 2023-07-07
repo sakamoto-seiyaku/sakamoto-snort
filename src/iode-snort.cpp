@@ -37,7 +37,7 @@ static void snort();
 int main() {
     try {
         snort();
-    } catch (std::runtime_error e) {
+    } catch (const std::runtime_error &e) {
         LOG(ERROR) << "Fatal Exception: " << e.what();
         return EXIT_FAILURE;
     }

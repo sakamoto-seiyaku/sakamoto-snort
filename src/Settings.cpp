@@ -22,7 +22,7 @@ void Settings::finishFirstStart() { android::base::SetProperty(_firstStartProp, 
 
 void Settings::save() {
     _saver.save([&] {
-        const std::lock_guard lock(_mutexPassword);
+        const std::shared_lock_guard lock(_mutexPassword);
         _saver.write<bool>(_blockEnabled);
         _saver.write<uint32_t>(_version);
         _saver.write<uint8_t>(_blockMask);
@@ -48,7 +48,9 @@ void Settings::restore() {
         }
         _blockIface = _saver.read<uint8_t>();
         _passState = _saver.read<uint8_t>();
-        _saver.read(_password);
+        std::string password;
+        _saver.read(password);
+        _password = password;
         _getBlackIPs = _saver.read<bool>();
         _blockIPLeaks = _saver.read<bool>();
         _maxAgeIP = _saver.read<std::time_t>();

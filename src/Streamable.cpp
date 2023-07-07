@@ -49,7 +49,7 @@ template <class Item> void Streamable<Item>::stream(const std::shared_ptr<Item> 
 template <class Item>
 void Streamable<Item>::startStream(const SocketIO::Ptr sockio, const bool pretty,
                                    const std::time_t horizon, const std::uint32_t minSize) {
-    const std::lock_guard lockItems(_mutexItems);
+    const std::shared_lock_guard lockItems(_mutexItems);
     timespec now;
     timespec_get(&now, TIME_UTC);
     uint32_t nb = 0;
@@ -71,7 +71,7 @@ template <class Item> void Streamable<Item>::stopStream(const SocketIO::Ptr sock
 
 template <class Item> void Streamable<Item>::save() {
     _saver.save([&] {
-        const std::lock_guard lockItems(_mutexItems);
+        const std::shared_lock_guard lockItems(_mutexItems);
         _saver.write<uint32_t>(_items.size());
         for (const auto &item : _items) {
             item->save(_saver);

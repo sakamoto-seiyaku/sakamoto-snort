@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <libnetfilter_queue/libnetfilter_queue.h>
 #include <linux/netfilter.h>
 #include <netinet/tcp.h>
@@ -116,7 +116,7 @@ template <class IP> void PacketListener<IP>::listen(const uint32_t threadId) {
 
             const uint32_t port = mnl_socket_get_portid(socket);
             for (;;) {
-                if (int ret = mnl_socket_recvfrom(socket, buffer, nlmsgSize); ret >= 0) {
+                if (ssize_t ret = mnl_socket_recvfrom(socket, buffer, nlmsgSize); ret >= 0) {
                     if (mnl_cb_run(buffer, ret, 0, port, callback, nullptr) == -1) {
                         throw "MNL callback error";
                     }

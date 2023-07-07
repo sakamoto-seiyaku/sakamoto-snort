@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <cutils/sockets.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -137,11 +137,6 @@ void Control::unixServer() {
         throw std::runtime_error("control unix socket error");
     }
 
-    if (const int one = 1;
-        setsockopt(unixSocket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0) {
-        throw std::runtime_error("control unix socket setsockopt error");
-    }
-
     if (listen(unixSocket, settings.controlClients) == -1) {
         throw std::runtime_error("control unix socket listen error");
     }
@@ -200,8 +195,7 @@ void Control::clientLoop(const int sockClient) const {
     SocketIO::Ptr _sockio = std::make_shared<SocketIO>(sockClient);
     const auto &resetall = _cmds.find("RESETALL");
     char buffer[settings.controlCmdLen];
-    std::string answer;
-    int len;
+    ssize_t len;
     while ((len = read(sockClient, buffer, settings.controlCmdLen)) > 0) {
         if (len >= settings.controlCmdLen) {
             buffer[settings.controlCmdLen - 1] = 0;

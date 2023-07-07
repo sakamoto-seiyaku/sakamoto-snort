@@ -35,7 +35,7 @@ void DefaultAppsManager::start() {
                 in.seekg(1, std::ios_base::cur);
             }
         }
-    } catch (std::ifstream::failure m_) {
+    } catch (const std::ifstream::failure &_) {
         defapps.clear();
     }
 
@@ -50,60 +50,64 @@ void DefaultAppsManager::start() {
 
         while (in >> app >> appdir >> removable >> category) {
             auto it = defapps.find(app);
+            std::string dir;
+            bool found = false;
             if (it != defapps.end()) {
-                const auto &app = it->first;
-                const auto &defapp = it->second;
-                std::string dir = defapp.dir;
-                bool found = false;
-                if (const std::ifstream exists(dir); exists.is_open()) {
+                if (const std::ifstream exists(it->second.dir); exists.is_open()) {
+                    dir = it->second.dir;
                     found = true;
-                } else {
-                    for (const auto dir1 : {"/system", "/system_ext", "/system/product"}) {
-                        for (const auto dir2 : {"/app/", "/priv-app/"}) {
-                            dir = std::string(dir1) + dir2 + appdir;
-                            if (const std::ifstream exists(dir); exists.is_open()) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (found) {
+                }
+            }
+            if (!found) {
+                for (const auto dir1 : {"/system", "/system_ext", "/system/product"}) {
+                    for (const auto dir2 : {"/app/", "/priv-app/"}) {
+                        dir = std::string(dir1) + dir2 + appdir;
+                        if (const std::ifstream exists(dir); exists.is_open()) {
+                            found = true;
                             break;
                         }
                     }
-                }
-                if (found) {
-                    status = defapp.status;
-                    if (status == REMOVED || status == TOBEREMOVED) {
-                        if (removable) {
-                            if (auto dirfd = opendir(dir.c_str())) {
-                                bool empty = true;
-                                dirent *de;
-                                while ((de = readdir(dirfd)) != nullptr) {
-                                    if (de->d_type == DT_REG) {
-                                        CmdLine(settings.mountShell, "-o", "bind",
-                                                "/mnt/iode/empty", dir)
-                                            .exec();
-                                        break;
-                                    }
-                                }
-                            }
-                            CmdLine(settings.pmShell, "disable", app).exec();
-                            CmdLine(settings.pmShell, "hide", app).exec();
-                        }
-                        status = REMOVED;
-                    } else if (status == TOBEINSTALLED) {
-                        std::thread([=] {
-                            if (!settings.firstStart()) {
-                                if (android::base::WaitForProperty("sys.boot_completed", "1")) {
-                                    CmdLine(settings.pmShell, "install", "-g",
-                                            dir + "/" + appdir + ".apk")
-                                        .exec();
-                                }
-                            }
-                        }).detach();
-                        status = INSTALLED;
+                    if (found) {
+                        break;
                     }
                 }
+            }
+            status = INSTALLED;
+            if (found && it != defapps.end()) {
+                const auto &app = it->first;
+                status = it->second.status;
+                if (status == REMOVED || status == TOBEREMOVED) {
+                    if (removable) {
+                        if (auto dirfd = opendir(dir.c_str())) {
+                            bool empty = true;
+                            dirent *de;
+                            while ((de = readdir(dirfd)) != nullptr) {
+                                if (de->d_type == DT_REG) {
+                                    CmdLine(settings.mountShell, "-o", "bind",
+                                            "/mnt/iode/empty", dir)
+                                        .exec();
+                                    break;
+                                }
+                            }
+                        }
+                        CmdLine(settings.pmShell, "disable", app).exec();
+                        CmdLine(settings.pmShell, "hide", app).exec();
+                    }
+                    status = REMOVED;
+                } else if (status == TOBEINSTALLED) {
+                    std::thread([=] {
+                        if (!settings.firstStart()) {
+                            if (android::base::WaitForProperty("sys.boot_completed", "1")) {
+                                CmdLine(settings.pmShell, "install", "-g",
+                                        dir + "/" + appdir + ".apk")
+                                    .exec();
+                            }
+                        }
+                    }).detach();
+                    status = INSTALLED;
+                }
+            }
+            if (found) {
                 _apps.try_emplace(app, dir, status, removable, category);
             }
         }

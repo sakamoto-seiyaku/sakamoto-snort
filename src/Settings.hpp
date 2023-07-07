@@ -23,7 +23,7 @@ private:
     static inline const std::string _telnetFile = _snortDir + "telnet";
 
 public:
-    std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+    const std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
     static constexpr auto saveInterval = std::chrono::minutes(60);
     static constexpr uint8_t standardListBit = 1;
     static constexpr uint8_t reinforcedListBit = 1 << 3;

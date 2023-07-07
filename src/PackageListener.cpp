@@ -69,7 +69,7 @@ void PackageListener::updatePackages() {
                 appManager.remove(uid, names);
             }
             finished = true;
-        } catch (std::ifstream::failure _) {
+        } catch (const std::ifstream::failure &_) {
             std::this_thread::sleep_for(settings.packagesListRetry);
         }
     }

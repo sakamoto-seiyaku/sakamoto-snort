@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <thread>
 
 #include <DomainManager.hpp>
@@ -111,7 +111,7 @@ void DomainManager::reset() {
 }
 
 void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View view) {
-    const std::lock_guard lock(_mutexByName);
+    const std::shared_lock_guard lock(_mutexByName);
     uint32_t blackAccepted = 0;
     uint32_t blackBlocked = 0;
     for (const auto &[_, domain] : _byName) {

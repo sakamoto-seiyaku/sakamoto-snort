@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <iode-snort.hpp>
 
 #include <Saver.hpp>
@@ -58,7 +58,7 @@ void CustomList::restore(Saver &saver) {
 }
 
 void CustomList::print(std::ostream &out) {
-    const std::lock_guard lock(_mutex);
+    const std::shared_lock_guard lock(_mutex);
     bool first = true;
     out << "[";
     for (const auto &domain : _domains) {

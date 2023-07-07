@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <Saver.hpp>
 
 Saver::Saver(const std::string &&filename)
@@ -24,7 +24,7 @@ void Saver::save(ioFun &&saveFun) {
         saveFun();
         out.close();
         std::rename(_filetmp.c_str(), _filename.c_str());
-    } catch (std::ofstream::failure _) {
+    } catch (const std::ofstream::failure &_) {
     }
 }
 
@@ -32,8 +32,8 @@ void Saver::restore(ioFun &&restoreFun) {
     try {
         in.open(_filename, std::ios::binary);
         restoreFun();
-    } catch (std::ifstream::failure _) {
-    } catch (RestoreException _) {
+    } catch (const std::ifstream::failure &_) {
+    } catch (const RestoreException &_) {
     }
 }
 

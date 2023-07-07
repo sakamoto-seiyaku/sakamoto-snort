@@ -15,7 +15,7 @@ private:
     Saver _saver;
     std::unordered_map<SocketIO::Ptr, const bool> _sockios;
     std::deque<const std::shared_ptr<Item>> _items;
-    std::mutex _mutexItems;
+    std::shared_mutex _mutexItems;
     std::mutex _mutexSockios;
 
 public:

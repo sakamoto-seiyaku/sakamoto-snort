@@ -15,12 +15,12 @@ AppManager::AppManager() {}
 AppManager::~AppManager() {}
 
 const App::Ptr AppManager::find(const App::Uid uid) {
-    const std::lock_guard lock(_mutexByUid);
+    const std::shared_lock_guard lock(_mutexByUid);
     return find(_byUid, uid);
 }
 
 const App::Ptr AppManager::find(const std::string &name) {
-    const std::lock_guard lock(_mutexByName);
+    const std::shared_lock_guard lock(_mutexByName);
     return find(_byName, name);
 }
 
@@ -101,7 +101,7 @@ void AppManager::restore() {
                 if (de->d_type == DT_REG) {
                     try {
                         make(std::stoi(de->d_name));
-                    } catch (std::exception e) {
+                    } catch (const std::exception &e) {
                         std::remove((settings.saveDirPackages + de->d_name).c_str());
                     }
                 }

@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <array>
@@ -30,7 +30,7 @@ public:
 
     bool operator==(const Address<IP> &addr) const noexcept { return _value == addr._value; }
 
-    std::size_t hash() const {
+    std::size_t hash() const __attribute__((no_sanitize("unsigned-integer-overflow"))) {
         std::size_t result = 5381;
         for (const auto x : _value) {
             result = ((result << 5) + result) ^ x;

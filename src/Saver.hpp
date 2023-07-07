@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <fstream>
@@ -63,14 +63,15 @@ template <class T> T Saver::read() {
 
 template <class T> void Saver::read(T &data) { read(data, sizeof(data)); }
 
-void Saver::read(std::string &str, const uint32_t min = 1, const uint32_t max = UINT32_MAX / 2) {
+void Saver::read(std::string &str, const uint32_t min = 1, const uint32_t max = 1000) {
     uint32_t len = read<uint32_t>();
-    str.resize(len - 1);
     if (len < min || len > max) {
         throw RestoreException();
     }
+    str.resize(len - 1);
     read(str.data(), len);
-    if (str.c_str()[len - 1] != 0) {
+    if (str.data()[len - 1] != 0) {
+        str.clear();
         throw RestoreException();
     }
 }
