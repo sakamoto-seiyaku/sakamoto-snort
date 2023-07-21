@@ -600,14 +600,16 @@ void Control::cmdAddCustomDomain(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
     ack(params.out);
     if (args.size() == 1) {
-        domManager.customList(color).add(args[0].string);
+        // domManager.customList(color).add(args[0].string);
         domManager.customList(color == Stats::BLACK ? Stats::WHITE : Stats::BLACK)
             .remove(args[0].string);
+        domManager.addCustomDomain(args[0].string, color);
     } else if (args.size() == 2) {
         if (const auto app = arg2app(args[0])) {
-            app->customList(color).add(args[1].string);
+            // app->customList(color).add(args[1].string);
             app->customList(color == Stats::BLACK ? Stats::WHITE : Stats::BLACK)
                 .remove(args[1].string);
+            app->addCustomDomain(args[1].string, color);
         }
     }
 }

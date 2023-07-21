@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <CustomList.hpp>
@@ -59,6 +59,8 @@ public:
     template <class IP> void addIP(const Domain::Ptr &domain, const Address<IP> &ip);
 
     void removeIPs(const Domain::Ptr &domain);
+
+    void addCustomDomain(const std::string &name, const Stats::Color color);
 
     void save();
 

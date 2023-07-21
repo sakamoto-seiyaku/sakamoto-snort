@@ -18,11 +18,16 @@ bool CustomList::exists(const Domain::Ptr &domain) {
     return _domains.find(domain) != _domains.end();
 }
 
-void CustomList::add(const std::string &name) {
+// void CustomList::add(const std::string &name) {
+//     const std::lock_guard lock(_mutex);
+//     if (auto domain = _findDomain(name)) {
+//         _domains.insert(domain);
+//     }
+// }
+
+void CustomList::add(const Domain::Ptr &domain) {
     const std::lock_guard lock(_mutex);
-    if (auto domain = _findDomain(name)) {
-        _domains.insert(domain);
-    }
+    _domains.insert(domain);
 }
 
 void CustomList::remove(const std::string &name) {

@@ -79,6 +79,11 @@ void App::updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Sta
     return ds.try_emplace(domain).first->second.update(ts, bs, val);
 }
 
+void App::addCustomDomain(const std::string &name, const Stats::Color color) {
+    const Domain::Ptr domain = domManager.make(std::move(name));
+    customList(color).add(domain);
+}
+
 void App::reset(const Stats::View view) {
     _saved = false;
     _stats.reset(view);

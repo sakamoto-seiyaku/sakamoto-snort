@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <vector>
@@ -94,6 +94,8 @@ public:
 
     void updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,
                      const Stats::Block bs, const uint64_t val);
+
+    void addCustomDomain(const std::string &name, const Stats::Color color);
 
     void reset(const Stats::View vs);
 
