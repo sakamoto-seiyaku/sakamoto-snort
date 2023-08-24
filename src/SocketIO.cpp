@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <sstream>
 
 #include <iode-snort.hpp>
@@ -16,7 +16,7 @@ SocketIO::~SocketIO() {}
 bool SocketIO::print(std::stringstream &out, const bool pretty) {
     auto writeSocket = [&](auto &in) {
         const std::string out(in.str());
-        if (const uint32_t len = out.size() + 1; len != 1) {
+        if (const ssize_t len = out.size() + 1; len != 1) {
             const std::lock_guard lock(_mutex);
             _open = (write(_socket, out.c_str(), len) == len);
         }

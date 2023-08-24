@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <iomanip>
 
 #include <AppManager.hpp>
@@ -37,11 +37,12 @@ void DnsRequest::print(std::ostream &out) const {
 }
 
 bool DnsRequest::inHorizon(const uint32_t horizon, const timespec timeRef) const {
-    return timeRef.tv_sec - _timestamp.tv_sec < horizon;
+    return timeRef.tv_sec - _timestamp.tv_sec < static_cast<std::time_t>(horizon);
 }
 
 bool DnsRequest::expired(const DnsRequest::Ptr req) const {
-    return req->_timestamp.tv_sec - _timestamp.tv_sec > settings.dnsStreamMaxHorizon;
+    return req->_timestamp.tv_sec - _timestamp.tv_sec >
+           static_cast<std::time_t>(settings.dnsStreamMaxHorizon);
 }
 
 void DnsRequest::save(Saver &saver) {

@@ -197,7 +197,7 @@ void Control::clientLoop(const int sockClient) const {
     char buffer[settings.controlCmdLen];
     ssize_t len;
     while ((len = read(sockClient, buffer, settings.controlCmdLen)) > 0) {
-        if (len >= settings.controlCmdLen) {
+        if (len >= static_cast<ssize_t>(settings.controlCmdLen)) {
             buffer[settings.controlCmdLen - 1] = 0;
             LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " " << buffer;
             break;
