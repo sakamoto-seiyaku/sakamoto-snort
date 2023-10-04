@@ -27,10 +27,6 @@ public:
 
     bool exists(const Domain::Ptr &domain);
 
-    // void add(const std::string &name);
-
-    void remove(const std::string &name);
-
     void add(const Domain::Ptr &domain);
 
     void remove(const Domain::Ptr &domain);

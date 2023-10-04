@@ -97,6 +97,8 @@ public:
 
     void addCustomDomain(const std::string &name, const Stats::Color color);
 
+    void removeCustomDomain(const std::string &name, const Stats::Color color);
+
     void reset(const Stats::View vs);
 
     void save();

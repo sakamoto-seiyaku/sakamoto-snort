@@ -72,8 +72,14 @@ void DomainManager::removeIPs(const Domain::Ptr &domain) {
 }
 
 void DomainManager::addCustomDomain(const std::string &name, const Stats::Color color) {
-    const Domain::Ptr domain = make(std::move(name));
+    const auto domain = make(std::move(name));
     customList(color).add(domain);
+}
+
+void DomainManager::removeCustomDomain(const std::string &name, const Stats::Color color) {
+    if (const auto domain = find(std::move(name))) {
+        customList(color).remove(domain);
+    }
 }
 
 void DomainManager::save() {

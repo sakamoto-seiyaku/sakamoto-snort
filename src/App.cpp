@@ -84,6 +84,12 @@ void App::addCustomDomain(const std::string &name, const Stats::Color color) {
     customList(color).add(domain);
 }
 
+void App::removeCustomDomain(const std::string &name, const Stats::Color color) {
+    if (const auto domain = domManager.find(std::move(name))) {
+        customList(color).remove(domain);
+    }
+}
+
 void App::reset(const Stats::View view) {
     _saved = false;
     _stats.reset(view);
