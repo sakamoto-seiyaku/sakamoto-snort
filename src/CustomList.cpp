@@ -6,10 +6,10 @@
 #include <iode-snort.hpp>
 
 #include <Saver.hpp>
+#include <DomainManager.hpp>
 #include <CustomList.hpp>
 
-CustomList::CustomList(const FindDomainFun &&findDomain)
-    : _findDomain(findDomain) {}
+CustomList::CustomList() {}
 
 CustomList::~CustomList() {}
 
@@ -47,7 +47,7 @@ void CustomList::restore(Saver &saver) {
     for (uint32_t i = 0; i < nb; ++i) {
         std::string name;
         saver.readDomName(name);
-        if (auto domain = _findDomain(name)) {
+        if (auto domain = domManager.find(name)) {
             _domains.insert(domain);
         }
     }

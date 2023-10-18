@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include <ActivityManager.hpp>
+#include <RulesManager.hpp>
 #include <Settings.hpp>
 #include <AppManager.hpp>
 
@@ -35,9 +36,7 @@ const App::Ptr AppManager::make(const App::Uid uid) {
 
 template <class... Names> App::Ptr AppManager::create(const App::Uid uid, const Names &...names) {
     const std::scoped_lock lock(_mutexByUid, _mutexByName);
-    const auto [it, inserted] = _byUid.emplace(
-        uid, std::make_shared<App>(
-                 uid, [&](const std::string &name) { return domManager.find(name); }, names...));
+    const auto [it, inserted] = _byUid.emplace(uid, std::make_shared<App>(uid, names...));
     const auto app = it->second;
     if (inserted) {
         _byName.emplace(app->name(), app);
@@ -109,7 +108,7 @@ void AppManager::restore() {
             closedir(dir);
         }
         for (const auto &[_, app] : _byUid) {
-            app->restore();
+            app->restore(app);
         }
         if (auto dir = opendir(settings.saveDirPackages.c_str())) {
             dirent *de;

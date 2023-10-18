@@ -15,7 +15,9 @@
 #include <HostManager.hpp>
 #include <PacketManager.hpp>
 #include <DefaultAppsManager.hpp>
+#include <RulesManager.hpp>
 #include <Settings.hpp>
+#include <Rule.hpp>
 #include <Control.hpp>
 
 struct {
@@ -85,10 +87,18 @@ Control::Control() {
     _cmds.emplace("WHITELIST.ADD", make(&Control::cmdAddCustomDomain, Stats::WHITE));
     _cmds.emplace("BLACKLIST.REMOVE", make(&Control::cmdRemoveCustomDomain, Stats::BLACK));
     _cmds.emplace("WHITELIST.REMOVE", make(&Control::cmdRemoveCustomDomain, Stats::WHITE));
-    _cmds.emplace("BLACKLIST.CLEAR", make(&Control::cmdClearCustomList, Stats::BLACK));
-    _cmds.emplace("WHITELIST.CLEAR", make(&Control::cmdClearCustomList, Stats::WHITE));
     _cmds.emplace("BLACKLIST.PRINT", make(&Control::cmdPrintCustomList, Stats::BLACK));
     _cmds.emplace("WHITELIST.PRINT", make(&Control::cmdPrintCustomList, Stats::WHITE));
+    _cmds.emplace("RULES.ADD", make(&Control::cmdAddRule));
+    _cmds.emplace("RULES.REMOVE", make(&Control::cmdRemoveRule));
+    _cmds.emplace("RULES.UPDATE", make(&Control::cmdUpdateRule));
+    _cmds.emplace("RULES.PRINT", make(&Control::cmdPrintRules));
+    _cmds.emplace("BLACKRULES.ADD", make(&Control::cmdAddCustomRule, Stats::BLACK));
+    _cmds.emplace("WHITERULES.ADD", make(&Control::cmdAddCustomRule, Stats::WHITE));
+    _cmds.emplace("BLACKRULES.REMOVE", make(&Control::cmdRemoveCustomRule, Stats::BLACK));
+    _cmds.emplace("WHITERULES.REMOVE", make(&Control::cmdRemoveCustomRule, Stats::WHITE));
+    _cmds.emplace("BLACKRULES.PRINT", make(&Control::cmdPrintCustomRules, Stats::BLACK));
+    _cmds.emplace("WHITERULES.PRINT", make(&Control::cmdPrintCustomRules, Stats::WHITE));
 
     for (size_t vs = 0; vs < Stats::nbViews; ++vs) {
         const auto &view = views[vs];
@@ -301,6 +311,7 @@ void Control::cmdResetAll(CmdParams &&params) const {
     settings.reset();
     appManager.reset();
     domManager.reset();
+    rulesManager.reset();
     pktManager.reset();
     hostManager.reset();
     dnsListener.reset();
@@ -624,22 +635,70 @@ void Control::cmdRemoveCustomDomain(CmdParams &&params, Stats::Color color) cons
     }
 }
 
-void Control::cmdClearCustomList(CmdParams &&params, Stats::Color color) const {
-    const auto arg = readCmdArg(params.args);
-    ack(params.out);
-    if (arg.type == CmdArg::NONE) {
-        domManager.customList(color).reset();
-    } else if (const auto app = arg2app(arg)) {
-        app->customList(color).reset();
-    }
-}
-
 void Control::cmdPrintCustomList(CmdParams &&params, Stats::Color color) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
         domManager.customList(color).print(params.out);
     } else if (const auto app = arg2app(arg)) {
-        app->customListConst(color).print(params.out);
+        app->customList(color).print(params.out);
+    }
+}
+
+void Control::cmdAddRule(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    params.out << JSS(
+        rulesManager.addRule(static_cast<Rule::Type>(args[0].number), args[1].string));
+}
+
+void Control::cmdRemoveRule(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    ack(params.out);
+    rulesManager.removeRule(args[0].number);
+}
+
+void Control::cmdUpdateRule(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    ack(params.out);
+    rulesManager.updateRule(args[0].number, static_cast<Rule::Type>(args[1].number),
+                            args[2].string);
+}
+
+void Control::cmdPrintRules(CmdParams &&params) const { rulesManager.print(params.out); }
+
+void Control::cmdAddCustomRule(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    ack(params.out);
+    if (args.size() == 1) {
+        rulesManager.removeCustom(args[0].number,
+                                  color == Stats::BLACK ? Stats::WHITE : Stats::BLACK);
+        rulesManager.addCustom(args[0].number, color, true);
+    } else if (args.size() == 2) {
+        if (const auto app = arg2app(args[0])) {
+            rulesManager.removeCustom(app, args[1].number,
+                                      color == Stats::BLACK ? Stats::WHITE : Stats::BLACK);
+            rulesManager.addCustom(app, args[1].number, color, true);
+        }
+    }
+}
+
+void Control::cmdRemoveCustomRule(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    ack(params.out);
+    if (args.size() == 1) {
+        rulesManager.removeCustom(args[0].number, color);
+    } else if (args.size() == 2) {
+        if (const auto app = arg2app(args[0])) {
+            rulesManager.removeCustom(app, args[1].number, color);
+        }
+    }
+}
+
+void Control::cmdPrintCustomRules(CmdParams &&params, Stats::Color color) const {
+    const auto arg = readCmdArg(params.args);
+    if (arg.type == CmdArg::NONE) {
+        domManager.customRules(color).print(params.out);
+    } else if (const auto app = arg2app(arg)) {
+        app->customRules(color).print(params.out);
     }
 }
 

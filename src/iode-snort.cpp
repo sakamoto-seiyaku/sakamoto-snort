@@ -15,10 +15,13 @@
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
 #include <DnsListener.hpp>
+#include <RulesManager.hpp>
 #include <Control.hpp>
+#include <Rule.hpp>
 
 Settings settings;
 DefaultAppsManager defAppManager;
+RulesManager rulesManager;
 DomainManager domManager;
 AppManager appManager;
 HostManager hostManager;
@@ -61,6 +64,7 @@ static void snort() {
                                   pkgListener.start();
                                   Timer::get("packages");
                                   Timer::set("restore", "Data restoration time");
+                                  rulesManager.restore();
                                   domManager.restore();
                                   appManager.restore();
                                   dnsListener.restore();
@@ -104,6 +108,15 @@ static void snort() {
     std::signal(SIGTERM, quit);
     std::signal(SIGPIPE, SIG_IGN);
 
+    // rulesManager.add(Rule::REGEX, ".*google.*");
+    // rulesManager.addCustom(0, Stats::BLACK);
+    // rulesManager.add(Rule::WILDCARD, "*google.fr");
+    // rulesManager.addCustom(1, Stats::WHITE);
+
+    // domManager.addRule(Rule::WILDCARD, "*google.fr", Stats::WHITE);
+    // domManager.addRule(Rule::REGEX, ".*\\.facebook.com", Stats::BLACK);
+    // domManager.addRule(Rule::REGEX, ".*.facebook.fr", Stats::BLACK);
+
     for (;;) {
         {
             const std::lock_guard lock(mutexListeners);
@@ -116,6 +129,7 @@ static void snort() {
 void snortSave(bool quit) {
     Timer::set("save", "Data backup time");
     settings.save();
+    rulesManager.save();
     domManager.save();
     appManager.save();
     dnsListener.save();

@@ -5,6 +5,7 @@
 
 #include <thread>
 
+#include <RulesManager.hpp>
 #include <DomainManager.hpp>
 
 DomainManager::DomainManager() {}
@@ -54,10 +55,13 @@ void DomainManager::initDomain(const Domain::Ptr &domain) {
     domain->blockMask(blockMask);
 }
 
-bool DomainManager::blocked(const Domain::Ptr &domain) { return _customBlacklist.exists(domain); }
+bool DomainManager::blocked(const Domain::Ptr &domain) {
+    return _customBlacklist.exists(domain) ||
+           (_blackRules.match(domain) && !_whiteRules.match(domain));
+}
 
 bool DomainManager::authorized(const Domain::Ptr &domain) {
-    return _customWhitelist.exists(domain);
+    return _customWhitelist.exists(domain) || _whiteRules.match(domain);
 }
 
 void DomainManager::removeIPs(const Domain::Ptr &domain) {
@@ -90,6 +94,8 @@ void DomainManager::save() {
         }
         _customBlacklist.save(_saver);
         _customWhitelist.save(_saver);
+        _blackRules.save(_saver);
+        _whiteRules.save(_saver);
     });
 }
 
@@ -110,6 +116,10 @@ void DomainManager::restore() {
         }
         _customBlacklist.restore(_saver);
         _customWhitelist.restore(_saver);
+        rulesManager.restoreCustomRules(_saver, nullptr, Stats::BLACK);
+        rulesManager.restoreCustomRules(_saver, nullptr, Stats::WHITE);
+        // _blackRules->restore(_saver);
+        // _whiteRules->restore(_saver);
     });
 }
 
@@ -119,6 +129,8 @@ void DomainManager::reset() {
     _byName.clear();
     _customBlacklist.reset();
     _customWhitelist.reset();
+    _blackRules.reset();
+    _whiteRules.reset();
 }
 
 void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View view) {

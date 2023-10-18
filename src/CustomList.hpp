@@ -12,14 +12,12 @@
 class CustomList {
 private:
     using DomSet = std::set<const Domain::Ptr>;
-    using FindDomainFun = std::function<const Domain::Ptr(const std::string &)>;
 
     DomSet _domains;
     std::shared_mutex _mutex;
-    FindDomainFun _findDomain;
 
 public:
-    CustomList(const FindDomainFun &&findDomain);
+    CustomList();
 
     ~CustomList();
 

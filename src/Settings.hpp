@@ -15,8 +15,6 @@ class Settings {
 private:
     static constexpr const char *_saveFile = "/data/snort/settings";
     static constexpr const char *_firstStartProp = "iode-snort.first_start";
-    static constexpr const char *_snortDir2 = "/data/snort/";
-    static constexpr const char *_snortDir3 = _snortDir2;
     static inline const std::string _snortDir = "/data/snort/";
     static inline const std::string _saveDir = _snortDir + "save/";
     static inline const std::string _defaultDirEtc = "/system_ext/etc/iode-snort/";
@@ -36,7 +34,9 @@ public:
     static inline const std::string saveDirSystem = _saveDir + "system/";
     static inline const std::string saveDomains = _saveDir + "stats_domains";
     static inline const std::string saveDnsStream = _saveDir + "dnsstream";
+    static inline const std::string saveRules = _saveDir + "rules";
     static inline const std::string saveStatsTotal = _saveDir + "stats_total";
+
     static inline const std::string systemAppPrefix = "system_";
 
     static constexpr const char *netdSocketPath = "iode-snort-netd";

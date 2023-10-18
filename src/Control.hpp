@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <sstream>
@@ -153,9 +153,23 @@ private:
 
     void cmdRemoveCustomDomain(CmdParams &&params, Stats::Color color) const;
 
-    void cmdClearCustomList(CmdParams &&params, Stats::Color color) const;
-
     void cmdPrintCustomList(CmdParams &&params, Stats::Color color) const;
+
+    void cmdAddRule(CmdParams &&params) const;
+
+    void cmdRemoveRule(CmdParams &&params) const;
+
+    void cmdUpdateRule(CmdParams &&params) const;
+
+    void cmdPrintRules(CmdParams &&params) const;
+
+    void cmdAddCustomRule(CmdParams &&params, Stats::Color color) const;
+
+    void cmdRemoveCustomRule(CmdParams &&params, Stats::Color color) const;
+
+    void cmdPrintCustomRules(CmdParams &&params, Stats::Color color) const;
+
+    void cmdClearCustomRules(CmdParams &&params, Stats::Color color) const;
 
     void cmdHelp(CmdParams &&params) const;
 };

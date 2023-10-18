@@ -18,6 +18,7 @@ cc_binary {
         "src/CmdLine.cpp",
         "src/Control.cpp",
         "src/CustomList.cpp",
+        "src/CustomRules.cpp",
         "src/DefaultAppsManager.cpp",
         "src/DnsListener.cpp",
         "src/DnsRequest.cpp",
@@ -31,6 +32,8 @@ cc_binary {
         "src/Packet.cpp",
         "src/PacketListener.cpp",
         "src/PacketManager.cpp",
+        "src/Rule.cpp",
+        "src/RulesManager.cpp",
         "src/Saver.cpp",
         "src/Settings.cpp",
         "src/SocketIO.cpp",
@@ -52,4 +55,18 @@ cc_binary {
     ],
     static_libs: ["libmnl", "libnetfilter_queue", "libnfnetlink.system_ext"],
     shared_libs: ["libcutils", "liblog", "libbase"],
+
+//    sanitize: {
+//        misc_undefined: [
+//            "undefined",
+//            "alignment",
+//            "bounds",
+//            "null",
+//            "unreachable",
+//            "integer",
+//        ],
+//        diag: {
+//            undefined : true
+//        },
+//    },
 }

@@ -4,31 +4,30 @@
  */
 
 #include <sstream>
+#include <RulesManager.hpp>
 #include <Settings.hpp>
 #include <App.hpp>
+#include <Settings.hpp>
 
-App::App(const Uid uid, const FindDomainFun &&findDomain, const NamesVec &names)
-    : App(uid, std::move(findDomain), settings.systemAppPrefix + std::to_string(uid), names,
+App::App(const Uid uid, const NamesVec &names)
+    : App(uid, settings.systemAppPrefix + std::to_string(uid), names,
           settings.saveDirSystem + std::to_string(uid),
           settings.standardListBit + settings.customListBit, 0, true) {}
 
-App::App(const Uid uid, const FindDomainFun &&findDomain, const std::string &name)
-    : App(uid, std::move(findDomain), name, NamesVec(), settings.saveDirPackages + name,
-          settings.blockMask(), settings.blockIface(),
-          settings.blockMask() & settings.customListBit) {}
+App::App(const Uid uid, const std::string &name)
+    : App(uid, name, NamesVec(), settings.saveDirPackages + name, settings.blockMask(),
+          settings.blockIface(), settings.blockMask() & settings.customListBit) {}
 
-App::App(const Uid uid, const FindDomainFun &&findDomain, const std::string &name,
-         const NamesVec &names, const std::string &&saveFile, const std::uint8_t blockMask,
-         const std::uint8_t blockIface, const bool useCustomList)
+App::App(const Uid uid, const std::string &name, const NamesVec &names,
+         const std::string &&saveFile, const std::uint8_t blockMask, const std::uint8_t blockIface,
+         const bool useCustomList)
     : _saver(saveFile)
     , _uid(uid)
     , _name(name)
     , _names(names)
     , _blockMask(blockMask)
     , _blockIface(blockIface)
-    , _useCustomList(useCustomList)
-    , _customBlacklist(std::move(findDomain))
-    , _customWhitelist(std::move(findDomain)) {}
+    , _useCustomList(useCustomList) {}
 
 bool App::hasData(const Stats::View view) { return _stats.hasData(view); }
 
@@ -51,6 +50,12 @@ const std::pair<bool, Stats::Color> App::blocked(const Domain::Ptr &domain) {
             return {false, cs};
         }
         if (_customBlacklist.exists(domain)) {
+            return {true, cs};
+        }
+        if (_whiteRules.match(domain)) {
+            return {false, cs};
+        }
+        if (_blackRules.match(domain)) {
             return {true, cs};
         }
         if (domManager.authorized(domain)) {
@@ -111,7 +116,7 @@ void App::removeFile() {
 }
 
 void App::save() {
-    if (!_saved) {
+    if (!_saved || !_blackRules.saved() || !_whiteRules.saved()) {
         _saver.save([&] {
             _saver.write<uint8_t>(_blockMask);
             _stats.save(_saver);
@@ -129,12 +134,14 @@ void App::save() {
             _saver.write<bool>(_useCustomList);
             _saver.write<uint8_t>(_blockMask);
             _saver.write<uint8_t>(_blockIface);
+            _blackRules.save(_saver);
+            _whiteRules.save(_saver);
         });
         _saved = true;
     }
 }
 
-void App::restore() {
+void App::restore(const App::Ptr &app) {
     _saver.restore([&] {
         _blockMask = _saver.read<uint8_t>();
         _stats.restore(_saver);
@@ -152,6 +159,8 @@ void App::restore() {
         _useCustomList = _saver.read<bool>();
         _blockMask = _saver.read<uint8_t>();
         _blockIface = _saver.read<uint8_t>();
+        rulesManager.restoreCustomRules(_saver, app, Stats::BLACK);
+        rulesManager.restoreCustomRules(_saver, app, Stats::WHITE);
     });
 }
 

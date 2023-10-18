@@ -9,6 +9,7 @@
 
 #include <AppStats.hpp>
 #include <DomainManager.hpp>
+#include <CustomRules.hpp>
 #include <Settings.hpp>
 
 class App {
@@ -16,7 +17,6 @@ public:
     using Ptr = std::shared_ptr<App>;
     using Uid = uint32_t;
     using NamesVec = std::vector<const std::string>;
-    using FindDomainFun = std::function<const Domain::Ptr(const std::string &)>;
 
 private:
     using DomStatsMap = std::unordered_map<Domain::Ptr, DomainStats>;
@@ -37,21 +37,22 @@ private:
 
     CustomList _customBlacklist;
     CustomList _customWhitelist;
+    CustomRules _blackRules;
+    CustomRules _whiteRules;
 
 public:
-    App(const Uid uid, const FindDomainFun &&findDomain, const NamesVec &names = NamesVec());
+    App(const Uid uid, const NamesVec &names = NamesVec());
 
-    App(const Uid uid, const FindDomainFun &&findDomain, const std::string &name);
+    App(const Uid uid, const std::string &name);
 
     App(const App &) = delete;
 
-    CustomList &customListConst(const Stats::Color color) {
+    CustomList &customList(const Stats::Color color) {
         return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
     }
 
-    CustomList &customList(const Stats::Color color) {
-        _saved = false;
-        return customListConst(color);
+    CustomRules &customRules(const Stats::Color color) {
+        return color == Stats::BLACK ? _blackRules : _whiteRules;
     }
 
     const std::string &name() const { return _name; }
@@ -103,7 +104,7 @@ public:
 
     void save();
 
-    void restore();
+    void restore(const App::Ptr &app);
 
     void removeFile();
 
@@ -124,9 +125,8 @@ public:
     void migrateV4V5(AppStats &globStats);
 
 private:
-    App(const Uid uid, const FindDomainFun &&findDomain, const std::string &name,
-        const NamesVec &names, const std::string &&saveFile, const std::uint8_t blockMask,
-        const std::uint8_t blockIface, const bool useCustomList);
+    App(const Uid uid, const std::string &name, const NamesVec &names, const std::string &&saveFile,
+        const std::uint8_t blockMask, const std::uint8_t blockIface, const bool useCustomList);
 
     DomStatsMap &domStats(const size_t cs) { return _domStats[cs - 1].first; }
 

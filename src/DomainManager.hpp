@@ -7,6 +7,7 @@
 
 #include <CustomList.hpp>
 #include <DomainList.hpp>
+#include <CustomRules.hpp>
 
 class DomainManager {
 private:
@@ -24,8 +25,10 @@ private:
 
     DomainList _blacklist;
     DomainList _whitelist;
-    CustomList _customBlacklist{[&](const std::string &name) { return find(name); }};
-    CustomList _customWhitelist{[&](const std::string &name) { return find(name); }};
+    CustomList _customBlacklist;
+    CustomList _customWhitelist;
+    CustomRules _blackRules;
+    CustomRules _whiteRules;
 
     Domain::Ptr _anonymousDom{make("anonymous domains")};
 
@@ -38,6 +41,10 @@ public:
 
     CustomList &customList(const Stats::Color color) {
         return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
+    }
+
+    CustomRules &customRules(const Stats::Color color) {
+        return color == Stats::BLACK ? _blackRules : _whiteRules;
     }
 
     const Domain::Ptr anonymousDom() { return _anonymousDom; }
