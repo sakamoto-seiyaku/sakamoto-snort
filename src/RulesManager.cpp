@@ -34,13 +34,13 @@ void RulesManager::removeRule(const Rule::Id ruleId) {
     if (const auto &rule = find(ruleId)) {
         Custom &custom = _customs[rule];
         if (custom.color != Stats::ALLC) {
-            domManager.customRules(custom.color).remove(rule, true);
+            domManager.removeCustomRule(rule, true, custom.color);
         }
         for (const auto &app : custom.blacklist) {
-            app->customRules(Stats::BLACK).remove(rule, true);
+            app->removeCustomRule(rule, true, Stats::BLACK);
         }
         for (const auto &app : custom.whitelist) {
-            app->customRules(Stats::WHITE).remove(rule, true);
+            app->removeCustomRule(rule, true, Stats::WHITE);
         }
         _rules.erase(rule->id());
         _customs.erase(rule);
@@ -54,13 +54,13 @@ void RulesManager::updateRule(const uint32_t ruleId, const Rule::Type type,
         rule->update(type, ruleRaw);
         Custom &custom = _customs[rule];
         if (custom.color != Stats::ALLC) {
-            domManager.customRules(custom.color).build();
+            domManager.buildCustomRules(custom.color);
         }
         for (const auto &app : custom.blacklist) {
-            app->customRules(Stats::BLACK).build();
+            app->buildCustomRules(Stats::BLACK);
         }
         for (const auto &app : custom.whitelist) {
-            app->customRules(Stats::WHITE).build();
+            app->buildCustomRules(Stats::WHITE);
         }
     }
 }
@@ -82,10 +82,10 @@ void RulesManager::addCustom(const App::Ptr &app, const Rule::Id ruleId, const S
     if (const auto &rule = find(ruleId)) {
         if (app == nullptr) {
             _customs[rule].color = color;
-            domManager.customRules(color).add(rule, compile);
+            domManager.addCustomRule(rule, compile, color);
         } else {
             _customs[rule].list(color).insert(app);
-            app->customRules(color).add(rule, compile);
+            app->addCustomRule(rule, compile, color);
         }
     }
 }
@@ -101,9 +101,9 @@ void RulesManager::removeCustom(const App::Ptr &app, const Rule::Id ruleId,
         Custom &custom = _customs[rule];
         if (app == nullptr) {
             custom.color = Stats::ALLC;
-            domManager.customRules(color).remove(rule, true);
+            domManager.removeCustomRule(rule, true, color);
         } else {
-            app->customRules(color).remove(rule, true);
+            app->removeCustomRule(rule, true, color);
             custom.list(color).erase(app);
         }
         if (custom.color == Stats::ALLC && custom.blacklist.empty() && custom.whitelist.empty()) {
@@ -146,9 +146,9 @@ void RulesManager::restoreCustomRules(Saver &saver, App::Ptr app, Stats::Color c
         }
     }
     if (app == nullptr) {
-        domManager.customRules(color).build();
+        domManager.buildCustomRules(color);
     } else {
-        app->customRules(color).build();
+        app->buildCustomRules(color);
     }
 }
 

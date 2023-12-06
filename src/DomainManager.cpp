@@ -86,6 +86,26 @@ void DomainManager::removeCustomDomain(const std::string &name, const Stats::Col
     }
 }
 
+void DomainManager::printCustomDomains(std::ostream &out, const Stats::Color color) {
+    customList(color).print(out);
+}
+
+void DomainManager::addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
+    customRules(color).add(rule, compile);
+}
+
+void DomainManager::removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
+    customRules(color).remove(rule, compile);
+}
+
+void DomainManager::buildCustomRules(const Stats::Color color) {
+    customRules(color).build();
+}
+
+void DomainManager::printCustomRules(std::ostream &out, const Stats::Color color) {
+    customRules(color).print(out);
+}
+
 void DomainManager::save() {
     _saver.save([&] {
         _saver.write<uint32_t>(_byName.size());

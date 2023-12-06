@@ -85,14 +85,38 @@ void App::updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Sta
 }
 
 void App::addCustomDomain(const std::string &name, const Stats::Color color) {
+    _saved = false;
     const Domain::Ptr domain = domManager.make(std::move(name));
     customList(color).add(domain);
 }
 
 void App::removeCustomDomain(const std::string &name, const Stats::Color color) {
+    _saved = false;
     if (const auto domain = domManager.find(std::move(name))) {
         customList(color).remove(domain);
     }
+}
+
+void App::printCustomDomains(std::ostream &out, const Stats::Color color) {
+    customList(color).print(out);
+}
+
+void App::addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
+    _saved = false;
+    customRules(color).add(rule, compile);
+}
+
+void App::removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
+    _saved = false;
+    customRules(color).remove(rule, compile);
+}
+
+void App::buildCustomRules(const Stats::Color color) {
+    customRules(color).build();
+}
+
+void App::printCustomRules(std::ostream &out, const Stats::Color color) {
+    customRules(color).print(out);
 }
 
 void App::reset(const Stats::View view) {

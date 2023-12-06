@@ -39,14 +39,6 @@ public:
 
     DomainManager(const DomainManager &) = delete;
 
-    CustomList &customList(const Stats::Color color) {
-        return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
-    }
-
-    CustomRules &customRules(const Stats::Color color) {
-        return color == Stats::BLACK ? _blackRules : _whiteRules;
-    }
-
     const Domain::Ptr anonymousDom() { return _anonymousDom; }
 
     void start();
@@ -71,6 +63,16 @@ public:
 
     void removeCustomDomain(const std::string &name, const Stats::Color color);
 
+    void printCustomDomains(std::ostream &out, const Stats::Color color);
+
+    void addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
+
+    void removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
+
+    void buildCustomRules(const Stats::Color color);
+
+    void printCustomRules(std::ostream &out, const Stats::Color color);
+
     void save();
 
     void restore();
@@ -84,6 +86,14 @@ public:
     void printBlackDomainsStats(std::ostream &out, const Stats::View view);
 
 private:
+    CustomList &customList(const Stats::Color color) {
+        return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
+    }
+
+    CustomRules &customRules(const Stats::Color color) {
+        return color == Stats::BLACK ? _blackRules : _whiteRules;
+    }
+
     void initDomain(const Domain::Ptr &domain);
 
     template <class IP> auto &byIP();

@@ -638,9 +638,9 @@ void Control::cmdRemoveCustomDomain(CmdParams &&params, Stats::Color color) cons
 void Control::cmdPrintCustomList(CmdParams &&params, Stats::Color color) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
-        domManager.customList(color).print(params.out);
+        domManager.printCustomDomains(params.out, color);
     } else if (const auto app = arg2app(arg)) {
-        app->customList(color).print(params.out);
+        app->printCustomDomains(params.out, color);
     }
 }
 
@@ -696,9 +696,9 @@ void Control::cmdRemoveCustomRule(CmdParams &&params, Stats::Color color) const 
 void Control::cmdPrintCustomRules(CmdParams &&params, Stats::Color color) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
-        domManager.customRules(color).print(params.out);
+        domManager.printCustomRules(params.out, color);
     } else if (const auto app = arg2app(arg)) {
-        app->customRules(color).print(params.out);
+        app->printCustomRules(params.out, color);
     }
 }
 

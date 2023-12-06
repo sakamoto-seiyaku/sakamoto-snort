@@ -47,14 +47,6 @@ public:
 
     App(const App &) = delete;
 
-    CustomList &customList(const Stats::Color color) {
-        return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
-    }
-
-    CustomRules &customRules(const Stats::Color color) {
-        return color == Stats::BLACK ? _blackRules : _whiteRules;
-    }
-
     const std::string &name() const { return _name; }
 
     const NamesVec &names() const { return _names; }
@@ -100,6 +92,16 @@ public:
 
     void removeCustomDomain(const std::string &name, const Stats::Color color);
 
+    void printCustomDomains(std::ostream &out, const Stats::Color color);
+
+    void addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
+
+    void removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
+
+    void buildCustomRules(const Stats::Color color);
+
+    void printCustomRules(std::ostream &out, const Stats::Color color);
+
     void reset(const Stats::View vs);
 
     void save();
@@ -125,6 +127,14 @@ public:
     void migrateV4V5(AppStats &globStats);
 
 private:
+    CustomList &customList(const Stats::Color color) {
+        return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
+    }
+
+    CustomRules &customRules(const Stats::Color color) {
+        return color == Stats::BLACK ? _blackRules : _whiteRules;
+    }
+
     App(const Uid uid, const std::string &name, const NamesVec &names, const std::string &&saveFile,
         const std::uint8_t blockMask, const std::uint8_t blockIface, const bool useCustomList);
 
