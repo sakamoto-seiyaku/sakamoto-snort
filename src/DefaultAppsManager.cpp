@@ -90,8 +90,12 @@ void DefaultAppsManager::start() {
                                 }
                             }
                         }
-                        CmdLine(settings.pmShell, "disable", app).exec();
-                        CmdLine(settings.pmShell, "hide", app).exec();
+                        std::thread([=] {
+                            if (android::base::WaitForProperty("sys.boot_completed", "1")) {
+                                CmdLine(settings.pmShell, "disable", app).exec();
+                                CmdLine(settings.pmShell, "hide", app).exec();
+                            }
+                        }).detach();
                     }
                     status = REMOVED;
                 } else if (status == TOBEINSTALLED) {
