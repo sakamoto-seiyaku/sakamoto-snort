@@ -155,16 +155,21 @@ void DomainManager::reset() {
 
 void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View view) {
     const std::shared_lock_guard lock(_mutexByName);
-    uint32_t blackAccepted = 0;
-    uint32_t blackBlocked = 0;
+    uint32_t blocked = 0;
+    uint32_t stdLeaked = 0;
+    uint32_t rfcLeaked = 0;
     for (const auto &[_, domain] : _byName) {
-        if (domain->color() == Stats::BLACK && domain->stats().hasBlackAccepted(view)) {
-            ++blackAccepted;
+        if (domain->stats().hasBlocked(view)) {
+            ++blocked;
         }
-        if (domain->stats().hasBlackBlocked(view)) {
-            ++blackBlocked;
+        if (domain->stats().hasAccepted(view)) {
+            if (domain->color() == Stats::BLACK) {
+                ++stdLeaked;
+            } else if (domain->color() == Stats::WHITE) {
+                ++rfcLeaked;
+            }
         }
     }
-    out << "{" << JSF("blackBlocked") << blackBlocked << "," << JSF("blackAccepted")
-        << blackAccepted << "}";
+    out << "{" << JSF("blocked") << blocked << "," << JSF("stdLeaked")
+        << stdLeaked << "," << JSF("rfcLeaked") << rfcLeaked << "}";
 }

@@ -17,9 +17,9 @@ public:
 
     void update(const Type ts, const Block bs, const uint64_t val);
 
-    bool hasBlackBlocked(const View view);
+    bool hasBlocked(const View view);
 
-    bool hasBlackAccepted(const View view);
+    bool hasAccepted(const View view);
 
     void migrateV1V2();
 

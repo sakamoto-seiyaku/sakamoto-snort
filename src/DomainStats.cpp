@@ -30,16 +30,26 @@ uint64_t DomainStats::stat(const View view, const size_t ts, const size_t bs) co
     }
 }
 
-bool DomainStats::hasBlackBlocked(const View view) {
+bool DomainStats::hasBlocked(const View view) {
     const std::shared_lock_guard lock(_mutex);
     shift();
-    return stat(view, DNS, BLOCK) != 0;
+    for (size_t ts = 0; ts < nbTypes; ++ts) {
+        if (stat(view, static_cast<Type>(ts), BLOCK) != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
-bool DomainStats::hasBlackAccepted(const View view) {
+bool DomainStats::hasAccepted(const View view) {
     const std::shared_lock_guard lock(_mutex);
     shift();
-    return stat(view, DNS, AUTH) != 0;
+    for (size_t ts = 0; ts < nbTypes; ++ts) {
+        if (stat(view, static_cast<Type>(ts), AUTH) != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool DomainStats::hasDataType(const View view, const Type ts) const {
