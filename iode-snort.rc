@@ -6,8 +6,6 @@
 service iode-snort /system_ext/bin/iode-snort
     class main
     user root
-    socket iode-snort-control stream 0666 root root
-    socket iode-snort-netd seqpacket 0600 root root
     group root package_info
     disabled
 

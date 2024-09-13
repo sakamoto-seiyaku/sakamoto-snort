@@ -39,8 +39,8 @@ public:
 
     static inline const std::string systemAppPrefix = "system_";
 
-    static constexpr const char *netdSocketPath = "iode-snort-netd";
-    static constexpr const char *controlSocketPath = "iode-snort-control";
+    static constexpr const char *netdSocketPath = "@sucre-snort-inetd";
+    static constexpr const char *controlSocketPath = "@sucre-snort-control";
 
     static inline const std::string defaultBlacklist = _defaultDirEtc + "domains-black";
     static inline const std::string defaultWhitelist = _defaultDirEtc + "domains-white";

@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <cutils/sockets.h>
 #include <sys/un.h>
 #include <thread>
@@ -19,10 +19,20 @@ void DnsListener::start() {
 }
 
 void DnsListener::server() {
-    int sockServer = android_get_control_socket(settings.netdSocketPath);
-
+    int sockServer = socket(PF_UNIX, SOCK_SEQPACKET, 0);
+    struct sockaddr_un addr;
     if (sockServer < 1) {
         throw std::runtime_error("netd socket control error");
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, settings.netdSocketPath, sizeof(addr.sun_path) - 1);
+    int alen = offsetof(struct sockaddr_un, sun_path) + strlen(settings.netdSocketPath);
+    addr.sun_path[0] = '\0';
+
+    if (bind(sockServer, (struct sockaddr *)&addr, alen) < 0) {
+        throw std::runtime_error("netd socket bind error");
     }
 
     if (const int one = 1;
