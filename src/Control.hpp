@@ -172,6 +172,24 @@ private:
     void cmdClearCustomRules(CmdParams &&params, Stats::Color color) const;
 
     void cmdHelp(CmdParams &&params) const;
+
+    void cmdAddBlockingList(CmdParams &&params) const;
+
+    void cmdRemoveBlockingList(CmdParams &&params) const;
+
+    void cmdToggleBlockingList(CmdParams &&params) const;
+
+    void cmdUpdateBlockingList(CmdParams &&params) const;
+
+    void cmdPrintBlockingLists(CmdParams &&params) const;
+
+    void cmdRefreshBlockingList(CmdParams &&params) const;
+
+    void cmdOutDateBlockingList(CmdParams &&params) const;
+
+    void cmdClearBlockingLists(CmdParams &&params) const;
+
+    void cmdSaveBlockingLists(CmdParams &&params) const;
 };
 
 extern Control control;

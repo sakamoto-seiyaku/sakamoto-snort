@@ -2,11 +2,13 @@
  * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <iode-snort.hpp>
 #include <Saver.hpp>
+
+class ListColorException : public std::exception {};
 
 class Stats {
 public:
@@ -32,6 +34,26 @@ public:
     ~Stats();
 
     Stats(const Stats &) = delete;
+
+    static inline std::string colorToString(Stats::Color color) {
+        if (color == Stats::BLACK) {
+            return "block";
+        } else if (color == Stats::WHITE) {
+            return "allow";
+        } else {
+            throw ListColorException();
+        }
+    }
+
+    static inline Stats::Color colorFromString(std::string colorStr) {
+        if (colorStr == "block") {
+            return Stats::BLACK;
+        } else if (colorStr == "allow") {
+            return Stats::WHITE;
+        } else {
+            throw ListColorException();
+        }
+    }
 };
 
 template <class T> class StatsTPL : public Stats {

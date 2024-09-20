@@ -44,6 +44,14 @@ public:
 
     inline void readDomName(std::string &str);
 
+    inline void readBlockingListName(std::string &str);
+
+    inline void readGuid(std::string &str);
+
+    inline void readBlockingListUrl(std::string &str);
+
+    inline void readBlockingListType(std::string &str);
+
     template <class T> void read(void *data, const T len);
 
     template <class V, class T> void write(const T &&data);
@@ -77,6 +85,14 @@ void Saver::read(std::string &str, const uint32_t min = 1, const uint32_t max = 
 }
 
 void Saver::readDomName(std::string &str) { read(str, 3, HOST_NAME_MAX); }
+
+void Saver::readGuid(std::string &str) { read(str, 37, 37); }
+
+void Saver::readBlockingListName(std::string &str) { read(str, 1, 50); }
+
+void Saver::readBlockingListUrl(std::string &str) { read(str, 1, 256); }
+
+void Saver::readBlockingListType(std::string &str) { read(str, 6, 6); }
 
 template <class T> void Saver::read(void *data, const T len) {
     in.read(reinterpret_cast<char *>(data), len);

@@ -1,0 +1,57 @@
+#include <Saver.hpp>
+#include <Stats.hpp>
+#include <ctime>
+#include <string>
+
+#pragma once
+
+class MissingBlockingListException : public std::exception {};
+
+class BlockingList {
+public:
+    BlockingList();
+
+    BlockingList(const std::string id, const std::string name, const std::string url,
+                 const Stats::Color _color, const std::time_t updatedAt, const bool outdated,
+                 const std::string etag, const bool enabled);
+
+    void save(Saver &saver) const;
+
+    void restore(Saver &saver);
+
+    void refreshList(const std::string lastUpdated, const std::string etag);
+
+    void updateList(const std::string name, const Stats::Color color, const std::string url);
+
+    void toggleList();
+
+    std::string getId() const;
+
+    std::string getName() const;
+
+    std::string getUrl() const;
+
+    Stats::Color getColor() const;
+
+    std::time_t getUpdatedAt() const;
+
+    bool isOutdated() const;
+
+    void setIsOutDated();
+
+    std::string getEtag() const;
+
+    bool isEnabled() const;
+
+    std::string serialize();
+
+private:
+    std::string _id;
+    std::string _name;
+    std::string _url;
+    Stats::Color _color;
+    std::time_t _updatedAt = 0;
+    bool _outdated = true;
+    std::string _etag = "";
+    bool _enabled = true;
+};

@@ -36,6 +36,7 @@ public:
     static inline const std::string saveDnsStream = _saveDir + "dnsstream";
     static inline const std::string saveRules = _saveDir + "rules";
     static inline const std::string saveStatsTotal = _saveDir + "stats_total";
+    static inline const std::string saveBlobkingLists = _saveDir + "blocking_lists";
 
     static inline const std::string systemAppPrefix = "system_";
 

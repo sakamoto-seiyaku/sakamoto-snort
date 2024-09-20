@@ -18,11 +18,13 @@
 #include <RulesManager.hpp>
 #include <Control.hpp>
 #include <Rule.hpp>
+#include <BlockingListManager.hpp>
 
 Settings settings;
 DefaultAppsManager defAppManager;
 RulesManager rulesManager;
 DomainManager domManager;
+BlockingListManager blm;
 AppManager appManager;
 HostManager hostManager;
 PackageListener pkgListener;
@@ -64,6 +66,7 @@ static void snort() {
                                   pkgListener.start();
                                   Timer::get("packages");
                                   Timer::set("restore", "Data restoration time");
+                                  blm.restore();
                                   rulesManager.restore();
                                   domManager.restore();
                                   appManager.restore();
@@ -129,6 +132,7 @@ static void snort() {
 void snortSave(bool quit) {
     Timer::set("save", "Data backup time");
     settings.save();
+    blm.save();
     rulesManager.save();
     domManager.save();
     appManager.save();
