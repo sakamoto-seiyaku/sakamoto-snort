@@ -9,10 +9,11 @@ using namespace std;
 
 BlockingListManager::BlockingListManager() {}
 
-bool BlockingListManager::addBlockingList(string id, string url, string name, Stats::Color color) {
+bool BlockingListManager::addBlockingList(string id, string url, string name, Stats::Color color,
+                                          std::uint8_t blockMask) {
     auto it = _ByIds.find(id);
     if (it == _ByIds.end()) {
-        BlockingList bl(id, name, url, color, 0, true, "", true);
+        BlockingList bl(id, name, url, color, blockMask, 0, true, "", true);
         const std::lock_guard lock(_mutex);
         return _ByIds.try_emplace(id, bl).second;
     }

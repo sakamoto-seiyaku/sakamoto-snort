@@ -301,6 +301,8 @@ const App::Ptr Control::arg2app(const CmdArg &arg) {
 
 void Control::ack(std::stringstream &out) const { out << "OK"; }
 
+void Control::nack(std::stringstream &out) const { out << "NOK"; }
+
 void Control::cmdHello(CmdParams &&params) const { ack(params.out); }
 
 void Control::cmdQuit(CmdParams &&params) const { quit = true; }
@@ -727,22 +729,28 @@ void Control::cmdPrintCustomRules(CmdParams &&params, Stats::Color color) const 
 
 void Control::cmdAddBlockingList(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
-    if (args.size() >= 4) {
+    if (args.size() >= 5) {
         std::string id = args[0].string;
         std::string url = args[1].string;
         std::string colorStr = args[2].string;
-        std::string name = args[3].string;
-        for (unsigned long i = 4; i < args.size(); i++) {
+        std::string blockMaskStr = args[3].string;
+        std::string name = args[4].string;
+        for (unsigned long i = 5; i < args.size(); i++) {
             name += " ";
             name += args[i].string;
         }
         Stats::Color color = Stats::colorFromString(colorStr);
-        if (blm.addBlockingList(id, url, name, color)) {
-            LOG(INFO) << "Adding blocking list " << id << " " << url << " " << colorStr << " "
-                      << name;
+        int blockMask = std::stoi(blockMaskStr);
+        if (blockMask < 0 || blockMask > std::numeric_limits<uint8_t>::max()) {
+            blockMask = 1;
+        }
+        if (blm.addBlockingList(id, url, name, color, static_cast<uint8_t>(blockMask))) {
             ack(params.out);
         } else {
+            nack(params.out);
         }
+    } else {
+        nack(params.out);
     }
 }
 
@@ -757,29 +765,36 @@ void Control::cmdRefreshBlockingList(CmdParams &&params) const {
         }
         ack(params.out);
     } else {
-        throw MissingBlockingListException();
+        nack(params.out);
     }
 }
 
 void Control::cmdUpdateBlockingList(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
-    if (args.size() >= 4) {
+    if (args.size() >= 5) {
         std::string id = args[0].string;
         std::string url = args[1].string;
         std::string colorStr = args[2].string;
-        std::string name = args[3].string;
+        std::string blockMaskStr = args[3].string;
+        std::string name = args[4].string;
         BlockingList *blockingList = blm.findListById(id);
         if (blockingList != nullptr) {
-            for (unsigned long i = 4; i < args.size(); i++) {
+            for (unsigned long i = 5; i < args.size(); i++) {
                 name += " ";
                 name += args[i].string;
             }
             Stats::Color newColor = Stats::colorFromString(colorStr);
-            blockingList->updateList(name, newColor, url);
+            int blockMask = std::stoi(blockMaskStr);
+            if (blockMask < 0 || blockMask > std::numeric_limits<uint8_t>::max()) {
+                blockMask = 1;
+            }
+            blockingList->updateList(name, newColor, url, static_cast<uint8_t>(blockMask));
             ack(params.out);
         } else {
-            throw MissingBlockingListException();
+            nack(params.out);
         }
+    } else {
+        nack(params.out);
     }
 }
 
@@ -793,8 +808,10 @@ void Control::cmdToggleBlockingList(CmdParams &&params) const {
             blockingList->setIsOutDated();
             ack(params.out);
         } else {
-            throw MissingBlockingListException();
+            nack(params.out);
         }
+    } else {
+        nack(params.out);
     }
 }
 
@@ -803,6 +820,8 @@ void Control::cmdRemoveBlockingList(CmdParams &&params) const {
     if (args.size() == 1) {
         blm.removeBlockingList(args[0].string);
         ack(params.out);
+    } else {
+        nack(params.out);
     }
 }
 
@@ -810,6 +829,8 @@ void Control::cmdPrintBlockingLists(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
         blm.printAll(params.out);
+    } else {
+        nack(params.out);
     }
 }
 
@@ -821,8 +842,10 @@ void Control::cmdOutDateBlockingList(CmdParams &&params) const {
             blockingList->setIsOutDated();
             ack(params.out);
         } else {
-            throw MissingBlockingListException();
+            nack(params.out);
         }
+    } else {
+        nack(params.out);
     }
 }
 
@@ -833,6 +856,8 @@ void Control::cmdClearBlockingLists(CmdParams &&params) const {
             blm.removeBlockingList(id);
         }
         ack(params.out);
+    } else {
+        nack(params.out);
     }
 }
 
@@ -841,6 +866,8 @@ void Control::cmdSaveBlockingLists(CmdParams &&params) const {
     if (arg.type == CmdArg::NONE) {
         blm.save();
         ack(params.out);
+    } else {
+        nack(params.out);
     }
 }
 

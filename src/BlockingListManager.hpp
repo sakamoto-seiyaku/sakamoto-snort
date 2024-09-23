@@ -19,7 +19,8 @@ private:
 public:
     BlockingListManager();
 
-    bool addBlockingList(std::string id, std::string url, std::string name, Stats::Color color);
+    bool addBlockingList(std::string id, std::string url, std::string name, Stats::Color color,
+                         std::uint8_t blockMask);
 
     BlockingList *findListById(std::string id);
 

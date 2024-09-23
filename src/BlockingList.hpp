@@ -5,15 +5,13 @@
 
 #pragma once
 
-class MissingBlockingListException : public std::exception {};
-
 class BlockingList {
 public:
     BlockingList();
 
     BlockingList(const std::string id, const std::string name, const std::string url,
-                 const Stats::Color _color, const std::time_t updatedAt, const bool outdated,
-                 const std::string etag, const bool enabled);
+                 const Stats::Color _color, uint8_t _blockMask, const std::time_t updatedAt,
+                 const bool outdated, const std::string etag, const bool enabled);
 
     void save(Saver &saver) const;
 
@@ -21,7 +19,8 @@ public:
 
     void refreshList(const std::string lastUpdated, const std::string etag);
 
-    void updateList(const std::string name, const Stats::Color color, const std::string url);
+    void updateList(const std::string name, const Stats::Color color, const std::string url,
+                    const uint8_t _blockMask);
 
     void toggleList();
 
@@ -32,6 +31,10 @@ public:
     std::string getUrl() const;
 
     Stats::Color getColor() const;
+
+    std::uint8_t getBlockMask() const;
+
+    std::uint8_t getIdBlockMask() const;
 
     std::time_t getUpdatedAt() const;
 
@@ -50,6 +53,7 @@ private:
     std::string _name;
     std::string _url;
     Stats::Color _color;
+    uint8_t _blockMask;
     std::time_t _updatedAt = 0;
     bool _outdated = true;
     std::string _etag = "";

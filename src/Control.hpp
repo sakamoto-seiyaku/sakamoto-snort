@@ -67,6 +67,8 @@ private:
 
     void ack(std::stringstream &out) const;
 
+    void nack(std::stringstream &out) const;
+
     void cmdHello(CmdParams &&params) const;
 
     void cmdQuit(CmdParams &&params) const;
