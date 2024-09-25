@@ -76,3 +76,11 @@ void BlockingListManager::reset() {
     const std::lock_guard lock(_mutex);
     _ByIds.clear();
 }
+
+std::vector<BlockingList> BlockingListManager::getLists() {
+    std::vector<BlockingList> lists;
+    for (auto it = _ByIds.begin(); it != _ByIds.end(); ++it) {
+        lists.push_back(it->second);
+    }
+    return lists;
+}

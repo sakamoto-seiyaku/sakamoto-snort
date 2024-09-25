@@ -12,9 +12,15 @@ DomainManager::DomainManager() {}
 
 DomainManager::~DomainManager() {}
 
-void DomainManager::start() {
-    _blacklist.add(settings.defaultBlacklist);
-    _whitelist.add(settings.defaultWhitelist);
+void DomainManager::start(std::vector<BlockingList> blockingLists) {
+    // Iterate over the vector and print each BlockingList
+    for (auto it = blockingLists.begin(); it != blockingLists.end(); ++it) {
+        if (it->getColor() == Stats::BLACK) {
+            _blacklist.read(it->getId());
+        } else if (it->getColor() == Stats::WHITE) {
+            _whitelist.read(it->getId());
+        }
+    }
 }
 
 const Domain::Ptr DomainManager::make(const std::string &&name) {
@@ -90,17 +96,17 @@ void DomainManager::printCustomDomains(std::ostream &out, const Stats::Color col
     customList(color).print(out);
 }
 
-void DomainManager::addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
+void DomainManager::addCustomRule(const Rule::Ptr rule, const bool compile,
+                                  const Stats::Color color) {
     customRules(color).add(rule, compile);
 }
 
-void DomainManager::removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
+void DomainManager::removeCustomRule(const Rule::Ptr rule, const bool compile,
+                                     const Stats::Color color) {
     customRules(color).remove(rule, compile);
 }
 
-void DomainManager::buildCustomRules(const Stats::Color color) {
-    customRules(color).build();
-}
+void DomainManager::buildCustomRules(const Stats::Color color) { customRules(color).build(); }
 
 void DomainManager::printCustomRules(std::ostream &out, const Stats::Color color) {
     customRules(color).print(out);
@@ -170,6 +176,23 @@ void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View 
             }
         }
     }
-    out << "{" << JSF("blocked") << blocked << "," << JSF("stdLeaked")
-        << stdLeaked << "," << JSF("rfcLeaked") << rfcLeaked << "}";
+    out << "{" << JSF("blocked") << blocked << "," << JSF("stdLeaked") << stdLeaked << ","
+        << JSF("rfcLeaked") << rfcLeaked << "}";
+}
+
+void DomainManager::addDomainsToList(std::string listId, int8_t mask,
+                                     std::vector<std::string> domains, Stats::Color color) {
+    if (color == Stats::BLACK) {
+        _blacklist.write(listId, domains, mask);
+    } else if (color == Stats::WHITE) {
+        _whitelist.write(listId, domains, mask);
+    }
+}
+
+void DomainManager::getDomainsFromList(std::string listId, Stats::Color color) {
+    if (color == Stats::BLACK) {
+        _blacklist.read(listId);
+    } else if (color == Stats::WHITE) {
+        _whitelist.read(listId);
+    }
 }

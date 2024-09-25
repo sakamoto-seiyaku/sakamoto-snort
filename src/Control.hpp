@@ -192,6 +192,12 @@ private:
     void cmdClearBlockingLists(CmdParams &&params) const;
 
     void cmdSaveBlockingLists(CmdParams &&params) const;
+
+    void cmdAddManyDomains(CmdParams &&params, Stats::Color color) const;
+
+    void cmdRemoveManyDomains(CmdParams &&params, Stats::Color color) const;
+
+    std::vector<std::string> parseAggregatedDomains(CmdArg arg) const;
 };
 
 extern Control control;

@@ -8,6 +8,9 @@
 #include <CustomList.hpp>
 #include <DomainList.hpp>
 #include <CustomRules.hpp>
+#include <Stats.hpp>
+#include <BlockingList.hpp>
+#include <vector>
 
 class DomainManager {
 private:
@@ -41,7 +44,7 @@ public:
 
     const Domain::Ptr anonymousDom() { return _anonymousDom; }
 
-    void start();
+    void start(std::vector<BlockingList> blockingLists);
 
     const Domain::Ptr make(const std::string &&name);
 
@@ -84,6 +87,11 @@ public:
                       const Stats::View view, const TypeStats... ts);
 
     void printBlackDomainsStats(std::ostream &out, const Stats::View view);
+
+    void addDomainsToList(std::string listId, int8_t mask, std::vector<std::string> domains,
+                          Stats::Color color);
+
+    void getDomainsFromList(std::string listId, Stats::Color color);
 
 private:
     CustomList &customList(const Stats::Color color) {

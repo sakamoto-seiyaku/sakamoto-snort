@@ -7,7 +7,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <thread>
-
+#include <vector>
 #include <iode-snort.hpp>
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
@@ -110,6 +110,10 @@ Control::Control() {
     _cmds.emplace("BLOCKLIST.PRINT", make(&Control::cmdPrintBlockingLists));
     _cmds.emplace("BLOCKLIST.CLEAR", make(&Control::cmdClearBlockingLists));
     _cmds.emplace("BLOCKLIST.SAVE", make(&Control::cmdSaveBlockingLists));
+    _cmds.emplace("DOMAIN.BLACK.ADD.MANY", make(&Control::cmdAddManyDomains, Stats::BLACK));
+    _cmds.emplace("DOMAIN.BLACK.REMOVE.MANY", make(&Control::cmdRemoveManyDomains, Stats::BLACK));
+    _cmds.emplace("DOMAIN.BLACK.ADD.WHITE", make(&Control::cmdAddManyDomains, Stats::WHITE));
+    _cmds.emplace("DOMAIN.BLACK.REMOVE.WHITE", make(&Control::cmdRemoveManyDomains, Stats::WHITE));
 
     for (size_t vs = 0; vs < Stats::nbViews; ++vs) {
         const auto &view = views[vs];
@@ -744,7 +748,8 @@ void Control::cmdAddBlockingList(CmdParams &&params) const {
         if (blockMask < 0 || blockMask > std::numeric_limits<uint8_t>::max()) {
             blockMask = 1;
         }
-        if (blm.addBlockingList(id, url, name, color, static_cast<uint8_t>(blockMask))) {
+        if (blockingListManager.addBlockingList(id, url, name, color,
+                                                static_cast<uint8_t>(blockMask))) {
             ack(params.out);
         } else {
             nack(params.out);
@@ -756,7 +761,7 @@ void Control::cmdAddBlockingList(CmdParams &&params) const {
 
 void Control::cmdRefreshBlockingList(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
-    BlockingList *blockingList = blm.findListById(args[0].string);
+    BlockingList *blockingList = blockingListManager.findListById(args[0].string);
     if (blockingList != nullptr) {
         if (args.size() == 2) {
             blockingList->refreshList(args[1].string, "");
@@ -777,7 +782,7 @@ void Control::cmdUpdateBlockingList(CmdParams &&params) const {
         std::string colorStr = args[2].string;
         std::string blockMaskStr = args[3].string;
         std::string name = args[4].string;
-        BlockingList *blockingList = blm.findListById(id);
+        BlockingList *blockingList = blockingListManager.findListById(id);
         if (blockingList != nullptr) {
             for (unsigned long i = 5; i < args.size(); i++) {
                 name += " ";
@@ -802,7 +807,7 @@ void Control::cmdToggleBlockingList(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
         std::string id = args[0].string;
-        BlockingList *blockingList = blm.findListById(id);
+        BlockingList *blockingList = blockingListManager.findListById(id);
         if (blockingList != nullptr) {
             blockingList->toggleList();
             blockingList->setIsOutDated();
@@ -818,7 +823,7 @@ void Control::cmdToggleBlockingList(CmdParams &&params) const {
 void Control::cmdRemoveBlockingList(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
-        blm.removeBlockingList(args[0].string);
+        blockingListManager.removeBlockingList(args[0].string);
         ack(params.out);
     } else {
         nack(params.out);
@@ -826,9 +831,9 @@ void Control::cmdRemoveBlockingList(CmdParams &&params) const {
 }
 
 void Control::cmdPrintBlockingLists(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::NONE) {
-        blm.printAll(params.out);
+    const auto args = readCmdArg(params.args);
+    if (args.type == CmdArg::NONE) {
+        blockingListManager.printAll(params.out);
     } else {
         nack(params.out);
     }
@@ -837,7 +842,7 @@ void Control::cmdPrintBlockingLists(CmdParams &&params) const {
 void Control::cmdOutDateBlockingList(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 2) {
-        BlockingList *blockingList = blm.findListById(args[0].string);
+        BlockingList *blockingList = blockingListManager.findListById(args[0].string);
         if (blockingList != nullptr) {
             blockingList->setIsOutDated();
             ack(params.out);
@@ -850,10 +855,10 @@ void Control::cmdOutDateBlockingList(CmdParams &&params) const {
 }
 
 void Control::cmdClearBlockingLists(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::NONE) {
-        for (const auto &[id, _] : blm.getAll()) {
-            blm.removeBlockingList(id);
+    const auto args = readCmdArg(params.args);
+    if (args.type == CmdArg::NONE) {
+        for (const auto &[id, _] : blockingListManager.getAll()) {
+            blockingListManager.removeBlockingList(id);
         }
         ack(params.out);
     } else {
@@ -862,13 +867,49 @@ void Control::cmdClearBlockingLists(CmdParams &&params) const {
 }
 
 void Control::cmdSaveBlockingLists(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::NONE) {
-        blm.save();
+    const auto args = readCmdArg(params.args);
+    if (args.type == CmdArg::NONE) {
+        blockingListManager.save();
         ack(params.out);
     } else {
         nack(params.out);
     }
+}
+
+void Control::cmdAddManyDomains(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() == 3) {
+        domManager.addDomainsToList(args[0].string, args[1].number, parseAggregatedDomains(args[2]),
+                                    color);
+        ack(params.out);
+    } else {
+        nack(params.out);
+    }
+}
+
+void Control::cmdRemoveManyDomains(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() == 3) {
+        ack(params.out);
+    } else {
+        nack(params.out);
+    }
+}
+
+std::vector<std::string> Control::parseAggregatedDomains(CmdArg arg) const {
+    std::string allAggregatedDomains = arg.string.c_str();
+    std::string domain;
+    const std::string separator = ";";
+    size_t pos_start = 0, pos_end;
+    std::vector<std::string> allDomains = {};
+    // Parse allDomains to obtain all domains separated by ';'
+    while ((pos_end = allAggregatedDomains.find(separator, pos_start)) != std::string::npos) {
+        domain = allAggregatedDomains.substr(pos_start, pos_end - pos_start);
+        pos_start = pos_end + 1;
+        allDomains.push_back(domain);
+    }
+    allDomains.push_back(allAggregatedDomains.substr(pos_start));
+    return allDomains;
 }
 
 void Control::cmdHelp(CmdParams &&params) const {
@@ -1047,5 +1088,7 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "BLOCKLIST.REFRESH <id>: set the refresh date of a "
            "blocking list,\r\n"
         << "BLOCKLIST.PRINT <id>: print all blocking lists,\r\n"
-        << "BLOCKLIST.SAVE : save all blocking lists.\r\n";
+        << "BLOCKLIST.SAVE : save all blocking lists.\r\n"
+        << "DOMAIN.ADD.MANY <id>: add many domains.\r\n"
+        << "DOMAIN.REMOVE.MANY <id>: remove many domains.\r\n";
 }

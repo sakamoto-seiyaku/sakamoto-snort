@@ -35,6 +35,8 @@ public:
     void reset();
 
     void save();
+
+    std::vector<BlockingList> getLists();
 };
 
-extern BlockingListManager blm;
+extern BlockingListManager blockingListManager;

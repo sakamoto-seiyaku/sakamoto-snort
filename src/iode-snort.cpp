@@ -24,7 +24,7 @@ Settings settings;
 DefaultAppsManager defAppManager;
 RulesManager rulesManager;
 DomainManager domManager;
-BlockingListManager blm;
+BlockingListManager blockingListManager;
 AppManager appManager;
 HostManager hostManager;
 PackageListener pkgListener;
@@ -57,21 +57,21 @@ static void snort() {
         defAppManager.start();
         Timer::get("defapps");
         std::thread threads[]{std::thread([&] {
-                                  Timer::set("lists", "Domain lists init time");
-                                  domManager.start();
-                                  Timer::get("lists");
-                              }),
-                              std::thread([&] {
                                   Timer::set("packages", "Packages init time");
                                   pkgListener.start();
                                   Timer::get("packages");
                                   Timer::set("restore", "Data restoration time");
-                                  blm.restore();
+                                  blockingListManager.restore();
                                   rulesManager.restore();
                                   domManager.restore();
                                   appManager.restore();
                                   dnsListener.restore();
                                   Timer::get("restore");
+                              }),
+                              std::thread([&] {
+                                  Timer::set("lists", "Domain lists init time");
+                                  domManager.start(blockingListManager.getLists());
+                                  Timer::get("lists");
                               }),
                               std::thread([&] {
                                   Timer::set("dns", "DNS listener init time");
@@ -132,7 +132,7 @@ static void snort() {
 void snortSave(bool quit) {
     Timer::set("save", "Data backup time");
     settings.save();
-    blm.save();
+    blockingListManager.save();
     rulesManager.save();
     domManager.save();
     appManager.save();
