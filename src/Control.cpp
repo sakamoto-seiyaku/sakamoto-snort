@@ -93,7 +93,7 @@ Control::Control() {
     _cmds.emplace("WHITELIST.PRINT", make(&Control::cmdPrintCustomList, Stats::WHITE));
     _cmds.emplace("RULES.ADD", make(&Control::cmdAddRule));
     _cmds.emplace("RULES.REMOVE", make(&Control::cmdRemoveRule));
-    _cmds.emplace("RULES.UPDATE", make(&Control::cmdUpdateRule));
+    _cmds.emplace("RULES.UPDATElist", make(&Control::cmdUpdateRule));
     _cmds.emplace("RULES.PRINT", make(&Control::cmdPrintRules));
     _cmds.emplace("BLACKRULES.ADD", make(&Control::cmdAddCustomRule, Stats::BLACK));
     _cmds.emplace("WHITERULES.ADD", make(&Control::cmdAddCustomRule, Stats::WHITE));
@@ -101,19 +101,25 @@ Control::Control() {
     _cmds.emplace("WHITERULES.REMOVE", make(&Control::cmdRemoveCustomRule, Stats::WHITE));
     _cmds.emplace("BLACKRULES.PRINT", make(&Control::cmdPrintCustomRules, Stats::BLACK));
     _cmds.emplace("WHITERULES.PRINT", make(&Control::cmdPrintCustomRules, Stats::WHITE));
-    _cmds.emplace("BLOCKLIST.ADD", make(&Control::cmdAddBlockingList));
-    _cmds.emplace("BLOCKLIST.UPDATE", make(&Control::cmdUpdateBlockingList));
-    _cmds.emplace("BLOCKLIST.REMOVE", make(&Control::cmdRemoveBlockingList));
-    _cmds.emplace("BLOCKLIST.TOGGLE", make(&Control::cmdToggleBlockingList));
-    _cmds.emplace("BLOCKLIST.REFRESH", make(&Control::cmdRefreshBlockingList));
-    _cmds.emplace("BLOCKLIST.OUTDATE", make(&Control::cmdOutDateBlockingList));
+    _cmds.emplace("BLOCKLIST.BLACK.ADD", make(&Control::cmdAddBlockingList, Stats::BLACK));
+    _cmds.emplace("BLOCKLIST.WHITE.ADD", make(&Control::cmdAddBlockingList, Stats::WHITE));
+    _cmds.emplace("BLOCKLIST.BLACK.UPDATE", make(&Control::cmdUpdateBlockingList, Stats::BLACK));
+    _cmds.emplace("BLOCKLIST.WHITE.UPDATE", make(&Control::cmdUpdateBlockingList, Stats::WHITE));
+    _cmds.emplace("BLOCKLIST.BLACK.REMOVE", make(&Control::cmdRemoveBlockingList, Stats::BLACK));
+    _cmds.emplace("BLOCKLIST.WHITE.REMOVE", make(&Control::cmdRemoveBlockingList, Stats::WHITE));
+    _cmds.emplace("BLOCKLIST.BLACK.ENABLE", make(&Control::cmdEnableBlockingList, Stats::BLACK));
+    _cmds.emplace("BLOCKLIST.WHITE.ENABLE", make(&Control::cmdEnableBlockingList, Stats::WHITE));
+    _cmds.emplace("BLOCKLIST.BLACK.DISABLE", make(&Control::cmdDisableBlockingList, Stats::BLACK));
+    _cmds.emplace("BLOCKLIST.WHITE.DISABLE", make(&Control::cmdDisableBlockingList, Stats::WHITE));
     _cmds.emplace("BLOCKLIST.PRINT", make(&Control::cmdPrintBlockingLists));
     _cmds.emplace("BLOCKLIST.CLEAR", make(&Control::cmdClearBlockingLists));
     _cmds.emplace("BLOCKLIST.SAVE", make(&Control::cmdSaveBlockingLists));
     _cmds.emplace("DOMAIN.BLACK.ADD.MANY", make(&Control::cmdAddManyDomains, Stats::BLACK));
-    _cmds.emplace("DOMAIN.BLACK.REMOVE.MANY", make(&Control::cmdRemoveManyDomains, Stats::BLACK));
-    _cmds.emplace("DOMAIN.BLACK.ADD.WHITE", make(&Control::cmdAddManyDomains, Stats::WHITE));
-    _cmds.emplace("DOMAIN.BLACK.REMOVE.WHITE", make(&Control::cmdRemoveManyDomains, Stats::WHITE));
+    _cmds.emplace("DOMAIN.WHITE.ADD.MANY", make(&Control::cmdAddManyDomains, Stats::WHITE));
+    _cmds.emplace("DOMAIN.BLACK.COUNT", make(&Control::cmdDomainsCount, Stats::BLACK));
+    _cmds.emplace("DOMAIN.WHITE.COUNT", make(&Control::cmdDomainsCount, Stats::WHITE));
+    _cmds.emplace("DOMAIN.BLACK.PRINT", make(&Control::cmdDomainsPrint, Stats::BLACK));
+    _cmds.emplace("DOMAIN.WHITE.COUNT", make(&Control::cmdDomainsPrint, Stats::WHITE));
 
     for (size_t vs = 0; vs < Stats::nbViews; ++vs) {
         const auto &view = views[vs];
@@ -263,7 +269,7 @@ void Control::clientLoop(const int sockClient) const {
             }
         } else {
             LOG(ERROR) << __FUNCTION__ << " - invalid command: '" << cmd << "'";
-            out << "\"KO\"";
+            nack(out);
         }
         if (!_sockio->print(out, pretty)) {
             LOG(ERROR) << __FUNCTION__ << " - control socket write error";
@@ -282,6 +288,8 @@ auto Control::readCmdArgs(std::stringstream &args) {
     while (args >> arg) {
         if (std::all_of(arg.begin(), arg.end(), ::isdigit)) {
             vecArgs.emplace_back(arg, std::stoi(arg));
+        } else if (arg == "true" || arg == "false") {
+            vecArgs.emplace_back((arg == "true"));
         } else {
             vecArgs.emplace_back(arg);
         }
@@ -337,9 +345,11 @@ void Control::cmdPassState(CmdParams &&params) const {
 
 void Control::cmdResetAll(CmdParams &&params) const {
     ack(params.out);
+    LOG(INFO) << "Resetting all";
     settings.reset();
     appManager.reset();
     domManager.reset();
+    blockingListManager.reset();
     rulesManager.reset();
     pktManager.reset();
     hostManager.reset();
@@ -731,25 +741,22 @@ void Control::cmdPrintCustomRules(CmdParams &&params, Stats::Color color) const 
     }
 }
 
-void Control::cmdAddBlockingList(CmdParams &&params) const {
+void Control::cmdAddBlockingList(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
-    if (args.size() >= 5) {
+    if (args.size() >= 4) {
+        LOG(INFO) << __FUNCTION__ << "Add BlockingList " << args[0].string;
         std::string id = args[0].string;
         std::string url = args[1].string;
-        std::string colorStr = args[2].string;
-        std::string blockMaskStr = args[3].string;
-        std::string name = args[4].string;
-        for (unsigned long i = 5; i < args.size(); i++) {
+        uint32_t blockMask = args[2].number;
+        std::string name = args[3].string;
+        for (unsigned long i = 4; i < args.size(); i++) {
             name += " ";
             name += args[i].string;
         }
-        Stats::Color color = Stats::colorFromString(colorStr);
-        int blockMask = std::stoi(blockMaskStr);
-        if (blockMask < 0 || blockMask > std::numeric_limits<uint8_t>::max()) {
-            blockMask = 1;
-        }
+
         if (blockingListManager.addBlockingList(id, url, name, color,
                                                 static_cast<uint8_t>(blockMask))) {
+            blockingListManager.save();
             ack(params.out);
         } else {
             nack(params.out);
@@ -759,41 +766,43 @@ void Control::cmdAddBlockingList(CmdParams &&params) const {
     }
 }
 
-void Control::cmdRefreshBlockingList(CmdParams &&params) const {
+void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
-    BlockingList *blockingList = blockingListManager.findListById(args[0].string);
-    if (blockingList != nullptr) {
-        if (args.size() == 2) {
-            blockingList->refreshList(args[1].string, "");
-        } else if (args.size() == 3) {
-            blockingList->refreshList(args[1].string, args[2].string);
-        }
-        ack(params.out);
-    } else {
-        nack(params.out);
-    }
-}
-
-void Control::cmdUpdateBlockingList(CmdParams &&params) const {
-    const auto args = readCmdArgs(params.args);
-    if (args.size() >= 5) {
+    if (args.size() >= 8) {
         std::string id = args[0].string;
         std::string url = args[1].string;
-        std::string colorStr = args[2].string;
-        std::string blockMaskStr = args[3].string;
-        std::string name = args[4].string;
+        uint32_t blockMask = args[2].number;
+        uint32_t domainCount = args[3].number;
+        std::string updatedAtStr = args[4].string;
+        std::string etag = args[5].string;
+        bool enabled = args[6].boolean;
+        bool outdated = args[7].boolean;
+        std::string name;
         BlockingList *blockingList = blockingListManager.findListById(id);
         if (blockingList != nullptr) {
-            for (unsigned long i = 5; i < args.size(); i++) {
+            // Get name
+            for (unsigned long i = 8; i < args.size(); i++) {
                 name += " ";
                 name += args[i].string;
             }
-            Stats::Color newColor = Stats::colorFromString(colorStr);
-            int blockMask = std::stoi(blockMaskStr);
-            if (blockMask < 0 || blockMask > std::numeric_limits<uint8_t>::max()) {
-                blockMask = 1;
+            // Parse updatedAt
+            struct std::tm tm;
+            std::istringstream ss(updatedAtStr);
+            ss >> std::get_time(&tm, "%Y-%m-%d_%X"); // or just %T in this case
+            time_t updatedAt = mktime(&tm);
+
+            // If color change switch list
+            if (color != blockingList->getColor()) {
+                domManager.switchListColor(id, color);
             }
-            blockingList->updateList(name, newColor, url, static_cast<uint8_t>(blockMask));
+
+            if (blockMask != blockingList->getBlockMask()) {
+                domManager.changeBlockMask(id, blockMask, color);
+            }
+
+            blockingList->updateList(name, color, url, static_cast<uint8_t>(blockMask), domainCount,
+                                     updatedAt, etag, enabled, outdated);
+            blockingListManager.save();
             ack(params.out);
         } else {
             nack(params.out);
@@ -803,27 +812,12 @@ void Control::cmdUpdateBlockingList(CmdParams &&params) const {
     }
 }
 
-void Control::cmdToggleBlockingList(CmdParams &&params) const {
+void Control::cmdRemoveBlockingList(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
-        std::string id = args[0].string;
-        BlockingList *blockingList = blockingListManager.findListById(id);
-        if (blockingList != nullptr) {
-            blockingList->toggleList();
-            blockingList->setIsOutDated();
-            ack(params.out);
-        } else {
-            nack(params.out);
-        }
-    } else {
-        nack(params.out);
-    }
-}
-
-void Control::cmdRemoveBlockingList(CmdParams &&params) const {
-    const auto args = readCmdArgs(params.args);
-    if (args.size() == 1) {
+        domManager.removeAllDomainsFromList(args[0].string, color);
         blockingListManager.removeBlockingList(args[0].string);
+        blockingListManager.save();
         ack(params.out);
     } else {
         nack(params.out);
@@ -839,26 +833,13 @@ void Control::cmdPrintBlockingLists(CmdParams &&params) const {
     }
 }
 
-void Control::cmdOutDateBlockingList(CmdParams &&params) const {
-    const auto args = readCmdArgs(params.args);
-    if (args.size() == 2) {
-        BlockingList *blockingList = blockingListManager.findListById(args[0].string);
-        if (blockingList != nullptr) {
-            blockingList->setIsOutDated();
-            ack(params.out);
-        } else {
-            nack(params.out);
-        }
-    } else {
-        nack(params.out);
-    }
-}
-
 void Control::cmdClearBlockingLists(CmdParams &&params) const {
     const auto args = readCmdArg(params.args);
     if (args.type == CmdArg::NONE) {
-        for (const auto &[id, _] : blockingListManager.getAll()) {
+        for (const auto &[id, toBeRemoved] : blockingListManager.getAll()) {
+            domManager.removeAllDomainsFromList(id, toBeRemoved.getColor());
             blockingListManager.removeBlockingList(id);
+            blockingListManager.save();
         }
         ack(params.out);
     } else {
@@ -876,23 +857,65 @@ void Control::cmdSaveBlockingLists(CmdParams &&params) const {
     }
 }
 
+void Control::cmdEnableBlockingList(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() == 1) {
+        std::string id = args[0].string;
+        BlockingList *blockingList = blockingListManager.findListById(id);
+        if (domManager.enableList(id, blockingList->getBlockMask(), color)) {
+            blockingList->enable();
+            blockingListManager.save();
+            ack(params.out);
+        } else {
+            nack(params.out);
+        }
+    } else {
+        nack(params.out);
+    }
+}
+
+void Control::cmdDisableBlockingList(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() == 1) {
+        std::string id = args[0].string;
+        BlockingList *blockingList = blockingListManager.findListById(id);
+        if (domManager.disableList(id, color)) {
+            blockingList->disable();
+            blockingListManager.save();
+            ack(params.out);
+        } else {
+            nack(params.out);
+        }
+    } else {
+        ack(params.out);
+    }
+}
+
 void Control::cmdAddManyDomains(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
-    if (args.size() == 3) {
-        domManager.addDomainsToList(args[0].string, args[1].number, parseAggregatedDomains(args[2]),
-                                    color);
+    if (args.size() == 4) {
+        LOG(INFO) << __FUNCTION__ << "Add many domains to BlockingList " << args[0].string;
+        domManager.addDomainsToList(args[0].string, args[1].number, args[2].boolean,
+                                    parseAggregatedDomains(args[3]), color);
         ack(params.out);
     } else {
         nack(params.out);
     }
 }
 
-void Control::cmdRemoveManyDomains(CmdParams &&params, Stats::Color color) const {
-    const auto args = readCmdArgs(params.args);
-    if (args.size() == 3) {
-        ack(params.out);
+void Control::cmdDomainsCount(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArg(params.args);
+    if (args.type == CmdArg::NONE) {
+        params.out << domManager.getDomainsCount(color);
     } else {
         nack(params.out);
+    }
+}
+
+void Control::cmdDomainsPrint(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() == 1) {
+        domManager.printDomainsFromList(args[0].string, color, params.out);
     }
 }
 
@@ -919,7 +942,8 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "***\r\n"
         << "\r\n"
         << "- ending a command name by '!' indents json output (e.g. APP.UID!).\r\n"
-        << "- commands output either a single int (for e.g. blocking status), or an array of\r\n"
+        << "- commands output either a single int (for e.g. blocking status), or an array "
+           "of\r\n"
         << "      objects which can be apps, or domains.\r\n"
         << "- <uid> as parameter: outputs an array containing a single json object. If no\r\n"
         << "      app exists with that uid, the array is empty.\r\n"
@@ -974,7 +998,8 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "BLOCKIPLEAKS [<0|1>]: prints, disables or enables the IP leak blocking\r\n"
         << "    mechanism.\r\n"
         << "MAXAGEIP [<int>]: prints or sets the IP maximum age in seconds.\r\n"
-        << "GETBLACKIPS [<0|1>]: prints, disables or enables blacklisted hosts IP retrieval.\r\n"
+        << "GETBLACKIPS [<0|1>]: prints, disables or enables blacklisted hosts IP "
+           "retrieval.\r\n"
         << "\r\n"
 
         << "***\r\n"
@@ -1063,15 +1088,18 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "    blacklist, or to the app custom blacklist.\r\n"
         << "WHITELIST.ADD [<uid|str>] <domain>: adds the domain to either the global custom\r\n"
         << "    whitelist, or to the app custom whitelist.\r\n"
-        << "BLACKLIST.REMOVE [<uid|str>] <domain>: removes the domain from either the global\r\n"
+        << "BLACKLIST.REMOVE [<uid|str>] <domain>: removes the domain from either the "
+           "global\r\n"
         << "    custom blacklist, or from the app custom blacklist.\r\n"
-        << "WHITELIST.REMOVE [<uid|str>] <domain>: removes the domain from either the global\r\n"
+        << "WHITELIST.REMOVE [<uid|str>] <domain>: removes the domain from either the "
+           "global\r\n"
         << "    whitelist, or from the app custom whitelist.\r\n"
         << "BLACKLIST.CLEAR [<uid|str>]: clears either the global custom blacklist or the\r\n"
         << "    app custom blacklist.\r\n"
         << "WHITELIST.CLEAR [<uid|str>]: clears either the global custom whitelist or the\r\n"
         << "    app custom whitelist.\r\n"
-        << "BLACKLIST.PRINT [<uid|str>] <domain>: prints either the global custom blacklist,\r\n"
+        << "BLACKLIST.PRINT [<uid|str>] <domain>: prints either the global custom "
+           "blacklist,\r\n"
         << "    or the app custom blacklist.\r\n"
         << "WHITELIST.PRINT [<uid|str>] <domain>: prints either the the global whitelist,\r\n"
         << "    or the app custom whitelist.\r\n"

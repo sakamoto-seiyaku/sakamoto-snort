@@ -4,6 +4,7 @@
  */
 
 #include <thread>
+#include <dirent.h>
 
 #include <RulesManager.hpp>
 #include <DomainManager.hpp>
@@ -13,12 +14,14 @@ DomainManager::DomainManager() {}
 DomainManager::~DomainManager() {}
 
 void DomainManager::start(std::vector<BlockingList> blockingLists) {
-    // Iterate over the vector and print each BlockingList
+    // Parse blockingLists.size() to string to log it
     for (auto it = blockingLists.begin(); it != blockingLists.end(); ++it) {
-        if (it->getColor() == Stats::BLACK) {
-            _blacklist.read(it->getId());
-        } else if (it->getColor() == Stats::WHITE) {
-            _whitelist.read(it->getId());
+        if (it->isEnabled()) {
+            if (it->getColor() == Stats::BLACK) {
+                _blacklist.read(it->getId(), it->getBlockMask());
+            } else if (it->getColor() == Stats::WHITE) {
+                _whitelist.read(it->getId(), it->getBlockMask());
+            }
         }
     }
 }
@@ -157,6 +160,19 @@ void DomainManager::reset() {
     _customWhitelist.reset();
     _blackRules.reset();
     _whiteRules.reset();
+    _blacklist.reset();
+    _whitelist.reset();
+    if (auto dir = opendir(settings.saveDirDomainLists.c_str())) {
+        dirent *de;
+        while ((de = readdir(dir)) != nullptr) {
+            if (de->d_type == DT_REG) {
+                std::remove((settings.saveDirDomainLists + de->d_name).c_str());
+            }
+        }
+        closedir(dir);
+    } else {
+        LOG(INFO) << settings.saveDirDomainLists << " dir not exists";
+    }
 }
 
 void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View view) {
@@ -180,19 +196,73 @@ void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View 
         << JSF("rfcLeaked") << rfcLeaked << "}";
 }
 
-void DomainManager::addDomainsToList(std::string listId, int8_t mask,
+void DomainManager::addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
                                      std::vector<std::string> domains, Stats::Color color) {
     if (color == Stats::BLACK) {
-        _blacklist.write(listId, domains, mask);
+        _blacklist.write(listId, domains, blockMask, clear);
     } else if (color == Stats::WHITE) {
-        _whitelist.write(listId, domains, mask);
+        _whitelist.write(listId, domains, blockMask, clear);
     }
 }
 
-void DomainManager::getDomainsFromList(std::string listId, Stats::Color color) {
+void DomainManager::removeAllDomainsFromList(std::string listId, Stats::Color color) {
     if (color == Stats::BLACK) {
-        _blacklist.read(listId);
+        _blacklist.erase(listId);
     } else if (color == Stats::WHITE) {
-        _whitelist.read(listId);
+        _whitelist.erase(listId);
+    }
+}
+
+void DomainManager::switchListColor(std::string listId, Stats::Color color) {
+    if (color == Stats::BLACK) {
+        _blacklist.set(listId, _whitelist.get(listId));
+        _whitelist.erase(listId);
+    } else if (color == Stats::WHITE) {
+        _whitelist.set(listId, _blacklist.get(listId));
+        _blacklist.erase(listId);
+    }
+}
+
+bool DomainManager::enableList(std::string listId, uint8_t blockMask, Stats::Color color) {
+    if (color == Stats::BLACK) {
+        return _blacklist.enable(listId, blockMask);
+    } else if (color == Stats::WHITE) {
+        return _whitelist.enable(listId, blockMask);
+    }
+    return false;
+}
+
+bool DomainManager::disableList(std::string listId, Stats::Color color) {
+    if (color == Stats::BLACK) {
+        return _blacklist.disable(listId);
+    } else if (color == Stats::WHITE) {
+        return _whitelist.disable(listId);
+    }
+    return false;
+}
+
+uint32_t DomainManager::getDomainsCount(Stats::Color color) {
+    if (color == Stats::BLACK) {
+        return _blacklist.size();
+    } else if (color == Stats::WHITE) {
+        return _whitelist.size();
+    }
+    return 0;
+}
+
+void DomainManager::changeBlockMask(std::string listId, uint8_t blockMask, Stats::Color color) {
+    if (color == Stats::BLACK) {
+        _blacklist.changeBlockMask(listId, blockMask);
+    } else if (color == Stats::WHITE) {
+        _whitelist.changeBlockMask(listId, blockMask);
+    }
+}
+
+void DomainManager::printDomainsFromList(std::string listId, Stats::Color color,
+                                         std::ostream &out) {
+    if (color == Stats::BLACK) {
+        _blacklist.printDomains(listId, out);
+    } else if (color == Stats::WHITE) {
+        _whitelist.printDomains(listId, out);
     }
 }

@@ -67,8 +67,6 @@ static void snort() {
                                   appManager.restore();
                                   dnsListener.restore();
                                   Timer::get("restore");
-                              }),
-                              std::thread([&] {
                                   Timer::set("lists", "Domain lists init time");
                                   domManager.start(blockingListManager.getLists());
                                   Timer::get("lists");

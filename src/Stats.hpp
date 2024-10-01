@@ -37,19 +37,9 @@ public:
 
     static inline std::string colorToString(Stats::Color color) {
         if (color == Stats::BLACK) {
-            return "block";
+            return "BLACK";
         } else if (color == Stats::WHITE) {
-            return "allow";
-        } else {
-            throw ListColorException();
-        }
-    }
-
-    static inline Stats::Color colorFromString(std::string colorStr) {
-        if (colorStr == "block") {
-            return Stats::BLACK;
-        } else if (colorStr == "allow") {
-            return Stats::WHITE;
+            return "WHITE";
         } else {
             throw ListColorException();
         }

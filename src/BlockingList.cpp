@@ -12,7 +12,7 @@ BlockingList::BlockingList() {}
 BlockingList::BlockingList(const string id, const string name, const string url,
                            const Stats::Color color, const uint8_t blockMask,
                            const time_t updatedAt, const bool outdated, const string etag,
-                           const bool enabled)
+                           const bool enabled, const uint32_t domainsCount)
     : _id(id)
     , _name(name)
     , _url(url)
@@ -21,14 +21,22 @@ BlockingList::BlockingList(const string id, const string name, const string url,
     , _updatedAt(updatedAt)
     , _outdated(outdated)
     , _etag(etag)
-    , _enabled(enabled) {}
+    , _enabled(enabled)
+    , _domainsCount(domainsCount) {}
 
 void BlockingList::updateList(const string name, const Stats::Color color, const string url,
-                              const uint8_t blockMask) {
+                              const uint8_t blockMask, const uint32_t domainsCount,
+                              const time_t updatedAt, const string etag, const bool enabled,
+                              const bool outdated) {
     _name = name;
     _url = url;
     _color = color;
     _blockMask = blockMask;
+    _domainsCount = domainsCount;
+    _updatedAt = updatedAt;
+    _etag = etag;
+    _enabled = enabled;
+    _outdated = outdated;
 }
 
 void BlockingList::refreshList(const string lastUpdated, const string etag) {
@@ -40,32 +48,30 @@ void BlockingList::refreshList(const string lastUpdated, const string etag) {
     _etag = etag;
 }
 
-void BlockingList::toggleList() { _enabled = !_enabled; }
-
 void BlockingList::save(Saver &saver) const {
     saver.write(_id);
     saver.write(_name);
     saver.write(_url);
-    saver.write(Stats::colorToString(_color));
+    saver.write<Stats::Color>(_color);
     saver.write<uint8_t>(_blockMask);
     saver.write(_updatedAt);
     saver.write<bool>(_outdated);
     saver.write(_etag);
     saver.write<bool>(_enabled);
+    saver.write<uint32_t>(_domainsCount);
 }
 
 void BlockingList::restore(Saver &saver) {
     saver.readGuid(_id);
     saver.readBlockingListName(_name);
     saver.readBlockingListUrl(_url);
-    string colorStr = "";
-    saver.readBlockingListType(colorStr);
-    _color = Stats::colorFromString(colorStr);
+    _color = saver.read<Stats::Color>();
     _blockMask = saver.read<uint8_t>();
     _updatedAt = saver.read<time_t>();
     _outdated = saver.read<bool>();
     saver.read(_etag);
     _enabled = saver.read<bool>();
+    _domainsCount = saver.read<uint32_t>();
 }
 
 string BlockingList::getId() const { return _id; }
@@ -88,6 +94,12 @@ string BlockingList::getEtag() const { return _etag; }
 
 bool BlockingList::isEnabled() const { return _enabled; }
 
+void BlockingList::enable() { _enabled = true; }
+
+void BlockingList::disable() { _enabled = false; }
+
+uint32_t BlockingList::getDomainsCount() const { return _domainsCount; }
+
 string BlockingList::serialize() {
     time_t date = _updatedAt;
     tm *date_tm = gmtime(&date);
@@ -102,7 +114,7 @@ string BlockingList::serialize() {
     blString += _url;
     blString += "\",\"type\":\"";
     blString += Stats::colorToString(_color);
-    blString += "\",\"mask\":";
+    blString += "\",\"blockMask\":";
     blString += std::to_string(_blockMask);
     blString += ",\"updatedAt\":\"";
     blString += dateStr;
@@ -112,6 +124,8 @@ string BlockingList::serialize() {
     blString += _etag;
     blString += "\",\"enabled\":";
     blString += _enabled ? "1" : "0";
+    blString += ",\"domainsCount\":";
+    blString += std::to_string(_domainsCount);
     blString += "}";
     return blString;
 }

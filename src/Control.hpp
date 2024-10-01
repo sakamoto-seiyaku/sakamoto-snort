@@ -10,8 +10,9 @@
 class Control {
 private:
     struct CmdArg {
-        const enum { NONE, INT, STR } type;
+        const enum { NONE, INT, STR, BOOL } type;
         const uint32_t number = 0;
+        const bool boolean = false;
         const std::string string;
 
         CmdArg()
@@ -21,6 +22,10 @@ private:
             : type(INT)
             , number(num)
             , string(str) {}
+
+        CmdArg(const bool b)
+            : type(BOOL)
+            , boolean(b) {}
 
         CmdArg(const std::string &str)
             : type(STR)
@@ -175,19 +180,13 @@ private:
 
     void cmdHelp(CmdParams &&params) const;
 
-    void cmdAddBlockingList(CmdParams &&params) const;
+    void cmdAddBlockingList(CmdParams &&params, Stats::Color color) const;
 
-    void cmdRemoveBlockingList(CmdParams &&params) const;
+    void cmdRemoveBlockingList(CmdParams &&params, Stats::Color color) const;
 
-    void cmdToggleBlockingList(CmdParams &&params) const;
-
-    void cmdUpdateBlockingList(CmdParams &&params) const;
+    void cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) const;
 
     void cmdPrintBlockingLists(CmdParams &&params) const;
-
-    void cmdRefreshBlockingList(CmdParams &&params) const;
-
-    void cmdOutDateBlockingList(CmdParams &&params) const;
 
     void cmdClearBlockingLists(CmdParams &&params) const;
 
@@ -195,7 +194,13 @@ private:
 
     void cmdAddManyDomains(CmdParams &&params, Stats::Color color) const;
 
-    void cmdRemoveManyDomains(CmdParams &&params, Stats::Color color) const;
+    void cmdEnableBlockingList(CmdParams &&params, Stats::Color color) const;
+
+    void cmdDisableBlockingList(CmdParams &&params, Stats::Color color) const;
+
+    void cmdDomainsCount(CmdParams &&params, Stats::Color color) const;
+
+    void cmdDomainsPrint(CmdParams &&params, Stats::Color color) const;
 
     std::vector<std::string> parseAggregatedDomains(CmdArg arg) const;
 };

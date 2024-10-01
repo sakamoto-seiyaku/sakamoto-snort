@@ -88,10 +88,22 @@ public:
 
     void printBlackDomainsStats(std::ostream &out, const Stats::View view);
 
-    void addDomainsToList(std::string listId, int8_t mask, std::vector<std::string> domains,
-                          Stats::Color color);
+    void addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
+                          std::vector<std::string> domains, Stats::Color color);
 
-    void getDomainsFromList(std::string listId, Stats::Color color);
+    void removeAllDomainsFromList(std::string listId, Stats::Color color);
+
+    void switchListColor(std::string listId, Stats::Color color);
+
+    bool enableList(std::string listId, uint8_t blockMask, Stats::Color color);
+
+    bool disableList(std::string listId, Stats::Color color);
+
+    uint32_t getDomainsCount(Stats::Color color);
+
+    void changeBlockMask(std::string listId, uint8_t blockMask, Stats::Color color);
+
+    void printDomainsFromList(std::string listId, Stats::Color color, std::ostream &out);
 
 private:
     CustomList &customList(const Stats::Color color) {

@@ -1,26 +1,21 @@
-#include <list>
-#include <string>
-#include <ctime>
-#include <Saver.hpp>
-#include <BlockingList.hpp>
 #include <BlockingListManager.hpp>
-#include <Stats.hpp>
+
 using namespace std;
 
 BlockingListManager::BlockingListManager() {}
 
 bool BlockingListManager::addBlockingList(string id, string url, string name, Stats::Color color,
-                                          std::uint8_t blockMask) {
+                                          uint8_t blockMask) {
     auto it = _ByIds.find(id);
     if (it == _ByIds.end()) {
-        BlockingList bl(id, name, url, color, blockMask, 0, true, "", true);
-        const std::lock_guard lock(_mutex);
+        BlockingList bl(id, name, url, color, blockMask, 0, true, "", true, 0);
+        const lock_guard lock(_mutex);
         return _ByIds.try_emplace(id, bl).second;
     }
     return false;
 }
 
-BlockingList *BlockingListManager::findListById(std::string id) {
+BlockingList *BlockingListManager::findListById(string id) {
     auto it = _ByIds.find(id);
     if (it != _ByIds.end()) {
         return &(it->second);
@@ -28,16 +23,22 @@ BlockingList *BlockingListManager::findListById(std::string id) {
     return nullptr;
 }
 
-bool BlockingListManager::removeBlockingList(std::string id) {
+bool BlockingListManager::removeBlockingList(string id) {
     auto it = _ByIds.find(id);
     if (it != _ByIds.end()) {
-        _ByIds.erase(it);
-        return true;
+        string filePath =
+            settings.saveDirDomainLists + "/" + id + (it->second.isEnabled() ? "" : ".disabled");
+        if (std::remove(filePath.c_str()) == 0) {
+            _ByIds.erase(it);
+            return true;
+        } else {
+            return false;
+        }
     }
     return false;
 }
 
-std::unordered_map<std::string, BlockingList> BlockingListManager::getAll() { return _ByIds; }
+unordered_map<string, BlockingList> BlockingListManager::getAll() { return _ByIds; }
 
 void BlockingListManager::restore() {
     _saver.restore([&] {
@@ -60,8 +61,8 @@ void BlockingListManager::save() {
     });
 }
 
-void BlockingListManager::printAll(std::ostream &out) {
-    const std::shared_lock_guard lock(_mutex);
+void BlockingListManager::printAll(ostream &out) {
+    const shared_lock_guard lock(_mutex);
     bool first = true;
     out << "{\"blockingLists\":[";
     for (auto &bl : _ByIds) {
@@ -73,12 +74,13 @@ void BlockingListManager::printAll(std::ostream &out) {
 }
 
 void BlockingListManager::reset() {
-    const std::lock_guard lock(_mutex);
+    const lock_guard lock(_mutex);
     _ByIds.clear();
 }
 
-std::vector<BlockingList> BlockingListManager::getLists() {
-    std::vector<BlockingList> lists;
+vector<BlockingList> BlockingListManager::getLists() {
+    vector<BlockingList> lists;
+    const lock_guard lock(_mutex);
     for (auto it = _ByIds.begin(); it != _ByIds.end(); ++it) {
         lists.push_back(it->second);
     }

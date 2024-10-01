@@ -11,7 +11,8 @@ public:
 
     BlockingList(const std::string id, const std::string name, const std::string url,
                  const Stats::Color _color, uint8_t _blockMask, const std::time_t updatedAt,
-                 const bool outdated, const std::string etag, const bool enabled);
+                 const bool outdated, const std::string etag, const bool enabled,
+                 const uint32_t domainsCount);
 
     void save(Saver &saver) const;
 
@@ -20,7 +21,8 @@ public:
     void refreshList(const std::string lastUpdated, const std::string etag);
 
     void updateList(const std::string name, const Stats::Color color, const std::string url,
-                    const uint8_t _blockMask);
+                    const uint8_t blockMask, const uint32_t domainsCount, const time_t updatedAt,
+                    const std::string etag, const bool enabled, const bool outdated);
 
     void toggleList();
 
@@ -34,9 +36,9 @@ public:
 
     std::uint8_t getBlockMask() const;
 
-    std::uint8_t getIdBlockMask() const;
-
     std::time_t getUpdatedAt() const;
+
+    std::uint32_t getDomainsCount() const;
 
     bool isOutdated() const;
 
@@ -45,6 +47,10 @@ public:
     std::string getEtag() const;
 
     bool isEnabled() const;
+
+    void enable();
+
+    void disable();
 
     std::string serialize();
 
@@ -58,4 +64,5 @@ private:
     bool _outdated = true;
     std::string _etag = "";
     bool _enabled = true;
+    uint32_t _domainsCount;
 };

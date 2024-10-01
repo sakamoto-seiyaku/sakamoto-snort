@@ -11,6 +11,10 @@ DomainList::DomainList() {}
 
 DomainList::~DomainList() {}
 
+DomainList::DomsSet DomainList::get(std::string listId) { return _domainsByListId[listId]; }
+
+void DomainList::set(std::string listId, DomsSet domains) { _domainsByListId[listId] = domains; }
+
 uint8_t DomainList::blockMask(const std::string &domain) {
     const std::shared_lock_guard lock(_mutex);
     for (const auto &[_, domains] : _domainsByListId) {
@@ -32,34 +36,89 @@ uint8_t DomainList::blockMask(const std::string &domain) {
     return 0;
 }
 
-bool DomainList::read(std::string listId) {
-    if (auto in = std::ifstream(settings.saveDomainLists + '/' + listId); in.is_open()) {
+void DomainList::read(std::string listId, uint8_t blockMask) {
+    const std::shared_lock_guard lock(_mutex);
+    if (auto in = std::ifstream(settings.saveDirDomainLists + listId, std::ifstream::in);
+        in.is_open()) {
         std::string hostname;
-        uint32_t mask;
         DomsSet domains;
-        while (in >> hostname >> mask) {
-            auto [it, inserted] = domains.emplace(std::move(hostname), mask);
+        while (in >> hostname) {
+            auto [it, inserted] = domains.emplace(std::move(hostname), blockMask);
             if (!inserted) {
-                it->second |= mask;
+                it->second |= blockMask;
             }
         }
         _domainsByListId.emplace(listId, domains);
         in.close();
-        return true;
     } else {
-        throw std::runtime_error("Cannot open list file for list" + listId);
+        throw std::runtime_error("Cannot read DomainList file");
     }
 }
 
-void DomainList::write(std::string listId, std::vector<std::string> domains, int8_t mask) {
-    if (auto out = std::ofstream(settings.saveDomainLists + '/' + listId, std::ofstream::app);
+void DomainList::write(std::string listId, std::vector<std::string> domains, uint8_t blockMask,
+                       bool clear) {
+    // Acquire a lock on the mutex
+    const std::shared_lock_guard lock(_mutex);
+    if (auto out = std::ofstream(settings.saveDirDomainLists + listId.c_str(),
+                                 std::ofstream::app | std::ofstream::out);
         out.is_open()) {
+        if (clear) {
+            _domainsByListId.erase(listId);
+            out.clear();
+        }
         // Iterate over the domains and write them to the file
-        for (auto &domain : domains) {
-            out << domain << " " << mask << std::endl;
+        for (const auto &domain : domains) {
+            _domainsByListId[listId].emplace(domain, blockMask);
+            out << domain << std::endl;
         }
         out.close();
     } else {
-        throw std::runtime_error("Cannot open list file for list" + listId);
+        throw std::runtime_error("Cannot write DomainList file");
+    }
+}
+
+void DomainList::erase(std::string listId) {
+    const std::shared_lock_guard lock(_mutex);
+    _domainsByListId.erase(listId);
+}
+
+void DomainList::reset() {
+    const std::shared_lock_guard lock(_mutex);
+    _domainsByListId.clear();
+}
+
+bool DomainList::enable(std::string listId, uint8_t blockMask) {
+    const std::shared_lock_guard lock(_mutex);
+    const std::string oldName = settings.saveDirDomainLists + listId + ".disabled";
+    const std::string newName = settings.saveDirDomainLists + listId;
+    if (std::rename(oldName.c_str(), newName.c_str())) {
+        return false;
+    } else {
+        read(listId, blockMask);
+        return true;
+    }
+}
+
+bool DomainList::disable(std::string listId) {
+    const std::shared_lock_guard lock(_mutex);
+    const std::string oldName = settings.saveDirDomainLists + listId;
+    const std::string newName = settings.saveDirDomainLists + listId + ".disabled";
+    if (std::rename(oldName.c_str(), newName.c_str())) {
+        return false;
+    } else {
+        erase(listId);
+        return true;
+    }
+}
+
+void DomainList::changeBlockMask(std::string listId, uint8_t blockMask) {
+    for (auto &it : _domainsByListId[listId]) {
+        it.second = blockMask;
+    }
+}
+
+void DomainList::printDomains(std::string listId, std::ostream &out) {
+    for (auto it : _domainsByListId[listId]) {
+        out << it.first << " " << std::to_string(it.second) << std::endl;
     }
 }

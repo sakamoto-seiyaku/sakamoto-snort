@@ -32,20 +32,18 @@ public:
 
     static inline const std::string saveDirPackages = _saveDir + "packages/";
     static inline const std::string saveDirSystem = _saveDir + "system/";
+    static inline const std::string saveDirDomainLists = _saveDir + "domains_lists/";
+
     static inline const std::string saveDomains = _saveDir + "stats_domains";
     static inline const std::string saveDnsStream = _saveDir + "dnsstream";
     static inline const std::string saveRules = _saveDir + "rules";
     static inline const std::string saveStatsTotal = _saveDir + "stats_total";
-    static inline const std::string saveBlobkingLists = _saveDir + "blocking_lists";
-    static inline const std::string saveDomainLists = _saveDir + "domains_lists";
+    static inline const std::string saveBlockingLists = _saveDir + "blocking_lists";
 
     static inline const std::string systemAppPrefix = "system_";
 
     static constexpr const char *netdSocketPath = "@sucre-snort-inetd";
     static constexpr const char *controlSocketPath = "@sucre-snort-control";
-
-    static inline const std::string defaultBlacklist = _defaultDirEtc + "domains-black";
-    static inline const std::string defaultWhitelist = _defaultDirEtc + "domains-white";
 
     static constexpr const char *iptablesShell = "/system/bin/iptables";
     static constexpr const char *ip6tablesShell = "/system/bin/ip6tables";
@@ -57,7 +55,7 @@ public:
     static constexpr const char *pmShell = "/system/bin/pm";
     static constexpr const char *mountShell = "/system/bin/mount";
 
-    static constexpr uint32_t controlCmdLen = 1000;
+    static constexpr uint32_t controlCmdLen = 10001;
     static constexpr uint32_t controlBindTrials = 10;
     static constexpr uint32_t controlClients = 1000;
     static constexpr uint32_t controlPort = 60606;

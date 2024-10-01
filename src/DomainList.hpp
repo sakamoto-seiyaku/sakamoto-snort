@@ -9,7 +9,7 @@
 #include <Settings.hpp>
 #include <iode-snort.hpp>
 #include <vector>
-
+#include <filesystem>
 class DomainList {
 private:
     using DomsSet = std::unordered_map<std::string, uint8_t>;
@@ -25,6 +25,10 @@ public:
 
     DomainList(const DomainList &) = delete;
 
+    DomsSet get(std::string listId);
+
+    void set(std::string listId, DomsSet domains);
+
     uint32_t size() const {
         int totalItems = 0;
         for (const auto &[_, domsSet] : _domainsByListId) {
@@ -35,7 +39,20 @@ public:
 
     uint8_t blockMask(const std::string &domain);
 
-    bool read(std::string listId);
+    void read(std::string listId, uint8_t blockMask);
 
-    void write(std::string listId, std::vector<std::string> domains, int8_t mask);
+    void write(std::string listId, std::vector<std::string> domains, uint8_t blockMask,
+               bool clear = false);
+
+    void erase(std::string listId);
+
+    bool enable(std::string listId, uint8_t blockMask);
+
+    bool disable(std::string listId);
+
+    void changeBlockMask(std::string listId, uint8_t blockMask);
+
+    void reset();
+
+    void printDomains(std::string listId, std::ostream &out);
 };

@@ -3,17 +3,20 @@
 #include <vector>
 #include <shared_mutex>
 #include <unordered_map>
-
-#include <Saver.hpp>
 #include <Settings.hpp>
 #include <Stats.hpp>
 #include <BlockingList.hpp>
-
+#include <stdio.h>
+#include <list>
+#include <string>
+#include <ctime>
+#include <Saver.hpp>
+#include <DomainManager.hpp>
 class BlockingListManager {
 
 private:
     std::unordered_map<std::string, BlockingList> _ByIds;
-    Saver _saver{settings.saveBlobkingLists};
+    Saver _saver{settings.saveBlockingLists};
     std::shared_mutex _mutex;
 
 public:
