@@ -1,8 +1,8 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2028 sucré Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <net/if.h>
 
 #include <PacketManager.hpp>
@@ -43,8 +43,8 @@ void PacketManager::initIfaces() {
                     _ifaceBits[i->if_index] = WIFI;
                 }
                 break;
-	    case 512:
-	    case 519:
+            case 512:
+            case 519:
                 _ifaceBits[i->if_index] = DATA;
                 break;
             case 65534:

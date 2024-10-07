@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2028 sucré Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
@@ -8,16 +8,16 @@
 #include <android-base/properties.h>
 #include <chrono>
 
-#include <iode-snort.hpp>
+#include <sucre-snort.hpp>
 #include <Saver.hpp>
 
 class Settings {
 private:
     static constexpr const char *_saveFile = "/data/snort/settings";
-    static constexpr const char *_firstStartProp = "iode-snort.first_start";
+    static constexpr const char *_firstStartProp = "sucre-snort.first_start";
     static inline const std::string _snortDir = "/data/snort/";
     static inline const std::string _saveDir = _snortDir + "save/";
-    static inline const std::string _defaultDirEtc = "/system_ext/etc/iode-snort/";
+    static inline const std::string _defaultDirEtc = "/system_ext/etc/sucre-snort/";
     static inline const std::string _telnetFile = _snortDir + "telnet";
 
 public:
@@ -47,8 +47,8 @@ public:
 
     static constexpr const char *iptablesShell = "/system/bin/iptables";
     static constexpr const char *ip6tablesShell = "/system/bin/ip6tables";
-    static constexpr const char *inputChain = "iode-snort_INPUT";
-    static constexpr const char *outputChain = "iode-snort_OUTPUT";
+    static constexpr const char *inputChain = "sucre-snort_INPUT";
+    static constexpr const char *outputChain = "sucre-snort_OUTPUT";
 
     static inline const std::string defaultAppsFile = _snortDir + "default-apps";
     static inline const std::string defaultAppsFileEtc = _defaultDirEtc + "default-apps";

@@ -1,9 +1,9 @@
 #
-# SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+# SPDX-FileCopyrightText: 2024-2025 sucré
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-service iode-snort /system_ext/bin/iode-snort
+service sucre-snort /system_ext/bin/sucre-snort
     class main
     user root
     group root package_info
@@ -12,5 +12,5 @@ service iode-snort /system_ext/bin/iode-snort
 on early-boot
    mkdir /data/snort 0700 root root
    restorecon --recursive /data/snort
-   setprop iode-snort.first_start true
-   enable iode-snort
+   setprop sucre-snort.first_start true
+   enable sucre-snort

@@ -1,13 +1,13 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2028 sucré Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #include <fstream>
 #include <sys/inotify.h>
 #include <thread>
 
-#include <iode-snort.hpp>
+#include <sucre-snort.hpp>
 #include <Settings.hpp>
 #include <PackageListener.hpp>
 

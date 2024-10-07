@@ -1,13 +1,13 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2025 sucré
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 cc_binary {
-    name: "iode-snort",
+    name: "sucre-snort",
     system_ext_specific: true,
     local_include_dirs: ["src"],
-    init_rc: ["iode-snort.rc"],
+    init_rc: ["sucre-snort.rc"],
     srcs: [
         "src/Activity.cpp",
         "src/ActivityManager.cpp",
@@ -42,7 +42,7 @@ cc_binary {
         "src/Stats.cpp",
         "src/Streamable.cpp",
         "src/Timer.cpp",
-        "src/iode-snort.cpp",
+        "src/sucre-snort.cpp",
     ],
     cppflags: [
         "-std=c++2a",

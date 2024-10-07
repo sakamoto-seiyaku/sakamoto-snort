@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2028 sucré Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 #include <thread>
 
-#include <iode-snort.hpp>
+#include <sucre-snort.hpp>
 #include <CmdLine.hpp>
 #include <Settings.hpp>
 #include <DefaultAppsManager.hpp>
@@ -45,8 +45,8 @@ void DefaultAppsManager::start() {
         bool removable;
         uint32_t category;
 
-        mkdir("/mnt/iode", 0700);
-        mkdir("/mnt/iode/empty", 0700);
+        mkdir("/mnt/sucre", 0700);
+        mkdir("/mnt/sucre/empty", 0700);
 
         while (in >> app >> appdir >> removable >> category) {
             auto it = defapps.find(app);
@@ -83,8 +83,8 @@ void DefaultAppsManager::start() {
                             dirent *de;
                             while ((de = readdir(dirfd)) != nullptr) {
                                 if (de->d_type == DT_REG) {
-                                    CmdLine(settings.mountShell, "-o", "bind",
-                                            "/mnt/iode/empty", dir)
+                                    CmdLine(settings.mountShell, "-o", "bind", "/mnt/sucre/empty",
+                                            dir)
                                         .exec();
                                     break;
                                 }

@@ -1,8 +1,8 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2028 sucré Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <Stats.hpp>
@@ -32,7 +32,7 @@ private:
 
     void resetDay(const View view);
 
-    void printType(std::ostream & out, const View view, const Type ts) const;
+    void printType(std::ostream &out, const View view, const Type ts) const;
 
-    void printNotif(std::ostream & out) const;
+    void printNotif(std::ostream &out) const;
 };

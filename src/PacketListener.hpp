@@ -1,8 +1,8 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2028 sucré Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
- 
+
 #pragma once
 
 #include <libmnl/libmnl.h>

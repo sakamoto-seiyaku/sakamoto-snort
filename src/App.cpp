@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 iodé Technologies
+ * SPDX-FileCopyrightText: 2024-2028 sucré Technologies
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
@@ -111,9 +111,7 @@ void App::removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats
     customRules(color).remove(rule, compile);
 }
 
-void App::buildCustomRules(const Stats::Color color) {
-    customRules(color).build();
-}
+void App::buildCustomRules(const Stats::Color color) { customRules(color).build(); }
 
 void App::printCustomRules(std::ostream &out, const Stats::Color color) {
     customRules(color).print(out);
