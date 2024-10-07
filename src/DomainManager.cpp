@@ -22,6 +22,12 @@ void DomainManager::start(std::vector<BlockingList> blockingLists) {
             } else if (it->getColor() == Stats::WHITE) {
                 _whitelist.read(it->getId(), it->getBlockMask());
             }
+        } else {
+            if (it->getColor() == Stats::BLACK) {
+                _blacklist.disable(it->getId());
+            } else if (it->getColor() == Stats::WHITE) {
+                _whitelist.disable(it->getId());
+            }
         }
     }
 }
@@ -171,7 +177,7 @@ void DomainManager::reset() {
         }
         closedir(dir);
     } else {
-        LOG(INFO) << settings.saveDirDomainLists << " dir not exists";
+        LOG(ERROR) << settings.saveDirDomainLists << " dir not exists";
     }
 }
 
@@ -205,12 +211,13 @@ void DomainManager::addDomainsToList(std::string listId, uint8_t blockMask, bool
     }
 }
 
-void DomainManager::removeAllDomainsFromList(std::string listId, Stats::Color color) {
+bool DomainManager::removeDomainList(std::string listId, Stats::Color color) {
     if (color == Stats::BLACK) {
-        _blacklist.erase(listId);
+        return _blacklist.remove(listId);
     } else if (color == Stats::WHITE) {
-        _whitelist.erase(listId);
+        return _whitelist.remove(listId);
     }
+    return false;
 }
 
 void DomainManager::switchListColor(std::string listId, Stats::Color color) {

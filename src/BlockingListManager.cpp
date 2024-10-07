@@ -26,14 +26,8 @@ BlockingList *BlockingListManager::findListById(string id) {
 bool BlockingListManager::removeBlockingList(string id) {
     auto it = _ByIds.find(id);
     if (it != _ByIds.end()) {
-        string filePath =
-            settings.saveDirDomainLists + "/" + id + (it->second.isEnabled() ? "" : ".disabled");
-        if (std::remove(filePath.c_str()) == 0) {
-            _ByIds.erase(it);
-            return true;
-        } else {
-            return false;
-        }
+        _ByIds.erase(it);
+        return true;
     }
     return false;
 }

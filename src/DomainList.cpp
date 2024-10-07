@@ -51,7 +51,7 @@ void DomainList::read(std::string listId, uint8_t blockMask) {
         _domainsByListId.emplace(listId, domains);
         in.close();
     } else {
-        throw std::runtime_error("Cannot read DomainList file");
+        LOG(ERROR) << " List read error for list: " << listId;
     }
 }
 
@@ -73,13 +73,18 @@ void DomainList::write(std::string listId, std::vector<std::string> domains, uin
         }
         out.close();
     } else {
-        throw std::runtime_error("Cannot write DomainList file");
+        LOG(ERROR) << __FUNCTION__ << " List write error for list: " << listId;
     }
 }
 
-void DomainList::erase(std::string listId) {
+bool DomainList::erase(std::string listId) {
     const std::shared_lock_guard lock(_mutex);
-    _domainsByListId.erase(listId);
+    auto it = _domainsByListId.find(listId);
+    if (it != _domainsByListId.end()) {
+        _domainsByListId.erase(it);
+        return true;
+    }
+    return false;
 }
 
 void DomainList::reset() {
@@ -120,5 +125,18 @@ void DomainList::changeBlockMask(std::string listId, uint8_t blockMask) {
 void DomainList::printDomains(std::string listId, std::ostream &out) {
     for (auto it : _domainsByListId[listId]) {
         out << it.first << " " << std::to_string(it.second) << std::endl;
+    }
+}
+
+bool DomainList::remove(std::string listId) {
+    erase(listId);
+    std::string filePathListEnabled = settings.saveDirDomainLists + "/" + listId;
+    std::string filePathListDisabled = settings.saveDirDomainLists + "/" + listId + ".disabled";
+    if (std::remove(filePathListEnabled.c_str()) == 0) {
+        return true;
+    } else if (std::remove(filePathListDisabled.c_str()) == 0) {
+        return true;
+    } else {
+        return false;
     }
 }

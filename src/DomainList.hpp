@@ -44,7 +44,7 @@ public:
     void write(std::string listId, std::vector<std::string> domains, uint8_t blockMask,
                bool clear = false);
 
-    void erase(std::string listId);
+    bool erase(std::string listId);
 
     bool enable(std::string listId, uint8_t blockMask);
 
@@ -55,4 +55,6 @@ public:
     void reset();
 
     void printDomains(std::string listId, std::ostream &out);
+
+    bool remove(std::string listId);
 };

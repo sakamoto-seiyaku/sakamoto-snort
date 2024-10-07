@@ -91,7 +91,7 @@ public:
     void addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
                           std::vector<std::string> domains, Stats::Color color);
 
-    void removeAllDomainsFromList(std::string listId, Stats::Color color);
+    bool removeDomainList(std::string listId, Stats::Color color);
 
     void switchListColor(std::string listId, Stats::Color color);
 

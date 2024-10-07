@@ -105,6 +105,8 @@ Control::Control() {
     _cmds.emplace("BLOCKLIST.WHITE.ADD", make(&Control::cmdAddBlockingList, Stats::WHITE));
     _cmds.emplace("BLOCKLIST.BLACK.UPDATE", make(&Control::cmdUpdateBlockingList, Stats::BLACK));
     _cmds.emplace("BLOCKLIST.WHITE.UPDATE", make(&Control::cmdUpdateBlockingList, Stats::WHITE));
+    _cmds.emplace("BLOCKLIST.BLACK.OUTDATE", make(&Control::cmdOutdateBlockingList, Stats::BLACK));
+    _cmds.emplace("BLOCKLIST.WHITE.OUTDATE", make(&Control::cmdOutdateBlockingList, Stats::WHITE));
     _cmds.emplace("BLOCKLIST.BLACK.REMOVE", make(&Control::cmdRemoveBlockingList, Stats::BLACK));
     _cmds.emplace("BLOCKLIST.WHITE.REMOVE", make(&Control::cmdRemoveBlockingList, Stats::WHITE));
     _cmds.emplace("BLOCKLIST.BLACK.ENABLE", make(&Control::cmdEnableBlockingList, Stats::BLACK));
@@ -744,7 +746,6 @@ void Control::cmdPrintCustomRules(CmdParams &&params, Stats::Color color) const 
 void Control::cmdAddBlockingList(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() >= 4) {
-        LOG(INFO) << __FUNCTION__ << "Add BlockingList " << args[0].string;
         std::string id = args[0].string;
         std::string url = args[1].string;
         uint32_t blockMask = args[2].number;
@@ -753,22 +754,23 @@ void Control::cmdAddBlockingList(CmdParams &&params, Stats::Color color) const {
             name += " ";
             name += args[i].string;
         }
-
         if (blockingListManager.addBlockingList(id, url, name, color,
                                                 static_cast<uint8_t>(blockMask))) {
             blockingListManager.save();
             ack(params.out);
         } else {
+            LOG(ERROR) << __FUNCTION__ << " Error on add BlockingList id " << id;
             nack(params.out);
         }
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }
 
 void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
-    if (args.size() >= 8) {
+    if (args.size() >= 9) {
         std::string id = args[0].string;
         std::string url = args[1].string;
         uint32_t blockMask = args[2].number;
@@ -777,11 +779,11 @@ void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) cons
         std::string etag = args[5].string;
         bool enabled = args[6].boolean;
         bool outdated = args[7].boolean;
-        std::string name;
+        std::string name = args[8].string;
         BlockingList *blockingList = blockingListManager.findListById(id);
         if (blockingList != nullptr) {
             // Get name
-            for (unsigned long i = 8; i < args.size(); i++) {
+            for (unsigned long i = 9; i < args.size(); i++) {
                 name += " ";
                 name += args[i].string;
             }
@@ -805,9 +807,26 @@ void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) cons
             blockingListManager.save();
             ack(params.out);
         } else {
+            LOG(ERROR) << __FUNCTION__ << " Cannot update list with id : " << id
+                       << " list not found";
             nack(params.out);
         }
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
+        nack(params.out);
+    }
+}
+
+void Control::cmdOutdateBlockingList(CmdParams &&params, Stats::Color color) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() == 1) {
+        std::string id = args[0].string;
+        BlockingList *blockingList = blockingListManager.findListById(id);
+        blockingList->setIsOutDated();
+        blockingListManager.save();
+        ack(params.out);
+    } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }
@@ -815,11 +834,16 @@ void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) cons
 void Control::cmdRemoveBlockingList(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
-        domManager.removeAllDomainsFromList(args[0].string, color);
-        blockingListManager.removeBlockingList(args[0].string);
+        if (!domManager.removeDomainList(args[0].string, color)) {
+            LOG(ERROR) << " Error when removing domain list :" << args[0].string;
+        };
+        if (!blockingListManager.removeBlockingList(args[0].string)) {
+            LOG(ERROR) << " Error when removing blocking list :" << args[0].string;
+        }
         blockingListManager.save();
         ack(params.out);
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }
@@ -837,12 +861,13 @@ void Control::cmdClearBlockingLists(CmdParams &&params) const {
     const auto args = readCmdArg(params.args);
     if (args.type == CmdArg::NONE) {
         for (const auto &[id, toBeRemoved] : blockingListManager.getAll()) {
-            domManager.removeAllDomainsFromList(id, toBeRemoved.getColor());
+            domManager.removeDomainList(id, toBeRemoved.getColor());
             blockingListManager.removeBlockingList(id);
             blockingListManager.save();
         }
         ack(params.out);
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }
@@ -853,6 +878,7 @@ void Control::cmdSaveBlockingLists(CmdParams &&params) const {
         blockingListManager.save();
         ack(params.out);
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }
@@ -870,6 +896,7 @@ void Control::cmdEnableBlockingList(CmdParams &&params, Stats::Color color) cons
             nack(params.out);
         }
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }
@@ -887,6 +914,7 @@ void Control::cmdDisableBlockingList(CmdParams &&params, Stats::Color color) con
             nack(params.out);
         }
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         ack(params.out);
     }
 }
@@ -894,11 +922,11 @@ void Control::cmdDisableBlockingList(CmdParams &&params, Stats::Color color) con
 void Control::cmdAddManyDomains(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 4) {
-        LOG(INFO) << __FUNCTION__ << "Add many domains to BlockingList " << args[0].string;
         domManager.addDomainsToList(args[0].string, args[1].number, args[2].boolean,
                                     parseAggregatedDomains(args[3]), color);
         ack(params.out);
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }
@@ -908,6 +936,7 @@ void Control::cmdDomainsCount(CmdParams &&params, Stats::Color color) const {
     if (args.type == CmdArg::NONE) {
         params.out << domManager.getDomainsCount(color);
     } else {
+        LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
     }
 }

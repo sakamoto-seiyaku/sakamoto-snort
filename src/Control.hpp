@@ -186,6 +186,8 @@ private:
 
     void cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) const;
 
+    void cmdOutdateBlockingList(CmdParams &&params, Stats::Color color) const;
+
     void cmdPrintBlockingLists(CmdParams &&params) const;
 
     void cmdClearBlockingLists(CmdParams &&params) const;
