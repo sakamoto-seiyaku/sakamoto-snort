@@ -146,12 +146,6 @@ private:
     void cmdDomainlistApp(CmdParams &&params, const Stats::Color cs, const Stats::View view,
                           const TypeStat... ts) const;
 
-    void cmdDefaultAppsList(CmdParams &&params) const;
-
-    void cmdDefaultAppsInstall(CmdParams &&params) const;
-
-    void cmdDefaultAppsRemove(CmdParams &&params) const;
-
     void cmdTopActivity(CmdParams &&params) const;
 
     void cmdUseCustomList(CmdParams &&params, bool useCustom) const;

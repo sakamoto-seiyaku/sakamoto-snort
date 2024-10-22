@@ -50,8 +50,6 @@ public:
     static constexpr const char *inputChain = "sucre-snort_INPUT";
     static constexpr const char *outputChain = "sucre-snort_OUTPUT";
 
-    static inline const std::string defaultAppsFile = _snortDir + "default-apps";
-    static inline const std::string defaultAppsFileEtc = _defaultDirEtc + "default-apps";
     static constexpr const char *pmShell = "/system/bin/pm";
     static constexpr const char *mountShell = "/system/bin/mount";
 

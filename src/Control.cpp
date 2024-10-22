@@ -14,7 +14,6 @@
 #include <DnsListener.hpp>
 #include <HostManager.hpp>
 #include <PacketManager.hpp>
-#include <DefaultAppsManager.hpp>
 #include <RulesManager.hpp>
 #include <Settings.hpp>
 #include <Rule.hpp>
@@ -79,9 +78,6 @@ Control::Control() {
     _cmds.emplace("ACTIVITYSTREAM.STOP", make(&Control::cmdStopActivityStream));
     _cmds.emplace("HOSTS", make(&Control::cmdHosts));
     _cmds.emplace("HOSTS.NAME", make(&Control::cmdHostsByName));
-    _cmds.emplace("DEFAULTAPPS.LIST", make(&Control::cmdDefaultAppsList));
-    _cmds.emplace("DEFAULTAPPS.INSTALL", make(&Control::cmdDefaultAppsInstall));
-    _cmds.emplace("DEFAULTAPPS.REMOVE", make(&Control::cmdDefaultAppsRemove));
     _cmds.emplace("TOPACTIVITY", make(&Control::cmdTopActivity));
     _cmds.emplace("CUSTOMLIST.ON", make(&Control::cmdUseCustomList, true));
     _cmds.emplace("CUSTOMLIST.OFF", make(&Control::cmdUseCustomList, false));
@@ -615,20 +611,6 @@ void Control::cmdDomainlistApp(CmdParams &&params, const Stats::Color cs, const 
     } else {
         appManager.printDomains(params.out, arg.string, cs, view, ts...);
     }
-}
-
-void Control::cmdDefaultAppsList(CmdParams &&params) const { defAppManager.print(params.out); }
-
-void Control::cmdDefaultAppsInstall(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    ack(params.out);
-    defAppManager.install(arg.string);
-}
-
-void Control::cmdDefaultAppsRemove(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    ack(params.out);
-    defAppManager.remove(arg.string);
 }
 
 void Control::cmdTopActivity(CmdParams &&params) const {

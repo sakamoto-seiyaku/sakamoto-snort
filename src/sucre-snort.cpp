@@ -10,7 +10,6 @@
 #include <sucre-snort.hpp>
 #include <Timer.hpp>
 #include <Settings.hpp>
-#include <DefaultAppsManager.hpp>
 #include <PacketListener.hpp>
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
@@ -21,7 +20,6 @@
 #include <BlockingListManager.hpp>
 
 Settings settings;
-DefaultAppsManager defAppManager;
 RulesManager rulesManager;
 DomainManager domManager;
 BlockingListManager blockingListManager;
@@ -54,7 +52,6 @@ static void snort() {
     {
         const std::lock_guard lock(mutexListeners);
         Timer::set("defapps", "Default apps init time");
-        defAppManager.start();
         Timer::get("defapps");
         std::thread threads[]{std::thread([&] {
                                   Timer::set("packages", "Packages init time");

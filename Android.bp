@@ -21,7 +21,6 @@ cc_binary {
         "src/Control.cpp",
         "src/CustomList.cpp",
         "src/CustomRules.cpp",
-        "src/DefaultAppsManager.cpp",
         "src/DnsListener.cpp",
         "src/DnsRequest.cpp",
         "src/Domain.cpp",
