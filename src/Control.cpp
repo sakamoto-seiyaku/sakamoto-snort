@@ -160,31 +160,19 @@ void Control::start() {
 }
 
 void Control::unixServer() {
+    int unixSocket = android_get_control_socket(settings.controlSocketPath);
 
-    int controlSocket = socket(PF_UNIX, SOCK_STREAM, 0);
-    struct sockaddr_un addr;
-    int alen;
-    if (controlSocket < 0) {
+    if (unixSocket < 1) {
         throw std::runtime_error("control unix socket error");
-        LOG(ERROR) << __FUNCTION__ << "sucre-snort-control socket creation error";
     }
 
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, settings.controlSocketPath, sizeof(addr.sun_path) - 1);
-    alen = offsetof(struct sockaddr_un, sun_path) + strlen(settings.controlSocketPath);
-    addr.sun_path[0] = '\0';
-    if (bind(controlSocket, (struct sockaddr *)&addr, alen) < 0) {
-        LOG(ERROR) << __FUNCTION__ << "sucre-snort-control socket bind error";
-    }
-    if (listen(controlSocket, settings.controlClients) == -1) {
-        LOG(ERROR) << __FUNCTION__ << "sucre-snort-control control unix socket listen error";
-        throw std::runtime_error("sucre-snort-control control unix socket listen error");
+    if (listen(unixSocket, settings.controlClients) == -1) {
+        throw std::runtime_error("control unix socket listen error");
     }
 
     for (;;) {
-        if (const int sockClient = accept(controlSocket, nullptr, nullptr); sockClient < 0) {
-            LOG(ERROR) << __FUNCTION__ << " - sucre-snort-control socket accept error";
+        if (const int sockClient = accept(unixSocket, nullptr, nullptr); sockClient < 0) {
+            LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
         } else {
             std::thread([=] { clientLoop(sockClient); }).detach();
         }

@@ -6,6 +6,8 @@
 service sucre-snort /system_ext/bin/sucre-snort
     class main
     user root
+    socket sucre-snort-control stream 0666 root root
+    socket sucre-snort-netd seqpacket 0600 root root
     group root package_info
     disabled
 

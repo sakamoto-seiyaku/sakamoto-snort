@@ -42,8 +42,8 @@ public:
 
     static inline const std::string systemAppPrefix = "system_";
 
-    static constexpr const char *netdSocketPath = "@sucre-snort-inetd";
-    static constexpr const char *controlSocketPath = "@sucre-snort-control";
+    static constexpr const char *netdSocketPath = "sucre-snort-netd";
+    static constexpr const char *controlSocketPath = "sucre-snort-control";
 
     static constexpr const char *iptablesShell = "/system/bin/iptables";
     static constexpr const char *ip6tablesShell = "/system/bin/ip6tables";
