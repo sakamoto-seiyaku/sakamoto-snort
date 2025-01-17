@@ -544,7 +544,6 @@ void Control::cmdStatsApp(CmdParams &&params, const Stats::View view, const Type
 
 void Control::cmdResetApp(CmdParams &&params, const Stats::View view) const {
     const auto arg = readCmdArg(params.args);
-    ack(params.out);
     if (arg.type == CmdArg::INT) {
         if (const auto app = arg2app(arg)) {
             app->reset(view);
@@ -556,6 +555,7 @@ void Control::cmdResetApp(CmdParams &&params, const Stats::View view) const {
             app->reset(view);
         }
     }
+    ack(params.out);
 }
 
 void Control::cmdAppCustomLists(CmdParams &&params) const {
@@ -605,7 +605,9 @@ void Control::cmdTopActivity(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::INT) {
         if (const auto app = arg2app(arg)) {
-            activityManager.make(app);
+            if (app != nullptr && app->tracked() && app->hasData(Stats::View::ALL)) {
+                activityManager.make(app);
+            }
         }
     }
 }
