@@ -9,7 +9,7 @@
 
 class CmdLine {
 private:
-    std::vector<const std::string> _args;
+    std::vector<std::string> _args;
     uint32_t _argc = 0;
     char **_argv = nullptr;
 

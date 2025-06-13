@@ -12,11 +12,11 @@
 
 class HostManager {
 private:
-    using NamesMap = std::unordered_map<std::string, std::vector<const Host::Ptr>>;
+    using NamesMap = std::unordered_map<std::string, std::vector<Host::Ptr>>;
     using IPv4Map = std::unordered_map<Address<IPv4>, const Host::Ptr>;
     using IPv6Map = std::unordered_map<Address<IPv6>, const Host::Ptr>;
 
-    std::vector<const Host::Ptr> _hosts;
+    std::vector<Host::Ptr> _hosts;
     NamesMap _byName;
     IPv4Map _byIPv4;
     IPv6Map _byIPv6;

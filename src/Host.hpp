@@ -17,8 +17,8 @@ public:
 private:
     std::string _name;
     bool _resolved = false;
-    std::vector<const Address<IPv4>> _ipv4;
-    std::vector<const Address<IPv6>> _ipv6;
+    std::vector<Address<IPv4>> _ipv4;
+    std::vector<Address<IPv6>> _ipv6;
     Domain::Ptr _domain = nullptr;
     std::shared_mutex _mutex;
 
@@ -46,7 +46,7 @@ public:
     void print(std::stringstream &out);
 
 private:
-    template <class IP> std::vector<const Address<IP>> &addr();
+    template <class IP> std::vector<Address<IP>> &addr();
 };
 
 template <class IP> void Host::addIP(const Address<IP> &ip) {
@@ -54,7 +54,7 @@ template <class IP> void Host::addIP(const Address<IP> &ip) {
     addr<IP>().push_back(ip);
 }
 
-template <class IP> std::vector<const Address<IP>> &Host::addr() {
+template <class IP> std::vector<Address<IP>> &Host::addr() {
     if constexpr (std::is_same_v<IP, IPv4>) {
         return _ipv4;
     } else {
