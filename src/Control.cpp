@@ -605,9 +605,9 @@ void Control::cmdTopActivity(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::INT) {
         if (const auto app = arg2app(arg)) {
-            if (app != nullptr && app->tracked() && app->hasData(Stats::View::ALL)) {
-                activityManager.make(app);
-            }
+            // if (app != nullptr && app->tracked() && app->hasData(Stats::View::ALL)) {
+            activityManager.make(app);
+            //}
         }
     }
 }

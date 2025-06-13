@@ -11,7 +11,7 @@
 
 class CustomList {
 private:
-    using DomSet = std::set<const Domain::Ptr>;
+    using DomSet = std::set<Domain::Ptr>;
 
     DomSet _domains;
     std::shared_mutex _mutex;

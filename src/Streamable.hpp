@@ -9,12 +9,13 @@
 
 #include <Saver.hpp>
 #include <SocketIO.hpp>
+#include <shared_mutex>
 
 template <class Item> class Streamable {
 private:
     Saver _saver;
     std::unordered_map<SocketIO::Ptr, const bool> _sockios;
-    std::deque<const std::shared_ptr<Item>> _items;
+    std::deque<std::shared_ptr<Item>> _items;
     std::shared_mutex _mutexItems;
     std::mutex _mutexSockios;
 

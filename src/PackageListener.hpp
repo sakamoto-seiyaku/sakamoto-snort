@@ -9,7 +9,7 @@
 
 class PackageListener {
 private:
-    using NamesMap = std::map<App::Uid, std::vector<const std::string>>;
+    using NamesMap = std::map<App::Uid, std::vector<std::string>>;
 
     NamesMap _names;
 
