@@ -16,7 +16,7 @@ class App {
 public:
     using Ptr = std::shared_ptr<App>;
     using Uid = uint32_t;
-    using NamesVec = std::vector<const std::string>;
+    using NamesVec = std::vector<std::string>;
 
 private:
     using DomStatsMap = std::unordered_map<Domain::Ptr, DomainStats>;
