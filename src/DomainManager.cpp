@@ -202,13 +202,15 @@ void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View 
         << JSF("rfcLeaked") << rfcLeaked << "}";
 }
 
-void DomainManager::addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
-                                     std::vector<std::string> domains, Stats::Color color) {
+uint32_t DomainManager::addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
+                                         std::vector<std::string> domains, Stats::Color color) {
+    const std::shared_lock_guard lock(_mutexByName);
     if (color == Stats::BLACK) {
-        _blacklist.write(listId, domains, blockMask, clear);
+        return _blacklist.write(listId, domains, blockMask, clear);
     } else if (color == Stats::WHITE) {
-        _whitelist.write(listId, domains, blockMask, clear);
+        return _whitelist.write(listId, domains, blockMask, clear);
     }
+    return 0;
 }
 
 bool DomainManager::removeDomainList(std::string listId, Stats::Color color) {

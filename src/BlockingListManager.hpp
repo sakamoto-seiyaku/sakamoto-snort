@@ -12,7 +12,6 @@
 #include <Stats.hpp>
 #include <BlockingList.hpp>
 #include <stdio.h>
-#include <list>
 #include <string>
 #include <ctime>
 #include <Saver.hpp>

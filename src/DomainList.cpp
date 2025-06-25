@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "BlockingListManager.hpp"
 #include <fstream>
 
 #include <DomainList.hpp>
@@ -13,7 +14,10 @@ DomainList::~DomainList() {}
 
 DomainList::DomsSet DomainList::get(std::string listId) { return _domainsByListId[listId]; }
 
-void DomainList::set(std::string listId, DomsSet domains) { _domainsByListId[listId] = domains; }
+void DomainList::set(std::string listId, DomsSet domains) {
+    std::unique_lock lock(_mutex);
+    _domainsByListId[listId] = domains;
+}
 
 uint8_t DomainList::blockMask(const std::string &domain) {
     const std::shared_lock_guard lock(_mutex);
@@ -55,30 +59,63 @@ void DomainList::read(std::string listId, uint8_t blockMask) {
     }
 }
 
-void DomainList::write(std::string listId, std::vector<std::string> domains, uint8_t blockMask,
-                       bool clear) {
-    // Acquire a lock on the mutex
-    const std::shared_lock_guard lock(_mutex);
-    if (auto out = std::ofstream(settings.saveDirDomainLists + listId.c_str(),
-                                 std::ofstream::app | std::ofstream::out);
-        out.is_open()) {
-        if (clear) {
-            _domainsByListId.erase(listId);
-            out.clear();
-        }
-        // Iterate over the domains and write them to the file
-        for (const auto &domain : domains) {
-            _domainsByListId[listId].emplace(domain, blockMask);
-            out << domain << std::endl;
-        }
-        out.close();
-    } else {
-        LOG(ERROR) << __FUNCTION__ << " List write error for list: " << listId;
+uint32_t DomainList::write(const std::string listId, const std::vector<std::string> domains,
+                           uint8_t blockMask, bool clear) {
+    std::unique_lock lock(_mutex);
+
+    if (clear) {
+        _domainsByListId.erase(listId);
+        // Clear file content
+        std::ofstream(settings.saveDirDomainLists + listId,
+                      std::ofstream::out | std::ofstream::trunc)
+            .close();
     }
+
+    // 1. Collect matching list IDs
+    std::vector<std::string> matchingListIds; 
+    for (const auto &[otherListId, _] : _domainsByListId) {
+        BlockingList *bl = blockingListManager.findListById(otherListId);
+        if (bl && bl->getBlockMask() <= blockMask) {
+            matchingListIds.push_back(otherListId);
+        }
+    }
+
+    auto &targetSet = _domainsByListId[listId];
+    std::ofstream out(settings.saveDirDomainLists + listId, std::ofstream::app);
+    if (!out.is_open()) {
+        LOG(ERROR) << __FUNCTION__ << " List write error for list: " << listId;
+        return 0;
+    }
+
+    uint32_t addedCount = 0;
+    for (const auto &domain : domains) {
+        bool exists = false;
+        // 2. Check only lists with matching blockMask
+        for (const auto &matchingId : matchingListIds) {
+            const auto &set = _domainsByListId.at(matchingId);
+            if (set.find(domain) != set.end()) {
+                exists = true;
+                break;
+            }
+        }
+        if (exists)
+            continue;
+
+        auto [it, inserted] = targetSet.emplace(domain, blockMask);
+        if (inserted) {
+            out << domain << std::endl;
+            ++addedCount;
+            if (addedCount == 0)
+                break; // uint8_t overflow
+        }
+    }
+
+    out.close();
+    return addedCount;
 }
 
 bool DomainList::erase(std::string listId) {
-    const std::shared_lock_guard lock(_mutex);
+    std::unique_lock lock(_mutex);
     auto it = _domainsByListId.find(listId);
     if (it != _domainsByListId.end()) {
         _domainsByListId.erase(it);
@@ -88,7 +125,7 @@ bool DomainList::erase(std::string listId) {
 }
 
 void DomainList::reset() {
-    const std::shared_lock_guard lock(_mutex);
+    std::unique_lock lock(_mutex);
     _domainsByListId.clear();
 }
 
