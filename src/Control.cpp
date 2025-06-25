@@ -117,7 +117,7 @@ Control::Control() {
     _cmds.emplace("DOMAIN.BLACK.COUNT", make(&Control::cmdDomainsCount, Stats::BLACK));
     _cmds.emplace("DOMAIN.WHITE.COUNT", make(&Control::cmdDomainsCount, Stats::WHITE));
     _cmds.emplace("DOMAIN.BLACK.PRINT", make(&Control::cmdDomainsPrint, Stats::BLACK));
-    _cmds.emplace("DOMAIN.WHITE.COUNT", make(&Control::cmdDomainsPrint, Stats::WHITE));
+    _cmds.emplace("DOMAIN.WHITE.PRINT", make(&Control::cmdDomainsPrint, Stats::WHITE));
 
     for (size_t vs = 0; vs < Stats::nbViews; ++vs) {
         const auto &view = views[vs];
@@ -894,9 +894,7 @@ void Control::cmdDisableBlockingList(CmdParams &&params, Stats::Color color) con
 void Control::cmdAddManyDomains(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 4) {
-        domManager.addDomainsToList(args[0].string, args[1].number, args[2].boolean,
-                                    parseAggregatedDomains(args[3]), color);
-        ack(params.out);
+        params.out << domManager.addDomainsToList(args[0].string, args[1].number, args[2].boolean, parseAggregatedDomains(args[3]), color);
     } else {
         LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);

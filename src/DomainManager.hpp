@@ -88,7 +88,7 @@ public:
 
     void printBlackDomainsStats(std::ostream &out, const Stats::View view);
 
-    void addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
+    uint32_t addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
                           std::vector<std::string> domains, Stats::Color color);
 
     bool removeDomainList(std::string listId, Stats::Color color);

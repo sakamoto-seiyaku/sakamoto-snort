@@ -53,7 +53,7 @@ public:
     static constexpr const char *pmShell = "/system/bin/pm";
     static constexpr const char *mountShell = "/system/bin/mount";
 
-    static constexpr uint32_t controlCmdLen = 10001;
+    static constexpr uint32_t controlCmdLen = 20000;
     static constexpr uint32_t controlBindTrials = 10;
     static constexpr uint32_t controlClients = 1000;
     static constexpr uint32_t controlPort = 60606;

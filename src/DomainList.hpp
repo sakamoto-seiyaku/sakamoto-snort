@@ -9,7 +9,6 @@
 #include <Settings.hpp>
 #include <sucre-snort.hpp>
 #include <vector>
-#include <filesystem>
 class DomainList {
 private:
     using DomsSet = std::unordered_map<std::string, uint8_t>;
@@ -41,8 +40,8 @@ public:
 
     void read(std::string listId, uint8_t blockMask);
 
-    void write(std::string listId, std::vector<std::string> domains, uint8_t blockMask,
-               bool clear = false);
+    uint32_t write(std::string listId, std::vector<std::string> domains, uint8_t blockMask,
+                   bool clear = false);
 
     bool erase(std::string listId);
 
