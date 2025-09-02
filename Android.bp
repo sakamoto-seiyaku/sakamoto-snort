@@ -54,9 +54,11 @@ cc_binary {
         "-Wno-unused-variable",
 	    "-Wno-unused-private-field"
     ],
+    strip: {
+        none: false, // Default: strip in release, NOT in debug
+    },
     static_libs: ["libmnl", "libnetfilter_queue", "libnfnetlink.system_ext"],
     shared_libs: ["libcutils", "liblog", "libbase"],
-
 //    sanitize: {
 //        misc_undefined: [
 //            "undefined",

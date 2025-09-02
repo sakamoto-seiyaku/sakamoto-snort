@@ -423,6 +423,7 @@ void Control::cmdBlockMask(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
         if (const auto app = arg2app(args[0])) {
+            LOG(INFO) << " cmdBlockMask " << static_cast<uint32_t>(app->blockMask());
             params.out << static_cast<uint32_t>(app->blockMask());
         }
     } else {
@@ -431,6 +432,7 @@ void Control::cmdBlockMask(CmdParams &&params) const {
             if (const auto app = arg2app(args[0])) {
                 app->blockMask(args[1].number);
                 activityManager.update(app, true);
+                LOG(INFO) << " cmdBlockMask " << static_cast<uint32_t>(app->blockMask());
             }
         }
     }
