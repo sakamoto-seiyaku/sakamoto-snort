@@ -6,6 +6,8 @@
 #pragma once
 
 #include <sstream>
+#include <App.hpp>
+#include <SocketIO.hpp>
 
 class Control {
 private:
