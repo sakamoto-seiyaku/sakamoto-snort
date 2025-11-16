@@ -72,16 +72,23 @@ template <class T> T Saver::read() {
 template <class T> void Saver::read(T &data) { read(data, sizeof(data)); }
 
 void Saver::read(std::string &str, const uint32_t min = 1, const uint32_t max = 1000) {
-    uint32_t len = read<uint32_t>();
+    // Fix #13: avoid writing past string size; read payload and terminator separately
+    const uint32_t len = read<uint32_t>();
     if (len < min || len > max) {
         throw RestoreException();
     }
-    str.resize(len - 1);
-    read(str.data(), len);
-    if (str.data()[len - 1] != 0) {
+    std::string tmp;
+    tmp.resize(len - 1);
+    // Read the payload (len-1 bytes)
+    read(tmp.data(), len - 1);
+    // Read the trailing NUL (1 byte) and validate
+    char term = 0;
+    read(&term, static_cast<uint32_t>(1));
+    if (term != '\0') {
         str.clear();
         throw RestoreException();
     }
+    str.swap(tmp);
 }
 
 void Saver::readDomName(std::string &str) { read(str, 3, HOST_NAME_MAX); }

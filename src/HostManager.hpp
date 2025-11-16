@@ -60,14 +60,17 @@ template <class IP> auto &HostManager::byIP() {
 }
 
 template <class IP> const Host::Ptr HostManager::find(const Address<IP> &ip, const bool locked) {
+    // Fix #15: keep the shared lock while evaluating iterator and copying the pointer
     if (!locked) {
         _mutexIP.lock_shared();
     }
-    const auto it = byIP<IP>().find(ip);
+    auto &map = byIP<IP>();
+    const auto it = map.find(ip);
+    const Host::Ptr result = (it != map.end()) ? it->second : nullptr;
     if (!locked) {
         _mutexIP.unlock_shared();
     }
-    return it != byIP<IP>().end() ? it->second : nullptr;
+    return result;
 }
 
 template <class IP> const Host::Ptr HostManager::make(const Address<IP> &ip) {

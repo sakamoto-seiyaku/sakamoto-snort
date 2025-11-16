@@ -35,6 +35,10 @@ Control control;
 
 std::shared_mutex mutexListeners;
 
+// Fix #12: use an async-signal-safe handler that only sets a flag
+static volatile sig_atomic_t g_quit_flag = 0;
+static void on_term_signal(int) { g_quit_flag = 1; }
+
 static void snort();
 
 int main() {
@@ -98,12 +102,8 @@ static void snort() {
     }
 
     Timer::get("total", "Total init time");
-    const auto quit = [](int signal) {
-        const std::lock_guard lock(mutexListeners);
-        snortSave(true);
-    };
-    std::signal(SIGINT, quit);
-    std::signal(SIGTERM, quit);
+    std::signal(SIGINT, on_term_signal);
+    std::signal(SIGTERM, on_term_signal);
     std::signal(SIGPIPE, SIG_IGN);
 
     // rulesManager.add(Rule::REGEX, ".*google.*");
@@ -118,7 +118,15 @@ static void snort() {
     for (;;) {
         {
             const std::lock_guard lock(mutexListeners);
-            snortSave();
+            if (g_quit_flag) {
+                snortSave(true); // will std::exit
+            } else {
+                snortSave();
+            }
+        }
+        if (g_quit_flag) {
+            // In case snortSave(true) returns (shouldn't), break to stop loop.
+            break;
         }
         std::this_thread::sleep_for(settings.saveInterval);
     }
