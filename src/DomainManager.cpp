@@ -50,6 +50,7 @@ const Domain::Ptr DomainManager::create(const std::string &&name) {
 }
 
 void DomainManager::fixDomainsColors() {
+    const std::shared_lock_guard lock(_mutexByName);
     for (const auto &[_, domain] : _byName) {
         initDomain(domain);
     }
@@ -123,6 +124,7 @@ void DomainManager::printCustomRules(std::ostream &out, const Stats::Color color
 
 void DomainManager::save() {
     _saver.save([&] {
+        const std::shared_lock_guard lock(_mutexByName);
         _saver.write<uint32_t>(_byName.size());
         for (const auto &[_, domain] : _byName) {
             domain->save(_saver);

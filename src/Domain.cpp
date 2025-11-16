@@ -20,7 +20,7 @@ bool Domain::validIP() { return std::time(nullptr) - _timestampIP <= settings.ma
 void Domain::save(Saver &saver) {
     const std::shared_lock_guard lock(_mutexIP);
     saver.write(_name);
-    saver.write<Stats::Color>(_color);
+    saver.write<Stats::Color>(static_cast<Stats::Color>(_color.load(std::memory_order_relaxed)));
     saveIP<IPv4>(saver);
     saveIP<IPv6>(saver);
     saver.write(_timestampIP);

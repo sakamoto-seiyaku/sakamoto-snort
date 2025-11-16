@@ -6,6 +6,7 @@
 #pragma once
 
 #include <unordered_set>
+#include <atomic>
 
 #include <Address.hpp>
 #include <DomainStats.hpp>
@@ -20,8 +21,8 @@ private:
     using IPv6Set = std::unordered_set<Address<IPv6>>;
 
     const std::string _name;
-    uint8_t _blockMask;
-    Stats::Color _color;
+    std::atomic<uint8_t> _blockMask{0};
+    std::atomic<uint8_t> _color{static_cast<uint8_t>(Stats::GREY)};
 
     DomainStats _stats;
     IPv4Set _ipv4;
@@ -38,13 +39,13 @@ public:
 
     const std::string &name() const { return _name; }
 
-    uint8_t blockMask() const { return _blockMask; }
+    uint8_t blockMask() const { return _blockMask.load(std::memory_order_relaxed); }
 
-    void blockMask(const uint8_t blockMask) { _blockMask = blockMask; }
+    void blockMask(const uint8_t blockMask) { _blockMask.store(blockMask, std::memory_order_relaxed); }
 
-    Stats::Color color() const { return _color; }
+    Stats::Color color() const { return static_cast<Stats::Color>(_color.load(std::memory_order_relaxed)); }
 
-    void color(const Stats::Color color) { _color = color; }
+    void color(const Stats::Color color) { _color.store(static_cast<uint8_t>(color), std::memory_order_relaxed); }
 
     DomainStats &stats() { return _stats; }
 
@@ -88,7 +89,7 @@ template <class... Args>
 void Domain::print(std::ostream &out, DomainStats &stats, const Args... args) {
     const std::shared_lock_guard lock(_mutexIP);
     out << "{" << JSF("domain") << JSS(_name) << "," << JSF("blockMask")
-        << static_cast<uint32_t>(_blockMask) << "," << JSF("ipv4");
+        << static_cast<uint32_t>(_blockMask.load(std::memory_order_relaxed)) << "," << JSF("ipv4");
     printIP<IPv4>(out);
     out << "," << JSF("ipv6");
     printIP<IPv6>(out);
