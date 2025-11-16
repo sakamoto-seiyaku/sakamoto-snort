@@ -57,7 +57,7 @@ public:
 
     void disable();
 
-    std::string serialize();
+    std::string serialize() const;
 
 private:
     std::string _id;

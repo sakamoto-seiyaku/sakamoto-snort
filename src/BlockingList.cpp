@@ -107,7 +107,7 @@ void BlockingList::disable() { _enabled = false; }
 
 uint32_t BlockingList::getDomainsCount() const { return _domainsCount; }
 
-string BlockingList::serialize() {
+string BlockingList::serialize() const {
     time_t date = _updatedAt;
     tm *date_tm = gmtime(&date);
     char dateBuffer[19];
