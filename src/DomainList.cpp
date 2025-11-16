@@ -87,11 +87,12 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
             .close();
     }
 
-    // 1. Collect matching list IDs
-    std::vector<std::string> matchingListIds; 
+    // 1. Collect matching list IDs (use snapshot to avoid pointer exposure)
+    std::vector<std::string> matchingListIds;
+    const auto masks = blockingListManager.masksSnapshot();
     for (const auto &[otherListId, _] : _domainsByListId) {
-        BlockingList *bl = blockingListManager.findListById(otherListId);
-        if (bl && bl->getBlockMask() <= blockMask) {
+        auto itMask = masks.find(otherListId);
+        if (itMask != masks.end() && itMask->second <= blockMask) {
             matchingListIds.push_back(otherListId);
         }
     }

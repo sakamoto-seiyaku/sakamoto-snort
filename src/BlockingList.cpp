@@ -45,12 +45,14 @@ void BlockingList::updateList(const string name, const Stats::Color color, const
 }
 
 void BlockingList::refreshList(const string lastUpdated, const string etag) {
-    struct tm tm;
+    // Fix 8a: zero-initialize tm and validate parsing before mktime
+    struct tm tm{};
     istringstream ss(lastUpdated);
-    ss >> get_time(&tm, "%Y-%m-%d_%X"); // or just %T in this case
-    _updatedAt = mktime(&tm);
-    _outdated = false;
-    _etag = etag;
+    if (ss >> get_time(&tm, "%Y-%m-%d_%X")) {
+        _updatedAt = mktime(&tm);
+        _outdated = false;
+        _etag = etag;
+    }
 }
 
 void BlockingList::save(Saver &saver) const {

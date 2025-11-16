@@ -754,35 +754,35 @@ void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) cons
         bool enabled = args[6].boolean;
         bool outdated = args[7].boolean;
         std::string name = args[8].string;
-        BlockingList *blockingList = blockingListManager.findListById(id);
-        if (blockingList != nullptr) {
-            // Get name
-            for (unsigned long i = 9; i < args.size(); i++) {
-                name += " ";
-                name += args[i].string;
-            }
-            // Parse updatedAt
-            struct std::tm tm;
-            std::istringstream ss(updatedAtStr);
-            ss >> std::get_time(&tm, "%Y-%m-%d_%X"); // or just %T in this case
-            time_t updatedAt = mktime(&tm);
+        // Join remaining name fragments
+        for (unsigned long i = 9; i < args.size(); i++) {
+            name += " ";
+            name += args[i].string;
+        }
 
-            // If color change switch list
-            if (color != blockingList->getColor()) {
-                domManager.switchListColor(id, color);
-            }
+        // Reflect structural changes first
+        uint8_t currentMask = 0;
+        bool hasMask = blockingListManager.getBlockMask(id, currentMask);
+        if (!hasMask) {
+            LOG(ERROR) << __FUNCTION__ << " Cannot update list with id : " << id << " list not found";
+            nack(params.out);
+            return;
+        }
+        if (blockMask != currentMask) {
+            domManager.changeBlockMask(id, blockMask, color);
+        }
+        Stats::Color currentColor;
+        if (blockingListManager.getColor(id, currentColor) && currentColor != color) {
+            domManager.switchListColor(id, color);
+        }
 
-            if (blockMask != blockingList->getBlockMask()) {
-                domManager.changeBlockMask(id, blockMask, color);
-            }
-
-            blockingList->updateList(name, color, url, static_cast<uint8_t>(blockMask), domainCount,
-                                     updatedAt, etag, enabled, outdated);
+        // Manager performs validated update (fix 8a: strict time parsing inside)
+        if (blockingListManager.updateBlockingList(id, url, name, color, static_cast<uint8_t>(blockMask),
+                                                   domainCount, updatedAtStr, etag, enabled, outdated)) {
             blockingListManager.save();
             ack(params.out);
         } else {
-            LOG(ERROR) << __FUNCTION__ << " Cannot update list with id : " << id
-                       << " list not found";
+            LOG(ERROR) << __FUNCTION__ << " Cannot update list with id : " << id;
             nack(params.out);
         }
     } else {
@@ -795,10 +795,12 @@ void Control::cmdOutdateBlockingList(CmdParams &&params, Stats::Color color) con
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
         std::string id = args[0].string;
-        BlockingList *blockingList = blockingListManager.findListById(id);
-        blockingList->setIsOutDated();
-        blockingListManager.save();
-        ack(params.out);
+        if (blockingListManager.markOutdated(id)) {
+            blockingListManager.save();
+            ack(params.out);
+        } else {
+            nack(params.out);
+        }
     } else {
         LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
@@ -834,11 +836,11 @@ void Control::cmdPrintBlockingLists(CmdParams &&params) const {
 void Control::cmdClearBlockingLists(CmdParams &&params) const {
     const auto args = readCmdArg(params.args);
     if (args.type == CmdArg::NONE) {
-        for (const auto &[id, toBeRemoved] : blockingListManager.getAll()) {
-            domManager.removeDomainList(id, toBeRemoved.getColor());
-            blockingListManager.removeBlockingList(id);
-            blockingListManager.save();
+        for (const auto &bl : blockingListManager.listsSnapshot()) {
+            domManager.removeDomainList(bl.getId(), bl.getColor());
+            blockingListManager.removeBlockingList(bl.getId());
         }
+        blockingListManager.save();
         ack(params.out);
     } else {
         LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
@@ -861,9 +863,9 @@ void Control::cmdEnableBlockingList(CmdParams &&params, Stats::Color color) cons
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
         std::string id = args[0].string;
-        BlockingList *blockingList = blockingListManager.findListById(id);
-        if (domManager.enableList(id, blockingList->getBlockMask(), color)) {
-            blockingList->enable();
+        uint8_t mask = 0;
+        if (blockingListManager.getBlockMask(id, mask) && domManager.enableList(id, mask, color) &&
+            blockingListManager.setEnabled(id, true)) {
             blockingListManager.save();
             ack(params.out);
         } else {
@@ -879,9 +881,7 @@ void Control::cmdDisableBlockingList(CmdParams &&params, Stats::Color color) con
     const auto args = readCmdArgs(params.args);
     if (args.size() == 1) {
         std::string id = args[0].string;
-        BlockingList *blockingList = blockingListManager.findListById(id);
-        if (domManager.disableList(id, color)) {
-            blockingList->disable();
+        if (domManager.disableList(id, color) && blockingListManager.setEnabled(id, false)) {
             blockingListManager.save();
             ack(params.out);
         } else {
@@ -889,7 +889,7 @@ void Control::cmdDisableBlockingList(CmdParams &&params, Stats::Color color) con
         }
     } else {
         LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
-        ack(params.out);
+        nack(params.out);
     }
 }
 
