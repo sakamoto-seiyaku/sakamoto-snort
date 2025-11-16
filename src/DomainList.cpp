@@ -14,7 +14,7 @@ DomainList::DomainList() {}
 DomainList::~DomainList() {}
 
 DomainList::DomsSet DomainList::get(std::string listId) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     auto it = _domainsByListId.find(listId);
     return it != _domainsByListId.end() ? it->second : DomsSet{};
 }
@@ -201,7 +201,7 @@ void DomainList::changeBlockMask(std::string listId, uint8_t blockMask) {
 }
 
 void DomainList::printDomains(std::string listId, std::ostream &out) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     if (auto it = _domainsByListId.find(listId); it != _domainsByListId.end()) {
         for (const auto &kv : it->second) {
             out << kv.first << " " << std::to_string(kv.second) << std::endl;

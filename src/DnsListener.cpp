@@ -44,7 +44,7 @@ void DnsListener::server() {
 }
 
 void DnsListener::clientRun(const int socket) {
-    const std::shared_lock_guard lock(mutexListeners);
+    const std::shared_lock<std::shared_mutex> lock(mutexListeners);
     try {
         uint32_t len;
         clientRead(socket, &len, sizeof(len), "len read error");

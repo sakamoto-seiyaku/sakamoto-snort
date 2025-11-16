@@ -16,12 +16,12 @@ AppManager::AppManager() {}
 AppManager::~AppManager() {}
 
 const App::Ptr AppManager::find(const App::Uid uid) {
-    const std::shared_lock_guard lock(_mutexByUid);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
     return find(_byUid, uid);
 }
 
 const App::Ptr AppManager::find(const std::string &name) {
-    const std::shared_lock_guard lock(_mutexByName);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByName);
     return find(_byName, name);
 }
 
@@ -67,7 +67,7 @@ void AppManager::updateStats(const Domain::Ptr &domain, const App::Ptr &app, con
 }
 
 void AppManager::reset(const Stats::View view) {
-    const std::shared_lock_guard lock(_mutexByUid);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
     for (const auto &[_, app] : _byUid) {
         app->reset(view);
     }
@@ -126,12 +126,12 @@ void AppManager::restore() {
 }
 
 void AppManager::printAppsByUid(std::ostream &out, const std::string &subname) {
-    const std::shared_lock_guard lock(_mutexByUid);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
     printAppList(_byUid, out, subname, [&](const App::Ptr &app) { app->print(out); });
 }
 
 void AppManager::printAppsByName(std::ostream &out, const std::string &subname) {
-    const std::shared_lock_guard lock(_mutexByName);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByName);
     printAppList(_byName, out, subname, [&](const App::Ptr &app) { app->print(out); });
 }
 

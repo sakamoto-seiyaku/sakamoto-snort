@@ -130,7 +130,7 @@ template <class IP> auto &DomainManager::byIP() {
 }
 
 template <class IP> const Domain::Ptr DomainManager::find(const Address<IP> &ip) {
-    const std::shared_lock_guard lock(_mutexByIP);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByIP);
     const auto it = byIP<IP>().find(ip);
     return it != byIP<IP>().end() ? it->second : nullptr;
 }

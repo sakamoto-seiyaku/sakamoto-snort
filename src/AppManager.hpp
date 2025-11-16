@@ -91,7 +91,7 @@ template <class... Args> void AppManager::printStatsTotal(std::ostream &out, con
 template <class... Args>
 void AppManager::printApps(std::ostream &out, const std::string &subname, const Stats::View view,
                            const Args... args) {
-    const std::shared_lock_guard lock(_mutexByUid);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
     printAppList(
         _byUid, out, subname, [&](const App::Ptr &app) { app->printAppStats(out, view, args...); },
         [&](const App::Ptr &app) -> bool { return app->hasData(view); });
@@ -100,7 +100,7 @@ void AppManager::printApps(std::ostream &out, const std::string &subname, const 
 template <class... TypeStats>
 void AppManager::printDomains(std::ostream &out, const std::string &subname, const Stats::Color cs,
                               const Stats::View view, const TypeStats... ts) {
-    const std::shared_lock_guard lock(_mutexByUid);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
     printAppList(
         _byUid, out, subname,
         [&](const App::Ptr &app) { app->printDomainStats(out, cs, view, ts...); },

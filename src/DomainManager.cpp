@@ -39,7 +39,7 @@ const Domain::Ptr DomainManager::make(const std::string &&name) {
 }
 
 const Domain::Ptr DomainManager::find(const std::string &name) {
-    const std::shared_lock_guard lock(_mutexByName);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByName);
     const auto it = _byName.find(name);
     return it != _byName.end() ? it->second : nullptr;
 }
@@ -50,7 +50,7 @@ const Domain::Ptr DomainManager::create(const std::string &&name) {
 }
 
 void DomainManager::fixDomainsColors() {
-    const std::shared_lock_guard lock(_mutexByName);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByName);
     for (const auto &[_, domain] : _byName) {
         initDomain(domain);
     }
@@ -124,7 +124,7 @@ void DomainManager::printCustomRules(std::ostream &out, const Stats::Color color
 
 void DomainManager::save() {
     _saver.save([&] {
-        const std::shared_lock_guard lock(_mutexByName);
+        const std::shared_lock<std::shared_mutex> lock(_mutexByName);
         _saver.write<uint32_t>(_byName.size());
         for (const auto &[_, domain] : _byName) {
             domain->save(_saver);
@@ -184,7 +184,7 @@ void DomainManager::reset() {
 }
 
 void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View view) {
-    const std::shared_lock_guard lock(_mutexByName);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByName);
     uint32_t blocked = 0;
     uint32_t stdLeaked = 0;
     uint32_t rfcLeaked = 0;
@@ -206,7 +206,7 @@ void DomainManager::printBlackDomainsStats(std::ostream &out, const Stats::View 
 
 uint32_t DomainManager::addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
                                          std::vector<std::string> domains, Stats::Color color) {
-    const std::shared_lock_guard lock(_mutexByName);
+    const std::shared_lock<std::shared_mutex> lock(_mutexByName);
     if (color == Stats::BLACK) {
         return _blacklist.write(listId, domains, blockMask, clear);
     } else if (color == Stats::WHITE) {

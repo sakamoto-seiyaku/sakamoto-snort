@@ -32,7 +32,7 @@ void PackageListener::listen() {
             for (;;) {
                 if (inotify_add_watch(fd, settings.packagesList, IN_CLOSE_WRITE) != -1) {
                     if (read(fd, buf, sizeof(buf)) > 0) {
-                        const std::shared_lock_guard lock(mutexListeners);
+                        const std::shared_lock<std::shared_mutex> lock(mutexListeners);
                         updatePackages();
                     } else {
                         close(fd);

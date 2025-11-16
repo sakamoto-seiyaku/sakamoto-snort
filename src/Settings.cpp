@@ -24,7 +24,7 @@ void Settings::finishFirstStart() { android::base::SetProperty(_firstStartProp, 
 
 void Settings::save() {
     _saver.save([&] {
-        const std::shared_lock_guard lock(_mutexPassword);
+        const std::shared_lock<std::shared_mutex> lock(_mutexPassword);
         _saver.write<bool>(_blockEnabled);
         _saver.write<uint32_t>(_version);
         _saver.write<uint8_t>(_blockMask);

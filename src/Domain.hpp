@@ -87,7 +87,7 @@ template <class IP> auto &Domain::addIP(const Address<IP> &&ip) {
 
 template <class... Args>
 void Domain::print(std::ostream &out, DomainStats &stats, const Args... args) {
-    const std::shared_lock_guard lock(_mutexIP);
+    const std::shared_lock<std::shared_mutex> lock(_mutexIP);
     out << "{" << JSF("domain") << JSS(_name) << "," << JSF("blockMask")
         << static_cast<uint32_t>(_blockMask.load(std::memory_order_relaxed)) << "," << JSF("ipv4");
     printIP<IPv4>(out);

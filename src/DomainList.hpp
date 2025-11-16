@@ -38,7 +38,7 @@ public:
     void set(std::string listId, DomsSet domains);
 
     uint32_t size() const {
-        const std::shared_lock_guard lock(_mutex);
+        const std::shared_lock<std::shared_mutex> lock(_mutex);
         uint32_t totalItems = 0;
         for (const auto &pair : _domainsByListId) {
             totalItems += static_cast<uint32_t>(pair.second.size());

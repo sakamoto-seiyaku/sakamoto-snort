@@ -81,7 +81,7 @@ void CustomRules::save(Saver &saver) {
     // Snapshot rule ids under shared lock, write to disk without holding the mutex
     std::vector<Rule::Id> ids;
     {
-        const std::shared_lock_guard lock(_mutex);
+        const std::shared_lock<std::shared_mutex> lock(_mutex);
         ids.reserve(_rules.size());
         for (const auto &rule : _rules) ids.push_back(rule->id());
     }
@@ -114,7 +114,7 @@ void CustomRules::restore(Saver &saver) {
 }
 
 void CustomRules::print(std::ostream &out) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     bool first = true;
     out << "[";
     for (const auto &rule : _rules) {

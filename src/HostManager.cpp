@@ -20,7 +20,7 @@ void HostManager::reset() {
 }
 
 void HostManager::printHosts(std::stringstream &out, const std::string &subname) {
-    const std::shared_lock_guard lock(_mutexHosts);
+    const std::shared_lock<std::shared_mutex> lock(_mutexHosts);
     out << "[";
     bool first = true;
     for (const auto &host : _hosts) {
@@ -33,7 +33,7 @@ void HostManager::printHosts(std::stringstream &out, const std::string &subname)
 }
 
 void HostManager::printHostsByName(std::stringstream &out, const std::string &subname) {
-    const std::shared_lock_guard lock(_mutexName);
+    const std::shared_lock<std::shared_mutex> lock(_mutexName);
     out << "[";
     bool first = true;
     for (const auto &[name, hosts] : _byName) {

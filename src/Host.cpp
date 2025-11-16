@@ -8,7 +8,7 @@
 Host::Host() {}
 
 const Domain::Ptr Host::domain() {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     return _domain;
 }
 
@@ -18,7 +18,7 @@ void Host::domain(const Domain::Ptr &domain) {
 }
 
 void Host::print(std::stringstream &out) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     out << "{" << JSF("name") << JSS(_name) << ",";
     if (_domain) {
         out << JSF("domain") << JSS(_domain->name()) << "," << JSF("color")

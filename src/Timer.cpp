@@ -16,13 +16,13 @@ void Timer::set(std::string &&name, std::string &&message) {
 void Timer::set(std::string &&name) { set(std::move(name), ""); }
 
 void Timer::get(std::string &&name, std::string &&message) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     auto &t = _timers[name];
     get(t, message);
 }
 
 void Timer::get(std::string &&name) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     auto &t = _timers[name];
     get(t, t.message);
 }

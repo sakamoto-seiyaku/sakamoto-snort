@@ -114,7 +114,7 @@ public:
     bool inetControl() { return _inetControl; }
 
     std::string password() {
-        const std::shared_lock_guard lock(_mutexPassword);
+        const std::shared_lock<std::shared_mutex> lock(_mutexPassword);
         return _password;
     }
 

@@ -30,7 +30,7 @@ const Rule::Ptr RulesManager::find(const Rule::Id ruleId) {
 }
 
 const Rule::Ptr RulesManager::findThreadSafe(const Rule::Id ruleId) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     const auto it = _rules.find(ruleId);
     return it != _rules.end() ? it->second : nullptr;
 }
@@ -159,7 +159,7 @@ void RulesManager::restoreCustomRules(Saver &saver, App::Ptr app, Stats::Color c
 }
 
 void RulesManager::print(std::ostream &out) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     bool first = true;
     out << "[";
     for (const auto &[_, rule] : _rules) {

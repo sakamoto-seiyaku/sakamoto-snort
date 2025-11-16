@@ -172,7 +172,7 @@ void App::printDomains(std::ostream &out, const Stats::Color cs, const Stats::Vi
     out << "[";
     bool first = true;
     for (auto &[domain, stats] : domStats(cs)) {
-        const std::shared_lock_guard lock(mutex(cs));
+        const std::shared_lock<std::shared_mutex> lock(mutex(cs));
         if (stats.hasData(view)) {
             when(first, out << ",");
             domain->print(out, stats, view, ts...);

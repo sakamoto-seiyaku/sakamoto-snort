@@ -252,7 +252,7 @@ void Control::clientLoop(const int sockClient) const {
                 const std::lock_guard lock(mutexListeners);
                 applyCmd();
             } else {
-                const std::shared_lock_guard lock(mutexListeners);
+                const std::shared_lock<std::shared_mutex> lock(mutexListeners);
                 applyCmd();
             }
         } else {

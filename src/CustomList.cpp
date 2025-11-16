@@ -14,7 +14,7 @@ CustomList::CustomList() {}
 CustomList::~CustomList() {}
 
 bool CustomList::exists(const Domain::Ptr &domain) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     return _domains.find(domain) != _domains.end();
 }
 
@@ -34,7 +34,7 @@ void CustomList::reset() {
 }
 
 void CustomList::save(Saver &saver) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     saver.write<uint32_t>(_domains.size());
     for (const auto &domain : _domains) {
         saver.write(domain->name());
@@ -54,7 +54,7 @@ void CustomList::restore(Saver &saver) {
 }
 
 void CustomList::print(std::ostream &out) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     bool first = true;
     out << "[";
     for (const auto &domain : _domains) {

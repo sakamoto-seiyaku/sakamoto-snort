@@ -18,7 +18,7 @@ void Domain::updateStats(const Stats::Type ts, const Stats::Block bs, const uint
 bool Domain::validIP() { return std::time(nullptr) - _timestampIP <= settings.maxAgeIP(); }
 
 void Domain::save(Saver &saver) {
-    const std::shared_lock_guard lock(_mutexIP);
+    const std::shared_lock<std::shared_mutex> lock(_mutexIP);
     saver.write(_name);
     saver.write<Stats::Color>(static_cast<Stats::Color>(_color.load(std::memory_order_relaxed)));
     saveIP<IPv4>(saver);

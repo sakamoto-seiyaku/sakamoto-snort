@@ -75,7 +75,7 @@ void App::updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Sta
     domain->updateStats(ts, bs, val);
     auto &ds = domStats(cs);
     {
-        const std::shared_lock_guard lock(mutex(cs));
+        const std::shared_lock<std::shared_mutex> lock(mutex(cs));
         if (auto it = ds.find(domain); it != ds.end()) {
             return it->second.update(ts, bs, val);
         }
@@ -143,7 +143,7 @@ void App::save() {
             _saver.write<uint8_t>(_blockMask);
             _stats.save(_saver);
             for (auto &[map, mutex] : _domStats) {
-                const std::shared_lock_guard lock(mutex);
+                const std::shared_lock<std::shared_mutex> lock(mutex);
                 _saver.write<uint32_t>(map.size());
                 for (const auto &[domain, stats] : map) {
                     _saver.write(domain->name());

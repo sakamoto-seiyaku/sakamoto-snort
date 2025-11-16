@@ -231,7 +231,7 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
 
     if (settings.blockEnabled() && (!settings.inetControl() || (srcPort != settings.controlPort &&
                                                                 dstPort != settings.controlPort))) {
-        const std::shared_lock_guard lock(mutexListeners);
+        const std::shared_lock<std::shared_mutex> lock(mutexListeners);
         verdict = pktManager.template make<IP>(
             reinterpret_cast<const uint8_t *>(_inputTLS ? &ip->saddr : &ip->daddr), uid, _inputTLS,
             iface, timestamp, IP::payloadProto(ip), srcPort, dstPort, payloadLen);

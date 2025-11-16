@@ -33,7 +33,7 @@ bool BlockingListManager::removeBlockingList(string id) {
 }
 
 unordered_map<string, BlockingList> BlockingListManager::getAll() {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     return _ByIds; // copy under shared lock
 }
 
@@ -136,7 +136,7 @@ bool BlockingListManager::markOutdated(const string &id) {
 }
 
 bool BlockingListManager::getBlockMask(const string &id, uint8_t &outMask) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     auto it = _ByIds.find(id);
     if (it == _ByIds.end()) return false;
     outMask = it->second.getBlockMask();
@@ -144,7 +144,7 @@ bool BlockingListManager::getBlockMask(const string &id, uint8_t &outMask) {
 }
 
 bool BlockingListManager::getColor(const string &id, Stats::Color &outColor) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     auto it = _ByIds.find(id);
     if (it == _ByIds.end()) return false;
     outColor = it->second.getColor();
@@ -152,7 +152,7 @@ bool BlockingListManager::getColor(const string &id, Stats::Color &outColor) {
 }
 
 unordered_map<string, uint8_t> BlockingListManager::masksSnapshot() {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     unordered_map<string, uint8_t> masks;
     masks.reserve(_ByIds.size());
     for (const auto &p : _ByIds) masks.emplace(p.first, p.second.getBlockMask());
@@ -160,7 +160,7 @@ unordered_map<string, uint8_t> BlockingListManager::masksSnapshot() {
 }
 
 vector<BlockingList> BlockingListManager::listsSnapshot() {
-    const std::shared_lock_guard lock(_mutex);
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
     vector<BlockingList> lists;
     lists.reserve(_ByIds.size());
     for (const auto &p : _ByIds) lists.push_back(p.second);

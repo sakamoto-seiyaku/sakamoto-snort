@@ -21,20 +21,7 @@
         stm;                                                                                       \
     }
 
-namespace std {
-template <class Mutex> class shared_lock_guard {
-private:
-    Mutex &_mutex;
-
-public:
-    explicit shared_lock_guard(Mutex &mutex)
-        : _mutex(mutex) {
-        mutex.lock_shared();
-    }
-
-    ~shared_lock_guard() { _mutex.unlock_shared(); }
-};
-} // namespace std
+// Removed custom injection of std::shared_lock<std::shared_mutex> to avoid undefined behavior.
 
 extern std::shared_mutex mutexListeners;
 
