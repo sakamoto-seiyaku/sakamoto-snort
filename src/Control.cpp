@@ -90,6 +90,8 @@ Control::Control() {
     _cmds.emplace("RULES.ADD", make(&Control::cmdAddRule));
     _cmds.emplace("RULES.REMOVE", make(&Control::cmdRemoveRule));
     _cmds.emplace("RULES.UPDATElist", make(&Control::cmdUpdateRule));
+    // Backward-compatible alias with normalized name
+    _cmds.emplace("RULES.UPDATE", make(&Control::cmdUpdateRule));
     _cmds.emplace("RULES.PRINT", make(&Control::cmdPrintRules));
     _cmds.emplace("BLACKRULES.ADD", make(&Control::cmdAddCustomRule, Stats::BLACK));
     _cmds.emplace("WHITERULES.ADD", make(&Control::cmdAddCustomRule, Stats::WHITE));

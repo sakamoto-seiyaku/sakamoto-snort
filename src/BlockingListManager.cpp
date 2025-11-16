@@ -100,7 +100,7 @@ bool BlockingListManager::updateBlockingList(const string &id, const string &url
     // Strict time parsing (fix 8a): zero-init tm and check state
     std::tm tm{};
     std::istringstream ss(updatedAtStr);
-    if (!(ss >> std::get_time(&tm, "%Y-%m-%d_%X"))) {
+    if (!(ss >> std::get_time(&tm, "%Y-%m-%d_%H:%M:%S"))) {
         return false; // refuse invalid time format
     }
     time_t updatedAt = mktime(&tm);

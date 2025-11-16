@@ -29,6 +29,12 @@ const Rule::Ptr RulesManager::find(const Rule::Id ruleId) {
     return it != _rules.end() ? it->second : nullptr;
 }
 
+const Rule::Ptr RulesManager::findThreadSafe(const Rule::Id ruleId) {
+    const std::shared_lock_guard lock(_mutex);
+    const auto it = _rules.find(ruleId);
+    return it != _rules.end() ? it->second : nullptr;
+}
+
 void RulesManager::removeRule(const Rule::Id ruleId) {
     const std::lock_guard lock(_mutex);
     if (const auto &rule = find(ruleId)) {
@@ -140,7 +146,7 @@ void RulesManager::restoreCustomRules(Saver &saver, App::Ptr app, Stats::Color c
     uint32_t nb = saver.read<uint32_t>();
     for (uint32_t i = 0; i < nb; ++i) {
         Rule::Id id = saver.read<Rule::Id>();
-        const Rule::Ptr &rule = find(id);
+        const Rule::Ptr rule = findThreadSafe(id);
         if (rule != nullptr) {
             addCustom(app, id, color, false);
         }
@@ -157,7 +163,12 @@ void RulesManager::print(std::ostream &out) {
     bool first = true;
     out << "[";
     for (const auto &[_, rule] : _rules) {
-        auto &_custom = _customs[rule];
+        // Read-only: avoid operator[] which would insert; use find with a fallback
+        const Custom emptyCustom{};
+        const Custom &custom = [&](){
+            auto it = _customs.find(rule);
+            return it != _customs.end() ? it->second : emptyCustom;
+        }();
         std::stringstream tmp;
         for (const auto c : rule->rule()) {
             switch (c) {
@@ -174,18 +185,18 @@ void RulesManager::print(std::ostream &out) {
         when(first, out << ",");
         out << "{" << JSF("id") << JSS(rule->id()) << "," << JSF("type") << rule->type() << ","
             << JSF("rule") << JSS(tmp.str()) << "," << JSF("status")
-            << JSS((_custom.color == Stats::ALLC    ? "none"
-                    : _custom.color == Stats::BLACK ? "black"
-                                                    : "white"))
+            << JSS((custom.color == Stats::ALLC    ? "none"
+                    : custom.color == Stats::BLACK ? "black"
+                                                   : "white"))
             << "," << JSF("blacklist") << "[";
         bool first2 = true;
-        for (const auto &app : _custom.blacklist) {
+        for (const auto &app : custom.blacklist) {
             when(first2, out << ",");
             out << JSS(app->name());
         }
         out << "]," << JSF("whitelist") << "[";
         first2 = true;
-        for (const auto &app : _custom.whitelist) {
+        for (const auto &app : custom.whitelist) {
             when(first2, out << ",");
             out << JSS(app->name());
         }

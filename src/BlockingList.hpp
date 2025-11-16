@@ -29,7 +29,6 @@ public:
                     const uint8_t blockMask, const uint32_t domainsCount, const time_t updatedAt,
                     const std::string etag, const bool enabled, const bool outdated);
 
-    void toggleList();
 
     std::string getId() const;
 

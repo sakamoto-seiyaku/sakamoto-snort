@@ -41,6 +41,9 @@ public:
     RulesManager(const RulesManager &) = delete;
 
     const Rule::Ptr find(const uint32_t ruleId);
+    // Thread-safe lookup for contexts without external locking. Do not call
+    // this while already holding _mutex to avoid lock reentrancy.
+    const Rule::Ptr findThreadSafe(const uint32_t ruleId);
 
     Rule::Id addRule(const Rule::Type type, const std::string &ruleRaw);
 

@@ -99,7 +99,7 @@ void CustomRules::restore(Saver &saver) {
     toAdd.reserve(nb);
     for (uint32_t i = 0; i < nb; ++i) {
         Rule::Id id = saver.read<Rule::Id>();
-        const Rule::Ptr &rule = rulesManager.find(id);
+        const Rule::Ptr rule = rulesManager.findThreadSafe(id);
         if (rule != nullptr) {
             toAdd.push_back(rule);
         }

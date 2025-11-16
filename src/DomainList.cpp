@@ -122,8 +122,6 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
         if (inserted) {
             out << domain << std::endl;
             ++addedCount;
-            if (addedCount == 0)
-                break; // uint8_t overflow
         }
     }
 
