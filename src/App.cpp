@@ -167,7 +167,9 @@ void App::restore(const App::Ptr &app) {
     _saver.restore([&] {
         _blockMask = _saver.read<uint8_t>();
         _stats.restore(_saver);
-        for (auto &[map, _] : _domStats) {
+        // Protect per-color domain stats maps during restore (coarse-grained)
+        for (auto &[map, mutex] : _domStats) {
+            const std::lock_guard lock(mutex);
             uint32_t nb = _saver.read<uint32_t>();
             for (uint32_t i = 0; i < nb; ++i) {
                 std::string name;

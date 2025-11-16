@@ -74,6 +74,8 @@ void AppManager::reset(const Stats::View view) {
 }
 
 void AppManager::reset() {
+    // Simple coarse-grained locking: protect indexes during full reset
+    const std::scoped_lock lock(_mutexByUid, _mutexByName);
     for (const auto &[_, app] : _byUid) {
         app->removeFile();
     }
