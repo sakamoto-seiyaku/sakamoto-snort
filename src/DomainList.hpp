@@ -6,6 +6,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <memory>
 #include <Settings.hpp>
 #include <sucre-snort.hpp>
 #include <vector>
@@ -14,8 +15,16 @@ private:
     using DomsSet = std::unordered_map<std::string, uint8_t>;
     using DomsMap = std::unordered_map<std::string, DomsSet>;
 
-    DomsMap _domainsByListId;
-    std::shared_mutex _mutex;
+    DomsMap _domainsByListId;                // all lists: listId -> (domain -> mask)
+    mutable std::shared_mutex _mutex;        // protects _domainsByListId and snapshot rebuild
+
+    // Aggregated read-only snapshot for fast lookups (domain -> merged mask)
+    // Queried by blockMask() without taking _mutex.
+    std::shared_ptr<DomsSet> _aggSnapshot;   
+
+    // Internal helpers (call only under correct locking discipline)
+    bool eraseUnlocked(const std::string &listId);
+    void rebuildAggSnapshotLocked();
 
 public:
     DomainList();
@@ -29,9 +38,10 @@ public:
     void set(std::string listId, DomsSet domains);
 
     uint32_t size() const {
-        int totalItems = 0;
-        for (const auto &[_, domsSet] : _domainsByListId) {
-            totalItems += domsSet.size();
+        const std::shared_lock_guard lock(_mutex);
+        uint32_t totalItems = 0;
+        for (const auto &pair : _domainsByListId) {
+            totalItems += static_cast<uint32_t>(pair.second.size());
         }
         return totalItems;
     }
