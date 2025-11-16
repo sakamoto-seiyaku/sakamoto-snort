@@ -78,7 +78,7 @@ void RulesManager::addCustom(const Rule::Id ruleId, const Stats::Color color, bo
 
 void RulesManager::addCustom(const App::Ptr &app, const Rule::Id ruleId, const Stats::Color color,
                              bool compile) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::lock_guard lock(_mutex);
     if (const auto &rule = find(ruleId)) {
         if (app == nullptr) {
             _customs[rule].color = color;
@@ -96,7 +96,7 @@ void RulesManager::removeCustom(const Rule::Id ruleId, const Stats::Color color)
 
 void RulesManager::removeCustom(const App::Ptr &app, const Rule::Id ruleId,
                                 const Stats::Color color) {
-    const std::shared_lock_guard lock(_mutex);
+    const std::lock_guard lock(_mutex);
     if (const auto &rule = find(ruleId)) {
         Custom &custom = _customs[rule];
         if (app == nullptr) {
