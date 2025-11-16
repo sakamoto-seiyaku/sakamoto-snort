@@ -8,6 +8,7 @@
 #include <Stats.hpp>
 #include <cstdlib>
 #include <ctime>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 using namespace std;
@@ -108,11 +109,24 @@ void BlockingList::disable() { _enabled = false; }
 uint32_t BlockingList::getDomainsCount() const { return _domainsCount; }
 
 string BlockingList::serialize() const {
+    // Fix #11: thread-safe time formatting + correct buffer size (19 + NUL)
+    // - Use gmtime_r (POSIX) instead of gmtime (non-thread-safe)
+    // - Use fixed format "%Y-%m-%d_%H:%M:%S" (19 chars) and a 20-byte buffer
+    // - Respect strftime return value to avoid using uninitialized memory
     time_t date = _updatedAt;
-    tm *date_tm = gmtime(&date);
-    char dateBuffer[19];
-    strftime(dateBuffer, 19, "%Y-%m-%d_%X", date_tm);
-    string dateStr(dateBuffer, 19);
+    struct tm tmval{};
+    char dateBuffer[20]; // 19 chars + '\0'
+    const char *fallback = "1970-01-01_00:00:00"; // safe default
+    if (gmtime_r(&date, &tmval) != nullptr) {
+        size_t n = strftime(dateBuffer, sizeof(dateBuffer), "%Y-%m-%d_%H:%M:%S", &tmval);
+        if (n == 0) {
+            // Buffer too small or formatting error; fall back to a fixed string
+            std::memcpy(dateBuffer, fallback, sizeof(dateBuffer));
+        }
+    } else {
+        std::memcpy(dateBuffer, fallback, sizeof(dateBuffer));
+    }
+    string dateStr(dateBuffer);
     string blString = "{\"id\":\"";
     blString += _id;
     blString += "\",\"name\":\"";

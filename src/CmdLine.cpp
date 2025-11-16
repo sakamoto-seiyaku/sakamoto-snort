@@ -32,7 +32,12 @@ void CmdLine::exec() {
     }
     if (_argc > 0) {
         if (const auto pid = fork(); pid == 0) {
+            // Child: replace image. If execv returns, it's a failure and we must not continue
+            // running parent logic. Use only async-signal-safe calls here.
             execv(_argv[0], _argv);
+            static const char msg[] = "sucre-snort: execv failed in child\n";
+            (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
+            _exit(127); // unreachable on success
         } else {
             int wstatus;
             waitpid(pid, &wstatus, 0);
