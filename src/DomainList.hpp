@@ -25,6 +25,7 @@ private:
     // Internal helpers (call only under correct locking discipline)
     bool eraseUnlocked(const std::string &listId);
     void rebuildAggSnapshotLocked();
+    static bool validListId(const std::string &listId);
 
 public:
     DomainList();

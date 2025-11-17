@@ -6,6 +6,7 @@
 #include "BlockingListManager.hpp"
 #include <fstream>
 #include <memory>
+#include <cctype>
 
 #include <DomainList.hpp>
 
@@ -51,6 +52,10 @@ uint8_t DomainList::blockMask(const std::string &domain) {
 }
 
 void DomainList::read(std::string listId, uint8_t blockMask) {
+    if (!validListId(listId)) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid list id";
+        return;
+    }
     // Phase 1: file I/O without holding the mutex
     DomsSet domains;
     if (auto in = std::ifstream(settings.saveDirDomainLists + listId, std::ifstream::in); in.is_open()) {
@@ -77,6 +82,10 @@ void DomainList::read(std::string listId, uint8_t blockMask) {
 
 uint32_t DomainList::write(const std::string listId, const std::vector<std::string> domains,
                            uint8_t blockMask, bool clear) {
+    if (!validListId(listId)) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid list id";
+        return 0;
+    }
     std::unique_lock lock(_mutex);
 
     if (clear) {
@@ -133,6 +142,10 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
 }
 
 bool DomainList::erase(std::string listId) {
+    if (!validListId(listId)) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid list id";
+        return false;
+    }
     std::unique_lock lock(_mutex);
     const bool erased = eraseUnlocked(listId);
     if (erased) {
@@ -148,6 +161,10 @@ void DomainList::reset() {
 }
 
 bool DomainList::enable(std::string listId, uint8_t blockMask) {
+    if (!validListId(listId)) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid list id";
+        return false;
+    }
     // 按方案A：全程持有独占锁，避免 enable() 与并发 disable() 的竞态窗口。
     std::unique_lock lock(_mutex);
 
@@ -179,6 +196,10 @@ bool DomainList::enable(std::string listId, uint8_t blockMask) {
 }
 
 bool DomainList::disable(std::string listId) {
+    if (!validListId(listId)) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid list id";
+        return false;
+    }
     std::unique_lock lock(_mutex);
     const std::string oldName = settings.saveDirDomainLists + listId;
     const std::string newName = settings.saveDirDomainLists + listId + ".disabled";
@@ -210,6 +231,10 @@ void DomainList::printDomains(std::string listId, std::ostream &out) {
 }
 
 bool DomainList::remove(std::string listId) {
+    if (!validListId(listId)) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid list id";
+        return false;
+    }
     // Remove from in-memory map first; file deletion may fail due to filesystem state.
     // Returning false indicates that no on-disk file was removed, but the logical list
     // has already been erased from memory.
@@ -258,4 +283,17 @@ void DomainList::rebuildAggSnapshotLocked() {
         }
     }
     std::atomic_store(&_aggSnapshot, std::move(snap));
+}
+
+// Accept only a restricted character set to prevent path traversal or directory injection.
+// Current format is a GUID (hex + '-') with 36 chars, but allow up to 64 to decouple logic
+// from exact formatting while keeping a strict whitelist.
+bool DomainList::validListId(const std::string &listId) {
+    if (listId.empty() || listId.size() > 64) return false;
+    for (unsigned char ch : listId) {
+        if (!(std::isxdigit(ch) || ch == '-')) {
+            return false;
+        }
+    }
+    return true;
 }

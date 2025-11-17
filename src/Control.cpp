@@ -225,17 +225,18 @@ void Control::inetServer() {
 void Control::clientLoop(const int sockClient) const {
     SocketIO::Ptr _sockio = std::make_shared<SocketIO>(sockClient);
     const auto &resetall = _cmds.find("RESETALL");
-    char buffer[settings.controlCmdLen];
+    // Avoid large stack buffer: use heap-backed buffer sized from settings.
+    std::vector<char> buffer(settings.controlCmdLen);
     ssize_t len;
     const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
-    while ((len = read(sockClient, buffer, maxRead)) > 0) {
-        buffer[len] = '\0';
+    while ((len = read(sockClient, buffer.data(), maxRead)) > 0) {
+        buffer[static_cast<size_t>(len)] = '\0';
         if (len == maxRead) {
             // Input truncated; avoid processing potentially incomplete command
-            LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " " << buffer;
+            LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " " << buffer.data();
             break;
         }
-        std::stringstream cmdLine(buffer);
+        std::stringstream cmdLine(buffer.data());
         std::string cmd;
         std::stringstream out;
         bool pretty = false;

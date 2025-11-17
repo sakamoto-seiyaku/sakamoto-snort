@@ -55,6 +55,7 @@ template <class IP> void Domain::restoreIP(Saver &saver) {
 }
 
 void Domain::clearIPs() {
+    const std::lock_guard lock(_mutexIP);
     _ipv4.clear();
     _ipv6.clear();
 }

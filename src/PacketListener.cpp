@@ -173,30 +173,34 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         LOG(ERROR) << __FUNCTION__ << " - metaheader not set";
         return MNL_CB_ERROR;
     }
+    const auto nfqHeader =
+        static_cast<nfqnl_msg_packet_hdr *>(mnl_attr_get_payload(attr[NFQA_PACKET_HDR]));
     if (attr[NFQA_PAYLOAD] == nullptr) {
+        // Cannot parse payload but we do have a packet id; accept to avoid queue stall.
         LOG(ERROR) << __FUNCTION__ << " - payload attribute not set";
-        return MNL_CB_ERROR;
+        sendVerdict(ntohl(nfqHeader->packet_id), NF_ACCEPT);
+        return MNL_CB_OK;
     }
 
-    const uint16_t payloadLen = mnl_attr_get_payload_len(attr[NFQA_PAYLOAD]);
+    const uint32_t payloadLen = mnl_attr_get_payload_len(attr[NFQA_PAYLOAD]);
 
     // Basic length guards: must at least contain the IP header of this family.
     if (payloadLen < sizeof(typename IP::Header)) {
         LOG(ERROR) << __FUNCTION__ << " - payload length too short";
-        return MNL_CB_ERROR;
+        sendVerdict(ntohl(nfqHeader->packet_id), NF_ACCEPT);
+        return MNL_CB_OK;
     }
 
-    const auto nfqHeader =
-        static_cast<nfqnl_msg_packet_hdr *>(mnl_attr_get_payload(attr[NFQA_PACKET_HDR]));
     const auto payload = static_cast<const uint8_t *>(mnl_attr_get_payload(attr[NFQA_PAYLOAD]));
     const auto ip = reinterpret_cast<const typename IP::Header *>(payload);
     const auto iphdrLen = IP::hdrLen(ip);
     // Validate computed IP header length (e.g. IPv4 ihl field) against payload bounds.
     if (iphdrLen < sizeof(typename IP::Header) || iphdrLen > payloadLen) {
         LOG(ERROR) << __FUNCTION__ << " - invalid IP header length";
-        return MNL_CB_ERROR;
+        sendVerdict(ntohl(nfqHeader->packet_id), NF_ACCEPT);
+        return MNL_CB_OK;
     }
-    uint16_t len = payloadLen - iphdrLen;
+    uint32_t len = payloadLen - iphdrLen;
     App::Uid uid = 0;
     uint32_t iface = 0;
     timespec timestamp = {0, 0};
@@ -223,20 +227,22 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     switch (IP::payloadProto(ip)) {
     case IPPROTO_TCP:
         if (len < sizeof(tcphdr)) {
-            // Not enough to contain TCP header; treat as malformed.
+            // Not enough to contain TCP header; reject malformed L4 per original policy.
             LOG(ERROR) << __FUNCTION__ << " - TCP header too short";
-            return MNL_CB_ERROR;
+            sendVerdict(ntohl(nfqHeader->packet_id), NF_DROP);
+            return MNL_CB_OK;
         }
         {
             const auto tcp = reinterpret_cast<const tcphdr *>(payload + iphdrLen);
-            const uint16_t tcpHdrLen = static_cast<uint16_t>(tcp->doff) * 4;
+            const uint32_t tcpHdrLen = static_cast<uint32_t>(tcp->doff) * 4;
             if (tcp->doff < 5 || tcpHdrLen > len) {
                 LOG(ERROR) << __FUNCTION__ << " - invalid TCP header length";
-                return MNL_CB_ERROR;
+                sendVerdict(ntohl(nfqHeader->packet_id), NF_DROP);
+                return MNL_CB_OK;
             }
             srcPort = ntohs(tcp->source);
             dstPort = ntohs(tcp->dest);
-            len = static_cast<uint16_t>(len - tcpHdrLen);
+            len = len - tcpHdrLen;
         }
         break;
     case IPPROTO_UDP:
@@ -245,6 +251,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
             srcPort = ntohs(udp->source);
             dstPort = ntohs(udp->dest);
             len -= sizeof(udphdr);
+        } else {
+            LOG(ERROR) << __FUNCTION__ << " - UDP header too short";
+            sendVerdict(ntohl(nfqHeader->packet_id), NF_DROP);
+            return MNL_CB_OK;
         }
         break;
     }
