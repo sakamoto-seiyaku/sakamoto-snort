@@ -227,13 +227,14 @@ void Control::clientLoop(const int sockClient) const {
     const auto &resetall = _cmds.find("RESETALL");
     char buffer[settings.controlCmdLen];
     ssize_t len;
-    while ((len = read(sockClient, buffer, settings.controlCmdLen)) > 0) {
-        if (len >= static_cast<ssize_t>(settings.controlCmdLen)) {
-            buffer[settings.controlCmdLen - 1] = 0;
+    const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
+    while ((len = read(sockClient, buffer, maxRead)) > 0) {
+        buffer[len] = '\0';
+        if (len == maxRead) {
+            // Input truncated; avoid processing potentially incomplete command
             LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " " << buffer;
             break;
         }
-        buffer[len] = '\0';
         std::stringstream cmdLine(buffer);
         std::string cmd;
         std::stringstream out;

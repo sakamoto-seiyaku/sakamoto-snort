@@ -30,8 +30,12 @@ void PacketManager::stopStream(const SocketIO::Ptr sockio) {
 void PacketManager::initIfaces() {
     const auto sysdir = std::string("/sys/class/net/");
     auto ifaces = if_nameindex();
+    if (ifaces == nullptr) {
+        // Failed to enumerate interfaces; leave _ifaceBits as-is
+        return;
+    }
 
-    for (auto i = ifaces; i->if_index != 0 || i->if_name != nullptr; ++i) {
+    for (auto i = ifaces; i && i->if_index != 0 && i->if_name != nullptr; ++i) {
         const std::string dir(sysdir + i->if_name);
         uint32_t type;
         _ifaceBits.resize(std::max(_ifaceBits.size(), static_cast<size_t>(i->if_index + 1)), NONE);

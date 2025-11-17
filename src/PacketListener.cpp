@@ -8,6 +8,7 @@
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #include <thread>
+#include <vector>
 
 #include <CmdLine.hpp>
 #include <PacketListener.hpp>
@@ -73,7 +74,8 @@ template <class IP> void PacketListener<IP>::start() {
 
 template <class IP> void PacketListener<IP>::listen(const uint32_t threadId) {
     const uint32_t nlmsgSize = 0xffff + (MNL_SOCKET_BUFFER_SIZE / 2);
-    char buffer[nlmsgSize];
+    // Avoid large VLA on stack: use a heap-backed buffer with stable address
+    std::vector<char> buffer(nlmsgSize);
     _queueTLS = _firstQueue + threadId;
     _inputTLS = threadId < _inputQueues;
 
@@ -88,25 +90,25 @@ template <class IP> void PacketListener<IP>::listen(const uint32_t threadId) {
             if (mnl_socket_bind(socket, 0, MNL_SOCKET_AUTOPID) < 0) {
                 throw "cannot bind MNL socket";
             }
-            auto nlh = putHeader(buffer, NFQNL_MSG_CONFIG);
+            auto nlh = putHeader(buffer.data(), NFQNL_MSG_CONFIG);
             nfq_nlmsg_cfg_put_cmd(nlh, IP::family, NFQNL_CFG_CMD_BIND);
             sendToSocket(nlh);
 
-            nlh = putHeader(buffer, NFQNL_MSG_CONFIG);
+            nlh = putHeader(buffer.data(), NFQNL_MSG_CONFIG);
             nfq_nlmsg_cfg_put_params(nlh, NFQNL_COPY_PACKET, 0xffff);
             sendToSocket(nlh);
 
-            nlh = putHeader(buffer, NFQNL_MSG_CONFIG);
+            nlh = putHeader(buffer.data(), NFQNL_MSG_CONFIG);
             mnl_attr_put_u32(nlh, NFQA_CFG_FLAGS, htonl(NFQA_CFG_F_GSO));
             mnl_attr_put_u32(nlh, NFQA_CFG_MASK, htonl(NFQA_CFG_F_GSO));
             sendToSocket(nlh);
 
-            nlh = putHeader(buffer, NFQNL_MSG_CONFIG);
+            nlh = putHeader(buffer.data(), NFQNL_MSG_CONFIG);
             mnl_attr_put_u32(nlh, NFQA_CFG_FLAGS, htonl(NFQA_CFG_F_UID_GID));
             mnl_attr_put_u32(nlh, NFQA_CFG_MASK, htonl(NFQA_CFG_F_UID_GID));
             sendToSocket(nlh);
 
-            nlh = putHeader(buffer, NFQNL_MSG_CONFIG);
+            nlh = putHeader(buffer.data(), NFQNL_MSG_CONFIG);
             mnl_attr_put_u32(nlh, NFQA_CFG_FLAGS, htonl(NFQA_CFG_F_FAIL_OPEN));
             mnl_attr_put_u32(nlh, NFQA_CFG_MASK, htonl(NFQA_CFG_F_FAIL_OPEN));
             sendToSocket(nlh);
@@ -116,8 +118,8 @@ template <class IP> void PacketListener<IP>::listen(const uint32_t threadId) {
 
             const uint32_t port = mnl_socket_get_portid(socket);
             for (;;) {
-                if (ssize_t ret = mnl_socket_recvfrom(socket, buffer, nlmsgSize); ret >= 0) {
-                    if (mnl_cb_run(buffer, ret, 0, port, callback, nullptr) == -1) {
+                if (ssize_t ret = mnl_socket_recvfrom(socket, buffer.data(), nlmsgSize); ret >= 0) {
+                    if (mnl_cb_run(buffer.data(), ret, 0, port, callback, nullptr) == -1) {
                         throw "MNL callback error";
                     }
                 } else {
@@ -219,7 +221,7 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         break;
     case IPPROTO_UDP:
         if (len >= sizeof(udphdr)) {
-            const auto udp = reinterpret_cast<const tcphdr *>(payload + iphdrLen);
+            const auto udp = reinterpret_cast<const udphdr *>(payload + iphdrLen);
             srcPort = ntohs(udp->source);
             dstPort = ntohs(udp->dest);
             len -= sizeof(udphdr);

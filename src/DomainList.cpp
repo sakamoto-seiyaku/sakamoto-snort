@@ -214,8 +214,9 @@ bool DomainList::remove(std::string listId) {
     // Returning false indicates that no on-disk file was removed, but the logical list
     // has already been erased from memory.
     erase(listId);
-    std::string filePathListEnabled = settings.saveDirDomainLists + "/" + listId;
-    std::string filePathListDisabled = settings.saveDirDomainLists + "/" + listId + ".disabled";
+    // Avoid duplicate '/' since saveDirDomainLists already ends with '/'
+    std::string filePathListEnabled = settings.saveDirDomainLists + listId;
+    std::string filePathListDisabled = settings.saveDirDomainLists + listId + ".disabled";
     if (std::remove(filePathListEnabled.c_str()) == 0) {
         return true;
     } else if (std::remove(filePathListDisabled.c_str()) == 0) {
