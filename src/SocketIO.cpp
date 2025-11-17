@@ -4,6 +4,8 @@
  */
 
 #include <sstream>
+#include <iterator>
+#include <errno.h>
 
 #include <sucre-snort.hpp>
 #include <SocketIO.hpp>
@@ -14,11 +16,35 @@ SocketIO::SocketIO(const int socket)
 SocketIO::~SocketIO() {}
 
 bool SocketIO::print(std::stringstream &out, const bool pretty) {
+    // Robust write: handle partial writes and EINTR/EAGAIN; keep semantics of sending a
+    // trailing NUL byte as before (size()+1).
     auto writeSocket = [&](auto &in) {
-        const std::string out(in.str());
-        if (const ssize_t len = out.size() + 1; len != 1) {
-            const std::lock_guard lock(_mutex);
-            _open = (write(_socket, out.c_str(), len) == len);
+        const std::string outStr(in.str());
+        const char *buf = outStr.c_str();
+        ssize_t remaining = static_cast<ssize_t>(outStr.size() + 1); // include NUL terminator
+        ssize_t written = 0;
+        if (remaining == 1) {
+            return; // nothing to write
+        }
+        const std::lock_guard lock(_mutex);
+        while (remaining > 0) {
+            ssize_t ret = ::write(_socket, buf + written, static_cast<size_t>(remaining));
+            if (ret > 0) {
+                written += ret;
+                remaining -= ret;
+            } else if (ret == -1 && (errno == EINTR)) {
+                continue; // retry
+            } else if (ret == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // For blocking sockets this shouldn't happen; treat as failure to avoid busy loop
+                _open = false;
+                break;
+            } else {
+                _open = false;
+                break;
+            }
+        }
+        if (remaining == 0) {
+            _open = true;
         }
     };
     if (_open) {
@@ -34,36 +60,67 @@ bool SocketIO::print(std::stringstream &out, const bool pretty) {
 }
 
 void SocketIO::format(std::stringstream &in, std::stringstream &out) {
-    std::istream_iterator<char> it(in);
-    const std::istream_iterator<char> end;
+    // JSON-ish pretty printer with string-awareness.
+    // - Track string/escape state so braces/commas inside strings don't affect indentation
+    // - Keep previous CRLF + tab-based indentation semantics
+    std::istreambuf_iterator<char> it(in.rdbuf());
+    const std::istreambuf_iterator<char> end;
     std::string indent;
-    char c0 = '\0';
+    bool inString = false;
+    bool escaped = false;
+
     while (it != end) {
         const char c = *it;
-        const char c2 = (++it == end ? '\0' : *it);
-        switch (c) {
-        case ':':
+
+        if (inString) {
             out << c;
-            if (c0 == '\"') {
-                out << ' ';
+            if (escaped) {
+                escaped = false; // escape only protects next char
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                inString = false;
             }
-            break;
-        case ',':
+            ++it;
+            continue;
+        }
+
+        // Not inside string: structural formatting
+        switch (c) {
+        case '"':
+            inString = true;
             out << c;
-            if (c2 == '\"') {
+            break;
+        case ':':
+            out << c << ' ';
+            break;
+        case ',': {
+            out << c;
+            // Preserve old behavior: newline+indent only if next is a string start
+            const auto next = std::next(it);
+            if (next != end && *next == '"') {
                 out << "\r\n" << indent;
             }
             break;
+        }
         case '{':
-            out << c << "\r\n" << (indent += '\t');
+        case '[':
+            out << c << "\r\n";
+            indent.push_back('\t');
+            out << indent;
             break;
         case '}':
-            out << "\r\n" << (indent.pop_back(), indent) << c;
+        case ']':
+            if (!indent.empty()) {
+                indent.pop_back();
+            }
+            out << "\r\n" << indent << c;
             break;
         default:
             out << c;
+            break;
         }
-        c0 = c;
+        ++it;
     }
     in.clear();
     in.seekg(0);

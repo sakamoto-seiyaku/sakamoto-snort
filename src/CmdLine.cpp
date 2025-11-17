@@ -22,13 +22,18 @@ CmdLine::~CmdLine() {
 
 void CmdLine::exec() {
     if (_argc < _args.size()) {
-        if ((_argv = static_cast<char **>(reallocarray(_argv, _args.size() + 1, sizeof(char *))))) {
-            for (; _argc < _args.size(); ++_argc) {
-                _argv[_argc] = new char[_args[_argc].size() + 1];
-                std::memcpy(_argv[_argc], _args[_argc].c_str(), _args[_argc].size() + 1);
-            }
-            _argv[_args.size()] = nullptr;
+        // Use a temporary to avoid clobbering _argv on allocation failure.
+        char **new_argv = static_cast<char **>(reallocarray(_argv, _args.size() + 1, sizeof(char *)));
+        if (!new_argv) {
+            LOG(ERROR) << __FUNCTION__ << " - argv allocation failed";
+            return; // leave existing _argv/_argc intact
         }
+        _argv = new_argv;
+        for (; _argc < _args.size(); ++_argc) {
+            _argv[_argc] = new char[_args[_argc].size() + 1];
+            std::memcpy(_argv[_argc], _args[_argc].c_str(), _args[_argc].size() + 1);
+        }
+        _argv[_args.size()] = nullptr;
     }
     if (_argc > 0) {
         if (const auto pid = fork(); pid == 0) {

@@ -173,9 +173,14 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         LOG(ERROR) << __FUNCTION__ << " - metaheader not set";
         return MNL_CB_ERROR;
     }
+    if (attr[NFQA_PAYLOAD] == nullptr) {
+        LOG(ERROR) << __FUNCTION__ << " - payload attribute not set";
+        return MNL_CB_ERROR;
+    }
 
     const uint16_t payloadLen = mnl_attr_get_payload_len(attr[NFQA_PAYLOAD]);
 
+    // Basic length guards: must at least contain the IP header of this family.
     if (payloadLen < sizeof(typename IP::Header)) {
         LOG(ERROR) << __FUNCTION__ << " - payload length too short";
         return MNL_CB_ERROR;
@@ -186,6 +191,11 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     const auto payload = static_cast<const uint8_t *>(mnl_attr_get_payload(attr[NFQA_PAYLOAD]));
     const auto ip = reinterpret_cast<const typename IP::Header *>(payload);
     const auto iphdrLen = IP::hdrLen(ip);
+    // Validate computed IP header length (e.g. IPv4 ihl field) against payload bounds.
+    if (iphdrLen < sizeof(typename IP::Header) || iphdrLen > payloadLen) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid IP header length";
+        return MNL_CB_ERROR;
+    }
     uint16_t len = payloadLen - iphdrLen;
     App::Uid uid = 0;
     uint32_t iface = 0;
@@ -212,11 +222,21 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
 
     switch (IP::payloadProto(ip)) {
     case IPPROTO_TCP:
-        if (len >= sizeof(tcphdr)) {
+        if (len < sizeof(tcphdr)) {
+            // Not enough to contain TCP header; treat as malformed.
+            LOG(ERROR) << __FUNCTION__ << " - TCP header too short";
+            return MNL_CB_ERROR;
+        }
+        {
             const auto tcp = reinterpret_cast<const tcphdr *>(payload + iphdrLen);
+            const uint16_t tcpHdrLen = static_cast<uint16_t>(tcp->doff) * 4;
+            if (tcp->doff < 5 || tcpHdrLen > len) {
+                LOG(ERROR) << __FUNCTION__ << " - invalid TCP header length";
+                return MNL_CB_ERROR;
+            }
             srcPort = ntohs(tcp->source);
             dstPort = ntohs(tcp->dest);
-            len -= tcp->doff * 4;
+            len = static_cast<uint16_t>(len - tcpHdrLen);
         }
         break;
     case IPPROTO_UDP:

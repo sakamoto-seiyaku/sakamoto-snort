@@ -171,8 +171,10 @@ void App::printDomains(std::ostream &out, const Stats::Color cs, const Stats::Vi
                        const TypeStats... ts) {
     out << "[";
     bool first = true;
-    for (auto &[domain, stats] : domStats(cs)) {
-        const std::shared_lock<std::shared_mutex> lock(mutex(cs));
+    // Hold read lock for the full traversal to prevent iterator invalidation while iterating.
+    const std::shared_lock<std::shared_mutex> lock(mutex(cs));
+    auto &map = domStats(cs);
+    for (auto &[domain, stats] : map) {
         if (stats.hasData(view)) {
             when(first, out << ",");
             domain->print(out, stats, view, ts...);

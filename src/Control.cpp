@@ -275,7 +275,7 @@ auto Control::readCmdArgs(std::stringstream &args) {
     std::string arg;
     std::vector<CmdArg> vecArgs;
     while (args >> arg) {
-        if (std::all_of(arg.begin(), arg.end(), ::isdigit)) {
+        if (std::all_of(arg.begin(), arg.end(), [](char ch) { return std::isdigit(static_cast<unsigned char>(ch)); })) {
             vecArgs.emplace_back(arg, std::stoi(arg));
         } else if (arg == "true" || arg == "false") {
             vecArgs.emplace_back((arg == "true"));

@@ -23,9 +23,13 @@ template <class IP> Address<IP>::Address(Saver &saver) {
 template <class IP> Address<IP>::~Address() {}
 
 template <class IP> const std::string Address<IP>::str() const {
-    char buffer[IP::strLen];
-    inet_ntop(IP::family, _value.data(), buffer, IP::strLen);
-    return std::string(buffer);
+    // Guard against inet_ntop failure to avoid returning uninitialized memory.
+    char buffer[IP::strLen] = {};
+    const char *ret = inet_ntop(IP::family, _value.data(), buffer, IP::strLen);
+    if (ret == nullptr) {
+        return std::string();
+    }
+    return std::string(ret);
 }
 
 template <class IP> void Address<IP>::save(Saver &saver) const {
