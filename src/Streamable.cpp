@@ -26,7 +26,7 @@ template <class Item> void Streamable<Item>::reset() { _items.clear(); }
 template <class Item> void Streamable<Item>::stream(const std::shared_ptr<Item> item) {
     const std::lock_guard lockItems(_mutexItems);
     _items.push_back(item);
-    while (_items.front()->expired(item)) {
+    while (!_items.empty() && _items.front()->expired(item)) {
         _items.pop_front();
     }
 

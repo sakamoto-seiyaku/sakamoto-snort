@@ -51,12 +51,17 @@ void DnsListener::clientRun(const int socket) {
         if (len < 3 || len > HOST_NAME_MAX) {
             throw "domain name invalid";
         }
-        char hostname[len];
-        clientRead(socket, hostname, len, "domain read error");
+        // Avoid VLA; read into std::string buffer and trim optional NUL terminator
+        std::string host;
+        host.resize(len);
+        clientRead(socket, host.data(), len, "domain read error");
+        if (!host.empty() && host.back() == '\0') {
+            host.pop_back();
+        }
         App::Uid uid;
         clientRead(socket, &uid, sizeof(uid), "uid read error");
         const auto app = appManager.make(uid);
-        const auto domain = domManager.make(hostname);
+        const auto domain = domManager.make(std::move(host));
         const auto [blocked, cs] = app->blocked(domain);
         const bool verdict = !blocked;
         clientWrite(socket, &verdict, sizeof(verdict), "verdict write error");

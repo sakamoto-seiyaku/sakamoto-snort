@@ -7,6 +7,7 @@
 
 #include <android-base/properties.h>
 #include <chrono>
+#include <atomic>
 
 #include <sucre-snort.hpp>
 #include <Saver.hpp>
@@ -82,7 +83,7 @@ private:
     std::atomic_uint8_t _passState;
     std::atomic_bool _getBlackIPs;
     std::atomic_bool _blockIPLeaks;
-    std::time_t _maxAgeIP;
+    std::atomic<std::time_t> _maxAgeIP;
 
 public:
     Settings();
@@ -175,10 +176,10 @@ public:
         save();
     }
 
-    std::time_t maxAgeIP() const { return _maxAgeIP; }
+    std::time_t maxAgeIP() const { return _maxAgeIP.load(std::memory_order_relaxed); }
 
     void maxAgeIP(const std::time_t maxAgeIP) {
-        _maxAgeIP = maxAgeIP;
+        _maxAgeIP.store(maxAgeIP, std::memory_order_relaxed);
         save();
     }
 
