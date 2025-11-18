@@ -25,4 +25,4 @@ bool Activity::expired(const Activity::Ptr activity) const { return _streamed; }
 
 void Activity::save(Saver &saver) {}
 
-Activity::Ptr restore(Saver &saver) { return nullptr; }
+Activity::Ptr Activity::restore(Saver &saver) { return nullptr; }

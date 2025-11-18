@@ -53,9 +53,22 @@ void AppManager::install(const App::Uid uid, const App::NamesVec &names) {
 }
 
 void AppManager::remove(const App::Uid uid, const App::NamesVec &names) {
+    // Maintain index consistency even if names is empty or contains aliases.
     const std::scoped_lock lock(_mutexByUid, _mutexByName);
-    _byUid.erase(uid);
-    _byName.erase(names[0]);
+    auto it = _byUid.find(uid);
+    if (it != _byUid.end()) {
+        // Erase using the canonical name stored on the App object.
+        const std::string canonical = it->second->name();
+        // Remove persisted state for this app to keep on-disk data consistent.
+        it->second->removeFile();
+        _byUid.erase(it);
+        _byName.erase(canonical);
+    } else {
+        // Do not attempt best-effort name-based deletion without a matching uid; avoid accidental
+        // removal of unrelated entries. Let callers fix their uid/name mapping.
+        LOG(WARNING) << __FUNCTION__ << " - remove: uid not found (" << uid
+                     << "), skip names fallback";
+    }
 }
 
 void AppManager::updateStats(const Domain::Ptr &domain, const App::Ptr &app, const bool blocked,
