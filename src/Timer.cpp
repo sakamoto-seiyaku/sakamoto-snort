@@ -20,7 +20,7 @@ void Timer::get(std::string &&name, std::string &&message) {
     if (auto it = _timers.find(name); it != _timers.end()) {
         get(it->second, message);
     } else {
-        LOG(WARN) << __FUNCTION__ << " - timer not set for: " << name;
+        LOG(WARNING) << __FUNCTION__ << " - timer not set for: " << name;
     }
 }
 
@@ -29,7 +29,7 @@ void Timer::get(std::string &&name) {
     if (auto it = _timers.find(name); it != _timers.end()) {
         get(it->second, it->second.message);
     } else {
-        LOG(WARN) << __FUNCTION__ << " - timer not set for: " << name;
+        LOG(WARNING) << __FUNCTION__ << " - timer not set for: " << name;
     }
 }
 
