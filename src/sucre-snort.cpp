@@ -102,6 +102,8 @@ static void snort() {
     }
 
     Timer::get("total", "Total init time");
+    // Prime interface snapshot once to avoid cold-miss refresh on the hot path.
+    pktManager.refreshIfacesOnce();
     std::signal(SIGINT, on_term_signal);
     std::signal(SIGTERM, on_term_signal);
     std::signal(SIGPIPE, SIG_IGN);
@@ -124,6 +126,8 @@ static void snort() {
                 snortSave();
             }
         }
+        // Very low frequency passive refresh (best-effort); does not block hot path.
+        pktManager.refreshIfacesPassive();
         if (g_quit_flag) {
             // In case snortSave(true) returns (shouldn't), break to stop loop.
             break;
