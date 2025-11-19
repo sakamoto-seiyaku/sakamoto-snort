@@ -15,7 +15,10 @@ void Domain::updateStats(const Stats::Type ts, const Stats::Block bs, const uint
     _stats.update(ts, bs, val);
 }
 
-bool Domain::validIP() { return std::time(nullptr) - _timestampIP <= settings.maxAgeIP(); }
+bool Domain::validIP() {
+    const std::time_t last = _timestampIP.load(std::memory_order_relaxed);
+    return std::time(nullptr) - last <= settings.maxAgeIP();
+}
 
 void Domain::save(Saver &saver) {
     const std::shared_lock<std::shared_mutex> lock(_mutexIP);
@@ -23,7 +26,7 @@ void Domain::save(Saver &saver) {
     saver.write<Stats::Color>(static_cast<Stats::Color>(_color.load(std::memory_order_relaxed)));
     saveIP<IPv4>(saver);
     saveIP<IPv6>(saver);
-    saver.write(_timestampIP);
+    saver.write(_timestampIP.load(std::memory_order_relaxed));
     _stats.save(saver);
 }
 
@@ -39,7 +42,7 @@ void Domain::restore(Saver &saver) {
     restoreIP<IPv4>(saver);
     restoreIP<IPv6>(saver);
     if (settings.savedVersion() >= 4) {
-        _timestampIP = saver.read<std::time_t>();
+        _timestampIP.store(saver.read<std::time_t>(), std::memory_order_relaxed);
     }
     _stats.restore(saver);
     if (settings.savedVersion() == 1 && cs != Stats::BLACK) {

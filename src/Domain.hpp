@@ -27,7 +27,8 @@ private:
     DomainStats _stats;
     IPv4Set _ipv4;
     IPv6Set _ipv6;
-    std::time_t _timestampIP = 0;
+    // Last time an IP was added for this domain; atomic to allow hot-path lock-free reads
+    std::atomic<std::time_t> _timestampIP{0};
     std::shared_mutex _mutexIP;
 
 public:
@@ -81,7 +82,7 @@ private:
 
 template <class IP> auto &Domain::addIP(const Address<IP> &&ip) {
     const std::lock_guard lock(_mutexIP);
-    _timestampIP = std::time(nullptr);
+    _timestampIP.store(std::time(nullptr), std::memory_order_relaxed);
     return *(ips<IP>().emplace(std::move(ip)).first);
 }
 
