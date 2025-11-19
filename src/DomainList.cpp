@@ -86,6 +86,9 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
         LOG(ERROR) << __FUNCTION__ << " - invalid list id";
         return 0;
     }
+    // Take a BLM masks snapshot BEFORE acquiring DL lock to avoid lock order inversion (BLM -> DL).
+    const auto masks = blockingListManager.masksSnapshot();
+
     std::unique_lock lock(_mutex);
 
     if (clear) {
@@ -96,9 +99,9 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
             .close();
     }
 
-    // 1. Collect matching list IDs (use snapshot to avoid pointer exposure)
+    // 1. Collect matching list IDs based on the pre-fetched masks snapshot
+    //    Note: masks is a value snapshot to prevent cross-component locking while holding DL lock.
     std::vector<std::string> matchingListIds;
-    const auto masks = blockingListManager.masksSnapshot();
     for (const auto &[otherListId, _] : _domainsByListId) {
         auto itMask = masks.find(otherListId);
         if (itMask != masks.end() && itMask->second <= blockMask) {
