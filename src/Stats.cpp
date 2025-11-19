@@ -50,7 +50,8 @@ template <class T> void StatsTPL<T>::shift() {
 }
 
 template <class T> bool StatsTPL<T>::hasData(const View view) {
-    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    // Exclusive lock to ensure shift() (which writes _stats) does not race with readers.
+    const std::lock_guard<std::shared_mutex> lock(_mutex);
     shift();
     for (size_t ts = 0; ts < nbTypes; ++ts) {
         if (hasDataType(view, static_cast<Type>(ts))) {
@@ -81,13 +82,13 @@ template <class T> void StatsTPL<T>::reset(const View view) {
 template <class T> void StatsTPL<T>::reset() { std::memset(_stats, 0, sizeof(_stats)); }
 
 template <class T> void StatsTPL<T>::print(std::ostream &out) {
-    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    const std::lock_guard<std::shared_mutex> lock(_mutex);
     shift();
     printNotif(out);
 }
 
 template <class T> void StatsTPL<T>::print(std::ostream &out, const View view) {
-    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    const std::lock_guard<std::shared_mutex> lock(_mutex);
     shift();
     out << "{";
     for (size_t ts = 0; ts < nbTypes; ++ts) {
@@ -101,7 +102,7 @@ template <class T> void StatsTPL<T>::print(std::ostream &out, const View view) {
 }
 
 template <class T> void StatsTPL<T>::print(std::ostream &out, const View view, const Type ts) {
-    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    const std::lock_guard<std::shared_mutex> lock(_mutex);
     shift();
     printType(out, view, ts);
 }

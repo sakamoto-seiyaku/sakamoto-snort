@@ -31,7 +31,8 @@ uint64_t DomainStats::stat(const View view, const size_t ts, const size_t bs) co
 }
 
 bool DomainStats::hasBlocked(const View view) {
-    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    // Exclusive lock to protect shift() writing to _stats
+    const std::lock_guard<std::shared_mutex> lock(_mutex);
     shift();
     for (size_t ts = 0; ts < nbTypes; ++ts) {
         if (stat(view, static_cast<Type>(ts), BLOCK) != 0) {
@@ -42,7 +43,7 @@ bool DomainStats::hasBlocked(const View view) {
 }
 
 bool DomainStats::hasAccepted(const View view) {
-    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    const std::lock_guard<std::shared_mutex> lock(_mutex);
     shift();
     for (size_t ts = 0; ts < nbTypes; ++ts) {
         if (stat(view, static_cast<Type>(ts), AUTH) != 0) {
