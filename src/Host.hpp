@@ -7,6 +7,8 @@
 
 #include <sstream>
 #include <vector>
+#include <shared_mutex>
+#include <atomic>
 
 #include <Domain.hpp>
 
@@ -16,26 +18,37 @@ public:
 
 private:
     std::string _name;
-    bool _resolved = false;
+    std::atomic_bool _resolved{false};
     std::vector<Address<IPv4>> _ipv4;
     std::vector<Address<IPv6>> _ipv6;
     Domain::Ptr _domain = nullptr;
-    std::shared_mutex _mutex;
+    mutable std::shared_mutex _mutex;
 
 public:
     Host();
 
     Host(const Host &) = delete;
 
-    const std::string &name() { return _name; }
+    // Read name under shared lock; return by value to avoid exposing references to internal state
+    std::string name() const {
+        const std::shared_lock<std::shared_mutex> lock(_mutex);
+        return _name;
+    }
 
-    void name(const std::string &&name) { _name = name; }
+    // Write name under exclusive lock; pass-by-value to enable move from temporaries
+    void name(std::string name) {
+        const std::lock_guard lock(_mutex);
+        _name = std::move(name);
+    }
 
-    bool resolved() { return _resolved; }
+    bool resolved() const { return _resolved.load(std::memory_order_acquire); }
 
-    void setResolved() { _resolved = true; }
+    void setResolved() { _resolved.store(true, std::memory_order_release); }
 
-    bool hasName() const { return _name.size() != 0; }
+    bool hasName() const {
+        const std::shared_lock<std::shared_mutex> lock(_mutex);
+        return !_name.empty();
+    }
 
     const Domain::Ptr domain();
 

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <netdb.h>
+#include <sys/socket.h>
 
 #include <DomainManager.hpp>
 #include <Host.hpp>
@@ -82,24 +83,27 @@ template <class IP> const Host::Ptr HostManager::make(const Address<IP> &ip) {
 }
 
 template <class IP> const Host::Ptr HostManager::create(const Address<IP> &ip) {
-    const std::lock_guard lockIP(_mutexIP);
     Host::Ptr host = nullptr;
-    if (!(host = find<IP>(ip, true))) {
-        const std::lock_guard lock(_mutexHosts);
-        host = _hosts.emplace_back(std::make_shared<Host>());
-        byIP<IP>().emplace(ip, host);
-        host->template addIP<IP>(ip);
-        host->domain(domManager.find(ip));
+    // Phase 1: ensure host exists and mappings are in place under Manager locks only
+    {
+        const std::lock_guard lockIP(_mutexIP);
+        if (!(host = find<IP>(ip, true))) {
+            const std::lock_guard lockHosts(_mutexHosts);
+            host = _hosts.emplace_back(std::make_shared<Host>());
+            byIP<IP>().emplace(ip, host);
+            host->template addIP<IP>(ip);
+            host->domain(domManager.find(ip));
+        }
     }
+    // Phase 2: reverse DNS outside of Manager locks; update Host then name index, no nested locks
     if (settings.reverseDns() && !host->resolved()) {
-        sockaddr_storage sa;
-        // IP::fillSockAddr(&sa, ip.raw());
+        sockaddr_storage sa{};
         ip.fillSockAddr(sa);
         char buffer[NI_MAXHOST];
         if (getnameinfo(reinterpret_cast<sockaddr *>(&sa), sizeof(sa), buffer, sizeof(buffer),
                         nullptr, 0, NI_NAMEREQD) == 0) {
-            host->name(buffer);
-            const std::lock_guard lock(_mutexName);
+            host->name(buffer); // Host-internal lock
+            const std::lock_guard lockName(_mutexName);
             _byName.try_emplace(buffer).first->second.push_back(host);
         }
         host->setResolved();

@@ -34,7 +34,6 @@ private:
     std::shared_mutex _mutexIP;
 
     // Allow DomainManager to coordinate atomic updates across domain-level and global IP maps
-    friend class DomainManager;
 
 public:
     Domain(const std::string &&name);

@@ -13,18 +13,33 @@ HostManager::HostManager() {}
 HostManager::~HostManager() {}
 
 void HostManager::reset() {
-    _hosts.clear();
-    _byName.clear();
-    _byIPv4.clear();
-    _byIPv6.clear();
+    {
+        const std::lock_guard lock(_mutexHosts);
+        _hosts.clear();
+    }
+    {
+        const std::lock_guard lock(_mutexName);
+        _byName.clear();
+    }
+    {
+        const std::lock_guard lock(_mutexIP);
+        _byIPv4.clear();
+        _byIPv6.clear();
+    }
 }
 
 void HostManager::printHosts(std::stringstream &out, const std::string &subname) {
-    const std::shared_lock<std::shared_mutex> lock(_mutexHosts);
+    // Snapshot vector of hosts under lock, then print outside to avoid nested Manager→Host locks
+    std::vector<Host::Ptr> snap;
+    {
+        const std::shared_lock<std::shared_mutex> lock(_mutexHosts);
+        snap = _hosts; // copy shared_ptrs
+    }
     out << "[";
     bool first = true;
-    for (const auto &host : _hosts) {
-        if (subname.size() == 0 || host->name().find(subname) != std::string::npos) {
+    for (const auto &host : snap) {
+        const std::string name = host->name();
+        if (subname.empty() || name.find(subname) != std::string::npos) {
             when(first, out << ",");
             host->print(out);
         }
@@ -33,16 +48,21 @@ void HostManager::printHosts(std::stringstream &out, const std::string &subname)
 }
 
 void HostManager::printHostsByName(std::stringstream &out, const std::string &subname) {
-    const std::shared_lock<std::shared_mutex> lock(_mutexName);
-    out << "[";
-    bool first = true;
-    for (const auto &[name, hosts] : _byName) {
-        if (subname.size() == 0 || name.find(subname) != std::string::npos) {
-            for (const auto &host : hosts) {
-                when(first, out << ",");
-                host->print(out);
+    // Snapshot matching hosts under _mutexName, then print outside to avoid _mutexName→Host locks
+    std::vector<Host::Ptr> snap;
+    {
+        const std::shared_lock<std::shared_mutex> lock(_mutexName);
+        for (const auto &[name, hosts] : _byName) {
+            if (subname.empty() || name.find(subname) != std::string::npos) {
+                snap.insert(snap.end(), hosts.begin(), hosts.end());
             }
         }
+    }
+    out << "[";
+    bool first = true;
+    for (const auto &host : snap) {
+        when(first, out << ",");
+        host->print(out);
     }
     out << "]";
 }
