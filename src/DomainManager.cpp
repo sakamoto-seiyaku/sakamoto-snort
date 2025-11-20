@@ -8,6 +8,7 @@
 
 #include <RulesManager.hpp>
 #include <DomainManager.hpp>
+#include <Domain.hpp>
 
 DomainManager::DomainManager() {}
 
@@ -81,14 +82,33 @@ bool DomainManager::authorized(const Domain::Ptr &domain) {
 }
 
 void DomainManager::removeIPs(const Domain::Ptr &domain) {
-    const std::lock_guard lock(_mutexByIP);
-    for (const auto ip : domain->ips<IPv4>()) {
-        byIP<IPv4>().erase(ip);
-    }
-    for (const auto ip : domain->ips<IPv6>()) {
-        byIP<IPv6>().erase(ip);
-    }
-    domain->clearIPs();
+    // Strong consistency: hold domain lock first, then global IP map lock; delete mappings and
+    // clear per-domain IP sets in the same critical section to avoid races.
+    domain->withIPsLocked([&](auto &ipv4, auto &ipv6) {
+        const std::lock_guard<std::shared_mutex> glock(_mutexByIP); // Domain -> Global lock order
+        for (const auto &ip : ipv4) {
+            _byIPv4.erase(ip);
+        }
+        for (const auto &ip : ipv6) {
+            _byIPv6.erase(ip);
+        }
+        ipv4.clear();
+        ipv6.clear();
+    });
+}
+
+void DomainManager::addIPBoth(const Domain::Ptr &domain, const Address<IPv4> &ip) {
+    domain->withAddedIPLocked<IPv4>(ip, [&]() {
+        const std::lock_guard<std::shared_mutex> glock(_mutexByIP); // Domain -> Global
+        _byIPv4.try_emplace(ip, domain);
+    });
+}
+
+void DomainManager::addIPBoth(const Domain::Ptr &domain, const Address<IPv6> &ip) {
+    domain->withAddedIPLocked<IPv6>(ip, [&]() {
+        const std::lock_guard<std::shared_mutex> glock(_mutexByIP); // Domain -> Global
+        _byIPv6.try_emplace(ip, domain);
+    });
 }
 
 void DomainManager::addCustomDomain(const std::string &name, const Stats::Color color) {

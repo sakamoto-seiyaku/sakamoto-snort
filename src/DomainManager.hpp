@@ -11,6 +11,9 @@
 #include <Stats.hpp>
 #include <BlockingList.hpp>
 #include <vector>
+#include <shared_mutex>
+#include <mutex>
+#include <ctime>
 
 class DomainManager {
 private:
@@ -59,6 +62,16 @@ public:
     bool authorized(const Domain::Ptr &domain);
 
     template <class IP> void addIP(const Domain::Ptr &domain, const Address<IP> &ip);
+
+    // Atomically insert IP into domain's IP set and update the global reverse map, using
+    // a single critical section with the lock order: domain->_mutexIP -> _mutexByIP.
+    template <class IP> void addIPBoth(const Domain::Ptr &domain, const Address<IP> &ip);
+
+    // Atomically insert into domain IP set and global IP->Domain map under proper lock ordering
+    // (Domain lock -> Global lock). Overloads provided for IPv4/IPv6 to avoid template
+    // definitions in headers that would require additional includes.
+    void addIPBoth(const Domain::Ptr &domain, const Address<IPv4> &ip);
+    void addIPBoth(const Domain::Ptr &domain, const Address<IPv6> &ip);
 
     void removeIPs(const Domain::Ptr &domain);
 
@@ -137,6 +150,16 @@ template <class IP> const Domain::Ptr DomainManager::find(const Address<IP> &ip)
 
 template <class IP> void DomainManager::addIP(const Domain::Ptr &domain, const Address<IP> &ip) {
     const std::lock_guard lock(_mutexByIP);
+    byIP<IP>().try_emplace(ip, domain);
+}
+
+template <class IP> void DomainManager::addIPBoth(const Domain::Ptr &domain, const Address<IP> &ip) {
+    // Strong consistency and deadlock-free: take domain lock first, then global IP lock.
+    const std::lock_guard<std::shared_mutex> lockDom(domain->_mutexIP);
+    // Insert into the domain's set; avoid calling Domain::addIP() here to prevent re-locking.
+    domain->ips<IP>().emplace(ip);
+    domain->_timestampIP.store(std::time(nullptr), std::memory_order_relaxed);
+    const std::lock_guard lockIP(_mutexByIP);
     byIP<IP>().try_emplace(ip, domain);
 }
 

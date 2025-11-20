@@ -7,10 +7,12 @@
 
 #include <unordered_set>
 #include <atomic>
+#include <shared_mutex>
 
 #include <Address.hpp>
 #include <DomainStats.hpp>
 #include <IP.hpp>
+#include <ctime>
 
 class Domain {
 public:
@@ -30,6 +32,9 @@ private:
     // Last time an IP was added for this domain; atomic to allow hot-path lock-free reads
     std::atomic<std::time_t> _timestampIP{0};
     std::shared_mutex _mutexIP;
+
+    // Allow DomainManager to coordinate atomic updates across domain-level and global IP maps
+    friend class DomainManager;
 
 public:
     Domain(const std::string &&name);
@@ -61,6 +66,25 @@ public:
     }
 
     template <class IP> auto &addIP(const Address<IP> &&ip);
+
+    // Execute a callable while holding the domain IP mutex; exposes the containers by reference
+    // to the callable without breaking encapsulation outside this class.
+    template <class Fn>
+    void withIPsLocked(Fn&& fn) {
+        const std::lock_guard<std::shared_mutex> lock(_mutexIP);
+        fn(_ipv4, _ipv6);
+    }
+
+    // Insert an IP inside the domain under the domain lock, then run a continuation while the
+    // domain lock is still held. The continuation can safely acquire outer/global locks (e.g.
+    // DomainManager::_mutexByIP) to keep the lock ordering Domain -> Global consistent.
+    template <class IP, class Fn>
+    void withAddedIPLocked(Address<IP> ip, Fn&& after) {
+        const std::lock_guard<std::shared_mutex> lock(_mutexIP);
+        _timestampIP.store(std::time(nullptr), std::memory_order_relaxed);
+        ips<IP>().emplace(std::move(ip));
+        after();
+    }
 
     void updateStats(const Stats::Type ts, const Stats::Block bs, const uint64_t val);
 

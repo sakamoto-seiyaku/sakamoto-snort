@@ -90,10 +90,13 @@ void DnsListener::clientRun(const int socket) {
 }
 
 template <class IP> void DnsListener::readIP(const int socket, const Domain::Ptr &domain) {
-    const auto &ip = domain->addIP<IP>(Address<IP>([=](uint8_t *address, const uint32_t len) {
+    // Read IP into a local value to avoid holding a reference to a container element that could be
+    // cleared by a concurrent removeIPs(). Then atomically add to the domain and global maps with
+    // proper lock ordering using DomainManager::addIPBoth().
+    Address<IP> ip([=](uint8_t *address, const uint32_t len) {
         clientRead(socket, address, len, "ip read error");
-    }));
-    domManager.addIP<IP>(domain, ip);
+    });
+    domManager.addIPBoth(domain, ip);
 }
 
 void DnsListener::clientRead(const int socket, void *data, const uint32_t len, const char *error) {
