@@ -118,13 +118,12 @@ static void snort() {
     // domManager.addRule(Rule::REGEX, ".*.facebook.fr", Stats::BLACK);
 
     for (;;) {
-        {
-            const std::lock_guard lock(mutexListeners);
-            if (g_quit_flag) {
-                snortSave(true); // will std::exit
-            } else {
-                snortSave();
-            }
+        // Periodic save no longer freezes the world with a global lock. Each module's save()
+        // is internally synchronized; cross-module snapshot consistency is eventual and sufficient.
+        if (g_quit_flag) {
+            snortSave(true); // will std::exit
+        } else {
+            snortSave();
         }
         // Very low frequency passive refresh (best-effort); does not block hot path.
         pktManager.refreshIfacesPassive();

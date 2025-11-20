@@ -5,6 +5,7 @@
  
 #include <cutils/sockets.h>
 #include <sys/un.h>
+#include <sys/time.h>
 #include <thread>
 
 #include <DnsListener.hpp>
@@ -44,7 +45,13 @@ void DnsListener::server() {
 }
 
 void DnsListener::clientRun(const int socket) {
-    const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+    // Never hold the global listeners lock across blocking I/O. We only take it briefly
+    // around critical sections that must quiesce during resetall.
+    // Soften stuck clients: set a small read timeout to avoid indefinitely hanging threads.
+    {
+        const timeval tv{.tv_sec = 0, .tv_usec = 250000}; // 250 ms
+        (void)setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
     try {
         uint32_t len;
         clientRead(socket, &len, sizeof(len), "len read error");
@@ -62,24 +69,50 @@ void DnsListener::clientRun(const int socket) {
         clientRead(socket, &uid, sizeof(uid), "uid read error");
         const auto app = appManager.make(uid);
         const auto domain = domManager.make(std::move(host));
-        const auto [blocked, cs] = app->blocked(domain);
-        const bool verdict = !blocked;
+
+        // Decision must observe a consistent snapshot vs resetall. Keep the lock window tiny.
+        bool blocked = false;
+        Stats::Color cs = Stats::GREY;
+        bool verdict = true;
+        bool getips = false;
+        {
+            const std::shared_lock<std::shared_mutex> g(mutexListeners);
+            const auto bc = app->blocked(domain);
+            blocked = bc.first;
+            cs = bc.second;
+            verdict = !blocked;
+            getips = verdict || settings.getBlackIPs();
+        }
         clientWrite(socket, &verdict, sizeof(verdict), "verdict write error");
-        const bool getips = verdict || settings.getBlackIPs();
         clientWrite(socket, &getips, sizeof(getips), "getips write error");
         if (getips) {
-            domManager.removeIPs(domain);
+            // Clear existing mappings under the global lock (short window) to quiesce vs resetall.
+            {
+                const std::shared_lock<std::shared_mutex> g(mutexListeners);
+                domManager.removeIPs(domain);
+            }
             int family = -1;
             do {
                 clientRead(socket, &family, sizeof(family), "family read error");
                 if (family == AF_INET) {
-                    readIP<IPv4>(socket, domain);
+                    // Read IP without holding the global lock, then publish under a tiny lock.
+                    Address<IPv4> ip([=](uint8_t *address, const uint32_t l) {
+                        clientRead(socket, address, l, "ip read error");
+                    });
+                    const std::shared_lock<std::shared_mutex> g(mutexListeners);
+                    domManager.addIPBoth(domain, ip);
                 } else if (family == AF_INET6) {
-                    readIP<IPv6>(socket, domain);
+                    Address<IPv6> ip([=](uint8_t *address, const uint32_t l) {
+                        clientRead(socket, address, l, "ip read error");
+                    });
+                    const std::shared_lock<std::shared_mutex> g(mutexListeners);
+                    domManager.addIPBoth(domain, ip);
                 }
             } while (family != -1);
         }
         if (settings.blockEnabled() && app->tracked()) {
+            // Keep stats and streaming within a tiny lock window to align with resetall freeze.
+            const std::shared_lock<std::shared_mutex> g(mutexListeners);
             appManager.updateStats(domain, app, blocked, cs, Stats::DNS, 1);
             stream(std::make_shared<DnsRequest>(app, domain, cs, blocked));
         }
@@ -90,12 +123,12 @@ void DnsListener::clientRun(const int socket) {
 }
 
 template <class IP> void DnsListener::readIP(const int socket, const Domain::Ptr &domain) {
-    // Read IP into a local value to avoid holding a reference to a container element that could be
-    // cleared by a concurrent removeIPs(). Then atomically add to the domain and global maps with
-    // proper lock ordering using DomainManager::addIPBoth().
+    // Unused after refactor; kept for ABI compatibility if needed. The new code reads the IP
+    // without holding the global lock, then publishes under a tiny lock in clientRun.
     Address<IP> ip([=](uint8_t *address, const uint32_t len) {
         clientRead(socket, address, len, "ip read error");
     });
+    const std::shared_lock<std::shared_mutex> g(mutexListeners);
     domManager.addIPBoth(domain, ip);
 }
 
