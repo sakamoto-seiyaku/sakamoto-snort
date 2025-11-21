@@ -28,9 +28,18 @@ template <class T> void StatsTPL<T>::restore(Saver &saver) {
 }
 
 template <class T> time_t StatsTPL<T>::timestamp() {
-    auto t = std::time(nullptr);
-    struct tm loctime;
-    return timegm(localtime_r(&t, &loctime)) / _timeStep;
+    std::time_t t = std::time(nullptr);
+    struct tm loctime{};
+
+    localtime_r(&t, &loctime);
+
+    loctime.tm_hour = 0;
+    loctime.tm_min = 0;
+    loctime.tm_sec = 0;
+    loctime.tm_isdst = -1;
+
+    const std::time_t day_start = std::mktime(&loctime);
+    return day_start / _timeStep;
 }
 
 template <class T> void StatsTPL<T>::shift() {
