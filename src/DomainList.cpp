@@ -34,19 +34,31 @@ uint8_t DomainList::blockMask(const std::string &domain) {
         return 0;
     }
 
+    // Normalize trailing FQDN dot: turn "a.b." into "a.b" so that suffix
+    // matching works as expected against stored rules like "a.b"/"b".
+    const std::string *query = &domain;
+    std::string stripped;
+    if (!domain.empty() && domain.back() == '.') {
+        if (domain.size() == 1) {
+            return 0;
+        }
+        stripped = domain.substr(0, domain.size() - 1);
+        query = &stripped;
+    }
+
     // Exact match first
-    if (auto it = snap->find(domain); it != snap->end()) {
+    if (auto it = snap->find(*query); it != snap->end()) {
         return it->second;
     }
 
     // Suffix match: walk subdomains (a.b.c -> b.c -> c)
-    auto first = domain.find_first_of('.');
-    auto last = domain.find_last_of('.');
+    auto first = query->find_first_of('.');
+    auto last = query->find_last_of('.');
     while (first != last) {
-        if (auto it2 = snap->find(domain.substr(first + 1)); it2 != snap->end()) {
+        if (auto it2 = snap->find(query->substr(first + 1)); it2 != snap->end()) {
             return it2->second;
         }
-        first = domain.find_first_of('.', first + 1);
+        first = query->find_first_of('.', first + 1);
     }
     return 0;
 }
