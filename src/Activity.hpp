@@ -6,6 +6,7 @@
 #pragma once
 
 #include <AppManager.hpp>
+#include <atomic>
 
 class Activity {
 public:
@@ -13,7 +14,7 @@ public:
 
 private:
     const App::Ptr _app;
-    bool _streamed = false;
+    std::atomic_bool _streamed{false};
 
 public:
     Activity(const App::Ptr app);
@@ -22,7 +23,7 @@ public:
 
     Activity(const Activity &) = delete;
 
-    void streamed(bool streamed) { _streamed = streamed; }
+    void streamed(bool streamed) { _streamed.store(streamed, std::memory_order_relaxed); }
 
     void print(std::ostream &out) const;
 

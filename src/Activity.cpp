@@ -21,7 +21,9 @@ void Activity::print(std::ostream &out) const {
 
 bool Activity::inHorizon(const uint32_t horizon, const timespec timeRef) const { return true; }
 
-bool Activity::expired(const Activity::Ptr activity) const { return _streamed; }
+bool Activity::expired(const Activity::Ptr activity) const {
+    return _streamed.load(std::memory_order_relaxed);
+}
 
 void Activity::save(Saver &saver) {}
 

@@ -21,7 +21,10 @@ Streamable<Item>::Streamable(const std::string &filename)
 
 template <class Item> Streamable<Item>::~Streamable() {}
 
-template <class Item> void Streamable<Item>::reset() { _items.clear(); }
+template <class Item> void Streamable<Item>::reset() {
+    const std::lock_guard<std::shared_mutex> lock(_mutexItems);
+    _items.clear();
+}
 
 template <class Item> void Streamable<Item>::stream(const std::shared_ptr<Item> item) {
     const std::lock_guard lockItems(_mutexItems);
