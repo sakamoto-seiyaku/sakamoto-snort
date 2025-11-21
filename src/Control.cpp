@@ -159,9 +159,9 @@ Control::Control() {
 Control::~Control() {}
 
 void Control::start() {
-    std::thread([=] { unixServer(); }).detach();
+    std::thread([this] { unixServer(); }).detach();
     if (settings.inetControl()) {
-        std::thread([=] { inetServer(); }).detach();
+        std::thread([this] { inetServer(); }).detach();
     }
 }
 
@@ -180,7 +180,7 @@ void Control::unixServer() {
         if (const int sockClient = accept(unixSocket, nullptr, nullptr); sockClient < 0) {
             LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
         } else {
-            std::thread([=] { clientLoop(sockClient); }).detach();
+            std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
         }
     }
 }
@@ -217,7 +217,7 @@ void Control::inetServer() {
             if (const int sockClient = accept(inetSocket, nullptr, nullptr); sockClient < 0) {
                 throw "inet socket accept error";
             } else {
-                std::thread([=] { clientLoop(sockClient); }).detach();
+                std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
             }
         }
     } catch (const char *error) {
