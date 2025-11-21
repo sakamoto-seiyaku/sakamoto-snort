@@ -40,9 +40,9 @@ public:
     PacketManager(const PacketManager &) = delete;
 
     template <class IP>
-    bool make(const Address<IP> &&ip, const App::Uid uid, const bool input, const uint32_t iface,
-              const timespec timestamp, const int proto, const uint16_t srcPort,
-              const uint16_t dstPort, const uint16_t len);
+    bool make(const Address<IP> &ip, const App::Ptr &app, const Host::Ptr &host,
+              const bool input, const uint32_t iface, const timespec timestamp, const int proto,
+              const uint16_t srcPort, const uint16_t dstPort, const uint16_t len);
 
     void reset();
 
@@ -67,11 +67,10 @@ public:
 };
 
 template <class IP>
-bool PacketManager::make(const Address<IP> &&ip, const App::Uid uid, const bool input,
-                         const uint32_t iface, const timespec timestamp, const int proto,
-                         const uint16_t srcPort, const uint16_t dstPort, const uint16_t len) {
-    const auto app = appManager.make(uid);
-    const auto host = hostManager.make<IP>(ip);
+bool PacketManager::make(const Address<IP> &ip, const App::Ptr &app, const Host::Ptr &host,
+                         const bool input, const uint32_t iface, const timespec timestamp,
+                         const int proto, const uint16_t srcPort, const uint16_t dstPort,
+                         const uint16_t len) {
     auto domain = host->domain();
     const auto validIP = domain != nullptr && domain->validIP();
     if (!validIP) {
@@ -86,7 +85,7 @@ bool PacketManager::make(const Address<IP> &&ip, const App::Uid uid, const bool 
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXB : Stats::TXB, len);
     }
     Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-        std::move(ip), host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict));
+        ip, host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict));
 
     return verdict;
 }

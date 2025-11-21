@@ -26,7 +26,7 @@ private:
     const bool _accepted : 1;
 
 public:
-    Packet(const Address<IP> &&ip, const Host::Ptr &host, const App::Ptr &app, const bool input,
+    Packet(const Address<IP> &ip, const Host::Ptr &host, const App::Ptr &app, const bool input,
            const uint32_t iface, const timespec timestamp, const int proto, const uint16_t srcPort,
            const uint16_t dstPort, const uint16_t len, const bool accepted);
 

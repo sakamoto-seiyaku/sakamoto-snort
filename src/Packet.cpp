@@ -9,11 +9,11 @@
 #include <Packet.hpp>
 
 template <class IP>
-Packet<IP>::Packet(const Address<IP> &&ip, const Host::Ptr &host, const App::Ptr &app,
+Packet<IP>::Packet(const Address<IP> &ip, const Host::Ptr &host, const App::Ptr &app,
                    const bool input, const uint32_t iface, const timespec timestamp,
                    const int proto, const uint16_t srcPort, const uint16_t dstPort,
                    const uint16_t len, const bool accepted)
-    : _ip(std::move(ip))
+    : _ip(ip)
     , _host(host)
     , _app(app)
     , _iface(iface)

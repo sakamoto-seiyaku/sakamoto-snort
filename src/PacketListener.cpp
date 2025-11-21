@@ -263,10 +263,19 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
 
     if (settings.blockEnabled() && (!settings.inetControl() || (srcPort != settings.controlPort &&
                                                                 dstPort != settings.controlPort))) {
+        // Phase 1 (outside global listeners lock): build per-packet context. This may perform
+        // reverse DNS (HostManager::make) or touch disk, but never holds mutexListeners.
+        Address<IP> addr(reinterpret_cast<const uint8_t *>(
+            _inputTLS ? &ip->saddr : &ip->daddr));
+        const auto app = appManager.make(uid);
+        const auto host = hostManager.make<IP>(addr);
+
+        // Phase 2 (under global listeners shared lock): pure decision + stats + streaming. This
+        // critical section must remain free of blocking I/O to avoid starving RESETALL and other
+        // operations that need the exclusive listeners lock.
         const std::shared_lock<std::shared_mutex> lock(mutexListeners);
-        verdict = pktManager.template make<IP>(
-            reinterpret_cast<const uint8_t *>(_inputTLS ? &ip->saddr : &ip->daddr), uid, _inputTLS,
-            iface, timestamp, IP::payloadProto(ip), srcPort, dstPort, payloadLen);
+        verdict = pktManager.template make<IP>(addr, app, host, _inputTLS, iface, timestamp,
+                                               IP::payloadProto(ip), srcPort, dstPort, payloadLen);
     }
 
     sendVerdict(ntohl(nfqHeader->packet_id), verdict ? NF_ACCEPT : NF_DROP);
