@@ -374,11 +374,21 @@ void Control::cmdPassword(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
         params.out << JSS(settings.password());
-    } else {
-        ack(params.out);
-        if (arg.type == CmdArg::STR) {
-            settings.password(arg.string.substr(1, arg.string.size() - 2));
+        return;
+    }
+
+    ack(params.out);
+    if (arg.type == CmdArg::STR) {
+        const std::string &raw = arg.string;
+        std::string value = raw;
+        if (raw.size() >= 2) {
+            const char first = raw.front();
+            const char last = raw.back();
+            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                value = raw.substr(1, raw.size() - 2);
+            }
         }
+        settings.password(value);
     }
 }
 

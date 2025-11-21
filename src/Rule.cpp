@@ -35,8 +35,7 @@ void Rule::create(const Type type, const std::string &rule) {
                 // Treat WILDCARD as a pure glob: only '*' and '?' have special
                 // meaning. All other regex meta characters must be escaped so
                 // that user input cannot accidentally be interpreted as regex.
-                if (".^$|()[]{}*+?\\"
-                        s.find_first_of(c) != std::string::npos) {
+                if (std::string(".^$|()[]{}*+?\\").find(c) != std::string::npos) {
                     tmp << '\\';
                 }
                 tmp << c;
