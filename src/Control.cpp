@@ -6,8 +6,12 @@
 #include <cutils/sockets.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/time.h>
 #include <thread>
 #include <vector>
+#include <cerrno>
+#include <cstring>
+#include <ctime>
 #include <sucre-snort.hpp>
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
@@ -226,48 +230,103 @@ void Control::inetServer() {
 
 void Control::clientLoop(const int sockClient) const {
     SocketIO::Ptr _sockio = std::make_shared<SocketIO>(sockClient);
+    // Reset per-thread state for this client connection.
+    quit = false;
+    activeStreams = 0;
+
+    // Apply a receive timeout so that completely idle non-stream clients
+    // do not keep a thread and socket forever. 15 minutes is chosen to
+    // be well above any realistic interactive use.
+    {
+        const timeval tv{.tv_sec = 15 * 60, .tv_usec = 0};
+        if (setsockopt(sockClient, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+            const int err = errno;
+            LOG(ERROR) << __FUNCTION__ << " - control socket SO_RCVTIMEO error: "
+                       << std::strerror(err);
+            // Continue without timeout in this rare case; behavior falls back
+            // to the previous infinite-blocking semantics on this connection.
+        }
+    }
+
     const auto &resetall = _cmds.find("RESETALL");
     // Avoid large stack buffer: use heap-backed buffer sized from settings.
     std::vector<char> buffer(settings.controlCmdLen);
-    ssize_t len;
     const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
-    while ((len = read(sockClient, buffer.data(), maxRead)) > 0) {
-        buffer[static_cast<size_t>(len)] = '\0';
-        if (len == maxRead) {
-            // Input truncated; avoid processing potentially incomplete command
-            LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " " << buffer.data();
-            break;
-        }
-        std::stringstream cmdLine(buffer.data());
-        std::string cmd;
-        std::stringstream out;
-        bool pretty = false;
-        cmdLine >> cmd;
-        cmdLine.seekg(cmd.size());
-        if (cmd.size() > 0 && cmd.back() == '!') {
-            pretty = true;
-            cmd.pop_back();
-        }
-        if (cmd.size() == 0) {
-            ack(out);
-        } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
-            const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
-            if (it == resetall) {
-                const std::lock_guard lock(mutexListeners);
-                applyCmd();
-            } else {
-                const std::shared_lock<std::shared_mutex> lock(mutexListeners);
-                applyCmd();
+    for (;;) {
+        const ssize_t len = read(sockClient, buffer.data(), maxRead);
+        if (len > 0) {
+            buffer[static_cast<size_t>(len)] = '\0';
+            if (len == maxRead) {
+                // Input truncated; avoid processing potentially incomplete command
+                LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " "
+                           << buffer.data();
+                break;
             }
-        } else {
-            LOG(ERROR) << __FUNCTION__ << " - invalid command: '" << cmd << "'";
-            nack(out);
-        }
-        if (!_sockio->print(out, pretty)) {
-            LOG(ERROR) << __FUNCTION__ << " - control socket write error";
+            std::stringstream cmdLine(buffer.data());
+            std::string cmd;
+            std::stringstream out;
+            bool pretty = false;
+            cmdLine >> cmd;
+            cmdLine.seekg(cmd.size());
+            if (cmd.size() > 0 && cmd.back() == '!') {
+                pretty = true;
+                cmd.pop_back();
+            }
+            if (cmd.size() == 0) {
+                ack(out);
+            } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
+                const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
+                if (it == resetall) {
+                    const std::lock_guard lock(mutexListeners);
+                    applyCmd();
+                } else {
+                    const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+                    applyCmd();
+                }
+            } else {
+                LOG(ERROR) << __FUNCTION__ << " - invalid command: '" << cmd << "'";
+                nack(out);
+            }
+            if (!_sockio->print(out, pretty)) {
+                LOG(ERROR) << __FUNCTION__ << " - control socket write error";
+                break;
+            }
+            if (quit) {
+                break;
+            }
+        } else if (len == 0) {
+            // Peer closed the connection.
             break;
-        }
-        if (quit) {
+        } else {
+            const int err = errno;
+            if (err == EINTR) {
+                // Interrupted by signal, retry read.
+                continue;
+            }
+            if (err == EAGAIN || err == EWOULDBLOCK) {
+                if (activeStreams == 0) {
+                    // No active streams on this control connection and no data
+                    // received within the timeout window: treat as idle and close.
+                    LOG(WARNING) << __FUNCTION__ << " - idle control client timeout, closing";
+                    break;
+                }
+                // There is at least one active stream on this connection. It is expected
+                // that the client may only receive data and not send further commands.
+                // However, if we also observe that nothing has been written to this
+                // socket for a full timeout window, we treat it as a dead stream and
+                // close the connection to avoid leaking a stuck thread.
+                const std::time_t now = std::time(nullptr);
+                const std::time_t lastWrite = _sockio->lastWrite();
+                if (lastWrite == 0 || now - lastWrite >= 15 * 60) {
+                    LOG(WARNING) << __FUNCTION__
+                                 << " - idle streaming control client timeout, closing";
+                    break;
+                }
+                // Recent writes are observed on this socket; keep waiting for potential
+                // future commands and do not close based on read timeout alone.
+                continue;
+            }
+            LOG(ERROR) << __FUNCTION__ << " - control socket read error: " << std::strerror(err);
             break;
         }
     }
@@ -502,6 +561,7 @@ void Control::cmdReverseDnsOff(CmdParams &&params) const {
 
 void Control::cmdStartDnsStream(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
+    ++activeStreams;
     dnsListener.startStream(params.sockio, params.pretty,
                             args.size() >= 1 ? args[0].number : settings.dnsStreamDefaultHorizon,
                             args.size() == 2 ? args[1].number : settings.dnsStreamMinSize);
@@ -510,24 +570,38 @@ void Control::cmdStartDnsStream(CmdParams &&params) const {
 void Control::cmdStopDnsStream(CmdParams &&params) const {
     ack(params.out);
     dnsListener.stopStream(params.sockio);
+    if (activeStreams > 0) {
+        --activeStreams;
+    }
 }
 
 void Control::cmdStartPktStream(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
+    ++activeStreams;
     pktManager.startStream(params.sockio, params.pretty,
                            args.size() >= 1 ? args[0].number : settings.pktStreamDefaultHorizon,
                            args.size() == 2 ? args[1].number : settings.pktStreamMinSize);
 }
 
-void Control::cmdStopPktStream(CmdParams &&params) const { pktManager.stopStream(params.sockio); }
+void Control::cmdStopPktStream(CmdParams &&params) const {
+    pktManager.stopStream(params.sockio);
+    if (activeStreams > 0) {
+        --activeStreams;
+    }
+}
 
 void Control::cmdStartActivityStream(CmdParams &&params) const {
     const auto args = readCmdArgs(params.args);
+    (void)args;
+    ++activeStreams;
     activityManager.startStream(params.sockio, params.pretty, 0, 0);
 }
 
 void Control::cmdStopActivityStream(CmdParams &&params) const {
     activityManager.stopStream(params.sockio);
+    if (activeStreams > 0) {
+        --activeStreams;
+    }
 }
 
 template <class... TypeStat>

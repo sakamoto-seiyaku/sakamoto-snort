@@ -46,7 +46,12 @@ private:
 
     CmdMap _cmds;
 
+    // Per-control-thread state:
+    // - quit: set by cmdQuit to stop the current client loop.
+    // - activeStreams: number of active long-lived streams (DNS/packet/activity)
+    //   associated with the current control connection.
     thread_local static inline bool quit = false;
+    thread_local static inline uint32_t activeStreams = 0;
 
 public:
     Control();

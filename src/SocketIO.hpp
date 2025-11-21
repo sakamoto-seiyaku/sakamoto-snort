@@ -5,6 +5,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <ctime>
+
 class SocketIO {
 public:
     using Ptr = std::shared_ptr<SocketIO>;
@@ -13,6 +16,7 @@ private:
     int _socket;
     bool _open = true;
     std::mutex _mutex;
+    std::atomic<std::time_t> _lastWrite{0};
 
 public:
     SocketIO(const int socket);
@@ -22,6 +26,10 @@ public:
     SocketIO(const SocketIO &) = delete;
 
     bool print(std::stringstream &out, const bool pretty);
+
+    std::time_t lastWrite() const {
+        return _lastWrite.load(std::memory_order_relaxed);
+    }
 
 private:
     static void format(std::stringstream &in, std::stringstream &out);

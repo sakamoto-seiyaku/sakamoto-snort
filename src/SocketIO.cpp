@@ -6,12 +6,18 @@
 #include <sstream>
 #include <iterator>
 #include <errno.h>
+#include <ctime>
 
 #include <sucre-snort.hpp>
 #include <SocketIO.hpp>
 
 SocketIO::SocketIO(const int socket)
-    : _socket(socket) {}
+    : _socket(socket) {
+    // Initialize lastWrite to "now" so that a freshly created connection that
+    // never writes anything will still be considered idle after a single full
+    // timeout window.
+    _lastWrite.store(std::time(nullptr), std::memory_order_relaxed);
+}
 
 SocketIO::~SocketIO() {}
 
@@ -45,6 +51,7 @@ bool SocketIO::print(std::stringstream &out, const bool pretty) {
         }
         if (remaining == 0) {
             _open = true;
+            _lastWrite.store(std::time(nullptr), std::memory_order_relaxed);
         }
     };
     if (_open) {
