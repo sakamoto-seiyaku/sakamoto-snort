@@ -28,7 +28,9 @@ void Host::print(std::stringstream &out) {
     bool first = true;
     for (const auto &ip : _ipv4) {
         when(first, out << ",");
+        out << "\"";
         ip.print(out);
+        out << "\"";
     }
     out << "]," << JSF("ipv6") << "[";
     first = true;

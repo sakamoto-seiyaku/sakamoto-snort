@@ -9,7 +9,7 @@ Saver::Saver(const std::string &&filename)
     : _filename(filename)
     , _filetmp(_filename + ".tmp") {
     in.exceptions(std::ifstream::failbit | std::ifstream::badbit | std::ifstream::eofbit);
-    out.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    out.exceptions(std::ofstream::failbit | std::ofstream::badbit);
 }
 
 Saver::Saver(const std::string &filename)

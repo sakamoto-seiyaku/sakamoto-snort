@@ -58,9 +58,21 @@ void HostManager::printHostsByName(std::stringstream &out, const std::string &su
             }
         }
     }
+    // Deduplicate hosts by pointer to avoid repeated entries when a host appears in multiple
+    // name buckets or with multiple IPs; order is preserved based on first occurrence.
+    std::vector<Host::Ptr> unique;
+    {
+        std::unordered_set<Host::Ptr> seen;
+        seen.reserve(snap.size());
+        for (const auto &host : snap) {
+            if (seen.insert(host).second) {
+                unique.push_back(host);
+            }
+        }
+    }
     out << "[";
     bool first = true;
-    for (const auto &host : snap) {
+    for (const auto &host : unique) {
         when(first, out << ",");
         host->print(out);
     }

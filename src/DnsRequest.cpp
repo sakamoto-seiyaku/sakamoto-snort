@@ -56,10 +56,10 @@ void DnsRequest::save(Saver &saver) {
 DnsRequest::Ptr DnsRequest::restore(Saver &saver) {
     std::string name;
     saver.read(name);
-    auto &app = appManager.find(name);
+    auto app = appManager.find(name);
     std::string name2;
     saver.read(name2);
-    auto &domain = domManager.find(name2);
+    auto domain = domManager.find(name2);
     auto cs = saver.read<Stats::Color>();
     auto blocked = saver.read<bool>();
     auto timestamp = saver.read<timespec>();

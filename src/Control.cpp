@@ -182,7 +182,7 @@ void Control::unixServer() {
 }
 
 void Control::inetServer() {
-    int inetSocket;
+    int inetSocket = -1;
     sockaddr_in addr;
 
     memset(&addr, 0, sizeof(addr));
@@ -218,7 +218,9 @@ void Control::inetServer() {
         }
     } catch (const char *error) {
         LOG(ERROR) << __FUNCTION__ << " - " << error;
-        close(inetSocket);
+        if (inetSocket >= 0) {
+            close(inetSocket);
+        }
     }
 }
 

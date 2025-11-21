@@ -15,7 +15,6 @@ void Settings::start() {
     mkdir(_saveDir.c_str(), 0700);
     mkdir(saveDirPackages.c_str(), 0700);
     mkdir(saveDirSystem.c_str(), 0700);
-    mkdir(saveDirSystem.c_str(), 0700);
     mkdir(saveDirDomainLists.c_str(), 0700);
     restore();
 }
