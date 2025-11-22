@@ -7,6 +7,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/time.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <thread>
 #include <vector>
 #include <cerrno>
@@ -169,10 +171,48 @@ void Control::unixServer() {
     int unixSocket = android_get_control_socket(settings.controlSocketPath);
 
     if (unixSocket < 1) {
-        throw std::runtime_error("control unix socket error");
+        // Fallback: manually create socket in /dev/socket/ for debugging
+        // This allows the daemon to run when started directly via adb
+        const std::string socketPath = "/dev/socket/sucre-snort-control";
+        LOG(INFO) << __FUNCTION__ << " - Control socket not inherited from init, creating fallback at " << socketPath;
+
+        // Clean up any existing socket file
+        unlink(socketPath.c_str());
+
+        // Create UNIX domain socket
+        unixSocket = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (unixSocket < 0) {
+            const int err = errno;
+            LOG(ERROR) << __FUNCTION__ << " - Failed to create fallback socket: " << std::strerror(err);
+            throw std::runtime_error("control unix socket error: failed to create fallback socket");
+        }
+
+        // Bind to /dev/socket/ path
+        sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+
+        if (bind(unixSocket, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+            const int err = errno;
+            LOG(ERROR) << __FUNCTION__ << " - Failed to bind fallback socket: " << std::strerror(err);
+            close(unixSocket);
+            throw std::runtime_error("control unix socket error: failed to bind fallback socket");
+        }
+
+        // Match init.rc: socket sucre-snort-control stream 0666 root root
+        if (chmod(socketPath.c_str(), 0666) < 0) {
+            const int err = errno;
+            LOG(WARNING) << __FUNCTION__ << " - Failed to set socket permissions: " << std::strerror(err);
+            // Continue anyway, permissions might still work
+        }
+
+        LOG(INFO) << __FUNCTION__ << " - Fallback socket created successfully on FD " << unixSocket;
     }
 
     if (listen(unixSocket, settings.controlClients) == -1) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__ << " - Socket listen failed: " << std::strerror(err);
         throw std::runtime_error("control unix socket listen error");
     }
 
