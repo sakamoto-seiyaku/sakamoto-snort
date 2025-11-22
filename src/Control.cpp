@@ -170,54 +170,144 @@ void Control::start() {
 void Control::unixServer() {
     int unixSocket = android_get_control_socket(settings.controlSocketPath);
 
-    if (unixSocket < 1) {
-        // Fallback: manually create socket in /dev/socket/ for debugging
-        // This allows the daemon to run when started directly via adb
-        const std::string socketPath = "/dev/socket/sucre-snort-control";
-        LOG(INFO) << __FUNCTION__ << " - Control socket not inherited from init, creating fallback at " << socketPath;
-
-        // Clean up any existing socket file
-        unlink(socketPath.c_str());
-
-        // Create UNIX domain socket
-        unixSocket = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-        if (unixSocket < 0) {
+    // Production path: init.rc created the RESERVED socket under /dev/socket/.
+    // In that case we simply inherit the FD from init and do not touch any paths,
+    // to stay fully compatible with the original KSU module behaviour.
+    if (unixSocket >= 1) {
+        if (listen(unixSocket, settings.controlClients) == -1) {
             const int err = errno;
-            LOG(ERROR) << __FUNCTION__ << " - Failed to create fallback socket: " << std::strerror(err);
-            throw std::runtime_error("control unix socket error: failed to create fallback socket");
+            LOG(ERROR) << __FUNCTION__ << " - Socket listen failed: " << std::strerror(err);
+            throw std::runtime_error("control unix socket listen error");
         }
 
-        // Bind to /dev/socket/ path
-        sockaddr_un addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
-
-        if (bind(unixSocket, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
-            const int err = errno;
-            LOG(ERROR) << __FUNCTION__ << " - Failed to bind fallback socket: " << std::strerror(err);
-            close(unixSocket);
-            throw std::runtime_error("control unix socket error: failed to bind fallback socket");
+        for (;;) {
+            if (const int sockClient = accept(unixSocket, nullptr, nullptr); sockClient < 0) {
+                LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
+            } else {
+                std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
+            }
         }
-
-        // Match init.rc: socket sucre-snort-control stream 0666 root root
-        if (chmod(socketPath.c_str(), 0666) < 0) {
-            const int err = errno;
-            LOG(WARNING) << __FUNCTION__ << " - Failed to set socket permissions: " << std::strerror(err);
-            // Continue anyway, permissions might still work
-        }
-
-        LOG(INFO) << __FUNCTION__ << " - Fallback socket created successfully on FD " << unixSocket;
     }
 
-    if (listen(unixSocket, settings.controlClients) == -1) {
+    // Fallback path: running under DEV mode (started via adb / service.sh),
+    // no init-created socket is available. To keep full compatibility with:
+    //   1) Framework / new clients using /dev/socket/sucre-snort-control (RESERVED)
+    //   2) Existing APP builds using the legacy abstract @sucre-snort-control
+    // we expose both a filesystem socket and an abstract socket, and route all
+    // connections through the same clientLoop() implementation.
+
+    // 1. /dev/socket/sucre-snort-control (filesystem namespace)
+    const std::string socketPath = "/dev/socket/sucre-snort-control";
+    LOG(INFO) << __FUNCTION__
+              << " - Control socket not inherited from init, creating fallback at "
+              << socketPath << " and @sucre-snort-control";
+
+    // Clean up any existing socket file left by previous runs.
+    unlink(socketPath.c_str());
+
+    int devSocket = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (devSocket < 0) {
         const int err = errno;
-        LOG(ERROR) << __FUNCTION__ << " - Socket listen failed: " << std::strerror(err);
+        LOG(ERROR) << __FUNCTION__
+                   << " - Failed to create fallback /dev socket: " << std::strerror(err);
+        throw std::runtime_error(
+            "control unix socket error: failed to create /dev fallback socket");
+    }
+
+    sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+
+    if (bind(devSocket, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__
+                   << " - Failed to bind fallback /dev socket: " << std::strerror(err);
+        close(devSocket);
+        throw std::runtime_error(
+            "control unix socket error: failed to bind /dev fallback socket");
+    }
+
+    // Match init.rc: socket sucre-snort-control stream 0666 root root
+    if (chmod(socketPath.c_str(), 0666) < 0) {
+        const int err = errno;
+        LOG(WARNING) << __FUNCTION__
+                     << " - Failed to set /dev socket permissions: " << std::strerror(err);
+        // Continue anyway, permissions might still work.
+    }
+
+    // 2. @sucre-snort-control (abstract namespace)
+    // This keeps compatibility with existing APP builds which connect to the
+    // abstract address "@sucre-snort-control".
+    int abstractSocket = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (abstractSocket < 0) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__
+                   << " - Failed to create abstract fallback socket: " << std::strerror(err);
+        close(devSocket);
+        throw std::runtime_error(
+            "control unix socket error: failed to create abstract fallback socket");
+    }
+
+    sockaddr_un addrAbstract;
+    memset(&addrAbstract, 0, sizeof(addrAbstract));
+    addrAbstract.sun_family = AF_UNIX;
+    // Abstract namespace: first byte of sun_path is '\0', name starts at offset 1.
+    addrAbstract.sun_path[0] = '\0';
+    strncpy(addrAbstract.sun_path + 1, settings.controlSocketPath,
+            sizeof(addrAbstract.sun_path) - 1);
+
+    // Compute exact sockaddr length for abstract namespace: header + NUL + nameLen
+    const size_t nameLen = strnlen(settings.controlSocketPath,
+                                   sizeof(addrAbstract.sun_path) - 1);
+    const socklen_t addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + nameLen);
+    if (bind(abstractSocket, reinterpret_cast<const sockaddr*>(&addrAbstract), addrLen) < 0) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__
+                   << " - Failed to bind abstract fallback socket: " << std::strerror(err);
+        close(devSocket);
+        close(abstractSocket);
+        throw std::runtime_error(
+            "control unix socket error: failed to bind abstract fallback socket");
+    }
+
+    if (listen(devSocket, settings.controlClients) == -1) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__
+                   << " - /dev socket listen failed: " << std::strerror(err);
+        close(devSocket);
+        close(abstractSocket);
         throw std::runtime_error("control unix socket listen error");
     }
 
+    if (listen(abstractSocket, settings.controlClients) == -1) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__
+                   << " - abstract socket listen failed: " << std::strerror(err);
+        close(devSocket);
+        close(abstractSocket);
+        throw std::runtime_error("control unix socket listen error");
+    }
+
+    LOG(INFO) << __FUNCTION__ << " - Fallback sockets created successfully on FDs "
+              << devSocket << " (/dev) and " << abstractSocket << " (@abstract)";
+
+    // Handle abstract clients in a helper thread so that the main unixServer()
+    // thread can continue to serve the /dev socket. Both entry points reuse
+    // the same clientLoop() implementation.
+    std::thread([this, abstractSocket] {
+        for (;;) {
+            if (const int sockClient = accept(abstractSocket, nullptr, nullptr);
+                sockClient < 0) {
+                LOG(ERROR) << __FUNCTION__ << " - unix abstract socket accept error";
+            } else {
+                std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
+            }
+        }
+    }).detach();
+
     for (;;) {
-        if (const int sockClient = accept(unixSocket, nullptr, nullptr); sockClient < 0) {
+        if (const int sockClient = accept(devSocket, nullptr, nullptr); sockClient < 0) {
             LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
         } else {
             std::thread([this, sockClient] { clientLoop(sockClient); }).detach();

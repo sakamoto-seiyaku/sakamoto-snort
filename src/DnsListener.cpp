@@ -25,63 +25,126 @@ void DnsListener::start() {
 }
 
 void DnsListener::server() {
-    int sockServer = android_get_control_socket(settings.netdSocketPath);
+    int inherited = android_get_control_socket(settings.netdSocketPath);
 
-    if (sockServer < 1) {
-        // Fallback: manually create socket in /dev/socket/ for debugging
-        // This allows the daemon to run when started directly via adb
-        const std::string socketPath = "/dev/socket/sucre-snort-netd";
-        LOG(INFO) << __FUNCTION__ << " - Netd socket not inherited from init, creating fallback at " << socketPath;
-
-        // Clean up any existing socket file
-        unlink(socketPath.c_str());
-
-        // Create UNIX domain socket with SOCK_SEQPACKET (important for DnsResolver compatibility!)
-        sockServer = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-        if (sockServer < 0) {
+    // Production path: init.rc provides the RESERVED socket; use inherited FD as-is.
+    if (inherited >= 1) {
+        if (const int one = 1; setsockopt(inherited, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0) {
             const int err = errno;
-            LOG(ERROR) << __FUNCTION__ << " - Failed to create fallback socket: " << std::strerror(err);
-            throw std::runtime_error("netd socket control error: failed to create fallback socket");
+            LOG(ERROR) << __FUNCTION__ << " - Socket setsockopt failed: " << std::strerror(err);
+            throw std::runtime_error("netd socket setsockopt error");
         }
-
-        // Bind to /dev/socket/ path
-        sockaddr_un addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
-
-        if (bind(sockServer, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+        if (listen(inherited, settings.controlClients) == -1) {
             const int err = errno;
-            LOG(ERROR) << __FUNCTION__ << " - Failed to bind fallback socket: " << std::strerror(err);
-            close(sockServer);
-            throw std::runtime_error("netd socket control error: failed to bind fallback socket");
+            LOG(ERROR) << __FUNCTION__ << " - Socket listen failed: " << std::strerror(err);
+            throw std::runtime_error("netd socket listen error");
         }
-
-        // Match init.rc: socket sucre-snort-netd seqpacket 0600 root root
-        if (chmod(socketPath.c_str(), 0600) < 0) {
-            const int err = errno;
-            LOG(WARNING) << __FUNCTION__ << " - Failed to set socket permissions: " << std::strerror(err);
-            // Continue anyway, permissions might still work
+        for (;;) {
+            if (const int sockClient = accept(inherited, nullptr, nullptr); sockClient == -1) {
+                LOG(ERROR) << __FUNCTION__ << " - dnslistener accept error";
+            } else {
+                std::thread([this, sockClient] { clientRun(sockClient); }).detach();
+            }
         }
-
-        LOG(INFO) << __FUNCTION__ << " - Fallback socket created successfully on FD " << sockServer;
     }
 
-    if (const int one = 1;
-        setsockopt(sockServer, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0) {
+    // DEV fallback: create both filesystem and abstract sockets to maximize compatibility.
+    const std::string socketPath = "/dev/socket/sucre-snort-netd";
+    LOG(INFO) << __FUNCTION__
+              << " - Netd socket not inherited from init, creating fallback at "
+              << socketPath << " and @sucre-snort-netd";
+
+    // 1) Filesystem namespace: /dev/socket/sucre-snort-netd
+    unlink(socketPath.c_str());
+    int devSocket = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (devSocket < 0) {
         const int err = errno;
-        LOG(ERROR) << __FUNCTION__ << " - Socket setsockopt failed: " << std::strerror(err);
+        LOG(ERROR) << __FUNCTION__ << " - Failed to create /dev fallback socket: " << std::strerror(err);
+        throw std::runtime_error("netd socket control error: failed to create /dev fallback socket");
+    }
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+    if (bind(devSocket, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__ << " - Failed to bind /dev fallback socket: " << std::strerror(err);
+        close(devSocket);
+        throw std::runtime_error("netd socket control error: failed to bind /dev fallback socket");
+    }
+    // DEV: Relax permissions so non-root clients (e.g. DnsResolver) can connect.
+    if (chmod(socketPath.c_str(), 0666) < 0) {
+        const int err = errno;
+        LOG(WARNING) << __FUNCTION__ << " - Failed to set /dev netd socket permissions: " << std::strerror(err);
+        // Continue anyway; abstract socket below may still provide connectivity.
+    }
+    if (const int one = 1; setsockopt(devSocket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__ << " - /dev socket setsockopt failed: " << std::strerror(err);
+        close(devSocket);
         throw std::runtime_error("netd socket setsockopt error");
     }
 
-    if (listen(sockServer, settings.controlClients) == -1) {
+    // 2) Abstract namespace: @sucre-snort-netd (no filesystem permission issues)
+    int abstractSocket = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (abstractSocket < 0) {
         const int err = errno;
-        LOG(ERROR) << __FUNCTION__ << " - Socket listen failed: " << std::strerror(err);
+        LOG(ERROR) << __FUNCTION__ << " - Failed to create abstract fallback socket: " << std::strerror(err);
+        close(devSocket);
+        throw std::runtime_error("netd socket control error: failed to create abstract fallback socket");
+    }
+    sockaddr_un addrAbstract{};
+    addrAbstract.sun_family = AF_UNIX;
+    addrAbstract.sun_path[0] = '\0';
+    // Name = settings.netdSocketPath ("sucre-snort-netd") at offset 1
+    strncpy(addrAbstract.sun_path + 1, settings.netdSocketPath, sizeof(addrAbstract.sun_path) - 1);
+    const size_t nameLen = strnlen(settings.netdSocketPath, sizeof(addrAbstract.sun_path) - 1);
+    const socklen_t addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + nameLen);
+    if (bind(abstractSocket, reinterpret_cast<const sockaddr*>(&addrAbstract), addrLen) < 0) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__ << " - Failed to bind abstract fallback socket: " << std::strerror(err);
+        close(devSocket);
+        close(abstractSocket);
+        throw std::runtime_error("netd socket control error: failed to bind abstract fallback socket");
+    }
+    if (const int one = 1; setsockopt(abstractSocket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__ << " - abstract socket setsockopt failed: " << std::strerror(err);
+        close(devSocket);
+        close(abstractSocket);
+        throw std::runtime_error("netd socket setsockopt error");
+    }
+
+    if (listen(devSocket, settings.controlClients) == -1) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__ << " - /dev socket listen failed: " << std::strerror(err);
+        close(devSocket);
+        close(abstractSocket);
+        throw std::runtime_error("netd socket listen error");
+    }
+    if (listen(abstractSocket, settings.controlClients) == -1) {
+        const int err = errno;
+        LOG(ERROR) << __FUNCTION__ << __FUNCTION__ << " - abstract socket listen failed: " << std::strerror(err);
+        close(devSocket);
+        close(abstractSocket);
         throw std::runtime_error("netd socket listen error");
     }
 
+    LOG(INFO) << __FUNCTION__ << " - Fallback netd sockets created on FDs " << devSocket
+              << " (/dev) and " << abstractSocket << " (@abstract)";
+
+    // Accept on abstract in a helper thread; main thread serves the /dev socket.
+    std::thread([this, abstractSocket] {
+        for (;;) {
+            if (const int sockClient = accept(abstractSocket, nullptr, nullptr); sockClient == -1) {
+                LOG(ERROR) << __FUNCTION__ << " - dnslistener abstract accept error";
+            } else {
+                std::thread([this, sockClient] { clientRun(sockClient); }).detach();
+            }
+        }
+    }).detach();
+
     for (;;) {
-        if (const int sockClient = accept(sockServer, nullptr, nullptr); sockClient == -1) {
+        if (const int sockClient = accept(devSocket, nullptr, nullptr); sockClient == -1) {
             LOG(ERROR) << __FUNCTION__ << " - dnslistener accept error";
         } else {
             // Explicitly capture this for C++20 compatibility (no implicit this with [=]).
