@@ -16,7 +16,7 @@ cd ~/android/lineage
 
 # Binary paths
 BINARY_PATH="out/target/product/bluejay/system_ext/bin/sucre-snort"
-OUTPUT_PATH="$HOME/sucre-build-output/sucre-snort"
+OUTPUT_PATH="$SNORT_ROOT/build-output/sucre-snort"
 
 # Optional clean
 if [ "$1" = "--clean" ] || [ "$1" = "-c" ]; then
@@ -95,6 +95,7 @@ fi
 echo ""
 
 echo "[5/6] Extracting binary..."
+mkdir -p "$(dirname "$OUTPUT_PATH")"
 cp "$BINARY_PATH" "$OUTPUT_PATH"
 
 echo ""

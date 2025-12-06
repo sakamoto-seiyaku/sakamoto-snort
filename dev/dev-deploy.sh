@@ -2,7 +2,11 @@
 
 set -e
 
-BINARY=~/sucre-build-output/sucre-snort
+# Derive script location for relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SNORT_ROOT="$SCRIPT_DIR/.."
+
+BINARY="$SNORT_ROOT/build-output/sucre-snort"
 TARGET=/data/local/tmp/sucre-snort-dev
 LOG=/data/snort/dev.log
 

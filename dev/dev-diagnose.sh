@@ -7,6 +7,7 @@ set -e
 
 # Derive paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SNORT_ROOT="$SCRIPT_DIR/.."
 SUCRE_TOOLKIT="${SUCRE_TOOLKIT:-}"
 
 LOG=/data/snort/dev.log
@@ -200,7 +201,7 @@ if ! adb.exe shell su -c "pidof sucre-snort" >/dev/null 2>&1; then
     echo "⚠️  守护进程未运行"
     echo ""
     echo "排查步骤:"
-    echo "  1. 检查编译是否成功: ls -lh ~/sucre-build-output/sucre-snort"
+    echo "  1. 检查编译是否成功: ls -lh $SNORT_ROOT/build-output/sucre-snort"
     echo "  2. 重新部署: bash dev-deploy.sh"
     echo "  3. 查看完整日志: adb.exe shell su -c \"cat $LOG\""
     echo "  4. 手动启动测试: adb.exe shell su -c \"/data/local/tmp/sucre-snort-dev\""

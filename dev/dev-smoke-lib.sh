@@ -8,7 +8,7 @@
 SNORT_HOST="${SNORT_HOST:-127.0.0.1}"
 SNORT_PORT="${SNORT_PORT:-60606}"
 SNORT_TIMEOUT="${SNORT_TIMEOUT:-5}"
-ADB="${ADB:-/mnt/c/Android/SDK/platform-tools/adb.exe}"
+ADB="${ADB:-adb.exe}"
 
 # 颜色
 RED='\033[0;31m'
