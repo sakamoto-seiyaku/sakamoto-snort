@@ -1,8 +1,8 @@
 # sucre-snort 接口规范
 
-版本: v3.2  
-目标平台: Android 16, KernelSU  
-更新时间: 2025-11-20
+版本: v3.3
+目标平台: Android 16, KernelSU
+更新时间: 2025-12-06
 
 ---
 
@@ -24,6 +24,20 @@
 - 含空格名称的拼接：`BLOCKLIST.*.ADD/UPDATE` 将第 4 或第 9 个参数后所有 token 以空格拼接为 `<name>`；无需引号。
 - 负数/带符号整数不被识别为整数。
 
+多用户参数约定（`<uid|str>` 位置）:
+- `<uid>`: 完整 Linux UID（含 userId 高位），例如 `10123`（user 0）或 `110123`（user 1）。
+- `<str>`: 包名字符串，默认指向主用户（user 0）。
+- `<str> USER <userId>`: 显式指定用户，适用于所有支持 `<uid|str>` 的命令。
+- `<str> <userId>`: 仅限部分命令（见下文"支持简写的命令"）。
+
+支持 `<str> <userId>` 简写的命令（在 `<uid|str>` 后不再接受其他整型参数）:
+  `APP.UID`, `APP.NAME`, `APP<v>`, `APP.<TYPE><v>`, `<COLOR>.APP<v>`, `APP.RESET<v>`,
+  `TRACK`, `UNTRACK`, `APP.CUSTOMLISTS`
+
+仅支持 `<str> USER <userId>` 的命令（第二个整数参数有其他含义）:
+  `BLOCKMASK`, `BLOCKIFACE`, `CUSTOMLIST.ON/OFF`, `BLACKLIST.*`, `WHITELIST.*`,
+  `BLACKRULES.*`, `WHITERULES.*`
+
 ---
 
 ## 2. 命令
@@ -39,19 +53,20 @@
 - `RESETALL` | - | `OK` | 清空设置、统计、域名、规则、列表并持久化
 
 2.2 应用
-- `APP.UID [<uid|str>]` | 过滤可选 | App 数组 | `<uid>` 精确；`<str>` 子串匹配
-- `APP.NAME [<uid|str>]` | 同上 | App 数组 | 按名称排序
-- `APP.CUSTOMLISTS <uid|str>` | 必填 | 对象 | `{"blacklist":[...],"whitelist":[...]}`
+- `APP.UID [<uid|str>]` | 过滤可选 | App 数组 | 无参数列出所有用户的 App（按 UID 升序）；`USER <userId>` 仅该用户；`<uid>` 精确匹配；`<str>` 子串匹配（支持 `<str> <userId>` 简写）
+- `APP.NAME [<uid|str>]` | 同上 | App 数组 | 按名称排序；其余同 `APP.UID`
+- `APP.CUSTOMLISTS <uid|str>` | 必填 | 对象 | `{"blacklist":[...],"whitelist":[...]}`；支持 `<str> <userId>` 简写
 
 App 对象字段:
-- `name:string`, `uid:int`, `blocked:int`(blockMask), `blockIface:int`, `tracked:0|1`, `useCustomList:0|1`
+- `name:string`, `uid:int`(完整 Linux UID), `userId:int`, `appId:int`, `blocked:int`(blockMask), `blockIface:int`, `tracked:0|1`, `useCustomList:0|1`
 - 可选 `allNames:string[]`（共享 UID 多包时存在）
+- UID 公式: `uid = userId * 100000 + appId`（user 0 下 `uid` 与 `appId` 数值相同）
 
 2.3 拦截与网络
 - `BLOCK [<0|1>]` | 查询/设置 | 当前值或 `OK` | 全局开关
-- `BLOCKMASK <uid|str> [<mask>]` | 查询/设置 | 当前/`OK` | 应用拦截掩码
+- `BLOCKMASK <uid|str> [<mask>]` | 查询/设置 | 当前/`OK` | 应用拦截掩码；仅支持 `<str> USER <userId>`（不支持简写）
 - `BLOCKMASKDEF [<mask>]` | 查询/设置 | 当前/`OK` | 新装应用默认拦截掩码
-- `BLOCKIFACE <uid|str> [<mask>]` | 查询/设置 | 当前/`OK` | 接口拦截掩码
+- `BLOCKIFACE <uid|str> [<mask>]` | 查询/设置 | 当前/`OK` | 接口拦截掩码；仅支持 `<str> USER <userId>`（不支持简写）
 - `BLOCKIFACEDEF [<mask>]` | 查询/设置 | 当前/`OK` | 新装应用默认接口掩码
 - `BLOCKIPLEAKS [<0|1>]` | 查询/设置 | 当前/`OK` | IP 泄漏拦截
 - `GETBLACKIPS [<0|1>]` | 查询/设置 | 当前/`OK` | 对被拦截域是否仍获取 IP
@@ -62,8 +77,8 @@ App 对象字段:
 - blockIface 位: `1`(WiFi), `2`(Mobile Data), `4`(VPN)。
 
 2.4 追踪与反解
-- `TRACK <uid|str>` | - | `OK` | 置应用 tracked=1
-- `UNTRACK <uid|str>` | - | `OK` | 置应用 tracked=0
+- `TRACK <uid|str>` | - | `OK` | 置应用 tracked=1；支持 `<str> <userId>` 简写
+- `UNTRACK <uid|str>` | - | `OK` | 置应用 tracked=0；支持 `<str> <userId>` 简写
 - `RDNS.SET` | - | `OK` | 开启反向 DNS
 - `RDNS.UNSET` | - | `OK` | 关闭反向 DNS
 
@@ -75,13 +90,13 @@ App 对象字段:
     - 颜色对象: `{"total":[all,blocked,auth],"black":[...],"white":[...],"grey":[...]}`
   - `<TYPE><v>` -> 数值: 单类型总数
 - 应用
-  - `APP<v> [<uid|str>]` -> App 数组，含 `stats`（同上结构）
-  - `APP.<TYPE><v> [<uid|str>]` -> App 数组，`stats` 仅该 type
-  - `APP.RESET<v> <uid|str|ALL>` -> `OK`
+  - `APP<v> [<uid|str>]` -> App 数组，含 `stats`；无参数为所有用户的设备级统计；`USER <userId>` 仅该用户；支持 `<str> <userId>` 简写
+  - `APP.<TYPE><v> [<uid|str>]` -> App 数组，`stats` 仅该 type；同上
+  - `APP.RESET<v> <uid|str|ALL>` -> `OK`；`ALL` 重置所有用户；`ALL USER <userId>` 仅重置该用户；支持 `<str> <userId>` 简写
 - 域名
   - `DOMAINS<v>` -> 对象: `{ "blocked":int, "stdLeaked":int, "rfcLeaked":int }`
   - `<BLACK|WHITE|GREY><v> [<str>]` -> Domain 数组
-  - `<BLACK|WHITE|GREY>.APP<v> [<uid|str>]` -> Domain 数组（按应用）
+  - `<BLACK|WHITE|GREY>.APP<v> [<uid|str>]` -> Domain 数组（按应用）；支持 `USER <userId>` 和 `<str> <userId>` 简写
   - 上述命令可追加 `.DNS|.RXP|.RXB|.TXP|.TXB` 仅返回该类型
 
 Domain 对象字段:
@@ -94,26 +109,27 @@ Domain 对象字段:
 - `PKTSTREAM.STOP` | 停止 | 无响应（不发送任何字节）
 - `ACTIVITYSTREAM.START` | 开始 | 返回事件流（无 `OK`）
 - `ACTIVITYSTREAM.STOP` | 停止 | 无响应（不发送任何字节）
-- `TOPACTIVITY <uid>` | 触发一次前台活动推送 | 无响应（不发送任何字节）
+- `TOPACTIVITY <uid>` | 触发一次前台活动推送 | 无响应；仅接受完整 UID，不支持包名
 
 事件格式:
-- DNS: `{ "app":string, "domain":string, "domMask":int, "appMask":int, "blocked":0|1, "timestamp":string }`
-- Packet(IPv4/6): `{ "app":string, "direction":"in|out", "length":int, "interface":string, "protocol":"tcp|udp|icmp|n/a", "timestamp":string, "ipv4|ipv6":string, "host":string|"n/a", "srcPort":int, "dstPort":int, "accepted":0|1 }`
-- Activity: `{ "blockEnabled":0|1, "app":{App 含 stats 通知视图} }`
+- DNS: `{ "app":string, "uid":int, "userId":int, "domain":string, "domMask":int, "appMask":int, "blocked":0|1, "timestamp":string }`
+- Packet(IPv4/6): `{ "app":string, "uid":int, "userId":int, "direction":"in|out", "length":int, "interface":string, "protocol":"tcp|udp|icmp|n/a", "timestamp":string, "ipv4|ipv6":string, "host":string|"n/a", "srcPort":int, "dstPort":int, "accepted":0|1 }`
+- Activity: `{ "blockEnabled":0|1, "uid":int, "userId":int, "app":{App 含 stats 通知视图} }`
 
 流行为：
-- `START` 先回放“时间窗口内或至少 minSize 条”，随后推送实时事件（每连接独立 pretty 偏好）。
+- `START` 先回放"时间窗口内或至少 minSize 条"，随后推送实时事件（每连接独立 pretty 偏好）。
 - 保留上限：DNS 24h；包 2h；超限逐出旧事件。
+- 流命令保持设备级视图，不支持 `USER <userId>` 子句；用户级过滤由客户端根据事件中的 `userId` 字段自行实现。
 
 2.7 自定义黑白名单
-- `CUSTOMLIST.ON <uid|str>` | - | `OK` | 该应用启用自定义列表
-- `CUSTOMLIST.OFF <uid|str>` | - | `OK` | 该应用停用自定义列表
-- `BLACKLIST.ADD [<uid|str>] <domain>` | - | `OK` | 若含应用则为应用级；否则全局
+- `CUSTOMLIST.ON <uid|str>` | - | `OK` | 该应用启用自定义列表；仅支持 `<str> USER <userId>`
+- `CUSTOMLIST.OFF <uid|str>` | - | `OK` | 该应用停用自定义列表；仅支持 `<str> USER <userId>`
+- `BLACKLIST.ADD [<uid|str>] <domain>` | - | `OK` | 若含应用则为应用级（仅支持 `<str> USER <userId>`）；否则全局
 - `WHITELIST.ADD [<uid|str>] <domain>` | - | `OK` | 同上
-- `BLACKLIST.REMOVE [<uid|str>] <domain>` | - | `OK`
-- `WHITELIST.REMOVE [<uid|str>] <domain>` | - | `OK`
-- `BLACKLIST.PRINT [<uid|str>]` | - | 字符串数组
-- `WHITELIST.PRINT [<uid|str>]` | - | 字符串数组
+- `BLACKLIST.REMOVE [<uid|str>] <domain>` | - | `OK` | 仅支持 `<str> USER <userId>`
+- `WHITELIST.REMOVE [<uid|str>] <domain>` | - | `OK` | 同上
+- `BLACKLIST.PRINT [<uid|str>]` | - | 字符串数组 | 仅支持 `<str> USER <userId>`
+- `WHITELIST.PRINT [<uid|str>]` | - | 字符串数组 | 同上
 
 规则: 添加到黑名单将从白名单移除（反之亦然）。全局 `BLACKLIST/WHITELIST` 命令可添加任意域名；应用级（带 `<uid|str>`）命令要求该域名已出现过。
 
@@ -122,11 +138,11 @@ Domain 对象字段:
 - `RULES.REMOVE <id:int>` | `OK`
 - `RULES.UPDATE <id:int> <type:int> <pattern:str>` | `OK`（等价 `RULES.UPDATElist`）
 - `RULES.PRINT` | 规则数组：`[{"id":int,"type":0|1|2,"rule":string,"status":"none|black|white","blacklist":[app...],"whitelist":[app...]}]`
-- `BLACKRULES.ADD <id> | <uid|str> <id>` | `OK`
-- `WHITERULES.ADD <id> | <uid|str> <id>` | `OK`
-- `BLACKRULES.REMOVE <id> | <uid|str> <id>` | `OK`
-- `WHITERULES.REMOVE <id> | <uid|str> <id>` | `OK`
-- `BLACKRULES.PRINT [<uid|str>]` | ID 数组或应用规则 ID 数组
+- `BLACKRULES.ADD <id> | <uid|str> <id>` | `OK` | 全局或应用级启用规则；仅支持 `<str> USER <userId>`
+- `WHITERULES.ADD <id> | <uid|str> <id>` | `OK` | 同上
+- `BLACKRULES.REMOVE <id> | <uid|str> <id>` | `OK` | 仅支持 `<str> USER <userId>`
+- `WHITERULES.REMOVE <id> | <uid|str> <id>` | `OK` | 同上
+- `BLACKRULES.PRINT [<uid|str>]` | ID 数组或应用规则 ID 数组 | 仅支持 `<str> USER <userId>`
 - `WHITERULES.PRINT [<uid|str>]` | 同上
 
 规则类型: `0`=DOMAIN，`1`=WILDCARD（`*`→`.*`, `?`→`.` 并转义），`2`=REGEX。
@@ -230,7 +246,7 @@ Host 对象字段:
 - 最大客户端连接数 1000；多连接并发。
 
 版本与兼容：
-- 数据保存版本 `savedVersion=7`；本规范 v3.2 对应当前实现。
+- 数据保存版本 `savedVersion=7`；本规范 v3.3 对应当前实现。
 - 兼容别名：`RULES.UPDATElist` ≡ `RULES.UPDATE`。
 
 安全与暴露面：
@@ -242,6 +258,18 @@ Host 对象字段:
 - 列表：`BLOCKLIST.BLACK.ADD <id> <url> 1 Ads List` → `OK`；`BLOCKLIST.PRINT` → `{ "blockingLists":[...] }`
 - 批量：`DOMAIN.BLACK.ADD.MANY <id> 1 true a.com;b.net` → `2`
 - 主机：`HOSTS namepart` → `[ {"name":...,"ipv4":[...],"ipv6":[...]} ]`
+
+多用户支持：
+- UID 公式: `完整 Linux UID = userId * 100000 + appId`（user 0 下 `uid` 与 `appId` 数值相同，向后兼容）。
+- 支持 `USER <userId>` 子句的命令（App 级）:
+  `APP.UID`, `APP.NAME`, `APP<v>`, `APP.<TYPE><v>`, `<COLOR>.APP<v>`, `APP.RESET<v>`,
+  `BLOCKMASK`, `BLOCKIFACE`, `TRACK`, `UNTRACK`, `APP.CUSTOMLISTS`,
+  `CUSTOMLIST.ON/OFF`, `BLACKLIST.*`, `WHITELIST.*`, `BLACKRULES.*`, `WHITERULES.*`
+- 不支持 `USER` 子句的命令（设备级/全局）:
+  `RESETALL`, `DNSSTREAM.*`, `PKTSTREAM.*`, `ACTIVITYSTREAM.*`,
+  `TOPACTIVITY`（仅接受 `<uid>`，不接受 `<str>`）,
+  `ALL<v>`, `<TYPE><v>`, `DOMAINS<v>`, `<COLOR><v>`,
+  `BLOCKLIST.*`, `RULES.*`, `DOMAIN.*`, `HOSTS.*`
 
 ---
 
@@ -264,8 +292,10 @@ Host 对象字段:
 
 - 设置: `/data/snort/settings`
 - 保存目录: `/data/snort/save/`
-  - 应用（系统 UID）: `/data/snort/save/system/<uid>`
-  - 应用（包名）: `/data/snort/save/packages/<package>`
+  - 应用（系统 UID，user 0）: `/data/snort/save/system/<appId>`
+  - 应用（包名，user 0）: `/data/snort/save/packages/<package>`
+  - 应用（系统 UID，非 0 用户）: `/data/snort/save/user<userId>/system/<appId>`
+  - 应用（包名，非 0 用户）: `/data/snort/save/user<userId>/packages/<package>`
   - 域名统计: `/data/snort/save/stats_domains`
   - DNS 流: `/data/snort/save/dnsstream`
   - 规则: `/data/snort/save/rules`
@@ -329,3 +359,14 @@ Host 对象字段:
   - `DOMAIN.BLACK.COUNT` → 整数；`DOMAIN.BLACK.PRINT <id>` → 纯文本多行（`domain<space>mask`）
 - 主机
   - `HOSTS` 或 `HOSTS namepart` → `[ {"name", "domain"?, "color"?, "ipv4":[未加引号的 IP...], "ipv6":["..."]} ]`
+- 多用户
+  - `APP.UID` → 包含所有用户的 App 数组（`uid`/`userId`/`appId` 字段区分）
+  - `APP.UID USER 10` → 仅 user 10 的 App 数组
+  - `APP.NAME com.example USER 1` → user 1 下名称匹配的 App
+  - `APP.NAME com.example 1` → 同上（简写形式）
+  - `BLOCKMASK com.example USER 1` → user 1 下该包的掩码
+  - `BLOCKMASK com.example USER 1 129` → 设置 user 1 下该包的掩码
+  - `TRACK com.example USER 1` → 追踪 user 1 下的该包
+  - `APP.RESET.A ALL` → 重置所有用户统计
+  - `APP.RESET.A ALL USER 10` → 仅重置 user 10 的统计
+  - `DNSSTREAM.START 60 1` → 事件含 `uid`/`userId` 字段，客户端按需过滤
