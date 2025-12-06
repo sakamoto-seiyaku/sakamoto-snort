@@ -8,7 +8,9 @@ SNORT_ROOT="$SCRIPT_DIR/.."
 
 BINARY="$SNORT_ROOT/build-output/sucre-snort"
 TARGET=/data/local/tmp/sucre-snort-dev
-LOG=/data/snort/dev.log
+PROC_NAME=$(basename "$TARGET")
+LOG_DIR=/data/snort
+LOG=$LOG_DIR/dev.log
 
 echo "=== Sucre-Snort Development Deploy ==="
 echo ""
@@ -28,13 +30,13 @@ fi
 # ============================================================================
 
 echo "[1/6] 停止现有进程..."
-adb.exe shell su -c "killall sucre-snort 2>/dev/null" || true
+adb.exe shell su -c "killall $PROC_NAME 2>/dev/null" || true
 sleep 1
 
 # Verify process stopped
-if adb.exe shell su -c "pidof sucre-snort" >/dev/null 2>&1; then
+if adb.exe shell su -c "pidof $PROC_NAME" >/dev/null 2>&1; then
     echo "⚠️  进程未能停止，强制终止..."
-    adb.exe shell su -c "killall -9 sucre-snort" || true
+    adb.exe shell su -c "killall -9 $PROC_NAME" || true
     sleep 1
 fi
 
@@ -57,14 +59,14 @@ adb.exe shell su -c "chmod 755 $TARGET"
 # ============================================================================
 
 echo "[4/6] 清理旧日志..."
-adb.exe shell su -c "mkdir -p /data/snort && echo '' > $LOG"
+adb.exe shell "su -c 'mkdir -p $LOG_DIR && : > $LOG'"
 
 # ============================================================================
 # Start daemon
 # ============================================================================
 
 echo "[5/6] 启动守护进程..."
-adb.exe shell su -c "cd /data/snort && nohup $TARGET >> $LOG 2>&1 &"
+adb.exe shell "su -c '($TARGET >> $LOG 2>&1 &)'"
 
 # ============================================================================
 # Health check
@@ -77,8 +79,8 @@ ERRORS=0
 
 # Check process
 echo -n "  进程状态: "
-if adb.exe shell su -c "pidof sucre-snort" >/dev/null 2>&1; then
-    PID=$(adb.exe shell su -c "pidof sucre-snort" | tr -d '\r\n')
+if adb.exe shell su -c "pidof $PROC_NAME" >/dev/null 2>&1; then
+    PID=$(adb.exe shell su -c "pidof $PROC_NAME" | tr -d '\r\n')
     echo "✓ 运行中 (PID: $PID)"
 else
     echo "❌ 未运行"
@@ -104,7 +106,7 @@ fi
 
 # Check SELinux context
 echo -n "  SELinux: "
-CONTEXT=$(adb.exe shell su -c "ps -AZ" | grep sucre-snort | awk '{print $1}' | head -1 | tr -d '\r\n')
+CONTEXT=$(adb.exe shell su -c "ps -AZ" | grep "$PROC_NAME" | awk '{print $1}' | head -1 | tr -d '\r\n')
 if [ -n "$CONTEXT" ]; then
     echo "$CONTEXT"
 else
@@ -114,7 +116,7 @@ fi
 # Show log excerpt
 echo ""
 echo "=== 最近日志 (最后10行) ==="
-adb.exe shell su -c "tail -10 $LOG" 2>/dev/null || echo "日志为空或无法读取"
+adb.exe shell "su -c 'tail -10 $LOG'" 2>/dev/null || echo "日志为空或无法读取"
 
 # ============================================================================
 # Summary
