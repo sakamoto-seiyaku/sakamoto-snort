@@ -658,13 +658,10 @@ void Control::cmdPassState(CmdParams &&params) const {
 void Control::cmdResetAll(CmdParams &&params) const {
     ack(params.out);
     LOG(INFO) << "Resetting all";
-    {
-        // Hold exclusive lock to ensure no listeners are processing during reset
-        const std::lock_guard lock(mutexListeners);
-        settings.reset();
-        // Clear all per-user save directories before resetting modules
-        Settings::clearSaveTreeForResetAll();
-    }
+    // Note: exclusive mutexListeners lock is already held by the command loop caller
+    settings.reset();
+    // Clear all per-user save directories before resetting modules
+    Settings::clearSaveTreeForResetAll();
     appManager.reset();
     domManager.reset();
     blockingListManager.reset();
