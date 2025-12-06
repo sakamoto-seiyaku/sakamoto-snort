@@ -34,6 +34,19 @@ private:
             , string(str) {}
     };
 
+    // ParsedAppArg: holds a CmdArg with parsed userId for multi-user support
+    // Unlike readCmdArg + arg2appWithUser pattern, readAppArg parses USER clause
+    // as part of the initial read, avoiding stream exhaustion issues.
+    struct ParsedAppArg {
+        CmdArg arg;
+        uint32_t userId = 0;
+        bool hasUserClause = false;
+
+        ParsedAppArg() : arg() {}
+        ParsedAppArg(const CmdArg &a, uint32_t uid = 0, bool hasUser = false)
+            : arg(a), userId(uid), hasUserClause(hasUser) {}
+    };
+
     struct CmdParams {
         const SocketIO::Ptr sockio;
         const bool pretty;
@@ -75,7 +88,30 @@ private:
 
     static auto readCmdArg(std::stringstream &args);
 
+    // Read a single token from stream (does NOT consume entire stream like readCmdArgs)
+    static CmdArg readSingleArg(std::stringstream &args);
+
+    // Read app identifier + optional USER <userId> clause
+    // - For INT: userId is extracted from UID (uid / 100000)
+    // - For STR: checks for optional "USER <userId>" and consumes if present
+    // - For bare 'USER <userId>' (no app), returns ParsedAppArg with arg.type = NONE and
+    //   hasUserClause = true to represent a pure user filter.
+    // - Remaining stream position preserved for additional arguments
+    // - When allowBareUserId is true, a second integer token after a string (e.g. "<str> <userId>")
+    //   is interpreted as userId for commands that do not accept extra integer parameters.
+    static ParsedAppArg readAppArg(std::stringstream &args, bool allowBareUserId = false);
+
     static const App::Ptr arg2app(const CmdArg &arg);
+
+    // AppSelector from ParsedAppArg (preferred - already has userId parsed)
+    static const App::Ptr arg2app(const ParsedAppArg &parg);
+
+    // AppSelector: parses app argument with optional USER <userId> clause
+    // - INT: treated as complete Linux UID, userId extracted from UID
+    // - STR: package name, optionally followed by "USER <userId>" in remaining args
+    // - Default userId is 0 for backward compatibility
+    // DEPRECATED: Use readAppArg() + arg2app(ParsedAppArg) instead to avoid stream exhaustion
+    static const App::Ptr arg2appWithUser(const CmdArg &arg, std::stringstream &args);
 
     void ack(std::stringstream &out) const;
 

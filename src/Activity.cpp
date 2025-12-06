@@ -13,7 +13,8 @@ Activity::~Activity() {}
 void Activity::print(std::ostream &out) const {
     out << "{" << JSF("blockEnabled") << settings.blockEnabled();
     if (_app != nullptr) {
-        out << "," << JSF("app");
+        out << "," << JSF("uid") << _app->uid() << "," << JSF("userId") << _app->userId() << ","
+            << JSF("app");
         _app->printAppNotif(out);
     }
     out << "}";

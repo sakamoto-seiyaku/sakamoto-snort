@@ -483,11 +483,132 @@ auto Control::readCmdArgs(std::stringstream &args) {
 
 auto Control::readCmdArg(std::stringstream &args) { return readCmdArgs(args)[0]; }
 
+Control::CmdArg Control::readSingleArg(std::stringstream &args) {
+    std::string token;
+    if (!(args >> token)) {
+        return CmdArg(); // NONE
+    }
+    // Check if all digits (INT)
+    if (std::all_of(token.begin(), token.end(),
+                    [](char ch) { return std::isdigit(static_cast<unsigned char>(ch)); })) {
+        return CmdArg(token, std::stoi(token));
+    }
+    // Check for boolean
+    if (token == "true" || token == "false") {
+        return CmdArg(token == "true");
+    }
+    // Otherwise STR
+    return CmdArg(token);
+}
+
+Control::ParsedAppArg Control::readAppArg(std::stringstream &args, const bool allowBareUserId) {
+    CmdArg arg = readSingleArg(args);
+
+    if (arg.type == CmdArg::NONE) {
+        return ParsedAppArg();
+    }
+
+    // Special case: pure USER <userId> filter (no explicit app)
+    if (arg.type == CmdArg::STR && arg.string == "USER") {
+        CmdArg userArg = readSingleArg(args);
+        if (userArg.type == CmdArg::INT) {
+            // Represent as "no app selected, but with a user filter"
+            return ParsedAppArg(CmdArg(), userArg.number, true);
+        }
+        // Malformed USER clause - treat as no-selection with no user filter
+        return ParsedAppArg();
+    }
+
+    if (arg.type == CmdArg::INT) {
+        // INT: userId is derived from UID (uid / 100000)
+        uint32_t userId = arg.number / 100000;
+        return ParsedAppArg(arg, userId, false);
+    }
+
+    if (arg.type == CmdArg::STR) {
+        // STR: check for optional "USER <userId>" clause, or (optionally) bare <userId>
+        uint32_t userId = 0;
+        bool hasUserClause = false;
+
+        auto pos = args.tellg();
+        std::string keyword;
+        if (args >> keyword) {
+            if (keyword == "USER") {
+                uint32_t userIdArg;
+                if (args >> userIdArg) {
+                    userId = userIdArg;
+                    hasUserClause = true;
+                } else {
+                    // "USER" without a number - restore position
+                    args.clear();
+                    args.seekg(pos);
+                }
+            } else if (allowBareUserId &&
+                       std::all_of(keyword.begin(), keyword.end(), [](char ch) {
+                           return std::isdigit(static_cast<unsigned char>(ch));
+                       })) {
+                // "<str> <userId>" form for commands that do not accept extra integer params
+                userId = static_cast<uint32_t>(std::stoi(keyword));
+                hasUserClause = true;
+            } else {
+                // Not a USER clause and not a bare userId we should consume - restore position
+                args.clear();
+                args.seekg(pos);
+            }
+        }
+        return ParsedAppArg(arg, userId, hasUserClause);
+    }
+
+    // BOOL or other - just return as-is
+    return ParsedAppArg(arg, 0, false);
+}
+
 const App::Ptr Control::arg2app(const CmdArg &arg) {
     if (arg.type == CmdArg::INT) {
-        return appManager.find(arg.number % 100000);
+        return appManager.find(arg.number);
     } else if (arg.type == CmdArg::STR) {
         return appManager.find(arg.string);
+    }
+    return nullptr;
+}
+
+const App::Ptr Control::arg2app(const ParsedAppArg &parg) {
+    if (parg.arg.type == CmdArg::INT) {
+        // INT: complete Linux UID, find by UID directly
+        return appManager.find(parg.arg.number);
+    } else if (parg.arg.type == CmdArg::STR) {
+        // STR: package name with userId (either from USER clause or default 0)
+        return appManager.findByName(parg.arg.string, parg.userId);
+    }
+    return nullptr;
+}
+
+const App::Ptr Control::arg2appWithUser(const CmdArg &arg, std::stringstream &args) {
+    if (arg.type == CmdArg::INT) {
+        // INT: treated as complete Linux UID
+        return appManager.find(arg.number);
+    } else if (arg.type == CmdArg::STR) {
+        // STR: package name, check for optional "USER <userId>" clause
+        uint32_t userId = 0; // Default to user 0 for backward compatibility
+        std::string keyword;
+        auto pos = args.tellg();
+        if (args >> keyword) {
+            if (keyword == "USER") {
+                uint32_t userIdArg;
+                if (args >> userIdArg) {
+                    userId = userIdArg;
+                } else {
+                    // "USER" without a number - restore position and use default
+                    args.clear();
+                    args.seekg(pos);
+                }
+            } else {
+                // Not "USER" keyword - restore position for caller
+                args.clear();
+                args.seekg(pos);
+            }
+        }
+        return appManager.findByName(arg.string, userId);
     }
     return nullptr;
 }
@@ -537,7 +658,13 @@ void Control::cmdPassState(CmdParams &&params) const {
 void Control::cmdResetAll(CmdParams &&params) const {
     ack(params.out);
     LOG(INFO) << "Resetting all";
-    settings.reset();
+    {
+        // Hold exclusive lock to ensure no listeners are processing during reset
+        const std::lock_guard lock(mutexListeners);
+        settings.reset();
+        // Clear all per-user save directories before resetting modules
+        Settings::clearSaveTreeForResetAll();
+    }
     appManager.reset();
     domManager.reset();
     blockingListManager.reset();
@@ -550,28 +677,46 @@ void Control::cmdResetAll(CmdParams &&params) const {
 }
 
 void Control::cmdAppsByUid(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::INT) {
+    const auto parg = readAppArg(params.args, true);
+    if (parg.arg.type == CmdArg::INT) {
+        // APP.UID <uid> - single app by UID
         params.out << '[';
-        if (const auto app = arg2app(arg)) {
+        if (const auto app = arg2app(parg)) {
             app->print(params.out);
         }
         params.out << ']';
+    } else if (parg.arg.type == CmdArg::STR) {
+        // APP.UID <str> [<userId>|USER <userId>] - substring match within specified userId
+        appManager.printAppsByUid(params.out, parg.arg.string, parg.userId);
     } else {
-        appManager.printAppsByUid(params.out, arg.string);
+        // APP.UID [USER <userId>] - device-wide list, optionally filtered by userId
+        std::optional<uint32_t> userFilter = std::nullopt;
+        if (parg.hasUserClause) {
+            userFilter = parg.userId;
+        }
+        appManager.printAppsByUid(params.out, std::string(), userFilter);
     }
 }
 
 void Control::cmdAppsByName(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::INT) {
+    const auto parg = readAppArg(params.args, true);
+    if (parg.arg.type == CmdArg::INT) {
+        // APP.NAME <uid> - behaves like APP.UID <uid>
         params.out << '[';
-        if (const auto app = arg2app(arg)) {
+        if (const auto app = arg2app(parg)) {
             app->print(params.out);
         }
         params.out << ']';
+    } else if (parg.arg.type == CmdArg::STR) {
+        // APP.NAME <str> [<userId>|USER <userId>] - substring match within specified userId
+        appManager.printAppsByName(params.out, parg.arg.string, parg.userId);
     } else {
-        appManager.printAppsByName(params.out, arg.string);
+        // APP.NAME [USER <userId>] - device-wide list, optionally filtered by userId
+        std::optional<uint32_t> userFilter = std::nullopt;
+        if (parg.hasUserClause) {
+            userFilter = parg.userId;
+        }
+        appManager.printAppsByName(params.out, std::string(), userFilter);
     }
 }
 
@@ -625,17 +770,21 @@ void Control::cmdMaxAgeIP(CmdParams &&params) const {
 }
 
 void Control::cmdBlockMask(CmdParams &&params) const {
-    const auto args = readCmdArgs(params.args);
-    if (args.size() == 1) {
-        if (const auto app = arg2app(args[0])) {
+    const auto parg = readAppArg(params.args);  // Reads app + optional USER clause
+    const auto mask = readSingleArg(params.args);  // Read optional mask
+
+    if (mask.type == CmdArg::NONE) {
+        // GET mode: BLOCKMASK <uid|str> [USER <userId>]
+        if (const auto app = arg2app(parg)) {
             LOG(INFO) << " cmdBlockMask " << static_cast<uint32_t>(app->blockMask());
             params.out << static_cast<uint32_t>(app->blockMask());
         }
     } else {
+        // SET mode: BLOCKMASK <uid|str> [USER <userId>] <mask>
         ack(params.out);
-        if (args.size() == 2 && args[1].type == CmdArg::INT) {
-            if (const auto app = arg2app(args[0])) {
-                app->blockMask(args[1].number);
+        if (mask.type == CmdArg::INT) {
+            if (const auto app = arg2app(parg)) {
+                app->blockMask(mask.number);
                 activityManager.update(app, true);
                 LOG(INFO) << " cmdBlockMask " << static_cast<uint32_t>(app->blockMask());
             }
@@ -656,14 +805,18 @@ void Control::cmdBlockMaskDef(CmdParams &&params) const {
 }
 
 void Control::cmdBlockIface(CmdParams &&params) const {
-    const auto args = readCmdArgs(params.args);
-    if (const auto app = arg2app(args[0])) {
-        if (args.size() == 1) {
+    const auto parg = readAppArg(params.args);  // Reads app + optional USER clause
+    const auto iface = readSingleArg(params.args);  // Read optional iface
+
+    if (const auto app = arg2app(parg)) {
+        if (iface.type == CmdArg::NONE) {
+            // GET mode
             params.out << static_cast<uint32_t>(app->blockIface());
         } else {
+            // SET mode
             ack(params.out);
-            if (args.size() == 2 && args[1].type == CmdArg::INT) {
-                app->blockIface(args[1].number);
+            if (iface.type == CmdArg::INT) {
+                app->blockIface(iface.number);
             }
         }
     }
@@ -682,9 +835,9 @@ void Control::cmdBlockIfaceDef(CmdParams &&params) const {
 }
 
 void Control::cmdTrack(CmdParams &&params, bool track) const {
-    const auto arg = readCmdArg(params.args);
+    const auto parg = readAppArg(params.args, true);
     ack(params.out);
-    if (const auto app = arg2app(arg)) {
+    if (const auto app = arg2app(parg)) {
         app->tracked(track);
     }
 }
@@ -752,28 +905,43 @@ void Control::cmdStatsTotal(CmdParams &&params, const Stats::View view,
 
 template <class... TypeStat>
 void Control::cmdStatsApp(CmdParams &&params, const Stats::View view, const TypeStat... ts) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::INT) {
+    const auto parg = readAppArg(params.args, true);
+    if (parg.arg.type == CmdArg::INT) {
+        // APP.<v> <uid> - stats for a single app
         params.out << '[';
-        if (const auto app = arg2app(arg)) {
+        if (const auto app = arg2app(parg)) {
             app->printAppStats(params.out, view, ts...);
         }
         params.out << ']';
+    } else if (parg.arg.type == CmdArg::STR) {
+        // APP.<v> <str> [<userId>|USER <userId>] - per-app stats within specified userId
+        appManager.printApps(params.out, parg.arg.string, view,
+            parg.hasUserClause ? std::optional<uint32_t>(parg.userId) : std::nullopt, ts...);
     } else {
-        appManager.printApps(params.out, arg.string, view, ts...);
+        // APP.<v> [USER <userId>] - device-wide stats, optionally filtered by user
+        std::optional<uint32_t> userFilter = std::nullopt;
+        if (parg.hasUserClause) {
+            userFilter = parg.userId;
+        }
+        appManager.printApps(params.out, std::string(), view, userFilter, ts...);
     }
 }
 
 void Control::cmdResetApp(CmdParams &&params, const Stats::View view) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::INT) {
-        if (const auto app = arg2app(arg)) {
+    const auto parg = readAppArg(params.args, true);
+    if (parg.arg.type == CmdArg::INT) {
+        if (const auto app = arg2app(parg)) {
             app->reset(view);
         }
-    } else if (arg.type == CmdArg::STR) {
-        if (arg.string == "ALL") {
-            appManager.reset(view);
-        } else if (const auto app = appManager.find(arg.string)) {
+    } else if (parg.arg.type == CmdArg::STR) {
+        if (parg.arg.string == "ALL") {
+            // APP.RESET.<v> ALL [USER <userId>]
+            if (parg.hasUserClause) {
+                appManager.reset(view, std::optional<uint32_t>(parg.userId));
+            } else {
+                appManager.reset(view);
+            }
+        } else if (const auto app = arg2app(parg)) {
             app->reset(view);
         }
     }
@@ -781,8 +949,8 @@ void Control::cmdResetApp(CmdParams &&params, const Stats::View view) const {
 }
 
 void Control::cmdAppCustomLists(CmdParams &&params) const {
-    const auto arg = readCmdArg(params.args);
-    if (const auto app = arg2app(arg)) {
+    const auto parg = readAppArg(params.args, true);
+    if (const auto app = arg2app(parg)) {
         app->printCustomLists(params.out);
     }
 }
@@ -811,70 +979,79 @@ void Control::cmdDomainlist(CmdParams &&params, const Stats::Color cs, const Sta
 template <class... TypeStat>
 void Control::cmdDomainlistApp(CmdParams &&params, const Stats::Color cs, const Stats::View view,
                                const TypeStat... ts) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::INT) {
-        if (auto app = arg2app(arg)) {
+    const auto parg = readAppArg(params.args);
+    if (parg.arg.type == CmdArg::INT) {
+        if (auto app = arg2app(parg)) {
             app->printDomains(params.out, cs, view, ts...);
         } else {
             ack(params.out);
         }
-    } else {
-        appManager.printDomains(params.out, arg.string, cs, view, ts...);
+    } else if (parg.arg.type == CmdArg::STR) {
+        // STR case: substring match within specified userId (or all users if not specified)
+        appManager.printDomains(params.out, parg.arg.string, cs, view,
+            parg.hasUserClause ? std::optional<uint32_t>(parg.userId) : std::nullopt, ts...);
     }
 }
 
 void Control::cmdTopActivity(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::INT) {
-        if (const auto app = arg2app(arg)) {
-            // if (app != nullptr && app->tracked() && app->hasData(Stats::View::ALL)) {
+        if (const auto app = appManager.make(arg.number)) {
             activityManager.make(app);
-            //}
         }
     }
 }
 
 void Control::cmdUseCustomList(CmdParams &&params, bool useCustom) const {
-    const auto arg = readCmdArg(params.args);
+    const auto parg = readAppArg(params.args);
     ack(params.out);
-    if (const auto app = arg2app(arg)) {
+    if (const auto app = arg2app(parg)) {
         app->useCustomList(useCustom);
     }
 }
 
 void Control::cmdAddCustomDomain(CmdParams &&params, Stats::Color color) const {
-    const auto args = readCmdArgs(params.args);
+    const auto parg = readAppArg(params.args);  // Reads app/domain + optional USER clause
+    const auto domain = readSingleArg(params.args);  // Read optional domain
+
     ack(params.out);
-    if (args.size() == 1) {
-        domManager.removeCustomDomain(args[0].string,
+    if (domain.type == CmdArg::NONE) {
+        // Global form: BLACKLIST.ADD <domain>
+        // First arg was actually the domain, not an app
+        domManager.removeCustomDomain(parg.arg.string,
                                       color == Stats::BLACK ? Stats::WHITE : Stats::BLACK);
-        domManager.addCustomDomain(args[0].string, color);
-    } else if (args.size() == 2) {
-        if (const auto app = arg2app(args[0])) {
-            app->removeCustomDomain(args[1].string,
+        domManager.addCustomDomain(parg.arg.string, color);
+    } else {
+        // App-specific form: BLACKLIST.ADD <app> [USER <userId>] <domain>
+        if (const auto app = arg2app(parg)) {
+            app->removeCustomDomain(domain.string,
                                     color == Stats::BLACK ? Stats::WHITE : Stats::BLACK);
-            app->addCustomDomain(args[1].string, color);
+            app->addCustomDomain(domain.string, color);
         }
     }
 }
 
 void Control::cmdRemoveCustomDomain(CmdParams &&params, Stats::Color color) const {
-    const auto args = readCmdArgs(params.args);
+    const auto parg = readAppArg(params.args);
+    const auto domain = readSingleArg(params.args);
+
     ack(params.out);
-    if (args.size() == 1) {
-        domManager.removeCustomDomain(args[0].string, color);
-    } else if (args.size() == 2) {
-        if (const auto app = arg2app(args[0])) {
-            app->removeCustomDomain(args[1].string, color);
+    if (domain.type == CmdArg::NONE) {
+        // Global form
+        domManager.removeCustomDomain(parg.arg.string, color);
+    } else {
+        // App-specific form
+        if (const auto app = arg2app(parg)) {
+            app->removeCustomDomain(domain.string, color);
         }
     }
 }
 
 void Control::cmdPrintCustomList(CmdParams &&params, Stats::Color color) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::NONE) {
+    const auto parg = readAppArg(params.args);
+    if (parg.arg.type == CmdArg::NONE) {
         domManager.printCustomDomains(params.out, color);
-    } else if (const auto app = arg2app(arg)) {
+    } else if (const auto app = arg2app(parg)) {
         app->printCustomDomains(params.out, color);
     }
 }
@@ -901,38 +1078,55 @@ void Control::cmdUpdateRule(CmdParams &&params) const {
 void Control::cmdPrintRules(CmdParams &&params) const { rulesManager.print(params.out); }
 
 void Control::cmdAddCustomRule(CmdParams &&params, Stats::Color color) const {
-    const auto args = readCmdArgs(params.args);
+    const auto parg = readAppArg(params.args);  // Reads app/ruleId + optional USER clause
+    const auto ruleArg = readSingleArg(params.args);  // Read optional rule ID
+
     ack(params.out);
-    if (args.size() == 1) {
-        rulesManager.removeCustom(args[0].number,
-                                  color == Stats::BLACK ? Stats::WHITE : Stats::BLACK);
-        rulesManager.addCustom(args[0].number, color, true);
-    } else if (args.size() == 2) {
-        if (const auto app = arg2app(args[0])) {
-            rulesManager.removeCustom(app, args[1].number,
+    if (ruleArg.type == CmdArg::NONE) {
+        // Global form: BLACKRULES.ADD <ruleId>
+        // First arg was actually the rule ID, not an app
+        if (parg.arg.type == CmdArg::INT) {
+            rulesManager.removeCustom(parg.arg.number,
                                       color == Stats::BLACK ? Stats::WHITE : Stats::BLACK);
-            rulesManager.addCustom(app, args[1].number, color, true);
+            rulesManager.addCustom(parg.arg.number, color, true);
+        }
+    } else {
+        // App-specific form: BLACKRULES.ADD <app> [USER <userId>] <ruleId>
+        if (ruleArg.type == CmdArg::INT) {
+            if (const auto app = arg2app(parg)) {
+                rulesManager.removeCustom(app, ruleArg.number,
+                                          color == Stats::BLACK ? Stats::WHITE : Stats::BLACK);
+                rulesManager.addCustom(app, ruleArg.number, color, true);
+            }
         }
     }
 }
 
 void Control::cmdRemoveCustomRule(CmdParams &&params, Stats::Color color) const {
-    const auto args = readCmdArgs(params.args);
+    const auto parg = readAppArg(params.args);
+    const auto ruleArg = readSingleArg(params.args);
+
     ack(params.out);
-    if (args.size() == 1) {
-        rulesManager.removeCustom(args[0].number, color);
-    } else if (args.size() == 2) {
-        if (const auto app = arg2app(args[0])) {
-            rulesManager.removeCustom(app, args[1].number, color);
+    if (ruleArg.type == CmdArg::NONE) {
+        // Global form
+        if (parg.arg.type == CmdArg::INT) {
+            rulesManager.removeCustom(parg.arg.number, color);
+        }
+    } else {
+        // App-specific form
+        if (ruleArg.type == CmdArg::INT) {
+            if (const auto app = arg2app(parg)) {
+                rulesManager.removeCustom(app, ruleArg.number, color);
+            }
         }
     }
 }
 
 void Control::cmdPrintCustomRules(CmdParams &&params, Stats::Color color) const {
-    const auto arg = readCmdArg(params.args);
-    if (arg.type == CmdArg::NONE) {
+    const auto parg = readAppArg(params.args);
+    if (parg.arg.type == CmdArg::NONE) {
         domManager.printCustomRules(params.out, color);
-    } else if (const auto app = arg2app(arg)) {
+    } else if (const auto app = arg2app(parg)) {
         app->printCustomRules(params.out, color);
     }
 }
@@ -1166,10 +1360,36 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "- commands output either a single int (for e.g. blocking status), or an array "
            "of\r\n"
         << "      objects which can be apps, or domains.\r\n"
-        << "- <uid> as parameter: outputs an array containing a single json object. If no\r\n"
-        << "      app exists with that uid, the array is empty.\r\n"
-        << "- <str> as parameter: outputs an array of objects whose name match the string.\r\n"
-        << "      If no object exists with that uid, the array is empty.\r\n"
+        << "- <uid> as parameter: complete Linux UID (e.g. 10123 for user 0, 110123 for\r\n"
+        << "      user 1). Outputs an array containing a single json object. If no app\r\n"
+        << "      exists with that uid, the array is empty.\r\n"
+        << "- <str> as parameter: package name. By default \"<str>\" refers to the main\r\n"
+        << "      user (user 0). For commands that support multi-user selection on\r\n"
+        << "      <uid|str>:\r\n"
+        << "        * \"<str>\" alone selects (packageName, userId=0);\r\n"
+        << "        * \"<str> USER <userId>\" explicitly selects an Android user;\r\n"
+        << "        * for commands that do NOT accept extra integer parameters after\r\n"
+        << "          <uid|str> (e.g. APP.UID, APP.NAME, APP<v>, APP.RESET<v>, TRACK,\r\n"
+        << "          UNTRACK, APP.CUSTOMLISTS), \"<str> <userId>\" is also accepted and\r\n"
+        << "          is equivalent to \"<str> USER <userId>\".\r\n"
+        << "      Example: com.example.app USER 1\r\n"
+        << "      Outputs an array of objects whose name match the string.\r\n"
+        << "\r\n"
+        << "*** Multi-user support\r\n"
+        << "\r\n"
+        << "Commands supporting USER <userId> clause (for STR parameter):\r\n"
+        << "  APP.UID, APP.NAME, BLOCKMASK, BLOCKIFACE, TRACK, UNTRACK,\r\n"
+        << "  APP<v>, APP.DNS<v>, APP.RXP<v>, APP.RXB<v>, APP.TXP<v>, APP.TXB<v>,\r\n"
+        << "  APP.RESET<v>, BLACK.APP<v>, WHITE.APP<v>, GREY.APP<v>,\r\n"
+        << "  CUSTOMLIST.ON, CUSTOMLIST.OFF, BLACKLIST.*, WHITELIST.*,\r\n"
+        << "  BLACKRULES.*, WHITERULES.*, APP.CUSTOMLISTS\r\n"
+        << "\r\n"
+        << "Commands NOT supporting USER clause (global or UID-only):\r\n"
+        << "  RESETALL, DNSSTREAM.*, PKTSTREAM.*, ACTIVITYSTREAM.*,\r\n"
+        << "  TOPACTIVITY (accepts <uid> only, not <str>),\r\n"
+        << "  BLOCKLIST.*, RULES.*, ALL<v>, DNS<v>, RXP<v>, RXB<v>, TXP<v>, TXB<v>\r\n"
+        << "    For these commands, any \"USER <userId>\" tokens are not interpreted as\r\n"
+        << "    a per-user filter and the commands keep their device-wide semantics.\r\n"
         << "\r\n"
 
         << "***\r\n"

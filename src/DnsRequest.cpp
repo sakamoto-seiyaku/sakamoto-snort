@@ -28,10 +28,11 @@ DnsRequest::DnsRequest(const App::Ptr app, const Domain::Ptr domain, const Stats
 DnsRequest::~DnsRequest() {}
 
 void DnsRequest::print(std::ostream &out) const {
-    out << "{" << JSF("app") << JSS(_app->name()) << "," << JSF("domain") << JSS(_domain->name())
-        << "," << JSF("domMask") << static_cast<uint32_t>(_domain->blockMask()) << ","
-        << JSF("appMask") << static_cast<uint32_t>(_app->blockMask()) << "," << JSF("blocked")
-        << JSB(_blocked) << "," << JSF("timestamp")
+    out << "{" << JSF("app") << JSS(_app->name()) << "," << JSF("uid") << _app->uid() << ","
+        << JSF("userId") << _app->userId() << "," << JSF("domain") << JSS(_domain->name()) << ","
+        << JSF("domMask") << static_cast<uint32_t>(_domain->blockMask()) << "," << JSF("appMask")
+        << static_cast<uint32_t>(_app->blockMask()) << "," << JSF("blocked") << JSB(_blocked) << ","
+        << JSF("timestamp")
         << JSS(_timestamp.tv_sec << "." << std::setfill('0') << std::setw(9) << _timestamp.tv_nsec)
         << "}";
 }
@@ -56,7 +57,9 @@ void DnsRequest::save(Saver &saver) {
 DnsRequest::Ptr DnsRequest::restore(Saver &saver) {
     std::string name;
     saver.read(name);
-    auto app = appManager.find(name);
+    // Backward compatibility: old saved streams are treated as user 0
+    // Use findByName with explicit userId=0 to ensure correct user selection
+    auto app = appManager.findByName(name, 0);
     std::string name2;
     saver.read(name2);
     auto domain = domManager.find(name2);

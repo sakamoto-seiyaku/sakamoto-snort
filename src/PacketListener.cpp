@@ -68,7 +68,7 @@ template <class IP> void PacketListener<IP>::start() {
     rule(settings.inputChain, _firstQueue, _inputQueues);
     rule(settings.outputChain, _firstQueue + _inputQueues, _outputQueues);
     for (uint32_t i = 0; i < _inputQueues + _outputQueues; ++i) {
-        std::thread([=] { listen(i); }).detach();
+        std::thread([=, this] { listen(i); }).detach();
     }
 }
 

@@ -18,9 +18,17 @@ PackageListener::PackageListener() {}
 
 PackageListener::~PackageListener() {}
 
+namespace {
+// App UIDs in Android are >= AID_APP_START (10000).
+// UIDs below this threshold are system/root UIDs and should not be tracked as apps.
+constexpr App::Uid AID_APP_START = 10000;
+
+bool isAppUid(const App::Uid uid) { return uid >= AID_APP_START; }
+} // namespace
+
 void PackageListener::start() {
     updatePackages();
-    std::thread([=] { listen(); }).detach();
+    std::thread([=, this] { listen(); }).detach();
 }
 
 void PackageListener::reset() {
@@ -93,6 +101,49 @@ void PackageListener::updatePackages() {
         App::Uid uid;
         while (in >> name >> uid) {
             in.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+            // Security validation 1: Filter non-app UIDs (system UIDs < 10000 are not tracked)
+            if (!isAppUid(uid)) {
+                continue;
+            }
+
+            // Security validation 2: userId range check (0 ≤ userId < 10000)
+            const uint32_t userId = uid / 100000;
+            if (userId >= 10000) {
+                LOG(WARNING) << "packages.list: rejecting invalid userId " << userId
+                             << " for uid " << uid;
+                continue;
+            }
+
+            // Security validation 3: Package name validation
+            // - Reject empty names
+            // - Reject names with control characters (< 32), NUL, or high bytes that could be exploits
+            // - Reject names with path traversal patterns
+            // - Enforce reasonable length limit
+            if (name.empty() || name.size() > 256) {
+                LOG(WARNING) << "packages.list: rejecting invalid name length for uid " << uid;
+                continue;
+            }
+
+            bool validName = true;
+            for (unsigned char c : name) {
+                // Reject control characters, NUL, DEL (127), and non-ASCII bytes
+                if (c < 32 || c == 127) {
+                    validName = false;
+                    break;
+                }
+            }
+            if (!validName) {
+                LOG(WARNING) << "packages.list: rejecting name with invalid characters for uid " << uid;
+                continue;
+            }
+
+            // Reject path traversal attempts
+            if (name.find("..") != std::string::npos || name.find('/') != std::string::npos) {
+                LOG(WARNING) << "packages.list: rejecting name with path traversal for uid " << uid;
+                continue;
+            }
+
             _names[uid].push_back(name);
         }
         // Apply delta: install new UIDs; remove ones missing from new snapshot

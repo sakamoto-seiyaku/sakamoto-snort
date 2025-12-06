@@ -25,8 +25,8 @@ private:
     Saver _saver;
 
     const Uid _uid;
-    const std::string _name;
-    const NamesVec _names;
+    std::string _name;       // Non-const to allow anonymous→named upgrade
+    NamesVec _names;         // Non-const to allow anonymous→named upgrade
     std::atomic_bool _saved = false;
     AppStats _stats;
     std::pair<DomStatsMap, std::shared_mutex> _domStats[Stats::nbColors - 1];
@@ -50,6 +50,21 @@ public:
     const std::string &name() const { return _name; }
 
     const NamesVec &names() const { return _names; }
+
+    // Returns true if this app has an anonymous name (e.g., "system_12345")
+    bool isAnonymous() const;
+
+    // Upgrade from anonymous to named app - only succeeds if currently anonymous
+    // Returns true if upgrade was performed, false if already named
+    // Also handles save file rename for persistence
+    bool upgradeName(const std::string &newName);
+    bool upgradeName(const NamesVec &newNames);
+
+    Uid uid() const { return _uid; }
+
+    Uid userId() const { return _uid / 100000; }
+
+    Uid appId() const { return _uid % 100000; }
 
     uint8_t blockMask() const { return _blockMask; }
 

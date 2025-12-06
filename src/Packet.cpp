@@ -33,8 +33,9 @@ template <class IP> typename Packet<IP>::Ptr Packet<IP>::restore(Saver &saver) {
 
 template <class IP> void Packet<IP>::print(std::ostream &out) const {
     char buffer[IF_NAMESIZE];
-    out << "{" << JSF("app") << JSS(_app->name()) << "," << JSF("direction")
-        << JSS((_input ? "in" : "out")) << "," << JSF("length") << _len << "," << JSF("interface")
+    out << "{" << JSF("app") << JSS(_app->name()) << "," << JSF("uid") << _app->uid() << ","
+        << JSF("userId") << _app->userId() << "," << JSF("direction") << JSS((_input ? "in" : "out"))
+        << "," << JSF("length") << _len << "," << JSF("interface")
         << JSS((if_indextoname(_iface, buffer) ? buffer : "n/a")) << "," << JSF("protocol")
         << JSS((_proto == IPPROTO_TCP      ? "tcp"
                 : _proto == IPPROTO_UDP    ? "udp"

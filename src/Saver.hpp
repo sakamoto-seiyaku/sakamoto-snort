@@ -15,8 +15,8 @@ class Saver {
 private:
     using ioFun = std::function<void()>;
 
-    const std::string _filename;
-    const std::string _filetmp;
+    std::string _filename;
+    std::string _filetmp;
 
     std::ifstream in;
     std::ofstream out;
@@ -29,6 +29,8 @@ public:
     ~Saver();
 
     Saver(const Saver &) = delete;
+
+    Saver& operator=(Saver&&) = default;
 
     void save(ioFun &&saveFun);
 

@@ -4,6 +4,7 @@
  */
 
 #include <dirent.h>
+#include <cstring>
 #include <sstream>
 
 #include <ActivityManager.hpp>
@@ -25,12 +26,21 @@ const App::Ptr AppManager::find(const std::string &name) {
     return find(_byName, name);
 }
 
+const App::Ptr AppManager::findByName(const std::string &name, const uint32_t userId) {
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+    for (const auto &[uid, app] : _byUid) {
+        if (app->userId() == userId && app->name() == name) {
+            return app;
+        }
+    }
+    return nullptr;
+}
+
 const App::Ptr AppManager::make(const App::Uid uid) {
-    auto fuid = uid % 100000;
-    if (const auto app = find(fuid)) {
+    if (const auto app = find(uid)) {
         return app;
     } else {
-        return create(fuid);
+        return create(uid);
     }
 }
 
@@ -40,6 +50,18 @@ template <class... Names> App::Ptr AppManager::create(const App::Uid uid, const 
     const auto app = it->second;
     if (inserted) {
         _byName.emplace(app->name(), app);
+    } else {
+        // UID already exists - check if we should upgrade from anonymous to named
+        // This handles the case where traffic was observed before packages.list was parsed
+        if constexpr (sizeof...(names) > 0) {
+            const std::string oldName = app->name();
+            // Try to upgrade - will only succeed if app is currently anonymous
+            if (app->upgradeName(names...)) {
+                // Update _byName index: remove old entry, add new entry
+                _byName.erase(oldName);
+                _byName.emplace(app->name(), app);
+            }
+        }
     }
     return app;
 }
@@ -86,6 +108,16 @@ void AppManager::reset(const Stats::View view) {
     }
 }
 
+void AppManager::reset(const Stats::View view, const std::optional<uint32_t> userId) {
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+    for (const auto &[_, app] : _byUid) {
+        if (userId.has_value() && app->userId() != userId.value()) {
+            continue;
+        }
+        app->reset(view);
+    }
+}
+
 void AppManager::reset() {
     // Simple coarse-grained locking: protect indexes during full reset
     const std::scoped_lock lock(_mutexByUid, _mutexByName);
@@ -109,43 +141,74 @@ void AppManager::save() {
 void AppManager::restore() {
     _saver.restore([&] {
         _stats.restore(_saver);
-        if (auto dir = opendir(settings.saveDirSystem.c_str())) {
-            dirent *de;
-            while ((de = readdir(dir)) != nullptr) {
-                if (de->d_type == DT_REG) {
-                    try {
-                        make(std::stoi(de->d_name));
-                    } catch (const std::exception &e) {
-                        std::remove((settings.saveDirPackages + de->d_name).c_str());
-                    }
-                }
-            }
-            closedir(dir);
-        }
+        // Restore state only for apps already in _byUid (created by PackageListener or runtime make()).
+        // Do not create new Apps from persisted files - App lifecycle is driven by packages.list
+        // and runtime UID discovery, not by saved state files.
         for (const auto &[_, app] : _byUid) {
             app->restore(app);
         }
-        if (auto dir = opendir(settings.saveDirPackages.c_str())) {
-            dirent *de;
-            while ((de = readdir(dir)) != nullptr) {
-                if (de->d_type == DT_REG && find(de->d_name) == nullptr) {
-                    LOG(ERROR) << "remove " << de->d_name;
-                    std::remove((settings.saveDirPackages + de->d_name).c_str());
+        // Clean up orphan package save files for apps that no longer exist
+        // Helper lambda to clean orphan files in a packages directory
+        auto cleanOrphanFiles = [this](const std::string &packagesDir) {
+            if (auto dir = opendir(packagesDir.c_str())) {
+                dirent *de;
+                while ((de = readdir(dir)) != nullptr) {
+                    if (de->d_type == DT_REG && find(de->d_name) == nullptr) {
+                        LOG(WARNING) << "remove orphan save file: " << de->d_name;
+                        std::remove((packagesDir + de->d_name).c_str());
+                    }
                 }
+                closedir(dir);
             }
-            closedir(dir);
+        };
+        // Clean user 0 packages directory
+        cleanOrphanFiles(settings.saveDirPackages);
+        // Clean per-user packages directories (user1, user2, ...)
+        // Derive save directory from saveDirPackages by removing "packages/" suffix
+        std::string saveDir = settings.saveDirPackages;
+        auto pos = saveDir.rfind("packages/");
+        if (pos != std::string::npos) {
+            saveDir = saveDir.substr(0, pos);
+            if (auto dir = opendir(saveDir.c_str())) {
+                dirent *de;
+                while ((de = readdir(dir)) != nullptr) {
+                    // Look for directories named "user<N>" where N >= 1
+                    if (de->d_type == DT_DIR &&
+                        strncmp(de->d_name, "user", 4) == 0 &&
+                        de->d_name[4] >= '1' && de->d_name[4] <= '9') {
+                        cleanOrphanFiles(saveDir + de->d_name + "/packages/");
+                    }
+                }
+                closedir(dir);
+            }
         }
     });
 }
 
-void AppManager::printAppsByUid(std::ostream &out, const std::string &subname) {
+void AppManager::printAppsByUid(std::ostream &out, const std::string &subname,
+                                const std::optional<uint32_t> userId) {
     const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
-    printAppList(_byUid, out, subname, [&](const App::Ptr &app) { app->print(out); });
+    printAppList(_byUid, out, subname, [&](const App::Ptr &app) { app->print(out); },
+                 [&](const App::Ptr &app) -> bool {
+                     // Filter by userId if specified (nullopt = all users)
+                     if (userId.has_value() && app->userId() != userId.value()) {
+                         return false;
+                     }
+                     return true;
+                 });
 }
 
-void AppManager::printAppsByName(std::ostream &out, const std::string &subname) {
+void AppManager::printAppsByName(std::ostream &out, const std::string &subname,
+                                 const std::optional<uint32_t> userId) {
     const std::shared_lock<std::shared_mutex> lock(_mutexByName);
-    printAppList(_byName, out, subname, [&](const App::Ptr &app) { app->print(out); });
+    printAppList(_byName, out, subname, [&](const App::Ptr &app) { app->print(out); },
+                 [&](const App::Ptr &app) -> bool {
+                     // Filter by userId if specified (nullopt = all users)
+                     if (userId.has_value() && app->userId() != userId.value()) {
+                         return false;
+                     }
+                     return true;
+                 });
 }
 
 template <class Map, class Arg> App::Ptr AppManager::find(Map &map, Arg &arg) {

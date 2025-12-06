@@ -11,12 +11,17 @@
 
 App::App(const Uid uid, const NamesVec &names)
     : App(uid, settings.systemAppPrefix + std::to_string(uid), names,
-          settings.saveDirSystem + std::to_string(uid),
-          settings.standardListBit + settings.customListBit, 0, true) {}
+          Settings::userSaveDirSystem(uid / 100000) + std::to_string(uid),
+          settings.standardListBit + settings.customListBit, 0, true) {
+    Settings::ensureUserDirs(uid / 100000);
+}
 
 App::App(const Uid uid, const std::string &name)
-    : App(uid, name, NamesVec(), settings.saveDirPackages + name, settings.blockMask(),
-          settings.blockIface(), settings.blockMask() & settings.customListBit) {}
+    : App(uid, name, NamesVec(), Settings::userSaveDirPackages(uid / 100000) + name,
+          settings.blockMask(), settings.blockIface(),
+          settings.blockMask() & settings.customListBit) {
+    Settings::ensureUserDirs(uid / 100000);
+}
 
 App::App(const Uid uid, const std::string &name, const NamesVec &names,
          const std::string &&saveFile, const std::uint8_t blockMask, const std::uint8_t blockIface,
@@ -28,6 +33,40 @@ App::App(const Uid uid, const std::string &name, const NamesVec &names,
     , _blockMask(blockMask)
     , _blockIface(blockIface)
     , _useCustomList(useCustomList) {}
+
+bool App::isAnonymous() const {
+    return _name.rfind(settings.systemAppPrefix, 0) == 0;
+}
+
+bool App::upgradeName(const std::string &newName) {
+    if (!isAnonymous()) {
+        return false;  // Already named, no upgrade needed
+    }
+
+    // Get old and new save file paths
+    const uint32_t userId = _uid / 100000;
+    std::string oldPath = Settings::userSaveDirSystem(userId) + std::to_string(_uid);
+    std::string newPath = Settings::userSaveDirPackages(userId) + newName;
+
+    // Rename save file if it exists
+    std::rename(oldPath.c_str(), newPath.c_str());
+
+    // Update internal state
+    _name = newName;
+    _names.clear();
+    _saver = Saver(newPath);
+    _saved = false;
+
+    LOG(INFO) << "App upgraded from anonymous to " << newName << " (uid=" << _uid << ")";
+    return true;
+}
+
+bool App::upgradeName(const NamesVec &newNames) {
+    if (newNames.empty()) {
+        return false;
+    }
+    return upgradeName(newNames[0]);
+}
 
 bool App::hasData(const Stats::View view) { return _stats.hasData(view); }
 
@@ -203,7 +242,8 @@ void App::print(std::ostream &out) {
 }
 
 void App::print(std::ostream &out, const PrintFun &&print) {
-    out << "{" << JSF("name") << JSS(_name) << "," << JSF("uid") << _uid << "," << JSF("blocked")
+    out << "{" << JSF("name") << JSS(_name) << "," << JSF("uid") << _uid << "," << JSF("userId")
+        << userId() << "," << JSF("appId") << appId() << "," << JSF("blocked")
         << static_cast<uint32_t>(_blockMask) << "," << JSF("blockIface")
         << static_cast<uint32_t>(_blockIface) << "," << JSF("tracked") << JSB(_tracked) << ","
         << JSF("useCustomList") << JSB(_useCustomList);

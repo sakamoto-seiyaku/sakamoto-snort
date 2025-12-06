@@ -35,6 +35,46 @@ public:
     static inline const std::string saveDirSystem = _saveDir + "system/";
     static inline const std::string saveDirDomainLists = _saveDir + "domains_lists/";
 
+    // Per-user directory helpers for userId > 0
+    // User 0 continues to use the legacy paths (saveDirPackages/saveDirSystem).
+    // For defense-in-depth, userId is range-checked and the resulting path is
+    // validated to remain under the snort root directory.
+    static std::string userSaveRoot(const uint32_t userId) {
+        // Bound userId to a reasonable range (0 <= userId < 10000) to avoid
+        // unbounded directory fan-out or accidental misuse.
+        constexpr uint32_t maxUserId = 10000;
+        const uint32_t safeUserId = userId < maxUserId ? userId : (maxUserId - 1);
+
+        std::string root = _saveDir + "user" + std::to_string(safeUserId) + "/";
+
+        // Prefix check: the computed per-user root must stay within the snort
+        // directory tree. This guards against any future changes that might
+        // accidentally construct an out-of-tree path.
+        if (root.rfind(_snortDir, 0) != 0) {
+            // Fall back to the main save directory to guarantee we never
+            // escape /data/snort/.
+            return _saveDir;
+        }
+
+        return root;
+    }
+
+    static std::string userSaveDirPackages(const uint32_t userId) {
+        if (userId == 0) {
+            return saveDirPackages;
+        }
+        return userSaveRoot(userId) + "packages/";
+    }
+
+    static std::string userSaveDirSystem(const uint32_t userId) {
+        if (userId == 0) {
+            return saveDirSystem;
+        }
+        return userSaveRoot(userId) + "system/";
+    }
+
+    static void ensureUserDirs(const uint32_t userId);
+
     static inline const std::string saveDomains = _saveDir + "stats_domains";
     static inline const std::string saveDnsStream = _saveDir + "dnsstream";
     static inline const std::string saveRules = _saveDir + "rules";
@@ -188,6 +228,9 @@ public:
     void save();
 
     void restore();
+
+    // Clear entire save tree for RESETALL, including all user<N> subdirectories
+    static void clearSaveTreeForResetAll();
 };
 
 extern Settings settings;

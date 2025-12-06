@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <dirent.h>
 #include <sys/stat.h>
+#include <cstring>
 
 #include <Settings.hpp>
 
@@ -17,6 +19,16 @@ void Settings::start() {
     mkdir(saveDirSystem.c_str(), 0700);
     mkdir(saveDirDomainLists.c_str(), 0700);
     restore();
+}
+
+void Settings::ensureUserDirs(const uint32_t userId) {
+    if (userId == 0) {
+        // User 0 uses legacy paths which are created in start()
+        return;
+    }
+    mkdir(userSaveRoot(userId).c_str(), 0700);
+    mkdir(userSaveDirPackages(userId).c_str(), 0700);
+    mkdir(userSaveDirSystem(userId).c_str(), 0700);
 }
 
 void Settings::finishFirstStart() { android::base::SetProperty(_firstStartProp, "0"); }
@@ -56,4 +68,44 @@ void Settings::restore() {
         _blockIPLeaks = _saver.read<bool>();
         _maxAgeIP = _saver.read<std::time_t>();
     });
+}
+
+namespace {
+// Recursively remove all files and subdirectories in the given path
+void removeDirectoryContents(const std::string &path) {
+    DIR *dir = opendir(path.c_str());
+    if (dir == nullptr) {
+        return;
+    }
+
+    dirent *de;
+    while ((de = readdir(dir)) != nullptr) {
+        // Skip . and ..
+        if (std::strcmp(de->d_name, ".") == 0 || std::strcmp(de->d_name, "..") == 0) {
+            continue;
+        }
+
+        std::string fullPath = path + "/" + de->d_name;
+        if (de->d_type == DT_DIR) {
+            // Recursively remove subdirectory contents, then remove the directory
+            removeDirectoryContents(fullPath);
+            rmdir(fullPath.c_str());
+        } else {
+            // Remove regular file
+            std::remove(fullPath.c_str());
+        }
+    }
+    closedir(dir);
+}
+} // namespace
+
+void Settings::clearSaveTreeForResetAll() {
+    // Clear contents of the main save directory including all user<N> subdirectories
+    // This is called during RESETALL to ensure all per-user state is removed
+    removeDirectoryContents(_saveDir);
+
+    // Recreate the base directories for user 0
+    mkdir(saveDirPackages.c_str(), 0700);
+    mkdir(saveDirSystem.c_str(), 0700);
+    mkdir(saveDirDomainLists.c_str(), 0700);
 }
