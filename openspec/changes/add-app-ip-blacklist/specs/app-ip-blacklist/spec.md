@@ -1,17 +1,24 @@
 ## ADDED Requirements
 
-### Requirement: Per-app IP blacklist with highest priority
-系统 MUST 支持以 `(uid, IP)` 为 key 的 App 级 IP 黑名单；当某数据包的 `(uid, 源/目的 IP)` 命中该黑名单时，判决 MUST 为 DROP，不得被域名白名单、黑名单或 `BLOCKIPLEAKS`、接口策略所覆盖或放行。
+### Requirement: Per-app IP blacklist as supplementary filter
+系统 MUST 支持以 `(uid, 对端 IP)` 为 key 的 App 级 IP 黑名单，其中“对端 IP”定义为出站流量的目的 IP、入站流量的源 IP。本黑名单在 NFQUEUE 判决链路中作为现有域名/接口规则之后的一道补充过滤：当全局阻断已启用且某数据包经由域名规则（含白名单/黑名单、自定义规则）、`BLOCKIPLEAKS` 与接口策略处理后仍未被这些规则明确 ACCEPT 或 DROP 时，若其 `(uid, 对端 IP)` 命中该黑名单，则最终判决 MUST 为 DROP。由域名白名单产生的允许判决以及由 `BLOCKIPLEAKS` 或接口策略产生的丢弃判决 SHALL 不受 IP 黑名单影响。
 
 #### Scenario: Packet without domain is dropped by app IP blacklist
-- **WHEN** NFQUEUE 收到某 App 的数据包，该包对应的 IP 未能映射到任何 `Domain`（例如未经历 DNS 或 DNS 未被监听）  
-- **AND** `(uid, IP)` 已被加入该 App 的 IP 黑名单  
-- **THEN** `PacketManager` 在判决时 SHALL 直接返回 DROP，不依赖域名信息或域名黑名单状态  
+- **WHEN** NFQUEUE 收到某 App 的数据包，该包对应的对端 IP 未能映射到任何 `Domain`（例如未经历 DNS 或 DNS 未被监听）  
+- **AND** 全局阻断 (`BLOCK`) 已启用，且该包未被接口策略或其他现有规则明确 DROP  
+- **AND** `(uid, 对端 IP)` 已被加入该 App 的 IP 黑名单  
+- **THEN** `PacketManager` 在判决时 SHALL 将该包判为 DROP  
 
-#### Scenario: App IP blacklist overrides domain allow
-- **WHEN** 某 App 对某域名被判定为“允许”（例如在白名单或不在任何黑名单中）  
-- **AND** 该域名解析得到的某个 IP 被加入该 App 的 IP 黑名单  
-- **THEN** 针对该 IP 的数据包 SHALL 被直接 DROP，即使 `App::blocked(domain)` 返回未阻断  
+#### Scenario: Domain whitelist bypasses app IP blacklist
+- **WHEN** 某 App 对某域名被判定为“允许”（例如命中白名单或其它授权规则）  
+- **AND** 该域名解析得到的某个对端 IP 被加入该 App 的 IP 黑名单  
+- **THEN** 在全局阻断已启用且该包未被接口策略等规则要求 DROP 的前提下，针对该 IP 的数据包 SHALL 继续被 ACCEPT，IP 黑名单 SHALL 不改变这一允许判决  
+
+#### Scenario: IP blacklist active when BLOCKIPLEAKS is disabled
+- **WHEN** 某 App 的 `(uid, 对端 IP)` 被加入 IP 黑名单  
+- **AND** 针对该 IP 的流量不命中域名白名单，且未被接口策略要求 DROP  
+- **AND** `BLOCK` 已启用但 `BLOCKIPLEAKS` 被关闭  
+- **THEN** 针对该 `(uid, 对端 IP)` 的数据包 SHALL 仍然被 IP 黑名单判为 DROP  
 
 ### Requirement: Snapshot-based lookup on hot path
 NFQUEUE 判决热路径 MUST 仅通过只读 snapshot 结构查询 `(uid, IP)` 黑名单，不得在 `PacketManager::make` 中执行加锁、磁盘访问或复杂数据结构重构；每次判决对 IP 黑名单的查询开销 MUST 限于一次 snapshot 指针加载和有限次哈希查找。

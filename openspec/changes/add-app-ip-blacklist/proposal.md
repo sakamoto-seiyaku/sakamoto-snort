@@ -9,7 +9,7 @@
 随着精细化控制需求增加，需要为每个 App 提供独立的 IP 黑名单能力，使其可以在不依赖域名、规则和列表的前提下，对指定 IP 直接 DROP，同时保持 NFQUEUE 热路径的性能与并发约束。
 
 ## What Changes
-- 新增“按 App + IP 维度”的黑名单能力，key 为 `(uid, IP)`，命中时 NFQUEUE 热路径 MUST 直接 DROP，对域名信息与域名黑/白名单完全独立。  
+- 新增“按 App + IP 维度”的黑名单能力，key 为 `(uid, 对端 IP)`（出站为目的 IP，入站为源 IP），在全局阻断开启时仅作为域名/接口规则之后的一道补充过滤：当现有域名规则（含白名单/黑名单、自定义规则）、`BLOCKIPLEAKS` 与接口策略未对某个包给出明确 ACCEPT/DROP 结论时，若其命中该黑名单，则 NFQUEUE 热路径 MUST 将其判为 DROP；由域名白名单产生的允许以及由 `BLOCKIPLEAKS` 或接口策略产生的丢弃不受该黑名单影响。  
 - 在 `PacketManager::make` 中引入只读 snapshot 结构：  
   - 使用 `std::shared_ptr<const Snapshot>` + atomic load 承载 `(uid → {IPv4, IPv6})` 集合；  
   - NFQUEUE 热路径仅做一次 snapshot 指针加载和最多两次哈希查找，不引入新锁。  
