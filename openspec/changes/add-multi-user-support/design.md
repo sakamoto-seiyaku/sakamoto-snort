@@ -9,21 +9,22 @@
 ## Goals / Non-Goals
 - Goals:  
   - 内部统一使用完整 Linux UID，消除 `% 100000` 带来的多用户信息丢失；  
-  - 基于 `/data/system/packages.list` 单一数据源，为每个 `(package, userId)` 建立独立 App 实例；  
+  - 基于系统文件聚合（`/data/system/packages.list` + `/data/system/users/<userId>/package-restrictions.xml`），为每个 `(package, userId)` 建立独立 App 实例；  
   - 引入 per-user 保存目录，实现多用户统计与配置的物理隔离；  
   - 在不新增控制命令的前提下，通过参数扩展支持多用户选择（UID 模式与包名 + userId 模式）；  
   - 为 DNS/Packet/Activity 流事件补充 `uid/userId` 维度，使上层 UI 可以按用户视角展示。  
 - Non-Goals:  
   - 不改变“全局列表/配置”的设备级语义，例如全局黑白名单、规则、总览统计仍按设备级视角工作；  
-  - 不在本次改动中引入新的网络协议或额外数据源（例如新的清单文件或 `pm` 命令）。  
+  - 不在本次改动中引入新的网络协议；不依赖 `pm` 命令或 Binder 查询，安装状态与 UID 映射仅来自系统已有持久化文件。  
 
 ## Decisions
 - UID 模型：  
   - 统一以完整 Linux UID 作为内部主键，`App` 暴露 `uid()/userId()/appId()` helper，`AppManager`、`DnsListener`、`PacketListener` 等所有入口不再对 UID 做取模。  
   - 对外 API 中 `<uid>` 的含义升级为完整 Linux UID；旧客户端仅在 user 0 上使用 appId 范围的 UID 时行为不变。  
 - 数据源与安装状态：  
-  - 仅依赖 `/data/system/packages.list` 获取 `(package, uid)` 映射，不引入新的持久化或命令依赖。  
-  - 解析时限制只使用前两个 token（`name uid`），其余丢弃；对 uid 使用 helper 过滤非应用 UID，对 name 做基础合法性检查。  
+  - `/data/system/packages.list` 作为全局 `packageName -> appId` / `appId -> names[]`（shared UID）映射来源；解析时限制只使用前两个 token（`name uid`），其余丢弃；对 appId 使用 helper 过滤非应用 UID，对 name 做基础合法性检查。  
+  - per-user 安装状态来自 `/data/system/users/<userId>/package-restrictions.xml`（读取 `<pkg name="...">` 的 `inst` 等字段），用户集合来自 `/data/system/users/userlist.xml`（或 users 目录枚举兜底）。  
+  - `PackageListener` 通过上述两类文件聚合出 `fullUid -> names[]`，再驱动 `AppManager.install/remove`。  
 - 持久化路径：  
   - user 0 沿用当前的 `saveDirPackages/saveDirSystem/saveDirDomainLists`；  
   - 对 `userId > 0` 的 App，通过 `Settings::userSaveRoot/userSaveDirPackages/userSaveDirSystem` 生成 `user<userId>/...` 目录，并集中在 Settings 层创建。  
@@ -52,9 +53,9 @@
 为避免实现偏离设计文档中的边界约束，在编码阶段需要遵守以下关键规则（对应 `docs/SNORT_MULTI_USER_REFACTOR.md` 中的若干条目）：  
 
 - UID 绝不再做截断或取模：  
-  - 仅允许在 packages.list 解析阶段通过 `isAppUid(uid)` 过滤非应用 UID；  
+  - 仅允许在包安装状态聚合阶段（`packages.list` 与 per-user `package-restrictions.xml`）通过 `isAppUid(uid)`/appId 范围校验过滤非应用 UID；  
   - 其它所有路径（NFQUEUE 的 `NFQA_UID`、netd socket UID、控制命令显式传入的 `<uid>` 等）都必须将 UID 视为“内核事实”，不再执行 `% 100000` 或其它形式的截断。  
-- App 集合的唯一来源是 packages.list + 运行期 UID：  
+- App 集合的唯一来源是“包安装状态聚合 + 运行期 UID”：  
   - `AppManager::restore()` 只能在已有 `_byUid` 集合基础上恢复内容，**不得创建新的 App**；  
   - App 的生命周期仅由 `PackageListener::updatePackages()`（安装/卸载）和运行期的 `AppManager::make(uid)` 驱动，任何额外的数据源都不得独自创建 App。  
 - 所有 `<uid|str>` 命令统一走 AppSelector：  

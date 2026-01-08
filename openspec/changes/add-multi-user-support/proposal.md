@@ -9,9 +9,11 @@
 随着多用户设备与多用户安装场景的增多，需要升级后端模型，使其在内部完整感知 Linux UID、按用户分层持久化，同时保持对现有单用户调用方式的兼容。
 
 ## What Changes
-- 统一内部模型为“完整 Linux UID + `/data/system/packages.list` 单一数据源”，移除核心路径上对 UID 的 `% 100000` 截断。  
+- 统一内部模型为“完整 Linux UID + 系统文件聚合数据源”，移除核心路径上对 UID 的 `% 100000` 截断：  
+  - `/data/system/packages.list` 提供全局 `packageName ↔ appId`/shared-UID 信息；  
+  - `/data/system/users/<userId>/package-restrictions.xml` 提供 per-user 安装状态（例如 `inst` 等）。  
 - 在 `Settings` 中引入按用户分层的保存目录（`user<userId>/packages` / `user<userId>/system`），user 0 继续沿用当前根目录，保证向后兼容。  
-- 重构 `PackageListener` 和 `AppManager` 的安装/删除/恢复逻辑，以 `/data/system/packages.list` 为唯一权威数据源，为每个 `(package, userId)` 生成独立的 App 实例。  
+- 重构 `PackageListener` 和 `AppManager` 的安装/删除/恢复逻辑：通过 `packages.list` + per-user `package-restrictions.xml` 聚合出 `uid -> names[]`，为每个 `(package, userId)` 生成独立的 App 实例；不依赖 `pm` 命令。  
 - 在控制协议层统一实现 AppSelector：  
   - `<uid>` 始终解释为完整 Linux UID；  
   - `<str>` 解释为包名，可选追加 `USER <userId>` 子句；  
@@ -27,4 +29,3 @@
   - 控制协议与选择逻辑：`Control` 及所有接受 `<uid|str>` 的命令实现。  
   - 数据路径与流事件：`DnsListener`, `PacketListener`, `PacketManager`, `Activity`, `Streamable`。  
   - 全局重置逻辑：`Control::cmdResetAll` 及相关 `reset()` 实现。  
-

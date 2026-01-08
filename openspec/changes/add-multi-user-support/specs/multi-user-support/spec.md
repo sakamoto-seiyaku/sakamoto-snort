@@ -11,23 +11,36 @@
 - **WHEN** `DnsListener` 从 `sucre-snort-netd` 连接收到带 UID 的 DNS 查询信息  
 - **THEN** 系统 SHALL 使用该完整 UID 查找或创建对应的 App，并在后续 DNS 统计与 Activity 流中始终使用该 UID  
 
-### Requirement: packages.list as single source of truth
-系统 MUST 仅使用 `/data/system/packages.list` 作为 App 安装状态与 UID 映射的权威数据源，不依赖额外清单或 `pm` 命令；解析时仅使用每行的包名与 UID 字段，其余内容忽略。
+### Requirement: Install-state aggregation from system files
+系统 MUST 通过读取系统持久化文件聚合得到多用户下的 App 安装状态与 UID 映射，而不是依赖 `pm` 命令或其他运行时命令执行；聚合的数据源至少包括：  
+- `/data/system/packages.list`：提供全局 `packageName -> appId` 与 `appId -> names[]`（shared UID/别名集合）映射；解析时仅使用每行前两个 token（`<packageName> <uid>`），其中 `<uid>` 视为 user 0 的 UID（等价 appId），其余内容忽略。  
+- `/data/system/users/<userId>/package-restrictions.xml`：提供 per-user 安装状态；实现 MUST 解析 `<pkg name="...">` 的 `inst` 布尔属性（缺省视为 `true`）。  
+系统 MUST 通过 `fullUid = userId * 100000 + appId`（或等价 helper）构建每个 user 下的实例，并为每个 `(package, userId)` 生成独立 App 实例。
 
-#### Scenario: Valid packages.list line creates or updates App
-- **WHEN** `PackageListener` 读取到一行格式为 `<packageName> <uid> ...` 且 `<uid>` 为有效应用 UID 的记录  
-- **THEN** 系统 SHALL 在内存中为该 UID 建立或更新对应的包名列表，并通过 `AppManager` 确保存在对应的 App 实例  
+#### Scenario: Work-profile-only install creates only that user instance
+- **GIVEN** 某包在 `packages.list` 中存在且其 `appId` 为有效应用 UID  
+- **WHEN** 该包在 user 10 的 `package-restrictions.xml` 中 `inst=true`，且在 user 0 的对应文件中 `inst=false`（或不存在该 user）  
+- **THEN** 系统 SHALL 仅创建/维护 `uid = 10*100000 + appId` 对应的 App 实例，而不会错误创建 user 0 的实例  
 
-#### Scenario: Invalid or non-app lines are ignored
-- **WHEN** `PackageListener` 遇到格式错误、UID 非应用范围或包含非法字符的行  
-- **THEN** 系统 SHALL 安静跳过该行，不创建任何 App，也不破坏已有映射  
+#### Scenario: Same package installed in multiple users yields multiple uids
+- **GIVEN** 某包在 `packages.list` 中存在且其 `appId` 为有效应用 UID  
+- **WHEN** 该包在多个 user 的 `package-restrictions.xml` 中均为 `inst=true`  
+- **THEN** 系统 SHALL 为每个 userId 生成各自的 `fullUid` 并创建多个独立 App 实例（UID 不同），从而实现多用户隔离  
 
-### Requirement: Security constraints for packages.list parsing and path construction
-为防止利用 packages.list 或持久化路径的输入构造进行注入或路径遍历攻击，系统 MUST 在解析包名与构造 per-user 路径时执行安全约束。
+#### Scenario: Transient parse/read failure does not uninstall apps
+- **WHEN** `PackageListener` 在一次更新中无法读取或解析某个必要输入文件（例如 `package-restrictions.xml` 正在原子替换导致短暂不可读）  
+- **THEN** 系统 SHALL 保持上一份已知的聚合快照不变，并在后续重试更新；不得因为本次失败而将大量 App 误判为卸载并触发 `appManager.remove`  
+
+#### Scenario: Malformed input is ignored safely
+- **WHEN** `PackageListener` 遇到格式错误、包名包含非法字符、appId/uid 非应用范围、或 XML 中出现无法解析的 `<pkg>` 条目  
+- **THEN** 系统 SHALL 安静跳过该条目，不创建任何 App，也不破坏已有映射  
+
+### Requirement: Security constraints for package-state parsing and path construction
+为防止利用包状态文件或持久化路径的输入构造进行注入或路径遍历攻击，系统 MUST 在解析 `/data/system/packages.list` 与 `/data/system/users/<userId>/package-restrictions.xml` 时对包名与数值字段执行安全约束，并在构造 per-user 路径时执行安全约束。
 
 #### Scenario: Package name with control characters is rejected
-- **WHEN** `PackageListener` 在 packages.list 中遇到某行的包名包含换行符、NUL 或其他控制字符  
-- **THEN** 系统 SHALL 安静跳过该行，不创建 App，也不更新现有映射，以防止类似 CVE-2024-0044 的注入攻击  
+- **WHEN** `PackageListener` 在 `packages.list` 或 `package-restrictions.xml` 中遇到包名包含换行符、NUL 或其他控制字符  
+- **THEN** 系统 SHALL 安静跳过该条目，不创建 App，也不更新现有映射，以防止注入与解析混淆类攻击  
 
 #### Scenario: Per-user path construction validates userId and prevents traversal
 - **WHEN** 系统为 `userId > 0` 的 App 构造持久化路径  

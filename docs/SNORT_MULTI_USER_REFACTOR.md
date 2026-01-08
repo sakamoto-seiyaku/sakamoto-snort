@@ -10,7 +10,9 @@
 ## 1. 最终方案（当前结论）
 
 - 内部统一使用完整 Linux UID，不再对 UID 取模；`App::_uid`、`AppManager` 等全部以完整 UID 为唯一键。
-- 数据源统一为 `/data/system/packages.list`：一行代表一个 `(userId, package)` 实例，包含完整 UID；不再引入额外清单或 `pm` 依赖。
+- 数据源与职责拆分（均为系统文件，只读解析聚合，不依赖执行 `pm` 等命令）：
+  - `/data/system/packages.list`：提供全局 `packageName ↔ appId`（以及 shared UID 的别名集合等）信息；**不表达 per-user 安装状态**。
+  - `/data/system/users/<userId>/package-restrictions.xml`：提供 per-user 的包安装状态（AOSP 字段名例如 `inst`）；用户集合来自 `/data/system/users/userlist.xml`（或枚举 `/data/system/users/` 数字目录兜底）。
 - 所有现有“传 UID”参数的命令保持不变，只是 UID 的取值从“appId”升级为“完整 Linux UID（含 userId 高位）”：  
   - 对于旧客户端，仍然可以像过去一样只在 user 0 上使用 appId 范围内的 UID，行为不变；  
   - 对于新客户端，如果传入完整 Linux UID，则可以显式指向任意用户下的实例，这一能力只在新调用方有意识使用时才生效。
@@ -32,12 +34,11 @@
 
 ### 2.2 数据源调研与事实确立
 
-- 在 Android 16 设备上检查 `/data/system/packages.list`：
-  - 同一包在多个用户下安装时，对应多行；卸载某个用户后只保留实际安装的那一行。
-  - 系统应用在新建用户下会自动出现，对应新的 UID。
+- `/data/system/packages.list` 的定位：全局 `packageName ↔ appId`（以及 shared UID 的别名集合）索引；写入端在 AOSP 仍标注“未处理多用户”，因此该文件**不承载 per-user 安装状态**，也不能直接用于判断某包“安装在哪些 userId”。
+- per-user 安装状态的权威来源：`/data/system/users/<userId>/package-restrictions.xml`（其中 `<pkg name="...">` 的 `inst` 等字段描述该 user 下的安装/隐藏/停用状态）。
 - 结合公开资料与设备验证，确认 UID 公式：
   - `linuxUid = userId * 100000 + appId`，系统应用与普通应用一致。
-- 结论：仅依靠 `/data/system/packages.list` 即可获得完整的 `(userId, package, uid)` 映射，无需额外数据源。
+- 结论：多用户下需要通过 `packages.list` + per-user `package-restrictions.xml` 做文件级聚合，才能得到正确的 `(userId, package, uid)` 安装视图；并保留“运行期先见 UID、后补全名称”的兜底路径。
 
 ### 2.3 方案空间与取舍
 
@@ -50,7 +51,7 @@
 
 ### 2.4 最终决策理由
 
-- 统一内部模型为“完整 UID + `/data/system/packages.list` 单一数据源”，保证多用户信息不再丢失。
+- 统一内部模型为“完整 UID + 文件聚合数据源（`packages.list` + per-user `package-restrictions.xml`）”，保证多用户安装状态与 UID 信息不丢失。
 - 保留现有命令集，通过扩展参数而非新增命令来支持多用户：
   - 兼容旧用法（仅给包名 → 默认 user 0），保证单用户设备和主用户行为完全不变。
   - 允许新客户端通过完整 UID 或“包名 + userId”访问任意用户实例。
@@ -59,9 +60,10 @@
 
 ### 2.5 外部引用（事实来源）
 
-- Android 多用户 UID 公式与 `/data/system/packages.list` 多用户行为：
-  - 来源为 AOSP 文档与在目标设备（Android 16, AOSP-based ROM）上的实际验证结果。
-  - 确认同一系统应用在不同用户下拥有不同 UID（高位 userId 不同）。
+- Android 多用户 UID 公式与包安装状态文件：
+  - UID 公式来源为 AOSP 文档与设备验证：同一 appId 在不同 userId 下形成不同 Linux UID（高位 userId 不同）。
+  - `packages.list`：全局 `packageName ↔ appId`/shared-UID 信息；不提供 per-user 安装状态。
+  - `package-restrictions.xml`：per-user 安装状态权威来源（例如 `inst`/hidden/stopped 等）。
 
 ## 3. 兼容性与安全约束（固定前提）
 
@@ -69,9 +71,9 @@
   - 仅保证 org.sucre.app 的对接接口，以及 sucre-snort 的对外控制协议保持向前兼容（命令名与基本语义不变）。
   - 不承诺旧版本生成的本地保存文件（统计快照、应用配置等）在新版本下完全可用；会尽量兼容，但不做保证。
 
-- `packages.list` 解析安全：
+- `packages.list` / `package-restrictions.xml` 解析安全：
   - 已知存在与 `packages.list` 相关的换行注入安全漏洞（CVE-2024-0044 系列，2024 年起在 AOSP 中修复）。
-  - 读取 `/data/system/packages.list` 时必须对 UID 做范围校验（仅接受合法应用 UID），并对包名做格式校验（拒绝包含换行符、NUL 等控制字符）。
+  - 读取 `/data/system/packages.list` 与 `/data/system/users/<userId>/package-restrictions.xml` 时必须对包名做格式校验（拒绝包含换行符、NUL 等控制字符），并对 appId/UID 与 userId 做范围校验（仅接受合法应用 UID）。
   - 本文后续讨论默认“UID 与包名已在单点完成严格校验”，不再在各处重复展开。
 
 - userId 用于构建路径的约束：
@@ -121,7 +123,7 @@
 1. 内部 UID 模型与取值约束
    - `App::Uid` 在整个进程内统一表示“完整 Linux UID”（含 userId 高位），类型仍为 32 位无符号整型，禁止在任何内部逻辑中再对 UID 做 `% 100000` 或其它压缩映射。
    - 约定 Android 应用 UID 满足 `uid = userId * AID_USER + appId`，其中 `AID_USER`、`AID_APP_START`、`AID_APP_END` 等常量统一来源于 AOSP 提供的系统头文件（例如 `android_filesystem_config.h`），`userId >= 0`。
-   - 仅针对 `/data/system/packages.list` 这一文本数据源，在解析时通过统一的 “应用 UID 校验函数”判断某个 UID 是否属于“应用 UID”（例如 `appId` 是否落在 `[AID_APP_START, AID_APP_END]`），并结合包名的长度/字符检查来抵御注入类问题。
+   - 针对离线数据源（`/data/system/packages.list` 与 per-user `/data/system/users/<userId>/package-restrictions.xml`），在解析/聚合时对 appId/userId 做范围校验（仅接受合法应用 UID），并结合包名的长度/字符检查来抵御注入类问题。
    - NFQUEUE 的 `NFQA_UID`、netd socket 等运行时 UID 来源不再额外做合法性过滤，直接视为“内核事实”，交由 `AppManager::make(uid)` 按完整 UID 处理。
    - `App`、`AppManager`、`Activity`、`DnsRequest` 等内部对象中的 UID 语义全部切换为“完整 Linux UID”；任何地方如需 appId，需要显式通过 helper 从 UID 反推，不能再假定 `uid` 本身就是 appId。
 
@@ -166,7 +168,7 @@
      - 当未给出 `userId` 时，仅在主用户（user 0）范围内查找；找不到则返回空结果，不在其它用户中回退匹配。
    - 保留现有 `find(const std::string &name)` 接口作为兼容层包装，语义等价于 `findByName(name, /*no userId*/)`；强调该接口仅用于兼容场景，核心热路径只使用 UID 相关接口（`make(uid)` / `find(uid)`）。
 
-### 第二部分（条目 8–14）：多用户持久化与 packages.list 协同
+### 第二部分（条目 8–14）：多用户持久化与包安装状态聚合协同
 
 8. AppSelector / Control::arg2app 的统一选择规则
    - 在 `Control` 层抽象出“App 选择器”的概念：针对所有使用 `<uid|str>` 的命令，统一走一条解析路径，避免各命令自行解析 `<uid|str>` 并把字符串逻辑渗透到核心模块。
@@ -210,30 +212,33 @@
 
 12. AppManager::save / restore 在多用户下的职责
    - `save()` 行为基本不变：遍历 `_byUid` 中的所有 App，调用各自的 `save()`；每个 App 按第 10 条的路径规则写入自己的配置与统计。该接口仅由守护进程生命周期管理代码（例如 `snortSave()`）调用，不通过控制协议直接暴露。
-   - `restore()` 需要扩展为多目录扫描，但遵循“先由 `PackageListener` 通过 `packages.list` 建立 UID ↔ name 映射，再根据已有 App 恢复内容”的原则：
+   - `restore()` 需要扩展为多目录扫描，但遵循“先由 `PackageListener` 通过 `packages.list` + per-user `package-restrictions.xml` 建立 UID ↔ name 映射，再根据已有 App 恢复内容”的原则：
      - 首先恢复 `_stats` 全局统计；
      - 针对 user 0：
        - 扫描 `saveDirSystem`，文件名为 appId：利用第 2 条 helper 推出完整 UID，在 `_byUid` 中存在对应 UID 时调用 `App::restore` 恢复系统 App 内容；
        - 扫描 `saveDirPackages`，文件名为包名：仅当 `_byUid` 中存在某个 App 与该 name 匹配时才恢复，否则视为孤儿文件并可按当前行为清理；
      - 针对其他用户：
        - 遍历 `_saveDir` 下形如 `user<userId>/system/` 与 `user<userId>/packages/` 的子目录；`system/` 下的文件名仍为 appId，利用 helper 推出完整 UID，并对已存在的 App 对象调用 `restore`；`packages/` 目录按 `(userId, packageName)` 匹配已有 App 后再恢复。
-   - 为避免在 `restore()` 阶段与 `PackageListener::updatePackages()` 互相踩踏，`restore()` 仅负责“已有 App 对象对应文件的内容恢复”，不主动创建新的 UID；App 对象可以在运行期由 `AppManager::make(uid)`（例如 NFQUEUE/DNS 热路径首次遇到某 UID 时）或 `PackageListener::updatePackages()` 创建，`packages.list` 仍然是 UID ↔ 包名映射的权威来源，AppManager 内部始终以 UID 为唯一主键。
+   - 为避免在 `restore()` 阶段与 `PackageListener::updatePackages()` 互相踩踏，`restore()` 仅负责“已有 App 对象对应文件的内容恢复”，不主动创建新的 UID；App 对象可以在运行期由 `AppManager::make(uid)`（例如 NFQUEUE/DNS 热路径首次遇到某 UID 时）或 `PackageListener::updatePackages()` 创建，**UID ↔ 包名映射以 `PackageListener` 的聚合结果为准**（包名/appId 来自 `packages.list`，per-user 安装状态来自 `package-restrictions.xml`），AppManager 内部始终以 UID 为唯一主键。
 
 13. PackageListener::updatePackages 的多用户语义
-   - 继续以 `Settings::packagesList` (`/data/system/packages.list`) 为唯一数据源，但按“每行一个 `(package, uid)` 对”解读，其中 `uid` 为完整 Linux UID。
-   - 读取流程细化为：
-     - 逐行读取时仅使用前两个 token（`name` 与 `uid`），剩余内容通过 `ignore(..., '\n')` 丢弃；
-     - 通过第 1 条的 UID 校验函数过滤掉非应用 UID 或格式异常行，保证仅为“应用 UID”维护映射；
-     - 对于通过校验的行，将 `name` 追加到 `_names[uid]` 对应的向量中，允许多包共享同一 UID（系统/共享 UID 场景）。其中 `_names` 的键始终是 UID，映射仅在 `PackageListener` 内部使用，不向核心模块泄露。
-   - 在完成一次完整扫描后，再与旧快照做 diff：
-     - 对每个新的 `(uid, names)` 调用 `appManager.install(uid, names)` 安装新 App；
-     - 对旧快照中已不存在的 UID 调用 `appManager.remove(uid, names)` 卸载对应 App。
-   - 多用户情况下，同一 `packageName` 在不同 `userId` 下会出现在多条记录中，由于 `uid` 不同，它们自然成为多个独立的 `_names[uid]` 项；`AppManager` 以 UID 为键创建多个 App，即从数据源上实现多用户拆分。
+   - 数据源由两部分组成（均为读文件解析，不执行 `pm`）：  
+     - `Settings::packagesList`（`/data/system/packages.list`）：提供全局 `packageName -> appId` 以及 `appId -> names[]`（shared UID / 别名集合）映射；解析时仅使用每行前两个 token（`name uid`），其中 `uid` 视为 user 0 的 UID（等价 appId），其余字段丢弃。  
+     - `/data/system/users/<userId>/package-restrictions.xml`：提供 per-user 的已安装包集合；读取 `<pkg name="...">` 的 `inst` 属性（缺省视为 true），并以用户集合（`/data/system/users/userlist.xml` 或 users 目录枚举）为范围进行聚合。  
+   - `updatePackages()` 的输出仍然是 `_names: fullUid -> names[]`（键始终是完整 Linux UID）：  
+     - 对每个 `(userId, packageName)` 的 installed 实例，通过 `packages.list` 查到 `appId`，再计算 `fullUid = userId * 100000 + appId`；  
+     - 将该 `appId` 对应的 `names[]` 赋给 `_names[fullUid]`，从而自然支持 shared UID（多个包共享同一 appId）。  
+   - 在完成一次完整聚合后，与旧快照做 diff：  
+     - 对每个新的 `(fullUid, names)` 调用 `appManager.install(fullUid, names)` 安装新 App；  
+     - 对旧快照中已不存在的 UID 调用 `appManager.remove(fullUid, names)` 卸载对应 App。  
+   - 多用户情况下：  
+     - 同一包在多个 user 下都 installed → 生成多个不同 `fullUid` 条目（userId 不同）；  
+     - 某包只在工作空间/某个 user 下 installed → 仅生成该 user 的条目，不会错误落到 user 0。
 
 14. PackageListener 与 AppManager 的协同顺序
-   - 启动阶段仍先由 `PackageListener::updatePackages()` 基于 `packages.list` 初始化基础 App 集合，再由 `AppManager::restore()` 从磁盘恢复各 App 的持久化内容；两者均在守护进程初始化阶段由 `sucre-snort` 主函数统一调度。
-   - 运行期当 `packages.list` 更新时（安装/卸载应用或用户），`PackageListener` 仅负责维护 UID ↔ 包名映射并调用 `appManager.install/remove`，不直接操作任何持久化文件；持久化文件的读写由各模块的 `save/restore` 负责，`AppManager` 仍然只以 UID 为主键管理 App 实例。
-   - 对于 race 情况（例如 DNS/Packet 在某 UID 第一次出现前先于 `packages.list` 更新），保持当前行为：允许临时存在“没有名称的 App”（由 `AppManager::make(uid)` 创建并挂在 `_byUid` 上），一旦 `PackageListener` 在 `packages.list` 中看到该 UID，即通过 `install(uid, names)` 补全名称和别名；在多用户场景下，同一包在不同用户下拥有不同 UID，这一行为按 UID 自然区分，不需要额外的 userId 分支处理。
+   - 启动阶段仍先由 `PackageListener::updatePackages()` 基于 `packages.list` + per-user `package-restrictions.xml` 初始化基础 App 集合，再由 `AppManager::restore()` 从磁盘恢复各 App 的持久化内容；两者均在守护进程初始化阶段由 `sucre-snort` 主函数统一调度。
+   - 运行期当包相关文件更新时（`packages.list`、`/data/system/users/userlist.xml`、任一 user 的 `package-restrictions.xml` 发生变化），`PackageListener` 重新聚合 UID ↔ 包名映射并调用 `appManager.install/remove`，不直接操作任何持久化文件；持久化文件的读写由各模块的 `save/restore` 负责，`AppManager` 仍然只以 UID 为主键管理 App 实例。
+   - 对于 race 情况（例如 DNS/Packet 在某 UID 第一次出现前先于聚合完成），保持当前行为：允许临时存在“没有名称的 App”（由 `AppManager::make(uid)` 创建并挂在 `_byUid` 上），一旦 `PackageListener` 的聚合结果中出现该 UID，即通过 `install(uid, names)` 补全名称和别名；在多用户场景下，同一包在不同用户下拥有不同 UID，这一行为按 UID 自然区分，不需要额外的 userId 分支处理。
 
 ### 第三部分（条目 15–21）：控制协议与命令语义
 
@@ -295,7 +300,7 @@
 21. DNSListener / PacketListener 中 UID 的使用
    - `DnsListener::clientRun` 在读取 UID 时，不再对其做任何取模或裁剪，直接以完整 UID 调用 `appManager.make(uid)`，并据此选择 App 实例。
    - `PacketListener::callback` 在 NFQUEUE 报文中读取到的 `NFQA_UID` 同样被视为完整 UID，直接传入 `appManager.make(uid)`。
-   - 不针对 UID 做额外的“异常值防御”或特殊聚合处理；未通过 `packages.list` 建立名称映射的 UID 如有出现，仅在统计和配置层面表现为“无名称的 App”，不会影响其它 App 的行为。
+   - 不针对 UID 做额外的“异常值防御”或特殊聚合处理；未通过包安装状态聚合（`packages.list` + per-user `package-restrictions.xml`）建立名称映射的 UID 如有出现，仅在统计和配置层面表现为“无名称的 App”，不会影响其它 App 的行为。
 
 ### 第四部分（条目 22–26）：流数据、RESETALL 与兼容策略
 
@@ -323,7 +328,7 @@
      - 在 `/data/snort/save` 根目录下递归清理所有用户的数据，包括 `saveDirPackages` / `saveDirSystem` / `saveDirDomainLists` 以及 `user<userId>/packages/`、`user<userId>/system/` 等子目录；  
      - 即一次 `RESETALL` 会清掉所有 userId 对应的 App / 域名 / 流数据。  
    - `RESETALL` 是本设计中唯一会同时重置所有用户配置与统计数据的命令特例；其它命令（含 `APP.RESET<v>` 系列）按前文约定的 AppSelector / `USER <userId>` 语义工作。  
-   - `RESETALL` 完成后，`PackageListener::updatePackages()` 基于 `/data/system/packages.list` 重新构建 UID ↔ 包名映射，多用户 App 集合在后续流量到达时按完整 UID 重新创建。
+   - `RESETALL` 完成后，`PackageListener::updatePackages()` 基于 `packages.list` + per-user `package-restrictions.xml` 重新聚合 UID ↔ 包名映射，多用户 App 集合在后续流量到达时按完整 UID 重新创建。
 
 24. 兼容性与迁移策略  
    - 不在守护进程内部实现复杂迁移逻辑。旧数据能按当前格式解析则继续使用，解析失败时直接丢弃。跨版本、跨用户的精细迁移由前端管理 APP 的导出/导入负责。  
@@ -346,7 +351,7 @@
      - `DNSSTREAM.START` / `PKTSTREAM.START` / `ACTIVITYSTREAM.START` 默认输出所有用户事件；在客户端侧按 `userId` 过滤出 user 0 或 user 10 的事件，验证事件 JSON 中的 `uid` / `userId` 字段与预期一致。  
    - RESET 行为与兼容性：  
      - 在多用户设备上执行 `APP.RESET<v> ALL`，确认所有用户下所有 App 的对应视图统计都被清空；执行 `APP.RESET<v> ALL USER 10` 时仅清空 user 10 下 App 的统计，user 0 的统计保持不变；  
-     - 在已存在 `user<userId>/...` 子目录时执行 `RESETALL`，确认 `/data/snort/save` 下所有用户数据被清理，`Settings` 全局开关回到默认值，后续通过 `packages.list` 自动重建 App 集合；  
+     - 在已存在 `user<userId>/...` 子目录时执行 `RESETALL`，确认 `/data/snort/save` 下所有用户数据被清理，`Settings` 全局开关回到默认值，后续通过包安装状态聚合自动重建 App 集合；  
      - 在仅有主用户的设备上，对比旧版本与新版本下 `RESETALL` 的行为，确认用户感知上仍然等价于“一键恢复到初始状态”。  
    - 持久化、回滚与安全：  
      - 从旧版本升级到新版本后，在 user 0 下验证旧配置（自定义列表、阻断配置等）仍按预期生效；  
@@ -369,8 +374,8 @@
 
 - **UID 绝不再做截断或取模**：  
   - 现有代码中只有两处对 UID 做了 `% 100000`：`AppManager::make` 与 `Control::arg2app`。重构时必须**全部移除**，并确保其它任何新代码中都不再出现类似逻辑；  
-  - 唯一允许“过滤 UID”的地方是在 `packages.list` 解析阶段使用 `isAppUid(uid)`，其余路径一律把 UID 视为内核事实。
-- **App 集合的唯一来源是 `packages.list` + 运行期 UID**：  
+  - 唯一允许“过滤 UID”的地方是在包安装状态解析/聚合阶段（`packages.list` 与 per-user `package-restrictions.xml`）使用 `isAppUid(uid)` / appId 范围校验，其余路径一律把 UID 视为内核事实。
+- **App 集合的唯一来源是“包安装状态聚合 + 运行期 UID”**：  
   - `AppManager::restore()` 只能在已有 `_byUid` 集合基础上恢复内容，**不得创建新的 App**；  
   - App 的生命周期只由 `PackageListener::updatePackages()`（安装/卸载）和运行期的 `AppManager::make(uid)` 驱动。
 - **所有 `<uid|str>` 命令统一走 AppSelector**：  
@@ -464,18 +469,18 @@
   - 多用户场景下如需精确定位实例，必须通过 UID 或 `(name, userId)` 调用 `findByName`，而不是用简单的 `find(name)`。
 
 3) 匿名 App 与 `install(uid, names)` 的协同语义  
-- 运行期可能出现 “先在 DNS/NFQUEUE 路径中看到某个 UID，后在 `packages.list` 中看到对应包名” 的顺序：  
+- 运行期可能出现 “先在 DNS/NFQUEUE 路径中看到某个 UID，后在包安装状态聚合中看到对应包名” 的顺序：  
   - 第一次在 DNS/NFQUEUE 中看到该 UID 时，通过 `AppManager::make(uid)` 创建一个“匿名 App”，此时只知道 UID，不知道包名；  
-  - 之后 `PackageListener::updatePackages()` 在 `packages.list` 中看到同一个 UID，通过 `appManager.install(uid, names)` 补全该 App 的名称与别名集合。  
+  - 之后 `PackageListener::updatePackages()` 通过聚合（`packages.list` + per-user `package-restrictions.xml`）得到该 UID 的 `names`，并通过 `appManager.install(uid, names)` 补全该 App 的名称与别名集合。  
 - 为避免出现“匿名 App 永远停留在占位名称（例如 `system_<uid>`）”的情况，`install(uid, names)` 的语义约定为：  
   - 若 `_byUid` 中不存在该 UID：按第 1 条中的规则调用 `create(uid, names...)`，直接创建一个带完整名称信息的新 App；  
   - 若 `_byUid` 中已经存在该 UID：**复用现有 App 实例**，仅更新其名称相关元数据，而不是忽略新的 `names`：  
     - 将 `App::_name` 更新为 canonical 包名（通常为 `names[0]`），将 `_names` 更新为完整别名集合；  
     - 由此 `App::isSystemApp()` / `isUserApp()` 的判断结果也会随之更新，用于后续持久化路径选择；  
-    - 对于已经存在的 `_saver` 路径，允许实现采用“路径一旦确定则保持不变”的策略，避免在运行期复杂迁移历史文件；新的通过 `packages.list` 直接创建的 App 则严格遵守 3.1.4 中的 per-user 保存路径规则。  
+    - 对于已经存在的 `_saver` 路径，允许实现采用“路径一旦确定则保持不变”的策略，避免在运行期复杂迁移历史文件；新的通过 `PackageListener` 聚合直接创建的 App 则严格遵守 3.1.4 中的 per-user 保存路径规则。  
 - 上述约定保证：  
   - DNS/NFQUEUE 热路径可以在不知道包名的情况下立即开始按 UID 统计，不丢事件；  
-  - 一旦 `packages.list` 中出现该 UID，对应 App 会被“升级”为带正确名称/别名的实例，后续 Control / HELP 等视图看到的都是规范化后的名称；  
+  - 一旦聚合结果中出现该 UID，对应 App 会被“升级”为带正确名称/别名的实例，后续 Control / HELP 等视图看到的都是规范化后的名称；  
   - `PackageListener::updatePackages()` 与 `AppManager` 的协同具体行为在本小节定义，3.3.2 中将 `appManager.install(uid, names)` 作为黑盒调用引用这里的语义。
 - 实现提示：  
   - 为了支持 “匿名 App → 命名 App” 的升级语义，需要将 `App` 内部的 `_name` / `_names` 从只读成员调整为可更新字段，并将 `UidMap` / `NamesMap` 的 `mapped_type` 从 `const App::Ptr` 调整为 `App::Ptr`，由 `AppManager::install` 负责在保持 `_byUid` 为唯一主索引的前提下维护 `_byName` 的一致性；  
@@ -523,7 +528,7 @@
   - `App` 内部基于自身 `_saver` 路径写入配置与统计，无需感知 userId。  
 - `restore()`：遵循“先由 PackageListener 建立 App 集合，再恢复内容”的顺序：  
   - 启动阶段由主函数保证：  
-    1. 先执行 `PackageListener::updatePackages()` 基于 `packages.list` 创建 UID 对应的 App；  
+    1. 先执行 `PackageListener::updatePackages()` 基于包安装状态聚合创建 UID 对应的 App；  
     2. 再调用 `AppManager::restore()` 从磁盘恢复各 App 的内容。  
   - `restore()` 具体行为：  
     - 先恢复 `_stats` 全局统计；  
@@ -549,7 +554,7 @@
         - 找到则 `restore`，找不到则删除。  
 - 整体约束：  
   - `restore()` 不自行创建新的 App 对象，不修改 UID 集合；  
-  - App 对象的生命周期由 `PackageListener::updatePackages()` 与运行时的 `AppManager::make(uid)` 驱动，`packages.list` 仍然是 UID ↔ 包名映射的权威来源；  
+  - App 对象的生命周期由 `PackageListener::updatePackages()` 与运行时的 `AppManager::make(uid)` 驱动，UID ↔ 包名映射以 `PackageListener` 的聚合结果为准；  
   - 恢复过程中遇到无法匹配的旧文件一律视为孤儿，优先保持运行时状态干净，而不是尝试复杂迁移。  
   - 为落实上述约束，**现有 `AppManager::restore()` 中基于 `saveDirSystem` / `saveDirPackages` 调用 `make()` 创建 App 的逻辑将被完全移除**（即不再通过扫描保存文件名来隐式创建 App）；新实现仅对已经存在于 `_byUid` 的 App 调用 `App::restore`。
 
@@ -562,7 +567,7 @@
 - 保持现有的根目录定义不变：  
   - `_snortDir = "/data/snort/"`、`_saveDir = "/data/snort/save/"`；  
   - `saveDirPackages = _saveDir + "packages/"`、`saveDirSystem = _saveDir + "system/"`、`saveDirDomainLists = _saveDir + "domains_lists/"`；  
-  - `Settings::packagesList = "/data/system/packages.list"` 作为唯一 App 清单数据源。  
+  - `Settings::packagesList = "/data/system/packages.list"` 作为全局 `packageName ↔ appId` 映射数据源（不承载 per-user 安装状态）。  
 - UID helper 所需的 Android 常量（`AID_USER`、`AID_APP_START`、`AID_APP_END` 等）统一从 AOSP 头文件引入（例如 `android_filesystem_config.h`），不在 Settings 内重复定义。Settings 自身只负责路径字符串，不参与 UID 计算。  
 - 对于路径安全约束：  
   - 所有基于 `userId` 拼接出的路径（`userSaveRoot`/`userSaveDirPackages`/`userSaveDirSystem` 等）在使用前必须：  
@@ -600,47 +605,45 @@
   - 新版本创建的 `user<userId>/...` 目录必须对旧版本透明：旧版本只访问 `saveDirPackages` / `saveDirSystem` / `saveDirDomainLists`，忽略多出来的 `user<userId>/...`；  
   - 因此 Settings 在生成路径和处理错误时不能假定 `user<userId>` 目录存在或有特定结构，避免旧版本因额外文件/目录崩溃。
 
-### 3.3 PackageListener / packages.list（对应条目 2, 13, 14, 24）
+### 3.3 PackageListener / 包安装状态聚合（对应条目 2, 13, 14, 24）
 
-目标：以 `/data/system/packages.list` 为唯一权威数据源，按“每行一个 `(package, uid)` 对”解析，基于完整 UID 维护 App 安装状态，在多用户场景下自然分离不同用户的实例，并保证对异常输入有防御能力。
+目标：通过读取系统文件（`/data/system/packages.list` + `/data/system/users/<userId>/package-restrictions.xml`）在内存中构建“完整 UID → 包名/别名集合”的映射，驱动 App 的 install/remove；避免执行 `pm` 命令，引入最小不确定性。
 
-#### 3.3.1 packages.list 解析与安全（条目 2, 13, 24）
+#### 3.3.1 数据源与解析安全（条目 2, 13, 24）
 
-- 读取路径固定为 `Settings::packagesList`（`/data/system/packages.list`），不依赖任何 `pm` 命令或额外清单文件。  
-- 在 `PackageListener::updatePackages()` 中解析时遵守以下约束：  
-  - 每行仅使用前两个 token：`name`（包名字符串）和 `uid`（十进制整数），其余内容通过 `ignore(..., '\n')` 丢弃；  
-  - 对 `uid`：  
-    - 调用 UID helper 的 `isAppUid(uid)` 过滤掉非应用 UID 或格式异常行；  
-    - 不再对 `uid` 做 `% 100000`，直接使用完整 Linux UID 作为 `_names` 的 key；  
-  - 对 `name`：  
-    - 限制长度在合理范围；  
-    - 拒绝包含换行符、NUL、控制字符等可用于注入的字符；  
-    - 保留多包共享同一 UID 的场景（系统/共享 UID），将所有别名 push 到 `_names[uid]`。  
-- 对于解析失败或格式异常的行：  
-  - 安静跳过该行并继续读取，保证合法 UID 不受影响；  
-  - 必要时记录调试日志，但不阻断整个更新流程。
+- `/data/system/packages.list`：读取路径固定为 `Settings::packagesList`，用于建立全局 `packageName -> appId` 与 `appId -> names[]`（shared UID）映射；解析时每行仅使用前两个 token（`name uid`），其中 `uid` 视为 user 0 UID（等价 appId），其余内容通过 `ignore(..., '\n')` 丢弃。  
+- `/data/system/users/<userId>/package-restrictions.xml`：用于确定每个 user 下哪些 package 处于 installed 状态；至少读取 `<pkg name="...">` 的 `inst` 属性（缺省视为 true）。  
+- 用户枚举：优先读取 `/data/system/users/userlist.xml`；也可以枚举 `/data/system/users/` 下的数字目录作为兜底。  
+- 安全约束（对两类来源统一执行）：  
+  - 对包名：限制长度、拒绝控制字符/NUL/换行、拒绝路径穿越（`..`、`/`）；  
+  - 对 appId/UID：通过 `isAppUid(appId)` 或等价范围校验过滤非应用 UID；对 userId 做合理范围校验；  
+  - 对 XML：如使用通用 XML 库，必须禁用外部实体等易引入不确定性的特性。  
 
 #### 3.3.2 updatePackages 与 AppManager 的协同（条目 13, 14）
 
 - `_names` 的类型保持为 `std::map<App::Uid, std::vector<std::string>>`，键始终是完整 UID。  
 - `PackageListener::updatePackages()` 的工作流程：  
   1. 将旧的 `_names` 快照搬到局部变量 `old` 中，并清空 `_names`；  
-  2. 读取 `packages.list`，填充新的 `_names` 映射；  
-  3. 对新快照中的每个 `(uid, names)`：  
+  2. 读取 `packages.list`，构建临时的 `packageName -> appId` 与 `appId -> names[]` 映射；  
+  3. 遍历用户集合并读取每个 user 的 `package-restrictions.xml`，对每个 installed `(userId, packageName)`：  
+     - 通过 `packageName -> appId` 取到 appId；  
+     - 计算 `uid = userId * 100000 + appId`；  
+     - 用 `appId -> names[]` 填充 `_names[uid]`；  
+  4. 对新快照中的每个 `(uid, names)`：  
      - 若 `old` 中不存在该 UID，则调用 `appManager.install(uid, names)` 安装新 App（其具体行为包括“复用并升级已有匿名 App”的语义，见 3.1.3 第 3 点）；  
      - 若 `old` 中存在该 UID，则从 `old` 中移除（表示仍然有效，不需卸载）；  
-  4. 对 `old` 中剩余的 `(uid, names)`：  
+  5. 对 `old` 中剩余的 `(uid, names)`：  
      - 调用 `appManager.remove(uid, names)` 卸载对应 App；  
      - 由 `AppManager::remove` 负责删除对应 App 的持久化文件。  
-- 多用户场景下，同一 packageName 在不同 userId 下对应不同的 UID 行：  
-  - `_names` 中会自然出现多条 UID 条目（每个 UID 对应一个 `names` 向量）；  
-  - `AppManager::install(uid, names)` 以 UID 为键创建多个 App 实例，从而完成跨用户的拆分。  
+- 多用户场景下：  
+  - 同一 packageName 在不同 userId 下均 installed → `_names` 中会出现多个不同 UID 条目（userId 不同）；  
+  - 仅在某个 user 下 installed → 只会生成该 user 的 UID 条目，不会错误落到 user 0。  
 - 线程模型与协同顺序：  
   - 启动阶段：  
     - 主线程在持有 `mutexListeners` 的锁下启动 `pkgListener.start()`；  
     - `updatePackages()` 首次运行完毕后，主线程再调用 `appManager.restore()` 恢复 App 内容；  
   - 运行期：  
-    - `listen()` 线程通过 inotify 监控 `packages.list`，在文件更新时调用 `updatePackages()`；  
+    - `listen()` 线程通过 inotify 监控 `packages.list` 与 `/data/system/users/` 下的用户/包状态文件（例如 `userlist.xml` 与各 user 的 `package-restrictions.xml`），在任一更新时调用 `updatePackages()`；  
     - `updatePackages()` 内部不操作全局 `mutexListeners`，仅与 `AppManager` 的内部锁交互，保证与 DNS/NFQUEUE 热路径相互独立。
 
 ### 3.4 Control / AppSelector / HELP（对应条目 8, 15, 16, 17, 18, 19, 20, 22, 26）
@@ -778,7 +781,7 @@
     - 各业务模块无需分别遍历 per-user 目录，避免多处散落的目录删除逻辑，与 3.2.3 的职责划分保持一致：模块级 `reset()` 负责清理自身已知文件，Settings 级 helper 负责清理多用户布局及遗留文件。  
   - 最后调用 `snortSave()` 触发一次同步保存当前全局状态（包括 Settings 和空白的统计/列表），并在需要时根据参数决定是否退出进程。  
 - 多用户扩展：  
-  - 在完成 `/data/snort/save` 整棵目录树的清理后，通过调用一次 `pkgListener.reset()`（内部再次触发 `PackageListener::updatePackages()`）基于当前 `packages.list` 重新构建 App 集合（包含所有用户），保证 RESETALL 之后的 App 集合与当前系统安装状态一致；  
+  - 在完成 `/data/snort/save` 整棵目录树的清理后，通过调用一次 `pkgListener.reset()`（内部再次触发 `PackageListener::updatePackages()`）基于包安装状态聚合重新构建 App 集合（包含所有用户），保证 RESETALL 之后的 App 集合与当前系统安装状态一致；  
   - 对于 user 0 与非 0 用户，RESETALL 的语义完全一致：所有用户的数据（统计、阻断配置、自定义列表等）都被清空，后续行为仅由当前系统实际安装的应用决定。
 
 #### 3.7.2 监听器锁与并发（条目 21, 23, 25）
@@ -797,7 +800,7 @@
 - 单元级测试建议：  
   - 针对 UID helper：构造不同 `userId/appId` 组合，验证 `userId(uid)` / `appId(uid)` / `isAppUid(uid)` 行为正确；  
   - 针对 Settings 路径 helper：验证合法/非法 `userId` 的路径生成与安全检查；  
-  - 针对 PackageListener：在内存中伪造多种 `packages.list` 内容，验证 `_names` 与 `appManager.install/remove` 行为符合预期。  
+  - 针对 PackageListener：在内存中伪造多种 `packages.list` 与 per-user `package-restrictions.xml` 内容，验证聚合后的 `_names` 以及 `appManager.install/remove` 行为符合预期。  
 - 集成级测试建议：  
   - 启动序列测试：在多用户设备上启动守护进程，检查 `pkgListener.start()` → `appManager.restore()` → 各模块 `restore()` 的顺序与日志是否匹配设计；  
   - 控制协议测试：通过自动化脚本调用 `APP.UID` / `APP.NAME` / `APP<v>` / `BLOCKMASK` / `TRACK` / `CUSTOMLIST.*` 等命令，验证 `<uid|str>` / `USER <userId>` 组合在单用户和多用户下的行为；  
@@ -805,7 +808,7 @@
 - 回滚与兼容性测试：  
   - 从旧版本升级到新版本后，检查 user 0 下旧配置仍能被新版本正确恢复；  
   - 在新版本下为非 0 用户生成配置，并回滚到旧版本，验证旧版本忽略 `user<userId>/...` 子目录且不会崩溃；  
-  - 构造恶意或异常的 `packages.list`，验证 parser 能跳过异常行且合法 UID 不受影响。  
+  - 构造恶意或异常的 `packages.list` 与 `package-restrictions.xml`，验证 parser 能跳过异常输入且合法 UID 不受影响。  
 - 重置与稳定性测试：  
   - 在高流量场景下多次执行 `APP.RESET<v> ALL` 和 `RESETALL`，观察 CPU/内存/响应时间，确保实现遵守“短锁窗口、无死锁”的原则。  
 
@@ -825,7 +828,7 @@
   - 验证：在单用户设备上产生统计后重启守护进程，确认 `APP.DNS.0 <uid>` 等应用统计仍能恢复；在存在非 0 用户但未在该用户安装应用的设备上启动，检查 `/data/snort/save` 仅包含 user 0 目录，不自动创建 `user<id>`。
 
 - 阶段 3：PackageListener 多用户化 + AppManager.install/remove/restore  
-  - 实现：按 3.3.1 调整 `PackageListener::updatePackages()`（只读 `name uid`、`isAppUid` 过滤、name 校验），按 3.1.3 实现 `install/remove` 的“匿名 App → 命名 App”升级语义，并重写 `AppManager::restore()` 只在已有 `_byUid` 集合上恢复内容，不再通过保存文件名创建新 App。  
+  - 实现：按 3.3.1 调整 `PackageListener::updatePackages()`（解析 `packages.list` 构建 `packageName->appId`/`appId->names[]`，再结合 per-user `package-restrictions.xml` 聚合出 `uid->names[]`，并做 `isAppUid`/name 校验），按 3.1.3 实现 `install/remove` 的“匿名 App → 命名 App”升级语义，并重写 `AppManager::restore()` 只在已有 `_byUid` 集合上恢复内容，不再通过保存文件名创建新 App。  
   - 验证：  
     - 单用户：重启后执行 `APP.UID` / `APP.NAME` / `APP.A`，与阶段 2 行为一致。  
     - 多用户：在 user 0 与某个非 0 用户上安装同一包，启动守护进程后通过 `APP.UID` + `APP.UID <pkg> USER <userId>` 检查同包在不同用户下被拆分为不同 UID 与 `userId`。
@@ -844,7 +847,7 @@
   - 实现：在 `Settings` 中实现 `clearSaveTreeForResetAll()`，在持有 `mutexListeners` 写锁的 `Control::cmdResetAll` 中按 3.7.1 的顺序依次调用各模块 `reset()`（含 `activityManager.reset()` 与 `dnsListener.reset()`）再调用 `settings.clearSaveTreeForResetAll()`，最后调用 `snortSave()`；`clearSaveTreeForResetAll()` 清理 `/data/snort/save/` 下所有 user 0 与 `user<userId>` 的持久化文件，并在结束时保证基础目录存在。  
   - 验证：  
     - 单用户：执行 `RESETALL` 前后对比 `APP.A` / `APP.DNS.0` 与 `/data/snort/save` 内容，确认统计与持久化文件被清空但守护进程仍可继续工作。  
-    - 多用户：在多个用户下产生统计与自定义配置后执行 `RESETALL`，确认 `/data/snort/save` 下所有 `user<id>` 目录被清理，重建后的 `APP.UID` 仅由当前 `packages.list` 决定，统计从 0 开始重新累积。
+    - 多用户：在多个用户下产生统计与自定义配置后执行 `RESETALL`，确认 `/data/snort/save` 下所有 `user<id>` 目录被清理，重建后的 `APP.UID` 由包安装状态聚合决定，统计从 0 开始重新累积。
 
 - 阶段 7：全量回归与多用户用例沉淀  
   - 实现：在 `docs/tests/BACKEND_DEV_SMOKE.md` 中追加“多用户扩展”章节，固化阶段 3/4/6 中使用的多用户测试用例。  
