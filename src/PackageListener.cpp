@@ -4,14 +4,21 @@
  */
 
 #include <fstream>
+#include <dirent.h>
 #include <sys/inotify.h>
 #include <thread>
 #include <unistd.h>
 #include <errno.h>
+#include <algorithm>
 #include <array>
+#include <cstring>
+#include <limits>
+#include <string_view>
+#include <unordered_set>
 
 #include <sucre-snort.hpp>
 #include <Settings.hpp>
+#include <PackageState.hpp>
 #include <PackageListener.hpp>
 
 PackageListener::PackageListener() {}
@@ -22,8 +29,71 @@ namespace {
 // App UIDs in Android are >= AID_APP_START (10000).
 // UIDs below this threshold are system/root UIDs and should not be tracked as apps.
 constexpr App::Uid AID_APP_START = 10000;
+constexpr uint32_t AID_USER_OFFSET = 100000;
 
 bool isAppUid(const App::Uid uid) { return uid >= AID_APP_START; }
+
+bool isNumeric(const char *s) {
+    if (s == nullptr || *s == '\0') {
+        return false;
+    }
+    for (const unsigned char c : std::string_view{s}) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool tryParseUserId(const char *s, uint32_t &out) {
+    if (!isNumeric(s)) {
+        return false;
+    }
+    uint64_t value = 0;
+    for (const unsigned char c : std::string_view{s}) {
+        value = value * 10 + static_cast<uint64_t>(c - '0');
+        if (value > std::numeric_limits<uint32_t>::max()) {
+            return false;
+        }
+    }
+    if (value >= 10000) {
+        return false;
+    }
+    out = static_cast<uint32_t>(value);
+    return true;
+}
+
+bool enumerateUserIds(std::vector<uint32_t> &outUserIds, std::string &error) {
+    outUserIds.clear();
+    DIR *dir = opendir(Settings::systemUsersDir);
+    if (dir == nullptr) {
+        error = std::string("opendir failed: ") + std::strerror(errno);
+        return false;
+    }
+
+    std::unordered_set<uint32_t> uniq;
+    dirent *de;
+    while ((de = readdir(dir)) != nullptr) {
+        if (std::strcmp(de->d_name, ".") == 0 || std::strcmp(de->d_name, "..") == 0) {
+            continue;
+        }
+        uint32_t userId = 0;
+        if (!tryParseUserId(de->d_name, userId)) {
+            continue;
+        }
+        uniq.emplace(userId);
+    }
+    closedir(dir);
+
+    if (uniq.empty()) {
+        error = "no users found";
+        return false;
+    }
+
+    outUserIds.assign(uniq.begin(), uniq.end());
+    std::sort(outUserIds.begin(), outUserIds.end());
+    return true;
+}
 } // namespace
 
 void PackageListener::start() {
@@ -32,7 +102,10 @@ void PackageListener::start() {
 }
 
 void PackageListener::reset() {
-    _names.clear();
+    {
+        const std::lock_guard lock(_mutexNames);
+        _names.clear();
+    }
     updatePackages();
 }
 
@@ -89,74 +162,92 @@ void PackageListener::listen() {
 }
 
 void PackageListener::updatePackages() {
-    NamesMap old(std::move(_names));
-    _names.clear();
+    const auto retryDelay = std::chrono::milliseconds(100);
+
     for (;;) {
-        std::ifstream in(settings.packagesList);
-        if (!in.is_open()) {
-            std::this_thread::sleep_for(settings.packagesListRetry);
+        PackageState::PackagesListSnapshot packages;
+        std::string parseError;
+        if (!PackageState::parsePackagesListFile(settings.packagesList, packages, &parseError)) {
+            LOG(WARNING) << "packages.list: parse failed: " << parseError;
+            std::this_thread::sleep_for(retryDelay);
             continue;
         }
-        std::string name;
-        App::Uid uid;
-        while (in >> name >> uid) {
-            in.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
-            // Security validation 1: Filter non-app UIDs (system UIDs < 10000 are not tracked)
-            if (!isAppUid(uid)) {
-                continue;
+        std::vector<uint32_t> userIds;
+        std::string usersError;
+        if (!enumerateUserIds(userIds, usersError)) {
+            LOG(WARNING) << Settings::systemUsersDir << ": enumerate users failed: " << usersError;
+            std::this_thread::sleep_for(retryDelay);
+            continue;
+        }
+
+        NamesMap newNames;
+        bool ok = true;
+        for (const uint32_t userId : userIds) {
+            const std::string path = Settings::packageRestrictionsPath(userId);
+            PackageState::PackageRestrictionsSnapshot restrictions;
+            std::string rerr;
+            if (!PackageState::parsePackageRestrictionsFile(path.c_str(), restrictions, &rerr)) {
+                LOG(WARNING) << path << ": parse failed: " << rerr;
+                ok = false;
+                break;
             }
 
-            // Security validation 2: userId range check (0 ≤ userId < 10000)
-            const uint32_t userId = uid / 100000;
-            if (userId >= 10000) {
-                LOG(WARNING) << "packages.list: rejecting invalid userId " << userId
-                             << " for uid " << uid;
-                continue;
-            }
+            for (const auto &pkgName : restrictions.installedPackages) {
+                const auto it = packages.packageToAppId.find(pkgName);
+                if (it == packages.packageToAppId.end()) {
+                    continue;
+                }
+                const uint32_t appId = it->second;
+                const auto namesIt = packages.appIdToNames.find(appId);
+                if (namesIt == packages.appIdToNames.end()) {
+                    continue;
+                }
 
-            // Security validation 3: Package name validation
-            // - Reject empty names
-            // - Reject names with control characters (< 32), NUL, or high bytes that could be exploits
-            // - Reject names with path traversal patterns
-            // - Enforce reasonable length limit
-            if (name.empty() || name.size() > 256) {
-                LOG(WARNING) << "packages.list: rejecting invalid name length for uid " << uid;
-                continue;
+                const uint64_t fullUid64 = static_cast<uint64_t>(userId) * AID_USER_OFFSET + appId;
+                if (fullUid64 > std::numeric_limits<App::Uid>::max()) {
+                    continue;
+                }
+                const App::Uid fullUid = static_cast<App::Uid>(fullUid64);
+                if (!isAppUid(fullUid)) {
+                    continue;
+                }
+                newNames[fullUid] = namesIt->second;
             }
+        }
 
-            bool validName = true;
-            for (unsigned char c : name) {
-                // Reject control characters, NUL, DEL (127), and non-ASCII bytes
-                if (c < 32 || c == 127) {
-                    validName = false;
-                    break;
+        if (!ok) {
+            std::this_thread::sleep_for(retryDelay);
+            continue;
+        }
+
+        std::vector<std::pair<App::Uid, App::NamesVec>> installs;
+        std::vector<std::pair<App::Uid, App::NamesVec>> removes;
+
+        NamesMap old;
+        {
+            const std::lock_guard lock(_mutexNames);
+            old = std::move(_names);
+            _names = std::move(newNames);
+
+            for (auto &[uid, names] : _names) {
+                if (const auto it = old.find(uid); it == old.end()) {
+                    installs.emplace_back(uid, names);
+                } else {
+                    old.erase(it);
                 }
             }
-            if (!validName) {
-                LOG(WARNING) << "packages.list: rejecting name with invalid characters for uid " << uid;
-                continue;
-            }
-
-            // Reject path traversal attempts
-            if (name.find("..") != std::string::npos || name.find('/') != std::string::npos) {
-                LOG(WARNING) << "packages.list: rejecting name with path traversal for uid " << uid;
-                continue;
-            }
-
-            _names[uid].push_back(name);
-        }
-        // Apply delta: install new UIDs; remove ones missing from new snapshot
-        for (const auto &[uid, names] : _names) {
-            if (const auto it = old.find(uid); it == old.end()) {
-                appManager.install(uid, names);
-            } else {
-                old.erase(it);
+            for (auto &[uid, names] : old) {
+                removes.emplace_back(uid, names);
             }
         }
-        for (const auto &[uid, names] : old) {
+
+        for (const auto &[uid, names] : installs) {
+            appManager.install(uid, names);
+        }
+        for (const auto &[uid, names] : removes) {
             appManager.remove(uid, names);
         }
-        break; // finished
+        break;
     }
 }

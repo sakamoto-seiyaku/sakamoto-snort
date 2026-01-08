@@ -7,10 +7,13 @@
 
 #include <AppManager.hpp>
 
+#include <mutex>
+
 class PackageListener {
 private:
     using NamesMap = std::map<App::Uid, std::vector<std::string>>;
 
+    std::mutex _mutexNames;
     NamesMap _names;
 
 public:
