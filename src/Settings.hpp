@@ -8,6 +8,7 @@
 #include <android-base/properties.h>
 #include <chrono>
 #include <atomic>
+#include <string>
 
 #include <sucre-snort.hpp>
 #include <Saver.hpp>
@@ -30,6 +31,13 @@ public:
 
     static constexpr const char *packagesList = "/data/system/packages.list";
     static constexpr auto packagesListRetry = std::chrono::milliseconds(1);
+
+    static constexpr const char *systemUsersDir = "/data/system/users";
+    static constexpr const char *systemUsersUserlist = "/data/system/users/userlist.xml";
+
+    static std::string systemUserDir(uint32_t userId);
+
+    static std::string packageRestrictionsPath(uint32_t userId);
 
     static inline const std::string saveDirPackages = _saveDir + "packages/";
     static inline const std::string saveDirSystem = _saveDir + "system/";

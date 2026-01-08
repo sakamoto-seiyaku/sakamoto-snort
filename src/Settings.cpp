@@ -9,6 +9,10 @@
 
 #include <Settings.hpp>
 
+namespace {
+constexpr uint32_t kMaxUserId = 10000;
+} // namespace
+
 Settings::Settings() { reset(); }
 
 Settings::~Settings() {}
@@ -29,6 +33,15 @@ void Settings::ensureUserDirs(const uint32_t userId) {
     mkdir(userSaveRoot(userId).c_str(), 0700);
     mkdir(userSaveDirPackages(userId).c_str(), 0700);
     mkdir(userSaveDirSystem(userId).c_str(), 0700);
+}
+
+std::string Settings::systemUserDir(const uint32_t userId) {
+    const uint32_t safeUserId = userId < kMaxUserId ? userId : (kMaxUserId - 1);
+    return std::string(systemUsersDir) + "/" + std::to_string(safeUserId);
+}
+
+std::string Settings::packageRestrictionsPath(const uint32_t userId) {
+    return systemUserDir(userId) + "/package-restrictions.xml";
 }
 
 void Settings::finishFirstStart() { android::base::SetProperty(_firstStartProp, "0"); }
