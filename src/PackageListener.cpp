@@ -5,6 +5,7 @@
 
 #include <fstream>
 #include <dirent.h>
+#include <poll.h>
 #include <sys/inotify.h>
 #include <thread>
 #include <unistd.h>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <sucre-snort.hpp>
@@ -110,51 +112,197 @@ void PackageListener::reset() {
 }
 
 void PackageListener::listen() {
-    // Robust inotify loop: add watch once per fd and drain variable-length events.
+    const auto debounce = std::chrono::milliseconds(250);
+    const auto retryDelay = std::chrono::seconds(1);
+
+    enum class WatchKind { PackagesListFile, UsersDir, UserDir };
+    struct WatchInfo {
+        WatchKind kind;
+        uint32_t userId;
+    };
+
+    auto isPackageRestrictionsName = [](const inotify_event *ev) -> bool {
+        return ev->len > 0 && std::strcmp(ev->name, "package-restrictions.xml") == 0;
+    };
+    auto isUserlistName = [](const inotify_event *ev) -> bool {
+        return ev->len > 0 && std::strcmp(ev->name, "userlist.xml") == 0;
+    };
+
     for (;;) {
         int fd = inotify_init1(IN_CLOEXEC);
         if (fd == -1) {
-            std::this_thread::sleep_for(settings.packagesListRetry);
+            std::this_thread::sleep_for(retryDelay);
             continue;
         }
 
-        // Watch the file for writes; also detect inode replacement/deletion (atomic replace)
-        int wd = inotify_add_watch(fd, settings.packagesList,
-                                   IN_CLOSE_WRITE | IN_MOVE_SELF | IN_DELETE_SELF);
-        if (wd == -1) {
+        std::unordered_map<int, WatchInfo> watches;
+        const auto addWatch = [&](const std::string &path, const uint32_t mask,
+                                  const WatchInfo info) -> bool {
+            const int wd = inotify_add_watch(fd, path.c_str(), mask);
+            if (wd == -1) {
+                return false;
+            }
+            watches.emplace(wd, info);
+            return true;
+        };
+
+        // Watch packages.list for writes + inode replacement.
+        if (!addWatch(settings.packagesList, IN_CLOSE_WRITE | IN_MOVE_SELF | IN_DELETE_SELF,
+                      WatchInfo{WatchKind::PackagesListFile, 0})) {
             close(fd);
-            std::this_thread::sleep_for(settings.packagesListRetry);
+            std::this_thread::sleep_for(retryDelay);
             continue;
         }
+
+        // Watch /data/system/users for user add/remove + userlist.xml updates.
+        constexpr uint32_t usersDirMask = IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM |
+                                          IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF;
+        if (!addWatch(Settings::systemUsersDir, usersDirMask, WatchInfo{WatchKind::UsersDir, 0})) {
+            close(fd);
+            std::this_thread::sleep_for(retryDelay);
+            continue;
+        }
+
+        // Watch each user directory for package-restrictions.xml changes (robust across atomic replace).
+        std::vector<uint32_t> userIds;
+        std::string usersError;
+        if (!enumerateUserIds(userIds, usersError)) {
+            close(fd);
+            std::this_thread::sleep_for(retryDelay);
+            continue;
+        }
+
+        constexpr uint32_t userDirMask = IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM |
+                                         IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF;
+        bool ok = true;
+        for (const uint32_t userId : userIds) {
+            const std::string userDir = Settings::systemUserDir(userId);
+            if (!addWatch(userDir, userDirMask, WatchInfo{WatchKind::UserDir, userId})) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) {
+            close(fd);
+            std::this_thread::sleep_for(retryDelay);
+            continue;
+        }
+
+        bool updateQueued = false;
+        auto updateDeadline = std::chrono::steady_clock::time_point{};
 
         std::array<char, 4096> buf{};
         for (;;) {
-            ssize_t len = read(fd, buf.data(), buf.size());
-            if (len > 0) {
-                size_t i = 0;
-                bool needRestart = false;
-                while (i + sizeof(inotify_event) <= static_cast<size_t>(len)) {
-                    const auto *ev = reinterpret_cast<const inotify_event *>(buf.data() + i);
-                    if (ev->mask & IN_CLOSE_WRITE) {
-                        // No need to hold mutexListeners here; updatePackages does not operate on
-                        // listeners themselves and AppManager is internally synchronized.
-                        updatePackages();
-                    }
-                    // If the watched file was moved/deleted (e.g., atomic rename), restart to reattach.
-                    if ((ev->mask & IN_MOVE_SELF) || (ev->mask & IN_DELETE_SELF)) {
-                        needRestart = true;
-                    }
-                    i += sizeof(inotify_event) + ev->len;
+            const auto now = std::chrono::steady_clock::now();
+            int timeoutMs = -1;
+            if (updateQueued) {
+                if (now >= updateDeadline) {
+                    // No need to hold mutexListeners here; updatePackages does not operate on listeners
+                    // themselves and AppManager is internally synchronized.
+                    updatePackages();
+                    updateQueued = false;
+                } else {
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(updateDeadline - now);
+                    timeoutMs = static_cast<int>(std::min<int64_t>(ms.count(), std::numeric_limits<int>::max()));
                 }
-                if (needRestart) {
-                    close(fd);
-                    break;
+            }
+
+            pollfd pfd{fd, POLLIN, 0};
+            const int pret = poll(&pfd, 1, timeoutMs);
+            if (pret == 0) {
+                continue; // timeout handled above
+            }
+            if (pret < 0) {
+                if (errno == EINTR) {
+                    continue;
                 }
-            } else if (len == -1 && errno == EINTR) {
-                continue; // retry
-            } else {
-                // fd closed or error; restart the inotify session
                 close(fd);
+                break;
+            }
+
+            const ssize_t len = read(fd, buf.data(), buf.size());
+            if (len <= 0) {
+                if (len == -1 && errno == EINTR) {
+                    continue;
+                }
+                close(fd);
+                break;
+            }
+
+            size_t i = 0;
+            bool needRestart = false;
+            while (i + sizeof(inotify_event) <= static_cast<size_t>(len)) {
+                const auto *ev = reinterpret_cast<const inotify_event *>(buf.data() + i);
+
+                if (ev->mask & IN_Q_OVERFLOW) {
+                    updateQueued = true;
+                    updateDeadline = std::chrono::steady_clock::now() + debounce;
+                    needRestart = true;
+                } else if (ev->mask & IN_IGNORED) {
+                    updateQueued = true;
+                    updateDeadline = std::chrono::steady_clock::now() + debounce;
+                    needRestart = true;
+                } else {
+                    const auto it = watches.find(ev->wd);
+                    if (it != watches.end()) {
+                        const auto kind = it->second.kind;
+                        if (kind == WatchKind::PackagesListFile) {
+                            if (ev->mask & IN_CLOSE_WRITE) {
+                                updateQueued = true;
+                                updateDeadline = std::chrono::steady_clock::now() + debounce;
+                            }
+                            if ((ev->mask & IN_MOVE_SELF) || (ev->mask & IN_DELETE_SELF)) {
+                                updateQueued = true;
+                                updateDeadline = std::chrono::steady_clock::now() + debounce;
+                                needRestart = true;
+                            }
+                        } else if (kind == WatchKind::UsersDir) {
+                            if ((ev->mask & IN_DELETE_SELF) || (ev->mask & IN_MOVE_SELF)) {
+                                updateQueued = true;
+                                updateDeadline = std::chrono::steady_clock::now() + debounce;
+                                needRestart = true;
+                            }
+                            if (isUserlistName(ev)) {
+                                updateQueued = true;
+                                updateDeadline = std::chrono::steady_clock::now() + debounce;
+                                needRestart = true; // userlist.xml atomic replace or user set changed
+                            }
+                            if (ev->len > 0) {
+                                uint32_t userId = 0;
+                                if (tryParseUserId(ev->name, userId) &&
+                                    (ev->mask & (IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM))) {
+                                    updateQueued = true;
+                                    updateDeadline = std::chrono::steady_clock::now() + debounce;
+                                    needRestart = true; // need to rebuild per-user watches
+                                }
+                            }
+                        } else if (kind == WatchKind::UserDir) {
+                            if ((ev->mask & IN_DELETE_SELF) || (ev->mask & IN_MOVE_SELF)) {
+                                updateQueued = true;
+                                updateDeadline = std::chrono::steady_clock::now() + debounce;
+                                needRestart = true;
+                            }
+                            if (isPackageRestrictionsName(ev) &&
+                                (ev->mask & (IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE | IN_MOVED_FROM))) {
+                                updateQueued = true;
+                                updateDeadline = std::chrono::steady_clock::now() + debounce;
+                            }
+                        }
+                    }
+                }
+
+                i += sizeof(inotify_event) + ev->len;
+            }
+
+            if (needRestart) {
+                close(fd);
+                if (updateQueued) {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now < updateDeadline) {
+                        std::this_thread::sleep_for(updateDeadline - now);
+                    }
+                    updatePackages();
+                }
                 break;
             }
         }
