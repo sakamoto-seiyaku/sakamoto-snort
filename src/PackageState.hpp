@@ -328,11 +328,16 @@ inline bool parsePackageRestrictionsFile(const char *path, PackageRestrictionsSn
     size_t pos = 0;
     bool sawAnyPkg = false;
     while (pos < data.size()) {
-        const size_t start = data.find("<pkg", pos);
-        if (start == std::string::npos) {
+        const size_t pkgStart = data.find("<pkg", pos);
+        const size_t packageStart = data.find("<package", pos);
+        if (pkgStart == std::string::npos && packageStart == std::string::npos) {
             break;
         }
-        pos = start + 4;
+
+        const bool isPkgTag = (pkgStart != std::string::npos) &&
+                              (packageStart == std::string::npos || pkgStart < packageStart);
+        const size_t start = isPkgTag ? pkgStart : packageStart;
+        pos = start + (isPkgTag ? 4u : 8u);
 
         const char next = pos < data.size() ? data[pos] : '\0';
         const bool isTagBoundary = next == ' ' || next == '\t' || next == '\r' || next == '\n' ||
@@ -344,7 +349,7 @@ inline bool parsePackageRestrictionsFile(const char *path, PackageRestrictionsSn
         const size_t end = data.find('>', pos);
         if (end == std::string::npos) {
             if (error) {
-                *error = "unterminated <pkg> tag";
+                *error = isPkgTag ? "unterminated <pkg> tag" : "unterminated <package> tag";
             }
             return false;
         }
@@ -356,6 +361,7 @@ inline bool parsePackageRestrictionsFile(const char *path, PackageRestrictionsSn
 
         std::string_view nameAttr;
         std::string_view instAttr;
+        std::string_view installedAttr;
 
         size_t attrPos = 0;
         for (;;) {
@@ -367,6 +373,8 @@ inline bool parsePackageRestrictionsFile(const char *path, PackageRestrictionsSn
                 nameAttr = attr.value;
             } else if (attr.name == "inst") {
                 instAttr = attr.value;
+            } else if (attr.name == "installed") {
+                installedAttr = attr.value;
             }
         }
 
@@ -383,7 +391,8 @@ inline bool parsePackageRestrictionsFile(const char *path, PackageRestrictionsSn
             return false;
         }
 
-        const bool installed = detail::parseXmlBool(instAttr, true);
+        const std::string_view installedToken = !instAttr.empty() ? instAttr : installedAttr;
+        const bool installed = detail::parseXmlBool(installedToken, true);
         if (installed) {
             out.installedPackages.emplace(std::string(nameAttr));
         }
@@ -391,7 +400,7 @@ inline bool parsePackageRestrictionsFile(const char *path, PackageRestrictionsSn
 
     if (!sawAnyPkg) {
         if (error) {
-            *error = "no <pkg> entries found";
+            *error = "no <pkg>/<package> entries found";
         }
         return false;
     }
