@@ -12,7 +12,7 @@
 - 内部统一使用完整 Linux UID，不再对 UID 取模；`App::_uid`、`AppManager` 等全部以完整 UID 为唯一键。
 - 数据源与职责拆分（均为系统文件，只读解析聚合，不依赖执行 `pm` 等命令）：
   - `/data/system/packages.list`：提供全局 `packageName ↔ appId`（以及 shared UID 的别名集合等）信息；**不表达 per-user 安装状态**。
-  - `/data/system/users/<userId>/package-restrictions.xml`：提供 per-user 的包安装状态（AOSP 字段名例如 `inst`）；用户集合来自 `/data/system/users/userlist.xml`（或枚举 `/data/system/users/` 数字目录兜底）。
+  - `/data/system/users/<userId>/package-restrictions.xml`：提供 per-user 的包安装状态（字段名例如 `inst`）。该文件在新版本 Android 上可能为 **ABX（二进制 XML，magic 为 `ABX\0`）**，实现需要同时支持 ABX 与文本 XML；用户集合来自 `/data/system/users/userlist.xml`（或枚举 `/data/system/users/` 数字目录兜底）。
 - 所有现有“传 UID”参数的命令保持不变，只是 UID 的取值从“appId”升级为“完整 Linux UID（含 userId 高位）”：  
   - 对于旧客户端，仍然可以像过去一样只在 user 0 上使用 appId 范围内的 UID，行为不变；  
   - 对于新客户端，如果传入完整 Linux UID，则可以显式指向任意用户下的实例，这一能力只在新调用方有意识使用时才生效。
@@ -35,7 +35,7 @@
 ### 2.2 数据源调研与事实确立
 
 - `/data/system/packages.list` 的定位：全局 `packageName ↔ appId`（以及 shared UID 的别名集合）索引；写入端在 AOSP 仍标注“未处理多用户”，因此该文件**不承载 per-user 安装状态**，也不能直接用于判断某包“安装在哪些 userId”。
-- per-user 安装状态的权威来源：`/data/system/users/<userId>/package-restrictions.xml`（其中 `<pkg name="...">` 的 `inst` 等字段描述该 user 下的安装/隐藏/停用状态）。
+- per-user 安装状态的权威来源：`/data/system/users/<userId>/package-restrictions.xml`（其中 `<pkg name="...">` 的 `inst` 等字段描述该 user 下的安装/隐藏/停用状态；文件可能为 ABX 或文本 XML）。
 - 结合公开资料与设备验证，确认 UID 公式：
   - `linuxUid = userId * 100000 + appId`，系统应用与普通应用一致。
 - 结论：多用户下需要通过 `packages.list` + per-user `package-restrictions.xml` 做文件级聚合，才能得到正确的 `(userId, package, uid)` 安装视图；并保留“运行期先见 UID、后补全名称”的兜底路径。
@@ -74,6 +74,7 @@
 - `packages.list` / `package-restrictions.xml` 解析安全：
   - 已知存在与 `packages.list` 相关的换行注入安全漏洞（CVE-2024-0044 系列，2024 年起在 AOSP 中修复）。
   - 读取 `/data/system/packages.list` 与 `/data/system/users/<userId>/package-restrictions.xml` 时必须对包名做格式校验（拒绝包含换行符、NUL 等控制字符），并对 appId/UID 与 userId 做范围校验（仅接受合法应用 UID）。
+  - `package-restrictions.xml` 在部分 Android 版本上为 ABX（二进制 XML），实现必须先识别 `ABX\0` magic 并按 ABX 协议解析，不能假设一定存在文本 `<pkg ...>`。
   - 本文后续讨论默认“UID 与包名已在单点完成严格校验”，不再在各处重复展开。
 
 - userId 用于构建路径的约束：

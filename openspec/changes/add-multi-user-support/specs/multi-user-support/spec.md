@@ -14,7 +14,7 @@
 ### Requirement: Install-state aggregation from system files
 系统 MUST 通过读取系统持久化文件聚合得到多用户下的 App 安装状态与 UID 映射，而不是依赖 `pm` 命令或其他运行时命令执行；聚合的数据源至少包括：  
 - `/data/system/packages.list`：提供全局 `packageName -> appId` 与 `appId -> names[]`（shared UID/别名集合）映射；解析时仅使用每行前两个 token（`<packageName> <uid>`），其中 `<uid>` 视为 user 0 的 UID（等价 appId），其余内容忽略。  
-- `/data/system/users/<userId>/package-restrictions.xml`：提供 per-user 安装状态；实现 MUST 解析 `<pkg name="...">` 的 `inst` 布尔属性（缺省视为 `true`）。  
+- `/data/system/users/<userId>/package-restrictions.xml`：提供 per-user 安装状态；该文件可能为文本 XML 或 ABX（二进制 XML，magic 为 `ABX\0`）；实现 MUST 支持两者并解析 `<pkg name="...">` 的 `inst` 布尔属性（缺省视为 `true`）。  
 系统 MUST 通过 `fullUid = userId * 100000 + appId`（或等价 helper）构建每个 user 下的实例，并为每个 `(package, userId)` 生成独立 App 实例。
 
 #### Scenario: Work-profile-only install creates only that user instance

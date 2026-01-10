@@ -11,7 +11,7 @@
 ## What Changes
 - 统一内部模型为“完整 Linux UID + 系统文件聚合数据源”，移除核心路径上对 UID 的 `% 100000` 截断：  
   - `/data/system/packages.list` 提供全局 `packageName ↔ appId`/shared-UID 信息；  
-  - `/data/system/users/<userId>/package-restrictions.xml` 提供 per-user 安装状态（例如 `inst` 等）。  
+  - `/data/system/users/<userId>/package-restrictions.xml` 提供 per-user 安装状态（例如 `inst` 等；该文件可能为 ABX 二进制 XML 或文本 XML）。  
 - 在 `Settings` 中引入按用户分层的保存目录（`user<userId>/packages` / `user<userId>/system`），user 0 继续沿用当前根目录，保证向后兼容。  
 - 重构 `PackageListener` 和 `AppManager` 的安装/删除/恢复逻辑：通过 `packages.list` + per-user `package-restrictions.xml` 聚合出 `uid -> names[]`，为每个 `(package, userId)` 生成独立的 App 实例；不依赖 `pm` 命令。  
 - 在控制协议层统一实现 AppSelector：  

@@ -18,21 +18,21 @@
 ## 2. Multi-user 安装状态聚合（修正数据源假设）
 
 > 背景：`/data/system/packages.list` 在 AOSP 写入端仍标注“未处理多用户”，其第二列为 user 0 的 UID（等价 appId），不表达 “某包安装在哪些 userId”。  
-> 多用户安装状态以 `/data/system/users/<userId>/package-restrictions.xml` 为准（tag 为 `<pkg>`，字段名如 `inst`，缺省为 true）。
+> 多用户安装状态以 `/data/system/users/<userId>/package-restrictions.xml` 为准（tag 为 `<pkg>`，字段名如 `inst`，缺省为 true；该文件可能为 ABX 二进制 XML 或文本 XML）。
 
-- [ ] 2.1 明确数据源与兼容边界（只读文件聚合，零命令依赖）：
+- [x] 2.1 明确数据源与兼容边界（只读文件聚合，零命令依赖）：
   - 明确 `packages.list` 的职责：`packageName -> appId` 与 `appId -> names[]`（shared UID/别名集合），不承载 per-user 安装状态；
   - 明确 `package-restrictions.xml` 的职责：per-user `inst` 状态（缺省 true）；
   - 明确 user 枚举策略：优先枚举 `/data/system/users/` 下的数字目录，必要时再读 `userlist.xml` 作为补充；
   - 输出到 OpenSpec spec/design 的 “source of truth” 表述保持一致（避免后续再误用）。
 
-- [ ] 2.2 Settings：补齐包状态相关路径常量与 helper（集中管理，便于审计权限）：
+- [x] 2.2 Settings：补齐包状态相关路径常量与 helper（集中管理，便于审计权限）：
   - 目标文件：`src/Settings.hpp`、`src/Settings.cpp`
   - 增加 `/data/system/users/` 根目录常量与 per-user `package-restrictions.xml` 路径拼接 helper；
   - 明确这些 helper 仅用于读系统文件，不引入任何 shell/pm/binder 依赖；
   - **验证**：在单用户与多用户设备上通过 `dev/dev-diagnose.sh` 确认 SELinux/权限允许读取这些路径（若拒绝，记录 AVC 并在基础模块/策略层修复）。
 
-- [ ] 2.3 解析层：实现“可单测、无副作用、强校验”的两类 parser（内存安全优先）：
+- [x] 2.3 解析层：实现“可单测、无副作用、强校验”的两类 parser（内存安全优先）：
   - 目标文件：新增 `src/PackageState.*`（或等价新模块），并在 `src/PackageListener.cpp` 调用
   - `packages.list` parser：
     - 仅读取每行前两个 token（`<packageName> <uid>`），将 `<uid>` 解释为 appId（user 0 uid）；
@@ -40,12 +40,12 @@
     - 对 `appId` 做范围校验（仅保留应用 UID 范围）；
     - 产出：`packageName -> appId` 与 `appId -> names[]`（收集 shared UID 的别名集合）。
   - `package-restrictions.xml` parser：
-    - 仅解析 `<pkg name="...">` 以及 `inst` 布尔字段（缺省 true）；
+    - 仅解析 `<pkg name="...">` 以及 `inst` 布尔字段（缺省 true）；需要同时支持 ABX（二进制 XML，`ABX\0` magic）与文本 XML；
     - 解析时采用“线性扫描 + 严格边界检查”的实现（避免正则灾难与越界），并对 `name` 做同样的包名校验；
     - 明确：解析失败 MUST 返回错误而不是返回空集合（用于上层的“保持旧快照”策略）。
   - **验证**：用内置样例（最小/异常/恶意输入）跑一轮离线解析自测（可通过 `dev/` 脚本或临时测试入口），确认不会崩溃/死循环/超内存。
 
-- [ ] 2.4 聚合层：重写 `PackageListener::updatePackages()` 为“构建新快照 → 原子提交 → diff 应用”的安全流程：
+- [x] 2.4 聚合层：重写 `PackageListener::updatePackages()` 为“构建新快照 → 原子提交 → diff 应用”的安全流程：
   - 目标文件：`src/PackageListener.cpp`、`src/PackageListener.hpp`
   - 构建 `newNames: fullUid -> names[]`：
     - 遍历用户集合（目录枚举或 userlist），对每个 user 读取其 `package-restrictions.xml`，取 `inst=true` 的包；
@@ -59,7 +59,7 @@
     - 不在解析阶段持有任何跨模块锁，避免与 DNS/NFQUEUE 热路径形成锁环。
   - **验证**：通过人为制造“文件原子替换/短暂不可读”场景，确认不会把大量 App 判为卸载并触发持久化删除。
 
-- [ ] 2.5 监听层：扩展 inotify 监听范围并保证鲁棒性（避免漏更与抖动）
+- [x] 2.5 监听层：扩展 inotify 监听范围并保证鲁棒性（避免漏更与抖动）
   - 目标文件：`src/PackageListener.cpp`
   - 监听对象至少包括：
     - `Settings::packagesList`（包名↔appId 映射变化）；

@@ -23,7 +23,7 @@
   - 对外 API 中 `<uid>` 的含义升级为完整 Linux UID；旧客户端仅在 user 0 上使用 appId 范围的 UID 时行为不变。  
 - 数据源与安装状态：  
   - `/data/system/packages.list` 作为全局 `packageName -> appId` / `appId -> names[]`（shared UID）映射来源；解析时限制只使用前两个 token（`name uid`），其余丢弃；对 appId 使用 helper 过滤非应用 UID，对 name 做基础合法性检查。  
-  - per-user 安装状态来自 `/data/system/users/<userId>/package-restrictions.xml`（读取 `<pkg name="...">` 的 `inst` 等字段），用户集合来自 `/data/system/users/userlist.xml`（或 users 目录枚举兜底）。  
+  - per-user 安装状态来自 `/data/system/users/<userId>/package-restrictions.xml`（读取 `<pkg name="...">` 的 `inst` 等字段；文件可能为 ABX 二进制 XML 或文本 XML），用户集合来自 `/data/system/users/userlist.xml`（或 users 目录枚举兜底）。  
   - `PackageListener` 通过上述两类文件聚合出 `fullUid -> names[]`，再驱动 `AppManager.install/remove`。  
 - 持久化路径：  
   - user 0 沿用当前的 `saveDirPackages/saveDirSystem/saveDirDomainLists`；  
