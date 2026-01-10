@@ -310,92 +310,104 @@ void PackageListener::listen() {
 }
 
 void PackageListener::updatePackages() {
-    const auto retryDelay = std::chrono::milliseconds(100);
+    const auto start = std::chrono::steady_clock::now();
+    const auto maxWait = std::chrono::seconds(5);
+    auto nextLog = start;
 
     for (;;) {
+        std::string error;
         PackageState::PackagesListSnapshot packages;
         std::string parseError;
         if (!PackageState::parsePackagesListFile(settings.packagesList, packages, &parseError)) {
-            LOG(WARNING) << "packages.list: parse failed: " << parseError;
-            std::this_thread::sleep_for(retryDelay);
-            continue;
-        }
+            error = std::string("packages.list: parse failed: ") + parseError;
+        } else {
+            std::vector<uint32_t> userIds;
+            std::string usersError;
+            if (!enumerateUserIds(userIds, usersError)) {
+                error = std::string(Settings::systemUsersDir) +
+                        ": enumerate users failed: " + usersError;
+            } else {
+                NamesMap newNames;
+                bool ok = true;
+                for (const uint32_t userId : userIds) {
+                    const std::string path = Settings::packageRestrictionsPath(userId);
+                    PackageState::PackageRestrictionsSnapshot restrictions;
+                    std::string rerr;
+                    if (!PackageState::parsePackageRestrictionsFile(path.c_str(), restrictions,
+                                                                   &rerr)) {
+                        error = path + ": parse failed: " + rerr;
+                        ok = false;
+                        break;
+                    }
 
-        std::vector<uint32_t> userIds;
-        std::string usersError;
-        if (!enumerateUserIds(userIds, usersError)) {
-            LOG(WARNING) << Settings::systemUsersDir << ": enumerate users failed: " << usersError;
-            std::this_thread::sleep_for(retryDelay);
-            continue;
-        }
+                    for (const auto &pkgName : restrictions.installedPackages) {
+                        const auto it = packages.packageToAppId.find(pkgName);
+                        if (it == packages.packageToAppId.end()) {
+                            continue;
+                        }
+                        const uint32_t appId = it->second;
+                        const auto namesIt = packages.appIdToNames.find(appId);
+                        if (namesIt == packages.appIdToNames.end()) {
+                            continue;
+                        }
 
-        NamesMap newNames;
-        bool ok = true;
-        for (const uint32_t userId : userIds) {
-            const std::string path = Settings::packageRestrictionsPath(userId);
-            PackageState::PackageRestrictionsSnapshot restrictions;
-            std::string rerr;
-            if (!PackageState::parsePackageRestrictionsFile(path.c_str(), restrictions, &rerr)) {
-                LOG(WARNING) << path << ": parse failed: " << rerr;
-                ok = false;
-                break;
+                        const uint64_t fullUid64 =
+                            static_cast<uint64_t>(userId) * AID_USER_OFFSET + appId;
+                        if (fullUid64 > std::numeric_limits<App::Uid>::max()) {
+                            continue;
+                        }
+                        const App::Uid fullUid = static_cast<App::Uid>(fullUid64);
+                        if (!isAppUid(fullUid)) {
+                            continue;
+                        }
+                        newNames[fullUid] = namesIt->second;
+                    }
+                }
+
+                if (ok) {
+                    std::vector<std::pair<App::Uid, App::NamesVec>> installs;
+                    std::vector<std::pair<App::Uid, App::NamesVec>> removes;
+
+                    NamesMap old;
+                    {
+                        const std::lock_guard lock(_mutexNames);
+                        old = std::move(_names);
+                        _names = std::move(newNames);
+
+                        for (auto &[uid, names] : _names) {
+                            if (const auto it = old.find(uid); it == old.end()) {
+                                installs.emplace_back(uid, names);
+                            } else {
+                                old.erase(it);
+                            }
+                        }
+                        for (auto &[uid, names] : old) {
+                            removes.emplace_back(uid, names);
+                        }
+                    }
+
+                    for (const auto &[uid, names] : installs) {
+                        appManager.install(uid, names);
+                    }
+                    for (const auto &[uid, names] : removes) {
+                        appManager.remove(uid, names);
+                    }
+                    return;
+                }
             }
-
-            for (const auto &pkgName : restrictions.installedPackages) {
-                const auto it = packages.packageToAppId.find(pkgName);
-                if (it == packages.packageToAppId.end()) {
-                    continue;
-                }
-                const uint32_t appId = it->second;
-                const auto namesIt = packages.appIdToNames.find(appId);
-                if (namesIt == packages.appIdToNames.end()) {
-                    continue;
-                }
-
-                const uint64_t fullUid64 = static_cast<uint64_t>(userId) * AID_USER_OFFSET + appId;
-                if (fullUid64 > std::numeric_limits<App::Uid>::max()) {
-                    continue;
-                }
-                const App::Uid fullUid = static_cast<App::Uid>(fullUid64);
-                if (!isAppUid(fullUid)) {
-                    continue;
-                }
-                newNames[fullUid] = namesIt->second;
-            }
         }
 
-        if (!ok) {
-            std::this_thread::sleep_for(retryDelay);
-            continue;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= nextLog) {
+            LOG(WARNING) << __FUNCTION__ << ": " << error;
+            nextLog = now + std::chrono::seconds(1);
         }
-
-        std::vector<std::pair<App::Uid, App::NamesVec>> installs;
-        std::vector<std::pair<App::Uid, App::NamesVec>> removes;
-
-        NamesMap old;
-        {
-            const std::lock_guard lock(_mutexNames);
-            old = std::move(_names);
-            _names = std::move(newNames);
-
-            for (auto &[uid, names] : _names) {
-                if (const auto it = old.find(uid); it == old.end()) {
-                    installs.emplace_back(uid, names);
-                } else {
-                    old.erase(it);
-                }
-            }
-            for (auto &[uid, names] : old) {
-                removes.emplace_back(uid, names);
-            }
+        if (now - start >= maxWait) {
+            LOG(ERROR) << __FUNCTION__ << ": giving up after "
+                       << std::chrono::duration_cast<std::chrono::seconds>(maxWait).count()
+                       << "s (" << error << ")";
+            return;
         }
-
-        for (const auto &[uid, names] : installs) {
-            appManager.install(uid, names);
-        }
-        for (const auto &[uid, names] : removes) {
-            appManager.remove(uid, names);
-        }
-        break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }

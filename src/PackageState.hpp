@@ -129,6 +129,34 @@ struct AttrView {
     std::string_view value;
 };
 
+inline std::string hexPrefix(const std::string_view data, const size_t maxBytes) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    const size_t n = std::min(data.size(), maxBytes);
+    std::string out;
+    out.reserve(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+        const unsigned char c = static_cast<unsigned char>(data[i]);
+        out.push_back(kHex[c >> 4]);
+        out.push_back(kHex[c & 0x0f]);
+    }
+    return out;
+}
+
+inline std::string asciiPrefix(const std::string_view data, const size_t maxBytes) {
+    const size_t n = std::min(data.size(), maxBytes);
+    std::string out;
+    out.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        const unsigned char c = static_cast<unsigned char>(data[i]);
+        if (c >= 32 && c < 127 && c != '"' && c != '\\') {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('.');
+        }
+    }
+    return out;
+}
+
 inline bool parseNextXmlAttr(const std::string_view s, size_t &pos, AttrView &out) {
     const size_t n = s.size();
     while (pos < n) {
@@ -400,7 +428,12 @@ inline bool parsePackageRestrictionsFile(const char *path, PackageRestrictionsSn
 
     if (!sawAnyPkg) {
         if (error) {
-            *error = "no <pkg>/<package> entries found";
+            constexpr size_t kHexBytes = 16;
+            constexpr size_t kAsciiBytes = 64;
+            const std::string_view sv{data};
+            *error = "no <pkg>/<package> entries found (size=" + std::to_string(sv.size()) +
+                     ", prefix_hex=" + detail::hexPrefix(sv, kHexBytes) + ", prefix_ascii=\"" +
+                     detail::asciiPrefix(sv, kAsciiBytes) + "\")";
         }
         return false;
     }
