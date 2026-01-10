@@ -361,8 +361,11 @@ struct AbxReader {
             }
             return false;
         }
-        out = (static_cast<int32_t>(pos[0]) << 24) | (static_cast<int32_t>(pos[1]) << 16) |
-              (static_cast<int32_t>(pos[2]) << 8) | static_cast<int32_t>(pos[3]);
+        const uint32_t value = (static_cast<uint32_t>(pos[0]) << 24) |
+                               (static_cast<uint32_t>(pos[1]) << 16) |
+                               (static_cast<uint32_t>(pos[2]) << 8) |
+                               static_cast<uint32_t>(pos[3]);
+        out = static_cast<int32_t>(value);
         pos += 4;
         return true;
     }
