@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "BlockingListManager.hpp"
 #include <fstream>
+#include <algorithm>
 #include <memory>
 #include <cctype>
 
@@ -98,8 +98,6 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
         LOG(ERROR) << __FUNCTION__ << " - invalid list id";
         return 0;
     }
-    // Take a BLM masks snapshot BEFORE acquiring DL lock to avoid lock order inversion (BLM -> DL).
-    const auto masks = blockingListManager.masksSnapshot();
 
     std::unique_lock lock(_mutex);
 
@@ -111,16 +109,6 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
             .close();
     }
 
-    // 1. Collect matching list IDs based on the pre-fetched masks snapshot
-    //    Note: masks is a value snapshot to prevent cross-component locking while holding DL lock.
-    std::vector<std::string> matchingListIds;
-    for (const auto &[otherListId, _] : _domainsByListId) {
-        auto itMask = masks.find(otherListId);
-        if (itMask != masks.end() && itMask->second <= blockMask) {
-            matchingListIds.push_back(otherListId);
-        }
-    }
-
     auto &targetSet = _domainsByListId[listId];
     std::ofstream out(settings.saveDirDomainLists + listId, std::ofstream::app);
     if (!out.is_open()) {
@@ -130,18 +118,6 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
 
     uint32_t addedCount = 0;
     for (const auto &domain : domains) {
-        bool exists = false;
-        // 2. Check only lists with matching blockMask
-        for (const auto &matchingId : matchingListIds) {
-            const auto &set = _domainsByListId.at(matchingId);
-            if (set.find(domain) != set.end()) {
-                exists = true;
-                break;
-            }
-        }
-        if (exists)
-            continue;
-
         auto [it, inserted] = targetSet.emplace(domain, blockMask);
         if (inserted) {
             out << domain << std::endl;
@@ -282,10 +258,13 @@ void DomainList::rebuildAggSnapshotLocked() {
     // Note: if allocation fails (std::bad_alloc), the exception will propagate and
     // the previously published snapshot remains intact, preserving reader safety.
     auto snap = std::make_shared<DomsSet>();
-    // Pre-reserve to reduce rehashes.
-    size_t total = 0;
-    for (const auto &p : _domainsByListId) total += p.second.size();
-    if (total > 0) snap->reserve(total);
+    // Pre-reserve conservatively to reduce rehashes without over-allocating when
+    // many lists share the same domains (cross-list dedupe is intentionally not used).
+    size_t maxListSize = 0;
+    for (const auto &p : _domainsByListId) {
+        maxListSize = std::max(maxListSize, p.second.size());
+    }
+    if (maxListSize > 0) snap->reserve(maxListSize);
 
     for (const auto &p : _domainsByListId) {
         for (const auto &kv : p.second) {

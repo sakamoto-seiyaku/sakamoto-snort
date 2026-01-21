@@ -72,6 +72,7 @@ void Settings::restore() {
         if (_savedVersion < 3) {
             _blockMask += customListBit;
         }
+        _blockMask = normalizeAppBlockMask(_blockMask);
         _blockIface = _saver.read<uint8_t>();
         _passState = _saver.read<uint8_t>();
         std::string password;

@@ -13,6 +13,9 @@ BlockingListManager::BlockingListManager() {}
 
 bool BlockingListManager::addBlockingList(string id, string url, string name, Stats::Color color,
                                           uint8_t blockMask) {
+    if (!Settings::isValidBlockingListMask(blockMask)) {
+        return false;
+    }
     const lock_guard lock(_mutex);
     auto it = _ByIds.find(id);
     if (it != _ByIds.end()) {
@@ -97,6 +100,9 @@ bool BlockingListManager::updateBlockingList(const string &id, const string &url
                                              Stats::Color color, uint8_t blockMask,
                                              uint32_t domainsCount, const string &updatedAtStr,
                                              const string &etag, bool enabled, bool outdated) {
+    if (!Settings::isValidBlockingListMask(blockMask)) {
+        return false;
+    }
     // Strict time parsing (fix 8a): zero-init tm and check state
     std::tm tm{};
     std::istringstream ss(updatedAtStr);

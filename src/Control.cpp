@@ -778,13 +778,15 @@ void Control::cmdBlockMask(CmdParams &&params) const {
         }
     } else {
         // SET mode: BLOCKMASK <uid|str> [USER <userId>] <mask>
+        if (mask.type != CmdArg::INT || !Settings::isValidAppBlockMask(mask.number)) {
+            nack(params.out);
+            return;
+        }
         ack(params.out);
-        if (mask.type == CmdArg::INT) {
-            if (const auto app = arg2app(parg)) {
-                app->blockMask(mask.number);
-                activityManager.update(app, true);
-                LOG(INFO) << " cmdBlockMask " << static_cast<uint32_t>(app->blockMask());
-            }
+        if (const auto app = arg2app(parg)) {
+            app->blockMask(static_cast<uint8_t>(mask.number));
+            activityManager.update(app, true);
+            LOG(INFO) << " cmdBlockMask " << static_cast<uint32_t>(app->blockMask());
         }
     }
 }
@@ -794,10 +796,12 @@ void Control::cmdBlockMaskDef(CmdParams &&params) const {
     if (arg.type == CmdArg::NONE) {
         params.out << static_cast<uint32_t>(settings.blockMask());
     } else {
-        ack(params.out);
-        if (arg.type == CmdArg::INT) {
-            settings.blockMask(arg.number);
+        if (arg.type != CmdArg::INT || !Settings::isValidAppBlockMask(arg.number)) {
+            nack(params.out);
+            return;
         }
+        ack(params.out);
+        settings.blockMask(static_cast<uint8_t>(arg.number));
     }
 }
 
@@ -1139,6 +1143,11 @@ void Control::cmdAddBlockingList(CmdParams &&params, Stats::Color color) const {
             name += " ";
             name += args[i].string;
         }
+        if (!Settings::isValidBlockingListMask(blockMask)) {
+            LOG(ERROR) << __FUNCTION__ << " Invalid blockMask " << blockMask;
+            nack(params.out);
+            return;
+        }
         if (blockingListManager.addBlockingList(id, url, name, color,
                                                 static_cast<uint8_t>(blockMask))) {
             blockingListManager.save();
@@ -1171,6 +1180,13 @@ void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) cons
             name += args[i].string;
         }
 
+        if (!Settings::isValidBlockingListMask(blockMask)) {
+            LOG(ERROR) << __FUNCTION__ << " Invalid blockMask " << blockMask;
+            nack(params.out);
+            return;
+        }
+        const uint8_t newMask = static_cast<uint8_t>(blockMask);
+
         // Reflect structural changes first
         uint8_t currentMask = 0;
         bool hasMask = blockingListManager.getBlockMask(id, currentMask);
@@ -1179,8 +1195,8 @@ void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) cons
             nack(params.out);
             return;
         }
-        if (blockMask != currentMask) {
-            domManager.changeBlockMask(id, blockMask, color);
+        if (newMask != currentMask) {
+            domManager.changeBlockMask(id, newMask, color);
         }
         Stats::Color currentColor;
         if (blockingListManager.getColor(id, currentColor) && currentColor != color) {
@@ -1188,7 +1204,7 @@ void Control::cmdUpdateBlockingList(CmdParams &&params, Stats::Color color) cons
         }
 
         // Manager performs validated update (fix 8a: strict time parsing inside)
-        if (blockingListManager.updateBlockingList(id, url, name, color, static_cast<uint8_t>(blockMask),
+        if (blockingListManager.updateBlockingList(id, url, name, color, newMask,
                                                    domainCount, updatedAtStr, etag, enabled, outdated)) {
             blockingListManager.save();
             ack(params.out);
@@ -1307,7 +1323,14 @@ void Control::cmdDisableBlockingList(CmdParams &&params, Stats::Color color) con
 void Control::cmdAddManyDomains(CmdParams &&params, Stats::Color color) const {
     const auto args = readCmdArgs(params.args);
     if (args.size() == 4) {
-        params.out << domManager.addDomainsToList(args[0].string, args[1].number, args[2].boolean, parseAggregatedDomains(args[3]), color);
+        if (!Settings::isValidBlockingListMask(args[1].number)) {
+            LOG(ERROR) << __FUNCTION__ << " Invalid blockMask " << args[1].number;
+            nack(params.out);
+            return;
+        }
+        params.out << domManager.addDomainsToList(
+            args[0].string, static_cast<uint8_t>(args[1].number), args[2].boolean,
+            parseAggregatedDomains(args[3]), color);
     } else {
         LOG(ERROR) << __FUNCTION__ << " Wrong arg numbers";
         nack(params.out);
@@ -1414,7 +1437,7 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "\r\n"
         << "BLOCK [<0|1>]: prints, disables or enables blocking.\r\n"
         << "BLOCKMASK <uid|str> [<mask>]: prints or sets the app blocking mask. Mask bits:\r\n"
-        << "    standard: 1, socials: 2, porn: 4, extreme: 8.\r\n"
+        << "    standard: 1, reinforced: 8 (implies 1), extra chains: 2/4/16/32/64, custom: 128.\r\n"
         << "BLOCKMASKDEF [<mask>]: prints or sets the default blocking mask for newly\r\n"
         << "    installed apps.\r\n"
         << "\r\n"

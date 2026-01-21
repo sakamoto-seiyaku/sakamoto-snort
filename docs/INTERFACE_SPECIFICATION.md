@@ -73,7 +73,13 @@ App 对象字段:
 - `MAXAGEIP [<int>]` | 查询/设置 | 当前/`OK` | IP 最大存活秒数
 
 掩码定义:
-- blockMask 位: `1`(standard), `8`(reinforced), `128`(custom)。默认: 系统 129；用户继承全局。
+- blockMask 位:
+  - `1`(standard)
+  - `8`(reinforced，后端会自动补齐 `1`，即 reinforced ⊇ standard)
+  - `2|4|16|32|64`(额外组合桶：仅用于黑名单订阅的“额外链”语义，由前端按 bit 映射展示)
+  - `128`(custom，自定义名单/规则开关)
+  - 默认: 系统 129；用户继承全局。
+- BlockingList/DomainList 的 `blockMask` 约束: 必须为单 bit 且只允许 `1/2/4/8/16/32/64`（禁止 `0`/多 bit/`128`）。
 - blockIface 位: `1`(WiFi), `2`(Mobile Data), `4`(VPN)。
 
 2.4 追踪与反解
@@ -221,7 +227,7 @@ Host 对象字段:
 - DNS 流: `max=86400`，`default=600`，`minSize=500`
 - 包流: `max=7200`，`default=600`，`minSize=100`
 - `activityNotificationIntervalMs=500`
-- blockMask 位: `1|8|128`；blockIface 位: `1|2|4`
+- blockMask 位: `1/2/4/8/16/32/64`（可组合）与 `128`；blockIface 位: `1|2|4`
  - 颜色映射：域名若命中 `standardListBit` → `BLACK`；命中 `reinforcedListBit` → `WHITE`。
 
 ---

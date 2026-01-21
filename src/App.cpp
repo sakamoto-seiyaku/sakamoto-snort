@@ -205,6 +205,7 @@ void App::save() {
 void App::restore(const App::Ptr &app) {
     _saver.restore([&] {
         _blockMask = _saver.read<uint8_t>();
+        _blockMask = Settings::normalizeAppBlockMask(_blockMask);
         _stats.restore(_saver);
         // Protect per-color domain stats maps during restore (coarse-grained)
         for (auto &[map, mutex] : _domStats) {
@@ -221,6 +222,7 @@ void App::restore(const App::Ptr &app) {
         _customWhitelist.restore(_saver);
         _useCustomList = _saver.read<bool>();
         _blockMask = _saver.read<uint8_t>();
+        _blockMask = Settings::normalizeAppBlockMask(_blockMask);
         _blockIface = _saver.read<uint8_t>();
         rulesManager.restoreCustomRules(_saver, app, Stats::BLACK);
         rulesManager.restoreCustomRules(_saver, app, Stats::WHITE);

@@ -70,7 +70,7 @@ public:
 
     void blockMask(const uint8_t blockMask) {
         _saved = false;
-        _blockMask = blockMask;
+        _blockMask = Settings::normalizeAppBlockMask(blockMask);
     }
 
     uint8_t blockIface() const { return _blockIface; }

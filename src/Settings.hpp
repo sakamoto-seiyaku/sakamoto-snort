@@ -28,6 +28,30 @@ public:
     static constexpr uint8_t standardListBit = 1;
     static constexpr uint8_t reinforcedListBit = 1 << 3;
     static constexpr uint8_t customListBit = 128;
+    // Extra combinable chains for blocking lists (blacklists): 2/4/16/32/64.
+    static constexpr uint8_t extraListBitsMask = 2 | 4 | 16 | 32 | 64;
+    static constexpr uint8_t supportedListBitsMask = standardListBit | reinforcedListBit | extraListBitsMask;
+    static constexpr uint8_t supportedAppBitsMask = supportedListBitsMask | customListBit;
+
+    // BlockingList/DomainList masks must be single-bit selectors from the supported set.
+    static constexpr bool isValidBlockingListMask(const uint32_t mask) {
+        return mask == 1 || mask == 2 || mask == 4 || mask == 8 || mask == 16 || mask == 32 || mask == 64;
+    }
+    static constexpr bool isValidBlockingListMask(const uint8_t mask) {
+        return isValidBlockingListMask(static_cast<uint32_t>(mask));
+    }
+
+    // App masks may combine multiple list bits + customListBit. Reinforced implies standard.
+    static constexpr bool isValidAppBlockMask(const uint32_t mask) {
+        if (mask > 255) return false;
+        return (mask & ~static_cast<uint32_t>(supportedAppBitsMask)) == 0;
+    }
+    static constexpr uint8_t normalizeAppBlockMask(uint8_t mask) {
+        if (mask & reinforcedListBit) {
+            mask |= standardListBit;
+        }
+        return mask;
+    }
 
     static constexpr const char *packagesList = "/data/system/packages.list";
     static constexpr auto packagesListRetry = std::chrono::milliseconds(1);
@@ -192,7 +216,7 @@ public:
     uint8_t blockMask() const { return _blockMask; }
 
     void blockMask(const uint8_t blockMask) {
-        _blockMask = blockMask;
+        _blockMask = normalizeAppBlockMask(blockMask);
         save();
     }
 
