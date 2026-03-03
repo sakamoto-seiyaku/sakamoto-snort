@@ -21,9 +21,9 @@ private:
     const uint16_t _proto;
     const uint16_t _srcPort;
     const uint16_t _dstPort;
-    const uint16_t _len : 14; // MTU max : 32768
-    const bool _input : 1;
-    const bool _accepted : 1;
+    const uint16_t _len; // NFQUEUE/GSO can exceed 14-bit payload lengths; keep full 16-bit value.
+    const bool _input;
+    const bool _accepted;
 
 public:
     Packet(const Address<IP> &ip, const Host::Ptr &host, const App::Ptr &app, const bool input,

@@ -905,3 +905,71 @@ Control Thread 1                Control Thread 2
 - 问题: 按名称聚合后直接拼接各向量，重复 Host（多 IP 或多次解析）会多次输出。
 - 影响: 展示不稳定/统计偏差。
 - **修复**: Line 61-72 添加去重逻辑，使用 `unordered_set<Host::Ptr>` 基于指针值去重，保留首次出现顺序；复杂度 O(n)，与 Issue #55 快照模式一致。
+
+---
+
+## 第二轮扫描（2026-01-21：识别问题；后续修复记录见各条目 ✅）
+
+#### 72. DomainManager::reset 未加锁导致与并发访问数据竞争（CRITICAL） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/DomainManager.cpp:183-204；并发访问: sucre/sucre-snort/src/DnsListener.cpp:179-181；sucre/sucre-snort/src/HostManager.hpp:39-41,85-96
+- 问题: reset() 直接 clear `_byIPv4/_byIPv6/_byName`，未持有 `_mutexByIP/_mutexByName`；但 `domManager.make/find/addIPBoth` 等在 DnsListener/HostManager 路径可在不持 `mutexListeners` 的情况下执行（Phase 1），RESETALL 的全局锁无法覆盖这部分访问。
+- 影响: unordered_map 在 clear/insert/find 并发下 UB → 崩溃/内存破坏；RESETALL 期间更容易触发。
+- **修复**: reset() 内 `std::scoped_lock(_mutexByName, _mutexByIP)` 后再 clear 索引（并保留匿名域名条目），避免 HostManager/PacketListener Phase1 等不经 `mutexListeners` 的并发读导致数据竞争。(2026-01-21)
+
+#### 73. AppManager::save/restore 无锁遍历 _byUid（CRITICAL） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/AppManager.cpp:132-186；并发写入点: sucre/sucre-snort/src/PacketListener.cpp:270；sucre/sucre-snort/src/DnsListener.cpp:179；sucre/sucre-snort/src/PackageListener.cpp:389-394
+- 问题: save/restore 在不持 `_mutexByUid/_mutexByName` 的情况下迭代 `_byUid` 并调用 `app->save/app->restore`；同时 PacketListener/DnsListener/PackageListener 可并发创建/删除 App（insert/erase）。
+- 影响: std::map 并发迭代+修改 → UB（迭代器失效/崩溃）；同时可能导致保存文件缺失/错乱。
+- 触发: `snortSave()` 周期性调用 `appManager.save()`（当前不再持全局锁）与上述写入路径并发。
+- **修复**: save/restore 对 `_byUid` 先 `shared_lock(_mutexByUid)` 生成 `App::Ptr` 快照，再逐个调用 `app->save/app->restore`，避免 map 并发迭代+修改导致 UB。(2026-01-21)
+
+#### 74. RulesManager::save/restore 无锁访问 _rules/_idCount（CRITICAL） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/RulesManager.cpp:121-143
+- 问题: save/restore 不持 `_mutex`；而 `addRule/removeRule/updateRule/addCustom/removeCustom/reset` 都会在持锁下修改 `_rules/_customs/_idCount`。
+- 影响: 周期性 `snortSave()` 调用 `rulesManager.save()` 与控制线程写操作并发 → UB/崩溃；保存文件可能损坏。
+- **修复**: `RulesManager::save()` 使用 `shared_lock(_mutex)`；`restore()` 使用独占锁，保证与 add/remove/update/reset 等写操作互斥，消除并发数据竞争。(2026-01-21)
+
+#### 75. StatsTPL::save/restore 未加锁导致与 update/print/reset 竞态（CRITICAL/HIGH） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/Stats.cpp:20-28；调用点示例: sucre/sucre-snort/src/App.cpp:179-203；sucre/sucre-snort/src/Domain.cpp:23-31；sucre/sucre-snort/src/AppManager.cpp:132-138
+- 问题: StatsTPL 的写入路径（`AppStats::update/DomainStats::update` 等）依赖 `_mutex` 保护 `_timestamp/_stats`；但 `save/restore` 直接读写 `_timestamp/_stats` 无锁。
+- 影响: 周期性保存与热路径 update 并发 → 数据竞争（UB）；轻则统计/持久化不一致，重则在部分平台触发崩溃。
+- **修复**: `StatsTPL::save/restore` 对 `_timestamp/_stats` 采取“锁内快照、锁外读写盘”：锁只持有到 memcpy 完成，避免把潜在阻塞的 I/O 放进 stats 锁；同时消除与热路径并发的数据竞争。(2026-01-21)
+
+#### 76. App::hasData(color, view) 无锁遍历 domStats map（CRITICAL） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/App.cpp:73-80；写入点: sucre/sucre-snort/src/App.cpp:110-129；调用点: sucre/sucre-snort/src/AppManager.hpp:130-144
+- 问题: `hasData(cs, view)` 直接遍历 `domStats(cs)`，未持 `mutex(cs)`；而 `updateStats()` 会在持锁下插入/rehash（unordered_map）。
+- 影响: 控制面查询（如 `DOMAINLIST.APP.*`/过滤路径）与数据包更新并发 → 迭代器失效/崩溃（典型容器并发 UB）。
+- **修复**: `App::hasData(cs, view)` 增加 `shared_lock(mutex(cs))`，与 `printDomains()` 一致，避免并发插入/rehash 导致的迭代器失效与崩溃。(2026-01-21)
+
+#### 77. App::upgradeName 读写 _name/_names/_saver 无同步（CRITICAL/HIGH） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/App.cpp:41-62；调用点: sucre/sucre-snort/src/AppManager.cpp:34-63；并发点: sucre/sucre-snort/src/AppManager.cpp:132-138（app->save）等
+- 问题: `upgradeName()` 在无 App 内部锁的情况下修改 `_name/_names/_saver`；同时 Packet/DNS/Control/Save 线程可并发读取 `name()` / `print()` / `save()`。
+- 影响: std::string/Saver 并发读写 → UB（潜在 use-after-free/崩溃）；文件 rename 与保存同时发生可能导致持久化文件错位。
+- **修复**: 为 App 引入内部 `shared_mutex`，将 `_saver/_name/_names` 纳入同一把锁；`upgradeName/removeFile` 用独占锁，`save/restore/name/names/isAnonymous` 用共享锁，消除并发读写导致的 UB/崩溃。(2026-01-21)
+
+#### 78. Control::readCmdArgs/readSingleArg 使用 std::stoi 未捕获异常导致远程崩溃（CRITICAL） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/Control.cpp:466-563
+- 问题: 解析数字参数时使用 `std::stoi()`，仅用 `isdigit()` 判定“全数字”但未限制长度/范围；超长数字会触发 `std::out_of_range` 异常。Control 线程未做 try/catch，异常将穿透线程边界触发 `std::terminate`，导致整个进程崩溃。
+- 影响: 本地任意客户端可通过构造超长数字参数实现稳定 DoS（杀死 sucre-snort）。
+- **修复**: 使用 `std::from_chars` 进行无异常 `uint32_t` 解析；解析失败/越界时不再崩溃（回退为 STR 参数），避免触发 `std::terminate`。(2026-01-21)
+
+#### 79. snortSave 可被多线程并发调用，导致保存流程数据竞争/文件损坏（CRITICAL） ✅ **已修复**
+- 危险等级: **CRITICAL**
+- 位置: sucre/sucre-snort/src/sucre-snort.cpp:104-145（周期性 snortSave）；sucre/sucre-snort/src/Control.cpp:658-673（RESETALL 内调用 snortSave）
+- 问题: 主线程周期性调用 `snortSave()`；同时控制线程在 `RESETALL` 里也会调用 `snortSave()`，两者之间没有任何全局互斥。各模块 `save()` 内部的 `Saver`（ofstream/rename 写盘流程）本身也非线程安全 → 并发执行时会发生数据竞争（UB）与同名 `.tmp` 文件互相覆盖/交错写入。
+- 影响: 可能崩溃（UB）；更常见是持久化文件损坏/丢失（settings/rules/domains/app stats/dnsstream 等），出现“随机恢复失败/状态回退”。
+- **修复**: 为 `snortSave()` 引入全局互斥（单入口 `std::mutex`），确保周期性保存与 RESETALL 保存不会并发执行，避免 `.tmp`/rename 交错与跨模块 save 数据竞争。(2026-01-21)
+
+#### 80. Packet::length 位域仅 14bit，GSO/大包下长度输出可能截断（LOW） ✅ **已修复**
+- 危险等级: **LOW**
+- 位置: sucre/sucre-snort/src/Packet.hpp:24-30；打印: sucre/sucre-snort/src/Packet.cpp:36-58
+- 问题: `Packet::_len` 使用 `uint16_t _len : 14`，最大仅 16383；但启用了 NFQUEUE 的 GSO 相关配置，实际 `payloadLen` 可能更大。该字段截断会导致 PKTSTREAM 中 `length` 输出错误（统计本身使用入参 len，不受影响）。
+- 影响: 主要是调试/观测误导（PKTSTREAM length 不可信），不直接影响拦截判定。
+- **修复**: 移除 `_len` 14-bit 位域，改为完整 `uint16_t` 存储；PKTSTREAM 的 `length` 不再在大包场景下被截断。(2026-01-21)

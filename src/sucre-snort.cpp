@@ -6,6 +6,7 @@
 #include <csignal>
 #include <unistd.h>
 #include <thread>
+#include <mutex>
 
 #include <sucre-snort.hpp>
 #include <Timer.hpp>
@@ -38,6 +39,10 @@ std::shared_mutex mutexListeners;
 // Fix #12: use an async-signal-safe handler that only sets a flag
 static volatile sig_atomic_t g_quit_flag = 0;
 static void on_term_signal(int) { g_quit_flag = 1; }
+
+// snortSave() can be called from multiple threads (periodic loop, RESETALL). Guard the
+// full save pipeline to avoid concurrent Saver tmp/rename races and module data races.
+static std::mutex g_snortSaveMutex;
 
 static void snort();
 
@@ -136,6 +141,7 @@ static void snort() {
 }
 
 void snortSave(bool quit) {
+    const std::lock_guard<std::mutex> lock(g_snortSaveMutex);
     Timer::set("save", "Data backup time");
     settings.save();
     blockingListManager.save();

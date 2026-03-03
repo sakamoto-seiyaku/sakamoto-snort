@@ -49,7 +49,7 @@ public:
 template <class T> class StatsTPL : public Stats {
 protected:
     T _stats[nbViews - 1];
-    std::shared_mutex _mutex;
+    mutable std::shared_mutex _mutex;
 
 private:
     time_t _timestamp;

@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <cstring>
 #include <sstream>
+#include <vector>
 
 #include <ActivityManager.hpp>
 #include <RulesManager.hpp>
@@ -132,7 +133,15 @@ void AppManager::reset() {
 void AppManager::save() {
     _saver.save([&] {
         _stats.save(_saver);
-        for (const auto &[_, app] : _byUid) {
+        std::vector<App::Ptr> apps;
+        {
+            const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+            apps.reserve(_byUid.size());
+            for (const auto &[_, app] : _byUid) {
+                apps.push_back(app);
+            }
+        }
+        for (const auto &app : apps) {
             app->save();
         }
     });
@@ -144,7 +153,15 @@ void AppManager::restore() {
         // Restore state only for apps already in _byUid (created by PackageListener or runtime make()).
         // Do not create new Apps from persisted files - App lifecycle is driven by packages.list
         // and runtime UID discovery, not by saved state files.
-        for (const auto &[_, app] : _byUid) {
+        std::vector<App::Ptr> apps;
+        {
+            const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+            apps.reserve(_byUid.size());
+            for (const auto &[_, app] : _byUid) {
+                apps.push_back(app);
+            }
+        }
+        for (const auto &app : apps) {
             app->restore(app);
         }
         // Clean up orphan package save files for apps that no longer exist

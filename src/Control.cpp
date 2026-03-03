@@ -11,9 +11,11 @@
 #include <unistd.h>
 #include <thread>
 #include <vector>
+#include <charconv>
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <system_error>
 #include <sucre-snort.hpp>
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
@@ -463,12 +465,30 @@ void Control::clientLoop(const int sockClient) const {
     close(sockClient);
 }
 
+namespace {
+bool tryParseUint32(const std::string &token, uint32_t &out) {
+    if (token.empty()) {
+        return false;
+    }
+    uint32_t value = 0;
+    const char *begin = token.data();
+    const char *end = begin + token.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, value);
+    if (ec != std::errc() || ptr != end) {
+        return false;
+    }
+    out = value;
+    return true;
+}
+} // namespace
+
 auto Control::readCmdArgs(std::stringstream &args) {
     std::string arg;
     std::vector<CmdArg> vecArgs;
     while (args >> arg) {
-        if (std::all_of(arg.begin(), arg.end(), [](char ch) { return std::isdigit(static_cast<unsigned char>(ch)); })) {
-            vecArgs.emplace_back(arg, std::stoi(arg));
+        uint32_t num = 0;
+        if (tryParseUint32(arg, num)) {
+            vecArgs.emplace_back(arg, num);
         } else if (arg == "true" || arg == "false") {
             vecArgs.emplace_back((arg == "true"));
         } else {
@@ -488,10 +508,10 @@ Control::CmdArg Control::readSingleArg(std::stringstream &args) {
     if (!(args >> token)) {
         return CmdArg(); // NONE
     }
-    // Check if all digits (INT)
-    if (std::all_of(token.begin(), token.end(),
-                    [](char ch) { return std::isdigit(static_cast<unsigned char>(ch)); })) {
-        return CmdArg(token, std::stoi(token));
+    // INT (uint32), parse safely without exceptions.
+    uint32_t num = 0;
+    if (tryParseUint32(token, num)) {
+        return CmdArg(token, num);
     }
     // Check for boolean
     if (token == "true" || token == "false") {

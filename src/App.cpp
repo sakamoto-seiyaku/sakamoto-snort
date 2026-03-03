@@ -8,6 +8,7 @@
 #include <Settings.hpp>
 #include <App.hpp>
 #include <Settings.hpp>
+#include <mutex>
 
 App::App(const Uid uid, const NamesVec &names)
     : App(uid, settings.systemAppPrefix + std::to_string(uid), names,
@@ -30,16 +31,19 @@ App::App(const Uid uid, const std::string &name, const NamesVec &names,
     , _uid(uid)
     , _name(name)
     , _names(names)
+    , _nameSnap(std::make_shared<const std::string>(name))
     , _blockMask(blockMask)
     , _blockIface(blockIface)
     , _useCustomList(useCustomList) {}
 
 bool App::isAnonymous() const {
+    const std::shared_lock<std::shared_mutex> lock(_mutexMeta);
     return _name.rfind(settings.systemAppPrefix, 0) == 0;
 }
 
 bool App::upgradeName(const std::string &newName) {
-    if (!isAnonymous()) {
+    const std::unique_lock<std::shared_mutex> lock(_mutexMeta);
+    if (_name.rfind(settings.systemAppPrefix, 0) != 0) {
         return false;  // Already named, no upgrade needed
     }
 
@@ -55,6 +59,9 @@ bool App::upgradeName(const std::string &newName) {
     _name = newName;
     _names.clear();
     _saver = Saver(newPath);
+    // Publish the new name for lock-free readers (stream output paths).
+    std::atomic_store_explicit(&_nameSnap, std::make_shared<const std::string>(_name),
+                              std::memory_order_release);
     _saved = false;
 
     LOG(INFO) << "App upgraded from anonymous to " << newName << " (uid=" << _uid << ")";
@@ -71,6 +78,7 @@ bool App::upgradeName(const NamesVec &newNames) {
 bool App::hasData(const Stats::View view) { return _stats.hasData(view); }
 
 bool App::hasData(const Stats::Color cs, const Stats::View view) {
+    const std::shared_lock<std::shared_mutex> lock(mutex(cs));
     for (auto &[domain, stats] : domStats(cs)) {
         if (stats.hasData(view)) {
             return true;
@@ -172,11 +180,13 @@ void App::reset(const Stats::View view) {
 }
 
 void App::removeFile() {
+    const std::unique_lock<std::shared_mutex> lock(_mutexMeta);
     _saved = false;
     _saver.remove();
 }
 
 void App::save() {
+    const std::shared_lock<std::shared_mutex> metaLock(_mutexMeta);
     if (!_saved || !_blackRules.saved() || !_whiteRules.saved()) {
         _saver.save([&] {
             _saver.write<uint8_t>(_blockMask);
@@ -203,6 +213,7 @@ void App::save() {
 }
 
 void App::restore(const App::Ptr &app) {
+    const std::shared_lock<std::shared_mutex> metaLock(_mutexMeta);
     _saver.restore([&] {
         _blockMask = _saver.read<uint8_t>();
         _blockMask = Settings::normalizeAppBlockMask(_blockMask);
@@ -230,11 +241,12 @@ void App::restore(const App::Ptr &app) {
 }
 
 void App::print(std::ostream &out) {
+    const auto names = this->names();
     print(out, [&](App &app) {
-        if (_names.size() > 1) {
+        if (names.size() > 1) {
             out << "," << JSF("allNames") << "[";
             bool first = true;
-            for (const auto &name : _names) {
+            for (const auto &name : names) {
                 when(first, out << ",");
                 out << JSS(name);
             }
@@ -244,7 +256,7 @@ void App::print(std::ostream &out) {
 }
 
 void App::print(std::ostream &out, const PrintFun &&print) {
-    out << "{" << JSF("name") << JSS(_name) << "," << JSF("uid") << _uid << "," << JSF("userId")
+    out << "{" << JSF("name") << JSS(name()) << "," << JSF("uid") << _uid << "," << JSF("userId")
         << userId() << "," << JSF("appId") << appId() << "," << JSF("blocked")
         << static_cast<uint32_t>(_blockMask) << "," << JSF("blockIface")
         << static_cast<uint32_t>(_blockIface) << "," << JSF("tracked") << JSB(_tracked) << ","

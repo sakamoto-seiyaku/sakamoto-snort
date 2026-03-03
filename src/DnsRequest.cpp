@@ -28,7 +28,13 @@ DnsRequest::DnsRequest(const App::Ptr app, const Domain::Ptr domain, const Stats
 DnsRequest::~DnsRequest() {}
 
 void DnsRequest::print(std::ostream &out) const {
-    out << "{" << JSF("app") << JSS(_app->name()) << "," << JSF("uid") << _app->uid() << ","
+    out << "{" << JSF("app");
+    if (const auto appName = _app->nameSnapshot()) {
+        out << JSS(*appName);
+    } else {
+        out << JSS(_app->name());
+    }
+    out << "," << JSF("uid") << _app->uid() << ","
         << JSF("userId") << _app->userId() << "," << JSF("domain") << JSS(_domain->name()) << ","
         << JSF("domMask") << static_cast<uint32_t>(_domain->blockMask()) << "," << JSF("appMask")
         << static_cast<uint32_t>(_app->blockMask()) << "," << JSF("blocked") << JSB(_blocked) << ","
@@ -47,7 +53,11 @@ bool DnsRequest::expired(const DnsRequest::Ptr req) const {
 }
 
 void DnsRequest::save(Saver &saver) {
-    saver.write(_app->name());
+    if (const auto appName = _app->nameSnapshot()) {
+        saver.write(*appName);
+    } else {
+        saver.write(_app->name());
+    }
     saver.write(_domain->name());
     saver.write<Stats::Color>(_color);
     saver.write<bool>(_blocked);

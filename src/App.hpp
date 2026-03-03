@@ -5,6 +5,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <memory>
+#include <shared_mutex>
 #include <vector>
 
 #include <AppStats.hpp>
@@ -23,10 +26,13 @@ private:
     using PrintFun = std::function<void(App &app)>;
 
     Saver _saver;
+    mutable std::shared_mutex _mutexMeta; // protects _saver/_name/_names during anonymous->named upgrade
 
     const Uid _uid;
     std::string _name;       // Non-const to allow anonymous→named upgrade
     NamesVec _names;         // Non-const to allow anonymous→named upgrade
+    // Immutable snapshot of name for lock-free reads in high-volume streaming code paths.
+    std::shared_ptr<const std::string> _nameSnap;
     std::atomic_bool _saved = false;
     AppStats _stats;
     std::pair<DomStatsMap, std::shared_mutex> _domStats[Stats::nbColors - 1];
@@ -47,9 +53,20 @@ public:
 
     App(const App &) = delete;
 
-    const std::string &name() const { return _name; }
+    std::string name() const {
+        const std::shared_lock<std::shared_mutex> lock(_mutexMeta);
+        return _name;
+    }
 
-    const NamesVec &names() const { return _names; }
+    // Lock-free snapshot; prefer for packet/DNS streaming output to avoid per-item string copies.
+    std::shared_ptr<const std::string> nameSnapshot() const {
+        return std::atomic_load_explicit(&_nameSnap, std::memory_order_acquire);
+    }
+
+    NamesVec names() const {
+        const std::shared_lock<std::shared_mutex> lock(_mutexMeta);
+        return _names;
+    }
 
     // Returns true if this app has an anonymous name (e.g., "system_12345")
     bool isAnonymous() const;

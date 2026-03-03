@@ -6,6 +6,9 @@
 #include <Saver.hpp>
 #include <Stats.hpp>
 
+#include <cstring>
+#include <type_traits>
+
 Stats::Stats() {}
 
 Stats::~Stats() {}
@@ -18,13 +21,35 @@ template <class T> StatsTPL<T>::StatsTPL() {
 template <class T> StatsTPL<T>::~StatsTPL() {}
 
 template <class T> void StatsTPL<T>::save(Saver &saver) const {
-    saver.write<time_t>(_timestamp);
-    saver.write(_stats);
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "StatsTPL snapshot save requires trivially copyable T");
+
+    // Hot-path friendly: hold the stats mutex only long enough to take a stable snapshot.
+    // All potentially blocking file I/O happens after releasing the mutex.
+    time_t ts;
+    decltype(_stats) statsSnap;
+    {
+        const std::lock_guard<std::shared_mutex> lock(_mutex);
+        ts = _timestamp;
+        std::memcpy(statsSnap, _stats, sizeof(_stats));
+    }
+
+    saver.write<time_t>(ts);
+    saver.write(statsSnap);
 }
 
 template <class T> void StatsTPL<T>::restore(Saver &saver) {
-    _timestamp = saver.read<time_t>();
-    saver.read(_stats);
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "StatsTPL snapshot restore requires trivially copyable T");
+
+    // Read into a local buffer first (may block on I/O), then publish under the mutex.
+    const time_t ts = saver.read<time_t>();
+    decltype(_stats) statsSnap;
+    saver.read(statsSnap);
+
+    const std::lock_guard<std::shared_mutex> lock(_mutex);
+    _timestamp = ts;
+    std::memcpy(_stats, statsSnap, sizeof(_stats));
 }
 
 template <class T> time_t StatsTPL<T>::timestamp() {

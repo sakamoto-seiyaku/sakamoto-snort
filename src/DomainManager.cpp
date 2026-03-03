@@ -181,9 +181,14 @@ void DomainManager::restore() {
 }
 
 void DomainManager::reset() {
-    _byIPv4.clear();
-    _byIPv6.clear();
-    _byName.clear();
+    {
+        const std::scoped_lock lock(_mutexByName, _mutexByIP);
+        _byIPv4.clear();
+        _byIPv6.clear();
+        _byName.clear();
+        // Keep the long-lived anonymous domain discoverable after a full reset.
+        _byName.try_emplace(_anonymousDom->name(), _anonymousDom);
+    }
     _customBlacklist.reset();
     _customWhitelist.reset();
     _blackRules.reset();

@@ -120,6 +120,7 @@ void RulesManager::removeCustom(const App::Ptr &app, const Rule::Id ruleId,
 
 void RulesManager::save() {
     _saver.save([&] {
+        const std::shared_lock<std::shared_mutex> lock(_mutex);
         _saver.write<uint32_t>(_idCount);
         _saver.write<uint32_t>(_rules.size());
         for (const auto &[id, rule] : _rules) {
@@ -130,6 +131,7 @@ void RulesManager::save() {
 
 void RulesManager::restore() {
     _saver.restore([&] {
+        const std::lock_guard<std::shared_mutex> lock(_mutex);
         _idCount = _saver.read<uint32_t>();
         uint32_t nb = _saver.read<uint32_t>();
         for (uint32_t i = 0; i < nb; ++i) {
