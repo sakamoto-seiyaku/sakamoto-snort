@@ -23,7 +23,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 
 ### Architecture Patterns
 - 单进程、多线程守护程序架构：
-  - `sucre-snort.cpp` 中启动多个线程：`PacketListener<IPv4/IPv6>`（iptables/NFQUEUE）、`DnsListener`（与 netd 配合）、`PackageListener`（监控 `/data/system/packages.list`）、`Control`（控制 socket）、以及阻止列表和各 Manager 的恢复逻辑。
+  - `sucre-snort.cpp` 中启动多个线程：`PacketListener<IPv4/IPv6>`（iptables/NFQUEUE）、`DnsListener`（与 netd 配合）、`PackageListener`（监控 `/data/system/packages.list` 与 per-user `package-restrictions.xml`）、`Control`（控制 socket）、以及阻止列表和各 Manager 的恢复逻辑。
   - 全局单例对象用于跨模块共享状态：`Settings`, `AppManager`, `DomainManager`, `HostManager`, `PacketManager`, `DnsListener`, `ActivityManager`, `BlockingListManager`, `RulesManager`, `Control` 等。
 - 域名与规则管理：
   - `DomainManager` 负责域名对象、黑白名单列表、自定义名单与规则映射，并通过 `_byName`、`_byIPv4`、`_byIPv6` 建立域名和 IP 的双向索引。
@@ -31,7 +31,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
   - `BlockingListManager` 管理屏蔽列表元信息（id/name/url/color/blockMask/etag/updatedAt/启用状态/域名数）并持久化，域名实际内容通过 `DomainManager` 加载到 `DomainList` 中。
   - `Rule` + `RulesManager` 提供域名/通配符/正则规则，支持全局和按 App 作用，自定义规则会在 `DomainManager`/`App` 构建对应的匹配器。
 - 应用与主机模型：
-  - `PackageListener` 持续监听 `/data/system/packages.list` 变化，增量维护 UID → 包名列表，再通过 `AppManager` 创建/删除 `App` 实例。
+  - `PackageListener` 持续监听 `/data/system/packages.list` 与 `/data/system/users/<userId>/package-restrictions.xml` 变化，聚合得到 full UID → names[] 快照，再通过 `AppManager` 创建/删除 `App` 实例。
   - `App` 维护每个 UID 的全局/按域名统计（`AppStats` + per-domain `DomainStats`）、拦截掩码（`blockMask`）、接口掩码（`blockIface`）、是否追踪（`tracked`）以及自定义黑白名单和规则。
   - `HostManager` 维护 IP → `Host` → 可选域名映射，并在启用 `reverseDns` 时通过 `getnameinfo` 做反向 DNS。
 - 数据路径与判决：
@@ -67,7 +67,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 ## Domain Context
 - 项目定位与边界：
   - 这是 sucre 阻止器的“系统内核”组件，不负责 UI、HTTP 下载或用户配置管理；这些任务由上层应用完成，通过控制协议与本守护进程交互。
-  - 当前实现以“单用户设备”为假设：`AppManager::make` 仍对 UID 取模（`uid % 100000`），不同 Android 用户下的同一包名会被折叠到同一逻辑 App 中；多用户支持的详细设计在 `docs/SNORT_MULTI_USER_REFACTOR.md` 中，但尚未在代码里落地。
+  - 当前实现支持 Android 多用户：内部以完整 Linux UID 作为 App 主键；通过 `/data/system/packages.list` + per-user `/data/system/users/<userId>/package-restrictions.xml` 聚合安装状态；控制协议在 `<uid|str>` 参数位置支持 `USER <userId>` 子句进行精确选择。
 - 网络与拦截模型：
   - iptables 建立专用链 `sucre-snort_INPUT`/`sucre-snort_OUTPUT`，通过 NFQUEUE 将除 DNS（53/853/5353）外的流量送入用户态处理。
   - DNS 解析由系统 `netd`/`DnsResolver` 完成，通过 Unix 域 socket `sucre-snort-netd` 把域名与 UID 以及解析出的 IP 列表发送给 `DnsListener`。
@@ -102,7 +102,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
   - 控制协议命令和返回 JSON 结构已经被上层 UI 依赖；对已有命令只允许兼容性扩展（新增字段），不允许随意改变字段含义或删除字段。
   - socket 名称（`sucre-snort-control`, `sucre-snort-netd`）、路径（`/data/snort/...`）、iptables 链名称等常量均被多个组件硬编码依赖，修改前必须更新相关规范与上游调用方。
 - 多用户约束：
-  - 目前代码仍按“单用户”实现，不支持真正的 per-user 规则/统计隔离；`docs/SNORT_MULTI_USER_REFACTOR.md` 描述的是未来演进方向，新功能在设计时可以参考但不得假定其已经实现。
+  - 当前代码已支持按完整 UID 区分不同 userId 下的 App 实例，并通过 `USER <userId>` 选择语义暴露给调用方；但全局视图与全局列表（例如 `ALL<v>`、全局黑/白名单）仍保持设备级语义，不提供隐式的 per-user 全局视图拆分。
 
 ## External Dependencies
 - Android / 内核依赖：
@@ -110,7 +110,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
   - `cutils` 提供的 `android_get_control_socket`，用于从 init 继承预创建的 Unix 域 socket。
 - 上游服务与系统组件：
   - 系统 DNS 组件（netd / DnsResolver），通过 `sucre-snort-netd` socket 与 `DnsListener` 交互。
-  - Android 包管理与 `packages.list`：`PackageListener` 依赖 `/data/system/packages.list` 作为 App UIDs 的权威来源。
+  - Android 包管理与系统持久化文件：`PackageListener` 依赖 `/data/system/packages.list`（包名↔appId）与 per-user `package-restrictions.xml`（安装状态）聚合得到 full UID 列表。
   - 上层 sucre UI / 管理应用：负责向 `sucre-snort-control` 发送命令（例如管理 Blocking Lists、切换 App 拦截策略、开启流式订阅）并持久化用户配置。
 - 外部列表/网络服务：
   - 屏蔽列表的下载与更新由上层应用负责；本守护进程只管理本地元信息和域名文件，不直接发起 HTTP 请求。
