@@ -119,7 +119,7 @@ Domain 对象字段:
 
 事件格式:
 - DNS: `{ "app":string, "uid":int, "userId":int, "domain":string, "domMask":int, "appMask":int, "blocked":0|1, "timestamp":string }`
-- Packet(IPv4/6): `{ "app":string, "uid":int, "userId":int, "direction":"in|out", "length":int, "interface":string, "protocol":"tcp|udp|icmp|n/a", "timestamp":string, "ipv4|ipv6":string, "host":string|"n/a", "srcPort":int, "dstPort":int, "accepted":0|1 }`
+- Packet(IPv4/6): `{ "app":string, "uid":int, "userId":int, "direction":"in|out", "length":int, "interface":string, "protocol":"tcp|udp|icmp|n/a", "timestamp":string, "ipVersion":4|6, "srcIp":string, "dstIp":string, "host":string|"n/a", "srcPort":int, "dstPort":int, "accepted":0|1, "reasonId":string, "ruleId"?:string|int, "wouldRuleId"?:string|int, "wouldDrop"?:0|1 }`
 - Activity: `{ "blockEnabled":0|1, "uid":int, "userId":int, "app":{App 含 stats 通知视图} }`
 
 流行为：
@@ -342,7 +342,7 @@ Host 对象字段:
   - `WHITE.APP.DNS.A <uid>` → `[]` 或域名对象数组
 - 流（运行 10 秒内）
   - `DNSSTREAM.START 10 1` → 多条 `{ "app","domain","blocked",... }`；`DNSSTREAM.STOP` → `OK`
-  - `PKTSTREAM.START 10 1` → 多条 `{ "app","direction","length","interface","protocol","timestamp","ipv4|ipv6","host","srcPort","dstPort","accepted" }`；`PKTSTREAM.STOP` → 无响应
+  - `PKTSTREAM.START 10 1` → 多条 `{ "app","direction","length","interface","protocol","timestamp","ipVersion","srcIp","dstIp","host","srcPort","dstPort","accepted","reasonId","ruleId"?,"wouldRuleId"?,"wouldDrop"? }`；`PKTSTREAM.STOP` → 无响应
   - `ACTIVITYSTREAM.START` → `{ "blockEnabled", "app":{...} }`；`ACTIVITYSTREAM.STOP` → 无响应
   - `TOPACTIVITY <uid>` → 无响应；后续 ACTIVITY 事件包含该 app
 - 自定义黑白名单
