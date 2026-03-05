@@ -44,6 +44,31 @@
 - **THEN** 系统 SHALL 返回 ACCEPT
 - **AND** PKTSTREAM SHALL 输出该包的 would-match（包含该规则的 `wouldRuleId` 与 `wouldDrop=1`）
 
+### Requirement: Per-rule runtime stats are maintained and exposed
+系统 MUST 为每条 IP 规则维护并对外暴露 runtime stats（不依赖 PKTSTREAM 是否开启）：
+- `hitPackets:uint64` / `hitBytes:uint64` / `lastHitTsNs:uint64`
+- `wouldHitPackets:uint64` / `wouldHitBytes:uint64` / `lastWouldHitTsNs:uint64`
+
+系统 MUST 通过控制面 `IPRULES.PRINT` 在 rule 对象中输出上述 `stats` 字段。
+
+约束：
+- `hit*` 仅在该规则作为最终 enforce 命中规则时更新（每包最多 1 条规则被计为 hit）。
+- `wouldHit*` 仅在该规则作为最终 would-match 规则时更新（每包最多 1 条 would-match）。
+- stats 生命周期为 since boot（重启后归零），不要求持久化。
+
+#### Scenario: Enforce hit updates hitPackets and lastHitTsNs
+- **GIVEN** `IPRULES=1` 且存在一条 `enforce=1` 的规则可命中某 IPv4 包（其 `ruleId` 为 R）
+- **WHEN** 发送该包
+- **THEN** 后续调用 `IPRULES.PRINT RULE R` 时，返回的 `stats.hitPackets` SHALL 大于等于 1
+- **AND** `stats.lastHitTsNs` SHALL 大于 0
+
+#### Scenario: Would-match updates wouldHitPackets without dropping
+- **GIVEN** `IPRULES=1` 且存在一条 `action=BLOCK,enforce=0,log=1` 的规则可命中某 IPv4 包（其 `ruleId` 为 W）
+- **AND** 该包未命中任何 `enforce=1` 的规则
+- **WHEN** 发送该包
+- **THEN** 系统 SHALL 返回 ACCEPT
+- **AND** 后续调用 `IPRULES.PRINT RULE W` 时，返回的 `stats.wouldHitPackets` SHALL 大于等于 1
+
 ### Requirement: Engine can be disabled with zero behavioral impact
 系统 MUST 提供全局开关 `IPRULES`。当 `IPRULES=0` 时：
 - IP 规则引擎 SHALL 不参与 Packet 判决；

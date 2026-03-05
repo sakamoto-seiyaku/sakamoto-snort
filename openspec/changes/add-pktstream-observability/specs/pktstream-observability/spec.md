@@ -51,3 +51,21 @@
 - **AND** 事件 SHALL 包含 `wouldDrop`
 - **AND** `wouldDrop` SHALL 为 1
 - **AND** `reasonId` SHALL 为 `ALLOW_DEFAULT`
+
+### Requirement: Device-wide reason counters are exposed via METRICS.REASONS
+系统 MUST 在控制面提供 device-wide 的 per-reason counters（拉取式，不依赖 PKTSTREAM）：
+- 命令 `METRICS.REASONS` MUST 返回每个 reasonId 的 `packets/bytes`（uint64）
+- 命令 `METRICS.REASONS.RESET` MUST 清空上述 counters
+- counters MUST 在热路径以非阻塞方式更新（仅允许 `atomic++`，不得新增锁/IO/分配）
+- counters 的生命周期为 since boot（重启后归零），不要求持久化
+
+#### Scenario: METRICS.REASONS reflects observed decisions
+- **GIVEN** `BLOCK=1`
+- **AND** 某包在 baseline 判决下被 ACCEPT（其 PKTSTREAM 事件 `reasonId=ALLOW_DEFAULT`）
+- **WHEN** 客户端调用 `METRICS.REASONS`
+- **THEN** 返回值中的 `ALLOW_DEFAULT.packets` SHALL 大于等于 1
+
+#### Scenario: METRICS.REASONS.RESET clears counters
+- **GIVEN** `METRICS.REASONS` 中至少一个 reason 的 `packets` 大于 0
+- **WHEN** 客户端调用 `METRICS.REASONS.RESET`
+- **THEN** 后续调用 `METRICS.REASONS` 时，所有 reason 的 `packets/bytes` SHALL 为 0

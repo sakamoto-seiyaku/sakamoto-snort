@@ -11,3 +11,5 @@
 - [ ] 3.2 PKTSTREAM：升级为输出 `ipVersion/srcIp/dstIp` 并移除 `ipv4|ipv6`
 - [ ] 3.3 文档：更新 `docs/INTERFACE_SPECIFICATION.md` 的 PKTSTREAM 事件格式
 - [ ] 3.4 设备验证：`reasonId` baseline（iface / ip-leak / default allow）与字段齐全
+- [ ] 3.5 METRICS：实现 `METRICS.REASONS`（per-reason `packets/bytes`）与 `METRICS.REASONS.RESET`
+- [ ] 3.6 设备验证：`METRICS.REASONS` 计数增长与 reset 生效（不依赖 PKTSTREAM 是否开启）

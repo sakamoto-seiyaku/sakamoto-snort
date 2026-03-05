@@ -128,9 +128,22 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 
 ## 7. Per-rule runtime stats
 为每条规则维护：
-- `hitPackets/hitBytes/lastHitNs`
-- `wouldHitPackets/lastWouldHitNs`
-热路径只对“最终命中规则”和“最终 would-match 规则（若有）”做无锁原子更新。
+- `hitPackets/hitBytes/lastHitTsNs`
+- `wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`
+
+语义：
+- `hit*`：该规则作为最终 enforce 命中规则时更新（每包最多 1 条）。
+- `wouldHit*`：该规则作为最终 would-match（`enforce=0, log=1`，且无 enforce 命中）规则时更新（每包最多 1 条）。
+
+生命周期：
+- since boot（进程内计数），不要求持久化；重启后归零。
+- 当规则被 `UPDATE` 覆盖为新定义时，该规则的 runtime stats SHOULD 清零（避免旧命中混入新语义）。
+
+对外输出：
+- `IPRULES.PRINT` 的 rule 对象中包含 `stats` 字段（输出上述 counters）。
+
+实现约束：
+- 热路径只对“最终命中规则”和“最终 would-match 规则（若有）”做无锁原子更新（`atomic++ relaxed`）；不得新增锁/IO/分配。
 
 ## 8. Persistence & RESETALL
 - 新增持久化文件（实现阶段确定具体路径，推荐在 `/data/snort/save/system/` 下新增 `iprules` 文件）。

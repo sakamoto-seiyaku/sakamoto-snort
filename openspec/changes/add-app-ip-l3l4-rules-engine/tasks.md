@@ -13,7 +13,7 @@
 - [ ] 3.2 实现 preflight：统计 subtables/buckets/rangeCandidates 并执行阈值校验（推荐告警+硬拒绝）
 - [ ] 3.3 实现 snapshot：immutable EngineSnapshot + atomic publish
 - [ ] 3.4 实现 lookup：mask-subtable + maxPriority 早停 + rangeCandidates 线性扫描（硬上限）
-- [ ] 3.5 实现 per-rule runtime stats（hit/wouldHit/lastHit）
+- [ ] 3.5 实现 per-rule runtime stats（`hitPackets/hitBytes/lastHitTsNs` + `wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`，since boot 不持久化），并在 `IPRULES.PRINT` 输出 `stats`
 
 ## 4. Hot path integration
 - [ ] 4.1 `PacketManager` 接入规则引擎 lookup（依赖 `add-pktstream-observability` 已提供 src/dst 5-tuple 输入）
