@@ -25,7 +25,7 @@
 - [ ] 5.2 log-only 命中：填充 `wouldRuleId` 与 `wouldDrop=1`；保持 `accepted=1` 且 `reasonId` 仍解释实际 verdict；同时保证每包最多 1 条 would-match（不改变 verdict）
 
 ## 6. Persistence & RESETALL
-- [ ] 6.1 规则集持久化与恢复（新增 saver 文件），重启后恢复规则与 stats
+- [ ] 6.1 规则集持久化与恢复（新增 saver 文件），重启后恢复规则（per-rule stats since boot，不持久化）
 - [ ] 6.2 `RESETALL` 清理持久化与内存快照
 
 ## 7. Verification (device)

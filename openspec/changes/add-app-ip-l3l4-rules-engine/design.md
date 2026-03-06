@@ -137,6 +137,7 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 
 生命周期：
 - since boot（进程内计数），不要求持久化；重启后归零。
+- 若需要跨重启保留/做长期分析，由前端周期性拉取并自行持久化；不在本 change 范围内。
 - 当规则被 `UPDATE` 覆盖为新定义时，该规则的 runtime stats SHOULD 清零（避免旧命中混入新语义）。
 
 对外输出：
