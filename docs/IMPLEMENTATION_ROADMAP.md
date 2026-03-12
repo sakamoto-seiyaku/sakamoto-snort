@@ -7,38 +7,38 @@
 
 当前主线优先级调整为：
 
-`Debug 基础设施 → Host-side 单元测试 → Host-driven 集成测试 → 真机/模拟器调试验证 → 恢复功能主线（A → IP rules core → C → B）`
+`P0 Host-side 单元测试（当前 active change） → P1 Host-driven 集成测试（后续独立 change） → P2 恢复功能主线（A → IP rules core → C → B） → P3 原生 Debug / 真机专项验证（待设备恢复后推进）`
 
 - 这次调整意味着：此前围绕 `A / IP rules core / C / B` 的实现任务暂时中断。
 - 只有**直接服务于 debug / test lane 落地**的工作，才应在当前阶段插队进入主线。
 - 关于当前测试/调试路线、边界与官方依据，以 `docs/NATIVE_DEBUGGING_AND_TESTING.md` 为权威补充文档。
+- 当前仅通过 OpenSpec change `add-host-side-unit-test-foundation` 收敛 **P0 Host-side 单元测试**；在该 change 审核通过前，不进入对应实现。
+- `P1 Host-driven 集成测试` 与 `P3 原生 Debug / 真机专项验证` 将在后续分别以独立 change 推进，不并入当前 P0 change。
+- 由于设备返修，当前无法落地真机相关 debug / platform validation，因此这部分整体后置到 `P3`。
 
 ## 2. 当前阶段顺序与边界
 
-- `Debug 基础设施`
-  - 打通 `lldbclient.py` 的 CLI attach / run-under-debugger。
-  - 打通 `VS Code WSL2 + CodeLLDB` 图形化断点调试。
-  - 固化 `tombstone / stack / debuggerd.wait_for_debugger` 的 crash 定位流程。
-  - 视需要补充 dev-only debug build 选项与 sanitizer lane。
-- `Host-side 单元测试`
-  - 目标是尽快挡住低级回归，而不是追求“大而全覆盖”。
-  - 优先选择低耦合、高价值模块；不为了测试做大重构。
-  - 仅在必要处允许增加小型 seam / helper，但不得把当前阶段演化成架构重写。
-- `Host-driven 集成测试`
-  - 测试代码运行在 host / WSL，目标环境优先 Android device / emulator。
-  - 优先复用并演进现有 `dev/dev-smoke.sh` 与相关脚本，而不是另起一套完全独立流程。
-  - 这一层是当前最重要的自动化回归抓手。
-- `真机/模拟器调试验证`
-  - 模拟器 / 虚拟设备优先承担启动期、控制面、线程/锁类问题的快速定位。
-  - 真机继续承担 `NFQUEUE / iptables / netd / SELinux / 性能` 等强平台耦合问题的最终验证。
+- `P0 Host-side 单元测试`
+  - 这是当前 active change。
+  - 目标是挡住低级回归，优先覆盖低耦合模块。
+  - 本地落地方式采用仓库内置 `gtest`（`CMake + FetchContent` 固定版本），不要求 host 预装 `gtest` 包。
+  - 不为了测试做大重构。
+- `P1 Host-driven 集成测试`
+  - 这是后续独立 change，不属于当前 P0。
+  - 测试代码运行在 host / WSL，目标环境优先 Android device 或 emulator。
+- `P2 恢复功能主线`
+  - 在测试基础可用后，恢复 `A → IP rules core → C → B` 功能实现。
+- `P3 原生 Debug / 真机专项验证`
+  - 由于设备返修，当前不可落地。
+  - 设备恢复后，再推进 LLDB、真机 crash 复盘、`NFQUEUE / iptables / netd / SELinux / 性能` 等平台专项验证。
 
 ## 3. 为什么现在先做 debug / test
 
 - 当前最大瓶颈不是 spec 不清，而是**开发与定位效率不足**。
 - 若继续直接推进 `A / IP rules core / C / B`，会持续放大“只能看 log 反推”的成本。
-- `Host-driven integration tests` 与当前开发循环最接近，投入产出比最高。
-- 单元测试不是唯一目标，但它能以较低成本挡住一批解析、规则、统计类回归。
-- 先补齐 debug / test lane，后续功能主线的实现、回归与排障效率都会显著提高。
+- 当前设备不可用，真机相关 debug lane 暂时无法作为起步项。
+- 单元测试虽然不是全部目标，但它能以最低外部依赖成本先挡住一批解析、规则、统计类回归。
+- 先补齐可在本地推进的测试基础，再恢复功能主线；待设备恢复后，再补原生 debug 与平台专项验证。
 
 ## 4. 功能主线的保留顺序（在工程化基础补齐后恢复）
 
@@ -67,5 +67,6 @@
 - `add-pktstream-observability` 已按当前 A 层基线收敛。
 - `add-app-ip-l3l4-rules-engine` 已明确：仅 `NoMatch` 回落 legacy/domain。
 - `docs/DOMAIN_POLICY_OBSERVABILITY.md` 继续作为 B 层权威文档。
-- `docs/NATIVE_DEBUGGING_AND_TESTING.md` 已建立并成为当前测试/调试主线的权威补充文档。
-- 当前实现优先级已正式切换：先补齐 debug / test 工程化基础，再恢复 A/B/C 与 IP 规则主线实现。
+- `docs/NATIVE_DEBUGGING_AND_TESTING.md` 继续作为未来 P3 原生调试 / 平台专项验证的权威补充文档。
+- 当前 active change 已收敛为 `add-host-side-unit-test-foundation`；后续 phases 将继续拆分为独立 changes。
+- 当前实现优先级已正式切换：先完成 P0 Host-side 单元测试，再推进 P1 Host-driven 集成测试，随后恢复 A/B/C 与 IP 规则主线；P3 真机 debug 待设备恢复后再落地。
