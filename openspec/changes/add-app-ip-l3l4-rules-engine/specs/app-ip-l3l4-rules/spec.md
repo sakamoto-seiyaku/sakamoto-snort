@@ -9,40 +9,180 @@
 - `src IPv4 CIDR` 与 `dst IPv4 CIDR`（`/0..32`）
 - `srcPort` 与 `dstPort`（any / 精确 / range）
 
-命中语义 MUST 全局确定：同一数据包在同一时刻命中多条规则时，系统 SHALL 以 `priority` 为主键选取唯一命中规则，并使用固定 tie-break（例如 `specificityScore`、`ruleId`）保证稳定性。
+命中语义 MUST 全局确定：同一数据包在同一时刻命中多条规则时，系统 SHALL 先以 `priority` 为主键选取最高优先级候选；若同优先级仍有多条重叠命中，则 SHALL 由编译后的 classifier 稳定查询路径选出唯一命中规则。对同一份 active ruleset，重复编译后对同一包的唯一命中结果 MUST 保持一致。
 
 #### Scenario: Highest priority rule wins
 - **GIVEN** 针对同一 `uid` 存在两条均可命中的规则，且它们 `priority` 不同
 - **WHEN** NFQUEUE 收到该 `uid` 的 IPv4 数据包
 - **THEN** 系统 SHALL 选择 `priority` 更高的规则作为唯一命中，并输出对应的 `ruleId`
 
+#### Scenario: Same-priority overlap uses deterministic compiled winner
+- **GIVEN** 针对同一 `uid` 存在两条 `priority` 相同且均可命中的规则
+- **WHEN** 系统以同一份 active ruleset 对该规则集重复编译并处理同一 IPv4 数据包
+- **THEN** 系统 SHALL 在两次处理中选出同一条唯一命中规则
+
+### Requirement: Current v1 control surface is uid-only and rejects unsupported match dimensions
+系统 MUST 将当前 v1 规则控制面限定为数值 `uid` 选择器；包名字符串 selector MUST NOT 作为本 change 的输入语义。系统 MUST 要求 `priority` 显式提供；缺失 `priority` 的创建/更新请求 MUST 返回 `NOK`。对于 `enabled/enforce/log`，系统 MUST 固定当前 v1 的缺省值为 `1/1/0`。系统 MUST 同时拒绝当前未纳入 v1 语义的控制面字段（例如 `ct`），避免出现“看起来已配置、实际上不生效”的假语义。系统 MUST NOT 将 `NFQA_CT`、内核 conntrack 元数据或用户态自研 full flow tracking 作为当前 v1 匹配语义成立的前提。
+
+#### Scenario: Package-name selector is rejected
+- **GIVEN** 客户端尝试以包名字符串而非数值 `uid` 创建或查询规则
+- **WHEN** 控制面校验该请求
+- **THEN** 系统 SHALL 返回 `NOK`
+
+#### Scenario: Missing priority is rejected
+- **GIVEN** 客户端尝试创建或更新规则，但未提供 `priority`
+- **WHEN** 控制面校验该规则
+- **THEN** 系统 SHALL 返回 `NOK`
+
+#### Scenario: Unsupported ct field is rejected
+- **GIVEN** 客户端尝试创建或更新规则，并传入 `ct=...`
+- **WHEN** 控制面校验该规则
+- **THEN** 系统 SHALL 返回 `NOK`
+
+#### Scenario: v1 matching semantics do not depend on conntrack metadata
+- **GIVEN** 当前环境未向 NFQUEUE 暴露 `NFQA_CT` 或其他 conntrack 元数据
+- **AND** 已配置一条仅依赖 v1 已定义字段（`uid/direction/iface/proto/src/dst/ports`）的规则
+- **WHEN** NFQUEUE 收到可命中该规则的 IPv4 数据包
+- **THEN** 系统 SHALL 仍按这些 v1 字段完成匹配并得出一致的 IP 规则结果
+
+#### Scenario: Omitted toggle fields use v1 defaults
+- **GIVEN** 客户端创建一条规则时未显式提供 `enabled/enforce/log`
+- **WHEN** 后续客户端调用 `IPRULES.PRINT RULE R` 查看该规则
+- **THEN** 返回的该规则对象 SHALL 体现 `enabled=1`
+- **AND** 返回的该规则对象 SHALL 体现 `enforce=1`
+- **AND** 返回的该规则对象 SHALL 体现 `log=0`
+
 ### Requirement: Rule actions include ALLOW and BLOCK
-系统 MUST 支持规则动作 `ALLOW` 与 `BLOCK`。当 IP 规则引擎启用且命中：
+系统 MUST 支持规则动作 `ALLOW` 与 `BLOCK`。当数据包未命中更高优先级硬原因、且 IP 规则引擎启用并命中：
 - `ALLOW` SHALL 使该包最终 verdict 为 ACCEPT
 - `BLOCK` SHALL 使该包最终 verdict 为 DROP
 
 #### Scenario: ALLOW rule accepts a packet
-- **GIVEN** `IPRULES=1` 且存在一条命中该包的 `ALLOW` 规则
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 存在一条命中该包的 `ALLOW` 规则
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 ACCEPT
 
 #### Scenario: BLOCK rule drops a packet
-- **GIVEN** `IPRULES=1` 且存在一条命中该包的 `BLOCK` 规则
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 存在一条命中该包的 `BLOCK` 规则
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 DROP
 
+### Requirement: Enforce hits are attributed in PKTSTREAM
+当数据包未命中更高优先级硬原因、且 `IPRULES=1` 下最终由某条 `enforce=1` 规则决定实际 verdict 时，系统 MUST 在 PKTSTREAM 中输出与该实际 verdict 一致的 `reasonId`，并输出唯一胜出规则的 `ruleId`：
+- `ALLOW` 命中时，`reasonId` SHALL 为 `IP_RULE_ALLOW`
+- `BLOCK` 命中时，`reasonId` SHALL 为 `IP_RULE_BLOCK`
+
+#### Scenario: Enforce ALLOW emits IP_RULE_ALLOW and ruleId
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 某条 `ALLOW,enforce=1` 规则作为最终胜出规则命中该包
+- **WHEN** 系统输出该包的 PKTSTREAM 事件
+- **THEN** 事件 SHALL 包含该规则的 `ruleId`
+- **AND** `reasonId` SHALL 为 `IP_RULE_ALLOW`
+
+#### Scenario: Enforce BLOCK emits IP_RULE_BLOCK and ruleId
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 某条 `BLOCK,enforce=1` 规则作为最终胜出规则命中该包
+- **WHEN** 系统输出该包的 PKTSTREAM 事件
+- **THEN** 事件 SHALL 包含该规则的 `ruleId`
+- **AND** `reasonId` SHALL 为 `IP_RULE_BLOCK`
+
+### Requirement: ruleId is stable under incremental rule management
+系统 MUST 为每条规则分配 `ruleId`，并在当前增量管理模型下保持其稳定性：
+- 空规则集上的第一条规则 MUST 使用初始 `ruleId = 0`
+- `IPRULES.ADD` MUST 为新规则分配从 `0` 开始单调递增的整数 `ruleId`
+- `IPRULES.UPDATE` 与 `IPRULES.ENABLE` MUST 保留原有 `ruleId`
+- `IPRULES.REMOVE` MUST NOT 触发其余规则重新编号
+- 已删除 `ruleId` 在当前规则集生命周期内 MUST NOT 被后续 `ADD` 复用
+- 持久化恢复后，已保存规则 MUST 保持原有 `ruleId`
+- `RESETALL` 清空整套规则集后，后续第一条新规则 MUST 从初始 `ruleId = 0` 重新开始分配
+
+#### Scenario: UPDATE preserves ruleId
+- **GIVEN** 已存在一条规则，其 `ruleId` 为 `R`
+- **WHEN** 客户端执行 `IPRULES.UPDATE R ...` 并使新定义生效
+- **THEN** 后续 `IPRULES.PRINT RULE R` SHALL 仍以 `R` 标识该规则
+
+#### Scenario: REMOVE does not renumber surviving rules
+- **GIVEN** 已存在两条规则，其 `ruleId` 分别为 `R1` 与 `R2`
+- **WHEN** 客户端移除 `R1`
+- **THEN** 后续 `R2` SHALL 仍保持原有 `ruleId`
+
+#### Scenario: RESETALL restarts ruleId allocation from the initial value
+- **GIVEN** 先前规则集内已经分配过多个 `ruleId`
+- **WHEN** 客户端调用 `RESETALL` 并随后重新添加第一条规则
+- **THEN** 该新规则 SHALL 使用初始 `ruleId = 0`
+
+### Requirement: IFACE_BLOCK remains the highest-priority hard drop
+系统 MUST 保持 `IFACE_BLOCK` 为高于 IP 规则引擎的 hard-drop 原因。命中 `IFACE_BLOCK` 时，系统 SHALL 直接 DROP，并 SHALL NOT 让 `ALLOW`/`BLOCK`/would-match 改写该包的实际原因，也 SHALL NOT 输出来自 IP 规则引擎的 `ruleId`/`wouldRuleId` 归因。
+
+#### Scenario: ALLOW rule cannot override IFACE_BLOCK
+- **GIVEN** 某包命中 `IFACE_BLOCK`
+- **AND** 该包也命中一条 `ALLOW` 的 IP 规则
+- **WHEN** NFQUEUE 收到该包
+- **THEN** 系统 SHALL 返回 DROP
+- **AND** 该包的实际 `reasonId` SHALL 为 `IFACE_BLOCK`
+- **AND** PKTSTREAM SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
+
+### Requirement: Only NoMatch falls through to legacy/domain
+当数据包未命中 `IFACE_BLOCK`、`IPRULES=1` 且当前 active ruleset 中没有任何规则命中时，系统 MUST 将其视为 IP 规则层 `NoMatch`；该层 SHALL NOT 产生 `ruleId`、`wouldRuleId` 或 `IP_RULE_*` 归因，并 SHALL 允许该包继续进入后续 legacy/domain 路径。相对地，当 IP 规则引擎结果为 `Allow`、`Block` 或 `WouldBlock` 时，系统 SHALL NOT 再回落到 legacy/domain 路径。该 change 不定义 `NoMatch` 之后 legacy/domain 路径的详细判决语义。
+
+#### Scenario: No matching IP rule yields no IP-rule attribution and falls through
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 当前 active ruleset 中没有任何规则命中该包
+- **WHEN** NFQUEUE 收到该包
+- **THEN** PKTSTREAM SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
+- **AND** 若该事件包含 `reasonId`，则其 SHALL NOT 为 `IP_RULE_ALLOW` 或 `IP_RULE_BLOCK`
+- **AND** 该包 SHALL 继续进入后续 legacy/domain 路径
+
+#### Scenario: Would-block does not fall through to legacy/domain
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 某条 `action=BLOCK,enforce=0,log=1` 规则作为最终 would-match 命中该包
+- **WHEN** NFQUEUE 收到该包
+- **THEN** 系统 SHALL 返回 ACCEPT
+- **AND** 该包 SHALL NOT 再进入后续 legacy/domain 路径
+
 ### Requirement: Per-rule safety-mode via enforce/log (would-match)
-系统 MUST 为每条规则提供 `enforce` 与 `log` 控制：
+系统 MUST 为规则提供 `enforce` 与 `log` 控制，其中当前 safety-mode 仅适用于 `BLOCK` 规则：
 - `enforce=1`：命中时按 `ALLOW/BLOCK` 实际执行
-- `enforce=0, log=1`：命中时不得实际 DROP/ACCEPT 改变全局策略，仅产生 **would-match** 可观测结果
+- `action=BLOCK, enforce=0, log=1`：表示 would-block；仅当该包未被任何 `enforce=1` 规则作为最终命中接管时，才产生 **would-match** 可观测结果；其命中不得改变 IP 规则引擎本身给出的实际 verdict
+- 控制面 MUST 拒绝其他 `enforce=0` 组合（包括 `action=ALLOW, enforce=0` 与 `enforce=0, log=0`）
 
 `enforce=0` 的 would-match 事件在 `PKTSTREAM` 中每包最多输出 1 条（包含 `wouldRuleId` 与 `wouldDrop=1`）。
 
 #### Scenario: Would-block does not drop the packet
-- **GIVEN** `IPRULES=1` 且存在一条命中该包的规则，且 `action=BLOCK`、`enforce=0`、`log=1`
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 存在一条命中该包的规则，且 `action=BLOCK`、`enforce=0`、`log=1`
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 ACCEPT
 - **AND** PKTSTREAM SHALL 输出该包的 would-match（包含该规则的 `wouldRuleId` 与 `wouldDrop=1`）
+
+#### Scenario: ALLOW rule cannot use enforce=0 safety-mode
+- **GIVEN** 客户端尝试创建或更新一条规则，且其 `action=ALLOW`、`enforce=0`
+- **WHEN** 控制面校验该规则
+- **THEN** 系统 SHALL 返回 `NOK`
+
+### Requirement: Disabled rules are inert and zero-cost
+系统 MUST 支持规则级 `enabled` 开关。`enabled=0` 的规则 MUST 继续保留在控制面、持久化与 `IPRULES.PRINT` 输出中，但 MUST NOT 参与 active snapshot、Packet 判决、PKTSTREAM `ruleId/wouldRuleId` 归因、runtime stats 更新或 `IPRULES.PREFLIGHT` 的 active complexity 统计。热路径对 disabled rules SHALL 仅承担“该规则不存在”同等成本。
+
+#### Scenario: Disabled rule does not affect packet or observability
+- **GIVEN** `IPRULES=1`
+- **AND** 存在一条本可命中该包的规则，但其 `enabled=0`
+- **WHEN** NFQUEUE 收到该包
+- **THEN** 系统 SHALL 不因该规则改变该包的 verdict
+- **AND** PKTSTREAM SHALL NOT 输出该规则的 `ruleId` 或 `wouldRuleId`
+- **AND** 该规则的 `stats.hitPackets` 与 `stats.wouldHitPackets` SHALL 保持不变
+
+#### Scenario: Disabled rule is excluded from active preflight complexity
+- **GIVEN** 存在一条 `enabled=0` 的 range 规则
+- **WHEN** 客户端调用 `IPRULES.PREFLIGHT`
+- **THEN** 返回的 active complexity 统计 SHALL NOT 将该规则计入 `rangeRulesTotal` 或相关 bucket 负载
+
+#### Scenario: Disabled rule remains visible in IPRULES.PRINT
+- **GIVEN** 已存在一条规则 `R`，并通过 `IPRULES.ENABLE R 0` 将其禁用
+- **WHEN** 客户端调用 `IPRULES.PRINT RULE R`
+- **THEN** 返回值 SHALL 仍包含该规则
+- **AND** 该规则对象 SHALL 体现 `enabled=0`
 
 ### Requirement: Per-rule runtime stats are maintained and exposed
 系统 MUST 为每条 IP 规则维护并对外暴露 runtime stats（不依赖 PKTSTREAM 是否开启）：
@@ -54,6 +194,9 @@
 约束：
 - `hit*` 仅在该规则作为最终 enforce 命中规则时更新（每包最多 1 条规则被计为 hit）。
 - `wouldHit*` 仅在该规则作为最终 would-match 规则时更新（每包最多 1 条 would-match）。
+- `enabled=0` 的规则 MUST NOT 更新 `hit*`/`wouldHit*`。
+- 当规则被 `UPDATE` 改写并生效时，该规则的 `hit*`/`wouldHit*` MUST 清零。
+- 当规则从 `enabled=0` 重新切回 `enabled=1` 时，该规则的 `hit*`/`wouldHit*` MUST 清零。
 - stats 生命周期为 since boot（重启后归零），不要求持久化。
 
 #### Scenario: Enforce hit updates hitPackets and lastHitTsNs
@@ -64,36 +207,116 @@
 
 #### Scenario: Would-match updates wouldHitPackets without dropping
 - **GIVEN** `IPRULES=1` 且存在一条 `action=BLOCK,enforce=0,log=1` 的规则可命中某 IPv4 包（其 `ruleId` 为 W）
+- **AND** 该包未命中 `IFACE_BLOCK`
 - **AND** 该包未命中任何 `enforce=1` 的规则
 - **WHEN** 发送该包
 - **THEN** 系统 SHALL 返回 ACCEPT
 - **AND** 后续调用 `IPRULES.PRINT RULE W` 时，返回的 `stats.wouldHitPackets` SHALL 大于等于 1
 
+#### Scenario: Updating a rule resets its runtime stats
+- **GIVEN** 存在一条规则 `R`，且其 `stats.hitPackets` 或 `stats.wouldHitPackets` 已大于 0
+- **WHEN** 客户端通过 `IPRULES.UPDATE R ...` 改写该规则内容并使新定义生效
+- **THEN** 后续调用 `IPRULES.PRINT RULE R` 时，返回的 `stats.hitPackets` SHALL 为 0
+- **AND** 返回的 `stats.wouldHitPackets` SHALL 为 0
+
+#### Scenario: Re-enabling a rule resets its runtime stats
+- **GIVEN** 存在一条规则 `R`，其 `enabled=0`，且禁用前 `stats.hitPackets` 或 `stats.wouldHitPackets` 已大于 0
+- **WHEN** 客户端通过 `IPRULES.ENABLE R 1` 将其重新启用
+- **THEN** 后续调用 `IPRULES.PRINT RULE R` 时，返回的 `stats.hitPackets` SHALL 为 0
+- **AND** 返回的 `stats.wouldHitPackets` SHALL 为 0
+
 ### Requirement: Engine can be disabled with zero behavioral impact
 系统 MUST 提供全局开关 `IPRULES`。当 `IPRULES=0` 时：
 - IP 规则引擎 SHALL 不参与 Packet 判决；
-- 对外行为 SHALL 与未配置 IP 规则时一致（除去 PKTSTREAM 新增字段的兼容性扩展）。
+- Packet 热路径 SHALL 不执行该引擎的 snapshot load/lookup；
+- 对外行为 SHALL 与未配置 IP 规则时一致（仅允许出现 `add-pktstream-observability` 已定义的新字段输出）。
 
 #### Scenario: Disabling IPRULES restores baseline behaviour
 - **GIVEN** 配置了可命中某包的 IP 规则
 - **WHEN** 将 `IPRULES` 设为 0 并再次发送该包
 - **THEN** 系统 SHALL 不再因该 IP 规则而改变该包的 verdict
 
-### Requirement: Domain ip-leak result participates via POLICY.ORDER
-系统 MUST 允许调用方控制“域名系统的 ip-leak 判决结果”与“IP 规则引擎结果”的合流顺序，通过 `POLICY.ORDER` 提供至少三种模式：
-- `DOMAIN_FIRST`
-- `IP_FIRST`
-- `PRIORITY`
+### Requirement: IPRULES.PRINT returns a structured v1 rule list
+系统 MUST 将 `IPRULES.PRINT` 的当前 v1 输出固定为顶层 JSON 对象，并包含 key `rules`。即使当前无规则、或过滤后无命中，系统也 MUST 返回 `{"rules":[]}`，而不是 `NOK`。`rules` 数组 MUST 按 `ruleId` 升序输出。`rules` 数组中的每个 rule 对象 MUST 至少包含：`ruleId/uid/action/priority/enabled/enforce/log/dir/iface/ifindex/proto/src/dst/sport/dport/stats`。其中 `stats` 对象 MUST 至少包含 `hitPackets/hitBytes/lastHitTsNs/wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`。`ruleId/uid/priority/stats.*` MUST 使用 JSON number；`ifindex` 也 MUST 使用 JSON number，其中 `0` 表示“不限定精确 ifindex”；`enabled/enforce/log` MUST 使用 `0|1` JSON number，不得输出为 `true|false` 或带引号字符串。`action/dir/iface/proto` MUST 输出规范化 string token；`src/dst` MUST 输出规范化 string token（`any` 或标准 IPv4 CIDR 字符串）；`sport/dport` MUST 输出规范化 string token（`any`、单端口十进制字符串、或 `lo-hi`）。
 
-其中 ip-leak 仍被视为**域名系统的一部分**（其 reasonId 属于域名系统），其是否被 `ALLOW` 覆盖取决于 `POLICY.ORDER` 的定义。
+#### Scenario: IPRULES.PRINT returns normalized rule objects
+- **GIVEN** 已存在至少一条规则
+- **WHEN** 客户端调用 `IPRULES.PRINT`
+- **THEN** 返回值 SHALL 是合法 JSON 对象
+- **AND** 返回值 SHALL 包含 key `rules`
+- **AND** `rules[0]` SHALL 至少包含 `ruleId` 与 `stats`
 
-#### Scenario: POLICY.ORDER changes whether ALLOW can override ip-leak
-- **GIVEN** 某包同时满足 ip-leak 的 DROP 条件
-- **AND** 该包也命中一条 `ALLOW` 的 IP 规则
-- **WHEN** `POLICY.ORDER=DOMAIN_FIRST`
-- **THEN** 系统 SHALL 按 `DOMAIN_FIRST` 的定义决定 verdict（例如优先应用 ip-leak）
-- **WHEN** `POLICY.ORDER=IP_FIRST`（或 `PRIORITY`，按定义允许覆盖）
-- **THEN** 系统 SHALL 按新的合流模式决定 verdict
+#### Scenario: IPRULES.PRINT returns an empty rules array when nothing matches
+- **GIVEN** 当前无规则，或客户端提供的过滤条件未命中任何规则
+- **WHEN** 客户端调用 `IPRULES.PRINT`
+- **THEN** 返回值 SHALL 是 `{"rules":[]}`
+
+#### Scenario: IPRULES.PRINT orders rules by ascending ruleId
+- **GIVEN** 已存在多条规则，且它们的 `ruleId` 不同
+- **WHEN** 客户端调用 `IPRULES.PRINT`
+- **THEN** 返回值中的 `rules` SHALL 按 `ruleId` 升序排列
+
+#### Scenario: IPRULES.PRINT uses numeric ids and numeric toggle fields
+- **GIVEN** 已存在至少一条规则
+- **WHEN** 客户端调用 `IPRULES.PRINT`
+- **THEN** 返回的 rule 对象中的 `ruleId/uid/priority/ifindex` SHALL 为 JSON number
+- **AND** 若该规则未限定精确 `ifindex`，则其 `ifindex` SHALL 为 `0`
+- **AND** `enabled/enforce/log` SHALL 为 `0|1` JSON number
+
+#### Scenario: IPRULES.PRINT uses normalized match tokens
+- **GIVEN** 已存在至少一条规则
+- **WHEN** 客户端调用 `IPRULES.PRINT`
+- **THEN** 返回的 rule 对象中的 `action/dir/iface/proto` SHALL 为规范化 string token
+- **AND** `src/dst` SHALL 为 `any` 或标准 IPv4 CIDR 字符串
+- **AND** `sport/dport` SHALL 为 `any`、单端口十进制字符串、或 `lo-hi`
+
+### Requirement: Rule definitions persist across restart, but runtime stats do not
+系统 MUST 持久化 IP 规则定义与 `IPRULES` 全局开关，使其在进程重启后可恢复；但 per-rule runtime stats MUST 保持 since-boot 语义，不得跨重启恢复。`RESETALL` MUST 同时清空该规则持久化状态、内存快照与后续分配使用的 `ruleId` 计数器。
+
+#### Scenario: Restart restores rules but not stats
+- **GIVEN** 已配置至少一条 IP 规则，且某条规则的 `stats.hitPackets` 已大于 0
+- **WHEN** 进程重启并恢复持久化状态
+- **THEN** 该规则定义 SHALL 仍可通过 `IPRULES.PRINT` 查询到
+- **AND** 其 `stats.hitPackets` 与 `stats.wouldHitPackets` SHALL 从 0 重新开始
+
+#### Scenario: RESETALL clears persisted rules and active snapshot
+- **GIVEN** 已配置至少一条 IP 规则
+- **WHEN** 客户端调用 `RESETALL`
+- **THEN** 后续 `IPRULES.PRINT` SHALL 返回 `{"rules":[]}`
+- **AND** 后续重启 SHALL 不再恢复这些规则
+- **AND** 后续新规则集的第一条新规则 SHALL 从初始 `ruleId = 0` 重新开始分配
+
+### Requirement: IPRULES.PREFLIGHT returns a structured v1 report
+系统 MUST 将 `IPRULES.PREFLIGHT` 的当前 v1 输出固定为顶层 JSON 对象，并至少包含 `summary/limits/warnings/violations` 四个 key。其中：
+- `summary` MUST 至少包含：`rulesTotal/rangeRulesTotal/subtablesTotal/maxSubtablesPerUid/maxRangeRulesPerBucket`，且这些字段 MUST 为 JSON number
+- `limits` MUST 固定为对象 `{ "recommended": {...}, "hard": {...} }`
+- `limits.recommended` MUST 至少包含：`maxRulesTotal/maxSubtablesPerUid/maxRangeRulesPerBucket`
+- `limits.hard` MUST 至少包含：`maxRulesTotal/maxSubtablesPerUid/maxRangeRulesPerBucket`
+- `warnings` 与 `violations` MUST 为数组；空时 MUST 返回 `[]`
+- `warnings/violations` 的每个元素 MUST 至少包含：`metric:string`、`value:number`、`limit:number`、`message:string`
+
+#### Scenario: IPRULES.PREFLIGHT exposes fixed summary keys
+- **WHEN** 客户端调用 `IPRULES.PREFLIGHT`
+- **THEN** 返回值 SHALL 是合法 JSON 对象
+- **AND** 返回值 SHALL 包含 `summary/limits/warnings/violations`
+- **AND** `summary` SHALL 包含 `rulesTotal` 与 `maxRangeRulesPerBucket`
+
+#### Scenario: IPRULES.PREFLIGHT exposes fixed limits objects
+- **WHEN** 客户端调用 `IPRULES.PREFLIGHT`
+- **THEN** 返回值中的 `limits` SHALL 包含 `recommended` 与 `hard`
+- **AND** `limits.recommended.maxRulesTotal` SHALL 为 JSON number
+- **AND** `limits.hard.maxRulesTotal` SHALL 为 JSON number
+
+#### Scenario: IPRULES.PREFLIGHT returns empty warning arrays when clean
+- **GIVEN** 当前 active ruleset 未触发任何推荐阈值或硬上限问题
+- **WHEN** 客户端调用 `IPRULES.PREFLIGHT`
+- **THEN** 返回值中的 `warnings` SHALL 为 `[]`
+- **AND** 返回值中的 `violations` SHALL 为 `[]`
+
+#### Scenario: IPRULES.PREFLIGHT warning items use normalized objects
+- **GIVEN** 当前 active ruleset 超过推荐阈值但未超过硬上限
+- **WHEN** 客户端调用 `IPRULES.PREFLIGHT`
+- **THEN** `warnings[0]` SHALL 至少包含 `metric/value/limit/message`
 
 ### Requirement: Preflight rejects overly complex rule sets
 系统 MUST 在控制面提供 `IPRULES.PREFLIGHT` 输出复杂度统计，并对超过硬上限的规则集拒绝 apply（返回 `NOK`），以保证 NFQUEUE 热路径最坏复杂度可控。
@@ -104,12 +327,24 @@
 - **THEN** 系统 SHALL 拒绝该变更并返回 `NOK`，并在 preflight 报告中指出超限项
 
 ### Requirement: IFACES.PRINT exposes ifindex mapping for precise matching
-系统 MUST 提供 `IFACES.PRINT` 输出当前网络接口信息，使调用方可在需要时对 `ifindex` 做精确匹配。
+系统 MUST 提供 `IFACES.PRINT` 输出当前网络接口信息，使调用方可在需要时对 `ifindex` 做精确匹配。返回值 MUST 为顶层对象，且包含 `ifaces` 数组；即使当前枚举失败或暂时没有可返回接口，系统也 MUST 返回 `{"ifaces":[]}`，而不是 `NOK`。数组元素至少包含 `ifindex:number`、`name:string`、`kind:string`，并 MAY 包含调试用的 `type:number` 字段。若 `type` 出现，系统 SHALL 将其视为排障增强信息；客户端 MUST NOT 依赖其存在与否来决定正式语义。
 
-#### Scenario: IFACES.PRINT returns at least one interface
+#### Scenario: IFACES.PRINT returns a structured interface list
 - **WHEN** 客户端调用 `IFACES.PRINT`
-- **THEN** 返回值 SHALL 是合法 JSON
-- **AND** 至少包含一个 `{ifindex,name,kind}` 结构
+- **THEN** 返回值 SHALL 是合法 JSON 对象
+- **AND** 返回值 SHALL 包含 key `ifaces`
+- **AND** `ifaces` SHALL 为数组
+
+#### Scenario: IFACES.PRINT may return an empty array
+- **GIVEN** 当前接口枚举失败，或暂时没有可返回接口
+- **WHEN** 客户端调用 `IFACES.PRINT`
+- **THEN** 返回值 SHALL 是 `{"ifaces":[]}`
+
+#### Scenario: IFACES.PRINT uses numeric ifindex and optional numeric type
+- **GIVEN** `IFACES.PRINT` 返回至少一个接口对象
+- **WHEN** 客户端读取该对象
+- **THEN** `ifindex` SHALL 为 JSON number
+- **AND** 若存在 `type`，则 `type` SHALL 为 JSON number
 
 ### Requirement: IPv6 is not affected by new IPv4 rules
 本 change 引入的 L3/L4 规则语义仅覆盖 IPv4。IPv6 流量 MUST 不受这些新规则影响（默认放行且不提示规则命中）。

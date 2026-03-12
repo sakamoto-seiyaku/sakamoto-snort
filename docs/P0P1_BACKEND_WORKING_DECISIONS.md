@@ -2,7 +2,7 @@
 
 > 范围：仅本仓库后端（Snort + iptables + NFQUEUE + control socket）。  
 > 目标：把讨论中的“做什么/不做什么 + 为什么（关键原则）+ 现状事实语义”固化成可迭代的临时文档。  
-> 备注：无老客户端兼容包袱；更精炼的可观测性上级决策见 `docs/OBSERVABILITY_WORKING_DECISIONS.md`；后续讨论如有新结论，以本文件为准持续更新。
+> 备注：当前尚未发布正式版本，因此不需要预设“历史发布版本迁移/兼容”包袱；但接口与语义仍不得随意改动，只有在存在明确重大理由时才允许调整，并应同步更新权威文档。更精炼的可观测性上级决策见 `docs/OBSERVABILITY_WORKING_DECISIONS.md`；若与上位纲领或 OpenSpec change 冲突，以上位文档为准；本文件继续作为调研/工作记录持续更新。
 
 ---
 
@@ -13,13 +13,15 @@
 2. **不增加新的“观测通路”**  
    后端仅负责输出；前端负责采集/汇总/丢弃过期数据。观测通道复用 `PKTSTREAM`（以及已有 stats）。
 3. **不做全局 safety-mode（现在不做、以后也不做）**  
-   全局代价高且收益有限；用户更常见的工作流是“在一个 checkpoint 内批量变更若干规则”，对这批规则做 log-only/试运行即可。
+   全局代价高且收益有限；用户更常见的工作流是“在一个 checkpoint 内批量变更若干规则”，对这批规则做逐条试运行即可；当前 dry-run 仅对 BLOCK 规则开放。
 4. **不在 P0/P1 强行重构域名系统**  
    P0/P1 先把 IPv4 L3/L4 规则与最小可解释性落地；域名相关可观测性后置。
 5. **IPv6 规则后置**  
    P0/P1 新规则语义先只覆盖 IPv4 地址；IPv6 暂默认放行且不提示，后续补齐。
 6. **事实优先于规划**  
    以源码事实语义为准，规划随实现调整（双向过程）。
+7. **未发正式版不等于接口可随意变化**  
+   当前不需要为历史发布版本背迁移包袱；但凡改控制命令、字段或语义，必须能明确说明其必要性，并同步收敛权威文档，避免讨论稿与 change 漂移。
 
 ---
 
@@ -27,9 +29,10 @@
 
 - **reasonId**：一次判决“为什么允许/为什么拦截”的可解释标识；P0 以“粗粒度 +（新增 IPv4 规则精确到 ruleId）”为目标。
 - **safety-mode**：仅针对“本次 checkpoint 批量变更的规则”的试运行机制：  
-  - `enforce=0, log=1`：评估/命中/记录，但不实际 DROP（PKTSTREAM 输出 `wouldRuleId` + `wouldDrop=1`，实际 `accepted` 仍为 1，`reasonId` 仍解释实际 verdict）。  
+  - `action=BLOCK, enforce=0, log=1`：评估/命中/记录，但不实际 DROP；仅当该包未被任何 `enforce=1` 规则作为最终命中接管时，PKTSTREAM 才输出 `wouldRuleId` + `wouldDrop=1`，此时实际 `accepted` 仍为 1，`reasonId` 仍解释实际 verdict。  
   - `enforce=1, log=1`：实际执行策略，同时保留日志（观测是否误伤）。  
   - `enforce=1, log=0`：正常使用。  
+  - `enforce=0` 的职责仅限调试/试运行，不承担“禁用规则”的职责；彻底禁用统一由 `enabled=0` 表达。  
   safety-mode **不覆盖全局**，也不尝试让所有系统（域名/IP/接口）统一进入 dry-run。
 - **PKTSTREAM**：控制面流式输出网络包事件；被视为主要可观测性通道（非新增系统）。
 - **checkpoint**：前端概念（批量变更与回滚）；后端不实现 checkpoint 机制本身，只提供必要的规则开关/统计/可解释输出。
@@ -87,7 +90,7 @@
 ### 2.5 持久化点（现状）
 
 - 周期性 `snortSave()`：保存 `settings/blockingList/rules/domains/apps/dnsstream`；**不保存 pktstream**（`Packet::save/restore` 当前为空）。
-- `RESETALL`：清空 settings + save tree + 各 manager（含 `pktManager.reset()`、`dnsListener.reset()`）并触发保存。
+- `RESETALL`：清空 settings + save tree + 各 manager（含 `pktManager.reset()`、`dnsListener.reset()`）并触发保存。对于本轮新增的 IP 规则语义，这意味着整套规则集被彻底丢弃；后续新建规则从新的空规则集重新开始，`ruleId` 计数器也从初始值 `0` 重开。
 
 ---
 
@@ -99,7 +102,7 @@
   - 代价：需要拆分当前 `BLOCK` 的“评估 gating + enforce”双重语义；影响 Packet/DNS/stats/stream 全链路，风险过高。
   - 收益：对典型用户工作流（checkpoint 内增量改规则）不匹配。
 - **做**：逐条规则（或批量变更的那批规则）支持 `enforce/log` 语义。  
-  - 前端通过 checkpoint 选择“本批规则”进入 `enforce=0, log=1`（would-block），观察后再切 `enforce=1`。
+  - 前端通过 checkpoint 选择“本批 BLOCK 规则”进入 `enforce=0, log=1`（would-block），观察后再切 `enforce=1`。
   - 后端只需在规则引擎里实现：命中时产生 reasonId + hit 统计 +（可选）PKTSTREAM 输出。
 
 ### 3.2 reasonId（决策：P0 粗粒度 + 新 IPv4 规则精确到 ruleId）
@@ -107,10 +110,10 @@
 P0 仅保证以下最小集合能解释清楚：
 
 - Packet（NFQUEUE）：
-  - `IFACE_BLOCK`
-  - `IP_LEAK_BLOCK`
+  - `IFACE_BLOCK`（且命中该原因时，不再附带更低优先级规则层的 `ruleId/wouldRuleId`）
   - `ALLOW_DEFAULT`
-  - 以及新增 IPv4 L3/L4 规则的：`IP_RULE_ALLOW|IP_RULE_BLOCK`（enforce 命中时带 `ruleId`；log-only/would-match 通过 `wouldRuleId/wouldDrop=1` 表达，`accepted` 仍为 1）
+  - 以及新增 IPv4 L3/L4 规则的：`IP_RULE_ALLOW|IP_RULE_BLOCK`（enforce 命中时带 `ruleId`；BLOCK 规则的 log-only/would-match 通过 `wouldRuleId/wouldDrop=1` 表达，且仅在无 `enforce=1` 最终命中时出现，此时 `accepted` 仍为 1）
+  - `IP_LEAK_BLOCK` 等域名系统附属原因留待最终融合阶段再决定，当前不作为本轮实现前提
 - DNS：
   - 先只输出 `DNS_DOMAIN_DECISION`（blocked/allowed）+（可选）自定义名单/规则来源后置
 
@@ -122,30 +125,37 @@ P0 仅保证以下最小集合能解释清楚：
 - 前端采集：只保留“最近最有用的少量日志/窗口”，超出缓存期直接丢弃。
 - 风险告知：PKTSTREAM 开启会增加热路径负担；属于可观测性成本，需对用户明确。
 
-### 3.4 策略统计（决策：新增规则自带 hit/lastHit 等）
+### 3.4 策略统计（决策：新增规则自带 per-rule runtime stats）
 
-对新增 IPv4 L3/L4 规则，后端提供最小但实用的 per-rule 统计（不依赖 PKTSTREAM 是否开启）：
+对新增 IPv4 L3/L4 规则，后端提供固定 v1 形态的 per-rule runtime stats（不依赖 PKTSTREAM 是否开启）：
 
-- `hitPackets` / `hitBytes`（或至少 `hitPackets`）
-- `lastHitTimestamp`
-- 可选：`firstHitTimestamp`、`lastVerdict`（would-block / blocked / allowed）
+- `hitPackets/hitBytes/lastHitTsNs`
+- `wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`
 
-规则层面不存在“同一条规则既 allow 又 block”的混合语义；每条规则只有一个 action（ALLOW 或 BLOCK），再叠加 `enforce/log`。
+语义与边界：
+- `hit*`：该规则作为最终 `enforce=1` 命中规则时更新（每包最多 1 条）。
+- `wouldHit*`：该规则作为最终 would-match（`action=BLOCK, enforce=0, log=1`，且无 `enforce=1` 命中）规则时更新（每包最多 1 条）。
+- `enabled=0` 的规则不得更新任何 runtime stats，也不得计入 active complexity。
+- 规则层面不存在“同一条规则既 allow 又 block”的混合语义；每条规则只有一个 action（ALLOW 或 BLOCK），再叠加 `enforce/log`。
+- 规则内容一旦被 UPDATE 改写并生效，其 runtime state/stats 直接清零；当前不需要为修改前的历史 state 保留兼容语义。
+- 规则若从 `enabled=0` 再次切回 `enabled=1`，其 runtime state/stats 也直接清零，避免历史命中延续到重新启用后的观测。
 
 ---
 
 ## 4. 待定项（明确标注 TBD，避免误当结论）
 
-- reasonId 枚举的最终命名/稳定性与对外协议字段（PKTSTREAM schema 如何演进）。
-- 新 IPv4 L3/L4 规则的字段规范化：
-  - direction 下 `srcPort/dstPort` 与“remote/local port”的语义映射
-  - 接口维度（ifindex/name/bit）在规则中的表达
-  - 上下文维度（例如 input/output、UID、协议、端口 ANY）与默认策略顺序
+- `reasonId` / PKTSTREAM 当前最小字段集与最小 reason 集合已由现有 change 固化；仍待后续专题决定的是**未来扩展**（例如域名附属原因恢复后如何增量追加、是否引入更多 counters/聚合口径）。
+- 新 IPv4 L3/L4 规则的**实现映射细节**仍可继续细化，但不得推翻已固定的 v1 控制面字段：
+  - direction 下 `srcPort/dstPort` 与“local/remote port”视角的内部映射实现
+  - `ifaceKind + ifindex` 在内部 classifier 中的编码与归一化
+  - 其它上下文维度若未来扩展（例如 CT）如何进入字段全集与编译路径
 - PKTSTREAM 的背压/采样/限速策略（是否需要避免长时间阻塞 `mutexListeners`）。
 
 ---
 
 ## 5. 与已存在 change 的关系（现状）
 
-- 已有 OpenSpec change：`openspec/changes/add-app-ip-blacklist/`  
-  用于 per-app IP 黑名单（snapshot + 热路径查询）方向的落地参考与复用。
+- 当前 OpenSpec change：`openspec/changes/add-app-ip-l3l4-rules-engine/`  
+  用于本轮 IPv4 L3/L4 per-app 规则引擎的权威语义与任务拆分。
+- 已归档参考：`openspec/changes/archive/2026-03-04-add-app-ip-blacklist/`  
+  仅作为早期 per-app IP 黑名单方向的历史参考。

@@ -33,6 +33,9 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 5) **域名系统不在 P0/P1 大重构**  
 先把可解释骨架与最关键的 IP 规则落地；域名细粒度定位（per-rule）后置。
 
+6) **当前未发正式版：不预设历史迁移包袱，但观测接口仍须稳定收敛**  
+当前不需要为了已发布旧版本预留额外兼容/迁移逻辑；但 stream 字段、metrics 口径与 reasonId 语义依然不能随意变。只有当存在明确重大理由（例如修复错误语义、消除跨文档冲突、满足已确认需求）时，才允许调整，并且必须同步更新权威文档与相关 change。
+
 ---
 
 ## 2. 决策拆分（A/B/C 三层）
@@ -55,7 +58,9 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 ### 3.2 reasonId / would-match 语义
 - `reasonId` **只解释实际 verdict**（即 `accepted` 的原因），每包仅 1 个且确定性选择。
-- log-only 不使用独立 `reasonId`：使用 `wouldRuleId + wouldDrop=1` 表达 would-match；并且 `accepted` 仍为 1。
+- 当前 would-match 仅指 `action=BLOCK, enforce=0, log=1` 的 would-block dry-run；不为 `ALLOW` 定义对称的 would-allow 语义。
+- log-only/would-block 不使用独立 `reasonId`：使用 `wouldRuleId + wouldDrop=1` 表达 would-match；并且仅在该包无 `enforce=1` 最终命中时出现，此时 `accepted` 仍为 1。
+- 若包的实际 `reasonId=IFACE_BLOCK`，则不得再附带来自更低优先级规则层的 `ruleId`/`wouldRuleId`。
 
 ### 3.3 stream 风险（必须认知）
 `Streamable::stream()` 在调用线程同步写 socket；慢消费者可能反压并拖慢热路径。产品与文档需要把 PKTSTREAM 定位为“调试期开、短期开、持续读”。
@@ -69,8 +74,11 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 - 对外：`METRICS.REASONS` / `METRICS.REASONS.RESET`
 - 字段：每个 `reasonId` 的 `packets/bytes`
+- JSON shape：固定为顶层对象 `{"reasons": {...}}`
 - 生命周期：since boot（进程内，不落盘；重启归零）
+- counters 不依赖 `tracked`（默认可查），也不依赖 PKTSTREAM 是否开启
 - gating：保持事实语义，仅对进入 Packet 判决链路的包统计（当前 `BLOCK=0` 不进入判决链路）
+- 当前 P0 基线/验收明确以 legacy `ip-leak` 路径**未参与 Packet 最终判决**为前提（可理解为当前 A 层验收场景下 `BLOCKIPLEAKS=0`）；`BLOCKIPLEAKS=1` 时是否恢复独立 `reasonId`、其命名与优先级，统一留到后续融合阶段单独收敛
 
 对应 OpenSpec：`add-pktstream-observability`。
 
@@ -90,7 +98,8 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 - 每条规则 stats：`hitPackets/hitBytes/lastHitTsNs` + `wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`
 - 输出：`IPRULES.PRINT` 在 rule 对象中包含 `stats`
-- 生命周期：since boot（不持久化）；规则 UPDATE 建议清零 stats
+- 生命周期：since boot（不持久化）；规则 `UPDATE` 后 MUST 清零 stats，规则从 `enabled=0` 重新 `ENABLE` 后也 MUST 清零 stats，避免旧命中混入新语义
+- `enabled=0` 的规则不得更新任何 hit/wouldHit 计数，也不得进入 active complexity 口径
 - 热路径：只对“最终命中规则”和“最终 would-match 规则（若有）”做无锁原子更新
 
 对应 OpenSpec：`add-app-ip-l3l4-rules-engine`。
@@ -101,6 +110,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 - 不做全局 safety-mode（dry-run 全系统）。
 - 不要求 `BLOCK=0` 时逐包输出 reasonId（engine_off 属于状态解释：`BLOCK/ACTIVITYSTREAM`）。
+- 不要求本轮为 legacy `BLOCKIPLEAKS=1` 分支补齐最终 `reasonId` 命名与验收场景；该路径当前明确视为 TBD，不作为 A 层落地阻塞项。
 - 不做域名规则 per-rule counters（regex/wildcard/listId）：现状聚合 regex 无法归因，需更大重构，后置。
 - 不把 ip-leak 混进域名 policySource counters：如需统计，后续以独立维度/命令追加。
 - 不在后端引入 Prometheus/集中存储角色：前端自行采样与落库。
@@ -117,4 +127,3 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 3) 域名侧 `policySource` 与 B 层 counters 口径：  
 `docs/DOMAIN_POLICY_OBSERVABILITY.md`
-

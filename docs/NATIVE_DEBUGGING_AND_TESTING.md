@@ -1,0 +1,534 @@
+# sucre-snort 原生调试与测试工作流（WSL2 / VS Code / Codex CLI）
+
+更新时间：2026-03-12  
+状态：已核实的工作文档（以 AOSP / VS Code 官方文档为准）；当前 roadmap 的测试 / 调试阶段以本文件为权威补充文档。
+
+---
+
+## 0. 这份文档解决什么问题
+
+目标不是把 `sucre-snort` 先改造成“完全脱离 Android/Lineage 的普通 Linux 项目”，而是先建立一条**可实际使用的原生调试与测试 lane**：
+
+- 遇到问题时，可以像普通 C/C++ 项目那样做 **attach / run / breakpoint / step / backtrace / watch**；
+- 不是只靠 log 反推；
+- 在**不要求先做大重构**的前提下，补出一部分单元测试、集成测试和崩溃定位能力。
+
+---
+
+## 1. 已核实的官方事实
+
+### 1.1 Android 平台原生调试：现在应使用 LLDB，不是 GDB
+
+已核实：AOSP 官方文档明确说明，**GDB 已不再支持/不再提供**，平台原生调试使用 **LLDB**。
+
+这意味着后续所有“像普通 C/C++ 项目一样断点调试”的主线，都应围绕：
+
+- `lldbclient.py`
+- `lldbserver`
+- VS Code + CodeLLDB
+
+而不是围绕老的 `gdbserver` / `gdb` 工作流。
+
+### 1.2 AOSP 官方支持两类核心 LLDB 工作流
+
+已核实：AOSP 官方文档直接给出两种常用流程：
+
+1. **调试一个你刚 push 到设备上的二进制**：`lldbclient.py -r ...`
+2. **附加到已运行的 native daemon / process**：`lldbclient.py -p <pid>`
+
+官方还明确说明：
+
+- `-p` 是 **PID**；
+- `--port` 是 **调试端口**；
+- `lldbclient.py` 会自动做 **port forwarding、启动远端 stub、配置符号、连接 host 端调试器**。
+
+### 1.3 AOSP 官方支持 VS Code 调试 Android 平台原生代码
+
+已核实：AOSP 官方文档专门有一节 `Debug with VS Code`，明确说明：
+
+- Android 平台原生代码可以用 **Visual Studio Code** 调试；
+- 官方推荐安装 **CodeLLDB** 扩展；
+- 通过 `lldbclient.py --setup-forwarding vscode-lldb --vscode-launch-file ...` 可以自动生成 `launch.json` 片段并完成连接准备。
+
+这不是“野路子”，而是 AOSP 官方支持的工作流。
+
+### 1.4 VS Code Remote / WSL 是官方支持的远程开发模型
+
+已核实：VS Code 官方文档说明：
+
+- Remote Development 扩展可以把命令与扩展直接运行在 **WSL** / 容器 / 远端主机中；
+- 在远程工作区中，**Workspace Extensions** 会运行在远端环境（这里就是 WSL）里的 **Remote Extension Host / VS Code Server** 中；
+- 这意味着在 WSL 打开的工程里，调试相关扩展可以运行在 WSL 环境本身。
+
+基于这些官方文档，**在 VS Code WSL 窗口内使用 CodeLLDB 调试 Android native 代码是成立的**。
+
+### 1.5 崩溃后等待调试器 / tombstone / 符号化 也是官方支持能力
+
+已核实：AOSP 官方文档明确说明：
+
+- 崩溃时更完整的 tombstone 会写到 `/data/tombstones/`；
+- Android 11 之后可以设置：
+
+```bash
+adb shell setprop debug.debuggerd.wait_for_debugger true
+```
+
+让崩溃进程挂起，等待调试器附加；
+
+- 若已持有未剥离符号，可使用 `stack` 对 tombstone / crash dump 做符号化。
+
+同时官方也特别提醒：**如果进程已经被 `lldb` 或 `strace` 之类工具附加，crash dumper 可能无法再附加**，因此“live debug”和“取系统 tombstone”有时需要分开做。
+
+### 1.6 内存错误定位：AOSP 当前主推 HWASan
+
+已核实：AOSP 官方文档说明：
+
+- Android 平台开发者用 **HWASan** 查 C/C++ 内存错误；
+- 在 AArch64 平台上，**ASan 在 Android 11 之后已被官方标注为不推荐，建议改用 HWASan**；
+- 若只能做局部 sanitizer，单模块启用 `sanitize` 仍然是可行路径。
+
+这意味着：对 `sucre-snort` 这类 native daemon，**sanitizer 构建是很高价值的 debug lane**，即使它不是“单元测试”。
+
+---
+
+## 2. 当前仓库与这些官方能力的映射
+
+当前仓库已经具备不少前提条件：
+
+- 开发构建目标是 `userdebug`：见 `dev/dev-build.sh`
+- 编译参数里已经带 `-g`：见 `Android.bp`
+- 当前开发部署目标是独立二进制：`/data/local/tmp/sucre-snort-dev`
+- 当前开发流程已经把守护进程与系统镜像内正式版本隔离
+
+这意味着：
+
+- **最适合先调试的是 `/data/local/tmp/sucre-snort-dev`**；
+- 不必一开始就和 `init.rc` / 正式系统服务生命周期绑定死；
+- 可以先把“断点调试体验”做起来，再决定是否需要更深的系统服务级调试。
+
+> 注：当前仓库脚本主要使用 `adb.exe`；AOSP 官方文档默认使用 `adb`。在 WSL 环境里，只要 `lldbclient.py` 能找到一个可工作的 `adb` 即可。当前本机环境里 `adb` 与 `adb.exe` 都存在，但这属于环境事实，不应假定所有开发机都完全一致。
+
+---
+
+## 3. 推荐的调试工作流（不要求先重构代码）
+
+## 3.1 方案 A：附加到正在运行的 `sucre-snort-dev`
+
+适合场景：
+
+- 守护进程已经能跑起来；
+- 某条控制命令、某类流量、某段运行期状态会触发问题；
+- 想看线程、锁、栈、变量、条件断点。
+
+推荐步骤：
+
+```bash
+# 1) 在 AOSP tree 里进入已 setup 的 shell
+cd ~/android/lineage
+source build/envsetup.sh
+lunch lineage_bluejay-bp2a-userdebug
+
+# 2) 确保已部署并运行 dev binary
+cd /home/js/Git/sucre/sucre-snort/dev
+bash dev-build.sh
+bash dev-deploy.sh
+
+# 3) 取得 PID（建议找 sucre-snort-dev）
+adb shell su -c 'pidof sucre-snort-dev'
+
+# 4) 附加调试器
+lldbclient.py -p <PID>
+```
+
+说明：
+
+- 这是 AOSP 官方支持的 attach 模式；
+- `lldbclient.py` 会自动处理符号与远端连接；
+- 适合大多数“跑一会儿才出问题”的场景。
+
+## 3.2 方案 B：启动即断点（run-under-debugger）
+
+适合场景：
+
+- 启动阶段就失败；
+- socket / iptables / listener 初始化阶段有问题；
+- 想在 `main()`、构造函数、初始化路径最早处下断点。
+
+推荐步骤：
+
+```bash
+cd ~/android/lineage
+source build/envsetup.sh
+lunch lineage_bluejay-bp2a-userdebug
+
+# 停旧进程并清理遗留 socket（按需要增减）
+adb shell su -c 'killall sucre-snort-dev 2>/dev/null || true'
+adb shell su -c 'rm -f /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd'
+
+# 推送 dev binary
+adb push /home/js/Git/sucre/sucre-snort/build-output/sucre-snort /data/local/tmp/sucre-snort-dev
+adb shell su -c 'chmod 755 /data/local/tmp/sucre-snort-dev'
+
+# 直接在调试器下启动
+lldbclient.py --port 5039 -r /data/local/tmp/sucre-snort-dev
+```
+
+说明：
+
+- 官方文档明确支持 `-r` 模式；
+- `-r` 后面跟的是“要在设备上启动的命令行”，因此**`-r` 应放在 `lldbclient.py` 可选参数的最后**，不要再把别的 `lldbclient.py` 选项写在它后面；
+- 若命中入口断点后程序停住，按需 `continue`；
+- 这是取代“启动失败只能看 log”的最直接路径。
+
+## 3.3 方案 C：VS Code（WSL 窗口）图形化断点调试
+
+适合场景：
+
+- 你主要在 VS Code WSL2 开发；
+- 想获得接近普通 Linux/C++ 项目的调试体验；
+- 需要可视化线程、变量、断点、条件断点、watch 表达式。
+
+推荐步骤：
+
+### 第一步：在 VS Code 的 **WSL 窗口** 打开仓库
+
+- 使用 `WSL: New Window`
+- 在 WSL 窗口内打开 `sucre-snort` 工程
+- 在这个 **WSL 窗口** 中安装 **CodeLLDB**
+
+> 这里的“在 WSL 窗口安装”是基于 VS Code Remote 官方机制做出的工作结论：在远程工作区里，workspace 类扩展运行在远端环境中。
+
+### 第二步：准备 `.vscode/launch.json`
+
+先放一个最小壳子：
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    // #lldbclient-generated-begin
+    // #lldbclient-generated-end
+  ]
+}
+```
+
+### 第三步：在已经 `envsetup + lunch` 的 AOSP shell 中生成转发与配置
+
+附加到正在运行的 daemon：
+
+```bash
+lldbclient.py --setup-forwarding vscode-lldb \
+  --vscode-launch-file /home/js/Git/sucre/sucre-snort/.vscode/launch.json \
+  -p <PID>
+```
+
+或者启动即调试：
+
+```bash
+lldbclient.py --setup-forwarding vscode-lldb \
+  --vscode-launch-file /home/js/Git/sucre/sucre-snort/.vscode/launch.json \
+  -r /data/local/tmp/sucre-snort-dev
+```
+
+然后：
+
+- 保持这条 `lldbclient.py` 命令所在终端**不要退出**；
+- 回到 VS Code，打开 Run and Debug；
+- 选择生成出的 LLDB 配置并按 `F5`。
+
+### 第四步：结束调试
+
+根据 AOSP 官方文档，调试结束后回到运行 `lldbclient.py` 的那个终端，按一次回车结束会话即可。
+
+---
+
+## 4. 崩溃优先场景：不要只看 log
+
+如果问题是“很快 crash，来不及 attach”，推荐优先走这条线：
+
+```bash
+adb shell setprop debug.debuggerd.wait_for_debugger true
+```
+
+然后复现问题，再按 logcat / debuggerd 给出的提示附加调试器。
+
+同时保留下面这套兜底能力：
+
+```bash
+# 抓 tombstone
+adb shell su -c 'ls -lt /data/tombstones | head'
+adb shell su -c 'cat /data/tombstones/tombstone_xx' > /tmp/tombstone_xx
+
+# 在已 lunch 的 shell 里做符号化
+stack < /tmp/tombstone_xx
+```
+
+建议把问题分成两类：
+
+- **live attach / breakpoint 场景**：优先 LLDB
+- **野外 crash / 一次性崩溃复盘**：优先 tombstone + `stack`
+
+不要强行把两套机制混在一次运行里，因为官方文档已明确说明：若 `lldb` / `strace` 已附加，crash dumper 可能拿不到机会。
+
+---
+
+## 5. 对 `sucre-snort` 特别有价值的附加能力
+
+## 5.1 dev-only 编译选项：建议补 `-fno-omit-frame-pointer`
+
+当前仓库已有 `-g`，但若希望：
+
+- backtrace 更稳定；
+- sanitizer 报告更好读；
+- 断点与单步更接近源码直觉；
+
+建议为 **debug/dev 变体** 追加：
+
+```text
+-O0
+-fno-omit-frame-pointer
+```
+
+这是 AOSP 官方 ASan 文档里也特别强调的方向：更好的栈信息依赖 frame pointers。
+
+## 5.2 对内存破坏类问题：优先考虑 HWASan
+
+若你遇到的是：
+
+- use-after-free
+- heap overflow
+- stack scope 相关问题
+- “日志看起来像别处坏了，但根因不在崩点”
+
+那么 **HWASan build / image** 往往比纯日志或普通断点更高效。
+
+对 Android 平台组件，AOSP 当前官方建议优先用 **HWASan**，而不是 arm64 上的旧式 ASan。
+
+## 5.3 对 syscall / 权限 / socket / 文件问题：`strace` 很有帮助
+
+当问题集中在：
+
+- bind / connect / listen / accept
+- open / rename / chmod / unlink
+- `iptables` / `execv`
+- SELinux / seccomp / 权限边界
+
+可以考虑对进程使用 `strace`。AOSP 官方也保留了这条调试路径。
+
+但要记住：`strace` 与 crash dump / LLDB 一样，可能会和其他调试机制相互影响。
+
+---
+
+## 6. 模拟器能不能替代真机？
+
+### 已核实的事实
+
+- AOSP 官方 LLDB 文档描述的是“连接到目标设备/进程”的通用工作流；
+- Tradefed 官方文档把 **emulator** 也视作 device 类型的一种；
+- Atest 官方文档明确支持 `--start-avd` 与 `--acloud-create`，可在运行测试前自动启动已有 AVD，或创建新的 AVD / remote instance；
+- 因此，只要目标能通过 `adb` 可见、并且构建/符号与目标镜像匹配，**同一套 LLDB / host-driven test 思路可以迁移到模拟器或 Cuttlefish**。
+
+### 对本项目的工作判断（推断）
+
+基于 `sucre-snort` 当前代码与依赖边界，可以做出如下工作判断：
+
+- **适合先在模拟器上解决的**
+  - 启动期 crash
+  - 控制面 socket 命令
+  - 大部分线程/锁/状态机问题
+  - 断点、变量、调用栈定位
+
+- **仍应以真机为准的**
+  - NFQUEUE
+  - `iptables` / `ip6tables`
+  - `netd` 交互
+  - SELinux / init / 权限细节
+  - 与具体 ROM / 内核网络栈绑定的问题
+
+所以更现实的目标不是“模拟器完全取代真机”，而是：
+
+- **模拟器 / 虚拟设备承担快速 debug**
+- **真机承担最终集成验证与性能/行为确认**
+
+---
+
+## 7. 那么单元测试、集成测试到底有没有办法？
+
+有，而且**不必先大重构**；只是要接受“测试分层”。
+
+## 7.1 单元测试：有办法，但覆盖面有限
+
+AOSP 官方明确支持：
+
+- **平台 GoogleTest（native tests）**
+- **host-side deviceless gtest**
+- 通过 Tradefed 的 **HostGTest** 在 host 上跑 native gtest
+
+如果测试本身**不需要设备**，官方建议直接跑 host-side gtest，因为会更快。
+
+按 AOSP 官方文档，host-side gtest 在 Soong 中通常通过 `host_supported: true` 暴露为 host 变体；随后可用 `atest --host <module>` 运行，或由 Tradefed 的 `HostGTest` 自动生成配置并执行。
+
+这类测试适合放在：
+
+- 解析器
+- 规则匹配
+- 计数器
+- package / UID / userId 处理逻辑
+- 控制命令参数解析
+
+对 `sucre-snort` 而言，这类测试当然不是“主要目标”，但它仍然有价值：
+
+- 能把一些低级回归挡在进入设备前；
+- 能让规则/解析类 bug 更快复现；
+- 成本相对低。
+
+## 7.2 集成测试：有，而且这是更值得优先做的方向
+
+AOSP 官方明确支持两条非常适合当前项目的路：
+
+### 路线 A：device-side native gtest
+
+适用场景：
+
+- 想在 Android 环境中直接跑 native test binary；
+- 测试对象需要设备上的 Android 用户态环境；
+- 但还不需要完整 UI / App 自动化。
+
+官方路径是：
+
+- 写平台 GTest；
+- 通过 `atest <module>` 或 Tradefed 运行；
+- 若希望先在模拟器上跑，可结合 `atest --start-avd <module>`；若需要自动创建实例，可进一步评估 `--acloud-create`。
+
+### 路线 B：host-driven tests（更适合 `sucre-snort`）
+
+AOSP 官方明确支持 **host-driven test**：
+
+- 测试代码跑在 host；
+- 由 host 去驱动设备状态、推送文件、执行 shell、收集结果；
+- 适合需要 reboot、push binary、改设备状态、调用 adb 的集成测试。
+
+这条路和 `sucre-snort` 当前开发模式非常贴合，因为你们现在本来就已经在做：
+
+- push dev binary
+- 启动守护进程
+- 建控制 socket
+- 发送命令
+- 查日志 / 查 socket / 查状态
+
+换句话说：**你们离“正式的 host-driven integration test”其实只差一步封装，不差架构重写。**
+
+## 7.3 对当前项目最现实的测试分层建议
+
+### 第 1 层：host-side deviceless tests
+
+目的：快速挡住纯逻辑回归。
+
+建议覆盖：
+
+- `PackageState` 解析
+- `Rule` / `CustomRules` 匹配
+- `Stats` / `AppStats` / `DomainStats` 计数
+- `Control` 参数解析辅助逻辑
+
+### 第 2 层：host-driven integration tests
+
+目的：验证“守护进程 + 设备 + 控制面”整体行为。
+
+建议覆盖：
+
+- push `sucre-snort-dev`
+- 启动 / 停止 daemon
+- `HELLO` / `HELP`
+- `BLOCK` / `BLOCKMASK` / `RESETALL`
+- `APP.*` 查询
+- `DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 基础行为
+- save / restore / reset 语义
+
+这层本质上就是把现有 `dev/dev-smoke.sh` 里的关键路径，逐步沉淀为**可自动跑、可并入 CI、可筛选模块运行**的测试模块。
+
+### 第 3 层：真机 smoke / perf / compatibility
+
+目的：保留那些确实离不开真机的验证。
+
+建议继续保留：
+
+- NFQUEUE 行为
+- `iptables` 链初始化
+- `netd` 相关交互
+- SELinux / 权限问题
+- 性能回归、backlog、极端流量行为
+
+### 第 4 层：sanitizer / crash lane
+
+目的：抓“肉眼最难查”的 native 内存问题。
+
+建议补：
+
+- dev-only `sanitize` 变体
+- 有条件时优先 HWASan
+- tombstone + `stack` 归档流程
+
+---
+
+## 8. 对当前项目的推荐推进顺序
+
+如果遵循“**不为了测试先大重构**”这个原则，推荐顺序如下：
+
+1. **先把 LLDB 调试 lane 打通**
+   - CLI attach
+   - CLI run-under-debugger
+   - VS Code WSL 图形化断点调试
+
+2. **再把现有 smoke 升级为 host-driven integration tests**
+   - 这是最贴近当前工作流、收益也最高的一步
+
+3. **补少量 host-side gtest**
+   - 只挑高价值、低耦合模块，不追求“全覆盖”
+
+4. **最后补 sanitizer lane**
+   - 对难查内存损坏问题非常值
+
+这个顺序的核心是：
+
+- 先解决“开发效率差、只能看日志”的痛点；
+- 再解决“回归只能手工跑设备”的痛点；
+- 最后再去扩充更精细的测试矩阵。
+
+---
+
+## 9. 结论
+
+对于 `sucre-snort`，在**不先做大重构**的前提下，下面这些都是现实可行的：
+
+- 用 **LLDB** 而不是 GDB，对设备上的 native daemon 做断点调试；
+- 在 **VS Code WSL2** 里用 **CodeLLDB** 获得接近普通 Linux/C++ 项目的调试体验；
+- 用 `debuggerd.wait_for_debugger`、tombstone、`stack` 解决“来不及 attach 就 crash”的问题；
+- 通过 **host-driven integration tests** 把现有设备烟测逐步正规化；
+- 通过少量 **host-side gtest** 和 **device-side gtest** 补充测试层；
+- 通过 **HWASan / sanitizer** 增强内存错误定位能力。
+
+真正不现实的是：
+
+- 期待“完全不依赖 Android/Lineage，就把整个 daemon 当纯 Linux 项目一样完整开发与验证”；
+- 或者期待“模拟器完全替代真机”。
+
+现实可行、性价比最高的目标是：
+
+**保留当前 Android 构建链，但把调试链、测试链、崩溃定位链补齐。**
+
+---
+
+## 10. 官方参考链接（2026-03-12 核实）
+
+- AOSP `Use debuggers`: https://source.android.com/docs/core/tests/debug/gdb
+- AOSP `Debug native Android platform code`: https://source.android.com/docs/core/tests/debug
+- AOSP `Debug native memory use`: https://source.android.com/docs/core/tests/debug/native-memory
+- AOSP `AddressSanitizer`: https://source.android.com/docs/security/test/asan
+- AOSP `Hardware-assisted AddressSanitizer`: https://source.android.com/docs/security/test/hwasan
+- AOSP `GoogleTest`: https://source.android.com/docs/core/tests/development/gtest
+- AOSP `Write a host-side deviceless test in TF`: https://source.android.com/docs/core/tests/tradefed/testing/through-tf/host-side-deviceless-test
+- AOSP `Write a host-driven test in Trade Federation`: https://source.android.com/docs/core/tests/tradefed/testing/through-tf/host-driven-test
+- AOSP `Work with devices in TF`: https://source.android.com/docs/core/tests/tradefed/fundamentals/devices
+- VS Code `Remote Development`: https://code.visualstudio.com/docs/remote/remote-overview
+- VS Code `Supporting Remote Development and GitHub Codespaces`: https://code.visualstudio.com/api/advanced-topics/remote-extensions
