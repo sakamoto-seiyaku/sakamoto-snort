@@ -1,5 +1,8 @@
 # Change: PKTSTREAM 可观测性基座（reasonId + would-match + src/dst IP）
 
+> 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
+
+
 ## Why
 P0/P1 设计初衷需要对用户提供“友好可观测性”与“策略调试（当前主要指 BLOCK 规则的 would-block / would-match）”：
 - 现状 PKTSTREAM 只有 `accepted`，缺少“为什么”；

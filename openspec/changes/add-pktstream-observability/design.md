@@ -1,5 +1,8 @@
 # Design: PKTSTREAM 可观测性基座（reasonId + would-match + src/dst IP）
 
+> 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
+
+
 ## 0. Scope
 本 change 定义：
 - PKTSTREAM 的 Packet 事件 schema 与 `reasonId/ruleId/wouldRuleId/wouldDrop` 语义；

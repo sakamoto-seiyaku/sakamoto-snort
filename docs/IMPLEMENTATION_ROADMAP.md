@@ -1,72 +1,54 @@
-# 当前实现 Roadmap（P0/P1）
+# 当前实现 Roadmap（P0/P1/P2/P3）
 
-更新时间：2026-03-12  
-状态：当前共识；自 2026-03-12 起，功能主线实现暂缓，优先补齐 `debug / test` 工程化基础；若后续调整顺序，必须同步更新本文件、`AGENTS.md` 与相关权威文档。
+更新时间：2026-03-13  
+状态：当前共识；当前 `P0/P1/P2/P3` 只表示 **测试 / 集成验证 / 真机调试** 的工程化顺序，不表示功能实现阶段，也不授权推进 `A/B/C`、可观测性、`IPRULES` 等产品能力。
 
-## 1. 当前最高优先级
+## 1. 当前主线顺序
 
-当前主线优先级调整为：
+`P0 Host-side 单元测试（已完成） → P1 Host-driven 集成测试（host / WSL 驱动真机） → P2 真机集成 / smoke / 兼容性验证 → P3 真机原生 Debug / crash / LLDB`
 
-`P0 Host-side 单元测试（当前 active change） → P1 Host-driven 集成测试（后续独立 change） → P2 恢复功能主线（A → IP rules core → C → B） → P3 原生 Debug / 真机专项验证（待设备恢复后推进）`
+- 这四个 phase 全部围绕 **test / debug / tooling**。
+- `P0/P1/P2/P3` 与 `A/B/C`、`add-pktstream-observability`、`add-app-ip-l3l4-rules-engine` 没有阶段对应关系。
+- 所有与可观测性 / IP rules / `A/B/C` 相关的功能实现，统一排在整个 `P0 → P3` 之后，作为独立功能主线处理。
+- 任何以 `P1/P2/P3` 名义推进的工作，都不得顺势夹带产品功能实现；若确需极小的 test seam / debug seam，必须先说明必要性，并把范围压到最小。
 
-- 这次调整意味着：此前围绕 `A / IP rules core / C / B` 的实现任务暂时中断。
-- 只有**直接服务于 debug / test lane 落地**的工作，才应在当前阶段插队进入主线。
-- 关于当前测试/调试路线、边界与官方依据，以 `docs/NATIVE_DEBUGGING_AND_TESTING.md` 为权威补充文档。
-- 当前仅通过 OpenSpec change `add-host-side-unit-test-foundation` 收敛 **P0 Host-side 单元测试**；在该 change 审核通过前，不进入对应实现。
-- `P1 Host-driven 集成测试` 与 `P3 原生 Debug / 真机专项验证` 将在后续分别以独立 change 推进，不并入当前 P0 change。
-- 由于设备返修，当前无法落地真机相关 debug / platform validation，因此这部分整体后置到 `P3`。
-
-## 2. 当前阶段顺序与边界
+## 2. 各阶段定义与边界
 
 - `P0 Host-side 单元测试`
-  - 这是当前 active change。
-  - 目标是挡住低级回归，优先覆盖低耦合模块。
-  - 本地落地方式采用仓库内置 `gtest`（`CMake + FetchContent` 固定版本），不要求 host 预装 `gtest` 包。
-  - 不为了测试做大重构。
+  - 目标：不连设备先挡住一批低耦合回归。
+  - 方式：host-side `gtest`，由仓库管理依赖，不要求 host 预装 `gtest`。
+  - 边界：不为了测试做大重构，不把 Android / NFQUEUE / `iptables` / `netd` 强依赖塞进首批单测。
 - `P1 Host-driven 集成测试`
-  - 这是后续独立 change，不属于当前 P0。
-  - 测试代码运行在 host / WSL，目标环境优先 Android device 或 emulator。
-- `P2 恢复功能主线`
-  - 在测试基础可用后，恢复 `A → IP rules core → C → B` 功能实现。
-- `P3 原生 Debug / 真机专项验证`
-  - 由于设备返修，当前不可落地。
-  - 设备恢复后，再推进 LLDB、真机 crash 复盘、`NFQUEUE / iptables / netd / SELinux / 性能` 等平台专项验证。
+  - 目标：测试代码跑在 host / WSL，由 host 驱动 Android 真机完成端到端回归。
+  - 典型内容：deploy / start / health-check / control protocol 基线 / stream 健康检查 / reset 基线。
+  - 边界：仍是自动化验证，不进入真机专项 debug / crash 分析，也不以此为由实现新功能。
+- `P2 真机集成 / smoke / 兼容性验证`
+  - 目标：在 rooted Android 真机上补齐更贴近真实运行环境的专项验证。
+  - 典型内容：NFQUEUE、`iptables`、`netd`、SELinux、权限、生命周期、性能 / 回归 smoke。
+  - 边界：它仍属于测试 lane，不等于产品功能实现阶段。
+- `P3 真机原生 Debug / crash / LLDB`
+  - 目标：形成可实际使用的断点、单步、attach、run-under-debugger、tombstone symbolize 工作流。
+  - 典型内容：LLDB attach / run、VS Code + CodeLLDB 准备、`debuggerd` / tombstone / `stack`、必要时 sanitizer。
+  - 边界：它解决定位效率问题，不授权顺手改产品功能。
 
-## 3. 为什么现在先做 debug / test
+## 3. 为什么按这个顺序
 
-- 当前最大瓶颈不是 spec 不清，而是**开发与定位效率不足**。
-- 若继续直接推进 `A / IP rules core / C / B`，会持续放大“只能看 log 反推”的成本。
-- 当前设备不可用，真机相关 debug lane 暂时无法作为起步项。
-- 单元测试虽然不是全部目标，但它能以最低外部依赖成本先挡住一批解析、规则、统计类回归。
-- 先补齐可在本地推进的测试基础，再恢复功能主线；待设备恢复后，再补原生 debug 与平台专项验证。
+- 当前最缺的不是再写一轮功能设计，而是可重复验证与可直接调试的开发链路。
+- 单测先补最低成本回归保护。
+- host-driven 集成测试先把“push / 起守护进程 / 发命令 / 验结果”固化下来。
+- 真机 smoke / 兼容性随后补真实 Android 环境差异。
+- 最后再把 LLDB / crash lane 固化，解决“只能查 log 反推”的低效率问题。
 
-## 4. 功能主线的保留顺序（在工程化基础补齐后恢复）
+## 4. 与功能主线的关系
 
-恢复功能主线后，顺序仍保持为：`A → IP rules core → C → B`
-
-- `A`：Packet 可观测性基座
-  - `PKTSTREAM` 的 `reasonId/ruleId/wouldRuleId/wouldDrop/ipVersion/srcIp/dstIp`
-  - `METRICS.REASONS` / `METRICS.REASONS.RESET`
-  - 当前 A 层验收基线按 `BLOCKIPLEAKS=0` 理解；legacy `ip-leak` 细节仍为 TBD
-- `IP rules core`：IP 规则主能力
-  - 控制面骨架：`IPRULES`、`IPRULES.ADD/UPDATE/REMOVE/ENABLE/PRINT/PREFLIGHT`、`IFACES.PRINT`
-  - 数据面骨架：`PacketKeyV4`、preflight、snapshot、classifier、per-thread exact cache
-  - 热路径边界：`IFACE_BLOCK` 前置；仅 `NoMatch` 回落到 legacy/domain
-- `C`：IP 规则 per-rule runtime stats
-  - `IPRULES.PRINT.stats`
-  - `hit* / wouldHit*`
-  - `UPDATE` 生效后清零；`ENABLE 0→1` 后清零
-- `B`：DomainPolicy 常态 counters
-  - `METRICS.DOMAIN.SOURCES*`
-  - 复用现有 `App::blocked()` 归因顺序
-  - 不把 `ip-leak` 混入 B 层口径
+- `A/B/C`、可观测性、`IPRULES`、DomainPolicy 相关实现属于**独立功能主线**。
+- 这些功能 change 可以继续保留为独立 proposal / design / working decisions，但不得再复用 `P0/P1/P2/P3` 作为阶段编号，以免和测试 / 调试 roadmap 串线。
+- 若未来恢复功能主线，必须在 `P0 → P3` 完整收敛后另行排期，不得倒灌进当前 test / debug lane。
 
 ## 5. 当前现状
 
-- 纲领仍收敛到 `A / B / C` 三层边界；这些功能文档结论没有被推翻。
-- `add-pktstream-observability` 已按当前 A 层基线收敛。
-- `add-app-ip-l3l4-rules-engine` 已明确：仅 `NoMatch` 回落 legacy/domain。
-- `docs/DOMAIN_POLICY_OBSERVABILITY.md` 继续作为 B 层权威文档。
-- `docs/NATIVE_DEBUGGING_AND_TESTING.md` 继续作为未来 P3 原生调试 / 平台专项验证的权威补充文档。
-- 当前 active change 已收敛为 `add-host-side-unit-test-foundation`；后续 phases 将继续拆分为独立 changes。
-- 当前实现优先级已正式切换：先完成 P0 Host-side 单元测试，再推进 P1 Host-driven 集成测试，随后恢复 A/B/C 与 IP 规则主线；P3 真机 debug 待设备恢复后再落地。
+- `P0 Host-side 单元测试`：已完成；对应 change 已归档，并已从 active queue 移出。
+- `P1 Host-driven 集成测试`：作为独立 change 继续推进，只聚焦基线自动化验证。
+- `P2 真机集成 / smoke / 兼容性验证`：待以独立 change 收敛。
+- `P3 真机原生 Debug / crash / LLDB`：调研已完成，继续以独立 change 推进真机工作流。
+- `docs/NATIVE_DEBUGGING_AND_TESTING.md` 是这条 test / debug 路线的权威补充文档。

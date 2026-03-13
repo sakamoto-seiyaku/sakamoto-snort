@@ -1,7 +1,7 @@
 # sucre-snort 原生调试与测试工作流（WSL2 / VS Code / Codex CLI）
 
-更新时间：2026-03-12  
-状态：已核实的工作文档（以 AOSP / VS Code 官方文档为准）；作为未来 P3 原生 Debug / 真机专项验证阶段的权威补充文档。由于设备返修，当前阶段暂不落地本文件对应实现。
+更新时间：2026-03-13  
+状态：已核实的工作文档（以 AOSP / VS Code 官方文档为准）；作为当前 `P0/P1/P2/P3` 测试 / 调试路线的权威补充文档，其中 `P3 真机原生 Debug / crash / LLDB` 是本文重点。该路线与 `A/B/C`、可观测性、`IPRULES` 等功能实现无关。
 
 ---
 
@@ -319,36 +319,23 @@ stack < /tmp/tombstone_xx
 
 ---
 
-## 6. 模拟器能不能替代真机？
+## 6. 当前项目的 phase 顺序与目标环境
 
-### 已核实的事实
+当前项目的 `P0/P1/P2/P3` 是 **测试 / 调试路线编号**，不是功能实现编号，也不对应 `A/B/C`、可观测性或 `IPRULES` 主线。
 
-- AOSP 官方 LLDB 文档描述的是“连接到目标设备/进程”的通用工作流；
-- Tradefed 官方文档把 **emulator** 也视作 device 类型的一种；
-- Atest 官方文档明确支持 `--start-avd` 与 `--acloud-create`，可在运行测试前自动启动已有 AVD，或创建新的 AVD / remote instance；
-- 因此，只要目标能通过 `adb` 可见、并且构建/符号与目标镜像匹配，**同一套 LLDB / host-driven test 思路可以迁移到模拟器或 Cuttlefish**。
+顺序固定为：
 
-### 对本项目的工作判断（推断）
+- `P0`：host-side 单元测试（不连设备，优先 low-coupling `gtest`）
+- `P1`：host-driven 集成测试（测试代码跑在 host / WSL，由 host 驱动真机）
+- `P2`：真机集成 / smoke / 兼容性验证（更贴近 NFQUEUE / `iptables` / `netd` / SELinux / 权限 / 性能场景）
+- `P3`：真机原生 debug / crash 复盘 / LLDB / VS Code CodeLLDB
 
-基于 `sucre-snort` 当前代码与依赖边界，可以做出如下工作判断：
+这意味着：
 
-- **适合先在模拟器上解决的**
-  - 启动期 crash
-  - 控制面 socket 命令
-  - 大部分线程/锁/状态机问题
-  - 断点、变量、调用栈定位
-
-- **仍应以真机为准的**
-  - NFQUEUE
-  - `iptables` / `ip6tables`
-  - `netd` 交互
-  - SELinux / init / 权限细节
-  - 与具体 ROM / 内核网络栈绑定的问题
-
-所以更现实的目标不是“模拟器完全取代真机”，而是：
-
-- **模拟器 / 虚拟设备承担快速 debug**
-- **真机承担最终集成验证与性能/行为确认**
+- 当前不再为模拟器 / 虚拟设备维护单独流程；
+- `P1/P2/P3` 都以 Android 真机为目标环境；
+- `P3` 与 `P1/P2` 的区别在于：前者解决 live debug / crash / native 排障，后两者解决自动化验证与回归；
+- `A/B/C`、`add-pktstream-observability`、`add-app-ip-l3l4-rules-engine` 属于独立功能线，统一排在整个 test / debug 路线之后。
 
 ---
 
@@ -398,7 +385,7 @@ AOSP 官方明确支持两条非常适合当前项目的路：
 
 - 写平台 GTest；
 - 通过 `atest <module>` 或 Tradefed 运行；
-- 若希望先在模拟器上跑，可结合 `atest --start-avd <module>`；若需要自动创建实例，可进一步评估 `--acloud-create`。
+- AOSP 文档也覆盖模拟器/AVD 路径，但对当前仓库一律不纳入工作流；当前实践统一收敛到真实 Android 设备。
 
 ### 路线 B：host-driven tests（更适合 `sucre-snort`）
 
@@ -418,9 +405,9 @@ AOSP 官方明确支持 **host-driven test**：
 
 换句话说：**你们离“正式的 host-driven integration test”其实只差一步封装，不差架构重写。**
 
-## 7.3 对当前项目最现实的测试分层建议
+## 7.3 对当前项目最现实的 `P0/P1/P2/P3` 分层建议
 
-### 第 1 层：host-side deviceless tests
+### `P0`：host-side deviceless tests
 
 目的：快速挡住纯逻辑回归。
 
@@ -431,9 +418,9 @@ AOSP 官方明确支持 **host-driven test**：
 - `Stats` / `AppStats` / `DomainStats` 计数
 - `Control` 参数解析辅助逻辑
 
-### 第 2 层：host-driven integration tests
+### `P1`：host-driven integration tests
 
-目的：验证“守护进程 + 设备 + 控制面”整体行为。
+目的：验证“守护进程 + 真机 + 控制面”整体行为，但测试驱动仍运行在 host / WSL。
 
 建议覆盖：
 
@@ -447,9 +434,9 @@ AOSP 官方明确支持 **host-driven test**：
 
 这层本质上就是把现有 `dev/dev-smoke.sh` 里的关键路径，逐步沉淀为**可自动跑、可并入 CI、可筛选模块运行**的测试模块。
 
-### 第 3 层：真机 smoke / perf / compatibility
+### `P2`：真机 smoke / compatibility / integration
 
-目的：保留那些确实离不开真机的验证。
+目的：把必须依赖 rooted Android 真机的专项验证单独收敛出来。
 
 建议继续保留：
 
@@ -457,43 +444,46 @@ AOSP 官方明确支持 **host-driven test**：
 - `iptables` 链初始化
 - `netd` 相关交互
 - SELinux / 权限问题
-- 性能回归、backlog、极端流量行为
+- 生命周期、性能回归、backlog、极端流量行为
 
-### 第 4 层：sanitizer / crash lane
+### `P3`：真机 native debug / sanitizer / crash lane
 
-目的：抓“肉眼最难查”的 native 内存问题。
+目的：抓“肉眼最难查”的 native 问题，并提供日常断点调试能力。
 
 建议补：
 
+- LLDB attach / run-under-debugger
+- VS Code + CodeLLDB 调试准备
+- tombstone + `stack` 归档流程
 - dev-only `sanitize` 变体
 - 有条件时优先 HWASan
-- tombstone + `stack` 归档流程
 
 ---
 
 ## 8. 对当前项目的推荐推进顺序
 
-如果遵循“**不为了测试先大重构**”这个原则，推荐顺序如下：
+按当前已经确认的 roadmap，顺序固定为：
 
-1. **先把 LLDB 调试 lane 打通**
-   - CLI attach
-   - CLI run-under-debugger
-   - VS Code WSL 图形化断点调试
-
-2. **再把现有 smoke 升级为 host-driven integration tests**
-   - 这是最贴近当前工作流、收益也最高的一步
-
-3. **补少量 host-side gtest**
+1. **`P0`：先补 host-side 单元测试**
    - 只挑高价值、低耦合模块，不追求“全覆盖”
 
-4. **最后补 sanitizer lane**
-   - 对难查内存损坏问题非常值
+2. **`P1`：再把现有 smoke 收敛为 host-driven integration tests**
+   - 测试代码在 host / WSL，目标是真机
+
+3. **`P2`：随后补真机专项的 integration / smoke / compatibility**
+   - 解决 NFQUEUE / `iptables` / `netd` / SELinux / 权限 / 性能等真实环境差异
+
+4. **`P3`：最后固化真机 native debug / crash lane**
+   - LLDB attach / run-under-debugger
+   - VS Code WSL 图形化断点调试
+   - tombstone / `stack` / sanitizer
 
 这个顺序的核心是：
 
-- 先解决“开发效率差、只能看日志”的痛点；
-- 再解决“回归只能手工跑设备”的痛点；
-- 最后再去扩充更精细的测试矩阵。
+- 先建立最基础、最便宜的自动化保护；
+- 再把 host 驱动真机的回归跑通；
+- 再补必须依赖真机环境的专项验证；
+- 最后把高效率 native 调试链完整补齐。
 
 ---
 
@@ -511,7 +501,7 @@ AOSP 官方明确支持 **host-driven test**：
 真正不现实的是：
 
 - 期待“完全不依赖 Android/Lineage，就把整个 daemon 当纯 Linux 项目一样完整开发与验证”；
-- 或者期待“模拟器完全替代真机”。
+- 或者期待“非真机环境可以完全替代真实 Android 设备”。
 
 现实可行、性价比最高的目标是：
 
@@ -519,7 +509,7 @@ AOSP 官方明确支持 **host-driven test**：
 
 ---
 
-## 10. 官方参考链接（2026-03-12 核实）
+## 10. 官方参考链接（2026-03-13 核实）
 
 - AOSP `Use debuggers`: https://source.android.com/docs/core/tests/debug/gdb
 - AOSP `Debug native Android platform code`: https://source.android.com/docs/core/tests/debug

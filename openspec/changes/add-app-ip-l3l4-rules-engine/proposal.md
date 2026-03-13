@@ -1,5 +1,8 @@
 # Change: App-level IPv4 L3/L4 rules engine (per-UID)
 
+> 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
+
+
 ## Why
 现有 sucre-snort 的数据包判决主要依赖域名系统（DomainList/自定义名单与规则）与 `BLOCKIPLEAKS` 的联动：
 - Packet 热路径无法对“无域名/无 DNS 映射”的流量做 per-app 精确控制；

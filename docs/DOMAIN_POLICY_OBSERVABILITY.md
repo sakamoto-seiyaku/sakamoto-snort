@@ -62,7 +62,7 @@
 6. `GLOBAL_BLOCKED`（device-wide 拦截命中：全局黑名单/黑规则）
 7. `MASK_FALLBACK`（最终回退：`app.blockMask & domain.blockMask`）
 
-> 说明：这套枚举只做“来源归因”，**不细到具体 ruleId / listId**；细粒度定位属于后续 P1/P2（会牵涉到域名规则匹配结构变化）。
+> 说明：这套枚举只做“来源归因”，**不细到具体 ruleId / listId**；细粒度定位属于后续独立功能线（会牵涉到域名规则匹配结构变化）。
 
 ### 2.2 命中唯一性与优先级（与现状实现一致）
 
