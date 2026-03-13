@@ -11,9 +11,9 @@
 
 - `Rule`
   - 文档依据：`openspec/project.md`、`docs/INTERFACE_SPECIFICATION.md`
-  - 审计结论：文档要求 `DOMAIN` 为精确匹配、`WILDCARD` 仅对 `*`/`?` 赋予特殊语义、`REGEX` 保持正则语义。
-  - 发现问题：实现此前把 `DOMAIN` 直接当 regex 使用，`.` 等元字符会破坏“精确匹配”语义。
-  - P0 处理：先做最小纠偏，再补 host-side gtest，防止继续给错误语义背书。
+  - 审计结论：`WILDCARD` 的 `*`/`?` 语义与 `REGEX` 的原样正则语义是明确的；但 `DOMAIN` 是否应当“字面量精确匹配”，还是继续保持当前“直接透传到 regex”的历史实现，现阶段存在歧义。
+  - 历史事实：规则能力在 2023-10-18 的 `add wildcards/regex` 中引入，当时实现即为“仅 `WILDCARD` 做转换，其他类型原样进入 regex”。
+  - P0 处理：不在测试 change 中私自改动 `DOMAIN` 产品语义；当前仅为 `WILDCARD` 转义规则与现有 `DOMAIN/REGEX` 行为补 host-side gtest，并把 `DOMAIN` 语义澄清留给后续独立决策。
 
 - `Settings` 纯 helper
   - 文档依据：`docs/INTERFACE_SPECIFICATION.md`、`openspec/specs/multi-user-support/spec.md`
