@@ -1,11 +1,11 @@
 # 当前实现 Roadmap（P0/P1/P2/P3）
 
-更新时间：2026-03-13  
+更新时间：2026-03-14  
 状态：当前共识；当前 `P0/P1/P2/P3` 只表示 **测试 / 集成验证 / 真机调试** 的工程化顺序，不表示功能实现阶段，也不授权推进 `A/B/C`、可观测性、`IPRULES` 等产品能力。
 
 ## 1. 当前主线顺序
 
-`P0 Host-side 单元测试（当前 active change，tasks complete） → P1 Host-driven 集成测试（host / WSL 驱动真机） → P2 真机集成 / smoke / 兼容性验证 → P3 真机原生 Debug / crash / LLDB`
+`P0 Host-side 单元测试 → P1 Host-driven 集成测试（host / WSL 驱动真机） → P2 真机集成 / smoke / 兼容性验证 → P3 真机原生 Debug / crash / LLDB`
 
 - 这四个 phase 全部围绕 **test / debug / tooling**。
 - `P0/P1/P2/P3` 与 `A/B/C`、`add-pktstream-observability`、`add-app-ip-l3l4-rules-engine` 没有阶段对应关系。
@@ -47,8 +47,8 @@
 
 ## 5. 当前现状
 
-- `P0 Host-side 单元测试`：本轮 reopened 工作已完成；当前值得测且不由 `P1/P2/P3` 覆盖的高价值 pure-logic 模块，已形成 inventory，并补齐 `PackageState`（含 ABX）、`Rule`、`Settings`、`Stats/AppStats/DomainStats` 的 host-side gtest；其余暂缓项也已记录明确原因。
-- `P1 Host-driven 集成测试`：作为独立 change 继续推进，只聚焦基线自动化验证。
-- `P2 真机集成 / smoke / 兼容性验证`：待以独立 change 收敛。
-- `P3 真机原生 Debug / crash / LLDB`：调研已完成，继续以独立 change 推进真机工作流。
+- `P0 Host-side 单元测试`：已完成并归档；当前值得测且不由 `P1/P2/P3` 覆盖的高价值 pure-logic 模块，已形成 inventory，并补齐 `PackageState`（含 ABX）、`Rule`、`Settings`、`Stats/AppStats/DomainStats` 的 host-side gtest；其余暂缓项也已记录明确原因。
+- `P1 Host-driven 集成测试`：已完成并归档；主入口收敛在 `tests/integration/run.sh`，并已在 rooted 真机上完成 baseline 验证。
+- `P2 真机集成 / smoke / 兼容性验证`：已以独立 change 收敛；当前主入口为 `tests/integration/device-smoke.sh`，覆盖 rooted 真机上的 root/preflight、socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC 与 lifecycle restart smoke。`libnetd_resolv.so` 挂载属于环境相关 compatibility 检查；若外部 debug-base 模块未就位，则明确标为 skip，而不是倒灌到产品实现。
+- `P3 真机原生 Debug / crash / LLDB`：独立 change 与真机入口脚本已完成，继续沿真机工作流使用 `LLDB` / `CodeLLDB` / tombstone symbolize 能力。
 - `docs/NATIVE_DEBUGGING_AND_TESTING.md` 是这条 test / debug 路线的权威补充文档。

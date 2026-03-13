@@ -9,6 +9,7 @@ sucre/
 │       ├── dev-build.sh               # 增量编译
 │       ├── dev-deploy.sh              # 推送 + 启动 + 健康检查
 │       ├── dev-integration-tests.sh   # 兼容 wrapper → tests/integration/run.sh
+│       ├── dev-device-smoke.sh        # 兼容 wrapper → tests/integration/device-smoke.sh
 │       ├── dev-diagnose.sh            # 诊断工具
 │       ├── dev-android-device-lib.sh  # 真机/ADB 公共辅助
 │       ├── dev-native-debug.sh        # P3 LLDB / VS Code 调试入口
@@ -17,8 +18,9 @@ sucre/
 ├── tests/
 │   ├── host/                          # P0 host-side gtest
 │   └── integration/
-│       ├── run.sh                     # P1 host-driven / P2 真机 smoke 入口
-│       ├── full-smoke.sh              # 更完整的真机冒烟回归
+│       ├── run.sh                     # P1 host-driven baseline 入口
+│       ├── device-smoke.sh            # P2 rooted 真机平台 smoke 入口
+│       ├── full-smoke.sh              # 更广的控制协议冒烟回归
 │       └── lib.sh                     # integration 公共辅助
 ├── sucre-snort/               # 软链接 → ~/android/lineage/system/sucre-snort
 ├── sucre-android16-toolkit/   # 模块打包工具
@@ -115,37 +117,40 @@ bash dev-deploy.sh
 
 **结果**: 显示成功/失败状态 + 快速命令
 
-#### 4. 真机测试（P1 基线 / P2 后续扩展）
+#### 4. 真机测试（P1 / P2）
 
 ```bash
+# P1 baseline
 bash tests/integration/run.sh
+
+# P2 rooted 真机平台 smoke
+bash tests/integration/device-smoke.sh
 ```
 
 **特点**:
-- 运行在 host / WSL，驱动 Android 真机执行集成测试
-- 默认包含 deploy + health-check + first-wave smoke cases
-- 当前 first-wave 仅聚焦守护进程生命周期、控制面基线、stream 健康检查与 `RESETALL` 基线语义
-- `P2` 再继续补 rooted 真机上的 NFQUEUE / `iptables` / `netd` / SELinux / 权限 / 性能专项验证
+- 两条测试 lane 都运行在 host / WSL，由 host 驱动 Android 真机执行验证
+- `P1` 只聚焦守护进程生命周期、控制面基线、stream 健康检查与 `RESETALL` 基线语义
+- `P2` 聚焦 rooted 真机上的 socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC 与 lifecycle restart smoke
 - 支持按 group / case 选择测试
 - 支持通过 `--serial` 绑定指定真机
 
 **常用示例**:
 
 ```bash
-# 全量 first-wave 集成测试
+# 全量 P1 baseline
 bash tests/integration/run.sh
 
-# 只跑 core / app 组
-bash tests/integration/run.sh --group core,app
-
-# 只跑 streams / reset 组
+# 只跑 P1 streams / reset
 bash tests/integration/run.sh --group streams,reset
 
-# 只跑指定 case
-bash tests/integration/run.sh --case IT-01,IT-05,IT-07,IT-09
+# 全量 P2 rooted 真机平台 smoke
+bash tests/integration/device-smoke.sh --serial <serial>
 
-# 复用当前已部署守护进程
-bash tests/integration/run.sh --skip-deploy --group reset
+# 只跑 P2 firewall / selinux
+bash tests/integration/device-smoke.sh --skip-deploy --group firewall,selinux
+
+# 只跑 P2 lifecycle case
+bash tests/integration/device-smoke.sh --case P2-09
 ```
 
 ---
