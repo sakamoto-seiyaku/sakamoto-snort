@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -43,6 +44,55 @@ public:
 private:
     std::filesystem::path path_;
 };
+
+void appendBe16(std::string &out, const uint16_t value) {
+    out.push_back(static_cast<char>((value >> 8) & 0xff));
+    out.push_back(static_cast<char>(value & 0xff));
+}
+
+void appendUtf(std::string &out, const std::string &text) {
+    appendBe16(out, static_cast<uint16_t>(text.size()));
+    out.append(text);
+}
+
+void appendInternedUtf(std::string &out, const std::string &text) {
+    appendBe16(out, 0xffff);
+    appendUtf(out, text);
+}
+
+std::string buildPackageRestrictionsAbx(const bool omitNameAttr = false) {
+    std::string out("ABX\0", 4);
+
+    out.push_back(static_cast<char>(0x10));
+    out.push_back(static_cast<char>(0x22));
+    appendUtf(out, "package-restrictions");
+
+    out.push_back(static_cast<char>(0x22));
+    appendUtf(out, "pkg");
+    if (!omitNameAttr) {
+        out.push_back(static_cast<char>(0x2f));
+        appendInternedUtf(out, "name");
+        appendUtf(out, "com.example.alpha");
+    }
+    out.push_back(static_cast<char>(0x23));
+    appendUtf(out, "pkg");
+
+    out.push_back(static_cast<char>(0x22));
+    appendUtf(out, "package");
+    out.push_back(static_cast<char>(0x2f));
+    appendInternedUtf(out, "name");
+    appendUtf(out, "com.example.beta");
+    out.push_back(static_cast<char>(0xdf));
+    appendInternedUtf(out, "inst");
+    out.push_back(static_cast<char>(0x23));
+    appendUtf(out, "package");
+
+    out.push_back(static_cast<char>(0x23));
+    appendUtf(out, "package-restrictions");
+    out.push_back(static_cast<char>(0x11));
+
+    return out;
+}
 
 TEST(PackageStateTest, ValidatesPackageNames) {
     EXPECT_TRUE(PackageState::isValidPackageName("com.example.app"));
@@ -147,6 +197,30 @@ TEST(PackageStateTest, RejectsRestrictionsWithoutPackageEntries) {
     ASSERT_FALSE(PackageState::parsePackageRestrictionsFile(path.c_str(), snapshot, &error));
     ASSERT_FALSE(error.empty());
     EXPECT_EQ(error.find("no <pkg>/<package> entries found"), 0u);
+}
+
+TEST(PackageStateTest, ParsesPackageRestrictionsAbxFile) {
+    TempDir tempDir;
+    const auto path = tempDir.writeFile("package-restrictions.xml", buildPackageRestrictionsAbx());
+
+    PackageState::PackageRestrictionsSnapshot snapshot;
+    std::string error;
+
+    ASSERT_TRUE(PackageState::parsePackageRestrictionsFile(path.c_str(), snapshot, &error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(snapshot.installedPackages.contains("com.example.alpha"));
+    EXPECT_FALSE(snapshot.installedPackages.contains("com.example.beta"));
+}
+
+TEST(PackageStateTest, RejectsAbxRestrictionsMissingPackageName) {
+    TempDir tempDir;
+    const auto path = tempDir.writeFile("package-restrictions.xml", buildPackageRestrictionsAbx(true));
+
+    PackageState::PackageRestrictionsSnapshot snapshot;
+    std::string error;
+
+    ASSERT_FALSE(PackageState::parsePackageRestrictionsFile(path.c_str(), snapshot, &error));
+    EXPECT_EQ(error, "missing pkg name attribute");
 }
 
 } // namespace

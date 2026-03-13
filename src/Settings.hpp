@@ -8,6 +8,7 @@
 #include <android-base/properties.h>
 #include <chrono>
 #include <atomic>
+#include <fstream>
 #include <string>
 
 #include <sucre-snort.hpp>

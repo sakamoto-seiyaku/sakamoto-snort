@@ -10,13 +10,23 @@
 
 ## 当前覆盖
 
-第一批仅覆盖低耦合的 `PackageState`：
+当前 `tests/host/` 已覆盖以下文档驱动的 low-coupling pure-logic 模块：
 
-- `PackageState::isValidPackageName()`
-- `PackageState::parsePackagesListFile()`
-- `PackageState::parsePackageRestrictionsFile()`
+- `PackageState`
+  - `isValidPackageName()`
+  - `parsePackagesListFile()`
+  - `parsePackageRestrictionsFile()`（文本 XML + ABX）
+- `Rule`
+  - `DOMAIN / WILDCARD / REGEX` 的核心匹配语义
+- `Settings` 纯 helper
+  - `blockMask` / `appMask` 约束
+  - per-user 持久化路径 helper
+- `Stats / AppStats / DomainStats`
+  - 计数更新、聚合桶、`DAY0/WEEK/ALL` 与 `reset` 语义
 
 这些测试都不依赖 Android 真机、socket、NFQUEUE、iptables 或 netd。
+
+当前 `P0` 仍以“文档先行审计 + host-side 补测”为准。模块清单、文档依据、以及暂缓原因统一记录在 `tests/host/P0_PURE_LOGIC_INVENTORY.md`。
 
 ## 运行方式
 

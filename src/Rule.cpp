@@ -11,6 +11,25 @@
 
 using namespace std::string_literals;
 
+namespace {
+
+void appendEscapedRegexLiteral(std::stringstream &out, const char c) {
+    if (std::string(".^$|()[]{}*+?\\").find(c) != std::string::npos) {
+        out << '\\';
+    }
+    out << c;
+}
+
+std::string escapeRegexLiteral(const std::string &text) {
+    std::stringstream out;
+    for (const char c : text) {
+        appendEscapedRegexLiteral(out, c);
+    }
+    return out.str();
+}
+
+} // namespace
+
 Rule::Rule(const Type type, const Id id, const std::string &rule)
     : _id(id) {
     create(type, rule);
@@ -35,13 +54,12 @@ void Rule::create(const Type type, const std::string &rule) {
                 // Treat WILDCARD as a pure glob: only '*' and '?' have special
                 // meaning. All other regex meta characters must be escaped so
                 // that user input cannot accidentally be interpreted as regex.
-                if (std::string(".^$|()[]{}*+?\\").find(c) != std::string::npos) {
-                    tmp << '\\';
-                }
-                tmp << c;
+                appendEscapedRegexLiteral(tmp, c);
             }
         }
         _regex = tmp.str();
+    } else if (type == Rule::DOMAIN) {
+        _regex = escapeRegexLiteral(rule);
     } else {
         _regex = rule;
     }

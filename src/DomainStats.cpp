@@ -77,7 +77,7 @@ void DomainStats::printType(std::ostream &out, const View view, const Type ts) c
     out << "]";
 }
 
-void DomainStats::printNotif(std::ostream &out) const {}
+void DomainStats::printNotif(std::ostream &out) const { (void)out; }
 
 void DomainStats::migrateV1V2() {
     for (size_t vs = 0; vs < nbViews; ++vs) {

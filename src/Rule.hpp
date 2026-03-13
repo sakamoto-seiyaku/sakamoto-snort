@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include <Saver.hpp>
 
 class Rule {
