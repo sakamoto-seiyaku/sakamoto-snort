@@ -188,7 +188,7 @@ case_p2_04_netd_prerequisite() {
     if [[ -n "$mount_line" ]]; then
         log_pass "$case_id netd prerequisite"
     else
-        log_skip "$case_id netd prerequisite missing (libnetd_resolv.so 未挂载；需要外部 debug-base 模块)"
+        log_skip "$case_id netd prerequisite missing (libnetd_resolv.so 未挂载；先跑 bash dev/dev-netd-resolv.sh prepare，必要时再用模块方案)"
     fi
 }
 

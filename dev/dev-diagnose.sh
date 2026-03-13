@@ -159,7 +159,8 @@ if [ -n "$RESOLV_MOUNTED" ]; then
     echo "  ✓ 已挂载"
     echo "$RESOLV_MOUNTED" | sed 's/^/    /'
 else
-    echo "  ❌ 未挂载 (需要调试基础模块)"
+    echo "  ❌ 未挂载"
+    echo "  建议先执行: bash dev/dev-netd-resolv.sh prepare"
 fi
 
 echo ""
@@ -211,7 +212,10 @@ fi
 if [ -z "$RESOLV_MOUNTED" ]; then
     echo "⚠️  libnetd_resolv.so 未挂载"
     echo ""
-    echo "需要刷入调试基础模块:"
+    echo "开发态优先方案（无需刷完整模块）:"
+    echo "  bash dev/dev-netd-resolv.sh prepare"
+    echo ""
+    echo "若仍需完整模块兜底:"
     if [ -n "$SUCRE_TOOLKIT" ]; then
         echo "  cd $SUCRE_TOOLKIT/scripts"
     else
@@ -219,8 +223,7 @@ if [ -z "$RESOLV_MOUNTED" ]; then
         echo "  # 或设置环境变量: export SUCRE_TOOLKIT=/path/to/sucre-android16-toolkit"
     fi
     echo "  bash build-debug-base.sh"
-    echo "  adb.exe push ../output/sucre-debug-base-*.zip /sdcard/Download/"
-    echo "  adb.exe shell su -c \"ksud module install /sdcard/Download/sucre-debug-base-*.zip && reboot\""
+    echo "  # 然后通过 APatch / KernelSU Manager 安装生成的 zip 并重启"
     echo ""
 fi
 

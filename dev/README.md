@@ -10,6 +10,7 @@ sucre/
 │       ├── dev-deploy.sh              # 推送 + 启动 + 健康检查
 │       ├── dev-integration-tests.sh   # 兼容 wrapper → tests/integration/run.sh
 │       ├── dev-device-smoke.sh        # 兼容 wrapper → tests/integration/device-smoke.sh
+│       ├── dev-netd-resolv.sh         # 开发态推送/挂载 libnetd_resolv.so
 │       ├── dev-diagnose.sh            # 诊断工具
 │       ├── dev-android-device-lib.sh  # 真机/ADB 公共辅助
 │       ├── dev-native-debug.sh        # P3 LLDB / VS Code 调试入口
@@ -58,8 +59,7 @@ bash build-debug-base.sh
 # 推送模块
 adb.exe push output/sucre-debug-base-*.zip /sdcard/Download/
 
-# 安装并重启
-adb.exe shell su -c "ksud module install /sdcard/Download/sucre-debug-base-*.zip && reboot"
+# 然后在 APatch / KernelSU Manager 中手动安装该 zip，并重启
 ```
 
 **效果**: 设备重启后，依赖项（DNS 补丁、APP）已就位，无守护进程自动启动。
@@ -116,6 +116,30 @@ bash dev-deploy.sh
    - 最近日志 (10 行)
 
 **结果**: 显示成功/失败状态 + 快速命令
+
+#### 3.5 快速准备 netd / SELinux（开发态，无需刷模块）
+
+```bash
+# 推送并临时挂载 libnetd_resolv.so，同时切到 permissive
+bash dev/dev-netd-resolv.sh prepare
+
+# 只查看状态
+bash dev/dev-netd-resolv.sh status
+
+# 仅切换 SELinux
+bash dev/dev-netd-resolv.sh permissive on
+bash dev/dev-netd-resolv.sh permissive off
+```
+
+**适用场景**:
+- 当前目标只是快速做真机联调 / 冒烟 / 集成验证
+- 不想每次都重新生成并刷入完整模块
+- 设备当前使用 APatch，且允许通过 `nsenter + busybox mount` 做开发态临时挂载
+
+**说明**:
+- 该脚本会把本地 `libnetd_resolv.so` 推到 `/data/local/tmp/`，再临时挂到 resolver APEX
+- 该挂载是**开发态临时状态**，重启后需要重新执行
+- 若只是为了跑 `P2`，优先走这条路；完整模块只作为更重的兜底方案
 
 #### 4. 真机测试（P1 / P2）
 
@@ -290,7 +314,12 @@ bash dev-build.sh --regen-graph
 
 **症状**: libnetd_resolv.so 未挂载或 APP 未安装
 
-**解决**: 重新刷入调试基础模块（见"首次设置"）
+**优先解决（开发态）**:
+```bash
+bash dev/dev-netd-resolv.sh prepare
+```
+
+**若仍不满足**: 再回退到完整调试基础模块方案（见"首次设置"）
 
 ---
 
@@ -314,5 +343,5 @@ dev-deploy.sh (10秒)     │
 
 ---
 
-**最后更新**: 2026-03-13
-**环境**: Android 16, KSU Next, Pixel 6a
+**最后更新**: 2026-03-14
+**环境**: Android 16, APatch（当前开发机型）, Pixel 6a

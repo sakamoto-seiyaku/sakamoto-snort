@@ -1,6 +1,6 @@
 # sucre-snort 原生调试与测试工作流（WSL2 / VS Code / Codex CLI）
 
-更新时间：2026-03-13  
+更新时间：2026-03-14  
 状态：已核实的工作文档（以 AOSP / VS Code 官方文档为准）；作为当前 `P0/P1/P2/P3` 测试 / 调试路线的权威补充文档，其中 `P3 真机原生 Debug / crash / LLDB` 是本文重点。该路线与 `A/B/C`、可观测性、`IPRULES` 等功能实现无关。
 
 ---
@@ -445,6 +445,33 @@ AOSP 官方明确支持 **host-driven test**：
 - `netd` 相关交互
 - SELinux / 权限问题
 - 生命周期、性能回归、backlog、极端流量行为
+
+### `P2` 补充：APatch 下的开发态快路径（已实机验证）
+
+对于当前这台 rooted 真机，已经验证存在一条**不必先刷完整模块**的开发态快路径，适合日常真机联调 / 冒烟 / 集成验证：
+
+```bash
+# 1) 准备开发态依赖：推送并临时挂载 libnetd_resolv.so，必要时切到 permissive
+bash dev/dev-netd-resolv.sh prepare
+
+# 2) 运行 P2
+bash tests/integration/device-smoke.sh --serial <serial> --skip-deploy --cleanup-forward
+```
+
+关键点：
+
+- `libnetd_resolv.so` 不再要求每次都通过完整模块刷入；可以直接推到 `/data/local/tmp/` 后，临时 bind mount 到 `/apex/com.android.resolv*/lib64/libnetd_resolv.so`。
+- 在当前 APatch 环境里，直接 `adb shell su -c 'setenforce 0'` 可能失败；已验证可通过 **`nsenter -t 1 -m -- setenforce 0`** 切换到 `Permissive`。
+- 这条快路径本质上属于 **dev-only 临时状态**：设备重启后需要重新执行，不应当被误认为持久部署方案。
+- 若只是为了跑 `P2`、复现问题或提高真机联调效率，应优先走这条快路径；完整模块仍保留为更重的兜底方案。
+
+当前仓库中，这条快路径已经收敛为：
+
+- `dev/dev-netd-resolv.sh`
+- `dev/README.md`
+- `tests/integration/device-smoke.sh`
+
+因此，`P2` 中与 `netd` / SELinux 相关的验证，不再要求先把设备改造成完整模块态；在 APatch 真机上，开发态快速准备即可满足测试前置。
 
 ### `P3`：真机 native debug / sanitizer / crash lane
 

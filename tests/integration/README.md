@@ -39,6 +39,9 @@ bash tests/integration/device-smoke.sh --serial <serial>
 
 # 只跑 P2 firewall / selinux
 bash tests/integration/device-smoke.sh --skip-deploy --group firewall,selinux
+
+# 若 P2-04 因 libnetd_resolv.so 未挂载而 skip，先准备开发态依赖
+bash dev/dev-netd-resolv.sh prepare
 ```
 
 ## 边界
