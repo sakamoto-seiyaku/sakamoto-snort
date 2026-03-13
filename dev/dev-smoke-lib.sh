@@ -1,6 +1,9 @@
 #!/bin/bash
 # dev-smoke-lib.sh - sucre-snort 测试工具库
-# 用于 dev-smoke.sh 的辅助函数
+# 用于 dev-smoke.sh / dev-integration-tests.sh 的辅助函数
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/dev-android-device-lib.sh"
 
 # ============================================================================
 # 配置
@@ -8,7 +11,7 @@
 SNORT_HOST="${SNORT_HOST:-127.0.0.1}"
 SNORT_PORT="${SNORT_PORT:-60606}"
 SNORT_TIMEOUT="${SNORT_TIMEOUT:-5}"
-ADB="${ADB:-adb.exe}"
+ADB="${ADB:-$ADB_BIN}"
 
 # 颜色
 RED='\033[0;31m'
@@ -369,8 +372,8 @@ try:
     time.sleep(0.1)
     s.close()
 
-    # 输出采样数据
-    sys.stdout.write(data.decode('utf-8', errors='replace'))
+    # 输出采样数据（将控制协议里的 NUL 转成换行，便于逐条解析 JSON 事件）
+    sys.stdout.write(data.replace(b'\x00', b'\n').decode('utf-8', errors='replace'))
 except Exception as e:
     print(f'ERROR: {e}', file=sys.stderr)
     sys.exit(1)
@@ -394,15 +397,12 @@ check_daemon() {
 
 # 检查 adb forward
 check_forward() {
-    if ! $ADB forward --list 2>/dev/null | grep -q "tcp:$SNORT_PORT"; then
-        return 1
-    fi
-    return 0
+    check_control_forward "$SNORT_PORT"
 }
 
 # 设置 adb forward
 setup_forward() {
-    $ADB forward tcp:$SNORT_PORT localfilesystem:/dev/socket/sucre-snort-control >/dev/null 2>&1
+    setup_control_forward "$SNORT_PORT"
 }
 
 # ============================================================================
@@ -436,17 +436,22 @@ print_summary() {
 init_test_env() {
     log_info "初始化测试环境..."
 
-    # 检查 forward
+    if ! device_preflight; then
+        echo -e "${RED}错误: 真机 preflight 失败${NC}"
+        return 1
+    fi
+
+    log_info "目标真机: $(adb_target_desc)"
+
     if ! check_forward; then
         log_info "设置 adb forward..."
         setup_forward
     fi
 
-    # 检查守护进程
     if ! check_daemon; then
         echo -e "${RED}错误: 守护进程未响应${NC}"
         echo "请确保守护进程正在运行:"
-        echo "  $ADB shell \"su -c '/data/local/tmp/sucre-snort-dev &'\""
+        echo "  ${ADB} -s $(adb_target_desc) shell \"su -c '/data/local/tmp/sucre-snort-dev &'\""
         return 1
     fi
 
