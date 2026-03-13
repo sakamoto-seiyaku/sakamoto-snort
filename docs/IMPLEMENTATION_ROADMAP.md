@@ -5,7 +5,7 @@
 
 ## 1. 当前主线顺序
 
-`P0 Host-side 单元测试（已完成） → P1 Host-driven 集成测试（host / WSL 驱动真机） → P2 真机集成 / smoke / 兼容性验证 → P3 真机原生 Debug / crash / LLDB`
+`P0 Host-side 单元测试（当前 active change，tasks complete） → P1 Host-driven 集成测试（host / WSL 驱动真机） → P2 真机集成 / smoke / 兼容性验证 → P3 真机原生 Debug / crash / LLDB`
 
 - 这四个 phase 全部围绕 **test / debug / tooling**。
 - `P0/P1/P2/P3` 与 `A/B/C`、`add-pktstream-observability`、`add-app-ip-l3l4-rules-engine` 没有阶段对应关系。
@@ -16,7 +16,7 @@
 
 - `P0 Host-side 单元测试`
   - 目标：不连设备先挡住一批低耦合回归。
-  - 方式：host-side `gtest`，由仓库管理依赖，不要求 host 预装 `gtest`。
+  - 方式：先按现有权威文档 / 设计语义审计 pure-logic 实现，再用 host-side `gtest` 补测试；依赖由仓库管理，不要求 host 预装 `gtest`。
   - 边界：不为了测试做大重构，不把 Android / NFQUEUE / `iptables` / `netd` 强依赖塞进首批单测。
 - `P1 Host-driven 集成测试`
   - 目标：测试代码跑在 host / WSL，由 host 驱动 Android 真机完成端到端回归。
@@ -47,7 +47,7 @@
 
 ## 5. 当前现状
 
-- `P0 Host-side 单元测试`：已完成；对应 change 已归档，并已从 active queue 移出。
+- `P0 Host-side 单元测试`：本轮 reopened 工作已完成；当前值得测且不由 `P1/P2/P3` 覆盖的高价值 pure-logic 模块，已形成 inventory，并补齐 `PackageState`（含 ABX）、`Rule`、`Settings`、`Stats/AppStats/DomainStats` 的 host-side gtest；其余暂缓项也已记录明确原因。
 - `P1 Host-driven 集成测试`：作为独立 change 继续推进，只聚焦基线自动化验证。
 - `P2 真机集成 / smoke / 兼容性验证`：待以独立 change 收敛。
 - `P3 真机原生 Debug / crash / LLDB`：调研已完成，继续以独立 change 推进真机工作流。
