@@ -9,7 +9,7 @@
 - 新增并固化 `sucre-snort` 的 host-driven 集成测试入口。
 - 测试驱动运行在 host / WSL，目标环境为 Android 真机。
 - 当前 P1 主路径收敛为真机集成测试。
-- 优先复用并收敛现有 `dev/dev-smoke.sh`、`dev/dev-smoke-lib.sh`、`dev/dev-deploy.sh`，而不是另起一套完全割裂的新流程。
+- 优先复用并收敛现有 smoke / deploy 路径，而不是另起一套完全割裂的新流程；其中测试入口优先落在 `tests/integration/`，而非长期停留在 `dev/`。
 - 为集成测试补齐最小必需的目标 preflight、deploy、健康检查、状态 reset/cleanup 与结果汇总能力。
 - 允许按 group / case 运行测试，便于本地迭代与后续 CI 接入。
 
@@ -28,4 +28,4 @@
 
 ## Impact
 - Affected docs：`docs/IMPLEMENTATION_ROADMAP.md`, `docs/NATIVE_DEBUGGING_AND_TESTING.md`, `dev/README.md`
-- Affected tooling/code（实现时）：`dev/dev-smoke.sh`, `dev/dev-smoke-lib.sh`, `dev/dev-deploy.sh`, 以及可能新增的 `dev/` 辅助脚本/文档
+- Affected tooling/code（实现时）：`tests/integration/`, `dev/dev-deploy.sh`, 以及相关文档 / 兼容 wrapper

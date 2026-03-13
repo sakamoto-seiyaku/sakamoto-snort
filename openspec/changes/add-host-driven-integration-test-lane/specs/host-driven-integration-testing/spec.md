@@ -18,7 +18,7 @@
 
 #### Scenario: Integration test lane evolves from existing scripts
 - **WHEN** 开发者查阅当前 P1 方案
-- **THEN** SHALL 能明确看到现有 `dev/dev-smoke.sh`、`dev/dev-smoke-lib.sh`、`dev/dev-deploy.sh` 是首选演进基础
+- **THEN** SHALL 能明确看到现有 smoke / deploy 路径是首选演进基础，且 host-driven 集成测试入口优先位于 `tests/integration/`
 
 ### Requirement: Phase 1 provides repeatable target lifecycle handling and scriptable results
 项目 MUST 为 host-driven 集成测试提供可重复的目标 preflight / deploy / health-check / cleanup 流程，并输出适合脚本调用的执行结果。
@@ -29,11 +29,12 @@
 - **THEN** 系统 SHALL 对目标环境执行必要的准备与健康检查，并以明确退出码反映成功或失败
 
 ### Requirement: Phase 1 excludes native debug and deep platform-specific validation
-项目 MUST 明确 P1 与 P3 的边界：即使当前 P1 运行在真机上，也不承担真机专项 debug、性能压测与其他深度平台专项验证。
+项目 MUST 明确：即使当前 `P1` 运行在真机上，它仍只承担 baseline integration；真机专项 debug、性能压测与深度平台专项验证属于后续 `P2/P3`。
 
 #### Scenario: Review P1 scope boundaries
 - **WHEN** 开发者查阅当前 P1 设计
 - **THEN** SHALL 能明确看到 LLDB、tombstone 流程、NFQUEUE 性能、SELinux 疑难问题等仍不属于本 change
+- **AND** SHALL 能明确看到 `P1` 与 `P2` 的区别在于 baseline integration vs platform-specific / compatibility，而不是是否使用真机
 
 
 ### Requirement: Phase 1 must remain a test/tooling lane

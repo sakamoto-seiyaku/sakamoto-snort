@@ -432,7 +432,7 @@ AOSP 官方明确支持 **host-driven test**：
 - `DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 基础行为
 - save / restore / reset 语义
 
-这层本质上就是把现有 `dev/dev-smoke.sh` 里的关键路径，逐步沉淀为**可自动跑、可并入 CI、可筛选模块运行**的测试模块。
+这层本质上就是把现有 smoke 路径里的关键路径，逐步沉淀为位于 `tests/integration/` 的**可自动跑、可并入 CI、可筛选模块运行**的测试模块。
 
 ### `P2`：真机 smoke / compatibility / integration
 

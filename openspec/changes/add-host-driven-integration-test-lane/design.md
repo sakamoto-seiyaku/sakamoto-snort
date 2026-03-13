@@ -1,22 +1,23 @@
 # Design: Host-driven integration test lane for sucre-snort
 
 ## 0. Scope
-本 change 只关注 **P1 Host-driven 集成测试**：
+本 change 只关注 **P1 Host-driven 真机基线集成测试**：
 - 从 host / WSL 驱动 Android 目标环境执行集成测试
 - 建立可重复执行的 deploy / preflight / smoke / cleanup 流程
-- 逐步把现有 `dev/dev-smoke.sh` 收敛为可筛选、可自动运行的测试 lane
+- 逐步把现有 smoke 路径收敛为位于 `tests/integration/` 的可筛选、可自动运行测试 lane
 
-本 change 不包含真机 LLDB / crash debug，不包含性能专项，不包含必须依赖真机的平台专项验证。
+本 change 不包含真机 LLDB / crash debug，不包含性能专项，不包含必须依赖真机的平台专项验证；这些内容属于后续 `P2/P3`。
 
 ## 1. Context
 - Android 官方测试拓扑中，host-driven / host-side 测试由 host 发起并驱动 Android 目标环境执行验证；当前 P1 目标环境收敛为 Android 真机。
-- 当前开发环境是 `Codex CLI + VS Code + WSL2`，仓库中已经存在 `dev/dev-smoke.sh`、`dev/dev-smoke-lib.sh`、`dev/dev-deploy.sh` 这套脚本化验证路径。
+- 当前开发环境是 `Codex CLI + VS Code + WSL2`，仓库中已经存在 smoke / deploy 这套脚本化验证路径；随着 P1 收敛，host-driven 集成测试入口应归拢到 `tests/integration/`。
 - 现在真机已恢复可用，因此 P1 主路径直接收敛到真机。
 - 对当前项目而言，最现实的路径不是先迁移到完整 Tradefed 套件，而是先把现有 smoke lane 收敛为更稳定、可重复、可脚本化调用的 host-driven integration lane。
 
 ## 2. Goals
 - 在 host 侧提供一个统一入口，驱动 Android 真机完成端到端验证。
 - 优先覆盖 daemon 生命周期、控制面协议、状态修改与基本流式接口行为。
+- 明确 `P1` 与 `P2` 的区别在于验证目标深度，而不是是否使用真机：`P1` 是 baseline integration，`P2` 是平台专项 / compatibility。
 - 让本地迭代可以按 group / case 选择测试，而不是每次都跑完整大脚本。
 - 输出可靠的退出码与结果汇总，便于后续并入 CI。
 
@@ -31,7 +32,7 @@
 - 测试驱动继续运行在 host / WSL。
 - 目标环境抽象为单一 Android target 接口，底层通过 `adb` 与真机通信。
 - P1 当前仅维护真机集成测试路径。
-- 现有 `dev/dev-smoke.sh` 与 `dev/dev-smoke-lib.sh` 作为实现基底，优先做收敛和结构化，而不是废弃重写。
+- 现有 smoke 脚本作为实现基底，优先做收敛和结构化，而不是废弃重写；测试主入口落在 `tests/integration/`，`dev/` 仅保留必要兼容包装或非测试型工具。
 - 测试入口需要至少支持：target preflight、deploy/start、健康检查、按组执行、失败退出、可选 cleanup/reset。
 
 ## 5. Suggested first-wave coverage

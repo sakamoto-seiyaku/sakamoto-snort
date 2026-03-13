@@ -8,12 +8,18 @@ sucre/
 │   └── dev/
 │       ├── dev-build.sh               # 增量编译
 │       ├── dev-deploy.sh              # 推送 + 启动 + 健康检查
-│       ├── dev-integration-tests.sh   # P1 host-driven / P2 真机 smoke 入口
+│       ├── dev-integration-tests.sh   # 兼容 wrapper → tests/integration/run.sh
 │       ├── dev-diagnose.sh            # 诊断工具
 │       ├── dev-android-device-lib.sh  # 真机/ADB 公共辅助
 │       ├── dev-native-debug.sh        # P3 LLDB / VS Code 调试入口
 │       ├── dev-tombstone.sh           # P3 tombstone / stack 符号化入口
 │       └── README.md
+├── tests/
+│   ├── host/                          # P0 host-side gtest
+│   └── integration/
+│       ├── run.sh                     # P1 host-driven / P2 真机 smoke 入口
+│       ├── full-smoke.sh              # 更完整的真机冒烟回归
+│       └── lib.sh                     # integration 公共辅助
 ├── sucre-snort/               # 软链接 → ~/android/lineage/system/sucre-snort
 ├── sucre-android16-toolkit/   # 模块打包工具
 │   └── scripts/
@@ -112,7 +118,7 @@ bash dev-deploy.sh
 #### 4. 真机测试（P1 基线 / P2 后续扩展）
 
 ```bash
-bash dev-integration-tests.sh
+bash tests/integration/run.sh
 ```
 
 **特点**:
@@ -127,19 +133,19 @@ bash dev-integration-tests.sh
 
 ```bash
 # 全量 first-wave 集成测试
-bash dev-integration-tests.sh
+bash tests/integration/run.sh
 
 # 只跑 core / app 组
-bash dev-integration-tests.sh --group core,app
+bash tests/integration/run.sh --group core,app
 
 # 只跑 streams / reset 组
-bash dev-integration-tests.sh --group streams,reset
+bash tests/integration/run.sh --group streams,reset
 
 # 只跑指定 case
-bash dev-integration-tests.sh --case IT-01,IT-05,IT-07,IT-09
+bash tests/integration/run.sh --case IT-01,IT-05,IT-07,IT-09
 
 # 复用当前已部署守护进程
-bash dev-integration-tests.sh --skip-deploy --group reset
+bash tests/integration/run.sh --skip-deploy --group reset
 ```
 
 ---

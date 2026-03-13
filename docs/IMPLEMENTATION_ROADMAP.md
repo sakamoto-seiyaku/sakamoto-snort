@@ -18,14 +18,14 @@
   - 目标：不连设备先挡住一批低耦合回归。
   - 方式：先按现有权威文档 / 设计语义审计 pure-logic 实现，再用 host-side `gtest` 补测试；依赖由仓库管理，不要求 host 预装 `gtest`。
   - 边界：不为了测试做大重构，不把 Android / NFQUEUE / `iptables` / `netd` 强依赖塞进首批单测。
-- `P1 Host-driven 集成测试`
-  - 目标：测试代码跑在 host / WSL，由 host 驱动 Android 真机完成端到端回归。
-  - 典型内容：deploy / start / health-check / control protocol 基线 / stream 健康检查 / reset 基线。
-  - 边界：仍是自动化验证，不进入真机专项 debug / crash 分析，也不以此为由实现新功能。
+- `P1 Host-driven 真机基线集成测试`
+  - 目标：测试代码跑在 host / WSL，由 host 驱动 Android 真机完成 baseline 级端到端回归。
+  - 典型内容：deploy / start / health-check / control protocol 基线 / stream 健康检查 / `RESETALL` 基线。
+  - 边界：虽然目标环境是真机，但它仍只覆盖 baseline integration，不进入 NFQUEUE / SELinux / `iptables` / `netd` 等平台专项，也不以此为由实现新功能。
 - `P2 真机集成 / smoke / 兼容性验证`
-  - 目标：在 rooted Android 真机上补齐更贴近真实运行环境的专项验证。
+  - 目标：在 rooted Android 真机上补齐平台专项、兼容性与更贴近真实运行环境的 smoke 验证。
   - 典型内容：NFQUEUE、`iptables`、`netd`、SELinux、权限、生命周期、性能 / 回归 smoke。
-  - 边界：它仍属于测试 lane，不等于产品功能实现阶段。
+  - 边界：它与 `P1` 的区别不在于“是否使用真机”，而在于它关注平台专项 / compatibility，而不是 baseline integration。
 - `P3 真机原生 Debug / crash / LLDB`
   - 目标：形成可实际使用的断点、单步、attach、run-under-debugger、tombstone symbolize 工作流。
   - 典型内容：LLDB attach / run、VS Code + CodeLLDB 准备、`debuggerd` / tombstone / `stack`、必要时 sanitizer。
