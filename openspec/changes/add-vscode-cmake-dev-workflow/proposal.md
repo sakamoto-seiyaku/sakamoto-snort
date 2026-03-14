@@ -15,16 +15,19 @@
 因此需要新增一个独立 change，把现有 `P0/P1/P2/P3` 能力收敛为 **VS Code + CMake orchestrated workflow**：
 - 对开发者呈现尽量接近传统 `C/C++ + CMake` 项目的日常工作流；
 - `CMake/CTest` 不只是“再包一层 UI”，而是尽量接管 build/test/debug 的日常编排；
-- 但不改写真实的 Android / Lineage / Soong 产物构建主线。
+- 其中 build 入口允许由 `CMake` 统一触发现有 Android / Lineage / Soong 流程，而不是重写其构建定义。
 
 ## What Changes
 - 在 repo root 引入面向开发者主入口的 **VS Code + CMake orchestrated workspace**。
 - 提供 checked-in 的 `CMakeLists.txt` / `CMakePresets.json` / `.vscode` 基础配置，使仓库根目录可直接作为 VS Code C++ 工作区打开。
+- 提供 repo-root 的统一 build 入口，使 VS Code / CMake 可通过受控 target 调用现有 Android / Soong 构建流程。
 - 将现有 `P0` host-side `gtest` 真正纳入 `CMake + CTest`，并暴露为 VS Code Testing 面板中的可发现测试。
 - 将现有 `P1/P2` 真机集成测试尽量托管到 `CMake/CTest` 命名测试入口，而不是继续让开发者把 shell 脚本当作主入口。
 - 将现有 `P3` 真机调试 backend 收敛为 checked-in 的 `launch.json + tasks.json` 工作流，使开发者可以在 VS Code 中直接 `F5` 进入真机 attach / run debug。
 - 允许为此改造、收缩或替换当前 `dev/` / `tests/` 中的编排脚本：目标是让能被 `CMake/CTest` 托管的部分尽量托管，而不是要求“旧脚本原封不动，再在外面包一层”。
-- 明确区分“CMake 托管的开发者工作流”和“真实 Android 构建层”：前者负责开发者日常编排，后者仍然以 `Android.bp + Lineage/Soong` 为准。
+- 在 change 收尾阶段，对 `dev/` 下脚本做一次目录清理：已被完全替代的脚本归档到 `archive/dev/`；仍有价值但放错位置的脚本迁到更合适的目录；只保留少量仍然属于 backend helper / 真机调试辅助的内容在 `dev/`。
+- 明确区分“CMake 托管的开发者工作流”和“真实 Android 构建层”：前者负责开发者日常编排与统一入口，后者仍然以 `Android.bp + Lineage/Soong` 作为权威构建定义。
+- 基于外部脚手架审计（见 `reference-audit.md`），本 change 进一步明确采用：hidden-base presets、极简 checked-in `.vscode`、`CTest` labels、checked-in `launch.json` 主入口；并明确不引入 `CPM/Conan/Vcpkg`、不提交 user-local presets、也不把 repo-root `CMakeLists.txt` 变成产品构建定义替代物。
 
 ## Relationship to current phases
 - 本 change **不替代** `P0/P1/P2/P3` 的阶段定义，而是把它们现有的 test/debug 能力提升为更统一的 VS Code/CMake 开发体验。
@@ -32,7 +35,7 @@
 - `P3` 已有的真机调试 backend 不废弃；本 change 在其之上补齐 IDE 主入口。
 
 ## Non-Goals
-- 不把 `sucre-snort` 的真实产物构建从 `Android.bp + Soong` 改写为纯 `CMake`。
+- 不把 `sucre-snort` 的 Android 构建定义从 `Android.bp + Soong` 重写为纯 `CMake`；但允许 `CMake` 作为统一入口调用既有构建流程。
 - 不要求保留所有现有脚本的表面形态；但若脚本继续存在，应尽量下沉为 backend helper，而不是开发者主入口。
 - 不在本 change 中推进任何 `src/` 产品功能、可观测性、`IPRULES`、`A/B/C` 或其他业务实现。
 - 不把当前仓库升级为一个自定义 VS Code 扩展仓库；若 `CTest` 足以承载 Testing UI，则不引入额外扩展开发。

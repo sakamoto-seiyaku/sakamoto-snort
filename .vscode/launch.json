@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Sucre Snort: Attach (real device)",
+      "type": "lldb",
+      "request": "launch",
+      "initCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/attach-init.lldb"
+      ],
+      "targetCreateCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/attach-target-create.lldb"
+      ],
+      "processCreateCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/attach-process-create.lldb"
+      ],
+      "preLaunchTask": "snort-debug-attach-workflow",
+      "postDebugTask": "snort-debug-cleanup",
+      "preRunCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/attach-pre-run.lldb"
+      ]
+    },
+    {
+      "name": "Sucre Snort: Run (real device)",
+      "type": "lldb",
+      "request": "launch",
+      "initCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/run-init.lldb"
+      ],
+      "targetCreateCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/run-target-create.lldb"
+      ],
+      "processCreateCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/run-process-create.lldb"
+      ],
+      "preLaunchTask": "snort-debug-run-workflow",
+      "postDebugTask": "snort-debug-cleanup",
+      "preRunCommands": [
+        "command source ${workspaceFolder}/build-output/vscode-debug/run-pre-run.lldb"
+      ]
+    }
+  ]
+}

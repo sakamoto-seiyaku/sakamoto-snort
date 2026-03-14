@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(sucre_snort_host_tests LANGUAGES CXX)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(sucre_snort_host_tests LANGUAGES CXX)
+  include(CTest)
+endif()
 
 include(FetchContent)
 
@@ -18,7 +21,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-enable_testing()
 include(GoogleTest)
 
 get_filename_component(SUCRE_SNORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
@@ -29,7 +31,12 @@ function(add_sucre_snort_host_test target)
   target_include_directories(${target} PRIVATE "${HOST_TEST_INCLUDE_DIR}" "${SUCRE_SNORT_ROOT}/src")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(${target} PRIVATE GTest::gtest_main)
-  gtest_discover_tests(${target})
+  set_property(GLOBAL APPEND PROPERTY SUCRE_SNORT_HOST_TEST_TARGETS ${target})
+  gtest_discover_tests(
+    ${target}
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "p0;host"
+  )
 endfunction()
 
 add_sucre_snort_host_test(package_state_tests package_state_tests.cpp)

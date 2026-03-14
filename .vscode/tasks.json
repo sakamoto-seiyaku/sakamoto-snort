@@ -1,0 +1,288 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "snort-configure-dev-debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--preset",
+        "dev-debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "snort-build",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "snort-deploy-stage",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-deploy-stage"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "snort-debug-attach-workflow",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-debug-attach-workflow"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "snort-debug-run-workflow",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-debug-run-workflow"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "snort-debug-cleanup",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-debug-cleanup"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "snort-debug-status",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-debug-status"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "snort-host-tests",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-host-tests"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "snort-p1-tests",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-p1-tests"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "snort-p2-tests",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "dev-debug",
+        "--target",
+        "snort-p2-tests"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
+        }
+      },
+      "dependsOn": [
+        "snort-configure-dev-debug"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "test"
+    }
+  ]
+}

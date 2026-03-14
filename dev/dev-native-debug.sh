@@ -15,6 +15,8 @@ DEFAULT_PROCESS="sucre-snort-dev"
 DEFAULT_PORT="5039"
 DEFAULT_LUNCH_TARGET="${DEV_LUNCH_TARGET:-lineage_bluejay-bp2a-userdebug}"
 DEFAULT_LAUNCH_FILE="$PWD/.vscode/launch.json"
+DEVICE_LLDB_SERVER="/data/local/tmp/arm64-lldb-server"
+WORKSPACE_ROOT="${SNORT_VSCODE_WORKSPACE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 show_help() {
     cat <<EOF
@@ -39,7 +41,7 @@ attach/vscode-attach 选项:
 
 run/vscode-run 选项:
   --binary <path>          真机上的二进制路径（默认: $DEFAULT_BINARY）
-  --host-binary <path>     host 上对应的未剥离二进制（默认: $DEFAULT_HOST_BINARY）
+  --host-binary <path>     host 上用于符号解析的二进制；若默认产物被 strip，会自动回退到匹配 Build ID 的 unstripped 版本
 
 vscode 选项:
   --launch-file <path>     launch.json 目标路径（默认: $DEFAULT_LAUNCH_FILE）
@@ -116,6 +118,77 @@ EOF
     fi
 }
 
+binary_build_id() {
+    local binary_path="$1"
+
+    [[ -f "$binary_path" ]] || return 1
+    readelf -n "$binary_path" 2>/dev/null | awk '/Build ID:/ { print $3; exit }'
+}
+
+binary_has_debug_info() {
+    local binary_path="$1"
+
+    [[ -f "$binary_path" ]] || return 1
+    readelf -S "$binary_path" 2>/dev/null | grep -q '\.debug_info'
+}
+
+find_matching_unstripped_host_binary() {
+    local binary_name="$1"
+    local expected_build_id="$2"
+    local debug_output="$SCRIPT_DIR/../build-output/${binary_name}.debug"
+    local candidate=""
+
+    if [[ -f "$debug_output" ]] \
+        && [[ "$(binary_build_id "$debug_output" 2>/dev/null || true)" == "$expected_build_id" ]] \
+        && binary_has_debug_info "$debug_output"; then
+        printf '%s\n' "$debug_output"
+        return 0
+    fi
+
+    while IFS= read -r candidate; do
+        if [[ "$(binary_build_id "$candidate" 2>/dev/null || true)" == "$expected_build_id" ]] \
+            && binary_has_debug_info "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done < <(find "$LINEAGE_ROOT/out/soong/.intermediates/system/sucre-snort" -path "*/unstripped/$binary_name" -type f 2>/dev/null | sort)
+
+    return 1
+}
+
+resolve_host_debug_binary() {
+    local host_binary="$1"
+    local resolved_build_id=""
+    local resolved_binary=""
+    local binary_name=""
+
+    if [[ ! -f "$host_binary" ]]; then
+        echo "❌ 未找到 host 调试二进制: $host_binary" >&2
+        exit 1
+    fi
+
+    if binary_has_debug_info "$host_binary"; then
+        printf '%s\n' "$host_binary"
+        return 0
+    fi
+
+    resolved_build_id="$(binary_build_id "$host_binary" 2>/dev/null || true)"
+    if [[ -z "$resolved_build_id" ]]; then
+        printf '%s\n' "$host_binary"
+        return 0
+    fi
+
+    binary_name="$(basename "$host_binary")"
+    resolved_binary="$(find_matching_unstripped_host_binary "$binary_name" "$resolved_build_id" || true)"
+    if [[ -n "$resolved_binary" ]]; then
+        echo "使用匹配 Build ID 的 unstripped 符号文件: $resolved_binary" >&2
+        printf '%s\n' "$resolved_binary"
+        return 0
+    fi
+
+    printf '%s\n' "$host_binary"
+}
+
 build_lldbclient_cmd() {
     local python_bin="$1"
     local lunch_target="$2"
@@ -127,7 +200,7 @@ build_lldbclient_cmd() {
     local shim_cmd=""
     local mirror_cmd=""
 
-    printf -v pycmd '%q ' "$python_bin" "$LLDBCLIENT_WRAPPER" "$LLDBCLIENT" "$@"
+    printf -v pycmd '%q ' "$python_bin" "$LLDBCLIENT_WRAPPER" "$LLDBCLIENT" --adb "$ADB_BIN" -s "$ADB_SERIAL_RESOLVED" "$@"
     if [[ -n "$device_product" ]]; then
         printf -v shim_cmd 'if [[ "${TARGET_PRODUCT:-}" == lineage_* && "${TARGET_PRODUCT#lineage_}" == %q ]]; then export TARGET_PRODUCT=%q; fi && ' "$device_product" "$device_product"
     fi
@@ -198,6 +271,340 @@ resolve_pid() {
         return 1
     fi
     printf '%s\n' "$resolved"
+}
+
+control_socket_roundtrip() {
+    local request="$1"
+    local expected="$2"
+    local control_forward_port="$3"
+
+    if ! adb_su "ls /dev/socket/sucre-snort-control" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    adb_cmd forward "tcp:${control_forward_port}" localabstract:sucre-snort-control >/dev/null 2>&1 || return 1
+    python3 - <<PY >/dev/null 2>&1
+import socket, sys
+port = int(${control_forward_port})
+request = ${request@Q}.encode("utf-8") + b"\0"
+expected = ${expected@Q}
+try:
+    sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+    sock.sendall(request)
+    sock.settimeout(3)
+    data = b""
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if data.endswith(b"\0"):
+            break
+    sock.close()
+    if data.endswith(b"\0"):
+        data = data[:-1]
+    sys.exit(0 if data.decode("utf-8", errors="replace").strip() == expected else 1)
+except Exception:
+    sys.exit(1)
+PY
+    local status=$?
+    adb_cmd forward --remove "tcp:${control_forward_port}" >/dev/null 2>&1 || true
+    return $status
+}
+
+request_dev_shutdown() {
+    local control_forward_port="$1"
+    control_socket_roundtrip "DEV.SHUTDOWN" "OK" "$control_forward_port"
+}
+
+resolve_tracer_pid() {
+    local pid="$1"
+    adb_su "awk '/^TracerPid:/ {print \$2}' /proc/$pid/status 2>/dev/null || true" | tr -d '\r\n'
+}
+
+clear_process_debugger_residue() {
+    local pid="$1"
+    local tracer_pid
+
+    tracer_pid="$(resolve_tracer_pid "$pid")"
+    if [[ -n "$tracer_pid" && "$tracer_pid" != "0" ]]; then
+        echo "检测到残留 debugger (TracerPid: $tracer_pid)，先清理..."
+        adb_su "kill -9 $tracer_pid 2>/dev/null || true"
+        adb_su "kill -CONT $pid 2>/dev/null || true"
+        sleep 1
+    fi
+}
+
+clear_lldb_server_residue() {
+    local port="$1"
+    adb_cmd forward --remove "tcp:${port}" >/dev/null 2>&1 || true
+    adb_su "killall -9 arm64-lldb-server lldb-server gdbserver 2>/dev/null || true"
+}
+
+debug_prepare_attach() {
+    local pid="$1"
+    local port="$2"
+
+    clear_lldb_server_residue "$port"
+    clear_process_debugger_residue "$pid"
+}
+
+debug_prepare_run() {
+    local process_name="$1"
+    local port="$2"
+    local control_forward_port="60616"
+    local pid=""
+
+    clear_lldb_server_residue "$port"
+    pid="$(adb_su "pidof $process_name 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)"
+    if [[ -n "$pid" ]]; then
+        clear_process_debugger_residue "$pid"
+        if request_dev_shutdown "$control_forward_port"; then
+            echo "已通过 DEV.SHUTDOWN 请求旧进程退出"
+        else
+            adb_su "killall $process_name 2>/dev/null || true"
+        fi
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if ! adb_su "pidof $process_name >/dev/null 2>&1" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 1
+        done
+        if adb_su "pidof $process_name >/dev/null 2>&1" >/dev/null 2>&1; then
+            pid="$(adb_su "pidof $process_name 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)"
+            if [[ -n "$pid" ]]; then
+                clear_process_debugger_residue "$pid"
+            fi
+            adb_su "killall -9 $process_name 2>/dev/null || true"
+            sleep 1
+        fi
+    fi
+
+    adb_su "rm -f /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true"
+}
+
+resolve_symbols_root() {
+    local device_product="$1"
+    printf '%s\n' "$LINEAGE_ROOT/out/target/product/$device_product/symbols"
+}
+
+build_exec_search_paths() {
+    local symbols_root="$1"
+    local candidates=(
+        "$symbols_root/system/lib64/"
+        "$symbols_root/system/lib64/hw"
+        "$symbols_root/system/lib64/ssl/engines"
+        "$symbols_root/system/lib64/drm"
+        "$symbols_root/system/lib64/egl"
+        "$symbols_root/system/lib64/soundfx"
+        "$symbols_root/vendor/lib64/"
+        "$symbols_root/vendor/lib64/hw"
+        "$symbols_root/vendor/lib64/egl"
+    )
+    local existing=()
+    local candidate=""
+
+    for candidate in "${candidates[@]}"; do
+        [[ -d "$candidate" ]] && existing+=("$candidate")
+    done
+
+    printf '%s\n' "${existing[*]}"
+}
+
+ensure_device_lldb_server() {
+    local local_server=""
+
+    if adb_su "test -x $DEVICE_LLDB_SERVER" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local_server="$(find "$LINEAGE_ROOT/prebuilts/clang/host/linux-x86" -path '*/runtimes_ndk_cxx/aarch64/lldb-server' -type f 2>/dev/null | sort | tail -n 1)"
+    if [[ -z "$local_server" ]]; then
+        echo "❌ 未找到 host lldb-server" >&2
+        exit 1
+    fi
+
+    echo "推送设备侧 lldb-server: $local_server"
+    adb_push_file "$local_server" "$DEVICE_LLDB_SERVER" >/dev/null
+    adb_su "chmod 755 $DEVICE_LLDB_SERVER"
+}
+
+write_vscode_generated_launch() {
+    local launch_file="$1"
+    local host_binary="$2"
+    local symbols_root="$3"
+    local lineage_root="$4"
+    local workspace_root="$5"
+    local port="$6"
+    local exec_search_paths="$7"
+
+    "$AOSP_PYTHON_DEFAULT" - <<PY
+import json
+from pathlib import Path
+
+launch_file = Path(${launch_file@Q})
+host_binary = ${host_binary@Q}
+symbols_root = ${symbols_root@Q}
+lineage_root = ${lineage_root@Q}
+workspace_root = ${workspace_root@Q}
+port = ${port@Q}
+exec_search_paths = ${exec_search_paths@Q}.strip()
+
+config = {
+    "name": f"(sucre-snort) VS Code helper ({port})",
+    "type": "lldb",
+    "request": "launch",
+    "relativePathBase": workspace_root,
+    "sourceMap": {
+        "/b/f/w/system/sucre-snort": workspace_root,
+        "system/sucre-snort": workspace_root,
+        "/b/f/w": lineage_root,
+        ".": lineage_root,
+    },
+    "initCommands": [],
+    "targetCreateCommands": [
+        f"target create {host_binary}",
+        f"target modules search-paths add / {symbols_root}/",
+    ],
+    "processCreateCommands": [
+        f"gdb-remote {port}",
+    ],
+}
+if exec_search_paths:
+    config["initCommands"].append(
+        f"settings append target.exec-search-paths {exec_search_paths}"
+    )
+
+data = {"version": "0.2.0", "configurations": [config]}
+launch_file.parent.mkdir(parents=True, exist_ok=True)
+launch_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+start_vscode_debug_server() {
+    local mode="$1"
+    local pid="$2"
+    local binary="$3"
+    local port="$4"
+    local cmd=""
+
+    ensure_device_lldb_server
+    adb_su "rm -f /data/local/tmp/lldb-server.log 2>/dev/null || true"
+    if [[ "$mode" == "attach" ]]; then
+        cmd="nohup $DEVICE_LLDB_SERVER gdbserver localhost:$port --attach $pid >/data/local/tmp/lldb-server.log 2>&1 &"
+    else
+        cmd="nohup $DEVICE_LLDB_SERVER gdbserver localhost:$port -- $binary >/data/local/tmp/lldb-server.log 2>&1 &"
+    fi
+    adb_su "$cmd"
+    sleep 1
+    adb_cmd forward "tcp:${port}" "tcp:${port}" >/dev/null
+}
+
+cleanup_vscode_debug_session() {
+    local mode="$1"
+    local pid="$2"
+    local process_name="$3"
+    local port="$4"
+
+    adb_cmd forward --remove "tcp:${port}" >/dev/null 2>&1 || true
+    adb_su "killall -9 arm64-lldb-server lldb-server gdbserver 2>/dev/null || true"
+    if [[ "$mode" == "run" ]]; then
+        adb_su "killall -9 $process_name 2>/dev/null || true"
+        adb_su "rm -f /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true"
+    elif [[ -n "$pid" ]]; then
+        clear_process_debugger_residue "$pid"
+        adb_su "kill -CONT $pid 2>/dev/null || true"
+    fi
+}
+
+run_vscode_helper_action() {
+    local action="$1"
+
+    case "$action" in
+        restart)
+            cleanup_vscode_debug_session "$mode" "$cleanup_pid" "$process_name" "$port"
+            if [[ "$mode" == "attach" ]]; then
+                pid="$(resolve_pid "" "$process_name")"
+                remote_binary="$(resolve_pid_binary "$pid")"
+                debug_prepare_attach "$pid" "$port"
+                start_vscode_debug_server "$mode" "$pid" "$remote_binary" "$port"
+                cleanup_pid="$pid"
+            else
+                debug_prepare_run "$process_name" "$port"
+                start_vscode_debug_server "$mode" "$pid" "$remote_binary" "$port"
+                cleanup_pid="$(adb_su "pidof $process_name 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)"
+            fi
+            write_vscode_generated_launch "$launch_file" "$host_binary" "$symbols_root" "$LINEAGE_ROOT" "$WORKSPACE_ROOT" "$port" "$exec_search_paths"
+            ;;
+        terminate)
+            cleanup_vscode_debug_session "$mode" "$cleanup_pid" "$process_name" "$port"
+            cleanup_pid=""
+            ;;
+        *)
+            echo "unknown helper action: $action" >&2
+            return 1
+            ;;
+    esac
+}
+
+run_vscode_helper_backend() {
+    local mode="$1"
+    local launch_file="$2"
+    local host_binary="$3"
+    local remote_binary="$4"
+    local port="$5"
+    local pid="$6"
+    local process_name="$7"
+    local device_product="$8"
+    local symbols_root=""
+    local exec_search_paths=""
+    local cleanup_pid="$pid"
+    local state_dir=""
+    local command=""
+    local action=""
+    local token=""
+    local action_status=0
+
+    state_dir="$(dirname "$launch_file")"
+    symbols_root="$(resolve_symbols_root "$device_product")"
+    exec_search_paths="$(build_exec_search_paths "$symbols_root")"
+    start_vscode_debug_server "$mode" "$pid" "$remote_binary" "$port"
+    if [[ "$mode" == "run" ]]; then
+        cleanup_pid="$(adb_su "pidof $process_name 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)"
+    fi
+    write_vscode_generated_launch "$launch_file" "$host_binary" "$symbols_root" "$LINEAGE_ROOT" "$WORKSPACE_ROOT" "$port" "$exec_search_paths"
+    echo "Generated config written to '$launch_file'"
+    echo
+    echo "Waiting for VS Code debug lifecycle commands..."
+    trap 'cleanup_vscode_debug_session "$mode" "$cleanup_pid" "$process_name" "$port"; exit 0' INT TERM
+
+    while IFS= read -r command; do
+        if [[ -z "$command" ]]; then
+            break
+        fi
+
+        action="$command"
+        token=""
+        if [[ "$command" == *" "* ]]; then
+            action="${command%% *}"
+            token="${command#* }"
+        fi
+
+        set +e
+        run_vscode_helper_action "$action"
+        action_status=$?
+        set -e
+
+        if [[ -n "$token" ]]; then
+            if [[ $action_status -eq 0 ]]; then
+                printf 'ok\n' > "$state_dir/hook-$token.status"
+            else
+                printf 'error: helper action %s failed\n' "$action" > "$state_dir/hook-$token.status"
+            fi
+        fi
+    done
+
+    cleanup_vscode_debug_session "$mode" "$cleanup_pid" "$process_name" "$port"
 }
 
 print_command() {
@@ -344,6 +751,13 @@ main() {
             ensure_vscode_launch_file "$launch_file"
             lldb_args=(--setup-forwarding vscode-lldb --vscode-launch-file "$launch_file" --port "$port" -r "$binary")
             ;;
+        vscode-helper-attach)
+            pid="$(resolve_pid "$pid" "$process_name")"
+            remote_binary="$(resolve_pid_binary "$pid")"
+            ;;
+        vscode-helper-run)
+            remote_binary="$binary"
+            ;;
         wait-debugger)
             if [[ -z "${process_name:-}" ]]; then
                 :
@@ -356,7 +770,9 @@ main() {
             ;;
     esac
 
-    cmd="$(build_lldbclient_cmd "$python_bin" "$lunch_target" "$device_product" "$remote_binary" "$host_binary" "${lldb_args[@]}")"
+    if [[ "$remote_binary" == /data/local/tmp/* ]]; then
+        host_binary="$(resolve_host_debug_binary "$host_binary")"
+    fi
 
     echo "目标真机: $(adb_target_desc)"
     echo "device product: $device_product"
@@ -369,10 +785,41 @@ main() {
         echo "host binary: $host_binary"
     fi
     echo "python: $python_bin"
+
+    case "$mode" in
+        vscode-helper-attach|vscode-helper-run)
+            echo "launch file: $launch_file"
+            if [[ $print_only -eq 1 ]]; then
+                exit 0
+            fi
+            case "$mode" in
+                vscode-helper-attach)
+                    debug_prepare_attach "$pid" "$port"
+                    run_vscode_helper_backend "attach" "$launch_file" "$host_binary" "$remote_binary" "$port" "$pid" "$process_name" "$device_product"
+                    ;;
+                vscode-helper-run)
+                    debug_prepare_run "$(basename "$binary")" "$port"
+                    run_vscode_helper_backend "run" "$launch_file" "$host_binary" "$remote_binary" "$port" "" "$(basename "$binary")" "$device_product"
+                    ;;
+            esac
+            exit 0
+            ;;
+    esac
+
+    cmd="$(build_lldbclient_cmd "$python_bin" "$lunch_target" "$device_product" "$remote_binary" "$host_binary" "${lldb_args[@]}")"
     echo "命令: bash -lc $cmd"
     if [[ $print_only -eq 1 ]]; then
         exit 0
     fi
+
+    case "$mode" in
+        attach|vscode-attach)
+            debug_prepare_attach "$pid" "$port"
+            ;;
+        run|vscode-run)
+            debug_prepare_run "$(basename "$binary")" "$port"
+            ;;
+    esac
 
     exec bash -lc "$cmd"
 }

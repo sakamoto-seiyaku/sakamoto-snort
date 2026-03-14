@@ -448,7 +448,22 @@ init_test_env() {
         setup_forward
     fi
 
-    if ! check_daemon; then
+    local ready_retries="${SNORT_DAEMON_READY_RETRIES:-10}"
+    local ready_delay="${SNORT_DAEMON_READY_DELAY:-1}"
+    local ready=0
+    local attempt
+    for ((attempt = 1; attempt <= ready_retries; attempt++)); do
+        if check_daemon; then
+            ready=1
+            break
+        fi
+        if [[ $attempt -lt $ready_retries ]]; then
+            log_info "等待守护进程响应控制协议... (${attempt}/${ready_retries})"
+            sleep "$ready_delay"
+        fi
+    done
+
+    if [[ $ready -ne 1 ]]; then
         echo -e "${RED}错误: 守护进程未响应${NC}"
         echo "请确保守护进程正在运行:"
         echo "  ${ADB} -s $(adb_target_desc) shell \"su -c '/data/local/tmp/sucre-snort-dev &'\""

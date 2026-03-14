@@ -12,19 +12,26 @@ PROC_NAME=$(basename "$TARGET")
 LOG_DIR=/data/local/tmp
 LOG=$LOG_DIR/sucre-snort-dev.log
 CLEAR_LOG=1
+STAGE_ONLY=0
 CONTROL_FORWARD_PORT="${CONTROL_FORWARD_PORT:-60616}"
 
-request_dev_shutdown() {
+control_socket_roundtrip() {
+    local request="$1"
+    local expected="$2"
+
     if ! adb_su "ls /dev/socket/sucre-snort-control" >/dev/null 2>&1; then
         return 1
     fi
+
     adb_cmd forward "tcp:${CONTROL_FORWARD_PORT}" localabstract:sucre-snort-control >/dev/null 2>&1 || return 1
     python3 - <<PY >/dev/null 2>&1
 import socket, sys
 port = int(${CONTROL_FORWARD_PORT})
+request = ${request@Q}.encode("utf-8") + b"\0"
+expected = ${expected@Q}
 try:
     sock = socket.create_connection(("127.0.0.1", port), timeout=2)
-    sock.sendall(b"DEV.SHUTDOWN\0")
+    sock.sendall(request)
     sock.settimeout(3)
     data = b""
     while True:
@@ -37,13 +44,34 @@ try:
     sock.close()
     if data.endswith(b"\0"):
         data = data[:-1]
-    sys.exit(0 if data.decode("utf-8", errors="replace").strip() == "OK" else 1)
+    sys.exit(0 if data.decode("utf-8", errors="replace").strip() == expected else 1)
 except Exception:
     sys.exit(1)
 PY
     local status=$?
     adb_cmd forward --remove "tcp:${CONTROL_FORWARD_PORT}" >/dev/null 2>&1 || true
     return $status
+}
+
+request_dev_shutdown() {
+    control_socket_roundtrip "DEV.SHUTDOWN" "OK"
+}
+
+request_dev_hello() {
+    control_socket_roundtrip "HELLO" "OK"
+}
+
+clear_debugger_residue() {
+    local pid="$1"
+    local tracer_pid
+
+    tracer_pid=$(adb_su "awk '/^TracerPid:/ {print \$2}' /proc/$pid/status 2>/dev/null || true" | tr -d '\r\n')
+    if [[ -n "$tracer_pid" && "$tracer_pid" != "0" ]]; then
+        echo "  检测到残留 debugger (TracerPid: $tracer_pid)，先清理..."
+        adb_su "kill -9 $tracer_pid 2>/dev/null || true"
+        adb_su "kill -CONT $pid 2>/dev/null || true"
+        sleep 1
+    fi
 }
 
 show_help() {
@@ -53,6 +81,7 @@ show_help() {
 选项:
   --serial <serial>   指定目标真机 serial
   --no-clear-log      保留原有日志，不清空 dev.log
+  --stage-only        仅停止旧进程、推送并准备二进制，不启动守护进程
   -h, --help          显示帮助
 EOF
 }
@@ -66,6 +95,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-clear-log)
             CLEAR_LOG=0
+            shift
+            ;;
+        --stage-only)
+            STAGE_ONLY=1
             shift
             ;;
         -h|--help)
@@ -97,22 +130,31 @@ echo "目标路径: $TARGET"
 echo ""
 
 echo "[1/6] 停止现有进程..."
+CURRENT_PID=$(adb_su "pidof $PROC_NAME 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)
+if [[ -n "$CURRENT_PID" ]]; then
+    clear_debugger_residue "$CURRENT_PID"
+fi
 if request_dev_shutdown; then
     echo "  已通过 DEV.SHUTDOWN 请求优雅退出"
 else
-    adb_su "killall $PROC_NAME 2>/dev/null" || true
+    adb_su "killall $PROC_NAME 2>/dev/null || true"
 fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if ! adb_su "pidof $PROC_NAME" >/dev/null 2>&1; then
+    if ! adb_su "pidof $PROC_NAME >/dev/null 2>&1" >/dev/null 2>&1; then
         break
     fi
     sleep 1
 done
-if adb_su "pidof $PROC_NAME" >/dev/null 2>&1; then
+if adb_su "pidof $PROC_NAME >/dev/null 2>&1" >/dev/null 2>&1; then
+    CURRENT_PID=$(adb_su "pidof $PROC_NAME 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)
+    if [[ -n "$CURRENT_PID" ]]; then
+        clear_debugger_residue "$CURRENT_PID"
+    fi
     echo "⚠️  进程未能在宽限期内退出，强制终止..."
-    adb_su "killall -9 $PROC_NAME" || true
+    adb_su "killall -9 $PROC_NAME 2>/dev/null || true"
     sleep 1
 fi
+adb_su "rm -f /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true"
 
 echo "[2/6] 推送二进制文件..."
 adb_push_file "$BINARY" "$TARGET" 2>&1 | grep -E "pushed|[0-9]+ KB/s|[0-9]+ MB/s" || true
@@ -126,6 +168,13 @@ if [[ $CLEAR_LOG -eq 1 ]]; then
 else
     echo "[4/6] 保留现有日志..."
     adb_su "mkdir -p $LOG_DIR"
+fi
+
+if [[ $STAGE_ONLY -eq 1 ]]; then
+    echo "[5/5] 设备预部署完成（未启动守护进程）"
+    echo ""
+    echo "✅ 已完成 stage-only，可直接进入 run-under-debugger"
+    exit 0
 fi
 
 echo "[5/6] 启动守护进程..."
@@ -158,6 +207,14 @@ if adb_su "ls /dev/socket/sucre-snort-netd" >/dev/null 2>&1; then
     echo "✓ 已创建"
 else
     echo "❌ 未创建"
+    ERRORS=$((ERRORS + 1))
+fi
+
+echo -n "  控制协议 HELLO: "
+if request_dev_hello; then
+    echo "✓ OK"
+else
+    echo "❌ 未响应"
     ERRORS=$((ERRORS + 1))
 fi
 

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
-### Requirement: Project provides a CMake-orchestrated developer workflow without replacing Android production build
-项目 MUST 提供一个由 `CMake` 托管主要开发者编排入口的工作流，但不得把真实 Android 产物构建主线从 `Android.bp + Soong` 改写为纯 `CMake`。
+### Requirement: Project provides a CMake-orchestrated developer workflow without redefining Android production build
+项目 MUST 提供一个由 `CMake` 托管主要开发者编排入口的工作流；该入口可以调用现有 Android 构建流程，但不得把真实 Android 产物构建定义从 `Android.bp + Soong` 改写为纯 `CMake`。
 
 #### Scenario: Open the repo as a VS Code C++ workspace
 - **GIVEN** 开发者在 VS Code WSL 窗口中打开仓库根目录
@@ -10,7 +10,17 @@
 
 #### Scenario: Preserve Android production build authority
 - **WHEN** 开发者查阅当前 shared workspace 配置与文档
-- **THEN** SHALL 能明确看到 `CMake` 负责开发者日常编排入口，而不替代 `Android.bp + Soong`
+- **THEN** SHALL 能明确看到 `CMake` 负责开发者日常编排入口，并可调用现有 Android 构建流程，但不替代 `Android.bp + Soong` 的构建定义
+
+#### Scenario: Trigger delegated Android build from the workspace
+- **GIVEN** repo-root `CMakeLists.txt` 与 presets 已经引入
+- **WHEN** 开发者从 VS Code 或 `cmake --build` 触发 workspace build
+- **THEN** 系统 SHALL 能通过 `CMake` 定义的统一入口委托调用现有 Android 构建流程
+
+#### Scenario: Repo-root CMake does not redefine Android build
+- **GIVEN** repo-root `CMakeLists.txt` 与 presets 已经引入
+- **WHEN** 开发者查看 workspace 暴露的目标与文档
+- **THEN** SHALL 能看到它们聚焦于 build/test/debug orchestration，而不是替代 Android 产品构建定义
 
 ### Requirement: Project surfaces host-side unit tests through VS Code Testing
 项目 MUST 将现有 host-side `gtest` 测试以 `CTest` / VS Code Testing 可发现的形式暴露，而不是只保留脚本入口。
@@ -56,6 +66,24 @@
 - **WHEN** 开发者在 VS Code 中选择 real-device run debug 配置并按下 `F5`
 - **THEN** 系统 SHALL 能进入 run-under-debugger 工作流，而不要求开发者手工拼装底层命令
 
+### Requirement: Project keeps `dev/` scripts curated as backend helpers rather than a catch-all entrypoint bucket
+项目 MUST 在 workflow 收敛完成后对 `dev/` 目录做职责清理，使其不再继续充当 build/test/debug 全部入口的混合桶。
+
+#### Scenario: Archive scripts that are fully superseded
+- **GIVEN** 某个 `dev/` 脚本的能力已经被 `CMake` target、`CTest`、或 checked-in `.vscode` workflow 完全替代
+- **WHEN** 项目完成这一轮 workflow 收敛
+- **THEN** 该脚本 SHALL 被迁移到 `archive/dev/`，而不是继续保留在 `dev/` 作为活跃主入口
+
+#### Scenario: Relocate scripts that belong elsewhere
+- **GIVEN** 某个 `dev/` 脚本仍然有价值，但其职责更属于 `tests/`、`cmake/` 或其他更清晰的位置
+- **WHEN** 项目完成目录整理
+- **THEN** 该脚本 SHALL 被迁移到更合适的目录，而不是继续堆放在 `dev/`
+
+#### Scenario: Keep only genuine backend helpers in `dev/`
+- **GIVEN** 本轮 change 的 build/test/debug 主入口已经收敛到 `CMake/CTest/.vscode`
+- **WHEN** 开发者查看 `dev/` 目录
+- **THEN** SHALL 只看到少量仍然承担 backend helper、diagnose 或 device-debug 底层适配职责的脚本
+
 ### Requirement: Project separates shared workspace config from user-local machine config
 项目 MUST 清晰分离 checked-in shared workspace 配置与每位开发者本机专属配置。
 
@@ -63,3 +91,8 @@
 - **GIVEN** 两位开发者的 `LINEAGE_ROOT`、`ADB_SERIAL` 或默认 lunch target 不同
 - **WHEN** 他们分别配置本地工作区
 - **THEN** 系统 SHALL 支持通过 user-local 配置覆盖这些值，而不要求修改仓库内共享配置文件
+
+#### Scenario: Shared workspace config stays machine-neutral
+- **GIVEN** 开发者首次打开仓库并检查 checked-in workspace 配置
+- **WHEN** 他查看 `CMakePresets.json` 与 `.vscode` 共享配置
+- **THEN** SHALL 能看到最小必要的共享工作流配置，而不会看到开发者私有路径、设备串号或本地 preset 内容

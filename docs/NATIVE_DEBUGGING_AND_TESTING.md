@@ -106,7 +106,7 @@ adb shell setprop debug.debuggerd.wait_for_debugger true
 - 不必一开始就和 `init.rc` / 正式系统服务生命周期绑定死；
 - 可以先把“断点调试体验”做起来，再决定是否需要更深的系统服务级调试。
 
-> 注：当前仓库脚本主要使用 `adb.exe`；AOSP 官方文档默认使用 `adb`。在 WSL 环境里，只要 `lldbclient.py` 能找到一个可工作的 `adb` 即可。当前本机环境里 `adb` 与 `adb.exe` 都存在，但这属于环境事实，不应假定所有开发机都完全一致。
+> 注：当前仓库脚本在 WSL 下会优先选择 Lineage tree 自带的 Linux `adb`，只有显式覆盖时才退回其他 `adb` / `adb.exe`。这样可以避开 Windows `adb.exe` 在后台 helper / mDNS 设备发现上的不稳定行为。
 
 ---
 
@@ -198,54 +198,62 @@ lldbclient.py --port 5039 -r /data/local/tmp/sucre-snort-dev
 
 > 这里的“在 WSL 窗口安装”是基于 VS Code Remote 官方机制做出的工作结论：在远程工作区里，workspace 类扩展运行在远端环境中。
 
-### 第二步：准备 `.vscode/launch.json`
+### 第二步：直接使用 checked-in `.vscode` 工作流
 
-先放一个最小壳子：
+当前仓库已经提供：
 
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
-    // #lldbclient-generated-begin
-    // #lldbclient-generated-end
-  ]
-}
-```
+- checked-in `.vscode/launch.json`
+- checked-in `.vscode/tasks.json`
+- `dev/dev-vscode-debug-task.py` 作为 VS Code task helper
+- `dev/dev-native-debug.sh` 作为底层 Android / `lldbclient.py` backend
 
-### 第三步：优先使用仓库脚本生成转发与配置
+因此现在的推荐方式不再是“手工准备一个最小 `launch.json` 壳子，再手敲脚本”，而是直接在仓库根目录使用 checked-in F5 工作流。
 
-当前仓库已经把这一步收敛到 `dev/dev-native-debug.sh`，优先直接使用它，而不是手工拼 `lldbclient.py`：
+### 第三步：在 VS Code 中按 `F5`
 
-附加到正在运行的 daemon：
+当前可用的配置是：
 
-```bash
-bash dev/dev-native-debug.sh vscode-attach --serial <serial>
-```
+- `Sucre Snort: Attach (real device)`
+- `Sucre Snort: Run (real device)`
 
-或者启动即调试：
+执行过程：
 
-```bash
-bash dev/dev-native-debug.sh vscode-run --serial <serial>
-```
-
-该脚本会额外处理当前真机工作流里的几个兼容点：
-
-- 自动进入 `LINEAGE_ROOT` 并执行 `envsetup + lunch`；
-- 优先使用 AOSP 预置 Python，避开 host `python3` 版本过低导致的 `lldbclient.py` 语法失败；
-- 对 `lineage_<device>` 这类 lunch target，自动做 `TARGET_PRODUCT` 与真机 `ro.build.product` 的兼容处理；
-- 对 `/data/local/tmp/sucre-snort-dev` 这类开发态二进制，自动把 host 侧 `build-output/sucre-snort` 镜像到 `$ANDROID_PRODUCT_OUT/symbols/data/local/tmp/sucre-snort-dev`，保证 `target create` 命中未剥离符号；
-- 对当前 APatch 真机，把 AOSP `lldbclient.py` 内部默认的 `su root <cmd>` 调用改写为可工作的 `su -c ...` 形式；
-- 当 `adbd` 不是 root 时，自动把 `lldb-server` transport 从默认的 Unix socket forward 切到 `tcp:<port>`，避免 `localfilesystem:` 转发被权限卡住。
-
-然后：
-
-- 保持这条 `dev-native-debug.sh` 命令所在终端**不要退出**；
-- 回到 VS Code，打开 Run and Debug；
-- 选择生成出的 LLDB 配置并按 `F5`。
+1. `preLaunchTask` 会先进入 checked-in VS Code task；该 task 先执行 `cmake --preset dev-debug`，再通过 `cmake --build --preset dev-debug --target snort-debug-*-workflow` 调到真正的 debug backend；
+2. `Run` 配置会顺序执行：cleanup → incremental build → stage-only deploy → prepare run；`Attach` 配置会执行 cleanup → prepare attach；
+3. helper 再调用 `dev/dev-native-debug.sh vscode-helper-attach` 或 `vscode-helper-run`；
+4. backend 会继续处理当前真机工作流里的几个兼容点：
+   - 对 `/data/local/tmp/sucre-snort-dev` 这类开发态二进制，优先使用 host 侧 `build-output/sucre-snort.debug`；若默认 host binary 已 strip，则按 Build ID 自动回退到 Soong `unstripped` 产物；
+   - 在 `attach` / `run` 前先清理设备侧残留的 `lldb-server` / `gdbserver` / `TracerPid`；`run` 模式下还会额外停掉旧的 `sucre-snort-dev` 与旧 socket，避免上一次异常调试把环境卡脏；
+   - `Run` 场景下不会再先正常启动 daemon 再立刻杀掉，而是通过 `stage-only deploy` 只把新二进制推到设备，再直接进入 run-under-debugger；
+   - `Run` 模式会保留启动时的 `SIGSTOP`（让进程先停在入口），以便 VS Code/CodeLLDB 有机会在真正执行前安装断点；同时会屏蔽 `SIGCHLD` 噪音，避免被频繁的子进程信号打断；
+   - `Run` 模式还会设置 `target.skip-prologue=false`，这样 `main` 入口这类源码断点可以停在函数入口，而不是被默认挪到序言后的首个可执行位置；
+   - helper 会把编译时源码前缀 `system/sucre-snort` 映射回当前工作区根目录，确保 VS Code 下使用工作区绝对路径设置的源码断点可以正确绑定；
+   - VS Code helper 会直接在设备上拉起 `arm64-lldb-server`、建立 `adb forward tcp:<port> tcp:<port>`，并生成 CodeLLDB 所需的 launch 片段，不再依赖 `lldbclient.py` 那条更慢的前置链路。
+5. helper 会把生成出的 launch 片段物化成稳定的 `.lldb` 命令文件，并把实际 `sourceMap` 物化进去，避免 checked-in `launch.json` 直接依赖 `${env:LINEAGE_ROOT}`；
+6. `launch.json` 里的 `preRunCommands` 会把 VS Code 的 `Restart` 生命周期接到真实真机流程：
+   - `Run` 模式下，`Restart` 会执行一轮新的 incremental build → stage-only deploy → 真机 `lldb-server` 重建，然后再重新连接；
+   - `Attach` 模式下，`Restart` 会先清理当前 attach 残留，再重新附加到当前运行中的 `sucre-snort-dev`；
+   - `Stop` 则由 `postDebugTask` 做最终收尾。
+7. 最终由 checked-in `launch.json` 里的 CodeLLDB 配置连接到真机上的 `lldb-server`。
 
 ### 第四步：结束调试
 
-根据 AOSP 官方文档，调试结束后回到运行 `dev/dev-native-debug.sh`（其内部再调用 `lldbclient.py`）的那个终端，按一次回车结束会话即可。
+调试结束后，由 `postDebugTask` 执行 `dev/dev-vscode-debug-task.py cleanup`，向后台 helper 发送换行并完成最终清理。
+
+额外提醒：如果上一次调试异常中断，设备上可能残留 `lldb-server`，把 `sucre-snort-dev` 停在 `tracing stop`。当前 `dev/dev-deploy.sh` 已经会在 redeploy 时检查 `TracerPid` 并自动清理这类残留 debugger；若仍怀疑有残留，可先跑：
+
+```bash
+bash dev/dev-diagnose.sh --serial <serial>
+```
+
+### 手工 fallback
+
+如果需要绕过 VS Code task helper，仍然可以直接调用底层 backend：
+
+```bash
+bash dev/dev-native-debug.sh vscode-attach --serial <serial>
+bash dev/dev-native-debug.sh vscode-run --serial <serial>
+```
 
 ---
 

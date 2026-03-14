@@ -1,7 +1,11 @@
 #!/bin/bash
 
+NATIVE_LINEAGE_ADB="${LINEAGE_ROOT:-$HOME/android/lineage}/prebuilts/runtime/adb"
+
 if [[ -n "${ADB:-}" ]]; then
     ADB_BIN="$ADB"
+elif [[ -x "$NATIVE_LINEAGE_ADB" ]]; then
+    ADB_BIN="$NATIVE_LINEAGE_ADB"
 elif command -v adb >/dev/null 2>&1; then
     ADB_BIN="$(command -v adb)"
 elif command -v adb.exe >/dev/null 2>&1; then
@@ -22,7 +26,7 @@ resolve_adb_serial() {
         return 0
     fi
 
-    mapfile -t devices < <("$ADB_BIN" devices | tr -d '\r' | awk 'NR > 1 && $2 == "device" { print $1 }')
+    mapfile -t devices < <("$ADB_BIN" devices | tr -d '\r' | awk 'NR > 1 && $2 == "device" { print $1 }' | grep -Ev '^adb-.*\._adb-tls-connect\._tcp$')
     if [[ ${#devices[@]} -eq 0 ]]; then
         echo "❌ 未检测到已连接的 Android 真机" >&2
         return 1
@@ -51,9 +55,17 @@ adb_cmd() {
     "$ADB_BIN" -s "$ADB_SERIAL_RESOLVED" "$@"
 }
 
+shell_single_quote() {
+    local value="$1"
+    value=${value//\'/\'"\'"\'}
+    printf "'%s'" "$value"
+}
+
 adb_su() {
     local command="$1"
-    adb_cmd shell su -c "$command"
+    local quoted_command
+    quoted_command="$(shell_single_quote "$command")"
+    adb_cmd shell "su 0 sh -c $quoted_command"
 }
 
 adb_target_desc() {

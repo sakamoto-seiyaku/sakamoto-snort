@@ -30,18 +30,25 @@
 
 ## 运行方式
 
-在仓库根目录执行：
+优先推荐 repo-root CMake workspace 入口：
 
 ```bash
-bash dev/dev-host-unit-tests.sh
+cmake -S . -B build-output/cmake/manual -G Ninja -DSNORT_ENABLE_HOST_TESTS=ON
+cmake --build build-output/cmake/manual --target snort-host-tests
 ```
 
-脚本会：
+也可以直接在 repo-root CMake build dir 里运行：
 
-1. 在 `build-output/host-tests` 下配置 `CMake`
-2. 首次构建时自动下载固定版本 `googletest`
-3. 构建 `package_state_tests`
-4. 通过 `ctest` 运行全部当前 host-side 单元测试
+```bash
+cd build-output/cmake/manual && ctest --output-on-failure -L p0
+```
+
+repo-root workflow 会：
+
+1. 在同一个 workspace 下暴露 delegated build 与 host-side tests
+2. 首次配置时自动下载固定版本 `googletest`
+3. 通过 `CTest` 暴露 gtest case，供 VS Code Testing 发现
+4. 通过 `snort-host-tests` / `ctest -L p0` 运行当前 host-side 单元测试
 
 ## 当前边界
 

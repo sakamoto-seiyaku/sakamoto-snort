@@ -31,25 +31,70 @@ echo ""
 # Add repo to PATH
 export PATH="$HOME/bin:$PATH"
 
-cd ~/android/lineage
-
-# Binary paths
-PACKAGE_BINARY_PATH="out/target/product/bluejay/system_ext/bin/sucre-snort"
-INTERMEDIATE_BINARY_PATH="out/soong/.intermediates/system/sucre-snort/sucre-snort/android_arm64_armv8-2a_cortex-a55/sucre-snort"
-COMBINED_NINJA_PATH="out/combined-lineage_bluejay.ninja"
-SOONG_NINJA_PATH="out/soong/build.lineage_bluejay.ninja"
-OUTPUT_PATH="$SNORT_ROOT/build-output/sucre-snort"
+LINEAGE_ROOT="${LINEAGE_ROOT:-$HOME/android/lineage}"
+LUNCH_TARGET="${DEV_LUNCH_TARGET:-lineage_bluejay-bp2a-userdebug}"
+LUNCH_PRODUCT="${DEV_LUNCH_PRODUCT:-${LUNCH_TARGET%%-*}}"
+TARGET_DEVICE="${DEV_TARGET_DEVICE:-${LUNCH_PRODUCT#lineage_}}"
+PACKAGE_BINARY_PATH="${DEV_PACKAGE_BINARY_PATH:-out/target/product/${TARGET_DEVICE}/system_ext/bin/sucre-snort}"
+DIRECT_NINJA_TARGET="${DEV_DIRECT_NINJA_TARGET:-$PACKAGE_BINARY_PATH}"
+COMBINED_NINJA_PATH="${DEV_COMBINED_NINJA_PATH:-out/combined-${LUNCH_PRODUCT}.ninja}"
+SOONG_NINJA_PATH="${DEV_SOONG_NINJA_PATH:-out/soong/build.${LUNCH_PRODUCT}.ninja}"
+OUTPUT_PATH="${DEV_BUILD_OUTPUT_PATH:-$SNORT_ROOT/build-output/sucre-snort}"
+DEBUG_OUTPUT_PATH="${DEV_BUILD_DEBUG_OUTPUT_PATH:-$SNORT_ROOT/build-output/sucre-snort.debug}"
 BUILD_SOURCE_PATH="$PACKAGE_BINARY_PATH"
 BUILD_MODE_DESC="full graph regeneration (m sucre-snort)"
 USE_DIRECT_NINJA=0
 DIRECT_NINJA_JOBS="${DEV_BUILD_JOBS:-4}"
+
+if [[ ! -d "$LINEAGE_ROOT" ]]; then
+    echo "❌ 未找到 LINEAGE_ROOT: $LINEAGE_ROOT" >&2
+    exit 1
+fi
+
+binary_build_id() {
+    local binary_path="$1"
+
+    [[ -f "$binary_path" ]] || return 1
+    readelf -n "$binary_path" 2>/dev/null | awk '/Build ID:/ { print $3; exit }'
+}
+
+binary_has_debug_info() {
+    local binary_path="$1"
+
+    [[ -f "$binary_path" ]] || return 1
+    readelf -S "$binary_path" 2>/dev/null | grep -q '\.debug_info'
+}
+
+find_matching_unstripped_binary() {
+    local stripped_binary="$1"
+    local expected_build_id=""
+    local binary_name=""
+    local candidate=""
+
+    expected_build_id="$(binary_build_id "$stripped_binary" 2>/dev/null || true)"
+    [[ -n "$expected_build_id" ]] || return 1
+
+    binary_name="$(basename "$stripped_binary")"
+    while IFS= read -r candidate; do
+        if [[ "$(binary_build_id "$candidate" 2>/dev/null || true)" == "$expected_build_id" ]] \
+            && binary_has_debug_info "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done < <(find out/soong/.intermediates/system/sucre-snort -path "*/unstripped/$binary_name" -type f 2>/dev/null | sort)
+
+    return 1
+}
+
+cd "$LINEAGE_ROOT"
 
 # Optional clean
 if [[ $CLEAN -eq 1 ]]; then
     echo "[Optional] Cleaning build artifacts..."
     rm -rf out/soong/.intermediates/*sucre-snort* 2>/dev/null || true
     rm -f "$PACKAGE_BINARY_PATH" 2>/dev/null || true
-    rm -f "$INTERMEDIATE_BINARY_PATH" 2>/dev/null || true
+    rm -f "$DIRECT_NINJA_TARGET" 2>/dev/null || true
+    rm -f "$OUTPUT_PATH" "$DEBUG_OUTPUT_PATH" 2>/dev/null || true
     echo "Clean complete"
     echo ""
 fi
@@ -77,7 +122,7 @@ echo ""
 
 if [[ $FORCE_GRAPH_REGEN -eq 0 && $CLEAN -eq 0 && -f "$COMBINED_NINJA_PATH" && -f "$SOONG_NINJA_PATH" ]]; then
     USE_DIRECT_NINJA=1
-    BUILD_SOURCE_PATH="$INTERMEDIATE_BINARY_PATH"
+    BUILD_SOURCE_PATH="$PACKAGE_BINARY_PATH"
     BUILD_MODE_DESC="direct ninja reuse (${DIRECT_NINJA_JOBS} jobs, no Soong regen)"
 fi
 
@@ -89,7 +134,7 @@ else
     source build/envsetup.sh
 
     echo "[2/6] Configuring lunch target..."
-    lunch lineage_bluejay-bp2a-userdebug
+    lunch "$LUNCH_TARGET"
 fi
 
 # Record timestamp before build
@@ -106,9 +151,12 @@ fi
 echo ""
 
 echo "[4/6] Building sucre-snort (incremental)..."
+echo "LINEAGE_ROOT: $LINEAGE_ROOT"
+echo "Lunch target: $LUNCH_TARGET"
+echo "Target device: $TARGET_DEVICE"
 START=$(date +%s)
 if [[ $USE_DIRECT_NINJA -eq 1 ]]; then
-    prebuilts/build-tools/linux-x86/bin/ninja -f "$COMBINED_NINJA_PATH" -j "$DIRECT_NINJA_JOBS" "$INTERMEDIATE_BINARY_PATH"
+    prebuilts/build-tools/linux-x86/bin/ninja -f "$COMBINED_NINJA_PATH" -j "$DIRECT_NINJA_JOBS" "$DIRECT_NINJA_TARGET"
 else
     m sucre-snort
 fi
@@ -123,9 +171,9 @@ if [[ -f "$BUILD_SOURCE_PATH" ]]; then
         echo ""
         echo "⚠️  WARNING: Binary timestamp not updated!"
         echo "   This means no source files were modified, using cached version."
-        echo "   If you expect changes, run: bash dev-build.sh --clean"
+        echo "   If you expect changes, run: bash dev/dev-build.sh --clean"
         if [[ $USE_DIRECT_NINJA -eq 1 ]]; then
-            echo "   If Android.bp changed, run: bash dev-build.sh --regen-graph"
+            echo "   If Android.bp changed, run: bash dev/dev-build.sh --regen-graph"
         fi
     else
         echo ""
@@ -139,14 +187,27 @@ else
 fi
 echo ""
 
-echo "[5/6] Extracting binary..."
+echo "[5/6] Extracting binaries..."
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 cp "$BUILD_SOURCE_PATH" "$OUTPUT_PATH"
+
+DEBUG_SOURCE_PATH="$(find_matching_unstripped_binary "$BUILD_SOURCE_PATH" || true)"
+if [[ -n "$DEBUG_SOURCE_PATH" ]]; then
+    cp "$DEBUG_SOURCE_PATH" "$DEBUG_OUTPUT_PATH"
+else
+    rm -f "$DEBUG_OUTPUT_PATH" 2>/dev/null || true
+fi
 
 echo ""
 echo "=== Build Complete ==="
 echo "Time: $((END - START))s"
 echo "Output: $OUTPUT_PATH"
 ls -lh "$OUTPUT_PATH"
+if [[ -f "$DEBUG_OUTPUT_PATH" ]]; then
+    echo "Debug symbols: $DEBUG_OUTPUT_PATH"
+    ls -lh "$DEBUG_OUTPUT_PATH"
+else
+    echo "⚠️  未找到匹配 Build ID 的 unstripped 产物，未生成 $DEBUG_OUTPUT_PATH"
+fi
 echo ""
-echo "Next: bash dev-deploy.sh"
+echo "Next: bash dev/dev-deploy.sh"

@@ -7,6 +7,11 @@
 
 ## 当前入口
 
+repo-root CMake workspace 现在已经暴露了 lane 级 `CTest` 入口：
+- `p1-baseline`
+- `p2-device-smoke`
+
+对应到底层脚本仍然是：
 - `tests/integration/run.sh`
   - `P1` host-driven baseline
   - 支持 `--group` / `--case` / `--skip-deploy` / `--serial`
@@ -22,19 +27,25 @@
 ## 相关工具
 
 - `dev/dev-deploy.sh`
-  - 推送 + 启动 + 健康检查
+  - 推送 + 启动 + 健康检查（现在还会做控制协议 `HELLO` 检查，并在需要时清理遗留 debugger）
 - `dev/dev-android-device-lib.sh`
   - ADB / rooted device 公共辅助
-- `dev/dev-device-smoke.sh`
-  - `P2` 兼容 wrapper → `tests/integration/device-smoke.sh`
+- `dev/dev-diagnose.sh`
+  - 当前真机状态诊断（进程、`TracerPid`、socket、日志、iptables）
+
+已被替代的旧 `dev/` 测试 wrapper 已迁到 `archive/dev/`。
 
 ## 示例
 
 ```bash
-# P1 baseline（推荐）
-bash tests/integration/run.sh --skip-deploy --group core,config,app,streams
+# P1 baseline（repo-root CTest 入口）
+cd build-output/cmake/p12 && ctest --output-on-failure -L p1
 
-# P2 rooted 真机平台 smoke
+# P2 rooted 真机平台 smoke（repo-root CTest 入口）
+cd build-output/cmake/p12 && ctest --output-on-failure -L p2
+
+# 继续直接调用底层脚本也可以
+bash tests/integration/run.sh --skip-deploy --group core,config,app,streams
 bash tests/integration/device-smoke.sh --serial <serial>
 
 # 只跑 P2 firewall / selinux

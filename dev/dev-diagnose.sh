@@ -1,235 +1,130 @@
 #!/bin/bash
 
-# Sucre-Snort Development Diagnostics Tool
-# 快速诊断守护进程启动和运行状态
+set -euo pipefail
 
-set -e
-
-# Derive paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SNORT_ROOT="$SCRIPT_DIR/.."
-SUCRE_TOOLKIT="${SUCRE_TOOLKIT:-}"
+source "$SCRIPT_DIR/dev-android-device-lib.sh"
 
-LOG=/data/snort/dev.log
-PROD_LOG=/data/snort/sucre-snort.log
+PROC_NAME="sucre-snort-dev"
+TARGET="/data/local/tmp/sucre-snort-dev"
+LOG="/data/local/tmp/sucre-snort-dev.log"
+CONTROL_FORWARD_PORT="${CONTROL_FORWARD_PORT:-60618}"
+
+show_help() {
+    cat <<EOF
+用法: $0 [选项]
+
+选项:
+  --serial <serial>   指定目标真机 serial
+  -h, --help          显示帮助
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --serial)
+            ADB_SERIAL="$2"
+            export ADB_SERIAL
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "未知选项: $1" >&2
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+print_section() {
+    echo ""
+    echo "【$1】"
+}
+
+resolve_pid() {
+    adb_su "pidof $PROC_NAME 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true
+}
+
+control_hello() {
+    if ! adb_su "ls /dev/socket/sucre-snort-control" >/dev/null 2>&1; then
+        return 1
+    fi
+    adb_cmd forward "tcp:${CONTROL_FORWARD_PORT}" localabstract:sucre-snort-control >/dev/null 2>&1
+    python3 - <<PY
+import socket, sys
+port = int(${CONTROL_FORWARD_PORT})
+try:
+    sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+    sock.sendall(b"HELLO\0")
+    sock.settimeout(3)
+    data = b""
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if data.endswith(b"\0"):
+            break
+    sock.close()
+    if data.endswith(b"\0"):
+        data = data[:-1]
+    print(data.decode("utf-8", errors="replace"), end="")
+except Exception as exc:
+    print(f"ERROR: {exc}", end="")
+    sys.exit(1)
+PY
+    local status=$?
+    adb_cmd forward --remove "tcp:${CONTROL_FORWARD_PORT}" >/dev/null 2>&1 || true
+    return $status
+}
 
 echo "╔═══════════════════════════════════════╗"
-echo "║ Sucre-Snort 开发环境诊断工具         ║"
+echo "║ Sucre-Snort 当前真机诊断             ║"
 echo "╚═══════════════════════════════════════╝"
-echo ""
 
-# ============================================================================
-# 1. 设备连接状态
-# ============================================================================
+device_preflight
 
-echo "【1. 设备连接】"
-if adb.exe devices | tr -d '\r' | grep -q "device$"; then
-    DEVICE=$(adb.exe devices | tr -d '\r' | grep "device$" | awk '{print $1}')
-    echo "✓ 设备已连接: $DEVICE"
-else
-    echo "❌ 未检测到设备"
-    exit 1
-fi
-echo ""
+print_section "1. 设备与 root"
+echo "设备: $(adb_target_desc)"
+echo "root: $(adb_su "id" | tr -d '\r')"
+echo "SELinux: $(adb_su "getenforce" | tr -d '\r\n')"
 
-# ============================================================================
-# 2. 进程状态
-# ============================================================================
-
-echo "【2. 进程状态】"
-
-# Development daemon
-echo "开发进程 (/data/local/tmp/sucre-snort-dev):"
-if adb.exe shell su -c "pidof sucre-snort" >/dev/null 2>&1; then
-    adb.exe shell su -c "ps -AZ | grep sucre-snort" | while IFS= read -r line; do
-        echo "  $line"
-    done
-else
-    echo "  ❌ 未运行"
-fi
-
-# Production daemon (if exists)
-if adb.exe shell su -c "ls /system/system_ext/bin/sucre-snort" >/dev/null 2>&1; then
-    echo ""
-    echo "生产进程 (/system/system_ext/bin/sucre-snort):"
-    PROD_PID=$(adb.exe shell su -c "pgrep -f /system/system_ext/bin/sucre-snort" 2>/dev/null || echo "")
-    if [ -n "$PROD_PID" ]; then
-        echo "  ⚠️  检测到生产进程运行 (PID: $PROD_PID)"
-        echo "  建议: 卸载生产模块以避免冲突"
-    else
-        echo "  ✓ 未运行 (无冲突)"
-    fi
-fi
-echo ""
-
-# ============================================================================
-# 3. Socket 状态
-# ============================================================================
-
-echo "【3. Socket 状态】"
-SOCKETS=$(adb.exe shell su -c "ls -lZ /dev/socket/ 2>/dev/null | grep sucre" || echo "")
-if [ -n "$SOCKETS" ]; then
-    echo "$SOCKETS"
-else
-    echo "  ❌ 未创建 socket"
-fi
-echo ""
-
-# ============================================================================
-# 4. 二进制文件
-# ============================================================================
-
-echo "【4. 二进制文件】"
-
-# Dev binary
-echo "开发二进制:"
-if adb.exe shell su -c "ls -l /data/local/tmp/sucre-snort-dev" >/dev/null 2>&1; then
-    DEV_INFO=$(adb.exe shell su -c "ls -lh /data/local/tmp/sucre-snort-dev" | tr -d '\r')
-    echo "  $DEV_INFO"
-else
-    echo "  ❌ 不存在"
-fi
-
-# Prod binary (if exists)
-if adb.exe shell su -c "ls /system/system_ext/bin/sucre-snort" >/dev/null 2>&1; then
-    echo ""
-    echo "生产二进制:"
-    PROD_INFO=$(adb.exe shell su -c "ls -lh /system/system_ext/bin/sucre-snort" | tr -d '\r')
-    echo "  $PROD_INFO"
-fi
-echo ""
-
-# ============================================================================
-# 5. SELinux 状态
-# ============================================================================
-
-echo "【5. SELinux 状态】"
-SELINUX=$(adb.exe shell su -c "getenforce" | tr -d '\r\n')
-echo "模式: $SELINUX"
-
-echo ""
-echo "最近 SELinux 拒绝 (sucre 相关):"
-DENIALS=$(adb.exe shell su -c "logcat -d -s 'AVC' 2>/dev/null | grep -i sucre | tail -5" || echo "")
-if [ -n "$DENIALS" ]; then
-    echo "$DENIALS"
-else
-    echo "  ✓ 无相关拒绝记录"
-fi
-echo ""
-
-# ============================================================================
-# 6. 日志分析
-# ============================================================================
-
-echo "【6. 日志分析】"
-
-echo "开发日志 ($LOG):"
-if adb.exe shell su -c "test -f $LOG" 2>/dev/null; then
-    LOG_SIZE=$(adb.exe shell su -c "wc -c < $LOG" | tr -d '\r\n')
-    LOG_LINES=$(adb.exe shell su -c "wc -l < $LOG" | tr -d '\r\n')
-    echo "  大小: $LOG_SIZE bytes, 行数: $LOG_LINES"
-
-    echo ""
-    echo "  最后 20 行:"
-    adb.exe shell su -c "tail -20 $LOG" | sed 's/^/    /'
-
-    echo ""
-    echo "  错误/警告:"
-    ERRORS=$(adb.exe shell su -c "grep -iE 'error|fail|fatal|exception' $LOG | tail -5" || echo "")
-    if [ -n "$ERRORS" ]; then
-        echo "$ERRORS" | sed 's/^/    /'
-    else
-        echo "    ✓ 无明显错误"
+print_section "2. 进程与 tracer"
+PID="$(resolve_pid)"
+if [[ -n "$PID" ]]; then
+    echo "PID: $PID"
+    adb_su "ps -AZ | grep $PROC_NAME || true" | sed 's/^/  /'
+    TRACER_PID="$(adb_su "awk '/^TracerPid:/ {print \$2}' /proc/$PID/status" | tr -d '\r\n')"
+    echo "TracerPid: ${TRACER_PID:-0}"
+    if [[ -n "$TRACER_PID" && "$TRACER_PID" != "0" ]]; then
+        echo "⚠️  检测到遗留 debugger；重新 deploy 会自动清理。"
     fi
 else
-    echo "  ❌ 日志文件不存在"
-fi
-echo ""
-
-# ============================================================================
-# 7. 依赖检查
-# ============================================================================
-
-echo "【7. 依赖检查】"
-
-# libnetd_resolv.so
-echo "libnetd_resolv.so:"
-RESOLV_MOUNTED=$(adb.exe shell su -c "mount | grep libnetd_resolv.so" || echo "")
-if [ -n "$RESOLV_MOUNTED" ]; then
-    echo "  ✓ 已挂载"
-    echo "$RESOLV_MOUNTED" | sed 's/^/    /'
-else
-    echo "  ❌ 未挂载"
-    echo "  建议先执行: bash dev/dev-netd-resolv.sh prepare"
+    echo "❌ $PROC_NAME 未运行"
 fi
 
+print_section "3. 控制面与 socket"
+HELLO_RESULT="$(control_hello || true)"
+echo "HELLO: ${HELLO_RESULT:-<no-response>}"
+adb_su "ls -lZ /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true" | sed 's/^/  /'
+
+print_section "4. 二进制与日志"
+adb_su "ls -lh $TARGET 2>/dev/null || true" | sed 's/^/  /'
+adb_su "tail -20 $LOG 2>/dev/null || true" | sed 's/^/  /'
+
+print_section "5. 平台依赖"
+echo "libnetd_resolv.so 挂载:"
+adb_su "mount | grep libnetd_resolv.so || true" | sed 's/^/  /'
+echo "iptables / ip6tables (sucre-snort):"
+adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | sed 's/^/  /'
+adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | sed 's/^/  /'
+
 echo ""
-echo "Sucre APP:"
-APP_INSTALLED=$(adb.exe shell su -c "pm list packages | grep -i sucre" || echo "")
-if [ -n "$APP_INSTALLED" ]; then
-    echo "  ✓ 已安装"
-    echo "  $APP_INSTALLED"
-else
-    echo "  ❌ 未安装 (需要调试基础模块)"
-fi
-echo ""
-
-# ============================================================================
-# 8. 网络/防火墙状态
-# ============================================================================
-
-echo "【8. 网络/防火墙】"
-echo "iptables 规则 (sucre 相关):"
-IPTABLES=$(adb.exe shell su -c "iptables -L -n 2>/dev/null | grep -i sucre" || echo "")
-if [ -n "$IPTABLES" ]; then
-    echo "$IPTABLES" | sed 's/^/  /'
-else
-    echo "  ⚠️  无相关规则 (守护进程可能未初始化防火墙)"
-fi
-echo ""
-
-# ============================================================================
-# 9. 快速操作建议
-# ============================================================================
-
-echo "╔═══════════════════════════════════════╗"
-echo "║ 快速操作                             ║"
-echo "╚═══════════════════════════════════════╝"
-echo ""
-
-# 根据检查结果给出建议
-if ! adb.exe shell su -c "pidof sucre-snort" >/dev/null 2>&1; then
-    echo "⚠️  守护进程未运行"
-    echo ""
-    echo "排查步骤:"
-    echo "  1. 检查编译是否成功: ls -lh $SNORT_ROOT/build-output/sucre-snort"
-    echo "  2. 重新部署: bash dev-deploy.sh"
-    echo "  3. 查看完整日志: adb.exe shell su -c \"cat $LOG\""
-    echo "  4. 手动启动测试: adb.exe shell su -c \"/data/local/tmp/sucre-snort-dev\""
-    echo ""
-fi
-
-if [ -z "$RESOLV_MOUNTED" ]; then
-    echo "⚠️  libnetd_resolv.so 未挂载"
-    echo ""
-    echo "开发态优先方案（无需刷完整模块）:"
-    echo "  bash dev/dev-netd-resolv.sh prepare"
-    echo ""
-    echo "若仍需完整模块兜底:"
-    if [ -n "$SUCRE_TOOLKIT" ]; then
-        echo "  cd $SUCRE_TOOLKIT/scripts"
-    else
-        echo "  cd <sucre-android16-toolkit>/scripts"
-        echo "  # 或设置环境变量: export SUCRE_TOOLKIT=/path/to/sucre-android16-toolkit"
-    fi
-    echo "  bash build-debug-base.sh"
-    echo "  # 然后通过 APatch / KernelSU Manager 安装生成的 zip 并重启"
-    echo ""
-fi
-
-echo "常用命令:"
-echo "  实时日志: adb.exe shell su -c \"tail -f $LOG\""
-echo "  重启守护进程: bash dev-deploy.sh"
-echo "  重新编译: bash dev-build.sh"
-echo "  查看完整日志: adb.exe shell su -c \"cat $LOG | less\""
-echo ""
+echo "建议："
+echo "  重新部署: bash dev/dev-deploy.sh --serial $(adb_target_desc)"
+echo "  P1 baseline: bash tests/integration/run.sh --serial $(adb_target_desc)"
+echo "  P2 smoke:    bash tests/integration/device-smoke.sh --serial $(adb_target_desc)"
+echo "  P3 debug:    python3 dev/dev-vscode-debug-task.py prepare attach"

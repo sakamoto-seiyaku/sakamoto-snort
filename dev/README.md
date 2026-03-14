@@ -1,354 +1,99 @@
-# Sucre-Snort 开发环境
+# `dev/` backend helpers
 
-## 目录结构
+`dev/` 不再承担“所有开发入口都放这里”的职责。
 
-```
-sucre/
-├── scripts/
-│   └── dev/
-│       ├── dev-build.sh               # 增量编译
-│       ├── dev-deploy.sh              # 推送 + 启动 + 健康检查
-│       ├── dev-integration-tests.sh   # 兼容 wrapper → tests/integration/run.sh
-│       ├── dev-device-smoke.sh        # 兼容 wrapper → tests/integration/device-smoke.sh
-│       ├── dev-netd-resolv.sh         # 开发态推送/挂载 libnetd_resolv.so
-│       ├── dev-diagnose.sh            # 诊断工具
-│       ├── dev-android-device-lib.sh  # 真机/ADB 公共辅助
-│       ├── dev-native-debug.sh        # P3 LLDB / VS Code 调试入口
-│       ├── dev-tombstone.sh           # P3 tombstone / stack 符号化入口
-│       └── README.md
-├── tests/
-│   ├── host/                          # P0 host-side gtest
-│   └── integration/
-│       ├── run.sh                     # P1 host-driven baseline 入口
-│       ├── device-smoke.sh            # P2 rooted 真机平台 smoke 入口
-│       ├── full-smoke.sh              # 更广的控制协议冒烟回归
-│       └── lib.sh                     # integration 公共辅助
-├── sucre-snort/               # 软链接 → ~/android/lineage/system/sucre-snort
-├── sucre-android16-toolkit/   # 模块打包工具
-│   └── scripts/
-│       └── build-debug-base.sh  # 调试基础模块构建
-└── sucre-build-output/        # 编译产物 (~/sucre-build-output/)
-    └── sucre-snort            # 最新二进制
-```
+当前约定是：
 
-## 完整开发流程
+- 开发者主入口优先使用 repo-root `CMake + CTest + .vscode`
+- 测试资产优先放在 `tests/`
+- `dev/` 只保留少量 Android / 真机相关的 backend helper、诊断工具和 debug 底层适配
 
-### 首次设置（一次性）
+## 当前主入口
 
-#### 1. 构建调试基础模块
+- 构建
+  - 首选：repo-root CMake target `snort-build`
+  - backend：`dev/dev-build.sh`
+- `P0` host-side 单测
+  - 首选：repo-root `CTest` / `snort-host-tests`
+  - 实际测试资产：`tests/host/`
+- `P1` host-driven 真机 baseline
+  - 首选：repo-root `CTest` 的 `p1-baseline`
+  - 实际入口：`tests/integration/run.sh`
+- `P2` rooted 真机 smoke / compatibility
+  - 首选：repo-root `CTest` 的 `p2-device-smoke`
+  - 实际入口：`tests/integration/device-smoke.sh`
+- `P3` 真机 native debug
+  - 首选：VS Code `F5`
+  - backend：`dev/dev-vscode-debug-task.py` + `dev/dev-native-debug.sh`
 
-```bash
-cd /home/js/Git/sucre/sucre-android16-toolkit/scripts
-bash build-debug-base.sh
-```
+## `dev/` 中保留的内容
 
-**产物**: `output/sucre-debug-base-{timestamp}.zip`
+### Build / deploy backend
 
-**包含**:
-- libnetd_resolv.so (DNS 补丁)
-- sucre.apk (控制 APP)
-- SELinux 权限配置
+- `dev-build.sh`
+  - 委托现有 Android / Soong 编译流程
+  - 默认产出 `build-output/sucre-snort`，并在找到同 Build ID 的 `unstripped` 产物时额外产出 `build-output/sucre-snort.debug`
+- `dev-deploy.sh`
+  - 推送、启动、健康检查
+  - 当前会额外执行真实 `HELLO` 检查
+  - 若发现遗留 `lldb-server` / `TracerPid`，会先清理再停启守护进程
+- `dev-android-device-lib.sh`
+  - ADB / APatch root / rooted 真机公共辅助
+- `dev-netd-resolv.sh`
+  - 开发态准备 `libnetd_resolv.so` / SELinux permissive
 
-**不包含**:
-- sucre-snort 守护进程（手动推送）
-- service.sh / init.rc（手动启动）
+### Diagnose / debug backend
 
-#### 2. 刷入调试基础模块
+- `dev-diagnose.sh`
+  - 查看当前真机上的进程、`TracerPid`、socket、日志、iptables、依赖状态
+- `dev-native-debug.sh`
+  - Android native debug backend；手工 `attach/run` 继续兼容 AOSP `lldbclient.py`，VS Code helper 则走更快的直连 `lldb-server` 路径
+  - 对 `/data/local/tmp/*` 开发态二进制，会优先使用 `build-output/<name>.debug`；若默认 host binary 已 strip，则按 Build ID 自动回退到 Soong `unstripped` 产物做符号解析
+- `dev-lldbclient-wrapper.py`
+  - AOSP `lldbclient.py` 兼容包装
+- `dev-vscode-debug-task.py`
+  - VS Code task helper
+- `dev-tombstone.sh`
+  - tombstone 拉取与符号化
 
-```bash
-# 推送模块
-adb.exe push output/sucre-debug-base-*.zip /sdcard/Download/
+## 已归档的旧 wrapper
 
-# 然后在 APatch / KernelSU Manager 中手动安装该 zip，并重启
-```
+以下脚本已被当前 workflow 完全替代，已迁到 `archive/dev/`：
 
-**效果**: 设备重启后，依赖项（DNS 补丁、APP）已就位，无守护进程自动启动。
+- `dev-host-unit-tests.sh`
+- `dev-integration-tests.sh`
+- `dev-device-smoke.sh`
+- `dev-smoke.sh`
+- `dev-smoke-lib.sh`
 
----
-
-### 日常开发循环
-
-#### 1. 修改代码
+## 常用命令
 
 ```bash
-cd /home/js/Git/sucre/sucre-snort/src
-vim Control.cpp  # 修改任意源文件
+# 1) repo-root CMake preset configure
+cmake --preset dev-debug
+
+# 2) delegated Android build / deploy / debug helpers
+cmake --build --preset dev-debug --target snort-build
+cmake --build --preset dev-debug --target snort-deploy-stage
+cmake --build --preset dev-debug --target snort-debug-run-workflow
+cmake --build --preset dev-debug --target snort-debug-attach-workflow
+cmake --build --preset dev-debug --target snort-debug-cleanup
+
+# 3) P0 / P1 / P2
+cmake --build --preset dev-debug --target snort-host-tests
+cmake --build --preset dev-debug --target snort-p1-tests
+cmake --build --preset dev-debug --target snort-p2-tests
+
+# 4) diagnose / deploy
+bash dev/dev-diagnose.sh
+bash dev/dev-deploy.sh
+
+# 5) VS Code debug backend fallback
+python3 dev/dev-vscode-debug-task.py prepare attach
+python3 dev/dev-vscode-debug-task.py cleanup
 ```
 
-#### 2. 编译
+## 边界
 
-```bash
-cd /home/js/Git/sucre/scripts/dev
-
-# 默认优先复用现有 combined ninja 图（WSL2 下最快）
-bash dev-build.sh
-
-# 强制重新编译（清掉 sucre-snort 相关中间产物）
-bash dev-build.sh --clean
-
-# 当 Android.bp / Soong 图发生变化时，强制重新生成 build graph
-bash dev-build.sh --regen-graph
-```
-
-**验证**:
-- 脚本自动检查二进制时间戳
-- 默认优先走 direct-ninja，只编 `sucre-snort` 目标，避免 WSL2 下 Soong graph 生成带来的高内存换页
-- 如果源码未修改，会警告使用缓存版本
-- `--clean` 用于清掉 `sucre-snort` 中间产物；`--regen-graph` 用于 Android.bp / Soong 图变化场景
-
-#### 3. 部署
-
-```bash
-bash dev-deploy.sh
-```
-
-**执行步骤**:
-1. 优先通过 `DEV.SHUTDOWN` 请求守护进程保存后退出，必要时再强制终止
-2. 推送二进制 → `/data/local/tmp/sucre-snort-dev`
-3. 设置权限 (0755)
-4. 清理旧日志
-5. 启动守护进程
-6. **健康检查**:
-   - 进程状态 (PID)
-   - 控制 Socket (`/dev/socket/sucre-snort-control`)
-   - DNS Socket (`/dev/socket/sucre-snort-netd`)
-   - SELinux 上下文
-   - 最近日志 (10 行)
-
-**结果**: 显示成功/失败状态 + 快速命令
-
-#### 3.5 快速准备 netd / SELinux（开发态，无需刷模块）
-
-```bash
-# 推送并临时挂载 libnetd_resolv.so，同时切到 permissive
-bash dev/dev-netd-resolv.sh prepare
-
-# 只查看状态
-bash dev/dev-netd-resolv.sh status
-
-# 仅切换 SELinux
-bash dev/dev-netd-resolv.sh permissive on
-bash dev/dev-netd-resolv.sh permissive off
-```
-
-**适用场景**:
-- 当前目标只是快速做真机联调 / 冒烟 / 集成验证
-- 不想每次都重新生成并刷入完整模块
-- 设备当前使用 APatch，且允许通过 `nsenter + busybox mount` 做开发态临时挂载
-
-**说明**:
-- 该脚本会把本地 `libnetd_resolv.so` 推到 `/data/local/tmp/`，再临时挂到 resolver APEX
-- 该挂载是**开发态临时状态**，重启后需要重新执行
-- 若只是为了跑 `P2`，优先走这条路；完整模块只作为更重的兜底方案
-
-#### 4. 真机测试（P1 / P2）
-
-```bash
-# P1 baseline
-bash tests/integration/run.sh
-
-# P2 rooted 真机平台 smoke
-bash tests/integration/device-smoke.sh
-```
-
-**特点**:
-- 两条测试 lane 都运行在 host / WSL，由 host 驱动 Android 真机执行验证
-- `P1` 只聚焦守护进程生命周期、控制面基线、stream 健康检查与 `RESETALL` 基线语义
-- `P2` 聚焦 rooted 真机上的 socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC 与 lifecycle restart smoke
-- 支持按 group / case 选择测试
-- 支持通过 `--serial` 绑定指定真机
-
-**常用示例**:
-
-```bash
-# 全量 P1 baseline
-bash tests/integration/run.sh
-
-# 只跑 P1 streams / reset
-bash tests/integration/run.sh --group streams,reset
-
-# 全量 P2 rooted 真机平台 smoke
-bash tests/integration/device-smoke.sh --serial <serial>
-
-# 只跑 P2 firewall / selinux
-bash tests/integration/device-smoke.sh --skip-deploy --group firewall,selinux
-
-# 只跑 P2 lifecycle case
-bash tests/integration/device-smoke.sh --case P2-09
-```
-
----
-
-### 调试与排查
-
-#### 诊断工具
-
-```bash
-bash dev-diagnose.sh
-```
-
-**检查项**:
-1. 设备连接
-2. 进程状态（开发 vs 生产冲突）
-3. Socket 状态
-4. 二进制文件信息
-5. SELinux 状态和拒绝记录
-6. 日志分析（错误/警告）
-
-#### 真机原生调试（P3）
-
-```bash
-# attach 到当前 dev daemon
-bash dev-native-debug.sh attach
-
-# 以 LLDB 方式直接启动真机上的 dev binary
-bash dev-native-debug.sh run
-
-# 为 VS Code + CodeLLDB 生成连接准备
-bash dev-native-debug.sh vscode-attach
-```
-
-说明：
-- `dev-native-debug.sh` 会自动进入 `LINEAGE_ROOT`、执行 `envsetup + lunch`，并优先使用 AOSP 预置 Python。
-- 对当前 `/data/local/tmp/sucre-snort-dev` 调试流，脚本会自动把 host 侧 `build-output/sucre-snort` 镜像到 `$ANDROID_PRODUCT_OUT/symbols/data/local/tmp/sucre-snort-dev`，避免 `lldbclient.py` 再从设备侧回拉临时二进制。
-- 对当前 APatch 真机，AOSP `lldbclient.py` 默认使用的 `su root <cmd>` 形式与设备行为不完全兼容；仓库内的 host-side wrapper 已统一改写为可工作的 `su -c` 调用。
-- 当 `adbd` 不是 root（当前生产签名 rooted 真机就是如此）时，wrapper 会把 `lldb-server` 的 transport 从默认的 Unix socket forward 切到 `tcp:<port>`，绕开 `localfilesystem:` 转发的权限问题。
-- `vscode-attach` / `vscode-run` 是“CLI 生成 + VS Code 最后一步启动”的模式：命令所在终端要保持打开，调试结束后回到该终端按一次回车收尾。
-
-#### tombstone / 符号化
-
-```bash
-# 查看最新 tombstone
-bash dev-tombstone.sh latest
-
-# 拉取最新 tombstone
-bash dev-tombstone.sh pull
-
-# 对 tombstone 做 stack 符号化
-bash dev-tombstone.sh symbolize --path build-output/tombstones/tombstone_xx
-```
-7. 依赖检查（libnetd_resolv, APP）
-8. iptables 规则
-9. 操作建议（根据检查结果）
-
-#### 常用命令
-
-```bash
-# 实时日志
-adb.exe shell su -c "tail -f /data/local/tmp/sucre-snort-dev.log"
-
-# 进程状态
-adb.exe shell su -c "ps -AZ | grep sucre"
-
-# Socket 状态
-adb.exe shell su -c "ls -lZ /dev/socket/sucre*"
-
-# 查看完整日志
-adb.exe shell su -c "cat /data/local/tmp/sucre-snort-dev.log"
-
-# SELinux 拒绝
-adb.exe shell su -c "logcat -d -s AVC | grep sucre"
-
-# 手动启动测试（调试启动失败）
-adb.exe shell su -c "/data/local/tmp/sucre-snort-dev"
-```
-
----
-
-## 注意事项
-
-### 环境隔离
-
-- **调试环境**: `/data/local/tmp/sucre-snort-dev` (手动启动)
-- **生产环境**: `/system/system_ext/bin/sucre-snort` (init.rc 启动)
-- **日志隔离**: `/data/local/tmp/sucre-snort-dev.log` vs 生产环境自身日志路径
-
-### 避免冲突
-
-如果检测到生产模块，诊断工具会警告。建议：
-1. 卸载生产模块
-2. 刷入调试基础模块
-3. 使用开发循环
-
-### 重启后
-
-- 调试基础模块保持激活（依赖项存在）
-- 守护进程**不会**自动启动
-- 重新运行 `bash dev-deploy.sh` 启动守护进程
-
----
-
-## 故障排查
-
-### 守护进程无法启动
-
-```bash
-# 1. 诊断
-bash dev-diagnose.sh
-
-# 2. 检查日志
-adb.exe shell su -c "cat /data/local/tmp/sucre-snort-dev.log"
-
-# 3. 手动启动查看错误
-adb.exe shell su -c "/data/local/tmp/sucre-snort-dev"
-
-# 4. 检查 SELinux 拒绝
-adb.exe shell su -c "logcat -d -s AVC | grep sucre"
-```
-
-### Socket 未创建
-
-**原因**: 守护进程启动失败或 fallback 机制未触发
-
-**排查**:
-1. 确认守护进程运行中
-2. 检查日志中 "socket" 相关错误
-3. 验证 `/dev/socket/` 权限
-
-### 编译后二进制未更新
-
-**症状**: `dev-build.sh` 显示 "WARNING: Binary timestamp not updated"
-
-**解决**:
-```bash
-bash dev-build.sh --clean
-
-# 如果是 Android.bp / Soong graph 变化导致的缓存不一致
-bash dev-build.sh --regen-graph
-```
-
-### 依赖缺失
-
-**症状**: libnetd_resolv.so 未挂载或 APP 未安装
-
-**优先解决（开发态）**:
-```bash
-bash dev/dev-netd-resolv.sh prepare
-```
-
-**若仍不满足**: 再回退到完整调试基础模块方案（见"首次设置"）
-
----
-
-## 开发循环示意图
-
-```
-[首次设置]
-    ↓
-build-debug-base.sh → 刷入设备 → 重启
-    ↓
-[开发循环] ←─────────────┐
-    ↓                    │
-修改代码                 │
-    ↓                    │
-dev-build.sh（默认 direct-ninja） │
-    ↓                    │
-dev-deploy.sh (10秒)     │
-    ↓                    │
-调试测试 ─────────────────┘
-```
-
----
-
-**最后更新**: 2026-03-14
-**环境**: Android 16, APatch（当前开发机型）, Pixel 6a
+- `dev/` 只做 test / debug / tooling 的 backend helper，不承载产品逻辑实现。
+- 若后续某个脚本已被 `CMake` / `CTest` / `.vscode` 主入口完全替代，应继续迁出或归档，而不是把 `dev/` 重新堆回“大杂烩”。

@@ -1,0 +1,62 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 19,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-output/cmake/${presetName}",
+      "cacheVariables": {
+        "SNORT_ENABLE_DELEGATED_BUILD_TARGETS": "ON",
+        "SNORT_ENABLE_HOST_TESTS": "ON",
+        "SNORT_ENABLE_DEVICE_TESTS": "ON"
+      }
+    },
+    {
+      "name": "dev-debug",
+      "inherits": "base",
+      "description": "Repo-root developer workflow preset (Debug)"
+    },
+    {
+      "name": "dev-relwithdebinfo",
+      "inherits": "base",
+      "description": "Repo-root developer workflow preset (RelWithDebInfo)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev-debug",
+      "configurePreset": "dev-debug",
+      "description": "Build repo-root developer workflow targets with the dev-debug configure preset"
+    },
+    {
+      "name": "dev-relwithdebinfo",
+      "configurePreset": "dev-relwithdebinfo",
+      "description": "Build repo-root developer workflow targets with the dev-relwithdebinfo configure preset"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev-debug",
+      "configurePreset": "dev-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-relwithdebinfo",
+      "configurePreset": "dev-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
