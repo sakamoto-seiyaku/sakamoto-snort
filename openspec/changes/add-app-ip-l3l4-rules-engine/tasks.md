@@ -44,6 +44,7 @@
 
 ## 10. Verification (device)
 - [ ] 10.1 控制面：缺失 `priority` / 传入包名 selector / 传入 `ct` 时返回 `NOK`；省略 `enabled/enforce/log` 时按 `1/1/0` 归一化；disabled 规则仍可通过 `IPRULES.PRINT` 查询
+- [ ] 10.1b 控制面：`IPRULES.UPDATE` 为 patch/merge；未提供的 key 保持原值（不得回落到缺省值）；例如只更新 `dport` 时 `log/enforce/enabled` 不应被重置
 - [ ] 10.2 输出：`IFACES.PRINT` 固定返回 `{"ifaces":[...]}`；枚举失败或无接口时返回 `{"ifaces":[]}`；`ifindex/type` 为 number
 - [ ] 10.3 输出：`IPRULES.PRINT` 在无规则或过滤无命中时返回 `{"rules":[]}`；`rules` 按 `ruleId` 升序；`ruleId/uid/priority/stats.*` 为 number；`ifindex` 为 number 且未限定时为 `0`；`enabled/enforce/log` 为 `0|1`
 - [ ] 10.4 输出：`IPRULES.PRINT` 中 `action/dir/iface/proto` 使用规范化 string token；`src/dst` 为 `any` 或标准 IPv4 CIDR；`sport/dport` 为 `any`、单端口十进制字符串、或 `lo-hi`

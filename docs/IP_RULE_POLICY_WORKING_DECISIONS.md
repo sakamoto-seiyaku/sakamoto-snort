@@ -109,7 +109,8 @@
 其中：
 - 当前 v1 控制面只接受数值 `uid`，不接受包名字符串 selector。
 - 当前 v1 要求 `priority` 显式提供；若缺失则控制面直接拒绝。
-- 若未显式提供 `enabled/enforce/log`，则其 v1 缺省值固定为 `1/1/0`。
+- `IPRULES.ADD` 若未显式提供 `enabled/enforce/log`，则其 v1 缺省值固定为 `1/1/0`。
+- `IPRULES.UPDATE` 采用 patch/merge 语义：仅更新请求中提供的 key；未提供的 key MUST 保持原值（不得回落到缺省值）。
 - `enabled=0` 表示该规则仍保留在控制面/持久化/打印视图中；对热路径必须等价于“该规则不存在”。
 - `enabled=0` 的规则不得进入 active matcher，不得产生 `ruleId`/`wouldRuleId`，不得更新 stats，也不得计入 active preflight 复杂度。
 

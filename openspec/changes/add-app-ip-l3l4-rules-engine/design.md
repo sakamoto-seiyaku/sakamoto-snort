@@ -71,6 +71,10 @@ kv 语法：每项为 `key=value` token（Control 的空格分词可直接支持
 - `dport=any|<0..65535>|<lo>-<hi>`
 - `ct`：当前 v1 不接受；若传入则返回 `NOK`
 
+`IPRULES.UPDATE` 语义（v1）：
+- 当前 v1 `IPRULES.UPDATE` 采用 patch/merge：仅更新请求中提供的 key；未提供的 key MUST 保持原值（不得回落到缺省值）。
+- `enabled/enforce/log` 的 `1/1/0` 缺省值仅适用于 `IPRULES.ADD`（创建时省略字段）。
+
 字段语义（避免歧义）：
 - `src/dst` 与 `sport/dport` 均指数据包 IPv4/L4 头部字段（`saddr/daddr`、TCP/UDP `source/dest`）。
 - `dir=in|out` 仅表示包来自 `INPUT/OUTPUT` 链（入站/出站），不改变上述字段含义。

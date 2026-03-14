@@ -24,7 +24,7 @@
 - **THEN** 系统 SHALL 在两次处理中选出同一条唯一命中规则
 
 ### Requirement: Current v1 control surface is uid-only and rejects unsupported match dimensions
-系统 MUST 将当前 v1 规则控制面限定为数值 `uid` 选择器；包名字符串 selector MUST NOT 作为本 change 的输入语义。系统 MUST 要求 `priority` 显式提供；缺失 `priority` 的创建/更新请求 MUST 返回 `NOK`。对于 `enabled/enforce/log`，系统 MUST 固定当前 v1 的缺省值为 `1/1/0`。系统 MUST 同时拒绝当前未纳入 v1 语义的控制面字段（例如 `ct`），避免出现“看起来已配置、实际上不生效”的假语义。系统 MUST NOT 将 `NFQA_CT`、内核 conntrack 元数据或用户态自研 full flow tracking 作为当前 v1 匹配语义成立的前提。
+系统 MUST 将当前 v1 规则控制面限定为数值 `uid` 选择器；包名字符串 selector MUST NOT 作为本 change 的输入语义。系统 MUST 要求 `priority` 显式提供；缺失 `priority` 的创建/更新请求 MUST 返回 `NOK`。对于 `enabled/enforce/log`，系统 MUST 将其 v1 缺省值固定为 `1/1/0`（仅适用于 `IPRULES.ADD` 创建时省略字段）。系统 MUST 将 `IPRULES.UPDATE` 定义为 patch/merge：仅更新请求中提供的 key；未提供的 key MUST 保持原值（不得回落到缺省值）。系统 MUST 同时拒绝当前未纳入 v1 语义的控制面字段（例如 `ct`），避免出现“看起来已配置、实际上不生效”的假语义。系统 MUST NOT 将 `NFQA_CT`、内核 conntrack 元数据或用户态自研 full flow tracking 作为当前 v1 匹配语义成立的前提。
 
 #### Scenario: Package-name selector is rejected
 - **GIVEN** 客户端尝试以包名字符串而非数值 `uid` 创建或查询规则
@@ -53,6 +53,12 @@
 - **THEN** 返回的该规则对象 SHALL 体现 `enabled=1`
 - **AND** 返回的该规则对象 SHALL 体现 `enforce=1`
 - **AND** 返回的该规则对象 SHALL 体现 `log=0`
+
+#### Scenario: UPDATE preserves omitted fields (patch semantics)
+- **GIVEN** 已存在一条规则 `R`，其 `log=1` 且 `dport=80`
+- **WHEN** 客户端调用 `IPRULES.UPDATE R dport=443`（未提供 `log`）
+- **THEN** 后续客户端调用 `IPRULES.PRINT RULE R` 时，该规则对象 SHALL 仍体现 `log=1`
+- **AND** 该规则对象 SHALL 体现 `dport=443`
 
 ### Requirement: Rule actions include ALLOW and BLOCK
 系统 MUST 支持规则动作 `ALLOW` 与 `BLOCK`。当数据包未命中更高优先级硬原因、且 IP 规则引擎启用并命中：
