@@ -51,4 +51,5 @@
 - `P1 Host-driven 集成测试`：已完成并归档；主入口收敛在 `tests/integration/run.sh`，并已在 rooted 真机上完成 baseline 验证。
 - `P2 真机集成 / smoke / 兼容性验证`：已以独立 change 收敛；当前主入口为 `tests/integration/device-smoke.sh`，覆盖 rooted 真机上的 root/preflight、socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC 与 lifecycle restart smoke。`libnetd_resolv.so` 挂载属于环境相关 compatibility 检查；若外部 debug-base 模块未就位，则明确标为 skip，而不是倒灌到产品实现。
 - `P3 真机原生 Debug / crash / LLDB`：独立 change 与真机入口脚本已完成，继续沿真机工作流使用 `LLDB` / `CodeLLDB` / tombstone symbolize 能力。
+- `VS Code/CMake` 开发者统一入口：已完成并归档（`openspec/changes/archive/2026-03-14-add-vscode-cmake-dev-workflow/`）；将 `P0/P1/P2` 以 `CTest` / VS Code Testing 方式暴露，并把 `P3` 真机调试收敛为 `F5` 工作流；对应 capability spec 为 `openspec/specs/vscode-cmake-development/spec.md`。
 - `docs/NATIVE_DEBUGGING_AND_TESTING.md` 是这条 test / debug 路线的权威补充文档。
