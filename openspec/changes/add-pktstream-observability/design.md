@@ -26,6 +26,8 @@
 - 入站包（`direction=in`）时，`host` 对应 `srcIp`
 - 出站包（`direction=out`）时，`host` 对应 `dstIp`
 
+IPv6 说明：本 change 要求 IPv4/IPv6 的 Packet 事件都输出 `reasonId`。在当前阶段（IPv6 不受新 IPv4 规则影响），IPv6 的 `reasonId` 仍按同一套优先级链选择（例如 `IFACE_BLOCK` 或 `ALLOW_DEFAULT`）。
+
 ### 2.2 可解释字段
 - `reasonId: string`（必填）：解释本包的**实际 verdict**（P0 最小集合见下）
 - `ruleId?: string|int`：当“实际执行的规则”命中并决定 verdict 时填充
@@ -51,6 +53,17 @@ Packet 侧当前阶段的最小 reasonId 集合（字符串）：
 
 reasonId 选择必须确定且唯一；至少在当前 baseline（无规则引擎 override，且不纳入 legacy `ip-leak` 分支）下遵循优先级：
 `IFACE_BLOCK` > `ALLOW_DEFAULT`
+
+### 3.1 Reason priority across layers (current known set)
+为避免后续规则系统落地时出现“同包多原因”或“先 allow 再被 legacy drop”的歧义，本项目当前约束的判决边界为：
+
+1) **先执行硬原因**：`IFACE_BLOCK`（命中即终止；不得携带更低层 `ruleId/wouldRuleId`）。  
+2) **再执行 IP 规则引擎（若启用）**：若其给出 `Allow`/`Block`，则该结果为 **最终 verdict**，不再回落到 legacy/domain 路径：  
+   - `Allow` → `reasonId=IP_RULE_ALLOW`  
+   - `Block` → `reasonId=IP_RULE_BLOCK`  
+3) **仅当 IP 规则层 `NoMatch`** 时，才允许回落到 legacy/domain 路径：在当前 A 层验收基线（可理解为 `BLOCKIPLEAKS=0`）下，该路径仅产生 `ALLOW_DEFAULT`。  
+
+> 注：`ip-leak` 与其它 legacy drop 原因的 reasonId 命名与优先级不属于本 change；若未来恢复其参与 Packet 最终判决，必须以独立 change 增量定义其 reasonId 与优先级链。
 
 ## 4. Notes for future rule engines
 - `ruleId` 与 `wouldRuleId` 的稳定性、tie-break 与“每包最多 1 条 would-match”由各规则引擎在其 change 中定义/实现，但必须遵循本 change 的字段契约（含 `wouldDrop` 语义）。
