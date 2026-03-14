@@ -24,21 +24,27 @@
 - **THEN** 系统 SHALL 在两次处理中选出同一条唯一命中规则
 
 ### Requirement: Current v1 control surface is uid-only and rejects unsupported match dimensions
-系统 MUST 将当前 v1 规则控制面限定为数值 `uid` 选择器；包名字符串 selector MUST NOT 作为本 change 的输入语义。系统 MUST 要求 `priority` 显式提供；缺失 `priority` 的创建/更新请求 MUST 返回 `NOK`。对于 `enabled/enforce/log`，系统 MUST 将其 v1 缺省值固定为 `1/1/0`（仅适用于 `IPRULES.ADD` 创建时省略字段）。系统 MUST 将 `IPRULES.UPDATE` 定义为 patch/merge：仅更新请求中提供的 key；未提供的 key MUST 保持原值（不得回落到缺省值）。系统 MUST 同时拒绝当前未纳入 v1 语义的控制面字段（例如 `ct`），避免出现“看起来已配置、实际上不生效”的假语义。系统 MUST NOT 将 `NFQA_CT`、内核 conntrack 元数据或用户态自研 full flow tracking 作为当前 v1 匹配语义成立的前提。
+系统 MUST 将当前 v1 规则控制面限定为数值 `uid` 选择器；包名字符串 selector MUST NOT 作为本 change 的输入语义。系统 MUST 要求 `IPRULES.ADD` 创建规则时 `priority` 显式提供；缺失 `priority` 的创建请求 MUST 返回 `NOK`。对于 `enabled/enforce/log`，系统 MUST 将其 v1 缺省值固定为 `1/1/0`（仅适用于 `IPRULES.ADD` 创建时省略字段）。系统 MUST 将 `IPRULES.UPDATE` 定义为 patch/merge：仅更新请求中提供的 key；未提供的 key（包含 `priority`）MUST 保持原值（不得回落到缺省值）。系统 MUST 将 `enforce=0` 限定为 `action=BLOCK, log=1` 的 would-block safety-mode；其它 `enforce=0` 组合（例如 `action=ALLOW, enforce=0` 或 `enforce=0, log=0`）MUST 返回 `NOK`。系统 MUST 同时拒绝当前未纳入 v1 语义的控制面字段（例如 `ct`），避免出现“看起来已配置、实际上不生效”的假语义。系统 MUST NOT 将 `NFQA_CT`、内核 conntrack 元数据或用户态自研 full flow tracking 作为当前 v1 匹配语义成立的前提。
 
 #### Scenario: Package-name selector is rejected
 - **GIVEN** 客户端尝试以包名字符串而非数值 `uid` 创建或查询规则
 - **WHEN** 控制面校验该请求
 - **THEN** 系统 SHALL 返回 `NOK`
 
-#### Scenario: Missing priority is rejected
-- **GIVEN** 客户端尝试创建或更新规则，但未提供 `priority`
-- **WHEN** 控制面校验该规则
+#### Scenario: Missing priority on ADD is rejected
+- **GIVEN** 客户端尝试通过 `IPRULES.ADD` 创建规则，但未提供 `priority`
+- **WHEN** 控制面校验该请求
 - **THEN** 系统 SHALL 返回 `NOK`
 
 #### Scenario: Unsupported ct field is rejected
 - **GIVEN** 客户端尝试创建或更新规则，并传入 `ct=...`
 - **WHEN** 控制面校验该规则
+- **THEN** 系统 SHALL 返回 `NOK`
+
+#### Scenario: Invalid enforce combinations are rejected
+- **GIVEN** 客户端尝试创建或更新规则，并传入 `enforce=0`
+- **AND** 该规则不满足 `action=BLOCK, log=1`
+- **WHEN** 控制面校验该请求
 - **THEN** 系统 SHALL 返回 `NOK`
 
 #### Scenario: v1 matching semantics do not depend on conntrack metadata
@@ -104,6 +110,7 @@
 - `IPRULES.REMOVE` MUST NOT 触发其余规则重新编号
 - 已删除 `ruleId` 在当前规则集生命周期内 MUST NOT 被后续 `ADD` 复用
 - 持久化恢复后，已保存规则 MUST 保持原有 `ruleId`
+- 持久化恢复后，`IPRULES.ADD` 的分配状态 MUST 继续保持单调递增（即使重启前删除了最高 `ruleId`，也不得在重启后复用已删除的 id）
 - `RESETALL` 清空整套规则集后，后续第一条新规则 MUST 从初始 `ruleId = 0` 重新开始分配
 
 #### Scenario: UPDATE preserves ruleId
@@ -120,6 +127,13 @@
 - **GIVEN** 先前规则集内已经分配过多个 `ruleId`
 - **WHEN** 客户端调用 `RESETALL` 并随后重新添加第一条规则
 - **THEN** 该新规则 SHALL 使用初始 `ruleId = 0`
+
+#### Scenario: Restart does not reuse deleted highest ruleId
+- **GIVEN** 已存在三条规则，其 `ruleId` 分别为 `0/1/2`
+- **AND** 客户端移除 `ruleId=2`（当前最高 id）
+- **WHEN** 进程重启并恢复持久化状态
+- **AND** 客户端再次调用 `IPRULES.ADD ...` 添加新规则
+- **THEN** 该新规则 SHALL 分配到 `ruleId=3`（不得复用已删除的 `2`）
 
 ### Requirement: IFACE_BLOCK remains the highest-priority hard drop
 系统 MUST 保持 `IFACE_BLOCK` 为高于 IP 规则引擎的 hard-drop 原因。命中 `IFACE_BLOCK` 时，系统 SHALL 直接 DROP，并 SHALL NOT 让 `ALLOW`/`BLOCK`/would-match 改写该包的实际原因，也 SHALL NOT 输出来自 IP 规则引擎的 `ruleId`/`wouldRuleId` 归因。
@@ -164,6 +178,23 @@
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 ACCEPT
 - **AND** PKTSTREAM SHALL 输出该包的 would-match（包含该规则的 `wouldRuleId` 与 `wouldDrop=1`）
+
+#### Scenario: Enforce match suppresses would-match regardless of priority
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 存在一条命中该包的 `ALLOW,enforce=1` 规则
+- **AND** 同时存在一条也可命中的 `BLOCK,enforce=0,log=1` would-drop 规则（其 `priority` 更高）
+- **WHEN** NFQUEUE 收到该包
+- **THEN** 系统 SHALL 返回 ACCEPT
+- **AND** PKTSTREAM SHALL 包含 `ruleId`（来自 `ALLOW,enforce=1` 规则）
+- **AND** PKTSTREAM SHALL NOT 包含 `wouldRuleId`
+
+#### Scenario: Multiple would-drop candidates pick a single deterministic winner
+- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 该包未命中任何 `enforce=1` 的规则
+- **AND** 存在两条均可命中的 would-drop 规则（`action=BLOCK,enforce=0,log=1`），且 `priority` 不同
+- **WHEN** NFQUEUE 收到该包
+- **THEN** PKTSTREAM SHALL 仅输出 1 个 `wouldRuleId`
+- **AND** 该 `wouldRuleId` SHALL 对应 `priority` 更高的那条规则
 
 #### Scenario: ALLOW rule cannot use enforce=0 safety-mode
 - **GIVEN** 客户端尝试创建或更新一条规则，且其 `action=ALLOW`、`enforce=0`

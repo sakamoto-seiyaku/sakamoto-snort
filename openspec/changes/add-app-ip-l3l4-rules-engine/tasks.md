@@ -9,7 +9,7 @@
 ## 3. Control surface & rule model
 - [ ] 3.1 新增控制命令：`IPRULES`、`IFACES.PRINT`
 - [ ] 3.2 新增规则管理命令：`IPRULES.ADD/UPDATE/REMOVE/ENABLE/PRINT/PREFLIGHT`，并固定当前 v1 的 `IFACES.PRINT/IPRULES.PRINT/IPRULES.PREFLIGHT` JSON 输出形态（含空结果返回空数组、numeric id/计数字段、toggle 使用 `0|1`、规范化 match token、固定 `limits/warnings/violations` shape）
-- [ ] 3.3 定义 RuleDef/RuleId/priority/enabled/enforce/log 模型与解析（kv token）；当前 v1 保持 uid-only、`priority` 显式提供、`enabled/enforce/log` 缺省值固定为 `1/1/0`、拒绝 `ct` 与无效组合（如 `action=ALLOW,enforce=0`）
+- [ ] 3.3 定义 RuleDef/RuleId/priority/enabled/enforce/log 模型与解析（kv token）；当前 v1 保持 uid-only、`IPRULES.ADD` 要求 `priority` 显式提供、`enabled/enforce/log` 缺省值固定为 `1/1/0`（仅 ADD）、`IPRULES.UPDATE` 为 patch/merge（未提供字段保持原值，包含 `priority`），拒绝 `ct` 与无效组合（如 `action=ALLOW,enforce=0`）
 - [ ] 3.4 Settings/持久化新增 `IPRULES` 开关，并保证当前开发期内读写/恢复自洽（当前不要求为未发版历史状态设计迁移/兼容逻辑）
 - [ ] 3.5 `HELP` 更新：准确描述新增命令与参数语义
 
@@ -39,11 +39,11 @@
 - [ ] 8.3 规则 `UPDATE` 生效后必须清零该规则 stats；规则 `ENABLE 0→1` 时也必须清零该规则 stats
 
 ## 9. Persistence & RESETALL
-- [ ] 9.1 规则集持久化与恢复（新增 saver 文件），重启后恢复规则定义与既有 `ruleId`；per-rule stats 保持 since-boot 语义，不持久化
+- [ ] 9.1 规则集持久化与恢复（新增 saver 文件），重启后恢复规则定义与既有 `ruleId`，并恢复 `nextRuleId` 高水位计数器以避免复用已删除 `ruleId`；per-rule stats 保持 since-boot 语义，不持久化
 - [ ] 9.2 `RESETALL` 清理持久化、内存快照与 `ruleId` 计数器；其后新一轮规则集从初始 `ruleId = 0` 重开
 
 ## 10. Verification (device)
-- [ ] 10.1 控制面：缺失 `priority` / 传入包名 selector / 传入 `ct` 时返回 `NOK`；省略 `enabled/enforce/log` 时按 `1/1/0` 归一化；disabled 规则仍可通过 `IPRULES.PRINT` 查询
+- [ ] 10.1 控制面：`IPRULES.ADD` 缺失 `priority` / 传入包名 selector / 传入 `ct` 或非法 `enforce=0` 组合时返回 `NOK`；省略 `enabled/enforce/log` 时按 `1/1/0` 归一化；disabled 规则仍可通过 `IPRULES.PRINT` 查询
 - [ ] 10.1b 控制面：`IPRULES.UPDATE` 为 patch/merge；未提供的 key 保持原值（不得回落到缺省值）；例如只更新 `dport` 时 `log/enforce/enabled` 不应被重置
 - [ ] 10.2 输出：`IFACES.PRINT` 固定返回 `{"ifaces":[...]}`；枚举失败或无接口时返回 `{"ifaces":[]}`；`ifindex/type` 为 number
 - [ ] 10.3 输出：`IPRULES.PRINT` 在无规则或过滤无命中时返回 `{"rules":[]}`；`rules` 按 `ruleId` 升序；`ruleId/uid/priority/stats.*` 为 number；`ifindex` 为 number 且未限定时为 `0`；`enabled/enforce/log` 为 `0|1`

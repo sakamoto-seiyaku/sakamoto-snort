@@ -56,7 +56,7 @@
 
 kv 语法：每项为 `key=value` token（Control 的空格分词可直接支持），当前 v1 要求的最小字段与语义如下：
 - `action=allow|block`
-- `priority=<int>`（当前必须显式提供）
+- `priority=<int>`（`IPRULES.ADD` 当前必须显式提供；`IPRULES.UPDATE` 省略则保持原值）
 - `enabled=0|1`（缺省 1）
 - `enforce=0|1`（缺省 1）
 - `log=0|1`（缺省 0）
@@ -101,11 +101,12 @@ kv 语法：每项为 `key=value` token（Control 的空格分词可直接支持
 - `PacketKeyV4` 必须使用稳定的标量表示（例如 host-byte-order 的整数），避免把字节序转换散落在 cache/classifier/统计路径中。
 - `PacketKeyV4` 不得纳入 `timestamp`、`len`、NFQUEUE `packet_id`、`App/Host/Domain` 指针或其他每包波动字段。
 - `ifaceKind` 与 `ifindex` 在 key 中同时保留：前者承载规则语义，后者承载精确接口约束；两者都属于命中判定输入。
+- `ifaceKind` 通常由 `ifindex -> ifaceBit()` 的只读快照推导得到；当系统网络栈变化导致同一 `ifindex` 的分类发生变化时，`PacketKeyV4` 也会变化并触发 cache miss——这是为保证“规则语义随接口分类变化而生效”的正确性取舍。
 - 当前 v1 correctness 明确不依赖 `NFQA_CT`；`ctInfo` 不属于 v1 `PacketKeyV4` 字段集合。
 
 ### 4.2 Exact-decision cache (v1)
 - exact cache 位于 classifier 之前，是 IP 规则引擎数据面的第一层。
-- key 固定为 `PacketKeyV4`；entry 至少绑定 `rulesEpoch`，并缓存引擎层结果（`NoMatch/Allow/Block/WouldBlock`）及对应规则归因。
+- key 固定为 `PacketKeyV4`；entry 至少绑定 `rulesEpoch`，并缓存引擎层结果（`NoMatch/Allow/Block/WouldBlock`）及对应规则归因（至少包含 `ruleId` 或 `wouldRuleId`，而不是仅缓存内部索引）。
 - cache 允许缓存 `NoMatch`（negative cache），以避免大量未命中流量重复进入 classifier。
 - 该 cache 的 correctness 前提是“相同 `PacketKeyV4` + 相同 `rulesEpoch` => 相同引擎层结果”；它不是 flow tracker，也不是整个系统最终 verdict cache。
 - v1 的 exact cache 必须可在不依赖 `NFQA_CT`、内核 conntrack 元数据暴露或用户态自研 full flow tracking 的前提下独立成立。
@@ -152,6 +153,21 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 - 若同优先级仍存在重叠命中，则由编译后 `subtable / bucket / rangeCandidates` 的规范化组织与查询路径定义唯一胜者。
 - 对同一份 active ruleset，重复编译必须得到相同的唯一胜者；实现不得依赖不稳定的容器迭代顺序。
 - `ruleId` 用于标识、输出与控制面引用，不作为当前对外承诺的语义 tie-break。
+
+实现提示（保证稳定查询路径的一种简单方式）：
+- `UidView.subtables`：按 `maxPriority` 降序；若相同则按 `MaskSig` 的稳定序（例如字节序比较）排序。
+- bucket 内 exact 匹配列表：按 `priority` 降序；若相同则按 `ruleId` 升序做稳定排序（`ruleId` 仅作为实现层面的稳定 tie-break，不构成对外语义承诺）。
+- `rangeCandidates`：同上，确保线性扫描的“首个命中”在重复编译下稳定。
+
+### 5.6 Would-match selection (enforce-first)
+为保证 “would-match 不改变实际 verdict” 且 “每包最多 1 条 would-match”，选择逻辑必须明确为两阶段：
+
+1) **先求 enforce 命中**：仅在 `enabled=1 && enforce=1` 的规则子集内，按 §5.5 的确定性规则选出唯一胜者；若胜者存在，则该包的引擎层结果为 `Allow/Block`，并禁止产生 would-match。  
+2) **仅当无 enforce 命中**：才在 `enabled=1 && action=BLOCK && enforce=0 && log=1` 的 would-drop 规则子集内，按 §5.5 的确定性规则选出唯一胜者；若胜者存在，则引擎层结果为 `WouldBlock`（实际 verdict 仍为 ACCEPT）。  
+
+说明：
+- enforce 规则永远优先于 would-drop（即使 would-drop `priority` 更高），否则 would-drop 可能“压过”真实策略并改变实际 verdict。
+- “每包最多 1 条 would-match”即由上述“子集内唯一胜者”保证；同优先级的 would-drop 重叠命中也必须通过稳定查询路径得到唯一胜者。
 
 ## 6. Preflight & limits
 `IPRULES.PREFLIGHT` 的 v1 最小输出 shape 固定为顶层对象，至少包含：
@@ -219,16 +235,17 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 ### 7.1 Suggested implementation sketch (correctness-first)
 > 本节为实现建议（非对外接口承诺），目的是降低落地时的并发/一致性踩坑概率。
 
-- **Stats 存储应独立于 snapshot**：`EngineSnapshot` 维持“匹配结构 immutable”，而每条规则的 `RuleRuntimeStats` 作为独立对象（或数组槽位）通过 `ruleId` / `runtimeSlot` 索引。
-- **UPDATE/ENABLE 的“stats 清零”以 publish 边界生效**：
-  - `IPRULES.UPDATE`：在控制面生成新规则定义时，同时生成**新的零值 stats**（或将该 ruleId 的 stats 清零），并确保新 snapshot 引用新 stats（或指向已清零的 slot），再执行 atomic publish。
-  - `IPRULES.ENABLE 0→1`：在将规则重新纳入 active ruleset 之前先清零 stats，并在 publish 后开始计数，避免“旧命中混入新语义”。
-- **IPRULES.PRINT 始终读取“控制面当前规则视图”的 stats**：实现上推荐 `ruleId -> RuleState{def, enabled, statsPtr}`；`PRINT` 读取 `statsPtr` 的原子计数并输出。旧 snapshot 即使还在被并发读线程引用，也只能更新旧 stats，不影响“当前规则视图”的清零语义。
-- **exact-decision cache 与 stats**：cache entry 必须绑定 `rulesEpoch`；只有 epoch 匹配时才允许复用 cached decision 并更新对应规则 stats，避免对已失效规则集计数。
+- **Stats 存储应独立于 snapshot（以便保留未变更规则的历史 stats）**：推荐维护控制面视图 `ruleId -> RuleState{def, enabled, statsPtr}`；编译后的 `ruleRef` 携带 `ruleId` 与热路径可直接更新的 `statsPtr`（raw pointer），并由 snapshot 持有 `shared_ptr` 以延长其生命周期。这样重编 snapshot 只会替换匹配结构，未变更规则的 stats 可自然延续。
+- **UPDATE/ENABLE 的“stats 清零”以 publish 边界生效（避免 in-flight 旧 snapshot 污染新 stats）**：
+  - `IPRULES.UPDATE` 生效：为该 `ruleId` 分配新的零值 `statsPtr` 并在控制面替换，再发布新 `rulesEpoch`/snapshot；旧 snapshot 仍指向旧 stats，但 `IPRULES.PRINT` 只读当前控制面视图，因此更新后立即可见清零。
+  - `IPRULES.ENABLE 0→1`：同样为该 `ruleId` 分配新的零值 `statsPtr` 并发布，避免禁用前历史命中混入重新启用后的观察。
+- **runtimeSlot/索引不得复用（ABA 规避）**：若实现选择使用 `runtimeSlot`（而非直接用 `ruleId`）索引 stats，则该 slot 在一次规则集生命周期内不得被新规则复用；否则并发读线程仍可能持有旧 snapshot 并更新到“复用后的新规则”。最简单的实现是令 `runtimeSlot == ruleId`，并配合 `nextRuleId` 单调递增（见持久化小节）。
+- **exact-decision cache 与 stats**：cache entry 必须绑定 `rulesEpoch`，并缓存最终归因信息（至少包含 `ruleId`/`wouldRuleId`）；只有 epoch 匹配时才允许复用 cached decision 并更新对应规则 stats，避免对已失效规则集计数。`rulesEpoch` 必须在每次规则集 apply（含 `RESETALL`）时单调递增，不得在进程生命周期内回退或重置。
 - **Bytes 口径**：`hitBytes/wouldHitBytes` 推荐计入“该包的全包长度”（NFQUEUE payload length / IPv4 packet bytes），与 `METRICS.REASONS` 的 bytes 口径保持一致。
 
 ## 8. Persistence & RESETALL
-- 新增持久化文件（实现阶段确定具体路径，推荐在 `/data/snort/save/system/` 下新增 `iprules` 文件）。
+- 新增持久化文件（实现阶段确定具体路径；为与现有 `settings.saveRules` 等全局 saver 一致，推荐使用 `/data/snort/save/iprules` 一类的全局文件路径）。
+- 持久化格式必须同时包含：rules 列表 + `nextRuleId`（下一个待分配的 `ruleId` 高水位计数器）。重启恢复时必须以该计数器恢复分配状态，避免“删除最高 ruleId 后重启导致复用已删除 id”。
 - `RESETALL`：清空持久化记录、清空内存规则集并发布空 snapshot；后续重启应保持为空状态，不再恢复旧规则；同时将后续分配使用的 `ruleId` 计数器重置到初始值。
 - 当前仓库尚未发版，因此本 change 不要求为既有发布版本设计迁移/兼容策略；实现阶段只需新增持久化字段，并保证当前开发期内规则定义与 `IPRULES` 全局开关的读写/恢复自洽。若未来出现已发布版本兼容需求，再以独立 change/实现决策补充迁移策略。
 
