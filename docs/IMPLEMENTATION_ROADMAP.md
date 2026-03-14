@@ -1,7 +1,9 @@
-# 当前实现 Roadmap（P0/P1/P2/P3）
+# 当前实现 Roadmap（Tooling + 功能主线）
 
 更新时间：2026-03-14  
-状态：当前共识；当前 `P0/P1/P2/P3` 只表示 **测试 / 集成验证 / 真机调试** 的工程化顺序，不表示功能实现阶段，也不授权推进 `A/B/C`、可观测性、`IPRULES` 等产品能力。
+状态：当前共识；本文包含两条不混用阶段号的主线：
+- `P0/P1/P2/P3`：只表示 **测试 / 集成验证 / 真机调试** 的工程化顺序；
+- `A/B/C`：只表示 **可观测性分层**（见 `docs/OBSERVABILITY_WORKING_DECISIONS.md`），不表示测试/调试阶段号。
 
 ## 1. 当前主线顺序
 
@@ -43,7 +45,7 @@
 
 - `A/B/C`、可观测性、`IPRULES`、DomainPolicy 相关实现属于**独立功能主线**。
 - 这些功能 change 可以继续保留为独立 proposal / design / working decisions，但不得再复用 `P0/P1/P2/P3` 作为阶段编号，以免和测试 / 调试 roadmap 串线。
-- 若未来恢复功能主线，必须在 `P0 → P3` 完整收敛后另行排期，不得倒灌进当前 test / debug lane。
+- `P0 → P3` 已收敛；功能主线顺序见第 6 节，但仍不得倒灌进 test / debug lane。
 
 ## 5. 当前现状
 
@@ -53,3 +55,16 @@
 - `P3 真机原生 Debug / crash / LLDB`：独立 change 与真机入口脚本已完成，继续沿真机工作流使用 `LLDB` / `CodeLLDB` / tombstone symbolize 能力。
 - `VS Code/CMake` 开发者统一入口：已完成并归档（`openspec/changes/archive/2026-03-14-add-vscode-cmake-dev-workflow/`）；将 `P0/P1/P2` 以 `CTest` / VS Code Testing 方式暴露，并把 `P3` 真机调试收敛为 `F5` 工作流；对应 capability spec 为 `openspec/specs/vscode-cmake-development/spec.md`。
 - `docs/NATIVE_DEBUGGING_AND_TESTING.md` 是这条 test / debug 路线的权威补充文档。
+
+## 6. 功能主线顺序（可观测性 A/B/C + IPRULES）
+
+基于 `docs/OBSERVABILITY_WORKING_DECISIONS.md` 与 `docs/IP_RULE_POLICY_WORKING_DECISIONS.md` 的当前共识，推荐顺序如下：
+
+`A（Packet 判决层可观测性：add-pktstream-observability） → IPRULES v1（add-app-ip-l3l4-rules-engine，包含 C：per-rule stats） → B（DomainPolicy 层 counters：policySource） → ip-leak 融合 / IPv6 / 域名 per-rule（TBD）`
+
+说明（对应你提议的 “IP rule → C → B”）：
+- **A 必须先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 PKTSTREAM/metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
+- **C 不建议拆成独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 `add-app-ip-l3l4-rules-engine` change 内部按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
+- **B 可后置但不应长期拖欠**：它与 IPRULES 基本解耦，因此放在 IP 主线之后没问题；但建议在 IPRULES 主线落地后立刻补齐，避免域名侧长期缺乏默认可查的归因与 counters。
+
+> 注：`docs/INTERFACE_SPECIFICATION.md` 作为对外接口汇总，应在相关 change 合并并稳定后统一刷新，避免“接口文档先行”导致漂移。
