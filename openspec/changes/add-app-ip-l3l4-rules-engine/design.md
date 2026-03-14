@@ -217,7 +217,7 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 - since boot（进程内计数），不要求持久化；重启后归零。
 - 若需要跨重启保留/做长期分析，由前端周期性拉取并自行持久化；不在本 change 范围内。
 - 当规则被 `UPDATE` 覆盖为新定义并生效时，该规则的 runtime stats MUST 清零（避免旧命中混入新语义）；当前不保留修改前历史 state 的兼容语义。
-- 当规则从 `enabled=0` 重新切回 `enabled=1` 时，该规则的 runtime stats MUST 同样清零，避免禁用前的历史命中影响重新启用后的观察。
+- 当规则从 `enabled=0` 重新切回 `enabled=1` 时，该规则的 runtime stats MUST 同样清零，避免“禁用前（`enabled=1` 时）累计的历史命中”影响重新启用后的观察（禁用后计数不再增长但仍会保留；重新启用必须从 0 开始）。
 
 对外输出：
 - `IPRULES.PRINT` 的 v1 最小输出 shape 固定为顶层对象 `{"rules":[...]}`；即使当前无规则、或过滤后无命中，也返回 `{"rules":[]}`。

@@ -152,7 +152,7 @@
 - 统计只归因到“最终胜出规则”和“最终 would‑match 规则（若有）”，避免一包多记。
 - `enabled=0` 的规则不得更新任何 hit/wouldHit 计数。
 - 规则内容一旦被 `UPDATE` 改写并生效，其 runtime state（含 `hit*`/`wouldHit*`）必须直接清零；不保留旧语义下的历史 state。
-- 规则从 `enabled=0` 再次切回 `enabled=1` 时，其 runtime state 也必须清零，避免禁用前的历史命中干扰重新启用后的观察。
+- 规则从 `enabled=0` 再次切回 `enabled=1` 时，其 runtime state 也必须清零，避免“禁用前（`enabled=1` 时）累计的历史命中”干扰重新启用后的观察（禁用后计数不再增长但仍会保留在控制面视图中；重新启用必须从 0 开始）。
 
 ### 4.7 控制面输出契约（v1）
 - `IPRULES.PRINT` 固定返回顶层对象 `{"rules":[...]}`；即使当前无规则、或过滤后无命中，也返回 `{"rules":[]}`，而不是 `NOK`。

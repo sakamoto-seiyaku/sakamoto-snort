@@ -141,7 +141,7 @@ P0 仅保证以下最小集合能解释清楚：
 - `enabled=0` 的规则不得更新任何 runtime stats，也不得计入 active complexity。
 - 规则层面不存在“同一条规则既 allow 又 block”的混合语义；每条规则只有一个 action（ALLOW 或 BLOCK），再叠加 `enforce/log`。
 - 规则内容一旦被 UPDATE 改写并生效，其 runtime state/stats 直接清零；当前不需要为修改前的历史 state 保留兼容语义。
-- 规则若从 `enabled=0` 再次切回 `enabled=1`，其 runtime state/stats 也直接清零，避免历史命中延续到重新启用后的观测。
+- 规则若从 `enabled=0` 再次切回 `enabled=1`，其 runtime state/stats 也直接清零，避免“禁用前（`enabled=1` 时）累计的历史命中”延续到重新启用后的观测（禁用后计数不再增长但仍会保留；重新启用必须从 0 开始）。
 
 ---
 
