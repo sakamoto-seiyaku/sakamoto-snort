@@ -208,6 +208,13 @@ bash dev-native-debug.sh run
 bash dev-native-debug.sh vscode-attach
 ```
 
+说明：
+- `dev-native-debug.sh` 会自动进入 `LINEAGE_ROOT`、执行 `envsetup + lunch`，并优先使用 AOSP 预置 Python。
+- 对当前 `/data/local/tmp/sucre-snort-dev` 调试流，脚本会自动把 host 侧 `build-output/sucre-snort` 镜像到 `$ANDROID_PRODUCT_OUT/symbols/data/local/tmp/sucre-snort-dev`，避免 `lldbclient.py` 再从设备侧回拉临时二进制。
+- 对当前 APatch 真机，AOSP `lldbclient.py` 默认使用的 `su root <cmd>` 形式与设备行为不完全兼容；仓库内的 host-side wrapper 已统一改写为可工作的 `su -c` 调用。
+- 当 `adbd` 不是 root（当前生产签名 rooted 真机就是如此）时，wrapper 会把 `lldb-server` 的 transport 从默认的 Unix socket forward 切到 `tcp:<port>`，绕开 `localfilesystem:` 转发的权限问题。
+- `vscode-attach` / `vscode-run` 是“CLI 生成 + VS Code 最后一步启动”的模式：命令所在终端要保持打开，调试结束后回到该终端按一次回车收尾。
+
 #### tombstone / 符号化
 
 ```bash

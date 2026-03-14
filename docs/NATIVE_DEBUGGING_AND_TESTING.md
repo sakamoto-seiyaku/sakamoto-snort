@@ -212,33 +212,40 @@ lldbclient.py --port 5039 -r /data/local/tmp/sucre-snort-dev
 }
 ```
 
-### 第三步：在已经 `envsetup + lunch` 的 AOSP shell 中生成转发与配置
+### 第三步：优先使用仓库脚本生成转发与配置
+
+当前仓库已经把这一步收敛到 `dev/dev-native-debug.sh`，优先直接使用它，而不是手工拼 `lldbclient.py`：
 
 附加到正在运行的 daemon：
 
 ```bash
-lldbclient.py --setup-forwarding vscode-lldb \
-  --vscode-launch-file /home/js/Git/sucre/sucre-snort/.vscode/launch.json \
-  -p <PID>
+bash dev/dev-native-debug.sh vscode-attach --serial <serial>
 ```
 
 或者启动即调试：
 
 ```bash
-lldbclient.py --setup-forwarding vscode-lldb \
-  --vscode-launch-file /home/js/Git/sucre/sucre-snort/.vscode/launch.json \
-  -r /data/local/tmp/sucre-snort-dev
+bash dev/dev-native-debug.sh vscode-run --serial <serial>
 ```
+
+该脚本会额外处理当前真机工作流里的几个兼容点：
+
+- 自动进入 `LINEAGE_ROOT` 并执行 `envsetup + lunch`；
+- 优先使用 AOSP 预置 Python，避开 host `python3` 版本过低导致的 `lldbclient.py` 语法失败；
+- 对 `lineage_<device>` 这类 lunch target，自动做 `TARGET_PRODUCT` 与真机 `ro.build.product` 的兼容处理；
+- 对 `/data/local/tmp/sucre-snort-dev` 这类开发态二进制，自动把 host 侧 `build-output/sucre-snort` 镜像到 `$ANDROID_PRODUCT_OUT/symbols/data/local/tmp/sucre-snort-dev`，保证 `target create` 命中未剥离符号；
+- 对当前 APatch 真机，把 AOSP `lldbclient.py` 内部默认的 `su root <cmd>` 调用改写为可工作的 `su -c ...` 形式；
+- 当 `adbd` 不是 root 时，自动把 `lldb-server` transport 从默认的 Unix socket forward 切到 `tcp:<port>`，避免 `localfilesystem:` 转发被权限卡住。
 
 然后：
 
-- 保持这条 `lldbclient.py` 命令所在终端**不要退出**；
+- 保持这条 `dev-native-debug.sh` 命令所在终端**不要退出**；
 - 回到 VS Code，打开 Run and Debug；
 - 选择生成出的 LLDB 配置并按 `F5`。
 
 ### 第四步：结束调试
 
-根据 AOSP 官方文档，调试结束后回到运行 `lldbclient.py` 的那个终端，按一次回车结束会话即可。
+根据 AOSP 官方文档，调试结束后回到运行 `dev/dev-native-debug.sh`（其内部再调用 `lldbclient.py`）的那个终端，按一次回车结束会话即可。
 
 ---
 
