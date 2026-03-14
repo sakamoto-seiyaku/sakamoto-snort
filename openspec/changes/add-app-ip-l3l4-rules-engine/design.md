@@ -216,6 +216,17 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 实现约束：
 - 热路径只对“最终命中规则”和“最终 would-match 规则（若有）”做无锁原子更新（`atomic++ relaxed`）；不得新增锁/IO/分配。
 
+### 7.1 Suggested implementation sketch (correctness-first)
+> 本节为实现建议（非对外接口承诺），目的是降低落地时的并发/一致性踩坑概率。
+
+- **Stats 存储应独立于 snapshot**：`EngineSnapshot` 维持“匹配结构 immutable”，而每条规则的 `RuleRuntimeStats` 作为独立对象（或数组槽位）通过 `ruleId` / `runtimeSlot` 索引。
+- **UPDATE/ENABLE 的“stats 清零”以 publish 边界生效**：
+  - `IPRULES.UPDATE`：在控制面生成新规则定义时，同时生成**新的零值 stats**（或将该 ruleId 的 stats 清零），并确保新 snapshot 引用新 stats（或指向已清零的 slot），再执行 atomic publish。
+  - `IPRULES.ENABLE 0→1`：在将规则重新纳入 active ruleset 之前先清零 stats，并在 publish 后开始计数，避免“旧命中混入新语义”。
+- **IPRULES.PRINT 始终读取“控制面当前规则视图”的 stats**：实现上推荐 `ruleId -> RuleState{def, enabled, statsPtr}`；`PRINT` 读取 `statsPtr` 的原子计数并输出。旧 snapshot 即使还在被并发读线程引用，也只能更新旧 stats，不影响“当前规则视图”的清零语义。
+- **exact-decision cache 与 stats**：cache entry 必须绑定 `rulesEpoch`；只有 epoch 匹配时才允许复用 cached decision 并更新对应规则 stats，避免对已失效规则集计数。
+- **Bytes 口径**：`hitBytes/wouldHitBytes` 推荐计入“该包的全包长度”（NFQUEUE payload length / IPv4 packet bytes），与 `METRICS.REASONS` 的 bytes 口径保持一致。
+
 ## 8. Persistence & RESETALL
 - 新增持久化文件（实现阶段确定具体路径，推荐在 `/data/snort/save/system/` 下新增 `iprules` 文件）。
 - `RESETALL`：清空持久化记录、清空内存规则集并发布空 snapshot；后续重启应保持为空状态，不再恢复旧规则；同时将后续分配使用的 `ruleId` 计数器重置到初始值。

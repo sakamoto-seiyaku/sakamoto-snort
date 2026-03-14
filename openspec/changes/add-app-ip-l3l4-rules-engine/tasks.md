@@ -1,10 +1,10 @@
 ## 1. OpenSpec docs (this change)
-- [ ] 1.1 完成 `proposal.md/design.md/tasks.md` 与 capability spec delta（本目录下 `specs/`）
-- [ ] 1.2 `openspec validate add-app-ip-l3l4-rules-engine --strict` 通过
+- [x] 1.1 完成 `proposal.md/design.md/tasks.md` 与 capability spec delta（本目录下 `specs/`）
+- [x] 1.2 `openspec validate add-app-ip-l3l4-rules-engine --strict` 通过
 
 ## 2. Implementation gate (ordering)
 - [ ] 2.1 本 change 的代码实现以前，先确认 A 层基座（`add-pktstream-observability`）的字段/契约已可用或已同步落地：`reasonId/ruleId/wouldRuleId/wouldDrop/ipVersion/srcIp/dstIp` + `METRICS.REASONS`
-- [ ] 2.2 本 change 的实现顺序按 `docs/IMPLEMENTATION_ROADMAP.md` 执行：先 `IP rules core`，再 `C`（per-rule runtime stats），不要让 B 层 DomainPolicy counters 阻塞本 change 主线
+- [ ] 2.2 本 change 的实现顺序按 `docs/IMPLEMENTATION_ROADMAP.md` 执行：`IPRULES v1` **必须包含** per-rule runtime stats（可观测性 C 层），不得将 stats 作为独立 change/独立里程碑后置；同时不要让 B 层 DomainPolicy counters 阻塞本 change 主线
 
 ## 3. Control surface & rule model
 - [ ] 3.1 新增控制命令：`IPRULES`、`IFACES.PRINT`
@@ -33,7 +33,7 @@
 - [ ] 7.1 enforce 命中：按 `add-pktstream-observability` 契约填充 `reasonId=IP_RULE_ALLOW|IP_RULE_BLOCK` 与 `ruleId`
 - [ ] 7.2 log-only/would-block 命中：仅对 `action=BLOCK,enforce=0,log=1` 填充 `wouldRuleId` 与 `wouldDrop=1`；保持 `accepted=1` 且 `reasonId` 仍解释实际 verdict；同时保证每包最多 1 条 would-match（不改变 verdict）
 
-## 8. C layer: per-rule runtime stats
+## 8. Per-rule runtime stats（可观测性 C 层，v1 必需）
 - [ ] 8.1 实现 per-rule runtime stats（`hitPackets/hitBytes/lastHitTsNs` + `wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`，since boot 不持久化），并在 `IPRULES.PRINT` 输出 `stats`
 - [ ] 8.2 disabled rules 不得更新 stats，也不得进入 active complexity 口径
 - [ ] 8.3 规则 `UPDATE` 生效后必须清零该规则 stats；规则 `ENABLE 0→1` 时也必须清零该规则 stats
@@ -55,6 +55,6 @@
 - [ ] 10.9 行为：仅 `NoMatch` 回落到 legacy/domain，`Allow/Block/WouldBlock` 不再回落；当前不启用 `ip-leak` 合流语义
 - [ ] 10.10 行为：safety-mode would-block 归因正确；每包最多 1 条 would-match；would-block 不改变实际 verdict
 - [ ] 10.11 行为：disabled 规则不影响 verdict/PKTSTREAM/stats/preflight；同优先级重叠命中的唯一胜者在重复编译后保持稳定；增量 `UPDATE/ENABLE` 不改变既有 `ruleId`
-- [ ] 10.12 C 层：per-rule stats 归因正确；`UPDATE` 生效后清零该规则 stats；`ENABLE 0→1` 时也清零该规则 stats
+- [ ] 10.12 per-rule stats：归因正确；`UPDATE` 生效后清零该规则 stats；`ENABLE 0→1` 时也清零该规则 stats
 - [ ] 10.13 生命周期：`RESETALL` 后所有规则被彻底清空；后续新一轮规则集从初始 `ruleId = 0` 重开
 - [ ] 10.14 性能冒烟：规则 0/100/1000 下，在 cache hit-heavy 与 `NoMatch`-heavy 两类流量中 pps/CPU/队列 backlog 不显著回退；PKTSTREAM 关闭作为基线
