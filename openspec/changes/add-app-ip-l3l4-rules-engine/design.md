@@ -11,7 +11,7 @@
 - IPv6 新规则语义（IPv6 本期默认放行且不提示）。
 
 ## 1. Constraints (non-negotiable)
-- NFQUEUE 热路径：不得新增锁、不得做磁盘/网络 IO、不得做动态分配；只允许纯计算与只读快照查询。
+- 在现状基础上，NFQUEUE 热路径不得新增锁、不得新增磁盘/网络 IO、不得新增动态分配或其他阻塞点；只允许纯计算与只读快照查询。
 - 更新模型：控制面构建新快照并一次性发布（atomic publish），热路径只见旧/新之一，不存在中间态。
 - 可观测性：不新增通路，仅复用 `PKTSTREAM` + 轻量聚合统计；慢消费者可能反压是已知风险点。
 - 现有 `IFACE_BLOCK` 保持最高优先级 hard-drop；当前阶段不允许由 IP 规则覆盖。
@@ -70,6 +70,10 @@ kv 语法：每项为 `key=value` token（Control 的空格分词可直接支持
 - `sport=any|<0..65535>|<lo>-<hi>`
 - `dport=any|<0..65535>|<lo>-<hi>`
 - `ct`：当前 v1 不接受；若传入则返回 `NOK`
+
+字段语义（避免歧义）：
+- `src/dst` 与 `sport/dport` 均指数据包 IPv4/L4 头部字段（`saddr/daddr`、TCP/UDP `source/dest`）。
+- `dir=in|out` 仅表示包来自 `INPUT/OUTPUT` 链（入站/出站），不改变上述字段含义。
 
 补充约束：
 - 空规则集上的第一条规则使用初始 `ruleId = 0`；`ruleId` 在当前增量管理模型下使用从 `0` 开始的单调递增整数；`UPDATE` / `ENABLE` / `DISABLE` 不改变该规则 `ruleId`，`REMOVE` 后不复用已删除 id。

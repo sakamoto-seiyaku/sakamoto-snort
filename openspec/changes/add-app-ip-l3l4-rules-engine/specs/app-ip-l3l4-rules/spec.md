@@ -9,6 +9,8 @@
 - `src IPv4 CIDR` 与 `dst IPv4 CIDR`（`/0..32`）
 - `srcPort` 与 `dstPort`（any / 精确 / range）
 
+系统 MUST 将 `src/dst` 与 `srcPort/dstPort` 解释为数据包 IPv4/L4 头部字段（`saddr/daddr`、TCP/UDP `source/dest`）。`direction=in|out` 仅表示包来自 `INPUT/OUTPUT` 链（入站/出站），不改变上述字段含义。
+
 命中语义 MUST 全局确定：同一数据包在同一时刻命中多条规则时，系统 SHALL 先以 `priority` 为主键选取最高优先级候选；若同优先级仍有多条重叠命中，则 SHALL 由编译后的 classifier 稳定查询路径选出唯一命中规则。对同一份 active ruleset，重复编译后对同一包的唯一命中结果 MUST 保持一致。
 
 #### Scenario: Highest priority rule wins

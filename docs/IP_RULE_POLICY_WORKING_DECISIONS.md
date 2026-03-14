@@ -38,14 +38,14 @@
 
 辅助材料（调研/事实语义）：
 - `docs/P0P1_BACKEND_WORKING_DECISIONS.md`
-- `docs/IP_RULE_ENGINE_RESEARCH.md`
+- `docs/archived/IP_RULE_ENGINE_RESEARCH.md`
 
 ---
 
 ## 2. 决策原则（做取舍时的上位约束）
 
-1) **NFQUEUE 热路径不引入新锁/重 IO/动态分配**  
-热路径只允许纯计算、只读快照查询与固定维度的 `atomic++(relaxed)`。
+1) **在现状基础上，NFQUEUE 热路径不引入新的锁/重 IO/动态分配**  
+热路径只允许纯计算、只读快照查询与固定维度的 `atomic++(relaxed)`；不得新增阻塞点。
 
 2) **更新必须原子：snapshot + atomic publish（RCU 风格）**  
 热路径只能看到“旧或新”完整版本，不存在中间态；控制面在新快照上编译并一次性发布。
@@ -101,6 +101,10 @@
   - `src/dst IPv4 CIDR`（`/0..32`）
   - `src/dst port`（any / 精确 / range）
 - `ct`：当前 v1 不纳入控制面可配置语义；若客户端传入 `ct` 条件，控制面应直接拒绝，避免出现“看起来配置了、实际上不生效”的假语义
+
+匹配语义（避免歧义）：
+- `src/dst` 与 `srcPort/dstPort` 均指数据包 IPv4/L4 头部字段（`saddr/daddr`、TCP/UDP `source/dest`）。
+- `direction=in|out` 仅表示包来自 `INPUT/OUTPUT` 链（入站/出站），不改变上述字段含义。
 
 其中：
 - 当前 v1 控制面只接受数值 `uid`，不接受包名字符串 selector。
