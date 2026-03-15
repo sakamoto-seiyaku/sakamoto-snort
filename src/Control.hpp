@@ -64,6 +64,7 @@ private:
     // - activeStreams: number of active long-lived streams (DNS/packet/activity)
     //   associated with the current control connection.
     thread_local static inline bool quit = false;
+    thread_local static inline bool devShutdown = false;
     thread_local static inline uint32_t activeStreams = 0;
 
 public:
@@ -121,9 +122,17 @@ private:
 
     void cmdQuit(CmdParams &&params) const;
 
+    void cmdDevShutdown(CmdParams &&params) const;
+
     void cmdPassword(CmdParams &&params) const;
 
     void cmdPassState(CmdParams &&params) const;
+
+    void cmdPerfmetrics(CmdParams &&params) const;
+
+    void cmdMetricsPerf(CmdParams &&params) const;
+
+    void cmdMetricsPerfReset(CmdParams &&params) const;
 
     void cmdAppsByUid(CmdParams &&params) const;
 

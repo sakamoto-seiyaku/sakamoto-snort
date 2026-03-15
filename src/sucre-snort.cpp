@@ -11,6 +11,7 @@
 #include <sucre-snort.hpp>
 #include <Timer.hpp>
 #include <Settings.hpp>
+#include <PerfMetrics.hpp>
 #include <PacketListener.hpp>
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
@@ -30,6 +31,7 @@ PackageListener pkgListener;
 ActivityManager activityManager;
 DnsListener dnsListener;
 PacketManager pktManager;
+PerfMetrics perfMetrics;
 PacketListener<IPv4> pktListener4;
 PacketListener<IPv6> pktListener6;
 Control control;

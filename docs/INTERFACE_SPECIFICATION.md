@@ -1,8 +1,8 @@
 # sucre-snort 接口规范
 
-版本: v3.3
+版本: v3.4
 目标平台: Android 16, KernelSU
-更新时间: 2025-12-06
+更新时间: 2026-03-15
 
 ---
 
@@ -51,6 +51,9 @@
 - `PASSWORD [<str>]` | 查询/设置 | 当前密码或 `OK` | 设置时需双引号
 - `PASSSTATE [<int>]` | 查询/设置 | 当前状态或 `OK` | `uint8` 状态值
 - `RESETALL` | - | `OK` | 清空设置、统计、域名、规则、列表并持久化
+- `PERFMETRICS [<0|1>]` | 查询/设置 | 当前值或 `OK|NOK` | 运行时开关；默认 `0`；仅接受 `0|1`；`0→1` 自动清零；`1→1/0→0` 幂等不清零
+- `METRICS.PERF` | - | JSON 对象 | `{"perf":{"nfq_total_us":{...},"dns_decision_us":{...}}}`；单位 `us`；`PERFMETRICS=0` 时返回全 `0`
+- `METRICS.PERF.RESET` | - | `OK` | 清零 perf 聚合数据；不改变 `PERFMETRICS` 状态
 
 2.2 应用
 - `APP.UID [<uid|str>]` | 过滤可选 | App 数组 | 无参数列出所有用户的 App（按 UID 升序）；`USER <userId>` 仅该用户；`<uid>` 精确匹配；`<str>` 子串匹配（支持 `<str> <userId>` 简写）
@@ -198,6 +201,23 @@ Host 对象字段:
 特例：
 - `BLOCKMASK <uid|str>` / `BLOCKIFACE <uid|str>` 查询时，如未匹配应用，无响应（不发送任何字节）。
 - `APP.CUSTOMLISTS <uid|str>` 查询时，如未匹配应用，无响应（不发送任何字节）。
+
+2.12 可观测性（Perf）
+
+`METRICS.PERF` 返回固定 JSON shape（单位 `us`）：
+```json
+{
+  "perf": {
+    "nfq_total_us": {"samples":0,"min":0,"avg":0,"p50":0,"p95":0,"p99":0,"max":0},
+    "dns_decision_us": {"samples":0,"min":0,"avg":0,"p50":0,"p95":0,"p99":0,"max":0}
+  }
+}
+```
+
+字段定义（当 `samples>0`）：
+- `avg = floor(sum(values) / samples)`
+- `p50/p95/p99` 使用 nearest-rank 百分位数定义：令样本排序为 `x[1..N]`（`N=samples`），则 `pXX = x[ceil(XX/100*N)]`；实现采用 histogram 近似时，返回“首次达到 rank 的最小 bucket upper bound”。
+- `p50/p95/p99` 可能受 buckets 上界影响而被 clamp；`min/avg/max` 始终基于真实样本值计算。
 
 ---
 

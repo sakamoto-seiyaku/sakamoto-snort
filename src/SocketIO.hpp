@@ -31,6 +31,8 @@ public:
         return _lastWrite.load(std::memory_order_relaxed);
     }
 
+    int fd() const { return _socket; }
+
 private:
     static void format(std::stringstream &in, std::stringstream &out);
 };

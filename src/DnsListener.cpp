@@ -14,6 +14,7 @@
 #include <cerrno>
 
 #include <DnsListener.hpp>
+#include <PerfMetrics.hpp>
 
 DnsListener::DnsListener()
     : Streamable<DnsRequest>(settings.saveDnsStream) {}
@@ -179,6 +180,12 @@ void DnsListener::clientRun(const int socket) {
         const auto app = appManager.make(uid);
         const auto domain = domManager.make(std::move(host));
 
+        const bool measure = perfMetrics.enabled();
+        uint64_t startUs = 0;
+        if (measure) {
+            startUs = PerfMetrics::nowUs();
+        }
+
         // Decision must observe a consistent snapshot vs resetall. Keep the lock window tiny.
         bool blocked = false;
         Stats::Color cs = Stats::GREY;
@@ -194,6 +201,12 @@ void DnsListener::clientRun(const int socket) {
         }
         clientWrite(socket, &verdict, sizeof(verdict), "verdict write error");
         clientWrite(socket, &getips, sizeof(getips), "getips write error");
+
+        if (measure) {
+            const uint64_t endUs = PerfMetrics::nowUs();
+            perfMetrics.observeDnsDecisionUs(endUs - startUs);
+        }
+
         if (getips) {
             // Clear existing mappings under the global lock (short window) to quiesce vs resetall.
             {

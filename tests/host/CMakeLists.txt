@@ -40,6 +40,7 @@ function(add_sucre_snort_host_test target)
 endfunction()
 
 add_sucre_snort_host_test(package_state_tests package_state_tests.cpp)
+add_sucre_snort_host_test(perf_metrics_tests perf_metrics_tests.cpp)
 add_sucre_snort_host_test(rule_tests rule_tests.cpp "${SUCRE_SNORT_ROOT}/src/Rule.cpp")
 add_sucre_snort_host_test(settings_tests settings_tests.cpp "${SUCRE_SNORT_ROOT}/src/Settings.cpp")
 add_sucre_snort_host_test(stats_tests stats_tests.cpp "${SUCRE_SNORT_ROOT}/src/Stats.cpp" "${SUCRE_SNORT_ROOT}/src/AppStats.cpp" "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp")

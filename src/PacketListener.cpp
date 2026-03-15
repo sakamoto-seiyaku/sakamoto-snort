@@ -12,6 +12,7 @@
 
 #include <CmdLine.hpp>
 #include <PacketListener.hpp>
+#include <PerfMetrics.hpp>
 
 template <class IP> PacketListener<IP>::PacketListener() {}
 
@@ -163,6 +164,14 @@ void PacketListener<IP>::sendVerdict(const uint32_t id, const uint32_t verdict) 
 }
 
 template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *data) {
+    (void)data;
+
+    const bool measure = perfMetrics.enabled();
+    uint64_t startUs = 0;
+    if (measure) {
+        startUs = PerfMetrics::nowUs();
+    }
+
     nlattr *attr[NFQA_MAX + 1] = {};
 
     if (nfq_nlmsg_parse(nlh, attr) < 0) {
@@ -175,10 +184,14 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     }
     const auto nfqHeader =
         static_cast<nfqnl_msg_packet_hdr *>(mnl_attr_get_payload(attr[NFQA_PACKET_HDR]));
+    const uint32_t packetId = ntohl(nfqHeader->packet_id);
     if (attr[NFQA_PAYLOAD] == nullptr) {
         // Cannot parse payload but we do have a packet id; accept to avoid queue stall.
         LOG(ERROR) << __FUNCTION__ << " - payload attribute not set";
-        sendVerdict(ntohl(nfqHeader->packet_id), NF_ACCEPT);
+        sendVerdict(packetId, NF_ACCEPT);
+        if (measure) {
+            perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+        }
         return MNL_CB_OK;
     }
 
@@ -187,7 +200,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     // Basic length guards: must at least contain the IP header of this family.
     if (payloadLen < sizeof(typename IP::Header)) {
         LOG(ERROR) << __FUNCTION__ << " - payload length too short";
-        sendVerdict(ntohl(nfqHeader->packet_id), NF_ACCEPT);
+        sendVerdict(packetId, NF_ACCEPT);
+        if (measure) {
+            perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+        }
         return MNL_CB_OK;
     }
 
@@ -197,7 +213,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     // Validate computed IP header length (e.g. IPv4 ihl field) against payload bounds.
     if (iphdrLen < sizeof(typename IP::Header) || iphdrLen > payloadLen) {
         LOG(ERROR) << __FUNCTION__ << " - invalid IP header length";
-        sendVerdict(ntohl(nfqHeader->packet_id), NF_ACCEPT);
+        sendVerdict(packetId, NF_ACCEPT);
+        if (measure) {
+            perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+        }
         return MNL_CB_OK;
     }
     uint32_t len = payloadLen - iphdrLen;
@@ -229,7 +248,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         if (len < sizeof(tcphdr)) {
             // Not enough to contain TCP header; reject malformed L4 per original policy.
             LOG(ERROR) << __FUNCTION__ << " - TCP header too short";
-            sendVerdict(ntohl(nfqHeader->packet_id), NF_DROP);
+            sendVerdict(packetId, NF_DROP);
+            if (measure) {
+                perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+            }
             return MNL_CB_OK;
         }
         {
@@ -237,7 +259,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
             const uint32_t tcpHdrLen = static_cast<uint32_t>(tcp->doff) * 4;
             if (tcp->doff < 5 || tcpHdrLen > len) {
                 LOG(ERROR) << __FUNCTION__ << " - invalid TCP header length";
-                sendVerdict(ntohl(nfqHeader->packet_id), NF_DROP);
+                sendVerdict(packetId, NF_DROP);
+                if (measure) {
+                    perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+                }
                 return MNL_CB_OK;
             }
             srcPort = ntohs(tcp->source);
@@ -253,7 +278,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
             len -= sizeof(udphdr);
         } else {
             LOG(ERROR) << __FUNCTION__ << " - UDP header too short";
-            sendVerdict(ntohl(nfqHeader->packet_id), NF_DROP);
+            sendVerdict(packetId, NF_DROP);
+            if (measure) {
+                perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+            }
             return MNL_CB_OK;
         }
         break;
@@ -278,8 +306,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
                                                IP::payloadProto(ip), srcPort, dstPort, payloadLen);
     }
 
-    sendVerdict(ntohl(nfqHeader->packet_id), verdict ? NF_ACCEPT : NF_DROP);
-
+    sendVerdict(packetId, verdict ? NF_ACCEPT : NF_DROP);
+    if (measure) {
+        perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+    }
     return MNL_CB_OK;
 }
 

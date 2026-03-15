@@ -26,6 +26,7 @@
 #include <Settings.hpp>
 #include <Rule.hpp>
 #include <Control.hpp>
+#include <PerfMetrics.hpp>
 #include <BlockingListManager.hpp>
 #include <BlockingList.hpp>
 
@@ -60,9 +61,13 @@ Control::Control() {
     _cmds.emplace("HELLO", make(&Control::cmdHello));
     _cmds.emplace("HELP", make(&Control::cmdHelp));
     _cmds.emplace("QUIT", make(&Control::cmdQuit));
+    _cmds.emplace("DEV.SHUTDOWN", make(&Control::cmdDevShutdown));
     _cmds.emplace("PASSWORD", make(&Control::cmdPassword));
     _cmds.emplace("PASSSTATE", make(&Control::cmdPassState));
     _cmds.emplace("RESETALL", make(&Control::cmdResetAll));
+    _cmds.emplace("PERFMETRICS", make(&Control::cmdPerfmetrics));
+    _cmds.emplace("METRICS.PERF", make(&Control::cmdMetricsPerf));
+    _cmds.emplace("METRICS.PERF.RESET", make(&Control::cmdMetricsPerfReset));
     _cmds.emplace("APP.NAME", make(&Control::cmdAppsByName));
     _cmds.emplace("APP.UID", make(&Control::cmdAppsByUid));
     _cmds.emplace("APP.CUSTOMLISTS", make(&Control::cmdAppCustomLists));
@@ -364,6 +369,7 @@ void Control::clientLoop(const int sockClient) const {
     SocketIO::Ptr _sockio = std::make_shared<SocketIO>(sockClient);
     // Reset per-thread state for this client connection.
     quit = false;
+    devShutdown = false;
     activeStreams = 0;
 
     // Apply a receive timeout so that completely idle non-stream clients
@@ -422,6 +428,9 @@ void Control::clientLoop(const int sockClient) const {
             if (!_sockio->print(out, pretty)) {
                 LOG(ERROR) << __FUNCTION__ << " - control socket write error";
                 break;
+            }
+            if (devShutdown) {
+                snortSave(true); // will std::exit
             }
             if (quit) {
                 break;
@@ -641,6 +650,30 @@ void Control::cmdHello(CmdParams &&params) const { ack(params.out); }
 
 void Control::cmdQuit(CmdParams &&params) const { quit = true; }
 
+void Control::cmdDevShutdown(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    const int fd = params.sockio ? params.sockio->fd() : -1;
+    ucred cred{};
+    socklen_t credLen = sizeof(cred);
+    if (fd < 0 || getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &credLen) != 0) {
+        nack(params.out);
+        return;
+    }
+    // DEV.* commands are reserved for adb / root workflows.
+    if (cred.uid != 0 && cred.uid != 2000) { // root / shell
+        nack(params.out);
+        return;
+    }
+
+    devShutdown = true;
+    ack(params.out);
+}
+
 void Control::cmdPassword(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
@@ -675,10 +708,69 @@ void Control::cmdPassState(CmdParams &&params) const {
     }
 }
 
+void Control::cmdPerfmetrics(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1) {
+        nack(params.out);
+        return;
+    }
+
+    const auto &arg = args[0];
+    if (arg.type == CmdArg::NONE) {
+        params.out << (perfMetrics.enabled() ? 1 : 0);
+        return;
+    }
+
+    if (arg.type != CmdArg::INT || (arg.number != 0 && arg.number != 1)) {
+        nack(params.out);
+        return;
+    }
+
+    perfMetrics.setEnabled(arg.number == 1);
+    ack(params.out);
+}
+
+void Control::cmdMetricsPerf(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    const auto snap = perfMetrics.snapshotForControl();
+
+    const auto printOne = [&](const PerfMetrics::Summary &s) {
+        params.out << "{"
+                   << JSF("samples") << s.samples << "," << JSF("min") << s.min << ","
+                   << JSF("avg") << s.avg << "," << JSF("p50") << s.p50 << ","
+                   << JSF("p95") << s.p95 << "," << JSF("p99") << s.p99 << ","
+                   << JSF("max") << s.max << "}";
+    };
+
+    params.out << "{" << JSF("perf") << "{";
+    params.out << JSF("nfq_total_us");
+    printOne(snap.nfq_total_us);
+    params.out << "," << JSF("dns_decision_us");
+    printOne(snap.dns_decision_us);
+    params.out << "}}";
+}
+
+void Control::cmdMetricsPerfReset(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    perfMetrics.reset();
+    ack(params.out);
+}
+
 void Control::cmdResetAll(CmdParams &&params) const {
     ack(params.out);
     LOG(INFO) << "Resetting all";
     // Note: exclusive mutexListeners lock is already held by the command loop caller
+    perfMetrics.resetAll();
     settings.reset();
     // Clear all per-user save directories before resetting modules
     Settings::clearSaveTreeForResetAll();
@@ -1425,7 +1517,8 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "  BLACKRULES.*, WHITERULES.*, APP.CUSTOMLISTS\r\n"
         << "\r\n"
         << "Commands NOT supporting USER clause (global or UID-only):\r\n"
-        << "  RESETALL, DNSSTREAM.*, PKTSTREAM.*, ACTIVITYSTREAM.*,\r\n"
+        << "  RESETALL, PERFMETRICS, METRICS.PERF, METRICS.PERF.RESET,\r\n"
+        << "  DNSSTREAM.*, PKTSTREAM.*, ACTIVITYSTREAM.*,\r\n"
         << "  TOPACTIVITY (accepts <uid> only, not <str>),\r\n"
         << "  BLOCKLIST.*, RULES.*, ALL<v>, DNS<v>, RXP<v>, RXB<v>, TXP<v>, TXB<v>\r\n"
         << "    For these commands, any \"USER <userId>\" tokens are not interpreted as\r\n"
@@ -1441,6 +1534,9 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "PASSWORD [<str>]: prints or sets password.\r\n"
         << "PASSSTATE [<int>]: prints or sets password protection state.\r\n"
         << "RESETALL: resets all settings and data (statistics, domains, ...).\r\n"
+        << "PERFMETRICS [<0|1>]: prints or sets D-layer perf metrics collection toggle.\r\n"
+        << "METRICS.PERF: prints a perf metrics JSON snapshot (us).\r\n"
+        << "METRICS.PERF.RESET: clears perf metrics aggregates.\r\n"
         << "\r\n"
 
         << "***\r\n"
