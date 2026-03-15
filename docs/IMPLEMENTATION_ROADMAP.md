@@ -13,7 +13,7 @@
 - 集成测试 / 真机回归：见 `tests/integration/`
   - baseline：`tests/integration/run.sh`
   - 平台专项 smoke / compatibility：`tests/integration/device-smoke.sh`
-  - perf baseline：`tests/integration/perf-nfq-latency.sh`
+  - perf baseline：`tests/integration/perf-network-load.sh`
   - 协议全量回归：`tests/integration/full-smoke.sh`（更广，但不替代 smoke）
 - 真机原生调试（LLDB / VS Code + CodeLLDB）：见 `docs/VSCODE_CMAKE_WORKFLOW.md`
 

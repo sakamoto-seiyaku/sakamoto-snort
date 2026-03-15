@@ -7,7 +7,7 @@
 repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
 - `p1-baseline`（baseline integration；历史命名）
 - `p2-device-smoke`（platform smoke；历史命名）
-- `perf-nfq-latency`（perf baseline）
+- `perf-network-load`（perf baseline；网络下载触发 NFQ/D 端采样）
 
 对应到底层脚本仍然是：
 - `tests/integration/run.sh`
@@ -16,8 +16,8 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
 - `tests/integration/device-smoke.sh`
   - rooted 真机平台 smoke / compatibility
   - 覆盖 root/preflight、socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC、lifecycle restart
-- `tests/integration/perf-nfq-latency.sh`
-  - 真机 perf baseline：通过 NFQUEUE 路径跑 ICMP 流量，输出 RTT 分位数与 NFQUEUE drop 变化（JSON）
+- `tests/integration/perf-network-load.sh`
+  - 真机 perf baseline：在设备侧用 `curl`/`wget`（若无则尝试 `toybox wget`）对稳定 URL 做 download，产生真实网络 I/O 负载，并读取 `METRICS.PERF`（JSON）
 - `tests/integration/full-smoke.sh`
   - 更广的控制协议冒烟回归
   - 不替代 rooted 真机平台 smoke
@@ -38,14 +38,17 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
 ## 示例
 
 ```bash
+# 首次使用先生成 repo-root CMake workspace
+cmake --preset dev-debug
+
 # Baseline integration（repo-root CTest 入口；label `p1` 为历史命名）
-cd build-output/cmake/p12 && ctest --output-on-failure -L p1
+cd build-output/cmake/dev-debug && ctest --output-on-failure -L p1
 
 # Rooted platform smoke（repo-root CTest 入口；label `p2` 为历史命名）
-cd build-output/cmake/p12 && ctest --output-on-failure -L p2
+cd build-output/cmake/dev-debug && ctest --output-on-failure -L p2
 
-# Perf baseline（repo-root CTest 入口）
-cd build-output/cmake/p12 && ctest --output-on-failure -L perf
+# Perf baseline
+cd build-output/cmake/dev-debug && ctest --output-on-failure -L perf
 
 # 继续直接调用底层脚本也可以
 bash tests/integration/run.sh --skip-deploy --group core,config,app,streams
