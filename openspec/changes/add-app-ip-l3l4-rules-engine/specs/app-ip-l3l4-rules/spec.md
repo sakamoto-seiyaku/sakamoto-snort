@@ -26,6 +26,10 @@
 ### Requirement: Current v1 control surface is uid-only and rejects unsupported match dimensions
 系统 MUST 将当前 v1 规则控制面限定为数值 `uid` 选择器；包名字符串 selector MUST NOT 作为本 change 的输入语义。系统 MUST 要求 `IPRULES.ADD` 创建规则时 `priority` 显式提供；缺失 `priority` 的创建请求 MUST 返回 `NOK`。对于 `enabled/enforce/log`，系统 MUST 将其 v1 缺省值固定为 `1/1/0`（仅适用于 `IPRULES.ADD` 创建时省略字段）。系统 MUST 将 `IPRULES.UPDATE` 定义为 patch/merge：仅更新请求中提供的 key；未提供的 key（包含 `priority`）MUST 保持原值（不得回落到缺省值）。系统 MUST 将 `enforce=0` 限定为 `action=BLOCK, log=1` 的 would-block safety-mode；其它 `enforce=0` 组合（例如 `action=ALLOW, enforce=0` 或 `enforce=0, log=0`）MUST 返回 `NOK`。系统 MUST 同时拒绝当前未纳入 v1 语义的控制面字段（例如 `ct`），避免出现“看起来已配置、实际上不生效”的假语义。系统 MUST NOT 将 `NFQA_CT`、内核 conntrack 元数据或用户态自研 full flow tracking 作为当前 v1 匹配语义成立的前提。
 
+控制面 MUST 为“输入合法性”保持严格与原子性：
+- 对 `IPRULES.ADD/UPDATE/REMOVE/ENABLE`，若输入包含未知 key、无法解析的值、或违反本 spec 的组合约束，则系统 MUST 返回 `NOK`。
+- 对上述返回 `NOK` 的请求，系统 MUST NOT 改变当前规则集（含 active snapshot 与持久化内容），且 `IPRULES.ADD` MUST NOT 消耗新的 `ruleId`（不得出现“失败的 ADD 也推进了 ruleId 计数器”的洞）。
+
 #### Scenario: Package-name selector is rejected
 - **GIVEN** 客户端尝试以包名字符串而非数值 `uid` 创建或查询规则
 - **WHEN** 控制面校验该请求
@@ -35,6 +39,14 @@
 - **GIVEN** 客户端尝试通过 `IPRULES.ADD` 创建规则，但未提供 `priority`
 - **WHEN** 控制面校验该请求
 - **THEN** 系统 SHALL 返回 `NOK`
+
+#### Scenario: Failed ADD is atomic and does not consume ruleId
+- **GIVEN** 当前无任何规则
+- **WHEN** 客户端调用 `IPRULES.ADD 10000 action=block`（缺失 `priority`）
+- **THEN** 返回值 SHALL 为 `NOK`
+- **AND** 后续 `IPRULES.PRINT` SHALL 返回 `{"rules":[]}`
+- **WHEN** 客户端调用 `IPRULES.ADD 10000 action=block priority=10`
+- **THEN** 返回值（`ruleId`）SHALL 为 `0`
 
 #### Scenario: Unsupported ct field is rejected
 - **GIVEN** 客户端尝试创建或更新规则，并传入 `ct=...`
@@ -66,37 +78,89 @@
 - **THEN** 后续客户端调用 `IPRULES.PRINT RULE R` 时，该规则对象 SHALL 仍体现 `log=1`
 - **AND** 该规则对象 SHALL 体现 `dport=443`
 
+### Requirement: Omitted match fields default to ANY and are normalized
+系统 MUST 允许在 `IPRULES.ADD` 省略除 `action/priority` 以外的 match 字段；省略时控制面 MUST 归一化为 `any`，并在 `IPRULES.PRINT` 中按归一化值输出。最小归一化集合至少包括：
+- `dir=any`
+- `iface=any`
+- `ifindex=0`（表示 any）
+- `proto=any`
+- `src=any`
+- `dst=any`
+- `sport=any`
+- `dport=any`
+
+系统 MUST 将控制面输入中的 `ifindex=0` 视为 `ifindex=any` 的同义。
+
+系统 MUST 拒绝会产生“看起来配置了但永远不匹配”的假语义：当 `proto=icmp` 时，`sport/dport` MUST 为 `any`；否则 `IPRULES.ADD/UPDATE` MUST 返回 `NOK`。
+
+#### Scenario: Omitted match fields normalize to ANY on PRINT
+- **GIVEN** 客户端通过 `IPRULES.ADD` 创建规则时仅提供 `action/priority`（未提供 match 字段），并获得返回的 `ruleId=R`
+- **WHEN** 客户端调用 `IPRULES.PRINT RULE R` 查看该规则
+- **THEN** 返回的该规则对象 SHALL 体现 `dir=any`
+- **AND** 返回的该规则对象 SHALL 体现 `iface=any`
+- **AND** 返回的该规则对象 SHALL 体现 `ifindex=0`
+- **AND** 返回的该规则对象 SHALL 体现 `proto=any`
+- **AND** 返回的该规则对象 SHALL 体现 `src=any`
+- **AND** 返回的该规则对象 SHALL 体现 `dst=any`
+- **AND** 返回的该规则对象 SHALL 体现 `sport=any`
+- **AND** 返回的该规则对象 SHALL 体现 `dport=any`
+
+#### Scenario: ifindex=0 is accepted as ANY
+- **GIVEN** 客户端通过 `IPRULES.ADD` 创建规则，并显式提供 `ifindex=0`
+- **WHEN** 控制面校验该请求
+- **THEN** 系统 SHALL 接受该规则创建请求（不返回 `NOK`）
+
+#### Scenario: ICMP with non-any ports is rejected
+- **GIVEN** 客户端尝试创建或更新规则，且 `proto=icmp`
+- **AND** 同时提供 `sport` 或 `dport` 为非 `any`
+- **WHEN** 控制面校验该请求
+- **THEN** 系统 SHALL 返回 `NOK`
+
+### Requirement: Port predicates only apply to TCP/UDP packets
+系统 MUST 将 `sport/dport` 解释为 TCP/UDP 的 L4 头部字段。对于 `proto` 不是 `tcp` 也不是 `udp` 的数据包（例如 `icmp`），规则仅当 `sport=any` 且 `dport=any` 时才允许因端口维度通过匹配；若规则包含任一非 `any` 的端口约束，则该规则 MUST NOT 匹配该非 TCP/UDP 数据包（即使该规则的 `proto=any`）。
+
+#### Scenario: ICMP does not match proto=any rule with port constraint
+- **GIVEN** `BLOCK=1` 且 `IPRULES=1`
+- **AND** 存在一条规则 `R`，其 `proto=any` 且 `dport=53`（其余字段均为 any，且该规则 `enforce=1`）
+- **WHEN** NFQUEUE 收到一个 `proto=icmp` 的 IPv4 数据包
+- **THEN** PKTSTREAM SHALL NOT 包含来自该规则的 `ruleId`
+- **AND** 若该事件包含 `reasonId`，则其 SHALL NOT 为 `IP_RULE_ALLOW` 或 `IP_RULE_BLOCK`
+
 ### Requirement: Rule actions include ALLOW and BLOCK
-系统 MUST 支持规则动作 `ALLOW` 与 `BLOCK`。当数据包未命中更高优先级硬原因、且 IP 规则引擎启用并命中：
+系统 MUST 支持规则动作 `ALLOW` 与 `BLOCK`。当 `BLOCK=1` 且数据包未命中更高优先级硬原因、且 IP 规则引擎启用并命中：
 - `ALLOW` SHALL 使该包最终 verdict 为 ACCEPT
 - `BLOCK` SHALL 使该包最终 verdict 为 DROP
 
 #### Scenario: ALLOW rule accepts a packet
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 存在一条命中该包的 `ALLOW` 规则
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 ACCEPT
 
 #### Scenario: BLOCK rule drops a packet
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 存在一条命中该包的 `BLOCK` 规则
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 DROP
 
 ### Requirement: Enforce hits are attributed in PKTSTREAM
-当数据包未命中更高优先级硬原因、且 `IPRULES=1` 下最终由某条 `enforce=1` 规则决定实际 verdict 时，系统 MUST 在 PKTSTREAM 中输出与该实际 verdict 一致的 `reasonId`，并输出唯一胜出规则的 `ruleId`：
+当 `BLOCK=1` 且数据包未命中更高优先级硬原因、且 `IPRULES=1` 下最终由某条 `enforce=1` 规则决定实际 verdict 时，系统 MUST 在 PKTSTREAM 中输出与该实际 verdict 一致的 `reasonId`，并输出唯一胜出规则的 `ruleId`：
 - `ALLOW` 命中时，`reasonId` SHALL 为 `IP_RULE_ALLOW`
 - `BLOCK` 命中时，`reasonId` SHALL 为 `IP_RULE_BLOCK`
 
 #### Scenario: Enforce ALLOW emits IP_RULE_ALLOW and ruleId
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 某条 `ALLOW,enforce=1` 规则作为最终胜出规则命中该包
 - **WHEN** 系统输出该包的 PKTSTREAM 事件
 - **THEN** 事件 SHALL 包含该规则的 `ruleId`
 - **AND** `reasonId` SHALL 为 `IP_RULE_ALLOW`
 
 #### Scenario: Enforce BLOCK emits IP_RULE_BLOCK and ruleId
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 某条 `BLOCK,enforce=1` 规则作为最终胜出规则命中该包
 - **WHEN** 系统输出该包的 PKTSTREAM 事件
 - **THEN** 事件 SHALL 包含该规则的 `ruleId`
@@ -136,51 +200,75 @@
 - **THEN** 该新规则 SHALL 分配到 `ruleId=3`（不得复用已删除的 `2`）
 
 ### Requirement: IFACE_BLOCK remains the highest-priority hard drop
-系统 MUST 保持 `IFACE_BLOCK` 为高于 IP 规则引擎的 hard-drop 原因。命中 `IFACE_BLOCK` 时，系统 SHALL 直接 DROP，并 SHALL NOT 让 `ALLOW`/`BLOCK`/would-match 改写该包的实际原因，也 SHALL NOT 输出来自 IP 规则引擎的 `ruleId`/`wouldRuleId` 归因。
+系统 MUST 保持 `IFACE_BLOCK` 为高于 IP 规则引擎的 hard-drop 原因。在 `BLOCK=1` 时命中 `IFACE_BLOCK`，系统 SHALL 直接 DROP，并 SHALL NOT 让 `ALLOW`/`BLOCK`/would-match 改写该包的实际原因，也 SHALL NOT 输出来自 IP 规则引擎的 `ruleId`/`wouldRuleId` 归因。
 
 #### Scenario: ALLOW rule cannot override IFACE_BLOCK
-- **GIVEN** 某包命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** 某包命中 `IFACE_BLOCK`
 - **AND** 该包也命中一条 `ALLOW` 的 IP 规则
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 DROP
 - **AND** 该包的实际 `reasonId` SHALL 为 `IFACE_BLOCK`
 - **AND** PKTSTREAM SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
 
-### Requirement: Only NoMatch falls through to legacy/domain
-当数据包未命中 `IFACE_BLOCK`、`IPRULES=1` 且当前 active ruleset 中没有任何规则命中时，系统 MUST 将其视为 IP 规则层 `NoMatch`；该层 SHALL NOT 产生 `ruleId`、`wouldRuleId` 或 `IP_RULE_*` 归因，并 SHALL 允许该包继续进入后续 legacy/domain 路径。相对地，当 IP 规则引擎结果为 `Allow`、`Block` 或 `WouldBlock` 时，系统 SHALL NOT 再回落到 legacy/domain 路径。该 change 不定义 `NoMatch` 之后 legacy/domain 路径的详细判决语义。
+### Requirement: Only enforce ALLOW/BLOCK short-circuit legacy/domain
+当 `BLOCK=1` 且 `IPRULES=1` 时，系统 MUST 遵循以下判决边界：
+- 若某条 `enforce=1` 规则作为最终胜出规则命中，则系统 SHALL 使用该规则决定实际 verdict（`ALLOW`→ACCEPT，`BLOCK`→DROP），并 SHALL NOT 再回落到 legacy/domain 路径。
+- 若不存在任何 `enforce=1` 的最终命中，则系统 SHALL 继续进入 legacy/domain 路径；此时 IP 规则层可能给出 `NoMatch` 或 `WouldBlock` overlay 候选，但二者都 SHALL NOT 短路 legacy/domain。
+
+其中：
+- `NoMatch` 表示 IP 规则层无任何命中；该层 SHALL NOT 产生 `ruleId`、`wouldRuleId` 或 `IP_RULE_*` 归因。
+- `WouldBlock` 表示存在 would-drop overlay 候选（`action=BLOCK,enforce=0,log=1` 的最终胜出规则）；其不得改变系统最终 verdict，且仅当最终 verdict 为 ACCEPT 时才允许输出 would-match（`wouldRuleId/wouldDrop`）。
+
+该 change 不定义 legacy/domain 路径的详细判决语义。
 
 #### Scenario: No matching IP rule yields no IP-rule attribution and falls through
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 当前 active ruleset 中没有任何规则命中该包
 - **WHEN** NFQUEUE 收到该包
 - **THEN** PKTSTREAM SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
 - **AND** 若该事件包含 `reasonId`，则其 SHALL NOT 为 `IP_RULE_ALLOW` 或 `IP_RULE_BLOCK`
 - **AND** 该包 SHALL 继续进入后续 legacy/domain 路径
 
-#### Scenario: Would-block does not fall through to legacy/domain
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
-- **AND** 某条 `action=BLOCK,enforce=0,log=1` 规则作为最终 would-match 命中该包
+#### Scenario: Would-block is an overlay and still falls through to legacy/domain
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 某条 `action=BLOCK,enforce=0,log=1` 规则作为最终 would-drop overlay 候选命中该包
 - **WHEN** NFQUEUE 收到该包
-- **THEN** 系统 SHALL 返回 ACCEPT
-- **AND** 该包 SHALL NOT 再进入后续 legacy/domain 路径
+- **THEN** 该包 SHALL 继续进入后续 legacy/domain 路径（不被 would-block 短路）
 
 ### Requirement: Per-rule safety-mode via enforce/log (would-match)
 系统 MUST 为规则提供 `enforce` 与 `log` 控制，其中当前 safety-mode 仅适用于 `BLOCK` 规则：
 - `enforce=1`：命中时按 `ALLOW/BLOCK` 实际执行
-- `action=BLOCK, enforce=0, log=1`：表示 would-block；仅当该包未被任何 `enforce=1` 规则作为最终命中接管时，才产生 **would-match** 可观测结果；其命中不得改变 IP 规则引擎本身给出的实际 verdict
+- `action=BLOCK, enforce=0, log=1`：表示 would-block；仅当该包未被任何 `enforce=1` 规则作为最终命中接管时，才产生 **would-match** 可观测结果；其命中不得改变系统最终 verdict，仅用于观测 overlay；并且仅当最终 verdict 为 ACCEPT 时才允许输出 would-match
 - 控制面 MUST 拒绝其他 `enforce=0` 组合（包括 `action=ALLOW, enforce=0` 与 `enforce=0, log=0`）
 
 `enforce=0` 的 would-match 事件在 `PKTSTREAM` 中每包最多输出 1 条（包含 `wouldRuleId` 与 `wouldDrop=1`）。
 
 #### Scenario: Would-block does not drop the packet
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 存在一条命中该包的规则，且 `action=BLOCK`、`enforce=0`、`log=1`
+- **AND** 后续 legacy/domain 路径对该包最终 verdict 为 ACCEPT
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 ACCEPT
 - **AND** PKTSTREAM SHALL 输出该包的 would-match（包含该规则的 `wouldRuleId` 与 `wouldDrop=1`）
 
+#### Scenario: Would-block is suppressed when final verdict is DROP
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **AND** 存在一条命中该包的规则，且 `action=BLOCK`、`enforce=0`、`log=1`（其 `ruleId` 为 W）
+- **AND** 该包未命中任何 `enforce=1` 的规则
+- **AND** 后续 legacy/domain 路径对该包最终 verdict 为 DROP
+- **WHEN** NFQUEUE 收到该包
+- **THEN** 系统 SHALL 返回 DROP
+- **AND** PKTSTREAM SHALL NOT 输出该包的 would-match（不得包含 `wouldRuleId` 或 `wouldDrop`）
+- **AND** 后续调用 `IPRULES.PRINT RULE W` 时，返回的 `stats.wouldHitPackets` SHALL 不增加
+
 #### Scenario: Enforce match suppresses would-match regardless of priority
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 存在一条命中该包的 `ALLOW,enforce=1` 规则
 - **AND** 同时存在一条也可命中的 `BLOCK,enforce=0,log=1` would-drop 规则（其 `priority` 更高）
 - **WHEN** NFQUEUE 收到该包
@@ -189,9 +277,11 @@
 - **AND** PKTSTREAM SHALL NOT 包含 `wouldRuleId`
 
 #### Scenario: Multiple would-drop candidates pick a single deterministic winner
-- **GIVEN** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 该包未命中任何 `enforce=1` 的规则
 - **AND** 存在两条均可命中的 would-drop 规则（`action=BLOCK,enforce=0,log=1`），且 `priority` 不同
+- **AND** 后续 legacy/domain 路径对该包最终 verdict 为 ACCEPT
 - **WHEN** NFQUEUE 收到该包
 - **THEN** PKTSTREAM SHALL 仅输出 1 个 `wouldRuleId`
 - **AND** 该 `wouldRuleId` SHALL 对应 `priority` 更高的那条规则
@@ -205,7 +295,8 @@
 系统 MUST 支持规则级 `enabled` 开关。`enabled=0` 的规则 MUST 继续保留在控制面、持久化与 `IPRULES.PRINT` 输出中，但 MUST NOT 参与 active snapshot、Packet 判决、PKTSTREAM `ruleId/wouldRuleId` 归因、runtime stats 更新或 `IPRULES.PREFLIGHT` 的 active complexity 统计。热路径对 disabled rules SHALL 仅承担“该规则不存在”同等成本。
 
 #### Scenario: Disabled rule does not affect packet or observability
-- **GIVEN** `IPRULES=1`
+- **GIVEN** `BLOCK=1`
+- **AND** `IPRULES=1`
 - **AND** 存在一条本可命中该包的规则，但其 `enabled=0`
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 不因该规则改变该包的 verdict
@@ -270,13 +361,47 @@
 - Packet 热路径 SHALL 不执行该引擎的 snapshot load/lookup；
 - 对外行为 SHALL 与未配置 IP 规则时一致（仅允许出现 `add-pktstream-observability` 已定义的新字段输出）。
 
+系统 MUST 通过控制面暴露命令 `IPRULES [<0|1>]`：
+- `IPRULES` MUST 在无参数时返回 `0|1`。
+- `IPRULES <0|1>` MUST 在成功设置时返回 `OK`，且 MUST 仅接受 `0` 或 `1`；其他参数 MUST 返回 `NOK`。
+- `IPRULES` 的设置语义 MUST 为幂等：`IPRULES 1→1` / `IPRULES 0→0` MUST NOT 产生除重复确认以外的副作用（例如不得触发 rulesEpoch 变化从而导致热路径 cache 全量失效）。
+- `IPRULES` 的默认值 MUST 为 `0`（全新启动/无持久化状态时默认关闭）。
+
 #### Scenario: Disabling IPRULES restores baseline behaviour
 - **GIVEN** 配置了可命中某包的 IP 规则
 - **WHEN** 将 `IPRULES` 设为 0 并再次发送该包
 - **THEN** 系统 SHALL 不再因该 IP 规则而改变该包的 verdict
 
+#### Scenario: IPRULES rejects invalid values
+- **WHEN** 客户端调用 `IPRULES 2`
+- **THEN** 返回值 SHALL 为 `NOK`
+
+### Requirement: Global BLOCK gates IPRULES and IFACE_BLOCK
+系统 MUST 遵循全局开关 `BLOCK`：当 `BLOCK=0` 时，IP 规则引擎与 `IFACE_BLOCK` MUST 不参与该包判决；即使存在可命中该包的 IP 规则或接口拦截条件，系统也 SHALL 返回 ACCEPT。并且该包 MUST NOT 触发 per-rule runtime stats 的更新。
+
+#### Scenario: BLOCK=0 bypasses enforce rules and does not update stats
+- **GIVEN** `BLOCK=0`
+- **AND** `IPRULES=1`
+- **AND** 存在一条可命中某 IPv4 包的 `BLOCK,enforce=1` 规则（其 `ruleId` 为 R）
+- **WHEN** 发送该 IPv4 包
+- **THEN** 系统 SHALL 返回 ACCEPT
+- **AND** 后续调用 `IPRULES.PRINT RULE R` 时，该规则的 `stats.hitPackets` SHALL 不增加
+- **AND** 后续调用 `IPRULES.PRINT RULE R` 时，该规则的 `stats.wouldHitPackets` SHALL 不增加
+
+#### Scenario: BLOCK=0 bypasses IFACE_BLOCK hard-drop
+- **GIVEN** `BLOCK=0`
+- **AND** 某 App/UID 配置了会在 `BLOCK=1` 时触发 `IFACE_BLOCK` 的接口拦截条件
+- **WHEN** NFQUEUE 收到该 App/UID 的数据包
+- **THEN** 系统 SHALL 返回 ACCEPT
+
 ### Requirement: IPRULES.PRINT returns a structured v1 rule list
 系统 MUST 将 `IPRULES.PRINT` 的当前 v1 输出固定为顶层 JSON 对象，并包含 key `rules`。即使当前无规则、或过滤后无命中，系统也 MUST 返回 `{"rules":[]}`，而不是 `NOK`。`rules` 数组 MUST 按 `ruleId` 升序输出。`rules` 数组中的每个 rule 对象 MUST 至少包含：`ruleId/uid/action/priority/enabled/enforce/log/dir/iface/ifindex/proto/src/dst/sport/dport/stats`。其中 `stats` 对象 MUST 至少包含 `hitPackets/hitBytes/lastHitTsNs/wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`。`ruleId/uid/priority/stats.*` MUST 使用 JSON number；`ifindex` 也 MUST 使用 JSON number，其中 `0` 表示“不限定精确 ifindex”；`enabled/enforce/log` MUST 使用 `0|1` JSON number，不得输出为 `true|false` 或带引号字符串。`action/dir/iface/proto` MUST 输出规范化 string token；`src/dst` MUST 输出规范化 string token（`any` 或标准 IPv4 CIDR 字符串）；`sport/dport` MUST 输出规范化 string token（`any`、单端口十进制字符串、或 `lo-hi`）。
+
+`IPRULES.PRINT` MUST 支持以下过滤参数（v1）：
+- `IPRULES.PRINT`：输出所有规则；
+- `IPRULES.PRINT UID <uid>`：仅输出该 `uid` 的规则；
+- `IPRULES.PRINT RULE <ruleId>`：仅输出该 `ruleId` 的规则（若不存在则输出空数组）；
+- `IPRULES.PRINT UID <uid> RULE <ruleId>`：仅当该规则同时满足两者时输出；否则输出空数组。
 
 #### Scenario: IPRULES.PRINT returns normalized rule objects
 - **GIVEN** 已存在至少一条规则
@@ -322,6 +447,7 @@
 - **GIVEN** 已配置至少一条 IP 规则
 - **WHEN** 客户端调用 `RESETALL`
 - **THEN** 后续 `IPRULES.PRINT` SHALL 返回 `{"rules":[]}`
+- **AND** 后续 `IPRULES` SHALL 返回 `0`
 - **AND** 后续重启 SHALL 不再恢复这些规则
 - **AND** 后续新规则集的第一条新规则 SHALL 从初始 `ruleId = 0` 重新开始分配
 

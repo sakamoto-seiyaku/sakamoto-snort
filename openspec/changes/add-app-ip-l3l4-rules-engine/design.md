@@ -28,9 +28,16 @@
   - 1：启用规则引擎。
 
 ### 3.2 Current verdict boundary
+- 全局 `BLOCK` 是总开关：当 `BLOCK=0` 时，本 change 引入的 `IFACE_BLOCK`/`IPRULES`/legacy/domain 判决均不执行（直接 ACCEPT；也不产生 would-match overlay）。
 - `IFACE_BLOCK` 保持在 IP 规则引擎之前执行，命中后直接 DROP；该预检查应尽量前移到 host/domain 等潜在慢路径之前。
-- 仅当数据包未命中 `IFACE_BLOCK` 且 `IPRULES=1` 时，才进入 IP 规则引擎的 fast path；其顺序固定为 `exact-decision cache -> classifier snapshot`。
-- `exact-decision cache` 只缓存 IP 规则引擎这一层的结果（`NoMatch/Allow/Block/WouldBlock`），不是整个系统最终 verdict cache；只有 `NoMatch` 才允许继续回落到 legacy/domain 路径。
+  - 该预检查只依赖 `uid`、`direction` 与 `ifindex`（以及 `ifindex -> ifaceKind` 的只读快照）；不得依赖 Host/Domain 对象、reverse DNS、磁盘/网络 IO 或任何锁等待。
+  - 为允许该检查前移到 `HostManager::make()` 之前，数据面必须在 NFQUEUE 回调早期拿到 `ifindex`：依赖 `INPUT/OUTPUT` 链提供的 `NFQA_IFINDEX_INDEV/NFQA_IFINDEX_OUTDEV`；若两者都缺失则 MUST fail-open（视为未命中 `IFACE_BLOCK`，避免误杀）。
+  - 接口分类快照必须可被非热路径主动刷新（启动时 prime + 被动刷新）。热路径最多允许 best-effort 的 try-lock + rate-limit 刷新，不得引入阻塞 IO。
+- 仅当 `BLOCK=1`、数据包未命中 `IFACE_BLOCK` 且 `IPRULES=1` 时，才进入 IP 规则引擎的 fast path；其顺序固定为 `exact-decision cache -> classifier snapshot`。
+- `exact-decision cache` 只缓存 IP 规则引擎这一层的结果（`NoMatch/Allow/Block/WouldBlock`），不是整个系统最终 verdict cache；其中：
+  - `Allow/Block`：作为最终 enforce 命中结果，短路后续 legacy/domain；
+  - `NoMatch`：允许回落到 legacy/domain；
+  - `WouldBlock`：仅表示 would-match overlay 候选，**不得**阻止后续 legacy/domain；且仅当最终 verdict 仍为 ACCEPT 时才允许输出 would-match（若后续 legacy/domain 最终为 DROP，则不得输出 would-match）。
 - `ip-leak` / `POLICY.ORDER` 不属于本 change；当前阶段相关后端路径不作为实现与验收前提。
 
 ### 3.3 Interface enumeration
@@ -64,12 +71,18 @@ kv 语法：每项为 `key=value` token（Control 的空格分词可直接支持
 - `iface=wifi|data|vpn|unmanaged|any`
 - `ifindex=<int>|any`
   - 控制面输出归一化时，`IPRULES.PRINT` 使用 numeric `ifindex`；其中 `0` 表示“不限定精确 ifindex”
+- 控制面输入允许 `ifindex=0` 作为 `ifindex=any` 的同义（便于 round-trip 与人工 copy/paste）。
 - `proto=tcp|udp|icmp|any`
 - `src=any|A.B.C.D/<0..32>`
 - `dst=any|A.B.C.D/<0..32>`
 - `sport=any|<0..65535>|<lo>-<hi>`
 - `dport=any|<0..65535>|<lo>-<hi>`
 - `ct`：当前 v1 不接受；若传入则返回 `NOK`
+
+除 `action/priority` 外，其余 match 字段在 `IPRULES.ADD` 时均允许省略；省略时控制面 SHALL 归一化为 `any`（例如 `dir=any, iface=any, ifindex=0, proto=any, src=any, dst=any, sport=any, dport=any`），并在 `IPRULES.PRINT` 中按该归一化值输出。
+
+补充约束（避免假语义）：
+- 当 `proto=icmp` 时，`sport/dport` MUST 为 `any`（否则返回 `NOK`）。
 
 `IPRULES.UPDATE` 语义（v1）：
 - 当前 v1 `IPRULES.UPDATE` 采用 patch/merge：仅更新请求中提供的 key；未提供的 key MUST 保持原值（不得回落到缺省值）。
@@ -112,7 +125,7 @@ kv 语法：每项为 `key=value` token（Control 的空格分词可直接支持
 - v1 的 exact cache 必须可在不依赖 `NFQA_CT`、内核 conntrack 元数据暴露或用户态自研 full flow tracking 的前提下独立成立。
 
 ### 4.3 PKTSTREAM observability contract
-PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcIp/dstIp` 等）由 `add-pktstream-observability` 定义。本引擎仅负责在命中时按该契约填充 `reasonId/ruleId`（enforce）与 `wouldRuleId/wouldDrop`（would-block log-only）；would-match 仅在该包无 `enforce=1` 最终命中时输出，并保证每包最多 1 条。
+PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcIp/dstIp` 等）由 `add-pktstream-observability` 定义。本引擎仅负责在命中时按该契约填充 `reasonId/ruleId`（enforce）与 `wouldRuleId/wouldDrop`（would-block log-only）；would-match 仅在该包无 `enforce=1` 最终命中时输出，并保证每包最多 1 条，且仅当最终 verdict 为 ACCEPT 时才允许输出（若后续 legacy/domain 最终为 DROP，则必须 suppress would-match）。
 
 约束：
 - `reasonId` 始终解释实际 verdict。
@@ -163,7 +176,7 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 为保证 “would-match 不改变实际 verdict” 且 “每包最多 1 条 would-match”，选择逻辑必须明确为两阶段：
 
 1) **先求 enforce 命中**：仅在 `enabled=1 && enforce=1` 的规则子集内，按 §5.5 的确定性规则选出唯一胜者；若胜者存在，则该包的引擎层结果为 `Allow/Block`，并禁止产生 would-match。  
-2) **仅当无 enforce 命中**：才在 `enabled=1 && action=BLOCK && enforce=0 && log=1` 的 would-drop 规则子集内，按 §5.5 的确定性规则选出唯一胜者；若胜者存在，则引擎层结果为 `WouldBlock`（实际 verdict 仍为 ACCEPT）。  
+2) **仅当无 enforce 命中**：才在 `enabled=1 && action=BLOCK && enforce=0 && log=1` 的 would-drop 规则子集内，按 §5.5 的确定性规则选出唯一胜者；若胜者存在，则引擎层产生 `WouldBlock` overlay 候选（**不 drop** 且 **不短路** legacy/domain），仅在最终 verdict 仍为 ACCEPT 时才允许输出 would-match。  
 
 说明：
 - enforce 规则永远优先于 would-drop（即使 would-drop `priority` 更高），否则 would-drop 可能“压过”真实策略并改变实际 verdict。
@@ -201,7 +214,7 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 - `limits.hard.maxSubtablesPerUid = 64`
 - `limits.hard.maxRangeRulesPerBucket = 64`
 
-超推荐：允许 apply 但返回 warning；超硬上限：拒绝 apply（`NOK` + report）。
+超推荐：允许 apply，但 `IPRULES.PREFLIGHT` 输出 warning；超硬上限：拒绝 apply（`NOK` + report）。
 
 ## 7. Per-rule runtime stats
 为每条规则维护：
@@ -210,7 +223,7 @@ PKTSTREAM 的 schema（`reasonId/ruleId/wouldRuleId/wouldDrop`、`ipVersion/srcI
 
 语义：
 - `hit*`：该规则作为最终 enforce 命中规则时更新（每包最多 1 条）。
-- `wouldHit*`：该规则作为最终 would-match（`action=BLOCK, enforce=0, log=1`，且无 enforce 命中）规则时更新（每包最多 1 条）。
+- `wouldHit*`：该规则作为最终 would-match（`action=BLOCK, enforce=0, log=1`，且无 enforce 命中）规则时更新（每包最多 1 条），并且仅当最终 verdict 为 ACCEPT 且最终输出 would-match 时才更新（避免后续 legacy/domain DROP 时产生“无效 would 计数”）。
 - `enabled=0` 的规则不得更新 `hit*`/`wouldHit*`。
 
 生命周期：

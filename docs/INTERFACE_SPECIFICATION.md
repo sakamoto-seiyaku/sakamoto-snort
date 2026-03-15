@@ -1,8 +1,8 @@
 # sucre-snort 接口规范
 
-版本: v3.4
+版本: v3.5
 目标平台: Android 16, KernelSU
-更新时间: 2026-03-15
+更新时间: 2026-03-16
 
 ---
 
@@ -55,7 +55,7 @@
 - `PERFMETRICS [<0|1>]` | 查询/设置 | 当前值或 `OK|NOK` | 运行时开关；默认 `0`；仅接受 `0|1`；`0→1` 自动清零；`1→1/0→0` 幂等不清零
 - `METRICS.PERF` | - | JSON 对象 | `{"perf":{"nfq_total_us":{...},"dns_decision_us":{...}}}`；单位 `us`；`PERFMETRICS=0` 时返回全 `0`
 - `METRICS.PERF.RESET` | - | `OK` | 清零 perf 聚合数据；不改变 `PERFMETRICS` 状态
-- `METRICS.REASONS` | - | JSON 对象 | `{"reasons":{"IFACE_BLOCK":{"packets":0,"bytes":0},...}}`（device-wide；since boot/reset）
+- `METRICS.REASONS` | - | JSON 对象 | `{"reasons":{"IFACE_BLOCK":{...},"IP_LEAK_BLOCK":{...},"ALLOW_DEFAULT":{...},"IP_RULE_ALLOW":{...},"IP_RULE_BLOCK":{...}}}`（device-wide；since boot/reset）
 - `METRICS.REASONS.RESET` | - | `OK` | 清零 reason counters（不改变其他开关）
 
 2.2 应用
@@ -77,6 +77,21 @@ App 对象字段:
 - `BLOCKIPLEAKS [<0|1>]` | 查询/设置 | 当前/`OK` | IP 泄漏拦截
 - `GETBLACKIPS [<0|1>]` | 查询/设置 | 当前/`OK` | 对被拦截域是否仍获取 IP
 - `MAXAGEIP [<int>]` | 查询/设置 | 当前/`OK` | IP 最大存活秒数
+- `IPRULES [<0|1>]` | 查询/设置 | 当前/`OK|NOK` | IPv4 L3/L4 规则开关；仅接受 `0|1`；幂等（`1→1/0→0` 不清零）；仅当 `BLOCK=1` 时才评估（`BLOCK=0` 直接放行且不产生 metrics/stats）
+- `IPRULES.ADD <uid> <kv...>` | 新增 | `<ruleId:int>|NOK` | v1 仅支持 IPv4；失败必须原子且不得消耗 ruleId
+- `IPRULES.UPDATE <ruleId> <kv...>` | 更新 | `OK|NOK` | patch/merge；失败原子且不改变规则
+- `IPRULES.REMOVE <ruleId>` | 删除 | `OK|NOK` |
+- `IPRULES.ENABLE <ruleId> <0|1>` | 启用/禁用 | `OK|NOK` | `0→1` 清零该规则 stats；`1→1/0→0` 幂等
+- `IPRULES.PRINT [UID <uid>] [RULE <ruleId>]` | 可选过滤 | JSON 对象 | `{"rules":[...]}`；无命中时 `{"rules":[]}`
+- `IPRULES.PREFLIGHT` | - | JSON 对象 | `{"summary":{...},"limits":{...},"warnings":[...],"violations":[...]}`
+- `IFACES.PRINT` | - | JSON 对象 | `{"ifaces":[{"ifindex":47,"name":"wlan0","kind":"wifi","type":1},...]}`；枚举失败或无接口时返回 `{"ifaces":[]}`
+
+IPRULES v1 `kv` 令牌（控制面语法：`key=value`，每个 token 作为一个字符串参数传入）：
+- ADD 必填：`action={allow|block}`、`priority=<int32>`（注意：priority 的负数写法在 kv 内是允许的）
+- 可选：`enabled=0|1`、`enforce=0|1`、`log=0|1`、`dir={any|in|out}`、`iface={any|wifi|data|vpn|unmanaged}`、`ifindex={any|<uint32>}`、`proto={any|tcp|udp|icmp}`、`src={any|<IPv4 CIDR>}`、`dst={any|<IPv4 CIDR>}`、`sport={any|<port>|<lo-hi>}`、`dport={any|<port>|<lo-hi>}`
+- `ifindex` 说明：输入允许 `ifindex=0` 作为 `ifindex=any` 的同义；`IPRULES.PRINT` 输出中 `ifindex=0` 表示未限定精确 ifindex
+- 组合约束：`enforce=0` 仅允许用于 `action=block,log=1`（would-block）；`ct` 当前保留但一律拒绝
+- UPDATE 语义：patch/merge（未提供的 key 保持原值）；UPDATE 生效后清零该规则 per-rule stats
 
 掩码定义:
 - blockMask 位:
@@ -86,7 +101,7 @@ App 对象字段:
   - `128`(custom，自定义名单/规则开关)
   - 默认: 系统 129；用户继承全局。
 - BlockingList/DomainList 的 `blockMask` 约束: 必须为单 bit 且只允许 `1/2/4/8/16/32/64`（禁止 `0`/多 bit/`128`）。
-- blockIface 位: `1`(WiFi), `2`(Mobile Data), `4`(VPN)。
+- blockIface 位: `1`(WiFi), `2`(Mobile Data), `4`(VPN), `128`(Unmanaged/Unknown)。
 
 2.4 追踪与反解
 - `TRACK <uid|str>` | - | `OK` | 置应用 tracked=1；支持 `<str> <userId>` 简写
