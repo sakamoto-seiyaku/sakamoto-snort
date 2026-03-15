@@ -48,6 +48,7 @@
 - `HELLO` | - | `OK` |
 - `HELP` | - | 文本 |
 - `QUIT` | - | - | 关闭当前连接
+- `DEV.SHUTDOWN` | - | `OK|NOK` | DEV-only；仅 `root(0)` / `shell(2000)` 可调用；回复 `OK` 后保存并退出进程（连接随进程退出断开）
 - `PASSWORD [<str>]` | 查询/设置 | 当前密码或 `OK` | 设置时需双引号
 - `PASSSTATE [<int>]` | 查询/设置 | 当前状态或 `OK` | `uint8` 状态值
 - `RESETALL` | - | `OK` | 清空设置、统计、域名、规则、列表并持久化
