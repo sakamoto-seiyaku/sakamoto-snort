@@ -3,7 +3,7 @@
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
 
 
-更新时间：2026-03-05  
+更新时间：2026-03-15  
 状态：工作结论（可迭代修订；实现与验收以 OpenSpec change 为准）
 
 ---
@@ -41,9 +41,9 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 ---
 
-## 2. 决策拆分（A/B/C 三层）
+## 2. 决策拆分（A/B/C/D 四层）
 
-为避免“域名 vs IP”割裂，可观测性拆成三层（每层有独立的口径与边界）：
+为避免“域名 vs IP”割裂，可观测性拆成四层（每层有独立的口径与边界）：
 
 - **A：Packet 判决层（device-wide）**  
 面向“最终 verdict 的原因”与常态 reason counters。
@@ -51,6 +51,15 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 面向“域名策略命中来源（policySource）”与常态 counters。
 - **C：IP 规则层（per-rule）**  
 面向“新 IP 规则引擎每条规则的运行时命中统计”。
+- **D：性能健康指标层（latency / health metrics）**  
+面向“这次处理花了多久”，而不是“为什么命中”。
+
+对 D 层的当前结论如下：
+
+- 当前只关心两个核心指标：`nfq_total_us` 与 `dns_decision_us`。
+- D 属于常态 metrics，可在正常运行中按需开启/关闭；不要求前端持续订阅 stream。
+- D 的控制面、口径与 JSON shape 必须稳定；是否采集仅由运行时开关控制，**不以 debug/release 区分接口与语义**。
+- D 与 A/B/C 的语义独立，也不参与 `A → IPRULES v1（含 C） → B` 这条功能主线排序；其对应 change 可按需要独立推进。
 
 ---
 
@@ -107,6 +116,46 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 对应 OpenSpec：`add-app-ip-l3l4-rules-engine`。
 
+### 4.4 D：性能健康指标（NFQ / DNS latency）
+目标：以**尽可能小的热路径代价**，在正常运行情况下提供默认可拉取的 latency 指标，用于性能基线、回归对比与线上健康观察。
+
+- 当前只定义两个核心指标：
+  - `nfq_total_us`：单个 NFQ 包在 userspace 中的总处理时间。
+  - `dns_decision_us`：单次 DNS 判决请求的处理时间。
+- 这组指标即 D 层；它与 A/B/C 并列，属于 observability 的 health/perf 维度；不复用 `reasonId` / `policySource` / per-rule stats 语义。
+- D 的实现与落地节奏独立于 A/B/C；只要控制面与口径稳定，其 change 可单独推进，不作为主线依赖。
+- 对外接口拟定为：`PERFMETRICS [<0|1>]`、`METRICS.PERF`、`METRICS.PERF.RESET`。
+- `PERFMETRICS=0` 时热路径只允许一个极轻量 gating branch；`PERFMETRICS=1` 时才做计时与聚合。
+- 接口、字段与语义**不区分 debug/release**；是否采集仅由运行时开关决定。
+
+#### 4.4.1 指标边界（固定口径）
+
+- `nfq_total_us`
+  - 开始：`PacketListener::callback()` 入口。
+  - 结束：`sendVerdict()` 返回之后。
+  - 语义：覆盖 packet parse、`App/Host` 构造、锁等待、`pktManager.make()`、以及 verdict 回写。
+- `dns_decision_us`
+  - 开始：DNS 请求体（`len/domain/uid`）已读完，且 `App/Domain` 已构造完成之后。
+  - 结束：`verdict/getips` 两个返回值写回完成之后。
+  - 语义：只覆盖“判决本身”；**不**把后续 IP 上传阶段纳入 latency，以免混入对端上传节奏。
+
+#### 4.4.2 聚合口径
+
+- 单位统一为 `us`。
+- 生命周期统一为 `since_reset_or_enable`：
+  - `PERFMETRICS 0→1` 时自动清零；
+  - `METRICS.PERF.RESET` 时显式清零；
+  - 重启后归零，不持久化。
+- 当前最小输出集合固定为：`samples/min/avg/p50/p95/p99/max`。
+- 统计方式优先采用 histogram/分桶聚合，不保存逐样本历史，也不做每包日志输出。
+
+#### 4.4.3 热路径约束
+
+- 不得为这组指标新增 stream、磁盘 I/O、每包 JSON、每包日志或长时间持锁。
+- NFQ 路径应优先使用 per-thread / per-queue 分片聚合，snapshot 时再 merge，避免全局争用。
+- DNS 路径允许采用更简单的轻量聚合实现，但仍不得在热路径引入阻塞点。
+- 这组指标属于“正常运行时可开启”的常态 metrics，而不是 debug-only instrumentation。
+
 ---
 
 ## 5. 明确延后/非目标（避免误解）
@@ -116,6 +165,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 不要求本轮为 legacy `BLOCKIPLEAKS=1` 分支补齐最终 `reasonId` 命名与验收场景；该路径当前明确视为 TBD，不作为 A 层落地阻塞项。
 - 不做域名规则 per-rule counters（regex/wildcard/listId）：现状聚合 regex 无法归因，需更大重构，后置。
 - 不把 ip-leak 混进域名 policySource counters：如需统计，后续以独立维度/命令追加。
+- 不把 `ping RTT`、control socket 往返或前端消费延迟当作 `nfq_total_us` / `dns_decision_us` 的替代口径。
 - 不在后端引入 Prometheus/集中存储角色：前端自行采样与落库。
 
 ---
@@ -130,3 +180,6 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 3) 域名侧 `policySource` 与 B 层 counters 口径：  
 `docs/DOMAIN_POLICY_OBSERVABILITY.md`
+
+4) D 层性能健康指标（`PERFMETRICS` / `METRICS.PERF*`）的边界与口径：  
+`docs/OBSERVABILITY_WORKING_DECISIONS.md`

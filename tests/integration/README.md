@@ -1,26 +1,26 @@
 # Host-driven integration tests
 
-这里是 `P1` / `P2` 真机测试的主入口目录。
-
-- `P1`：host-driven 真机 baseline integration
-- `P2`：rooted 真机平台专项 / compatibility / smoke
+这里是真机集成测试 / 平台专项验证的主入口目录（测试代码运行在 host/WSL，通过 ADB 驱动真机）。
 
 ## 当前入口
 
-repo-root CMake workspace 现在已经暴露了 lane 级 `CTest` 入口：
-- `p1-baseline`
-- `p2-device-smoke`
+repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
+- `p1-baseline`（baseline integration；历史命名）
+- `p2-device-smoke`（platform smoke；历史命名）
+- `perf-nfq-latency`（perf baseline）
 
 对应到底层脚本仍然是：
 - `tests/integration/run.sh`
-  - `P1` host-driven baseline
+  - baseline integration（控制协议基线 / stream 健康检查 / `RESETALL` 基线）
   - 支持 `--group` / `--case` / `--skip-deploy` / `--serial`
 - `tests/integration/device-smoke.sh`
-  - `P2` rooted 真机平台 smoke / compatibility
+  - rooted 真机平台 smoke / compatibility
   - 覆盖 root/preflight、socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC、lifecycle restart
+- `tests/integration/perf-nfq-latency.sh`
+  - 真机 perf baseline：通过 NFQUEUE 路径跑 ICMP 流量，输出 RTT 分位数与 NFQUEUE drop 变化（JSON）
 - `tests/integration/full-smoke.sh`
   - 更广的控制协议冒烟回归
-  - 不替代 `P2` 的平台专项 smoke
+  - 不替代 rooted 真机平台 smoke
 - `tests/integration/lib.sh`
   - integration 公共辅助函数
 
@@ -38,25 +38,28 @@ repo-root CMake workspace 现在已经暴露了 lane 级 `CTest` 入口：
 ## 示例
 
 ```bash
-# P1 baseline（repo-root CTest 入口）
+# Baseline integration（repo-root CTest 入口；label `p1` 为历史命名）
 cd build-output/cmake/p12 && ctest --output-on-failure -L p1
 
-# P2 rooted 真机平台 smoke（repo-root CTest 入口）
+# Rooted platform smoke（repo-root CTest 入口；label `p2` 为历史命名）
 cd build-output/cmake/p12 && ctest --output-on-failure -L p2
+
+# Perf baseline（repo-root CTest 入口）
+cd build-output/cmake/p12 && ctest --output-on-failure -L perf
 
 # 继续直接调用底层脚本也可以
 bash tests/integration/run.sh --skip-deploy --group core,config,app,streams
 bash tests/integration/device-smoke.sh --serial <serial>
 
-# 只跑 P2 firewall / selinux
+# 只跑 platform smoke 的 firewall / selinux
 bash tests/integration/device-smoke.sh --skip-deploy --group firewall,selinux
 
-# 若 P2-04 因 libnetd_resolv.so 未挂载而 skip，先准备开发态依赖
+# 若 P2-04 因 libnetd_resolv.so 未挂载而 skip，先准备开发态依赖（case id 为历史命名）
 bash dev/dev-netd-resolv.sh prepare
 ```
 
 ## 边界
 
 - 这里只做测试 / tooling，不推进产品逻辑实现。
-- `P1` 与 `P2` 的区别是 baseline integration vs platform-specific / compatibility，而不是是否使用真机。
-- 真机原生调试、LLDB、tombstone 仍属于 `P3`。
+- baseline integration 与 platform-specific / compatibility 的区别在于覆盖范围，而不是是否使用真机。
+- 真机原生调试、LLDB、tombstone workflow 见 `docs/VSCODE_CMAKE_WORKFLOW.md`。

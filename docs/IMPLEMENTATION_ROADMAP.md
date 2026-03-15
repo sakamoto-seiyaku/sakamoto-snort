@@ -1,17 +1,18 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-03-14  
+更新时间：2026-03-15  
 状态：当前共识；本文包含两条不混用阶段号的主线：
 - `P0/P1/P2/P3`：只表示 **测试 / 集成验证 / 真机调试** 的工程化顺序；
-- `A/B/C`：只表示 **可观测性分层**（见 `docs/OBSERVABILITY_WORKING_DECISIONS.md`），不表示测试/调试阶段号。
+- `A/B/C/D`：只表示 **可观测性分层**（见 `docs/OBSERVABILITY_WORKING_DECISIONS.md`），不表示测试/调试阶段号。
 
 ## 1. 当前主线顺序
 
 `P0 Host-side 单元测试 → P1 Host-driven 集成测试（host / WSL 驱动真机） → P2 真机集成 / smoke / 兼容性验证 → P3 真机原生 Debug / crash / LLDB`
 
 - 这四个 phase 全部围绕 **test / debug / tooling**。
-- `P0/P1/P2/P3` 与 `A/B/C`、`add-pktstream-observability`、`add-app-ip-l3l4-rules-engine` 没有阶段对应关系。
-- 所有与可观测性 / IP rules / `A/B/C` 相关的功能实现，统一排在整个 `P0 → P3` 之后，作为独立功能主线处理。
+- `P0/P1/P2/P3` 与 `A/B/C/D`、`add-pktstream-observability`、`add-app-ip-l3l4-rules-engine` 没有阶段对应关系。
+- `A/B/C` 与 IP rules / DomainPolicy 相关功能，仍作为独立功能主线处理；推荐顺序见第 6 节。
+- `D`（性能健康指标层）独立于 `P0 → P3` 与 `A/B/C` 主线排序；其对应 change 可在任意时点单独推进，不影响主线进度。
 - 任何以 `P1/P2/P3` 名义推进的工作，都不得顺势夹带产品功能实现；若确需极小的 test seam / debug seam，必须先说明必要性，并把范围压到最小。
 
 ## 2. 各阶段定义与边界
@@ -43,9 +44,11 @@
 
 ## 4. 与功能主线的关系
 
-- `A/B/C`、可观测性、`IPRULES`、DomainPolicy 相关实现属于**独立功能主线**。
-- 这些功能 change 可以继续保留为独立 proposal / design / working decisions，但不得再复用 `P0/P1/P2/P3` 作为阶段编号，以免和测试 / 调试 roadmap 串线。
-- `P0 → P3` 已收敛；功能主线顺序见第 6 节，但仍不得倒灌进 test / debug lane。
+- `A/B/C`、`IPRULES`、DomainPolicy 相关实现属于**独立功能主线**。
+- `D` 属于 observability 内的独立性能健康指标层：它不是 test/debug phase，也不参与 `A → IPRULES v1（含 C） → B` 这条主线排序。
+- 因此，D 对应的 change 可以继续保留为独立 proposal / design / working decisions，并且可在任意时点单独推进；它既不阻塞主线，也不依赖主线收敛后才能开始。
+- 上述功能 change 都不得复用 `P0/P1/P2/P3` 作为阶段编号，以免和测试 / 调试 roadmap 串线。
+- `P0 → P3` 已收敛；A/B/C 功能主线顺序见第 6 节，但仍不得倒灌进 test / debug lane。
 
 ## 5. 当前现状
 
@@ -56,9 +59,9 @@
 - `VS Code/CMake` 开发者统一入口：已完成并归档（`openspec/changes/archive/2026-03-14-add-vscode-cmake-dev-workflow/`）；将 `P0/P1/P2` 以 `CTest` / VS Code Testing 方式暴露，并把 `P3` 真机调试收敛为 `F5` 工作流；对应 capability spec 为 `openspec/specs/vscode-cmake-development/spec.md`。
 - `docs/NATIVE_DEBUGGING_AND_TESTING.md` 是这条 test / debug 路线的权威补充文档。
 
-## 6. 功能主线顺序（可观测性 A/B/C + IPRULES）
+## 6. 功能主线顺序（A/B/C + IPRULES；D 独立）
 
-基于 `docs/OBSERVABILITY_WORKING_DECISIONS.md` 与 `docs/IP_RULE_POLICY_WORKING_DECISIONS.md` 的当前共识，推荐顺序如下：
+基于 `docs/OBSERVABILITY_WORKING_DECISIONS.md` 与 `docs/IP_RULE_POLICY_WORKING_DECISIONS.md` 的当前共识，A/B/C 主线推荐顺序如下：
 
 `A（Packet 判决层可观测性：add-pktstream-observability） → IPRULES v1（add-app-ip-l3l4-rules-engine，包含 C：per-rule stats） → B（DomainPolicy 层 counters：policySource） → ip-leak 融合 / IPv6 / 域名 per-rule（TBD）`
 
@@ -66,5 +69,6 @@
 - **A 必须先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 PKTSTREAM/metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
 - **C 不建议拆成独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 `add-app-ip-l3l4-rules-engine` change 内部按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
 - **B 可后置但不应长期拖欠**：它与 IPRULES 基本解耦，因此放在 IP 主线之后没问题；但建议在 IPRULES 主线落地后立刻补齐，避免域名侧长期缺乏默认可查的归因与 counters。
+- **D 不参与上述排序**：D 只承载 `nfq_total_us` / `dns_decision_us` 这类性能健康指标；它在语义上独立于 A/B/C，可作为单独 change 在任意时点推进，不改变当前主线优先级。
 
 > 注：`docs/INTERFACE_SPECIFICATION.md` 作为对外接口汇总，应在相关 change 合并并稳定后统一刷新，避免“接口文档先行”导致漂移。

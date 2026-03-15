@@ -46,14 +46,23 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
   - 各 Manager 自身还维护细粒度的 `std::shared_mutex`/`std::mutex`，避免在热路径上产生锁级联或死锁。
 
 ### Testing Strategy
-- 当前仓库未包含单元测试或集成测试目录，主要依赖以下手段保障质量：
-  - 编译通过（Soong 构建 `cc_binary`，本地可通过 `compile_commands.json` 配合 clangd/静态分析）。
-  - 手动验证控制协议：使用 `nc` 或自定义工具连接 `sucre-snort-control`，调用 `BLOCK`, `APP.*`, `DNSSTREAM.*`, `BLOCKLIST.*` 等关键命令验证行为。
-  - 通过日志与统计输出（`Stats`、`Activity` 流、`DnsRequest`/`Packet` 流）观察行为是否符合预期。
-- 对新的代码改动有如下要求/建议：
+- 目标：把 sucre-snort 维护成“像传统 Linux C/C++ 项目一样可测试、可调试”的形态，并把验证与调试固化为仓库内可重复执行的入口。
+
+- 当前测试/验收入口（repo 作为单一入口；不要求开发机预装 gtest 包）：
+  - 单元测试（host-side / pure-logic）：`tests/host/`（repo-managed gtest；经 CMake/CTest 暴露）
+  - 集成测试 / 真机回归：`tests/integration/`（baseline、平台专项 smoke、perf 等；统一通过脚本 + CTest 暴露）
+  - 真机原生调试：repo-root VS Code + CMake + CodeLLDB workflow（见 `docs/VSCODE_CMAKE_WORKFLOW.md`）
+
+- **Non-negotiable / Tests-first policy（对后续所有 change 生效）**：
+  - 任何会改变行为/接口/统计口径/持久化语义/热路径性能特征的改动，必须在对应 OpenSpec change 的 `tasks.md` 中**先写清验证方案**（能补的单测/集成测试/真机验收都要补），再开始改代码。
+  - 优先按 “tests first” 推进：先写（或补）可复现的用例（回归测试/验收用例；旧实现应失败），再改实现让其通过。
+  - 能单测就补单测；无法单测的，至少补集成测试；仍无法自动化的，也必须把“真机验收步骤（命令 + 预期）”写进 `tasks.md`。
+  - 不为测试做大规模重构；如需引入 seam/抽象以便测试，必须限制在局部、避免影响热路径，并在 change 中说明必要性与边界。
+  - 对控制协议/stream schema 的任何修改，必须同步补齐对应的集成覆盖（例如 `tests/integration/` 回归，或 `full-smoke` 回归），避免“只改实现不改验收”的漂移。
+
+- 其它实现侧建议（不替代 tests-first）：
   - 尽量保持变更局限在单模块，避免一次修改多个核心路径（`PacketListener`, `PacketManager`, `DnsListener`, `Control` 同时大改）。
   - 对并发或持久化相关改动，优先添加防御性检查（断言、LOG）和临时“可开关”的调试路径，而不是直接改变持久化格式。
-  - 如需引入临时测试/调试脚本，放在 `dev/` 目录或外部，提交前删除或在 MR 中明确标记。
 
 ### Git Workflow
 - 新功能、行为变化或架构调整需要先通过 OpenSpec 建立变更提案：

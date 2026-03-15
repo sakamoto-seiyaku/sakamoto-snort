@@ -1,12 +1,12 @@
 # Host-side unit tests
 
-当前 P0 使用 **repo-managed GoogleTest (gtest)** 建立最小可运行的 host-side 单元测试基础设施。
+当前仓库使用 **repo-managed GoogleTest (gtest)** 建立最小可运行的 host-side 单元测试基础设施。
 
 ## 为什么使用 gtest
 
 - Android 官方原生测试文档把 **GoogleTest** 作为 native C/C++ test 路径。
 - GoogleTest 官方 `CMake` quickstart 提供了 `FetchContent` 集成方式。
-- 因此当前 P0 采用 **`CMake + FetchContent` 固定版本拉取 gtest**，而不是要求开发机预装 `gtest` 系统包。
+- 因此当前采用 **`CMake + FetchContent` 固定版本拉取 gtest**，而不是要求开发机预装 `gtest` 系统包。
 
 ## 当前覆盖
 
@@ -26,7 +26,7 @@
 
 这些测试都不依赖 Android 真机、socket、NFQUEUE、iptables 或 netd。
 
-当前 `P0` 仍以“文档先行审计 + host-side 补测”为准。模块清单、文档依据、以及暂缓原因统一记录在 `tests/host/P0_PURE_LOGIC_INVENTORY.md`。
+当前仍以“文档先行审计 + host-side 补测”为准。模块清单、文档依据、以及暂缓原因统一记录在 `tests/host/P0_PURE_LOGIC_INVENTORY.md`。
 
 ## 运行方式
 
@@ -43,6 +43,8 @@ cmake --build build-output/cmake/manual --target snort-host-tests
 cd build-output/cmake/manual && ctest --output-on-failure -L p0
 ```
 
+> 注：`ctest -L p0` 中的 `p0` 是历史 label 命名，仅用于过滤 host-side unit tests，不表示 roadmap 阶段号。
+
 repo-root workflow 会：
 
 1. 在同一个 workspace 下暴露 delegated build 与 host-side tests
@@ -55,4 +57,4 @@ repo-root workflow 会：
 - 这是第一批低耦合测试，不追求高覆盖率
 - 不为了测试做大规模重构
 - 当前只要求开发机具备 `cmake`、`git` 和标准 C++ 编译器
-- 强 Android 依赖与真机相关逻辑留给后续 phases
+- 强 Android 依赖与真机相关逻辑由集成测试 / 真机验证覆盖

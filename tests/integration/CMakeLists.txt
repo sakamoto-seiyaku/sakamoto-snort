@@ -34,7 +34,7 @@ add_custom_target(
   snort-p1-tests
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L p1
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  COMMENT "Run sucre-snort P1 real-device baseline lane via CTest"
+  COMMENT "Run sucre-snort real-device baseline lane via CTest"
   USES_TERMINAL
   VERBATIM
 )
@@ -43,7 +43,7 @@ add_custom_target(
   snort-p2-tests
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L p2
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  COMMENT "Run sucre-snort P2 real-device smoke lane via CTest"
+  COMMENT "Run sucre-snort real-device platform smoke lane via CTest"
   USES_TERMINAL
   VERBATIM
 )
