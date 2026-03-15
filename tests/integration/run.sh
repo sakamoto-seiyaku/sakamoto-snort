@@ -249,6 +249,149 @@ case_it_09_resetall() {
     fi
 }
 
+case_it_10_metrics_reasons() {
+    local group="core"
+    local case_id="IT-10"
+    should_run_case "$group" "$case_id" || { skip_case "$case_id" "METRICS.REASONS"; return 0; }
+
+    local help
+    help=$(send_cmd "HELP")
+    if ! echo "$help" | grep -q "METRICS.REASONS"; then
+        log_fail "$case_id HELP exposes METRICS.REASONS"
+        return 1
+    fi
+
+    local orig_block orig_bil
+    orig_block=$(send_cmd "BLOCK")
+    orig_bil=$(send_cmd "BLOCKIPLEAKS")
+
+    # Reset under BLOCK=0 to avoid background traffic affecting the counters.
+    send_cmd "BLOCK 0" >/dev/null || true
+    local reset_result
+    reset_result=$(send_cmd "METRICS.REASONS.RESET")
+    if [[ "$reset_result" != "OK" ]]; then
+        log_fail "$case_id METRICS.REASONS.RESET returns OK"
+        echo "    响应: $reset_result"
+        return 1
+    fi
+
+    local j0
+    j0=$(send_cmd "METRICS.REASONS")
+    if ! echo "$j0" | python3 -c "import sys, json; d=json.load(sys.stdin); r=d['reasons']; req=['IFACE_BLOCK','ALLOW_DEFAULT','IP_RULE_ALLOW','IP_RULE_BLOCK']; assert all(k in r for k in req); assert all(int(r[k]['packets'])==0 and int(r[k]['bytes'])==0 for k in req)" 2>/dev/null; then
+        log_fail "$case_id METRICS.REASONS returns stable keys and zeros after reset"
+        echo "    响应: ${j0:0:200}..."
+        # restore best-effort
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Enable BLOCK and trigger minimal traffic; counters should grow.
+    send_cmd "BLOCKIPLEAKS 0" >/dev/null || true
+    send_cmd "BLOCK 1" >/dev/null || true
+    adb_su "command -v ping >/dev/null 2>&1 && (ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || true)" >/dev/null 2>&1 || true
+
+    local j1
+    j1=$(send_cmd "METRICS.REASONS")
+    local total
+    total=$(echo "$j1" | python3 -c "import sys, json; d=json.load(sys.stdin); r=d.get('reasons',{}); print(sum(int(v.get('packets',0)) for v in r.values()))" 2>/dev/null || echo 0)
+    if [[ "$total" -ge 1 ]]; then
+        log_pass "$case_id METRICS.REASONS grows under traffic (totalPackets=$total)"
+    else
+        log_fail "$case_id METRICS.REASONS grows under traffic"
+        echo "    提示: 确认真机有网络且 BLOCK=1，可进入 NFQUEUE"
+        echo "    响应: ${j1:0:200}..."
+        # restore best-effort
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Tracked-independence: reason counters MUST still grow when tracked=0 (use uid=0 as a controllable source).
+    local app0 tracked_orig
+    app0=$(send_cmd "APP.UID 0")
+    tracked_orig=$(echo "$app0" | python3 -c "import sys, json; d=json.load(sys.stdin); assert len(d)==1; print(int(d[0]['tracked']))" 2>/dev/null || echo "")
+    if [[ -z "$tracked_orig" ]]; then
+        log_fail "$case_id tracked-independence precheck (APP.UID 0)"
+        echo "    响应: ${app0:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    send_cmd "UNTRACK 0" >/dev/null || true
+    app0=$(send_cmd "APP.UID 0")
+    if ! echo "$app0" | python3 -c "import sys, json; d=json.load(sys.stdin); assert len(d)==1; assert int(d[0]['tracked'])==0" 2>/dev/null; then
+        log_fail "$case_id UNTRACK 0 takes effect"
+        echo "    响应: ${app0:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    send_cmd "BLOCK 0" >/dev/null || true
+    send_cmd "METRICS.REASONS.RESET" >/dev/null || true
+    send_cmd "BLOCK 1" >/dev/null || true
+    adb_su "command -v ping >/dev/null 2>&1 && (ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || true)" >/dev/null 2>&1 || true
+    j1=$(send_cmd "METRICS.REASONS")
+    total=$(echo "$j1" | python3 -c "import sys, json; d=json.load(sys.stdin); r=d.get('reasons',{}); print(sum(int(v.get('packets',0)) for v in r.values()))" 2>/dev/null || echo 0)
+    if [[ "$total" -ge 1 ]]; then
+        log_pass "$case_id METRICS.REASONS does not depend on tracked (tracked=0)"
+    else
+        log_fail "$case_id METRICS.REASONS does not depend on tracked (tracked=0)"
+        echo "    响应: ${j1:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    if [[ "$tracked_orig" -eq 1 ]]; then
+        send_cmd "TRACK 0" >/dev/null 2>&1 || true
+    fi
+
+    # Restore best-effort.
+    send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+    send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+}
+
+case_it_11_pktstream_schema() {
+    local group="streams"
+    local case_id="IT-11"
+    should_run_case "$group" "$case_id" || { skip_case "$case_id" "PKTSTREAM schema"; return 0; }
+
+    local orig_block orig_bil
+    orig_block=$(send_cmd "BLOCK")
+    orig_bil=$(send_cmd "BLOCKIPLEAKS")
+
+    send_cmd "BLOCKIPLEAKS 0" >/dev/null || true
+    send_cmd "BLOCK 1" >/dev/null || true
+    adb_su "command -v ping >/dev/null 2>&1 && (ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || true)" >/dev/null 2>&1 || true
+
+    local result
+    result=$(stream_sample "PKTSTREAM.START 10 1" "PKTSTREAM.STOP" 1)
+    if [[ $? -ne 0 || "$result" == ERROR:* ]]; then
+        log_fail "$case_id PKTSTREAM sample"
+        echo "    响应: $result"
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    if ! echo "$result" | python3 -c "import sys, json\nobj=None\nfor line in sys.stdin:\n  line=line.strip()\n  if not line: continue\n  try:\n    obj=json.loads(line)\n    break\n  except Exception:\n    continue\nif obj is None:\n  raise SystemExit(2)\nfor k in ['ipVersion','srcIp','dstIp','reasonId']:\n  assert k in obj\nassert 'ipv4' not in obj and 'ipv6' not in obj\nassert obj['ipVersion'] in (4,6)\nassert isinstance(obj['srcIp'], str) and isinstance(obj['dstIp'], str)\nassert isinstance(obj['reasonId'], str)\n" 2>/dev/null; then
+        log_pass "$case_id PKTSTREAM packet schema vNext"
+    else
+        log_fail "$case_id PKTSTREAM packet schema vNext"
+        echo "    采样: ${result:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Restore best-effort.
+    send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+    send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+}
+
 run_all_cases() {
     case_it_01_hello
     case_it_02_help
@@ -258,6 +401,8 @@ run_all_cases() {
     case_it_06_dnsstream_health
     case_it_07_pktstream_health
     case_it_08_activitystream_health
+    case_it_10_metrics_reasons
+    case_it_11_pktstream_schema
     case_it_09_resetall
 }
 

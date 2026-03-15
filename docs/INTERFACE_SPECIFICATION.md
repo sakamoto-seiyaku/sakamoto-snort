@@ -55,6 +55,8 @@
 - `PERFMETRICS [<0|1>]` | 查询/设置 | 当前值或 `OK|NOK` | 运行时开关；默认 `0`；仅接受 `0|1`；`0→1` 自动清零；`1→1/0→0` 幂等不清零
 - `METRICS.PERF` | - | JSON 对象 | `{"perf":{"nfq_total_us":{...},"dns_decision_us":{...}}}`；单位 `us`；`PERFMETRICS=0` 时返回全 `0`
 - `METRICS.PERF.RESET` | - | `OK` | 清零 perf 聚合数据；不改变 `PERFMETRICS` 状态
+- `METRICS.REASONS` | - | JSON 对象 | `{"reasons":{"IFACE_BLOCK":{"packets":0,"bytes":0},...}}`（device-wide；since boot/reset）
+- `METRICS.REASONS.RESET` | - | `OK` | 清零 reason counters（不改变其他开关）
 
 2.2 应用
 - `APP.UID [<uid|str>]` | 过滤可选 | App 数组 | 无参数列出所有用户的 App（按 UID 升序）；`USER <userId>` 仅该用户；`<uid>` 精确匹配；`<str>` 子串匹配（支持 `<str> <userId>` 简写）
@@ -203,7 +205,7 @@ Host 对象字段:
 - `BLOCKMASK <uid|str>` / `BLOCKIFACE <uid|str>` 查询时，如未匹配应用，无响应（不发送任何字节）。
 - `APP.CUSTOMLISTS <uid|str>` 查询时，如未匹配应用，无响应（不发送任何字节）。
 
-2.12 可观测性（Perf）
+2.12 可观测性（Metrics）
 
 `METRICS.PERF` 返回固定 JSON shape（单位 `us`）：
 ```json
@@ -219,6 +221,22 @@ Host 对象字段:
 - `avg = floor(sum(values) / samples)`
 - `p50/p95/p99` 使用 nearest-rank 百分位数定义：令样本排序为 `x[1..N]`（`N=samples`），则 `pXX = x[ceil(XX/100*N)]`；实现采用 histogram 近似时，返回“首次达到 rank 的最小 bucket upper bound”。
 - `p50/p95/p99` 可能受 buckets 上界影响而被 clamp；`min/avg/max` 始终基于真实样本值计算。
+
+`METRICS.REASONS` 返回固定 JSON shape：
+```json
+{
+  "reasons": {
+    "IFACE_BLOCK": {"packets":0,"bytes":0},
+    "ALLOW_DEFAULT": {"packets":0,"bytes":0},
+    "IP_RULE_ALLOW": {"packets":0,"bytes":0},
+    "IP_RULE_BLOCK": {"packets":0,"bytes":0}
+  }
+}
+```
+
+说明：
+- key 为 `reasonId`；当前实现还可能包含 `IP_LEAK_BLOCK` 等其它 key（客户端应容忍额外 key）。
+- `bytes` 口径为 NFQUEUE `NFQA_PAYLOAD` 的全包长度（与 Packet 事件 `length` 一致）。
 
 ---
 
@@ -302,7 +320,7 @@ Host 对象字段:
 
 ## 6. 索引
 
-通用: HELLO, HELP, QUIT, PASSWORD, PASSSTATE, RESETALL
+通用: HELLO, HELP, QUIT, DEV.SHUTDOWN, PASSWORD, PASSSTATE, RESETALL, PERFMETRICS, METRICS.PERF, METRICS.REASONS
 应用: APP.UID, APP.NAME, APP.CUSTOMLISTS
 拦截: BLOCK, BLOCKMASK, BLOCKMASKDEF, BLOCKIFACE, BLOCKIFACEDEF, BLOCKIPLEAKS, GETBLACKIPS, MAXAGEIP
 统计: ALL<v>, <TYPE><v>, APP<v>, APP.<TYPE><v>, APP.RESET<v>, DOMAINS<v>, <COLOR><v>, <COLOR>.APP<v>

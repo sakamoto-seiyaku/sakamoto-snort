@@ -18,6 +18,7 @@ PacketManager::~PacketManager() {}
 void PacketManager::reset() {
     Streamable<Packet<IPv4>>::reset();
     Streamable<Packet<IPv6>>::reset();
+    _reasonMetrics.reset();
 }
 
 void PacketManager::startStream(const SocketIO::Ptr sockio, const bool pretty,

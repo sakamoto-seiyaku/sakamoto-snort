@@ -68,6 +68,8 @@ Control::Control() {
     _cmds.emplace("PERFMETRICS", make(&Control::cmdPerfmetrics));
     _cmds.emplace("METRICS.PERF", make(&Control::cmdMetricsPerf));
     _cmds.emplace("METRICS.PERF.RESET", make(&Control::cmdMetricsPerfReset));
+    _cmds.emplace("METRICS.REASONS", make(&Control::cmdMetricsReasons));
+    _cmds.emplace("METRICS.REASONS.RESET", make(&Control::cmdMetricsReasonsReset));
     _cmds.emplace("APP.NAME", make(&Control::cmdAppsByName));
     _cmds.emplace("APP.UID", make(&Control::cmdAppsByUid));
     _cmds.emplace("APP.CUSTOMLISTS", make(&Control::cmdAppCustomLists));
@@ -763,6 +765,38 @@ void Control::cmdMetricsPerfReset(CmdParams &&params) const {
     }
 
     perfMetrics.reset();
+    ack(params.out);
+}
+
+void Control::cmdMetricsReasons(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    const auto snap = pktManager.reasonMetricsSnapshot();
+
+    params.out << "{" << JSF("reasons") << "{";
+    bool first = true;
+    for (const auto reasonId : kPacketReasonIds) {
+        const size_t idx = static_cast<size_t>(reasonId);
+        when(first, params.out << ",");
+        params.out << JSF(packetReasonIdStr(reasonId)) << "{"
+                   << JSF("packets") << snap.reasons[idx].packets << "," << JSF("bytes")
+                   << snap.reasons[idx].bytes << "}";
+    }
+    params.out << "}}";
+}
+
+void Control::cmdMetricsReasonsReset(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    pktManager.resetReasonMetrics();
     ack(params.out);
 }
 
@@ -1518,6 +1552,7 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "\r\n"
         << "Commands NOT supporting USER clause (global or UID-only):\r\n"
         << "  RESETALL, PERFMETRICS, METRICS.PERF, METRICS.PERF.RESET,\r\n"
+        << "  METRICS.REASONS, METRICS.REASONS.RESET,\r\n"
         << "  DNSSTREAM.*, PKTSTREAM.*, ACTIVITYSTREAM.*,\r\n"
         << "  TOPACTIVITY (accepts <uid> only, not <str>),\r\n"
         << "  BLOCKLIST.*, RULES.*, ALL<v>, DNS<v>, RXP<v>, RXB<v>, TXP<v>, TXB<v>\r\n"
@@ -1537,6 +1572,8 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "PERFMETRICS [<0|1>]: prints or sets D-layer perf metrics collection toggle.\r\n"
         << "METRICS.PERF: prints a perf metrics JSON snapshot (us).\r\n"
         << "METRICS.PERF.RESET: clears perf metrics aggregates.\r\n"
+        << "METRICS.REASONS: prints device-wide per-reason packet/byte counters.\r\n"
+        << "METRICS.REASONS.RESET: clears per-reason counters.\r\n"
         << "\r\n"
 
         << "***\r\n"

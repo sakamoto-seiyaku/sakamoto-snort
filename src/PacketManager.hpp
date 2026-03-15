@@ -8,6 +8,7 @@
 #include <AppManager.hpp>
 #include <HostManager.hpp>
 #include <Packet.hpp>
+#include <ReasonMetrics.hpp>
 #include <Streamable.hpp>
 
 #include <atomic>
@@ -32,6 +33,8 @@ private:
     // Optional passive (very low frequency) refresh period.
     static constexpr long long kIfacePassiveRefreshNs = 30LL * 1000 * 1000 * 1000; // 30 s
 
+    ReasonMetrics _reasonMetrics;
+
 public:
     PacketManager();
 
@@ -40,7 +43,8 @@ public:
     PacketManager(const PacketManager &) = delete;
 
     template <class IP>
-    bool make(const Address<IP> &ip, const App::Ptr &app, const Host::Ptr &host,
+    bool make(const Address<IP> &srcIp, const Address<IP> &dstIp, const App::Ptr &app,
+              const Host::Ptr &host,
               const bool input, const uint32_t iface, const timespec timestamp, const int proto,
               const uint16_t srcPort, const uint16_t dstPort, const uint16_t len);
 
@@ -50,6 +54,10 @@ public:
                      const std::uint32_t minSize);
 
     void stopStream(const SocketIO::Ptr sockio);
+
+    ReasonMetrics::Snapshot reasonMetricsSnapshot() const { return _reasonMetrics.snapshot(); }
+
+    void resetReasonMetrics() { _reasonMetrics.reset(); }
 
 private:
     // Rebuild snapshot from current system state and publish atomically.
@@ -67,25 +75,32 @@ public:
 };
 
 template <class IP>
-bool PacketManager::make(const Address<IP> &ip, const App::Ptr &app, const Host::Ptr &host,
-                         const bool input, const uint32_t iface, const timespec timestamp,
-                         const int proto, const uint16_t srcPort, const uint16_t dstPort,
-                         const uint16_t len) {
+bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, const App::Ptr &app,
+                         const Host::Ptr &host, const bool input, const uint32_t iface,
+                         const timespec timestamp, const int proto, const uint16_t srcPort,
+                         const uint16_t dstPort, const uint16_t len) {
     auto domain = host->domain();
     const auto validIP = domain != nullptr && domain->validIP();
     if (!validIP) {
         domain = nullptr;
     }
     const auto [blocked, cs] = app->blocked(domain);
-    const bool verdict = !(settings.blockIPLeaks() && blocked && validIP) &&
-                         (app->blockIface() & ifaceBit(iface)) == 0;
+    const bool ifaceBlocked = (app->blockIface() & ifaceBit(iface)) != 0;
+    const bool ipLeakBlocked = settings.blockIPLeaks() && blocked && validIP;
+    const bool verdict = !ipLeakBlocked && !ifaceBlocked;
+    const PacketReasonId reasonId = ifaceBlocked  ? PacketReasonId::IFACE_BLOCK
+                                   : ipLeakBlocked ? PacketReasonId::IP_LEAK_BLOCK
+                                                   : PacketReasonId::ALLOW_DEFAULT;
+
+    _reasonMetrics.observe(reasonId, len);
 
     if (app->tracked()) {
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXP : Stats::TXP, 1);
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXB : Stats::TXB, len);
     }
     Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-        ip, host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict));
+        srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict,
+        reasonId, std::nullopt, std::nullopt));
 
     return verdict;
 }

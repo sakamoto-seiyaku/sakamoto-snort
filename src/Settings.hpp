@@ -173,7 +173,7 @@ public:
         _password.clear();
         _passState = 0;
         _getBlackIPs = false;
-        _blockIPLeaks = true;
+        _blockIPLeaks = false;
         _maxAgeIP = 3600 * 4;
     }
 

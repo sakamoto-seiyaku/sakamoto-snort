@@ -134,6 +134,10 @@ private:
 
     void cmdMetricsPerfReset(CmdParams &&params) const;
 
+    void cmdMetricsReasons(CmdParams &&params) const;
+
+    void cmdMetricsReasonsReset(CmdParams &&params) const;
+
     void cmdAppsByUid(CmdParams &&params) const;
 
     void cmdAppsByName(CmdParams &&params) const;

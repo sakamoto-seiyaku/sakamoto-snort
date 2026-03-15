@@ -5,15 +5,19 @@
 
 #pragma once
 
+#include <optional>
+
 #include <App.hpp>
 #include <Host.hpp>
+#include <PacketReasons.hpp>
 
 template <class IP> class Packet {
 public:
     using Ptr = std::shared_ptr<Packet>;
 
 private:
-    const Address<IP> _ip;
+    const Address<IP> _srcIp;
+    const Address<IP> _dstIp;
     const Host::Ptr _host;
     const App::Ptr _app;
     const uint32_t _iface;
@@ -24,11 +28,16 @@ private:
     const uint16_t _len; // NFQUEUE/GSO can exceed 14-bit payload lengths; keep full 16-bit value.
     const bool _input;
     const bool _accepted;
+    const PacketReasonId _reasonId;
+    const std::optional<uint32_t> _ruleId;
+    const std::optional<uint32_t> _wouldRuleId;
 
 public:
-    Packet(const Address<IP> &ip, const Host::Ptr &host, const App::Ptr &app, const bool input,
-           const uint32_t iface, const timespec timestamp, const int proto, const uint16_t srcPort,
-           const uint16_t dstPort, const uint16_t len, const bool accepted);
+    Packet(const Address<IP> &srcIp, const Address<IP> &dstIp, const Host::Ptr &host,
+           const App::Ptr &app, const bool input, const uint32_t iface, const timespec timestamp,
+           const int proto, const uint16_t srcPort, const uint16_t dstPort, const uint16_t len,
+           const bool accepted, const PacketReasonId reasonId,
+           const std::optional<uint32_t> ruleId, const std::optional<uint32_t> wouldRuleId);
 
     ~Packet();
 

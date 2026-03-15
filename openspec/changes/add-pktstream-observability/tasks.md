@@ -6,21 +6,22 @@
 - [x] 2.1 归档 superseded change：`add-app-ip-blacklist`
 - [x] 2.2 修订 `add-app-ip-l3l4-rules-engine`：移除/下沉 PKTSTREAM schema 与 src/dst 5-tuple plumbing 描述，改为依赖本 change
 
-## 3. Implementation (DEFERRED)
-- [ ] 3.1 PKTSTREAM：在 Packet 判决收口处新增 `reasonId/ruleId/wouldRuleId/wouldDrop`，并确保 `IFACE_BLOCK` 事件不携带更低优先级规则层的 `ruleId/wouldRuleId`
-- [ ] 3.2 PKTSTREAM：升级为输出 `ipVersion/srcIp/dstIp` 并移除 `ipv4|ipv6`；同时保持既有 `host` 字段语义为 remote endpoint（入站对应 `srcIp`，出站对应 `dstIp`）
-- [ ] 3.3 Control：新增 `METRICS.REASONS` / `METRICS.REASONS.RESET` 命令注册与处理，并更新 `HELP`
-- [ ] 3.4 METRICS：实现 `METRICS.REASONS`（per-reason `packets/bytes`）与 `METRICS.REASONS.RESET`，并确保 `RESETALL -> pktManager.reset()` 也会清空这些 counters
-- [ ] 3.5 文档：更新 `docs/INTERFACE_SPECIFICATION.md`，覆盖 PKTSTREAM 新事件格式、`host` 语义说明，以及 `METRICS.REASONS*` 命令与 JSON shape
-- [ ] 3.6 开发冒烟（P1 lane）：扩展 `tests/integration/run.sh`（`p1-baseline`），验证：
+## 3. Implementation
+- [x] 3.1 PKTSTREAM：在 Packet 判决收口处新增 `reasonId/ruleId/wouldRuleId/wouldDrop`，并确保 `IFACE_BLOCK` 事件不携带更低优先级规则层的 `ruleId/wouldRuleId`
+- [x] 3.2 PKTSTREAM：升级为输出 `ipVersion/srcIp/dstIp` 并移除 `ipv4|ipv6`；同时保持既有 `host` 字段语义为 remote endpoint（入站对应 `srcIp`，出站对应 `dstIp`）
+- [x] 3.3 Control：新增 `METRICS.REASONS` / `METRICS.REASONS.RESET` 命令注册与处理，并更新 `HELP`
+- [x] 3.4 METRICS：实现 `METRICS.REASONS`（per-reason `packets/bytes`）与 `METRICS.REASONS.RESET`，并确保 `RESETALL -> pktManager.reset()` 也会清空这些 counters
+- [x] 3.5 文档：更新 `docs/INTERFACE_SPECIFICATION.md`，覆盖 PKTSTREAM 新事件格式、`host` 语义说明，以及 `METRICS.REASONS*` 命令与 JSON shape
+- [x] 3.6 开发冒烟（P1 lane）：扩展 `tests/integration/run.sh`（`p1-baseline`），验证：
   - `HELP` 暴露 `METRICS.REASONS*`
   - `METRICS.REASONS` 返回有效 JSON
   - `METRICS.REASONS.RESET` 可清零
   - `RESETALL` 后 reason counters 归零
-- [ ] 3.7 开发冒烟（P1 lane）：扩展 `tests/integration/run.sh` 的 `PKTSTREAM` case：
+- [x] 3.7 开发冒烟（P1 lane）：扩展 `tests/integration/run.sh` 的 `PKTSTREAM` case：
   - 用设备侧 `ping`（或等价最小流量触发）制造至少 1 个可进入 NFQUEUE 的包
   - 通过 `PKTSTREAM.START <horizon> <minSize>` 回放拿到至少 1 条完整 Packet 事件
   - 验证事件包含 `ipVersion/srcIp/dstIp/reasonId`，且不再包含 legacy `ipv4|ipv6`
-- [ ] 3.8 设备验证：在当前 A 层验收基线（可理解为 `BLOCKIPLEAKS=0`）下，`reasonId` baseline（iface / default allow）与字段齐全
-- [ ] 3.9 设备验证：在当前 A 层验收基线（可理解为 `BLOCKIPLEAKS=0`）下，`METRICS.REASONS` 计数增长与 reset 生效（不依赖 PKTSTREAM 是否开启）
-- [ ] 3.10 设备验证：`METRICS.REASONS` 不依赖 `tracked`，即 `tracked=0` 的 app 仍会计入 reason counters
+- [x] 3.8 设备验证：在当前 A 层验收基线（可理解为 `BLOCKIPLEAKS=0`）下，`reasonId` baseline（iface / default allow）与字段齐全
+- [x] 3.9 设备验证：在当前 A 层验收基线（可理解为 `BLOCKIPLEAKS=0`）下，`METRICS.REASONS` 计数增长与 reset 生效（不依赖 PKTSTREAM 是否开启）
+- [x] 3.10 设备验证：`METRICS.REASONS` 不依赖 `tracked`，即 `tracked=0` 的 app 仍会计入 reason counters
+- [x] 3.11 Host-side：新增 `ReasonMetrics` 单元测试并通过 `ctest -L p0`

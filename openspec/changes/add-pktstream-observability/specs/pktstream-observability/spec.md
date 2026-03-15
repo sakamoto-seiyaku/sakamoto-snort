@@ -24,7 +24,9 @@
 
 若实际 `reasonId=IFACE_BLOCK`，事件 SHALL NOT 包含来自更低优先级规则层的 `ruleId` 或 `wouldRuleId`。
 
-当前最小 reasonId 集与场景验收明确以 legacy `ip-leak` 分支未参与 Packet 最终判决为前提（可理解为当前验收场景下 `BLOCKIPLEAKS=0`）。若后续恢复该附属功能，其新增 reasonId 与场景由对应 change 增量补充，不属于本 change 当前实现/验收前提。
+当前阶段验收以 `BLOCKIPLEAKS=0` 为前提（该附属功能默认关闭，不作为阻塞项）。
+
+为避免开发态开启 `BLOCKIPLEAKS=1` 时出现“drop 但 reasonId 无法解释”的缺口：当 legacy IP leak 拦截导致本包被 DROP（`accepted=0`）时，系统 SHALL 使用临时 reasonId `IP_LEAK_BLOCK` 表达该原因；若同时命中接口拦截，`IFACE_BLOCK` 优先级更高。
 
 #### Scenario: IFACE_BLOCK uses IFACE_BLOCK reasonId
 - **GIVEN** 某包满足接口拦截条件
