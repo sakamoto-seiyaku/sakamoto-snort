@@ -63,6 +63,11 @@
 系统 MUST 在控制面提供 device-wide 的 per-reason counters（拉取式，不依赖 PKTSTREAM）：
 - 命令 `METRICS.REASONS` MUST 返回顶层对象 `{"reasons": {...}}`
 - `reasons` 对象中每个 reasonId 的 value MUST 固定包含 `packets/bytes`（uint64）
+- `reasons` 对象 MUST 至少包含以下 key（即使其 counters 为 0）：
+  - `IFACE_BLOCK`
+  - `ALLOW_DEFAULT`
+  - `IP_RULE_ALLOW`
+  - `IP_RULE_BLOCK`
 - `bytes` MUST 按 NFQUEUE `NFQA_PAYLOAD` 长度口径累计（即当前 Packet 路径传递的全包长度 `len`）
 - 命令 `METRICS.REASONS.RESET` MUST 清空上述 counters
 - counters MUST 在热路径以非阻塞方式更新（仅允许 `atomic++`，不得新增锁/IO/分配）
@@ -75,6 +80,13 @@
 - **AND** 某包在 baseline 判决下被 ACCEPT（其 PKTSTREAM 事件 `reasonId=ALLOW_DEFAULT`）
 - **WHEN** 客户端调用 `METRICS.REASONS`
 - **THEN** 返回值中的 `ALLOW_DEFAULT.packets` SHALL 大于等于 1
+
+#### Scenario: METRICS.REASONS returns stable keys
+- **WHEN** 客户端调用 `METRICS.REASONS`
+- **THEN** 返回值中的 `reasons` 对象 SHALL 包含 key `IFACE_BLOCK`
+- **AND** 返回值中的 `reasons` 对象 SHALL 包含 key `ALLOW_DEFAULT`
+- **AND** 返回值中的 `reasons` 对象 SHALL 包含 key `IP_RULE_ALLOW`
+- **AND** 返回值中的 `reasons` 对象 SHALL 包含 key `IP_RULE_BLOCK`
 
 #### Scenario: METRICS.REASONS.RESET clears counters
 - **GIVEN** `METRICS.REASONS` 中至少一个 reason 的 `packets` 大于 0
