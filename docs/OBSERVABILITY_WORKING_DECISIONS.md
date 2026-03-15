@@ -182,4 +182,4 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 `docs/DOMAIN_POLICY_OBSERVABILITY.md`
 
 4) D 层性能健康指标（`PERFMETRICS` / `METRICS.PERF*`）的边界与口径：  
-`openspec/changes/add-perfmetrics-observability/`
+`openspec/specs/perfmetrics-observability/`（历史 change 归档：`openspec/changes/archive/2026-03-15-add-perfmetrics-observability/`）
