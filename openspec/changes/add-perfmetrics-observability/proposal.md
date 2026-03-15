@@ -15,8 +15,8 @@
   - `nfq_total_us`：单个 NFQ 包的 userspace 总处理时间（`PacketListener::callback()` entry → `sendVerdict()` return）。
   - `dns_decision_us`：单次 DNS 判决处理时间（`len/domain/uid` 已读完且 `App/Domain` 已构造完成 → `verdict/getips` 写回完成）。
 - 新增控制面命令（不区分 debug/release 语义）：
-  - `PERFMETRICS [<0|1>]`：查询/设置是否采集 D 层指标（`0→1` 自动清零）。
-  - `METRICS.PERF`：拉取 `nfq_total_us` / `dns_decision_us` 的聚合结果（固定 JSON shape）。
+  - `PERFMETRICS [<0|1>]`：查询/设置是否采集 D 层指标（`0→1` 自动清零；仅接受 `0|1`，非法参数返回 `NOK`）。
+  - `METRICS.PERF`：拉取 `{"perf":{...}}` 的聚合结果（固定 JSON shape；与现有 `METRICS.*` 风格一致）。
   - `METRICS.PERF.RESET`：清零上述聚合结果（不改变 enable 状态）。
 - 聚合方式：固定维度的直方图/分桶 + 原子计数，不保留逐样本历史、不开 per-packet 日志/JSON。
 
@@ -32,4 +32,4 @@
 ## Impact
 - Affected code（实现阶段）：`src/PacketListener.cpp`, `src/DnsListener.cpp`, `src/Control.cpp`, `src/Control.hpp`
 - Affected docs（实现阶段）：`docs/INTERFACE_SPECIFICATION.md`
-- Affected perf tooling（实现阶段）：`tests/integration/perf-nfq-latency.sh`
+- Affected perf tooling（实现阶段）：`tests/integration/perf-network-load.sh`
