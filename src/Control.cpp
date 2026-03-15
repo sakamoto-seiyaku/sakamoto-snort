@@ -9,12 +9,16 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <net/if.h>
 #include <thread>
 #include <vector>
 #include <charconv>
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <fstream>
+#include <optional>
 #include <system_error>
 #include <sucre-snort.hpp>
 #include <PackageListener.hpp>
@@ -70,6 +74,14 @@ Control::Control() {
     _cmds.emplace("METRICS.PERF.RESET", make(&Control::cmdMetricsPerfReset));
     _cmds.emplace("METRICS.REASONS", make(&Control::cmdMetricsReasons));
     _cmds.emplace("METRICS.REASONS.RESET", make(&Control::cmdMetricsReasonsReset));
+    _cmds.emplace("IPRULES", make(&Control::cmdIpRules));
+    _cmds.emplace("IPRULES.ADD", make(&Control::cmdIpRulesAdd));
+    _cmds.emplace("IPRULES.UPDATE", make(&Control::cmdIpRulesUpdate));
+    _cmds.emplace("IPRULES.REMOVE", make(&Control::cmdIpRulesRemove));
+    _cmds.emplace("IPRULES.ENABLE", make(&Control::cmdIpRulesEnable));
+    _cmds.emplace("IPRULES.PRINT", make(&Control::cmdIpRulesPrint));
+    _cmds.emplace("IPRULES.PREFLIGHT", make(&Control::cmdIpRulesPreflight));
+    _cmds.emplace("IFACES.PRINT", make(&Control::cmdIfacesPrint));
     _cmds.emplace("APP.NAME", make(&Control::cmdAppsByName));
     _cmds.emplace("APP.UID", make(&Control::cmdAppsByUid));
     _cmds.emplace("APP.CUSTOMLISTS", make(&Control::cmdAppCustomLists));
@@ -798,6 +810,365 @@ void Control::cmdMetricsReasonsReset(CmdParams &&params) const {
 
     pktManager.resetReasonMetrics();
     ack(params.out);
+}
+
+namespace {
+const char *ipRulesActionStr(const IpRulesEngine::Action a) noexcept {
+    return a == IpRulesEngine::Action::ALLOW ? "allow" : "block";
+}
+
+const char *ipRulesDirStr(const IpRulesEngine::Direction d) noexcept {
+    switch (d) {
+    case IpRulesEngine::Direction::ANY:
+        return "any";
+    case IpRulesEngine::Direction::IN:
+        return "in";
+    case IpRulesEngine::Direction::OUT:
+        return "out";
+    }
+    return "any";
+}
+
+const char *ipRulesIfaceStr(const IpRulesEngine::IfaceKind k) noexcept {
+    switch (k) {
+    case IpRulesEngine::IfaceKind::ANY:
+        return "any";
+    case IpRulesEngine::IfaceKind::WIFI:
+        return "wifi";
+    case IpRulesEngine::IfaceKind::DATA:
+        return "data";
+    case IpRulesEngine::IfaceKind::VPN:
+        return "vpn";
+    case IpRulesEngine::IfaceKind::UNMANAGED:
+        return "unmanaged";
+    }
+    return "any";
+}
+
+const char *ipRulesProtoStr(const IpRulesEngine::Proto p) noexcept {
+    switch (p) {
+    case IpRulesEngine::Proto::ANY:
+        return "any";
+    case IpRulesEngine::Proto::TCP:
+        return "tcp";
+    case IpRulesEngine::Proto::UDP:
+        return "udp";
+    case IpRulesEngine::Proto::ICMP:
+        return "icmp";
+    }
+    return "any";
+}
+
+std::string ipRulesCidrStr(const IpRulesEngine::CidrV4 &c) {
+    if (c.any) {
+        return "any";
+    }
+    in_addr a{};
+    a.s_addr = htonl(c.addr);
+    char buf[INET_ADDRSTRLEN] = {};
+    if (inet_ntop(AF_INET, &a, buf, sizeof(buf)) == nullptr) {
+        return "any";
+    }
+    return std::string(buf) + "/" + std::to_string(static_cast<uint32_t>(c.prefix));
+}
+
+std::string ipRulesPortPredStr(const IpRulesEngine::PortPredicate &p) {
+    switch (p.kind) {
+    case IpRulesEngine::PortPredicate::Kind::ANY:
+        return "any";
+    case IpRulesEngine::PortPredicate::Kind::EXACT:
+        return std::to_string(static_cast<uint32_t>(p.lo));
+    case IpRulesEngine::PortPredicate::Kind::RANGE:
+        return std::to_string(static_cast<uint32_t>(p.lo)) + "-" +
+               std::to_string(static_cast<uint32_t>(p.hi));
+    }
+    return "any";
+}
+
+const char *ifaceKindStrFromBit(const uint8_t bit) noexcept {
+    switch (bit) {
+    case 1:
+        return "wifi";
+    case 2:
+        return "data";
+    case 4:
+        return "vpn";
+    case 128:
+        return "unmanaged";
+    default:
+        return "unmanaged";
+    }
+}
+} // namespace
+
+void Control::cmdIpRules(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1) {
+        nack(params.out);
+        return;
+    }
+
+    const auto &arg = args[0];
+    if (arg.type == CmdArg::NONE) {
+        params.out << (settings.ipRulesEnabled() ? 1 : 0);
+        return;
+    }
+
+    if (arg.type != CmdArg::INT || (arg.number != 0 && arg.number != 1)) {
+        nack(params.out);
+        return;
+    }
+
+    settings.ipRulesEnabled(arg.number == 1);
+    ack(params.out);
+}
+
+void Control::cmdIpRulesAdd(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() < 3 || args[0].type != CmdArg::INT) {
+        nack(params.out);
+        return;
+    }
+
+    std::vector<std::string> kv;
+    kv.reserve(args.size() - 1);
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (args[i].type != CmdArg::STR) {
+            nack(params.out);
+            return;
+        }
+        kv.push_back(args[i].string);
+    }
+
+    const auto res = pktManager.ipRules().addFromKv(args[0].number, kv);
+    if (res.ok && res.ruleId.has_value()) {
+        params.out << *res.ruleId;
+    } else {
+        nack(params.out);
+    }
+}
+
+void Control::cmdIpRulesUpdate(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() < 2 || args[0].type != CmdArg::INT) {
+        nack(params.out);
+        return;
+    }
+
+    std::vector<std::string> kv;
+    kv.reserve(args.size() - 1);
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (args[i].type != CmdArg::STR) {
+            nack(params.out);
+            return;
+        }
+        kv.push_back(args[i].string);
+    }
+
+    const auto res = pktManager.ipRules().updateFromKv(args[0].number, kv);
+    if (res.ok) {
+        ack(params.out);
+    } else {
+        nack(params.out);
+    }
+}
+
+void Control::cmdIpRulesRemove(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::INT) {
+        nack(params.out);
+        return;
+    }
+
+    const auto res = pktManager.ipRules().removeRule(args[0].number);
+    if (res.ok) {
+        ack(params.out);
+    } else {
+        nack(params.out);
+    }
+}
+
+void Control::cmdIpRulesEnable(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 2 || args[0].type != CmdArg::INT || args[1].type != CmdArg::INT ||
+        (args[1].number != 0 && args[1].number != 1)) {
+        nack(params.out);
+        return;
+    }
+
+    const auto res = pktManager.ipRules().enableRule(args[0].number, args[1].number == 1);
+    if (res.ok) {
+        ack(params.out);
+    } else {
+        nack(params.out);
+    }
+}
+
+void Control::cmdIpRulesPrint(CmdParams &&params) const {
+    std::optional<uint32_t> uidFilter = std::nullopt;
+    std::optional<IpRulesEngine::RuleId> ruleFilter = std::nullopt;
+
+    std::string tok;
+    while (params.args >> tok) {
+        if (tok == "UID") {
+            uint32_t uid = 0;
+            if (!(params.args >> uid)) {
+                nack(params.out);
+                return;
+            }
+            uidFilter = uid;
+        } else if (tok == "RULE") {
+            uint32_t rid = 0;
+            if (!(params.args >> rid)) {
+                nack(params.out);
+                return;
+            }
+            ruleFilter = rid;
+        } else {
+            nack(params.out);
+            return;
+        }
+    }
+
+    const auto rules = pktManager.ipRules().listRules(uidFilter, ruleFilter);
+
+    params.out << "{" << JSF("rules") << "[";
+    bool first = true;
+    for (const auto &r : rules) {
+        when(first, params.out << ",");
+        const auto stats = pktManager.ipRules().statsSnapshot(r.ruleId);
+        const IpRulesEngine::RuleStatsSnapshot s = stats.value_or(IpRulesEngine::RuleStatsSnapshot{});
+
+        params.out << "{"
+                   << JSF("ruleId") << r.ruleId << "," << JSF("uid") << r.uid << ","
+                   << JSF("action") << JSS(ipRulesActionStr(r.action)) << ","
+                   << JSF("priority") << r.priority << "," << JSF("enabled") << JSB(r.enabled)
+                   << "," << JSF("enforce") << JSB(r.enforce) << "," << JSF("log") << JSB(r.log)
+                   << "," << JSF("dir") << JSS(ipRulesDirStr(r.dir)) << ","
+                   << JSF("iface") << JSS(ipRulesIfaceStr(r.iface)) << ","
+                   << JSF("ifindex") << r.ifindex << ","
+                   << JSF("proto") << JSS(ipRulesProtoStr(r.proto)) << ","
+                   << JSF("src") << JSS(ipRulesCidrStr(r.src)) << ","
+                   << JSF("dst") << JSS(ipRulesCidrStr(r.dst)) << ","
+                   << JSF("sport") << JSS(ipRulesPortPredStr(r.sport)) << ","
+                   << JSF("dport") << JSS(ipRulesPortPredStr(r.dport)) << ","
+                   << JSF("stats") << "{"
+                   << JSF("hitPackets") << s.hitPackets << "," << JSF("hitBytes") << s.hitBytes
+                   << "," << JSF("lastHitTsNs") << s.lastHitTsNs << ","
+                   << JSF("wouldHitPackets") << s.wouldHitPackets << ","
+                   << JSF("wouldHitBytes") << s.wouldHitBytes << ","
+                   << JSF("lastWouldHitTsNs") << s.lastWouldHitTsNs << "}"
+                   << "}";
+    }
+    params.out << "]}";
+}
+
+void Control::cmdIpRulesPreflight(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    const auto rep = pktManager.ipRules().preflight();
+
+    const auto printIssues = [&](const std::vector<IpRulesEngine::PreflightIssue> &issues) {
+        params.out << "[";
+        bool first = true;
+        for (const auto &it : issues) {
+            when(first, params.out << ",");
+            params.out << "{"
+                       << JSF("metric") << JSS(it.metric) << "," << JSF("value") << it.value
+                       << "," << JSF("limit") << it.limit << "," << JSF("message") << JSS(it.message)
+                       << "}";
+        }
+        params.out << "]";
+    };
+
+    params.out << "{";
+    params.out << JSF("summary") << "{"
+               << JSF("rulesTotal") << rep.summary.rulesTotal << ","
+               << JSF("rangeRulesTotal") << rep.summary.rangeRulesTotal << ","
+               << JSF("subtablesTotal") << rep.summary.subtablesTotal << ","
+               << JSF("maxSubtablesPerUid") << rep.summary.maxSubtablesPerUid << ","
+               << JSF("maxRangeRulesPerBucket") << rep.summary.maxRangeRulesPerBucket << "}"
+               << ",";
+    params.out << JSF("limits") << "{"
+               << JSF("recommended") << "{"
+               << JSF("maxRulesTotal") << rep.recommended.maxRulesTotal << ","
+               << JSF("maxSubtablesPerUid") << rep.recommended.maxSubtablesPerUid << ","
+               << JSF("maxRangeRulesPerBucket") << rep.recommended.maxRangeRulesPerBucket << "}"
+               << "," << JSF("hard") << "{"
+               << JSF("maxRulesTotal") << rep.hard.maxRulesTotal << ","
+               << JSF("maxSubtablesPerUid") << rep.hard.maxSubtablesPerUid << ","
+               << JSF("maxRangeRulesPerBucket") << rep.hard.maxRangeRulesPerBucket << "}"
+               << "}"
+               << ",";
+    params.out << JSF("warnings");
+    printIssues(rep.warnings);
+    params.out << "," << JSF("violations");
+    printIssues(rep.violations);
+    params.out << "}";
+}
+
+void Control::cmdIfacesPrint(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    pktManager.refreshIfacesOnce();
+
+    auto ifaces = if_nameindex();
+    if (ifaces == nullptr) {
+        params.out << "{" << JSF("ifaces") << "[]}";
+        return;
+    }
+
+    struct IfaceEntry {
+        uint32_t ifindex = 0;
+        std::string name;
+        std::string kind;
+        std::optional<uint32_t> type;
+    };
+
+    std::vector<IfaceEntry> entries;
+    for (auto it = ifaces; it && it->if_index != 0 && it->if_name != nullptr; ++it) {
+        const uint32_t ifindex = it->if_index;
+        const std::string name = it->if_name;
+
+        IfaceEntry e{};
+        e.ifindex = ifindex;
+        e.name = name;
+        e.kind = ifaceKindStrFromBit(pktManager.ifaceKindBit(ifindex));
+
+        const std::string typePath = std::string("/sys/class/net/") + name + "/type";
+        uint32_t t = 0;
+        if (std::ifstream in(typePath); in.is_open() && (in >> t)) {
+            e.type = t;
+        }
+
+        entries.push_back(std::move(e));
+    }
+    if_freenameindex(ifaces);
+
+    std::sort(entries.begin(), entries.end(),
+              [](const IfaceEntry &a, const IfaceEntry &b) { return a.ifindex < b.ifindex; });
+
+    params.out << "{" << JSF("ifaces") << "[";
+    bool first = true;
+    for (const auto &e : entries) {
+        when(first, params.out << ",");
+        params.out << "{"
+                   << JSF("ifindex") << e.ifindex << "," << JSF("name") << JSS(e.name) << ","
+                   << JSF("kind") << JSS(e.kind);
+        if (e.type.has_value()) {
+            params.out << "," << JSF("type") << *e.type;
+        }
+        params.out << "}";
+    }
+    params.out << "]}";
 }
 
 void Control::cmdResetAll(CmdParams &&params) const {
@@ -1553,6 +1924,7 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "Commands NOT supporting USER clause (global or UID-only):\r\n"
         << "  RESETALL, PERFMETRICS, METRICS.PERF, METRICS.PERF.RESET,\r\n"
         << "  METRICS.REASONS, METRICS.REASONS.RESET,\r\n"
+        << "  IPRULES, IPRULES.*, IFACES.PRINT,\r\n"
         << "  DNSSTREAM.*, PKTSTREAM.*, ACTIVITYSTREAM.*,\r\n"
         << "  TOPACTIVITY (accepts <uid> only, not <str>),\r\n"
         << "  BLOCKLIST.*, RULES.*, ALL<v>, DNS<v>, RXP<v>, RXB<v>, TXP<v>, TXB<v>\r\n"
@@ -1574,6 +1946,14 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "METRICS.PERF.RESET: clears perf metrics aggregates.\r\n"
         << "METRICS.REASONS: prints device-wide per-reason packet/byte counters.\r\n"
         << "METRICS.REASONS.RESET: clears per-reason counters.\r\n"
+        << "IPRULES [<0|1>]: prints or sets IPv4 L3/L4 rules engine toggle.\r\n"
+        << "IFACES.PRINT: prints a JSON snapshot of current network interfaces.\r\n"
+        << "IPRULES.PREFLIGHT: prints current ruleset complexity report.\r\n"
+        << "IPRULES.PRINT [UID <uid>] [RULE <ruleId>]: prints rules as {\"rules\":[...]}.\r\n"
+        << "IPRULES.ADD <uid> <kv...>: adds a rule, returns ruleId.\r\n"
+        << "IPRULES.UPDATE <ruleId> <kv...>: patch-updates a rule.\r\n"
+        << "IPRULES.REMOVE <ruleId>: removes a rule.\r\n"
+        << "IPRULES.ENABLE <ruleId> <0|1>: disables/enables a rule.\r\n"
         << "\r\n"
 
         << "***\r\n"

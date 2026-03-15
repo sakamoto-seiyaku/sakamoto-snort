@@ -74,6 +74,7 @@ static void snort() {
                                   domManager.restore();
                                   appManager.restore();
                                   dnsListener.restore();
+                                  pktManager.restore();
                                   Timer::get("restore");
                                   Timer::set("lists", "Domain lists init time");
                                   domManager.start(blockingListManager.getLists());
@@ -151,6 +152,7 @@ void snortSave(bool quit) {
     domManager.save();
     appManager.save();
     dnsListener.save();
+    pktManager.save();
     Timer::get("save");
     if (quit) {
         std::exit(EXIT_SUCCESS);

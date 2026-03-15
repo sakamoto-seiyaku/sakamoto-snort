@@ -142,7 +142,7 @@ public:
 
 private:
     Saver _saver{_saveFile};
-    uint32_t _version = 7;
+    uint32_t _version = 8;
     uint32_t _savedVersion = 1;
     bool _firstStart = android::base::GetBoolProperty(_firstStartProp, true);
     bool _inetControl = std::ifstream(_telnetFile).is_open();
@@ -156,6 +156,7 @@ private:
     std::atomic_uint8_t _passState;
     std::atomic_bool _getBlackIPs;
     std::atomic_bool _blockIPLeaks;
+    std::atomic_bool _ipRulesEnabled;
     std::atomic<std::time_t> _maxAgeIP;
 
 public:
@@ -174,6 +175,7 @@ public:
         _passState = 0;
         _getBlackIPs = false;
         _blockIPLeaks = false;
+        _ipRulesEnabled = false;
         _maxAgeIP = 3600 * 4;
     }
 
@@ -246,6 +248,13 @@ public:
 
     void blockIPLeaks(const bool blockIPLeaks) {
         _blockIPLeaks = blockIPLeaks;
+        save();
+    }
+
+    bool ipRulesEnabled() const { return _ipRulesEnabled; }
+
+    void ipRulesEnabled(const bool enabled) {
+        _ipRulesEnabled = enabled;
         save();
     }
 

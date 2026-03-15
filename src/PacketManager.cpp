@@ -19,6 +19,7 @@ void PacketManager::reset() {
     Streamable<Packet<IPv4>>::reset();
     Streamable<Packet<IPv6>>::reset();
     _reasonMetrics.reset();
+    _ipRules.resetAll();
 }
 
 void PacketManager::startStream(const SocketIO::Ptr sockio, const bool pretty,
@@ -135,3 +136,7 @@ void PacketManager::refreshIfacesOnce() {
     std::lock_guard<std::mutex> g(_ifaceRefreshMutex);
     refreshIfaces();
 }
+
+// Bundled translation unit: keep IpRulesEngine out of the Android.bp srcs list to avoid
+// requiring a full Soong graph regeneration for local incremental builds.
+#include "IpRulesEngine.cpp"

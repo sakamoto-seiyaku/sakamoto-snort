@@ -58,6 +58,7 @@ void Settings::save() {
         _saver.write(_password);
         _saver.write<bool>(_getBlackIPs);
         _saver.write<bool>(_blockIPLeaks);
+        _saver.write<bool>(_ipRulesEnabled);
         _saver.write<std::time_t>(_maxAgeIP);
     });
 }
@@ -81,6 +82,11 @@ void Settings::restore() {
         _password = password;
         _getBlackIPs = _saver.read<bool>();
         _blockIPLeaks = _saver.read<bool>();
+        if (_savedVersion >= 8) {
+            _ipRulesEnabled = _saver.read<bool>();
+        } else {
+            _ipRulesEnabled = false;
+        }
         _maxAgeIP = _saver.read<std::time_t>();
     });
 }

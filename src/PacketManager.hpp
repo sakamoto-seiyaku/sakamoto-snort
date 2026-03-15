@@ -7,6 +7,7 @@
 
 #include <AppManager.hpp>
 #include <HostManager.hpp>
+#include <IpRulesEngine.hpp>
 #include <Packet.hpp>
 #include <ReasonMetrics.hpp>
 #include <Streamable.hpp>
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
 class PacketManager : public Streamable<Packet<IPv4>>, Streamable<Packet<IPv6>> {
@@ -34,6 +36,7 @@ private:
     static constexpr long long kIfacePassiveRefreshNs = 30LL * 1000 * 1000 * 1000; // 30 s
 
     ReasonMetrics _reasonMetrics;
+    IpRulesEngine _ipRules;
 
 public:
     PacketManager();
@@ -50,6 +53,14 @@ public:
 
     void reset();
 
+    void save() { _ipRules.save(); }
+
+    void restore() { _ipRules.restore(); }
+
+    IpRulesEngine &ipRules() { return _ipRules; }
+
+    const IpRulesEngine &ipRules() const { return _ipRules; }
+
     void startStream(const SocketIO::Ptr sockio, const bool pretty, const uint32_t horizon,
                      const std::uint32_t minSize);
 
@@ -58,6 +69,9 @@ public:
     ReasonMetrics::Snapshot reasonMetricsSnapshot() const { return _reasonMetrics.snapshot(); }
 
     void resetReasonMetrics() { _reasonMetrics.reset(); }
+
+    // Hot-path safe: uses the existing interface kind snapshot and best-effort refresh.
+    uint8_t ifaceKindBit(const uint32_t ifindex) { return ifaceBit(ifindex); }
 
 private:
     // Rebuild snapshot from current system state and publish atomically.
@@ -79,18 +93,105 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                          const Host::Ptr &host, const bool input, const uint32_t iface,
                          const timespec timestamp, const int proto, const uint16_t srcPort,
                          const uint16_t dstPort, const uint16_t len) {
+    const uint8_t ifaceKindBit = ifaceBit(iface);
+    const bool ifaceBlocked = (app->blockIface() & ifaceKindBit) != 0;
+    const uint64_t tsNs =
+        static_cast<uint64_t>(timestamp.tv_sec) * 1000000000ULL + static_cast<uint64_t>(timestamp.tv_nsec);
+
+    std::optional<uint32_t> ruleId = std::nullopt;
+    std::optional<uint32_t> wouldRuleId = std::nullopt;
+    [[maybe_unused]] bool hasWouldDecision = false;
+    [[maybe_unused]] IpRulesEngine::Decision wouldDecision{};
+
+    // 1) Highest priority hard-drop: IFACE_BLOCK.
+    if (ifaceBlocked) {
+        const bool verdict = false;
+        const PacketReasonId reasonId = PacketReasonId::IFACE_BLOCK;
+        _reasonMetrics.observe(reasonId, len);
+
+        if (app->tracked()) {
+            // IFACE_BLOCK is independent of domain policy; keep stats minimally attributed.
+            appManager.updateStats(nullptr, app, true, Stats::GREY, input ? Stats::RXP : Stats::TXP, 1);
+            appManager.updateStats(nullptr, app, true, Stats::GREY, input ? Stats::RXB : Stats::TXB, len);
+        }
+
+        Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
+            srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
+            verdict, reasonId, ruleId, wouldRuleId));
+        return verdict;
+    }
+
+    // 2) IPv4-only fast path: IPRULES (exact cache -> classifier snapshot).
+    if constexpr (std::is_same_v<IP, IPv4>) {
+        if (settings.ipRulesEnabled()) {
+            auto v4HostFromNetBytes = [](const uint8_t *b) -> uint32_t {
+                return (static_cast<uint32_t>(b[0]) << 24) | (static_cast<uint32_t>(b[1]) << 16) |
+                       (static_cast<uint32_t>(b[2]) << 8) | static_cast<uint32_t>(b[3]);
+            };
+
+            IpRulesEngine::PacketKeyV4 k{};
+            k.uid = app->uid();
+            k.dir = input ? 0 : 1;
+            k.ifaceKind = ifaceKindBit;
+            k.proto = static_cast<uint8_t>(proto);
+            k.ifindex = iface;
+            k.srcIp = v4HostFromNetBytes(srcIp.data());
+            k.dstIp = v4HostFromNetBytes(dstIp.data());
+            k.srcPort = srcPort;
+            k.dstPort = dstPort;
+
+            const auto decision = _ipRules.evaluate(k);
+
+            if (decision.kind == IpRulesEngine::DecisionKind::ALLOW ||
+                decision.kind == IpRulesEngine::DecisionKind::BLOCK) {
+                const bool verdict = (decision.kind == IpRulesEngine::DecisionKind::ALLOW);
+                const PacketReasonId reasonId =
+                    verdict ? PacketReasonId::IP_RULE_ALLOW : PacketReasonId::IP_RULE_BLOCK;
+                ruleId = decision.ruleId;
+
+                IpRulesEngine::observeEnforceHit(decision, static_cast<uint32_t>(len), tsNs);
+                _reasonMetrics.observe(reasonId, len);
+
+                if (app->tracked()) {
+                    appManager.updateStats(nullptr, app, !verdict, Stats::GREY,
+                                           input ? Stats::RXP : Stats::TXP, 1);
+                    appManager.updateStats(nullptr, app, !verdict, Stats::GREY,
+                                           input ? Stats::RXB : Stats::TXB, len);
+                }
+
+                Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
+                    srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
+                    verdict, reasonId, ruleId, std::nullopt));
+                return verdict;
+            }
+
+            if (decision.kind == IpRulesEngine::DecisionKind::WOULD_BLOCK) {
+                hasWouldDecision = true;
+                wouldDecision = decision;
+            }
+        }
+    }
+
+    // 3) Legacy/domain path (unchanged semantics).
     auto domain = host->domain();
     const auto validIP = domain != nullptr && domain->validIP();
     if (!validIP) {
         domain = nullptr;
     }
+
     const auto [blocked, cs] = app->blocked(domain);
-    const bool ifaceBlocked = (app->blockIface() & ifaceBit(iface)) != 0;
     const bool ipLeakBlocked = settings.blockIPLeaks() && blocked && validIP;
-    const bool verdict = !ipLeakBlocked && !ifaceBlocked;
-    const PacketReasonId reasonId = ifaceBlocked  ? PacketReasonId::IFACE_BLOCK
-                                   : ipLeakBlocked ? PacketReasonId::IP_LEAK_BLOCK
-                                                   : PacketReasonId::ALLOW_DEFAULT;
+    const bool verdict = !ipLeakBlocked;
+    const PacketReasonId reasonId = ipLeakBlocked ? PacketReasonId::IP_LEAK_BLOCK
+                                                  : PacketReasonId::ALLOW_DEFAULT;
+
+    // Would-match overlay: emit only if final verdict is ACCEPT.
+    if constexpr (std::is_same_v<IP, IPv4>) {
+        if (hasWouldDecision && verdict) {
+            wouldRuleId = wouldDecision.ruleId;
+            IpRulesEngine::observeWouldHitIfAccepted(wouldDecision, true, static_cast<uint32_t>(len), tsNs);
+        }
+    }
 
     _reasonMetrics.observe(reasonId, len);
 
@@ -98,9 +199,10 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXP : Stats::TXP, 1);
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXB : Stats::TXB, len);
     }
+
     Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
         srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict,
-        reasonId, std::nullopt, std::nullopt));
+        reasonId, ruleId, wouldRuleId));
 
     return verdict;
 }

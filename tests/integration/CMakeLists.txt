@@ -25,6 +25,12 @@ add_sucre_snort_shell_test(
 )
 
 add_sucre_snort_shell_test(
+  p1-iprules
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/iprules.sh"
+  "p1;device;root-required;iprules"
+)
+
+add_sucre_snort_shell_test(
   p2-device-smoke
   "${SUCRE_SNORT_INTEGRATION_ROOT}/device-smoke.sh"
   "p2;device;root-required;smoke"

@@ -36,6 +36,10 @@ public:
 
     template <class IP> const Host::Ptr make(const Address<IP> &ip);
 
+    // Create/find a Host without attempting reverse DNS resolution, regardless of settings.
+    // Intended for hot-path early-drop reasons (e.g., IFACE_BLOCK) where hostname is irrelevant.
+    template <class IP> const Host::Ptr makeNoReverseDns(const Address<IP> &ip);
+
     template <class IP> void domain(const Host::Ptr host, const Address<IP> &ip) {
         host->domain(domManager.find(ip));
     }
@@ -49,7 +53,7 @@ public:
 private:
     template <class IP> auto &byIP();
 
-    template <class IP> const Host::Ptr create(const Address<IP> &ip);
+    template <class IP> const Host::Ptr create(const Address<IP> &ip, const bool allowReverseDns);
 };
 
 template <class IP> auto &HostManager::byIP() {
@@ -78,11 +82,20 @@ template <class IP> const Host::Ptr HostManager::make(const Address<IP> &ip) {
     if (const auto host = find<IP>(ip, false)) {
         return host;
     } else {
-        return create(ip);
+        return create(ip, true);
     }
 }
 
-template <class IP> const Host::Ptr HostManager::create(const Address<IP> &ip) {
+template <class IP> const Host::Ptr HostManager::makeNoReverseDns(const Address<IP> &ip) {
+    if (const auto host = find<IP>(ip, false)) {
+        return host;
+    } else {
+        return create(ip, false);
+    }
+}
+
+template <class IP>
+const Host::Ptr HostManager::create(const Address<IP> &ip, const bool allowReverseDns) {
     Host::Ptr host = nullptr;
     // Phase 1: ensure host exists and mappings are in place under Manager locks only
     {
@@ -96,7 +109,7 @@ template <class IP> const Host::Ptr HostManager::create(const Address<IP> &ip) {
         }
     }
     // Phase 2: reverse DNS outside of Manager locks; update Host then name index, no nested locks
-    if (settings.reverseDns() && !host->resolved()) {
+    if (allowReverseDns && settings.reverseDns() && !host->resolved()) {
         sockaddr_storage sa{};
         ip.fillSockAddr(sa);
         char buffer[NI_MAXHOST];

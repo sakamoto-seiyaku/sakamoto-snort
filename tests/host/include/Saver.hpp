@@ -1,8 +1,11 @@
 #pragma once
 
 #include <functional>
+#include <exception>
 #include <string>
 #include <utility>
+
+class RestoreException : public std::exception {};
 
 class Saver {
 private:

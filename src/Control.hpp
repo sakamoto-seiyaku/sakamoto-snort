@@ -138,6 +138,22 @@ private:
 
     void cmdMetricsReasonsReset(CmdParams &&params) const;
 
+    void cmdIpRules(CmdParams &&params) const;
+
+    void cmdIpRulesAdd(CmdParams &&params) const;
+
+    void cmdIpRulesUpdate(CmdParams &&params) const;
+
+    void cmdIpRulesRemove(CmdParams &&params) const;
+
+    void cmdIpRulesEnable(CmdParams &&params) const;
+
+    void cmdIpRulesPrint(CmdParams &&params) const;
+
+    void cmdIpRulesPreflight(CmdParams &&params) const;
+
+    void cmdIfacesPrint(CmdParams &&params) const;
+
     void cmdAppsByUid(CmdParams &&params) const;
 
     void cmdAppsByName(CmdParams &&params) const;

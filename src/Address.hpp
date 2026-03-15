@@ -40,6 +40,8 @@ public:
 
     void fillSockAddr(sockaddr_storage &sa) const { IP::fillSockAddr(sa, _value.data()); }
 
+    const uint8_t *data() const noexcept { return _value.data(); }
+
     const std::string str() const;
 
     void save(Saver &saver) const;
