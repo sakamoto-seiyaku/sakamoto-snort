@@ -49,7 +49,7 @@
 ## Local override example
 本地若需要为 VS Code/CMake workspace 指定自定义环境，请创建未提交的 `CMakeUserPresets.json`，或在启动 VS Code 前导出环境变量。
 
-## P0 host-side tests in VS Code
+## Host-side unit tests in VS Code
 当前 repo-root workspace 已将 `tests/host/` 纳入 CMake/CTest。
 
 推荐工作流：
@@ -63,10 +63,10 @@
 - `cmake --preset dev-debug`
 - `cmake --build --preset dev-debug --target snort-host-tests`
 
-## P1 / P2 real-device lanes in VS Code
+## Real-device integration lanes in VS Code
 当前 repo-root workspace 已将 lane 级真机测试暴露为 `CTest`：
-- `p1-baseline`
-- `p2-device-smoke`
+- `p1-baseline`（baseline integration；历史命名）
+- `p2-device-smoke`（platform smoke；历史命名）
 
 推荐工作流：
 - rooted 真机在线；
@@ -84,7 +84,7 @@
 - 已进入测试流程后的 deploy / daemon / firewall / selinux 等异常，按 fail 处理；
 - deploy 现在会在健康检查里执行一次真实 `HELLO`，并在检测到遗留 `lldb-server` / `TracerPid` 时先清理残留 debugger，避免“进程在 `tracing stop` 但表面仍存活”的假健康状态。
 
-## P3 F5 real-device debug in VS Code
+## F5 real-device debug in VS Code
 当前 checked-in VS Code 配置已经提供：
 - `.vscode/settings.json` 默认启用 `CMake Presets`，并把 workspace 默认 preset 固定到 `dev-debug`
 - `.vscode/tasks.json` 中的 `snort-configure-dev-debug`、`snort-build`、`snort-deploy-stage`、`snort-debug-attach-workflow`、`snort-debug-run-workflow`、`snort-debug-cleanup`、`snort-host-tests`、`snort-p1-tests`、`snort-p2-tests`
