@@ -401,6 +401,7 @@ void Control::clientLoop(const int sockClient) const {
     }
 
     const auto &resetall = _cmds.find("RESETALL");
+    const auto &metricsReasonsReset = _cmds.find("METRICS.REASONS.RESET");
     // Avoid large stack buffer: use heap-backed buffer sized from settings.
     std::vector<char> buffer(settings.controlCmdLen);
     const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
@@ -428,7 +429,7 @@ void Control::clientLoop(const int sockClient) const {
                 ack(out);
             } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
                 const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
-                if (it == resetall) {
+                if (it == resetall || it == metricsReasonsReset) {
                     const std::lock_guard lock(mutexListeners);
                     applyCmd();
                 } else {
@@ -1326,17 +1327,28 @@ void Control::cmdBlockIface(CmdParams &&params) const {
     const auto parg = readAppArg(params.args);  // Reads app + optional USER clause
     const auto iface = readSingleArg(params.args);  // Read optional iface
 
-    if (const auto app = arg2app(parg)) {
-        if (iface.type == CmdArg::NONE) {
-            // GET mode
+    if (iface.type == CmdArg::NONE) {
+        // GET mode: BLOCKIFACE <uid|str> [USER <userId>]
+        if (const auto app = arg2app(parg)) {
             params.out << static_cast<uint32_t>(app->blockIface());
-        } else {
-            // SET mode
-            ack(params.out);
-            if (iface.type == CmdArg::INT) {
-                app->blockIface(iface.number);
-            }
         }
+        return;
+    }
+
+    // SET mode: BLOCKIFACE <uid|str> [USER <userId>] <mask>
+    if (iface.type != CmdArg::INT || iface.number > 255) {
+        nack(params.out);
+        return;
+    }
+    ack(params.out);
+
+    auto app = arg2app(parg);
+    // Allow setting by numeric UID even before the app has been observed on the hot path.
+    if (app == nullptr && parg.arg.type == CmdArg::INT) {
+        app = appManager.make(parg.arg.number);
+    }
+    if (app != nullptr) {
+        app->blockIface(static_cast<uint8_t>(iface.number));
     }
 }
 

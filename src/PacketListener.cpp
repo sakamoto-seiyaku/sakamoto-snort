@@ -298,8 +298,8 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         const Address<IP> &remoteIp = _inputTLS ? srcIp : dstIp;
         const auto app = appManager.make(uid);
         const bool ifaceBlocked = (app->blockIface() & pktManager.ifaceKindBit(iface)) != 0;
-        const auto host = ifaceBlocked ? hostManager.makeNoReverseDns<IP>(remoteIp)
-                                       : hostManager.make<IP>(remoteIp);
+        const auto host =
+            ifaceBlocked ? hostManager.anonymousHost() : hostManager.make<IP>(remoteIp);
 
         // Phase 2 (under global listeners shared lock): pure decision + stats + streaming. This
         // critical section must remain free of blocking I/O to avoid starving RESETALL and other

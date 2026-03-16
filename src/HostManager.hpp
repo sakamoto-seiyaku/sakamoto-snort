@@ -17,6 +17,10 @@ private:
     using IPv4Map = std::unordered_map<Address<IPv4>, const Host::Ptr>;
     using IPv6Map = std::unordered_map<Address<IPv6>, const Host::Ptr>;
 
+    // Singleton Host used for hot-path early-drop reasons where we must not materialize
+    // per-remote host state (and thus must not touch host caches or DomainManager).
+    Host::Ptr _anonymousHost;
+
     std::vector<Host::Ptr> _hosts;
     NamesMap _byName;
     IPv4Map _byIPv4;
@@ -43,6 +47,8 @@ public:
     template <class IP> void domain(const Host::Ptr host, const Address<IP> &ip) {
         host->domain(domManager.find(ip));
     }
+
+    const Host::Ptr &anonymousHost() const { return _anonymousHost; }
 
     void reset();
 

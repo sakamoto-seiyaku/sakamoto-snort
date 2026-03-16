@@ -5,10 +5,12 @@
 
 #include <sys/socket.h>
 
+#include <memory>
+
 #include <Settings.hpp>
 #include <HostManager.hpp>
 
-HostManager::HostManager() {}
+HostManager::HostManager() : _anonymousHost(std::make_shared<Host>()) {}
 
 HostManager::~HostManager() {}
 
