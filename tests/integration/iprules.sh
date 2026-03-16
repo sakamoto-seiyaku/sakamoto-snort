@@ -129,6 +129,27 @@ ping4_once() {
     return 1
 }
 
+ping4_async() {
+    local target="$1"
+    local delay="${2:-1}"
+    if adb_shell "command -v ping >/dev/null 2>&1"; then
+        adb_shell "sleep \"$delay\"; ping -4 -c 1 -W 1 \"$target\" >/dev/null 2>&1 || ping -c 1 -W 1 \"$target\" >/dev/null 2>&1 || true" >/dev/null 2>&1 &
+        echo "$!"
+        return 0
+    fi
+    return 1
+}
+
+resolve_ipv4_via_ping() {
+    local host="$1"
+    if ! adb_shell "command -v ping >/dev/null 2>&1"; then
+        return 1
+    fi
+    local line
+    line="$(adb_shell "ping -4 -c 1 -W 1 \"$host\" 2>/dev/null | head -n 1" 2>/dev/null || true)"
+    echo "$line" | sed -n 's/.*(\([0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\)).*/\1/p' | head -n 1
+}
+
 main() {
     log_section "IP rules engine (IPRULES.* / IFACES.PRINT)"
 
@@ -237,6 +258,44 @@ main() {
         log_fail "per-rule hitPackets did not grow (hitPackets=$hits)"
     fi
 
+    log_section "PKTSTREAM schema: ruleId for enforce decisions"
+    local targetIp
+    targetIp="1.1.1.1"
+    local pingPid
+    pingPid="$(ping4_async "$targetIp" 1)"
+    local pktSample
+    pktSample="$(stream_sample "PKTSTREAM.START 0 0" "PKTSTREAM.STOP" 3)"
+    wait "$pingPid" >/dev/null 2>&1 || true
+    if echo "$pktSample" | python3 -c "$(cat <<PY
+import sys, json
+uid = int('${TEST_UID}')
+target = '${targetIp}'
+expected = int('${allowRid}')
+found = False
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+    except Exception:
+        continue
+    if obj.get('uid') != uid or obj.get('direction') != 'out' or obj.get('dstIp') != target or obj.get('protocol') != 'icmp':
+        continue
+    assert bool(obj.get('accepted')) is True
+    assert obj.get('reasonId') == 'IP_RULE_ALLOW'
+    assert obj.get('ruleId') == expected
+    found = True
+    break
+assert found, 'no matching pktstream event'
+PY
+)" 2>/dev/null; then
+        log_pass "PKTSTREAM carries ruleId for IP_RULE_ALLOW (ruleId=$allowRid)"
+    else
+        log_fail "PKTSTREAM missing/incorrect ruleId for enforce decision"
+        echo "    sample: ${pktSample:0:200}..."
+    fi
+
     expect_ok "IPRULES.UPDATE ${allowRid} priority=101" "UPDATE clears stats"
     local hitsCleared
     hitsCleared="$(get_rule_stat "$allowRid" "hitPackets")"
@@ -286,17 +345,32 @@ main() {
     fi
 
     log_section "IFACE_BLOCK precedence"
-    expect_ok "METRICS.REASONS.RESET" "METRICS.REASONS.RESET"
+    expect_ok "RESETALL" "RESETALL (IFACE_BLOCK test)"
+    expect_ok "BLOCK 1" "BLOCK enable"
+    expect_ok "IPRULES 1" "IPRULES enable"
+    expect_ok "BLOCKIPLEAKS 0" "BLOCKIPLEAKS baseline off"
+    local ifaceAllowRid
+    ifaceAllowRid="$(expect_uint "IPRULES.ADD ${TEST_UID} action=allow priority=100 proto=icmp" "ADD enforce allow rule (IFACE precedence)")"
     expect_ok "BLOCKIFACE ${TEST_UID} 255" "BLOCKIFACE all"
     local ifaceBefore
     ifaceBefore="$(get_reason_packets "IFACE_BLOCK")"
-    ping4_once "1.1.1.1"
+    local ifaceTargetIp
+    ifaceTargetIp="93.184.216.34" # example.com (stable) - low chance of background traffic
+    ping4_once "$ifaceTargetIp"
     local ifaceAfter
     ifaceAfter="$(get_reason_packets "IFACE_BLOCK")"
     if [[ "$ifaceAfter" -gt "$ifaceBefore" ]]; then
         log_pass "IFACE_BLOCK grows under traffic ($ifaceBefore -> $ifaceAfter)"
     else
         log_fail "IFACE_BLOCK did not grow under traffic ($ifaceBefore -> $ifaceAfter)"
+    fi
+    local hostsJson
+    hostsJson="$(send_cmd "HOSTS")"
+    if [[ -n "$hostsJson" ]] && ! echo "$hostsJson" | grep -q "$ifaceTargetIp"; then
+        log_pass "IFACE_BLOCK does not materialize host cache entries for blocked traffic"
+    else
+        log_fail "IFACE_BLOCK traffic polluted HOSTS cache (unexpected remote IP present)"
+        echo "    hosts: ${hostsJson:0:200}..."
     fi
 
     log_section "Would-block overlay (accept-only)"
@@ -313,6 +387,108 @@ main() {
         log_pass "wouldHitPackets grows when accepted (wouldHitPackets=$wouldAccepted)"
     else
         log_fail "wouldHitPackets did not grow when accepted (wouldHitPackets=$wouldAccepted)"
+    fi
+    pingPid="$(ping4_async "1.1.1.1" 1)"
+    pktSample="$(stream_sample "PKTSTREAM.START 0 0" "PKTSTREAM.STOP" 3)"
+    wait "$pingPid" >/dev/null 2>&1 || true
+    if echo "$pktSample" | python3 -c "$(cat <<PY
+import sys, json
+uid = int('${TEST_UID}')
+target = '1.1.1.1'
+expected = int('${wouldOnlyRid}')
+found = False
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+    except Exception:
+        continue
+    if obj.get('uid') != uid or obj.get('direction') != 'out' or obj.get('dstIp') != target or obj.get('protocol') != 'icmp':
+        continue
+    assert bool(obj.get('accepted')) is True
+    assert obj.get('reasonId') == 'ALLOW_DEFAULT'
+    assert obj.get('wouldRuleId') == expected
+    assert obj.get('wouldDrop') == 1
+    assert 'ruleId' not in obj
+    found = True
+    break
+assert found, 'no matching pktstream event'
+PY
+)" 2>/dev/null; then
+        log_pass "PKTSTREAM carries wouldRuleId/wouldDrop overlay when accepted"
+    else
+        log_fail "PKTSTREAM missing/incorrect wouldRuleId overlay (accept-only)"
+        echo "    sample: ${pktSample:0:200}..."
+    fi
+
+    log_section "Would-block overlay is suppressed on final DROP (best-effort)"
+    expect_ok "RESETALL" "RESETALL (would-block suppressed test)"
+    expect_ok "BLOCK 1" "BLOCK enable"
+    expect_ok "IPRULES 1" "IPRULES enable"
+    expect_ok "BLOCKIPLEAKS 0" "BLOCKIPLEAKS off (warm DNS mapping)"
+    local leakDomain leakIp
+    leakDomain="example.com"
+    leakIp="$(resolve_ipv4_via_ping "$leakDomain")"
+    if [[ -z "$leakIp" ]]; then
+        log_skip "could not resolve $leakDomain to IPv4; skip drop-path overlay suppression"
+    else
+        # Warm DNS mapping for leakIp -> leakDomain so legacy ip-leak path can trigger validIP.
+        ping4_once "$leakDomain"
+        sleep 1
+        expect_ok "CUSTOMLIST.ON ${TEST_UID}" "CUSTOMLIST.ON (ensure custom lists active)"
+        expect_ok "BLACKLIST.ADD ${TEST_UID} ${leakDomain}" "BLACKLIST.ADD app-specific (ip-leak)"
+        expect_ok "BLOCKIPLEAKS 1" "BLOCKIPLEAKS on (drop case)"
+        local wouldDropRid
+        wouldDropRid="$(expect_uint "IPRULES.ADD ${TEST_UID} action=block priority=10 enforce=0 log=1 proto=icmp" "ADD would-block rule (drop case)")"
+        expect_ok "METRICS.REASONS.RESET" "METRICS.REASONS.RESET (drop case)"
+        pingPid="$(ping4_async "$leakIp" 1)"
+        pktSample="$(stream_sample "PKTSTREAM.START 0 0" "PKTSTREAM.STOP" 3)"
+        wait "$pingPid" >/dev/null 2>&1 || true
+        local ipLeakPackets
+        ipLeakPackets="$(get_reason_packets "IP_LEAK_BLOCK")"
+        if [[ "$ipLeakPackets" -lt 1 ]]; then
+            log_skip "IP_LEAK_BLOCK not observed; environment may not provide valid DNS->IP mapping (skip)"
+        else
+            log_pass "IP_LEAK_BLOCK observed (packets=$ipLeakPackets)"
+            local wouldDropHits
+            wouldDropHits="$(get_rule_stat "$wouldDropRid" "wouldHitPackets")"
+            if [[ "$wouldDropHits" -eq 0 ]]; then
+                log_pass "wouldHitPackets stays 0 when final verdict is DROP"
+            else
+                log_fail "wouldHitPackets grew unexpectedly on DROP (wouldHitPackets=$wouldDropHits)"
+            fi
+            if echo "$pktSample" | python3 -c "$(cat <<PY
+import sys, json
+uid = int('${TEST_UID}')
+target = '${leakIp}'
+found = False
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+    except Exception:
+        continue
+    if obj.get('uid') != uid or obj.get('direction') != 'out' or obj.get('dstIp') != target or obj.get('protocol') != 'icmp':
+        continue
+    assert bool(obj.get('accepted')) is False
+    assert obj.get('reasonId') == 'IP_LEAK_BLOCK'
+    assert 'wouldRuleId' not in obj
+    assert 'wouldDrop' not in obj
+    found = True
+    break
+assert found, 'no matching pktstream event'
+PY
+)" 2>/dev/null; then
+                log_pass "PKTSTREAM suppresses wouldRuleId overlay when final verdict is DROP"
+            else
+                log_fail "PKTSTREAM incorrectly emitted wouldRuleId overlay on DROP"
+                echo "    sample: ${pktSample:0:200}..."
+            fi
+        fi
     fi
 
     log_section "BLOCK=0 bypasses all processing"

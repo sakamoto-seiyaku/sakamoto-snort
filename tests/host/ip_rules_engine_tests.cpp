@@ -4,6 +4,11 @@
 
 #include <arpa/inet.h>
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <vector>
+
 namespace {
 
 static uint32_t ipHost(const char *s) {
@@ -353,6 +358,107 @@ TEST(IpRulesEngineTest, MatchRespectsCidrAndPorts) {
     ASSERT_TRUE(eng.addFromKv(10000, {"action=block", "priority=20", "proto=tcp", "dport=400-500"}).ok);
     const auto mixed = eng.evaluate(keyAnyTcp(10000));
     EXPECT_EQ(mixed.kind, IpRulesEngine::DecisionKind::BLOCK);
+}
+
+TEST(IpRulesEngineTest, ConcurrentEvaluateAndControlPlaneMutationsDoNotCrash) {
+    IpRulesEngine eng;
+    const uint32_t uid = 10000;
+
+    const auto enforce =
+        eng.addFromKv(uid, {"action=allow", "priority=10", "proto=tcp", "dport=443"});
+    ASSERT_TRUE(enforce.ok);
+    ASSERT_TRUE(enforce.ruleId.has_value());
+
+    const auto would =
+        eng.addFromKv(uid, {"action=block", "priority=1", "proto=tcp", "enforce=0", "log=1"});
+    ASSERT_TRUE(would.ok);
+    ASSERT_TRUE(would.ruleId.has_value());
+
+    std::atomic<bool> stop{false};
+    std::atomic<std::uint64_t> tsNs{1};
+
+    auto worker = [&] {
+        auto key = keyAnyTcp(uid);
+        while (!stop.load(std::memory_order_relaxed)) {
+            const auto d = eng.evaluate(key);
+            const auto ts = tsNs.fetch_add(1, std::memory_order_relaxed);
+            if (d.isEnforce()) {
+                IpRulesEngine::observeEnforceHit(d, 100, ts);
+            } else if (d.isWould()) {
+                IpRulesEngine::observeWouldHitIfAccepted(d, true, 100, ts);
+            }
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(4);
+    for (int i = 0; i < 4; ++i) {
+        workers.emplace_back(worker);
+    }
+
+    std::vector<IpRulesEngine::RuleId> ruleIds;
+    ruleIds.push_back(*enforce.ruleId);
+    ruleIds.push_back(*would.ruleId);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    std::uint32_t iter = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        ++iter;
+        if (iter % 64 == 0) {
+            eng.resetAll();
+            ruleIds.clear();
+            continue;
+        }
+
+        if (ruleIds.empty()) {
+            // Re-seed after reset.
+            const auto r = eng.addFromKv(uid, {"action=allow", "priority=10", "proto=tcp"});
+            if (r.ok && r.ruleId.has_value()) {
+                ruleIds.push_back(*r.ruleId);
+            }
+            continue;
+        }
+
+        const auto id = ruleIds[iter % ruleIds.size()];
+        switch (iter % 4) {
+        case 0: {
+            (void)eng.updateFromKv(id, {"priority=11"});
+            break;
+        }
+        case 1: {
+            (void)eng.enableRule(id, (iter % 2) == 0);
+            break;
+        }
+        case 2: {
+            const bool makeWould = (iter % 8) == 0;
+            const auto r = makeWould
+                               ? eng.addFromKv(uid, {"action=block", "priority=1", "proto=tcp",
+                                                     "enforce=0", "log=1"})
+                               : eng.addFromKv(uid, {"action=allow", "priority=10", "proto=tcp"});
+            if (r.ok && r.ruleId.has_value()) {
+                ruleIds.push_back(*r.ruleId);
+            }
+            break;
+        }
+        case 3: {
+            if (!ruleIds.empty()) {
+                const auto victim = ruleIds.back();
+                ruleIds.pop_back();
+                (void)eng.removeRule(victim);
+            }
+            break;
+        }
+        }
+    }
+
+    stop.store(true, std::memory_order_relaxed);
+    for (auto &t : workers) {
+        t.join();
+    }
+
+    // Basic sanity: epoch is monotonic and API remains callable after stress.
+    EXPECT_GE(eng.rulesEpoch(), 1u);
+    (void)eng.preflight();
 }
 
 } // namespace
