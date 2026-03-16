@@ -34,6 +34,21 @@ static IpRulesEngine::PacketKeyV4 keyAnyTcpOut(const uint32_t uid) {
     return k;
 }
 
+static IpRulesEngine::PacketKeyV4 keyAnyIcmp(const uint32_t uid) {
+    auto k = keyAnyTcp(uid);
+    k.proto = IPPROTO_ICMP;
+    k.srcPort = 0;
+    k.dstPort = 0;
+    return k;
+}
+
+static IpRulesEngine::PacketKeyV4 keyTcpDstPort(const uint32_t uid, const uint16_t dstPort) {
+    auto k = keyAnyTcp(uid);
+    k.proto = IPPROTO_TCP;
+    k.dstPort = dstPort;
+    return k;
+}
+
 TEST(IpRulesEngineTest, AddRejectsMissingPriorityAndDoesNotConsumeRuleId) {
     IpRulesEngine eng;
 
@@ -257,6 +272,46 @@ TEST(IpRulesEngineTest, MatchRespectsDirection) {
 
     const auto out = eng.evaluate(keyAnyTcpOut(10000));
     EXPECT_EQ(out.kind, IpRulesEngine::DecisionKind::ALLOW);
+}
+
+TEST(IpRulesEngineTest, ProtoIcmpRejectsPortPredicatesOnAddAndUpdate) {
+    IpRulesEngine eng;
+
+    EXPECT_FALSE(eng.addFromKv(10000, {"action=allow", "priority=1", "proto=icmp", "dport=53"}).ok);
+    EXPECT_FALSE(eng.addFromKv(10000, {"action=allow", "priority=1", "proto=icmp", "sport=1-2"}).ok);
+
+    const auto icmp = eng.addFromKv(10000, {"action=allow", "priority=1", "proto=icmp"});
+    ASSERT_TRUE(icmp.ok);
+    ASSERT_TRUE(icmp.ruleId.has_value());
+    const auto rid = *icmp.ruleId;
+
+    const auto updBad = eng.updateFromKv(rid, {"dport=0"});
+    EXPECT_FALSE(updBad.ok);
+    const auto rule = eng.getRule(rid);
+    ASSERT_TRUE(rule.has_value());
+    EXPECT_TRUE(rule->dport.isAny()) << "NOK UPDATE MUST be atomic";
+
+    const auto tcpWithPort =
+        eng.addFromKv(10000, {"action=allow", "priority=2", "proto=any", "dport=80"});
+    ASSERT_TRUE(tcpWithPort.ok);
+    ASSERT_TRUE(tcpWithPort.ruleId.has_value());
+    EXPECT_FALSE(eng.updateFromKv(*tcpWithPort.ruleId, {"proto=icmp"}).ok)
+        << "proto=icmp MUST reject non-any sport/dport";
+}
+
+TEST(IpRulesEngineTest, PortPredicatesDoNotMatchNonTcpUdpPackets) {
+    IpRulesEngine eng;
+
+    const auto rule =
+        eng.addFromKv(10000, {"action=block", "priority=1", "proto=any", "dport=0-100"});
+    ASSERT_TRUE(rule.ok);
+
+    const auto icmp = eng.evaluate(keyAnyIcmp(10000));
+    EXPECT_EQ(icmp.kind, IpRulesEngine::DecisionKind::NOMATCH);
+
+    const auto tcp = eng.evaluate(keyTcpDstPort(10000, 50));
+    EXPECT_EQ(tcp.kind, IpRulesEngine::DecisionKind::BLOCK);
+    EXPECT_EQ(tcp.ruleId, *rule.ruleId);
 }
 
 TEST(IpRulesEngineTest, MatchRespectsIfaceKindAndIfindex) {

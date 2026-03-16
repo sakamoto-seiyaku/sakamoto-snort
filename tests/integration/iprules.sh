@@ -179,6 +179,7 @@ main() {
     local wouldRid
     wouldRid="$(expect_uint "IPRULES.ADD ${TEST_UID} action=block priority=11 enforce=0 log=1 proto=icmp" "ADD would-block rule")"
     expect_nok "IPRULES.ADD ${TEST_UID} action=block priority=12 ct=foo" "ADD rejects ct token"
+    expect_nok "IPRULES.ADD ${TEST_UID} action=allow priority=13 proto=icmp dport=53" "ADD rejects proto=icmp with port predicates"
 
     log_section "UPDATE patch semantics"
     local updRid
@@ -328,6 +329,61 @@ main() {
         log_pass "METRICS.REASONS does not grow under traffic when BLOCK=0"
     else
         log_fail "METRICS.REASONS grew under traffic when BLOCK=0 (totalPackets=$total)"
+    fi
+
+    log_section "Persistence across restart (ruleId high-water)"
+    expect_ok "RESETALL" "RESETALL (persistence test)"
+    expect_ok "BLOCK 1" "BLOCK enable"
+    expect_ok "IPRULES 1" "IPRULES enable"
+
+    local pr0 pr1 pr2
+    pr0="$(expect_uint "IPRULES.ADD ${TEST_UID} action=allow priority=1 proto=icmp" "ADD persist rule0")"
+    pr1="$(expect_uint "IPRULES.ADD ${TEST_UID} action=allow priority=2 proto=tcp dport=443" "ADD persist rule1")"
+    pr2="$(expect_uint "IPRULES.ADD ${TEST_UID} action=allow priority=3 proto=udp dport=53" "ADD persist rule2")"
+    if [[ "$pr0" != "0" || "$pr1" != "1" || "$pr2" != "2" ]]; then
+        log_fail "unexpected initial ruleIds for persistence test (got $pr0,$pr1,$pr2)"
+    else
+        log_pass "initial ruleIds allocated sequentially (0,1,2)"
+    fi
+
+    expect_ok "IPRULES.REMOVE ${pr2}" "REMOVE highest ruleId before restart"
+    expect_ok "DEV.SHUTDOWN" "DEV.SHUTDOWN (save + exit)"
+
+    if [[ $DO_DEPLOY -eq 1 ]]; then
+        log_info "重启守护进程（deploy 模式）..."
+        if ! bash dev/dev-deploy.sh --no-clear-log >/dev/null; then
+            log_fail "re-deploy failed"
+            print_summary
+            exit 1
+        fi
+    else
+        log_info "重启守护进程（skip-deploy 模式，复用 /data/local/tmp/sucre-snort-dev）..."
+        adb_su "rm -f /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true"
+        adb_su "/data/local/tmp/sucre-snort-dev >> /data/local/tmp/sucre-snort-dev.log 2>&1 &"
+        sleep 2
+    fi
+
+    if ! init_test_env; then
+        log_fail "init_test_env after restart"
+        print_summary
+        exit 1
+    fi
+
+    local persisted
+    persisted="$(send_cmd "IPRULES.PRINT")"
+    if [[ "$(json_get "$persisted" "rules.0.ruleId")" == "0" && "$(json_get "$persisted" "rules.1.ruleId")" == "1" ]]; then
+        log_pass "rules persisted across restart (ruleId 0/1 present)"
+    else
+        log_fail "rules did not persist as expected across restart"
+        echo "    IPRULES.PRINT: $persisted"
+    fi
+
+    local pr3
+    pr3="$(expect_uint "IPRULES.ADD ${TEST_UID} action=allow priority=4 proto=icmp" "ADD after restart")"
+    if [[ "$pr3" == "3" ]]; then
+        log_pass "nextRuleId high-water persisted (new ruleId=3)"
+    else
+        log_fail "nextRuleId high-water not persisted (expected 3, got $pr3)"
     fi
 
     if [[ $CLEANUP_FORWARD -eq 1 ]]; then

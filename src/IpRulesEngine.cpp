@@ -359,6 +359,12 @@ bool IpRulesEngine::validateRuleDef(const RuleDef &def, std::string &error) {
             return false;
         }
     }
+    if (def.proto == Proto::ICMP) {
+        if (!def.sport.isAny() || !def.dport.isAny()) {
+            error = "proto=icmp requires sport=any and dport=any";
+            return false;
+        }
+    }
     return true;
 }
 
@@ -440,6 +446,12 @@ struct IpRulesEngine::Snapshot {
 
         bool matches(const PacketKeyV4 &k) const {
             if (uid != k.uid) return false;
+            const bool packetTcpUdp = (k.proto == static_cast<uint8_t>(Proto::TCP) ||
+                                       k.proto == static_cast<uint8_t>(Proto::UDP));
+            if (!packetTcpUdp) {
+                // Port predicates apply to TCP/UDP only.
+                if (!sport.isAny() || !dport.isAny()) return false;
+            }
             if (dir == Direction::IN && k.dir != 0) return false;
             if (dir == Direction::OUT && k.dir != 1) return false;
             if (iface != IfaceKind::ANY && k.ifaceKind != static_cast<uint8_t>(iface)) return false;
