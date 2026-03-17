@@ -297,7 +297,8 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         Address<IP> dstIp(reinterpret_cast<const uint8_t *>(&ip->daddr));
         const Address<IP> &remoteIp = _inputTLS ? srcIp : dstIp;
         const auto app = appManager.make(uid);
-        const bool ifaceBlocked = (app->blockIface() & pktManager.ifaceKindBit(iface)) != 0;
+        const uint8_t ifaceKindBit = pktManager.ifaceKindBit(iface);
+        const bool ifaceBlocked = (app->blockIface() & ifaceKindBit) != 0;
         const auto host =
             ifaceBlocked ? hostManager.anonymousHost() : hostManager.make<IP>(remoteIp);
 
@@ -306,7 +307,8 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         // operations that need the exclusive listeners lock.
         const std::shared_lock<std::shared_mutex> lock(mutexListeners);
         verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface, timestamp,
-                                               IP::payloadProto(ip), srcPort, dstPort, payloadLen);
+                                               IP::payloadProto(ip), srcPort, dstPort, payloadLen,
+                                               ifaceKindBit, ifaceBlocked);
     }
 
     sendVerdict(packetId, verdict ? NF_ACCEPT : NF_DROP);

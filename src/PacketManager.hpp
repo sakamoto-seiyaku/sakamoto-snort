@@ -49,7 +49,8 @@ public:
     bool make(const Address<IP> &srcIp, const Address<IP> &dstIp, const App::Ptr &app,
               const Host::Ptr &host,
               const bool input, const uint32_t iface, const timespec timestamp, const int proto,
-              const uint16_t srcPort, const uint16_t dstPort, const uint16_t len);
+              const uint16_t srcPort, const uint16_t dstPort, const uint16_t len,
+              const uint8_t ifaceKindBit, const bool ifaceBlockedSnapshot);
 
     void reset();
 
@@ -92,9 +93,10 @@ template <class IP>
 bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, const App::Ptr &app,
                          const Host::Ptr &host, const bool input, const uint32_t iface,
                          const timespec timestamp, const int proto, const uint16_t srcPort,
-                         const uint16_t dstPort, const uint16_t len) {
-    const uint8_t ifaceKindBit = ifaceBit(iface);
-    const bool ifaceBlocked = (app->blockIface() & ifaceKindBit) != 0;
+                         const uint16_t dstPort, const uint16_t len, const uint8_t ifaceKindBit,
+                         const bool ifaceBlockedSnapshot) {
+    const bool ifaceBlockedNow = (app->blockIface() & ifaceKindBit) != 0;
+    const bool ifaceBlocked = ifaceBlockedSnapshot || ifaceBlockedNow;
     const uint64_t tsNs =
         static_cast<uint64_t>(timestamp.tv_sec) * 1000000000ULL + static_cast<uint64_t>(timestamp.tv_nsec);
 
