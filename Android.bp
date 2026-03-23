@@ -73,3 +73,23 @@ cc_binary {
 //        },
 //    },
 }
+
+cc_binary {
+    name: "iptest-replay",
+    system_ext_specific: true,
+    srcs: [
+        "tests/device-modules/ip/native/iptest_replay.cpp",
+    ],
+    cppflags: [
+        "-std=c++2a",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-O2",
+        "-g",
+    ],
+    strip: {
+        none: false,
+    },
+}

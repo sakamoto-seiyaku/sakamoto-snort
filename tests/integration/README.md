@@ -23,6 +23,10 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
   - 覆盖 root/preflight、socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC、lifecycle restart
 - `tests/integration/perf-network-load.sh`
   - 真机 perf baseline：在设备侧用 `curl`/`wget`（若无则尝试 `toybox wget`）对稳定 URL 做 download，产生真实网络 I/O 负载，并读取 `METRICS.PERF`（JSON）
+- `tests/device-modules/ip/run.sh`
+  - IP/L3-L4 真机测试模组（Tier-1 `netns+veth` 受控拓扑 + 可复现流量 + perf baseline 记录）
+  - 说明与 run records：`docs/testing/ip/IP_TEST_MODULE.md`
+  - 已知环境 bug：Pixel 6a 上 toybox `nc -L sh -c ...` 可能触发 `sock_ioctl` kernel panic（见 `docs/testing/ip/BUG_kernel_panic_sock_ioctl.md`）；模组默认避开该模式
 - `tests/integration/full-smoke.sh`
   - 更广的控制协议冒烟回归
   - 不替代 rooted 真机平台 smoke

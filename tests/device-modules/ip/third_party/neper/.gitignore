@@ -1,0 +1,10 @@
+*.o
+*.log
+tcp_crr
+tcp_rr
+tcp_stream
+udp_rr
+udp_stream
+psp_stream
+psp_rr
+psp_crr

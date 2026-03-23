@@ -1,0 +1,623 @@
+/*
+ * Copyright 2016 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * This file implements six different state machines:
+ * TCP_RR client/server, UDP_RR client/server, and TCP_CRR client/server
+ *
+ * Note that there is a high degree of overlap, for example the TCP_RR server
+ * TCP_CRR server state machines are identical. The state machines are broken
+ * down into small callback functions which each perform some small task, such
+ * as sending a message, opening a socket connection, or gathering statistics.
+ */
+
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "coef.h"
+#include "common.h"
+#include "countdown_cond.h"
+#include "flow.h"
+#include "histo.h"
+#include "logging.h"
+#include "percentiles.h"
+#include "print.h"
+#include "rr.h"
+#include "snaps.h"
+#include "socket.h"
+#include "stats.h"
+#include "thread.h"
+
+#define NEPER_EPOLL_MASK (EPOLLHUP | EPOLLRDHUP | EPOLLERR)
+
+typedef ssize_t (*rr_send_t)(struct flow *, const char *, size_t, int);
+typedef ssize_t (*rr_recv_t)(struct flow *, char *, size_t);
+
+struct rr_state {
+        rr_send_t rr_send;
+        rr_recv_t rr_recv;
+
+        ssize_t rr_xfer;  /* # of bytes remaining in the current send or recv */
+
+        struct timespec rr_ts_0;  /* timestamp just after previous recv() */
+        struct timespec rr_ts_1;  /* timestamp just before current send() */
+        struct timespec rr_ts_2;  /* timestamp just after current recv() */
+
+        struct sockaddr_storage rr_peer;  /* for UDP servers */
+        socklen_t rr_peerlen;
+};
+
+struct rr_snap_opaque {
+        double min;
+        double max;
+        double mean;
+        double stddev;
+        double percentile[0];
+};
+
+static void rr_server_state_0(struct flow *, uint32_t);
+static void rr_client_state_0(struct flow *, uint32_t);
+static void crr_client_state_0(struct flow *, uint32_t);
+
+/*
+ * Some protocol-specific send/recv wrappers for the state machine.
+ * UDP server sockets receive traffic from many different clients and
+ * therefore need to use recvfrom() and sendto().
+ */
+
+static ssize_t rr_fn_send(struct flow *f, const char *buf, size_t len,
+                          int flags)
+{
+        struct thread *t = flow_thread(f);
+
+        t->io_stats.tx_ops++;
+        t->io_stats.tx_bytes += len;
+        return send(flow_fd(f), buf, len, flags);
+}
+
+static ssize_t rr_fn_sendto(struct flow *f, const char *buf, size_t len,
+                            int flags)
+{
+        const struct rr_state *rr = flow_opaque(f);
+        struct thread *t = flow_thread(f);
+
+        t->io_stats.tx_ops++;
+        t->io_stats.tx_bytes += len;
+        return sendto(flow_fd(f), buf, len, flags, (void *)&rr->rr_peer,
+                      rr->rr_peerlen);
+}
+
+static ssize_t rr_fn_recv(struct flow *f, char *buf, size_t len)
+{
+        struct thread *t = flow_thread(f);
+        ssize_t ret;
+
+        if (t->opts->rx_zerocopy) {
+                ret = flow_recv_zerocopy(f, buf, len);
+	} else {
+		ret = recv(flow_fd(f), buf, len, 0);
+	}
+        t->io_stats.rx_ops++;
+        t->io_stats.rx_bytes += ret > 0 ? ret : 0;
+        return ret;
+}
+
+static ssize_t rr_fn_recvfrom(struct flow *f, char *buf, size_t len)
+{
+        struct rr_state *rr = flow_opaque(f);
+        struct thread *t = flow_thread(f);
+        ssize_t ret;
+
+        rr->rr_peerlen = sizeof(struct sockaddr_storage);
+        ret = recvfrom(flow_fd(f), buf, len, 0, (void *)&rr->rr_peer,
+                       &rr->rr_peerlen);
+        t->io_stats.rx_ops++;
+        t->io_stats.rx_bytes += ret > 0 ? ret : 0;
+        return ret;
+}
+
+/* Allocate a message buffer for a rr flow. */
+
+static void *rr_alloc(struct thread *t)
+{
+        const struct options *opts = t->opts;
+        size_t len;
+
+        if (t->f_mbuf)
+                return t->f_mbuf;
+        len = MAX(opts->request_size, opts->response_size);
+        len = MIN(len, opts->buffer_size);
+
+        t->f_mbuf = calloc_or_die(len, sizeof(char), t->cb);
+        return t->f_mbuf;
+}
+
+static struct neper_stat *rr_latency_init(struct flow *f)
+{
+        const struct thread *t = flow_thread(f);
+        int size;
+        if (t->opts->nostats)
+                return NULL;
+
+        struct neper_histo *histo = neper_histo_new(t, DEFAULT_K_BITS);
+
+        size = sizeof(struct rr_snap_opaque) + t->opts->percentiles.p_count * sizeof(double);
+
+        return neper_stat_init(f, histo, size);
+}
+
+static ssize_t rr_send_size(struct thread *t) {
+        if (t->opts->client) {
+                return t->opts->request_size;
+        }
+        return t->opts->response_size;
+}
+
+static ssize_t rr_recv_size(struct thread *t) {
+        if (t->opts->client) {
+                return t->opts->response_size;
+        }
+        return t->opts->request_size;
+}
+
+static void rr_state_init(struct thread *t, int fd,
+                          void (*state)(struct flow *, uint32_t),
+                          uint32_t event)
+{
+        struct rr_state *rr = calloc_or_die(1, sizeof(struct rr_state), t->cb);
+
+        // Request is always first.
+        rr->rr_xfer = t->opts->request_size;
+
+        common_gettime(&rr->rr_ts_2);  /* This initializes TCP_CRR stats. */
+
+        switch (t->fn->fn_type) {
+        case SOCK_STREAM:
+                rr->rr_send = rr_fn_send;
+                rr->rr_recv = rr_fn_recv;
+                break;
+        case SOCK_DGRAM:
+                rr->rr_send = rr_fn_sendto;
+                rr->rr_recv = rr_fn_recvfrom;
+                break;
+        }
+
+        const struct flow_create_args args = {
+                .thread  = t,
+                .fd      = fd,
+                .events  = event,
+                .opaque  = rr,
+                .handler = state,
+                .mbuf_alloc = rr_alloc,
+                .stat    = rr_latency_init
+        };
+
+        flow_create(&args);
+
+        if (t->opts->client && t->opts->log_rtt && t->rtt_logs == NULL) {
+                t->rtt_log_capacity = (long)t->flow_limit *
+                                      t->opts->logrtt_entries_per_flow;
+                if (t->rtt_log_capacity > 0) {
+                        t->rtt_logs = calloc_or_die(
+                            t->rtt_log_capacity, sizeof(struct rtt_log), t->cb);
+                }
+        }
+}
+
+/*
+ * Return values of true for rr_do_send() and rr_do_recv() mean the transfer was
+ * successfully completed and the state machine may therefore advance.
+ */
+
+static bool rr_do_send(struct flow *f, uint32_t events, rr_send_t rr_send)
+{
+        struct thread *t = flow_thread(f);
+        const struct options *opts = t->opts;
+        struct rr_state *rr = flow_opaque(f);
+
+        if (events & ~(NEPER_EPOLL_MASK | EPOLLOUT))
+                LOG_ERROR(t->cb, "%s(): unknown event(s) %x", __func__, events);
+
+        if (events & NEPER_EPOLL_MASK) {
+                flow_delete(f);
+                return false;
+        }
+
+        ssize_t len = rr->rr_xfer;
+        if ((len == opts->request_size) && opts->client)
+                common_gettime(&rr->rr_ts_1);
+
+        int flags = 0;
+        if (len > opts->buffer_size) {
+                len = opts->buffer_size;
+                flags |= MSG_MORE;
+        }
+
+        ssize_t n = rr_send(f, flow_mbuf(f), len, flags);
+        if (n == -1) {
+                PLOG_ERROR(t->cb, "send");
+                return false;
+        }
+
+        rr->rr_xfer -= n;
+        if (rr->rr_xfer)
+                return false;
+
+        // Transition to receiving.
+        rr->rr_xfer = rr_recv_size(t);
+        return true;
+}
+
+static bool rr_do_recv(struct flow *f, uint32_t events, rr_recv_t rr_recv)
+{
+        struct thread *t = flow_thread(f);
+        const struct options *opts = t->opts;
+        struct rr_state *rr = flow_opaque(f);
+
+        if (events & ~(NEPER_EPOLL_MASK | EPOLLIN))
+                LOG_ERROR(t->cb, "%s(): unknown event(s) %x", __func__, events);
+
+        if (events & NEPER_EPOLL_MASK) {
+                flow_delete(f);
+                return false;
+        }
+
+        ssize_t len = rr->rr_xfer;
+
+        if (len > opts->buffer_size)
+                len = opts->buffer_size;
+
+        ssize_t n;
+        do {
+                n = rr_recv(f, flow_mbuf(f), len);
+        } while(n == -1 && errno == EINTR);
+
+        if (n == -1) {
+                PLOG_ERROR(t->cb, "read");
+                return false;
+        }
+        if (n == 0) {
+                flow_delete(f);
+                return false;
+        }
+
+        rr->rr_xfer -= n;
+        if (rr->rr_xfer)
+                return false;
+
+        if (opts->client) {
+                rr->rr_ts_0 = rr->rr_ts_2;
+                common_gettime(&rr->rr_ts_2);
+        }
+
+        t->transactions++;
+
+        // Transition to sending.
+        rr->rr_xfer = rr_send_size(t);
+        return true;
+}
+
+static void rr_snapshot(struct thread *t, struct neper_stat *stat,
+                        struct neper_snap *snap)
+{
+        struct neper_histo *histo = stat->histo(stat);
+
+        neper_histo_epoch(histo);
+
+        struct rr_snap_opaque *opaque = (void *)&snap->opaque;
+
+        opaque->min = neper_histo_min(histo);
+        opaque->max = neper_histo_max(histo);
+        opaque->mean = neper_histo_mean(histo);
+        opaque->stddev = neper_histo_stddev(histo);
+
+        for (int i = 0; i < t->opts->percentiles.p_count; i++)
+                opaque->percentile[i] = neper_histo_percent(histo, i);
+}
+
+static bool rr_do_compl(struct flow *f,
+                        const struct timespec *then,
+                        const struct timespec *now)
+{
+        double elapsed = seconds_between(then, now);
+        struct thread *t = flow_thread(f);
+        bool last = false;
+
+        struct neper_stat *stat = flow_stat(f);
+        struct neper_histo *histo = stat->histo(stat);
+        neper_histo_event(histo, elapsed);
+
+        if (t->opts->client && t->rtt_logs) {
+                long count = flow_rtt_log_count(f);
+                if (count < t->opts->logrtt_entries_per_flow) {
+                        long offset = flow_id(f) * t->opts->logrtt_entries_per_flow;
+                        struct rtt_log *log = &t->rtt_logs[offset + count];
+                        log->rtt = elapsed;
+                        log->thread_id = t->index;
+                        log->flow_id = flow_id(f);
+                        log->timestamp = *now;
+                        flow_increment_rtt_log_count(f);
+                }
+        }
+
+        if (t->data_pending) {
+                /* data vs time mode, last rr? */
+                if (!countdown_cond_commit(t->data_pending)) {
+                        LOG_INFO(t->cb, "last transaction received");
+                        last = true;
+                }
+        }
+
+        stat->event(t, stat, 1, last, rr_snapshot);
+
+        return last;
+}
+
+/* The state machine for RR clients: */
+
+static void rr_client_state_1(struct flow *f, uint32_t events)
+{
+        struct thread *t = flow_thread(f);
+
+        if (rr_do_recv(f, events, rr_fn_recv)) {
+                struct rr_state *rr = flow_opaque(f);
+
+                if (rr_do_compl(f, &rr->rr_ts_1, &rr->rr_ts_2))
+                        return;
+
+                bool sent = !t->opts->delay
+                                && !t->opts->noburst
+                                && rr_do_send(f, EPOLLOUT, rr_fn_send);
+                if (sent)
+                        return;
+
+                flow_mod(f, rr_client_state_0, EPOLLOUT, true);
+        }
+}
+
+static void rr_client_state_0(struct flow *f, uint32_t events)
+{
+        struct thread *t = flow_thread(f);
+
+        if (t->data_pending && countdown_cond_dec(t->data_pending) < 0) {
+                /* data vs time mode and no more transactons to send */
+                return;
+        }
+        if ((t->opts->delay || t->opts->noburst) && flow_postpone(f))
+                return;
+        if (rr_do_send(f, events, rr_fn_send))
+                flow_mod(f, rr_client_state_1, EPOLLIN, true);
+}
+
+/* The state machine for CRR clients: */
+
+static void crr_client_state_1(struct flow *f, uint32_t events)
+{
+        if (rr_do_recv(f, events, rr_fn_recv)) {
+                struct rr_state *rr = flow_opaque(f);
+
+                if (rr_do_compl(f, &rr->rr_ts_0, &rr->rr_ts_2))
+                        return;
+                flow_reconnect(f, crr_client_state_0, EPOLLOUT);
+        }
+}
+
+static void crr_client_state_0(struct flow *f, uint32_t events)
+{
+        struct thread *t = flow_thread(f);
+
+        if (t->data_pending && countdown_cond_dec(t->data_pending) < 0) {
+                /* data vs time mode and no more transactons to send */
+                return;
+        }
+        if (rr_do_send(f, events, rr_fn_send))
+                flow_mod(f, crr_client_state_1, EPOLLIN, true);
+}
+
+/* The state machine for servers: */
+
+static void rr_server_state_2(struct flow *f, uint32_t events)
+{
+        struct rr_state *rr = flow_opaque(f);
+        struct thread *t = flow_thread(f);
+        struct neper_stat *stat = flow_stat(f);
+        struct neper_histo *histo = stat ? stat->histo(stat) : NULL;
+
+        if (rr_do_send(f, events, rr->rr_send)) {
+                if (stat) {
+                        /* rr server has no meaningful latency to measure. */
+                        neper_histo_event(histo, 0.0);
+                        stat->event(t, stat, 1, false, rr_snapshot);
+                }
+                flow_mod(f, rr_server_state_0, EPOLLIN, false);
+        }
+}
+
+static void rr_server_state_1(struct flow *f)
+{
+        flow_mod(f, rr_server_state_2, EPOLLOUT, false);
+}
+
+static void rr_server_state_0(struct flow *f, uint32_t events)
+{
+        struct rr_state *rr = flow_opaque(f);
+
+        if (rr_do_recv(f, events, rr->rr_recv))
+                rr_server_state_1(f);
+}
+
+/* These functions point the state machines at their first handler functions. */
+
+void crr_flow_init(struct thread *t, int fd)
+{
+        void (*state)(struct flow *, uint32_t);
+        uint32_t event;
+
+        if (t->opts->client) {
+                state = crr_client_state_0;
+                event = EPOLLOUT;
+        } else {
+                state = rr_server_state_0;  /* crr & rr servers are identical */
+                event = EPOLLIN;
+        }
+
+        rr_state_init(t, fd, state, event);
+}
+
+void rr_flow_init(struct thread *t, int fd)
+{
+        void (*state)(struct flow *, uint32_t);
+        uint32_t event;
+
+        if (t->opts->client) {
+                state = rr_client_state_0;
+                event = EPOLLOUT;
+        } else {
+                state = rr_server_state_0;
+                event = EPOLLIN;
+        }
+
+        rr_state_init(t, fd, state, event);
+}
+
+/*
+ * Statistics. Ignore everything below this line, which (a) has not been
+ * changed and (b) is about to be completely replaced.
+ */
+
+static void rr_print_snap(struct thread *t, int flow_index, 
+                          const struct neper_snap *snap, FILE *csv)
+{
+
+        if (snap && csv) {
+                const struct rr_snap_opaque *rso = (void *)&snap->opaque;
+
+                fprintf(csv, ",%f,%f,%f,%f",
+                        rso->min, rso->mean, rso->max, rso->stddev);
+
+                for (int i = 0; i < t->opts->percentiles.p_count; i++)
+                        fprintf(csv, ",%f", rso->percentile[i]);
+                fprintf(csv, "\n");
+        }
+}
+
+static int
+fn_add(struct neper_stat *stat, void *ptr)
+{
+        struct neper_histo *src = stat->histo(stat);
+        struct neper_histo *des = ptr;
+        neper_histo_add(des, src);
+        return 0;
+}
+
+static void rr_log_rtt(struct thread *tinfo, struct callbacks *cb,
+                       uint64_t num_transactions)
+{
+        const char *sep = " ";
+        const char *ext = strrchr(tinfo[0].opts->log_rtt, '.');
+        if (ext && !strcmp(ext, ".csv"))
+                sep = ",";
+
+        FILE *rtt_log_file = fopen(tinfo[0].opts->log_rtt, "w");
+        if (!rtt_log_file)
+                PLOG_FATAL(cb, "fopen %s", tinfo[0].opts->log_rtt);
+
+        fprintf(rtt_log_file, "%15s%s%10s%s%10s%s%12s\n", "timestamp", sep, "thread_id", sep, "flow_id", sep, "rtt");
+
+        long transactions_logged = 0;
+        const struct timespec *start_time = tinfo[0].time_start;
+
+        for (int i = 0; i < tinfo[0].opts->num_threads; i++) {
+                struct thread *t = &tinfo[i];
+                if (!t->rtt_logs)
+                        continue;
+                for (int j = 0; j < t->flow_count; j++) {
+                        struct flow *f = t->flows[j];
+                        if (!f)
+                                continue;
+                        transactions_logged += flow_rtt_log_count(f);
+                        long offset = flow_id(f) * t->opts->logrtt_entries_per_flow;
+                        for (long k = 0; k < flow_rtt_log_count(f); k++) {
+                                struct rtt_log *log = &t->rtt_logs[offset + k];
+                                double elapsed = seconds_between(start_time, &log->timestamp);
+                                fprintf(rtt_log_file, "%15.9f%s%10d%s%10d%s%12.9f\n",
+                                        elapsed, sep, log->thread_id, sep,
+                                        log->flow_id, sep, log->rtt);
+                        }
+                }
+                free(t->rtt_logs);
+                t->rtt_logs = NULL;
+        }
+        fclose(rtt_log_file);
+        PRINT(cb, "rtt_transactions_logged", "%ld", transactions_logged);
+
+        if (transactions_logged < num_transactions) {
+                LOG_INFO(cb,
+                         "rtt_transactions_logged (%ld) < num_transactions (%lu)",
+                         transactions_logged, num_transactions);
+        }
+}
+
+int rr_report_stats(struct thread *tinfo)
+{
+        const struct options *opts = tinfo[0].opts;
+        const char *path = opts->all_samples;
+        struct callbacks *cb = tinfo[0].cb;
+        FILE *csv = NULL;
+        int i;
+
+        if (opts->nostats)
+                return 0;
+
+        uint64_t num_events = thread_stats_events(tinfo);
+        PRINT(cb, "num_transactions", "%lu", num_events);
+
+        if (opts->client && tinfo[0].opts->log_rtt)
+                rr_log_rtt(tinfo, cb, num_events);
+
+        struct neper_histo *sum = neper_histo_new(tinfo, DEFAULT_K_BITS);
+        for (i = 0; i < opts->num_threads; i++)
+                tinfo[i].stats->sumforeach(tinfo[i].stats, fn_add, sum);
+        neper_histo_epoch(sum);
+        neper_histo_print(sum);
+        neper_histo_delete(sum);
+
+        if (path) {
+                csv = print_header(path, "transactions,transactions/s",
+                                   "", cb);
+                print_latency_header(csv, &opts->percentiles);
+        }
+
+        struct neper_coef *coef = neper_stat_print(tinfo, csv, rr_print_snap);
+        if (coef) {
+                double thru = coef->thruput(coef);
+                struct options *w_opts = (struct options *)opts;
+
+                w_opts->local_rate = thru; /* bits/s */
+
+                PRINT(cb, "throughput", "%.2f", thru);
+
+                coef->fini(coef);
+        } else {
+                LOG_ERROR(cb, "%s: not able to find coef", __func__);
+                return -1;
+        }
+
+        if (csv)
+                fclose(csv);
+
+        return 0;
+}
