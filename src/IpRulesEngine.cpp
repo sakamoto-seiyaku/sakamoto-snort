@@ -20,6 +20,8 @@ namespace {
 
 static constexpr std::int32_t kNoPriority = std::numeric_limits<std::int32_t>::min();
 
+static std::atomic<std::uint64_t> g_ipRulesEngineInstanceId{1};
+
 static inline IpRulesEngine::ApplyResult okResult(const std::optional<IpRulesEngine::RuleId> ruleId = std::nullopt) {
     IpRulesEngine::ApplyResult r{};
     r.ok = true;
@@ -485,18 +487,20 @@ struct IpRulesEngine::Snapshot {
 
         const RuleRef *bestEnforce(const PacketKeyV4 &k) const {
             const RuleRef *exact = exactEnforce.empty() ? nullptr : &exactEnforce[0];
-            const std::int32_t pExact = exact ? exact->priority : kNoPriority;
-
-            for (const auto &cand : rangeEnforce) {
-                if (exact && cand.priority <= pExact) {
-                    break;
-                }
-                if (cand.matches(k)) {
-                    return &cand;
-                }
+            if (exact && !exact->matches(k)) {
+                exact = nullptr;
             }
 
             if (exact) {
+                const std::int32_t pExact = exact->priority;
+                for (const auto &cand : rangeEnforce) {
+                    if (cand.priority <= pExact) {
+                        break;
+                    }
+                    if (cand.matches(k)) {
+                        return &cand;
+                    }
+                }
                 return exact;
             }
 
@@ -510,18 +514,20 @@ struct IpRulesEngine::Snapshot {
 
         const RuleRef *bestWould(const PacketKeyV4 &k) const {
             const RuleRef *exact = exactWould.empty() ? nullptr : &exactWould[0];
-            const std::int32_t pExact = exact ? exact->priority : kNoPriority;
-
-            for (const auto &cand : rangeWould) {
-                if (exact && cand.priority <= pExact) {
-                    break;
-                }
-                if (cand.matches(k)) {
-                    return &cand;
-                }
+            if (exact && !exact->matches(k)) {
+                exact = nullptr;
             }
 
             if (exact) {
+                const std::int32_t pExact = exact->priority;
+                for (const auto &cand : rangeWould) {
+                    if (cand.priority <= pExact) {
+                        break;
+                    }
+                    if (cand.matches(k)) {
+                        return &cand;
+                    }
+                }
                 return exact;
             }
 
@@ -841,7 +847,8 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
     return CompileResult{.snapshot = std::move(snap), .report = std::move(report)};
 }
 
-IpRulesEngine::IpRulesEngine() {
+IpRulesEngine::IpRulesEngine()
+    : _instanceId(g_ipRulesEngineInstanceId.fetch_add(1, std::memory_order_relaxed)) {
     // Always publish an initial empty snapshot so evaluate() is safe without locks.
     const auto cr = compile(_rules, _rulesEpoch.load(std::memory_order_relaxed));
     _snapshot = cr.snapshot;
@@ -1318,13 +1325,13 @@ IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
     };
 
     struct Cache {
-        const IpRulesEngine *owner = nullptr;
+        std::uint64_t ownerInstanceId = 0;
         std::array<CacheEntry, 1024> entries{};
     };
 
     thread_local Cache cache;
-    if (cache.owner != this) {
-        cache.owner = this;
+    if (cache.ownerInstanceId != _instanceId) {
+        cache.ownerInstanceId = _instanceId;
         for (auto &e : cache.entries) {
             e.epoch = 0;
         }

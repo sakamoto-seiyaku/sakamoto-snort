@@ -277,6 +277,7 @@ private:
     RulesMap _rules;
     RuleId _nextRuleId = 0;
     std::atomic<std::uint64_t> _rulesEpoch{1};
+    std::uint64_t _instanceId = 0;
     std::shared_ptr<const Snapshot> _snapshot;
     PreflightReport _lastPreflight;
     Saver _saver{"/data/snort/save/iprules"};

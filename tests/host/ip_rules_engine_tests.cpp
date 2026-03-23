@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <new>
 #include <thread>
 #include <vector>
 
@@ -307,16 +308,58 @@ TEST(IpRulesEngineTest, ProtoIcmpRejectsPortPredicatesOnAddAndUpdate) {
 TEST(IpRulesEngineTest, PortPredicatesDoNotMatchNonTcpUdpPackets) {
     IpRulesEngine eng;
 
-    const auto rule =
+    const auto rangeRule =
         eng.addFromKv(10000, {"action=block", "priority=1", "proto=any", "dport=0-100"});
-    ASSERT_TRUE(rule.ok);
+    ASSERT_TRUE(rangeRule.ok);
+    const auto exactRule =
+        eng.addFromKv(10000, {"action=block", "priority=2", "proto=any", "dport=0"});
+    ASSERT_TRUE(exactRule.ok);
 
     const auto icmp = eng.evaluate(keyAnyIcmp(10000));
     EXPECT_EQ(icmp.kind, IpRulesEngine::DecisionKind::NOMATCH);
 
     const auto tcp = eng.evaluate(keyTcpDstPort(10000, 50));
     EXPECT_EQ(tcp.kind, IpRulesEngine::DecisionKind::BLOCK);
-    EXPECT_EQ(tcp.ruleId, *rule.ruleId);
+    EXPECT_EQ(tcp.ruleId, *rangeRule.ruleId);
+
+    const auto tcp0 = eng.evaluate(keyTcpDstPort(10000, 0));
+    EXPECT_EQ(tcp0.kind, IpRulesEngine::DecisionKind::BLOCK);
+    EXPECT_EQ(tcp0.ruleId, *exactRule.ruleId);
+}
+
+TEST(IpRulesEngineTest, WouldPortPredicatesDoNotMatchNonTcpUdpPackets) {
+    IpRulesEngine eng;
+
+    const auto would =
+        eng.addFromKv(10000, {"action=block", "priority=1", "proto=any", "dport=0", "enforce=0", "log=1"});
+    ASSERT_TRUE(would.ok);
+
+    const auto icmp = eng.evaluate(keyAnyIcmp(10000));
+    EXPECT_EQ(icmp.kind, IpRulesEngine::DecisionKind::NOMATCH);
+
+    const auto tcp = eng.evaluate(keyTcpDstPort(10000, 0));
+    EXPECT_EQ(tcp.kind, IpRulesEngine::DecisionKind::WOULD_BLOCK);
+    EXPECT_EQ(tcp.ruleId, *would.ruleId);
+}
+
+TEST(IpRulesEngineTest, ThreadLocalCacheIsClearedAcrossEngineLifetimeEvenAtSameAddress) {
+    alignas(IpRulesEngine) unsigned char storage[sizeof(IpRulesEngine)];
+
+    auto *eng1 = new (storage) IpRulesEngine();
+    const auto r1 =
+        eng1->addFromKv(10000, {"action=block", "priority=1", "proto=tcp", "dport=443"});
+    ASSERT_TRUE(r1.ok);
+    const auto d1 = eng1->evaluate(keyAnyTcp(10000));
+    ASSERT_EQ(d1.kind, IpRulesEngine::DecisionKind::BLOCK);
+    eng1->~IpRulesEngine();
+
+    auto *eng2 = new (storage) IpRulesEngine();
+    const auto r2 =
+        eng2->addFromKv(10001, {"action=allow", "priority=1", "proto=tcp", "dport=80"});
+    ASSERT_TRUE(r2.ok);
+    const auto d2 = eng2->evaluate(keyAnyTcp(10000));
+    EXPECT_EQ(d2.kind, IpRulesEngine::DecisionKind::NOMATCH);
+    eng2->~IpRulesEngine();
 }
 
 TEST(IpRulesEngineTest, MatchRespectsIfaceKindAndIfindex) {
