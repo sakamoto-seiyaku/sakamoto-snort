@@ -13,6 +13,11 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
 - `tests/integration/run.sh`
   - baseline integration（控制协议基线 / stream 健康检查 / `RESETALL` 基线）
   - 支持 `--group` / `--case` / `--skip-deploy` / `--serial`
+- `tests/integration/iprules.sh`
+  - IPRULES v1 基础验收（控制面校验 + 少量 ICMP + PKTSTREAM/overlay + 持久化）
+- `tests/integration/iprules-device-matrix.sh`
+  - IPRULES v1 真机规则矩阵（大量组合/边界：TCP/UDP/ICMP + proto/dir/iface/ifindex/CIDR/ports）
+  - runbook：`docs/IPRULES_DEVICE_VERIFICATION.md`
 - `tests/integration/device-smoke.sh`
   - rooted 真机平台 smoke / compatibility
   - 覆盖 root/preflight、socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC、lifecycle restart

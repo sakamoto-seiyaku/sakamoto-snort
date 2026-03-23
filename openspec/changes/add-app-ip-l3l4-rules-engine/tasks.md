@@ -58,12 +58,21 @@
 - [x] 10.4 输出：`IPRULES.PRINT` 中 `action/dir/iface/proto` 使用规范化 string token；`src/dst` 为 `any` 或标准 IPv4 CIDR；`sport/dport` 为 `any`、单端口十进制字符串、或 `lo-hi`
 - [x] 10.5 输出：`IPRULES.PREFLIGHT` 固定返回 `summary/limits/warnings/violations`；`limits` 含 `recommended/hard`；`warnings/violations` 为空时返回 `[]`，有项时每项至少含 `metric/value/limit/message`
 - [x] 10.6 行为/环境：在未暴露 `NFQA_CT` 元数据的环境下，v1 规则仍可按既定字段完成匹配；若环境提供相关元数据，也不得改变既定 v1 语义
-- [x] 10.7 行为：ALLOW/BLOCK 基本匹配（CIDR、端口 exact/range、proto、iface/ifindex、dir）
-- [x] 10.8 行为：`IFACE_BLOCK` 高于 ALLOW/BLOCK/would-match，且 `IFACE_BLOCK` 包不带 `ruleId/wouldRuleId`；`IPRULES=0` 时行为与基线一致且不做 lookup
+- [x] 10.7 行为：ALLOW/BLOCK 基本匹配（CIDR、端口 exact/range、proto、iface/ifindex、dir）—— 以真机矩阵为准（见 `tests/integration/iprules-device-matrix.sh`）
+- [x] 10.8a 行为：`IFACE_BLOCK` 高于 ALLOW/BLOCK/would-match，且 `IFACE_BLOCK` 包不带 `ruleId/wouldRuleId`
+- [x] 10.8b 行为：`IPRULES=0` 时行为与基线一致且不做 lookup（真机矩阵覆盖）
 - [x] 10.9 行为：`Allow/Block` 不回落；`NoMatch` 回落；`WouldBlock` 仅 overlay 且回落；若 legacy/domain 最终为 DROP，则本包不得出现 `wouldRuleId/wouldDrop` 且不得更新 wouldHit stats；当前不启用 `ip-leak` 合流语义
 - [x] 10.10 行为：safety-mode would-block 归因正确；每包最多 1 条 would-match；would-block 不改变实际 verdict
 - [x] 10.11 行为：disabled 规则不影响 verdict/PKTSTREAM/stats/preflight；同优先级重叠命中的唯一胜者在重复编译后保持稳定；增量 `UPDATE/ENABLE` 不改变既有 `ruleId`
 - [x] 10.12 per-rule stats：归因正确；`UPDATE` 生效后清零该规则 stats；`ENABLE 0→1` 时也清零该规则 stats
 - [x] 10.13 生命周期：`RESETALL` 后所有规则被彻底清空；后续新一轮规则集从初始 `ruleId = 0` 重开
-- [x] 10.14 性能冒烟：`tests/integration/perf-network-load.sh` 通过（NFQUEUE perf baseline），`tests/integration/iprules.sh` 覆盖 `IPRULES=0/1` 以及 enforce/would/stats 的主路径；更细粒度的 “0/100/1000 rules overhead microbench” 另立 follow-up change
+- [x] 10.14a 性能冒烟：`tests/integration/perf-network-load.sh` 通过（NFQUEUE perf baseline）
+- [x] 10.14b 真机矩阵：`tests/integration/iprules-device-matrix.sh` 覆盖 `IPRULES=0/1`、TCP/UDP/ICMP 与主要组合/边界
 - [x] 10.15 行为：`BLOCK=0` 时即使 `IPRULES=1` 或满足 `IFACE_BLOCK` 条件也一律 ACCEPT；并且 `METRICS.REASONS` 与 per-rule stats 在 `BLOCK=0` 下不增长
+
+## 11. Device matrix (补偿项，必须补齐才算验收)
+- [x] 11.1 新增真机矩阵 runbook：`docs/IPRULES_DEVICE_VERIFICATION.md`
+- [x] 11.2 新增真机矩阵脚本：`tests/integration/iprules-device-matrix.sh`（基于 ping + nc，优先 IP literal）
+- [x] 11.3 扩展矩阵覆盖：补齐 `proto=any` / `dir=any` / `iface=any` / `src CIDR` / UDP range no-match / sport range / dst /24 match+no-match 等边界与组合（以脚本为准）
+- [x] 11.4 并发窗口验证（best-effort）：控制面 ADD/UPDATE/ENABLE/REMOVE 与流量并发时不 crash、不死锁、判决语义不出现明显 bypass（脚本 `--stress-seconds N` 或等价手工流程）
+- [x] 11.5 在目标真机上重复跑矩阵并记录结果（至少 3 次），作为关闭 change 的必要证据
