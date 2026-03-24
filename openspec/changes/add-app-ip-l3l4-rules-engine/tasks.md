@@ -71,7 +71,7 @@
 - [x] 10.15 行为：`BLOCK=0` 时即使 `IPRULES=1` 或满足 `IFACE_BLOCK` 条件也一律 ACCEPT；并且 `METRICS.REASONS` 与 per-rule stats 在 `BLOCK=0` 下不增长
 
 ## 11. Device matrix (补偿项，必须补齐才算验收)
-- [x] 11.1 新增真机矩阵 runbook：`docs/IPRULES_DEVICE_VERIFICATION.md`
+- [x] 11.1 新增真机矩阵 runbook：`docs/testing/IPRULES_DEVICE_VERIFICATION.md`
 - [x] 11.2 新增真机矩阵脚本：`tests/integration/iprules-device-matrix.sh`（基于 ping + nc，优先 IP literal）
 - [x] 11.3 扩展矩阵覆盖：补齐 `proto=any` / `dir=any` / `iface=any` / `src CIDR` / UDP range no-match / sport range / dst /24 match+no-match 等边界与组合（以脚本为准）
 - [x] 11.4 并发窗口验证（best-effort）：控制面 ADD/UPDATE/ENABLE/REMOVE 与流量并发时不 crash、不死锁、判决语义不出现明显 bypass（脚本 `--stress-seconds N` 或等价手工流程）

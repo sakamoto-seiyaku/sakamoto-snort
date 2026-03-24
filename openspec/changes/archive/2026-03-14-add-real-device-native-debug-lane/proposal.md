@@ -21,5 +21,5 @@
 - 除非绝对必要且范围可解释，否则不修改 `src/` 主实现。
 
 ## Impact
-- Affected docs：`docs/NATIVE_DEBUGGING_AND_TESTING.md`, `dev/README.md`, `docs/IMPLEMENTATION_ROADMAP.md`
+- Affected docs：`docs/archived/NATIVE_DEBUGGING_AND_TESTING.md`, `dev/README.md`, `docs/IMPLEMENTATION_ROADMAP.md`
 - Affected tooling/code（实现时）：`dev/dev-native-debug.sh`, `dev/dev-tombstone.sh`, 以及相关 device/ADB 辅助脚本

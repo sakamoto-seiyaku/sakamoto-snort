@@ -42,5 +42,5 @@
 - 不以“更像传统 CMake 项目”为理由，触发与当前目标无关的大规模架构重构。
 
 ## Impact
-- Affected docs：`docs/NATIVE_DEBUGGING_AND_TESTING.md`, `docs/IMPLEMENTATION_ROADMAP.md`, `dev/README.md`, `tests/host/README.md`, `tests/integration/README.md`
+- Affected docs：`docs/archived/NATIVE_DEBUGGING_AND_TESTING.md`, `docs/IMPLEMENTATION_ROADMAP.md`, `dev/README.md`, `tests/host/README.md`, `tests/integration/README.md`
 - Affected tooling/code（实现时）：repo-root `CMakeLists.txt`, `CMakePresets.json`, `.vscode/`, `tests/host/`, `tests/integration/`, `dev/`

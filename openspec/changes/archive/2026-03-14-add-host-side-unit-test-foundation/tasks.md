@@ -5,7 +5,7 @@
 ## 2. Roadmap alignment
 - [x] 2.1 初始已更新 `docs/IMPLEMENTATION_ROADMAP.md`，建立 `P0/P1/P2/P3` 测试/调试顺序
 - [x] 2.2 初始已更新 `AGENTS.md`，明确以 roadmap 为准
-- [x] 2.3 初始已更新 `docs/NATIVE_DEBUGGING_AND_TESTING.md`，明确测试/调试 phase 定义
+- [x] 2.3 初始已更新 `docs/archived/NATIVE_DEBUGGING_AND_TESTING.md`，明确测试/调试 phase 定义
 - [x] 2.4 取消 P0 归档，恢复为 active change
 - [x] 2.5 更新 roadmap / AGENTS，明确：只要仍存在当前值得测且不由 `P1/P2/P3` 覆盖的 pure-logic 缺口，P0 就不能标记完成
 

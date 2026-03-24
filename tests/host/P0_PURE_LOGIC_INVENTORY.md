@@ -27,7 +27,7 @@
 ## 当前暂缓
 
 - `CustomRules`
-  - 文档依据：`openspec/project.md`、`docs/DOMAIN_POLICY_OBSERVABILITY.md`
+  - 文档依据：`openspec/project.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`
   - 审计结论：当前实现把多条规则汇总成单一 regex 快照并只返回 bool；文档也明确 per-rule 归因与 counters 延后。
   - 暂缓原因：若要进一步验证规则归因或更细粒度行为，会触及 `Domain`/快照组合路径，容易超出 P0“最小改动”边界。
 

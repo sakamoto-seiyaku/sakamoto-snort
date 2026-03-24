@@ -25,7 +25,7 @@ bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile perf --skip
 ```
 
 说明：
-- `tests/device-modules/ip/` 是“真机测试模组”，不是 unit/integration 的替代品（见 `docs/TEST_COMPONENTS_MANIFESTO.md`）。
+- `tests/device-modules/ip/` 是“真机测试模组”，不是 unit/integration 的替代品（见 `docs/testing/TEST_COMPONENTS_MANIFESTO.md`）。
 - 结果记录默认写到 `tests/device-modules/ip/records/`（该目录已被 `tests/device-modules/ip/.gitignore` 排除，不进 git）。
 
 ## 2. Tier‑1（netns+veth）受控拓扑

@@ -27,5 +27,5 @@
 - 除非绝对必要且范围可解释，否则不修改 `src/` 主实现。
 
 ## Impact
-- Affected docs：`docs/IMPLEMENTATION_ROADMAP.md`, `docs/NATIVE_DEBUGGING_AND_TESTING.md`, `dev/README.md`
+- Affected docs：`docs/IMPLEMENTATION_ROADMAP.md`, `docs/archived/NATIVE_DEBUGGING_AND_TESTING.md`, `dev/README.md`
 - Affected tooling/code（实现时）：`tests/integration/`, `dev/dev-deploy.sh`, 以及相关文档 / 兼容 wrapper

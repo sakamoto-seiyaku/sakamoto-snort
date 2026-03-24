@@ -51,7 +51,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 - 当前测试/验收入口（repo 作为单一入口；不要求开发机预装 gtest 包）：
   - 单元测试（host-side / pure-logic）：`tests/host/`（repo-managed gtest；经 CMake/CTest 暴露）
   - 集成测试 / 真机回归：`tests/integration/`（baseline、平台专项 smoke、perf 等；统一通过脚本 + CTest 暴露）
-  - 真机原生调试：repo-root VS Code + CMake + CodeLLDB workflow（见 `docs/VSCODE_CMAKE_WORKFLOW.md`）
+  - 真机原生调试：repo-root VS Code + CMake + CodeLLDB workflow（见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`）
 
 - **Non-negotiable / Tests-first policy（对后续所有 change 生效）**：
   - 任何会改变行为/接口/统计口径/持久化语义/热路径性能特征的改动，必须在对应 OpenSpec change 的 `tasks.md` 中**先写清验证方案**（能补的单测/集成测试/真机验收都要补），再开始改代码。

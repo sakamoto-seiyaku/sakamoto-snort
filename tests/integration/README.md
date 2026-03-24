@@ -17,7 +17,7 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
   - IPRULES v1 基础验收（控制面校验 + 少量 ICMP + PKTSTREAM/overlay + 持久化）
 - `tests/integration/iprules-device-matrix.sh`
   - IPRULES v1 真机规则矩阵（大量组合/边界：TCP/UDP/ICMP + proto/dir/iface/ifindex/CIDR/ports）
-  - runbook：`docs/IPRULES_DEVICE_VERIFICATION.md`
+  - runbook：`docs/testing/IPRULES_DEVICE_VERIFICATION.md`
 - `tests/integration/device-smoke.sh`
   - rooted 真机平台 smoke / compatibility
   - 覆盖 root/preflight、socket、`netd` 前置、`iptables` / `ip6tables` / `NFQUEUE`、SELinux / AVC、lifecycle restart
@@ -74,4 +74,4 @@ bash dev/dev-netd-resolv.sh prepare
 
 - 这里只做测试 / tooling，不推进产品逻辑实现。
 - baseline integration 与 platform-specific / compatibility 的区别在于覆盖范围，而不是是否使用真机。
-- 真机原生调试、LLDB、tombstone workflow 见 `docs/VSCODE_CMAKE_WORKFLOW.md`。
+- 真机原生调试、LLDB、tombstone workflow 见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`。

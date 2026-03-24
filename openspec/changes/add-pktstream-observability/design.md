@@ -99,5 +99,5 @@ reasonId 选择必须确定且唯一；在当前 baseline（无规则引擎 over
   - 仅对进入 `PacketManager::make()` 的包计数（当前事实：`BLOCK=0` 时不进入判决链路）
 
 ## 6. TBD (Next)
-- 域名侧 `policySource` 归因与 counters 口径：已固化在 `docs/DOMAIN_POLICY_OBSERVABILITY.md`，实现与对外接口 TBD。
+- 域名侧 `policySource` 归因与 counters 口径：已固化在 `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`，实现与对外接口 TBD。
 - 常态 counters/metrics（域名系统与 IP 规则等）如何统一对外暴露与复用：TBD（下一轮专题）。

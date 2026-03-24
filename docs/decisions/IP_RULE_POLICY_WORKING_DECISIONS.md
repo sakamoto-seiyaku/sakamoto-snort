@@ -37,7 +37,7 @@
 `docs/archived/IP_RULE_POLICY_DISCUSSION_RAW_EXCERPTS_019cad3d-d9ba-7b21-9dc8-ae0f84c12ba1.md`
 
 辅助材料（调研/事实语义）：
-- `docs/P0P1_BACKEND_WORKING_DECISIONS.md`
+- `docs/decisions/P0P1_BACKEND_WORKING_DECISIONS.md`
 - `docs/archived/IP_RULE_ENGINE_RESEARCH.md`
 
 ---

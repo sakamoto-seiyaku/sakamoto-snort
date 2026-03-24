@@ -14,7 +14,7 @@
 ## What Changes
 
 - 新增一个项目级 **IP 真机测试模组**（host-driven、真机执行）：
-  - 明确的组件边界与原则（见纲领 `docs/TEST_COMPONENTS_MANIFESTO.md`）
+  - 明确的组件边界与原则（见纲领 `docs/testing/TEST_COMPONENTS_MANIFESTO.md`）
   - 统一 runner（可按 profile/group/case 运行子集，输出可机器解析的 summary）
   - 覆盖 ip-smoke / ip-matrix / ip-stress / ip-perf 四类入口（快/全/并发/性能；可选 longrun）
   - 使用统一断言数据源：`PKTSTREAM` / `METRICS.REASONS` / `IPRULES.PRINT(stats)` / `METRICS.PERF`

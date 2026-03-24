@@ -103,7 +103,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 生命周期：since boot（进程内，不落盘）
 - 对外接口（拟定）：`METRICS.DOMAIN.SOURCES*`（device-wide + per-app）
 
-权威文档：`docs/DOMAIN_POLICY_OBSERVABILITY.md`（域名侧不新建 OpenSpec change）。
+权威文档：`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`（域名侧不新建 OpenSpec change）。
 
 ### 4.3 C：IP per-rule runtime stats（IP 规则引擎）
 目标：新 IP 规则从一开始就必须支持可解释 + per-rule stats（常态可查，不依赖 PKTSTREAM）。
@@ -179,7 +179,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 `openspec/changes/add-app-ip-l3l4-rules-engine/`
 
 3) 域名侧 `policySource` 与 B 层 counters 口径：  
-`docs/DOMAIN_POLICY_OBSERVABILITY.md`
+`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`
 
 4) D 层性能健康指标（`PERFMETRICS` / `METRICS.PERF*`）的边界与口径：  
 `openspec/specs/perfmetrics-observability/`（历史 change 归档：`openspec/changes/archive/2026-03-15-add-perfmetrics-observability/`）
