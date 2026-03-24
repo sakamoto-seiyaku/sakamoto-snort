@@ -145,7 +145,8 @@ IP 模组的 perf baseline 当前追求的是一个**稳定、可复现、可比
 
 2) **跨场景可拉开差距**  
    baseline 不只是要“能跑”，还要能让典型场景之间出现可观察的差异。当前关注的场景包括：`BLOCK=0`、`IPRULES=0`、`IPRULES=1 + empty rules`、`IPRULES=1 + 2K rules`、`IPRULES=1 + 4K rules`。  
-   如果不同场景之间长期几乎无差异，则这套 baseline 对后续优化/回归的诊断价值有限。
+   如果不同场景之间长期几乎无差异，则这套 baseline 对后续优化/回归的诊断价值有限。  
+   但也要接受一个现实：当 rule engine 的 cache 很有效时，**cache-on 的真实热路径**在 `2k vs 4k` 下可能只差几个百分点，这并不一定代表“baseline 失败”，而是代表“实际使用时 cache 在工作”。此时需要额外引入 “cache-off / cold-cache” 的诊断口径来放大算法差异（见第 6 点）。
 
 3) **先追求固定 workload，再追求覆盖面**  
    当前阶段不追求把“所有真实流量形态”和“所有规则组合”都塞进 baseline。先冻结一组固定 workload 和固定 ruleset，确认它具备稳定性与区分度；后续再逐步增加额外 workload/ruleset 作为补充，而不是一开始就做成一个无法解释的大杂烩。
@@ -157,6 +158,14 @@ IP 模组的 perf baseline 当前追求的是一个**稳定、可复现、可比
 
 5) **结果记录要保留探索痕迹**  
    在 baseline 尚未完全定型前，需要把“为什么放弃某条路径、为什么保留某个候选 workload/ruleset”记入 runbook。这样即使后续对话被压缩、上下文丢失，也能从文档恢复思路演进过程。
+
+6) **分层：cache-on baseline + cache-off 诊断（目的不同）**  
+   我们需要两套 perf 口径，分别回答不同问题：
+   - **cache-on baseline（默认）**：尽量贴近真实线上路径；允许差异只有几个百分点，只要稳定、可复现、能长期对比即可（用于“回归/趋势”）。
+   - **cache-off / cold-cache 诊断**：人为放大 “规则规模/匹配策略/数据结构” 的成本，用于评估算法复杂度、验证优化是否真实有效（用于“诊断/对比/放大差距”）。  
+   建议以一个 **DEV-only debug 开关**落地（例如 `DEV.IPRULES.CACHE 0|1`，默认 `1`），并要求：
+   - 默认开启时不改变当前线上语义；
+   - 不应把 runtime 开关检查变成新的热路径负担（理想做法：在 engine 构造/切换时决定是否启用 cache；或仅在 dev 构建启用该开关）。
 
 2) **局域网固定 server（推荐，用于更真实吞吐）**  
    在实验网/局域网提供固定 IP 的 HTTP/iperf server；模组以 IP literal 访问并做下载/吞吐。  
