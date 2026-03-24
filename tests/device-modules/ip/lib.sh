@@ -13,6 +13,95 @@ log_pass() { echo -e "${GREEN}✓${NC} $1"; }
 log_fail() { echo -e "${RED}✗${NC} $1"; }
 log_skip() { echo -e "${YELLOW}⊘${NC} $1"; }
 
+# -----------------------------------------------------------------------------
+# Common expectations (device-module friendly)
+# -----------------------------------------------------------------------------
+
+expect_ok() {
+  local cmd="$1"
+  local desc="$2"
+  local result status
+
+  set +e
+  result="$(send_cmd "$cmd")"
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    log_fail "$desc"
+    echo "    cmd: $cmd"
+    echo "    got: $result"
+    return 1
+  fi
+
+  if [[ "$result" == "OK" ]]; then
+    log_pass "$desc"
+    return 0
+  fi
+
+  log_fail "$desc"
+  echo "    cmd: $cmd"
+  echo "    got: $result"
+  return 1
+}
+
+expect_nok() {
+  local cmd="$1"
+  local desc="$2"
+  local result status
+
+  set +e
+  result="$(send_cmd "$cmd")"
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    log_fail "$desc"
+    echo "    cmd: $cmd"
+    echo "    got: $result"
+    return 1
+  fi
+
+  if [[ "$result" == "NOK" ]]; then
+    log_pass "$desc"
+    return 0
+  fi
+
+  log_fail "$desc"
+  echo "    cmd: $cmd"
+  echo "    got: $result"
+  return 1
+}
+
+expect_uint() {
+  local cmd="$1"
+  local desc="$2"
+  local result status
+
+  set +e
+  result="$(send_cmd "$cmd")"
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    log_fail "$desc" >&2
+    echo "    cmd: $cmd" >&2
+    echo "    got: $result" >&2
+    return 1
+  fi
+
+  if [[ "$result" =~ ^[0-9]+$ ]]; then
+    log_pass "$desc (value=$result)" >&2
+    echo "$result"
+    return 0
+  fi
+
+  log_fail "$desc" >&2
+  echo "    cmd: $cmd" >&2
+  echo "    got: $result" >&2
+  return 1
+}
+
 IPTEST_NS="${IPTEST_NS:-iptest_ns}"
 IPTEST_VETH0="${IPTEST_VETH0:-iptest_veth0}"
 IPTEST_VETH1="${IPTEST_VETH1:-iptest_veth1}"

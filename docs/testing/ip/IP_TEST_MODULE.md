@@ -22,15 +22,25 @@ bash dev/dev-deploy.sh --serial "$ADB_SERIAL"
 # IP 模组 smoke/perf（Tier‑1: netns+veth）
 bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile smoke
 bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile perf --skip-deploy
+
+# 全量功能矩阵 / 并发压力（best-effort；环境不满足会 SKIP）
+bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile matrix --skip-deploy
+bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile stress --skip-deploy
 ```
 
 说明：
-- `tests/device-modules/ip/` 是“真机测试模组”，不是 unit/integration 的替代品（见 `docs/testing/TEST_COMPONENTS_MANIFESTO.md`）。
+- `tests/device-modules/ip/` 是“真机测试模组”，不是 unit/integration 的替代品（见 `tests/TEST_COMPONENTS_MANIFESTO.md`）。
 - 结果记录默认写到 `tests/device-modules/ip/records/`（该目录已被 `tests/device-modules/ip/.gitignore` 排除，不进 git）。
+- 建议频率（口径保守，先不把 perf 变成 hard gate）：
+  - 任意 `IPRULES/IFACE_BLOCK/BLOCKIPLEAKS` 语义改动：至少跑 `smoke + matrix`
+  - 热路径/性能/并发相关改动：再补 `perf + stress`（perf 推荐用本文固定口径的 UDP baseline）
 
 ## 2. Tier‑1（netns+veth）受控拓扑
 
 Tier‑1 的目的：在真机内创建封闭网络拓扑，避免公网/DNS/CDN 抖动，获得更强可复现性。
+
+当前范围：
+- 本模组目前只实现 Tier‑1（设备内 `netns+veth` 自建对端）；Tier‑2/Tier‑3 暂不做。
 
 关键点：
 - Android 常见 policy routing：不同 UID 的出站流量会走 `wlan0/rmnet` 等 table。Tier‑1 setup 需要把测试子网路由注入“client UID 实际使用的 table”，否则 `ip route get <peer> uid 2000` 可能不会走 veth。
@@ -234,6 +244,17 @@ baseline v1 采用 3 个场景（对同一台设备、同一组 knobs）：
 规则语料设计目标：
 - 强化 rule-eval 成本，但不改变实际 verdict（使用 `would-block`：`action=block enforce=0 log=1`）。
 - deterministic：固定 seed + 固定生成规则形态，便于长期回归对比。
+
+### 4.1 规则规模扫描（可选；METRICS.PERF + /proc delta）
+
+用于观察 “规则规模→延迟/吞吐趋势”（**先记录**，不作为硬阈值 gate）：
+
+```bash
+bash tests/device-modules/ip/perf_ruleset_sweep.sh \
+  --serial "$ADB_SERIAL" \
+  --seconds 30 \
+  --load-mode mix
+```
 
 ## 5. 已知环境问题（必须规避）
 

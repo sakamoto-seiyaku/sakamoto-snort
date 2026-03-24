@@ -98,7 +98,7 @@ Tier‑1 的 TCP load server 当前使用：
 
 ## 4. Perf baseline（当前探索中的固定口径）
 
-这部分不是“最终定稿”，而是把当前阶段已经确认的原则、候选 workload 和被放弃的方向先固定在文档里，避免后续上下文丢失。总原则见 `docs/testing/TEST_COMPONENTS_MANIFESTO.md` 的 `4.4.3`；这里补充当前落地到 `tests/device-modules/ip/` 的具体形态。
+这部分不是“最终定稿”，而是把当前阶段已经确认的原则、候选 workload 和被放弃的方向先固定在文档里，避免后续上下文丢失。总原则见 `tests/TEST_COMPONENTS_MANIFESTO.md` 的 `4.4.3`；这里补充当前落地到 `tests/device-modules/ip/` 的具体形态。
 
 ### 4.1 当前追求的 baseline 目标
 
