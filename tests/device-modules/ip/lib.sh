@@ -75,6 +75,111 @@ iptest_stage_neper_binaries() {
   adb_su "chmod 755 \"$IPTEST_NEPER_TCP_CRR_DEVICE_BIN\" \"$IPTEST_NEPER_UDP_STREAM_DEVICE_BIN\""
 }
 
+iptest_snort_pid() {
+  local pid
+
+  pid="$(adb_su 'pidof sucre-snort-dev 2>/dev/null | awk "{print \$1}" || true' | tr -d '\r\n')"
+  if [[ -z "$pid" ]]; then
+    pid="$(adb_su 'pidof sucre-snort 2>/dev/null | awk "{print \$1}" || true' | tr -d '\r\n')"
+  fi
+
+  if [[ -z "$pid" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$pid"
+  return 0
+}
+
+iptest_capture_snort_proc_snapshot() {
+  adb_su "$(cat <<'SH'
+set -e
+
+pid="$(pidof sucre-snort-dev 2>/dev/null | awk "{print \$1}" || true)"
+if [ -z "${pid}" ]; then
+  pid="$(pidof sucre-snort 2>/dev/null | awk "{print \$1}" || true)"
+fi
+
+echo timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+if [ -z "${pid}" ]; then
+  echo snort_pid=0
+  exit 0
+fi
+
+echo snort_pid="${pid}"
+readlink "/proc/${pid}/exe" 2>/dev/null | awk '{print "snort_exe=" $0}' || true
+tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null | awk '{print "snort_cmdline=" $0}' || true
+awk '{print "snort_utime_ticks=" $14 "\n" "snort_stime_ticks=" $15 "\n" "snort_rss_pages=" $24}' "/proc/${pid}/stat" 2>/dev/null || true
+grep '^VmRSS:' "/proc/${pid}/status" 2>/dev/null | awk '{print "snort_vm_rss_kb=" $2}' || true
+grep '^VmSize:' "/proc/${pid}/status" 2>/dev/null | awk '{print "snort_vm_size_kb=" $2}' || true
+getconf CLK_TCK 2>/dev/null | awk '{print "snort_clk_tck=" $1}' || true
+SH
+)"
+}
+
+iptest_snort_proc_delta_summary() {
+  local before_path="$1"
+  local after_path="$2"
+  python3 - "$before_path" "$after_path" <<'PY'
+import sys
+from pathlib import Path
+
+before_path = Path(sys.argv[1])
+after_path = Path(sys.argv[2])
+
+
+def load(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        return out
+    for line in lines:
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def as_int(d: dict[str, str], key: str) -> int:
+    val = d.get(key, "")
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
+
+
+before = load(before_path)
+after = load(after_path)
+
+pid = as_int(after, "snort_pid") or as_int(before, "snort_pid")
+clk_tck = as_int(after, "snort_clk_tck") or as_int(before, "snort_clk_tck")
+
+ut_b = as_int(before, "snort_utime_ticks")
+st_b = as_int(before, "snort_stime_ticks")
+ut_a = as_int(after, "snort_utime_ticks")
+st_a = as_int(after, "snort_stime_ticks")
+
+vmrss_b = as_int(before, "snort_vm_rss_kb")
+vmrss_a = as_int(after, "snort_vm_rss_kb")
+
+ut_d = max(0, ut_a - ut_b)
+st_d = max(0, st_a - st_b)
+cpu_d = ut_d + st_d
+vmrss_d = vmrss_a - vmrss_b
+
+print(f"snort_pid={pid}")
+print(f"snort_clk_tck={clk_tck}")
+print(f"snort_utime_ticks_delta={ut_d}")
+print(f"snort_stime_ticks_delta={st_d}")
+print(f"snort_cpu_ticks_delta={cpu_d}")
+print(f"snort_vm_rss_kb_before={vmrss_b}")
+print(f"snort_vm_rss_kb_after={vmrss_a}")
+print(f"snort_vm_rss_kb_delta={vmrss_d}")
+PY
+}
+
 iptest_reset_baseline() {
   assert_ok "RESETALL" "RESETALL baseline"
   assert_ok "BLOCK 1" "BLOCK=1"

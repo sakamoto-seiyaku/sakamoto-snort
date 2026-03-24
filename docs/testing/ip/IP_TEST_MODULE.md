@@ -187,6 +187,43 @@ bash dev/dev-deploy.sh --serial "$ADB_SERIAL" --variant iprules-nocache
 
 这些值由脚本在每个样本前后读取 `/proc/net/netfilter/nfnetlink_queue` 并计算 delta。
 
+### 3.6 额外采集（best-effort；不做 gate）
+
+为帮助定位 “吞吐差距不大但热路径成本变化” 的情况，每个 scenario 额外采集 `sucre-snort` 进程的 `/proc/<pid>` 快照并计算 delta：
+- `*_snort_proc_before.txt` / `*_snort_proc_after.txt`
+- `*_summary.txt` 中会额外出现（示例）：
+  - `snort_cpu_ticks_delta`
+  - `snort_cpu_ticks_per_pkt`（UDP/ICMP 等按 NFQ 包数归一）
+  - `snort_cpu_ticks_per_txn`（`tcp_crr` 按事务数归一）
+  - `snort_vm_rss_kb_delta`
+
+说明：
+- 这是 **best-effort** 诊断指标：若无法定位 PID 会回退为 `0`；不作为通过/失败 gate。
+- tick→时间换算依赖 `CLK_TCK`（脚本会记录 `snort_clk_tck`，避免假设 HZ）。
+
+### 3.7 其他 mode（可选；非 baseline）
+
+除 UDP_STREAM baseline 外，还保留一个更偏 “短连接/事务” 的 TCP_CRR runner（用于 spot-check；不作为 baseline gate）：
+
+```bash
+bash tests/device-modules/ip/neper_perf_fixedfreq_matrix.sh \
+  --serial "$ADB_SERIAL" \
+  --adb "$ADB" \
+  --matrix-mode scenario \
+  --settle 10 \
+  --freq0 1328000 --freq4 1328000 --freq6 1426000 \
+  -- \
+  --rounds-per-scenario 5 \
+  --seconds 60 \
+  --warmup 10 \
+  --cooldown-job 10 \
+  --threads 8 \
+  --flows 1024 \
+  --bytes 1 \
+  --num-ports 16 \
+  --perfmetrics 0
+```
+
 ## 4. 规则集与场景语义（perf 口径）
 
 baseline v1 采用 3 个场景（对同一台设备、同一组 knobs）：

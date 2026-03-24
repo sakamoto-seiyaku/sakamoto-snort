@@ -339,7 +339,10 @@ run_neper_udp_stream() {
   local server_log="$records_dir/${label}_server.txt"
   local nfq_before="$records_dir/${label}_nfq_before.txt"
   local nfq_after="$records_dir/${label}_nfq_after.txt"
+  local proc_before="$records_dir/${label}_snort_proc_before.txt"
+  local proc_after="$records_dir/${label}_snort_proc_after.txt"
 
+  iptest_capture_snort_proc_snapshot >"$proc_before" || true
   capture_nfq >"$nfq_before" || true
 
   adb_su "rm -f /data/local/tmp/iptest_neper_udp_srv.log"
@@ -355,6 +358,7 @@ run_neper_udp_stream() {
   adb_su "cat /data/local/tmp/iptest_neper_udp_srv.log 2>/dev/null || true" >"$server_log" || true
 
   capture_nfq >"$nfq_after" || true
+  iptest_capture_snort_proc_snapshot >"$proc_after" || true
 
   local summary="$records_dir/${label}_summary.txt"
   {
@@ -363,6 +367,9 @@ run_neper_udp_stream() {
     echo ""
     echo "== nfq delta =="
     nfq_delta_summary "$nfq_before" "$nfq_after"
+    echo ""
+    echo "== snort proc delta =="
+    iptest_snort_proc_delta_summary "$proc_before" "$proc_after"
   } | tee "$summary"
 
   python3 - "$label" "$client_log" "$summary" "$seconds" "$THREADS" "$FLOWS" "$BYTES" "$DELAY_NS" "$CLIENT_UID" "$LOCAL_HOST_COUNT" "$LOCAL_HOST_BASE_OCTET" >>"$records_dir/results.jsonl" <<'PY'
@@ -402,10 +409,17 @@ def find_str(name: str) -> str:
     return m.group(1).strip()
 
 def find_kv_int(name: str) -> int:
-    m = re.search(rf"^{re.escape(name)}=([0-9]+)$", summary_txt, re.M)
+    m = re.search(rf"^{re.escape(name)}=([-]?[0-9]+)$", summary_txt, re.M)
     if not m:
         return 0
     return int(m.group(1))
+
+seq_total = find_kv_int("nfq_seq_total")
+snort_cpu_ticks = find_kv_int("snort_cpu_ticks_delta")
+snort_clk_tck = find_kv_int("snort_clk_tck")
+snort_cpu_ms_delta = (snort_cpu_ticks / snort_clk_tck * 1000.0) if snort_clk_tck else 0.0
+snort_cpu_ticks_per_pkt = (snort_cpu_ticks / seq_total) if seq_total else 0.0
+snort_cpu_ms_per_pkt = (snort_cpu_ms_delta / seq_total) if seq_total else 0.0
 
 row = {
     "scenario": label,
@@ -430,9 +444,22 @@ row = {
         "local_throughput": find_float("local_throughput"),
     },
     "nfq": {
-        "seq_total": find_kv_int("nfq_seq_total"),
+        "seq_total": seq_total,
         "queue_dropped_total": find_kv_int("nfq_queue_dropped_total"),
         "user_dropped_total": find_kv_int("nfq_user_dropped_total"),
+    },
+    "snort_proc": {
+        "pid": find_kv_int("snort_pid"),
+        "clk_tck": snort_clk_tck,
+        "utime_ticks_delta": find_kv_int("snort_utime_ticks_delta"),
+        "stime_ticks_delta": find_kv_int("snort_stime_ticks_delta"),
+        "cpu_ticks_delta": snort_cpu_ticks,
+        "cpu_ms_delta": snort_cpu_ms_delta,
+        "cpu_ticks_per_pkt": snort_cpu_ticks_per_pkt,
+        "cpu_ms_per_pkt": snort_cpu_ms_per_pkt,
+        "vm_rss_kb_before": find_kv_int("snort_vm_rss_kb_before"),
+        "vm_rss_kb_after": find_kv_int("snort_vm_rss_kb_after"),
+        "vm_rss_kb_delta": find_kv_int("snort_vm_rss_kb_delta"),
     },
 }
 print(json.dumps(row, ensure_ascii=False, separators=(",", ":")))

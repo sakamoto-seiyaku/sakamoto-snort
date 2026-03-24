@@ -140,6 +140,11 @@ capture_device_snapshot() {
   local path="$OUTPUT_DIR/${label}.txt"
   adb_su "
 echo timestamp=\$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+echo build_fingerprint=\$(getprop ro.build.fingerprint 2>/dev/null || true)
+echo build_sdk=\$(getprop ro.build.version.sdk 2>/dev/null || true)
+echo build_release=\$(getprop ro.build.version.release 2>/dev/null || true)
+echo device_model=\$(getprop ro.product.model 2>/dev/null || true)
+echo kernel=\$(uname -a 2>/dev/null || true)
 for p in /sys/devices/system/cpu/cpufreq/policy0 /sys/devices/system/cpu/cpufreq/policy4 /sys/devices/system/cpu/cpufreq/policy6; do
   name=\$(basename \"\$p\")
   echo === \$name ===

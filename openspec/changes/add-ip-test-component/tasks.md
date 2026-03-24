@@ -31,6 +31,7 @@
   - `tests/device-modules/ip/neper_perf_3way.sh`（TCP_CRR；off/2k/4k；records+summarizer）
   - `tests/device-modules/ip/neper_udp_perf_3way.sh`（UDP_STREAM；off/2k/4k；records+summarizer）
   - `tests/device-modules/ip/neper_udp_perf_fixedfreq_matrix.sh`（固定频率 + scenario matrix；用于固化长期 perf baseline 口径）
+- [x] 4.2.2 baseline 额外采集 snort `/proc/<pid>` delta（CPU ticks / VmRSS；best-effort，不做 gate）
 - [x] 4.3 将结果以可追加方式记录到 runbook（不要求阈值 gate；标注 traffic tier 与环境信息）
 
 ## 5. Optional: dev/CI hooks

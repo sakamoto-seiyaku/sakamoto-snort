@@ -93,6 +93,85 @@ def _extract_drops(row: Dict[str, Any]) -> Tuple[int, int]:
         return 0, 0
 
 
+def _extract_nfq_seq_total(row: Dict[str, Any]) -> int:
+    nfq = row.get("nfq")
+    if not isinstance(nfq, dict):
+        return 0
+    try:
+        return int(nfq.get("seq_total", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_neper_num_transactions(row: Dict[str, Any]) -> int:
+    neper = row.get("neper")
+    if not isinstance(neper, dict):
+        return 0
+    try:
+        return int(neper.get("num_transactions", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_snort_cpu_ticks_delta(row: Dict[str, Any]) -> Optional[float]:
+    snort = row.get("snort_proc")
+    if not isinstance(snort, dict):
+        return None
+    val = snort.get("cpu_ticks_delta")
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_snort_vm_rss_kb_delta(row: Dict[str, Any]) -> Optional[float]:
+    snort = row.get("snort_proc")
+    if not isinstance(snort, dict):
+        return None
+    val = snort.get("vm_rss_kb_delta")
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _print_metric(
+    runs: List[Run],
+    scenarios: Iterable[str],
+    title: str,
+    extract,
+    digits: int = 2,
+) -> None:
+    values: Dict[str, List[float]] = {s: [] for s in scenarios}
+    for r in runs:
+        for s in scenarios:
+            row = r.rows.get(s)
+            if not row:
+                continue
+            v = extract(row)
+            if v is None:
+                continue
+            values[s].append(v)
+
+    if not any(values[s] for s in scenarios):
+        return
+
+    print("")
+    print(title)
+    for s in scenarios:
+        vals = values[s]
+        mean, stdev = _mean_stdev(vals)
+        cv = (stdev / mean * 100.0) if mean else 0.0
+        if vals:
+            mean_s = f"{mean:.{digits}f}"
+            stdev_s = f"{stdev:.{digits}f}"
+            min_s = f"{min(vals):.{digits}f}"
+            max_s = f"{max(vals):.{digits}f}"
+            print(f"- {s}: n={len(vals)} mean={mean_s} stdev={stdev_s} cv={cv:.2f}% min={min_s} max={max_s}")
+        else:
+            print(f"- {s}: n=0")
+
+
 def _print_knobs_summary(runs: List[Run]) -> None:
     # Best-effort: show whether knobs appear stable across runs.
     knobs_by_run: List[Dict[str, Any]] = []
@@ -215,6 +294,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"- 2k_vs_off: {_fmt_pct(_pct(k2_mean, off_mean))}")
     print(f"- 4k_vs_off: {_fmt_pct(_pct(k4_mean, off_mean))}")
     print(f"- 4k_vs_2k:  {_fmt_pct(_pct(k4_mean, k2_mean))}")
+
+    _print_metric(
+        runs,
+        scenarios,
+        title="snort_cpu_ticks_delta (lower is better; ticks via /proc/<pid>/stat):",
+        extract=_extract_snort_cpu_ticks_delta,
+        digits=2,
+    )
+
+    def cpu_ticks_per_pkt(row: Dict[str, Any]) -> Optional[float]:
+        cpu = _extract_snort_cpu_ticks_delta(row)
+        seq = _extract_nfq_seq_total(row)
+        if cpu is None or seq <= 0:
+            return None
+        return cpu / float(seq)
+
+    _print_metric(
+        runs,
+        scenarios,
+        title="snort_cpu_ticks_per_pkt (lower is better; ticks/pkt):",
+        extract=cpu_ticks_per_pkt,
+        digits=6,
+    )
+
+    def cpu_ticks_per_txn(row: Dict[str, Any]) -> Optional[float]:
+        cpu = _extract_snort_cpu_ticks_delta(row)
+        txns = _extract_neper_num_transactions(row)
+        if cpu is None or txns <= 0:
+            return None
+        return cpu / float(txns)
+
+    _print_metric(
+        runs,
+        scenarios,
+        title="snort_cpu_ticks_per_txn (lower is better; ticks/txn; tcp_crr only):",
+        extract=cpu_ticks_per_txn,
+        digits=6,
+    )
+
+    _print_metric(
+        runs,
+        scenarios,
+        title="snort_vm_rss_kb_delta (delta VmRSS; kB):",
+        extract=_extract_snort_vm_rss_kb_delta,
+        digits=2,
+    )
 
     # Monotonicity per-run (only when the run has all three scenarios).
     mono = 0
