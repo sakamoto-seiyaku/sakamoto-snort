@@ -1,7 +1,8 @@
-> 状态对齐（2026-03-24）：
+> 状态对齐（2026-03-25）：
 > - `tests/device-modules/ip/run.sh` + Tier‑1 已落地；当前稳定承载 `smoke` / `perf`，并已具备 `matrix` 的核心用例入口。
 > - `IPRULES`/`IFACE_BLOCK` 的主要 functional matrix 已迁入 `tests/device-modules/ip/cases/*`；`tests/integration/iprules-device-matrix.sh` 暂保留为 legacy 对照入口。
-> - `stress` 已落地（控制面 churn + 真实流量并发）；Tier-2/Tier-3 流量源暂不做；`longrun` 仍为 staged（runner 已预留，缺 case 时会 SKIP）；因此本 change 维持 `17/18` 任务完成度。
+> - `stress` 已落地（控制面 churn + 真实流量并发）；Tier-2/Tier-3 流量源暂不做。
+> - Deferred（迁移到 `update-post-domain-ip-fusion-rollup`）：Tier‑1 `longrun` 用例补齐 +（可选）CI/CTest `ip-smoke` hook。
 
 ## 0. OpenSpec docs
 - [x] 0.1 新增纲领：`tests/TEST_COMPONENTS_MANIFESTO.md`（包含 IP test component 的范围/原则/入口约定）
@@ -47,9 +48,6 @@
   - `tests/device-modules/ip/neper_udp_perf_fixedfreq_matrix.sh`（固定频率 + scenario matrix；用于固化长期 perf baseline 口径）
 - [x] 4.2.2 baseline 额外采集 snort `/proc/<pid>` delta（CPU ticks / VmRSS；best-effort，不做 gate）
 - [x] 4.3 将结果以可追加方式记录到 runbook（不要求阈值 gate；标注 traffic tier 与环境信息）
-
-## 5. Optional: dev/CI hooks
-- [ ] 5.1 （可选）提供一个轻量 `ip-smoke` 入口接入现有 CTest（仅在运行时长与稳定性满足时）
 
 ## 6. Runbook & result recording
 - [x] 6.1 新增 `docs/testing/ip/IP_TEST_MODULE.md`：运行方式、环境要求、结果记录模板、常见失败排障
