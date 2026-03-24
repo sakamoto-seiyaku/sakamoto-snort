@@ -1,3 +1,8 @@
+> 状态对齐（2026-03-24）：
+> - `tests/device-modules/ip/run.sh` 与 Tier-1 / baseline perf 已落地，当前稳定承载的是 `smoke` / `perf`。
+> - 完整 functional matrix 目前仍主要由 `tests/integration/iprules-device-matrix.sh` 承担，尚未完全迁入本模组。
+> - `matrix` / `stress` / `longrun` 的 profile 名称已预留，但对应 case 脚本仍待补齐；因此本 change 维持 `9/18` 任务完成度。
+
 ## 0. OpenSpec docs
 - [x] 0.1 新增纲领：`docs/testing/TEST_COMPONENTS_MANIFESTO.md`（包含 IP test component 的范围/原则/入口约定）
 - [x] 0.2 完成 `proposal.md/design.md/tasks.md` 与 capability spec delta（本目录下 `specs/`）
@@ -7,12 +12,12 @@
 - [x] 1.1 新增 `tests/device-modules/ip/run.sh`：支持 `--profile smoke|matrix|stress|perf|longrun` 与 `--group/--case`
 - [x] 1.2 抽取/复用现有 adb/control 辅助（可复用 `tests/integration/lib.sh` 作为实现细节），统一日志与 skip 语义
 
-## 2. Functional coverage (matrix)
+## 2. Functional coverage (matrix; pending migration from `tests/integration/iprules-device-matrix.sh`)
 - [ ] 2.1 `IPRULES`：proto/dir/iface/ifindex/CIDR/ports/priority/tie-break/enable/enforce/would 的主要组合与边界
 - [ ] 2.2 `IFACE_BLOCK`：优先级与 gating（含 `BLOCK=0` bypass）
 - [ ] 2.3 `BLOCKIPLEAKS`：最小闭环回归（含 would overlay suppression on DROP）
 
-## 3. Stress (best-effort)
+## 3. Stress (best-effort; pending migration into device-module runner)
 - [ ] 3.1 control-plane 变更（ADD/UPDATE/ENABLE/REMOVE/RESET）与真实流量并发时不 crash、不死锁
 - [ ] 3.2 输出最小证据：`HELLO` 可用性 + 关键 counters/stream 抽样
 

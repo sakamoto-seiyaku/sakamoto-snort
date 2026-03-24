@@ -19,7 +19,7 @@ show_help() {
   --serial <serial>        指定目标真机 serial（等价于设置 ADB_SERIAL）
   --skip-deploy            跳过 deploy，复用当前真机上的守护进程
   --cleanup-forward        结束后移除 adb forward
-  --profile <name>         smoke|matrix|stress|perf|longrun（默认: smoke）
+  --profile <name>         smoke|perf|matrix|stress|longrun（默认: smoke；后 3 者当前为 staged，缺 case 时会 SKIP）
   --group <token>          只运行指定 group（按 case 文件名推导，如 iprules/perf）
   --case <token>           只运行指定 case（按 case 文件名子串匹配）
   -h, --help               显示帮助

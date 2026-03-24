@@ -1,3 +1,7 @@
+> 状态对齐（2026-03-24）：
+> - 本 change 当前是独立 backlog，用于收尾 multi-user / blockmask chains 的验证与文档同步。
+> - 它不阻塞当前 IP / observability 主线，也不应与 `add-ip-test-component` 或 DomainPolicy 下一阶段混在一起追踪。
+
 ## 0. Rollup bookkeeping
 - [x] Archive `add-combinable-blockmask-chains` and promote its spec into `openspec/specs/`.
 - [x] Archive `add-multi-user-support` and promote its spec into `openspec/specs/`.
