@@ -8,8 +8,8 @@
 #### Scenario: Build produces two binaries
 - **WHEN** 开发者执行项目的标准 dev 构建流程
 - **THEN** 系统 SHALL 产出两份可执行二进制：
-  - 默认产物：决策缓存启用（行为与当前一致）
-  - cache-off 变体：决策缓存禁用（用于 perf 诊断）
+  - `sucre-snort`：默认产物；决策缓存启用（行为与当前一致）
+  - `sucre-snort-iprules-nocache`：DEV-only 变体；决策缓存禁用（用于 perf 诊断）
 
 #### Scenario: Cache-off bypasses decision cache
 - **GIVEN** 正在运行 cache-off 变体
@@ -20,4 +20,3 @@
 - **GIVEN** 同一组启用规则与同一个 `PacketKeyV4`
 - **WHEN** 在默认产物与 cache-off 变体下分别调用 `evaluate()`
 - **THEN** 两次判决的 `Decision.kind` 与 `Decision.ruleId` SHALL 一致（变体仅用于性能诊断，不改变语义）
-

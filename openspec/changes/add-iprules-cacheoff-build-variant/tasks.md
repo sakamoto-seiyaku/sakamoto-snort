@@ -4,7 +4,7 @@
 - [ ] 0.3 `openspec validate add-iprules-cacheoff-build-variant --strict` 通过
 
 ## 1. Build variants (Soong + dev workflow)
-- [ ] 1.1 `Android.bp` 新增一个 DEV-only 的 cache-off `cc_binary`（例如 module 名 `sucre-snort-iprules-nocache`）
+- [ ] 1.1 `Android.bp` 新增一个 DEV-only 的 cache-off `cc_binary`（module 名：`sucre-snort-iprules-nocache`）
 - [ ] 1.2 `dev/dev-build.sh` 默认同时构建 `sucre-snort` 与 cache-off 变体，并把两份产物导出到 `build-output/`
 - [ ] 1.3 `dev/dev-deploy.sh` 支持选择部署哪份二进制（例如 `--variant iprules-nocache` 或 `--binary <path>`）
 

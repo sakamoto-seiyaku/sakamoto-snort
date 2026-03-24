@@ -12,7 +12,7 @@
 
 - 构建系统一次产出两份二进制：
   - `sucre-snort`：默认产物（决策缓存启用；行为与当前一致）
-  - `sucre-snort-iprules-nocache`（命名待最终确定）：DEV-only 诊断产物（决策缓存禁用）
+  - `sucre-snort-iprules-nocache`：DEV-only 诊断产物（决策缓存禁用）
 - 影响范围（当前）：仅影响 `IpRulesEngine::evaluate()` 内部的 per-thread 决策缓存（thread-local cache）
 - 选择方式：由部署脚本选择推送哪份二进制并重启进程（无运行时开关；不持久化）
 
