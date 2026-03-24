@@ -34,7 +34,7 @@
   - 已完成：runner/目录结构、Tier-1 `netns+veth`、`smoke`/`matrix`/`stress`/`perf` 入口、核心 functional matrix（`IPRULES/IFACE_BLOCK/BLOCKIPLEAKS`）、neper baseline、cache-off 基线记录、ruleset sweep（`perf_ruleset_sweep.sh`）
   - 未完成：Tier-2/3 流量源 fallback、`longrun` case（staged）、（可选）轻量 `ip-smoke` 接入 CTest/CI
 - ⏳ B：DomainPolicy counters（下一步；目前仍停留在决策文档层）
-- ⏳ 多用户 / blockmask chains 收尾：`update-multi-user-and-blockmask-chains-rollup`（独立 backlog；当前不阻塞 IP/observability 主线）
+- ⏳ 多用户 / blockmask chains /（post domain+IP fusion）收尾：`update-post-domain-ip-fusion-rollup`（延后执行 backlog；当前不阻塞 IP/observability 主线）
 
 说明（对应你提议的 “IP rule → C → B”）：
 - **A 必须先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 PKTSTREAM/metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
@@ -42,6 +42,6 @@
 - **B 可后置但不应长期拖欠**：它与 IPRULES 基本解耦，因此放在 IP 主线之后没问题；但建议在 IPRULES 主线落地后立刻补齐，避免域名侧长期缺乏默认可查的归因与 counters。
 - **D 不参与上述排序**：D 只承载 `nfq_total_us` / `dns_decision_us` 这类性能健康指标；它在语义上独立于 A/B/C，可作为单独 change 在任意时点推进，不改变当前主线优先级。当前已落地：见 `openspec/specs/perfmetrics-observability/spec.md` 与 `tests/integration/perf-network-load.sh`。
 - **IP test module 与 integration lane 当前并存**：`tests/device-modules/ip/run.sh --profile matrix|stress` 已覆盖核心语义；`tests/integration/iprules-device-matrix.sh` 暂保留为 legacy 对照/额外用例入口（直到确认完全收敛并可替代为止）。
-- **OpenSpec 主规格已同步到位**：A / IPRULES v1 / cache-off 相关 change 已归档；当前 capability 已体现在 `openspec/specs/pktstream-observability/spec.md` 与 `openspec/specs/app-ip-l3l4-rules/spec.md`。当前 OpenSpec active changes 只剩 `add-ip-test-component` 与 `update-multi-user-and-blockmask-chains-rollup`。
+- **OpenSpec 主规格已同步到位**：A / IPRULES v1 / cache-off 相关 change 已归档；当前 capability 已体现在 `openspec/specs/pktstream-observability/spec.md` 与 `openspec/specs/app-ip-l3l4-rules/spec.md`。当前 OpenSpec active changes 只剩 `add-ip-test-component` 与 `update-post-domain-ip-fusion-rollup`。
 
 > 注：`docs/INTERFACE_SPECIFICATION.md` 作为对外接口汇总，应在相关 change 合并并稳定后统一刷新，避免“接口文档先行”导致漂移。
