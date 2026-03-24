@@ -53,7 +53,7 @@ perfmetrics：推荐 `PERFMETRICS=0`（避免观测本身成为瓶颈；只把 `
 - `threads=8 flows=1024 bytes=64 perfmetrics=0 delay-ns=43000`
 - CPU 定频（best-effort，runner 会 restore）：
   - `policy0=1328000 policy4=1328000 policy6=1426000`
-  - governor: `performance`
+  - governor: `performance`（并写入 `scaling_min_freq = scaling_max_freq = <freq>`）
 - matrix mode：`scenario`（每个样本独立 `RESETALL + warmup`，降低顺序 bias）
 
 推荐窗口：
@@ -85,13 +85,18 @@ bash tests/device-modules/ip/neper_udp_perf_fixedfreq_matrix.sh \
 产物目录形如：
 - `tests/device-modules/ip/records/neper-udp-perf-fixedfreq-matrix-<ts>_<serial>/`
 
-### 3.4 预期“分离度 vs 方差”（参考值）
+### 3.4 baseline v1（冻结记录，关键数据）
 
-严格复核（`60s × n=5`，baseline v1）参考值：
-- `off` mean ≈ `11.076 Mb/s`，CV ≈ `0.56%`
-- `2k` mean ≈ `10.811 Mb/s`，CV ≈ `1.41%`（vs off ≈ `-2.39%`）
-- `4k` mean ≈ `9.969 Mb/s`，CV ≈ `1.73%`（vs off ≈ `-9.99%`；vs 2k ≈ `-7.78%`）
+严格复核（`seconds=60 × rounds-per-scenario=5`，`delay-ns=43000`）：
+- 设备：Pixel 6a（Android 16 / SDK 36）
+- CPU 定频：`policy0=1328000 policy4=1328000 policy6=1426000`（governor=`performance`，min=max）
+- 产物（不进 git）：`tests/device-modules/ip/records/neper-udp-perf-fixedfreq-matrix-20260323T013903Z_28201JEGR0XPAJ/`
+- 主指标：neper `remote_throughput`（bps；括号内为 Mb/s；mean/cv）：
+  - `off`: `mean=11075923 cv=0.56%`（`11.076`）
+  - `2k`: `mean=10811018 cv=1.41%`（`10.811`；vs off `-2.39%`）
+  - `4k`: `mean=9969492  cv=1.73%`（`9.969`；vs off `-9.99%`；vs 2k `-7.78%`）
 - 单调性：`off > 2k > 4k` by index `5/5`
+- guardrails：所有样本 `nfq_queue_dropped_total=0` 且 `nfq_user_dropped_total=0`
 
 解释：场景差距（~2%/~10%）显著大于单场景方差（~1% 量级），因此足以作为后续优化/回归的对比基线。
 
@@ -135,4 +140,3 @@ Pixel 6a（toybox `nc`）存在已复现的 kernel panic：
 - 设备/Android 版本变化导致 DVFS/内核行为变化
 - tuple-space 或规则语料形态发生实质变化（例如新增关键 match 维度、bucket 策略变化）
 - 观测到单调性/方差显著劣化（例如 `off>2k>4k` 经常失败或 CV 明显上升）
-
