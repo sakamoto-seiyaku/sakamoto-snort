@@ -13,6 +13,7 @@ LOG_DIR=/data/local/tmp
 LOG=$LOG_DIR/sucre-snort-dev.log
 CLEAR_LOG=1
 STAGE_ONLY=0
+VARIANT="default"
 CONTROL_FORWARD_PORT="${CONTROL_FORWARD_PORT:-60616}"
 
 control_socket_roundtrip() {
@@ -80,6 +81,8 @@ show_help() {
 
 选项:
   --serial <serial>   指定目标真机 serial
+  --variant <name>    选择部署变体: default|iprules-nocache (默认: default)
+  --binary <path>     显式指定本地二进制路径（覆盖 --variant）
   --no-clear-log      保留原有日志，不清空 dev.log
   --stage-only        仅停止旧进程、推送并准备二进制，不启动守护进程
   -h, --help          显示帮助
@@ -91,6 +94,28 @@ while [[ $# -gt 0 ]]; do
         --serial)
             ADB_SERIAL="$2"
             export ADB_SERIAL
+            shift 2
+            ;;
+        --variant)
+            VARIANT="$2"
+            case "$VARIANT" in
+                default)
+                    BINARY="$SNORT_ROOT/build-output/sucre-snort"
+                    ;;
+                iprules-nocache)
+                    BINARY="$SNORT_ROOT/build-output/sucre-snort-iprules-nocache"
+                    ;;
+                *)
+                    echo "未知 variant: $VARIANT" >&2
+                    show_help >&2
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
+        --binary)
+            VARIANT="custom"
+            BINARY="$2"
             shift 2
             ;;
         --no-clear-log)
@@ -125,6 +150,7 @@ fi
 device_preflight
 
 echo "目标真机: $(adb_target_desc)"
+echo "变体: $VARIANT"
 echo "二进制: $BINARY"
 echo "目标路径: $TARGET"
 echo ""

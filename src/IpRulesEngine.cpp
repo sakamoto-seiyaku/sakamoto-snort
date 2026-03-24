@@ -22,6 +22,15 @@ static constexpr std::int32_t kNoPriority = std::numeric_limits<std::int32_t>::m
 
 static std::atomic<std::uint64_t> g_ipRulesEngineInstanceId{1};
 
+// Decision cache toggle (compile-time).
+//
+// Default binary MUST NOT incur any per-packet runtime overhead for this toggle.
+// Therefore, cache-off is implemented as a separate build variant that sets:
+//   -DSUCRE_SNORT_IPRULES_DECISION_CACHE=0
+#ifndef SUCRE_SNORT_IPRULES_DECISION_CACHE
+#define SUCRE_SNORT_IPRULES_DECISION_CACHE 1
+#endif
+
 static inline IpRulesEngine::ApplyResult okResult(const std::optional<IpRulesEngine::RuleId> ruleId = std::nullopt) {
     IpRulesEngine::ApplyResult r{};
     r.ok = true;
@@ -1316,6 +1325,7 @@ IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
         return out;
     }
 
+#if SUCRE_SNORT_IPRULES_DECISION_CACHE
     struct CacheEntry {
         std::uint64_t epoch = 0;
         PacketKeyV4 key{};
@@ -1359,6 +1369,13 @@ IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
     out.ruleId = d.ruleId;
     out.stats = d.stats;
     return out;
+#else
+    const auto d = snap->evaluate(key);
+    out.kind = d.kind;
+    out.ruleId = d.ruleId;
+    out.stats = d.stats;
+    return out;
+#endif
 }
 
 void IpRulesEngine::observeEnforceHit(const Decision &decision, const std::uint32_t bytes,

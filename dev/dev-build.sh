@@ -41,6 +41,9 @@ COMBINED_NINJA_PATH="${DEV_COMBINED_NINJA_PATH:-out/combined-${LUNCH_PRODUCT}.ni
 SOONG_NINJA_PATH="${DEV_SOONG_NINJA_PATH:-out/soong/build.${LUNCH_PRODUCT}.ninja}"
 OUTPUT_PATH="${DEV_BUILD_OUTPUT_PATH:-$SNORT_ROOT/build-output/sucre-snort}"
 DEBUG_OUTPUT_PATH="${DEV_BUILD_DEBUG_OUTPUT_PATH:-$SNORT_ROOT/build-output/sucre-snort.debug}"
+NOCACHE_OUTPUT_NAME="sucre-snort-iprules-nocache"
+OUTPUT_PATH_NOCACHE="$SNORT_ROOT/build-output/${NOCACHE_OUTPUT_NAME}"
+DEBUG_OUTPUT_PATH_NOCACHE="$SNORT_ROOT/build-output/${NOCACHE_OUTPUT_NAME}.debug"
 BUILD_SOURCE_PATH="$PACKAGE_BINARY_PATH"
 BUILD_MODE_DESC="full graph regeneration (m sucre-snort)"
 USE_DIRECT_NINJA=0
@@ -81,7 +84,7 @@ find_matching_unstripped_binary() {
             printf '%s\n' "$candidate"
             return 0
         fi
-    done < <(find out/soong/.intermediates/system/sucre-snort -path "*/unstripped/$binary_name" -type f 2>/dev/null | sort)
+    done < <(find out/soong/.intermediates/system -path "*/unstripped/$binary_name" -type f 2>/dev/null | sort)
 
     return 1
 }
@@ -94,7 +97,7 @@ if [[ $CLEAN -eq 1 ]]; then
     rm -rf out/soong/.intermediates/*sucre-snort* 2>/dev/null || true
     rm -f "$PACKAGE_BINARY_PATH" 2>/dev/null || true
     rm -f "$DIRECT_NINJA_TARGET" 2>/dev/null || true
-    rm -f "$OUTPUT_PATH" "$DEBUG_OUTPUT_PATH" 2>/dev/null || true
+    rm -f "$OUTPUT_PATH" "$DEBUG_OUTPUT_PATH" "$OUTPUT_PATH_NOCACHE" "$DEBUG_OUTPUT_PATH_NOCACHE" 2>/dev/null || true
     echo "Clean complete"
     echo ""
 fi
@@ -158,7 +161,7 @@ START=$(date +%s)
 if [[ $USE_DIRECT_NINJA -eq 1 ]]; then
     prebuilts/build-tools/linux-x86/bin/ninja -f "$COMBINED_NINJA_PATH" -j "$DIRECT_NINJA_JOBS" "$DIRECT_NINJA_TARGET"
 else
-    m sucre-snort
+    m -j "$DIRECT_NINJA_JOBS" sucre-snort
 fi
 END=$(date +%s)
 
@@ -187,27 +190,79 @@ else
 fi
 echo ""
 
-echo "[5/6] Extracting binaries..."
-mkdir -p "$(dirname "$OUTPUT_PATH")"
-cp "$BUILD_SOURCE_PATH" "$OUTPUT_PATH"
+echo "[5/6] Building cache-off diagnostic variant (iprules decision cache disabled)..."
+ENGINE_CPP_PATH="$LINEAGE_SNORT_PATH/src/IpRulesEngine.cpp"
+ENGINE_CPP_BACKUP="$(mktemp "${TMPDIR:-/tmp}/IpRulesEngine.cpp.XXXXXX")"
+cp "$ENGINE_CPP_PATH" "$ENGINE_CPP_BACKUP"
 
+restore_engine_cpp() {
+    if [[ -n "${ENGINE_CPP_BACKUP:-}" && -f "$ENGINE_CPP_BACKUP" ]]; then
+        cp "$ENGINE_CPP_BACKUP" "$ENGINE_CPP_PATH"
+        rm -f "$ENGINE_CPP_BACKUP"
+    fi
+}
+trap restore_engine_cpp EXIT
+
+if ! grep -q "^#define SUCRE_SNORT_IPRULES_DECISION_CACHE 1$" "$ENGINE_CPP_PATH"; then
+    echo "❌ Unexpected decision-cache toggle line in: $ENGINE_CPP_PATH" >&2
+    echo "Expected an exact line: #define SUCRE_SNORT_IPRULES_DECISION_CACHE 1" >&2
+    exit 1
+fi
+sed -i 's/^#define SUCRE_SNORT_IPRULES_DECISION_CACHE 1$/#define SUCRE_SNORT_IPRULES_DECISION_CACHE 0/' "$ENGINE_CPP_PATH"
+
+if [[ $USE_DIRECT_NINJA -eq 1 ]]; then
+    prebuilts/build-tools/linux-x86/bin/ninja -f "$COMBINED_NINJA_PATH" -j "$DIRECT_NINJA_JOBS" "$DIRECT_NINJA_TARGET"
+else
+    m -j "$DIRECT_NINJA_JOBS" sucre-snort
+fi
+
+mkdir -p "$(dirname "$OUTPUT_PATH")"
+cp "$BUILD_SOURCE_PATH" "$OUTPUT_PATH_NOCACHE"
+DEBUG_SOURCE_PATH_NOCACHE="$(find_matching_unstripped_binary "$BUILD_SOURCE_PATH" || true)"
+if [[ -n "$DEBUG_SOURCE_PATH_NOCACHE" ]]; then
+    cp "$DEBUG_SOURCE_PATH_NOCACHE" "$DEBUG_OUTPUT_PATH_NOCACHE"
+else
+    rm -f "$DEBUG_OUTPUT_PATH_NOCACHE" 2>/dev/null || true
+fi
+
+echo ""
+echo "[6/6] Restoring cache-on source and rebuilding default..."
+restore_engine_cpp
+trap - EXIT
+
+if [[ $USE_DIRECT_NINJA -eq 1 ]]; then
+    prebuilts/build-tools/linux-x86/bin/ninja -f "$COMBINED_NINJA_PATH" -j "$DIRECT_NINJA_JOBS" "$DIRECT_NINJA_TARGET"
+else
+    m -j "$DIRECT_NINJA_JOBS" sucre-snort
+fi
+
+cp "$BUILD_SOURCE_PATH" "$OUTPUT_PATH"
 DEBUG_SOURCE_PATH="$(find_matching_unstripped_binary "$BUILD_SOURCE_PATH" || true)"
 if [[ -n "$DEBUG_SOURCE_PATH" ]]; then
     cp "$DEBUG_SOURCE_PATH" "$DEBUG_OUTPUT_PATH"
 else
     rm -f "$DEBUG_OUTPUT_PATH" 2>/dev/null || true
 fi
+END=$(date +%s)
 
 echo ""
 echo "=== Build Complete ==="
 echo "Time: $((END - START))s"
 echo "Output: $OUTPUT_PATH"
 ls -lh "$OUTPUT_PATH"
+echo "Output (nocache): $OUTPUT_PATH_NOCACHE"
+ls -lh "$OUTPUT_PATH_NOCACHE"
 if [[ -f "$DEBUG_OUTPUT_PATH" ]]; then
     echo "Debug symbols: $DEBUG_OUTPUT_PATH"
     ls -lh "$DEBUG_OUTPUT_PATH"
 else
     echo "⚠️  未找到匹配 Build ID 的 unstripped 产物，未生成 $DEBUG_OUTPUT_PATH"
+fi
+if [[ -f "$DEBUG_OUTPUT_PATH_NOCACHE" ]]; then
+    echo "Debug symbols (nocache): $DEBUG_OUTPUT_PATH_NOCACHE"
+    ls -lh "$DEBUG_OUTPUT_PATH_NOCACHE"
+else
+    echo "⚠️  未找到匹配 Build ID 的 unstripped 产物，未生成 $DEBUG_OUTPUT_PATH_NOCACHE"
 fi
 echo ""
 echo "Next: bash dev/dev-deploy.sh"

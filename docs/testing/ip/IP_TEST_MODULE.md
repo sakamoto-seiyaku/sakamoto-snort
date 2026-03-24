@@ -134,6 +134,51 @@ CPU 定频快照（`snapshot_after_pin.txt`）：
 - 单调性：`off > 2k > 4k` by index `5/5`
 - guardrails：`nfq_queue_dropped_total=0` 且 `nfq_user_dropped_total=0`（`15/15` 样本）
 
+### 3.4.1 baseline v1（cache-off 诊断：iprules decision cache disabled）
+
+前置：部署 cache-off 诊断二进制（仅禁用 `IpRulesEngine::evaluate()` 内部 per-thread decision cache；不改变规则语义）。
+
+```bash
+bash dev/dev-build.sh
+bash dev/dev-deploy.sh --serial "$ADB_SERIAL" --variant iprules-nocache
+```
+
+严格复核（同 baseline v1 knobs；`seconds=60 × rounds-per-scenario=5`，`delay-ns=43000`）：
+- 设备：Pixel 6a（Android `16` / SDK `36`；serial=`28201JEGR0XPAJ`）
+- 产物（不进 git）：`tests/device-modules/ip/records/neper-udp-perf-fixedfreq-matrix-20260324T023234Z_28201JEGR0XPAJ/`
+
+原始样本（每行对应 1 个独立 job 的 scenario 结果）：
+
+| scenario | sample | remote_throughput_bps | remote_throughput_Mb/s | nfq_seq_total | nfq_queue_dropped_total | nfq_user_dropped_total | records_dir |
+|---|---:|---:|---:|---:|---:|---:|---|
+| off | 1 | 11566169 | 11.566 | 1357848 | 0 | 0 | neper-udp-perf-3way-20260324T023416Z_28201JEGR0XPAJ |
+| off | 2 | 11791505 | 11.792 | 1383959 | 0 | 0 | neper-udp-perf-3way-20260324T023541Z_28201JEGR0XPAJ |
+| off | 3 | 11576794 | 11.577 | 1359383 | 0 | 0 | neper-udp-perf-3way-20260324T024737Z_28201JEGR0XPAJ |
+| off | 4 | 11815719 | 11.816 | 1386776 | 0 | 0 | neper-udp-perf-3way-20260324T025207Z_28201JEGR0XPAJ |
+| off | 5 | 11760032 | 11.760 | 1380119 | 0 | 0 | neper-udp-perf-3way-20260324T025332Z_28201JEGR0XPAJ |
+| 2k | 1 | 11200949 | 11.201 | 1315118 | 0 | 0 | neper-udp-perf-3way-20260324T023248Z_28201JEGR0XPAJ |
+| 2k | 2 | 11347429 | 11.347 | 1332343 | 0 | 0 | neper-udp-perf-3way-20260324T023838Z_28201JEGR0XPAJ |
+| 2k | 3 | 11229448 | 11.229 | 1317910 | 0 | 0 | neper-udp-perf-3way-20260324T024313Z_28201JEGR0XPAJ |
+| 2k | 4 | 11177968 | 11.178 | 1312149 | 0 | 0 | neper-udp-perf-3way-20260324T024441Z_28201JEGR0XPAJ |
+| 2k | 5 | 11110675 | 11.111 | 1304395 | 0 | 0 | neper-udp-perf-3way-20260324T024608Z_28201JEGR0XPAJ |
+| 4k | 1 | 10034056 | 10.034 | 1178288 | 0 | 0 | neper-udp-perf-3way-20260324T023705Z_28201JEGR0XPAJ |
+| 4k | 2 | 9468190 | 9.468 | 1111575 | 0 | 0 | neper-udp-perf-3way-20260324T024006Z_28201JEGR0XPAJ |
+| 4k | 3 | 9905271 | 9.905 | 1163309 | 0 | 0 | neper-udp-perf-3way-20260324T024139Z_28201JEGR0XPAJ |
+| 4k | 4 | 9530180 | 9.530 | 1119135 | 0 | 0 | neper-udp-perf-3way-20260324T024901Z_28201JEGR0XPAJ |
+| 4k | 5 | 9404189 | 9.404 | 1104406 | 0 | 0 | neper-udp-perf-3way-20260324T025035Z_28201JEGR0XPAJ |
+
+汇总（mean/stdev/cv/min/max；`delta_vs_off` 为 mean 的相对差异）：
+
+| scenario | n | mean_bps | stdev_bps | cv% | min_bps | max_bps | delta_vs_off |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| off | 5 | 11702043.80 | 120869.21 | 1.03% | 11566169.00 | 11815719.00 | baseline |
+| 2k | 5 | 11213293.80 | 86867.91 | 0.77% | 11110675.00 | 11347429.00 | -4.18% |
+| 4k | 5 | 9668377.20 | 282315.62 | 2.92% | 9404189.00 | 10034056.00 | -17.38% |
+
+对比 cache-on baseline v1（`3.4`）：
+- mean throughput（off/2k/4k）相对 cache-on：`-1.46% / -1.76% / -4.04%`
+- 规则规模差距放大：`4k_vs_off=-17.38%`（cache-on: `-15.16%`），`4k_vs_2k=-13.78%`（cache-on: `-11.73%`）
+
 ### 3.5 Guardrails（必须满足）
 
 每个样本必须满足（否则说明打流已把 NFQUEUE 打爆，结果不可比）：
