@@ -85,20 +85,54 @@ bash tests/device-modules/ip/neper_udp_perf_fixedfreq_matrix.sh \
 产物目录形如：
 - `tests/device-modules/ip/records/neper-udp-perf-fixedfreq-matrix-<ts>_<serial>/`
 
-### 3.4 baseline v1（冻结记录，关键数据）
+### 3.4 baseline v1（冻结记录：原始样本表）
 
 严格复核（`seconds=60 × rounds-per-scenario=5`，`delay-ns=43000`）：
-- 设备：Pixel 6a（Android 16 / SDK 36）
-- CPU 定频：`policy0=1328000 policy4=1328000 policy6=1426000`（governor=`performance`，min=max）
-- 产物（不进 git）：`tests/device-modules/ip/records/neper-udp-perf-fixedfreq-matrix-20260323T013903Z_28201JEGR0XPAJ/`
-- 主指标：neper `remote_throughput`（bps；括号内为 Mb/s；mean/cv）：
-  - `off`: `mean=11075923 cv=0.56%`（`11.076`）
-  - `2k`: `mean=10811018 cv=1.41%`（`10.811`；vs off `-2.39%`）
-  - `4k`: `mean=9969492  cv=1.73%`（`9.969`；vs off `-9.99%`；vs 2k `-7.78%`）
-- 单调性：`off > 2k > 4k` by index `5/5`
-- guardrails：所有样本 `nfq_queue_dropped_total=0` 且 `nfq_user_dropped_total=0`
+- 设备：Pixel 6a（Android `16` / SDK `36`；serial=`28201JEGR0XPAJ`）
+- 产物（不进 git）：`tests/device-modules/ip/records/neper-udp-perf-fixedfreq-matrix-20260324T000344Z_28201JEGR0XPAJ/`
+- 说明：
+  - warmup `warmup_off` 已排除（仅统计 `iprules_off/iprules_2k/iprules_4k`）
+  - neper `remote_throughput` 单位为 **bits/s**（表中同时给出 Mb/s）
 
-解释：场景差距（~2%/~10%）显著大于单场景方差（~1% 量级），因此足以作为后续优化/回归的对比基线。
+CPU 定频快照（`snapshot_after_pin.txt`）：
+
+| policy | governor | cur_khz | min_khz | max_khz |
+|---|---|---:|---:|---:|
+| policy0 | performance | 1328000 | 1328000 | 1328000 |
+| policy4 | performance | 1328000 | 1328000 | 1328000 |
+| policy6 | performance | 1426000 | 1426000 | 1426000 |
+
+原始样本（每行对应 1 个独立 job 的 scenario 结果）：
+
+| scenario | sample | remote_throughput_bps | remote_throughput_Mb/s | nfq_seq_total | nfq_queue_dropped_total | nfq_user_dropped_total | records_dir |
+|---|---:|---:|---:|---:|---:|---:|---|
+| off | 1 | 11624335 | 11.624 | 1364249 | 0 | 0 | neper-udp-perf-3way-20260324T000527Z_28201JEGR0XPAJ |
+| off | 2 | 11705030 | 11.705 | 1374103 | 0 | 0 | neper-udp-perf-3way-20260324T000651Z_28201JEGR0XPAJ |
+| off | 3 | 11958127 | 11.958 | 1403288 | 0 | 0 | neper-udp-perf-3way-20260324T001919Z_28201JEGR0XPAJ |
+| off | 4 | 12182696 | 12.183 | 1430551 | 0 | 0 | neper-udp-perf-3way-20260324T002348Z_28201JEGR0XPAJ |
+| off | 5 | 11908125 | 11.908 | 1397785 | 0 | 0 | neper-udp-perf-3way-20260324T002513Z_28201JEGR0XPAJ |
+| 2k | 1 | 11391782 | 11.392 | 1336982 | 0 | 0 | neper-udp-perf-3way-20260324T000358Z_28201JEGR0XPAJ |
+| 2k | 2 | 11048183 | 11.048 | 1296664 | 0 | 0 | neper-udp-perf-3way-20260324T001023Z_28201JEGR0XPAJ |
+| 2k | 3 | 11090753 | 11.091 | 1301399 | 0 | 0 | neper-udp-perf-3way-20260324T001455Z_28201JEGR0XPAJ |
+| 2k | 4 | 11644796 | 11.645 | 1367176 | 0 | 0 | neper-udp-perf-3way-20260324T001624Z_28201JEGR0XPAJ |
+| 2k | 5 | 11894243 | 11.894 | 1396630 | 0 | 0 | neper-udp-perf-3way-20260324T001751Z_28201JEGR0XPAJ |
+| 4k | 1 | 9882440 | 9.882 | 1160342 | 0 | 0 | neper-udp-perf-3way-20260324T000851Z_28201JEGR0XPAJ |
+| 4k | 2 | 10079179 | 10.079 | 1183515 | 0 | 0 | neper-udp-perf-3way-20260324T001151Z_28201JEGR0XPAJ |
+| 4k | 3 | 10278973 | 10.279 | 1206806 | 0 | 0 | neper-udp-perf-3way-20260324T001323Z_28201JEGR0XPAJ |
+| 4k | 4 | 10101956 | 10.102 | 1186093 | 0 | 0 | neper-udp-perf-3way-20260324T002043Z_28201JEGR0XPAJ |
+| 4k | 5 | 10033588 | 10.034 | 1177752 | 0 | 0 | neper-udp-perf-3way-20260324T002216Z_28201JEGR0XPAJ |
+
+汇总（mean/stdev/cv/min/max；`delta_vs_off` 为 mean 的相对差异）：
+
+| scenario | n | mean_bps | stdev_bps | cv% | min_bps | max_bps | delta_vs_off |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| off | 5 | 11875662.60 | 220456.76 | 1.86% | 11624335.00 | 12182696.00 | baseline |
+| 2k | 5 | 11413951.40 | 361491.51 | 3.17% | 11048183.00 | 11894243.00 | -3.89% |
+| 4k | 5 | 10075227.20 | 142428.16 | 1.41% | 9882440.00 | 10278973.00 | -15.16% |
+
+验收口径：
+- 单调性：`off > 2k > 4k` by index `5/5`
+- guardrails：`nfq_queue_dropped_total=0` 且 `nfq_user_dropped_total=0`（`15/15` 样本）
 
 ### 3.5 Guardrails（必须满足）
 
