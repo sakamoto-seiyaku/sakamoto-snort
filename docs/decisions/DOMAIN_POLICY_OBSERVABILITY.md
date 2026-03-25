@@ -2,6 +2,7 @@
 
 > 当前状态（2026-03-25）：A/C/D、IPRULES v1 与 IP 真机测试模组已落地；本文件对应 observability 的 **B 层**，是当前下一步功能主线。  
 > 当前尚未实现；本文应作为后续 OpenSpec change、接口文档与测试用例的落地基线。
+> 对应 OpenSpec change：`openspec/changes/add-domain-policy-observability/`
 
 > 本文档用于固化“域名策略（现有功能已完成）”在可观测性上的**归因模型**与**常态 counters**设计，避免后续 IP 规则方向变化导致域名侧返工。  
 > 约束：不新增观测通路；常态统计必须不依赖 `PKTSTREAM`；不做全局 safety-mode；不做域名规则 per-rule counters。

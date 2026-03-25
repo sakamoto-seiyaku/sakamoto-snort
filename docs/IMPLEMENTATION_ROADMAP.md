@@ -35,7 +35,7 @@
 - ✅ IP 真机测试模组（Tier-1）：`tests/device-modules/ip/run.sh`（OpenSpec change `add-ip-test-component` 已归档）
   - 已完成：runner/目录结构、Tier-1 `netns+veth`、`smoke`/`matrix`/`stress`/`perf` 入口、核心 functional matrix（`IPRULES/IFACE_BLOCK/BLOCKIPLEAKS`）、neper baseline、cache-off 基线记录、ruleset sweep（`perf_ruleset_sweep.sh`）
   - Deferred（post domain+IP fusion）：`longrun` case、（可选）轻量 `ip-smoke` 接入 CTest/CI（见 `update-post-domain-ip-fusion-rollup`）
-- ⏳ B：DomainPolicy counters（下一步；目前仍停留在决策文档层）
+- ⏳ B：DomainPolicy counters（下一步；OpenSpec：`add-domain-policy-observability`）
 - ⏳ 多用户 / blockmask chains /（post domain+IP fusion）收尾：`update-post-domain-ip-fusion-rollup`（延后执行 backlog；当前不阻塞 IP/observability 主线）
 
 说明（对应你提议的 “IP rule → C → B”）：
