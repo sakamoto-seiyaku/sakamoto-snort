@@ -24,7 +24,7 @@
 
 `A（Packet 判决层可观测性：add-pktstream-observability） → IPRULES v1（add-app-ip-l3l4-rules-engine，包含 C：per-rule stats） → B（DomainPolicy 层 counters：policySource） → ip-leak 融合 / IPv6 / 域名 per-rule（TBD）`
 
-> 术语提醒：DomainPolicy 文档/代码中的 `GLOBAL_*` 是“域名侧 device-wide 层”，并非 domain+IP 的真正全局；统一命名在 domain+IP 融合后再清理。
+> 术语提醒：DomainPolicy 文档/代码中的 `GLOBAL_*` 是“域名侧 device-wide 层”，并非 domain+IP 的真正全局；统一命名会在后续 domain+IP 融合阶段一并处理。
 
 当前落地状态（以仓库内 code + tests 为准）：
 - ✅ A：`add-pktstream-observability`（PKTSTREAM vNext schema + `reasonId/ruleId/wouldRuleId`）
