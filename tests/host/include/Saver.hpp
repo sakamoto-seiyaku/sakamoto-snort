@@ -41,6 +41,16 @@ public:
         str.clear();
     }
 
+    void readDomName(std::string &str) { read(str); }
+
+    void readBlockingListName(std::string &str) { read(str); }
+
+    void readGuid(std::string &str) { read(str); }
+
+    void readBlockingListUrl(std::string &str) { read(str); }
+
+    void readBlockingListType(std::string &str) { read(str); }
+
     template <class T>
     void read(void *, const T) {}
 

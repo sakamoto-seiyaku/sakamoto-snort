@@ -5,10 +5,22 @@
 
 #pragma once
 
+#include <cstring>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 
 #include <Settings.hpp>
+
+#if defined(__has_include)
+#if __has_include(<linux/ipv6.h>)
+#include <linux/ipv6.h>
+#define SUCRE_HAS_LINUX_IPV6HDR 1
+#endif
+#endif
+
+#ifndef SUCRE_HAS_LINUX_IPV6HDR
+#define SUCRE_HAS_LINUX_IPV6HDR 0
+#endif
 
 struct IPv4 {
     using Addr = in_addr;
@@ -31,15 +43,25 @@ struct IPv4 {
 
 struct IPv6 {
     using Addr = in6_addr;
+#if SUCRE_HAS_LINUX_IPV6HDR
     using Header = ipv6hdr;
+#else
+    using Header = ip6_hdr;
+#endif
     static constexpr uint32_t family = AF_INET6;
     static constexpr uint32_t strLen = INET6_ADDRSTRLEN;
     static constexpr const char *name = "ipv6";
     static constexpr const char *iptables = Settings::ip6tablesShell;
 
-    static uint16_t hdrLen(const ipv6hdr *ip) { return sizeof(ipv6hdr); }
+    static uint16_t hdrLen(const Header *ip) { return sizeof(*ip); }
 
-    static uint32_t payloadProto(const ipv6hdr *ip) { return ip->nexthdr; }
+    static uint32_t payloadProto(const Header *ip) {
+#if SUCRE_HAS_LINUX_IPV6HDR
+        return ip->nexthdr;
+#else
+        return ip->ip6_nxt;
+#endif
+    }
 
     static void fillSockAddr(sockaddr_storage &sad, const uint8_t *rawAddress) {
         auto *sa = reinterpret_cast<sockaddr_in6 *>(&sad);

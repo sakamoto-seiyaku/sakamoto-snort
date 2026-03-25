@@ -115,6 +115,37 @@ const std::pair<bool, Stats::Color> App::blocked(const Domain::Ptr &domain) {
     return {_blockMask & domain->blockMask(), cs};
 }
 
+App::BlockedWithSource App::blockedWithSource(const Domain::Ptr &domain) {
+    if (domain == nullptr || !settings.blockEnabled()) {
+        return {.blocked = false, .color = Stats::GREY, .policySource = DomainPolicySource::MASK_FALLBACK};
+    }
+
+    const auto cs = domain->color();
+    if (_useCustomList) {
+        if (_customWhitelist.exists(domain)) {
+            return {.blocked = false, .color = cs, .policySource = DomainPolicySource::CUSTOM_WHITELIST};
+        }
+        if (_customBlacklist.exists(domain)) {
+            return {.blocked = true, .color = cs, .policySource = DomainPolicySource::CUSTOM_BLACKLIST};
+        }
+        if (_whiteRules.match(domain)) {
+            return {.blocked = false, .color = cs, .policySource = DomainPolicySource::CUSTOM_RULE_WHITE};
+        }
+        if (_blackRules.match(domain)) {
+            return {.blocked = true, .color = cs, .policySource = DomainPolicySource::CUSTOM_RULE_BLACK};
+        }
+        if (domManager.authorized(domain)) {
+            return {.blocked = false, .color = cs, .policySource = DomainPolicySource::GLOBAL_AUTHORIZED};
+        }
+        if (domManager.blocked(domain)) {
+            return {.blocked = true, .color = cs, .policySource = DomainPolicySource::GLOBAL_BLOCKED};
+        }
+    }
+
+    const bool blocked = _blockMask & domain->blockMask();
+    return {.blocked = blocked, .color = cs, .policySource = DomainPolicySource::MASK_FALLBACK};
+}
+
 void App::updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,
                       const Stats::Block bs, const uint64_t val) {
     _saved = false;
@@ -242,7 +273,7 @@ void App::restore(const App::Ptr &app) {
 
 void App::print(std::ostream &out) {
     const auto names = this->names();
-    print(out, [&](App &app) {
+    print(out, [&](App &) {
         if (names.size() > 1) {
             out << "," << JSF("allNames") << "[";
             bool first = true;

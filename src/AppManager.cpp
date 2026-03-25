@@ -130,6 +130,13 @@ void AppManager::reset() {
     _byName.clear();
 }
 
+void AppManager::resetDomainPolicySources() {
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+    for (const auto &[_, app] : _byUid) {
+        app->resetDomainPolicySources();
+    }
+}
+
 void AppManager::save() {
     _saver.save([&] {
         _stats.save(_saver);

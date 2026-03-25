@@ -193,11 +193,17 @@ void DnsListener::clientRun(const int socket) {
         bool getips = false;
         {
             const std::shared_lock<std::shared_mutex> g(mutexListeners);
-            const auto bc = app->blocked(domain);
-            blocked = bc.first;
-            cs = bc.second;
+            const auto bcs = app->blockedWithSource(domain);
+            blocked = bcs.blocked;
+            cs = bcs.color;
             verdict = !blocked;
             getips = verdict || settings.getBlackIPs();
+
+            if (settings.blockEnabled()) {
+                // B-layer counters: DNS-request-based DomainPolicy attribution.
+                domManager.observeDomainPolicySource(bcs.policySource, blocked);
+                app->observeDomainPolicySource(bcs.policySource, blocked);
+            }
         }
         clientWrite(socket, &verdict, sizeof(verdict), "verdict write error");
         clientWrite(socket, &getips, sizeof(getips), "getips write error");

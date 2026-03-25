@@ -13,6 +13,8 @@
 #include <AppStats.hpp>
 #include <DomainManager.hpp>
 #include <CustomRules.hpp>
+#include <DomainPolicySources.hpp>
+#include <DomainPolicySourcesMetrics.hpp>
 #include <Settings.hpp>
 
 class App {
@@ -25,6 +27,14 @@ private:
     using DomStatsMap = std::unordered_map<Domain::Ptr, DomainStats>;
     using PrintFun = std::function<void(App &app)>;
 
+public:
+    struct BlockedWithSource {
+        bool blocked = false;
+        Stats::Color color = Stats::GREY;
+        DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
+    };
+
+private:
     Saver _saver;
     mutable std::shared_mutex _mutexMeta; // protects _saver/_name/_names during anonymous->named upgrade
 
@@ -45,6 +55,8 @@ private:
     CustomList _customWhitelist;
     CustomRules _blackRules;
     CustomRules _whiteRules;
+
+    DomainPolicySourcesCounters _domainSourcesCounters;
 
 public:
     App(const Uid uid, const NamesVec &names = NamesVec());
@@ -116,6 +128,18 @@ public:
     bool hasData(const Stats::Color cs, const Stats::View view);
 
     const std::pair<bool, Stats::Color> blocked(const Domain::Ptr &domain);
+
+    BlockedWithSource blockedWithSource(const Domain::Ptr &domain);
+
+    void observeDomainPolicySource(const DomainPolicySource source, const bool blocked) noexcept {
+        _domainSourcesCounters.observe(source, blocked);
+    }
+
+    void resetDomainPolicySources() noexcept { _domainSourcesCounters.reset(); }
+
+    DomainPolicySourcesSnapshot domainPolicySourcesSnapshot() const noexcept {
+        return _domainSourcesCounters.snapshot();
+    }
 
     void updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,
                      const Stats::Block bs, const uint64_t val);

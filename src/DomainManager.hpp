@@ -8,6 +8,7 @@
 #include <CustomList.hpp>
 #include <DomainList.hpp>
 #include <CustomRules.hpp>
+#include <DomainPolicySourcesMetrics.hpp>
 #include <Stats.hpp>
 #include <BlockingList.hpp>
 #include <vector>
@@ -38,6 +39,8 @@ private:
 
     Domain::Ptr _anonymousDom{make("anonymous domains")};
 
+    DomainPolicySourcesMetrics _domainSourcesMetrics;
+
 public:
     DomainManager();
 
@@ -60,6 +63,16 @@ public:
     bool blocked(const Domain::Ptr &domain);
 
     bool authorized(const Domain::Ptr &domain);
+
+    void observeDomainPolicySource(const DomainPolicySource source, const bool blocked) noexcept {
+        _domainSourcesMetrics.observe(source, blocked);
+    }
+
+    DomainPolicySourcesSnapshot domainPolicySourcesSnapshot() const noexcept {
+        return _domainSourcesMetrics.snapshot();
+    }
+
+    void resetDomainPolicySources() noexcept { _domainSourcesMetrics.reset(); }
 
     template <class IP> void addIP(const Domain::Ptr &domain, const Address<IP> &ip);
 

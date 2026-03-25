@@ -1,8 +1,8 @@
 # sucre-snort 接口规范
 
-版本: v3.5
+版本: v3.6
 目标平台: Android 16, KernelSU
-更新时间: 2026-03-16
+更新时间: 2026-03-25
 
 ---
 
@@ -32,7 +32,8 @@
 
 支持 `<str> <userId>` 简写的命令（在 `<uid|str>` 后不再接受其他整型参数）:
   `APP.UID`, `APP.NAME`, `APP<v>`, `APP.<TYPE><v>`, `<COLOR>.APP<v>`, `APP.RESET<v>`,
-  `TRACK`, `UNTRACK`, `APP.CUSTOMLISTS`
+  `TRACK`, `UNTRACK`, `APP.CUSTOMLISTS`,
+  `METRICS.DOMAIN.SOURCES.APP`, `METRICS.DOMAIN.SOURCES.RESET.APP`
 
 仅支持 `<str> USER <userId>` 的命令（第二个整数参数有其他含义）:
   `BLOCKMASK`, `BLOCKIFACE`, `CUSTOMLIST.ON/OFF`, `BLACKLIST.*`, `WHITELIST.*`,
@@ -49,12 +50,17 @@
 - `HELP` | - | 文本 |
 - `QUIT` | - | - | 关闭当前连接
 - `DEV.SHUTDOWN` | - | `OK|NOK` | DEV-only；仅 `root(0)` / `shell(2000)` 可调用；回复 `OK` 后保存并退出进程（连接随进程退出断开）
+- `DEV.DNSQUERY <uid> <domain>` | - | JSON 对象 | DEV-only；仅 `root(0)` / `shell(2000)` 可调用；触发一次 DomainPolicy 判决并返回 `{uid,domain,blocked,policySource}`；在 `BLOCK=1` 时同步更新 `METRICS.DOMAIN.SOURCES*` counters
 - `PASSWORD [<str>]` | 查询/设置 | 当前密码或 `OK` | 设置时需双引号
 - `PASSSTATE [<int>]` | 查询/设置 | 当前状态或 `OK` | `uint8` 状态值
 - `RESETALL` | - | `OK` | 清空设置、统计、域名、规则、列表并持久化
 - `PERFMETRICS [<0|1>]` | 查询/设置 | 当前值或 `OK|NOK` | 运行时开关；默认 `0`；仅接受 `0|1`；`0→1` 自动清零；`1→1/0→0` 幂等不清零
 - `METRICS.PERF` | - | JSON 对象 | `{"perf":{"nfq_total_us":{...},"dns_decision_us":{...}}}`；单位 `us`；`PERFMETRICS=0` 时返回全 `0`
 - `METRICS.PERF.RESET` | - | `OK` | 清零 perf 聚合数据；不改变 `PERFMETRICS` 状态
+- `METRICS.DOMAIN.SOURCES` | - | JSON 对象 | device-wide；固定 shape `{"sources":{...}}`；7 个 key 常驻（allow/block uint64）；仅在 `BLOCK=1` 时随 DNS 判决递增
+- `METRICS.DOMAIN.SOURCES.APP <uid|str> [USER <userId>]` | - | JSON 对象 | per-app；固定 shape 同上；支持 `<str> <userId>` 简写
+- `METRICS.DOMAIN.SOURCES.RESET` | - | `OK` | 清零 device-wide + per-app 的 DomainPolicy source counters（严格 reset 边界）
+- `METRICS.DOMAIN.SOURCES.RESET.APP <uid|str> [USER <userId>]` | - | `OK|NOK` | 仅清零目标 app；支持 `<str> <userId>` 简写；app 不存在或参数非法返回 `NOK`
 - `METRICS.REASONS` | - | JSON 对象 | `{"reasons":{"IFACE_BLOCK":{...},"IP_LEAK_BLOCK":{...},"ALLOW_DEFAULT":{...},"IP_RULE_ALLOW":{...},"IP_RULE_BLOCK":{...}}}`（device-wide；since boot/reset）
 - `METRICS.REASONS.RESET` | - | `OK` | 清零 reason counters（不改变其他开关）
 

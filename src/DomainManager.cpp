@@ -34,7 +34,10 @@ void DomainManager::start(std::vector<BlockingList> blockingLists) {
 }
 
 const Domain::Ptr DomainManager::make(const std::string &&name) {
-    Domain::Ptr domain = find(name) ?: create(std::move(name));
+    Domain::Ptr domain = find(name);
+    if (!domain) {
+        domain = create(std::move(name));
+    }
     initDomain(domain);
     return domain;
 }
@@ -181,6 +184,7 @@ void DomainManager::restore() {
 }
 
 void DomainManager::reset() {
+    _domainSourcesMetrics.reset();
     {
         const std::scoped_lock lock(_mutexByName, _mutexByIP);
         _byIPv4.clear();

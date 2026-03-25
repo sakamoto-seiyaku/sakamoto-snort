@@ -392,6 +392,153 @@ case_it_11_pktstream_schema() {
     send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
 }
 
+case_it_12_metrics_domain_sources() {
+    local group="core"
+    local case_id="IT-12"
+    should_run_case "$group" "$case_id" || { skip_case "$case_id" "METRICS.DOMAIN.SOURCES"; return 0; }
+
+    local help
+    help=$(send_cmd "HELP")
+    if ! echo "$help" | grep -q "METRICS.DOMAIN.SOURCES"; then
+        log_fail "$case_id HELP exposes METRICS.DOMAIN.SOURCES"
+        return 1
+    fi
+
+    local orig_block orig_bil
+    orig_block=$(send_cmd "BLOCK")
+    orig_bil=$(send_cmd "BLOCKIPLEAKS")
+
+    # Reset under BLOCK=0 so that counters are deterministic (no background DNS).
+    send_cmd "BLOCK 0" >/dev/null || true
+    local reset_result
+    reset_result=$(send_cmd "METRICS.DOMAIN.SOURCES.RESET")
+    if [[ "$reset_result" != "OK" ]]; then
+        log_fail "$case_id METRICS.DOMAIN.SOURCES.RESET returns OK"
+        echo "    响应: $reset_result"
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    local j0
+    j0=$(send_cmd "METRICS.DOMAIN.SOURCES")
+    if ! echo "$j0" | python3 -c "import sys, json; d=json.load(sys.stdin); s=d['sources']; req=['CUSTOM_WHITELIST','CUSTOM_BLACKLIST','CUSTOM_RULE_WHITE','CUSTOM_RULE_BLACK','GLOBAL_AUTHORIZED','GLOBAL_BLOCKED','MASK_FALLBACK']; assert all(k in s for k in req); assert all(int(s[k]['allow'])==0 and int(s[k]['block'])==0 for k in req)" 2>/dev/null; then
+        log_fail "$case_id METRICS.DOMAIN.SOURCES returns stable keys and zeros after reset"
+        echo "    响应: ${j0:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Gating: BLOCK=0 must NOT update counters even if DNS queries happen.
+    local dom0
+    dom0="t${RANDOM}${RANDOM}.example.com"
+    # Host-driven tests do not depend on the system resolver being hooked to the netd socket.
+    # Use a DEV.* trigger to generate a deterministic DomainPolicy verdict path.
+    local devq0
+    devq0=$(send_cmd "DEV.DNSQUERY 0 $dom0" 5)
+    if ! echo "$devq0" | python3 -c "import sys, json; d=json.load(sys.stdin); assert 'policySource' in d" 2>/dev/null; then
+        log_fail "$case_id DEV.DNSQUERY returns JSON (BLOCK=0)"
+        echo "    响应: ${devq0:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    local j1 total
+    j1=$(send_cmd "METRICS.DOMAIN.SOURCES")
+    total=$(echo "$j1" | python3 -c "import sys, json; d=json.load(sys.stdin); s=d.get('sources',{}); print(sum(int(v.get('allow',0))+int(v.get('block',0)) for v in s.values()))" 2>/dev/null || echo 0)
+    if [[ "$total" -eq 0 ]]; then
+        log_pass "$case_id METRICS.DOMAIN.SOURCES gated by BLOCK=0 (total=$total)"
+    else
+        log_fail "$case_id METRICS.DOMAIN.SOURCES gated by BLOCK=0 (total=$total)"
+        echo "    响应: ${j1:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Enable BLOCK and trigger a DNS query; counters should grow.
+    send_cmd "BLOCKIPLEAKS 0" >/dev/null || true
+    send_cmd "BLOCK 1" >/dev/null || true
+    send_cmd "METRICS.DOMAIN.SOURCES.RESET" >/dev/null || true
+
+    local dom1
+    dom1="t${RANDOM}${RANDOM}.example.com"
+    local devq1
+    devq1=$(send_cmd "DEV.DNSQUERY 0 $dom1" 5)
+    if ! echo "$devq1" | python3 -c "import sys, json; d=json.load(sys.stdin); assert 'policySource' in d" 2>/dev/null; then
+        log_fail "$case_id DEV.DNSQUERY returns JSON (BLOCK=1)"
+        echo "    响应: ${devq1:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    local j2
+    j2=$(send_cmd "METRICS.DOMAIN.SOURCES")
+    total=$(echo "$j2" | python3 -c "import sys, json; d=json.load(sys.stdin); s=d.get('sources',{}); print(sum(int(v.get('allow',0))+int(v.get('block',0)) for v in s.values()))" 2>/dev/null || echo 0)
+    if [[ "$total" -ge 1 ]]; then
+        log_pass "$case_id METRICS.DOMAIN.SOURCES grows under DNS traffic (total=$total)"
+    else
+        log_fail "$case_id METRICS.DOMAIN.SOURCES grows under DNS traffic (total=$total)"
+        echo "    提示: 确认真机有网络且 BLOCK=1；ping 域名应触发 DNS 请求"
+        echo "    响应: ${j2:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Tracked-independence: per-app DomainPolicy source counters MUST still grow when tracked=0 (uid=0).
+    local app0 tracked_orig
+    app0=$(send_cmd "APP.UID 0")
+    tracked_orig=$(echo "$app0" | python3 -c "import sys, json; d=json.load(sys.stdin); assert len(d)==1; print(int(d[0]['tracked']))" 2>/dev/null || echo "")
+    if [[ -z "$tracked_orig" ]]; then
+        log_fail "$case_id tracked-independence precheck (APP.UID 0)"
+        echo "    响应: ${app0:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    send_cmd "UNTRACK 0" >/dev/null || true
+    app0=$(send_cmd "APP.UID 0")
+    if ! echo "$app0" | python3 -c "import sys, json; d=json.load(sys.stdin); assert len(d)==1; assert int(d[0]['tracked'])==0" 2>/dev/null; then
+        log_fail "$case_id UNTRACK 0 takes effect"
+        echo "    响应: ${app0:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    send_cmd "BLOCK 0" >/dev/null || true
+    send_cmd "METRICS.DOMAIN.SOURCES.RESET.APP 0" >/dev/null || true
+    send_cmd "BLOCK 1" >/dev/null || true
+    dom1="t${RANDOM}${RANDOM}.example.com"
+    send_cmd "DEV.DNSQUERY 0 $dom1" >/dev/null 2>&1 || true
+
+    local japp tapp
+    japp=$(send_cmd "METRICS.DOMAIN.SOURCES.APP 0")
+    tapp=$(echo "$japp" | python3 -c "import sys, json; d=json.load(sys.stdin); s=d.get('sources',{}); print(sum(int(v.get('allow',0))+int(v.get('block',0)) for v in s.values()))" 2>/dev/null || echo 0)
+    if [[ "$tapp" -ge 1 ]]; then
+        log_pass "$case_id METRICS.DOMAIN.SOURCES.APP grows with tracked=0 (total=$tapp)"
+    else
+        log_fail "$case_id METRICS.DOMAIN.SOURCES.APP grows with tracked=0 (total=$tapp)"
+        echo "    响应: ${japp:0:200}..."
+        send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+        send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    if [[ "$tracked_orig" -eq 1 ]]; then
+        send_cmd "TRACK 0" >/dev/null 2>&1 || true
+    fi
+
+    # Restore best-effort.
+    send_cmd "BLOCK $orig_block" >/dev/null 2>&1 || true
+    send_cmd "BLOCKIPLEAKS $orig_bil" >/dev/null 2>&1 || true
+}
+
 run_all_cases() {
     case_it_01_hello
     case_it_02_help
@@ -402,6 +549,7 @@ run_all_cases() {
     case_it_07_pktstream_health
     case_it_08_activitystream_health
     case_it_10_metrics_reasons
+    case_it_12_metrics_domain_sources
     case_it_11_pktstream_schema
     case_it_09_resetall
 }

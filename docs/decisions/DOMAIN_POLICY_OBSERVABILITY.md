@@ -223,5 +223,5 @@ per-app：
 建议测试分层：
 
 - host/unit：对 `App::blockedWithSource()` 或等价 source classifier 做优先级与 `_useCustomList=0` 的纯逻辑测试。
-- host-driven integration：通过控制口 + DNS listener 闭环验证 `METRICS.DOMAIN.SOURCES*`、`RESET` / `RESET.APP`、`BLOCK=0`、`tracked=0`。
+- host-driven integration：通过控制口 +（不依赖系统 resolver hook 的）DEV seam 触发 DomainPolicy verdict，闭环验证 `METRICS.DOMAIN.SOURCES*`、`RESET` / `RESET.APP`、`BLOCK=0`、`tracked=0`。
 - 回归口径：至少要覆盖 device-wide 与 per-app 结果一致性，以及 reset 边界的严格语义。

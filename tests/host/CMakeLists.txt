@@ -48,3 +48,21 @@ target_compile_definitions(ip_rules_engine_tests_nocache PRIVATE SUCRE_SNORT_IPR
 add_sucre_snort_host_test(rule_tests rule_tests.cpp "${SUCRE_SNORT_ROOT}/src/Rule.cpp")
 add_sucre_snort_host_test(settings_tests settings_tests.cpp "${SUCRE_SNORT_ROOT}/src/Settings.cpp")
 add_sucre_snort_host_test(stats_tests stats_tests.cpp "${SUCRE_SNORT_ROOT}/src/Stats.cpp" "${SUCRE_SNORT_ROOT}/src/AppStats.cpp" "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp")
+add_sucre_snort_host_test(
+  domain_policy_sources_tests
+  domain_policy_sources_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
+  "${SUCRE_SNORT_ROOT}/src/App.cpp"
+  "${SUCRE_SNORT_ROOT}/src/AppStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomRules.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Rule.cpp"
+  "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)

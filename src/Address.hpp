@@ -6,9 +6,16 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <sys/socket.h>
 
 #include <Saver.hpp>
+
+#if defined(__clang__)
+#define SUCRE_NO_SANITIZE_UNSIGNED_OVERFLOW __attribute__((no_sanitize("unsigned-integer-overflow")))
+#else
+#define SUCRE_NO_SANITIZE_UNSIGNED_OVERFLOW
+#endif
 
 template <class IP> class Address {
 private:
@@ -30,7 +37,7 @@ public:
 
     bool operator==(const Address<IP> &addr) const noexcept { return _value == addr._value; }
 
-    std::size_t hash() const __attribute__((no_sanitize("unsigned-integer-overflow"))) {
+    std::size_t hash() const SUCRE_NO_SANITIZE_UNSIGNED_OVERFLOW {
         std::size_t result = 5381;
         for (const auto x : _value) {
             result = ((result << 5) + result) ^ x;

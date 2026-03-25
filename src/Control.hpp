@@ -124,6 +124,8 @@ private:
 
     void cmdDevShutdown(CmdParams &&params) const;
 
+    void cmdDevDnsQuery(CmdParams &&params) const;
+
     void cmdPassword(CmdParams &&params) const;
 
     void cmdPassState(CmdParams &&params) const;
@@ -133,6 +135,14 @@ private:
     void cmdMetricsPerf(CmdParams &&params) const;
 
     void cmdMetricsPerfReset(CmdParams &&params) const;
+
+    void cmdMetricsDomainSources(CmdParams &&params) const;
+
+    void cmdMetricsDomainSourcesApp(CmdParams &&params) const;
+
+    void cmdMetricsDomainSourcesReset(CmdParams &&params) const;
+
+    void cmdMetricsDomainSourcesResetApp(CmdParams &&params) const;
 
     void cmdMetricsReasons(CmdParams &&params) const;
 

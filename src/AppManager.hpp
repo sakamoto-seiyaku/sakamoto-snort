@@ -57,6 +57,8 @@ public:
 
     void reset();
 
+    void resetDomainPolicySources();
+
     void save();
 
     void restore();

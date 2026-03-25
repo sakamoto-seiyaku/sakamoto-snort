@@ -66,12 +66,17 @@ Control::Control() {
     _cmds.emplace("HELP", make(&Control::cmdHelp));
     _cmds.emplace("QUIT", make(&Control::cmdQuit));
     _cmds.emplace("DEV.SHUTDOWN", make(&Control::cmdDevShutdown));
+    _cmds.emplace("DEV.DNSQUERY", make(&Control::cmdDevDnsQuery));
     _cmds.emplace("PASSWORD", make(&Control::cmdPassword));
     _cmds.emplace("PASSSTATE", make(&Control::cmdPassState));
     _cmds.emplace("RESETALL", make(&Control::cmdResetAll));
     _cmds.emplace("PERFMETRICS", make(&Control::cmdPerfmetrics));
     _cmds.emplace("METRICS.PERF", make(&Control::cmdMetricsPerf));
     _cmds.emplace("METRICS.PERF.RESET", make(&Control::cmdMetricsPerfReset));
+    _cmds.emplace("METRICS.DOMAIN.SOURCES", make(&Control::cmdMetricsDomainSources));
+    _cmds.emplace("METRICS.DOMAIN.SOURCES.APP", make(&Control::cmdMetricsDomainSourcesApp));
+    _cmds.emplace("METRICS.DOMAIN.SOURCES.RESET", make(&Control::cmdMetricsDomainSourcesReset));
+    _cmds.emplace("METRICS.DOMAIN.SOURCES.RESET.APP", make(&Control::cmdMetricsDomainSourcesResetApp));
     _cmds.emplace("METRICS.REASONS", make(&Control::cmdMetricsReasons));
     _cmds.emplace("METRICS.REASONS.RESET", make(&Control::cmdMetricsReasonsReset));
     _cmds.emplace("IPRULES", make(&Control::cmdIpRules));
@@ -402,6 +407,8 @@ void Control::clientLoop(const int sockClient) const {
 
     const auto &resetall = _cmds.find("RESETALL");
     const auto &metricsReasonsReset = _cmds.find("METRICS.REASONS.RESET");
+    const auto &metricsDomainSourcesReset = _cmds.find("METRICS.DOMAIN.SOURCES.RESET");
+    const auto &metricsDomainSourcesResetApp = _cmds.find("METRICS.DOMAIN.SOURCES.RESET.APP");
     // Avoid large stack buffer: use heap-backed buffer sized from settings.
     std::vector<char> buffer(settings.controlCmdLen);
     const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
@@ -429,7 +436,8 @@ void Control::clientLoop(const int sockClient) const {
                 ack(out);
             } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
                 const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
-                if (it == resetall || it == metricsReasonsReset) {
+                if (it == resetall || it == metricsReasonsReset || it == metricsDomainSourcesReset ||
+                    it == metricsDomainSourcesResetApp) {
                     const std::lock_guard lock(mutexListeners);
                     applyCmd();
                 } else {
@@ -689,6 +697,51 @@ void Control::cmdDevShutdown(CmdParams &&params) const {
     ack(params.out);
 }
 
+void Control::cmdDevDnsQuery(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 2 || args[0].type != CmdArg::INT || args[1].type != CmdArg::STR) {
+        nack(params.out);
+        return;
+    }
+
+    const int fd = params.sockio ? params.sockio->fd() : -1;
+    ucred cred{};
+    socklen_t credLen = sizeof(cred);
+    if (fd < 0 || getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &credLen) != 0) {
+        nack(params.out);
+        return;
+    }
+    // DEV.* commands are reserved for adb / root workflows.
+    if (cred.uid != 0 && cred.uid != 2000) { // root / shell
+        nack(params.out);
+        return;
+    }
+
+    const App::Uid uid = args[0].number;
+    std::string host = args[1].string;
+    if (host.empty()) {
+        nack(params.out);
+        return;
+    }
+
+    const auto app = appManager.make(uid);
+    const auto domain = domManager.make(std::move(host));
+    const auto bcs = app->blockedWithSource(domain);
+    const bool blocked = bcs.blocked;
+
+    if (settings.blockEnabled()) {
+        domManager.observeDomainPolicySource(bcs.policySource, blocked);
+        app->observeDomainPolicySource(bcs.policySource, blocked);
+    }
+
+    params.out
+        << "{\"uid\":" << uid
+        << ",\"domain\":" << JSS(domain->name())
+        << ",\"blocked\":" << (blocked ? "true" : "false")
+        << ",\"policySource\":" << JSS(domainPolicySourceStr(bcs.policySource))
+        << "}";
+}
+
 void Control::cmdPassword(CmdParams &&params) const {
     const auto arg = readCmdArg(params.args);
     if (arg.type == CmdArg::NONE) {
@@ -778,6 +831,94 @@ void Control::cmdMetricsPerfReset(CmdParams &&params) const {
     }
 
     perfMetrics.reset();
+    ack(params.out);
+}
+
+namespace {
+void printDomainPolicySources(std::stringstream &out, const DomainPolicySourcesSnapshot &snap) {
+    out << "{";
+    bool first = true;
+    for (const auto source : kDomainPolicySources) {
+        const size_t idx = static_cast<size_t>(source);
+        when(first, out << ",");
+        out << JSF(domainPolicySourceStr(source)) << "{"
+            << JSF("allow") << snap.sources[idx].allow << "," << JSF("block")
+            << snap.sources[idx].block << "}";
+    }
+    out << "}";
+}
+} // namespace
+
+void Control::cmdMetricsDomainSources(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    const auto snap = domManager.domainPolicySourcesSnapshot();
+
+    params.out << "{" << JSF("sources");
+    printDomainPolicySources(params.out, snap);
+    params.out << "}";
+}
+
+void Control::cmdMetricsDomainSourcesApp(CmdParams &&params) const {
+    const auto parg = readAppArg(params.args, true);
+    if (parg.arg.type != CmdArg::INT && parg.arg.type != CmdArg::STR) {
+        nack(params.out);
+        return;
+    }
+    if (readSingleArg(params.args).type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    const auto app = arg2app(parg);
+    if (app == nullptr) {
+        nack(params.out);
+        return;
+    }
+
+    const auto snap = app->domainPolicySourcesSnapshot();
+
+    params.out << "{"
+               << JSF("uid") << app->uid() << "," << JSF("userId") << app->userId() << ","
+               << JSF("app") << JSS(app->name()) << "," << JSF("sources");
+    printDomainPolicySources(params.out, snap);
+    params.out << "}";
+}
+
+void Control::cmdMetricsDomainSourcesReset(CmdParams &&params) const {
+    const auto args = readCmdArgs(params.args);
+    if (args.size() != 1 || args[0].type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    domManager.resetDomainPolicySources();
+    appManager.resetDomainPolicySources();
+    ack(params.out);
+}
+
+void Control::cmdMetricsDomainSourcesResetApp(CmdParams &&params) const {
+    const auto parg = readAppArg(params.args, true);
+    if (parg.arg.type != CmdArg::INT && parg.arg.type != CmdArg::STR) {
+        nack(params.out);
+        return;
+    }
+    if (readSingleArg(params.args).type != CmdArg::NONE) {
+        nack(params.out);
+        return;
+    }
+
+    const auto app = arg2app(parg);
+    if (app == nullptr) {
+        nack(params.out);
+        return;
+    }
+
+    app->resetDomainPolicySources();
     ack(params.out);
 }
 
@@ -1919,7 +2060,8 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "        * \"<str> USER <userId>\" explicitly selects an Android user;\r\n"
         << "        * for commands that do NOT accept extra integer parameters after\r\n"
         << "          <uid|str> (e.g. APP.UID, APP.NAME, APP<v>, APP.RESET<v>, TRACK,\r\n"
-        << "          UNTRACK, APP.CUSTOMLISTS), \"<str> <userId>\" is also accepted and\r\n"
+        << "          UNTRACK, APP.CUSTOMLISTS, METRICS.DOMAIN.SOURCES.*),\r\n"
+        << "          \"<str> <userId>\" is also accepted and\r\n"
         << "          is equivalent to \"<str> USER <userId>\".\r\n"
         << "      Example: com.example.app USER 1\r\n"
         << "      Outputs an array of objects whose name match the string.\r\n"
@@ -1928,6 +2070,7 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "\r\n"
         << "Commands supporting USER <userId> clause (for STR parameter):\r\n"
         << "  APP.UID, APP.NAME, BLOCKMASK, BLOCKIFACE, TRACK, UNTRACK,\r\n"
+        << "  METRICS.DOMAIN.SOURCES.APP, METRICS.DOMAIN.SOURCES.RESET.APP,\r\n"
         << "  APP<v>, APP.DNS<v>, APP.RXP<v>, APP.RXB<v>, APP.TXP<v>, APP.TXB<v>,\r\n"
         << "  APP.RESET<v>, BLACK.APP<v>, WHITE.APP<v>, GREY.APP<v>,\r\n"
         << "  CUSTOMLIST.ON, CUSTOMLIST.OFF, BLACKLIST.*, WHITELIST.*,\r\n"
@@ -1935,6 +2078,7 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "\r\n"
         << "Commands NOT supporting USER clause (global or UID-only):\r\n"
         << "  RESETALL, PERFMETRICS, METRICS.PERF, METRICS.PERF.RESET,\r\n"
+        << "  METRICS.DOMAIN.SOURCES, METRICS.DOMAIN.SOURCES.RESET,\r\n"
         << "  METRICS.REASONS, METRICS.REASONS.RESET,\r\n"
         << "  IPRULES, IPRULES.*, IFACES.PRINT,\r\n"
         << "  DNSSTREAM.*, PKTSTREAM.*, ACTIVITYSTREAM.*,\r\n"
@@ -1956,6 +2100,10 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "PERFMETRICS [<0|1>]: prints or sets D-layer perf metrics collection toggle.\r\n"
         << "METRICS.PERF: prints a perf metrics JSON snapshot (us).\r\n"
         << "METRICS.PERF.RESET: clears perf metrics aggregates.\r\n"
+        << "METRICS.DOMAIN.SOURCES: prints device-wide DomainPolicy source counters.\r\n"
+        << "METRICS.DOMAIN.SOURCES.APP <uid|str> [USER <userId>]: prints per-app DomainPolicy source counters.\r\n"
+        << "METRICS.DOMAIN.SOURCES.RESET: clears DomainPolicy source counters.\r\n"
+        << "METRICS.DOMAIN.SOURCES.RESET.APP <uid|str> [USER <userId>]: clears per-app DomainPolicy source counters.\r\n"
         << "METRICS.REASONS: prints device-wide per-reason packet/byte counters.\r\n"
         << "METRICS.REASONS.RESET: clears per-reason counters.\r\n"
         << "IPRULES [<0|1>]: prints or sets IPv4 L3/L4 rules engine toggle.\r\n"
