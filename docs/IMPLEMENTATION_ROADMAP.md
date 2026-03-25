@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-03-24  
+更新时间：2026-03-25  
 状态：当前共识；本文包含两条主线（互不混用代号）：
 - **工程化**：测试/回归/真机调试工作流（单元测试、集成测试、真机原生调试）
 - **功能**：可观测性分层 `A/B/C/D`（见 `docs/decisions/OBSERVABILITY_WORKING_DECISIONS.md`），以及其上层的 IPRULES / DomainPolicy 相关实现
@@ -23,6 +23,8 @@
 基于 `docs/decisions/OBSERVABILITY_WORKING_DECISIONS.md` 与 `docs/decisions/IP_RULE_POLICY_WORKING_DECISIONS.md` 的当前共识，A/B/C 主线推荐顺序如下：
 
 `A（Packet 判决层可观测性：add-pktstream-observability） → IPRULES v1（add-app-ip-l3l4-rules-engine，包含 C：per-rule stats） → B（DomainPolicy 层 counters：policySource） → ip-leak 融合 / IPv6 / 域名 per-rule（TBD）`
+
+> 术语提醒：DomainPolicy 文档/代码中的 `GLOBAL_*` 是“域名侧 device-wide 层”，并非 domain+IP 的真正全局；统一命名在 domain+IP 融合后再清理。
 
 当前落地状态（以仓库内 code + tests 为准）：
 - ✅ A：`add-pktstream-observability`（PKTSTREAM vNext schema + `reasonId/ruleId/wouldRuleId`）
