@@ -18,6 +18,9 @@
 #include <Saver.hpp>
 
 class IpRulesEngine {
+private:
+    struct Snapshot;
+
 public:
     using RuleId = std::uint32_t;
 
@@ -32,6 +35,10 @@ public:
         UNMANAGED = 128,
     };
     enum class Proto : std::uint8_t { ANY = 0, TCP = 6, UDP = 17, ICMP = 1 };
+
+    // Minimal conntrack match dimensions (aligned with OVS ct_state semantics, compressed).
+    enum class CtState : std::uint8_t { ANY = 0, NEW = 1, ESTABLISHED = 2, INVALID = 3 };
+    enum class CtDirection : std::uint8_t { ANY = 0, ORIG = 1, REPLY = 2 };
 
     struct PortPredicate {
         enum class Kind : std::uint8_t { ANY = 0, EXACT = 1, RANGE = 2 };
@@ -99,6 +106,9 @@ public:
         PortPredicate sport = PortPredicate::any();
         PortPredicate dport = PortPredicate::any();
 
+        CtState ctState = CtState::ANY;
+        CtDirection ctDir = CtDirection::ANY;
+
         bool hasPortConstraints() const { return !(sport.isAny() && dport.isAny()); }
         bool hasRangePorts() const { return sport.isRange() || dport.isRange(); }
         bool isWouldBlock() const { return action == Action::BLOCK && !enforce && log; }
@@ -129,6 +139,8 @@ public:
     struct PreflightSummary {
         std::uint64_t rulesTotal = 0;
         std::uint64_t rangeRulesTotal = 0;
+        std::uint64_t ctRulesTotal = 0;
+        std::uint64_t ctUidsTotal = 0;
         std::uint64_t subtablesTotal = 0;
         std::uint64_t maxSubtablesPerUid = 0;
         std::uint64_t maxRangeRulesPerBucket = 0;
@@ -154,6 +166,8 @@ public:
         std::uint32_t dstIp = 0; // host-byte-order
         std::uint16_t srcPort = 0;
         std::uint16_t dstPort = 0;
+        std::uint8_t ctState = 0; // CtState (0 == any)
+        std::uint8_t ctDir = 0;   // CtDirection (0 == any)
 
         bool operator==(const PacketKeyV4 &o) const = default;
     };
@@ -213,6 +227,22 @@ public:
     // Exposed for tests: current rules epoch (monotonic).
     std::uint64_t rulesEpoch() const;
 
+    // Hot-path helper: load and pin a rules snapshot once, then reuse it for
+    // (a) per-UID gating queries and (b) decision evaluation with coherent epoch.
+    struct HotSnapshot {
+        std::uint64_t rulesEpoch() const noexcept;
+        bool valid() const noexcept { return static_cast<bool>(_snap); }
+        bool uidUsesCt(const std::uint32_t uid) const noexcept;
+        Decision evaluate(const PacketKeyV4 &key) const;
+
+    private:
+        std::uint64_t _instanceId = 0;
+        std::shared_ptr<const Snapshot> _snap;
+        friend class IpRulesEngine;
+    };
+
+    HotSnapshot hotSnapshot() const;
+
 private:
     struct RuleStats {
         std::atomic<std::uint64_t> hitPackets{0};
@@ -229,8 +259,6 @@ private:
         RuleDef def;
         std::shared_ptr<RuleStats> stats;
     };
-
-    struct Snapshot;
 
     using RulesMap = std::map<RuleId, RuleState>;
 
@@ -249,6 +277,8 @@ private:
     static bool parseDirection(const std::string_view v, Direction &out);
     static bool parseIfaceKind(const std::string_view v, IfaceKind &out);
     static bool parseProto(const std::string_view v, Proto &out);
+    static bool parseCtState(const std::string_view v, CtState &out);
+    static bool parseCtDirection(const std::string_view v, CtDirection &out);
     static bool parseIfindex(const std::string_view v, std::uint32_t &outIfindex);
     static bool parsePriority(const std::string_view v, std::int32_t &outPriority);
     static bool parseCidrV4(const std::string_view v, CidrV4 &out);
@@ -258,6 +288,8 @@ private:
     static std::string normalizeDirection(const Direction d);
     static std::string normalizeIfaceKind(const IfaceKind k);
     static std::string normalizeProto(const Proto p);
+    static std::string normalizeCtState(const CtState s);
+    static std::string normalizeCtDirection(const CtDirection d);
     static std::string normalizeCidrV4(const CidrV4 &c);
     static std::string normalizePortPredicate(const PortPredicate &p);
 

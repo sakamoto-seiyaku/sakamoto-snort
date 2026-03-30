@@ -1,4 +1,5 @@
 #include <IpRulesEngine.hpp>
+#include <IpRulesCapsCache.hpp>
 
 #include <gtest/gtest.h>
 
@@ -115,6 +116,97 @@ TEST(IpRulesEngineTest, EnforceZeroIsOnlyAllowedForWouldBlockAndCtIsRejected) {
     EXPECT_TRUE(w->isWouldBlock());
 
     EXPECT_FALSE(eng.addFromKv(10000, {"action=block", "priority=2", "ct=foo"}).ok);
+}
+
+TEST(IpRulesEngineTest, CtFieldsParseAndMatch) {
+    IpRulesEngine eng;
+
+    const auto add =
+        eng.addFromKv(10000, {"action=block", "priority=10", "ct.state=new", "ct.direction=orig"});
+    ASSERT_TRUE(add.ok);
+    ASSERT_TRUE(add.ruleId.has_value());
+
+    const auto rule = eng.getRule(*add.ruleId);
+    ASSERT_TRUE(rule.has_value());
+    EXPECT_EQ(rule->ctState, IpRulesEngine::CtState::NEW);
+    EXPECT_EQ(rule->ctDir, IpRulesEngine::CtDirection::ORIG);
+
+    IpRulesEngine::PacketKeyV4 k{};
+    k.uid = 10000;
+    k.dir = 0;
+    k.ifaceKind = 0;
+    k.proto = static_cast<std::uint8_t>(IpRulesEngine::Proto::TCP);
+    k.ifindex = 0;
+    k.srcIp = 0;
+    k.dstIp = 0;
+    k.srcPort = 0;
+    k.dstPort = 0;
+    k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::NEW);
+    k.ctDir = static_cast<std::uint8_t>(IpRulesEngine::CtDirection::ORIG);
+
+    const auto d1 = eng.evaluate(k);
+    EXPECT_EQ(d1.kind, IpRulesEngine::DecisionKind::BLOCK);
+    EXPECT_EQ(d1.ruleId, *add.ruleId);
+
+    k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::ESTABLISHED);
+    const auto d2 = eng.evaluate(k);
+    EXPECT_EQ(d2.kind, IpRulesEngine::DecisionKind::NOMATCH);
+}
+
+TEST(IpRulesEngineTest, CtFieldsRejectInvalidValuesWithoutMutation) {
+    IpRulesEngine eng;
+
+    EXPECT_FALSE(eng.addFromKv(10000, {"action=block", "priority=1", "ct.state=foo"}).ok);
+    EXPECT_FALSE(eng.addFromKv(10000, {"action=block", "priority=1", "ct.direction=foo"}).ok);
+
+    const auto add =
+        eng.addFromKv(10000, {"action=allow", "priority=10", "ct.state=new"});
+    ASSERT_TRUE(add.ok);
+    ASSERT_TRUE(add.ruleId.has_value());
+
+    const auto badUpd =
+        eng.updateFromKv(*add.ruleId, {"ct.direction=bogus"});
+    EXPECT_FALSE(badUpd.ok);
+
+    const auto rule = eng.getRule(*add.ruleId);
+    ASSERT_TRUE(rule.has_value());
+    EXPECT_EQ(rule->ctState, IpRulesEngine::CtState::NEW);
+    EXPECT_EQ(rule->ctDir, IpRulesEngine::CtDirection::ANY);
+}
+
+TEST(IpRulesEngineTest, GatingCacheRefreshesOnRulesEpochChange) {
+    IpRulesEngine eng;
+    IpRulesCapsCache cache;
+    const uint32_t uid = 10000;
+
+    auto resolveUsesCt = [&](const IpRulesEngine::HotSnapshot &snap) -> bool {
+        const std::uint64_t epoch = snap.rulesEpoch();
+        const auto cached = cache.usesCtIfFresh(epoch);
+        const bool usesCt = cached.has_value() ? *cached : snap.uidUsesCt(uid);
+        if (!cached.has_value()) {
+            cache.setUsesCt(epoch, usesCt);
+        }
+        return usesCt;
+    };
+
+    const auto s0 = eng.hotSnapshot();
+    ASSERT_TRUE(s0.valid());
+    EXPECT_FALSE(resolveUsesCt(s0));
+
+    const auto add = eng.addFromKv(uid, {"action=allow", "priority=1", "ct.state=new"});
+    ASSERT_TRUE(add.ok);
+
+    const auto s1 = eng.hotSnapshot();
+    ASSERT_TRUE(s1.valid());
+    EXPECT_NE(s1.rulesEpoch(), s0.rulesEpoch());
+    EXPECT_TRUE(resolveUsesCt(s1));
+
+    // Removing ct usage must invalidate the cached cap on the next epoch.
+    ASSERT_TRUE(eng.updateFromKv(*add.ruleId, {"ct.state=any"}).ok);
+    const auto s2 = eng.hotSnapshot();
+    ASSERT_TRUE(s2.valid());
+    EXPECT_NE(s2.rulesEpoch(), s1.rulesEpoch());
+    EXPECT_FALSE(resolveUsesCt(s2));
 }
 
 TEST(IpRulesEngineTest, UpdateIsPatchSemanticsAndRejectsUnknownKeysWithoutMutation) {

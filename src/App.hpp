@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <shared_mutex>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include <CustomRules.hpp>
 #include <DomainPolicySources.hpp>
 #include <DomainPolicySourcesMetrics.hpp>
+#include <IpRulesCapsCache.hpp>
 #include <Settings.hpp>
 
 class App {
@@ -50,6 +52,7 @@ private:
     std::atomic_uint8_t _blockMask;
     std::atomic_uint8_t _blockIface;
     std::atomic_bool _useCustomList;
+    IpRulesCapsCache _ipRulesCaps;
 
     CustomList _customBlacklist;
     CustomList _customWhitelist;
@@ -122,6 +125,17 @@ public:
     }
 
     bool useCustomList() const { return _useCustomList; }
+
+    // Hot-path helper: cached per-UID IPRULES capability gates (amortized by rulesEpoch).
+    //
+    // Returns std::nullopt if cache is stale for the provided rulesEpoch.
+    std::optional<bool> ipRulesUsesCtIfFresh(const std::uint64_t rulesEpoch) const noexcept {
+        return _ipRulesCaps.usesCtIfFresh(rulesEpoch);
+    }
+
+    void setIpRulesUsesCtCache(const std::uint64_t rulesEpoch, const bool usesCt) noexcept {
+        _ipRulesCaps.setUsesCt(rulesEpoch, usesCt);
+    }
 
     bool hasData(const Stats::View view);
 

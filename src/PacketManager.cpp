@@ -20,6 +20,7 @@ void PacketManager::reset() {
     Streamable<Packet<IPv6>>::reset();
     _reasonMetrics.reset();
     _ipRules.resetAll();
+    _conntrack.reset();
 }
 
 void PacketManager::startStream(const SocketIO::Ptr sockio, const bool pretty,
@@ -139,4 +140,5 @@ void PacketManager::refreshIfacesOnce() {
 
 // Bundled translation unit: keep IpRulesEngine out of the Android.bp srcs list to avoid
 // requiring a full Soong graph regeneration for local incremental builds.
+#include "Conntrack.cpp"
 #include "IpRulesEngine.cpp"

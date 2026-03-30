@@ -27,6 +27,7 @@ IPTEST_PERF_BG_TOTAL="${IPTEST_PERF_BG_TOTAL:-0}"
 IPTEST_PERF_BG_UIDS="${IPTEST_PERF_BG_UIDS:-$IPTEST_PERF_BG_TOTAL}"
 IPTEST_PERF_BG_UID_BASE="${IPTEST_PERF_BG_UID_BASE:-10000}"
 IPTEST_PERF_COMPARE="${IPTEST_PERF_COMPARE:-0}"
+IPTEST_PERF_ENABLE_CT="${IPTEST_PERF_ENABLE_CT:-0}" # 0|1: add a ct consumer rule to force conntrack work
 
 csv_from_array() {
   local -n arr_ref="$1"
@@ -185,6 +186,11 @@ install_single_flow_rules() {
     return 0
   fi
 
+  if [[ "$IPTEST_PERF_ENABLE_CT" == "1" ]]; then
+    add_rule "$IPTEST_UID" "ADD ct consumer rule" "action=allow priority=1 proto=tcp ct.state=invalid" >/dev/null
+    rules_added=$((rules_added + 1))
+  fi
+
   rid_hit="$(add_rule "$IPTEST_UID" "ADD traffic hit rule" "action=allow priority=1000 dir=out proto=tcp dst=${IPTEST_PEER_IP}/32 dport=${IPTEST_PERF_PORT}")"
   rules_added=$((rules_added + 1))
 
@@ -255,6 +261,11 @@ install_mix_rules() {
   if [[ "$IPTEST_PERF_TRAFFIC_RULES" -le 0 ]]; then
     log_info "traffic rules disabled: running empty-ruleset baseline"
     return 0
+  fi
+
+  if [[ "$IPTEST_PERF_ENABLE_CT" == "1" ]]; then
+    add_rule "$IPTEST_UID" "ADD ct consumer rule" "action=allow priority=1 proto=tcp ct.state=invalid" >/dev/null
+    rules_added=$((rules_added + 1))
   fi
 
   log_info "adding mixed replay rules (hostIps=${#perf_host_ips[@]} peerIps=${#perf_peer_ips[@]} ports=${#perf_ports[@]})..."

@@ -107,6 +107,7 @@ collect_cases_for_profile() {
     matrix)
       out+=("$case_dir/00_env.sh")
       out+=("$case_dir/20_matrix_l3l4.sh")
+      out+=("$case_dir/22_conntrack_ct.sh")
       out+=("$case_dir/30_ip_leak.sh")
       out+=("$case_dir/40_iface_block.sh")
       ;;
@@ -117,6 +118,7 @@ collect_cases_for_profile() {
     perf)
       out+=("$case_dir/00_env.sh")
       out+=("$case_dir/60_perf.sh")
+      out+=("$case_dir/62_perf_ct_compare.sh")
       ;;
     longrun)
       out+=("$case_dir/00_env.sh")

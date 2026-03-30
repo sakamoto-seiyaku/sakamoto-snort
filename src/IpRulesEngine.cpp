@@ -210,6 +210,42 @@ bool IpRulesEngine::parseProto(const std::string_view v, Proto &out) {
     return false;
 }
 
+bool IpRulesEngine::parseCtState(const std::string_view v, CtState &out) {
+    if (v == "any") {
+        out = CtState::ANY;
+        return true;
+    }
+    if (v == "new") {
+        out = CtState::NEW;
+        return true;
+    }
+    if (v == "established") {
+        out = CtState::ESTABLISHED;
+        return true;
+    }
+    if (v == "invalid") {
+        out = CtState::INVALID;
+        return true;
+    }
+    return false;
+}
+
+bool IpRulesEngine::parseCtDirection(const std::string_view v, CtDirection &out) {
+    if (v == "any") {
+        out = CtDirection::ANY;
+        return true;
+    }
+    if (v == "orig") {
+        out = CtDirection::ORIG;
+        return true;
+    }
+    if (v == "reply") {
+        out = CtDirection::REPLY;
+        return true;
+    }
+    return false;
+}
+
 bool IpRulesEngine::parseIfindex(const std::string_view v, std::uint32_t &outIfindex) {
     if (v == "any") {
         outIfindex = 0;
@@ -337,6 +373,32 @@ std::string IpRulesEngine::normalizeProto(const Proto p) {
     return "any";
 }
 
+std::string IpRulesEngine::normalizeCtState(const CtState s) {
+    switch (s) {
+    case CtState::ANY:
+        return "any";
+    case CtState::NEW:
+        return "new";
+    case CtState::ESTABLISHED:
+        return "established";
+    case CtState::INVALID:
+        return "invalid";
+    }
+    return "any";
+}
+
+std::string IpRulesEngine::normalizeCtDirection(const CtDirection d) {
+    switch (d) {
+    case CtDirection::ANY:
+        return "any";
+    case CtDirection::ORIG:
+        return "orig";
+    case CtDirection::REPLY:
+        return "reply";
+    }
+    return "any";
+}
+
 std::string IpRulesEngine::normalizeCidrV4(const CidrV4 &c) {
     if (c.any) {
         return "any";
@@ -364,6 +426,14 @@ std::string IpRulesEngine::normalizePortPredicate(const PortPredicate &p) {
 }
 
 bool IpRulesEngine::validateRuleDef(const RuleDef &def, std::string &error) {
+    if (static_cast<std::uint8_t>(def.ctState) > static_cast<std::uint8_t>(CtState::INVALID)) {
+        error = "invalid ct.state";
+        return false;
+    }
+    if (static_cast<std::uint8_t>(def.ctDir) > static_cast<std::uint8_t>(CtDirection::REPLY)) {
+        error = "invalid ct.direction";
+        return false;
+    }
     if (!def.enforce) {
         if (!(def.action == Action::BLOCK && def.log)) {
             error = "enforce=0 is only supported for action=block,log=1";
@@ -385,6 +455,8 @@ struct IpRulesEngine::Snapshot {
         bool iface = false;
         bool ifindex = false;
         bool proto = false;
+        bool ctState = false;
+        bool ctDir = false;
         uint8_t srcPrefix = 255; // 255 == any, otherwise 0..32
         uint8_t dstPrefix = 255;
         bool sportExact = false;
@@ -399,6 +471,8 @@ struct IpRulesEngine::Snapshot {
             if (a.iface != b.iface) return a.iface < b.iface;
             if (a.ifindex != b.ifindex) return a.ifindex < b.ifindex;
             if (a.proto != b.proto) return a.proto < b.proto;
+            if (a.ctState != b.ctState) return a.ctState < b.ctState;
+            if (a.ctDir != b.ctDir) return a.ctDir < b.ctDir;
             if (a.srcPrefix != b.srcPrefix) return a.srcPrefix < b.srcPrefix;
             if (a.dstPrefix != b.dstPrefix) return a.dstPrefix < b.dstPrefix;
             if (a.sportExact != b.sportExact) return a.sportExact < b.sportExact;
@@ -411,6 +485,8 @@ struct IpRulesEngine::Snapshot {
         uint8_t dir = 0;
         uint8_t ifaceKind = 0;
         uint8_t proto = 0;
+        uint8_t ctState = 0;
+        uint8_t ctDir = 0;
         uint32_t ifindex = 0;
         uint32_t srcIpMasked = 0;
         uint32_t dstIpMasked = 0;
@@ -426,6 +502,8 @@ struct IpRulesEngine::Snapshot {
             h = mixHash(h, k.dir);
             h = mixHash(h, k.ifaceKind);
             h = mixHash(h, k.proto);
+            h = mixHash(h, k.ctState);
+            h = mixHash(h, k.ctDir);
             h = mixHash(h, k.ifindex);
             h = mixHash(h, k.srcIpMasked);
             h = mixHash(h, k.dstIpMasked);
@@ -446,6 +524,8 @@ struct IpRulesEngine::Snapshot {
         IfaceKind iface = IfaceKind::ANY;
         std::uint32_t ifindex = 0;
         Proto proto = Proto::ANY;
+        CtState ctState = CtState::ANY;
+        CtDirection ctDir = CtDirection::ANY;
 
         CidrV4 src = CidrV4::anyCidr();
         CidrV4 dst = CidrV4::anyCidr();
@@ -468,6 +548,8 @@ struct IpRulesEngine::Snapshot {
             if (iface != IfaceKind::ANY && k.ifaceKind != static_cast<uint8_t>(iface)) return false;
             if (ifindex != 0 && k.ifindex != ifindex) return false;
             if (proto != Proto::ANY && k.proto != static_cast<uint8_t>(proto)) return false;
+            if (ctState != CtState::ANY && k.ctState != static_cast<uint8_t>(ctState)) return false;
+            if (ctDir != CtDirection::ANY && k.ctDir != static_cast<uint8_t>(ctDir)) return false;
             if (!src.matches(k.srcIp)) return false;
             if (!dst.matches(k.dstIp)) return false;
             if (!sport.matches(k.srcPort)) return false;
@@ -560,6 +642,7 @@ struct IpRulesEngine::Snapshot {
         std::vector<Subtable> subtables;
         std::vector<size_t> enforceOrder;
         std::vector<size_t> wouldOrder;
+        bool usesCt = false;
     };
 
     std::uint64_t rulesEpoch = 0;
@@ -571,6 +654,8 @@ struct IpRulesEngine::Snapshot {
         s.iface = (r.iface != IfaceKind::ANY);
         s.ifindex = (r.ifindex != 0);
         s.proto = (r.proto != Proto::ANY);
+        s.ctState = (r.ctState != CtState::ANY);
+        s.ctDir = (r.ctDir != CtDirection::ANY);
         s.srcPrefix = r.src.any ? 255 : r.src.prefix;
         s.dstPrefix = r.dst.any ? 255 : r.dst.prefix;
         s.sportExact = (r.sport.kind == PortPredicate::Kind::EXACT);
@@ -587,6 +672,8 @@ struct IpRulesEngine::Snapshot {
         mk.dir = sig.dir ? k.dir : 0;
         mk.ifaceKind = sig.iface ? k.ifaceKind : 0;
         mk.proto = sig.proto ? k.proto : 0;
+        mk.ctState = sig.ctState ? k.ctState : 0;
+        mk.ctDir = sig.ctDir ? k.ctDir : 0;
         mk.ifindex = sig.ifindex ? k.ifindex : 0;
         mk.srcIpMasked = (sig.srcPrefix == 255) ? 0 : (k.srcIp & maskFromPrefix(sig.srcPrefix));
         mk.dstIpMasked = (sig.dstPrefix == 255) ? 0 : (k.dstIp & maskFromPrefix(sig.dstPrefix));
@@ -600,6 +687,8 @@ struct IpRulesEngine::Snapshot {
         mk.dir = sig.dir ? dirValue(r.dir) : 0;
         mk.ifaceKind = sig.iface ? static_cast<uint8_t>(r.iface) : 0;
         mk.proto = sig.proto ? static_cast<uint8_t>(r.proto) : 0;
+        mk.ctState = sig.ctState ? static_cast<uint8_t>(r.ctState) : 0;
+        mk.ctDir = sig.ctDir ? static_cast<uint8_t>(r.ctDir) : 0;
         mk.ifindex = sig.ifindex ? r.ifindex : 0;
         mk.srcIpMasked = (sig.srcPrefix == 255) ? 0 : (r.src.addr & maskFromPrefix(sig.srcPrefix));
         mk.dstIpMasked = (sig.dstPrefix == 255) ? 0 : (r.dst.addr & maskFromPrefix(sig.dstPrefix));
@@ -707,6 +796,7 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
 
     std::map<std::uint32_t, std::map<Snapshot::MaskSig, Snapshot::Subtable, Snapshot::MaskSigLess>>
         uidTables;
+    std::unordered_map<std::uint32_t, bool> uidUsesCt;
 
     std::uint64_t maxRangeBucket = 0;
 
@@ -719,6 +809,10 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
         report.summary.rulesTotal++;
         if (def.hasRangePorts()) {
             report.summary.rangeRulesTotal++;
+        }
+        if (def.ctState != CtState::ANY || def.ctDir != CtDirection::ANY) {
+            report.summary.ctRulesTotal++;
+            uidUsesCt[def.uid] = true;
         }
 
         const Snapshot::MaskSig sig = Snapshot::maskSigForRule(def);
@@ -738,6 +832,8 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
         ref.iface = def.iface;
         ref.ifindex = def.ifindex;
         ref.proto = def.proto;
+        ref.ctState = def.ctState;
+        ref.ctDir = def.ctDir;
         ref.src = def.src;
         ref.dst = def.dst;
         ref.sport = def.sport;
@@ -772,9 +868,11 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
     report.summary.subtablesTotal = 0;
     report.summary.maxSubtablesPerUid = 0;
     report.summary.maxRangeRulesPerBucket = maxRangeBucket;
+    report.summary.ctUidsTotal = uidUsesCt.size();
 
     for (auto &[uid, subtablesMap] : uidTables) {
         Snapshot::UidView view{};
+        view.usesCt = uidUsesCt.find(uid) != uidUsesCt.end();
         view.subtables.reserve(subtablesMap.size());
         for (auto &[_, st] : subtablesMap) {
             for (auto &[_, bucket] : st.buckets) {
@@ -1013,6 +1111,14 @@ IpRulesEngine::ApplyResult IpRulesEngine::addFromKv(const std::uint32_t uid,
             if (!parsePortPredicate(v, def.dport)) {
                 return nokResult("invalid dport");
             }
+        } else if (k == "ct.state") {
+            if (!parseCtState(v, def.ctState)) {
+                return nokResult("invalid ct.state");
+            }
+        } else if (k == "ct.direction") {
+            if (!parseCtDirection(v, def.ctDir)) {
+                return nokResult("invalid ct.direction");
+            }
         } else if (k == "ct") {
             return nokResult("ct is not supported");
         } else {
@@ -1112,6 +1218,14 @@ IpRulesEngine::ApplyResult IpRulesEngine::updateFromKv(const RuleId ruleId,
             if (!parsePortPredicate(v, def.dport)) {
                 return nokResult("invalid dport");
             }
+        } else if (k == "ct.state") {
+            if (!parseCtState(v, def.ctState)) {
+                return nokResult("invalid ct.state");
+            }
+        } else if (k == "ct.direction") {
+            if (!parseCtDirection(v, def.ctDir)) {
+                return nokResult("invalid ct.direction");
+            }
         } else if (k == "ct") {
             return nokResult("ct is not supported");
         } else {
@@ -1187,7 +1301,7 @@ void IpRulesEngine::save() {
               [](const RuleDef &a, const RuleDef &b) { return a.ruleId < b.ruleId; });
 
     _saver.save([&] {
-        constexpr uint32_t kFormatVersion = 1;
+        constexpr uint32_t kFormatVersion = 2;
         _saver.write<uint32_t>(kFormatVersion);
         _saver.write<RuleId>(nextRuleId);
         _saver.write<uint32_t>(static_cast<uint32_t>(defs.size()));
@@ -1220,6 +1334,9 @@ void IpRulesEngine::save() {
             _saver.write<uint8_t>(static_cast<uint8_t>(d.dport.kind));
             _saver.write<uint16_t>(d.dport.lo);
             _saver.write<uint16_t>(d.dport.hi);
+
+            _saver.write<uint8_t>(static_cast<uint8_t>(d.ctState));
+            _saver.write<uint8_t>(static_cast<uint8_t>(d.ctDir));
         }
     });
 }
@@ -1227,7 +1344,7 @@ void IpRulesEngine::save() {
 void IpRulesEngine::restore() {
     _saver.restore([&] {
         const auto formatVersion = _saver.read<uint32_t>();
-        if (formatVersion != 1) {
+        if (formatVersion != 1 && formatVersion != 2) {
             throw RestoreException();
         }
 
@@ -1269,6 +1386,14 @@ void IpRulesEngine::restore() {
             d.dport.kind = static_cast<PortPredicate::Kind>(_saver.read<uint8_t>());
             d.dport.lo = _saver.read<uint16_t>();
             d.dport.hi = _saver.read<uint16_t>();
+
+            if (formatVersion >= 2) {
+                d.ctState = static_cast<CtState>(_saver.read<uint8_t>());
+                d.ctDir = static_cast<CtDirection>(_saver.read<uint8_t>());
+            } else {
+                d.ctState = CtState::ANY;
+                d.ctDir = CtDirection::ANY;
+            }
 
             std::string error;
             if (!validateRuleDef(d, error)) {
@@ -1314,14 +1439,41 @@ static inline size_t hashPacketKey(const IpRulesEngine::PacketKeyV4 &k) noexcept
     h = mixHash(h, k.dstIp);
     h = mixHash(h, k.srcPort);
     h = mixHash(h, k.dstPort);
+    h = mixHash(h, k.ctState);
+    h = mixHash(h, k.ctDir);
     return h;
 }
 
 IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
-    const auto snap = std::atomic_load_explicit(&_snapshot, std::memory_order_acquire);
+    return hotSnapshot().evaluate(key);
+}
+
+IpRulesEngine::HotSnapshot IpRulesEngine::hotSnapshot() const {
+    HotSnapshot hs{};
+    hs._instanceId = _instanceId;
+    hs._snap = std::atomic_load_explicit(&_snapshot, std::memory_order_acquire);
+    return hs;
+}
+
+std::uint64_t IpRulesEngine::HotSnapshot::rulesEpoch() const noexcept {
+    return _snap ? _snap->rulesEpoch : 0;
+}
+
+bool IpRulesEngine::HotSnapshot::uidUsesCt(const std::uint32_t uid) const noexcept {
+    if (!_snap) {
+        return false;
+    }
+    const auto it = _snap->byUid.find(uid);
+    if (it == _snap->byUid.end()) {
+        return false;
+    }
+    return it->second.usesCt;
+}
+
+IpRulesEngine::Decision IpRulesEngine::HotSnapshot::evaluate(const PacketKeyV4 &key) const {
     Decision out{};
-    out.keepAlive = snap;
-    if (!snap) {
+    out.keepAlive = _snap;
+    if (!_snap) {
         return out;
     }
 
@@ -1347,7 +1499,7 @@ IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
         }
     }
 
-    const std::uint64_t epoch = snap->rulesEpoch;
+    const std::uint64_t epoch = _snap->rulesEpoch;
     const size_t idx = hashPacketKey(key) & (cache.entries.size() - 1);
     CacheEntry &e = cache.entries[idx];
     if (e.epoch == epoch && e.key == key) {
@@ -1357,7 +1509,7 @@ IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
         return out;
     }
 
-    const auto d = snap->evaluate(key);
+    const auto d = _snap->evaluate(key);
 
     e.epoch = epoch;
     e.key = key;
@@ -1370,7 +1522,7 @@ IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
     out.stats = d.stats;
     return out;
 #else
-    const auto d = snap->evaluate(key);
+    const auto d = _snap->evaluate(key);
     out.kind = d.kind;
     out.ruleId = d.ruleId;
     out.stats = d.stats;

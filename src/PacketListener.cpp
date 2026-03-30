@@ -5,6 +5,7 @@
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
 #include <linux/netfilter.h>
+#include <netinet/ip_icmp.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #include <thread>
@@ -220,11 +221,14 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         return MNL_CB_OK;
     }
     uint32_t len = payloadLen - iphdrLen;
+    const uint16_t ipPayloadLen = static_cast<uint16_t>(len);
     App::Uid uid = 0;
     uint32_t iface = 0;
     timespec timestamp = {0, 0};
     uint32_t srcPort = 0;
     uint32_t dstPort = 0;
+    bool isFragment = false;
+    Conntrack::PacketV4 ctPktV4{};
 
     if (attr[NFQA_UID]) {
         uid = ntohl(mnl_attr_get_u32(attr[NFQA_UID]));
@@ -243,48 +247,103 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         timespec_get(&timestamp, TIME_UTC);
     }
 
-    switch (IP::payloadProto(ip)) {
-    case IPPROTO_TCP:
-        if (len < sizeof(tcphdr)) {
-            // Not enough to contain TCP header; reject malformed L4 per original policy.
-            LOG(ERROR) << __FUNCTION__ << " - TCP header too short";
-            sendVerdict(packetId, NF_DROP);
-            if (measure) {
-                perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
-            }
-            return MNL_CB_OK;
-        }
-        {
-            const auto tcp = reinterpret_cast<const tcphdr *>(payload + iphdrLen);
-            const uint32_t tcpHdrLen = static_cast<uint32_t>(tcp->doff) * 4;
-            if (tcp->doff < 5 || tcpHdrLen > len) {
-                LOG(ERROR) << __FUNCTION__ << " - invalid TCP header length";
+    if constexpr (std::is_same_v<IP, IPv4>) {
+        const uint16_t frag = ntohs(ip->frag_off);
+        isFragment = (frag & (IP_MF | IP_OFFMASK)) != 0;
+
+        ctPktV4.tsNs = static_cast<std::uint64_t>(timestamp.tv_sec) * 1000000000ULL +
+                       static_cast<std::uint64_t>(timestamp.tv_nsec);
+        ctPktV4.uid = uid;
+        ctPktV4.srcIp = ntohl(ip->saddr);
+        ctPktV4.dstIp = ntohl(ip->daddr);
+        ctPktV4.proto = static_cast<std::uint8_t>(IP::payloadProto(ip));
+        ctPktV4.isFragment = isFragment;
+        ctPktV4.ipPayloadLen = ipPayloadLen;
+    }
+
+    if (!isFragment) {
+        switch (IP::payloadProto(ip)) {
+        case IPPROTO_TCP:
+            if (len < sizeof(tcphdr)) {
+                // Not enough to contain TCP header; reject malformed L4 per original policy.
+                LOG(ERROR) << __FUNCTION__ << " - TCP header too short";
                 sendVerdict(packetId, NF_DROP);
                 if (measure) {
                     perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
                 }
                 return MNL_CB_OK;
             }
-            srcPort = ntohs(tcp->source);
-            dstPort = ntohs(tcp->dest);
-            len = len - tcpHdrLen;
-        }
-        break;
-    case IPPROTO_UDP:
-        if (len >= sizeof(udphdr)) {
-            const auto udp = reinterpret_cast<const udphdr *>(payload + iphdrLen);
-            srcPort = ntohs(udp->source);
-            dstPort = ntohs(udp->dest);
-            len -= sizeof(udphdr);
-        } else {
-            LOG(ERROR) << __FUNCTION__ << " - UDP header too short";
-            sendVerdict(packetId, NF_DROP);
-            if (measure) {
-                perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+            {
+                const auto tcp = reinterpret_cast<const tcphdr *>(payload + iphdrLen);
+                const uint32_t tcpHdrLen = static_cast<uint32_t>(tcp->doff) * 4;
+                if (tcp->doff < 5 || tcpHdrLen > len) {
+                    LOG(ERROR) << __FUNCTION__ << " - invalid TCP header length";
+                    sendVerdict(packetId, NF_DROP);
+                    if (measure) {
+                        perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+                    }
+                    return MNL_CB_OK;
+                }
+                srcPort = ntohs(tcp->source);
+                dstPort = ntohs(tcp->dest);
+                len = len - tcpHdrLen;
+
+                if constexpr (std::is_same_v<IP, IPv4>) {
+                    ctPktV4.srcPort = static_cast<std::uint16_t>(srcPort);
+                    ctPktV4.dstPort = static_cast<std::uint16_t>(dstPort);
+                    ctPktV4.hasTcp = true;
+                    ctPktV4.tcp.dataOffsetWords = static_cast<std::uint8_t>(tcp->doff);
+                    ctPktV4.tcp.window = ntohs(tcp->window);
+                    ctPktV4.tcp.seq = ntohl(tcp->seq);
+                    ctPktV4.tcp.ack = ntohl(tcp->ack_seq);
+                    std::uint8_t flags = 0;
+                    if (tcp->fin) flags |= TH_FIN;
+                    if (tcp->syn) flags |= TH_SYN;
+                    if (tcp->rst) flags |= TH_RST;
+                    if (tcp->psh) flags |= TH_PUSH;
+                    if (tcp->ack) flags |= TH_ACK;
+                    if (tcp->urg) flags |= TH_URG;
+#ifdef TH_ECE
+                    if (tcp->ece) flags |= TH_ECE;
+#endif
+#ifdef TH_CWR
+                    if (tcp->cwr) flags |= TH_CWR;
+#endif
+                    ctPktV4.tcp.flags = flags;
+                }
             }
-            return MNL_CB_OK;
+            break;
+        case IPPROTO_UDP:
+            if (len >= sizeof(udphdr)) {
+                const auto udp = reinterpret_cast<const udphdr *>(payload + iphdrLen);
+                srcPort = ntohs(udp->source);
+                dstPort = ntohs(udp->dest);
+                len -= sizeof(udphdr);
+                if constexpr (std::is_same_v<IP, IPv4>) {
+                    ctPktV4.srcPort = static_cast<std::uint16_t>(srcPort);
+                    ctPktV4.dstPort = static_cast<std::uint16_t>(dstPort);
+                }
+            } else {
+                LOG(ERROR) << __FUNCTION__ << " - UDP header too short";
+                sendVerdict(packetId, NF_DROP);
+                if (measure) {
+                    perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+                }
+                return MNL_CB_OK;
+            }
+            break;
+        case IPPROTO_ICMP:
+            if constexpr (std::is_same_v<IP, IPv4>) {
+                if (len >= sizeof(icmphdr)) {
+                    const auto icmp = reinterpret_cast<const icmphdr *>(payload + iphdrLen);
+                    ctPktV4.hasIcmp = true;
+                    ctPktV4.icmp.type = icmp->type;
+                    ctPktV4.icmp.code = icmp->code;
+                    ctPktV4.icmp.id = ntohs(icmp->un.echo.id);
+                }
+            }
+            break;
         }
-        break;
     }
 
     bool verdict = true;
@@ -306,9 +365,13 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         // critical section must remain free of blocking I/O to avoid starving RESETALL and other
         // operations that need the exclusive listeners lock.
         const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+        const Conntrack::PacketV4 *ctPtr = nullptr;
+        if constexpr (std::is_same_v<IP, IPv4>) {
+            ctPtr = &ctPktV4;
+        }
         verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface, timestamp,
                                                IP::payloadProto(ip), srcPort, dstPort, payloadLen,
-                                               ifaceKindBit, ifaceBlocked);
+                                               ifaceKindBit, ifaceBlocked, ctPtr);
     }
 
     sendVerdict(packetId, verdict ? NF_ACCEPT : NF_DROP);

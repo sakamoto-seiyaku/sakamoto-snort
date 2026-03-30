@@ -185,6 +185,8 @@ main() {
     log_section "Control plane validation"
     expect_nok "IPRULES.ADD ${TEST_UID} action=allow" "ADD rejects missing priority (does not consume ruleId)"
     expect_nok "IPRULES.ADD ${TEST_UID} action=allow priority=10 bogus=1" "ADD rejects unknown keys atomically"
+    expect_nok "IPRULES.ADD ${TEST_UID} action=allow priority=10 ct.state=foo" "ADD rejects invalid ct.state atomically"
+    expect_nok "IPRULES.ADD ${TEST_UID} action=allow priority=10 ct.direction=foo" "ADD rejects invalid ct.direction atomically"
     local rid0
     rid0="$(expect_uint "IPRULES.ADD ${TEST_UID} action=allow priority=10" "ADD ok after prior failures")"
     if [[ "$rid0" != "0" ]]; then
@@ -199,7 +201,7 @@ main() {
     expect_nok "IPRULES.ADD ${TEST_UID} action=block priority=11 enforce=0 log=0" "ADD rejects enforce=0,log=0"
     local wouldRid
     wouldRid="$(expect_uint "IPRULES.ADD ${TEST_UID} action=block priority=11 enforce=0 log=1 proto=icmp" "ADD would-block rule")"
-    expect_nok "IPRULES.ADD ${TEST_UID} action=block priority=12 ct=foo" "ADD rejects ct token"
+    expect_nok "IPRULES.ADD ${TEST_UID} action=block priority=12 ct=foo" "ADD rejects legacy ct token"
     expect_nok "IPRULES.ADD ${TEST_UID} action=allow priority=13 proto=icmp dport=53" "ADD rejects proto=icmp with port predicates"
 
     log_section "UPDATE patch semantics"
@@ -226,6 +228,19 @@ main() {
         log_fail "NOK UPDATE is atomic"
     else
         log_pass "NOK UPDATE is atomic"
+    fi
+    expect_nok "IPRULES.UPDATE ${updRid} ct.state=foo" "UPDATE rejects invalid ct.state without mutation"
+    local printed3
+    printed3="$(send_cmd "IPRULES.PRINT RULE ${updRid}")"
+    if [[ "$(json_get "$printed3" "rules.0.ct.state")" != "any" ]]; then
+        log_fail "NOK UPDATE is atomic (ct.state)"
+    else
+        log_pass "NOK UPDATE is atomic (ct.state)"
+    fi
+    if [[ "$(json_get "$printed3" "rules.0.dport")" != "443" ]]; then
+        log_fail "NOK UPDATE is atomic (dport)"
+    else
+        log_pass "NOK UPDATE is atomic (dport)"
     fi
 
     log_section "Runtime stats & verdict integration"

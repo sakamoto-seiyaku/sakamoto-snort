@@ -89,16 +89,23 @@ App 对象字段:
 - `IPRULES.REMOVE <ruleId>` | 删除 | `OK|NOK` |
 - `IPRULES.ENABLE <ruleId> <0|1>` | 启用/禁用 | `OK|NOK` | `0→1` 清零该规则 stats；`1→1/0→0` 幂等
 - `IPRULES.PRINT [UID <uid>] [RULE <ruleId>]` | 可选过滤 | JSON 对象 | `{"rules":[...]}`；无命中时 `{"rules":[]}`
-- `IPRULES.PREFLIGHT` | - | JSON 对象 | `{"summary":{...},"limits":{...},"warnings":[...],"violations":[...]}`
+- `IPRULES.PREFLIGHT` | - | JSON 对象 | `{"summary":{...},"limits":{...},"warnings":[...],"violations":[...]}`；`summary` 包含 `ctRulesTotal`、`ctUidsTotal`
 - `IFACES.PRINT` | - | JSON 对象 | `{"ifaces":[{"ifindex":47,"name":"wlan0","kind":"wifi","type":1},...]}`；枚举失败或无接口时返回 `{"ifaces":[]}`
 
 IPRULES v1 `kv` 令牌（控制面语法：`key=value`，每个 token 作为一个字符串参数传入）：
 - ADD 必填：`action={allow|block}`、`priority=<int32>`（注意：priority 的负数写法在 kv 内是允许的）
-- 可选：`enabled=0|1`、`enforce=0|1`、`log=0|1`、`dir={any|in|out}`、`iface={any|wifi|data|vpn|unmanaged}`、`ifindex={any|<uint32>}`、`proto={any|tcp|udp|icmp}`、`src={any|<IPv4 CIDR>}`、`dst={any|<IPv4 CIDR>}`、`sport={any|<port>|<lo-hi>}`、`dport={any|<port>|<lo-hi>}`
+- 可选：`enabled=0|1`、`enforce=0|1`、`log=0|1`、`dir={any|in|out}`、`iface={any|wifi|data|vpn|unmanaged}`、`ifindex={any|<uint32>}`、`proto={any|tcp|udp|icmp}`、`src={any|<IPv4 CIDR>}`、`dst={any|<IPv4 CIDR>}`、`sport={any|<port>|<lo-hi>}`、`dport={any|<port>|<lo-hi>}`、`ct.state={any|new|established|invalid}`、`ct.direction={any|orig|reply}`
 - `ifindex` 说明：输入允许 `ifindex=0` 作为 `ifindex=any` 的同义；`IPRULES.PRINT` 输出中 `ifindex=0` 表示未限定精确 ifindex
-- 组合约束：`enforce=0` 仅允许用于 `action=block,log=1`（would-block）；`ct` 当前保留但一律拒绝
+- `ct` 说明：`ct.state/ct.direction` 都是可选维度；两者都省略或都为 `any` 时，等价于“不消费 conntrack”
+- `ct.direction` 说明：`orig|reply` 描述 flow 内的首包创建方向，与 `dir=in|out`（INPUT/OUTPUT 链方向）不同
+- 组合约束：`enforce=0` 仅允许用于 `action=block,log=1`（would-block）
 - 组合约束：`proto=icmp` 时 `sport/dport` 必须为 `any`；`sport/dport` 端口谓词仅对 TCP/UDP 包生效（非 TCP/UDP 包携带端口谓词时永不匹配）
 - UPDATE 语义：patch/merge（未提供的 key 保持原值）；UPDATE 生效后清零该规则 per-rule stats
+- `IPRULES.PRINT` 中规则的 conntrack 维度统一放在 `ct` wrapper 中，例如 `{"ct":{"state":"new","direction":"orig"}}`；未设置时输出 `{"ct":{"state":"any","direction":"any"}}`
+
+示例：
+- `IPRULES.ADD 2000 action=allow priority=200 dir=out proto=tcp dst=10.200.1.2/32 dport=18081 ct.state=new ct.direction=orig`
+- `IPRULES.ADD 2000 action=allow priority=200 dir=in proto=tcp src=10.200.1.2/32 sport=18081 ct.state=established ct.direction=reply`
 
 掩码定义:
 - blockMask 位:

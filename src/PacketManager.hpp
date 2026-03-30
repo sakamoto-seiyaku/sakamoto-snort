@@ -6,6 +6,7 @@
 #pragma once
 
 #include <AppManager.hpp>
+#include <Conntrack.hpp>
 #include <HostManager.hpp>
 #include <IpRulesEngine.hpp>
 #include <Packet.hpp>
@@ -37,6 +38,7 @@ private:
 
     ReasonMetrics _reasonMetrics;
     IpRulesEngine _ipRules;
+    Conntrack _conntrack;
 
 public:
     PacketManager();
@@ -50,7 +52,8 @@ public:
               const Host::Ptr &host,
               const bool input, const uint32_t iface, const timespec timestamp, const int proto,
               const uint16_t srcPort, const uint16_t dstPort, const uint16_t len,
-              const uint8_t ifaceKindBit, const bool ifaceBlockedSnapshot);
+              const uint8_t ifaceKindBit, const bool ifaceBlockedSnapshot,
+              const Conntrack::PacketV4 *ctPktV4 = nullptr);
 
     void reset();
 
@@ -94,7 +97,7 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                          const Host::Ptr &host, const bool input, const uint32_t iface,
                          const timespec timestamp, const int proto, const uint16_t srcPort,
                          const uint16_t dstPort, const uint16_t len, const uint8_t ifaceKindBit,
-                         const bool ifaceBlockedSnapshot) {
+                         const bool ifaceBlockedSnapshot, const Conntrack::PacketV4 *ctPktV4) {
     const bool ifaceBlockedNow = (app->blockIface() & ifaceKindBit) != 0;
     const bool ifaceBlocked = ifaceBlockedSnapshot || ifaceBlockedNow;
     const uint64_t tsNs =
@@ -102,6 +105,7 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
 
     std::optional<uint32_t> ruleId = std::nullopt;
     std::optional<uint32_t> wouldRuleId = std::nullopt;
+    std::optional<Conntrack::PolicyView> ctPolicyView = std::nullopt;
     [[maybe_unused]] bool hasWouldDecision = false;
     [[maybe_unused]] IpRulesEngine::Decision wouldDecision{};
 
@@ -142,7 +146,30 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
             k.srcPort = srcPort;
             k.dstPort = dstPort;
 
-            const auto decision = _ipRules.evaluate(k);
+            const auto snap = _ipRules.hotSnapshot();
+            if (snap.valid()) {
+                const std::uint64_t epoch = snap.rulesEpoch();
+                if (epoch != 0) {
+                    const auto cached = app->ipRulesUsesCtIfFresh(epoch);
+                    const bool usesCt =
+                        cached.has_value() ? *cached : snap.uidUsesCt(app->uid());
+                    if (!cached.has_value()) {
+                        app->setIpRulesUsesCtCache(epoch, usesCt);
+                    }
+                    if (usesCt) {
+                        if (ctPktV4 != nullptr) {
+                            ctPolicyView = _conntrack.inspectForPolicy(*ctPktV4);
+                            k.ctState = static_cast<std::uint8_t>(ctPolicyView->result.state);
+                            k.ctDir = static_cast<std::uint8_t>(ctPolicyView->result.direction);
+                        } else {
+                            k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::INVALID);
+                            k.ctDir = 0;
+                        }
+                    }
+                }
+            }
+
+            const auto decision = snap.evaluate(k);
 
             if (decision.kind == IpRulesEngine::DecisionKind::ALLOW ||
                 decision.kind == IpRulesEngine::DecisionKind::BLOCK) {
@@ -150,6 +177,10 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                 const PacketReasonId reasonId =
                     verdict ? PacketReasonId::IP_RULE_ALLOW : PacketReasonId::IP_RULE_BLOCK;
                 ruleId = decision.ruleId;
+
+                if (verdict && ctPolicyView.has_value() && ctPktV4 != nullptr) {
+                    _conntrack.commitAccepted(*ctPktV4, *ctPolicyView);
+                }
 
                 IpRulesEngine::observeEnforceHit(decision, static_cast<uint32_t>(len), tsNs);
                 _reasonMetrics.observe(reasonId, len);
@@ -186,6 +217,12 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     const bool verdict = !ipLeakBlocked;
     const PacketReasonId reasonId = ipLeakBlocked ? PacketReasonId::IP_LEAK_BLOCK
                                                   : PacketReasonId::ALLOW_DEFAULT;
+
+    if constexpr (std::is_same_v<IP, IPv4>) {
+        if (verdict && ctPolicyView.has_value() && ctPktV4 != nullptr) {
+            _conntrack.commitAccepted(*ctPktV4, *ctPolicyView);
+        }
+    }
 
     // Would-match overlay: emit only if final verdict is ACCEPT.
     if constexpr (std::is_same_v<IP, IPv4>) {

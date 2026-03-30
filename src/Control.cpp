@@ -1001,6 +1001,32 @@ const char *ipRulesProtoStr(const IpRulesEngine::Proto p) noexcept {
     return "any";
 }
 
+const char *ipRulesCtStateStr(const IpRulesEngine::CtState s) noexcept {
+    switch (s) {
+    case IpRulesEngine::CtState::ANY:
+        return "any";
+    case IpRulesEngine::CtState::NEW:
+        return "new";
+    case IpRulesEngine::CtState::ESTABLISHED:
+        return "established";
+    case IpRulesEngine::CtState::INVALID:
+        return "invalid";
+    }
+    return "any";
+}
+
+const char *ipRulesCtDirStr(const IpRulesEngine::CtDirection d) noexcept {
+    switch (d) {
+    case IpRulesEngine::CtDirection::ANY:
+        return "any";
+    case IpRulesEngine::CtDirection::ORIG:
+        return "orig";
+    case IpRulesEngine::CtDirection::REPLY:
+        return "reply";
+    }
+    return "any";
+}
+
 std::string ipRulesCidrStr(const IpRulesEngine::CidrV4 &c) {
     if (c.any) {
         return "any";
@@ -1190,6 +1216,10 @@ void Control::cmdIpRulesPrint(CmdParams &&params) const {
                    << JSF("iface") << JSS(ipRulesIfaceStr(r.iface)) << ","
                    << JSF("ifindex") << r.ifindex << ","
                    << JSF("proto") << JSS(ipRulesProtoStr(r.proto)) << ","
+                   << JSF("ct") << "{"
+                   << JSF("state") << JSS(ipRulesCtStateStr(r.ctState)) << ","
+                   << JSF("direction") << JSS(ipRulesCtDirStr(r.ctDir)) << "}"
+                   << ","
                    << JSF("src") << JSS(ipRulesCidrStr(r.src)) << ","
                    << JSF("dst") << JSS(ipRulesCidrStr(r.dst)) << ","
                    << JSF("sport") << JSS(ipRulesPortPredStr(r.sport)) << ","
@@ -1231,6 +1261,8 @@ void Control::cmdIpRulesPreflight(CmdParams &&params) const {
     params.out << JSF("summary") << "{"
                << JSF("rulesTotal") << rep.summary.rulesTotal << ","
                << JSF("rangeRulesTotal") << rep.summary.rangeRulesTotal << ","
+               << JSF("ctRulesTotal") << rep.summary.ctRulesTotal << ","
+               << JSF("ctUidsTotal") << rep.summary.ctUidsTotal << ","
                << JSF("subtablesTotal") << rep.summary.subtablesTotal << ","
                << JSF("maxSubtablesPerUid") << rep.summary.maxSubtablesPerUid << ","
                << JSF("maxRangeRulesPerBucket") << rep.summary.maxRangeRulesPerBucket << "}"
