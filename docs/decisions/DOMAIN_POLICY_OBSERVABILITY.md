@@ -1,8 +1,8 @@
 # 域名策略可观测性（DomainPolicy）：`policySource` 归因与常态 counters（DNS 口径）
 
-> 当前状态（2026-03-25）：A/C/D、IPRULES v1 与 IP 真机测试模组已落地；本文件对应 observability 的 **B 层**，是当前下一步功能主线。  
-> 当前尚未实现；本文应作为后续 OpenSpec change、接口文档与测试用例的落地基线。
-> 对应 OpenSpec change：`openspec/changes/add-domain-policy-observability/`
+> 当前状态（2026-03-26）：A/C/D、IPRULES v1、IP 真机测试模组与 observability **B 层**均已落地。  
+> 本文件保留为 B 层设计/验收口径回执；后续若进入 domain+IP fusion，应基于本文已落地语义继续收敛，而不是回退到概念讨论。
+> 对应 OpenSpec 历史 change：`openspec/changes/archive/2026-03-27-add-domain-policy-observability/`
 
 > 本文档用于固化“域名策略（现有功能已完成）”在可观测性上的**归因模型**与**常态 counters**设计，避免后续 IP 规则方向变化导致域名侧返工。  
 > 约束：不新增观测通路；常态统计必须不依赖 `PKTSTREAM`；不做全局 safety-mode；不做域名规则 per-rule counters。
@@ -34,8 +34,8 @@
   - 仅当 `settings.blockEnabled()==true && app->tracked()==true` 才更新 stats 并输出 DNSSTREAM。  
     参考：`src/DnsListener.cpp#L222`。
 
-本文的 counters（metrics）**不应**依赖 `tracked`；它属于“默认可查”常态信息。
-当前代码中也**不存在** domain policy source 维度的常态 counters；因此本文件定义的是新增能力，而不是对现有 `APP.DNS.*` / `DNSSTREAM` 的改名包装。
+本文的 counters（metrics）**不应**依赖 `tracked`；它属于“默认可查”常态信息。  
+该能力现已落地；本文记录的是其设计约束与验收口径，而不是对现有 `APP.DNS.*` / `DNSSTREAM` 的改名包装。
 
 ### 1.2 `App::blocked()` 的优先级链路（归因来源）
 
@@ -176,7 +176,7 @@ per-app：
   - 或者使用 epoch/bank swap 达到等价效果。
 - 无论采用哪种实现，接口层语义都应视为“严格 reset”，测试也必须按严格口径验收。
 
-### 3.5 更新点（实现指引，非本轮实现）
+### 3.5 实现落点（已落地）
 
 为避免改变现有语义，建议新增一个内部 API（名字仅示意）：
 
@@ -200,8 +200,8 @@ per-app：
 
 ## 4. 与其它可观测性的关系（避免割裂）
 
-- A 层（Packet `reasonId` counters）与 C 层（IP per-rule stats）会在各自 change 中落盘（OpenSpec change），本文仅固化域名侧 B 层。
-- B 层是当前下一步功能主线；实现时应新建独立 OpenSpec change，而不是直接绕过 spec 流程修改接口。
+- A 层（Packet `reasonId` counters）与 C 层（IP per-rule stats）已在各自 change 中落地，本文仅固化域名侧 B 层。
+- B 层已通过独立 OpenSpec change 落地；后续只在 domain+IP fusion 阶段回看命名与跨层融合问题。
 - 未来如需把 ip-leak 纳入“域名观测”，建议以 **单独维度**追加（例如 `METRICS.IPLEAK.*`），不要混进 `METRICS.DOMAIN.SOURCES`，避免语义混乱。
 
 ---
