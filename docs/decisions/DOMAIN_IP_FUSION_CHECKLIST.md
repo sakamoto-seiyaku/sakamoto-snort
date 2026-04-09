@@ -1,15 +1,17 @@
 # Domain + IP Fusion Checklist
 
 更新时间：2026-04-09  
-状态：pre-change 分析清单（先对齐现状与问题，再拆具体 change）
+状态：融合纲领（现状快照 + 目标状态 + 实现拆分）
 
 ---
 
 ## 0. 目的
 
-这份清单只做一件事：在开始 `domain+IP fusion` 之前，把**当前系统真实状态**、**需要统一的点**、以及**后续应拆成哪些 change**先钉住。
+这份文档把 `domain+IP fusion` 的工作收敛为三件事：
 
-这不是实现方案，也不是接口文档；它是后续评审/拆任务的总 checklist。
+1. **现状快照**（第 1 节）：完全按代码事实陈述，不做推演。  
+2. **目标状态**（第 2 节）：fusion 完成后，“用户应如何理解系统”的统一心智模型。  
+3. **实现拆分**（第 3 节）：从现状走到目标，需要改哪些东西、如何拆 change、按什么顺序落地。
 
 ---
 
@@ -73,291 +75,194 @@ IFACE_BLOCK
 
 ---
 
-## 2. fusion 前必须逐项检查的 checklist
+## 2. 目标状态（fusion 完成后的统一心智模型）
 
-> 用法：先逐项讨论并确认“目标口径”，再决定哪些项需要新 change，哪些只是文档/命名/重构。
+> 本节描述的是“做完之后应该长什么样”。第 1 节是现状；不要混用。
 
-### A. 术语与命名（按最新决议重写）
+本轮 fusion 的目标不是把 Domain 与 IP 的“匹配字段”强行对齐，而是让用户能用同一套模型理解系统，统一落在三个维度：
 
-本轮 fusion 的目标是让“域名腿”和“IP 腿”在用户视角上**同构**：用户用同一套词理解优先级与复用方式；但两条腿的匹配字段不要求对齐。
+1. **规则优先级顺序**：谁覆盖谁、谁先谁后。  
+2. **匹配条件集合**：每条腿各自如何命中（不同对象空间，不要求字段对等）。  
+3. **规则组**：如何复用/组织规则集合（用户视角同构；后端实现允许不同）。  
 
-- **规则优先级顺序**：当多条策略同时命中时，谁赢（统一口径）。
-- **匹配条件集合**：一条规则用哪些条件命中（两条腿不同对象空间，不要求字段对等）。
-- **规则组**：为了复用/组织规则集合的配置概念（domain 后端原生支持；IP 侧只做配置展开）。
+### 2.1 规则优先级顺序（统一用户模型）
 
-#### A1. 命名约束（文档/HELP 必须执行）
+#### 2.1.1 共通原则
 
-- 新设计文档中禁止使用裸 `global`。
-- 必须写清层名：`device-wide DomainPolicy ...` / `per-app (UID-scoped) ...` / `packet policy ...`。
-- 代码枚举 `GLOBAL_AUTHORIZED/GLOBAL_BLOCKED` 当前应被解读为 **domain-only device-wide**（后续改名目标：`DOMAIN_DEVICE_*`）。
+- **P1（scope）**：更窄的 scope 覆盖更宽的 scope。用户首先按 `per-app` / `device-wide` / `fallback` 来理解“谁赢”。  
+- **P2（gate/template）**：gate 与 template 不参与仲裁：  
+  - gate（`BLOCK/IPRULES/BLOCKIPLEAKS/CUSTOMLIST.ON` 等）决定某条路径是否参与或是否产生最终效果；  
+  - template（`BLOCKMASKDEF/BLOCKIFACEDEF`）只影响新建 app 初始值，不应被解读成“设备级 live policy”。  
+- **P3（确定性）**：如果某个 scope 内允许多条规则同时命中，必须保证“胜出规则”确定。  
+  - 对 IP 规则：使用 `priority`（或等价确定性规则）决胜。  
+  - 对配置展开引入的歧义：应在 apply 阶段拒绝（见 2.3.3）。  
 
-#### A2. 规则组（Domain vs IP）
+#### 2.1.2 DomainPolicy（域名腿）
 
-- Domain 侧：后端已经存在可复用的规则集合（lists/rules/bits 等），并天然区分 per-app 与 device-wide 两个入口。
-- IP 侧：后端不引入“规则组”概念；`规则组` 只存在于**配置层**（前端/配置生成器）。
+用户应按下面顺序理解 DomainPolicy 的生效层级（高 → 低）：
 
-#### A3. IP 规则组的配置展开与冲突规则（决议）
+1. **per-app domain custom**（app 自定义域名名单/规则）  
+2. **device-wide domain custom（domain-only）**（设备级域名自定义名单/规则）  
+3. **fallback：mask 交叉层**（`app.blockMask & domain.blockMask`）  
 
-当某个 app 引用多个 IP 规则组时，最终都会被展开成同一份 `<uid>` 的 `IPRULES` 规则集。为保证确定性与可解释性：
+关键 gate/template 语义（用户理解口径）：
 
-- **允许去重**：完全相同的规则允许合并/去重。
-- **冲突拒绝 apply（已确认）**：只要出现两条规则的**匹配条件集合相同**，但**任意字段不同** → 直接拒绝 apply（不进入运行期仲裁）。
+- `CUSTOMLIST.OFF`：跳过 1/2，直接走 3。  
+- `BLOCKMASKDEF`：只是新 app 的默认模板，不是 device-wide 的 domain policy。  
 
-> 说明：这里的“字段”按“规则规格字段”理解（例如 action/enforce、priority、reasonId/ruleId、would/enforce 相关字段等）。如果未来需要支持“同条件不同动作”的覆盖语义，应显式新增仲裁规则，而不是隐式容忍冲突。
+补充说明：
 
-- **统计口径（决议）**：暂时只承诺 per-app（UID）级别统计，不承诺规则组级统计。
+- DomainPolicy 的 verdict 是**域名语义判决/观测**；它常用于 DNS 侧观测，也可能通过 legacy bridge 影响 packet verdict。  
 
-- [ ] A4. 统一把接口/帮助文案里的 `global custom ...` 改为带层名的表述
-- [ ] A5. 将 `GLOBAL_*` 改名为 `DOMAIN_DEVICE_*`（纯命名收敛 change）
+#### 2.1.3 packet policy / IPRULES（IP 腿）
 
-### B. 作用域模型（scope lattice）（按最新决议重写）
+用户应按下面顺序理解“最终传输 verdict（packet verdict）”的优先级（高 → 低）：
 
-本节只回答“谁对谁生效”。为避免混淆，必须区分三类东西：
+1. **`IFACE_BLOCK`（per-app packet hard gate）**：命中即 drop  
+2. **`IPRULES`（per-UID IPv4 L3/L4）**：若启用且命中，按引擎决策 allow/block  
+3. **legacy DomainPolicy bridge**：若能解析到 `host->domain()`，则可使用 DomainPolicy 结果影响 verdict  
+4. **`BLOCKIPLEAKS` overlay**：对 legacy domain verdict 的附加裁决  
 
-- **scope**：真正参与判决的策略层
-- **gate**：运行期开关（开/关整段逻辑）
-- **template**：新建 app 默认模板（不会 retroactive 改写已有 app）
+关键 gate/template 语义（用户理解口径）：
 
-#### B1. gate / template / scope 速查（现状）
+- `BLOCK=0`：整体不产生最终 blocking 行为（packet verdict 直通）；但系统可能仍做最小映射/观测（以各自指标契约为准）。  
+- `IPRULES=0`：IPRULES 不参与；不应被误读为“清空规则”。  
+- `BLOCKIFACEDEF`：只是新 app 的默认模板，不是 device-wide 的 iface policy。  
 
-| 类别 | 项目 | 说明 |
-|---|---|---|
-| gate | `BLOCK` | blocking 总开关；`BLOCK=0` 时 packet path bypass |
-| gate | `IPRULES` | 是否启用 IPRULES 引擎 |
-| gate | `BLOCKIPLEAKS` | 是否启用 legacy overlay |
-| template | `BLOCKMASKDEF` / `BLOCKIFACEDEF` | 新建 app 默认模板（决议：template default） |
-| per-app gate | `CUSTOMLIST.ON/OFF` | 决议：保持现语义；同时 gate 掉 app custom 与 device-wide domain custom |
-| scope | per-app domain custom | `BLACK*/WHITE*` 带 app 参数 |
-| scope | device-wide domain custom | `BLACK*/WHITE*` 不带 app 参数（domain-only） |
-| scope | mask fallback | `app.blockMask & domain.blockMask` |
-| scope | per-app packet hard gate | `BLOCKIFACE` / `IFACE_BLOCK`（决议：hard gate） |
-| scope | per-UID IP rules | `IPRULES.ADD <uid> ...`（当前仅 per-UID） |
+补充说明：
 
-#### B2. DomainPolicy（域名腿）scope（现状基线）
+- 当前目标状态仍**不引入 device-wide IP rules**（保持 IP 腿的 scope 边界清晰；规则复用通过“规则组（配置层）”完成，见 2.3）。  
 
-`App::blocked()` 的结构（省略 metrics 细节）：
+### 2.2 匹配条件集合（两条腿不强行对齐）
 
-```text
-gate: BLOCK=0 -> allow
-gate: CUSTOMLIST.OFF -> MASK_FALLBACK
-CUSTOMLIST.ON ->
-  per-app domain custom lists/rules
-  -> device-wide domain custom lists/rules (domain-only)
-  -> MASK_FALLBACK (app.blockMask & domain.blockMask)
-```
+统一点：两条腿都可以被同一套“优先级模型/规则组模型”包装；但它们匹配的对象不同，条件字段天然不对等。
 
-#### B3. packet policy（包腿）scope（现状基线）
+#### 2.2.1 DomainPolicy 的匹配条件集合（域名对象空间）
 
-`PacketManager::make()` 的判决链路：
+- 输入对象：`(uid/app, domain)`  
+- 条件集合（示例）：  
+  - 精确域名 / 后缀（子域）  
+  - 通配符 / 正则（取决于规则类型）  
+  - 来自 blocking lists 的 `domain.blockMask`（由订阅列表聚合得出）  
 
-```text
-gate: BLOCK=0 -> bypass
-IFACE_BLOCK (per-app hard gate)
-  -> IPRULES (per-UID rules; gated by IPRULES=1)
-  -> legacy DomainPolicy bridge (host/domain -> App::blocked(domain))
-  -> BLOCKIPLEAKS (global overlay; gated by BLOCKIPLEAKS=1)
-```
+#### 2.2.2 IPRULES 的匹配条件集合（包/五元组对象空间）
 
-边界说明（决议/现状）：
+- 输入对象：`(uid/app, packet-key)`  
+- 条件集合（示例）：  
+  - `dir`（in/out）  
+  - `iface` / `ifindex`  
+  - `proto`（tcp/udp/icmp/any）  
+  - `src/dst IPv4 CIDR`  
+  - `sport/dport`（TCP/UDP）  
+  - `ct.state/ct.direction`（若启用 conntrack 维度）  
 
-- 当前没有 device-wide IP rules（IP 腿 scope 不做强行对称）。
-- IP 侧“规则组”只在配置层存在，不引入新的后端 scope。
+> 备注：`uid` 更准确地说是“ruleset 选择 scope”，不是 rule 的 match 字段；但对用户来说它仍是 per-app 生效边界的一部分。
 
-#### B4. `IFACE_BLOCK` 与 DNS-side DomainPolicy 的关系（必须显式写清）
+### 2.3 规则组（配置复用的统一心智；后端实现允许不同）
 
-- `IFACE_BLOCK` 命中时会遮蔽后续 packet-layer 判决对“实际联网结果”的影响。
-- 但 DNS-side DomainPolicy 仍可能运行并产出观测（当前 `DnsListener` 不检查 `blockIface()`）。
-- 因此必须区分：DNS verdict/观测 与 最终传输 verdict 是两件事。
+#### 2.3.1 用户视角（统一）
 
-- [ ] B5. 将上述 scope/gate/template 速查同步到接口文档与 HELP（单独 change）
+用户应能用同一套方式理解两条腿的“规则组”：
 
-### C. 规则优先级顺序 / 仲裁口径（按最新决议重写）
+- 规则组是为了**复用/组织**规则集合；可被多个 app 引用。  
+- 每个 app 仍可以叠加自己的“本地规则”（scope 更窄，优先级更高）。  
+- 对用户来说，Domain 规则组与 IP 规则组都只是“可复用的规则集合”；不需要理解后端如何存储。  
 
-统一原则：
+#### 2.3.2 Domain 侧规则组（后端原生能力）
 
-- 统一的是“规则优先级顺序”（用户怎么理解谁覆盖谁），不是“匹配条件字段必须对齐”。
-- 通过 A3 的“冲突拒绝 apply”规则，避免运行期出现“同条件不同动作”的隐式仲裁。
+- device-wide domain custom 本质上就是“被所有 app 引用的一组规则/名单”。  
+- per-app domain custom 是“仅该 app 引用的一组规则/名单”。  
+- blocking lists（标准/强化）则是另一类“可复用规则源”，其落地结果是 `domain.blockMask`。  
 
-#### C1. packet verdict 优先级顺序（现状基线）
+#### 2.3.3 IP 侧规则组（路线 A：配置展开；已确认决议）
 
-在 `BLOCK=1` 前提下，最终 packet verdict 的优先级顺序为：
+IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），后端不引入 group/profile 的持久化概念。落地规则如下：
 
-1. `IFACE_BLOCK`：命中即 drop（最终）
-2. `IPRULES`：若启用且命中，由 IPRULES 引擎给出 allow/block
-3. legacy DomainPolicy bridge：当能解析出 `host->domain()` 时，按 DomainPolicy 结果影响 verdict
-4. `BLOCKIPLEAKS`：对 legacy domain verdict 的全局 overlay
+- app 引用多个 IP 规则组时，最终都会展开成同一份 `<uid>` 的 `IPRULES` 规则集。  
+- **允许去重**：完全相同的规则允许合并/去重。  
+- **冲突拒绝 apply（已确认）**：只要出现两条规则的**匹配条件集合相同**，但**任意字段不同** → 直接拒绝 apply（不进入运行期仲裁）。  
+  - 这条规则的目标是：避免出现“看似同一条规则，但不同来源给了不同 action/priority/归因字段”的隐式仲裁。  
 
-#### C2. DomainPolicy verdict 优先级顺序（现状基线）
+统计口径（同一决议的后半句）：
 
-在 `CUSTOMLIST.ON` 前提下：
+- 暂时只承诺 **per-app（UID）级别** stats/metrics；不承诺规则组级统计。  
 
-1. per-app domain custom allow/block
-2. device-wide domain custom allow/block（domain-only）
-3. `MASK_FALLBACK`（`app.blockMask & domain.blockMask`）
+### 2.4 可观测性（fusion 后的统一解释模型）
 
-`CUSTOMLIST.OFF`：跳过 1/2，直接走 3。
+目标：当用户问“为什么这个请求被拦/放过？”时，两条腿给出的解释在结构上是同构的，且不会互相打架。
 
-#### C3. DNS verdict vs packet verdict（对外解释必须分层）
+- **DNS 侧（DomainPolicy）**：以 `policySource` 为核心解释字段，配套 `METRICS.DOMAIN.SOURCES*`。  
+- **packet 侧（最终传输 verdict）**：以 `reasonId` +（可选）`ruleId/wouldRuleId` 为核心解释字段，配套 `METRICS.REASONS*`、`IPRULES.PRINT stats`、`PKTSTREAM`。  
+- **跨层一致性**：当 DNS verdict 与 packet verdict 不一致时（例如 `IFACE_BLOCK` 遮蔽了后续路径），对外解释必须明确“哪个是最终传输裁决、哪个只是语义观测”。  
 
-- DNS-side verdict（`policySource`）是“域名语义判决/观测”。
-- packet verdict 是“最终传输裁决”，可能被 `IFACE_BLOCK`/`IPRULES` 提前决定；因此对外解释时必须同时标注层名与优先级来源。
+### 2.5 控制面（control plane）与文档口径
 
-- [ ] C4. 在观测统一（D 组）里补齐：当 DNS verdict 与 packet verdict 不一致时，对外解释口径是什么
-### D. 观测统一性
+目标：控制面命令与 HELP/接口文档能直接表达第 2 节的统一心智模型，避免“名字像全局、实际不是全局”的误导。
 
-- [ ] D1. 定义一套统一的“为什么被拦/为什么放过”解释模型：
-  - DNS 侧 `policySource`
-  - Packet 侧 `reasonId`
-  - IPRULES `ruleId/wouldRuleId`
-- [ ] D2. 决定哪些信息是 layer-local 的，哪些应该作为跨层术语统一
-- [ ] D3. 审核 `PKTSTREAM` / `METRICS.DOMAIN.SOURCES` / `METRICS.REASONS` / per-rule stats 是否已满足“同一系统、两边口径不打架”
-- [ ] D4. 决定 app/domain 统计在 IPRULES 命中时是否继续保持 `domain=null, GREY`，还是后续要引入更明确的归因层
+- 禁止在对外文档中使用裸 `global`；必须写清层名：`device-wide DomainPolicy ...` / `per-app (UID-scoped) ...` / `packet policy ...`。  
+- `GLOBAL_AUTHORIZED/GLOBAL_BLOCKED`（若仍存在）必须被明确为 **domain-only device-wide**；最终应改名为 `DOMAIN_DEVICE_*`。  
+- IP 规则组是配置概念：后端控制面仍以 `<uid>` 的 `IPRULES.*` 为准；规则组冲突/去重在 apply 语义中体现（2.3.3）。  
 
-### E. 控制面与用户心智
+### 2.6 state / counters / lifecycle（统一边界）
 
-- [ ] E1. 审核现有控制命令能否自然表达统一模型：
-  - `BLOCK`
-  - `BLOCKMASK*`
-  - `BLOCKIFACE*`
-  - `IPRULES*`
-  - `BLACKLIST/WHITELIST`
-  - `BLACKRULES/WHITERULES`
-- [ ] E2. 决定“用户先配域名规则，再配 IP 规则”时，前端/文档应该如何解释两者关系
-- [ ] E3. 决定哪些历史命令名保留，哪些只做文档层术语收敛，不做接口重命名
-- [ ] E4. 列出所有“名字像全局、实际不是全局”的对外接口/帮助文案/JSON 字段，避免只清理一半
-- [ ] E5. 明确哪些概念只允许出现在设计文档里，哪些会成为用户真正要理解和操作的控制面概念
+目标：用户能区分“规则状态”“统计状态”“观测状态”，并能预期 reset/save/restore 的边界。
 
-### F. 数据结构与模块边界
+- 明确哪些是 since-boot，哪些持久化，哪些属于规则生命周期内有效。  
+- 明确 `RESETALL` 与 layer-specific reset 的边界：DomainPolicy counters、packet reason counters、perf metrics、per-rule stats 的 reset 语义一致且可解释。  
 
-- [ ] F1. 审核 `App` 是否承担了过多跨层职责：
-  - DomainPolicy custom lists/rules
-  - block masks
-  - domain counters
-  - iprules caps cache
-- [ ] F2. 审核 `PacketManager` 是否已经变成 packet policy 的唯一仲裁入口；若是，fusion 后是否继续以它为中心
-- [ ] F3. 审核 `DomainManager` / `HostManager` / `IpRulesEngine` 的边界是否清晰，哪些地方只是历史路径遗留
-- [ ] F4. 识别纯命名重构、纯结构重构、纯语义变更三类工作，避免混在一个 change 里
+### 2.7 测试与验收（fusion 后的基线）
 
-### G. 生命周期 / reset / 持久化
+目标：产出一套可反复运行的基线，后续任何大改都能完整重跑，用于评估 bug 与性能回归。
 
-- [ ] G1. 审核 `RESETALL` 的统一边界：哪些 domain/IP/metrics 状态会一起清掉，见 `src/Control.cpp:439`
-- [ ] G2. 审核 layer-specific reset：
-  - `METRICS.DOMAIN.SOURCES.RESET*`
-  - `METRICS.REASONS.RESET`
-  - `METRICS.PERF.RESET`
-  - `IPRULES` rule stats reset semantics
-- [ ] G3. 明确哪些是 since-boot、哪些持久化、哪些是规则生命周期内有效
-- [ ] G4. 审核 restore/save 的权威来源：哪些状态在 `Settings/App/DomainManager/IpRulesEngine` 中持久化，哪些只是运行期派生态
-- [ ] G5. 明确 rule/list/stats/metrics 在 “开关关闭 → 再开启” 时是否保留、是否清零、是否重建 snapshot/cache
+- host-side：引擎/解析/确定性单测（不替代真机验收）。  
+- host-driven integration：控制面下发 + 事件流/metrics 验证。  
+- device（Tier‑1 受控拓扑）：以稳定可复现的受控环境覆盖关键矩阵（DomainPolicy/IFACE_BLOCK/IPRULES/overlay + 并发/reset）。  
 
-### H. 测试与验收
+### 2.8 性能与并发承诺（红线）
 
-- [ ] H1. 列出 fusion 本身要补的 host/integration/device 验收项
-- [ ] H2. 明确哪些旧测试只覆盖 domain 或只覆盖 ip，无法证明“统一性”
-- [ ] H3. 设计最小 fusion 回归矩阵：
-  - 同 scope 下 domain / ip 语义一致性
-  - 跨 scope 优先级一致性
-  - 可观测性字段一致性
-  - reset / since-boot / docs 对齐
-- [ ] H4. 单独列出 negative / invalid / malformed case：
-  - 非法控制参数
-  - 空对象/无命中对象
-  - 开关关闭时的 bypass 语义
-  - 规则/列表冲突与幂等
-- [ ] H5. 单独列出 concurrency / live-traffic case：
-  - reset 与流量并发
-  - rule/list update 与流量并发
-  - stream/metrics 查询与流量并发
+目标：fusion 不得把“可选成本”变成“每包必经成本”，并避免引入新的并发判决窗口不一致。
 
-### I. 热路径 / 性能约束
-
-- [ ] I1. 固化 fusion change 的性能红线：
-  - 不得在已有 bypass 场景平白新增 host/domain 物化
-  - 不得把原本可 snapshot/lock-free 的读路径退化成常态加锁
-  - 不得把本可按需启用的逻辑变成每包必经重成本逻辑
-- [ ] I2. 明确哪些额外判断属于可接受常数成本，哪些必须继续后置/按需 gating
-- [ ] I3. 审核 domain+IP 统一后，`BLOCK=0` / `IPRULES=0` / 无 domain consumer / 无 ct consumer 等 bypass 路径是否仍然干净
-- [ ] I4. 审核 observability/metrics 是否在默认关闭或常态开启下满足既定热路径约束
-
-### J. 并发 / 原子性 / phase 边界
-
-- [ ] J1. 审核 `PacketListener phase-1 / phase-2` 与 `PacketManager` 当前分层是否会在 fusion 后产生新的判决窗口不一致
-- [ ] J2. 审核控制面修改（domain list/rules、`BLOCKMASK`、`BLOCKIFACE`、`IPRULES`）对热路径的可见性模型：
-  - 何时生效
-  - 是否需要 epoch/snapshot
-  - 哪些允许 eventual consistency
-- [ ] J3. 审核 metrics/reset/stream 在 live traffic 下的原子性口径，避免“接口看似严格 reset，实际只是 best effort”
-- [ ] J4. 明确哪些并发语义是产品承诺，哪些只是实现细节（文档不承诺）
-
-### K. 冲突样例矩阵（必须在设计阶段说清）
-
-- [ ] K1. 列出最小冲突样例：
-  - domain allow + ip block
-  - domain block + ip allow
-  - per-app allow + device-wide block
-  - `IFACE_BLOCK` + 其它 allow
-  - `BLOCKIPLEAKS` + IPRULES allow
-- [ ] K2. 对每个冲突样例写出：
-  - 最终 verdict
-  - 对外解释口径（reason/source）
-  - 哪些 stats/metrics 应增长
-  - 哪些字段必须为空/不得出现
-- [ ] K3. 单独确认“同一概念在 domain 与 ip 两边是否真的应该统一”，避免为了表面对称强行设计错误抽象
-
-### L. 产物与拆分边界
-
-- [ ] L1. 这轮 fusion 预研至少要产出哪些固定 artefact：
-  - 术语表
-  - scope / precedence 对照表
-  - control surface inventory
-  - observability 对照表
-  - 测试缺口矩阵
-- [ ] L2. 为每个 artefact 标明“只是审计结论”还是“会直接驱动代码 change”
-- [ ] L3. 把“纯命名收敛 / 纯文档同步 / 真正语义变更 / 结构性重构”明确拆开，避免一次 change 混做
-
-### M. 明确先不做的事
-
-- [ ] M1. 是否继续把 `ip-leak` 放在 fusion 之后单独收敛
-- [ ] M2. 是否继续把 “global IP rules” 放在 fusion 之后单独讨论
-- [ ] M3. IPv6 / domain per-rule stats / 更强 L4 state 是否继续保持后置
+- 热路径不得新增磁盘/网络 I/O，不得长时间持锁；可选逻辑必须保持 gating。  
+- `PacketListener phase-1/phase-2` 的边界必须保持：锁内只做纯判决与轻量计数。  
+- 控制面更新与流量并发时，对外承诺必须明确（严格/最终一致/best-effort），避免接口语义含糊。  
 
 ---
 
-## 3. 建议的拆分方式（先讨论，不立即创建）
+## 3. 实现拆分与落地顺序（从现状到目标）
 
-如果上面的 checklist 基本认可，建议后续不要做一个超大 change，而是至少拆成下面几类：
+本节回答“要改哪些东西，大概改成什么样”。建议按影响面拆分，避免把命名清理、语义变更、观测统一、结构重构混成一个大 change。
 
-1. **Fusion 现状审计 / 语义对照 change**
-   - 只固化术语、scope、优先级、observability 对照表
-   - 产出权威设计文档与验收 checklist
-   - 同时明确性能红线、并发承诺、冲突样例矩阵
+### 3.1 命名与文档收敛（低风险；先做）
 
-2. **命名/帮助文档/设计文档收敛 change**
-   - 不改功能语义
-   - 只清理 `GLOBAL_*`、help 文案、设计文档与 roadmap/project drift
+- 将对外文档/HELP 中的裸 `global` 全部替换为带层名表述。  
+- 将 `GLOBAL_*` 改名为 `DOMAIN_DEVICE_*`（若涉及外部兼容，先做 alias/双写，再逐步迁移）。  
+- 对齐 `docs/IMPLEMENTATION_ROADMAP.md`、`openspec/project.md`、各 `docs/decisions/*`：确保“现状/目标/已落地能力”不互相打架。  
 
-3. **仲裁/边界统一 change**
-   - 真正涉及 DomainPolicy / IPRULES / legacy path 的统一规则
-   - 这是第一个真正可能改代码语义的 change
+### 3.2 IP 规则组“配置展开”语义补齐（确定性；可能涉及后端约束）
 
-4. **观测统一 change**
-   - 统一 reason / source / rule attribution 的用户心智与输出口径
+- 明确并实现 2.3.3 的 apply 语义：  
+  - 完全相同规则可去重；  
+  - 同一匹配条件集合、任意字段不同 → 拒绝 apply（必须有清晰错误原因，便于前端定位冲突来源）。  
+- 统计先维持 per-app；不引入 group-level stats。  
 
-5. **结构性重构 change**
-   - 仅在前四项都钉死之后，再做模块边界/命名/数据结构重构
+### 3.3 可观测性对齐（跨层解释）
 
----
+- 固化一套对外解释结构：最终传输裁决（packet）与语义观测（DNS）如何同时呈现。  
+- 对齐 `policySource` / `reasonId` / `ruleId` / `wouldRuleId` 的叙事：哪些是最终裁决依据、哪些只是来源/候选信息。  
 
-## 4. 当前建议
+### 3.4 控制面与生命周期（reset/save/restore）
 
-当前最合理的顺序不是直接改代码，而是：
+- 明确各类 counters/stats 的 reset 语义：`RESETALL` 与 layer-specific reset 的边界不含糊。  
+- 明确开关关闭/再开启时：规则、缓存、统计是否保留/是否清零/是否重建。  
 
-1. 先逐项过完本清单  
-2. 先产出一组最小 artefact：
-   - **DomainPolicy / PacketPolicy / scope / precedence** 对照表
-   - **observability（policySource / reasonId / ruleId）** 对照表
-   - **冲突样例矩阵**
-   - **测试缺口矩阵**
-3. 再基于这些 artefact 创建第一个 `domain+IP fusion` change
+### 3.5 测试补齐（以真机闭环为最终验收）
 
-如果第 2 步没有先做，后面的 change 很容易把“命名清理、语义收敛、性能边界、并发承诺、结构重构、观测统一”混成一团。
+- host 单测：覆盖 apply 冲突拒绝、确定性仲裁边界、序列化/反序列化一致性。  
+- integration：覆盖控制面下发 + metrics/stream 断言。  
+- device Tier‑1：覆盖关键矩阵与并发窗口（reset/update 与流量并发）。  
+
+### 3.6 延后项（明确不夹带进本轮 fusion）
+
+- `ip-leak` 重新收敛到统一仲裁之前，不在本轮先行改语义。  
+- device-wide IP rules：除非出现明确产品需求与性能预算，否则保持不引入。  
+- IPv6、域名 per-rule stats、更多 L4/L7 维度：按各自主线单独推进。  
