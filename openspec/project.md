@@ -1,8 +1,8 @@
 # Project Context
 
 ## Purpose
-sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android system_ext 分区上，通过内核 netfilter/iptables NFQUEUE 拦截 IPv4/IPv6 流量，并结合域名列表、自定义规则和应用级策略，对广告、跟踪器和恶意域名进行精细化拦截与统计。  
-项目目标是提供一个高性能、低依赖、与界面解耦的网络过滤内核，长期稳定运行于手机系统中，为上层 UI 和服务提供统一的控制与观测接口。
+sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android system_ext 分区上，通过内核 netfilter/iptables NFQUEUE 拦截 IPv4/IPv6 流量，并结合域名策略、应用级自定义名单/规则、per-UID IPv4 L3/L4 `IPRULES`、接口拦截与 IP 泄漏防护，对广告、跟踪器和恶意网络访问进行精细化拦截、统计与观测。  
+项目目标是提供一个高性能、低依赖、与界面解耦的网络过滤内核，长期稳定运行于手机系统中，为上层 UI 和服务提供统一的控制、诊断与可观测接口。
 
 ## Tech Stack
 - 主要语言: C++20（`Android.bp` 中使用 `-std=c++2a`，启用 `-Wall -Wextra -Werror`）
@@ -24,7 +24,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 ### Architecture Patterns
 - 单进程、多线程守护程序架构：
   - `sucre-snort.cpp` 中启动多个线程：`PacketListener<IPv4/IPv6>`（iptables/NFQUEUE）、`DnsListener`（与 netd 配合）、`PackageListener`（监控 `/data/system/packages.list` 与 per-user `package-restrictions.xml`）、`Control`（控制 socket）、以及阻止列表和各 Manager 的恢复逻辑。
-  - 全局单例对象用于跨模块共享状态：`Settings`, `AppManager`, `DomainManager`, `HostManager`, `PacketManager`, `DnsListener`, `ActivityManager`, `BlockingListManager`, `RulesManager`, `Control` 等。
+  - 全局单例对象用于跨模块共享状态：`Settings`, `AppManager`, `DomainManager`, `HostManager`, `PacketManager`, `DnsListener`, `ActivityManager`, `BlockingListManager`, `RulesManager`, `Control`，以及进程级 `perfMetrics` 等。
 - 域名与规则管理：
   - `DomainManager` 负责域名对象、黑白名单列表、自定义名单与规则映射，并通过 `_byName`、`_byIPv4`、`_byIPv6` 建立域名和 IP 的双向索引。
   - `DomainList` 将多个屏蔽列表文件聚合为内存快照 `_aggSnapshot`，支持按域名及其后缀（子域名）查询 blockMask。
@@ -32,15 +32,16 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
   - `Rule` + `RulesManager` 提供域名/通配符/正则规则，支持全局和按 App 作用，自定义规则会在 `DomainManager`/`App` 构建对应的匹配器。
 - 应用与主机模型：
   - `PackageListener` 持续监听 `/data/system/packages.list` 与 `/data/system/users/<userId>/package-restrictions.xml` 变化，聚合得到 full UID → names[] 快照，再通过 `AppManager` 创建/删除 `App` 实例。
-  - `App` 维护每个 UID 的全局/按域名统计（`AppStats` + per-domain `DomainStats`）、拦截掩码（`blockMask`）、接口掩码（`blockIface`）、是否追踪（`tracked`）以及自定义黑白名单和规则。
+  - `App` 维护每个 UID 的全局/按域名统计（`AppStats` + per-domain `DomainStats`）、拦截掩码（`blockMask`）、接口掩码（`blockIface`）、是否追踪（`tracked`）、域名侧 `policySource` counters，以及 IPRULES/conntrack 相关的轻量热路径缓存。
   - `HostManager` 维护 IP → `Host` → 可选域名映射，并在启用 `reverseDns` 时通过 `getnameinfo` 做反向 DNS。
 - 数据路径与判决：
-  - `PacketListener` 通过 NFQUEUE 收到数据包，在不持有全局锁的情况下解析 IP/端口/UID/接口/时间戳和部分 L4 头部；然后在持有 `mutexListeners` 的共享锁时调用 `PacketManager::make` 做判决和统计。
-  - `DnsListener` 通过 `sucre-snort-netd` 接收前端 DNS 解析结果（域名、UID 及对应 IP 列表），在短暂持有 `mutexListeners` 共享锁的窗口内更新 `DomainManager` 的 IP 映射和统计，并向订阅者推送 `DnsRequest` 事件。
-  - `PacketManager::make` 根据当前域名有效性（`Domain::validIP`）、App 阻止规则（`App::blocked`）、IP 泄漏开关（`blockIPLeaks`）、接口掩码（`blockIface` + `ifaceBit`）得出最终 verdict，同时更新统计并通过 `Streamable<Packet>` 推送事件。
+  - `PacketListener` 通过 NFQUEUE 收到数据包，在不持有 `mutexListeners` 的情况下解析 IP/端口/UID/接口/时间戳和必要的 L4 头部；对 IPv4/TCP/UDP/ICMP 还会构造最小 `Conntrack::PacketV4`。随后先在锁外完成 app / iface / host 上下文准备，再在持有 `mutexListeners` 共享锁时调用 `PacketManager::make` 做纯判决、统计和流事件输出。
+  - `DnsListener` 通过 `sucre-snort-netd` 接收前端 DNS 解析结果（域名、UID 及对应 IP 列表），在短暂持有 `mutexListeners` 共享锁的窗口内更新 `DomainManager` 的 IP 映射、域名侧 `policySource` counters，并向订阅者推送 `DnsRequest` 事件。
+  - `PacketManager::make` 的当前判决顺序是：`IFACE_BLOCK` 最高优先级 hard-drop → IPv4 `IPRULES`（exact cache / classifier snapshot / 可选 conntrack gating）→ legacy domain path（`App::blocked(domain)`）+ `BLOCKIPLEAKS`。`IPRULES` 的 `would-block` 只在最终 verdict 为 ACCEPT 时产出 overlay，不会阻止后续 legacy/domain 路径做最终 DROP。
 - 控制与流式接口：
   - `Control` 通过 Unix 域 socket `sucre-snort-control` 和可选 TCP 端口 60606 暴露文本命令协议，对应实现集中在 `Control::clientLoop` 与各 `cmd*` 方法中，协议详见 `docs/INTERFACE_SPECIFICATION.md`。
-  - `Streamable<T>` 为 DNS 请求、数据包和 Activity 提供统一的事件队列与订阅模型，通过 `startStream/stopStream/stream` 在控制连接上以 JSON 片段形式推送增量事件。
+  - 当前控制面除 legacy 命令外，还包含 `IPRULES.*`、`IPRULES.PREFLIGHT`、`METRICS.REASONS*`、`PERFMETRICS` / `METRICS.PERF*`、`METRICS.DOMAIN.SOURCES*` 与 `DEV.DNSQUERY` 等诊断/可观测性命令。
+  - `Streamable<T>` 为 DNS 请求、数据包和 Activity 提供统一的事件队列与订阅模型，通过 `startStream/stopStream/stream` 在控制连接上以 JSON 片段形式推送增量事件；当前 `PKTSTREAM` 事件已带 `reasonId` / `ruleId` / `wouldRuleId` 等判决字段。
 - 全局同步约束：
   - `mutexListeners` 是“监听器世界状态”的全局读写锁：热路径（DNS/packet 判决）在共享锁下运行，`RESETALL` 等重置操作在独占锁下暂停一切判决，任何需要持有独占锁的逻辑必须避免长时间阻塞。
   - 各 Manager 自身还维护细粒度的 `std::shared_mutex`/`std::mutex`，避免在热路径上产生锁级联或死锁。
@@ -51,6 +52,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 - 当前测试/验收入口（repo 作为单一入口；不要求开发机预装 gtest 包）：
   - 单元测试（host-side / pure-logic）：`tests/host/`（repo-managed gtest；经 CMake/CTest 暴露）
   - 集成测试 / 真机回归：`tests/integration/`（baseline、平台专项 smoke、perf 等；统一通过脚本 + CTest 暴露）
+  - IP 真机专项模组（Tier-1 controlled topology）：`tests/device-modules/ip/run.sh`（`netns+veth`、matrix/stress/perf；当前 `longrun` 仍属 backlog）
   - 真机原生调试：repo-root VS Code + CMake + CodeLLDB workflow（见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`）
 
 - **Non-negotiable / Tests-first policy（对后续所有 change 生效）**：
@@ -79,9 +81,12 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
   - 当前实现支持 Android 多用户：内部以完整 Linux UID 作为 App 主键；通过 `/data/system/packages.list` + per-user `/data/system/users/<userId>/package-restrictions.xml` 聚合安装状态；控制协议在 `<uid|str>` 参数位置支持 `USER <userId>` 子句进行精确选择。
 - 网络与拦截模型：
   - iptables 建立专用链 `sucre-snort_INPUT`/`sucre-snort_OUTPUT`，通过 NFQUEUE 将除 DNS（53/853/5353）外的流量送入用户态处理。
+  - `BLOCK=0` 时，packet 路径整体短路放行；DNS 路径仍会走最小判决/映射流程，但 DomainPolicy counters 等常态观测只在 `BLOCK=1` 时更新。
   - DNS 解析由系统 `netd`/`DnsResolver` 完成，通过 Unix 域 socket `sucre-snort-netd` 把域名与 UID 以及解析出的 IP 列表发送给 `DnsListener`。
-  - 数据包判决逻辑集中在 `PacketManager::make`：结合域名是否在黑/白名单中、App 的 blockMask 和 blockIface、是否启用 IP 泄漏防护（`blockIPLeaks`）、以及 IP 是否仍在有效期（`maxAgeIP`）得出最终 ACCEPT/DROP。
+  - 数据包判决逻辑集中在 `PacketManager::make`：先处理接口级 `IFACE_BLOCK`，再处理 IPv4 per-UID `IPRULES`，最后才落回域名侧 `App::blocked(domain)` 与 `BLOCKIPLEAKS`；域名路径仍依赖 `Domain::validIP` 与 DNS 建立的 `domain ↔ IP` 映射。
 - 规则来源与优先级（按代码实现）：
+  - 包级 verdict 的当前优先级是：`IFACE_BLOCK` → `IPRULES`（IPv4 only）→ legacy domain policy + `BLOCKIPLEAKS`。
+  - `IPRULES` 是独立于 domain policy 的 IPv4 per-UID L3/L4 规则引擎，当前支持 `dir/iface/ifindex/proto/src/dst/sport/dport` 与最小 `ct.state/ct.direction` 维度；命中后可直接 `ALLOW/BLOCK`，也支持 `would-block` 只做观测 overlay。
   - 域名黑/白名单来自 `DomainList` + `BlockingListManager`：每个订阅列表对应一个 listId，域名的 blockMask 由所有列表的掩码合并而成。
   - 自定义名单：
     - 全局自定义黑/白名单：`DomainManager::_customBlacklist/_customWhitelist`。
@@ -93,16 +98,20 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
     - 若未启用阻止或域名为空 → 不阻止。
     - 若启用 per-app 自定义列表：优先检查该 App 的自定义白名单/黑名单，再检查全局自定义规则/名单。
     - 否则根据 App 的 `blockMask` 与 Domain 的 `blockMask`（由标准/强化列表位决定）综合判断。
+  - 术语注意：DomainPolicy 文档/代码中的 `GLOBAL_*` 当前仅表示“域名侧 device-wide 层”，并不覆盖 `IPRULES`、`IFACE_BLOCK` 或其它 packet-level 维度。
 - 统计与观测：
   - `Stats`/`AppStats`/`DomainStats` 提供按天滚动窗口和“ALL/WEEK”视图，支持 DNS 请求数以及 RX/TX 包、字节数等。
-  - 统计可通过 `ALL.*`, `APP.*`, `BLACK/WHITE/GREY.*` 等命令查看，事件则通过 `DNSSTREAM`, `PKTSTREAM`, `ACTIVITYSTREAM` 推送。
+  - `ReasonMetrics` 提供 packet-level `reasonId` counters（`METRICS.REASONS*`）；`PerfMetrics` 提供 `nfq_total_us` / `dns_decision_us` 等性能观测（`PERFMETRICS`, `METRICS.PERF*`）；DomainPolicy `policySource` counters 通过 `METRICS.DOMAIN.SOURCES*` 暴露。
+  - `IPRULES` 同时维护 per-rule stats 与 ruleset complexity preflight；事件流则通过 `DNSSTREAM`, `PKTSTREAM`, `ACTIVITYSTREAM` 推送，其中 `PKTSTREAM` 已能表达 `reasonId/ruleId/wouldRuleId`。
 - Activity 模型：
   - `ActivityManager` 将最近前台 App 抽象为 `Activity` 对象，通过 `ACTIVITYSTREAM.*` 命令向订阅者推送，主要用于 UI 展示“当前活跃应用”与拦截状态变化。
 
 ## Important Constraints
 - 性能与并发：
   - NFQUEUE 回调和 DNS 回调是极端热点，不得在这些路径中增加新的磁盘访问、网络访问或长时间持锁操作。
-  - 访问 `mutexListeners` 的代码必须遵循既有模式：热路径使用 `std::shared_lock`，重置/全局操作在 `Control::cmdResetAll` 等处使用独占锁，并尽快完成。
+  - 访问 `mutexListeners` 的代码必须遵循既有模式：热路径使用 `std::shared_lock`，重置/全局操作在 `Control::cmdResetAll`、严格 RESET 语义命令等处使用独占锁，并尽快完成。
+  - `PacketListener` 的 phase-1（锁外上下文准备）与 phase-2（锁内纯判决）边界不能被打破；尤其不能把阻塞 I/O 或重锁重新带回 `PacketManager::make` 所在临界区。
+  - `IPRULES` 热路径依赖 snapshot / exact-cache / `uidUsesCt` gating；`conntrack` 与性能统计都必须保持“按需启用”，避免把可选成本变成无条件 per-packet 开销。
   - `DomainList`、`BlockingListManager`、`DomainManager`、`AppManager` 等管理类已经为并发访问加上细粒度锁与快照逻辑，新代码在访问这些结构时应优先复用现有 API，避免绕过锁直接操作内部容器。
 - 持久化格式兼容：
   - 所有持久化由 `Saver` 完成，包含严格的长度与格式检查（如域名最小长度、GUID 长度、阻止列表 URL 长度等）；任何修改持久化结构的改动都需要通过 OpenSpec 设计并慎重考虑升级/回滚场景。

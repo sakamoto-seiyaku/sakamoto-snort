@@ -3,8 +3,8 @@
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
 
 
-更新时间：2026-03-25  
-状态：工作结论（可迭代修订；实现与验收以 OpenSpec change 为准）
+更新时间：2026-04-02  
+状态：工作结论（A/B/C/D 主能力均已落地；本文保留为上位原则与历史决策回执）
 
 ---
 
@@ -92,7 +92,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - gating：保持事实语义，仅对进入 Packet 判决链路的包统计（当前 `BLOCK=0` 不进入判决链路）
 - 当前 P0 基线/验收明确以 legacy `ip-leak` 路径**未参与 Packet 最终判决**为前提（可理解为当前 A 层验收场景下 `BLOCKIPLEAKS=0`）；`BLOCKIPLEAKS=1` 时是否恢复独立 `reasonId`、其命名与优先级，统一留到后续融合阶段单独收敛
 
-对应 OpenSpec：`add-pktstream-observability`。
+对应主规格：`openspec/specs/pktstream-observability/spec.md`。
 
 ### 4.2 B：DomainPolicy `policySource` counters（DNS 口径）
 目标：域名功能已完整，必须补上“默认可查”的归因与 counters，避免后置导致设计困难。
@@ -101,9 +101,9 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 统计口径：**按 DNS 请求计数**（每次 DNS 判决更新一次）。
 - 明确：**先不考虑 ip-leak**（附加功能，不因小事大）。
 - 生命周期：since boot（进程内，不落盘）
-- 对外接口（拟定）：`METRICS.DOMAIN.SOURCES*`（device-wide + per-app）
+- 对外接口：`METRICS.DOMAIN.SOURCES*`（device-wide + per-app）
 
-权威文档：`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`（OpenSpec change：`openspec/changes/add-domain-policy-observability/`）。
+权威文档：`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`（主规格：`openspec/specs/domain-policy-observability/spec.md`；历史 change：`openspec/changes/archive/2026-03-27-add-domain-policy-observability/`）。
 
 ### 4.3 C：IP per-rule runtime stats（IP 规则引擎）
 目标：新 IP 规则从一开始就必须支持可解释 + per-rule stats（常态可查，不依赖 PKTSTREAM）。
@@ -114,7 +114,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - `enabled=0` 的规则不得更新任何 hit/wouldHit 计数，也不得进入 active complexity 口径
 - 热路径：只对“最终命中规则”和“最终 would-match 规则（若有）”做无锁原子更新
 
-对应 OpenSpec：`add-app-ip-l3l4-rules-engine`。
+对应主规格：`openspec/specs/app-ip-l3l4-rules/spec.md`。
 
 ### 4.4 D：性能健康指标（NFQ / DNS latency）
 目标：以**尽可能小的热路径代价**，在正常运行情况下提供默认可拉取的 latency 指标，用于性能基线、回归对比与线上健康观察。
@@ -123,8 +123,8 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - `nfq_total_us`：单个 NFQ 包在 userspace 中的总处理时间。
   - `dns_decision_us`：单次 DNS 判决请求的处理时间。
 - 这组指标即 D 层；它与 A/B/C 并列，属于 observability 的 health/perf 维度；不复用 `reasonId` / `policySource` / per-rule stats 语义。
-- D 的实现与落地节奏独立于 A/B/C；只要控制面与口径稳定，其 change 可单独推进，不作为主线依赖。
-- 对外接口拟定为：`PERFMETRICS [<0|1>]`、`METRICS.PERF`、`METRICS.PERF.RESET`。
+- D 的实现与落地节奏独立于 A/B/C；当前已独立落地，不改变主线排序。
+- 对外接口为：`PERFMETRICS [<0|1>]`、`METRICS.PERF`、`METRICS.PERF.RESET`。
 - `PERFMETRICS=0` 时热路径只允许一个极轻量 gating branch；`PERFMETRICS=1` 时才做计时与聚合。
 - 接口、字段与语义**不区分 debug/release**；是否采集仅由运行时开关决定。
 
@@ -173,13 +173,13 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 ## 6. 归属与“单一真相”（避免文件互相打架）
 
 1) PKTSTREAM schema + reasonId/would-match 契约 + A 层 `METRICS.REASONS`：  
-`openspec/changes/add-pktstream-observability/`
+`openspec/specs/pktstream-observability/spec.md`
 
 2) IP 规则语义 + C 层 per-rule stats（含 `IPRULES.PRINT` 的 `stats`）：  
-`openspec/changes/add-app-ip-l3l4-rules-engine/`
+`openspec/specs/app-ip-l3l4-rules/spec.md`
 
 3) 域名侧 `policySource` 与 B 层 counters 口径：  
 `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`
 
 4) D 层性能健康指标（`PERFMETRICS` / `METRICS.PERF*`）的边界与口径：  
-`openspec/specs/perfmetrics-observability/`（历史 change 归档：`openspec/changes/archive/2026-03-15-add-perfmetrics-observability/`）
+`openspec/specs/perfmetrics-observability/spec.md`（历史 change 归档：`openspec/changes/archive/2026-03-15-add-perfmetrics-observability/`）

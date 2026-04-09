@@ -156,9 +156,9 @@ P0 仅保证以下最小集合能解释清楚：
 
 ---
 
-## 5. 与已存在 change 的关系（现状）
+## 5. 与已存在 spec/change 的关系（现状）
 
-- 当前 OpenSpec change：`openspec/changes/add-app-ip-l3l4-rules-engine/`  
-  用于本轮 IPv4 L3/L4 per-app 规则引擎的权威语义与任务拆分。
+- 当前主规格：`openspec/specs/app-ip-l3l4-rules/spec.md`  
+  用于本轮 IPv4 L3/L4 per-app 规则引擎的权威语义；对应历史 change 已归档到 `openspec/changes/archive/2026-03-24-add-app-ip-l3l4-rules-engine/`。
 - 已归档参考：`openspec/changes/archive/2026-03-04-add-app-ip-blacklist/`  
   仅作为早期 per-app IP 黑名单方向的历史参考。

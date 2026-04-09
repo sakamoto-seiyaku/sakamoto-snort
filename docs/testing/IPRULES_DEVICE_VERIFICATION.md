@@ -1,7 +1,7 @@
 # IPRULES v1 真机验证矩阵（L3/L4 Firewall）
 
 目的：在 **真机** 上验证 `IPRULES v1` 的端到端行为（控制面下发 → NFQUEUE 真实流量 → 判决/统计/PKTSTREAM 可观测），覆盖 TCP/UDP/ICMP 与关键组合/边界条件。  
-说明：host-side gtest 只能验证引擎/解析/确定性，不足以作为最终验收；关闭该 change 必须补齐本矩阵记录。
+说明：host-side gtest 只能验证引擎/解析/确定性，不足以作为最终验收；本文保留为 IPRULES v1 已归档 change 的真机验证记录。
 
 ## 1. 前置条件
 

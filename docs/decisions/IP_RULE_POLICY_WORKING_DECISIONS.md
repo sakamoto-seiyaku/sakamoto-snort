@@ -3,8 +3,8 @@
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
 
 
-更新时间：2026-03-12  
-状态：纲领性工作结论（可迭代修订；实现与验收以 OpenSpec change 为准）
+更新时间：2026-04-02  
+状态：纲领性工作结论（v1 历史设计回执；主能力已落地，后续 domain+IP 融合前仍以本文约束为准）
 
 ---
 
@@ -28,10 +28,10 @@
 为避免“讨论摘录/二手结论”互相打架，权威以以下文档为准：
 
 1) IP 规则引擎（语义/算法/控制面）：  
-`openspec/changes/add-app-ip-l3l4-rules-engine/`
+`openspec/specs/app-ip-l3l4-rules/spec.md`（历史 change：`openspec/changes/archive/2026-03-24-add-app-ip-l3l4-rules-engine/`）
 
 2) PKTSTREAM schema + reasonId/would‑match 契约（字段与口径）：  
-`openspec/changes/add-pktstream-observability/`
+`openspec/specs/pktstream-observability/spec.md`（历史 change：`openspec/changes/archive/2026-03-24-add-pktstream-observability/`）
 
 3) 原始讨论摘录（只用于追溯决策背景，不作最终规范）：  
 `docs/archived/IP_RULE_POLICY_DISCUSSION_RAW_EXCERPTS_019cad3d-d9ba-7b21-9dc8-ae0f84c12ba1.md`
@@ -100,7 +100,7 @@
   - `proto`（tcp/udp/icmp/any）
   - `src/dst IPv4 CIDR`（`/0..32`）
   - `src/dst port`（any / 精确 / range）
-- `ct`：当前 v1 不纳入控制面可配置语义；若客户端传入 `ct` 条件，控制面应直接拒绝，避免出现“看起来配置了、实际上不生效”的假语义
+- `ct`：这条是本文写作时的 v1 结论；当前仓库已通过独立的 L4 conntrack change 落地 `ct.state/ct.direction`，对应权威入口转为 `openspec/specs/l4-conntrack-core/spec.md`
 
 匹配语义（避免歧义）：
 - `src/dst` 与 `srcPort/dstPort` 均指数据包 IPv4/L4 头部字段（`saddr/daddr`、TCP/UDP `source/dest`）。
@@ -217,13 +217,13 @@ range 规则进入 bucket 的 `rangeCandidates`（按 priority 降序）；looku
 ## 7. 与原始讨论摘录的差异/澄清（以权威入口为准）
 
 1) **would‑match 不使用独立 reasonId**  
-早期讨论中出现过 `IPRULE_WOULD_BLOCK` 一类表述；当前契约为 `wouldRuleId + wouldDrop=1`，`reasonId` 始终解释实际 verdict（见 `openspec/changes/add-pktstream-observability/`）。
+早期讨论中出现过 `IPRULE_WOULD_BLOCK` 一类表述；当前契约为 `wouldRuleId + wouldDrop=1`，`reasonId` 始终解释实际 verdict（见 `openspec/specs/pktstream-observability/spec.md`）。
 
 2) **reasonId 命名以 PKTSTREAM change 为准**  
 统一使用 `IP_RULE_ALLOW/IP_RULE_BLOCK`（而非 `IPRULE_*` 等变体）。
 
 3) **端口 range 走 predicate 扫描 + 硬上限**  
-讨论中曾出现“编译期展开”的备选；当前确定不展开，避免 expanded‑entries 爆炸（见 `openspec/changes/add-app-ip-l3l4-rules-engine/design.md`）。
+讨论中曾出现“编译期展开”的备选；当前确定不展开，避免 expanded‑entries 爆炸（见 `openspec/changes/archive/2026-03-24-add-app-ip-l3l4-rules-engine/design.md`）。
 
 4) **早期出现过的 `POLICY.ORDER` / ip-leak 覆盖讨论，当前不作为现行结论**  
 这部分已重新拍板为 TBD；当前 change 先完成主规则引擎，`ip-leak` 相关部分后续再单独收敛。

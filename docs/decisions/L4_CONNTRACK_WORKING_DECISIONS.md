@@ -1,8 +1,9 @@
 # L4 Conntrack：工作决策与原则
 
-更新时间：2026-03-28  
-状态：纲领性工作结论（当前用于约束后续 change；不是实现 spec，也不是任务清单）
-对应 OpenSpec change（草案/待评审）：`openspec/changes/add-iprules-conntrack-core/`
+更新时间：2026-04-02  
+状态：纲领性工作结论（历史设计回执；能力已落地，后续评审/重构仍应对照本文）
+对应主规格：`openspec/specs/l4-conntrack-core/spec.md`  
+对应历史 change：`openspec/changes/archive/2026-03-30-add-iprules-conntrack-core/`
 
 ---
 
@@ -134,9 +135,9 @@
 - exact cache / classifier snapshot 是当前 stateless fast path 的主结构；
 - `IPRULES=0` 时仍必须 zero-cost disable；
 - 当前 correctness 不依赖系统 conntrack；
-- 当前控制面拒绝 `ct` 条件，是合理的，因为后端语义尚未存在。
+- 本文写作时控制面尚拒绝 `ct` 条件；当前仓库已通过独立 conntrack change 落地 `ct.state/ct.direction`，因此这条只应视为 v1 历史背景，而非现状约束。
 
-下一阶段 L4 conntrack 和 v1 的关系应理解为：
+L4 conntrack 和 v1 的关系应理解为：
 - **conntrack core** 提供新的判决输入维度；
 - **rule engine** 再决定是否、何时把这些维度暴露成 `ct.*` 匹配语义；
 - **observability** 再决定如何把 flow state / direction / invalid 等信息输出出来。
@@ -552,9 +553,9 @@ SNI / QUIC Initial / authority 之类 future backup signal 可以作为后续产
 
 ---
 
-## 12. 后续进入具体 change 前，需要持续对照的检查点
+## 12. 实现后仍需持续对照的检查点
 
-后续一旦从纲领进入具体 change，至少要持续回答以下问题：
+后续在 code review、缺陷修复与重构阶段，至少要持续回答以下问题：
 
 1. 这个实现是在**保持 OVS 级 conntrack 语义**，还是在偷偷变成新的 ad-hoc cache？
 2. 它是 **C++ 适配式重实现**，还是把 OVS 工程杂质一起搬进来了？
@@ -562,10 +563,10 @@ SNI / QUIC Initial / authority 之类 future backup signal 可以作为后续产
 4. 它关闭时是否真的不污染当前热路径？
 5. 它启用时的 CPU / 内存 / sweep 成本是否可解释、可测量、可回归？
 
-如果这些问题里有任何一条答不稳，就说明方案还没有准备好进入实现。
+如果这些问题里有任何一条答不稳，就说明当前实现或后续重构还没有真正收敛。
 
 ---
 
 ## 13. 当前结论（一句话版本）
 
-`sucre-snort` 下一阶段若要把 IP 规则补全到“真正的 L4”，正确方向不是继续堆单包字段，而是以 **OVS userspace conntrack 语义**为母本，做一个 **C++ 原生、Android 约束下可控的 conntrack core 重实现**；范围先收敛在 `TCP / UDP / ICMP / other`，并明确不把 NAT / ALG / system conntrack / DPI 一起带进来。
+`sucre-snort` 已按本文方向把 IP 规则补全到最小可用的 stateful L4：以 **OVS userspace conntrack 语义**为母本，落地了一个 **C++ 原生、Android 约束下可控的 conntrack core 重实现**；范围收敛在 `TCP / UDP / ICMP / other`，并明确未把 NAT / ALG / system conntrack / DPI 一起带进来。
