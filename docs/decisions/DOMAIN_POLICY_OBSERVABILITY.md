@@ -67,8 +67,8 @@
 2. `CUSTOM_BLACKLIST`（app 级自定义黑名单命中）
 3. `CUSTOM_RULE_WHITE`（app 级自定义白规则命中）
 4. `CUSTOM_RULE_BLACK`（app 级自定义黑规则命中）
-5. `GLOBAL_AUTHORIZED`（domain-only device-wide 授权命中：域名侧全局白名单/白规则）
-6. `GLOBAL_BLOCKED`（domain-only device-wide 拦截命中：域名侧全局黑名单/黑规则）
+5. `DOMAIN_DEVICE_WIDE_AUTHORIZED`（domain-only device-wide 授权命中：域名侧设备级白名单/白规则）
+6. `DOMAIN_DEVICE_WIDE_BLOCKED`（domain-only device-wide 拦截命中：域名侧设备级黑名单/黑规则）
 7. `MASK_FALLBACK`（最终回退：`app.blockMask & domain.blockMask`）
 
 > 说明：这套枚举只做“来源归因”，**不细到具体 ruleId / listId**；细粒度定位属于后续独立功能线（会牵涉到域名规则匹配结构变化）。
@@ -81,8 +81,8 @@
 2. `CUSTOM_BLACKLIST` → block
 3. `CUSTOM_RULE_WHITE` → allow
 4. `CUSTOM_RULE_BLACK` → block
-5. `GLOBAL_AUTHORIZED` → allow
-6. `GLOBAL_BLOCKED` → block
+5. `DOMAIN_DEVICE_WIDE_AUTHORIZED` → allow
+6. `DOMAIN_DEVICE_WIDE_BLOCKED` → block
 7. `MASK_FALLBACK` → allow 或 block（按 bit 与结果）
 
 当 `_useCustomList == false` 时，`policySource` 永远为 `MASK_FALLBACK`（并且不会访问其它分支）。
@@ -142,8 +142,8 @@ device-wide：
     "CUSTOM_BLACKLIST":  {"allow": 0, "block": 0},
     "CUSTOM_RULE_WHITE": {"allow": 0, "block": 0},
     "CUSTOM_RULE_BLACK": {"allow": 0, "block": 0},
-    "GLOBAL_AUTHORIZED": {"allow": 0, "block": 0},
-    "GLOBAL_BLOCKED":    {"allow": 0, "block": 0},
+    "DOMAIN_DEVICE_WIDE_AUTHORIZED": {"allow": 0, "block": 0},
+    "DOMAIN_DEVICE_WIDE_BLOCKED":    {"allow": 0, "block": 0},
     "MASK_FALLBACK":     {"allow": 0, "block": 0}
   }
 }
