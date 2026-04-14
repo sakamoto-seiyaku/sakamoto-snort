@@ -3,8 +3,10 @@
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
 
 
-更新时间：2026-04-13  
+更新时间：2026-04-14  
 状态：工作结论 + vNext 设计收敛（新增 `tracked` 统一语义、`METRICS.TRAFFIC*`、`METRICS.CONNTRACK`、stream `type`/suppressed 事件；待实现）
+
+落地任务清单：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
 
 ---
 
@@ -75,7 +77,15 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 若包的实际 `reasonId=IFACE_BLOCK`，则不得再附带来自更低优先级规则层的 `ruleId`/`wouldRuleId`。
 
 ### 3.3 stream 风险（必须认知）
-`Streamable::stream()` 在调用线程同步写 socket；慢消费者可能反压并拖慢热路径。产品与文档需要把 PKTSTREAM 定位为“调试期开、短期开、持续读”。
+现状：`Streamable::stream()` 在调用线程同步写 socket；慢消费者可能反压并拖慢 NFQUEUE 热路径，甚至阻塞 `RESETALL` 等需要独占 `mutexListeners` 的操作。
+
+本轮融合红线（与 `DOMAIN_IP_FUSION_CHECKLIST.md:2.8` 一致）：
+
+- hot path / `mutexListeners` 锁内不得写 socket，也不得做大 JSON 构造/pretty-format。
+- 逐条事件必须先进入**有界队列/ring**，由独立 writer 线程（或等价机制）异步 flush。
+- 反压时允许 drop，且必须通过 `type="notice"` 显式提示（不新增独立 metrics；最小字段：`notice="dropped"` + `droppedEvents`）。
+
+产品口径：即便实现异步化，`PKTSTREAM` 仍是“调试期开、短期开、持续读”的通道，不提供“完整不丢”保证。
 
 ### 3.4 stream vNext：事件 envelope（`type`）与 suppressed 汇总（NOTICE）
 
@@ -88,6 +98,11 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - `type="dns"`：DNS 判决事件（DNSSTREAM）
   - `type="pkt"`：packet 判决事件（PKTSTREAM）
   - `type="notice"`：系统提示事件（例如 suppressed）
+- 线协议（vNext；为可靠解析与避免输出交织）：
+  - 输出采用 NDJSON：**一行一个 JSON 对象**，以 LF（`\n`）分隔；事件 JSON 不得包含换行；不再发送 NUL terminator。
+  - `pretty` 禁止：stream 不支持多行/缩进输出；若客户端请求 pretty（命令 `!` 后缀）必须报错并拒绝开启 stream。
+  - `*.STOP` 的 `OK` 以 JSON ack 返回：`{"ok": true}`；任何失败以 `{"error": {...}}` 返回（与错误模型一致），确保前端可统一按 NDJSON 解析。
+  - 进入 stream 模式后，禁止在同一连接上执行非 stream 控制命令（避免输出交织破坏解析）；如需查询/配置请另开控制连接。
 
 > 说明：stream 开启时优先正确性与可回溯性；字段增加不作为性能优化目标。
 
@@ -123,6 +138,13 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 }
 ```
 
+补充决策：反压/队列满导致丢事件时，也必须输出 `type="notice"` 的汇总提示（**不新增独立 metrics**）：
+
+- `notice="dropped"`：表示在该窗口内有逐条事件因反压被丢弃。
+- 频率：最多 1 条/秒/streamType（dns/pkt）。
+- 字段最小集合：`type/notice/stream/windowMs/droppedEvents`（其余可选）。
+- NOTICE 只实时；不进入 ring buffer，不参与 horizon 回放，不落盘。
+
 #### 3.4.3 stream vNext：最小事件字段集合（DNS/packet 同构心智模型）
 
 目标：在 stream 开启时，“单条事件可自解释”，同时字段集合固定、可控。
@@ -146,6 +168,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
       - `ALLOW_DEFAULT` 等“无明确规则命中”的路径可以不输出 `scope`
     - `ifaceKindBit`：接口类型 bit（与 `blockIface` 同口径：WiFi=1/Data=2/VPN=4/Unmanaged=128）
     - `interface`（name）仅用于可读性；**不得**作为唯一标识或规则匹配依据（以 `ifindex` 为准）
+    - `host`（可选）：若存在可解释的 host name（例如 reverse-dns 或其它映射结果）则一并输出；仅用于可读性/排障，**不得**作为唯一标识或仲裁依据
   - 输出：`accepted/reasonId`
   - 回溯：`ruleId?`、`wouldRuleId?`、`wouldDrop?`
   - Conntrack（可选、避免误导）：仅当该包实际参与 `ct.*` 维度匹配时输出 `ct{state,direction}`
@@ -154,6 +177,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - `notice="suppressed"` + `stream="dns|pkt"` + `windowMs`
   - `traffic{dns/rxp/rxb/txp/txb -> {allow,block}}`
   - `hint`
+  - `notice="dropped"` + `stream="dns|pkt"` + `windowMs` + `droppedEvents`
 
 #### 3.4.4 stream vNext：回放（horizon）与持久化（save/restore）策略
 
@@ -168,8 +192,22 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - **不做落盘 save/restore**：重启后自然清空；若前端需要持久化，应保持 stream 常开并自行落库。
 - stream 关闭时：
   - 不记录/不构造任何逐条事件与 ring buffer（避免热路径分配与锁开销）；仅保留常态 metrics。
+- `DNSSTREAM.STOP` / `PKTSTREAM.STOP`：
+  - 清空 ring buffer + pending queue（若有）；下次 `START` 视为全新 session（horizon 只回放本次开启期间的 ring）。
+- `DNSSTREAM.START` / `PKTSTREAM.START`（回放参数；不影响已有流）：
+  - 语法：`*.START [<horizonSec> [<minSize>]]`（单位：秒/条数）
+  - 参数仅影响“本次连接启动时的回放（replay）”，不得改变 ring 的保留策略，也不得影响已存在的其它连接/流。
+  - 默认：`horizonSec=0`、`minSize=0`（不回放历史，只看实时）。
+  - 同一连接重复 `*.START`：报 `STATE_CONFLICT`（严格拒绝；不影响已有流）。
+  - `*.START` 成功：不返回 `OK`（直接开始输出事件）。
+  - `*.STOP`：返回 `OK`，并且 **幂等**（未 started 时也返回 `OK`）。
+  - 回放选择规则（已确认；v1）：
+    - 回放集合 = “时间窗内事件” ∪ “最近 `minSize` 条事件”（两者取并集）。
+    - `horizonSec=0` 时仅按 `minSize` 回放；`0/0` 表示不回放。
+    - 若请求超出 ring 现存范围：尽力回放（最多回放 ring 中现存事件），不报错。
+- 性能红线（实现要求）：逐条事件输出必须异步化（hot path 只做有界 enqueue）；反压允许 drop，并通过 `type="notice"`（`notice="dropped"`）可定位。
 - horizon 默认值：建议默认 `0`（只看开启后的实时）；需要回放时由控制面显式传入 horizon。
-- `RESETALL` 必须清空 stream ring buffer（见 4.7.2）。
+- `RESETALL` 必须强制 stop 并断开 stream 连接，清空 ring buffer/queue（见 4.7.2）。
 
 ---
 
@@ -194,10 +232,11 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 目标：域名功能已完整，必须补上“默认可查”的归因与 counters，避免后置导致设计困难。
 
 - `policySource` 枚举与优先级：与现有 `App::blocked()` 分支顺序一一对应（不细到 ruleId/listId）。
+- `policySource` 对外命名（fusion 收敛口径；不做 alias/双写）：`CUSTOM_LIST_AUTHORIZED/BLOCKED`、`CUSTOM_RULE_AUTHORIZED/BLOCKED`、`DOMAIN_DEVICE_WIDE_AUTHORIZED/BLOCKED`、`MASK_FALLBACK`（历史 `CUSTOM_*WHITE/BLACK`、`GLOBAL_*` 仅视为内部实现名）。
 - 统计口径：**按 DNS 请求计数**（每次 DNS 判决更新一次）。
 - 明确：**先不考虑 ip-leak**（附加功能，不因小事大）。
 - 生命周期：since boot（进程内，不落盘）
-- 对外接口：`METRICS.DOMAIN.SOURCES*`（device-wide + per-app）
+- 对外接口：`METRICS.DOMAIN.SOURCES*`（device-wide + per-app（per-UID））
 
 权威文档：`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`（主规格：`openspec/specs/domain-policy-observability/spec.md`；历史 change：`openspec/changes/archive/2026-03-27-add-domain-policy-observability/`）。
 
@@ -254,7 +293,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 ### 4.5 Traffic（DNS + packet）轻量 counters：`METRICS.TRAFFIC*`
 
-目标：提供一套 **always-on（轻量）** 的 per-app 与 device-wide 流量 counters，覆盖 DNS + packet 两条腿，用于：
+目标：提供一套 **always-on（轻量）** 的 per-app（per-UID）与 device-wide 流量 counters，覆盖 DNS + packet 两条腿，用于：
 
 - “默认可查”的基础吞吐/命中统计（不会依赖 stream 或重型 stats）
 - stream 开启但某些 app 未 tracked 时的 suppressed 定位（3.4.2）
@@ -314,8 +353,10 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 ```
 
 - app selector（多用户语义）：
+  - 统一语法：`<uid>` 或 `<pkg> [USER <userId>]`（禁止 `<pkg> <userId>` 这种位置参数，避免 silent 选错与未来扩展冲突）。
   - INT（`<uid>`）：uid 本身已包含 userId（`uid/100000`），无需额外 `USER` 子句。
   - STR（`<pkg>`）：允许可选 `USER <userId>` 用于消歧。
+    - `<pkg>` 允许匹配 canonical `name` 或 `allNames`（别名）；若匹配到多个 app → 必须拒绝并要求 `<uid>` 或更明确输入。
     - 若未指定 `USER` 且存在多个 userId 下同名 package → 必须拒绝并要求指定 `USER`（避免 silent 选错；正确性优先）。
 
 - `METRICS.TRAFFIC.RESET` / `METRICS.TRAFFIC.RESET.APP ...`
@@ -324,7 +365,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 #### 4.5.3 实现约束（热路径）
 
 - traffic counters 必须是固定维度的 `atomic++(relaxed)`，不得复用现有 `StatsTPL/AppStats/DomainStats`（其包含 `shift()/localtime_r/mktime` + map 更新，非轻量）。
-- v1 建议实现为 **per-app 轻量 counters always-on**；device-wide `METRICS.TRAFFIC` 查询时汇总所有 app 的快照（避免热路径额外全局原子争用）。
+- v1 建议实现为 **per-app（per-UID）轻量 counters always-on**；device-wide `METRICS.TRAFFIC` 查询时汇总所有 app 的快照（避免热路径额外全局原子争用）。
   - 若未来需要进一步降低 `METRICS.TRAFFIC` 查询成本，可再引入可选的 device-wide sharded counters；但这会让热路径每次更新多一次（或多次）`atomic++`，属于 tradeoff。
 
 ### 4.6 Conntrack（L4）轻量 counters：`METRICS.CONNTRACK`
@@ -376,7 +417,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 以及既有：`METRICS.REASONS*`、`METRICS.DOMAIN.SOURCES*`、`IPRULES` runtime stats、`METRICS.PERF*`
 - 并且必须清理所有“观测状态”：
   - `tracked`：全部重置为 `false`
-  - stream：清空 `DNSSTREAM/PKTSTREAM` 的 ring buffer
+  - stream：强制 stop 并断开连接；清空 `DNSSTREAM/PKTSTREAM` 的 ring buffer/queue
   - 若实现中仍存在历史遗留的 stream 落盘文件（例如旧版 `dnsstream` save）：应同步删除，避免回放混入旧 schema 数据
 
 ---

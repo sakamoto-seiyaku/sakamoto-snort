@@ -1,6 +1,6 @@
 # Domain + IP Fusion Checklist
 
-更新时间：2026-04-11  
+更新时间：2026-04-14  
 状态：融合纲领（现状快照 + 目标状态 + 实现拆分）
 
 ---
@@ -17,6 +17,7 @@
 
 - `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`：本 checklist（主入口）
 - `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`：可观测性工作决策（stream vNext、`tracked` 统一语义、`METRICS.TRAFFIC*`、`METRICS.CONNTRACK` 等）
+- `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`：可观测性落地任务清单（从工作结论提炼为 change 切片）
 
 ---
 
@@ -35,7 +36,7 @@
 ```text
 IFACE_BLOCK
   -> IPRULES (IPv4 only)
-  -> legacy domain path
+  -> legacy domain path (DNS-learned Domain↔IP bridge)
   -> BLOCKIPLEAKS
 ```
 
@@ -118,7 +119,7 @@ IFACE_BLOCK
 
 补充说明：
 
-- DomainPolicy 的 verdict 是**域名语义判决/观测**；它常用于 DNS 侧观测，也可能通过 legacy bridge 影响 packet verdict。  
+- DomainPolicy 的 verdict 是**域名语义判决/观测**；它常用于 DNS 侧观测。packet 侧存在 legacy bridge（DNS-learned Domain↔IP 映射）可在特定开关下影响 packet verdict，但本轮 fusion 将其视为历史模块冻结（见 3.6）。  
 
 #### 2.1.3 packet policy / IPRULES（IP 腿）
 
@@ -126,8 +127,7 @@ IFACE_BLOCK
 
 1. **`IFACE_BLOCK`（per-app packet hard gate）**：命中即 drop  
 2. **`IPRULES`（per-UID IPv4 L3/L4）**：若启用且命中，按引擎决策 allow/block  
-3. **legacy DomainPolicy bridge**：若能解析到 `host->domain()`，则可使用 DomainPolicy 结果影响 verdict  
-4. **`BLOCKIPLEAKS` overlay**：对 legacy domain verdict 的附加裁决  
+3. **默认允许（`ALLOW_DEFAULT`）**：未命中前述规则时（本轮 fusion 不把 legacy bridge / `BLOCKIPLEAKS` 纳入统一仲裁模型）  
 
 关键 gate/template 语义（用户理解口径）：
 
@@ -138,6 +138,7 @@ IFACE_BLOCK
 补充说明：
 
 - 当前目标状态仍**不引入 device-wide IP rules**（保持 IP 腿的 scope 边界清晰；规则复用通过“规则组（配置层）”完成，见 2.3）。  
+- `BLOCKIPLEAKS` / `ip-leak` 与 legacy bridge 属于历史模块：本轮 fusion 冻结不动、默认保持关闭（见 3.6）；未来若要保留/移除/并入仲裁，将另开章讨论。  
 
 ### 2.2 匹配条件集合（两条腿不强行对齐）
 
@@ -208,10 +209,12 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
     - `IP_RULE_*` → `APP|DEVICE_WIDE`（取决于命中规则来源；未来支持 `IPRULES.GLOBAL.*` 时区分）
     - `ALLOW_DEFAULT` 等“无明确规则命中”的路径可以不输出 `scope`
   - `PKTSTREAM` 的接口维度建议输出 `ifindex`（唯一标识）与 `ifaceKindBit`（WiFi/Data/VPN/Unmanaged），`interface(name)` 仅作可读性补充（不得作为唯一标识）。
+  - `host`（可选）：若存在可解释的 host name（例如 reverse-dns 或其它映射结果）则一并输出；仅用于可读性/排障（不得作为唯一标识或仲裁依据）。
   - `policySource` 为 coarse attribution（不做 per-rule/listId 归因），但必须与 `METRICS.DOMAIN.SOURCES*` 的枚举与优先级严格一致。
+    - `policySource` 对外枚举（vNext；统一 authorized/blocked 口径）：`CUSTOM_LIST_AUTHORIZED/BLOCKED`、`CUSTOM_RULE_AUTHORIZED/BLOCKED`、`DOMAIN_DEVICE_WIDE_AUTHORIZED/BLOCKED`、`MASK_FALLBACK`（不做 alias/双写）。
   - `useCustomList` 必须在事件里显式输出，用于消除 `policySource=MASK_FALLBACK` 的歧义（`CUSTOMLIST.OFF` vs custom 分支未命中）。
   - `scope`（统一心智模型；跨 DNS/packet 通用宽度）：`APP` / `DEVICE_WIDE` / `FALLBACK`。
-    - 派生规则：`CUSTOM_*` → `APP`；`GLOBAL_*`（domain-only device-wide）→ `DEVICE_WIDE`；`MASK_FALLBACK` → `FALLBACK`。
+    - 派生规则：`CUSTOM_LIST_*`/`CUSTOM_RULE_*` → `APP`；`DOMAIN_DEVICE_WIDE_*`（domain-only device-wide；当前代码仍名为 `GLOBAL_*`）→ `DEVICE_WIDE`；`MASK_FALLBACK` → `FALLBACK`。
   - `getips` 必须在事件里显式输出：它是 DNS 判决链路的重要分岔（是否进入 IP 映射读回/写回路径），是排障“DNS verdict 正确但后续包未绑定域名”的关键线索。
   - **回溯原则（DNSSTREAM）**：事件字段必须是“判决时快照”，避免打印时读取导致漂移；至少应快照 `policySource/useCustomList/scope/getips/domMask/appMask`。
 
@@ -220,8 +223,42 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 目标：控制面命令与 HELP/接口文档能直接表达第 2 节的统一心智模型，避免“名字像全局、实际不是全局”的误导。
 
 - 禁止在对外文档中使用裸 `global`；必须写清层名：`device-wide DomainPolicy ...` / `per-app (UID-scoped) ...` / `packet policy ...`。  
-- `DOMAIN_DEVICE_WIDE_*`（若仍存在）必须被明确为 **domain-only device-wide**，不得以任何形式被解读为“全系统全局”。  
+- `policySource` / `METRICS.DOMAIN.SOURCES*` 对外枚举统一收敛为 `AUTHORIZED/BLOCKED` 叙事（禁止 white/black/global；不做 alias/双写）：
+  - `CUSTOM_LIST_AUTHORIZED` / `CUSTOM_LIST_BLOCKED`
+  - `CUSTOM_RULE_AUTHORIZED` / `CUSTOM_RULE_BLOCKED`
+  - `DOMAIN_DEVICE_WIDE_AUTHORIZED` / `DOMAIN_DEVICE_WIDE_BLOCKED`（domain-only device-wide；当前代码仍名为 `GLOBAL_*`）
+  - `MASK_FALLBACK`
 - IP 规则组是配置概念：后端控制面仍以 `<uid>` 的 `IPRULES.*` 为准；规则组冲突/去重在 apply 语义中体现（2.3.3）。  
+- 接口字段/枚举命名风格（已确认）：
+  - JSON keys：统一 `camelCase`（例如 `userId/reasonId/policySource/ifaceKindBit/droppedEvents`）。
+  - enum values：
+    - “分类/归因”类：`scope/policySource/reasonId/error.code` 使用大写（如 `APP/IFACE_BLOCK/SELECTOR_AMBIGUOUS`）。
+    - “事件 envelope”类：`type/notice` 使用小写（如 `dns|pkt|notice`、`suppressed|dropped`）。
+    - metrics 维度 key：保持小写（如 `dns/rxp/rxb/txp/txb`）。
+- app selector（多用户语义；已确认）：
+  - 统一语法：所有“按 app 操作”的命令统一使用 `<uid>` 或 `<pkg> [USER <userId>]`（禁止 `<pkg> <userId>` 这种位置参数，避免 silent 选错与未来扩展冲突）。
+  - 本文中 `per-app` **等价于 per-UID**（uid-scoped app instance）：同一 package 在不同 userId 下视为不同 app（分别统计/分别 state/分别规则）。
+  - INT（`<uid>`）：uid 本身已包含 userId（`uid/100000`）；因此 `<uid>` 选择是跨用户唯一的。
+  - STR（`<pkg>`）：
+    - 允许可选 `USER <userId>` 用于消歧。
+    - 若未指定 `USER` 且存在多个 userId 下同名 package → 必须拒绝并要求指定 `USER`（或直接改用 `<uid>`）。
+    - `<pkg>` 允许匹配 canonical `name` 或 `allNames`（别名）；若匹配到多个 app → 必须拒绝并要求 `<uid>` 或更明确输入。
+  - 解析策略（严格拒绝）：
+    - selector 无法唯一 resolve（不存在/歧义/userId 不存在）→ **一律拒绝**；不做 best-effort，不做隐式创建/占位。
+    - 本轮先锁“拒绝策略”；边界异常在测试暴露后再补齐（但不得引入 silent 选错）。
+  - 输出回显（强制；用于快速回溯）：凡是 app 相关 JSON 输出，必须回显 `uid/userId/app(canonical pkg)`。
+    - 若输入命中 alias，可选回显 `matchedName`（原输入）以便解释；但主展示/主键仍是 canonical `app`。
+  - 错误形态（必须可修复；已确认）：
+    - 失败输出一律为：`{"error": {...}}`（成功输出保持“每命令各自 shape”，不引入统一 success envelope）。
+    - `error` 最小字段：`code`（string enum）+ `message`；可选 `hint`、`candidates`、`matchedName`。
+    - `candidates[]` item（歧义时优先返回，可直接用 `<uid>`）：`{uid, userId, app}`（其中 `app` 为 canonical pkg）。
+    - v1 `code`（允许未来新增，不得改名/删值）：
+      - 通用：`UNKNOWN_COMMAND` / `SYNTAX_ERROR` / `MISSING_ARGUMENT` / `INVALID_ARGUMENT`
+      - selector：`SELECTOR_NOT_FOUND` / `SELECTOR_AMBIGUOUS`
+      - 状态：`STATE_CONFLICT`
+      - 兜底：`INTERNAL_ERROR`
+  - 不提供 userId 级批量能力：不新增“对某个 userId 下所有 app 批量 track/reset/apply”的命令；需要批量由前端枚举并逐个调用（可观测、可回滚）。
+  - 不允许裸 `USER <userId>`（无 app）过滤语法：若未来需要“按 userId 列表/查询”，应以独立命令提供，而不是复用 app selector。
 
 ### 2.6 state / counters / lifecycle（统一边界）
 
@@ -242,8 +279,18 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 目标：fusion 不得把“可选成本”变成“每包必经成本”，并避免引入新的并发判决窗口不一致。
 
-- 热路径不得新增磁盘/网络 I/O，不得长时间持锁；可选逻辑必须保持 gating。  
-- `PacketListener phase-1/phase-2` 的边界必须保持：锁内只做纯判决与轻量计数。  
+- 本轮收敛结论（ACA）：
+  - **A：锁内只做纯判决**（NFQUEUE hot path / `mutexListeners` shared lock）  
+    - 只允许：纯判决、固定维度 atomic counters、**有界 enqueue**（后续异步处理）  
+    - 禁止：任何磁盘/网络 I/O、socket write、大 JSON 构造/pretty-format、无界分配、长时持锁  
+  - **C：stream I/O 必须异步化**  
+    - hot path 只 enqueue；由独立 writer 线程（或等价机制）写 socket  
+    - 出现反压时允许 drop；必须通过 `type="notice"` 显式提示“事件被丢弃/反压中”（不新增独立 metrics；最小字段：`notice="dropped"` + `droppedEvents`）  
+    - 目标：stream 不得影响 verdict latency，也不得阻塞 `RESETALL`（独占锁路径）  
+  - **A：gate 必须是真 gate**  
+    - stream 关闭时：不构造逐条事件、不维护 ring buffer（仅保留常态 metrics）  
+    - app 未 `tracked` 时：不输出逐条事件；按 stream vNext 的 suppressed NOTICE 定位（见 observability working decisions）  
+- `PacketListener phase-1/phase-2` 的边界必须保持：锁内只做纯判决与轻量计数；任何解析、I/O、重构造都必须锁外完成。  
 - 控制面更新与流量并发时，对外承诺必须明确（严格/最终一致/best-effort），避免接口语义含糊。  
 
 ---
@@ -255,7 +302,13 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 ### 3.1 命名与文档收敛（低风险；先做）
 
 - 将对外文档/HELP 中的裸 `global` 全部替换为带层名表述。  
-- 将 `GLOBAL_*` 改名为 `DOMAIN_DEVICE_WIDE_*`（**不做 alias/双写**：当前未发正式版，不承担向后兼容包袱）。  
+- 将域名侧 `policySource` 对外枚举统一改名为 `AUTHORIZED/BLOCKED` 叙事（**不做 alias/双写**：当前未发正式版，不承担向后兼容包袱）：
+  - `CUSTOM_WHITELIST` → `CUSTOM_LIST_AUTHORIZED`
+  - `CUSTOM_BLACKLIST` → `CUSTOM_LIST_BLOCKED`
+  - `CUSTOM_RULE_WHITE` → `CUSTOM_RULE_AUTHORIZED`
+  - `CUSTOM_RULE_BLACK` → `CUSTOM_RULE_BLOCKED`
+  - `GLOBAL_AUTHORIZED` → `DOMAIN_DEVICE_WIDE_AUTHORIZED`（domain-only device-wide）
+  - `GLOBAL_BLOCKED` → `DOMAIN_DEVICE_WIDE_BLOCKED`（domain-only device-wide）
 - 对齐 `docs/IMPLEMENTATION_ROADMAP.md`、`openspec/project.md`、各 `docs/decisions/*`：确保“现状/目标/已落地能力”不互相打架。  
 
 ### 3.2 IP 规则组“配置展开”语义补齐（确定性；可能涉及后端约束）
@@ -270,6 +323,8 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - 固化一套对外解释结构：最终传输裁决（packet）与语义观测（DNS）如何同时呈现。  
 - 对齐 `policySource` / `reasonId` / `ruleId` / `wouldRuleId` 的叙事：哪些是最终裁决依据、哪些只是来源/候选信息。  
 - `DNSSTREAM` vNext：补齐 `policySource/useCustomList/scope` + “判决时快照”字段口径；允许升级时丢弃历史 `dnsstream` 缓存文件（调试型产物不做严格兼容）。  
+- stream pipeline 重构（见 2.8）：hot path / `mutexListeners` 锁内只做有界 enqueue；由独立 writer 线程异步写 socket；反压允许 drop，且必须通过 `type="notice"` 可定位。  
+- 落地 task list：见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`（含 `METRICS.TRAFFIC*`/`METRICS.CONNTRACK`、stream vNext、reset/selector/测试与推荐切片）。  
 
 ### 3.4 控制面与生命周期（reset/save/restore）
 
@@ -297,18 +352,36 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 #### 3.4.3 Streams（DNSSTREAM/PKTSTREAM）生命周期（已确认）
 
 - 不做兼容：stream 是调试通道；允许升级时丢弃历史缓存文件。
-- `type="notice"`（suppressed）只实时，不进入 ring，不参与 horizon，不落盘。
+- `type="notice"`（`notice="suppressed"|"dropped"`）只实时，不进入 ring，不参与 horizon，不落盘。
+- 线协议（vNext；为可靠解析与避免输出交织）：
+  - 输出采用 NDJSON：**一行一个 JSON 对象**，以 LF（`\n`）分隔；事件 JSON 不得包含换行；不再发送 NUL terminator。
+  - `pretty` 禁止：stream 不支持多行/缩进输出；若客户端请求 pretty（命令 `!` 后缀）必须报错并拒绝开启 stream。
+  - `*.STOP` 的 `OK` 以 JSON ack 返回：`{"ok": true}`；任何失败以 `{"error": {...}}` 返回（与错误模型一致），确保前端可统一按 NDJSON 解析。
+  - 进入 stream 模式后，禁止在同一连接上执行非 stream 控制命令（避免输出交织破坏解析）；如需查询/配置请另开控制连接。
+- `DNSSTREAM.STOP` / `PKTSTREAM.STOP`：清空 ring buffer + pending queue（若有）；下次 `START` 视为全新 session。
+- `DNSSTREAM.START` / `PKTSTREAM.START`（回放参数；不影响已有流）：
+  - 语法：`*.START [<horizonSec> [<minSize>]]`
+  - 参数仅影响“本次连接启动时的回放（replay）”，不得改变 ring 的保留策略，也不得影响已存在的其它连接/流。
+  - 默认：`horizonSec=0`、`minSize=0`（不回放历史，只看实时）。
+  - 同一连接重复 `*.START`：报 `STATE_CONFLICT`（严格拒绝；不影响已有流）。
+  - `*.START` 成功：不返回 `OK`（直接开始输出事件）。
+  - `*.STOP`：返回 `OK`，并且 **幂等**（未 started 时也返回 `OK`）。
+  - 回放选择规则（已确认；v1）：
+    - 回放集合 = “时间窗内事件” ∪ “最近 `minSize` 条事件”（两者取并集）。
+    - `horizonSec=0` 时仅按 `minSize` 回放；`0/0` 表示不回放。
+    - 若请求超出 ring 现存范围：尽力回放（最多回放 ring 中现存事件），不报错。
 - `type="dns"` / `type="pkt"`：
   - ring buffer **只在 stream 开启期间**维护；stream 关闭时不记录/不构造事件（避免热路径分配与锁开销）。
   - horizon 默认建议为 `0`（只看开启后的实时）；需要回放时由控制面显式传入。
-- `RESETALL` 必须清空 stream ring buffer；并删除历史遗留的落盘 stream 文件（若仍存在）。
+- 性能红线（见 2.8）：逐条事件不得在 `mutexListeners` 锁内同步写 socket；锁内只允许有界 enqueue；由独立 writer 线程（或等价机制）完成序列化与写 socket；反压允许 drop，并通过 `type="notice"` 可定位。
+- `RESETALL` 必须强制停止并断开所有 stream 连接（控制端 1:1），并清空 ring buffer/queue；同时删除历史遗留的落盘 stream 文件（若仍存在）。
 
 #### 3.4.4 reset 语义（边界必须锁死）
 
 - `RESETALL`：清空**所有**可观测性相关状态
   - 轻量 counters：`REASONS / DOMAIN.SOURCES* / PERF / IPRULES per-rule stats / TRAFFIC / CONNTRACK`
   - 观测开关：`tracked=false`
-  - streams：清空 ring buffer（dns/pkt）
+  - streams：强制 stop 并断开连接；清空 ring buffer/queue（dns/pkt）
   - 以及既有：清空 settings/规则/列表/域名/统计并持久化（以 `RESETALL` 的既有契约为准）
 - layer-specific reset（例如 `METRICS.DOMAIN.SOURCES.RESET`）：
   - 只清其对应 counters，不应修改任何 policy 开关、tracked 或 stream 状态。
@@ -318,6 +391,16 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - `BLOCK=0`：dataplane bypass；metrics/counters 不更新（与现状一致）。
 - `IPRULES 0→1`：不清零规则集合；per-rule stats 的清零规则按 IPRULES 既有契约执行（UPDATE/ENABLE 时清零）。
 - `PERFMETRICS 0→1`：自动清零 perf 聚合；其余幂等不清零（保持既有契约）。
+
+#### 3.4.6 save/restore（policy）持久化 key（多用户；已确认）
+
+- `per-app` 的 policy（规则/开关）持久化 key 以 `pkg+userId` 为准；`uid` 仅作为运行时 resolve 结果（可选作为 hint/审计字段，但不得作为主键）。
+- 持久化版本化（已确认）：
+  - 落盘 payload 必须包含 `schemaVersion`（数字）；不认识的版本不得尝试 restore（避免读错导致 silent corruption），应以可定位错误记录/上报，并保持基线不变。
+- restore（已确认；v1）：
+  - **逐条 restore**：单条失败不影响其它条目；失败条目保持默认/原值，并返回/记录可定位的错误信息（汇总错误列表）。
+  - orphan policy（`pkg+userId` 当前不存在/已卸载）：**直接清理该条持久化记录**（不允许出现“policy 存在但 app 不存在”的悬挂状态）。
+  - 仍禁止隐式创建/占位 app：restore 不得触发创建匿名 app 或写入新的 app 状态。
 
 ### 3.5 测试补齐（以真机闭环为最终验收；本阶段仅 IP 线）
 
@@ -334,7 +417,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 #### 3.5.1 host 单测（优先覆盖确定性与边界）
 
 - DomainPolicy：
-  - `DomainPolicySource` 枚举/顺序/快照稳定（sources keys 固定 7 个）（保留既有；本阶段不扩写、不作为 gate）
+  - `DomainPolicySource` 枚举/顺序/快照稳定（sources keys 固定 7 个）（本阶段只做命名收敛见 3.1，不扩写、不作为 gate）
 - IPRULES：
   - apply 冲突拒绝（同一匹配条件集合、字段不同必须拒绝）
   - per-rule stats 清零边界（UPDATE/ENABLE）
@@ -363,7 +446,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ### 3.6 延后项（明确不夹带进本轮 fusion）
 
-- `ip-leak` 重新收敛到统一仲裁之前，不在本轮先行改语义。  
+- `BLOCKIPLEAKS` / `ip-leak`（以及其依赖的 legacy bridge）：本轮默认保持关闭并冻结不动；在重新收敛到统一仲裁之前，不改语义/优先级/接口口径。  
 - device-wide IP rules：除非出现明确产品需求与性能预算，否则保持不引入。  
 - IPv6、域名 per-rule stats、更多 L4/L7 维度：按各自主线单独推进。  
 
@@ -385,7 +468,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ### 4.2 命名与术语收敛（对外口径 + 内部枚举）
 
-- 统一“全局/设备级/应用级”的术语与命名：禁止裸 `global`；把 `GLOBAL_*` 明确改成 `DOMAIN_DEVICE_WIDE_*`（以及对应的 policySource/HELP/文档口径）。
+- 统一“全局/设备级/应用级”的术语与命名：禁止裸 `global`；明确 DomainPolicy 的 device-wide（domain-only）层命名（避免被误读为“全系统全局”）。
 - 把 gate/template 的对外口径锁死并写进权威文档：`BLOCKMASKDEF/BLOCKIFACEDEF` 仅模板、`CUSTOMLIST.OFF` 的语义、`BLOCK/IPRULES/BLOCKIPLEAKS` 等开关的“是否参与判决/是否计数/是否输出”边界。
 - 明确 “scope” 这组枚举在 DNS/packet 两条腿的统一取值与派生规则（`APP/DEVICE_WIDE/FALLBACK`），以及它是否进入 metrics/stream/interface spec。
 
@@ -406,7 +489,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ### 4.5 可观测性落地清单（从工作决策 → 实现任务）
 
-- 把 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md` 中的 vNext 决策，提炼成“需要实现/需要改动/需要补测试/需要刷新接口文档”的 task list。
+- 把 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md` 中的 vNext 决策，提炼成“需要实现/需要改动/需要补测试/需要刷新接口文档”的 task list（见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`）。
 - 特别包括但不限于：`DNSSTREAM/PKTSTREAM` 的 `type` envelope、suppressed notice、`tracked` 统一语义、`METRICS.TRAFFIC*`、`METRICS.CONNTRACK`、以及与 `METRICS.REASONS`/`METRICS.DOMAIN.SOURCES*` 的跨层叙事对齐。
 
 ### 4.6 状态、持久化与 reset 边界（save/restore/versioning）
@@ -417,18 +500,94 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ### 4.7 多用户与 selector 语义（uid/pkg/userId）
 
-- 统一所有控制面命令对 `<uid|pkg> [USER <userId>]` 的选择器语义（含歧义拒绝策略），确保 metrics/stream/track 等命令的多用户行为一致。
-- 明确“policy 保存/恢复”“tracked 默认值”“per-app metrics”在多用户场景下的边界与验收口径（避免单用户假设渗漏进对外契约）。
+- 已收敛（不在本节重复）：selector 语法/歧义拒绝/严格拒绝策略/输出回显/错误提示/别名展示/不做批量/不允许裸 `USER`，见 2.5；save/restore key 见 3.4.6。
+- 延后到 4.8（接口契约细节）：
+  - selector 错误的 `code/hint/candidates` 字段名与枚举（保持可修复；优先推荐 `<uid>`）。
+  - restore 的返回 JSON shape（错误汇总列表字段名等；行为已定为“逐条 restore”，见 3.4.6）。
 
 ### 4.8 接口与对外契约（control plane / schema）
 
-- 需要把第 2.5/3.4 中的口径，进一步收敛成“可直接写进 `docs/INTERFACE_SPECIFICATION.md` 的契约”：命令名、字段名、JSON shape、reset/save/restore 边界、兼容策略（是否允许 alias）。
-- 特别关注：`DNSSTREAM/PKTSTREAM` vNext schema、`tracked` 语义、`METRICS.TRAFFIC*`/`METRICS.CONNTRACK` 等新增接口如何进入权威接口文档。
+目标：把第 2.5/3.4 等已收敛口径，写成可落地的“接口契约”（命令名/字段名/JSON shape/错误形态/生命周期/兼容策略）。
+
+#### 4.8.1 契约边界与兼容承诺
+
+- 哪些接口/字段是强契约（必须长期稳定），哪些属于 debug 通道允许演进（例如 stream 缓存文件可丢弃）。
+- “不做 alias/双写”的范围与例外（本轮原则：默认无 alias）。
+
+#### 4.8.2 命令语法与 selector（规范化）
+
+- `<uid>` vs `<pkg> [USER <userId>]`（语义已定在 2.5）；在接口契约中补齐：关键字保留、大小写、空格、引号/转义（若需要）。
+- 所有命令是否统一支持 `<uid>` 与 `<pkg>...`（或列出例外清单）。
+
+#### 4.8.3 通用输出约定（identity echo + envelope）
+
+- per-app 输出强制回显 `uid/userId/app(canonical)`（已定在 2.5）；是否补 `matchedName` 等辅助字段。
+- 是否引入统一的顶层 `version` / `schema` 字段（尤其 stream vNext）。
+
+#### 4.8.4 错误模型（必须可修复）
+
+- selector/语法/状态错误的 `code/message/hint/candidates` 字段名与枚举。
+- 歧义时 candidates 的最小信息集合（优先 `<uid>`）。
+
+#### 4.8.5 枚举与命名表（字段名/枚举的“单一真相”）
+
+- `scope`、`policySource`、`reasonId`、`notice`、`ifaceKindBit` 等：最终对外名称、取值集合、是否允许新增。
+- rename 相关：`GLOBAL_*` → `DOMAIN_DEVICE_WIDE_*` 的对外兼容策略（本轮无 alias）。
+
+#### 4.8.6 Streams（DNSSTREAM/PKTSTREAM）契约
+
+- 命令：`START/STOP`、horizon 参数、连接/断连、`RESETALL` 影响（3.4 已定部分，补齐接口字段）。
+- schema vNext：`type=dns|pkt|notice`，`notice=suppressed|dropped`，最小字段集合与快照原则。
+- backpressure/drop 的对外表现（notice 字段）。
+
+#### 4.8.7 Metrics 契约
+
+- `METRICS.REASONS` / `METRICS.DOMAIN.SOURCES*` / `METRICS.TRAFFIC*` / `METRICS.CONNTRACK` / `METRICS.PERF*`：
+  - 命令名、JSON shape、gating（`BLOCK=0` 不更新）、reset 语义与返回字段。
+
+#### 4.8.8 Reset / save / restore 契约
+
+- `RESETALL` vs layer reset 的对外效果清单（3.4 已定部分，补齐“接口可观察”）。
+- save/restore：key/批量失败策略/orphan 清理/schemaVersion 已定在 3.4.6；仅补齐接口可观察与返回 JSON shape。
+
+#### 4.8.9 落盘位置与同步策略（当前只占坑）
+
+- 在本目录形成 working contract，后续再同步到 `docs/INTERFACE_SPECIFICATION.md` 与 `openspec/specs/*`（不在本轮讨论中外溢改动）。
 
 ### 4.9 配置层/前端职责边界（rule group 展开、冲突归因、错误形态）
 
-- IP 规则组是配置概念：需要把“去重/冲突拒绝/错误归因”的责任边界讲清楚（前端如何定位冲突来自哪个 group；后端错误返回的最小信息集合）。
-- Domain 侧 device‑wide/per‑app 规则组与 blocking lists 的“复用叙事”需要与 IP 侧规则组的叙事对齐（用户视角同构、实现允许不同）。
+#### 4.9.1 总体边界（必须）
+
+- IP 规则组是**配置层概念**：后端不持久化 group/profile；对后端来说，唯一可执行对象仍是每个 app（per‑UID）的 IPRULES 规则集合（以及其 `ruleId/stats`）。
+- 一切“仲裁/优先级”必须可解释且确定：不得依赖“下发顺序/遍历顺序/未定义默认值”产生隐式结果；需要优先级时必须显式表达（例如 `priority/action/enforce/log/...`）。
+- 冲突不得被运行期“隐式处理”：只要出现“同一匹配条件集合但字段不同”的情况，必须在下发阶段被拒绝（2.3.3/3.2 已定），否则前端无法解释“为什么生效的是 A 而不是 B”。
+
+#### 4.9.2 前端职责（必须）
+
+- 规则组展开：把多个 rule group + app 本地规则展开成**最终规则清单**再下发；展开结果要可重复（同输入得到同输出）。
+- 去重：完全相同规则允许合并/去重；去重后仍需保留“来源映射”（用于 UI 回显与冲突定位）。
+- 归因映射（前后端提前约定）：前端必须能把“后端返回的冲突/错误”定位回 UI 中的某个 group 与某条 rule。
+  - 推荐：为每条下发规则生成稳定的 `clientRuleId`（或等价 source token），并在下发/回显/错误中贯穿；否则只能靠规则内容反查，容易歧义且成本高。
+- 下发事务语义必须清晰：要么后端提供“原子 replace/apply”，要么前端负责回滚/重试；**禁止**出现“半更新成功”的持久化状态污染下一次下发。
+
+#### 4.9.3 后端职责（必须）
+
+- 冲突检测：后端必须以“归一化 matchKey”（由 match 维度字段组成）检测冲突，并在冲突发生时拒绝下发（不得 silent accept）。
+- 错误必须可修复：错误信息要能指导前端“如何改对”（例如哪两条规则冲突、差异在哪些字段、建议删除/合并/调整）。
+- 输出必须最小但可定位：后端不认识 rule group，但必须返回足够信息让前端映射回 group（依赖 4.9.2 的约定）。
+
+#### 4.9.4 冲突错误形态（需要收敛成接口契约）
+
+- `error.code` 取值（复用 `INVALID_ARGUMENT` 还是新增枚举）与字段名（例如 `conflicts[]`）需要提前锁死。
+- `conflicts[]` 最小字段建议包含：
+  - `matchKey`（可打印/可复现的归一化匹配条件集合）
+  - `rules[]`（至少 2 条）：每条包含 `clientRuleId?`（若存在）、以及能解释差异的关键字段（`action/priority/enforce/log/...`）。
+- 列表上限与截断：需要一个固定上限（例如最多返回 20 个冲突）；若截断必须明确 `truncated=true`（避免前端误以为只存在这些冲突）。
+
+#### 4.9.5 与 Domain 侧“复用叙事”对齐（用户视角）
+
+- Domain 的 device‑wide/per‑app custom 与 blocking lists 在实现上是后端原生对象；IP 的 rule group 则是配置展开。但对用户/前端呈现，应统一为“可复用的规则集合 + app 本地覆盖”的同构心智模型。
+- 当 Domain 与 IP 同时影响同一连接的最终 allow/drop 时，前端需要能分别解释“DomainPolicy 来源”与“packet 最终 verdict”而不互相打架（与 2.4/3.3 叙事一致）。
 
 ### 4.10 基础数据结构与代码复用（后端实现骨架）
 
