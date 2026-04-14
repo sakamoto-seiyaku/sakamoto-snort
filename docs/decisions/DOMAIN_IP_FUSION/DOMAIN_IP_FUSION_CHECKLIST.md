@@ -18,6 +18,7 @@
 - `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`：本 checklist（主入口）
 - `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`：可观测性工作决策（stream vNext、`tracked` 统一语义、`METRICS.TRAFFIC*`、`METRICS.CONNTRACK` 等）
 - `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`：可观测性落地任务清单（从工作结论提炼为 change 切片）
+- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`：IP 规则组/原子 apply 契约（`matchKey/clientRuleId`、冲突错误 shape、`IPRULES.PRINT` 回显）
 
 ---
 
@@ -187,8 +188,9 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 - app 引用多个 IP 规则组时，最终都会展开成同一份 `<uid>` 的 `IPRULES` 规则集。  
 - **允许去重**：完全相同的规则允许合并/去重。  
-- **冲突拒绝 apply（已确认）**：只要出现两条规则的**匹配条件集合相同**，但**任意字段不同** → 直接拒绝 apply（不进入运行期仲裁）。  
-  - 这条规则的目标是：避免出现“看似同一条规则，但不同来源给了不同 action/priority/归因字段”的隐式仲裁。  
+- **冲突拒绝 apply（已确认）**：同一 `<uid>` 的 apply payload 内，**匹配条件集合（`matchKey`）不允许重复**；一旦重复必须拒绝 apply（不进入运行期仲裁）。  
+  - 目标：避免“同一匹配集合存在多条规则”的隐式仲裁/归因歧义（action/priority/enforce/log 乃至来源 token 不一致都会导致不可解释）。  
+- 原子 apply（路线 1，强一致）、`matchKey/clientRuleId` 与冲突错误契约：见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
 
 统计口径（同一决议的后半句）：
 
@@ -257,6 +259,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
       - selector：`SELECTOR_NOT_FOUND` / `SELECTOR_AMBIGUOUS`
       - 状态：`STATE_CONFLICT`
       - 兜底：`INTERNAL_ERROR`
+    - `INVALID_ARGUMENT` 在冲突类场景下允许携带结构化详情字段（例如 `conflicts[]`），用于前端定位问题；该 shape 的权威约定见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
   - 不提供 userId 级批量能力：不新增“对某个 userId 下所有 app 批量 track/reset/apply”的命令；需要批量由前端枚举并逐个调用（可观测、可回滚）。
   - 不允许裸 `USER <userId>`（无 app）过滤语法：若未来需要“按 userId 列表/查询”，应以独立命令提供，而不是复用 app selector。
 
@@ -315,8 +318,9 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 - 明确并实现 2.3.3 的 apply 语义：  
   - 完全相同规则可去重；  
-  - 同一匹配条件集合、任意字段不同 → 拒绝 apply（必须有清晰错误原因，便于前端定位冲突来源）。  
+  - 同一 `<uid>` 的 apply payload 内 `matchKey` 不允许重复；一旦重复必须拒绝 apply（必须有清晰错误原因，便于前端定位冲突来源）。  
 - 统计先维持 per-app；不引入 group-level stats。  
+- 原子 apply（路线 1）与前后端约定（`matchKey/clientRuleId`、冲突错误 shape、`IPRULES.PRINT` 回显）：见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
 
 ### 3.3 可观测性对齐（跨层解释）
 
@@ -554,40 +558,11 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 - 在本目录形成 working contract，后续再同步到 `docs/INTERFACE_SPECIFICATION.md` 与 `openspec/specs/*`（不在本轮讨论中外溢改动）。
 
-### 4.9 配置层/前端职责边界（rule group 展开、冲突归因、错误形态）
+### 4.9 配置层/前端职责边界（已收敛；此处仅保留索引）
 
-#### 4.9.1 总体边界（必须）
+该话题已从“待讨论章节”迁移为可实现契约，权威约定见：
 
-- IP 规则组是**配置层概念**：后端不持久化 group/profile；对后端来说，唯一可执行对象仍是每个 app（per‑UID）的 IPRULES 规则集合（以及其 `ruleId/stats`）。
-- 一切“仲裁/优先级”必须可解释且确定：不得依赖“下发顺序/遍历顺序/未定义默认值”产生隐式结果；需要优先级时必须显式表达（例如 `priority/action/enforce/log/...`）。
-- 冲突不得被运行期“隐式处理”：只要出现“同一匹配条件集合但字段不同”的情况，必须在下发阶段被拒绝（2.3.3/3.2 已定），否则前端无法解释“为什么生效的是 A 而不是 B”。
-
-#### 4.9.2 前端职责（必须）
-
-- 规则组展开：把多个 rule group + app 本地规则展开成**最终规则清单**再下发；展开结果要可重复（同输入得到同输出）。
-- 去重：完全相同规则允许合并/去重；去重后仍需保留“来源映射”（用于 UI 回显与冲突定位）。
-- 归因映射（前后端提前约定）：前端必须能把“后端返回的冲突/错误”定位回 UI 中的某个 group 与某条 rule。
-  - 推荐：为每条下发规则生成稳定的 `clientRuleId`（或等价 source token），并在下发/回显/错误中贯穿；否则只能靠规则内容反查，容易歧义且成本高。
-- 下发事务语义必须清晰：要么后端提供“原子 replace/apply”，要么前端负责回滚/重试；**禁止**出现“半更新成功”的持久化状态污染下一次下发。
-
-#### 4.9.3 后端职责（必须）
-
-- 冲突检测：后端必须以“归一化 matchKey”（由 match 维度字段组成）检测冲突，并在冲突发生时拒绝下发（不得 silent accept）。
-- 错误必须可修复：错误信息要能指导前端“如何改对”（例如哪两条规则冲突、差异在哪些字段、建议删除/合并/调整）。
-- 输出必须最小但可定位：后端不认识 rule group，但必须返回足够信息让前端映射回 group（依赖 4.9.2 的约定）。
-
-#### 4.9.4 冲突错误形态（需要收敛成接口契约）
-
-- `error.code` 取值（复用 `INVALID_ARGUMENT` 还是新增枚举）与字段名（例如 `conflicts[]`）需要提前锁死。
-- `conflicts[]` 最小字段建议包含：
-  - `matchKey`（可打印/可复现的归一化匹配条件集合）
-  - `rules[]`（至少 2 条）：每条包含 `clientRuleId?`（若存在）、以及能解释差异的关键字段（`action/priority/enforce/log/...`）。
-- 列表上限与截断：需要一个固定上限（例如最多返回 20 个冲突）；若截断必须明确 `truncated=true`（避免前端误以为只存在这些冲突）。
-
-#### 4.9.5 与 Domain 侧“复用叙事”对齐（用户视角）
-
-- Domain 的 device‑wide/per‑app custom 与 blocking lists 在实现上是后端原生对象；IP 的 rule group 则是配置展开。但对用户/前端呈现，应统一为“可复用的规则集合 + app 本地覆盖”的同构心智模型。
-- 当 Domain 与 IP 同时影响同一连接的最终 allow/drop 时，前端需要能分别解释“DomainPolicy 来源”与“packet 最终 verdict”而不互相打架（与 2.4/3.3 叙事一致）。
+- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
 
 ### 4.10 基础数据结构与代码复用（后端实现骨架）
 
