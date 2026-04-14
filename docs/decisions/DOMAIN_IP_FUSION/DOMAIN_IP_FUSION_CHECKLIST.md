@@ -277,6 +277,10 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - host-side：引擎/解析/确定性单测（不替代真机验收）。  
 - host-driven integration：控制面下发 + 事件流/metrics 验证。  
 - device（Tier‑1 受控拓扑）：以稳定可复现的受控环境覆盖关键矩阵（DomainPolicy/IFACE_BLOCK/IPRULES/overlay + 并发/reset）。  
+- fusion 阶段每个 change 的最低 gate（已确认；阶段定义见 `docs/IMPLEMENTATION_ROADMAP.md`）：
+  - 默认必须跑：P0（host 单测）+ P1（host-driven integration）
+  - 若 change 触及不可退化契约（hot path/stream/reset/apply/输出协议/多用户语义等），必须追加：P2（device Tier‑1）
+  - P3（真机原生调试）仅用于问题定位，不作为 gate
 
 ### 2.8 性能与并发承诺（红线）
 
@@ -414,6 +418,21 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 3) 观测输出可回溯且口径一致  
 4) 真机上能跑通闭环（最终验收）
 
+每个 change 的最低 gate（已确认；阶段定义见 `docs/IMPLEMENTATION_ROADMAP.md`）：
+
+- 默认必须跑：P0（host 单测）+ P1（host-driven integration）
+- 若 change 触及不可退化契约（例如 hot path/stream/reset/save-restore/apply/输出协议/多用户语义），必须追加：P2（device Tier‑1）
+- P3（真机原生调试）仅用于问题定位，不作为 gate
+
+不可退化契约（已确认；只要 change 触及则必须有对应测试/验收点）：
+
+1) 原子 apply（路线 1，强一致）：失败不改变现状；成功后新基线立即可见  
+2) `matchKey` 规范化与冲突拒绝：错误为 `INVALID_ARGUMENT` 且携带 `conflicts[]`（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）  
+3) `clientRuleId` 贯穿：apply/print/error 一致回显（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）  
+4) stream vNext：严格 NDJSON、START/STOP/RESETALL/`STATE_CONFLICT` 语义、禁止 pretty/NUL、禁止输出交织（见 observability working decisions）  
+5) reset/save/restore 边界：`RESETALL` 必须回到干净基线；layer reset 不得污染其它层（见 3.4）  
+6) 多用户语义：`per-app == per-UID`、selector 严格拒绝 + 强制回显（见 2.5）  
+
 范围约束（当前阶段锁死）：
 - 域名侧“真机正确性测试”（真实 resolver / netd / DnsListener 链路）目前需要额外系统/PO 壳准备，尚未就绪；因此本阶段**不做域名真机测试**。
 - 域名侧只保留既有 host/unit 与 host-driven integration（不新增、不作为 gate）；本阶段验收以 **IP 线 Tier‑1 真机闭环** 为准。
@@ -423,17 +442,22 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - DomainPolicy：
   - `DomainPolicySource` 枚举/顺序/快照稳定（sources keys 固定 7 个）（本阶段只做命名收敛见 3.1，不扩写、不作为 gate）
 - IPRULES：
-  - apply 冲突拒绝（同一匹配条件集合、字段不同必须拒绝）
+  - 原子 apply：失败不改变现状；成功后新基线立即可见（路线 1）
+  - `matchKey` 规范化：CIDR 网络地址归一化、`ifindex=0` 视为 any、`proto=icmp` 端口约束等（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
+  - apply 冲突拒绝：同一 `<uid>` apply payload 内 `matchKey` 不允许重复；错误为 `INVALID_ARGUMENT + conflicts[]`（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
+  - `clientRuleId`：格式/唯一性校验与贯穿回显（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
   - per-rule stats 清零边界（UPDATE/ENABLE）
 - Reset 边界（最小集合）：
-  - `RESETALL` 会清空：reasons/domain-sources/perf/iprules-stats（以及未来 traffic/conntrack）
+  - `RESETALL` 会清空：reasons/domain-sources/perf/iprules-stats（以及未来 traffic/conntrack），并回到干净基线（不遗留旧 stream/ring/pending 状态污染下一次开启）
 
 #### 3.5.2 integration（控制面下发 + 结构断言）
 
 - metrics shape：`METRICS.REASONS` / `METRICS.DOMAIN.SOURCES*`（以及未来 `METRICS.TRAFFIC*`/`METRICS.CONNTRACK`）
 - gating：`BLOCK=0` 下 counters 不更新
+- 多用户 selector：严格拒绝与强制回显（见 2.5）
 - stream schema vNext：
   - `DNSSTREAM/PKTSTREAM` 事件能被可靠解析（`type` + 最小字段集合）
+  - 严格 NDJSON：LF 分隔、禁止 NUL terminator、禁止 pretty、`*.STOP` JSON ack、禁止输出交织
   - suppressed notice（`type="notice"`) 的限频与 hint 文案（只需结构稳定，具体文案可后置）
 
 #### 3.5.3 device Tier‑1（Pixel6a 真机闭环；最终验收）
@@ -447,10 +471,12 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
   - 流量进行中触发 `RESETALL`/更新规则/切换开关，保证不会死锁、不会出现明显不可解释状态
 - 回归基线：
   - 同一套脚本/命令序列可重复跑出一致的结构结果（数值允许波动，但口径/shape 必须一致）
+- 性能/反压 gate（只锁原则，不锁阈值；阈值与基线对比在 P2/perf 环节收敛）：
+  - 慢消费者/反压不得拖死 hot path；允许 drop，但必须通过 `type="notice"` 可定位（见 observability working decisions）
 
 ### 3.6 延后项（明确不夹带进本轮 fusion）
 
-- `BLOCKIPLEAKS` / `ip-leak`（以及其依赖的 legacy bridge）：本轮默认保持关闭并冻结不动；在重新收敛到统一仲裁之前，不改语义/优先级/接口口径。  
+- `BLOCKIPLEAKS` / `ip-leak`（以及其依赖链：`legacy domain path` / DNS‑learned Domain↔IP bridge）：本轮默认保持关闭并冻结不动；在重新收敛到统一仲裁之前，不改语义/优先级/接口口径。  
 - device-wide IP rules：除非出现明确产品需求与性能预算，否则保持不引入。  
 - IPv6、域名 per-rule stats、更多 L4/L7 维度：按各自主线单独推进。  
 
@@ -569,10 +595,12 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - 把“scope / attribution / explain envelope”的内部数据结构收敛清楚：DNS（`policySource`）与 packet（`reasonId/ruleId`）如何在代码层对齐，并避免重复造轮子。
 - 明确哪些复用发生在配置层（rule group 展开/冲突拒绝），哪些需要后端提供最小硬约束（例如 apply 冲突错误形态）。
 
-### 4.11 测试与验收（补齐讨论 + 明确 gate）
+### 4.11 测试与验收（已收敛；此处仅保留索引）
 
-- 在第 2.7/3.5 的基础上，明确 fusion 相关 change 的最小 gating 集合（host 单测 / host-driven integration / device Tier‑1），以及每类测试覆盖哪些“不可退化的契约”（优先级确定性、reset 边界、观测 shape）。
-- 同步对齐 `docs/IMPLEMENTATION_ROADMAP.md` 中“IP 线真机验收 / 域名真机 deferred”的边界，避免未来讨论漂移。
+本章已在第 2.7/3.5 收敛为可执行 gate 与不可退化契约（不再作为待讨论章节）：
+
+- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`（2.7/3.5）
+- `docs/IMPLEMENTATION_ROADMAP.md`（P0/P1/P2/P3 阶段定义）
 
 ### 4.12 落地拆分（change 切片与顺序）
 
