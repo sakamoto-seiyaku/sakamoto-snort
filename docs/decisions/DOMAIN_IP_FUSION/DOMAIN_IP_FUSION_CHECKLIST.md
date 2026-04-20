@@ -549,8 +549,12 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ## 4. 待继续讨论/收敛的章节（先占坑，避免遗漏）
 
-> 注：第 2/3 节中已有部分“草案级”内容；本节用来明确接下来按章推进的讨论范围与落盘位置。  
-> 本节 **按推荐讨论顺序编号**：`4.1 → 4.13` 即建议推进顺序。
+> 重要（已确认）：本节只列**仍未落盘**或仍需进一步收敛的 open items。  
+> 已收敛口径/已落盘契约请直接以单一真相文档为准（`CONTROL_PROTOCOL_VNEXT.md` / `CONTROL_COMMANDS_VNEXT.md` / `OBSERVABILITY_WORKING_DECISIONS.md` / `IPRULES_APPLY_CONTRACT.md`）。
+
+### 4.0 当前 open issues（以挑刺清单为入口）
+
+- 见 `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`（本目录唯一挑刺清单；只保留未落盘项）。
 
 ### 4.1 延后项清单（明确不夹带，但要先锁边界）
 
@@ -583,8 +587,9 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ### 4.5 可观测性落地清单（从工作决策 → 实现任务）
 
-- 把 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md` 中的 vNext 决策，提炼成“需要实现/需要改动/需要补测试/需要刷新接口文档”的 task list（见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`）。
-- 特别包括但不限于：`DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 的 `type` envelope、suppressed notice、`tracked` 统一语义、metrics name=`traffic`/`conntrack`（`METRICS.GET`/`METRICS.RESET` 入口统一）、以及与 `METRICS.GET(name=reasons)` / `METRICS.GET(name=domainSources)` 的跨层叙事对齐。
+已落盘：
+- 工作结论：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- 任务清单：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
 
 ### 4.6 状态、持久化与 reset 边界（save/restore/versioning）
 
@@ -594,59 +599,19 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ### 4.7 多用户与 selector 语义（uid/pkg/userId）
 
-- 已收敛（不在本节重复）：selector JSON（`{"uid":...}` 或 `{"pkg":"...","userId":...}`）、歧义拒绝/严格拒绝策略/输出回显/错误提示/别名展示/不做批量/允许 `args.userId` 过滤（限明确支持的 list/stats 命令），见 2.5；save/restore key 见 3.4.6。
-- 延后到 4.8（接口契约细节）：
-  - selector 错误的 `code/hint/candidates` 字段名与枚举（保持可修复；优先推荐 `{"uid":...}`）。
-  - restore 的返回 JSON shape（错误汇总列表字段名等；行为已定为“逐条 restore”，见 3.4.6）。
+已落盘：
+- selector / strict reject / candidates：`CONTROL_PROTOCOL_VNEXT.md` + `CONTROL_COMMANDS_VNEXT.md`
+- save/restore/reset 边界：本 checklist 第 3.4（实现期再落到 change/spec）
 
 ### 4.8 接口与对外契约（control plane / schema）
 
-目标：把第 2.5/3.4 等已收敛口径，写成可落地的“接口契约”（命令名/字段名/JSON shape/错误形态/生命周期/兼容策略）。
+已落盘（接口契约的单一真相）：
+- wire/envelope/errors/selector/stream 连接约束：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+- 命令集合与每个 `cmd` 的 args/result/errors：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+- `IPRULES.APPLY` 的 apply/冲突/回显契约：`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
+- stream/metrics/tracked 等观测语义：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
 
-#### 4.8.1 契约边界与兼容承诺
-
-- 哪些接口/字段是强契约（必须长期稳定），哪些属于 debug 通道允许演进（例如 stream 缓存文件可丢弃）。
-- “不做 alias/双写”的范围与例外（本轮原则：默认无 alias）。
-
-#### 4.8.2 命令语法与 selector（规范化）
-
-- `{"uid":...}` vs `{"pkg":"...","userId":...}`（语义已定在 2.5）；在接口契约中补齐：字段名保留、大小写、字符串转义与值域（若需要）。
-- 所有命令是否统一支持两种 selector（或列出例外清单）。
-
-#### 4.8.3 通用输出约定（identity echo + envelope）
-
-- per-app 输出强制回显 `uid/userId/app(canonical)`（已定在 2.5）；是否补 `matchedName` 等辅助字段。
-- 是否引入统一的顶层 `version` / `schema` 字段（尤其 stream vNext）。
-
-#### 4.8.4 错误模型（必须可修复）
-
-- selector/语法/状态错误的 `code/message/hint/candidates` 字段名与枚举。
-- 歧义时 candidates 的最小信息集合（优先 `{"uid":...}`）。
-
-#### 4.8.5 枚举与命名表（字段名/枚举的“单一真相”）
-
-- `scope`、`policySource`、`reasonId`、`notice`、`ifaceKindBit` 等：最终对外名称、取值集合、是否允许新增。
-- rename 相关：`GLOBAL_*` → `DOMAIN_DEVICE_WIDE_*` 的对外兼容策略（本轮无 alias）。
-
-#### 4.8.6 Streams（DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM）契约
-
-- 命令：`STREAM.START/STREAM.STOP`（`type=dns|pkt|activity`）、horizon 参数、连接/断连、`RESETALL` 影响（3.4 已定部分，补齐接口字段）。
-- schema vNext：`type=dns|pkt|activity|notice`，`notice=suppressed|dropped`，最小字段集合与快照原则。
-- backpressure/drop 的对外表现（notice 字段）。
-
-#### 4.8.7 Metrics 契约
-
-- `METRICS.GET(name=reasons|domainSources|traffic|conntrack|perf)`（以及 `METRICS.RESET(...)`）：
-  - JSON shape、gating（`BLOCK=0` 不更新）、reset 语义与返回字段。
-
-#### 4.8.8 Reset / save / restore 契约
-
-- `RESETALL` vs layer reset 的对外效果清单（3.4 已定部分，补齐“接口可观察”）。
-- save/restore：key/批量失败策略/orphan 清理/schemaVersion 已定在 3.4.6；仅补齐接口可观察与返回 JSON shape。
-
-#### 4.8.9 落盘位置与同步策略（当前只占坑）
-
-- 在本目录形成 working contract，后续再同步到 `docs/INTERFACE_SPECIFICATION.md` 与 `openspec/specs/*`（不在本轮讨论中外溢改动）。
+仍未落盘的部分请以挑刺清单为准：`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`
 
 ### 4.9 配置层/前端职责边界（已收敛；此处仅保留索引）
 

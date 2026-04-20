@@ -62,6 +62,9 @@ vNext 全局 strict：
 - `QUIT`
 - `RESETALL`
 
+备注（已确认）：
+- vNext daemon **不提供** legacy 的 `HELP/PASSWORD/PASSSTATE` 命令；help 由 `sucre-snort-ctl --help|help` 等 CLI 承担（见 `CONTROL_PROTOCOL_VNEXT.md`）。
+
 ### 1.2 Inventory
 
 - `APPS.LIST`
