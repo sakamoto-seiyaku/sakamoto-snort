@@ -3,8 +3,8 @@
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
 
 
-更新时间：2026-04-14  
-状态：工作结论 + vNext 设计收敛（新增 `tracked` 统一语义、`METRICS.TRAFFIC*`、`METRICS.CONNTRACK`、stream `type`/suppressed 事件；待实现）
+更新时间：2026-04-17  
+状态：工作结论 + vNext 设计收敛（新增 `tracked` 统一语义、`METRICS.GET(name=traffic|conntrack)`、统一 `STREAM.START/STOP(type=...)`、stream `type`/suppressed 事件；待实现）
 
 落地任务清单：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
 
@@ -14,7 +14,7 @@
 
 本项目的可观测性 = **事件（Events）** + **指标/计数（Metrics/Counters）** 两条腿：
 
-- **Events（调试型）**：`PKTSTREAM/DNSSTREAM/ACTIVITYSTREAM` 等 push 流；用于“看最近发生了什么、为什么”。
+- **Events（调试型）**：统一 `STREAM.START(type=pkt|dns|activity)` 的 push 流；用于“看最近发生了什么、为什么”。
 - **Metrics（常态型）**：拉取式 counters；用于“默认可查、不会因为前端慢而拖热路径”的命中统计与健康信息。
 
 后端只负责输出结构化事件/指标；前端负责采集、过滤、聚合、落库、过期丢弃（不在后端新增存储/查询系统）。
@@ -93,16 +93,18 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 #### 3.4.1 `type` 字段（可靠解析）
 
-- vNext 决策：`DNSSTREAM/PKTSTREAM` 事件都增加顶层字段 `type`，用于显式区分事件类别。
+- vNext 决策：所有 stream（`type=dns|pkt|activity|notice`）事件都增加顶层字段 `type`，用于显式区分事件类别。
 - 候选值（最小集合）：
-  - `type="dns"`：DNS 判决事件（DNSSTREAM）
-  - `type="pkt"`：packet 判决事件（PKTSTREAM）
+  - `type="dns"`：DNS 判决事件
+  - `type="pkt"`：packet 判决事件
+  - `type="activity"`：activity 事件
   - `type="notice"`：系统提示事件（例如 suppressed）
 - 线协议（vNext；为可靠解析与避免输出交织）：
-  - 输出采用 NDJSON：**一行一个 JSON 对象**，以 LF（`\n`）分隔；事件 JSON 不得包含换行；不再发送 NUL terminator。
-  - `pretty` 禁止：stream 不支持多行/缩进输出；若客户端请求 pretty（命令 `!` 后缀）必须报错并拒绝开启 stream。
-  - `*.STOP` 的 `OK` 以 JSON ack 返回：`{"ok": true}`；任何失败以 `{"error": {...}}` 返回（与错误模型一致），确保前端可统一按 NDJSON 解析。
-  - 进入 stream 模式后，禁止在同一连接上执行非 stream 控制命令（避免输出交织破坏解析）；如需查询/配置请另开控制连接。
+  - framing 采用 netstring（见 `CONTROL_PROTOCOL_VNEXT.md`）：每条 response/event 都是一个 netstring frame，payload 为 UTF‑8 JSON object；不发送 NUL terminator。
+    - 严格 JSON（2.10）：所有字符串字段必须正确 escape（至少处理 `\" \\ \n \r \t`）。
+  - stream events 与 control response 共享同一 framing，但 event 不得包含 `id/ok`（避免与 response 混淆）。
+  - `STREAM.STOP` 的 ack 是该 STOP 的 response frame（`{"id":...,"ok":true}`）；失败为 `{"id":...,"ok":false,"error":{...}}`（与错误模型一致）。
+  - 进入 stream 模式后，禁止在同一连接上执行非 stream 控制命令（避免输出交织与心智分裂）；如需查询/配置请另开控制连接。
 
 > 说明：stream 开启时优先正确性与可回溯性；字段增加不作为性能优化目标。
 
@@ -114,10 +116,15 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 - 触发条件：stream 已开启，且在该输出窗口内存在“被 tracked 过滤”的事件。
 - 频率：**最多 1 条/秒/streamType（dns/pkt）**（严格限频）。
-  - 注：当前控制面默认是 **单控制端（Android App 1:1）**，因此 suppressed 不引入 per-subscriber 语义；按 streamType 限频即可。
-- 内容：输出窗口内的被过滤增量计数，字段尽量复用 `METRICS.TRAFFIC` 的结构（见 4.5），并提供最小操作提示。
-- 不要求列出 uid 列表（防止爆炸）；定位“是谁”交给 `METRICS.TRAFFIC*`。
+  - 注：按 2.8-A 单连接约束，同一时间每种 stream 只允许 1 条连接订阅，因此 suppressed 不引入 per-subscriber 语义；按 streamType 限频即可。
+- 内容：输出窗口内的被过滤增量计数，字段尽量复用 `METRICS.GET(name=traffic)` 的结构（见 4.5），并提供最小操作提示。
+- 不要求列出 uid 列表（防止爆炸）；定位“是谁”交给 `METRICS.GET(name=traffic, app=...)`。
 - NOTICE 不持久化、也不参与 horizon 回放：仅对**当前已开启的 stream 连接**实时输出，且只对 stream 开启后的流量生效。若前端需要持久化，应保持 stream 常开并自行落库/聚合。
+
+`notice="dropped"`（反压丢事件提示）补充锁死（已确认；2.12-A）：
+- drop policy：pending queue 满时 drop-oldest（保留最新事件）。
+- `droppedEvents`：按“被丢弃的逐条事件条数”计数（不按 bytes）；不包含 NOTICE 自身。
+- NOTICE 频率：最多 1 条/秒/streamType；`windowMs` 输出实际聚合窗口。
 
 建议 JSON shape（示例）：
 
@@ -134,7 +141,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
     "txp": {"allow": 0, "block": 0},
     "txb": {"allow": 0, "block": 0}
   },
-  "hint": "untracked apps have traffic; use TRACK <uid> or METRICS.TRAFFIC*"
+  "hint": "untracked apps have traffic; enable tracked via CONFIG.SET (scope=app,set={tracked:1}) or query METRICS.GET(name=traffic)"
 }
 ```
 
@@ -148,6 +155,12 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 #### 3.4.3 stream vNext：最小事件字段集合（DNS/packet 同构心智模型）
 
 目标：在 stream 开启时，“单条事件可自解释”，同时字段集合固定、可控。
+
+**字段类型与缺失表示（已确认；2.24‑A）**
+- optional 字段缺失时：**省略该 key**（不输出 `"n/a"`/空字符串；不依赖客户端猜测）。
+- 布尔语义字段：统一使用 JSON boolean（`true|false`），例如：`blocked/accepted/wouldDrop/blockEnabled`。
+- `timestamp` 格式锁死为字符串：`"<sec>.<nsec>"`（nsec 固定 9 位，不足补 0）；DNS/pkt 同口径。
+  - 注：这条约束只适用于 stream 事件 schema；控制面里“开关类命令”的返回值仍可维持 legacy `0|1`（numbers），两者不强行统一。
 
 - `type="dns"`（DNS 判决事件）最小字段：
   - 识别：`type`
@@ -168,16 +181,33 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
       - `ALLOW_DEFAULT` 等“无明确规则命中”的路径可以不输出 `scope`
     - `ifaceKindBit`：接口类型 bit（与 `blockIface` 同口径：WiFi=1/Data=2/VPN=4/Unmanaged=128）
     - `interface`（name）仅用于可读性；**不得**作为唯一标识或规则匹配依据（以 `ifindex` 为准）
-    - `host`（可选）：若存在可解释的 host name（例如 reverse-dns 或其它映射结果）则一并输出；仅用于可读性/排障，**不得**作为唯一标识或仲裁依据
+    - `domain`（可选）：来自 DNS‑learned Domain↔IP bridge 的 best‑effort 域名；仅用于可读性/排障，**不得**作为唯一标识或仲裁依据
+      - 仅当 bridge 命中且 `domain.validIP()==true` 时输出（避免陈旧映射误导）。
+    - `host`（可选）：来自 reverse‑dns 的 best‑effort host name；仅用于可读性/排障，**不得**作为唯一标识或仲裁依据
+    - 补充：
+      - `domain/host` 若输出，应来自 bridge / reverse‑dns 缓存；不得为了补这两个字段在 packet 热路径额外引入 DomainPolicy 判决（仅在已进入 `tracked` 的观测路径时按需计算）。
+      - `domain.validIP()` 内部需要 `time()`；为满足 2.8 的 ACA 红线，建议在 **writer/序列化线程**做 `validIP` 判定与字段输出，避免 hot path 每包调用 `time()`。
+      - `domain/host` 属于 best‑effort 可读性字段；不承诺“判决时快照”，允许轻微漂移（例如 reverse‑dns 结果延迟出现）。
+      - 对外解释口径（已确认；2.33-A）：
+        - `domain/host` 缺失表示“未知/不可得”，不是错误；前端可省略展示或显示 `-`。
+        - `domain` 即使存在，也只是“该 IP 当前关联到的一个 domain 标签”，不保证与该包真实业务域名一致（例如 CDN/多域名共享 IP）；不得用于归因或仲裁解释。
+        - 若需要更强排障，应查看 `STREAM.START(type=dns)`（含 `getips/domMask/appMask/policySource`）或常态 metrics（`METRICS.GET(name=domainSources)`/`METRICS.GET(name=traffic)`）。
   - 输出：`accepted/reasonId`
   - 回溯：`ruleId?`、`wouldRuleId?`、`wouldDrop?`
+    - `wouldDrop`：仅当 `wouldRuleId` 存在时输出；类型为 boolean（与 `accepted` 同类语义）。
   - Conntrack（可选、避免误导）：仅当该包实际参与 `ct.*` 维度匹配时输出 `ct{state,direction}`
+
+- `type="activity"`（activity 事件）最小字段：
+  - 识别：`type`
+  - 输出：`blockEnabled`（boolean）
+  - 可选（解释辅助）：`uid/userId/app`（例如 top app；回显风格与其它事件一致）
 
 - `type="notice"`（系统提示事件）最小字段：
   - `notice="suppressed"` + `stream="dns|pkt"` + `windowMs`
   - `traffic{dns/rxp/rxb/txp/txb -> {allow,block}}`
   - `hint`
   - `notice="dropped"` + `stream="dns|pkt"` + `windowMs` + `droppedEvents`
+  - `notice="started"` + `stream="dns|pkt|activity"`（可选 echo：`horizonSec/minSize`）
 
 #### 3.4.4 stream vNext：回放（horizon）与持久化（save/restore）策略
 
@@ -190,21 +220,41 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - `type="dns"` / `type="pkt"`（逐条事件）：
   - **只保留进程内 ring buffer**（用于可选 horizon 回放）。
   - **不做落盘 save/restore**：重启后自然清空；若前端需要持久化，应保持 stream 常开并自行落库。
-- stream 关闭时：
-  - 不记录/不构造任何逐条事件与 ring buffer（避免热路径分配与锁开销）；仅保留常态 metrics。
-- `DNSSTREAM.STOP` / `PKTSTREAM.STOP`：
-  - 清空 ring buffer + pending queue（若有）；下次 `START` 视为全新 session（horizon 只回放本次开启期间的 ring）。
-- `DNSSTREAM.START` / `PKTSTREAM.START`（回放参数；不影响已有流）：
-  - 语法：`*.START [<horizonSec> [<minSize>]]`（单位：秒/条数）
-  - 参数仅影响“本次连接启动时的回放（replay）”，不得改变 ring 的保留策略，也不得影响已存在的其它连接/流。
-  - 默认：`horizonSec=0`、`minSize=0`（不回放历史，只看实时）。
-  - 同一连接重复 `*.START`：报 `STATE_CONFLICT`（严格拒绝；不影响已有流）。
-  - `*.START` 成功：不返回 `OK`（直接开始输出事件）。
-  - `*.STOP`：返回 `OK`，并且 **幂等**（未 started 时也返回 `OK`）。
+- `type="activity"`：
+  - **只实时输出**；不进入 ring buffer，不参与 horizon 回放，不落盘。
+- 无订阅者（stream 关闭时）：
+  - 未 `tracked` 的 app：不构造逐条事件/不入 ring（避免把可选成本变成每包必经成本）。
+  - 已 `tracked` 的 app：仍构造逐条事件并进入进程内 ring（用于 `STREAM.START(type=dns|pkt, horizonSec/minSize)` 回放）；不做 socket I/O；不落盘。
+  - 如需完全关闭逐条事件的观测成本，应通过 `CONFIG.SET`（`scope=app`，`set.tracked=0`）关闭 `tracked`（D8：tracked 持久化，且前端开启时必须提示性能影响）。
+- `STREAM.STOP`：
+  - 返回 response frame（`{"id":...,"ok":true}`；幂等）；并清理 pending queue（若有）。
+  - **ack barrier（已确认；2.9-B）**：
+    - STOP 必须先禁用该连接订阅并清空该连接 pending queue（允许丢弃尾部未发送事件/notice），再输出 `{"id":...,"ok":true}`。
+    - `{"id":...,"ok":true}` 必须是该 STOP 的最后一个输出 frame；ack 后不得再输出任何事件/notice，直到下一次 `STREAM.START`。
+  - 对 dns/pkt：清空 ring buffer；下次 `START` 视为全新 session（horizon 只回放自上次 `STOP/RESETALL` 之后积累的 ring）。
+- `STREAM.START`（入口统一；通过 `args.type` 区分；不影响其它连接）：
+  - request `args`：
+    - `type="dns"|"pkt"`：支持 `horizonSec/minSize`（单位：秒/条数；默认 `0/0`）
+    - `type="activity"`：不支持回放参数（应省略；或要求为 `0/0`）
+  - 参数仅影响“本次连接启动时的回放（replay）”，不得改变 ring 的保留策略，也不得影响其它 stream 类型（dns/pkt/activity 之间互不影响）。
+  - **单连接约束（已确认；2.8-A）**：同一时间每种 stream 只允许 1 条连接订阅；已有连接存在时，新的 `STREAM.START` 返回 `STATE_CONFLICT`（避免“STOP 清空 ring”影响其它订阅者的语义矛盾）。
+  - **连接拓扑（已确认；2.27-A）**：同一条 stream 连接同一时间只允许订阅一种 streamType；连接一旦 `STREAM.START(type=dns)`，则在 `STREAM.STOP` 之前，任何试图在同一连接上启动其它 type 或执行非 stream 控制命令，一律 `STATE_CONFLICT`。需要同时看 dns+pkt+activity 时，前端应使用多条连接（每种 streamType 一条）。
+  - 同一连接重复 `STREAM.START`：报 `STATE_CONFLICT`（严格拒绝；不影响已有流）。
+  - `STREAM.START` 成功：先返回 response frame（`{"id":...,"ok":true}`），并且必须先输出一次 `type="notice", notice="started"`（至少一条；不进入 ring、不参与 horizon、不落盘），然后才开始回放（若有）与实时事件输出。
+  - `STREAM.STOP`：返回 response frame（`{"id":...,"ok":true}`），并且 **幂等**（未 started 时也返回 `{"id":...,"ok":true}`）。
   - 回放选择规则（已确认；v1）：
     - 回放集合 = “时间窗内事件” ∪ “最近 `minSize` 条事件”（两者取并集）。
     - `horizonSec=0` 时仅按 `minSize` 回放；`0/0` 表示不回放。
     - 若请求超出 ring 现存范围：尽力回放（最多回放 ring 中现存事件），不报错。
+  - **有界 cap（已确认；2.31-A）**：
+    - ring 与 pending queue 都必须有明确的“按事件条数”的上限（不在本阶段锁具体数值，但必须存在且可配置/可验证）。
+      - `maxRingEvents`：ring 最多保留 N 条事件（超出时 drop-oldest；影响 replay 但不影响实时）。
+      - `maxPendingEvents`：pending queue 最多 N 条待发送事件（超出时 drop-oldest，并计入 `droppedEvents`，触发 `notice="dropped"`）。
+    - `STREAM.START`（`type=dns|pkt`）的 `horizonSec/minSize` 必须 clamp 到能力上限（例如 `minSize<=maxRingEvents`；`horizonSec<=maxHorizonSec`），并把**实际生效值**通过 `notice="started"` echo 回去（避免前端误解）。
+- `STREAM.START(type=activity)`：
+  - request：`{"id":...,"cmd":"STREAM.START","args":{"type":"activity"}}`（无回放参数）
+  - 同一连接重复 `STREAM.START`：报 `STATE_CONFLICT`（严格拒绝；不影响已有流）。
+  - 成功：先返回 response frame（`{"id":...,"ok":true}`），并且必须先输出一次 `type="notice", notice="started"`，并且至少应输出一次当前状态快照。
 - 性能红线（实现要求）：逐条事件输出必须异步化（hot path 只做有界 enqueue）；反压允许 drop，并通过 `type="notice"`（`notice="dropped"`）可定位。
 - horizon 默认值：建议默认 `0`（只看开启后的实时）；需要回放时由控制面显式传入 horizon。
 - `RESETALL` 必须强制 stop 并断开 stream 连接，清空 ring buffer/queue（见 4.7.2）。
@@ -214,17 +264,15 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 ## 4. Metrics（常态型）核心结论
 
 ### 4.1 A：reasonId counters（Packet，device-wide）
-目标：默认可查、与 PKTSTREAM 订阅无关、热路径只做 `atomic++`。
+目标：默认可查、与 `STREAM.START(type=pkt)` 订阅无关、热路径只做 `atomic++`。
 
-- 对外：`METRICS.REASONS` / `METRICS.REASONS.RESET`
+- 对外：`METRICS.GET(name=reasons)` / `METRICS.RESET(name=reasons)`
 - 字段：每个 `reasonId` 的 `packets/bytes`
 - JSON shape：固定为顶层对象 `{"reasons": {...}}`
 - 生命周期：since boot（进程内，不落盘；重启归零）
-- counters 不依赖 `tracked`（默认可查），也不依赖 PKTSTREAM 是否开启
+- counters 不依赖 `tracked`（默认可查），也不依赖 stream 是否开启
 - gating：保持事实语义，仅对进入 Packet 判决链路的包统计（当前 `BLOCK=0` 不进入判决链路）
-- 当前 P0 基线/验收明确以 legacy `ip-leak` overlay **关闭**为前提（可理解为验收场景下 `BLOCKIPLEAKS=0`）。
-  - `BLOCKIPLEAKS=1` 时，若 overlay 产生最终 DROP，则它自然计入 A 层与 traffic 口径（例如 `reasonId=IP_LEAK_BLOCK`）。
-  - 该路径是否长期保留、以及其优先级/解释口径（相对 DomainPolicy 与 IPRULES），仍视为 TBD，留到后续融合阶段单独收敛。
+- legacy `BLOCKIPLEAKS/ip-leak` overlay：本轮 fusion 已裁决为**冻结并强制关闭（无作用）**（见本目录 2.21 / D31）。因此 A 层 reasons metrics（`METRICS.GET(name=reasons)`）与 traffic 口径**不讨论也不暴露**任何 `IP_LEAK_*` 类 `reasonId`。
 
 对应主规格：`openspec/specs/pktstream-observability/spec.md`。
 
@@ -232,11 +280,11 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 目标：域名功能已完整，必须补上“默认可查”的归因与 counters，避免后置导致设计困难。
 
 - `policySource` 枚举与优先级：与现有 `App::blocked()` 分支顺序一一对应（不细到 ruleId/listId）。
-- `policySource` 对外命名（fusion 收敛口径；不做 alias/双写）：`CUSTOM_LIST_AUTHORIZED/BLOCKED`、`CUSTOM_RULE_AUTHORIZED/BLOCKED`、`DOMAIN_DEVICE_WIDE_AUTHORIZED/BLOCKED`、`MASK_FALLBACK`（历史 `CUSTOM_*WHITE/BLACK`、`GLOBAL_*` 仅视为内部实现名）。
+- `policySource` 对外命名（fusion 收敛口径；不做 alias/双写）：`CUSTOM_LIST_ALLOWED/BLOCKED`、`CUSTOM_RULE_ALLOWED/BLOCKED`、`DOMAIN_DEVICE_WIDE_ALLOWED/BLOCKED`、`MASK_FALLBACK`（历史 `CUSTOM_*WHITE/BLACK`、`GLOBAL_*` 仅视为内部实现名）。
 - 统计口径：**按 DNS 请求计数**（每次 DNS 判决更新一次）。
-- 明确：**先不考虑 ip-leak**（附加功能，不因小事大）。
+- 明确：本轮 **不考虑** `ip-leak/BLOCKIPLEAKS`（已冻结并强制关闭，无作用）。
 - 生命周期：since boot（进程内，不落盘）
-- 对外接口：`METRICS.DOMAIN.SOURCES*`（device-wide + per-app（per-UID））
+- 对外：`METRICS.GET(name=domainSources)` / `METRICS.RESET(name=domainSources)`（device-wide + per-app（per-UID））
 
 权威文档：`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`（主规格：`openspec/specs/domain-policy-observability/spec.md`；历史 change：`openspec/changes/archive/2026-03-27-add-domain-policy-observability/`）。
 
@@ -259,8 +307,11 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - `dns_decision_us`：单次 DNS 判决请求的处理时间。
 - 这组指标即 D 层；它与 A/B/C 并列，属于 observability 的 health/perf 维度；不复用 `reasonId` / `policySource` / per-rule stats 语义。
 - D 的实现与落地节奏独立于 A/B/C；当前已独立落地，不改变主线排序。
-- 对外接口为：`PERFMETRICS [<0|1>]`、`METRICS.PERF`、`METRICS.PERF.RESET`。
-- `PERFMETRICS=0` 时热路径只允许一个极轻量 gating branch；`PERFMETRICS=1` 时才做计时与聚合。
+- 对外：
+  - 开关：`CONFIG.SET(scope=device,set={perfmetrics.enabled:0|1})`
+  - 查询：`METRICS.GET(name=perf)`
+  - reset：`METRICS.RESET(name=perf)`
+- `perfmetrics.enabled=0` 时热路径只允许一个极轻量 gating branch；`perfmetrics.enabled=1` 时才做计时与聚合。
 - 接口、字段与语义**不区分 debug/release**；是否采集仅由运行时开关决定。
 
 #### 4.4.1 指标边界（固定口径）
@@ -278,8 +329,8 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 - 单位统一为 `us`。
 - 生命周期统一为 `since_reset_or_enable`：
-  - `PERFMETRICS 0→1` 时自动清零；
-  - `METRICS.PERF.RESET` 时显式清零；
+  - `perfmetrics.enabled 0→1` 时自动清零；
+  - `METRICS.RESET(name=perf)` 时显式清零；
   - 重启后归零，不持久化。
 - 当前最小输出集合固定为：`samples/min/avg/p50/p95/p99/max`。
 - 统计方式优先采用 histogram/分桶聚合，不保存逐样本历史，也不做每包日志输出。
@@ -291,7 +342,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - DNS 路径允许采用更简单的轻量聚合实现，但仍不得在热路径引入阻塞点。
 - 这组指标属于“正常运行时可开启”的常态 metrics，而不是 debug-only instrumentation。
 
-### 4.5 Traffic（DNS + packet）轻量 counters：`METRICS.TRAFFIC*`
+### 4.5 Traffic（DNS + packet）轻量 counters：metrics name=`traffic`（`METRICS.GET`）
 
 目标：提供一套 **always-on（轻量）** 的 per-app（per-UID）与 device-wide 流量 counters，覆盖 DNS + packet 两条腿，用于：
 
@@ -314,14 +365,17 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - DNS：`blocked=false → allow`，`blocked=true → block`
   - packet：`NF_ACCEPT → allow`，`NF_DROP → block`
   - would-match（log-only/would-block）不改变最终 verdict，因此计入 `allow`（其统计由 per-rule `wouldHit*` 承担）
-- `block` 只看最终 verdict：所有导致最终 DROP 的路径都计入（例如 `IFACE_BLOCK`、`IP_RULE_*`、以及当前仍存在的 `IP_LEAK_BLOCK`）
-  - 注：`IP_LEAK_BLOCK` 本身是否保留属于后续决策；只要路径仍存在，其 verdict 就自然计入 `block`。
+- `block` 只看最终 verdict：所有导致最终 DROP 的路径都计入（例如 `IFACE_BLOCK`、`IP_RULE_*` 等）。
 - gating：**仅在 `settings.blockEnabled()==true` 时累计**（与现有 metrics 一致；`BLOCK=0` 时 dataplane bypass，不统计）
-- `METRICS.TRAFFIC` 的 device-wide 汇总必须是**全量**（包含 tracked/untracked 的所有 app），否则会导致 suppressed 定位与“默认可查”口径失真
+- `METRICS.GET(name=traffic)` 的 device-wide 汇总必须是**全量**（包含 tracked/untracked 的所有 app），否则会导致 suppressed 定位与“默认可查”口径失真
 
 #### 4.5.2 控制面命令与 JSON shape（v1）
 
-- `METRICS.TRAFFIC`：
+- device-wide query：
+
+```json
+{"id":1,"cmd":"METRICS.GET","args":{"name":"traffic"}}
+```
 
 ```json
 {
@@ -335,7 +389,17 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 }
 ```
 
-- `METRICS.TRAFFIC.APP <uid|pkg> [USER <userId>]`：
+- per-app query：
+
+```json
+{"id":2,"cmd":"METRICS.GET","args":{"name":"traffic","app":{"uid":10123}}}
+```
+
+或：
+
+```json
+{"id":2,"cmd":"METRICS.GET","args":{"name":"traffic","app":{"pkg":"com.example","userId":0}}}
+```
 
 ```json
 {
@@ -352,23 +416,22 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 }
 ```
 
-- app selector（多用户语义）：
-  - 统一语法：`<uid>` 或 `<pkg> [USER <userId>]`（禁止 `<pkg> <userId>` 这种位置参数，避免 silent 选错与未来扩展冲突）。
-  - INT（`<uid>`）：uid 本身已包含 userId（`uid/100000`），无需额外 `USER` 子句。
-  - STR（`<pkg>`）：允许可选 `USER <userId>` 用于消歧。
-    - `<pkg>` 允许匹配 canonical `name` 或 `allNames`（别名）；若匹配到多个 app → 必须拒绝并要求 `<uid>` 或更明确输入。
-    - 若未指定 `USER` 且存在多个 userId 下同名 package → 必须拒绝并要求指定 `USER`（避免 silent 选错；正确性优先）。
+- reset（device-wide / per-app）：
 
-- `METRICS.TRAFFIC.RESET` / `METRICS.TRAFFIC.RESET.APP ...`
+```json
+{"id":3,"cmd":"METRICS.RESET","args":{"name":"traffic"}}
+{"id":4,"cmd":"METRICS.RESET","args":{"name":"traffic","app":{"uid":10123}}}
+```
+
 - 生命周期：since boot（进程内）；`RESET` 清零；`RESETALL` 必须清零（见 4.7）。
 
 #### 4.5.3 实现约束（热路径）
 
 - traffic counters 必须是固定维度的 `atomic++(relaxed)`，不得复用现有 `StatsTPL/AppStats/DomainStats`（其包含 `shift()/localtime_r/mktime` + map 更新，非轻量）。
-- v1 建议实现为 **per-app（per-UID）轻量 counters always-on**；device-wide `METRICS.TRAFFIC` 查询时汇总所有 app 的快照（避免热路径额外全局原子争用）。
-  - 若未来需要进一步降低 `METRICS.TRAFFIC` 查询成本，可再引入可选的 device-wide sharded counters；但这会让热路径每次更新多一次（或多次）`atomic++`，属于 tradeoff。
+- v1 建议实现为 **per-app（per-UID）轻量 counters always-on**；device-wide traffic 查询时汇总所有 app 的快照（避免热路径额外全局原子争用）。
+  - 若未来需要进一步降低 device-wide traffic 查询成本，可再引入可选的 device-wide sharded counters；但这会让热路径每次更新多一次（或多次）`atomic++`，属于 tradeoff。
 
-### 4.6 Conntrack（L4）轻量 counters：`METRICS.CONNTRACK`
+### 4.6 Conntrack（L4）轻量 counters：metrics name=`conntrack`（`METRICS.GET`）
 
 目标：暴露 conntrack core 的最小健康计数，用于容量/扫表/溢出等诊断；不做 per-flow/per-entry dump。
 
@@ -379,7 +442,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - `overflowDrops`
 - gating：仅在 `settings.blockEnabled()==true` 时有意义/更新
 - 生命周期：since boot（进程内）；`RESETALL` 必须清零（见 4.7）
-- v1 暂不提供独立 `METRICS.CONNTRACK.RESET`：先锁死 `RESETALL` 行为即可
+- v1 暂不提供独立 reset：`conntrack` 仅 `RESETALL` 清零（`METRICS.RESET(name=conntrack)` 应返回 `INVALID_ARGUMENT`）
 
 建议 JSON shape：
 
@@ -401,23 +464,23 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 #### 4.7.1 `tracked` 的语义（vNext）
 
 - `tracked` **不影响** allow/drop 判决，只影响 observability：
-  - stream 逐条事件输出（DNSSTREAM/PKTSTREAM）
+  - stream 逐条事件输出（`type=dns|pkt`）
   - 重型历史 stats（现有 `ALL.* / APP.* / DOMAINS.*` 体系）
 - `tracked` **不 gating** 轻量 always-on counters（A/B/C/4.5/4.6）：
-  - `METRICS.REASONS`、`METRICS.DOMAIN.SOURCES*`、`IPRULES.PRINT stats`、`METRICS.TRAFFIC*`、`METRICS.CONNTRACK` 等应默认可查
-- 默认值：`tracked=false`（便于极限压测与降低默认噪音；需要观测某个 app 时显式 `TRACK`）
-- `tracked` 不持久化：daemon 重启后全部恢复为 `false`；如前端希望“重启后继续追踪”，由前端在连接建立后重新下发相关命令。
+  - `METRICS.GET(name=reasons)`、`METRICS.GET(name=domainSources)`、`IPRULES.PRINT stats`、`METRICS.GET(name=traffic)`、`METRICS.GET(name=conntrack)` 等应默认可查
+- 默认值：`tracked=false`（便于极限压测与降低默认噪音；需要观测某个 app 时通过 `CONFIG.SET(scope=app,set={tracked:1})` 显式开启）
+- `tracked` 持久化（D8）：daemon 重启后保持原值；前端在显式开启 tracked 时必须提示用户“可能带来性能影响”。
 
 #### 4.7.2 `RESETALL` 与 counters 边界（补充）
 
 `RESETALL` 必须清零：
 
-- `METRICS.TRAFFIC*`
-- `METRICS.CONNTRACK`
-- 以及既有：`METRICS.REASONS*`、`METRICS.DOMAIN.SOURCES*`、`IPRULES` runtime stats、`METRICS.PERF*`
+- `METRICS.GET(name=traffic)`
+- `METRICS.GET(name=conntrack)`
+- 以及既有：`METRICS.GET(name=reasons)`、`METRICS.GET(name=domainSources)`、`IPRULES` runtime stats、`METRICS.GET(name=perf)`
 - 并且必须清理所有“观测状态”：
   - `tracked`：全部重置为 `false`
-  - stream：强制 stop 并断开连接；清空 `DNSSTREAM/PKTSTREAM` 的 ring buffer/queue
+  - stream：强制 stop 并断开连接；清空 dns/pkt ring buffer/queue，并清理 activity 会话态
   - 若实现中仍存在历史遗留的 stream 落盘文件（例如旧版 `dnsstream` save）：应同步删除，避免回放混入旧 schema 数据
 
 ---
@@ -425,10 +488,10 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 ## 5. 明确延后/非目标（避免误解）
 
 - 不做全局 safety-mode（dry-run 全系统）。
-- 不要求 `BLOCK=0` 时逐包输出 reasonId（engine_off 属于状态解释：`BLOCK/ACTIVITYSTREAM`）。
-- 不要求本轮为 legacy `BLOCKIPLEAKS=1` 分支补齐最终 `reasonId` 命名与验收场景；该路径当前明确视为 TBD，不作为 A 层落地阻塞项。
+- 不要求 `block.enabled=0` 时逐包输出 reasonId（engine_off 属于状态解释：`CONFIG.GET(block.enabled)` / `STREAM.START(type=activity)`）。
+- legacy `BLOCKIPLEAKS/ip-leak`：本轮已裁决为**冻结并强制关闭（无作用）**；vNext 不提供接口；不做 reasonId/metrics/stream 叙事。
 - 不做域名规则 per-rule counters（regex/wildcard/listId）：现状聚合 regex 无法归因，需更大重构，后置。
-- 不把 ip-leak 混进域名 policySource counters：如需统计，后续以独立维度/命令追加。
+- 不把 ip-leak 混进域名 policySource counters：若未来另开 change 重新引入/替代 ip-leak，可再以独立维度/命令追加。
 - 不把 `ping RTT`、control socket 往返或前端消费延迟当作 `nfq_total_us` / `dns_decision_us` 的替代口径。
 - 不在后端引入 Prometheus/集中存储角色：前端自行采样与落库。
 

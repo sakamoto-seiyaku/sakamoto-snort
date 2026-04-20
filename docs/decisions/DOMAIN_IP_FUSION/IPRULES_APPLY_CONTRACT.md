@@ -1,6 +1,6 @@
 # IPRULES：原子 apply 契约（rule group 展开 / matchKey / clientRuleId）
 
-更新时间：2026-04-14  
+更新时间：2026-04-16  
 状态：已收敛（AAA）
 
 > 本文只定义“前后端约定/接口契约”，不涉及代码实现与 change 拆分。
@@ -75,7 +75,7 @@
 `matchKey` 必须是可打印、可复现、可比对的 canonical string，并且**版本化**：
 
 ```text
-mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctState=<...>|ctDir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>
+mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>
 ```
 
 约束：
@@ -87,10 +87,10 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctState=<...>|ctDir=<...>|sr
 
 - `dir`：`any|in|out`
 - `iface`：`any|wifi|data|vpn|unmanaged`
-- `ifindex`：`any|<decimal>`（`any` 表示不约束；数值为非负十进制）
+- `ifindex`：`0|<decimal>`（`0` 表示不约束；数值为非负十进制）
 - `proto`：`any|tcp|udp|icmp`
-- `ctState`：`any|new|established|invalid`
-- `ctDir`：`any|orig|reply`
+- `ctstate`：`any|new|established|invalid`
+- `ctdir`：`any|orig|reply`
 - `src` / `dst`：`any|a.b.c.d/prefix`（IPv4；`prefix` 为 `0..32`）
 - `sport` / `dport`：`any|N|lo-hi`（十进制；`N/lo/hi` 为 `0..65535`，且 `lo<=hi`）
 
@@ -100,7 +100,7 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctState=<...>|ctDir=<...>|sr
 
 - CIDR 必须规范化为网络地址：`a.b.c.d/prefix` 中的 `a.b.c.d` 必须已经按 `prefix` mask 归零 host bits。  
   - 示例：`1.2.3.4/24` → `1.2.3.0/24`
-- `ifindex=0` 视为 `ifindex=any`（不约束）。
+- `ifindex` 归一化：输入允许 `ifindex=any` 或 `ifindex=0` 表示 any；canonical 输出为 `ifindex=0`。
 - 若 `proto=icmp`：`sport/dport` 必须为 `any`（与引擎语义一致）。
 
 ---
@@ -117,20 +117,22 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctState=<...>|ctDir=<...>|sr
 
 ### 4.2 错误 payload（`INVALID_ARGUMENT`）
 
-冲突拒绝 apply 时，错误形态锁死为：
+冲突拒绝 apply 时，错误形态锁死为（vNext response envelope；`id` 为示例）：
 
 ```json
 {
+  "id": 123,
+  "ok": false,
   "error": {
     "code": "INVALID_ARGUMENT",
     "message": "iprules conflict: duplicated matchKey",
     "conflicts": [
       {
         "uid": 10123,
-        "matchKey": "mk1|dir=out|iface=any|ifindex=any|proto=tcp|ctState=any|ctDir=any|src=any|dst=1.2.3.0/24|sport=any|dport=443",
+        "matchKey": "mk1|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=1.2.3.0/24|sport=any|dport=443",
         "rules": [
-          {"clientRuleId": "g1:r12", "action": "block", "priority": 10, "enabled": true, "enforce": true, "log": false},
-          {"clientRuleId": "g2:r7", "action": "allow", "priority": 10, "enabled": true, "enforce": true, "log": false}
+          {"clientRuleId": "g1:r12", "action": "block", "priority": 10, "enabled": 1, "enforce": 1, "log": 0},
+          {"clientRuleId": "g2:r7", "action": "allow", "priority": 10, "enabled": 1, "enforce": 1, "log": 0}
         ]
       }
     ],
@@ -147,3 +149,85 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctState=<...>|ctDir=<...>|sr
   - `rules[]` item 最小字段：`clientRuleId` + 会影响语义的关键字段（`action/priority/enabled/enforce/log`）
 - `truncated`：若出于保护上限导致 `conflicts[]` 被截断，必须显式 `truncated=true`（避免前端误判“只有这些冲突”）。
 
+---
+
+## 5. apply 成功响应：必须回传 `clientRuleId -> ruleId -> matchKey` 映射（已确认；2.13）
+
+定位：
+- apply 的输入是“配置层展开后的 rules（含 `clientRuleId`）”，但后续运行期与后端其它接口（`UPDATE/ENABLE/REMOVE`、`PKTSTREAM.ruleId`）依赖的是 `ruleId`。
+- 因此 apply 成功时必须在响应中回传“这次生效基线里，每条 `clientRuleId` 对应哪个 `ruleId` 与 `matchKey`”，避免前端再额外 `IPRULES.PRINT` 扫一遍做 join。
+
+成功响应 shape（建议；vNext response envelope；`id` 为示例）：
+
+```json
+{
+  "id": 123,
+  "ok": true,
+  "result": {
+    "uid": 10123,
+    "rules": [
+      {"clientRuleId": "g1:r12", "ruleId": 10, "matchKey": "mk1|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=1.2.3.0/24|sport=any|dport=443"},
+      {"clientRuleId": "g2:r7", "ruleId": 11, "matchKey": "mk1|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=2.3.4.0/24|sport=any|dport=443"}
+    ]
+  }
+}
+```
+
+字段约束：
+- `result.uid`：本次 apply 的目标 UID（与请求一致）。
+- `result.rules[]`：必须与提交后的新基线 1:1 对应（每条规则一项，不得缺失）。
+- `result.rules[].clientRuleId`：与请求一致。
+- `result.rules[].ruleId`：提交后生效的稳定标识（见第 6 节）。
+- `result.rules[].matchKey`：提交后生效的 canonical 匹配集合编码（mk1）。
+
+注：
+- 若后续担心 payload 过大，可引入可选 `truncated`（默认 false），但 v1 推荐强制完整回传（与“强一致可观察”目标一致）。
+
+---
+
+## 6. `ruleId` 分配与稳定性：对 `clientRuleId` 稳定复用（已确认；2.13 B）
+
+对同一 `<uid>` 的 apply：
+
+- 若某条 `clientRuleId` 在“当前生效 ruleset”中已存在，则 apply 后必须**复用其原 `ruleId`**（即使该规则定义发生变化）。
+- 若某条 `clientRuleId` 是新增，则必须分配新的 `ruleId`：
+  - 分配器状态与 v1 `IPRULES.ADD` 一致：从 `0` 开始单调递增；
+  - 已删除的 `ruleId` 不得复用；
+  - `RESETALL` 清空规则集后，下一条新规则从初始 `ruleId = 0` 重新开始分配。
+
+等价理解：
+- `clientRuleId` 是前端的“稳定身份”；`ruleId` 是后端运行期句柄。
+- apply 是 replace 语义，但“身份复用”必须以 `clientRuleId` 为准（避免 ruleId 来回漂移导致 PKTSTREAM 归因不稳定）。
+
+实现侧要求（文档层约束）：
+- 后端必须在规则持久化结构中保存 `clientRuleId`（否则无法在重启后做到稳定复用）。
+
+---
+
+## 7. apply 对 per-rule stats 的影响：幂等 apply 不清 stats（已确认；2.13 B）
+
+apply 成功后，对每条规则的 per-rule stats 生命周期锁死为：
+
+- 新增规则（新增 `clientRuleId` / 新分配 `ruleId`）：stats 归零（初始状态）。
+- 删除规则（`clientRuleId` 不在新基线中）：stats 消失（不再可见）。
+- 复用 `ruleId` 的规则：
+  - 若“规则定义完全一致”则保留 stats；
+  - 否则 reset stats（对齐 v1 `IPRULES.UPDATE` 的心智：定义变化即清零）。
+
+“规则定义完全一致”的判据（v1）：
+- `matchKey` 相同（mk1 canonical；覆盖所有 match 维度）
+- 且 `action/priority/enabled/enforce/log` 全部相同
+
+注：
+- 该口径与现有引擎约束一致：`UPDATE` 必须 reset stats、`ENABLE 0->1` 必须 reset stats；apply 只是把“变化判定”提升到 replace 粒度。
+
+---
+
+## 8. PKTSTREAM 归因字段：继续只输出 `ruleId`（已确认；2.13 A）
+
+- PKTSTREAM 事件继续只输出数值 `ruleId/wouldRuleId`（不回显 `clientRuleId`）。
+- 前端如需把命中归因到配置来源（rule group / UI item），应通过 `ruleId -> clientRuleId` 做 join：
+  - `IPRULES.PRINT` 必须回显 `clientRuleId`（第 2 节）
+  - apply 成功响应必须回传 `clientRuleId -> ruleId` 映射（第 5 节）
+
+该选择的核心理由：避免在高频 PKTSTREAM 上引入 per-event string 成本；以“稳定 ruleId + 可 join”为主。
