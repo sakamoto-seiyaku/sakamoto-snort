@@ -3,7 +3,7 @@
 更新时间：2026-04-09  
 状态：当前共识；本文包含两条主线（互不混用代号）：
 - **工程化**：测试/回归/真机调试工作流（单元测试、集成测试、真机原生调试）
-- **功能**：可观测性分层 `A/B/C/D`（见 `docs/decisions/OBSERVABILITY_WORKING_DECISIONS.md`），以及其上层的 IPRULES / DomainPolicy 相关实现
+- **功能**：可观测性分层 `A/B/C/D`（见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`），以及其上层的 IPRULES / DomainPolicy 相关实现
 
 ## 1. 工程化基线（已收敛）
 
@@ -20,7 +20,7 @@
 
 ## 2. 功能主线收敛状态（A/B/C + IPRULES + conntrack；D 独立）
 
-基于 `docs/decisions/OBSERVABILITY_WORKING_DECISIONS.md` 与 `docs/decisions/IP_RULE_POLICY_WORKING_DECISIONS.md` 的当前共识，A/B/C 主线推荐顺序如下：
+基于 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md` 与 `docs/decisions/IP_RULE_POLICY_WORKING_DECISIONS.md` 的当前共识，A/B/C 主线推荐顺序如下：
 
 `A（Packet 判决层可观测性：add-pktstream-observability） → IPRULES v1（add-app-ip-l3l4-rules-engine，包含 C：per-rule stats） → B（DomainPolicy 层 counters：policySource） → ip-leak 融合 / IPv6 / 域名 per-rule（TBD）`
 
@@ -60,7 +60,65 @@
 
 ### 3.2 下一条真正的功能主线
 
-- **domain+IP fusion**：统一“域名侧 GLOBAL_* 并不是真全局”的命名与语义边界，梳理 DomainPolicy / IPRULES / legacy 路径之间的融合口径（入口：`docs/decisions/DOMAIN_IP_FUSION_CHECKLIST.md`）
+- **domain+IP fusion**：统一“域名侧 GLOBAL_* 并不是真全局”的命名与语义边界，梳理 DomainPolicy / IPRULES / legacy 路径之间的融合口径（入口：`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`）
+
+#### 3.2.1 domain+IP fusion：vNext control 平面落地路线（P0/P1/P2）
+
+目标：把 `docs/decisions/DOMAIN_IP_FUSION/*` 收敛出的 vNext 协议/命令面落实到代码与测试里，同时保留 legacy control（并存窗口与下线判据见 checklist 的“迁移与下线”章节）。
+
+切片约束（避免“细节失控”）：
+- 每个切片都必须是**单独可验收**的一步：先把 P0/P1（必要时 P2）跑通，再继续下一步。
+- 本阶段不讨论/不实现“健全/安全/鉴权/发布 gate”（包含 60607 暴露策略）；全部 defer 到后续安排。
+- 不改动既有域名匹配与裁决链路；vNext 只做“控制平面 + 可观测性输出口径 + 落盘形态”的承接与对齐。
+
+单一真相（实现必须以此为准）：
+- vNext 协议/wire/envelope/errors/selector：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+- vNext 命令面（cmd/args/result/errors）：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+- vNext stream/metrics/tracked/reset：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- vNext IPRULES apply 契约：`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
+
+推荐切片（按顺序；每个切片建议对应一个 OpenSpec change）：
+
+1) `add-control-vnext-codec-ctl`（vNext codec + `sucre-snort-ctl`）
+   - 交付物：netstring 打包/解包；严格 JSON encode/decode（至少处理 string escape）；`sucre-snort-ctl`（发送/接收 vNext frame + pretty 输出；替代 socat 手敲）
+   - P0：codec/encoder 单测（netstring roundtrip、partial read、多帧、len 超限、JSON string escape 最小集）
+   - P1/P2：N/A（本切片不依赖真机）
+   - 验收口径：host 上可稳定“构造 request + 解包 response”（通过本地 mock vNext server 覆盖）
+
+2) `add-control-vnext-daemon-hello`（daemon vNext listener + `HELLO/HELP`）
+   - 交付物：60607 + vNext unix socket listener；netstring read/write；严格 JSON parse；统一 envelope；结构化错误与 strict reject；最小命令集 `HELLO/HELP`（可选 `PING/ECHO` 仅用于测试）
+   - P0：parser/validator 单测（unknown key strict reject、candidates/structured error、id 回显、maxBytes 超限断连）
+   - P1：`tests/integration/` 新增 vNext baseline case（`sucre-snort-ctl hello/help`）+ 断连/重连覆盖
+   - P2（建议从这里开始就加）：真机 smoke 覆盖“并发连接（非独占）”的基本行为
+   - 验收口径：在真机上稳定完成：启动 daemon → `HELLO/HELP` → 断连/重连 → 并发两客户端互不影响（last-write-wins 的并发 mutate 语义留到后续命令面阶段）
+
+3) `add-control-vnext-domain-surface`（DomainPolicy/DomainLists/DomainRules：控制面迁移）
+   - 交付物：把 vNext domain 命令面落到 daemon（保持域名匹配实现不动；只做入参校验/落盘形态/返回口径/错误模型）；明确 `DOMAINPOLICY.APPLY` ack-only
+   - P0：domain 命令 handler 单测（apply 原子性：一次请求整体成功/失败；错误结构稳定；print/get 输出 shape 稳定）
+   - P1：新增 integration case：apply→print→verify（可先用 `DEV.DNSQUERY` 做真机闭环验证）
+   - P2（按需）：在 `device-smoke` 增加最小回归（避免“只有单测对，但真机展示错”）
+
+4) `add-control-vnext-iprules-surface`（IPRULES.*：控制面迁移）
+   - 交付物：`IPRULES.PREFLIGHT/PRINT/APPLY` vNext 落地，并严格对齐 `IPRULES_APPLY_CONTRACT.md`（字段全集/类型写死，禁止 shape 漂移）
+   - P0：apply contract 单测（schema、冲突回显、toggle=0|1、禁止携带 ruleId/matchKey/stats 等）
+   - P1：integration case：preflight→apply→print→verify；并与现有 `tests/integration/iprules.sh` 共享同一套“期望规则集”
+   - P2：复用 `tests/device-modules/ip/run.sh` 增加一个 vNext control 驱动 profile（作为“真机一眼验收”的硬门槛）
+
+5) `add-control-vnext-metrics`（metrics vNext：`traffic`/`conntrack`）
+   - 交付物：`METRICS.GET/RESET` vNext（name=`traffic|conntrack`；口径对齐 `OBSERVABILITY_WORKING_DECISIONS.md`）；任务分解见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
+   - P0：metrics 口径/RESET 边界/输出 shape 单测
+   - P1：integration：产生少量可控流量后验证 metrics 增长与 reset
+   - P2（按需）：perf baseline 对比（不锁阈值，只锁“不退化到不可用”）
+
+6) `add-control-vnext-stream`（stream vNext：pipeline + `STREAM.*` + NOTICE）
+   - 交付物：异步 pipeline + 真 gate；`STREAM.START/STOP/RESET*` 状态机、STOP ack barrier、禁止输出交织；`type="notice"`（suppressed/dropped）；任务分解见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
+   - P0：queue/ring/NOTICE 聚合/STOP barrier 单测
+   - P1：integration：启动 stream → 产生可预期事件（`DEV.*` 或可控 test traffic）→ STOP barrier → 验证无交织/无半帧
+   - P2：真机 perf/反压基线对比（不锁阈值，只锁“不应退化到不可用”）
+
+7) `migrate-to-control-vnext`（前端/脚本默认迁移 + legacy 并存与下线）
+   - 交付物：前端与脚本默认走 vNext；legacy 保留但明确标注“将被关闭”；补齐回滚路径（出现控制平面问题可快速切回 legacy）
+   - 验收口径：不止是“默认迁到 vNext + 回归/真机基线通过 + 至少一个发布周期无回滚”，还包括：发布后**至少两个小版本更新**未出现控制平面问题反馈，才视为 vNext 稳定；再进入 60606 下线窗口
 - **ip-leak 重新纳入设计**：在 fusion 阶段统一决定其启用条件、优先级、可观测性与控制面形态；当前仍保持独立 backlog，不反向污染已收敛的 IPRULES v1/B 层语义
 
 ### 3.3 明确后置（不要提前打散主线）

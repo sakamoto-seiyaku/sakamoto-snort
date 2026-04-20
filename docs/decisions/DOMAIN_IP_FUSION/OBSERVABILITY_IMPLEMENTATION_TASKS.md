@@ -4,12 +4,18 @@
 状态：任务分解（仅列“要做什么”；不在此处实现代码）
 
 > 本文是把 `OBSERVABILITY_WORKING_DECISIONS.md` 的工作结论提炼为可执行 task list。
-> 讨论阶段只维护本目录（`docs/decisions/DOMAIN_IP_FUSION/`）内文档，不外溢到代码与其他权威文档。
+> 本文只维护本目录（`docs/decisions/DOMAIN_IP_FUSION/`）内的任务分解；切片与 gate 以 `docs/IMPLEMENTATION_ROADMAP.md` 为准；不在此处推动代码与其它权威规格更新。
 
 ## 0. 参考
 
 - `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`（总纲；2.8 ACA 性能红线）
 - `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`（可观测性工作结论）
+
+## 0.1 与 Roadmap 的关系（避免分科漂移）
+
+- `docs/IMPLEMENTATION_ROADMAP.md` 负责定义“切片（change）与 P0/P1/P2 gate”；本文件只负责把 **可观测性切片**展开为可执行 task list。
+- 本文件覆盖的范围：roadmap `3.2.1` 的 `add-control-vnext-metrics` + `add-control-vnext-stream`（统称 “observability vNext”）。
+- 本文件中提到的 **通用 vNext 基础设施**（netstring framing、严格 JSON parse/encode、selector/错误模型/strict reject）应在 `add-control-vnext-codec-ctl` + `add-control-vnext-daemon-hello` 完成；本文件只复述其对 stream/metrics 的使用要求，避免重复设计。
 
 ## 1. 范围与边界（先锁死）
 
@@ -102,6 +108,7 @@
     - 严格 JSON（2.10）：所有字符串字段必须正确 escape（至少处理 `\" \\ \n \r \t`；vNext 必须引入统一 JSON string encoder）。
   - `STREAM.STOP` 的 response frame 作为 ack barrier（见上）；任何失败返回 `{"id":...,"ok":false,"error":{...}}`。
   - 进入 stream 模式后禁止复用连接执行非 stream 控制命令；如需查询/配置另开控制连接。
+  - 注：netstring framing + 严格 JSON encoder/decoder 属于 vNext core 共享能力；实现上应在 `add-control-vnext-codec-ctl` + `add-control-vnext-daemon-hello` 落地并复用，避免 observability 切片自建一套 writer/encoder 口径。
 - 并发/锁：
   - `mutexListeners` 锁内不得做 I/O；不得做大 JSON 构造；不得做无界分配。
   - `RESETALL`（独占锁）不得被 writer/队列阻塞。
@@ -154,7 +161,7 @@
   - `docs/INTERFACE_SPECIFICATION.md`：补齐命令名与 JSON shape（包含 selector 多用户语义）。
 - 更新实现路线图与 change 切片描述：`docs/IMPLEMENTATION_ROADMAP.md`（仅在进入实现阶段时同步）。
 
-## 5. 推荐 change 切片顺序（实现阶段参考）
+## 5. 推荐实现顺序（observability vNext：`add-control-vnext-metrics` → `add-control-vnext-stream`）
 
 1) Traffic metrics（metrics name=`traffic`；`METRICS.GET`/`METRICS.RESET`）
 2) Conntrack metrics（metrics name=`conntrack`；`METRICS.GET`；仅 `RESETALL` 清零）
