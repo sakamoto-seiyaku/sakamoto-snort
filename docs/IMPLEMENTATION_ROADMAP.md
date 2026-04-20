@@ -117,8 +117,10 @@
    - 验收口径：在真机上稳定完成：启动 daemon → `HELLO`/inventory/config → 断连/重连 → 并发两客户端互不影响（并发 mutate 语义：last-write-wins）
 
 3) `add-control-vnext-domain-surface`（DomainPolicy/DomainLists/DomainRules：控制面迁移）
-   - 交付物：把 vNext domain 命令面落到 daemon（保持域名匹配实现不动；只做入参校验/落盘形态/返回口径/错误模型）；明确 `DOMAINPOLICY.APPLY` ack-only
-   - P0：domain 命令 handler 单测（apply 原子性：一次请求整体成功/失败；错误结构稳定；print/get 输出 shape 稳定）
+   - 交付物：
+     - 把 vNext domain 命令面落到 daemon（保持域名匹配实现不动；只做入参校验/落盘形态/返回口径/错误模型）；明确 `DOMAINPOLICY.APPLY` ack-only
+     - `DOMAINLISTS.IMPORT`：落实命令级上限（例如 `maxImportDomains`/`maxImportBytes`）；当 payload 未超过 `maxRequestBytes` 但超出命令级上限时，必须返回结构化错误（提示前端/CLI 分批导入），避免默默截断或引入隐式规则
+   - P0：domain 命令 handler 单测（apply 原子性：一次请求整体成功/失败；错误结构稳定；print/get 输出 shape 稳定；`DOMAINLISTS.IMPORT` 超限必须结构化报错）
    - P1：新增 integration case：apply→print→verify（可先用 `DEV.DNSQUERY` 做真机闭环验证）
    - P2（按需）：在 `device-smoke` 增加最小回归（避免“只有单测对，但真机展示错”）
 
