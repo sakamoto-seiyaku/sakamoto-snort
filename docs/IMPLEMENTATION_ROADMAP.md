@@ -80,17 +80,41 @@
 推荐切片（按顺序；每个切片建议对应一个 OpenSpec change）：
 
 1) `add-control-vnext-codec-ctl`（vNext codec + `sucre-snort-ctl`）
-   - 交付物：netstring 打包/解包；严格 JSON encode/decode（至少处理 string escape）；`sucre-snort-ctl`（发送/接收 vNext frame + pretty 输出；替代 socat 手敲）
-   - P0：codec/encoder 单测（netstring roundtrip、partial read、多帧、len 超限、JSON string escape 最小集）
+   - 交付物（必须一次到位，避免后续切片返工）：
+     - JSON 库：vendor **RapidJSON**（header-only；同时接入 Android.bp 与 host CMake build）
+     - vNext codec（可复用模块；daemon/ctl/tests 共用）：
+       - netstring framing：roundtrip、partial read、一次 read 多帧、header/terminator 校验
+       - JSON codec：严格 JSON parse/encode（字符串 escape 最小集；禁止 `std::stringstream` 手写拼 JSON）
+       - envelope helpers：`{"id","cmd","args"}` / `{"id","ok","result|error"}` + strict reject（unknown key）
+     - `sucre-snort-ctl`（host C++ 二进制；替代 socat 手敲）：
+       - `--help|help`：输出命令目录/示例（对应“vNext daemon 不提供 HELP”的裁决）
+       - request/response/event：负责打包/解包 netstring + JSON，并 pretty 输出
+       - 支持 tcp 与 unix socket（便于 host/真机/开发态复用；adb forward 场景走 tcp）
+   - P0：codec/encoder 单测（netstring roundtrip、partial read、多帧、len/header 错误、严格 JSON string escape 最小集、unknown key strict reject）
    - P1/P2：N/A（本切片不依赖真机）
    - 验收口径：host 上可稳定“构造 request + 解包 response”（通过本地 mock vNext server 覆盖）
 
-2) `add-control-vnext-daemon-hello`（daemon vNext listener + `HELLO/HELP`）
-   - 交付物：60607 + vNext unix socket listener；netstring read/write；严格 JSON parse；统一 envelope；结构化错误与 strict reject；最小命令集 `HELLO/HELP`（可选 `PING/ECHO` 仅用于测试）
-   - P0：parser/validator 单测（unknown key strict reject、candidates/structured error、id 回显、maxBytes 超限断连）
-   - P1：`tests/integration/` 新增 vNext baseline case（`sucre-snort-ctl hello/help`）+ 断连/重连覆盖
-   - P2（建议从这里开始就加）：真机 smoke 覆盖“并发连接（非独占）”的基本行为
-   - 验收口径：在真机上稳定完成：启动 daemon → `HELLO/HELP` → 断连/重连 → 并发两客户端互不影响（last-write-wins 的并发 mutate 语义留到后续命令面阶段）
+2) `add-control-vnext-daemon-base`（daemon vNext listener + Meta/Inventory/Config）
+   - 交付物：
+     - endpoints（生产路径 + 开发 fallback 都必须明确）：
+       - vNext unix socket：`sucre-snort-control-vnext`（filesystem+abstract）
+         - production：`sucre-snort.rc` 声明 socket（与 legacy 并存）
+         - dev fallback：无 init socket 时创建/暴露 vNext filesystem+abstract（避免生产/开发路径分叉）
+       - vNext TCP：`60607`（`inetControl()` gating；保持与 legacy 口径一致）
+     - 协议与 I/O：
+       - netstring read/write；严格 JSON parse；统一 envelope；结构化错误与 strict reject
+       - `HELLO` 必须回显：`protocolVersion`/`framing`/`maxRequestBytes`/`maxResponseBytes`
+       - I/O 边界：vNext 不发送 NUL terminator；不得复用 legacy `SocketIO::print()` 的 “size()+1（含 NUL）” 语义，避免 framing 混淆
+     - 最小命令集：`HELLO/QUIT/RESETALL`、`APPS.LIST/IFACES.LIST`、`CONFIG.GET/CONFIG.SET`
+     - 备注（已确认）：vNext（v1）daemon **不提供** legacy 的 `HELP/PASSWORD/PASSSTATE`；help 由 `sucre-snort-ctl --help|help` 等 CLI 承担
+     - 迁移期 dataplane 约束（已确认）：当 `inetControl()` 开启时，PacketListener 必须豁免 60606 + 60607（避免 control traffic 被 blocking/干扰；见 `CONTROL_PROTOCOL_VNEXT.md`）
+     - 工程底座：补齐 P1/P2 的 vNext forward + baseline 发送/解析（优先复用 `sucre-snort-ctl`，避免另写一套 framing）
+       - `dev/dev-android-device-lib.sh`：增加 vNext forward 支持（转发到 `localabstract:sucre-snort-control-vnext`）
+       - `tests/integration/*`：新增 vNext baseline case（不要复用 legacy `HELP` 心智）
+   - P0：parser/validator 单测（unknown key strict reject、candidates/structured error、id 回显、`len > maxRequestBytes` 超限断连）
+   - P1：`tests/integration/` 新增 vNext baseline case（`sucre-snort-ctl hello` + inventory/config 最小闭环）+ 断连/重连覆盖（优先走 unix abstract socket）
+   - P2（补齐 tcp 60607 覆盖）：在 `inetControl()` 开启且 `BLOCK=1` 的场景下验证 vNext TCP 控制面可用（覆盖“60607 豁免”这一设计约束）
+   - 验收口径：在真机上稳定完成：启动 daemon → `HELLO`/inventory/config → 断连/重连 → 并发两客户端互不影响（并发 mutate 语义：last-write-wins）
 
 3) `add-control-vnext-domain-surface`（DomainPolicy/DomainLists/DomainRules：控制面迁移）
    - 交付物：把 vNext domain 命令面落到 daemon（保持域名匹配实现不动；只做入参校验/落盘形态/返回口径/错误模型）；明确 `DOMAINPOLICY.APPLY` ack-only
@@ -118,6 +142,8 @@
 
 7) `migrate-to-control-vnext`（前端/脚本默认迁移 + legacy 并存与下线）
    - 交付物：前端与脚本默认走 vNext；legacy 保留但明确标注“将被关闭”；补齐回滚路径（出现控制平面问题可快速切回 legacy）
+   - 迁移期文案/提示：在 legacy `HELP`（或等价入口）中显式标注“冻结/无作用”的开关（如 `BLOCKIPLEAKS/GETBLACKIPS/MAXAGEIP`）与 vNext 迁移提示，避免误连 legacy 导致用户困惑
+   - tracked UX：前端在显式开启 tracked 时必须提示“可能带来性能影响”，并在 UI 中明确展示当前 tracked 状态（含升级后遗留的 tracked=true），避免隐式长期 tracked
    - 验收口径：不止是“默认迁到 vNext + 回归/真机基线通过 + 至少一个发布周期无回滚”，还包括：发布后**至少两个小版本更新**未出现控制平面问题反馈，才视为 vNext 稳定；再进入 60606 下线窗口
 - **ip-leak 重新纳入设计**：在 fusion 阶段统一决定其启用条件、优先级、可观测性与控制面形态；当前仍保持独立 backlog，不反向污染已收敛的 IPRULES v1/B 层语义
 

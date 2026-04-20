@@ -161,6 +161,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 布尔语义字段：统一使用 JSON boolean（`true|false`），例如：`blocked/accepted/wouldDrop/blockEnabled`。
 - `timestamp` 格式锁死为字符串：`"<sec>.<nsec>"`（nsec 固定 9 位，不足补 0）；DNS/pkt 同口径。
   - 注：这条约束只适用于 stream 事件 schema；控制面里“开关类命令”的返回值仍可维持 legacy `0|1`（numbers），两者不强行统一。
+- `protocol` 字段类型锁死为 string（对用户/前端更友好）：`"tcp"|"udp"|"icmp"|"other"`（ICMPv6 同样使用 `"icmp"`；未知/不支持用 `"other"`，不使用 `"n/a"`）。
 
 - `type="dns"`（DNS 判决事件）最小字段：
   - 识别：`type`
@@ -465,6 +466,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - `METRICS.GET(name=reasons)`、`METRICS.GET(name=domainSources)`、`IPRULES.PRINT stats`、`METRICS.GET(name=traffic)`、`METRICS.GET(name=conntrack)` 等应默认可查
 - 默认值：`tracked=false`（便于极限压测与降低默认噪音；需要观测某个 app 时通过 `CONFIG.SET(scope=app,set={tracked:1})` 显式开启）
 - `tracked` 持久化（D8）：daemon 重启后保持原值；前端在显式开启 tracked 时必须提示用户“可能带来性能影响”。
+- 升级/UX 注意：由于 `tracked` 语义在融合后可能变“更重”，前端必须在 UI 中显式展示当前 tracked 状态（尤其是升级后已存在 `tracked=true` 的 app），避免用户在未确认的情况下长期处于 tracked 状态。
 
 #### 4.7.2 `RESETALL` 与 counters 边界（补充）
 
