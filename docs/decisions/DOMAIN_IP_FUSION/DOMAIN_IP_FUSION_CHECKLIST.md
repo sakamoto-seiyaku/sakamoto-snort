@@ -55,6 +55,32 @@
   - `openspec/specs/domain-policy-observability/spec.md`（`policySource` 枚举 rename）
   - `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`（与 OpenSpec 对齐）
 
+## 0.3 设计阶段收口/验收（Design Freeze）
+
+当且仅当下面所有条件都满足时，可认为 **DOMAIN_IP_FUSION 设计阶段结束**；此后任何新增/变更都应进入 change/task/实现流程（不再在本目录引入新语义）。
+
+### 0.3.1 文档结构（必须）
+
+- 单一真相固定且可引用：`CONTROL_PROTOCOL_VNEXT.md` / `CONTROL_COMMANDS_VNEXT.md` / `OBSERVABILITY_WORKING_DECISIONS.md` / `IPRULES_APPLY_CONTRACT.md`
+- `DOMAIN_IP_FUSION_NITPICKS_TMP.md` 只允许记录“未落盘 open issues”；一旦裁决必须回写单一真相并清空对应条目
+- `DOMAIN_IP_FUSION_CHECKLIST.md` 第 4 章仅用于索引 open issues 与 defer 清单，不承载接口契约
+
+### 0.3.2 协议与命令契约（必须）
+
+- vNext 协议不变式已写死并无互相矛盾：framing/envelope/strict reject/error model/selector/每 request 恰好 1 个 response（framing 断连除外）
+- vNext 命令面不变式已写死并无互相矛盾：scope 规则、`0|1` toggle、所有 `*.APPLY` 原子 replace、selector not-found/ambiguous 必须结构化错误（不得 silent no-op）
+- 可观测性不变式已写死并无互相矛盾：tracked gating、stream/ring/drop/notice、STOP ack barrier、以及 legacy 模块（`BLOCKIPLEAKS` 等）冻结边界
+- IPRULES apply 不变式已写死并无互相矛盾：`matchKey` mk1、冲突拒绝、成功回显映射等
+
+### 0.3.3 边界与移交（必须）
+
+- defer/非目标清单明确且不夹带承诺（例如 `ip-leak/BLOCKIPLEAKS`、`GETBLACKIPS/MAXAGEIP`、IPv6、domain per-rule stats 等）
+- 进入实现阶段的“目录外同步范围”已在本 checklist 中列清（但不同步动作不在本阶段执行）
+
+### 0.3.4 最终验收检查（必须）
+
+- `DOMAIN_IP_FUSION_NITPICKS_TMP.md` 的 open issues 为空（或仅剩“提醒”类文字）
+
 ---
 
 ## 1. 当前系统快照（按代码事实）

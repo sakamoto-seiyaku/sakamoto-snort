@@ -21,21 +21,4 @@
 
 ## 1. Open issues（请逐条回复）
 
-### 1.1 `DOMAINLISTS.APPLY`：订阅字段的更新语义（patch vs replace）
-
-要写入的位置：
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md` → `DOMAINLISTS.APPLY`（`upsert[]` item 的订阅字段语义）
-
-问题（必须钉死，否则实现/前端会互相踩）：
-- `upsert[]` 中 `url/name/updatedAt/etag/outdated/domainsCount` 是否必填？
-- 是否允许只更新其中部分字段（其余保持不变）？
-
-选项（选一个并写死）：
-- A（推荐）：**patch 语义**  
-  - `listId/listKind/mask/enabled` 必填；订阅字段全可选，未提供=保持旧值。  
-  - 创建新 list 时订阅字段默认：`url/name/etag/updatedAt=""`、`domainsCount=0`、`outdated=1`。  
-- B：**replace 语义**  
-  - upsert 时订阅字段必须全量携带；缺失即 `INVALID_ARGUMENT`（前端需先 GET 再完整回写）。  
-- C：拆分命令  
-  - `DOMAINLISTS.APPLY` 只管执行配置；新增 `DOMAINLISTS.META.SET` 专门更新订阅字段（命令面变多）。
-
+（当前为空：本文件只保留“未落盘 open issues”；已确认项已落盘到单一真相文档。）

@@ -390,6 +390,20 @@ request（示例）：
 
 response：`{"id":2,"ok":true}`
 
+订阅字段更新语义（已确认；A=patch）：
+- `upsert[]` item 中：
+  - 执行配置字段 `listId/listKind/mask/enabled` **必填**；
+  - 订阅字段 `url/name/updatedAt/etag/outdated/domainsCount` **可选**：
+    - 未提供则保持后端已存值不变（patch 语义）；
+    - 提供则覆盖写入。
+- 创建新 list 时，订阅字段默认值（若未在 upsert 中提供）：
+  - `url=""`
+  - `name=""`
+  - `updatedAt=""`
+  - `etag=""`
+  - `outdated=1`
+  - `domainsCount=0`
+
 `enabled` 语义（与现实现一致；摘要）：
 - `enabled=0`：该 list 不参与域名匹配链路（从内存快照中移除；若存在 on‑disk enabled 文件，应切换为 disabled 形式）。
 - `enabled=1`：该 list 参与域名匹配链路（若存在 on‑disk disabled 文件，应切换为 enabled 形式并载入/重建内存快照）。
