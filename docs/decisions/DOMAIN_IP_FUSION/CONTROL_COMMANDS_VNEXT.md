@@ -1,6 +1,6 @@
 # Control Commands vNext（命令目录）
 
-更新时间：2026-04-17  
+更新时间：2026-04-20  
 状态：已收敛（命令面单一真相；不继承 legacy 命令体系；实现/落盘到 change 另行拆分）
 
 > - 线协议（framing / JSON envelope / error model / selector）见：`CONTROL_PROTOCOL_VNEXT.md`  
@@ -46,11 +46,23 @@ vNext 全局 strict：
 - `args.scope="device"`（不允许出现 `args.app`）
 - `args.scope="app"`（必须出现 `args.app`）
 
-### 0.6 apply（原子 replace）
+### 0.6 apply（原子更新）
 
 所有 `*.APPLY`（包括 `DOMAINRULES.APPLY` / `DOMAINPOLICY.APPLY` / `DOMAINLISTS.APPLY` / `IPRULES.APPLY`）默认语义：
 - 一次请求要么整体成功、要么整体失败（禁止部分成功）。
 - 成功返回后，后续查询/判决必须看到新基线；失败不污染现有基线。
+  - 备注：具体是 **replace** 还是 **patch/merge** 由各命令章节单独定义（例如 `DOMAINRULES.APPLY/DOMAINPOLICY.APPLY/IPRULES.APPLY` 是 replace；`DOMAINLISTS.APPLY` 对订阅字段是 patch）。
+
+### 0.7 输出排序（稳定；已确认）
+
+为便于 diff/回灌/测试快照，vNext 对部分系统生成的数组输出锁死排序规则：
+
+- `APPS.LIST.result.apps[]`：按 `uid` 升序
+- `IFACES.LIST.result.ifaces[]`：按 `ifindex` 升序
+- `DOMAINRULES.GET/DOMAINRULES.APPLY.result.rules[]`：按 `ruleId` 升序
+- `DOMAINLISTS.GET.result.lists[]`：按 `listKind` 再按 `listId` 升序（字符串序）
+
+> 备注：JSON object 的 key 顺序不承诺；客户端不得依赖字段输出顺序。
 
 ---
 
@@ -63,7 +75,7 @@ vNext 全局 strict：
 - `RESETALL`
 
 备注（已确认）：
-- vNext daemon **不提供** legacy 的 `HELP/PASSWORD/PASSSTATE` 命令；help 由 `sucre-snort-ctl --help|help` 等 CLI 承担（见 `CONTROL_PROTOCOL_VNEXT.md`）。
+- vNext（v1）daemon **不提供** legacy 的 `HELP/PASSWORD/PASSSTATE` 命令；help 由 `sucre-snort-ctl --help|help` 等 CLI 承担（见 `CONTROL_PROTOCOL_VNEXT.md`）。鉴权/权限模型属于延后项（见本目录 checklist）。
 
 ### 1.2 Inventory
 
@@ -113,7 +125,7 @@ request：
 response（最小字段集合建议）：
 
 ```json
-{"id":1,"ok":true,"result":{"protocol":"control-vnext","protocolVersion":4,"framing":"netstring","maxFrameBytes":123456}}
+{"id":1,"ok":true,"result":{"protocol":"control-vnext","protocolVersion":1,"framing":"netstring","maxRequestBytes":123456,"maxResponseBytes":123456}}
 ```
 
 ### 2.2 `QUIT`
@@ -150,11 +162,15 @@ request（示例）：
 response（示例）：
 
 ```json
-{"id":1,"ok":true,"result":{"apps":[{"uid":10123,"userId":0,"app":"com.example","allNames":["..."]}]}}
+{"id":1,"ok":true,"result":{"apps":[{"uid":10123,"userId":0,"app":"com.example","allNames":["..."]}],"truncated":false}}
 ```
 
 约束：
 - `allNames` 仅展示，不参与 selector resolve。
+- `limit`（u32，可选）：
+  - 默认：`200`（未提供时）
+  - 最大：`1000`（超出时 clamp 到 1000；不报错）
+  - 若结果因 `limit` 或实现侧保护上限被截断，必须返回 `result.truncated=true`（否则 `false`）。
 
 ### 2.5 `IFACES.LIST`
 
@@ -246,9 +262,12 @@ response（示例）：
 ```
 
 `type`（v1）：
-- `domain`：按 regex 解释（不转义元字符；与现实现一致；`.` 仍是“任意字符”）。**语义上与 `regex` 等价**，主要用于表达“域名腿的规则”。
+- `domain`：按 regex 解释（不转义元字符；与现实现一致；`.` 仍是“任意字符”）。**在 `protocolVersion=1` 下语义上与 `regex` 等价**；客户端当前应把 `domain` 当作 `regex` 处理。
 - `wildcard`：纯 glob（仅 `*`/`?` 有特殊含义；其它 regex 元字符会被转义），用于人类友好的通配表达。
 - `regex`：按 regex 解释（不转义元字符；与现实现一致；`.` 仍是“任意字符”）。语义上与 `domain` 等价，建议用于“明确就是正则”的场景。
+
+演进提醒（已确认；R-013=B）：
+- 未来允许将 `type="domain"` 调整为“更贴近域名心智”的新语义；若发生，必须 bump `protocolVersion`（client 需通过 `HELLO` 版本协商后才可使用新语义）。
 
 #### 2.7.2 `DOMAINRULES.APPLY`
 
@@ -271,6 +290,12 @@ response（示例；回传最终基线，便于拿到新分配的 ruleId）：
   {"ruleId":13,"type":"wildcard","pattern":"*.ads.example.com"}
 ]}}
 ```
+
+`ruleId` 语义（R-004；已确认 A）：
+- `ruleId` 是规则身份（identity）；daemon 不会用 `(type,pattern)` 去推断“这是不是同一条规则”或复用既有 `ruleId`。
+- 若要更新/保留一条已有规则，客户端**必须**携带其 `ruleId`（通常流程：先 `DOMAINRULES.GET` → 再 `DOMAINRULES.APPLY`）。
+- `ruleId` 缺失仅用于“新增规则”：daemon 会分配新的 `ruleId` 并在 `result.rules[]` 中回显。
+- 为避免无意的 `ruleId` 漂移：若某条规则 `ruleId` 缺失，且其 `(type,pattern)` 与当前基线中某条规则完全相同，则必须拒绝（`INVALID_ARGUMENT`，hint：请先 GET 拿到该规则的 `ruleId` 再更新）。
 
 不冲突（v1 最小口径）：
 - payload 内 `ruleId`（若提供）必须唯一；
@@ -328,10 +353,27 @@ request（app）：
 }}}
 ```
 
+response（已确认；R-011=A）：
+
+```json
+{"id":2,"ok":true}
+```
+
+> 若客户端需要确认最终基线，应调用 `DOMAINPOLICY.GET` 拉取。
+
 约束：
 - `ruleIds[]` 必须引用 `DOMAINRULES` 当前基线内存在的 ruleId；不存在 → `INVALID_ARGUMENT`（并给出 hint）。
 - 同一 scope 内 allow/block 允许相交（按现代码优先级：allow wins）；不得因为相交或重复而拒绝 apply。
-- **不做 canonicalization（已确认）**：`domains[]` 按原始字符串解释（大小写敏感；不保证自动 trim/lowercase/去尾点）。客户端若希望稳定命中，应自行统一输入形式（建议 lower-case 且无 trailing `.`）。
+- 数组语义（已确认；R-009=C）：
+  - daemon 不承诺对 `domains[]/ruleIds[]` 做去重或稳定排序；客户端应将其当作 **set** 使用，并自行去重/排序（用于 diff/备份/回灌）。
+  - payload 内重复项允许（不因此拒绝 apply）；运行期效果等价于去重后的集合。
+- `domains[]` string 最小校验（已确认；R-006=A）：
+  - 必须为非空字符串，长度 `<= HOST_NAME_MAX`；
+  - 禁止任何 ASCII whitespace（space/`\t`/`\n`/`\r`/`\v`/`\f`）；
+  - 禁止控制字符（`< 0x20`）与 `\0`。
+- canonicalization（已确认；R-005=A）：
+  - daemon 不做通用 canonicalization：大小写敏感；不自动 trim/lowercase；
+  - custom domains / rules 路径也不会“自动忽略尾点 `.`”，因此客户端（前端/脚本/CLI）**必须**自行统一输入形式（至少去掉单个尾点 `.`），否则可能出现“list 能命中但 custom 不命中”的差异。
 - **gating（现实现一致）**：某个 app 是否参与 device/app 两个 scope 的 custom domain policy，受 `CONFIG.SET(scope=app, set={"domain.custom.enabled":0|1})` 控制；当该开关为 0 时，该 app 的 domain 判决将直接走 `MASK_FALLBACK`（忽略 device/app 两层 custom domains/rules）。
 - 判决顺序（现实现一致；用于解释“allow wins”）：
   - 当 `domain.custom.enabled=1`：app allow → app block → app allow rules → app block rules → device allow → device block → `MASK_FALLBACK`（即 `block.mask & DOMAINLISTS(block)`；其中 `DOMAINLISTS(allow)` 仅在该 fallback 内表现为 blockMask=0 的 override）。
@@ -344,7 +386,8 @@ request（app）：
 #### 2.9.1 listKind
 
 - `listKind="block" | "allow"`
-- `listId`：建议使用 GUID（仅允许 hex digits 与 `-`；长度 1..64），避免路径注入与实现分歧（与现代码 `DomainList::validListId()` 口径一致）。
+- `listId`（已确认；R-008=A）：必须是 36 字符 GUID（`8-4-4-4-12`），仅允许 hex digits 与 `-`。
+  - 备注：这条约束与现有 blocking lists 元数据落盘/restore 口径一致（`Saver::readGuid()`）；即使底层 `DomainList::validListId()` 更宽松，vNext 仍选择在接口层收紧以降低迁移复杂度与踩坑概率。
 - `mask`（u8）：必须是单 bit selector，且满足现代码 `Settings::isValidBlockingListMask()`：`1|2|4|8|16|32|64`。
 
 mask 语义（重要）：
@@ -375,7 +418,7 @@ response（示例）：
 
 #### 2.9.3 `DOMAINLISTS.APPLY`
 
-语义：原子 replace（路线 1），包含 upsert + remove。
+语义：原子更新（包含 upsert + remove；订阅字段为 patch 语义）。
 
 request（示例）：
 
@@ -388,7 +431,11 @@ request（示例）：
 }}
 ```
 
-response：`{"id":2,"ok":true}`
+response（示例；回显 remove 结果，便于前端幂等处理）：
+
+```json
+{"id":2,"ok":true,"result":{"removed":["89abcdef-0123-4567-89ab-cdef01234567"],"notFound":[]}}
+```
 
 订阅字段更新语义（已确认；A=patch）：
 - `upsert[]` item 中：
@@ -410,6 +457,8 @@ response：`{"id":2,"ok":true}`
 
 remove 语义（摘要）：
 - `remove[]` 必须同时移除：list 配置 + 该 list 的 domains 文件（enabled/disabled 两种）+ 内存快照中的该 list 条目。
+- `remove[]` 包含未知 `listId` 时：不报错；在 `result.notFound[]` 中回显（已确认；C）。
+- `result.removed[]/notFound[]` 的顺序：与请求 `remove[]` 保持一致（去重后）。
 
 `listKind` 可变性（按现代码现状；2.11‑B）：
 - 允许同一个 `listId` 在 `block` 与 `allow` 之间切换（高风险；前端应显式提示/二次确认）。  
@@ -432,13 +481,26 @@ request（示例）：
 
 response（示例）：`{"id":3,"ok":true,"result":{"imported":2}}`
 
+`clear` 语义（已确认；A）：
+- `clear=1`：先清空该 `listId` 的已落盘 domains 集合，再导入 `domains[]`（replace）。
+- `clear=0`（默认）：不清空，按“集合并集”导入（只追加不存在的 domain；重复项忽略）。
+- 命令级原子性：导入要么整体成功、要么整体失败；失败不得污染现有集合（不得“导入了一半”）。
+
 约束：
-- `domains[]` 只做**最小保护性校验**（保持现有域名匹配实现不动）：必须是非空字符串、长度上限（例如 `<= HOST_NAME_MAX`）、且不得包含 `\0`/换行；不做“DNS 语法合法性”校验。出现非法条目必须整体拒绝（`INVALID_ARGUMENT`），不得部分成功。
-- **不做 canonicalization（已确认）**：`domains[]` 按原始字符串解释（大小写敏感；不保证自动 trim/lowercase/去尾点）。若客户端希望稳定命中/去重，应自行统一输入形式（建议 lower-case 且无 trailing `.`）。
+- `domains[]` 只做**最小保护性校验**（保持现有域名匹配实现不动；已确认；R-006=A）：
+  - 必须为非空字符串，长度 `<= HOST_NAME_MAX`；
+  - 禁止任何 ASCII whitespace（space/`\t`/`\n`/`\r`/`\v`/`\f`）；
+  - 禁止控制字符（`< 0x20`）与 `\0`；
+  - 不做“DNS 语法合法性”校验（不校验 label/IDN/最大层级等）。
+  - 出现非法条目必须整体拒绝（`INVALID_ARGUMENT`），不得部分成功。
+- canonicalization（已确认；R-005=A）：
+  - daemon 不做通用 canonicalization：大小写敏感；不自动 trim/lowercase/去尾点；按原样落盘/匹配。
+  - 备注（实现细节）：现代码的 domain list matcher 会对 query 的尾点 `.` 做兼容处理；但该行为不会扩展到 custom domains / rules。
+  - 因此客户端（前端/脚本/CLI）**必须**自行统一输入形式（至少去掉单个尾点 `.`），用于稳定命中与去重；否则可能出现“list 命中但 custom 不命中”，以及“导入了带尾点的 domain 但永远不会命中”的踩坑。
 - `listKind/mask` 仅用于一致性校验（已确认；2.10‑B）：必须与后端已存该 `listId` 的元数据一致；不一致 → `INVALID_ARGUMENT`。  
   - `listId` 不存在也必须拒绝（`INVALID_ARGUMENT`，提示先 `DOMAINLISTS.APPLY` 创建/启用该 list）。
-- 实现侧需受 `maxFrameBytes` 约束；若 request frame 本身已超出 `maxFrameBytes`，按 `CONTROL_PROTOCOL_VNEXT.md` 断连策略处理（客户端应先 `HELLO` 预检查并分批导入）。
-- 同时必须有命令级上限（例如 `maxImportDomains`/`maxImportBytes`）：在未超过 `maxFrameBytes` 但超出命令级上限时，必须返回结构化错误（`INVALID_ARGUMENT`），明确提示“payload 太大/请分批导入”，并尽量回显上限数值（便于前端做 chunk）。
+- 实现侧需受 `maxRequestBytes` 约束；若 request frame 本身已超出 `maxRequestBytes`，按 `CONTROL_PROTOCOL_VNEXT.md` 断连策略处理（客户端应先 `HELLO` 预检查并分批导入）。
+- 同时必须有命令级上限（例如 `maxImportDomains`/`maxImportBytes`）：在未超过 `maxRequestBytes` 但超出命令级上限时，必须返回结构化错误（`INVALID_ARGUMENT`），明确提示“payload 太大/请分批导入”，并尽量回显上限数值（便于前端做 chunk）。
 
 ### 2.10 `IPRULES.PREFLIGHT` / `IPRULES.PRINT` / `IPRULES.APPLY`
 

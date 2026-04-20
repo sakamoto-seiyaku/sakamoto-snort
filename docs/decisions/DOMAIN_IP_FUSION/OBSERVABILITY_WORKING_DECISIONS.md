@@ -3,7 +3,7 @@
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
 
 
-更新时间：2026-04-17  
+更新时间：2026-04-20  
 状态：工作结论 + vNext 设计收敛（新增 `tracked` 统一语义、`METRICS.GET(name=traffic|conntrack)`、统一 `STREAM.START/STOP(type=...)`、stream `type`/suppressed 事件；待实现）
 
 落地任务清单：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
@@ -282,6 +282,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - `policySource` 枚举与优先级：与现有 `App::blocked()` 分支顺序一一对应（不细到 ruleId/listId）。
 - `policySource` 对外命名（fusion 收敛口径；不做 alias/双写）：`CUSTOM_LIST_ALLOWED/BLOCKED`、`CUSTOM_RULE_ALLOWED/BLOCKED`、`DOMAIN_DEVICE_WIDE_ALLOWED/BLOCKED`、`MASK_FALLBACK`（历史 `CUSTOM_*WHITE/BLACK`、`GLOBAL_*` 仅视为内部实现名）。
 - 统计口径：**按 DNS 请求计数**（每次 DNS 判决更新一次）。
+- gating：保持事实语义，仅在 `BLOCK=1` 时随 DNS 判决递增（`BLOCK=0` 不计数；不做全局 dry-run）。
 - 明确：本轮 **不考虑** `ip-leak/BLOCKIPLEAKS`（已冻结并强制关闭，无作用）。
 - 生命周期：since boot（进程内，不落盘）
 - 对外：`METRICS.GET(name=domainSources)` / `METRICS.RESET(name=domainSources)`（device-wide + per-app（per-UID））
@@ -378,15 +379,13 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 ```
 
 ```json
-{
-  "traffic": {
-    "dns": {"allow": 0, "block": 0},
-    "rxp": {"allow": 0, "block": 0},
-    "rxb": {"allow": 0, "block": 0},
-    "txp": {"allow": 0, "block": 0},
-    "txb": {"allow": 0, "block": 0}
-  }
-}
+{"id":1,"ok":true,"result":{"traffic":{
+  "dns":{"allow":0,"block":0},
+  "rxp":{"allow":0,"block":0},
+  "rxb":{"allow":0,"block":0},
+  "txp":{"allow":0,"block":0},
+  "txb":{"allow":0,"block":0}
+}}}
 ```
 
 - per-app query：
@@ -402,18 +401,16 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 ```
 
 ```json
-{
-  "uid": 123456,
-  "userId": 0,
-  "app": "com.example",
-  "traffic": {
-    "dns": {"allow": 0, "block": 0},
-    "rxp": {"allow": 0, "block": 0},
-    "rxb": {"allow": 0, "block": 0},
-    "txp": {"allow": 0, "block": 0},
-    "txb": {"allow": 0, "block": 0}
+{"id":2,"ok":true,"result":{
+  "uid":123456,"userId":0,"app":"com.example",
+  "traffic":{
+    "dns":{"allow":0,"block":0},
+    "rxp":{"allow":0,"block":0},
+    "rxb":{"allow":0,"block":0},
+    "txp":{"allow":0,"block":0},
+    "txb":{"allow":0,"block":0}
   }
-}
+}}
 ```
 
 - reset（device-wide / per-app）：
@@ -447,14 +444,12 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 建议 JSON shape：
 
 ```json
-{
-  "conntrack": {
-    "totalEntries": 0,
-    "creates": 0,
-    "expiredRetires": 0,
-    "overflowDrops": 0
-  }
-}
+{"id":1,"ok":true,"result":{"conntrack":{
+  "totalEntries":0,
+  "creates":0,
+  "expiredRetires":0,
+  "overflowDrops":0
+}}}
 ```
 
 ### 4.7 `tracked` 统一语义（两条腿一致）与重型 stats 边界

@@ -1,6 +1,6 @@
 # IPRULES：原子 apply 契约（rule group 展开 / matchKey / clientRuleId）
 
-更新时间：2026-04-16  
+更新时间：2026-04-20  
 状态：已收敛（AAA）
 
 > 本文只定义“前后端约定/接口契约”，不涉及代码实现与 change 拆分。
@@ -21,7 +21,8 @@
 非目标：
 
 - 不讨论 UI 上 rule group 的展示优先级/排序（纯前端问题）。
-- 不在本文定义具体命令名（例如 `IPRULES.APPLY` / `IPRULES.REPLACE` 等）；本文只定义语义与返回形态。
+- 命令名与 envelope/selector 约束以 vNext 单一真相为准：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md` + `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`。  
+  本文第 9 节会补齐 `IPRULES.PREFLIGHT/PRINT/APPLY` 的 JSON schema（字段全集/类型），用于避免实现期漂移（已确认；R-014=A）。
 
 ---
 
@@ -100,7 +101,7 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|sr
 
 - CIDR 必须规范化为网络地址：`a.b.c.d/prefix` 中的 `a.b.c.d` 必须已经按 `prefix` mask 归零 host bits。  
   - 示例：`1.2.3.4/24` → `1.2.3.0/24`
-- `ifindex` 归一化：输入允许 `ifindex=any` 或 `ifindex=0` 表示 any；canonical 输出为 `ifindex=0`。
+- `ifindex` 归一化：`ifindex=0` 表示 any；canonical 输出为 `ifindex=0`。（若上层语法使用 `any`，CLI 必须在下发前归一化为 `0`。）
 - 若 `proto=icmp`：`sport/dport` 必须为 `any`（与引擎语义一致）。
 
 ---
@@ -231,3 +232,127 @@ apply 成功后，对每条规则的 per-rule stats 生命周期锁死为：
   - apply 成功响应必须回传 `clientRuleId -> ruleId` 映射（第 5 节）
 
 该选择的核心理由：避免在高频 PKTSTREAM 上引入 per-event string 成本；以“稳定 ruleId + 可 join”为主。
+
+---
+
+## 9. vNext `IPRULES.*` JSON schema（字段全集/类型；已确认；R-014=A）
+
+目标：在动代码前把 schema 写死，避免 daemon/CLI/tests 三方对字段名、类型、以及 `0|1` vs boolean 产生漂移。
+
+通用约定（不在本文重复定义）：
+- request/response envelope、selector、strict reject：见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+- toggle 类型统一为 `0|1`（numbers）：见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+
+### 9.1 `IPRULES.PREFLIGHT`
+
+request：
+
+```json
+{"id":1,"cmd":"IPRULES.PREFLIGHT","args":{}}
+```
+
+response：
+
+```json
+{"id":1,"ok":true,"result":{
+  "summary":{
+    "rulesTotal":0,"rangeRulesTotal":0,"ctRulesTotal":0,"ctUidsTotal":0,
+    "subtablesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0
+  },
+  "limits":{
+    "recommended":{"maxRulesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0},
+    "hard":{"maxRulesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0}
+  },
+  "warnings":[{"metric":"...","value":0,"limit":0,"message":"..."}],
+  "violations":[{"metric":"...","value":0,"limit":0,"message":"..."}]
+}}
+```
+
+类型约束：
+- `summary.*`：u64
+- `limits.*.*`：u64
+- `warnings[]/violations[]` item：
+  - `metric`：string
+  - `value/limit`：u64
+  - `message`：string
+
+### 9.2 `IPRULES.PRINT`
+
+request：
+
+```json
+{"id":2,"cmd":"IPRULES.PRINT","args":{"app":{"uid":10123}}}
+```
+
+response：
+
+```json
+{"id":2,"ok":true,"result":{"uid":10123,"rules":[
+  {"ruleId":0,"clientRuleId":"g1:r12","matchKey":"mk1|...","action":"block","priority":10,
+   "enabled":1,"enforce":1,"log":0,
+   "dir":"out","iface":"any","ifindex":0,"proto":"tcp",
+   "ct":{"state":"any","direction":"any"},
+   "src":"any","dst":"1.2.3.0/24","sport":"any","dport":"443",
+   "stats":{"hitPackets":0,"hitBytes":0,"lastHitTsNs":0,"wouldHitPackets":0,"wouldHitBytes":0,"lastWouldHitTsNs":0}}
+]}}
+```
+
+`result` 字段：
+- `uid`：u32（与 selector resolve 后的 uid 一致）
+- `rules[]`：数组，每个 item 为 `Rule`（见 9.4）
+
+`stats.*` 时间戳字段说明（v1）：
+- `lastHitTsNs/lastWouldHitTsNs`：u64（ns）；可能超过 JS `Number` 的安全整数范围；JS 客户端应避免依赖其精确值。
+
+### 9.3 `IPRULES.APPLY`
+
+request：
+
+```json
+{"id":3,"cmd":"IPRULES.APPLY","args":{"app":{"uid":10123},"rules":[
+  {"clientRuleId":"g1:r12","action":"block","priority":10,"enabled":1,"enforce":1,"log":0,
+   "dir":"out","iface":"any","ifindex":0,"proto":"tcp",
+   "ct":{"state":"any","direction":"any"},
+   "src":"any","dst":"1.2.3.0/24","sport":"any","dport":"443"}
+]}}
+```
+
+约束（schema）：
+- `rules[]` 每个 item 必须包含：
+  - 身份：`clientRuleId`
+  - 行为：`action/priority/enabled/enforce/log`
+  - 匹配：`dir/iface/ifindex/proto/ct/src/dst/sport/dport`
+- 禁止客户端在 apply payload 中携带：
+  - `ruleId`（由 daemon 分配/复用；见第 6 节）
+  - `matchKey`（由 daemon 计算；见第 3 节）
+  - `stats`（只在 `IPRULES.PRINT` 输出）
+
+成功 response：
+- 见第 5 节（必须回传 `clientRuleId -> ruleId -> matchKey` 映射）。
+
+失败 response：
+- 冲突：见第 4.2 节（`error.code=INVALID_ARGUMENT` + `conflicts[]`）。
+
+### 9.4 `Rule` 对象字段与类型（v1）
+
+`rules[]` item（`IPRULES.PRINT.result.rules[]`）字段全集：
+- `ruleId`：u32
+- `clientRuleId`：string（`[A-Za-z0-9._:-]{1,64}`）
+- `matchKey`：string（`mk1|...`；见第 3 节）
+- `action`：`"allow" | "block"`
+- `priority`：i32
+- `enabled/enforce/log`：`0|1`（numbers）
+- `dir`：`"any" | "in" | "out"`
+- `iface`：`"any" | "wifi" | "data" | "vpn" | "unmanaged"`
+- `ifindex`：u32（`0` 表示 any；canonical 输出为 `0`）
+- `proto`：`"any" | "tcp" | "udp" | "icmp"`
+- `ct`：
+  - `state`：`"any" | "new" | "established" | "invalid"`
+  - `direction`：`"any" | "orig" | "reply"`
+- `src/dst`：`"any"` 或 `"a.b.c.d/prefix"`（IPv4 CIDR；network address 已规范化）
+- `sport/dport`：`"any"` 或 `"N"` 或 `"lo-hi"`（十进制；`0..65535`）
+- `stats`：
+  - `hitPackets/hitBytes/lastHitTsNs/wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`：u64
+
+`IPRULES.APPLY.args.rules[]` 的 item 复用上述字段集合，但不包含：
+- `ruleId/matchKey/stats`

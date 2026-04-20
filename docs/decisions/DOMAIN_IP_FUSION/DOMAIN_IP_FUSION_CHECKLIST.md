@@ -1,6 +1,6 @@
 # Domain + IP Fusion Checklist
 
-更新时间：2026-04-17  
+更新时间：2026-04-20  
 状态：融合纲领（现状快照 + 目标状态 + 实现拆分）
 
 ---
@@ -68,7 +68,7 @@
 ### 0.3.2 协议与命令契约（必须）
 
 - vNext 协议不变式已写死并无互相矛盾：framing/envelope/strict reject/error model/selector/每 request 恰好 1 个 response（framing 断连除外）
-- vNext 命令面不变式已写死并无互相矛盾：scope 规则、`0|1` toggle、所有 `*.APPLY` 原子 replace、selector not-found/ambiguous 必须结构化错误（不得 silent no-op）
+- vNext 命令面不变式已写死并无互相矛盾：scope 规则、`0|1` toggle、所有 `*.APPLY` 原子更新（一次请求要么整体成功要么整体失败）、selector not-found/ambiguous 必须结构化错误（不得 silent no-op）
 - 可观测性不变式已写死并无互相矛盾：tracked gating、stream/ring/drop/notice、STOP ack barrier、以及 legacy 模块（`BLOCKIPLEAKS` 等）冻结边界
 - IPRULES apply 不变式已写死并无互相矛盾：`matchKey` mk1、冲突拒绝、成功回显映射等
 
@@ -82,6 +82,35 @@
 - `DOMAIN_IP_FUSION_NITPICKS_TMP.md` 的 open issues 为空（或仅剩“提醒”类文字）
 
 ---
+
+## 0.4 架构审计计划（Review Plan）
+
+目标：站在“架构师/审核”视角，从高到低系统性挑刺，避免在实现期才发现“当初不该这么定/文档互相打架/边界没锁死”。
+
+### 0.4.1 审计顺序（从高到低）
+
+1. **北极星 + v1 scope**：哪些必须做、哪些明确延后（defer），以及“停止继续细化”的 stop rule。  
+2. **资源/状态模型**：每个资源（CONFIG/DOMAINRULES/DOMAINPOLICY/DOMAINLISTS/IPRULES/METRICS/STREAM）的：
+   - source-of-truth（谁写、谁读、谁拥有语义）
+   - 持久化边界（policy/config vs session state vs counters）
+   - 原子性/幂等性/参照完整性
+3. **control 协议（wire）**：framing/envelope/strict reject/error model/selector/连接拓扑（control 不独占、stream 限制）。  
+4. **命令面（surface）**：每个 `cmd` 的 args/result/errors 是否足够实现、是否自洽、是否有隐式规则；以及输出排序/稳定性。  
+5. **可观测性（observability）**：tracked 语义、stream/ring/drop/notice、metrics 名称与 shape、legacy 冻结边界是否能解释“为什么”。  
+6. **性能/并发/反压**：哪些东西可进热路径、哪些必须 gating、I/O 与锁的边界、慢消费者策略。  
+7. **迁移与下线**：vNext/legacy 并存窗口、`vNext 稳定` 判据、删除 60606 的时机与回滚口径。  
+8. **目录外同步范围**：哪些权威文档/OpenSpec 必须同步更新（设计阶段仅列清，不在本阶段改）。
+
+### 0.4.2 审计输出如何落盘（强制流程）
+
+- 发现“必须裁决/必须锁死”的新问题：只新增到 `DOMAIN_IP_FUSION_NITPICKS_TMP.md`（带 severity/evidence/options/recommendation）。  
+- 逐条裁决后：回写到对应单一真相文档，并从 nitpicks 删除该条（nitpicks 只保留 open issues）。  
+- 明确延后：写入本 checklist 的 4.1 延后项（不夹带实现承诺与时间点）。
+
+### 0.4.3 当前审计状态（截至 2026-04-20）
+
+- 本目录“单一真相”之间未发现新的硬矛盾；剩余必须裁决项以 `DOMAIN_IP_FUSION_NITPICKS_TMP.md` 为准。  
+- 健全/安全、快照原子 restore 等后置议题已收敛为 defer（见 4.1/4.6）。
 
 ## 1. 当前系统快照（按代码事实）
 
@@ -332,8 +361,10 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
     - 仅允许在明确标注支持的 device-wide list/stats 命令上作为可选 `args.userId`；
     - 其它命令若出现 `args.userId` 一律报错（`SYNTAX_ERROR`），禁止 silent ignore。
   - dual-form 命令（device-wide vs app-specific）消歧（D16；vNext 不背兼容包袱）：
-    - 适用命令族：`BLACKLIST.* / WHITELIST.* / BLACKRULES.* / WHITERULES.*`
-    - vNext 规则：通过 `args.selector` 是否存在显式区分（存在 = per-app；缺失 = device-wide）；不做 token 推断与缺参回退。
+    - vNext 一律使用显式 `args.scope="device"|"app"`（见 `CONTROL_COMMANDS_VNEXT.md` 的 scope 约定）：
+      - `scope="device"`：禁止出现 `args.app`
+      - `scope="app"`：必须出现 `args.app`
+    - 当前 dual-form 命令：`CONFIG.GET/CONFIG.SET`、`DOMAINPOLICY.GET/DOMAINPOLICY.APPLY`
 
 ### 2.6 state / counters / lifecycle（统一边界）
 
@@ -586,6 +617,10 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 - `ip-leak/BLOCKIPLEAKS`：本轮已锁死为“强制关闭且冻结无作用”。若未来要重新启用或彻底移除，必须另开 change（不在本轮 fusion 讨论）。
 - `GETBLACKIPS/MAXAGEIP`：同属 legacy 链条，已锁死为“全部冻结”（强制 `GETBLACKIPS=0`；`MAXAGEIP` 不对外；vNext 不提供接口/HELP 不展示）。
+- control plane 健全/安全边界（延后项；本轮不实现）：
+  - 鉴权/权限模型（包含 `PERMISSION_DENIED` 的实际可返回条件、以及 destructive 命令的最小保护策略）。
+  - vNext Unix socket 的访问控制（socket 文件权限、peer creds allowlist、SELinux 等）。
+  - vNext TCP `60607` 的暴露策略（bind 地址、是否只读、以及远程调试/ADB port-forward 的推荐使用方式）。
 - IPv6 新规则语义（与 IPRULES v1 的关系、默认行为、可观测性口径）。
 - 域名规则 per-rule 级 observability / stats（regex/wildcard/listId 归因）及其对域名匹配结构的影响评估。
 - “真实系统 resolver → netd socket → DnsListener” 平台闭环（真机 correctness gate 是否要回归；需要哪些系统/PO 壳准备）。
@@ -620,6 +655,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 ### 4.6 状态、持久化与 reset 边界（save/restore/versioning）
 
 - 明确哪些属于 policy（应持久化），哪些属于 observability config（如 `tracked`，应持久化），哪些属于 observability session state（如 stream/ring/queue，不持久化），哪些属于 counters（since‑boot 可 reset）。
+- restore/迁移的原子性（未来口径；本轮不实现）：恢复要么整体成功、要么整体失败（至少在用户选择的 scope 内保持原子性；不允许同一 app 下出现“域名恢复成功但 IP 规则恢复失败”等部分成功的中间态）。整机快照接口（如 `STATE.EXPORT/STATE.APPLY`）后置到单独 change。
 - 明确 stream 的 ring buffer / horizon / 落盘策略与升级策略（允许丢弃历史 debug 缓存的边界）。
 - 明确 `RESETALL` 与 layer‑specific reset 的边界清单（必须清空哪些 counters/开关/stream 状态；哪些不得被误清）。
 

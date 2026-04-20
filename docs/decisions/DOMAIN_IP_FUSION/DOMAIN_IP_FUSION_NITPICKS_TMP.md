@@ -14,11 +14,11 @@
 
 ## 0. 提醒（不需要裁决，但实现期容易踩坑）
 
-- strict reject 扩展性：全局 `args` 未知 key → `SYNTAX_ERROR` 很干净；未来若要灰度字段，可能需要一个明确的 `ext{}` 容器或版本协商规则。  
+- strict reject 扩展策略已锁死（R-012=A）：不引入 `ext{}`；靠 `protocolVersion` + `HELLO` 版本协商。  
 - stream：只限制订阅，不限制 control 并发连接（避免实现时偷懒成“整个 control socket 单连接”）。
 
 ---
 
 ## 1. Open issues（请逐条回复）
 
-（当前为空：本文件只保留“未落盘 open issues”；已确认项已落盘到单一真相文档。）
+（当前无 open issues；如需新增挑刺项，请按 `R-xxx` 递增编号添加。）
