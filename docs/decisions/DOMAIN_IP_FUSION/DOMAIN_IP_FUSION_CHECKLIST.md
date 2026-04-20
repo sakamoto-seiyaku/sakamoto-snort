@@ -16,24 +16,32 @@
 ## 0.1 本目录文档索引（in-flight，避免与既有决策打架）
 
 - `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`：本 checklist（主入口）
-- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_AUDIT_TMP.md`：临时审阅笔记/裁决日志（便于逐条回复；**非最终规格**）
-- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_DESIGN_REVIEW_TMP.md`：临时“挑刺”审核意见（非规范性；用于去复杂化/找过度设计点）
 - `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`：最终挑刺清单（临时；逐条回复用）
 - `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`：control 协议 vNext（wire framing/JSON envelope/selector/错误模型/stream 状态机）
 - `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`：vNext 命令目录（每个 `cmd` 的 args/result/errors；与协议文档解耦，便于挑刺与落地拆分）
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_VNEXT_SURFACE_SIMPLIFIED_TMP.md`：vNext 命令面重设计（简化提案；确认后回写命令目录）
 - `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`：可观测性工作决策（stream vNext、`tracked` 统一语义、metrics name=`traffic`/`conntrack` 等）
 - `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`：可观测性落地任务清单（从工作结论提炼为 change 切片）
 - `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`：IP 规则组/原子 apply 契约（`matchKey/clientRuleId`、冲突错误 shape、`IPRULES.PRINT` 回显）
 
-本目录内部的“落盘规则”（避免前后矛盾）：
+归档（历史草稿/讨论记录；**不得当作规范**）：
 
-- `DOMAIN_IP_FUSION_AUDIT_TMP.md` 负责记录讨论与裁决；但**裁决一旦确认**，必须同步写入对应的“单一真相”文档：
+- `docs/decisions/DOMAIN_IP_FUSION/archive/CONTROL_VNEXT_SURFACE_SIMPLIFIED_TMP.md`
+- `docs/decisions/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_AUDIT_TMP.md`
+- `docs/decisions/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_DESIGN_REVIEW_TMP.md`
+- `docs/decisions/DOMAIN_IP_FUSION/archive/DESIGN_PHASE_REMAINING_WORK_TMP.md`
+- `docs/decisions/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_FOLDER_INVENTORY_TMP.md`
+
+本目录内部的“落盘规则”（避免前后矛盾；**已确认**）：
+
+- **唯一挑刺清单**：`DOMAIN_IP_FUSION_NITPICKS_TMP.md`（用于逐条挑刺/裁决；不承载接口契约）。
+- 任何“已确认裁决/决定”必须直接回写到对应的**单一真相**文档：
   - control 协议（wire framing/JSON envelope）/错误模型/selector：`CONTROL_PROTOCOL_VNEXT.md`
+  - vNext 命令面（`cmd`/args/result/errors）：`CONTROL_COMMANDS_VNEXT.md`
   - stream/metrics/tracked/drop/cap 等观测语义：`OBSERVABILITY_WORKING_DECISIONS.md`
-  - implementation tasks：`OBSERVABILITY_IMPLEMENTATION_TASKS.md`（应当由 working decisions 派生，不应自创新语义）
+  - implementation tasks：`OBSERVABILITY_IMPLEMENTATION_TASKS.md`（仅派生，不得自创新语义）
   - IPRULES apply 契约：`IPRULES_APPLY_CONTRACT.md`
-- 本 checklist 只做索引与摘要；如果 checklist 与上述单一真相发生冲突，应以单一真相为准并立即修正 checklist。
+- `archive/` 下的 `*_TMP.md` 只保留历史上下文，**不保证同步**；若其中内容与单一真相冲突，以单一真相为准。
+- 本 checklist 只做索引与摘要；如果 checklist 与单一真相发生冲突，应以单一真相为准并立即修正 checklist。
 
 ## 0.2 单一真相与同步策略（重要）
 

@@ -10,7 +10,7 @@
 
 ## 0. 先说结论（还可能踩坑的点）
 
-1) vNext 已用 **netstring + JSON envelope** 把“token 规则堆叠/歧义推断”砍掉；但目录内仍有大量 legacy 讨论笔记（尤其 `DOMAIN_IP_FUSION_AUDIT_TMP.md`）——实现期需要强约束“只信单一真相”，否则很容易把复杂度又实现回去。  
+1) vNext 已用 **netstring + JSON envelope** 把“token 规则堆叠/歧义推断”砍掉；但目录内仍有大量 legacy 讨论笔记（尤其 `archive/DOMAIN_IP_FUSION_AUDIT_TMP.md`）——实现期需要强约束“只信单一真相”，否则很容易把复杂度又实现回去。  
 2) 即便命令面已选 **A（资源化 + 少量动词）**，仍有两类“会把系统重新做复杂”的高风险点：  
    -（a）为兼容手敲/脚本而把“语法糖”塞回 wire protocol；  
    -（b）把 domain 与 ip 的观测/配置入口拆回多套命令族（metrics/stream/list/rules 重新分裂）。  

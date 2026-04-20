@@ -74,6 +74,9 @@ vNext 连接上传输的是一串 netstring：
 - `cmd`：string（命令名；命令集合与各自契约以 `CONTROL_COMMANDS_VNEXT.md` 为准）
 - `args`：object（允许空 `{}`；禁止其它 JSON 类型以避免歧义）
 
+严格 JSON（已确认；2.10‑A）：
+- vNext 的所有对外 JSON 输出必须是**严格 JSON**（正确 escape `\" \\ \n \r \t` 等）；禁止手写拼接“看起来像 JSON”的字符串。
+
 严格性（已确认；0.3.2‑A）：
 - 顶层出现未知 key → `SYNTAX_ERROR`。
 - `args` 中出现未知 key → 默认 `SYNTAX_ERROR`（除非该命令明确声明允许扩展字段）。
@@ -103,6 +106,9 @@ vNext 连接上传输的是一串 netstring：
 - 顶层 `ok` 永远是 boolean。
 - `ok=true`：禁止出现 `error`。
 - `ok=false`：必须出现 `error`，且禁止出现 `result`。
+- **每条 request 必须且仅必须对应 1 个 response frame**（成功或失败）：  
+  - 例外：若连接因 framing 级错误或 `len>maxFrameBytes` 被 server 直接断开，则不保证能返回可解析 response。  
+  - stream 的 event/notice frames 不算 response（它们必须不包含 `id/ok`；见 3.3）。
 
 ### 3.3 Stream events（server → client；异步）
 

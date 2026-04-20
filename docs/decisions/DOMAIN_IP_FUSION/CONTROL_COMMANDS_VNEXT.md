@@ -26,6 +26,8 @@
 - `{"pkg":"<canonical_pkg>","userId":<u32>}`
 
 > `pkg` 仅匹配 canonical `App::name()`；歧义/不存在必须结构化报错（`SELECTOR_AMBIGUOUS/SELECTOR_NOT_FOUND + candidates[]`）。
+>  
+> 约束（已确认；严格拒绝）：任何带 `args.app` 的命令，selector resolve 不唯一/不存在都必须返回结构化错误（`SELECTOR_AMBIGUOUS/SELECTOR_NOT_FOUND + candidates[]`），**不得** silent no-op 还返回 `ok=true`。
 
 ### 0.3 toggle
 
