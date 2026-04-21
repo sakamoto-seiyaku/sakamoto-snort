@@ -25,10 +25,18 @@ include(GoogleTest)
 
 get_filename_component(SUCRE_SNORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(HOST_TEST_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
+set(RAPIDJSON_INCLUDE_DIR "${SUCRE_SNORT_ROOT}/third_party/rapidjson/include")
 
 function(add_sucre_snort_host_test target)
   add_executable(${target} ${ARGN})
-  target_include_directories(${target} PRIVATE "${HOST_TEST_INCLUDE_DIR}" "${SUCRE_SNORT_ROOT}/src")
+  target_include_directories(
+    ${target}
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}"
+      "${HOST_TEST_INCLUDE_DIR}"
+      "${SUCRE_SNORT_ROOT}/src"
+  )
+  target_include_directories(${target} SYSTEM PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(${target} PRIVATE GTest::gtest_main)
   set_property(GLOBAL APPEND PROPERTY SUCRE_SNORT_HOST_TEST_TARGETS ${target})
@@ -38,6 +46,25 @@ function(add_sucre_snort_host_test target)
     PROPERTIES LABELS "p0;host"
   )
 endfunction()
+
+function(add_sucre_snort_host_tool target)
+  add_executable(${target} ${ARGN})
+  target_include_directories(
+    ${target}
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}"
+      "${SUCRE_SNORT_ROOT}/src"
+  )
+  target_include_directories(${target} SYSTEM PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+endfunction()
+
+add_sucre_snort_host_tool(
+  sucre-snort-ctl
+  sucre_snort_ctl.cpp
+  sucre_snort_ctl_session.cpp
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+)
 
 add_sucre_snort_host_test(package_state_tests package_state_tests.cpp)
 add_sucre_snort_host_test(perf_metrics_tests perf_metrics_tests.cpp)
@@ -67,4 +94,17 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
   "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
   "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)
+
+add_sucre_snort_host_test(
+  control_vnext_codec_tests
+  control_vnext_codec_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+)
+
+add_sucre_snort_host_test(
+  control_vnext_ctl_roundtrip_tests
+  control_vnext_ctl_roundtrip_tests.cpp
+  sucre_snort_ctl_session.cpp
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
 )

@@ -3,10 +3,17 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+cc_library_headers {
+    name: "sucre-snort-rapidjson-headers",
+    system_ext_specific: true,
+    export_system_include_dirs: ["third_party/rapidjson/include"],
+}
+
 cc_binary {
     name: "sucre-snort",
     system_ext_specific: true,
     local_include_dirs: ["src"],
+    header_libs: ["sucre-snort-rapidjson-headers"],
     init_rc: ["sucre-snort.rc"],
     srcs: [
         "src/Activity.cpp",
