@@ -179,6 +179,10 @@ void App::printCustomDomains(std::ostream &out, const Stats::Color color) {
     customList(color).print(out);
 }
 
+std::vector<std::string> App::snapshotCustomDomains(const Stats::Color color) const {
+    return customList(color).snapshotNames();
+}
+
 void App::addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
     _saved = false;
     customRules(color).add(rule, compile);
@@ -187,6 +191,10 @@ void App::addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::C
 void App::removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color) {
     _saved = false;
     customRules(color).remove(rule, compile);
+}
+
+std::vector<Rule::Id> App::snapshotCustomRuleIds(const Stats::Color color) const {
+    return customRules(color).snapshotRuleIds();
 }
 
 void App::buildCustomRules(const Stats::Color color) { customRules(color).build(); }

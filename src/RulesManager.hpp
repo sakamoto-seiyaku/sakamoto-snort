@@ -7,8 +7,10 @@
 
 #include <map>
 #include <regex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <sucre-snort.hpp>
 #include <App.hpp>
@@ -34,6 +36,18 @@ private:
     Saver _saver{settings.saveRules};
 
 public:
+    struct BaselineRule {
+        uint32_t ruleId = 0;
+        Rule::Type type = Rule::DOMAIN;
+        std::string pattern;
+    };
+
+    struct CustomRuleConflict {
+        uint32_t ruleId = 0;
+        bool device = false;
+        std::vector<uint32_t> appUids;
+    };
+
     RulesManager();
 
     ~RulesManager();
@@ -44,6 +58,18 @@ public:
     // Thread-safe lookup for contexts without external locking. Do not call
     // this while already holding _mutex to avoid lock reentrancy.
     const Rule::Ptr findThreadSafe(const uint32_t ruleId);
+
+    // Snapshot of the current rules baseline (id/type/pattern) under shared lock.
+    std::vector<BaselineRule> snapshotBaseline();
+
+    // Bump the next allocated ruleId to at least nextId (no-op when already larger).
+    void ensureNextRuleIdAtLeast(uint32_t nextId);
+
+    // Upsert a rule with a fixed ruleId (create if missing; update if present).
+    void upsertRuleWithId(uint32_t ruleId, Rule::Type type, const std::string &ruleRaw);
+
+    // Compute referential-integrity conflicts for removing the given ruleIds.
+    std::vector<CustomRuleConflict> conflictsForRemoval(const std::vector<uint32_t> &ruleIds);
 
     Rule::Id addRule(const Rule::Type type, const std::string &ruleRaw);
 

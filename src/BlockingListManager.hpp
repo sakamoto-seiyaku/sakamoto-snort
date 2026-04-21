@@ -54,6 +54,8 @@ public:
 
     bool markOutdated(const std::string &id);
 
+    bool updateDomainsCount(const std::string &id, std::uint32_t domainsCount);
+
     // Return mask if present; false if id not found
     bool getBlockMask(const std::string &id, std::uint8_t &outMask);
     bool getColor(const std::string &id, Stats::Color &outColor);

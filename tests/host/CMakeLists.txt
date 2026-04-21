@@ -116,3 +116,25 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/ControlVNextSession.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
 )
+
+add_sucre_snort_host_test(
+  control_vnext_domain_surface_tests
+  control_vnext_domain_surface_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
+  "${SUCRE_SNORT_ROOT}/src/App.cpp"
+  "${SUCRE_SNORT_ROOT}/src/AppStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingListManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextSessionCommandsDomain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomRules.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Rule.cpp"
+  "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)

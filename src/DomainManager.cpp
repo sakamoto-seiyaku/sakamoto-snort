@@ -125,6 +125,10 @@ void DomainManager::removeCustomDomain(const std::string &name, const Stats::Col
     }
 }
 
+std::vector<std::string> DomainManager::snapshotCustomDomains(const Stats::Color color) const {
+    return customList(color).snapshotNames();
+}
+
 void DomainManager::printCustomDomains(std::ostream &out, const Stats::Color color) {
     customList(color).print(out);
 }
@@ -137,6 +141,10 @@ void DomainManager::addCustomRule(const Rule::Ptr rule, const bool compile,
 void DomainManager::removeCustomRule(const Rule::Ptr rule, const bool compile,
                                      const Stats::Color color) {
     customRules(color).remove(rule, compile);
+}
+
+std::vector<Rule::Id> DomainManager::snapshotCustomRuleIds(const Stats::Color color) const {
+    return customRules(color).snapshotRuleIds();
 }
 
 void DomainManager::buildCustomRules(const Stats::Color color) { customRules(color).build(); }
@@ -199,16 +207,16 @@ void DomainManager::reset() {
     _whiteRules.reset();
     _blacklist.reset();
     _whitelist.reset();
-    if (auto dir = opendir(settings.saveDirDomainLists.c_str())) {
+    if (auto dir = opendir(Settings::saveDirDomainListsPath().c_str())) {
         dirent *de;
         while ((de = readdir(dir)) != nullptr) {
             if (de->d_type == DT_REG) {
-                std::remove((settings.saveDirDomainLists + de->d_name).c_str());
+                std::remove((Settings::saveDirDomainListsPath() + de->d_name).c_str());
             }
         }
         closedir(dir);
     } else {
-        LOG(ERROR) << settings.saveDirDomainLists << " dir not exists";
+        LOG(ERROR) << Settings::saveDirDomainListsPath() << " dir not exists";
     }
 }
 
@@ -242,6 +250,19 @@ uint32_t DomainManager::addDomainsToList(std::string listId, uint8_t blockMask, 
         return _whitelist.write(listId, domains, blockMask, clear);
     }
     return 0;
+}
+
+DomainList::ImportResult DomainManager::importDomainsToListAtomic(
+    const std::string &listId, const uint8_t blockMask, const bool clear,
+    const std::vector<std::string> &domains, const Stats::Color color, const bool enabled) {
+    const std::shared_lock<std::shared_mutex> lock(_mutexByName);
+    if (color == Stats::BLACK) {
+        return _blacklist.importAtomic(listId, domains, blockMask, clear, enabled);
+    }
+    if (color == Stats::WHITE) {
+        return _whitelist.importAtomic(listId, domains, blockMask, clear, enabled);
+    }
+    return {};
 }
 
 bool DomainManager::removeDomainList(std::string listId, Stats::Color color) {

@@ -6,6 +6,8 @@
 #pragma once
 
 #include <set>
+#include <string>
+#include <vector>
 
 #include <Domain.hpp>
 
@@ -14,7 +16,7 @@ private:
     using DomSet = std::set<Domain::Ptr>;
 
     DomSet _domains;
-    std::shared_mutex _mutex;
+    mutable std::shared_mutex _mutex;
 
 public:
     CustomList();
@@ -30,6 +32,9 @@ public:
     void remove(const Domain::Ptr &domain);
 
     void reset();
+
+    // Snapshot custom domain names. Order is unspecified (caller may sort if needed).
+    std::vector<std::string> snapshotNames() const;
 
     void print(std::ostream &out);
 

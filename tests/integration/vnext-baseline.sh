@@ -421,13 +421,82 @@ PY
 
     assert_ctl_ok "VNT-14b two clients concurrent (last-write-wins)" two_client_last_write_wins
 
+    log_section "Domain Surface"
+
+    local rules_apply rules_get rid0
+    rules_apply=$(ctl_cmd DOMAINRULES.APPLY '{"rules":[{"type":"domain","pattern":"example.com"},{"type":"regex","pattern":".*google.*"}]}' || true)
+    assert_json_pred "VNT-15 DOMAINRULES.APPLY ok + returns rules[]" "$rules_apply" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert isinstance(j["result"]["rules"], list); assert len(j["result"]["rules"]) >= 2'
+
+    rid0=$(RULES_APPLY_JSON="$rules_apply" python3 - <<'PY'
+import os, json
+j = json.loads(os.environ["RULES_APPLY_JSON"])
+rules = j["result"]["rules"]
+print(rules[0]["ruleId"] if rules else "")
+PY
+) || rid0=""
+
+    rules_get=$(ctl_cmd DOMAINRULES.GET) || true
+    assert_json_pred "VNT-16 DOMAINRULES.GET rules[] sorted by ruleId" "$rules_get" \
+        'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; ids=[r["ruleId"] for r in rules]; assert ids==sorted(ids)'
+
+    local pol_apply pol_get
+    pol_apply=$(ctl_cmd DOMAINPOLICY.APPLY "{\"scope\":\"device\",\"policy\":{\"allow\":{\"domains\":[],\"ruleIds\":[${rid0}]},\"block\":{\"domains\":[\"bad.com\"],\"ruleIds\":[]}}}" || true)
+    assert_json_pred "VNT-17 DOMAINPOLICY.APPLY is ack-only" "$pol_apply" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert "result" not in j'
+
+    pol_get=$(ctl_cmd DOMAINPOLICY.GET '{"scope":"device"}') || true
+    assert_json_pred "VNT-18 DOMAINPOLICY.GET device contains ruleId" "$pol_get" \
+        "import sys,json; j=json.load(sys.stdin); ids=j['result']['policy']['allow']['ruleIds']; assert ${rid0} in ids"
+
+    # Optional: stable on-device verification via legacy DEV.DNSQUERY (no network needed).
+    if ! check_control_forward "$SNORT_PORT"; then
+        log_info "设置 legacy control adb forward..."
+        setup_control_forward "$SNORT_PORT"
+    fi
+
+    local devq_allow devq_block
+    devq_allow=$(send_cmd "DEV.DNSQUERY 0 example.com" 5) || true
+    assert_json_pred "VNT-18c DEV.DNSQUERY sees allow rule effect" "$devq_allow" \
+        'import sys,json; j=json.load(sys.stdin); assert j["domain"]=="example.com"; assert j["blocked"] is False'
+
+    devq_block=$(send_cmd "DEV.DNSQUERY 0 bad.com" 5) || true
+    assert_json_pred "VNT-18d DEV.DNSQUERY sees block domain effect" "$devq_block" \
+        'import sys,json; j=json.load(sys.stdin); assert j["domain"]=="bad.com"; assert j["blocked"] is True'
+
+    local list_id list_unknown lists_apply lists_get imp lists_get2
+    list_id="$(python3 - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)"
+    list_unknown="00000000-0000-0000-0000-00000000ffff"
+
+    lists_apply=$(ctl_cmd DOMAINLISTS.APPLY "{\"upsert\":[{\"listId\":\"${list_id}\",\"listKind\":\"block\",\"mask\":1,\"enabled\":0,\"url\":\"https://example/list\",\"name\":\"Example\",\"updatedAt\":\"2026-01-01_00:00:00\",\"etag\":\"etagX\",\"outdated\":0,\"domainsCount\":0}],\"remove\":[\"${list_unknown}\"]}" || true)
+    assert_json_pred "VNT-19 DOMAINLISTS.APPLY remove unknown reports notFound[]" "$lists_apply" \
+        "import sys,json; j=json.load(sys.stdin); assert j['ok'] is True; assert '${list_unknown}' in j['result']['notFound']"
+
+    lists_get=$(ctl_cmd DOMAINLISTS.GET) || true
+    assert_json_pred "VNT-20 DOMAINLISTS.GET lists[] sorted by (kind,id)" "$lists_get" \
+        'import sys,json; j=json.load(sys.stdin); ls=j["result"]["lists"]; key=[(e["listKind"],e["listId"]) for e in ls]; assert key==sorted(key)'
+    assert_json_pred "VNT-20b DOMAINLISTS.GET contains our listId" "$lists_get" \
+        "import sys,json; j=json.load(sys.stdin); ls=j['result']['lists']; assert any(e['listId']=='${list_id}' for e in ls)"
+
+    imp=$(ctl_cmd DOMAINLISTS.IMPORT "{\"listId\":\"${list_id}\",\"listKind\":\"block\",\"mask\":1,\"clear\":1,\"domains\":[\"a.com\",\"b.com\"]}" || true)
+    assert_json_pred "VNT-21 DOMAINLISTS.IMPORT imported==2" "$imp" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert j["result"]["imported"] == 2'
+
+    lists_get2=$(ctl_cmd DOMAINLISTS.GET) || true
+    assert_json_pred "VNT-22 DOMAINLISTS.IMPORT updates only domainsCount" "$lists_get2" \
+        "import sys,json; j=json.load(sys.stdin); ls=j['result']['lists']; e=[x for x in ls if x['listId']=='${list_id}'][0]; assert e['domainsCount']==2 and e['url']=='https://example/list' and e['etag']=='etagX' and e['outdated']==0"
+
     log_section "Resetall"
 
     local resetall
     resetall=$(ctl_cmd RESETALL) || true
-    assert_json_pred "VNT-15 RESETALL ok=true" "$resetall" \
+    assert_json_pred "VNT-23 RESETALL ok=true" "$resetall" \
         'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
-    assert_ctl_ok "VNT-16 HELLO after RESETALL" ctl_cmd HELLO
+    assert_ctl_ok "VNT-24 HELLO after RESETALL" ctl_cmd HELLO
 
     print_summary
     local status=$?

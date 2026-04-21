@@ -33,6 +33,16 @@ void CustomList::reset() {
     _domains.clear();
 }
 
+std::vector<std::string> CustomList::snapshotNames() const {
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    std::vector<std::string> out;
+    out.reserve(_domains.size());
+    for (const auto &domain : _domains) {
+        out.push_back(domain->name());
+    }
+    return out;
+}
+
 void CustomList::save(Saver &saver) {
     const std::shared_lock<std::shared_mutex> lock(_mutex);
     saver.write<uint32_t>(_domains.size());

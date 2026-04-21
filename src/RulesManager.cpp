@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
 #include <sstream>
+#include <unordered_set>
+#include <vector>
 
 #include <sucre-snort.hpp>
 #include <Saver.hpp>
@@ -33,6 +36,95 @@ const Rule::Ptr RulesManager::findThreadSafe(const Rule::Id ruleId) {
     const std::shared_lock<std::shared_mutex> lock(_mutex);
     const auto it = _rules.find(ruleId);
     return it != _rules.end() ? it->second : nullptr;
+}
+
+std::vector<RulesManager::BaselineRule> RulesManager::snapshotBaseline() {
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    std::vector<BaselineRule> out;
+    out.reserve(_rules.size());
+    for (const auto &[id, rule] : _rules) {
+        out.push_back(BaselineRule{.ruleId = id, .type = rule->type(), .pattern = rule->rule()});
+    }
+    return out;
+}
+
+void RulesManager::ensureNextRuleIdAtLeast(const uint32_t nextId) {
+    const std::lock_guard lock(_mutex);
+    if (_idCount < nextId) {
+        _idCount = nextId;
+    }
+}
+
+void RulesManager::upsertRuleWithId(const uint32_t ruleId, const Rule::Type type,
+                                    const std::string &ruleRaw) {
+    const std::lock_guard lock(_mutex);
+
+    if (const auto &rule = find(ruleId)) {
+        rule->update(type, ruleRaw);
+        Custom &custom = _customs[rule];
+        if (custom.color != Stats::ALLC) {
+            domManager.buildCustomRules(custom.color);
+        }
+        for (const auto &app : custom.blacklist) {
+            app->buildCustomRules(Stats::BLACK);
+        }
+        for (const auto &app : custom.whitelist) {
+            app->buildCustomRules(Stats::WHITE);
+        }
+        return;
+    }
+
+    make(ruleId, type, ruleRaw);
+    if (_idCount <= ruleId) {
+        _idCount = ruleId + 1;
+    }
+}
+
+std::vector<RulesManager::CustomRuleConflict>
+RulesManager::conflictsForRemoval(const std::vector<uint32_t> &ruleIds) {
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    std::vector<CustomRuleConflict> out;
+
+    for (const auto ruleId : ruleIds) {
+        const auto it = _rules.find(ruleId);
+        if (it == _rules.end()) {
+            continue;
+        }
+
+        const Rule::Ptr &rule = it->second;
+        const auto customIt = _customs.find(rule);
+        if (customIt == _customs.end()) {
+            continue;
+        }
+
+        const Custom &custom = customIt->second;
+        const bool device = custom.color != Stats::ALLC;
+
+        std::unordered_set<uint32_t> uids;
+        uids.reserve(custom.blacklist.size() + custom.whitelist.size());
+        for (const auto &app : custom.blacklist) {
+            uids.insert(app->uid());
+        }
+        for (const auto &app : custom.whitelist) {
+            uids.insert(app->uid());
+        }
+
+        if (!device && uids.empty()) {
+            continue;
+        }
+
+        std::vector<uint32_t> appUids;
+        appUids.reserve(uids.size());
+        for (const auto uid : uids) {
+            appUids.push_back(uid);
+        }
+        std::sort(appUids.begin(), appUids.end());
+
+        out.push_back(
+            CustomRuleConflict{.ruleId = ruleId, .device = device, .appUids = std::move(appUids)});
+    }
+
+    return out;
 }
 
 void RulesManager::removeRule(const Rule::Id ruleId) {

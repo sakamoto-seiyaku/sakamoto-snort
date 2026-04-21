@@ -10,6 +10,7 @@
 #include <atomic>
 #include <fstream>
 #include <string>
+#include <utility>
 
 #include <sucre-snort.hpp>
 #include <Saver.hpp>
@@ -67,6 +68,20 @@ public:
     static inline const std::string saveDirPackages = _saveDir + "packages/";
     static inline const std::string saveDirSystem = _saveDir + "system/";
     static inline const std::string saveDirDomainLists = _saveDir + "domains_lists/";
+    static inline std::string _saveDirDomainListsOverride;
+
+    // Override hook for host tests (avoid hard dependency on /data/snort).
+    // The override should include a trailing '/'.
+    static void setSaveDirDomainListsOverrideForTesting(std::string path) {
+        if (!path.empty() && path.back() != '/') {
+            path.push_back('/');
+        }
+        _saveDirDomainListsOverride = std::move(path);
+    }
+
+    static const std::string &saveDirDomainListsPath() {
+        return _saveDirDomainListsOverride.empty() ? saveDirDomainLists : _saveDirDomainListsOverride;
+    }
 
     // Per-user directory helpers for userId > 0
     // User 0 continues to use the legacy paths (saveDirPackages/saveDirSystem).

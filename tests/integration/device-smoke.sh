@@ -418,6 +418,112 @@ case_p2_10_vnext_tcp_control_bypass() {
     fi
 }
 
+case_p2_11_vnext_domain_surface() {
+    local group="lifecycle"
+    local case_id="P2-11"
+    should_run_case "$group" "$case_id" || { skip_case "$case_id" "vNext domain surface"; return 0; }
+
+    local ctl
+    ctl="$(find_snort_ctl)" || {
+        log_fail "$case_id vNext domain surface (missing sucre-snort-ctl)"
+        echo "    需要构建 clang host tool: cmake --build --preset dev-debug --target sucre-snort-ctl"
+        return 0
+    }
+
+    local port=60607
+    if ! check_control_vnext_forward "$port"; then
+        setup_control_vnext_forward "$port"
+    fi
+
+    vctl() {
+        local cmd="$1"
+        local args_json="${2:-}"
+        if [[ -n "$args_json" ]]; then
+            "$ctl" --tcp "127.0.0.1:${port}" --compact "$cmd" "$args_json"
+        else
+            "$ctl" --tcp "127.0.0.1:${port}" --compact "$cmd"
+        fi
+    }
+
+    local hello
+    hello=$(vctl HELLO 2>/dev/null || true)
+    if ! printf '%s\n' "$hello" | python3 -c 'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True' >/dev/null 2>&1; then
+        log_fail "$case_id vNext domain surface"
+        echo "    HELLO failed: ${hello:0:200}"
+        return 0
+    fi
+
+    local rules_get rules_apply_args rules_apply
+    rules_get=$(vctl DOMAINRULES.GET 2>/dev/null || true)
+    rules_apply_args=$(RULES_GET_JSON="$rules_get" python3 - <<'PY'
+import os, json
+j = json.loads(os.environ["RULES_GET_JSON"])
+print(json.dumps({"rules": j.get("result", {}).get("rules", [])}, separators=(",",":")))
+PY
+) || rules_apply_args='{"rules":[]}'
+    rules_apply=$(vctl DOMAINRULES.APPLY "$rules_apply_args" 2>/dev/null || true)
+
+    if ! printf '%s\n' "$rules_apply" | python3 -c 'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert isinstance(j["result"]["rules"], list)' >/dev/null 2>&1; then
+        log_fail "$case_id vNext domain surface"
+        echo "    DOMAINRULES.APPLY failed: ${rules_apply:0:200}"
+        return 0
+    fi
+
+    local pol_get pol_apply_args pol_apply
+    pol_get=$(vctl DOMAINPOLICY.GET '{"scope":"device"}' 2>/dev/null || true)
+    pol_apply_args=$(POL_GET_JSON="$pol_get" python3 - <<'PY'
+import os, json
+j = json.loads(os.environ["POL_GET_JSON"])
+print(json.dumps({"scope":"device","policy": j.get("result", {}).get("policy", {})}, separators=(",",":")))
+PY
+) || pol_apply_args='{"scope":"device","policy":{"allow":{"domains":[],"ruleIds":[]},"block":{"domains":[],"ruleIds":[]}}}'
+    pol_apply=$(vctl DOMAINPOLICY.APPLY "$pol_apply_args" 2>/dev/null || true)
+
+    if ! printf '%s\n' "$pol_apply" | python3 -c 'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert "result" not in j' >/dev/null 2>&1; then
+        log_fail "$case_id vNext domain surface"
+        echo "    DOMAINPOLICY.APPLY failed: ${pol_apply:0:200}"
+        return 0
+    fi
+
+    local list_id list_unknown lists_apply lists_get imp rm
+    list_id="$(python3 - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)"
+    list_unknown="00000000-0000-0000-0000-00000000ffff"
+
+    lists_apply=$(vctl DOMAINLISTS.APPLY "{\"upsert\":[{\"listId\":\"${list_id}\",\"listKind\":\"block\",\"mask\":1,\"enabled\":0,\"url\":\"https://example/list\",\"name\":\"P2\",\"updatedAt\":\"2026-01-01_00:00:00\",\"etag\":\"etagP2\",\"outdated\":0,\"domainsCount\":0}],\"remove\":[\"${list_unknown}\"]}" 2>/dev/null || true)
+    if ! printf '%s\n' "$lists_apply" | python3 -c "import sys,json; j=json.load(sys.stdin); assert j['ok'] is True; assert '${list_unknown}' in j['result']['notFound']" >/dev/null 2>&1; then
+        log_fail "$case_id vNext domain surface"
+        echo "    DOMAINLISTS.APPLY failed: ${lists_apply:0:200}"
+        return 0
+    fi
+
+    imp=$(vctl DOMAINLISTS.IMPORT "{\"listId\":\"${list_id}\",\"listKind\":\"block\",\"mask\":1,\"clear\":1,\"domains\":[\"a.com\",\"b.com\"]}" 2>/dev/null || true)
+    if ! printf '%s\n' "$imp" | python3 -c 'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert j["result"]["imported"] == 2' >/dev/null 2>&1; then
+        log_fail "$case_id vNext domain surface"
+        echo "    DOMAINLISTS.IMPORT failed: ${imp:0:200}"
+        return 0
+    fi
+
+    lists_get=$(vctl DOMAINLISTS.GET 2>/dev/null || true)
+    if ! printf '%s\n' "$lists_get" | python3 -c "import sys,json; j=json.load(sys.stdin); ls=j['result']['lists']; e=[x for x in ls if x['listId']=='${list_id}'][0]; assert e['domainsCount']==2" >/dev/null 2>&1; then
+        log_fail "$case_id vNext domain surface"
+        echo "    DOMAINLISTS.GET verify failed: ${lists_get:0:200}"
+        return 0
+    fi
+
+    rm=$(vctl DOMAINLISTS.APPLY "{\"remove\":[\"${list_id}\"]}" 2>/dev/null || true)
+    if ! printf '%s\n' "$rm" | python3 -c "import sys,json; j=json.load(sys.stdin); assert j['ok'] is True; assert '${list_id}' in j['result']['removed']" >/dev/null 2>&1; then
+        log_fail "$case_id vNext domain surface"
+        echo "    DOMAINLISTS remove failed: ${rm:0:200}"
+        return 0
+    fi
+
+    log_pass "$case_id vNext domain surface"
+}
+
 main() {
     log_section "P2 rooted real-device platform smoke"
 
@@ -442,10 +548,12 @@ main() {
     case_p2_08_selinux_runtime
     case_p2_09_lifecycle_restart
     case_p2_10_vnext_tcp_control_bypass
+    case_p2_11_vnext_domain_surface
 
     if [[ $CLEANUP_FORWARD -eq 1 ]]; then
         log_info "移除 adb forward..."
         remove_control_forward "$SNORT_PORT"
+        remove_control_vnext_forward 60607
     fi
 
     print_summary

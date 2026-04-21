@@ -28,6 +28,12 @@ private:
     static bool validListId(const std::string &listId);
 
 public:
+    struct ImportResult {
+        bool ok = false;
+        uint32_t imported = 0;
+        uint32_t total = 0;
+    };
+
     DomainList();
 
     ~DomainList();
@@ -53,6 +59,11 @@ public:
 
     uint32_t write(std::string listId, std::vector<std::string> domains, uint8_t blockMask,
                    bool clear = false);
+
+    // Atomic import via temp-file + rename. When enabled=false, updates the ".disabled" file and
+    // does not touch in-memory snapshots.
+    ImportResult importAtomic(const std::string &listId, const std::vector<std::string> &domains,
+                              uint8_t blockMask, bool clear, bool enabled);
 
     bool erase(std::string listId);
 

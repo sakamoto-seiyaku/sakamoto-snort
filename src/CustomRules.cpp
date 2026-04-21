@@ -61,6 +61,16 @@ void CustomRules::build() {
     rebuildRegexSnapshotLocked();
 }
 
+std::vector<Rule::Id> CustomRules::snapshotRuleIds() const {
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    std::vector<Rule::Id> out;
+    out.reserve(_rules.size());
+    for (const auto &rule : _rules) {
+        out.push_back(rule->id());
+    }
+    return out;
+}
+
 bool CustomRules::match(const Domain::Ptr &domain) {
     // Lock-free fast path: read compiled regex snapshot atomically.
     const auto snap = std::atomic_load(&_regexSnap);

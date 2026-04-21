@@ -9,13 +9,14 @@
 #include <memory>
 #include <atomic>
 #include <unordered_set>
+#include <vector>
 
 #include <Rule.hpp>
 
 class CustomRules {
 private:
     std::unordered_set<Rule::Ptr> _rules;      // rules set; protected by _mutex
-    std::shared_mutex _mutex;                  // protects _rules and rebuild operations
+    mutable std::shared_mutex _mutex;          // protects _rules and rebuild operations
     // Atomically published compiled regex snapshot for lock-free reads in DNS path
     std::shared_ptr<std::regex> _regexSnap;
     std::atomic<bool> _saved{false};
@@ -37,6 +38,9 @@ public:
 
     // Rebuild compiled regex and publish snapshot (acquires exclusive lock internally)
     void build();
+
+    // Snapshot ruleIds. Order is unspecified (caller may sort if needed).
+    std::vector<Rule::Id> snapshotRuleIds() const;
 
     bool match(const Domain::Ptr &domain);
 

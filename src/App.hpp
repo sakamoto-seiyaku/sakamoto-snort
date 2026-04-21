@@ -164,9 +164,15 @@ public:
 
     void printCustomDomains(std::ostream &out, const Stats::Color color);
 
+    // Snapshot custom allow/block domains. Order is unspecified (caller may sort if needed).
+    std::vector<std::string> snapshotCustomDomains(const Stats::Color color) const;
+
     void addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
 
     void removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
+
+    // Snapshot custom allow/block ruleIds. Order is unspecified (caller may sort if needed).
+    std::vector<Rule::Id> snapshotCustomRuleIds(const Stats::Color color) const;
 
     void buildCustomRules(const Stats::Color color);
 
@@ -201,7 +207,15 @@ private:
         return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
     }
 
+    const CustomList &customList(const Stats::Color color) const {
+        return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
+    }
+
     CustomRules &customRules(const Stats::Color color) {
+        return color == Stats::BLACK ? _blackRules : _whiteRules;
+    }
+
+    const CustomRules &customRules(const Stats::Color color) const {
         return color == Stats::BLACK ? _blackRules : _whiteRules;
     }
 

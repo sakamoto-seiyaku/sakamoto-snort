@@ -88,11 +88,17 @@ public:
 
     void removeCustomDomain(const std::string &name, const Stats::Color color);
 
+    // Snapshot custom allow/block domains. Order is unspecified (caller may sort if needed).
+    std::vector<std::string> snapshotCustomDomains(const Stats::Color color) const;
+
     void printCustomDomains(std::ostream &out, const Stats::Color color);
 
     void addCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
 
     void removeCustomRule(const Rule::Ptr rule, const bool compile, const Stats::Color color);
+
+    // Snapshot custom allow/block ruleIds. Order is unspecified (caller may sort if needed).
+    std::vector<Rule::Id> snapshotCustomRuleIds(const Stats::Color color) const;
 
     void buildCustomRules(const Stats::Color color);
 
@@ -113,6 +119,11 @@ public:
     uint32_t addDomainsToList(std::string listId, uint8_t blockMask, bool clear,
                           std::vector<std::string> domains, Stats::Color color);
 
+    DomainList::ImportResult importDomainsToListAtomic(const std::string &listId, uint8_t blockMask,
+                                                       bool clear,
+                                                       const std::vector<std::string> &domains,
+                                                       Stats::Color color, bool enabled);
+
     bool removeDomainList(std::string listId, Stats::Color color);
 
     void switchListColor(std::string listId, Stats::Color color);
@@ -132,7 +143,15 @@ private:
         return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
     }
 
+    const CustomList &customList(const Stats::Color color) const {
+        return color == Stats::BLACK ? _customBlacklist : _customWhitelist;
+    }
+
     CustomRules &customRules(const Stats::Color color) {
+        return color == Stats::BLACK ? _blackRules : _whiteRules;
+    }
+
+    const CustomRules &customRules(const Stats::Color color) const {
         return color == Stats::BLACK ? _blackRules : _whiteRules;
     }
 

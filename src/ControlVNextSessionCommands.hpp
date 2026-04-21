@@ -22,5 +22,9 @@ struct ResponsePlan {
 std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView &request,
                                                 const ControlVNextSession::Limits &limits);
 
-} // namespace ControlVNextSessionCommands
+// Handles domain vNext commands (DOMAINRULES/DOMAINPOLICY/DOMAINLISTS). Returns std::nullopt when cmd
+// is not recognized by this handler.
+std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView &request,
+                                                const ControlVNextSession::Limits &limits);
 
+} // namespace ControlVNextSessionCommands

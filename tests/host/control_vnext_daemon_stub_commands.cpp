@@ -14,5 +14,11 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
     return std::nullopt;
 }
 
-} // namespace ControlVNextSessionCommands
+std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView &request,
+                                                const ControlVNextSession::Limits &limits) {
+    (void)request;
+    (void)limits;
+    return std::nullopt;
+}
 
+} // namespace ControlVNextSessionCommands

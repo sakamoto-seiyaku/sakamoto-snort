@@ -5,6 +5,7 @@
 
 #include <fstream>
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <cctype>
 
@@ -70,7 +71,8 @@ void DomainList::read(std::string listId, uint8_t blockMask) {
     }
     // Phase 1: file I/O without holding the mutex
     DomsSet domains;
-    if (auto in = std::ifstream(settings.saveDirDomainLists + listId, std::ifstream::in); in.is_open()) {
+    if (auto in = std::ifstream(Settings::saveDirDomainListsPath() + listId, std::ifstream::in);
+        in.is_open()) {
         std::string hostname;
         while (in >> hostname) {
             auto [it, inserted] = domains.emplace(std::move(hostname), blockMask);
@@ -104,13 +106,13 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
     if (clear) {
         _domainsByListId.erase(listId);
         // Clear file content
-        std::ofstream(settings.saveDirDomainLists + listId,
+        std::ofstream(Settings::saveDirDomainListsPath() + listId,
                       std::ofstream::out | std::ofstream::trunc)
             .close();
     }
 
     auto &targetSet = _domainsByListId[listId];
-    std::ofstream out(settings.saveDirDomainLists + listId, std::ofstream::app);
+    std::ofstream out(Settings::saveDirDomainListsPath() + listId, std::ofstream::app);
     if (!out.is_open()) {
         LOG(ERROR) << __FUNCTION__ << " List write error for list: " << listId;
         return 0;
@@ -130,6 +132,95 @@ uint32_t DomainList::write(const std::string listId, const std::vector<std::stri
     // The underlying sets changed; rebuild aggregated snapshot.
     rebuildAggSnapshotLocked();
     return addedCount;
+}
+
+DomainList::ImportResult DomainList::importAtomic(const std::string &listId,
+                                                  const std::vector<std::string> &domains,
+                                                  const uint8_t blockMask, const bool clear,
+                                                  const bool enabled) {
+    if (!validListId(listId)) {
+        LOG(ERROR) << __FUNCTION__ << " - invalid list id";
+        return {};
+    }
+
+    const std::string finalPath =
+        Settings::saveDirDomainListsPath() + listId + (enabled ? "" : ".disabled");
+    const std::string tmpPath = finalPath + ".tmp." +
+                                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    // Phase 1: build the target set without mutating any state.
+    DomsSet merged;
+    if (!clear) {
+        bool loadedFromMemory = false;
+        if (enabled) {
+            const std::shared_lock<std::shared_mutex> lock(_mutex);
+            if (auto it = _domainsByListId.find(listId); it != _domainsByListId.end()) {
+                merged = it->second;
+                loadedFromMemory = true;
+            }
+        }
+
+        if (!loadedFromMemory) {
+            if (auto in = std::ifstream(finalPath, std::ifstream::in); in.is_open()) {
+                std::string hostname;
+                while (in >> hostname) {
+                    auto [it, inserted] = merged.emplace(std::move(hostname), blockMask);
+                    if (!inserted) {
+                        it->second |= blockMask;
+                    }
+                }
+                in.close();
+            }
+        }
+    }
+
+    ImportResult stats{};
+    for (const auto &domain : domains) {
+        auto [it, inserted] = merged.emplace(domain, blockMask);
+        if (inserted) {
+            stats.imported++;
+        } else {
+            it->second |= blockMask;
+        }
+    }
+
+    // Phase 2: persist atomically via temp file + rename.
+    {
+        std::ofstream out(tmpPath, std::ofstream::out | std::ofstream::trunc);
+        if (!out.is_open()) {
+            LOG(ERROR) << __FUNCTION__ << " - temp file open failed: " << tmpPath;
+            std::remove(tmpPath.c_str());
+            return {};
+        }
+        for (const auto &kv : merged) {
+            out << kv.first << '\n';
+        }
+        out.close();
+        if (!out) {
+            LOG(ERROR) << __FUNCTION__ << " - temp file write failed: " << tmpPath;
+            std::remove(tmpPath.c_str());
+            return {};
+        }
+    }
+
+    if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
+        LOG(ERROR) << __FUNCTION__ << " - rename failed: " << tmpPath << " -> " << finalPath;
+        std::remove(tmpPath.c_str());
+        return {};
+    }
+
+    // Phase 3: publish new in-memory snapshot for enabled lists.
+    if (enabled) {
+        std::unique_lock lock(_mutex);
+        _domainsByListId[listId] = std::move(merged);
+        rebuildAggSnapshotLocked();
+        stats.total = static_cast<uint32_t>(_domainsByListId[listId].size());
+    } else {
+        stats.total = static_cast<uint32_t>(merged.size());
+    }
+
+    stats.ok = true;
+    return stats;
 }
 
 bool DomainList::erase(std::string listId) {
@@ -159,8 +250,8 @@ bool DomainList::enable(std::string listId, uint8_t blockMask) {
     // 按方案A：全程持有独占锁，避免 enable() 与并发 disable() 的竞态窗口。
     std::unique_lock lock(_mutex);
 
-    const std::string oldName = settings.saveDirDomainLists + listId + ".disabled";
-    const std::string newName = settings.saveDirDomainLists + listId;
+    const std::string oldName = Settings::saveDirDomainListsPath() + listId + ".disabled";
+    const std::string newName = Settings::saveDirDomainListsPath() + listId;
     if (std::rename(oldName.c_str(), newName.c_str())) {
         return false;
     }
@@ -192,8 +283,8 @@ bool DomainList::disable(std::string listId) {
         return false;
     }
     std::unique_lock lock(_mutex);
-    const std::string oldName = settings.saveDirDomainLists + listId;
-    const std::string newName = settings.saveDirDomainLists + listId + ".disabled";
+    const std::string oldName = Settings::saveDirDomainListsPath() + listId;
+    const std::string newName = Settings::saveDirDomainListsPath() + listId + ".disabled";
     if (std::rename(oldName.c_str(), newName.c_str())) {
         return false;
     }
@@ -230,9 +321,9 @@ bool DomainList::remove(std::string listId) {
     // Returning false indicates that no on-disk file was removed, but the logical list
     // has already been erased from memory.
     erase(listId);
-    // Avoid duplicate '/' since saveDirDomainLists already ends with '/'
-    std::string filePathListEnabled = settings.saveDirDomainLists + listId;
-    std::string filePathListDisabled = settings.saveDirDomainLists + listId + ".disabled";
+    // Avoid duplicate '/' since saveDirDomainListsPath() ends with '/'
+    std::string filePathListEnabled = Settings::saveDirDomainListsPath() + listId;
+    std::string filePathListDisabled = Settings::saveDirDomainListsPath() + listId + ".disabled";
     if (std::remove(filePathListEnabled.c_str()) == 0) {
         return true;
     } else if (std::remove(filePathListDisabled.c_str()) == 0) {
