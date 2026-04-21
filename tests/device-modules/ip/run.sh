@@ -19,7 +19,7 @@ show_help() {
   --serial <serial>        指定目标真机 serial（等价于设置 ADB_SERIAL）
   --skip-deploy            跳过 deploy，复用当前真机上的守护进程
   --cleanup-forward        结束后移除 adb forward
-  --profile <name>         smoke|perf|matrix|stress|longrun（默认: smoke；后 3 者当前为 staged，缺 case 时会 SKIP）
+  --profile <name>         smoke|vnext|perf|matrix|stress|longrun（默认: smoke；后 3 者当前为 staged，缺 case 时会 SKIP）
   --group <token>          只运行指定 group（按 case 文件名推导，如 iprules/perf）
   --case <token>           只运行指定 case（按 case 文件名子串匹配）
   -h, --help               显示帮助
@@ -103,6 +103,10 @@ collect_cases_for_profile() {
       out+=("$case_dir/00_env.sh")
       out+=("$case_dir/10_iprules_smoke.sh")
       out+=("$case_dir/12_native_replay_poc.sh")
+      ;;
+    vnext)
+      out+=("$case_dir/00_env.sh")
+      out+=("$case_dir/14_iprules_vnext_smoke.sh")
       ;;
     matrix)
       out+=("$case_dir/00_env.sh")

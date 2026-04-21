@@ -9,6 +9,7 @@
 #include <BlockingListManager.hpp>
 #include <DomainManager.hpp>
 #include <RulesManager.hpp>
+#include <ControlVNextSessionSelectors.hpp>
 #include <Settings.hpp>
 
 #include <algorithm>
@@ -80,81 +81,6 @@ unknownArgsKey(const rapidjson::Value &args, std::initializer_list<std::string_v
         }
     }
     return true;
-}
-
-[[nodiscard]] std::pair<App::Ptr, std::optional<rapidjson::Document>>
-resolveAppSelector(const uint32_t id, const rapidjson::Value &selector) {
-    if (const auto unknown = ControlVNext::findUnknownKey(selector, {"uid", "pkg", "userId"});
-        unknown.has_value()) {
-        rapidjson::Document response = ControlVNext::makeErrorResponse(
-            id, "SYNTAX_ERROR", "unknown selector key: " + std::string(*unknown));
-        return {nullptr, std::move(response)};
-    }
-
-    const auto uidIt = selector.FindMember("uid");
-    const auto pkgIt = selector.FindMember("pkg");
-    const auto userIt = selector.FindMember("userId");
-
-    const bool hasUid = uidIt != selector.MemberEnd();
-    const bool hasPkg = pkgIt != selector.MemberEnd();
-    const bool hasUser = userIt != selector.MemberEnd();
-
-    if (hasUid) {
-        if (hasPkg || hasUser) {
-            rapidjson::Document response = ControlVNext::makeErrorResponse(
-                id, "INVALID_ARGUMENT", "selector must be either {uid} or {pkg,userId}");
-            return {nullptr, std::move(response)};
-        }
-        if (!uidIt->value.IsUint()) {
-            rapidjson::Document response =
-                ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "selector.uid must be u32");
-            return {nullptr, std::move(response)};
-        }
-        const auto app = appManager.find(uidIt->value.GetUint());
-        if (!app) {
-            rapidjson::Document response =
-                ControlVNext::makeErrorResponse(id, "SELECTOR_NOT_FOUND", "app selector not found");
-            auto &alloc = response.GetAllocator();
-            rapidjson::Value candidates(rapidjson::kArrayType);
-            response["error"].AddMember("candidates", candidates, alloc);
-            return {nullptr, std::move(response)};
-        }
-        return {app, std::nullopt};
-    }
-
-    if (hasPkg || hasUser) {
-        if (!hasPkg || !hasUser) {
-            rapidjson::Document response = ControlVNext::makeErrorResponse(
-                id, "MISSING_ARGUMENT", "selector requires pkg and userId");
-            return {nullptr, std::move(response)};
-        }
-        if (!pkgIt->value.IsString()) {
-            rapidjson::Document response =
-                ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "selector.pkg must be string");
-            return {nullptr, std::move(response)};
-        }
-        if (!userIt->value.IsUint()) {
-            rapidjson::Document response =
-                ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "selector.userId must be u32");
-            return {nullptr, std::move(response)};
-        }
-        const std::string pkg(pkgIt->value.GetString(), pkgIt->value.GetStringLength());
-        const uint32_t userId = userIt->value.GetUint();
-        const auto app = appManager.findByName(pkg, userId);
-        if (!app) {
-            rapidjson::Document response =
-                ControlVNext::makeErrorResponse(id, "SELECTOR_NOT_FOUND", "app selector not found");
-            auto &alloc = response.GetAllocator();
-            rapidjson::Value candidates(rapidjson::kArrayType);
-            response["error"].AddMember("candidates", candidates, alloc);
-            return {nullptr, std::move(response)};
-        }
-        return {app, std::nullopt};
-    }
-
-    rapidjson::Document response =
-        ControlVNext::makeErrorResponse(id, "MISSING_ARGUMENT", "selector requires uid or pkg+userId");
-    return {nullptr, std::move(response)};
 }
 
 [[nodiscard]] bool isValidGuid36(const std::string_view guid) noexcept {

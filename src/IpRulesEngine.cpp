@@ -5,14 +5,18 @@
 
 #include <IpRulesEngine.hpp>
 
+#include <IpRulesContract.hpp>
+
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <climits>
 #include <cstring>
 #include <limits>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <arpa/inet.h>
 
@@ -21,6 +25,10 @@ namespace {
 static constexpr std::int32_t kNoPriority = std::numeric_limits<std::int32_t>::min();
 
 static std::atomic<std::uint64_t> g_ipRulesEngineInstanceId{1};
+
+using IpRulesContract::isValidClientRuleId;
+using IpRulesContract::maskFromPrefix;
+using IpRulesContract::parseDec;
 
 // Decision cache toggle (compile-time).
 //
@@ -45,29 +53,8 @@ static inline IpRulesEngine::ApplyResult nokResult(const std::string &error) {
     return r;
 }
 
-static inline uint32_t maskFromPrefix(const uint8_t prefix) noexcept {
-    if (prefix == 0) {
-        return 0u;
-    }
-    if (prefix >= 32) {
-        return 0xFFFFFFFFu;
-    }
-    return 0xFFFFFFFFu << (32u - prefix);
-}
-
-template <class T> static bool parseDec(const std::string_view s, T &out) {
-    if (s.empty()) {
-        return false;
-    }
-    T v{};
-    const char *begin = s.data();
-    const char *end = s.data() + s.size();
-    auto res = std::from_chars(begin, end, v);
-    if (res.ec != std::errc() || res.ptr != end) {
-        return false;
-    }
-    out = v;
-    return true;
+static inline std::string legacyClientRuleId(const uint32_t uid, const IpRulesEngine::RuleId ruleId) {
+    return "legacy:" + std::to_string(uid) + ":" + std::to_string(ruleId);
 }
 
 static inline size_t mixHash(size_t h, const size_t v) noexcept {
@@ -291,8 +278,9 @@ bool IpRulesEngine::parseCidrV4(const std::string_view v, CidrV4 &out) {
     }
 
     out.any = false;
-    out.addr = ntohl(a.s_addr);
-    out.prefix = static_cast<std::uint8_t>(prefix);
+    const auto prefixLen = static_cast<std::uint8_t>(prefix);
+    out.addr = ntohl(a.s_addr) & maskFromPrefix(prefixLen); // canonical: network-address form
+    out.prefix = prefixLen;
     return true;
 }
 
@@ -1043,6 +1031,7 @@ IpRulesEngine::ApplyResult IpRulesEngine::addFromKv(const std::uint32_t uid,
     RuleDef def{};
     def.ruleId = _nextRuleId;
     def.uid = uid;
+    def.clientRuleId = legacyClientRuleId(uid, def.ruleId);
     def.enabled = true;
     def.enforce = true;
     def.log = false;
@@ -1278,6 +1267,114 @@ IpRulesEngine::ApplyResult IpRulesEngine::enableRule(const RuleId ruleId, const 
     return applyNewRules(std::move(newRules), std::nullopt);
 }
 
+IpRulesEngine::ApplyResult
+IpRulesEngine::replaceRulesForUid(const std::uint32_t uid, const std::vector<ApplyRule> &rules) {
+    std::unique_lock<std::shared_mutex> g(_mutex);
+
+    std::unordered_set<std::string> seenClientIds;
+    seenClientIds.reserve(rules.size());
+    for (const auto &r : rules) {
+        if (!isValidClientRuleId(r.clientRuleId)) {
+            return nokResult("invalid clientRuleId");
+        }
+        if (!seenClientIds.emplace(r.clientRuleId).second) {
+            return nokResult("duplicate clientRuleId");
+        }
+    }
+
+    std::unordered_map<std::string, const RuleState *> prevByClientId;
+    prevByClientId.reserve(rules.size());
+    for (const auto &[_, st] : _rules) {
+        if (st.def.uid != uid) {
+            continue;
+        }
+        if (st.def.clientRuleId.empty()) {
+            continue;
+        }
+        prevByClientId.emplace(st.def.clientRuleId, &st);
+    }
+
+    const auto sameMatch = [](const RuleDef &a, const RuleDef &b) {
+        return a.dir == b.dir && a.iface == b.iface && a.ifindex == b.ifindex && a.proto == b.proto &&
+               a.ctState == b.ctState && a.ctDir == b.ctDir && a.src.any == b.src.any &&
+               a.src.addr == b.src.addr && a.src.prefix == b.src.prefix && a.dst.any == b.dst.any &&
+               a.dst.addr == b.dst.addr && a.dst.prefix == b.dst.prefix &&
+               a.sport.kind == b.sport.kind && a.sport.lo == b.sport.lo && a.sport.hi == b.sport.hi &&
+               a.dport.kind == b.dport.kind && a.dport.lo == b.dport.lo && a.dport.hi == b.dport.hi;
+    };
+
+    const auto sameBehavior = [](const RuleDef &a, const RuleDef &b) {
+        return a.action == b.action && a.priority == b.priority && a.enabled == b.enabled &&
+               a.enforce == b.enforce && a.log == b.log;
+    };
+
+    RulesMap newRules = _rules;
+    for (auto it = newRules.begin(); it != newRules.end();) {
+        if (it->second.def.uid == uid) {
+            it = newRules.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    RuleId nextRuleId = _nextRuleId;
+    std::optional<RuleId> maxAllocatedRuleId = std::nullopt;
+
+    for (const auto &r : rules) {
+        const auto prevIt = prevByClientId.find(r.clientRuleId);
+        const bool hasPrev = prevIt != prevByClientId.end();
+
+        const RuleId assignedRuleId = hasPrev ? prevIt->second->def.ruleId : nextRuleId++;
+        if (!hasPrev) {
+            maxAllocatedRuleId = assignedRuleId;
+        }
+
+        RuleDef def{};
+        def.ruleId = assignedRuleId;
+        def.uid = uid;
+        def.clientRuleId = r.clientRuleId;
+        def.action = r.action;
+        def.priority = r.priority;
+        def.enabled = r.enabled;
+        def.enforce = r.enforce;
+        def.log = r.log;
+        def.dir = r.dir;
+        def.iface = r.iface;
+        def.ifindex = r.ifindex;
+        def.proto = r.proto;
+        def.src = r.src;
+        def.dst = r.dst;
+        def.sport = r.sport;
+        def.dport = r.dport;
+        def.ctState = r.ctState;
+        def.ctDir = r.ctDir;
+
+        std::string error;
+        if (!validateRuleDef(def, error)) {
+            return nokResult(error);
+        }
+
+        RuleState st{};
+        st.def = def;
+        if (hasPrev) {
+            const auto *prev = prevIt->second;
+            if (sameMatch(prev->def, def) && sameBehavior(prev->def, def)) {
+                st.stats = prev->stats;
+            } else {
+                st.stats = std::make_shared<RuleStats>();
+            }
+        } else {
+            st.stats = std::make_shared<RuleStats>();
+        }
+
+        if (!newRules.emplace(def.ruleId, std::move(st)).second) {
+            return nokResult("internal error: duplicate ruleId");
+        }
+    }
+
+    return applyNewRules(std::move(newRules), maxAllocatedRuleId);
+}
+
 void IpRulesEngine::resetAll() {
     std::unique_lock<std::shared_mutex> g(_mutex);
     RulesMap empty;
@@ -1301,7 +1398,7 @@ void IpRulesEngine::save() {
               [](const RuleDef &a, const RuleDef &b) { return a.ruleId < b.ruleId; });
 
     _saver.save([&] {
-        constexpr uint32_t kFormatVersion = 2;
+        constexpr uint32_t kFormatVersion = 3;
         _saver.write<uint32_t>(kFormatVersion);
         _saver.write<RuleId>(nextRuleId);
         _saver.write<uint32_t>(static_cast<uint32_t>(defs.size()));
@@ -1309,6 +1406,7 @@ void IpRulesEngine::save() {
         for (const auto &d : defs) {
             _saver.write<RuleId>(d.ruleId);
             _saver.write<uint32_t>(d.uid);
+            _saver.write(d.clientRuleId);
             _saver.write<uint8_t>(static_cast<uint8_t>(d.action));
             _saver.write<std::int32_t>(d.priority);
             _saver.write<bool>(d.enabled);
@@ -1344,7 +1442,7 @@ void IpRulesEngine::save() {
 void IpRulesEngine::restore() {
     _saver.restore([&] {
         const auto formatVersion = _saver.read<uint32_t>();
-        if (formatVersion != 1 && formatVersion != 2) {
+        if (formatVersion != 1 && formatVersion != 2 && formatVersion != 3) {
             throw RestoreException();
         }
 
@@ -1361,6 +1459,14 @@ void IpRulesEngine::restore() {
             RuleDef d{};
             d.ruleId = _saver.read<RuleId>();
             d.uid = _saver.read<uint32_t>();
+            if (formatVersion >= 3) {
+                _saver.read(d.clientRuleId, 1, 64);
+                if (!isValidClientRuleId(d.clientRuleId)) {
+                    throw RestoreException();
+                }
+            } else {
+                d.clientRuleId = legacyClientRuleId(d.uid, d.ruleId);
+            }
             d.action = static_cast<Action>(_saver.read<uint8_t>());
             d.priority = _saver.read<std::int32_t>();
             d.enabled = _saver.read<bool>();
@@ -1374,10 +1480,22 @@ void IpRulesEngine::restore() {
             d.src.any = _saver.read<bool>();
             d.src.addr = _saver.read<uint32_t>();
             d.src.prefix = _saver.read<uint8_t>();
+            if (!d.src.any) {
+                if (d.src.prefix > 32) {
+                    throw RestoreException();
+                }
+                d.src.addr &= maskFromPrefix(d.src.prefix);
+            }
 
             d.dst.any = _saver.read<bool>();
             d.dst.addr = _saver.read<uint32_t>();
             d.dst.prefix = _saver.read<uint8_t>();
+            if (!d.dst.any) {
+                if (d.dst.prefix > 32) {
+                    throw RestoreException();
+                }
+                d.dst.addr &= maskFromPrefix(d.dst.prefix);
+            }
 
             d.sport.kind = static_cast<PortPredicate::Kind>(_saver.read<uint8_t>());
             d.sport.lo = _saver.read<uint16_t>();

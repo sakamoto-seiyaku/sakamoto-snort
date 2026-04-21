@@ -490,6 +490,27 @@ PY
     assert_json_pred "VNT-22 DOMAINLISTS.IMPORT updates only domainsCount" "$lists_get2" \
         "import sys,json; j=json.load(sys.stdin); ls=j['result']['lists']; e=[x for x in ls if x['listId']=='${list_id}'][0]; assert e['domainsCount']==2 and e['url']=='https://example/list' and e['etag']=='etagX' and e['outdated']==0"
 
+    log_section "IPRULES Surface"
+
+    if [[ -z "$app_uid" ]]; then
+        log_skip "VNT-22c IPRULES surface skipped (no apps)"
+    else
+        local ip_preflight ip_apply ip_print
+        ip_preflight=$(ctl_cmd IPRULES.PREFLIGHT) || true
+        assert_json_pred "VNT-22c IPRULES.PREFLIGHT has summary/limits" "$ip_preflight" \
+            'import sys,json; j=json.load(sys.stdin); r=j["result"]; assert j["ok"] is True; assert "summary" in r and "limits" in r and "warnings" in r and "violations" in r'
+
+        ip_apply=$(ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"g1:r1\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"1.2.3.4/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r2\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2.3.4.5/24\",\"sport\":\"any\",\"dport\":\"443\"}]}" || true)
+        assert_json_pred "VNT-22d IPRULES.APPLY ok + returns mapping" "$ip_apply" \
+            'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; r=j["result"]; assert isinstance(r["uid"], int); assert isinstance(r["rules"], list); assert len(r["rules"])==2; assert set([x["clientRuleId"] for x in r["rules"]])==set(["g1:r1","g1:r2"]); assert all(isinstance(x["ruleId"], int) for x in r["rules"]); assert all(isinstance(x["matchKey"], str) for x in r["rules"])'
+
+        ip_print=$(ctl_cmd IPRULES.PRINT "{\"app\":{\"uid\":${app_uid}}}") || true
+        assert_json_pred "VNT-22e IPRULES.PRINT rules[] sorted by ruleId" "$ip_print" \
+            'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; ids=[r["ruleId"] for r in rules]; assert ids==sorted(ids)'
+        assert_json_pred "VNT-22f IPRULES.PRINT has required fields + canonical CIDR" "$ip_print" \
+            'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; assert len(rules)==2; r0=rules[0]; assert "clientRuleId" in r0 and "matchKey" in r0 and "stats" in r0 and "ct" in r0; assert isinstance(r0["stats"]["hitPackets"], int); assert any(r["dst"]=="1.2.3.0/24" for r in rules); assert any("dst=1.2.3.0/24" in r["matchKey"] for r in rules)'
+    fi
+
     log_section "Resetall"
 
     local resetall

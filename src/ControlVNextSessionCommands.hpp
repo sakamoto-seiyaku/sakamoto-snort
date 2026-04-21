@@ -27,4 +27,9 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
 std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView &request,
                                                 const ControlVNextSession::Limits &limits);
 
+// Handles iprules vNext commands (IPRULES.PREFLIGHT/PRINT/APPLY). Returns std::nullopt when cmd is
+// not recognized by this handler.
+std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView &request,
+                                                 const ControlVNextSession::Limits &limits);
+
 } // namespace ControlVNextSessionCommands

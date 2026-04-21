@@ -21,4 +21,11 @@ std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView 
     return std::nullopt;
 }
 
+std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView &request,
+                                                 const ControlVNextSession::Limits &limits) {
+    (void)request;
+    (void)limits;
+    return std::nullopt;
+}
+
 } // namespace ControlVNextSessionCommands

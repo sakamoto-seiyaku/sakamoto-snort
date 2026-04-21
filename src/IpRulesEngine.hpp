@@ -88,6 +88,7 @@ public:
     struct RuleDef {
         RuleId ruleId = 0;
         std::uint32_t uid = 0;
+        std::string clientRuleId;
 
         Action action = Action::ALLOW;
         std::int32_t priority = 0;
@@ -112,6 +113,31 @@ public:
         bool hasPortConstraints() const { return !(sport.isAny() && dport.isAny()); }
         bool hasRangePorts() const { return sport.isRange() || dport.isRange(); }
         bool isWouldBlock() const { return action == Action::BLOCK && !enforce && log; }
+    };
+
+    // vNext apply payload item (ruleId is assigned/reused by the engine).
+    struct ApplyRule {
+        std::string clientRuleId;
+
+        Action action = Action::ALLOW;
+        std::int32_t priority = 0;
+
+        bool enabled = true;
+        bool enforce = true;
+        bool log = false;
+
+        Direction dir = Direction::ANY;
+        IfaceKind iface = IfaceKind::ANY;
+        std::uint32_t ifindex = 0; // 0 == any
+        Proto proto = Proto::ANY;
+
+        CidrV4 src = CidrV4::anyCidr();
+        CidrV4 dst = CidrV4::anyCidr();
+        PortPredicate sport = PortPredicate::any();
+        PortPredicate dport = PortPredicate::any();
+
+        CtState ctState = CtState::ANY;
+        CtDirection ctDir = CtDirection::ANY;
     };
 
     struct RuleStatsSnapshot {
@@ -205,6 +231,9 @@ public:
     ApplyResult removeRule(const RuleId ruleId);
     ApplyResult enableRule(const RuleId ruleId, const bool enabled);
     void resetAll();
+
+    // vNext atomic replace apply (per-UID).
+    ApplyResult replaceRulesForUid(const std::uint32_t uid, const std::vector<ApplyRule> &rules);
 
     void save();
     void restore();
