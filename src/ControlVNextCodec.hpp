@@ -55,6 +55,7 @@ private:
     [[nodiscard]] std::optional<NetstringError> parseAvailable();
 
     size_t _maxFrameBytes = 0;
+    size_t _maxHeaderDigits = 0;
     std::string _buffer;
     std::deque<std::string> _frames;
 

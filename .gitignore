@@ -7,8 +7,6 @@
 build-output/*
 Testing/
 build/*
-/build_host/*
-/build_host_asan_1/*
 /build-output/*
 __pycache__/
 *.pyc

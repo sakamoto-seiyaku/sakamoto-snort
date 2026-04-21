@@ -12,6 +12,7 @@
 #include <thread>
 #include <cstring>
 #include <cerrno>
+#include <stdexcept>
 
 #include <DnsListener.hpp>
 #include <PerfMetrics.hpp>
@@ -22,7 +23,15 @@ DnsListener::DnsListener()
 DnsListener::~DnsListener() {}
 
 void DnsListener::start() {
-    std::thread([&] { server(); }).detach();
+    std::thread([this] {
+        try {
+            server();
+        } catch (const std::exception &e) {
+            LOG(FATAL) << "DnsListener server failed: " << e.what();
+        } catch (...) {
+            LOG(FATAL) << "DnsListener server failed: unknown exception";
+        }
+    }).detach();
 }
 
 void DnsListener::server() {
@@ -246,6 +255,10 @@ void DnsListener::clientRun(const int socket) {
         }
     } catch (const char *error) {
         LOG(ERROR) << __FUNCTION__ << " - " << error;
+    } catch (const std::exception &e) {
+        LOG(ERROR) << __FUNCTION__ << " - dnslistener client exception: " << e.what();
+    } catch (...) {
+        LOG(ERROR) << __FUNCTION__ << " - dnslistener client exception: unknown";
     }
     close(socket);
 }

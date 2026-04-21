@@ -15,8 +15,8 @@ RulesManager::~RulesManager() {}
 
 Rule::Id RulesManager::addRule(const Rule::Type type, const std::string &ruleRaw) {
     const std::lock_guard lock(_mutex);
-    const auto &rule = make(_idCount, type, ruleRaw);
-    return ++_idCount - 1;
+    make(_idCount, type, ruleRaw);
+    return _idCount++;
 }
 
 const Rule::Ptr RulesManager::make(const Rule::Id id, const Rule::Type type,
@@ -167,10 +167,8 @@ void RulesManager::print(std::ostream &out) {
     for (const auto &[_, rule] : _rules) {
         // Read-only: avoid operator[] which would insert; use find with a fallback
         const Custom emptyCustom{};
-        const Custom &custom = [&](){
-            auto it = _customs.find(rule);
-            return it != _customs.end() ? it->second : emptyCustom;
-        }();
+        const auto customIt = _customs.find(rule);
+        const Custom &custom = customIt != _customs.end() ? customIt->second : emptyCustom;
         std::stringstream tmp;
         for (const auto c : rule->rule()) {
             switch (c) {

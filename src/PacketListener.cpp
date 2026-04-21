@@ -348,8 +348,11 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
 
     bool verdict = true;
 
-    if (settings.blockEnabled() && (!settings.inetControl() || (srcPort != settings.controlPort &&
-                                                                dstPort != settings.controlPort))) {
+    const bool isControlTraffic =
+        srcPort == settings.controlPort || dstPort == settings.controlPort ||
+        srcPort == settings.controlVNextPort || dstPort == settings.controlVNextPort;
+
+    if (settings.blockEnabled() && (!settings.inetControl() || !isControlTraffic)) {
         // Phase 1 (outside global listeners lock): build per-packet context. This may perform
         // reverse DNS (HostManager::make) or touch disk, but never holds mutexListeners.
         Address<IP> srcIp(reinterpret_cast<const uint8_t *>(&ip->saddr));

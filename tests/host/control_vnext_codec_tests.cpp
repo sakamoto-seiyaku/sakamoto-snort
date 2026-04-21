@@ -97,6 +97,13 @@ TEST(ControlVNextNetstring, RejectsOversizedFrames) {
     EXPECT_EQ(err->code, ControlVNext::NetstringError::Code::FrameTooLarge);
 }
 
+TEST(ControlVNextNetstring, RejectsOversizedFramesBeforeColon) {
+    ControlVNext::NetstringDecoder decoder(/*maxFrameBytes=*/9);
+    const auto err = decoder.feed(asBytes("10"));
+    ASSERT_TRUE(err.has_value());
+    EXPECT_EQ(err->code, ControlVNext::NetstringError::Code::FrameTooLarge);
+}
+
 TEST(ControlVNextJson, ParsesStrictObject) {
     rapidjson::Document doc;
     ControlVNext::JsonError error;

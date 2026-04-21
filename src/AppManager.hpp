@@ -7,6 +7,7 @@
 
 #include <map>
 #include <optional>
+#include <vector>
 
 #include <DomainManager.hpp>
 #include <App.hpp>
@@ -68,6 +69,9 @@ public:
 
     void printAppsByName(std::ostream &out, const std::string &subname,
                          const std::optional<uint32_t> userId = std::nullopt);
+
+    // Snapshot apps sorted by uid ascending. Optional userId filter is applied server-side.
+    std::vector<App::Ptr> snapshotByUid(const std::optional<uint32_t> userId = std::nullopt);
 
     template <class... Args> void printStatsTotal(std::ostream &out, const Args... args);
 

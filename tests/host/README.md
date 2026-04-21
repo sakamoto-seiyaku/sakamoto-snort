@@ -33,14 +33,22 @@
 优先推荐 repo-root CMake workspace 入口：
 
 ```bash
-cmake -S . -B build-output/cmake/manual -G Ninja -DSNORT_ENABLE_HOST_TESTS=ON
-cmake --build build-output/cmake/manual --target snort-host-tests
+cmake --preset dev-debug
+cmake --build --preset dev-debug --target snort-host-tests
 ```
 
 也可以直接在 repo-root CMake build dir 里运行：
 
 ```bash
-cd build-output/cmake/manual && ctest --output-on-failure -L p0
+ctest --preset dev-debug -L p0
+```
+
+Host-side ASAN lane 固定使用 Clang，避免误用系统 GCC ASAN：
+
+```bash
+cmake --preset host-asan-clang
+cmake --build --preset host-asan-clang --target snort-host-tests
+ctest --preset host-asan-clang -L p0
 ```
 
 > 注：`ctest -L p0` 中的 `p0` 是历史 label 命名，仅用于过滤 host-side unit tests，不表示 roadmap 阶段号。
@@ -57,4 +65,5 @@ repo-root workflow 会：
 - 这是第一批低耦合测试，不追求高覆盖率
 - 不为了测试做大规模重构
 - 当前只要求开发机具备 `cmake`、`git` 和标准 C++ 编译器
+- repo-root CMake presets 固定使用 `clang` / `clang++` 运行 host-side 测试
 - 强 Android 依赖与真机相关逻辑由集成测试 / 真机验证覆盖

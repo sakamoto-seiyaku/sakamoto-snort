@@ -62,7 +62,7 @@ The daemon MUST implement `CONFIG.GET` and `CONFIG.SET` for the v1 key set defin
 
 #### Scenario: CONFIG.SET rejects unknown keys
 - **WHEN** a client sends `CONFIG.SET` containing an unsupported key
-- **THEN** the daemon SHALL respond with `ok=false` and `error.code="SYNTAX_ERROR"`
+- **THEN** the daemon SHALL respond with `ok=false` and `error.code="INVALID_ARGUMENT"`
 
 ### Requirement: inetControl migration exemption includes 60606 and 60607
 When `inetControl()` is enabled, the dataplane MUST exempt control traffic for both legacy and vNext TCP ports to avoid interfering with control connectivity.
@@ -70,4 +70,3 @@ When `inetControl()` is enabled, the dataplane MUST exempt control traffic for b
 #### Scenario: Control TCP traffic bypasses blocking decisions
 - **WHEN** `inetControl()` is enabled and a TCP packet has `srcPort` or `dstPort` equal to `60606` or `60607`
 - **THEN** the dataplane SHALL bypass blocking logic for that packet
-

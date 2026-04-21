@@ -25,6 +25,12 @@ add_sucre_snort_shell_test(
 )
 
 add_sucre_snort_shell_test(
+  p1-vnext-baseline
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/vnext-baseline.sh"
+  "p1;device;root-required;baseline;vnext"
+)
+
+add_sucre_snort_shell_test(
   p1-iprules
   "${SUCRE_SNORT_INTEGRATION_ROOT}/iprules.sh"
   "p1;device;root-required;iprules"
@@ -59,3 +65,8 @@ add_custom_target(
   USES_TERMINAL
   VERBATIM
 )
+
+if(TARGET sucre-snort-ctl)
+  add_dependencies(snort-p1-tests sucre-snort-ctl)
+  add_dependencies(snort-p2-tests sucre-snort-ctl)
+endif()

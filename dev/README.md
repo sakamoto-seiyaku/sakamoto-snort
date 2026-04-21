@@ -69,7 +69,7 @@
 ## 常用命令
 
 ```bash
-# 1) repo-root CMake preset configure
+# 1) repo-root CMake preset configure（host 侧固定使用 Clang）
 cmake --preset dev-debug
 
 # 2) delegated Android build / deploy / debug helpers
@@ -81,6 +81,8 @@ cmake --build --preset dev-debug --target snort-debug-cleanup
 
 # 3) P0 / P1 / P2
 cmake --build --preset dev-debug --target snort-host-tests
+cmake --preset host-asan-clang
+cmake --build --preset host-asan-clang --target snort-host-tests
 cmake --build --preset dev-debug --target snort-p1-tests
 cmake --build --preset dev-debug --target snort-p2-tests
 

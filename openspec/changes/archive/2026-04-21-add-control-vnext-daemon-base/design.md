@@ -41,6 +41,7 @@ vNext control 的协议/命令面单一真相已收敛于：
 3) **Endpoints：production 继承 init socket；dev 模式自动创建 filesystem + abstract**
    - 选择：对 unix socket `sucre-snort-control-vnext`：
      - production：`sucre-snort.rc` 声明 socket，daemon 用 `android_get_control_socket()` 继承 FD
+     - production（补充）：即使继承了 init socket（filesystem），daemon 也会额外暴露 `@sucre-snort-control-vnext`（abstract），以满足 vNext “filesystem + abstract” 双端点契约
      - dev fallback：无 init socket 时，创建 `/dev/socket/sucre-snort-control-vnext` + `@sucre-snort-control-vnext` 并复用同一 session loop
    - 理由：避免 production/dev 路径分叉导致行为漂移；与 legacy 控制面既有策略一致。
 
@@ -85,4 +86,3 @@ vNext control 的协议/命令面单一真相已收敛于：
 
 - `maxRequestBytes/maxResponseBytes` 默认值（实现常量）最终取值；本切片建议先与 `sucre-snort-ctl` 默认 `16MiB` 对齐，后续按真机输出体积再调。
 - 是否在 `len > maxRequestBytes` 断连前输出可选 `type="notice"`（排障友好，但会引入“断连前多写一帧”的复杂度）。
-

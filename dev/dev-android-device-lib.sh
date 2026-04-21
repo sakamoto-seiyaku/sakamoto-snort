@@ -121,6 +121,22 @@ remove_control_forward() {
     adb_cmd forward --remove "tcp:${port}" >/dev/null 2>&1 || true
 }
 
+check_control_vnext_forward() {
+    local port="${1:-60607}"
+    ensure_adb_target || return 1
+    adb_cmd forward --list 2>/dev/null | tr -d '\r' | grep -q "${ADB_SERIAL_RESOLVED} .*tcp:${port} .*localabstract:sucre-snort-control-vnext"
+}
+
+setup_control_vnext_forward() {
+    local port="${1:-60607}"
+    adb_cmd forward "tcp:${port}" localabstract:sucre-snort-control-vnext >/dev/null
+}
+
+remove_control_vnext_forward() {
+    local port="${1:-60607}"
+    adb_cmd forward --remove "tcp:${port}" >/dev/null 2>&1 || true
+}
+
 adb_uses_windows_host() {
     if [[ "$ADB_BIN" == *.exe ]]; then
         return 0

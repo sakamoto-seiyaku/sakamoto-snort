@@ -118,6 +118,7 @@ public:
 
     static constexpr const char *netdSocketPath = "sucre-snort-netd";
     static constexpr const char *controlSocketPath = "sucre-snort-control";
+    static constexpr const char *controlVNextSocketPath = "sucre-snort-control-vnext";
 
     static constexpr const char *iptablesShell = "/system/bin/iptables";
     static constexpr const char *ip6tablesShell = "/system/bin/ip6tables";
@@ -131,6 +132,10 @@ public:
     static constexpr uint32_t controlBindTrials = 10;
     static constexpr uint32_t controlClients = 1000;
     static constexpr uint32_t controlPort = 60606;
+    static constexpr uint32_t controlVNextPort = 60607;
+
+    static constexpr uint32_t controlVNextMaxRequestBytes = 16 * 1024 * 1024;
+    static constexpr uint32_t controlVNextMaxResponseBytes = 16 * 1024 * 1024;
 
     static constexpr uint32_t dnsStreamMaxHorizon = 3600 * 24;
     static constexpr std::time_t dnsStreamDefaultHorizon = 600;

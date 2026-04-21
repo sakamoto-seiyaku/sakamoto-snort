@@ -23,6 +23,15 @@ namespace {
 
 constexpr bool isDigit(const char ch) { return ch >= '0' && ch <= '9'; }
 
+size_t decimalDigits(size_t value) {
+    size_t digits = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++digits;
+    }
+    return digits;
+}
+
 std::optional<EnvelopeError> makeSyntaxError(std::string message) {
     return EnvelopeError{.code = "SYNTAX_ERROR", .message = std::move(message)};
 }
@@ -38,7 +47,7 @@ std::optional<EnvelopeError> makeInvalidArg(std::string message) {
 } // namespace
 
 NetstringDecoder::NetstringDecoder(const size_t maxFrameBytes)
-    : _maxFrameBytes(maxFrameBytes) {}
+    : _maxFrameBytes(maxFrameBytes), _maxHeaderDigits(decimalDigits(maxFrameBytes)) {}
 
 std::optional<NetstringError> NetstringDecoder::feed(const std::span<const std::byte> bytes) {
     if (bytes.empty()) {
@@ -71,6 +80,14 @@ std::optional<NetstringError> NetstringDecoder::parseAvailable() {
                                  [](const char ch) { return isDigit(ch); })) {
                     return NetstringError{.code = NetstringError::Code::InvalidHeader,
                                           .message = "netstring header contains non-digit"};
+                }
+                if (_buffer.size() > 1 && _buffer.front() == '0') {
+                    return NetstringError{.code = NetstringError::Code::LeadingZero,
+                                          .message = "netstring header has leading zero"};
+                }
+                if (_buffer.size() > _maxHeaderDigits) {
+                    return NetstringError{.code = NetstringError::Code::FrameTooLarge,
+                                          .message = "netstring header exceeds max frame size"};
                 }
                 // Need more data.
                 return std::nullopt;

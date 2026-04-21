@@ -12,6 +12,8 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-output/cmake/${presetName}",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
         "SNORT_ENABLE_DELEGATED_BUILD_TARGETS": "ON",
         "SNORT_ENABLE_HOST_TESTS": "ON",
         "SNORT_ENABLE_DEVICE_TESTS": "ON"
@@ -20,14 +22,28 @@
     {
       "name": "dev-debug",
       "inherits": "base",
-      "description": "Repo-root developer workflow preset (Debug)"
+      "description": "Repo-root developer workflow preset (Debug, Clang)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     },
     {
       "name": "dev-relwithdebinfo",
       "inherits": "base",
-      "description": "Repo-root developer workflow preset (RelWithDebInfo)",
+      "description": "Repo-root developer workflow preset (RelWithDebInfo, Clang)",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "host-asan-clang",
+      "inherits": "base",
+      "description": "Host-side test preset with Clang AddressSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address -fno-omit-frame-pointer -O1 -g",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer -O1 -g",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address"
       }
     }
   ],
@@ -41,6 +57,11 @@
       "name": "dev-relwithdebinfo",
       "configurePreset": "dev-relwithdebinfo",
       "description": "Build repo-root developer workflow targets with the dev-relwithdebinfo configure preset"
+    },
+    {
+      "name": "host-asan-clang",
+      "configurePreset": "host-asan-clang",
+      "description": "Build repo-root host-side targets with Clang AddressSanitizer"
     }
   ],
   "testPresets": [
@@ -54,6 +75,13 @@
     {
       "name": "dev-relwithdebinfo",
       "configurePreset": "dev-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "host-asan-clang",
+      "configurePreset": "host-asan-clang",
       "output": {
         "outputOnFailure": true
       }

@@ -108,3 +108,11 @@ add_sucre_snort_host_test(
   sucre_snort_ctl_session.cpp
   "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
 )
+
+add_sucre_snort_host_test(
+  control_vnext_daemon_session_tests
+  control_vnext_daemon_session_tests.cpp
+  control_vnext_daemon_stub_commands.cpp
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextSession.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+)

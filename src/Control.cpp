@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <fstream>
 #include <optional>
 #include <system_error>
@@ -187,9 +188,25 @@ Control::Control() {
 Control::~Control() {}
 
 void Control::start() {
-    std::thread([this] { unixServer(); }).detach();
+    std::thread([this] {
+        try {
+            unixServer();
+        } catch (const std::exception &e) {
+            LOG(FATAL) << "Control unix server failed: " << e.what();
+        } catch (...) {
+            LOG(FATAL) << "Control unix server failed: unknown exception";
+        }
+    }).detach();
     if (settings.inetControl()) {
-        std::thread([this] { inetServer(); }).detach();
+        std::thread([this] {
+            try {
+                inetServer();
+            } catch (const std::exception &e) {
+                LOG(FATAL) << "Control inet server failed: " << e.what();
+            } catch (...) {
+                LOG(FATAL) << "Control inet server failed: unknown exception";
+            }
+        }).detach();
     }
 }
 
@@ -385,116 +402,131 @@ void Control::inetServer() {
 }
 
 void Control::clientLoop(const int sockClient) const {
-    SocketIO::Ptr _sockio = std::make_shared<SocketIO>(sockClient);
-    // Reset per-thread state for this client connection.
-    quit = false;
-    devShutdown = false;
-    activeStreams = 0;
-
-    // Apply a receive timeout so that completely idle non-stream clients
-    // do not keep a thread and socket forever. 15 minutes is chosen to
-    // be well above any realistic interactive use.
-    {
-        const timeval tv{.tv_sec = 15 * 60, .tv_usec = 0};
-        if (setsockopt(sockClient, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-            const int err = errno;
-            LOG(ERROR) << __FUNCTION__ << " - control socket SO_RCVTIMEO error: "
-                       << std::strerror(err);
-            // Continue without timeout in this rare case; behavior falls back
-            // to the previous infinite-blocking semantics on this connection.
+    struct AutoCloseFd {
+        int fd = -1;
+        ~AutoCloseFd() {
+            if (fd >= 0) {
+                ::close(fd);
+            }
         }
-    }
+    } sock{sockClient};
 
-    const auto &resetall = _cmds.find("RESETALL");
-    const auto &metricsReasonsReset = _cmds.find("METRICS.REASONS.RESET");
-    const auto &metricsDomainSourcesReset = _cmds.find("METRICS.DOMAIN.SOURCES.RESET");
-    const auto &metricsDomainSourcesResetApp = _cmds.find("METRICS.DOMAIN.SOURCES.RESET.APP");
-    // Avoid large stack buffer: use heap-backed buffer sized from settings.
-    std::vector<char> buffer(settings.controlCmdLen);
-    const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
-    for (;;) {
-        const ssize_t len = read(sockClient, buffer.data(), maxRead);
-        if (len > 0) {
-            buffer[static_cast<size_t>(len)] = '\0';
-            if (len == maxRead) {
-                // Input truncated; avoid processing potentially incomplete command
-                LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " "
-                           << buffer.data();
-                break;
+    try {
+        SocketIO::Ptr _sockio = std::make_shared<SocketIO>(sockClient);
+        // Reset per-thread state for this client connection.
+        quit = false;
+        devShutdown = false;
+        activeStreams = 0;
+
+        // Apply a receive timeout so that completely idle non-stream clients
+        // do not keep a thread and socket forever. 15 minutes is chosen to
+        // be well above any realistic interactive use.
+        {
+            const timeval tv{.tv_sec = 15 * 60, .tv_usec = 0};
+            if (setsockopt(sockClient, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+                const int err = errno;
+                LOG(ERROR) << __FUNCTION__ << " - control socket SO_RCVTIMEO error: "
+                           << std::strerror(err);
+                // Continue without timeout in this rare case; behavior falls back
+                // to the previous infinite-blocking semantics on this connection.
             }
-            std::stringstream cmdLine(buffer.data());
-            std::string cmd;
-            std::stringstream out;
-            bool pretty = false;
-            cmdLine >> cmd;
-            cmdLine.seekg(cmd.size());
-            if (cmd.size() > 0 && cmd.back() == '!') {
-                pretty = true;
-                cmd.pop_back();
-            }
-            if (cmd.size() == 0) {
-                ack(out);
-            } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
-                const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
-                if (it == resetall || it == metricsReasonsReset || it == metricsDomainSourcesReset ||
-                    it == metricsDomainSourcesResetApp) {
-                    const std::lock_guard lock(mutexListeners);
-                    applyCmd();
+        }
+
+        const auto &resetall = _cmds.find("RESETALL");
+        const auto &metricsReasonsReset = _cmds.find("METRICS.REASONS.RESET");
+        const auto &metricsDomainSourcesReset = _cmds.find("METRICS.DOMAIN.SOURCES.RESET");
+        const auto &metricsDomainSourcesResetApp = _cmds.find("METRICS.DOMAIN.SOURCES.RESET.APP");
+        // Avoid large stack buffer: use heap-backed buffer sized from settings.
+        std::vector<char> buffer(settings.controlCmdLen);
+        const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
+        for (;;) {
+            const ssize_t len = read(sockClient, buffer.data(), maxRead);
+            if (len > 0) {
+                buffer[static_cast<size_t>(len)] = '\0';
+                if (len == maxRead) {
+                    // Input truncated; avoid processing potentially incomplete command
+                    LOG(ERROR) << __FUNCTION__ << " - control string too long " << len << " "
+                               << buffer.data();
+                    break;
+                }
+                std::stringstream cmdLine(buffer.data());
+                std::string cmd;
+                std::stringstream out;
+                bool pretty = false;
+                cmdLine >> cmd;
+                cmdLine.seekg(cmd.size());
+                if (cmd.size() > 0 && cmd.back() == '!') {
+                    pretty = true;
+                    cmd.pop_back();
+                }
+                if (cmd.size() == 0) {
+                    ack(out);
+                } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
+                    const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
+                    if (it == resetall || it == metricsReasonsReset ||
+                        it == metricsDomainSourcesReset || it == metricsDomainSourcesResetApp) {
+                        const std::lock_guard lock(mutexListeners);
+                        applyCmd();
+                    } else {
+                        const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+                        applyCmd();
+                    }
                 } else {
-                    const std::shared_lock<std::shared_mutex> lock(mutexListeners);
-                    applyCmd();
+                    LOG(ERROR) << __FUNCTION__ << " - invalid command: '" << cmd << "'";
+                    nack(out);
                 }
+                if (!_sockio->print(out, pretty)) {
+                    LOG(ERROR) << __FUNCTION__ << " - control socket write error";
+                    break;
+                }
+                if (devShutdown) {
+                    snortSave(true); // will std::exit
+                }
+                if (quit) {
+                    break;
+                }
+            } else if (len == 0) {
+                // Peer closed the connection.
+                break;
             } else {
-                LOG(ERROR) << __FUNCTION__ << " - invalid command: '" << cmd << "'";
-                nack(out);
-            }
-            if (!_sockio->print(out, pretty)) {
-                LOG(ERROR) << __FUNCTION__ << " - control socket write error";
+                const int err = errno;
+                if (err == EINTR) {
+                    // Interrupted by signal, retry read.
+                    continue;
+                }
+                if (err == EAGAIN || err == EWOULDBLOCK) {
+                    if (activeStreams == 0) {
+                        // No active streams on this control connection and no data
+                        // received within the timeout window: treat as idle and close.
+                        LOG(WARNING) << __FUNCTION__ << " - idle control client timeout, closing";
+                        break;
+                    }
+                    // There is at least one active stream on this connection. It is expected
+                    // that the client may only receive data and not send further commands.
+                    // However, if we also observe that nothing has been written to this
+                    // socket for a full timeout window, we treat it as a dead stream and
+                    // close the connection to avoid leaking a stuck thread.
+                    const std::time_t now = std::time(nullptr);
+                    const std::time_t lastWrite = _sockio->lastWrite();
+                    if (lastWrite == 0 || now - lastWrite >= 15 * 60) {
+                        LOG(WARNING) << __FUNCTION__
+                                     << " - idle streaming control client timeout, closing";
+                        break;
+                    }
+                    // Recent writes are observed on this socket; keep waiting for potential
+                    // future commands and do not close based on read timeout alone.
+                    continue;
+                }
+                LOG(ERROR) << __FUNCTION__ << " - control socket read error: "
+                           << std::strerror(err);
                 break;
             }
-            if (devShutdown) {
-                snortSave(true); // will std::exit
-            }
-            if (quit) {
-                break;
-            }
-        } else if (len == 0) {
-            // Peer closed the connection.
-            break;
-        } else {
-            const int err = errno;
-            if (err == EINTR) {
-                // Interrupted by signal, retry read.
-                continue;
-            }
-            if (err == EAGAIN || err == EWOULDBLOCK) {
-                if (activeStreams == 0) {
-                    // No active streams on this control connection and no data
-                    // received within the timeout window: treat as idle and close.
-                    LOG(WARNING) << __FUNCTION__ << " - idle control client timeout, closing";
-                    break;
-                }
-                // There is at least one active stream on this connection. It is expected
-                // that the client may only receive data and not send further commands.
-                // However, if we also observe that nothing has been written to this
-                // socket for a full timeout window, we treat it as a dead stream and
-                // close the connection to avoid leaking a stuck thread.
-                const std::time_t now = std::time(nullptr);
-                const std::time_t lastWrite = _sockio->lastWrite();
-                if (lastWrite == 0 || now - lastWrite >= 15 * 60) {
-                    LOG(WARNING) << __FUNCTION__
-                                 << " - idle streaming control client timeout, closing";
-                    break;
-                }
-                // Recent writes are observed on this socket; keep waiting for potential
-                // future commands and do not close based on read timeout alone.
-                continue;
-            }
-            LOG(ERROR) << __FUNCTION__ << " - control socket read error: " << std::strerror(err);
-            break;
         }
+    } catch (const std::exception &e) {
+        LOG(ERROR) << __FUNCTION__ << " - control client exception: " << e.what();
+    } catch (...) {
+        LOG(ERROR) << __FUNCTION__ << " - control client exception: unknown";
     }
-    close(sockClient);
 }
 
 namespace {

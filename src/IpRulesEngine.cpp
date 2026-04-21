@@ -1428,6 +1428,7 @@ void IpRulesEngine::restore() {
     });
 }
 
+#if SUCRE_SNORT_IPRULES_DECISION_CACHE
 static inline size_t hashPacketKey(const IpRulesEngine::PacketKeyV4 &k) noexcept {
     size_t h = 0;
     h = mixHash(h, k.uid);
@@ -1443,6 +1444,7 @@ static inline size_t hashPacketKey(const IpRulesEngine::PacketKeyV4 &k) noexcept
     h = mixHash(h, k.ctDir);
     return h;
 }
+#endif
 
 IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
     return hotSnapshot().evaluate(key);

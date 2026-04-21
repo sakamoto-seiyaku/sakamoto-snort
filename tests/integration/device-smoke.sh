@@ -130,6 +130,24 @@ nfqueue_packets() {
     adb_su "$tool -L $chain -v -n 2>/dev/null | awk '/NFQUEUE/{print \$1; exit}'" | tr -d '\r\n'
 }
 
+find_snort_ctl() {
+    local candidates=(
+        "$SNORT_ROOT/build-output/cmake/dev-debug/tests/host/sucre-snort-ctl"
+        "$SNORT_ROOT/build-output/cmake/dev-relwithdebinfo/tests/host/sucre-snort-ctl"
+        "$SNORT_ROOT/build-output/cmake/host-asan-clang/tests/host/sucre-snort-ctl"
+    )
+
+    local c
+    for c in "${candidates[@]}"; do
+        if [[ -x "$c" ]]; then
+            printf '%s\n' "$c"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 case_p2_01_root_preflight() {
     local group="env"
     local case_id="P2-01"
@@ -337,6 +355,69 @@ case_p2_09_lifecycle_restart() {
     fi
 }
 
+case_p2_10_vnext_tcp_control_bypass() {
+    local group="firewall"
+    local case_id="P2-10"
+    should_run_case "$group" "$case_id" || { skip_case "$case_id" "vNext TCP control bypass"; return 0; }
+
+    local ctl
+    ctl="$(find_snort_ctl)" || {
+        log_fail "$case_id vNext TCP control bypass (missing sucre-snort-ctl)"
+        echo "    需要构建 clang host tool: cmake --build --preset dev-debug --target sucre-snort-ctl"
+        return 0
+    }
+
+    local had_telnet
+    had_telnet="$(adb_su "test -f /data/snort/telnet && echo 1 || echo 0" | tr -d '\r\n')" || had_telnet=0
+
+    adb_su "mkdir -p /data/snort && touch /data/snort/telnet" >/dev/null 2>&1 || {
+        log_fail "$case_id vNext TCP control bypass"
+        echo "    无法写入 /data/snort/telnet"
+        return 0
+    }
+
+    local deploy_log
+    deploy_log="$(mktemp)"
+    if ! bash "$SNORT_ROOT/dev/dev-deploy.sh" --serial "$(adb_target_desc)" >"$deploy_log" 2>&1; then
+        log_fail "$case_id vNext TCP control bypass (redeploy failed)"
+        tail -20 "$deploy_log" | sed 's/^/    /'
+        rm -f "$deploy_log"
+        return 0
+    fi
+    rm -f "$deploy_log"
+
+    local block_orig
+    block_orig="$(send_cmd "BLOCK" 3 | tr -d '\r\n')" || block_orig=1
+    send_cmd "BLOCK 1" 3 >/dev/null 2>&1 || true
+
+    local host_port=60617
+    adb_cmd forward "tcp:${host_port}" "tcp:60607" >/dev/null 2>&1 || {
+        log_fail "$case_id vNext TCP control bypass (adb forward failed)"
+        return 0
+    }
+
+    if "$ctl" --tcp "127.0.0.1:${host_port}" --compact HELLO >/dev/null 2>&1; then
+        log_pass "$case_id vNext TCP control bypass"
+    else
+        log_fail "$case_id vNext TCP control bypass"
+        echo "    提示: 需要 inetControl() enabled + BLOCK=1 下仍能连通 60607"
+    fi
+
+    adb_cmd forward --remove "tcp:${host_port}" >/dev/null 2>&1 || true
+
+    if [[ "$block_orig" =~ ^[01]$ ]]; then
+        send_cmd "BLOCK $block_orig" 3 >/dev/null 2>&1 || true
+    fi
+
+    if [[ "$had_telnet" != "1" ]]; then
+        adb_su "rm -f /data/snort/telnet" >/dev/null 2>&1 || true
+        # Best-effort restore: inetControl() is latched at startup.
+        deploy_log="$(mktemp)"
+        bash "$SNORT_ROOT/dev/dev-deploy.sh" --serial "$(adb_target_desc)" >"$deploy_log" 2>&1 || true
+        rm -f "$deploy_log"
+    fi
+}
+
 main() {
     log_section "P2 rooted real-device platform smoke"
 
@@ -360,6 +441,7 @@ main() {
     case_p2_07_ipv6_firewall_hooks
     case_p2_08_selinux_runtime
     case_p2_09_lifecycle_restart
+    case_p2_10_vnext_tcp_control_bypass
 
     if [[ $CLEANUP_FORWARD -eq 1 ]]; then
         log_info "移除 adb forward..."

@@ -37,6 +37,19 @@ const App::Ptr AppManager::findByName(const std::string &name, const uint32_t us
     return nullptr;
 }
 
+std::vector<App::Ptr> AppManager::snapshotByUid(const std::optional<uint32_t> userId) {
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+    std::vector<App::Ptr> out;
+    out.reserve(_byUid.size());
+    for (const auto &[_, app] : _byUid) {
+        if (userId.has_value() && app->userId() != userId.value()) {
+            continue;
+        }
+        out.push_back(app);
+    }
+    return out;
+}
+
 const App::Ptr AppManager::make(const App::Uid uid) {
     if (const auto app = find(uid)) {
         return app;

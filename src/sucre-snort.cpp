@@ -18,6 +18,7 @@
 #include <DnsListener.hpp>
 #include <RulesManager.hpp>
 #include <Control.hpp>
+#include <ControlVNext.hpp>
 #include <Rule.hpp>
 #include <BlockingListManager.hpp>
 
@@ -35,6 +36,7 @@ PerfMetrics perfMetrics;
 PacketListener<IPv4> pktListener4;
 PacketListener<IPv6> pktListener6;
 Control control;
+ControlVNext controlVNext;
 
 std::shared_mutex mutexListeners;
 
@@ -99,6 +101,11 @@ static void snort() {
                                   Timer::set("control", "Control init time");
                                   control.start();
                                   Timer::get("control");
+                              }),
+                              std::thread([&] {
+                                  Timer::set("control-vnext", "Control vNext init time");
+                                  controlVNext.start();
+                                  Timer::get("control-vnext");
                               })};
         for (auto &thread : threads) {
             thread.join();
