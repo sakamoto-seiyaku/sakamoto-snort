@@ -179,6 +179,9 @@ void ControlVNextSession::run() {
         if (auto plan = ControlVNextSessionCommands::handleIpRulesCommand(request, _limits); plan.has_value()) {
             return std::move(*plan);
         }
+        if (auto plan = ControlVNextSessionCommands::handleMetricsCommand(request, _limits); plan.has_value()) {
+            return std::move(*plan);
+        }
 
         rapidjson::Document response = ControlVNext::makeErrorResponse(
             id, "UNSUPPORTED_COMMAND", "unsupported cmd: " + std::string(request.cmd));
@@ -218,7 +221,7 @@ void ControlVNextSession::run() {
             if (requestView.cmd == "RESETALL" || requestView.cmd == "CONFIG.SET" ||
                 requestView.cmd == "DOMAINRULES.APPLY" || requestView.cmd == "DOMAINPOLICY.APPLY" ||
                 requestView.cmd == "DOMAINLISTS.APPLY" || requestView.cmd == "DOMAINLISTS.IMPORT" ||
-                requestView.cmd == "IPRULES.APPLY") {
+                requestView.cmd == "IPRULES.APPLY" || requestView.cmd == "METRICS.RESET") {
                 const std::lock_guard lock(mutexListeners);
                 applyCommand();
             } else {

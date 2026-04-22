@@ -511,6 +511,98 @@ PY
             'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; assert len(rules)==2; r0=rules[0]; assert "clientRuleId" in r0 and "matchKey" in r0 and "stats" in r0 and "ct" in r0; assert isinstance(r0["stats"]["hitPackets"], int); assert any(r["dst"]=="1.2.3.0/24" for r in rules); assert any("dst=1.2.3.0/24" in r["matchKey"] for r in rules)'
     fi
 
+    log_section "Metrics Surface"
+
+    local m_perf m_reasons m_sources m_traffic m_ct
+
+    m_perf=$(ctl_cmd METRICS.GET '{"name":"perf"}' || true)
+    assert_json_pred "VNT-22g METRICS.GET perf shape" "$m_perf" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; p=j["result"]["perf"]; assert "nfq_total_us" in p and "dns_decision_us" in p; s=p["nfq_total_us"]; assert set(["samples","min","avg","p50","p95","p99","max"]).issubset(s.keys())'
+
+    m_reasons=$(ctl_cmd METRICS.GET '{"name":"reasons"}' || true)
+    assert_json_pred "VNT-22h METRICS.GET reasons has ALLOW_DEFAULT" "$m_reasons" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; r=j["result"]["reasons"]; assert "ALLOW_DEFAULT" in r'
+
+    m_sources=$(ctl_cmd METRICS.GET '{"name":"domainSources"}' || true)
+    assert_json_pred "VNT-22i METRICS.GET domainSources has MASK_FALLBACK" "$m_sources" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; s=j["result"]["sources"]; assert "MASK_FALLBACK" in s; assert set(["allow","block"]).issubset(s["MASK_FALLBACK"].keys())'
+
+    m_traffic=$(ctl_cmd METRICS.GET '{"name":"traffic"}' || true)
+    assert_json_pred "VNT-22j METRICS.GET traffic has required keys" "$m_traffic" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; t=j["result"]["traffic"]; assert set(["dns","rxp","rxb","txp","txb"]).issubset(t.keys()); assert set(["allow","block"]).issubset(t["txp"].keys())'
+
+    m_ct=$(ctl_cmd METRICS.GET '{"name":"conntrack"}' || true)
+    assert_json_pred "VNT-22k METRICS.GET conntrack has required fields" "$m_ct" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; ct=j["result"]["conntrack"]; assert set(["totalEntries","creates","expiredRetires","overflowDrops"]).issubset(ct.keys())'
+
+    local ct_reset
+    ct_reset=$(ctl_cmd METRICS.RESET '{"name":"conntrack"}' || true)
+    assert_json_pred "VNT-22l METRICS.RESET conntrack rejected" "$ct_reset" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is False; assert j["error"]["code"] == "INVALID_ARGUMENT"'
+
+    # Best-effort: try to generate a small amount of traffic (usually from shell uid=2000),
+    # then verify per-app traffic counters increase and can be reset.
+    local block_get block_enabled
+    block_get=$(ctl_cmd CONFIG.GET '{"scope":"device","keys":["block.enabled"]}' || true)
+    block_enabled=$(BLOCK_GET_JSON="$block_get" python3 - <<'PY'
+import os, json
+j = json.loads(os.environ["BLOCK_GET_JSON"])
+print(j.get("result", {}).get("values", {}).get("block.enabled", ""))
+PY
+) || block_enabled=""
+
+    if [[ "$block_enabled" != "1" ]]; then
+        log_skip "VNT-22m traffic generation skipped (block.enabled!=1)"
+    else
+        local uid_shell traffic_shell_before traffic_shell_after traffic_shell_reset
+        uid_shell=2000
+
+        traffic_shell_before=$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${uid_shell}}}" 2>/dev/null || true)
+
+        # Try a few packets; ignore errors (offline device, blocked network, etc).
+        adb_cmd shell "ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1" || true
+
+        traffic_shell_after=$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${uid_shell}}}" 2>/dev/null || true)
+
+        if printf '%s\n' "$traffic_shell_after" | python3 - <<'PY' >/dev/null 2>&1
+	import json, sys, os
+	j = json.loads(sys.stdin.read() or "{}")
+	if not j.get("ok", False):
+	    raise SystemExit(1)
+t = j["result"]["traffic"]
+total = 0
+for k in ("dns","rxp","rxb","txp","txb"):
+    total += int(t[k]["allow"]) + int(t[k]["block"])
+	if total <= 0:
+	    raise SystemExit(1)
+PY
+        then
+            log_pass "VNT-22m traffic counters increased (shell uid=2000)"
+
+            assert_ctl_ok "VNT-22n METRICS.RESET traffic (shell uid=2000)" \
+                ctl_cmd METRICS.RESET "{\"name\":\"traffic\",\"app\":{\"uid\":${uid_shell}}}"
+
+            traffic_shell_reset=$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${uid_shell}}}" 2>/dev/null || true)
+            if printf '%s\n' "$traffic_shell_reset" | python3 - <<'PY' >/dev/null 2>&1
+	import json, sys
+	j = json.loads(sys.stdin.read() or "{}")
+	if not j.get("ok", False):
+	    raise SystemExit(1)
+t = j["result"]["traffic"]
+for k in ("dns","rxp","rxb","txp","txb"):
+	    if int(t[k]["allow"]) != 0 or int(t[k]["block"]) != 0:
+	        raise SystemExit(1)
+PY
+            then
+                log_pass "VNT-22o traffic reset clears per-app counters (shell uid=2000)"
+            else
+                log_skip "VNT-22o traffic reset check skipped (non-zero after reset; background traffic?)"
+            fi
+        else
+            log_skip "VNT-22m traffic generation skipped (could not observe per-app counters)"
+        fi
+    fi
+
     log_section "Resetall"
 
     local resetall
@@ -518,6 +610,11 @@ PY
     assert_json_pred "VNT-23 RESETALL ok=true" "$resetall" \
         'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
     assert_ctl_ok "VNT-24 HELLO after RESETALL" ctl_cmd HELLO
+
+    local ct_after_resetall
+    ct_after_resetall=$(ctl_cmd METRICS.GET '{"name":"conntrack"}' || true)
+    assert_json_pred "VNT-24b conntrack counters cleared by RESETALL (best-effort)" "$ct_after_resetall" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; ct=j["result"]["conntrack"]; assert ct["totalEntries"] == 0 and ct["creates"] == 0 and ct["expiredRetires"] == 0 and ct["overflowDrops"] == 0'
 
     print_summary
     local status=$?

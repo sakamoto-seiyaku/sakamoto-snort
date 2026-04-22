@@ -74,6 +74,8 @@ public:
 
     void resetReasonMetrics() { _reasonMetrics.reset(); }
 
+    Conntrack::MetricsSnapshot conntrackMetricsSnapshot() const noexcept { return _conntrack.metricsSnapshot(); }
+
     // Hot-path safe: uses the existing interface kind snapshot and best-effort refresh.
     uint8_t ifaceKindBit(const uint32_t ifindex) { return ifaceBit(ifindex); }
 
@@ -114,6 +116,7 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
         const bool verdict = false;
         const PacketReasonId reasonId = PacketReasonId::IFACE_BLOCK;
         _reasonMetrics.observe(reasonId, len);
+        app->observeTrafficPacket(input, verdict, len);
 
         if (app->tracked()) {
             // IFACE_BLOCK is independent of domain policy; keep stats minimally attributed.
@@ -184,6 +187,7 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
 
                 IpRulesEngine::observeEnforceHit(decision, static_cast<uint32_t>(len), tsNs);
                 _reasonMetrics.observe(reasonId, len);
+                app->observeTrafficPacket(input, verdict, len);
 
                 if (app->tracked()) {
                     appManager.updateStats(nullptr, app, !verdict, Stats::GREY,
@@ -233,6 +237,7 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     }
 
     _reasonMetrics.observe(reasonId, len);
+    app->observeTrafficPacket(input, verdict, len);
 
     if (app->tracked()) {
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXP : Stats::TXP, 1);

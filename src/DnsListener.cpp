@@ -212,6 +212,7 @@ void DnsListener::clientRun(const int socket) {
                 // B-layer counters: DNS-request-based DomainPolicy attribution.
                 domManager.observeDomainPolicySource(bcs.policySource, blocked);
                 app->observeDomainPolicySource(bcs.policySource, blocked);
+                app->observeTrafficDns(blocked);
             }
         }
         clientWrite(socket, &verdict, sizeof(verdict), "verdict write error");

@@ -2,33 +2,46 @@
 
 版本: v3.6
 目标平台: Android 16, KernelSU
-更新时间: 2026-03-25
+更新时间: 2026-04-22
 
 ---
 
 ## 1. 连接与协议
 
-- 控制通道: Android control socket 名称 `sucre-snort-control`（Unix Domain, SOCK_STREAM）。
-- 可选 TCP 控制端口: 60606（当存在 `/data/snort/telnet` 文件时开启）。
+- 控制通道（legacy）: Android control socket 名称 `sucre-snort-control`（Unix Domain, SOCK_STREAM）。
+- 控制通道（vNext）: Android control socket 名称 `sucre-snort-control-vnext`（Unix Domain, SOCK_STREAM；netstring + JSON）。
+- 可选 TCP 控制端口（legacy）: 60606（当存在 `/data/snort/telnet` 文件时开启）。
+- 可选 TCP 控制端口（vNext）: 60607（当存在 `/data/snort/telnet` 文件时开启；与 60606 同 gating）。
 - DNS 监听通道: Android control socket 名称 `sucre-snort-netd`（Unix Domain, SOCK_SEQPACKET）。
 
-报文约定（控制通道）:
+报文约定（legacy 控制通道）:
 - 命令为 ASCII 文本，以空格分隔参数；请求报文以 NUL 结尾；响应在有内容时以 NUL 结尾（少数命令无任何响应）。
 - 在命令名后加 `!` 开启美化输出（仅影响缩进与换行；内容不变）。
 - 布尔参数为 `true`/`false`；纯数字串解析为整数；其余视为字符串。不要为字符串参数加引号（唯一例外：`PASSWORD`）。
 - 成功无数据返回时回 `OK`；失败回 `NOK`；其余返回为 JSON 片段或原始数字/文本。
 
-参数解析（严格按实现）：
+报文约定（control-vnext 控制通道）:
+- framing: netstring `<len>:<payload>,`；`payload` 为 UTF‑8 JSON object。
+- request envelope：`{"id":1,"cmd":"...","args":{}}`（`args` 必须是 object）
+- response envelope：`{"id":1,"ok":true,"result":{...}}` / `{"id":1,"ok":false,"error":{...}}`
+- strict reject：顶层/args 出现未知 key → `SYNTAX_ERROR`；未知 `cmd` → `UNSUPPORTED_COMMAND`。
+- 细节见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`。
+
+参数解析（legacy，严格按实现）：
 - 令牌以空格分隔；仅纯数字串视为整数；`true|false`（小写）视为布尔；其他为字符串。
 - 仅 `PASSWORD` 会去除首尾双引号后设置密码；其余命令不剥引号。
 - 含空格名称的拼接：`BLOCKLIST.*.ADD/UPDATE` 将第 4 或第 9 个参数后所有 token 以空格拼接为 `<name>`；无需引号。
 - 负数/带符号整数不被识别为整数。
 
-多用户参数约定（`<uid|str>` 位置）:
+多用户参数约定（legacy token，`<uid|str>` 位置）:
 - `<uid>`: 完整 Linux UID（含 userId 高位），例如 `10123`（user 0）或 `110123`（user 1）。
 - `<str>`: 包名字符串，默认指向主用户（user 0）。
 - `<str> USER <userId>`: 显式指定用户，适用于所有支持 `<uid|str>` 的命令。
 - `<str> <userId>`: 仅限部分命令（见下文"支持简写的命令"）。
+
+vNext app selector（`args.app`）约定:
+- `{"uid":10123}` 或 `{"pkg":"com.example","userId":0}`（二选一；禁止混用）。
+- resolve 不存在/歧义 → `SELECTOR_NOT_FOUND` / `SELECTOR_AMBIGUOUS` + `candidates[]`（按 `uid` 升序）。
 
 支持 `<str> <userId>` 简写的命令（在 `<uid|str>` 后不再接受其他整型参数）:
   `APP.UID`, `APP.NAME`, `APP<v>`, `APP.<TYPE><v>`, `<COLOR>.APP<v>`, `APP.RESET<v>`,
@@ -266,6 +279,73 @@ Host 对象字段:
 说明：
 - key 为 `reasonId`；当前实现还可能包含 `IP_LEAK_BLOCK` 等其它 key（客户端应容忍额外 key）。
 - `bytes` 口径为 NFQUEUE `NFQA_PAYLOAD` 的全包长度（与 Packet 事件 `length` 一致）。
+
+vNext（control-vnext，netstring + JSON）统一入口：
+- `METRICS.GET`：查询指标
+- `METRICS.RESET`：清零指标（受 reset 边界约束）
+
+request（示例）：
+```json
+{"id":1,"cmd":"METRICS.GET","args":{"name":"traffic"}}
+```
+
+`METRICS.GET.args / METRICS.RESET.args`：
+- `name:string`（必填）：`perf|reasons|domainSources|traffic|conntrack`
+- `app:object`（可选）：仅允许用于 `name=traffic` 或 `name=domainSources`（selector 见上文；错误返回 `SELECTOR_NOT_FOUND/AMBIGUOUS + candidates[]`）
+- `args` 出现未知 key → `SYNTAX_ERROR`
+
+`METRICS.GET` 返回（v1）：
+- `name=perf` -> `result.perf{...}`（shape 同上文 `METRICS.PERF` 的 `perf` 对象）
+- `name=reasons` -> `result.reasons{...}`（shape 同上文 `METRICS.REASONS` 的 `reasons` 对象）
+- `name=domainSources` -> `result.sources{...}`（shape 同 `METRICS.DOMAIN.SOURCES` 的 `sources` 对象；per-app 额外包含 `uid/userId/app`）
+- `name=traffic` -> `result.traffic{dns/rxp/rxb/txp/txb -> {allow,block}}`（per-app 同上带 `uid/userId/app`；device-wide 汇总包含 tracked + untracked）
+
+device-wide traffic（示例）：
+```json
+{"id":1,"ok":true,"result":{"traffic":{
+  "dns":{"allow":0,"block":0},
+  "rxp":{"allow":0,"block":0},
+  "rxb":{"allow":0,"block":0},
+  "txp":{"allow":0,"block":0},
+  "txb":{"allow":0,"block":0}
+}}}
+```
+
+per-app traffic（示例）：
+```json
+{"id":2,"ok":true,"result":{
+  "uid":10123,"userId":0,"app":"com.example",
+  "traffic":{
+    "dns":{"allow":0,"block":0},
+    "rxp":{"allow":0,"block":0},
+    "rxb":{"allow":0,"block":0},
+    "txp":{"allow":0,"block":0},
+    "txb":{"allow":0,"block":0}
+  }
+}}
+```
+
+- `name=conntrack` -> `result.conntrack{totalEntries,creates,expiredRetires,overflowDrops}`
+
+```json
+{"id":3,"ok":true,"result":{"conntrack":{
+  "totalEntries":0,
+  "creates":0,
+  "expiredRetires":0,
+  "overflowDrops":0
+}}}
+```
+
+`METRICS.RESET`（v1）：
+- 支持 reset：`perf` / `reasons` / `domainSources` / `traffic`
+- `METRICS.RESET(name=traffic|domainSources, app=...)`：仅清零目标 app 的 counters
+- `METRICS.RESET(name=conntrack)`：不支持，返回 `INVALID_ARGUMENT`（提示使用 `RESETALL`）
+
+```json
+{"id":4,"ok":false,"error":{"code":"INVALID_ARGUMENT","message":"conntrack does not support METRICS.RESET; use RESETALL"}}
+```
+
+- `RESETALL`：清零 `perf/reasons/domainSources/traffic/conntrack`（以及其他所有状态）
 
 ---
 

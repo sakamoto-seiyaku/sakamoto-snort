@@ -31,6 +31,7 @@ cc_binary {
         "src/ControlVNextSessionCommandsDaemon.cpp",
         "src/ControlVNextSessionCommandsDomain.cpp",
         "src/ControlVNextSessionCommandsIpRules.cpp",
+        "src/ControlVNextSessionCommandsMetrics.cpp",
         "src/ControlVNext.cpp",
         "src/CustomList.cpp",
         "src/CustomRules.cpp",

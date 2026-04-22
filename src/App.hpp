@@ -18,6 +18,7 @@
 #include <DomainPolicySourcesMetrics.hpp>
 #include <IpRulesCapsCache.hpp>
 #include <Settings.hpp>
+#include <TrafficCounters.hpp>
 
 class App {
 public:
@@ -60,6 +61,7 @@ private:
     CustomRules _whiteRules;
 
     DomainPolicySourcesCounters _domainSourcesCounters;
+    TrafficCounters _trafficCounters;
 
 public:
     App(const Uid uid, const NamesVec &names = NamesVec());
@@ -154,6 +156,16 @@ public:
     DomainPolicySourcesSnapshot domainPolicySourcesSnapshot() const noexcept {
         return _domainSourcesCounters.snapshot();
     }
+
+    void observeTrafficDns(const bool blocked) noexcept { _trafficCounters.observeDns(blocked); }
+
+    void observeTrafficPacket(const bool input, const bool accepted, const std::uint64_t bytes) noexcept {
+        _trafficCounters.observePacket(input, accepted, bytes);
+    }
+
+    void resetTraffic() noexcept { _trafficCounters.reset(); }
+
+    TrafficSnapshot trafficSnapshot() const noexcept { return _trafficCounters.snapshot(); }
 
     void updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,
                      const Stats::Block bs, const uint64_t val);

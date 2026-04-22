@@ -130,7 +130,7 @@
    - P1：integration case：preflight→apply→print→verify；并与现有 `tests/integration/iprules.sh` 共享同一套“期望规则集”
    - P2：复用 `tests/device-modules/ip/run.sh` 增加一个 vNext control 驱动 profile（作为“真机一眼验收”的硬门槛）
 
-5) ⏳ `add-control-vnext-metrics`（metrics vNext：`traffic`/`conntrack`）
+5) ✅ `add-control-vnext-metrics`（metrics vNext：`traffic`/`conntrack`；已归档 2026-04-22）
    - 交付物：`METRICS.GET/RESET` vNext（name=`traffic|conntrack`；口径对齐 `OBSERVABILITY_WORKING_DECISIONS.md`）；任务分解见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
    - P0：metrics 口径/RESET 边界/输出 shape 单测
    - P1：integration：产生少量可控流量后验证 metrics 增长与 reset
