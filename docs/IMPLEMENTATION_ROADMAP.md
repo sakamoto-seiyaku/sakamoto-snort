@@ -142,11 +142,15 @@
    - P1：integration：启动 stream → 产生可预期事件（`DEV.*` 或可控 test traffic）→ STOP barrier → 验证无交织/无半帧
    - P2：真机 perf/反压基线对比（不锁阈值，只锁“不应退化到不可用”）
 
-7) ⏳ `migrate-to-control-vnext`（前端/脚本默认迁移 + legacy 并存与下线）
-   - 交付物：前端与脚本默认走 vNext；legacy 保留但明确标注“将被关闭”；补齐回滚路径（出现控制平面问题可快速切回 legacy）
-   - 迁移期文案/提示：在 legacy `HELP`（或等价入口）中显式标注“冻结/无作用”的开关（如 `BLOCKIPLEAKS/GETBLACKIPS/MAXAGEIP`）与 vNext 迁移提示，避免误连 legacy 导致用户困惑
-   - tracked UX：前端在显式开启 tracked 时必须提示“可能带来性能影响”，并在 UI 中明确展示当前 tracked 状态（含升级后遗留的 tracked=true），避免隐式长期 tracked
-   - 验收口径：不止是“默认迁到 vNext + 回归/真机基线通过 + 至少一个发布周期无回滚”，还包括：发布后**至少两个小版本更新**未出现控制平面问题反馈，才视为 vNext 稳定；再进入 60606 下线窗口
+7) ⏳ `stabilize-control-transition-surface`（legacy 冻结收口 + 仓库脚本分轨）
+   - 交付物：
+     - daemon 内部把 legacy 冻结项收口为**全局固定语义**：`BLOCKIPLEAKS` 强制关闭且 no-op；`GETBLACKIPS=0`；`MAXAGEIP` 固定默认值；不得被 legacy/vNext 任一入口、历史落盘或 restore 改写
+     - legacy `HELP`（或等价入口）显式标注“冻结/无作用”项与 vNext 提示，避免误连 legacy 时形成错误心智
+     - 仓库内开发/测试脚本与 helper 收敛：明确 legacy lane / vNext lane；补齐 vNext helper 或协议选择；不再让公共脚本隐式绑定单一 `60606` 文本协议
+     - 更新仍把冻结项当“可调能力”的 legacy 回归与 device-module case，改为验证 fixed/no-op 语义；保留必要的 legacy 对照 lane
+   - P0：冻结项 fixed/no-op + restore/RESETALL 语义单测；legacy help 文案与返回口径锁定
+   - P1：integration/dev 脚本收敛（`deploy`/`diagnose`/common helper/`ip` module runner 至少一条常用链路支持 vNext；legacy lane 显式保留）
+   - P2（按需）：补最小双轨回归（legacy 对照 + vNext lane），避免脚本/文案继续漂移
 - **ip-leak 重新纳入设计**：在 fusion 阶段统一决定其启用条件、优先级、可观测性与控制面形态；当前仍保持独立 backlog，不反向污染已收敛的 IPRULES v1/B 层语义
 
 ### 3.3 明确后置（不要提前打散主线；✅ 表示已收敛）
@@ -154,6 +158,7 @@
 - ✅ `update-post-domain-ip-fusion-rollup`：blockmask chains 验证收敛（bit/listId 组合、兼容性、BLOCKMASK 归一化；已归档 2026-04-22）
 - ✅ `update-post-domain-ip-fusion-rollup`：multi-user 验证与文档补齐（单用户回归、多用户场景、`SNORT_MULTI_USER_REFACTOR` 更新、`full-smoke` 用例沉淀；已归档 2026-04-22）
 - ✅ IP 真机测试模组：`longrun` case + 文档补齐 + `ip-smoke` CTest/CI hook（已归档 2026-04-22）
+- `migrate-to-control-vnext`：前端与对外工具默认切到 vNext、tracked UX、迁移期开关/回滚口径、legacy 并存窗口与 `60606` 下线判据；待前端实现启动并经过真实版本验证后再推进
 - IPv6 新规则语义
 - 域名规则 per-rule 级 observability / stats
 - “真实系统 resolver hook” 的平台闭环（如果未来仍坚持把它作为真机 DNS 验收链路）
