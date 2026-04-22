@@ -300,6 +300,45 @@ assert_set_get() {
     return 0
 }
 
+# 断言 frozen/no-op：设置返回 OK 但查询仍为固定值
+# 用法: assert_frozen_knob "GETBLACKIPS" "1" "0" "GETBLACKIPS frozen/no-op"
+assert_frozen_knob() {
+    local cmd_base="$1"
+    local set_val="$2"
+    local expected_val="$3"
+    local desc="$4"
+
+    local before
+    before=$(send_cmd "$cmd_base")
+    if [[ "$before" != "$expected_val" ]]; then
+        log_fail "$desc: 初始查询值不匹配"
+        echo "    预期: $expected_val"
+        echo "    实际: $before"
+        return 1
+    fi
+
+    local set_result
+    set_result=$(send_cmd "$cmd_base $set_val")
+    if [[ "$set_result" != "OK" ]]; then
+        log_fail "$desc: 设置失败"
+        echo "    命令: $cmd_base $set_val"
+        echo "    响应: $set_result"
+        return 1
+    fi
+
+    local after
+    after=$(send_cmd "$cmd_base")
+    if [[ "$after" != "$expected_val" ]]; then
+        log_fail "$desc: 查询值不匹配"
+        echo "    预期: $expected_val"
+        echo "    实际: $after"
+        return 1
+    fi
+
+    log_pass "$desc"
+    return 0
+}
+
 # ============================================================================
 # JSON 查询辅助
 # ============================================================================

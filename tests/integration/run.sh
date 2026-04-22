@@ -128,7 +128,33 @@ case_it_02_help() {
     local group="core"
     local case_id="IT-02"
     should_run_case "$group" "$case_id" || { skip_case "$case_id" "HELP"; return 0; }
-    assert_not_empty "HELP" "$case_id HELP"
+
+    local help
+    help="$(send_cmd "HELP")"
+    if [[ -z "$help" ]]; then
+        log_fail "$case_id HELP (empty response)"
+        return 1
+    fi
+
+    local -a missing=()
+    local token
+    for token in "BLOCKIPLEAKS" "GETBLACKIPS" "MAXAGEIP" "frozen/no-op" "sucre-snort-ctl"; do
+        if ! echo "$help" | grep -q "$token"; then
+            missing+=("$token")
+        fi
+    done
+    if ! echo "$help" | grep -q "60607" && ! echo "$help" | grep -q "sucre-snort-control-vnext"; then
+        missing+=("60607|sucre-snort-control-vnext")
+    fi
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        log_pass "$case_id HELP (frozen/no-op + vNext guidance)"
+        return 0
+    fi
+
+    log_fail "$case_id HELP missing tokens: ${missing[*]}"
+    echo "    HELP: ${help:0:200}..."
+    return 1
 }
 
 case_it_03_block_roundtrip() {
@@ -149,16 +175,9 @@ case_it_03_block_roundtrip() {
 case_it_04_blockipleaks_roundtrip() {
     local group="config"
     local case_id="IT-04"
-    should_run_case "$group" "$case_id" || { skip_case "$case_id" "BLOCKIPLEAKS roundtrip"; return 0; }
+    should_run_case "$group" "$case_id" || { skip_case "$case_id" "BLOCKIPLEAKS frozen/no-op"; return 0; }
 
-    local original
-    original=$(send_cmd "BLOCKIPLEAKS")
-    if [[ "$original" =~ ^[01]$ ]]; then
-        local toggled=$((1 - original))
-        assert_set_get "BLOCKIPLEAKS" "$toggled" "$original" "$case_id BLOCKIPLEAKS roundtrip"
-    else
-        log_fail "$case_id BLOCKIPLEAKS 查询格式错误"
-    fi
+    assert_frozen_knob "BLOCKIPLEAKS" "1" "0" "$case_id BLOCKIPLEAKS frozen/no-op"
 }
 
 case_it_05_app_lookup() {

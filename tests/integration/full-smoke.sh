@@ -135,36 +135,13 @@ test_group_3() {
     fi
 
     # TC-07: GETBLACKIPS
-    local gbi_orig
-    gbi_orig=$(send_cmd "GETBLACKIPS")
-    if [[ "$gbi_orig" =~ ^[01]$ ]]; then
-        local new_val=$((1 - gbi_orig))
-        assert_set_get "GETBLACKIPS" "$new_val" "$gbi_orig" "TC-07 GETBLACKIPS"
-    else
-        log_fail "TC-07 GETBLACKIPS 查询格式错误"
-        echo "    响应: $gbi_orig"
-    fi
+    assert_frozen_knob "GETBLACKIPS" "1" "0" "TC-07 GETBLACKIPS frozen/no-op"
 
     # TC-08: BLOCKIPLEAKS
-    local bil_orig
-    bil_orig=$(send_cmd "BLOCKIPLEAKS")
-    if [[ "$bil_orig" =~ ^[01]$ ]]; then
-        local new_val=$((1 - bil_orig))
-        assert_set_get "BLOCKIPLEAKS" "$new_val" "$bil_orig" "TC-08 BLOCKIPLEAKS"
-    else
-        log_fail "TC-08 BLOCKIPLEAKS 查询格式错误"
-        echo "    响应: $bil_orig"
-    fi
+    assert_frozen_knob "BLOCKIPLEAKS" "1" "0" "TC-08 BLOCKIPLEAKS frozen/no-op"
 
     # TC-09: MAXAGEIP
-    local mai_orig
-    mai_orig=$(send_cmd "MAXAGEIP")
-    if [[ "$mai_orig" =~ ^[0-9]+$ ]]; then
-        assert_set_get "MAXAGEIP" "14400" "$mai_orig" "TC-09 MAXAGEIP"
-    else
-        log_fail "TC-09 MAXAGEIP 查询格式错误"
-        echo "    响应: $mai_orig"
-    fi
+    assert_frozen_knob "MAXAGEIP" "1" "14400" "TC-09 MAXAGEIP frozen/no-op"
 
     # TC-10: BLOCKMASKDEF / BLOCKIFACEDEF
     local bmd_orig bid_orig

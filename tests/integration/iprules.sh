@@ -438,46 +438,35 @@ PY
         echo "    sample: ${pktSample:0:200}..."
     fi
 
-    log_section "Would-block overlay is suppressed on final DROP (best-effort)"
-    expect_ok "RESETALL" "RESETALL (would-block suppressed test)"
+    log_section "Would-block overlay is suppressed on final DROP (IP_RULE_BLOCK)"
+    expect_ok "RESETALL" "RESETALL (would-block suppressed drop test)"
     expect_ok "BLOCK 1" "BLOCK enable"
     expect_ok "IPRULES 1" "IPRULES enable"
-    expect_ok "BLOCKIPLEAKS 0" "BLOCKIPLEAKS off (warm DNS mapping)"
-    local leakDomain leakIp
-    leakDomain="example.com"
-    leakIp="$(resolve_ipv4_via_ping "$leakDomain")"
-    if [[ -z "$leakIp" ]]; then
-        log_skip "could not resolve $leakDomain to IPv4; skip drop-path overlay suppression"
+    expect_ok "BLOCKIPLEAKS 0" "BLOCKIPLEAKS off (drop case)"
+
+    local dropTargetIp wouldRid blockRid
+    dropTargetIp="1.1.1.1"
+    wouldRid="$(expect_uint "IPRULES.ADD ${TEST_UID} action=block priority=10 enforce=0 log=1 proto=icmp dst=${dropTargetIp}/32" "ADD would-block rule (drop case)")"
+    blockRid="$(expect_uint "IPRULES.ADD ${TEST_UID} action=block priority=100 proto=icmp dst=${dropTargetIp}/32" "ADD enforce block rule (drop case)")"
+
+    expect_ok "METRICS.REASONS.RESET" "METRICS.REASONS.RESET (drop case)"
+    pingPid="$(ping4_async "$dropTargetIp" 1)"
+    pktSample="$(stream_sample "PKTSTREAM.START 0 0" "PKTSTREAM.STOP" 3)"
+    wait "$pingPid" >/dev/null 2>&1 || true
+
+    local wouldHits
+    wouldHits="$(get_rule_stat "$wouldRid" "wouldHitPackets")"
+    if [[ "${wouldHits:-0}" -eq 0 ]]; then
+        log_pass "wouldHitPackets stays 0 when final verdict is DROP (wouldHitPackets=$wouldHits)"
     else
-        # Warm DNS mapping for leakIp -> leakDomain so legacy ip-leak path can trigger validIP.
-        ping4_once "$leakDomain"
-        sleep 1
-        expect_ok "CUSTOMLIST.ON ${TEST_UID}" "CUSTOMLIST.ON (ensure custom lists active)"
-        expect_ok "BLACKLIST.ADD ${TEST_UID} ${leakDomain}" "BLACKLIST.ADD app-specific (ip-leak)"
-        expect_ok "BLOCKIPLEAKS 1" "BLOCKIPLEAKS on (drop case)"
-        local wouldDropRid
-        wouldDropRid="$(expect_uint "IPRULES.ADD ${TEST_UID} action=block priority=10 enforce=0 log=1 proto=icmp" "ADD would-block rule (drop case)")"
-        expect_ok "METRICS.REASONS.RESET" "METRICS.REASONS.RESET (drop case)"
-        pingPid="$(ping4_async "$leakIp" 1)"
-        pktSample="$(stream_sample "PKTSTREAM.START 0 0" "PKTSTREAM.STOP" 3)"
-        wait "$pingPid" >/dev/null 2>&1 || true
-        local ipLeakPackets
-        ipLeakPackets="$(get_reason_packets "IP_LEAK_BLOCK")"
-        if [[ "$ipLeakPackets" -lt 1 ]]; then
-            log_skip "IP_LEAK_BLOCK not observed; environment may not provide valid DNS->IP mapping (skip)"
-        else
-            log_pass "IP_LEAK_BLOCK observed (packets=$ipLeakPackets)"
-            local wouldDropHits
-            wouldDropHits="$(get_rule_stat "$wouldDropRid" "wouldHitPackets")"
-            if [[ "$wouldDropHits" -eq 0 ]]; then
-                log_pass "wouldHitPackets stays 0 when final verdict is DROP"
-            else
-                log_fail "wouldHitPackets grew unexpectedly on DROP (wouldHitPackets=$wouldDropHits)"
-            fi
-            if echo "$pktSample" | python3 -c "$(cat <<PY
+        log_fail "wouldHitPackets grew unexpectedly on DROP (wouldHitPackets=$wouldHits)"
+    fi
+
+    if echo "$pktSample" | python3 -c "$(cat <<PY
 import sys, json
 uid = int('${TEST_UID}')
-target = '${leakIp}'
+target = '${dropTargetIp}'
+expected_block = int('${blockRid}')
 found = False
 for line in sys.stdin:
     line = line.strip()
@@ -490,7 +479,8 @@ for line in sys.stdin:
     if obj.get('uid') != uid or obj.get('direction') != 'out' or obj.get('dstIp') != target or obj.get('protocol') != 'icmp':
         continue
     assert bool(obj.get('accepted')) is False
-    assert obj.get('reasonId') == 'IP_LEAK_BLOCK'
+    assert obj.get('reasonId') == 'IP_RULE_BLOCK'
+    assert obj.get('ruleId') == expected_block
     assert 'wouldRuleId' not in obj
     assert 'wouldDrop' not in obj
     found = True
@@ -498,13 +488,16 @@ for line in sys.stdin:
 assert found, 'no matching pktstream event'
 PY
 )" 2>/dev/null; then
-                log_pass "PKTSTREAM suppresses wouldRuleId overlay when final verdict is DROP"
-            else
-                log_fail "PKTSTREAM incorrectly emitted wouldRuleId overlay on DROP"
-                echo "    sample: ${pktSample:0:200}..."
-            fi
-        fi
+        log_pass "PKTSTREAM suppresses wouldRuleId overlay when final verdict is DROP"
+    else
+        log_fail "PKTSTREAM incorrectly emitted wouldRuleId overlay on DROP"
+        echo "    sample: ${pktSample:0:200}..."
     fi
+
+    log_section "Legacy frozen knobs (fixed/no-op)"
+    assert_frozen_knob "BLOCKIPLEAKS" "1" "0" "BLOCKIPLEAKS frozen/no-op"
+    assert_frozen_knob "GETBLACKIPS" "1" "0" "GETBLACKIPS frozen/no-op"
+    assert_frozen_knob "MAXAGEIP" "1" "14400" "MAXAGEIP frozen/no-op"
 
     log_section "BLOCK=0 bypasses all processing"
     expect_ok "RESETALL" "RESETALL (BLOCK=0 test)"

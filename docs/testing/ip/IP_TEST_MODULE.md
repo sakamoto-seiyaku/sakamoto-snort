@@ -3,7 +3,7 @@
 > 这是 IP 真机测试模组的“精简可维护版”说明文档：只保留稳定结论、入口与口径。  
 > 详细的实验过程与中间数据已归档：`docs/testing/ip/archive/2026-03-24-IP_TEST_MODULE.md`。
 
-目标：在 rooted Android 真机上为 `IPRULES/IFACE_BLOCK/BLOCKIPLEAKS` 提供 **可重复执行** 的功能回归与 perf baseline。  
+目标：在 rooted Android 真机上为 `IPRULES/IFACE_BLOCK` 提供 **可重复执行** 的功能回归与 perf baseline，并包含对 legacy 冻结项（`BLOCKIPLEAKS/GETBLACKIPS/MAXAGEIP`）的 fixed/no-op 语义 sanity check。  
 原则：不追求模拟真实网络，优先追求 **稳定、可复现、能拉开差距**（用于后续任何大改动的对比基线）。
 
 ## 1. 入口（推荐）
@@ -37,7 +37,8 @@ IPTEST_LONGRUN_SECONDS=600 \
 - 结果记录默认写到 `tests/device-modules/ip/records/`（该目录已被 `tests/device-modules/ip/.gitignore` 排除，不进 git）。
   - `--profile longrun` 产物目录形如 `tests/device-modules/ip/records/ip-longrun-<ts>_<serial>/`，包含 `meta.txt`、`longrun.log`、`snort_proc_before/after/delta` 与 `traffic.txt`。
 - 建议频率（口径保守，先不把 perf 变成 hard gate）：
-  - 任意 `IPRULES/IFACE_BLOCK/BLOCKIPLEAKS` 语义改动：至少跑 `smoke + matrix`
+  - 任意 `IPRULES/IFACE_BLOCK` 语义改动：至少跑 `smoke + matrix`
+  - 若触及 legacy 冻结项（`BLOCKIPLEAKS/GETBLACKIPS/MAXAGEIP`）：至少确保 `smoke` 通过（相关用例验证 fixed/no-op 语义）
   - 热路径/性能/并发相关改动：再补 `perf + stress`（perf 推荐用本文固定口径的 UDP baseline）
   - 需要更强稳定性/长期运行信心时（例如 release candidate）：再补 `longrun`（best-effort；环境不满足会 SKIP）
 

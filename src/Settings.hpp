@@ -160,6 +160,12 @@ public:
     static constexpr uint32_t pktStreamMinSize = 100;
     static constexpr uint32_t activityNotificationIntervalMs = 500;
 
+    // Legacy knobs frozen to fixed/no-op semantics during the control transition.
+    // See: openspec/changes/stabilize-control-transition-surface/
+    static constexpr bool legacyGetBlackIPsFrozenValue = false;
+    static constexpr bool legacyBlockIPLeaksFrozenValue = false;
+    static constexpr std::time_t legacyMaxAgeIPFrozenValue = 3600 * 4; // 14400
+
 private:
     Saver _saver{_saveFile};
     uint32_t _version = 8;
@@ -193,10 +199,10 @@ public:
         _reverseDns = false;
         _password.clear();
         _passState = 0;
-        _getBlackIPs = false;
-        _blockIPLeaks = false;
+        _getBlackIPs = legacyGetBlackIPsFrozenValue;
+        _blockIPLeaks = legacyBlockIPLeaksFrozenValue;
         _ipRulesEnabled = false;
-        _maxAgeIP = 3600 * 4;
+        _maxAgeIP = legacyMaxAgeIPFrozenValue;
     }
 
     bool firstStart() { return _firstStart; }
@@ -257,17 +263,17 @@ public:
         save();
     }
 
-    bool getBlackIPs() const { return _getBlackIPs; }
+    bool getBlackIPs() const { return legacyGetBlackIPsFrozenValue; }
 
-    void getBlackIPs(const bool getBlackIPs) {
-        _getBlackIPs = getBlackIPs;
+    void getBlackIPs(const bool /*getBlackIPs*/) {
+        _getBlackIPs = legacyGetBlackIPsFrozenValue;
         save();
     }
 
-    bool blockIPLeaks() const { return _blockIPLeaks; }
+    bool blockIPLeaks() const { return legacyBlockIPLeaksFrozenValue; }
 
-    void blockIPLeaks(const bool blockIPLeaks) {
-        _blockIPLeaks = blockIPLeaks;
+    void blockIPLeaks(const bool /*blockIPLeaks*/) {
+        _blockIPLeaks = legacyBlockIPLeaksFrozenValue;
         save();
     }
 
@@ -278,12 +284,15 @@ public:
         save();
     }
 
-    std::time_t maxAgeIP() const { return _maxAgeIP.load(std::memory_order_relaxed); }
+    std::time_t maxAgeIP() const { return legacyMaxAgeIPFrozenValue; }
 
-    void maxAgeIP(const std::time_t maxAgeIP) {
-        _maxAgeIP.store(maxAgeIP, std::memory_order_relaxed);
+    void maxAgeIP(const std::time_t /*maxAgeIP*/) {
+        _maxAgeIP.store(legacyMaxAgeIPFrozenValue, std::memory_order_relaxed);
         save();
     }
+
+    // Override hook for host tests (avoid hard dependency on /data/snort/settings).
+    void setSaveFileOverrideForTesting(std::string path);
 
     void start();
 

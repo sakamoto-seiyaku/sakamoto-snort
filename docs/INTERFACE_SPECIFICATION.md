@@ -93,9 +93,9 @@ App 对象字段:
 - `BLOCKMASKDEF [<mask>]` | 查询/设置 | 当前/`OK` | 新装应用默认拦截掩码
 - `BLOCKIFACE <uid|str> [<mask>]` | 查询/设置 | 当前/`OK` | 接口拦截掩码；仅支持 `<str> USER <userId>`（不支持简写）
 - `BLOCKIFACEDEF [<mask>]` | 查询/设置 | 当前/`OK` | 新装应用默认接口掩码
-- `BLOCKIPLEAKS [<0|1>]` | 查询/设置 | 当前/`OK` | IP 泄漏拦截
-- `GETBLACKIPS [<0|1>]` | 查询/设置 | 当前/`OK` | 对被拦截域是否仍获取 IP
-- `MAXAGEIP [<int>]` | 查询/设置 | 当前/`OK` | IP 最大存活秒数
+- `BLOCKIPLEAKS [<0|1>]` | 查询/设置 | `0`/`OK` | **冻结(no-op)**：查询恒为 `0`；设置返回 `OK` 但无效果
+- `GETBLACKIPS [<0|1>]` | 查询/设置 | `0`/`OK` | **冻结(no-op)**：查询恒为 `0`；设置返回 `OK` 但无效果
+- `MAXAGEIP [<int>]` | 查询/设置 | `14400`/`OK` | **冻结(no-op)**：查询恒为 `14400`；设置返回 `OK` 但无效果
 - `IPRULES [<0|1>]` | 查询/设置 | 当前/`OK|NOK` | IPv4 L3/L4 规则开关；仅接受 `0|1`；幂等（`1→1/0→0` 不清零）；仅当 `BLOCK=1` 时才评估（`BLOCK=0` 直接放行且不产生 metrics/stats）
 - `IPRULES.ADD <uid> <kv...>` | 新增 | `<ruleId:int>|NOK` | v1 仅支持 IPv4；失败必须原子且不得消耗 ruleId
 - `IPRULES.UPDATE <ruleId> <kv...>` | 更新 | `OK|NOK` | patch/merge；失败原子且不改变规则
@@ -385,7 +385,8 @@ per-app traffic（示例）：
 - 除 `PASSWORD` 外不支持通用引号。除 `BLOCKLIST.*.ADD/UPDATE` 的 `<name>` 通过“余下 token 拼接”可包含空格外，其他字符串参数不应包含空格。
 - 批量域名 `<domains>` 应传裸字符串（以 `;` 分隔，如 `a.com;b.net`），不要加引号。
 - `RULES.ADD` 返回规则 ID 为字符串（例如 `"42"`）。
-- `BLOCK`/`BLOCKIPLEAKS`/`GETBLACKIPS`/`MAXAGEIP` 等查询返回原始数字；设置成功返回 `OK`。
+- `BLOCK` 等查询返回原始数字；设置成功返回 `OK`。
+- `BLOCKIPLEAKS/GETBLACKIPS/MAXAGEIP` 为冻结(no-op)：查询恒为 `0/0/14400`；设置仍返回 `OK` 但无效果。
 - `DOMAIN.*.PRINT` 返回纯文本（每行 `domain mask`），非 JSON。
 - `HOSTS` 返回对象数组；其中 IPv4 列表元素为未加引号的字符串（与 IPv6 不一致，保持实现现状）。
 
@@ -431,7 +432,7 @@ per-app traffic（示例）：
 
 通用: HELLO, HELP, QUIT, DEV.SHUTDOWN, PASSWORD, PASSSTATE, RESETALL, PERFMETRICS, METRICS.PERF, METRICS.REASONS
 应用: APP.UID, APP.NAME, APP.CUSTOMLISTS
-拦截: BLOCK, BLOCKMASK, BLOCKMASKDEF, BLOCKIFACE, BLOCKIFACEDEF, BLOCKIPLEAKS, GETBLACKIPS, MAXAGEIP
+拦截: BLOCK, BLOCKMASK, BLOCKMASKDEF, BLOCKIFACE, BLOCKIFACEDEF, BLOCKIPLEAKS(frozen), GETBLACKIPS(frozen), MAXAGEIP(frozen)
 统计: ALL<v>, <TYPE><v>, APP<v>, APP.<TYPE><v>, APP.RESET<v>, DOMAINS<v>, <COLOR><v>, <COLOR>.APP<v>
 流: DNSSTREAM.START/STOP, PKTSTREAM.START/STOP, ACTIVITYSTREAM.START/STOP, TOPACTIVITY, RDNS.SET/UNSET
 黑白名单: CUSTOMLIST.ON/OFF, BLACKLIST.ADD/REMOVE/PRINT, WHITELIST.ADD/REMOVE/PRINT
@@ -471,8 +472,9 @@ per-app traffic（示例）：
   - `PASSSTATE 1` → `OK`；`PASSSTATE` → `0|1|...`
 - 全局开关/参数
   - `BLOCK` → `0|1`；`BLOCK 0` → `OK`
-  - `GETBLACKIPS` → `0|1`；`GETBLACKIPS 1` → `OK`
-  - `MAXAGEIP` → 整数秒；`MAXAGEIP 7200` → `OK`
+  - `BLOCKIPLEAKS` → `0`；`BLOCKIPLEAKS 1` → `OK`（但查询仍为 `0`）
+  - `GETBLACKIPS` → `0`；`GETBLACKIPS 1` → `OK`（但查询仍为 `0`）
+  - `MAXAGEIP` → `14400`；`MAXAGEIP 7200` → `OK`（但查询仍为 `14400`）
 - 应用/掩码
   - `APP.UID 0` 或 `APP.NAME sys` → `[ {"name", "uid", ...} ]`
   - `BLOCKMASKDEF` → 整数；`BLOCKMASKDEF 129` → `OK`

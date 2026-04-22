@@ -56,10 +56,10 @@ void Settings::save() {
         _saver.write<uint8_t>(_blockIface);
         _saver.write<uint8_t>(_passState);
         _saver.write(_password);
-        _saver.write<bool>(_getBlackIPs);
-        _saver.write<bool>(_blockIPLeaks);
+        _saver.write<bool>(legacyGetBlackIPsFrozenValue);
+        _saver.write<bool>(legacyBlockIPLeaksFrozenValue);
         _saver.write<bool>(_ipRulesEnabled);
-        _saver.write<std::time_t>(_maxAgeIP);
+        _saver.write<std::time_t>(legacyMaxAgeIPFrozenValue);
     });
 }
 
@@ -80,15 +80,29 @@ void Settings::restore() {
         std::string password;
         _saver.read(password);
         _password = password;
-        _getBlackIPs = _saver.read<bool>();
-        _blockIPLeaks = _saver.read<bool>();
+        // Legacy knobs are frozen: read to maintain wire compatibility but ignore values.
+        (void)_saver.read<bool>(); // GETBLACKIPS
+        (void)_saver.read<bool>(); // BLOCKIPLEAKS
         if (_savedVersion >= 8) {
             _ipRulesEnabled = _saver.read<bool>();
         } else {
             _ipRulesEnabled = false;
         }
-        _maxAgeIP = _saver.read<std::time_t>();
+
+        (void)_saver.read<std::time_t>(); // MAXAGEIP
+
+        _getBlackIPs = legacyGetBlackIPsFrozenValue;
+        _blockIPLeaks = legacyBlockIPLeaksFrozenValue;
+        _maxAgeIP = legacyMaxAgeIPFrozenValue;
     });
+}
+
+void Settings::setSaveFileOverrideForTesting(std::string path) {
+    if (path.empty()) {
+        _saver = Saver(_saveFile);
+        return;
+    }
+    _saver = Saver(std::move(path));
 }
 
 namespace {

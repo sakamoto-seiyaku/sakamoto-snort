@@ -142,7 +142,7 @@
    - P1：integration：启动 stream → 产生可预期事件（`DEV.*` 或可控 test traffic）→ STOP barrier → 验证无交织/无半帧
    - P2：真机 perf/反压基线对比（不锁阈值，只锁“不应退化到不可用”）
 
-7) ⏳ `stabilize-control-transition-surface`（legacy 冻结收口 + 仓库脚本分轨）
+7) ✅ `stabilize-control-transition-surface`（legacy 冻结收口 + 仓库脚本分轨；完成，待归档）
    - 交付物：
      - daemon 内部把 legacy 冻结项收口为**全局固定语义**：`BLOCKIPLEAKS` 强制关闭且 no-op；`GETBLACKIPS=0`；`MAXAGEIP` 固定默认值；不得被 legacy/vNext 任一入口、历史落盘或 restore 改写
      - legacy `HELP`（或等价入口）显式标注“冻结/无作用”项与 vNext 提示，避免误连 legacy 时形成错误心智
