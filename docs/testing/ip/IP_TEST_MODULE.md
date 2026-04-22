@@ -26,14 +26,20 @@ bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile perf --skip
 # 全量功能矩阵 / 并发压力（best-effort；环境不满足会 SKIP）
 bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile matrix --skip-deploy
 bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile stress --skip-deploy
+
+# Tier-1 longrun（control-plane churn + traffic + health assertions；record-first）
+IPTEST_LONGRUN_SECONDS=600 \
+  bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile longrun --skip-deploy
 ```
 
 说明：
 - `tests/device-modules/ip/` 是“真机测试模组”，不是 unit/integration 的替代品（见 `tests/TEST_COMPONENTS_MANIFESTO.md`）。
 - 结果记录默认写到 `tests/device-modules/ip/records/`（该目录已被 `tests/device-modules/ip/.gitignore` 排除，不进 git）。
+  - `--profile longrun` 产物目录形如 `tests/device-modules/ip/records/ip-longrun-<ts>_<serial>/`，包含 `meta.txt`、`longrun.log`、`snort_proc_before/after/delta` 与 `traffic.txt`。
 - 建议频率（口径保守，先不把 perf 变成 hard gate）：
   - 任意 `IPRULES/IFACE_BLOCK/BLOCKIPLEAKS` 语义改动：至少跑 `smoke + matrix`
   - 热路径/性能/并发相关改动：再补 `perf + stress`（perf 推荐用本文固定口径的 UDP baseline）
+  - 需要更强稳定性/长期运行信心时（例如 release candidate）：再补 `longrun`（best-effort；环境不满足会 SKIP）
 
 ## 2. Tier‑1（netns+veth）受控拓扑
 

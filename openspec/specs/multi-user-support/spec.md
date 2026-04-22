@@ -6,6 +6,14 @@ Define multi-user behavior for sucre-snort:
 - Package install-state aggregation is derived from system files (`packages.list` + per-user `package-restrictions.xml`, text or ABX).
 - The control protocol supports selecting per-user app instances via full UID or `USER <userId>` clauses, while device-wide views remain device-wide.
 ## Requirements
+### Requirement: Single-user behavior remains backward compatible
+在只存在 user 0 的设备上，多用户支持 MUST 不改变现有命令的功能行为，除非是明确文档化的兼容扩展（例如返回 JSON 中新增 `userId`/`appId` 字段与更新 HELP 文本）。
+
+#### Scenario: APP listing on a single-user device
+- **GIVEN** a device with only user 0
+- **WHEN** a client queries `APP.UID`, `APP.NAME`, and `APP.A` using pre-existing call patterns
+- **THEN** the results SHALL remain compatible with pre-multi-user behavior, and any returned per-app objects MUST report `userId = 0`
+
 ### Requirement: Full UID-based app identity
 系统内部 MUST 以完整 Linux UID 作为 App 的唯一一等主键，不再在核心逻辑中对 UID 做取模或其他截断；每个 `(package, userId)` 实例对应一个独立的 App 对象与统计视图。
 

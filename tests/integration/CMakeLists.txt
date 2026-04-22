@@ -43,6 +43,13 @@ add_sucre_snort_shell_test(
 )
 
 add_sucre_snort_shell_test(
+  ip-smoke
+  "${SUCRE_SNORT_REPO_ROOT}/tests/device-modules/ip/run.sh"
+  "device;root-required;ip-smoke"
+  --profile smoke --case iprules_smoke
+)
+
+add_sucre_snort_shell_test(
   perf-network-load
   "${SUCRE_SNORT_INTEGRATION_ROOT}/perf-network-load.sh"
   "perf;device;root-required;baseline"
@@ -66,7 +73,17 @@ add_custom_target(
   VERBATIM
 )
 
+add_custom_target(
+  snort-ip-smoke-tests
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L ip-smoke
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+  COMMENT "Run sucre-snort IP device-module smoke via CTest"
+  USES_TERMINAL
+  VERBATIM
+)
+
 if(TARGET sucre-snort-ctl)
   add_dependencies(snort-p1-tests sucre-snort-ctl)
   add_dependencies(snort-p2-tests sucre-snort-ctl)
+  add_dependencies(snort-ip-smoke-tests sucre-snort-ctl)
 endif()

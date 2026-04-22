@@ -1,5 +1,32 @@
 # sucre-snort 多用户重构设计文档
 
+## ✅ 实施状态（对齐到当前仓库，2026-04-22）
+
+本设计已完成主要实现落地；OpenSpec 主规格已提升为 `openspec/specs/multi-user-support/spec.md`，仓库代码以该 spec 为准。
+
+剩余工作主要是“验证与用例沉淀”（非新增运行时语义），集中追踪在 OpenSpec change `update-post-domain-ip-fusion-rollup` 的 tasks 2.1–2.4：
+- 单用户回归：跑通现有冒烟用例，确认仅有“新增字段/HELP 文本”层面的兼容扩展。
+- 多用户场景：验证同包多 user 的 UID 隔离、`USER <userId>` selector、per-app knobs 的正确归属。
+- 用例沉淀：将关键多用户安装聚合场景沉淀到 `tests/integration/full-smoke.sh`（Group 13，best-effort）。
+
+### 现有验证入口（建议）
+
+Host（纯逻辑/解析/selector 语义）：
+```bash
+cmake --preset dev-debug
+cmake --build --preset dev-debug
+ctest --preset dev-debug -L p0
+```
+
+Device（回归与多用户 best-effort）：
+```bash
+# 单用户回归：跑完整冒烟（默认 groups 1-12）
+bash tests/integration/full-smoke.sh
+
+# 多用户：显式启用 Group 13（不会默认运行）
+SNORT_ENABLE_MULTIUSER_SMOKE=1 bash tests/integration/full-smoke.sh -g 13
+```
+
 ## 0. 设计原则（核心约束）
 
 - **核心以 UID 为唯一一等主键**：内部模块（`App`、`AppManager`、`DnsListener`、`PacketListener`、`Activity` 等）统一以完整 Linux UID 作为唯一主键，不再在核心逻辑中解析 `<uid|str>` 或依赖包名；包名与 userId 的解析、兼容逻辑集中在适配/兼容层（例如 `Control`、`PackageListener`、持久化路径生成）。
