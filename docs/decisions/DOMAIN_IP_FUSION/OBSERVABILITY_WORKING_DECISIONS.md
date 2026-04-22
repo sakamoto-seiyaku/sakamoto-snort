@@ -232,6 +232,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - **ack barrier（已确认；2.9-B）**：
     - STOP 必须先禁用该连接订阅并清空该连接 pending queue（允许丢弃尾部未发送事件/notice），再输出 `{"id":...,"ok":true}`。
     - `{"id":...,"ok":true}` 必须是该 STOP 的最后一个输出 frame；ack 后不得再输出任何事件/notice，直到下一次 `STREAM.START`。
+    - 注：若某个 netstring frame 已经开始写出（partial write），为保持 framing 正确，daemon 可能需要先完成该 frame，STOP response 才能被写出；barrier 仍以 STOP response 为界。
   - 对 dns/pkt：清空 ring buffer；下次 `START` 视为全新 session（horizon 只回放自上次 `STOP/RESETALL` 之后积累的 ring）。
 - `STREAM.START`（入口统一；通过 `args.type` 区分；不影响其它连接）：
   - request `args`：

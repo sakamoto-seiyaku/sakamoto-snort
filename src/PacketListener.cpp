@@ -13,6 +13,7 @@
 
 #include <CmdLine.hpp>
 #include <PacketListener.hpp>
+#include <ControlVNextStreamManager.hpp>
 #include <PerfMetrics.hpp>
 
 template <class IP> PacketListener<IP>::PacketListener() {}
@@ -367,14 +368,26 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         // Phase 2 (under global listeners shared lock): pure decision + stats + streaming. This
         // critical section must remain free of blocking I/O to avoid starving RESETALL and other
         // operations that need the exclusive listeners lock.
-        const std::shared_lock<std::shared_mutex> lock(mutexListeners);
-        const Conntrack::PacketV4 *ctPtr = nullptr;
-        if constexpr (std::is_same_v<IP, IPv4>) {
-            ctPtr = &ctPktV4;
+        ControlVNextStreamManager::PktEvent streamEvent{};
+        bool trackedSnapshot = false;
+
+        {
+            const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+            const Conntrack::PacketV4 *ctPtr = nullptr;
+            if constexpr (std::is_same_v<IP, IPv4>) {
+                ctPtr = &ctPktV4;
+            }
+            verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface, timestamp,
+                                                   IP::payloadProto(ip), srcPort, dstPort, payloadLen,
+                                                   ifaceKindBit, ifaceBlocked, ctPtr,
+                                                   &streamEvent, &trackedSnapshot);
         }
-        verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface, timestamp,
-                                               IP::payloadProto(ip), srcPort, dstPort, payloadLen,
-                                               ifaceKindBit, ifaceBlocked, ctPtr);
+
+        if (trackedSnapshot) {
+            controlVNextStream.observePktTracked(std::move(streamEvent));
+        } else {
+            controlVNextStream.observePktSuppressed(_inputTLS, verdict, payloadLen);
+        }
     }
 
     sendVerdict(packetId, verdict ? NF_ACCEPT : NF_DROP);

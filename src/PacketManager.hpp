@@ -7,6 +7,7 @@
 
 #include <AppManager.hpp>
 #include <Conntrack.hpp>
+#include <ControlVNextStreamManager.hpp>
 #include <HostManager.hpp>
 #include <IpRulesEngine.hpp>
 #include <Packet.hpp>
@@ -14,6 +15,7 @@
 #include <Streamable.hpp>
 
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <type_traits>
@@ -53,7 +55,9 @@ public:
               const bool input, const uint32_t iface, const timespec timestamp, const int proto,
               const uint16_t srcPort, const uint16_t dstPort, const uint16_t len,
               const uint8_t ifaceKindBit, const bool ifaceBlockedSnapshot,
-              const Conntrack::PacketV4 *ctPktV4 = nullptr);
+              const Conntrack::PacketV4 *ctPktV4 = nullptr,
+              ControlVNextStreamManager::PktEvent *streamEventOut = nullptr,
+              bool *trackedSnapshotOut = nullptr);
 
     void reset();
 
@@ -99,7 +103,51 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                          const Host::Ptr &host, const bool input, const uint32_t iface,
                          const timespec timestamp, const int proto, const uint16_t srcPort,
                          const uint16_t dstPort, const uint16_t len, const uint8_t ifaceKindBit,
-                         const bool ifaceBlockedSnapshot, const Conntrack::PacketV4 *ctPktV4) {
+                         const bool ifaceBlockedSnapshot, const Conntrack::PacketV4 *ctPktV4,
+                         ControlVNextStreamManager::PktEvent *streamEventOut,
+                         bool *trackedSnapshotOut) {
+    const bool trackedSnapshot = app->tracked();
+    if (trackedSnapshotOut != nullptr) {
+        *trackedSnapshotOut = trackedSnapshot;
+    }
+
+    const auto fillStreamEvent = [&](const bool accepted, const PacketReasonId reason,
+                                     const std::optional<uint32_t> ruleId,
+                                     const std::optional<uint32_t> wouldRuleId) {
+        if (!trackedSnapshot || streamEventOut == nullptr) {
+            return;
+        }
+        ControlVNextStreamManager::PktEvent ev{};
+        ev.timestamp = timestamp;
+        ev.uid = app->uid();
+        ev.userId = app->userId();
+        ev.app = app->nameSnapshot();
+        ev.host = host;
+        std::memset(ev.srcIp.data(), 0, ev.srcIp.size());
+        std::memset(ev.dstIp.data(), 0, ev.dstIp.size());
+        if constexpr (std::is_same_v<IP, IPv4>) {
+            std::memcpy(ev.srcIp.data(), srcIp.data(), 4);
+            std::memcpy(ev.dstIp.data(), dstIp.data(), 4);
+            ev.ipVersion = 4;
+        } else {
+            std::memcpy(ev.srcIp.data(), srcIp.data(), 16);
+            std::memcpy(ev.dstIp.data(), dstIp.data(), 16);
+            ev.ipVersion = 6;
+        }
+        ev.ifindex = iface;
+        ev.proto = static_cast<std::uint16_t>(proto);
+        ev.srcPort = srcPort;
+        ev.dstPort = dstPort;
+        ev.length = len;
+        ev.ifaceKindBit = ifaceKindBit;
+        ev.input = input;
+        ev.accepted = accepted;
+        ev.reasonId = reason;
+        ev.ruleId = ruleId;
+        ev.wouldRuleId = wouldRuleId;
+        *streamEventOut = std::move(ev);
+    };
+
     const bool ifaceBlockedNow = (app->blockIface() & ifaceKindBit) != 0;
     const bool ifaceBlocked = ifaceBlockedSnapshot || ifaceBlockedNow;
     const uint64_t tsNs =
@@ -118,15 +166,18 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
         _reasonMetrics.observe(reasonId, len);
         app->observeTrafficPacket(input, verdict, len);
 
-        if (app->tracked()) {
+        if (trackedSnapshot) {
             // IFACE_BLOCK is independent of domain policy; keep stats minimally attributed.
             appManager.updateStats(nullptr, app, true, Stats::GREY, input ? Stats::RXP : Stats::TXP, 1);
             appManager.updateStats(nullptr, app, true, Stats::GREY, input ? Stats::RXB : Stats::TXB, len);
         }
 
-        Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-            srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
-            verdict, reasonId, ruleId, wouldRuleId));
+        fillStreamEvent(verdict, reasonId, ruleId, wouldRuleId);
+        if (trackedSnapshot) {
+            Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
+                srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
+                verdict, reasonId, ruleId, wouldRuleId));
+        }
         return verdict;
     }
 
@@ -189,16 +240,19 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                 _reasonMetrics.observe(reasonId, len);
                 app->observeTrafficPacket(input, verdict, len);
 
-                if (app->tracked()) {
+                if (trackedSnapshot) {
                     appManager.updateStats(nullptr, app, !verdict, Stats::GREY,
                                            input ? Stats::RXP : Stats::TXP, 1);
                     appManager.updateStats(nullptr, app, !verdict, Stats::GREY,
                                            input ? Stats::RXB : Stats::TXB, len);
                 }
 
-                Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-                    srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
-                    verdict, reasonId, ruleId, std::nullopt));
+                fillStreamEvent(verdict, reasonId, ruleId, std::nullopt);
+                if (trackedSnapshot) {
+                    Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
+                        srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
+                        verdict, reasonId, ruleId, std::nullopt));
+                }
                 return verdict;
             }
 
@@ -239,14 +293,17 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     _reasonMetrics.observe(reasonId, len);
     app->observeTrafficPacket(input, verdict, len);
 
-    if (app->tracked()) {
+    if (trackedSnapshot) {
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXP : Stats::TXP, 1);
         appManager.updateStats(domain, app, !verdict, cs, input ? Stats::RXB : Stats::TXB, len);
     }
 
-    Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-        srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict,
-        reasonId, ruleId, wouldRuleId));
+    fillStreamEvent(verdict, reasonId, ruleId, wouldRuleId);
+    if (trackedSnapshot) {
+        Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
+            srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict,
+            reasonId, ruleId, wouldRuleId));
+    }
 
     return verdict;
 }

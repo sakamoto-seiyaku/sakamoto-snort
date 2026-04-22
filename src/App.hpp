@@ -49,7 +49,7 @@ private:
     std::atomic_bool _saved = false;
     AppStats _stats;
     std::pair<DomStatsMap, std::shared_mutex> _domStats[Stats::nbColors - 1];
-    std::atomic_bool _tracked = true;
+    std::atomic_bool _tracked = false;
     std::atomic_uint8_t _blockMask;
     std::atomic_uint8_t _blockIface;
     std::atomic_bool _useCustomList;

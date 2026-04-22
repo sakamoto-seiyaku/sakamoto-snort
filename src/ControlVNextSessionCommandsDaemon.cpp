@@ -7,6 +7,7 @@
 
 #include <AppManager.hpp>
 #include <BlockingListManager.hpp>
+#include <ControlVNextStreamManager.hpp>
 #include <DnsListener.hpp>
 #include <HostManager.hpp>
 #include <PackageListener.hpp>
@@ -17,6 +18,7 @@
 #include <sucre-snort.hpp>
 
 #include <net/if.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -102,6 +104,14 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
         if (auto err = requireEmptyArgs("RESETALL"); err.has_value()) {
             return ResponsePlan{.response = std::move(*err)};
         }
+
+        // Force-stop and disconnect any active vNext stream subscriptions before resetting state.
+        // RESETALL must not be blocked by slow stream consumers.
+        for (const int fd : controlVNextStream.resetAll()) {
+            (void)::shutdown(fd, SHUT_RDWR);
+        }
+        // Best-effort cleanup: legacy stream files are debug artifacts (no compatibility promise).
+        (void)::unlink(settings.saveDnsStream.c_str());
 
         perfMetrics.resetAll();
         settings.reset();
@@ -653,6 +663,7 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
         if (deviceScope) {
             if (deviceUpdates.blockEnabled.has_value()) {
                 settings.blockEnabled(*deviceUpdates.blockEnabled);
+                controlVNextStream.observeBlockEnabled(*deviceUpdates.blockEnabled);
             }
             if (deviceUpdates.ipRulesEnabled.has_value()) {
                 settings.ipRulesEnabled(*deviceUpdates.ipRulesEnabled);

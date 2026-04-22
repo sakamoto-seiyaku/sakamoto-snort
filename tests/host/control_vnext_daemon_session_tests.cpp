@@ -5,6 +5,7 @@
 
 #include <ControlVNextCodec.hpp>
 #include <ControlVNextSession.hpp>
+#include <Settings.hpp>
 #include <sucre-snort.hpp>
 
 #include <gtest/gtest.h>
@@ -25,6 +26,8 @@
 #include <stdexcept>
 #include <thread>
 
+// Provide the globals normally defined in src/sucre-snort.cpp.
+Settings settings;
 std::shared_mutex mutexListeners;
 
 namespace {

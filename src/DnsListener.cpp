@@ -15,6 +15,7 @@
 #include <stdexcept>
 
 #include <DnsListener.hpp>
+#include <ControlVNextStreamManager.hpp>
 #include <PerfMetrics.hpp>
 
 DnsListener::DnsListener()
@@ -200,19 +201,50 @@ void DnsListener::clientRun(const int socket) {
         Stats::Color cs = Stats::GREY;
         bool verdict = true;
         bool getips = false;
+        DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
+        bool useCustomList = false;
+        uint32_t domMask = 0;
+        uint32_t appMask = 0;
         {
             const std::shared_lock<std::shared_mutex> g(mutexListeners);
             const auto bcs = app->blockedWithSource(domain);
             blocked = bcs.blocked;
             cs = bcs.color;
+            policySource = bcs.policySource;
             verdict = !blocked;
             getips = verdict || settings.getBlackIPs();
+            useCustomList = app->useCustomList();
+            domMask = static_cast<uint32_t>(domain->blockMask());
+            appMask = static_cast<uint32_t>(app->blockMask());
 
             if (settings.blockEnabled()) {
                 // B-layer counters: DNS-request-based DomainPolicy attribution.
                 domManager.observeDomainPolicySource(bcs.policySource, blocked);
                 app->observeDomainPolicySource(bcs.policySource, blocked);
                 app->observeTrafficDns(blocked);
+            }
+        }
+
+        if (settings.blockEnabled()) {
+            if (app->tracked()) {
+                timespec ts{};
+                timespec_get(&ts, TIME_UTC);
+                ControlVNextStreamManager::DnsEvent ev{
+                    .timestamp = ts,
+                    .uid = app->uid(),
+                    .userId = app->userId(),
+                    .app = app->nameSnapshot(),
+                    .domain = domain,
+                    .domMask = domMask,
+                    .appMask = appMask,
+                    .blocked = blocked,
+                    .getips = getips,
+                    .useCustomList = useCustomList,
+                    .policySource = policySource,
+                };
+                controlVNextStream.observeDnsTracked(std::move(ev));
+            } else {
+                controlVNextStream.observeDnsSuppressed(blocked);
             }
         }
         clientWrite(socket, &verdict, sizeof(verdict), "verdict write error");

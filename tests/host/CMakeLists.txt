@@ -113,8 +113,32 @@ add_sucre_snort_host_test(
   control_vnext_daemon_session_tests
   control_vnext_daemon_session_tests.cpp
   control_vnext_daemon_stub_commands.cpp
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextSession.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamJson.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Host.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)
+
+add_sucre_snort_host_test(
+  control_vnext_stream_surface_tests
+  control_vnext_stream_surface_tests.cpp
+  control_vnext_daemon_stub_commands.cpp
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextSession.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamJson.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Host.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
 )
 
 add_sucre_snort_host_test(

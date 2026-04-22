@@ -223,6 +223,108 @@ print("OK")
 PY
 }
 
+stream_activity_start_event_stop_smoke() {
+    VNEXT_PORT="$VNEXT_PORT" python3 - <<'PY'
+import json
+import os
+import select
+import socket
+
+PORT = int(os.environ["VNEXT_PORT"])
+
+
+def encode_netstring(payload: bytes) -> bytes:
+    return str(len(payload)).encode("ascii") + b":" + payload + b","
+
+
+def read_exact(sock: socket.socket, n: int) -> bytes:
+    out = bytearray()
+    while len(out) < n:
+        chunk = sock.recv(n - len(out))
+        if not chunk:
+            raise EOFError("eof while reading payload")
+        out += chunk
+    return bytes(out)
+
+
+def read_netstring(sock: socket.socket) -> bytes:
+    header = bytearray()
+    while True:
+        ch = sock.recv(1)
+        if not ch:
+            raise EOFError("eof while reading netstring header")
+        if ch == b":":
+            break
+        header += ch
+        if len(header) > 32:
+            raise ValueError("netstring header too long")
+    if not header:
+        raise ValueError("empty netstring length")
+    if header.startswith(b"0") and header != b"0":
+        raise ValueError("leading zero in netstring length")
+    length = int(header.decode("ascii"))
+    payload = read_exact(sock, length)
+    comma = read_exact(sock, 1)
+    if comma != b",":
+        raise ValueError("netstring missing trailing comma")
+    return payload
+
+
+def rpc(sock: socket.socket, req_id: int, cmd: str, args: dict) -> dict:
+    req = {"id": req_id, "cmd": cmd, "args": args}
+    payload = json.dumps(req, separators=(",", ":")).encode("utf-8")
+    sock.sendall(encode_netstring(payload))
+    resp = json.loads(read_netstring(sock))
+    if resp.get("id") != req_id:
+        raise RuntimeError(f"id mismatch: expected={req_id} got={resp.get('id')}")
+    return resp
+
+
+def read_event(sock: socket.socket) -> dict:
+    ev = json.loads(read_netstring(sock))
+    if not isinstance(ev, dict):
+        raise RuntimeError(f"event not object: {type(ev)}")
+    if "id" in ev or "ok" in ev:
+        raise RuntimeError(f"event contains response envelope fields: {ev}")
+    if "type" not in ev:
+        raise RuntimeError(f"event missing type: {ev}")
+    return ev
+
+
+sock = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+sock.settimeout(5)
+
+hello = rpc(sock, 1, "HELLO", {})
+if not hello.get("ok", False):
+    raise RuntimeError(f"HELLO failed: {hello}")
+
+start = rpc(sock, 2, "STREAM.START", {"type": "activity"})
+if not start.get("ok", False):
+    raise RuntimeError(f"STREAM.START failed: {start}")
+
+notice = read_event(sock)
+if notice.get("type") != "notice" or notice.get("notice") != "started" or notice.get("stream") != "activity":
+    raise RuntimeError(f"unexpected started notice: {notice}")
+
+activity = read_event(sock)
+if activity.get("type") != "activity" or "blockEnabled" not in activity or not isinstance(activity["blockEnabled"], bool):
+    raise RuntimeError(f"unexpected activity event: {activity}")
+
+stop = rpc(sock, 3, "STREAM.STOP", {})
+if not stop.get("ok", False):
+    raise RuntimeError(f"STREAM.STOP failed: {stop}")
+
+# STOP ack barrier: no further frames until next START (best-effort time window).
+r, _, _ = select.select([sock], [], [], 0.2)
+if r:
+    extra = json.loads(read_netstring(sock))
+    raise RuntimeError(f"unexpected frame after STOP: {extra}")
+
+sock.close()
+print("OK")
+PY
+}
+
 main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
@@ -286,6 +388,10 @@ main() {
     assert_ctl_ok "VNT-02 QUIT closes cleanly" ctl_cmd QUIT
 
     assert_ctl_ok "VNT-03 reconnect HELLO" ctl_cmd HELLO
+
+    log_section "Stream"
+
+    assert_ctl_ok "VNT-03b STREAM activity start→event→stop flow" stream_activity_start_event_stop_smoke
 
     log_section "Inventory"
 
