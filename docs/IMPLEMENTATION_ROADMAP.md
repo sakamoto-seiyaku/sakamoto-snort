@@ -11,6 +11,7 @@
 - `Device / DX`：ADB + root 真机集成、平台 smoke、测试模组、perf/longrun
 - 仓库里现存 `p0/p1/p2` 只保留为历史 `CTest` label / 存量文档用语，不再当作当前路线图阶段名
 - 当前 `Host` 端现状与缺口见 `docs/testing/HOST_TEST_SURVEY.md`
+- 当前 `Device / DX` 真机测试重组纲领见 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
 
 ## 1. 工程化基线（已收敛）
 
@@ -64,6 +65,15 @@
 - 已完成：`add-domain-policy-observability` 已归档；当前 OpenSpec active changes：无
 - 已完成：`add-iprules-conntrack-core` 已归档；roadmap 先前把它写成“待研究方向”，现已改为已落地能力
 - 已完成：`update-post-domain-ip-fusion-rollup` 已归档（2026-04-22）；其为 backlog rollup（验证/文档/Tier-1 longrun/可选 CI hook），并已将 delta specs 同步回主规格
+- 已确定：下一批 `Device / DX` 工程化重组只拆 **2 个** change，且按 `smoke -> diagnostics` 顺序推进；archive 不单独开 change，而是在对应 change 内完成满足条件的物理归档
+  - `rework-dx-smoke`
+    - 落地 `dx-smoke / dx-smoke-platform / dx-smoke-control / dx-smoke-datapath`
+    - 收拢 active `vNext` 主线 smoke，移除旧 `p1/p2/ip-smoke` 命名
+    - 在本 change 内处理满足条件的 legacy smoke 迁移源与 archive 搬目录
+  - `rehome-dx-diagnostics`
+    - 把现有 `perf / stress / longrun` 入口统一归位到 diagnostics
+    - 本阶段只要求 diagnostics 归位，不预先锁死其最终命名和细分结构
+    - 在本 change 内处理满足条件的 legacy diagnostics 迁移源与 archive 搬目录
 - 继续巡检并收敛仍保留历史语境的设计文档；例如 `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md` 现已转为已落地回执，应继续避免被误读成“待实现提案”
 - 保持 `docs/INTERFACE_SPECIFICATION.md` 与当前控制面一致；目前 `METRICS.DOMAIN.SOURCES*` 与 `IPRULES ct.*` 已同步，后续只在接口新增时再刷新
 

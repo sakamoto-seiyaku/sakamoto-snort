@@ -16,6 +16,8 @@
 
 - `docs/testing/HOST_TEST_SURVEY.md`
   - 当前 `Host` 端测试现状、`ASAN` 结果、覆盖缺口
+- `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
+  - `Device / DX` 真机测试重组纲领；记录当前关于 `smoke / diagnostics / archive`、`vNext` 主线与迁移源的共识
 - `tests/host/README.md`
   - `Host` 运行方式与边界
 - `tests/integration/README.md`
@@ -84,6 +86,8 @@ bash tests/device-modules/ip/run.sh --profile smoke
 ```
 
 `tests/device-modules/ip/run.sh` 的 profile 可按需要替换为 `smoke / vnext / matrix / stress / perf / longrun`。
+
+当前 `Device / DX` 重组讨论与后续 change 的上层边界，统一以 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md` 为准。
 
 ## 相关索引
 
