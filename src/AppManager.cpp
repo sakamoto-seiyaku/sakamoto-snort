@@ -88,7 +88,7 @@ void AppManager::install(const App::Uid uid, const App::NamesVec &names) {
     }
 }
 
-void AppManager::remove(const App::Uid uid, const App::NamesVec &names) {
+void AppManager::remove(const App::Uid uid, const App::NamesVec & /*names*/) {
     // Maintain index consistency even if names is empty or contains aliases.
     const std::scoped_lock lock(_mutexByUid, _mutexByName);
     auto it = _byUid.find(uid);
@@ -257,7 +257,7 @@ template <class MAP>
 void AppManager::printAppList(MAP &map, std::ostream &out, const std::string &subname,
                               const PrintFun &&print) {
     printAppList(map, out, subname, std::move(print),
-                 [&](const App::Ptr &app) -> bool { return true; });
+                 [](const App::Ptr &) -> bool { return true; });
 }
 
 template <class MAP>

@@ -20,12 +20,12 @@ void Activity::print(std::ostream &out) const {
     out << "}";
 }
 
-bool Activity::inHorizon(const uint32_t horizon, const timespec timeRef) const { return true; }
+bool Activity::inHorizon(const uint32_t /*horizon*/, const timespec /*timeRef*/) const { return true; }
 
-bool Activity::expired(const Activity::Ptr activity) const {
+bool Activity::expired(const Activity::Ptr /*activity*/) const {
     return _streamed.load(std::memory_order_relaxed);
 }
 
-void Activity::save(Saver &saver) {}
+void Activity::save(Saver & /*saver*/) {}
 
-Activity::Ptr Activity::restore(Saver &saver) { return nullptr; }
+Activity::Ptr Activity::restore(Saver & /*saver*/) { return nullptr; }

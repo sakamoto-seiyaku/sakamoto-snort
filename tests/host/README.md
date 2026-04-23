@@ -40,7 +40,7 @@ cmake --build --preset dev-debug --target snort-host-tests
 也可以直接在 repo-root CMake build dir 里运行：
 
 ```bash
-ctest --preset dev-debug -L p0
+ctest --preset dev-debug -L host
 ```
 
 Host-side ASAN lane 固定使用 Clang，避免误用系统 GCC ASAN：
@@ -48,17 +48,26 @@ Host-side ASAN lane 固定使用 Clang，避免误用系统 GCC ASAN：
 ```bash
 cmake --preset host-asan-clang
 cmake --build --preset host-asan-clang --target snort-host-tests
-ctest --preset host-asan-clang -L p0
+ctest --preset host-asan-clang -L host
 ```
 
-> 注：`ctest -L p0` 中的 `p0` 是历史 label 命名，仅用于过滤 host-side unit tests，不表示 roadmap 阶段号。
+> 注：`host` 是当前 host-side unit tests 的主要 `CTest` label；历史上 `p0` 曾被用于过滤 host 测试，但不再作为主要口径，也不表示 roadmap 阶段号。
 
 repo-root workflow 会：
 
 1. 在同一个 workspace 下暴露 delegated build 与 host-side tests
 2. 首次配置时自动下载固定版本 `googletest`
 3. 通过 `CTest` 暴露 gtest case，供 VS Code Testing 发现
-4. 通过 `snort-host-tests` / `ctest -L p0` 运行当前 host-side 单元测试
+   - `dev-debug`：`H.<可执行文件>.<GTestSuite>.<TestName>`
+   - `host-asan-clang`：`H.ASAN.<可执行文件>.<GTestSuite>.<TestName>`
+   - `host-coverage-clang`：`H.COV.<可执行文件>.<GTestSuite>.<TestName>`
+4. 通过 `snort-host-tests` / `ctest -L host` 运行当前 host-side 单元测试
+
+补充入口：
+
+- `snort-host-tests-asan`：同一套 host 用例的 ASAN lane
+- `snort-host-tests-gate`：按顺序运行 normal → ASAN
+- `snort-host-coverage`：Clang/LLVM 覆盖率产物（`summary.txt` + `coverage.json`）
 
 ## 当前边界
 

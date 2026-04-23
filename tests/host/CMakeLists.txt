@@ -27,15 +27,44 @@ get_filename_component(SUCRE_SNORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSO
 set(HOST_TEST_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
 set(RAPIDJSON_INCLUDE_DIR "${SUCRE_SNORT_ROOT}/third_party/rapidjson/include")
 
+set(SUCRE_SNORT_HOST_TEST_LANE "H")
+set(SUCRE_SNORT_HOST_TEST_LABELS "host")
+
+set(_sucre_snort_host_has_asan OFF)
+if(
+  CMAKE_CXX_FLAGS MATCHES "-fsanitize=address"
+  OR CMAKE_C_FLAGS MATCHES "-fsanitize=address"
+  OR CMAKE_EXE_LINKER_FLAGS MATCHES "-fsanitize=address"
+)
+  set(_sucre_snort_host_has_asan ON)
+endif()
+
+set(_sucre_snort_host_has_coverage OFF)
+if(
+  CMAKE_CXX_FLAGS MATCHES "-fprofile-instr-generate"
+  OR CMAKE_C_FLAGS MATCHES "-fprofile-instr-generate"
+  OR CMAKE_EXE_LINKER_FLAGS MATCHES "-fprofile-instr-generate"
+)
+  set(_sucre_snort_host_has_coverage ON)
+endif()
+
+if(_sucre_snort_host_has_asan)
+  set(SUCRE_SNORT_HOST_TEST_LANE "H.ASAN")
+  set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};asan")
+elseif(_sucre_snort_host_has_coverage)
+  set(SUCRE_SNORT_HOST_TEST_LANE "H.COV")
+  set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};coverage")
+endif()
+
 function(add_sucre_snort_host_test target)
-  add_executable(${target} ${ARGN})
+  add_executable(${target} "${SUCRE_SNORT_ROOT}/src/Saver.cpp" ${ARGN})
   target_include_directories(
     ${target}
     PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}"
-      "${HOST_TEST_INCLUDE_DIR}"
       "${SUCRE_SNORT_ROOT}/src"
   )
+  target_include_directories(${target} PRIVATE "${HOST_TEST_INCLUDE_DIR}")
   target_include_directories(${target} SYSTEM PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(${target} PRIVATE GTest::gtest_main)
@@ -43,7 +72,9 @@ function(add_sucre_snort_host_test target)
   gtest_discover_tests(
     ${target}
     DISCOVERY_TIMEOUT 60
-    PROPERTIES LABELS "p0;host"
+    DISCOVERY_MODE PRE_TEST
+    TEST_PREFIX "${SUCRE_SNORT_HOST_TEST_LANE}.${target}."
+    PROPERTIES LABELS "${SUCRE_SNORT_HOST_TEST_LABELS}"
   )
 endfunction()
 
@@ -55,6 +86,7 @@ function(add_sucre_snort_host_tool target)
       "${CMAKE_CURRENT_SOURCE_DIR}"
       "${SUCRE_SNORT_ROOT}/src"
   )
+  target_include_directories(${target} PRIVATE "${HOST_TEST_INCLUDE_DIR}")
   target_include_directories(${target} SYSTEM PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
 endfunction()
@@ -209,4 +241,35 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
   "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
   "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)
+
+add_sucre_snort_host_test(
+  host_gap_tests
+  host_gap_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Activity.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ActivityManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
+  "${SUCRE_SNORT_ROOT}/src/App.cpp"
+  "${SUCRE_SNORT_ROOT}/src/AppManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/AppStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CmdLine.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomRules.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DnsRequest.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Host.cpp"
+  "${SUCRE_SNORT_ROOT}/src/HostManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Packet.cpp"
+  "${SUCRE_SNORT_ROOT}/src/PacketManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Rule.cpp"
+  "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/SocketIO.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Streamable.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Timer.cpp"
 )

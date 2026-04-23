@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <string.h>
+#include <cstdlib>
+#include <cstring>
 #include <sys/wait.h>
 #include <unistd.h>
 

@@ -1,18 +1,27 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-04-22  
+更新时间：2026-04-23
 状态：当前共识；本文包含两条主线（互不混用代号）：
 - **工程化**：测试/回归/真机调试工作流（单元测试、集成测试、真机原生调试）
 - **功能**：可观测性分层 `A/B/C/D`（见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`），以及其上层的 IPRULES / DomainPolicy 相关实现
 
+当前工程化讨论统一按运行环境描述：
+
+- `Host`：本机 `gtest/CTest`；`ASAN` 是同一套 `Host` 用例的构建变体
+- `Device / DX`：ADB + root 真机集成、平台 smoke、测试模组、perf/longrun
+- 仓库里现存 `p0/p1/p2` 只保留为历史 `CTest` label / 存量文档用语，不再当作当前路线图阶段名
+- 当前 `Host` 端现状与缺口见 `docs/testing/HOST_TEST_SURVEY.md`
+
 ## 1. 工程化基线（已收敛）
 
-工程化（test/debug/tooling）阶段号使用 `P0/P1/P2/P3`，与功能线（A/B/C/D、IPRULES）互不混用：
+工程化当前只区分运行环境，不再新增路线图代号：
 
-- **P0 Host-side 单元测试（gtest）**：见 `tests/host/`
-- **P1 Host-driven 集成测试（host/WSL 驱动真机）**：见 `tests/integration/run.sh` 与 `tests/integration/lib.sh`
-- **P2 真机集成 / smoke / 兼容性验证 / perf**：见 `tests/integration/device-smoke.sh`、`tests/integration/perf-network-load.sh`、`tests/integration/iprules-device-matrix.sh`（runbook：`docs/testing/IPRULES_DEVICE_VERIFICATION.md`）、`tests/integration/full-smoke.sh`，以及项目级 IP 真机模组 `tests/device-modules/ip/run.sh`
-- **P3 真机原生调试（LLDB / VS Code + CodeLLDB）**：见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`
+- **Host**：本机 `gtest/CTest`；日常入口见 `tests/host/`，当前系统性盘点见 `docs/testing/HOST_TEST_SURVEY.md`
+- **Host + ASAN**：同一套 `Host` case 的 AddressSanitizer 构建变体；不是另一条编号线
+- **Device / DX**：host/WSL 驱动真机集成、platform smoke、IP 模组、perf/longrun；入口见 `tests/integration/` 与 `tests/device-modules/ip/`
+- **Native Debug**：真机原生调试（LLDB / VS Code + CodeLLDB）；见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`
+
+当前默认开发 preset 已把 `SNORT_ENABLE_DEVICE_TESTS=OFF`，因此 `dev-debug` 与 `host-asan-clang` 会先收敛到纯 `Host` 回归。
 
 长期约束（对后续所有 change 生效）：
 - 工程化任务只做 test/debug/tooling；不得顺势夹带产品功能实现。
@@ -65,6 +74,7 @@
 #### 3.2.1 domain+IP fusion：vNext control 平面落地路线（P0/P1/P2）
 
 目标：把 `docs/decisions/DOMAIN_IP_FUSION/*` 收敛出的 vNext 协议/命令面落实到代码与测试里，同时保留 legacy control（并存窗口与下线判据见 checklist 的“迁移与下线”章节）。
+当前进度：1-7 切片均已完成并归档（截至 2026-04-22）；后端 vNext control 平面已收敛，下一步转向前端/对外工具迁移与下线判据落地。
 
 切片约束（避免“细节失控”）：
 - 每个切片都必须是**单独可验收**的一步：先把 P0/P1（必要时 P2）跑通，再继续下一步。
@@ -136,13 +146,13 @@
    - P1：integration：产生少量可控流量后验证 metrics 增长与 reset
    - P2（按需）：perf baseline 对比（不锁阈值，只锁“不退化到不可用”）
 
-6) ⏳ `add-control-vnext-stream`（stream vNext：pipeline + `STREAM.*` + NOTICE）
+6) ✅ `add-control-vnext-stream`（stream vNext：pipeline + `STREAM.*` + NOTICE；已归档 2026-04-22）
    - 交付物：异步 pipeline + 真 gate；`STREAM.START/STOP/RESET*` 状态机、STOP ack barrier、禁止输出交织；`type="notice"`（suppressed/dropped）；任务分解见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
    - P0：queue/ring/NOTICE 聚合/STOP barrier 单测
    - P1：integration：启动 stream → 产生可预期事件（`DEV.*` 或可控 test traffic）→ STOP barrier → 验证无交织/无半帧
    - P2：真机 perf/反压基线对比（不锁阈值，只锁“不应退化到不可用”）
 
-7) ✅ `stabilize-control-transition-surface`（legacy 冻结收口 + 仓库脚本分轨；完成，待归档）
+7) ✅ `stabilize-control-transition-surface`（legacy 冻结收口 + 仓库脚本分轨；已归档 2026-04-22）
    - 交付物：
      - daemon 内部把 legacy 冻结项收口为**全局固定语义**：`BLOCKIPLEAKS` 强制关闭且 no-op；`GETBLACKIPS=0`；`MAXAGEIP` 固定默认值；不得被 legacy/vNext 任一入口、历史落盘或 restore 改写
      - legacy `HELP`（或等价入口）显式标注“冻结/无作用”项与 vNext 提示，避免误连 legacy 时形成错误心智

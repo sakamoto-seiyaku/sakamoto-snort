@@ -34,9 +34,9 @@ Packet<IP>::Packet(const Address<IP> &srcIp, const Address<IP> &dstIp, const Hos
 
 template <class IP> Packet<IP>::~Packet() {}
 
-template <class IP> void Packet<IP>::save(Saver &saver) {}
+template <class IP> void Packet<IP>::save(Saver & /*saver*/) {}
 
-template <class IP> typename Packet<IP>::Ptr Packet<IP>::restore(Saver &saver) { return nullptr; }
+template <class IP> typename Packet<IP>::Ptr Packet<IP>::restore(Saver & /*saver*/) { return nullptr; }
 
 template <class IP> void Packet<IP>::print(std::ostream &out) const {
     char buffer[IF_NAMESIZE];

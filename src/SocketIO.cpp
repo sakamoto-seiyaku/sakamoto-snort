@@ -7,6 +7,7 @@
 #include <iterator>
 #include <errno.h>
 #include <ctime>
+#include <unistd.h>
 
 #include <sucre-snort.hpp>
 #include <SocketIO.hpp>

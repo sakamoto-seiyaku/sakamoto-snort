@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <limits.h>
+
 #include <fstream>
 #include <functional>
 #include <string>

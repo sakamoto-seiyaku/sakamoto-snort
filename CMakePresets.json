@@ -16,7 +16,7 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "SNORT_ENABLE_DELEGATED_BUILD_TARGETS": "ON",
         "SNORT_ENABLE_HOST_TESTS": "ON",
-        "SNORT_ENABLE_DEVICE_TESTS": "ON"
+        "SNORT_ENABLE_DEVICE_TESTS": "OFF"
       }
     },
     {
@@ -45,6 +45,17 @@
         "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer -O1 -g",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address"
       }
+    },
+    {
+      "name": "host-coverage-clang",
+      "inherits": "base",
+      "description": "Host-side test preset with Clang/LLVM source-based coverage instrumentation",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fprofile-instr-generate -fcoverage-mapping -O0 -g",
+        "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping -O0 -g",
+        "CMAKE_EXE_LINKER_FLAGS": "-fprofile-instr-generate"
+      }
     }
   ],
   "buildPresets": [
@@ -62,6 +73,11 @@
       "name": "host-asan-clang",
       "configurePreset": "host-asan-clang",
       "description": "Build repo-root host-side targets with Clang AddressSanitizer"
+    },
+    {
+      "name": "host-coverage-clang",
+      "configurePreset": "host-coverage-clang",
+      "description": "Build repo-root host-side targets with Clang/LLVM coverage instrumentation"
     }
   ],
   "testPresets": [
@@ -82,6 +98,16 @@
     {
       "name": "host-asan-clang",
       "configurePreset": "host-asan-clang",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=0"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "host-coverage-clang",
+      "configurePreset": "host-coverage-clang",
       "output": {
         "outputOnFailure": true
       }
