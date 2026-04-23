@@ -16,50 +16,73 @@ STAGE_ONLY=0
 VARIANT="default"
 CONTROL_FORWARD_PORT="${CONTROL_FORWARD_PORT:-60616}"
 
-control_socket_roundtrip() {
-    local request="$1"
-    local expected="$2"
-
-    if ! adb_su "ls /dev/socket/sucre-snort-control" >/dev/null 2>&1; then
+request_vnext_hello() {
+    adb_cmd forward "tcp:${CONTROL_FORWARD_PORT}" localabstract:sucre-snort-control-vnext >/dev/null 2>&1 ||
         return 1
-    fi
-
-    adb_cmd forward "tcp:${CONTROL_FORWARD_PORT}" localabstract:sucre-snort-control >/dev/null 2>&1 || return 1
     python3 - <<PY >/dev/null 2>&1
-import socket, sys
-port = int(${CONTROL_FORWARD_PORT})
-request = ${request@Q}.encode("utf-8") + b"\0"
-expected = ${expected@Q}
-try:
-    sock = socket.create_connection(("127.0.0.1", port), timeout=2)
-    sock.sendall(request)
-    sock.settimeout(3)
-    data = b""
-    while True:
-        chunk = sock.recv(4096)
+import json
+import socket
+import sys
+
+PORT = int(${CONTROL_FORWARD_PORT})
+
+
+def encode_netstring(payload: bytes) -> bytes:
+    return str(len(payload)).encode("ascii") + b":" + payload + b","
+
+
+def read_exact(sock: socket.socket, n: int) -> bytes:
+    out = bytearray()
+    while len(out) < n:
+        chunk = sock.recv(n - len(out))
         if not chunk:
+            raise EOFError("eof while reading payload")
+        out += chunk
+    return bytes(out)
+
+
+def read_netstring(sock: socket.socket) -> bytes:
+    header = bytearray()
+    while True:
+        ch = sock.recv(1)
+        if not ch:
+            raise EOFError("eof while reading netstring header")
+        if ch == b":":
             break
-        data += chunk
-        if data.endswith(b"\0"):
-            break
-    sock.close()
-    if data.endswith(b"\0"):
-        data = data[:-1]
-    sys.exit(0 if data.decode("utf-8", errors="replace").strip() == expected else 1)
-except Exception:
-    sys.exit(1)
+        header += ch
+        if len(header) > 32:
+            raise ValueError("netstring header too long")
+    if not header:
+        raise ValueError("empty netstring length")
+    if header.startswith(b"0") and header != b"0":
+        raise ValueError("leading zero in netstring length")
+    length = int(header.decode("ascii"))
+    payload = read_exact(sock, length)
+    comma = read_exact(sock, 1)
+    if comma != b",":
+        raise ValueError("netstring missing trailing comma")
+    return payload
+
+
+req = {"id": 1, "cmd": "HELLO", "args": {}}
+payload = json.dumps(req, separators=(",", ":")).encode("utf-8")
+frame = encode_netstring(payload)
+
+sock = socket.create_connection(("127.0.0.1", PORT), timeout=2)
+sock.settimeout(3)
+sock.sendall(frame)
+resp = json.loads(read_netstring(sock))
+sock.close()
+
+if not resp.get("ok", False):
+    raise SystemExit(1)
+if resp.get("result", {}).get("protocol") != "control-vnext":
+    raise SystemExit(1)
+raise SystemExit(0)
 PY
     local status=$?
     adb_cmd forward --remove "tcp:${CONTROL_FORWARD_PORT}" >/dev/null 2>&1 || true
     return $status
-}
-
-request_dev_shutdown() {
-    control_socket_roundtrip "DEV.SHUTDOWN" "OK"
-}
-
-request_dev_hello() {
-    control_socket_roundtrip "HELLO" "OK"
 }
 
 clear_debugger_residue() {
@@ -160,11 +183,7 @@ CURRENT_PID=$(adb_su "pidof $PROC_NAME 2>/dev/null | awk '{print \$1}'" | tr -d 
 if [[ -n "$CURRENT_PID" ]]; then
     clear_debugger_residue "$CURRENT_PID"
 fi
-if request_dev_shutdown; then
-    echo "  已通过 DEV.SHUTDOWN 请求优雅退出"
-else
-    adb_su "killall $PROC_NAME 2>/dev/null || true"
-fi
+adb_su "killall $PROC_NAME 2>/dev/null || true"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
     if ! adb_su "pidof $PROC_NAME >/dev/null 2>&1" >/dev/null 2>&1; then
         break
@@ -237,7 +256,7 @@ else
 fi
 
 echo -n "  控制协议 HELLO: "
-if request_dev_hello; then
+if request_vnext_hello; then
     echo "✓ OK"
 else
     echo "❌ 未响应"

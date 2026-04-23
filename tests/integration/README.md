@@ -5,11 +5,21 @@
 ## 当前入口
 
 repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
-- `p1-baseline`（baseline integration；历史命名）
-- `p2-device-smoke`（platform smoke；历史命名）
-- `perf-network-load`（perf baseline；网络下载触发 NFQ/D 端采样）
+- `dx-smoke`（DX smoke 总入口；固定顺序 `platform -> control -> datapath`；vNext-only）
+- `dx-smoke-platform`（平台 gate；vNext-only）
+- `dx-smoke-control`（vNext 控制面基线；vNext-only）
+- `dx-smoke-datapath`（IP 模组 datapath 闭环：`--profile smoke`；vNext-only）
+- `perf-network-load`（diagnostics/perf baseline；暂未在本 change 收敛）
 
 对应到底层脚本仍然是：
+- `tests/integration/dx-smoke.sh`
+  - 总入口（只做聚合与顺序 gate）
+- `tests/integration/dx-smoke-platform.sh`
+  - 平台 gate：root/preflight、socket、`iptables/ip6tables`/`NFQUEUE`、SELinux/AVC、lifecycle restart
+- `tests/integration/dx-smoke-control.sh`
+  - wrapper：调用 `tests/integration/vnext-baseline.sh`
+- `tests/integration/dx-smoke-datapath.sh`
+  - wrapper：调用 `tests/device-modules/ip/run.sh --profile smoke`
 - `tests/integration/run.sh`
   - baseline integration（控制协议基线 / stream 健康检查 / `RESETALL` 基线）
   - 支持 `--group` / `--case` / `--skip-deploy` / `--serial`
@@ -27,11 +37,15 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
   - IP/L3-L4 真机测试模组（Tier-1 `netns+veth` 受控拓扑 + 可复现流量 + perf baseline 记录）
   - 说明与 run records：`docs/testing/ip/IP_TEST_MODULE.md`
   - 已知环境 bug：Pixel 6a 上 toybox `nc -L sh -c ...` 可能触发 `sock_ioctl` kernel panic（见 `docs/testing/ip/BUG_kernel_panic_sock_ioctl.md`）；模组默认避开该模式
+  - 说明：active DX smoke 走 `--profile smoke`（vNext-only）；旧 mixed smoke 入口已收敛到 `--profile legacy-smoke` 仅供按需回查
 - `tests/integration/full-smoke.sh`
   - 更广的控制协议冒烟回归
   - 不替代 rooted 真机平台 smoke
 - `tests/integration/lib.sh`
   - integration 公共辅助函数
+
+说明：
+- legacy 的 `p1/p2/ip-smoke` 入口不再注册到 `CTest/VS Code Testing`；它们作为迁移源按需回查时，只能通过脚本路径显式运行。
 
 ## 相关工具
 
@@ -48,20 +62,22 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
 
 ```bash
 # 首次使用先生成 repo-root CMake workspace
-cmake --preset dev-debug
+cmake --preset dev-debug -DSNORT_ENABLE_DEVICE_TESTS=ON
 
-# Baseline integration（repo-root CTest 入口；label `p1` 为历史命名）
-cd build-output/cmake/dev-debug && ctest --output-on-failure -L p1
+# DX smoke gate（repo-root CTest 入口）
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke$
 
-# Rooted platform smoke（repo-root CTest 入口；label `p2` 为历史命名）
-cd build-output/cmake/dev-debug && ctest --output-on-failure -L p2
+# 分段入口（按需）
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke-platform$
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke-control$
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke-datapath$
 
 # Perf baseline
 cd build-output/cmake/dev-debug && ctest --output-on-failure -L perf
 
 # 继续直接调用底层脚本也可以
 bash tests/integration/run.sh --skip-deploy --group core,config,app,streams
-bash tests/integration/device-smoke.sh --serial <serial>
+bash tests/integration/device-smoke.sh --serial <serial>   # 迁移源
 
 # 只跑 platform smoke 的 firewall / selinux
 bash tests/integration/device-smoke.sh --skip-deploy --group firewall,selinux

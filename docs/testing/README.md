@@ -76,16 +76,24 @@ cmake --build --preset host-coverage-clang --target snort-host-coverage
 ### Device / DX
 
 ```bash
-cmake --preset dev-debug
+cmake --preset dev-debug -DSNORT_ENABLE_DEVICE_TESTS=ON
 
-cd build-output/cmake/dev-debug && ctest --output-on-failure -L p1
-cd build-output/cmake/dev-debug && ctest --output-on-failure -L p2
-cd build-output/cmake/dev-debug && ctest --output-on-failure -L ip-smoke
+# 总入口（固定顺序：platform -> control -> datapath）
+cmake --build --preset dev-debug --target snort-dx-smoke
 
-bash tests/device-modules/ip/run.sh --profile smoke
+# 分段入口（需要时单跑）
+cmake --build --preset dev-debug --target snort-dx-smoke-platform
+cmake --build --preset dev-debug --target snort-dx-smoke-control
+cmake --build --preset dev-debug --target snort-dx-smoke-datapath
+
+# 或直接用 ctest：
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke$
 ```
 
-`tests/device-modules/ip/run.sh` 的 profile 可按需要替换为 `smoke / vnext / matrix / stress / perf / longrun`。
+说明：
+- `dx-smoke-control` 复用 `tests/integration/vnext-baseline.sh`（vNext-only）。
+- `dx-smoke-datapath` 调用 `tests/device-modules/ip/run.sh --profile smoke`（vNext-only）。
+- legacy 的 `p1/p2/ip-smoke` 入口不再注册到 `CTest/VS Code Testing`；仅作为迁移源按需回查（见 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`）。
 
 当前 `Device / DX` 重组讨论与后续 change 的上层边界，统一以 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md` 为准。
 
@@ -94,4 +102,4 @@ bash tests/device-modules/ip/run.sh --profile smoke
 - `docs/testing/IPRULES_DEVICE_VERIFICATION.md`
 - `docs/testing/ip/CONNTRACK_CT_TIER1_VERIFICATION.md`
 - `docs/testing/ip/BUG_kernel_panic_sock_ioctl.md`
-- `tests/TEST_COMPONENTS_MANIFESTO.md`
+- 归档参考：`docs/testing/archive/TEST_COMPONENTS_MANIFESTO.md`

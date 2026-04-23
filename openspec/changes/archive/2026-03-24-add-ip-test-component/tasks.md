@@ -5,7 +5,7 @@
 > - Deferred（迁移到 `update-post-domain-ip-fusion-rollup`）：Tier‑1 `longrun` 用例补齐 +（可选）CI/CTest `ip-smoke` hook。
 
 ## 0. OpenSpec docs
-- [x] 0.1 新增纲领：`tests/TEST_COMPONENTS_MANIFESTO.md`（包含 IP test component 的范围/原则/入口约定）
+- [x] 0.1 新增纲领：`docs/testing/archive/TEST_COMPONENTS_MANIFESTO.md`（包含 IP test component 的范围/原则/入口约定）
 - [x] 0.2 完成 `proposal.md/design.md/tasks.md` 与 capability spec delta（本目录下 `specs/`）
 - [x] 0.3 `openspec validate add-ip-test-component --strict` 通过
 

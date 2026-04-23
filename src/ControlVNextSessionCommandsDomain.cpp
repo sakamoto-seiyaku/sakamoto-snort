@@ -8,6 +8,7 @@
 #include <AppManager.hpp>
 #include <BlockingListManager.hpp>
 #include <DomainManager.hpp>
+#include <DomainPolicySources.hpp>
 #include <RulesManager.hpp>
 #include <ControlVNextSessionSelectors.hpp>
 #include <Settings.hpp>
@@ -220,6 +221,71 @@ std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView 
         (void)cmd;
         return std::nullopt;
     };
+
+    if (request.cmd == "DEV.DOMAIN.QUERY") {
+        if (const auto unknown = unknownArgsKey(args, {"app", "domain"}); unknown.has_value()) {
+            rapidjson::Document response = ControlVNext::makeErrorResponse(
+                id, "SYNTAX_ERROR", "unknown args key: " + std::string(*unknown));
+            return ResponsePlan{.response = std::move(response)};
+        }
+
+        const auto appIt = args.FindMember("app");
+        if (appIt == args.MemberEnd()) {
+            rapidjson::Document response =
+                ControlVNext::makeErrorResponse(id, "MISSING_ARGUMENT", "missing args.app");
+            return ResponsePlan{.response = std::move(response)};
+        }
+        if (!appIt->value.IsObject()) {
+            rapidjson::Document response =
+                ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "args.app must be object");
+            return ResponsePlan{.response = std::move(response)};
+        }
+        auto [app, selectorErr] = resolveAppSelector(id, appIt->value);
+        if (selectorErr.has_value()) {
+            return ResponsePlan{.response = std::move(*selectorErr)};
+        }
+
+        const auto domIt = args.FindMember("domain");
+        if (domIt == args.MemberEnd()) {
+            rapidjson::Document response =
+                ControlVNext::makeErrorResponse(id, "MISSING_ARGUMENT", "missing args.domain");
+            return ResponsePlan{.response = std::move(response)};
+        }
+        if (!domIt->value.IsString()) {
+            rapidjson::Document response =
+                ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "args.domain must be string");
+            return ResponsePlan{.response = std::move(response)};
+        }
+        std::string domain(domIt->value.GetString(), domIt->value.GetStringLength());
+        std::string reason;
+        if (!isValidDomainString(domain, reason)) {
+            rapidjson::Document response =
+                ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", reason);
+            return ResponsePlan{.response = std::move(response)};
+        }
+
+        const auto dom = domManager.make(std::move(domain));
+        const auto bcs = app->blockedWithSource(dom);
+        const bool blocked = bcs.blocked;
+
+        if (settings.blockEnabled()) {
+            domManager.observeDomainPolicySource(bcs.policySource, blocked);
+            app->observeDomainPolicySource(bcs.policySource, blocked);
+        }
+
+        rapidjson::Document result(rapidjson::kObjectType);
+        auto &alloc = result.GetAllocator();
+        result.AddMember("uid", app->uid(), alloc);
+        result.AddMember("userId", app->userId(), alloc);
+        const std::string canonical = app->name();
+        result.AddMember("app", makeString(canonical, alloc), alloc);
+        result.AddMember("domain", makeString(dom->name(), alloc), alloc);
+        result.AddMember("blocked", blocked, alloc);
+        result.AddMember("policySource", makeString(domainPolicySourceStr(bcs.policySource), alloc), alloc);
+
+        rapidjson::Document response = ControlVNext::makeOkResponse(id, &result);
+        return ResponsePlan{.response = std::move(response)};
+    }
 
     if (request.cmd == "DOMAINRULES.GET") {
         if (auto err = requireEmptyArgs("DOMAINRULES.GET"); err.has_value()) {

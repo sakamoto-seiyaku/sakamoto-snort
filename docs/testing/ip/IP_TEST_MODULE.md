@@ -33,7 +33,7 @@ IPTEST_LONGRUN_SECONDS=600 \
 ```
 
 说明：
-- `tests/device-modules/ip/` 是“真机测试模组”，不是 unit/integration 的替代品（见 `tests/TEST_COMPONENTS_MANIFESTO.md`）。
+- `tests/device-modules/ip/` 是“真机测试模组”，不是 unit/integration 的替代品（历史纲领见 `docs/testing/archive/TEST_COMPONENTS_MANIFESTO.md`）。
 - 结果记录默认写到 `tests/device-modules/ip/records/`（该目录已被 `tests/device-modules/ip/.gitignore` 排除，不进 git）。
   - `--profile longrun` 产物目录形如 `tests/device-modules/ip/records/ip-longrun-<ts>_<serial>/`，包含 `meta.txt`、`longrun.log`、`snort_proc_before/after/delta` 与 `traffic.txt`。
 - 建议频率（口径保守，先不把 perf 变成 hard gate）：

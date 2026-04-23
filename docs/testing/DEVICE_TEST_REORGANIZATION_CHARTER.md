@@ -138,15 +138,17 @@
 
 | 当前入口 | 当前覆盖 | 未来归类 | 当前判断 |
 | --- | --- | --- | --- |
-| `tests/integration/vnext-baseline.sh` | `vNext` 控制面基线；含 domain surface、metrics surface、IPRULES vNext surface | `smoke` | 这是未来 active `smoke` 的主骨架 |
-| `tests/integration/device-smoke.sh` | 真机平台 gate：root、socket、netd、iptables/NFQUEUE、SELinux、lifecycle；并含最小 `vNext` domain surface | `smoke` | 保留在主线合理，不急于过度拆分 |
-| `tests/device-modules/ip/run.sh --profile vnext` | IP `vNext` 最小真机功能闭环 | `smoke` | 应并入 active `smoke` 主线 |
+| `dx-smoke*`（`CTest` 主入口组） | `vNext` DX smoke gate：`dx-smoke`（`platform -> control -> datapath`）+ 三段子入口；区分 `PASS/FAIL/BLOCKED` | `smoke` | 已收敛为 active `smoke` 主入口组（对外只暴露这一组） |
+| `tests/integration/dx-smoke-platform.sh` | 平台 gate：root/preflight、socket、iptables/NFQUEUE、SELinux/AVC、lifecycle restart | `smoke` | `dx-smoke-platform` 的实现脚本（vNext-only） |
+| `tests/integration/vnext-baseline.sh` | `vNext` 控制面基线；含 domain surface、metrics surface、IPRULES vNext surface | `smoke` | `dx-smoke-control` 的实现脚本（不单独暴露为 `CTest` 主入口） |
+| `tests/device-modules/ip/run.sh --profile smoke` | IP vNext datapath smoke profile（Tier-1 真实流量下 allow/block/would-match overlay + IFACE_BLOCK + BLOCK=0 gating；含 reasons/stats 断言） | `smoke` | `dx-smoke-datapath` 的实现 runner（active；vNext-only） |
+| `tests/device-modules/ip/run.sh --profile legacy-smoke` | 旧 mixed smoke（legacy iprules smoke + native replay poc） | 迁移源 | 仅回查；不进入 `dx-smoke*` 默认路径 |
+| `tests/integration/device-smoke.sh` | rooted 真机平台 smoke / compatibility（legacy 混合职责） | 迁移源 | 仅回查；不注册到 `CTest/VS Code Testing` |
 | `tests/integration/perf-network-load.sh` | 真机下载负载下的 `METRICS.PERF` / latency 观测 | `diagnostics` | 作为 diagnostics 主入口之一是合理的 |
 | `tests/device-modules/ip/run.sh --profile perf|stress|longrun` | IP 受控拓扑 perf/stress/longrun | `diagnostics` | 应留在 diagnostics，不进入主 gate |
-| `tests/integration/run.sh` | legacy baseline；含 core/config/app/streams/reset，以及 domain sources 覆盖 | 迁移源 / `archive` 候选 | 内容有价值，但不应继续作为未来主入口 |
-| `tests/integration/iprules.sh` | legacy `IPRULES v1` 基础验收 | 迁移源 / `archive` 候选 | 应被 `vNext` 的 IP smoke 吸收 |
+| `tests/integration/run.sh` | legacy baseline；含 core/config/app/streams/reset，以及 domain sources 覆盖 | 迁移源 / `archive` 候选 | 主 gate 已由 `dx-smoke-control` 接住；脚本仅回查 |
+| `tests/integration/iprules.sh` | legacy `IPRULES v1` 基础验收 | 迁移源 / `archive` 候选 | 主 gate 已由 `dx-smoke-control/dx-smoke-datapath` 接住；脚本仅回查 |
 | `tests/integration/iprules-device-matrix.sh` | legacy `IPRULES v1` 真机矩阵 | 迁移源 / `archive` 候选 | 继续保留参考价值，但不宜当 active 主线 |
-| `tests/device-modules/ip/run.sh --profile smoke` | 当前混合 `iprules smoke + native replay poc` | 待拆 / 待收敛 | 不应直接等同未来 active `smoke` |
 | `tests/integration/full-smoke.sh` | 更广的 legacy 控制协议冒烟回归 | 迁移源 / `archive` 候选 | 用于捞缺口，不继续作为主线入口 |
 
 ## 5. 当前阶段的迁移重点
@@ -155,9 +157,10 @@
 
 ### 5.1 把 active `smoke` 收敛到 `vNext`
 
-- 未来 active `smoke` 应以 `tests/integration/vnext-baseline.sh` 为主骨架
-- `tests/integration/device-smoke.sh` 继续承担平台 gate
-- IP 真机最小闭环应由 `tests/device-modules/ip/run.sh --profile vnext` 纳入主线
+- active `smoke` 对外入口以 `dx-smoke` 为总入口（`platform -> control -> datapath`）
+- `dx-smoke-control` 复用 `tests/integration/vnext-baseline.sh`（实现脚本，不直接暴露为 `CTest` 主入口）
+- `dx-smoke-platform` 由 `tests/integration/dx-smoke-platform.sh` 承担（`tests/integration/device-smoke.sh` 作为迁移源回查）
+- `dx-smoke-datapath` 由 `tests/device-modules/ip/run.sh --profile smoke` 承担（实现 runner，不直接暴露为 `CTest` 主入口）
 
 ### 5.2 把仍有价值的 domain 覆盖迁入 active `smoke`
 
@@ -220,14 +223,14 @@
   - 顺序执行 `platform -> control -> datapath`
   - 其通过含义是：当前真机 `vNext` 主线具备最小可继续集成的功能闭环
 - `dx-smoke-platform`
-  - 对应当前 `tests/integration/device-smoke.sh`
+  - 对应当前 `tests/integration/dx-smoke-platform.sh`
   - 负责真机平台 gate：root、socket、netd、iptables/NFQUEUE、SELinux、lifecycle 等
 - `dx-smoke-control`
-  - 对应当前 `tests/integration/vnext-baseline.sh`
+  - 对应当前 `tests/integration/vnext-baseline.sh`（由 `tests/integration/dx-smoke-control.sh` wrapper 调用）
   - 负责 `vNext` 控制面与返回面基线
 - `dx-smoke-datapath`
-  - 对应当前 `tests/device-modules/ip/run.sh --profile vnext`
-  - 负责真实 datapath / IP `vNext` 最小功能闭环
+  - 对应当前 `tests/device-modules/ip/run.sh --profile smoke`（由 `tests/integration/dx-smoke-datapath.sh` wrapper 调用）
+  - 负责真实 datapath / IP `vNext` smoke gate
 
 上述名字的约束如下：
 
@@ -289,6 +292,7 @@
 
 - 迁移源只供按需回查，不作为用户日常运行入口
 - 迁移源必须在纲领 / 索引中可见，便于追踪迁移状态
+- 迁移源不得注册到 `CTest/VS Code Testing`（日常 `ctest -N` 不可见）
 - 迁移源不得进入：
   - `dx-smoke`
   - 默认 diagnostics 入口
@@ -300,11 +304,27 @@
 
 | 当前入口 | 当前状态 | 目标归属 | 迁移结论 | 备注 |
 | --- | --- | --- | --- | --- |
-| `tests/integration/run.sh` | `迁移源` | `dx-smoke-control` | `待补 vNext` | 仍承载部分 legacy baseline / domain 责任，当前不能归档 |
-| `tests/integration/iprules.sh` | `迁移源` | `dx-smoke-datapath` | `待补 vNext` | 现有 IP 真机责任尚未被 `vNext` datapath 主线完整接住 |
+| `tests/integration/device-smoke.sh` | `迁移源` | `dx-smoke-platform` | `已由新入口接住主 gate` | 作为 compatibility/回查入口保留；不注册到 `CTest/VS Code Testing` |
+| `tests/integration/run.sh` | `迁移源` | `dx-smoke-control` | `已接住/仅回查` | legacy baseline 回查入口；不再进入 active `dx-smoke*` 默认路径 |
+| `tests/integration/iprules.sh` | `迁移源` | `dx-smoke-control + dx-smoke-datapath` | `已接住/仅回查` | legacy IPRULES v1 回查入口；更细的 matrix/persistence/对照仍可在此回查 |
 | `tests/integration/iprules-device-matrix.sh` | `迁移源` | `diagnostics` / 后续专项迁移 | `待补 vNext` | 当前仍保留真机矩阵参考价值，不能直接归档 |
 | `tests/integration/full-smoke.sh` | `迁移源` | `dx-smoke-control` | `迁移后再评估 archive` | 可作为 legacy 广覆盖回查入口，但不再作为未来主线入口 |
-| `tests/device-modules/ip/run.sh --profile smoke` | `迁移源` | `dx-smoke-datapath` | `待收敛` | 当前混合 `iprules smoke + native replay poc`，不直接等同未来 active `smoke` |
+| `tests/device-modules/ip/run.sh --profile legacy-smoke` | `迁移源` | `dx-smoke-datapath` | `仅回查` | 旧 mixed smoke 入口；active smoke 已收敛为 `--profile smoke`（vNext-only） |
+
+### 6.3 smoke 不纳入项（避免误判为遗漏）
+
+以下入口/能力**不属于** active `dx-smoke`（主 gate），而是 diagnostics 或迁移源回查：
+
+- diagnostics（perf/stress/longrun/full matrix）
+  - `tests/integration/perf-network-load.sh`
+  - `tests/device-modules/ip/run.sh --profile perf|stress|longrun|matrix`
+  - `tests/integration/iprules-device-matrix.sh`
+- 迁移源回查（legacy 对照/历史回归）
+  - `tests/integration/run.sh`
+  - `tests/integration/iprules.sh`
+  - `tests/integration/full-smoke.sh`
+  - `tests/integration/device-smoke.sh`
+  - `tests/device-modules/ip/run.sh --profile legacy-smoke`
 
 若后续目录重组成立，当前建议方向是：
 

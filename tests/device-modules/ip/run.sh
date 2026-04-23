@@ -19,7 +19,7 @@ show_help() {
   --serial <serial>        指定目标真机 serial（等价于设置 ADB_SERIAL）
   --skip-deploy            跳过 deploy，复用当前真机上的守护进程
   --cleanup-forward        结束后移除 adb forward
-  --profile <name>         smoke|vnext|perf|matrix|stress|longrun（默认: smoke；后 3 者当前为 staged，缺 case 时会 SKIP）
+  --profile <name>         smoke|legacy-smoke|perf|matrix|stress|longrun（默认: smoke；后 3 者当前为 staged，缺 case 时会 SKIP）
   --group <token>          只运行指定 group（按 case 文件名推导，如 iprules/perf）
   --case <token>           只运行指定 case（按 case 文件名子串匹配）
   -h, --help               显示帮助
@@ -100,13 +100,13 @@ collect_cases_for_profile() {
 
   case "$profile" in
     smoke)
+      out+=("$case_dir/14_iprules_vnext_smoke.sh")
+      out+=("$case_dir/16_iprules_vnext_datapath_smoke.sh")
+      ;;
+    legacy-smoke)
       out+=("$case_dir/00_env.sh")
       out+=("$case_dir/10_iprules_smoke.sh")
       out+=("$case_dir/12_native_replay_poc.sh")
-      ;;
-    vnext)
-      out+=("$case_dir/00_env.sh")
-      out+=("$case_dir/14_iprules_vnext_smoke.sh")
       ;;
     matrix)
       out+=("$case_dir/00_env.sh")
@@ -165,9 +165,24 @@ main() {
 
   # Preflight once (forward + HELLO). Individual cases still do their own baseline resets.
   source "$IPMOD_DIR/lib.sh"
-  init_test_env
+  if [[ "$PROFILE" == "smoke" ]]; then
+    if ! device_preflight; then
+      echo "BLOCKED: device_preflight failed (need adb + rooted device)" >&2
+      exit 77
+    fi
 
-  local passed=0 failed=0 skipped=0
+    VNEXT_PORT="${VNEXT_PORT:-60607}"
+    if ! check_control_vnext_forward "$VNEXT_PORT"; then
+      setup_control_vnext_forward "$VNEXT_PORT" || {
+        echo "BLOCKED: setup_control_vnext_forward failed (port=$VNEXT_PORT)" >&2
+        exit 77
+      }
+    fi
+  else
+    init_test_env
+  fi
+
+  local passed=0 failed=0 skipped=0 blocked=0
 
   mapfile -t cases < <(collect_cases_for_profile "$PROFILE")
   local c
@@ -185,6 +200,9 @@ main() {
       ((passed += 1))
     elif [[ $rc -eq 10 ]]; then
       ((skipped += 1))
+    elif [[ $rc -eq 77 ]]; then
+      ((blocked += 1))
+      break
     else
       ((failed += 1))
     fi
@@ -192,14 +210,21 @@ main() {
 
   echo ""
   echo "== SUMMARY =="
-  echo "passed=$passed failed=$failed skipped=$skipped"
+  echo "passed=$passed failed=$failed skipped=$skipped blocked=$blocked"
 
   if [[ $CLEANUP_FORWARD -eq 1 ]]; then
-    remove_control_forward "${SNORT_PORT:-60606}" >/dev/null 2>&1 || true
+    if [[ "$PROFILE" == "smoke" ]]; then
+      remove_control_vnext_forward "${VNEXT_PORT:-60607}" >/dev/null 2>&1 || true
+    else
+      remove_control_forward "${SNORT_PORT:-60606}" >/dev/null 2>&1 || true
+    fi
   fi
 
   if [[ $failed -ne 0 ]]; then
     return 1
+  fi
+  if [[ $blocked -ne 0 ]]; then
+    return 77
   fi
   return 0
 }

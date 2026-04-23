@@ -14,39 +14,33 @@ function(add_sucre_snort_shell_test name script labels)
     PROPERTIES
       LABELS "${labels}"
       SKIP_REGULAR_EXPRESSION "${SUCRE_SNORT_SKIP_REGEX_COMMON}"
+      SKIP_RETURN_CODE 77
       WORKING_DIRECTORY "${SUCRE_SNORT_REPO_ROOT}"
   )
 endfunction()
 
 add_sucre_snort_shell_test(
-  p1-baseline
-  "${SUCRE_SNORT_INTEGRATION_ROOT}/run.sh"
-  "p1;device;root-required;baseline"
+  dx-smoke
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke.sh"
+  "dx-smoke;device;root-required;smoke"
 )
 
 add_sucre_snort_shell_test(
-  p1-vnext-baseline
-  "${SUCRE_SNORT_INTEGRATION_ROOT}/vnext-baseline.sh"
-  "p1;device;root-required;baseline;vnext"
+  dx-smoke-platform
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke-platform.sh"
+  "dx-smoke-platform;device;root-required;smoke"
 )
 
 add_sucre_snort_shell_test(
-  p1-iprules
-  "${SUCRE_SNORT_INTEGRATION_ROOT}/iprules.sh"
-  "p1;device;root-required;iprules"
+  dx-smoke-control
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke-control.sh"
+  "dx-smoke-control;device;root-required;smoke"
 )
 
 add_sucre_snort_shell_test(
-  p2-device-smoke
-  "${SUCRE_SNORT_INTEGRATION_ROOT}/device-smoke.sh"
-  "p2;device;root-required;smoke"
-)
-
-add_sucre_snort_shell_test(
-  ip-smoke
-  "${SUCRE_SNORT_REPO_ROOT}/tests/device-modules/ip/run.sh"
-  "device;root-required;ip-smoke"
-  --profile smoke --case iprules_smoke
+  dx-smoke-datapath
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke-datapath.sh"
+  "dx-smoke-datapath;device;root-required;smoke"
 )
 
 add_sucre_snort_shell_test(
@@ -56,34 +50,44 @@ add_sucre_snort_shell_test(
 )
 
 add_custom_target(
-  snort-p1-tests
-  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L p1
+  snort-dx-smoke
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^dx-smoke$
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  COMMENT "Run sucre-snort real-device baseline lane via CTest"
+  COMMENT "Run sucre-snort DX smoke gate via CTest"
   USES_TERMINAL
   VERBATIM
 )
 
 add_custom_target(
-  snort-p2-tests
-  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L p2
+  snort-dx-smoke-platform
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^dx-smoke-platform$
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  COMMENT "Run sucre-snort real-device platform smoke lane via CTest"
+  COMMENT "Run sucre-snort DX smoke platform gate via CTest"
   USES_TERMINAL
   VERBATIM
 )
 
 add_custom_target(
-  snort-ip-smoke-tests
-  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L ip-smoke
+  snort-dx-smoke-control
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^dx-smoke-control$
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  COMMENT "Run sucre-snort IP device-module smoke via CTest"
+  COMMENT "Run sucre-snort DX smoke control gate via CTest"
+  USES_TERMINAL
+  VERBATIM
+)
+
+add_custom_target(
+  snort-dx-smoke-datapath
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^dx-smoke-datapath$
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+  COMMENT "Run sucre-snort DX smoke datapath gate via CTest"
   USES_TERMINAL
   VERBATIM
 )
 
 if(TARGET sucre-snort-ctl)
-  add_dependencies(snort-p1-tests sucre-snort-ctl)
-  add_dependencies(snort-p2-tests sucre-snort-ctl)
-  add_dependencies(snort-ip-smoke-tests sucre-snort-ctl)
+  add_dependencies(snort-dx-smoke sucre-snort-ctl)
+  add_dependencies(snort-dx-smoke-platform sucre-snort-ctl)
+  add_dependencies(snort-dx-smoke-control sucre-snort-ctl)
+  add_dependencies(snort-dx-smoke-datapath sucre-snort-ctl)
 endif()

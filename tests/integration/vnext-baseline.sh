@@ -332,10 +332,10 @@ main() {
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
 
-    device_preflight || exit 1
+    device_preflight || exit 77
     echo "目标真机: $(adb_target_desc)"
 
-    SNORT_CTL="$(find_snort_ctl)" || exit 1
+    SNORT_CTL="$(find_snort_ctl)" || exit 77
     echo "sucre-snort-ctl: $SNORT_CTL"
 
     local had_telnet
@@ -442,7 +442,15 @@ import os, json
 j = json.loads(os.environ["DEVICE_GET_JSON"])
 print(j["result"]["values"]["perfmetrics.enabled"])
 PY
-) || perf_orig=0
+    ) || perf_orig=0
+
+    local block_orig
+    block_orig=$(DEVICE_GET_JSON="$device_get" python3 - <<'PY'
+import os, json
+j = json.loads(os.environ["DEVICE_GET_JSON"])
+print(j["result"]["values"]["block.enabled"])
+PY
+    ) || block_orig=0
 
     device_set=$(DEVICE_GET_JSON="$device_get" python3 - <<'PY'
 import os, json
@@ -555,21 +563,6 @@ PY
     assert_json_pred "VNT-18 DOMAINPOLICY.GET device contains ruleId" "$pol_get" \
         "import sys,json; j=json.load(sys.stdin); ids=j['result']['policy']['allow']['ruleIds']; assert ${rid0} in ids"
 
-    # Optional: stable on-device verification via legacy DEV.DNSQUERY (no network needed).
-    if ! check_control_forward "$SNORT_PORT"; then
-        log_info "设置 legacy control adb forward..."
-        setup_control_forward "$SNORT_PORT"
-    fi
-
-    local devq_allow devq_block
-    devq_allow=$(send_cmd "DEV.DNSQUERY 0 example.com" 5) || true
-    assert_json_pred "VNT-18c DEV.DNSQUERY sees allow rule effect" "$devq_allow" \
-        'import sys,json; j=json.load(sys.stdin); assert j["domain"]=="example.com"; assert j["blocked"] is False'
-
-    devq_block=$(send_cmd "DEV.DNSQUERY 0 bad.com" 5) || true
-    assert_json_pred "VNT-18d DEV.DNSQUERY sees block domain effect" "$devq_block" \
-        'import sys,json; j=json.load(sys.stdin); assert j["domain"]=="bad.com"; assert j["blocked"] is True'
-
     local list_id list_unknown lists_apply lists_get imp lists_get2
     list_id="$(python3 - <<'PY'
 import uuid
@@ -632,6 +625,82 @@ PY
     m_sources=$(ctl_cmd METRICS.GET '{"name":"domainSources"}' || true)
     assert_json_pred "VNT-22i METRICS.GET domainSources has MASK_FALLBACK" "$m_sources" \
         'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; s=j["result"]["sources"]; assert "MASK_FALLBACK" in s; assert set(["allow","block"]).issubset(s["MASK_FALLBACK"].keys())'
+
+    log_section "DomainSources Behavior"
+
+    if [[ -z "$app_uid" ]]; then
+        log_skip "VNT-22i2 domainSources behavior skipped (no apps)"
+    else
+        local tracked_orig
+        tracked_orig=$(ctl_cmd CONFIG.GET "{\"scope\":\"app\",\"app\":{\"uid\":${app_uid}},\"keys\":[\"tracked\"]}" 2>/dev/null || true)
+        tracked_orig=$(TRACKED_JSON="$tracked_orig" python3 - <<'PY'
+import os, json
+j = json.loads(os.environ["TRACKED_JSON"] or "{}")
+print(j.get("result", {}).get("values", {}).get("tracked", 0))
+PY
+        ) || tracked_orig=0
+        if [[ "$tracked_orig" != "0" && "$tracked_orig" != "1" ]]; then
+            tracked_orig=0
+        fi
+
+        assert_ctl_ok "VNT-22i3 METRICS.RESET domainSources (device)" \
+            ctl_cmd METRICS.RESET '{"name":"domainSources"}'
+        local sources_zero
+        sources_zero=$(ctl_cmd METRICS.GET '{"name":"domainSources"}' || true)
+        assert_json_pred "VNT-22i4 domainSources zero after reset (device)" "$sources_zero" \
+            'import sys,json; j=json.load(sys.stdin); s=j["result"]["sources"]; total=sum(int(v.get("allow",0))+int(v.get("block",0)) for v in s.values()); assert total==0'
+
+        assert_ctl_ok "VNT-22i5 SET block.enabled=0 (gate domainSources)" \
+            ctl_cmd CONFIG.SET '{"scope":"device","set":{"block.enabled":0}}'
+
+        local dq_gate
+        dq_gate=$(ctl_cmd DEV.DOMAIN.QUERY "{\"app\":{\"uid\":${app_uid}},\"domain\":\"bad.com\"}" 2>/dev/null || true)
+        assert_json_pred "VNT-22i6 DEV.DOMAIN.QUERY returns shape" "$dq_gate" \
+            'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; r=j["result"]; assert isinstance(r["uid"], int); assert isinstance(r["domain"], str); assert isinstance(r["blocked"], bool); assert isinstance(r["policySource"], str)'
+
+        local sources_gated
+        sources_gated=$(ctl_cmd METRICS.GET '{"name":"domainSources"}' || true)
+        assert_json_pred "VNT-22i7 domainSources gated by block.enabled=0" "$sources_gated" \
+            'import sys,json; j=json.load(sys.stdin); s=j["result"]["sources"]; total=sum(int(v.get("allow",0))+int(v.get("block",0)) for v in s.values()); assert total==0'
+
+        assert_ctl_ok "VNT-22i8 SET block.enabled=1 (enable domainSources)" \
+            ctl_cmd CONFIG.SET '{"scope":"device","set":{"block.enabled":1}}'
+
+        assert_ctl_ok "VNT-22i9 METRICS.RESET domainSources (device)" \
+            ctl_cmd METRICS.RESET '{"name":"domainSources"}'
+
+        local dq_grow
+        dq_grow=$(ctl_cmd DEV.DOMAIN.QUERY "{\"app\":{\"uid\":${app_uid}},\"domain\":\"bad.com\"}" 2>/dev/null || true)
+        assert_json_pred "VNT-22j0 DEV.DOMAIN.QUERY ok (growth)" "$dq_grow" \
+            'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
+
+        local sources_grow
+        sources_grow=$(ctl_cmd METRICS.GET '{"name":"domainSources"}' || true)
+        assert_json_pred "VNT-22j1 domainSources grows under block.enabled=1" "$sources_grow" \
+            'import sys,json; j=json.load(sys.stdin); s=j["result"]["sources"]; total=sum(int(v.get("allow",0))+int(v.get("block",0)) for v in s.values()); assert total>=1'
+
+        assert_ctl_ok "VNT-22j2 SET tracked=0 (per-app domainSources should still grow)" \
+            ctl_cmd CONFIG.SET "{\"scope\":\"app\",\"app\":{\"uid\":${app_uid}},\"set\":{\"tracked\":0}}"
+
+        assert_ctl_ok "VNT-22j3 METRICS.RESET domainSources (app)" \
+            ctl_cmd METRICS.RESET "{\"name\":\"domainSources\",\"app\":{\"uid\":${app_uid}}}"
+
+        local dq_app
+        dq_app=$(ctl_cmd DEV.DOMAIN.QUERY "{\"app\":{\"uid\":${app_uid}},\"domain\":\"bad.com\"}" 2>/dev/null || true)
+        assert_json_pred "VNT-22j4 DEV.DOMAIN.QUERY ok (app)" "$dq_app" \
+            'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
+
+        local sources_app
+        sources_app=$(ctl_cmd METRICS.GET "{\"name\":\"domainSources\",\"app\":{\"uid\":${app_uid}}}" || true)
+        assert_json_pred "VNT-22j5 domainSources(app) grows even when tracked=0" "$sources_app" \
+            'import sys,json; j=json.load(sys.stdin); s=j["result"]["sources"]; total=sum(int(v.get("allow",0))+int(v.get("block",0)) for v in s.values()); assert total>=1'
+
+        assert_ctl_ok "VNT-22j6 restore tracked" \
+            ctl_cmd CONFIG.SET "{\"scope\":\"app\",\"app\":{\"uid\":${app_uid}},\"set\":{\"tracked\":${tracked_orig}}}"
+
+        assert_ctl_ok "VNT-22j7 restore block.enabled" \
+            ctl_cmd CONFIG.SET "{\"scope\":\"device\",\"set\":{\"block.enabled\":${block_orig}}}"
+    fi
 
     m_traffic=$(ctl_cmd METRICS.GET '{"name":"traffic"}' || true)
     assert_json_pred "VNT-22j METRICS.GET traffic has required keys" "$m_traffic" \

@@ -2,18 +2,54 @@
 
 NATIVE_LINEAGE_ADB="${LINEAGE_ROOT:-$HOME/android/lineage}/prebuilts/runtime/adb"
 
-if [[ -n "${ADB:-}" ]]; then
-    ADB_BIN="$ADB"
-elif [[ -x "$NATIVE_LINEAGE_ADB" ]]; then
-    ADB_BIN="$NATIVE_LINEAGE_ADB"
-elif command -v adb >/dev/null 2>&1; then
-    ADB_BIN="$(command -v adb)"
-elif command -v adb.exe >/dev/null 2>&1; then
-    ADB_BIN="$(command -v adb.exe)"
-else
-    echo "❌ 未找到 adb/adb.exe" >&2
+pick_adb_bin() {
+    local -a candidates=()
+    local -A seen=()
+
+    append_candidate() {
+        local c="$1"
+        if [[ -z "$c" || ! -x "$c" ]]; then
+            return 0
+        fi
+        if [[ -n "${seen["$c"]:-}" ]]; then
+            return 0
+        fi
+        seen["$c"]=1
+        candidates+=("$c")
+        return 0
+    }
+
+    if [[ -n "${ADB:-}" ]]; then
+        append_candidate "$ADB"
+    fi
+
+    local IFS=':'
+    local dir
+    for dir in $PATH; do
+        if [[ -n "$dir" ]]; then
+            append_candidate "$dir/adb"
+            append_candidate "$dir/adb.exe"
+        fi
+    done
+
+    if [[ -x "$NATIVE_LINEAGE_ADB" ]]; then
+        append_candidate "$NATIVE_LINEAGE_ADB"
+    fi
+
+    local c
+    for c in "${candidates[@]}"; do
+        if "$c" devices 2>&1 | tr -d '\r' | grep -q '^List of devices attached$'; then
+            printf '%s\n' "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ADB_BIN="$(pick_adb_bin)" || {
+    echo "❌ 未找到可用的 adb/adb.exe" >&2
     return 1 2>/dev/null || exit 1
-fi
+}
 
 ADB="${ADB_BIN}"
 ADB_SERIAL="${ADB_SERIAL:-${ANDROID_SERIAL:-}}"

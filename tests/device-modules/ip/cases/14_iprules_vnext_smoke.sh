@@ -61,23 +61,41 @@ assert_json_pred() {
   return 1
 }
 
-if ! init_test_env; then
-  exit 2
-fi
+device_preflight || {
+  echo "BLOCKED: device_preflight failed (need adb + rooted device)" >&2
+  exit 77
+}
 
 if ! check_control_vnext_forward "$VNEXT_PORT"; then
   log_info "设置 vNext adb forward..."
-  setup_control_vnext_forward "$VNEXT_PORT"
+  setup_control_vnext_forward "$VNEXT_PORT" || {
+    echo "BLOCKED: setup_control_vnext_forward failed (port=$VNEXT_PORT)" >&2
+    exit 77
+  }
 fi
 
-SNORT_CTL="$(find_snort_ctl)" || exit 2
+SNORT_CTL="$(find_snort_ctl)" || exit 77
 log_info "sucre-snort-ctl: $SNORT_CTL"
 
-hello="$(ctl_cmd HELLO 2>/dev/null || true)"
+set +e
+hello="$(ctl_cmd HELLO 2>/dev/null)"
+st=$?
+set -e
+if [[ $st -ne 0 ]]; then
+  echo "BLOCKED: vNext control HELLO failed (port=$VNEXT_PORT)" >&2
+  exit 77
+fi
 assert_json_pred "VNX-01 HELLO ok" "$hello" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert j["result"]["protocol"]=="control-vnext"'
 
-apps="$(ctl_cmd APPS.LIST '{"query":"com.","limit":50}' 2>/dev/null || true)"
+set +e
+apps="$(ctl_cmd APPS.LIST '{"query":"com.","limit":50}' 2>/dev/null)"
+st=$?
+set -e
+if [[ $st -ne 0 ]]; then
+  echo "BLOCKED: vNext APPS.LIST failed (port=$VNEXT_PORT)" >&2
+  exit 77
+fi
 app_uid="$(APPS_JSON="$apps" python3 - <<'PY'
 import os, json
 j = json.loads(os.environ["APPS_JSON"])
@@ -87,27 +105,54 @@ PY
 )" || app_uid=""
 
 if [[ -z "$app_uid" ]]; then
-  echo "SKIP: no apps found for selector" >&2
-  exit 10
+  echo "BLOCKED: no apps found for selector (APPS.LIST empty)" >&2
+  exit 77
 fi
 log_info "target uid=$app_uid"
 
-resetall="$(ctl_cmd RESETALL 2>/dev/null || true)"
+set +e
+resetall="$(ctl_cmd RESETALL 2>/dev/null)"
+st=$?
+set -e
+if [[ $st -ne 0 ]]; then
+  echo "BLOCKED: vNext RESETALL failed (port=$VNEXT_PORT)" >&2
+  exit 77
+fi
 assert_json_pred "VNX-02 RESETALL ok" "$resetall" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
 
-preflight="$(ctl_cmd IPRULES.PREFLIGHT 2>/dev/null || true)"
+set +e
+preflight="$(ctl_cmd IPRULES.PREFLIGHT 2>/dev/null)"
+st=$?
+set -e
+if [[ $st -ne 0 ]]; then
+  echo "BLOCKED: vNext IPRULES.PREFLIGHT failed (port=$VNEXT_PORT)" >&2
+  exit 77
+fi
 assert_json_pred "VNX-03 IPRULES.PREFLIGHT shape" "$preflight" \
   'import sys,json; j=json.load(sys.stdin); r=j["result"]; assert j["ok"] is True; assert "summary" in r and "limits" in r and "warnings" in r and "violations" in r'
 
-apply="$(ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"g1:r1\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"1.2.3.4/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r2\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2.3.4.5/24\",\"sport\":\"any\",\"dport\":\"443\"}]}" 2>/dev/null || true)"
+set +e
+apply="$(ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"g1:r1\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"1.2.3.4/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r2\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2.3.4.5/24\",\"sport\":\"any\",\"dport\":\"443\"}]}" 2>/dev/null)"
+st=$?
+set -e
+if [[ $st -ne 0 ]]; then
+  echo "BLOCKED: vNext IPRULES.APPLY failed (port=$VNEXT_PORT)" >&2
+  exit 77
+fi
 assert_json_pred "VNX-04 IPRULES.APPLY returns mapping" "$apply" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; rules=j["result"]["rules"]; assert len(rules)==2; assert set([r["clientRuleId"] for r in rules])==set(["g1:r1","g1:r2"]); assert all(isinstance(r["ruleId"], int) for r in rules); assert all(isinstance(r["matchKey"], str) for r in rules)'
 
-printed="$(ctl_cmd IPRULES.PRINT "{\"app\":{\"uid\":${app_uid}}}" 2>/dev/null || true)"
+set +e
+printed="$(ctl_cmd IPRULES.PRINT "{\"app\":{\"uid\":${app_uid}}}" 2>/dev/null)"
+st=$?
+set -e
+if [[ $st -ne 0 ]]; then
+  echo "BLOCKED: vNext IPRULES.PRINT failed (port=$VNEXT_PORT)" >&2
+  exit 77
+fi
 assert_json_pred "VNX-05 IPRULES.PRINT sorted + canonical CIDR" "$printed" \
   'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; ids=[r["ruleId"] for r in rules]; assert len(rules)==2; assert ids==sorted(ids); assert any(r["dst"]=="1.2.3.0/24" for r in rules); assert any("dst=1.2.3.0/24" in r["matchKey"] for r in rules)'
 
 log_pass "iprules vNext smoke ok"
 exit 0
-

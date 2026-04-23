@@ -44,17 +44,17 @@
 - ✅ IPRULES cache-off 诊断变体：`add-iprules-cacheoff-build-variant`（`sucre-snort-iprules-nocache` + host nocache 单测 + 真机 perf 诊断入口）
 - ✅ IP 真机测试模组（Tier-1）：`tests/device-modules/ip/run.sh`（OpenSpec change `add-ip-test-component` 已归档）
   - 已完成：runner/目录结构、Tier-1 `netns+veth`、`smoke`/`matrix`/`stress`/`perf` 入口、核心 functional matrix（`IPRULES/IFACE_BLOCK/BLOCKIPLEAKS`）、neper baseline、cache-off 基线记录、ruleset sweep（`perf_ruleset_sweep.sh`）
-  - ✅ 已完成：`longrun` case + 对应文档补齐 + 轻量 `ip-smoke` 接入 CTest/CI（rollup：`update-post-domain-ip-fusion-rollup`，已归档 2026-04-22）
+  - ✅ 已完成：`longrun` case + 对应文档补齐 +（历史）`ip-smoke` CTest/CI hook（现已在 `rework-dx-smoke` 收敛为 `dx-smoke-datapath`/`dx-smoke*` 命名；rollup：`update-post-domain-ip-fusion-rollup`，已归档 2026-04-22）
 - ✅ B：DomainPolicy counters（`policySource`；OpenSpec：`add-domain-policy-observability`）
   - 控制面：`METRICS.DOMAIN.SOURCES*` + RESET 严格边界
   - tests：host 单测 + host-driven integration（见 `tests/integration/run.sh` 的 IT-12）
-  - 真机闭环：已可通过 `DEV.DNSQUERY` 在真机上稳定闭环 B 层计数；“真实系统 resolver → netd socket → DnsListener”链路仍属平台/环境排障项，不阻塞 B 层本身验收
+  - 真机闭环：已可通过 vNext DEV-only seam `DEV.DOMAIN.QUERY` 在真机上稳定触发 B 层计数（active smoke 不再调用 legacy `DEV.DNSQUERY`）；“真实系统 resolver → netd socket → DnsListener”链路仍属平台/环境排障项，不阻塞 B 层本身验收
 - ✅ L4 conntrack core：`add-iprules-conntrack-core`（OpenSpec 已归档）
   - 能力：userspace conntrack core 已接入 `IPRULES`，支持 `ct.state={new|established|invalid}`、`ct.direction={orig|reply}`，并保留“无 ct consumer 时跳过热路径更新”的 gating 语义
   - 文档：主规格已提升到 `openspec/specs/l4-conntrack-core/spec.md`；接口已同步到 `docs/INTERFACE_SPECIFICATION.md`
   - tests：host 单测 + Tier-1 真机 case `22_conntrack_ct.sh` + `perf_ct_compare` 已落地，并有独立记录 `docs/testing/ip/CONNTRACK_CT_TIER1_VERIFICATION.md`
 - ✅ 多用户 / blockmask chains /（post domain+IP fusion）收尾：`update-post-domain-ip-fusion-rollup`（已完成并归档 2026-04-22）
-  - 已完成：blockmask chains 验证收敛、multi-user 验证/文档与 `full-smoke` 用例沉淀、IP test module `longrun`/文档/`ip-smoke` CTest/CI hook、repo-wide docs sync（spec Purpose + project 状态）
+  - 已完成：blockmask chains 验证收敛、multi-user 验证/文档与 `full-smoke` 用例沉淀、IP test module `longrun`/文档/（历史）`ip-smoke` hook（现已收敛为 `dx-smoke-datapath`/`dx-smoke*`）、repo-wide docs sync（spec Purpose + project 状态）
 
 ## 3. 之后的工作（按优先级）
 
@@ -65,15 +65,15 @@
 - 已完成：`add-domain-policy-observability` 已归档；当前 OpenSpec active changes：无
 - 已完成：`add-iprules-conntrack-core` 已归档；roadmap 先前把它写成“待研究方向”，现已改为已落地能力
 - 已完成：`update-post-domain-ip-fusion-rollup` 已归档（2026-04-22）；其为 backlog rollup（验证/文档/Tier-1 longrun/可选 CI hook），并已将 delta specs 同步回主规格
-- 已确定：下一批 `Device / DX` 工程化重组只拆 **2 个** change，且按 `smoke -> diagnostics` 顺序推进；archive 不单独开 change，而是在对应 change 内完成满足条件的物理归档
-  - `rework-dx-smoke`
-    - 落地 `dx-smoke / dx-smoke-platform / dx-smoke-control / dx-smoke-datapath`
-    - 收拢 active `vNext` 主线 smoke，移除旧 `p1/p2/ip-smoke` 命名
-    - 在本 change 内处理满足条件的 legacy smoke 迁移源与 archive 搬目录
+- 已确定：下一批 `Device / DX` 工程化重组只拆 **2 个** change，且按 `smoke -> diagnostics` 顺序推进；物理 archive（搬目录到 `tests/archive/device/`）在本轮实现中 **defer**（按准入门槛决定是否做）
+  - ✅ `rework-dx-smoke`（已完成；不做物理 archive）
+    - 落地 `dx-smoke / dx-smoke-platform / dx-smoke-control / dx-smoke-datapath` 主入口组（vNext-only）
+    - 完成 smoke 转换矩阵：control domainSources 行为（vNext `DEV.DOMAIN.QUERY` seam）+ datapath allow/block/would-match/IFACE_BLOCK/BLOCK=0
+    - 移除旧 `p1/p2/ip-smoke` 命名；legacy 入口仅保留为迁移源按需回查
   - `rehome-dx-diagnostics`
     - 把现有 `perf / stress / longrun` 入口统一归位到 diagnostics
     - 本阶段只要求 diagnostics 归位，不预先锁死其最终命名和细分结构
-    - 在本 change 内处理满足条件的 legacy diagnostics 迁移源与 archive 搬目录
+    - 在 diagnostics change 中同样先以“归位 + 迁移源分轨”为主；物理 archive 仍按门槛另行决定
 - 继续巡检并收敛仍保留历史语境的设计文档；例如 `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md` 现已转为已落地回执，应继续避免被误读成“待实现提案”
 - 保持 `docs/INTERFACE_SPECIFICATION.md` 与当前控制面一致；目前 `METRICS.DOMAIN.SOURCES*` 与 `IPRULES ct.*` 已同步，后续只在接口新增时再刷新
 
@@ -141,7 +141,7 @@
      - 把 vNext domain 命令面落到 daemon（保持域名匹配实现不动；只做入参校验/落盘形态/返回口径/错误模型）；明确 `DOMAINPOLICY.APPLY` ack-only
      - `DOMAINLISTS.IMPORT`：落实命令级上限（例如 `maxImportDomains`/`maxImportBytes`）；当 payload 未超过 `maxRequestBytes` 但超出命令级上限时，必须返回结构化错误（提示前端/CLI 分批导入），避免默默截断或引入隐式规则
    - P0：domain 命令 handler 单测（apply 原子性：一次请求整体成功/失败；错误结构稳定；print/get 输出 shape 稳定；`DOMAINLISTS.IMPORT` 超限必须结构化报错）
-   - P1：新增 integration case：apply→print→verify（可先用 `DEV.DNSQUERY` 做真机闭环验证）
+   - P1：新增 integration case：apply→print→verify（可先用 vNext DEV-only seam `DEV.DOMAIN.QUERY` 做真机闭环验证）
    - P2（按需）：在 `device-smoke` 增加最小回归（避免“只有单测对，但真机展示错”）
 
 4) ✅ `add-control-vnext-iprules-surface`（IPRULES.*：控制面迁移；已归档 2026-04-22）
@@ -177,7 +177,7 @@
 
 - ✅ `update-post-domain-ip-fusion-rollup`：blockmask chains 验证收敛（bit/listId 组合、兼容性、BLOCKMASK 归一化；已归档 2026-04-22）
 - ✅ `update-post-domain-ip-fusion-rollup`：multi-user 验证与文档补齐（单用户回归、多用户场景、`SNORT_MULTI_USER_REFACTOR` 更新、`full-smoke` 用例沉淀；已归档 2026-04-22）
-- ✅ IP 真机测试模组：`longrun` case + 文档补齐 + `ip-smoke` CTest/CI hook（已归档 2026-04-22）
+- ✅ IP 真机测试模组：`longrun` case + 文档补齐 +（历史）`ip-smoke` hook（现已收敛为 `dx-smoke-datapath`/`dx-smoke*` 命名；已归档 2026-04-22）
 - `migrate-to-control-vnext`：前端与对外工具默认切到 vNext、tracked UX、迁移期开关/回滚口径、legacy 并存窗口与 `60606` 下线判据；待前端实现启动并经过真实版本验证后再推进
 - IPv6 新规则语义
 - 域名规则 per-rule 级 observability / stats
