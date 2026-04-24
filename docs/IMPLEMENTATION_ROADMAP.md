@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-04-23
+更新时间：2026-04-24
 状态：当前共识；本文包含两条主线（互不混用代号）：
 - **工程化**：测试/回归/真机调试工作流（单元测试、集成测试、真机原生调试）
 - **功能**：可观测性分层 `A/B/C/D`（见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`），以及其上层的 IPRULES / DomainPolicy 相关实现
@@ -12,6 +12,8 @@
 - 仓库里现存 `p0/p1/p2` 只保留为历史 `CTest` label / 存量文档用语，不再当作当前路线图阶段名
 - 当前 `Host` 端现状与缺口见 `docs/testing/HOST_TEST_SURVEY.md`
 - 当前 `Device / DX` 真机测试重组纲领见 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
+- 当前 `Device / DX` 冒烟测试 Casebook（真机端到端“人话”用例）见 `docs/testing/DEVICE_SMOKE_CASEBOOK.md`
+- 当前 `Device / DX` 覆盖矩阵（case → 入口/脚本映射）见 `docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
 
 ## 1. 工程化基线（已收敛）
 
@@ -76,6 +78,13 @@
     - IP 真机模组归位到 `tests/device/ip/`，`perf/matrix/stress/longrun` profiles 为 vNext-only；legacy-only 冻结项回查迁到 `tests/archive/device/`
 - 继续巡检并收敛仍保留历史语境的设计文档；例如 `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md` 现已转为已落地回执，应继续避免被误读成“待实现提案”
 - 保持 `docs/INTERFACE_SPECIFICATION.md` 与当前控制面一致；目前 `METRICS.DOMAIN.SOURCES*` 与 `IPRULES ct.*` 已同步，后续只在接口新增时再刷新
+- 计划：补齐 `Device / DX` 冒烟覆盖（按模块拆 5 个 change；以 `docs/testing/DEVICE_SMOKE_CASEBOOK.md` 为验收口径）
+  - 约束：`openspec/specs/dx-smoke-workflow/spec.md` 与 `openspec/specs/dx-diagnostics-workflow/spec.md` 已锁定 CTest 可发现主入口集合，因此不得新增 `dx-smoke*` / `dx-diagnostics*` 入口名；新增场景以“脚本/可选 stage”存在（必要时由现有入口调用，或供开发者手动运行）
+  - `complete-device-smoke-casebook-platform`：补齐 Platform 模块（环境就绪、RESETALL/基线、host 工具链），让 `dx-smoke-platform` 能直接解释“为什么 BLOCKED/FAIL”
+  - `complete-device-smoke-casebook-domain`：补齐 Domain 模块（domain lists/import、custom rules、policySource counters、dns stream/rdns 相关断言），落到 `dx-smoke-control`/control baseline
+  - `complete-device-smoke-casebook-ip`：补齐 IP 模块（allow/block/would-match、per-rule stats、pkt stream + 受控流量触发），落到 `dx-smoke-datapath`/IP smoke profile
+  - `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块（ct.state/direction 场景），保持 Tier‑1 可重复（必要时独立脚本）
+  - `complete-device-smoke-casebook-other`：把 `perfmetrics.enabled` 的“可用性验证”提炼进 smoke 口径，并补上极端规模（海量 domain/import、海量 iprules）“失败必须可解释 + daemon 仍可 HELLO”的场景（默认不进 `dx-smoke` 主链，可选运行）
 
 ### 3.2 下一条真正的功能主线
 
