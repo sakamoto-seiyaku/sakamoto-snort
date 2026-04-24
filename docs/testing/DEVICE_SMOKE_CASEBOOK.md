@@ -58,6 +58,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - socket namespace 就绪（至少文件存在）：
   - `/dev/socket/sucre-snort-control-vnext`
   - `/dev/socket/sucre-snort-netd`
+- host→device 的 vNext 控制面最小连通性成立（至少 `HELLO` 握手能成功；完整的 QUIT/reconnect 见 Case 2）
 - iptables/ip6tables hooks + NFQUEUE 规则存在
 - SELinux 无 AVC denials（至少针对 sucre 的）
 - netd hook 状态必须“讲清楚”：
@@ -71,7 +72,6 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - （文档层面）把 netd hook 的“准备/确认”写成可执行步骤：
   - `bash dev/dev-netd-resolv.sh prepare`
   - `bash dev/dev-netd-resolv.sh status`
-- （当前脚本层面）`dx-smoke-platform` 主要检查“socket 文件存在”，但不检查 daemon pid 或 socket 可连接性；真正的可连接性在 Case 2 才会暴露。
 
 ---
 ### Case 2：控制面 vNext 连通（HELLO/QUIT/reconnect）
@@ -199,7 +199,8 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - 若缺失：明确写出需要构建的 target（例如：`cmake --build --preset dev-debug --target sucre-snort-ctl`）
 
 **现有覆盖**
-- 各脚本内部会探测/报错（例如 `find_snort_ctl()`），但没有一个“集中、可读”的前置 Case。
+- `tests/integration/dx-smoke-platform.sh`：集中检查 `python3` + `sucre-snort-ctl`，缺失时明确 `BLOCKED` 并给出 build hint
+- 其他脚本也会二次探测/报错（例如 `tests/integration/vnext-baseline.sh` 的 `find_snort_ctl()`），但平台 gate 已把它前置化
 
 **缺口**
 - 无（这是文档层面的补齐；实现可选）。

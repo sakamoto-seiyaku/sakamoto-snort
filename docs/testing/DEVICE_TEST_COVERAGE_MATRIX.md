@@ -45,12 +45,13 @@ Archive（仅回查；不算 active 覆盖）：
 | Feature / 断言点 | `dx-smoke-platform` (`tests/integration/dx-smoke-platform.sh`) | `dx-smoke-control` (`tests/integration/vnext-baseline.sh`) | `dx-smoke-datapath` (`tests/device/ip/run.sh --profile smoke`) | Host gtest（参考；不等同真机覆盖） |
 | --- | --- | --- | --- | --- |
 | rooted device preflight +（可选）deploy | ✅（`device_preflight` + `dev/dev-deploy.sh`） | ◐（在 `dx-smoke` 下默认 `--skip-deploy`） | ◐（在 `dx-smoke` 下默认 `--skip-deploy`） | — |
+| host 工具链（`python3` + `sucre-snort-ctl`） | ✅（集中检查；缺失→BLOCKED） | ✅（依赖；platform 已前置暴露） | ✅（依赖；platform 已前置暴露） | — |
 | socket namespace（control-vnext + netd） | ✅（检查 `/dev/socket/sucre-snort-control-vnext`、`/dev/socket/sucre-snort-netd`） | — | — | — |
 | iptables/ip6tables hooks + NFQUEUE 规则 | ✅（链/规则存在性断言） | — | — | — |
 | SELinux runtime + AVC denials | ✅（`getenforce` + `logcat -s AVC`） | — | — | — |
 | lifecycle restart（kill → restart → redeploy） | ✅（仅 `DO_DEPLOY=1` 时） | — | — | — |
 | inetControl gating（TCP:60607 不应暴露） | — | ✅（`/data/snort/telnet` 缺失时：tcp:60607 不可达） | — | ◐（session/codec tests 侧重协议，不测真机 gating） |
-| vNext handshake（HELLO fields） | — | ✅（`HELLO` shape + reconnect/QUIT） | ✅（`HELLO` 可用） | ✅（`tests/host/control_vnext_*_tests.cpp`） |
+| vNext handshake（HELLO fields） | ✅（HELLO sanity） | ✅（`HELLO` shape + reconnect/QUIT） | ✅（`HELLO` 可用） | ✅（`tests/host/control_vnext_*_tests.cpp`） |
 | 并发连接语义（last-write-wins） | — | ✅（两连接并发 `CONFIG.SET`） | — | ✅（多 handler/codec 覆盖） |
 | strict reject / error model（未知 args key/命令等） | — | — | — | ✅（例如 `tests/host/control_vnext_{metrics,iprules,stream,domain}_surface_tests.cpp`） |
 | stream: activity start→event→stop | — | ✅（`STREAM.START type=activity` + started notice + STOP ack barrier） | — | ✅（`tests/host/control_vnext_stream_surface_tests.cpp`） |
