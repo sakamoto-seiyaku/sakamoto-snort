@@ -26,7 +26,7 @@
 
 前置条件：
 - 设备具备：root + `ip netns`/`veth` + `nc` + `ping` + `timeout`
-- `tests/device-modules/ip/` 真机模组可正常运行
+- `tests/device/ip/` 真机模组可正常运行
 
 复现命令（host 上执行，**已确认可触发重启**）：
 
@@ -38,7 +38,7 @@ IPTEST_PERF_SECONDS=180 \
 IPTEST_PERF_COMPARE=1 \
 IPTEST_PERF_BG_TOTAL=2000 \
 IPTEST_PERF_BG_UIDS=200 \
-  bash tests/device-modules/ip/run.sh --serial "$ADB_SERIAL" --profile perf
+  bash tests/device/ip/run.sh --serial "$ADB_SERIAL" --profile perf
 ```
 
 现象（关键观察点）：
@@ -60,9 +60,9 @@ $ADB -s "$ADB_SERIAL" shell "su 0 sh -c 'cat /sys/fs/pstore/console-ramoops-0'" 
 `/data/local/tmp/iptest_panic_repro/`（重启后仍在）。
 
 脚本路径（repo）：
-- `tests/device-modules/ip/repro/kernel_panic_sock_ioctl_device_repro.sh`
+- `tests/archive/device/ip/repro/kernel_panic_sock_ioctl_device_repro.sh`
 
-也可以使用 host-side wrapper 一键执行 + 归档（推荐，跑完自动写入 `tests/device-modules/ip/records/`）：
+也可以使用 host-side wrapper 一键执行 + 归档（推荐，跑完自动写入 `tests/device/ip/records/`）：
 
 ```bash
 export ADB="$HOME/.local/android/platform-tools/adb"
@@ -71,7 +71,7 @@ export ADB_SERIAL=28201JEGR0XPAJ
 # 例如：验证 workaround（server 不派生 sh）
 SERVER_MODE=cat_zero REPRO_MODE=net_only STOP_SNORT=1 \
   IPTEST_PERF_SECONDS=60 LOAD_MAX_ITERS=1 LOAD_MODE=connect_q0 \
-  bash tests/device-modules/ip/repro/run_kernel_panic_sock_ioctl_host.sh
+  bash tests/device/ip/repro/run_kernel_panic_sock_ioctl_host.sh
 ```
 
 这个 host-side wrapper 会把下列 host 环境变量原样透传到设备侧 repro 脚本：
@@ -87,7 +87,7 @@ export ADB="$HOME/.local/android/platform-tools/adb"
 export ADB_SERIAL=28201JEGR0XPAJ
 
 RUN_ID_PREFIX=panic-matrix \
-  bash tests/device-modules/ip/repro/run_kernel_panic_sock_ioctl_matrix.sh
+  bash tests/device/ip/repro/run_kernel_panic_sock_ioctl_matrix.sh
 ```
 
 矩阵默认会顺序执行 4 组最小 case：
@@ -103,7 +103,7 @@ RUN_ID_PREFIX=panic-matrix \
 export ADB="$HOME/.local/android/platform-tools/adb"
 export ADB_SERIAL=28201JEGR0XPAJ
 
-$ADB -s "$ADB_SERIAL" push tests/device-modules/ip/repro/kernel_panic_sock_ioctl_device_repro.sh \
+$ADB -s "$ADB_SERIAL" push tests/archive/device/ip/repro/kernel_panic_sock_ioctl_device_repro.sh \
   /data/local/tmp/iptest_kernel_panic_sock_ioctl_repro.sh
 
 $ADB -s "$ADB_SERIAL" shell "su 0 sh -c 'chmod 755 /data/local/tmp/iptest_kernel_panic_sock_ioctl_repro.sh && /data/local/tmp/iptest_kernel_panic_sock_ioctl_repro.sh'"
@@ -209,24 +209,24 @@ $ADB -s "$ADB_SERIAL" shell "su 0 sh -c '
 
 主线 harness 也已验证该 workaround：
 
-- `IPTEST_PERF_SECONDS=30 IPTEST_PERF_COMPARE=1 IPTEST_PERF_BG_TOTAL=2000 IPTEST_PERF_BG_UIDS=200 bash tests/device-modules/ip/run.sh --skip-deploy --profile perf`
+- `IPTEST_PERF_SECONDS=30 IPTEST_PERF_COMPARE=1 IPTEST_PERF_BG_TOTAL=2000 IPTEST_PERF_BG_UIDS=200 bash tests/device/ip/run.sh --skip-deploy --profile perf`
 - 结果：`passed=2 failed=0 skipped=0`
-- 观察：双阶段 duration load 完整跑完，无 ADB 断连/设备重启，`METRICS.PERF` 两阶段都返回有效 JSON 与正样本数
+- 观察：双阶段 duration load 完整跑完，无 ADB 断连/设备重启，`METRICS.GET(name=perf)` 两阶段都返回有效 JSON 与正样本数
 
 ## Evidence (this repo)
 
 本次复现证据：
 
 - Host-side repro（抓取时间：`20260318T145949Z`）
-  - `tests/device-modules/ip/records/20260318T145949Z_28201JEGR0XPAJ_boot.txt`
-  - `tests/device-modules/ip/records/20260318T145949Z_28201JEGR0XPAJ_console-ramoops-0.txt`
-  - `tests/device-modules/ip/records/20260318T145949Z_28201JEGR0XPAJ_pmsg-ramoops-0.bin`
+  - `tests/device/ip/records/20260318T145949Z_28201JEGR0XPAJ_boot.txt`
+  - `tests/device/ip/records/20260318T145949Z_28201JEGR0XPAJ_console-ramoops-0.txt`
+  - `tests/device/ip/records/20260318T145949Z_28201JEGR0XPAJ_pmsg-ramoops-0.bin`
 
 - Device-side repro + step marker（抓取时间：`20260318T153320Z`）
-  - `tests/device-modules/ip/records/20260318T153320Z_28201JEGR0XPAJ_boot.txt`
-  - `tests/device-modules/ip/records/20260318T153320Z_28201JEGR0XPAJ_console-ramoops-0.txt`
-  - `tests/device-modules/ip/records/20260318T153320Z_28201JEGR0XPAJ_pmsg-ramoops-0.bin`
-  - `tests/device-modules/ip/records/20260318T153320Z_28201JEGR0XPAJ_device-repro.log`
+  - `tests/device/ip/records/20260318T153320Z_28201JEGR0XPAJ_boot.txt`
+  - `tests/device/ip/records/20260318T153320Z_28201JEGR0XPAJ_console-ramoops-0.txt`
+  - `tests/device/ip/records/20260318T153320Z_28201JEGR0XPAJ_pmsg-ramoops-0.bin`
+  - `tests/device/ip/records/20260318T153320Z_28201JEGR0XPAJ_device-repro.log`
 
 关键 excerpt（来自 `console-ramoops-0`）：
 

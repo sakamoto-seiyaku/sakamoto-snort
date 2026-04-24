@@ -57,9 +57,8 @@ The project MUST keep this change limited to host-side testing and tooling. It M
 
 #### Scenario: Device scripts remain unchanged
 - **WHEN** this change adds host unit tests, host ASAN entry, or host coverage workflow
-- **THEN** files under real-device test paths such as `tests/integration/` and `tests/device-modules/` SHALL NOT be modified as part of this change
+- **THEN** files under real-device test paths such as `tests/integration/` and `tests/device/` SHALL NOT be modified as part of this change
 
 #### Scenario: Host and Device/DX boundaries are documented
 - **WHEN** a developer reads the updated testing documentation
 - **THEN** the documentation SHALL distinguish host unit-test/ASAN/coverage workflows from Device/DX workflows
-

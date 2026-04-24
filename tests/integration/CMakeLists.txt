@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 set(SUCRE_SNORT_INTEGRATION_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(SUCRE_SNORT_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
-set(SUCRE_SNORT_SKIP_REGEX_COMMON "未找到 adb/adb.exe|未检测到已连接的 Android 真机|检测到多台 Android 真机|无法通过 su 获取 root 权限|目标设备未返回 root 身份|错误: 真机 preflight 失败|SKIP: perf-network-load.*")
+set(SUCRE_SNORT_SKIP_REGEX_COMMON "未找到 adb/adb.exe|未检测到已连接的 Android 真机|检测到多台 Android 真机|无法通过 su 获取 root 权限|目标设备未返回 root 身份|错误: 真机 preflight 失败|SKIP: dx-diagnostics-perf-network-load.*")
 
 function(add_sucre_snort_shell_test name script labels)
   add_test(
@@ -44,9 +44,15 @@ add_sucre_snort_shell_test(
 )
 
 add_sucre_snort_shell_test(
-  perf-network-load
-  "${SUCRE_SNORT_INTEGRATION_ROOT}/perf-network-load.sh"
-  "perf;device;root-required;baseline"
+  dx-diagnostics
+  "${SUCRE_SNORT_REPO_ROOT}/tests/device/diagnostics/dx-diagnostics.sh"
+  "dx-diagnostics;device;root-required;diagnostics"
+)
+
+add_sucre_snort_shell_test(
+  dx-diagnostics-perf-network-load
+  "${SUCRE_SNORT_REPO_ROOT}/tests/device/diagnostics/dx-diagnostics-perf-network-load.sh"
+  "dx-diagnostics-perf-network-load;device;root-required;diagnostics;perf"
 )
 
 add_custom_target(

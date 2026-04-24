@@ -8,7 +8,9 @@ source "$SCRIPT_DIR/dev-android-device-lib.sh"
 PROC_NAME="sucre-snort-dev"
 TARGET="/data/local/tmp/sucre-snort-dev"
 LOG="/data/local/tmp/sucre-snort-dev.log"
-CONTROL_FORWARD_PORT="${CONTROL_FORWARD_PORT:-60618}"
+VNEXT_FORWARD_PORT="${VNEXT_FORWARD_PORT:-${CONTROL_FORWARD_PORT:-60618}}"
+LEGACY_FORWARD_PORT="${LEGACY_FORWARD_PORT:-60619}"
+SNORT_CTL="${SNORT_CTL:-}"
 
 show_help() {
     cat <<EOF
@@ -49,13 +51,60 @@ resolve_pid() {
 }
 
 control_hello() {
+    if ! adb_su "ls /dev/socket/sucre-snort-control-vnext" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    setup_control_vnext_forward "$VNEXT_FORWARD_PORT" >/dev/null 2>&1 || return 1
+    local ctl
+    if [[ -z "$SNORT_CTL" ]]; then
+        local candidates=(
+            "$SCRIPT_DIR/../build-output/cmake/dev-debug/tests/host/sucre-snort-ctl"
+            "$SCRIPT_DIR/../build-output/cmake/dev-relwithdebinfo/tests/host/sucre-snort-ctl"
+            "$SCRIPT_DIR/../build-output/cmake/host-asan-clang/tests/host/sucre-snort-ctl"
+        )
+        local c
+        for c in "${candidates[@]}"; do
+            if [[ -x "$c" ]]; then
+                SNORT_CTL="$c"
+                break
+            fi
+        done
+    fi
+    ctl="${SNORT_CTL:-}"
+
+    if [[ -z "$ctl" || ! -x "$ctl" ]]; then
+        remove_control_vnext_forward "$VNEXT_FORWARD_PORT" >/dev/null 2>&1 || true
+        echo "ERROR: missing sucre-snort-ctl (build `sucre-snort-ctl` first)"
+        return 1
+    fi
+
+    set +e
+    local out
+    out="$("$ctl" --tcp "127.0.0.1:${VNEXT_FORWARD_PORT}" --compact HELLO 2>&1)"
+    local status=$?
+    set -e
+
+    remove_control_vnext_forward "$VNEXT_FORWARD_PORT" >/dev/null 2>&1 || true
+
+    if [[ $status -ne 0 ]]; then
+        echo "ERROR: $out"
+        return $status
+    fi
+
+    echo "$out"
+    return 0
+}
+
+legacy_hello() {
     if ! adb_su "ls /dev/socket/sucre-snort-control" >/dev/null 2>&1; then
         return 1
     fi
-    adb_cmd forward "tcp:${CONTROL_FORWARD_PORT}" localabstract:sucre-snort-control >/dev/null 2>&1
+
+    setup_control_forward "$LEGACY_FORWARD_PORT" >/dev/null 2>&1 || return 1
     python3 - <<PY
 import socket, sys
-port = int(${CONTROL_FORWARD_PORT})
+port = int(${LEGACY_FORWARD_PORT})
 try:
     sock = socket.create_connection(("127.0.0.1", port), timeout=2)
     sock.sendall(b"HELLO\0")
@@ -77,7 +126,7 @@ except Exception as exc:
     sys.exit(1)
 PY
     local status=$?
-    adb_cmd forward --remove "tcp:${CONTROL_FORWARD_PORT}" >/dev/null 2>&1 || true
+    remove_control_forward "$LEGACY_FORWARD_PORT" >/dev/null 2>&1 || true
     return $status
 }
 
@@ -107,9 +156,11 @@ else
 fi
 
 print_section "3. 控制面与 socket"
-HELLO_RESULT="$(control_hello || true)"
-echo "HELLO: ${HELLO_RESULT:-<no-response>}"
-adb_su "ls -lZ /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true" | sed 's/^/  /'
+VNEXT_HELLO_RESULT="$(control_hello || true)"
+echo "vNext HELLO: ${VNEXT_HELLO_RESULT:-<no-response>}"
+LEGACY_HELLO_RESULT="$(legacy_hello || true)"
+echo "legacy HELLO: ${LEGACY_HELLO_RESULT:-<no-response>}"
+adb_su "ls -lZ /dev/socket/sucre-snort-control-vnext /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true" | sed 's/^/  /'
 
 print_section "4. 二进制与日志"
 adb_su "ls -lh $TARGET 2>/dev/null || true" | sed 's/^/  /'
@@ -125,6 +176,6 @@ adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | sed 's/^/  /'
 echo ""
 echo "建议："
 echo "  重新部署: bash dev/dev-deploy.sh --serial $(adb_target_desc)"
-echo "  P1 baseline: bash tests/integration/run.sh --serial $(adb_target_desc)"
-echo "  P2 smoke:    bash tests/integration/device-smoke.sh --serial $(adb_target_desc)"
-echo "  P3 debug:    python3 dev/dev-vscode-debug-task.py prepare attach"
+echo "  DX smoke:    cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke$"
+echo "  DX diag:     cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-diagnostics$"
+echo "  Debug:       python3 dev/dev-vscode-debug-task.py prepare attach"

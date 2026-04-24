@@ -19,7 +19,7 @@
 
 - **Host**：本机 `gtest/CTest`；日常入口见 `tests/host/`，当前系统性盘点见 `docs/testing/HOST_TEST_SURVEY.md`
 - **Host + ASAN**：同一套 `Host` case 的 AddressSanitizer 构建变体；不是另一条编号线
-- **Device / DX**：host/WSL 驱动真机集成、platform smoke、IP 模组、perf/longrun；入口见 `tests/integration/` 与 `tests/device-modules/ip/`
+- **Device / DX**：host/WSL 驱动真机集成、platform smoke、IP 模组、diagnostics/perf/longrun；入口见 `tests/integration/`、`tests/device/ip/` 与 `tests/device/diagnostics/`
 - **Native Debug**：真机原生调试（LLDB / VS Code + CodeLLDB）；见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`
 
 当前默认开发 preset 已把 `SNORT_ENABLE_DEVICE_TESTS=OFF`，因此 `dev-debug` 与 `host-asan-clang` 会先收敛到纯 `Host` 回归。
@@ -38,16 +38,16 @@
 
 当前落地状态（以仓库内 code + tests 为准）：
 - ✅ A：`add-pktstream-observability`（PKTSTREAM vNext schema + `reasonId/ruleId/wouldRuleId`）
-- ✅ D：`perfmetrics-observability`（`PERFMETRICS` / `METRICS.PERF` + `tests/integration/perf-network-load.sh`）
-- ✅ IPRULES v1：`add-app-ip-l3l4-rules-engine`（IPv4 L3/L4 per-UID rules + per-rule stats + `tests/integration/iprules.sh`）
-- ✅ IPRULES v1 真机矩阵补偿项：`docs/testing/IPRULES_DEVICE_VERIFICATION.md` + `tests/integration/iprules-device-matrix.sh`（已记录多次目标真机运行结果）
+- ✅ D：`perfmetrics-observability`（vNext：`CONFIG.SET(perfmetrics.enabled)` + `METRICS.GET/RESET(name=perf)`；入口：`dx-diagnostics-perf-network-load` -> `tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`）
+- ✅ IPRULES v1：`add-app-ip-l3l4-rules-engine`（IPv4 L3/L4 per-UID rules + per-rule stats；active gate：`dx-smoke-datapath`；legacy 对照脚本：`tests/archive/integration/iprules.sh`）
+- ✅ IPRULES v1 真机矩阵补偿项：`docs/testing/IPRULES_DEVICE_VERIFICATION.md`（active vNext：`tests/device/ip/run.sh --profile matrix`；legacy 对照脚本：`tests/archive/integration/iprules-device-matrix.sh`）
 - ✅ IPRULES cache-off 诊断变体：`add-iprules-cacheoff-build-variant`（`sucre-snort-iprules-nocache` + host nocache 单测 + 真机 perf 诊断入口）
-- ✅ IP 真机测试模组（Tier-1）：`tests/device-modules/ip/run.sh`（OpenSpec change `add-ip-test-component` 已归档）
-  - 已完成：runner/目录结构、Tier-1 `netns+veth`、`smoke`/`matrix`/`stress`/`perf` 入口、核心 functional matrix（`IPRULES/IFACE_BLOCK/BLOCKIPLEAKS`）、neper baseline、cache-off 基线记录、ruleset sweep（`perf_ruleset_sweep.sh`）
+- ✅ IP 真机测试模组（Tier-1）：`tests/device/ip/run.sh`（原 OpenSpec change `add-ip-test-component` 已归档；当前目录已归位）
+  - 已完成：runner/目录结构、Tier-1 `netns+veth`、`smoke`/`matrix`/`stress`/`perf` 入口、核心 functional matrix（`IPRULES/IFACE_BLOCK/conntrack`）、perf baseline、cache-off 基线记录、ruleset sweep（`perf_ruleset_sweep.sh`）
   - ✅ 已完成：`longrun` case + 对应文档补齐 +（历史）`ip-smoke` CTest/CI hook（现已在 `rework-dx-smoke` 收敛为 `dx-smoke-datapath`/`dx-smoke*` 命名；rollup：`update-post-domain-ip-fusion-rollup`，已归档 2026-04-22）
 - ✅ B：DomainPolicy counters（`policySource`；OpenSpec：`add-domain-policy-observability`）
   - 控制面：`METRICS.DOMAIN.SOURCES*` + RESET 严格边界
-  - tests：host 单测 + host-driven integration（见 `tests/integration/run.sh` 的 IT-12）
+  - tests：host 单测 + vNext baseline（`tests/integration/vnext-baseline.sh` 的 `METRICS.GET(name=domainSources)` 用例；legacy 对照脚本：`tests/archive/integration/run.sh` 的 `IT-12`）
   - 真机闭环：已可通过 vNext DEV-only seam `DEV.DOMAIN.QUERY` 在真机上稳定触发 B 层计数（active smoke 不再调用 legacy `DEV.DNSQUERY`）；“真实系统 resolver → netd socket → DnsListener”链路仍属平台/环境排障项，不阻塞 B 层本身验收
 - ✅ L4 conntrack core：`add-iprules-conntrack-core`（OpenSpec 已归档）
   - 能力：userspace conntrack core 已接入 `IPRULES`，支持 `ct.state={new|established|invalid}`、`ct.direction={orig|reply}`，并保留“无 ct consumer 时跳过热路径更新”的 gating 语义
@@ -65,15 +65,15 @@
 - 已完成：`add-domain-policy-observability` 已归档；当前 OpenSpec active changes：无
 - 已完成：`add-iprules-conntrack-core` 已归档；roadmap 先前把它写成“待研究方向”，现已改为已落地能力
 - 已完成：`update-post-domain-ip-fusion-rollup` 已归档（2026-04-22）；其为 backlog rollup（验证/文档/Tier-1 longrun/可选 CI hook），并已将 delta specs 同步回主规格
-- 已确定：下一批 `Device / DX` 工程化重组只拆 **2 个** change，且按 `smoke -> diagnostics` 顺序推进；物理 archive（搬目录到 `tests/archive/device/`）在本轮实现中 **defer**（按准入门槛决定是否做）
-  - ✅ `rework-dx-smoke`（已完成；不做物理 archive）
+- 已完成：`Device / DX` 工程化重组拆 **2 个** change（按 `smoke -> diagnostics` 顺序推进）；物理 archive 只对“无 vNext surface 的 legacy-only case”执行（其余 legacy 入口仍作为迁移源回查）
+  - ✅ `rework-dx-smoke`（已完成）
     - 落地 `dx-smoke / dx-smoke-platform / dx-smoke-control / dx-smoke-datapath` 主入口组（vNext-only）
     - 完成 smoke 转换矩阵：control domainSources 行为（vNext `DEV.DOMAIN.QUERY` seam）+ datapath allow/block/would-match/IFACE_BLOCK/BLOCK=0
     - 移除旧 `p1/p2/ip-smoke` 命名；legacy 入口仅保留为迁移源按需回查
-  - `rehome-dx-diagnostics`
-    - 把现有 `perf / stress / longrun` 入口统一归位到 diagnostics
-    - 本阶段只要求 diagnostics 归位，不预先锁死其最终命名和细分结构
-    - 在 diagnostics change 中同样先以“归位 + 迁移源分轨”为主；物理 archive 仍按门槛另行决定
+  - ✅ `rework-dx-diagnostics`（已完成并归档 2026-04-24）
+    - 新增 `dx-diagnostics / dx-diagnostics-perf-network-load` 主入口组（vNext-only）
+    - `perf-network-load` 迁移到 `tests/device/diagnostics/` 并改为 vNext-only
+    - IP 真机模组归位到 `tests/device/ip/`，`perf/matrix/stress/longrun` profiles 为 vNext-only；legacy-only 冻结项回查迁到 `tests/archive/device/`
 - 继续巡检并收敛仍保留历史语境的设计文档；例如 `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md` 现已转为已落地回执，应继续避免被误读成“待实现提案”
 - 保持 `docs/INTERFACE_SPECIFICATION.md` 与当前控制面一致；目前 `METRICS.DOMAIN.SOURCES*` 与 `IPRULES ct.*` 已同步，后续只在接口新增时再刷新
 
@@ -147,8 +147,8 @@
 4) ✅ `add-control-vnext-iprules-surface`（IPRULES.*：控制面迁移；已归档 2026-04-22）
    - 交付物：`IPRULES.PREFLIGHT/PRINT/APPLY` vNext 落地，并严格对齐 `IPRULES_APPLY_CONTRACT.md`（字段全集/类型写死，禁止 shape 漂移）
    - P0：apply contract 单测（schema、冲突回显、toggle=0|1、禁止携带 ruleId/matchKey/stats 等）
-   - P1：integration case：preflight→apply→print→verify；并与现有 `tests/integration/iprules.sh` 共享同一套“期望规则集”
-   - P2：复用 `tests/device-modules/ip/run.sh` 增加一个 vNext control 驱动 profile（作为“真机一眼验收”的硬门槛）
+   - P1：integration case：preflight→apply→print→verify；并与 legacy 对照脚本 `tests/archive/integration/iprules.sh` 共享同一套“期望规则集”
+   - P2：复用 `tests/device/ip/run.sh` 增加一个 vNext control 驱动 profile（作为“真机一眼验收”的硬门槛）
 
 5) ✅ `add-control-vnext-metrics`（metrics vNext：`traffic`/`conntrack`；已归档 2026-04-22）
    - 交付物：`METRICS.GET/RESET` vNext（name=`traffic|conntrack`；口径对齐 `OBSERVABILITY_WORKING_DECISIONS.md`）；任务分解见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
@@ -188,8 +188,8 @@
 - **A 必须先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 PKTSTREAM/metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
 - **C 不建议拆成独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 `add-app-ip-l3l4-rules-engine` change 内部按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
 - **B 已补齐**：它与 IPRULES 基本解耦，当前已落地；剩余工作主要是归档与把过期设计文档状态修正，避免 roadmap/设计文档继续把它当作“未开始”。
-- **D 不参与上述排序**：D 只承载 `nfq_total_us` / `dns_decision_us` 这类性能健康指标；它在语义上独立于 A/B/C，可作为单独 change 在任意时点推进，不改变当前主线优先级。当前已落地：见 `openspec/specs/perfmetrics-observability/spec.md` 与 `tests/integration/perf-network-load.sh`。
-- **IP test module 与 integration lane 当前并存**：`tests/device-modules/ip/run.sh --profile matrix|stress` 已覆盖核心语义；`tests/integration/iprules-device-matrix.sh` 暂保留为 legacy 对照/额外用例入口（直到确认完全收敛并可替代为止）。
+- **D 不参与上述排序**：D 只承载 `nfq_total_us` / `dns_decision_us` 这类性能健康指标；它在语义上独立于 A/B/C，可作为单独 change 在任意时点推进，不改变当前主线优先级。当前已落地：见 `openspec/specs/perfmetrics-observability/spec.md` 与 `dx-diagnostics-perf-network-load`（`tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`）。
+- **IP test module 已接住 legacy device matrix**：active vNext 入口为 `tests/device/ip/run.sh --profile matrix|stress|perf`；legacy 对照脚本已迁入 `tests/archive/integration/iprules-device-matrix.sh` 仅供回查。
 - **OpenSpec 主规格已同步到位**：A / IPRULES v1 / cache-off / ip-test-component / DomainPolicy observability / L4 conntrack core 相关 change 已归档；当前 capability 已体现在 `openspec/specs/pktstream-observability/spec.md`、`openspec/specs/app-ip-l3l4-rules/spec.md`、`openspec/specs/domain-policy-observability/spec.md` 与 `openspec/specs/l4-conntrack-core/spec.md`。当前 OpenSpec in-flight/backlog：无（`update-post-domain-ip-fusion-rollup` 已于 2026-04-22 归档）
 
 ## 4. 战略备注（记录方向，不提前锁死实现）

@@ -8,7 +8,7 @@ SNORT_ROOT="$SCRIPT_DIR/.."
 export PATH="$HOME/bin:$PATH"
 
 LINEAGE_ROOT="${LINEAGE_ROOT:-$HOME/android/lineage}"
-NEPER_SRC_DIR="${DEV_NEPER_SOURCE_DIR:-$SNORT_ROOT/tests/device-modules/ip/third_party/neper}"
+NEPER_SRC_DIR="${DEV_NEPER_SOURCE_DIR:-$SNORT_ROOT/tests/device/ip/third_party/neper}"
 OUT_DIR="${DEV_NEPER_OUTPUT_DIR:-$SNORT_ROOT/build-output}"
 OUT_TCP_CRR="${DEV_NEPER_TCP_CRR_OUT:-$OUT_DIR/iptest-neper-tcp_crr}"
 OUT_UDP_STREAM="${DEV_NEPER_UDP_STREAM_OUT:-$OUT_DIR/iptest-neper-udp_stream}"

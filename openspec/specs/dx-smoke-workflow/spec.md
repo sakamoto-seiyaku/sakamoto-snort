@@ -99,10 +99,10 @@ DX smoke 转换完成的判定标准 MUST 是“旧 smoke 中仍属于主功能 
 - **AND** SHALL 验证 pkt stream attribution 与 per-rule stats
 
 ### Requirement: IP module smoke profile 不得保留 legacy/mixed 默认语义
-`tests/device-modules/ip/run.sh --profile smoke` MUST 表示 active vNext IP smoke，且 MUST NOT 默认执行 legacy/mixed smoke case。
+`tests/device/ip/run.sh --profile smoke` MUST 表示 active vNext IP smoke，且 MUST NOT 默认执行 legacy/mixed smoke case。
 
 #### Scenario: IP module smoke profile uses active vNext cases
-- **WHEN** 开发者运行 `tests/device-modules/ip/run.sh --profile smoke`
+- **WHEN** 开发者运行 `tests/device/ip/run.sh --profile smoke`
 - **THEN** runner SHALL 执行 active vNext smoke cases
 - **AND** SHALL NOT 执行 legacy/mixed smoke cases unless they are explicitly invoked for migration review
 
@@ -141,4 +141,3 @@ active DX `smoke` 的主入口名与对外展示 MUST NOT 继续使用 `p1`、`p
 #### Scenario: active DX smoke 入口不包含历史 lane 命名
 - **WHEN** 开发者查看 active DX `smoke` 的主入口列表
 - **THEN** SHALL 只看到 `dx-smoke*` 入口，而不包含 `p1/p2/ip-smoke` 等历史命名
-

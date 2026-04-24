@@ -17,7 +17,7 @@ Runs the conntrack functional smoke that asserts:
 Command:
 
 ```bash
-bash tests/device-modules/ip/run.sh --profile matrix --case conntrack_ct
+bash tests/device/ip/run.sh --profile matrix --case conntrack_ct
 ```
 
 Key knobs (optional):
@@ -33,7 +33,7 @@ Runs `60_perf.sh` twice:
 Command:
 
 ```bash
-IPTEST_PERF_CT_COMPARE=1 bash tests/device-modules/ip/run.sh --profile perf --case perf_ct_compare
+IPTEST_PERF_CT_COMPARE=1 bash tests/device/ip/run.sh --profile perf --case perf_ct_compare
 ```
 
 Notes:

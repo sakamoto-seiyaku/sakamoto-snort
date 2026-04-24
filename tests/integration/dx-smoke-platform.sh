@@ -83,8 +83,8 @@ else
 fi
 
 log_section "Sockets"
-sock_ls="$(adb_su "ls -lZ /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true" | tr -d '\r')"
-if printf '%s\n' "$sock_ls" | grep -q "/dev/socket/sucre-snort-control" && \
+sock_ls="$(adb_su "ls -lZ /dev/socket/sucre-snort-control-vnext /dev/socket/sucre-snort-netd 2>/dev/null || true" | tr -d '\r')"
+if printf '%s\n' "$sock_ls" | grep -q "/dev/socket/sucre-snort-control-vnext" && \
    printf '%s\n' "$sock_ls" | grep -q "/dev/socket/sucre-snort-netd"; then
   log_pass "socket namespace ok"
 else
@@ -186,10 +186,8 @@ fi
 
 if [[ $CLEANUP_FORWARD -eq 1 ]]; then
   log_info "移除 adb forward..."
-  remove_control_forward 60606
   remove_control_vnext_forward 60607
 fi
 
 log_pass "dx-smoke-platform ok"
 exit 0
-

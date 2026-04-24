@@ -62,7 +62,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cmd=(bash "$SNORT_ROOT/tests/device-modules/ip/run.sh" --profile smoke)
+cmd=(bash "$SNORT_ROOT/tests/device/ip/run.sh" --profile smoke)
 if [[ -n "${ADB_SERIAL:-}" ]]; then
   cmd+=(--serial "$ADB_SERIAL")
 fi

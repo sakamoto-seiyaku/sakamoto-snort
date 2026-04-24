@@ -88,12 +88,19 @@ cmake --build --preset dev-debug --target snort-dx-smoke-datapath
 
 # 或直接用 ctest：
 cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke$
+
+# diagnostics（按需；不做 gate）
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-diagnostics$
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-diagnostics-perf-network-load$
 ```
 
 说明：
 - `dx-smoke-control` 复用 `tests/integration/vnext-baseline.sh`（vNext-only）。
-- `dx-smoke-datapath` 调用 `tests/device-modules/ip/run.sh --profile smoke`（vNext-only）。
+- `dx-smoke-datapath` 调用 `tests/device/ip/run.sh --profile smoke`（vNext-only）。
+- diagnostics 主入口：`dx-diagnostics` / `dx-diagnostics-perf-network-load`（vNext-only）。
 - legacy 的 `p1/p2/ip-smoke` 入口不再注册到 `CTest/VS Code Testing`；仅作为迁移源按需回查（见 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`）。
+- `dx-diagnostics-perf-network-load` 当前在部分设备/环境下会因为 DNS hook 不活跃而打印 `SKIP: dx-diagnostics-perf-network-load ...`（仅跳过 DNS 断言；核心 perfmetrics/METRICS(perf) 断言仍执行）。若用 CTest 运行，可能会因此被标记为 `Skipped`。
+- `tests/device/ip/run.sh --profile perf` 当前在默认 `IPTEST_PERF_TRAFFIC_RULES=2000` 的大 ruleset 下可能出现 `BLOCKED: ... IPRULES.APPLY transport failed (rc=126)`；可临时用 `IPTEST_PERF_TRAFFIC_RULES=200` 验证链路，后续再专项修复大 ruleset 的 apply 路径。
 
 当前 `Device / DX` 重组讨论与后续 change 的上层边界，统一以 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md` 为准。
 

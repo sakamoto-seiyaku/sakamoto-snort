@@ -14,7 +14,7 @@ TARGET_DEVICE="${DEV_TARGET_DEVICE:-${LUNCH_PRODUCT#lineage_}}"
 REMOTE_SNORT_PATH="system/sucre-snort"
 BUILD_SOURCE_PATH="${DEV_REPLAY_BINARY_PATH:-out/target/product/${TARGET_DEVICE}/system_ext/bin/iptest-replay}"
 OUTPUT_PATH="${DEV_REPLAY_OUTPUT_PATH:-$SNORT_ROOT/build-output/iptest-replay}"
-REPLAY_SRC_PATH="${DEV_REPLAY_SOURCE_PATH:-$SNORT_ROOT/tests/device-modules/ip/native/iptest_replay.cpp}"
+REPLAY_SRC_PATH="${DEV_REPLAY_SOURCE_PATH:-$SNORT_ROOT/tests/device/ip/native/iptest_replay.cpp}"
 
 if [[ ! -d "$LINEAGE_ROOT" ]]; then
     echo "❌ 未找到 LINEAGE_ROOT: $LINEAGE_ROOT" >&2

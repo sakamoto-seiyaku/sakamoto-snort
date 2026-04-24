@@ -14,9 +14,12 @@
 
 ## 2. 相关脚本
 
-- 基线回归：`tests/integration/run.sh`
-- IPRULES 基础验收（控制面 + 少量 ICMP）：`tests/integration/iprules.sh`
-- IPRULES 真机矩阵（ICMP/TCP/UDP 大量组合）：`tests/integration/iprules-device-matrix.sh`
+- active vNext smoke gate（推荐）：`dx-smoke-control` / `dx-smoke-datapath`（经 CTest 暴露；vNext-only）
+- active vNext functional matrix（推荐）：`bash tests/device/ip/run.sh --profile matrix`（vNext-only）
+- legacy 对照脚本（仅回查；位于 `tests/archive/`）：
+  - `tests/archive/integration/run.sh`
+  - `tests/archive/integration/iprules.sh`
+  - `tests/archive/integration/iprules-device-matrix.sh`
 
 ## 3. 流量触发策略（尽量确定性）
 
@@ -28,7 +31,7 @@
 
 注意：当前 iptables 规则对 `lo` 与 DNS 端口（`53/853/5353`）会 `RETURN`，不进入 NFQUEUE；矩阵测试避免使用这些端口/接口。
 
-可选（用于“更大流量 + 更长时间”的 sanity，非语义覆盖主手段）：直接复用 `tests/integration/perf-network-load.sh` 的 download 触发逻辑（它会在真机侧优先用 `curl`/`wget`，不存在则尝试 `toybox wget`），可用于对比空闲 vs 下载阶段的 `METRICS.REASONS` / per-rule stats 变化是否符合预期。
+可选（用于“更大流量 + 更长时间”的 sanity，非语义覆盖主手段）：直接复用 `tests/device/diagnostics/dx-diagnostics-perf-network-load.sh` 的 download 触发逻辑（它会在真机侧优先用 `curl`/`wget`，不存在则尝试 `toybox wget`），可用于对比空闲 vs 下载阶段的 `METRICS.REASONS` / per-rule stats 变化是否符合预期。
 
 ## 4. 必覆盖维度（最小闭环）
 
@@ -72,15 +75,21 @@
 在主机侧运行（示例设备：`28201JEGR0XPAJ`）：
 
 ```bash
-bash tests/integration/run.sh --skip-deploy --serial 28201JEGR0XPAJ
-bash tests/integration/iprules.sh --skip-deploy --serial 28201JEGR0XPAJ
-bash tests/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ
+# 推荐：active vNext（通过 CTest/VS Code Testing 可发现）
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke-control$
+cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke-datapath$
+bash tests/device/ip/run.sh --serial 28201JEGR0XPAJ --profile matrix --skip-deploy
+
+# legacy 对照（仅回查；不注册到 CTest）
+bash tests/archive/integration/run.sh --skip-deploy --serial 28201JEGR0XPAJ
+bash tests/archive/integration/iprules.sh --skip-deploy --serial 28201JEGR0XPAJ
+bash tests/archive/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ
 ```
 
 建议记录输出（并重复至少 3 次）：
 
 ```bash
-bash tests/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ | tee -a /tmp/iprules-device-matrix.$(date +%F).log
+bash tests/archive/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ | tee -a /tmp/iprules-device-matrix.$(date +%F).log
 ```
 
 ## 6. 结果判定（验收口径）
@@ -111,18 +120,18 @@ bash tests/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR
   - host git: `bcb3541db0dafd1c1e8c41d1affd942a233009c0`（working tree dirty）
   - build-output binary build-id: `b8115be650ceea9810943cf11ce7410d`
 - run #1（functional matrix）：
-  - command: `bash tests/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
+  - command: `bash tests/archive/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
   - summary: `passed=252 failed=0 skipped=1`
   - notes: `ICMP in echo-reply not attributable to uid=2000`（device 差异，允许 SKIP）
 - run #2（functional matrix）：
-  - command: `bash tests/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
+  - command: `bash tests/archive/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
   - summary: `passed=252 failed=0 skipped=1`
   - log: `build-output/iptest/iprules-device-matrix-20260323T021815Z-run2.log`
 - run #3（functional matrix）：
-  - command: `bash tests/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
+  - command: `bash tests/archive/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
   - summary: `passed=252 failed=0 skipped=1`
   - log: `build-output/iptest/iprules-device-matrix-20260323T021903Z-run3.log`
 - run #4（best-effort stress, `STRESS_SECONDS=5`）：
-  - command: `STRESS_SECONDS=5 bash tests/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
+  - command: `STRESS_SECONDS=5 bash tests/archive/integration/iprules-device-matrix.sh --skip-deploy --serial 28201JEGR0XPAJ`
   - summary: `passed=258 failed=0 skipped=1`
   - log: `build-output/iptest/iprules-device-matrix-20260323T022232Z-stress5.log`

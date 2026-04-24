@@ -144,4 +144,4 @@ cmake --build --preset host-coverage-clang --target snort-host-coverage
 - `tests/host/README.md`
 - `tests/host/CMakeLists.txt`
 - `tests/integration/README.md`
-- `tests/device-modules/ip/README.md`
+- `docs/testing/ip/IP_TEST_MODULE.md`
