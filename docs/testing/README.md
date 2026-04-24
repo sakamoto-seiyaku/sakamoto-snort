@@ -1,6 +1,6 @@
 # Testing 文档入口
 
-更新时间：2026-04-23
+更新时间：2026-04-24
 
 当前仓库的测试讨论只区分两类运行环境：
 
@@ -18,6 +18,8 @@
   - 当前 `Host` 端测试现状、`ASAN` 结果、覆盖缺口
 - `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
   - `Device / DX` 真机测试重组纲领；记录当前关于 `smoke / diagnostics / archive`、`vNext` 主线与迁移源的共识
+- `docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
+  - `Device / DX` 覆盖矩阵（feature × entrypoint）+ 当前缺口与建议归类
 - `tests/host/README.md`
   - `Host` 运行方式与边界
 - `tests/integration/README.md`
@@ -109,4 +111,5 @@ cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-diagnostics-
 - `docs/testing/IPRULES_DEVICE_VERIFICATION.md`
 - `docs/testing/ip/CONNTRACK_CT_TIER1_VERIFICATION.md`
 - `docs/testing/ip/BUG_kernel_panic_sock_ioctl.md`
+- `docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
 - 归档参考：`docs/testing/archive/TEST_COMPONENTS_MANIFESTO.md`

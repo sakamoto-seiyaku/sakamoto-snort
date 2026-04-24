@@ -398,6 +398,21 @@ if [[ $ready -ne 1 ]]; then
   exit 77
 fi
 
+# Reset per-app traffic counters to make the trigger deterministic.
+traffic_reset="$(ctl_cmd METRICS.RESET "{\"name\":\"traffic\",\"app\":{\"uid\":${app_uid}}}" 2>/dev/null || true)"
+assert_json_pred "VNXDP-05c METRICS.RESET traffic ok (uid=$app_uid)" "$traffic_reset" \
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
+
+traffic_zero="$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${app_uid}}}" 2>/dev/null || true)"
+assert_json_pred "VNXDP-05d traffic zero after reset (uid=$app_uid)" "$traffic_zero" \
+  'import sys,json; j=json.load(sys.stdin); t=j["result"]["traffic"]; total=0; \
+   total += int(t["dns"]["allow"])+int(t["dns"]["block"]); \
+   total += int(t["rxp"]["allow"])+int(t["rxp"]["block"]); \
+   total += int(t["rxb"]["allow"])+int(t["rxb"]["block"]); \
+   total += int(t["txp"]["allow"])+int(t["txp"]["block"]); \
+   total += int(t["txb"]["allow"])+int(t["txb"]["block"]); \
+   assert total==0'
+
 # Trigger datapath traffic as the selected uid.
 for _ in 1 2 3; do
   iptest_adb_shell "nc -n -z -w 1 \"$IPTEST_PEER_IP\" 443 >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
@@ -426,6 +441,30 @@ if [[ $rc -ne 0 ]]; then
   exit 1
 fi
 log_pass "VNXDP-06 STREAM pkt contains reasonId/ruleId"
+
+traffic_after="$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${app_uid}}}" 2>/dev/null || true)"
+assert_json_pred "VNXDP-06b traffic counters increased (uid=$app_uid)" "$traffic_after" \
+  'import sys,json; j=json.load(sys.stdin); t=j["result"]["traffic"]; total=0; \
+   total += int(t["dns"]["allow"])+int(t["dns"]["block"]); \
+   total += int(t["rxp"]["allow"])+int(t["rxp"]["block"]); \
+   total += int(t["rxb"]["allow"])+int(t["rxb"]["block"]); \
+   total += int(t["txp"]["allow"])+int(t["txp"]["block"]); \
+   total += int(t["txb"]["allow"])+int(t["txb"]["block"]); \
+   assert total>=1'
+
+traffic_reset2="$(ctl_cmd METRICS.RESET "{\"name\":\"traffic\",\"app\":{\"uid\":${app_uid}}}" 2>/dev/null || true)"
+assert_json_pred "VNXDP-06c METRICS.RESET traffic ok (uid=$app_uid)" "$traffic_reset2" \
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
+
+traffic_zero2="$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${app_uid}}}" 2>/dev/null || true)"
+assert_json_pred "VNXDP-06d traffic zero after reset (uid=$app_uid)" "$traffic_zero2" \
+  'import sys,json; j=json.load(sys.stdin); t=j["result"]["traffic"]; total=0; \
+   total += int(t["dns"]["allow"])+int(t["dns"]["block"]); \
+   total += int(t["rxp"]["allow"])+int(t["rxp"]["block"]); \
+   total += int(t["rxb"]["allow"])+int(t["rxb"]["block"]); \
+   total += int(t["txp"]["allow"])+int(t["txp"]["block"]); \
+   total += int(t["txb"]["allow"])+int(t["txb"]["block"]); \
+   assert total==0'
 
 set +e
 printed="$(ctl_cmd IPRULES.PRINT "{\"app\":{\"uid\":${app_uid}}}" 2>/dev/null)"
