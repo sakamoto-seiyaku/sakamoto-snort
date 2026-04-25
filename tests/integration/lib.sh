@@ -7,7 +7,10 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SNORT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$SNORT_ROOT/dev/dev-android-device-lib.sh"
+if ! source "$SNORT_ROOT/dev/dev-android-device-lib.sh"; then
+  echo "BLOCKED: adb/device helper unavailable; install adb or set ADB/ADB_SERIAL" >&2
+  exit 77
+fi
 
 # Prefer a stable adb path if the caller set it; otherwise use dev lib's ADB_BIN.
 ADB="${ADB:-$ADB_BIN}"
@@ -27,9 +30,9 @@ FAILED=0
 SKIPPED=0
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_pass() { echo -e "${GREEN}✓${NC} $1"; ((PASSED++)); }
-log_fail() { echo -e "${RED}✗${NC} $1"; ((FAILED++)); }
-log_skip() { echo -e "${YELLOW}⊘${NC} $1"; ((SKIPPED++)); }
+log_pass() { echo -e "${GREEN}✓${NC} $1"; PASSED=$((PASSED + 1)); }
+log_fail() { echo -e "${RED}✗${NC} $1"; FAILED=$((FAILED + 1)); }
+log_skip() { echo -e "${YELLOW}⊘${NC} $1"; SKIPPED=$((SKIPPED + 1)); }
 
 log_section() {
   echo ""

@@ -56,12 +56,13 @@ Archive（仅回查；不算 active 覆盖）：
 | strict reject / error model（未知 args key/命令等） | — | — | — | ✅（例如 `tests/host/control_vnext_{metrics,iprules,stream,domain}_surface_tests.cpp`） |
 | stream: activity start→event→stop | — | ✅（`STREAM.START type=activity` + started notice + STOP ack barrier） | — | ✅（`tests/host/control_vnext_stream_surface_tests.cpp`） |
 | stream: pkt 事件字段（reasonId/ruleId/wouldRuleId） | — | — | ✅（Tier-1 打流 + `STREAM.START type=pkt` 抓到 `reasonId/ruleId` / overlay / IFACE_BLOCK） | ◐（host 侧更偏 surface/state，不产出真实 pkt） |
-| stream: dns 事件字段（端到端） | — | ✅（netd inject → `DnsListener` → `STREAM.START type=dns` 收到事件） | — | ◐（host 侧可测 START/STOP/state；不等于真机 DNS 链路） |
+| stream: dns 事件字段（端到端） | — | ✅（netd inject → `DnsListener` → `STREAM.START type=dns`；`VNT-10b*` + `VNT-DOM-03/04/06/07/09`） | — | ◐（host 侧可测 START/STOP/state；不等于真机 DNS 链路） |
 | inventory: `APPS.LIST` shape/sort/limit | — | ✅（apps[]、uid 排序、limit/truncated） | ✅（IP 模组用于挑选 `uid>=10000` 的测试 app） | ✅（control surface tests） |
 | inventory: `IFACES.LIST` shape/sort | — | — | ✅（IFACE_BLOCK 场景需要 `IFACES.LIST` + ifindex→kind） | ◐ |
 | config: `CONFIG.GET/SET`（device/app keys） | — | ✅（`block.enabled`、`perfmetrics.enabled`、`tracked` 等） | ✅（`block.enabled/iprules.enabled/tracked/block.ifaceKindMask`） | ✅ |
-| domain surface：`DOMAINRULES/DOMAINPOLICY/DOMAINLISTS` | — | ✅（GET/APPLY/IMPORT 基线） | — | ✅（domain surface tests 覆盖更多错误/边界） |
-| domain observability：`METRICS.GET(domainSources)` 增长/RESET 边界 | — | ✅（用 `DEV.DOMAIN.QUERY` 稳定触发；含 `block.enabled` gating） | — | ✅（`tests/host/domain_policy_sources_tests.cpp` + vNext metrics surface） |
+| domain surface：`DOMAINRULES/DOMAINPOLICY/DOMAINLISTS` | — | ✅（GET/APPLY/IMPORT 基线 + `VNT-DOM-01a~01b` 负向契约） | — | ✅（domain surface tests 覆盖更多错误/边界） |
+| domain observability：`METRICS.GET(domainSources)` 增长/RESET 边界 | — | ✅（`DEV.DOMAIN.QUERY` gating + `VNT-DOM-02~09` bucket 级 e2e） | — | ✅（`tests/host/domain_policy_sources_tests.cpp` + vNext metrics surface） |
+| domain casebook：Domain Case 1–9 | — | ✅（`tests/integration/vnext-domain-casebook.py`：`VNT-DOM-01a~09`；Case 8 hook 缺失→BLOCKED） | — | ◐（Host 覆盖组件契约，不替代真机 e2e） |
 | iprules surface：`IPRULES.PREFLIGHT/APPLY/PRINT` | — | ✅（shape + mapping + PRINT 排序/字段） | ✅（smoke 基线 + datapath 场景使用） | ✅（`tests/host/control_vnext_iprules_surface_tests.cpp`） |
 | datapath correctness：verdict + per-rule stats + reasons | — | — | ✅（allow/block/would-match overlay/IFACE_BLOCK；stats hitPackets） | ◐（host 侧不具备 NFQUEUE/iptables 真实链路） |
 | metrics surface：`METRICS.GET`（perf/reasons/traffic/conntrack） | — | ✅（shape + 部分 best-effort traffic 触发/RESET） | ◐（case 内会读 reasons/traffic 用于诊断/断言） | ✅ |
@@ -119,11 +120,11 @@ Archive（仅回查；不算 active 覆盖）：
 - flake / 前置：无（Host lane）。
 
 ### Gap-02（已补齐）：DNS stream 端到端事件（不依赖公网）
-- 现状（已解决）：`dx-smoke-control` 通过 **netd inject** 直接触发 `DnsListener`，并在 `STREAM.START(type="dns")` 下断言收到匹配事件。
+- 现状（已解决）：`dx-smoke-control` 通过 **netd inject** 直接触发 `DnsListener`，并在 `STREAM.START(type="dns")` 下断言收到匹配事件、字段、suppressed notice、`traffic.dns` 与 `domainSources` bucket。
 - 入口：
   - 注入工具源码：`tests/device/dx/native/dx_netd_inject.cpp`
   - 构建脚本：`dev/dev-build-dx-netd-inject.sh`
-  - smoke 用例：`tests/integration/vnext-baseline.sh` 的 `VNT-10b3`（dns stream e2e）
+  - smoke 用例：`tests/integration/vnext-baseline.sh` 的 `VNT-10b3`（dns stream e2e）与 `tests/integration/vnext-domain-casebook.py` 的 `VNT-DOM-03/04/06/07/09`
 
 ### Gap-03（已补齐）：`METRICS.GET(name="traffic")` 的稳定可控触发
 - 现状（已解决）：`dx-smoke-datapath`（IP Tier‑1）已在受控打流下断言：
@@ -132,10 +133,9 @@ Archive（仅回查；不算 active 覆盖）：
   - 再次 reset 能恢复到 0
 - 入口：`tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`（`VNXDP-05c~06d`）
 
-### Gap-04：真实系统 resolver hook（netd resolv patch）闭环
-- 现状：netd hook 的挂载/触发在部分设备/环境下不稳定（见 `dx-smoke-platform` 的 prereq 提示与 `dx-diagnostics-perf-network-load` 的 DNS 断言 SKIP 语义）。
-- 建议归类：**diagnostics**（平台/环境依赖强，先以“可观测/排障”为主，不作为 smoke gate）。
-- 目标口径（后续若要补测）：在 hook 就绪前置下，触发真实 DNS lookup 并断言 dns stream/`dns_decision_us.samples` 增长（避免公网可达性做 gate）。
+### Gap-04（Domain smoke 已接入）：真实系统 resolver hook（netd resolv patch）闭环
+- 现状：`dx-smoke-control` 的 `VNT-DOM-08` 在 hook 就绪时触发真实 DNS lookup 并断言 dns stream、`traffic.dns.block` 与 `domainSources`；hook 不活跃时明确 `BLOCKED` 并提示 `dev/dev-netd-resolv.sh status|prepare`。
+- 仍需注意：netd hook 的挂载/触发在部分设备/环境下不稳定，因此 `BLOCKED` 属于环境前置不足，不等同于 sucre-snort 本体 FAIL。
 
 ### Gap-05：大 payload / limits 在 Device 侧的覆盖
 - 现状：Host 已覆盖 `DOMAINLISTS.IMPORT` limits（`maxImportBytes/maxImportDomains`）与 `IPRULES.APPLY` preflight hard-limit 的结构化错误；Device 侧未覆盖。

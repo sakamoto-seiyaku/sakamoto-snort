@@ -545,6 +545,17 @@ PY
     return 0
 }
 
+domain_casebook_smoke() {
+    local uid="$1"
+    local injector="${DX_NETD_INJECT_DEVICE_BIN:-/data/local/tmp/dx-netd-inject}"
+    python3 "$SCRIPT_DIR/vnext-domain-casebook.py" \
+        --port "$VNEXT_PORT" \
+        --uid "$uid" \
+        --adb "$ADB" \
+        --serial "${ADB_SERIAL_RESOLVED:-}" \
+        --injector "$injector"
+}
+
 main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
@@ -859,6 +870,29 @@ PY
     assert_json_pred "VNT-22 DOMAINLISTS.IMPORT updates only domainsCount" "$lists_get2" \
         "import sys,json; j=json.load(sys.stdin); ls=j['result']['lists']; e=[x for x in ls if x['listId']=='${list_id}'][0]; assert e['domainsCount']==2 and e['url']=='https://example/list' and e['etag']=='etagX' and e['outdated']==0"
 
+    log_section "Domain Casebook"
+
+    if [[ -z "$app_uid" ]]; then
+        log_skip "VNT-DOM Domain casebook skipped (no apps)"
+    else
+        if ! stage_dx_netd_injector; then
+            exit 77
+        fi
+
+        set +e
+        domain_casebook_smoke "$app_uid"
+        local domain_casebook_rc=$?
+        set -e
+        if [[ $domain_casebook_rc -eq 77 ]]; then
+            exit 77
+        fi
+        if [[ $domain_casebook_rc -ne 0 ]]; then
+            log_fail "VNT-DOM Domain casebook Case 1-9"
+            return 1
+        fi
+        log_pass "VNT-DOM Domain casebook Case 1-9"
+    fi
+
     log_section "IPRULES Surface"
 
     if [[ -z "$app_uid" ]]; then
@@ -1009,17 +1043,18 @@ PY
 
         traffic_shell_after=$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${uid_shell}}}" 2>/dev/null || true)
 
-        if printf '%s\n' "$traffic_shell_after" | python3 - <<'PY' >/dev/null 2>&1
-	import json, sys, os
-	j = json.loads(sys.stdin.read() or "{}")
-	if not j.get("ok", False):
-	    raise SystemExit(1)
+        if TRAFFIC_JSON="$traffic_shell_after" python3 - <<'PY' >/dev/null 2>&1
+import json
+import os
+j = json.loads(os.environ.get("TRAFFIC_JSON") or "{}")
+if not j.get("ok", False):
+    raise SystemExit(1)
 t = j["result"]["traffic"]
 total = 0
 for k in ("dns","rxp","rxb","txp","txb"):
     total += int(t[k]["allow"]) + int(t[k]["block"])
-	if total <= 0:
-	    raise SystemExit(1)
+if total <= 0:
+    raise SystemExit(1)
 PY
         then
             log_pass "VNT-22m traffic counters increased (shell uid=2000)"
@@ -1028,15 +1063,16 @@ PY
                 ctl_cmd METRICS.RESET "{\"name\":\"traffic\",\"app\":{\"uid\":${uid_shell}}}"
 
             traffic_shell_reset=$(ctl_cmd METRICS.GET "{\"name\":\"traffic\",\"app\":{\"uid\":${uid_shell}}}" 2>/dev/null || true)
-            if printf '%s\n' "$traffic_shell_reset" | python3 - <<'PY' >/dev/null 2>&1
-	import json, sys
-	j = json.loads(sys.stdin.read() or "{}")
-	if not j.get("ok", False):
-	    raise SystemExit(1)
+            if TRAFFIC_JSON="$traffic_shell_reset" python3 - <<'PY' >/dev/null 2>&1
+import json
+import os
+j = json.loads(os.environ.get("TRAFFIC_JSON") or "{}")
+if not j.get("ok", False):
+    raise SystemExit(1)
 t = j["result"]["traffic"]
 for k in ("dns","rxp","rxb","txp","txb"):
-	    if int(t[k]["allow"]) != 0 or int(t[k]["block"]) != 0:
-	        raise SystemExit(1)
+    if int(t[k]["allow"]) != 0 or int(t[k]["block"]) != 0:
+        raise SystemExit(1)
 PY
             then
                 log_pass "VNT-22o traffic reset clears per-app counters (shell uid=2000)"

@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-04-24
+更新时间：2026-04-25
 状态：当前共识（以仓库内 code + tests + OpenSpec 主规格为准）
 
 ## 0. 阅读指南
@@ -52,7 +52,7 @@ Status 口径（全篇统一）：
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
 - Device/DX 冒烟补齐以 casebook 为验收口径推进（见 3.1）。
 - 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
-- [NOTE] OpenSpec 当前 active changes：无（截至 2026-04-24）。
+- [NOW] OpenSpec 当前 active changes：`complete-device-smoke-casebook-domain`（只做 apply；归档另行处理）。
 
 ### 1.2 功能（Domain + IP）
 
@@ -97,7 +97,7 @@ Status 口径（全篇统一）：
 
 ### 3.1 工程化：Device / DX 冒烟 Casebook 补齐（以 casebook 为验收口径）
 
-- [NEXT] `complete-device-smoke-casebook-domain`：补齐 Domain 模块 smoke 口径（dns stream e2e、stable traffic metrics、suppressed notice、rdns 相关断言；落到 `dx-smoke-control`）
+- [NOW] `complete-device-smoke-casebook-domain`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；落到 `dx-smoke-control`）
 - [NEXT] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、维度级 traffic/reasons/stats、pkt stream 字段；落到 `dx-smoke-datapath` / IP smoke profile）
 - [NEXT] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（ct.state/direction 场景；保持 Tier‑1 可重复）
 - [NEXT] `complete-device-smoke-casebook-other`：把 `perfmetrics.enabled` 的“可用性验证”提炼进 smoke 口径，并补上极端规模（海量 domain/import、海量 iprules）“失败必须可解释 + daemon 仍可 HELLO”的场景（默认不进 `dx-smoke` 主链，可选运行）
@@ -148,4 +148,3 @@ Status 口径（全篇统一）：
 - **C 不拆独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 IPRULES v1 change 内按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
 - **B 已补齐**：它与 IPRULES 基本解耦，当前已落地；剩余工作主要是把过期设计文档状态修正，避免被误读成“未开始”。
 - **D 独立**：perfmetrics 只承载性能健康指标；它在语义上独立于 A/B/C，可在任意时点推进，不改变当前主线优先级。
-

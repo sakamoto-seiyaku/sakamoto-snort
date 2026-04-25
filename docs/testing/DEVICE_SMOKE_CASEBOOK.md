@@ -308,11 +308,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **现有覆盖**
 - `tests/integration/vnext-baseline.sh`：`VNT-15~22`
+- `tests/integration/vnext-domain-casebook.py`（经 `dx-smoke-control` 调用）：`VNT-DOM-01a~01b`
 
 **缺口**
-- （完善）补 1~2 条负向契约，避免“脚本能跑但状态已坏”：
-  - `DOMAINLISTS.IMPORT` unknown listId → `INVALID_ARGUMENT` + hint（先 `DOMAINLISTS.APPLY`）
-  - `DOMAINRULES.APPLY` 尝试删除仍被 policy 引用的 ruleId → `INVALID_ARGUMENT` + conflicts[] + hint
+- 已补齐：`DOMAINLISTS.IMPORT` unknown listId → `INVALID_ARGUMENT` + hint；`DOMAINRULES.APPLY` 删除仍被 policy 引用的 ruleId → `INVALID_ARGUMENT` + conflicts[] + hint。
 
 ---
 
@@ -339,12 +338,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 **现有覆盖**
 - `tests/integration/vnext-baseline.sh`：`VNT-22i3~VNT-22j7`
 - 注意：当前“触发判决”使用 `DEV.DOMAIN.QUERY`（稳定，但不是系统真实 resolver 链路）
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-02` 覆盖 APP / DEVICE_WIDE / FALLBACK bucket 级增长。
 
 **缺口**
-- （完善）目前只看 total，不看 bucket；建议至少把这三类 bucket 覆盖到：
-  - APP：`CUSTOM_*`（见 Case 3/6）
-  - DEVICE_WIDE：`GLOBAL_*`（见 Case 6）
-  - FALLBACK：`MASK_FALLBACK`（见 Case 7）
+- 已补齐 bucket 级覆盖：APP=`CUSTOM_*`（Case 3/6）、DEVICE_WIDE=`GLOBAL_*`（Case 6）、FALLBACK=`MASK_FALLBACK`（Case 7）。
 
 ---
 
@@ -390,9 +387,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **现有覆盖**
 - `tests/integration/vnext-baseline.sh`：`VNT-10b*`（但目前只验证 start→event→stop，不看 metrics）
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-03`
 
 **缺口**
-- （完善）补齐 traffic/domainSources 断言；补齐 dns event 字段覆盖（目前只看少量字段）
+- 已补齐：dns event 字段、`traffic.dns.allow/block`、`domainSources` `CUSTOM_WHITELIST.allow` / `CUSTOM_BLACKLIST.block`。
 
 ---
 
@@ -423,9 +421,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **现有覆盖**
 - `tests/integration/vnext-baseline.sh`：`VNT-22j2~22j5` 覆盖 “tracked=0 时 domainSources 仍增长”（但未覆盖 suppressed notice / traffic.dns）
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-04`
 
 **缺口**
-- （新增）把 suppressed notice + traffic.dns 断言纳入 smoke
+- 已补齐：`notice.suppressed`、notice traffic snapshot/hint、无本次 dns event、`traffic.dns` 与 `domainSources` 增长。
 
 ---
 
@@ -457,9 +456,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 **现有覆盖**
 - 配置可设：`tests/integration/vnext-baseline.sh`：`VNT-09~10`
 - domainSources 基本增长：`tests/integration/vnext-baseline.sh`：`VNT-22i* / VNT-22j*`
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-05`
 
 **缺口**
-- （新增）把 `domain.custom.enabled=0/1` 的端到端行为固化成 smoke Case（当前只有“能设”，没有“触发→输出”）
+- 已补齐：`domain.custom.enabled=1` 命中 `CUSTOM_BLACKLIST`，`0` 回落 `MASK_FALLBACK`，并校验对应 `domainSources` bucket。
 
 ---
 
@@ -502,10 +502,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - domainSources(app)：对应 bucket 增长
 
 **现有覆盖**
-- 无
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-06`
 
 **缺口**
-- （新增）需要把这条优先级闭环纳入 smoke；否则现场排障容易把 “scope 不对” 误判成系统 bug
+- 已补齐：APP allow 覆盖 device block、APP block 覆盖 device allow、device-only block 三条路径。
 
 ---
 
@@ -549,9 +549,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **现有覆盖**
 - list surface：`tests/integration/vnext-baseline.sh`：`VNT-19~22`
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-07`
 
 **缺口**
-- （新增）缺“list 影响判决”的端到端（现在只验证能 apply/get/import）
+- 已补齐：enabled block list、disabled block list、allow 覆盖 block 的 DNS verdict 与 metrics 闭环。
 
 ---
 
@@ -577,7 +578,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
   - `METRICS.RESET(name=traffic, app)`
   - `METRICS.RESET(name=domainSources, app)`
 - 触发一次真实解析（避免缓存：用 unique 子域名）：
-  - shell uid：执行一次会触发 getaddrinfo 的命令（例如 `ping -c 1 -W 1 <domain>` 或 `nc <domain> 80`）
+  - shell uid：执行一次会触发 getaddrinfo 的命令；smoke 优先用 `nc -z -w 1 <domain> 80`，无 `nc` 时再退回 `ping -c 1 -W 1 <domain>`
   - 真实 app uid：同上，但在该 uid 的进程上下文运行
 - 停止 stream：`STREAM.STOP`
 
@@ -594,10 +595,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 **现有覆盖（但不满足“真实解析”要求）**
 - 当前已有 “dns stream 端到端”，但它是 **netd inject 合成请求**：
   - `tests/integration/vnext-baseline.sh`：`VNT-10b*`（见「本模块 / Case 3」）
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-08`（hook 就绪时执行真实 resolver；hook 不活跃时报 `BLOCKED` 并提示 `dev/dev-netd-resolv.sh status|prepare`）
 
 **缺口**
-- （新增）需要把“真实解析触发”写成正式 smoke gate（hook 不活跃 = BLOCKED）
-- （完善）补 “shell uid=2000 + 真实 app uid” 两条触发路径的口径与工具说明
+- 已补齐 smoke 口径：优先用 shell uid=2000 + `nc` 做真实 resolver 触发；hook 未激活或 shell uid 无法建立可观测 app 时为明确 `BLOCKED`。
 
 ---
 
@@ -639,10 +640,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - domainSources(app)：`CUSTOM_RULE_WHITE.allow>=1` 且 `CUSTOM_RULE_BLACK.block>=1`
 
 **现有覆盖**
-- 无（当前 smoke 只覆盖了 `CUSTOM_(WHITE|BLACK)LIST`、`GLOBAL_*`、`MASK_FALLBACK`；缺 `CUSTOM_RULE_*`）
+- `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-09`
 
 **缺口**
-- （自动化层面）若要把这条纳入 active smoke，需要补一个稳定的规则生成 + restore 策略（调查先记录，不做实现）
+- 已补齐：生成 exact-domain allow rule + regex block rule，app policy 引用 ruleIds，校验 `CUSTOM_RULE_WHITE/BLACK` stream 与 metrics，并在失败路径恢复 rules/policy。
 
 ---
 
@@ -1182,20 +1183,20 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 6) **pkt stream 事件字段**：补“字段契约”的集中断言（见「可观测性 / Case 1」）
 
 ### B) 新增用例（现在没有这个“人话场景”）
-1) **域名：DNS 真机真实解析端到端冒烟（强需求；域名 / Case 8）**
+1) **域名：DNS 真机真实解析端到端冒烟（已纳入 `VNT-DOM-08`；域名 / Case 8）**
     - 明确“netd hook 不活跃”= BLOCKED（给出 prepare 命令）
     - 同时覆盖 shell uid=2000 + 真实 app uid 两条触发路径
-2) **域名：DNS netd inject 端到端（稳定触发 metrics + 字段覆盖；域名 / Case 3）**
-3) **域名：tracked=0 suppressed notice（域名 / Case 4）**
-4) **域名：domain.custom.enabled 语义（域名 / Case 5）**
-5) **域名：device vs app policy 优先级（域名 / Case 6）**
-6) **域名：DomainLists enable/disable + allow 覆盖 block（域名 / Case 7）**
+2) **域名：DNS netd inject 端到端（已纳入 `VNT-DOM-03`；域名 / Case 3）**
+3) **域名：tracked=0 suppressed notice（已纳入 `VNT-DOM-04`；域名 / Case 4）**
+4) **域名：domain.custom.enabled 语义（已纳入 `VNT-DOM-05`；域名 / Case 5）**
+5) **域名：device vs app policy 优先级（已纳入 `VNT-DOM-06`；域名 / Case 6）**
+6) **域名：DomainLists enable/disable + allow 覆盖 block（已纳入 `VNT-DOM-07`；域名 / Case 7）**
 7) **可观测性：DNS→IP 绑定→pkt stream 带 domain（可观测性 / Case 2）**
 8) **可观测性：pkt tracked=0 suppressed notice（可观测性 / Case 3）**
 9) **IP：iprules.enabled=0 的 gating correctness（IP / Case 7）**
 10) **IP：payload 读写稳定触发 bytes（IP / Case 8）**
 11) **conntrack（L4 state）最小闭环纳入 smoke**
-12) **域名：DOMAINRULES(ruleIds) 端到端（CUSTOM_RULE_*；域名 / Case 9）**
+12) **域名：DOMAINRULES(ruleIds) 端到端（已纳入 `VNT-DOM-09`；域名 / Case 9）**
 13) **其他：极端规模下的控制面下发/limits sanity（其他 / Case 2）**
 
 ---
@@ -1206,6 +1207,7 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - stream dns（当前是 netd inject）：`VNT-10b*`
 - domain surface：`VNT-15~22`
 - domainSources 行为：`VNT-22i* / VNT-22j*`
+- domain casebook：`VNT-DOM-01a~09`（`tests/integration/vnext-domain-casebook.py`，由 `dx-smoke-control` 调用）
 - datapath（Tier‑1）：`tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`
 - allow：`VNXDP-05~07`
 - traffic reset/grow/reset：`VNXDP-05c~06d`
