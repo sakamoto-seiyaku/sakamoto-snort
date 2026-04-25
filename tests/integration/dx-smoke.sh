@@ -83,8 +83,8 @@ if [[ $DO_DEPLOY -eq 0 ]]; then
   control_cmd+=(--skip-deploy)
   datapath_cmd+=(--skip-deploy)
 else
-  # platform 已 deploy 后，后续两段固定复用当前守护进程
-  control_cmd+=(--skip-deploy)
+  # control owns the startup-latched inetControl() gate check, so let it deploy
+  # in full dx-smoke mode instead of forcing VNT-00 to skip.
   datapath_cmd+=(--skip-deploy)
 fi
 
@@ -101,4 +101,3 @@ run_stage "dx-smoke-datapath" "${datapath_cmd[@]}" || exit $?
 echo ""
 echo "dx-smoke: PASS"
 exit 0
-
