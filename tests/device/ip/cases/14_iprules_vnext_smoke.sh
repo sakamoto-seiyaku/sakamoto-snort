@@ -152,7 +152,9 @@ if [[ $st -ne 0 ]]; then
   exit 77
 fi
 assert_json_pred "VNX-05 IPRULES.PRINT sorted + canonical CIDR" "$printed" \
-  'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; ids=[r["ruleId"] for r in rules]; assert len(rules)==2; assert ids==sorted(ids); assert any(r["dst"]=="1.2.3.0/24" for r in rules); assert any("dst=1.2.3.0/24" in r["matchKey"] for r in rules)'
+  'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; ids=[r["ruleId"] for r in rules]; assert len(rules)==2; assert ids==sorted(ids); assert any(r["dst"]=="1.2.3.0/24" for r in rules); assert any("dst=1.2.3.0/24" in r["matchKey"] for r in rules); \
+   required=("hitPackets","hitBytes","wouldHitPackets","wouldHitBytes"); \
+   assert all(isinstance(r.get("stats",{}).get(k), int) for r in rules for k in required)'
 
 log_pass "iprules vNext smoke ok"
 exit 0

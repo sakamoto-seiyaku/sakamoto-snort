@@ -1,6 +1,6 @@
 # Device / DX：真机冒烟过程中发现的 Snort 本体问题记录
 
-更新时间：2026-04-24
+更新时间：2026-04-25
 
 目的：
 - 只记录在执行 `docs/testing/DEVICE_SMOKE_CASEBOOK.md` / `dx-smoke*` / `dx-diagnostics*` 过程中发现的 **sucre-snort 本体**问题（daemon 行为/契约/热路径/控制面）。

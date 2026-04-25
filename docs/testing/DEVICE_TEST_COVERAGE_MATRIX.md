@@ -1,6 +1,6 @@
 # Device / DX 测试覆盖矩阵（vNext；smoke + diagnostics）
 
-更新时间：2026-04-24
+更新时间：2026-04-25
 
 范围与目的：
 - 范围：仅本仓库 `sucre-snort` 的 **Device / DX** 真机测试（host/WSL 侧脚本通过 ADB 驱动 rooted Android 真机）。
@@ -63,10 +63,11 @@ Archive（仅回查；不算 active 覆盖）：
 | domain surface：`DOMAINRULES/DOMAINPOLICY/DOMAINLISTS` | — | ✅（GET/APPLY/IMPORT 基线 + `VNT-DOM-01a~01b` 负向契约） | — | ✅（domain surface tests 覆盖更多错误/边界） |
 | domain observability：`METRICS.GET(domainSources)` 增长/RESET 边界 | — | ✅（`DEV.DOMAIN.QUERY` gating + `VNT-DOM-02~09` bucket 级 e2e） | — | ✅（`tests/host/domain_policy_sources_tests.cpp` + vNext metrics surface） |
 | domain casebook：Domain Case 1–9 | — | ✅（`tests/integration/vnext-domain-casebook.py`：`VNT-DOM-01a~09`；Case 8 hook 缺失→BLOCKED） | — | ◐（Host 覆盖组件契约，不替代真机 e2e） |
+| IP casebook：IP Case 1–8 | — | — | ✅（`VNX-03~05` + `VNXDP-05~13`；不含 `IP - Conntrack`） | ◐（Host 覆盖组件契约，不替代真机 e2e） |
 | iprules surface：`IPRULES.PREFLIGHT/APPLY/PRINT` | — | ✅（shape + mapping + PRINT 排序/字段） | ✅（smoke 基线 + datapath 场景使用） | ✅（`tests/host/control_vnext_iprules_surface_tests.cpp`） |
-| datapath correctness：verdict + per-rule stats + reasons | — | — | ✅（allow/block/would-match overlay/IFACE_BLOCK；stats hitPackets） | ◐（host 侧不具备 NFQUEUE/iptables 真实链路） |
-| metrics surface：`METRICS.GET`（perf/reasons/traffic/conntrack） | — | ✅（shape + 部分 best-effort traffic 触发/RESET） | ◐（case 内会读 reasons/traffic 用于诊断/断言） | ✅ |
-| traffic metrics：受控触发 + RESET（per-app） | — | ◐（baseline 中有 best-effort 触发；可能 skip） | ✅（Tier-1 `nc` 打流 + `METRICS.GET/RESET(name=traffic,app)` 断言） | ✅（metrics surface tests 覆盖 shape + reset 语义） |
+| datapath correctness：verdict + per-rule stats + reasons | — | — | ✅（allow/block/would-match/IFACE_BLOCK、`block.enabled=0`、`iprules.enabled=0`、payload bytes；stats `hitPackets/hitBytes`） | ◐（host 侧不具备 NFQUEUE/iptables 真实链路） |
+| metrics surface：`METRICS.GET`（perf/reasons/traffic/conntrack） | — | ✅（shape + 部分 best-effort traffic 触发/RESET） | ✅（IP Case 2–8 对 reasons/traffic 做 bucket 级断言） | ✅ |
+| traffic metrics：受控触发 + RESET（per-app） | — | ◐（baseline 中有 best-effort 触发；可能 skip） | ✅（Tier-1 `nc` + payload；`traffic.txp/rxp/rxb` bucket 与 reset 断言） | ✅（metrics surface tests 覆盖 shape + reset 语义） |
 | `RESETALL` baseline | — | ✅（RESETALL + HELLO；best-effort conntrack 清零） | ◐（各 case 内会先 RESETALL 做干净基线） | ✅ |
 
 ### 2.2 Diagnostics 覆盖矩阵（Device / DX）
@@ -129,9 +130,10 @@ Archive（仅回查；不算 active 覆盖）：
 ### Gap-03（已补齐）：`METRICS.GET(name="traffic")` 的稳定可控触发
 - 现状（已解决）：`dx-smoke-datapath`（IP Tier‑1）已在受控打流下断言：
   - `METRICS.RESET(name=traffic,app)` 能清零
-  - 打流后 counters 增长
-  - 再次 reset 能恢复到 0
-- 入口：`tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`（`VNXDP-05c~06d`）
+  - `nc -z` 打流后 `txp.allow/txp.block` 等 verdict 维度增长
+  - `block.enabled=0` 时 traffic 不增长
+  - 固定 payload 读 `65536` bytes 后 `rxb.allow` 与 rule `hitBytes` 达到阈值
+- 入口：`tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`（`VNXDP-05d~13n`）
 
 ### Gap-04（Domain smoke 已接入）：真实系统 resolver hook（netd resolv patch）闭环
 - 现状：`dx-smoke-control` 的 `VNT-DOM-08` 在 hook 就绪时触发真实 DNS lookup 并断言 dns stream、`traffic.dns.block` 与 `domainSources`；hook 不活跃时明确 `BLOCKED` 并提示 `dev/dev-netd-resolv.sh status|prepare`。

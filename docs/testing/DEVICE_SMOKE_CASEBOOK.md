@@ -673,7 +673,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **现有覆盖**
 - `tests/integration/vnext-baseline.sh`：`VNT-22c~22f`
-- `tests/device/ip/cases/14_iprules_vnext_smoke.sh`：`VNX-03~05`
+- `tests/device/ip/cases/14_iprules_vnext_smoke.sh`：`VNX-03~05`（含 `IPRULES.PRINT` stats shape）
 
 **缺口**
 - 无
@@ -707,10 +707,8 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-05~07`
 
 **缺口**
-- （完善）当前 datapath smoke 会吞掉 `nc` 成败（`|| true`），缺“allow 就应该能通”的硬断言
-- （完善）allow 路径目前没硬断言 `reasons.IP_RULE_ALLOW` 增长
-- （完善）traffic 现在以 total 为主，需要补维度级断言（至少 `traffic(app).txp.allow`）
-- （完善）若要把 bytes 变成 hard assert，需要把触发从 `nc -z` 换成“真实读写”（例如 `iptest_tier1_tcp_count_bytes`），再断言 `txb/hitBytes/reasons.*.bytes`
+- 已补齐：`VNXDP-06` 硬断言 TCP 成功；`VNXDP-06b~06d` 断言 pkt stream、`reasons.IP_RULE_ALLOW` 与 `traffic.txp.allow`；`VNXDP-07` 断言 rule `hitPackets`。
+- bytes hard assert 归入「IP / Case 8」的 payload 流量闭环（`VNXDP-13*`），避免在短连接上做波动断言。
 
 ---
 
@@ -739,8 +737,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-08*`
 
 **缺口**
-- （完善）同样缺 `nc` 失败的硬断言（当前吞错误）
-- （完善）traffic(block 维度) 没看（至少 `traffic(app).txp.block`）
+- 已补齐：`VNXDP-08f` 硬断言 TCP 失败；`VNXDP-08g~08j` 断言 pkt stream、`reasons.IP_RULE_BLOCK`、`traffic.txp.block` 与 rule `hitPackets`。
 
 ---
 
@@ -768,8 +765,8 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-09*`
 
 **缺口**
-- （完善）可补“连通性应成功”的硬断言（当前吞错误）
-- （完善）若要断言 `wouldHitBytes`，同样需要把触发从 `nc -z` 换成“真实读写”
+- 已补齐：`VNXDP-09f` 硬断言 TCP 成功；`VNXDP-09g~09j` 断言 `ALLOW_DEFAULT + wouldRuleId`、`reasons.ALLOW_DEFAULT`、`traffic.txp.allow` 与 `wouldHitPackets`。
+- `wouldHitBytes` 仍不在短连接 case 中做 hard assert；bytes 口径统一由「IP / Case 8」payload 流量覆盖。
 
 ---
 
@@ -798,8 +795,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-10*`
 
 **缺口**
-- （完善）缺“nc 应失败”的硬断言（当前吞错误）
-- （完善）traffic(block 维度) 没看（至少 `traffic(app).txp.block`）
+- 已补齐：`VNXDP-10g` 硬断言 TCP 失败；`VNXDP-10h~10k` 断言 `IFACE_BLOCK` pkt stream、`reasons.IFACE_BLOCK`、`traffic.txp.block`，以及 shadow rule stats 不增长。
 
 ---
 
@@ -821,7 +817,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-11*`
 
 **缺口**
-- （完善）当前只断言了 reasons；未断言 traffic 也被 gating（以及 pkt stream 不应产生 pkt frame）
+- 已补齐：`VNXDP-11e~11h` 断言 `block.enabled=0` 时 TCP 仍可通、无匹配 pkt stream verdict、reasons 为 0、per-app traffic 为 0。
 
 ---
 
@@ -852,10 +848,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
   - `nc` 应该失败；pkt stream 命中 `IP_RULE_BLOCK + ruleId`
 
 **现有覆盖**
-- 无（当前 smoke 未覆盖 `iprules.enabled=0` 的 correctness；perf 会切开关但不做 verdict 断言）
+- `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-12*`
 
 **缺口**
-- （新增）建议把这条纳入 smoke：否则现场排障很容易把 “开关关着” 当成 “规则没生效”
+- 已补齐：`VNXDP-12c~12m` 覆盖 `iprules.enabled=0` correctness（TCP 成功、`ALLOW_DEFAULT`、traffic/reasons allow bucket、rule stats 不增长、恢复 `iprules.enabled=1`）。
 
 ---
 
@@ -891,9 +887,11 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **现有覆盖**
 - payload 触发 + bytes 断言在 `tests/device/ip/cases/22_conntrack_ct.sh` 里已有（`iptest_tier1_tcp_count_bytes`），但它验证的是 CT，且不在 smoke profile。
+- `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-13*`
 
 **缺口**
-- （新增）把这条纳入 smoke（它是 bytes/traffic 维度断言最稳的触发方式）
+- 已补齐：`VNXDP-13f~13n` 用固定 `65536` bytes payload 断言 `traffic.rxb.allow`、`traffic.txp.allow`、`reasons.IP_RULE_ALLOW.bytes`、inbound rule `hitBytes` 与 outbound rule `hitPackets`。
+- 可选 pkt stream 的 in/out 双方向事件未作为 hard gate；当前 smoke 用 payload metrics + per-rule stats 完成 bytes 闭环，避免增加 flake。
 
 ---
 
@@ -1173,12 +1171,12 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 ## 7) 缺口清单（按你要的两类：完善已有 / 新增用例）
 
 ### A) 完善已有用例（同一场景，补“该看的输出”）
-1) **IP allow/block/iface/would**：把 `nc` 成败变成硬断言（现在普遍 `|| true` 吞掉结果）
+1) **IP allow/block/iface/would（已补齐）**：`VNXDP-06/08f/09f/10g` 已把 `nc` 成败变成硬断言
 2) **traffic metrics**：从 “total>=1” 升级为“维度级增长”
-    - IP：至少看 `txp.allow/txp.block`；若要断言 bytes（`rxb/txb`、`hitBytes`）建议走「IP / Case 8」固定读写 N bytes
+    - IP（已补齐）：`VNXDP-06d/08i/09i/10j/11h/12j/13i~13k` 覆盖 `txp/rxp/rxb` 维度；bytes 走「IP / Case 8」固定读写 N bytes
     - DNS：看 `dns.allow/dns.block`
-3) **reasons metrics**：补 allow 路径 `IP_RULE_ALLOW.packets` 增长断言（bytes 仅在 payload 流量下断言）
-4) **per-rule stats**：补 `hitBytes / wouldHitBytes`（需要 payload 流量；`nc -z` 不会稳定推动 bytes）
+3) **reasons metrics（IP 已补齐）**：`VNXDP-06c/08h/09h/10i/11g/12i/13g~13h` 覆盖原因 bucket 与 payload bytes
+4) **per-rule stats（IP bytes 已补齐）**：`VNXDP-13l~13n` 覆盖 `hitBytes`；`wouldHitBytes` 仍不在短连接 would case 中做 hard assert
 5) **dns stream 事件字段**：补更多字段类型/一致性校验（不只看 blocked/policySource）
 6) **pkt stream 事件字段**：补“字段契约”的集中断言（见「可观测性 / Case 1」）
 
@@ -1193,8 +1191,8 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 6) **域名：DomainLists enable/disable + allow 覆盖 block（已纳入 `VNT-DOM-07`；域名 / Case 7）**
 7) **可观测性：DNS→IP 绑定→pkt stream 带 domain（可观测性 / Case 2）**
 8) **可观测性：pkt tracked=0 suppressed notice（可观测性 / Case 3）**
-9) **IP：iprules.enabled=0 的 gating correctness（IP / Case 7）**
-10) **IP：payload 读写稳定触发 bytes（IP / Case 8）**
+9) **IP：iprules.enabled=0 的 gating correctness（已纳入 `VNXDP-12*`；IP / Case 7）**
+10) **IP：payload 读写稳定触发 bytes（已纳入 `VNXDP-13*`；IP / Case 8）**
 11) **conntrack（L4 state）最小闭环纳入 smoke**
 12) **域名：DOMAINRULES(ruleIds) 端到端（已纳入 `VNT-DOM-09`；域名 / Case 9）**
 13) **其他：极端规模下的控制面下发/limits sanity（其他 / Case 2）**
@@ -1210,12 +1208,12 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - domain casebook：`VNT-DOM-01a~09`（`tests/integration/vnext-domain-casebook.py`，由 `dx-smoke-control` 调用）
 - datapath（Tier‑1）：`tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`
 - allow：`VNXDP-05~07`
-- traffic reset/grow/reset：`VNXDP-05c~06d`
+- traffic reset/grow/reset：`VNXDP-05d~06d / VNXDP-08d~08i / VNXDP-09d~09i / VNXDP-10d~10j / VNXDP-11b~11h / VNXDP-12e~12j / VNXDP-13d~13k`
 - block：`VNXDP-08*`
 - would：`VNXDP-09*`
 - iface：`VNXDP-10*`
 - gating：`VNXDP-11*`
-- `iprules.enabled=0` gating correctness：暂无 smoke check id（文档见「IP / Case 7」；perf 会切开关但不做 verdict 断言：`tests/device/ip/cases/60_perf.sh`）
-- payload bytes 触发（建议纳入 smoke）：文档见「IP / Case 8」；现有 helper：`tests/device/ip/lib.sh` 的 `iptest_tier1_tcp_count_bytes`；类似触发在 `tests/device/ip/cases/22_conntrack_ct.sh`（但该 case 不在 smoke profile）
+- `iprules.enabled=0` gating correctness：`VNXDP-12*`
+- payload bytes 触发：`VNXDP-13*`（helper：`tests/device/ip/lib.sh` 的 `iptest_tier1_tcp_count_bytes`）
 - conntrack（Tier‑1）：`tests/device/ip/cases/22_conntrack_ct.sh`
 - diagnostics：`tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`
