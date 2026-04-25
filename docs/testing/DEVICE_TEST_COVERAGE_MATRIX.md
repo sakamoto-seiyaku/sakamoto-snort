@@ -32,6 +32,9 @@ Diagnostics（非 gate；观测/对比；vNext-only）：
   - `tests/device/ip/run.sh --profile matrix|stress|perf|longrun`
   - 说明与 records：`docs/testing/ip/IP_TEST_MODULE.md`、`docs/testing/PERFORMANCE_TEST_RECORD.md`
 
+Optional Casebook（非 gate；显式运行；vNext-only）：
+- `dx-casebook-other`：`DEVICE_SMOKE_CASEBOOK.md` `## 其他` Case 1–2，脚本 `tests/device/diagnostics/dx-casebook-other.sh`
+
 Archive（仅回查；不算 active 覆盖）：
 - legacy/mixed baseline：`tests/archive/integration/*.sh`
 - legacy 冻结项回查：`tests/archive/device/30_ip_leak.sh`
@@ -85,6 +88,19 @@ Archive（仅回查；不算 active 覆盖）：
 
 ---
 
+### 2.3 Optional Casebook 覆盖矩阵（Device / DX）
+
+| Feature / 断言点 | `dx-casebook-other` (`tests/device/diagnostics/dx-casebook-other.sh`) | 默认 `dx-smoke` 主链 |
+| --- | --- | --- |
+| `perfmetrics.enabled=0` under Tier‑1 payload | ✅（`VNXOTH-01b~01d`；非公网依赖） | — |
+| `perfmetrics.enabled=1` samples 增长 + 1→1 幂等 | ✅（`VNXOTH-01e~01i`） | — |
+| `perfmetrics.enabled=2` 非法值拒绝 | ✅（`VNXOTH-01j~01k`） | — |
+| `dns_decision_us` perf | ◐（`VNXOTH-01l`；仅 optional/non-gate，不强依赖 netd hook） | — |
+| `DOMAINLISTS.IMPORT` under/over limits + `HELLO` recovery | ✅（`VNXOTH-02a~02f`；optional limits sanity） | — |
+| `IPRULES.APPLY` recommended/hard limits + all-or-nothing + recovery | ✅（`VNXOTH-02g~02n`；optional limits sanity） | — |
+
+---
+
 ## 3) “第一阶段尽量测全”的推荐顺序（单机）
 
 前置：
@@ -98,7 +114,10 @@ Archive（仅回查；不算 active 覆盖）：
 2) `dx-diagnostics-perf-network-load`（真实负载 + perf metrics）
    - `cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-diagnostics-perf-network-load$`
    - 若只想复用 `dx-smoke` 刚 deploy 的守护进程：也可直接跑脚本并加 `--skip-deploy`
-3) IP 模组扩面（受控 Tier‑1；建议复用守护进程）
+3) `dx-casebook-other`（可选；casebook `## 其他`，建议上线前/大改后显式跑）
+   - `cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-casebook-other$`
+   - 或直接：`bash tests/device/diagnostics/dx-casebook-other.sh --skip-deploy`
+4) IP 模组扩面（受控 Tier‑1；建议复用守护进程）
    - `bash tests/device/ip/run.sh --profile matrix --skip-deploy`
    - `bash tests/device/ip/run.sh --profile stress --skip-deploy`
    - `bash tests/device/ip/run.sh --profile perf --skip-deploy`
@@ -106,6 +125,7 @@ Archive（仅回查；不算 active 覆盖）：
 
 已知“可能 BLOCKED/SKIP”的两类点（先记录，不要硬塞进 smoke）：
 - `dx-diagnostics-perf-network-load` 的 DNS 断言：依赖 netd resolv hook；缺失时脚本会明确 `SKIP:`（见 `docs/testing/PERFORMANCE_TEST_RECORD.md`）。
+- `dx-casebook-other` 的 optional limits sanity：可能因 Tier‑1 前置、host/daemon request-size 上限或设备资源差异明确 `SKIP/BLOCKED`；这不影响默认 `dx-smoke` 主 gate。
 - IP perf 大 ruleset apply：默认 `IPTEST_PERF_TRAFFIC_RULES=2000` 可能触发 `IPRULES.APPLY transport failed`；可临时降到 `IPTEST_PERF_TRAFFIC_RULES=200` 验证链路（见 `docs/testing/README.md` 与 `docs/testing/PERFORMANCE_TEST_RECORD.md`）。
 
 ---
@@ -139,7 +159,7 @@ Archive（仅回查；不算 active 覆盖）：
 - 现状：`dx-smoke-control` 的 `VNT-DOM-08` 在 hook 就绪时触发真实 DNS lookup 并断言 dns stream、`traffic.dns.block` 与 `domainSources`；hook 不活跃时明确 `BLOCKED` 并提示 `dev/dev-netd-resolv.sh status|prepare`。
 - 仍需注意：netd hook 的挂载/触发在部分设备/环境下不稳定，因此 `BLOCKED` 属于环境前置不足，不等同于 sucre-snort 本体 FAIL。
 
-### Gap-05：大 payload / limits 在 Device 侧的覆盖
-- 现状：Host 已覆盖 `DOMAINLISTS.IMPORT` limits（`maxImportBytes/maxImportDomains`）与 `IPRULES.APPLY` preflight hard-limit 的结构化错误；Device 侧未覆盖。
-- 建议归类：**先不补进 smoke**；若要补，放 diagnostics，并把断言限定为 `error.code` + `error.limits/error.preflight` shape（不要真的导入巨量数据导致长时间/耗存储）。
-- flake / 风险点：payload 太大导致运行时间不可控、设备存储/内存差异导致非确定性失败。
+### Gap-05（Optional 已接入）：大 payload / limits 在 Device 侧的覆盖
+- 现状：Host 已覆盖 `DOMAINLISTS.IMPORT` limits（`maxImportBytes/maxImportDomains`）与 `IPRULES.APPLY` preflight hard-limit 的结构化错误；Device 侧通过 `dx-casebook-other` 的 `VNXOTH-02*` 做 optional sanity。
+- 归类：**不补进默认 smoke**；保留在 optional casebook runner，断言限定为 `error.code` + `error.limits/error.preflight` shape + 失败后 `HELLO` 可用。
+- flake / 风险点：payload 太大导致运行时间不可控、设备存储/内存差异导致非确定性失败；runner 遇到 request-size/资源前置不足时应明确 `SKIP/BLOCKED`。

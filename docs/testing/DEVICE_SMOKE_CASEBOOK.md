@@ -1,6 +1,6 @@
 # Device / DX 冒烟测试 Casebook（真机端到端；人话版）
 
-更新时间：2026-04-24
+更新时间：2026-04-25
 
 这份文档是**调查输出**（不做实现）：把当前“真机端到端能不能用”的测试，按 **Case（下规则→触发→看输出）**写清楚：
 - 哪些已经在 smoke 里测到了（现有覆盖）
@@ -23,6 +23,9 @@ Smoke（总入口，固定顺序 platform → control → datapath）：
 Diagnostics（现在只有 1 条聚合脚本）：
 - `tests/device/diagnostics/dx-diagnostics.sh`
 - `tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`
+
+可选 Casebook（非默认 gate；需要显式运行）：
+- `tests/device/diagnostics/dx-casebook-other.sh`（`## 其他` Case 1–2；不进入默认 `dx-smoke` 主链）
 
 ---
 
@@ -1118,11 +1121,19 @@ Diagnostics（现在只有 1 条聚合脚本）：
   - 不要把它作为这条 smoke 的硬 gate（避免把 netd 环境问题误判成 perfmetrics 功能坏了）。
 
 **现有覆盖**
+- optional casebook（非默认 gate）：`tests/device/diagnostics/dx-casebook-other.sh --case perfmetrics`
+  - `VNXOTH-01a`：保存 `perfmetrics.enabled` 原值
+  - `VNXOTH-01b~01d`：`perfmetrics.enabled=0` + `METRICS.RESET(name=perf)` + Tier‑1 payload 后 `nfq_total_us.samples==0`
+  - `VNXOTH-01e~01g`：`perfmetrics.enabled=1` + reset + Tier‑1 payload 后 `nfq_total_us.samples>=1`
+  - `VNXOTH-01h~01i`：`1→1` 幂等不清空 `nfq_total_us.samples`
+  - `VNXOTH-01j~01k`：非法值 `2` 返回 `INVALID_ARGUMENT` 且当前有效值不变
+  - `VNXOTH-01l`：`dns_decision_us` 保持 optional/non-gate（无 active netd resolver hook 时不硬断言）
 - diagnostics（重负载/公网下载版）：`tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`
   - 里面已包含 off=0 / on=grow / 1→1 幂等 / 非法值拒绝 的验证，但它依赖设备侧 downloader + 公网 URL（更偏诊断/性能）。
 
 **缺口**
-- （自动化层面）这条 smoke 口径目前未挂进 `dx-smoke.sh` 的固定序列；如果要落地，应补一个独立 check id（不做实现，调查先记录）。
+- 已补齐为**可选** casebook runner；按 roadmap 约束不挂进 `dx-smoke.sh` 固定序列。
+- 若 Tier‑1 前置不足，runner 会明确 `SKIP/BLOCKED`，不把环境问题误报为 perfmetrics 功能通过。
 
 ---
 
@@ -1166,10 +1177,17 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - 上述两类失败都不应导致 daemon crash/控制面不可用（失败后 `HELLO` 仍 OK）
 
 **现有覆盖**
-- 无（当前 active smoke 不覆盖“下发规模/limits”）
+- optional casebook（非默认 gate）：`tests/device/diagnostics/dx-casebook-other.sh --case limits`
+  - `VNXOTH-02a`：`HELLO` 可用并读取 `maxRequestBytes`
+  - `VNXOTH-02b~02d`：创建 disabled test list、under-limit import 成功、`domainsCount` 回查正确
+  - `VNXOTH-02e~02f`：over-limit `DOMAINLISTS.IMPORT` 返回 `INVALID_ARGUMENT` + `error.limits` + hint，且失败后 `HELLO` 仍 OK
+  - `VNXOTH-02g~02j`：`RESETALL` 后 under-hard-limit IPRULES 大规则集 apply 成功，并通过 `IPRULES.PREFLIGHT` 看到 `rulesTotal` warning
+  - `VNXOTH-02k~02n`：over-hard-limit `IPRULES.APPLY` 返回 `INVALID_ARGUMENT` + `error.preflight.violations.rulesTotal`，失败 all-or-nothing，且后续 `HELLO` / `IPRULES.PREFLIGHT` 仍 OK
+- Host gtest：已覆盖 `DOMAINLISTS.IMPORT` limits 与 `IPRULES.APPLY` preflight hard-limit 的结构化错误（见 coverage matrix）。
 
 **缺口**
-- （自动化层面）更适合落到 diagnostics 脚本里（例如 `tests/device/diagnostics/`），并作为“上线前手工跑一次”的 checklist 项（调查先记录，不做实现）。
+- 已补齐为**可选** diagnostics/casebook runner；不进入默认 `dx-smoke` 主链。
+- 若本机/daemon `maxRequestBytes` 无法承载 over-limit payload，runner 会明确 `SKIP`，避免把 transport 上限误报为 command-level limits 行为。
 
 ---
 
@@ -1222,3 +1240,4 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - payload bytes 触发：`VNXDP-13*`（helper：`tests/device/ip/lib.sh` 的 `iptest_tier1_tcp_count_bytes`）
 - conntrack（Tier‑1）：`tests/device/ip/cases/22_conntrack_ct.sh`（`VNXCT-01~12c`；已纳入 active smoke）
 - diagnostics：`tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`
+- optional other casebook：`tests/device/diagnostics/dx-casebook-other.sh`（`VNXOTH-01*` / `VNXOTH-02*`；非默认 gate）

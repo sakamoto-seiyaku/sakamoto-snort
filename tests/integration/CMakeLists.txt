@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 set(SUCRE_SNORT_INTEGRATION_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(SUCRE_SNORT_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
-set(SUCRE_SNORT_SKIP_REGEX_COMMON "未找到 adb/adb.exe|未检测到已连接的 Android 真机|检测到多台 Android 真机|无法通过 su 获取 root 权限|目标设备未返回 root 身份|错误: 真机 preflight 失败|SKIP: dx-diagnostics-perf-network-load.*")
+set(SUCRE_SNORT_SKIP_REGEX_COMMON "未找到 adb/adb.exe|未检测到已连接的 Android 真机|检测到多台 Android 真机|无法通过 su 获取 root 权限|目标设备未返回 root 身份|错误: 真机 preflight 失败|SKIP: dx-diagnostics-perf-network-load.*|SKIP: dx-casebook-other.*")
 
 function(add_sucre_snort_shell_test name script labels)
   add_test(
@@ -55,6 +55,12 @@ add_sucre_snort_shell_test(
   "dx-diagnostics-perf-network-load;device;root-required;diagnostics;perf"
 )
 
+add_sucre_snort_shell_test(
+  dx-casebook-other
+  "${SUCRE_SNORT_REPO_ROOT}/tests/device/diagnostics/dx-casebook-other.sh"
+  "dx-casebook-other;device;root-required;casebook;optional"
+)
+
 add_custom_target(
   snort-dx-smoke
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^dx-smoke$
@@ -91,9 +97,19 @@ add_custom_target(
   VERBATIM
 )
 
+add_custom_target(
+  snort-dx-casebook-other
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^dx-casebook-other$
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+  COMMENT "Run optional sucre-snort DX other casebook checks via CTest"
+  USES_TERMINAL
+  VERBATIM
+)
+
 if(TARGET sucre-snort-ctl)
   add_dependencies(snort-dx-smoke sucre-snort-ctl)
   add_dependencies(snort-dx-smoke-platform sucre-snort-ctl)
   add_dependencies(snort-dx-smoke-control sucre-snort-ctl)
   add_dependencies(snort-dx-smoke-datapath sucre-snort-ctl)
+  add_dependencies(snort-dx-casebook-other sucre-snort-ctl)
 endif()

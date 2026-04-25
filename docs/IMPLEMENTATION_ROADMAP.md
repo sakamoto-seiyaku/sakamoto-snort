@@ -46,13 +46,14 @@ Status 口径（全篇统一）：
 ### 1.1 工程化（测试/工作流）
 
 - 当前默认开发 preset 已把 `SNORT_ENABLE_DEVICE_TESTS=OFF`，因此 `dev-debug` 与 `host-asan-clang` 会先收敛到纯 Host 回归。
-- Device/DX active 入口（vNext-only；fail-fast）：
+- Device/DX active/optional 入口（vNext-only；smoke fail-fast）：
   - smoke：`dx-smoke`（platform → control → datapath）
   - diagnostics：`dx-diagnostics` / `dx-diagnostics-perf-network-load`
+  - optional casebook：`dx-casebook-other`（`## 其他` Case 1–2；不进默认 `dx-smoke` 主链）
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
 - Device/DX 冒烟补齐以 casebook 为验收口径推进（见 3.1）。
 - 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
-- [NOW] OpenSpec 当前 active changes：无（下一步见 3.1）。
+- [NOW] OpenSpec 当前 active changes：`complete-device-smoke-casebook-other`（apply 已完成；按当前要求暂不 archive）。
 
 ### 1.2 功能（Domain + IP）
 
@@ -100,7 +101,7 @@ Status 口径（全篇统一）：
 
 ### 3.1 工程化：Device / DX 冒烟 Casebook 补齐（以 casebook 为验收口径）
 
-- [NEXT] `complete-device-smoke-casebook-other`：把 `perfmetrics.enabled` 的“可用性验证”提炼进 smoke 口径，并补上极端规模（海量 domain/import、海量 iprules）“失败必须可解释 + daemon 仍可 HELLO”的场景（默认不进 `dx-smoke` 主链，可选运行）
+- [NOW] `complete-device-smoke-casebook-other`：已 apply，新增 optional `dx-casebook-other` 承接 `perfmetrics.enabled` 可用性验证与极端规模（海量 domain/import、海量 iprules）limits sanity；默认不进 `dx-smoke` 主链，当前等待后续 archive。
 
 ### 3.2 迁移与下线（前端/对外工具；不是后端能力缺口）
 
