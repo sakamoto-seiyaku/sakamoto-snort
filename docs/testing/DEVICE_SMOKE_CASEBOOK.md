@@ -940,10 +940,15 @@ Diagnostics（现在只有 1 条聚合脚本）：
   - （建议）conntrack metrics：`creates==0` 且 `totalEntries==0`
 
 **现有覆盖**
-- `tests/device/ip/cases/22_conntrack_ct.sh`（当前在 profile=matrix，不在 dx-smoke 主链里）
+- `tests/device/ip/cases/22_conntrack_ct.sh`（已纳入 `tests/device/ip/run.sh --profile smoke` / `dx-smoke-datapath`）：
+  - `VNXCT-01~01c`：`RESETALL` 后 conntrack metrics shape 与 `totalEntries/creates==0`
+  - `VNXCT-02~03`：allow 规则 apply + `IPRULES.PREFLIGHT` ct consumer
+  - `VNXCT-04~06c`：固定 payload bytes、allow rule stats、create-on-accept metrics
+  - `VNXCT-07~08b`：block 阶段 `RESETALL`、block rule apply、ct consumer
+  - `VNXCT-09~12c`：block verdict、reasons、block rule stats、block 不 create conntrack entry
 
 **缺口**
-- （新增）把这条作为 smoke 级用例纳入（或至少明确列为“第一阶段建议新增 smoke case”）
+- 已补齐：该 Case 已作为 smoke 级用例纳入 active datapath gate；更强 flow-state / perf / matrix 扩展仍留在 IP 专项 profile。
 
 ---
 
@@ -1193,7 +1198,7 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 8) **可观测性：pkt tracked=0 suppressed notice（可观测性 / Case 3）**
 9) **IP：iprules.enabled=0 的 gating correctness（已纳入 `VNXDP-12*`；IP / Case 7）**
 10) **IP：payload 读写稳定触发 bytes（已纳入 `VNXDP-13*`；IP / Case 8）**
-11) **conntrack（L4 state）最小闭环纳入 smoke**
+11) **conntrack（L4 state）最小闭环纳入 smoke（已纳入 `VNXCT-01~12c`；IP - Conntrack / Case 1）**
 12) **域名：DOMAINRULES(ruleIds) 端到端（已纳入 `VNT-DOM-09`；域名 / Case 9）**
 13) **其他：极端规模下的控制面下发/limits sanity（其他 / Case 2）**
 
@@ -1215,5 +1220,5 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - gating：`VNXDP-11*`
 - `iprules.enabled=0` gating correctness：`VNXDP-12*`
 - payload bytes 触发：`VNXDP-13*`（helper：`tests/device/ip/lib.sh` 的 `iptest_tier1_tcp_count_bytes`）
-- conntrack（Tier‑1）：`tests/device/ip/cases/22_conntrack_ct.sh`
+- conntrack（Tier‑1）：`tests/device/ip/cases/22_conntrack_ct.sh`（`VNXCT-01~12c`；已纳入 active smoke）
 - diagnostics：`tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`

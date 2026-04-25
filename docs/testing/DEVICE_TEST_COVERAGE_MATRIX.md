@@ -63,10 +63,10 @@ Archive（仅回查；不算 active 覆盖）：
 | domain surface：`DOMAINRULES/DOMAINPOLICY/DOMAINLISTS` | — | ✅（GET/APPLY/IMPORT 基线 + `VNT-DOM-01a~01b` 负向契约） | — | ✅（domain surface tests 覆盖更多错误/边界） |
 | domain observability：`METRICS.GET(domainSources)` 增长/RESET 边界 | — | ✅（`DEV.DOMAIN.QUERY` gating + `VNT-DOM-02~09` bucket 级 e2e） | — | ✅（`tests/host/domain_policy_sources_tests.cpp` + vNext metrics surface） |
 | domain casebook：Domain Case 1–9 | — | ✅（`tests/integration/vnext-domain-casebook.py`：`VNT-DOM-01a~09`；Case 8 hook 缺失→BLOCKED） | — | ◐（Host 覆盖组件契约，不替代真机 e2e） |
-| IP casebook：IP Case 1–8 | — | — | ✅（`VNX-03~05` + `VNXDP-05~13`；不含 `IP - Conntrack`） | ◐（Host 覆盖组件契约，不替代真机 e2e） |
+| IP casebook：IP Case 1–8 + Conntrack Case 1 | — | — | ✅（`VNX-03~05` + `VNXDP-05~13` + `VNXCT-01~12c`；Conntrack 仅最小 L4 state 闭环） | ◐（Host 覆盖组件契约，不替代真机 e2e） |
 | iprules surface：`IPRULES.PREFLIGHT/APPLY/PRINT` | — | ✅（shape + mapping + PRINT 排序/字段） | ✅（smoke 基线 + datapath 场景使用） | ✅（`tests/host/control_vnext_iprules_surface_tests.cpp`） |
-| datapath correctness：verdict + per-rule stats + reasons | — | — | ✅（allow/block/would-match/IFACE_BLOCK、`block.enabled=0`、`iprules.enabled=0`、payload bytes；stats `hitPackets/hitBytes`） | ◐（host 侧不具备 NFQUEUE/iptables 真实链路） |
-| metrics surface：`METRICS.GET`（perf/reasons/traffic/conntrack） | — | ✅（shape + 部分 best-effort traffic 触发/RESET） | ✅（IP Case 2–8 对 reasons/traffic 做 bucket 级断言） | ✅ |
+| datapath correctness：verdict + per-rule stats + reasons | — | — | ✅（allow/block/would-match/IFACE_BLOCK、`block.enabled=0`、`iprules.enabled=0`、payload bytes、conntrack allow/block；stats `hitPackets/hitBytes`） | ◐（host 侧不具备 NFQUEUE/iptables 真实链路） |
+| metrics surface：`METRICS.GET`（perf/reasons/traffic/conntrack） | — | ✅（shape + 部分 best-effort traffic 触发/RESET） | ✅（IP Case 2–8 对 reasons/traffic 做 bucket 级断言；`VNXCT` 对 conntrack create/no-create 做断言） | ✅ |
 | traffic metrics：受控触发 + RESET（per-app） | — | ◐（baseline 中有 best-effort 触发；可能 skip） | ✅（Tier-1 `nc` + payload；`traffic.txp/rxp/rxb` bucket 与 reset 断言） | ✅（metrics surface tests 覆盖 shape + reset 语义） |
 | `RESETALL` baseline | — | ✅（RESETALL + HELLO；best-effort conntrack 清零） | ◐（各 case 内会先 RESETALL 做干净基线） | ✅ |
 

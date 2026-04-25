@@ -102,6 +102,7 @@ collect_cases_for_profile() {
     smoke)
       out+=("$case_dir/14_iprules_vnext_smoke.sh")
       out+=("$case_dir/16_iprules_vnext_datapath_smoke.sh")
+      out+=("$case_dir/22_conntrack_ct.sh")
       ;;
     matrix)
       out+=("$case_dir/00_env.sh")

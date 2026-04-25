@@ -52,7 +52,7 @@ Status 口径（全篇统一）：
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
 - Device/DX 冒烟补齐以 casebook 为验收口径推进（见 3.1）。
 - 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
-- [NOW] OpenSpec 当前 active changes：`complete-device-smoke-casebook-ip`（只做 apply；归档另行处理）。
+- [NOW] OpenSpec 当前 active changes：无（下一步见 3.1）。
 
 ### 1.2 功能（Domain + IP）
 
@@ -78,6 +78,8 @@ Status 口径（全篇统一）：
 
 - [DONE 2026-04-24] `complete-device-smoke-casebook-platform`：补齐 platform gate 可解释性（host 工具链 + vNext HELLO sanity + `--skip-deploy` 语义；spec：`openspec/specs/dx-smoke-platform-gate/spec.md`）
 - [DONE 2026-04-25] `complete-device-smoke-casebook-domain`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；spec：`openspec/specs/dx-smoke-domain-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、`block.enabled=0`、`iprules.enabled=0`、payload bytes、维度级 traffic/reasons/stats、pkt stream 字段；spec：`openspec/specs/dx-smoke-ip-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（`ct.state/direction` 最小闭环、create-on-accept、block 不 create entry；spec：`openspec/specs/dx-smoke-conntrack-casebook/spec.md`）
 
 ### 2.3 功能（Domain+IP；后端已收敛）
 
@@ -98,8 +100,6 @@ Status 口径（全篇统一）：
 
 ### 3.1 工程化：Device / DX 冒烟 Casebook 补齐（以 casebook 为验收口径）
 
-- [NOW] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、`block.enabled=0`、`iprules.enabled=0`、payload bytes、维度级 traffic/reasons/stats、pkt stream 字段；落到 `dx-smoke-datapath` / IP smoke profile）
-- [NEXT] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（ct.state/direction 场景；保持 Tier‑1 可重复）
 - [NEXT] `complete-device-smoke-casebook-other`：把 `perfmetrics.enabled` 的“可用性验证”提炼进 smoke 口径，并补上极端规模（海量 domain/import、海量 iprules）“失败必须可解释 + daemon 仍可 HELLO”的场景（默认不进 `dx-smoke` 主链，可选运行）
 
 ### 3.2 迁移与下线（前端/对外工具；不是后端能力缺口）
