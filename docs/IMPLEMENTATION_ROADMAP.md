@@ -1,223 +1,151 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
 更新时间：2026-04-24
-状态：当前共识；本文包含两条主线（互不混用代号）：
-- **工程化**：测试/回归/真机调试工作流（单元测试、集成测试、真机原生调试）
-- **功能**：可观测性分层 `A/B/C/D`（见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`），以及其上层的 IPRULES / DomainPolicy 相关实现
+状态：当前共识（以仓库内 code + tests + OpenSpec 主规格为准）
 
-当前工程化讨论统一按运行环境描述：
+## 0. 阅读指南
 
-- `Host`：本机 `gtest/CTest`；`ASAN` 是同一套 `Host` 用例的构建变体
-- `Device / DX`：ADB + root 真机集成、平台 smoke、测试模组、perf/longrun
-- 仓库里现存 `p0/p1/p2` 只保留为历史 `CTest` label / 存量文档用语，不再当作当前路线图阶段名
-- 当前 `Host` 端现状与缺口见 `docs/testing/HOST_TEST_SURVEY.md`
-- 当前 `Device / DX` 真机测试重组纲领见 `docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
-- 当前 `Device / DX` 冒烟测试 Casebook（真机端到端“人话”用例）见 `docs/testing/DEVICE_SMOKE_CASEBOOK.md`
-- 当前 `Device / DX` 覆盖矩阵（case → 入口/脚本映射）见 `docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
+本文结构：
+- 1) 当前结论：一屏摘要（回答“现在做到哪了”）
+- 2) 已完成：事实清单（按模块；带日期）
+- 3) 待办：下一步工作（按优先级）
+- 4) 后置：不挡主线的 backlog
+- Appendix：战略备注 / 架构边界判断（NOTE；非任务）
 
-## 1. 工程化基线（已收敛）
+运行环境术语（工程化讨论统一用这套）：
+- `Host`：本机 `gtest/CTest`
+- `Host + ASAN`：同一套 Host case 的 AddressSanitizer 变体
+- `Device / DX`：ADB + root 真机集成（smoke/diagnostics/IP 模组/perf/longrun）
+- `Native Debug`：真机原生调试（LLDB / VS Code + CodeLLDB），见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`
 
-工程化当前只区分运行环境，不再新增路线图代号：
+历史用语：
+- 仓库里现存 `p0/p1/p2` 只保留为历史 CTest label / 存量文档用语，不再当作当前路线图阶段名。
 
-- **Host**：本机 `gtest/CTest`；日常入口见 `tests/host/`，当前系统性盘点见 `docs/testing/HOST_TEST_SURVEY.md`
-- **Host + ASAN**：同一套 `Host` case 的 AddressSanitizer 构建变体；不是另一条编号线
-- **Device / DX**：host/WSL 驱动真机集成、platform smoke、IP 模组、diagnostics/perf/longrun；入口见 `tests/integration/`、`tests/device/ip/` 与 `tests/device/diagnostics/`
-- **Native Debug**：真机原生调试（LLDB / VS Code + CodeLLDB）；见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`
+Status 口径（全篇统一）：
+- `[DONE YYYY-MM-DD]`：已落地并归档/收敛
+- `[NOW]`：当前正在做（本周/本迭代）
+- `[NEXT]`：下一步紧接着做（已明确但未开始）
+- `[BACKLOG]`：明确后置（不挡当前主线）
+- `[NOTE]`：战略/架构判断（非任务，不与 TODO 混用）
 
-当前默认开发 preset 已把 `SNORT_ENABLE_DEVICE_TESTS=OFF`，因此 `dev-debug` 与 `host-asan-clang` 会先收敛到纯 `Host` 回归。
+单一真相 / 索引：
+- Host 现状盘点：`docs/testing/HOST_TEST_SURVEY.md`
+- Device/DX 重组纲领：`docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
+- Device/DX 冒烟 casebook：`docs/testing/DEVICE_SMOKE_CASEBOOK.md`
+- Device/DX 覆盖矩阵：`docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
+- vNext 协议/命令：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`、`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+- 可观测性口径：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- OpenSpec 主规格：`openspec/specs/`
 
 长期约束（对后续所有 change 生效）：
 - 工程化任务只做 test/debug/tooling；不得顺势夹带产品功能实现。
 - 如确需极小的 test seam / debug seam，必须先说明必要性，并把范围压到最小。
 
-## 2. 功能主线收敛状态（A/B/C + IPRULES + conntrack；D 独立）
+## 1. 当前结论（1 屏可读）
 
-基于 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md` 与 `docs/decisions/IP_RULE_POLICY_WORKING_DECISIONS.md` 的当前共识，A/B/C 主线推荐顺序如下：
+### 1.1 工程化（测试/工作流）
 
-`A（Packet 判决层可观测性：add-pktstream-observability） → IPRULES v1（add-app-ip-l3l4-rules-engine，包含 C：per-rule stats） → B（DomainPolicy 层 counters：policySource） → ip-leak 融合 / IPv6 / 域名 per-rule（TBD）`
+- 当前默认开发 preset 已把 `SNORT_ENABLE_DEVICE_TESTS=OFF`，因此 `dev-debug` 与 `host-asan-clang` 会先收敛到纯 Host 回归。
+- Device/DX active 入口（vNext-only；fail-fast）：
+  - smoke：`dx-smoke`（platform → control → datapath）
+  - diagnostics：`dx-diagnostics` / `dx-diagnostics-perf-network-load`
+  - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
+- Device/DX 冒烟补齐以 casebook 为验收口径推进（见 3.1）。
+- 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
+- [NOTE] OpenSpec 当前 active changes：无（截至 2026-04-24）。
 
-> 术语提醒：DomainPolicy 文档/代码中的 `GLOBAL_*` 是“域名侧 device-wide 层”，并非 domain+IP 的真正全局；统一命名会在后续 domain+IP 融合阶段一并处理。
+### 1.2 功能（Domain + IP）
 
-当前落地状态（以仓库内 code + tests 为准）：
-- ✅ A：`add-pktstream-observability`（PKTSTREAM vNext schema + `reasonId/ruleId/wouldRuleId`）
-- ✅ D：`perfmetrics-observability`（vNext：`CONFIG.SET(perfmetrics.enabled)` + `METRICS.GET/RESET(name=perf)`；入口：`dx-diagnostics-perf-network-load` -> `tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`）
-- ✅ IPRULES v1：`add-app-ip-l3l4-rules-engine`（IPv4 L3/L4 per-UID rules + per-rule stats；active gate：`dx-smoke-datapath`；legacy 对照脚本：`tests/archive/integration/iprules.sh`）
-- ✅ IPRULES v1 真机矩阵补偿项：`docs/testing/IPRULES_DEVICE_VERIFICATION.md`（active vNext：`tests/device/ip/run.sh --profile matrix`；legacy 对照脚本：`tests/archive/integration/iprules-device-matrix.sh`）
-- ✅ IPRULES cache-off 诊断变体：`add-iprules-cacheoff-build-variant`（`sucre-snort-iprules-nocache` + host nocache 单测 + 真机 perf 诊断入口）
-- ✅ IP 真机测试模组（Tier-1）：`tests/device/ip/run.sh`（原 OpenSpec change `add-ip-test-component` 已归档；当前目录已归位）
-  - 已完成：runner/目录结构、Tier-1 `netns+veth`、`smoke`/`matrix`/`stress`/`perf` 入口、核心 functional matrix（`IPRULES/IFACE_BLOCK/conntrack`）、perf baseline、cache-off 基线记录、ruleset sweep（`perf_ruleset_sweep.sh`）
-  - ✅ 已完成：`longrun` case + 对应文档补齐 +（历史）`ip-smoke` CTest/CI hook（现已在 `rework-dx-smoke` 收敛为 `dx-smoke-datapath`/`dx-smoke*` 命名；rollup：`update-post-domain-ip-fusion-rollup`，已归档 2026-04-22）
-- ✅ B：DomainPolicy counters（`policySource`；OpenSpec：`add-domain-policy-observability`）
-  - 控制面：`METRICS.DOMAIN.SOURCES*` + RESET 严格边界
-  - tests：host 单测 + vNext baseline（`tests/integration/vnext-baseline.sh` 的 `METRICS.GET(name=domainSources)` 用例；legacy 对照脚本：`tests/archive/integration/run.sh` 的 `IT-12`）
-  - 真机闭环：已可通过 vNext DEV-only seam `DEV.DOMAIN.QUERY` 在真机上稳定触发 B 层计数（active smoke 不再调用 legacy `DEV.DNSQUERY`）；“真实系统 resolver → netd socket → DnsListener”链路仍属平台/环境排障项，不阻塞 B 层本身验收
-- ✅ L4 conntrack core：`add-iprules-conntrack-core`（OpenSpec 已归档）
-  - 能力：userspace conntrack core 已接入 `IPRULES`，支持 `ct.state={new|established|invalid}`、`ct.direction={orig|reply}`，并保留“无 ct consumer 时跳过热路径更新”的 gating 语义
-  - 文档：主规格已提升到 `openspec/specs/l4-conntrack-core/spec.md`；接口已同步到 `docs/INTERFACE_SPECIFICATION.md`
-  - tests：host 单测 + Tier-1 真机 case `22_conntrack_ct.sh` + `perf_ct_compare` 已落地，并有独立记录 `docs/testing/ip/CONNTRACK_CT_TIER1_VERIFICATION.md`
-- ✅ 多用户 / blockmask chains /（post domain+IP fusion）收尾：`update-post-domain-ip-fusion-rollup`（已完成并归档 2026-04-22）
-  - 已完成：blockmask chains 验证收敛、multi-user 验证/文档与 `full-smoke` 用例沉淀、IP test module `longrun`/文档/（历史）`ip-smoke` hook（现已收敛为 `dx-smoke-datapath`/`dx-smoke*`）、repo-wide docs sync（spec Purpose + project 状态）
+- Domain+IP 的“后端融合”（vNext control 平面 + observability 口径 + datapath 接线）已完成并稳定回归；后续主风险点是**迁移与命名梳理**（前端/对外工具默认切 vNext、legacy 并存窗口与下线判据），而不是后端能力缺失。
+- A/B/C/D 口径已经全部落地：
+  - A：pkt verdict 可观测（`reasonId/ruleId/wouldRuleId`）
+  - B：DomainPolicy counters（`policySource` / `domainSources`）
+  - C：IP per-rule stats（随 IPRULES v1 一起落地）
+  - D：perfmetrics（`nfq_total_us` / `dns_decision_us` 等）
+- IPRULES v1 + L4 conntrack core 已落地；真机 Tier‑1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
 
-## 3. 之后的工作（按优先级）
+## 2. 已完成（事实清单）
 
-现在主线已经从“把 A/B/C/D 和 IPRULES 做出来”切换到“收尾 + 融合 + 下一阶段规划”。后续工作建议分三层看：
+### 2.1 工程化（DX workflow / 真机测试组织）
 
-### 3.1 立刻可做（低风险收尾）
+- [DONE 2026-04-23] `rework-dx-smoke`：收敛 active smoke 入口到 `dx-smoke{,-platform,-control,-datapath}`（spec：`openspec/specs/dx-smoke-workflow/spec.md`）
+- [DONE 2026-04-24] `rework-dx-diagnostics`：收敛 active diagnostics 入口到 `dx-diagnostics{,-perf-network-load}`（spec：`openspec/specs/dx-diagnostics-workflow/spec.md`）
+- [DONE 2026-03-24] `add-ip-test-component`：IP 真机测试模组（Tier‑1 netns+veth + profiles；spec：`openspec/specs/ip-test-component/spec.md`）
+- [DONE 2026-03-24] `add-iprules-cacheoff-build-variant`：cache-off 变体 + perf 对照记录（记录：`docs/testing/PERFORMANCE_TEST_RECORD.md`）
+- [DONE 2026-04-22] `update-post-domain-ip-fusion-rollup`：后置 rollup（验证/文档/longrun 归位；仅保留为 archive 记录）
 
-- 已完成：`add-domain-policy-observability` 已归档；当前 OpenSpec active changes：无
-- 已完成：`add-iprules-conntrack-core` 已归档；roadmap 先前把它写成“待研究方向”，现已改为已落地能力
-- 已完成：`update-post-domain-ip-fusion-rollup` 已归档（2026-04-22）；其为 backlog rollup（验证/文档/Tier-1 longrun/可选 CI hook），并已将 delta specs 同步回主规格
-- 已完成：`Device / DX` 工程化重组拆 **2 个** change（按 `smoke -> diagnostics` 顺序推进）；物理 archive 只对“无 vNext surface 的 legacy-only case”执行（其余 legacy 入口仍作为迁移源回查）
-  - ✅ `rework-dx-smoke`（已完成）
-    - 落地 `dx-smoke / dx-smoke-platform / dx-smoke-control / dx-smoke-datapath` 主入口组（vNext-only）
-    - 完成 smoke 转换矩阵：control domainSources 行为（vNext `DEV.DOMAIN.QUERY` seam）+ datapath allow/block/would-match/IFACE_BLOCK/BLOCK=0
-    - 移除旧 `p1/p2/ip-smoke` 命名；legacy 入口仅保留为迁移源按需回查
-  - ✅ `rework-dx-diagnostics`（已完成并归档 2026-04-24）
-    - 新增 `dx-diagnostics / dx-diagnostics-perf-network-load` 主入口组（vNext-only）
-    - `perf-network-load` 迁移到 `tests/device/diagnostics/` 并改为 vNext-only
-    - IP 真机模组归位到 `tests/device/ip/`，`perf/matrix/stress/longrun` profiles 为 vNext-only；legacy-only 冻结项回查迁到 `tests/archive/device/`
-- 继续巡检并收敛仍保留历史语境的设计文档；例如 `docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md` 现已转为已落地回执，应继续避免被误读成“待实现提案”
-- 保持 `docs/INTERFACE_SPECIFICATION.md` 与当前控制面一致；目前 `METRICS.DOMAIN.SOURCES*` 与 `IPRULES ct.*` 已同步，后续只在接口新增时再刷新
-- 计划：补齐 `Device / DX` 冒烟覆盖（按模块拆 5 个 change；以 `docs/testing/DEVICE_SMOKE_CASEBOOK.md` 为验收口径）
-  - 约束：`openspec/specs/dx-smoke-workflow/spec.md` 与 `openspec/specs/dx-diagnostics-workflow/spec.md` 已锁定 CTest 可发现主入口集合，因此不得新增 `dx-smoke*` / `dx-diagnostics*` 入口名；新增场景以“脚本/可选 stage”存在（必要时由现有入口调用，或供开发者手动运行）
-  - `complete-device-smoke-casebook-platform`：补齐 Platform 模块（环境就绪、RESETALL/基线、host 工具链），让 `dx-smoke-platform` 能直接解释“为什么 BLOCKED/FAIL”
-  - `complete-device-smoke-casebook-domain`：补齐 Domain 模块（domain lists/import、custom rules、policySource counters、dns stream/rdns 相关断言），落到 `dx-smoke-control`/control baseline
-  - `complete-device-smoke-casebook-ip`：补齐 IP 模块（allow/block/would-match、per-rule stats、pkt stream + 受控流量触发），落到 `dx-smoke-datapath`/IP smoke profile
-  - `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块（ct.state/direction 场景），保持 Tier‑1 可重复（必要时独立脚本）
-  - `complete-device-smoke-casebook-other`：把 `perfmetrics.enabled` 的“可用性验证”提炼进 smoke 口径，并补上极端规模（海量 domain/import、海量 iprules）“失败必须可解释 + daemon 仍可 HELLO”的场景（默认不进 `dx-smoke` 主链，可选运行）
+### 2.2 工程化（Device smoke casebook 补齐）
 
-### 3.2 下一条真正的功能主线
+- [DONE 2026-04-24] `complete-device-smoke-casebook-platform`：补齐 platform gate 可解释性（host 工具链 + vNext HELLO sanity + `--skip-deploy` 语义；spec：`openspec/specs/dx-smoke-platform-gate/spec.md`）
 
-- **domain+IP fusion**：统一“域名侧 GLOBAL_* 并不是真全局”的命名与语义边界，梳理 DomainPolicy / IPRULES / legacy 路径之间的融合口径（入口：`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`）
+### 2.3 功能（Domain+IP；后端已收敛）
 
-#### 3.2.1 domain+IP fusion：vNext control 平面落地路线（P0/P1/P2）
+- [DONE 2026-04-21] vNext codec + ctl：`add-control-vnext-codec-ctl`（spec：`openspec/specs/control-vnext-codec/spec.md`、`openspec/specs/sucre-snort-ctl/spec.md`）
+- [DONE 2026-04-21] vNext daemon base（meta/inventory/config）：`add-control-vnext-daemon-base`（spec：`openspec/specs/control-vnext-daemon-base/spec.md`）
+- [DONE 2026-04-21] vNext domain surface：`add-control-vnext-domain-surface`（spec：`openspec/specs/control-vnext-domain-surface/spec.md`）
+- [DONE 2026-04-22] vNext iprules surface：`add-control-vnext-iprules-surface`（spec：`openspec/specs/control-vnext-iprules-surface/spec.md`）
+- [DONE 2026-04-22] vNext metrics surface（traffic/conntrack/perf/reasons/domainSources）：`add-control-vnext-metrics`（spec：`openspec/specs/control-vnext-metrics-surface/spec.md`、`openspec/specs/traffic-observability/spec.md`、`openspec/specs/conntrack-observability/spec.md`）
+- [DONE 2026-04-22] vNext stream surface（pkt/dns/activity + notice/barrier）：`add-control-vnext-stream`（spec：`openspec/specs/control-vnext-stream-surface/spec.md`）
+- [DONE 2026-04-22] legacy 冻结收口 + lane 分轨：`stabilize-control-transition-surface`（spec：`openspec/specs/control-transition-surface/spec.md`）
+- [DONE 2026-03-24] pktstream 可观测性：`add-pktstream-observability`（spec：`openspec/specs/pktstream-observability/spec.md`）
+- [DONE 2026-03-24] IPRULES v1（IPv4 L3/L4 + per-rule stats）：`add-app-ip-l3l4-rules-engine`（spec：`openspec/specs/app-ip-l3l4-rules/spec.md`）
+- [DONE 2026-03-27] DomainPolicy observability（policySource counters）：`add-domain-policy-observability`（spec：`openspec/specs/domain-policy-observability/spec.md`）
+- [DONE 2026-03-30] L4 conntrack core：`add-iprules-conntrack-core`（spec：`openspec/specs/l4-conntrack-core/spec.md`）
+- [DONE 2026-03-15] perfmetrics：`add-perfmetrics-observability`（spec：`openspec/specs/perfmetrics-observability/spec.md`）
 
-目标：把 `docs/decisions/DOMAIN_IP_FUSION/*` 收敛出的 vNext 协议/命令面落实到代码与测试里，同时保留 legacy control（并存窗口与下线判据见 checklist 的“迁移与下线”章节）。
-当前进度：1-7 切片均已完成并归档（截至 2026-04-22）；后端 vNext control 平面已收敛，下一步转向前端/对外工具迁移与下线判据落地。
+## 3. 待办（按优先级）
 
-切片约束（避免“细节失控”）：
-- 每个切片都必须是**单独可验收**的一步：先把 P0/P1（必要时 P2）跑通，再继续下一步。
-- 本阶段不讨论/不实现“健全/安全/鉴权/发布 gate”（包含 60607 暴露策略）；全部 defer 到后续安排。
-- 不改动既有域名匹配与裁决链路；vNext 只做“控制平面 + 可观测性输出口径 + 落盘形态”的承接与对齐。
+### 3.1 工程化：Device / DX 冒烟 Casebook 补齐（以 casebook 为验收口径）
 
-单一真相（实现必须以此为准）：
-- vNext 协议/wire/envelope/errors/selector：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
-- vNext 命令面（cmd/args/result/errors）：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- vNext stream/metrics/tracked/reset：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
-- vNext IPRULES apply 契约：`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
+- [NEXT] `complete-device-smoke-casebook-domain`：补齐 Domain 模块 smoke 口径（dns stream e2e、stable traffic metrics、suppressed notice、rdns 相关断言；落到 `dx-smoke-control`）
+- [NEXT] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、维度级 traffic/reasons/stats、pkt stream 字段；落到 `dx-smoke-datapath` / IP smoke profile）
+- [NEXT] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（ct.state/direction 场景；保持 Tier‑1 可重复）
+- [NEXT] `complete-device-smoke-casebook-other`：把 `perfmetrics.enabled` 的“可用性验证”提炼进 smoke 口径，并补上极端规模（海量 domain/import、海量 iprules）“失败必须可解释 + daemon 仍可 HELLO”的场景（默认不进 `dx-smoke` 主链，可选运行）
 
-推荐切片（按顺序；每个切片建议对应一个 OpenSpec change）：
+### 3.2 迁移与下线（前端/对外工具；不是后端能力缺口）
 
-1) ✅ `add-control-vnext-codec-ctl`（vNext codec + `sucre-snort-ctl`；已归档 2026-04-21）
-   - 交付物（必须一次到位，避免后续切片返工）：
-     - JSON 库：vendor **RapidJSON**（header-only；同时接入 Android.bp 与 host CMake build）
-     - vNext codec（可复用模块；daemon/ctl/tests 共用）：
-       - netstring framing：roundtrip、partial read、一次 read 多帧、header/terminator 校验
-       - JSON codec：严格 JSON parse/encode（字符串 escape 最小集；禁止 `std::stringstream` 手写拼 JSON）
-       - envelope helpers：`{"id","cmd","args"}` / `{"id","ok","result|error"}` + strict reject（unknown key）
-     - `sucre-snort-ctl`（host C++ 二进制；替代 socat 手敲）：
-       - `--help|help`：输出命令目录/示例（对应“vNext daemon 不提供 HELP”的裁决）
-       - request/response/event：负责打包/解包 netstring + JSON，并 pretty 输出
-       - 支持 tcp 与 unix socket（便于 host/真机/开发态复用；adb forward 场景走 tcp）
-   - P0：codec/encoder 单测（netstring roundtrip、partial read、多帧、len/header 错误、严格 JSON string escape 最小集、unknown key strict reject）
-   - P1/P2：N/A（本切片不依赖真机）
-   - 验收口径：host 上可稳定“构造 request + 解包 response”（通过本地 mock vNext server 覆盖）
+- [BACKLOG] `migrate-to-control-vnext`：前端与对外工具默认切到 vNext、tracked UX、迁移期开关/回滚口径、legacy 并存窗口与 `60606` 下线判据（需要真实版本/发布策略配合，独立于后端）
 
-2) ✅ `add-control-vnext-daemon-base`（daemon vNext listener + Meta/Inventory/Config；已归档 2026-04-21）
-   - 交付物：
-     - endpoints（生产路径 + 开发 fallback 都必须明确）：
-       - vNext unix socket：`sucre-snort-control-vnext`（filesystem+abstract）
-         - production：`sucre-snort.rc` 声明 socket（与 legacy 并存）
-         - dev fallback：无 init socket 时创建/暴露 vNext filesystem+abstract（避免生产/开发路径分叉）
-       - vNext TCP：`60607`（`inetControl()` gating；保持与 legacy 口径一致）
-     - 协议与 I/O：
-       - netstring read/write；严格 JSON parse；统一 envelope；结构化错误与 strict reject
-       - `HELLO` 必须回显：`protocolVersion`/`framing`/`maxRequestBytes`/`maxResponseBytes`
-       - I/O 边界：vNext 不发送 NUL terminator；不得复用 legacy `SocketIO::print()` 的 “size()+1（含 NUL）” 语义，避免 framing 混淆
-     - 最小命令集：`HELLO/QUIT/RESETALL`、`APPS.LIST/IFACES.LIST`、`CONFIG.GET/CONFIG.SET`
-     - 备注（已确认）：vNext（v1）daemon **不提供** legacy 的 `HELP/PASSWORD/PASSSTATE`；help 由 `sucre-snort-ctl --help|help` 等 CLI 承担
-     - 迁移期 dataplane 约束（已确认）：当 `inetControl()` 开启时，PacketListener 必须豁免 60606 + 60607（避免 control traffic 被 blocking/干扰；见 `CONTROL_PROTOCOL_VNEXT.md`）
-     - 工程底座：补齐 P1/P2 的 vNext forward + baseline 发送/解析（优先复用 `sucre-snort-ctl`，避免另写一套 framing）
-       - `dev/dev-android-device-lib.sh`：增加 vNext forward 支持（转发到 `localabstract:sucre-snort-control-vnext`）
-       - `tests/integration/*`：新增 vNext baseline case（不要复用 legacy `HELP` 心智）
-   - P0：parser/validator 单测（unknown key strict reject、candidates/structured error、id 回显、`len > maxRequestBytes` 超限断连）
-   - P1：`tests/integration/` 新增 vNext baseline case（`sucre-snort-ctl hello` + inventory/config 最小闭环）+ 断连/重连覆盖（优先走 unix abstract socket）
-   - P2（补齐 tcp 60607 覆盖）：在 `inetControl()` 开启且 `BLOCK=1` 的场景下验证 vNext TCP 控制面可用（覆盖“60607 豁免”这一设计约束）
-   - 验收口径：在真机上稳定完成：启动 daemon → `HELLO`/inventory/config → 断连/重连 → 并发两客户端互不影响（并发 mutate 语义：last-write-wins）
+### 3.3 文档收尾（降低误读）
 
-3) ✅ `add-control-vnext-domain-surface`（DomainPolicy/DomainLists/DomainRules：控制面迁移；已归档 2026-04-21）
-   - 交付物：
-     - 把 vNext domain 命令面落到 daemon（保持域名匹配实现不动；只做入参校验/落盘形态/返回口径/错误模型）；明确 `DOMAINPOLICY.APPLY` ack-only
-     - `DOMAINLISTS.IMPORT`：落实命令级上限（例如 `maxImportDomains`/`maxImportBytes`）；当 payload 未超过 `maxRequestBytes` 但超出命令级上限时，必须返回结构化错误（提示前端/CLI 分批导入），避免默默截断或引入隐式规则
-   - P0：domain 命令 handler 单测（apply 原子性：一次请求整体成功/失败；错误结构稳定；print/get 输出 shape 稳定；`DOMAINLISTS.IMPORT` 超限必须结构化报错）
-   - P1：新增 integration case：apply→print→verify（可先用 vNext DEV-only seam `DEV.DOMAIN.QUERY` 做真机闭环验证）
-   - P2（按需）：在 `device-smoke` 增加最小回归（避免“只有单测对，但真机展示错”）
+- [NEXT] 巡检并收敛仍保留历史语境的设计文档，避免被误读成“待实现提案”（例如已落地回执类文档）。
+- [NEXT] 仅在接口新增/变更后刷新 `docs/INTERFACE_SPECIFICATION.md`，避免“接口文档先行”导致漂移。
 
-4) ✅ `add-control-vnext-iprules-surface`（IPRULES.*：控制面迁移；已归档 2026-04-22）
-   - 交付物：`IPRULES.PREFLIGHT/PRINT/APPLY` vNext 落地，并严格对齐 `IPRULES_APPLY_CONTRACT.md`（字段全集/类型写死，禁止 shape 漂移）
-   - P0：apply contract 单测（schema、冲突回显、toggle=0|1、禁止携带 ruleId/matchKey/stats 等）
-   - P1：integration case：preflight→apply→print→verify；并与 legacy 对照脚本 `tests/archive/integration/iprules.sh` 共享同一套“期望规则集”
-   - P2：复用 `tests/device/ip/run.sh` 增加一个 vNext control 驱动 profile（作为“真机一眼验收”的硬门槛）
+## 4. 后置 / Backlog（不挡主线）
 
-5) ✅ `add-control-vnext-metrics`（metrics vNext：`traffic`/`conntrack`；已归档 2026-04-22）
-   - 交付物：`METRICS.GET/RESET` vNext（name=`traffic|conntrack`；口径对齐 `OBSERVABILITY_WORKING_DECISIONS.md`）；任务分解见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
-   - P0：metrics 口径/RESET 边界/输出 shape 单测
-   - P1：integration：产生少量可控流量后验证 metrics 增长与 reset
-   - P2（按需）：perf baseline 对比（不锁阈值，只锁“不退化到不可用”）
+- [BACKLOG] 命名与语义边界梳理：尤其是 domain-only 历史命名（例如 `GLOBAL_*`）与 domain+IP 语义边界的统一（目标是收敛心智，不做接口大重构）
+- [BACKLOG] `ip-leak` 重新纳入设计：在统一口径下决定启用条件、优先级、可观测性与控制面形态（当前保持独立 backlog，不反向污染已收敛主线）
+- [BACKLOG] IPv6 新规则语义
+- [BACKLOG] 域名规则 per-rule observability / stats
+- [BACKLOG] “真实系统 resolver hook” 的平台闭环（如未来仍坚持把它作为真机 DNS 验收链路）
+- [BACKLOG] 更强的 L4 stateful semantics（超出当前 `ct.state/ct.direction` 最小闭环的扩展能力）
+- [BACKLOG] L7 / HTTP / HTTPS 被动识别（暂不作为已承诺主线）
 
-6) ✅ `add-control-vnext-stream`（stream vNext：pipeline + `STREAM.*` + NOTICE；已归档 2026-04-22）
-   - 交付物：异步 pipeline + 真 gate；`STREAM.START/STOP/RESET*` 状态机、STOP ack barrier、禁止输出交织；`type="notice"`（suppressed/dropped）；任务分解见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
-   - P0：queue/ring/NOTICE 聚合/STOP barrier 单测
-   - P1：integration：启动 stream → 产生可预期事件（`DEV.*` 或可控 test traffic）→ STOP barrier → 验证无交织/无半帧
-   - P2：真机 perf/反压基线对比（不锁阈值，只锁“不应退化到不可用”）
+---
 
-7) ✅ `stabilize-control-transition-surface`（legacy 冻结收口 + 仓库脚本分轨；已归档 2026-04-22）
-   - 交付物：
-     - daemon 内部把 legacy 冻结项收口为**全局固定语义**：`BLOCKIPLEAKS` 强制关闭且 no-op；`GETBLACKIPS=0`；`MAXAGEIP` 固定默认值；不得被 legacy/vNext 任一入口、历史落盘或 restore 改写
-     - legacy `HELP`（或等价入口）显式标注“冻结/无作用”项与 vNext 提示，避免误连 legacy 时形成错误心智
-     - 仓库内开发/测试脚本与 helper 收敛：明确 legacy lane / vNext lane；补齐 vNext helper 或协议选择；不再让公共脚本隐式绑定单一 `60606` 文本协议
-     - 更新仍把冻结项当“可调能力”的 legacy 回归与 device-module case，改为验证 fixed/no-op 语义；保留必要的 legacy 对照 lane
-   - P0：冻结项 fixed/no-op + restore/RESETALL 语义单测；legacy help 文案与返回口径锁定
-   - P1：integration/dev 脚本收敛（`deploy`/`diagnose`/common helper/`ip` module runner 至少一条常用链路支持 vNext；legacy lane 显式保留）
-   - P2（按需）：补最小双轨回归（legacy 对照 + vNext lane），避免脚本/文案继续漂移
-- **ip-leak 重新纳入设计**：在 fusion 阶段统一决定其启用条件、优先级、可观测性与控制面形态；当前仍保持独立 backlog，不反向污染已收敛的 IPRULES v1/B 层语义
-
-### 3.3 明确后置（不要提前打散主线；✅ 表示已收敛）
-
-- ✅ `update-post-domain-ip-fusion-rollup`：blockmask chains 验证收敛（bit/listId 组合、兼容性、BLOCKMASK 归一化；已归档 2026-04-22）
-- ✅ `update-post-domain-ip-fusion-rollup`：multi-user 验证与文档补齐（单用户回归、多用户场景、`SNORT_MULTI_USER_REFACTOR` 更新、`full-smoke` 用例沉淀；已归档 2026-04-22）
-- ✅ IP 真机测试模组：`longrun` case + 文档补齐 +（历史）`ip-smoke` hook（现已收敛为 `dx-smoke-datapath`/`dx-smoke*` 命名；已归档 2026-04-22）
-- `migrate-to-control-vnext`：前端与对外工具默认切到 vNext、tracked UX、迁移期开关/回滚口径、legacy 并存窗口与 `60606` 下线判据；待前端实现启动并经过真实版本验证后再推进
-- IPv6 新规则语义
-- 域名规则 per-rule 级 observability / stats
-- “真实系统 resolver hook” 的平台闭环（如果未来仍坚持把它作为真机 DNS 验收链路）
-- 更强的 L4 stateful semantics（超出当前 `ct.state/ct.direction` 最小闭环的扩展能力）
-
-说明（对应你提议的 “IP rule → C → B”）：
-- **A 必须先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 PKTSTREAM/metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
-- **C 不建议拆成独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 `add-app-ip-l3l4-rules-engine` change 内部按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
-- **B 已补齐**：它与 IPRULES 基本解耦，当前已落地；剩余工作主要是归档与把过期设计文档状态修正，避免 roadmap/设计文档继续把它当作“未开始”。
-- **D 不参与上述排序**：D 只承载 `nfq_total_us` / `dns_decision_us` 这类性能健康指标；它在语义上独立于 A/B/C，可作为单独 change 在任意时点推进，不改变当前主线优先级。当前已落地：见 `openspec/specs/perfmetrics-observability/spec.md` 与 `dx-diagnostics-perf-network-load`（`tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`）。
-- **IP test module 已接住 legacy device matrix**：active vNext 入口为 `tests/device/ip/run.sh --profile matrix|stress|perf`；legacy 对照脚本已迁入 `tests/archive/integration/iprules-device-matrix.sh` 仅供回查。
-- **OpenSpec 主规格已同步到位**：A / IPRULES v1 / cache-off / ip-test-component / DomainPolicy observability / L4 conntrack core 相关 change 已归档；当前 capability 已体现在 `openspec/specs/pktstream-observability/spec.md`、`openspec/specs/app-ip-l3l4-rules/spec.md`、`openspec/specs/domain-policy-observability/spec.md` 与 `openspec/specs/l4-conntrack-core/spec.md`。当前 OpenSpec in-flight/backlog：无（`update-post-domain-ip-fusion-rollup` 已于 2026-04-22 归档）
-
-## 4. 战略备注（记录方向，不提前锁死实现）
+## Appendix A. 战略备注（NOTE；非任务）
 
 以下几点用于承接“domain-only 旧骨架 + 新增 IP 一条腿”后的中长期整理方向；当前仅记录问题意识与推荐顺序，不视为已定方案：
 
 - **接口 / 模块命名梳理是必做项**：原始系统大量命名天然偏向 domain-only；在引入 IPRULES 后，需要系统性梳理哪些对外命令、对内模块名、文档术语的语义已经扩大、缩窄或变得含混。目标是**收敛命名与边界**，不是做一次接口大重构。
-- **可观测性命名与分层也要跟着梳理**：A/B/C/D 已分别落地，但后续仍需在 domain+IP fusion 阶段统一“events / metrics / reasons / sources / per-rule stats”的命名规则与展示口径，避免 domain/IP 两套术语长期并存。
-- **`ip-leak` 继续后置，但必须重新定义定位**：它横跨 domain 与 IP，两边都相关；当前不宜提前混入已收敛主线。等 domain+IP fusion 时，需要重新回答它到底是“补位能力 / 默认关闭能力 / 某类场景下的重要能力”中的哪一种。
+- **可观测性命名与分层也要跟着梳理**：A/B/C/D 已分别落地，但后续仍需统一“events / metrics / reasons / sources / per-rule stats”的命名规则与展示口径，避免 domain/IP 两套术语长期并存。
+- **`ip-leak` 继续后置，但必须重新定义定位**：它横跨 domain 与 IP，两边都相关；当前不宜提前混入已收敛主线。需要在统一口径下重新回答它到底是“补位能力 / 默认关闭能力 / 某类场景下的重要能力”中的哪一种。
 - **L4 conntrack core 已落地，但更强的 flow-state 仍应谨慎后置**：当前仓库已经具备最小闭环的 userspace conntrack（`ct.state/ct.direction` + hot-path gating + host/真机验证）；后续若继续扩展更强的 L4 状态语义，仍应作为独立能力评估其热路径成本、内存模型与 Android 设备约束。当前纲领入口见 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`；实现原则仍是“以 OVS conntrack 语义为母本做 C++ 重实现”，不是重新设计另一套状态系统。
 - **L7 / HTTP / HTTPS 识别暂不作为已承诺主线**：现阶段更稳的产品定位仍是 DNS/domain-policy + IPv4 L3/L4 判决与观测。更高层协议识别是否值得做、能做到什么程度，应在后续单独评估，而不是默认沿着“继续往上解包”自然推进。
 
-## 5. 架构边界上的当前判断
+## Appendix B. 架构边界上的当前判断（NOTE；非任务）
 
 基于当前实现形态（Android + root + NFQUEUE + userspace quick verdict），先记录一个高层判断，供后续讨论时反复对照：
 
-- **DomainPolicy 与 IPRULES 不是二选一**：前者更偏语义友好、面向域名/名单/规则与用户理解；后者更偏底层强约束、面向 L3/L4 包判决与最终兜底。后续融合的目标应是“边界清晰 + 仲裁明确”，而不是把两者揉成一个失去层次的总开关。
+- **DomainPolicy 与 IPRULES 不是二选一**：前者更偏语义友好、面向域名/名单/规则与用户理解；后者更偏底层强约束、面向 L3/L4 包判决与最终兜底。后续的目标应是“边界清晰 + 仲裁明确”，而不是把两者揉成一个失去层次的总开关。
 - **强项**：device-level 的 DNS / domain-policy、IPv4 L3/L4 规则、per-app 判决、可解释性、真机回归与性能基线。
 - **可扩展但需谨慎**：L4 flow state、连接级语义、更加稳定的 cross-packet observability。
 - **不应先验承诺**：被动式 full HTTP/HTTPS 语义识别；尤其在加密协议持续增强的前提下，不应把未来产品路线押注在“靠被动包检查看清上层明文语义”上。
 
-> 注：`docs/INTERFACE_SPECIFICATION.md` 作为对外接口汇总，应在相关 change 合并并稳定后统一刷新，避免“接口文档先行”导致漂移。当前已同步：`METRICS.DOMAIN.SOURCES*` 与 `IPRULES ct.*`。
+## Appendix C. 说明：A/B/C/D 与 IPRULES 的顺序心智（NOTE；非任务）
+
+- **A 先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 PKTSTREAM/metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
+- **C 不拆独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 IPRULES v1 change 内按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
+- **B 已补齐**：它与 IPRULES 基本解耦，当前已落地；剩余工作主要是把过期设计文档状态修正，避免被误读成“未开始”。
+- **D 独立**：perfmetrics 只承载性能健康指标；它在语义上独立于 A/B/C，可在任意时点推进，不改变当前主线优先级。
+
