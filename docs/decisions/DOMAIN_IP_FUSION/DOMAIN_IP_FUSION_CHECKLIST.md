@@ -70,7 +70,7 @@
 - vNext 协议不变式已写死并无互相矛盾：framing/envelope/strict reject/error model/selector/每 request 恰好 1 个 response（framing 断连除外）
 - vNext 命令面不变式已写死并无互相矛盾：scope 规则、`0|1` toggle、所有 `*.APPLY` 原子更新（一次请求要么整体成功要么整体失败）、selector not-found/ambiguous 必须结构化错误（不得 silent no-op）
 - 可观测性不变式已写死并无互相矛盾：tracked gating、stream/ring/drop/notice、STOP ack barrier、以及 legacy 模块（`BLOCKIPLEAKS` 等）冻结边界
-- IPRULES apply 不变式已写死并无互相矛盾：`matchKey` mk1、冲突拒绝、成功回显映射等
+- IPRULES apply 不变式已写死并无互相矛盾：`matchKey` mk2、冲突拒绝、成功回显映射等
 
 ### 0.3.3 边界与移交（必须）
 

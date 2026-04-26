@@ -1,8 +1,5 @@
-# control-vnext-iprules-surface Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-control-vnext-iprules-surface. Update Purpose after archive.
-## Requirements
 ### Requirement: `IPRULES.PREFLIGHT` returns a stable preflight report
 The daemon MUST implement `IPRULES.PREFLIGHT` as defined in:
 - `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
@@ -69,14 +66,13 @@ Apply semantics:
 - **WHEN** client sends `IPRULES.APPLY` for a uid with one rule `{clientRuleId,...}`
 - **THEN** daemon responds `ok=true` and `result.rules[]` contains an item with the same `clientRuleId` and assigned `ruleId` and computed `matchKey`
 
-### Requirement: Apply preflight failures return structured `error.preflight`
-If an `IPRULES.APPLY` fails due to preflight violations or hard limits, the daemon MUST:
-- respond with `ok=false` and `error.code="INVALID_ARGUMENT"`
-- include a structured `error.preflight` report matching the `IPRULES.PREFLIGHT` schema (summary/limits/warnings/violations)
+## REMOVED Requirements
 
-#### Scenario: Apply rejected by preflight includes `error.preflight`
-- **WHEN** `IPRULES.APPLY` is rejected due to preflight violations
-- **THEN** daemon responds `ok=false` and includes `error.preflight.summary` and `error.preflight.violations[]`
+### Requirement: `matchKey` is computed with mk1 canonicalization and conflicts are rejected
+**Reason**: IPRULES rule model is upgraded to dual-stack, so `matchKey` MUST include `family` and becomes mk2.
+**Migration**: Update daemon/clients/tests to compute/validate mk2 per `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md` §3 and reject duplicates by mk2.
+
+## ADDED Requirements
 
 ### Requirement: `matchKey` is computed with mk2 canonicalization and conflicts are rejected
 For each rule in an `IPRULES.APPLY`, the daemon MUST compute a `matchKey` string per mk2:

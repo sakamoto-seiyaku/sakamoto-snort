@@ -1,6 +1,6 @@
 # IPRULES：原子 apply 契约（rule group 展开 / matchKey / clientRuleId）
 
-更新时间：2026-04-20  
+更新时间：2026-04-26  
 状态：已收敛（AAA）
 
 > 本文只定义“前后端约定/接口契约”，不涉及代码实现与 change 拆分。
@@ -35,7 +35,7 @@
   - apply 成功返回后，后续 `IPRULES.PRINT`/判决/统计必须看到新基线（旧基线不可再见）。
   - apply 失败时：现有规则集保持不变（不得“半更新成功”污染下一次下发）。
 - **完整校验先于提交**：后端必须在提交前完成：
-  - 语法/值域校验（例如 `proto=icmp` 时 `sport/dport` 必须为 `any`）
+  - 语法/值域校验（例如 `proto=icmp|other` 时 `sport/dport` 必须为 `any`）
   - 冲突检测（见第 4 节）
   - 资源/复杂度检查（可复用 `IPRULES.PREFLIGHT` 的口径；具体门槛由实现阶段确定）
 
@@ -71,38 +71,46 @@
 - 在 apply 阶段检测冲突（同一 `matchKey` 不允许出现多条规则，见第 4 节）
 - 在错误中回显“冲突发生在什么匹配集合上”，避免前端自行重新实现一套 canonicalizer
 
-### 3.1 `matchKey` 字符串格式（mk1）
+### 3.1 `matchKey` 字符串格式（mk2）
 
 `matchKey` 必须是可打印、可复现、可比对的 canonical string，并且**版本化**：
 
 ```text
-mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>
+mk2|family=<ipv4|ipv6>|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>
 ```
 
 约束：
 
 - 固定字段顺序（如上），固定分隔符（`|` 与 `=`），全小写，无空格。
-- 取值口径必须与 `IPRULES.PRINT` 的字符串口径一致（`any/in/out`、`any/tcp/udp/icmp`、CIDR、port predicate 等）。
+- `family` 必须显式提供；不得从 `src/dst` 推断、不得省略、不得使用 `family=any`。
+- 取值口径必须与 `IPRULES.PRINT` 的字符串口径一致（`any/in/out`、`any/tcp/udp/icmp/other`、CIDR、port predicate 等）。
 
 各字段取值：
 
+- `family`：`ipv4|ipv6`
 - `dir`：`any|in|out`
 - `iface`：`any|wifi|data|vpn|unmanaged`
 - `ifindex`：`0|<decimal>`（`0` 表示不约束；数值为非负十进制）
-- `proto`：`any|tcp|udp|icmp`
+- `proto`：`any|tcp|udp|icmp|other`
 - `ctstate`：`any|new|established|invalid`
 - `ctdir`：`any|orig|reply`
-- `src` / `dst`：`any|a.b.c.d/prefix`（IPv4；`prefix` 为 `0..32`）
+- `src` / `dst`：
+  - `any`
+  - `a.b.c.d/prefix`（当 `family=ipv4`；`prefix` 为 `0..32`）
+  - IPv6 CIDR（当 `family=ipv6`；`prefix` 为 `0..128`；不得包含 `%zone`）
 - `sport` / `dport`：`any|N|lo-hi`（十进制；`N/lo/hi` 为 `0..65535`，且 `lo<=hi`）
 
 ### 3.2 规范化规则
 
 为避免“看起来不同、实际上等价”的重复：
 
-- CIDR 必须规范化为网络地址：`a.b.c.d/prefix` 中的 `a.b.c.d` 必须已经按 `prefix` mask 归零 host bits。  
-  - 示例：`1.2.3.4/24` → `1.2.3.0/24`
+- CIDR 必须规范化为网络地址：
+  - IPv4：`a.b.c.d/prefix` 中的 `a.b.c.d` 必须已按 `prefix` mask 归零 host bits。  
+    - 示例：`1.2.3.4/24` → `1.2.3.0/24`
+  - IPv6：输入必须按 prefix mask 归零 host bits，并以稳定的 `inet_ntop` 口径输出。  
+    - 示例：`2001:db8::1/64` → `2001:db8::/64`
 - `ifindex` 归一化：`ifindex=0` 表示 any；canonical 输出为 `ifindex=0`。（若上层语法使用 `any`，CLI 必须在下发前归一化为 `0`。）
-- 若 `proto=icmp`：`sport/dport` 必须为 `any`（与引擎语义一致）。
+- 若 `proto=icmp` 或 `proto=other`：`sport/dport` 必须为 `any`（与引擎语义一致）。
 
 ---
 
@@ -115,6 +123,7 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|sr
 - 后端必须对每条规则计算 `matchKey`。
 - **`matchKey` 必须唯一**：同一 `<uid>` 的 apply payload 内，任何重复 `matchKey` 都必须拒绝 apply。  
   - 解释：重复 `matchKey` 会导致“同一匹配集合存在多条规则”，无论字段是否相同都会破坏可解释性与 1:1 归因（`clientRuleId`）。
+- 冲突检测覆盖 apply payload 内所有 rules（包括 `enabled=0` 的规则）；不得因 disabled 状态放宽唯一性。
 
 ### 4.2 错误 payload（`INVALID_ARGUMENT`）
 
@@ -130,7 +139,7 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|sr
     "conflicts": [
       {
         "uid": 10123,
-        "matchKey": "mk1|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=1.2.3.0/24|sport=any|dport=443",
+        "matchKey": "mk2|family=ipv4|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=1.2.3.0/24|sport=any|dport=443",
         "rules": [
           {"clientRuleId": "g1:r12", "action": "block", "priority": 10, "enabled": 1, "enforce": 1, "log": 0},
           {"clientRuleId": "g2:r7", "action": "allow", "priority": 10, "enabled": 1, "enforce": 1, "log": 0}
@@ -167,8 +176,8 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|sr
   "result": {
     "uid": 10123,
     "rules": [
-      {"clientRuleId": "g1:r12", "ruleId": 10, "matchKey": "mk1|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=1.2.3.0/24|sport=any|dport=443"},
-      {"clientRuleId": "g2:r7", "ruleId": 11, "matchKey": "mk1|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=2.3.4.0/24|sport=any|dport=443"}
+      {"clientRuleId": "g1:r12", "ruleId": 10, "matchKey": "mk2|family=ipv4|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=1.2.3.0/24|sport=any|dport=443"},
+      {"clientRuleId": "g2:r7", "ruleId": 11, "matchKey": "mk2|family=ipv4|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=any|dst=2.3.4.0/24|sport=any|dport=443"}
     ]
   }
 }
@@ -179,7 +188,7 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|sr
 - `result.rules[]`：必须与提交后的新基线 1:1 对应（每条规则一项，不得缺失）。
 - `result.rules[].clientRuleId`：与请求一致。
 - `result.rules[].ruleId`：提交后生效的稳定标识（见第 6 节）。
-- `result.rules[].matchKey`：提交后生效的 canonical 匹配集合编码（mk1）。
+- `result.rules[].matchKey`：提交后生效的 canonical 匹配集合编码（mk2）。
 
 注：
 - 若后续担心 payload 过大，可引入可选 `truncated`（默认 false），但 v1 推荐强制完整回传（与“强一致可观察”目标一致）。
@@ -216,7 +225,7 @@ apply 成功后，对每条规则的 per-rule stats 生命周期锁死为：
   - 否则 reset stats（对齐 v1 `IPRULES.UPDATE` 的心智：定义变化即清零）。
 
 “规则定义完全一致”的判据（v1）：
-- `matchKey` 相同（mk1 canonical；覆盖所有 match 维度）
+- `matchKey` 相同（mk2 canonical；覆盖所有 match 维度，包含 `family`）
 - 且 `action/priority/enabled/enforce/log` 全部相同
 
 注：
@@ -259,6 +268,16 @@ response：
     "rulesTotal":0,"rangeRulesTotal":0,"ctRulesTotal":0,"ctUidsTotal":0,
     "subtablesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0
   },
+  "byFamily":{
+    "ipv4":{
+      "rulesTotal":0,"rangeRulesTotal":0,"ctRulesTotal":0,"ctUidsTotal":0,
+      "subtablesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0
+    },
+    "ipv6":{
+      "rulesTotal":0,"rangeRulesTotal":0,"ctRulesTotal":0,"ctUidsTotal":0,
+      "subtablesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0
+    }
+  },
   "limits":{
     "recommended":{"maxRulesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0},
     "hard":{"maxRulesTotal":0,"maxSubtablesPerUid":0,"maxRangeRulesPerBucket":0}
@@ -270,6 +289,7 @@ response：
 
 类型约束：
 - `summary.*`：u64
+- `byFamily.ipv4.*` / `byFamily.ipv6.*`：u64（字段集合与 `summary` 一致；两项都必须存在；不要求可加）
 - `limits.*.*`：u64
 - `warnings[]/violations[]` item：
   - `metric`：string
@@ -288,9 +308,9 @@ response：
 
 ```json
 {"id":2,"ok":true,"result":{"uid":10123,"rules":[
-  {"ruleId":0,"clientRuleId":"g1:r12","matchKey":"mk1|...","action":"block","priority":10,
+  {"ruleId":0,"clientRuleId":"g1:r12","matchKey":"mk2|family=ipv4|...","action":"block","priority":10,
    "enabled":1,"enforce":1,"log":0,
-   "dir":"out","iface":"any","ifindex":0,"proto":"tcp",
+   "family":"ipv4","dir":"out","iface":"any","ifindex":0,"proto":"tcp",
    "ct":{"state":"any","direction":"any"},
    "src":"any","dst":"1.2.3.0/24","sport":"any","dport":"443",
    "stats":{"hitPackets":0,"hitBytes":0,"lastHitTsNs":0,"wouldHitPackets":0,"wouldHitBytes":0,"lastWouldHitTsNs":0}}
@@ -311,7 +331,7 @@ request：
 ```json
 {"id":3,"cmd":"IPRULES.APPLY","args":{"app":{"uid":10123},"rules":[
   {"clientRuleId":"g1:r12","action":"block","priority":10,"enabled":1,"enforce":1,"log":0,
-   "dir":"out","iface":"any","ifindex":0,"proto":"tcp",
+   "family":"ipv4","dir":"out","iface":"any","ifindex":0,"proto":"tcp",
    "ct":{"state":"any","direction":"any"},
    "src":"any","dst":"1.2.3.0/24","sport":"any","dport":"443"}
 ]}}
@@ -321,7 +341,7 @@ request：
 - `rules[]` 每个 item 必须包含：
   - 身份：`clientRuleId`
   - 行为：`action/priority/enabled/enforce/log`
-  - 匹配：`dir/iface/ifindex/proto/ct/src/dst/sport/dport`
+  - 匹配：`family/dir/iface/ifindex/proto/ct/src/dst/sport/dport`
 - 禁止客户端在 apply payload 中携带：
   - `ruleId`（由 daemon 分配/复用；见第 6 节）
   - `matchKey`（由 daemon 计算；见第 3 节）
@@ -338,18 +358,22 @@ request：
 `rules[]` item（`IPRULES.PRINT.result.rules[]`）字段全集：
 - `ruleId`：u32
 - `clientRuleId`：string（`[A-Za-z0-9._:-]{1,64}`）
-- `matchKey`：string（`mk1|...`；见第 3 节）
+- `matchKey`：string（`mk2|...`；见第 3 节）
 - `action`：`"allow" | "block"`
 - `priority`：i32
 - `enabled/enforce/log`：`0|1`（numbers）
+- `family`：`"ipv4" | "ipv6"`
 - `dir`：`"any" | "in" | "out"`
 - `iface`：`"any" | "wifi" | "data" | "vpn" | "unmanaged"`
 - `ifindex`：u32（`0` 表示 any；canonical 输出为 `0`）
-- `proto`：`"any" | "tcp" | "udp" | "icmp"`
+- `proto`：`"any" | "tcp" | "udp" | "icmp" | "other"`
 - `ct`：
   - `state`：`"any" | "new" | "established" | "invalid"`
   - `direction`：`"any" | "orig" | "reply"`
-- `src/dst`：`"any"` 或 `"a.b.c.d/prefix"`（IPv4 CIDR；network address 已规范化）
+- `src/dst`：
+  - `"any"`
+  - `"a.b.c.d/prefix"`（当 `family="ipv4"`；IPv4 CIDR；network address 已规范化）
+  - IPv6 CIDR（当 `family="ipv6"`；不得包含 `%zone`；network address 已规范化）
 - `sport/dport`：`"any"` 或 `"N"` 或 `"lo-hi"`（十进制；`0..65535`）
 - `stats`：
   - `hitPackets/hitBytes/lastHitTsNs/wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`：u64
