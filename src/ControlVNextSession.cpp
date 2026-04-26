@@ -160,6 +160,34 @@ void ControlVNextSession::run() {
     }
 
     FrameWriter writer(sock.get());
+    std::optional<std::chrono::steady_clock::time_point> pendingWriteSince;
+
+    const auto pendingWriteWithinDeadline = [&]() -> bool {
+        if (!writer.hasPending()) {
+            pendingWriteSince = std::nullopt;
+            return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!pendingWriteSince.has_value()) {
+            pendingWriteSince = now;
+            return true;
+        }
+        return now - *pendingWriteSince <= snortControlSendDeadline;
+    };
+
+    const auto pendingWritePollTimeout = [&](const int defaultTimeoutMs) -> int {
+        if (!pendingWriteSince.has_value()) {
+            return defaultTimeoutMs;
+        }
+        const auto deadline = *pendingWriteSince + snortControlSendDeadline;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            return 0;
+        }
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+        return static_cast<int>(std::min<std::int64_t>(defaultTimeoutMs, remaining));
+    };
 
     const auto enqueueFrame = [&](const std::string_view json) -> bool {
         if (json.size() > _limits.maxResponseBytes) {
@@ -170,6 +198,7 @@ void ControlVNextSession::run() {
             return false;
         }
         writer.enqueue(std::move(frame));
+        (void)pendingWriteWithinDeadline();
         return true;
     };
 
@@ -186,8 +215,15 @@ void ControlVNextSession::run() {
             if (!writer.hasPending()) {
                 break;
             }
+            if (!pendingWriteWithinDeadline()) {
+                return false;
+            }
+            const int pollTimeoutMs = pendingWritePollTimeout(timeoutMs);
+            if (pollTimeoutMs <= 0) {
+                return false;
+            }
             pollfd pfd{.fd = sock.get(), .events = POLLOUT | POLLHUP, .revents = 0};
-            const int rc = ::poll(&pfd, 1, timeoutMs);
+            const int rc = ::poll(&pfd, 1, pollTimeoutMs);
             if (rc <= 0) {
                 continue;
             }
@@ -339,7 +375,7 @@ void ControlVNextSession::run() {
             }
 
             ControlVNextStreamManager::StartResult startResult{};
-            if (!controlVNextStream.start(const_cast<void *>(sessionKey), sock.get(), params, startResult)) {
+            if (!controlVNextStream.start(const_cast<void *>(sessionKey), params, startResult)) {
                 rapidjson::Document response =
                     ControlVNext::makeErrorResponse(id, "STATE_CONFLICT", "stream type already subscribed");
                 return ResponsePlan{.response = std::move(response)};
@@ -458,6 +494,11 @@ void ControlVNextSession::run() {
             }
         }
 
+        if (activeStream.has_value() &&
+            !controlVNextStream.ownsSubscription(const_cast<void *>(sessionKey), *activeStream)) {
+            return;
+        }
+
         // Stream writer: enqueue pending events + per-second notices (best-effort).
             if (activeStream.has_value()) {
                 const auto stream = *activeStream;
@@ -548,6 +589,9 @@ void ControlVNextSession::run() {
         if (!writer.flushOnce()) {
             return;
         }
+        if (!pendingWriteWithinDeadline()) {
+            return;
+        }
 
         short events = POLLIN | POLLHUP;
         if (writer.hasPending()) {
@@ -568,6 +612,14 @@ void ControlVNextSession::run() {
             timeoutMs = static_cast<int>(
                 std::min<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count(),
                                        15LL * 60 * 1000));
+        }
+
+        if (writer.hasPending()) {
+            const int pendingTimeoutMs = pendingWritePollTimeout(timeoutMs);
+            if (pendingTimeoutMs <= 0) {
+                return;
+            }
+            timeoutMs = std::min(timeoutMs, pendingTimeoutMs);
         }
 
         pollfd pfd{.fd = sock.get(), .events = events, .revents = 0};

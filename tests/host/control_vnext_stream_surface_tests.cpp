@@ -139,6 +139,19 @@ struct Harness {
             }
         }
     }
+
+    bool waitForClose(const int timeoutMs) {
+        pollfd pfd{.fd = clientFd, .events = POLLIN | POLLHUP, .revents = 0};
+        const int rc = ::poll(&pfd, 1, timeoutMs);
+        if (rc <= 0) {
+            return false;
+        }
+        if (pfd.revents & POLLHUP) {
+            return true;
+        }
+        char byte = '\0';
+        return ::read(clientFd, &byte, 1) == 0;
+    }
 };
 
 std::uint64_t totalTraffic(const TrafficSnapshot &snapshot) {
@@ -150,12 +163,12 @@ std::uint64_t totalTraffic(const TrafficSnapshot &snapshot) {
     return total;
 }
 
+void resetStreamState() { controlVNextStream.resetAll(); }
+
 } // namespace
 
 TEST(ControlVNextStreamSurface, StartEmitsStartedNotice) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -188,9 +201,7 @@ TEST(ControlVNextStreamSurface, StartEmitsStartedNotice) {
 }
 
 TEST(ControlVNextStreamSurface, StartRejectsUnknownArgsKey) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -207,9 +218,7 @@ TEST(ControlVNextStreamSurface, StartRejectsUnknownArgsKey) {
 }
 
 TEST(ControlVNextStreamSurface, StartRejectsUnknownType) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -226,9 +235,7 @@ TEST(ControlVNextStreamSurface, StartRejectsUnknownType) {
 }
 
 TEST(ControlVNextStreamSurface, ActivityStartRejectsReplayArgs) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -245,9 +252,7 @@ TEST(ControlVNextStreamSurface, ActivityStartRejectsReplayArgs) {
 }
 
 TEST(ControlVNextStreamSurface, StopIsIdempotentWhenNotStarted) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -263,9 +268,7 @@ TEST(ControlVNextStreamSurface, StopIsIdempotentWhenNotStarted) {
 }
 
 TEST(ControlVNextStreamSurface, RejectsNonStreamCommandInStreamMode) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -286,9 +289,7 @@ TEST(ControlVNextStreamSurface, RejectsNonStreamCommandInStreamMode) {
 }
 
 TEST(ControlVNextStreamSurface, StopIsAckBarrier) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -308,10 +309,22 @@ TEST(ControlVNextStreamSurface, StopIsAckBarrier) {
     EXPECT_FALSE(h.readFrame(/*timeoutMs=*/200).has_value());
 }
 
+TEST(ControlVNextStreamSurface, ResetAllCancelsStreamThroughOwningSession) {
+    resetStreamState();
+
+    Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+
+    h.sendJsonFrame(R"({"id":1,"cmd":"STREAM.START","args":{"type":"dns"}})");
+    ASSERT_TRUE(h.readFrame(/*timeoutMs=*/1000).has_value()); // response
+    ASSERT_TRUE(h.readFrame(/*timeoutMs=*/1000).has_value()); // started notice
+
+    controlVNextStream.resetAll();
+
+    EXPECT_TRUE(h.waitForClose(/*timeoutMs=*/1000));
+}
+
 TEST(ControlVNextStreamSurface, SecondSubscriberIsStateConflict) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness a(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
     Harness b(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
@@ -335,9 +348,7 @@ TEST(ControlVNextStreamSurface, SecondSubscriberIsStateConflict) {
 }
 
 TEST(ControlVNextStreamSurface, SameConnectionCannotStartAnotherType) {
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    resetStreamState();
 
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
 
@@ -368,7 +379,7 @@ TEST(ControlVNextStreamSurface, SuppressedDnsTakeAndResetDoesNotLoseConcurrentIn
     });
     int sessionKey = 0;
     ControlVNextStreamManager::StartResult startResult{};
-    ASSERT_TRUE(manager.start(&sessionKey, -1,
+    ASSERT_TRUE(manager.start(&sessionKey,
                               ControlVNextStreamManager::StartParams{
                                   .type = ControlVNextStreamManager::Type::Dns,
                               },
@@ -426,7 +437,7 @@ TEST(ControlVNextStreamSurface, SuppressedPktTakeAndResetClearsPacketAndByteCoun
     });
     int sessionKey = 0;
     ControlVNextStreamManager::StartResult startResult{};
-    ASSERT_TRUE(manager.start(&sessionKey, -1,
+    ASSERT_TRUE(manager.start(&sessionKey,
                               ControlVNextStreamManager::StartParams{
                                   .type = ControlVNextStreamManager::Type::Pkt,
                               },
@@ -454,7 +465,7 @@ TEST(ControlVNextStreamSurface, SuppressedCountersStartFromCleanSubscriptionBoun
 
     int sessionKey = 0;
     ControlVNextStreamManager::StartResult startResult{};
-    ASSERT_TRUE(manager.start(&sessionKey, -1,
+    ASSERT_TRUE(manager.start(&sessionKey,
                               ControlVNextStreamManager::StartParams{
                                   .type = ControlVNextStreamManager::Type::Dns,
                               },

@@ -21,6 +21,7 @@
 #include <fstream>
 #include <optional>
 #include <system_error>
+#include <utility>
 #include <sucre-snort.hpp>
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
@@ -226,8 +227,14 @@ void Control::unixServer() {
         for (;;) {
             if (const int sockClient = accept(unixSocket, nullptr, nullptr); sockClient < 0) {
                 LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
+            } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
+                       !budget) {
+                LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
+                close(sockClient);
             } else {
-                std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
+                std::thread([this, sockClient, budget = std::move(budget)]() mutable {
+                    clientLoop(sockClient);
+                }).detach();
             }
         }
     }
@@ -343,8 +350,14 @@ void Control::unixServer() {
             if (const int sockClient = accept(abstractSocket, nullptr, nullptr);
                 sockClient < 0) {
                 LOG(ERROR) << __FUNCTION__ << " - unix abstract socket accept error";
+            } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
+                       !budget) {
+                LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
+                close(sockClient);
             } else {
-                std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
+                std::thread([this, sockClient, budget = std::move(budget)]() mutable {
+                    clientLoop(sockClient);
+                }).detach();
             }
         }
     }).detach();
@@ -352,8 +365,14 @@ void Control::unixServer() {
     for (;;) {
         if (const int sockClient = accept(devSocket, nullptr, nullptr); sockClient < 0) {
             LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
+        } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
+                   !budget) {
+            LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
+            close(sockClient);
         } else {
-            std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
+            std::thread([this, sockClient, budget = std::move(budget)]() mutable {
+                clientLoop(sockClient);
+            }).detach();
         }
     }
 }
@@ -389,8 +408,14 @@ void Control::inetServer() {
         for (;;) {
             if (const int sockClient = accept(inetSocket, nullptr, nullptr); sockClient < 0) {
                 throw "inet socket accept error";
+            } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
+                       !budget) {
+                LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
+                close(sockClient);
             } else {
-                std::thread([this, sockClient] { clientLoop(sockClient); }).detach();
+                std::thread([this, sockClient, budget = std::move(budget)]() mutable {
+                    clientLoop(sockClient);
+                }).detach();
             }
         }
     } catch (const char *error) {
@@ -482,7 +507,8 @@ void Control::clientLoop(const int sockClient) const {
                     break;
                 }
                 if (devShutdown) {
-                    snortSave(true); // will std::exit
+                    snortRequestShutdown();
+                    break;
                 }
                 if (quit) {
                     break;

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cerrno>
 #include <stdexcept>
+#include <utility>
 
 #include <DnsListener.hpp>
 #include <ControlVNextStreamManager.hpp>
@@ -53,8 +54,14 @@ void DnsListener::server() {
         for (;;) {
             if (const int sockClient = accept(inherited, nullptr, nullptr); sockClient == -1) {
                 LOG(ERROR) << __FUNCTION__ << " - dnslistener accept error";
+            } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Dns);
+                       !budget) {
+                LOG(WARNING) << __FUNCTION__ << " - DNS client budget exhausted";
+                close(sockClient);
             } else {
-                std::thread([this, sockClient] { clientRun(sockClient); }).detach();
+                std::thread([this, sockClient, budget = std::move(budget)]() mutable {
+                    clientRun(sockClient);
+                }).detach();
             }
         }
     }
@@ -148,8 +155,14 @@ void DnsListener::server() {
         for (;;) {
             if (const int sockClient = accept(abstractSocket, nullptr, nullptr); sockClient == -1) {
                 LOG(ERROR) << __FUNCTION__ << " - dnslistener abstract accept error";
+            } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Dns);
+                       !budget) {
+                LOG(WARNING) << __FUNCTION__ << " - DNS client budget exhausted";
+                close(sockClient);
             } else {
-                std::thread([this, sockClient] { clientRun(sockClient); }).detach();
+                std::thread([this, sockClient, budget = std::move(budget)]() mutable {
+                    clientRun(sockClient);
+                }).detach();
             }
         }
     }).detach();
@@ -157,9 +170,13 @@ void DnsListener::server() {
     for (;;) {
         if (const int sockClient = accept(devSocket, nullptr, nullptr); sockClient == -1) {
             LOG(ERROR) << __FUNCTION__ << " - dnslistener accept error";
+        } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Dns); !budget) {
+            LOG(WARNING) << __FUNCTION__ << " - DNS client budget exhausted";
+            close(sockClient);
         } else {
-            // Explicitly capture this for C++20 compatibility (no implicit this with [=]).
-            std::thread([this, sockClient] { clientRun(sockClient); }).detach();
+            std::thread([this, sockClient, budget = std::move(budget)]() mutable {
+                clientRun(sockClient);
+            }).detach();
         }
     }
 }
@@ -342,7 +359,7 @@ void DnsListener::clientRead(const int socket, void *data, const uint32_t len, c
 
 void DnsListener::clientWrite(const int socket, const void *data, const uint32_t len,
                               const char *error) {
-    if (write(socket, data, len) != static_cast<ssize_t>(len)) {
+    if (!snortWriteAllWithDeadline(socket, data, len, snortDnsSendDeadline)) {
         throw error;
     }
 }

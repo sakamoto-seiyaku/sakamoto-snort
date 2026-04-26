@@ -19,7 +19,6 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
-#include <vector>
 
 class Domain;
 class Host;
@@ -99,7 +98,7 @@ public:
     const Caps &caps() const noexcept { return _caps; }
 
     // Returns false on STATE_CONFLICT (another subscriber already active for the stream type).
-    bool start(void *sessionKey, int fd, const StartParams &params, StartResult &out);
+    bool start(void *sessionKey, const StartParams &params, StartResult &out);
 
     // Idempotent: only affects the calling session if it owns the subscription.
     void stop(void *sessionKey);
@@ -107,9 +106,12 @@ public:
     // Detach a session (connection closed). Releases any owned subscription but does not clear ring.
     void detach(void *sessionKey);
 
-    // Force-stop all subscriptions and clear all stream state. Returns fds that should be shutdown
-    // by the caller to disconnect stream connections.
-    [[nodiscard]] std::vector<int> resetAll();
+    // Force-stop all subscriptions and clear all stream state. Owning sessions observe cancellation
+    // and close their own sockets.
+    void resetAll();
+
+    // Returns true only while the calling session still owns the active subscription.
+    bool ownsSubscription(void *sessionKey, Type type);
 
     // Pop next pending event for a subscribed session.
     std::optional<DnsEvent> popDnsPending(void *sessionKey);
@@ -133,7 +135,6 @@ private:
     struct DnsState {
         std::mutex mutex;
         void *subscriber = nullptr;
-        int subscriberFd = -1;
         std::deque<DnsEvent> ring;
         std::deque<DnsEvent> pending;
         std::atomic_bool subscribed{false};
@@ -144,7 +145,6 @@ private:
     struct PktState {
         std::mutex mutex;
         void *subscriber = nullptr;
-        int subscriberFd = -1;
         std::deque<PktEvent> ring;
         std::deque<PktEvent> pending;
         std::atomic_bool subscribed{false};
@@ -155,7 +155,6 @@ private:
     struct ActivityState {
         std::mutex mutex;
         void *subscriber = nullptr;
-        int subscriberFd = -1;
         std::deque<ActivityEvent> pending;
         std::atomic_bool subscribed{false};
         std::atomic_bool lastBlockEnabled{false};

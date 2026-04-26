@@ -10,7 +10,7 @@
 - `[FIXED]` 一项 HIGH 已通过冻结 legacy `Streamable` 输出修复；vNext `STREAM.START(type=...)` 是受支持的实时观测入口。
 - `[FIXED]` 一项 HIGH 已通过拆分 vNext control mutation mutex 与 datapath `mutexListeners` 修复。
 - `[FIXED]` 一项 MEDIUM 与一项 LOW 已通过 suppressed counter 原子 take-and-reset、`ActivityManager::reset()` 接入 `RESETALL` 修复。
-- 未标记 `[FIXED]` 的 HIGH / MEDIUM / LOW 仍按原 finding 处理，尚未在本轮修复。
+- `[FIXED]` daemon lifecycle ownership 组三项已通过 main-owned shutdown、session-owned fd、bounded thread-per-client 修复。
 - 本轮属于运行期并发边界设计收敛：对外 `RESETALL` 语义不变，但内部从“仅依赖 `mutexListeners`”调整为“save/reset coordinator + reset epoch + 短共享锁发布窗口”。
 - reset 并发边界设计文档已新增：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`。
 
@@ -247,43 +247,93 @@
 - 原始影响面：legacy activity stream、reset 语义；未证明会直接影响 verdict。
 - 当前验证口径：host test 通过 weak pointer 断言 `ActivityManager::reset()` 会释放 reset 前 `_topApp`。
 
-### [HIGH] SIGTERM / SIGINT 处理可能让退出延迟最长达到保存周期
+### [HIGH][FIXED] SIGTERM / SIGINT 处理可能让退出延迟最长达到保存周期
 
-- 位置：`src/sucre-snort.cpp:43`、`src/sucre-snort.cpp:122`、`src/sucre-snort.cpp:135`、`src/sucre-snort.cpp:149`。
-- 当前代码事实：signal handler 只设置 `g_quit_flag`。main loop 只在 `snortSave()` 前后检查该 flag，随后调用 `std::this_thread::sleep_for(settings.saveInterval)`，当前保存间隔为 1 小时。信号可能投递到任意未屏蔽线程，不能保证唤醒正在 sleep 的 main thread。
-- 触发 interleaving：
-  - Thread A：main loop 完成 `snortSave()` 后进入 `sleep_for(saveInterval)`。
-  - Thread B：某个 detached worker 收到 SIGTERM / SIGINT，并设置 `g_quit_flag`。
-  - Thread A：直到实现主动唤醒或完整 sleep interval 结束前，都可能不执行最终保存 / 退出。
-- 失败模式：退出卡住 / 长时间延迟；Android / service supervisor 升级终止前可能没有完成 final save。
-- 影响面：daemon lifecycle、shutdown persistence、fd/socket 清理预期。
-- 最小修复方向：用 `sigwait` / `signalfd` / self-pipe 配合 condition variable 或 eventfd 代替被动轮询；收到信号后立即唤醒 main loop 并执行一次 final save。
-- 验证建议：真机 lifecycle 测试：在 save sleep 的不同时间点反复发送 SIGTERM，断言退出延迟有上界且 final save 完成。
+修复状态：已修复。
 
-### [MEDIUM] `resetAll()` 返回 raw stream fd，缺少生命周期所有权
+性质判断：发布级 daemon lifecycle ownership 设计问题。问题根源不是单个 `sleep_for()`，而是进程退出没有 main-owned coordinator，信号、control worker、周期保存各自分散处理 lifecycle。
 
-- 位置：`src/ControlVNextStreamManager.hpp:110`、`src/ControlVNextStreamManager.cpp:261`、`src/ControlVNextSessionCommandsDaemon.cpp:108`、`src/ControlVNextSessionCommandsDaemon.cpp:110`、`src/ControlVNextSession.cpp:150`、`src/ControlVNextSession.cpp:207`。
-- 当前代码事实：stream manager 把 `subscriberFd` 保存为 raw int。`resetAll()` 把 fd 值复制到 vector，清空 subscriber 并释放 stream locks，调用方随后对这些 fd 执行 `shutdown(fd, SHUT_RDWR)`。真正拥有 fd 的 session 线程仍可能同时关闭该 fd。
-- 触发 interleaving：
-  - Thread A：`RESETALL` 调用 `controlVNextStream.resetAll()`，得到 fd `42`。
-  - Thread B：stream session 并发退出并关闭 fd `42`。
-  - Thread C：accept loop 接受新 client，OS 复用 fd `42`。
-  - Thread A：对 `42` 调用 `shutdown()`，误伤不相关的新 client。
-- 失败模式：fd lifetime race；错误断开 session；概率低但从当前 ownership 模型可静态推出。
-- 影响面：vNext stream reset、control client 生命周期。
-- 最小修复方向：不要返回 bare fd。可以在 stream mutex 下 `dup()` fd 后返回副本，或让 owning session 观察 cancellation flag 并由 session 自己执行 shutdown / close。
-- 验证建议：高频 vNext stream connect / disconnect，同时反复执行 `RESETALL`；观察不相关 command session 是否出现 `POLLHUP` 或响应截断。
+实际修复：
 
-### [MEDIUM] detached client / listener 线程配合阻塞写，可能耗尽进程资源
+- 新增 OpenSpec change：`openspec/changes/stabilize-daemon-lifecycle-ownership/`，把 main-owned shutdown、session-owned fd、bounded thread-per-client 固化为发布级设计。
+- 新增 runtime shutdown coordinator：`SIGINT` / `SIGTERM` 在启动早期被 block，专用 signal waiter 使用 `sigwait()` 请求 shutdown。
+- main save loop 改为可唤醒 timed wait；shutdown 请求会立即唤醒 main，由 main 执行 final save 后返回。
+- legacy `DEV.SHUTDOWN` 不再从 control worker 直接 `std::exit`；它回复 `OK` 后请求同一个 shutdown coordinator。
 
-- 位置：`src/DnsListener.cpp:26`、`src/DnsListener.cpp:53`、`src/DnsListener.cpp:147`、`src/Control.cpp:190`、`src/Control.cpp:226`、`src/Control.cpp:341`、`src/ControlVNext.cpp:48`、`src/ControlVNext.cpp:95`、`src/PacketListener.cpp:73`、`src/PackageListener.cpp:101`、`src/DnsListener.cpp:315`、`src/SocketIO.cpp:36`、`src/ControlVNextSession.cpp:181`。
-- 当前代码事实：accept loop 为每个 client 创建 detached thread，除了 listen backlog 外没有全局 client / thread budget。legacy `SocketIO::print()` 与 DNS `clientWrite()` 使用阻塞写。vNext 命令响应虽然使用 non-blocking fd，但 `flushBlocking()` 在有 pending frame 时没有总 deadline。
-- 触发 interleaving：
-  - 大量 client 连接后不读响应，或保持 session idle 到超时。
-  - daemon 积累 detached threads，这些线程阻塞在 write / read / poll 中；没有 owner 能 join 或 cancel 它们。
-- 失败模式：thread / fd exhaustion、shutdown 变慢、control-plane DoS。
-- 影响面：legacy control、vNext command client、DNS netd fallback client、daemon lifecycle。
-- 最小修复方向：引入有界 worker / session accounting；为发送增加总 deadline；control client 更适合 event-loop 或 thread-pool ownership；暴露 active session 与 rejected client counters。
+影响：
+
+- packet / DNS verdict 热路径无新增锁。
+- 退出最坏延迟不再由 60 分钟 `saveInterval` 决定，而由当前 save/reset 临界区和 final save 耗时决定。
+
+验证口径：
+
+- host test 覆盖 shutdown request 可以唤醒长时间 timed wait。
+- 已验证：`cmake --build --preset dev-debug --target snort-host-tests`、`cmake --build --preset dev-debug --target snort-host-tests-asan` 通过。
+- 仍建议真机补测：在周期等待窗口发送 SIGTERM，确认快速退出且 final save 完成。
+
+原始问题摘要：
+
+- 原始位置：`src/sucre-snort.cpp:43`、`src/sucre-snort.cpp:122`、`src/sucre-snort.cpp:135`、`src/sucre-snort.cpp:149`。
+- 原始代码事实：signal handler 只设置 `g_quit_flag`，main loop 在 `sleep_for(settings.saveInterval)` 后才可能观察 flag；信号可投递到任意未屏蔽线程。
+- 原始失败模式：退出卡住 / 长时间延迟；Android / service supervisor 升级终止前可能没有完成 final save。
+
+### [MEDIUM][FIXED] `resetAll()` 返回 raw stream fd，缺少生命周期所有权
+
+修复状态：已修复。
+
+性质判断：session / fd ownership 设计问题。stream manager 不是 socket owner，因此不应保存、返回或 shutdown client fd。
+
+实际修复：
+
+- `ControlVNextStreamManager::resetAll()` 改为只清理 stream state，不再返回 `std::vector<int>` fd。
+- stream state 移除 `subscriberFd`，只保留 subscriber identity。
+- `ControlVNextSession` 在 loop 中观察 `ownsSubscription()`；`RESETALL` 清空订阅后，拥有 socket 的 session 自行退出并关闭自己的 fd。
+- `snortResetAll()` 不再对 stream fd 调用 `shutdown(fd, SHUT_RDWR)`。
+
+影响：
+
+- 不改变 vNext stream wire shape；`RESETALL` 仍会终止 active stream session。
+- 消除 fd reuse 误伤新 client 的静态可推导 race。
+
+验证口径：
+
+- host test 覆盖 `RESETALL` 后 stream 连接由 owning session 关闭。
+- 已验证：`cmake --build --preset dev-debug --target snort-host-tests`、`cmake --build --preset dev-debug --target snort-host-tests-asan` 通过。
+
+原始问题摘要：
+
+- 原始位置：`src/ControlVNextStreamManager.hpp:110`、`src/ControlVNextStreamManager.cpp:261`、`src/ControlVNextSession.cpp:150`。
+- 原始失败模式：reset caller 持有旧 raw fd 值，session 并发 close 后 OS 复用 fd，reset caller 可能 shutdown 不相关新 client。
+
+### [MEDIUM][FIXED] detached client / listener 线程配合阻塞写，可能耗尽进程资源
+
+修复状态：已修复。
+
+性质判断：daemon client lifecycle 设计问题。当前发布架构可以保留 thread-per-client，但必须有明确 active budget 与 I/O deadline，否则 detached worker 没有资源上界。
+
+实际修复：
+
+- 新增 RAII active session budget：legacy control 与 vNext control 共用 control budget；DNS netd client 使用独立 DNS budget。
+- legacy control、vNext control、DNS accept path 在 detach worker 前先获取 budget；超限时立即 close accepted fd 并记录 warning。
+- 新增 `snortWriteAllWithDeadline()`，legacy `SocketIO::print()` 与 DNS `clientWrite()` 使用 bounded write。
+- vNext session pending writer 增加总 deadline，慢读 client 不能无限保持 pending frame 和 worker。
+
+影响：
+
+- `settings.controlClients` 继续作为 listen backlog；active worker 数由 runtime budget 控制。
+- 正常本地 client 不受影响；异常慢读或不读 client 会在 deadline 后被断开。
+- 不改变 legacy / vNext 响应格式。
+
+验证口径：
+
+- host test 覆盖 session budget acquire / release。
+- 已验证：`cmake --build --preset dev-debug --target snort-host-tests`、`cmake --build --preset dev-debug --target snort-host-tests-asan` 通过。
+- 仍建议真机或压力测试覆盖慢读 client、连接风暴和 daemon `HELLO` 恢复性。
+
+原始问题摘要：
+
+- 原始位置：`src/DnsListener.cpp:26`、`src/DnsListener.cpp:53`、`src/DnsListener.cpp:147`、`src/Control.cpp:190`、`src/Control.cpp:226`、`src/Control.cpp:341`、`src/ControlVNext.cpp:48`、`src/ControlVNext.cpp:95`、`src/DnsListener.cpp:315`、`src/SocketIO.cpp:36`、`src/ControlVNextSession.cpp:181`。
+- 原始失败模式：大量 client 连接后不读响应或保持 idle，daemon 积累 detached threads / fd，造成 resource exhaustion、shutdown 变慢、control-plane DoS。
 - 验证建议：host 或真机 socket stress：对 legacy / vNext / DNS socket 打开大量不读取 client，断言 threads / fds 有上界且 command latency 稳定。
 
 ## Needs Dynamic Verification
@@ -291,8 +341,8 @@
 - Conntrack lockless lookup / epoch reclaim：当前代码使用 epoch guard，且未静态证明存在 UAF；但仍应使用 TSan stress 覆盖并发 `inspectForPolicy()`、`commitAccepted()`、sweep、reclaim。
 - Conntrack reset 边界：只有在所有生产调用都继续保证 reset 位于独占 `mutexListeners` 下时才静态安全；建议用 TSan 覆盖 `RESETALL` + 活跃 IPv4 traffic。
 - Legacy stream 背压：用不读取的 client 复现，量化 NFQUEUE latency 与 reset starvation。
-- vNext fd race：需要高 churn stream connect / disconnect / reset 测试，因为 fd reuse 依赖 OS 时序。
-- Signal exit latency：需要真机测量，因为信号投递线程与 `sleep_for` 中断行为依赖运行时 / 实现。
+- Daemon lifecycle：本轮已用 host test 覆盖 coordinator wake、budget 与 vNext stream reset cancellation；仍建议真机测量 SIGTERM latency、慢读 client、连接风暴和 final save 完整性。
+- Android / Soong 生产构建：本轮已确认 host/ASAN；由于全图重建耗时约 40 分钟，`snort-build-regen-graph` 留到今天工作结束时集中验证。直接复用旧 ninja graph 的 `snort-build` 会因未纳入新增 `src/SnortIo.cpp` 出现过期图链接失败，需以 graph regen 作为准入验证。
 - 大 control-plane 操作：并发运行 domain import / IPRULES apply 与 datapath perf，观察 `nfq_total_us` tail latency。
 
 ## No Finding Areas

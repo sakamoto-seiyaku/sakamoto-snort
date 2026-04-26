@@ -27,32 +27,16 @@ bool SocketIO::print(std::stringstream &out, const bool pretty) {
     // trailing NUL byte as before (size()+1).
     auto writeSocket = [&](auto &in) {
         const std::string outStr(in.str());
-        const char *buf = outStr.c_str();
-        ssize_t remaining = static_cast<ssize_t>(outStr.size() + 1); // include NUL terminator
-        ssize_t written = 0;
-        if (remaining == 1) {
+        const size_t len = outStr.size() + 1; // include NUL terminator
+        if (len == 1) {
             return; // nothing to write
         }
         const std::lock_guard lock(_mutex);
-        while (remaining > 0) {
-            ssize_t ret = ::write(_socket, buf + written, static_cast<size_t>(remaining));
-            if (ret > 0) {
-                written += ret;
-                remaining -= ret;
-            } else if (ret == -1 && (errno == EINTR)) {
-                continue; // retry
-            } else if (ret == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                // For blocking sockets this shouldn't happen; treat as failure to avoid busy loop
-                _open = false;
-                break;
-            } else {
-                _open = false;
-                break;
-            }
-        }
-        if (remaining == 0) {
+        if (snortWriteAllWithDeadline(_socket, outStr.c_str(), len, snortControlSendDeadline)) {
             _open = true;
             _lastWrite.store(std::time(nullptr), std::memory_order_relaxed);
+        } else {
+            _open = false;
         }
     };
     if (_open) {

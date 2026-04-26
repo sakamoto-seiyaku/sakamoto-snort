@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <csignal>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <thread>
@@ -40,16 +39,13 @@ PacketListener<IPv6> pktListener6;
 Control control;
 ControlVNext controlVNext;
 
-// Fix #12: use an async-signal-safe handler that only sets a flag
-static volatile sig_atomic_t g_quit_flag = 0;
-static void on_term_signal(int) { g_quit_flag = 1; }
-
 static std::mutex g_snortSaveResetMutex;
 
 static void snort();
-static void snortSaveLocked(bool quit);
+static void snortSaveLocked();
 
 int main() {
+    snortConfigureProcessSignals();
     try {
         snort();
     } catch (const std::runtime_error &e) {
@@ -59,6 +55,7 @@ int main() {
 }
 
 static void snort() {
+    snortStartSignalWaiter();
     Timer::set("total", "Total time");
     settings.start();
     {
@@ -118,9 +115,6 @@ static void snort() {
     Timer::get("total", "Total init time");
     // Prime interface snapshot once to avoid cold-miss refresh on the hot path.
     pktManager.refreshIfacesOnce();
-    std::signal(SIGINT, on_term_signal);
-    std::signal(SIGTERM, on_term_signal);
-    std::signal(SIGPIPE, SIG_IGN);
 
     // rulesManager.add(Rule::REGEX, ".*google.*");
     // rulesManager.addCustom(0, Stats::BLACK);
@@ -134,24 +128,27 @@ static void snort() {
     for (;;) {
         // Periodic save no longer freezes the world with a global lock. Each module's save()
         // is internally synchronized; cross-module snapshot consistency is eventual and sufficient.
-        if (g_quit_flag) {
-            snortSave(true); // will std::exit
-        } else {
-            snortSave();
-        }
+        snortSave();
         // Very low frequency passive refresh (best-effort); does not block hot path.
         pktManager.refreshIfacesPassive();
-        if (g_quit_flag) {
-            // In case snortSave(true) returns (shouldn't), break to stop loop.
+        if (snortShutdownRequested()) {
             break;
         }
-        std::this_thread::sleep_for(settings.saveInterval);
+        if (snortWaitForShutdownFor(
+                std::chrono::duration_cast<std::chrono::milliseconds>(settings.saveInterval))) {
+            break;
+        }
     }
+    snortSave();
 }
 
 void snortSave(bool quit) {
+    if (quit) {
+        snortRequestShutdown();
+        return;
+    }
     const std::lock_guard<std::mutex> lock(g_snortSaveResetMutex);
-    snortSaveLocked(quit);
+    snortSaveLocked();
 }
 
 void snortResetAll() {
@@ -160,9 +157,7 @@ void snortResetAll() {
     const std::lock_guard listenersLock(mutexListeners);
 
     snortBeginResetEpoch();
-    for (const int fd : controlVNextStream.resetAll()) {
-        (void)::shutdown(fd, SHUT_RDWR);
-    }
+    controlVNextStream.resetAll();
     (void)::unlink(settings.saveDnsStream.c_str());
 
     perfMetrics.resetAll();
@@ -177,11 +172,11 @@ void snortResetAll() {
     hostManager.reset();
     dnsListener.reset();
     pkgListener.reset();
-    snortSaveLocked(false);
+    snortSaveLocked();
     snortEndResetEpoch();
 }
 
-static void snortSaveLocked(bool quit) {
+static void snortSaveLocked() {
     Timer::set("save", "Data backup time");
     settings.save();
     blockingListManager.save();
@@ -191,7 +186,4 @@ static void snortSaveLocked(bool quit) {
     dnsListener.save();
     pktManager.save();
     Timer::get("save");
-    if (quit) {
-        std::exit(EXIT_SUCCESS);
-    }
 }

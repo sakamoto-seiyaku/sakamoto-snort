@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -50,8 +51,14 @@ void serveClient(const int sockClient) {
         if (const int sockClient = accept(serverFd, nullptr, nullptr); sockClient < 0) {
             const int err = errno;
             LOG(ERROR) << __FUNCTION__ << " - " << kind << " accept error: " << std::strerror(err);
+        } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
+                   !budget) {
+            LOG(WARNING) << __FUNCTION__ << " - vNext control session budget exhausted";
+            ::close(sockClient);
         } else {
-            std::thread([sockClient] { serveClient(sockClient); }).detach();
+            std::thread([sockClient, budget = std::move(budget)]() mutable {
+                serveClient(sockClient);
+            }).detach();
         }
     }
 }
@@ -212,8 +219,14 @@ void ControlVNext::inetServer() {
         for (;;) {
             if (const int sockClient = accept(inetSocket, nullptr, nullptr); sockClient < 0) {
                 throw "inet socket accept error";
+            } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
+                       !budget) {
+                LOG(WARNING) << __FUNCTION__ << " - vNext control session budget exhausted";
+                ::close(sockClient);
             } else {
-                std::thread([sockClient] { serveClient(sockClient); }).detach();
+                std::thread([sockClient, budget = std::move(budget)]() mutable {
+                    serveClient(sockClient);
+                }).detach();
             }
         }
     } catch (const char *error) {

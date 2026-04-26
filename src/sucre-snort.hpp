@@ -6,6 +6,8 @@
 #pragma once
 
 #include <android-base/logging.h>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <iomanip>
 #include <map>
@@ -28,11 +30,57 @@
 extern std::shared_mutex mutexListeners;
 extern std::mutex mutexControlMutations;
 
+inline constexpr std::chrono::milliseconds snortControlSendDeadline{5000};
+inline constexpr std::chrono::milliseconds snortDnsSendDeadline{250};
+
 std::uint64_t snortResetEpoch() noexcept;
 bool snortResetEpochIsStable(std::uint64_t epoch) noexcept;
 bool snortResetEpochStillCurrent(std::uint64_t epoch) noexcept;
 void snortBeginResetEpoch() noexcept;
 void snortEndResetEpoch() noexcept;
+
+void snortConfigureProcessSignals();
+void snortStartSignalWaiter();
+void snortRequestShutdown();
+bool snortShutdownRequested();
+bool snortWaitForShutdownFor(std::chrono::milliseconds timeout);
+void snortResetShutdownForTests();
+
+enum class SnortSessionBudgetKind : std::uint8_t {
+    Control,
+    Dns,
+};
+
+class SnortSessionBudgetToken {
+public:
+    SnortSessionBudgetToken() noexcept = default;
+    ~SnortSessionBudgetToken();
+
+    SnortSessionBudgetToken(const SnortSessionBudgetToken &) = delete;
+    SnortSessionBudgetToken &operator=(const SnortSessionBudgetToken &) = delete;
+
+    SnortSessionBudgetToken(SnortSessionBudgetToken &&other) noexcept;
+    SnortSessionBudgetToken &operator=(SnortSessionBudgetToken &&other) noexcept;
+
+    explicit operator bool() const noexcept { return _active; }
+
+private:
+    friend SnortSessionBudgetToken snortTryAcquireSessionBudget(SnortSessionBudgetKind kind) noexcept;
+
+    SnortSessionBudgetToken(SnortSessionBudgetKind kind, bool active) noexcept;
+    void release() noexcept;
+
+    SnortSessionBudgetKind _kind{SnortSessionBudgetKind::Control};
+    bool _active = false;
+};
+
+SnortSessionBudgetToken snortTryAcquireSessionBudget(SnortSessionBudgetKind kind) noexcept;
+std::uint32_t snortSessionBudgetLimit(SnortSessionBudgetKind kind) noexcept;
+std::uint32_t snortActiveSessions(SnortSessionBudgetKind kind) noexcept;
+void snortResetSessionBudgetsForTests() noexcept;
+
+bool snortWriteAllWithDeadline(int fd, const void *data, std::size_t len,
+                               std::chrono::milliseconds deadline) noexcept;
 
 void snortSave(bool quit = false);
 void snortResetAll();

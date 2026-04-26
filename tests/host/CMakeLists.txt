@@ -270,6 +270,7 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
   "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
   "${SUCRE_SNORT_ROOT}/src/SocketIO.cpp"
+  "${SUCRE_SNORT_ROOT}/src/SnortIo.cpp"
   "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
   "${SUCRE_SNORT_ROOT}/src/Streamable.cpp"
   "${SUCRE_SNORT_ROOT}/src/Timer.cpp"

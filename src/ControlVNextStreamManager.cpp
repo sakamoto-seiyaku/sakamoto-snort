@@ -102,8 +102,7 @@ std::uint32_t ControlVNextStreamManager::replayStartIndexForUnion(const std::deq
     return std::min(minSizeStart, horizonStart);
 }
 
-bool ControlVNextStreamManager::start(void *sessionKey, const int fd, const StartParams &params,
-                                      StartResult &out) {
+bool ControlVNextStreamManager::start(void *sessionKey, const StartParams &params, StartResult &out) {
     if (params.type == Type::Dns) {
         std::uint32_t horizon = params.horizonSec;
         std::uint32_t minSize = params.minSize;
@@ -119,7 +118,6 @@ bool ControlVNextStreamManager::start(void *sessionKey, const int fd, const Star
         }
 
         _dns.subscriber = sessionKey;
-        _dns.subscriberFd = fd;
         _dns.pending.clear();
         _dns.droppedEvents.store(0, std::memory_order_relaxed);
         _dns.suppressedTraffic.reset();
@@ -147,7 +145,6 @@ bool ControlVNextStreamManager::start(void *sessionKey, const int fd, const Star
         }
 
         _pkt.subscriber = sessionKey;
-        _pkt.subscriberFd = fd;
         _pkt.pending.clear();
         _pkt.droppedEvents.store(0, std::memory_order_relaxed);
         _pkt.suppressedTraffic.reset();
@@ -174,7 +171,6 @@ bool ControlVNextStreamManager::start(void *sessionKey, const int fd, const Star
             return false;
         }
         _activity.subscriber = sessionKey;
-        _activity.subscriberFd = fd;
         _activity.subscribed.store(true, std::memory_order_release);
         _activity.pending.clear();
         _activity.lastBlockEnabled.store(params.blockEnabled, std::memory_order_relaxed);
@@ -193,7 +189,6 @@ void ControlVNextStreamManager::stop(void *sessionKey) {
         const std::lock_guard lock(_dns.mutex);
         if (_dns.subscriber == sessionKey) {
             _dns.subscriber = nullptr;
-            _dns.subscriberFd = -1;
             _dns.subscribed.store(false, std::memory_order_release);
             _dns.pending.clear();
             _dns.ring.clear();
@@ -205,7 +200,6 @@ void ControlVNextStreamManager::stop(void *sessionKey) {
         const std::lock_guard lock(_pkt.mutex);
         if (_pkt.subscriber == sessionKey) {
             _pkt.subscriber = nullptr;
-            _pkt.subscriberFd = -1;
             _pkt.subscribed.store(false, std::memory_order_release);
             _pkt.pending.clear();
             _pkt.ring.clear();
@@ -217,7 +211,6 @@ void ControlVNextStreamManager::stop(void *sessionKey) {
         const std::lock_guard lock(_activity.mutex);
         if (_activity.subscriber == sessionKey) {
             _activity.subscriber = nullptr;
-            _activity.subscriberFd = -1;
             _activity.subscribed.store(false, std::memory_order_release);
             _activity.pending.clear();
         }
@@ -229,7 +222,6 @@ void ControlVNextStreamManager::detach(void *sessionKey) {
         const std::lock_guard lock(_dns.mutex);
         if (_dns.subscriber == sessionKey) {
             _dns.subscriber = nullptr;
-            _dns.subscriberFd = -1;
             _dns.subscribed.store(false, std::memory_order_release);
             _dns.pending.clear();
             _dns.droppedEvents.store(0, std::memory_order_relaxed);
@@ -240,7 +232,6 @@ void ControlVNextStreamManager::detach(void *sessionKey) {
         const std::lock_guard lock(_pkt.mutex);
         if (_pkt.subscriber == sessionKey) {
             _pkt.subscriber = nullptr;
-            _pkt.subscriberFd = -1;
             _pkt.subscribed.store(false, std::memory_order_release);
             _pkt.pending.clear();
             _pkt.droppedEvents.store(0, std::memory_order_relaxed);
@@ -251,22 +242,16 @@ void ControlVNextStreamManager::detach(void *sessionKey) {
         const std::lock_guard lock(_activity.mutex);
         if (_activity.subscriber == sessionKey) {
             _activity.subscriber = nullptr;
-            _activity.subscriberFd = -1;
             _activity.subscribed.store(false, std::memory_order_release);
             _activity.pending.clear();
         }
     }
 }
 
-std::vector<int> ControlVNextStreamManager::resetAll() {
-    std::vector<int> fds;
+void ControlVNextStreamManager::resetAll() {
     {
         const std::lock_guard lock(_dns.mutex);
-        if (_dns.subscriber != nullptr && _dns.subscriberFd >= 0) {
-            fds.push_back(_dns.subscriberFd);
-        }
         _dns.subscriber = nullptr;
-        _dns.subscriberFd = -1;
         _dns.subscribed.store(false, std::memory_order_release);
         _dns.pending.clear();
         _dns.ring.clear();
@@ -275,11 +260,7 @@ std::vector<int> ControlVNextStreamManager::resetAll() {
     }
     {
         const std::lock_guard lock(_pkt.mutex);
-        if (_pkt.subscriber != nullptr && _pkt.subscriberFd >= 0) {
-            fds.push_back(_pkt.subscriberFd);
-        }
         _pkt.subscriber = nullptr;
-        _pkt.subscriberFd = -1;
         _pkt.subscribed.store(false, std::memory_order_release);
         _pkt.pending.clear();
         _pkt.ring.clear();
@@ -288,15 +269,23 @@ std::vector<int> ControlVNextStreamManager::resetAll() {
     }
     {
         const std::lock_guard lock(_activity.mutex);
-        if (_activity.subscriber != nullptr && _activity.subscriberFd >= 0) {
-            fds.push_back(_activity.subscriberFd);
-        }
         _activity.subscriber = nullptr;
-        _activity.subscriberFd = -1;
         _activity.subscribed.store(false, std::memory_order_release);
         _activity.pending.clear();
     }
-    return fds;
+}
+
+bool ControlVNextStreamManager::ownsSubscription(void *sessionKey, const Type type) {
+    if (type == Type::Dns) {
+        const std::lock_guard lock(_dns.mutex);
+        return _dns.subscriber == sessionKey && _dns.subscribed.load(std::memory_order_acquire);
+    }
+    if (type == Type::Pkt) {
+        const std::lock_guard lock(_pkt.mutex);
+        return _pkt.subscriber == sessionKey && _pkt.subscribed.load(std::memory_order_acquire);
+    }
+    const std::lock_guard lock(_activity.mutex);
+    return _activity.subscriber == sessionKey && _activity.subscribed.load(std::memory_order_acquire);
 }
 
 std::optional<ControlVNextStreamManager::DnsEvent>
