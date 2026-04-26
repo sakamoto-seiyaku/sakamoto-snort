@@ -118,7 +118,7 @@ public:
 
     MetricsSnapshot metricsSnapshot() const noexcept;
 
-    // Clears the conntrack table and counters. Caller MUST ensure no concurrent update().
+    // Clears the conntrack table and counters. Caller MUST exclude concurrent public method calls.
     void reset() noexcept;
 
 #ifdef SUCRE_SNORT_TESTING

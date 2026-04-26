@@ -124,6 +124,7 @@ struct Conntrack::Impl {
         std::atomic<std::uint32_t> used{0};
         std::atomic<std::uint8_t> global{0};
         std::atomic<bool> exhausted{false};
+        std::atomic<bool> reclaiming{false};
         const std::uint64_t instanceId = allocateInstanceId();
 
         static std::uint64_t allocateInstanceId() noexcept {
@@ -154,7 +155,17 @@ struct Conntrack::Impl {
             if (!s) {
                 return;
             }
-            s->epoch.store(current(), std::memory_order_release);
+            for (;;) {
+                while (reclaiming.load(std::memory_order_acquire)) {
+                }
+                const std::uint8_t observed = current();
+                s->epoch.store(observed, std::memory_order_release);
+                if (!reclaiming.load(std::memory_order_acquire) &&
+                    global.load(std::memory_order_acquire) == observed) {
+                    return;
+                }
+                s->epoch.store(kQuiescent, std::memory_order_release);
+            }
         }
 
         void exit(Slot *s) noexcept {
@@ -164,15 +175,21 @@ struct Conntrack::Impl {
             s->epoch.store(kQuiescent, std::memory_order_release);
         }
 
-        std::optional<std::uint8_t> tryAdvance() noexcept {
+        std::optional<std::uint8_t> beginAdvanceForReclaim() noexcept {
             if (exhausted.load(std::memory_order_relaxed)) {
+                return std::nullopt;
+            }
+            bool expected = false;
+            if (!reclaiming.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                    std::memory_order_relaxed)) {
                 return std::nullopt;
             }
             const std::uint8_t cur = global.load(std::memory_order_relaxed);
             const std::uint32_t n = used.load(std::memory_order_acquire);
             for (std::uint32_t i = 0; i < n && i < kMaxSlots; ++i) {
                 const std::uint8_t e = slots[i].epoch.load(std::memory_order_acquire);
-                if (e != kQuiescent && e != cur) {
+                if (e != kQuiescent) {
+                    reclaiming.store(false, std::memory_order_release);
                     return std::nullopt;
                 }
             }
@@ -181,6 +198,8 @@ struct Conntrack::Impl {
             const std::uint8_t reclaim = static_cast<std::uint8_t>((next + 1u) % 3u);
             return reclaim;
         }
+
+        void endReclaim() noexcept { reclaiming.store(false, std::memory_order_release); }
     };
 
     static constexpr std::uint64_t kNsPerSec = 1'000'000'000ULL;
@@ -470,12 +489,13 @@ struct Conntrack::Impl {
         if (minIntervalNs != 0 && nowNs > last && nowNs - last < minIntervalNs) {
             return;
         }
-        const auto reclaimEpoch = epoch.tryAdvance();
+        const auto reclaimEpoch = epoch.beginAdvanceForReclaim();
         if (!reclaimEpoch.has_value()) {
             return;
         }
         lastEpochAdvanceTsNs.store(nowNs, std::memory_order_relaxed);
         reclaimEpochAllShards(*reclaimEpoch);
+        epoch.endReclaim();
     }
 
     bool maybeHotSweep(Shard &shard, const std::uint64_t nowNs) noexcept {

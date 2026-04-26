@@ -1,9 +1,14 @@
 #include <Conntrack.hpp>
+#include <sucre-snort.hpp>
 
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <mutex>
+#include <shared_mutex>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -516,4 +521,128 @@ TEST(ConntrackConcurrencyTest, ConcurrentSweepsAndReclaimsDoNotCrash) {
     start.store(true, std::memory_order_release);
     t1.join();
     t2.join();
+}
+
+TEST(ConntrackConcurrencyTest, ConcurrentPreviewCommitUpdatesAndReclaimStaySafe) {
+    Conntrack::Options opt{};
+    opt.maxEntries = 8192;
+    opt.shards = 2;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 128;
+    opt.sweepMinIntervalMs = 0;
+    Conntrack ct(opt);
+
+    constexpr int kThreads = 4;
+    constexpr int kIters = 2000;
+    constexpr std::uint64_t kStepNs = 61ULL * 1000ULL * 1000ULL * 1000ULL;
+    std::atomic<bool> start{false};
+    std::atomic<int> invalidExisting{0};
+
+    auto worker = [&](const int workerId) {
+        while (!start.load(std::memory_order_acquire)) {
+        }
+        for (int i = 0; i < kIters; ++i) {
+            Conntrack::PacketV4 pkt{};
+            pkt.tsNs = static_cast<std::uint64_t>(i + 1) * kStepNs;
+            pkt.uid = static_cast<std::uint32_t>(1000 + (workerId % 2));
+            pkt.srcIp = 0x0A000001u + static_cast<std::uint32_t>(workerId);
+            pkt.dstIp = 0x0A000080u + static_cast<std::uint32_t>(i % 7);
+            pkt.proto = IPPROTO_UDP;
+            pkt.srcPort = static_cast<std::uint16_t>(10000 + ((i + workerId * 97) % 4096));
+            pkt.dstPort = static_cast<std::uint16_t>(20000 + (i % 32));
+
+            if ((i % 3) == 0) {
+                auto preview = ct.inspectForPolicy(pkt);
+                if (preview.createOnAccept) {
+                    ct.commitAccepted(pkt, preview);
+                }
+            } else if ((i % 3) == 1) {
+                const auto result = ct.update(pkt);
+                if (result.state == Conntrack::CtState::INVALID) {
+                    invalidExisting.fetch_add(1, std::memory_order_relaxed);
+                }
+            } else {
+                Conntrack::PacketV4 reply = pkt;
+                std::swap(reply.srcIp, reply.dstIp);
+                std::swap(reply.srcPort, reply.dstPort);
+                (void)ct.update(reply);
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+        threads.emplace_back(worker, i);
+    }
+    start.store(true, std::memory_order_release);
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    const auto metrics = ct.metricsSnapshot();
+    EXPECT_LE(metrics.totalEntries, opt.maxEntries);
+    EXPECT_EQ(invalidExisting.load(std::memory_order_relaxed), 0);
+}
+
+TEST(ConntrackConcurrencyTest, ResetIsSafeWhenExternalListenersMutexExcludesReaders) {
+    Conntrack::Options opt{};
+    opt.maxEntries = 8192;
+    opt.shards = 2;
+    opt.bucketsPerShard = 16;
+    opt.sweepMaxBuckets = 2;
+    opt.sweepMaxEntries = 64;
+    opt.sweepMinIntervalMs = 0;
+    Conntrack ct(opt);
+
+    constexpr int kThreads = 4;
+    constexpr int kIters = 1500;
+    constexpr int kResetRounds = 64;
+    std::atomic<bool> start{false};
+    std::atomic<int> invalid{0};
+
+    auto reader = [&](const int workerId) {
+        while (!start.load(std::memory_order_acquire)) {
+        }
+        for (int i = 0; i < kIters; ++i) {
+            Conntrack::PacketV4 pkt{};
+            pkt.tsNs = static_cast<std::uint64_t>(i + 1);
+            pkt.uid = 1000;
+            pkt.srcIp = 0x0A010001u + static_cast<std::uint32_t>(workerId);
+            pkt.dstIp = 0x0A020001u + static_cast<std::uint32_t>(i % 8);
+            pkt.proto = IPPROTO_UDP;
+            pkt.srcPort = static_cast<std::uint16_t>(12000 + ((i + workerId * 31) % 2048));
+            pkt.dstPort = 443;
+
+            const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+            const auto preview = ct.inspectForPolicy(pkt);
+            if (preview.result.state == Conntrack::CtState::INVALID) {
+                invalid.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            if (preview.createOnAccept) {
+                ct.commitAccepted(pkt, preview);
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+        threads.emplace_back(reader, i);
+    }
+    start.store(true, std::memory_order_release);
+
+    for (int i = 0; i < kResetRounds; ++i) {
+        const std::unique_lock<std::shared_mutex> lock(mutexListeners);
+        ct.reset();
+    }
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_EQ(invalid.load(std::memory_order_relaxed), 0);
+    EXPECT_LE(ct.metricsSnapshot().totalEntries, opt.maxEntries);
 }

@@ -6,10 +6,11 @@
 ## 1. 结论先行
 
 - Host 用例统一由 `tests/host/CMakeLists.txt` 通过 `gtest_discover_tests(...)` 注册，并统一打 `ctest` label：`host`。
-- 当前 Host 端共有 **18 个 gtest binary / 164 个 case**（`ctest -L host`）。
-- repo-root 提供 3 个高频入口（两个入口 + 一个 gate）：
+- Host 用例数量由 `gtest_discover_tests(...)` 自动注册，以当前 `ctest -L host` 输出为准。
+- repo-root 提供 4 个高频入口（三个入口 + 一个 gate）：
   - `snort-host-tests`：普通 host lane（`ctest --output-on-failure -L host`）
   - `snort-host-tests-asan`：同一套 host 用例的 ASAN lane
+  - `snort-host-tests-tsan`：Conntrack 并发 ThreadSanitizer 专项
   - `snort-host-tests-gate`：按顺序运行 normal → ASAN
 - Clang 覆盖率 workflow：
   - preset：`host-coverage-clang`
@@ -48,6 +49,13 @@ cmake --preset dev-debug
 cmake --build --preset dev-debug --target snort-host-tests-gate
 ```
 
+TSan（Conntrack 并发专项，推荐用 wrapper）：
+
+```bash
+cmake --preset dev-debug
+cmake --build --preset dev-debug --target snort-host-tests-tsan
+```
+
 补充：如果你想直接进入 ASAN build dir 跑：
 
 ```bash
@@ -58,6 +66,7 @@ cmake --build --preset host-asan-clang --target snort-host-tests
 说明：
 
 - ASAN lane 默认设置 `ASAN_OPTIONS=detect_leaks=0`（避免某些 harness/CI 的 ptrace 环境触发 LeakSanitizer fatal）；如需 leak 检测，可在 `build-output/cmake/host-asan-clang` 内直接跑 `ctest` 并自行配置 `ASAN_OPTIONS`。
+- TSan lane 默认设置 `TSAN_OPTIONS=halt_on_error=1`，并默认只跑 `conntrack_tests`，用于发布前验证 Conntrack epoch reclaim 与 reset 静默边界。
 
 ## 3. Clang 覆盖率产物链路
 

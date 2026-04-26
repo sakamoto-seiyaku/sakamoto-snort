@@ -121,6 +121,13 @@ if(SNORT_ENABLE_HOST_TESTS)
     # ASAN lane stable by disabling leak detection by default.
     list(APPEND SNORT_HOST_TEST_ENV "ASAN_OPTIONS=detect_leaks=0")
   endif()
+  if(
+    CMAKE_CXX_FLAGS MATCHES "-fsanitize=thread"
+    OR CMAKE_C_FLAGS MATCHES "-fsanitize=thread"
+    OR CMAKE_EXE_LINKER_FLAGS MATCHES "-fsanitize=thread"
+  )
+    list(APPEND SNORT_HOST_TEST_ENV "TSAN_OPTIONS=halt_on_error=1")
+  endif()
   add_custom_target(
     snort-host-tests
     COMMAND "${CMAKE_COMMAND}" -E env ${SNORT_HOST_TEST_ENV} "${CMAKE_CTEST_COMMAND}" --output-on-failure -L host
@@ -139,6 +146,33 @@ if(SNORT_ENABLE_HOST_TESTS)
     COMMAND "${CMAKE_COMMAND}" --build --preset host-asan-clang --target snort-host-tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Run sucre-snort host-side gtest lane with ASAN via a dedicated preset"
+    USES_TERMINAL
+    VERBATIM
+  )
+
+  find_program(SNORT_SETARCH_EXECUTABLE setarch)
+  set(SNORT_TSAN_CONNTRACK_TEST "${CMAKE_SOURCE_DIR}/build-output/cmake/host-tsan-clang/tests/host/conntrack_tests")
+  if(SNORT_SETARCH_EXECUTABLE)
+    set(
+      SNORT_TSAN_CONNTRACK_COMMAND
+      "${SNORT_SETARCH_EXECUTABLE}" "${CMAKE_SYSTEM_PROCESSOR}" "-R"
+      "${CMAKE_COMMAND}" "-E" "env" "TSAN_OPTIONS=halt_on_error=1"
+      "${SNORT_TSAN_CONNTRACK_TEST}"
+    )
+  else()
+    set(
+      SNORT_TSAN_CONNTRACK_COMMAND
+      "${CMAKE_COMMAND}" "-E" "env" "TSAN_OPTIONS=halt_on_error=1"
+      "${SNORT_TSAN_CONNTRACK_TEST}"
+    )
+  endif()
+  add_custom_target(
+    snort-host-tests-tsan
+    COMMAND "${CMAKE_COMMAND}" --preset host-tsan-clang
+    COMMAND "${CMAKE_COMMAND}" --build --preset host-tsan-clang --target conntrack_tests
+    COMMAND ${SNORT_TSAN_CONNTRACK_COMMAND}
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Run Conntrack host stress tests with ThreadSanitizer"
     USES_TERMINAL
     VERBATIM
   )
@@ -253,7 +287,7 @@ endif()
 message(STATUS "sucre-snort repo-root workflow workspace configured")
 message(STATUS "Delegated build/debug targets: snort-build, snort-build-clean, snort-build-regen-graph, snort-deploy-stage, snort-debug-run-workflow, snort-debug-attach-workflow, snort-debug-cleanup, snort-debug-status")
 if(SNORT_ENABLE_HOST_TESTS)
-  message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-gate")
+  message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-tsan, snort-host-tests-gate")
   if(TARGET snort-host-coverage)
     message(STATUS "Host coverage target: snort-host-coverage")
   endif()

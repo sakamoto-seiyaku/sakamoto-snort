@@ -39,6 +39,22 @@ if(
   set(_sucre_snort_host_has_asan ON)
 endif()
 
+set(_sucre_snort_host_has_tsan OFF)
+if(
+  CMAKE_CXX_FLAGS MATCHES "-fsanitize=thread"
+  OR CMAKE_C_FLAGS MATCHES "-fsanitize=thread"
+  OR CMAKE_EXE_LINKER_FLAGS MATCHES "-fsanitize=thread"
+)
+  set(_sucre_snort_host_has_tsan ON)
+endif()
+set(_sucre_snort_host_tsan_executor)
+if(_sucre_snort_host_has_tsan)
+  find_program(_sucre_snort_host_setarch setarch)
+  if(_sucre_snort_host_setarch)
+    set(_sucre_snort_host_tsan_executor "${_sucre_snort_host_setarch};${CMAKE_SYSTEM_PROCESSOR};-R")
+  endif()
+endif()
+
 set(_sucre_snort_host_has_coverage OFF)
 if(
   CMAKE_CXX_FLAGS MATCHES "-fprofile-instr-generate"
@@ -51,6 +67,9 @@ endif()
 if(_sucre_snort_host_has_asan)
   set(SUCRE_SNORT_HOST_TEST_LANE "H.ASAN")
   set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};asan")
+elseif(_sucre_snort_host_has_tsan)
+  set(SUCRE_SNORT_HOST_TEST_LANE "H.TSAN")
+  set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};tsan")
 elseif(_sucre_snort_host_has_coverage)
   set(SUCRE_SNORT_HOST_TEST_LANE "H.COV")
   set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};coverage")
@@ -68,6 +87,9 @@ function(add_sucre_snort_host_test target)
   target_include_directories(${target} SYSTEM PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(${target} PRIVATE GTest::gtest_main)
+  if(_sucre_snort_host_tsan_executor)
+    set_property(TARGET ${target} PROPERTY CROSSCOMPILING_EMULATOR "${_sucre_snort_host_tsan_executor}")
+  endif()
   set_property(GLOBAL APPEND PROPERTY SUCRE_SNORT_HOST_TEST_TARGETS ${target})
   gtest_discover_tests(
     ${target}
@@ -102,7 +124,12 @@ add_sucre_snort_host_test(package_state_tests package_state_tests.cpp)
 add_sucre_snort_host_test(perf_metrics_tests perf_metrics_tests.cpp)
 add_sucre_snort_host_test(reset_epoch_tests reset_epoch_tests.cpp "${SUCRE_SNORT_ROOT}/src/SnortRuntime.cpp")
 add_sucre_snort_host_test(reason_metrics_tests reason_metrics_tests.cpp)
-add_sucre_snort_host_test(conntrack_tests conntrack_tests.cpp "${SUCRE_SNORT_ROOT}/src/Conntrack.cpp")
+add_sucre_snort_host_test(
+  conntrack_tests
+  conntrack_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Conntrack.cpp"
+  "${SUCRE_SNORT_ROOT}/src/SnortRuntime.cpp"
+)
 target_compile_definitions(conntrack_tests PRIVATE SUCRE_SNORT_TESTING=1)
 add_sucre_snort_host_test(ip_rules_engine_tests ip_rules_engine_tests.cpp "${SUCRE_SNORT_ROOT}/src/IpRulesEngine.cpp")
 add_sucre_snort_host_test(ip_rules_engine_tests_nocache ip_rules_engine_tests.cpp "${SUCRE_SNORT_ROOT}/src/IpRulesEngine.cpp")

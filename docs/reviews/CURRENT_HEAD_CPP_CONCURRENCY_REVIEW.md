@@ -11,6 +11,7 @@
 - `[FIXED]` 一项 HIGH 已通过拆分 vNext control mutation mutex 与 datapath `mutexListeners` 修复。
 - `[FIXED]` 一项 MEDIUM 与一项 LOW 已通过 suppressed counter 原子 take-and-reset、`ActivityManager::reset()` 接入 `RESETALL` 修复。
 - `[FIXED]` daemon lifecycle ownership 组三项已通过 main-owned shutdown、session-owned fd、bounded thread-per-client 修复。
+- `[FIXED]` Conntrack epoch reclaim 在 TSan stress 中暴露的 UAF/data race 风险已通过 reclaim gate + 全 reader 静默后 free 修复。
 - 本轮属于运行期并发边界设计收敛：对外 `RESETALL` 语义不变，但内部从“仅依赖 `mutexListeners`”调整为“save/reset coordinator + reset epoch + 短共享锁发布窗口”。
 - reset 并发边界设计文档已新增：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`。
 
@@ -41,6 +42,7 @@
 - Conntrack：
   - 每个 shard 的 `std::mutex` 保护结构性 insert / unlink。
   - 无锁读者通过 atomic bucket / next 指针遍历，并用 epoch guard 延迟回收。
+  - retired entry free 前先进入 atomic reclaim gate，等待所有已注册 reader slot quiescent，并在 delete 窗口阻止新 reader 进入。
 - Socket 写：
   - legacy `SocketIO::_mutex` 串行化阻塞式 `write()`。
   - vNext `FrameWriter` 使用 non-blocking fd write，但命令响应的 `flushBlocking()` 仍可能等待写缓冲 drain。
@@ -50,7 +52,7 @@
 - 长生命周期全局对象在 `src/sucre-snort.cpp:25` 到 `src/sucre-snort.cpp:39` 构造。
 - 大多数 listener / control / client worker 都是 detached thread，并捕获 `this` 或 raw fd。
 - `App`、`Domain`、`Host`、`Rule`、stream event、IPRULES snapshot 主要通过 `shared_ptr` 持有。
-- Conntrack entry 是 raw `Entry *` 节点，由 shard bucket / retired list 拥有，并通过 epoch 机制回收。
+- Conntrack entry 是 raw `Entry *` 节点，由 shard bucket / retired list 拥有，并通过 epoch + reclaim gate 机制回收。
 - legacy control session 持有 `SocketIO::Ptr`；vNext session 持有 `UniqueFd`，但 stream manager 只保存 raw subscriber fd。
 - thread-local cache 分布在 Conntrack epoch slot、IPRULES decision cache、metrics shard、packet listener queue state 中。
 
@@ -336,10 +338,36 @@
 - 原始失败模式：大量 client 连接后不读响应或保持 idle，daemon 积累 detached threads / fd，造成 resource exhaustion、shutdown 变慢、control-plane DoS。
 - 验证建议：host 或真机 socket stress：对 legacy / vNext / DNS socket 打开大量不读取 client，断言 threads / fds 有上界且 command latency 稳定。
 
+### [HIGH][FIXED] Conntrack epoch reclaim 可与 lockless reader 交错释放 retired entry
+
+修复状态：已修复。
+
+性质判断：实现问题暴露出的 SMR 边界缺口。Conntrack 选择 lockless bucket lookup + deferred free 是正确设计方向，但原 epoch 推进条件过乐观：允许 current epoch reader 存活时推进，并且在“确认全静默”到实际 delete 之间没有阻止新 reader 进入。由于 atomic bucket load 仍可能观察到刚 unlink 的旧指针，TSan stress 可复现 retired entry 被 free 时另一个 reader 正在读 key。
+
+实际修复：
+
+- `Epoch::enter()` 改为发布 observed epoch 后再次校验 global epoch 与 reclaim gate；若期间发生推进或回收，先退回 quiescent 再重试。
+- epoch reclaim 改为 `beginAdvanceForReclaim()` / `endReclaim()`：进入 reclaim gate 后必须看到所有已注册 reader slot 都是 quiescent，且 gate 持续覆盖 retired entry delete 窗口，阻止新 reader 在 delete 期间进入。
+- `Conntrack::reset()` 注释从“无并发 update”收紧为“调用方必须排除所有 Conntrack public methods 并发”，与生产 `mutexListeners` reset 静默边界保持一致。
+- 新增 host stress 覆盖并发 `inspectForPolicy()`、`commitAccepted()`、`update()`、sweep、reclaim，以及 `mutexListeners` shared/exclusive reset 边界。
+
+影响：
+
+- packet 热路径新增一个短 atomic reclaim gate 检查；无 mutex、无 syscall，只有 retired free 窗口会短暂阻止新 Conntrack reader 进入。
+- retired entry free 更偏向 fail-safe：必须等所有 reader quiescent 后才释放，极端持续流量下可能延迟释放更多 retired 节点，但避免 UAF。
+- 对外 `IPRULES` / Conntrack 语义不变；变化仅限内部 SMR 安全边界。
+
+当前修复位置：`src/Conntrack.cpp`、`src/Conntrack.hpp`、`tests/host/conntrack_tests.cpp`、`CMakePresets.json`、`CMakeLists.txt`、`tests/host/CMakeLists.txt`。
+
+验证口径：
+
+- 已验证：`cmake --build --preset dev-debug --target snort-host-tests`、`cmake --build --preset dev-debug --target snort-host-tests-asan`、`cmake --build --preset dev-debug --target snort-host-tests-tsan` 通过；其中 TSan 20 个 Conntrack 用例无 data race / UAF 报告。
+- 仍建议发布前保留该 TSan 专项作为手动 gate；当前 `snort-host-tests-gate` 不默认包含 TSan，避免常规 gate 变慢。
+
 ## Needs Dynamic Verification
 
-- Conntrack lockless lookup / epoch reclaim：当前代码使用 epoch guard，且未静态证明存在 UAF；但仍应使用 TSan stress 覆盖并发 `inspectForPolicy()`、`commitAccepted()`、sweep、reclaim。
-- Conntrack reset 边界：只有在所有生产调用都继续保证 reset 位于独占 `mutexListeners` 下时才静态安全；建议用 TSan 覆盖 `RESETALL` + 活跃 IPv4 traffic。
+- Conntrack lockless lookup / epoch reclaim：已新增并通过 TSan stress；后续仍建议把 `snort-host-tests-tsan` 保留为发布前手动 gate。
+- Conntrack reset 边界：已新增 host 测试用 `mutexListeners` shared/exclusive 模拟生产 reset 静默边界；后续真机可继续覆盖 `RESETALL` + 活跃 IPv4 traffic。
 - Legacy stream 背压：用不读取的 client 复现，量化 NFQUEUE latency 与 reset starvation。
 - Daemon lifecycle：本轮已用 host test 覆盖 coordinator wake、budget 与 vNext stream reset cancellation；仍建议真机测量 SIGTERM latency、慢读 client、连接风暴和 final save 完整性。
 - Android / Soong 生产构建：本轮已确认 host/ASAN；由于全图重建耗时约 40 分钟，`snort-build-regen-graph` 留到今天工作结束时集中验证。直接复用旧 ninja graph 的 `snort-build` 会因未纳入新增 `src/SnortIo.cpp` 出现过期图链接失败，需以 graph regen 作为准入验证。
@@ -347,7 +375,7 @@
 
 ## No Finding Areas
 
-- Conntrack 正常 update 路径：lockless bucket traversal 使用 atomic bucket / next 指针，结构性 mutation 由 shard lock 保护，并通过 epoch 延迟 free；在排除 reset 并发的前提下，未静态证明当前存在 UAF。
+- Conntrack 正常 update 路径：lockless bucket traversal 使用 atomic bucket / next 指针，结构性 mutation 由 shard lock 保护，并通过 epoch + reclaim gate 延迟 free；当前 TSan stress 未发现剩余 UAF / data race。护栏位于 `tests/host/conntrack_tests.cpp`，并可通过 `snort-host-tests-tsan` 在 ThreadSanitizer 下专项验证。
 - IPRULES hot snapshot：packet decision 通过 `Decision::keepAlive` pin snapshot；per-rule stats 指针由 pinned snapshot 拥有，未证明 stats UAF。
 - DomainList 热查询：`blockMask()` 使用 atomically published `shared_ptr` aggregate snapshot；rebuild 在 list mutex 下完成，hot reader 不会观察到 iterator invalidation。
 - App / Host manager 基本 lookup：map lookup 在持有 manager lock 时复制 `shared_ptr`，普通 find / make 路径未发现 iterator UAF。

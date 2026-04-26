@@ -47,6 +47,17 @@
       }
     },
     {
+      "name": "host-tsan-clang",
+      "inherits": "base",
+      "description": "Host-side Conntrack stress preset with Clang ThreadSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -O1 -g",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -O1 -g",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
       "name": "host-coverage-clang",
       "inherits": "base",
       "description": "Host-side test preset with Clang/LLVM source-based coverage instrumentation",
@@ -75,6 +86,11 @@
       "description": "Build repo-root host-side targets with Clang AddressSanitizer"
     },
     {
+      "name": "host-tsan-clang",
+      "configurePreset": "host-tsan-clang",
+      "description": "Build repo-root Conntrack stress targets with Clang ThreadSanitizer"
+    },
+    {
       "name": "host-coverage-clang",
       "configurePreset": "host-coverage-clang",
       "description": "Build repo-root host-side targets with Clang/LLVM coverage instrumentation"
@@ -100,6 +116,16 @@
       "configurePreset": "host-asan-clang",
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=0"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "host-tsan-clang",
+      "configurePreset": "host-tsan-clang",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1"
       },
       "output": {
         "outputOnFailure": true

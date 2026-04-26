@@ -40,6 +40,9 @@ cmake --build --preset dev-debug --target snort-host-tests
 # ASAN：同一套 Host 用例的构建变体
 cmake --build --preset dev-debug --target snort-host-tests-asan
 
+# TSan：Conntrack 并发专项
+cmake --build --preset dev-debug --target snort-host-tests-tsan
+
 # Gate：normal -> ASAN
 cmake --build --preset dev-debug --target snort-host-tests-gate
 ```
@@ -48,6 +51,7 @@ cmake --build --preset dev-debug --target snort-host-tests-gate
 
 - `dev-debug`：`H.<可执行文件>.<GTestSuite>.<TestName>`
 - `host-asan-clang`：`H.ASAN.<可执行文件>.<GTestSuite>.<TestName>`
+- `host-tsan-clang`：`H.TSAN.<可执行文件>.<GTestSuite>.<TestName>`
 - `host-coverage-clang`：`H.COV.<可执行文件>.<GTestSuite>.<TestName>`
 
 如果只想直接在 ASAN build dir 内跑（跳过 wrapper）：
@@ -55,6 +59,12 @@ cmake --build --preset dev-debug --target snort-host-tests-gate
 ```bash
 cmake --preset host-asan-clang
 cmake --build --preset host-asan-clang --target snort-host-tests
+```
+
+TSan 专项默认只跑 Conntrack stress，避免把日常 gate 拉长：
+
+```bash
+cmake --build --preset dev-debug --target snort-host-tests-tsan
 ```
 
 Coverage（Clang/LLVM）：

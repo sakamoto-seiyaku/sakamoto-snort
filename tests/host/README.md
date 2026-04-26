@@ -51,6 +51,12 @@ cmake --build --preset host-asan-clang --target snort-host-tests
 ctest --preset host-asan-clang -L host
 ```
 
+Conntrack ThreadSanitizer 专项固定使用 Clang，默认只跑 Conntrack stress：
+
+```bash
+cmake --build --preset dev-debug --target snort-host-tests-tsan
+```
+
 > 注：`host` 是当前 host-side unit tests 的主要 `CTest` label；历史上 `p0` 曾被用于过滤 host 测试，但不再作为主要口径，也不表示 roadmap 阶段号。
 
 repo-root workflow 会：
