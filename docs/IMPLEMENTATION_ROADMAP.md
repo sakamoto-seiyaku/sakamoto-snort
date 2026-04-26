@@ -119,11 +119,14 @@ Status 口径（全篇统一）：
 - [NEXT] 巡检并收敛仍保留历史语境的设计文档，避免被误读成“待实现提案”（例如已落地回执类文档）。
 - [NEXT] 仅在接口新增/变更后刷新 `docs/INTERFACE_SPECIFICATION.md`，避免“接口文档先行”导致漂移。
 
+### 3.4 功能：IPRULES IPv4/IPv6 双栈
+
+- [NEXT] `add-iprules-dual-stack-ipv6`：将 IPRULES 升级为 IPv4/IPv6 同级规则模型（vNext schema `family/mk2`、datapath IPv6 header walker + `l4Status`、IPv6 conntrack + byFamily metrics）；决策入口：`docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`。
+
 ## 4. 后置 / Backlog（不挡主线）
 
 - [BACKLOG] 命名与语义边界梳理：尤其是 domain-only 历史命名（例如 `GLOBAL_*`）与 domain+IP 语义边界的统一（目标是收敛心智，不做接口大重构）
 - [BACKLOG] `ip-leak` 重新纳入设计：在统一口径下决定启用条件、优先级、可观测性与控制面形态（当前保持独立 backlog，不反向污染已收敛主线）
-- [BACKLOG] IPv6 新规则语义
 - [BACKLOG] 域名规则 per-rule observability / stats
 - [BACKLOG] “真实系统 resolver hook” 的平台闭环（如未来仍坚持把它作为真机 DNS 验收链路）
 - [BACKLOG] 更强的 L4 stateful semantics（超出当前 `ct.state/ct.direction` 最小闭环的扩展能力）

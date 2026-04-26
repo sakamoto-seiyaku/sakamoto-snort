@@ -211,6 +211,7 @@ datapath：
 - IPv4 下，合法 IP header + 非 TCP/UDP/ICMP protocol 是 `other-terminal`；declared TCP/UDP/ICMP 但头部过短、TCP doff 异常或长度不一致是 `invalid-or-unavailable-l4`。
 - IPv6 下，ESP、No Next Header、未知合法 terminal protocol 是 `other-terminal`；header chain 长度异常、无法安全继续或 walker 预算耗尽是 `invalid-or-unavailable-l4`。
 - `invalid-or-unavailable-l4` 仍进入 IPRULES 判决：端口不可用，不匹配普通 `proto=other`，但可由 `ct.state=invalid` 规则接管。
+- 对 declared L4 头部过短、TCP `doff` 异常或长度不一致等 `invalid-or-unavailable-l4` 情形，listener 层不得直接 `NF_DROP`；必须以“可判决输入”继续流经 IPRULES/后续路径，并按本文口径产出端口不可用与 `ct=invalid/any` 结果。
 - `invalid-or-unavailable-l4` 若能安全获得 declared / terminal proto，则规则层 `proto=tcp|udp|icmp` 可按该 proto 匹配。
 - `proto=any` 匹配所有 L3 key 可构造的 `invalid-or-unavailable-l4` 包。
 - `proto=other` 只匹配合法 `other-terminal`，不得匹配 `invalid-or-unavailable-l4`。
