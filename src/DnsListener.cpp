@@ -187,8 +187,6 @@ void DnsListener::clientRun(const int socket) {
         }
         App::Uid uid;
         clientRead(socket, &uid, sizeof(uid), "uid read error");
-        const auto app = appManager.make(uid);
-        const auto domain = domManager.make(std::move(host));
 
         const bool measure = perfMetrics.enabled();
         uint64_t startUs = 0;
@@ -205,8 +203,31 @@ void DnsListener::clientRun(const int socket) {
         bool useCustomList = false;
         uint32_t domMask = 0;
         uint32_t appMask = 0;
-        {
+        App::Ptr app;
+        Domain::Ptr domain;
+        std::uint64_t resetEpoch = 0;
+
+        for (;;) {
+            resetEpoch = snortResetEpoch();
+            if (!snortResetEpochIsStable(resetEpoch)) {
+                const std::shared_lock<std::shared_mutex> g(mutexListeners);
+                continue;
+            }
+
+            const auto foundApp = appManager.find(uid);
+            const auto preparedApp = foundApp ? App::Ptr{} : appManager.prepare(uid);
+
             const std::shared_lock<std::shared_mutex> g(mutexListeners);
+            if (!snortResetEpochStillCurrent(resetEpoch)) {
+                continue;
+            }
+
+            app = appManager.publishPrepared(uid, preparedApp);
+            if (!app) {
+                continue;
+            }
+            domain = domManager.make(std::string(host));
+
             const auto bcs = app->blockedWithSource(domain);
             blocked = bcs.blocked;
             cs = bcs.color;
@@ -223,29 +244,30 @@ void DnsListener::clientRun(const int socket) {
                 app->observeDomainPolicySource(bcs.policySource, blocked);
                 app->observeTrafficDns(blocked);
             }
-        }
 
-        if (settings.blockEnabled()) {
-            if (app->tracked()) {
-                timespec ts{};
-                timespec_get(&ts, TIME_UTC);
-                ControlVNextStreamManager::DnsEvent ev{
-                    .timestamp = ts,
-                    .uid = app->uid(),
-                    .userId = app->userId(),
-                    .app = app->nameSnapshot(),
-                    .domain = domain,
-                    .domMask = domMask,
-                    .appMask = appMask,
-                    .blocked = blocked,
-                    .getips = getips,
-                    .useCustomList = useCustomList,
-                    .policySource = policySource,
-                };
-                controlVNextStream.observeDnsTracked(std::move(ev));
-            } else {
-                controlVNextStream.observeDnsSuppressed(blocked);
+            if (settings.blockEnabled()) {
+                if (app->tracked()) {
+                    timespec ts{};
+                    timespec_get(&ts, TIME_UTC);
+                    ControlVNextStreamManager::DnsEvent ev{
+                        .timestamp = ts,
+                        .uid = app->uid(),
+                        .userId = app->userId(),
+                        .app = app->nameSnapshot(),
+                        .domain = domain,
+                        .domMask = domMask,
+                        .appMask = appMask,
+                        .blocked = blocked,
+                        .getips = getips,
+                        .useCustomList = useCustomList,
+                        .policySource = policySource,
+                    };
+                    controlVNextStream.observeDnsTracked(std::move(ev));
+                } else {
+                    controlVNextStream.observeDnsSuppressed(blocked);
+                }
             }
+            break;
         }
         clientWrite(socket, &verdict, sizeof(verdict), "verdict write error");
         clientWrite(socket, &getips, sizeof(getips), "getips write error");
@@ -256,35 +278,41 @@ void DnsListener::clientRun(const int socket) {
         }
 
         if (getips) {
-            // Clear existing mappings under the global lock (short window) to quiesce vs resetall.
             {
                 const std::shared_lock<std::shared_mutex> g(mutexListeners);
-                domManager.removeIPs(domain);
+                if (snortResetEpochStillCurrent(resetEpoch)) {
+                    domManager.removeIPs(domain);
+                }
             }
             int family = -1;
             do {
                 clientRead(socket, &family, sizeof(family), "family read error");
                 if (family == AF_INET) {
-                    // Read IP without holding the global lock, then publish under a tiny lock.
                     Address<IPv4> ip([=](uint8_t *address, const uint32_t l) {
                         clientRead(socket, address, l, "ip read error");
                     });
                     const std::shared_lock<std::shared_mutex> g(mutexListeners);
-                    domManager.addIPBoth(domain, ip);
+                    if (snortResetEpochStillCurrent(resetEpoch)) {
+                        domManager.addIPBoth(domain, ip);
+                    }
                 } else if (family == AF_INET6) {
                     Address<IPv6> ip([=](uint8_t *address, const uint32_t l) {
                         clientRead(socket, address, l, "ip read error");
                     });
                     const std::shared_lock<std::shared_mutex> g(mutexListeners);
-                    domManager.addIPBoth(domain, ip);
+                    if (snortResetEpochStillCurrent(resetEpoch)) {
+                        domManager.addIPBoth(domain, ip);
+                    }
                 }
             } while (family != -1);
         }
-        if (settings.blockEnabled() && app->tracked()) {
-            // Keep stats and streaming within a tiny lock window to align with resetall freeze.
+        {
             const std::shared_lock<std::shared_mutex> g(mutexListeners);
-            appManager.updateStats(domain, app, blocked, cs, Stats::DNS, 1);
-            stream(std::make_shared<DnsRequest>(app, domain, cs, blocked));
+            if (snortResetEpochStillCurrent(resetEpoch) && settings.blockEnabled() &&
+                app->tracked()) {
+                appManager.updateStats(domain, app, blocked, cs, Stats::DNS, 1);
+                stream(std::make_shared<DnsRequest>(app, domain, cs, blocked));
+            }
         }
     } catch (const char *error) {
         LOG(ERROR) << __FUNCTION__ << " - " << error;

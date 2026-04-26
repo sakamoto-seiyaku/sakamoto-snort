@@ -5,14 +5,14 @@
 > 对应 OpenSpec 历史 change：`openspec/changes/archive/2026-03-27-add-domain-policy-observability/`
 
 > 本文档用于固化“域名策略（现有功能已完成）”在可观测性上的**归因模型**与**常态 counters**设计，避免后续 IP 规则方向变化导致域名侧返工。  
-> 约束：不新增观测通路；常态统计必须不依赖 `PKTSTREAM`；不做全局 safety-mode；不做域名规则 per-rule counters。
+> 约束：不新增观测通路；常态统计必须不依赖 vNext packet stream；不做全局 safety-mode；不做域名规则 per-rule counters。
 
 ---
 
 ## 0. 背景与目标
 
 域名侧当前已经具备完整的决策链路（自定义名单/规则、全局名单/规则、blocking list、mask fallback 等）。  
-但缺少“可解释归因（policySource）”与“默认可查的命中次数（counters）”，导致前端在排障/调试策略时只能依赖 `DNSSTREAM`（调试型事件流）或现有 stats（偏流量/粗粒度）；当前 `PKTSTREAM` 侧并不承载域名策略的 `policySource` 语义。
+但缺少“可解释归因（policySource）”与“默认可查的命中次数（counters）”，导致前端在排障/调试策略时只能依赖 dns stream（调试型事件流）或现有 stats（偏流量/粗粒度）；packet stream 侧并不承载域名策略的 `policySource` 语义。
 
 本文目标是：
 
@@ -31,11 +31,11 @@
   参考：`src/DnsListener.cpp#L160`（`clientRun` 内对 `app->blocked(domain)` 的调用路径）。
 
 - 注意：现有 DNS 的 stats/stream 更新被 gating：
-  - 仅当 `settings.blockEnabled()==true && app->tracked()==true` 才更新 stats 并输出 DNSSTREAM。  
+  - 仅当 `settings.blockEnabled()==true && app->tracked()==true` 才更新 stats 并输出 vNext dns stream 事件。
     参考：`src/DnsListener.cpp#L222`。
 
 本文的 counters（metrics）**不应**依赖 `tracked`；它属于“默认可查”常态信息。  
-该能力现已落地；本文记录的是其设计约束与验收口径，而不是对现有 `APP.DNS.*` / `DNSSTREAM` 的改名包装。
+该能力现已落地；本文记录的是其设计约束与验收口径，而不是对现有 `APP.DNS.*` / dns stream 的改名包装。
 
 ### 1.2 `App::blocked()` 的优先级链路（归因来源）
 
@@ -102,10 +102,10 @@
 
 - **统计单位：DNS 请求**（每次 DNS 判决更新一次）。
 - **先不考虑 ip-leak**：ip-leak 属于 Packet 侧附加功能（Domain↔IP 映射 + `BLOCKIPLEAKS`），不把它混入域名策略 counters，避免因小事大。
-- counters **不依赖** `PKTSTREAM/DNSSTREAM` 是否开启（拉取式）。
+- counters **不依赖** vNext packet/dns stream 是否开启（拉取式）。
 - counters **不依赖** `tracked`（默认可查）。
 - gating：与现状一致，只有在 `BLOCK=1` 时更新（不做全局 dry-run）。
-- 更新时点：以 **DNS verdict 已算出** 为准更新一次；不得依赖后续 `getips` / IP 映射读回是否完成，也不得依赖 `DNSSTREAM` 是否输出成功。
+- 更新时点：以 **DNS verdict 已算出** 为准更新一次；不得依赖后续 `getips` / IP 映射读回是否完成，也不得依赖 dns stream 是否输出成功。
 - 语义边界：这里统计的是 **DomainPolicy 决策来源**，不是 socket I/O 成功次数，也不是 domain->IP 映射更新次数。
 
 ### 3.2 对外接口（控制命令）

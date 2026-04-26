@@ -105,26 +105,7 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
             return ResponsePlan{.response = std::move(*err)};
         }
 
-        // Force-stop and disconnect any active vNext stream subscriptions before resetting state.
-        // RESETALL must not be blocked by slow stream consumers.
-        for (const int fd : controlVNextStream.resetAll()) {
-            (void)::shutdown(fd, SHUT_RDWR);
-        }
-        // Best-effort cleanup: legacy stream files are debug artifacts (no compatibility promise).
-        (void)::unlink(settings.saveDnsStream.c_str());
-
-        perfMetrics.resetAll();
-        settings.reset();
-        Settings::clearSaveTreeForResetAll();
-        appManager.reset();
-        domManager.reset();
-        blockingListManager.reset();
-        rulesManager.reset();
-        pktManager.reset();
-        hostManager.reset();
-        dnsListener.reset();
-        pkgListener.reset();
-        snortSave();
+        snortResetAll();
 
         rapidjson::Document response = ControlVNext::makeOkResponse(id, nullptr);
         return ResponsePlan{.response = std::move(response)};

@@ -54,6 +54,7 @@ cc_binary {
         "src/Saver.cpp",
         "src/Settings.cpp",
         "src/SocketIO.cpp",
+        "src/SnortRuntime.cpp",
         "src/Stats.cpp",
         "src/Streamable.cpp",
         "src/Timer.cpp",

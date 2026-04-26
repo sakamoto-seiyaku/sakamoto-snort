@@ -9,6 +9,7 @@
 #include <chrono>
 #include <atomic>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -197,8 +198,11 @@ public:
         _blockMask = standardListBit + customListBit;
         _blockIface = 0;
         _reverseDns = false;
-        _password.clear();
-        _passState = 0;
+        {
+            const std::lock_guard lock(_mutexPassword);
+            _password.clear();
+            _passState = 0;
+        }
         _getBlackIPs = legacyGetBlackIPsFrozenValue;
         _blockIPLeaks = legacyBlockIPLeaksFrozenValue;
         _ipRulesEnabled = false;

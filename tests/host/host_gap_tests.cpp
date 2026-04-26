@@ -262,7 +262,7 @@ TEST_F(HostGapTest, DnsRequestPrintHorizonExpireAndRestore) {
     reader.remove();
 }
 
-TEST_F(HostGapTest, StreamableRespectsMinSizeAndExpiration) {
+TEST_F(HostGapTest, LegacyStreamableIsFrozenNoOp) {
     const auto domain1 = domManager.make("a.example.com");
     const auto domain2 = domManager.make("b.example.com");
     ASSERT_NE(domain1, nullptr);
@@ -294,8 +294,7 @@ TEST_F(HostGapTest, StreamableRespectsMinSizeAndExpiration) {
     }
 
     const auto messages = splitNulStrings(readAllBytes(fds[1]));
-    ASSERT_EQ(messages.size(), 1U);
-    EXPECT_NE(messages[0].find("b.example.com"), std::string::npos);
+    EXPECT_TRUE(messages.empty());
 
     if (fds[1] >= 0) {
         ::close(fds[1]);
@@ -321,8 +320,7 @@ TEST_F(HostGapTest, StreamableRespectsMinSizeAndExpiration) {
     }
 
     const auto messages2 = splitNulStrings(readAllBytes(fds2[1]));
-    ASSERT_EQ(messages2.size(), 1U);
-    EXPECT_NE(messages2[0].find("b.example.com"), std::string::npos);
+    EXPECT_TRUE(messages2.empty());
 
     if (fds2[1] >= 0) {
         ::close(fds2[1]);
@@ -460,8 +458,7 @@ TEST_F(HostGapTest, ActivityAndActivityManagerCurrentNoOpSemantics) {
     }
 
     const auto messages = splitNulStrings(readAllBytes(fds[1]));
-    ASSERT_FALSE(messages.empty());
-    EXPECT_NE(messages.back().find("\"uid\":0"), std::string::npos);
+    EXPECT_TRUE(messages.empty());
 
     if (fds[1] >= 0) {
         ::close(fds[1]);

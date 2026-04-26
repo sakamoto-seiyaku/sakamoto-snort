@@ -35,7 +35,7 @@ Semantics (v1):
 - `dns` counts DNS requests (per DNS verdict); `blocked=false → allow`, `blocked=true → block`.
 - `rxp/rxb` count packet allow/block on NFQUEUE INPUT direction (external→local).
 - `txp/txb` count packet allow/block on NFQUEUE OUTPUT direction (local→external).
-- bytes counters (`rxb/txb`) MUST use NFQUEUE payload length (same as PKTSTREAM `length`).
+- bytes counters (`rxb/txb`) MUST use NFQUEUE payload length (same as vNext packet stream `length`).
 - would-match (log-only/would-block) MUST NOT change final verdict; therefore it MUST be counted as `allow`.
 
 gating:
@@ -61,4 +61,3 @@ Reset semantics (v1):
 - **WHEN** client calls `METRICS.RESET` with `name=traffic` and an `app` selector for one app
 - **THEN** subsequent `METRICS.GET(name=traffic, app=...)` for that app SHALL return all zeros
 - **AND** subsequent `METRICS.GET(name=traffic, app=...)` for the other app SHALL remain unchanged
-

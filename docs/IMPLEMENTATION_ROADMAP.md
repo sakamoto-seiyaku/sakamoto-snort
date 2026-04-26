@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-04-25
+更新时间：2026-04-26
 状态：当前共识（以仓库内 code + tests + OpenSpec 主规格为准）
 
 ## 0. 阅读指南
@@ -35,6 +35,7 @@ Status 口径（全篇统一）：
 - Device/DX 覆盖矩阵：`docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
 - vNext 协议/命令：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`、`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
 - 可观测性口径：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
 - OpenSpec 主规格：`openspec/specs/`
 
 长期约束（对后续所有 change 生效）：
@@ -97,6 +98,11 @@ Status 口径（全篇统一）：
 - [DONE 2026-03-30] L4 conntrack core：`add-iprules-conntrack-core`（spec：`openspec/specs/l4-conntrack-core/spec.md`）
 - [DONE 2026-03-15] perfmetrics：`add-perfmetrics-observability`（spec：`openspec/specs/perfmetrics-observability/spec.md`）
 
+### 2.4 稳定性（运行期并发边界）
+
+- [DONE 2026-04-26] RESETALL runtime 并发边界：修复 `RESETALL` 与周期性 `snortSave()` 竞态，以及 packet / DNS 热路径锁外准备对象跨 reset 发布问题；设计口径见 `docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`，审查状态见 `docs/reviews/CURRENT_HEAD_CPP_CONCURRENCY_REVIEW.md`。
+- [DONE 2026-04-26] legacy stream 冻结：`DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 不再作为实时事件通道；支持入口统一到 vNext `STREAM.START(type=dns|pkt|activity)`，消除 legacy 同步 socket write 对热路径与 `RESETALL` 的反压风险。
+
 ## 3. 待办（按优先级）
 
 ### 3.1 工程化：Device / DX 冒烟 Casebook 补齐（以 casebook 为验收口径）
@@ -145,7 +151,7 @@ Status 口径（全篇统一）：
 
 ## Appendix C. 说明：A/B/C/D 与 IPRULES 的顺序心智（NOTE；非任务）
 
-- **A 先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 PKTSTREAM/metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
+- **A 先落地**：`reasonId/ruleId/would-match + src/dst IP` 属于后续所有规则系统的 shared 契约；先把 vNext packet stream / metrics 基座收敛，避免 IP 规则与域名侧各自“先实现再对齐”导致返工。
 - **C 不拆独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 IPRULES v1 change 内按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
 - **B 已补齐**：它与 IPRULES 基本解耦，当前已落地；剩余工作主要是把过期设计文档状态修正，避免被误读成“未开始”。
 - **D 独立**：perfmetrics 只承载性能健康指标；它在语义上独立于 A/B/C，可在任意时点推进，不改变当前主线优先级。

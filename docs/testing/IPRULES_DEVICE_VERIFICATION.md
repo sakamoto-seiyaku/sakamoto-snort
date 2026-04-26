@@ -1,6 +1,6 @@
 # IPRULES v1 真机验证矩阵（L3/L4 Firewall）
 
-目的：在 **真机** 上验证 `IPRULES v1` 的端到端行为（控制面下发 → NFQUEUE 真实流量 → 判决/统计/PKTSTREAM 可观测），覆盖 TCP/UDP/ICMP 与关键组合/边界条件。  
+目的：在 **真机** 上验证 `IPRULES v1` 的端到端行为（控制面下发 → NFQUEUE 真实流量 → 判决/统计/vNext packet stream 可观测），覆盖 TCP/UDP/ICMP 与关键组合/边界条件。
 说明：host-side gtest 只能验证引擎/解析/确定性，不足以作为最终验收；本文保留为 IPRULES v1 已归档 change 的真机验证记录。
 
 ## 1. 前置条件
@@ -46,7 +46,7 @@
 - `src/dst`：`any`、`/32`、`/24`（match 与 no-match）
 - `sport/dport`（TCP/UDP）：`exact`、`range`、以及 range 边界（包含/不包含）
 - `iface` / `ifindex`：
-  - 从 PKTSTREAM 抽样确定当前出站接口（`interface` name），再映射到 `IFACES.PRINT` 的 `{ifindex,kind}`
+  - 从 vNext packet stream 抽样确定当前出站接口（`ifindex/ifaceKindBit`），再映射到 `IFACES.PRINT` 的 `{ifindex,kind}`
   - 覆盖 `ifindex=<actual>`、`ifindex=0(any)`、`ifindex=<wrong>`（no-match）
   - 覆盖 `iface=<actualKind>` 与 `iface=<wrongKind>`（no-match）
   - 覆盖 `iface=any`（显式 any token）

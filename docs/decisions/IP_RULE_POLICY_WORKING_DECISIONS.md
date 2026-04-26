@@ -27,10 +27,10 @@
 
 为避免“讨论摘录/二手结论”互相打架，权威以以下文档为准：
 
-1) IP 规则引擎（语义/算法/控制面）：  
+1) IP 规则引擎（语义/算法/控制面）：
 `openspec/specs/app-ip-l3l4-rules/spec.md`（历史 change：`openspec/changes/archive/2026-03-24-add-app-ip-l3l4-rules-engine/`）
 
-2) PKTSTREAM schema + reasonId/would‑match 契约（字段与口径）：  
+2) vNext packet stream schema + reasonId/would‑match 契约（字段与口径）：
 `openspec/specs/pktstream-observability/spec.md`（历史 change：`openspec/changes/archive/2026-03-24-add-pktstream-observability/`）
 
 3) 原始讨论摘录（只用于追溯决策背景，不作最终规范）：  
@@ -57,7 +57,7 @@
 不追求“任意组合的防火墙”；允许的语义必须能被编译为受控的最坏复杂度，并用硬上限拒绝超限配置。
 
 5) **不新增观测通路**  
-事件复用 PKTSTREAM；常态统计通过控制面拉取（per‑rule stats），不引入新的存储/查询系统。
+事件复用 vNext packet stream；常态统计通过控制面拉取（per‑rule stats），不引入新的存储/查询系统。
 
 6) **分层推进：后端骨架可扩展，前端按 P0/P1 逐步开放**  
 后端先把“字段全集 + 分类器骨架 + 可解释/预检”钉死；前端按阶段只开放子集，附属融合功能后置，避免后续因接口形态返工。
@@ -146,7 +146,7 @@
 - `enforce=0` 的原意仅限调试/试运行；不承担“禁用规则”的职责。
 - 其他 `enforce=0` 组合（尤其 `action=ALLOW, enforce=0` 与 `enforce=0, log=0`）不作为现行语义，控制面应直接拒绝。
 
-### 4.6 per‑rule stats（常态可查，不依赖 PKTSTREAM）
+### 4.6 per‑rule stats（常态可查，不依赖 vNext packet stream）
 - 每条规则维护 `hit*` 与 `wouldHit*`（since boot，不持久化；重启归零）。
 - 若需要跨重启保留/做长期分析，由前端周期性读取并自行持久化；后端不承担存储职责。
 - 统计只归因到“最终胜出规则”和“最终 would‑match 规则（若有）”，避免一包多记。
@@ -219,7 +219,7 @@ range 规则进入 bucket 的 `rangeCandidates`（按 priority 降序）；looku
 1) **would‑match 不使用独立 reasonId**  
 早期讨论中出现过 `IPRULE_WOULD_BLOCK` 一类表述；当前契约为 `wouldRuleId + wouldDrop=1`，`reasonId` 始终解释实际 verdict（见 `openspec/specs/pktstream-observability/spec.md`）。
 
-2) **reasonId 命名以 PKTSTREAM change 为准**  
+2) **reasonId 命名以 vNext packet stream change 为准**
 统一使用 `IP_RULE_ALLOW/IP_RULE_BLOCK`（而非 `IPRULE_*` 等变体）。
 
 3) **端口 range 走 predicate 扫描 + 硬上限**  

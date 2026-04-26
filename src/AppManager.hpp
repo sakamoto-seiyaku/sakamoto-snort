@@ -35,6 +35,10 @@ public:
 
     const App::Ptr make(const App::Uid uid);
 
+    const App::Ptr prepare(const App::Uid uid);
+
+    const App::Ptr publishPrepared(const App::Uid uid, const App::Ptr &prepared);
+
     const App::Ptr find(const App::Uid uid);
 
     const App::Ptr find(const std::string &name);

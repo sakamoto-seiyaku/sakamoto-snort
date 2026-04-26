@@ -156,7 +156,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **GIVEN** `BLOCK=1` 且 `IPRULES=1`
 - **AND** 存在一条规则 `R`，其 `proto=any` 且 `dport=53`（其余字段均为 any，且该规则 `enforce=1`）
 - **WHEN** NFQUEUE 收到一个 `proto=icmp` 的 IPv4 数据包
-- **THEN** PKTSTREAM SHALL NOT 包含来自该规则的 `ruleId`
+- **THEN** vNext packet stream SHALL NOT 包含来自该规则的 `ruleId`
 - **AND** 若该事件包含 `reasonId`，则其 SHALL NOT 为 `IP_RULE_ALLOW` 或 `IP_RULE_BLOCK`
 
 ### Requirement: Rule actions include ALLOW and BLOCK
@@ -178,8 +178,8 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 DROP
 
-### Requirement: Enforce hits are attributed in PKTSTREAM
-当 `BLOCK=1` 且数据包未命中更高优先级硬原因、且 `IPRULES=1` 下最终由某条 `enforce=1` 规则决定实际 verdict 时，系统 MUST 在 PKTSTREAM 中输出与该实际 verdict 一致的 `reasonId`，并输出唯一胜出规则的 `ruleId`：
+### Requirement: Enforce hits are attributed in vNext packet stream
+当 `BLOCK=1` 且数据包未命中更高优先级硬原因、且 `IPRULES=1` 下最终由某条 `enforce=1` 规则决定实际 verdict 时，系统 MUST 在 vNext packet stream 中输出与该实际 verdict 一致的 `reasonId`，并输出唯一胜出规则的 `ruleId`：
 - `ALLOW` 命中时，`reasonId` SHALL 为 `IP_RULE_ALLOW`
 - `BLOCK` 命中时，`reasonId` SHALL 为 `IP_RULE_BLOCK`
 
@@ -187,7 +187,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **GIVEN** `BLOCK=1`
 - **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 某条 `ALLOW,enforce=1` 规则作为最终胜出规则命中该包
-- **WHEN** 系统输出该包的 PKTSTREAM 事件
+- **WHEN** 系统输出该包的 vNext packet stream 事件
 - **THEN** 事件 SHALL 包含该规则的 `ruleId`
 - **AND** `reasonId` SHALL 为 `IP_RULE_ALLOW`
 
@@ -195,7 +195,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **GIVEN** `BLOCK=1`
 - **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 某条 `BLOCK,enforce=1` 规则作为最终胜出规则命中该包
-- **WHEN** 系统输出该包的 PKTSTREAM 事件
+- **WHEN** 系统输出该包的 vNext packet stream 事件
 - **THEN** 事件 SHALL 包含该规则的 `ruleId`
 - **AND** `reasonId` SHALL 为 `IP_RULE_BLOCK`
 
@@ -242,7 +242,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 DROP
 - **AND** 该包的实际 `reasonId` SHALL 为 `IFACE_BLOCK`
-- **AND** PKTSTREAM SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
+- **AND** vNext packet stream SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
 
 ### Requirement: Only enforce ALLOW/BLOCK short-circuit legacy/domain
 当 `BLOCK=1` 且 `IPRULES=1` 时，系统 MUST 遵循以下判决边界：
@@ -260,7 +260,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **AND** `IPRULES=1` 且该包未命中 `IFACE_BLOCK`
 - **AND** 当前 active ruleset 中没有任何规则命中该包
 - **WHEN** NFQUEUE 收到该包
-- **THEN** PKTSTREAM SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
+- **THEN** vNext packet stream SHALL NOT 包含来自 IP 规则引擎的 `ruleId` 或 `wouldRuleId`
 - **AND** 若该事件包含 `reasonId`，则其 SHALL NOT 为 `IP_RULE_ALLOW` 或 `IP_RULE_BLOCK`
 - **AND** 该包 SHALL 继续进入后续 legacy/domain 路径
 
@@ -277,7 +277,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - `action=BLOCK, enforce=0, log=1`：表示 would-block；仅当该包未被任何 `enforce=1` 规则作为最终命中接管时，才产生 **would-match** 可观测结果；其命中不得改变系统最终 verdict，仅用于观测 overlay；并且仅当最终 verdict 为 ACCEPT 时才允许输出 would-match
 - 控制面 MUST 拒绝其他 `enforce=0` 组合（包括 `action=ALLOW, enforce=0` 与 `enforce=0, log=0`）
 
-`enforce=0` 的 would-match 事件在 `PKTSTREAM` 中每包最多输出 1 条（包含 `wouldRuleId` 与 `wouldDrop=1`）。
+`enforce=0` 的 would-match 事件在 vNext packet stream 中每包最多输出 1 条（包含 `wouldRuleId` 与 `wouldDrop=1`）。
 
 #### Scenario: Would-block does not drop the packet
 - **GIVEN** `BLOCK=1`
@@ -286,7 +286,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **AND** 后续 legacy/domain 路径对该包最终 verdict 为 ACCEPT
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 ACCEPT
-- **AND** PKTSTREAM SHALL 输出该包的 would-match（包含该规则的 `wouldRuleId` 与 `wouldDrop=1`）
+- **AND** vNext packet stream SHALL 输出该包的 would-match（包含该规则的 `wouldRuleId` 与 `wouldDrop=1`）
 
 #### Scenario: Would-block is suppressed when final verdict is DROP
 - **GIVEN** `BLOCK=1`
@@ -296,7 +296,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **AND** 后续 legacy/domain 路径对该包最终 verdict 为 DROP
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 DROP
-- **AND** PKTSTREAM SHALL NOT 输出该包的 would-match（不得包含 `wouldRuleId` 或 `wouldDrop`）
+- **AND** vNext packet stream SHALL NOT 输出该包的 would-match（不得包含 `wouldRuleId` 或 `wouldDrop`）
 - **AND** 后续调用 `IPRULES.PRINT RULE W` 时，返回的 `stats.wouldHitPackets` SHALL 不增加
 
 #### Scenario: Enforce match suppresses would-match regardless of priority
@@ -306,8 +306,8 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **AND** 同时存在一条也可命中的 `BLOCK,enforce=0,log=1` would-drop 规则（其 `priority` 更高）
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 返回 ACCEPT
-- **AND** PKTSTREAM SHALL 包含 `ruleId`（来自 `ALLOW,enforce=1` 规则）
-- **AND** PKTSTREAM SHALL NOT 包含 `wouldRuleId`
+- **AND** vNext packet stream SHALL 包含 `ruleId`（来自 `ALLOW,enforce=1` 规则）
+- **AND** vNext packet stream SHALL NOT 包含 `wouldRuleId`
 
 #### Scenario: Multiple would-drop candidates pick a single deterministic winner
 - **GIVEN** `BLOCK=1`
@@ -316,7 +316,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **AND** 存在两条均可命中的 would-drop 规则（`action=BLOCK,enforce=0,log=1`），且 `priority` 不同
 - **AND** 后续 legacy/domain 路径对该包最终 verdict 为 ACCEPT
 - **WHEN** NFQUEUE 收到该包
-- **THEN** PKTSTREAM SHALL 仅输出 1 个 `wouldRuleId`
+- **THEN** vNext packet stream SHALL 仅输出 1 个 `wouldRuleId`
 - **AND** 该 `wouldRuleId` SHALL 对应 `priority` 更高的那条规则
 
 #### Scenario: ALLOW rule cannot use enforce=0 safety-mode
@@ -325,7 +325,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **THEN** 系统 SHALL 返回 `NOK`
 
 ### Requirement: Disabled rules are inert and zero-cost
-系统 MUST 支持规则级 `enabled` 开关。`enabled=0` 的规则 MUST 继续保留在控制面、持久化与 `IPRULES.PRINT` 输出中，但 MUST NOT 参与 active snapshot、Packet 判决、PKTSTREAM `ruleId/wouldRuleId` 归因、runtime stats 更新或 `IPRULES.PREFLIGHT` 的 active complexity 统计。热路径对 disabled rules SHALL 仅承担“该规则不存在”同等成本。
+系统 MUST 支持规则级 `enabled` 开关。`enabled=0` 的规则 MUST 继续保留在控制面、持久化与 `IPRULES.PRINT` 输出中，但 MUST NOT 参与 active snapshot、Packet 判决、vNext packet stream `ruleId/wouldRuleId` 归因、runtime stats 更新或 `IPRULES.PREFLIGHT` 的 active complexity 统计。热路径对 disabled rules SHALL 仅承担“该规则不存在”同等成本。
 
 #### Scenario: Disabled rule does not affect packet or observability
 - **GIVEN** `BLOCK=1`
@@ -333,7 +333,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **AND** 存在一条本可命中该包的规则，但其 `enabled=0`
 - **WHEN** NFQUEUE 收到该包
 - **THEN** 系统 SHALL 不因该规则改变该包的 verdict
-- **AND** PKTSTREAM SHALL NOT 输出该规则的 `ruleId` 或 `wouldRuleId`
+- **AND** vNext packet stream SHALL NOT 输出该规则的 `ruleId` 或 `wouldRuleId`
 - **AND** 该规则的 `stats.hitPackets` 与 `stats.wouldHitPackets` SHALL 保持不变
 
 #### Scenario: Disabled rule is excluded from active preflight complexity
@@ -348,7 +348,7 @@ TBD - created by archiving change add-app-ip-l3l4-rules-engine. Update Purpose a
 - **AND** 该规则对象 SHALL 体现 `enabled=0`
 
 ### Requirement: Per-rule runtime stats are maintained and exposed
-系统 MUST 为每条 IP 规则维护并对外暴露 runtime stats（不依赖 PKTSTREAM 是否开启）：
+系统 MUST 为每条 IP 规则维护并对外暴露 runtime stats（不依赖 vNext packet stream 是否开启）：
 - `hitPackets:uint64` / `hitBytes:uint64` / `lastHitTsNs:uint64`
 - `wouldHitPackets:uint64` / `wouldHitBytes:uint64` / `lastWouldHitTsNs:uint64`
 

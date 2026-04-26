@@ -100,6 +100,7 @@ add_sucre_snort_host_tool(
 
 add_sucre_snort_host_test(package_state_tests package_state_tests.cpp)
 add_sucre_snort_host_test(perf_metrics_tests perf_metrics_tests.cpp)
+add_sucre_snort_host_test(reset_epoch_tests reset_epoch_tests.cpp "${SUCRE_SNORT_ROOT}/src/SnortRuntime.cpp")
 add_sucre_snort_host_test(reason_metrics_tests reason_metrics_tests.cpp)
 add_sucre_snort_host_test(conntrack_tests conntrack_tests.cpp "${SUCRE_SNORT_ROOT}/src/Conntrack.cpp")
 target_compile_definitions(conntrack_tests PRIVATE SUCRE_SNORT_TESTING=1)

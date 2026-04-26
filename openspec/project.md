@@ -35,13 +35,13 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
   - `App` 维护每个 UID 的全局/按域名统计（`AppStats` + per-domain `DomainStats`）、拦截掩码（`blockMask`）、接口掩码（`blockIface`）、是否追踪（`tracked`）、域名侧 `policySource` counters，以及 IPRULES/conntrack 相关的轻量热路径缓存。
   - `HostManager` 维护 IP → `Host` → 可选域名映射，并在启用 `reverseDns` 时通过 `getnameinfo` 做反向 DNS。
 - 数据路径与判决：
-  - `PacketListener` 通过 NFQUEUE 收到数据包，在不持有 `mutexListeners` 的情况下解析 IP/端口/UID/接口/时间戳和必要的 L4 头部；对 IPv4/TCP/UDP/ICMP 还会构造最小 `Conntrack::PacketV4`。随后先在锁外完成 app / iface / host 上下文准备，再在持有 `mutexListeners` 共享锁时调用 `PacketManager::make` 做纯判决、统计和流事件输出。
-  - `DnsListener` 通过 `sucre-snort-netd` 接收前端 DNS 解析结果（域名、UID 及对应 IP 列表），在短暂持有 `mutexListeners` 共享锁的窗口内更新 `DomainManager` 的 IP 映射、域名侧 `policySource` counters，并向订阅者推送 `DnsRequest` 事件。
+  - `PacketListener` 通过 NFQUEUE 收到数据包，在不持有 `mutexListeners` 的情况下解析 IP/端口/UID/接口/时间戳和必要的 L4 头部；对 IPv4/TCP/UDP/ICMP 还会构造最小 `Conntrack::PacketV4`。随后先在锁外完成 app / iface / host 上下文准备，再在持有 `mutexListeners` 共享锁时调用 `PacketManager::make` 做纯判决、统计和 vNext stream 有界 enqueue。
+  - `DnsListener` 通过 `sucre-snort-netd` 接收前端 DNS 解析结果（域名、UID 及对应 IP 列表），在短暂持有 `mutexListeners` 共享锁的窗口内更新 `DomainManager` 的 IP 映射、域名侧 `policySource` counters，并向 vNext stream manager enqueue DNS 事件。
   - `PacketManager::make` 的当前判决顺序是：`IFACE_BLOCK` 最高优先级 hard-drop → IPv4 `IPRULES`（exact cache / classifier snapshot / 可选 conntrack gating）→ legacy domain path（`App::blocked(domain)`）+ `BLOCKIPLEAKS`。`IPRULES` 的 `would-block` 只在最终 verdict 为 ACCEPT 时产出 overlay，不会阻止后续 legacy/domain 路径做最终 DROP。
 - 控制与流式接口：
   - `Control` 通过 Unix 域 socket `sucre-snort-control` 和可选 TCP 端口 60606 暴露文本命令协议，对应实现集中在 `Control::clientLoop` 与各 `cmd*` 方法中，协议详见 `docs/INTERFACE_SPECIFICATION.md`。
   - 当前控制面除 legacy 命令外，还包含 `IPRULES.*`、`IPRULES.PREFLIGHT`、`METRICS.REASONS*`、`PERFMETRICS` / `METRICS.PERF*`、`METRICS.DOMAIN.SOURCES*` 与 `DEV.DNSQUERY` 等诊断/可观测性命令。
-  - `Streamable<T>` 为 DNS 请求、数据包和 Activity 提供统一的事件队列与订阅模型，通过 `startStream/stopStream/stream` 在控制连接上以 JSON 片段形式推送增量事件；当前 `PKTSTREAM` 事件已带 `reasonId` / `ruleId` / `wouldRuleId` 等判决字段。
+  - legacy `Streamable<T>` / `DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 已冻结为 no-op；实时事件推送由 vNext `STREAM.START(type=dns|pkt|activity)` 提供，pkt 事件带 `reasonId` / `ruleId` / `wouldRuleId` 等判决字段。
 - 全局同步约束：
   - `mutexListeners` 是“监听器世界状态”的全局读写锁：热路径（DNS/packet 判决）在共享锁下运行，`RESETALL` 等重置操作在独占锁下暂停一切判决，任何需要持有独占锁的逻辑必须避免长时间阻塞。
   - 各 Manager 自身还维护细粒度的 `std::shared_mutex`/`std::mutex`，避免在热路径上产生锁级联或死锁。
@@ -102,9 +102,9 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 - 统计与观测：
   - `Stats`/`AppStats`/`DomainStats` 提供按天滚动窗口和“ALL/WEEK”视图，支持 DNS 请求数以及 RX/TX 包、字节数等。
   - `ReasonMetrics` 提供 packet-level `reasonId` counters（`METRICS.REASONS*`）；`PerfMetrics` 提供 `nfq_total_us` / `dns_decision_us` 等性能观测（`PERFMETRICS`, `METRICS.PERF*`）；DomainPolicy `policySource` counters 通过 `METRICS.DOMAIN.SOURCES*` 暴露。
-  - `IPRULES` 同时维护 per-rule stats 与 ruleset complexity preflight；事件流则通过 `DNSSTREAM`, `PKTSTREAM`, `ACTIVITYSTREAM` 推送，其中 `PKTSTREAM` 已能表达 `reasonId/ruleId/wouldRuleId`。
+  - `IPRULES` 同时维护 per-rule stats 与 ruleset complexity preflight；事件流通过 vNext `STREAM.START(type=dns|pkt|activity)` 推送，其中 pkt stream 已能表达 `reasonId/ruleId/wouldRuleId`。
 - Activity 模型：
-  - `ActivityManager` 将最近前台 App 抽象为 `Activity` 对象，通过 `ACTIVITYSTREAM.*` 命令向订阅者推送，主要用于 UI 展示“当前活跃应用”与拦截状态变化。
+  - `ActivityManager` 将最近前台 App 抽象为 `Activity` 对象，通过 vNext `STREAM.START(type=activity)` 向订阅者推送，主要用于 UI 展示“当前活跃应用”与拦截状态变化。
 
 ## Important Constraints
 - 性能与并发：

@@ -354,39 +354,73 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         srcPort == settings.controlVNextPort || dstPort == settings.controlVNextPort;
 
     if (settings.blockEnabled() && (!settings.inetControl() || !isControlTraffic)) {
-        // Phase 1 (outside global listeners lock): build per-packet context. This may perform
-        // reverse DNS (HostManager::make) or touch disk, but never holds mutexListeners.
         Address<IP> srcIp(reinterpret_cast<const uint8_t *>(&ip->saddr));
         Address<IP> dstIp(reinterpret_cast<const uint8_t *>(&ip->daddr));
         const Address<IP> &remoteIp = _inputTLS ? srcIp : dstIp;
-        const auto app = appManager.make(uid);
         const uint8_t ifaceKindBit = pktManager.ifaceKindBit(iface);
-        const bool ifaceBlocked = (app->blockIface() & ifaceKindBit) != 0;
-        const auto host =
-            ifaceBlocked ? hostManager.anonymousHost() : hostManager.make<IP>(remoteIp);
 
-        // Phase 2 (under global listeners shared lock): pure decision + stats + streaming. This
-        // critical section must remain free of blocking I/O to avoid starving RESETALL and other
-        // operations that need the exclusive listeners lock.
-        ControlVNextStreamManager::PktEvent streamEvent{};
-        bool trackedSnapshot = false;
-
-        {
-            const std::shared_lock<std::shared_mutex> lock(mutexListeners);
-            const Conntrack::PacketV4 *ctPtr = nullptr;
-            if constexpr (std::is_same_v<IP, IPv4>) {
-                ctPtr = &ctPktV4;
+        for (;;) {
+            const std::uint64_t resetEpoch = snortResetEpoch();
+            if (!snortResetEpochIsStable(resetEpoch)) {
+                const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+                continue;
             }
-            verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface, timestamp,
-                                                   IP::payloadProto(ip), srcPort, dstPort, payloadLen,
-                                                   ifaceKindBit, ifaceBlocked, ctPtr,
-                                                   &streamEvent, &trackedSnapshot);
-        }
 
-        if (trackedSnapshot) {
-            controlVNextStream.observePktTracked(std::move(streamEvent));
-        } else {
-            controlVNextStream.observePktSuppressed(_inputTLS, verdict, payloadLen);
+            const auto foundApp = appManager.find(uid);
+            const auto preparedApp = foundApp ? App::Ptr{} : appManager.prepare(uid);
+            const auto appForPrepare = foundApp ? foundApp : preparedApp;
+            const bool prepareHost =
+                appForPrepare == nullptr || (appForPrepare->blockIface() & ifaceKindBit) == 0;
+            const auto foundHost = prepareHost ? hostManager.find<IP>(remoteIp, false) : Host::Ptr{};
+            const auto preparedHost =
+                (prepareHost && !foundHost) ? hostManager.prepare<IP>(remoteIp) : Host::Ptr{};
+
+            ControlVNextStreamManager::PktEvent streamEvent{};
+            bool trackedSnapshot = false;
+            bool retryWithHost = false;
+
+            {
+                const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+                if (!snortResetEpochStillCurrent(resetEpoch)) {
+                    continue;
+                }
+
+                const auto app = appManager.publishPrepared(uid, preparedApp);
+                if (!app) {
+                    continue;
+                }
+
+                const bool ifaceBlocked = (app->blockIface() & ifaceKindBit) != 0;
+                Host::Ptr host;
+                if (ifaceBlocked) {
+                    host = hostManager.anonymousHost();
+                } else {
+                    if (!prepareHost) {
+                        retryWithHost = true;
+                    } else {
+                        host = foundHost ? foundHost
+                                         : hostManager.publishPrepared<IP>(remoteIp, preparedHost);
+                    }
+                }
+                if (retryWithHost || !host) {
+                    continue;
+                }
+
+                const Conntrack::PacketV4 *ctPtr = nullptr;
+                if constexpr (std::is_same_v<IP, IPv4>) {
+                    ctPtr = &ctPktV4;
+                }
+                verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface,
+                                                       timestamp, IP::payloadProto(ip), srcPort,
+                                                       dstPort, payloadLen, ifaceKindBit, ifaceBlocked,
+                                                       ctPtr, &streamEvent, &trackedSnapshot);
+                if (trackedSnapshot) {
+                    controlVNextStream.observePktTracked(std::move(streamEvent));
+                } else {
+                    controlVNextStream.observePktSuppressed(_inputTLS, verdict, payloadLen);
+                }
+            }
+            break;
         }
     }
 

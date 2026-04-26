@@ -155,7 +155,7 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|sr
 ## 5. apply 成功响应：必须回传 `clientRuleId -> ruleId -> matchKey` 映射（已确认；2.13）
 
 定位：
-- apply 的输入是“配置层展开后的 rules（含 `clientRuleId`）”，但后续运行期与后端其它接口（`UPDATE/ENABLE/REMOVE`、`PKTSTREAM.ruleId`）依赖的是 `ruleId`。
+- apply 的输入是“配置层展开后的 rules（含 `clientRuleId`）”，但后续运行期与后端其它接口（`UPDATE/ENABLE/REMOVE`、vNext packet stream `ruleId`）依赖的是 `ruleId`。
 - 因此 apply 成功时必须在响应中回传“这次生效基线里，每条 `clientRuleId` 对应哪个 `ruleId` 与 `matchKey`”，避免前端再额外 `IPRULES.PRINT` 扫一遍做 join。
 
 成功响应 shape（建议；vNext response envelope；`id` 为示例）：
@@ -198,7 +198,7 @@ mk1|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|sr
 
 等价理解：
 - `clientRuleId` 是前端的“稳定身份”；`ruleId` 是后端运行期句柄。
-- apply 是 replace 语义，但“身份复用”必须以 `clientRuleId` 为准（避免 ruleId 来回漂移导致 PKTSTREAM 归因不稳定）。
+- apply 是 replace 语义，但“身份复用”必须以 `clientRuleId` 为准（避免 ruleId 来回漂移导致 vNext packet stream 归因不稳定）。
 
 实现侧要求（文档层约束）：
 - 后端必须在规则持久化结构中保存 `clientRuleId`（否则无法在重启后做到稳定复用）。
@@ -224,14 +224,14 @@ apply 成功后，对每条规则的 per-rule stats 生命周期锁死为：
 
 ---
 
-## 8. PKTSTREAM 归因字段：继续只输出 `ruleId`（已确认；2.13 A）
+## 8. vNext packet stream 归因字段：继续只输出 `ruleId`（已确认；2.13 A）
 
-- PKTSTREAM 事件继续只输出数值 `ruleId/wouldRuleId`（不回显 `clientRuleId`）。
+- vNext packet stream 事件继续只输出数值 `ruleId/wouldRuleId`（不回显 `clientRuleId`）。
 - 前端如需把命中归因到配置来源（rule group / UI item），应通过 `ruleId -> clientRuleId` 做 join：
   - `IPRULES.PRINT` 必须回显 `clientRuleId`（第 2 节）
   - apply 成功响应必须回传 `clientRuleId -> ruleId` 映射（第 5 节）
 
-该选择的核心理由：避免在高频 PKTSTREAM 上引入 per-event string 成本；以“稳定 ruleId + 可 join”为主。
+该选择的核心理由：避免在高频 vNext packet stream 上引入 per-event string 成本；以“稳定 ruleId + 可 join”为主。
 
 ---
 

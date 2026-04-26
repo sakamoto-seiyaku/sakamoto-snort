@@ -197,8 +197,8 @@ void PackageListener::listen() {
             int timeoutMs = -1;
             if (updateQueued) {
                 if (now >= updateDeadline) {
-                    // No need to hold mutexListeners here; updatePackages does not operate on listeners
-                    // themselves and AppManager is internally synchronized.
+                    // updatePackages applies AppManager changes under mutexListeners so package
+                    // updates cannot publish apps across a concurrent RESETALL boundary.
                     updatePackages();
                     updateQueued = false;
                 } else {
@@ -386,11 +386,14 @@ void PackageListener::updatePackages() {
                         }
                     }
 
-                    for (const auto &[uid, names] : installs) {
-                        appManager.install(uid, names);
-                    }
-                    for (const auto &[uid, names] : removes) {
-                        appManager.remove(uid, names);
+                    {
+                        const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+                        for (const auto &[uid, names] : installs) {
+                            appManager.install(uid, names);
+                        }
+                        for (const auto &[uid, names] : removes) {
+                            appManager.remove(uid, names);
+                        }
                     }
                     return;
                 }

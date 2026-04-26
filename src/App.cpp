@@ -13,16 +13,12 @@
 App::App(const Uid uid, const NamesVec &names)
     : App(uid, settings.systemAppPrefix + std::to_string(uid), names,
           Settings::userSaveDirSystem(uid / 100000) + std::to_string(uid),
-          settings.standardListBit + settings.customListBit, 0, true) {
-    Settings::ensureUserDirs(uid / 100000);
-}
+          settings.standardListBit + settings.customListBit, 0, true) {}
 
 App::App(const Uid uid, const std::string &name)
     : App(uid, name, NamesVec(), Settings::userSaveDirPackages(uid / 100000) + name,
           settings.blockMask(), settings.blockIface(),
-          settings.blockMask() & settings.customListBit) {
-    Settings::ensureUserDirs(uid / 100000);
-}
+          settings.blockMask() & settings.customListBit) {}
 
 App::App(const Uid uid, const std::string &name, const NamesVec &names,
          const std::string &&saveFile, const std::uint8_t blockMask, const std::uint8_t blockIface,
@@ -49,6 +45,7 @@ bool App::upgradeName(const std::string &newName) {
 
     // Get old and new save file paths
     const uint32_t userId = _uid / 100000;
+    Settings::ensureUserDirs(userId);
     std::string oldPath = Settings::userSaveDirSystem(userId) + std::to_string(_uid);
     std::string newPath = Settings::userSaveDirPackages(userId) + newName;
 
@@ -227,6 +224,7 @@ void App::removeFile() {
 void App::save() {
     const std::shared_lock<std::shared_mutex> metaLock(_mutexMeta);
     if (!_saved || !_blackRules.saved() || !_whiteRules.saved()) {
+        Settings::ensureUserDirs(_uid / 100000);
         _saver.save([&] {
             _saver.write<uint8_t>(_blockMask);
             _stats.save(_saver);

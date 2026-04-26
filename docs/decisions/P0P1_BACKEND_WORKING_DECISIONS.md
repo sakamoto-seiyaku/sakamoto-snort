@@ -6,6 +6,7 @@
 > 范围：仅本仓库后端（Snort + iptables + NFQUEUE + control socket）。  
 > 目标：把讨论中的“做什么/不做什么 + 为什么（关键原则）+ 现状事实语义”固化成可迭代的临时文档。  
 > 备注：当前尚未发布正式版本，因此不需要预设“历史发布版本迁移/兼容”包袱；但接口与语义仍不得随意改动，只有在存在明确重大理由时才允许调整，并应同步更新权威文档。更精炼的可观测性上级决策见 `docs/decisions/OBSERVABILITY_WORKING_DECISIONS.md`；若与上位纲领或 OpenSpec change 冲突，以上位文档为准；本文件继续作为调研/工作记录持续更新。
+> 更新：legacy `DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 已冻结为 no-op；实时事件通道以 vNext `STREAM.START(type=dns|pkt|activity)` 为准。
 
 ---
 
@@ -14,7 +15,7 @@
 1. **NFQUEUE 热路径不引入新锁/重 IO**  
    热路径指 `PacketListener::callback` 及其调用链（含 `PacketManager::make`）；保持原有并发约束。
 2. **不增加新的“观测通路”**  
-   后端仅负责输出；前端负责采集/汇总/丢弃过期数据。观测通道复用 `PKTSTREAM`（以及已有 stats）。
+   后端仅负责输出；前端负责采集/汇总/丢弃过期数据。观测通道使用 vNext stream（以及已有 stats）。
 3. **不做全局 safety-mode（现在不做、以后也不做）**  
    全局代价高且收益有限；用户更常见的工作流是“在一个 checkpoint 内批量变更若干规则”，对这批规则做逐条试运行即可；当前 dry-run 仅对 BLOCK 规则开放。
 4. **不在 P0/P1 强行重构域名系统**  
@@ -32,12 +33,12 @@
 
 - **reasonId**：一次判决“为什么允许/为什么拦截”的可解释标识；P0 以“粗粒度 +（新增 IPv4 规则精确到 ruleId）”为目标。
 - **safety-mode**：仅针对“本次 checkpoint 批量变更的规则”的试运行机制：  
-  - `action=BLOCK, enforce=0, log=1`：评估/命中/记录，但不实际 DROP；仅当该包未被任何 `enforce=1` 规则作为最终命中接管时，PKTSTREAM 才输出 `wouldRuleId` + `wouldDrop=1`，此时实际 `accepted` 仍为 1，`reasonId` 仍解释实际 verdict。  
+  - `action=BLOCK, enforce=0, log=1`：评估/命中/记录，但不实际 DROP；仅当该包未被任何 `enforce=1` 规则作为最终命中接管时，vNext packet stream 才输出 `wouldRuleId` + `wouldDrop=1`，此时实际 `accepted` 仍为 1，`reasonId` 仍解释实际 verdict。
   - `enforce=1, log=1`：实际执行策略，同时保留日志（观测是否误伤）。  
   - `enforce=1, log=0`：正常使用。  
   - `enforce=0` 的职责仅限调试/试运行，不承担“禁用规则”的职责；彻底禁用统一由 `enabled=0` 表达。  
   safety-mode **不覆盖全局**，也不尝试让所有系统（域名/IP/接口）统一进入 dry-run。
-- **PKTSTREAM**：控制面流式输出网络包事件；被视为主要可观测性通道（非新增系统）。
+- **vNext packet stream**：控制面流式输出网络包事件；被视为主要可观测性通道（非新增系统）。
 - **checkpoint**：前端概念（批量变更与回滚）；后端不实现 checkpoint 机制本身，只提供必要的规则开关/统计/可解释输出。
 
 ---
@@ -70,7 +71,7 @@
 
 **统计与 stream（Packet）**
 - stats：仅当 `app->tracked()==true` 才会调用 `appManager.updateStats(...)`（但这与 stream 独立）。
-- PKTSTREAM：无论 `tracked` 是否开启，都会构造 `Packet` 并 push 到 `Streamable<Packet>::stream(...)`。
+- vNext pkt stream：按 `tracked` 与 vNext stream manager 口径输出事件；legacy `PKTSTREAM` 已冻结为 no-op。
 
 ### 2.3 DNS 判决与 Domain↔IP 映射（IP leak 前提）
 
@@ -79,15 +80,14 @@
 1. 读取 `(domain, uid)`，得到 `app` 与 `domain`。
 2. 在 `mutexListeners` shared lock 内调用 `app->blocked(domain)`：输出 DNS verdict；并计算 `getips = verdict || GETBLACKIPS`。
 3. 若 `getips==true`：清空旧映射后接收并写入 `Domain↔IP` 映射（IPv4/IPv6）。
-4. 若 `BLOCK==1 && tracked==1`：更新 DNS stats 并输出 DNSSTREAM。
+4. 若 `BLOCK==1 && tracked==1`：更新 DNS stats，并通过 vNext dns stream 输出事件；legacy `DNSSTREAM` 已冻结为 no-op。
 
 结论：Packet 的“域名维度判决”当前并非直接基于域名，而是依赖 DNS 建立映射后通过 `BLOCKIPLEAKS` 间接生效。
 
 ### 2.4 Stream 的事实语义与风险
 
-- `PKTSTREAM/DNSSTREAM` 的实现是 `Streamable::stream()`：在调用线程内生成 JSON 并对每个订阅 socket **同步 write()**。
-- 现状 `PacketManager::make` 在 `mutexListeners` shared lock 下执行，而 `Streamable::stream()` 也在该锁范围内。  
-  结论：**PKTSTREAM 开启且输出变大/前端读慢时，可能阻塞 NFQUEUE 热路径，并延迟需要独占锁的 RESETALL 等操作。**
+- 历史 legacy `PKTSTREAM/DNSSTREAM` 的实现是 `Streamable::stream()`：在调用线程内生成 JSON 并对每个订阅 socket **同步 write()**。
+- 当前 legacy stream 已冻结为 no-op；vNext stream 使用有界队列与 non-blocking writer，慢消费者通过 drop/notice 处理。
 - 这是可观测性的代价：需要在产品/文档中明确告知用户（例如“调试时开、日常关；或限制订阅时长/数量/输出字段”）。
 
 ### 2.5 持久化点（现状）
@@ -106,7 +106,7 @@
   - 收益：对典型用户工作流（checkpoint 内增量改规则）不匹配。
 - **做**：逐条规则（或批量变更的那批规则）支持 `enforce/log` 语义。  
   - 前端通过 checkpoint 选择“本批 BLOCK 规则”进入 `enforce=0, log=1`（would-block），观察后再切 `enforce=1`。
-  - 后端只需在规则引擎里实现：命中时产生 reasonId + hit 统计 +（可选）PKTSTREAM 输出。
+  - 后端只需在规则引擎里实现：命中时产生 reasonId + hit 统计 +（可选）vNext packet stream 输出。
 
 ### 3.2 reasonId（决策：P0 粗粒度 + 新 IPv4 规则精确到 ruleId）
 
@@ -122,15 +122,15 @@ P0 仅保证以下最小集合能解释清楚：
 
 域名系统内部的精细解释（例如命中 custom list / custom rule / blocking list / authorized / blocked 的具体来源）**后置**。
 
-### 3.3 “可观测性”采用 PKTSTREAM（决策：不新增通路）
+### 3.3 “可观测性”采用 vNext packet stream（决策：不新增通路）
 
-- 后端输出：PKTSTREAM 作为事件通道；stats 作为常驻轻量聚合通道。
+- 后端输出：vNext packet stream 作为事件通道；stats 作为常驻轻量聚合通道。
 - 前端采集：只保留“最近最有用的少量日志/窗口”，超出缓存期直接丢弃。
-- 风险告知：PKTSTREAM 开启会增加热路径负担；属于可观测性成本，需对用户明确。
+- 风险告知：vNext packet stream 开启会增加热路径负担；属于可观测性成本，需对用户明确。
 
 ### 3.4 策略统计（决策：新增规则自带 per-rule runtime stats）
 
-对新增 IPv4 L3/L4 规则，后端提供固定 v1 形态的 per-rule runtime stats（不依赖 PKTSTREAM 是否开启）：
+对新增 IPv4 L3/L4 规则，后端提供固定 v1 形态的 per-rule runtime stats（不依赖 vNext packet stream 是否开启）：
 
 - `hitPackets/hitBytes/lastHitTsNs`
 - `wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`
@@ -147,12 +147,12 @@ P0 仅保证以下最小集合能解释清楚：
 
 ## 4. 待定项（明确标注 TBD，避免误当结论）
 
-- `reasonId` / PKTSTREAM 当前最小字段集与最小 reason 集合已由现有 change 固化；仍待后续专题决定的是**未来扩展**（例如域名附属原因恢复后如何增量追加、是否引入更多 counters/聚合口径）。
+- `reasonId` / vNext packet stream 当前最小字段集与最小 reason 集合已由现有 change 固化；仍待后续专题决定的是**未来扩展**（例如域名附属原因恢复后如何增量追加、是否引入更多 counters/聚合口径）。
 - 新 IPv4 L3/L4 规则的**实现映射细节**仍可继续细化，但不得推翻已固定的 v1 控制面字段：
   - direction 下 `srcPort/dstPort` 与“local/remote port”视角的内部映射实现
   - `ifaceKind + ifindex` 在内部 classifier 中的编码与归一化
   - 其它上下文维度若未来扩展（例如 CT）如何进入字段全集与编译路径
-- PKTSTREAM 的背压/采样/限速策略（是否需要避免长时间阻塞 `mutexListeners`）。
+- vNext packet stream 的背压/采样/限速策略（当前为有界 pending + dropped notice）。
 
 ---
 

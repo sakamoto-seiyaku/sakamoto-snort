@@ -463,8 +463,10 @@ void Control::clientLoop(const int sockClient) const {
                     ack(out);
                 } else if (auto it = _cmds.find(cmd); it != _cmds.end()) {
                     const auto applyCmd = [&] { it->second({_sockio, pretty, out, cmdLine}); };
-                    if (it == resetall || it == metricsReasonsReset ||
-                        it == metricsDomainSourcesReset || it == metricsDomainSourcesResetApp) {
+                    if (it == resetall) {
+                        applyCmd();
+                    } else if (it == metricsReasonsReset || it == metricsDomainSourcesReset ||
+                               it == metricsDomainSourcesResetApp) {
                         const std::lock_guard lock(mutexListeners);
                         applyCmd();
                     } else {
@@ -1380,20 +1382,7 @@ void Control::cmdIfacesPrint(CmdParams &&params) const {
 void Control::cmdResetAll(CmdParams &&params) const {
     ack(params.out);
     LOG(INFO) << "Resetting all";
-    // Note: exclusive mutexListeners lock is already held by the command loop caller
-    perfMetrics.resetAll();
-    settings.reset();
-    // Clear all per-user save directories before resetting modules
-    Settings::clearSaveTreeForResetAll();
-    appManager.reset();
-    domManager.reset();
-    blockingListManager.reset();
-    rulesManager.reset();
-    pktManager.reset();
-    hostManager.reset();
-    dnsListener.reset();
-    pkgListener.reset();
-    snortSave();
+    snortResetAll();
 }
 
 void Control::cmdAppsByUid(CmdParams &&params) const {
@@ -2231,12 +2220,13 @@ void Control::cmdHelp(CmdParams &&params) const {
         << "*** DNS and newtork packet streaming\r\n"
         << "***\r\n"
         << "\r\n"
-        << "DNSSTREAM.START [<horizon> [<nbrequests>]]: starts streaming DNS requests\r\n"
-        << "    and outputs past requests on the given horizon (by default 600 seconds),\r\n"
-        << "    keeping at least a given number of them even if outdated.\r\n"
-        << "DNSSTREAM.STOP: stops streaming DNS requests.\r\n"
-        << "PKTSTREAM.START: starts streaming network packets.\r\n"
-        << "PKTSTREAM.STOP: stops streaming network packets.\r\n"
+        << "DNSSTREAM.START [<horizon> [<nbrequests>]]: frozen/no-op legacy stream.\r\n"
+        << "DNSSTREAM.STOP: frozen/no-op legacy stream.\r\n"
+        << "PKTSTREAM.START [<horizon> [<nbrequests>]]: frozen/no-op legacy stream.\r\n"
+        << "PKTSTREAM.STOP: frozen/no-op legacy stream.\r\n"
+        << "ACTIVITYSTREAM.START: frozen/no-op legacy stream.\r\n"
+        << "ACTIVITYSTREAM.STOP: frozen/no-op legacy stream.\r\n"
+        << "    Use vNext STREAM.START/STREAM.STOP with type=dns|pkt|activity.\r\n"
         << "\r\n"
 
         << "***\r\n"

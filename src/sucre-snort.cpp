@@ -4,6 +4,7 @@
  */
 
 #include <csignal>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <thread>
 #include <mutex>
@@ -19,6 +20,7 @@
 #include <RulesManager.hpp>
 #include <Control.hpp>
 #include <ControlVNext.hpp>
+#include <ControlVNextStreamManager.hpp>
 #include <Rule.hpp>
 #include <BlockingListManager.hpp>
 
@@ -38,17 +40,14 @@ PacketListener<IPv6> pktListener6;
 Control control;
 ControlVNext controlVNext;
 
-std::shared_mutex mutexListeners;
-
 // Fix #12: use an async-signal-safe handler that only sets a flag
 static volatile sig_atomic_t g_quit_flag = 0;
 static void on_term_signal(int) { g_quit_flag = 1; }
 
-// snortSave() can be called from multiple threads (periodic loop, RESETALL). Guard the
-// full save pipeline to avoid concurrent Saver tmp/rename races and module data races.
-static std::mutex g_snortSaveMutex;
+static std::mutex g_snortSaveResetMutex;
 
 static void snort();
+static void snortSaveLocked(bool quit);
 
 int main() {
     try {
@@ -151,7 +150,36 @@ static void snort() {
 }
 
 void snortSave(bool quit) {
-    const std::lock_guard<std::mutex> lock(g_snortSaveMutex);
+    const std::lock_guard<std::mutex> lock(g_snortSaveResetMutex);
+    snortSaveLocked(quit);
+}
+
+void snortResetAll() {
+    const std::lock_guard<std::mutex> saveResetLock(g_snortSaveResetMutex);
+    const std::lock_guard listenersLock(mutexListeners);
+
+    snortBeginResetEpoch();
+    for (const int fd : controlVNextStream.resetAll()) {
+        (void)::shutdown(fd, SHUT_RDWR);
+    }
+    (void)::unlink(settings.saveDnsStream.c_str());
+
+    perfMetrics.resetAll();
+    settings.reset();
+    Settings::clearSaveTreeForResetAll();
+    appManager.reset();
+    domManager.reset();
+    blockingListManager.reset();
+    rulesManager.reset();
+    pktManager.reset();
+    hostManager.reset();
+    dnsListener.reset();
+    pkgListener.reset();
+    snortSaveLocked(false);
+    snortEndResetEpoch();
+}
+
+static void snortSaveLocked(bool quit) {
     Timer::set("save", "Data backup time");
     settings.save();
     blockingListManager.save();

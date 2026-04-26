@@ -1,7 +1,7 @@
 # 可观测性 vNext：落地任务清单（Domain + IP Fusion）
 
-更新时间：2026-04-17  
-状态：任务分解（仅列“要做什么”；不在此处实现代码）
+更新时间：2026-04-26
+状态：任务分解归档口径；vNext stream 已落地，legacy stream 已冻结为 no-op
 
 > 本文是把 `OBSERVABILITY_WORKING_DECISIONS.md` 的工作结论提炼为可执行 task list。
 > 本文只维护本目录（`docs/decisions/DOMAIN_IP_FUSION/`）内的任务分解；切片与 gate 以 `docs/IMPLEMENTATION_ROADMAP.md` 为准；不在此处推动代码与其它权威规格更新。
@@ -28,7 +28,7 @@
 
 ## 2. 需要落地的对外产物（接口/shape）
 
-1) **stream vNext（DNSSTREAM/PKTSTREAM）**
+1) **stream vNext（type=dns|pkt|activity）**
    - 事件 envelope：`type="dns"|"pkt"|"notice"`。
    - `type="notice"`：
      - `notice="suppressed"`：tracked 过滤提示（按秒聚合，最多 1 条/秒/streamType）。
@@ -118,7 +118,7 @@
 
 ### 3.4 stream vNext schema：`type` + suppressed NOTICE + 快照字段
 
-- `DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 事件增加顶层 `type` 字段。
+- vNext dns/pkt/activity stream 事件增加顶层 `type` 字段；legacy `DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 不再作为事件入口。
 - `type="notice"`：实现 `notice="suppressed"`（按秒聚合，最多 1 条/秒/streamType）。
   - NOTICE 只实时；不进 ring；不参与 horizon；不落盘。
   - NOTICE 内容尽量复用 `METRICS.GET(name=traffic)` 的结构；不输出 uid 列表；提示用 `CONFIG.SET(scope=app,set={tracked:1})` 或 `METRICS.GET(name=traffic, app=...)` 定位。

@@ -149,8 +149,8 @@ IFACE_BLOCK
 ### 1.4 可观测性现状
 
 - DomainPolicy：`METRICS.DOMAIN.SOURCES*`（DNS verdict 来源），见 `src/DnsListener.cpp:202`
-- DomainPolicy（调试事件）：`DNSSTREAM` 当前不包含 `policySource/useCustomList`，且 `domMask/appMask` 为“打印时读取”（非判决时快照），并受 `app->tracked()` gating 影响，见 `src/DnsRequest.cpp:30`、`src/DnsListener.cpp:241`
-- Packet：`METRICS.REASONS*` + `PKTSTREAM(reasonId/ruleId/wouldRuleId)`，见 `src/PacketManager.hpp:174`、`src/Packet.cpp:66`
+- DomainPolicy（调试事件）：vNext dns stream 包含 `policySource/useCustomList`，并受 `app->tracked()` gating 影响
+- Packet：`METRICS.REASONS*` + vNext pkt stream (`reasonId/ruleId/wouldRuleId`)
 - IPRULES：`IPRULES.PRINT` per-rule stats + `IPRULES.PREFLIGHT`
 - Perf：`PERFMETRICS` / `METRICS.PERF*`
 
@@ -210,7 +210,7 @@ IFACE_BLOCK
 
 补充说明：
 
-- DomainPolicy 的 verdict 是**域名语义判决/观测**；它常用于 DNS 侧观测。packet 侧存在 legacy bridge（DNS-learned Domain↔IP 映射）；本轮 fusion 已裁决：**保留映射但仅用于 observability/可读性**（例如 PKTSTREAM 的可选 `domain/host` 字段），最终 packet verdict/reasonId **不依赖** DomainPolicy；并把 DomainPolicy 判决从 packet 热路径里移出（仅在需要时计算，如 `tracked==true` 的观测路径），见 3.6/4.3。  
+- DomainPolicy 的 verdict 是**域名语义判决/观测**；它常用于 DNS 侧观测。packet 侧存在 legacy bridge（DNS-learned Domain↔IP 映射）；本轮 fusion 已裁决：**保留映射但仅用于 observability/可读性**（例如 vNext pkt stream 的可选 `domain/host` 字段），最终 packet verdict/reasonId **不依赖** DomainPolicy；并把 DomainPolicy 判决从 packet 热路径里移出（仅在需要时计算，如 `tracked==true` 的观测路径），见 3.6/4.3。
 
 #### 2.1.3 packet policy / IPRULES（IP 腿）
 
@@ -290,21 +290,21 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 目标：当用户问“为什么这个请求被拦/放过？”时，两条腿给出的解释在结构上是同构的，且不会互相打架。
 
-- **DNS 侧（DomainPolicy）**：以 `policySource` 为核心解释字段，配套 `METRICS.GET(name=domainSources)`（以及 `METRICS.RESET(name=domainSources)`）。  
-- **packet 侧（最终传输 verdict）**：以 `reasonId` +（可选）`ruleId/wouldRuleId` 为核心解释字段，配套 `METRICS.GET(name=reasons)`、`IPRULES.PRINT stats`、`PKTSTREAM`。  
+- **DNS 侧（DomainPolicy）**：以 `policySource` 为核心解释字段，配套 `METRICS.GET(name=domainSources)`（以及 `METRICS.RESET(name=domainSources)`）。
+- **packet 侧（最终传输 verdict）**：以 `reasonId` +（可选）`ruleId/wouldRuleId` 为核心解释字段，配套 `METRICS.GET(name=reasons)`、`IPRULES.PRINT stats`、vNext packet stream。
 - **跨层一致性**：当 DNS verdict 与 packet verdict 不一致时（例如 `IFACE_BLOCK` 遮蔽了后续路径），对外解释必须明确“哪个是最终传输裁决、哪个只是语义观测”。  
-- **调试事件（stream）**：`DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 属于“调试期开、短期开”（入口统一为 `STREAM.START(type=dns|pkt|activity)`），在开启时应尽量做到“单条事件可自解释”，不依赖额外查询/二次拼接。
+- **调试事件（stream）**：vNext `STREAM.START(type=dns|pkt|activity)` 属于“调试期开、短期开”；legacy `DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 已冻结为 no-op。在开启时应尽量做到“单条事件可自解释”，不依赖额外查询/二次拼接。
   - stream vNext 统一增加事件 envelope：顶层字段 `type`（`dns|pkt|activity|notice`），并支持 `type="notice"` 的 suppressed 汇总事件（按秒聚合、仅实时，不持久化/不参与 horizon 回放；suppressed 仅对 dns/pkt 有意义）。详见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`。
-  - `DNSSTREAM` 应补齐 `policySource/useCustomList/scope` 三个字段（其中 `scope` 可由 `policySource` 派生；命名见下）。
-  - `PKTSTREAM` 也应输出 `scope`（同一组取值：`APP|DEVICE_WIDE|FALLBACK`），用于解释 packet verdict 的“来源宽度”：
+  - vNext dns stream 应补齐 `policySource/useCustomList/scope` 三个字段（其中 `scope` 可由 `policySource` 派生；命名见下）。
+  - vNext pkt stream 也应输出 `scope`（同一组取值：`APP|DEVICE_WIDE|FALLBACK`），用于解释 packet verdict 的“来源宽度”：
     - `IFACE_BLOCK` → `APP`
     - `IP_RULE_*` → `APP|DEVICE_WIDE`（取决于命中规则来源；未来支持 `IPRULES.GLOBAL.*` 时区分）
     - `ALLOW_DEFAULT` 等“无明确规则命中”的路径可以不输出 `scope`
-  - `PKTSTREAM` 的接口维度建议输出 `ifindex`（唯一标识）与 `ifaceKindBit`（WiFi/Data/VPN/Unmanaged），`interface(name)` 仅作可读性补充（不得作为唯一标识）。
+  - vNext pkt stream 的接口维度建议输出 `ifindex`（唯一标识）与 `ifaceKindBit`（WiFi/Data/VPN/Unmanaged），`interface(name)` 仅作可读性补充（不得作为唯一标识）。
   - `domain`（可选）：来自 DNS‑learned Domain↔IP bridge 的 best‑effort 域名；仅用于可读性/排障（不得作为唯一标识或仲裁依据）。
     - 仅当 bridge 命中且 `domain.validIP()==true` 时输出（避免陈旧映射误导）。
   - `host`（可选）：来自 reverse‑dns 的 best‑effort host name；仅用于可读性/排障（不得作为唯一标识或仲裁依据）。
-  - `ACTIVITYSTREAM`：
+  - vNext activity stream：
     - 用于“当前 top app/是否启用 BLOCK”等状态提示；事件 envelope 使用 `type="activity"`。
     - 最小字段建议：`type/blockEnabled`；可选附带 `uid/userId/app`（与其它事件回显风格一致）。
   - `policySource` 为 coarse attribution（不做 per-rule/listId 归因），但必须与 `METRICS.GET(name=domainSources)` 的枚举与优先级严格一致。
@@ -314,7 +314,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
     - 派生规则：`CUSTOM_LIST_*`/`CUSTOM_RULE_*` → `APP`；`DOMAIN_DEVICE_WIDE_*`（domain-only device-wide；当前代码仍名为 `GLOBAL_*`）→ `DEVICE_WIDE`；`MASK_FALLBACK` → `FALLBACK`。
   - `getips` 必须在事件里显式输出：它是 DNS 判决链路的重要分岔（是否进入 IP 映射读回/写回路径），是排障“DNS verdict 正确但后续包未绑定域名”的关键线索。
     - 本轮已裁决冻结 `GETBLACKIPS/MAXAGEIP`（见 3.6）：强制 `GETBLACKIPS=0`，因此 `getips` 在 vNext 语义下等价于 `verdict`（`blocked=true` 时固定 `getips=false`）。
-  - **回溯原则（DNSSTREAM）**：事件字段必须是“判决时快照”，避免打印时读取导致漂移；至少应快照 `policySource/useCustomList/scope/getips/domMask/appMask`。
+  - **回溯原则（vNext dns stream）**：事件字段必须是“判决时快照”，避免打印时读取导致漂移；至少应快照 `policySource/useCustomList/scope/getips/domMask/appMask`。
 
 ### 2.5 控制面（control plane）与文档口径
 
@@ -459,10 +459,10 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - 后端 `tracked` **持久化**：daemon 重启后保持原值（D8）。
 - 前端 UX 要求（D8）：用户显式开启 `tracked` 时必须提示“可能带来性能影响”（tracked 语义已覆盖更重的观测/统计维度，例如延迟相关统计）。
 - `tracked` gating：
-  - gate：`DNSSTREAM/PKTSTREAM` 逐条事件 + heavy stats
+  - gate：vNext dns/pkt stream 逐条事件 + heavy stats
   - 不 gate：轻量 always-on counters（`METRICS.GET(name=reasons)` / `METRICS.GET(name=domainSources)` / `METRICS.GET(name=traffic)` / `METRICS.GET(name=conntrack)` 等）
 
-#### 3.4.3 Streams（DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM）生命周期（已确认）
+#### 3.4.3 Streams（vNext dns/pkt/activity）生命周期（已确认）
 
 - 不做兼容：stream 是调试通道；允许升级时丢弃历史缓存文件。
 - `type="notice"`（`notice="suppressed"|"dropped"|"started"`）只实时，不进入 ring，不参与 horizon，不落盘（suppressed/dropped 仅对 dns/pkt 有意义）。
@@ -573,7 +573,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - gating：`BLOCK=0` 下 counters 不更新
 - 多用户 selector：严格拒绝与强制回显（见 2.5）
 - stream schema vNext：
-  - `DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 事件能被可靠解析（`type` + 最小字段集合）
+  - vNext dns/pkt/activity stream 事件能被可靠解析（`type` + 最小字段集合）
   - netstring framing + 严格 JSON（见 `CONTROL_PROTOCOL_VNEXT.md`）：`STREAM.STOP` response 作为 ack barrier、禁止输出交织
   - suppressed notice（`type="notice"`) 的限频与 hint 文案（只需结构稳定，具体文案可后置）
 

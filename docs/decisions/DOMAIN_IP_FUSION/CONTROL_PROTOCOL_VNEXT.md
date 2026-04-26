@@ -25,7 +25,8 @@
 ### 1.2 legacy endpoints（迁移期保留，后续删除）
 
 - legacy：`sucre-snort-control` / `60606`
-  - 继续保持当前实现（NUL terminator + `OK/NOK` + `!` pretty + legacy streams 行为）
+  - 继续保持当前基础 wire shape（NUL terminator + `OK/NOK` + `!` pretty）
+  - legacy `DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 已冻结为 no-op；实时观测使用 vNext `STREAM.START/STREAM.STOP`
 - 删除判据（“vNext 稳定”）（已确认）：
   - 前端/脚本默认迁到 vNext；
   - 回归/真机基线通过；

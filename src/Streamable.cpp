@@ -3,9 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <sstream>
-#include <vector>
-
 #include <Activity.hpp>
 #include <DnsRequest.hpp>
 #include <Packet.hpp>
@@ -27,44 +24,16 @@ template <class Item> void Streamable<Item>::reset() {
 }
 
 template <class Item> void Streamable<Item>::stream(const std::shared_ptr<Item> item) {
-    const std::lock_guard lockItems(_mutexItems);
-    _items.push_back(item);
-    while (!_items.empty() && _items.front()->expired(item)) {
-        _items.pop_front();
-    }
-
-    const std::lock_guard lockSockios(_mutexSockios);
-    if (!_sockios.empty()) {
-        std::vector<SocketIO::Ptr> closed;
-        std::stringstream out;
-        _items.back()->print(out);
-        for (const auto &[sockio, pretty] : _sockios) {
-            if (!sockio->print(out, pretty)) {
-                closed.push_back(sockio);
-            }
-        }
-        for (const auto &sockio : closed) {
-            _sockios.erase(sockio);
-        }
-    }
+    (void)item;
 }
 
 template <class Item>
 void Streamable<Item>::startStream(const SocketIO::Ptr sockio, const bool pretty,
                                    const std::time_t horizon, const std::uint32_t minSize) {
-    const std::shared_lock<std::shared_mutex> lockItems(_mutexItems);
-    timespec now;
-    timespec_get(&now, TIME_UTC);
-    uint32_t nb = 0;
-    for (const auto &item : _items) {
-        if (_items.size() - ++nb < minSize || item->inHorizon(horizon, now)) {
-            std::stringstream out;
-            item->print(out);
-            sockio->print(out, pretty);
-        }
-    }
-    const std::lock_guard lockSockios(_mutexSockios);
-    _sockios.emplace(sockio, pretty);
+    (void)sockio;
+    (void)pretty;
+    (void)horizon;
+    (void)minSize;
 }
 
 template <class Item> void Streamable<Item>::stopStream(const SocketIO::Ptr sockio) {

@@ -3,8 +3,8 @@
 ## Purpose
 TBD - created by archiving change add-pktstream-observability. Update Purpose after archive.
 ## Requirements
-### Requirement: PKTSTREAM Packet events include reasonId and src/dst IP
-系统 MUST 将 PKTSTREAM 的 Packet 事件升级为同时输出：
+### Requirement: vNext packet stream events include reasonId and src/dst IP
+系统 MUST 将 vNext packet stream 的 Packet 事件升级为同时输出：
 - `ipVersion: 4|6`
 - `srcIp: string`
 - `dstIp: string`
@@ -13,11 +13,11 @@ TBD - created by archiving change add-pktstream-observability. Update Purpose af
 系统 MUST 移除旧的动态字段 `ipv4|ipv6`。
 
 #### Scenario: Packet event contains required fields
-- **WHEN** 客户端调用 `PKTSTREAM.START`
+- **WHEN** 客户端调用 vNext `STREAM.START(type=pkt)`
 - **THEN** 每条 Packet 事件 SHALL 包含 `ipVersion/srcIp/dstIp/reasonId`
 
 #### Scenario: Legacy ipv4/ipv6 key is not present
-- **WHEN** 客户端调用 `PKTSTREAM.START`
+- **WHEN** 客户端调用 vNext `STREAM.START(type=pkt)`
 - **THEN** Packet 事件 SHALL 不包含 key `ipv4`
 - **AND** Packet 事件 SHALL 不包含 key `ipv6`
 
@@ -33,7 +33,7 @@ TBD - created by archiving change add-pktstream-observability. Update Purpose af
 
 #### Scenario: IFACE_BLOCK uses IFACE_BLOCK reasonId
 - **GIVEN** 某包满足接口拦截条件
-- **WHEN** 系统对该包产生 PKTSTREAM 事件
+- **WHEN** 系统对该包产生 vNext packet stream 事件
 - **THEN** `accepted` SHALL 为 0
 - **AND** `reasonId` SHALL 为 `IFACE_BLOCK`
 - **AND** 事件 SHALL NOT 包含来自更低优先级规则层的 `ruleId` 或 `wouldRuleId`
@@ -41,7 +41,7 @@ TBD - created by archiving change add-pktstream-observability. Update Purpose af
 #### Scenario: Default accept uses ALLOW_DEFAULT
 - **GIVEN** 某包不满足任何当前已启用的 drop 条件且无规则引擎 override
 - **AND** 当前验收场景下未启用 legacy `ip-leak` 分支（可理解为 `BLOCKIPLEAKS=0`）
-- **WHEN** 系统对该包产生 PKTSTREAM 事件
+- **WHEN** 系统对该包产生 vNext packet stream 事件
 - **THEN** `accepted` SHALL 为 1
 - **AND** `reasonId` SHALL 为 `ALLOW_DEFAULT`
 
@@ -57,7 +57,7 @@ TBD - created by archiving change add-pktstream-observability. Update Purpose af
 - **AND** 当前验收场景下未启用 legacy `ip-leak` 分支（可理解为 `BLOCKIPLEAKS=0`）
 - **AND** 该包未命中任何 `enforce=1` 的规则（无论 action=ALLOW|BLOCK）
 - **AND** 某包命中一个 would-drop 规则（`action=BLOCK, enforce=0, log=1`）
-- **WHEN** 系统输出 PKTSTREAM 事件
+- **WHEN** 系统输出 vNext packet stream 事件
 - **THEN** `accepted` SHALL 为 1
 - **AND** 事件 SHALL 包含 `wouldRuleId`
 - **AND** 事件 SHALL 包含 `wouldDrop`
@@ -65,7 +65,7 @@ TBD - created by archiving change add-pktstream-observability. Update Purpose af
 - **AND** `reasonId` SHALL 为 `ALLOW_DEFAULT`
 
 ### Requirement: Device-wide reason counters are exposed via METRICS.REASONS
-系统 MUST 在控制面提供 device-wide 的 per-reason counters（拉取式，不依赖 PKTSTREAM）：
+系统 MUST 在控制面提供 device-wide 的 per-reason counters（拉取式，不依赖 vNext packet stream 是否开启）：
 - 命令 `METRICS.REASONS` MUST 返回顶层对象 `{"reasons": {...}}`
 - `reasons` 对象中每个 reasonId 的 value MUST 固定包含 `packets/bytes`（uint64）
 - `reasons` 对象 MUST 至少包含以下 key（即使其 counters 为 0）：
@@ -82,7 +82,7 @@ TBD - created by archiving change add-pktstream-observability. Update Purpose af
 #### Scenario: METRICS.REASONS reflects observed decisions
 - **GIVEN** `BLOCK=1`
 - **AND** 当前验收场景下未启用 legacy `ip-leak` 分支（可理解为 `BLOCKIPLEAKS=0`）
-- **AND** 某包在 baseline 判决下被 ACCEPT（其 PKTSTREAM 事件 `reasonId=ALLOW_DEFAULT`）
+- **AND** 某包在 baseline 判决下被 ACCEPT（其 vNext packet stream 事件 `reasonId=ALLOW_DEFAULT`）
 - **WHEN** 客户端调用 `METRICS.REASONS`
 - **THEN** 返回值中的 `ALLOW_DEFAULT.packets` SHALL 大于等于 1
 
@@ -110,4 +110,3 @@ TBD - created by archiving change add-pktstream-observability. Update Purpose af
 - **AND** 该 app 产生一个 baseline 判决为 ACCEPT 的 Packet 事件（其 `reasonId=ALLOW_DEFAULT`）
 - **WHEN** 客户端调用 `METRICS.REASONS`
 - **THEN** 返回值中的 `ALLOW_DEFAULT.packets` SHALL 大于等于 1
-

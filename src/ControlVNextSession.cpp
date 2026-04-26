@@ -425,8 +425,10 @@ void ControlVNextSession::run() {
 
             ResponsePlan plan{};
             const auto applyCommand = [&] { plan = dispatch(requestView); };
-            if (requestView.cmd == "RESETALL" || requestView.cmd == "CONFIG.SET" ||
-                requestView.cmd == "DOMAINRULES.APPLY" || requestView.cmd == "DOMAINPOLICY.APPLY" ||
+            if (requestView.cmd == "RESETALL") {
+                applyCommand();
+            } else if (requestView.cmd == "CONFIG.SET" || requestView.cmd == "DOMAINRULES.APPLY" ||
+                requestView.cmd == "DOMAINPOLICY.APPLY" ||
                 requestView.cmd == "DOMAINLISTS.APPLY" || requestView.cmd == "DOMAINLISTS.IMPORT" ||
                 requestView.cmd == "IPRULES.APPLY" || requestView.cmd == "METRICS.RESET") {
                 const std::lock_guard lock(mutexListeners);

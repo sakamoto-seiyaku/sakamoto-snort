@@ -6,6 +6,7 @@
 #pragma once
 
 #include <android-base/logging.h>
+#include <cstdint>
 #include <iomanip>
 #include <map>
 #include <shared_mutex>
@@ -25,4 +26,11 @@
 
 extern std::shared_mutex mutexListeners;
 
+std::uint64_t snortResetEpoch() noexcept;
+bool snortResetEpochIsStable(std::uint64_t epoch) noexcept;
+bool snortResetEpochStillCurrent(std::uint64_t epoch) noexcept;
+void snortBeginResetEpoch() noexcept;
+void snortEndResetEpoch() noexcept;
+
 void snortSave(bool quit = false);
+void snortResetAll();

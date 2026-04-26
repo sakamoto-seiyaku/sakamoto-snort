@@ -3,8 +3,8 @@
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。
 
 
-更新时间：2026-04-20  
-状态：工作结论 + vNext 设计收敛（新增 `tracked` 统一语义、`METRICS.GET(name=traffic|conntrack)`、统一 `STREAM.START/STOP(type=...)`、stream `type`/suppressed 事件；待实现）
+更新时间：2026-04-26
+状态：工作结论 + vNext 设计已落地（`tracked` 统一语义、`METRICS.GET(name=traffic|conntrack)`、统一 `STREAM.START/STOP(type=...)`、stream `type`/suppressed/dropped 事件）
 
 落地任务清单：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
 
@@ -67,8 +67,8 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 ## 3. Events（调试型）核心结论
 
-### 3.1 PKTSTREAM 的定位
-`PKTSTREAM` 是 packet decision event pipe：事件从“活动包”升级为“判决摘要事件”，前端订阅/采集/聚合即可。
+### 3.1 vNext packet stream 的定位
+vNext `STREAM.START(type=pkt)` 是 packet decision event pipe：事件从“活动包”升级为“判决摘要事件”，前端订阅/采集/聚合即可。legacy `PKTSTREAM` 已冻结为 no-op。
 
 ### 3.2 reasonId / would-match 语义
 - `reasonId` **只解释实际 verdict**（即 `accepted` 的原因），每包仅 1 个且确定性选择。
@@ -77,7 +77,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 若包的实际 `reasonId=IFACE_BLOCK`，则不得再附带来自更低优先级规则层的 `ruleId`/`wouldRuleId`。
 
 ### 3.3 stream 风险（必须认知）
-现状：`Streamable::stream()` 在调用线程同步写 socket；慢消费者可能反压并拖慢 NFQUEUE 热路径，甚至阻塞 `RESETALL` 等需要独占 `mutexListeners` 的操作。
+历史问题：legacy `Streamable::stream()` 曾在调用线程同步写 socket；慢消费者可能反压并拖慢 NFQUEUE 热路径，甚至阻塞 `RESETALL` 等需要独占 `mutexListeners` 的操作。当前 legacy stream 已冻结为 no-op，实时观测只支持 vNext stream。
 
 本轮融合红线（与 `DOMAIN_IP_FUSION_CHECKLIST.md:2.8` 一致）：
 
@@ -85,7 +85,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 - 逐条事件必须先进入**有界队列/ring**，由独立 writer 线程（或等价机制）异步 flush。
 - 反压时允许 drop，且必须通过 `type="notice"` 显式提示（不新增独立 metrics；最小字段：`notice="dropped"` + `droppedEvents`）。
 
-产品口径：即便实现异步化，`PKTSTREAM` 仍是“调试期开、短期开、持续读”的通道，不提供“完整不丢”保证。
+产品口径：即便实现异步化，vNext packet stream 仍是“调试期开、短期开、持续读”的通道，不提供“完整不丢”保证。
 
 ### 3.4 stream vNext：事件 envelope（`type`）与 suppressed 汇总（NOTICE）
 
@@ -292,7 +292,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 权威文档：`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`（主规格：`openspec/specs/domain-policy-observability/spec.md`；历史 change：`openspec/changes/archive/2026-03-27-add-domain-policy-observability/`）。
 
 ### 4.3 C：IP per-rule runtime stats（IP 规则引擎）
-目标：新 IP 规则从一开始就必须支持可解释 + per-rule stats（常态可查，不依赖 PKTSTREAM）。
+目标：新 IP 规则从一开始就必须支持可解释 + per-rule stats（常态可查，不依赖 vNext packet stream 是否开启）。
 
 - 每条规则 stats：`hitPackets/hitBytes/lastHitTsNs` + `wouldHitPackets/wouldHitBytes/lastWouldHitTsNs`
 - 输出：`IPRULES.PRINT` 在 rule 对象中包含 `stats`
@@ -361,7 +361,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
   - `dns`：按 DNS 请求计数（每次 DNS 判决更新一次；无 bytes 维度）。
   - `rxp/rxb`：NFQUEUE **INPUT（LOCAL_IN / iptables INPUT）** 路径上的 packet 数/bytes（外部→本机方向）。
   - `txp/txb`：NFQUEUE **OUTPUT（LOCAL_OUT / iptables OUTPUT）** 路径上的 packet 数/bytes（本机→外部方向）。
-  - bytes 口径为 NFQUEUE payload 长度（与 PKTSTREAM 的 `length` 一致）。
+  - bytes 口径为 NFQUEUE payload 长度（与 vNext packet stream 的 `length` 一致）。
 - 方向定义必须与 **NFQUEUE 的队列分裂/合并模式无关**：即使未来 INPUT/OUTPUT 共用 queue range，也必须按 packet 的 hook/链路方向归类。
   - `rx/tx（INPUT/OUTPUT）` 与 conntrack 的 `ct.direction（orig/reply）` **不是**同一个概念：前者解释“本机收/发”，后者解释“首包方向”。
 - `allow/block` 口径（v1）：只看最终 verdict
@@ -497,7 +497,7 @@ safety-mode 仅针对“规则引擎内的逐条/批次规则”（`enforce/log`
 
 ## 6. 归属与“单一真相”（避免文件互相打架）
 
-1) PKTSTREAM schema + reasonId/would-match 契约 + A 层 `METRICS.REASONS`：  
+1) vNext packet stream schema + reasonId/would-match 契约 + A 层 `METRICS.REASONS`：
 `openspec/specs/pktstream-observability/spec.md`
 
 2) IP 规则语义 + C 层 per-rule stats（含 `IPRULES.PRINT` 的 `stats`）：  

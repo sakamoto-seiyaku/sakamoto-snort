@@ -970,6 +970,6 @@ Control Thread 1                Control Thread 2
 #### 80. Packet::length 位域仅 14bit，GSO/大包下长度输出可能截断（LOW） ✅ **已修复**
 - 危险等级: **LOW**
 - 位置: sucre/sucre-snort/src/Packet.hpp:24-30；打印: sucre/sucre-snort/src/Packet.cpp:36-58
-- 问题: `Packet::_len` 使用 `uint16_t _len : 14`，最大仅 16383；但启用了 NFQUEUE 的 GSO 相关配置，实际 `payloadLen` 可能更大。该字段截断会导致 PKTSTREAM 中 `length` 输出错误（统计本身使用入参 len，不受影响）。
-- 影响: 主要是调试/观测误导（PKTSTREAM length 不可信），不直接影响拦截判定。
-- **修复**: 移除 `_len` 14-bit 位域，改为完整 `uint16_t` 存储；PKTSTREAM 的 `length` 不再在大包场景下被截断。(2026-01-21)
+- 问题: `Packet::_len` 使用 `uint16_t _len : 14`，最大仅 16383；但启用了 NFQUEUE 的 GSO 相关配置，实际 `payloadLen` 可能更大。该字段截断会导致 packet stream 中 `length` 输出错误（统计本身使用入参 len，不受影响）。
+- 影响: 主要是调试/观测误导（packet stream length 不可信），不直接影响拦截判定。
+- **修复**: 移除 `_len` 14-bit 位域，改为完整 `uint16_t` 存储；packet stream 的 `length` 不再在大包场景下被截断。(2026-01-21)

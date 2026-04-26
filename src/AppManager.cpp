@@ -54,8 +54,23 @@ const App::Ptr AppManager::make(const App::Uid uid) {
     if (const auto app = find(uid)) {
         return app;
     } else {
-        return create(uid);
+        return publishPrepared(uid, prepare(uid));
     }
+}
+
+const App::Ptr AppManager::prepare(const App::Uid uid) { return std::make_shared<App>(uid); }
+
+const App::Ptr AppManager::publishPrepared(const App::Uid uid, const App::Ptr &prepared) {
+    const std::scoped_lock lock(_mutexByUid, _mutexByName);
+    if (const auto app = find(_byUid, uid)) {
+        return app;
+    }
+    if (!prepared) {
+        return nullptr;
+    }
+    _byUid.emplace(uid, prepared);
+    _byName.emplace(prepared->name(), prepared);
+    return prepared;
 }
 
 template <class... Names> App::Ptr AppManager::create(const App::Uid uid, const Names &...names) {

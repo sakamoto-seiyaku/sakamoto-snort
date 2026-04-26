@@ -40,6 +40,11 @@ public:
 
     template <class IP> const Host::Ptr make(const Address<IP> &ip);
 
+    template <class IP> const Host::Ptr prepare(const Address<IP> &ip);
+
+    template <class IP>
+    const Host::Ptr publishPrepared(const Address<IP> &ip, const Host::Ptr &prepared);
+
     // Create/find a Host without attempting reverse DNS resolution, regardless of settings.
     // Intended for hot-path early-drop reasons (e.g., IFACE_BLOCK) where hostname is irrelevant.
     template <class IP> const Host::Ptr makeNoReverseDns(const Address<IP> &ip);
@@ -88,7 +93,7 @@ template <class IP> const Host::Ptr HostManager::make(const Address<IP> &ip) {
     if (const auto host = find<IP>(ip, false)) {
         return host;
     } else {
-        return create(ip, true);
+        return publishPrepared(ip, prepare(ip));
     }
 }
 
@@ -98,6 +103,48 @@ template <class IP> const Host::Ptr HostManager::makeNoReverseDns(const Address<
     } else {
         return create(ip, false);
     }
+}
+
+template <class IP> const Host::Ptr HostManager::prepare(const Address<IP> &ip) {
+    auto host = std::make_shared<Host>();
+    host->template addIP<IP>(ip);
+    host->domain(domManager.find(ip));
+
+    if (settings.reverseDns()) {
+        sockaddr_storage sa{};
+        ip.fillSockAddr(sa);
+        char buffer[NI_MAXHOST];
+        if (getnameinfo(reinterpret_cast<sockaddr *>(&sa), sizeof(sa), buffer, sizeof(buffer),
+                        nullptr, 0, NI_NAMEREQD) == 0) {
+            host->name(buffer);
+        }
+        host->setResolved();
+    }
+    return host;
+}
+
+template <class IP>
+const Host::Ptr HostManager::publishPrepared(const Address<IP> &ip, const Host::Ptr &prepared) {
+    {
+        const std::lock_guard lockIP(_mutexIP);
+        if (const auto host = find<IP>(ip, true)) {
+            return host;
+        }
+        if (!prepared) {
+            return nullptr;
+        }
+        {
+            const std::lock_guard lockHosts(_mutexHosts);
+            _hosts.emplace_back(prepared);
+            byIP<IP>().emplace(ip, prepared);
+        }
+    }
+
+    if (prepared->hasName()) {
+        const std::lock_guard lockName(_mutexName);
+        _byName.try_emplace(prepared->name()).first->second.push_back(prepared);
+    }
+    return prepared;
 }
 
 template <class IP>
