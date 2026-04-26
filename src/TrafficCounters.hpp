@@ -70,6 +70,15 @@ public:
         return snap;
     }
 
+    TrafficSnapshot takeAndReset() noexcept {
+        TrafficSnapshot snap{};
+        for (size_t i = 0; i < kTrafficMetricKeys.size(); ++i) {
+            snap.dims[i].allow = _allow[i].exchange(0, std::memory_order_relaxed);
+            snap.dims[i].block = _block[i].exchange(0, std::memory_order_relaxed);
+        }
+        return snap;
+    }
+
 private:
     std::array<std::atomic<std::uint64_t>, kTrafficMetricKeys.size()> _allow{};
     std::array<std::atomic<std::uint64_t>, kTrafficMetricKeys.size()> _block{};

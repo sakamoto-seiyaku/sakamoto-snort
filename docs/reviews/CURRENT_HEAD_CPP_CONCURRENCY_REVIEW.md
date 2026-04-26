@@ -9,6 +9,7 @@
 - `[FIXED]` 两项 CRITICAL 已通过 reset/save coordinator + reset epoch 边界修复。
 - `[FIXED]` 一项 HIGH 已通过冻结 legacy `Streamable` 输出修复；vNext `STREAM.START(type=...)` 是受支持的实时观测入口。
 - `[FIXED]` 一项 HIGH 已通过拆分 vNext control mutation mutex 与 datapath `mutexListeners` 修复。
+- `[FIXED]` 一项 MEDIUM 与一项 LOW 已通过 suppressed counter 原子 take-and-reset、`ActivityManager::reset()` 接入 `RESETALL` 修复。
 - 未标记 `[FIXED]` 的 HIGH / MEDIUM / LOW 仍按原 finding 处理，尚未在本轮修复。
 - 本轮属于运行期并发边界设计收敛：对外 `RESETALL` 语义不变，但内部从“仅依赖 `mutexListeners`”调整为“save/reset coordinator + reset epoch + 短共享锁发布窗口”。
 - reset 并发边界设计文档已新增：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`。
@@ -154,7 +155,6 @@
 
 后续未修复项的处理顺序按“是否同源 / 是否互相影响”重排：
 
-- suppressed counter 与 ActivityManager reset 是可独立小修。
 - SIGTERM、raw fd、detached threads 属于 daemon / session lifecycle ownership，同组设计和修复。
 
 ### [HIGH][FIXED] vNext 独占命令在全局锁内执行大 CPU / 文件工作，会阻塞 packet 热路径
@@ -191,31 +191,61 @@
 - 原始修复方向：这些命令改成 two-phase / lock split：parse / validate / compile / temp-file write 在 `mutexListeners` 外完成，只在必要发布窗口依赖 manager-local locks；内部一致性由 manager-local locks 保证。
 - 当前验证建议：并发运行 `dx-casebook-other` 大 domain/import 与 IP ruleset sanity，以及 `tests/device/ip/run.sh --profile perf|stress`；断言 control-plane import 期间 `nfq_total_us` 不出现因 `mutexListeners` 被普通 mutation 持有造成的尖峰。
 
-### [MEDIUM] vNext suppressed stream counter 在 take-and-reset 时会丢增量
+### [MEDIUM][FIXED] vNext suppressed stream counter 在 take-and-reset 时会丢增量
 
-- 位置：`src/ControlVNextStreamManager.cpp:335`、`src/ControlVNextStreamManager.cpp:341`、`src/TrafficCounters.hpp:64`、`src/TrafficCounters.hpp:57`、`src/ControlVNextSession.cpp:463`。
-- 当前代码事实：`takeSuppressedTraffic()` 先调用 `TrafficCounters::snapshot()`，再调用 `TrafficCounters::reset()`。热路径并发调用 `observeDnsSuppressed()` / `observePktSuppressed()`，计数使用 relaxed atomic increment。
-- 触发 interleaving：
+修复状态：已修复。
+
+性质判断：实现问题。vNext stream 的 suppressed notice 设计只要求增量聚合，不要求全局线性化；原实现把 destructive read 拆成 `snapshot()` + `reset()` 两步，导致实现层面可丢增量。
+
+实际修复：
+
+- `TrafficCounters` 新增 `takeAndReset()`，对每个 allow / block bucket 使用 `exchange(0, std::memory_order_relaxed)` 原子取清。
+- `ControlVNextStreamManager::takeSuppressedTraffic()` 的 DNS / PKT 分支改为调用 `takeAndReset()`，保证每个并发增量要么进入当前 notice，要么进入下一次 notice。
+- `STREAM.START` 的 DNS / PKT 分支先清空 pending、dropped 与 suppressed counters，再发布 `subscribed=true`，避免启动窗口内新 suppressed 增量被初始 reset 擦掉。
+- 保留 `snapshot()` 与 `reset()` 给非 destructive 读或显式清零场景使用。
+
+修复后影响：
+
+- packet / DNS 热路径仍只执行已有的 relaxed atomic `fetch_add()`，不新增 mutex、不改变 subscribed fast-path。
+- stream session 取 suppressed delta 时从 load+store 改为 exchange；这是低频 control stream aggregation 路径，不影响 verdict。
+- 当前修复位置：`src/TrafficCounters.hpp:73`、`src/ControlVNextStreamManager.cpp:121`、`src/ControlVNextStreamManager.cpp:335`、`tests/host/control_vnext_stream_surface_tests.cpp:363`、`tests/host/control_vnext_stream_surface_tests.cpp:421`。
+
+- 原始位置：`src/ControlVNextStreamManager.cpp:335`、`src/ControlVNextStreamManager.cpp:341`、`src/TrafficCounters.hpp:64`、`src/TrafficCounters.hpp:57`、`src/ControlVNextSession.cpp:463`。
+- 原始代码事实：`takeSuppressedTraffic()` 先调用 `TrafficCounters::snapshot()`，再调用 `TrafficCounters::reset()`。热路径并发调用 `observeDnsSuppressed()` / `observePktSuppressed()`，计数使用 relaxed atomic increment。
+- 原始触发 interleaving：
   - Thread A：stream session snapshot suppressed counters，读取某个 bucket 值为 `N`。
   - Thread B：packet / DNS 热路径把同一个 bucket 加到 `N+1`。
   - Thread A：调用 `reset()` store 0，擦掉 Thread B 的增量，且该增量未进入当前 notice。
-- 失败模式：可观测性撕裂；并发负载下 suppressed traffic notice 低估。
-- 影响面：vNext DNS / PKT stream suppressed notice；不影响 verdict。
-- 最小修复方向：把 snapshot-then-reset 改为每个 counter 使用 `exchange(0)`，保证每个增量要么进入当前 notice，要么进入下一次 notice。
-- 验证建议：增加 host 并发测试：`takeSuppressedTraffic()` 与 observe loop 并行；真机 stream stress 产生 untracked traffic 并检查 aggregate count 单调一致。
+- 原始失败模式：可观测性撕裂；并发负载下 suppressed traffic notice 低估。
+- 原始影响面：vNext DNS / PKT stream suppressed notice；不影响 verdict。
+- 当前验证口径：host 并发测试覆盖 `takeSuppressedTraffic()` 与 DNS observe loop 并行；PKT 分支覆盖 packet / byte bucket 取清。
 
-### [LOW] `RESETALL` 没有重置 `ActivityManager`
+### [LOW][FIXED] `RESETALL` 没有重置 `ActivityManager`
 
-- 位置：`src/ActivityManager.hpp:13`、`src/ActivityManager.cpp:13`、`src/ActivityManager.cpp:39`、`src/ControlVNextSessionCommandsDaemon.cpp:116`、`src/Control.cpp:1384`。
-- 当前代码事实：`ActivityManager` 用 `shared_ptr<App>` 保存 `_topApp`，并继承 legacy `Streamable<Activity>`，但 legacy 与 vNext `RESETALL` 都没有调用 activity reset。`AppManager::reset()` 清空 manager map，但不能清空 `_topApp`。
-- 触发 interleaving：
+修复状态：已修复。
+
+性质判断：实现问题。`RESETALL` 的运行期状态清理边界已经统一到 `snortResetAll()`；遗漏 `ActivityManager` 属于 reset 覆盖面不完整，不需要改变对外语义。
+
+实际修复：
+
+- `ActivityManager` 新增 `reset()`，清空 `_topApp`、重置 activity timestamp，并调用继承的 `Streamable<Activity>::reset()`。
+- `snortResetAll()` 在统一 reset pipeline 中调用 `activityManager.reset()`，legacy `RESETALL` 与 vNext `RESETALL` 均通过该路径生效。
+
+修复后影响：
+
+- 不进入 packet / DNS 判决热路径；只影响 `RESETALL` 控制路径与 activity observability 状态。
+- reset 后不再由 `_topApp` 持有旧 `App`，避免旧 app 生命周期被 activity 状态延长。
+- 当前修复位置：`src/ActivityManager.hpp:29`、`src/ActivityManager.cpp:33`、`src/sucre-snort.cpp:172`、`tests/host/host_gap_tests.cpp:469`。
+
+- 原始位置：`src/ActivityManager.hpp:13`、`src/ActivityManager.cpp:13`、`src/ActivityManager.cpp:39`、`src/ControlVNextSessionCommandsDaemon.cpp:116`、`src/Control.cpp:1384`。
+- 原始代码事实：`ActivityManager` 用 `shared_ptr<App>` 保存 `_topApp`，并继承 legacy `Streamable<Activity>`，但 legacy 与 vNext `RESETALL` 都没有调用 activity reset。`AppManager::reset()` 清空 manager map，但不能清空 `_topApp`。
+- 原始触发 interleaving：
   - reset 前 activity tracking 保存了一个 top app。
   - `RESETALL` 清空 apps，但 `_topApp` 仍保留。
   - 后续 legacy activity stream start 会发出 reset 前 app 对应的 activity。
-- 失败模式：reset 后 stale observability；旧 app 对象生命周期被意外延长。
-- 影响面：legacy activity stream、reset 语义；未证明会直接影响 verdict。
-- 最小修复方向：新增 `ActivityManager::reset()`，在自身锁下清空 `_topApp` 与继承的 stream items，并在两条 reset 路径中调用。
-- 验证建议：host test 或 vNext / legacy control 场景：设置 top app，执行 `RESETALL`，启动 activity stream，断言不会输出 reset 前 app。
+- 原始失败模式：reset 后 stale observability；旧 app 对象生命周期被意外延长。
+- 原始影响面：legacy activity stream、reset 语义；未证明会直接影响 verdict。
+- 当前验证口径：host test 通过 weak pointer 断言 `ActivityManager::reset()` 会释放 reset 前 `_topApp`。
 
 ### [HIGH] SIGTERM / SIGINT 处理可能让退出延迟最长达到保存周期
 

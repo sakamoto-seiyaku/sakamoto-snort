@@ -99,7 +99,7 @@ protected:
         appManager.reset();
         hostManager.reset();
         pktManager.reset();
-        activityManager.make(nullptr);
+        activityManager.reset();
     }
 };
 
@@ -464,6 +464,19 @@ TEST_F(HostGapTest, ActivityAndActivityManagerCurrentNoOpSemantics) {
         ::close(fds[1]);
         fds[1] = -1;
     }
+}
+
+TEST_F(HostGapTest, ActivityManagerResetReleasesTopApp) {
+    ActivityManager mgr;
+    auto app = std::make_shared<App>(0, "root");
+    std::weak_ptr<App> weakApp = app;
+
+    mgr.make(app);
+    app.reset();
+    EXPECT_FALSE(weakApp.expired());
+
+    mgr.reset();
+    EXPECT_TRUE(weakApp.expired());
 }
 
 TEST_F(HostGapTest, CmdLineExecNoCrash) {

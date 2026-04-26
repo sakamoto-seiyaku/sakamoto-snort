@@ -120,10 +120,10 @@ bool ControlVNextStreamManager::start(void *sessionKey, const int fd, const Star
 
         _dns.subscriber = sessionKey;
         _dns.subscriberFd = fd;
-        _dns.subscribed.store(true, std::memory_order_release);
         _dns.pending.clear();
         _dns.droppedEvents.store(0, std::memory_order_relaxed);
         _dns.suppressedTraffic.reset();
+        _dns.subscribed.store(true, std::memory_order_release);
 
         const std::uint32_t startIdx = replayStartIndexForUnion(_dns.ring, now, horizon, minSize);
         for (std::uint32_t i = startIdx; i < _dns.ring.size(); ++i) {
@@ -148,10 +148,10 @@ bool ControlVNextStreamManager::start(void *sessionKey, const int fd, const Star
 
         _pkt.subscriber = sessionKey;
         _pkt.subscriberFd = fd;
-        _pkt.subscribed.store(true, std::memory_order_release);
         _pkt.pending.clear();
         _pkt.droppedEvents.store(0, std::memory_order_relaxed);
         _pkt.suppressedTraffic.reset();
+        _pkt.subscribed.store(true, std::memory_order_release);
 
         const std::uint32_t startIdx = replayStartIndexForUnion(_pkt.ring, now, horizon, minSize);
         for (std::uint32_t i = startIdx; i < _pkt.ring.size(); ++i) {
@@ -334,14 +334,10 @@ ControlVNextStreamManager::popActivityPending(void *sessionKey) {
 
 TrafficSnapshot ControlVNextStreamManager::takeSuppressedTraffic(const Type type) {
     if (type == Type::Dns) {
-        const auto snap = _dns.suppressedTraffic.snapshot();
-        _dns.suppressedTraffic.reset();
-        return snap;
+        return _dns.suppressedTraffic.takeAndReset();
     }
     if (type == Type::Pkt) {
-        const auto snap = _pkt.suppressedTraffic.snapshot();
-        _pkt.suppressedTraffic.reset();
-        return snap;
+        return _pkt.suppressedTraffic.takeAndReset();
     }
     TrafficSnapshot empty{};
     return empty;

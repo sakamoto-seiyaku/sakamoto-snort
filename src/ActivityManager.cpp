@@ -30,6 +30,15 @@ void ActivityManager::update(const App::Ptr app, const bool force) {
     }
 }
 
+void ActivityManager::reset() {
+    {
+        const std::lock_guard lock(_mutex);
+        _topApp.reset();
+        _timestamp = std::chrono::steady_clock::now();
+    }
+    Streamable<Activity>::reset();
+}
+
 void ActivityManager::create(const App::Ptr app) {
     const Activity::Ptr activity = std::make_shared<Activity>(app);
     stream(activity);

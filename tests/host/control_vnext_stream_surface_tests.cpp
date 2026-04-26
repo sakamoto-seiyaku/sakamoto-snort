@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -139,6 +140,15 @@ struct Harness {
         }
     }
 };
+
+std::uint64_t totalTraffic(const TrafficSnapshot &snapshot) {
+    std::uint64_t total = 0;
+    for (const auto &dim : snapshot.dims) {
+        total += dim.allow;
+        total += dim.block;
+    }
+    return total;
+}
 
 } // namespace
 
@@ -348,4 +358,108 @@ TEST(ControlVNextStreamSurface, SameConnectionCannotStartAnotherType) {
 
     h.sendJsonFrame(R"({"id":3,"cmd":"STREAM.STOP","args":{}})");
     ASSERT_TRUE(h.readFrame(/*timeoutMs=*/1000).has_value());
+}
+
+TEST(ControlVNextStreamSurface, SuppressedDnsTakeAndResetDoesNotLoseConcurrentIncrements) {
+    ControlVNextStreamManager manager(ControlVNextStreamManager::Caps{
+        .maxHorizonSec = 0,
+        .maxRingEvents = 0,
+        .maxPendingEvents = 8,
+    });
+    int sessionKey = 0;
+    ControlVNextStreamManager::StartResult startResult{};
+    ASSERT_TRUE(manager.start(&sessionKey, -1,
+                              ControlVNextStreamManager::StartParams{
+                                  .type = ControlVNextStreamManager::Type::Dns,
+                              },
+                              startResult));
+
+    constexpr int kProducerCount = 4;
+    constexpr int kIterations = 25000;
+    std::atomic_bool start{false};
+    std::atomic_int activeProducers{kProducerCount};
+    std::atomic<std::uint64_t> expected{0};
+    std::uint64_t observed = 0;
+
+    std::thread consumer([&] {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        while (activeProducers.load(std::memory_order_acquire) > 0) {
+            observed += totalTraffic(manager.takeSuppressedTraffic(ControlVNextStreamManager::Type::Dns));
+            std::this_thread::yield();
+        }
+    });
+
+    std::array<std::thread, kProducerCount> producers;
+    for (int producer = 0; producer < kProducerCount; ++producer) {
+        producers[producer] = std::thread([&, producer] {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            for (int i = 0; i < kIterations; ++i) {
+                manager.observeDnsSuppressed(((i + producer) % 2) == 0);
+                expected.fetch_add(1, std::memory_order_relaxed);
+                if ((i % 64) == 0) {
+                    std::this_thread::yield();
+                }
+            }
+            activeProducers.fetch_sub(1, std::memory_order_release);
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+    for (auto &producer : producers) {
+        producer.join();
+    }
+    consumer.join();
+    observed += totalTraffic(manager.takeSuppressedTraffic(ControlVNextStreamManager::Type::Dns));
+
+    EXPECT_EQ(observed, expected.load(std::memory_order_relaxed));
+}
+
+TEST(ControlVNextStreamSurface, SuppressedPktTakeAndResetClearsPacketAndByteCounters) {
+    ControlVNextStreamManager manager(ControlVNextStreamManager::Caps{
+        .maxHorizonSec = 0,
+        .maxRingEvents = 0,
+        .maxPendingEvents = 8,
+    });
+    int sessionKey = 0;
+    ControlVNextStreamManager::StartResult startResult{};
+    ASSERT_TRUE(manager.start(&sessionKey, -1,
+                              ControlVNextStreamManager::StartParams{
+                                  .type = ControlVNextStreamManager::Type::Pkt,
+                              },
+                              startResult));
+
+    manager.observePktSuppressed(/*input=*/true, /*accepted=*/true, /*bytes=*/7);
+    manager.observePktSuppressed(/*input=*/false, /*accepted=*/false, /*bytes=*/11);
+
+    const auto snapshot = manager.takeSuppressedTraffic(ControlVNextStreamManager::Type::Pkt);
+    EXPECT_EQ(snapshot.dims[1].allow, 1U);
+    EXPECT_EQ(snapshot.dims[2].allow, 7U);
+    EXPECT_EQ(snapshot.dims[3].block, 1U);
+    EXPECT_EQ(snapshot.dims[4].block, 11U);
+    EXPECT_EQ(totalTraffic(manager.takeSuppressedTraffic(ControlVNextStreamManager::Type::Pkt)), 0U);
+}
+
+TEST(ControlVNextStreamSurface, SuppressedCountersStartFromCleanSubscriptionBoundary) {
+    ControlVNextStreamManager manager(ControlVNextStreamManager::Caps{
+        .maxHorizonSec = 0,
+        .maxRingEvents = 0,
+        .maxPendingEvents = 8,
+    });
+    manager.observeDnsSuppressed(/*blocked=*/true);
+    EXPECT_EQ(totalTraffic(manager.takeSuppressedTraffic(ControlVNextStreamManager::Type::Dns)), 0U);
+
+    int sessionKey = 0;
+    ControlVNextStreamManager::StartResult startResult{};
+    ASSERT_TRUE(manager.start(&sessionKey, -1,
+                              ControlVNextStreamManager::StartParams{
+                                  .type = ControlVNextStreamManager::Type::Dns,
+                              },
+                              startResult));
+
+    manager.observeDnsSuppressed(/*blocked=*/false);
+    EXPECT_EQ(totalTraffic(manager.takeSuppressedTraffic(ControlVNextStreamManager::Type::Dns)), 1U);
 }

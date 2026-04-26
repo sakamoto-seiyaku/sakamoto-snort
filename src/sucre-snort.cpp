@@ -169,6 +169,7 @@ void snortResetAll() {
     settings.reset();
     Settings::clearSaveTreeForResetAll();
     appManager.reset();
+    activityManager.reset();
     domManager.reset();
     blockingListManager.reset();
     rulesManager.reset();

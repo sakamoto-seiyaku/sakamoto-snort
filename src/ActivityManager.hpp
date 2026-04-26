@@ -26,6 +26,8 @@ public:
 
     void update(const App::Ptr app, const bool force);
 
+    void reset();
+
     void startStream(const SocketIO::Ptr sockio, const bool pretty, const std::time_t horizon,
                      const std::uint32_t minSize);
 
