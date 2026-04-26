@@ -156,6 +156,7 @@ void snortSave(bool quit) {
 
 void snortResetAll() {
     const std::lock_guard<std::mutex> saveResetLock(g_snortSaveResetMutex);
+    const std::lock_guard<std::mutex> controlMutationLock(mutexControlMutations);
     const std::lock_guard listenersLock(mutexListeners);
 
     snortBeginResetEpoch();

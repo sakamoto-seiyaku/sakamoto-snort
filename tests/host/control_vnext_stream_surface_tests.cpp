@@ -30,6 +30,12 @@
 // Provide the globals normally defined in src/sucre-snort.cpp.
 Settings settings;
 std::shared_mutex mutexListeners;
+std::mutex mutexControlMutations;
+
+void snortResetAll() {
+    const std::lock_guard<std::mutex> controlLock(mutexControlMutations);
+    const std::lock_guard listenersLock(mutexListeners);
+}
 
 namespace {
 

@@ -8,6 +8,7 @@
 #include <atomic>
 
 std::shared_mutex mutexListeners;
+std::mutex mutexControlMutations;
 
 namespace {
 

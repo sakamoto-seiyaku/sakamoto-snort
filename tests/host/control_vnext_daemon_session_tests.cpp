@@ -16,9 +16,11 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -29,6 +31,22 @@
 // Provide the globals normally defined in src/sucre-snort.cpp.
 Settings settings;
 std::shared_mutex mutexListeners;
+std::mutex mutexControlMutations;
+
+namespace ControlVNextSessionCommands::TestHooks {
+void reset();
+void blockCommandUntilReleased(std::string_view cmd);
+void releaseBlockedCommand();
+bool waitForBlockedCommand(std::chrono::milliseconds timeout);
+void markResetEntered();
+int resetCountSnapshot();
+} // namespace ControlVNextSessionCommands::TestHooks
+
+void snortResetAll() {
+    const std::lock_guard<std::mutex> controlLock(mutexControlMutations);
+    const std::lock_guard listenersLock(mutexListeners);
+    ControlVNextSessionCommands::TestHooks::markResetEntered();
+}
 
 namespace {
 
@@ -78,6 +96,16 @@ struct Harness {
     }
 
     rapidjson::Document readOneResponse() {
+        if (auto doc = tryReadOneResponse(std::chrono::milliseconds::max())) {
+            return std::move(*doc);
+        }
+        throw std::runtime_error("timed out waiting for response");
+    }
+
+    std::optional<rapidjson::Document> tryReadOneResponse(const std::chrono::milliseconds timeout) {
+        const auto deadline = timeout == std::chrono::milliseconds::max()
+                                  ? std::chrono::steady_clock::time_point::max()
+                                  : std::chrono::steady_clock::now() + timeout;
         std::array<std::byte, 4096> buf{};
         for (;;) {
             if (const auto payload = decoder.pop(); payload.has_value()) {
@@ -87,6 +115,28 @@ struct Harness {
                     throw std::runtime_error("response JSON parse failed");
                 }
                 return doc;
+            }
+
+            int pollTimeout = -1;
+            if (deadline != std::chrono::steady_clock::time_point::max()) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= deadline) {
+                    return std::nullopt;
+                }
+                pollTimeout = static_cast<int>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+            }
+
+            pollfd pfd{.fd = clientFd, .events = POLLIN | POLLHUP, .revents = 0};
+            const int pollRc = ::poll(&pfd, 1, pollTimeout);
+            if (pollRc == 0) {
+                return std::nullopt;
+            }
+            if (pollRc < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                throw std::runtime_error(std::string("poll failed: ") + std::strerror(errno));
             }
 
             const ssize_t n = ::read(clientFd, buf.data(), buf.size());
@@ -128,6 +178,13 @@ struct Harness {
 };
 
 } // namespace
+
+static void expectOkResponse(const rapidjson::Document &resp, const uint32_t expectedId) {
+    ControlVNext::ResponseView view;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp, view).has_value());
+    EXPECT_EQ(view.id, expectedId);
+    EXPECT_TRUE(view.ok);
+}
 
 TEST(ControlVNextDaemonSession, RejectsUnknownRequestKeys) {
     Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
@@ -218,6 +275,59 @@ TEST(ControlVNextDaemonSession, QuitClosesAfterResponse) {
     std::array<std::byte, 16> buf{};
     const ssize_t n = ::read(h.clientFd, buf.data(), buf.size());
     EXPECT_EQ(n, 0) << "expected EOF after QUIT";
+}
+
+TEST(ControlVNextDaemonSession, MutationRespondsWhileDatapathLockIsHeld) {
+    ControlVNextSessionCommands::TestHooks::reset();
+    Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+    std::unique_lock<std::shared_mutex> datapathLock(mutexListeners);
+
+    h.sendJsonFrame(R"({"id":20,"cmd":"CONFIG.SET","args":{}})");
+    auto resp = h.tryReadOneResponse(std::chrono::milliseconds(250));
+
+    datapathLock.unlock();
+    ASSERT_TRUE(resp.has_value()) << "CONFIG.SET should not wait for mutexListeners";
+    expectOkResponse(*resp, 20u);
+}
+
+TEST(ControlVNextDaemonSession, LargeMutationDispatchDoesNotRequireDatapathLock) {
+    ControlVNextSessionCommands::TestHooks::reset();
+    Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+    std::unique_lock<std::shared_mutex> datapathLock(mutexListeners);
+
+    h.sendJsonFrame(R"({"id":21,"cmd":"DOMAINLISTS.IMPORT","args":{}})");
+    auto resp = h.tryReadOneResponse(std::chrono::milliseconds(250));
+
+    datapathLock.unlock();
+    ASSERT_TRUE(resp.has_value()) << "DOMAINLISTS.IMPORT dispatch should not wait for mutexListeners";
+    expectOkResponse(*resp, 21u);
+}
+
+TEST(ControlVNextDaemonSession, ResetAllWaitsForInFlightControlMutation) {
+    ControlVNextSessionCommands::TestHooks::reset();
+    ControlVNextSessionCommands::TestHooks::blockCommandUntilReleased("CONFIG.SET");
+    Harness mutationClient(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+    Harness resetClient(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+
+    mutationClient.sendJsonFrame(R"({"id":30,"cmd":"CONFIG.SET","args":{}})");
+    if (!ControlVNextSessionCommands::TestHooks::waitForBlockedCommand(
+            std::chrono::milliseconds(1000))) {
+        ControlVNextSessionCommands::TestHooks::releaseBlockedCommand();
+        FAIL() << "CONFIG.SET did not enter the test mutation boundary";
+    }
+
+    resetClient.sendJsonFrame(R"({"id":31,"cmd":"RESETALL","args":{}})");
+    EXPECT_FALSE(resetClient.tryReadOneResponse(std::chrono::milliseconds(150)).has_value())
+        << "RESETALL responded before the in-flight mutation left the control boundary";
+    EXPECT_EQ(ControlVNextSessionCommands::TestHooks::resetCountSnapshot(), 0);
+
+    ControlVNextSessionCommands::TestHooks::releaseBlockedCommand();
+    const rapidjson::Document mutationResp = mutationClient.readOneResponse();
+    const rapidjson::Document resetResp = resetClient.readOneResponse();
+
+    expectOkResponse(mutationResp, 30u);
+    expectOkResponse(resetResp, 31u);
+    EXPECT_EQ(ControlVNextSessionCommands::TestHooks::resetCountSnapshot(), 1);
 }
 
 TEST(ControlVNextDaemonSession, OversizedRequestDisconnectsWithoutResponse) {

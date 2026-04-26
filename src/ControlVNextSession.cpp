@@ -431,7 +431,7 @@ void ControlVNextSession::run() {
                 requestView.cmd == "DOMAINPOLICY.APPLY" ||
                 requestView.cmd == "DOMAINLISTS.APPLY" || requestView.cmd == "DOMAINLISTS.IMPORT" ||
                 requestView.cmd == "IPRULES.APPLY" || requestView.cmd == "METRICS.RESET") {
-                const std::lock_guard lock(mutexListeners);
+                const std::lock_guard<std::mutex> lock(mutexControlMutations);
                 applyCommand();
             } else {
                 const std::shared_lock<std::shared_mutex> lock(mutexListeners);

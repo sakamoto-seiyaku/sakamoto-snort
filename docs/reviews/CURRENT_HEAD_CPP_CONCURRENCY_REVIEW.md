@@ -8,6 +8,7 @@
 
 - `[FIXED]` 两项 CRITICAL 已通过 reset/save coordinator + reset epoch 边界修复。
 - `[FIXED]` 一项 HIGH 已通过冻结 legacy `Streamable` 输出修复；vNext `STREAM.START(type=...)` 是受支持的实时观测入口。
+- `[FIXED]` 一项 HIGH 已通过拆分 vNext control mutation mutex 与 datapath `mutexListeners` 修复。
 - 未标记 `[FIXED]` 的 HIGH / MEDIUM / LOW 仍按原 finding 处理，尚未在本轮修复。
 - 本轮属于运行期并发边界设计收敛：对外 `RESETALL` 语义不变，但内部从“仅依赖 `mutexListeners`”调整为“save/reset coordinator + reset epoch + 短共享锁发布窗口”。
 - reset 并发边界设计文档已新增：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`。
@@ -20,11 +21,14 @@
   - 启动阶段在 restore manager 与启动 listener 时持有独占锁。
   - Packet / DNS 热路径使用 reset epoch 先读后校验；只有判决、状态更新、manager 对象发布窗口持有共享锁。
   - legacy / vNext `RESETALL` 不再由各自 dispatch 外层直接持有该锁，而是统一进入 `snortResetAll()`。
-  - vNext control 对 `CONFIG.SET`、domain apply/import、`IPRULES.APPLY`、`METRICS.RESET` 仍使用独占锁。
+  - vNext 普通 mutation 不再持有该锁覆盖整个 handler；`RESETALL` 仍通过 `snortResetAll()` 短窗口独占该锁来静默 packet / DNS 热路径。
+- control mutation coordinator：
+  - `mutexControlMutations` 定义于 `src/SnortRuntime.cpp`，串行化 vNext `CONFIG.SET`、domain apply/import、`IPRULES.APPLY`、`METRICS.RESET` 等普通 mutation。
+  - `RESETALL` 在进入 `mutexListeners` 独占锁之前先取得该 mutex，确保 reset 不与在途 vNext mutation 交错。
 - reset/save coordinator：
   - `g_snortSaveResetMutex` 定义于 `src/sucre-snort.cpp:47`，串行化周期性 `snortSave()` 与完整 `snortResetAll()`。
   - reset epoch 定义于 `src/SnortRuntime.cpp:14`；偶数表示稳定，奇数表示 reset 进行中。
-  - `snortResetAll()` 的锁顺序固定为 `g_snortSaveResetMutex` → `mutexListeners` 独占锁。
+  - `snortResetAll()` 的锁顺序固定为 `g_snortSaveResetMutex` → `mutexControlMutations` → `mutexListeners` 独占锁。
 - Manager 内部锁：
   - `AppManager`：`_mutexByUid`、`_mutexByName`。
   - `DomainManager`：`_mutexByName`、`_mutexByIP`；单个 domain 的 IP set 使用 `Domain::_mutexIP`。
@@ -148,31 +152,44 @@
 - 原始影响面：NFQUEUE verdict 延迟、DNS stats streaming、legacy control stream client、reset 响应性。
 - 当前验证口径：host test 断言 legacy `Streamable` 与 `ActivityManager` stream 不再 replay/输出消息；慢读 legacy stream client 不再能把热路径带入 socket write。
 
-### [HIGH] vNext 独占命令在全局锁内执行大 CPU / 文件工作，会阻塞 packet 热路径
+后续未修复项的处理顺序按“是否同源 / 是否互相影响”重排：
+
+- suppressed counter 与 ActivityManager reset 是可独立小修。
+- SIGTERM、raw fd、detached threads 属于 daemon / session lifecycle ownership，同组设计和修复。
+
+### [HIGH][FIXED] vNext 独占命令在全局锁内执行大 CPU / 文件工作，会阻塞 packet 热路径
+
+修复状态：已修复。
+
+性质判断：设计边界问题。原实现把 vNext control-plane mutation 串行化复用了 datapath 全局静默锁，导致普通 apply/import 的 parse、校验、编译、I/O 与响应构造都会阻塞 packet / DNS verdict。
+
+实际修复：
+
+- 新增 `mutexControlMutations` 作为进程级 control-plane mutation 串行化边界；该锁不进入 packet / DNS 热路径。
+- vNext `CONFIG.SET`、`DOMAINRULES.APPLY`、`DOMAINPOLICY.APPLY`、`DOMAINLISTS.APPLY`、`DOMAINLISTS.IMPORT`、`IPRULES.APPLY`、`METRICS.RESET` dispatch 只持有 `mutexControlMutations`，不再用 `mutexListeners` 包住整个 handler。
+- vNext `RESETALL` 继续绕过普通 mutation branch，由 `snortResetAll()` 统一执行完整 reset 锁顺序：save/reset coordinator → control mutation mutex → `mutexListeners` 独占锁。
+- read-only vNext 命令保持原有 shared `mutexListeners` 路径；本次不做无关锁 churn。
+- manager atomicity 审计结果：`DOMAINLISTS.IMPORT` 依赖 `DomainList::importAtomic()` temp-file + rename + 本地 publish lock；`IPRULES.APPLY` 依赖 `IpRulesEngine` 本地独占锁与 atomic hot snapshot publish；domain rules/policy/list apply 继续由 `RulesManager`、`BlockingListManager`、`DomainManager`、`App` 的本地锁保护结构一致性，未引入新的全局 transaction 框架。
+
+修复后影响：
+
+- 大 vNext mutation 仍会与其他 vNext mutation 串行，但不再让 packet / DNS 热路径等待 `mutexListeners`。
+- `RESETALL` 仍会等待在途 vNext mutation 后再静默热路径，这是避免 reset 与 apply/import 交错的必要语义。
+- 对 packet / DNS 稳态热路径无新增锁；预期影响为降低 mutation 期间的 `nfq_total_us` / DNS verdict tail latency。
+- 后续真机建议：并发大 `DOMAINLISTS.IMPORT` / `IPRULES.APPLY` 与 datapath perf，确认 `nfq_total_us` tail latency 不再因 `mutexListeners` 被普通 mutation 持有而尖峰。
+
+- 当前修复位置：`src/sucre-snort.hpp`、`src/SnortRuntime.cpp`、`src/sucre-snort.cpp`、`src/ControlVNextSession.cpp`、`tests/host/control_vnext_daemon_session_tests.cpp`、`tests/host/control_vnext_daemon_stub_commands.cpp`、`tests/host/control_vnext_stream_surface_tests.cpp`。
 
 - 位置：`src/ControlVNextSession.cpp:426`、`src/ControlVNextSession.cpp:428`、`src/ControlVNextSessionCommandsDomain.cpp:1321`、`src/ControlVNextSessionCommandsDomain.cpp:1408`、`src/ControlVNextSessionCommandsDomain.cpp:1473`、`src/DomainList.cpp:187`、`src/DomainList.cpp:206`、`src/IpRulesEngine.cpp:998`、`src/IpRulesEngine.cpp:1001`、`src/ControlVNextSessionCommandsIpRules.cpp:945`。
-- 当前代码事实：vNext dispatch 在运行 `DOMAINLISTS.IMPORT`、`DOMAINLISTS.APPLY`、`DOMAINPOLICY.APPLY`、`DOMAINRULES.APPLY`、`IPRULES.APPLY` 前先取得独占 `mutexListeners`。`DOMAINLISTS.IMPORT` 可校验最多 1,000,000 个 domain / 16 MiB payload，并在独占锁内写 temp file + rename。IPRULES apply 也在同一全局锁内 compile / replace rule snapshot。
-- 触发 interleaving：
+- 原始代码事实：vNext dispatch 在运行 `DOMAINLISTS.IMPORT`、`DOMAINLISTS.APPLY`、`DOMAINPOLICY.APPLY`、`DOMAINRULES.APPLY`、`IPRULES.APPLY` 前先取得独占 `mutexListeners`。`DOMAINLISTS.IMPORT` 可校验最多 1,000,000 个 domain / 16 MiB payload，并在独占锁内写 temp file + rename。IPRULES apply 也在同一全局锁内 compile / replace rule snapshot。
+- 原始触发 interleaving：
   - Thread A：vNext client 发送大 `DOMAINLISTS.IMPORT` 或大 `IPRULES.APPLY`。
   - Thread A：持有独占 `mutexListeners` 执行 parse、compile 或 list 文件写入。
   - Thread B：NFQUEUE callback 到达 `PacketListener.cpp:374`，等待共享 `mutexListeners` 才能发 verdict。
-- 失败模式：hot-path stall、packet backlog、明显 tail latency spike；这不是 data race，但全局静默窗口过大。
-- 影响面：NFQUEUE、DNS 判决窗口、vNext control 扩展性、大 domain / IP ruleset 操作。
-- 最小修复方向：这些命令改成 two-phase：parse / validate / compile / temp-file write 在 `mutexListeners` 外完成，只在发布内存 snapshot 与更新 metadata 时短暂持有独占锁；内部一致性由 manager-local locks 保证。
-- 验证建议：并发运行 `dx-casebook-other` 大 domain/import 与 IP ruleset sanity，以及 `tests/device/ip/run.sh --profile perf|stress`；断言 control-plane import 期间 `nfq_total_us` 不出现尖峰。
-
-### [HIGH] SIGTERM / SIGINT 处理可能让退出延迟最长达到保存周期
-
-- 位置：`src/sucre-snort.cpp:43`、`src/sucre-snort.cpp:122`、`src/sucre-snort.cpp:135`、`src/sucre-snort.cpp:149`。
-- 当前代码事实：signal handler 只设置 `g_quit_flag`。main loop 只在 `snortSave()` 前后检查该 flag，随后调用 `std::this_thread::sleep_for(settings.saveInterval)`，当前保存间隔为 1 小时。信号可能投递到任意未屏蔽线程，不能保证唤醒正在 sleep 的 main thread。
-- 触发 interleaving：
-  - Thread A：main loop 完成 `snortSave()` 后进入 `sleep_for(saveInterval)`。
-  - Thread B：某个 detached worker 收到 SIGTERM / SIGINT，并设置 `g_quit_flag`。
-  - Thread A：直到实现主动唤醒或完整 sleep interval 结束前，都可能不执行最终保存 / 退出。
-- 失败模式：退出卡住 / 长时间延迟；Android / service supervisor 升级终止前可能没有完成 final save。
-- 影响面：daemon lifecycle、shutdown persistence、fd/socket 清理预期。
-- 最小修复方向：用 `sigwait` / `signalfd` / self-pipe 配合 condition variable 或 eventfd 代替被动轮询；收到信号后立即唤醒 main loop 并执行一次 final save。
-- 验证建议：真机 lifecycle 测试：在 save sleep 的不同时间点反复发送 SIGTERM，断言退出延迟有上界且 final save 完成。
+- 原始失败模式：hot-path stall、packet backlog、明显 tail latency spike；这不是 data race，但全局静默窗口过大。
+- 原始影响面：NFQUEUE、DNS 判决窗口、vNext control 扩展性、大 domain / IP ruleset 操作。
+- 原始修复方向：这些命令改成 two-phase / lock split：parse / validate / compile / temp-file write 在 `mutexListeners` 外完成，只在必要发布窗口依赖 manager-local locks；内部一致性由 manager-local locks 保证。
+- 当前验证建议：并发运行 `dx-casebook-other` 大 domain/import 与 IP ruleset sanity，以及 `tests/device/ip/run.sh --profile perf|stress`；断言 control-plane import 期间 `nfq_total_us` 不出现因 `mutexListeners` 被普通 mutation 持有造成的尖峰。
 
 ### [MEDIUM] vNext suppressed stream counter 在 take-and-reset 时会丢增量
 
@@ -186,6 +203,32 @@
 - 影响面：vNext DNS / PKT stream suppressed notice；不影响 verdict。
 - 最小修复方向：把 snapshot-then-reset 改为每个 counter 使用 `exchange(0)`，保证每个增量要么进入当前 notice，要么进入下一次 notice。
 - 验证建议：增加 host 并发测试：`takeSuppressedTraffic()` 与 observe loop 并行；真机 stream stress 产生 untracked traffic 并检查 aggregate count 单调一致。
+
+### [LOW] `RESETALL` 没有重置 `ActivityManager`
+
+- 位置：`src/ActivityManager.hpp:13`、`src/ActivityManager.cpp:13`、`src/ActivityManager.cpp:39`、`src/ControlVNextSessionCommandsDaemon.cpp:116`、`src/Control.cpp:1384`。
+- 当前代码事实：`ActivityManager` 用 `shared_ptr<App>` 保存 `_topApp`，并继承 legacy `Streamable<Activity>`，但 legacy 与 vNext `RESETALL` 都没有调用 activity reset。`AppManager::reset()` 清空 manager map，但不能清空 `_topApp`。
+- 触发 interleaving：
+  - reset 前 activity tracking 保存了一个 top app。
+  - `RESETALL` 清空 apps，但 `_topApp` 仍保留。
+  - 后续 legacy activity stream start 会发出 reset 前 app 对应的 activity。
+- 失败模式：reset 后 stale observability；旧 app 对象生命周期被意外延长。
+- 影响面：legacy activity stream、reset 语义；未证明会直接影响 verdict。
+- 最小修复方向：新增 `ActivityManager::reset()`，在自身锁下清空 `_topApp` 与继承的 stream items，并在两条 reset 路径中调用。
+- 验证建议：host test 或 vNext / legacy control 场景：设置 top app，执行 `RESETALL`，启动 activity stream，断言不会输出 reset 前 app。
+
+### [HIGH] SIGTERM / SIGINT 处理可能让退出延迟最长达到保存周期
+
+- 位置：`src/sucre-snort.cpp:43`、`src/sucre-snort.cpp:122`、`src/sucre-snort.cpp:135`、`src/sucre-snort.cpp:149`。
+- 当前代码事实：signal handler 只设置 `g_quit_flag`。main loop 只在 `snortSave()` 前后检查该 flag，随后调用 `std::this_thread::sleep_for(settings.saveInterval)`，当前保存间隔为 1 小时。信号可能投递到任意未屏蔽线程，不能保证唤醒正在 sleep 的 main thread。
+- 触发 interleaving：
+  - Thread A：main loop 完成 `snortSave()` 后进入 `sleep_for(saveInterval)`。
+  - Thread B：某个 detached worker 收到 SIGTERM / SIGINT，并设置 `g_quit_flag`。
+  - Thread A：直到实现主动唤醒或完整 sleep interval 结束前，都可能不执行最终保存 / 退出。
+- 失败模式：退出卡住 / 长时间延迟；Android / service supervisor 升级终止前可能没有完成 final save。
+- 影响面：daemon lifecycle、shutdown persistence、fd/socket 清理预期。
+- 最小修复方向：用 `sigwait` / `signalfd` / self-pipe 配合 condition variable 或 eventfd 代替被动轮询；收到信号后立即唤醒 main loop 并执行一次 final save。
+- 验证建议：真机 lifecycle 测试：在 save sleep 的不同时间点反复发送 SIGTERM，断言退出延迟有上界且 final save 完成。
 
 ### [MEDIUM] `resetAll()` 返回 raw stream fd，缺少生命周期所有权
 
@@ -212,19 +255,6 @@
 - 影响面：legacy control、vNext command client、DNS netd fallback client、daemon lifecycle。
 - 最小修复方向：引入有界 worker / session accounting；为发送增加总 deadline；control client 更适合 event-loop 或 thread-pool ownership；暴露 active session 与 rejected client counters。
 - 验证建议：host 或真机 socket stress：对 legacy / vNext / DNS socket 打开大量不读取 client，断言 threads / fds 有上界且 command latency 稳定。
-
-### [LOW] `RESETALL` 没有重置 `ActivityManager`
-
-- 位置：`src/ActivityManager.hpp:13`、`src/ActivityManager.cpp:13`、`src/ActivityManager.cpp:39`、`src/ControlVNextSessionCommandsDaemon.cpp:116`、`src/Control.cpp:1384`。
-- 当前代码事实：`ActivityManager` 用 `shared_ptr<App>` 保存 `_topApp`，并继承 legacy `Streamable<Activity>`，但 legacy 与 vNext `RESETALL` 都没有调用 activity reset。`AppManager::reset()` 清空 manager map，但不能清空 `_topApp`。
-- 触发 interleaving：
-  - reset 前 activity tracking 保存了一个 top app。
-  - `RESETALL` 清空 apps，但 `_topApp` 仍保留。
-  - 后续 legacy activity stream start 会发出 reset 前 app 对应的 activity。
-- 失败模式：reset 后 stale observability；旧 app 对象生命周期被意外延长。
-- 影响面：legacy activity stream、reset 语义；未证明会直接影响 verdict。
-- 最小修复方向：新增 `ActivityManager::reset()`，在自身锁下清空 `_topApp` 与继承的 stream items，并在两条 reset 路径中调用。
-- 验证建议：host test 或 vNext / legacy control 场景：设置 top app，执行 `RESETALL`，启动 activity stream，断言不会输出 reset 前 app。
 
 ## Needs Dynamic Verification
 

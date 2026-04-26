@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <map>
+#include <mutex>
 #include <shared_mutex>
 
 #define JSS(s) "\"" << s << "\""
@@ -25,6 +26,7 @@
 // Removed custom injection of std::shared_lock<std::shared_mutex> to avoid undefined behavior.
 
 extern std::shared_mutex mutexListeners;
+extern std::mutex mutexControlMutations;
 
 std::uint64_t snortResetEpoch() noexcept;
 bool snortResetEpochIsStable(std::uint64_t epoch) noexcept;
