@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-04-26
+更新时间：2026-04-27
 状态：当前共识（以仓库内 code + tests + OpenSpec 主规格为准）
 
 ## 0. 阅读指南
@@ -34,6 +34,7 @@ Status 口径（全篇统一）：
 - Device/DX 冒烟 casebook：`docs/testing/DEVICE_SMOKE_CASEBOOK.md`
 - Device/DX 覆盖矩阵：`docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
 - vNext 协议/命令：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`、`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+- 对外接口规范（vNext-only）：`docs/INTERFACE_SPECIFICATION.md`
 - 可观测性口径：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
 - OpenSpec 主规格：`openspec/specs/`
@@ -52,9 +53,9 @@ Status 口径（全篇统一）：
   - diagnostics：`dx-diagnostics` / `dx-diagnostics-perf-network-load`
   - optional casebook：`dx-casebook-other`（`## 其他` Case 1–2；不进默认 `dx-smoke` 主链）
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
-- Device/DX 冒烟补齐以 casebook 为验收口径推进（见 3.1）。
+- Device/DX 冒烟补齐以 casebook 为验收口径推进（见 2.2）。
 - 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
-- [NOW] OpenSpec 当前 active changes：`complete-device-smoke-casebook-other`（apply 已完成；按当前要求暂不 archive）。
+- [NOW] OpenSpec 当前 active changes（apply 已完成；待 archive）：`stabilize-daemon-lifecycle-ownership`、`add-iprules-dual-stack-ipv6`。
 
 ### 1.2 功能（Domain + IP）
 
@@ -64,7 +65,7 @@ Status 口径（全篇统一）：
   - B：DomainPolicy counters（`policySource` / `domainSources`）
   - C：IP per-rule stats（随 IPRULES v1 一起落地）
   - D：perfmetrics（`nfq_total_us` / `dns_decision_us` 等）
-- IPRULES v1 + L4 conntrack core 已落地；真机 Tier‑1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
+- IPRULES dual-stack（IPv4/IPv6）+ L4 conntrack core 已落地；真机 Tier‑1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
 
 ## 2. 已完成（事实清单）
 
@@ -82,6 +83,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-25] `complete-device-smoke-casebook-domain`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；spec：`openspec/specs/dx-smoke-domain-casebook/spec.md`）
 - [DONE 2026-04-25] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、`block.enabled=0`、`iprules.enabled=0`、payload bytes、维度级 traffic/reasons/stats、pkt stream 字段；spec：`openspec/specs/dx-smoke-ip-casebook/spec.md`）
 - [DONE 2026-04-25] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（`ct.state/direction` 最小闭环、create-on-accept、block 不 create entry；spec：`openspec/specs/dx-smoke-conntrack-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-other`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 其他` Case 1–2（perfmetrics.enabled 可用性验证、极端规模 limits sanity；spec：`openspec/specs/dx-smoke-other-casebook/spec.md`）
 
 ### 2.3 功能（Domain+IP；后端已收敛）
 
@@ -96,6 +98,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-03-24] IPRULES v1（IPv4 L3/L4 + per-rule stats）：`add-app-ip-l3l4-rules-engine`（spec：`openspec/specs/app-ip-l3l4-rules/spec.md`）
 - [DONE 2026-03-27] DomainPolicy observability（policySource counters）：`add-domain-policy-observability`（spec：`openspec/specs/domain-policy-observability/spec.md`）
 - [DONE 2026-03-30] L4 conntrack core：`add-iprules-conntrack-core`（spec：`openspec/specs/l4-conntrack-core/spec.md`）
+- [DONE 2026-04-27] IPRULES IPv4/IPv6 双栈：`add-iprules-dual-stack-ipv6`（required `family`/mk2、IPv6 header walker + `l4Status`、conntrack byFamily metrics、host + device Tier‑1 回归；决策入口：`docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`）
 - [DONE 2026-03-15] perfmetrics：`add-perfmetrics-observability`（spec：`openspec/specs/perfmetrics-observability/spec.md`）
 
 ### 2.4 稳定性（运行期并发边界）
@@ -103,12 +106,19 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-26] RESETALL runtime 并发边界：修复 `RESETALL` 与周期性 `snortSave()` 竞态，以及 packet / DNS 热路径锁外准备对象跨 reset 发布问题；设计口径见 `docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`，审查状态见 `docs/reviews/CURRENT_HEAD_CPP_CONCURRENCY_REVIEW.md`。
 - [DONE 2026-04-26] legacy stream 冻结：`DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 不再作为实时事件通道；支持入口统一到 vNext `STREAM.START(type=dns|pkt|activity)`，消除 legacy 同步 socket write 对热路径与 `RESETALL` 的反压风险。
 - [DONE 2026-04-26] vNext mutation / datapath 锁拆分：新增 control mutation mutex，普通 vNext apply/import/config/metrics reset 不再持有 `mutexListeners` 覆盖大 CPU / I/O 工作；`RESETALL` 仍按 save/reset → control mutation → datapath quiesce 顺序完整串行化。
+- [DONE 2026-04-26] daemon lifecycle ownership：`stabilize-daemon-lifecycle-ownership`（main-owned shutdown、session-owned fd、active session budget、send deadline；并更新 concurrency review lifecycle findings）
+
+### 2.5 文档（对外契约 / 权威口径）
+
+- [DONE 2026-04-26] `sync-iprules-dual-stack-authority-docs`：同步 dual-stack IPRULES 的权威设计/契约文档，避免跨文档漂移与误读。
+- [DONE 2026-04-27] 接口规范收敛：重写 `docs/INTERFACE_SPECIFICATION.md` 为 vNext-only，并归档 legacy 版到 `docs/archived/INTERFACE_SPECIFICATION_v3.7_2026-04-26_legacy.md`。
 
 ## 3. 待办（按优先级）
 
-### 3.1 工程化：Device / DX 冒烟 Casebook 补齐（以 casebook 为验收口径）
+### 3.1 发布收口（OpenSpec change 归档）
 
-- [NOW] `complete-device-smoke-casebook-other`：已 apply，新增 optional `dx-casebook-other` 承接 `perfmetrics.enabled` 可用性验证与极端规模（海量 domain/import、海量 iprules）limits sanity；默认不进 `dx-smoke` 主链，当前等待后续 archive。
+- [NEXT] `stabilize-daemon-lifecycle-ownership`：apply 已完成；归档 change（过程性收口）。
+- [NEXT] `add-iprules-dual-stack-ipv6`：apply 已完成；归档 change（过程性收口）。
 
 ### 3.2 迁移与下线（前端/对外工具；不是后端能力缺口）
 
@@ -117,11 +127,7 @@ Status 口径（全篇统一）：
 ### 3.3 文档收尾（降低误读）
 
 - [NEXT] 巡检并收敛仍保留历史语境的设计文档，避免被误读成“待实现提案”（例如已落地回执类文档）。
-- [NEXT] 仅在接口新增/变更后刷新 `docs/INTERFACE_SPECIFICATION.md`，避免“接口文档先行”导致漂移。
-
-### 3.4 功能：IPRULES IPv4/IPv6 双栈
-
-- [NEXT] `add-iprules-dual-stack-ipv6`：将 IPRULES 升级为 IPv4/IPv6 同级规则模型（vNext schema `family/mk2`、datapath IPv6 header walker + `l4Status`、IPv6 conntrack + byFamily metrics）；决策入口：`docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`。
+- [NOTE] 仅在接口新增/变更后刷新 `docs/INTERFACE_SPECIFICATION.md`；当前已于 2026-04-27 收敛为 vNext-only（legacy 版已归档）。
 
 ## 4. 后置 / Backlog（不挡主线）
 
