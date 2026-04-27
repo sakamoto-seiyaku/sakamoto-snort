@@ -117,8 +117,8 @@ Status 口径（全篇统一）：
 
 ### 3.1 发布收口（OpenSpec change 归档）
 
-- [NEXT] `stabilize-daemon-lifecycle-ownership`：apply 已完成；归档 change（过程性收口）。
-- [NEXT] `add-iprules-dual-stack-ipv6`：apply 已完成；归档 change（过程性收口）。
+- [DONE 2026-04-27] `stabilize-daemon-lifecycle-ownership`：已归档（过程性收口）。
+- [DONE 2026-04-27] `add-iprules-dual-stack-ipv6`：已归档（过程性收口）。
 
 ### 3.2 迁移与下线（前端/对外工具；不是后端能力缺口）
 
