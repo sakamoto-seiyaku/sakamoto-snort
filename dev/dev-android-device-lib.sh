@@ -141,6 +141,52 @@ device_preflight() {
     return 0
 }
 
+selinux_get_mode() {
+    # Best-effort: prefer init mount namespace (matches dev-netd-resolv workflow),
+    # but fall back to plain getenforce if nsenter is unavailable.
+    local had_errexit=0
+    case $- in *e*) had_errexit=1 ;; esac
+    set +e
+
+    local mode=""
+    mode="$(adb_su "nsenter -t 1 -m -- getenforce 2>/dev/null || getenforce 2>/dev/null || true" 2>/dev/null | tr -d '\r\n')"
+    local rc=$?
+
+    if [[ $had_errexit -eq 1 ]]; then
+        set -e
+    fi
+
+    if [[ $rc -ne 0 || -z "$mode" ]]; then
+        return 1
+    fi
+    if [[ "$mode" != "Enforcing" && "$mode" != "Permissive" ]]; then
+        return 1
+    fi
+    printf '%s\n' "$mode"
+    return 0
+}
+
+selinux_ensure_permissive() {
+    # Many device tests rely on netd/resolver hooks and privileged sockets which
+    # are routinely blocked under SELinux Enforcing on dev devices.
+    local mode
+    mode="$(selinux_get_mode 2>/dev/null || true)"
+    if [[ "$mode" == "Permissive" ]]; then
+        return 0
+    fi
+
+    local had_errexit=0
+    case $- in *e*) had_errexit=1 ;; esac
+    set +e
+    adb_su "nsenter -t 1 -m -- setenforce 0 2>/dev/null || setenforce 0 2>/dev/null" >/dev/null 2>&1
+    if [[ $had_errexit -eq 1 ]]; then
+        set -e
+    fi
+
+    mode="$(selinux_get_mode 2>/dev/null || true)"
+    [[ "$mode" == "Permissive" ]]
+}
+
 check_control_forward() {
     local port="${1:-60606}"
     ensure_adb_target || return 1

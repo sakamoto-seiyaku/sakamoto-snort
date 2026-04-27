@@ -566,6 +566,13 @@ main() {
     device_preflight || exit 77
     echo "目标真机: $(adb_target_desc)"
 
+    log_section "SELinux"
+    if ! selinux_ensure_permissive; then
+        echo "BLOCKED: SELinux must be Permissive for device tests (try: adb shell su 0 sh -c 'nsenter -t 1 -m -- setenforce 0')" >&2
+        exit 77
+    fi
+    log_pass "SELinux ok ($(selinux_get_mode 2>/dev/null || echo unknown))"
+
     SNORT_CTL="$(find_snort_ctl)" || exit 77
     echo "sucre-snort-ctl: $SNORT_CTL"
 

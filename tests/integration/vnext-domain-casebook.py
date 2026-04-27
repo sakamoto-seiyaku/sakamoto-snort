@@ -709,6 +709,13 @@ class DomainCasebook:
             raise SmokeBlocked(
                 "Domain Case 8 blocked: netd resolv hook inactive; run bash dev/dev-netd-resolv.sh status|prepare"
             )
+        mode = self.adb.su(
+            "nsenter -t 1 -m -- getenforce 2>/dev/null || getenforce 2>/dev/null || true"
+        ).stdout.strip()
+        if mode and mode != "Permissive":
+            raise SmokeBlocked(
+                "Domain Case 8 blocked: SELinux Enforcing blocks netd->sucre-snort-netd; run adb shell su 0 sh -c 'nsenter -t 1 -m -- setenforce 0'"
+            )
         shell_uid = 2000
         warmup = self.domain("real-warmup")
         warmup_cmd = self.shell_dns_trigger_command(warmup)

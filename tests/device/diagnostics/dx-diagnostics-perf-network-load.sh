@@ -287,6 +287,11 @@ vnext_preflight() {
         return 77
     fi
 
+    if ! selinux_ensure_permissive; then
+        echo "BLOCKED: SELinux must be Permissive for device tests (try: adb shell su 0 sh -c 'nsenter -t 1 -m -- setenforce 0')" >&2
+        return 77
+    fi
+
     if ! check_control_vnext_forward "$VNEXT_PORT"; then
         log_info "设置 vNext adb forward..."
         setup_control_vnext_forward "$VNEXT_PORT" || {
