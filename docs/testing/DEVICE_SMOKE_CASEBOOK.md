@@ -344,7 +344,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - `tests/integration/vnext-domain-casebook.py`：`VNT-DOM-02` 覆盖 APP / DEVICE_WIDE / FALLBACK bucket 级增长。
 
 **缺口**
-- 已补齐 bucket 级覆盖：APP=`CUSTOM_*`（Case 3/6）、DEVICE_WIDE=`GLOBAL_*`（Case 6）、FALLBACK=`MASK_FALLBACK`（Case 7）。
+- 已补齐 bucket 级覆盖：APP=`CUSTOM_*`（Case 3/6）、DEVICE_WIDE=`DOMAIN_DEVICE_WIDE_*`（Case 6）、FALLBACK=`MASK_FALLBACK`（Case 7）。
 
 ---
 
@@ -434,7 +434,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 ### Case 5：domain.custom.enabled 语义（0/1 必须改变判决路径）
 **目的**
 - 验证 app 的 custom 开关真正影响判决：
-  - 1：custom/app/device policy 生效（`CUSTOM_* / GLOBAL_*`）
+  - 1：custom/app/device policy 生效（`CUSTOM_* / DOMAIN_DEVICE_WIDE_*`）
   - 0：全部回落到 `MASK_FALLBACK`（`policySource=MASK_FALLBACK`，`scope=FALLBACK`）
 
 **Given**
@@ -470,7 +470,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 **目的**
 - 验证优先级与输出解释一致：
   - APP 策略命中：`policySource=CUSTOM_*`，`scope=APP`
-  - 仅 DEVICE 策略命中：`policySource=GLOBAL_*`，`scope=DEVICE_WIDE`
+  - 仅 DEVICE 策略命中：`policySource=DOMAIN_DEVICE_WIDE_*`，`scope=DEVICE_WIDE`
 
 **Given**
 - `block.enabled=1`
@@ -500,7 +500,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 **Then（期望输出）**
 - d1：`blocked=false`、`policySource=CUSTOM_WHITELIST`、`scope=APP`、`useCustomList=true`
 - d2：`blocked=true`、`policySource=CUSTOM_BLACKLIST`、`scope=APP`、`useCustomList=true`
-- d3：`blocked=true`、`policySource=GLOBAL_BLOCKED`、`scope=DEVICE_WIDE`、`useCustomList=true`
+- d3：`blocked=true`、`policySource=DOMAIN_DEVICE_WIDE_BLOCKED`、`scope=DEVICE_WIDE`、`useCustomList=true`
 - traffic(app)：`traffic.dns.allow` 与 `traffic.dns.block` 增长（至少各 1）
 - domainSources(app)：对应 bucket 增长
 

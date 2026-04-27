@@ -132,10 +132,12 @@ App::BlockedWithSource App::blockedWithSource(const Domain::Ptr &domain) {
             return {.blocked = true, .color = cs, .policySource = DomainPolicySource::CUSTOM_RULE_BLACK};
         }
         if (domManager.authorized(domain)) {
-            return {.blocked = false, .color = cs, .policySource = DomainPolicySource::GLOBAL_AUTHORIZED};
+            return {.blocked = false,
+                    .color = cs,
+                    .policySource = DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED};
         }
         if (domManager.blocked(domain)) {
-            return {.blocked = true, .color = cs, .policySource = DomainPolicySource::GLOBAL_BLOCKED};
+            return {.blocked = true, .color = cs, .policySource = DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED};
         }
     }
 

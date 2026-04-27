@@ -15,9 +15,10 @@ enum class DomainPolicySource : uint8_t {
     CUSTOM_BLACKLIST = 1,
     CUSTOM_RULE_WHITE = 2,
     CUSTOM_RULE_BLACK = 3,
-    // "GLOBAL_*" is domain-only device-wide logic (DomainManager authorized/blocked).
-    GLOBAL_AUTHORIZED = 4,
-    GLOBAL_BLOCKED = 5,
+    // Domain-only device-wide logic (DomainManager authorized/blocked).
+    // Historical name: "GLOBAL_*" (kept out of the interface to avoid semantic confusion).
+    DOMAIN_DEVICE_WIDE_AUTHORIZED = 4,
+    DOMAIN_DEVICE_WIDE_BLOCKED = 5,
     // Final fallback: app.blockMask & domain.blockMask.
     MASK_FALLBACK = 6,
 };
@@ -25,7 +26,7 @@ enum class DomainPolicySource : uint8_t {
 inline constexpr std::array<DomainPolicySource, 7> kDomainPolicySources = {
     DomainPolicySource::CUSTOM_WHITELIST,  DomainPolicySource::CUSTOM_BLACKLIST,
     DomainPolicySource::CUSTOM_RULE_WHITE, DomainPolicySource::CUSTOM_RULE_BLACK,
-    DomainPolicySource::GLOBAL_AUTHORIZED, DomainPolicySource::GLOBAL_BLOCKED,
+    DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED, DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED,
     DomainPolicySource::MASK_FALLBACK,
 };
 
@@ -39,13 +40,12 @@ inline constexpr const char *domainPolicySourceStr(const DomainPolicySource s) n
         return "CUSTOM_RULE_WHITE";
     case DomainPolicySource::CUSTOM_RULE_BLACK:
         return "CUSTOM_RULE_BLACK";
-    case DomainPolicySource::GLOBAL_AUTHORIZED:
-        return "GLOBAL_AUTHORIZED";
-    case DomainPolicySource::GLOBAL_BLOCKED:
-        return "GLOBAL_BLOCKED";
+    case DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED:
+        return "DOMAIN_DEVICE_WIDE_AUTHORIZED";
+    case DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED:
+        return "DOMAIN_DEVICE_WIDE_BLOCKED";
     case DomainPolicySource::MASK_FALLBACK:
         return "MASK_FALLBACK";
     }
     return "UNKNOWN";
 }
-

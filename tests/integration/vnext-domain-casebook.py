@@ -592,12 +592,19 @@ class DomainCasebook:
         events = self.capture_dns([d1, d2, d3], lambda: (self.inject(d1), self.inject(d2), self.inject(d3)))
         require_dns_event(events[d1], self.app_uid, d1, blocked=False, policySource="CUSTOM_WHITELIST", scope="APP")
         require_dns_event(events[d2], self.app_uid, d2, blocked=True, policySource="CUSTOM_BLACKLIST", scope="APP")
-        require_dns_event(events[d3], self.app_uid, d3, blocked=True, policySource="GLOBAL_BLOCKED", scope="DEVICE_WIDE")
+        require_dns_event(
+            events[d3],
+            self.app_uid,
+            d3,
+            blocked=True,
+            policySource="DOMAIN_DEVICE_WIDE_BLOCKED",
+            scope="DEVICE_WIDE",
+        )
         allow_count, block_count = self.get_app_traffic_dns()
         if allow_count < 1 or block_count < 2:
             raise SmokeFailure(f"policy priority traffic mismatch: allow={allow_count} block={block_count}")
-        if self.get_app_source("GLOBAL_BLOCKED")[1] < 1:
-            raise SmokeFailure("GLOBAL_BLOCKED.block did not grow")
+        if self.get_app_source("DOMAIN_DEVICE_WIDE_BLOCKED")[1] < 1:
+            raise SmokeFailure("DOMAIN_DEVICE_WIDE_BLOCKED.block did not grow")
         log_pass("VNT-DOM-06", "APP policy priority and DEVICE_WIDE fallback are observable")
 
     def apply_list(self, list_id: str, kind: str, enabled: int) -> None:
@@ -745,8 +752,8 @@ class DomainCasebook:
             self.rpc.call("METRICS.GET", {"name": "domainSources", "app": {"uid": shell_uid}}),
             "shell domainSources get failed",
         )
-        if source_counts(sources, "GLOBAL_BLOCKED")[1] < 1:
-            raise SmokeFailure("Case 8 real resolver did not grow GLOBAL_BLOCKED.block")
+        if source_counts(sources, "DOMAIN_DEVICE_WIDE_BLOCKED")[1] < 1:
+            raise SmokeFailure("Case 8 real resolver did not grow DOMAIN_DEVICE_WIDE_BLOCKED.block")
         log_pass("VNT-DOM-08", "true resolver DNS e2e is observable when netd hook is active")
 
     def run_case9_ruleids(self) -> None:

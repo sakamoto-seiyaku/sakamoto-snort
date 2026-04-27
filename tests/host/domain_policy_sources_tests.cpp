@@ -63,13 +63,13 @@ TEST(DomainPolicySourcesCountersTest, StartsZeroObserveReset) {
         EXPECT_EQ(snap.sources[idx].block, 0U);
     }
 
-    counters.observe(DomainPolicySource::GLOBAL_AUTHORIZED, false);
-    counters.observe(DomainPolicySource::GLOBAL_AUTHORIZED, false);
-    counters.observe(DomainPolicySource::GLOBAL_BLOCKED, true);
+    counters.observe(DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED, false);
+    counters.observe(DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED, false);
+    counters.observe(DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED, true);
 
     snap = counters.snapshot();
-    EXPECT_EQ(snap.sources[static_cast<size_t>(DomainPolicySource::GLOBAL_AUTHORIZED)].allow, 2U);
-    EXPECT_EQ(snap.sources[static_cast<size_t>(DomainPolicySource::GLOBAL_BLOCKED)].block, 1U);
+    EXPECT_EQ(snap.sources[static_cast<size_t>(DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED)].allow, 2U);
+    EXPECT_EQ(snap.sources[static_cast<size_t>(DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED)].block, 1U);
 
     counters.reset();
     snap = counters.snapshot();
@@ -144,7 +144,7 @@ TEST_F(DomainPolicySourcesAttributionTest, CustomBlackRuleMatches) {
     EXPECT_EQ(bcs.policySource, DomainPolicySource::CUSTOM_RULE_BLACK);
 }
 
-TEST_F(DomainPolicySourcesAttributionTest, GlobalAuthorizedMatches) {
+TEST_F(DomainPolicySourcesAttributionTest, DeviceWideAuthorizedMatches) {
     auto app = std::make_shared<App>(0, "root");
     const auto domain = domManager.make("example.com");
 
@@ -156,10 +156,10 @@ TEST_F(DomainPolicySourcesAttributionTest, GlobalAuthorizedMatches) {
     EXPECT_FALSE(bc.first);
     EXPECT_EQ(bc.first, bcs.blocked);
     EXPECT_EQ(bc.second, bcs.color);
-    EXPECT_EQ(bcs.policySource, DomainPolicySource::GLOBAL_AUTHORIZED);
+    EXPECT_EQ(bcs.policySource, DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED);
 }
 
-TEST_F(DomainPolicySourcesAttributionTest, GlobalBlockedMatches) {
+TEST_F(DomainPolicySourcesAttributionTest, DeviceWideBlockedMatches) {
     auto app = std::make_shared<App>(0, "root");
     const auto domain = domManager.make("example.com");
 
@@ -171,7 +171,7 @@ TEST_F(DomainPolicySourcesAttributionTest, GlobalBlockedMatches) {
     EXPECT_TRUE(bc.first);
     EXPECT_EQ(bc.first, bcs.blocked);
     EXPECT_EQ(bc.second, bcs.color);
-    EXPECT_EQ(bcs.policySource, DomainPolicySource::GLOBAL_BLOCKED);
+    EXPECT_EQ(bcs.policySource, DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED);
 }
 
 TEST_F(DomainPolicySourcesAttributionTest, UseCustomListOffCollapsesToMaskFallback) {
@@ -195,4 +195,3 @@ TEST_F(DomainPolicySourcesAttributionTest, UseCustomListOffCollapsesToMaskFallba
 }
 
 } // namespace
-

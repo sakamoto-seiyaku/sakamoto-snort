@@ -52,7 +52,7 @@
 全局（device-wide）名单/规则由 `DomainManager` 决定：  
 参考：`src/DomainManager.cpp#L74`（`authorized/blocked`）。
 
-> 术语：本文中的 “全局 / `GLOBAL_*`” 仅指 **域名策略（DomainPolicy）层** 的 device-wide 名单/规则；  
+> 术语：本文中的 “device-wide / `DOMAIN_DEVICE_WIDE_*`” 仅指 **域名策略（DomainPolicy）层** 的 device-wide 名单/规则（历史命名为 `GLOBAL_*`）；  
 > 它不覆盖 IPRULES、Packet `reasonId` 等其它维度。域名+IP 的统一命名与融合在后续阶段处理。
 
 ---
@@ -213,7 +213,7 @@ per-app：
 1. 构造命中 app 自定义白名单的 DNS 请求：`CUSTOM_WHITELIST.allow += 1`
 2. 构造命中 app 自定义黑名单：`CUSTOM_BLACKLIST.block += 1`
 3. 构造命中 app 自定义白规则/黑规则：对应 `CUSTOM_RULE_*` 增长
-4. 构造命中全局 authorized/blocked：对应 `GLOBAL_*` 增长
+4. 构造命中 device-wide authorized/blocked：对应 `DOMAIN_DEVICE_WIDE_*` 增长
 5. 关闭 `_useCustomList`：所有命中都落在 `MASK_FALLBACK`（allow 或 block）
 6. `BLOCK=0` 时 counters 不增长
 7. `tracked=0` 时 counters 仍正常增长

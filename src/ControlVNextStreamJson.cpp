@@ -104,8 +104,8 @@ namespace {
     case DomainPolicySource::CUSTOM_RULE_WHITE:
     case DomainPolicySource::CUSTOM_RULE_BLACK:
         return "APP";
-    case DomainPolicySource::GLOBAL_AUTHORIZED:
-    case DomainPolicySource::GLOBAL_BLOCKED:
+    case DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED:
+    case DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED:
         return "DEVICE_WIDE";
     case DomainPolicySource::MASK_FALLBACK:
         return "FALLBACK";
