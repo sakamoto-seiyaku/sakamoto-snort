@@ -15,6 +15,47 @@
 
 该问题会使 perf 对比/长时压测无法稳定完成，属于 **P0 级别的测试阻塞问题**（会把设备打重启）。
 
+## Update (2026-04-27): `ip -6 addr show` also triggers reboot
+
+在同一台 Pixel 6a（`bluejay`）上，另一个**独立**的触发路径是执行 `ip -6 addr show`。该命令会走到 `sock_ioctl`，并可直接触发 kernel panic（进程 `Comm: ip`）。
+
+这条命令曾经作为 `tests/device/ip/` Tier‑1 prereq 的“探针”，导致开启 IPv6 的 device profile 在进入用例前就可能把设备打重启。
+
+### Commands (before / after)
+
+Before（已确认可触发重启）：
+
+```bash
+export ADB="$HOME/.local/android/platform-tools/adb"
+export ADB_SERIAL=28201JEGR0XPAJ
+
+$ADB -s "$ADB_SERIAL" shell "su 0 sh -c 'ip -6 addr show'"
+```
+
+也可以用带 step marker 的 repro wrapper（会归档到 `tests/device/ip/records/`）：
+
+```bash
+export ADB="$HOME/.local/android/platform-tools/adb"
+export ADB_SERIAL=28201JEGR0XPAJ
+
+bash tests/device/ip/repro/run_ip_sock_ioctl_tier1_probe_host.sh
+```
+
+After（规避：不再执行该探针，直接跑 Tier‑1 用例）：
+
+```bash
+export ADB="$HOME/.local/android/platform-tools/adb"
+export ADB_SERIAL=28201JEGR0XPAJ
+
+bash tests/device/ip/run.sh --profile smoke  --skip-deploy --serial "$ADB_SERIAL"
+bash tests/device/ip/run.sh --profile matrix --skip-deploy --serial "$ADB_SERIAL"
+IPTEST_PERF_COMPARE=1 bash tests/device/ip/run.sh --profile perf --skip-deploy --serial "$ADB_SERIAL"
+```
+
+Evidence（本 repo 归档）：
+- `tests/device/ip/records/20260427T071418Z_28201JEGR0XPAJ_*`：panic（最后命令为 `ip -6 addr show`）
+- `tests/device/ip/records/20260427T071349Z_28201JEGR0XPAJ_*`：v4-only probe 正常完成
+
 ## Environment
 
 - Device: Pixel 6a (`bluejay`), rooted (Magisk)
