@@ -5,13 +5,18 @@
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
 #include <linux/netfilter.h>
+#include <netinet/icmp6.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
+#include <algorithm>
+#include <cstring>
 #include <thread>
 #include <vector>
 
 #include <CmdLine.hpp>
+#include <Ipv6L4Walker.hpp>
 #include <PacketListener.hpp>
 #include <ControlVNextStreamManager.hpp>
 #include <PerfMetrics.hpp>
@@ -226,10 +231,10 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     App::Uid uid = 0;
     uint32_t iface = 0;
     timespec timestamp = {0, 0};
-    uint32_t srcPort = 0;
-    uint32_t dstPort = 0;
+    L4ParseResult l4{};
     bool isFragment = false;
     Conntrack::PacketV4 ctPktV4{};
+    Conntrack::PacketV6 ctPktV6{};
 
     if (attr[NFQA_UID]) {
         uid = ntohl(mnl_attr_get_u32(attr[NFQA_UID]));
@@ -260,98 +265,150 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
         ctPktV4.proto = static_cast<std::uint8_t>(IP::payloadProto(ip));
         ctPktV4.isFragment = isFragment;
         ctPktV4.ipPayloadLen = ipPayloadLen;
+    } else {
+        ctPktV6.tsNs = static_cast<std::uint64_t>(timestamp.tv_sec) * 1000000000ULL +
+                       static_cast<std::uint64_t>(timestamp.tv_nsec);
+        ctPktV6.uid = uid;
+        std::memcpy(ctPktV6.srcIp.data(), &ip->saddr, 16);
+        std::memcpy(ctPktV6.dstIp.data(), &ip->daddr, 16);
     }
 
-    if (!isFragment) {
-        switch (IP::payloadProto(ip)) {
-        case IPPROTO_TCP:
-            if (len < sizeof(tcphdr)) {
-                // Not enough to contain TCP header; reject malformed L4 per original policy.
-                LOG(ERROR) << __FUNCTION__ << " - TCP header too short";
-                sendVerdict(packetId, NF_DROP);
-                if (measure) {
-                    perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
-                }
-                return MNL_CB_OK;
-            }
-            {
-                const auto tcp = reinterpret_cast<const tcphdr *>(payload + iphdrLen);
-                const uint32_t tcpHdrLen = static_cast<uint32_t>(tcp->doff) * 4;
-                if (tcp->doff < 5 || tcpHdrLen > len) {
-                    LOG(ERROR) << __FUNCTION__ << " - invalid TCP header length";
-                    sendVerdict(packetId, NF_DROP);
-                    if (measure) {
-                        perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
-                    }
-                    return MNL_CB_OK;
-                }
-                srcPort = ntohs(tcp->source);
-                dstPort = ntohs(tcp->dest);
-                len = len - tcpHdrLen;
+    const uint8_t declaredProto = static_cast<uint8_t>(IP::payloadProto(ip));
+    if constexpr (std::is_same_v<IP, IPv4>) {
+        l4.proto = declaredProto;
+        if (isFragment) {
+            l4.l4Status = L4Status::FRAGMENT;
+        } else {
+            const uint8_t *l4p = payload + iphdrLen;
+            const size_t l4len = payloadLen - iphdrLen;
 
-                if constexpr (std::is_same_v<IP, IPv4>) {
-                    ctPktV4.srcPort = static_cast<std::uint16_t>(srcPort);
-                    ctPktV4.dstPort = static_cast<std::uint16_t>(dstPort);
-                    ctPktV4.hasTcp = true;
-                    ctPktV4.tcp.dataOffsetWords = static_cast<std::uint8_t>(tcp->doff);
-                    ctPktV4.tcp.window = ntohs(tcp->window);
-                    ctPktV4.tcp.seq = ntohl(tcp->seq);
-                    ctPktV4.tcp.ack = ntohl(tcp->ack_seq);
-                    std::uint8_t flags = 0;
-                    if (tcp->fin) flags |= TH_FIN;
-                    if (tcp->syn) flags |= TH_SYN;
-                    if (tcp->rst) flags |= TH_RST;
-                    if (tcp->psh) flags |= TH_PUSH;
-                    if (tcp->ack) flags |= TH_ACK;
-                    if (tcp->urg) flags |= TH_URG;
+            switch (declaredProto) {
+            case IPPROTO_TCP: {
+                if (l4len < sizeof(tcphdr)) {
+                    LOG(ERROR) << __FUNCTION__ << " - TCP header too short";
+                    l4.l4Status = L4Status::INVALID_OR_UNAVAILABLE_L4;
+                    break;
+                }
+                const auto tcp = reinterpret_cast<const tcphdr *>(l4p);
+                const uint32_t tcpHdrLen = static_cast<uint32_t>(tcp->doff) * 4u;
+                if (tcp->doff < 5 || tcpHdrLen > l4len) {
+                    LOG(ERROR) << __FUNCTION__ << " - invalid TCP header length";
+                    l4.l4Status = L4Status::INVALID_OR_UNAVAILABLE_L4;
+                    break;
+                }
+                l4.l4Status = L4Status::KNOWN_L4;
+                l4.srcPort = ntohs(tcp->source);
+                l4.dstPort = ntohs(tcp->dest);
+                l4.portsAvailable = 1;
+
+                ctPktV4.srcPort = l4.srcPort;
+                ctPktV4.dstPort = l4.dstPort;
+                ctPktV4.hasTcp = true;
+                ctPktV4.tcp.dataOffsetWords = static_cast<std::uint8_t>(tcp->doff);
+                ctPktV4.tcp.window = ntohs(tcp->window);
+                ctPktV4.tcp.seq = ntohl(tcp->seq);
+                ctPktV4.tcp.ack = ntohl(tcp->ack_seq);
+                std::uint8_t flags = 0;
+                if (tcp->fin) flags |= TH_FIN;
+                if (tcp->syn) flags |= TH_SYN;
+                if (tcp->rst) flags |= TH_RST;
+                if (tcp->psh) flags |= TH_PUSH;
+                if (tcp->ack) flags |= TH_ACK;
+                if (tcp->urg) flags |= TH_URG;
 #ifdef TH_ECE
-                    if (tcp->ece) flags |= TH_ECE;
+                if (tcp->ece) flags |= TH_ECE;
 #endif
 #ifdef TH_CWR
-                    if (tcp->cwr) flags |= TH_CWR;
+                if (tcp->cwr) flags |= TH_CWR;
 #endif
-                    ctPktV4.tcp.flags = flags;
+                ctPktV4.tcp.flags = flags;
+            } break;
+
+            case IPPROTO_UDP: {
+                if (l4len < sizeof(udphdr)) {
+                    LOG(ERROR) << __FUNCTION__ << " - UDP header too short";
+                    l4.l4Status = L4Status::INVALID_OR_UNAVAILABLE_L4;
+                    break;
                 }
+                const auto udp = reinterpret_cast<const udphdr *>(l4p);
+                l4.l4Status = L4Status::KNOWN_L4;
+                l4.srcPort = ntohs(udp->source);
+                l4.dstPort = ntohs(udp->dest);
+                l4.portsAvailable = 1;
+
+                ctPktV4.srcPort = l4.srcPort;
+                ctPktV4.dstPort = l4.dstPort;
+            } break;
+
+            case IPPROTO_ICMP: {
+                l4.proto = IPPROTO_ICMP;
+                if (l4len < sizeof(icmphdr)) {
+                    l4.l4Status = L4Status::INVALID_OR_UNAVAILABLE_L4;
+                    break;
+                }
+                l4.l4Status = L4Status::KNOWN_L4;
+                const auto icmp = reinterpret_cast<const icmphdr *>(l4p);
+                ctPktV4.hasIcmp = true;
+                ctPktV4.icmp.type = icmp->type;
+                ctPktV4.icmp.code = icmp->code;
+                ctPktV4.icmp.id = ntohs(icmp->un.echo.id);
+            } break;
+
+            default:
+                l4.l4Status = L4Status::OTHER_TERMINAL;
+                break;
             }
-            break;
-        case IPPROTO_UDP:
-            if (len >= sizeof(udphdr)) {
-                const auto udp = reinterpret_cast<const udphdr *>(payload + iphdrLen);
-                srcPort = ntohs(udp->source);
-                dstPort = ntohs(udp->dest);
-                len -= sizeof(udphdr);
-                if constexpr (std::is_same_v<IP, IPv4>) {
-                    ctPktV4.srcPort = static_cast<std::uint16_t>(srcPort);
-                    ctPktV4.dstPort = static_cast<std::uint16_t>(dstPort);
-                }
-            } else {
-                LOG(ERROR) << __FUNCTION__ << " - UDP header too short";
-                sendVerdict(packetId, NF_DROP);
-                if (measure) {
-                    perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
-                }
-                return MNL_CB_OK;
+        }
+    } else {
+        const uint8_t *l4p = nullptr;
+        std::uint16_t l4PayloadLenV6 = 0;
+        l4 = parseIpv6L4(declaredProto, payload + iphdrLen,
+                         static_cast<size_t>(payloadLen - iphdrLen), &l4p, &l4PayloadLenV6);
+
+        ctPktV6.proto = static_cast<std::uint8_t>(l4.proto);
+        ctPktV6.isFragment = l4.l4Status == L4Status::FRAGMENT;
+        ctPktV6.ipPayloadLen = l4PayloadLenV6;
+        ctPktV6.srcPort = l4.srcPort;
+        ctPktV6.dstPort = l4.dstPort;
+
+        if (l4.l4Status == L4Status::KNOWN_L4 && l4p != nullptr) {
+            if (l4.proto == IPPROTO_TCP) {
+                const auto tcp = reinterpret_cast<const tcphdr *>(l4p);
+                ctPktV6.hasTcp = true;
+                ctPktV6.tcp.dataOffsetWords = static_cast<std::uint8_t>(tcp->doff);
+                ctPktV6.tcp.window = ntohs(tcp->window);
+                ctPktV6.tcp.seq = ntohl(tcp->seq);
+                ctPktV6.tcp.ack = ntohl(tcp->ack_seq);
+                std::uint8_t flags = 0;
+                if (tcp->fin) flags |= TH_FIN;
+                if (tcp->syn) flags |= TH_SYN;
+                if (tcp->rst) flags |= TH_RST;
+                if (tcp->psh) flags |= TH_PUSH;
+                if (tcp->ack) flags |= TH_ACK;
+                if (tcp->urg) flags |= TH_URG;
+#ifdef TH_ECE
+                if (tcp->ece) flags |= TH_ECE;
+#endif
+#ifdef TH_CWR
+                if (tcp->cwr) flags |= TH_CWR;
+#endif
+                ctPktV6.tcp.flags = flags;
+            } else if (l4.proto == IPPROTO_ICMPV6) {
+                ctPktV6.hasIcmp = true;
+                ctPktV6.icmp.type = l4p[0];
+                ctPktV6.icmp.code = l4p[1];
+                std::uint16_t id = 0;
+                std::memcpy(&id, l4p + 4, sizeof(id));
+                ctPktV6.icmp.id = ntohs(id);
             }
-            break;
-        case IPPROTO_ICMP:
-            if constexpr (std::is_same_v<IP, IPv4>) {
-                if (len >= sizeof(icmphdr)) {
-                    const auto icmp = reinterpret_cast<const icmphdr *>(payload + iphdrLen);
-                    ctPktV4.hasIcmp = true;
-                    ctPktV4.icmp.type = icmp->type;
-                    ctPktV4.icmp.code = icmp->code;
-                    ctPktV4.icmp.id = ntohs(icmp->un.echo.id);
-                }
-            }
-            break;
         }
     }
 
     bool verdict = true;
 
     const bool isControlTraffic =
-        srcPort == settings.controlPort || dstPort == settings.controlPort ||
-        srcPort == settings.controlVNextPort || dstPort == settings.controlVNextPort;
+        l4.srcPort == settings.controlPort || l4.dstPort == settings.controlPort ||
+        l4.srcPort == settings.controlVNextPort || l4.dstPort == settings.controlVNextPort;
 
     if (settings.blockEnabled() && (!settings.inetControl() || !isControlTraffic)) {
         Address<IP> srcIp(reinterpret_cast<const uint8_t *>(&ip->saddr));
@@ -406,14 +463,16 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
                     continue;
                 }
 
-                const Conntrack::PacketV4 *ctPtr = nullptr;
+                const Conntrack::PacketV4 *ctPtrV4 = nullptr;
+                const Conntrack::PacketV6 *ctPtrV6 = nullptr;
                 if constexpr (std::is_same_v<IP, IPv4>) {
-                    ctPtr = &ctPktV4;
+                    ctPtrV4 = &ctPktV4;
+                } else {
+                    ctPtrV6 = &ctPktV6;
                 }
                 verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface,
-                                                       timestamp, IP::payloadProto(ip), srcPort,
-                                                       dstPort, payloadLen, ifaceKindBit, ifaceBlocked,
-                                                       ctPtr, &streamEvent, &trackedSnapshot);
+                                                       timestamp, l4, payloadLen, ifaceKindBit, ifaceBlocked,
+                                                       ctPtrV4, ctPtrV6, &streamEvent, &trackedSnapshot);
                 if (trackedSnapshot) {
                     controlVNextStream.observePktTracked(std::move(streamEvent));
                 } else {

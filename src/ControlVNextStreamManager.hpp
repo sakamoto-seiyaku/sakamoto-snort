@@ -6,6 +6,7 @@
 #pragma once
 
 #include <DomainPolicySources.hpp>
+#include <L4ParseResult.hpp>
 #include <PacketReasons.hpp>
 #include <TrafficCounters.hpp>
 
@@ -73,6 +74,7 @@ public:
         std::array<std::uint8_t, 16> dstIp{};
         std::uint32_t ifindex = 0;
         std::uint16_t proto = 0;
+        L4Status l4Status = L4Status::KNOWN_L4;
         std::uint16_t srcPort = 0;
         std::uint16_t dstPort = 0;
         std::uint16_t length = 0;

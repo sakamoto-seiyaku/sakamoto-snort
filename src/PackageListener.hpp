@@ -31,6 +31,13 @@ private:
     void listen();
 
     void updatePackages();
+
+    // Variant used during init and RESETALL when `mutexListeners` is held exclusively by the
+    // orchestrating thread. The regular update path takes a shared lock on `mutexListeners`
+    // to avoid racing with RESETALL, but doing so while an exclusive lock is held would deadlock.
+    void updatePackagesNoListenersLock();
+
+    void updatePackagesImpl(bool takeListenersLock);
 };
 
 extern PackageListener pkgListener;

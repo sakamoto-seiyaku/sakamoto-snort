@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 
@@ -66,6 +67,28 @@ public:
         IcmpMeta icmp{};
     };
 
+    struct PacketV6 {
+        std::uint64_t tsNs = 0;
+        std::uint32_t uid = 0;
+        std::array<std::uint8_t, 16> srcIp{}; // network-byte-order
+        std::array<std::uint8_t, 16> dstIp{}; // network-byte-order
+        std::uint8_t proto = 0;               // IPPROTO_* (terminal/declared after ext-header walking)
+        bool isFragment = false;
+
+        // Bytes available starting at the L4 header (i.e. IPv6 payload length after ext headers).
+        std::uint16_t ipPayloadLen = 0;
+
+        // L4 identifiers. For TCP/UDP: ports. For ICMPv6: id is provided in icmp meta, ports are 0.
+        std::uint16_t srcPort = 0;
+        std::uint16_t dstPort = 0;
+
+        bool hasTcp = false;
+        TcpMeta tcp{};
+
+        bool hasIcmp = false;
+        IcmpMeta icmp{};
+    };
+
     struct Result {
         CtState state = CtState::ANY;
         CtDirection direction = CtDirection::ANY;
@@ -98,22 +121,38 @@ public:
     Conntrack &operator=(const Conntrack &) = delete;
 
     static bool computeTcpPayloadLen(const PacketV4 &pkt, std::uint16_t &outPayloadLen) noexcept;
+    static bool computeTcpPayloadLen(const PacketV6 &pkt, std::uint16_t &outPayloadLen) noexcept;
 
     // Pre-verdict conntrack view for policy matching:
     // - existing entries may still be advanced in-place
     // - misses never create an entry until commitAccepted() is called
     PolicyView inspectForPolicy(const PacketV4 &pkt) noexcept;
+    PolicyView inspectForPolicy(const PacketV6 &pkt) noexcept;
 
     // Commits a previously previewed miss once the packet is accepted.
     void commitAccepted(const PacketV4 &pkt, const PolicyView &view) noexcept;
+    void commitAccepted(const PacketV6 &pkt, const PolicyView &view) noexcept;
 
     Result update(const PacketV4 &pkt) noexcept;
+    Result update(const PacketV6 &pkt) noexcept;
 
     struct MetricsSnapshot {
+        struct Family {
+            std::uint64_t totalEntries = 0;
+            std::uint64_t creates = 0;
+            std::uint64_t expiredRetires = 0;
+            std::uint64_t overflowDrops = 0;
+        };
+
         std::uint64_t totalEntries = 0;
         std::uint64_t creates = 0;
         std::uint64_t expiredRetires = 0;
         std::uint64_t overflowDrops = 0;
+
+        struct {
+            Family ipv4;
+            Family ipv6;
+        } byFamily;
     };
 
     MetricsSnapshot metricsSnapshot() const noexcept;
@@ -127,6 +166,10 @@ public:
 #endif
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> _impl;
+    struct Shared;
+    struct ImplV4;
+    struct ImplV6;
+    std::unique_ptr<Shared> _shared;
+    std::unique_ptr<ImplV4> _impl4;
+    std::unique_ptr<ImplV6> _impl6;
 };

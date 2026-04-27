@@ -24,6 +24,12 @@ IPTEST_PEER_IP="${IPTEST_PEER_IP:-10.200.1.2}"
 IPTEST_HOST_IP_POOL="${IPTEST_HOST_IP_POOL:-}" # optional CSV of extra host-side IPs
 IPTEST_PEER_IP_POOL="${IPTEST_PEER_IP_POOL:-}" # optional CSV of extra peer-side IPs
 
+IPTEST_NET6_CIDR="${IPTEST_NET6_CIDR:-fd00:200:1::/64}"
+IPTEST_HOST_IP6="${IPTEST_HOST_IP6:-fd00:200:1::1}"
+IPTEST_PEER_IP6="${IPTEST_PEER_IP6:-fd00:200:1::2}"
+IPTEST_HOST_IP6_POOL="${IPTEST_HOST_IP6_POOL:-}" # optional CSV of extra host-side IPv6 IPs
+IPTEST_PEER_IP6_POOL="${IPTEST_PEER_IP6_POOL:-}" # optional CSV of extra peer-side IPv6 IPs
+
 IPTEST_UID="${IPTEST_UID:-2000}" # default: shell (stable)
 IPTEST_APP_UID="${IPTEST_APP_UID:-$IPTEST_UID}"
 IPTEST_REPLAY_HOST_BIN="${IPTEST_REPLAY_HOST_BIN:-$SNORT_ROOT/build-output/iptest-replay}"
@@ -75,6 +81,39 @@ iptest_stage_neper_binaries() {
   adb_push_file "$IPTEST_NEPER_TCP_CRR_HOST_BIN" "$IPTEST_NEPER_TCP_CRR_DEVICE_BIN" >/dev/null
   adb_push_file "$IPTEST_NEPER_UDP_STREAM_HOST_BIN" "$IPTEST_NEPER_UDP_STREAM_DEVICE_BIN" >/dev/null
   adb_su "chmod 755 \"$IPTEST_NEPER_TCP_CRR_DEVICE_BIN\" \"$IPTEST_NEPER_UDP_STREAM_DEVICE_BIN\""
+}
+
+IPTEST_PING6_CMD="${IPTEST_PING6_CMD:-}"
+IPTEST_NC6_FLAG="${IPTEST_NC6_FLAG:-}"
+
+iptest_detect_ping6_cmd() {
+  if [[ -n "${IPTEST_PING6_CMD:-}" ]]; then
+    return 0
+  fi
+
+  if adb_cmd shell "ping -6 -c 1 -W 1 ::1 >/dev/null 2>&1"; then
+    IPTEST_PING6_CMD="ping -6"
+    return 0
+  fi
+  if adb_cmd shell "ping6 -c 1 -W 1 ::1 >/dev/null 2>&1"; then
+    IPTEST_PING6_CMD="ping6"
+    return 0
+  fi
+  return 1
+}
+
+iptest_detect_nc6_flag() {
+  if [[ -n "${IPTEST_NC6_FLAG:-}" ]]; then
+    return 0
+  fi
+  local help
+  help="$(adb_cmd shell "nc --help 2>&1 || nc -h 2>&1 || true" | tr -d '\r')"
+  if echo "$help" | grep -qE '(^|[[:space:]])-6($|[[:space:],])'; then
+    IPTEST_NC6_FLAG="-6"
+  else
+    IPTEST_NC6_FLAG=""
+  fi
+  return 0
 }
 
 iptest_snort_pid() {
@@ -251,6 +290,8 @@ iptest_require_tier1_prereqs() {
     return 1
   adb_cmd shell "command -v nc >/dev/null 2>&1 || command -v netcat >/dev/null 2>&1" >/dev/null 2>&1 || return 1
   adb_cmd shell "command -v ping >/dev/null 2>&1" >/dev/null 2>&1 || return 1
+  iptest_detect_ping6_cmd >/dev/null 2>&1 || return 1
+  iptest_detect_nc6_flag >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -276,6 +317,7 @@ iptest_tier1_teardown() {
   # Kill any processes still living in the namespace (best-effort).
   adb_su "pids=\"\$(ip netns pids \"$IPTEST_NS\" 2>/dev/null || true)\"; if [ -n \"\$pids\" ]; then kill -9 \$pids 2>/dev/null || true; fi"
   adb_su "ip route del \"$IPTEST_NET_CIDR\" dev \"$IPTEST_VETH0\" table \"$table\" >/dev/null 2>&1 || true"
+  adb_su "ip -6 route del \"$IPTEST_NET6_CIDR\" dev \"$IPTEST_VETH0\" table \"$table\" >/dev/null 2>&1 || true"
   adb_su "ip link del \"$IPTEST_VETH0\" >/dev/null 2>&1 || true"
   adb_su "ip netns del \"$IPTEST_NS\" >/dev/null 2>&1 || true"
 }
@@ -332,12 +374,64 @@ ip route add \"$IPTEST_NET_CIDR\" dev \"$IPTEST_VETH0\" table \"$table\" 2>/dev/
     return 10
   }
 
+  # IPv6: assign addresses/routes alongside IPv4; skip the whole tier1 setup if unavailable.
+  local host6_extra_cmd=""
+  local peer6_extra_cmd=""
+  if [[ -n "${IPTEST_HOST_IP6_POOL:-}" ]]; then
+    IFS=',' read -r -a _host6_pool <<< "$IPTEST_HOST_IP6_POOL"
+    for ip in "${_host6_pool[@]}"; do
+      [[ -n "$ip" ]] || continue
+      host6_extra_cmd="${host6_extra_cmd}
+ip addr add \"${ip}\"/64 dev \"$IPTEST_VETH0\""
+    done
+  fi
+  if [[ -n "${IPTEST_PEER_IP6_POOL:-}" ]]; then
+    IFS=',' read -r -a _peer6_pool <<< "$IPTEST_PEER_IP6_POOL"
+    for ip in "${_peer6_pool[@]}"; do
+      [[ -n "$ip" ]] || continue
+      peer6_extra_cmd="${peer6_extra_cmd}
+ip -n \"$IPTEST_NS\" addr add \"${ip}\"/64 dev \"$IPTEST_VETH1\""
+    done
+  fi
+
+  set +e
+  adb_su "set -e
+ip addr add \"$IPTEST_HOST_IP6\"/64 dev \"$IPTEST_VETH0\"
+${host6_extra_cmd}
+ip -n \"$IPTEST_NS\" addr add \"$IPTEST_PEER_IP6\"/64 dev \"$IPTEST_VETH1\"
+${peer6_extra_cmd}
+ip -6 route add \"$IPTEST_NET6_CIDR\" dev \"$IPTEST_VETH0\" table \"$table\" 2>/dev/null || true
+" >/dev/null 2>&1
+  local st=$?
+  set -e
+  if [[ $st -ne 0 ]]; then
+    echo "SKIP: tier1 ipv6 address/route setup failed (need ip -6 + netns ipv6 support)" >&2
+    iptest_tier1_teardown "$table"
+    return 10
+  fi
+
+  set +e
+  local verify6
+  verify6="$(adb_cmd shell "ip -6 route get \"$IPTEST_PEER_IP6\" uid \"$IPTEST_UID\" 2>/dev/null" | tr -d '\r')"
+  st=$?
+  set -e
+  if [[ $st -ne 0 || -z "$verify6" || "$verify6" != *"dev $IPTEST_VETH0"* ]]; then
+    echo "SKIP: tier1 ipv6 route injection not effective for uid=$IPTEST_UID (need dev=$IPTEST_VETH0): $verify6" >&2
+    iptest_tier1_teardown "$table"
+    return 10
+  fi
+
   printf '%s\n' "$table"
   return 0
 }
 
 iptest_tier1_ping_once() {
   iptest_adb_shell "ping -c 1 -W 1 \"$IPTEST_PEER_IP\" >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
+iptest_tier1_ping6_once() {
+  iptest_detect_ping6_cmd >/dev/null 2>&1 || return 1
+  iptest_adb_shell "$IPTEST_PING6_CMD -c 1 -W 1 \"$IPTEST_PEER_IP6\" >/dev/null 2>&1 || true" >/dev/null 2>&1
 }
 
 iptest_iface_ifindex() {

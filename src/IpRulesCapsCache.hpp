@@ -17,20 +17,19 @@ struct IpRulesCapsCache {
     std::atomic<std::uint64_t> packed{0};
 
     // Returns std::nullopt if cache is stale for the provided rulesEpoch.
-    std::optional<bool> usesCtIfFresh(const std::uint64_t rulesEpoch) const noexcept {
-        static constexpr std::uint64_t kUsesCt = 1u;
+    // Low 8 bits are a family-discriminated mask:
+    // - bit0: ipv4 uses ct
+    // - bit1: ipv6 uses ct
+    std::optional<std::uint8_t> usesCtMaskIfFresh(const std::uint64_t rulesEpoch) const noexcept {
         const std::uint64_t v = packed.load(std::memory_order_relaxed);
         const std::uint64_t cachedEpoch = v >> 8;
         if (cachedEpoch != rulesEpoch) {
             return std::nullopt;
         }
-        return (v & kUsesCt) != 0;
+        return static_cast<std::uint8_t>(v & 0xFFu);
     }
 
-    void setUsesCt(const std::uint64_t rulesEpoch, const bool usesCt) noexcept {
-        static constexpr std::uint64_t kUsesCt = 1u;
-        const std::uint64_t caps = usesCt ? kUsesCt : 0u;
-        packed.store((rulesEpoch << 8) | caps, std::memory_order_relaxed);
+    void setUsesCtMask(const std::uint64_t rulesEpoch, const std::uint8_t mask) noexcept {
+        packed.store((rulesEpoch << 8) | static_cast<std::uint64_t>(mask), std::memory_order_relaxed);
     }
 };
-

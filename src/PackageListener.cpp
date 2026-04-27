@@ -14,6 +14,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -99,7 +100,7 @@ bool enumerateUserIds(std::vector<uint32_t> &outUserIds, std::string &error) {
 } // namespace
 
 void PackageListener::start() {
-    updatePackages();
+    updatePackagesNoListenersLock();
     std::thread([=, this] { listen(); }).detach();
 }
 
@@ -108,7 +109,7 @@ void PackageListener::reset() {
         const std::lock_guard lock(_mutexNames);
         _names.clear();
     }
-    updatePackages();
+    updatePackagesNoListenersLock();
 }
 
 void PackageListener::listen() {
@@ -309,7 +310,13 @@ void PackageListener::listen() {
     }
 }
 
-void PackageListener::updatePackages() {
+void PackageListener::updatePackages() { updatePackagesImpl(/*takeListenersLock=*/true); }
+
+void PackageListener::updatePackagesNoListenersLock() {
+    updatePackagesImpl(/*takeListenersLock=*/false);
+}
+
+void PackageListener::updatePackagesImpl(const bool takeListenersLock) {
     const auto start = std::chrono::steady_clock::now();
     const auto maxWait = std::chrono::seconds(5);
     auto nextLog = start;
@@ -387,7 +394,10 @@ void PackageListener::updatePackages() {
                     }
 
                     {
-                        const std::shared_lock<std::shared_mutex> lock(mutexListeners);
+                        std::optional<std::shared_lock<std::shared_mutex>> lock = std::nullopt;
+                        if (takeListenersLock) {
+                            lock.emplace(mutexListeners);
+                        }
                         for (const auto &[uid, names] : installs) {
                             appManager.install(uid, names);
                         }

@@ -89,8 +89,8 @@ main() {
   log_info "tier1 tcp servers ports=$ports_csv pids=$(printf '%s' "$server_pids" | tr '\n' ',')"
 
   # Baseline rule: allow one port (re-apply will be used for churn).
-  rule_allow_on="{\"clientRuleId\":\"stress:r1\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${ports[0]}\"}"
-  rule_allow_off="{\"clientRuleId\":\"stress:r1\",\"action\":\"allow\",\"priority\":10,\"enabled\":0,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${ports[0]}\"}"
+  rule_allow_on="{\"clientRuleId\":\"stress:r1\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${ports[0]}\"}"
+  rule_allow_off="{\"clientRuleId\":\"stress:r1\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":0,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${ports[0]}\"}"
 
   apply_json="$(vnext_ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${IPTEST_UID}},\"rules\":[${rule_allow_on}]}" 2>/dev/null)" || {
     echo "BLOCKED: IPRULES.APPLY failed" >&2

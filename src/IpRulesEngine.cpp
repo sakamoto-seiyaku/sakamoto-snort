@@ -7,6 +7,8 @@
 
 #include <IpRulesContract.hpp>
 
+#include <android-base/logging.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -90,6 +92,31 @@ bool IpRulesEngine::CidrV4::matches(const std::uint32_t ipHost) const {
     }
     const uint32_t m = mask();
     return (ipHost & m) == (addr & m);
+}
+
+bool IpRulesEngine::CidrV6::matches(const std::array<std::uint8_t, 16> &ipNet) const noexcept {
+    if (any) {
+        return true;
+    }
+    if (prefix == 0) {
+        return true;
+    }
+    const std::uint8_t fullBytes = static_cast<std::uint8_t>(prefix / 8u);
+    const std::uint8_t remBits = static_cast<std::uint8_t>(prefix % 8u);
+
+    for (std::uint8_t i = 0; i < fullBytes; ++i) {
+        if (addr[i] != ipNet[i]) {
+            return false;
+        }
+    }
+    if (remBits == 0) {
+        return true;
+    }
+    if (fullBytes >= addr.size()) {
+        return true;
+    }
+    const std::uint8_t mask = static_cast<std::uint8_t>(0xFFu << (8u - remBits));
+    return (addr[fullBytes] & mask) == (ipNet[fullBytes] & mask);
 }
 
 IpRulesEngine::RuleStatsSnapshot IpRulesEngine::RuleStats::snapshot() const {
@@ -192,6 +219,10 @@ bool IpRulesEngine::parseProto(const std::string_view v, Proto &out) {
     }
     if (v == "icmp") {
         out = Proto::ICMP;
+        return true;
+    }
+    if (v == "other") {
+        out = Proto::OTHER;
         return true;
     }
     return false;
@@ -357,6 +388,10 @@ std::string IpRulesEngine::normalizeProto(const Proto p) {
         return "udp";
     case Proto::ICMP:
         return "icmp";
+    case Proto::OTHER:
+        return "other";
+    case Proto::UNKNOWN:
+        break;
     }
     return "any";
 }
@@ -414,6 +449,10 @@ std::string IpRulesEngine::normalizePortPredicate(const PortPredicate &p) {
 }
 
 bool IpRulesEngine::validateRuleDef(const RuleDef &def, std::string &error) {
+    if (def.family != Family::IPV4 && def.family != Family::IPV6) {
+        error = "invalid family";
+        return false;
+    }
     if (static_cast<std::uint8_t>(def.ctState) > static_cast<std::uint8_t>(CtState::INVALID)) {
         error = "invalid ct.state";
         return false;
@@ -422,15 +461,43 @@ bool IpRulesEngine::validateRuleDef(const RuleDef &def, std::string &error) {
         error = "invalid ct.direction";
         return false;
     }
+    if (def.ctState == CtState::INVALID && def.ctDir != CtDirection::ANY) {
+        error = "ct.state=invalid requires ct.direction=any";
+        return false;
+    }
+    if (def.proto == Proto::UNKNOWN) {
+        error = "invalid proto";
+        return false;
+    }
     if (!def.enforce) {
         if (!(def.action == Action::BLOCK && def.log)) {
             error = "enforce=0 is only supported for action=block,log=1";
             return false;
         }
     }
-    if (def.proto == Proto::ICMP) {
+    if (def.proto == Proto::ICMP || def.proto == Proto::OTHER) {
         if (!def.sport.isAny() || !def.dport.isAny()) {
-            error = "proto=icmp requires sport=any and dport=any";
+            error = (def.proto == Proto::ICMP) ? "proto=icmp requires sport=any and dport=any"
+                                               : "proto=other requires sport=any and dport=any";
+            return false;
+        }
+    }
+    if (def.family == Family::IPV4) {
+        if (!def.src6.any || !def.dst6.any) {
+            error = "family=ipv4 requires IPv6 CIDR fields to be any";
+            return false;
+        }
+    } else {
+        if (!def.src.any || !def.dst.any) {
+            error = "family=ipv6 requires IPv4 CIDR fields to be any";
+            return false;
+        }
+        if (!def.src6.any && def.src6.prefix > 128) {
+            error = "invalid ipv6 src prefix";
+            return false;
+        }
+        if (!def.dst6.any && def.dst6.prefix > 128) {
+            error = "invalid ipv6 dst prefix";
             return false;
         }
     }
@@ -525,10 +592,9 @@ struct IpRulesEngine::Snapshot {
 
         bool matches(const PacketKeyV4 &k) const {
             if (uid != k.uid) return false;
-            const bool packetTcpUdp = (k.proto == static_cast<uint8_t>(Proto::TCP) ||
-                                       k.proto == static_cast<uint8_t>(Proto::UDP));
-            if (!packetTcpUdp) {
-                // Port predicates apply to TCP/UDP only.
+            if (k.portsAvailable == 0) {
+                // Port predicates only apply when ports are safely available (known-l4 TCP/UDP).
+                // When ports are unavailable, any non-any predicate MUST NOT match.
                 if (!sport.isAny() || !dport.isAny()) return false;
             }
             if (dir == Direction::IN && k.dir != 0) return false;
@@ -635,6 +701,208 @@ struct IpRulesEngine::Snapshot {
 
     std::uint64_t rulesEpoch = 0;
     std::unordered_map<std::uint32_t, UidView> byUid;
+    // IPv6 compiled views (separate layout to preserve IPv4 hot path).
+    struct MaskSigV6 {
+        bool dir = false;
+        bool iface = false;
+        bool ifindex = false;
+        bool proto = false;
+        bool ctState = false;
+        bool ctDir = false;
+        uint8_t srcPrefix = 255; // 255 == any, otherwise 0..128
+        uint8_t dstPrefix = 255;
+        bool sportExact = false;
+        bool dportExact = false;
+
+        bool operator==(const MaskSigV6 &) const = default;
+    };
+
+    struct MaskSigV6Less {
+        bool operator()(const MaskSigV6 &a, const MaskSigV6 &b) const {
+            if (a.dir != b.dir) return a.dir < b.dir;
+            if (a.iface != b.iface) return a.iface < b.iface;
+            if (a.ifindex != b.ifindex) return a.ifindex < b.ifindex;
+            if (a.proto != b.proto) return a.proto < b.proto;
+            if (a.ctState != b.ctState) return a.ctState < b.ctState;
+            if (a.ctDir != b.ctDir) return a.ctDir < b.ctDir;
+            if (a.srcPrefix != b.srcPrefix) return a.srcPrefix < b.srcPrefix;
+            if (a.dstPrefix != b.dstPrefix) return a.dstPrefix < b.dstPrefix;
+            if (a.sportExact != b.sportExact) return a.sportExact < b.sportExact;
+            if (a.dportExact != b.dportExact) return a.dportExact < b.dportExact;
+            return false;
+        }
+    };
+
+    struct MaskedKeyV6 {
+        uint8_t dir = 0;
+        uint8_t ifaceKind = 0;
+        uint8_t proto = 0;
+        uint8_t ctState = 0;
+        uint8_t ctDir = 0;
+        uint32_t ifindex = 0;
+        std::array<std::uint8_t, 16> srcIpMasked{};
+        std::array<std::uint8_t, 16> dstIpMasked{};
+        uint16_t srcPort = 0;
+        uint16_t dstPort = 0;
+
+        bool operator==(const MaskedKeyV6 &o) const = default;
+    };
+
+    struct MaskedKeyV6Hash {
+        size_t operator()(const MaskedKeyV6 &k) const noexcept {
+            size_t h = 0;
+            h = mixHash(h, k.dir);
+            h = mixHash(h, k.ifaceKind);
+            h = mixHash(h, k.proto);
+            h = mixHash(h, k.ctState);
+            h = mixHash(h, k.ctDir);
+            h = mixHash(h, k.ifindex);
+
+            std::uint64_t a0 = 0, a1 = 0, b0 = 0, b1 = 0;
+            std::memcpy(&a0, k.srcIpMasked.data(), 8);
+            std::memcpy(&a1, k.srcIpMasked.data() + 8, 8);
+            std::memcpy(&b0, k.dstIpMasked.data(), 8);
+            std::memcpy(&b1, k.dstIpMasked.data() + 8, 8);
+            h = mixHash(h, static_cast<size_t>(a0));
+            h = mixHash(h, static_cast<size_t>(a1));
+            h = mixHash(h, static_cast<size_t>(b0));
+            h = mixHash(h, static_cast<size_t>(b1));
+            h = mixHash(h, k.srcPort);
+            h = mixHash(h, k.dstPort);
+            return h;
+        }
+    };
+
+    struct RuleRefV6 {
+        RuleId ruleId = 0;
+        uint32_t uid = 0;
+        Action action = Action::ALLOW;
+        std::int32_t priority = 0;
+        bool enforce = true;
+
+        Direction dir = Direction::ANY;
+        IfaceKind iface = IfaceKind::ANY;
+        std::uint32_t ifindex = 0;
+        Proto proto = Proto::ANY;
+        CtState ctState = CtState::ANY;
+        CtDirection ctDir = CtDirection::ANY;
+
+        CidrV6 src = CidrV6::anyCidr();
+        CidrV6 dst = CidrV6::anyCidr();
+        PortPredicate sport = PortPredicate::any();
+        PortPredicate dport = PortPredicate::any();
+
+        RuleStats *stats = nullptr;
+        std::shared_ptr<RuleStats> statsStrong;
+
+        bool matches(const PacketKeyV6 &k) const {
+            if (uid != k.uid) return false;
+            if (k.portsAvailable == 0) {
+                if (!sport.isAny() || !dport.isAny()) return false;
+            }
+            if (dir == Direction::IN && k.dir != 0) return false;
+            if (dir == Direction::OUT && k.dir != 1) return false;
+            if (iface != IfaceKind::ANY && k.ifaceKind != static_cast<uint8_t>(iface)) return false;
+            if (ifindex != 0 && k.ifindex != ifindex) return false;
+            if (proto != Proto::ANY && k.proto != static_cast<uint8_t>(proto)) return false;
+            if (ctState != CtState::ANY && k.ctState != static_cast<uint8_t>(ctState)) return false;
+            if (ctDir != CtDirection::ANY && k.ctDir != static_cast<uint8_t>(ctDir)) return false;
+            if (!src.matches(k.srcIp)) return false;
+            if (!dst.matches(k.dstIp)) return false;
+            if (!sport.matches(k.srcPort)) return false;
+            if (!dport.matches(k.dstPort)) return false;
+            return true;
+        }
+    };
+
+    struct BucketV6 {
+        std::vector<RuleRefV6> exactEnforce;
+        std::vector<RuleRefV6> rangeEnforce;
+        std::vector<RuleRefV6> exactWould;
+        std::vector<RuleRefV6> rangeWould;
+
+        static bool ruleLess(const RuleRefV6 &a, const RuleRefV6 &b) {
+            if (a.priority != b.priority) return a.priority > b.priority;
+            return a.ruleId < b.ruleId;
+        }
+
+        void sortAll() {
+            std::sort(exactEnforce.begin(), exactEnforce.end(), ruleLess);
+            std::sort(rangeEnforce.begin(), rangeEnforce.end(), ruleLess);
+            std::sort(exactWould.begin(), exactWould.end(), ruleLess);
+            std::sort(rangeWould.begin(), rangeWould.end(), ruleLess);
+        }
+
+        const RuleRefV6 *bestEnforce(const PacketKeyV6 &k) const {
+            const RuleRefV6 *exact = exactEnforce.empty() ? nullptr : &exactEnforce[0];
+            if (exact && !exact->matches(k)) {
+                exact = nullptr;
+            }
+
+            if (exact) {
+                const std::int32_t pExact = exact->priority;
+                for (const auto &cand : rangeEnforce) {
+                    if (cand.priority <= pExact) {
+                        break;
+                    }
+                    if (cand.matches(k)) {
+                        return &cand;
+                    }
+                }
+                return exact;
+            }
+
+            for (const auto &cand : rangeEnforce) {
+                if (cand.matches(k)) {
+                    return &cand;
+                }
+            }
+            return nullptr;
+        }
+
+        const RuleRefV6 *bestWould(const PacketKeyV6 &k) const {
+            const RuleRefV6 *exact = exactWould.empty() ? nullptr : &exactWould[0];
+            if (exact && !exact->matches(k)) {
+                exact = nullptr;
+            }
+
+            if (exact) {
+                const std::int32_t pExact = exact->priority;
+                for (const auto &cand : rangeWould) {
+                    if (cand.priority <= pExact) {
+                        break;
+                    }
+                    if (cand.matches(k)) {
+                        return &cand;
+                    }
+                }
+                return exact;
+            }
+
+            for (const auto &cand : rangeWould) {
+                if (cand.matches(k)) {
+                    return &cand;
+                }
+            }
+            return nullptr;
+        }
+    };
+
+    struct SubtableV6 {
+        MaskSigV6 sig;
+        std::int32_t maxEnforcePriority = kNoPriority;
+        std::int32_t maxWouldPriority = kNoPriority;
+        std::unordered_map<MaskedKeyV6, BucketV6, MaskedKeyV6Hash> buckets;
+    };
+
+    struct UidViewV6 {
+        std::vector<SubtableV6> subtables;
+        std::vector<size_t> enforceOrder;
+        std::vector<size_t> wouldOrder;
+        bool usesCt = false;
+    };
+
+    std::unordered_map<std::uint32_t, UidViewV6> byUid6;
 
     static MaskSig maskSigForRule(const RuleDef &r) {
         MaskSig s{};
@@ -680,6 +948,89 @@ struct IpRulesEngine::Snapshot {
         mk.ifindex = sig.ifindex ? r.ifindex : 0;
         mk.srcIpMasked = (sig.srcPrefix == 255) ? 0 : (r.src.addr & maskFromPrefix(sig.srcPrefix));
         mk.dstIpMasked = (sig.dstPrefix == 255) ? 0 : (r.dst.addr & maskFromPrefix(sig.dstPrefix));
+        mk.srcPort = sig.sportExact ? r.sport.lo : 0;
+        mk.dstPort = sig.dportExact ? r.dport.lo : 0;
+        return mk;
+    }
+
+    static MaskSigV6 maskSigForRuleV6(const RuleDef &r) {
+        MaskSigV6 s{};
+        s.dir = (r.dir != Direction::ANY);
+        s.iface = (r.iface != IfaceKind::ANY);
+        s.ifindex = (r.ifindex != 0);
+        s.proto = (r.proto != Proto::ANY);
+        s.ctState = (r.ctState != CtState::ANY);
+        s.ctDir = (r.ctDir != CtDirection::ANY);
+        s.srcPrefix = r.src6.any ? 255 : r.src6.prefix;
+        s.dstPrefix = r.dst6.any ? 255 : r.dst6.prefix;
+        s.sportExact = (r.sport.kind == PortPredicate::Kind::EXACT);
+        s.dportExact = (r.dport.kind == PortPredicate::Kind::EXACT);
+        return s;
+    }
+
+    static inline void maskIpV6(std::array<std::uint8_t, 16> &out,
+                                const std::array<std::uint8_t, 16> &in,
+                                const std::uint8_t prefix) {
+        out = in;
+        if (prefix == 0) {
+            out.fill(0);
+            return;
+        }
+        if (prefix >= 128) {
+            return;
+        }
+        const std::uint8_t fullBytes = static_cast<std::uint8_t>(prefix / 8u);
+        const std::uint8_t remBits = static_cast<std::uint8_t>(prefix % 8u);
+        for (std::uint8_t i = fullBytes + (remBits ? 1u : 0u); i < out.size(); ++i) {
+            out[i] = 0;
+        }
+        if (remBits != 0 && fullBytes < out.size()) {
+            const std::uint8_t mask = static_cast<std::uint8_t>(0xFFu << (8u - remBits));
+            out[fullBytes] &= mask;
+        }
+    }
+
+    static MaskedKeyV6 maskedKeyFromPacketV6(const MaskSigV6 &sig, const PacketKeyV6 &k) {
+        MaskedKeyV6 mk{};
+        mk.dir = sig.dir ? k.dir : 0;
+        mk.ifaceKind = sig.iface ? k.ifaceKind : 0;
+        mk.proto = sig.proto ? k.proto : 0;
+        mk.ctState = sig.ctState ? k.ctState : 0;
+        mk.ctDir = sig.ctDir ? k.ctDir : 0;
+        mk.ifindex = sig.ifindex ? k.ifindex : 0;
+        if (sig.srcPrefix == 255) {
+            mk.srcIpMasked.fill(0);
+        } else {
+            maskIpV6(mk.srcIpMasked, k.srcIp, sig.srcPrefix);
+        }
+        if (sig.dstPrefix == 255) {
+            mk.dstIpMasked.fill(0);
+        } else {
+            maskIpV6(mk.dstIpMasked, k.dstIp, sig.dstPrefix);
+        }
+        mk.srcPort = sig.sportExact ? k.srcPort : 0;
+        mk.dstPort = sig.dportExact ? k.dstPort : 0;
+        return mk;
+    }
+
+    static MaskedKeyV6 maskedKeyFromRuleV6(const MaskSigV6 &sig, const RuleDef &r) {
+        MaskedKeyV6 mk{};
+        mk.dir = sig.dir ? dirValue(r.dir) : 0;
+        mk.ifaceKind = sig.iface ? static_cast<uint8_t>(r.iface) : 0;
+        mk.proto = sig.proto ? static_cast<uint8_t>(r.proto) : 0;
+        mk.ctState = sig.ctState ? static_cast<uint8_t>(r.ctState) : 0;
+        mk.ctDir = sig.ctDir ? static_cast<uint8_t>(r.ctDir) : 0;
+        mk.ifindex = sig.ifindex ? r.ifindex : 0;
+        if (sig.srcPrefix == 255) {
+            mk.srcIpMasked.fill(0);
+        } else {
+            maskIpV6(mk.srcIpMasked, r.src6.addr, sig.srcPrefix);
+        }
+        if (sig.dstPrefix == 255) {
+            mk.dstIpMasked.fill(0);
+        } else {
+            maskIpV6(mk.dstIpMasked, r.dst6.addr, sig.dstPrefix);
+        }
         mk.srcPort = sig.sportExact ? r.sport.lo : 0;
         mk.dstPort = sig.dportExact ? r.dport.lo : 0;
         return mk;
@@ -770,6 +1121,86 @@ struct IpRulesEngine::Snapshot {
 
         return {};
     }
+
+    const RuleRefV6 *lookupBestEnforce(const PacketKeyV6 &k) const {
+        const auto it = byUid6.find(k.uid);
+        if (it == byUid6.end()) return nullptr;
+        const UidViewV6 &view = it->second;
+
+        const RuleRefV6 *best = nullptr;
+        std::int32_t bestPriority = kNoPriority;
+
+        for (const size_t idx : view.enforceOrder) {
+            const auto &st = view.subtables[idx];
+            if (st.maxEnforcePriority == kNoPriority) {
+                break;
+            }
+            if (best && st.maxEnforcePriority < bestPriority) {
+                break;
+            }
+
+            const MaskedKeyV6 mk = maskedKeyFromPacketV6(st.sig, k);
+            const auto bit = st.buckets.find(mk);
+            if (bit == st.buckets.end()) continue;
+            const BucketV6 &bucket = bit->second;
+            const RuleRefV6 *cand = bucket.bestEnforce(k);
+            if (cand && (!best || cand->priority > bestPriority)) {
+                best = cand;
+                bestPriority = cand->priority;
+            }
+        }
+        return best;
+    }
+
+    const RuleRefV6 *lookupBestWould(const PacketKeyV6 &k) const {
+        const auto it = byUid6.find(k.uid);
+        if (it == byUid6.end()) return nullptr;
+        const UidViewV6 &view = it->second;
+
+        const RuleRefV6 *best = nullptr;
+        std::int32_t bestPriority = kNoPriority;
+
+        for (const size_t idx : view.wouldOrder) {
+            const auto &st = view.subtables[idx];
+            if (st.maxWouldPriority == kNoPriority) {
+                break;
+            }
+            if (best && st.maxWouldPriority < bestPriority) {
+                break;
+            }
+
+            const MaskedKeyV6 mk = maskedKeyFromPacketV6(st.sig, k);
+            const auto bit = st.buckets.find(mk);
+            if (bit == st.buckets.end()) continue;
+            const BucketV6 &bucket = bit->second;
+            const RuleRefV6 *cand = bucket.bestWould(k);
+            if (cand && (!best || cand->priority > bestPriority)) {
+                best = cand;
+                bestPriority = cand->priority;
+            }
+        }
+        return best;
+    }
+
+    DecisionData evaluate(const PacketKeyV6 &k) const {
+        if (const RuleRefV6 *enforce = lookupBestEnforce(k)) {
+            DecisionData d{};
+            d.kind = (enforce->action == Action::ALLOW) ? DecisionKind::ALLOW : DecisionKind::BLOCK;
+            d.ruleId = enforce->ruleId;
+            d.stats = enforce->stats;
+            return d;
+        }
+
+        if (const RuleRefV6 *would = lookupBestWould(k)) {
+            DecisionData d{};
+            d.kind = DecisionKind::WOULD_BLOCK;
+            d.ruleId = would->ruleId;
+            d.stats = would->stats;
+            return d;
+        }
+
+        return {};
+    }
 };
 
 IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
@@ -782,11 +1213,19 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
                                     .maxSubtablesPerUid = kHardMaxSubtablesPerUid,
                                     .maxRangeRulesPerBucket = kHardMaxRangeRulesPerBucket};
 
-    std::map<std::uint32_t, std::map<Snapshot::MaskSig, Snapshot::Subtable, Snapshot::MaskSigLess>>
-        uidTables;
-    std::unordered_map<std::uint32_t, bool> uidUsesCt;
+    using V4SubtablesMap =
+        std::map<Snapshot::MaskSig, Snapshot::Subtable, Snapshot::MaskSigLess>;
+    using V6SubtablesMap =
+        std::map<Snapshot::MaskSigV6, Snapshot::SubtableV6, Snapshot::MaskSigV6Less>;
 
-    std::uint64_t maxRangeBucket = 0;
+    std::map<std::uint32_t, V4SubtablesMap> uidTables4;
+    std::map<std::uint32_t, V6SubtablesMap> uidTables6;
+
+    std::unordered_set<std::uint32_t> uidUsesCt4;
+    std::unordered_set<std::uint32_t> uidUsesCt6;
+
+    std::uint64_t maxRangeBucket4 = 0;
+    std::uint64_t maxRangeBucket6 = 0;
 
     for (const auto &[_, state] : rules) {
         const RuleDef &def = state.def;
@@ -795,57 +1234,124 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
         }
 
         report.summary.rulesTotal++;
+        if (def.family == Family::IPV4) {
+            report.byFamily.ipv4.rulesTotal++;
+        } else if (def.family == Family::IPV6) {
+            report.byFamily.ipv6.rulesTotal++;
+        }
+
         if (def.hasRangePorts()) {
             report.summary.rangeRulesTotal++;
-        }
-        if (def.ctState != CtState::ANY || def.ctDir != CtDirection::ANY) {
-            report.summary.ctRulesTotal++;
-            uidUsesCt[def.uid] = true;
-        }
-
-        const Snapshot::MaskSig sig = Snapshot::maskSigForRule(def);
-        Snapshot::Subtable &st = uidTables[def.uid][sig];
-        st.sig = sig;
-
-        const Snapshot::MaskedKey mk = Snapshot::maskedKeyFromRule(sig, def);
-        Snapshot::Bucket &bucket = st.buckets[mk];
-
-        Snapshot::RuleRef ref{};
-        ref.ruleId = def.ruleId;
-        ref.uid = def.uid;
-        ref.action = def.action;
-        ref.priority = def.priority;
-        ref.enforce = def.enforce;
-        ref.dir = def.dir;
-        ref.iface = def.iface;
-        ref.ifindex = def.ifindex;
-        ref.proto = def.proto;
-        ref.ctState = def.ctState;
-        ref.ctDir = def.ctDir;
-        ref.src = def.src;
-        ref.dst = def.dst;
-        ref.sport = def.sport;
-        ref.dport = def.dport;
-        ref.stats = state.stats.get();
-        ref.statsStrong = state.stats;
-
-        if (def.enforce) {
-            st.maxEnforcePriority = std::max(st.maxEnforcePriority, def.priority);
-            if (def.hasRangePorts()) {
-                bucket.rangeEnforce.push_back(std::move(ref));
-                maxRangeBucket =
-                    std::max<std::uint64_t>(maxRangeBucket, bucket.rangeEnforce.size() + bucket.rangeWould.size());
-            } else {
-                bucket.exactEnforce.push_back(std::move(ref));
+            if (def.family == Family::IPV4) {
+                report.byFamily.ipv4.rangeRulesTotal++;
+            } else if (def.family == Family::IPV6) {
+                report.byFamily.ipv6.rangeRulesTotal++;
             }
-        } else {
-            st.maxWouldPriority = std::max(st.maxWouldPriority, def.priority);
-            if (def.hasRangePorts()) {
-                bucket.rangeWould.push_back(std::move(ref));
-                maxRangeBucket =
-                    std::max<std::uint64_t>(maxRangeBucket, bucket.rangeEnforce.size() + bucket.rangeWould.size());
+        }
+
+        const bool ctConsumer = (def.ctState != CtState::ANY || def.ctDir != CtDirection::ANY);
+        if (ctConsumer) {
+            report.summary.ctRulesTotal++;
+            if (def.family == Family::IPV4) {
+                report.byFamily.ipv4.ctRulesTotal++;
+                uidUsesCt4.emplace(def.uid);
+            } else if (def.family == Family::IPV6) {
+                report.byFamily.ipv6.ctRulesTotal++;
+                uidUsesCt6.emplace(def.uid);
+            }
+        }
+
+        if (def.family == Family::IPV4) {
+            const Snapshot::MaskSig sig = Snapshot::maskSigForRule(def);
+            Snapshot::Subtable &st = uidTables4[def.uid][sig];
+            st.sig = sig;
+
+            const Snapshot::MaskedKey mk = Snapshot::maskedKeyFromRule(sig, def);
+            Snapshot::Bucket &bucket = st.buckets[mk];
+
+            Snapshot::RuleRef ref{};
+            ref.ruleId = def.ruleId;
+            ref.uid = def.uid;
+            ref.action = def.action;
+            ref.priority = def.priority;
+            ref.enforce = def.enforce;
+            ref.dir = def.dir;
+            ref.iface = def.iface;
+            ref.ifindex = def.ifindex;
+            ref.proto = def.proto;
+            ref.ctState = def.ctState;
+            ref.ctDir = def.ctDir;
+            ref.src = def.src;
+            ref.dst = def.dst;
+            ref.sport = def.sport;
+            ref.dport = def.dport;
+            ref.stats = state.stats.get();
+            ref.statsStrong = state.stats;
+
+            if (def.enforce) {
+                st.maxEnforcePriority = std::max(st.maxEnforcePriority, def.priority);
+                if (def.hasRangePorts()) {
+                    bucket.rangeEnforce.push_back(std::move(ref));
+                    maxRangeBucket4 = std::max<std::uint64_t>(
+                        maxRangeBucket4, bucket.rangeEnforce.size() + bucket.rangeWould.size());
+                } else {
+                    bucket.exactEnforce.push_back(std::move(ref));
+                }
             } else {
-                bucket.exactWould.push_back(std::move(ref));
+                st.maxWouldPriority = std::max(st.maxWouldPriority, def.priority);
+                if (def.hasRangePorts()) {
+                    bucket.rangeWould.push_back(std::move(ref));
+                    maxRangeBucket4 = std::max<std::uint64_t>(
+                        maxRangeBucket4, bucket.rangeEnforce.size() + bucket.rangeWould.size());
+                } else {
+                    bucket.exactWould.push_back(std::move(ref));
+                }
+            }
+        } else if (def.family == Family::IPV6) {
+            const Snapshot::MaskSigV6 sig = Snapshot::maskSigForRuleV6(def);
+            Snapshot::SubtableV6 &st = uidTables6[def.uid][sig];
+            st.sig = sig;
+
+            const Snapshot::MaskedKeyV6 mk = Snapshot::maskedKeyFromRuleV6(sig, def);
+            Snapshot::BucketV6 &bucket = st.buckets[mk];
+
+            Snapshot::RuleRefV6 ref{};
+            ref.ruleId = def.ruleId;
+            ref.uid = def.uid;
+            ref.action = def.action;
+            ref.priority = def.priority;
+            ref.enforce = def.enforce;
+            ref.dir = def.dir;
+            ref.iface = def.iface;
+            ref.ifindex = def.ifindex;
+            ref.proto = def.proto;
+            ref.ctState = def.ctState;
+            ref.ctDir = def.ctDir;
+            ref.src = def.src6;
+            ref.dst = def.dst6;
+            ref.sport = def.sport;
+            ref.dport = def.dport;
+            ref.stats = state.stats.get();
+            ref.statsStrong = state.stats;
+
+            if (def.enforce) {
+                st.maxEnforcePriority = std::max(st.maxEnforcePriority, def.priority);
+                if (def.hasRangePorts()) {
+                    bucket.rangeEnforce.push_back(std::move(ref));
+                    maxRangeBucket6 = std::max<std::uint64_t>(
+                        maxRangeBucket6, bucket.rangeEnforce.size() + bucket.rangeWould.size());
+                } else {
+                    bucket.exactEnforce.push_back(std::move(ref));
+                }
+            } else {
+                st.maxWouldPriority = std::max(st.maxWouldPriority, def.priority);
+                if (def.hasRangePorts()) {
+                    bucket.rangeWould.push_back(std::move(ref));
+                    maxRangeBucket6 = std::max<std::uint64_t>(
+                        maxRangeBucket6, bucket.rangeEnforce.size() + bucket.rangeWould.size());
+                } else {
+                    bucket.exactWould.push_back(std::move(ref));
+                }
             }
         }
     }
@@ -853,14 +1359,27 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
     auto snap = std::make_shared<Snapshot>();
     snap->rulesEpoch = rulesEpoch;
 
-    report.summary.subtablesTotal = 0;
-    report.summary.maxSubtablesPerUid = 0;
-    report.summary.maxRangeRulesPerBucket = maxRangeBucket;
-    report.summary.ctUidsTotal = uidUsesCt.size();
+    report.byFamily.ipv4.maxRangeRulesPerBucket = maxRangeBucket4;
+    report.byFamily.ipv6.maxRangeRulesPerBucket = maxRangeBucket6;
+    report.summary.maxRangeRulesPerBucket = std::max(maxRangeBucket4, maxRangeBucket6);
 
-    for (auto &[uid, subtablesMap] : uidTables) {
+    std::unordered_set<std::uint32_t> uidUsesCtAll = uidUsesCt4;
+    uidUsesCtAll.insert(uidUsesCt6.begin(), uidUsesCt6.end());
+    report.byFamily.ipv4.ctUidsTotal = uidUsesCt4.size();
+    report.byFamily.ipv6.ctUidsTotal = uidUsesCt6.size();
+    report.summary.ctUidsTotal = uidUsesCtAll.size();
+
+    report.summary.subtablesTotal = 0;
+    report.byFamily.ipv4.subtablesTotal = 0;
+    report.byFamily.ipv6.subtablesTotal = 0;
+    report.summary.maxSubtablesPerUid = 0;
+    report.byFamily.ipv4.maxSubtablesPerUid = 0;
+    report.byFamily.ipv6.maxSubtablesPerUid = 0;
+
+    // Compile and publish per-family views.
+    for (auto &[uid, subtablesMap] : uidTables4) {
         Snapshot::UidView view{};
-        view.usesCt = uidUsesCt.find(uid) != uidUsesCt.end();
+        view.usesCt = uidUsesCt4.find(uid) != uidUsesCt4.end();
         view.subtables.reserve(subtablesMap.size());
         for (auto &[_, st] : subtablesMap) {
             for (auto &[_, bucket] : st.buckets) {
@@ -871,8 +1390,11 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
 
         const size_t n = view.subtables.size();
         report.summary.subtablesTotal += static_cast<std::uint64_t>(n);
+        report.byFamily.ipv4.subtablesTotal += static_cast<std::uint64_t>(n);
         report.summary.maxSubtablesPerUid =
             std::max<std::uint64_t>(report.summary.maxSubtablesPerUid, n);
+        report.byFamily.ipv4.maxSubtablesPerUid =
+            std::max<std::uint64_t>(report.byFamily.ipv4.maxSubtablesPerUid, n);
 
         view.enforceOrder.resize(n);
         view.wouldOrder.resize(n);
@@ -904,6 +1426,55 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
         snap->byUid.emplace(uid, std::move(view));
     }
 
+    for (auto &[uid, subtablesMap] : uidTables6) {
+        Snapshot::UidViewV6 view{};
+        view.usesCt = uidUsesCt6.find(uid) != uidUsesCt6.end();
+        view.subtables.reserve(subtablesMap.size());
+        for (auto &[_, st] : subtablesMap) {
+            for (auto &[_, bucket] : st.buckets) {
+                bucket.sortAll();
+            }
+            view.subtables.push_back(std::move(st));
+        }
+
+        const size_t n = view.subtables.size();
+        report.summary.subtablesTotal += static_cast<std::uint64_t>(n);
+        report.byFamily.ipv6.subtablesTotal += static_cast<std::uint64_t>(n);
+        report.summary.maxSubtablesPerUid =
+            std::max<std::uint64_t>(report.summary.maxSubtablesPerUid, n);
+        report.byFamily.ipv6.maxSubtablesPerUid =
+            std::max<std::uint64_t>(report.byFamily.ipv6.maxSubtablesPerUid, n);
+
+        view.enforceOrder.resize(n);
+        view.wouldOrder.resize(n);
+        for (size_t i = 0; i < n; ++i) {
+            view.enforceOrder[i] = i;
+            view.wouldOrder[i] = i;
+        }
+
+        Snapshot::MaskSigV6Less less{};
+        std::sort(view.enforceOrder.begin(), view.enforceOrder.end(),
+                  [&](const size_t a, const size_t b) {
+                      const auto &sa = view.subtables[a];
+                      const auto &sb = view.subtables[b];
+                      if (sa.maxEnforcePriority != sb.maxEnforcePriority) {
+                          return sa.maxEnforcePriority > sb.maxEnforcePriority;
+                      }
+                      return less(sa.sig, sb.sig);
+                  });
+        std::sort(view.wouldOrder.begin(), view.wouldOrder.end(),
+                  [&](const size_t a, const size_t b) {
+                      const auto &sa = view.subtables[a];
+                      const auto &sb = view.subtables[b];
+                      if (sa.maxWouldPriority != sb.maxWouldPriority) {
+                          return sa.maxWouldPriority > sb.maxWouldPriority;
+                      }
+                      return less(sa.sig, sb.sig);
+                  });
+
+        snap->byUid6.emplace(uid, std::move(view));
+    }
+
     const auto addIssue = [&](std::vector<PreflightIssue> &dst, const std::string &metric,
                               const std::uint64_t value, const std::uint64_t limit,
                               const std::string &message) {
@@ -923,6 +1494,21 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
                  "active rules exceed recommended limit");
     }
 
+    if (report.byFamily.ipv4.rulesTotal > kHardMaxRulesTotal) {
+        addIssue(report.violations, "byFamily.ipv4.rulesTotal", report.byFamily.ipv4.rulesTotal,
+                 kHardMaxRulesTotal, "active ipv4 rules exceed hard limit");
+    } else if (report.byFamily.ipv4.rulesTotal > kRecommendedMaxRulesTotal) {
+        addIssue(report.warnings, "byFamily.ipv4.rulesTotal", report.byFamily.ipv4.rulesTotal,
+                 kRecommendedMaxRulesTotal, "active ipv4 rules exceed recommended limit");
+    }
+    if (report.byFamily.ipv6.rulesTotal > kHardMaxRulesTotal) {
+        addIssue(report.violations, "byFamily.ipv6.rulesTotal", report.byFamily.ipv6.rulesTotal,
+                 kHardMaxRulesTotal, "active ipv6 rules exceed hard limit");
+    } else if (report.byFamily.ipv6.rulesTotal > kRecommendedMaxRulesTotal) {
+        addIssue(report.warnings, "byFamily.ipv6.rulesTotal", report.byFamily.ipv6.rulesTotal,
+                 kRecommendedMaxRulesTotal, "active ipv6 rules exceed recommended limit");
+    }
+
     if (report.summary.maxSubtablesPerUid > kHardMaxSubtablesPerUid) {
         addIssue(report.violations, "maxSubtablesPerUid", report.summary.maxSubtablesPerUid,
                  kHardMaxSubtablesPerUid, "subtables per uid exceed hard limit");
@@ -931,12 +1517,50 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
                  kRecommendedMaxSubtablesPerUid, "subtables per uid exceed recommended limit");
     }
 
+    if (report.byFamily.ipv4.maxSubtablesPerUid > kHardMaxSubtablesPerUid) {
+        addIssue(report.violations, "byFamily.ipv4.maxSubtablesPerUid",
+                 report.byFamily.ipv4.maxSubtablesPerUid, kHardMaxSubtablesPerUid,
+                 "ipv4 subtables per uid exceed hard limit");
+    } else if (report.byFamily.ipv4.maxSubtablesPerUid > kRecommendedMaxSubtablesPerUid) {
+        addIssue(report.warnings, "byFamily.ipv4.maxSubtablesPerUid",
+                 report.byFamily.ipv4.maxSubtablesPerUid, kRecommendedMaxSubtablesPerUid,
+                 "ipv4 subtables per uid exceed recommended limit");
+    }
+    if (report.byFamily.ipv6.maxSubtablesPerUid > kHardMaxSubtablesPerUid) {
+        addIssue(report.violations, "byFamily.ipv6.maxSubtablesPerUid",
+                 report.byFamily.ipv6.maxSubtablesPerUid, kHardMaxSubtablesPerUid,
+                 "ipv6 subtables per uid exceed hard limit");
+    } else if (report.byFamily.ipv6.maxSubtablesPerUid > kRecommendedMaxSubtablesPerUid) {
+        addIssue(report.warnings, "byFamily.ipv6.maxSubtablesPerUid",
+                 report.byFamily.ipv6.maxSubtablesPerUid, kRecommendedMaxSubtablesPerUid,
+                 "ipv6 subtables per uid exceed recommended limit");
+    }
+
     if (report.summary.maxRangeRulesPerBucket > kHardMaxRangeRulesPerBucket) {
         addIssue(report.violations, "maxRangeRulesPerBucket", report.summary.maxRangeRulesPerBucket,
                  kHardMaxRangeRulesPerBucket, "range candidates per bucket exceed hard limit");
     } else if (report.summary.maxRangeRulesPerBucket > kRecommendedMaxRangeRulesPerBucket) {
         addIssue(report.warnings, "maxRangeRulesPerBucket", report.summary.maxRangeRulesPerBucket,
                  kRecommendedMaxRangeRulesPerBucket, "range candidates per bucket exceed recommended limit");
+    }
+
+    if (report.byFamily.ipv4.maxRangeRulesPerBucket > kHardMaxRangeRulesPerBucket) {
+        addIssue(report.violations, "byFamily.ipv4.maxRangeRulesPerBucket",
+                 report.byFamily.ipv4.maxRangeRulesPerBucket, kHardMaxRangeRulesPerBucket,
+                 "ipv4 range candidates per bucket exceed hard limit");
+    } else if (report.byFamily.ipv4.maxRangeRulesPerBucket > kRecommendedMaxRangeRulesPerBucket) {
+        addIssue(report.warnings, "byFamily.ipv4.maxRangeRulesPerBucket",
+                 report.byFamily.ipv4.maxRangeRulesPerBucket, kRecommendedMaxRangeRulesPerBucket,
+                 "ipv4 range candidates per bucket exceed recommended limit");
+    }
+    if (report.byFamily.ipv6.maxRangeRulesPerBucket > kHardMaxRangeRulesPerBucket) {
+        addIssue(report.violations, "byFamily.ipv6.maxRangeRulesPerBucket",
+                 report.byFamily.ipv6.maxRangeRulesPerBucket, kHardMaxRangeRulesPerBucket,
+                 "ipv6 range candidates per bucket exceed hard limit");
+    } else if (report.byFamily.ipv6.maxRangeRulesPerBucket > kRecommendedMaxRangeRulesPerBucket) {
+        addIssue(report.warnings, "byFamily.ipv6.maxRangeRulesPerBucket",
+                 report.byFamily.ipv6.maxRangeRulesPerBucket, kRecommendedMaxRangeRulesPerBucket,
+                 "ipv6 range candidates per bucket exceed recommended limit");
     }
 
     return CompileResult{.snapshot = std::move(snap), .report = std::move(report)};
@@ -1295,10 +1919,12 @@ IpRulesEngine::replaceRulesForUid(const std::uint32_t uid, const std::vector<App
     }
 
     const auto sameMatch = [](const RuleDef &a, const RuleDef &b) {
-        return a.dir == b.dir && a.iface == b.iface && a.ifindex == b.ifindex && a.proto == b.proto &&
-               a.ctState == b.ctState && a.ctDir == b.ctDir && a.src.any == b.src.any &&
-               a.src.addr == b.src.addr && a.src.prefix == b.src.prefix && a.dst.any == b.dst.any &&
-               a.dst.addr == b.dst.addr && a.dst.prefix == b.dst.prefix &&
+        return a.family == b.family && a.dir == b.dir && a.iface == b.iface && a.ifindex == b.ifindex &&
+               a.proto == b.proto && a.ctState == b.ctState && a.ctDir == b.ctDir &&
+               a.src.any == b.src.any && a.src.addr == b.src.addr && a.src.prefix == b.src.prefix &&
+               a.dst.any == b.dst.any && a.dst.addr == b.dst.addr && a.dst.prefix == b.dst.prefix &&
+               a.src6.any == b.src6.any && a.src6.addr == b.src6.addr && a.src6.prefix == b.src6.prefix &&
+               a.dst6.any == b.dst6.any && a.dst6.addr == b.dst6.addr && a.dst6.prefix == b.dst6.prefix &&
                a.sport.kind == b.sport.kind && a.sport.lo == b.sport.lo && a.sport.hi == b.sport.hi &&
                a.dport.kind == b.dport.kind && a.dport.lo == b.dport.lo && a.dport.hi == b.dport.hi;
     };
@@ -1333,6 +1959,7 @@ IpRulesEngine::replaceRulesForUid(const std::uint32_t uid, const std::vector<App
         def.ruleId = assignedRuleId;
         def.uid = uid;
         def.clientRuleId = r.clientRuleId;
+        def.family = r.family;
         def.action = r.action;
         def.priority = r.priority;
         def.enabled = r.enabled;
@@ -1344,6 +1971,8 @@ IpRulesEngine::replaceRulesForUid(const std::uint32_t uid, const std::vector<App
         def.proto = r.proto;
         def.src = r.src;
         def.dst = r.dst;
+        def.src6 = r.src6;
+        def.dst6 = r.dst6;
         def.sport = r.sport;
         def.dport = r.dport;
         def.ctState = r.ctState;
@@ -1398,7 +2027,7 @@ void IpRulesEngine::save() {
               [](const RuleDef &a, const RuleDef &b) { return a.ruleId < b.ruleId; });
 
     _saver.save([&] {
-        constexpr uint32_t kFormatVersion = 3;
+        constexpr uint32_t kFormatVersion = 4;
         _saver.write<uint32_t>(kFormatVersion);
         _saver.write<RuleId>(nextRuleId);
         _saver.write<uint32_t>(static_cast<uint32_t>(defs.size()));
@@ -1407,6 +2036,7 @@ void IpRulesEngine::save() {
             _saver.write<RuleId>(d.ruleId);
             _saver.write<uint32_t>(d.uid);
             _saver.write(d.clientRuleId);
+            _saver.write<uint8_t>(static_cast<uint8_t>(d.family));
             _saver.write<uint8_t>(static_cast<uint8_t>(d.action));
             _saver.write<std::int32_t>(d.priority);
             _saver.write<bool>(d.enabled);
@@ -1425,6 +2055,14 @@ void IpRulesEngine::save() {
             _saver.write<uint32_t>(d.dst.addr);
             _saver.write<uint8_t>(d.dst.prefix);
 
+            _saver.write<bool>(d.src6.any);
+            _saver.write(d.src6.addr.data(), static_cast<uint32_t>(d.src6.addr.size()));
+            _saver.write<uint8_t>(d.src6.prefix);
+
+            _saver.write<bool>(d.dst6.any);
+            _saver.write(d.dst6.addr.data(), static_cast<uint32_t>(d.dst6.addr.size()));
+            _saver.write<uint8_t>(d.dst6.prefix);
+
             _saver.write<uint8_t>(static_cast<uint8_t>(d.sport.kind));
             _saver.write<uint16_t>(d.sport.lo);
             _saver.write<uint16_t>(d.sport.hi);
@@ -1440,110 +2078,170 @@ void IpRulesEngine::save() {
 }
 
 void IpRulesEngine::restore() {
+    bool restoreAttempted = false;
+    bool restoreOk = true;
+
     _saver.restore([&] {
-        const auto formatVersion = _saver.read<uint32_t>();
-        if (formatVersion != 1 && formatVersion != 2 && formatVersion != 3) {
-            throw RestoreException();
-        }
+        restoreAttempted = true;
+        try {
+            const auto formatVersion = _saver.read<uint32_t>();
+            if (formatVersion != 4) {
+                throw RestoreException();
+            }
 
-        RuleId nextRuleId = _saver.read<RuleId>();
-        const auto count = _saver.read<uint32_t>();
+            RuleId nextRuleId = _saver.read<RuleId>();
+            const auto count = _saver.read<uint32_t>();
 
-        RulesMap restored;
-        restored.clear();
+            RulesMap restored;
+            restored.clear();
 
-        RuleId maxSeenId = 0;
-        bool hasAny = false;
+            RuleId maxSeenId = 0;
+            bool hasAny = false;
 
-        for (uint32_t i = 0; i < count; ++i) {
-            RuleDef d{};
-            d.ruleId = _saver.read<RuleId>();
-            d.uid = _saver.read<uint32_t>();
-            if (formatVersion >= 3) {
+            auto maskV6HostBits = [](std::array<std::uint8_t, 16> &addr,
+                                     const std::uint8_t prefix) {
+                if (prefix == 0) {
+                    addr.fill(0);
+                    return;
+                }
+                const std::uint8_t fullBytes = static_cast<std::uint8_t>(prefix / 8u);
+                const std::uint8_t remBits = static_cast<std::uint8_t>(prefix % 8u);
+                std::uint8_t i = fullBytes;
+                if (i >= addr.size()) {
+                    return;
+                }
+                if (remBits != 0) {
+                    const std::uint8_t mask = static_cast<std::uint8_t>(0xFFu << (8u - remBits));
+                    addr[i] &= mask;
+                    ++i;
+                }
+                for (; i < addr.size(); ++i) {
+                    addr[i] = 0;
+                }
+            };
+
+            for (uint32_t i = 0; i < count; ++i) {
+                RuleDef d{};
+                d.ruleId = _saver.read<RuleId>();
+                d.uid = _saver.read<uint32_t>();
+
                 _saver.read(d.clientRuleId, 1, 64);
                 if (!isValidClientRuleId(d.clientRuleId)) {
                     throw RestoreException();
                 }
-            } else {
-                d.clientRuleId = legacyClientRuleId(d.uid, d.ruleId);
-            }
-            d.action = static_cast<Action>(_saver.read<uint8_t>());
-            d.priority = _saver.read<std::int32_t>();
-            d.enabled = _saver.read<bool>();
-            d.enforce = _saver.read<bool>();
-            d.log = _saver.read<bool>();
-            d.dir = static_cast<Direction>(_saver.read<uint8_t>());
-            d.iface = static_cast<IfaceKind>(_saver.read<uint8_t>());
-            d.ifindex = _saver.read<uint32_t>();
-            d.proto = static_cast<Proto>(_saver.read<uint8_t>());
 
-            d.src.any = _saver.read<bool>();
-            d.src.addr = _saver.read<uint32_t>();
-            d.src.prefix = _saver.read<uint8_t>();
-            if (!d.src.any) {
-                if (d.src.prefix > 32) {
-                    throw RestoreException();
+                d.family = static_cast<Family>(_saver.read<uint8_t>());
+                d.action = static_cast<Action>(_saver.read<uint8_t>());
+                d.priority = _saver.read<std::int32_t>();
+                d.enabled = _saver.read<bool>();
+                d.enforce = _saver.read<bool>();
+                d.log = _saver.read<bool>();
+                d.dir = static_cast<Direction>(_saver.read<uint8_t>());
+                d.iface = static_cast<IfaceKind>(_saver.read<uint8_t>());
+                d.ifindex = _saver.read<uint32_t>();
+                d.proto = static_cast<Proto>(_saver.read<uint8_t>());
+
+                d.src.any = _saver.read<bool>();
+                d.src.addr = _saver.read<uint32_t>();
+                d.src.prefix = _saver.read<uint8_t>();
+                if (!d.src.any) {
+                    if (d.src.prefix > 32) {
+                        throw RestoreException();
+                    }
+                    d.src.addr &= maskFromPrefix(d.src.prefix);
                 }
-                d.src.addr &= maskFromPrefix(d.src.prefix);
-            }
 
-            d.dst.any = _saver.read<bool>();
-            d.dst.addr = _saver.read<uint32_t>();
-            d.dst.prefix = _saver.read<uint8_t>();
-            if (!d.dst.any) {
-                if (d.dst.prefix > 32) {
-                    throw RestoreException();
+                d.dst.any = _saver.read<bool>();
+                d.dst.addr = _saver.read<uint32_t>();
+                d.dst.prefix = _saver.read<uint8_t>();
+                if (!d.dst.any) {
+                    if (d.dst.prefix > 32) {
+                        throw RestoreException();
+                    }
+                    d.dst.addr &= maskFromPrefix(d.dst.prefix);
                 }
-                d.dst.addr &= maskFromPrefix(d.dst.prefix);
-            }
 
-            d.sport.kind = static_cast<PortPredicate::Kind>(_saver.read<uint8_t>());
-            d.sport.lo = _saver.read<uint16_t>();
-            d.sport.hi = _saver.read<uint16_t>();
+                d.src6.any = _saver.read<bool>();
+                _saver.read(d.src6.addr.data(), static_cast<uint32_t>(d.src6.addr.size()));
+                d.src6.prefix = _saver.read<uint8_t>();
+                if (!d.src6.any) {
+                    if (d.src6.prefix > 128) {
+                        throw RestoreException();
+                    }
+                    maskV6HostBits(d.src6.addr, d.src6.prefix);
+                } else {
+                    d.src6.addr.fill(0);
+                    d.src6.prefix = 0;
+                }
 
-            d.dport.kind = static_cast<PortPredicate::Kind>(_saver.read<uint8_t>());
-            d.dport.lo = _saver.read<uint16_t>();
-            d.dport.hi = _saver.read<uint16_t>();
+                d.dst6.any = _saver.read<bool>();
+                _saver.read(d.dst6.addr.data(), static_cast<uint32_t>(d.dst6.addr.size()));
+                d.dst6.prefix = _saver.read<uint8_t>();
+                if (!d.dst6.any) {
+                    if (d.dst6.prefix > 128) {
+                        throw RestoreException();
+                    }
+                    maskV6HostBits(d.dst6.addr, d.dst6.prefix);
+                } else {
+                    d.dst6.addr.fill(0);
+                    d.dst6.prefix = 0;
+                }
 
-            if (formatVersion >= 2) {
+                d.sport.kind = static_cast<PortPredicate::Kind>(_saver.read<uint8_t>());
+                d.sport.lo = _saver.read<uint16_t>();
+                d.sport.hi = _saver.read<uint16_t>();
+
+                d.dport.kind = static_cast<PortPredicate::Kind>(_saver.read<uint8_t>());
+                d.dport.lo = _saver.read<uint16_t>();
+                d.dport.hi = _saver.read<uint16_t>();
+
                 d.ctState = static_cast<CtState>(_saver.read<uint8_t>());
                 d.ctDir = static_cast<CtDirection>(_saver.read<uint8_t>());
-            } else {
-                d.ctState = CtState::ANY;
-                d.ctDir = CtDirection::ANY;
+
+                std::string error;
+                if (!validateRuleDef(d, error)) {
+                    throw RestoreException();
+                }
+
+                RuleState st{};
+                st.def = d;
+                st.stats = std::make_shared<RuleStats>(); // since-boot; not persisted
+                restored.emplace(d.ruleId, std::move(st));
+
+                maxSeenId = std::max(maxSeenId, d.ruleId);
+                hasAny = true;
             }
 
-            std::string error;
-            if (!validateRuleDef(d, error)) {
+            if (hasAny) {
+                nextRuleId = std::max<RuleId>(nextRuleId, static_cast<RuleId>(maxSeenId + 1));
+            }
+
+            const std::uint64_t newEpoch = _rulesEpoch.load(std::memory_order_relaxed) + 1;
+            auto cr = compile(restored, newEpoch);
+            if (!cr.report.ok()) {
                 throw RestoreException();
             }
 
-            RuleState st{};
-            st.def = d;
-            st.stats = std::make_shared<RuleStats>(); // since-boot; not persisted
-            restored.emplace(d.ruleId, std::move(st));
-
-            maxSeenId = std::max(maxSeenId, d.ruleId);
-            hasAny = true;
-        }
-
-        if (hasAny) {
-            nextRuleId = std::max<RuleId>(nextRuleId, static_cast<RuleId>(maxSeenId + 1));
-        }
-
-        const std::uint64_t newEpoch = _rulesEpoch.load(std::memory_order_relaxed) + 1;
-        auto cr = compile(restored, newEpoch);
-        if (!cr.report.ok()) {
+            const std::lock_guard<std::shared_mutex> g(_mutex);
+            _rules = std::move(restored);
+            _nextRuleId = nextRuleId;
+            _lastPreflight = cr.report;
+            _rulesEpoch.store(newEpoch, std::memory_order_relaxed);
+            std::atomic_store_explicit(&_snapshot, std::move(cr.snapshot), std::memory_order_release);
+        } catch (const RestoreException &) {
+            restoreOk = false;
+            throw;
+        } catch (...) {
+            restoreOk = false;
             throw RestoreException();
         }
-
-        const std::lock_guard<std::shared_mutex> g(_mutex);
-        _rules = std::move(restored);
-        _nextRuleId = nextRuleId;
-        _lastPreflight = cr.report;
-        _rulesEpoch.store(newEpoch, std::memory_order_relaxed);
-        std::atomic_store_explicit(&_snapshot, std::move(cr.snapshot), std::memory_order_release);
     });
+
+    if (restoreAttempted && !restoreOk) {
+        // Unsupported/invalid persisted rules: clear to an empty ruleset and drop the save file.
+        LOG(WARNING) << "IPRULES restore failed (unsupported or invalid save format); clearing ruleset";
+        resetAll();
+    }
 }
 
 #if SUCRE_SNORT_IPRULES_DECISION_CACHE
@@ -1558,6 +2256,31 @@ static inline size_t hashPacketKey(const IpRulesEngine::PacketKeyV4 &k) noexcept
     h = mixHash(h, k.dstIp);
     h = mixHash(h, k.srcPort);
     h = mixHash(h, k.dstPort);
+    h = mixHash(h, k.portsAvailable);
+    h = mixHash(h, k.ctState);
+    h = mixHash(h, k.ctDir);
+    return h;
+}
+
+static inline size_t hashPacketKey(const IpRulesEngine::PacketKeyV6 &k) noexcept {
+    size_t h = 0;
+    h = mixHash(h, k.uid);
+    h = mixHash(h, k.dir);
+    h = mixHash(h, k.ifaceKind);
+    h = mixHash(h, k.proto);
+    h = mixHash(h, k.ifindex);
+    std::uint64_t a0 = 0, a1 = 0, b0 = 0, b1 = 0;
+    std::memcpy(&a0, k.srcIp.data(), 8);
+    std::memcpy(&a1, k.srcIp.data() + 8, 8);
+    std::memcpy(&b0, k.dstIp.data(), 8);
+    std::memcpy(&b1, k.dstIp.data() + 8, 8);
+    h = mixHash(h, static_cast<size_t>(a0));
+    h = mixHash(h, static_cast<size_t>(a1));
+    h = mixHash(h, static_cast<size_t>(b0));
+    h = mixHash(h, static_cast<size_t>(b1));
+    h = mixHash(h, k.srcPort);
+    h = mixHash(h, k.dstPort);
+    h = mixHash(h, k.portsAvailable);
     h = mixHash(h, k.ctState);
     h = mixHash(h, k.ctDir);
     return h;
@@ -1565,6 +2288,10 @@ static inline size_t hashPacketKey(const IpRulesEngine::PacketKeyV4 &k) noexcept
 #endif
 
 IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV4 &key) const {
+    return hotSnapshot().evaluate(key);
+}
+
+IpRulesEngine::Decision IpRulesEngine::evaluate(const PacketKeyV6 &key) const {
     return hotSnapshot().evaluate(key);
 }
 
@@ -1583,11 +2310,28 @@ bool IpRulesEngine::HotSnapshot::uidUsesCt(const std::uint32_t uid) const noexce
     if (!_snap) {
         return false;
     }
-    const auto it = _snap->byUid.find(uid);
-    if (it == _snap->byUid.end()) {
+    return uidUsesCt(uid, Family::IPV4);
+}
+
+bool IpRulesEngine::HotSnapshot::uidUsesCt(const std::uint32_t uid, const Family family) const noexcept {
+    if (!_snap) {
         return false;
     }
-    return it->second.usesCt;
+    if (family == Family::IPV4) {
+        const auto it = _snap->byUid.find(uid);
+        if (it == _snap->byUid.end()) {
+            return false;
+        }
+        return it->second.usesCt;
+    }
+    if (family == Family::IPV6) {
+        const auto it = _snap->byUid6.find(uid);
+        if (it == _snap->byUid6.end()) {
+            return false;
+        }
+        return it->second.usesCt;
+    }
+    return false;
 }
 
 IpRulesEngine::Decision IpRulesEngine::HotSnapshot::evaluate(const PacketKeyV4 &key) const {
@@ -1609,6 +2353,66 @@ IpRulesEngine::Decision IpRulesEngine::HotSnapshot::evaluate(const PacketKeyV4 &
     struct Cache {
         std::uint64_t ownerInstanceId = 0;
         std::array<CacheEntry, 1024> entries{};
+    };
+
+    thread_local Cache cache;
+    if (cache.ownerInstanceId != _instanceId) {
+        cache.ownerInstanceId = _instanceId;
+        for (auto &e : cache.entries) {
+            e.epoch = 0;
+        }
+    }
+
+    const std::uint64_t epoch = _snap->rulesEpoch;
+    const size_t idx = hashPacketKey(key) & (cache.entries.size() - 1);
+    CacheEntry &e = cache.entries[idx];
+    if (e.epoch == epoch && e.key == key) {
+        out.kind = e.kind;
+        out.ruleId = e.ruleId;
+        out.stats = e.stats;
+        return out;
+    }
+
+    const auto d = _snap->evaluate(key);
+
+    e.epoch = epoch;
+    e.key = key;
+    e.kind = d.kind;
+    e.ruleId = d.ruleId;
+    e.stats = d.stats;
+
+    out.kind = d.kind;
+    out.ruleId = d.ruleId;
+    out.stats = d.stats;
+    return out;
+#else
+    const auto d = _snap->evaluate(key);
+    out.kind = d.kind;
+    out.ruleId = d.ruleId;
+    out.stats = d.stats;
+    return out;
+#endif
+}
+
+IpRulesEngine::Decision IpRulesEngine::HotSnapshot::evaluate(const PacketKeyV6 &key) const {
+    Decision out{};
+    out.keepAlive = _snap;
+    if (!_snap) {
+        return out;
+    }
+
+#if SUCRE_SNORT_IPRULES_DECISION_CACHE
+    struct CacheEntry {
+        std::uint64_t epoch = 0;
+        PacketKeyV6 key{};
+        DecisionKind kind = DecisionKind::NOMATCH;
+        RuleId ruleId = 0;
+        void *stats = nullptr;
+    };
+
+    struct Cache {
+        std::uint64_t ownerInstanceId = 0;
+        std::array<CacheEntry, 512> entries{};
     };
 
     thread_local Cache cache;

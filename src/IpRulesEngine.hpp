@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -20,9 +21,12 @@
 class IpRulesEngine {
 private:
     struct Snapshot;
+    struct SnapshotV6;
 
 public:
     using RuleId = std::uint32_t;
+
+    enum class Family : std::uint8_t { IPV4 = 4, IPV6 = 6 };
 
     enum class Action : std::uint8_t { ALLOW = 0, BLOCK = 1 };
     enum class Direction : std::uint8_t { ANY = 0, IN = 1, OUT = 2 };
@@ -34,7 +38,13 @@ public:
         VPN = 4,
         UNMANAGED = 128,
     };
-    enum class Proto : std::uint8_t { ANY = 0, TCP = 6, UDP = 17, ICMP = 1 };
+    // Proto token used for IPRULES matching (not the raw IPPROTO for all cases).
+    //
+    // - TCP/UDP match raw IPPROTO values (6/17)
+    // - ICMP token is shared across IPv4(ICMP=1) and IPv6(ICMPv6=58) packets; datapath maps both to 1.
+    // - OTHER means "legal other-terminal" (not TCP/UDP/ICMP-family).
+    // - UNKNOWN is used only for packets where L4/terminal proto is invalid/unavailable; no rule may use it.
+    enum class Proto : std::uint8_t { ANY = 0, TCP = 6, UDP = 17, ICMP = 1, OTHER = 255, UNKNOWN = 254 };
 
     // Minimal conntrack match dimensions (aligned with OVS ct_state semantics, compressed).
     enum class CtState : std::uint8_t { ANY = 0, NEW = 1, ESTABLISHED = 2, INVALID = 3 };
@@ -85,11 +95,29 @@ public:
         bool matches(const std::uint32_t ipHost) const;
     };
 
+    struct CidrV6 {
+        bool any = true;
+        std::array<std::uint8_t, 16> addr{}; // network-byte-order
+        std::uint8_t prefix = 0;             // 0..128
+
+        static CidrV6 anyCidr() { return {}; }
+        static CidrV6 cidr(const std::array<std::uint8_t, 16> &addrNet, const std::uint8_t prefixLen) {
+            CidrV6 c;
+            c.any = false;
+            c.addr = addrNet;
+            c.prefix = prefixLen;
+            return c;
+        }
+
+        bool matches(const std::array<std::uint8_t, 16> &ipNet) const noexcept;
+    };
+
     struct RuleDef {
         RuleId ruleId = 0;
         std::uint32_t uid = 0;
         std::string clientRuleId;
 
+        Family family = Family::IPV4;
         Action action = Action::ALLOW;
         std::int32_t priority = 0;
 
@@ -104,6 +132,8 @@ public:
 
         CidrV4 src = CidrV4::anyCidr();
         CidrV4 dst = CidrV4::anyCidr();
+        CidrV6 src6 = CidrV6::anyCidr();
+        CidrV6 dst6 = CidrV6::anyCidr();
         PortPredicate sport = PortPredicate::any();
         PortPredicate dport = PortPredicate::any();
 
@@ -119,6 +149,7 @@ public:
     struct ApplyRule {
         std::string clientRuleId;
 
+        Family family = Family::IPV4;
         Action action = Action::ALLOW;
         std::int32_t priority = 0;
 
@@ -133,6 +164,8 @@ public:
 
         CidrV4 src = CidrV4::anyCidr();
         CidrV4 dst = CidrV4::anyCidr();
+        CidrV6 src6 = CidrV6::anyCidr();
+        CidrV6 dst6 = CidrV6::anyCidr();
         PortPredicate sport = PortPredicate::any();
         PortPredicate dport = PortPredicate::any();
 
@@ -172,8 +205,14 @@ public:
         std::uint64_t maxRangeRulesPerBucket = 0;
     };
 
+    struct PreflightByFamily {
+        PreflightSummary ipv4;
+        PreflightSummary ipv6;
+    };
+
     struct PreflightReport {
         PreflightSummary summary;
+        PreflightByFamily byFamily;
         PreflightLimitSet recommended;
         PreflightLimitSet hard;
         std::vector<PreflightIssue> warnings;
@@ -186,16 +225,34 @@ public:
         std::uint32_t uid = 0;
         std::uint8_t dir = 0;       // 0=in, 1=out
         std::uint8_t ifaceKind = 0; // engine kind: 0=unknown, 1=wifi, 2=data, 4=vpn, 128=unmanaged
-        std::uint8_t proto = 0;     // IPPROTO_*
+        std::uint8_t proto = 0;     // Proto token (see Proto enum above)
         std::uint32_t ifindex = 0;
         std::uint32_t srcIp = 0; // host-byte-order
         std::uint32_t dstIp = 0; // host-byte-order
         std::uint16_t srcPort = 0;
         std::uint16_t dstPort = 0;
+        std::uint8_t portsAvailable = 0; // 1 only when ports were safely parsed (known-l4 TCP/UDP)
         std::uint8_t ctState = 0; // CtState (0 == any)
         std::uint8_t ctDir = 0;   // CtDirection (0 == any)
 
         bool operator==(const PacketKeyV4 &o) const = default;
+    };
+
+    struct PacketKeyV6 {
+        std::uint32_t uid = 0;
+        std::uint8_t dir = 0;       // 0=in, 1=out
+        std::uint8_t ifaceKind = 0; // engine kind: 0=unknown, 1=wifi, 2=data, 4=vpn, 128=unmanaged
+        std::uint8_t proto = 0;     // Proto token (see Proto enum above)
+        std::uint32_t ifindex = 0;
+        std::array<std::uint8_t, 16> srcIp{}; // network-byte-order
+        std::array<std::uint8_t, 16> dstIp{}; // network-byte-order
+        std::uint16_t srcPort = 0;
+        std::uint16_t dstPort = 0;
+        std::uint8_t portsAvailable = 0; // 1 only when ports were safely parsed (known-l4 TCP/UDP)
+        std::uint8_t ctState = 0; // CtState (0 == any)
+        std::uint8_t ctDir = 0;   // CtDirection (0 == any)
+
+        bool operator==(const PacketKeyV6 &o) const = default;
     };
 
     enum class DecisionKind : std::uint8_t { NOMATCH = 0, ALLOW = 1, BLOCK = 2, WOULD_BLOCK = 3 };
@@ -248,6 +305,7 @@ public:
     // Hot-path evaluation (lock-free).
     // Caller is responsible for gating on global switches (BLOCK/IPRULES) and IPv4-only.
     Decision evaluate(const PacketKeyV4 &key) const;
+    Decision evaluate(const PacketKeyV6 &key) const;
     static void observeEnforceHit(const Decision &decision, const std::uint32_t bytes,
                                   const std::uint64_t tsNs);
     static void observeWouldHitIfAccepted(const Decision &decision, const bool accepted,
@@ -262,7 +320,9 @@ public:
         std::uint64_t rulesEpoch() const noexcept;
         bool valid() const noexcept { return static_cast<bool>(_snap); }
         bool uidUsesCt(const std::uint32_t uid) const noexcept;
+        bool uidUsesCt(const std::uint32_t uid, const Family family) const noexcept;
         Decision evaluate(const PacketKeyV4 &key) const;
+        Decision evaluate(const PacketKeyV6 &key) const;
 
     private:
         std::uint64_t _instanceId = 0;

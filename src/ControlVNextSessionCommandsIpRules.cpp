@@ -17,6 +17,7 @@
 #include <charconv>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <string>
@@ -95,6 +96,65 @@ unknownArgsKey(const rapidjson::Value &args, const std::initializer_list<std::st
     return std::string(buf) + "/" + std::to_string(static_cast<uint32_t>(c.prefix));
 }
 
+[[nodiscard]] bool parseCidrV6(const std::string_view v, IpRulesEngine::CidrV6 &out) {
+    if (v == "any") {
+        out = IpRulesEngine::CidrV6::anyCidr();
+        return true;
+    }
+
+    const auto slash = v.find('/');
+    if (slash == std::string_view::npos || slash == 0 || slash + 1 >= v.size()) {
+        return false;
+    }
+    const std::string ipStr(v.substr(0, slash));
+    const std::string_view prefixStr = v.substr(slash + 1);
+    uint32_t prefix = 0;
+    if (!IpRulesContract::parseDec(prefixStr, prefix) || prefix > 128) {
+        return false;
+    }
+
+    in6_addr a{};
+    if (inet_pton(AF_INET6, ipStr.c_str(), &a) != 1) {
+        return false;
+    }
+
+    std::array<std::uint8_t, 16> bytes{};
+    std::memcpy(bytes.data(), &a, bytes.size());
+
+    const auto prefixLen = static_cast<std::uint8_t>(prefix);
+    if (prefixLen < 128) {
+        const std::uint8_t fullBytes = static_cast<std::uint8_t>(prefixLen / 8);
+        const std::uint8_t remBits = static_cast<std::uint8_t>(prefixLen % 8);
+        if (remBits != 0) {
+            const std::uint8_t mask = static_cast<std::uint8_t>(0xFFu << (8u - remBits));
+            bytes[fullBytes] &= mask;
+            for (size_t i = static_cast<size_t>(fullBytes) + 1; i < bytes.size(); ++i) {
+                bytes[i] = 0;
+            }
+        } else {
+            for (size_t i = static_cast<size_t>(fullBytes); i < bytes.size(); ++i) {
+                bytes[i] = 0;
+            }
+        }
+    }
+
+    out = IpRulesEngine::CidrV6::cidr(bytes, prefixLen);
+    return true;
+}
+
+[[nodiscard]] std::string formatCidrV6(const IpRulesEngine::CidrV6 &c) {
+    if (c.any) {
+        return "any";
+    }
+    in6_addr a{};
+    std::memcpy(&a, c.addr.data(), c.addr.size());
+    char buf[INET6_ADDRSTRLEN] = {};
+    if (inet_ntop(AF_INET6, &a, buf, sizeof(buf)) == nullptr) {
+        return "any";
+    }
+    return std::string(buf) + "/" + std::to_string(static_cast<uint32_t>(c.prefix));
+}
+
 [[nodiscard]] bool parsePortPredicate(const std::string_view v, IpRulesEngine::PortPredicate &out) {
     if (v == "any") {
         out = IpRulesEngine::PortPredicate::any();
@@ -148,6 +208,26 @@ unknownArgsKey(const rapidjson::Value &args, const std::initializer_list<std::st
         return IpRulesEngine::Action::BLOCK;
     }
     return std::nullopt;
+}
+
+[[nodiscard]] std::optional<IpRulesEngine::Family> parseFamily(const std::string_view family) noexcept {
+    if (family == "ipv4") {
+        return IpRulesEngine::Family::IPV4;
+    }
+    if (family == "ipv6") {
+        return IpRulesEngine::Family::IPV6;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] const char *familyStr(const IpRulesEngine::Family family) noexcept {
+    switch (family) {
+    case IpRulesEngine::Family::IPV4:
+        return "ipv4";
+    case IpRulesEngine::Family::IPV6:
+        return "ipv6";
+    }
+    return "ipv4";
 }
 
 [[nodiscard]] const char *actionStr(const IpRulesEngine::Action action) noexcept {
@@ -233,6 +313,9 @@ unknownArgsKey(const rapidjson::Value &args, const std::initializer_list<std::st
     if (proto == "icmp") {
         return IpRulesEngine::Proto::ICMP;
     }
+    if (proto == "other") {
+        return IpRulesEngine::Proto::OTHER;
+    }
     return std::nullopt;
 }
 
@@ -246,6 +329,10 @@ unknownArgsKey(const rapidjson::Value &args, const std::initializer_list<std::st
         return "udp";
     case IpRulesEngine::Proto::ICMP:
         return "icmp";
+    case IpRulesEngine::Proto::OTHER:
+        return "other";
+    case IpRulesEngine::Proto::UNKNOWN:
+        return "unknown";
     }
     return "any";
 }
@@ -305,18 +392,21 @@ unknownArgsKey(const rapidjson::Value &args, const std::initializer_list<std::st
     return "any";
 }
 
-template <class RuleLike> [[nodiscard]] std::string matchKeyMk1(const RuleLike &r) {
+template <class RuleLike> [[nodiscard]] std::string matchKeyMk2(const RuleLike &r) {
     std::string out;
-    out.reserve(192);
-    out.append("mk1");
+    out.reserve(256);
+    out.append("mk2");
+    out.append("|family=").append(familyStr(r.family));
     out.append("|dir=").append(directionStr(r.dir));
     out.append("|iface=").append(ifaceStr(r.iface));
     out.append("|ifindex=").append(std::to_string(r.ifindex));
     out.append("|proto=").append(protoStr(r.proto));
     out.append("|ctstate=").append(ctStateStr(r.ctState));
     out.append("|ctdir=").append(ctDirStr(r.ctDir));
-    out.append("|src=").append(formatCidrV4(r.src));
-    out.append("|dst=").append(formatCidrV4(r.dst));
+    out.append("|src=").append(r.family == IpRulesEngine::Family::IPV4 ? formatCidrV4(r.src)
+                                                                      : formatCidrV6(r.src6));
+    out.append("|dst=").append(r.family == IpRulesEngine::Family::IPV4 ? formatCidrV4(r.dst)
+                                                                      : formatCidrV6(r.dst6));
     out.append("|sport=").append(formatPortPredicate(r.sport));
     out.append("|dport=").append(formatPortPredicate(r.dport));
     return out;
@@ -324,15 +414,24 @@ template <class RuleLike> [[nodiscard]] std::string matchKeyMk1(const RuleLike &
 
 void addPreflightReport(rapidjson::Value &dst, rapidjson::Document::AllocatorType &alloc,
                         const IpRulesEngine::PreflightReport &rep) {
-    rapidjson::Value summary(rapidjson::kObjectType);
-    summary.AddMember("rulesTotal", rep.summary.rulesTotal, alloc);
-    summary.AddMember("rangeRulesTotal", rep.summary.rangeRulesTotal, alloc);
-    summary.AddMember("ctRulesTotal", rep.summary.ctRulesTotal, alloc);
-    summary.AddMember("ctUidsTotal", rep.summary.ctUidsTotal, alloc);
-    summary.AddMember("subtablesTotal", rep.summary.subtablesTotal, alloc);
-    summary.AddMember("maxSubtablesPerUid", rep.summary.maxSubtablesPerUid, alloc);
-    summary.AddMember("maxRangeRulesPerBucket", rep.summary.maxRangeRulesPerBucket, alloc);
-    dst.AddMember("summary", summary, alloc);
+    const auto makeSummary = [&](const IpRulesEngine::PreflightSummary &s) {
+        rapidjson::Value out(rapidjson::kObjectType);
+        out.AddMember("rulesTotal", s.rulesTotal, alloc);
+        out.AddMember("rangeRulesTotal", s.rangeRulesTotal, alloc);
+        out.AddMember("ctRulesTotal", s.ctRulesTotal, alloc);
+        out.AddMember("ctUidsTotal", s.ctUidsTotal, alloc);
+        out.AddMember("subtablesTotal", s.subtablesTotal, alloc);
+        out.AddMember("maxSubtablesPerUid", s.maxSubtablesPerUid, alloc);
+        out.AddMember("maxRangeRulesPerBucket", s.maxRangeRulesPerBucket, alloc);
+        return out;
+    };
+
+    dst.AddMember("summary", makeSummary(rep.summary), alloc);
+
+    rapidjson::Value byFamily(rapidjson::kObjectType);
+    byFamily.AddMember("ipv4", makeSummary(rep.byFamily.ipv4), alloc);
+    byFamily.AddMember("ipv6", makeSummary(rep.byFamily.ipv6), alloc);
+    dst.AddMember("byFamily", byFamily, alloc);
 
     rapidjson::Value limits(rapidjson::kObjectType);
     rapidjson::Value recommended(rapidjson::kObjectType);
@@ -432,7 +531,7 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
             rapidjson::Value item(rapidjson::kObjectType);
             item.AddMember("ruleId", r.ruleId, alloc);
             item.AddMember("clientRuleId", makeString(r.clientRuleId, alloc), alloc);
-            item.AddMember("matchKey", makeString(matchKeyMk1(r), alloc), alloc);
+            item.AddMember("matchKey", makeString(matchKeyMk2(r), alloc), alloc);
 
             item.AddMember("action", makeString(actionStr(r.action), alloc), alloc);
             item.AddMember("priority", r.priority, alloc);
@@ -440,6 +539,7 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
             item.AddMember("enforce", static_cast<uint32_t>(r.enforce ? 1 : 0), alloc);
             item.AddMember("log", static_cast<uint32_t>(r.log ? 1 : 0), alloc);
 
+            item.AddMember("family", makeString(familyStr(r.family), alloc), alloc);
             item.AddMember("dir", makeString(directionStr(r.dir), alloc), alloc);
             item.AddMember("iface", makeString(ifaceStr(r.iface), alloc), alloc);
             item.AddMember("ifindex", r.ifindex, alloc);
@@ -450,8 +550,16 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
             ct.AddMember("direction", makeString(ctDirStr(r.ctDir), alloc), alloc);
             item.AddMember("ct", ct, alloc);
 
-            item.AddMember("src", makeString(formatCidrV4(r.src), alloc), alloc);
-            item.AddMember("dst", makeString(formatCidrV4(r.dst), alloc), alloc);
+            item.AddMember("src",
+                           makeString(r.family == IpRulesEngine::Family::IPV4 ? formatCidrV4(r.src)
+                                                                            : formatCidrV6(r.src6),
+                                      alloc),
+                           alloc);
+            item.AddMember("dst",
+                           makeString(r.family == IpRulesEngine::Family::IPV4 ? formatCidrV4(r.dst)
+                                                                            : formatCidrV6(r.dst6),
+                                      alloc),
+                           alloc);
             item.AddMember("sport", makeString(formatPortPredicate(r.sport), alloc), alloc);
             item.AddMember("dport", makeString(formatPortPredicate(r.dport), alloc), alloc);
 
@@ -546,7 +654,8 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
 
             if (const auto unknown = ControlVNext::findUnknownKey(
                     rule, {"clientRuleId", "action", "priority", "enabled", "enforce", "log",
-                           "dir", "iface", "ifindex", "proto", "ct", "src", "dst", "sport", "dport"});
+                           "family", "dir", "iface", "ifindex", "proto", "ct", "src", "dst", "sport",
+                           "dport"});
                 unknown.has_value()) {
                 rapidjson::Document response = ControlVNext::makeErrorResponse(
                     id, "SYNTAX_ERROR", "unknown rule key: " + std::string(*unknown));
@@ -649,6 +758,26 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
                 return ResponsePlan{.response = std::move(response)};
             }
 
+            const auto familyIt = rule.FindMember("family");
+            if (familyIt == rule.MemberEnd()) {
+                rapidjson::Document response =
+                    ControlVNext::makeErrorResponse(id, "MISSING_ARGUMENT", "missing rule.family");
+                return ResponsePlan{.response = std::move(response)};
+            }
+            if (!familyIt->value.IsString()) {
+                rapidjson::Document response = ControlVNext::makeErrorResponse(
+                    id, "INVALID_ARGUMENT", "rule.family must be string");
+                return ResponsePlan{.response = std::move(response)};
+            }
+            const std::string_view familyStrView(familyIt->value.GetString(),
+                                                 familyIt->value.GetStringLength());
+            const auto family = parseFamily(familyStrView);
+            if (!family.has_value()) {
+                rapidjson::Document response = ControlVNext::makeErrorResponse(
+                    id, "INVALID_ARGUMENT", "rule.family must be ipv4|ipv6");
+                return ResponsePlan{.response = std::move(response)};
+            }
+
             const auto dirIt = rule.FindMember("dir");
             if (dirIt == rule.MemberEnd()) {
                 rapidjson::Document response =
@@ -716,7 +845,7 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
             const auto proto = parseProto(protoStrView);
             if (!proto.has_value()) {
                 rapidjson::Document response = ControlVNext::makeErrorResponse(
-                    id, "INVALID_ARGUMENT", "rule.proto must be any|tcp|udp|icmp");
+                    id, "INVALID_ARGUMENT", "rule.proto must be any|tcp|udp|icmp|other");
                 return ResponsePlan{.response = std::move(response)};
             }
 
@@ -788,12 +917,21 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
                     ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "rule.src must be string");
                 return ResponsePlan{.response = std::move(response)};
             }
-            IpRulesEngine::CidrV4 src;
-            if (!parseCidrV4(std::string_view(srcIt->value.GetString(), srcIt->value.GetStringLength()),
-                             src)) {
-                rapidjson::Document response = ControlVNext::makeErrorResponse(
-                    id, "INVALID_ARGUMENT", "rule.src must be any or CIDR a.b.c.d/prefix");
-                return ResponsePlan{.response = std::move(response)};
+            const std::string_view srcStrView(srcIt->value.GetString(), srcIt->value.GetStringLength());
+            IpRulesEngine::CidrV4 src4 = IpRulesEngine::CidrV4::anyCidr();
+            IpRulesEngine::CidrV6 src6 = IpRulesEngine::CidrV6::anyCidr();
+            if (*family == IpRulesEngine::Family::IPV4) {
+                if (!parseCidrV4(srcStrView, src4)) {
+                    rapidjson::Document response = ControlVNext::makeErrorResponse(
+                        id, "INVALID_ARGUMENT", "rule.src must be any or CIDR a.b.c.d/prefix");
+                    return ResponsePlan{.response = std::move(response)};
+                }
+            } else {
+                if (!parseCidrV6(srcStrView, src6)) {
+                    rapidjson::Document response = ControlVNext::makeErrorResponse(
+                        id, "INVALID_ARGUMENT", "rule.src must be any or IPv6 CIDR");
+                    return ResponsePlan{.response = std::move(response)};
+                }
             }
 
             const auto dstIt = rule.FindMember("dst");
@@ -807,12 +945,21 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
                     ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "rule.dst must be string");
                 return ResponsePlan{.response = std::move(response)};
             }
-            IpRulesEngine::CidrV4 dst;
-            if (!parseCidrV4(std::string_view(dstIt->value.GetString(), dstIt->value.GetStringLength()),
-                             dst)) {
-                rapidjson::Document response = ControlVNext::makeErrorResponse(
-                    id, "INVALID_ARGUMENT", "rule.dst must be any or CIDR a.b.c.d/prefix");
-                return ResponsePlan{.response = std::move(response)};
+            const std::string_view dstStrView(dstIt->value.GetString(), dstIt->value.GetStringLength());
+            IpRulesEngine::CidrV4 dst4 = IpRulesEngine::CidrV4::anyCidr();
+            IpRulesEngine::CidrV6 dst6 = IpRulesEngine::CidrV6::anyCidr();
+            if (*family == IpRulesEngine::Family::IPV4) {
+                if (!parseCidrV4(dstStrView, dst4)) {
+                    rapidjson::Document response = ControlVNext::makeErrorResponse(
+                        id, "INVALID_ARGUMENT", "rule.dst must be any or CIDR a.b.c.d/prefix");
+                    return ResponsePlan{.response = std::move(response)};
+                }
+            } else {
+                if (!parseCidrV6(dstStrView, dst6)) {
+                    rapidjson::Document response = ControlVNext::makeErrorResponse(
+                        id, "INVALID_ARGUMENT", "rule.dst must be any or IPv6 CIDR");
+                    return ResponsePlan{.response = std::move(response)};
+                }
             }
 
             const auto sportIt = rule.FindMember("sport");
@@ -855,8 +1002,18 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
                 return ResponsePlan{.response = std::move(response)};
             }
 
+            if ((*proto == IpRulesEngine::Proto::ICMP || *proto == IpRulesEngine::Proto::OTHER) &&
+                (!sport.isAny() || !dport.isAny())) {
+                rapidjson::Document response = ControlVNext::makeErrorResponse(
+                    id, "INVALID_ARGUMENT",
+                    (*proto == IpRulesEngine::Proto::ICMP) ? "proto=icmp requires sport=any and dport=any"
+                                                          : "proto=other requires sport=any and dport=any");
+                return ResponsePlan{.response = std::move(response)};
+            }
+
             IpRulesEngine::ApplyRule r{};
             r.clientRuleId = std::string(clientRuleId);
+            r.family = *family;
             r.action = *action;
             r.priority = priorityIt->value.GetInt();
             r.enabled = enabled == 1;
@@ -868,12 +1025,14 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
             r.proto = *proto;
             r.ctState = *ctState;
             r.ctDir = *ctDir;
-            r.src = src;
-            r.dst = dst;
+            r.src = src4;
+            r.dst = dst4;
+            r.src6 = src6;
+            r.dst6 = dst6;
             r.sport = sport;
             r.dport = dport;
 
-            const std::string mk = matchKeyMk1(r);
+            const std::string mk = matchKeyMk2(r);
             matchKeyToIndexes[mk].push_back(static_cast<size_t>(idx));
 
             rules.push_back(std::move(r));
@@ -970,7 +1129,7 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
             rapidjson::Value item(rapidjson::kObjectType);
             item.AddMember("clientRuleId", makeString(r.clientRuleId, alloc), alloc);
             item.AddMember("ruleId", r.ruleId, alloc);
-            item.AddMember("matchKey", makeString(matchKeyMk1(r), alloc), alloc);
+            item.AddMember("matchKey", makeString(matchKeyMk2(r), alloc), alloc);
             mapRules.PushBack(item, alloc);
         }
         result.AddMember("rules", mapRules, alloc);

@@ -18,7 +18,9 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -92,6 +94,28 @@ struct Options {
     std::exit(exitCode);
 }
 
+std::string readAll(std::istream &in) {
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+std::string loadArgsJson(const std::string &token) {
+    if (token == "-") {
+        return readAll(std::cin);
+    }
+    if (!token.empty() && token.front() == '@') {
+        const std::string path = token.substr(1);
+        if (path.empty()) {
+            die("invalid argsJson: empty @file token");
+        }
+        std::ifstream f(path, std::ios::in | std::ios::binary);
+        if (!f) {
+            die("failed to open argsJson file: " + path);
+        }
+        return readAll(f);
+    }
+    return token;
+}
+
 void printHelp(std::ostream &out) {
     out << "Usage:\n"
            "  sucre-snort-ctl [--tcp host:port | --unix path | --abstract name] [options] <cmd> "
@@ -120,11 +144,13 @@ void printHelp(std::ostream &out) {
 	           "  IP: IPRULES.PREFLIGHT/PRINT/APPLY\n"
 	           "  Observability: METRICS.GET, METRICS.RESET, STREAM.START, STREAM.STOP\n"
 	           "\n"
-	           "Examples:\n"
+           "Examples:\n"
 	           "  sucre-snort-ctl --tcp 127.0.0.1:60607 hello\n"
 	           "  sucre-snort-ctl HELLO\n"
            "  sucre-snort-ctl APPS.LIST '{\"query\":\"com.\",\"userId\":0,\"limit\":50}'\n"
-           "  sucre-snort-ctl --follow STREAM.START '{\"type\":\"dns\",\"horizonSec\":0,\"minSize\":0}'\n";
+           "  sucre-snort-ctl --follow STREAM.START '{\"type\":\"dns\",\"horizonSec\":0,\"minSize\":0}'\n"
+           "  sucre-snort-ctl IPRULES.APPLY @/tmp/iprules_apply.json\n"
+           "  cat /tmp/iprules_apply.json | sucre-snort-ctl IPRULES.APPLY -\n";
 }
 
 std::optional<uint16_t> parseU16(const std::string_view token) {
@@ -360,7 +386,7 @@ int main(const int argc, char **argv) {
     SucreSnortCtl::RequestOptions request;
     request.id = opts.id;
     request.cmd = opts.cmd;
-    request.argsJson = opts.argsJson;
+    request.argsJson = loadArgsJson(opts.argsJson);
 
     SucreSnortCtl::SessionOptions session;
     session.pretty = opts.pretty;

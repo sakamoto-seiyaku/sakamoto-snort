@@ -209,6 +209,21 @@ std::optional<ResponsePlan> handleMetricsCommand(const ControlVNext::RequestView
             ct.AddMember("creates", snap.creates, alloc);
             ct.AddMember("expiredRetires", snap.expiredRetires, alloc);
             ct.AddMember("overflowDrops", snap.overflowDrops, alloc);
+            {
+                rapidjson::Value byFamily(rapidjson::kObjectType);
+                auto addFam = [&](const char *name,
+                                  const Conntrack::MetricsSnapshot::Family &fam) {
+                    rapidjson::Value obj(rapidjson::kObjectType);
+                    obj.AddMember("totalEntries", fam.totalEntries, alloc);
+                    obj.AddMember("creates", fam.creates, alloc);
+                    obj.AddMember("expiredRetires", fam.expiredRetires, alloc);
+                    obj.AddMember("overflowDrops", fam.overflowDrops, alloc);
+                    byFamily.AddMember(makeString(name, alloc), obj, alloc);
+                };
+                addFam("ipv4", snap.byFamily.ipv4);
+                addFam("ipv6", snap.byFamily.ipv6);
+                ct.AddMember("byFamily", byFamily, alloc);
+            }
             result.AddMember("conntrack", ct, alloc);
         }
 
@@ -261,4 +276,3 @@ std::optional<ResponsePlan> handleMetricsCommand(const ControlVNext::RequestView
 }
 
 } // namespace ControlVNextSessionCommands
-

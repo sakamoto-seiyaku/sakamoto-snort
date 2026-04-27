@@ -131,6 +131,7 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/SnortRuntime.cpp"
 )
 target_compile_definitions(conntrack_tests PRIVATE SUCRE_SNORT_TESTING=1)
+add_sucre_snort_host_test(ipv6_l4_walker_tests ipv6_l4_walker_tests.cpp)
 add_sucre_snort_host_test(ip_rules_engine_tests ip_rules_engine_tests.cpp "${SUCRE_SNORT_ROOT}/src/IpRulesEngine.cpp")
 add_sucre_snort_host_test(ip_rules_engine_tests_nocache ip_rules_engine_tests.cpp "${SUCRE_SNORT_ROOT}/src/IpRulesEngine.cpp")
 target_compile_definitions(ip_rules_engine_tests_nocache PRIVATE SUCRE_SNORT_IPRULES_DECISION_CACHE=0)
@@ -193,6 +194,18 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/ControlVNextSession.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamJson.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Host.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)
+
+add_sucre_snort_host_test(
+  control_vnext_pkt_event_json_tests
+  control_vnext_pkt_event_json_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamJson.cpp"
   "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
   "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"

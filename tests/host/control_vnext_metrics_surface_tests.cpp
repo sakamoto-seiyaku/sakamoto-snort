@@ -439,6 +439,18 @@ TEST_F(ControlVNextMetricsSurfaceTest, ConntrackShapeAndResetRejection) {
     EXPECT_TRUE(ct.HasMember("creates"));
     EXPECT_TRUE(ct.HasMember("expiredRetires"));
     EXPECT_TRUE(ct.HasMember("overflowDrops"));
+    EXPECT_TRUE(ct.HasMember("byFamily"));
+    const auto &byFamily = ct["byFamily"];
+    ASSERT_TRUE(byFamily.IsObject());
+    ASSERT_TRUE(byFamily.HasMember("ipv4"));
+    ASSERT_TRUE(byFamily.HasMember("ipv6"));
+    for (const auto name : {"ipv4", "ipv6"}) {
+        const auto &fam = byFamily[name];
+        EXPECT_TRUE(fam.HasMember("totalEntries"));
+        EXPECT_TRUE(fam.HasMember("creates"));
+        EXPECT_TRUE(fam.HasMember("expiredRetires"));
+        EXPECT_TRUE(fam.HasMember("overflowDrops"));
+    }
 
     const rapidjson::Document resetResp = Rpc::call(/*id=*/14, "METRICS.RESET", args);
     ControlVNext::ResponseView resetView;
@@ -492,4 +504,3 @@ TEST_F(ControlVNextMetricsSurfaceTest, PerfAndReasonsHaveStableWrappers) {
 }
 
 } // namespace
-

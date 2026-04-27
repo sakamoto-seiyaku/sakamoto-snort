@@ -168,7 +168,7 @@ PY
   # ----------------------------------------------------------------------
   iptest_reset_baseline
 
-  apply="$(vnext_rpc_ok IPRULES.APPLY "{\"app\":{\"uid\":${IPTEST_UID}},\"rules\":[{\"clientRuleId\":\"iface:allow\",\"action\":\"allow\",\"priority\":100,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]}")" || exit $?
+  apply="$(vnext_rpc_ok IPRULES.APPLY "{\"app\":{\"uid\":${IPTEST_UID}},\"rules\":[{\"clientRuleId\":\"iface:allow\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":100,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]}")" || exit $?
   rid_allow="$(rule_id_from_apply "$apply" "iface:allow" | tr -d '\r\n')"
 
   vnext_rpc_ok CONFIG.SET "{\"scope\":\"app\",\"app\":{\"uid\":${IPTEST_UID}},\"set\":{\"block.ifaceKindMask\":${mask}}}" >/dev/null || exit $?

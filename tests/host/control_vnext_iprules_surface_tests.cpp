@@ -159,7 +159,7 @@ struct Rpc {
 };
 
 rapidjson::Value makeRule(rapidjson::Document::AllocatorType &alloc, const char *clientRuleId,
-                          const char *dstCidr) {
+                          const char *dstCidr, const char *family = "ipv4") {
     rapidjson::Value r(rapidjson::kObjectType);
     r.AddMember("clientRuleId", rapidjson::Value(clientRuleId, alloc), alloc);
     r.AddMember("action", rapidjson::Value("block", alloc), alloc);
@@ -167,6 +167,7 @@ rapidjson::Value makeRule(rapidjson::Document::AllocatorType &alloc, const char 
     r.AddMember("enabled", 1u, alloc);
     r.AddMember("enforce", 1u, alloc);
     r.AddMember("log", 0u, alloc);
+    r.AddMember("family", rapidjson::Value(family, alloc), alloc);
     r.AddMember("dir", rapidjson::Value("out", alloc), alloc);
     r.AddMember("iface", rapidjson::Value("any", alloc), alloc);
     r.AddMember("ifindex", 0u, alloc);
@@ -209,6 +210,7 @@ TEST_F(ControlVNextIpRulesSurfaceTest, PreflightShapeAndTypes) {
 
     const auto &result = *view.result;
     ASSERT_TRUE(result.HasMember("summary"));
+    ASSERT_TRUE(result.HasMember("byFamily"));
     ASSERT_TRUE(result.HasMember("limits"));
     ASSERT_TRUE(result.HasMember("warnings"));
     ASSERT_TRUE(result.HasMember("violations"));
@@ -222,6 +224,23 @@ TEST_F(ControlVNextIpRulesSurfaceTest, PreflightShapeAndTypes) {
     EXPECT_TRUE(summary["subtablesTotal"].IsUint64());
     EXPECT_TRUE(summary["maxSubtablesPerUid"].IsUint64());
     EXPECT_TRUE(summary["maxRangeRulesPerBucket"].IsUint64());
+
+    const auto &byFamily = result["byFamily"];
+    ASSERT_TRUE(byFamily.IsObject());
+    ASSERT_TRUE(byFamily.HasMember("ipv4"));
+    ASSERT_TRUE(byFamily.HasMember("ipv6"));
+    ASSERT_TRUE(byFamily["ipv4"].IsObject());
+    ASSERT_TRUE(byFamily["ipv6"].IsObject());
+    for (const auto fam : {"ipv4", "ipv6"}) {
+        const auto &s = byFamily[fam];
+        EXPECT_TRUE(s["rulesTotal"].IsUint64());
+        EXPECT_TRUE(s["rangeRulesTotal"].IsUint64());
+        EXPECT_TRUE(s["ctRulesTotal"].IsUint64());
+        EXPECT_TRUE(s["ctUidsTotal"].IsUint64());
+        EXPECT_TRUE(s["subtablesTotal"].IsUint64());
+        EXPECT_TRUE(s["maxSubtablesPerUid"].IsUint64());
+        EXPECT_TRUE(s["maxRangeRulesPerBucket"].IsUint64());
+    }
 
     const auto &limits = result["limits"];
     ASSERT_TRUE(limits.IsObject());
@@ -285,6 +304,8 @@ TEST_F(ControlVNextIpRulesSurfaceTest, PrintSortedAndHasRequiredFields) {
         ASSERT_TRUE(r["clientRuleId"].IsString());
         ASSERT_TRUE(r.HasMember("matchKey"));
         ASSERT_TRUE(r["matchKey"].IsString());
+        ASSERT_TRUE(r.HasMember("family"));
+        ASSERT_TRUE(r["family"].IsString());
         ASSERT_TRUE(r.HasMember("stats"));
         ASSERT_TRUE(r["stats"].IsObject());
         EXPECT_TRUE(r["stats"]["hitPackets"].IsUint64());
@@ -309,7 +330,7 @@ TEST_F(ControlVNextIpRulesSurfaceTest, ApplyRejectsForbiddenFields) {
         if (std::string_view(forbiddenKey) == "ruleId") {
             r.AddMember("ruleId", 0u, alloc);
         } else if (std::string_view(forbiddenKey) == "matchKey") {
-            r.AddMember("matchKey", rapidjson::Value("mk1|...", alloc), alloc);
+            r.AddMember("matchKey", rapidjson::Value("mk2|...", alloc), alloc);
         } else if (std::string_view(forbiddenKey) == "stats") {
             r.AddMember("stats", rapidjson::Value(rapidjson::kObjectType), alloc);
         }
@@ -379,8 +400,9 @@ TEST_F(ControlVNextIpRulesSurfaceTest, ApplySuccessReturnsMappingAndReusesRuleId
     const uint32_t rid1 = map1["ruleId"].GetUint();
     EXPECT_EQ(rid1, 0u);
     ASSERT_TRUE(map1["matchKey"].IsString());
-    EXPECT_TRUE(std::string_view(map1["matchKey"].GetString()).find("dst=1.2.3.0/24") !=
-                std::string_view::npos)
+    const std::string_view mk1(map1["matchKey"].GetString());
+    EXPECT_TRUE(mk1.find("mk2|family=ipv4|") != std::string_view::npos);
+    EXPECT_TRUE(mk1.find("dst=1.2.3.0/24") != std::string_view::npos)
         << "CIDR must be canonicalized to network address in matchKey";
 
     // Apply again with same clientRuleId but different dst; ruleId must be reused.
@@ -402,6 +424,52 @@ TEST_F(ControlVNextIpRulesSurfaceTest, ApplySuccessReturnsMappingAndReusesRuleId
     const auto &map2 = (*v2.result)["rules"][0];
     ASSERT_TRUE(map2["ruleId"].IsUint());
     EXPECT_EQ(map2["ruleId"].GetUint(), rid1) << "ruleId must be stable for clientRuleId";
+}
+
+TEST_F(ControlVNextIpRulesSurfaceTest, ApplyIpv6RuleCanonicalizesCidrAndPrintsFamily) {
+    rapidjson::Document applyArgs(rapidjson::kObjectType);
+    auto &alloc = applyArgs.GetAllocator();
+    rapidjson::Value sel(rapidjson::kObjectType);
+    sel.AddMember("uid", kUid, alloc);
+    applyArgs.AddMember("app", sel, alloc);
+
+    rapidjson::Value rules(rapidjson::kArrayType);
+    rules.PushBack(makeRule(alloc, "v6", "2001:db8::1/64", "ipv6"), alloc);
+    applyArgs.AddMember("rules", rules, alloc);
+
+    const rapidjson::Document resp = Rpc::call(/*id=*/35, "IPRULES.APPLY", applyArgs);
+    ControlVNext::ResponseView view;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp, view).has_value());
+    ASSERT_TRUE(view.ok);
+    ASSERT_NE(view.result, nullptr);
+    ASSERT_TRUE((*view.result)["rules"].IsArray());
+    ASSERT_EQ((*view.result)["rules"].Size(), 1u);
+    const auto &map = (*view.result)["rules"][0];
+    ASSERT_TRUE(map["matchKey"].IsString());
+    const std::string_view mk(map["matchKey"].GetString());
+    EXPECT_TRUE(mk.find("mk2|family=ipv6|") != std::string_view::npos);
+    EXPECT_TRUE(mk.find("dst=2001:db8::/64") != std::string_view::npos)
+        << "IPv6 CIDR must be canonicalized to network address in matchKey";
+
+    // PRINT should reflect canonical CIDR and family.
+    rapidjson::Document printArgs(rapidjson::kObjectType);
+    auto &pAlloc = printArgs.GetAllocator();
+    rapidjson::Value app(rapidjson::kObjectType);
+    app.AddMember("uid", kUid, pAlloc);
+    printArgs.AddMember("app", app, pAlloc);
+
+    const rapidjson::Document printResp = Rpc::call(/*id=*/36, "IPRULES.PRINT", printArgs);
+    ControlVNext::ResponseView pv;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(printResp, pv).has_value());
+    ASSERT_TRUE(pv.ok);
+    ASSERT_NE(pv.result, nullptr);
+    ASSERT_TRUE((*pv.result)["rules"].IsArray());
+    ASSERT_EQ((*pv.result)["rules"].Size(), 1u);
+    const auto &r = (*pv.result)["rules"][0];
+    ASSERT_TRUE(r["family"].IsString());
+    EXPECT_STREQ(r["family"].GetString(), "ipv6");
+    ASSERT_TRUE(r["dst"].IsString());
+    EXPECT_STREQ(r["dst"].GetString(), "2001:db8::/64");
 }
 
 TEST_F(ControlVNextIpRulesSurfaceTest, ApplyPreflightFailureIncludesStructuredErrorPreflight) {
@@ -441,4 +509,3 @@ TEST_F(ControlVNextIpRulesSurfaceTest, ApplyPreflightFailureIncludesStructuredEr
 }
 
 } // namespace
-

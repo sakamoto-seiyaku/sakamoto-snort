@@ -237,7 +237,7 @@ main() {
   assert_conntrack_metric_eq "VNXCT-01b conntrack totalEntries reset before allow" "$conntrack" totalEntries 0 || exit 1
   assert_conntrack_metric_eq "VNXCT-01c conntrack creates reset before allow" "$conntrack" creates 0 || exit 1
 
-  rules_allow="[{\"clientRuleId\":\"ct:new-orig\",\"action\":\"allow\",\"priority\":200,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"new\",\"direction\":\"orig\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${IPTEST_CT_PORT}\"},{\"clientRuleId\":\"ct:est-reply\",\"action\":\"allow\",\"priority\":200,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"in\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"established\",\"direction\":\"reply\"},\"src\":\"${IPTEST_PEER_IP}/32\",\"dst\":\"any\",\"sport\":\"${IPTEST_CT_PORT}\",\"dport\":\"any\"}]"
+  rules_allow="[{\"clientRuleId\":\"ct:new-orig\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":200,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"new\",\"direction\":\"orig\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${IPTEST_CT_PORT}\"},{\"clientRuleId\":\"ct:est-reply\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":200,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"in\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"established\",\"direction\":\"reply\"},\"src\":\"${IPTEST_PEER_IP}/32\",\"dst\":\"any\",\"sport\":\"${IPTEST_CT_PORT}\",\"dport\":\"any\"}]"
   apply="$(vnext_rpc_ok IPRULES.APPLY "{\"app\":{\"uid\":${IPTEST_UID}},\"rules\":${rules_allow}}")" || exit $?
   rid_new="$(rule_id_from_apply "$apply" "ct:new-orig" | tr -d '\r\n')"
   rid_est="$(rule_id_from_apply "$apply" "ct:est-reply" | tr -d '\r\n')"
@@ -273,7 +273,7 @@ main() {
   assert_conntrack_metric_eq "VNXCT-07b conntrack totalEntries reset before block" "$conntrack" totalEntries 0 || exit 1
   assert_conntrack_metric_eq "VNXCT-07c conntrack creates reset before block" "$conntrack" creates 0 || exit 1
 
-  rules_block="[{\"clientRuleId\":\"ct:block-new\",\"action\":\"block\",\"priority\":500,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"new\",\"direction\":\"orig\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${IPTEST_CT_PORT}\"}]"
+  rules_block="[{\"clientRuleId\":\"ct:block-new\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":500,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"new\",\"direction\":\"orig\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${IPTEST_CT_PORT}\"}]"
   apply2="$(vnext_rpc_ok IPRULES.APPLY "{\"app\":{\"uid\":${IPTEST_UID}},\"rules\":${rules_block}}")" || exit $?
   rid_block="$(rule_id_from_apply "$apply2" "ct:block-new" | tr -d '\r\n')"
   assert_rule_id "VNXCT-08 IPRULES.APPLY returns ct.block-new ruleId" "$rid_block" || exit 1

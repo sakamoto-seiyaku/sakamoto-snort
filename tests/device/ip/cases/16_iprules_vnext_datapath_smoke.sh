@@ -254,6 +254,53 @@ trigger_tcp_expect_failure() {
   fi
 }
 
+tcp6_probe_once() {
+  local port="$1"
+  set +e
+  iptest_adb_shell "nc ${IPTEST_NC6_FLAG} -n -z -w 1 \"$IPTEST_PEER_IP6\" \"$port\" >/dev/null 2>&1"
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
+trigger_tcp6_expect_success() {
+  local desc="$1" port="$2" ok=0
+  for _ in 1 2 3; do
+    if tcp6_probe_once "$port"; then
+      ok=1
+    fi
+  done
+  if [[ $ok -eq 1 ]]; then
+    log_pass "$desc"
+  else
+    log_fail "$desc"
+    exit 1
+  fi
+}
+
+trigger_tcp6_expect_failure() {
+  local desc="$1" port="$2" ok=0
+  for _ in 1 2 3; do
+    if tcp6_probe_once "$port"; then
+      ok=1
+    fi
+  done
+  if [[ $ok -eq 0 ]]; then
+    log_pass "$desc"
+  else
+    log_fail "$desc"
+    echo "    at least one nc -z probe unexpectedly succeeded"
+    exit 1
+  fi
+}
+
+udp6_send_once() {
+  local port="$1"
+  # On some Android builds, `nc -u` can hang despite `-q/-w`. Wrap in `timeout`
+  # to keep Tier-1 smoke deterministic; tolerate failures.
+  iptest_adb_shell "timeout 3 sh -c 'printf x | nc ${IPTEST_NC6_FLAG} -n -u -w 1 -q 1 \"$IPTEST_PEER_IP6\" \"$port\" >/dev/null 2>&1' >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
 PKT_CAPTURE_DIR=""
 PKT_CAPTURE_PID=""
 
@@ -269,6 +316,8 @@ pkt_capture_begin() {
   local dport="${9:-443}"
   local src_ip="${10:-}"
   local sport="${11:-}"
+  local dst_ip="${12:-$IPTEST_PEER_IP}"
+  local l4_status="${13:-known-l4}"
 
   PKT_CAPTURE_DIR="$(mktemp -d)"
   local ready_file="$PKT_CAPTURE_DIR/stream_ready"
@@ -278,9 +327,10 @@ pkt_capture_begin() {
     EXPECT_UID="$app_uid" \
     EXPECT_DIRECTION="$direction" \
     EXPECT_SRC="$src_ip" \
-    EXPECT_DST="$IPTEST_PEER_IP" \
+    EXPECT_DST="$dst_ip" \
     EXPECT_SPORT="$sport" \
     EXPECT_DPORT="$dport" \
+    EXPECT_L4_STATUS="$l4_status" \
     EXPECT_REASON="$reason" \
     EXPECT_ACCEPTED="$accepted" \
     EXPECT_RULE_ID="$rule_id" \
@@ -304,6 +354,7 @@ EXPECT_SRC = os.environ.get("EXPECT_SRC", "")
 EXPECT_DST = os.environ.get("EXPECT_DST", "")
 EXPECT_SPORT = os.environ.get("EXPECT_SPORT", "")
 EXPECT_DPORT = os.environ.get("EXPECT_DPORT", "")
+EXPECT_L4_STATUS = os.environ.get("EXPECT_L4_STATUS", "")
 EXPECT_REASON = os.environ.get("EXPECT_REASON", "")
 EXPECT_ACCEPTED = os.environ.get("EXPECT_ACCEPTED", "")
 EXPECT_RULE_ID = os.environ.get("EXPECT_RULE_ID", "")
@@ -384,6 +435,8 @@ def matches(frame: dict) -> bool:
     if EXPECT_SPORT and int_field(frame, "srcPort") != int(EXPECT_SPORT):
         return False
     if EXPECT_DPORT and int_field(frame, "dstPort") != int(EXPECT_DPORT):
+        return False
+    if EXPECT_L4_STATUS and frame.get("l4Status") != EXPECT_L4_STATUS:
         return False
     if EXPECT_REASON and frame.get("reasonId") != EXPECT_REASON:
         return False
@@ -572,9 +625,15 @@ assert_or_exit "VNXDP-03 CONFIG.SET device ack" "$cfg_dev" \
 log_info "setting up tier1 topology..."
 table="$(iptest_tier1_setup)" || exit $?
 log_info "tier1 table=$table"
+ipv6_tcp_port=4443
+ipv6_udp_port=4444
 iptest_tier1_start_tcp_zero_server 443 >/dev/null 2>&1 || {
   echo "BLOCKED: failed to start tier1 tcp server (port=443)" >&2
   exit 77
+}
+adb_su "ip netns exec \"$IPTEST_NS\" sh -c 'nc ${IPTEST_NC6_FLAG} -p \"$ipv6_tcp_port\" -L cat /dev/zero >/dev/null 2>&1 & echo \$!'" >/dev/null 2>&1 || {
+  echo "SKIP: failed to start tier1 ipv6 tcp server (port=$ipv6_tcp_port)" >&2
+  exit 10
 }
 
 # Ensure the {uid} selector exists in AppManager before CONFIG.GET/SET + IPRULES.APPLY.
@@ -625,7 +684,7 @@ dst_cidr="${IPTEST_PEER_IP}/32"
 # -----------------------------------------------------------------------------
 # IP / Case 2: enforce allow
 # -----------------------------------------------------------------------------
-apply_args="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r1\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
+apply_args="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r1\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
 ctl_json_or_block apply IPRULES.APPLY "$apply_args" "IPRULES.APPLY(allow) failed"
 assert_or_exit "VNXDP-05 IPRULES.APPLY allow ok" "$apply" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
@@ -651,7 +710,7 @@ assert_rule_stat_ge "VNXDP-07 per-rule stats hitPackets increments" "$rule_id" h
 # -----------------------------------------------------------------------------
 # IP / Case 3: enforce block
 # -----------------------------------------------------------------------------
-apply_args_block="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r2\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
+apply_args_block="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r2\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
 ctl_json_or_block apply_block IPRULES.APPLY "$apply_args_block" "IPRULES.APPLY(block) failed"
 assert_or_exit "VNXDP-08 IPRULES.APPLY block ok" "$apply_block" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
@@ -677,7 +736,7 @@ assert_rule_stat_ge "VNXDP-08j per-rule stats hitPackets increments" "$block_rul
 # -----------------------------------------------------------------------------
 # IP / Case 4: would-match overlay on final ACCEPT
 # -----------------------------------------------------------------------------
-apply_args_would="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r3\",\"action\":\"block\",\"priority\":12,\"enabled\":1,\"enforce\":0,\"log\":1,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
+apply_args_would="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r3\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":12,\"enabled\":1,\"enforce\":0,\"log\":1,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
 ctl_json_or_block apply_would IPRULES.APPLY "$apply_args_would" "IPRULES.APPLY(would) failed"
 assert_or_exit "VNXDP-09 IPRULES.APPLY would ok" "$apply_would" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
@@ -731,7 +790,7 @@ PY
 fi
 log_info "tier1 ifaceKindBit=$iface_kind_bit (ifindex=${iface_index:-?} kind=${iface_kind:-?})"
 
-apply_args_iface="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r4\",\"action\":\"allow\",\"priority\":13,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
+apply_args_iface="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r4\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":13,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
 ctl_json_or_block apply_iface IPRULES.APPLY "$apply_args_iface" "IPRULES.APPLY(iface shadow rule) failed"
 assert_or_exit "VNXDP-10 IPRULES.APPLY iface shadow rule ok" "$apply_iface" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
@@ -763,6 +822,77 @@ assert_or_exit "VNXDP-10l restore block.ifaceKindMask ack" "$cfg_iface_restore" 
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
 
 # -----------------------------------------------------------------------------
+# IP / Case 5b: IPv6 dual-stack datapath sanity (TCP + UDP)
+# -----------------------------------------------------------------------------
+dst6_cidr="${IPTEST_PEER_IP6}/128"
+
+apply_args6_allow="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:ipv6-allow\",\"family\":\"ipv6\",\"action\":\"allow\",\"priority\":30,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst6_cidr}\",\"sport\":\"any\",\"dport\":\"${ipv6_tcp_port}\"}]}"
+ctl_json_or_block apply6_allow IPRULES.APPLY "$apply_args6_allow" "IPRULES.APPLY(ipv6 allow) failed"
+assert_or_exit "VNXDP-10m IPRULES.APPLY ipv6 allow ok" "$apply6_allow" \
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
+rule6_allow_id="$(single_rule_id "$apply6_allow")" || rule6_allow_id=""
+if [[ ! "$rule6_allow_id" =~ ^[0-9]+$ ]]; then
+  log_fail "VNXDP-10n IPRULES.APPLY ipv6 allow returns ruleId"
+  echo "    ruleId=$rule6_allow_id"
+  exit 1
+fi
+
+metrics_reset_reasons "VNXDP-10o METRICS.RESET reasons ok (ipv6 allow)"
+metrics_reset_traffic "VNXDP-10p METRICS.RESET traffic ok (ipv6 allow)"
+assert_traffic_zero "VNXDP-10q traffic zero after reset (ipv6 allow)"
+
+pkt_capture_begin present out IP_RULE_ALLOW true "$rule6_allow_id" "" 0 0 "$ipv6_tcp_port" "" "" "$IPTEST_PEER_IP6"
+trigger_tcp6_expect_success "VNXDP-10r IPv6 TCP connect succeeds with allow rule" "$ipv6_tcp_port"
+pkt_capture_wait "VNXDP-10s STREAM pkt contains ipv6 IP_RULE_ALLOW + ruleId"
+assert_reason_bucket_ge "VNXDP-10t reasons IP_RULE_ALLOW increments (ipv6)" IP_RULE_ALLOW packets 1
+assert_traffic_bucket_ge "VNXDP-10u traffic txp.allow increments (ipv6)" txp allow 1
+assert_rule_stat_ge "VNXDP-10v ipv6 allow rule hitPackets increments" "$rule6_allow_id" hitPackets 1
+
+apply_args6_block="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:ipv6-block\",\"family\":\"ipv6\",\"action\":\"block\",\"priority\":31,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst6_cidr}\",\"sport\":\"any\",\"dport\":\"${ipv6_tcp_port}\"}]}"
+ctl_json_or_block apply6_block IPRULES.APPLY "$apply_args6_block" "IPRULES.APPLY(ipv6 block) failed"
+assert_or_exit "VNXDP-10w IPRULES.APPLY ipv6 block ok" "$apply6_block" \
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
+rule6_block_id="$(single_rule_id "$apply6_block")" || rule6_block_id=""
+if [[ ! "$rule6_block_id" =~ ^[0-9]+$ ]]; then
+  log_fail "VNXDP-10x IPRULES.APPLY ipv6 block returns ruleId"
+  echo "    ruleId=$rule6_block_id"
+  exit 1
+fi
+
+metrics_reset_reasons "VNXDP-10y METRICS.RESET reasons ok (ipv6 block)"
+metrics_reset_traffic "VNXDP-10z METRICS.RESET traffic ok (ipv6 block)"
+assert_traffic_zero "VNXDP-10za traffic zero after reset (ipv6 block)"
+
+pkt_capture_begin present out IP_RULE_BLOCK false "$rule6_block_id" "" 0 0 "$ipv6_tcp_port" "" "" "$IPTEST_PEER_IP6"
+trigger_tcp6_expect_failure "VNXDP-10zb IPv6 TCP connect fails with block rule" "$ipv6_tcp_port"
+pkt_capture_wait "VNXDP-10zc STREAM pkt contains ipv6 IP_RULE_BLOCK + ruleId"
+assert_reason_bucket_ge "VNXDP-10zd reasons IP_RULE_BLOCK increments (ipv6)" IP_RULE_BLOCK packets 1
+assert_traffic_bucket_ge "VNXDP-10ze traffic txp.block increments (ipv6)" txp block 1
+assert_rule_stat_ge "VNXDP-10zf ipv6 block rule hitPackets increments" "$rule6_block_id" hitPackets 1
+
+apply_args6_udp="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:ipv6-udp\",\"family\":\"ipv6\",\"action\":\"allow\",\"priority\":32,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"udp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst6_cidr}\",\"sport\":\"any\",\"dport\":\"${ipv6_udp_port}\"}]}"
+ctl_json_or_block apply6_udp IPRULES.APPLY "$apply_args6_udp" "IPRULES.APPLY(ipv6 udp allow) failed"
+assert_or_exit "VNXDP-10zg IPRULES.APPLY ipv6 udp allow ok" "$apply6_udp" \
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
+rule6_udp_id="$(single_rule_id "$apply6_udp")" || rule6_udp_id=""
+if [[ ! "$rule6_udp_id" =~ ^[0-9]+$ ]]; then
+  log_fail "VNXDP-10zh IPRULES.APPLY ipv6 udp allow returns ruleId"
+  echo "    ruleId=$rule6_udp_id"
+  exit 1
+fi
+
+metrics_reset_reasons "VNXDP-10zi METRICS.RESET reasons ok (ipv6 udp)"
+metrics_reset_traffic "VNXDP-10zj METRICS.RESET traffic ok (ipv6 udp)"
+assert_traffic_zero "VNXDP-10zk traffic zero after reset (ipv6 udp)"
+
+pkt_capture_begin present out IP_RULE_ALLOW true "$rule6_udp_id" "" 0 0 "$ipv6_udp_port" "" "" "$IPTEST_PEER_IP6"
+udp6_send_once "$ipv6_udp_port"
+pkt_capture_wait "VNXDP-10zl STREAM pkt contains ipv6 UDP IP_RULE_ALLOW + ruleId"
+assert_reason_bucket_ge "VNXDP-10zm reasons IP_RULE_ALLOW increments (ipv6 udp)" IP_RULE_ALLOW packets 1
+assert_traffic_bucket_ge "VNXDP-10zn traffic txp.allow increments (ipv6 udp)" txp allow 1
+assert_rule_stat_ge "VNXDP-10zo ipv6 udp rule hitPackets increments" "$rule6_udp_id" hitPackets 1
+
+# -----------------------------------------------------------------------------
 # IP / Case 6: block.enabled=0 gates reasons, traffic, and pkt stream
 # -----------------------------------------------------------------------------
 metrics_reset_reasons "VNXDP-11 METRICS.RESET reasons ok (block=0)"
@@ -786,7 +916,7 @@ assert_or_exit "VNXDP-11i CONFIG.SET block.enabled=1 ack" "$cfg_block1" \
 # -----------------------------------------------------------------------------
 # IP / Case 7: iprules.enabled=0 falls back to ALLOW_DEFAULT
 # -----------------------------------------------------------------------------
-apply_args_iprules_off="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r5\",\"action\":\"block\",\"priority\":14,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
+apply_args_iprules_off="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:r5\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":14,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"}]}"
 ctl_json_or_block apply_iprules_off IPRULES.APPLY "$apply_args_iprules_off" "IPRULES.APPLY(iprules.enabled=0 case) failed"
 assert_or_exit "VNXDP-12 IPRULES.APPLY block rule for iprules.enabled=0 ok" "$apply_iprules_off" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==1'
@@ -822,7 +952,7 @@ assert_or_exit "VNXDP-12m CONFIG.SET iprules.enabled=1 ack" "$cfg_iprules1" \
 # IP / Case 8: payload bytes drive traffic.*b, reasons bytes, and hitBytes
 # -----------------------------------------------------------------------------
 payload_bytes=65536
-apply_args_payload="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:payload-out\",\"action\":\"allow\",\"priority\":20,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"dx-smoke:payload-in\",\"action\":\"allow\",\"priority\":21,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"in\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"${dst_cidr}\",\"dst\":\"any\",\"sport\":\"443\",\"dport\":\"any\"}]}"
+apply_args_payload="{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"dx-smoke:payload-out\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":20,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${dst_cidr}\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"dx-smoke:payload-in\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":21,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"in\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"${dst_cidr}\",\"dst\":\"any\",\"sport\":\"443\",\"dport\":\"any\"}]}"
 ctl_json_or_block apply_payload IPRULES.APPLY "$apply_args_payload" "IPRULES.APPLY(payload allow rules) failed"
 assert_or_exit "VNXDP-13 IPRULES.APPLY payload allow rules ok" "$apply_payload" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; assert len(j["result"]["rules"])==2'

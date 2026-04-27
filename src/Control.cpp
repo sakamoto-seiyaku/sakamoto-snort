@@ -1057,6 +1057,10 @@ const char *ipRulesProtoStr(const IpRulesEngine::Proto p) noexcept {
         return "udp";
     case IpRulesEngine::Proto::ICMP:
         return "icmp";
+    case IpRulesEngine::Proto::OTHER:
+        return "other";
+    case IpRulesEngine::Proto::UNKNOWN:
+        return "unknown";
     }
     return "any";
 }

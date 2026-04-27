@@ -99,7 +99,15 @@ set_iprules_enabled() {
 apply_rules_for_uid() {
   local uid="$1"
   local rules_json="$2" # JSON array
-  vnext_rpc_ok IPRULES.APPLY "{\"app\":{\"uid\":${uid}},\"rules\":${rules_json}}" >/dev/null
+  # IPRULES.APPLY payloads can exceed Linux' per-arg length limits; use
+  # sucre-snort-ctl's @file argsJson loader for robustness.
+  local tmp
+  tmp="$(mktemp /tmp/iptest-perf-iprules-apply.XXXXXX.json)"
+  printf '{"app":{"uid":%s},"rules":%s}\n' "$uid" "$rules_json" >"$tmp"
+  vnext_rpc_ok IPRULES.APPLY "@$tmp" >/dev/null
+  local rc=$?
+  rm -f "$tmp" >/dev/null 2>&1 || true
+  return $rc
 }
 
 generate_traffic_rules_json() {
@@ -144,6 +152,7 @@ def rule(
 ):
     return {
         "clientRuleId": client_id,
+        "family": "ipv4",
         "action": action,
         "priority": priority,
         "enabled": enabled,
@@ -268,6 +277,7 @@ for i in range(n):
     rules.append(
         {
             "clientRuleId": f"bg:{uid}:{i}",
+            "family": "ipv4",
             "action": "allow",
             "priority": 1,
             "enabled": 1,

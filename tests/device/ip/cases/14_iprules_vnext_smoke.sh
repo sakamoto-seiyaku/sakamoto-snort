@@ -130,10 +130,10 @@ if [[ $st -ne 0 ]]; then
   exit 77
 fi
 assert_json_pred "VNX-03 IPRULES.PREFLIGHT shape" "$preflight" \
-  'import sys,json; j=json.load(sys.stdin); r=j["result"]; assert j["ok"] is True; assert "summary" in r and "limits" in r and "warnings" in r and "violations" in r'
+  'import sys,json; j=json.load(sys.stdin); r=j["result"]; assert j["ok"] is True; assert "summary" in r and "byFamily" in r and "limits" in r and "warnings" in r and "violations" in r'
 
 set +e
-apply="$(ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"g1:r1\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"1.2.3.4/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r2\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2.3.4.5/24\",\"sport\":\"any\",\"dport\":\"443\"}]}" 2>/dev/null)"
+apply="$(ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"g1:r1\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"1.2.3.4/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r2\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2.3.4.5/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r3\",\"family\":\"ipv6\",\"action\":\"block\",\"priority\":12,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2001:db8::1/64\",\"sport\":\"any\",\"dport\":\"443\"}]}" 2>/dev/null)"
 st=$?
 set -e
 if [[ $st -ne 0 ]]; then
@@ -141,7 +141,7 @@ if [[ $st -ne 0 ]]; then
   exit 77
 fi
 assert_json_pred "VNX-04 IPRULES.APPLY returns mapping" "$apply" \
-  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; rules=j["result"]["rules"]; assert len(rules)==2; assert set([r["clientRuleId"] for r in rules])==set(["g1:r1","g1:r2"]); assert all(isinstance(r["ruleId"], int) for r in rules); assert all(isinstance(r["matchKey"], str) for r in rules)'
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; rules=j["result"]["rules"]; assert len(rules)==3; assert set([r["clientRuleId"] for r in rules])==set(["g1:r1","g1:r2","g1:r3"]); assert all(isinstance(r["ruleId"], int) for r in rules); assert all(isinstance(r["matchKey"], str) for r in rules)'
 
 set +e
 printed="$(ctl_cmd IPRULES.PRINT "{\"app\":{\"uid\":${app_uid}}}" 2>/dev/null)"
@@ -152,7 +152,7 @@ if [[ $st -ne 0 ]]; then
   exit 77
 fi
 assert_json_pred "VNX-05 IPRULES.PRINT sorted + canonical CIDR" "$printed" \
-  'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; ids=[r["ruleId"] for r in rules]; assert len(rules)==2; assert ids==sorted(ids); assert any(r["dst"]=="1.2.3.0/24" for r in rules); assert any("dst=1.2.3.0/24" in r["matchKey"] for r in rules); \
+  'import sys,json; j=json.load(sys.stdin); rules=j["result"]["rules"]; ids=[r["ruleId"] for r in rules]; assert len(rules)==3; assert ids==sorted(ids); assert any(r["family"]=="ipv4" for r in rules); assert any(r["family"]=="ipv6" for r in rules); assert any(r["dst"]=="1.2.3.0/24" for r in rules); assert any("dst=1.2.3.0/24" in r["matchKey"] for r in rules); assert any(r["dst"]=="2001:db8::/64" for r in rules); assert any("family=ipv6" in r["matchKey"] and "dst=2001:db8::/64" in r["matchKey"] for r in rules); \
    required=("hitPackets","hitBytes","wouldHitPackets","wouldHitBytes"); \
    assert all(isinstance(r.get("stats",{}).get(k), int) for r in rules for k in required)'
 

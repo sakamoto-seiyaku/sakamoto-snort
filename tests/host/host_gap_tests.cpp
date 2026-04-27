@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -418,22 +419,108 @@ TEST_F(HostGapTest, PacketManagerIfaceBlockAndAllowDefaultUpdateReasonMetrics) {
     // IFACE_BLOCK
     app->blockIface(1);
     bool trackedSnapshot = true;
-    const bool verdictBlock = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, IPPROTO_TCP, 1, 2,
+    L4ParseResult l4{};
+    l4.l4Status = L4Status::KNOWN_L4;
+    l4.proto = IPPROTO_TCP;
+    l4.srcPort = 1;
+    l4.dstPort = 2;
+    l4.portsAvailable = 1;
+
+    const bool verdictBlock = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, l4,
                                              100, /*ifaceKindBit*/ 1, /*ifaceBlockedSnapshot*/ false,
-                                             /*ctPktV4*/ nullptr, /*streamEventOut*/ nullptr,
-                                             &trackedSnapshot);
+                                             /*ctPktV4*/ nullptr, /*ctPktV6*/ nullptr,
+                                             /*streamEventOut*/ nullptr,
+                                             /*trackedSnapshotOut*/ &trackedSnapshot);
     EXPECT_FALSE(verdictBlock);
     EXPECT_FALSE(trackedSnapshot);
 
     // ALLOW_DEFAULT
     app->blockIface(0);
-    const bool verdictAllow = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, IPPROTO_TCP, 1, 2,
+    const bool verdictAllow = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, l4,
                                              100, /*ifaceKindBit*/ 0, /*ifaceBlockedSnapshot*/ false);
     EXPECT_TRUE(verdictAllow);
 
     const auto snap = mgr.reasonMetricsSnapshot();
     EXPECT_EQ(snap.reasons[static_cast<size_t>(PacketReasonId::IFACE_BLOCK)].packets, 1U);
     EXPECT_EQ(snap.reasons[static_cast<size_t>(PacketReasonId::ALLOW_DEFAULT)].packets, 1U);
+}
+
+TEST_F(HostGapTest, PacketManagerIpv6ConntrackGatingIsPerFamily) {
+    PacketManager mgr;
+    settings.ipRulesEnabled(true);
+
+    const uint32_t uid = 10000;
+    auto app = std::make_shared<App>(uid, "u0.app");
+    auto host = std::make_shared<Host>();
+
+    // v4 uses conntrack, v6 does not. We will evaluate an IPv6 packet and ensure
+    // conntrack metrics remain unchanged (i.e. v4 mask bit MUST NOT leak to v6).
+    IpRulesEngine::ApplyRule v4{};
+    v4.clientRuleId = "v4";
+    v4.family = IpRulesEngine::Family::IPV4;
+    v4.action = IpRulesEngine::Action::ALLOW;
+    v4.priority = 1;
+    v4.proto = IpRulesEngine::Proto::TCP;
+    v4.ctState = IpRulesEngine::CtState::NEW;
+
+    IpRulesEngine::ApplyRule v6{};
+    v6.clientRuleId = "v6";
+    v6.family = IpRulesEngine::Family::IPV6;
+    v6.action = IpRulesEngine::Action::ALLOW;
+    v6.priority = 1;
+    v6.proto = IpRulesEngine::Proto::TCP;
+
+    ASSERT_TRUE(mgr.ipRules().replaceRulesForUid(uid, {v4, v6}).ok);
+
+    const auto snap = mgr.ipRules().hotSnapshot();
+    ASSERT_TRUE(snap.valid());
+    ASSERT_NE(snap.rulesEpoch(), 0u);
+    EXPECT_TRUE(snap.uidUsesCt(uid, IpRulesEngine::Family::IPV4));
+    EXPECT_FALSE(snap.uidUsesCt(uid, IpRulesEngine::Family::IPV6));
+
+    const std::array<std::uint8_t, 16> a = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 1};
+    const std::array<std::uint8_t, 16> b = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 2};
+    const Address<IPv6> srcIp(a.data());
+    const Address<IPv6> dstIp(b.data());
+
+    timespec ts{};
+    ::timespec_get(&ts, TIME_UTC);
+
+    L4ParseResult l4{};
+    l4.l4Status = L4Status::KNOWN_L4;
+    l4.proto = IPPROTO_TCP;
+    l4.srcPort = 12345;
+    l4.dstPort = 443;
+    l4.portsAvailable = 1;
+
+    Conntrack::PacketV6 ctPkt{};
+    ctPkt.tsNs = 1;
+    ctPkt.uid = uid;
+    ctPkt.srcIp = a;
+    ctPkt.dstIp = b;
+    ctPkt.proto = IPPROTO_TCP;
+    ctPkt.ipPayloadLen = 20;
+    ctPkt.srcPort = 12345;
+    ctPkt.dstPort = 443;
+    ctPkt.hasTcp = true;
+    ctPkt.tcp.dataOffsetWords = 5;
+    ctPkt.tcp.flags = TH_SYN;
+
+    const auto before = mgr.conntrackMetricsSnapshot();
+
+    const bool verdict = mgr.make<IPv6>(srcIp, dstIp, app, host, /*input*/ true, /*iface*/ 0, ts,
+                                        l4, /*len*/ 100,
+                                        /*ifaceKindBit*/ 0, /*ifaceBlockedSnapshot*/ false,
+                                        /*ctPktV4*/ nullptr, /*ctPktV6*/ &ctPkt);
+    EXPECT_TRUE(verdict);
+
+    const auto after = mgr.conntrackMetricsSnapshot();
+    EXPECT_EQ(after.totalEntries, before.totalEntries);
+    EXPECT_EQ(after.creates, before.creates);
+    EXPECT_EQ(after.byFamily.ipv6.totalEntries, before.byFamily.ipv6.totalEntries);
+    EXPECT_EQ(after.byFamily.ipv6.creates, before.byFamily.ipv6.creates);
 }
 
 TEST_F(HostGapTest, ActivityAndActivityManagerCurrentNoOpSemantics) {

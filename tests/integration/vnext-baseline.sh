@@ -620,6 +620,13 @@ main() {
 
     assert_ctl_ok "VNT-03 reconnect HELLO" ctl_cmd HELLO
 
+    # Ensure a deterministic baseline even if the device has persisted state from a previous run.
+    local pre_resetall
+    pre_resetall=$(ctl_cmd RESETALL) || true
+    assert_json_pred "VNT-03c RESETALL pre-clean ok=true" "$pre_resetall" \
+        'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
+    assert_ctl_ok "VNT-03d HELLO after RESETALL (pre-clean)" ctl_cmd HELLO
+
     log_section "Stream"
 
     assert_ctl_ok "VNT-03b STREAM activity start→event→stop flow" stream_activity_start_event_stop_smoke
@@ -903,7 +910,7 @@ PY
         assert_json_pred "VNT-22c IPRULES.PREFLIGHT has summary/limits" "$ip_preflight" \
             'import sys,json; j=json.load(sys.stdin); r=j["result"]; assert j["ok"] is True; assert "summary" in r and "limits" in r and "warnings" in r and "violations" in r'
 
-        ip_apply=$(ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"g1:r1\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"1.2.3.4/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r2\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2.3.4.5/24\",\"sport\":\"any\",\"dport\":\"443\"}]}" || true)
+        ip_apply=$(ctl_cmd IPRULES.APPLY "{\"app\":{\"uid\":${app_uid}},\"rules\":[{\"clientRuleId\":\"g1:r1\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"1.2.3.4/24\",\"sport\":\"any\",\"dport\":\"443\"},{\"clientRuleId\":\"g1:r2\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":11,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2.3.4.5/24\",\"sport\":\"any\",\"dport\":\"443\"}]}" || true)
         assert_json_pred "VNT-22d IPRULES.APPLY ok + returns mapping" "$ip_apply" \
             'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True; r=j["result"]; assert isinstance(r["uid"], int); assert isinstance(r["rules"], list); assert len(r["rules"])==2; assert set([x["clientRuleId"] for x in r["rules"]])==set(["g1:r1","g1:r2"]); assert all(isinstance(x["ruleId"], int) for x in r["rules"]); assert all(isinstance(x["matchKey"], str) for x in r["rules"])'
 

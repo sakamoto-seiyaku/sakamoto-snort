@@ -131,12 +131,12 @@ public:
     // Hot-path helper: cached per-UID IPRULES capability gates (amortized by rulesEpoch).
     //
     // Returns std::nullopt if cache is stale for the provided rulesEpoch.
-    std::optional<bool> ipRulesUsesCtIfFresh(const std::uint64_t rulesEpoch) const noexcept {
-        return _ipRulesCaps.usesCtIfFresh(rulesEpoch);
+    std::optional<std::uint8_t> ipRulesUsesCtMaskIfFresh(const std::uint64_t rulesEpoch) const noexcept {
+        return _ipRulesCaps.usesCtMaskIfFresh(rulesEpoch);
     }
 
-    void setIpRulesUsesCtCache(const std::uint64_t rulesEpoch, const bool usesCt) noexcept {
-        _ipRulesCaps.setUsesCt(rulesEpoch, usesCt);
+    void setIpRulesUsesCtMaskCache(const std::uint64_t rulesEpoch, const std::uint8_t mask) noexcept {
+        _ipRulesCaps.setUsesCtMask(rulesEpoch, mask);
     }
 
     bool hasData(const Stats::View view);

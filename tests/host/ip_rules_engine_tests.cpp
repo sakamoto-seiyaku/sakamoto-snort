@@ -32,6 +32,7 @@ static IpRulesEngine::PacketKeyV4 keyAnyTcp(const uint32_t uid) {
     k.dstIp = ipHost("93.184.216.34");
     k.srcPort = 12345;
     k.dstPort = 443;
+    k.portsAvailable = 1;
     return k;
 }
 
@@ -46,6 +47,7 @@ static IpRulesEngine::PacketKeyV4 keyAnyIcmp(const uint32_t uid) {
     k.proto = IPPROTO_ICMP;
     k.srcPort = 0;
     k.dstPort = 0;
+    k.portsAvailable = 0;
     return k;
 }
 
@@ -181,12 +183,16 @@ TEST(IpRulesEngineTest, GatingCacheRefreshesOnRulesEpochChange) {
 
     auto resolveUsesCt = [&](const IpRulesEngine::HotSnapshot &snap) -> bool {
         const std::uint64_t epoch = snap.rulesEpoch();
-        const auto cached = cache.usesCtIfFresh(epoch);
-        const bool usesCt = cached.has_value() ? *cached : snap.uidUsesCt(uid);
-        if (!cached.has_value()) {
-            cache.setUsesCt(epoch, usesCt);
+        const auto cachedMask = cache.usesCtMaskIfFresh(epoch);
+        if (cachedMask.has_value()) {
+            return (*cachedMask & 0x1u) != 0;
         }
-        return usesCt;
+
+        const bool usesCtV4 = snap.uidUsesCt(uid, IpRulesEngine::Family::IPV4);
+        const bool usesCtV6 = snap.uidUsesCt(uid, IpRulesEngine::Family::IPV6);
+        const std::uint8_t mask = static_cast<std::uint8_t>((usesCtV4 ? 0x1u : 0u) | (usesCtV6 ? 0x2u : 0u));
+        cache.setUsesCtMask(epoch, mask);
+        return usesCtV4;
     };
 
     const auto s0 = eng.hotSnapshot();

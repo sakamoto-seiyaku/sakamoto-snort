@@ -10,6 +10,7 @@
 #include <ControlVNextStreamManager.hpp>
 #include <HostManager.hpp>
 #include <IpRulesEngine.hpp>
+#include <L4ParseResult.hpp>
 #include <Packet.hpp>
 #include <ReasonMetrics.hpp>
 #include <Streamable.hpp>
@@ -52,10 +53,11 @@ public:
     template <class IP>
     bool make(const Address<IP> &srcIp, const Address<IP> &dstIp, const App::Ptr &app,
               const Host::Ptr &host,
-              const bool input, const uint32_t iface, const timespec timestamp, const int proto,
-              const uint16_t srcPort, const uint16_t dstPort, const uint16_t len,
+              const bool input, const uint32_t iface, const timespec timestamp,
+              const L4ParseResult &l4, const uint16_t len,
               const uint8_t ifaceKindBit, const bool ifaceBlockedSnapshot,
               const Conntrack::PacketV4 *ctPktV4 = nullptr,
+              const Conntrack::PacketV6 *ctPktV6 = nullptr,
               ControlVNextStreamManager::PktEvent *streamEventOut = nullptr,
               bool *trackedSnapshotOut = nullptr);
 
@@ -101,9 +103,10 @@ public:
 template <class IP>
 bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, const App::Ptr &app,
                          const Host::Ptr &host, const bool input, const uint32_t iface,
-                         const timespec timestamp, const int proto, const uint16_t srcPort,
-                         const uint16_t dstPort, const uint16_t len, const uint8_t ifaceKindBit,
+                         const timespec timestamp, const L4ParseResult &l4, const uint16_t len,
+                         const uint8_t ifaceKindBit,
                          const bool ifaceBlockedSnapshot, const Conntrack::PacketV4 *ctPktV4,
+                         const Conntrack::PacketV6 *ctPktV6,
                          ControlVNextStreamManager::PktEvent *streamEventOut,
                          bool *trackedSnapshotOut) {
     const bool trackedSnapshot = app->tracked();
@@ -135,9 +138,10 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
             ev.ipVersion = 6;
         }
         ev.ifindex = iface;
-        ev.proto = static_cast<std::uint16_t>(proto);
-        ev.srcPort = srcPort;
-        ev.dstPort = dstPort;
+        ev.proto = l4.proto;
+        ev.l4Status = l4.l4Status;
+        ev.srcPort = l4.srcPort;
+        ev.dstPort = l4.dstPort;
         ev.length = len;
         ev.ifaceKindBit = ifaceKindBit;
         ev.input = input;
@@ -175,55 +179,110 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
         fillStreamEvent(verdict, reasonId, ruleId, wouldRuleId);
         if (trackedSnapshot) {
             Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-                srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
+                srcIp, dstIp, host, app, input, iface, timestamp, static_cast<int>(l4.proto),
+                l4.srcPort, l4.dstPort, len,
                 verdict, reasonId, ruleId, wouldRuleId));
         }
         return verdict;
     }
 
-    // 2) IPv4-only fast path: IPRULES (exact cache -> classifier snapshot).
-    if constexpr (std::is_same_v<IP, IPv4>) {
-        if (settings.ipRulesEnabled()) {
-            auto v4HostFromNetBytes = [](const uint8_t *b) -> uint32_t {
-                return (static_cast<uint32_t>(b[0]) << 24) | (static_cast<uint32_t>(b[1]) << 16) |
-                       (static_cast<uint32_t>(b[2]) << 8) | static_cast<uint32_t>(b[3]);
-            };
+    // 2) Fast path: IPRULES (exact cache -> classifier snapshot).
+    if (settings.ipRulesEnabled()) {
+        const auto snap = _ipRules.hotSnapshot();
+        if (snap.valid()) {
+            constexpr std::uint8_t kUsesCtV4 = 1u << 0;
+            constexpr std::uint8_t kUsesCtV6 = 1u << 1;
+            const std::uint8_t maskBit = std::is_same_v<IP, IPv4> ? kUsesCtV4 : kUsesCtV6;
 
-            IpRulesEngine::PacketKeyV4 k{};
-            k.uid = app->uid();
-            k.dir = input ? 0 : 1;
-            k.ifaceKind = ifaceKindBit;
-            k.proto = static_cast<uint8_t>(proto);
-            k.ifindex = iface;
-            k.srcIp = v4HostFromNetBytes(srcIp.data());
-            k.dstIp = v4HostFromNetBytes(dstIp.data());
-            k.srcPort = srcPort;
-            k.dstPort = dstPort;
-
-            const auto snap = _ipRules.hotSnapshot();
-            if (snap.valid()) {
-                const std::uint64_t epoch = snap.rulesEpoch();
-                if (epoch != 0) {
-                    const auto cached = app->ipRulesUsesCtIfFresh(epoch);
-                    const bool usesCt =
-                        cached.has_value() ? *cached : snap.uidUsesCt(app->uid());
-                    if (!cached.has_value()) {
-                        app->setIpRulesUsesCtCache(epoch, usesCt);
-                    }
-                    if (usesCt) {
-                        if (ctPktV4 != nullptr) {
-                            ctPolicyView = _conntrack.inspectForPolicy(*ctPktV4);
-                            k.ctState = static_cast<std::uint8_t>(ctPolicyView->result.state);
-                            k.ctDir = static_cast<std::uint8_t>(ctPolicyView->result.direction);
-                        } else {
-                            k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::INVALID);
-                            k.ctDir = 0;
-                        }
-                    }
+            const std::uint64_t epoch = snap.rulesEpoch();
+            bool usesCt = false;
+            if (epoch != 0) {
+                std::uint8_t mask = 0;
+                if (const auto cachedMask = app->ipRulesUsesCtMaskIfFresh(epoch); cachedMask.has_value()) {
+                    mask = *cachedMask;
+                } else {
+                    const bool usesCtV4 = snap.uidUsesCt(app->uid(), IpRulesEngine::Family::IPV4);
+                    const bool usesCtV6 = snap.uidUsesCt(app->uid(), IpRulesEngine::Family::IPV6);
+                    mask = (usesCtV4 ? kUsesCtV4 : 0u) | (usesCtV6 ? kUsesCtV6 : 0u);
+                    app->setIpRulesUsesCtMaskCache(epoch, mask);
                 }
+                usesCt = (mask & maskBit) != 0;
             }
 
-            const auto decision = snap.evaluate(k);
+            const auto ipRulesProtoTok = [&]() -> std::uint8_t {
+                const std::uint16_t p = l4.proto;
+                if (p == IPPROTO_TCP) return static_cast<std::uint8_t>(IpRulesEngine::Proto::TCP);
+                if (p == IPPROTO_UDP) return static_cast<std::uint8_t>(IpRulesEngine::Proto::UDP);
+                if (p == IPPROTO_ICMP || p == IPPROTO_ICMPV6) {
+                    return static_cast<std::uint8_t>(IpRulesEngine::Proto::ICMP);
+                }
+                if (l4.l4Status == L4Status::INVALID_OR_UNAVAILABLE_L4) {
+                    return static_cast<std::uint8_t>(IpRulesEngine::Proto::UNKNOWN);
+                }
+                return static_cast<std::uint8_t>(IpRulesEngine::Proto::OTHER);
+            };
+
+            const bool l4AllowsCt =
+                l4.l4Status != L4Status::FRAGMENT &&
+                l4.l4Status != L4Status::INVALID_OR_UNAVAILABLE_L4;
+
+            IpRulesEngine::Decision decision{};
+            if constexpr (std::is_same_v<IP, IPv4>) {
+                auto v4HostFromNetBytes = [](const uint8_t *b) -> uint32_t {
+                    return (static_cast<uint32_t>(b[0]) << 24) | (static_cast<uint32_t>(b[1]) << 16) |
+                           (static_cast<uint32_t>(b[2]) << 8) | static_cast<uint32_t>(b[3]);
+                };
+
+                IpRulesEngine::PacketKeyV4 k{};
+                k.uid = app->uid();
+                k.dir = input ? 0 : 1;
+                k.ifaceKind = ifaceKindBit;
+                k.proto = ipRulesProtoTok();
+                k.ifindex = iface;
+                k.srcIp = v4HostFromNetBytes(srcIp.data());
+                k.dstIp = v4HostFromNetBytes(dstIp.data());
+                k.srcPort = l4.srcPort;
+                k.dstPort = l4.dstPort;
+                k.portsAvailable = l4.portsAvailable;
+
+                if (usesCt) {
+                    if (l4AllowsCt && ctPktV4 != nullptr) {
+                        ctPolicyView = _conntrack.inspectForPolicy(*ctPktV4);
+                        k.ctState = static_cast<std::uint8_t>(ctPolicyView->result.state);
+                        k.ctDir = static_cast<std::uint8_t>(ctPolicyView->result.direction);
+                    } else {
+                        k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::INVALID);
+                        k.ctDir = 0;
+                    }
+                }
+
+                decision = snap.evaluate(k);
+            } else {
+                IpRulesEngine::PacketKeyV6 k{};
+                k.uid = app->uid();
+                k.dir = input ? 0 : 1;
+                k.ifaceKind = ifaceKindBit;
+                k.proto = ipRulesProtoTok();
+                k.ifindex = iface;
+                std::memcpy(k.srcIp.data(), srcIp.data(), 16);
+                std::memcpy(k.dstIp.data(), dstIp.data(), 16);
+                k.srcPort = l4.srcPort;
+                k.dstPort = l4.dstPort;
+                k.portsAvailable = l4.portsAvailable;
+
+                if (usesCt) {
+                    if (l4AllowsCt && ctPktV6 != nullptr) {
+                        ctPolicyView = _conntrack.inspectForPolicy(*ctPktV6);
+                        k.ctState = static_cast<std::uint8_t>(ctPolicyView->result.state);
+                        k.ctDir = static_cast<std::uint8_t>(ctPolicyView->result.direction);
+                    } else {
+                        k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::INVALID);
+                        k.ctDir = 0;
+                    }
+                }
+
+                decision = snap.evaluate(k);
+            }
 
             if (decision.kind == IpRulesEngine::DecisionKind::ALLOW ||
                 decision.kind == IpRulesEngine::DecisionKind::BLOCK) {
@@ -232,8 +291,16 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                     verdict ? PacketReasonId::IP_RULE_ALLOW : PacketReasonId::IP_RULE_BLOCK;
                 ruleId = decision.ruleId;
 
-                if (verdict && ctPolicyView.has_value() && ctPktV4 != nullptr) {
-                    _conntrack.commitAccepted(*ctPktV4, *ctPolicyView);
+                if (verdict && ctPolicyView.has_value()) {
+                    if constexpr (std::is_same_v<IP, IPv4>) {
+                        if (ctPktV4 != nullptr) {
+                            _conntrack.commitAccepted(*ctPktV4, *ctPolicyView);
+                        }
+                    } else {
+                        if (ctPktV6 != nullptr) {
+                            _conntrack.commitAccepted(*ctPktV6, *ctPolicyView);
+                        }
+                    }
                 }
 
                 IpRulesEngine::observeEnforceHit(decision, static_cast<uint32_t>(len), tsNs);
@@ -250,8 +317,8 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                 fillStreamEvent(verdict, reasonId, ruleId, std::nullopt);
                 if (trackedSnapshot) {
                     Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-                        srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len,
-                        verdict, reasonId, ruleId, std::nullopt));
+                        srcIp, dstIp, host, app, input, iface, timestamp, static_cast<int>(l4.proto),
+                        l4.srcPort, l4.dstPort, len, verdict, reasonId, ruleId, std::nullopt));
                 }
                 return verdict;
             }
@@ -276,18 +343,22 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     const PacketReasonId reasonId = ipLeakBlocked ? PacketReasonId::IP_LEAK_BLOCK
                                                   : PacketReasonId::ALLOW_DEFAULT;
 
-    if constexpr (std::is_same_v<IP, IPv4>) {
-        if (verdict && ctPolicyView.has_value() && ctPktV4 != nullptr) {
-            _conntrack.commitAccepted(*ctPktV4, *ctPolicyView);
+    if (verdict && ctPolicyView.has_value()) {
+        if constexpr (std::is_same_v<IP, IPv4>) {
+            if (ctPktV4 != nullptr) {
+                _conntrack.commitAccepted(*ctPktV4, *ctPolicyView);
+            }
+        } else {
+            if (ctPktV6 != nullptr) {
+                _conntrack.commitAccepted(*ctPktV6, *ctPolicyView);
+            }
         }
     }
 
     // Would-match overlay: emit only if final verdict is ACCEPT.
-    if constexpr (std::is_same_v<IP, IPv4>) {
-        if (hasWouldDecision && verdict) {
-            wouldRuleId = wouldDecision.ruleId;
-            IpRulesEngine::observeWouldHitIfAccepted(wouldDecision, true, static_cast<uint32_t>(len), tsNs);
-        }
+    if (hasWouldDecision && verdict) {
+        wouldRuleId = wouldDecision.ruleId;
+        IpRulesEngine::observeWouldHitIfAccepted(wouldDecision, true, static_cast<uint32_t>(len), tsNs);
     }
 
     _reasonMetrics.observe(reasonId, len);
@@ -301,7 +372,8 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     fillStreamEvent(verdict, reasonId, ruleId, wouldRuleId);
     if (trackedSnapshot) {
         Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
-            srcIp, dstIp, host, app, input, iface, timestamp, proto, srcPort, dstPort, len, verdict,
+            srcIp, dstIp, host, app, input, iface, timestamp, static_cast<int>(l4.proto),
+            l4.srcPort, l4.dstPort, len, verdict,
             reasonId, ruleId, wouldRuleId));
     }
 

@@ -38,6 +38,91 @@ TEST(ConntrackTest, Ipv4FragmentsAreInvalid) {
     EXPECT_EQ(r.direction, Conntrack::CtDirection::ANY);
 }
 
+TEST(ConntrackTest, Ipv6FragmentsAreInvalid) {
+    Conntrack ct;
+    Conntrack::PacketV6 pkt{};
+    pkt.isFragment = true;
+
+    const auto r = ct.update(pkt);
+    EXPECT_EQ(r.state, Conntrack::CtState::INVALID);
+    EXPECT_EQ(r.direction, Conntrack::CtDirection::ANY);
+}
+
+TEST(ConntrackTest, TcpNewThenReplyBecomesEstablishedIpv6) {
+    Conntrack ct;
+
+    const std::array<std::uint8_t, 16> a = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 1};
+    const std::array<std::uint8_t, 16> b = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 2};
+
+    Conntrack::PacketV6 orig{};
+    orig.tsNs = 1;
+    orig.uid = 1000;
+    orig.srcIp = a;
+    orig.dstIp = b;
+    orig.proto = IPPROTO_TCP;
+    orig.srcPort = 12345;
+    orig.dstPort = 443;
+    orig.ipPayloadLen = 20;
+    orig.hasTcp = true;
+    orig.tcp.dataOffsetWords = 5;
+    orig.tcp.flags = TH_SYN;
+
+    auto r1 = ct.update(orig);
+    EXPECT_EQ(r1.state, Conntrack::CtState::NEW);
+    EXPECT_EQ(r1.direction, Conntrack::CtDirection::ORIG);
+
+    Conntrack::PacketV6 reply = orig;
+    reply.tsNs = 2;
+    std::swap(reply.srcIp, reply.dstIp);
+    std::swap(reply.srcPort, reply.dstPort);
+    reply.tcp.flags = static_cast<std::uint8_t>(TH_SYN | TH_ACK);
+
+    auto r2 = ct.update(reply);
+    EXPECT_EQ(r2.state, Conntrack::CtState::ESTABLISHED);
+    EXPECT_EQ(r2.direction, Conntrack::CtDirection::REPLY);
+
+    orig.tsNs = 3;
+    orig.tcp.flags = TH_ACK;
+    auto r3 = ct.update(orig);
+    EXPECT_EQ(r3.state, Conntrack::CtState::ESTABLISHED);
+    EXPECT_EQ(r3.direction, Conntrack::CtDirection::ORIG);
+}
+
+TEST(ConntrackTest, Icmp6EchoRequestReplyBecomesEstablished) {
+    Conntrack ct;
+
+    const std::array<std::uint8_t, 16> a = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 1};
+    const std::array<std::uint8_t, 16> b = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 2};
+
+    Conntrack::PacketV6 req{};
+    req.tsNs = 1;
+    req.uid = 1000;
+    req.srcIp = a;
+    req.dstIp = b;
+    req.proto = IPPROTO_ICMPV6;
+    req.hasIcmp = true;
+    req.icmp.type = 128; // echo request
+    req.icmp.code = 0;
+    req.icmp.id = 0xBEEF;
+
+    auto r1 = ct.update(req);
+    EXPECT_EQ(r1.state, Conntrack::CtState::NEW);
+    EXPECT_EQ(r1.direction, Conntrack::CtDirection::ORIG);
+
+    Conntrack::PacketV6 rep = req;
+    rep.tsNs = 2;
+    std::swap(rep.srcIp, rep.dstIp);
+    rep.icmp.type = 129; // echo reply
+
+    auto r2 = ct.update(rep);
+    EXPECT_EQ(r2.state, Conntrack::CtState::ESTABLISHED);
+    EXPECT_EQ(r2.direction, Conntrack::CtDirection::REPLY);
+}
+
 TEST(ConntrackTest, TcpNewThenReplyBecomesEstablished) {
     Conntrack ct;
 

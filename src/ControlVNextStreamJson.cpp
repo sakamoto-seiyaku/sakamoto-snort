@@ -83,6 +83,20 @@ namespace {
     }
 }
 
+[[nodiscard]] const char *l4StatusStr(const L4Status s) noexcept {
+    switch (s) {
+    case L4Status::KNOWN_L4:
+        return "known-l4";
+    case L4Status::OTHER_TERMINAL:
+        return "other-terminal";
+    case L4Status::FRAGMENT:
+        return "fragment";
+    case L4Status::INVALID_OR_UNAVAILABLE_L4:
+        return "invalid-or-unavailable-l4";
+    }
+    return "invalid-or-unavailable-l4";
+}
+
 [[nodiscard]] const char *dnsScopeStr(const DomainPolicySource source) noexcept {
     switch (source) {
     case DomainPolicySource::CUSTOM_WHITELIST:
@@ -207,6 +221,7 @@ rapidjson::Document makePktEvent(const ControlVNextStreamManager::PktEvent &even
     doc.AddMember("direction", makeString(event.input ? "in" : "out", alloc), alloc);
     doc.AddMember("ipVersion", static_cast<std::uint32_t>(event.ipVersion), alloc);
     doc.AddMember("protocol", makeString(protocolStr(event.proto), alloc), alloc);
+    doc.AddMember("l4Status", makeString(l4StatusStr(event.l4Status), alloc), alloc);
 
     if (const auto src = ipToString(event.srcIp, event.ipVersion); src.has_value()) {
         doc.AddMember("srcIp", makeString(*src, alloc), alloc);
@@ -215,8 +230,9 @@ rapidjson::Document makePktEvent(const ControlVNextStreamManager::PktEvent &even
         doc.AddMember("dstIp", makeString(*dst, alloc), alloc);
     }
 
-    doc.AddMember("srcPort", static_cast<std::uint32_t>(event.srcPort), alloc);
-    doc.AddMember("dstPort", static_cast<std::uint32_t>(event.dstPort), alloc);
+    const bool portsKnown = event.l4Status == L4Status::KNOWN_L4;
+    doc.AddMember("srcPort", static_cast<std::uint32_t>(portsKnown ? event.srcPort : 0), alloc);
+    doc.AddMember("dstPort", static_cast<std::uint32_t>(portsKnown ? event.dstPort : 0), alloc);
     doc.AddMember("length", static_cast<std::uint32_t>(event.length), alloc);
     doc.AddMember("ifindex", event.ifindex, alloc);
     doc.AddMember("ifaceKindBit", static_cast<std::uint32_t>(event.ifaceKindBit), alloc);

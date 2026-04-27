@@ -24,6 +24,17 @@ ping_once() {
   iptest_adb_as_uid "$IPTEST_UID" "ping -c 1 -W 1 \"$IPTEST_PEER_IP\" >/dev/null 2>&1 || true" >/dev/null 2>&1
 }
 
+ping6_once() {
+  iptest_detect_ping6_cmd >/dev/null 2>&1 || return 1
+  iptest_adb_as_uid "$IPTEST_UID" "$IPTEST_PING6_CMD -c 1 -W 1 \"$IPTEST_PEER_IP6\" >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
+ping6_large_once() {
+  local size="$1"
+  iptest_detect_ping6_cmd >/dev/null 2>&1 || return 1
+  iptest_adb_as_uid "$IPTEST_UID" "$IPTEST_PING6_CMD -s \"$size\" -c 1 -W 2 \"$IPTEST_PEER_IP6\" >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
 tcp_probe_once() {
   local port="$1"
   local sport="${2:-}"
@@ -258,7 +269,7 @@ main() {
   log_section "ICMP enforce"
 
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:icmp-allow\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:icmp-allow\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
   rid_allow="$(rule_id_from_apply "$apply" "m:icmp-allow" | tr -d '\r\n')"
   reset_reasons
   ping_once
@@ -274,7 +285,7 @@ main() {
   fi
 
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:icmp-block\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:icmp-block\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
   rid_block="$(rule_id_from_apply "$apply" "m:icmp-block" | tr -d '\r\n')"
   reset_reasons
   ping_once
@@ -290,7 +301,7 @@ main() {
   fi
 
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:icmp-anydir\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"any\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:icmp-anydir\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"any\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
   rid_anydir="$(rule_id_from_apply "$apply" "m:icmp-anydir" | tr -d '\r\n')"
   reset_reasons
   ping_once
@@ -311,7 +322,7 @@ main() {
   log_section "TCP/UDP enforce (ports)"
 
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:tcp-dport-exact\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${TCP_PORT}\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:tcp-dport-exact\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${TCP_PORT}\"}]")"
   rid_tcp_exact="$(rule_id_from_apply "$apply" "m:tcp-dport-exact" | tr -d '\r\n')"
   reset_reasons
   tcp_probe_once "$TCP_PORT"
@@ -329,7 +340,7 @@ main() {
   iptest_reset_baseline
   dport_lo=$((TCP_PORT - 5))
   dport_hi=$((TCP_PORT + 5))
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:tcp-dport-range\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${dport_lo}-${dport_hi}\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:tcp-dport-range\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${dport_lo}-${dport_hi}\"}]")"
   rid_tcp_range="$(rule_id_from_apply "$apply" "m:tcp-dport-range" | tr -d '\r\n')"
   reset_reasons
   tcp_probe_once "$TCP_PORT"
@@ -347,7 +358,7 @@ main() {
   iptest_reset_baseline
   miss_lo=$((TCP_PORT + 1))
   miss_hi=$((TCP_PORT + 2))
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:tcp-dport-miss\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${miss_lo}-${miss_hi}\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:tcp-dport-miss\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"tcp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${miss_lo}-${miss_hi}\"}]")"
   rid_tcp_miss="$(rule_id_from_apply "$apply" "m:tcp-dport-miss" | tr -d '\r\n')"
   reset_reasons
   tcp_probe_once "$TCP_PORT"
@@ -364,7 +375,7 @@ main() {
   fi
 
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:udp-dport\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"udp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${UDP_PORT}\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:udp-dport\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"udp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"${UDP_PORT}\"}]")"
   rid_udp="$(rule_id_from_apply "$apply" "m:udp-dport" | tr -d '\r\n')"
   reset_reasons
   udp_send_once "$UDP_PORT" "$FIXED_SPORT"
@@ -384,7 +395,7 @@ main() {
   # ----------------------------------------------------------------------
   log_section "CIDR canonicalization"
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:cidr24\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/24\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:cidr24\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/24\",\"sport\":\"any\",\"dport\":\"any\"}]")"
   rid_cidr="$(rule_id_from_apply "$apply" "m:cidr24" | tr -d '\r\n')"
   printed="$(print_rules)"
   expected_cidr="${IPTEST_PEER_IP%.*}.0/24"
@@ -454,7 +465,7 @@ PY
     fi
 
     iptest_reset_baseline
-    apply="$(apply_rules "[{\"clientRuleId\":\"m:iface-hit\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"${iface_kind}\",\"ifindex\":${iface_ifindex},\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+    apply="$(apply_rules "[{\"clientRuleId\":\"m:iface-hit\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"${iface_kind}\",\"ifindex\":${iface_ifindex},\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
     rid_iface_hit="$(rule_id_from_apply "$apply" "m:iface-hit" | tr -d '\r\n')"
     reset_reasons
     ping_once
@@ -470,7 +481,7 @@ PY
     fi
 
     iptest_reset_baseline
-    apply="$(apply_rules "[{\"clientRuleId\":\"m:iface-miss\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"${wrong_kind}\",\"ifindex\":${iface_ifindex},\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+    apply="$(apply_rules "[{\"clientRuleId\":\"m:iface-miss\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"${wrong_kind}\",\"ifindex\":${iface_ifindex},\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
     rid_iface_miss="$(rule_id_from_apply "$apply" "m:iface-miss" | tr -d '\r\n')"
     reset_reasons
     ping_once
@@ -492,7 +503,7 @@ PY
   log_section "priority wins"
   iptest_reset_baseline
   peer_24="${IPTEST_PEER_IP%.*}.0/24"
-  rules_prio="[{\"clientRuleId\":\"m:p10-allow\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${peer_24}\",\"sport\":\"any\",\"dport\":\"any\"},{\"clientRuleId\":\"m:p20-block\",\"action\":\"block\",\"priority\":20,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]"
+  rules_prio="[{\"clientRuleId\":\"m:p10-allow\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${peer_24}\",\"sport\":\"any\",\"dport\":\"any\"},{\"clientRuleId\":\"m:p20-block\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":20,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]"
   apply="$(apply_rules "$rules_prio")"
   rid_p20="$(rule_id_from_apply "$apply" "m:p20-block" | tr -d '\r\n')"
   reset_reasons
@@ -513,7 +524,7 @@ PY
   # ----------------------------------------------------------------------
   log_section "enabled toggle"
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:disabled\",\"action\":\"allow\",\"priority\":10,\"enabled\":0,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:disabled\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":0,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
   rid_dis="$(rule_id_from_apply "$apply" "m:disabled" | tr -d '\r\n')"
   reset_reasons
   ping_once
@@ -529,7 +540,7 @@ PY
   fi
 
   # Re-apply with enabled=1 using the same clientRuleId.
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:disabled\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:disabled\",\"family\":\"ipv4\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
   rid_en="$(rule_id_from_apply "$apply" "m:disabled" | tr -d '\r\n')"
   reset_reasons
   ping_once
@@ -553,7 +564,7 @@ PY
   trap 'rm -f "$tmp_pkt" "$tmp_pkt2" 2>/dev/null || true; cleanup' EXIT
 
   iptest_reset_baseline
-  apply="$(apply_rules "[{\"clientRuleId\":\"m:would\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":0,\"log\":1,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  apply="$(apply_rules "[{\"clientRuleId\":\"m:would\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":0,\"log\":1,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"}]")"
   rid_would="$(rule_id_from_apply "$apply" "m:would" | tr -d '\r\n')"
   reset_reasons
   capture_pkt_stream "$tmp_pkt" 6 200 || exit 1 &
@@ -607,7 +618,7 @@ raise SystemExit(2)
 
   iptest_reset_baseline
   peer_24="${IPTEST_PEER_IP%.*}.0/24"
-  rules_drop="[{\"clientRuleId\":\"m:drop\",\"action\":\"block\",\"priority\":20,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"},{\"clientRuleId\":\"m:would\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":0,\"log\":1,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${peer_24}\",\"sport\":\"any\",\"dport\":\"any\"}]"
+  rules_drop="[{\"clientRuleId\":\"m:drop\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":20,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP}/32\",\"sport\":\"any\",\"dport\":\"any\"},{\"clientRuleId\":\"m:would\",\"family\":\"ipv4\",\"action\":\"block\",\"priority\":10,\"enabled\":1,\"enforce\":0,\"log\":1,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${peer_24}\",\"sport\":\"any\",\"dport\":\"any\"}]"
   apply="$(apply_rules "$rules_drop")"
   rid_drop="$(rule_id_from_apply "$apply" "m:drop" | tr -d '\r\n')"
   reset_reasons
@@ -648,6 +659,110 @@ raise SystemExit(2)
     rg -n "\"reasonId\":\"IP_RULE_BLOCK\"" "$tmp_pkt2" | head -n 10 || true
     exit 20
   fi
+
+  # ----------------------------------------------------------------------
+  # IPv6 rows (Tier-1 dual-stack): CIDR match/no-match, ICMPv6 validation,
+  # and fragment classification when feasible.
+  # ----------------------------------------------------------------------
+  log_section "IPv6 CIDR + ICMPv6"
+
+  set +e
+  ping6_once
+  ping6_rc=$?
+  set -e
+  if [[ $ping6_rc -ne 0 ]]; then
+    echo "SKIP: ICMPv6 ping not permitted as uid=$IPTEST_UID (rc=$ping6_rc); cannot run IPv6 matrix rows"
+    exit 10
+  fi
+
+  iptest_reset_baseline
+  apply="$(apply_rules "[{\"clientRuleId\":\"m6:icmp-allow\",\"family\":\"ipv6\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP6}/128\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  rid6_allow="$(rule_id_from_apply "$apply" "m6:icmp-allow" | tr -d '\r\n')"
+  reset_reasons
+  ping6_once
+  reasons="$(get_reasons)"
+  printed="$(print_rules)"
+  rp="$(reasons_packets "$reasons" "IP_RULE_ALLOW")"
+  hp="$(rule_stat_from_print "$printed" "$rid6_allow" "hitPackets")"
+  if [[ "${rp:-0}" -ge 1 && "${hp:-0}" -ge 1 ]]; then
+    log_pass "IPv6 ICMP allow matches (reasonPackets=$rp hitPackets=$hp)"
+  else
+    log_fail "IPv6 ICMP allow matches (reasonPackets=$rp hitPackets=$hp)"
+    exit 21
+  fi
+
+  iptest_reset_baseline
+  apply="$(apply_rules "[{\"clientRuleId\":\"m6:cidr-miss\",\"family\":\"ipv6\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"2001:db8::/64\",\"sport\":\"any\",\"dport\":\"any\"}]")"
+  rid6_miss="$(rule_id_from_apply "$apply" "m6:cidr-miss" | tr -d '\r\n')"
+  reset_reasons
+  ping6_once
+  reasons="$(get_reasons)"
+  printed="$(print_rules)"
+  rp_allow="$(reasons_packets "$reasons" "IP_RULE_ALLOW")"
+  rp_def="$(reasons_packets "$reasons" "ALLOW_DEFAULT")"
+  hp="$(rule_stat_from_print "$printed" "$rid6_miss" "hitPackets")"
+  if [[ "${hp:-0}" -eq 0 && "${rp_allow:-0}" -eq 0 && "${rp_def:-0}" -ge 1 ]]; then
+    log_pass "IPv6 CIDR mismatch falls back to ALLOW_DEFAULT (default=$rp_def)"
+  else
+    log_fail "IPv6 CIDR mismatch falls back to ALLOW_DEFAULT (hitPackets=$hp allow=$rp_allow default=$rp_def)"
+    exit 22
+  fi
+
+  iptest_reset_baseline
+  bad_args="{\"app\":{\"uid\":${IPTEST_UID}},\"rules\":[{\"clientRuleId\":\"m6:icmp-bad-ports\",\"family\":\"ipv6\",\"action\":\"allow\",\"priority\":10,\"enabled\":1,\"enforce\":1,\"log\":0,\"dir\":\"out\",\"iface\":\"any\",\"ifindex\":0,\"proto\":\"icmp\",\"ct\":{\"state\":\"any\",\"direction\":\"any\"},\"src\":\"any\",\"dst\":\"${IPTEST_PEER_IP6}/128\",\"sport\":\"any\",\"dport\":\"443\"}]}"
+  # NOTE: This is a negative test (expected ok:false). The control tool may
+  # return non-zero rc on app-level validation failure, so we must not use
+  # vnext_rpc_ok() here.
+  set +e
+  bad_apply="$(vnext_ctl_cmd IPRULES.APPLY "$bad_args" 2>/dev/null)"
+  bad_rc=$?
+  set -e
+  if ! is_json "$bad_apply"; then
+    echo "BLOCKED: vNext IPRULES.APPLY transport failed (rc=$bad_rc)" >&2
+    exit 77
+  fi
+  if printf '%s\n' "$bad_apply" | python3 -c 'import sys,json; j=json.load(sys.stdin); assert j["ok"] is False' >/dev/null 2>&1; then
+    log_pass "IPv6 proto=icmp rejects port constraints"
+  else
+    log_fail "IPv6 proto=icmp rejects port constraints"
+    printf '%s\n' "$bad_apply" | head -n 3 | sed 's/^/    /'
+    exit 23
+  fi
+
+  # Best-effort fragment classification: send a large ICMPv6 echo and look for l4Status=fragment.
+  iptest_reset_baseline
+  tmp_frag="$(mktemp /tmp/ipmatrix-v6frag.XXXXXX)"
+  capture_pkt_stream "$tmp_frag" 6 200 || exit 1 &
+  cap_pid=$!
+  sleep 2
+  ping6_large_once 4000 || true
+  set +e
+  wait "$cap_pid"
+  set -e
+  if assert_pkt_event "$tmp_frag" "
+import json
+uid = int('${IPTEST_UID}')
+peer = '${IPTEST_PEER_IP6}'
+for line in lines:
+    if not line.strip():
+        continue
+    obj = json.loads(line)
+    if obj.get('type') != 'pkt':
+        continue
+    if obj.get('uid') != uid or obj.get('dstIp') != peer:
+        continue
+    if obj.get('l4Status') != 'fragment':
+        continue
+    assert int(obj.get('srcPort', -1)) == 0
+    assert int(obj.get('dstPort', -1)) == 0
+    raise SystemExit(0)
+raise SystemExit(2)
+"; then
+    log_pass "IPv6 fragment classification observed in pkt stream"
+  else
+    log_skip "IPv6 fragment classification not observed (best-effort)"
+  fi
+  rm -f "$tmp_frag" >/dev/null 2>&1 || true
 
   log_pass "matrix ok"
   exit 0
