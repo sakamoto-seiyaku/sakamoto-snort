@@ -38,7 +38,7 @@ TBD - created by archiving change complete-device-smoke-casebook-domain. Update 
 
 #### Scenario: domainSources 覆盖 APP DEVICE_WIDE FALLBACK buckets
 - **WHEN** 测试执行 Domain Case 3、6、7
-- **THEN** `domainSources(app)` SHALL 覆盖 `CUSTOM_*`、`GLOBAL_*`、`MASK_FALLBACK` 的 allow/block bucket
+- **THEN** `domainSources(app)` SHALL 覆盖 `CUSTOM_*`、`DOMAIN_DEVICE_WIDE_*`、`MASK_FALLBACK` 的 allow/block bucket
 - **AND** 每个 bucket 的增长 SHALL 与对应 DNS verdict 一致
 
 ### Requirement: DNS netd inject e2e 覆盖 stream traffic domainSources
@@ -96,7 +96,7 @@ TBD - created by archiving change complete-device-smoke-casebook-domain. Update 
 - **WHEN** device policy block 唯一域名且 app policy 不包含该域名
 - **AND** 测试通过 `dx-netd-inject` 注入该域名
 - **THEN** DNS event SHALL 为 `blocked=true`
-- **AND** `policySource` SHALL 为 `GLOBAL_BLOCKED`
+- **AND** `policySource` SHALL 为 `DOMAIN_DEVICE_WIDE_BLOCKED`
 - **AND** `scope` SHALL 为 `DEVICE_WIDE`
 
 ### Requirement: DomainLists enable disable 与 allow 覆盖 block 影响判决
@@ -155,4 +155,3 @@ Every Domain casebook test in `dx-smoke-control` MUST restore mutable device/app
 - **WHEN** a Domain case changes config, policy, rules, or lists
 - **THEN** the test SHALL restore the previous state before the next case starts
 - **AND** cleanup failures SHALL fail the test unless the run is already reporting `BLOCKED`
-

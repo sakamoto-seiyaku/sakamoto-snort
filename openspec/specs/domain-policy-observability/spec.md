@@ -24,15 +24,15 @@ TBD - created by archiving change add-domain-policy-observability. Update Purpos
 - `CUSTOM_BLACKLIST`
 - `CUSTOM_RULE_WHITE`
 - `CUSTOM_RULE_BLACK`
-- `GLOBAL_AUTHORIZED`（domain-only device-wide）
-- `GLOBAL_BLOCKED`（domain-only device-wide）
+- `DOMAIN_DEVICE_WIDE_AUTHORIZED`（domain-only device-wide）
+- `DOMAIN_DEVICE_WIDE_BLOCKED`（domain-only device-wide）
 - `MASK_FALLBACK`
 
 在给定 `domain != nullptr` 且 `BLOCK=1` 的前提下，`policySource` MUST 按与现有 `App::blocked()` 一致的优先级决策且命中唯一：
 `CUSTOM_WHITELIST` > `CUSTOM_BLACKLIST` > `CUSTOM_RULE_WHITE` > `CUSTOM_RULE_BLACK`
-> `GLOBAL_AUTHORIZED` > `GLOBAL_BLOCKED` > `MASK_FALLBACK`。
+> `DOMAIN_DEVICE_WIDE_AUTHORIZED` > `DOMAIN_DEVICE_WIDE_BLOCKED` > `MASK_FALLBACK`。
 
-当 `_useCustomList==false` 时，系统 MUST 不访问 custom/global 分支，且 `policySource` MUST 始终为 `MASK_FALLBACK`。
+当 `_useCustomList==false` 时，系统 MUST 不访问 custom/device-wide 分支，且 `policySource` MUST 始终为 `MASK_FALLBACK`。
 
 #### Scenario: _useCustomList=0 collapses to MASK_FALLBACK
 - **GIVEN** `_useCustomList=0`
@@ -57,7 +57,7 @@ TBD - created by archiving change add-domain-policy-observability. Update Purpos
 - **THEN** 返回值 SHALL 为有效 JSON
 - **AND** 顶层对象 SHALL 包含 key `sources`
 - **AND** `sources` SHALL 包含 key `CUSTOM_WHITELIST`
-- **AND** `sources` SHALL 包含 key `GLOBAL_BLOCKED`
+- **AND** `sources` SHALL 包含 key `DOMAIN_DEVICE_WIDE_BLOCKED`
 - **AND** `sources` SHALL 包含 key `MASK_FALLBACK`
 
 ### Requirement: Counters update per DNS verdict, gated by BLOCK, not by tracked
@@ -96,4 +96,3 @@ gating：
 - **GIVEN** `METRICS.DOMAIN.SOURCES` 中至少一个计数大于 0
 - **WHEN** 客户端调用 `METRICS.DOMAIN.SOURCES.RESET`
 - **THEN** 后续调用 `METRICS.DOMAIN.SOURCES` 时所有计数 SHALL 为 0
-
