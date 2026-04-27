@@ -12,7 +12,7 @@
 
 ## 1) 快照：当前文件清单（共 11 个）
 
-> 说明：盘点开始时该目录在 git 上是干净的；当前因为新增本文件而出现 `?? docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_FOLDER_INVENTORY_TMP.md`。
+> 说明：盘点开始时该目录在 git 上是干净的；当前因为新增本文件而出现 `?? docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_FOLDER_INVENTORY_TMP.md`。
 
 - `DOMAIN_IP_FUSION_CHECKLIST.md`（671 行）：主入口/总纲（现状快照 + 目标状态 + 实现拆分 + 索引）
 - `CONTROL_PROTOCOL_VNEXT.md`（216 行）：**vNext wire 协议单一真相**（framing/envelope/errors/selector/stream 状态机）
@@ -124,5 +124,5 @@
 2) **历史归档**：是否接受把 `*_TMP.md` 中“已被裁决覆盖/已回写到单一真相”的部分视为历史，不再维护同步？  
 3) **归档形式**：你更偏好哪种做法（只选一种即可）：
    - A：保留文件名不动，但在文件顶部加醒目声明“ARCHIVE/停止更新/不得当规范”；  
-   - B：移动到 `docs/decisions/DOMAIN_IP_FUSION/archive/`（更彻底，读者不容易误读）；  
+   - B：移动到 `docs/archived/DOMAIN_IP_FUSION/archive/`（更彻底，读者不容易误读）；  
    - C：把历史全部合并成一个 `HISTORY.md`，只保留单文件入口。

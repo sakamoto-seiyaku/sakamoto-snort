@@ -1,6 +1,6 @@
 # Device / DX 测试覆盖矩阵（vNext；smoke + diagnostics）
 
-更新时间：2026-04-25
+更新时间：2026-04-27
 
 范围与目的：
 - 范围：仅本仓库 `sucre-snort` 的 **Device / DX** 真机测试（host/WSL 侧脚本通过 ADB 驱动 rooted Android 真机）。
@@ -13,7 +13,7 @@
 - `◐`：部分覆盖 / best-effort / 环境依赖强（可能 SKIP/BLOCKED）。
 - `—`：不覆盖（或仅间接触达，不作为断言）。
 
-> 备注：vNext 协议面契约见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`；对应 Host 侧的纯协议/shape/strict-reject 覆盖主要在 `tests/host/control_vnext_*_tests.cpp`。
+> 备注：vNext 协议面契约见 `docs/INTERFACE_SPECIFICATION.md`；对应 Host 侧的纯协议/shape/strict-reject 覆盖主要在 `tests/host/control_vnext_*_tests.cpp`。
 
 ---
 

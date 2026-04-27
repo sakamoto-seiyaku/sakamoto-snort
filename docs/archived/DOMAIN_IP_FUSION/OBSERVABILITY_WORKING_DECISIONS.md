@@ -6,7 +6,7 @@
 更新时间：2026-04-26
 状态：工作结论 + vNext 设计已落地（`tracked` 统一语义、`METRICS.GET(name=traffic|conntrack)`、统一 `STREAM.START/STOP(type=...)`、stream `type`/suppressed/dropped 事件）
 
-落地任务清单：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
+落地任务清单：`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
 
 ---
 

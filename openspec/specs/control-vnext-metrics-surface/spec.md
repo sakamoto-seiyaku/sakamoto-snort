@@ -4,9 +4,7 @@
 TBD - created by archiving change add-control-vnext-metrics. Update Purpose after archive.
 ## Requirements
 ### Requirement: Daemon exposes METRICS.GET and METRICS.RESET for vNext metrics v1
-The daemon MUST implement `METRICS.GET` and `METRICS.RESET` as defined in:
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+The daemon MUST implement `METRICS.GET` and `METRICS.RESET` as defined in `docs/INTERFACE_SPECIFICATION.md`.
 
 The daemon MUST follow vNext envelope + strict reject rules.
 
@@ -57,4 +55,3 @@ Reset support (v1):
 #### Scenario: Conntrack reset is rejected
 - **WHEN** client sends `{"id":5,"cmd":"METRICS.RESET","args":{"name":"conntrack"}}`
 - **THEN** daemon SHALL respond `ok=false` with `error.code="INVALID_ARGUMENT"`
-

@@ -4,7 +4,7 @@
 状态：已收敛（AAA）
 
 > 本文只定义“前后端约定/接口契约”，不涉及代码实现与 change 拆分。
-> 本轮讨论只维护 `docs/decisions/DOMAIN_IP_FUSION/` 目录内文档，不外溢修改其它 docs 或代码。
+> 本轮讨论只维护 `docs/archived/DOMAIN_IP_FUSION/` 目录内文档，不外溢修改其它 docs 或代码。
 
 ---
 
@@ -21,7 +21,7 @@
 非目标：
 
 - 不讨论 UI 上 rule group 的展示优先级/排序（纯前端问题）。
-- 命令名与 envelope/selector 约束以 vNext 单一真相为准：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md` + `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`。  
+- 命令名与 envelope/selector 约束以 vNext 单一真相为准：`docs/archived/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md` + `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`。  
   本文第 9 节会补齐 `IPRULES.PREFLIGHT/PRINT/APPLY` 的 JSON schema（字段全集/类型），用于避免实现期漂移（已确认；R-014=A）。
 
 ---
@@ -249,8 +249,8 @@ apply 成功后，对每条规则的 per-rule stats 生命周期锁死为：
 目标：在动代码前把 schema 写死，避免 daemon/CLI/tests 三方对字段名、类型、以及 `0|1` vs boolean 产生漂移。
 
 通用约定（不在本文重复定义）：
-- request/response envelope、selector、strict reject：见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
-- toggle 类型统一为 `0|1`（numbers）：见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+- request/response envelope、selector、strict reject：见 `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+- toggle 类型统一为 `0|1`（numbers）：见 `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
 
 ### 9.1 `IPRULES.PREFLIGHT`
 

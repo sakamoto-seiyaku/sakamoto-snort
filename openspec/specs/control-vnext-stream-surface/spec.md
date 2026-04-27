@@ -6,10 +6,7 @@ TBD - created by archiving change add-control-vnext-stream. Update Purpose after
 ## Requirements
 
 ### Requirement: Daemon implements STREAM.START and STREAM.STOP for vNext streaming
-The daemon MUST implement `STREAM.START` and `STREAM.STOP` as defined in:
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+The daemon MUST implement `STREAM.START` and `STREAM.STOP` as defined in `docs/INTERFACE_SPECIFICATION.md`.
 
 The daemon MUST follow vNext strict reject rules for args validation.
 

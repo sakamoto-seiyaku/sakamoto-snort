@@ -36,7 +36,7 @@
 - D8（`tracked` 持久化 & UX）：`tracked` **持久化**；但前端必须明确提示用户“开启跟踪/统计可能带来性能影响”。
 - D9（`ifindex`）：`ifindex=0` 与 `ifindex=any` **语义等价**。
 - D10（统一性原则）：在 D9 前提下尽量统一表示/类型；核心目标是让前端能基于后端日志/输出清晰解释“发生了什么、为什么”。
-- D11（`policySource` 命名）：确认这是一组 breaking change；但**暂不要求**同步更新 `docs/decisions/DOMAIN_IP_FUSION/` 目录外的文档（先把融合讨论彻底完成）。
+- D11（`policySource` 命名）：确认这是一组 breaking change；但**暂不要求**同步更新 `docs/archived/DOMAIN_IP_FUSION/` 目录外的文档（先把融合讨论彻底完成）。
 - D12（`matchKey`/toggle 归一化）：`matchKey` 字段 key **全小写**；`ifindex=0` 作为 canonical；toggle 类型统一为 `0|1`。
 - D14（stream START 默认）：确认改为默认 `0/0`（不回放历史）。
 - D15（ACTIVITYSTREAM）：确认纳入 vNext，并与 DNS/PKT 保持统一协议/语义风格。
@@ -103,7 +103,7 @@
 - 禁止：`<pkg> <userId>`（位置参数简写）（D1 已裁决：不强制禁止；若牵连甚广可允许，接口需自洽）
 - selector 不唯一/不存在：一律拒绝并返回可修复错误（含 candidates），禁止 best-effort
 - 裸 `USER <userId>`（无 app）过滤语法：D2 已裁决为“不再强行禁止”，以接口逻辑自洽为准（建议：明确列出哪些命令支持 user-filter；不支持的命令对 `USER` token 报错，避免 silent ignore）。  
-  参考：`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:240`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:246`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:249`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:264`
+  参考：`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:240`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:246`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:249`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:264`
 
 **现有“权威”与实现**
 - 接口规范允许 `<str> <userId>` 简写，且大量命令支持裸 `USER <userId>` 过滤（list/stats）。  
@@ -135,7 +135,7 @@
 - `*.STOP` 返回 response frame（`{"id":...,"ok":true}`）；失败返回 `{"id":...,"ok":false,"error":{...}}`
 - 进入 stream 模式后禁止同一连接执行非 stream 控制命令（避免输出交织）
 - 事件 envelope：`type="dns|pkt|activity|notice"`；`notice="suppressed|dropped"`；NOTICE 仅实时，不进 ring，不回放，不落盘（suppressed 仅对 dns/pkt 有意义）  
-  参考：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:101`、`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:103`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:364`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:367`
+  参考：`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:101`、`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:103`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:364`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:367`
 
 **现有“权威”与实现**
 - 接口规范（v3.6）定义控制通道请求/响应以 NUL 结尾，`!` 允许 pretty；并且 `PKTSTREAM.STOP/ACTIVITYSTREAM.STOP` “无响应”。  
@@ -160,7 +160,7 @@
 - 兼容/落盘：OpenSpec multi-user 还要求“旧 stream restore 兼容（至少 DNS 流旧事件默认 user 0）”；当前代码也做了这一点：`src/DnsRequest.cpp:70`。  
   参考：`openspec/specs/multi-user-support/spec.md:196`、`openspec/specs/multi-user-support/spec.md:201`
 - fusion 文档同时主张“允许升级丢弃历史缓存文件/删除遗留落盘 stream 文件”。  
-  参考：`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:362`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:385`
+  参考：`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:362`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:385`
 - **规格层的缺口**：既有 OpenSpec `openspec/specs/pktstream-observability/spec.md` 目前未描述 `type` envelope / NOTICE（suppressed/dropped）事件；`docs/INTERFACE_SPECIFICATION.md` 也仍按旧 schema 展示示例。若 vNext 要落地，需同步更新这些“单一真相”，否则会出现“实现/设计已升级，但权威 spec 仍旧”的文档打架。
 
 **需要你裁决的问题**
@@ -176,7 +176,7 @@
 - `tracked` 默认 `false`
 - `tracked` 持久化（D8）：daemon 重启后保持原值；默认 `tracked=false`；前端显式开启 tracked 时必须提示“可能带来性能影响”。
 - `tracked` 只 gating 逐条事件 + heavy stats，不 gating always-on counters  
-  参考：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:403`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:354`
+  参考：`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:403`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:354`
 
 **现有实现**
 - `_tracked` 默认 `true`：`src/App.hpp:51`
@@ -195,9 +195,9 @@
 
 **apply 契约（fusion）当前写法**
 - `matchKey` 格式 `mk1|...|ifindex=0|...`，且明确 `ifindex=0` 为 any 的 canonical。  
-  参考：`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:77`、`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:90`、`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:103`
+  参考：`docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:77`、`docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:90`、`docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:103`
 - 冲突示例中 `enabled/enforce/log` 已统一为 `0|1`（与 `IPRULES.PRINT` 保持一致）。  
-  参考：`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:132`
+  参考：`docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md:132`
 
 **现有 v1 “单一真相”（OpenSpec + 接口规范 + 实现）**
 - IPRULES v1 规定 `ifindex` 在 PRINT 中是 JSON number，`0` 表示 any；并且 toggle 输出为 `0|1` number。  
@@ -209,7 +209,7 @@
 - D10（已裁决，原则）：在 D9 前提下尽量统一表示/类型；重点是让前端能清晰解释日志/输出。建议优先与既有 `PRINT/OpenSpec` 对齐（numbers），但如需为了可解释性做微调也可接受。
 
 **文档内部不自洽点（已按 D12 修订）**
-- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`：matchKey key 已统一为全小写；`ifindex=0` 作为 canonical；toggle 已统一为 `0|1`。
+- `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`：matchKey key 已统一为全小写；`ifindex=0` 作为 canonical；toggle 已统一为 `0|1`。
 
 > 额外提醒：apply 契约要求 CIDR 网络地址归一化（如 `1.2.3.4/24 → 1.2.3.0/24`）。当前引擎解析不会做“写入时归零 host bits”（`src/IpRulesEngine.cpp:271`），但匹配语义本身通过 mask 仍正确。`matchKey` 若要做“等价去重/冲突检测”，就必须实现 canonicalizer（这是后续实现任务，不是现状 bug）。
 
@@ -219,7 +219,7 @@
 
 **fusion 文档主张**
 - 禁止对外使用 white/black/global；统一收敛为 `ALLOWED/BLOCKED` 叙事，并把 device-wide 从 `GLOBAL_*` 改名为 `DOMAIN_DEVICE_WIDE_*`；且“不做 alias/双写”。  
-  参考：`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:31`、`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:239`
+  参考：`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:31`、`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:239`
   - 命名直观性补充（你反馈）：`BLOCKED/AUTHORIZED` 相比 `BLACK/WHITE` 不直观；建议最终落地用 `ALLOWED/BLOCKED`（更直接；且 `authorized` 易被误解为“鉴权/权限”）。命令层（`BLACKLIST/WHITELIST/...`）可继续保留黑白心智，不必强绑到 `policySource` 的枚举值上。
 
 **现有“单一真相”**
@@ -233,7 +233,7 @@
 - 若不想在现阶段承担 breaking rename 的成本，则 fusion 文档里“禁止 alias/双写”需要撤销或改成“对外保持旧枚举，内部命名可重构”。
 
 **需要你裁决的问题**
-- D11（已裁决）：确认 `policySource` 是 breaking rename（white/black/global → authorized/blocked/domain_device_wide）；但暂不要求同步更新 `docs/decisions/DOMAIN_IP_FUSION/` 目录外文档（先把融合讨论彻底完成，再拆 task/change 并统一更新 OpenSpec/接口规范/前端）。
+- D11（已裁决）：确认 `policySource` 是 breaking rename（white/black/global → authorized/blocked/domain_device_wide）；但暂不要求同步更新 `docs/archived/DOMAIN_IP_FUSION/` 目录外文档（先把融合讨论彻底完成，再拆 task/change 并统一更新 OpenSpec/接口规范/前端）。
 
 ---
 
@@ -251,7 +251,7 @@
 
 ### 2.3 IPRULES 原子 apply 没锁死 ruleId/stats 的策略
 
-（已裁决：见 2.13 / D27，且已同步进 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
+（已裁决：见 2.13 / D27，且已同步进 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
 
 - apply 是 replace 语义，但仍需裁决：ruleId 是否复用/如何映射（例如是否按 `clientRuleId` 稳定映射）、apply 后 per-rule stats 是否全清零等。否则容易与现有 v1 的“ruleId 稳定性”契约冲突。  
   参考：`openspec/specs/app-ip-l3l4-rules/spec.md:202`
@@ -390,8 +390,8 @@
 ### 2.8 stream 的 ring buffer / queue 与“多连接”语义目前存在潜在自相矛盾（已裁决：方案 A）
 
 当前 working decisions 同时写了两条容易冲突的原则：
-- `*.START` 的回放参数“不得影响已存在的其它连接/流”，见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:208`（已按 2.8-A 修订为“不得影响其它 stream 类型”）。
-- `*.STOP` 对 dns/pkt “清空 ring buffer；下次 START 视为全新 session”，见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:198`。
+- `*.START` 的回放参数“不得影响已存在的其它连接/流”，见 `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:208`（已按 2.8-A 修订为“不得影响其它 stream 类型”）。
+- `*.STOP` 对 dns/pkt “清空 ring buffer；下次 START 视为全新 session”，见 `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md:198`。
 
 如果允许**多个连接**同时订阅同一类 stream（dns/pkt），那“某个连接 STOP 清空 ring”会天然影响其它连接；除非我们其实只允许“同一时间最多一个订阅者/一个 session”。
 
@@ -763,7 +763,7 @@ B) Compact（只在首个分支处显式，APP 分支里不再重复 `DOMAIN/RUL
 - `AppManager::_byName` 的 key 只有 `name`（不含 userId），并且用 `emplace`：同包跨 user 同时存在时，后插入的 app **不会进 index**（`APP.NAME`/按名查找会丢失候选）。  
   参考：`src/AppManager.hpp:24`、`src/AppManager.cpp:55`
 - `findByName(name,userId)` 仅匹配 canonical `app->name()`（不匹配 alias/`allNames`）；若未来要让 `<pkg>` 支持 alias，则必须补齐 `matchedName`/候选去重/歧义解释等规则。本轮已裁决 `<pkg>` **仅匹配 canonical**，因此该点选择与现实现保持一致。  
-  参考：`src/AppManager.cpp:30`、`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:251`
+  参考：`src/AppManager.cpp:30`、`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md:251`
 
 因此如果不先锁死“selector 的匹配范围 + candidates 的构造规则 + index 结构”，实现阶段会出现：
 - 文档承诺的 `candidates[]` 做不出来（或做出来但不全/不稳定）
@@ -1562,7 +1562,7 @@ C) 超限后 drain/skip payload 并继续读下一帧（不推荐）
 
 ## 3. 建议的下一步（把冲突一次性打掉）
 
-- S1：在 `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md` 增加一段“本目录决策将覆盖哪些既有单一真相”的声明，并点名至少：`docs/INTERFACE_SPECIFICATION.md` 与 `openspec/specs/multi-user-support/spec.md` 的相关章节需要同步更新。
+- S1：在 `docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md` 增加一段“本目录决策将覆盖哪些既有单一真相”的声明，并点名至少：`docs/INTERFACE_SPECIFICATION.md` 与 `openspec/specs/multi-user-support/spec.md` 的相关章节需要同步更新。
 - S2：D4 已锁死（endpoints/HELP/requestId/STOP + “vNext 稳定后删除 legacy endpoints”）；建议下一轮把“稳定判据/下线节奏”写成一句可执行的约束（见 0.6），然后再开始拆 change/task。
 - S3：下一轮建议优先收敛：
   - 2.23.* 的落地边界：哪些观测路径允许读取/输出 `domain/host`；`domain.validIP` 判定与字段输出放在哪个线程（避免 hot path 每包 `time()`）；以及缺失映射时的对外解释口径

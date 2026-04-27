@@ -5,10 +5,10 @@
 
 > 规则（已确认）：本文件只列**尚未落盘**的 open issues。  
 > 已确认裁决请以单一真相为准：
-> - `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
-> - `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-> - `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
-> - `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
+> - `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+> - `docs/archived/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+> - `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+> - `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
 
 ---
 

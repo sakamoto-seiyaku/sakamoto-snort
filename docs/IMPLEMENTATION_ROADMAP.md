@@ -33,9 +33,9 @@ Status 口径（全篇统一）：
 - Device/DX 重组纲领：`docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
 - Device/DX 冒烟 casebook：`docs/testing/DEVICE_SMOKE_CASEBOOK.md`
 - Device/DX 覆盖矩阵：`docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
-- vNext 协议/命令：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`、`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+- 历史 vNext 设计材料（已归档；非权威）：`docs/archived/DOMAIN_IP_FUSION/`
 - 对外接口规范（vNext-only）：`docs/INTERFACE_SPECIFICATION.md`
-- 可观测性口径：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- 可观测性口径：`docs/INTERFACE_SPECIFICATION.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
 - OpenSpec 主规格：`openspec/specs/`
 

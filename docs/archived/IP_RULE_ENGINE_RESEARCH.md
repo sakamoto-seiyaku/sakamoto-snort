@@ -27,7 +27,7 @@
 
 ## 2) 本仓库事实入口（先快速读一遍）
 
-- 现状决策/事实语义：`docs/decisions/P0P1_BACKEND_WORKING_DECISIONS.md`
+- 现状决策/事实语义：`docs/archived/P0P1_BACKEND_WORKING_DECISIONS.md`
 - 既有 change 参考：`openspec/changes/add-app-ip-blacklist/`
 - 热路径入口：`src/PacketListener.cpp`、`src/PacketManager.hpp`
 - PKTSTREAM 风险点：`src/Streamable.cpp`、`src/SocketIO.cpp`
@@ -235,7 +235,7 @@ RuleRef
   仓库：`/home/js/Git/sucre/sucre/sucre-snort`
 
   先阅读并用 <= 12 行复述关键约束（作为你输出的第一段）：
-  - `docs/decisions/P0P1_BACKEND_WORKING_DECISIONS.md`
+  - `docs/archived/P0P1_BACKEND_WORKING_DECISIONS.md`
   - `docs/IP_RULE_ENGINE_RESEARCH.md`（已有 Round1 结果）
   - 热路径链路：`src/PacketListener.cpp`、`src/PacketManager.hpp`
   - 现有接口事实：`PacketListener` 目前传给 `PacketManager::make` 的 IP 是 `addr = IN ? saddr : daddr`（direction 折叠为 remote IP）

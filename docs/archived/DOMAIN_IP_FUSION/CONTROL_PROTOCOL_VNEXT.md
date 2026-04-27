@@ -1,12 +1,12 @@
 # Control Protocol vNext（Netstrings + JSON）
 
 更新时间：2026-04-20  
-状态：已收敛（仅在 `docs/decisions/DOMAIN_IP_FUSION/` 内生效；实现与落盘到 change 另行拆分）
+状态：已收敛（仅在 `docs/archived/DOMAIN_IP_FUSION/` 内生效；实现与落盘到 change 另行拆分）
 
 > 本文定义 vNext 的线协议：endpoint、framing、request/response envelope、错误模型与通用类型。  
-> 命令面（有哪些 `cmd`、各自的 args/result/errors）见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`。  
-> 事件字段语义（DNS/PKT/ACTIVITY）见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`；  
-> `IPRULES.APPLY` 的语义/错误 shape/回显要求见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
+> 命令面（有哪些 `cmd`、各自的 args/result/errors）见 `docs/archived/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`。  
+> 事件字段语义（DNS/PKT/ACTIVITY）见 `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`；  
+> `IPRULES.APPLY` 的语义/错误 shape/回显要求见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
 
 ---
 

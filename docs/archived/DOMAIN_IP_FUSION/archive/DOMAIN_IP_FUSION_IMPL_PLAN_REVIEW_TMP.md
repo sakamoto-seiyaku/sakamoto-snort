@@ -3,17 +3,17 @@
 更新时间：2026-04-20  
 状态：临时审计结论（归档目录；不作为“单一真相”）
 
-> 目的：把 `docs/decisions/DOMAIN_IP_FUSION/*`（单一真相）与 `docs/IMPLEMENTATION_ROADMAP.md`（切片/gate）以及当前代码/测试基线对齐，提前指出“实现会卡死/测不了/会返工”的硬问题，并把修复动作落到 Roadmap 文本中。  
+> 目的：把 `docs/archived/DOMAIN_IP_FUSION/*`（单一真相）与 `docs/IMPLEMENTATION_ROADMAP.md`（切片/gate）以及当前代码/测试基线对齐，提前指出“实现会卡死/测不了/会返工”的硬问题，并把修复动作落到 Roadmap 文本中。  
 > 注意：本文不复审 `archive/` 下历史讨论；以本目录非归档文件为设计真相输入。
 
 ## 0. 输入材料（本次对齐用到的真相/事实）
 
 设计真相（vNext 单一真相）：
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
-- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`
+- `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+- `docs/archived/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+- `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
+- `docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`
 
 实现计划（切片与 gate）：
 - `docs/IMPLEMENTATION_ROADMAP.md`（章节 `3.2.1`）
@@ -27,7 +27,7 @@
 
 ## 1. 结论（TL;DR）
 
-- **设计侧自洽**：vNext 的 wire/envelope/errors/selector/命令面/可观测性边界，当前在 `docs/decisions/DOMAIN_IP_FUSION/` 内已形成单一真相；未发现“实现不了/实现后自相矛盾”的根本性问题。
+- **设计侧自洽**：vNext 的 wire/envelope/errors/selector/命令面/可观测性边界，当前在 `docs/archived/DOMAIN_IP_FUSION/` 内已形成单一真相；未发现“实现不了/实现后自相矛盾”的根本性问题。
 - **实现计划侧需要补齐工程与测试底座**：目前 Roadmap 3.2.1 的切片描述与“单一真相”/现有测试基线存在几处硬冲突或缺口；若不先修正文档并把测试底座放进早期切片，实现会在 P1/P2 卡死或被迫返工。
 
 本轮审计认为最关键的修订点如下（按严重度）：
@@ -35,7 +35,7 @@
 ### S5（必须修，不然做不下去/测不了）
 
 1) **daemon v1 不提供 `HELP`（help 由 CLI 承担）**  
-   - 设计真相：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md:73`  
+   - 设计真相：`docs/archived/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md:73`  
    - 影响：Roadmap slice2 若仍以 `HELLO/HELP` 为最小集合，会把 P1 baseline 写死到一个不存在的命令上。
 
 2) **缺少 vNext 的“真机可用发送栈”与 forward 机制**  
@@ -45,7 +45,7 @@
 ### S4（不修会出现“自锁/路径分叉/热路径遗漏”）
 
 3) **60607（vNext TCP）与 dataplane 豁免必须联动**  
-   - 设计真相：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md:20`（inetControl 开启时豁免 60606 + 60607）  
+   - 设计真相：`docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md:20`（inetControl 开启时豁免 60606 + 60607）  
    - 事实：当前只豁免一个端口：`src/PacketListener.cpp:351`  
    - 影响：BLOCK=1 + inetControl=1 的环境里，vNext TCP 控制面可能被自己 blocking 干扰，导致“控制面不可用”。
 

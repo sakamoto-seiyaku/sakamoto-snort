@@ -1,7 +1,7 @@
 # IPRULES 双栈规则模型：工作决策与原则
 
-更新时间：2026-04-26
-状态：纲领性讨论结论（未实现；后续 OpenSpec/change 以本文为输入）
+更新时间：2026-04-27
+状态：已落地（设计回执；对外接口与测试口径以 `docs/INTERFACE_SPECIFICATION.md` / `docs/testing/` 为准）
 
 ---
 

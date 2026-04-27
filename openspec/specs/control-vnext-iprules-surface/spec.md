@@ -4,12 +4,7 @@
 TBD - created by archiving change add-control-vnext-iprules-surface. Update Purpose after archive.
 ## Requirements
 ### Requirement: `IPRULES.PREFLIGHT` returns a stable preflight report
-The daemon MUST implement `IPRULES.PREFLIGHT` as defined in:
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md` (schema §9.1)
-
-The daemon MUST follow the vNext envelope/strict reject rules in
-`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`.
+The daemon MUST implement `IPRULES.PREFLIGHT` as defined in `docs/INTERFACE_SPECIFICATION.md` and MUST follow the vNext envelope/strict reject rules described there.
 
 On success, the response MUST be `ok=true` and MUST include `result` with:
 - `summary` (object; all fields u64)
@@ -24,9 +19,7 @@ On success, the response MUST be `ok=true` and MUST include `result` with:
 - **THEN** daemon responds with `{"id":1,"ok":true,"result":{...}}` containing `summary`, `byFamily`, `limits`, `warnings`, and `violations`
 
 ### Requirement: `IPRULES.PRINT` returns stable rules baseline for a target app
-The daemon MUST implement `IPRULES.PRINT` as defined in:
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md` (schema §9.2/§9.4)
+The daemon MUST implement `IPRULES.PRINT` as defined in `docs/INTERFACE_SPECIFICATION.md`.
 
 Selector requirements:
 - The request MUST include `args.app` and MUST follow vNext selector rules (`{uid}` OR `{pkg,userId}`).
@@ -46,9 +39,7 @@ On success, the response MUST be `ok=true` and MUST include:
 - **THEN** daemon responds `ok=true` and `result.rules[]` is sorted by `ruleId` ascending
 
 ### Requirement: `IPRULES.APPLY` is atomic replace and returns mapping
-The daemon MUST implement `IPRULES.APPLY` as defined in:
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md` (apply semantics + schema §9.3)
+The daemon MUST implement `IPRULES.APPLY` as defined in `docs/INTERFACE_SPECIFICATION.md`.
 
 Request validation requirements:
 - The request MUST include `args.app` and MUST follow vNext selector rules.
@@ -80,7 +71,7 @@ If an `IPRULES.APPLY` fails due to preflight violations or hard limits, the daem
 
 ### Requirement: `matchKey` is computed with mk2 canonicalization and conflicts are rejected
 For each rule in an `IPRULES.APPLY`, the daemon MUST compute a `matchKey` string per mk2:
-- exact mk2 format and field ordering (see `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md` §3)
+- exact mk2 format and field ordering (see `docs/INTERFACE_SPECIFICATION.md` §2.6)
 - `family` MUST be included and MUST be one of `ipv4|ipv6`
 - CIDR values MUST be canonicalized to network-address form (mask host bits to zero) for both IPv4 and IPv6
 - `ifindex` MUST be canonicalized as decimal with `0` meaning any
@@ -95,4 +86,3 @@ Conflict detection:
 #### Scenario: Duplicate mk2 `matchKey` in apply payload is rejected with `conflicts[]`
 - **WHEN** client sends `IPRULES.APPLY` containing two rules for the same uid that normalize to the same mk2 `matchKey`
 - **THEN** daemon responds `ok=false` with `error.code="INVALID_ARGUMENT"` and includes `error.conflicts[]` describing the duplicated `matchKey`
-

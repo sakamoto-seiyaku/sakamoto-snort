@@ -1,6 +1,6 @@
 ## Context
 
-我们已经完成 IPRULES 双栈规则模型的纲领决策（`docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`），并已将权威契约/主规格同步到“`family` 必填 + mk2 `matchKey` + `l4Status` + conntrack `byFamily`”口径（见 `docs/decisions/DOMAIN_IP_FUSION/*` 与 `openspec/specs/*`）。
+我们已经完成 IPRULES 双栈规则模型的纲领决策（`docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`），并已将权威契约/主规格同步到“`family` 必填 + mk2 `matchKey` + `l4Status` + conntrack `byFamily`”口径（见 `docs/INTERFACE_SPECIFICATION.md` 与 `openspec/specs/*`）。
 
 但当前实现仍存在关键缺口（均会影响发布级语义与测试口径）：
 - datapath：`src/PacketManager.hpp` 的 IPRULES fast path 明确 IPv4-only（`if constexpr (IP==IPv4)`）；IPv6 包绕过 IPRULES。

@@ -4,12 +4,12 @@
 状态：任务分解归档口径；vNext stream 已落地，legacy stream 已冻结为 no-op
 
 > 本文是把 `OBSERVABILITY_WORKING_DECISIONS.md` 的工作结论提炼为可执行 task list。
-> 本文只维护本目录（`docs/decisions/DOMAIN_IP_FUSION/`）内的任务分解；切片与 gate 以 `docs/IMPLEMENTATION_ROADMAP.md` 为准；不在此处推动代码与其它权威规格更新。
+> 本文只维护本目录（`docs/archived/DOMAIN_IP_FUSION/`）内的任务分解；切片与 gate 以 `docs/IMPLEMENTATION_ROADMAP.md` 为准；不在此处推动代码与其它权威规格更新。
 
 ## 0. 参考
 
-- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`（总纲；2.8 ACA 性能红线）
-- `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`（可观测性工作结论）
+- `docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`（总纲；2.8 ACA 性能红线）
+- `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`（可观测性工作结论）
 
 ## 0.1 与 Roadmap 的关系（避免分科漂移）
 

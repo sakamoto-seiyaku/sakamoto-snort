@@ -6,7 +6,7 @@ TBD - created by archiving change add-control-vnext-domain-surface. Update Purpo
 ## Requirements
 
 ### Requirement: `DOMAINRULES.GET` returns stable rules baseline
-The daemon MUST implement `DOMAINRULES.GET` as defined in `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md` and MUST follow the vNext envelope/strict reject rules in `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`.
+The daemon MUST implement `DOMAINRULES.GET` as defined in `docs/INTERFACE_SPECIFICATION.md` and MUST follow the vNext envelope/strict reject rules described there.
 
 The response MUST be `ok=true` and MUST include:
 - `result.rules[]` where each item has:
@@ -116,4 +116,3 @@ On success:
 #### Scenario: Oversized import is rejected with limits
 - **WHEN** client sends `DOMAINLISTS.IMPORT` exceeding `maxImportDomains` or `maxImportBytes`
 - **THEN** daemon responds `ok=false`, `error.code="INVALID_ARGUMENT"`, and includes `error.limits`
-

@@ -1039,7 +1039,7 @@ ip leak 过程, 然后 然后这个包又匹配到域名的结果，我们是按
 ### JSONL line 2115 (assistant) 2026-03-03T02:40:15.178Z
 
 ````text
-已把我们到目前为止的讨论结论（做/不做 + 关键原则 + 源码事实语义 + 风险/TBD）整理成临时全量文档：`docs/decisions/P0P1_BACKEND_WORKING_DECISIONS.md`。
+已把我们到目前为止的讨论结论（做/不做 + 关键原则 + 源码事实语义 + 风险/TBD）整理成临时全量文档：`docs/archived/P0P1_BACKEND_WORKING_DECISIONS.md`。
 
 后续你要求更新时，我就在这个文件里增量改动、保持凝练。
 ````
@@ -1053,14 +1053,14 @@ ip leak 过程, 然后 然后这个包又匹配到域名的结果，我们是按
 ### JSONL line 2159 (assistant) 2026-03-03T02:42:44.549Z
 
 ````text
-这次对话里我**没有改动任何 `src/` 代码**；我唯一写入的是新增文档 `docs/decisions/P0P1_BACKEND_WORKING_DECISIONS.md`。
+这次对话里我**没有改动任何 `src/` 代码**；我唯一写入的是新增文档 `docs/archived/P0P1_BACKEND_WORKING_DECISIONS.md`。
 
 你现在看到的 `src/*` 变更来自**工作区本来就处于 dirty 状态**（已有未提交修改）。`git status` 当前显示被改动的文件包括 `src/App.cpp`、`src/Control.cpp`、`src/Packet.cpp`、`src/DomainManager.cpp` 等一批。
 
 “什么时候改的”只能从文件系统时间推断：例如
 - `src/App.cpp` 的 `mtime=2026-01-22 ...`
 - `src/Control.cpp` 的 `mtime=2026-01-21 ...`
-而新建的 `docs/decisions/P0P1_BACKEND_WORKING_DECISIONS.md` 是 `mtime=2026-03-03 ...`（本次对话产生）。
+而新建的 `docs/archived/P0P1_BACKEND_WORKING_DECISIONS.md` 是 `mtime=2026-03-03 ...`（本次对话产生）。
 
 如果你希望在开始实现前回到干净基线，我们可以再决定是 `git stash -u` 先收起来，还是 `git restore .` 丢弃这些本地改动（我先不做任何破坏性操作）。
 ````
@@ -1074,7 +1074,7 @@ ip leak 过程, 然后 然后这个包又匹配到域名的结果，我们是按
 ### JSONL line 2177 (assistant) 2026-03-03T07:25:26.523Z
 
 ````text
-只在“我们的后端结论会影响 Sakamoto 的 P0/P1 规划或前后端契约”时才需要去 `/home/js/Git/sucre/sakamoto` 更新那边的 doc；其余讨论中的细节先只落在本仓库的 `docs/decisions/P0P1_BACKEND_WORKING_DECISIONS.md` 里。
+只在“我们的后端结论会影响 Sakamoto 的 P0/P1 规划或前后端契约”时才需要去 `/home/js/Git/sucre/sakamoto` 更新那边的 doc；其余讨论中的细节先只落在本仓库的 `docs/archived/P0P1_BACKEND_WORKING_DECISIONS.md` 里。
 
 具体触发点（满足任意一条就应同步到 Sakamoto）：
 - **P0/P1 范围调整**：例如“全局 safety‑mode 永不做”“IPv6 规则后置、P0/P1 仅 IPv4”等会改变 roadmap/主旅程表述的结论。

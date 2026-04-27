@@ -19,7 +19,7 @@
 - response envelope：`{"id":1,"ok":true,"result":{...}}` / `{"id":1,"ok":false,"error":{...}}`
 - strict reject：顶层/args 出现未知 key → `SYNTAX_ERROR`；未知 `cmd` → `UNSUPPORTED_COMMAND`。
 - stream event：事件 frame 为 JSON object（无 `id/ok`），顶层必须含 `type`；见 `STREAM.*`。
-- 细节见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`。
+- 备注：对外契约以本文为准；更早的协议/命令面设计材料已归档到 `docs/archived/DOMAIN_IP_FUSION/`（非权威）。
 
 vNext app selector（`args.app`）约定:
 - `{"uid":10123}` 或 `{"pkg":"com.example","userId":0}`（二选一；禁止混用）。
@@ -83,7 +83,9 @@ vNext app selector（`args.app`）约定:
   - `src/dst`: `family=ipv4` 时为 `any` 或 `a.b.c.d/prefix`；`family=ipv6` 时为 `any` 或 IPv6 CIDR。
   - `sport/dport`: `any|N|lo-hi`；当 `proto=icmp|other` 时必须为 `any`。
   - 成功返回 committed mapping：`rules[]` item 为 `{clientRuleId,ruleId,matchKey}`（matchKey 为 mk2）。
-  - 细节见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
+  - `matchKey`（mk2；固定顺序、全小写、无空格）：
+    - `mk2|family=<ipv4|ipv6>|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>`
+    - CIDR 规范化为网络地址（host bits 清零）；`ifindex=0` 表示 any；`proto=icmp|other` 时 `sport/dport=any`。
 
 2.7 观测（Metrics/Stream）
 - `METRICS.GET` | `{"name":name,"app"?:selector}` | `result` |
@@ -112,7 +114,7 @@ vNext stream 事件（JSON object，无 `id/ok`）:
   - `l4Status` 恒存在；当 `l4Status!=known-l4` 时 `srcPort/dstPort=0`。
 - `activity`：`{type:"activity",timestamp:string,blockEnabled:bool}`
 
-语义锁定参考: `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`（含 `l4Status` 等枚举）。
+语义锁定参考: 本文（§2.6/§2.7 的枚举与字段口径即为锁定语义）。
 
 ---
 

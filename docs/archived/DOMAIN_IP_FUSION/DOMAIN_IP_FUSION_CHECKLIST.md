@@ -15,21 +15,21 @@
 
 ## 0.1 本目录文档索引（in-flight，避免与既有决策打架）
 
-- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`：本 checklist（主入口）
-- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`：最终挑刺清单（临时；逐条回复用）
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`：control 协议 vNext（wire framing/JSON envelope/selector/错误模型/stream 状态机）
-- `docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`：vNext 命令目录（每个 `cmd` 的 args/result/errors；与协议文档解耦，便于挑刺与落地拆分）
-- `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`：可观测性工作决策（stream vNext、`tracked` 统一语义、metrics name=`traffic`/`conntrack` 等）
-- `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`：可观测性落地任务清单（从工作结论提炼为 change 切片）
-- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`：IP 规则组/原子 apply 契约（`matchKey/clientRuleId`、冲突错误 shape、`IPRULES.PRINT` 回显）
+- `docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`：本 checklist（主入口）
+- `docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`：最终挑刺清单（临时；逐条回复用）
+- `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`：control 协议 vNext（wire framing/JSON envelope/selector/错误模型/stream 状态机）
+- `docs/archived/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`：vNext 命令目录（每个 `cmd` 的 args/result/errors；与协议文档解耦，便于挑刺与落地拆分）
+- `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`：可观测性工作决策（stream vNext、`tracked` 统一语义、metrics name=`traffic`/`conntrack` 等）
+- `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`：可观测性落地任务清单（从工作结论提炼为 change 切片）
+- `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`：IP 规则组/原子 apply 契约（`matchKey/clientRuleId`、冲突错误 shape、`IPRULES.PRINT` 回显）
 
 归档（历史草稿/讨论记录；**不得当作规范**）：
 
-- `docs/decisions/DOMAIN_IP_FUSION/archive/CONTROL_VNEXT_SURFACE_SIMPLIFIED_TMP.md`
-- `docs/decisions/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_AUDIT_TMP.md`
-- `docs/decisions/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_DESIGN_REVIEW_TMP.md`
-- `docs/decisions/DOMAIN_IP_FUSION/archive/DESIGN_PHASE_REMAINING_WORK_TMP.md`
-- `docs/decisions/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_FOLDER_INVENTORY_TMP.md`
+- `docs/archived/DOMAIN_IP_FUSION/archive/CONTROL_VNEXT_SURFACE_SIMPLIFIED_TMP.md`
+- `docs/archived/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_AUDIT_TMP.md`
+- `docs/archived/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_DESIGN_REVIEW_TMP.md`
+- `docs/archived/DOMAIN_IP_FUSION/archive/DESIGN_PHASE_REMAINING_WORK_TMP.md`
+- `docs/archived/DOMAIN_IP_FUSION/archive/DOMAIN_IP_FUSION_FOLDER_INVENTORY_TMP.md`
 
 本目录内部的“落盘规则”（避免前后矛盾；**已确认**）：
 
@@ -280,7 +280,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - **允许去重**：完全相同的规则允许合并/去重。  
 - **冲突拒绝 apply（已确认）**：同一 `<uid>` 的 apply payload 内，**匹配条件集合（`matchKey`）不允许重复**；一旦重复必须拒绝 apply（不进入运行期仲裁）。  
   - 目标：避免“同一匹配集合存在多条规则”的隐式仲裁/归因歧义（action/priority/enforce/log 乃至来源 token 不一致都会导致不可解释）。  
-- 原子 apply（路线 1，强一致）、`matchKey/clientRuleId` 与冲突错误契约：见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
+- 原子 apply（路线 1，强一致）、`matchKey/clientRuleId` 与冲突错误契约：见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
 
 统计口径（同一决议的后半句）：
 
@@ -294,7 +294,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - **packet 侧（最终传输 verdict）**：以 `reasonId` +（可选）`ruleId/wouldRuleId` 为核心解释字段，配套 `METRICS.GET(name=reasons)`、`IPRULES.PRINT stats`、vNext packet stream。
 - **跨层一致性**：当 DNS verdict 与 packet verdict 不一致时（例如 `IFACE_BLOCK` 遮蔽了后续路径），对外解释必须明确“哪个是最终传输裁决、哪个只是语义观测”。  
 - **调试事件（stream）**：vNext `STREAM.START(type=dns|pkt|activity)` 属于“调试期开、短期开”；legacy `DNSSTREAM/PKTSTREAM/ACTIVITYSTREAM` 已冻结为 no-op。在开启时应尽量做到“单条事件可自解释”，不依赖额外查询/二次拼接。
-  - stream vNext 统一增加事件 envelope：顶层字段 `type`（`dns|pkt|activity|notice`），并支持 `type="notice"` 的 suppressed 汇总事件（按秒聚合、仅实时，不持久化/不参与 horizon 回放；suppressed 仅对 dns/pkt 有意义）。详见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`。
+  - stream vNext 统一增加事件 envelope：顶层字段 `type`（`dns|pkt|activity|notice`），并支持 `type="notice"` 的 suppressed 汇总事件（按秒聚合、仅实时，不持久化/不参与 horizon 回放；suppressed 仅对 dns/pkt 有意义）。详见 `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`。
   - vNext dns stream 应补齐 `policySource/useCustomList/scope` 三个字段（其中 `scope` 可由 `policySource` 派生；命名见下）。
   - vNext pkt stream 也应输出 `scope`（同一组取值：`APP|DEVICE_WIDE|FALLBACK`），用于解释 packet verdict 的“来源宽度”：
     - `IFACE_BLOCK` → `APP`
@@ -334,7 +334,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
     - “事件 envelope”类：`type/notice` 使用小写（如 `dns|pkt|activity|notice`、`suppressed|dropped`）。
     - metrics 维度 key：保持小写（如 `dns/rxp/rxb/txp/txb`）。
 - app selector（多用户语义；已确认）：
-  - vNext 使用结构化 selector（见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`）：
+  - vNext 使用结构化 selector（见 `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`）：
     - `{"uid":10123}` 或 `{"pkg":"com.example","userId":0}`
     - 二选一：要么提供 `uid`，要么提供 `pkg+userId`；禁止混用。
   - 本文中 `per-app` **等价于 per-UID**（uid-scoped app instance）：同一 package 在不同 userId 下视为不同 app（分别统计/分别 state/分别规则）。
@@ -355,7 +355,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
       - 状态：`STATE_CONFLICT`
       - 权限：`PERMISSION_DENIED`
       - 兜底：`INTERNAL_ERROR`
-    - `INVALID_ARGUMENT` 在冲突类场景下允许携带结构化详情字段（例如 `conflicts[]`），用于前端定位问题；该 shape 的权威约定见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
+    - `INVALID_ARGUMENT` 在冲突类场景下允许携带结构化详情字段（例如 `conflicts[]`），用于前端定位问题；该 shape 的权威约定见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
   - 不提供 userId 级批量能力：不新增“对某个 userId 下所有 app 批量 track/reset/apply”的命令；需要批量由前端枚举并逐个调用（可观测、可回滚）。
   - 允许 userId 过滤（无 app selector）：采用白名单策略（2.20）：
     - 仅允许在明确标注支持的 device-wide list/stats 命令上作为可选 `args.userId`；
@@ -428,7 +428,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
   - 完全相同规则可去重；  
   - 同一 `<uid>` 的 apply payload 内 `matchKey` 不允许重复；一旦重复必须拒绝 apply（必须有清晰错误原因，便于前端定位冲突来源）。  
 - 统计先维持 per-app；不引入 group-level stats。  
-- 原子 apply（路线 1）与前后端约定（`matchKey/clientRuleId`、冲突错误 shape、`IPRULES.PRINT` 回显）：见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
+- 原子 apply（路线 1）与前后端约定（`matchKey/clientRuleId`、冲突错误 shape、`IPRULES.PRINT` 回显）：见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`。
 
 ### 3.3 可观测性对齐（跨层解释）
 
@@ -436,7 +436,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - 对齐 `policySource` / `reasonId` / `ruleId` / `wouldRuleId` 的叙事：哪些是最终裁决依据、哪些只是来源/候选信息。  
 - dns stream vNext（入口：`STREAM.START(type=dns)`）：补齐 `policySource/useCustomList/scope` + “判决时快照”字段口径；允许升级时丢弃历史 `dnsstream` 缓存文件（调试型产物不做严格兼容）。  
 - stream pipeline 重构（见 2.8）：hot path / `mutexListeners` 锁内只做有界 enqueue；由独立 writer 线程异步写 socket；反压允许 drop，且必须通过 `type="notice"` 可定位。  
-- 落地 task list：见 `docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`（含 metrics name=`traffic`/`conntrack`（`METRICS.GET`/`METRICS.RESET` 入口统一）、stream vNext、reset/selector/测试与推荐切片）。  
+- 落地 task list：见 `docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`（含 metrics name=`traffic`/`conntrack`（`METRICS.GET`/`METRICS.RESET` 入口统一）、stream vNext、reset/selector/测试与推荐切片）。  
 
 ### 3.4 控制面与生命周期（reset/save/restore）
 
@@ -467,12 +467,12 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 - 不做兼容：stream 是调试通道；允许升级时丢弃历史缓存文件。
 - `type="notice"`（`notice="suppressed"|"dropped"|"started"`）只实时，不进入 ring，不参与 horizon，不落盘（suppressed/dropped 仅对 dns/pkt 有意义）。
 - 线协议（vNext；为可靠解析与避免输出交织）：
-  - framing 采用 netstring（见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`）：每条 response/event 都是一个 netstring frame，payload 为 UTF‑8 JSON object；不发送 NUL terminator。
+  - framing 采用 netstring（见 `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`）：每条 response/event 都是一个 netstring frame，payload 为 UTF‑8 JSON object；不发送 NUL terminator。
     - 严格 JSON（2.10）：所有字符串字段必须正确 escape（至少处理 `\" \\ \n \r \t`；vNext 必须引入统一 JSON string encoder）。
   - stream events 与 control response 共享同一 framing，但 event 不得包含 `id/ok`（避免与 response 混淆）。
   - `*.STOP` 的 response frame 作为 ack barrier：成功为 `{"id":...,"ok":true}`；失败为 `{"id":...,"ok":false,"error":{...}}`（与错误模型一致）。
   - 进入 stream 模式后，禁止在同一连接上执行非 stream 控制命令（避免输出交织与心智分裂）；如需查询/配置请另开控制连接。
-  - control 协议 vNext（除 streams 外的所有命令 framing/响应/错误约定）：见 `docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`。
+  - control 协议 vNext（除 streams 外的所有命令 framing/响应/错误约定）：见 `docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`。
 - `STREAM.STOP`：
   - 返回 response frame；停止该连接的 stream session；并清理该连接 pending queue（若有）。
   - **ack barrier（已确认；2.9-B）**：STOP 必须先禁用订阅并清空 pending queue（允许丢弃尾部未发送事件/notice），再输出该 STOP 的 response frame（`{"id":...,"ok":true}`）；该 response 必须是该 STOP 的最后一个输出 frame，ack 后不得再输出任何事件/notice，直到下一次 `STREAM.START`。
@@ -544,8 +544,8 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 不可退化契约（已确认；只要 change 触及则必须有对应测试/验收点）：
 
 1) 原子 apply（路线 1，强一致）：失败不改变现状；成功后新基线立即可见  
-2) `matchKey` 规范化与冲突拒绝：错误为 `INVALID_ARGUMENT` 且携带 `conflicts[]`（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）  
-3) `clientRuleId` 贯穿：apply/print/error 一致回显（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）  
+2) `matchKey` 规范化与冲突拒绝：错误为 `INVALID_ARGUMENT` 且携带 `conflicts[]`（见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）  
+3) `clientRuleId` 贯穿：apply/print/error 一致回显（见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）  
 4) stream vNext：netstring framing + 严格 JSON、START/STOP/RESETALL/`STATE_CONFLICT` 语义、STOP ack barrier、禁止输出交织（见 observability working decisions）  
 5) reset/save/restore 边界：`RESETALL` 必须回到干净基线；layer reset 不得污染其它层（见 3.4）  
 6) 多用户语义：`per-app == per-UID`、selector 严格拒绝 + 强制回显（见 2.5）  
@@ -560,9 +560,9 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
   - `DomainPolicySource` 枚举/顺序/快照稳定（sources keys 固定 7 个）（本阶段只做命名收敛见 3.1，不扩写、不作为 gate）
 - IPRULES：
   - 原子 apply：失败不改变现状；成功后新基线立即可见（路线 1）
-  - `matchKey` 规范化：CIDR 网络地址归一化、`ifindex=0` 视为 any、`proto=icmp` 端口约束等（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
-  - apply 冲突拒绝：同一 `<uid>` apply payload 内 `matchKey` 不允许重复；错误为 `INVALID_ARGUMENT + conflicts[]`（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
-  - `clientRuleId`：格式/唯一性校验与贯穿回显（见 `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
+  - `matchKey` 规范化：CIDR 网络地址归一化、`ifindex=0` 视为 any、`proto=icmp` 端口约束等（见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
+  - apply 冲突拒绝：同一 `<uid>` apply payload 内 `matchKey` 不允许重复；错误为 `INVALID_ARGUMENT + conflicts[]`（见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
+  - `clientRuleId`：格式/唯一性校验与贯穿回显（见 `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`）
   - per-rule stats 清零边界（UPDATE/ENABLE）
 - Reset 边界（最小集合）：
   - `RESETALL` 会清空：reasons/domain-sources/perf/iprules-stats（以及未来 traffic/conntrack），并回到干净基线（不遗留旧 stream/ring/pending 状态污染下一次开启）
@@ -611,7 +611,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 ### 4.0 当前 open issues（以挑刺清单为入口）
 
-- 见 `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`（本目录唯一挑刺清单；只保留未落盘项）。
+- 见 `docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`（本目录唯一挑刺清单；只保留未落盘项）。
 
 ### 4.1 延后项清单（明确不夹带，但要先锁边界）
 
@@ -649,8 +649,8 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 ### 4.5 可观测性落地清单（从工作决策 → 实现任务）
 
 已落盘：
-- 工作结论：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
-- 任务清单：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
+- 工作结论：`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- 任务清单：`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_IMPLEMENTATION_TASKS.md`
 
 ### 4.6 状态、持久化与 reset 边界（save/restore/versioning）
 
@@ -668,18 +668,18 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 ### 4.8 接口与对外契约（control plane / schema）
 
 已落盘（接口契约的单一真相）：
-- wire/envelope/errors/selector/stream 连接约束：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
-- 命令集合与每个 `cmd` 的 args/result/errors：`docs/decisions/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
-- `IPRULES.APPLY` 的 apply/冲突/回显契约：`docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
-- stream/metrics/tracked 等观测语义：`docs/decisions/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
+- wire/envelope/errors/selector/stream 连接约束：`docs/archived/DOMAIN_IP_FUSION/CONTROL_PROTOCOL_VNEXT.md`
+- 命令集合与每个 `cmd` 的 args/result/errors：`docs/archived/DOMAIN_IP_FUSION/CONTROL_COMMANDS_VNEXT.md`
+- `IPRULES.APPLY` 的 apply/冲突/回显契约：`docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
+- stream/metrics/tracked 等观测语义：`docs/archived/DOMAIN_IP_FUSION/OBSERVABILITY_WORKING_DECISIONS.md`
 
-仍未落盘的部分请以挑刺清单为准：`docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`
+仍未落盘的部分请以挑刺清单为准：`docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_NITPICKS_TMP.md`
 
 ### 4.9 配置层/前端职责边界（已收敛；此处仅保留索引）
 
 该话题已从“待讨论章节”迁移为可实现契约，权威约定见：
 
-- `docs/decisions/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
+- `docs/archived/DOMAIN_IP_FUSION/IPRULES_APPLY_CONTRACT.md`
 
 ### 4.10 基础数据结构与代码复用（后端实现骨架）
 
@@ -690,7 +690,7 @@ IP 侧的“规则组”**只存在于配置层**（前端/配置生成器），
 
 本章已在第 2.7/3.5 收敛为可执行 gate 与不可退化契约（不再作为待讨论章节）：
 
-- `docs/decisions/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`（2.7/3.5）
+- `docs/archived/DOMAIN_IP_FUSION/DOMAIN_IP_FUSION_CHECKLIST.md`（2.7/3.5）
 - `docs/IMPLEMENTATION_ROADMAP.md`（P0/P1/P2/P3 阶段定义）
 
 ### 4.12 落地拆分（change 切片与顺序）
