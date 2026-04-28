@@ -454,6 +454,130 @@ TEST_F(ControlVNextDomainSurfaceTest, DomainPolicyGetApplyAckOnlyAndSelectorErro
     EXPECT_STREQ((*badView.error)["code"].GetString(), "INVALID_ARGUMENT");
 }
 
+TEST_F(ControlVNextDomainSurfaceTest, DevDomainQueryReturnsRuleIdAndDoesNotAffectCounters) {
+    const uint32_t uid = 10123;
+    appManager.install(uid, {"com.example"});
+
+    // 1) Baseline rules: one allow-only matcher and one block-only matcher.
+    const std::string allowDomain = "allow.example.com";
+    const std::string blockDomain = "block.example.com";
+
+    rapidjson::Document rulesArgs(rapidjson::kObjectType);
+    auto &rAlloc = rulesArgs.GetAllocator();
+    rapidjson::Value rules(rapidjson::kArrayType);
+    {
+        rapidjson::Value item(rapidjson::kObjectType);
+        item.AddMember("type", rapidjson::Value("domain", rAlloc), rAlloc);
+        item.AddMember("pattern", rapidjson::Value(allowDomain.c_str(), rAlloc), rAlloc);
+        rules.PushBack(item, rAlloc);
+    }
+    {
+        rapidjson::Value item(rapidjson::kObjectType);
+        item.AddMember("type", rapidjson::Value("domain", rAlloc), rAlloc);
+        item.AddMember("pattern", rapidjson::Value(blockDomain.c_str(), rAlloc), rAlloc);
+        rules.PushBack(item, rAlloc);
+    }
+    rulesArgs.AddMember("rules", rules, rAlloc);
+
+    const rapidjson::Document rulesResp = Rpc::call(/*id=*/100, "DOMAINRULES.APPLY", rulesArgs);
+    ControlVNext::ResponseView rulesView;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(rulesResp, rulesView).has_value());
+    ASSERT_TRUE(rulesView.ok);
+    ASSERT_NE(rulesView.result, nullptr);
+    ASSERT_TRUE(rulesView.result->HasMember("rules"));
+    const auto &finalRules = (*rulesView.result)["rules"];
+    ASSERT_TRUE(finalRules.IsArray());
+
+    std::optional<uint32_t> allowRuleId;
+    std::optional<uint32_t> blockRuleId;
+    for (const auto &v : finalRules.GetArray()) {
+        if (!v.IsObject() || !v.HasMember("pattern") || !v.HasMember("ruleId")) {
+            continue;
+        }
+        const std::string_view pat(v["pattern"].GetString(), v["pattern"].GetStringLength());
+        const uint32_t rid = v["ruleId"].GetUint();
+        if (pat == allowDomain) {
+            allowRuleId = rid;
+        } else if (pat == blockDomain) {
+            blockRuleId = rid;
+        }
+    }
+    ASSERT_TRUE(allowRuleId.has_value());
+    ASSERT_TRUE(blockRuleId.has_value());
+
+    // 2) Apply app policy to reference both ruleIds.
+    rapidjson::Document policyArgs(rapidjson::kObjectType);
+    auto &pAlloc = policyArgs.GetAllocator();
+    policyArgs.AddMember("scope", rapidjson::Value("app", pAlloc), pAlloc);
+    {
+        rapidjson::Value appObj(rapidjson::kObjectType);
+        appObj.AddMember("uid", uid, pAlloc);
+        policyArgs.AddMember("app", appObj, pAlloc);
+    }
+    {
+        rapidjson::Value policy(rapidjson::kObjectType);
+        auto makeSide = [&](const char *name, const uint32_t ruleId) {
+            rapidjson::Value side(rapidjson::kObjectType);
+            side.AddMember("domains", rapidjson::Value(rapidjson::kArrayType), pAlloc);
+            rapidjson::Value ruleIds(rapidjson::kArrayType);
+            ruleIds.PushBack(ruleId, pAlloc);
+            side.AddMember("ruleIds", ruleIds, pAlloc);
+            policy.AddMember(rapidjson::Value(name, pAlloc), side, pAlloc);
+        };
+        makeSide("allow", *allowRuleId);
+        makeSide("block", *blockRuleId);
+        policyArgs.AddMember("policy", policy, pAlloc);
+    }
+
+    const rapidjson::Document policyResp = Rpc::call(/*id=*/101, "DOMAINPOLICY.APPLY", policyArgs);
+    ControlVNext::ResponseView policyView;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(policyResp, policyView).has_value());
+    ASSERT_TRUE(policyView.ok);
+
+    // Seed counters so we can detect accidental increments.
+    const auto allowRule = rulesManager.findThreadSafe(*allowRuleId);
+    const auto blockRule = rulesManager.findThreadSafe(*blockRuleId);
+    ASSERT_NE(allowRule, nullptr);
+    ASSERT_NE(blockRule, nullptr);
+    allowRule->observeAllowHit();
+    blockRule->observeBlockHit();
+    blockRule->observeBlockHit();
+
+    const auto allowBefore = allowRule->hitsSnapshot();
+    const auto blockBefore = blockRule->hitsSnapshot();
+
+    // 3) DEV query should return ruleId but MUST NOT modify counters.
+    auto devQuery = [&](const uint32_t id, const std::string &domain, const char *expectedSource,
+                        const uint32_t expectedRuleId) {
+        rapidjson::Document args(rapidjson::kObjectType);
+        auto &aAlloc = args.GetAllocator();
+        rapidjson::Value appObj(rapidjson::kObjectType);
+        appObj.AddMember("uid", uid, aAlloc);
+        args.AddMember("app", appObj, aAlloc);
+        args.AddMember("domain", rapidjson::Value(domain.c_str(), aAlloc), aAlloc);
+
+        const rapidjson::Document resp = Rpc::call(id, "DEV.DOMAIN.QUERY", args);
+        ControlVNext::ResponseView view;
+        ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp, view).has_value());
+        ASSERT_TRUE(view.ok);
+        ASSERT_NE(view.result, nullptr);
+        ASSERT_TRUE(view.result->HasMember("policySource"));
+        EXPECT_STREQ((*view.result)["policySource"].GetString(), expectedSource);
+        ASSERT_TRUE(view.result->HasMember("ruleId"));
+        EXPECT_EQ((*view.result)["ruleId"].GetUint(), expectedRuleId);
+    };
+
+    devQuery(/*id=*/102, allowDomain, "CUSTOM_RULE_WHITE", *allowRuleId);
+    devQuery(/*id=*/103, blockDomain, "CUSTOM_RULE_BLACK", *blockRuleId);
+
+    const auto allowAfter = allowRule->hitsSnapshot();
+    const auto blockAfter = blockRule->hitsSnapshot();
+    EXPECT_EQ(allowAfter.allowHits, allowBefore.allowHits);
+    EXPECT_EQ(allowAfter.blockHits, allowBefore.blockHits);
+    EXPECT_EQ(blockAfter.allowHits, blockBefore.allowHits);
+    EXPECT_EQ(blockAfter.blockHits, blockBefore.blockHits);
+}
+
 TEST_F(ControlVNextDomainSurfaceTest, DomainListsGetApplySortPatchAndRemoveNotFound) {
     const std::string listAllow = "00000000-0000-0000-0000-000000000001";
     const std::string listBlock = "00000000-0000-0000-0000-000000000002";

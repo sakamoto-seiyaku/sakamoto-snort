@@ -16,7 +16,11 @@ Rule::Rule(const Type type, const Id id, const std::string &rule)
     create(type, rule);
 }
 
-void Rule::update(const Type type, const std::string &rule) { create(type, rule); }
+void Rule::update(const Type type, const std::string &rule) {
+    create(type, rule);
+    // Rule semantics changed; keep since-boot stats meaningful.
+    resetHits();
+}
 
 void Rule::create(const Type type, const std::string &rule) {
     _type = type;

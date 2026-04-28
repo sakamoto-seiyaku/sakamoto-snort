@@ -1,16 +1,4 @@
-# control-vnext-metrics-surface Specification
-
-## Purpose
-TBD - created by archiving change add-control-vnext-metrics. Update Purpose after archive.
-## Requirements
-### Requirement: Daemon exposes METRICS.GET and METRICS.RESET for vNext metrics v1
-The daemon MUST implement `METRICS.GET` and `METRICS.RESET` as defined in `docs/INTERFACE_SPECIFICATION.md`.
-
-The daemon MUST follow vNext envelope + strict reject rules.
-
-#### Scenario: Unknown args key is rejected
-- **WHEN** client sends `{"id":1,"cmd":"METRICS.GET","args":{"name":"traffic","x":1}}`
-- **THEN** daemon SHALL respond `ok=false` with `error.code="SYNTAX_ERROR"`
+## MODIFIED Requirements
 
 ### Requirement: METRICS.GET supports v1 names and enforces selector constraints
 `METRICS.GET.args.name` MUST be a string and MUST be one of:
@@ -61,4 +49,3 @@ Reset support (v1):
 #### Scenario: Conntrack reset is rejected
 - **WHEN** client sends `{"id":5,"cmd":"METRICS.RESET","args":{"name":"conntrack"}}`
 - **THEN** daemon SHALL respond `ok=false` with `error.code="INVALID_ARGUMENT"`
-

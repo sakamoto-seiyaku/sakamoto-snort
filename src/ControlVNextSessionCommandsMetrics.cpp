@@ -10,10 +10,12 @@
 #include <DomainManager.hpp>
 #include <PacketManager.hpp>
 #include <PerfMetrics.hpp>
+#include <RulesManager.hpp>
 #include <TrafficCounters.hpp>
 
 #include <algorithm>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,7 +40,7 @@ unknownArgsKey(const rapidjson::Value &args, const std::initializer_list<std::st
 
 [[nodiscard]] bool isSupportedMetricName(const std::string_view name) noexcept {
     return name == "perf" || name == "reasons" || name == "domainSources" || name == "traffic" ||
-           name == "conntrack";
+           name == "conntrack" || name == "domainRuleStats";
 }
 
 [[nodiscard]] bool nameAllowsAppSelector(const std::string_view name) noexcept {
@@ -225,6 +227,19 @@ std::optional<ResponsePlan> handleMetricsCommand(const ControlVNext::RequestView
                 ct.AddMember("byFamily", byFamily, alloc);
             }
             result.AddMember("conntrack", ct, alloc);
+        } else if (name == "domainRuleStats") {
+            const auto snap = rulesManager.snapshotBaselineRuleStats();
+            rapidjson::Value rules(rapidjson::kArrayType);
+            for (const auto &r : snap) {
+                rapidjson::Value item(rapidjson::kObjectType);
+                item.AddMember("ruleId", r.ruleId, alloc);
+                item.AddMember("allowHits", r.allowHits, alloc);
+                item.AddMember("blockHits", r.blockHits, alloc);
+                rules.PushBack(item, alloc);
+            }
+            rapidjson::Value stats(rapidjson::kObjectType);
+            stats.AddMember("rules", rules, alloc);
+            result.AddMember("domainRuleStats", stats, alloc);
         }
 
         rapidjson::Document response = ControlVNext::makeOkResponse(id, &result);
@@ -267,6 +282,13 @@ std::optional<ResponsePlan> handleMetricsCommand(const ControlVNext::RequestView
     if (name == "conntrack") {
         rapidjson::Document response = ControlVNext::makeErrorResponse(
             id, "INVALID_ARGUMENT", "conntrack does not support METRICS.RESET; use RESETALL");
+        return ResponsePlan{.response = std::move(response)};
+    }
+    if (name == "domainRuleStats") {
+        // Keep reset boundary easy to reason about vs concurrent DNS updates (which hold shared lock).
+        const std::unique_lock<std::shared_mutex> g(mutexListeners);
+        rulesManager.resetRuleHits();
+        rapidjson::Document response = ControlVNext::makeOkResponse(id, nullptr);
         return ResponsePlan{.response = std::move(response)};
     }
 

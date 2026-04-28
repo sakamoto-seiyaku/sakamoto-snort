@@ -126,6 +126,27 @@ TEST_F(DomainPolicySourcesAttributionTest, CustomWhiteRuleMatches) {
     EXPECT_EQ(bcs.policySource, DomainPolicySource::CUSTOM_RULE_WHITE);
 }
 
+TEST(CustomRulesAttributionTest, MatchFirstRuleIdChoosesSmallestId) {
+    settings.reset();
+    domManager.reset();
+    rulesManager.reset();
+
+    CustomRules rules;
+    const auto domain = domManager.make("example.com");
+
+    const auto r10 = std::make_shared<Rule>(Rule::REGEX, 10, ".*");
+    const auto r2 = std::make_shared<Rule>(Rule::DOMAIN, 2, "example.com");
+    ASSERT_TRUE(r10->valid());
+    ASSERT_TRUE(r2->valid());
+
+    rules.add(r10, /*compile=*/true);
+    rules.add(r2, /*compile=*/true);
+
+    EXPECT_TRUE(rules.match(domain));
+    ASSERT_TRUE(rules.matchFirstRuleId(domain).has_value());
+    EXPECT_EQ(*rules.matchFirstRuleId(domain), 2u);
+}
+
 TEST_F(DomainPolicySourcesAttributionTest, CustomBlackRuleMatches) {
     auto app = std::make_shared<App>(0, "root");
     const auto domain = domManager.make("example.com");

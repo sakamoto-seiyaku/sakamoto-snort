@@ -18,6 +18,7 @@
 #include <DnsListener.hpp>
 #include <ControlVNextStreamManager.hpp>
 #include <PerfMetrics.hpp>
+#include <RulesManager.hpp>
 
 DnsListener::DnsListener()
     : Streamable<DnsRequest>(settings.saveDnsStream) {}
@@ -223,6 +224,7 @@ void DnsListener::clientRun(const int socket) {
         App::Ptr app;
         Domain::Ptr domain;
         std::uint64_t resetEpoch = 0;
+        std::optional<std::uint32_t> ruleId;
 
         for (;;) {
             resetEpoch = snortResetEpoch();
@@ -245,10 +247,19 @@ void DnsListener::clientRun(const int socket) {
             }
             domain = domManager.make(std::string(host));
 
-            const auto bcs = app->blockedWithSource(domain);
-            blocked = bcs.blocked;
-            cs = bcs.color;
-            policySource = bcs.policySource;
+            if (settings.blockEnabled() && app->tracked()) {
+                const auto bcsr = app->blockedWithSourceAndRuleId(domain);
+                blocked = bcsr.blocked;
+                cs = bcsr.color;
+                policySource = bcsr.policySource;
+                ruleId = bcsr.ruleId;
+            } else {
+                const auto bcs = app->blockedWithSource(domain);
+                blocked = bcs.blocked;
+                cs = bcs.color;
+                policySource = bcs.policySource;
+                ruleId.reset();
+            }
             verdict = !blocked;
             getips = verdict || settings.getBlackIPs();
             useCustomList = app->useCustomList();
@@ -257,13 +268,18 @@ void DnsListener::clientRun(const int socket) {
 
             if (settings.blockEnabled()) {
                 // B-layer counters: DNS-request-based DomainPolicy attribution.
-                domManager.observeDomainPolicySource(bcs.policySource, blocked);
-                app->observeDomainPolicySource(bcs.policySource, blocked);
+                domManager.observeDomainPolicySource(policySource, blocked);
+                app->observeDomainPolicySource(policySource, blocked);
                 app->observeTrafficDns(blocked);
             }
 
             if (settings.blockEnabled()) {
                 if (app->tracked()) {
+                    if (ruleId.has_value()) {
+                        if (const auto rule = rulesManager.findThreadSafe(*ruleId); rule != nullptr) {
+                            blocked ? rule->observeBlockHit() : rule->observeAllowHit();
+                        }
+                    }
                     timespec ts{};
                     timespec_get(&ts, TIME_UTC);
                     ControlVNextStreamManager::DnsEvent ev{
@@ -278,6 +294,7 @@ void DnsListener::clientRun(const int socket) {
                         .getips = getips,
                         .useCustomList = useCustomList,
                         .policySource = policySource,
+                        .ruleId = ruleId,
                     };
                     controlVNextStream.observeDnsTracked(std::move(ev));
                 } else {

@@ -201,6 +201,10 @@ rapidjson::Document makeDnsEvent(const ControlVNextStreamManager::DnsEvent &even
     doc.AddMember("scope", makeString(dnsScopeStr(event.policySource), alloc), alloc);
     doc.AddMember("getips", event.getips, alloc);
 
+    if (event.ruleId.has_value()) {
+        doc.AddMember("ruleId", *event.ruleId, alloc);
+    }
+
     return doc;
 }
 

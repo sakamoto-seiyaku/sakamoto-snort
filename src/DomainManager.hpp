@@ -15,6 +15,7 @@
 #include <shared_mutex>
 #include <mutex>
 #include <ctime>
+#include <optional>
 
 class DomainManager {
 private:
@@ -63,6 +64,11 @@ public:
     bool blocked(const Domain::Ptr &domain);
 
     bool authorized(const Domain::Ptr &domain);
+
+    // Optional per-rule attribution for device-wide allow/block decisions.
+    // Returns nullopt when the decision came from device-wide custom list, or when no rule matched.
+    std::optional<Rule::Id> authorizedRuleId(const Domain::Ptr &domain);
+    std::optional<Rule::Id> blockedRuleId(const Domain::Ptr &domain);
 
     void observeDomainPolicySource(const DomainPolicySource source, const bool blocked) noexcept {
         _domainSourcesMetrics.observe(source, blocked);

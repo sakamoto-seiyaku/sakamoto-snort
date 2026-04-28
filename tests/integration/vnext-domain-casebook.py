@@ -788,6 +788,10 @@ class DomainCasebook:
             self.app,
         )
         self.reset_app_metrics()
+        require_ok(
+            self.rpc.call("METRICS.RESET", {"name": "domainRuleStats"}),
+            "METRICS.RESET domainRuleStats failed",
+        )
         events = self.capture_dns(
             [allow_domain, block_domain],
             lambda: (self.inject(allow_domain), self.inject(block_domain)),
@@ -800,6 +804,7 @@ class DomainCasebook:
             getips=True,
             policySource="CUSTOM_RULE_WHITE",
             scope="APP",
+            ruleId=int(allow_rule["ruleId"]),
         )
         require_dns_event(
             events[block_domain],
@@ -809,9 +814,56 @@ class DomainCasebook:
             getips=False,
             policySource="CUSTOM_RULE_BLACK",
             scope="APP",
+            ruleId=int(block_rule["ruleId"]),
         )
         if self.get_app_source("CUSTOM_RULE_WHITE")[0] < 1 or self.get_app_source("CUSTOM_RULE_BLACK")[1] < 1:
             raise SmokeFailure("Case 9 CUSTOM_RULE domainSources buckets did not grow")
+
+        # Per-rule counters (tracked-only) MUST grow for the attributed ruleIds.
+        stats = require_ok(
+            self.rpc.call("METRICS.GET", {"name": "domainRuleStats"}),
+            "METRICS.GET domainRuleStats failed",
+        )
+        rules = stats.get("result", {}).get("domainRuleStats", {}).get("rules", [])
+        allow_id = int(allow_rule["ruleId"])
+        block_id = int(block_rule["ruleId"])
+        allow_item = next((r for r in rules if int(r.get("ruleId", -1)) == allow_id), None)
+        block_item = next((r for r in rules if int(r.get("ruleId", -1)) == block_id), None)
+        if allow_item is None or block_item is None:
+            raise SmokeFailure(f"domainRuleStats missing ruleIds allow={allow_id} block={block_id}: {rules}")
+        if int(allow_item.get("allowHits", 0)) < 1:
+            raise SmokeFailure(f"domainRuleStats allowHits did not grow for ruleId={allow_id}: {allow_item}")
+        if int(block_item.get("blockHits", 0)) < 1:
+            raise SmokeFailure(f"domainRuleStats blockHits did not grow for ruleId={block_id}: {block_item}")
+
+        # Reset MUST clear, and counters MUST be able to grow again.
+        require_ok(
+            self.rpc.call("METRICS.RESET", {"name": "domainRuleStats"}),
+            "METRICS.RESET domainRuleStats (second) failed",
+        )
+        stats2 = require_ok(
+            self.rpc.call("METRICS.GET", {"name": "domainRuleStats"}),
+            "METRICS.GET domainRuleStats after reset failed",
+        )
+        rules2 = stats2.get("result", {}).get("domainRuleStats", {}).get("rules", [])
+        allow_item2 = next((r for r in rules2 if int(r.get("ruleId", -1)) == allow_id), None)
+        block_item2 = next((r for r in rules2 if int(r.get("ruleId", -1)) == block_id), None)
+        if allow_item2 is None or block_item2 is None:
+            raise SmokeFailure(f"domainRuleStats missing ruleIds after reset allow={allow_id} block={block_id}")
+        if int(allow_item2.get("allowHits", 0)) != 0 or int(allow_item2.get("blockHits", 0)) != 0:
+            raise SmokeFailure(f"domainRuleStats allow rule not zero after reset: {allow_item2}")
+        if int(block_item2.get("allowHits", 0)) != 0 or int(block_item2.get("blockHits", 0)) != 0:
+            raise SmokeFailure(f"domainRuleStats block rule not zero after reset: {block_item2}")
+
+        _ = self.capture_dns([allow_domain], lambda: self.inject(allow_domain))
+        stats3 = require_ok(
+            self.rpc.call("METRICS.GET", {"name": "domainRuleStats"}),
+            "METRICS.GET domainRuleStats after reinject failed",
+        )
+        rules3 = stats3.get("result", {}).get("domainRuleStats", {}).get("rules", [])
+        allow_item3 = next((r for r in rules3 if int(r.get("ruleId", -1)) == allow_id), None)
+        if allow_item3 is None or int(allow_item3.get("allowHits", 0)) < 1:
+            raise SmokeFailure(f"domainRuleStats did not regrow after reset for ruleId={allow_id}: {allow_item3}")
         log_pass("VNT-DOM-09", "DOMAINRULES(ruleIds) e2e covers CUSTOM_RULE buckets")
 
     def run(self) -> None:

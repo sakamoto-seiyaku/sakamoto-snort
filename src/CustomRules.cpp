@@ -5,6 +5,7 @@
 
 #include <sucre-snort.hpp>
 
+#include <algorithm>
 #include <sstream>
 #include <vector>
 
@@ -14,7 +15,8 @@
 #include <RulesManager.hpp>
 
 CustomRules::CustomRules()
-    : _regexSnap(std::make_shared<std::regex>("")) {}
+    : _regexSnap(std::make_shared<std::regex>(""))
+    , _attribSnap(std::make_shared<std::vector<AttribEntry>>()) {}
 
 CustomRules::~CustomRules() {}
 
@@ -40,12 +42,26 @@ void CustomRules::rebuildRegexSnapshotLocked() {
     // Precondition: _mutex is held exclusively by the caller.
     std::stringstream rules;
     bool first = true;
+
+    std::vector<AttribEntry> attrib;
+    attrib.reserve(_rules.size());
+
     for (const auto &rule : _rules) {
-        if (rule->valid()) {
-            when(first, rules << "|");
-            rules << rule->regex();
+        if (!rule->valid()) {
+            continue;
+        }
+        when(first, rules << "|");
+        rules << rule->regex();
+        try {
+            attrib.push_back(AttribEntry{.ruleId = rule->id(),
+                                         .regex = std::regex(rule->regex(), std::regex::extended)});
+        } catch (...) {
+            // Should not happen for rule->valid()==true, but keep attribution best-effort.
         }
     }
+    std::sort(attrib.begin(), attrib.end(),
+              [](const AttribEntry &a, const AttribEntry &b) { return a.ruleId < b.ruleId; });
+
     try {
         auto compiled = std::make_shared<std::regex>(rules.str(), std::regex::extended);
         std::atomic_store(&_regexSnap, std::move(compiled));
@@ -54,6 +70,8 @@ void CustomRules::rebuildRegexSnapshotLocked() {
         auto compiled = std::make_shared<std::regex>("");
         std::atomic_store(&_regexSnap, std::move(compiled));
     }
+
+    std::atomic_store(&_attribSnap, std::make_shared<std::vector<AttribEntry>>(std::move(attrib)));
 }
 
 void CustomRules::build() {
@@ -78,6 +96,20 @@ bool CustomRules::match(const Domain::Ptr &domain) {
         return false;
     }
     return std::regex_match(domain->name(), *snap);
+}
+
+std::optional<Rule::Id> CustomRules::matchFirstRuleId(const Domain::Ptr &domain) {
+    const auto snap = std::atomic_load(&_attribSnap);
+    if (!snap || snap->empty()) {
+        return std::nullopt;
+    }
+    const std::string &name = domain->name();
+    for (const auto &entry : *snap) {
+        if (std::regex_match(name, entry.regex)) {
+            return entry.ruleId;
+        }
+    }
+    return std::nullopt;
 }
 
 void CustomRules::reset() {

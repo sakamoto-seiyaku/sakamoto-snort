@@ -84,6 +84,25 @@ bool DomainManager::authorized(const Domain::Ptr &domain) {
     return _customWhitelist.exists(domain) || _whiteRules.match(domain);
 }
 
+std::optional<Rule::Id> DomainManager::authorizedRuleId(const Domain::Ptr &domain) {
+    if (_customWhitelist.exists(domain)) {
+        return std::nullopt;
+    }
+    // Deterministic attribution: pick the smallest matching ruleId.
+    return _whiteRules.matchFirstRuleId(domain);
+}
+
+std::optional<Rule::Id> DomainManager::blockedRuleId(const Domain::Ptr &domain) {
+    if (_customBlacklist.exists(domain)) {
+        return std::nullopt;
+    }
+    // Only count/attribute block rules that actually win (white overrides black).
+    if (!_blackRules.match(domain) || _whiteRules.match(domain)) {
+        return std::nullopt;
+    }
+    return _blackRules.matchFirstRuleId(domain);
+}
+
 void DomainManager::removeIPs(const Domain::Ptr &domain) {
     // Strong consistency: hold domain lock first, then global IP map lock; delete mappings and
     // clear per-domain IP sets in the same critical section to avoid races.

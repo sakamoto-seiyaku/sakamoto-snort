@@ -61,8 +61,9 @@ vNext app selector（`args.app`）约定:
   - `policy={allow:{domains:string[],ruleIds:u32[]},block:{domains:string[],ruleIds:u32[]}}`。
 - `DOMAINPOLICY.APPLY` | `{"scope":"device"|"app","app"?:selector,"policy":policy}` | `ok` |
   - 语义为“整体对齐”：分别对齐 allow/block 的 domains 与 ruleIds；未知 ruleId → `INVALID_ARGUMENT`（含 `error.hint`）。
-- `DEV.DOMAIN.QUERY` | `{"app":selector,"domain":string}` | `result={uid,userId,app,domain,blocked,policySource}` |
+- `DEV.DOMAIN.QUERY` | `{"app":selector,"domain":string}` | `result={uid,userId,app,domain,blocked,policySource,ruleId?}` |
   - DEV-only（用于调试一次 DomainPolicy 判决）；`blocked` 为 boolean。
+  - `ruleId` 仅当 `policySource` 来自规则分支且该 decision 实际来自 rule（非名单）时出现。
 
 2.5 域名清单（DomainLists）
 - `DOMAINLISTS.GET` | `{}` | `result={lists[]}` |
@@ -94,8 +95,10 @@ vNext app selector（`args.app`）约定:
   - `name=domainSources` → `result.sources{...}`（device 或 app 维度）；app 维度额外返回 `{uid,userId,app}`。
   - `name=traffic` → `result.traffic{dns,rxp,rxb,txp,txb}`；每项为 `{allow,block}`（device 或 app 维度）。
   - `name=conntrack` → `result.conntrack{totalEntries,creates,expiredRetires,overflowDrops,byFamily{ipv4,ipv6}}`。
+  - `name=domainRuleStats` → `result.domainRuleStats{rules[]}`（device-only；禁止 `args.app`）：
+    - `rules[]` item：`{ruleId:u32,allowHits:u64,blockHits:u64}`（按 `ruleId` 升序；baseline 全量覆盖）。
 - `METRICS.RESET` | `{"name":name,"app"?:selector}` | `ok` |
-  - 支持 reset：`perf` / `reasons` / `domainSources` / `traffic`。
+  - 支持 reset：`perf` / `reasons` / `domainSources` / `traffic` / `domainRuleStats`。
   - `METRICS.RESET(name=conntrack)`：不支持，返回 `INVALID_ARGUMENT`（提示使用 `RESETALL`）。
 - `STREAM.START` | `{"type":"dns"|"pkt"|"activity","horizonSec"?:u32,"minSize"?:u32}` | `ok` |
   - `dns/pkt` 支持 replay 参数（会被 clamp 到 caps）；`activity` 禁止携带 `horizonSec/minSize`（否则 `SYNTAX_ERROR`）。
@@ -108,7 +111,8 @@ vNext stream 事件（JSON object，无 `id/ok`）:
 - `notice.started`：`{ "type":"notice", "notice":"started", "stream":"dns"|"pkt"|"activity", "horizonSec"?:u32, "minSize"?:u32 }`
 - `notice.suppressed`：`{type:"notice",notice:"suppressed",stream,windowMs:u32,traffic:{dns|rxp|rxb|txp|txb:{allow,block}},hint:string}`
 - `notice.dropped`：`{type:"notice",notice:"dropped",stream,windowMs:u32,droppedEvents:u64}`
-- `dns`：`{type:"dns",timestamp:string,uid:u32,userId:u32,app:string,domain:string,domMask:u32,appMask:u32,blocked:bool,policySource:string,useCustomList:bool,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",getips:bool}`
+- `dns`：`{type:"dns",timestamp:string,uid:u32,userId:u32,app:string,domain:string,domMask:u32,appMask:u32,blocked:bool,policySource:string,useCustomList:bool,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",getips:bool,ruleId?:u32}`
+  - `ruleId` 仅在 tracked app 且 `policySource` 来自规则分支且 decision 实际来自 rule（非名单）时出现。
 - `pkt`：
   `{ "type":"pkt", "timestamp":string, "uid":u32, "userId":u32, "app":string, "direction":"in"|"out", "ipVersion":4|6, "protocol":"tcp"|"udp"|"icmp"|"other", "l4Status":"known-l4"|"other-terminal"|"fragment"|"invalid-or-unavailable-l4", "srcIp"?:string, "dstIp"?:string, "srcPort":u32, "dstPort":u32, "length":u32, "ifindex":u32, "ifaceKindBit":u32, "interface"?:string, "host"?:string, "domain"?:string, "accepted":bool, "reasonId":string, "ruleId"?:u32, "wouldRuleId"?:u32, "wouldDrop"?:bool }`
   - `l4Status` 恒存在；当 `l4Status!=known-l4` 时 `srcPort/dstPort=0`。
@@ -237,6 +241,8 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"perf\"}'`
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"traffic\"}'`
   - `sucre-snort-ctl METRICS.RESET '{\"name\":\"traffic\"}'`
+  - `sucre-snort-ctl METRICS.GET '{\"name\":\"domainRuleStats\"}'`
+  - `sucre-snort-ctl METRICS.RESET '{\"name\":\"domainRuleStats\"}'`
 - 流（运行 10 秒内）
   - `sucre-snort-ctl --follow STREAM.START '{\"type\":\"dns\",\"horizonSec\":0,\"minSize\":0}'` → `notice.started` + `type=dns` 事件
   - `sucre-snort-ctl STREAM.STOP` → ack response

@@ -265,12 +265,12 @@ std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView 
         }
 
         const auto dom = domManager.make(std::move(domain));
-        const auto bcs = app->blockedWithSource(dom);
-        const bool blocked = bcs.blocked;
+        const auto bcsr = app->blockedWithSourceAndRuleId(dom);
+        const bool blocked = bcsr.blocked;
 
         if (settings.blockEnabled()) {
-            domManager.observeDomainPolicySource(bcs.policySource, blocked);
-            app->observeDomainPolicySource(bcs.policySource, blocked);
+            domManager.observeDomainPolicySource(bcsr.policySource, blocked);
+            app->observeDomainPolicySource(bcsr.policySource, blocked);
         }
 
         rapidjson::Document result(rapidjson::kObjectType);
@@ -281,7 +281,10 @@ std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView 
         result.AddMember("app", makeString(canonical, alloc), alloc);
         result.AddMember("domain", makeString(dom->name(), alloc), alloc);
         result.AddMember("blocked", blocked, alloc);
-        result.AddMember("policySource", makeString(domainPolicySourceStr(bcs.policySource), alloc), alloc);
+        result.AddMember("policySource", makeString(domainPolicySourceStr(bcsr.policySource), alloc), alloc);
+        if (bcsr.ruleId.has_value()) {
+            result.AddMember("ruleId", *bcsr.ruleId, alloc);
+        }
 
         rapidjson::Document response = ControlVNext::makeOkResponse(id, &result);
         return ResponsePlan{.response = std::move(response)};

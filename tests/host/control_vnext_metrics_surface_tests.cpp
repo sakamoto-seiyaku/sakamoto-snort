@@ -249,6 +249,100 @@ TEST_F(ControlVNextMetricsSurfaceTest, GetRejectsAppForUnsupportedNames) {
     EXPECT_STREQ((*view.error)["code"].GetString(), "INVALID_ARGUMENT");
 }
 
+TEST_F(ControlVNextMetricsSurfaceTest, GetRejectsAppForDomainRuleStats) {
+    rapidjson::Document args(rapidjson::kObjectType);
+    auto &alloc = args.GetAllocator();
+    args.AddMember("name", rapidjson::Value("domainRuleStats", alloc), alloc);
+    rapidjson::Value app(rapidjson::kObjectType);
+    app.AddMember("uid", 10123u, alloc);
+    args.AddMember("app", app, alloc);
+
+    const rapidjson::Document resp = Rpc::call(/*id=*/30, "METRICS.GET", args);
+
+    ControlVNext::ResponseView view;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp, view).has_value());
+    EXPECT_FALSE(view.ok);
+    ASSERT_NE(view.error, nullptr);
+    EXPECT_STREQ((*view.error)["code"].GetString(), "INVALID_ARGUMENT");
+}
+
+TEST_F(ControlVNextMetricsSurfaceTest, DomainRuleStatsShapeSortAndReset) {
+    // Create a stable baseline with non-contiguous ruleIds to exercise ordering.
+    rulesManager.upsertRuleWithId(/*ruleId=*/3, Rule::REGEX, ".*");
+    rulesManager.upsertRuleWithId(/*ruleId=*/0, Rule::DOMAIN, "example.com");
+
+    rapidjson::Document get(rapidjson::kObjectType);
+    auto &gAlloc = get.GetAllocator();
+    get.AddMember("name", rapidjson::Value("domainRuleStats", gAlloc), gAlloc);
+
+    const rapidjson::Document resp0 = Rpc::call(/*id=*/31, "METRICS.GET", get);
+    ControlVNext::ResponseView view0;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp0, view0).has_value());
+    ASSERT_TRUE(view0.ok);
+    ASSERT_NE(view0.result, nullptr);
+    ASSERT_TRUE(view0.result->HasMember("domainRuleStats"));
+    const auto &stats0 = (*view0.result)["domainRuleStats"];
+    ASSERT_TRUE(stats0.IsObject());
+    ASSERT_TRUE(stats0.HasMember("rules"));
+    const auto &rules0 = stats0["rules"];
+    ASSERT_TRUE(rules0.IsArray());
+    ASSERT_EQ(rules0.Size(), 2u);
+    EXPECT_EQ(rules0[0]["ruleId"].GetUint(), 0u);
+    EXPECT_EQ(rules0[1]["ruleId"].GetUint(), 3u);
+    EXPECT_TRUE(rules0[0].HasMember("allowHits"));
+    EXPECT_TRUE(rules0[0].HasMember("blockHits"));
+
+    // Simulate runtime hits.
+    const auto r0 = rulesManager.findThreadSafe(0);
+    const auto r3 = rulesManager.findThreadSafe(3);
+    ASSERT_NE(r0, nullptr);
+    ASSERT_NE(r3, nullptr);
+    r0->observeAllowHit();
+    r3->observeBlockHit();
+    r3->observeBlockHit();
+
+    const rapidjson::Document resp1 = Rpc::call(/*id=*/32, "METRICS.GET", get);
+    ControlVNext::ResponseView view1;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp1, view1).has_value());
+    ASSERT_TRUE(view1.ok);
+    const auto &rules1 = (*view1.result)["domainRuleStats"]["rules"];
+    ASSERT_EQ(rules1.Size(), 2u);
+    EXPECT_EQ(rules1[0]["allowHits"].GetUint64(), 1u);
+    EXPECT_EQ(rules1[0]["blockHits"].GetUint64(), 0u);
+    EXPECT_EQ(rules1[1]["allowHits"].GetUint64(), 0u);
+    EXPECT_EQ(rules1[1]["blockHits"].GetUint64(), 2u);
+
+    // Reset and verify zero.
+    rapidjson::Document reset(rapidjson::kObjectType);
+    auto &rAlloc = reset.GetAllocator();
+    reset.AddMember("name", rapidjson::Value("domainRuleStats", rAlloc), rAlloc);
+    const rapidjson::Document resetResp = Rpc::call(/*id=*/33, "METRICS.RESET", reset);
+    ControlVNext::ResponseView resetView;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resetResp, resetView).has_value());
+    ASSERT_TRUE(resetView.ok);
+
+    const rapidjson::Document resp2 = Rpc::call(/*id=*/34, "METRICS.GET", get);
+    ControlVNext::ResponseView view2;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp2, view2).has_value());
+    ASSERT_TRUE(view2.ok);
+    const auto &rules2 = (*view2.result)["domainRuleStats"]["rules"];
+    ASSERT_EQ(rules2.Size(), 2u);
+    EXPECT_EQ(rules2[0]["allowHits"].GetUint64(), 0u);
+    EXPECT_EQ(rules2[0]["blockHits"].GetUint64(), 0u);
+    EXPECT_EQ(rules2[1]["allowHits"].GetUint64(), 0u);
+    EXPECT_EQ(rules2[1]["blockHits"].GetUint64(), 0u);
+
+    // RESETALL clears baseline rules; domainRuleStats must reflect the cleared baseline.
+    rulesManager.reset();
+    const rapidjson::Document resp3 = Rpc::call(/*id=*/35, "METRICS.GET", get);
+    ControlVNext::ResponseView view3;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp3, view3).has_value());
+    ASSERT_TRUE(view3.ok);
+    const auto &rules3 = (*view3.result)["domainRuleStats"]["rules"];
+    ASSERT_TRUE(rules3.IsArray());
+    EXPECT_EQ(rules3.Size(), 0u);
+}
+
 TEST_F(ControlVNextMetricsSurfaceTest, SelectorNotFoundReturnsCandidatesArray) {
     rapidjson::Document args(rapidjson::kObjectType);
     auto &alloc = args.GetAllocator();

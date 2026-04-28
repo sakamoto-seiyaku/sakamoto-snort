@@ -145,6 +145,63 @@ App::BlockedWithSource App::blockedWithSource(const Domain::Ptr &domain) {
     return {.blocked = blocked, .color = cs, .policySource = DomainPolicySource::MASK_FALLBACK};
 }
 
+App::BlockedWithSourceAndRuleId App::blockedWithSourceAndRuleId(const Domain::Ptr &domain) {
+    if (domain == nullptr || !settings.blockEnabled()) {
+        return {.blocked = false,
+                .color = Stats::GREY,
+                .policySource = DomainPolicySource::MASK_FALLBACK,
+                .ruleId = std::nullopt};
+    }
+
+    const auto cs = domain->color();
+    if (_useCustomList) {
+        if (_customWhitelist.exists(domain)) {
+            return {.blocked = false,
+                    .color = cs,
+                    .policySource = DomainPolicySource::CUSTOM_WHITELIST,
+                    .ruleId = std::nullopt};
+        }
+        if (_customBlacklist.exists(domain)) {
+            return {.blocked = true,
+                    .color = cs,
+                    .policySource = DomainPolicySource::CUSTOM_BLACKLIST,
+                    .ruleId = std::nullopt};
+        }
+
+        if (_whiteRules.match(domain)) {
+            return {.blocked = false,
+                    .color = cs,
+                    .policySource = DomainPolicySource::CUSTOM_RULE_WHITE,
+                    .ruleId = _whiteRules.matchFirstRuleId(domain)};
+        }
+        if (_blackRules.match(domain)) {
+            return {.blocked = true,
+                    .color = cs,
+                    .policySource = DomainPolicySource::CUSTOM_RULE_BLACK,
+                    .ruleId = _blackRules.matchFirstRuleId(domain)};
+        }
+
+        if (domManager.authorized(domain)) {
+            return {.blocked = false,
+                    .color = cs,
+                    .policySource = DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED,
+                    .ruleId = domManager.authorizedRuleId(domain)};
+        }
+        if (domManager.blocked(domain)) {
+            return {.blocked = true,
+                    .color = cs,
+                    .policySource = DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED,
+                    .ruleId = domManager.blockedRuleId(domain)};
+        }
+    }
+
+    const bool blocked = _blockMask & domain->blockMask();
+    return {.blocked = blocked,
+            .color = cs,
+            .policySource = DomainPolicySource::MASK_FALLBACK,
+            .ruleId = std::nullopt};
+}
+
 void App::updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,
                       const Stats::Block bs, const uint64_t val) {
     _saved = false;

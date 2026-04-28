@@ -37,6 +37,13 @@ public:
         DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
     };
 
+    struct BlockedWithSourceAndRuleId {
+        bool blocked = false;
+        Stats::Color color = Stats::GREY;
+        DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
+        std::optional<uint32_t> ruleId;
+    };
+
 private:
     Saver _saver;
     mutable std::shared_mutex _mutexMeta; // protects _saver/_name/_names during anonymous->named upgrade
@@ -146,6 +153,9 @@ public:
     const std::pair<bool, Stats::Color> blocked(const Domain::Ptr &domain);
 
     BlockedWithSource blockedWithSource(const Domain::Ptr &domain);
+
+    // Observability-only variant: includes optional per-rule attribution. Not intended for default hot path.
+    BlockedWithSourceAndRuleId blockedWithSourceAndRuleId(const Domain::Ptr &domain);
 
     void observeDomainPolicySource(const DomainPolicySource source, const bool blocked) noexcept {
         _domainSourcesCounters.observe(source, blocked);

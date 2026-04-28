@@ -48,6 +48,28 @@ std::vector<RulesManager::BaselineRule> RulesManager::snapshotBaseline() {
     return out;
 }
 
+std::vector<RulesManager::BaselineRuleStats> RulesManager::snapshotBaselineRuleStats() {
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    std::vector<BaselineRuleStats> out;
+    out.reserve(_rules.size());
+    for (const auto &[id, rule] : _rules) {
+        const auto snap = rule->hitsSnapshot();
+        out.push_back(BaselineRuleStats{
+            .ruleId = id,
+            .allowHits = snap.allowHits,
+            .blockHits = snap.blockHits,
+        });
+    }
+    return out;
+}
+
+void RulesManager::resetRuleHits() {
+    const std::lock_guard lock(_mutex);
+    for (const auto &[_, rule] : _rules) {
+        rule->resetHits();
+    }
+}
+
 void RulesManager::ensureNextRuleIdAtLeast(const uint32_t nextId) {
     const std::lock_guard lock(_mutex);
     if (_idCount < nextId) {

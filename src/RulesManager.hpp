@@ -42,6 +42,12 @@ public:
         std::string pattern;
     };
 
+    struct BaselineRuleStats {
+        uint32_t ruleId = 0;
+        std::uint64_t allowHits = 0;
+        std::uint64_t blockHits = 0;
+    };
+
     struct CustomRuleConflict {
         uint32_t ruleId = 0;
         bool device = false;
@@ -61,6 +67,12 @@ public:
 
     // Snapshot of the current rules baseline (id/type/pattern) under shared lock.
     std::vector<BaselineRule> snapshotBaseline();
+
+    // Snapshot of per-rule runtime counters under shared lock. Order is stable (ruleId asc).
+    std::vector<BaselineRuleStats> snapshotBaselineRuleStats();
+
+    // Clear per-rule runtime counters under exclusive lock.
+    void resetRuleHits();
 
     // Bump the next allocated ruleId to at least nextId (no-op when already larger).
     void ensureNextRuleIdAtLeast(uint32_t nextId);

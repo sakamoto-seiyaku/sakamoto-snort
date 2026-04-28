@@ -62,6 +62,7 @@ public:
         bool getips = false;
         bool useCustomList = false;
         DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
+        std::optional<std::uint32_t> ruleId;
     };
 
     struct PktEvent {
