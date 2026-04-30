@@ -5,6 +5,7 @@
 
 #include <ControlVNextCodec.hpp>
 #include <ControlVNextSession.hpp>
+#include <ControlVNextStreamJson.hpp>
 #include <ControlVNextStreamManager.hpp>
 #include <Settings.hpp>
 #include <sucre-snort.hpp>
@@ -21,6 +22,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -166,6 +169,14 @@ std::uint64_t totalTraffic(const TrafficSnapshot &snapshot) {
 
 void resetStreamState() { controlVNextStream.resetAll(); }
 
+ControlVNextStreamManager::DnsEvent makeReplayDnsEvent(const std::uint32_t uid) {
+    return ControlVNextStreamManager::DnsEvent{
+        .timestamp = timespec{.tv_sec = static_cast<std::time_t>(uid), .tv_nsec = 0},
+        .uid = uid,
+        .app = std::make_shared<const std::string>("replay.app"),
+    };
+}
+
 } // namespace
 
 TEST(ControlVNextStreamSurface, StartEmitsStartedNotice) {
@@ -199,6 +210,48 @@ TEST(ControlVNextStreamSurface, StartEmitsStartedNotice) {
     ASSERT_FALSE(ControlVNext::parseResponseEnvelope(*stopDoc, stopResp).has_value());
     EXPECT_EQ(stopResp.id, 2u);
     EXPECT_TRUE(stopResp.ok);
+}
+
+TEST(ControlVNextStreamSurface, ReplayUsesOnlyBoundedDebugPrebuffer) {
+    ControlVNextStreamManager manager(ControlVNextStreamManager::Caps{
+        .maxHorizonSec = 60,
+        .maxRingEvents = 2,
+        .maxPendingEvents = 8,
+    });
+
+    manager.observeDnsTracked(makeReplayDnsEvent(1001));
+    manager.observeDnsTracked(makeReplayDnsEvent(1002));
+    manager.observeDnsTracked(makeReplayDnsEvent(1003));
+
+    int sessionKey = 0;
+    ControlVNextStreamManager::StartResult startResult{};
+    ASSERT_TRUE(manager.start(&sessionKey,
+                              ControlVNextStreamManager::StartParams{
+                                  .type = ControlVNextStreamManager::Type::Dns,
+                                  .horizonSec = 0,
+                                  .minSize = 100,
+                              },
+                              startResult));
+    EXPECT_EQ(startResult.effectiveHorizonSec, 0u);
+    EXPECT_EQ(startResult.effectiveMinSize, 2u);
+
+    const auto first = manager.popDnsPending(&sessionKey);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->uid, 1002u);
+
+    const auto second = manager.popDnsPending(&sessionKey);
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(second->uid, 1003u);
+
+    EXPECT_FALSE(manager.popDnsPending(&sessionKey).has_value());
+
+    auto started = ControlVNextStreamJson::makeStartedNotice(ControlVNextStreamManager::Type::Dns,
+                                                            startResult.effectiveHorizonSec,
+                                                            startResult.effectiveMinSize);
+    EXPECT_TRUE(started.HasMember("horizonSec"));
+    EXPECT_TRUE(started.HasMember("minSize"));
+    EXPECT_FALSE(started.HasMember("history"));
+    EXPECT_FALSE(started.HasMember("timeline"));
 }
 
 TEST(ControlVNextStreamSurface, StartRejectsUnknownArgsKey) {

@@ -9,6 +9,7 @@
 #include <L4ParseResult.hpp>
 #include <PacketReasons.hpp>
 #include <TrafficCounters.hpp>
+#include <ControlVNextStreamExplain.hpp>
 
 #include <atomic>
 #include <array>
@@ -63,6 +64,7 @@ public:
         bool useCustomList = false;
         DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
         std::optional<std::uint32_t> ruleId;
+        std::optional<ControlVNextStreamExplain::DnsExplainSnapshot> explain;
     };
 
     struct PktEvent {
@@ -86,6 +88,7 @@ public:
         PacketReasonId reasonId = PacketReasonId::ALLOW_DEFAULT;
         std::optional<std::uint32_t> ruleId;
         std::optional<std::uint32_t> wouldRuleId;
+        std::optional<ControlVNextStreamExplain::PktExplainSnapshot> explain;
     };
 
     struct ActivityEvent {

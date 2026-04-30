@@ -12,6 +12,7 @@
 #include <thread>
 #include <cstring>
 #include <cerrno>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -249,12 +250,22 @@ void DnsListener::clientRun(const int socket) {
             }
             domain = domManager.make(std::string(host));
 
-            if (settings.blockEnabled() && app->tracked()) {
-                const auto bcsr = app->blockedWithSourceAndRuleId(domain);
-                blocked = bcsr.blocked;
-                cs = bcsr.color;
-                policySource = bcsr.policySource;
-                ruleId = bcsr.ruleId;
+            const bool blockEnabled = settings.blockEnabled();
+            const bool tracked = app->tracked();
+            const bool getBlackIPs = settings.getBlackIPs();
+            const bool buildDnsExplain = blockEnabled && tracked;
+            std::optional<ControlVNextStreamExplain::DnsExplainSnapshot> dnsExplain;
+            if (buildDnsExplain) {
+                auto debug = app->evaluateDomainPolicyDebug(domain, blockEnabled, tracked, getBlackIPs);
+                blocked = debug.blocked;
+                cs = debug.color;
+                policySource = debug.policySource;
+                ruleId = debug.ruleId;
+                getips = debug.getips;
+                useCustomList = debug.useCustomList;
+                domMask = debug.domMask;
+                appMask = debug.appMask;
+                dnsExplain = std::move(debug.explain);
             } else {
                 const auto bcs = app->blockedWithSource(domain);
                 blocked = bcs.blocked;
@@ -263,20 +274,22 @@ void DnsListener::clientRun(const int socket) {
                 ruleId.reset();
             }
             verdict = !blocked;
-            getips = verdict || settings.getBlackIPs();
-            useCustomList = app->useCustomList();
-            domMask = static_cast<uint32_t>(domain->blockMask());
-            appMask = static_cast<uint32_t>(app->blockMask());
+            if (!buildDnsExplain) {
+                getips = verdict || getBlackIPs;
+                useCustomList = app->useCustomList();
+                domMask = static_cast<uint32_t>(domain->blockMask());
+                appMask = static_cast<uint32_t>(app->blockMask());
+            }
 
-            if (settings.blockEnabled()) {
+            if (blockEnabled) {
                 // B-layer counters: DNS-request-based DomainPolicy attribution.
                 domManager.observeDomainPolicySource(policySource, blocked);
                 app->observeDomainPolicySource(policySource, blocked);
                 app->observeTrafficDns(blocked);
             }
 
-            if (settings.blockEnabled()) {
-                if (app->tracked()) {
+            if (blockEnabled) {
+                if (tracked) {
                     if (ruleId.has_value()) {
                         if (const auto rule = rulesManager.findThreadSafe(*ruleId); rule != nullptr) {
                             blocked ? rule->observeBlockHit() : rule->observeAllowHit();
@@ -297,6 +310,7 @@ void DnsListener::clientRun(const int socket) {
                         .useCustomList = useCustomList,
                         .policySource = policySource,
                         .ruleId = ruleId,
+                        .explain = std::move(dnsExplain),
                     };
                     controlVNextStream.observeDnsTracked(std::move(ev));
                 } else {

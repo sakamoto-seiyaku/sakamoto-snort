@@ -166,6 +166,22 @@ std::vector<Rule::Id> DomainManager::snapshotCustomRuleIds(const Stats::Color co
     return customRules(color).snapshotRuleIds();
 }
 
+std::vector<ControlVNextStreamExplain::DnsListEntrySnapshot>
+DomainManager::matchingCustomListExplainSnapshots(const Domain::Ptr &domain, const Stats::Color color,
+                                                  const std::string &scope,
+                                                  const std::string &action) const {
+    return customList(color).matchingExplainSnapshots(domain, scope, action);
+}
+
+std::vector<ControlVNextStreamExplain::DnsRuleSnapshot>
+DomainManager::matchingCustomRuleExplainSnapshots(
+    const Domain::Ptr &domain, const Stats::Color color, const std::string &scope,
+    const std::string &action, const std::optional<Rule::Id> winningRuleId,
+    bool &truncated, std::optional<std::uint32_t> &omittedCandidateCount) {
+    return customRules(color).matchingExplainSnapshots(domain, scope, action, winningRuleId,
+                                                       truncated, omittedCandidateCount);
+}
+
 void DomainManager::buildCustomRules(const Stats::Color color) { customRules(color).build(); }
 
 void DomainManager::printCustomRules(std::ostream &out, const Stats::Color color) {

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include <ControlVNextStreamExplain.hpp>
 #include <Domain.hpp>
 
 class CustomList {
@@ -35,6 +36,10 @@ public:
 
     // Snapshot custom domain names. Order is unspecified (caller may sort if needed).
     std::vector<std::string> snapshotNames() const;
+
+    std::vector<ControlVNextStreamExplain::DnsListEntrySnapshot>
+    matchingExplainSnapshots(const Domain::Ptr &domain, const std::string &scope,
+                             const std::string &action) const;
 
     void print(std::ostream &out);
 

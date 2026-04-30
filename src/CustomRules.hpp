@@ -13,6 +13,7 @@
 #include <shared_mutex>
 #include <vector>
 
+#include <ControlVNextStreamExplain.hpp>
 #include <Rule.hpp>
 
 class CustomRules {
@@ -56,6 +57,12 @@ public:
     // Return the deterministic attributed ruleId (min ruleId) when any rule matches.
     // Lock-free read path via atomic snapshot load.
     std::optional<Rule::Id> matchFirstRuleId(const Domain::Ptr &domain);
+
+    std::vector<ControlVNextStreamExplain::DnsRuleSnapshot>
+    matchingExplainSnapshots(const Domain::Ptr &domain, const std::string &scope,
+                             const std::string &action, std::optional<Rule::Id> winningRuleId,
+                             bool &truncated,
+                             std::optional<std::uint32_t> &omittedCandidateCount);
 
     void reset();
 

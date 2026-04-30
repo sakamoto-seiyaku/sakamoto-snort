@@ -229,6 +229,55 @@ def require_dns_event(ev: dict[str, Any], uid: int, domain: str, **expected: Any
             raise SmokeFailure(f"dns event expected {key}={val!r}, got {ev.get(key)!r}: {ev}")
 
 
+def require_dns_explain_stage(
+    ev: dict[str, Any],
+    stage_name: str,
+    *,
+    winner: bool | None = None,
+    rule_id: int | None = None,
+    require_rule_snapshot: bool = False,
+    require_mask: bool = False,
+) -> dict[str, Any]:
+    explain = ev.get("explain")
+    if not isinstance(explain, dict):
+        raise SmokeFailure(f"dns event missing explain object: {ev}")
+    if explain.get("version") != 1 or explain.get("kind") != "dns-policy":
+        raise SmokeFailure(f"dns explain identity mismatch: {explain}")
+    stages = explain.get("stages")
+    if not isinstance(stages, list):
+        raise SmokeFailure(f"dns explain stages missing: {explain}")
+    stage_names = [s.get("name") for s in stages if isinstance(s, dict)]
+    expected_names = [
+        "app.custom.allowList",
+        "app.custom.blockList",
+        "app.custom.allowRules",
+        "app.custom.blockRules",
+        "deviceWide.allow",
+        "deviceWide.block",
+        "maskFallback",
+    ]
+    if stage_names != expected_names:
+        raise SmokeFailure(f"dns explain stage order mismatch: {stage_names}")
+    stage = next((s for s in stages if isinstance(s, dict) and s.get("name") == stage_name), None)
+    if stage is None:
+        raise SmokeFailure(f"dns explain missing stage {stage_name}: {explain}")
+    if winner is not None and stage.get("winner") is not winner:
+        raise SmokeFailure(f"dns explain stage {stage_name} winner mismatch: {stage}")
+    if rule_id is not None:
+        ids = [int(x) for x in stage.get("ruleIds", [])]
+        if rule_id not in ids:
+            raise SmokeFailure(f"dns explain stage {stage_name} missing ruleId={rule_id}: {stage}")
+    if require_rule_snapshot:
+        snapshots = stage.get("ruleSnapshots", [])
+        if not isinstance(snapshots, list) or not any(int(s.get("ruleId", -1)) == rule_id for s in snapshots):
+            raise SmokeFailure(f"dns explain stage {stage_name} missing rule snapshot: {stage}")
+    if require_mask:
+        mask = stage.get("maskFallback")
+        if not isinstance(mask, dict) or "effectiveMask" not in mask:
+            raise SmokeFailure(f"dns explain maskFallback evidence missing: {stage}")
+    return stage
+
+
 def traffic_dns_counts(resp: dict[str, Any]) -> tuple[int, int]:
     traffic = resp["result"]["traffic"]["dns"]
     return int(traffic.get("allow", 0)), int(traffic.get("block", 0))
@@ -523,6 +572,8 @@ class DomainCasebook:
             raise SmokeFailure(f"tracked=0 emitted dns event: {matching_dns}")
         if notice is None:
             raise SmokeFailure("tracked=0 did not emit dns suppressed notice")
+        if "explain" in notice:
+            raise SmokeFailure(f"suppressed notice unexpectedly contains explain: {notice}")
         traffic = notice.get("traffic", {}).get("dns", {})
         if int(traffic.get("allow", 0)) + int(traffic.get("block", 0)) <= 0:
             raise SmokeFailure(f"suppressed notice missing dns traffic snapshot: {notice}")
@@ -600,6 +651,7 @@ class DomainCasebook:
             policySource="DOMAIN_DEVICE_WIDE_BLOCKED",
             scope="DEVICE_WIDE",
         )
+        require_dns_explain_stage(events[d3], "deviceWide.block", winner=True)
         allow_count, block_count = self.get_app_traffic_dns()
         if allow_count < 1 or block_count < 2:
             raise SmokeFailure(f"policy priority traffic mismatch: allow={allow_count} block={block_count}")
@@ -666,6 +718,7 @@ class DomainCasebook:
             scope="FALLBACK",
             useCustomList=False,
         )
+        require_dns_explain_stage(ev1, "maskFallback", winner=True, require_mask=True)
         if int(ev1.get("domMask", 0)) & 1 == 0 or int(ev1.get("appMask", 0)) & 1 == 0:
             raise SmokeFailure(f"block list event missing dom/app mask bit: {ev1}")
 
@@ -806,6 +859,13 @@ class DomainCasebook:
             scope="APP",
             ruleId=int(allow_rule["ruleId"]),
         )
+        require_dns_explain_stage(
+            events[allow_domain],
+            "app.custom.allowRules",
+            winner=True,
+            rule_id=int(allow_rule["ruleId"]),
+            require_rule_snapshot=True,
+        )
         require_dns_event(
             events[block_domain],
             self.app_uid,
@@ -815,6 +875,13 @@ class DomainCasebook:
             policySource="CUSTOM_RULE_BLACK",
             scope="APP",
             ruleId=int(block_rule["ruleId"]),
+        )
+        require_dns_explain_stage(
+            events[block_domain],
+            "app.custom.blockRules",
+            winner=True,
+            rule_id=int(block_rule["ruleId"]),
+            require_rule_snapshot=True,
         )
         if self.get_app_source("CUSTOM_RULE_WHITE")[0] < 1 or self.get_app_source("CUSTOM_RULE_BLACK")[1] < 1:
             raise SmokeFailure("Case 9 CUSTOM_RULE domainSources buckets did not grow")

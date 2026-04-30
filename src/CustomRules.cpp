@@ -14,6 +14,22 @@
 #include <CustomRules.hpp>
 #include <RulesManager.hpp>
 
+namespace {
+
+[[nodiscard]] std::string ruleTypeStr(const Rule::Type type) {
+    switch (type) {
+    case Rule::DOMAIN:
+        return "domain";
+    case Rule::WILDCARD:
+        return "wildcard";
+    case Rule::REGEX:
+        return "regex";
+    }
+    return "regex";
+}
+
+} // namespace
+
 CustomRules::CustomRules()
     : _regexSnap(std::make_shared<std::regex>(""))
     , _attribSnap(std::make_shared<std::vector<AttribEntry>>()) {}
@@ -110,6 +126,47 @@ std::optional<Rule::Id> CustomRules::matchFirstRuleId(const Domain::Ptr &domain)
         }
     }
     return std::nullopt;
+}
+
+std::vector<ControlVNextStreamExplain::DnsRuleSnapshot>
+CustomRules::matchingExplainSnapshots(const Domain::Ptr &domain, const std::string &scope,
+                                      const std::string &action,
+                                      const std::optional<Rule::Id> winningRuleId,
+                                      bool &truncated,
+                                      std::optional<std::uint32_t> &omittedCandidateCount) {
+    truncated = false;
+    omittedCandidateCount.reset();
+    const auto snap = std::atomic_load(&_attribSnap);
+    if (!snap || snap->empty() || domain == nullptr) {
+        return {};
+    }
+
+    const std::string &name = domain->name();
+    std::vector<ControlVNextStreamExplain::DnsRuleSnapshot> out;
+    for (const auto &entry : *snap) {
+        if (!std::regex_match(name, entry.regex)) {
+            continue;
+        }
+        const Rule::Ptr rule = rulesManager.findThreadSafe(entry.ruleId);
+        if (rule == nullptr) {
+            continue;
+        }
+        out.push_back(ControlVNextStreamExplain::DnsRuleSnapshot{
+            .ruleId = rule->id(),
+            .type = ruleTypeStr(rule->type()),
+            .pattern = rule->rule(),
+            .scope = scope,
+            .action = action,
+        });
+    }
+
+    std::sort(out.begin(), out.end(), [](const auto &a, const auto &b) {
+        return a.ruleId < b.ruleId;
+    });
+    ControlVNextStreamExplain::capCandidateSnapshots(
+        out, winningRuleId, [](const auto &snapshot) { return snapshot.ruleId; }, truncated,
+        omittedCandidateCount);
+    return out;
 }
 
 void CustomRules::reset() {

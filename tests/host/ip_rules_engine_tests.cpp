@@ -8,7 +8,11 @@
 #include <atomic>
 #include <chrono>
 #include <new>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -56,6 +60,42 @@ static IpRulesEngine::PacketKeyV4 keyTcpDstPort(const uint32_t uid, const uint16
     k.proto = IPPROTO_TCP;
     k.dstPort = dstPort;
     return k;
+}
+
+static IpRulesEngine::PacketKeyV6 keyAnyTcp6(const uint32_t uid) {
+    IpRulesEngine::PacketKeyV6 k{};
+    k.uid = uid;
+    k.dir = 1; // out
+    k.ifaceKind = 1; // wifi
+    k.proto = IPPROTO_TCP;
+    k.ifindex = 10;
+    inet_pton(AF_INET6, "2001:db8::1", k.srcIp.data());
+    inet_pton(AF_INET6, "2001:db8::2", k.dstIp.data());
+    k.srcPort = 12345;
+    k.dstPort = 443;
+    k.portsAvailable = 1;
+    return k;
+}
+
+static IpRulesEngine::ApplyRule makeApplyRule(std::string clientRuleId,
+                                              const IpRulesEngine::Action action,
+                                              const std::int32_t priority) {
+    IpRulesEngine::ApplyRule rule{};
+    rule.clientRuleId = std::move(clientRuleId);
+    rule.action = action;
+    rule.priority = priority;
+    rule.proto = IpRulesEngine::Proto::TCP;
+    return rule;
+}
+
+static std::optional<IpRulesEngine::RuleId> ruleIdForClient(const IpRulesEngine &eng,
+                                                            const std::string_view clientRuleId) {
+    for (const auto &rule : eng.listRules(std::nullopt, std::nullopt)) {
+        if (rule.clientRuleId == clientRuleId) {
+            return rule.ruleId;
+        }
+    }
+    return std::nullopt;
 }
 
 TEST(IpRulesEngineTest, AddRejectsMissingPriorityAndDoesNotConsumeRuleId) {
@@ -286,6 +326,92 @@ TEST(IpRulesEngineTest, WouldMatchOnlyWhenNoEnforceRuleMatches) {
     const auto d = eng.evaluate(keyAnyTcp(10000));
     EXPECT_EQ(d.kind, IpRulesEngine::DecisionKind::WOULD_BLOCK);
     EXPECT_EQ(d.ruleId, *w.ruleId);
+}
+
+TEST(IpRulesEngineTest, DebugExplainEnforceMatchesNormalVerdictOrderIpv4) {
+    IpRulesEngine eng;
+    const auto apply = eng.replaceRulesForUid(
+        10000,
+        {makeApplyRule("allow-low", IpRulesEngine::Action::ALLOW, 10),
+         makeApplyRule("block-high", IpRulesEngine::Action::BLOCK, 20)});
+    ASSERT_TRUE(apply.ok) << apply.error;
+    const auto allowRuleId = ruleIdForClient(eng, "allow-low");
+    const auto blockRuleId = ruleIdForClient(eng, "block-high");
+    ASSERT_TRUE(allowRuleId.has_value());
+    ASSERT_TRUE(blockRuleId.has_value());
+
+    const auto snap = eng.hotSnapshot();
+    const auto key = keyAnyTcp(10000);
+    const auto decision = snap.evaluate(key);
+    ASSERT_EQ(decision.kind, IpRulesEngine::DecisionKind::BLOCK);
+    EXPECT_EQ(decision.ruleId, *blockRuleId);
+
+    bool truncated = false;
+    std::optional<std::uint32_t> omitted;
+    const auto explain = snap.explainEnforce(key, decision.ruleId, truncated, omitted);
+    ASSERT_GE(explain.size(), 2u);
+    EXPECT_FALSE(truncated);
+    EXPECT_FALSE(omitted.has_value());
+    EXPECT_EQ(explain[0].ruleId, *blockRuleId);
+    EXPECT_EQ(explain[0].clientRuleId, "block-high");
+    EXPECT_EQ(explain[0].action, "block");
+    EXPECT_EQ(explain[0].family, "ipv4");
+    EXPECT_EQ(explain[1].ruleId, *allowRuleId);
+}
+
+TEST(IpRulesEngineTest, DebugExplainWouldMatchesNormalVerdictIpv4) {
+    IpRulesEngine eng;
+    auto rule = makeApplyRule("would", IpRulesEngine::Action::BLOCK, 5);
+    rule.enforce = false;
+    rule.log = true;
+    const auto apply = eng.replaceRulesForUid(10000, {rule});
+    ASSERT_TRUE(apply.ok) << apply.error;
+    const auto wouldRuleId = ruleIdForClient(eng, "would");
+    ASSERT_TRUE(wouldRuleId.has_value());
+
+    const auto snap = eng.hotSnapshot();
+    const auto key = keyAnyTcp(10000);
+    const auto decision = snap.evaluate(key);
+    ASSERT_EQ(decision.kind, IpRulesEngine::DecisionKind::WOULD_BLOCK);
+    EXPECT_EQ(decision.ruleId, *wouldRuleId);
+
+    bool truncated = false;
+    std::optional<std::uint32_t> omitted;
+    const auto explain = snap.explainWould(key, decision.ruleId, truncated, omitted);
+    ASSERT_EQ(explain.size(), 1u);
+    EXPECT_FALSE(truncated);
+    EXPECT_FALSE(omitted.has_value());
+    EXPECT_EQ(explain[0].ruleId, *wouldRuleId);
+    EXPECT_EQ(explain[0].clientRuleId, "would");
+    EXPECT_FALSE(explain[0].enforce);
+    EXPECT_TRUE(explain[0].log);
+}
+
+TEST(IpRulesEngineTest, DebugExplainEnforceMatchesNormalVerdictOrderIpv6) {
+    IpRulesEngine eng;
+    auto rule = makeApplyRule("v6-block", IpRulesEngine::Action::BLOCK, 30);
+    rule.family = IpRulesEngine::Family::IPV6;
+    const auto apply = eng.replaceRulesForUid(10000, {rule});
+    ASSERT_TRUE(apply.ok) << apply.error;
+    const auto blockRuleId = ruleIdForClient(eng, "v6-block");
+    ASSERT_TRUE(blockRuleId.has_value());
+
+    const auto snap = eng.hotSnapshot();
+    const auto key = keyAnyTcp6(10000);
+    const auto decision = snap.evaluate(key);
+    ASSERT_EQ(decision.kind, IpRulesEngine::DecisionKind::BLOCK);
+    EXPECT_EQ(decision.ruleId, *blockRuleId);
+
+    bool truncated = false;
+    std::optional<std::uint32_t> omitted;
+    const auto explain = snap.explainEnforce(key, decision.ruleId, truncated, omitted);
+    ASSERT_EQ(explain.size(), 1u);
+    EXPECT_FALSE(truncated);
+    EXPECT_FALSE(omitted.has_value());
+    EXPECT_EQ(explain[0].ruleId, *blockRuleId);
+    EXPECT_EQ(explain[0].clientRuleId, "v6-block");
+    EXPECT_EQ(explain[0].family, "ipv6");
+    EXPECT_NE(explain[0].matchKey.find("family=ipv6"), std::string::npos);
 }
 
 TEST(IpRulesEngineTest, PreflightCountsOnlyEnabledRulesAndFlagsRangeBucketOverload) {

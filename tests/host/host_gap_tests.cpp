@@ -428,7 +428,8 @@ TEST_F(HostGapTest, PacketManagerIfaceBlockAndAllowDefaultUpdateReasonMetrics) {
     l4.portsAvailable = 1;
 
     const bool verdictBlock = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, l4,
-                                             100, /*ifaceKindBit*/ 1, /*ifaceBlockedSnapshot*/ false,
+                                             100, /*ifaceKindBit*/ 1,
+                                             /*appIfaceMaskSnapshot*/ app->blockIface(),
                                              /*ctPktV4*/ nullptr, /*ctPktV6*/ nullptr,
                                              /*streamEventOut*/ nullptr,
                                              /*trackedSnapshotOut*/ &trackedSnapshot);
@@ -438,12 +439,75 @@ TEST_F(HostGapTest, PacketManagerIfaceBlockAndAllowDefaultUpdateReasonMetrics) {
     // ALLOW_DEFAULT
     app->blockIface(0);
     const bool verdictAllow = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, l4,
-                                             100, /*ifaceKindBit*/ 0, /*ifaceBlockedSnapshot*/ false);
+                                             100, /*ifaceKindBit*/ 0,
+                                             /*appIfaceMaskSnapshot*/ app->blockIface());
     EXPECT_TRUE(verdictAllow);
 
     const auto snap = mgr.reasonMetricsSnapshot();
     EXPECT_EQ(snap.reasons[static_cast<size_t>(PacketReasonId::IFACE_BLOCK)].packets, 1U);
     EXPECT_EQ(snap.reasons[static_cast<size_t>(PacketReasonId::ALLOW_DEFAULT)].packets, 1U);
+}
+
+TEST_F(HostGapTest, PacketManagerTrackedIpRulesAttachesExplain) {
+    PacketManager mgr;
+    settings.blockEnabled(true);
+    settings.ipRulesEnabled(true);
+
+    const uint32_t uid = 10000;
+    auto app = std::make_shared<App>(uid, "u0.app");
+    app->tracked(true);
+    auto host = std::make_shared<Host>();
+
+    IpRulesEngine::ApplyRule rule{};
+    rule.clientRuleId = "block-web";
+    rule.action = IpRulesEngine::Action::BLOCK;
+    rule.priority = 10;
+    rule.proto = IpRulesEngine::Proto::TCP;
+    rule.dport = IpRulesEngine::PortPredicate::exact(443);
+    ASSERT_TRUE(mgr.ipRules().replaceRulesForUid(uid, {rule}).ok);
+
+    const uint8_t srcRaw[4] = {10, 0, 0, 1};
+    const uint8_t dstRaw[4] = {93, 184, 216, 34};
+    const Address<IPv4> srcIp(srcRaw);
+    const Address<IPv4> dstIp(dstRaw);
+    timespec ts{};
+    ::timespec_get(&ts, TIME_UTC);
+
+    L4ParseResult l4{};
+    l4.l4Status = L4Status::KNOWN_L4;
+    l4.proto = IPPROTO_TCP;
+    l4.srcPort = 12345;
+    l4.dstPort = 443;
+    l4.portsAvailable = 1;
+
+    ControlVNextStreamManager::PktEvent streamEvent{};
+    bool trackedSnapshot = false;
+    const bool verdict = mgr.make<IPv4>(srcIp, dstIp, app, host, /*input*/ false, /*iface*/ 0,
+                                        ts, l4, /*len*/ 100, /*ifaceKindBit*/ 1,
+                                        /*appIfaceMaskSnapshot*/ 0,
+                                        /*ctPktV4*/ nullptr, /*ctPktV6*/ nullptr,
+                                        &streamEvent, &trackedSnapshot);
+    EXPECT_FALSE(verdict);
+    EXPECT_TRUE(trackedSnapshot);
+    ASSERT_TRUE(streamEvent.explain.has_value());
+    EXPECT_EQ(streamEvent.explain->kind, "packet-verdict");
+    ASSERT_EQ(streamEvent.explain->stages.size(), 4u);
+    EXPECT_EQ(streamEvent.explain->stages[0].name, "ifaceBlock");
+    EXPECT_EQ(streamEvent.explain->stages[1].name, "iprules.enforce");
+    EXPECT_TRUE(streamEvent.explain->stages[1].winner);
+    ASSERT_FALSE(streamEvent.explain->stages[1].ruleSnapshots.empty());
+    EXPECT_EQ(streamEvent.explain->stages[1].ruleSnapshots[0].clientRuleId, "block-web");
+
+    app->tracked(false);
+    streamEvent = {};
+    trackedSnapshot = true;
+    (void)mgr.make<IPv4>(srcIp, dstIp, app, host, /*input*/ false, /*iface*/ 0,
+                         ts, l4, /*len*/ 100, /*ifaceKindBit*/ 1,
+                         /*appIfaceMaskSnapshot*/ 0,
+                         /*ctPktV4*/ nullptr, /*ctPktV6*/ nullptr,
+                         &streamEvent, &trackedSnapshot);
+    EXPECT_FALSE(trackedSnapshot);
+    EXPECT_FALSE(streamEvent.explain.has_value());
 }
 
 TEST_F(HostGapTest, PacketManagerIpv6ConntrackGatingIsPerFamily) {
@@ -513,7 +577,7 @@ TEST_F(HostGapTest, PacketManagerIpv6ConntrackGatingIsPerFamily) {
 
     const bool verdict = mgr.make<IPv6>(srcIp, dstIp, app, host, /*input*/ true, /*iface*/ 0, ts,
                                         l4, /*len*/ 100,
-                                        /*ifaceKindBit*/ 0, /*ifaceBlockedSnapshot*/ false,
+                                        /*ifaceKindBit*/ 0, /*appIfaceMaskSnapshot*/ 0,
                                         /*ctPktV4*/ nullptr, /*ctPktV6*/ &ctPkt);
     EXPECT_TRUE(verdict);
 

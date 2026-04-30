@@ -15,11 +15,15 @@
 
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace ControlVNextStreamJson {
 
 namespace {
+
+namespace Explain = ControlVNextStreamExplain;
 
 [[nodiscard]] rapidjson::Value makeString(const std::string_view value,
                                          rapidjson::Document::AllocatorType &alloc) {
@@ -125,6 +129,241 @@ void addTraffic(rapidjson::Value &dst, rapidjson::Document::AllocatorType &alloc
     dst.AddMember("traffic", trafficObj, alloc);
 }
 
+void addStringMember(rapidjson::Value &dst, const char *key, const std::string &value,
+                     rapidjson::Document::AllocatorType &alloc) {
+    dst.AddMember(rapidjson::Value(key, alloc), makeString(value, alloc), alloc);
+}
+
+void addOptionalStringMember(rapidjson::Value &dst, const char *key,
+                             const std::optional<std::string> &value,
+                             rapidjson::Document::AllocatorType &alloc) {
+    if (value.has_value()) {
+        addStringMember(dst, key, *value, alloc);
+    }
+}
+
+rapidjson::Value makeRuleIdsArray(const std::vector<std::uint32_t> &ruleIds,
+                                  rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value arr(rapidjson::kArrayType);
+    for (const auto ruleId : ruleIds) {
+        arr.PushBack(ruleId, alloc);
+    }
+    return arr;
+}
+
+rapidjson::Value makeDnsRuleSnapshot(const Explain::DnsRuleSnapshot &snapshot,
+                                     rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value obj(rapidjson::kObjectType);
+    obj.AddMember("ruleId", snapshot.ruleId, alloc);
+    addStringMember(obj, "type", snapshot.type, alloc);
+    addStringMember(obj, "pattern", snapshot.pattern, alloc);
+    addStringMember(obj, "scope", snapshot.scope, alloc);
+    addStringMember(obj, "action", snapshot.action, alloc);
+    return obj;
+}
+
+rapidjson::Value makeDnsListEntrySnapshot(const Explain::DnsListEntrySnapshot &snapshot,
+                                          rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value obj(rapidjson::kObjectType);
+    addStringMember(obj, "type", snapshot.type, alloc);
+    addStringMember(obj, "pattern", snapshot.pattern, alloc);
+    addStringMember(obj, "scope", snapshot.scope, alloc);
+    addStringMember(obj, "action", snapshot.action, alloc);
+    return obj;
+}
+
+rapidjson::Value makeDnsStage(const Explain::DnsStageSnapshot &stage,
+                              rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value obj(rapidjson::kObjectType);
+    addStringMember(obj, "name", stage.name, alloc);
+    obj.AddMember("enabled", stage.enabled, alloc);
+    obj.AddMember("evaluated", stage.evaluated, alloc);
+    obj.AddMember("matched", stage.matched, alloc);
+    addStringMember(obj, "outcome", stage.outcome, alloc);
+    obj.AddMember("winner", stage.winner, alloc);
+    addOptionalStringMember(obj, "skipReason", stage.skipReason, alloc);
+    obj.AddMember("truncated", stage.truncated, alloc);
+    if (stage.omittedCandidateCount.has_value()) {
+        obj.AddMember("omittedCandidateCount", *stage.omittedCandidateCount, alloc);
+    }
+    if (!stage.ruleIds.empty()) {
+        obj.AddMember("ruleIds", makeRuleIdsArray(stage.ruleIds, alloc), alloc);
+    }
+    if (!stage.ruleSnapshots.empty()) {
+        rapidjson::Value arr(rapidjson::kArrayType);
+        for (const auto &snapshot : stage.ruleSnapshots) {
+            arr.PushBack(makeDnsRuleSnapshot(snapshot, alloc), alloc);
+        }
+        obj.AddMember("ruleSnapshots", arr, alloc);
+    }
+    if (!stage.listEntrySnapshots.empty()) {
+        rapidjson::Value arr(rapidjson::kArrayType);
+        for (const auto &snapshot : stage.listEntrySnapshots) {
+            arr.PushBack(makeDnsListEntrySnapshot(snapshot, alloc), alloc);
+        }
+        obj.AddMember("listEntrySnapshots", arr, alloc);
+    }
+    if (stage.maskFallback.has_value()) {
+        rapidjson::Value mask(rapidjson::kObjectType);
+        mask.AddMember("domMask", stage.maskFallback->domMask, alloc);
+        mask.AddMember("appMask", stage.maskFallback->appMask, alloc);
+        mask.AddMember("effectiveMask", stage.maskFallback->effectiveMask, alloc);
+        mask.AddMember("outcome", makeString(stage.maskFallback->blocked ? "block" : "allow", alloc), alloc);
+        obj.AddMember("maskFallback", mask, alloc);
+    }
+    return obj;
+}
+
+rapidjson::Value makeDnsExplain(const Explain::DnsExplainSnapshot &explain,
+                                rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value obj(rapidjson::kObjectType);
+    obj.AddMember("version", explain.version, alloc);
+    addStringMember(obj, "kind", explain.kind, alloc);
+
+    rapidjson::Value inputs(rapidjson::kObjectType);
+    inputs.AddMember("blockEnabled", explain.inputs.blockEnabled, alloc);
+    inputs.AddMember("tracked", explain.inputs.tracked, alloc);
+    inputs.AddMember("domainCustomEnabled", explain.inputs.domainCustomEnabled, alloc);
+    inputs.AddMember("useCustomList", explain.inputs.useCustomList, alloc);
+    addStringMember(inputs, "domain", explain.inputs.domain, alloc);
+    inputs.AddMember("domMask", explain.inputs.domMask, alloc);
+    inputs.AddMember("appMask", explain.inputs.appMask, alloc);
+    obj.AddMember("inputs", inputs, alloc);
+
+    rapidjson::Value final(rapidjson::kObjectType);
+    final.AddMember("blocked", explain.final.blocked, alloc);
+    final.AddMember("getips", explain.final.getips, alloc);
+    final.AddMember("policySource", makeString(domainPolicySourceStr(explain.final.policySource), alloc), alloc);
+    addStringMember(final, "scope", explain.final.scope, alloc);
+    if (explain.final.ruleId.has_value()) {
+        final.AddMember("ruleId", *explain.final.ruleId, alloc);
+    }
+    obj.AddMember("final", final, alloc);
+
+    rapidjson::Value stages(rapidjson::kArrayType);
+    for (const auto &stage : explain.stages) {
+        stages.PushBack(makeDnsStage(stage, alloc), alloc);
+    }
+    obj.AddMember("stages", stages, alloc);
+    return obj;
+}
+
+rapidjson::Value makeIpRulesRuleSnapshot(const Explain::IpRulesRuleSnapshot &snapshot,
+                                         rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value obj(rapidjson::kObjectType);
+    obj.AddMember("ruleId", snapshot.ruleId, alloc);
+    addStringMember(obj, "clientRuleId", snapshot.clientRuleId, alloc);
+    addStringMember(obj, "matchKey", snapshot.matchKey, alloc);
+    addStringMember(obj, "action", snapshot.action, alloc);
+    obj.AddMember("enforce", snapshot.enforce, alloc);
+    obj.AddMember("log", snapshot.log, alloc);
+    addStringMember(obj, "family", snapshot.family, alloc);
+    addStringMember(obj, "dir", snapshot.dir, alloc);
+    addStringMember(obj, "iface", snapshot.iface, alloc);
+    obj.AddMember("ifindex", snapshot.ifindex, alloc);
+    addStringMember(obj, "proto", snapshot.proto, alloc);
+
+    rapidjson::Value ct(rapidjson::kObjectType);
+    addStringMember(ct, "state", snapshot.ctState, alloc);
+    addStringMember(ct, "direction", snapshot.ctDirection, alloc);
+    obj.AddMember("ct", ct, alloc);
+
+    addStringMember(obj, "src", snapshot.src, alloc);
+    addStringMember(obj, "dst", snapshot.dst, alloc);
+    addStringMember(obj, "sport", snapshot.sport, alloc);
+    addStringMember(obj, "dport", snapshot.dport, alloc);
+    obj.AddMember("priority", snapshot.priority, alloc);
+    return obj;
+}
+
+rapidjson::Value makePktStage(const Explain::PktStageSnapshot &stage,
+                              rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value obj(rapidjson::kObjectType);
+    addStringMember(obj, "name", stage.name, alloc);
+    obj.AddMember("enabled", stage.enabled, alloc);
+    obj.AddMember("evaluated", stage.evaluated, alloc);
+    obj.AddMember("matched", stage.matched, alloc);
+    addStringMember(obj, "outcome", stage.outcome, alloc);
+    obj.AddMember("winner", stage.winner, alloc);
+    addOptionalStringMember(obj, "skipReason", stage.skipReason, alloc);
+    obj.AddMember("truncated", stage.truncated, alloc);
+    if (stage.omittedCandidateCount.has_value()) {
+        obj.AddMember("omittedCandidateCount", *stage.omittedCandidateCount, alloc);
+    }
+    if (!stage.ruleIds.empty()) {
+        obj.AddMember("ruleIds", makeRuleIdsArray(stage.ruleIds, alloc), alloc);
+    }
+    if (!stage.ruleSnapshots.empty()) {
+        rapidjson::Value arr(rapidjson::kArrayType);
+        for (const auto &snapshot : stage.ruleSnapshots) {
+            arr.PushBack(makeIpRulesRuleSnapshot(snapshot, alloc), alloc);
+        }
+        obj.AddMember("ruleSnapshots", arr, alloc);
+    }
+    if (stage.ifaceBlock.has_value()) {
+        rapidjson::Value iface(rapidjson::kObjectType);
+        iface.AddMember("appIfaceMask", stage.ifaceBlock->appIfaceMask, alloc);
+        iface.AddMember("packetIfaceKindBit", stage.ifaceBlock->packetIfaceKindBit, alloc);
+        iface.AddMember("evaluatedIntersection", stage.ifaceBlock->evaluatedIntersection, alloc);
+        addStringMember(iface, "packetIfaceKind", stage.ifaceBlock->packetIfaceKind, alloc);
+        iface.AddMember("outcome", makeString(stage.ifaceBlock->blocked ? "block" : "allow", alloc), alloc);
+        addOptionalStringMember(iface, "shortCircuitReason", stage.ifaceBlock->shortCircuitReason, alloc);
+        obj.AddMember("ifaceBlock", iface, alloc);
+    }
+    return obj;
+}
+
+rapidjson::Value makePktExplain(const Explain::PktExplainSnapshot &explain,
+                                rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value obj(rapidjson::kObjectType);
+    obj.AddMember("version", explain.version, alloc);
+    addStringMember(obj, "kind", explain.kind, alloc);
+
+    rapidjson::Value inputs(rapidjson::kObjectType);
+    inputs.AddMember("blockEnabled", explain.inputs.blockEnabled, alloc);
+    inputs.AddMember("iprulesEnabled", explain.inputs.iprulesEnabled, alloc);
+    addStringMember(inputs, "direction", explain.inputs.direction, alloc);
+    inputs.AddMember("ipVersion", static_cast<std::uint32_t>(explain.inputs.ipVersion), alloc);
+    addStringMember(inputs, "protocol", explain.inputs.protocol, alloc);
+    addStringMember(inputs, "l4Status", explain.inputs.l4Status, alloc);
+    inputs.AddMember("ifindex", explain.inputs.ifindex, alloc);
+    inputs.AddMember("ifaceKindBit", explain.inputs.ifaceKindBit, alloc);
+    addStringMember(inputs, "ifaceKind", explain.inputs.ifaceKind, alloc);
+    inputs.AddMember("conntrackEvaluated", explain.inputs.conntrackEvaluated, alloc);
+    if (explain.inputs.conntrackEvaluated) {
+        rapidjson::Value ct(rapidjson::kObjectType);
+        if (explain.inputs.conntrackState.has_value()) {
+            addStringMember(ct, "state", *explain.inputs.conntrackState, alloc);
+        }
+        if (explain.inputs.conntrackDirection.has_value()) {
+            addStringMember(ct, "direction", *explain.inputs.conntrackDirection, alloc);
+        }
+        inputs.AddMember("conntrack", ct, alloc);
+    }
+    obj.AddMember("inputs", inputs, alloc);
+
+    rapidjson::Value final(rapidjson::kObjectType);
+    final.AddMember("accepted", explain.final.accepted, alloc);
+    final.AddMember("reasonId", makeString(packetReasonIdStr(explain.final.reasonId), alloc), alloc);
+    if (explain.final.ruleId.has_value()) {
+        final.AddMember("ruleId", *explain.final.ruleId, alloc);
+    }
+    if (explain.final.wouldRuleId.has_value()) {
+        final.AddMember("wouldRuleId", *explain.final.wouldRuleId, alloc);
+    }
+    if (explain.final.wouldDrop) {
+        final.AddMember("wouldDrop", true, alloc);
+    }
+    obj.AddMember("final", final, alloc);
+
+    rapidjson::Value stages(rapidjson::kArrayType);
+    for (const auto &stage : explain.stages) {
+        stages.PushBack(makePktStage(stage, alloc), alloc);
+    }
+    obj.AddMember("stages", stages, alloc);
+    return obj;
+}
+
 } // namespace
 
 rapidjson::Document makeStartedNotice(const ControlVNextStreamManager::Type stream,
@@ -204,6 +443,9 @@ rapidjson::Document makeDnsEvent(const ControlVNextStreamManager::DnsEvent &even
     if (event.ruleId.has_value()) {
         doc.AddMember("ruleId", *event.ruleId, alloc);
     }
+    if (event.explain.has_value()) {
+        doc.AddMember("explain", makeDnsExplain(*event.explain, alloc), alloc);
+    }
 
     return doc;
 }
@@ -264,6 +506,9 @@ rapidjson::Document makePktEvent(const ControlVNextStreamManager::PktEvent &even
     if (event.wouldRuleId.has_value()) {
         doc.AddMember("wouldRuleId", *event.wouldRuleId, alloc);
         doc.AddMember("wouldDrop", true, alloc);
+    }
+    if (event.explain.has_value()) {
+        doc.AddMember("explain", makePktExplain(*event.explain, alloc), alloc);
     }
 
     return doc;

@@ -8,6 +8,7 @@
 #include <CustomList.hpp>
 #include <DomainList.hpp>
 #include <CustomRules.hpp>
+#include <ControlVNextStreamExplain.hpp>
 #include <DomainPolicySourcesMetrics.hpp>
 #include <Stats.hpp>
 #include <BlockingList.hpp>
@@ -105,6 +106,17 @@ public:
 
     // Snapshot custom allow/block ruleIds. Order is unspecified (caller may sort if needed).
     std::vector<Rule::Id> snapshotCustomRuleIds(const Stats::Color color) const;
+
+    std::vector<ControlVNextStreamExplain::DnsListEntrySnapshot>
+    matchingCustomListExplainSnapshots(const Domain::Ptr &domain, Stats::Color color,
+                                       const std::string &scope, const std::string &action) const;
+
+    std::vector<ControlVNextStreamExplain::DnsRuleSnapshot>
+    matchingCustomRuleExplainSnapshots(const Domain::Ptr &domain, Stats::Color color,
+                                       const std::string &scope, const std::string &action,
+                                       std::optional<Rule::Id> winningRuleId,
+                                       bool &truncated,
+                                       std::optional<std::uint32_t> &omittedCandidateCount);
 
     void buildCustomRules(const Stats::Color color);
 

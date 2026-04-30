@@ -4,11 +4,42 @@
  */
 
 #include <sstream>
+#include <string_view>
+#include <utility>
 #include <RulesManager.hpp>
 #include <Settings.hpp>
 #include <App.hpp>
 #include <Settings.hpp>
 #include <mutex>
+
+namespace {
+
+namespace Explain = ControlVNextStreamExplain;
+
+[[nodiscard]] std::string dnsScopeStr(const DomainPolicySource source) {
+    switch (source) {
+    case DomainPolicySource::CUSTOM_WHITELIST:
+    case DomainPolicySource::CUSTOM_BLACKLIST:
+    case DomainPolicySource::CUSTOM_RULE_WHITE:
+    case DomainPolicySource::CUSTOM_RULE_BLACK:
+        return "APP";
+    case DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED:
+    case DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED:
+        return "DEVICE_WIDE";
+    case DomainPolicySource::MASK_FALLBACK:
+        return "FALLBACK";
+    }
+    return "FALLBACK";
+}
+
+void fillRuleIds(Explain::DnsStageSnapshot &stage) {
+    stage.ruleIds.reserve(stage.ruleSnapshots.size());
+    for (const auto &snapshot : stage.ruleSnapshots) {
+        stage.ruleIds.push_back(snapshot.ruleId);
+    }
+}
+
+} // namespace
 
 App::App(const Uid uid, const NamesVec &names)
     : App(uid, settings.systemAppPrefix + std::to_string(uid), names,
@@ -200,6 +231,189 @@ App::BlockedWithSourceAndRuleId App::blockedWithSourceAndRuleId(const Domain::Pt
             .color = cs,
             .policySource = DomainPolicySource::MASK_FALLBACK,
             .ruleId = std::nullopt};
+}
+
+App::DomainPolicyDebugSnapshot
+App::evaluateDomainPolicyDebug(const Domain::Ptr &domain, const bool blockEnabled,
+                               const bool tracked, const bool getBlackIPs) {
+    DomainPolicyDebugSnapshot result{};
+    result.color = (domain != nullptr && blockEnabled) ? domain->color() : Stats::GREY;
+    result.useCustomList = _useCustomList.load(std::memory_order_relaxed);
+    result.domMask = domain != nullptr ? static_cast<std::uint32_t>(domain->blockMask()) : 0u;
+    result.appMask = static_cast<std::uint32_t>(_blockMask.load(std::memory_order_relaxed));
+
+    Explain::DnsExplainSnapshot explain{};
+    explain.inputs = Explain::DnsInputs{
+        .blockEnabled = blockEnabled,
+        .tracked = tracked,
+        .domainCustomEnabled = result.useCustomList,
+        .useCustomList = result.useCustomList,
+        .domain = domain != nullptr ? domain->name() : std::string(),
+        .domMask = result.domMask,
+        .appMask = result.appMask,
+    };
+
+    bool shortCircuited = false;
+    const auto setDecision = [&](const bool blocked, const DomainPolicySource source,
+                                 const std::optional<std::uint32_t> ruleId) {
+        result.blocked = blocked;
+        result.policySource = source;
+        result.ruleId = ruleId;
+    };
+    const auto firstRuleId = [](const Explain::DnsStageSnapshot &stage)
+        -> std::optional<std::uint32_t> {
+        if (stage.ruleSnapshots.empty()) {
+            return std::nullopt;
+        }
+        return stage.ruleSnapshots.front().ruleId;
+    };
+    const auto appendStage = [&](Explain::DnsStageSnapshot stage) {
+        if (!stage.enabled) {
+            stage.evaluated = false;
+            stage.skipReason = std::string(Explain::kSkipDisabled);
+        } else if (shortCircuited) {
+            stage.evaluated = false;
+            stage.matched = false;
+            stage.winner = false;
+            stage.outcome = "none";
+            stage.skipReason = std::string(Explain::kSkipShortCircuited);
+        }
+        if (stage.winner) {
+            shortCircuited = true;
+        }
+        explain.stages.push_back(std::move(stage));
+    };
+
+    const bool customStageEnabled = blockEnabled && result.useCustomList;
+    const auto makeListStage = [&](const std::string_view name, const Stats::Color color,
+                                   const std::string &scope, const std::string &action,
+                                   const DomainPolicySource winSource,
+                                   const bool deviceWide, const bool blocked) {
+        Explain::DnsStageSnapshot stage{};
+        stage.name = std::string(name);
+        stage.enabled = customStageEnabled;
+        if (stage.enabled && !shortCircuited) {
+            stage.evaluated = true;
+            stage.listEntrySnapshots =
+                deviceWide ? domManager.matchingCustomListExplainSnapshots(domain, color, scope, action)
+                           : customList(color).matchingExplainSnapshots(domain, scope, action);
+            stage.matched = !stage.listEntrySnapshots.empty();
+            stage.outcome = stage.matched ? action : "none";
+            stage.winner = stage.matched;
+            if (stage.winner) {
+                setDecision(blocked, winSource, std::nullopt);
+            }
+        }
+        appendStage(std::move(stage));
+    };
+
+    const auto makeRuleStage = [&](const std::string_view name, const Stats::Color color,
+                                   const std::string &scope, const std::string &action,
+                                   const DomainPolicySource winSource,
+                                   const bool deviceWide, const bool blocked) {
+        Explain::DnsStageSnapshot stage{};
+        stage.name = std::string(name);
+        stage.enabled = customStageEnabled;
+        if (stage.enabled && !shortCircuited) {
+            stage.evaluated = true;
+            stage.ruleSnapshots =
+                deviceWide ? domManager.matchingCustomRuleExplainSnapshots(
+                                 domain, color, scope, action, std::nullopt, stage.truncated,
+                                 stage.omittedCandidateCount)
+                           : customRules(color).matchingExplainSnapshots(
+                                 domain, scope, action, std::nullopt, stage.truncated,
+                                 stage.omittedCandidateCount);
+            fillRuleIds(stage);
+            stage.matched = !stage.ruleSnapshots.empty();
+            stage.outcome = stage.matched ? action : "none";
+            stage.winner = stage.matched;
+            if (stage.winner) {
+                setDecision(blocked, winSource, firstRuleId(stage));
+            }
+        }
+        appendStage(std::move(stage));
+    };
+
+    makeListStage(Explain::kDnsStageAppAllowList, Stats::WHITE, "APP", "allow",
+                  DomainPolicySource::CUSTOM_WHITELIST, false, false);
+    makeListStage(Explain::kDnsStageAppBlockList, Stats::BLACK, "APP", "block",
+                  DomainPolicySource::CUSTOM_BLACKLIST, false, true);
+    makeRuleStage(Explain::kDnsStageAppAllowRules, Stats::WHITE, "APP", "allow",
+                  DomainPolicySource::CUSTOM_RULE_WHITE, false, false);
+    makeRuleStage(Explain::kDnsStageAppBlockRules, Stats::BLACK, "APP", "block",
+                  DomainPolicySource::CUSTOM_RULE_BLACK, false, true);
+
+    Explain::DnsStageSnapshot deviceAllow{};
+    deviceAllow.name = std::string(Explain::kDnsStageDeviceAllow);
+    deviceAllow.enabled = customStageEnabled;
+    if (deviceAllow.enabled && !shortCircuited) {
+        deviceAllow.evaluated = true;
+        deviceAllow.listEntrySnapshots =
+            domManager.matchingCustomListExplainSnapshots(domain, Stats::WHITE, "DEVICE_WIDE", "allow");
+        deviceAllow.ruleSnapshots = domManager.matchingCustomRuleExplainSnapshots(
+            domain, Stats::WHITE, "DEVICE_WIDE", "allow", std::nullopt,
+            deviceAllow.truncated, deviceAllow.omittedCandidateCount);
+        fillRuleIds(deviceAllow);
+        deviceAllow.matched = !deviceAllow.listEntrySnapshots.empty() || !deviceAllow.ruleSnapshots.empty();
+        deviceAllow.outcome = deviceAllow.matched ? "allow" : "none";
+        deviceAllow.winner = deviceAllow.matched;
+        if (deviceAllow.winner) {
+            setDecision(false, DomainPolicySource::DOMAIN_DEVICE_WIDE_AUTHORIZED,
+                        deviceAllow.listEntrySnapshots.empty() ? firstRuleId(deviceAllow) : std::nullopt);
+        }
+    }
+    appendStage(std::move(deviceAllow));
+
+    Explain::DnsStageSnapshot deviceBlock{};
+    deviceBlock.name = std::string(Explain::kDnsStageDeviceBlock);
+    deviceBlock.enabled = customStageEnabled;
+    if (deviceBlock.enabled && !shortCircuited) {
+        deviceBlock.evaluated = true;
+        deviceBlock.listEntrySnapshots =
+            domManager.matchingCustomListExplainSnapshots(domain, Stats::BLACK, "DEVICE_WIDE", "block");
+        deviceBlock.ruleSnapshots = domManager.matchingCustomRuleExplainSnapshots(
+            domain, Stats::BLACK, "DEVICE_WIDE", "block", std::nullopt,
+            deviceBlock.truncated, deviceBlock.omittedCandidateCount);
+        fillRuleIds(deviceBlock);
+        deviceBlock.matched = !deviceBlock.listEntrySnapshots.empty() || !deviceBlock.ruleSnapshots.empty();
+        deviceBlock.outcome = deviceBlock.matched ? "block" : "none";
+        deviceBlock.winner = deviceBlock.matched;
+        if (deviceBlock.winner) {
+            setDecision(true, DomainPolicySource::DOMAIN_DEVICE_WIDE_BLOCKED,
+                        deviceBlock.listEntrySnapshots.empty() ? firstRuleId(deviceBlock) : std::nullopt);
+        }
+    }
+    appendStage(std::move(deviceBlock));
+
+    Explain::DnsStageSnapshot maskFallback{};
+    maskFallback.name = std::string(Explain::kDnsStageMaskFallback);
+    maskFallback.enabled = blockEnabled;
+    if (maskFallback.enabled && !shortCircuited) {
+        const std::uint32_t effectiveMask = result.appMask & result.domMask;
+        maskFallback.evaluated = true;
+        maskFallback.matched = true;
+        maskFallback.outcome = effectiveMask != 0 ? "block" : "allow";
+        maskFallback.winner = true;
+        maskFallback.maskFallback = Explain::DnsMaskEvidence{
+            .domMask = result.domMask,
+            .appMask = result.appMask,
+            .effectiveMask = effectiveMask,
+            .blocked = effectiveMask != 0,
+        };
+        setDecision(effectiveMask != 0, DomainPolicySource::MASK_FALLBACK, std::nullopt);
+    }
+    appendStage(std::move(maskFallback));
+
+    result.getips = !result.blocked || getBlackIPs;
+    explain.final = Explain::DnsFinal{
+        .blocked = result.blocked,
+        .getips = result.getips,
+        .policySource = result.policySource,
+        .scope = dnsScopeStr(result.policySource),
+        .ruleId = result.ruleId,
+    };
+    result.explain = std::move(explain);
+    return result;
 }
 
 void App::updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,

@@ -20,8 +20,85 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <netinet/in.h>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
+
+namespace PacketManagerExplainDetail {
+
+[[nodiscard]] inline const char *protocolStr(const std::uint16_t proto) noexcept {
+    switch (proto) {
+    case IPPROTO_TCP:
+        return "tcp";
+    case IPPROTO_UDP:
+        return "udp";
+    case IPPROTO_ICMP:
+    case IPPROTO_ICMPV6:
+        return "icmp";
+    default:
+        return "other";
+    }
+}
+
+[[nodiscard]] inline const char *l4StatusStr(const L4Status s) noexcept {
+    switch (s) {
+    case L4Status::KNOWN_L4:
+        return "known-l4";
+    case L4Status::OTHER_TERMINAL:
+        return "other-terminal";
+    case L4Status::FRAGMENT:
+        return "fragment";
+    case L4Status::INVALID_OR_UNAVAILABLE_L4:
+        return "invalid-or-unavailable-l4";
+    }
+    return "invalid-or-unavailable-l4";
+}
+
+[[nodiscard]] inline const char *ifaceKindStr(const std::uint8_t bit) noexcept {
+    switch (bit) {
+    case 1:
+        return "wifi";
+    case 2:
+        return "data";
+    case 4:
+        return "vpn";
+    case 128:
+        return "unmanaged";
+    default:
+        return "unknown";
+    }
+}
+
+[[nodiscard]] inline const char *ctStateStr(const std::uint8_t state) noexcept {
+    switch (static_cast<IpRulesEngine::CtState>(state)) {
+    case IpRulesEngine::CtState::ANY:
+        return "any";
+    case IpRulesEngine::CtState::NEW:
+        return "new";
+    case IpRulesEngine::CtState::ESTABLISHED:
+        return "established";
+    case IpRulesEngine::CtState::INVALID:
+        return "invalid";
+    }
+    return "any";
+}
+
+[[nodiscard]] inline const char *ctDirectionStr(const std::uint8_t direction) noexcept {
+    switch (static_cast<IpRulesEngine::CtDirection>(direction)) {
+    case IpRulesEngine::CtDirection::ANY:
+        return "any";
+    case IpRulesEngine::CtDirection::ORIG:
+        return "orig";
+    case IpRulesEngine::CtDirection::REPLY:
+        return "reply";
+    }
+    return "any";
+}
+
+} // namespace PacketManagerExplainDetail
 
 class PacketManager : public Streamable<Packet<IPv4>>, Streamable<Packet<IPv6>> {
 private:
@@ -56,7 +133,7 @@ public:
               const Host::Ptr &host,
               const bool input, const uint32_t iface, const timespec timestamp,
               const L4ParseResult &l4, const uint16_t len,
-              const uint8_t ifaceKindBit, const bool ifaceBlockedSnapshot,
+              const uint8_t ifaceKindBit, const uint8_t appIfaceMaskSnapshot,
               const Conntrack::PacketV4 *ctPktV4 = nullptr,
               const Conntrack::PacketV6 *ctPktV6 = nullptr,
               ControlVNextStreamManager::PktEvent *streamEventOut = nullptr,
@@ -106,7 +183,7 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                          const Host::Ptr &host, const bool input, const uint32_t iface,
                          const timespec timestamp, const L4ParseResult &l4, const uint16_t len,
                          const uint8_t ifaceKindBit,
-                         const bool ifaceBlockedSnapshot, const Conntrack::PacketV4 *ctPktV4,
+                         const uint8_t appIfaceMaskSnapshot, const Conntrack::PacketV4 *ctPktV4,
                          const Conntrack::PacketV6 *ctPktV6,
                          ControlVNextStreamManager::PktEvent *streamEventOut,
                          bool *trackedSnapshotOut) {
@@ -116,12 +193,92 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     }
     const auto teleHot = flowTelemetry.hotPathFlow();
     const bool telemetryActive = teleHot.session != nullptr;
+    const bool buildExplain = trackedSnapshot && streamEventOut != nullptr;
+
+    std::optional<ControlVNextStreamExplain::PktStageSnapshot> ifaceStage;
+    std::optional<ControlVNextStreamExplain::PktStageSnapshot> enforceStage;
+    std::optional<ControlVNextStreamExplain::PktStageSnapshot> domainIpLeakStage;
+    std::optional<ControlVNextStreamExplain::PktStageSnapshot> wouldStage;
+    if (buildExplain) {
+        ifaceStage.emplace(ControlVNextStreamExplain::PktStageSnapshot{
+            .name = std::string(ControlVNextStreamExplain::kPktStageIfaceBlock),
+            .enabled = settings.blockEnabled(),
+            .evaluated = true,
+            .matched = false,
+            .outcome = "allow",
+            .winner = false,
+        });
+        enforceStage.emplace(ControlVNextStreamExplain::PktStageSnapshot{
+            .name = std::string(ControlVNextStreamExplain::kPktStageIpRulesEnforce),
+            .enabled = settings.ipRulesEnabled(),
+            .evaluated = false,
+            .matched = false,
+            .outcome = "none",
+            .winner = false,
+        });
+        domainIpLeakStage.emplace(ControlVNextStreamExplain::PktStageSnapshot{
+            .name = std::string(ControlVNextStreamExplain::kPktStageDomainIpLeak),
+            .enabled = settings.blockEnabled(),
+            .evaluated = false,
+            .matched = false,
+            .outcome = "none",
+            .winner = false,
+        });
+        wouldStage.emplace(ControlVNextStreamExplain::PktStageSnapshot{
+            .name = std::string(ControlVNextStreamExplain::kPktStageIpRulesWould),
+            .enabled = settings.ipRulesEnabled(),
+            .evaluated = false,
+            .matched = false,
+            .outcome = "none",
+            .winner = false,
+        });
+    }
+    bool explainCtEvaluated = false;
+    std::optional<std::uint8_t> explainCtState;
+    std::optional<std::uint8_t> explainCtDir;
+
+    const auto fillPktRuleIds = [](ControlVNextStreamExplain::PktStageSnapshot &stage) {
+        stage.ruleIds.reserve(stage.ruleSnapshots.size());
+        for (const auto &snapshot : stage.ruleSnapshots) {
+            stage.ruleIds.push_back(snapshot.ruleId);
+        }
+    };
+
+    const auto markPacketStagesShortCircuitedAfter = [&](const std::string_view winningStageName) {
+        if (!buildExplain) {
+            return;
+        }
+        bool afterWinner = false;
+        for (auto *stage : {&*ifaceStage, &*enforceStage, &*domainIpLeakStage, &*wouldStage}) {
+            if (afterWinner && stage->enabled) {
+                stage->evaluated = false;
+                stage->matched = false;
+                stage->winner = false;
+                stage->outcome = "none";
+                stage->skipReason = std::string(ControlVNextStreamExplain::kSkipShortCircuited);
+                stage->ruleIds.clear();
+                stage->ruleSnapshots.clear();
+                stage->truncated = false;
+                stage->omittedCandidateCount.reset();
+            } else if (!stage->enabled) {
+                stage->skipReason = std::string(ControlVNextStreamExplain::kSkipDisabled);
+            }
+            if (stage->name == winningStageName) {
+                afterWinner = true;
+            }
+        }
+    };
 
     const auto fillStreamEvent = [&](const bool accepted, const PacketReasonId reason,
                                      const std::optional<uint32_t> ruleId,
                                      const std::optional<uint32_t> wouldRuleId) {
-        if (!trackedSnapshot || streamEventOut == nullptr) {
+        if (!buildExplain) {
             return;
+        }
+        for (auto *stage : {&*ifaceStage, &*enforceStage, &*domainIpLeakStage, &*wouldStage}) {
+            if (!stage->enabled && !stage->skipReason.has_value()) {
+                stage->skipReason = std::string(ControlVNextStreamExplain::kSkipDisabled);
+            }
         }
         ControlVNextStreamManager::PktEvent ev{};
         ev.timestamp = timestamp;
@@ -152,11 +309,50 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
         ev.reasonId = reason;
         ev.ruleId = ruleId;
         ev.wouldRuleId = wouldRuleId;
+        ev.explain = ControlVNextStreamExplain::PktExplainSnapshot{
+            .inputs = ControlVNextStreamExplain::PktInputs{
+                .blockEnabled = settings.blockEnabled(),
+                .iprulesEnabled = settings.ipRulesEnabled(),
+                .direction = input ? "in" : "out",
+                .ipVersion = ev.ipVersion,
+                .protocol = PacketManagerExplainDetail::protocolStr(ev.proto),
+                .l4Status = PacketManagerExplainDetail::l4StatusStr(ev.l4Status),
+                .ifindex = ev.ifindex,
+                .ifaceKindBit = ev.ifaceKindBit,
+                .ifaceKind = PacketManagerExplainDetail::ifaceKindStr(ev.ifaceKindBit),
+                .conntrackEvaluated = explainCtEvaluated,
+                .conntrackState = explainCtState.has_value()
+                                      ? std::optional<std::string>(
+                                            PacketManagerExplainDetail::ctStateStr(*explainCtState))
+                                      : std::nullopt,
+                .conntrackDirection = explainCtDir.has_value()
+                                           ? std::optional<std::string>(
+                                                 PacketManagerExplainDetail::ctDirectionStr(*explainCtDir))
+                                           : std::nullopt,
+            },
+            .final = ControlVNextStreamExplain::PktFinal{
+                .accepted = accepted,
+                .reasonId = reason,
+                .ruleId = ruleId,
+                .wouldRuleId = wouldRuleId,
+                .wouldDrop = wouldRuleId.has_value(),
+            },
+            .stages = {*ifaceStage, *enforceStage, *domainIpLeakStage, *wouldStage},
+        };
         *streamEventOut = std::move(ev);
     };
 
-    const bool ifaceBlockedNow = (app->blockIface() & ifaceKindBit) != 0;
-    const bool ifaceBlocked = ifaceBlockedSnapshot || ifaceBlockedNow;
+    const bool ifaceBlocked = (appIfaceMaskSnapshot & ifaceKindBit) != 0;
+    if (buildExplain) {
+        ifaceStage->ifaceBlock = ControlVNextStreamExplain::PktIfaceBlockEvidence{
+            .appIfaceMask = static_cast<std::uint32_t>(appIfaceMaskSnapshot),
+            .packetIfaceKindBit = static_cast<std::uint32_t>(ifaceKindBit),
+            .evaluatedIntersection = static_cast<std::uint32_t>(appIfaceMaskSnapshot & ifaceKindBit),
+            .packetIfaceKind = PacketManagerExplainDetail::ifaceKindStr(ifaceKindBit),
+            .blocked = ifaceBlocked,
+            .shortCircuitReason = std::nullopt,
+        };
+    }
     const uint64_t tsNs =
         static_cast<uint64_t>(timestamp.tv_sec) * 1000000000ULL + static_cast<uint64_t>(timestamp.tv_nsec);
 
@@ -195,6 +391,20 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     if (ifaceBlocked) {
         const bool verdict = false;
         const PacketReasonId reasonId = PacketReasonId::IFACE_BLOCK;
+        if (buildExplain) {
+            ifaceStage->matched = true;
+            ifaceStage->outcome = "block";
+            ifaceStage->winner = true;
+            ifaceStage->ifaceBlock = ControlVNextStreamExplain::PktIfaceBlockEvidence{
+                .appIfaceMask = static_cast<std::uint32_t>(appIfaceMaskSnapshot),
+                .packetIfaceKindBit = static_cast<std::uint32_t>(ifaceKindBit),
+                .evaluatedIntersection = static_cast<std::uint32_t>(appIfaceMaskSnapshot & ifaceKindBit),
+                .packetIfaceKind = PacketManagerExplainDetail::ifaceKindStr(ifaceKindBit),
+                .blocked = true,
+                .shortCircuitReason = std::string(ControlVNextStreamExplain::kSkipShortCircuited),
+            };
+        }
+        markPacketStagesShortCircuitedAfter(ControlVNextStreamExplain::kPktStageIfaceBlock);
         _reasonMetrics.observe(reasonId, len);
         app->observeTrafficPacket(input, verdict, len);
 
@@ -261,6 +471,40 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                 l4.l4Status != L4Status::INVALID_OR_UNAVAILABLE_L4;
 
             IpRulesEngine::Decision decision{};
+            const auto captureIpRulesExplain = [&](const auto &key,
+                                                   const IpRulesEngine::Decision &capturedDecision) {
+                if (!buildExplain) {
+                    return;
+                }
+                auto &enforce = *enforceStage;
+                auto &would = *wouldStage;
+                enforce.evaluated = true;
+                const std::optional<IpRulesEngine::RuleId> enforceWinner =
+                    capturedDecision.isEnforce()
+                        ? std::optional<IpRulesEngine::RuleId>(capturedDecision.ruleId)
+                        : std::nullopt;
+                enforce.ruleSnapshots = snap.explainEnforce(
+                    key, enforceWinner, enforce.truncated, enforce.omittedCandidateCount);
+                fillPktRuleIds(enforce);
+                enforce.matched = !enforce.ruleSnapshots.empty();
+                if (capturedDecision.kind == IpRulesEngine::DecisionKind::ALLOW) {
+                    enforce.outcome = "allow";
+                    enforce.winner = true;
+                } else if (capturedDecision.kind == IpRulesEngine::DecisionKind::BLOCK) {
+                    enforce.outcome = "block";
+                    enforce.winner = true;
+                } else {
+                    enforce.outcome = enforce.matched ? "shadowed" : "none";
+                }
+
+                if (capturedDecision.kind == IpRulesEngine::DecisionKind::WOULD_BLOCK) {
+                    would.ruleSnapshots = snap.explainWould(
+                        key, capturedDecision.ruleId, would.truncated, would.omittedCandidateCount);
+                    fillPktRuleIds(would);
+                    would.matched = !would.ruleSnapshots.empty();
+                    would.outcome = would.matched ? "wouldBlock" : "none";
+                }
+            };
             if constexpr (std::is_same_v<IP, IPv4>) {
                 auto v4HostFromNetBytes = [](const uint8_t *b) -> uint32_t {
                     return (static_cast<uint32_t>(b[0]) << 24) | (static_cast<uint32_t>(b[1]) << 16) |
@@ -288,9 +532,13 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                         k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::INVALID);
                         k.ctDir = 0;
                     }
+                    explainCtEvaluated = true;
+                    explainCtState = k.ctState;
+                    explainCtDir = k.ctDir;
                 }
 
                 decision = snap.evaluate(k);
+                captureIpRulesExplain(k, decision);
             } else {
                 IpRulesEngine::PacketKeyV6 k{};
                 k.uid = app->uid();
@@ -313,9 +561,13 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                         k.ctState = static_cast<std::uint8_t>(IpRulesEngine::CtState::INVALID);
                         k.ctDir = 0;
                     }
+                    explainCtEvaluated = true;
+                    explainCtState = k.ctState;
+                    explainCtDir = k.ctDir;
                 }
 
                 decision = snap.evaluate(k);
+                captureIpRulesExplain(k, decision);
             }
 
             if (decision.kind == IpRulesEngine::DecisionKind::ALLOW ||
@@ -355,6 +607,8 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                         : Conntrack::Result{.state = Conntrack::CtState::INVALID,
                                             .direction = Conntrack::CtDirection::ANY});
 
+                markPacketStagesShortCircuitedAfter(
+                    ControlVNextStreamExplain::kPktStageIpRulesEnforce);
                 fillStreamEvent(verdict, reasonId, ruleId, std::nullopt);
                 if (trackedSnapshot) {
                     Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
@@ -383,6 +637,26 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     const bool verdict = !ipLeakBlocked;
     const PacketReasonId reasonId = ipLeakBlocked ? PacketReasonId::IP_LEAK_BLOCK
                                                   : PacketReasonId::ALLOW_DEFAULT;
+    if (buildExplain) {
+        domainIpLeakStage->evaluated = true;
+        domainIpLeakStage->matched = ipLeakBlocked;
+        domainIpLeakStage->outcome = ipLeakBlocked ? "block" : "allow";
+        domainIpLeakStage->winner = true;
+        if (ipLeakBlocked) {
+            markPacketStagesShortCircuitedAfter(ControlVNextStreamExplain::kPktStageDomainIpLeak);
+        } else if (hasWouldDecision) {
+            wouldStage->evaluated = true;
+            wouldStage->matched = true;
+            wouldStage->outcome = "wouldBlock";
+            wouldStage->winner = false;
+        } else if (wouldStage->enabled) {
+            wouldStage->evaluated = true;
+            wouldStage->matched = false;
+            wouldStage->outcome = "none";
+        } else {
+            wouldStage->skipReason = std::string(ControlVNextStreamExplain::kSkipDisabled);
+        }
+    }
 
     if (verdict && ctPolicyView.has_value()) {
         if constexpr (std::is_same_v<IP, IPv4>) {

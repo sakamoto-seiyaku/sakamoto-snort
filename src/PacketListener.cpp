@@ -447,7 +447,8 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
                     continue;
                 }
 
-                const bool ifaceBlocked = (app->blockIface() & ifaceKindBit) != 0;
+                const std::uint8_t appIfaceMask = app->blockIface();
+                const bool ifaceBlocked = (appIfaceMask & ifaceKindBit) != 0;
                 Host::Ptr host;
                 if (ifaceBlocked) {
                     host = hostManager.anonymousHost();
@@ -471,7 +472,7 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
                     ctPtrV6 = &ctPktV6;
                 }
                 verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface,
-                                                       timestamp, l4, payloadLen, ifaceKindBit, ifaceBlocked,
+                                                       timestamp, l4, payloadLen, ifaceKindBit, appIfaceMask,
                                                        ctPtrV4, ctPtrV6, &streamEvent, &trackedSnapshot);
                 if (trackedSnapshot) {
                     controlVNextStream.observePktTracked(std::move(streamEvent));

@@ -435,6 +435,19 @@ std::string IpRulesEngine::normalizeCidrV4(const CidrV4 &c) {
     return std::string(buf) + "/" + std::to_string(static_cast<uint32_t>(c.prefix));
 }
 
+std::string IpRulesEngine::normalizeCidrV6(const CidrV6 &c) {
+    if (c.any) {
+        return "any";
+    }
+    in6_addr a{};
+    std::memcpy(&a, c.addr.data(), c.addr.size());
+    char buf[INET6_ADDRSTRLEN] = {};
+    if (inet_ntop(AF_INET6, &a, buf, sizeof(buf)) == nullptr) {
+        return "any";
+    }
+    return std::string(buf) + "/" + std::to_string(static_cast<uint32_t>(c.prefix));
+}
+
 std::string IpRulesEngine::normalizePortPredicate(const PortPredicate &p) {
     switch (p.kind) {
     case PortPredicate::Kind::ANY:
@@ -571,9 +584,11 @@ struct IpRulesEngine::Snapshot {
     struct RuleRef {
         RuleId ruleId = 0;
         uint32_t uid = 0;
+        std::string clientRuleId;
         Action action = Action::ALLOW;
         std::int32_t priority = 0;
         bool enforce = true;
+        bool log = false;
 
         Direction dir = Direction::ANY;
         IfaceKind iface = IfaceKind::ANY;
@@ -776,9 +791,11 @@ struct IpRulesEngine::Snapshot {
     struct RuleRefV6 {
         RuleId ruleId = 0;
         uint32_t uid = 0;
+        std::string clientRuleId;
         Action action = Action::ALLOW;
         std::int32_t priority = 0;
         bool enforce = true;
+        bool log = false;
 
         Direction dir = Direction::ANY;
         IfaceKind iface = IfaceKind::ANY;
@@ -1201,6 +1218,186 @@ struct IpRulesEngine::Snapshot {
 
         return {};
     }
+
+    static std::string matchKeyMk2(const RuleRef &r) {
+        std::string out = "mk2";
+        out.append("|family=ipv4");
+        out.append("|dir=").append(normalizeDirection(r.dir));
+        out.append("|iface=").append(normalizeIfaceKind(r.iface));
+        out.append("|ifindex=").append(std::to_string(r.ifindex));
+        out.append("|proto=").append(normalizeProto(r.proto));
+        out.append("|ctstate=").append(normalizeCtState(r.ctState));
+        out.append("|ctdir=").append(normalizeCtDirection(r.ctDir));
+        out.append("|src=").append(normalizeCidrV4(r.src));
+        out.append("|dst=").append(normalizeCidrV4(r.dst));
+        out.append("|sport=").append(normalizePortPredicate(r.sport));
+        out.append("|dport=").append(normalizePortPredicate(r.dport));
+        return out;
+    }
+
+    static std::string matchKeyMk2(const RuleRefV6 &r) {
+        std::string out = "mk2";
+        out.append("|family=ipv6");
+        out.append("|dir=").append(normalizeDirection(r.dir));
+        out.append("|iface=").append(normalizeIfaceKind(r.iface));
+        out.append("|ifindex=").append(std::to_string(r.ifindex));
+        out.append("|proto=").append(normalizeProto(r.proto));
+        out.append("|ctstate=").append(normalizeCtState(r.ctState));
+        out.append("|ctdir=").append(normalizeCtDirection(r.ctDir));
+        out.append("|src=").append(normalizeCidrV6(r.src));
+        out.append("|dst=").append(normalizeCidrV6(r.dst));
+        out.append("|sport=").append(normalizePortPredicate(r.sport));
+        out.append("|dport=").append(normalizePortPredicate(r.dport));
+        return out;
+    }
+
+    static ControlVNextStreamExplain::IpRulesRuleSnapshot ruleSnapshot(const RuleRef &r) {
+        return ControlVNextStreamExplain::IpRulesRuleSnapshot{
+            .ruleId = r.ruleId,
+            .clientRuleId = r.clientRuleId,
+            .matchKey = matchKeyMk2(r),
+            .action = normalizeAction(r.action),
+            .enforce = r.enforce,
+            .log = r.log,
+            .family = "ipv4",
+            .dir = normalizeDirection(r.dir),
+            .iface = normalizeIfaceKind(r.iface),
+            .ifindex = r.ifindex,
+            .proto = normalizeProto(r.proto),
+            .ctState = normalizeCtState(r.ctState),
+            .ctDirection = normalizeCtDirection(r.ctDir),
+            .src = normalizeCidrV4(r.src),
+            .dst = normalizeCidrV4(r.dst),
+            .sport = normalizePortPredicate(r.sport),
+            .dport = normalizePortPredicate(r.dport),
+            .priority = r.priority,
+        };
+    }
+
+    static ControlVNextStreamExplain::IpRulesRuleSnapshot ruleSnapshot(const RuleRefV6 &r) {
+        return ControlVNextStreamExplain::IpRulesRuleSnapshot{
+            .ruleId = r.ruleId,
+            .clientRuleId = r.clientRuleId,
+            .matchKey = matchKeyMk2(r),
+            .action = normalizeAction(r.action),
+            .enforce = r.enforce,
+            .log = r.log,
+            .family = "ipv6",
+            .dir = normalizeDirection(r.dir),
+            .iface = normalizeIfaceKind(r.iface),
+            .ifindex = r.ifindex,
+            .proto = normalizeProto(r.proto),
+            .ctState = normalizeCtState(r.ctState),
+            .ctDirection = normalizeCtDirection(r.ctDir),
+            .src = normalizeCidrV6(r.src),
+            .dst = normalizeCidrV6(r.dst),
+            .sport = normalizePortPredicate(r.sport),
+            .dport = normalizePortPredicate(r.dport),
+            .priority = r.priority,
+        };
+    }
+
+    static bool explainLess(const ControlVNextStreamExplain::IpRulesRuleSnapshot &a,
+                            const ControlVNextStreamExplain::IpRulesRuleSnapshot &b) {
+        if (a.priority != b.priority) {
+            return a.priority > b.priority;
+        }
+        return a.ruleId < b.ruleId;
+    }
+
+    static void appendMatching(const std::vector<RuleRef> &rules, const PacketKeyV4 &k,
+                               std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot> &out) {
+        for (const auto &rule : rules) {
+            if (rule.matches(k)) {
+                out.push_back(ruleSnapshot(rule));
+            }
+        }
+    }
+
+    static void appendMatching(const std::vector<RuleRefV6> &rules, const PacketKeyV6 &k,
+                               std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot> &out) {
+        for (const auto &rule : rules) {
+            if (rule.matches(k)) {
+                out.push_back(ruleSnapshot(rule));
+            }
+        }
+    }
+
+    std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+    explainEnforce(const PacketKeyV4 &k) const {
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot> out;
+        const auto it = byUid.find(k.uid);
+        if (it == byUid.end()) return out;
+        const UidView &view = it->second;
+        for (const size_t idx : view.enforceOrder) {
+            const auto &st = view.subtables[idx];
+            if (st.maxEnforcePriority == kNoPriority) break;
+            const MaskedKey mk = maskedKeyFromPacket(st.sig, k);
+            const auto bit = st.buckets.find(mk);
+            if (bit == st.buckets.end()) continue;
+            appendMatching(bit->second.exactEnforce, k, out);
+            appendMatching(bit->second.rangeEnforce, k, out);
+        }
+        std::sort(out.begin(), out.end(), explainLess);
+        return out;
+    }
+
+    std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+    explainWould(const PacketKeyV4 &k) const {
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot> out;
+        const auto it = byUid.find(k.uid);
+        if (it == byUid.end()) return out;
+        const UidView &view = it->second;
+        for (const size_t idx : view.wouldOrder) {
+            const auto &st = view.subtables[idx];
+            if (st.maxWouldPriority == kNoPriority) break;
+            const MaskedKey mk = maskedKeyFromPacket(st.sig, k);
+            const auto bit = st.buckets.find(mk);
+            if (bit == st.buckets.end()) continue;
+            appendMatching(bit->second.exactWould, k, out);
+            appendMatching(bit->second.rangeWould, k, out);
+        }
+        std::sort(out.begin(), out.end(), explainLess);
+        return out;
+    }
+
+    std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+    explainEnforce(const PacketKeyV6 &k) const {
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot> out;
+        const auto it = byUid6.find(k.uid);
+        if (it == byUid6.end()) return out;
+        const UidViewV6 &view = it->second;
+        for (const size_t idx : view.enforceOrder) {
+            const auto &st = view.subtables[idx];
+            if (st.maxEnforcePriority == kNoPriority) break;
+            const MaskedKeyV6 mk = maskedKeyFromPacketV6(st.sig, k);
+            const auto bit = st.buckets.find(mk);
+            if (bit == st.buckets.end()) continue;
+            appendMatching(bit->second.exactEnforce, k, out);
+            appendMatching(bit->second.rangeEnforce, k, out);
+        }
+        std::sort(out.begin(), out.end(), explainLess);
+        return out;
+    }
+
+    std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+    explainWould(const PacketKeyV6 &k) const {
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot> out;
+        const auto it = byUid6.find(k.uid);
+        if (it == byUid6.end()) return out;
+        const UidViewV6 &view = it->second;
+        for (const size_t idx : view.wouldOrder) {
+            const auto &st = view.subtables[idx];
+            if (st.maxWouldPriority == kNoPriority) break;
+            const MaskedKeyV6 mk = maskedKeyFromPacketV6(st.sig, k);
+            const auto bit = st.buckets.find(mk);
+            if (bit == st.buckets.end()) continue;
+            appendMatching(bit->second.exactWould, k, out);
+            appendMatching(bit->second.rangeWould, k, out);
+        }
+        std::sort(out.begin(), out.end(), explainLess);
+        return out;
+    }
 };
 
 IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
@@ -1272,9 +1469,11 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
             Snapshot::RuleRef ref{};
             ref.ruleId = def.ruleId;
             ref.uid = def.uid;
+            ref.clientRuleId = def.clientRuleId;
             ref.action = def.action;
             ref.priority = def.priority;
             ref.enforce = def.enforce;
+            ref.log = def.log;
             ref.dir = def.dir;
             ref.iface = def.iface;
             ref.ifindex = def.ifindex;
@@ -1318,9 +1517,11 @@ IpRulesEngine::CompileResult IpRulesEngine::compile(const RulesMap &rules,
             Snapshot::RuleRefV6 ref{};
             ref.ruleId = def.ruleId;
             ref.uid = def.uid;
+            ref.clientRuleId = def.clientRuleId;
             ref.action = def.action;
             ref.priority = def.priority;
             ref.enforce = def.enforce;
+            ref.log = def.log;
             ref.dir = def.dir;
             ref.iface = def.iface;
             ref.ifindex = def.ifindex;
@@ -2452,6 +2653,70 @@ IpRulesEngine::Decision IpRulesEngine::HotSnapshot::evaluate(const PacketKeyV6 &
     out.stats = d.stats;
     return out;
 #endif
+}
+
+std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+IpRulesEngine::HotSnapshot::explainEnforce(
+    const PacketKeyV4 &key, const std::optional<RuleId> winningRuleId,
+    bool &truncated, std::optional<std::uint32_t> &omittedCandidateCount) const {
+    truncated = false;
+    omittedCandidateCount.reset();
+    if (!_snap) {
+        return {};
+    }
+    auto out = _snap->explainEnforce(key);
+    ControlVNextStreamExplain::capCandidateSnapshots(
+        out, winningRuleId, [](const auto &snapshot) { return snapshot.ruleId; }, truncated,
+        omittedCandidateCount);
+    return out;
+}
+
+std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+IpRulesEngine::HotSnapshot::explainEnforce(
+    const PacketKeyV6 &key, const std::optional<RuleId> winningRuleId,
+    bool &truncated, std::optional<std::uint32_t> &omittedCandidateCount) const {
+    truncated = false;
+    omittedCandidateCount.reset();
+    if (!_snap) {
+        return {};
+    }
+    auto out = _snap->explainEnforce(key);
+    ControlVNextStreamExplain::capCandidateSnapshots(
+        out, winningRuleId, [](const auto &snapshot) { return snapshot.ruleId; }, truncated,
+        omittedCandidateCount);
+    return out;
+}
+
+std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+IpRulesEngine::HotSnapshot::explainWould(
+    const PacketKeyV4 &key, const std::optional<RuleId> winningRuleId,
+    bool &truncated, std::optional<std::uint32_t> &omittedCandidateCount) const {
+    truncated = false;
+    omittedCandidateCount.reset();
+    if (!_snap) {
+        return {};
+    }
+    auto out = _snap->explainWould(key);
+    ControlVNextStreamExplain::capCandidateSnapshots(
+        out, winningRuleId, [](const auto &snapshot) { return snapshot.ruleId; }, truncated,
+        omittedCandidateCount);
+    return out;
+}
+
+std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+IpRulesEngine::HotSnapshot::explainWould(
+    const PacketKeyV6 &key, const std::optional<RuleId> winningRuleId,
+    bool &truncated, std::optional<std::uint32_t> &omittedCandidateCount) const {
+    truncated = false;
+    omittedCandidateCount.reset();
+    if (!_snap) {
+        return {};
+    }
+    auto out = _snap->explainWould(key);
+    ControlVNextStreamExplain::capCandidateSnapshots(
+        out, winningRuleId, [](const auto &snapshot) { return snapshot.ruleId; }, truncated,
+        omittedCandidateCount);
+    return out;
 }
 
 void IpRulesEngine::observeEnforceHit(const Decision &decision, const std::uint32_t bytes,

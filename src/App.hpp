@@ -6,12 +6,14 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
 #include <vector>
 
 #include <AppStats.hpp>
+#include <ControlVNextStreamExplain.hpp>
 #include <DomainManager.hpp>
 #include <CustomRules.hpp>
 #include <DomainPolicySources.hpp>
@@ -42,6 +44,18 @@ public:
         Stats::Color color = Stats::GREY;
         DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
         std::optional<uint32_t> ruleId;
+    };
+
+    struct DomainPolicyDebugSnapshot {
+        bool blocked = false;
+        Stats::Color color = Stats::GREY;
+        DomainPolicySource policySource = DomainPolicySource::MASK_FALLBACK;
+        std::optional<uint32_t> ruleId;
+        bool getips = false;
+        bool useCustomList = false;
+        uint32_t domMask = 0;
+        uint32_t appMask = 0;
+        ControlVNextStreamExplain::DnsExplainSnapshot explain;
     };
 
 private:
@@ -156,6 +170,13 @@ public:
 
     // Observability-only variant: includes optional per-rule attribution. Not intended for default hot path.
     BlockedWithSourceAndRuleId blockedWithSourceAndRuleId(const Domain::Ptr &domain);
+
+    // Tracked-only DNS debug path: returns the compatibility summary fields and explain
+    // snapshot from the same ordered candidate evaluation.
+    DomainPolicyDebugSnapshot evaluateDomainPolicyDebug(const Domain::Ptr &domain,
+                                                        bool blockEnabled,
+                                                        bool tracked,
+                                                        bool getBlackIPs);
 
     void observeDomainPolicySource(const DomainPolicySource source, const bool blocked) noexcept {
         _domainSourcesCounters.observe(source, blocked);

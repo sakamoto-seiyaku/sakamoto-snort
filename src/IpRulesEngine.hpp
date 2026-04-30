@@ -16,6 +16,7 @@
 #include <string_view>
 #include <vector>
 
+#include <ControlVNextStreamExplain.hpp>
 #include <Saver.hpp>
 
 class IpRulesEngine {
@@ -323,6 +324,22 @@ public:
         bool uidUsesCt(const std::uint32_t uid, const Family family) const noexcept;
         Decision evaluate(const PacketKeyV4 &key) const;
         Decision evaluate(const PacketKeyV6 &key) const;
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+        explainEnforce(const PacketKeyV4 &key, std::optional<RuleId> winningRuleId,
+                       bool &truncated,
+                       std::optional<std::uint32_t> &omittedCandidateCount) const;
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+        explainEnforce(const PacketKeyV6 &key, std::optional<RuleId> winningRuleId,
+                       bool &truncated,
+                       std::optional<std::uint32_t> &omittedCandidateCount) const;
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+        explainWould(const PacketKeyV4 &key, std::optional<RuleId> winningRuleId,
+                     bool &truncated,
+                     std::optional<std::uint32_t> &omittedCandidateCount) const;
+        std::vector<ControlVNextStreamExplain::IpRulesRuleSnapshot>
+        explainWould(const PacketKeyV6 &key, std::optional<RuleId> winningRuleId,
+                     bool &truncated,
+                     std::optional<std::uint32_t> &omittedCandidateCount) const;
 
     private:
         std::uint64_t _instanceId = 0;
@@ -380,6 +397,7 @@ private:
     static std::string normalizeCtState(const CtState s);
     static std::string normalizeCtDirection(const CtDirection d);
     static std::string normalizeCidrV4(const CidrV4 &c);
+    static std::string normalizeCidrV6(const CidrV6 &c);
     static std::string normalizePortPredicate(const PortPredicate &p);
 
     static bool validateRuleDef(const RuleDef &def, std::string &error);

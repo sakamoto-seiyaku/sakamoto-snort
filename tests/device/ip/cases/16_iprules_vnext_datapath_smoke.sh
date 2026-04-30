@@ -421,6 +421,70 @@ def bool_matches(value, expected: str) -> bool:
     return value is want
 
 
+def explain_stage(frame: dict, name: str):
+    explain = frame.get("explain")
+    if not isinstance(explain, dict):
+        return None
+    if explain.get("version") != 1 or explain.get("kind") != "packet-verdict":
+        return None
+    stages = explain.get("stages")
+    if not isinstance(stages, list):
+        return None
+    names = [s.get("name") for s in stages if isinstance(s, dict)]
+    if names != ["ifaceBlock", "iprules.enforce", "domainIpLeak", "iprules.would"]:
+        return None
+    for stage in stages:
+        if isinstance(stage, dict) and stage.get("name") == name:
+            return stage
+    return None
+
+
+def explain_matches(frame: dict) -> bool:
+    explain = frame.get("explain")
+    if not isinstance(explain, dict):
+        return False
+    final = explain.get("final", {})
+    if EXPECT_REASON and final.get("reasonId") != EXPECT_REASON:
+        return False
+    if not bool_matches(final.get("accepted"), EXPECT_ACCEPTED):
+        return False
+
+    if EXPECT_REASON in ("IP_RULE_ALLOW", "IP_RULE_BLOCK"):
+        stage = explain_stage(frame, "iprules.enforce")
+        if not stage or stage.get("winner") is not True:
+            return False
+        if EXPECT_RULE_ID and int(EXPECT_RULE_ID) not in [int(x) for x in stage.get("ruleIds", [])]:
+            return False
+        if EXPECT_RULE_ID and not any(
+            int(s.get("ruleId", -1)) == int(EXPECT_RULE_ID)
+            for s in stage.get("ruleSnapshots", [])
+            if isinstance(s, dict)
+        ):
+            return False
+
+    if EXPECT_WOULD_RULE_ID:
+        stage = explain_stage(frame, "iprules.would")
+        if not stage or stage.get("matched") is not True:
+            return False
+        if int(EXPECT_WOULD_RULE_ID) not in [int(x) for x in stage.get("ruleIds", [])]:
+            return False
+        if final.get("wouldDrop") is not True or int(final.get("wouldRuleId", -1)) != int(EXPECT_WOULD_RULE_ID):
+            return False
+
+    if EXPECT_REASON == "IFACE_BLOCK":
+        stage = explain_stage(frame, "ifaceBlock")
+        if not stage or stage.get("winner") is not True:
+            return False
+        iface = stage.get("ifaceBlock")
+        if not isinstance(iface, dict) or "evaluatedIntersection" not in iface:
+            return False
+        lower = explain_stage(frame, "iprules.enforce")
+        if not lower or lower.get("skipReason") != "shortCircuited":
+            return False
+
+    return True
+
+
 def matches(frame: dict) -> bool:
     if frame.get("type") != "pkt":
         return False
@@ -450,6 +514,8 @@ def matches(frame: dict) -> bool:
         return False
     if EXPECT_NO_WOULD_RULE_ID and "wouldRuleId" in frame:
         return False
+    if EXPECT_MODE == "present" and not explain_matches(frame):
+        return False
     return True
 
 
@@ -464,6 +530,7 @@ try:
     deadline = time.time() + 5.0
     ready = False
     found = False
+    suppressed_notice = False
     samples = []
     while time.time() < deadline:
         try:
@@ -476,6 +543,10 @@ try:
                 with open(READY_FILE, "w", encoding="utf-8") as f:
                     f.write("ready\n")
                 ready = True
+            continue
+
+        if frame.get("type") == "notice" and frame.get("notice") == "suppressed" and frame.get("stream") == "pkt":
+            suppressed_notice = True
             continue
 
         if frame.get("type") != "pkt":
@@ -508,6 +579,16 @@ try:
             print("DEBUG: unexpected matching pkt event", file=sys.stderr)
             print(json.dumps(samples[-1], separators=(",", ":")), file=sys.stderr)
             raise SystemExit(2)
+        raise SystemExit(0)
+
+    if EXPECT_MODE == "suppressed":
+        if found:
+            print("DEBUG: unexpected matching pkt event while expecting suppression", file=sys.stderr)
+            print(json.dumps(samples[-1], separators=(",", ":")), file=sys.stderr)
+            raise SystemExit(2)
+        if not suppressed_notice:
+            print("DEBUG: no pkt suppressed notice observed", file=sys.stderr)
+            raise SystemExit(3)
         raise SystemExit(0)
 
     if not found:
@@ -946,6 +1027,18 @@ assert_rule_stat_eq "VNXDP-12l disabled IPRULES does not grow wouldHitPackets" "
 
 ctl_json_or_block cfg_iprules1 CONFIG.SET '{"scope":"device","set":{"iprules.enabled":1}}' "CONFIG.SET(iprules.enabled=1) failed"
 assert_or_exit "VNXDP-12m CONFIG.SET iprules.enabled=1 ack" "$cfg_iprules1" \
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
+
+ctl_json_or_block cfg_tracked0 CONFIG.SET "{\"scope\":\"app\",\"app\":{\"uid\":${app_uid}},\"set\":{\"tracked\":0}}" "CONFIG.SET(tracked=0) failed"
+assert_or_exit "VNXDP-12n CONFIG.SET tracked=0 ack" "$cfg_tracked0" \
+  'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
+
+pkt_capture_begin suppressed out IP_RULE_BLOCK false "$iprules_off_rule_id" "" 0 0 443
+trigger_tcp_expect_failure "VNXDP-12o TCP connect still blocked while tracked=0"
+pkt_capture_wait "VNXDP-12p tracked=0 suppresses pkt explain and emits suppressed notice"
+
+ctl_json_or_block cfg_tracked1b CONFIG.SET "{\"scope\":\"app\",\"app\":{\"uid\":${app_uid}},\"set\":{\"tracked\":1}}" "CONFIG.SET(tracked=1 restore) failed"
+assert_or_exit "VNXDP-12q restore tracked=1 ack" "$cfg_tracked1b" \
   'import sys,json; j=json.load(sys.stdin); assert j["ok"] is True'
 
 # -----------------------------------------------------------------------------

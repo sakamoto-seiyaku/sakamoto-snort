@@ -43,6 +43,26 @@ std::vector<std::string> CustomList::snapshotNames() const {
     return out;
 }
 
+std::vector<ControlVNextStreamExplain::DnsListEntrySnapshot>
+CustomList::matchingExplainSnapshots(const Domain::Ptr &domain, const std::string &scope,
+                                     const std::string &action) const {
+    if (domain == nullptr) {
+        return {};
+    }
+
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    if (_domains.find(domain) == _domains.end()) {
+        return {};
+    }
+
+    return {ControlVNextStreamExplain::DnsListEntrySnapshot{
+        .type = "domain",
+        .pattern = domain->name(),
+        .scope = scope,
+        .action = action,
+    }};
+}
+
 void CustomList::save(Saver &saver) {
     const std::shared_lock<std::shared_mutex> lock(_mutex);
     saver.write<uint32_t>(_domains.size());

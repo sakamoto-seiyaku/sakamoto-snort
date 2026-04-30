@@ -2,7 +2,7 @@
 
 版本: v3.7
 目标平台: Android 16, KernelSU
-更新时间: 2026-04-27
+更新时间: 2026-04-30
 
 ---
 
@@ -123,7 +123,9 @@ vNext app selector（`args.app`）约定:
 - `TELEMETRY.CLOSE` | `{}` | `ok` |
   - idempotent；会作废旧 session（consumer 端需停止 ingest 并在需要时重新 OPEN）。
 - `STREAM.START` | `{"type":"dns"|"pkt"|"activity","horizonSec"?:u32,"minSize"?:u32}` | `ok` |
-  - `dns/pkt` 支持 replay 参数（会被 clamp 到 caps）；`activity` 禁止携带 `horizonSec/minSize`（否则 `SYNTAX_ERROR`）。
+  - `dns/pkt` 是 tracked Debug Stream surface：用于短时 per-event 取证，不是常态 records/history/timeline/Top-K API。
+  - `dns/pkt` 支持 replay 参数（会被 clamp 到 caps）；replay 只读取 bounded in-process debug prebuffer，不查询 Flow Telemetry、Metrics 或持久化历史。
+  - `activity` 禁止携带 `horizonSec/minSize`（否则 `SYNTAX_ERROR`），且不属于 Debug Stream explainability surface。
   - 进入 stream mode 后，除 `STREAM.START/STOP` 外的命令一律 `STATE_CONFLICT`。
   - 输出顺序：`STREAM.START` response → `notice.started` → replay/实时事件。
 - `STREAM.STOP` | `{}` | `ok` |
@@ -132,13 +134,40 @@ vNext app selector（`args.app`）约定:
 vNext stream 事件（JSON object，无 `id/ok`）:
 - `notice.started`：`{ "type":"notice", "notice":"started", "stream":"dns"|"pkt"|"activity", "horizonSec"?:u32, "minSize"?:u32 }`
 - `notice.suppressed`：`{type:"notice",notice:"suppressed",stream,windowMs:u32,traffic:{dns|rxp|rxb|txp|txb:{allow,block}},hint:string}`
+  - 仅说明 tracked gate 导致 debug event 未输出；不是 Metrics replacement。
 - `notice.dropped`：`{type:"notice",notice:"dropped",stream,windowMs:u32,droppedEvents:u64}`
-- `dns`：`{type:"dns",timestamp:string,uid:u32,userId:u32,app:string,domain:string,domMask:u32,appMask:u32,blocked:bool,policySource:string,useCustomList:bool,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",getips:bool,ruleId?:u32}`
+  - 仅说明 queued debug evidence 丢失；不是 Metrics replacement。
+- `dns`：`{type:"dns",timestamp:string,uid:u32,userId:u32,app:string,domain:string,domMask:u32,appMask:u32,blocked:bool,policySource:string,useCustomList:bool,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",getips:bool,ruleId?:u32,explain:object}`
+  - 顶层字段是 compatibility summaries；`explain` 是权威 debug evidence。
   - `ruleId` 仅在 tracked app 且 `policySource` 来自规则分支且 decision 实际来自 rule（非名单）时出现。
+  - `explain.version=1`，`explain.kind="dns-policy"`。
+  - `explain.inputs={blockEnabled:bool,tracked:bool,domainCustomEnabled:bool,useCustomList:bool,domain:string,domMask:u32,appMask:u32}`。
+  - `explain.final={blocked:bool,getips:bool,policySource:string,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",ruleId?:u32}`。
+  - `explain.stages[]` 固定顺序：
+    `app.custom.allowList` → `app.custom.blockList` → `app.custom.allowRules` → `app.custom.blockRules` → `deviceWide.allow` → `deviceWide.block` → `maskFallback`。
+  - 每个 DNS stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`（例如 `disabled` / `shortCircuited`）。
+  - 规则 stage 可含 `ruleIds[]` 与 `ruleSnapshots[]`；rule snapshot 至少为 `{ruleId,type,pattern,scope,action}`。
+  - 名单 stage 可含 `listEntrySnapshots[]`；list-entry snapshot 至少为 `{type,pattern,scope,action}`。
+  - `maskFallback` stage 含 `maskFallback={domMask,appMask,effectiveMask,outcome}`，用于无需额外查询当前 mask 即可解释 fallback verdict。
 - `pkt`：
-  `{ "type":"pkt", "timestamp":string, "uid":u32, "userId":u32, "app":string, "direction":"in"|"out", "ipVersion":4|6, "protocol":"tcp"|"udp"|"icmp"|"other", "l4Status":"known-l4"|"other-terminal"|"fragment"|"invalid-or-unavailable-l4", "srcIp"?:string, "dstIp"?:string, "srcPort":u32, "dstPort":u32, "length":u32, "ifindex":u32, "ifaceKindBit":u32, "interface"?:string, "host"?:string, "domain"?:string, "accepted":bool, "reasonId":string, "ruleId"?:u32, "wouldRuleId"?:u32, "wouldDrop"?:bool }`
+  `{ "type":"pkt", "timestamp":string, "uid":u32, "userId":u32, "app":string, "direction":"in"|"out", "ipVersion":4|6, "protocol":"tcp"|"udp"|"icmp"|"other", "l4Status":"known-l4"|"other-terminal"|"fragment"|"invalid-or-unavailable-l4", "srcIp"?:string, "dstIp"?:string, "srcPort":u32, "dstPort":u32, "length":u32, "ifindex":u32, "ifaceKindBit":u32, "interface"?:string, "host"?:string, "domain"?:string, "accepted":bool, "reasonId":string, "ruleId"?:u32, "wouldRuleId"?:u32, "wouldDrop"?:bool, "explain":object }`
+  - 顶层字段是 compatibility summaries；`explain` 是权威 debug evidence。
   - `l4Status` 恒存在；当 `l4Status!=known-l4` 时 `srcPort/dstPort=0`。
+  - `explain.version=1`，`explain.kind="packet-verdict"`。
+  - `explain.inputs={blockEnabled:bool,iprulesEnabled:bool,direction:"in"|"out",ipVersion:4|6,protocol:string,l4Status:string,ifindex:u32,ifaceKindBit:u32,ifaceKind:string,conntrackEvaluated:bool,conntrack?:{state,direction}}`。
+  - `explain.final={accepted:bool,reasonId:string,ruleId?:u32,wouldRuleId?:u32,wouldDrop?:bool}`。
+  - `explain.stages[]` 固定顺序：`ifaceBlock` → `iprules.enforce` → `domainIpLeak` → `iprules.would`。
+  - 每个 packet stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`。
+  - IPRULES stage 可含 `ruleIds[]` 与 `ruleSnapshots[]`；rule snapshot 至少为 `{ruleId,clientRuleId,matchKey,action,enforce,log,family,dir,iface,ifindex,proto,ct,src,dst,sport,dport,priority}`。
+  - `ifaceBlock` stage 含 `ifaceBlock={appIfaceMask,packetIfaceKindBit,evaluatedIntersection,packetIfaceKind,outcome,shortCircuitReason?}`。
 - `activity`：`{type:"activity",timestamp:string,blockEnabled:bool}`
+  - `activity` 不输出 `explain`，不承载新 telemetry/history 语义。
+
+Debug Stream explain candidate 限制:
+- `maxExplainCandidatesPerStage=64`。
+- Domain rule candidates 按 `ruleId` 升序；IPRULES candidates 按 effective evaluation order（`priority` 降序，`ruleId` 升序）。
+- 超过上限时 stage 输出 `truncated=true`，可廉价得知时输出 `omittedCandidateCount`；winning rule snapshot 必须保留。
+- `dns/pkt` Debug Stream 不新增 Flow Telemetry records、Metrics names、DEV query surface、persistent storage、Top-K、timeline/history 聚合、Geo/ASN 或 DNS-to-packet join。
 
 语义锁定参考: 本文（§2.6/§2.7 的枚举与字段口径即为锁定语义）。
 
