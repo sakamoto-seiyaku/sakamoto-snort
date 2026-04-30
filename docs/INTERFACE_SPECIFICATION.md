@@ -1,6 +1,6 @@
 # sucre-snort 接口规范
 
-版本: v3.7
+版本: v3.8
 目标平台: Android 16, KernelSU
 更新时间: 2026-04-30
 
@@ -23,7 +23,7 @@
 - response envelope：`{"id":1,"ok":true,"result":{...}}` / `{"id":1,"ok":false,"error":{...}}`
 - strict reject：顶层/args 出现未知 key → `SYNTAX_ERROR`；未知 `cmd` → `UNSUPPORTED_COMMAND`。
 - stream event：事件 frame 为 JSON object（无 `id/ok`），顶层必须含 `type`；见 `STREAM.*`。
-- 备注：对外契约以本文为准；更早的协议/命令面设计材料已归档到 `docs/archived/DOMAIN_IP_FUSION/`（非权威）。
+- 备注：对外契约以本文为准；v3.7 及更早的协议/命令面设计材料已归档到 `docs/archived/`（非权威）。
 
 vNext app selector（`args.app`）约定:
 - `{"uid":10123}` 或 `{"pkg":"com.example","userId":0}`（二选一；禁止混用）。
@@ -36,7 +36,10 @@ vNext app selector（`args.app`）约定:
 说明格式: 命令 | 参数 | 返回 | 备注
 
 2.1 通用（Meta）
-- `HELLO` | `{}` | `result={protocol,protocolVersion,framing,maxRequestBytes,maxResponseBytes}` |
+- `HELLO` | `{}` | `result={protocol,protocolVersion,framing,maxRequestBytes,maxResponseBytes,daemonBuildId,artifactAbi,capabilities[]}` |
+  - `protocol="control-vnext"`，`protocolVersion=1`，`framing="netstring"`。
+  - `daemonBuildId` / `artifactAbi` 用于前端诊断当前 daemon 与 native artifact 身份。
+  - `capabilities[]` 当前包含：`"control-vnext"`、`"nfqueue-datapath"`、`"apk-native-artifact"`。
 - `QUIT` | `{}` | `ok` | response 写出后关闭连接
 - `RESETALL` | `{}` | `ok` | 清空设置、统计、域名、规则、列表并持久化
 
@@ -96,13 +99,13 @@ vNext app selector（`args.app`）约定:
 - `CHECKPOINT.LIST` | `{}` | `result={slots[],slotCount,maxSlotBytes}` |
   - 固定只暴露 3 个 slot：`0/1/2`；`slots[]` 必须按 `slot` 升序返回。
   - slot item：`{slot:u32,present:bool,formatVersion?:u32,sizeBytes?:u64,createdAt?:u64}`；后 3 项仅 `present=true` 时出现。
-- `CHECKPOINT.SAVE` | `{"slot":0|1|2}` | `result={slot,maxSlotBytes}` |
+- `CHECKPOINT.SAVE` | `{"slot":0|1|2}` | `result={slot:{slot,present,formatVersion?,sizeBytes?,createdAt?},maxSlotBytes}` |
   - 原子替换所选 slot；bundle 超过 64 MiB 时返回 `CAPACITY_EXCEEDED`，旧 slot 内容保持可恢复。
-- `CHECKPOINT.RESTORE` | `{"slot":0|1|2}` | `result={slot,maxSlotBytes}` |
+- `CHECKPOINT.RESTORE` | `{"slot":0|1|2}` | `result={slot:{slot,present,formatVersion?,sizeBytes?,createdAt?},maxSlotBytes}` |
   - 空 slot 返回 `NOT_FOUND`。
   - restore 先完整解析/验证 bundle（版本、DomainPolicy rule 引用、DomainLists 元数据/内容、IPRULES preflight 等），失败时 live policy 不变。
   - 成功后开启新的 policy runtime epoch：清 conntrack、learned domain/IP/host 关联、IPRULES cache、旧 policy epoch 的 metrics、active stream state 与 telemetry session；客户端需要重新打开 stream/telemetry consumer。
-- `CHECKPOINT.CLEAR` | `{"slot":0|1|2}` | `result={slot,maxSlotBytes}` |
+- `CHECKPOINT.CLEAR` | `{"slot":0|1|2}` | `result={slot:{slot,present,formatVersion?,sizeBytes?,createdAt?},maxSlotBytes}` |
   - 幂等删除所选 slot；空 slot 也返回 `ok=true` 且 `slot.present=false`。
 - 所有 `CHECKPOINT.*` 命令 strict JSON；未知 `args` key 返回 `SYNTAX_ERROR`，缺少 `slot` 返回 `MISSING_ARGUMENT`，非法 slot 返回 `INVALID_ARGUMENT`。
 - bundle 仅包含 verdict-affecting policy：device/app verdict config、DomainRules、DomainPolicy、DomainLists 元数据与内容、IPRULES rules/nextRuleId；不包含 frontend metadata、历史、统计、stream replay、Flow Telemetry records、Geo/ASN、health/billing/diagnostic export。
@@ -132,11 +135,74 @@ vNext app selector（`args.app`）约定:
     - poll/emit: `pollIntervalMs(u32)`, `bytesThreshold(u64)`, `packetsThreshold(u64)`, `maxExportIntervalMs(u32)`
     - TTL: `blockTtlMs(u32)`, `pickupTtlMs(u32)`, `invalidTtlMs(u32)`
     - limits: `maxFlowEntries(u32)`, `maxEntriesPerUid(u32)`
-  - records 通过 shared-memory ring 输出；recordType（u16）:
-    - `1(FLOW)`: `payloadVersion=1`；kind=`BEGIN|UPDATE|END`；包含 flowInstanceId/recordSeq/五元组元数据与累计 counters。
-    - `2(DNS_DECISION)`: `payloadVersion=1`；blocked-only；包含 queryName(≤255 bytes)、policySource 与可选 ruleId。
+  - records 通过 shared-memory ring 输出；二进制 ABI 见下方 “Flow Telemetry shared-memory ABI”。
 - `TELEMETRY.CLOSE` | `{}` | `ok` |
   - idempotent；会作废旧 session（consumer 端需停止 ingest 并在需要时重新 OPEN）。
+
+Flow Telemetry shared-memory ABI（`abiVersion=1`）:
+- 默认 sizing：`slotBytes=1024`、`ringDataBytes=16777216`（16 MiB）、`slotCount=16384`、`slotHeaderBytes=24`、`maxPayloadBytes=1000`。
+- 所有多字节整数均为 little-endian；offset 从 slot 或 payload 起点计算；不要依赖 C++ struct padding。
+- producer 使用递增 `ticket` 写入固定 slot：`slotIndex = ticket % slotCount`。consumer 从 `TELEMETRY.OPEN.result.writeTicketSnapshot` 开始读，忽略更早 ticket，并按 ticket 去重；ticket gap 表示 producer drop、consumer 落后或 slot 被覆盖。
+- 读取建议：以 acquire 语义读取 `state`；仅当 `state=Committed(2)` 时读取 header/payload；`payloadSize` 必须 `<= maxPayloadBytes`；未知 `recordType` 按 `payloadSize` 跳过。
+
+slot header（offset from slot start）:
+
+| Offset | Field | Type | 说明 |
+| --- | --- | --- | --- |
+| 0 | `state` | u32 | `0=Empty`, `1=Writing`, `2=Committed` |
+| 4 | `recordType` | u16 | `1=FLOW`, `2=DNS_DECISION` |
+| 6 | `reserved0` | bytes[2] | 保留；consumer 必须忽略 |
+| 8 | `ticket` | u64 | producer 全局递增 ticket |
+| 16 | `payloadSize` | u32 | payload 实际字节数 |
+| 20 | `reserved1` | bytes[4] | 保留；consumer 必须忽略 |
+| 24 | `payload` | bytes | 长度为 `payloadSize` |
+
+`recordType=1` FLOW payload v1（fixed size `102` bytes）:
+
+| Offset | Field | Type | 说明 |
+| --- | --- | --- | --- |
+| 0 | `payloadVersion` | u8 | 固定为 `1` |
+| 1 | `kind` | u8 | `1=Begin`, `2=Update`, `3=End` |
+| 2 | `ctState` | u8 | `0=ANY`, `1=NEW`, `2=ESTABLISHED`, `3=INVALID` |
+| 3 | `ctDir` | u8 | `0=ANY`, `1=ORIG`, `2=REPLY` |
+| 4 | `reasonId` | u8 | `0=IFACE_BLOCK`, `1=IP_LEAK_BLOCK`, `2=ALLOW_DEFAULT`, `3=IP_RULE_ALLOW`, `4=IP_RULE_BLOCK` |
+| 5 | `ifaceKindBit` | u8 | 见 §4 `ifaceKind` 位 |
+| 6 | `flags` | u8 | bit0 `hasRuleId`, bit1 `isIpv6`, bit2 `pickedUpMidStream`（保留/未来） |
+| 7 | `reserved0` | u8 | 保留 |
+| 8 | `timestampNs` | u64 | monotonic timestamp |
+| 16 | `flowInstanceId` | u64 | flow instance id |
+| 24 | `recordSeq` | u64 | flow 内 record 序号 |
+| 32 | `uid` | u32 | Android uid |
+| 36 | `userId` | u32 | Android user id |
+| 40 | `ifindex` | u32 | interface index |
+| 44 | `proto` | u8 | IP protocol number（例如 TCP=6, UDP=17, ICMP=1, ICMPv6=58） |
+| 45 | `reserved1` | u8 | 保留 |
+| 46 | `srcPort` | u16 | TCP/UDP port；无 L4 port 时为 0 |
+| 48 | `dstPort` | u16 | TCP/UDP port；无 L4 port 时为 0 |
+| 50 | `srcAddr` | bytes[16] | IPv4 使用前 4 bytes；IPv6 使用 16 bytes |
+| 66 | `dstAddr` | bytes[16] | IPv4 使用前 4 bytes；IPv6 使用 16 bytes |
+| 82 | `totalPackets` | u64 | flow 累计 packets |
+| 90 | `totalBytes` | u64 | flow 累计 bytes |
+| 98 | `ruleId` | u32 | 仅当 `flags.hasRuleId` 时有效 |
+
+`recordType=2` DNS_DECISION payload v1（blocked-only；fixed header `32` bytes）:
+
+| Offset | Field | Type | 说明 |
+| --- | --- | --- | --- |
+| 0 | `payloadVersion` | u8 | 固定为 `1` |
+| 1 | `flags` | u8 | bit0 `hasRuleId`, bit1 `queryNameTruncated` |
+| 2 | `policySource` | u8 | `0=CUSTOM_WHITELIST`, `1=CUSTOM_BLACKLIST`, `2=CUSTOM_RULE_WHITE`, `3=CUSTOM_RULE_BLACK`, `4=DOMAIN_DEVICE_WIDE_AUTHORIZED`, `5=DOMAIN_DEVICE_WIDE_BLOCKED`, `6=MASK_FALLBACK` |
+| 3 | `reserved0` | u8 | 保留 |
+| 4 | `queryNameLen` | u16 | `0..255` |
+| 6 | `reserved1` | u16 | 保留 |
+| 8 | `timestampNs` | u64 | monotonic timestamp |
+| 16 | `uid` | u32 | Android uid |
+| 20 | `userId` | u32 | Android user id |
+| 24 | `ruleId` | u32 | 无 ruleId 时为 0；以 `flags.hasRuleId` 判断有效性 |
+| 28 | `reserved2` | u32 | 保留 |
+| 32 | `queryName` | bytes[`queryNameLen`] | 原始 bytes，非 NUL 结尾；超 255 bytes 时截断并置 `queryNameTruncated` |
+
+payload 演进规则：每个 payload 自带 `payloadVersion`，新增字段只允许 append；旧 consumer 必须先验证自身需要的最小长度，再用 `payloadSize` 跳过未知尾部。
 - `STREAM.START` | `{"type":"dns"|"pkt"|"activity","horizonSec"?:u32,"minSize"?:u32}` | `ok` |
   - `dns/pkt` 是 tracked Debug Stream surface：用于短时 per-event 取证，不是常态 records/history/timeline/Top-K API。
   - `dns/pkt` 支持 replay 参数（会被 clamp 到 caps）；replay 只读取 bounded in-process debug prebuffer，不查询 Flow Telemetry、Metrics 或持久化历史。
@@ -160,7 +226,8 @@ vNext stream 事件（JSON object，无 `id/ok`）:
   - `explain.final={blocked:bool,getips:bool,policySource:string,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",ruleId?:u32}`。
   - `explain.stages[]` 固定顺序：
     `app.custom.allowList` → `app.custom.blockList` → `app.custom.allowRules` → `app.custom.blockRules` → `deviceWide.allow` → `deviceWide.block` → `maskFallback`。
-  - 每个 DNS stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`（例如 `disabled` / `shortCircuited`）。
+  - 每个 DNS stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`。
+  - `skipReason` 固定取值：`disabled` / `shortCircuited` / `noMatch` / `l4Unavailable` / `fragment` / `ctUnavailable`。
   - 规则 stage 可含 `ruleIds[]` 与 `ruleSnapshots[]`；rule snapshot 至少为 `{ruleId,type,pattern,scope,action}`。
   - 名单 stage 可含 `listEntrySnapshots[]`；list-entry snapshot 至少为 `{type,pattern,scope,action}`。
   - `maskFallback` stage 含 `maskFallback={domMask,appMask,effectiveMask,outcome}`，用于无需额外查询当前 mask 即可解释 fallback verdict。
@@ -168,11 +235,13 @@ vNext stream 事件（JSON object，无 `id/ok`）:
   `{ "type":"pkt", "timestamp":string, "uid":u32, "userId":u32, "app":string, "direction":"in"|"out", "ipVersion":4|6, "protocol":"tcp"|"udp"|"icmp"|"other", "l4Status":"known-l4"|"other-terminal"|"fragment"|"invalid-or-unavailable-l4", "srcIp"?:string, "dstIp"?:string, "srcPort":u32, "dstPort":u32, "length":u32, "ifindex":u32, "ifaceKindBit":u32, "interface"?:string, "host"?:string, "domain"?:string, "accepted":bool, "reasonId":string, "ruleId"?:u32, "wouldRuleId"?:u32, "wouldDrop"?:bool, "explain":object }`
   - 顶层字段是 compatibility summaries；`explain` 是权威 debug evidence。
   - `l4Status` 恒存在；当 `l4Status!=known-l4` 时 `srcPort/dstPort=0`。
+  - 顶层 `wouldDrop` 是 true-only optional：仅当 would-rule 命中 drop 时出现，consumer 不应期待显式 `false`。
   - `explain.version=1`，`explain.kind="packet-verdict"`。
   - `explain.inputs={blockEnabled:bool,iprulesEnabled:bool,direction:"in"|"out",ipVersion:4|6,protocol:string,l4Status:string,ifindex:u32,ifaceKindBit:u32,ifaceKind:string,conntrackEvaluated:bool,conntrack?:{state,direction}}`。
   - `explain.final={accepted:bool,reasonId:string,ruleId?:u32,wouldRuleId?:u32,wouldDrop?:bool}`。
+  - `explain.final.wouldDrop` 同样为 true-only optional；缺省不表示 JSON boolean false 字段存在。
   - `explain.stages[]` 固定顺序：`ifaceBlock` → `iprules.enforce` → `domainIpLeak` → `iprules.would`。
-  - 每个 packet stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`。
+  - 每个 packet stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`，取值同 DNS stage。
   - IPRULES stage 可含 `ruleIds[]` 与 `ruleSnapshots[]`；rule snapshot 至少为 `{ruleId,clientRuleId,matchKey,action,enforce,log,family,dir,iface,ifindex,proto,ct,src,dst,sport,dport,priority}`。
   - `ifaceBlock` stage 含 `ifaceBlock={appIfaceMask,packetIfaceKindBit,evaluatedIntersection,packetIfaceKind,outcome,shortCircuitReason?}`。
 - `activity`：`{type:"activity",timestamp:string,blockEnabled:bool}`
@@ -184,7 +253,7 @@ Debug Stream explain candidate 限制:
 - 超过上限时 stage 输出 `truncated=true`，可廉价得知时输出 `omittedCandidateCount`；winning rule snapshot 必须保留。
 - `dns/pkt` Debug Stream 不新增 Flow Telemetry records、Metrics names、DEV query surface、persistent storage、Top-K、timeline/history 聚合、Geo/ASN 或 DNS-to-packet join。
 
-语义锁定参考: 本文（§2.6/§2.7 的枚举与字段口径即为锁定语义）。
+语义锁定参考: 本文（§2.6/§2.7/§2.8 的枚举、字段口径与 telemetry ABI 即为锁定语义）。
 
 ---
 
