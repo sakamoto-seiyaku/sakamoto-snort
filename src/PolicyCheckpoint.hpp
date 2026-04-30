@@ -103,13 +103,20 @@ struct Bundle {
     IpRulesEngine::PolicySnapshot ipRules;
 };
 
+struct RestoreStaging {
+    std::string domainListsStageDir;
+    std::string domainListsBackupDir;
+    bool domainListsPublished = false;
+};
+
 [[nodiscard]] bool isValidSlot(std::uint32_t slot) noexcept;
 [[nodiscard]] std::array<SlotMetadata, kSlotCount> listSlots();
 [[nodiscard]] Status clearSlot(std::uint32_t slot, SlotMetadata &metadata);
 [[nodiscard]] Status saveCurrentPolicyToSlot(std::uint32_t slot, SlotMetadata &metadata);
 [[nodiscard]] Status readSlot(std::uint32_t slot, Bundle &bundle, SlotMetadata &metadata);
-[[nodiscard]] Status stageBundleForRestore(const Bundle &bundle);
-[[nodiscard]] Status restoreBundleToLivePolicy(const Bundle &bundle);
+[[nodiscard]] Status stageBundleForRestore(const Bundle &bundle, RestoreStaging &staging);
+[[nodiscard]] Status restoreBundleToLivePolicy(const Bundle &bundle, RestoreStaging &staging);
+void cleanupRestoreStaging(RestoreStaging &staging) noexcept;
 
 [[nodiscard]] Bundle captureLivePolicy();
 [[nodiscard]] Status validateBundle(const Bundle &bundle);

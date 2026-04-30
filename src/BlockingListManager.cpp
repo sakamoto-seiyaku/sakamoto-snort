@@ -92,6 +92,12 @@ void BlockingListManager::reset() {
     _ByIds.clear();
 }
 
+void BlockingListManager::replaceAllForCheckpointRestore(
+    std::unordered_map<std::string, BlockingList> lists) {
+    const lock_guard lock(_mutex);
+    _ByIds.swap(lists);
+}
+
 vector<BlockingList> BlockingListManager::getLists() {
     return listsSnapshot();
 }

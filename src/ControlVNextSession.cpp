@@ -563,7 +563,8 @@ void ControlVNextSession::run() {
 
             ResponsePlan plan{};
             const auto applyCommand = [&] { plan = dispatch(requestView); };
-            if (requestView.cmd == "RESETALL" || requestView.cmd == "CHECKPOINT.SAVE" ||
+            if (requestView.cmd == "RESETALL" || requestView.cmd == "CHECKPOINT.LIST" ||
+                requestView.cmd == "CHECKPOINT.SAVE" ||
                 requestView.cmd == "CHECKPOINT.RESTORE" || requestView.cmd == "CHECKPOINT.CLEAR") {
                 applyCommand();
             } else if (requestView.cmd == "CONFIG.SET" || requestView.cmd == "DOMAINRULES.APPLY" ||

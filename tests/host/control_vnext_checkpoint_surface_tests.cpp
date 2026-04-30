@@ -24,6 +24,7 @@
 #include <fstream>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -61,10 +62,11 @@ PolicyCheckpoint::Status snortCheckpointRestore(const std::uint32_t slot,
     if (auto st = PolicyCheckpoint::readSlot(slot, bundle, metadata); !st.ok) {
         return st;
     }
-    if (auto st = PolicyCheckpoint::stageBundleForRestore(bundle); !st.ok) {
+    PolicyCheckpoint::RestoreStaging staging;
+    if (auto st = PolicyCheckpoint::stageBundleForRestore(bundle, staging); !st.ok) {
         return st;
     }
-    return PolicyCheckpoint::restoreBundleToLivePolicy(bundle);
+    return PolicyCheckpoint::restoreBundleToLivePolicy(bundle, staging);
 }
 
 namespace {
@@ -125,6 +127,34 @@ void writeSlotFile(const std::uint32_t slot, const std::string &data) {
     ASSERT_TRUE(out.is_open());
     out << data;
     ASSERT_TRUE(out.good());
+}
+
+void writeTextFile(const std::string &path, const std::string &data) {
+    std::ofstream out(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out.is_open());
+    out << data;
+    ASSERT_TRUE(out.good());
+}
+
+std::string readTextFile(const std::string &path) {
+    std::ifstream in(path, std::ios::in | std::ios::binary);
+    if (!in.is_open()) {
+        return {};
+    }
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+PolicyCheckpoint::DomainListSnapshot makeCheckpointDomainList() {
+    PolicyCheckpoint::DomainListSnapshot list;
+    list.listId = "12345678-1234-1234-1234-123456789abc";
+    list.color = Stats::BLACK;
+    list.mask = Settings::standardListBit;
+    list.enabled = true;
+    list.url = "https://example.invalid/list.txt";
+    list.name = "test";
+    list.domains = {"new.example.com"};
+    list.domainsCount = 1;
+    return list;
 }
 
 class ControlVNextCheckpointSurfaceTest : public ::testing::Test {
@@ -258,6 +288,26 @@ TEST_F(ControlVNextCheckpointSurfaceTest, RestoreValidSlotRestoresDevicePolicyCo
     EXPECT_EQ(settings.blockMask(), Settings::standardListBit | Settings::customListBit);
 }
 
+TEST_F(ControlVNextCheckpointSurfaceTest, RestoreValidSlotPublishesDomainListContents) {
+    PolicyCheckpoint::Bundle bundle = PolicyCheckpoint::captureLivePolicy();
+    const auto list = makeCheckpointDomainList();
+    bundle.domainLists.push_back(list);
+
+    std::string encoded;
+    ASSERT_TRUE(PolicyCheckpoint::encodeBundle(bundle, encoded).ok);
+    writeSlotFile(0, encoded);
+
+    rapidjson::Document args(rapidjson::kObjectType);
+    args.AddMember("slot", 0, args.GetAllocator());
+    expectOk(callCheckpoint(12, "CHECKPOINT.RESTORE", args));
+
+    EXPECT_EQ(readTextFile(Settings::saveDirDomainListsPath() + list.listId), "new.example.com\n");
+    const auto lists = blockingListManager.listsSnapshot();
+    ASSERT_EQ(lists.size(), 1u);
+    EXPECT_EQ(lists[0].getId(), list.listId);
+    EXPECT_EQ(lists[0].getDomainsCount(), 1u);
+}
+
 TEST_F(ControlVNextCheckpointSurfaceTest, InvalidStagedDomainReferenceDoesNotMutateLiveState) {
     settings.applyCheckpointPolicyConfig(true, Settings::standardListBit | Settings::customListBit,
                                          0, false, false);
@@ -280,21 +330,49 @@ TEST_F(ControlVNextCheckpointSurfaceTest, InvalidStagedDomainReferenceDoesNotMut
 
     rapidjson::Document args(rapidjson::kObjectType);
     args.AddMember("slot", 0, args.GetAllocator());
-    expectErrorCode(callCheckpoint(12, "CHECKPOINT.RESTORE", args), "INVALID_ARGUMENT");
+    expectErrorCode(callCheckpoint(13, "CHECKPOINT.RESTORE", args), "INVALID_ARGUMENT");
     EXPECT_TRUE(settings.blockEnabled());
+}
+
+TEST_F(ControlVNextCheckpointSurfaceTest, MissingStagedDomainListDirRollsBackWithoutMutation) {
+    settings.applyCheckpointPolicyConfig(true, Settings::standardListBit | Settings::customListBit,
+                                         0, false, false);
+
+    PolicyCheckpoint::Bundle bundle = PolicyCheckpoint::captureLivePolicy();
+    bundle.deviceConfig.blockEnabled = false;
+    const auto list = makeCheckpointDomainList();
+    bundle.domainLists.push_back(list);
+
+    PolicyCheckpoint::SlotMetadata savedMeta;
+    ASSERT_TRUE(PolicyCheckpoint::saveCurrentPolicyToSlot(0, savedMeta).ok);
+
+    const std::string finalPath = Settings::saveDirDomainListsPath() + list.listId;
+    writeTextFile(finalPath, "old.example.com\n");
+
+    PolicyCheckpoint::RestoreStaging staging;
+    ASSERT_TRUE(PolicyCheckpoint::stageBundleForRestore(bundle, staging).ok);
+    EXPECT_EQ(readTextFile(finalPath), "old.example.com\n");
+    EXPECT_EQ(readTextFile(staging.domainListsStageDir + "/" + list.listId), "new.example.com\n");
+
+    std::error_code ec;
+    std::filesystem::remove_all(staging.domainListsStageDir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto status = PolicyCheckpoint::restoreBundleToLivePolicy(bundle, staging);
+    EXPECT_FALSE(status.ok);
+    EXPECT_TRUE(settings.blockEnabled());
+    EXPECT_EQ(readTextFile(finalPath), "old.example.com\n");
+
+    PolicyCheckpoint::Bundle slotBundle;
+    PolicyCheckpoint::SlotMetadata restoredMeta;
+    EXPECT_TRUE(PolicyCheckpoint::readSlot(0, slotBundle, restoredMeta).ok);
+    EXPECT_TRUE(restoredMeta.present);
 }
 
 TEST_F(ControlVNextCheckpointSurfaceTest, SerializerRejectsCorruptAndUnsupportedBundles) {
     PolicyCheckpoint::Bundle bundle = PolicyCheckpoint::captureLivePolicy();
-    PolicyCheckpoint::DomainListSnapshot list;
-    list.listId = "12345678-1234-1234-1234-123456789abc";
-    list.color = Stats::BLACK;
-    list.mask = Settings::standardListBit;
-    list.enabled = true;
-    list.url = "https://example.invalid/list.txt";
-    list.name = "test";
+    auto list = makeCheckpointDomainList();
     list.domains = {"example.com"};
-    list.domainsCount = 1;
     bundle.domainLists.push_back(std::move(list));
     std::string encoded;
     ASSERT_TRUE(PolicyCheckpoint::encodeBundle(bundle, encoded).ok);

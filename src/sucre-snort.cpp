@@ -203,7 +203,8 @@ PolicyCheckpoint::Status snortCheckpointRestore(const std::uint32_t slot,
     if (auto st = PolicyCheckpoint::readSlot(slot, bundle, metadata); !st.ok) {
         return st;
     }
-    if (auto st = PolicyCheckpoint::stageBundleForRestore(bundle); !st.ok) {
+    PolicyCheckpoint::RestoreStaging staging;
+    if (auto st = PolicyCheckpoint::stageBundleForRestore(bundle, staging); !st.ok) {
         return st;
     }
 
@@ -214,7 +215,7 @@ PolicyCheckpoint::Status snortCheckpointRestore(const std::uint32_t slot,
         ~ResetEpochGuard() { snortEndResetEpoch(); }
     } resetEpochGuard;
 
-    if (auto st = PolicyCheckpoint::restoreBundleToLivePolicy(bundle); !st.ok) {
+    if (auto st = PolicyCheckpoint::restoreBundleToLivePolicy(bundle, staging); !st.ok) {
         return st;
     }
 

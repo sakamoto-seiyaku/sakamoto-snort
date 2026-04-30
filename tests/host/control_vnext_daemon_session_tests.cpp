@@ -353,6 +353,19 @@ TEST(ControlVNextDaemonSession, CheckpointSaveDispatchDoesNotRequireDatapathLock
     expectOkResponse(*resp, 22u);
 }
 
+TEST(ControlVNextDaemonSession, CheckpointListDispatchDoesNotRequireDatapathLock) {
+    ControlVNextSessionCommands::TestHooks::reset();
+    Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+    std::unique_lock<std::shared_mutex> datapathLock(mutexListeners);
+
+    h.sendJsonFrame(R"({"id":23,"cmd":"CHECKPOINT.LIST","args":{}})");
+    auto resp = h.tryReadOneResponse(std::chrono::milliseconds(250));
+
+    datapathLock.unlock();
+    ASSERT_TRUE(resp.has_value()) << "CHECKPOINT.LIST should not wait for mutexListeners";
+    expectOkResponse(*resp, 23u);
+}
+
 TEST(ControlVNextDaemonSession, ResetAllWaitsForInFlightControlMutation) {
     ControlVNextSessionCommands::TestHooks::reset();
     ControlVNextSessionCommands::TestHooks::blockCommandUntilReleased("CONFIG.SET");

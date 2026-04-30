@@ -50,6 +50,12 @@
 - [x] 7.3 Run the host checkpoint/control/domain/iprules test gate
 - [x] 7.4 Run ASAN and UBSAN host variants and fix all memory/UB issues before review
 - [x] 7.5 Run TSAN for checkpoint restore concurrency tests if new shared-state commit helpers touch existing locks
-- [ ] 7.6 Run device checkpoint smoke coverage
+- [x] 7.6 Run device checkpoint smoke coverage
 - [x] 7.7 Run `git diff --check` and verify no generated/tracked build artifacts are accidentally staged
 - [x] 7.8 Run final verify/review pass before commit
+
+## 8. Review Fixes
+
+- [x] 8.1 Move `CHECKPOINT.LIST` dispatch outside the datapath listener lock and cover it with a host session test
+- [x] 8.2 Stage DomainList restore files in a private directory and add rollback/no-mutation host coverage
+- [x] 8.3 Rerun OpenSpec, host, sanitizer, and device gates after review fixes

@@ -25,11 +25,13 @@
 #include <ctime>
 #include <fstream>
 #include <functional>
+#include <filesystem>
 #include <iomanip>
 #include <limits>
 #include <set>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -311,8 +313,27 @@ constexpr std::string_view kMagic = "sucre-snort-policy-checkpoint";
     return color == Stats::WHITE ? "allow" : "block";
 }
 
-[[nodiscard]] std::string domainListFilePath(const DomainListSnapshot &list) {
-    return Settings::saveDirDomainListsPath() + list.listId + (list.enabled ? "" : ".disabled");
+[[nodiscard]] std::string trimTrailingSlashes(std::string path) {
+    while (path.size() > 1 && path.back() == '/') {
+        path.pop_back();
+    }
+    return path;
+}
+
+[[nodiscard]] std::string ensureTrailingSlash(std::string path) {
+    if (!path.empty() && path.back() != '/') {
+        path.push_back('/');
+    }
+    return path;
+}
+
+[[nodiscard]] std::string domainListsFinalDir() {
+    return trimTrailingSlashes(Settings::saveDirDomainListsPath());
+}
+
+[[nodiscard]] std::string domainListFilePathInDir(std::string dir,
+                                                  const DomainListSnapshot &list) {
+    return ensureTrailingSlash(std::move(dir)) + list.listId + (list.enabled ? "" : ".disabled");
 }
 
 [[nodiscard]] Status writeFileAtomically(const std::string &finalPath, const std::string &data) {
@@ -336,8 +357,34 @@ constexpr std::string_view kMagic = "sucre-snort-policy-checkpoint";
     return okStatus();
 }
 
-[[nodiscard]] Status prepareDomainListFiles(const std::vector<DomainListSnapshot> &lists) {
-    if (auto st = ensureDir(Settings::saveDirDomainListsPath()); !st.ok) {
+void removeTreeNoexcept(const std::string &path) noexcept {
+    if (path.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+}
+
+[[nodiscard]] Status ensureCleanDirectory(const std::string &path) {
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+    if (ec) {
+        return errStatus("INTERNAL_ERROR", "failed to clear checkpoint staging directory");
+    }
+    std::filesystem::create_directories(path, ec);
+    if (ec) {
+        return errStatus("INTERNAL_ERROR", "failed to create checkpoint staging directory");
+    }
+    return okStatus();
+}
+
+[[nodiscard]] Status prepareDomainListFiles(const std::vector<DomainListSnapshot> &lists,
+                                            RestoreStaging &staging) {
+    staging.domainListsStageDir = tmpSiblingPath(domainListsFinalDir() + ".stage");
+    staging.domainListsBackupDir.clear();
+    staging.domainListsPublished = false;
+
+    if (auto st = ensureCleanDirectory(staging.domainListsStageDir); !st.ok) {
         return st;
     }
     for (const auto &list : lists) {
@@ -346,7 +393,11 @@ constexpr std::string_view kMagic = "sucre-snort-policy-checkpoint";
             data.append(domain);
             data.push_back('\n');
         }
-        if (auto st = writeFileAtomically(domainListFilePath(list), data); !st.ok) {
+        if (auto st = writeFileAtomically(domainListFilePathInDir(staging.domainListsStageDir, list),
+                                          data);
+            !st.ok) {
+            removeTreeNoexcept(staging.domainListsStageDir);
+            staging.domainListsStageDir.clear();
             return st;
         }
     }
@@ -376,6 +427,100 @@ void cleanupStaleDomainListFiles(const std::vector<DomainListSnapshot> &lists) {
         }
     }
     ::closedir(dir);
+}
+
+void rollbackDomainListFiles(RestoreStaging &staging) noexcept {
+    const std::string finalDir = domainListsFinalDir();
+    if (staging.domainListsPublished) {
+        removeTreeNoexcept(finalDir);
+        if (!staging.domainListsBackupDir.empty()) {
+            if (::rename(staging.domainListsBackupDir.c_str(), finalDir.c_str()) == 0) {
+                staging.domainListsBackupDir.clear();
+            }
+        }
+    } else {
+        removeTreeNoexcept(staging.domainListsStageDir);
+    }
+    staging = RestoreStaging{};
+}
+
+void commitDomainListFiles(RestoreStaging &staging) noexcept {
+    removeTreeNoexcept(staging.domainListsBackupDir);
+    staging = RestoreStaging{};
+}
+
+[[nodiscard]] Status publishDomainListFiles(RestoreStaging &staging) {
+    if (staging.domainListsStageDir.empty()) {
+        return errStatus("INTERNAL_ERROR", "checkpoint domain list staging missing");
+    }
+
+    const std::string finalDir = domainListsFinalDir();
+    const auto parent = std::filesystem::path(finalDir).parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+        if (ec) {
+            return errStatus("INTERNAL_ERROR", "failed to create checkpoint domain list parent");
+        }
+    }
+
+    std::error_code ec;
+    const bool finalExists = std::filesystem::exists(finalDir, ec);
+    if (ec) {
+        return errStatus("INTERNAL_ERROR", "failed to stat checkpoint domain list directory");
+    }
+
+    if (finalExists) {
+        staging.domainListsBackupDir = tmpSiblingPath(finalDir + ".backup");
+        removeTreeNoexcept(staging.domainListsBackupDir);
+        if (::rename(finalDir.c_str(), staging.domainListsBackupDir.c_str()) != 0) {
+            staging.domainListsBackupDir.clear();
+            return errStatus("INTERNAL_ERROR", "failed to stage previous domain list directory");
+        }
+    }
+
+    if (::rename(staging.domainListsStageDir.c_str(), finalDir.c_str()) != 0) {
+        if (!staging.domainListsBackupDir.empty()) {
+            (void)::rename(staging.domainListsBackupDir.c_str(), finalDir.c_str());
+            staging.domainListsBackupDir.clear();
+        }
+        return errStatus("INTERNAL_ERROR", "failed to publish checkpoint domain list directory");
+    }
+
+    staging.domainListsPublished = true;
+    return okStatus();
+}
+
+[[nodiscard]] Status parseUpdatedAtTime(const std::string &updatedAt, std::time_t &out) {
+    out = 0;
+    if (updatedAt.empty()) {
+        return okStatus();
+    }
+
+    std::tm tm {};
+    std::istringstream ss{updatedAt};
+    ss >> std::get_time(&tm, "%Y-%m-%d_%H:%M:%S");
+    if (ss.fail() || !ss.eof()) {
+        return errStatus("INVALID_ARGUMENT", "domain list updatedAt invalid");
+    }
+    out = std::mktime(&tm);
+    return okStatus();
+}
+
+[[nodiscard]] Status
+buildBlockingListsForRestore(const std::vector<DomainListSnapshot> &snapshots,
+                             std::unordered_map<std::string, BlockingList> &out) {
+    out.clear();
+    out.reserve(snapshots.size());
+    for (const auto &list : snapshots) {
+        std::time_t updatedAt = 0;
+        if (auto st = parseUpdatedAtTime(list.updatedAt, updatedAt); !st.ok) {
+            return st;
+        }
+        out.try_emplace(list.listId, list.listId, list.name, list.url, list.color, list.mask,
+                        updatedAt, list.outdated, list.etag, list.enabled, list.domainsCount);
+    }
+    return okStatus();
 }
 
 [[nodiscard]] bool isValidGuid36(const std::string_view guid) {
@@ -1136,12 +1281,15 @@ Status readSlot(const std::uint32_t slot, Bundle &bundle, SlotMetadata &metadata
     return okStatus();
 }
 
-Status stageBundleForRestore(const Bundle &bundle) {
+Status stageBundleForRestore(const Bundle &bundle, RestoreStaging &staging) {
+    cleanupRestoreStaging(staging);
     if (auto st = validateBundle(bundle); !st.ok) {
         return st;
     }
-    return prepareDomainListFiles(bundle.domainLists);
+    return prepareDomainListFiles(bundle.domainLists, staging);
 }
+
+void cleanupRestoreStaging(RestoreStaging &staging) noexcept { rollbackDomainListFiles(staging); }
 
 Bundle captureLivePolicy() {
     Bundle bundle {};
@@ -1307,9 +1455,29 @@ Status validateBundle(const Bundle &bundle) {
     return okStatus();
 }
 
-Status restoreBundleToLivePolicy(const Bundle &bundle) {
+Status restoreBundleToLivePolicy(const Bundle &bundle, RestoreStaging &staging) {
+    const auto fail = [&](const Status &status) {
+        rollbackDomainListFiles(staging);
+        return status;
+    };
+
     if (auto st = validateBundle(bundle); !st.ok) {
-        return st;
+        return fail(st);
+    }
+
+    std::unordered_map<std::string, BlockingList> restoredLists;
+    if (auto st = buildBlockingListsForRestore(bundle.domainLists, restoredLists); !st.ok) {
+        return fail(st);
+    }
+
+    if (auto st = publishDomainListFiles(staging); !st.ok) {
+        return fail(st);
+    }
+
+    const auto ipRestore = pktManager.ipRules().restorePolicySnapshot(bundle.ipRules);
+    if (!ipRestore.ok) {
+        return fail(errStatus("INVALID_ARGUMENT",
+                              "failed to restore iprules checkpoint: " + ipRestore.error));
     }
 
     settings.applyCheckpointPolicyConfig(bundle.deviceConfig.blockEnabled, bundle.deviceConfig.blockMask,
@@ -1328,7 +1496,7 @@ Status restoreBundleToLivePolicy(const Bundle &bundle) {
     }
 
     domManager.resetPolicyForCheckpointRestore();
-    blockingListManager.reset();
+    blockingListManager.replaceAllForCheckpointRestore(std::move(restoredLists));
     rulesManager.reset();
 
     for (const auto &rule : bundle.domainRules.rules) {
@@ -1336,17 +1504,6 @@ Status restoreBundleToLivePolicy(const Bundle &bundle) {
     }
     rulesManager.ensureNextRuleIdAtLeast(bundle.domainRules.nextRuleId);
 
-    for (const auto &list : bundle.domainLists) {
-        if (!blockingListManager.addBlockingList(list.listId, list.url, list.name, list.color,
-                                                 list.mask)) {
-            return errStatus("INTERNAL_ERROR", "failed to restore domain list metadata");
-        }
-        if (!blockingListManager.updateBlockingList(list.listId, list.url, list.name, list.color,
-                                                    list.mask, list.domainsCount, list.updatedAt,
-                                                    list.etag, list.enabled, list.outdated)) {
-            return errStatus("INTERNAL_ERROR", "failed to restore domain list metadata");
-        }
-    }
     domManager.start(blockingListManager.getLists());
 
     addPolicyScope(bundle.domainPolicy.device, nullptr);
@@ -1354,11 +1511,8 @@ Status restoreBundleToLivePolicy(const Bundle &bundle) {
         addPolicyScope(appPolicy.policy, appManager.make(appPolicy.uid));
     }
 
-    const auto ipRestore = pktManager.ipRules().restorePolicySnapshot(bundle.ipRules);
-    if (!ipRestore.ok) {
-        return errStatus("INVALID_ARGUMENT", "failed to restore iprules checkpoint: " + ipRestore.error);
-    }
     cleanupStaleDomainListFiles(bundle.domainLists);
+    commitDomainListFiles(staging);
     return okStatus();
 }
 

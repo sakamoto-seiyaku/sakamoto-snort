@@ -40,6 +40,8 @@ public:
 
     void reset();
 
+    void replaceAllForCheckpointRestore(std::unordered_map<std::string, BlockingList> lists);
+
     void save();
 
     std::vector<BlockingList> getLists();
