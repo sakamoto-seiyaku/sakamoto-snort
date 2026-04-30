@@ -23,7 +23,7 @@ The current daemon build is a Soong `cc_binary` in `Android.bp`. It statically l
 - No multi-ABI release in the first version; first release is `arm64-v8a` only.
 - No assets/raw executable copy path and no dynamic code download path.
 - No frontend Flutter/Gradle APK build, APK install, or RuntimeService implementation in this change.
-- No removal of the legacy Soong daemon build path in this change; that is a follow-up after APK/RuntimeService validation.
+- No second official daemon build path after this change; historical Soong material may be archived, but active daemon build/deploy/debug documentation and commands must point to NDK.
 
 ## Decisions
 
@@ -33,9 +33,9 @@ The current daemon build is a Soong `cc_binary` in `Android.bp`. It statically l
 
    The NDK is treated as an external Android SDK dependency, not a repository artifact and not a project-specific absolute path. The default local Linux SDK root for this project is `/home/js/.local/share/android-sdk`, so the default local NDK path is `/home/js/.local/share/android-sdk/ndk/29.0.14206865`. Build tooling must still be CI-compatible by discovering the NDK from `ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT`, or `$ANDROID_SDK_ROOT/ndk/29.0.14206865` / `$ANDROID_HOME/ndk/29.0.14206865`. GitHub Actions installs the same version into the runner SDK root with `sdkmanager` or an Android setup action.
 
-2. **Create a dogfood binary before APK integration.**
+2. **Use one canonical executable payload with two output views.**
 
-   The first build output is `build-output/sucre-snort-ndk`. Existing `dev/dev-deploy.sh --binary` and `dx-smoke` already exercise the actual root daemon lifecycle, sockets, iptables hooks, NFQUEUE, control plane, and telemetry. This isolates build/dependency risk before adding RuntimeService packaging concerns.
+   The canonical output is `build-output/sucre-snort-ndk`. The APK-native staging output `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so` is the same Android executable payload copied under the packageable native-library name; it is not a separately built `add_library(SHARED)` artifact. The rooted-device dogfood flow, `dx-smoke`, IP matrix, and future RuntimeService launch must all validate that same payload.
 
 3. **Remove private Android libraries with local compatibility shims.**
 
@@ -56,11 +56,20 @@ The current daemon build is a Soong `cc_binary` in `Android.bp`. It statically l
 
    RuntimeService needs a cheap compatibility gate after root launch. vNext `HELLO` keeps all existing fields and adds `daemonBuildId`, `artifactAbi`, and `capabilities`. Existing clients that ignore unknown fields remain compatible.
 
-7. **Keep Soong as legacy until the frontend integration change.**
+7. **Remove the active Soong daemon workflow now.**
 
-   The NDK path is now the release-candidate daemon path, and NDK validation must not call
-   `snort-build-regen-graph`. Removing the legacy Soong daemon release surface is deferred until
-   APK/RuntimeService packaging has passed on-device validation.
+   The NDK path is now the release daemon path. Active repo-root CMake targets, VS Code tasks,
+   `dev/dev-deploy.sh`, VS Code debug helper rebuild hooks, and active developer documentation must
+   stop advertising or calling `dev/dev-build.sh`, `snort-build`, `snort-build-clean`, or
+   `snort-build-regen-graph` for the daemon. Legacy Soong daemon scripts/docs should be archived
+   when historical context is useful and deleted when they only create a duplicate official path.
+
+8. **Keep real-device debug on the same NDK payload.**
+
+   The VS Code / CodeLLDB flow remains in scope because it is part of current rooted-device
+   development. It should build/stage the NDK daemon and use NDK r29 host `lldb` plus device
+   `lldb-server` instead of requiring `LINEAGE_ROOT`, `lunch`, AOSP `lldbclient.py`, or Soong
+   unstripped output for daemon debugging.
 
 ## Risks / Trade-offs
 
@@ -68,7 +77,7 @@ The current daemon build is a Soong `cc_binary` in `Android.bp`. It statically l
 - [Risk] Vendored netfilter sources may need Android-specific compile flags. -> Mitigation: start from the current Lineage source lists and upstream release tarballs, keep the static library build minimal, and validate with `readelf` plus device NFQUEUE smoke.
 - [Risk] Static libc++ can conflict if the daemon later loads plugins or shared C++ libraries. -> Mitigation: the release artifact is a single executable-style native artifact; if future shared C++ components are introduced, revisit `c++_shared`.
 - [Risk] APK native library extraction differs by AGP/minSdk defaults. -> Mitigation: defer AGP packaging to a frontend change after this backend NDK artifact is proven.
-- [Risk] Removing Soong quickly removes a known build fallback. -> Mitigation: keep Soong legacy entrypoints until APK/RuntimeService validation has its own change.
+- [Risk] Removing the active Soong daemon workflow removes a known fallback. -> Mitigation: keep historical material only in archive, validate the NDK payload through current rooted-device deploy, `dx-smoke`, IP matrix, telemetry, and debug workflow before archiving this change.
 
 ## Migration Plan
 
@@ -77,7 +86,9 @@ The current daemon build is a Soong `cc_binary` in `Android.bp`. It statically l
 3. Vendor and statically link the netfilter libraries.
 4. Validate `build-output/sucre-snort-ndk` with `readelf`, `dev-deploy --binary`, `dx-smoke`, IP device profiles, and telemetry checks.
 5. Stage the APK-native `.so` artifact and document the future RuntimeService launch metadata contract.
-6. Keep formal Soong removal and frontend APK install validation as follow-up work.
+6. Retarget active CMake, VS Code, deploy, debug, and developer docs to the NDK daemon path.
+7. Archive or delete legacy Soong daemon entrypoints so no active workflow depends on Android source tree daemon output.
+8. Keep frontend APK install validation as follow-up work.
 
 ## Open Questions
 

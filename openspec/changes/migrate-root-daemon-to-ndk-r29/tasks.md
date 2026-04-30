@@ -37,9 +37,19 @@
 - [x] 5.5 Run IP device smoke/matrix profiles and telemetry consumer validation against the NDK daemon artifact.
 - [x] 5.6 Verify the staged APK-native `.so` artifact exists and is the same Android ARM64 executable payload validated by the rooted device tests.
 
-## 6. Release Workflow Boundaries
+## 6. Active Workflow Migration To NDK
 
-- [x] 6.1 Defer frontend APK install validation and formal Soong daemon release-path removal to follow-up changes after this NDK artifact is proven.
-- [x] 6.2 Keep or migrate helper/tool builds independently so no release task depends on Android source tree daemon output.
-- [x] 6.3 Update docs and developer commands to point to the NDK daemon build and deployment flow.
-- [x] 6.4 Route NDK daemon validation through `snort-build-ndk` / `dev/dev-build-ndk.sh`; keep `snort-build-regen-graph` only for separate legacy Soong / `Android.bp` graph changes.
+- [ ] 6.1 Remove active repo-root CMake daemon targets that invoke the Android source / Soong flow (`snort-build`, `snort-build-clean`, `snort-build-regen-graph`) and make `snort-build-ndk` the only daemon build target exposed by the current workflow.
+- [ ] 6.2 Retarget `.vscode/tasks.json` so the default build task invokes `snort-build-ndk`, and remove stale task entries that point at missing or obsolete daemon/test targets.
+- [ ] 6.3 Make `dev/dev-deploy.sh` default to `build-output/sucre-snort-ndk`, remove old daemon variant selection tied to Soong outputs, and keep explicit `--binary` override for diagnostics.
+- [ ] 6.4 Retarget `dev/dev-vscode-debug-task.py` rebuild/stage hooks to `dev/dev-build-ndk.sh` and the NDK daemon artifact.
+- [ ] 6.5 Replace the active daemon native-debug backend with an NDK r29 `lldb` / `lldb-server` flow that does not require `LINEAGE_ROOT`, `lunch`, AOSP `lldbclient.py`, or Soong unstripped daemon output.
+- [ ] 6.6 Archive or delete legacy Soong daemon scripts/docs that would otherwise remain discoverable as an active daemon build path.
+
+## 7. Documentation And Revalidation
+
+- [ ] 7.1 Update active developer docs (`AGENTS.md`, `dev/README.md`, `docs/tooling/NDK_DAEMON_BUILD.md`, `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`, and relevant testing docs) so daemon build/deploy/debug instructions point to NDK only.
+- [ ] 7.2 Validate OpenSpec after the scope update with `openspec validate migrate-root-daemon-to-ndk-r29 --strict` and confirm `openspec instructions apply` reports the new pending migration tasks.
+- [ ] 7.3 Re-run NDK build validation and confirm the dogfood binary and APK-native `.so` are byte-identical executable payloads.
+- [ ] 7.4 Re-run rooted-device deploy, vNext `HELLO`, `dx-smoke`, and IP matrix against the NDK daemon after workflow cleanup.
+- [ ] 7.5 Smoke the VS Code/CodeLLDB preparation path enough to confirm it stages/debugs the NDK daemon without Android source tree dependencies.

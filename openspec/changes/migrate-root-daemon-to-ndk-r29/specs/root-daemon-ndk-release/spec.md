@@ -44,10 +44,10 @@ The NDK daemon build MUST use vendored upstream sources for `libmnl 1.0.5`, `lib
 - **THEN** their source version, origin, and license/NOTICE information SHALL be present in the vendored dependency tree or release documentation
 
 ### Requirement: NDK dogfood artifact follows current real-device deploy flow
-The NDK dogfood artifact MUST be runnable through the existing adb/root development flow by explicitly selecting `build-output/sucre-snort-ndk` as the daemon binary.
+The NDK dogfood artifact MUST be runnable through the existing adb/root development flow, and active deploy defaults MUST use `build-output/sucre-snort-ndk` as the daemon binary.
 
 #### Scenario: Existing deploy script starts NDK daemon
-- **WHEN** `dev/dev-deploy.sh --binary build-output/sucre-snort-ndk` runs on a rooted test device
+- **WHEN** `dev/dev-deploy.sh` runs on a rooted test device after a successful NDK build
 - **THEN** the daemon SHALL start from `/data/local/tmp/sucre-snort-dev`, expose `@sucre-snort-control-vnext`, and answer vNext `HELLO`
 
 #### Scenario: Existing smoke flow validates NDK daemon
@@ -55,11 +55,15 @@ The NDK dogfood artifact MUST be runnable through the existing adb/root developm
 - **THEN** the platform, control, and datapath smoke checks SHALL pass without requiring Android source tree build output
 
 ### Requirement: Release daemon is staged as APK-native artifact
-The NDK build MUST stage the release daemon as `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so`. This change MUST NOT require a frontend Flutter/Gradle APK build or install validation.
+The NDK build MUST stage the release daemon as `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so`. This staged file MUST be the same executable payload as `build-output/sucre-snort-ndk`, copied under the APK-native library name for future packaging. This change MUST NOT require a frontend Flutter/Gradle APK build or install validation.
 
 #### Scenario: APK-native artifact is staged
 - **WHEN** the NDK daemon build completes
 - **THEN** `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so` SHALL exist and identify as an ARM64 Android executable artifact
+
+#### Scenario: APK-native artifact matches dogfood payload
+- **WHEN** both `build-output/sucre-snort-ndk` and `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so` exist after the NDK build
+- **THEN** the two files SHALL be byte-identical executable payloads
 
 #### Scenario: RuntimeService launch contract is documented for follow-up
 - **WHEN** frontend APK packaging is implemented in a later change
@@ -74,4 +78,22 @@ The NDK daemon build and validation workflow MUST NOT require Lineage, Soong, `s
 
 #### Scenario: Android.bp graph rebuild is not part of NDK validation
 - **WHEN** validating the NDK daemon migration
-- **THEN** `snort-build-regen-graph` SHALL NOT be required unless a separate change modifies `Android.bp`
+- **THEN** `snort-build-regen-graph` SHALL NOT be required or exposed as an active daemon validation target
+
+### Requirement: Active daemon workflow is NDK-only
+The repository MUST NOT leave two active daemon build systems. Active repo-root CMake targets, VS Code tasks, deploy defaults, debug rebuild hooks, and active developer documentation MUST use the NDK r29 daemon path. Legacy Android source / Soong daemon entrypoints MUST be archived or deleted when they would otherwise be discoverable as supported daemon workflow.
+
+#### Scenario: Repo-root build target is NDK-only
+- **WHEN** a developer runs the default VS Code build task or repo-root daemon build target
+- **THEN** it SHALL invoke `snort-build-ndk` / `dev/dev-build-ndk.sh`
+- **AND** it SHALL NOT invoke `dev/dev-build.sh`, `snort-build`, `snort-build-clean`, or `snort-build-regen-graph`
+
+#### Scenario: Debug workflow rebuilds NDK payload
+- **WHEN** the VS Code real-device debug run workflow prepares or restarts a run session
+- **THEN** it SHALL build and stage `build-output/sucre-snort-ndk`
+- **AND** it SHALL NOT require `LINEAGE_ROOT`, `lunch`, AOSP `lldbclient.py`, or Soong unstripped daemon output
+
+#### Scenario: Active docs do not advertise Soong daemon flow
+- **WHEN** a developer reads active developer docs for building, deploying, validating, or debugging the daemon
+- **THEN** the documented daemon commands SHALL point to the NDK build/deploy/debug workflow
+- **AND** any Android source / Soong daemon information SHALL be clearly archived or removed from active workflow docs
