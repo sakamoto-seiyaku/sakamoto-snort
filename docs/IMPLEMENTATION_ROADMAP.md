@@ -55,7 +55,9 @@ Status 口径（全篇统一）：
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
 - Device/DX 冒烟补齐以 casebook 为验收口径推进（见 2.2）。
 - 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
-- OpenSpec 当前 active changes：无；`add-flow-telemetry-plane` 已完成并归档。
+- OpenSpec 当前 active changes：
+  - `add-debug-stream-explainability`：Debug Stream 自包含取证链条（已创建，待实现）。
+  - `add-policy-bundle-checkpoints`：前端 checkpoint / rollback 所需的后端固定槽位 policy bundle 原语（已创建，待实现）。
 
 ### 1.2 功能（Domain + IP + Flow Telemetry）
 
@@ -68,6 +70,7 @@ Status 口径（全篇统一）：
 - IPRULES dual-stack（IPv4/IPv6）+ L4 conntrack core 已落地；真机 Tier-1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
 - [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
 - Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Debug Stream 保留为深度取证能力，Metrics 保留为后端低基数健康状态。
+- 前端支撑缺口已收敛：Flow Telemetry 已完成；Debug Stream explainability 已独立建 change；checkpoint / rollback 升级为后端需要提供的最小强保证能力，形式为固定槽位 Policy Bundle Checkpoint。
 
 ## 2. 已完成（事实清单）
 
@@ -128,7 +131,8 @@ Status 口径（全篇统一）：
 
 ### 3.2 后续独立能力（不混入 Flow Telemetry MVP）
 
-- [BACKLOG] Debug Stream explainability：补齐策略链条证据，使 Debug 场景尽量只靠 Stream 还原 DNS 请求与 packet verdict 的取证链条。
+- [NOW] `add-debug-stream-explainability`：补齐策略链条证据，使 Debug 场景只靠 tracked Debug Stream 还原 DNS 请求与 packet verdict 的取证链条；不新增 Flow Telemetry records、Metrics、Top-K、timeline/history。
+- [NOW] `add-policy-bundle-checkpoints`：新增 3 个固定 `CHECKPOINT.*` slot，保存 policy-only bundle，并提供 atomic-or-no-op restore；用于前端 undo / rollback / 自救工作流的后端最小强保证原语。
 - [BACKLOG] Flow Telemetry consumer / 前端持久化查询库：records 的落盘、索引、Top-K、timeline、Geo/ASN/注释等由前端/consumer 层实现，不放进 daemon。
 
 ### 3.3 迁移与下线（前端/对外工具；不是后端能力缺口）
@@ -156,6 +160,7 @@ Status 口径（全篇统一）：
 
 - **DomainPolicy 命名边界已收口，后续以接口同步为主**：`GLOBAL_*` 已对外收敛为 `DOMAIN_DEVICE_WIDE_*`；后续不再把它列为主线 backlog，只在接口文档/测试发现漂移时修正。
 - **可观测性分层进入 Flow Telemetry 阶段**：旧的 A/B/C/D counters/stream/perfmetrics 已落地；Flow Telemetry MVP 已补齐前端常态 Top-K/timeline/history 所需的原始 records 层。后续继续按 `Flow Telemetry records`（业务事实）、`Debug Stream`（深度取证）、`Metrics`（后端低基数健康状态）三层推进。
+- **checkpoint / rollback 升级为后端最小强保证能力**：前端仍负责命名、历史、备注、工作流与导入导出包；daemon 只提供固定槽位 policy bundle snapshot 与 atomic restore，避免前端用多条 apply 命令模拟回滚时出现半恢复。
 - **`ip-leak` 继续后置，但必须重新定义定位**：它横跨 domain 与 IP，两边都相关；当前不宜提前混入已收敛主线。需要在统一口径下重新回答它到底是“补位能力 / 默认关闭能力 / 某类场景下的重要能力”中的哪一种。
 - **L4 conntrack core 已落地，但更强的 flow-state 仍应谨慎后置**：当前仓库已经具备最小闭环的 userspace conntrack（`ct.state/ct.direction` + hot-path gating + host/真机验证）；后续若继续扩展更强的 L4 状态语义，仍应作为独立能力评估其热路径成本、内存模型与 Android 设备约束。当前纲领入口见 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`；实现原则仍是“以 OVS conntrack 语义为母本做 C++ 重实现”，不是重新设计另一套状态系统。
 - **L7 / HTTP / HTTPS 识别暂不作为已承诺主线**：现阶段更稳的产品定位仍是 DNS/domain-policy + IPv4 L3/L4 判决与观测。更高层协议识别是否值得做、能做到什么程度，应在后续单独评估，而不是默认沿着“继续往上解包”自然推进。
