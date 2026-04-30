@@ -7,46 +7,30 @@ SNORT_ROOT="$SCRIPT_DIR/.."
 
 export PATH="$HOME/bin:$PATH"
 
-LINEAGE_ROOT="${LINEAGE_ROOT:-$HOME/android/lineage}"
+source "$SCRIPT_DIR/dev-ndk-env.sh"
+
 NEPER_SRC_DIR="${DEV_NEPER_SOURCE_DIR:-$SNORT_ROOT/tests/device/ip/third_party/neper}"
 OUT_DIR="${DEV_NEPER_OUTPUT_DIR:-$SNORT_ROOT/build-output}"
 OUT_TCP_CRR="${DEV_NEPER_TCP_CRR_OUT:-$OUT_DIR/iptest-neper-tcp_crr}"
 OUT_UDP_STREAM="${DEV_NEPER_UDP_STREAM_OUT:-$OUT_DIR/iptest-neper-udp_stream}"
 
-find_manual_ndk_root() {
-    find "$LINEAGE_ROOT/out-kernel" \
-        -path '*/prebuilts/ndk-r23/toolchains/llvm/prebuilt/linux-x86_64' \
-        -type d 2>/dev/null | head -n 1
-}
-
 echo "=== IP Test Neper Build ==="
-echo "LINEAGE_ROOT: $LINEAGE_ROOT"
 echo "neper src: $NEPER_SRC_DIR"
 echo ""
-
-if [[ ! -d "$LINEAGE_ROOT" ]]; then
-    echo "❌ 未找到 LINEAGE_ROOT: $LINEAGE_ROOT" >&2
-    exit 1
-fi
 
 if [[ ! -f "$NEPER_SRC_DIR/Makefile" ]]; then
     echo "❌ 未找到 neper 源码目录: $NEPER_SRC_DIR" >&2
     exit 1
 fi
 
-ndk_root="$(find_manual_ndk_root)"
-if [[ -z "$ndk_root" ]]; then
-    echo "❌ 未找到 kernel NDK toolchain (ndk-r23)" >&2
-    exit 1
-fi
-
-cc="$ndk_root/bin/aarch64-linux-android31-clang"
+ndk_root="$(snort_ndk_require)"
+cc="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${SNORT_ANDROID_API}-clang"
 if [[ ! -x "$cc" ]]; then
-    echo "❌ 未找到 clang: $cc" >&2
+    echo "❌ 未找到 NDK clang: $cc" >&2
     exit 1
 fi
 
-echo "Using kernel NDK toolchain:"
+echo "Using toolchain:"
 echo "  NDK root: $ndk_root"
 echo "  CC: $cc"
 echo ""

@@ -79,6 +79,6 @@
 
 - Host：`cmake --build --preset dev-debug --target snort-host-tests`。
 - Host + ASAN：`cmake --build --preset dev-debug --target snort-host-tests-asan`。
-- Android build：`cmake --build --preset dev-debug --target snort-build`。
+- Android build：`cmake --build --preset dev-debug --target snort-build-ndk`。
 - Device/DX 后续建议：并发 `RESETALL`、DNS inject、IP traffic，并观察 reset 后没有 stale app/domain/host event 或旧 save 文件回写。
 - Device/DX 后续建议：并发大 `DOMAINLISTS.IMPORT` / `IPRULES.APPLY` 与 datapath perf，观察 `nfq_total_us` tail latency 不再因普通 vNext mutation 持有 `mutexListeners` 而尖峰。

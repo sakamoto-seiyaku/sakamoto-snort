@@ -80,6 +80,11 @@ The NDK daemon build and validation workflow MUST NOT require Lineage, Soong, `s
 - **WHEN** validating the NDK daemon migration
 - **THEN** `snort-build-regen-graph` SHALL NOT be required or exposed as an active daemon validation target
 
+#### Scenario: Android source daemon files are not active
+- **WHEN** the repository root is inspected after the NDK migration
+- **THEN** it SHALL NOT expose an active root daemon `Android.bp` or `sucre-snort.rc`
+- **AND** historical Android source / Soong daemon material, if retained, SHALL live under archive-only paths
+
 ### Requirement: Active daemon workflow is NDK-only
 The repository MUST NOT leave two active daemon build systems. Active repo-root CMake targets, VS Code tasks, deploy defaults, debug rebuild hooks, and active developer documentation MUST use the NDK r29 daemon path. Legacy Android source / Soong daemon entrypoints MUST be archived or deleted when they would otherwise be discoverable as supported daemon workflow.
 
@@ -97,3 +102,19 @@ The repository MUST NOT leave two active daemon build systems. Active repo-root 
 - **WHEN** a developer reads active developer docs for building, deploying, validating, or debugging the daemon
 - **THEN** the documented daemon commands SHALL point to the NDK build/deploy/debug workflow
 - **AND** any Android source / Soong daemon information SHALL be clearly archived or removed from active workflow docs
+
+#### Scenario: Native helper builds use NDK r29
+- **WHEN** an active native test helper build script builds a device-side helper binary
+- **THEN** it SHALL resolve Android NDK `29.0.14206865` through the shared NDK discovery helper
+- **AND** it SHALL NOT require `LINEAGE_ROOT`, out-kernel NDK r23 prebuilts, or Soong fallback builds
+
+#### Scenario: Checked-in compile database does not point at Soong
+- **WHEN** a developer opens the repository after the NDK migration
+- **THEN** the repository SHALL NOT track a stale Lineage/Soong `compile_commands.json`
+- **AND** compile databases SHALL be treated as local generated files
+
+#### Scenario: Active device diagnostics use SDK and NDK tools
+- **WHEN** active adb or tombstone helper scripts run after the NDK migration
+- **THEN** adb discovery SHALL use explicit `ADB`, `PATH`, or Android SDK `platform-tools`
+- **AND** tombstone symbolization SHALL use NDK r29 `ndk-stack`
+- **AND** neither path SHALL require `LINEAGE_ROOT`, AOSP `stack`, or Android source tree prebuilts

@@ -17,7 +17,7 @@ export ADB_SERIAL="28201JEGR0XPAJ"   # 例：Pixel 6a
 
 # 部署（可选；若已在机上运行可用 --skip-deploy）
 cmake --preset dev-debug
-cmake --build --preset dev-debug --target snort-build
+cmake --build --preset dev-debug --target snort-build-ndk
 bash dev/dev-deploy.sh --serial "$ADB_SERIAL"
 
 # IP 模组 smoke/perf（Tier‑1: netns+veth）

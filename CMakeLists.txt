@@ -5,16 +5,9 @@ project(sucre_snort_workspace LANGUAGES NONE)
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
 
-set(
-  SNORT_BUILD_SCRIPT
-  "${CMAKE_SOURCE_DIR}/dev/dev-build.sh"
-  CACHE FILEPATH
-  "Delegated Android build entrypoint for sucre-snort"
-)
-
 option(
   SNORT_ENABLE_DELEGATED_BUILD_TARGETS
-  "Expose delegated Android build targets in the repo-root CMake workspace"
+  "Expose repo-root build/deploy/debug helper targets"
   ON
 )
 option(
@@ -35,37 +28,10 @@ option(
 
 if(SNORT_ENABLE_DELEGATED_BUILD_TARGETS)
   add_custom_target(
-    snort-build
-    COMMAND "${BASH_EXECUTABLE}" "${SNORT_BUILD_SCRIPT}"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Delegated Android build via dev/dev-build.sh"
-    USES_TERMINAL
-    VERBATIM
-  )
-
-  add_custom_target(
-    snort-build-clean
-    COMMAND "${BASH_EXECUTABLE}" "${SNORT_BUILD_SCRIPT}" --clean
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Delegated Android clean build via dev/dev-build.sh --clean"
-    USES_TERMINAL
-    VERBATIM
-  )
-
-  add_custom_target(
     snort-build-ndk
     COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/dev/dev-build-ndk.sh"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Build sucre-snort daemon through Android NDK r29"
-    USES_TERMINAL
-    VERBATIM
-  )
-
-  add_custom_target(
-    snort-build-regen-graph
-    COMMAND "${BASH_EXECUTABLE}" "${SNORT_BUILD_SCRIPT}" --regen-graph
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Delegated Android build with graph regeneration"
     USES_TERMINAL
     VERBATIM
   )
@@ -324,7 +290,7 @@ if(SNORT_ENABLE_DEVICE_TESTS)
 endif()
 
 message(STATUS "sucre-snort repo-root workflow workspace configured")
-message(STATUS "Delegated build/debug targets: snort-build, snort-build-clean, snort-build-ndk, snort-build-regen-graph, snort-deploy-stage, snort-debug-run-workflow, snort-debug-attach-workflow, snort-debug-cleanup, snort-debug-status")
+message(STATUS "Build/debug targets: snort-build-ndk, snort-deploy-stage, snort-debug-run-workflow, snort-debug-attach-workflow, snort-debug-cleanup, snort-debug-status")
 if(SNORT_ENABLE_HOST_TESTS)
   message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-ubsan, snort-host-tests-tsan, snort-host-tests-gate")
   if(TARGET snort-host-coverage)

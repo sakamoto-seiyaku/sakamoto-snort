@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NATIVE_LINEAGE_ADB="${LINEAGE_ROOT:-$HOME/android/lineage}/prebuilts/runtime/adb"
+SNORT_DEFAULT_ANDROID_SDK_ROOT="${SNORT_DEFAULT_ANDROID_SDK_ROOT:-/home/js/.local/share/android-sdk}"
 
 pick_adb_bin() {
     local -a candidates=()
@@ -19,9 +19,24 @@ pick_adb_bin() {
         return 0
     }
 
+    append_sdk_adb_candidates() {
+        local sdk_root="$1"
+        if [[ -z "$sdk_root" ]]; then
+            return 0
+        fi
+        append_candidate "$sdk_root/platform-tools/adb"
+        append_candidate "$sdk_root/platform-tools/adb.exe"
+        return 0
+    }
+
     if [[ -n "${ADB:-}" ]]; then
         append_candidate "$ADB"
     fi
+
+    append_sdk_adb_candidates "${ANDROID_SDK_ROOT:-}"
+    append_sdk_adb_candidates "${ANDROID_HOME:-}"
+    append_sdk_adb_candidates "$SNORT_DEFAULT_ANDROID_SDK_ROOT"
+    append_sdk_adb_candidates "$HOME/Android/Sdk"
 
     local IFS=':'
     local dir
@@ -31,10 +46,6 @@ pick_adb_bin() {
             append_candidate "$dir/adb.exe"
         fi
     done
-
-    if [[ -x "$NATIVE_LINEAGE_ADB" ]]; then
-        append_candidate "$NATIVE_LINEAGE_ADB"
-    fi
 
     local c
     for c in "${candidates[@]}"; do

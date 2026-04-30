@@ -145,7 +145,7 @@ void PacketManager::refreshIfacesOnce() {
     refreshIfaces();
 }
 
-// Bundled translation unit: keep IpRulesEngine out of the Android.bp srcs list to avoid
-// requiring a full Soong graph regeneration for local incremental builds.
+// Bundled translation unit: keep IpRulesEngine coupled to PacketManager for the
+// current daemon source-list shape used by host and NDK builds.
 #include "Conntrack.cpp"
 #include "IpRulesEngine.cpp"

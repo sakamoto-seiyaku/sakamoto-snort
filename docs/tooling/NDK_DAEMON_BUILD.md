@@ -39,6 +39,10 @@ build-output/sucre-snort-ndk
 build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so
 ```
 
+Both paths contain the same ARM64 Android executable payload. The `.so` path is
+an APK-native staging name for future packaging; it is not a separate shared
+library build.
+
 The repo-root CMake workflow also exposes:
 
 ```bash
@@ -49,9 +53,9 @@ The build script discovers NDK r29 from `ANDROID_NDK_HOME`,
 `ANDROID_NDK_ROOT`, `$ANDROID_SDK_ROOT/ndk/29.0.14206865`,
 `$ANDROID_HOME/ndk/29.0.14206865`, or the documented local default.
 
-This NDK path is independent of the legacy Soong/Blueprint graph. Do not use
-`snort-build-regen-graph` for NDK daemon validation; that target remains only
-for separate legacy Soong changes such as `Android.bp` edits.
+This NDK path is the active daemon build path and is independent of the legacy
+Soong/Blueprint graph. The repo-root workflow no longer exposes a Soong daemon
+build or graph-regeneration target.
 
 ## APK-Native Staging
 
@@ -96,7 +100,7 @@ capabilities contains stable compatibility strings
 Dogfood the NDK daemon directly before APK RuntimeService integration:
 
 ```bash
-bash dev/dev-deploy.sh --binary build-output/sucre-snort-ndk
+bash dev/dev-deploy.sh
 bash tests/integration/dx-smoke.sh --skip-deploy --cleanup-forward
 bash tests/device/ip/run.sh --profile matrix --skip-deploy --cleanup-forward
 ```

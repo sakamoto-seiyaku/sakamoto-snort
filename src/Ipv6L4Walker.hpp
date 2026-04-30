@@ -22,7 +22,7 @@
 // - classifies terminal / fragment / invalid
 // - parses ports only for known TCP/UDP
 //
-// NOTE: This is header-only to keep Android.bp stable (no new translation unit).
+// NOTE: This is header-only to keep the daemon source list stable.
 [[nodiscard]] inline L4ParseResult
 parseIpv6L4(const std::uint8_t initialNext, const std::uint8_t *payload, const std::size_t payloadLen,
             const std::uint8_t **l4pOut = nullptr,
@@ -204,4 +204,3 @@ parseIpv6L4(const std::uint8_t initialNext, const std::uint8_t *payload, const s
         return out;
     }
 }
-

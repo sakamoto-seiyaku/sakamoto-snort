@@ -23,7 +23,7 @@
       "problemMatcher": []
     },
     {
-      "label": "snort-build",
+      "label": "snort-build-ndk",
       "type": "shell",
       "command": "cmake",
       "args": [
@@ -31,7 +31,7 @@
         "--preset",
         "dev-debug",
         "--target",
-        "snort-build"
+        "snort-build-ndk"
       ],
       "options": {
         "cwd": "${workspaceFolder}",
@@ -227,7 +227,7 @@
       "group": "test"
     },
     {
-      "label": "snort-p1-tests",
+      "label": "snort-dx-smoke",
       "type": "shell",
       "command": "cmake",
       "args": [
@@ -235,36 +235,7 @@
         "--preset",
         "dev-debug",
         "--target",
-        "snort-p1-tests"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}",
-        "env": {
-          "SNORT_VSCODE_WORKSPACE_ROOT": "${workspaceFolder}"
-        }
-      },
-      "dependsOn": [
-        "snort-configure-dev-debug"
-      ],
-      "dependsOrder": "sequence",
-      "presentation": {
-        "reveal": "always",
-        "panel": "dedicated",
-        "clear": true
-      },
-      "problemMatcher": [],
-      "group": "test"
-    },
-    {
-      "label": "snort-p2-tests",
-      "type": "shell",
-      "command": "cmake",
-      "args": [
-        "--build",
-        "--preset",
-        "dev-debug",
-        "--target",
-        "snort-p2-tests"
+        "snort-dx-smoke"
       ],
       "options": {
         "cwd": "${workspaceFolder}",

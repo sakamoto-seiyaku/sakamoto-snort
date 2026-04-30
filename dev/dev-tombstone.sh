@@ -3,11 +3,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SNORT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/dev-android-device-lib.sh"
+source "$SCRIPT_DIR/dev-ndk-env.sh"
 
-LINEAGE_ROOT="${LINEAGE_ROOT:-$HOME/android/lineage}"
-STACK_TOOL="$LINEAGE_ROOT/development/scripts/stack"
-OUTPUT_DIR="${TOMBSTONE_OUTPUT_DIR:-$PWD/build-output/tombstones}"
+OUTPUT_DIR="${TOMBSTONE_OUTPUT_DIR:-$SNORT_ROOT/build-output/tombstones}"
+SYMBOL_DIR="${TOMBSTONE_SYMBOL_DIR:-$SNORT_ROOT/build-output}"
 
 show_help() {
     cat <<EOF
@@ -16,11 +17,12 @@ show_help() {
 子命令:
   latest                 打印设备上最新 tombstone 路径
   pull                   拉取最新 tombstone 到本地
-  symbolize              对本地 tombstone 做 stack 符号化
+  symbolize              对本地 tombstone 做 NDK r29 ndk-stack 符号化
 
 选项:
   --serial <serial>      指定目标真机 serial
   --path <path>          指定 tombstone 路径（pull/symbolize）
+  --sym-dir <path>       指定 ndk-stack 符号目录（默认 build-output）
 EOF
 }
 
@@ -56,6 +58,10 @@ main() {
                 tombstone_path="$2"
                 shift 2
                 ;;
+            --sym-dir)
+                SYMBOL_DIR="$2"
+                shift 2
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -88,8 +94,14 @@ main() {
             echo "$OUTPUT_DIR/$base"
             ;;
         symbolize)
-            if [[ ! -x "$STACK_TOOL" ]]; then
-                echo "❌ 未找到 stack 工具: $STACK_TOOL" >&2
+            ndk_root="$(snort_ndk_require)"
+            ndk_stack="$ndk_root/ndk-stack"
+            if [[ ! -x "$ndk_stack" ]]; then
+                echo "❌ 未找到 ndk-stack: $ndk_stack" >&2
+                exit 1
+            fi
+            if [[ ! -d "$SYMBOL_DIR" ]]; then
+                echo "❌ 未找到符号目录: $SYMBOL_DIR" >&2
                 exit 1
             fi
             if [[ -z "$tombstone_path" ]]; then
@@ -106,7 +118,7 @@ main() {
                 echo "❌ 未找到本地 tombstone 文件" >&2
                 exit 1
             fi
-            "$STACK_TOOL" < "$tombstone_path"
+            "$ndk_stack" -sym "$SYMBOL_DIR" -dump "$tombstone_path"
             ;;
         *)
             echo "未知子命令: $mode" >&2

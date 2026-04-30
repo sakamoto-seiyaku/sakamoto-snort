@@ -33,7 +33,7 @@ def workflow(mode: str, timeout_seconds: int) -> int:
     cleanup(silent=True)
 
     if mode == "run":
-        run_command("[1/3] 增量构建真机二进制...", ["bash", str(ROOT / "dev" / "dev-build.sh")])
+        run_command("[1/3] 构建 NDK 真机二进制...", ["bash", str(ROOT / "dev" / "dev-build-ndk.sh")])
         run_command(
             "[2/3] 预部署到真机（不启动守护进程）...",
             ["bash", str(ROOT / "dev" / "dev-deploy.sh"), "--stage-only"],
@@ -404,7 +404,7 @@ def hook(mode: str, event: str, timeout_seconds: int) -> int:
 
         if not process_alive(read_pid(PID_FILE)):
             if mode == "run":
-                run_command("[restart 1/3] 增量构建真机二进制...", ["bash", str(ROOT / "dev" / "dev-build.sh")])
+                run_command("[restart 1/3] 构建 NDK 真机二进制...", ["bash", str(ROOT / "dev" / "dev-build-ndk.sh")])
                 run_command(
                     "[restart 2/3] 预部署到真机（不启动守护进程）...",
                     ["bash", str(ROOT / "dev" / "dev-deploy.sh"), "--stage-only"],
@@ -416,7 +416,7 @@ def hook(mode: str, event: str, timeout_seconds: int) -> int:
             return result
 
         if mode == "run":
-            run_command("[restart 1/2] 增量构建真机二进制...", ["bash", str(ROOT / "dev" / "dev-build.sh")])
+            run_command("[restart 1/2] 构建 NDK 真机二进制...", ["bash", str(ROOT / "dev" / "dev-build-ndk.sh")])
             run_command(
                 "[restart 2/2] 预部署到真机（不启动守护进程）...",
                 ["bash", str(ROOT / "dev" / "dev-deploy.sh"), "--stage-only"],

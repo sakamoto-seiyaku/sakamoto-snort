@@ -4,6 +4,7 @@
 !/.vscode/launch.json
 !/.vscode/tasks.json
 /CMakeUserPresets.json
+/compile_commands.json
 build-output/*
 Testing/
 build/*

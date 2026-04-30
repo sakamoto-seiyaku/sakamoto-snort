@@ -1,29 +1,30 @@
 # vscode-cmake-development Specification
 
 ## Purpose
-Provide a repo-root, `CMake`-orchestrated developer workflow for `sucre-snort` (VS Code / CTest / CodeLLDB) that delegates to the existing Android/Soong build, exposes `P0/P1/P2` tests in IDE-friendly form, and standardizes real-device `P3` native debugging.
+Provide a repo-root, `CMake`-orchestrated developer workflow for `sucre-snort` (VS Code / CTest / CodeLLDB) that delegates daemon builds to the NDK r29 workflow, exposes `P0/P1/P2` tests in IDE-friendly form, and standardizes real-device `P3` native debugging.
 ## Requirements
 ### Requirement: Project provides a CMake-orchestrated developer workflow without redefining Android production build
-项目 MUST 提供一个由 `CMake` 托管主要开发者编排入口的工作流；该入口可以调用现有 Android 构建流程，但不得把真实 Android 产物构建定义从 `Android.bp + Soong` 改写为纯 `CMake`。
+项目 MUST 提供一个由 `CMake` 托管主要开发者编排入口的工作流。当前 daemon 构建入口 MUST 委托到 NDK r29 daemon workflow，而不是 Android source / Soong daemon workflow。
 
 #### Scenario: Open the repo as a VS Code C++ workspace
 - **GIVEN** 开发者在 VS Code WSL 窗口中打开仓库根目录
 - **WHEN** 仓库的 development facade 已完成配置
 - **THEN** 开发者 SHALL 能以 repo-root 为入口使用 CMake/CTest/Debug 工作流
 
-#### Scenario: Preserve Android production build authority
+#### Scenario: Preserve NDK daemon build authority
 - **WHEN** 开发者查阅当前 shared workspace 配置与文档
-- **THEN** SHALL 能明确看到 `CMake` 负责开发者日常编排入口，并可调用现有 Android 构建流程，但不替代 `Android.bp + Soong` 的构建定义
+- **THEN** SHALL 能明确看到 `CMake` 负责开发者日常编排入口，并委托到 NDK r29 daemon 构建
+- **AND** SHALL NOT advertise `Android.bp + Soong` as the active daemon build authority
 
-#### Scenario: Trigger delegated Android build from the workspace
+#### Scenario: Trigger delegated NDK daemon build from the workspace
 - **GIVEN** repo-root `CMakeLists.txt` 与 presets 已经引入
 - **WHEN** 开发者从 VS Code 或 `cmake --build` 触发 workspace build
-- **THEN** 系统 SHALL 能通过 `CMake` 定义的统一入口委托调用现有 Android 构建流程
+- **THEN** 系统 SHALL 能通过 `snort-build-ndk` 委托调用 `dev/dev-build-ndk.sh`
 
-#### Scenario: Repo-root CMake does not redefine Android build
+#### Scenario: Repo-root CMake does not expose Soong daemon targets
 - **GIVEN** repo-root `CMakeLists.txt` 与 presets 已经引入
 - **WHEN** 开发者查看 workspace 暴露的目标与文档
-- **THEN** SHALL 能看到它们聚焦于 build/test/debug orchestration，而不是替代 Android 产品构建定义
+- **THEN** SHALL NOT expose `snort-build`, `snort-build-clean`, or `snort-build-regen-graph` as active daemon targets
 
 ### Requirement: Project surfaces host-side unit tests through VS Code Testing
 项目 MUST 将现有 host-side `gtest` 测试以 `CTest` / VS Code Testing 可发现的形式暴露，而不是只保留脚本入口。
@@ -91,7 +92,7 @@ Provide a repo-root, `CMake`-orchestrated developer workflow for `sucre-snort` (
 项目 MUST 清晰分离 checked-in shared workspace 配置与每位开发者本机专属配置。
 
 #### Scenario: Override local machine settings without editing checked-in files
-- **GIVEN** 两位开发者的 `LINEAGE_ROOT`、`ADB_SERIAL` 或默认 lunch target 不同
+- **GIVEN** 两位开发者的 `ANDROID_SDK_ROOT`、`ANDROID_NDK_HOME`、`ADB_SERIAL` 或默认设备不同
 - **WHEN** 他们分别配置本地工作区
 - **THEN** 系统 SHALL 支持通过 user-local 配置覆盖这些值，而不要求修改仓库内共享配置文件
 

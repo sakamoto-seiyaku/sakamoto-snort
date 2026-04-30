@@ -1,14 +1,14 @@
 # Project Context
 
 ## Purpose
-sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android system_ext 分区上，通过内核 netfilter/iptables NFQUEUE 拦截 IPv4/IPv6 流量，并结合域名策略、应用级自定义名单/规则、per-UID IPv4 L3/L4 `IPRULES`、接口拦截与 IP 泄漏防护，对广告、跟踪器和恶意网络访问进行精细化拦截、统计与观测。  
+sucre-snort 是 sucre 阻止器的 root daemon 部分，当前 release 构建由 Android NDK r29 产出 APK-native shaped executable payload，通过内核 netfilter/iptables NFQUEUE 拦截 IPv4/IPv6 流量，并结合域名策略、应用级自定义名单/规则、per-UID IPv4 L3/L4 `IPRULES`、接口拦截与 IP 泄漏防护，对广告、跟踪器和恶意网络访问进行精细化拦截、统计与观测。
 项目目标是提供一个高性能、低依赖、与界面解耦的网络过滤内核，长期稳定运行于手机系统中，为上层 UI 和服务提供统一的控制、诊断与可观测接口。
 
 ## Tech Stack
-- 主要语言: C++20（`Android.bp` 中使用 `-std=c++2a`，启用 `-Wall -Wextra -Werror`）
-- 运行环境: Android  Magisk / KernelSU 模块刷入 or ROM 集成，system_ext 下的 `cc_binary` 守护进程，通过 `sucre-snort.rc` 由 init 启动
+- 主要语言: C++20（NDK/CMake daemon target 启用 `-Wall -Wextra -Werror`）
+- 运行环境: Android rooted dogfood flow 与后续 APK RuntimeService root launch；当前 daemon artifact 为 `build-output/sucre-snort-ndk` 与 `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so`
 - 内核/网络: Linux Netfilter + iptables NFQUEUE，拦截 IPv4/IPv6 包并回送裁决；使用 `/sys/class/net` 获取接口类型（WiFi/数据/VPN）
-- Android 依赖库: `libmnl`, `libnetfilter_queue`, `libnfnetlink.system_ext`, `libcutils`, `liblog`, `libbase`
+- Android 依赖库: NDK/public `liblog`, `libc`, `libm`, `libdl`；`libmnl`, `libnetfilter_queue`, `libnfnetlink` 由 vendored upstream sources 静态链接
 - IPC 协议: Unix 域套接字和可选 TCP（60606 端口）文本协议，协议细节见 `docs/INTERFACE_SPECIFICATION.md`
 - 持久化: 自定义二进制序列化工具 `Saver`，所有状态保存在 `/data/snort` 目录（配置、统计、域名列表、规则、阻止列表等）
 
@@ -19,7 +19,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 - 编译选项开启大部分警告并将其视为错误（`-Wall -Wextra -Werror`），保持无警告编译。
 - 优先使用 RAII、标准库容器与算法；异常仅在边界处捕获（例如 `main()`／线程入口），内部代码尽量保持异常安全。
 - 热路径（例如 `PacketListener::callback`, `PacketManager::make`）中禁止引入阻塞 I/O（磁盘、DNS、socket）和重锁，尽量缩小锁作用域，必要时拆成“无锁准备阶段 + 短临界区”。
-- 日志使用 `android-base/logging.h` 的 `LOG(INFO/WARNING/ERROR)`；避免在热路径频繁打印高频日志。
+- 日志使用本地 `SnortLog.hpp` 的 stream-style `LOG(INFO/WARNING/ERROR/FATAL)` wrapper，并由 Android 上的 NDK `liblog` 输出；避免在热路径频繁打印高频日志。
 
 ### Architecture Patterns
 - 单进程、多线程守护程序架构：
@@ -125,7 +125,7 @@ sucre-snort 是 sucre 阻止器的系统守护进程部分，运行在 Android s
 ## External Dependencies
 - Android / 内核依赖：
   - Linux 内核 Netfilter 子系统（NFQUEUE）、iptables 命令行工具（`/system/bin/iptables`, `/system/bin/ip6tables`）。
-  - `cutils` 提供的 `android_get_control_socket`，用于从 init 继承预创建的 Unix 域 socket。
+  - 本地 `snort_get_control_socket()` 支持读取 inherited `ANDROID_SOCKET_<name>` fd；APK/root dogfood launch 使用现有 fallback socket path。
 - 上游服务与系统组件：
   - 系统 DNS 组件（netd / DnsResolver），通过 `sucre-snort-netd` socket 与 `DnsListener` 交互。
   - Android 包管理与系统持久化文件：`PackageListener` 依赖 `/data/system/packages.list`（包名↔appId）与 per-user `package-restrictions.xml`（安装状态）聚合得到 full UID 列表。
