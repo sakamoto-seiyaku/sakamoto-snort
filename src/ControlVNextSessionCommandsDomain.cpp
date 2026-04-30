@@ -781,7 +781,7 @@ std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView 
                     auto &alloc = response.GetAllocator();
                     response["error"].AddMember(
                         "hint", makeString("call DOMAINRULES.GET and use existing ruleIds", alloc), alloc);
-                    return std::move(response);
+                    return response;
                 }
                 outRuleIds.push_back(ruleId);
             }

@@ -55,6 +55,15 @@ if(_sucre_snort_host_has_tsan)
   endif()
 endif()
 
+set(_sucre_snort_host_has_ubsan OFF)
+if(
+  CMAKE_CXX_FLAGS MATCHES "-fsanitize=undefined"
+  OR CMAKE_C_FLAGS MATCHES "-fsanitize=undefined"
+  OR CMAKE_EXE_LINKER_FLAGS MATCHES "-fsanitize=undefined"
+)
+  set(_sucre_snort_host_has_ubsan ON)
+endif()
+
 set(_sucre_snort_host_has_coverage OFF)
 if(
   CMAKE_CXX_FLAGS MATCHES "-fprofile-instr-generate"
@@ -67,6 +76,9 @@ endif()
 if(_sucre_snort_host_has_asan)
   set(SUCRE_SNORT_HOST_TEST_LANE "H.ASAN")
   set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};asan")
+elseif(_sucre_snort_host_has_ubsan)
+  set(SUCRE_SNORT_HOST_TEST_LANE "H.UBSAN")
+  set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};ubsan")
 elseif(_sucre_snort_host_has_tsan)
   set(SUCRE_SNORT_HOST_TEST_LANE "H.TSAN")
   set(SUCRE_SNORT_HOST_TEST_LABELS "${SUCRE_SNORT_HOST_TEST_LABELS};tsan")
@@ -128,6 +140,9 @@ add_sucre_snort_host_test(
   conntrack_tests
   conntrack_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/Conntrack.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRecords.cpp"
   "${SUCRE_SNORT_ROOT}/src/SnortRuntime.cpp"
 )
 target_compile_definitions(conntrack_tests PRIVATE SUCRE_SNORT_TESTING=1)
@@ -215,6 +230,36 @@ add_sucre_snort_host_test(
 )
 
 add_sucre_snort_host_test(
+  flow_telemetry_ring_tests
+  flow_telemetry_ring_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+)
+
+add_sucre_snort_host_test(
+  flow_telemetry_records_tests
+  flow_telemetry_records_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRecords.cpp"
+)
+
+add_sucre_snort_host_test(
+  control_vnext_telemetry_surface_tests
+  control_vnext_telemetry_surface_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextSession.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamJson.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextSessionCommandsTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Host.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)
+
+add_sucre_snort_host_test(
   control_vnext_domain_surface_tests
   control_vnext_domain_surface_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/Address.cpp"
@@ -247,6 +292,9 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/Conntrack.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextSessionCommandsIpRules.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRecords.cpp"
   "${SUCRE_SNORT_ROOT}/src/CustomList.cpp"
   "${SUCRE_SNORT_ROOT}/src/CustomRules.cpp"
   "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
@@ -271,6 +319,9 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/Conntrack.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
   "${SUCRE_SNORT_ROOT}/src/ControlVNextSessionCommandsMetrics.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRecords.cpp"
   "${SUCRE_SNORT_ROOT}/src/CustomList.cpp"
   "${SUCRE_SNORT_ROOT}/src/CustomRules.cpp"
   "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
@@ -306,6 +357,9 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/HostManager.cpp"
   "${SUCRE_SNORT_ROOT}/src/Packet.cpp"
   "${SUCRE_SNORT_ROOT}/src/PacketManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRecords.cpp"
   "${SUCRE_SNORT_ROOT}/src/Rule.cpp"
   "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
   "${SUCRE_SNORT_ROOT}/src/Settings.cpp"

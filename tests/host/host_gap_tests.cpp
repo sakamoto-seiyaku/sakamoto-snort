@@ -40,6 +40,7 @@ AppManager appManager;
 HostManager hostManager;
 ActivityManager activityManager;
 PacketManager pktManager;
+FlowTelemetry flowTelemetry;
 std::shared_mutex mutexListeners;
 
 namespace {

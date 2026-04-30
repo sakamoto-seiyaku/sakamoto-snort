@@ -41,6 +41,13 @@ IPTEST_NEPER_UDP_STREAM_HOST_BIN="${IPTEST_NEPER_UDP_STREAM_HOST_BIN:-$SNORT_ROO
 IPTEST_NEPER_TCP_CRR_DEVICE_BIN="${IPTEST_NEPER_TCP_CRR_DEVICE_BIN:-/data/local/tmp/iptest-neper-tcp_crr}"
 IPTEST_NEPER_UDP_STREAM_DEVICE_BIN="${IPTEST_NEPER_UDP_STREAM_DEVICE_BIN:-/data/local/tmp/iptest-neper-udp_stream}"
 
+IPTEST_TELEMETRY_CONSUMER_HOST_BIN="${IPTEST_TELEMETRY_CONSUMER_HOST_BIN:-$SNORT_ROOT/build-output/sucre-snort-telemetry-consumer}"
+IPTEST_TELEMETRY_CONSUMER_DEVICE_BIN="${IPTEST_TELEMETRY_CONSUMER_DEVICE_BIN:-/data/local/tmp/sucre-snort-telemetry-consumer}"
+IPTEST_RAW_PROTO_HOST_BIN="${IPTEST_RAW_PROTO_HOST_BIN:-$SNORT_ROOT/build-output/iptest-raw-proto}"
+IPTEST_RAW_PROTO_DEVICE_BIN="${IPTEST_RAW_PROTO_DEVICE_BIN:-/data/local/tmp/iptest-raw-proto}"
+DX_NETD_INJECT_HOST_BIN="${DX_NETD_INJECT_HOST_BIN:-$SNORT_ROOT/build-output/dx-netd-inject}"
+DX_NETD_INJECT_DEVICE_BIN="${DX_NETD_INJECT_DEVICE_BIN:-/data/local/tmp/dx-netd-inject}"
+
 iptest_adb_shell() {
   local command="$1"
   local quoted
@@ -81,6 +88,93 @@ iptest_stage_neper_binaries() {
   adb_push_file "$IPTEST_NEPER_TCP_CRR_HOST_BIN" "$IPTEST_NEPER_TCP_CRR_DEVICE_BIN" >/dev/null
   adb_push_file "$IPTEST_NEPER_UDP_STREAM_HOST_BIN" "$IPTEST_NEPER_UDP_STREAM_DEVICE_BIN" >/dev/null
   adb_su "chmod 755 \"$IPTEST_NEPER_TCP_CRR_DEVICE_BIN\" \"$IPTEST_NEPER_UDP_STREAM_DEVICE_BIN\""
+}
+
+iptest_stage_telemetry_consumer() {
+  local host_bin="$IPTEST_TELEMETRY_CONSUMER_HOST_BIN"
+  local device_bin="$IPTEST_TELEMETRY_CONSUMER_DEVICE_BIN"
+
+  if [[ ! -f "$host_bin" ]]; then
+    echo "INFO: telemetry consumer not found, building..." >&2
+    if ! bash "$SNORT_ROOT/dev/dev-build-telemetry-consumer.sh" >/dev/null 2>&1; then
+      echo "SKIP: missing telemetry consumer ($host_bin); build it with: bash dev/dev-build-telemetry-consumer.sh" >&2
+      return 10
+    fi
+  fi
+
+  set +e
+  adb_push_file "$host_bin" "$device_bin" >/dev/null 2>&1
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    echo "BLOCKED: failed to push telemetry consumer to device" >&2
+    return 77
+  fi
+  adb_su "chmod 755 \"$device_bin\"" >/dev/null 2>&1 || {
+    echo "BLOCKED: failed to chmod telemetry consumer on device" >&2
+    return 77
+  }
+
+  export IPTEST_TELEMETRY_CONSUMER_DEVICE_BIN="$device_bin"
+  return 0
+}
+
+iptest_stage_raw_proto_binary() {
+  local host_bin="$IPTEST_RAW_PROTO_HOST_BIN"
+  local device_bin="$IPTEST_RAW_PROTO_DEVICE_BIN"
+
+  if [[ ! -f "$host_bin" ]]; then
+    echo "INFO: raw-proto helper not found, building..." >&2
+    if ! bash "$SNORT_ROOT/dev/dev-build-iptest-raw-proto.sh" >/dev/null 2>&1; then
+      echo "SKIP: missing raw-proto helper ($host_bin); build it with: bash dev/dev-build-iptest-raw-proto.sh" >&2
+      return 10
+    fi
+  fi
+
+  set +e
+  adb_push_file "$host_bin" "$device_bin" >/dev/null 2>&1
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    echo "BLOCKED: failed to push raw-proto helper to device" >&2
+    return 77
+  fi
+  adb_su "chmod 755 \"$device_bin\"" >/dev/null 2>&1 || {
+    echo "BLOCKED: failed to chmod raw-proto helper on device" >&2
+    return 77
+  }
+
+  export IPTEST_RAW_PROTO_DEVICE_BIN="$device_bin"
+  return 0
+}
+
+iptest_stage_dx_netd_injector() {
+  local host_bin="$DX_NETD_INJECT_HOST_BIN"
+  local device_bin="$DX_NETD_INJECT_DEVICE_BIN"
+
+  if [[ ! -f "$host_bin" ]]; then
+    echo "INFO: dx-netd-inject not found, building..." >&2
+    if ! bash "$SNORT_ROOT/dev/dev-build-dx-netd-inject.sh" >/dev/null 2>&1; then
+      echo "BLOCKED: missing dx-netd-inject ($host_bin); build it with: bash dev/dev-build-dx-netd-inject.sh" >&2
+      return 77
+    fi
+  fi
+
+  set +e
+  adb_push_file "$host_bin" "$device_bin" >/dev/null 2>&1
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    echo "BLOCKED: failed to push dx-netd-inject to device" >&2
+    return 77
+  fi
+  adb_su "chmod 755 \"$device_bin\"" >/dev/null 2>&1 || {
+    echo "BLOCKED: failed to chmod dx-netd-inject on device" >&2
+    return 77
+  }
+
+  export DX_NETD_INJECT_DEVICE_BIN="$device_bin"
+  return 0
 }
 
 IPTEST_PING6_CMD="${IPTEST_PING6_CMD:-}"

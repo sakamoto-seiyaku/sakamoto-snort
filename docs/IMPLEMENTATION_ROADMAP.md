@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-04-27
+更新时间：2026-04-30
 状态：当前共识（以仓库内 code + tests + OpenSpec 主规格为准）
 
 ## 0. 阅读指南
@@ -35,7 +35,7 @@ Status 口径（全篇统一）：
 - Device/DX 覆盖矩阵：`docs/testing/DEVICE_TEST_COVERAGE_MATRIX.md`
 - 历史 vNext 设计材料（已归档；非权威）：`docs/archived/DOMAIN_IP_FUSION/`
 - 对外接口规范（vNext-only）：`docs/INTERFACE_SPECIFICATION.md`
-- 可观测性口径：`docs/INTERFACE_SPECIFICATION.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`
+- 可观测性口径：`docs/INTERFACE_SPECIFICATION.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md`
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
 - OpenSpec 主规格：`openspec/specs/`
 
@@ -55,17 +55,19 @@ Status 口径（全篇统一）：
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
 - Device/DX 冒烟补齐以 casebook 为验收口径推进（见 2.2）。
 - 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
-- [NOW] OpenSpec 当前 active changes（apply 已完成；待 archive）：`stabilize-daemon-lifecycle-ownership`、`add-iprules-dual-stack-ipv6`。
+- OpenSpec 当前 active changes：无；`add-flow-telemetry-plane` 已完成并归档。
 
-### 1.2 功能（Domain + IP）
+### 1.2 功能（Domain + IP + Flow Telemetry）
 
-- Domain+IP 的“后端融合”（vNext control 平面 + observability 口径 + datapath 接线）已完成并稳定回归；后续主风险点是**迁移与命名梳理**（前端/对外工具默认切 vNext、legacy 并存窗口与下线判据），而不是后端能力缺失。
+- Domain+IP 的“后端融合”（vNext control 平面 + observability 口径 + datapath 接线）已完成并稳定回归；IPv4/IPv6 双栈、L4 conntrack core、DomainPolicy device-wide 命名收敛、DomainRules per-rule observability 均已完成。
 - A/B/C/D 口径已经全部落地：
   - A：pkt verdict 可观测（`reasonId/ruleId/wouldRuleId`）
   - B：DomainPolicy counters（`policySource` / `domainSources`）
   - C：IP per-rule stats（随 IPRULES v1 一起落地）
   - D：perfmetrics（`nfq_total_us` / `dns_decision_us` 等）
-- IPRULES dual-stack（IPv4/IPv6）+ L4 conntrack core 已落地；真机 Tier‑1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
+- IPRULES dual-stack（IPv4/IPv6）+ L4 conntrack core 已落地；真机 Tier-1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
+- [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
+- Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Debug Stream 保留为深度取证能力，Metrics 保留为后端低基数健康状态。
 
 ## 2. 已完成（事实清单）
 
@@ -99,7 +101,10 @@ Status 口径（全篇统一）：
 - [DONE 2026-03-27] DomainPolicy observability（policySource counters）：`add-domain-policy-observability`（spec：`openspec/specs/domain-policy-observability/spec.md`）
 - [DONE 2026-03-30] L4 conntrack core：`add-iprules-conntrack-core`（spec：`openspec/specs/l4-conntrack-core/spec.md`）
 - [DONE 2026-04-27] IPRULES IPv4/IPv6 双栈：`add-iprules-dual-stack-ipv6`（required `family`/mk2、IPv6 header walker + `l4Status`、conntrack byFamily metrics、host + device Tier‑1 回归；决策入口：`docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`）
+- [DONE 2026-04-27] DomainPolicy device-wide 命名收敛：`rename-domain-policy-global-to-domain-device-wide`（`GLOBAL_*` 对外收敛为 `DOMAIN_DEVICE_WIDE_*`；spec：`openspec/specs/domain-policy-observability/spec.md`）
+- [DONE 2026-04-28] DomainRules per-rule observability：`add-domainrules-per-rule-observability`（域名规则命中/状态观测补齐；spec：`openspec/specs/domainrules-per-rule-observability/spec.md`）
 - [DONE 2026-03-15] perfmetrics：`add-perfmetrics-observability`（spec：`openspec/specs/perfmetrics-observability/spec.md`）
+- [DONE 2026-04-30] Flow Telemetry Plane：`add-flow-telemetry-plane`（shared-memory ring export channel、`TELEMETRY.OPEN/CLOSE`、`METRICS.GET(name=telemetry)`、`FLOW` / `DNS_DECISION` records、host + 真机 + perf + longrun 回归；spec：`openspec/specs/control-vnext-telemetry-surface/spec.md`、`openspec/specs/flow-telemetry-export-channel/spec.md`、`openspec/specs/flow-telemetry-records/spec.md`）
 
 ### 2.4 稳定性（运行期并发边界）
 
@@ -112,28 +117,33 @@ Status 口径（全篇统一）：
 
 - [DONE 2026-04-26] `sync-iprules-dual-stack-authority-docs`：同步 dual-stack IPRULES 的权威设计/契约文档，避免跨文档漂移与误读。
 - [DONE 2026-04-27] 接口规范收敛：重写 `docs/INTERFACE_SPECIFICATION.md` 为 vNext-only，并归档 legacy 版到 `docs/archived/INTERFACE_SPECIFICATION_v3.7_2026-04-26_legacy.md`。
+- [DONE 2026-04-29] Flow Telemetry 工作纲领收口：`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md` 明确常态 records、Debug Stream、Metrics 与 `tracked` 的边界。
 
 ## 3. 待办（按优先级）
 
-### 3.1 发布收口（OpenSpec change 归档）
+### 3.1 Flow Telemetry 主线（常态观测原始事实层）
 
-- [DONE 2026-04-27] `stabilize-daemon-lifecycle-ownership`：已归档（过程性收口）。
-- [DONE 2026-04-27] `add-iprules-dual-stack-ipv6`：已归档（过程性收口）。
+- [DONE 2026-04-30] `add-flow-telemetry-plane` 已覆盖 Flow Telemetry MVP：Ring/session ABI POC、FlowRecord producer、DnsDecisionRecord producer、Control/state/metrics integration、接口文档同步、host/device/perf/longrun 验证。
+- [NOTE] 后续不再把 daemon 侧 Flow Telemetry MVP 切分为多个 active change；剩余工作进入 3.2 的独立 backlog。
 
-### 3.2 迁移与下线（前端/对外工具；不是后端能力缺口）
+### 3.2 后续独立能力（不混入 Flow Telemetry MVP）
+
+- [BACKLOG] Debug Stream explainability：补齐策略链条证据，使 Debug 场景尽量只靠 Stream 还原 DNS 请求与 packet verdict 的取证链条。
+- [BACKLOG] Flow Telemetry consumer / 前端持久化查询库：records 的落盘、索引、Top-K、timeline、Geo/ASN/注释等由前端/consumer 层实现，不放进 daemon。
+
+### 3.3 迁移与下线（前端/对外工具；不是后端能力缺口）
 
 - [BACKLOG] `migrate-to-control-vnext`：前端与对外工具默认切到 vNext、tracked UX、迁移期开关/回滚口径、legacy 并存窗口与 `60606` 下线判据（需要真实版本/发布策略配合，独立于后端）
 
-### 3.3 文档收尾（降低误读）
+### 3.4 文档收尾（降低误读）
 
-- [NEXT] 巡检并收敛仍保留历史语境的设计文档，避免被误读成“待实现提案”（例如已落地回执类文档）。
-- [NOTE] 仅在接口新增/变更后刷新 `docs/INTERFACE_SPECIFICATION.md`；当前已于 2026-04-27 收敛为 vNext-only（legacy 版已归档）。
+- [DONE 2026-04-29] Flow Telemetry 纲领文件已从讨论草案收口为工作决策文档。
+- [DONE 2026-04-30] Flow Telemetry 接口已随 `add-flow-telemetry-plane` 同步到 `docs/INTERFACE_SPECIFICATION.md`。
+- [NOTE] 仅在接口新增/变更后刷新 `docs/INTERFACE_SPECIFICATION.md`；当前已于 2026-04-30 收敛为 vNext-only + Flow Telemetry 契约（legacy 版已归档）。
 
 ## 4. 后置 / Backlog（不挡主线）
 
-- [BACKLOG] 命名与语义边界梳理：尤其是 domain-only 历史命名（例如 `GLOBAL_*`）与 domain+IP 语义边界的统一（目标是收敛心智，不做接口大重构）
 - [BACKLOG] `ip-leak` 重新纳入设计：在统一口径下决定启用条件、优先级、可观测性与控制面形态（当前保持独立 backlog，不反向污染已收敛主线）
-- [BACKLOG] 域名规则 per-rule observability / stats
 - [BACKLOG] “真实系统 resolver hook” 的平台闭环（如未来仍坚持把它作为真机 DNS 验收链路）
 - [BACKLOG] 更强的 L4 stateful semantics（超出当前 `ct.state/ct.direction` 最小闭环的扩展能力）
 - [BACKLOG] L7 / HTTP / HTTPS 被动识别（暂不作为已承诺主线）
@@ -144,8 +154,8 @@ Status 口径（全篇统一）：
 
 以下几点用于承接“domain-only 旧骨架 + 新增 IP 一条腿”后的中长期整理方向；当前仅记录问题意识与推荐顺序，不视为已定方案：
 
-- **接口 / 模块命名梳理是必做项**：原始系统大量命名天然偏向 domain-only；在引入 IPRULES 后，需要系统性梳理哪些对外命令、对内模块名、文档术语的语义已经扩大、缩窄或变得含混。目标是**收敛命名与边界**，不是做一次接口大重构。
-- **可观测性命名与分层也要跟着梳理**：A/B/C/D 已分别落地，但后续仍需统一“events / metrics / reasons / sources / per-rule stats”的命名规则与展示口径，避免 domain/IP 两套术语长期并存。
+- **DomainPolicy 命名边界已收口，后续以接口同步为主**：`GLOBAL_*` 已对外收敛为 `DOMAIN_DEVICE_WIDE_*`；后续不再把它列为主线 backlog，只在接口文档/测试发现漂移时修正。
+- **可观测性分层进入 Flow Telemetry 阶段**：旧的 A/B/C/D counters/stream/perfmetrics 已落地；Flow Telemetry MVP 已补齐前端常态 Top-K/timeline/history 所需的原始 records 层。后续继续按 `Flow Telemetry records`（业务事实）、`Debug Stream`（深度取证）、`Metrics`（后端低基数健康状态）三层推进。
 - **`ip-leak` 继续后置，但必须重新定义定位**：它横跨 domain 与 IP，两边都相关；当前不宜提前混入已收敛主线。需要在统一口径下重新回答它到底是“补位能力 / 默认关闭能力 / 某类场景下的重要能力”中的哪一种。
 - **L4 conntrack core 已落地，但更强的 flow-state 仍应谨慎后置**：当前仓库已经具备最小闭环的 userspace conntrack（`ct.state/ct.direction` + hot-path gating + host/真机验证）；后续若继续扩展更强的 L4 状态语义，仍应作为独立能力评估其热路径成本、内存模型与 Android 设备约束。当前纲领入口见 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`；实现原则仍是“以 OVS conntrack 语义为母本做 C++ 重实现”，不是重新设计另一套状态系统。
 - **L7 / HTTP / HTTPS 识别暂不作为已承诺主线**：现阶段更稳的产品定位仍是 DNS/domain-policy + IPv4 L3/L4 判决与观测。更高层协议识别是否值得做、能做到什么程度，应在后续单独评估，而不是默认沿着“继续往上解包”自然推进。
@@ -155,7 +165,7 @@ Status 口径（全篇统一）：
 基于当前实现形态（Android + root + NFQUEUE + userspace quick verdict），先记录一个高层判断，供后续讨论时反复对照：
 
 - **DomainPolicy 与 IPRULES 不是二选一**：前者更偏语义友好、面向域名/名单/规则与用户理解；后者更偏底层强约束、面向 L3/L4 包判决与最终兜底。后续的目标应是“边界清晰 + 仲裁明确”，而不是把两者揉成一个失去层次的总开关。
-- **强项**：device-level 的 DNS / domain-policy、IPv4 L3/L4 规则、per-app 判决、可解释性、真机回归与性能基线。
+- **强项**：device-level 的 DNS / domain-policy、IPv4/IPv6 L3/L4 规则、per-app 判决、可解释性、真机回归与性能基线。
 - **可扩展但需谨慎**：L4 flow state、连接级语义、更加稳定的 cross-packet observability。
 - **不应先验承诺**：被动式 full HTTP/HTTPS 语义识别；尤其在加密协议持续增强的前提下，不应把未来产品路线押注在“靠被动包检查看清上层明文语义”上。
 
@@ -165,3 +175,4 @@ Status 口径（全篇统一）：
 - **C 不拆独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 IPRULES v1 change 内按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
 - **B 已补齐**：它与 IPRULES 基本解耦，当前已落地；剩余工作主要是把过期设计文档状态修正，避免被误读成“未开始”。
 - **D 独立**：perfmetrics 只承载性能健康指标；它在语义上独立于 A/B/C，可在任意时点推进，不改变当前主线优先级。
+- **A/B/C/D 之后的主线是 Flow Telemetry**：前端常态观测不继续扩充 daemon 聚合 counters，而是由 daemon 导出 bounded records，consumer 负责持久化、查询与派生统计。

@@ -27,13 +27,14 @@
 
 namespace {
 
-void serveClient(const int sockClient) {
+void serveClient(const int sockClient, const bool canPassFd) {
     int fd = sockClient;
     try {
         ControlVNextSession session(
             fd,
             ControlVNextSession::Limits{.maxRequestBytes = settings.controlVNextMaxRequestBytes,
-                                       .maxResponseBytes = settings.controlVNextMaxResponseBytes});
+                                       .maxResponseBytes = settings.controlVNextMaxResponseBytes},
+            /*canPassFdOverride=*/canPassFd);
         fd = -1;
         session.run();
     } catch (const std::exception &e) {
@@ -46,7 +47,7 @@ void serveClient(const int sockClient) {
     }
 }
 
-[[noreturn]] void acceptLoop(const int serverFd, const char *const kind) {
+[[noreturn]] void acceptLoop(const int serverFd, const char *const kind, const bool canPassFd) {
     for (;;) {
         if (const int sockClient = accept(serverFd, nullptr, nullptr); sockClient < 0) {
             const int err = errno;
@@ -56,8 +57,8 @@ void serveClient(const int sockClient) {
             LOG(WARNING) << __FUNCTION__ << " - vNext control session budget exhausted";
             ::close(sockClient);
         } else {
-            std::thread([sockClient, budget = std::move(budget)]() mutable {
-                serveClient(sockClient);
+            std::thread([sockClient, canPassFd, budget = std::move(budget)]() mutable {
+                serveClient(sockClient, canPassFd);
             }).detach();
         }
     }
@@ -136,9 +137,11 @@ void ControlVNext::unixServer() {
             createAbstractListener(settings.controlVNextSocketPath, settings.controlClients);
         LOG(INFO) << __FUNCTION__ << " - Control vNext init socket inherited, exposing @"
                   << settings.controlVNextSocketPath;
-        std::thread([abstractSocket] { acceptLoop(abstractSocket, "unix abstract"); }).detach();
+        std::thread([abstractSocket] {
+            acceptLoop(abstractSocket, "unix abstract", /*canPassFd=*/true);
+        }).detach();
 
-        acceptLoop(unixSocket, "unix init");
+        acceptLoop(unixSocket, "unix init", /*canPassFd=*/true);
     }
 
     const std::string socketPath = std::string("/dev/socket/") + settings.controlVNextSocketPath;
@@ -183,8 +186,10 @@ void ControlVNext::unixServer() {
 
     const int abstractSocket =
         createAbstractListener(settings.controlVNextSocketPath, settings.controlClients);
-    std::thread([abstractSocket] { acceptLoop(abstractSocket, "unix abstract"); }).detach();
-    acceptLoop(devSocket, "unix /dev");
+    std::thread([abstractSocket] {
+        acceptLoop(abstractSocket, "unix abstract", /*canPassFd=*/true);
+    }).detach();
+    acceptLoop(devSocket, "unix /dev", /*canPassFd=*/true);
 }
 
 void ControlVNext::inetServer() {
@@ -225,7 +230,7 @@ void ControlVNext::inetServer() {
                 ::close(sockClient);
             } else {
                 std::thread([sockClient, budget = std::move(budget)]() mutable {
-                    serveClient(sockClient);
+                    serveClient(sockClient, /*canPassFd=*/false);
                 }).detach();
             }
         }

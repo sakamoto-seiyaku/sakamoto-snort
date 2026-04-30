@@ -8,6 +8,7 @@
 #include <AppManager.hpp>
 #include <Conntrack.hpp>
 #include <ControlVNextStreamManager.hpp>
+#include <FlowTelemetry.hpp>
 #include <HostManager.hpp>
 #include <IpRulesEngine.hpp>
 #include <L4ParseResult.hpp>
@@ -113,6 +114,8 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     if (trackedSnapshotOut != nullptr) {
         *trackedSnapshotOut = trackedSnapshot;
     }
+    const auto teleHot = flowTelemetry.hotPathFlow();
+    const bool telemetryActive = teleHot.session != nullptr;
 
     const auto fillStreamEvent = [&](const bool accepted, const PacketReasonId reason,
                                      const std::optional<uint32_t> ruleId,
@@ -163,6 +166,31 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
     [[maybe_unused]] bool hasWouldDecision = false;
     [[maybe_unused]] IpRulesEngine::Decision wouldDecision{};
 
+    const auto observeTelemetryFlow = [&](const PacketReasonId reason,
+                                          const std::optional<uint32_t> &rid,
+                                          const Conntrack::Result &ctRes) noexcept {
+        if (!telemetryActive) {
+            return;
+        }
+        if constexpr (std::is_same_v<IP, IPv4>) {
+            if (ctPktV4 == nullptr) {
+                return;
+            }
+            const std::span<const std::byte> srcAddrNet(reinterpret_cast<const std::byte *>(srcIp.data()), 4);
+            const std::span<const std::byte> dstAddrNet(reinterpret_cast<const std::byte *>(dstIp.data()), 4);
+            _conntrack.observeFlowTelemetry(*ctPktV4, ctRes, teleHot, ifaceKindBit, app->userId(),
+                                            iface, reason, rid, srcAddrNet, dstAddrNet, len);
+        } else {
+            if (ctPktV6 == nullptr) {
+                return;
+            }
+            const std::span<const std::byte> srcAddrNet(reinterpret_cast<const std::byte *>(srcIp.data()), 16);
+            const std::span<const std::byte> dstAddrNet(reinterpret_cast<const std::byte *>(dstIp.data()), 16);
+            _conntrack.observeFlowTelemetry(*ctPktV6, ctRes, teleHot, ifaceKindBit, app->userId(),
+                                            iface, reason, rid, srcAddrNet, dstAddrNet, len);
+        }
+    };
+
     // 1) Highest priority hard-drop: IFACE_BLOCK.
     if (ifaceBlocked) {
         const bool verdict = false;
@@ -175,6 +203,10 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
             appManager.updateStats(nullptr, app, true, Stats::GREY, input ? Stats::RXP : Stats::TXP, 1);
             appManager.updateStats(nullptr, app, true, Stats::GREY, input ? Stats::RXB : Stats::TXB, len);
         }
+
+        observeTelemetryFlow(reasonId, /*rid=*/std::nullopt,
+                             Conntrack::Result{.state = Conntrack::CtState::INVALID,
+                                               .direction = Conntrack::CtDirection::ANY});
 
         fillStreamEvent(verdict, reasonId, ruleId, wouldRuleId);
         if (trackedSnapshot) {
@@ -208,6 +240,8 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                 }
                 usesCt = (mask & maskBit) != 0;
             }
+            // Flow Telemetry (level=flow + consumer active) is a conntrack observation consumer.
+            usesCt = usesCt || telemetryActive;
 
             const auto ipRulesProtoTok = [&]() -> std::uint8_t {
                 const std::uint16_t p = l4.proto;
@@ -314,6 +348,13 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
                                            input ? Stats::RXB : Stats::TXB, len);
                 }
 
+                observeTelemetryFlow(
+                    reasonId, ruleId,
+                    ctPolicyView.has_value()
+                        ? ctPolicyView->result
+                        : Conntrack::Result{.state = Conntrack::CtState::INVALID,
+                                            .direction = Conntrack::CtDirection::ANY});
+
                 fillStreamEvent(verdict, reasonId, ruleId, std::nullopt);
                 if (trackedSnapshot) {
                     Streamable<Packet<IP>>::stream(std::make_shared<Packet<IP>>(
@@ -354,6 +395,12 @@ bool PacketManager::make(const Address<IP> &srcIp, const Address<IP> &dstIp, con
             }
         }
     }
+
+    observeTelemetryFlow(
+        reasonId, ruleId,
+        ctPolicyView.has_value()
+            ? ctPolicyView->result
+            : Conntrack::Result{.state = Conntrack::CtState::INVALID, .direction = Conntrack::CtDirection::ANY});
 
     // Would-match overlay: emit only if final verdict is ACCEPT.
     if (hasWouldDecision && verdict) {

@@ -138,8 +138,9 @@ private:
 
 } // namespace
 
-ControlVNextSession::ControlVNextSession(const int fd, const Limits limits)
-    : _fd(fd), _limits(limits) {}
+ControlVNextSession::ControlVNextSession(const int fd, const Limits limits,
+                                         const std::optional<bool> canPassFdOverride)
+    : _fd(fd), _limits(limits), _canPassFdOverride(canPassFdOverride) {}
 
 ControlVNextSession::~ControlVNextSession() {
     if (_fd >= 0) {
@@ -156,6 +157,17 @@ void ControlVNextSession::run() {
         const int flags = ::fcntl(sock.get(), F_GETFL, 0);
         if (flags >= 0) {
             (void)::fcntl(sock.get(), F_SETFL, flags | O_NONBLOCK);
+        }
+    }
+
+    bool canPassFd = _canPassFdOverride.value_or(false);
+    if (!_canPassFdOverride.has_value()) {
+        // Best-effort detection. Some host sandboxes may deny getsockopt/getsockname; in that case
+        // we conservatively treat the session as non-fd-capable.
+        int domain = 0;
+        socklen_t len = sizeof(domain);
+        if (::getsockopt(sock.get(), SOL_SOCKET, SO_DOMAIN, &domain, &len) == 0) {
+            canPassFd = (domain == AF_UNIX);
         }
     }
 
@@ -234,15 +246,77 @@ void ControlVNextSession::run() {
         return true;
     };
 
+    const auto sendFrameWithFdBlocking = [&](const std::string &frame, const int fdToSend) -> bool {
+        if (fdToSend < 0) {
+            return false;
+        }
+        if (frame.empty()) {
+            return false;
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        size_t offset = 0;
+        bool sentControl = false;
+        while (offset < frame.size()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - start > snortControlSendDeadline) {
+                return false;
+            }
+
+            iovec iov{};
+            iov.iov_base = const_cast<char *>(frame.data() + offset);
+            iov.iov_len = frame.size() - offset;
+
+            msghdr msg{};
+            msg.msg_iov = &iov;
+            msg.msg_iovlen = 1;
+
+            std::array<char, CMSG_SPACE(sizeof(int))> control{};
+            if (!sentControl) {
+                msg.msg_control = control.data();
+                msg.msg_controllen = control.size();
+
+                cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+                cmsg->cmsg_level = SOL_SOCKET;
+                cmsg->cmsg_type = SCM_RIGHTS;
+                cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+                std::memcpy(CMSG_DATA(cmsg), &fdToSend, sizeof(int));
+            }
+
+            const ssize_t n = ::sendmsg(sock.get(), &msg, 0);
+            if (n > 0) {
+                offset += static_cast<size_t>(n);
+                sentControl = true;
+                continue;
+            }
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                pollfd pfd{.fd = sock.get(), .events = POLLOUT | POLLHUP, .revents = 0};
+                const int rc = ::poll(&pfd, 1, /*timeoutMs=*/50);
+                if (rc <= 0) {
+                    continue;
+                }
+                if (pfd.revents & POLLHUP) {
+                    return false;
+                }
+                continue;
+            }
+            return false;
+        }
+        return true;
+    };
+
     using ResponsePlan = ControlVNextSessionCommands::ResponsePlan;
-    const void *sessionKey = this;
+    void *sessionKey = this;
     std::optional<ControlVNextStreamManager::Type> activeStream = std::nullopt;
     std::optional<std::pair<ControlVNextStreamManager::Type, ControlVNextStreamManager::StartResult>>
         pendingStartedNotice = std::nullopt;
 
     struct StreamDetachGuard {
-        const void *key = nullptr;
-        ~StreamDetachGuard() { controlVNextStream.detach(const_cast<void *>(key)); }
+        void *key = nullptr;
+        ~StreamDetachGuard() { controlVNextStream.detach(key); }
     } streamDetachGuard{sessionKey};
 
     struct StreamNoticeState {
@@ -375,7 +449,7 @@ void ControlVNextSession::run() {
             }
 
             ControlVNextStreamManager::StartResult startResult{};
-            if (!controlVNextStream.start(const_cast<void *>(sessionKey), params, startResult)) {
+            if (!controlVNextStream.start(sessionKey, params, startResult)) {
                 rapidjson::Document response =
                     ControlVNext::makeErrorResponse(id, "STATE_CONFLICT", "stream type already subscribed");
                 return ResponsePlan{.response = std::move(response)};
@@ -401,7 +475,7 @@ void ControlVNextSession::run() {
             if (activeStream.has_value()) {
                 // Ack barrier: drop any queued events/notices before sending STOP response.
                 writer.clearQueue();
-                controlVNextStream.stop(const_cast<void *>(sessionKey));
+                controlVNextStream.stop(sessionKey);
                 activeStream = std::nullopt;
                 pendingStartedNotice = std::nullopt;
                 notices.suppressed = TrafficSnapshot{};
@@ -413,6 +487,10 @@ void ControlVNextSession::run() {
         }
 
         if (auto plan = ControlVNextSessionCommands::handleDaemonCommand(request, _limits); plan.has_value()) {
+            return std::move(*plan);
+        }
+        if (auto plan = ControlVNextSessionCommands::handleTelemetryCommand(request, _limits, sessionKey, canPassFd);
+            plan.has_value()) {
             return std::move(*plan);
         }
         if (auto plan = ControlVNextSessionCommands::handleDomainCommand(request, _limits); plan.has_value()) {
@@ -466,7 +544,8 @@ void ControlVNextSession::run() {
             } else if (requestView.cmd == "CONFIG.SET" || requestView.cmd == "DOMAINRULES.APPLY" ||
                 requestView.cmd == "DOMAINPOLICY.APPLY" ||
                 requestView.cmd == "DOMAINLISTS.APPLY" || requestView.cmd == "DOMAINLISTS.IMPORT" ||
-                requestView.cmd == "IPRULES.APPLY" || requestView.cmd == "METRICS.RESET") {
+                requestView.cmd == "IPRULES.APPLY" || requestView.cmd == "METRICS.RESET" ||
+                requestView.cmd == "TELEMETRY.OPEN" || requestView.cmd == "TELEMETRY.CLOSE") {
                 const std::lock_guard<std::mutex> lock(mutexControlMutations);
                 applyCommand();
             } else {
@@ -474,8 +553,24 @@ void ControlVNextSession::run() {
                 applyCommand();
             }
 
-            if (!enqueueDoc(plan.response) || !flushBlocking(/*timeoutMs=*/250)) {
-                return;
+            if (plan.fdToSend.valid()) {
+                // Ensure any previously queued frames are flushed before sendmsg.
+                if (!flushBlocking(/*timeoutMs=*/250)) {
+                    return;
+                }
+                const std::string json =
+                    ControlVNext::encodeJson(plan.response, ControlVNext::JsonFormat::Compact);
+                if (json.size() > _limits.maxResponseBytes) {
+                    return;
+                }
+                const std::string frame = ControlVNext::encodeNetstring(json);
+                if (!sendFrameWithFdBlocking(frame, plan.fdToSend.get())) {
+                    return;
+                }
+            } else {
+                if (!enqueueDoc(plan.response) || !flushBlocking(/*timeoutMs=*/250)) {
+                    return;
+                }
             }
 
             // STREAM.START ordering: response → started notice.
@@ -495,7 +590,7 @@ void ControlVNextSession::run() {
         }
 
         if (activeStream.has_value() &&
-            !controlVNextStream.ownsSubscription(const_cast<void *>(sessionKey), *activeStream)) {
+            !controlVNextStream.ownsSubscription(sessionKey, *activeStream)) {
             return;
         }
 
@@ -560,17 +655,17 @@ void ControlVNextSession::run() {
                 rapidjson::Document eventDoc;
                 bool hasEvent = false;
                 if (st == ControlVNextStreamManager::Type::Dns) {
-                    if (auto ev = controlVNextStream.popDnsPending(const_cast<void *>(sessionKey))) {
+                    if (auto ev = controlVNextStream.popDnsPending(sessionKey)) {
                         eventDoc = ControlVNextStreamJson::makeDnsEvent(*ev);
                         hasEvent = true;
                     }
                 } else if (st == ControlVNextStreamManager::Type::Pkt) {
-                    if (auto ev = controlVNextStream.popPktPending(const_cast<void *>(sessionKey))) {
+                    if (auto ev = controlVNextStream.popPktPending(sessionKey)) {
                         eventDoc = ControlVNextStreamJson::makePktEvent(*ev);
                         hasEvent = true;
                     }
                 } else if (st == ControlVNextStreamManager::Type::Activity) {
-                    if (auto ev = controlVNextStream.popActivityPending(const_cast<void *>(sessionKey))) {
+                    if (auto ev = controlVNextStream.popActivityPending(sessionKey)) {
                         eventDoc = ControlVNextStreamJson::makeActivityEvent(*ev);
                         hasEvent = true;
                     }

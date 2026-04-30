@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 
 class ControlVNextSession {
 public:
@@ -14,7 +15,10 @@ public:
         size_t maxResponseBytes = 0;
     };
 
-    ControlVNextSession(int fd, Limits limits);
+    // canPassFdOverride:
+    // - std::nullopt: attempt to detect (best-effort).
+    // - true/false: force the session capability (used by listeners that know transport).
+    ControlVNextSession(int fd, Limits limits, std::optional<bool> canPassFdOverride = std::nullopt);
 
     ~ControlVNextSession();
 
@@ -26,5 +30,5 @@ public:
 private:
     int _fd = -1;
     Limits _limits;
+    std::optional<bool> _canPassFdOverride;
 };
-

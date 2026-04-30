@@ -26,6 +26,8 @@
 #include <unordered_map>
 #include <vector>
 
+FlowTelemetry flowTelemetry;
+
 // ---- Test-only Streamable + PacketManager seams ----
 //
 // The production PacketManager implementation depends on the full Streamable

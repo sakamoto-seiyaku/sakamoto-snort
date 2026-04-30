@@ -81,7 +81,8 @@ struct Harness {
         serverThread = std::thread([serverFd = fds[0], maxRequestBytes, maxResponseBytes] {
             ControlVNextSession session(
                 serverFd, ControlVNextSession::Limits{.maxRequestBytes = maxRequestBytes,
-                                                     .maxResponseBytes = maxResponseBytes});
+                                                     .maxResponseBytes = maxResponseBytes},
+                /*canPassFdOverride=*/true);
             session.run();
         });
     }

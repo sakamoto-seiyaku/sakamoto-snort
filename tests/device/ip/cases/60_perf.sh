@@ -28,6 +28,20 @@ IPTEST_PERF_BG_UIDS="${IPTEST_PERF_BG_UIDS:-$IPTEST_PERF_BG_TOTAL}"
 IPTEST_PERF_BG_UID_BASE="${IPTEST_PERF_BG_UID_BASE:-10000}"
 IPTEST_PERF_COMPARE="${IPTEST_PERF_COMPARE:-0}"
 IPTEST_PERF_ENABLE_CT="${IPTEST_PERF_ENABLE_CT:-0}" # 0|1: add a ct consumer rule to force conntrack work
+IPTEST_PERF_FLOW_TELEMETRY_COMPARE="${IPTEST_PERF_FLOW_TELEMETRY_COMPARE:-0}"
+IPTEST_PERF_FLOW_TELEMETRY_DROP_TARGET_PCT="${IPTEST_PERF_FLOW_TELEMETRY_DROP_TARGET_PCT:-10}"
+IPTEST_PERF_FLOW_TELEMETRY_FAIL_ON_DROP="${IPTEST_PERF_FLOW_TELEMETRY_FAIL_ON_DROP:-0}"
+
+FLOW_CONSUMER_PID=""
+FLOW_CONSUMER_OUT=""
+
+LAST_PERF_TAG=""
+LAST_PERF_BYTES=0
+LAST_PERF_CONNECTIONS=0
+LAST_PERF_SAMPLES=0
+LAST_PERF_P50=0
+LAST_PERF_P95=0
+LAST_PERF_P99=0
 
 csv_from_array() {
   local -n arr_ref="$1"
@@ -89,6 +103,46 @@ reset_perf_metrics() {
 
 get_perf_metrics() {
   vnext_rpc_ok METRICS.GET '{"name":"perf"}'
+}
+
+start_flow_telemetry_consumer() {
+  local collect_ms="$1"
+
+  iptest_stage_telemetry_consumer || return $?
+
+  FLOW_CONSUMER_OUT="$(mktemp /tmp/iptest-flow-telemetry-perf.XXXXXX.jsonl)"
+  local consumer_bin="${IPTEST_TELEMETRY_CONSUMER_DEVICE_BIN:-/data/local/tmp/sucre-snort-telemetry-consumer}"
+  local cmd
+  cmd="$consumer_bin --timeoutSec 60 --pollMs 100 --collectMs ${collect_ms} --wantFlow 1 --wantDns 0 --jsonl --packetsThreshold 1 --bytesThreshold 1 --maxExportIntervalMs 1"
+
+  set +e
+  adb_cmd shell "su 0 sh -c \"$cmd\"" >"$FLOW_CONSUMER_OUT" 2>&1 &
+  FLOW_CONSUMER_PID=$!
+  set -e
+  sleep 0.5
+}
+
+wait_flow_telemetry_consumer() {
+  if [[ -z "$FLOW_CONSUMER_PID" ]]; then
+    return 0
+  fi
+
+  local rc
+  set +e
+  wait "$FLOW_CONSUMER_PID"
+  rc=$?
+  set -e
+  FLOW_CONSUMER_PID=""
+
+  if [[ $rc -ne 0 ]]; then
+    log_fail "flow telemetry perf consumer"
+    echo "consumer_rc=$rc output=$FLOW_CONSUMER_OUT"
+    sed -n '1,120p' "$FLOW_CONSUMER_OUT" | sed 's/^/    /'
+    return 1
+  fi
+  log_info "flow telemetry perf consumer output=$FLOW_CONSUMER_OUT"
+  sed -n '1,20p' "$FLOW_CONSUMER_OUT" | sed 's/^/    /'
+  return 0
 }
 
 set_iprules_enabled() {
@@ -177,11 +231,11 @@ if enable_ct == 1 and n > 0:
     rules.append(
         rule(
             "perf:ct-consumer",
-            action="allow",
+            action="block",
             priority=1,
             enabled=1,
             enforce=0,
-            log=0,
+            log=1,
             dir="any",
             proto="tcp",
             ct_state="invalid",
@@ -370,6 +424,20 @@ run_phase() {
     return 6
   fi
 
+  LAST_PERF_TAG="$tag"
+  LAST_PERF_BYTES="$bytes_actual"
+  LAST_PERF_CONNECTIONS="$connections_actual"
+  LAST_PERF_SAMPLES="$samples"
+  read -r LAST_PERF_P50 LAST_PERF_P95 LAST_PERF_P99 < <(
+    PERF_JSON="$perf_json" python3 - <<'PY'
+import json
+import os
+
+perf = json.loads(os.environ["PERF_JSON"])["result"]["perf"]["nfq_total_us"]
+print(int(perf["p50"]), int(perf["p95"]), int(perf["p99"]))
+PY
+  )
+
   log_info "traffic bytes_actual=${bytes_actual} (${tag})"
   if [[ "$connections_actual" -gt 0 ]]; then
     log_info "traffic connections_actual=${connections_actual} (${tag})"
@@ -411,6 +479,47 @@ PY
 
   echo "PERF_PHASE_SUMMARY tag=${tag} iprules=${iprules} bytes=${bytes_actual} connections=${connections_actual} samples=${samples}"
   return 0
+}
+
+flow_telemetry_compare_report() {
+  local off_bytes="$1"
+  local off_p50="$2"
+  local off_p95="$3"
+  local off_p99="$4"
+  local on_bytes="$5"
+  local on_p50="$6"
+  local on_p95="$7"
+  local on_p99="$8"
+
+  OFF_BYTES="$off_bytes" ON_BYTES="$on_bytes" \
+    OFF_P50="$off_p50" OFF_P95="$off_p95" OFF_P99="$off_p99" \
+    ON_P50="$on_p50" ON_P95="$on_p95" ON_P99="$on_p99" \
+    TARGET="$IPTEST_PERF_FLOW_TELEMETRY_DROP_TARGET_PCT" \
+    FAIL_ON_DROP="$IPTEST_PERF_FLOW_TELEMETRY_FAIL_ON_DROP" python3 - <<'PY'
+import os
+import sys
+
+off = int(os.environ["OFF_BYTES"])
+on = int(os.environ["ON_BYTES"])
+target = float(os.environ["TARGET"])
+drop_pct = 0.0 if off <= 0 else max(0.0, (off - on) * 100.0 / off)
+line = (
+    f"FLOW_TELEMETRY_PERF_COMPARE off_bytes={off} on_bytes={on} "
+    f"drop_pct={drop_pct:.2f} target_pct={target:.2f} "
+    f"off_p50_us={os.environ['OFF_P50']} off_p95_us={os.environ['OFF_P95']} "
+    f"off_p99_us={os.environ['OFF_P99']} on_p50_us={os.environ['ON_P50']} "
+    f"on_p95_us={os.environ['ON_P95']} on_p99_us={os.environ['ON_P99']}"
+)
+print(line)
+if drop_pct > target:
+    print(
+        "FLOW_TELEMETRY_PERF_BOTTLENECK_NOTES "
+        "throughput_drop_exceeded_target=1 "
+        "inspect ring write pressure, conntrack observation fanout, and verdict latency percentiles"
+    )
+    if os.environ["FAIL_ON_DROP"] == "1":
+        raise SystemExit(8)
+PY
 }
 
 main() {
@@ -473,6 +582,11 @@ main() {
 
   table=""
   cleanup() {
+    if [[ -n "$FLOW_CONSUMER_PID" ]]; then
+      kill "$FLOW_CONSUMER_PID" >/dev/null 2>&1 || true
+      wait "$FLOW_CONSUMER_PID" >/dev/null 2>&1 || true
+      FLOW_CONSUMER_PID=""
+    fi
     if [[ -n "$table" ]]; then
       iptest_tier1_teardown "$table" || true
     fi
@@ -549,7 +663,32 @@ main() {
   preflight_summary="$(printf '%s\n' "$preflight" | python3 -c 'import json,sys; j=json.load(sys.stdin); print(json.dumps(j.get("result",{}).get("summary",{}), ensure_ascii=False, separators=(",",":")))' 2>/dev/null || echo '{}')"
   log_info "preflight summary: $preflight_summary"
 
-  if [[ "$IPTEST_PERF_COMPARE" -eq 1 ]]; then
+  if [[ "$IPTEST_PERF_FLOW_TELEMETRY_COMPARE" -eq 1 ]]; then
+    log_info "flow telemetry perf compare enabled: Flow Off vs Flow On (iprules=1)"
+
+    run_phase "flow_off" 1 "$preflight_summary"
+    off_bytes="$LAST_PERF_BYTES"
+    off_p50="$LAST_PERF_P50"
+    off_p95="$LAST_PERF_P95"
+    off_p99="$LAST_PERF_P99"
+
+    if [[ "$IPTEST_PERF_SECONDS" -gt 0 ]]; then
+      flow_collect_ms=$((IPTEST_PERF_SECONDS * 1000 + 2000))
+    else
+      flow_collect_ms=8000
+    fi
+    start_flow_telemetry_consumer "$flow_collect_ms" || exit $?
+    run_phase "flow_on" 1 "$preflight_summary"
+    on_bytes="$LAST_PERF_BYTES"
+    on_p50="$LAST_PERF_P50"
+    on_p95="$LAST_PERF_P95"
+    on_p99="$LAST_PERF_P99"
+    wait_flow_telemetry_consumer || exit $?
+
+    flow_telemetry_compare_report "$off_bytes" "$off_p50" "$off_p95" "$off_p99" \
+      "$on_bytes" "$on_p50" "$on_p95" "$on_p99"
+    log_pass "flow telemetry perf compare ok"
+  elif [[ "$IPTEST_PERF_COMPARE" -eq 1 ]]; then
     log_info "perf compare enabled: iprules=1 vs iprules=0"
     run_phase "iprules_on" 1 "$preflight_summary"
     run_phase "iprules_off" 0 "$preflight_summary"

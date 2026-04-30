@@ -62,7 +62,9 @@ public:
 
     template <class T> void write(const T &data);
 
-    template <> inline void write(const std::string &str);
+    // NOTE: explicit template specialization is not allowed inside class scope in standard C++.
+    // Use an overload instead.
+    inline void write(const std::string &str);
 
     template <class T> void write(const void *data, const T len);
 };
@@ -116,7 +118,7 @@ template <class V, class T> void Saver::write(const T &&data) {
 
 template <class T> void Saver::write(const T &data) { write(&data, sizeof(data)); }
 
-template <> inline void Saver::write(const std::string &str) {
+inline void Saver::write(const std::string &str) {
     const uint32_t len = str.size() + 1;
     write<uint32_t>(len);
     write(str.c_str(), len);

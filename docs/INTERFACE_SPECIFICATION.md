@@ -13,6 +13,10 @@
 - （DEV）adb forward（推荐）: `adb forward tcp:60607 localabstract:sucre-snort-control-vnext`
 - DNS 监听通道: Android control socket 名称 `sucre-snort-netd`（Unix Domain, SOCK_SEQPACKET；内部二进制协议，见 §3）。
 
+备注（Telemetry fd passing）:
+- `TELEMETRY.OPEN(level=flow)` 需要通过 Unix domain socket 的 `SCM_RIGHTS` 传递 shared-memory fd。
+- 因此：通过 TCP 60607 / adb forward 建立的连接**不能**打开 telemetry，只能查询 `METRICS.GET(name=telemetry)` 观察通道状态。
+
 报文约定（control-vnext 控制通道）:
 - framing: netstring `<len>:<payload>,`；`payload` 为 UTF-8 JSON object。
 - request envelope：`{"id":1,"cmd":"...","args":{}}`（`args` 必须是 object）
@@ -88,7 +92,7 @@ vNext app selector（`args.app`）约定:
     - `mk2|family=<ipv4|ipv6>|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>`
     - CIDR 规范化为网络地址（host bits 清零）；`ifindex=0` 表示 any；`proto=icmp|other` 时 `sport/dport=any`。
 
-2.7 观测（Metrics/Stream）
+2.7 观测（Metrics/Stream/Telemetry）
 - `METRICS.GET` | `{"name":name,"app"?:selector}` | `result` |
   - `name=perf` → `result.perf{nfq_total_us,dns_decision_us}`；每项为 `{samples,min,avg,p50,p95,p99,max}`（单位 `us`）。
   - `name=reasons` → `result.reasons{IFACE_BLOCK,IP_LEAK_BLOCK,ALLOW_DEFAULT,IP_RULE_ALLOW,IP_RULE_BLOCK}`；每项为 `{packets,bytes}`。
@@ -97,9 +101,27 @@ vNext app selector（`args.app`）约定:
   - `name=conntrack` → `result.conntrack{totalEntries,creates,expiredRetires,overflowDrops,byFamily{ipv4,ipv6}}`。
   - `name=domainRuleStats` → `result.domainRuleStats{rules[]}`（device-only；禁止 `args.app`）：
     - `rules[]` item：`{ruleId:u32,allowHits:u64,blockHits:u64}`（按 `ruleId` 升序；baseline 全量覆盖）。
+  - `name=telemetry` → `result.telemetry{enabled,consumerPresent,sessionId,slotBytes,slotCount,recordsWritten,recordsDropped,lastDropReason,lastError?}`（device-only；禁止 `args.app`）：
+    - `enabled`: 当前是否存在 `level=flow` 的 telemetry session（boolean）。
+    - `consumerPresent`: 当前是否存在 telemetry consumer session（boolean；`enabled=false` 时必为 false）。
+    - `lastDropReason`: `"none"|"consumerAbsent"|"slotBusy"|"recordTooLarge"|"disabled"|"resourcePressure"`。
 - `METRICS.RESET` | `{"name":name,"app"?:selector}` | `ok` |
   - 支持 reset：`perf` / `reasons` / `domainSources` / `traffic` / `domainRuleStats`。
   - `METRICS.RESET(name=conntrack)`：不支持，返回 `INVALID_ARGUMENT`（提示使用 `RESETALL`）。
+- `TELEMETRY.OPEN` | `{"level":"off"|"flow","config"?:{...}}` | `result={actualLevel,sessionId,abiVersion,slotBytes,slotCount,ringDataBytes,maxPayloadBytes,writeTicketSnapshot}` |
+  - `level=off` 等价于关闭 telemetry（同 `TELEMETRY.CLOSE`）；返回 `actualLevel="off"`。
+  - `level=flow` 仅支持 Unix domain vNext 连接；成功时服务端会在 response 的 ancillary data 中通过 `SCM_RIGHTS` 传递 shared-memory fd（response JSON 中不包含 fd 字段）。
+  - 在 TCP/adb-forward 连接上调用 `TELEMETRY.OPEN(level=flow)` 必失败：`INVALID_ARGUMENT` + `error.hint="use vNext Unix domain socket (fd passing required)"`。
+  - `config`（可选覆盖，未知 key → `SYNTAX_ERROR`）：
+    - ring: `slotBytes(u32)`, `ringDataBytes(u64)`
+    - poll/emit: `pollIntervalMs(u32)`, `bytesThreshold(u64)`, `packetsThreshold(u64)`, `maxExportIntervalMs(u32)`
+    - TTL: `blockTtlMs(u32)`, `pickupTtlMs(u32)`, `invalidTtlMs(u32)`
+    - limits: `maxFlowEntries(u32)`, `maxEntriesPerUid(u32)`
+  - records 通过 shared-memory ring 输出；recordType（u16）:
+    - `1(FLOW)`: `payloadVersion=1`；kind=`BEGIN|UPDATE|END`；包含 flowInstanceId/recordSeq/五元组元数据与累计 counters。
+    - `2(DNS_DECISION)`: `payloadVersion=1`；blocked-only；包含 queryName(≤255 bytes)、policySource 与可选 ruleId。
+- `TELEMETRY.CLOSE` | `{}` | `ok` |
+  - idempotent；会作废旧 session（consumer 端需停止 ingest 并在需要时重新 OPEN）。
 - `STREAM.START` | `{"type":"dns"|"pkt"|"activity","horizonSec"?:u32,"minSize"?:u32}` | `ok` |
   - `dns/pkt` 支持 replay 参数（会被 clamp 到 caps）；`activity` 禁止携带 `horizonSec/minSize`（否则 `SYNTAX_ERROR`）。
   - 进入 stream mode 后，除 `STREAM.START/STOP` 外的命令一律 `STATE_CONFLICT`。
@@ -187,7 +209,7 @@ vNext stream 事件（JSON object，无 `id/ok`）:
 配置: CONFIG.GET, CONFIG.SET
 域名: DOMAINRULES.GET/APPLY, DOMAINPOLICY.GET/APPLY, DOMAINLISTS.GET/APPLY/IMPORT, DEV.DOMAIN.QUERY(dev)
 IP: IPRULES.PREFLIGHT/PRINT/APPLY
-观测: METRICS.GET, METRICS.RESET, STREAM.START, STREAM.STOP
+观测: METRICS.GET, METRICS.RESET, TELEMETRY.OPEN, TELEMETRY.CLOSE, STREAM.START, STREAM.STOP
 
 ---
 
@@ -243,6 +265,7 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
   - `sucre-snort-ctl METRICS.RESET '{\"name\":\"traffic\"}'`
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"domainRuleStats\"}'`
   - `sucre-snort-ctl METRICS.RESET '{\"name\":\"domainRuleStats\"}'`
+  - `sucre-snort-ctl METRICS.GET '{\"name\":\"telemetry\"}'`
 - 流（运行 10 秒内）
   - `sucre-snort-ctl --follow STREAM.START '{\"type\":\"dns\",\"horizonSec\":0,\"minSize\":0}'` → `notice.started` + `type=dns` 事件
   - `sucre-snort-ctl STREAM.STOP` → ack response

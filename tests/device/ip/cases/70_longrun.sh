@@ -221,7 +221,7 @@ EOF
     reasons_json="$(vnext_ctl_cmd METRICS.GET '{"name":"reasons"}' 2>/dev/null)"
     local reasons_rc=$?
     set -e
-    if [[ $reasons_rc -ne 0 || ! is_json "$reasons_json" ]]; then
+    if [[ $reasons_rc -ne 0 ]] || ! is_json "$reasons_json"; then
       health_fail "METRICS.GET(reasons) failed (rc=$reasons_rc)"
       return 1
     fi

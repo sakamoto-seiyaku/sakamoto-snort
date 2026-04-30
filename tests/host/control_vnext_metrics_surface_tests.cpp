@@ -13,6 +13,7 @@
 #include <PerfMetrics.hpp>
 #include <RulesManager.hpp>
 #include <Settings.hpp>
+#include <FlowTelemetry.hpp>
 #include <Streamable.hpp>
 #include <sucre-snort.hpp>
 
@@ -138,6 +139,7 @@ DomainManager domManager;
 AppManager appManager;
 PacketManager pktManager;
 PerfMetrics perfMetrics;
+FlowTelemetry flowTelemetry;
 std::shared_mutex mutexListeners;
 
 namespace {
@@ -189,6 +191,7 @@ protected:
 
         settings.reset();
         perfMetrics.resetAll();
+        flowTelemetry.resetAll();
         domManager.reset();
         rulesManager.reset();
         appManager.reset();
@@ -264,6 +267,72 @@ TEST_F(ControlVNextMetricsSurfaceTest, GetRejectsAppForDomainRuleStats) {
     EXPECT_FALSE(view.ok);
     ASSERT_NE(view.error, nullptr);
     EXPECT_STREQ((*view.error)["code"].GetString(), "INVALID_ARGUMENT");
+}
+
+TEST_F(ControlVNextMetricsSurfaceTest, GetRejectsAppForTelemetry) {
+    rapidjson::Document args(rapidjson::kObjectType);
+    auto &alloc = args.GetAllocator();
+    args.AddMember("name", rapidjson::Value("telemetry", alloc), alloc);
+    rapidjson::Value app(rapidjson::kObjectType);
+    app.AddMember("uid", 10123u, alloc);
+    args.AddMember("app", app, alloc);
+
+    const rapidjson::Document resp = Rpc::call(/*id=*/31, "METRICS.GET", args);
+
+    ControlVNext::ResponseView view;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp, view).has_value());
+    EXPECT_FALSE(view.ok);
+    ASSERT_NE(view.error, nullptr);
+    EXPECT_STREQ((*view.error)["code"].GetString(), "INVALID_ARGUMENT");
+}
+
+TEST_F(ControlVNextMetricsSurfaceTest, TelemetryStateIsExposed) {
+    rapidjson::Document args(rapidjson::kObjectType);
+    auto &alloc = args.GetAllocator();
+    args.AddMember("name", rapidjson::Value("telemetry", alloc), alloc);
+
+    // Default: no consumer.
+    const rapidjson::Document resp0 = Rpc::call(/*id=*/32, "METRICS.GET", args);
+    ControlVNext::ResponseView view0;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp0, view0).has_value());
+    ASSERT_TRUE(view0.ok);
+    ASSERT_NE(view0.result, nullptr);
+    ASSERT_TRUE(view0.result->HasMember("telemetry"));
+    const auto &tel0 = (*view0.result)["telemetry"];
+    ASSERT_TRUE(tel0.IsObject());
+    EXPECT_TRUE(tel0.HasMember("enabled"));
+    EXPECT_TRUE(tel0.HasMember("consumerPresent"));
+    EXPECT_TRUE(tel0.HasMember("sessionId"));
+    EXPECT_TRUE(tel0.HasMember("slotBytes"));
+    EXPECT_TRUE(tel0.HasMember("slotCount"));
+    EXPECT_TRUE(tel0.HasMember("recordsWritten"));
+    EXPECT_TRUE(tel0.HasMember("recordsDropped"));
+    EXPECT_TRUE(tel0.HasMember("lastDropReason"));
+
+    EXPECT_FALSE(tel0["enabled"].GetBool());
+    EXPECT_FALSE(tel0["consumerPresent"].GetBool());
+
+    // Enable a session and verify the state updates.
+    FlowTelemetry::OpenResult openRes{};
+    std::string openErr;
+    ASSERT_TRUE(flowTelemetry.open(
+        this, /*canPassFd=*/true, FlowTelemetry::Level::Flow, /*overrideCfg=*/std::nullopt, openRes, openErr))
+        << openErr;
+    ASSERT_GT(openRes.sessionId, 0u);
+
+    const rapidjson::Document resp1 = Rpc::call(/*id=*/33, "METRICS.GET", args);
+    ControlVNext::ResponseView view1;
+    ASSERT_FALSE(ControlVNext::parseResponseEnvelope(resp1, view1).has_value());
+    ASSERT_TRUE(view1.ok);
+    const auto &tel1 = (*view1.result)["telemetry"];
+    EXPECT_TRUE(tel1["enabled"].GetBool());
+    EXPECT_TRUE(tel1["consumerPresent"].GetBool());
+    EXPECT_EQ(tel1["sessionId"].GetUint64(), openRes.sessionId);
+    EXPECT_EQ(tel1["slotBytes"].GetUint(), openRes.slotBytes);
+    EXPECT_EQ(tel1["slotCount"].GetUint(), openRes.slotCount);
+
+    flowTelemetry.close(this);
+    flowTelemetry.resetAll();
 }
 
 TEST_F(ControlVNextMetricsSurfaceTest, DomainRuleStatsShapeSortAndReset) {

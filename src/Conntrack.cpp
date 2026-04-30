@@ -5,6 +5,8 @@
 
 #include <Conntrack.hpp>
 
+#include <FlowTelemetryRecords.hpp>
+
 #include <atomic>
 #include <array>
 #include <cstddef>
@@ -20,8 +22,80 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
+namespace {
+
+inline constexpr std::uint64_t kNsPerMs = 1'000'000ULL;
+
+inline bool isBlockReason(const PacketReasonId reason) noexcept {
+    switch (reason) {
+    case PacketReasonId::IFACE_BLOCK:
+    case PacketReasonId::IP_LEAK_BLOCK:
+    case PacketReasonId::IP_RULE_BLOCK:
+        return true;
+    case PacketReasonId::ALLOW_DEFAULT:
+    case PacketReasonId::IP_RULE_ALLOW:
+        return false;
+    }
+    return false;
+}
+
+inline std::uint64_t packDecisionKey(const std::uint8_t ctState, const std::uint8_t ctDir,
+                                     const PacketReasonId reason, const std::uint8_t ifaceKindBit,
+                                     const std::optional<std::uint32_t> &ruleId) noexcept {
+    const std::uint32_t rid = ruleId.value_or(0u);
+    return static_cast<std::uint64_t>(ctState) |
+        (static_cast<std::uint64_t>(ctDir) << 8) |
+        (static_cast<std::uint64_t>(static_cast<std::uint8_t>(reason)) << 16) |
+        (static_cast<std::uint64_t>(ifaceKindBit) << 24) |
+        (static_cast<std::uint64_t>(rid) << 32);
+}
+
+inline void unpackDecisionKey(const std::uint64_t packed, std::uint8_t &ctState, std::uint8_t &ctDir,
+                              PacketReasonId &reason, std::uint8_t &ifaceKindBit,
+                              std::optional<std::uint32_t> &ruleId) noexcept {
+    ctState = static_cast<std::uint8_t>(packed & 0xFFu);
+    ctDir = static_cast<std::uint8_t>((packed >> 8) & 0xFFu);
+    reason = static_cast<PacketReasonId>(static_cast<std::uint8_t>((packed >> 16) & 0xFFu));
+    ifaceKindBit = static_cast<std::uint8_t>((packed >> 24) & 0xFFu);
+    const std::uint32_t rid = static_cast<std::uint32_t>((packed >> 32) & 0xFFFFFFFFu);
+    ruleId = (rid == 0) ? std::nullopt : std::optional<std::uint32_t>(rid);
+}
+
+inline std::uint64_t clampCap(const std::uint64_t a, const std::uint64_t b) noexcept {
+    if (a == 0) return b;
+    if (b == 0) return a;
+    return (a < b) ? a : b;
+}
+
+class ScopedAtomicBool {
+public:
+    explicit ScopedAtomicBool(std::atomic<bool> &flag) noexcept : _flag(flag) {
+        bool expected = false;
+        _locked = _flag.compare_exchange_strong(expected, true, std::memory_order_acquire,
+                                                std::memory_order_relaxed);
+    }
+
+    ~ScopedAtomicBool() {
+        if (_locked) {
+            _flag.store(false, std::memory_order_release);
+        }
+    }
+
+    ScopedAtomicBool(const ScopedAtomicBool &) = delete;
+    ScopedAtomicBool &operator=(const ScopedAtomicBool &) = delete;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return _locked; }
+
+private:
+    std::atomic<bool> &_flag;
+    bool _locked = false;
+};
+
+} // namespace
+
 struct Conntrack::Shared {
     std::atomic<std::uint32_t> totalEntries{0};
+    std::atomic<std::uint64_t> nextFlowInstanceId{1};
 };
 
 struct Conntrack::ImplV4 {
@@ -71,6 +145,28 @@ struct Conntrack::ImplV4 {
         KeyV4 key{};
         KeyV4 revKey{};
         std::atomic<std::uint64_t> expirationNs{0};
+        // Flow Telemetry state (best-effort, bounded; used only when telemetry consumer is active).
+        struct TelemetryState {
+            std::atomic<std::uint64_t> flowInstanceId{0};
+            std::atomic<std::uint64_t> recordSeq{0};
+            std::atomic<bool> exportInProgress{false};
+
+            std::atomic<std::uint64_t> totalPackets{0};
+            std::atomic<std::uint64_t> totalBytes{0};
+
+            // Packed (ctState|ctDir|reasonId|ifaceKindBit|ruleId) to detect decision segment changes.
+            std::atomic<std::uint64_t> decisionKey{0};
+
+            // Export throttling snapshots (cumulative totals; consumer derives deltas).
+            std::atomic<std::uint64_t> lastExportPackets{0};
+            std::atomic<std::uint64_t> lastExportBytes{0};
+            std::atomic<std::uint64_t> lastExportTsNs{0};
+            std::atomic<std::uint64_t> lastExportDecisionKey{0};
+
+            // Last seen non-key metadata needed for END export on retire.
+            std::atomic<std::uint32_t> lastUserId{0};
+            std::atomic<std::uint32_t> lastIfindex{0};
+        } tele{};
         // Tracker state:
         // - TCP: state0/state1 are peer[0]/peer[1] TcpPeerState values.
         // - other(UDP+other): state0 is OtherState.
@@ -220,7 +316,6 @@ struct Conntrack::ImplV4 {
     std::atomic<std::uint64_t> expiredRetires{0};
     std::atomic<std::uint64_t> overflowDrops{0};
     std::atomic<std::uint64_t> lastEpochAdvanceTsNs{0};
-
     static inline bool isPow2(const std::uint32_t v) noexcept {
         return v != 0 && ((v & (v - 1u)) == 0u);
     }
@@ -425,6 +520,9 @@ struct Conntrack::ImplV4 {
     }
 
     std::uint32_t sweepLocked(Shard &shard, const std::uint64_t nowNs, const std::uint8_t retireEpoch) noexcept {
+        const FlowTelemetry::HotPath teleHot = flowTelemetry.hotPathFlow();
+        const bool telemetryActive = teleHot.session != nullptr && teleHot.cfg != nullptr;
+
         std::uint32_t removed = 0;
         std::uint32_t scannedBuckets = 0;
         std::uint32_t scannedEntries = 0;
@@ -442,6 +540,66 @@ struct Conntrack::ImplV4 {
                 scannedEntries++;
                 Entry *next = cur->next.load(std::memory_order_relaxed);
                 if (expired(*cur, nowNs)) {
+                    if (telemetryActive) {
+                        const std::uint64_t flowId =
+                            cur->tele.flowInstanceId.load(std::memory_order_relaxed);
+                        const std::uint64_t packedKey =
+                            cur->tele.decisionKey.load(std::memory_order_relaxed);
+                        if (flowId != 0 && packedKey != 0) {
+                            std::uint8_t ctState = 0;
+                            std::uint8_t ctDir = 0;
+                            PacketReasonId reason = PacketReasonId::ALLOW_DEFAULT;
+                            std::uint8_t ifaceKind = 0;
+                            std::optional<std::uint32_t> rid = std::nullopt;
+                            unpackDecisionKey(packedKey, ctState, ctDir, reason, ifaceKind, rid);
+
+                            const std::uint64_t totalPk =
+                                cur->tele.totalPackets.load(std::memory_order_relaxed);
+                            const std::uint64_t totalBy =
+                                cur->tele.totalBytes.load(std::memory_order_relaxed);
+                            const std::uint32_t userId =
+                                cur->tele.lastUserId.load(std::memory_order_relaxed);
+                            const std::uint32_t ifindex =
+                                cur->tele.lastIfindex.load(std::memory_order_relaxed);
+
+                            const auto toV4 = [](const std::uint32_t ip) noexcept {
+                                std::array<std::byte, 4> out{};
+                                out[0] = static_cast<std::byte>((ip >> 24) & 0xFFu);
+                                out[1] = static_cast<std::byte>((ip >> 16) & 0xFFu);
+                                out[2] = static_cast<std::byte>((ip >> 8) & 0xFFu);
+                                out[3] = static_cast<std::byte>(ip & 0xFFu);
+                                return out;
+                            };
+                            const auto src = toV4(cur->key.src.ip);
+                            const auto dst = toV4(cur->key.dst.ip);
+
+                            ScopedAtomicBool exportGuard(cur->tele.exportInProgress);
+                            if (exportGuard) {
+                                const std::uint64_t recordSeq =
+                                    cur->tele.recordSeq.load(std::memory_order_relaxed) + 1;
+
+                                FlowTelemetryRecords::EncodedPayload payload{};
+                                if (FlowTelemetryRecords::encodeFlowV1(
+                                        payload, FlowTelemetryRecords::FlowRecordKind::End, ctState, ctDir,
+                                        static_cast<std::uint8_t>(reason), ifaceKind, /*isIpv6=*/false,
+                                        nowNs, flowId, recordSeq, cur->key.uid, userId, ifindex,
+                                        cur->key.proto, cur->key.src.port, cur->key.dst.port,
+                                        std::span<const std::byte>(src.data(), src.size()),
+                                        std::span<const std::byte>(dst.data(), dst.size()),
+                                        totalPk, totalBy, rid)) {
+                                    if (flowTelemetry.exportRecordHot(
+                                            teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
+                                        cur->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
+                                        cur->tele.lastExportPackets.store(totalPk, std::memory_order_relaxed);
+                                        cur->tele.lastExportBytes.store(totalBy, std::memory_order_relaxed);
+                                        cur->tele.lastExportTsNs.store(nowNs, std::memory_order_relaxed);
+                                        cur->tele.lastExportDecisionKey.store(packedKey, std::memory_order_relaxed);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Unlink.
                     if (prev) {
                         prev->next.store(next, std::memory_order_relaxed);
@@ -672,6 +830,25 @@ struct Conntrack::ImplV6 {
         KeyV6 key{};
         KeyV6 revKey{};
         std::atomic<std::uint64_t> expirationNs{0};
+        // Flow Telemetry state (best-effort, bounded; used only when telemetry consumer is active).
+        struct TelemetryState {
+            std::atomic<std::uint64_t> flowInstanceId{0};
+            std::atomic<std::uint64_t> recordSeq{0};
+            std::atomic<bool> exportInProgress{false};
+
+            std::atomic<std::uint64_t> totalPackets{0};
+            std::atomic<std::uint64_t> totalBytes{0};
+
+            std::atomic<std::uint64_t> decisionKey{0};
+
+            std::atomic<std::uint64_t> lastExportPackets{0};
+            std::atomic<std::uint64_t> lastExportBytes{0};
+            std::atomic<std::uint64_t> lastExportTsNs{0};
+            std::atomic<std::uint64_t> lastExportDecisionKey{0};
+
+            std::atomic<std::uint32_t> lastUserId{0};
+            std::atomic<std::uint32_t> lastIfindex{0};
+        } tele{};
         std::atomic<std::uint8_t> state0{0};
         std::atomic<std::uint8_t> state1{0};
         std::atomic<Entry *> next{nullptr};
@@ -816,7 +993,6 @@ struct Conntrack::ImplV6 {
     std::atomic<std::uint64_t> expiredRetires{0};
     std::atomic<std::uint64_t> overflowDrops{0};
     std::atomic<std::uint64_t> lastEpochAdvanceTsNs{0};
-
     static inline bool isPow2(const std::uint32_t v) noexcept {
         return v != 0 && ((v & (v - 1u)) == 0u);
     }
@@ -1011,6 +1187,9 @@ struct Conntrack::ImplV6 {
     }
 
     std::uint32_t sweepLocked(Shard &shard, const std::uint64_t nowNs, const std::uint8_t retireEpoch) noexcept {
+        const FlowTelemetry::HotPath teleHot = flowTelemetry.hotPathFlow();
+        const bool telemetryActive = teleHot.session != nullptr && teleHot.cfg != nullptr;
+
         std::uint32_t removed = 0;
         std::uint32_t scannedBuckets = 0;
         std::uint32_t scannedEntries = 0;
@@ -1028,6 +1207,57 @@ struct Conntrack::ImplV6 {
                 scannedEntries++;
                 Entry *next = cur->next.load(std::memory_order_relaxed);
                 if (expired(*cur, nowNs)) {
+                    if (telemetryActive) {
+                        const std::uint64_t flowId =
+                            cur->tele.flowInstanceId.load(std::memory_order_relaxed);
+                        const std::uint64_t packedKey =
+                            cur->tele.decisionKey.load(std::memory_order_relaxed);
+                        if (flowId != 0 && packedKey != 0) {
+                            std::uint8_t ctState = 0;
+                            std::uint8_t ctDir = 0;
+                            PacketReasonId reason = PacketReasonId::ALLOW_DEFAULT;
+                            std::uint8_t ifaceKind = 0;
+                            std::optional<std::uint32_t> rid = std::nullopt;
+                            unpackDecisionKey(packedKey, ctState, ctDir, reason, ifaceKind, rid);
+
+                            const std::uint64_t totalPk =
+                                cur->tele.totalPackets.load(std::memory_order_relaxed);
+                            const std::uint64_t totalBy =
+                                cur->tele.totalBytes.load(std::memory_order_relaxed);
+                            const std::uint32_t userId =
+                                cur->tele.lastUserId.load(std::memory_order_relaxed);
+                            const std::uint32_t ifindex =
+                                cur->tele.lastIfindex.load(std::memory_order_relaxed);
+
+                            ScopedAtomicBool exportGuard(cur->tele.exportInProgress);
+                            if (exportGuard) {
+                                const std::uint64_t recordSeq =
+                                    cur->tele.recordSeq.load(std::memory_order_relaxed) + 1;
+
+                                FlowTelemetryRecords::EncodedPayload payload{};
+                                if (FlowTelemetryRecords::encodeFlowV1(
+                                        payload, FlowTelemetryRecords::FlowRecordKind::End, ctState, ctDir,
+                                        static_cast<std::uint8_t>(reason), ifaceKind, /*isIpv6=*/true,
+                                        nowNs, flowId, recordSeq, cur->key.uid, userId, ifindex,
+                                        cur->key.proto, cur->key.src.port, cur->key.dst.port,
+                                        std::span<const std::byte>(
+                                            reinterpret_cast<const std::byte *>(cur->key.src.ip.data()), 16),
+                                        std::span<const std::byte>(
+                                            reinterpret_cast<const std::byte *>(cur->key.dst.ip.data()), 16),
+                                        totalPk, totalBy, rid)) {
+                                    if (flowTelemetry.exportRecordHot(
+                                            teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
+                                        cur->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
+                                        cur->tele.lastExportPackets.store(totalPk, std::memory_order_relaxed);
+                                        cur->tele.lastExportBytes.store(totalBy, std::memory_order_relaxed);
+                                        cur->tele.lastExportTsNs.store(nowNs, std::memory_order_relaxed);
+                                        cur->tele.lastExportDecisionKey.store(packedKey, std::memory_order_relaxed);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (prev) {
                         prev->next.store(next, std::memory_order_relaxed);
                     } else {
@@ -1519,6 +1749,8 @@ void Conntrack::commitAccepted(const PacketV4 &pkt, const PolicyView &view) noex
 
         e->key = key;
         e->revKey = ImplV4::reverseKey(key);
+        e->tele.flowInstanceId.store(_impl4->shared->nextFlowInstanceId.fetch_add(1, std::memory_order_relaxed),
+                                     std::memory_order_relaxed);
         if (pkt.proto == IPPROTO_TCP) {
             e->state0.store(static_cast<std::uint8_t>(ImplV4::TcpPeerState::SYN_SENT),
                             std::memory_order_relaxed);
@@ -1823,6 +2055,8 @@ void Conntrack::commitAccepted(const PacketV6 &pkt, const PolicyView &view) noex
 
         e->key = key;
         e->revKey = ImplV6::reverseKey(key);
+        e->tele.flowInstanceId.store(_impl6->shared->nextFlowInstanceId.fetch_add(1, std::memory_order_relaxed),
+                                     std::memory_order_relaxed);
         if (pkt.proto == IPPROTO_TCP) {
             e->state0.store(static_cast<std::uint8_t>(ImplV6::TcpPeerState::SYN_SENT),
                             std::memory_order_relaxed);
@@ -1859,6 +2093,488 @@ Conntrack::Result Conntrack::update(const PacketV6 &pkt) noexcept {
     const auto view = inspectForPolicy(pkt);
     commitAccepted(pkt, view);
     return view.result;
+}
+
+void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult,
+                                     const FlowTelemetry::HotPath &teleHot,
+                                     const std::uint8_t ifaceKindBit, const std::uint32_t userId,
+                                     const std::uint32_t ifindex, const PacketReasonId reasonId,
+                                     const std::optional<std::uint32_t> &ruleId,
+                                     const std::span<const std::byte> srcAddrNet,
+                                     const std::span<const std::byte> dstAddrNet,
+                                     const std::uint32_t packetBytes) noexcept {
+    if (!_impl4) {
+        return;
+    }
+    if (!teleHot.session || !teleHot.cfg) {
+        return;
+    }
+
+    // FLOW v1 expects IPv4 addr bytes.
+    if (srcAddrNet.size() != 4 || dstAddrNet.size() != 4) {
+        return;
+    }
+
+    ImplV4::KeyV4 key{};
+    if (!_impl4->makeKey(pkt, key)) {
+        return;
+    }
+
+    const std::uint64_t h = ImplV4::hashKey(key);
+    const std::uint32_t shardIndex = static_cast<std::uint32_t>(h % _impl4->shards.size());
+    const std::uint32_t bucketIndex = static_cast<std::uint32_t>(h) & _impl4->bucketMask;
+    ImplV4::Shard &shard = *_impl4->shards[shardIndex];
+
+    const auto epochSlot = _impl4->epoch.slotForThread();
+    struct EpochGuard {
+        ImplV4::Epoch &epoch;
+        ImplV4::Epoch::Slot *slot = nullptr;
+        EpochGuard(ImplV4::Epoch &e, ImplV4::Epoch::Slot *s) noexcept : epoch(e), slot(s) {
+            epoch.enter(slot);
+        }
+        ~EpochGuard() { epoch.exit(slot); }
+    } epochGuard(_impl4->epoch, epochSlot);
+
+    const auto isExpired = [&](const ImplV4::Entry &e) noexcept -> bool {
+        const std::uint64_t exp = e.expirationNs.load(std::memory_order_relaxed);
+        return exp != 0 && pkt.tsNs >= exp;
+    };
+
+    ImplV4::Entry *e = nullptr;
+    // Lock-free search first.
+    {
+        ImplV4::Entry *cur = shard.buckets[bucketIndex].load(std::memory_order_acquire);
+        while (cur) {
+            if (ImplV4::keyEq(cur->key, key) || ImplV4::keyEq(cur->revKey, key)) {
+                if (isExpired(*cur)) {
+                    break;
+                }
+                e = cur;
+                break;
+            }
+            cur = cur->next.load(std::memory_order_relaxed);
+        }
+    }
+
+    bool didRetire = false;
+    if (!e) {
+        // Miss: create an entry (telemetry tracks both allow and block attempts).
+        const std::lock_guard<std::mutex> g(shard.mutex);
+
+        ImplV4::Entry *cur = shard.buckets[bucketIndex].load(std::memory_order_acquire);
+        while (cur) {
+            if (ImplV4::keyEq(cur->key, key) || ImplV4::keyEq(cur->revKey, key)) {
+                if (!isExpired(*cur)) {
+                    e = cur;
+                }
+                break;
+            }
+            cur = cur->next.load(std::memory_order_relaxed);
+        }
+
+        if (!e) {
+            // Budgeted sweep before insert to free expired entries.
+            const std::uint8_t retireEpoch = _impl4->epoch.current();
+            const std::uint32_t swept = _impl4->sweepLocked(shard, pkt.tsNs, retireEpoch);
+            didRetire = swept != 0;
+
+            const std::uint64_t cap = clampCap(static_cast<std::uint64_t>(_impl4->opt.maxEntries),
+                                               static_cast<std::uint64_t>(teleHot.cfg->maxFlowEntries));
+            const std::uint64_t n =
+                _impl4->shared ? _impl4->shared->totalEntries.load(std::memory_order_relaxed)
+                               : _impl4->totalEntries.load(std::memory_order_relaxed);
+            if (cap != 0 && n >= cap) {
+                _impl4->overflowDrops.fetch_add(1, std::memory_order_relaxed);
+                flowTelemetry.accountResourcePressureDrop();
+                return;
+            }
+
+            if (pkt.proto == IPPROTO_TCP && !ImplV4::tcpValidNew(pkt)) {
+                return;
+            }
+            if (pkt.proto == IPPROTO_ICMP && !ImplV4::icmp4ValidNew(pkt)) {
+                return;
+            }
+
+            auto *ne = new (std::nothrow) ImplV4::Entry();
+            if (!ne) {
+                flowTelemetry.accountResourcePressureDrop();
+                return;
+            }
+
+            if (_impl4->shared) {
+                const std::uint32_t prev =
+                    _impl4->shared->totalEntries.fetch_add(1, std::memory_order_relaxed);
+                if (cap != 0 && static_cast<std::uint64_t>(prev) >= cap) {
+                    _impl4->shared->totalEntries.fetch_sub(1, std::memory_order_relaxed);
+                    _impl4->overflowDrops.fetch_add(1, std::memory_order_relaxed);
+                    flowTelemetry.accountResourcePressureDrop();
+                    delete ne;
+                    return;
+                }
+            }
+
+            ne->key = key;
+            ne->revKey = ImplV4::reverseKey(key);
+            ne->tele.flowInstanceId.store(
+                _impl4->shared->nextFlowInstanceId.fetch_add(1, std::memory_order_relaxed),
+                std::memory_order_relaxed);
+
+            // Initialize tracker state/expiration like accept-commit, then clamp if blocked.
+            if (pkt.proto == IPPROTO_TCP) {
+                ne->state0.store(static_cast<std::uint8_t>(ImplV4::TcpPeerState::SYN_SENT),
+                                 std::memory_order_relaxed);
+                ne->state1.store(static_cast<std::uint8_t>(ImplV4::TcpPeerState::CLOSED),
+                                 std::memory_order_relaxed);
+                ne->expirationNs.store(ImplV4::addTimeoutNs(pkt.tsNs, _impl4->tp.tcpSynSent),
+                                       std::memory_order_relaxed);
+            } else if (pkt.proto == IPPROTO_ICMP) {
+                ne->state0.store(static_cast<std::uint8_t>(ImplV4::IcmpState::FIRST),
+                                 std::memory_order_relaxed);
+                ne->expirationNs.store(ImplV4::addTimeoutNs(pkt.tsNs, _impl4->tp.icmpFirst),
+                                       std::memory_order_relaxed);
+            } else {
+                ne->state0.store(static_cast<std::uint8_t>(ImplV4::OtherState::FIRST),
+                                 std::memory_order_relaxed);
+                ne->expirationNs.store(ImplV4::addTimeoutNs(pkt.tsNs, _impl4->tp.udpFirst),
+                                       std::memory_order_relaxed);
+            }
+
+            ne->next.store(shard.buckets[bucketIndex].load(std::memory_order_relaxed),
+                           std::memory_order_relaxed);
+            shard.buckets[bucketIndex].store(ne, std::memory_order_release);
+            shard.size.fetch_add(1, std::memory_order_relaxed);
+            _impl4->totalEntries.fetch_add(1, std::memory_order_relaxed);
+            _impl4->creates.fetch_add(1, std::memory_order_relaxed);
+            e = ne;
+        }
+    }
+
+    if (!e) {
+        return;
+    }
+
+    // Update cumulative counters (count blocked attempts too).
+    const std::uint64_t totalPackets =
+        e->tele.totalPackets.fetch_add(1, std::memory_order_relaxed) + 1;
+    const std::uint64_t totalBytes =
+        e->tele.totalBytes.fetch_add(packetBytes, std::memory_order_relaxed) + packetBytes;
+
+    e->tele.lastUserId.store(userId, std::memory_order_relaxed);
+    e->tele.lastIfindex.store(ifindex, std::memory_order_relaxed);
+
+    // Clamp expiration for blocked segments (IFACE_BLOCK / IP_RULE_BLOCK / IP_LEAK_BLOCK).
+    if (isBlockReason(reasonId)) {
+        const std::uint64_t blockExp = pkt.tsNs + static_cast<std::uint64_t>(teleHot.cfg->blockTtlMs) * kNsPerMs;
+        const std::uint64_t curExp = e->expirationNs.load(std::memory_order_relaxed);
+        if (curExp == 0 || curExp > blockExp) {
+            e->expirationNs.store(blockExp, std::memory_order_relaxed);
+        }
+    }
+
+    const std::uint8_t ctStateU8 = static_cast<std::uint8_t>(ctResult.state);
+    const std::uint8_t ctDirU8 = static_cast<std::uint8_t>(ctResult.direction);
+    const std::uint64_t decisionKey = packDecisionKey(ctStateU8, ctDirU8, reasonId, ifaceKindBit, ruleId);
+    const std::uint64_t prevDecisionKey = e->tele.decisionKey.exchange(decisionKey, std::memory_order_relaxed);
+
+    const std::uint64_t lastPk = e->tele.lastExportPackets.load(std::memory_order_relaxed);
+    const std::uint64_t lastBy = e->tele.lastExportBytes.load(std::memory_order_relaxed);
+    const std::uint64_t lastTs = e->tele.lastExportTsNs.load(std::memory_order_relaxed);
+    const std::uint64_t lastKey = e->tele.lastExportDecisionKey.load(std::memory_order_relaxed);
+
+    const bool decisionChanged = (decisionKey != lastKey) && (lastTs != 0);
+    const bool countersDue =
+        (teleHot.cfg->packetsThreshold != 0 && totalPackets - lastPk >= teleHot.cfg->packetsThreshold) ||
+        (teleHot.cfg->bytesThreshold != 0 && totalBytes - lastBy >= teleHot.cfg->bytesThreshold);
+    const bool timeDue =
+        (lastTs == 0) ||
+        (teleHot.cfg->maxExportIntervalMs != 0 &&
+         pkt.tsNs > lastTs &&
+         (pkt.tsNs - lastTs) >= static_cast<std::uint64_t>(teleHot.cfg->maxExportIntervalMs) * kNsPerMs);
+
+    // Export policy:
+    // - First export is BEGIN (even if decisionKey packed is 0).
+    // - Subsequent exports are UPDATE when decisionKey changes or thresholds/interval are hit.
+    if (!decisionChanged && !countersDue && !timeDue) {
+        if (didRetire) {
+            _impl4->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        (void)prevDecisionKey;
+        return;
+    }
+
+    const FlowTelemetryRecords::FlowRecordKind kind =
+        (lastTs == 0) ? FlowTelemetryRecords::FlowRecordKind::Begin
+                      : FlowTelemetryRecords::FlowRecordKind::Update;
+
+    ScopedAtomicBool exportGuard(e->tele.exportInProgress);
+    if (!exportGuard) {
+        if (didRetire) {
+            _impl4->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        return;
+    }
+
+    const std::uint64_t recordSeq = e->tele.recordSeq.load(std::memory_order_relaxed) + 1;
+
+    FlowTelemetryRecords::EncodedPayload payload{};
+    if (!FlowTelemetryRecords::encodeFlowV1(
+            payload, kind, ctStateU8, ctDirU8, static_cast<std::uint8_t>(reasonId), ifaceKindBit,
+            /*isIpv6=*/false, pkt.tsNs, e->tele.flowInstanceId.load(std::memory_order_relaxed),
+            recordSeq, pkt.uid, userId, ifindex, pkt.proto, pkt.srcPort, pkt.dstPort,
+            srcAddrNet, dstAddrNet, totalPackets, totalBytes, ruleId)) {
+        if (didRetire) {
+            _impl4->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        return;
+    }
+
+    if (flowTelemetry.exportRecordHot(teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
+        e->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
+        e->tele.lastExportPackets.store(totalPackets, std::memory_order_relaxed);
+        e->tele.lastExportBytes.store(totalBytes, std::memory_order_relaxed);
+        e->tele.lastExportTsNs.store(pkt.tsNs, std::memory_order_relaxed);
+        e->tele.lastExportDecisionKey.store(decisionKey, std::memory_order_relaxed);
+    }
+
+    if (didRetire) {
+        _impl4->maybeAdvanceAndReclaim(pkt.tsNs);
+    }
+}
+
+void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult,
+                                     const FlowTelemetry::HotPath &teleHot,
+                                     const std::uint8_t ifaceKindBit, const std::uint32_t userId,
+                                     const std::uint32_t ifindex, const PacketReasonId reasonId,
+                                     const std::optional<std::uint32_t> &ruleId,
+                                     const std::span<const std::byte> srcAddrNet,
+                                     const std::span<const std::byte> dstAddrNet,
+                                     const std::uint32_t packetBytes) noexcept {
+    if (!_impl6) {
+        return;
+    }
+    if (!teleHot.session || !teleHot.cfg) {
+        return;
+    }
+
+    if (srcAddrNet.size() != 16 || dstAddrNet.size() != 16) {
+        return;
+    }
+
+    ImplV6::KeyV6 key{};
+    if (!_impl6->makeKey(pkt, key)) {
+        return;
+    }
+
+    const std::uint64_t h = ImplV6::hashKey(key);
+    const std::uint32_t shardIndex = static_cast<std::uint32_t>(h % _impl6->shards.size());
+    const std::uint32_t bucketIndex = static_cast<std::uint32_t>(h) & _impl6->bucketMask;
+    ImplV6::Shard &shard = *_impl6->shards[shardIndex];
+
+    const auto epochSlot = _impl6->epoch.slotForThread();
+    struct EpochGuard {
+        ImplV6::Epoch &epoch;
+        ImplV6::Epoch::Slot *slot = nullptr;
+        EpochGuard(ImplV6::Epoch &e, ImplV6::Epoch::Slot *s) noexcept : epoch(e), slot(s) {
+            epoch.enter(slot);
+        }
+        ~EpochGuard() { epoch.exit(slot); }
+    } epochGuard(_impl6->epoch, epochSlot);
+
+    const auto isExpired = [&](const ImplV6::Entry &e) noexcept -> bool {
+        const std::uint64_t exp = e.expirationNs.load(std::memory_order_relaxed);
+        return exp != 0 && pkt.tsNs >= exp;
+    };
+
+    ImplV6::Entry *e = nullptr;
+    {
+        ImplV6::Entry *cur = shard.buckets[bucketIndex].load(std::memory_order_acquire);
+        while (cur) {
+            if (ImplV6::keyEq(cur->key, key) || ImplV6::keyEq(cur->revKey, key)) {
+                if (isExpired(*cur)) {
+                    break;
+                }
+                e = cur;
+                break;
+            }
+            cur = cur->next.load(std::memory_order_relaxed);
+        }
+    }
+
+    bool didRetire = false;
+    if (!e) {
+        const std::lock_guard<std::mutex> g(shard.mutex);
+        ImplV6::Entry *cur = shard.buckets[bucketIndex].load(std::memory_order_acquire);
+        while (cur) {
+            if (ImplV6::keyEq(cur->key, key) || ImplV6::keyEq(cur->revKey, key)) {
+                if (!isExpired(*cur)) {
+                    e = cur;
+                }
+                break;
+            }
+            cur = cur->next.load(std::memory_order_relaxed);
+        }
+
+        if (!e) {
+            const std::uint8_t retireEpoch = _impl6->epoch.current();
+            const std::uint32_t swept = _impl6->sweepLocked(shard, pkt.tsNs, retireEpoch);
+            didRetire = swept != 0;
+
+            const std::uint64_t cap = clampCap(static_cast<std::uint64_t>(_impl6->opt.maxEntries),
+                                               static_cast<std::uint64_t>(teleHot.cfg->maxFlowEntries));
+            const std::uint64_t n =
+                _impl6->shared ? _impl6->shared->totalEntries.load(std::memory_order_relaxed)
+                               : _impl6->totalEntries.load(std::memory_order_relaxed);
+            if (cap != 0 && n >= cap) {
+                _impl6->overflowDrops.fetch_add(1, std::memory_order_relaxed);
+                flowTelemetry.accountResourcePressureDrop();
+                return;
+            }
+
+            if (pkt.proto == IPPROTO_TCP && !ImplV6::tcpValidNew(pkt)) {
+                return;
+            }
+            if (pkt.proto == IPPROTO_ICMPV6 && !ImplV6::icmp6ValidNew(pkt)) {
+                return;
+            }
+
+            auto *ne = new (std::nothrow) ImplV6::Entry();
+            if (!ne) {
+                flowTelemetry.accountResourcePressureDrop();
+                return;
+            }
+
+            if (_impl6->shared) {
+                const std::uint32_t prev =
+                    _impl6->shared->totalEntries.fetch_add(1, std::memory_order_relaxed);
+                if (cap != 0 && static_cast<std::uint64_t>(prev) >= cap) {
+                    _impl6->shared->totalEntries.fetch_sub(1, std::memory_order_relaxed);
+                    _impl6->overflowDrops.fetch_add(1, std::memory_order_relaxed);
+                    flowTelemetry.accountResourcePressureDrop();
+                    delete ne;
+                    return;
+                }
+            }
+
+            ne->key = key;
+            ne->revKey = ImplV6::reverseKey(key);
+            ne->tele.flowInstanceId.store(
+                _impl6->shared->nextFlowInstanceId.fetch_add(1, std::memory_order_relaxed),
+                std::memory_order_relaxed);
+
+            if (pkt.proto == IPPROTO_TCP) {
+                ne->state0.store(static_cast<std::uint8_t>(ImplV6::TcpPeerState::SYN_SENT),
+                                 std::memory_order_relaxed);
+                ne->state1.store(static_cast<std::uint8_t>(ImplV6::TcpPeerState::CLOSED),
+                                 std::memory_order_relaxed);
+                ne->expirationNs.store(ImplV6::addTimeoutNs(pkt.tsNs, _impl6->tp.tcpSynSent),
+                                       std::memory_order_relaxed);
+            } else if (pkt.proto == IPPROTO_ICMPV6) {
+                ne->state0.store(static_cast<std::uint8_t>(ImplV6::IcmpState::FIRST),
+                                 std::memory_order_relaxed);
+                ne->expirationNs.store(ImplV6::addTimeoutNs(pkt.tsNs, _impl6->tp.icmpFirst),
+                                       std::memory_order_relaxed);
+            } else {
+                ne->state0.store(static_cast<std::uint8_t>(ImplV6::OtherState::FIRST),
+                                 std::memory_order_relaxed);
+                ne->expirationNs.store(ImplV6::addTimeoutNs(pkt.tsNs, _impl6->tp.udpFirst),
+                                       std::memory_order_relaxed);
+            }
+
+            ne->next.store(shard.buckets[bucketIndex].load(std::memory_order_relaxed),
+                           std::memory_order_relaxed);
+            shard.buckets[bucketIndex].store(ne, std::memory_order_release);
+            shard.size.fetch_add(1, std::memory_order_relaxed);
+            _impl6->totalEntries.fetch_add(1, std::memory_order_relaxed);
+            _impl6->creates.fetch_add(1, std::memory_order_relaxed);
+            e = ne;
+        }
+    }
+
+    if (!e) {
+        return;
+    }
+
+    const std::uint64_t totalPackets =
+        e->tele.totalPackets.fetch_add(1, std::memory_order_relaxed) + 1;
+    const std::uint64_t totalBytes =
+        e->tele.totalBytes.fetch_add(packetBytes, std::memory_order_relaxed) + packetBytes;
+
+    e->tele.lastUserId.store(userId, std::memory_order_relaxed);
+    e->tele.lastIfindex.store(ifindex, std::memory_order_relaxed);
+
+    if (isBlockReason(reasonId)) {
+        const std::uint64_t blockExp = pkt.tsNs + static_cast<std::uint64_t>(teleHot.cfg->blockTtlMs) * kNsPerMs;
+        const std::uint64_t curExp = e->expirationNs.load(std::memory_order_relaxed);
+        if (curExp == 0 || curExp > blockExp) {
+            e->expirationNs.store(blockExp, std::memory_order_relaxed);
+        }
+    }
+
+    const std::uint8_t ctStateU8 = static_cast<std::uint8_t>(ctResult.state);
+    const std::uint8_t ctDirU8 = static_cast<std::uint8_t>(ctResult.direction);
+    const std::uint64_t decisionKey = packDecisionKey(ctStateU8, ctDirU8, reasonId, ifaceKindBit, ruleId);
+    (void)e->tele.decisionKey.exchange(decisionKey, std::memory_order_relaxed);
+
+    const std::uint64_t lastPk = e->tele.lastExportPackets.load(std::memory_order_relaxed);
+    const std::uint64_t lastBy = e->tele.lastExportBytes.load(std::memory_order_relaxed);
+    const std::uint64_t lastTs = e->tele.lastExportTsNs.load(std::memory_order_relaxed);
+    const std::uint64_t lastKey = e->tele.lastExportDecisionKey.load(std::memory_order_relaxed);
+
+    const bool decisionChanged = (decisionKey != lastKey) && (lastTs != 0);
+    const bool countersDue =
+        (teleHot.cfg->packetsThreshold != 0 && totalPackets - lastPk >= teleHot.cfg->packetsThreshold) ||
+        (teleHot.cfg->bytesThreshold != 0 && totalBytes - lastBy >= teleHot.cfg->bytesThreshold);
+    const bool timeDue =
+        (lastTs == 0) ||
+        (teleHot.cfg->maxExportIntervalMs != 0 &&
+         pkt.tsNs > lastTs &&
+         (pkt.tsNs - lastTs) >= static_cast<std::uint64_t>(teleHot.cfg->maxExportIntervalMs) * kNsPerMs);
+
+    if (!decisionChanged && !countersDue && !timeDue) {
+        if (didRetire) {
+            _impl6->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        return;
+    }
+
+    const FlowTelemetryRecords::FlowRecordKind kind =
+        (lastTs == 0) ? FlowTelemetryRecords::FlowRecordKind::Begin
+                      : FlowTelemetryRecords::FlowRecordKind::Update;
+
+    ScopedAtomicBool exportGuard(e->tele.exportInProgress);
+    if (!exportGuard) {
+        if (didRetire) {
+            _impl6->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        return;
+    }
+
+    const std::uint64_t recordSeq = e->tele.recordSeq.load(std::memory_order_relaxed) + 1;
+
+    FlowTelemetryRecords::EncodedPayload payload{};
+    if (!FlowTelemetryRecords::encodeFlowV1(
+            payload, kind, ctStateU8, ctDirU8, static_cast<std::uint8_t>(reasonId), ifaceKindBit,
+            /*isIpv6=*/true, pkt.tsNs, e->tele.flowInstanceId.load(std::memory_order_relaxed),
+            recordSeq, pkt.uid, userId, ifindex, pkt.proto, pkt.srcPort, pkt.dstPort,
+            srcAddrNet, dstAddrNet, totalPackets, totalBytes, ruleId)) {
+        if (didRetire) {
+            _impl6->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        return;
+    }
+
+    if (flowTelemetry.exportRecordHot(teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
+        e->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
+        e->tele.lastExportPackets.store(totalPackets, std::memory_order_relaxed);
+        e->tele.lastExportBytes.store(totalBytes, std::memory_order_relaxed);
+        e->tele.lastExportTsNs.store(pkt.tsNs, std::memory_order_relaxed);
+        e->tele.lastExportDecisionKey.store(decisionKey, std::memory_order_relaxed);
+    }
+
+    if (didRetire) {
+        _impl6->maybeAdvanceAndReclaim(pkt.tsNs);
+    }
 }
 
 Conntrack::MetricsSnapshot Conntrack::metricsSnapshot() const noexcept {

@@ -226,6 +226,7 @@ def make_rule(index: int) -> dict:
     fourth = index & 0xFF
     return {
         "clientRuleId": f"dx-other:{index}",
+        "family": "ipv4",
         "action": "allow",
         "priority": 100,
         "enabled": 1,

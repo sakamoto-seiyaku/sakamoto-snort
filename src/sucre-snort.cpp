@@ -20,6 +20,7 @@
 #include <Control.hpp>
 #include <ControlVNext.hpp>
 #include <ControlVNextStreamManager.hpp>
+#include <FlowTelemetry.hpp>
 #include <Rule.hpp>
 #include <BlockingListManager.hpp>
 
@@ -38,6 +39,7 @@ PacketListener<IPv4> pktListener4;
 PacketListener<IPv6> pktListener6;
 Control control;
 ControlVNext controlVNext;
+FlowTelemetry flowTelemetry;
 
 static std::mutex g_snortSaveResetMutex;
 
@@ -158,6 +160,7 @@ void snortResetAll() {
 
     snortBeginResetEpoch();
     controlVNextStream.resetAll();
+    flowTelemetry.resetAll();
     (void)::unlink(settings.saveDnsStream.c_str());
 
     perfMetrics.resetAll();

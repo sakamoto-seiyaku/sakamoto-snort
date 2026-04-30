@@ -128,6 +128,13 @@ if(SNORT_ENABLE_HOST_TESTS)
   )
     list(APPEND SNORT_HOST_TEST_ENV "TSAN_OPTIONS=halt_on_error=1")
   endif()
+  if(
+    CMAKE_CXX_FLAGS MATCHES "-fsanitize=undefined"
+    OR CMAKE_C_FLAGS MATCHES "-fsanitize=undefined"
+    OR CMAKE_EXE_LINKER_FLAGS MATCHES "-fsanitize=undefined"
+  )
+    list(APPEND SNORT_HOST_TEST_ENV "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+  endif()
   add_custom_target(
     snort-host-tests
     COMMAND "${CMAKE_COMMAND}" -E env ${SNORT_HOST_TEST_ENV} "${CMAKE_CTEST_COMMAND}" --output-on-failure -L host
@@ -146,6 +153,16 @@ if(SNORT_ENABLE_HOST_TESTS)
     COMMAND "${CMAKE_COMMAND}" --build --preset host-asan-clang --target snort-host-tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Run sucre-snort host-side gtest lane with ASAN via a dedicated preset"
+    USES_TERMINAL
+    VERBATIM
+  )
+
+  add_custom_target(
+    snort-host-tests-ubsan
+    COMMAND "${CMAKE_COMMAND}" --preset host-ubsan-clang
+    COMMAND "${CMAKE_COMMAND}" --build --preset host-ubsan-clang --target snort-host-tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Run sucre-snort host-side gtest lane with UBSAN via a dedicated preset"
     USES_TERMINAL
     VERBATIM
   )
@@ -184,8 +201,11 @@ if(SNORT_ENABLE_HOST_TESTS)
     COMMAND "${CMAKE_COMMAND}" -E echo "=== Host tests (ASAN) ==="
     COMMAND "${CMAKE_COMMAND}" --preset host-asan-clang
     COMMAND "${CMAKE_COMMAND}" --build --preset host-asan-clang --target snort-host-tests
+    COMMAND "${CMAKE_COMMAND}" -E echo "=== Host tests (UBSAN) ==="
+    COMMAND "${CMAKE_COMMAND}" --preset host-ubsan-clang
+    COMMAND "${CMAKE_COMMAND}" --build --preset host-ubsan-clang --target snort-host-tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Run sucre-snort host-side unit-test gate (normal + ASAN)"
+    COMMENT "Run sucre-snort host-side unit-test gate (normal + ASAN + UBSAN)"
     USES_TERMINAL
     VERBATIM
   )
@@ -287,7 +307,7 @@ endif()
 message(STATUS "sucre-snort repo-root workflow workspace configured")
 message(STATUS "Delegated build/debug targets: snort-build, snort-build-clean, snort-build-regen-graph, snort-deploy-stage, snort-debug-run-workflow, snort-debug-attach-workflow, snort-debug-cleanup, snort-debug-status")
 if(SNORT_ENABLE_HOST_TESTS)
-  message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-tsan, snort-host-tests-gate")
+  message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-ubsan, snort-host-tests-tsan, snort-host-tests-gate")
   if(TARGET snort-host-coverage)
     message(STATUS "Host coverage target: snort-host-coverage")
   endif()

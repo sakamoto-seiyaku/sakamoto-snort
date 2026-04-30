@@ -47,6 +47,17 @@
       }
     },
     {
+      "name": "host-ubsan-clang",
+      "inherits": "base",
+      "description": "Host-side test preset with Clang UndefinedBehaviorSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=undefined -fno-sanitize=pointer-overflow -fno-omit-frame-pointer -O1 -g",
+        "CMAKE_CXX_FLAGS": "-fsanitize=undefined -fno-sanitize=pointer-overflow -fno-omit-frame-pointer -O1 -g",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=undefined"
+      }
+    },
+    {
       "name": "host-tsan-clang",
       "inherits": "base",
       "description": "Host-side Conntrack stress preset with Clang ThreadSanitizer",
@@ -86,6 +97,11 @@
       "description": "Build repo-root host-side targets with Clang AddressSanitizer"
     },
     {
+      "name": "host-ubsan-clang",
+      "configurePreset": "host-ubsan-clang",
+      "description": "Build repo-root host-side targets with Clang UndefinedBehaviorSanitizer"
+    },
+    {
       "name": "host-tsan-clang",
       "configurePreset": "host-tsan-clang",
       "description": "Build repo-root Conntrack stress targets with Clang ThreadSanitizer"
@@ -116,6 +132,16 @@
       "configurePreset": "host-asan-clang",
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=0"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "host-ubsan-clang",
+      "configurePreset": "host-ubsan-clang",
+      "environment": {
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       },
       "output": {
         "outputOnFailure": true

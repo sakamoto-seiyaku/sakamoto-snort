@@ -10,6 +10,7 @@
 #include <DomainManager.hpp>
 #include <PacketManager.hpp>
 #include <PerfMetrics.hpp>
+#include <FlowTelemetry.hpp>
 #include <RulesManager.hpp>
 #include <TrafficCounters.hpp>
 
@@ -40,7 +41,7 @@ unknownArgsKey(const rapidjson::Value &args, const std::initializer_list<std::st
 
 [[nodiscard]] bool isSupportedMetricName(const std::string_view name) noexcept {
     return name == "perf" || name == "reasons" || name == "domainSources" || name == "traffic" ||
-           name == "conntrack" || name == "domainRuleStats";
+           name == "conntrack" || name == "domainRuleStats" || name == "telemetry";
 }
 
 [[nodiscard]] bool nameAllowsAppSelector(const std::string_view name) noexcept {
@@ -240,6 +241,22 @@ std::optional<ResponsePlan> handleMetricsCommand(const ControlVNext::RequestView
             rapidjson::Value stats(rapidjson::kObjectType);
             stats.AddMember("rules", rules, alloc);
             result.AddMember("domainRuleStats", stats, alloc);
+        } else if (name == "telemetry") {
+            const auto snap = flowTelemetry.healthSnapshot();
+            rapidjson::Value tel(rapidjson::kObjectType);
+            tel.AddMember("enabled", snap.enabled, alloc);
+            tel.AddMember("consumerPresent", snap.consumerPresent, alloc);
+            tel.AddMember("sessionId", snap.sessionId, alloc);
+            tel.AddMember("slotBytes", snap.slotBytes, alloc);
+            tel.AddMember("slotCount", snap.slotCount, alloc);
+            tel.AddMember("recordsWritten", snap.recordsWritten, alloc);
+            tel.AddMember("recordsDropped", snap.recordsDropped, alloc);
+            tel.AddMember("lastDropReason",
+                          makeString(flowTelemetryDropReasonStr(snap.lastDropReason), alloc), alloc);
+            if (snap.lastError.has_value()) {
+                tel.AddMember("lastError", makeString(*snap.lastError, alloc), alloc);
+            }
+            result.AddMember("telemetry", tel, alloc);
         }
 
         rapidjson::Document response = ControlVNext::makeOkResponse(id, &result);

@@ -8,6 +8,12 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
+
+// Telemetry plane hot-path wiring.
+#include <FlowTelemetry.hpp>
+#include <PacketReasons.hpp>
 
 // Userspace conntrack core (IPv4 first).
 //
@@ -159,6 +165,31 @@ public:
 
     // Clears the conntrack table and counters. Caller MUST exclude concurrent public method calls.
     void reset() noexcept;
+
+    // ---- Telemetry plane ----------------------------------------------------
+    //
+    // Best-effort per-packet observation for Flow Telemetry (records written to the telemetry ring).
+    // Caller must sample `FlowTelemetry::HotPath` once per packet and pass it down.
+    //
+    // Notes:
+    // - Telemetry failures must never change packet verdict.
+    // - This path is allowed to drop records under backpressure; drops are accounted by FlowTelemetry.
+    void observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult,
+                              const FlowTelemetry::HotPath &teleHot,
+                              std::uint8_t ifaceKindBit, std::uint32_t userId,
+                              std::uint32_t ifindex, PacketReasonId reasonId,
+                              const std::optional<std::uint32_t> &ruleId,
+                              std::span<const std::byte> srcAddrNet,
+                              std::span<const std::byte> dstAddrNet,
+                              std::uint32_t packetBytes) noexcept;
+    void observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult,
+                              const FlowTelemetry::HotPath &teleHot,
+                              std::uint8_t ifaceKindBit, std::uint32_t userId,
+                              std::uint32_t ifindex, PacketReasonId reasonId,
+                              const std::optional<std::uint32_t> &ruleId,
+                              std::span<const std::byte> srcAddrNet,
+                              std::span<const std::byte> dstAddrNet,
+                              std::uint32_t packetBytes) noexcept;
 
 #ifdef SUCRE_SNORT_TESTING
     std::uint32_t debugEpochUsedSlots() const noexcept;

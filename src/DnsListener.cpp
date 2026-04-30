@@ -17,6 +17,8 @@
 
 #include <DnsListener.hpp>
 #include <ControlVNextStreamManager.hpp>
+#include <FlowTelemetry.hpp>
+#include <FlowTelemetryRecords.hpp>
 #include <PerfMetrics.hpp>
 #include <RulesManager.hpp>
 
@@ -299,6 +301,24 @@ void DnsListener::clientRun(const int socket) {
                     controlVNextStream.observeDnsTracked(std::move(ev));
                 } else {
                     controlVNextStream.observeDnsSuppressed(blocked);
+                }
+            }
+
+            // Telemetry plane: blocked-only DNS_DECISION record (common timeline).
+            if (blocked) {
+                const auto teleHot = flowTelemetry.hotPathFlow();
+                if (teleHot.session != nullptr) {
+                    timespec ts{};
+                    timespec_get(&ts, TIME_UTC);
+                    const std::uint64_t tsNs = static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL +
+                        static_cast<std::uint64_t>(ts.tv_nsec);
+
+                    FlowTelemetryRecords::EncodedPayload payload{};
+                    if (FlowTelemetryRecords::encodeDnsDecisionV1(
+                            payload, tsNs, app->uid(), app->userId(), policySource, ruleId, host)) {
+                        (void)flowTelemetry.exportRecordHot(
+                            teleHot, FlowTelemetryAbi::RecordType::DnsDecision, payload.span());
+                    }
                 }
             }
             break;

@@ -134,4 +134,14 @@ std::optional<ResponsePlan> handleMetricsCommand(const ControlVNext::RequestView
     return std::nullopt;
 }
 
+std::optional<ResponsePlan> handleTelemetryCommand(const ControlVNext::RequestView &request,
+                                                   const ControlVNextSession::Limits &limits,
+                                                   void *sessionKey, const bool canPassFd) {
+    (void)request;
+    (void)limits;
+    (void)sessionKey;
+    (void)canPassFd;
+    return std::nullopt;
+}
+
 } // namespace ControlVNextSessionCommands

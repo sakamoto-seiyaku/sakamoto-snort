@@ -48,7 +48,7 @@ The daemon MUST enforce:
 - **THEN** connection B SHALL receive `ok=false` with `error.code="STATE_CONFLICT"`
 
 ### Requirement: Stream mode forbids non-stream commands on the same connection
-After a successful `STREAM.START`, the connection is in stream mode.
+After a successful `STREAM.START`, the connection MUST be in stream mode.
 While in stream mode, any non-stream command (any `cmd` other than `STREAM.START`/`STREAM.STOP`)
 MUST be rejected with `STATE_CONFLICT`.
 
@@ -58,10 +58,10 @@ MUST be rejected with `STATE_CONFLICT`.
 - **THEN** daemon SHALL respond `ok=false` with `error.code="STATE_CONFLICT"`
 
 ### Requirement: STREAM.START ordering and started notice
-On successful `STREAM.START`, the daemon MUST:
-1) send the `STREAM.START` response frame (`{"id":...,"ok":true}`)
-2) then send a first event frame `type="notice", notice="started"` for that stream
-3) then (for `dns`/`pkt`) send replay events (if any) followed by realtime events
+On successful `STREAM.START`, the daemon MUST perform this ordering:
+1. send the `STREAM.START` response frame (`{"id":...,"ok":true}`)
+2. then send a first event frame `type="notice", notice="started"` for that stream
+3. then (for `dns`/`pkt`) send replay events (if any) followed by realtime events
 
 The started notice MUST NOT include `id/ok`.
 
