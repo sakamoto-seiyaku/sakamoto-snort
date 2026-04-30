@@ -254,11 +254,46 @@ TEST(ControlVNextDaemonSession, HelloHasRequiredFieldsAndEchoesId) {
     ASSERT_TRUE(result.HasMember("framing"));
     ASSERT_TRUE(result.HasMember("maxRequestBytes"));
     ASSERT_TRUE(result.HasMember("maxResponseBytes"));
+    ASSERT_TRUE(result.HasMember("daemonBuildId"));
+    ASSERT_TRUE(result.HasMember("artifactAbi"));
+    ASSERT_TRUE(result.HasMember("capabilities"));
     EXPECT_STREQ(result["protocol"].GetString(), "control-vnext");
     EXPECT_EQ(result["protocolVersion"].GetUint(), 1u);
     EXPECT_STREQ(result["framing"].GetString(), "netstring");
     EXPECT_EQ(result["maxRequestBytes"].GetUint64(), 1024u);
     EXPECT_EQ(result["maxResponseBytes"].GetUint64(), 2048u);
+    ASSERT_TRUE(result["daemonBuildId"].IsString());
+    EXPECT_NE(std::string_view(result["daemonBuildId"].GetString(),
+                               result["daemonBuildId"].GetStringLength()),
+              std::string_view());
+    ASSERT_TRUE(result["artifactAbi"].IsString());
+    ASSERT_TRUE(result["capabilities"].IsArray());
+    EXPECT_GT(result["capabilities"].Size(), 0u);
+    for (const auto &capability : result["capabilities"].GetArray()) {
+        EXPECT_TRUE(capability.IsString());
+        EXPECT_GT(capability.GetStringLength(), 0u);
+    }
+}
+
+TEST(ControlVNextDaemonSession, HelloRemainsCompatibleForExistingFieldReaders) {
+    Harness h(/*maxRequestBytes=*/3072, /*maxResponseBytes=*/4096);
+
+    h.sendJsonFrame(R"({"id":12,"cmd":"HELLO","args":{}})");
+    const rapidjson::Document resp = h.readOneResponse();
+
+    ControlVNext::ResponseView view;
+    const auto envErr = ControlVNext::parseResponseEnvelope(resp, view);
+    ASSERT_FALSE(envErr.has_value());
+    EXPECT_EQ(view.id, 12u);
+    EXPECT_TRUE(view.ok);
+    ASSERT_NE(view.result, nullptr);
+
+    const auto &result = *view.result;
+    EXPECT_STREQ(result["protocol"].GetString(), "control-vnext");
+    EXPECT_EQ(result["protocolVersion"].GetUint(), 1u);
+    EXPECT_STREQ(result["framing"].GetString(), "netstring");
+    EXPECT_EQ(result["maxRequestBytes"].GetUint64(), 3072u);
+    EXPECT_EQ(result["maxResponseBytes"].GetUint64(), 4096u);
 }
 
 TEST(ControlVNextDaemonSession, QuitClosesAfterResponse) {

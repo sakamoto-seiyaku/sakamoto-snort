@@ -7,7 +7,7 @@
 
 #include <IpRulesContract.hpp>
 
-#include <android-base/logging.h>
+#include <SnortLog.hpp>
 
 #include <algorithm>
 #include <array>

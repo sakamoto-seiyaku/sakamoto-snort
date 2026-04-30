@@ -46,7 +46,7 @@ std::string Settings::packageRestrictionsPath(const uint32_t userId) {
     return systemUserDir(userId) + "/package-restrictions.xml";
 }
 
-void Settings::finishFirstStart() { android::base::SetProperty(_firstStartProp, "0"); }
+void Settings::finishFirstStart() {}
 
 void Settings::save() {
     _saver.save([&] {

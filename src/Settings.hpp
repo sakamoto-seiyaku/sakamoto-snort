@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <android-base/properties.h>
 #include <chrono>
 #include <atomic>
 #include <fstream>
@@ -19,7 +18,6 @@
 class Settings {
 private:
     static constexpr const char *_saveFile = "/data/snort/settings";
-    static constexpr const char *_firstStartProp = "sucre-snort.first_start";
     static inline const std::string _snortDir = "/data/snort/";
     static inline const std::string _saveDir = _snortDir + "save/";
     static inline const std::string _defaultDirEtc = "/system_ext/etc/sucre-snort/";
@@ -185,7 +183,6 @@ private:
     Saver _saver{_saveFile};
     uint32_t _version = 8;
     uint32_t _savedVersion = 1;
-    bool _firstStart = android::base::GetBoolProperty(_firstStartProp, true);
     bool _inetControl = std::ifstream(_telnetFile).is_open();
     std::shared_mutex _mutexPassword;
 
@@ -223,7 +220,7 @@ public:
         _maxAgeIP = legacyMaxAgeIPFrozenValue;
     }
 
-    bool firstStart() { return _firstStart; }
+    bool firstStart() const { return false; }
 
     void finishFirstStart();
 

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <cutils/sockets.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/time.h>
@@ -17,6 +16,7 @@
 #include <utility>
 
 #include <DnsListener.hpp>
+#include <AndroidInitSocket.hpp>
 #include <ControlVNextStreamManager.hpp>
 #include <FlowTelemetry.hpp>
 #include <FlowTelemetryRecords.hpp>
@@ -41,7 +41,7 @@ void DnsListener::start() {
 }
 
 void DnsListener::server() {
-    int inherited = android_get_control_socket(settings.netdSocketPath);
+    int inherited = snort_get_control_socket(settings.netdSocketPath);
 
     // Production path: init.rc provides the RESERVED socket; use inherited FD as-is.
     if (inherited >= 1) {

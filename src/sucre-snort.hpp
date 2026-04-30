@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include <android-base/logging.h>
+#include <SnortLog.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>

@@ -5,12 +5,12 @@
 
 #include <ControlVNext.hpp>
 
+#include <AndroidInitSocket.hpp>
 #include <ControlVNextSession.hpp>
 
 #include <Settings.hpp>
 #include <sucre-snort.hpp>
 
-#include <cutils/sockets.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -124,7 +124,7 @@ void ControlVNext::start() {
 }
 
 void ControlVNext::unixServer() {
-    int unixSocket = android_get_control_socket(settings.controlVNextSocketPath);
+    int unixSocket = snort_get_control_socket(settings.controlVNextSocketPath);
 
     if (unixSocket >= 1) {
         if (listen(unixSocket, settings.controlClients) == -1) {

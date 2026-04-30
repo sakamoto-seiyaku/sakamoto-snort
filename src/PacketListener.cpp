@@ -164,8 +164,8 @@ template <class IP> void PacketListener<IP>::sendToSocket(const nlmsghdr *nlh) {
 
 template <class IP>
 void PacketListener<IP>::sendVerdict(const uint32_t id, const uint32_t verdict) {
-    char buffer[MNL_SOCKET_BUFFER_SIZE];
-    auto nlh = putHeader(buffer, NFQNL_MSG_VERDICT);
+    std::vector<char> buffer(static_cast<std::size_t>(MNL_SOCKET_BUFFER_SIZE));
+    auto nlh = putHeader(buffer.data(), NFQNL_MSG_VERDICT);
     nfq_nlmsg_verdict_put(nlh, id, verdict);
     sendToSocket(nlh);
 }

@@ -226,6 +226,10 @@ iptest_tier1_start_tcp_zero_server "$tcp_port" >/dev/null 2>&1 || {
   exit 77
 }
 
+ctl_or_block cfg_device CONFIG.SET '{"scope":"device","set":{"block.enabled":1,"iprules.enabled":1}}' \
+  "CONFIG.SET device failed" || exit $?
+assert_ok "CP-10a CONFIG.SET device ok" "$cfg_device"
+
 ctl_or_block cfg CONFIG.SET "{\"scope\":\"app\",\"app\":{\"uid\":${IPTEST_UID}},\"set\":{\"tracked\":1,\"block.ifaceKindMask\":0}}" \
   "CONFIG.SET app failed" || exit $?
 assert_ok "CP-10 CONFIG.SET app ok" "$cfg"

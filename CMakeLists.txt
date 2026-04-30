@@ -27,6 +27,11 @@ option(
   "Expose real-device integration/smoke CTest lanes in the repo-root CMake workspace"
   OFF
 )
+option(
+  SNORT_ENABLE_NDK_DAEMON
+  "Configure the Android NDK arm64 root daemon target"
+  OFF
+)
 
 if(SNORT_ENABLE_DELEGATED_BUILD_TARGETS)
   add_custom_target(
@@ -43,6 +48,15 @@ if(SNORT_ENABLE_DELEGATED_BUILD_TARGETS)
     COMMAND "${BASH_EXECUTABLE}" "${SNORT_BUILD_SCRIPT}" --clean
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Delegated Android clean build via dev/dev-build.sh --clean"
+    USES_TERMINAL
+    VERBATIM
+  )
+
+  add_custom_target(
+    snort-build-ndk
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/dev/dev-build-ndk.sh"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Build sucre-snort daemon through Android NDK r29"
     USES_TERMINAL
     VERBATIM
   )
@@ -104,6 +118,11 @@ endif()
 
 if(SNORT_ENABLE_HOST_TESTS OR SNORT_ENABLE_DEVICE_TESTS)
   include(CTest)
+endif()
+
+if(SNORT_ENABLE_NDK_DAEMON)
+  enable_language(C CXX)
+  include(cmake/SucreSnortNdkDaemon.cmake)
 endif()
 
 if(SNORT_ENABLE_HOST_TESTS)
@@ -305,7 +324,7 @@ if(SNORT_ENABLE_DEVICE_TESTS)
 endif()
 
 message(STATUS "sucre-snort repo-root workflow workspace configured")
-message(STATUS "Delegated build/debug targets: snort-build, snort-build-clean, snort-build-regen-graph, snort-deploy-stage, snort-debug-run-workflow, snort-debug-attach-workflow, snort-debug-cleanup, snort-debug-status")
+message(STATUS "Delegated build/debug targets: snort-build, snort-build-clean, snort-build-ndk, snort-build-regen-graph, snort-deploy-stage, snort-debug-run-workflow, snort-debug-attach-workflow, snort-debug-cleanup, snort-debug-status")
 if(SNORT_ENABLE_HOST_TESTS)
   message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-ubsan, snort-host-tests-tsan, snort-host-tests-gate")
   if(TARGET snort-host-coverage)

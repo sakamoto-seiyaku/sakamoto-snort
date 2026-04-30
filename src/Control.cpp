@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <cutils/sockets.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/time.h>
@@ -23,6 +22,7 @@
 #include <system_error>
 #include <utility>
 #include <sucre-snort.hpp>
+#include <AndroidInitSocket.hpp>
 #include <PackageListener.hpp>
 #include <ActivityManager.hpp>
 #include <DnsListener.hpp>
@@ -212,7 +212,7 @@ void Control::start() {
 }
 
 void Control::unixServer() {
-    int unixSocket = android_get_control_socket(settings.controlSocketPath);
+    int unixSocket = snort_get_control_socket(settings.controlSocketPath);
 
     // Production path: init.rc created the RESERVED socket under /dev/socket/.
     // In that case we simply inherit the FD from init and do not touch any paths,

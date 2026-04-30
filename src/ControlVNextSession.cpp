@@ -31,6 +31,14 @@
 #include <string_view>
 #include <utility>
 
+#ifndef SUCRE_SNORT_DAEMON_BUILD_ID
+#define SUCRE_SNORT_DAEMON_BUILD_ID "host-dev"
+#endif
+
+#ifndef SUCRE_SNORT_ARTIFACT_ABI
+#define SUCRE_SNORT_ARTIFACT_ABI "host"
+#endif
+
 namespace {
 
 class UniqueFd {
@@ -123,6 +131,15 @@ private:
     rapidjson::Value out;
     out.SetString(value.data(), static_cast<rapidjson::SizeType>(value.size()), alloc);
     return out;
+}
+
+[[nodiscard]] rapidjson::Value makeCapabilities(rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value capabilities(rapidjson::kArrayType);
+    for (const std::string_view capability :
+         {"control-vnext", "nfqueue-datapath", "apk-native-artifact"}) {
+        capabilities.PushBack(makeString(capability, alloc), alloc);
+    }
+    return capabilities;
 }
 
 [[nodiscard]] uint32_t bestEffortRequestId(const rapidjson::Value &root) {
@@ -361,6 +378,9 @@ void ControlVNextSession::run() {
             result.AddMember("framing", makeString("netstring", alloc), alloc);
             result.AddMember("maxRequestBytes", static_cast<uint64_t>(_limits.maxRequestBytes), alloc);
             result.AddMember("maxResponseBytes", static_cast<uint64_t>(_limits.maxResponseBytes), alloc);
+            result.AddMember("daemonBuildId", makeString(SUCRE_SNORT_DAEMON_BUILD_ID, alloc), alloc);
+            result.AddMember("artifactAbi", makeString(SUCRE_SNORT_ARTIFACT_ABI, alloc), alloc);
+            result.AddMember("capabilities", makeCapabilities(alloc), alloc);
 
             rapidjson::Document response = ControlVNext::makeOkResponse(id, &result);
             return ResponsePlan{.response = std::move(response)};
