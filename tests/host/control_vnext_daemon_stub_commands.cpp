@@ -6,11 +6,12 @@
 #include <ControlVNextSessionCommands.hpp>
 #include <sucre-snort.hpp>
 
+#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 namespace ControlVNextSessionCommands {
@@ -19,65 +20,90 @@ namespace TestHooks {
 
 namespace {
 
-std::mutex g_mutex;
-std::condition_variable g_cv;
-std::string g_blockCommand;
-bool g_blockCommandEntered = false;
-bool g_releaseBlockedCommand = true;
-int g_resetCount = 0;
+enum class BlockedCommand {
+    None,
+    ConfigSet,
+    DomainListsImport,
+    CheckpointRestore,
+};
+
+std::atomic<BlockedCommand> g_blockCommand{BlockedCommand::None};
+std::atomic<bool> g_blockCommandEntered{false};
+std::atomic<bool> g_releaseBlockedCommand{true};
+std::atomic<int> g_resetCount{0};
+std::atomic<int> g_checkpointRestoreCount{0};
+
+BlockedCommand parseBlockedCommand(const std::string_view cmd) {
+    if (cmd == "CONFIG.SET") {
+        return BlockedCommand::ConfigSet;
+    }
+    if (cmd == "DOMAINLISTS.IMPORT") {
+        return BlockedCommand::DomainListsImport;
+    }
+    if (cmd == "CHECKPOINT.RESTORE") {
+        return BlockedCommand::CheckpointRestore;
+    }
+    return BlockedCommand::None;
+}
 
 void maybeBlockCommand(const std::string_view cmd) {
-    std::unique_lock<std::mutex> lock(g_mutex);
-    if (cmd != g_blockCommand) {
+    const auto blockedCommand = parseBlockedCommand(cmd);
+    if (blockedCommand == BlockedCommand::None ||
+        blockedCommand != g_blockCommand.load(std::memory_order_acquire)) {
         return;
     }
 
-    g_blockCommandEntered = true;
-    g_cv.notify_all();
-    g_cv.wait(lock, [] { return g_releaseBlockedCommand; });
+    g_blockCommandEntered.store(true, std::memory_order_release);
+    while (!g_releaseBlockedCommand.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 } // namespace
 
 void reset() {
-    const std::lock_guard<std::mutex> lock(g_mutex);
-    g_blockCommand.clear();
-    g_blockCommandEntered = false;
-    g_releaseBlockedCommand = true;
-    g_resetCount = 0;
+    g_blockCommand.store(BlockedCommand::None, std::memory_order_release);
+    g_blockCommandEntered.store(false, std::memory_order_release);
+    g_releaseBlockedCommand.store(true, std::memory_order_release);
+    g_resetCount.store(0, std::memory_order_release);
+    g_checkpointRestoreCount.store(0, std::memory_order_release);
 }
 
 void blockCommandUntilReleased(const std::string_view cmd) {
-    const std::lock_guard<std::mutex> lock(g_mutex);
-    g_blockCommand.assign(cmd);
-    g_blockCommandEntered = false;
-    g_releaseBlockedCommand = false;
+    g_blockCommand.store(parseBlockedCommand(cmd), std::memory_order_release);
+    g_blockCommandEntered.store(false, std::memory_order_release);
+    g_releaseBlockedCommand.store(false, std::memory_order_release);
 }
 
 void releaseBlockedCommand() {
-    {
-        const std::lock_guard<std::mutex> lock(g_mutex);
-        g_releaseBlockedCommand = true;
-    }
-    g_cv.notify_all();
+    g_releaseBlockedCommand.store(true, std::memory_order_release);
 }
 
 bool waitForBlockedCommand(const std::chrono::milliseconds timeout) {
-    std::unique_lock<std::mutex> lock(g_mutex);
-    return g_cv.wait_for(lock, timeout, [] { return g_blockCommandEntered; });
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (g_blockCommandEntered.load(std::memory_order_acquire)) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return g_blockCommandEntered.load(std::memory_order_acquire);
 }
 
 void markResetEntered() {
-    {
-        const std::lock_guard<std::mutex> lock(g_mutex);
-        ++g_resetCount;
-    }
-    g_cv.notify_all();
+    g_resetCount.fetch_add(1, std::memory_order_acq_rel);
 }
 
 int resetCountSnapshot() {
-    const std::lock_guard<std::mutex> lock(g_mutex);
-    return g_resetCount;
+    return g_resetCount.load(std::memory_order_acquire);
+}
+
+void markCheckpointRestoreEntered() {
+    g_checkpointRestoreCount.fetch_add(1, std::memory_order_acq_rel);
+}
+
+int checkpointRestoreCountSnapshot() {
+    return g_checkpointRestoreCount.load(std::memory_order_acquire);
 }
 
 } // namespace TestHooks
@@ -120,6 +146,26 @@ std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView
                                                  const ControlVNextSession::Limits &limits) {
     (void)limits;
     if (request.cmd == "IPRULES.APPLY") {
+        return okResponse(request);
+    }
+    return std::nullopt;
+}
+
+std::optional<ResponsePlan> handleCheckpointCommand(const ControlVNext::RequestView &request,
+                                                    const ControlVNextSession::Limits &limits) {
+    (void)limits;
+    if (request.cmd == "CHECKPOINT.SAVE" || request.cmd == "CHECKPOINT.CLEAR") {
+        const std::lock_guard<std::mutex> lock(mutexControlMutations);
+        return okResponse(request);
+    }
+    if (request.cmd == "CHECKPOINT.RESTORE") {
+        const std::lock_guard<std::mutex> lock(mutexControlMutations);
+        TestHooks::maybeBlockCommand(request.cmd);
+        TestHooks::markCheckpointRestoreEntered();
+        rapidjson::Document response = ControlVNext::makeOkResponse(request.id, nullptr);
+        return ResponsePlan{.response = std::move(response)};
+    }
+    if (request.cmd == "CHECKPOINT.LIST") {
         return okResponse(request);
     }
     return std::nullopt;

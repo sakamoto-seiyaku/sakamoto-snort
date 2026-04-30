@@ -141,6 +141,8 @@ public:
 
     void reset();
 
+    void resetCheckpointRuntimeEpoch();
+
     void save() { _ipRules.save(); }
 
     void restore() { _ipRules.restore(); }

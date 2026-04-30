@@ -23,6 +23,13 @@ void PacketManager::reset() {
     _conntrack.reset();
 }
 
+void PacketManager::resetCheckpointRuntimeEpoch() {
+    Streamable<Packet<IPv4>>::reset();
+    Streamable<Packet<IPv6>>::reset();
+    _reasonMetrics.reset();
+    _conntrack.reset();
+}
+
 void PacketManager::startStream(const SocketIO::Ptr sockio, const bool pretty,
                                 const uint32_t horizon, const std::uint32_t minSize) {
     Streamable<Packet<IPv4>>::startStream(sockio, pretty, horizon, minSize);

@@ -92,7 +92,22 @@ vNext app selector（`args.app`）约定:
     - `mk2|family=<ipv4|ipv6>|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>`
     - CIDR 规范化为网络地址（host bits 清零）；`ifindex=0` 表示 any；`proto=icmp|other` 时 `sport/dport=any`。
 
-2.7 观测（Metrics/Stream/Telemetry）
+2.7 策略检查点（Checkpoint）
+- `CHECKPOINT.LIST` | `{}` | `result={slots[],slotCount,maxSlotBytes}` |
+  - 固定只暴露 3 个 slot：`0/1/2`；`slots[]` 必须按 `slot` 升序返回。
+  - slot item：`{slot:u32,present:bool,formatVersion?:u32,sizeBytes?:u64,createdAt?:u64}`；后 3 项仅 `present=true` 时出现。
+- `CHECKPOINT.SAVE` | `{"slot":0|1|2}` | `result={slot,maxSlotBytes}` |
+  - 原子替换所选 slot；bundle 超过 64 MiB 时返回 `CAPACITY_EXCEEDED`，旧 slot 内容保持可恢复。
+- `CHECKPOINT.RESTORE` | `{"slot":0|1|2}` | `result={slot,maxSlotBytes}` |
+  - 空 slot 返回 `NOT_FOUND`。
+  - restore 先完整解析/验证 bundle（版本、DomainPolicy rule 引用、DomainLists 元数据/内容、IPRULES preflight 等），失败时 live policy 不变。
+  - 成功后开启新的 policy runtime epoch：清 conntrack、learned domain/IP/host 关联、IPRULES cache、旧 policy epoch 的 metrics、active stream state 与 telemetry session；客户端需要重新打开 stream/telemetry consumer。
+- `CHECKPOINT.CLEAR` | `{"slot":0|1|2}` | `result={slot,maxSlotBytes}` |
+  - 幂等删除所选 slot；空 slot 也返回 `ok=true` 且 `slot.present=false`。
+- 所有 `CHECKPOINT.*` 命令 strict JSON；未知 `args` key 返回 `SYNTAX_ERROR`，缺少 `slot` 返回 `MISSING_ARGUMENT`，非法 slot 返回 `INVALID_ARGUMENT`。
+- bundle 仅包含 verdict-affecting policy：device/app verdict config、DomainRules、DomainPolicy、DomainLists 元数据与内容、IPRULES rules/nextRuleId；不包含 frontend metadata、历史、统计、stream replay、Flow Telemetry records、Geo/ASN、health/billing/diagnostic export。
+
+2.8 观测（Metrics/Stream/Telemetry）
 - `METRICS.GET` | `{"name":name,"app"?:selector}` | `result` |
   - `name=perf` → `result.perf{nfq_total_us,dns_decision_us}`；每项为 `{samples,min,avg,p50,p95,p99,max}`（单位 `us`）。
   - `name=reasons` → `result.reasons{IFACE_BLOCK,IP_LEAK_BLOCK,ALLOW_DEFAULT,IP_RULE_ALLOW,IP_RULE_BLOCK}`；每项为 `{packets,bytes}`。
@@ -220,11 +235,12 @@ Debug Stream explain candidate 限制:
 
 开关与数值约定：
 - 设备/应用配置的布尔开关统一使用 `0|1`（u32），不是 JSON boolean（例如 `block.enabled`、`tracked`）。
-- stream 事件中的 `blocked/accepted/...` 为 JSON boolean（见 §2.7）。
+- stream 事件中的 `blocked/accepted/...` 为 JSON boolean（见 §2.8）。
 
 容量与限制：
 - 单帧最大请求/响应 payload：16MB（也会通过 `HELLO` 返回）。
 - `DOMAINLISTS.IMPORT` 附加限制：`domains` 数量 ≤ 1,000,000；domain 字符串总字节数 ≤ 16MB。
+- `CHECKPOINT.*` slot bundle 上限：64 MiB/slot；slot ID 固定为 `0..2`。
 
 多用户支持：
 - 多数 app 维度命令通过 `args.app` 明确指定 userId 或 uid；服务端在 `result` 中返回 `{uid,userId,app}` 以便客户端校验。
@@ -238,6 +254,7 @@ Debug Stream explain candidate 限制:
 配置: CONFIG.GET, CONFIG.SET
 域名: DOMAINRULES.GET/APPLY, DOMAINPOLICY.GET/APPLY, DOMAINLISTS.GET/APPLY/IMPORT, DEV.DOMAIN.QUERY(dev)
 IP: IPRULES.PREFLIGHT/PRINT/APPLY
+检查点: CHECKPOINT.LIST/SAVE/RESTORE/CLEAR
 观测: METRICS.GET, METRICS.RESET, TELEMETRY.OPEN, TELEMETRY.CLOSE, STREAM.START, STREAM.STOP
 
 ---
@@ -256,6 +273,7 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
   - 全局统计: `/data/snort/save/stats_total`
   - 拦截列表元数据: `/data/snort/save/blocking_lists`
   - 域名清单目录: `/data/snort/save/domains_lists/`
+  - 策略检查点目录: `/data/snort/save/policy_checkpoints/slot0.bundle` .. `slot2.bundle`
 - 包清单: `/data/system/packages.list`
 
 ---
@@ -288,6 +306,11 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
   - `sucre-snort-ctl IPRULES.PREFLIGHT`
   - `sucre-snort-ctl IPRULES.PRINT '{\"app\":{\"uid\":10123}}'`
   - `sucre-snort-ctl IPRULES.APPLY @/tmp/iprules_apply.json` → `{uid,rules:[{clientRuleId,ruleId,matchKey}]}`（matchKey 为 mk2）
+- 策略检查点
+  - `sucre-snort-ctl CHECKPOINT.LIST`
+  - `sucre-snort-ctl CHECKPOINT.SAVE '{\"slot\":0}'`
+  - `sucre-snort-ctl CHECKPOINT.RESTORE '{\"slot\":0}'`
+  - `sucre-snort-ctl CHECKPOINT.CLEAR '{\"slot\":0}'`
 - 统计
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"perf\"}'`
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"traffic\"}'`

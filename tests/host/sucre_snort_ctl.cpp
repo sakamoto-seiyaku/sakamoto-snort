@@ -142,6 +142,7 @@ void printHelp(std::ostream &out) {
            "  Config: CONFIG.GET, CONFIG.SET\n"
 	           "  Domain: DOMAINRULES.GET/APPLY, DOMAINPOLICY.GET/APPLY, DOMAINLISTS.GET/APPLY/IMPORT\n"
 	           "  IP: IPRULES.PREFLIGHT/PRINT/APPLY\n"
+	           "  Checkpoint: CHECKPOINT.LIST/SAVE/RESTORE/CLEAR\n"
 	           "  Observability: METRICS.GET, METRICS.RESET, STREAM.START, STREAM.STOP\n"
 	           "\n"
            "Examples:\n"
@@ -149,6 +150,8 @@ void printHelp(std::ostream &out) {
 	           "  sucre-snort-ctl HELLO\n"
            "  sucre-snort-ctl APPS.LIST '{\"query\":\"com.\",\"userId\":0,\"limit\":50}'\n"
            "  sucre-snort-ctl --follow STREAM.START '{\"type\":\"dns\",\"horizonSec\":0,\"minSize\":0}'\n"
+           "  sucre-snort-ctl CHECKPOINT.SAVE '{\"slot\":0}'\n"
+           "  sucre-snort-ctl CHECKPOINT.RESTORE '{\"slot\":0}'\n"
            "  sucre-snort-ctl IPRULES.APPLY @/tmp/iprules_apply.json\n"
            "  cat /tmp/iprules_apply.json | sucre-snort-ctl IPRULES.APPLY -\n";
 }

@@ -69,7 +69,9 @@ public:
     static inline const std::string saveDirPackages = _saveDir + "packages/";
     static inline const std::string saveDirSystem = _saveDir + "system/";
     static inline const std::string saveDirDomainLists = _saveDir + "domains_lists/";
+    static inline const std::string saveDirPolicyCheckpoints = _saveDir + "policy_checkpoints/";
     static inline std::string _saveDirDomainListsOverride;
+    static inline std::string _saveDirPolicyCheckpointsOverride;
 
     // Override hook for host tests (avoid hard dependency on /data/snort).
     // The override should include a trailing '/'.
@@ -82,6 +84,18 @@ public:
 
     static const std::string &saveDirDomainListsPath() {
         return _saveDirDomainListsOverride.empty() ? saveDirDomainLists : _saveDirDomainListsOverride;
+    }
+
+    static void setSaveDirPolicyCheckpointsOverrideForTesting(std::string path) {
+        if (!path.empty() && path.back() != '/') {
+            path.push_back('/');
+        }
+        _saveDirPolicyCheckpointsOverride = std::move(path);
+    }
+
+    static const std::string &saveDirPolicyCheckpointsPath() {
+        return _saveDirPolicyCheckpointsOverride.empty() ? saveDirPolicyCheckpoints
+                                                         : _saveDirPolicyCheckpointsOverride;
     }
 
     // Per-user directory helpers for userId > 0
@@ -294,6 +308,9 @@ public:
         _maxAgeIP.store(legacyMaxAgeIPFrozenValue, std::memory_order_relaxed);
         save();
     }
+
+    void applyCheckpointPolicyConfig(bool blockEnabled, uint8_t blockMask, uint8_t blockIface,
+                                     bool reverseDns, bool ipRulesEnabled);
 
     // Override hook for host tests (avoid hard dependency on /data/snort/settings).
     void setSaveFileOverrideForTesting(std::string path);

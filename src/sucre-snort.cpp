@@ -21,6 +21,7 @@
 #include <ControlVNext.hpp>
 #include <ControlVNextStreamManager.hpp>
 #include <FlowTelemetry.hpp>
+#include <PolicyCheckpoint.hpp>
 #include <Rule.hpp>
 #include <BlockingListManager.hpp>
 
@@ -177,6 +178,60 @@ void snortResetAll() {
     pkgListener.reset();
     snortSaveLocked();
     snortEndResetEpoch();
+}
+
+PolicyCheckpoint::Status snortCheckpointSave(const std::uint32_t slot,
+                                             PolicyCheckpoint::SlotMetadata &metadata) {
+    const std::lock_guard<std::mutex> saveResetLock(g_snortSaveResetMutex);
+    const std::lock_guard<std::mutex> controlMutationLock(mutexControlMutations);
+    return PolicyCheckpoint::saveCurrentPolicyToSlot(slot, metadata);
+}
+
+PolicyCheckpoint::Status snortCheckpointClear(const std::uint32_t slot,
+                                              PolicyCheckpoint::SlotMetadata &metadata) {
+    const std::lock_guard<std::mutex> saveResetLock(g_snortSaveResetMutex);
+    const std::lock_guard<std::mutex> controlMutationLock(mutexControlMutations);
+    return PolicyCheckpoint::clearSlot(slot, metadata);
+}
+
+PolicyCheckpoint::Status snortCheckpointRestore(const std::uint32_t slot,
+                                                PolicyCheckpoint::SlotMetadata &metadata) {
+    const std::lock_guard<std::mutex> saveResetLock(g_snortSaveResetMutex);
+    const std::lock_guard<std::mutex> controlMutationLock(mutexControlMutations);
+
+    PolicyCheckpoint::Bundle bundle;
+    if (auto st = PolicyCheckpoint::readSlot(slot, bundle, metadata); !st.ok) {
+        return st;
+    }
+    if (auto st = PolicyCheckpoint::stageBundleForRestore(bundle); !st.ok) {
+        return st;
+    }
+
+    const std::lock_guard listenersLock(mutexListeners);
+
+    struct ResetEpochGuard {
+        ResetEpochGuard() { snortBeginResetEpoch(); }
+        ~ResetEpochGuard() { snortEndResetEpoch(); }
+    } resetEpochGuard;
+
+    if (auto st = PolicyCheckpoint::restoreBundleToLivePolicy(bundle); !st.ok) {
+        return st;
+    }
+
+    controlVNextStream.resetAll();
+    flowTelemetry.resetAll();
+    (void)::unlink(settings.saveDnsStream.c_str());
+
+    perfMetrics.reset();
+    appManager.resetCheckpointRuntimeMetrics();
+    domManager.resetDomainPolicySources();
+    domManager.resetRuntimeAssociationsForCheckpoint();
+    rulesManager.resetRuleHits();
+    pktManager.resetCheckpointRuntimeEpoch();
+    hostManager.reset();
+    dnsListener.reset();
+    snortSaveLocked();
+    return PolicyCheckpoint::Status{.ok = true};
 }
 
 static void snortSaveLocked() {

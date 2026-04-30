@@ -68,6 +68,8 @@ public:
     // Snapshot of the current rules baseline (id/type/pattern) under shared lock.
     std::vector<BaselineRule> snapshotBaseline();
 
+    uint32_t nextRuleIdSnapshot();
+
     // Snapshot of per-rule runtime counters under shared lock. Order is stable (ruleId asc).
     std::vector<BaselineRuleStats> snapshotBaselineRuleStats();
 

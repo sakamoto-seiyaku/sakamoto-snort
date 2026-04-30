@@ -64,6 +64,10 @@ public:
 
     void resetDomainPolicySources();
 
+    void resetTraffic();
+
+    void resetCheckpointRuntimeMetrics();
+
     void save();
 
     void restore();

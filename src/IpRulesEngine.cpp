@@ -1811,6 +1811,107 @@ IpRulesEngine::listRules(const std::optional<std::uint32_t> uidFilter,
     return out;
 }
 
+IpRulesEngine::PolicySnapshot IpRulesEngine::policySnapshot() const {
+    const std::shared_lock<std::shared_mutex> g(_mutex);
+    PolicySnapshot out{};
+    out.nextRuleId = _nextRuleId;
+    out.rules.reserve(_rules.size());
+    for (const auto &[_, state] : _rules) {
+        out.rules.push_back(state.def);
+    }
+    std::sort(out.rules.begin(), out.rules.end(),
+              [](const RuleDef &a, const RuleDef &b) { return a.ruleId < b.ruleId; });
+    return out;
+}
+
+IpRulesEngine::ApplyResult
+IpRulesEngine::validatePolicySnapshot(const PolicySnapshot &snapshot) const {
+    RulesMap staged;
+    staged.clear();
+    RuleId maxRuleId = 0;
+    bool hasAny = false;
+    for (const auto &def : snapshot.rules) {
+        std::string error;
+        if (!validateRuleDef(def, error)) {
+            return nokResult(error);
+        }
+        RuleState state{};
+        state.def = def;
+        state.stats = std::make_shared<RuleStats>();
+        if (!staged.emplace(def.ruleId, std::move(state)).second) {
+            return nokResult("duplicate ruleId");
+        }
+        maxRuleId = std::max(maxRuleId, def.ruleId);
+        hasAny = true;
+    }
+    if (hasAny && snapshot.nextRuleId <= maxRuleId) {
+        return nokResult("nextRuleId must be greater than all ruleId values");
+    }
+
+    const std::uint64_t newEpoch = _rulesEpoch.load(std::memory_order_relaxed) + 1;
+    auto cr = compile(staged, newEpoch);
+    if (!cr.report.ok()) {
+        ApplyResult r{};
+        r.ok = false;
+        r.error = "preflight violations";
+        r.preflight = std::move(cr.report);
+        return r;
+    }
+
+    ApplyResult r{};
+    r.ok = true;
+    r.preflight = std::move(cr.report);
+    return r;
+}
+
+IpRulesEngine::ApplyResult
+IpRulesEngine::restorePolicySnapshot(const PolicySnapshot &snapshot) {
+    std::unique_lock<std::shared_mutex> g(_mutex);
+
+    RulesMap staged;
+    staged.clear();
+    RuleId maxRuleId = 0;
+    bool hasAny = false;
+    for (const auto &def : snapshot.rules) {
+        std::string error;
+        if (!validateRuleDef(def, error)) {
+            return nokResult(error);
+        }
+        RuleState state{};
+        state.def = def;
+        state.stats = std::make_shared<RuleStats>();
+        if (!staged.emplace(def.ruleId, std::move(state)).second) {
+            return nokResult("duplicate ruleId");
+        }
+        maxRuleId = std::max(maxRuleId, def.ruleId);
+        hasAny = true;
+    }
+    if (hasAny && snapshot.nextRuleId <= maxRuleId) {
+        return nokResult("nextRuleId must be greater than all ruleId values");
+    }
+
+    const std::uint64_t newEpoch = _rulesEpoch.load(std::memory_order_relaxed) + 1;
+    auto cr = compile(staged, newEpoch);
+    if (!cr.report.ok()) {
+        ApplyResult r{};
+        r.ok = false;
+        r.error = "preflight violations";
+        r.preflight = std::move(cr.report);
+        return r;
+    }
+
+    _rules = std::move(staged);
+    _nextRuleId = snapshot.nextRuleId;
+    _lastPreflight = cr.report;
+    _rulesEpoch.store(newEpoch, std::memory_order_relaxed);
+    std::atomic_store_explicit(&_snapshot, std::move(cr.snapshot), std::memory_order_release);
+
+    ApplyResult r{};
+    r.ok = true;
+    r.preflight = _lastPreflight;
+    return r;
+}
+
 std::optional<IpRulesEngine::RuleStatsSnapshot> IpRulesEngine::statsSnapshot(const RuleId ruleId) const {
     const std::shared_lock<std::shared_mutex> g(_mutex);
     const auto it = _rules.find(ruleId);

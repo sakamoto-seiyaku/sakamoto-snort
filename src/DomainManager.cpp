@@ -148,6 +148,17 @@ std::vector<std::string> DomainManager::snapshotCustomDomains(const Stats::Color
     return customList(color).snapshotNames();
 }
 
+std::vector<std::string> DomainManager::snapshotDomainListContents(const std::string &listId,
+                                                                   const Stats::Color color) const {
+    const auto domains = color == Stats::BLACK ? _blacklist.get(listId) : _whitelist.get(listId);
+    std::vector<std::string> out;
+    out.reserve(domains.size());
+    for (const auto &entry : domains) {
+        out.push_back(entry.first);
+    }
+    return out;
+}
+
 void DomainManager::printCustomDomains(std::ostream &out, const Stats::Color color) {
     customList(color).print(out);
 }
@@ -252,6 +263,42 @@ void DomainManager::reset() {
         closedir(dir);
     } else {
         LOG(ERROR) << Settings::saveDirDomainListsPath() << " dir not exists";
+    }
+}
+
+void DomainManager::resetPolicyForCheckpointRestore() {
+    _domainSourcesMetrics.reset();
+    {
+        const std::scoped_lock lock(_mutexByName, _mutexByIP);
+        _byIPv4.clear();
+        _byIPv6.clear();
+        _byName.clear();
+        _byName.try_emplace(_anonymousDom->name(), _anonymousDom);
+    }
+    _customBlacklist.reset();
+    _customWhitelist.reset();
+    _blackRules.reset();
+    _whiteRules.reset();
+    _blacklist.reset();
+    _whitelist.reset();
+}
+
+void DomainManager::resetRuntimeAssociationsForCheckpoint() {
+    std::vector<Domain::Ptr> domains;
+    {
+        const std::shared_lock<std::shared_mutex> lock(_mutexByName);
+        domains.reserve(_byName.size());
+        for (const auto &[_, domain] : _byName) {
+            domains.push_back(domain);
+        }
+    }
+    {
+        const std::lock_guard<std::shared_mutex> lock(_mutexByIP);
+        _byIPv4.clear();
+        _byIPv6.clear();
+    }
+    for (const auto &domain : domains) {
+        domain->clearIPs();
     }
 }
 

@@ -81,6 +81,8 @@ public:
 
     void resetDomainPolicySources() noexcept { _domainSourcesMetrics.reset(); }
 
+    void resetRuntimeAssociationsForCheckpoint();
+
     template <class IP> void addIP(const Domain::Ptr &domain, const Address<IP> &ip);
 
     // Atomically insert into domain IP set and global IP->Domain map under proper lock ordering
@@ -97,6 +99,9 @@ public:
 
     // Snapshot custom allow/block domains. Order is unspecified (caller may sort if needed).
     std::vector<std::string> snapshotCustomDomains(const Stats::Color color) const;
+
+    std::vector<std::string> snapshotDomainListContents(const std::string &listId,
+                                                        Stats::Color color) const;
 
     void printCustomDomains(std::ostream &out, const Stats::Color color);
 
@@ -127,6 +132,8 @@ public:
     void restore();
 
     void reset();
+
+    void resetPolicyForCheckpointRestore();
 
     template <class... TypeStats>
     void printDomains(std::ostream &out, const std::string &subname, const Stats::Color cs,

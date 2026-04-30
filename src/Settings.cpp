@@ -23,6 +23,7 @@ void Settings::start() {
     mkdir(saveDirPackages.c_str(), 0700);
     mkdir(saveDirSystem.c_str(), 0700);
     mkdir(saveDirDomainLists.c_str(), 0700);
+    mkdir(saveDirPolicyCheckpoints.c_str(), 0700);
     restore();
 }
 
@@ -103,6 +104,19 @@ void Settings::setSaveFileOverrideForTesting(std::string path) {
         return;
     }
     _saver = Saver(std::move(path));
+}
+
+void Settings::applyCheckpointPolicyConfig(const bool blockEnabled, const uint8_t blockMask,
+                                           const uint8_t blockIface, const bool reverseDns,
+                                           const bool ipRulesEnabled) {
+    _blockEnabled = blockEnabled;
+    _blockMask = normalizeAppBlockMask(blockMask);
+    _blockIface = blockIface;
+    _reverseDns = reverseDns;
+    _ipRulesEnabled = ipRulesEnabled;
+    _getBlackIPs = legacyGetBlackIPsFrozenValue;
+    _blockIPLeaks = legacyBlockIPLeaksFrozenValue;
+    _maxAgeIP = legacyMaxAgeIPFrozenValue;
 }
 
 namespace {

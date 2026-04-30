@@ -467,6 +467,22 @@ std::vector<Rule::Id> App::snapshotCustomRuleIds(const Stats::Color color) const
     return customRules(color).snapshotRuleIds();
 }
 
+void App::applyCheckpointPolicyConfig(const uint8_t blockMask, const uint8_t blockIface,
+                                      const bool useCustomList) {
+    _saved = false;
+    _blockMask = Settings::normalizeAppBlockMask(blockMask);
+    _blockIface = blockIface;
+    _useCustomList = useCustomList;
+}
+
+void App::clearCheckpointDomainPolicy() {
+    _saved = false;
+    _customBlacklist.reset();
+    _customWhitelist.reset();
+    _blackRules.reset();
+    _whiteRules.reset();
+}
+
 void App::buildCustomRules(const Stats::Color color) { customRules(color).build(); }
 
 void App::printCustomRules(std::ostream &out, const Stats::Color color) {

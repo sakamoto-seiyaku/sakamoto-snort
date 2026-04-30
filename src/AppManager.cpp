@@ -165,6 +165,23 @@ void AppManager::resetDomainPolicySources() {
     }
 }
 
+void AppManager::resetTraffic() {
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+    for (const auto &[_, app] : _byUid) {
+        app->resetTraffic();
+    }
+}
+
+void AppManager::resetCheckpointRuntimeMetrics() {
+    _stats.reset();
+    const std::shared_lock<std::shared_mutex> lock(_mutexByUid);
+    for (const auto &[_, app] : _byUid) {
+        app->reset(Stats::ALL);
+        app->resetDomainPolicySources();
+        app->resetTraffic();
+    }
+}
+
 void AppManager::save() {
     _saver.save([&] {
         _stats.save(_saver);

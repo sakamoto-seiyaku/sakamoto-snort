@@ -48,6 +48,11 @@ std::vector<RulesManager::BaselineRule> RulesManager::snapshotBaseline() {
     return out;
 }
 
+uint32_t RulesManager::nextRuleIdSnapshot() {
+    const std::shared_lock<std::shared_mutex> lock(_mutex);
+    return _idCount;
+}
+
 std::vector<RulesManager::BaselineRuleStats> RulesManager::snapshotBaselineRuleStats() {
     const std::shared_lock<std::shared_mutex> lock(_mutex);
     std::vector<BaselineRuleStats> out;

@@ -15,7 +15,7 @@ DomainList::DomainList() {}
 
 DomainList::~DomainList() {}
 
-DomainList::DomsSet DomainList::get(std::string listId) {
+DomainList::DomsSet DomainList::get(std::string listId) const {
     const std::shared_lock<std::shared_mutex> lock(_mutex);
     auto it = _domainsByListId.find(listId);
     return it != _domainsByListId.end() ? it->second : DomsSet{};

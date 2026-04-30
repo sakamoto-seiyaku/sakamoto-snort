@@ -40,6 +40,7 @@ void releaseBlockedCommand();
 bool waitForBlockedCommand(std::chrono::milliseconds timeout);
 void markResetEntered();
 int resetCountSnapshot();
+int checkpointRestoreCountSnapshot();
 } // namespace ControlVNextSessionCommands::TestHooks
 
 void snortResetAll() {
@@ -304,6 +305,19 @@ TEST(ControlVNextDaemonSession, LargeMutationDispatchDoesNotRequireDatapathLock)
     expectOkResponse(*resp, 21u);
 }
 
+TEST(ControlVNextDaemonSession, CheckpointSaveDispatchDoesNotRequireDatapathLock) {
+    ControlVNextSessionCommands::TestHooks::reset();
+    Harness h(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+    std::unique_lock<std::shared_mutex> datapathLock(mutexListeners);
+
+    h.sendJsonFrame(R"({"id":22,"cmd":"CHECKPOINT.SAVE","args":{"slot":0}})");
+    auto resp = h.tryReadOneResponse(std::chrono::milliseconds(250));
+
+    datapathLock.unlock();
+    ASSERT_TRUE(resp.has_value()) << "CHECKPOINT.SAVE should not wait for mutexListeners";
+    expectOkResponse(*resp, 22u);
+}
+
 TEST(ControlVNextDaemonSession, ResetAllWaitsForInFlightControlMutation) {
     ControlVNextSessionCommands::TestHooks::reset();
     ControlVNextSessionCommands::TestHooks::blockCommandUntilReleased("CONFIG.SET");
@@ -329,6 +343,33 @@ TEST(ControlVNextDaemonSession, ResetAllWaitsForInFlightControlMutation) {
     expectOkResponse(mutationResp, 30u);
     expectOkResponse(resetResp, 31u);
     EXPECT_EQ(ControlVNextSessionCommands::TestHooks::resetCountSnapshot(), 1);
+}
+
+TEST(ControlVNextDaemonSession, CheckpointRestoreWaitsForInFlightControlMutation) {
+    ControlVNextSessionCommands::TestHooks::reset();
+    ControlVNextSessionCommands::TestHooks::blockCommandUntilReleased("DOMAINLISTS.IMPORT");
+    Harness mutationClient(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+    Harness restoreClient(/*maxRequestBytes=*/4096, /*maxResponseBytes=*/4096);
+
+    mutationClient.sendJsonFrame(R"({"id":40,"cmd":"DOMAINLISTS.IMPORT","args":{}})");
+    if (!ControlVNextSessionCommands::TestHooks::waitForBlockedCommand(
+            std::chrono::milliseconds(1000))) {
+        ControlVNextSessionCommands::TestHooks::releaseBlockedCommand();
+        FAIL() << "DOMAINLISTS.IMPORT did not enter the test mutation boundary";
+    }
+
+    restoreClient.sendJsonFrame(R"({"id":41,"cmd":"CHECKPOINT.RESTORE","args":{"slot":0}})");
+    EXPECT_FALSE(restoreClient.tryReadOneResponse(std::chrono::milliseconds(150)).has_value())
+        << "CHECKPOINT.RESTORE responded before the in-flight mutation left the control boundary";
+    EXPECT_EQ(ControlVNextSessionCommands::TestHooks::checkpointRestoreCountSnapshot(), 0);
+
+    ControlVNextSessionCommands::TestHooks::releaseBlockedCommand();
+    const rapidjson::Document mutationResp = mutationClient.readOneResponse();
+    const rapidjson::Document restoreResp = restoreClient.readOneResponse();
+
+    expectOkResponse(mutationResp, 40u);
+    expectOkResponse(restoreResp, 41u);
+    EXPECT_EQ(ControlVNextSessionCommands::TestHooks::checkpointRestoreCountSnapshot(), 1);
 }
 
 TEST(ControlVNextDaemonSession, OversizedRequestDisconnectsWithoutResponse) {

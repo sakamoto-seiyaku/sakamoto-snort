@@ -499,6 +499,10 @@ void ControlVNextSession::run() {
         if (auto plan = ControlVNextSessionCommands::handleIpRulesCommand(request, _limits); plan.has_value()) {
             return std::move(*plan);
         }
+        if (auto plan = ControlVNextSessionCommands::handleCheckpointCommand(request, _limits);
+            plan.has_value()) {
+            return std::move(*plan);
+        }
         if (auto plan = ControlVNextSessionCommands::handleMetricsCommand(request, _limits); plan.has_value()) {
             return std::move(*plan);
         }
@@ -539,7 +543,8 @@ void ControlVNextSession::run() {
 
             ResponsePlan plan{};
             const auto applyCommand = [&] { plan = dispatch(requestView); };
-            if (requestView.cmd == "RESETALL") {
+            if (requestView.cmd == "RESETALL" || requestView.cmd == "CHECKPOINT.SAVE" ||
+                requestView.cmd == "CHECKPOINT.RESTORE" || requestView.cmd == "CHECKPOINT.CLEAR") {
                 applyCommand();
             } else if (requestView.cmd == "CONFIG.SET" || requestView.cmd == "DOMAINRULES.APPLY" ||
                 requestView.cmd == "DOMAINPOLICY.APPLY" ||

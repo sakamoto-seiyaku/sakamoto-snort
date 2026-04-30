@@ -40,7 +40,7 @@ public:
 
     DomainList(const DomainList &) = delete;
 
-    DomsSet get(std::string listId);
+    DomsSet get(std::string listId) const;
 
     void set(std::string listId, DomsSet domains);
 

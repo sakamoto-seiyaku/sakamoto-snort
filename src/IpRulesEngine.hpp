@@ -277,6 +277,11 @@ public:
         PreflightReport preflight;
     };
 
+    struct PolicySnapshot {
+        RuleId nextRuleId = 0;
+        std::vector<RuleDef> rules;
+    };
+
     IpRulesEngine();
     ~IpRulesEngine();
 
@@ -301,6 +306,9 @@ public:
     std::optional<RuleDef> getRule(const RuleId ruleId) const;
     std::vector<RuleDef> listRules(const std::optional<std::uint32_t> uidFilter,
                                    const std::optional<RuleId> ruleFilter) const;
+    PolicySnapshot policySnapshot() const;
+    ApplyResult validatePolicySnapshot(const PolicySnapshot &snapshot) const;
+    ApplyResult restorePolicySnapshot(const PolicySnapshot &snapshot);
     std::optional<RuleStatsSnapshot> statsSnapshot(const RuleId ruleId) const;
 
     // Hot-path evaluation (lock-free).

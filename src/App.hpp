@@ -198,6 +198,10 @@ public:
 
     TrafficSnapshot trafficSnapshot() const noexcept { return _trafficCounters.snapshot(); }
 
+    void applyCheckpointPolicyConfig(uint8_t blockMask, uint8_t blockIface, bool useCustomList);
+
+    void clearCheckpointDomainPolicy();
+
     void updateStats(const Domain::Ptr &domain, const Stats::Type ts, const Stats::Color cs,
                      const Stats::Block bs, const uint64_t val);
 

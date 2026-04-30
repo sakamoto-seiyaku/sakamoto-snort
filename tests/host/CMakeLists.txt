@@ -336,6 +336,39 @@ add_sucre_snort_host_test(
 )
 
 add_sucre_snort_host_test(
+  control_vnext_checkpoint_surface_tests
+  control_vnext_checkpoint_surface_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Activity.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ActivityManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
+  "${SUCRE_SNORT_ROOT}/src/App.cpp"
+  "${SUCRE_SNORT_ROOT}/src/AppManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/AppStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingListManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextSessionCommandsCheckpoint.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomRules.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DnsRequest.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRecords.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Packet.cpp"
+  "${SUCRE_SNORT_ROOT}/src/PacketManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/PolicyCheckpoint.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Rule.cpp"
+  "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Streamable.cpp"
+)
+
+add_sucre_snort_host_test(
   host_gap_tests
   host_gap_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/Activity.cpp"

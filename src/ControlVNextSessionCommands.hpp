@@ -67,6 +67,11 @@ std::optional<ResponsePlan> handleDomainCommand(const ControlVNext::RequestView 
 std::optional<ResponsePlan> handleIpRulesCommand(const ControlVNext::RequestView &request,
                                                  const ControlVNextSession::Limits &limits);
 
+// Handles checkpoint vNext commands (CHECKPOINT.LIST/SAVE/RESTORE/CLEAR). Returns std::nullopt
+// when cmd is not recognized by this handler.
+std::optional<ResponsePlan> handleCheckpointCommand(const ControlVNext::RequestView &request,
+                                                    const ControlVNextSession::Limits &limits);
+
 // Handles vNext metrics commands (METRICS.GET/METRICS.RESET). Returns std::nullopt when cmd is not
 // recognized by this handler.
 std::optional<ResponsePlan> handleMetricsCommand(const ControlVNext::RequestView &request,

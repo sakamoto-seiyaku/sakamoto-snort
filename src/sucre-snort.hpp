@@ -30,6 +30,11 @@
 extern std::shared_mutex mutexListeners;
 extern std::mutex mutexControlMutations;
 
+namespace PolicyCheckpoint {
+struct Status;
+struct SlotMetadata;
+} // namespace PolicyCheckpoint
+
 inline constexpr std::chrono::milliseconds snortControlSendDeadline{5000};
 inline constexpr std::chrono::milliseconds snortDnsSendDeadline{250};
 
@@ -84,3 +89,9 @@ bool snortWriteAllWithDeadline(int fd, const void *data, std::size_t len,
 
 void snortSave(bool quit = false);
 void snortResetAll();
+PolicyCheckpoint::Status snortCheckpointSave(std::uint32_t slot,
+                                             PolicyCheckpoint::SlotMetadata &metadata);
+PolicyCheckpoint::Status snortCheckpointRestore(std::uint32_t slot,
+                                                PolicyCheckpoint::SlotMetadata &metadata);
+PolicyCheckpoint::Status snortCheckpointClear(std::uint32_t slot,
+                                              PolicyCheckpoint::SlotMetadata &metadata);
