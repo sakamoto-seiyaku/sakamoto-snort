@@ -154,6 +154,10 @@ void snortSave(bool quit) {
     snortSaveLocked();
 }
 
+std::uint32_t snortExportTelemetryDisabledEnds() noexcept {
+    return pktManager.exportTelemetryDisabledEnds();
+}
+
 void snortResetAll() {
     const std::lock_guard<std::mutex> saveResetLock(g_snortSaveResetMutex);
     const std::lock_guard<std::mutex> controlMutationLock(mutexControlMutations);
@@ -161,6 +165,7 @@ void snortResetAll() {
 
     snortBeginResetEpoch();
     controlVNextStream.resetAll();
+    (void)pktManager.exportTelemetryDisabledEnds();
     flowTelemetry.resetAll();
     (void)::unlink(settings.saveDnsStream.c_str());
 
@@ -220,6 +225,7 @@ PolicyCheckpoint::Status snortCheckpointRestore(const std::uint32_t slot,
     }
 
     controlVNextStream.resetAll();
+    (void)pktManager.exportTelemetryDisabledEnds();
     flowTelemetry.resetAll();
     (void)::unlink(settings.saveDnsStream.c_str());
 

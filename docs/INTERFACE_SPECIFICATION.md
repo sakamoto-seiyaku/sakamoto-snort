@@ -138,6 +138,7 @@ vNext app selector（`args.app`）约定:
   - records 通过 shared-memory ring 输出；二进制 ABI 见下方 “Flow Telemetry shared-memory ABI”。
 - `TELEMETRY.CLOSE` | `{}` | `ok` |
   - idempotent；会作废旧 session（consumer 端需停止 ingest 并在需要时重新 OPEN）。
+  - daemon 可在关闭前 bounded best-effort 导出 `FLOW END(endReason=TELEMETRY_DISABLED)`；cleanup 预算按 scanned bucket / entry 计算，ring write 失败也不能扩大扫描范围；consumer 仍必须把 session boundary 当作活跃状态截断点，不能要求每个 active flow 都有 disabled END。
 
 Flow Telemetry shared-memory ABI（`abiVersion=1`）:
 - 默认 sizing：`slotBytes=1024`、`ringDataBytes=16777216`（16 MiB）、`slotCount=16384`、`slotHeaderBytes=24`、`maxPayloadBytes=1000`。
@@ -157,33 +158,53 @@ slot header（offset from slot start）:
 | 20 | `reserved1` | bytes[4] | 保留；consumer 必须忽略 |
 | 24 | `payload` | bytes | 长度为 `payloadSize` |
 
-`recordType=1` FLOW payload v1（fixed size `102` bytes）:
+`recordType=1` FLOW payload v1（fixed size `160` bytes）:
+
+> 兼容性说明：本布局直接替换旧 102-byte `FLOW` payload v1；不提供 `FLOW v2`、双写或旧 offset 兼容窗口。consumer 必须按本表解码。
 
 | Offset | Field | Type | 说明 |
 | --- | --- | --- | --- |
 | 0 | `payloadVersion` | u8 | 固定为 `1` |
 | 1 | `kind` | u8 | `1=Begin`, `2=Update`, `3=End` |
-| 2 | `ctState` | u8 | `0=ANY`, `1=NEW`, `2=ESTABLISHED`, `3=INVALID` |
-| 3 | `ctDir` | u8 | `0=ANY`, `1=ORIG`, `2=REPLY` |
-| 4 | `reasonId` | u8 | `0=IFACE_BLOCK`, `1=IP_LEAK_BLOCK`, `2=ALLOW_DEFAULT`, `3=IP_RULE_ALLOW`, `4=IP_RULE_BLOCK` |
-| 5 | `ifaceKindBit` | u8 | 见 §4 `ifaceKind` 位 |
-| 6 | `flags` | u8 | bit0 `hasRuleId`, bit1 `isIpv6`, bit2 `pickedUpMidStream`（保留/未来） |
-| 7 | `reserved0` | u8 | 保留 |
-| 8 | `timestampNs` | u64 | monotonic timestamp |
-| 16 | `flowInstanceId` | u64 | flow instance id |
-| 24 | `recordSeq` | u64 | flow 内 record 序号 |
-| 32 | `uid` | u32 | Android uid |
-| 36 | `userId` | u32 | Android user id |
-| 40 | `ifindex` | u32 | interface index |
-| 44 | `proto` | u8 | IP protocol number（例如 TCP=6, UDP=17, ICMP=1, ICMPv6=58） |
-| 45 | `reserved1` | u8 | 保留 |
-| 46 | `srcPort` | u16 | TCP/UDP port；无 L4 port 时为 0 |
-| 48 | `dstPort` | u16 | TCP/UDP port；无 L4 port 时为 0 |
-| 50 | `srcAddr` | bytes[16] | IPv4 使用前 4 bytes；IPv6 使用 16 bytes |
-| 66 | `dstAddr` | bytes[16] | IPv4 使用前 4 bytes；IPv6 使用 16 bytes |
-| 82 | `totalPackets` | u64 | flow 累计 packets |
-| 90 | `totalBytes` | u64 | flow 累计 bytes |
-| 98 | `ruleId` | u32 | 仅当 `flags.hasRuleId` 时有效 |
+| 2 | `observationKind` | u8 | `0=NORMAL`, `1=L3_OBSERVATION` |
+| 3 | `ctState` | u8 | `0=ANY`, `1=NEW`, `2=ESTABLISHED`, `3=INVALID` |
+| 4 | `ctDir` | u8 | `0=ANY`, `1=ORIG`, `2=REPLY` |
+| 5 | `packetDir` | u8 | `0=unknown`, `1=in`, `2=out`；真实 packet 方向 |
+| 6 | `flowOriginDir` | u8 | `0=unknown`, `1=in`, `2=out`；flow/observation 首包方向 |
+| 7 | `verdict` | u8 | `0=unknown`, `1=allow`, `2=block` |
+| 8 | `reasonId` | u8 | `0=IFACE_BLOCK`, `1=IP_LEAK_BLOCK`, `2=ALLOW_DEFAULT`, `3=IP_RULE_ALLOW`, `4=IP_RULE_BLOCK` |
+| 9 | `ifaceKindBit` | u8 | 见 §4 `ifaceKind` 位 |
+| 10 | `l4Status` | u8 | `0=KNOWN_L4`, `1=OTHER_TERMINAL`, `2=FRAGMENT`, `3=INVALID_OR_UNAVAILABLE_L4` |
+| 11 | `flags` | u8 | bit0 `hasRuleId`, bit1 `isIpv6`, bit2 `pickedUpMidStream`, bit3 `uidKnown`, bit4 `ifindexKnown`, bit5 `portsAvailable` |
+| 12 | `endReason` | u8 | `0=NONE`, `1=IDLE_TIMEOUT`, `2=TCP_END_DETECTED`, `3=RESOURCE_EVICTED`, `4=TELEMETRY_DISABLED` |
+| 13 | `proto` | u8 | IP protocol number（例如 TCP=6, UDP=17, ICMP=1, ICMPv6=58） |
+| 14 | `srcPort` | u16 | 仅当 `flags.portsAvailable=1` 时有效；否则为 0 |
+| 16 | `dstPort` | u16 | 仅当 `flags.portsAvailable=1` 时有效；否则为 0 |
+| 18 | `icmpType` | u8 | ICMP/ICMPv6 type；非 ICMP 为 0 |
+| 19 | `icmpCode` | u8 | ICMP/ICMPv6 code；非 ICMP 为 0 |
+| 20 | `icmpId` | u16 | ICMP/ICMPv6 id；不可用时为 0 |
+| 22 | `reserved0` | u16 | 保留 |
+| 24 | `timestampNs` | u64 | record event/export monotonic timestamp |
+| 32 | `firstSeenNs` | u64 | flow/observation 首个 packet monotonic timestamp |
+| 40 | `lastSeenNs` | u64 | flow/observation 最近 packet monotonic timestamp；END 中不等同于 retire/export 时间 |
+| 48 | `flowInstanceId` | u64 | flow/observation instance id |
+| 56 | `recordSeq` | u64 | flow 内 record 序号；仅在成功写入 ring 后递增 |
+| 64 | `uid` | u32 | Android uid；仅当 `flags.uidKnown=1` 时可解释为真实 uid |
+| 68 | `userId` | u32 | Android user id |
+| 72 | `ifindex` | u32 | observed interface index；仅当 `flags.ifindexKnown=1` 时有效 |
+| 76 | `srcAddr` | bytes[16] | IPv4 使用前 4 bytes；IPv6 使用 16 bytes |
+| 92 | `dstAddr` | bytes[16] | IPv4 使用前 4 bytes；IPv6 使用 16 bytes |
+| 108 | `totalPackets` | u64 | cumulative packets；不是 since-last-export delta |
+| 116 | `totalBytes` | u64 | cumulative bytes；不是 since-last-export delta |
+| 124 | `inPackets` | u64 | cumulative inbound packets |
+| 132 | `inBytes` | u64 | cumulative inbound bytes |
+| 140 | `outPackets` | u64 | cumulative outbound packets |
+| 148 | `outBytes` | u64 | cumulative outbound bytes |
+| 156 | `ruleId` | u32 | 仅当 `flags.hasRuleId=1` 时有效 |
+
+`observationKind=L3_OBSERVATION` 用于 fragment / invalid / unavailable L4 的 telemetry-only L3 observation：`portsAvailable=0`，`srcPort=dstPort=0`，不伪造正常 TCP/UDP/ICMP lifecycle。`DNS_DECISION` 仍是独立 blocked-only record，`FLOW` 不携带 DNS/IP join、domain hint、would-match 或 Debug Stream explainability 字段。
+
+Flow Telemetry 的 CT facts producer 与 `iprules.enabled` 解耦：当 `level=flow` consumer active 时，daemon 会为可追踪 L4 包采集 `ctState/ctDir`，即使 IP rules policy evaluation 已关闭；该 telemetry-only observation 不改变 packet verdict。资源驱逐会 best-effort 写 `FLOW END(endReason=RESOURCE_EVICTED)`，写失败只进入 telemetry drop/pressure 口径。
 
 `recordType=2` DNS_DECISION payload v1（blocked-only；fixed header `32` bytes）:
 
@@ -202,7 +223,7 @@ slot header（offset from slot start）:
 | 28 | `reserved2` | u32 | 保留 |
 | 32 | `queryName` | bytes[`queryNameLen`] | 原始 bytes，非 NUL 结尾；超 255 bytes 时截断并置 `queryNameTruncated` |
 
-payload 演进规则：每个 payload 自带 `payloadVersion`，新增字段只允许 append；旧 consumer 必须先验证自身需要的最小长度，再用 `payloadSize` 跳过未知尾部。
+payload 演进规则：每个 payload 自带 `payloadVersion`；consumer 必须先验证自身需要的最小长度，再用 `payloadSize` 跳过未知尾部。当前 `FLOW` v1 的 raw-facts completeness 是一次明确的 breaking replacement；后续非 breaking 字段才按 append-only 处理。
 - `STREAM.START` | `{"type":"dns"|"pkt"|"activity","horizonSec"?:u32,"minSize"?:u32}` | `ok` |
   - `dns/pkt` 是 tracked Debug Stream surface：用于短时 per-event 取证，不是常态 records/history/timeline/Top-K API。
   - `dns/pkt` 支持 replay 参数（会被 clamp 到 caps）；replay 只读取 bounded in-process debug prebuffer，不查询 Flow Telemetry、Metrics 或持久化历史。

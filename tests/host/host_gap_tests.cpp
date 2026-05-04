@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <memory>
 #include <shared_mutex>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -23,6 +25,8 @@
 #include <AppManager.hpp>
 #include <CmdLine.hpp>
 #include <DnsRequest.hpp>
+#include <FlowTelemetryAbi.hpp>
+#include <FlowTelemetryRecords.hpp>
 #include <HostManager.hpp>
 #include <PacketManager.hpp>
 #include <RulesManager.hpp>
@@ -83,6 +87,50 @@ std::vector<std::string> splitNulStrings(const std::string &bytes) {
         parts.push_back(cur);
     }
     return parts;
+}
+
+bool openFlowTelemetryForHostGap(void *owner, FlowTelemetry::OpenResult &out) {
+    FlowTelemetry::Config cfg{};
+    cfg.slotBytes = FlowTelemetryAbi::kSlotBytes;
+    cfg.ringDataBytes = FlowTelemetryAbi::kSlotBytes * 4ull;
+    cfg.packetsThreshold = 1;
+    cfg.bytesThreshold = 1;
+    cfg.maxExportIntervalMs = 1;
+
+    std::string err;
+    const std::unique_lock<std::shared_mutex> lock(mutexListeners);
+    return flowTelemetry.open(owner, true, FlowTelemetry::Level::Flow, cfg, out, err);
+}
+
+bool readHostGapFlowPayload(const FlowTelemetry::OpenResult &open, const std::uint64_t ticket,
+                            std::vector<std::byte> &outPayload) {
+    std::vector<std::byte> slot(static_cast<std::size_t>(open.slotBytes));
+    const off_t offset =
+        static_cast<off_t>((ticket % open.slotCount) * static_cast<std::uint64_t>(open.slotBytes));
+    const ssize_t n = ::pread(open.sharedMemoryFd, slot.data(), slot.size(), offset);
+    if (n != static_cast<ssize_t>(slot.size())) {
+        return false;
+    }
+
+    const std::span<const std::byte> slotSpan(slot.data(), slot.size());
+    const auto state = static_cast<FlowTelemetryAbi::SlotState>(
+        FlowTelemetryAbi::readU32Le(slotSpan, FlowTelemetryAbi::kSlotOffsetState));
+    if (state != FlowTelemetryAbi::SlotState::Committed) {
+        return false;
+    }
+    const auto recordType = static_cast<FlowTelemetryAbi::RecordType>(
+        FlowTelemetryAbi::readU16Le(slotSpan, FlowTelemetryAbi::kSlotOffsetRecordType));
+    if (recordType != FlowTelemetryAbi::RecordType::Flow) {
+        return false;
+    }
+    const std::uint32_t payloadSize =
+        FlowTelemetryAbi::readU32Le(slotSpan, FlowTelemetryAbi::kSlotOffsetPayloadSize);
+    if (payloadSize < FlowTelemetryRecords::kFlowV1Bytes) {
+        return false;
+    }
+    outPayload.assign(slot.begin() + FlowTelemetryAbi::kSlotHeaderBytes,
+                      slot.begin() + FlowTelemetryAbi::kSlotHeaderBytes + payloadSize);
+    return true;
 }
 
 std::string makeTmpPath(const std::string &stem) {
@@ -427,7 +475,8 @@ TEST_F(HostGapTest, PacketManagerIfaceBlockAndAllowDefaultUpdateReasonMetrics) {
     l4.dstPort = 2;
     l4.portsAvailable = 1;
 
-    const bool verdictBlock = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, l4,
+    const bool verdictBlock = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0,
+                                             /*uidKnown*/ true, /*ifindexKnown*/ true, ts, l4,
                                              100, /*ifaceKindBit*/ 1,
                                              /*appIfaceMaskSnapshot*/ app->blockIface(),
                                              /*ctPktV4*/ nullptr, /*ctPktV6*/ nullptr,
@@ -438,7 +487,8 @@ TEST_F(HostGapTest, PacketManagerIfaceBlockAndAllowDefaultUpdateReasonMetrics) {
 
     // ALLOW_DEFAULT
     app->blockIface(0);
-    const bool verdictAllow = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0, ts, l4,
+    const bool verdictAllow = mgr.make<IPv4>(srcIp, dstIp, app, host, true, 0,
+                                             /*uidKnown*/ true, /*ifindexKnown*/ true, ts, l4,
                                              100, /*ifaceKindBit*/ 0,
                                              /*appIfaceMaskSnapshot*/ app->blockIface());
     EXPECT_TRUE(verdictAllow);
@@ -446,6 +496,71 @@ TEST_F(HostGapTest, PacketManagerIfaceBlockAndAllowDefaultUpdateReasonMetrics) {
     const auto snap = mgr.reasonMetricsSnapshot();
     EXPECT_EQ(snap.reasons[static_cast<size_t>(PacketReasonId::IFACE_BLOCK)].packets, 1U);
     EXPECT_EQ(snap.reasons[static_cast<size_t>(PacketReasonId::ALLOW_DEFAULT)].packets, 1U);
+}
+
+TEST_F(HostGapTest, PacketManagerFlowTelemetryUsesConntrackWhenIpRulesDisabled) {
+    PacketManager mgr;
+    settings.ipRulesEnabled(false);
+    flowTelemetry.resetAll();
+
+    int owner = 0;
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openFlowTelemetryForHostGap(&owner, open));
+
+    const uint32_t uid = 10000;
+    auto app = std::make_shared<App>(uid, "u0.app");
+    auto host = std::make_shared<Host>();
+
+    const uint8_t srcRaw[4] = {10, 0, 0, 1};
+    const uint8_t dstRaw[4] = {10, 0, 0, 2};
+    const Address<IPv4> srcIp(srcRaw);
+    const Address<IPv4> dstIp(dstRaw);
+    const timespec ts{0, 1'000'000};
+
+    L4ParseResult l4{};
+    l4.l4Status = L4Status::KNOWN_L4;
+    l4.proto = IPPROTO_TCP;
+    l4.srcPort = 12345;
+    l4.dstPort = 443;
+    l4.portsAvailable = 1;
+
+    Conntrack::PacketV4 ctPkt{};
+    ctPkt.tsNs = 1'000'000;
+    ctPkt.uid = uid;
+    ctPkt.srcIp = 0x0A000001u;
+    ctPkt.dstIp = 0x0A000002u;
+    ctPkt.proto = IPPROTO_TCP;
+    ctPkt.ipPayloadLen = 20;
+    ctPkt.srcPort = 12345;
+    ctPkt.dstPort = 443;
+    ctPkt.hasTcp = true;
+    ctPkt.tcp.dataOffsetWords = 5;
+    ctPkt.tcp.flags = TH_SYN;
+
+    const bool verdict = mgr.make<IPv4>(srcIp, dstIp, app, host, /*input*/ true, /*iface*/ 0,
+                                        /*uidKnown*/ true, /*ifindexKnown*/ true,
+                                        ts, l4, /*len*/ 100, /*ifaceKindBit*/ 0,
+                                        /*appIfaceMaskSnapshot*/ 0,
+                                        /*ctPktV4*/ &ctPkt, /*ctPktV6*/ nullptr);
+    EXPECT_TRUE(verdict);
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readHostGapFlowPayload(open, /*ticket=*/0, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::Begin));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetCtState]),
+              static_cast<std::uint8_t>(Conntrack::CtState::NEW));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetCtDir]),
+              static_cast<std::uint8_t>(Conntrack::CtDirection::ORIG));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetVerdict]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowVerdict::Allow));
+
+    {
+        const std::unique_lock<std::shared_mutex> lock(mutexListeners);
+        flowTelemetry.close(&owner);
+    }
+    flowTelemetry.resetAll();
 }
 
 TEST_F(HostGapTest, PacketManagerTrackedIpRulesAttachesExplain) {
@@ -483,6 +598,7 @@ TEST_F(HostGapTest, PacketManagerTrackedIpRulesAttachesExplain) {
     ControlVNextStreamManager::PktEvent streamEvent{};
     bool trackedSnapshot = false;
     const bool verdict = mgr.make<IPv4>(srcIp, dstIp, app, host, /*input*/ false, /*iface*/ 0,
+                                        /*uidKnown*/ true, /*ifindexKnown*/ true,
                                         ts, l4, /*len*/ 100, /*ifaceKindBit*/ 1,
                                         /*appIfaceMaskSnapshot*/ 0,
                                         /*ctPktV4*/ nullptr, /*ctPktV6*/ nullptr,
@@ -502,6 +618,7 @@ TEST_F(HostGapTest, PacketManagerTrackedIpRulesAttachesExplain) {
     streamEvent = {};
     trackedSnapshot = true;
     (void)mgr.make<IPv4>(srcIp, dstIp, app, host, /*input*/ false, /*iface*/ 0,
+                         /*uidKnown*/ true, /*ifindexKnown*/ true,
                          ts, l4, /*len*/ 100, /*ifaceKindBit*/ 1,
                          /*appIfaceMaskSnapshot*/ 0,
                          /*ctPktV4*/ nullptr, /*ctPktV6*/ nullptr,
@@ -575,7 +692,8 @@ TEST_F(HostGapTest, PacketManagerIpv6ConntrackGatingIsPerFamily) {
 
     const auto before = mgr.conntrackMetricsSnapshot();
 
-    const bool verdict = mgr.make<IPv6>(srcIp, dstIp, app, host, /*input*/ true, /*iface*/ 0, ts,
+    const bool verdict = mgr.make<IPv6>(srcIp, dstIp, app, host, /*input*/ true, /*iface*/ 0,
+                                        /*uidKnown*/ true, /*ifindexKnown*/ true, ts,
                                         l4, /*len*/ 100,
                                         /*ifaceKindBit*/ 0, /*appIfaceMaskSnapshot*/ 0,
                                         /*ctPktV4*/ nullptr, /*ctPktV6*/ &ctPkt);

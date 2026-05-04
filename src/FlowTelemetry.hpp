@@ -49,6 +49,7 @@ public:
     struct HotPath {
         Session *session = nullptr;
         const Config *cfg = nullptr;
+        std::uint64_t sessionId = 0;
     };
 
     struct OpenResult {
@@ -87,6 +88,7 @@ public:
     bool open(void *ownerKey, bool canPassFd, Level level, const std::optional<Config> &overrideCfg,
               OpenResult &out, std::string &outError);
     void close(void *ownerKey) noexcept;
+    [[nodiscard]] bool isOwner(void *ownerKey) const noexcept;
 
     // Called under snortResetAll() critical section.
     void resetAll() noexcept;

@@ -30,6 +30,11 @@ void PacketManager::resetCheckpointRuntimeEpoch() {
     _conntrack.reset();
 }
 
+std::uint32_t PacketManager::exportTelemetryDisabledEnds() noexcept {
+    const auto now = static_cast<std::uint64_t>(monotonicNs());
+    return _conntrack.exportTelemetryDisabledEnds(now);
+}
+
 void PacketManager::startStream(const SocketIO::Ptr sockio, const bool pretty,
                                 const uint32_t horizon, const std::uint32_t minSize) {
     Streamable<Packet<IPv4>>::startStream(sockio, pretty, horizon, minSize);

@@ -1,6 +1,7 @@
 #include <Conntrack.hpp>
 #include <FlowTelemetryAbi.hpp>
 #include <FlowTelemetryRecords.hpp>
+#include <L4ParseResult.hpp>
 #include <sucre-snort.hpp>
 
 #include <gtest/gtest.h>
@@ -11,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <span>
 #include <string>
@@ -77,6 +79,50 @@ bool readFlowPayloadU64(const FlowTelemetry::OpenResult &open, const std::uint64
     return true;
 }
 
+bool readFlowPayload(const FlowTelemetry::OpenResult &open, const std::uint64_t ticket,
+                     std::vector<std::byte> &outPayload) {
+    std::vector<std::byte> slot(static_cast<std::size_t>(open.slotBytes));
+    const off_t offset =
+        static_cast<off_t>((ticket % open.slotCount) * static_cast<std::uint64_t>(open.slotBytes));
+    const ssize_t n = ::pread(open.sharedMemoryFd, slot.data(), slot.size(), offset);
+    if (n != static_cast<ssize_t>(slot.size())) {
+        return false;
+    }
+
+    const std::span<const std::byte> slotSpan(slot.data(), slot.size());
+    const auto state = static_cast<FlowTelemetryAbi::SlotState>(
+        FlowTelemetryAbi::readU32Le(slotSpan, FlowTelemetryAbi::kSlotOffsetState));
+    if (state != FlowTelemetryAbi::SlotState::Committed) {
+        return false;
+    }
+    const auto recordType = static_cast<FlowTelemetryAbi::RecordType>(
+        FlowTelemetryAbi::readU16Le(slotSpan, FlowTelemetryAbi::kSlotOffsetRecordType));
+    if (recordType != FlowTelemetryAbi::RecordType::Flow) {
+        return false;
+    }
+    const std::uint32_t payloadSize =
+        FlowTelemetryAbi::readU32Le(slotSpan, FlowTelemetryAbi::kSlotOffsetPayloadSize);
+    if (payloadSize < FlowTelemetryRecords::kFlowV1Bytes) {
+        return false;
+    }
+    outPayload.assign(slot.begin() + FlowTelemetryAbi::kSlotHeaderBytes,
+                      slot.begin() + FlowTelemetryAbi::kSlotHeaderBytes + payloadSize);
+    return true;
+}
+
+bool writeSlotState(const FlowTelemetry::OpenResult &open, const std::uint64_t ticket,
+                    const FlowTelemetryAbi::SlotState state) {
+    std::array<std::byte, sizeof(std::uint32_t)> stateBytes{};
+    FlowTelemetryAbi::writeU32Le(
+        std::span<std::byte>(stateBytes.data(), stateBytes.size()), 0,
+        static_cast<std::uint32_t>(state));
+    const off_t offset = static_cast<off_t>(
+        (ticket % open.slotCount) * static_cast<std::uint64_t>(open.slotBytes) +
+        FlowTelemetryAbi::kSlotOffsetState);
+    return ::pwrite(open.sharedMemoryFd, stateBytes.data(), stateBytes.size(), offset) ==
+        static_cast<ssize_t>(stateBytes.size());
+}
+
 bool openTelemetryForConntrackTest(void *owner, const std::uint32_t slotBytes,
                                    const std::uint64_t ringDataBytes,
                                    FlowTelemetry::OpenResult &out) {
@@ -111,6 +157,55 @@ bool readFlowInstanceId(const FlowTelemetry::OpenResult &open, const std::uint64
 void closeTelemetryForConntrackTest(void *owner) {
     const std::unique_lock<std::shared_mutex> lock(mutexListeners);
     flowTelemetry.close(owner);
+}
+
+Conntrack::TelemetryPacketFacts telemetryFacts(std::span<const std::byte> src,
+                                               std::span<const std::byte> dst,
+                                               const std::uint32_t packetBytes = 60,
+                                               const FlowTelemetryRecords::FlowPacketDirection dir =
+                                                   FlowTelemetryRecords::FlowPacketDirection::In,
+                                               const PacketReasonId reason =
+                                                   PacketReasonId::ALLOW_DEFAULT,
+                                               const std::optional<std::uint32_t> &ruleId =
+                                                   std::nullopt) {
+    Conntrack::TelemetryPacketFacts facts{};
+    facts.packetDir = dir;
+    facts.verdict = reason == PacketReasonId::ALLOW_DEFAULT || reason == PacketReasonId::IP_RULE_ALLOW
+        ? FlowTelemetryRecords::FlowVerdict::Allow
+        : FlowTelemetryRecords::FlowVerdict::Block;
+    facts.ifaceKindBit = 0;
+    facts.l4Status = static_cast<std::uint8_t>(L4Status::KNOWN_L4);
+    facts.uidKnown = true;
+    facts.ifindexKnown = true;
+    facts.portsAvailable = true;
+    facts.userId = 0;
+    facts.ifindex = 7;
+    facts.reasonId = reason;
+    facts.ruleId = ruleId;
+    facts.srcAddrNet = src;
+    facts.dstAddrNet = dst;
+    facts.packetBytes = packetBytes;
+    return facts;
+}
+
+Conntrack::TelemetryPacketFacts zeroPackedDecisionFacts(std::span<const std::byte> src,
+                                                        std::span<const std::byte> dst,
+                                                        const std::uint32_t packetBytes = 60) {
+    Conntrack::TelemetryPacketFacts facts{};
+    facts.packetDir = FlowTelemetryRecords::FlowPacketDirection::In;
+    facts.verdict = FlowTelemetryRecords::FlowVerdict::Unknown;
+    facts.ifaceKindBit = 0;
+    facts.l4Status = static_cast<std::uint8_t>(L4Status::KNOWN_L4);
+    facts.uidKnown = true;
+    facts.ifindexKnown = true;
+    facts.portsAvailable = true;
+    facts.userId = 0;
+    facts.ifindex = 7;
+    facts.reasonId = PacketReasonId::IFACE_BLOCK;
+    facts.srcAddrNet = src;
+    facts.dstAddrNet = dst;
+    facts.packetBytes = packetBytes;
+    return facts;
 }
 
 } // namespace
@@ -151,65 +246,64 @@ TEST(ConntrackTest, FlowTelemetryRecordSeqAdvancesOnlyAfterSuccessfulConntrackEx
     const auto src = ipv4AddrBytes(pkt.srcIp);
     const auto dst = ipv4AddrBytes(pkt.dstIp);
     FlowTelemetry::OpenResult open{};
-    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes, open));
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 2ull, open));
 
     ct.observeFlowTelemetry(pkt,
                             Conntrack::Result{.state = Conntrack::CtState::NEW,
                                               .direction = Conntrack::CtDirection::ORIG},
-                            flowTelemetry.hotPathFlow(), /*ifaceKindBit=*/0, /*userId=*/0,
-                            /*ifindex=*/7, PacketReasonId::ALLOW_DEFAULT, std::nullopt,
-                            std::span<const std::byte>(src.data(), src.size()),
-                            std::span<const std::byte>(dst.data(), dst.size()), /*packetBytes=*/60);
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                           std::span<const std::byte>(dst.data(), dst.size())));
 
     std::uint64_t seq = 0;
     ASSERT_TRUE(readFlowRecordSeq(open, /*ticket=*/0, seq));
     EXPECT_EQ(seq, 1ull);
 
-    closeTelemetryForConntrackTest(&owner);
+    std::array<std::byte, sizeof(std::uint32_t)> writingState{};
+    FlowTelemetryAbi::writeU32Le(
+        std::span<std::byte>(writingState.data(), writingState.size()), 0,
+        static_cast<std::uint32_t>(FlowTelemetryAbi::SlotState::Writing));
+    const off_t slot1StateOffset = static_cast<off_t>(
+        FlowTelemetryAbi::kSlotBytes + FlowTelemetryAbi::kSlotOffsetState);
+    ASSERT_EQ(::pwrite(open.sharedMemoryFd, writingState.data(), writingState.size(), slot1StateOffset),
+              static_cast<ssize_t>(writingState.size()));
 
-    FlowTelemetry::OpenResult tooSmall{};
-    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, /*slotBytes=*/64, tooSmall));
     pkt.tsNs += 1'000'000;
     pkt.tcp.flags = TH_ACK;
     ct.observeFlowTelemetry(pkt,
                             Conntrack::Result{.state = Conntrack::CtState::ESTABLISHED,
                                               .direction = Conntrack::CtDirection::ORIG},
-                            flowTelemetry.hotPathFlow(), /*ifaceKindBit=*/0, /*userId=*/0,
-                            /*ifindex=*/7, PacketReasonId::ALLOW_DEFAULT, std::nullopt,
-                            std::span<const std::byte>(src.data(), src.size()),
-                            std::span<const std::byte>(dst.data(), dst.size()), /*packetBytes=*/60);
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                           std::span<const std::byte>(dst.data(), dst.size())));
 
     const auto dropped = flowTelemetry.healthSnapshot();
     EXPECT_EQ(dropped.recordsDropped, 1ull);
-    EXPECT_EQ(dropped.lastDropReason, FlowTelemetryRing::DropReason::RecordTooLarge);
+    EXPECT_EQ(dropped.lastDropReason, FlowTelemetryRing::DropReason::SlotBusy);
 
-    closeTelemetryForConntrackTest(&owner);
-
-    FlowTelemetry::OpenResult reopened{};
-    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes, reopened));
     pkt.tsNs += 1'000'000;
     ct.observeFlowTelemetry(pkt,
                             Conntrack::Result{.state = Conntrack::CtState::ESTABLISHED,
                                               .direction = Conntrack::CtDirection::ORIG},
-                            flowTelemetry.hotPathFlow(), /*ifaceKindBit=*/0, /*userId=*/0,
-                            /*ifindex=*/7, PacketReasonId::ALLOW_DEFAULT, std::nullopt,
-                            std::span<const std::byte>(src.data(), src.size()),
-                            std::span<const std::byte>(dst.data(), dst.size()), /*packetBytes=*/60);
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                           std::span<const std::byte>(dst.data(), dst.size())));
 
-    ASSERT_TRUE(readFlowRecordSeq(reopened, /*ticket=*/0, seq));
+    ASSERT_TRUE(readFlowRecordSeq(open, /*ticket=*/2, seq));
     EXPECT_EQ(seq, 2ull);
 
     closeTelemetryForConntrackTest(&owner);
     flowTelemetry.resetAll();
 }
 
-TEST(ConntrackTest, FlowTelemetryResourcePressureIsAccountedWhenFlowTableIsFull) {
+TEST(ConntrackTest, FlowTelemetryResourcePressureExportsResourceEvictedEndWhenFlowTableIsFull) {
     int owner = 0;
     flowTelemetry.resetAll();
 
     FlowTelemetry::Config cfg{};
     cfg.slotBytes = FlowTelemetryAbi::kSlotBytes;
-    cfg.ringDataBytes = FlowTelemetryAbi::kSlotBytes * 2ull;
+    cfg.ringDataBytes = FlowTelemetryAbi::kSlotBytes * 4ull;
     cfg.packetsThreshold = 1;
     cfg.bytesThreshold = 1;
     cfg.maxExportIntervalMs = 1;
@@ -222,7 +316,12 @@ TEST(ConntrackTest, FlowTelemetryResourcePressureIsAccountedWhenFlowTableIsFull)
         ASSERT_TRUE(flowTelemetry.open(&owner, true, FlowTelemetry::Level::Flow, cfg, open, err)) << err;
     }
 
-    Conntrack ct;
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 8;
+    Conntrack ct(opt);
     Conntrack::PacketV4 first{};
     first.tsNs = 1'000'000;
     first.uid = 2000;
@@ -241,11 +340,9 @@ TEST(ConntrackTest, FlowTelemetryResourcePressureIsAccountedWhenFlowTableIsFull)
     ct.observeFlowTelemetry(first,
                             Conntrack::Result{.state = Conntrack::CtState::NEW,
                                               .direction = Conntrack::CtDirection::ORIG},
-                            flowTelemetry.hotPathFlow(), /*ifaceKindBit=*/0, /*userId=*/0,
-                            /*ifindex=*/7, PacketReasonId::ALLOW_DEFAULT, std::nullopt,
-                            std::span<const std::byte>(firstSrc.data(), firstSrc.size()),
-                            std::span<const std::byte>(firstDst.data(), firstDst.size()),
-                            /*packetBytes=*/60);
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(firstSrc.data(), firstSrc.size()),
+                                           std::span<const std::byte>(firstDst.data(), firstDst.size())));
 
     Conntrack::PacketV4 second = first;
     second.tsNs += 1'000'000;
@@ -256,15 +353,210 @@ TEST(ConntrackTest, FlowTelemetryResourcePressureIsAccountedWhenFlowTableIsFull)
     ct.observeFlowTelemetry(second,
                             Conntrack::Result{.state = Conntrack::CtState::NEW,
                                               .direction = Conntrack::CtDirection::ORIG},
-                            flowTelemetry.hotPathFlow(), /*ifaceKindBit=*/0, /*userId=*/0,
-                            /*ifindex=*/7, PacketReasonId::ALLOW_DEFAULT, std::nullopt,
-                            std::span<const std::byte>(secondSrc.data(), secondSrc.size()),
-                            std::span<const std::byte>(secondDst.data(), secondDst.size()),
-                            /*packetBytes=*/60);
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(secondSrc.data(), secondSrc.size()),
+                                           std::span<const std::byte>(secondDst.data(), secondDst.size())));
 
-    const auto snap = flowTelemetry.healthSnapshot();
-    EXPECT_EQ(snap.recordsDropped, 1ull);
-    EXPECT_EQ(snap.lastDropReason, FlowTelemetryRing::DropReason::ResourcePressure);
+    std::vector<std::byte> evictedPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, evictedPayload));
+    const std::span<const std::byte> evicted(evictedPayload.data(), evictedPayload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(evicted[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::End));
+    EXPECT_EQ(static_cast<std::uint8_t>(evicted[FlowTelemetryRecords::kFlowV1OffsetEndReason]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowEndReason::ResourceEvicted));
+
+    std::vector<std::byte> secondPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/2, secondPayload));
+    EXPECT_EQ(static_cast<std::uint8_t>(secondPayload[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::Begin));
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryDisabledCleanupExportsEndReason) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 8;
+    Conntrack ct(opt);
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 3ull, open));
+
+    Conntrack::PacketV4 pkt{};
+    pkt.tsNs = 1'000'000;
+    pkt.uid = 2000;
+    pkt.srcIp = 0x0A000001u;
+    pkt.dstIp = 0x0A000002u;
+    pkt.proto = IPPROTO_TCP;
+    pkt.srcPort = 12345;
+    pkt.dstPort = 443;
+    pkt.ipPayloadLen = 20;
+    pkt.hasTcp = true;
+    pkt.tcp.dataOffsetWords = 5;
+    pkt.tcp.flags = TH_SYN;
+
+    const auto src = ipv4AddrBytes(pkt.srcIp);
+    const auto dst = ipv4AddrBytes(pkt.dstIp);
+    ct.observeFlowTelemetry(pkt,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                           std::span<const std::byte>(dst.data(), dst.size())));
+
+    EXPECT_EQ(ct.exportTelemetryDisabledEnds(/*nowNs=*/2'000'000), 1u);
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::End));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetEndReason]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowEndReason::TelemetryDisabled));
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetTimestampNs),
+              2'000'000ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetLastSeenNs),
+              pkt.tsNs);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryDisabledCleanupPreservesRuleIdZeroOnEnd) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 8;
+    Conntrack ct(opt);
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 3ull, open));
+
+    Conntrack::PacketV4 pkt{};
+    pkt.tsNs = 1'000'000;
+    pkt.uid = 2000;
+    pkt.srcIp = 0x0A000001u;
+    pkt.dstIp = 0x0A000002u;
+    pkt.proto = IPPROTO_TCP;
+    pkt.srcPort = 12345;
+    pkt.dstPort = 443;
+    pkt.ipPayloadLen = 20;
+    pkt.hasTcp = true;
+    pkt.tcp.dataOffsetWords = 5;
+    pkt.tcp.flags = TH_SYN;
+
+    const auto src = ipv4AddrBytes(pkt.srcIp);
+    const auto dst = ipv4AddrBytes(pkt.dstIp);
+    ct.observeFlowTelemetry(pkt,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                           std::span<const std::byte>(dst.data(), dst.size()),
+                                           /*packetBytes=*/60,
+                                           FlowTelemetryRecords::FlowPacketDirection::In,
+                                           PacketReasonId::IP_RULE_BLOCK,
+                                           std::optional<std::uint32_t>{0u}));
+
+    std::vector<std::byte> beginPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/0, beginPayload));
+    std::span<const std::byte> begin(beginPayload.data(), beginPayload.size());
+    EXPECT_NE(static_cast<std::uint8_t>(begin[FlowTelemetryRecords::kFlowV1OffsetFlags]) &
+                  FlowTelemetryRecords::kFlowFlagHasRuleId,
+              0u);
+    EXPECT_EQ(FlowTelemetryAbi::readU32Le(begin, FlowTelemetryRecords::kFlowV1OffsetRuleId), 0u);
+
+    EXPECT_EQ(ct.exportTelemetryDisabledEnds(/*nowNs=*/2'000'000), 1u);
+
+    std::vector<std::byte> endPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, endPayload));
+    std::span<const std::byte> end(endPayload.data(), endPayload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(end[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::End));
+    EXPECT_EQ(static_cast<std::uint8_t>(end[FlowTelemetryRecords::kFlowV1OffsetVerdict]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowVerdict::Block));
+    EXPECT_EQ(static_cast<std::uint8_t>(end[FlowTelemetryRecords::kFlowV1OffsetReasonId]),
+              static_cast<std::uint8_t>(PacketReasonId::IP_RULE_BLOCK));
+    EXPECT_NE(static_cast<std::uint8_t>(end[FlowTelemetryRecords::kFlowV1OffsetFlags]) &
+                  FlowTelemetryRecords::kFlowFlagHasRuleId,
+              0u);
+    EXPECT_EQ(FlowTelemetryAbi::readU32Le(end, FlowTelemetryRecords::kFlowV1OffsetRuleId), 0u);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryDisabledCleanupStopsAtEntryBudgetWhenWritesFail) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    FlowTelemetry::Config cfg{};
+    cfg.slotBytes = FlowTelemetryAbi::kSlotBytes;
+    cfg.ringDataBytes = FlowTelemetryAbi::kSlotBytes * 8ull;
+    cfg.packetsThreshold = 1;
+    cfg.bytesThreshold = 1;
+    cfg.maxExportIntervalMs = 1;
+
+    FlowTelemetry::OpenResult open{};
+    std::string err;
+    {
+        const std::unique_lock<std::shared_mutex> lock(mutexListeners);
+        ASSERT_TRUE(flowTelemetry.open(&owner, true, FlowTelemetry::Level::Flow, cfg, open, err)) << err;
+    }
+
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 1;
+    Conntrack ct(opt);
+
+    for (std::uint32_t i = 0; i < 3; ++i) {
+        Conntrack::PacketV4 pkt{};
+        pkt.tsNs = 1'000'000 + i;
+        pkt.uid = 2000;
+        pkt.srcIp = 0x0A000001u + i;
+        pkt.dstIp = 0x0A000002u;
+        pkt.proto = IPPROTO_TCP;
+        pkt.srcPort = static_cast<std::uint16_t>(12345u + i);
+        pkt.dstPort = 443;
+        pkt.ipPayloadLen = 20;
+        pkt.hasTcp = true;
+        pkt.tcp.dataOffsetWords = 5;
+        pkt.tcp.flags = TH_SYN;
+
+        const auto src = ipv4AddrBytes(pkt.srcIp);
+        const auto dst = ipv4AddrBytes(pkt.dstIp);
+        ct.observeFlowTelemetry(pkt,
+                                Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                                  .direction = Conntrack::CtDirection::ORIG},
+                                flowTelemetry.hotPathFlow(),
+                                telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                               std::span<const std::byte>(dst.data(), dst.size())));
+    }
+
+    const auto before = flowTelemetry.healthSnapshot();
+    ASSERT_EQ(before.recordsWritten, 3ull);
+    ASSERT_EQ(before.recordsDropped, 0ull);
+    ASSERT_TRUE(writeSlotState(open, /*ticket=*/3,
+                               FlowTelemetryAbi::SlotState::Writing));
+
+    EXPECT_EQ(ct.exportTelemetryDisabledEnds(/*nowNs=*/2'000'000), 0u);
+
+    const auto after = flowTelemetry.healthSnapshot();
+    EXPECT_EQ(after.recordsWritten, before.recordsWritten);
+    EXPECT_EQ(after.recordsDropped, before.recordsDropped + 1ull);
+    EXPECT_EQ(after.lastDropReason, FlowTelemetryRing::DropReason::SlotBusy);
 
     closeTelemetryForConntrackTest(&owner);
     flowTelemetry.resetAll();
@@ -297,10 +589,9 @@ TEST(ConntrackTest, FlowTelemetryFlowInstanceIdIsUniqueAcrossIpv4AndIpv6) {
     ct.observeFlowTelemetry(pkt4,
                             Conntrack::Result{.state = Conntrack::CtState::NEW,
                                               .direction = Conntrack::CtDirection::ORIG},
-                            flowTelemetry.hotPathFlow(), /*ifaceKindBit=*/0, /*userId=*/0,
-                            /*ifindex=*/7, PacketReasonId::ALLOW_DEFAULT, std::nullopt,
-                            std::span<const std::byte>(src4.data(), src4.size()),
-                            std::span<const std::byte>(dst4.data(), dst4.size()), /*packetBytes=*/60);
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src4.data(), src4.size()),
+                                           std::span<const std::byte>(dst4.data(), dst4.size())));
 
     Conntrack::PacketV6 pkt6{};
     pkt6.tsNs = 2'000'000;
@@ -320,10 +611,9 @@ TEST(ConntrackTest, FlowTelemetryFlowInstanceIdIsUniqueAcrossIpv4AndIpv6) {
     ct.observeFlowTelemetry(pkt6,
                             Conntrack::Result{.state = Conntrack::CtState::NEW,
                                               .direction = Conntrack::CtDirection::ORIG},
-                            flowTelemetry.hotPathFlow(), /*ifaceKindBit=*/0, /*userId=*/0,
-                            /*ifindex=*/7, PacketReasonId::ALLOW_DEFAULT, std::nullopt,
-                            std::span<const std::byte>(src6.data(), src6.size()),
-                            std::span<const std::byte>(dst6.data(), dst6.size()), /*packetBytes=*/60);
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src6.data(), src6.size()),
+                                           std::span<const std::byte>(dst6.data(), dst6.size())));
 
     std::uint64_t id4 = 0;
     std::uint64_t id6 = 0;
@@ -332,6 +622,544 @@ TEST(ConntrackTest, FlowTelemetryFlowInstanceIdIsUniqueAcrossIpv4AndIpv6) {
     EXPECT_NE(id4, 0ull);
     EXPECT_NE(id6, 0ull);
     EXPECT_NE(id4, id6);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryExportsRawFactsAndDirectionCounters) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack ct;
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 4ull, open));
+
+    Conntrack::PacketV4 orig{};
+    orig.tsNs = 1'000'000;
+    orig.uid = 2000;
+    orig.srcIp = 0x0A000001u;
+    orig.dstIp = 0x0A000002u;
+    orig.proto = IPPROTO_TCP;
+    orig.srcPort = 12345;
+    orig.dstPort = 443;
+    orig.ipPayloadLen = 20;
+    orig.hasTcp = true;
+    orig.tcp.dataOffsetWords = 5;
+    orig.tcp.flags = TH_SYN;
+    const auto origSrc = ipv4AddrBytes(orig.srcIp);
+    const auto origDst = ipv4AddrBytes(orig.dstIp);
+    ct.observeFlowTelemetry(orig,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(origSrc.data(), origSrc.size()),
+                                           std::span<const std::byte>(origDst.data(), origDst.size()),
+                                           /*packetBytes=*/60,
+                                           FlowTelemetryRecords::FlowPacketDirection::In));
+
+    Conntrack::PacketV4 reply = orig;
+    reply.tsNs = 2'000'000;
+    reply.srcIp = orig.dstIp;
+    reply.dstIp = orig.srcIp;
+    reply.srcPort = orig.dstPort;
+    reply.dstPort = orig.srcPort;
+    reply.tcp.flags = TH_ACK;
+    const auto replySrc = ipv4AddrBytes(reply.srcIp);
+    const auto replyDst = ipv4AddrBytes(reply.dstIp);
+    ct.observeFlowTelemetry(reply,
+                            Conntrack::Result{.state = Conntrack::CtState::ESTABLISHED,
+                                              .direction = Conntrack::CtDirection::REPLY},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(replySrc.data(), replySrc.size()),
+                                           std::span<const std::byte>(replyDst.data(), replyDst.size()),
+                                           /*packetBytes=*/80,
+                                           FlowTelemetryRecords::FlowPacketDirection::Out));
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetPacketDir]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowPacketDirection::Out));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetFlowOriginDir]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowPacketDirection::In));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetVerdict]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowVerdict::Allow));
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetFirstSeenNs),
+              1'000'000ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetLastSeenNs),
+              2'000'000ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetTotalPackets), 2ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetTotalBytes), 140ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetInPackets), 1ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetInBytes), 60ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetOutPackets), 1ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetOutBytes), 80ull);
+    const std::uint8_t flags = static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetFlags]);
+    EXPECT_NE(flags & FlowTelemetryRecords::kFlowFlagUidKnown, 0u);
+    EXPECT_NE(flags & FlowTelemetryRecords::kFlowFlagIfindexKnown, 0u);
+    EXPECT_NE(flags & FlowTelemetryRecords::kFlowFlagPortsAvailable, 0u);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryUsesConntrackFirstSeenAndMarksMidstreamPickup) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack ct;
+    Conntrack::PacketV4 first{};
+    first.tsNs = 1'000'000;
+    first.uid = 2000;
+    first.srcIp = 0x0A000001u;
+    first.dstIp = 0x0A000002u;
+    first.proto = IPPROTO_TCP;
+    first.srcPort = 12345;
+    first.dstPort = 443;
+    first.ipPayloadLen = 20;
+    first.hasTcp = true;
+    first.tcp.dataOffsetWords = 5;
+    first.tcp.flags = TH_SYN;
+
+    const auto view = ct.inspectForPolicy(first);
+    ASSERT_EQ(view.result.state, Conntrack::CtState::NEW);
+    ASSERT_EQ(view.result.direction, Conntrack::CtDirection::ORIG);
+    ASSERT_TRUE(view.createOnAccept);
+    ct.commitAccepted(first, view);
+
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes, open));
+
+    Conntrack::PacketV4 later = first;
+    later.tsNs = 2'000'000;
+    later.tcp.flags = TH_ACK;
+    const auto src = ipv4AddrBytes(later.srcIp);
+    const auto dst = ipv4AddrBytes(later.dstIp);
+    ct.observeFlowTelemetry(later,
+                            Conntrack::Result{.state = Conntrack::CtState::ESTABLISHED,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                           std::span<const std::byte>(dst.data(), dst.size()),
+                                           /*packetBytes=*/80,
+                                           FlowTelemetryRecords::FlowPacketDirection::Out));
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/0, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::Begin));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetPacketDir]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowPacketDirection::Out));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetFlowOriginDir]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowPacketDirection::Out));
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetFirstSeenNs),
+              1'000'000ull);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetLastSeenNs),
+              2'000'000ull);
+    const std::uint8_t flags = static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetFlags]);
+    EXPECT_NE(flags & FlowTelemetryRecords::kFlowFlagPickedUpMidStream, 0u);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryLooseAckOnlyNewTcpIsPickedUpAndUsesPickupTtl) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    FlowTelemetry::Config cfg{};
+    cfg.slotBytes = FlowTelemetryAbi::kSlotBytes;
+    cfg.ringDataBytes = FlowTelemetryAbi::kSlotBytes * 4ull;
+    cfg.packetsThreshold = 1;
+    cfg.bytesThreshold = 1;
+    cfg.maxExportIntervalMs = 1;
+    cfg.pickupTtlMs = 1;
+
+    FlowTelemetry::OpenResult open{};
+    std::string err;
+    {
+        const std::unique_lock<std::shared_mutex> lock(mutexListeners);
+        ASSERT_TRUE(flowTelemetry.open(&owner, true, FlowTelemetry::Level::Flow, cfg, open, err)) << err;
+    }
+
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 8;
+    Conntrack ct(opt);
+
+    Conntrack::PacketV4 ackOnly{};
+    ackOnly.tsNs = 1'000'000;
+    ackOnly.uid = 2000;
+    ackOnly.srcIp = 0x0A000001u;
+    ackOnly.dstIp = 0x0A000002u;
+    ackOnly.proto = IPPROTO_TCP;
+    ackOnly.srcPort = 12345;
+    ackOnly.dstPort = 443;
+    ackOnly.ipPayloadLen = 20;
+    ackOnly.hasTcp = true;
+    ackOnly.tcp.dataOffsetWords = 5;
+    ackOnly.tcp.flags = TH_ACK;
+
+    const auto ackSrc = ipv4AddrBytes(ackOnly.srcIp);
+    const auto ackDst = ipv4AddrBytes(ackOnly.dstIp);
+    ct.observeFlowTelemetry(ackOnly,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(ackSrc.data(), ackSrc.size()),
+                                           std::span<const std::byte>(ackDst.data(), ackDst.size())));
+
+    std::vector<std::byte> beginPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/0, beginPayload));
+    std::span<const std::byte> begin(beginPayload.data(), beginPayload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(begin[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::Begin));
+    EXPECT_NE(static_cast<std::uint8_t>(begin[FlowTelemetryRecords::kFlowV1OffsetFlags]) &
+                  FlowTelemetryRecords::kFlowFlagPickedUpMidStream,
+              0u);
+
+    Conntrack::PacketV4 next = ackOnly;
+    next.tsNs = ackOnly.tsNs + 1'000'001;
+    next.srcIp = 0x0A000003u;
+    next.srcPort = 23456;
+    next.tcp.flags = TH_SYN;
+    const auto nextSrc = ipv4AddrBytes(next.srcIp);
+    const auto nextDst = ipv4AddrBytes(next.dstIp);
+    ct.observeFlowTelemetry(next,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(nextSrc.data(), nextSrc.size()),
+                                           std::span<const std::byte>(nextDst.data(), nextDst.size())));
+
+    std::vector<std::byte> endPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, endPayload));
+    std::span<const std::byte> end(endPayload.data(), endPayload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(end[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::End));
+    EXPECT_EQ(static_cast<std::uint8_t>(end[FlowTelemetryRecords::kFlowV1OffsetEndReason]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowEndReason::IdleTimeout));
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(end, FlowTelemetryRecords::kFlowV1OffsetTimestampNs),
+              next.tsNs);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(end, FlowTelemetryRecords::kFlowV1OffsetLastSeenNs),
+              ackOnly.tsNs);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryExportsIcmpDetailsWithoutPorts) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack ct;
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes, open));
+
+    Conntrack::PacketV4 pkt{};
+    pkt.tsNs = 1'000'000;
+    pkt.uid = 2000;
+    pkt.srcIp = 0x0A000001u;
+    pkt.dstIp = 0x0A000002u;
+    pkt.proto = IPPROTO_ICMP;
+    pkt.ipPayloadLen = 8;
+    pkt.hasIcmp = true;
+    pkt.icmp.type = 8;
+    pkt.icmp.code = 0;
+    pkt.icmp.id = 0x1234;
+    const auto src = ipv4AddrBytes(pkt.srcIp);
+    const auto dst = ipv4AddrBytes(pkt.dstIp);
+    auto facts = telemetryFacts(std::span<const std::byte>(src.data(), src.size()),
+                                std::span<const std::byte>(dst.data(), dst.size()));
+    facts.portsAvailable = false;
+    facts.icmpType = pkt.icmp.type;
+    facts.icmpCode = pkt.icmp.code;
+    facts.icmpId = pkt.icmp.id;
+    ct.observeFlowTelemetry(pkt,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(), facts);
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/0, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(FlowTelemetryAbi::readU16Le(bytes, FlowTelemetryRecords::kFlowV1OffsetSrcPort), 0u);
+    EXPECT_EQ(FlowTelemetryAbi::readU16Le(bytes, FlowTelemetryRecords::kFlowV1OffsetDstPort), 0u);
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetIcmpType]), 8u);
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetIcmpCode]), 0u);
+    EXPECT_EQ(FlowTelemetryAbi::readU16Le(bytes, FlowTelemetryRecords::kFlowV1OffsetIcmpId), 0x1234u);
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetFlags]) &
+                  FlowTelemetryRecords::kFlowFlagPortsAvailable,
+              0u);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryExportsL3ObservationForFragmentAndInvalidL4) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack ct;
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 2ull, open));
+
+    Conntrack::PacketV4 fragment{};
+    fragment.tsNs = 1'000'000;
+    fragment.uid = 2000;
+    fragment.srcIp = 0x0A000001u;
+    fragment.dstIp = 0x0A000002u;
+    fragment.proto = IPPROTO_TCP;
+    fragment.isFragment = true;
+    fragment.ipPayloadLen = 8;
+    const auto fragSrc = ipv4AddrBytes(fragment.srcIp);
+    const auto fragDst = ipv4AddrBytes(fragment.dstIp);
+    auto fragFacts = telemetryFacts(std::span<const std::byte>(fragSrc.data(), fragSrc.size()),
+                                    std::span<const std::byte>(fragDst.data(), fragDst.size()));
+    fragFacts.l4Status = static_cast<std::uint8_t>(L4Status::FRAGMENT);
+    fragFacts.portsAvailable = false;
+    ct.observeFlowTelemetry(fragment,
+                            Conntrack::Result{.state = Conntrack::CtState::INVALID,
+                                              .direction = Conntrack::CtDirection::ANY},
+                            flowTelemetry.hotPathFlow(), fragFacts);
+
+    Conntrack::PacketV4 invalid = fragment;
+    invalid.tsNs = 2'000'000;
+    invalid.srcIp = 0x0A000003u;
+    invalid.isFragment = false;
+    const auto invSrc = ipv4AddrBytes(invalid.srcIp);
+    const auto invDst = ipv4AddrBytes(invalid.dstIp);
+    auto invalidFacts = telemetryFacts(std::span<const std::byte>(invSrc.data(), invSrc.size()),
+                                       std::span<const std::byte>(invDst.data(), invDst.size()));
+    invalidFacts.l4Status = static_cast<std::uint8_t>(L4Status::INVALID_OR_UNAVAILABLE_L4);
+    invalidFacts.portsAvailable = false;
+    ct.observeFlowTelemetry(invalid,
+                            Conntrack::Result{.state = Conntrack::CtState::INVALID,
+                                              .direction = Conntrack::CtDirection::ANY},
+                            flowTelemetry.hotPathFlow(), invalidFacts);
+
+    for (std::uint64_t ticket = 0; ticket < 2; ++ticket) {
+        std::vector<std::byte> payload{};
+        ASSERT_TRUE(readFlowPayload(open, ticket, payload));
+        const std::span<const std::byte> bytes(payload.data(), payload.size());
+        EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetObservationKind]),
+                  static_cast<std::uint8_t>(FlowTelemetryRecords::FlowObservationKind::L3Observation));
+        EXPECT_EQ(FlowTelemetryAbi::readU16Le(bytes, FlowTelemetryRecords::kFlowV1OffsetSrcPort), 0u);
+        EXPECT_EQ(FlowTelemetryAbi::readU16Le(bytes, FlowTelemetryRecords::kFlowV1OffsetDstPort), 0u);
+        EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetTotalPackets), 1ull);
+    }
+    std::vector<std::byte> fragPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/0, fragPayload));
+    EXPECT_EQ(static_cast<std::uint8_t>(fragPayload[FlowTelemetryRecords::kFlowV1OffsetL4Status]),
+              static_cast<std::uint8_t>(L4Status::FRAGMENT));
+    std::vector<std::byte> invalidPayload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, invalidPayload));
+    EXPECT_EQ(static_cast<std::uint8_t>(invalidPayload[FlowTelemetryRecords::kFlowV1OffsetL4Status]),
+              static_cast<std::uint8_t>(L4Status::INVALID_OR_UNAVAILABLE_L4));
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryExpiredFlowExportsEndWithIdleReasonAndLastSeen) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 8;
+    Conntrack ct(opt);
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 4ull, open));
+
+    Conntrack::PacketV4 first{};
+    first.tsNs = 1'000'000;
+    first.uid = 2000;
+    first.srcIp = 0x0A000001u;
+    first.dstIp = 0x0A000002u;
+    first.proto = IPPROTO_TCP;
+    first.srcPort = 12345;
+    first.dstPort = 443;
+    first.ipPayloadLen = 20;
+    first.hasTcp = true;
+    first.tcp.dataOffsetWords = 5;
+    first.tcp.flags = TH_SYN;
+    const auto firstSrc = ipv4AddrBytes(first.srcIp);
+    const auto firstDst = ipv4AddrBytes(first.dstIp);
+    ct.observeFlowTelemetry(first,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(firstSrc.data(), firstSrc.size()),
+                                           std::span<const std::byte>(firstDst.data(), firstDst.size())));
+
+    Conntrack::PacketV4 second = first;
+    second.tsNs = first.tsNs + 31ull * 1'000'000'000ull;
+    second.srcIp = 0x0A000003u;
+    second.srcPort = 23456;
+    const auto secondSrc = ipv4AddrBytes(second.srcIp);
+    const auto secondDst = ipv4AddrBytes(second.dstIp);
+    ct.observeFlowTelemetry(second,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(secondSrc.data(), secondSrc.size()),
+                                           std::span<const std::byte>(secondDst.data(), secondDst.size())));
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::End));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetEndReason]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowEndReason::IdleTimeout));
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetTimestampNs),
+              second.tsNs);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetFirstSeenNs),
+              first.tsNs);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetLastSeenNs),
+              first.tsNs);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryIpv4IdleSweepExportsEndForZeroPackedDecisionKey) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 8;
+    Conntrack ct(opt);
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 4ull, open));
+
+    Conntrack::PacketV4 first{};
+    first.tsNs = 1'000'000;
+    first.uid = 2000;
+    first.srcIp = 0x0A000001u;
+    first.dstIp = 0x0A000002u;
+    first.proto = IPPROTO_UDP;
+    first.srcPort = 12345;
+    first.dstPort = 53;
+    first.ipPayloadLen = 8;
+    const auto firstSrc = ipv4AddrBytes(first.srcIp);
+    const auto firstDst = ipv4AddrBytes(first.dstIp);
+    ct.observeFlowTelemetry(
+        first,
+        Conntrack::Result{.state = Conntrack::CtState::ANY,
+                          .direction = Conntrack::CtDirection::ANY},
+        flowTelemetry.hotPathFlow(),
+        zeroPackedDecisionFacts(std::span<const std::byte>(firstSrc.data(), firstSrc.size()),
+                                std::span<const std::byte>(firstDst.data(), firstDst.size())));
+
+    Conntrack::PacketV4 second = first;
+    second.tsNs = first.tsNs + 11ull * 1'000'000'000ull;
+    second.srcIp = 0x0A000003u;
+    second.srcPort = 23456;
+    const auto secondSrc = ipv4AddrBytes(second.srcIp);
+    const auto secondDst = ipv4AddrBytes(second.dstIp);
+    ct.observeFlowTelemetry(second,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(secondSrc.data(), secondSrc.size()),
+                                           std::span<const std::byte>(secondDst.data(), secondDst.size())));
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::End));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetEndReason]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowEndReason::IdleTimeout));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetVerdict]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowVerdict::Unknown));
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetTimestampNs),
+              second.tsNs);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetFirstSeenNs),
+              first.tsNs);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetLastSeenNs),
+              first.tsNs);
+
+    closeTelemetryForConntrackTest(&owner);
+    flowTelemetry.resetAll();
+}
+
+TEST(ConntrackTest, FlowTelemetryIpv6IdleSweepExportsEndForZeroPackedDecisionKey) {
+    int owner = 0;
+    flowTelemetry.resetAll();
+
+    Conntrack::Options opt{};
+    opt.shards = 1;
+    opt.bucketsPerShard = 1;
+    opt.sweepMaxBuckets = 1;
+    opt.sweepMaxEntries = 8;
+    Conntrack ct(opt);
+    FlowTelemetry::OpenResult open{};
+    ASSERT_TRUE(openTelemetryForConntrackTest(&owner, FlowTelemetryAbi::kSlotBytes,
+                                              FlowTelemetryAbi::kSlotBytes * 4ull, open));
+
+    Conntrack::PacketV6 first{};
+    first.tsNs = 1'000'000;
+    first.uid = 2000;
+    first.srcIp[15] = 1;
+    first.dstIp[15] = 2;
+    first.proto = IPPROTO_UDP;
+    first.srcPort = 12345;
+    first.dstPort = 53;
+    first.ipPayloadLen = 8;
+    const auto firstSrc = ipv6AddrBytes(first.srcIp);
+    const auto firstDst = ipv6AddrBytes(first.dstIp);
+    ct.observeFlowTelemetry(
+        first,
+        Conntrack::Result{.state = Conntrack::CtState::ANY,
+                          .direction = Conntrack::CtDirection::ANY},
+        flowTelemetry.hotPathFlow(),
+        zeroPackedDecisionFacts(std::span<const std::byte>(firstSrc.data(), firstSrc.size()),
+                                std::span<const std::byte>(firstDst.data(), firstDst.size())));
+
+    Conntrack::PacketV6 second = first;
+    second.tsNs = first.tsNs + 11ull * 1'000'000'000ull;
+    second.srcIp[15] = 3;
+    second.srcPort = 23456;
+    const auto secondSrc = ipv6AddrBytes(second.srcIp);
+    const auto secondDst = ipv6AddrBytes(second.dstIp);
+    ct.observeFlowTelemetry(second,
+                            Conntrack::Result{.state = Conntrack::CtState::NEW,
+                                              .direction = Conntrack::CtDirection::ORIG},
+                            flowTelemetry.hotPathFlow(),
+                            telemetryFacts(std::span<const std::byte>(secondSrc.data(), secondSrc.size()),
+                                           std::span<const std::byte>(secondDst.data(), secondDst.size())));
+
+    std::vector<std::byte> payload{};
+    ASSERT_TRUE(readFlowPayload(open, /*ticket=*/1, payload));
+    const std::span<const std::byte> bytes(payload.data(), payload.size());
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetKind]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowRecordKind::End));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetEndReason]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowEndReason::IdleTimeout));
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[FlowTelemetryRecords::kFlowV1OffsetVerdict]),
+              static_cast<std::uint8_t>(FlowTelemetryRecords::FlowVerdict::Unknown));
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetTimestampNs),
+              second.tsNs);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetFirstSeenNs),
+              first.tsNs);
+    EXPECT_EQ(FlowTelemetryAbi::readU64Le(bytes, FlowTelemetryRecords::kFlowV1OffsetLastSeenNs),
+              first.tsNs);
 
     closeTelemetryForConntrackTest(&owner);
     flowTelemetry.resetAll();

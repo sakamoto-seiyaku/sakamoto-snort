@@ -88,6 +88,7 @@ bool snortWriteAllWithDeadline(int fd, const void *data, std::size_t len,
                                std::chrono::milliseconds deadline) noexcept;
 
 void snortSave(bool quit = false);
+std::uint32_t snortExportTelemetryDisabledEnds() noexcept;
 void snortResetAll();
 PolicyCheckpoint::Status snortCheckpointSave(std::uint32_t slot,
                                              PolicyCheckpoint::SlotMetadata &metadata);

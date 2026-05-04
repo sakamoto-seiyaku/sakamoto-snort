@@ -13,6 +13,7 @@
 
 // Telemetry plane hot-path wiring.
 #include <FlowTelemetry.hpp>
+#include <FlowTelemetryRecords.hpp>
 #include <PacketReasons.hpp>
 
 // Userspace conntrack core (IPv4 first).
@@ -174,22 +175,35 @@ public:
     // Notes:
     // - Telemetry failures must never change packet verdict.
     // - This path is allowed to drop records under backpressure; drops are accounted by FlowTelemetry.
+    struct TelemetryPacketFacts {
+        FlowTelemetryRecords::FlowPacketDirection packetDir =
+            FlowTelemetryRecords::FlowPacketDirection::Unknown;
+        FlowTelemetryRecords::FlowVerdict verdict = FlowTelemetryRecords::FlowVerdict::Unknown;
+        std::uint8_t ifaceKindBit = 0;
+        std::uint8_t l4Status = 0;
+        std::uint8_t icmpType = 0;
+        std::uint8_t icmpCode = 0;
+        std::uint16_t icmpId = 0;
+        bool uidKnown = false;
+        bool ifindexKnown = false;
+        bool portsAvailable = false;
+        std::uint32_t userId = 0;
+        std::uint32_t ifindex = 0;
+        PacketReasonId reasonId = PacketReasonId::ALLOW_DEFAULT;
+        std::optional<std::uint32_t> ruleId = std::nullopt;
+        std::span<const std::byte> srcAddrNet;
+        std::span<const std::byte> dstAddrNet;
+        std::uint32_t packetBytes = 0;
+    };
+
     void observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult,
                               const FlowTelemetry::HotPath &teleHot,
-                              std::uint8_t ifaceKindBit, std::uint32_t userId,
-                              std::uint32_t ifindex, PacketReasonId reasonId,
-                              const std::optional<std::uint32_t> &ruleId,
-                              std::span<const std::byte> srcAddrNet,
-                              std::span<const std::byte> dstAddrNet,
-                              std::uint32_t packetBytes) noexcept;
+                              const TelemetryPacketFacts &facts) noexcept;
     void observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult,
                               const FlowTelemetry::HotPath &teleHot,
-                              std::uint8_t ifaceKindBit, std::uint32_t userId,
-                              std::uint32_t ifindex, PacketReasonId reasonId,
-                              const std::optional<std::uint32_t> &ruleId,
-                              std::span<const std::byte> srcAddrNet,
-                              std::span<const std::byte> dstAddrNet,
-                              std::uint32_t packetBytes) noexcept;
+                              const TelemetryPacketFacts &facts) noexcept;
+
+    std::uint32_t exportTelemetryDisabledEnds(std::uint64_t nowNs) noexcept;
 
 #ifdef SUCRE_SNORT_TESTING
     std::uint32_t debugEpochUsedSlots() const noexcept;

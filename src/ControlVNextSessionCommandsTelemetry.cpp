@@ -84,6 +84,9 @@ std::optional<ResponsePlan> handleTelemetryCommand(const ControlVNext::RequestVi
         }
 
         const std::unique_lock<std::shared_mutex> lock(mutexListeners);
+        if (flowTelemetry.isOwner(sessionKey)) {
+            (void)snortExportTelemetryDisabledEnds();
+        }
         flowTelemetry.close(sessionKey);
         rapidjson::Document response = ControlVNext::makeOkResponse(id, nullptr);
         return ResponsePlan{.response = std::move(response)};
@@ -227,6 +230,9 @@ std::optional<ResponsePlan> handleTelemetryCommand(const ControlVNext::RequestVi
     std::string openErr;
     {
         const std::unique_lock<std::shared_mutex> lock(mutexListeners);
+        if (level == FlowTelemetry::Level::Off && flowTelemetry.isOwner(sessionKey)) {
+            (void)snortExportTelemetryDisabledEnds();
+        }
         if (!flowTelemetry.open(sessionKey, canPassFd, level, overrideCfg, openRes, openErr)) {
             rapidjson::Document response =
                 ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT",

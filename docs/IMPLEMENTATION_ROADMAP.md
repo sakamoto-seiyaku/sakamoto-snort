@@ -153,7 +153,7 @@ Status 口径（全篇统一）：
 
 ### 3.4 候选 C：后端能力扩展（偏新能力；不默认进入下一轮）
 
-- [NEXT] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；同步更新 daemon、native consumer、前端 consumer、OpenSpec spec 与 `docs/INTERFACE_SPECIFICATION.md`。
+- [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
 - [BACKLOG] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
 - [BACKLOG] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
 - [BACKLOG] 更强的 L4 stateful semantics：超出当前 `ct.state/ct.direction` 最小闭环的扩展能力。
@@ -163,7 +163,7 @@ Status 口径（全篇统一）：
 
 - [DONE 2026-04-29] Flow Telemetry 纲领文件已从讨论草案收口为工作决策文档。
 - [DONE 2026-04-30] Flow Telemetry 接口已随 `add-flow-telemetry-plane` 同步到 `docs/INTERFACE_SPECIFICATION.md`。
-- [NEXT] Flow Telemetry raw facts completeness 实现前，需按 `docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md` 新增决策同步 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`，明确新的 `FLOW` binary layout。
+- [DONE 2026-05-04] Flow Telemetry raw facts completeness 已同步 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`，新的 `FLOW` v1 binary layout 以接口文档 offset 表为准。
 - [DONE 2026-04-30] Debug Stream explainability 与 Policy Bundle Checkpoints 已同步到 OpenSpec 主规格；`docs/INTERFACE_SPECIFICATION.md` 后续只在接口新增/变更时刷新。
 - [NOTE] 当前 `docs/INTERFACE_SPECIFICATION.md` 已收敛为 vNext-only 契约（legacy 版已归档）；若下一轮先做 Flow Telemetry raw facts completeness，应先更新 telemetry ABI 契约；若先做前端 handoff，则优先补 RuntimeService / APK packaging 契约文档。
 

@@ -141,12 +141,35 @@ udp6_send_once() {
   iptest_adb_as_uid "$IPTEST_UID" "timeout 2 sh -c 'printf x | nc ${IPTEST_NC6_FLAG} -u -w 1 \"$IPTEST_PEER_IP6\" \"$port\" >/dev/null 2>&1' || true" >/dev/null 2>&1
 }
 
+ping4_large_once() {
+  local size="$1"
+  iptest_adb_as_uid "$IPTEST_UID" "ping -s \"$size\" -c 1 -W 2 \"$IPTEST_PEER_IP\" >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
+ping6_large_once() {
+  local size="$1"
+  iptest_detect_ping6_cmd >/dev/null 2>&1 || return 1
+  iptest_adb_as_uid "$IPTEST_UID" "$IPTEST_PING6_CMD -s \"$size\" -c 1 -W 2 \"$IPTEST_PEER_IP6\" >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
 other4_send() {
   iptest_adb_as_uid "$IPTEST_UID" "\"$IPTEST_RAW_PROTO_DEVICE_BIN\" --family 4 --dst \"$IPTEST_PEER_IP\" --proto 136 --count 3 --payloadBytes 32 >/dev/null 2>&1 || true" >/dev/null 2>&1
 }
 
 other6_send() {
   iptest_adb_as_uid "$IPTEST_UID" "\"$IPTEST_RAW_PROTO_DEVICE_BIN\" --family 6 --dst \"$IPTEST_PEER_IP6\" --proto 136 --count 3 --payloadBytes 32 >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
+invalid4_send() {
+  adb_su "\"$IPTEST_RAW_PROTO_DEVICE_BIN\" --family 4 --dst \"$IPTEST_PEER_IP\" --proto 6 --count 2 --payloadBytes 20 >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
+invalid6_send() {
+  adb_su "\"$IPTEST_RAW_PROTO_DEVICE_BIN\" --family 6 --dst \"$IPTEST_PEER_IP6\" --proto 6 --count 2 --payloadBytes 1 >/dev/null 2>&1 || true" >/dev/null 2>&1
+}
+
+fragment4_send() {
+  adb_su "\"$IPTEST_RAW_PROTO_DEVICE_BIN\" --family 4 --src \"$IPTEST_HOST_IP\" --dst \"$IPTEST_PEER_IP\" --ipv4Fragment --count 2 --payloadBytes 16 >/dev/null 2>&1 || true" >/dev/null 2>&1
 }
 
 assert_matrix_output() {
@@ -178,6 +201,14 @@ def need(ok: bool, msg: str) -> None:
     if not ok:
         print(f"missing: {msg}", file=sys.stderr)
         print(f"flow_count={len(flows)} dns_count={len(dns)} summary={summary}", file=sys.stderr)
+        dist = {}
+        for flow in flows:
+            key = (bool(flow.get("isIpv6")), flow.get("proto"), flow.get("reason"), flow.get("verdict"))
+            dist[key] = dist.get(key, 0) + 1
+        for key, count in sorted(dist.items(), key=lambda item: (str(item[0]), item[1]))[:40]:
+            print(f"flow_dist {key} count={count}", file=sys.stderr)
+        for flow in flows[:20]:
+            print("flow_sample " + json.dumps(flow, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         raise SystemExit(1)
 
 def has_flow(**want) -> bool:
@@ -213,6 +244,53 @@ for flow in flows:
 
 for reason in ("ALLOW_DEFAULT", "IP_RULE_ALLOW", "IP_RULE_BLOCK", "IFACE_BLOCK"):
     need(any(f.get("reason") == reason for f in flows), f"{reason} FLOW")
+
+for flow in flows:
+    need(int(flow.get("payloadSize", 0)) >= 160, "replacement FLOW payload size")
+    need(flow.get("observationKind") in ("NORMAL", "L3_OBSERVATION"), "observationKind exported")
+    need(flow.get("packetDir") in ("in", "out", "unknown"), "packetDir exported")
+    need(flow.get("flowOriginDir") in ("in", "out", "unknown"), "flowOriginDir exported")
+    need(flow.get("verdict") in ("allow", "block", "unknown"), "explicit verdict exported")
+    need(isinstance(flow.get("firstSeenNs"), int), "firstSeenNs exported")
+    need(isinstance(flow.get("lastSeenNs"), int), "lastSeenNs exported")
+    need(flow.get("firstSeenNs") > 0, "firstSeenNs non-zero")
+    need(flow.get("lastSeenNs") >= flow.get("firstSeenNs"), "lastSeenNs >= firstSeenNs")
+    if flow.get("packetDir") in ("in", "out"):
+        need(flow.get("flowOriginDir") in ("in", "out"), "flowOriginDir known for directed packet")
+    total_pk = int(flow.get("totalPackets", -1))
+    in_pk = int(flow.get("inPackets", -1))
+    out_pk = int(flow.get("outPackets", -1))
+    need(total_pk == in_pk + out_pk, "direction packet counters sum to total")
+    need(isinstance(flow.get("uidKnown"), bool), "uidKnown exported")
+    need(isinstance(flow.get("ifindexKnown"), bool), "ifindexKnown exported")
+    need(isinstance(flow.get("portsAvailable"), bool), "portsAvailable exported")
+
+for reason, verdict in (("IP_RULE_ALLOW", "allow"), ("IP_RULE_BLOCK", "block"), ("IFACE_BLOCK", "block")):
+    need(any(f.get("reason") == reason and f.get("verdict") == verdict for f in flows),
+         f"{reason} explicit {verdict} verdict")
+
+need(any(f.get("proto") in (1, 58) and isinstance(f.get("icmpType"), int)
+         and isinstance(f.get("icmpCode"), int) and isinstance(f.get("icmpId"), int)
+         and f.get("portsAvailable") is False
+         for f in flows), "ICMP facts without ports")
+
+need(any(f.get("proto") in (6, 17) and f.get("portsAvailable") is True
+         for f in flows), "TCP/UDP portsAvailable true")
+
+fragment_observed = any(f.get("observationKind") == "L3_OBSERVATION" and int(f.get("l4Status", -1)) == 2
+                        and f.get("portsAvailable") is False and int(f.get("srcPort", -1)) == 0
+                        and int(f.get("dstPort", -1)) == 0
+                        for f in flows)
+if os.environ.get("IPTEST_REQUIRE_FLOW_FRAGMENT", "0") == "1":
+    need(fragment_observed, "fragment L3 observation")
+elif not fragment_observed:
+    print("note: fragment L3 observation not observed; Android NFQUEUE may defrag or bypass raw fragments",
+          file=sys.stderr)
+
+need(any(f.get("observationKind") == "L3_OBSERVATION" and int(f.get("l4Status", -1)) == 3
+         and f.get("portsAvailable") is False and int(f.get("srcPort", -1)) == 0
+         and int(f.get("dstPort", -1)) == 0
+         for f in flows), "invalid L4 L3 observation")
 
 blocked = os.environ["BLOCKED_DOMAIN"]
 allowed = os.environ["ALLOWED_DOMAIN"]
@@ -333,6 +411,11 @@ udp4_send_once "$udp4_port" || true
 udp6_send_once "$udp6_port" || true
 other4_send || true
 other6_send || true
+ping4_large_once 4000 || true
+ping6_large_once 4000 || true
+fragment4_send || true
+invalid4_send || true
+invalid6_send || true
 
 log_info "triggering IP_RULE_ALLOW/IP_RULE_BLOCK/IFACE_BLOCK decisions..."
 apply_single_rule "ipv4-allow" "ipv4" "allow" "tcp" "${IPTEST_PEER_IP}/32" "$tcp4_port" 10

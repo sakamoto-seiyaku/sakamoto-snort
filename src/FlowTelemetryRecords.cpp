@@ -18,21 +18,11 @@ static void writeBytes(std::span<std::byte> out, const std::size_t off,
     std::memcpy(out.data() + off, in.data(), in.size());
 }
 
-bool encodeFlowV1(EncodedPayload &out, const FlowRecordKind kind, const std::uint8_t ctState,
-                  const std::uint8_t ctDir, const std::uint8_t reasonId,
-                  const std::uint8_t ifaceKindBit, const bool isIpv6,
-                  const std::uint64_t timestampNs, const std::uint64_t flowInstanceId,
-                  const std::uint64_t recordSeq, const std::uint32_t uid,
-                  const std::uint32_t userId, const std::uint32_t ifindex,
-                  const std::uint8_t proto, const std::uint16_t srcPort,
-                  const std::uint16_t dstPort, const std::span<const std::byte> srcAddr,
-                  const std::span<const std::byte> dstAddr, const std::uint64_t totalPackets,
-                  const std::uint64_t totalBytes,
-                  const std::optional<std::uint32_t> &ruleId) noexcept {
+bool encodeFlowV1(EncodedPayload &out, const FlowV1Fields &fields) noexcept {
     out = EncodedPayload{};
 
-    const std::size_t wantAddrBytes = isIpv6 ? 16u : 4u;
-    if (srcAddr.size() != wantAddrBytes || dstAddr.size() != wantAddrBytes) {
+    const std::size_t wantAddrBytes = fields.isIpv6 ? 16u : 4u;
+    if (fields.srcAddr.size() != wantAddrBytes || fields.dstAddr.size() != wantAddrBytes) {
         return false;
     }
 
@@ -41,46 +31,71 @@ bool encodeFlowV1(EncodedPayload &out, const FlowRecordKind kind, const std::uin
     std::fill(buf.begin(), buf.begin() + kFlowV1Bytes, std::byte{0});
 
     buf[kFlowV1OffsetPayloadVersion] = static_cast<std::byte>(kFlowPayloadVersionV1);
-    buf[kFlowV1OffsetKind] = static_cast<std::byte>(kind);
-    buf[kFlowV1OffsetCtState] = static_cast<std::byte>(ctState);
-    buf[kFlowV1OffsetCtDir] = static_cast<std::byte>(ctDir);
-    buf[kFlowV1OffsetReasonId] = static_cast<std::byte>(reasonId);
-    buf[kFlowV1OffsetIfaceKindBit] = static_cast<std::byte>(ifaceKindBit);
+    buf[kFlowV1OffsetKind] = static_cast<std::byte>(fields.kind);
+    buf[kFlowV1OffsetObservationKind] = static_cast<std::byte>(fields.observationKind);
+    buf[kFlowV1OffsetCtState] = static_cast<std::byte>(fields.ctState);
+    buf[kFlowV1OffsetCtDir] = static_cast<std::byte>(fields.ctDir);
+    buf[kFlowV1OffsetPacketDir] = static_cast<std::byte>(fields.packetDir);
+    buf[kFlowV1OffsetFlowOriginDir] = static_cast<std::byte>(fields.flowOriginDir);
+    buf[kFlowV1OffsetVerdict] = static_cast<std::byte>(fields.verdict);
+    buf[kFlowV1OffsetReasonId] = static_cast<std::byte>(fields.reasonId);
+    buf[kFlowV1OffsetIfaceKindBit] = static_cast<std::byte>(fields.ifaceKindBit);
+    buf[kFlowV1OffsetL4Status] = static_cast<std::byte>(fields.l4Status);
+    buf[kFlowV1OffsetEndReason] = static_cast<std::byte>(fields.endReason);
+    buf[kFlowV1OffsetProto] = static_cast<std::byte>(fields.proto);
+    FlowTelemetryAbi::writeU16Le(buf, kFlowV1OffsetSrcPort, fields.portsAvailable ? fields.srcPort : 0u);
+    FlowTelemetryAbi::writeU16Le(buf, kFlowV1OffsetDstPort, fields.portsAvailable ? fields.dstPort : 0u);
+    buf[kFlowV1OffsetIcmpType] = static_cast<std::byte>(fields.icmpType);
+    buf[kFlowV1OffsetIcmpCode] = static_cast<std::byte>(fields.icmpCode);
+    FlowTelemetryAbi::writeU16Le(buf, kFlowV1OffsetIcmpId, fields.icmpId);
 
     std::uint8_t flags = 0;
-    if (isIpv6) {
+    if (fields.isIpv6) {
         flags |= kFlowFlagIsIpv6;
     }
-    if (ruleId.has_value()) {
+    if (fields.ruleId.has_value()) {
         flags |= kFlowFlagHasRuleId;
+    }
+    if (fields.pickedUpMidStream) {
+        flags |= kFlowFlagPickedUpMidStream;
+    }
+    if (fields.uidKnown) {
+        flags |= kFlowFlagUidKnown;
+    }
+    if (fields.ifindexKnown) {
+        flags |= kFlowFlagIfindexKnown;
+    }
+    if (fields.portsAvailable) {
+        flags |= kFlowFlagPortsAvailable;
     }
     buf[kFlowV1OffsetFlags] = static_cast<std::byte>(flags);
 
-    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetTimestampNs, timestampNs);
-    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetFlowInstanceId, flowInstanceId);
-    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetRecordSeq, recordSeq);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetTimestampNs, fields.timestampNs);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetFirstSeenNs, fields.firstSeenNs);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetLastSeenNs, fields.lastSeenNs);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetFlowInstanceId, fields.flowInstanceId);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetRecordSeq, fields.recordSeq);
 
-    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetUid, uid);
-    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetUserId, userId);
-    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetIfindex, ifindex);
+    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetUid, fields.uid);
+    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetUserId, fields.userId);
+    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetIfindex, fields.ifindex);
 
-    buf[kFlowV1OffsetProto] = static_cast<std::byte>(proto);
-    FlowTelemetryAbi::writeU16Le(buf, kFlowV1OffsetSrcPort, srcPort);
-    FlowTelemetryAbi::writeU16Le(buf, kFlowV1OffsetDstPort, dstPort);
-
-    if (isIpv6) {
-        writeBytes(buf, kFlowV1OffsetSrcAddr, srcAddr);
-        writeBytes(buf, kFlowV1OffsetDstAddr, dstAddr);
+    if (fields.isIpv6) {
+        writeBytes(buf, kFlowV1OffsetSrcAddr, fields.srcAddr);
+        writeBytes(buf, kFlowV1OffsetDstAddr, fields.dstAddr);
     } else {
         // IPv4 stored in the first 4 bytes, remaining bytes are 0.
-        writeBytes(buf, kFlowV1OffsetSrcAddr, srcAddr);
-        writeBytes(buf, kFlowV1OffsetDstAddr, dstAddr);
+        writeBytes(buf, kFlowV1OffsetSrcAddr, fields.srcAddr);
+        writeBytes(buf, kFlowV1OffsetDstAddr, fields.dstAddr);
     }
 
-    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetTotalPackets, totalPackets);
-    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetTotalBytes, totalBytes);
-
-    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetRuleId, ruleId.value_or(0u));
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetTotalPackets, fields.totalPackets);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetTotalBytes, fields.totalBytes);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetInPackets, fields.inPackets);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetInBytes, fields.inBytes);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetOutPackets, fields.outPackets);
+    FlowTelemetryAbi::writeU64Le(buf, kFlowV1OffsetOutBytes, fields.outBytes);
+    FlowTelemetryAbi::writeU32Le(buf, kFlowV1OffsetRuleId, fields.ruleId.value_or(0u));
 
     out.size = kFlowV1Bytes;
     return true;

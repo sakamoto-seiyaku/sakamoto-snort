@@ -230,13 +230,15 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     const uint16_t ipPayloadLen = static_cast<uint16_t>(len);
     App::Uid uid = 0;
     uint32_t iface = 0;
+    const bool uidKnown = attr[NFQA_UID] != nullptr;
+    const bool ifindexKnown = attr[NFQA_IFINDEX_INDEV] != nullptr || attr[NFQA_IFINDEX_OUTDEV] != nullptr;
     timespec timestamp = {0, 0};
     L4ParseResult l4{};
     bool isFragment = false;
     Conntrack::PacketV4 ctPktV4{};
     Conntrack::PacketV6 ctPktV6{};
 
-    if (attr[NFQA_UID]) {
+    if (uidKnown) {
         uid = ntohl(mnl_attr_get_u32(attr[NFQA_UID]));
     }
     if (attr[NFQA_IFINDEX_INDEV]) {
@@ -472,7 +474,8 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
                     ctPtrV6 = &ctPktV6;
                 }
                 verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface,
-                                                       timestamp, l4, payloadLen, ifaceKindBit, appIfaceMask,
+                                                       uidKnown, ifindexKnown, timestamp,
+                                                       l4, payloadLen, ifaceKindBit, appIfaceMask,
                                                        ctPtrV4, ctPtrV6, &streamEvent, &trackedSnapshot);
                 if (trackedSnapshot) {
                     controlVNextStream.observePktTracked(std::move(streamEvent));

@@ -53,28 +53,47 @@ enum class RecordType : std::uint16_t {
 
 constexpr std::uint32_t kFlowV1OffsetPayloadVersion = 0;
 constexpr std::uint32_t kFlowV1OffsetKind = 1;
-constexpr std::uint32_t kFlowV1OffsetCtState = 2;
-constexpr std::uint32_t kFlowV1OffsetCtDir = 3;
-constexpr std::uint32_t kFlowV1OffsetReasonId = 4;
-constexpr std::uint32_t kFlowV1OffsetIfaceKindBit = 5;
-constexpr std::uint32_t kFlowV1OffsetFlags = 6;
-constexpr std::uint32_t kFlowV1OffsetTimestampNs = 8;
-constexpr std::uint32_t kFlowV1OffsetFlowInstanceId = 16;
-constexpr std::uint32_t kFlowV1OffsetRecordSeq = 24;
-constexpr std::uint32_t kFlowV1OffsetUid = 32;
-constexpr std::uint32_t kFlowV1OffsetUserId = 36;
-constexpr std::uint32_t kFlowV1OffsetIfindex = 40;
-constexpr std::uint32_t kFlowV1OffsetProto = 44;
-constexpr std::uint32_t kFlowV1OffsetSrcPort = 46;
-constexpr std::uint32_t kFlowV1OffsetDstPort = 48;
-constexpr std::uint32_t kFlowV1OffsetSrcAddr = 50;
-constexpr std::uint32_t kFlowV1OffsetDstAddr = 66;
-constexpr std::uint32_t kFlowV1OffsetTotalPackets = 82;
-constexpr std::uint32_t kFlowV1OffsetTotalBytes = 90;
-constexpr std::uint32_t kFlowV1OffsetRuleId = 98;
-constexpr std::uint32_t kFlowV1Bytes = 102;
+constexpr std::uint32_t kFlowV1OffsetObservationKind = 2;
+constexpr std::uint32_t kFlowV1OffsetCtState = 3;
+constexpr std::uint32_t kFlowV1OffsetCtDir = 4;
+constexpr std::uint32_t kFlowV1OffsetPacketDir = 5;
+constexpr std::uint32_t kFlowV1OffsetFlowOriginDir = 6;
+constexpr std::uint32_t kFlowV1OffsetVerdict = 7;
+constexpr std::uint32_t kFlowV1OffsetReasonId = 8;
+constexpr std::uint32_t kFlowV1OffsetIfaceKindBit = 9;
+constexpr std::uint32_t kFlowV1OffsetL4Status = 10;
+constexpr std::uint32_t kFlowV1OffsetFlags = 11;
+constexpr std::uint32_t kFlowV1OffsetEndReason = 12;
+constexpr std::uint32_t kFlowV1OffsetProto = 13;
+constexpr std::uint32_t kFlowV1OffsetSrcPort = 14;
+constexpr std::uint32_t kFlowV1OffsetDstPort = 16;
+constexpr std::uint32_t kFlowV1OffsetIcmpType = 18;
+constexpr std::uint32_t kFlowV1OffsetIcmpCode = 19;
+constexpr std::uint32_t kFlowV1OffsetIcmpId = 20;
+constexpr std::uint32_t kFlowV1OffsetTimestampNs = 24;
+constexpr std::uint32_t kFlowV1OffsetFirstSeenNs = 32;
+constexpr std::uint32_t kFlowV1OffsetLastSeenNs = 40;
+constexpr std::uint32_t kFlowV1OffsetFlowInstanceId = 48;
+constexpr std::uint32_t kFlowV1OffsetRecordSeq = 56;
+constexpr std::uint32_t kFlowV1OffsetUid = 64;
+constexpr std::uint32_t kFlowV1OffsetUserId = 68;
+constexpr std::uint32_t kFlowV1OffsetIfindex = 72;
+constexpr std::uint32_t kFlowV1OffsetSrcAddr = 76;
+constexpr std::uint32_t kFlowV1OffsetDstAddr = 92;
+constexpr std::uint32_t kFlowV1OffsetTotalPackets = 108;
+constexpr std::uint32_t kFlowV1OffsetTotalBytes = 116;
+constexpr std::uint32_t kFlowV1OffsetInPackets = 124;
+constexpr std::uint32_t kFlowV1OffsetInBytes = 132;
+constexpr std::uint32_t kFlowV1OffsetOutPackets = 140;
+constexpr std::uint32_t kFlowV1OffsetOutBytes = 148;
+constexpr std::uint32_t kFlowV1OffsetRuleId = 156;
+constexpr std::uint32_t kFlowV1Bytes = 160;
 constexpr std::uint8_t kFlowFlagHasRuleId = 1u << 0;
 constexpr std::uint8_t kFlowFlagIsIpv6 = 1u << 1;
+constexpr std::uint8_t kFlowFlagPickedUpMidStream = 1u << 2;
+constexpr std::uint8_t kFlowFlagUidKnown = 1u << 3;
+constexpr std::uint8_t kFlowFlagIfindexKnown = 1u << 4;
+constexpr std::uint8_t kFlowFlagPortsAvailable = 1u << 5;
 
 constexpr std::uint32_t kDnsV1OffsetPayloadVersion = 0;
 constexpr std::uint32_t kDnsV1OffsetFlags = 1;
@@ -168,6 +187,56 @@ struct Args {
         return "UPDATE";
     case 3:
         return "END";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+[[nodiscard]] const char *observationKindStr(const std::uint8_t kind) noexcept {
+    switch (kind) {
+    case 0:
+        return "NORMAL";
+    case 1:
+        return "L3_OBSERVATION";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+[[nodiscard]] const char *packetDirStr(const std::uint8_t dir) noexcept {
+    switch (dir) {
+    case 1:
+        return "in";
+    case 2:
+        return "out";
+    default:
+        return "unknown";
+    }
+}
+
+[[nodiscard]] const char *verdictStr(const std::uint8_t verdict) noexcept {
+    switch (verdict) {
+    case 1:
+        return "allow";
+    case 2:
+        return "block";
+    default:
+        return "unknown";
+    }
+}
+
+[[nodiscard]] const char *endReasonStr(const std::uint8_t reason) noexcept {
+    switch (reason) {
+    case 0:
+        return "NONE";
+    case 1:
+        return "IDLE_TIMEOUT";
+    case 2:
+        return "TCP_END_DETECTED";
+    case 3:
+        return "RESOURCE_EVICTED";
+    case 4:
+        return "TELEMETRY_DISABLED";
     default:
         return "UNKNOWN";
     }
@@ -580,25 +649,44 @@ void emitFlow(const Args &args, Summary &summary, const std::uint64_t ticket,
 
     const std::uint8_t payloadVersion = static_cast<std::uint8_t>(payload[kFlowV1OffsetPayloadVersion]);
     const std::uint8_t kind = static_cast<std::uint8_t>(payload[kFlowV1OffsetKind]);
+    const std::uint8_t observationKind = static_cast<std::uint8_t>(payload[kFlowV1OffsetObservationKind]);
     const std::uint8_t ctState = static_cast<std::uint8_t>(payload[kFlowV1OffsetCtState]);
     const std::uint8_t ctDir = static_cast<std::uint8_t>(payload[kFlowV1OffsetCtDir]);
+    const std::uint8_t packetDir = static_cast<std::uint8_t>(payload[kFlowV1OffsetPacketDir]);
+    const std::uint8_t flowOriginDir = static_cast<std::uint8_t>(payload[kFlowV1OffsetFlowOriginDir]);
+    const std::uint8_t verdict = static_cast<std::uint8_t>(payload[kFlowV1OffsetVerdict]);
     const std::uint8_t reasonId = static_cast<std::uint8_t>(payload[kFlowV1OffsetReasonId]);
     const std::uint8_t ifaceKindBit = static_cast<std::uint8_t>(payload[kFlowV1OffsetIfaceKindBit]);
+    const std::uint8_t l4Status = static_cast<std::uint8_t>(payload[kFlowV1OffsetL4Status]);
     const std::uint8_t flags = static_cast<std::uint8_t>(payload[kFlowV1OffsetFlags]);
+    const std::uint8_t endReason = static_cast<std::uint8_t>(payload[kFlowV1OffsetEndReason]);
+    const std::uint8_t proto = static_cast<std::uint8_t>(payload[kFlowV1OffsetProto]);
     const bool isIpv6 = (flags & kFlowFlagIsIpv6) != 0;
     const bool hasRuleId = (flags & kFlowFlagHasRuleId) != 0;
+    const bool pickedUpMidStream = (flags & kFlowFlagPickedUpMidStream) != 0;
+    const bool uidKnown = (flags & kFlowFlagUidKnown) != 0;
+    const bool ifindexKnown = (flags & kFlowFlagIfindexKnown) != 0;
+    const bool portsAvailable = (flags & kFlowFlagPortsAvailable) != 0;
 
     const std::uint64_t timestampNs = readU64Le(payload + kFlowV1OffsetTimestampNs);
+    const std::uint64_t firstSeenNs = readU64Le(payload + kFlowV1OffsetFirstSeenNs);
+    const std::uint64_t lastSeenNs = readU64Le(payload + kFlowV1OffsetLastSeenNs);
     const std::uint64_t flowInstanceId = readU64Le(payload + kFlowV1OffsetFlowInstanceId);
     const std::uint64_t recordSeq = readU64Le(payload + kFlowV1OffsetRecordSeq);
     const std::uint32_t uid = readU32Le(payload + kFlowV1OffsetUid);
     const std::uint32_t userId = readU32Le(payload + kFlowV1OffsetUserId);
     const std::uint32_t ifindex = readU32Le(payload + kFlowV1OffsetIfindex);
-    const std::uint8_t proto = static_cast<std::uint8_t>(payload[kFlowV1OffsetProto]);
     const std::uint16_t srcPort = readU16Le(payload + kFlowV1OffsetSrcPort);
     const std::uint16_t dstPort = readU16Le(payload + kFlowV1OffsetDstPort);
+    const std::uint8_t icmpType = static_cast<std::uint8_t>(payload[kFlowV1OffsetIcmpType]);
+    const std::uint8_t icmpCode = static_cast<std::uint8_t>(payload[kFlowV1OffsetIcmpCode]);
+    const std::uint16_t icmpId = readU16Le(payload + kFlowV1OffsetIcmpId);
     const std::uint64_t totalPackets = readU64Le(payload + kFlowV1OffsetTotalPackets);
     const std::uint64_t totalBytes = readU64Le(payload + kFlowV1OffsetTotalBytes);
+    const std::uint64_t inPackets = readU64Le(payload + kFlowV1OffsetInPackets);
+    const std::uint64_t inBytes = readU64Le(payload + kFlowV1OffsetInBytes);
+    const std::uint64_t outPackets = readU64Le(payload + kFlowV1OffsetOutPackets);
+    const std::uint64_t outBytes = readU64Le(payload + kFlowV1OffsetOutBytes);
     const std::uint32_t ruleId = readU32Le(payload + kFlowV1OffsetRuleId);
     const std::string srcAddr = ipString(isIpv6, payload + kFlowV1OffsetSrcAddr);
     const std::string dstAddr = ipString(isIpv6, payload + kFlowV1OffsetDstAddr);
@@ -622,22 +710,42 @@ void emitFlow(const Args &args, Summary &summary, const std::uint64_t ticket,
     if (args.jsonl) {
         std::printf("{\"type\":\"FLOW\",\"ticket\":%" PRIu64 ",\"payloadSize\":%" PRIu32
                     ",\"payloadVersion\":%u,\"kind\":\"%s\",\"kindId\":%u"
-                    ",\"ctState\":%u,\"ctDir\":%u,\"reasonId\":%u,\"reason\":\"%s\""
-                    ",\"ifaceKindBit\":%u,\"flags\":%u,\"isIpv6\":%s,\"timestampNs\":%" PRIu64
+                    ",\"observationKind\":\"%s\",\"observationKindId\":%u"
+                    ",\"ctState\":%u,\"ctDir\":%u,\"packetDir\":\"%s\",\"packetDirId\":%u"
+                    ",\"flowOriginDir\":\"%s\",\"flowOriginDirId\":%u"
+                    ",\"verdict\":\"%s\",\"verdictId\":%u,\"reasonId\":%u,\"reason\":\"%s\""
+                    ",\"ifaceKindBit\":%u,\"l4Status\":%u,\"flags\":%u,\"isIpv6\":%s"
+                    ",\"pickedUpMidStream\":%s,\"uidKnown\":%s,\"ifindexKnown\":%s"
+                    ",\"portsAvailable\":%s,\"endReason\":\"%s\",\"endReasonId\":%u"
+                    ",\"timestampNs\":%" PRIu64 ",\"firstSeenNs\":%" PRIu64
+                    ",\"lastSeenNs\":%" PRIu64
                     ",\"flowInstanceId\":%" PRIu64 ",\"recordSeq\":%" PRIu64
                     ",\"recordSeqGap\":%s,\"expectedRecordSeq\":%" PRIu64
                     ",\"uid\":%" PRIu32 ",\"userId\":%" PRIu32 ",\"ifindex\":%" PRIu32
                     ",\"proto\":%u,\"srcPort\":%" PRIu16 ",\"dstPort\":%" PRIu16
+                    ",\"icmpType\":%u,\"icmpCode\":%u,\"icmpId\":%" PRIu16
                     ",\"srcAddr\":\"%s\",\"dstAddr\":\"%s\",\"totalPackets\":%" PRIu64
-                    ",\"totalBytes\":%" PRIu64,
+                    ",\"totalBytes\":%" PRIu64 ",\"inPackets\":%" PRIu64
+                    ",\"inBytes\":%" PRIu64 ",\"outPackets\":%" PRIu64
+                    ",\"outBytes\":%" PRIu64,
                     ticket, payloadSize, static_cast<unsigned>(payloadVersion), flowKindStr(kind),
-                    static_cast<unsigned>(kind), static_cast<unsigned>(ctState),
-                    static_cast<unsigned>(ctDir), static_cast<unsigned>(reasonId), reasonStr(reasonId),
-                    static_cast<unsigned>(ifaceKindBit), static_cast<unsigned>(flags),
-                    isIpv6 ? "true" : "false", timestampNs, flowInstanceId, recordSeq,
+                    static_cast<unsigned>(kind), observationKindStr(observationKind),
+                    static_cast<unsigned>(observationKind), static_cast<unsigned>(ctState),
+                    static_cast<unsigned>(ctDir), packetDirStr(packetDir), static_cast<unsigned>(packetDir),
+                    packetDirStr(flowOriginDir), static_cast<unsigned>(flowOriginDir),
+                    verdictStr(verdict), static_cast<unsigned>(verdict),
+                    static_cast<unsigned>(reasonId), reasonStr(reasonId),
+                    static_cast<unsigned>(ifaceKindBit), static_cast<unsigned>(l4Status),
+                    static_cast<unsigned>(flags), isIpv6 ? "true" : "false",
+                    pickedUpMidStream ? "true" : "false", uidKnown ? "true" : "false",
+                    ifindexKnown ? "true" : "false", portsAvailable ? "true" : "false",
+                    endReasonStr(endReason), static_cast<unsigned>(endReason),
+                    timestampNs, firstSeenNs, lastSeenNs, flowInstanceId, recordSeq,
                     recordSeqGap ? "true" : "false", expectedSeq, uid, userId, ifindex,
-                    static_cast<unsigned>(proto), srcPort, dstPort, srcAddr.c_str(), dstAddr.c_str(),
-                    totalPackets, totalBytes);
+                    static_cast<unsigned>(proto), srcPort, dstPort,
+                    static_cast<unsigned>(icmpType), static_cast<unsigned>(icmpCode), icmpId,
+                    srcAddr.c_str(), dstAddr.c_str(), totalPackets, totalBytes,
+                    inPackets, inBytes, outPackets, outBytes);
         if (hasRuleId) {
             std::printf(",\"ruleId\":%" PRIu32, ruleId);
         }
@@ -645,11 +753,19 @@ void emitFlow(const Args &args, Summary &summary, const std::uint64_t ticket,
     } else {
         std::printf("FOUND FLOW: ticket=%" PRIu64 " payloadSize=%" PRIu32
                     " kind=%s flowInstanceId=%" PRIu64 " recordSeq=%" PRIu64
-                    " reason=%s proto=%u isIpv6=%d src=%s:%" PRIu16 " dst=%s:%" PRIu16
-                    " totalPackets=%" PRIu64 " totalBytes=%" PRIu64 " recordSeqGap=%d\n",
+                    " observation=%s packetDir=%s originDir=%s verdict=%s reason=%s proto=%u"
+                    " l4Status=%u isIpv6=%d src=%s:%" PRIu16 " dst=%s:%" PRIu16
+                    " icmp=%u/%u/%" PRIu16 " totalPackets=%" PRIu64 " totalBytes=%" PRIu64
+                    " in=%" PRIu64 "/%" PRIu64 " out=%" PRIu64 "/%" PRIu64
+                    " endReason=%s recordSeqGap=%d\n",
                     ticket, payloadSize, flowKindStr(kind), flowInstanceId, recordSeq,
-                    reasonStr(reasonId), static_cast<unsigned>(proto), isIpv6 ? 1 : 0,
-                    srcAddr.c_str(), srcPort, dstAddr.c_str(), dstPort, totalPackets, totalBytes,
+                    observationKindStr(observationKind), packetDirStr(packetDir), packetDirStr(flowOriginDir),
+                    verdictStr(verdict), reasonStr(reasonId), static_cast<unsigned>(proto),
+                    static_cast<unsigned>(l4Status), isIpv6 ? 1 : 0,
+                    srcAddr.c_str(), srcPort, dstAddr.c_str(), dstPort,
+                    static_cast<unsigned>(icmpType), static_cast<unsigned>(icmpCode), icmpId,
+                    totalPackets, totalBytes, inPackets, inBytes, outPackets, outBytes,
+                    endReasonStr(endReason),
                     recordSeqGap ? 1 : 0);
     }
 }

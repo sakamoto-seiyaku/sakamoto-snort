@@ -43,6 +43,8 @@ FlowTelemetry flowTelemetry;
 std::shared_mutex mutexListeners;
 std::mutex mutexControlMutations;
 
+std::uint32_t snortExportTelemetryDisabledEnds() noexcept { return 0; }
+
 namespace ControlVNextSessionCommands {
 
 // Provide minimal stubs for non-telemetry command handlers.

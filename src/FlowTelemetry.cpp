@@ -249,6 +249,10 @@ void FlowTelemetry::close(void *ownerKey) noexcept {
     _ownerKey = nullptr;
 }
 
+bool FlowTelemetry::isOwner(void *ownerKey) const noexcept {
+    return _ownerKey == ownerKey && _sessionOwner != nullptr;
+}
+
 void FlowTelemetry::resetAll() noexcept {
     _session.store(nullptr, std::memory_order_release);
     _sessionOwner.reset();
@@ -297,7 +301,7 @@ FlowTelemetry::HotPath FlowTelemetry::hotPathFlow() const noexcept {
     if (!s || s->level != Level::Flow) {
         return HotPath{};
     }
-    return HotPath{.session = s, .cfg = &s->cfg};
+    return HotPath{.session = s, .cfg = &s->cfg, .sessionId = s->sessionId};
 }
 
 void FlowTelemetry::accountDrop(const FlowTelemetryRing::DropReason reason) noexcept {

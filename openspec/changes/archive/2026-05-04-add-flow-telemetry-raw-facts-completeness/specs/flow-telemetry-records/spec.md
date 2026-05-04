@@ -1,38 +1,4 @@
-# flow-telemetry-records Specification
-
-## Purpose
-Defines the normal Flow Telemetry business fact records exported by the daemon.
-
-## Requirements
-
-### Requirement: Telemetry records contain only business facts
-The telemetry records database MUST contain only business fact records.
-
-The MVP top-level `recordType` set MUST be:
-- `FLOW`
-- `DNS_DECISION`
-
-The daemon MUST NOT emit `TelemetryHealthRecord` or `TelemetryStatsRecord`; channel health MUST be exposed through telemetry state/metrics.
-
-#### Scenario: Health is not emitted as a record
-- **WHEN** telemetry drop counters change
-- **THEN** daemon SHALL expose that state through telemetry state/metrics
-- **AND** daemon SHALL NOT emit a health/stats record into the telemetry ring
-
-### Requirement: FLOW records use flowInstanceId identity and BEGIN UPDATE END kinds
-Every `FLOW` payload MUST carry `flowInstanceId`.
-
-The 5-tuple/family/uid fields are a key used for lookup and display, but they MUST NOT be treated as the stable identity of a flow instance.
-
-`FLOW` payload MUST include an internal kind with values:
-- `BEGIN`
-- `UPDATE`
-- `END`
-
-#### Scenario: Same tuple can produce different flow instances
-- **GIVEN** a TCP connection using a 5-tuple has ended
-- **WHEN** a later connection reuses the same 5-tuple
-- **THEN** daemon SHALL assign a distinct `flowInstanceId`
+## MODIFIED Requirements
 
 ### Requirement: FLOW records carry cumulative counters and per-flow recordSeq
 `FLOW` records MUST carry cumulative `totalPackets` and `totalBytes`.
@@ -125,7 +91,7 @@ Telemetry-disabled cleanup MUST be bounded by scanned buckets and scanned entrie
 ### Requirement: FLOW decision fields describe final execution result only
 `FLOW` records MUST describe the final packet verdict segment and MUST NOT duplicate Debug Stream explainability fields.
 
-The `decisionKey` for segment changes MUST be:
+The `decisionKey` for segment changes MUST include:
 - `ctState`
 - `ctDir`
 - explicit `verdict` / action
@@ -146,6 +112,8 @@ The `decisionKey` for segment changes MUST be:
 - **GIVEN** daemon exports a `FLOW` record for a packet accepted by policy
 - **THEN** the record SHALL carry an explicit allow verdict/action
 - **AND** clients SHALL NOT need to infer allow/block solely from `reasonId`
+
+## ADDED Requirements
 
 ### Requirement: FLOW payload v1 is replaced as a breaking ABI update
 The daemon MUST replace the existing 102-byte `FLOW` payload v1 layout in place.
@@ -247,42 +215,3 @@ Telemetry-only conntrack observation MUST NOT change the packet verdict.
 - **WHEN** daemon observes an otherwise trackable TCP packet
 - **THEN** the exported `FLOW` record SHALL carry the conntrack state and direction observed for that packet
 - **AND** the final packet verdict SHALL remain the verdict that non-IPRULES policy would otherwise produce
-
-### Requirement: IFACE_BLOCK and BLOCK use the unified flow table
-`IFACE_BLOCK` and IP rule `BLOCK` attempts MUST use the same telemetry flow/conntrack observation table as allow/default-allow flows.
-
-`IFACE_BLOCK` MUST be represented as final decision `reasonId=IFACE_BLOCK` with no `ruleId`.
-
-BLOCK/IFACE_BLOCK entries MUST use `blockTtlMs`; if a later packet for the same flow becomes ALLOW or DEFAULT_ALLOW, the entry MUST switch to normal flow/conntrack timeout semantics.
-
-#### Scenario: IFACE_BLOCK exports as flow attempt
-- **WHEN** a packet is dropped by interface policy
-- **THEN** daemon SHALL be able to export a `FLOW` record for the observed attempt
-- **AND** that record SHALL use `reasonId=IFACE_BLOCK`
-
-### Requirement: DNS_DECISION records are blocked-only DNS timeline facts
-`DNS_DECISION` records MUST be emitted only for blocked DNS decisions.
-
-`DNS_DECISION` MAY carry a bounded inline `queryName`, with maximum encoded query name length of 255 bytes. It MUST NOT carry parsed response IP addresses or IP count.
-
-`domainRuleId` belongs only to DNS records and MUST NOT be copied into packet/CT `FLOW` records.
-
-#### Scenario: Allowed DNS decision does not emit DNS_DECISION
-- **WHEN** daemon allows a DNS decision
-- **THEN** daemon SHALL NOT emit a `DNS_DECISION` record for that decision
-
-#### Scenario: Blocked DNS decision emits DNS_DECISION
-- **WHEN** daemon blocks a DNS decision and a telemetry consumer is active
-- **THEN** daemon SHALL attempt to emit a `DNS_DECISION` record
-- **AND** the record SHALL NOT include response IP details
-
-### Requirement: Flow Telemetry resource pressure never changes verdict
-Failure to create a telemetry flow entry, failure to write a record, ring pressure, or consumer absence MUST NOT change packet or DNS verdict.
-
-When a telemetry/flow table is full, the daemon MUST first do bounded sweep of expired entries. If the table is still full, it MUST refuse the new telemetry entry and increment resource pressure state; existing entries MAY continue updating.
-
-#### Scenario: Telemetry table full does not drop packet
-- **GIVEN** telemetry flow table is full
-- **WHEN** a packet would otherwise be accepted by policy
-- **THEN** daemon SHALL preserve the accept verdict
-- **AND** telemetry MAY drop/refuse the corresponding record or flow entry
