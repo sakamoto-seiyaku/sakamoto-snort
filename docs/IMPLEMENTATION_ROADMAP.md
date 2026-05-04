@@ -57,7 +57,7 @@ Status 口径（全篇统一）：
 - 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
 - OpenSpec 当前 active changes：无（`openspec list` 当前为空）。下一轮需要先讨论并选择新的 change。
 - 2026-04-30 已收口的后端支撑闭环：
-  - Flow Telemetry：常态观测原始事实层。
+  - Flow Telemetry：常态观测原始事实层 MVP；前端 Activity 新需求已暴露 raw facts completeness 缺口。
   - Debug Stream explainability：tracked 调试取证链条。
   - Policy Bundle Checkpoints：固定槽位 policy-only snapshot / atomic restore。
   - NDK r29 root daemon workflow：当前 daemon build/deploy/debug 基线。
@@ -73,7 +73,7 @@ Status 口径（全篇统一）：
 - IPRULES dual-stack（IPv4/IPv6）+ L4 conntrack core 已落地；真机 Tier-1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
 - [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
 - Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Debug Stream 保留为深度取证能力，Metrics 保留为后端低基数健康状态。
-- 前端支撑所需的后端能力已基本闭环：Flow Telemetry、Debug Stream explainability、checkpoint / rollback 后端原语均已落地；后续重点转向前端/RuntimeService 集成、vNext 迁移、consumer 持久化与产品化工作流。
+- 前端支撑所需的后端原语已基本闭环：Debug Stream explainability、checkpoint / rollback、Flow Telemetry export channel 均已落地；但 Flow Telemetry `FLOW` record 对 Activity 所需 raw facts 仍有字段完整性缺口，已纳入下一轮后端能力扩展。
 
 ## 2. 已完成（事实清单）
 
@@ -132,7 +132,7 @@ Status 口径（全篇统一）：
 
 ### 3.1 当前后端闭环状态
 
-- [DONE 2026-04-30] Flow Telemetry MVP 已覆盖常态 records 原始事实层；后续 Top-K、timeline、history、Geo/ASN、注释与查询索引属于 consumer / 前端层。
+- [DONE 2026-04-30] Flow Telemetry MVP 已覆盖常态 records 初始原始事实层；前端 Activity 新需求暴露的 ICMP、方向、L4 状态、END/time/verdict/known flags、L3 observation 等 raw facts completeness 缺口进入 3.4 下一轮。
 - [DONE 2026-04-30] Debug Stream explainability 已覆盖 tracked DNS / packet verdict 的自包含取证链条；它继续定位为深度调试，不替代 Flow Telemetry records 或 Metrics。
 - [DONE 2026-04-30] Policy Bundle Checkpoints 已覆盖后端固定槽位 checkpoint / rollback 原语；前端仍负责命名、历史、备注、工作流与导入导出包。
 - [DONE 2026-04-30] NDK r29 root daemon workflow 已成为当前 daemon build/deploy/debug 基线；后续 APK/RuntimeService 集成不再依赖 Android source / Soong daemon 路径。
@@ -153,6 +153,7 @@ Status 口径（全篇统一）：
 
 ### 3.4 候选 C：后端能力扩展（偏新能力；不默认进入下一轮）
 
+- [NEXT] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；同步更新 daemon、native consumer、前端 consumer、OpenSpec spec 与 `docs/INTERFACE_SPECIFICATION.md`。
 - [BACKLOG] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
 - [BACKLOG] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
 - [BACKLOG] 更强的 L4 stateful semantics：超出当前 `ct.state/ct.direction` 最小闭环的扩展能力。
@@ -162,8 +163,9 @@ Status 口径（全篇统一）：
 
 - [DONE 2026-04-29] Flow Telemetry 纲领文件已从讨论草案收口为工作决策文档。
 - [DONE 2026-04-30] Flow Telemetry 接口已随 `add-flow-telemetry-plane` 同步到 `docs/INTERFACE_SPECIFICATION.md`。
+- [NEXT] Flow Telemetry raw facts completeness 实现前，需按 `docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md` 新增决策同步 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`，明确新的 `FLOW` binary layout。
 - [DONE 2026-04-30] Debug Stream explainability 与 Policy Bundle Checkpoints 已同步到 OpenSpec 主规格；`docs/INTERFACE_SPECIFICATION.md` 后续只在接口新增/变更时刷新。
-- [NOTE] 当前 `docs/INTERFACE_SPECIFICATION.md` 已收敛为 vNext-only 契约（legacy 版已归档）；如果下一轮是前端 handoff，应优先补 RuntimeService / APK packaging 契约文档，而不是继续扩 daemon 接口。
+- [NOTE] 当前 `docs/INTERFACE_SPECIFICATION.md` 已收敛为 vNext-only 契约（legacy 版已归档）；若下一轮先做 Flow Telemetry raw facts completeness，应先更新 telemetry ABI 契约；若先做前端 handoff，则优先补 RuntimeService / APK packaging 契约文档。
 
 ## 4. 后置 / Backlog（不挡主线）
 
