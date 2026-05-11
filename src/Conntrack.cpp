@@ -85,6 +85,65 @@ inline std::uint64_t addTimeoutMs(const std::uint64_t nowNs, const std::uint32_t
     return nowNs + d;
 }
 
+inline bool deltaAtLeast(const std::uint64_t current, const std::uint64_t last,
+                         const std::uint64_t threshold) noexcept {
+    return threshold != 0 && current >= last && (current - last) >= threshold;
+}
+
+inline void storeMaxRelaxed(std::atomic<std::uint64_t> &target,
+                            const std::uint64_t candidate) noexcept {
+    std::uint64_t current = target.load(std::memory_order_relaxed);
+    while (current < candidate &&
+           !target.compare_exchange_weak(current, candidate, std::memory_order_relaxed,
+                                         std::memory_order_relaxed)) {
+    }
+}
+
+inline bool isKnownPacketDirection(const FlowTelemetryRecords::FlowPacketDirection dir) noexcept {
+    return dir == FlowTelemetryRecords::FlowPacketDirection::In ||
+        dir == FlowTelemetryRecords::FlowPacketDirection::Out;
+}
+
+struct TelemetryCounterSnapshot {
+    std::uint64_t totalPackets = 0;
+    std::uint64_t totalBytes = 0;
+    std::uint64_t inPackets = 0;
+    std::uint64_t inBytes = 0;
+    std::uint64_t outPackets = 0;
+    std::uint64_t outBytes = 0;
+};
+
+template <typename TelemetryState>
+TelemetryCounterSnapshot loadTelemetryCounters(const TelemetryState &tele,
+                                               const bool deriveTotalsFromDirections) noexcept {
+    TelemetryCounterSnapshot out{};
+    out.totalPackets = tele.totalPackets.load(std::memory_order_relaxed);
+    out.totalBytes = tele.totalBytes.load(std::memory_order_relaxed);
+    out.inPackets = tele.inPackets.load(std::memory_order_relaxed);
+    out.inBytes = tele.inBytes.load(std::memory_order_relaxed);
+    out.outPackets = tele.outPackets.load(std::memory_order_relaxed);
+    out.outBytes = tele.outBytes.load(std::memory_order_relaxed);
+    if (deriveTotalsFromDirections) {
+        out.totalPackets = out.inPackets + out.outPackets;
+        out.totalBytes = out.inBytes + out.outBytes;
+    }
+    return out;
+}
+
+#ifdef SUCRE_SNORT_TESTING
+std::atomic<Conntrack::DebugTelemetryBeforeExportHook> gTelemetryBeforeExportHook{nullptr};
+std::atomic<void *> gTelemetryBeforeExportHookContext{nullptr};
+
+inline void runTelemetryBeforeExportHook() noexcept {
+    auto *hook = gTelemetryBeforeExportHook.load(std::memory_order_acquire);
+    if (hook) {
+        hook(gTelemetryBeforeExportHookContext.load(std::memory_order_acquire));
+    }
+}
+#else
+inline void runTelemetryBeforeExportHook() noexcept {}
+#endif
+
 class ScopedAtomicBool {
 public:
     explicit ScopedAtomicBool(std::atomic<bool> &flag) noexcept : _flag(flag) {
@@ -604,12 +663,10 @@ struct Conntrack::ImplV4 {
         const std::uint32_t ridValue = e.tele.decisionRuleId.load(std::memory_order_relaxed);
         const std::optional<std::uint32_t> rid =
             ridKnown ? std::optional<std::uint32_t>(ridValue) : std::nullopt;
-        const std::uint64_t totalPk = e.tele.totalPackets.load(std::memory_order_relaxed);
-        const std::uint64_t totalBy = e.tele.totalBytes.load(std::memory_order_relaxed);
-        const std::uint64_t inPk = e.tele.inPackets.load(std::memory_order_relaxed);
-        const std::uint64_t inBy = e.tele.inBytes.load(std::memory_order_relaxed);
-        const std::uint64_t outPk = e.tele.outPackets.load(std::memory_order_relaxed);
-        const std::uint64_t outBy = e.tele.outBytes.load(std::memory_order_relaxed);
+        const auto lastPacketDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
+            e.tele.lastPacketDir.load(std::memory_order_relaxed));
+        const auto counters =
+            loadTelemetryCounters(e.tele, isKnownPacketDirection(lastPacketDir));
 
         const auto toV4 = [](const std::uint32_t ip) noexcept {
             std::array<std::byte, 4> out{};
@@ -628,8 +685,7 @@ struct Conntrack::ImplV4 {
             e.tele.observationKind.load(std::memory_order_relaxed));
         fields.ctState = e.tele.lastCtState.load(std::memory_order_relaxed);
         fields.ctDir = e.tele.lastCtDir.load(std::memory_order_relaxed);
-        fields.packetDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
-            e.tele.lastPacketDir.load(std::memory_order_relaxed));
+        fields.packetDir = lastPacketDir;
         fields.flowOriginDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
             e.tele.flowOriginDir.load(std::memory_order_relaxed));
         fields.verdict = static_cast<FlowTelemetryRecords::FlowVerdict>(
@@ -659,12 +715,12 @@ struct Conntrack::ImplV4 {
         fields.ifindex = e.tele.lastIfindex.load(std::memory_order_relaxed);
         fields.srcAddr = std::span<const std::byte>(src.data(), src.size());
         fields.dstAddr = std::span<const std::byte>(dst.data(), dst.size());
-        fields.totalPackets = totalPk;
-        fields.totalBytes = totalBy;
-        fields.inPackets = inPk;
-        fields.inBytes = inBy;
-        fields.outPackets = outPk;
-        fields.outBytes = outBy;
+        fields.totalPackets = counters.totalPackets;
+        fields.totalBytes = counters.totalBytes;
+        fields.inPackets = counters.inPackets;
+        fields.inBytes = counters.inBytes;
+        fields.outPackets = counters.outPackets;
+        fields.outBytes = counters.outBytes;
         fields.ruleId = rid;
 
         FlowTelemetryRecords::EncodedPayload payload{};
@@ -676,8 +732,8 @@ struct Conntrack::ImplV4 {
         }
 
         e.tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
-        e.tele.lastExportPackets.store(totalPk, std::memory_order_relaxed);
-        e.tele.lastExportBytes.store(totalBy, std::memory_order_relaxed);
+        e.tele.lastExportPackets.store(counters.totalPackets, std::memory_order_relaxed);
+        e.tele.lastExportBytes.store(counters.totalBytes, std::memory_order_relaxed);
         e.tele.lastExportTsNs.store(nowNs, std::memory_order_relaxed);
         e.tele.lastExportDecisionKey.store(packedKey, std::memory_order_relaxed);
         e.tele.lastExportRuleId.store(ridValue, std::memory_order_relaxed);
@@ -892,18 +948,6 @@ struct Conntrack::ImplV4 {
                             cur->tele.lastExportTsNs.load(std::memory_order_relaxed);
                         if (flowId != 0 && lastExportTs != 0 &&
                             sessionId == teleHot.sessionId) {
-                            const std::uint64_t totalPk =
-                                cur->tele.totalPackets.load(std::memory_order_relaxed);
-                            const std::uint64_t totalBy =
-                                cur->tele.totalBytes.load(std::memory_order_relaxed);
-                            const std::uint64_t inPk =
-                                cur->tele.inPackets.load(std::memory_order_relaxed);
-                            const std::uint64_t inBy =
-                                cur->tele.inBytes.load(std::memory_order_relaxed);
-                            const std::uint64_t outPk =
-                                cur->tele.outPackets.load(std::memory_order_relaxed);
-                            const std::uint64_t outBy =
-                                cur->tele.outBytes.load(std::memory_order_relaxed);
                             const std::uint32_t userId =
                                 cur->tele.lastUserId.load(std::memory_order_relaxed);
                             const std::uint32_t ifindex =
@@ -930,6 +974,11 @@ struct Conntrack::ImplV4 {
                             if (exportGuard) {
                                 const std::uint64_t recordSeq =
                                     cur->tele.recordSeq.load(std::memory_order_relaxed) + 1;
+                                const auto lastPacketDir =
+                                    static_cast<FlowTelemetryRecords::FlowPacketDirection>(
+                                        cur->tele.lastPacketDir.load(std::memory_order_relaxed));
+                                const auto counters =
+                                    loadTelemetryCounters(cur->tele, isKnownPacketDirection(lastPacketDir));
 
                                 auto endReason = FlowTelemetryRecords::FlowEndReason::IdleTimeout;
                                 if (cur->key.proto == IPPROTO_TCP) {
@@ -948,8 +997,7 @@ struct Conntrack::ImplV4 {
                                     cur->tele.observationKind.load(std::memory_order_relaxed));
                                 fields.ctState = cur->tele.lastCtState.load(std::memory_order_relaxed);
                                 fields.ctDir = cur->tele.lastCtDir.load(std::memory_order_relaxed);
-                                fields.packetDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
-                                    cur->tele.lastPacketDir.load(std::memory_order_relaxed));
+                                fields.packetDir = lastPacketDir;
                                 fields.flowOriginDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
                                     cur->tele.flowOriginDir.load(std::memory_order_relaxed));
                                 fields.verdict = static_cast<FlowTelemetryRecords::FlowVerdict>(
@@ -981,12 +1029,12 @@ struct Conntrack::ImplV4 {
                                 fields.ifindex = ifindex;
                                 fields.srcAddr = std::span<const std::byte>(src.data(), src.size());
                                 fields.dstAddr = std::span<const std::byte>(dst.data(), dst.size());
-                                fields.totalPackets = totalPk;
-                                fields.totalBytes = totalBy;
-                                fields.inPackets = inPk;
-                                fields.inBytes = inBy;
-                                fields.outPackets = outPk;
-                                fields.outBytes = outBy;
+                                fields.totalPackets = counters.totalPackets;
+                                fields.totalBytes = counters.totalBytes;
+                                fields.inPackets = counters.inPackets;
+                                fields.inBytes = counters.inBytes;
+                                fields.outPackets = counters.outPackets;
+                                fields.outBytes = counters.outBytes;
                                 fields.ruleId = rid;
 
                                 FlowTelemetryRecords::EncodedPayload payload{};
@@ -994,8 +1042,10 @@ struct Conntrack::ImplV4 {
                                     if (flowTelemetry.exportRecordHot(
                                             teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
                                         cur->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
-                                        cur->tele.lastExportPackets.store(totalPk, std::memory_order_relaxed);
-                                        cur->tele.lastExportBytes.store(totalBy, std::memory_order_relaxed);
+                                        cur->tele.lastExportPackets.store(
+                                            counters.totalPackets, std::memory_order_relaxed);
+                                        cur->tele.lastExportBytes.store(
+                                            counters.totalBytes, std::memory_order_relaxed);
                                         cur->tele.lastExportTsNs.store(nowNs, std::memory_order_relaxed);
                                         cur->tele.lastExportDecisionKey.store(packedKey, std::memory_order_relaxed);
                                         cur->tele.lastExportRuleId.store(ridValue, std::memory_order_relaxed);
@@ -1678,12 +1728,10 @@ struct Conntrack::ImplV6 {
         const std::uint32_t ridValue = e.tele.decisionRuleId.load(std::memory_order_relaxed);
         const std::optional<std::uint32_t> rid =
             ridKnown ? std::optional<std::uint32_t>(ridValue) : std::nullopt;
-        const std::uint64_t totalPk = e.tele.totalPackets.load(std::memory_order_relaxed);
-        const std::uint64_t totalBy = e.tele.totalBytes.load(std::memory_order_relaxed);
-        const std::uint64_t inPk = e.tele.inPackets.load(std::memory_order_relaxed);
-        const std::uint64_t inBy = e.tele.inBytes.load(std::memory_order_relaxed);
-        const std::uint64_t outPk = e.tele.outPackets.load(std::memory_order_relaxed);
-        const std::uint64_t outBy = e.tele.outBytes.load(std::memory_order_relaxed);
+        const auto lastPacketDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
+            e.tele.lastPacketDir.load(std::memory_order_relaxed));
+        const auto counters =
+            loadTelemetryCounters(e.tele, isKnownPacketDirection(lastPacketDir));
 
         std::array<std::byte, 16> src{};
         std::array<std::byte, 16> dst{};
@@ -1698,8 +1746,7 @@ struct Conntrack::ImplV6 {
             e.tele.observationKind.load(std::memory_order_relaxed));
         fields.ctState = e.tele.lastCtState.load(std::memory_order_relaxed);
         fields.ctDir = e.tele.lastCtDir.load(std::memory_order_relaxed);
-        fields.packetDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
-            e.tele.lastPacketDir.load(std::memory_order_relaxed));
+        fields.packetDir = lastPacketDir;
         fields.flowOriginDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
             e.tele.flowOriginDir.load(std::memory_order_relaxed));
         fields.verdict = static_cast<FlowTelemetryRecords::FlowVerdict>(
@@ -1729,12 +1776,12 @@ struct Conntrack::ImplV6 {
         fields.ifindex = e.tele.lastIfindex.load(std::memory_order_relaxed);
         fields.srcAddr = std::span<const std::byte>(src.data(), src.size());
         fields.dstAddr = std::span<const std::byte>(dst.data(), dst.size());
-        fields.totalPackets = totalPk;
-        fields.totalBytes = totalBy;
-        fields.inPackets = inPk;
-        fields.inBytes = inBy;
-        fields.outPackets = outPk;
-        fields.outBytes = outBy;
+        fields.totalPackets = counters.totalPackets;
+        fields.totalBytes = counters.totalBytes;
+        fields.inPackets = counters.inPackets;
+        fields.inBytes = counters.inBytes;
+        fields.outPackets = counters.outPackets;
+        fields.outBytes = counters.outBytes;
         fields.ruleId = rid;
 
         FlowTelemetryRecords::EncodedPayload payload{};
@@ -1746,8 +1793,8 @@ struct Conntrack::ImplV6 {
         }
 
         e.tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
-        e.tele.lastExportPackets.store(totalPk, std::memory_order_relaxed);
-        e.tele.lastExportBytes.store(totalBy, std::memory_order_relaxed);
+        e.tele.lastExportPackets.store(counters.totalPackets, std::memory_order_relaxed);
+        e.tele.lastExportBytes.store(counters.totalBytes, std::memory_order_relaxed);
         e.tele.lastExportTsNs.store(nowNs, std::memory_order_relaxed);
         e.tele.lastExportDecisionKey.store(packedKey, std::memory_order_relaxed);
         e.tele.lastExportRuleId.store(ridValue, std::memory_order_relaxed);
@@ -1962,18 +2009,6 @@ struct Conntrack::ImplV6 {
                             cur->tele.lastExportTsNs.load(std::memory_order_relaxed);
                         if (flowId != 0 && lastExportTs != 0 &&
                             sessionId == teleHot.sessionId) {
-                            const std::uint64_t totalPk =
-                                cur->tele.totalPackets.load(std::memory_order_relaxed);
-                            const std::uint64_t totalBy =
-                                cur->tele.totalBytes.load(std::memory_order_relaxed);
-                            const std::uint64_t inPk =
-                                cur->tele.inPackets.load(std::memory_order_relaxed);
-                            const std::uint64_t inBy =
-                                cur->tele.inBytes.load(std::memory_order_relaxed);
-                            const std::uint64_t outPk =
-                                cur->tele.outPackets.load(std::memory_order_relaxed);
-                            const std::uint64_t outBy =
-                                cur->tele.outBytes.load(std::memory_order_relaxed);
                             const std::uint32_t userId =
                                 cur->tele.lastUserId.load(std::memory_order_relaxed);
                             const std::uint32_t ifindex =
@@ -1989,6 +2024,11 @@ struct Conntrack::ImplV6 {
                             if (exportGuard) {
                                 const std::uint64_t recordSeq =
                                     cur->tele.recordSeq.load(std::memory_order_relaxed) + 1;
+                                const auto lastPacketDir =
+                                    static_cast<FlowTelemetryRecords::FlowPacketDirection>(
+                                        cur->tele.lastPacketDir.load(std::memory_order_relaxed));
+                                const auto counters =
+                                    loadTelemetryCounters(cur->tele, isKnownPacketDirection(lastPacketDir));
 
                                 auto endReason = FlowTelemetryRecords::FlowEndReason::IdleTimeout;
                                 if (cur->key.proto == IPPROTO_TCP) {
@@ -2007,8 +2047,7 @@ struct Conntrack::ImplV6 {
                                     cur->tele.observationKind.load(std::memory_order_relaxed));
                                 fields.ctState = cur->tele.lastCtState.load(std::memory_order_relaxed);
                                 fields.ctDir = cur->tele.lastCtDir.load(std::memory_order_relaxed);
-                                fields.packetDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
-                                    cur->tele.lastPacketDir.load(std::memory_order_relaxed));
+                                fields.packetDir = lastPacketDir;
                                 fields.flowOriginDir = static_cast<FlowTelemetryRecords::FlowPacketDirection>(
                                     cur->tele.flowOriginDir.load(std::memory_order_relaxed));
                                 fields.verdict = static_cast<FlowTelemetryRecords::FlowVerdict>(
@@ -2042,12 +2081,12 @@ struct Conntrack::ImplV6 {
                                     reinterpret_cast<const std::byte *>(cur->key.src.ip.data()), 16);
                                 fields.dstAddr = std::span<const std::byte>(
                                     reinterpret_cast<const std::byte *>(cur->key.dst.ip.data()), 16);
-                                fields.totalPackets = totalPk;
-                                fields.totalBytes = totalBy;
-                                fields.inPackets = inPk;
-                                fields.inBytes = inBy;
-                                fields.outPackets = outPk;
-                                fields.outBytes = outBy;
+                                fields.totalPackets = counters.totalPackets;
+                                fields.totalBytes = counters.totalBytes;
+                                fields.inPackets = counters.inPackets;
+                                fields.inBytes = counters.inBytes;
+                                fields.outPackets = counters.outPackets;
+                                fields.outBytes = counters.outBytes;
                                 fields.ruleId = rid;
 
                                 FlowTelemetryRecords::EncodedPayload payload{};
@@ -2055,8 +2094,10 @@ struct Conntrack::ImplV6 {
                                     if (flowTelemetry.exportRecordHot(
                                             teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
                                         cur->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
-                                        cur->tele.lastExportPackets.store(totalPk, std::memory_order_relaxed);
-                                        cur->tele.lastExportBytes.store(totalBy, std::memory_order_relaxed);
+                                        cur->tele.lastExportPackets.store(
+                                            counters.totalPackets, std::memory_order_relaxed);
+                                        cur->tele.lastExportBytes.store(
+                                            counters.totalBytes, std::memory_order_relaxed);
                                         cur->tele.lastExportTsNs.store(nowNs, std::memory_order_relaxed);
                                         cur->tele.lastExportDecisionKey.store(packedKey, std::memory_order_relaxed);
                                         cur->tele.lastExportRuleId.store(ridValue, std::memory_order_relaxed);
@@ -2939,6 +2980,9 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
     if (facts.srcAddrNet.size() != 4 || facts.dstAddrNet.size() != 4) {
         return;
     }
+    if (!isKnownPacketDirection(facts.packetDir)) {
+        return;
+    }
 
     const bool l3Observation = isL3ObservationStatus(facts.l4Status);
     ImplV4::KeyV4 key{};
@@ -3141,19 +3185,15 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
     const std::uint64_t totalBytes =
         e->tele.totalBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed) + facts.packetBytes;
 
-    std::uint64_t inPackets = e->tele.inPackets.load(std::memory_order_relaxed);
-    std::uint64_t inBytes = e->tele.inBytes.load(std::memory_order_relaxed);
-    std::uint64_t outPackets = e->tele.outPackets.load(std::memory_order_relaxed);
-    std::uint64_t outBytes = e->tele.outBytes.load(std::memory_order_relaxed);
     if (facts.packetDir == FlowTelemetryRecords::FlowPacketDirection::In) {
-        inPackets = e->tele.inPackets.fetch_add(1, std::memory_order_relaxed) + 1;
-        inBytes = e->tele.inBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed) + facts.packetBytes;
+        e->tele.inPackets.fetch_add(1, std::memory_order_relaxed);
+        e->tele.inBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed);
     } else if (facts.packetDir == FlowTelemetryRecords::FlowPacketDirection::Out) {
-        outPackets = e->tele.outPackets.fetch_add(1, std::memory_order_relaxed) + 1;
-        outBytes = e->tele.outBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed) + facts.packetBytes;
+        e->tele.outPackets.fetch_add(1, std::memory_order_relaxed);
+        e->tele.outBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed);
     }
 
-    e->tele.lastSeenNs.store(pkt.tsNs, std::memory_order_relaxed);
+    storeMaxRelaxed(e->tele.lastSeenNs, pkt.tsNs);
     e->tele.lastUserId.store(facts.userId, std::memory_order_relaxed);
     e->tele.lastIfindex.store(facts.ifindex, std::memory_order_relaxed);
     e->tele.lastPacketDir.store(static_cast<std::uint8_t>(facts.packetDir), std::memory_order_relaxed);
@@ -3203,8 +3243,8 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
         (decisionKey != lastKey || ruleIdValue != lastRuleId || ruleIdKnown != lastRuleIdKnown) &&
         (lastTs != 0);
     const bool countersDue =
-        (teleHot.cfg->packetsThreshold != 0 && totalPackets - lastPk >= teleHot.cfg->packetsThreshold) ||
-        (teleHot.cfg->bytesThreshold != 0 && totalBytes - lastBy >= teleHot.cfg->bytesThreshold);
+        deltaAtLeast(totalPackets, lastPk, teleHot.cfg->packetsThreshold) ||
+        deltaAtLeast(totalBytes, lastBy, teleHot.cfg->bytesThreshold);
     const bool timeDue =
         (lastTs == 0) ||
         (teleHot.cfg->maxExportIntervalMs != 0 &&
@@ -3221,10 +3261,7 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
         return;
     }
 
-    const FlowTelemetryRecords::FlowRecordKind kind =
-        (lastTs == 0) ? FlowTelemetryRecords::FlowRecordKind::Begin
-                      : FlowTelemetryRecords::FlowRecordKind::Update;
-
+    runTelemetryBeforeExportHook();
     ScopedAtomicBool exportGuard(e->tele.exportInProgress);
     if (!exportGuard) {
         if (didRetire) {
@@ -3233,6 +3270,43 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
         return;
     }
 
+    const auto counters = loadTelemetryCounters(e->tele, true);
+    const std::uint64_t guardedLastPk = e->tele.lastExportPackets.load(std::memory_order_relaxed);
+    const std::uint64_t guardedLastBy = e->tele.lastExportBytes.load(std::memory_order_relaxed);
+    const std::uint64_t guardedLastTs = e->tele.lastExportTsNs.load(std::memory_order_relaxed);
+    const std::uint64_t guardedLastKey = e->tele.lastExportDecisionKey.load(std::memory_order_relaxed);
+    const std::uint32_t guardedLastRuleId = e->tele.lastExportRuleId.load(std::memory_order_relaxed);
+    const bool guardedLastRuleIdKnown = e->tele.lastExportRuleIdKnown.load(std::memory_order_relaxed);
+    const std::uint64_t guardedDecisionKey = e->tele.decisionKey.load(std::memory_order_relaxed);
+    const std::uint32_t guardedRuleIdValue = e->tele.decisionRuleId.load(std::memory_order_relaxed);
+    const bool guardedRuleIdKnown = e->tele.decisionRuleIdKnown.load(std::memory_order_relaxed);
+    const std::optional<std::uint32_t> guardedRuleId =
+        guardedRuleIdKnown ? std::optional<std::uint32_t>(guardedRuleIdValue) : std::nullopt;
+    const std::uint64_t exportLastSeenNs = e->tele.lastSeenNs.load(std::memory_order_relaxed);
+    const std::uint64_t exportTsNs = exportLastSeenNs != 0 ? exportLastSeenNs : pkt.tsNs;
+    const bool guardedDecisionChanged =
+        (guardedDecisionKey != guardedLastKey || guardedRuleIdValue != guardedLastRuleId ||
+         guardedRuleIdKnown != guardedLastRuleIdKnown) &&
+        (guardedLastTs != 0);
+    const bool guardedCountersDue =
+        deltaAtLeast(counters.totalPackets, guardedLastPk, teleHot.cfg->packetsThreshold) ||
+        deltaAtLeast(counters.totalBytes, guardedLastBy, teleHot.cfg->bytesThreshold);
+    const bool guardedTimeDue =
+        (guardedLastTs == 0) ||
+        (teleHot.cfg->maxExportIntervalMs != 0 &&
+         exportTsNs > guardedLastTs &&
+         (exportTsNs - guardedLastTs) >=
+             static_cast<std::uint64_t>(teleHot.cfg->maxExportIntervalMs) * kNsPerMs);
+    if (!guardedDecisionChanged && !guardedCountersDue && !guardedTimeDue) {
+        if (didRetire) {
+            _impl4->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        return;
+    }
+
+    const FlowTelemetryRecords::FlowRecordKind kind =
+        (guardedLastTs == 0) ? FlowTelemetryRecords::FlowRecordKind::Begin
+                             : FlowTelemetryRecords::FlowRecordKind::Update;
     const std::uint64_t recordSeq = e->tele.recordSeq.load(std::memory_order_relaxed) + 1;
 
     FlowTelemetryRecords::FlowV1Fields fields{};
@@ -3259,9 +3333,9 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
     fields.icmpType = facts.icmpType;
     fields.icmpCode = facts.icmpCode;
     fields.icmpId = facts.icmpId;
-    fields.timestampNs = pkt.tsNs;
+    fields.timestampNs = exportTsNs;
     fields.firstSeenNs = firstSeenNs;
-    fields.lastSeenNs = pkt.tsNs;
+    fields.lastSeenNs = exportLastSeenNs;
     fields.flowInstanceId = e->tele.flowInstanceId.load(std::memory_order_relaxed);
     fields.recordSeq = recordSeq;
     fields.uid = pkt.uid;
@@ -3269,13 +3343,13 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
     fields.ifindex = facts.ifindex;
     fields.srcAddr = facts.srcAddrNet;
     fields.dstAddr = facts.dstAddrNet;
-    fields.totalPackets = totalPackets;
-    fields.totalBytes = totalBytes;
-    fields.inPackets = inPackets;
-    fields.inBytes = inBytes;
-    fields.outPackets = outPackets;
-    fields.outBytes = outBytes;
-    fields.ruleId = facts.ruleId;
+    fields.totalPackets = counters.totalPackets;
+    fields.totalBytes = counters.totalBytes;
+    fields.inPackets = counters.inPackets;
+    fields.inBytes = counters.inBytes;
+    fields.outPackets = counters.outPackets;
+    fields.outBytes = counters.outBytes;
+    fields.ruleId = guardedRuleId;
 
     FlowTelemetryRecords::EncodedPayload payload{};
     if (!FlowTelemetryRecords::encodeFlowV1(payload, fields)) {
@@ -3287,12 +3361,12 @@ void Conntrack::observeFlowTelemetry(const PacketV4 &pkt, const Result &ctResult
 
     if (flowTelemetry.exportRecordHot(teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
         e->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
-        e->tele.lastExportPackets.store(totalPackets, std::memory_order_relaxed);
-        e->tele.lastExportBytes.store(totalBytes, std::memory_order_relaxed);
-        e->tele.lastExportTsNs.store(pkt.tsNs, std::memory_order_relaxed);
-        e->tele.lastExportDecisionKey.store(decisionKey, std::memory_order_relaxed);
-        e->tele.lastExportRuleId.store(ruleIdValue, std::memory_order_relaxed);
-        e->tele.lastExportRuleIdKnown.store(ruleIdKnown, std::memory_order_relaxed);
+        e->tele.lastExportPackets.store(counters.totalPackets, std::memory_order_relaxed);
+        e->tele.lastExportBytes.store(counters.totalBytes, std::memory_order_relaxed);
+        e->tele.lastExportTsNs.store(exportTsNs, std::memory_order_relaxed);
+        e->tele.lastExportDecisionKey.store(guardedDecisionKey, std::memory_order_relaxed);
+        e->tele.lastExportRuleId.store(guardedRuleIdValue, std::memory_order_relaxed);
+        e->tele.lastExportRuleIdKnown.store(guardedRuleIdKnown, std::memory_order_relaxed);
     }
 
     if (didRetire) {
@@ -3311,6 +3385,9 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
     }
 
     if (facts.srcAddrNet.size() != 16 || facts.dstAddrNet.size() != 16) {
+        return;
+    }
+    if (!isKnownPacketDirection(facts.packetDir)) {
         return;
     }
 
@@ -3510,19 +3587,15 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
     const std::uint64_t totalBytes =
         e->tele.totalBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed) + facts.packetBytes;
 
-    std::uint64_t inPackets = e->tele.inPackets.load(std::memory_order_relaxed);
-    std::uint64_t inBytes = e->tele.inBytes.load(std::memory_order_relaxed);
-    std::uint64_t outPackets = e->tele.outPackets.load(std::memory_order_relaxed);
-    std::uint64_t outBytes = e->tele.outBytes.load(std::memory_order_relaxed);
     if (facts.packetDir == FlowTelemetryRecords::FlowPacketDirection::In) {
-        inPackets = e->tele.inPackets.fetch_add(1, std::memory_order_relaxed) + 1;
-        inBytes = e->tele.inBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed) + facts.packetBytes;
+        e->tele.inPackets.fetch_add(1, std::memory_order_relaxed);
+        e->tele.inBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed);
     } else if (facts.packetDir == FlowTelemetryRecords::FlowPacketDirection::Out) {
-        outPackets = e->tele.outPackets.fetch_add(1, std::memory_order_relaxed) + 1;
-        outBytes = e->tele.outBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed) + facts.packetBytes;
+        e->tele.outPackets.fetch_add(1, std::memory_order_relaxed);
+        e->tele.outBytes.fetch_add(facts.packetBytes, std::memory_order_relaxed);
     }
 
-    e->tele.lastSeenNs.store(pkt.tsNs, std::memory_order_relaxed);
+    storeMaxRelaxed(e->tele.lastSeenNs, pkt.tsNs);
     e->tele.lastUserId.store(facts.userId, std::memory_order_relaxed);
     e->tele.lastIfindex.store(facts.ifindex, std::memory_order_relaxed);
     e->tele.lastPacketDir.store(static_cast<std::uint8_t>(facts.packetDir), std::memory_order_relaxed);
@@ -3571,8 +3644,8 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
         (decisionKey != lastKey || ruleIdValue != lastRuleId || ruleIdKnown != lastRuleIdKnown) &&
         (lastTs != 0);
     const bool countersDue =
-        (teleHot.cfg->packetsThreshold != 0 && totalPackets - lastPk >= teleHot.cfg->packetsThreshold) ||
-        (teleHot.cfg->bytesThreshold != 0 && totalBytes - lastBy >= teleHot.cfg->bytesThreshold);
+        deltaAtLeast(totalPackets, lastPk, teleHot.cfg->packetsThreshold) ||
+        deltaAtLeast(totalBytes, lastBy, teleHot.cfg->bytesThreshold);
     const bool timeDue =
         (lastTs == 0) ||
         (teleHot.cfg->maxExportIntervalMs != 0 &&
@@ -3586,10 +3659,7 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
         return;
     }
 
-    const FlowTelemetryRecords::FlowRecordKind kind =
-        (lastTs == 0) ? FlowTelemetryRecords::FlowRecordKind::Begin
-                      : FlowTelemetryRecords::FlowRecordKind::Update;
-
+    runTelemetryBeforeExportHook();
     ScopedAtomicBool exportGuard(e->tele.exportInProgress);
     if (!exportGuard) {
         if (didRetire) {
@@ -3598,6 +3668,43 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
         return;
     }
 
+    const auto counters = loadTelemetryCounters(e->tele, true);
+    const std::uint64_t guardedLastPk = e->tele.lastExportPackets.load(std::memory_order_relaxed);
+    const std::uint64_t guardedLastBy = e->tele.lastExportBytes.load(std::memory_order_relaxed);
+    const std::uint64_t guardedLastTs = e->tele.lastExportTsNs.load(std::memory_order_relaxed);
+    const std::uint64_t guardedLastKey = e->tele.lastExportDecisionKey.load(std::memory_order_relaxed);
+    const std::uint32_t guardedLastRuleId = e->tele.lastExportRuleId.load(std::memory_order_relaxed);
+    const bool guardedLastRuleIdKnown = e->tele.lastExportRuleIdKnown.load(std::memory_order_relaxed);
+    const std::uint64_t guardedDecisionKey = e->tele.decisionKey.load(std::memory_order_relaxed);
+    const std::uint32_t guardedRuleIdValue = e->tele.decisionRuleId.load(std::memory_order_relaxed);
+    const bool guardedRuleIdKnown = e->tele.decisionRuleIdKnown.load(std::memory_order_relaxed);
+    const std::optional<std::uint32_t> guardedRuleId =
+        guardedRuleIdKnown ? std::optional<std::uint32_t>(guardedRuleIdValue) : std::nullopt;
+    const std::uint64_t exportLastSeenNs = e->tele.lastSeenNs.load(std::memory_order_relaxed);
+    const std::uint64_t exportTsNs = exportLastSeenNs != 0 ? exportLastSeenNs : pkt.tsNs;
+    const bool guardedDecisionChanged =
+        (guardedDecisionKey != guardedLastKey || guardedRuleIdValue != guardedLastRuleId ||
+         guardedRuleIdKnown != guardedLastRuleIdKnown) &&
+        (guardedLastTs != 0);
+    const bool guardedCountersDue =
+        deltaAtLeast(counters.totalPackets, guardedLastPk, teleHot.cfg->packetsThreshold) ||
+        deltaAtLeast(counters.totalBytes, guardedLastBy, teleHot.cfg->bytesThreshold);
+    const bool guardedTimeDue =
+        (guardedLastTs == 0) ||
+        (teleHot.cfg->maxExportIntervalMs != 0 &&
+         exportTsNs > guardedLastTs &&
+         (exportTsNs - guardedLastTs) >=
+             static_cast<std::uint64_t>(teleHot.cfg->maxExportIntervalMs) * kNsPerMs);
+    if (!guardedDecisionChanged && !guardedCountersDue && !guardedTimeDue) {
+        if (didRetire) {
+            _impl6->maybeAdvanceAndReclaim(pkt.tsNs);
+        }
+        return;
+    }
+
+    const FlowTelemetryRecords::FlowRecordKind kind =
+        (guardedLastTs == 0) ? FlowTelemetryRecords::FlowRecordKind::Begin
+                             : FlowTelemetryRecords::FlowRecordKind::Update;
     const std::uint64_t recordSeq = e->tele.recordSeq.load(std::memory_order_relaxed) + 1;
 
     FlowTelemetryRecords::FlowV1Fields fields{};
@@ -3624,9 +3731,9 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
     fields.icmpType = facts.icmpType;
     fields.icmpCode = facts.icmpCode;
     fields.icmpId = facts.icmpId;
-    fields.timestampNs = pkt.tsNs;
+    fields.timestampNs = exportTsNs;
     fields.firstSeenNs = firstSeenNs;
-    fields.lastSeenNs = pkt.tsNs;
+    fields.lastSeenNs = exportLastSeenNs;
     fields.flowInstanceId = e->tele.flowInstanceId.load(std::memory_order_relaxed);
     fields.recordSeq = recordSeq;
     fields.uid = pkt.uid;
@@ -3634,13 +3741,13 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
     fields.ifindex = facts.ifindex;
     fields.srcAddr = facts.srcAddrNet;
     fields.dstAddr = facts.dstAddrNet;
-    fields.totalPackets = totalPackets;
-    fields.totalBytes = totalBytes;
-    fields.inPackets = inPackets;
-    fields.inBytes = inBytes;
-    fields.outPackets = outPackets;
-    fields.outBytes = outBytes;
-    fields.ruleId = facts.ruleId;
+    fields.totalPackets = counters.totalPackets;
+    fields.totalBytes = counters.totalBytes;
+    fields.inPackets = counters.inPackets;
+    fields.inBytes = counters.inBytes;
+    fields.outPackets = counters.outPackets;
+    fields.outBytes = counters.outBytes;
+    fields.ruleId = guardedRuleId;
 
     FlowTelemetryRecords::EncodedPayload payload{};
     if (!FlowTelemetryRecords::encodeFlowV1(payload, fields)) {
@@ -3652,12 +3759,12 @@ void Conntrack::observeFlowTelemetry(const PacketV6 &pkt, const Result &ctResult
 
     if (flowTelemetry.exportRecordHot(teleHot, FlowTelemetryAbi::RecordType::Flow, payload.span())) {
         e->tele.recordSeq.store(recordSeq, std::memory_order_relaxed);
-        e->tele.lastExportPackets.store(totalPackets, std::memory_order_relaxed);
-        e->tele.lastExportBytes.store(totalBytes, std::memory_order_relaxed);
-        e->tele.lastExportTsNs.store(pkt.tsNs, std::memory_order_relaxed);
-        e->tele.lastExportDecisionKey.store(decisionKey, std::memory_order_relaxed);
-        e->tele.lastExportRuleId.store(ruleIdValue, std::memory_order_relaxed);
-        e->tele.lastExportRuleIdKnown.store(ruleIdKnown, std::memory_order_relaxed);
+        e->tele.lastExportPackets.store(counters.totalPackets, std::memory_order_relaxed);
+        e->tele.lastExportBytes.store(counters.totalBytes, std::memory_order_relaxed);
+        e->tele.lastExportTsNs.store(exportTsNs, std::memory_order_relaxed);
+        e->tele.lastExportDecisionKey.store(guardedDecisionKey, std::memory_order_relaxed);
+        e->tele.lastExportRuleId.store(guardedRuleIdValue, std::memory_order_relaxed);
+        e->tele.lastExportRuleIdKnown.store(guardedRuleIdKnown, std::memory_order_relaxed);
     }
 
     if (didRetire) {
@@ -3715,6 +3822,13 @@ void Conntrack::reset() noexcept {
 }
 
 #ifdef SUCRE_SNORT_TESTING
+void Conntrack::debugSetTelemetryBeforeExportHook(DebugTelemetryBeforeExportHook hook,
+                                                  void *context) noexcept {
+    gTelemetryBeforeExportHook.store(nullptr, std::memory_order_release);
+    gTelemetryBeforeExportHookContext.store(context, std::memory_order_release);
+    gTelemetryBeforeExportHook.store(hook, std::memory_order_release);
+}
+
 std::uint32_t Conntrack::debugEpochUsedSlots() const noexcept {
     if (!_impl4) {
         return 0;

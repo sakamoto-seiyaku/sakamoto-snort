@@ -175,6 +175,7 @@ public:
     // Notes:
     // - Telemetry failures must never change packet verdict.
     // - This path is allowed to drop records under backpressure; drops are accounted by FlowTelemetry.
+    // - Producers must pass packetDir=In or Out; Unknown observations are ignored.
     struct TelemetryPacketFacts {
         FlowTelemetryRecords::FlowPacketDirection packetDir =
             FlowTelemetryRecords::FlowPacketDirection::Unknown;
@@ -206,6 +207,10 @@ public:
     std::uint32_t exportTelemetryDisabledEnds(std::uint64_t nowNs) noexcept;
 
 #ifdef SUCRE_SNORT_TESTING
+    using DebugTelemetryBeforeExportHook = void (*)(void *) noexcept;
+    static void debugSetTelemetryBeforeExportHook(DebugTelemetryBeforeExportHook hook,
+                                                  void *context) noexcept;
+
     std::uint32_t debugEpochUsedSlots() const noexcept;
     std::uint64_t debugEpochInstanceId() const noexcept;
 #endif
