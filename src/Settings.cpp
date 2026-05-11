@@ -61,6 +61,7 @@ void Settings::save() {
         _saver.write<bool>(legacyBlockIPLeaksFrozenValue);
         _saver.write<bool>(_ipRulesEnabled);
         _saver.write<std::time_t>(legacyMaxAgeIPFrozenValue);
+        _saver.write(std::string(nfqueueTopologyToString(nfqueueTopology())));
     });
 }
 
@@ -91,6 +92,14 @@ void Settings::restore() {
         }
 
         (void)_saver.read<std::time_t>(); // MAXAGEIP
+        _nfqueueTopology = defaultNfqueueTopology();
+        if (_savedVersion >= 9) {
+            std::string topologyValue;
+            _saver.read(topologyValue);
+            if (const auto parsed = parseNfqueueTopology(topologyValue); parsed.has_value()) {
+                _nfqueueTopology = *parsed;
+            }
+        }
 
         _getBlackIPs = legacyGetBlackIPsFrozenValue;
         _blockIPLeaks = legacyBlockIPLeaksFrozenValue;

@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 
+#include <NfqueueTopology.hpp>
 #include <sucre-snort.hpp>
 #include <Saver.hpp>
 
@@ -181,7 +182,7 @@ public:
 
 private:
     Saver _saver{_saveFile};
-    uint32_t _version = 8;
+    uint32_t _version = 9;
     uint32_t _savedVersion = 1;
     bool _inetControl = std::ifstream(_telnetFile).is_open();
     std::shared_mutex _mutexPassword;
@@ -195,6 +196,7 @@ private:
     std::atomic_bool _getBlackIPs;
     std::atomic_bool _blockIPLeaks;
     std::atomic_bool _ipRulesEnabled;
+    std::atomic<NfqueueTopology> _nfqueueTopology;
     std::atomic<std::time_t> _maxAgeIP;
 
 public:
@@ -217,6 +219,7 @@ public:
         _getBlackIPs = legacyGetBlackIPsFrozenValue;
         _blockIPLeaks = legacyBlockIPLeaksFrozenValue;
         _ipRulesEnabled = false;
+        _nfqueueTopology = defaultNfqueueTopology();
         _maxAgeIP = legacyMaxAgeIPFrozenValue;
     }
 
@@ -296,6 +299,15 @@ public:
 
     void ipRulesEnabled(const bool enabled) {
         _ipRulesEnabled = enabled;
+        save();
+    }
+
+    NfqueueTopology nfqueueTopology() const {
+        return _nfqueueTopology.load(std::memory_order_relaxed);
+    }
+
+    void nfqueueTopology(const NfqueueTopology topology) {
+        _nfqueueTopology.store(topology, std::memory_order_relaxed);
         save();
     }
 

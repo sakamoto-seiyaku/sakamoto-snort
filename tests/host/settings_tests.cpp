@@ -89,6 +89,95 @@ TEST(SettingsTest, LegacyKnobsRemainFrozenAfterSetters) {
     EXPECT_EQ(settings.maxAgeIP(), Settings::legacyMaxAgeIPFrozenValue);
 }
 
+TEST(SettingsTest, NfqueueTopologyDefaultsToSplitInOut) {
+    Settings settings;
+
+    EXPECT_EQ(settings.nfqueueTopology(), NfqueueTopology::SplitInOut);
+
+    settings.nfqueueTopology(NfqueueTopology::SharedFlowPool);
+    ASSERT_EQ(settings.nfqueueTopology(), NfqueueTopology::SharedFlowPool);
+
+    settings.reset();
+    EXPECT_EQ(settings.nfqueueTopology(), NfqueueTopology::SplitInOut);
+}
+
+TEST(SettingsTest, NfqueueTopologyPersistsInVersionNineSettings) {
+    TempFile tmp;
+    ASSERT_FALSE(tmp.path().empty());
+
+    Settings settings;
+    settings.setSaveFileOverrideForTesting(tmp.path());
+    settings.nfqueueTopology(NfqueueTopology::SharedFlowPool);
+
+    Settings restored;
+    restored.setSaveFileOverrideForTesting(tmp.path());
+    restored.restore();
+
+    EXPECT_EQ(restored.savedVersion(), 9u);
+    EXPECT_EQ(restored.nfqueueTopology(), NfqueueTopology::SharedFlowPool);
+}
+
+TEST(SettingsTest, NfqueueTopologyDefaultsForOlderSettingsFiles) {
+    TempFile tmp;
+    ASSERT_FALSE(tmp.path().empty());
+
+    Saver saver(tmp.path());
+    saver.save([&] {
+        saver.write<bool>(true);
+        saver.write<uint32_t>(8);
+        saver.write<uint8_t>(static_cast<uint8_t>(Settings::standardListBit | Settings::customListBit));
+        saver.write<uint8_t>(0);
+        saver.write<uint8_t>(0);
+
+        const std::string password;
+        saver.write(password);
+
+        saver.write<bool>(false);
+        saver.write<bool>(false);
+        saver.write<bool>(true);
+        saver.write<std::time_t>(Settings::legacyMaxAgeIPFrozenValue);
+    });
+
+    Settings settings;
+    settings.setSaveFileOverrideForTesting(tmp.path());
+    settings.restore();
+
+    EXPECT_EQ(settings.savedVersion(), 8u);
+    EXPECT_TRUE(settings.ipRulesEnabled());
+    EXPECT_EQ(settings.nfqueueTopology(), NfqueueTopology::SplitInOut);
+}
+
+TEST(SettingsTest, NfqueueTopologyInvalidPersistedValueFallsBackToSplitInOut) {
+    TempFile tmp;
+    ASSERT_FALSE(tmp.path().empty());
+
+    Saver saver(tmp.path());
+    saver.save([&] {
+        saver.write<bool>(true);
+        saver.write<uint32_t>(9);
+        saver.write<uint8_t>(static_cast<uint8_t>(Settings::standardListBit | Settings::customListBit));
+        saver.write<uint8_t>(0);
+        saver.write<uint8_t>(0);
+
+        const std::string password;
+        saver.write(password);
+
+        saver.write<bool>(false);
+        saver.write<bool>(false);
+        saver.write<bool>(true);
+        saver.write<std::time_t>(Settings::legacyMaxAgeIPFrozenValue);
+        saver.write(std::string("unsupported-topology"));
+    });
+
+    Settings settings;
+    settings.setSaveFileOverrideForTesting(tmp.path());
+    settings.restore();
+
+    EXPECT_EQ(settings.savedVersion(), 9u);
+    EXPECT_TRUE(settings.ipRulesEnabled());
+    EXPECT_EQ(settings.nfqueueTopology(), NfqueueTopology::SplitInOut);
+}
+
 TEST(SettingsTest, RestoreIgnoresPersistedNonFrozenValuesForLegacyKnobs) {
     TempFile tmp;
     ASSERT_FALSE(tmp.path().empty());

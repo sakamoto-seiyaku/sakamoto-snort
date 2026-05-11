@@ -151,6 +151,7 @@ add_sucre_snort_host_test(ip_rules_engine_tests ip_rules_engine_tests.cpp "${SUC
 add_sucre_snort_host_test(ip_rules_engine_tests_nocache ip_rules_engine_tests.cpp "${SUCRE_SNORT_ROOT}/src/IpRulesEngine.cpp")
 target_compile_definitions(ip_rules_engine_tests_nocache PRIVATE SUCRE_SNORT_IPRULES_DECISION_CACHE=0)
 add_sucre_snort_host_test(rule_tests rule_tests.cpp "${SUCRE_SNORT_ROOT}/src/Rule.cpp")
+add_sucre_snort_host_test(nfqueue_topology_tests nfqueue_topology_tests.cpp)
 add_sucre_snort_host_test(settings_tests settings_tests.cpp "${SUCRE_SNORT_ROOT}/src/Settings.cpp")
 add_sucre_snort_host_test(stats_tests stats_tests.cpp "${SUCRE_SNORT_ROOT}/src/Stats.cpp" "${SUCRE_SNORT_ROOT}/src/AppStats.cpp" "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp")
 add_sucre_snort_host_test(
@@ -197,6 +198,34 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
   "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
   "${SUCRE_SNORT_ROOT}/src/Host.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
+)
+
+add_sucre_snort_host_test(
+  control_vnext_daemon_config_tests
+  control_vnext_daemon_config_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/Address.cpp"
+  "${SUCRE_SNORT_ROOT}/src/App.cpp"
+  "${SUCRE_SNORT_ROOT}/src/AppStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/BlockingListManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Conntrack.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextSessionCommandsDaemon.cpp"
+  "${SUCRE_SNORT_ROOT}/src/ControlVNextStreamManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/CustomRules.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Domain.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainList.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainManager.cpp"
+  "${SUCRE_SNORT_ROOT}/src/DomainStats.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetry.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRecords.cpp"
+  "${SUCRE_SNORT_ROOT}/src/FlowTelemetryRing.cpp"
+  "${SUCRE_SNORT_ROOT}/src/IpRulesEngine.cpp"
+  "${SUCRE_SNORT_ROOT}/src/Rule.cpp"
+  "${SUCRE_SNORT_ROOT}/src/RulesManager.cpp"
   "${SUCRE_SNORT_ROOT}/src/Settings.cpp"
   "${SUCRE_SNORT_ROOT}/src/Stats.cpp"
 )

@@ -11,9 +11,10 @@
 
 template <class IP> class PacketListener {
 private:
-    uint32_t _inputQueues;
-    uint32_t _outputQueues;
-    uint32_t _firstQueue;
+    uint32_t _inputQueues = 0;
+    uint32_t _outputQueues = 0;
+    uint32_t _listenerQueues = 0;
+    uint32_t _firstQueue = 0;
 
     thread_local inline static bool _inputTLS;
     thread_local inline static uint32_t _queueTLS;

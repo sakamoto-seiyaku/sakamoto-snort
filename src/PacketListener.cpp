@@ -17,6 +17,7 @@
 
 #include <CmdLine.hpp>
 #include <Ipv6L4Walker.hpp>
+#include <NfqueueTopology.hpp>
 #include <PacketListener.hpp>
 #include <ControlVNextStreamManager.hpp>
 #include <PerfMetrics.hpp>
@@ -39,8 +40,10 @@ template <class IP> void PacketListener<IP>::start() {
         _firstQueue = threads;
     }
 
-    _inputQueues = threads / 2;
-    _outputQueues = threads / 2;
+    const auto queuePlan = makeNfqueueQueuePlan(settings.nfqueueTopology(), _firstQueue, threads);
+    _inputQueues = queuePlan.input.count;
+    _outputQueues = queuePlan.output.count;
+    _listenerQueues = queuePlan.listeners.count;
 
     CmdLine(IP::iptables, "-w", "-N", settings.inputChain).exec();
     CmdLine(IP::iptables, "-w", "-N", settings.outputChain).exec();
@@ -73,9 +76,9 @@ template <class IP> void PacketListener<IP>::start() {
         }
         cmd.exec();
     };
-    rule(settings.inputChain, _firstQueue, _inputQueues);
-    rule(settings.outputChain, _firstQueue + _inputQueues, _outputQueues);
-    for (uint32_t i = 0; i < _inputQueues + _outputQueues; ++i) {
+    rule(settings.inputChain, queuePlan.input.first, queuePlan.input.count);
+    rule(settings.outputChain, queuePlan.output.first, queuePlan.output.count);
+    for (uint32_t i = 0; i < _listenerQueues; ++i) {
         std::thread([=, this] { listen(i); }).detach();
     }
 }
@@ -192,6 +195,17 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     const auto nfqHeader =
         static_cast<nfqnl_msg_packet_hdr *>(mnl_attr_get_payload(attr[NFQA_PACKET_HDR]));
     const uint32_t packetId = ntohl(nfqHeader->packet_id);
+    const auto direction = nfqueueHookToDirection(nfqHeader->hook);
+    if (!direction.has_value()) {
+        LOG(ERROR) << __FUNCTION__ << " - unsupported NFQUEUE hook: "
+                   << static_cast<uint32_t>(nfqHeader->hook);
+        sendVerdict(packetId, NF_ACCEPT);
+        if (measure) {
+            perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+        }
+        return MNL_CB_OK;
+    }
+    const bool input = nfqueueDirectionIsInput(*direction);
     if (attr[NFQA_PAYLOAD] == nullptr) {
         // Cannot parse payload but we do have a packet id; accept to avoid queue stall.
         LOG(ERROR) << __FUNCTION__ << " - payload attribute not set";
@@ -415,7 +429,7 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     if (settings.blockEnabled() && (!settings.inetControl() || !isControlTraffic)) {
         Address<IP> srcIp(reinterpret_cast<const uint8_t *>(&ip->saddr));
         Address<IP> dstIp(reinterpret_cast<const uint8_t *>(&ip->daddr));
-        const Address<IP> &remoteIp = _inputTLS ? srcIp : dstIp;
+        const Address<IP> &remoteIp = input ? srcIp : dstIp;
         const uint8_t ifaceKindBit = pktManager.ifaceKindBit(iface);
 
         for (;;) {
@@ -473,14 +487,14 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
                 } else {
                     ctPtrV6 = &ctPktV6;
                 }
-                verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, _inputTLS, iface,
+                verdict = pktManager.template make<IP>(srcIp, dstIp, app, host, input, iface,
                                                        uidKnown, ifindexKnown, timestamp,
                                                        l4, payloadLen, ifaceKindBit, appIfaceMask,
                                                        ctPtrV4, ctPtrV6, &streamEvent, &trackedSnapshot);
                 if (trackedSnapshot) {
                     controlVNextStream.observePktTracked(std::move(streamEvent));
                 } else {
-                    controlVNextStream.observePktSuppressed(_inputTLS, verdict, payloadLen);
+                    controlVNextStream.observePktSuppressed(input, verdict, payloadLen);
                 }
             }
             break;

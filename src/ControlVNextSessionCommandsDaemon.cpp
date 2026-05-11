@@ -456,6 +456,9 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
                         values.AddMember(keyName, static_cast<uint32_t>(settings.blockMask()), alloc);
                     } else if (key == "block.ifaceKindMask.default") {
                         values.AddMember(keyName, static_cast<uint32_t>(settings.blockIface()), alloc);
+                    } else if (key == "nfqueue.topology") {
+                        values.AddMember(keyName, makeString(nfqueueTopologyToString(
+                                                   settings.nfqueueTopology()), alloc), alloc);
                     } else {
                         rapidjson::Document response =
                             ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "unsupported key: " + std::string(key));
@@ -504,6 +507,7 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
             std::optional<bool> perfMetricsEnabled;
             std::optional<uint8_t> blockMaskDefault;
             std::optional<uint8_t> blockIfaceKindMaskDefault;
+            std::optional<NfqueueTopology> nfqueueTopology;
         };
 
         struct AppUpdates {
@@ -585,6 +589,20 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
                         return ResponsePlan{.response = std::move(response)};
                     }
                     deviceUpdates.blockIfaceKindMaskDefault = static_cast<uint8_t>(raw);
+                } else if (key == "nfqueue.topology") {
+                    if (!value.IsString()) {
+                        rapidjson::Document response = ControlVNext::makeErrorResponse(
+                            id, "INVALID_ARGUMENT", "nfqueue.topology must be string");
+                        return ResponsePlan{.response = std::move(response)};
+                    }
+                    const std::string_view raw(value.GetString(), value.GetStringLength());
+                    const auto topology = parseNfqueueTopology(raw);
+                    if (!topology.has_value()) {
+                        rapidjson::Document response = ControlVNext::makeErrorResponse(
+                            id, "INVALID_ARGUMENT", "nfqueue.topology invalid");
+                        return ResponsePlan{.response = std::move(response)};
+                    }
+                    deviceUpdates.nfqueueTopology = *topology;
                 } else {
                     rapidjson::Document response =
                         ControlVNext::makeErrorResponse(id, "INVALID_ARGUMENT", "unsupported key: " + std::string(key));
@@ -660,6 +678,9 @@ std::optional<ResponsePlan> handleDaemonCommand(const ControlVNext::RequestView 
             }
             if (deviceUpdates.blockIfaceKindMaskDefault.has_value()) {
                 settings.blockIface(*deviceUpdates.blockIfaceKindMaskDefault);
+            }
+            if (deviceUpdates.nfqueueTopology.has_value()) {
+                settings.nfqueueTopology(*deviceUpdates.nfqueueTopology);
             }
         } else {
             if (appUpdates.tracked.has_value()) {
