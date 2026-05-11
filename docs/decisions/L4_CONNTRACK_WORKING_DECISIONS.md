@@ -1,6 +1,6 @@
 # L4 Conntrack：工作决策与原则
 
-更新时间：2026-04-02  
+更新时间：2026-05-11
 状态：纲领性工作结论（历史设计回执；能力已落地，后续评审/重构仍应对照本文）
 对应主规格：`openspec/specs/l4-conntrack-core/spec.md`  
 对应历史 change：`openspec/changes/archive/2026-03-30-add-iprules-conntrack-core/`
@@ -228,20 +228,29 @@ L4 conntrack 和 v1 的关系应理解为：
 
 ### 7.1 当前 NFQUEUE 线程模型的事实
 
-当前 `sucre-snort` 的 packet worker 拓扑是：
+当前 `sucre-snort` 的 packet worker 拓扑应命名为 `split-in-out`：
 - queue 数量来自 `hardware_concurrency()`，最少 4，且强制偶数；
 - 每个 IP family（IPv4 / IPv6）各占一段独立 queue range；
-- 当前实现把 queue **硬拆成一半 `INPUT`、一半 `OUTPUT`**；
-- 每个 queue 绑定一个独立 listener thread；
-- `direction` 当前通过 thread-local `_inputTLS` 传入判决路径。
+- 在每个 IP family 内，当前实现把 queue **硬拆成一半 `INPUT`、一半 `OUTPUT`**；
+- `INPUT` 链的 iptables 规则使用 input queue range；
+- `OUTPUT` 链的 iptables 规则使用 output queue range；
+- kernel 在对应 `--queue-balance` range 内选择具体 queue；
+- daemon 为每个 queue 启动一个 listener thread；
+- OS scheduler 再决定 listener thread 实际跑在哪个 CPU；当前没有显式 CPU affinity；
+- `direction` 当前通过 thread-local `_inputTLS` 从 queue/thread 分区传入判决路径。
 
 这意味着：
 - 当前实现下，同一条连接/流的正向与反向数据包**不能假设落在同一个 worker**；
+- 同一个双向 flow 在 `INPUT` / `OUTPUT` 分区下可以被两个 listener thread 并发处理；
 - 因此 future conntrack 的 correctness **绝不能依赖** “同流同线程”。
 
 ### 7.2 设计原则：NFQUEUE 拓扑只是运行模式，不是语义前提
 
-后续无论保留当前 `in/out split`，还是改成 shared queue pool，都只能视为：
+后续至少保留两类运行拓扑：
+- `split-in-out`：当前/default 行为，`INPUT` 与 `OUTPUT` 使用不同 queue ranges；
+- `shared-flow-pool`：计划中的实验模式，同一 IP family 内 `INPUT` 与 `OUTPUT` 使用同一个 queue range，让 kernel 的 NFQUEUE connection stickiness 尽量把同一 flow 的双向包放到同一个 queue/listener thread。
+
+两者都只能视为：
 - perf / contention / cache locality 的运行时变量；
 - debug / experiment / deployment profile 的切换项；
 
@@ -252,6 +261,8 @@ L4 conntrack 和 v1 的关系应理解为：
 结论：
 - conntrack core 必须在 **split topology** 与 **shared topology** 下都正确工作；
 - queue affinity 只能作为性能优化收益来源，不能作为唯一保险丝。
+- 即使启用 `shared-flow-pool`，也只能降低同一 flow 跨线程并发概率，不能移除 conntrack 内部并发保护；
+- `shared-flow-pool` 下 `direction` 不能再来自 `_inputTLS`，必须从每包 NFQUEUE header 的 hook 推导：`LOCAL_IN` 对应 input，`LOCAL_OUT` 对应 output。
 
 ### 7.3 线程安全目标形态
 
@@ -317,17 +328,38 @@ L4 conntrack 和 v1 的关系应理解为：
 ### 7.6 与 NFQUEUE 拓扑实验的关系
 
 后续可以允许至少两种运行拓扑并存：
-- `split in/out queues`
-- `shared queue pool`
+- `split-in-out`
+- `shared-flow-pool`
 
 但两者都应满足：
 - 功能 correctness 一致；
 - 控制面与规则语义一致；
 - 只有性能画像、竞争分布、cache locality 不同。
 
+其中 `shared-flow-pool` 的预期形态是：
+- 对同一个 IP family，`INPUT` 与 `OUTPUT` iptables rules 使用相同的 `--queue-balance` queue range；
+- kernel 负责在该 range 内做 queue 选择，并利用 NFQUEUE connection stickiness 尽量保持同一 connection 同 queue；
+- daemon 仍然保持“一个 queue 一个 listener thread”的现有 worker 基本形态；
+- 不再通过 queue/thread 分区判断包方向，而是从每包 NFQUEUE hook 推导方向。
+
+当 per-packet direction 推导正确时，两种模式下的业务语义应保持一致：
+- `remoteIp` 选择一致；
+- traffic rx/tx counters 一致；
+- IPRULES `dir` 匹配一致；
+- Flow Telemetry `packetDir` / `flowOriginDir` 一致；
+- Debug Stream packet direction 一致。
+
+计划中的控制面形态：
+- 未来通过 vNext device config 提供 string enum：`nfqueue.topology`；
+- 初始值保持 `split-in-out`；
+- 可选值先限定为 `split-in-out` 与 `shared-flow-pool`，避免 bool 配置限制后续模式扩展；
+- 配置持久化到现有 settings 存储，daemon 下次启动读取后生效；
+- 不要求、不设计热切换；前端/RuntimeService 负责 stop daemon 后重新 start daemon；
+- 后续实现时可另行暴露 active mode 供诊断，但在接口真正落地前不把它写入对外契约。
+
 因此，后续评估顺序应是：
 1. 先把 conntrack core 做成对拓扑无关的线程安全实现；
-2. 再把 NFQUEUE 拓扑作为独立 perf 变量做真机比较；
+2. 再实现 `nfqueue.topology=shared-flow-pool` 作为独立 perf / stability 变量做真机比较；
 3. 最后才决定默认运行模式。
 
 ### 7.7 Sweep 调度（baseline）

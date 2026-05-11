@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-04-30
+更新时间：2026-05-11
 状态：当前共识（以仓库内 code + tests + OpenSpec 主规格为准）
 
 ## 0. 阅读指南
@@ -74,6 +74,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
 - Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Debug Stream 保留为深度取证能力，Metrics 保留为后端低基数健康状态。
 - 前端支撑所需的后端原语已基本闭环：Debug Stream explainability、checkpoint / rollback、Flow Telemetry export channel 均已落地；但 Flow Telemetry `FLOW` record 对 Activity 所需 raw facts 仍有字段完整性缺口，已纳入下一轮后端能力扩展。
+- [NEXT] NFQUEUE topology modes 是 counter rollback 修复后的下一项后端任务：保留当前/default `split-in-out`，新增实验 `shared-flow-pool`，并通过持久化 vNext device config `nfqueue.topology` 选择下次启动使用的拓扑。
 
 ## 2. 已完成（事实清单）
 
@@ -151,9 +152,10 @@ Status 口径（全篇统一）：
 - [NEXT] legacy control 下线判据：明确 `60606` / legacy command 的保留期限、兼容窗口、诊断入口替代方案和最终删除条件。
 - [NOTE] 这条线依赖真实版本/发布策略配合，适合在前端 RuntimeService handoff 基本可跑后推进。
 
-### 3.4 候选 C：后端能力扩展（偏新能力；不默认进入下一轮）
+### 3.4 候选 C：后端能力扩展（偏新能力）
 
 - [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
+- [NEXT] NFQUEUE topology modes：新增 `nfqueue.topology` string enum device config，默认 `split-in-out`；新增实验值 `shared-flow-pool`，让同一 IP family 的 `INPUT` / `OUTPUT` 规则使用相同 queue range，从而利用 NFQUEUE connection stickiness 尽量把同一双向 flow 放到同一 queue/listener thread。该配置只要求持久化并在 daemon next start 生效，不做热切换；前端/RuntimeService 负责 stop/start daemon。`shared-flow-pool` 的必要前提是方向不能再依赖 `_inputTLS`，必须从每包 NFQUEUE hook 推导 `LOCAL_IN` / `LOCAL_OUT`。功能语义应与 `split-in-out` 一致，后续通过真机性能与稳定性对比再决定是否调整默认值。
 - [BACKLOG] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
 - [BACKLOG] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
 - [BACKLOG] 更强的 L4 stateful semantics：超出当前 `ct.state/ct.direction` 最小闭环的扩展能力。

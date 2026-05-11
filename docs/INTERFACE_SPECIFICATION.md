@@ -52,11 +52,13 @@ vNext app selector（`args.app`）约定:
 
 2.3 配置（Config）
 - `CONFIG.GET` | `{"scope":"device"|"app","app"?:selector,"keys":string[]}` | `result={values:{k:v...}}` |
-  - device scope keys：`block.enabled` / `iprules.enabled` / `rdns.enabled` / `perfmetrics.enabled` / `block.mask.default` / `block.ifaceKindMask.default`
+  - device scope keys：`block.enabled` / `iprules.enabled` / `rdns.enabled` / `perfmetrics.enabled` / `block.mask.default` / `block.ifaceKindMask.default` / `nfqueue.topology`
   - app scope keys：`tracked` / `block.mask` / `block.ifaceKindMask` / `domain.custom.enabled`
   - 所有开关值为 `0|1`（u32）；mask 为 `u8`（用 u32 传输）。
+  - `nfqueue.topology` 为 device-scope string enum：`"split-in-out"`（默认）或 `"shared-flow-pool"`。
 - `CONFIG.SET` | `{"scope":"device"|"app","app"?:selector,"set":{k:v...}}` | `ok` |
   - `set` key 集合与 `CONFIG.GET` 一致；不支持的 key → `INVALID_ARGUMENT`。
+  - `nfqueue.topology` 会持久化到 settings，但只在 daemon 下次启动时用于安装 NFQUEUE rules；`CONFIG.SET` 不热重建当前 listener / iptables。前端或 RuntimeService 负责 stop/start daemon。
 
 2.4 域名规则与策略（Domain）
 - `DOMAINRULES.GET` | `{}` | `result={rules[]}` |
@@ -383,6 +385,8 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
 - 配置
   - device: `sucre-snort-ctl CONFIG.GET '{\"scope\":\"device\",\"keys\":[\"block.enabled\",\"iprules.enabled\",\"rdns.enabled\"]}'`
   - device: `sucre-snort-ctl CONFIG.SET '{\"scope\":\"device\",\"set\":{\"block.enabled\":1}}'`
+  - nfqueue topology: `sucre-snort-ctl CONFIG.GET '{\"scope\":\"device\",\"keys\":[\"nfqueue.topology\"]}'`
+  - nfqueue topology next start: `sucre-snort-ctl CONFIG.SET '{\"scope\":\"device\",\"set\":{\"nfqueue.topology\":\"shared-flow-pool\"}}'`
   - app: `sucre-snort-ctl CONFIG.SET '{\"scope\":\"app\",\"app\":{\"uid\":10123},\"set\":{\"tracked\":1}}'`
 - 域名策略
   - `sucre-snort-ctl DOMAINRULES.GET`
