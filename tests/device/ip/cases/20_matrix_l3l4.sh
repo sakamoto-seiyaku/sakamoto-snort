@@ -57,10 +57,10 @@ udp_send_once() {
     sport_flag="-p $sport"
   fi
   if [[ -n "$DEVICE_BUSYBOX" ]]; then
-    iptest_adb_as_uid "$IPTEST_UID" "printf x | $DEVICE_BUSYBOX nc -n -u -w 1 $sport_flag \"$IPTEST_PEER_IP\" \"$port\" >/dev/null 2>&1 || true" >/dev/null 2>&1
+    iptest_adb_as_uid "$IPTEST_UID" "timeout 3 sh -c 'printf x | $DEVICE_BUSYBOX nc -n -u -w 1 $sport_flag \"$IPTEST_PEER_IP\" \"$port\" >/dev/null 2>&1' >/dev/null 2>&1 || true" >/dev/null 2>&1
   else
     # toybox nc requires -q >= 1
-    iptest_adb_as_uid "$IPTEST_UID" "printf x | nc -n -u -w 1 -q 1 $sport_flag \"$IPTEST_PEER_IP\" \"$port\" >/dev/null 2>&1 || true" >/dev/null 2>&1
+    iptest_adb_as_uid "$IPTEST_UID" "timeout 3 sh -c 'printf x | nc -n -u -w 1 -q 1 $sport_flag \"$IPTEST_PEER_IP\" \"$port\" >/dev/null 2>&1' >/dev/null 2>&1 || true" >/dev/null 2>&1
   fi
 }
 

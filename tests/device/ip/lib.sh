@@ -623,9 +623,6 @@ iptest_tier1_tcp_mix_count_bytes() {
   local device_script
   device_script=$(cat <<EOF
 set -eu
-tmp="/data/local/tmp/iptest_mix_\$\$"
-rm -rf "\$tmp"
-mkdir -p "\$tmp"
 
 pick_host_ip() {
   case "\$1" in
@@ -666,27 +663,22 @@ worker() {
     conns=\$((conns + 1))
     i=\$((i + 1))
   done
-  printf '%s %s\n' "\$total" "\$conns" > "\$tmp/\$wid"
+  printf '%s %s\n' "\$total" "\$conns"
 }
 
-w=0
-while [ "\$w" -lt "${workers}" ]; do
-  worker "\$w" &
-  w=\$((w + 1))
-done
-wait
+run_workers() {
+  w=0
+  while [ "\$w" -lt "${workers}" ]; do
+    worker "\$w" &
+    w=\$((w + 1))
+  done
+  wait
+}
 
-bytes=0
-conns=0
-for f in "\$tmp"/*; do
-  [ -f "\$f" ] || continue
-  set -- \$(cat "\$f")
-  bytes=\$((bytes + \${1:-0}))
-  conns=\$((conns + \${2:-0}))
-done
-
-rm -rf "\$tmp"
-printf '%s %s\n' "\$bytes" "\$conns"
+run_workers | awk '
+  { bytes += \$1; conns += \$2 }
+  END { printf "%s %s\n", bytes + 0, conns + 0 }
+'
 EOF
 )
 
