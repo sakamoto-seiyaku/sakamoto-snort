@@ -2,9 +2,7 @@
 
 ## Purpose
 Defines the normal Flow Telemetry business fact records exported by the daemon.
-
 ## Requirements
-
 ### Requirement: Telemetry records contain only business facts
 The telemetry records database MUST contain only business fact records.
 
@@ -45,6 +43,14 @@ The 5-tuple/family/uid fields are a key used for lookup and display, but they MU
 
 The daemon MUST count packets with packet direction `in` into the `in*` counters and packets with packet direction `out` into the `out*` counters.
 
+The daemon MUST ignore Flow Telemetry packet observations whose packet direction is `unknown`.
+
+For each exported `FLOW` record whose packet direction is known, `totalPackets` MUST equal `inPackets + outPackets`, and `totalBytes` MUST equal `inBytes + outBytes`.
+
+For the same `flowInstanceId`, records observed in increasing `recordSeq` order MUST NOT decrease `totalPackets`, `totalBytes`, `inPackets`, `inBytes`, `outPackets`, or `outBytes`.
+
+For the same `flowInstanceId`, records observed in increasing `recordSeq` order MUST NOT decrease `lastSeenNs`.
+
 `FLOW` records MUST NOT carry since-last-export delta counters.
 
 Each flow instance MUST maintain a `recordSeq` that increments only after a record for that `flowInstanceId` has successfully entered the shared-memory ring.
@@ -60,6 +66,24 @@ Each flow instance MUST maintain a `recordSeq` that increments only after a reco
 - **THEN** the record SHALL include cumulative `outPackets=2`
 - **AND** the record SHALL include cumulative `inPackets=1`
 - **AND** `totalPackets` SHALL equal the sum of inbound and outbound packets for that flow instance
+
+#### Scenario: Unknown packet direction observations are ignored
+- **GIVEN** Flow Telemetry is active
+- **WHEN** daemon observes a packet telemetry event with packet direction `unknown`
+- **THEN** daemon SHALL NOT create a conntrack telemetry entry for that observation
+- **AND** daemon SHALL NOT export a `FLOW` record for that observation
+
+#### Scenario: Concurrent direction exports do not roll back counters
+- **GIVEN** INPUT and OUTPUT workers concurrently process packets for the same `flowInstanceId`
+- **WHEN** both workers attempt to export `FLOW` records for that flow
+- **THEN** records observed by increasing `recordSeq` SHALL have nondecreasing cumulative packet and byte counters
+- **AND** each record with known packet direction SHALL have `totalPackets = inPackets + outPackets`
+- **AND** each record with known packet direction SHALL have `totalBytes = inBytes + outBytes`
+
+#### Scenario: Concurrent packet contexts do not roll back lastSeenNs
+- **GIVEN** two workers process packets for the same `flowInstanceId` with different packet timestamps
+- **WHEN** those workers export `FLOW` records in either execution order
+- **THEN** records observed by increasing `recordSeq` SHALL have nondecreasing `lastSeenNs`
 
 ### Requirement: FLOW UPDATE is emitted on state or threshold changes
 The daemon MUST emit `FLOW` records using packet-driven triggers.
