@@ -33,9 +33,11 @@ void DnsListener::start() {
         try {
             server();
         } catch (const std::exception &e) {
-            LOG(FATAL) << "DnsListener server failed: " << e.what();
+            LOG(ERROR) << "DnsListener server failed: " << e.what();
+            snortRequestFatalShutdown();
         } catch (...) {
-            LOG(FATAL) << "DnsListener server failed: unknown exception";
+            LOG(ERROR) << "DnsListener server failed: unknown exception";
+            snortRequestFatalShutdown();
         }
     }).detach();
 }
@@ -56,8 +58,14 @@ void DnsListener::server() {
             throw std::runtime_error("netd socket listen error");
         }
         for (;;) {
+            if (snortShutdownRequested()) {
+                return;
+            }
             if (const int sockClient = accept(inherited, nullptr, nullptr); sockClient == -1) {
                 LOG(ERROR) << __FUNCTION__ << " - dnslistener accept error";
+            } else if (snortShutdownRequested()) {
+                close(sockClient);
+                return;
             } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Dns);
                        !budget) {
                 LOG(WARNING) << __FUNCTION__ << " - DNS client budget exhausted";
@@ -157,8 +165,14 @@ void DnsListener::server() {
     // Accept on abstract in a helper thread; main thread serves the /dev socket.
     std::thread([this, abstractSocket] {
         for (;;) {
+            if (snortShutdownRequested()) {
+                return;
+            }
             if (const int sockClient = accept(abstractSocket, nullptr, nullptr); sockClient == -1) {
                 LOG(ERROR) << __FUNCTION__ << " - dnslistener abstract accept error";
+            } else if (snortShutdownRequested()) {
+                close(sockClient);
+                return;
             } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Dns);
                        !budget) {
                 LOG(WARNING) << __FUNCTION__ << " - DNS client budget exhausted";
@@ -172,8 +186,14 @@ void DnsListener::server() {
     }).detach();
 
     for (;;) {
+        if (snortShutdownRequested()) {
+            return;
+        }
         if (const int sockClient = accept(devSocket, nullptr, nullptr); sockClient == -1) {
             LOG(ERROR) << __FUNCTION__ << " - dnslistener accept error";
+        } else if (snortShutdownRequested()) {
+            close(sockClient);
+            return;
         } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Dns); !budget) {
             LOG(WARNING) << __FUNCTION__ << " - DNS client budget exhausted";
             close(sockClient);
@@ -186,6 +206,10 @@ void DnsListener::server() {
 }
 
 void DnsListener::clientRun(const int socket) {
+    if (snortShutdownRequested()) {
+        close(socket);
+        return;
+    }
     // Never hold the global listeners lock across blocking I/O. We only take it briefly
     // around critical sections that must quiesce during resetall.
     // Soften stuck clients: set a small read timeout to avoid indefinitely hanging threads.
@@ -208,6 +232,14 @@ void DnsListener::clientRun(const int socket) {
         }
         App::Uid uid;
         clientRead(socket, &uid, sizeof(uid), "uid read error");
+        if (snortShutdownRequested()) {
+            const bool verdict = true;
+            const bool getips = false;
+            clientWrite(socket, &verdict, sizeof(verdict), "shutdown verdict write error");
+            clientWrite(socket, &getips, sizeof(getips), "shutdown getips write error");
+            close(socket);
+            return;
+        }
 
         const bool measure = perfMetrics.enabled();
         uint64_t startUs = 0;

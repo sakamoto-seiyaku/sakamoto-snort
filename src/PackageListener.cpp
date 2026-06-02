@@ -130,6 +130,9 @@ void PackageListener::listen() {
     };
 
     for (;;) {
+        if (snortShutdownRequested()) {
+            return;
+        }
         int fd = inotify_init1(IN_CLOEXEC);
         if (fd == -1) {
             std::this_thread::sleep_for(retryDelay);
@@ -194,6 +197,10 @@ void PackageListener::listen() {
 
         std::array<char, 4096> buf{};
         for (;;) {
+            if (snortShutdownRequested()) {
+                close(fd);
+                return;
+            }
             const auto now = std::chrono::steady_clock::now();
             int timeoutMs = -1;
             if (updateQueued) {

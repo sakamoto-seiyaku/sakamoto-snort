@@ -535,6 +535,9 @@ void ControlVNextSession::run() {
     std::array<std::byte, 4096> buf{};
     auto lastRead = std::chrono::steady_clock::now();
     for (;;) {
+        if (snortShutdownRequested()) {
+            return;
+        }
         while (const auto payload = decoder.pop()) {
             rapidjson::Document requestDoc;
             ControlVNext::JsonError jsonError;

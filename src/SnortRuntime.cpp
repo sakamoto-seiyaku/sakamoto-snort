@@ -21,7 +21,9 @@ std::atomic<std::uint64_t> g_snortResetEpoch{0};
 std::mutex g_shutdownMutex;
 std::condition_variable g_shutdownCv;
 bool g_shutdownRequested = false;
+std::atomic_bool g_shutdownRequestedFast{false};
 std::once_flag g_signalWaiterOnce;
+std::atomic_bool g_fatalShutdownRequested{false};
 
 std::atomic<std::uint32_t> g_activeControlSessions{0};
 std::atomic<std::uint32_t> g_activeDnsSessions{0};
@@ -86,6 +88,7 @@ void snortStartSignalWaiter() {
 }
 
 void snortRequestShutdown() {
+    g_shutdownRequestedFast.store(true, std::memory_order_release);
     {
         const std::lock_guard lock(g_shutdownMutex);
         g_shutdownRequested = true;
@@ -93,9 +96,17 @@ void snortRequestShutdown() {
     g_shutdownCv.notify_all();
 }
 
-bool snortShutdownRequested() {
-    const std::lock_guard lock(g_shutdownMutex);
-    return g_shutdownRequested;
+void snortRequestFatalShutdown() noexcept {
+    g_fatalShutdownRequested.store(true, std::memory_order_release);
+    snortRequestShutdown();
+}
+
+bool snortShutdownRequested() noexcept {
+    return g_shutdownRequestedFast.load(std::memory_order_acquire);
+}
+
+bool snortFatalShutdownRequested() noexcept {
+    return g_fatalShutdownRequested.load(std::memory_order_acquire);
 }
 
 bool snortWaitForShutdownFor(const std::chrono::milliseconds timeout) {
@@ -104,10 +115,12 @@ bool snortWaitForShutdownFor(const std::chrono::milliseconds timeout) {
 }
 
 void snortResetShutdownForTests() {
+    g_fatalShutdownRequested.store(false, std::memory_order_release);
     {
         const std::lock_guard lock(g_shutdownMutex);
         g_shutdownRequested = false;
     }
+    g_shutdownRequestedFast.store(false, std::memory_order_release);
     g_shutdownCv.notify_all();
 }
 

@@ -14,6 +14,8 @@
 #include <thread>
 #include <utility>
 
+bool snortShutdownRequested() noexcept { return false; }
+
 namespace ControlVNextSessionCommands {
 
 namespace TestHooks {

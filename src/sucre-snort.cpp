@@ -5,6 +5,7 @@
 
 #include <sys/socket.h>
 #include <unistd.h>
+#include <cstdlib>
 #include <thread>
 #include <mutex>
 
@@ -45,6 +46,7 @@ FlowTelemetry flowTelemetry;
 static std::mutex g_snortSaveResetMutex;
 
 static void snort();
+static void snortFinalSave();
 static void snortSaveLocked();
 
 int main() {
@@ -53,8 +55,10 @@ int main() {
         snort();
     } catch (const std::runtime_error &e) {
         LOG(ERROR) << "Fatal Exception: " << e.what();
-        return EXIT_FAILURE;
+        snortRequestFatalShutdown();
+        std::_Exit(EXIT_FAILURE);
     }
+    std::_Exit(snortFatalShutdownRequested() ? EXIT_FAILURE : EXIT_SUCCESS);
 }
 
 static void snort() {
@@ -142,7 +146,7 @@ static void snort() {
             break;
         }
     }
-    snortSave();
+    snortFinalSave();
 }
 
 void snortSave(bool quit) {
@@ -151,6 +155,13 @@ void snortSave(bool quit) {
         return;
     }
     const std::lock_guard<std::mutex> lock(g_snortSaveResetMutex);
+    snortSaveLocked();
+}
+
+static void snortFinalSave() {
+    const std::lock_guard<std::mutex> saveResetLock(g_snortSaveResetMutex);
+    const std::lock_guard<std::mutex> controlMutationLock(mutexControlMutations);
+    const std::lock_guard listenersLock(mutexListeners);
     snortSaveLocked();
 }
 

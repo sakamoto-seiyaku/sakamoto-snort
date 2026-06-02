@@ -193,9 +193,11 @@ void Control::start() {
         try {
             unixServer();
         } catch (const std::exception &e) {
-            LOG(FATAL) << "Control unix server failed: " << e.what();
+            LOG(ERROR) << "Control unix server failed: " << e.what();
+            snortRequestFatalShutdown();
         } catch (...) {
-            LOG(FATAL) << "Control unix server failed: unknown exception";
+            LOG(ERROR) << "Control unix server failed: unknown exception";
+            snortRequestFatalShutdown();
         }
     }).detach();
     if (settings.inetControl()) {
@@ -203,9 +205,11 @@ void Control::start() {
             try {
                 inetServer();
             } catch (const std::exception &e) {
-                LOG(FATAL) << "Control inet server failed: " << e.what();
+                LOG(ERROR) << "Control inet server failed: " << e.what();
+                snortRequestFatalShutdown();
             } catch (...) {
-                LOG(FATAL) << "Control inet server failed: unknown exception";
+                LOG(ERROR) << "Control inet server failed: unknown exception";
+                snortRequestFatalShutdown();
             }
         }).detach();
     }
@@ -225,8 +229,14 @@ void Control::unixServer() {
         }
 
         for (;;) {
+            if (snortShutdownRequested()) {
+                return;
+            }
             if (const int sockClient = accept(unixSocket, nullptr, nullptr); sockClient < 0) {
                 LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
+            } else if (snortShutdownRequested()) {
+                close(sockClient);
+                return;
             } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
                        !budget) {
                 LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
@@ -347,9 +357,15 @@ void Control::unixServer() {
     // the same clientLoop() implementation.
     std::thread([this, abstractSocket] {
         for (;;) {
+            if (snortShutdownRequested()) {
+                return;
+            }
             if (const int sockClient = accept(abstractSocket, nullptr, nullptr);
                 sockClient < 0) {
                 LOG(ERROR) << __FUNCTION__ << " - unix abstract socket accept error";
+            } else if (snortShutdownRequested()) {
+                close(sockClient);
+                return;
             } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
                        !budget) {
                 LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
@@ -363,8 +379,14 @@ void Control::unixServer() {
     }).detach();
 
     for (;;) {
+        if (snortShutdownRequested()) {
+            return;
+        }
         if (const int sockClient = accept(devSocket, nullptr, nullptr); sockClient < 0) {
             LOG(ERROR) << __FUNCTION__ << " - unix socket accept error";
+        } else if (snortShutdownRequested()) {
+            close(sockClient);
+            return;
         } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
                    !budget) {
             LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
@@ -406,8 +428,16 @@ void Control::inetServer() {
             throw "inet socket listen error";
         }
         for (;;) {
+            if (snortShutdownRequested()) {
+                close(inetSocket);
+                return;
+            }
             if (const int sockClient = accept(inetSocket, nullptr, nullptr); sockClient < 0) {
                 throw "inet socket accept error";
+            } else if (snortShutdownRequested()) {
+                close(sockClient);
+                close(inetSocket);
+                return;
             } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
                        !budget) {
                 LOG(WARNING) << __FUNCTION__ << " - control session budget exhausted";
@@ -465,6 +495,9 @@ void Control::clientLoop(const int sockClient) const {
         std::vector<char> buffer(settings.controlCmdLen);
         const ssize_t maxRead = static_cast<ssize_t>(settings.controlCmdLen) - 1; // reserve 1 for NUL
         for (;;) {
+            if (snortShutdownRequested()) {
+                break;
+            }
             const ssize_t len = read(sockClient, buffer.data(), maxRead);
             if (len > 0) {
                 buffer[static_cast<size_t>(len)] = '\0';

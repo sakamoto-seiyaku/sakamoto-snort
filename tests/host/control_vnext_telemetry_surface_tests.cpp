@@ -44,6 +44,7 @@ std::shared_mutex mutexListeners;
 std::mutex mutexControlMutations;
 
 std::uint32_t snortExportTelemetryDisabledEnds() noexcept { return 0; }
+bool snortShutdownRequested() noexcept { return false; }
 
 namespace ControlVNextSessionCommands {
 

@@ -47,11 +47,17 @@ void serveClient(const int sockClient, const bool canPassFd) {
     }
 }
 
-[[noreturn]] void acceptLoop(const int serverFd, const char *const kind, const bool canPassFd) {
+void acceptLoop(const int serverFd, const char *const kind, const bool canPassFd) {
     for (;;) {
+        if (snortShutdownRequested()) {
+            return;
+        }
         if (const int sockClient = accept(serverFd, nullptr, nullptr); sockClient < 0) {
             const int err = errno;
             LOG(ERROR) << __FUNCTION__ << " - " << kind << " accept error: " << std::strerror(err);
+        } else if (snortShutdownRequested()) {
+            ::close(sockClient);
+            return;
         } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
                    !budget) {
             LOG(WARNING) << __FUNCTION__ << " - vNext control session budget exhausted";
@@ -105,9 +111,11 @@ void ControlVNext::start() {
         try {
             unixServer();
         } catch (const std::exception &e) {
-            LOG(FATAL) << "Control vNext unix server failed: " << e.what();
+            LOG(ERROR) << "Control vNext unix server failed: " << e.what();
+            snortRequestFatalShutdown();
         } catch (...) {
-            LOG(FATAL) << "Control vNext unix server failed: unknown exception";
+            LOG(ERROR) << "Control vNext unix server failed: unknown exception";
+            snortRequestFatalShutdown();
         }
     }).detach();
     if (settings.inetControl()) {
@@ -115,9 +123,11 @@ void ControlVNext::start() {
             try {
                 inetServer();
             } catch (const std::exception &e) {
-                LOG(FATAL) << "Control vNext inet server failed: " << e.what();
+                LOG(ERROR) << "Control vNext inet server failed: " << e.what();
+                snortRequestFatalShutdown();
             } catch (...) {
-                LOG(FATAL) << "Control vNext inet server failed: unknown exception";
+                LOG(ERROR) << "Control vNext inet server failed: unknown exception";
+                snortRequestFatalShutdown();
             }
         }).detach();
     }
@@ -142,6 +152,7 @@ void ControlVNext::unixServer() {
         }).detach();
 
         acceptLoop(unixSocket, "unix init", /*canPassFd=*/true);
+        return;
     }
 
     const std::string socketPath = std::string("/dev/socket/") + settings.controlVNextSocketPath;
@@ -222,8 +233,16 @@ void ControlVNext::inetServer() {
             throw "inet socket listen error";
         }
         for (;;) {
+            if (snortShutdownRequested()) {
+                close(inetSocket);
+                return;
+            }
             if (const int sockClient = accept(inetSocket, nullptr, nullptr); sockClient < 0) {
                 throw "inet socket accept error";
+            } else if (snortShutdownRequested()) {
+                ::close(sockClient);
+                close(inetSocket);
+                return;
             } else if (auto budget = snortTryAcquireSessionBudget(SnortSessionBudgetKind::Control);
                        !budget) {
                 LOG(WARNING) << __FUNCTION__ << " - vNext control session budget exhausted";

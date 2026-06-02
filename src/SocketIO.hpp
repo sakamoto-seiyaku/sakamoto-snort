@@ -7,6 +7,9 @@
 
 #include <atomic>
 #include <ctime>
+#include <memory>
+#include <mutex>
+#include <sstream>
 
 class SocketIO {
 public:

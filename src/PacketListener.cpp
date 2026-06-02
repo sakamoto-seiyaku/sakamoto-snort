@@ -91,6 +91,9 @@ template <class IP> void PacketListener<IP>::listen(const uint32_t threadId) {
     _inputTLS = threadId < _inputQueues;
 
     for (;;) {
+        if (snortShutdownRequested()) {
+            return;
+        }
         mnl_socket *socket = mnl_socket_open(NETLINK_NETFILTER);
         _socketTLS = socket;
 
@@ -129,6 +132,10 @@ template <class IP> void PacketListener<IP>::listen(const uint32_t threadId) {
 
             const uint32_t port = mnl_socket_get_portid(socket);
             for (;;) {
+                if (snortShutdownRequested()) {
+                    mnl_socket_close(socket);
+                    return;
+                }
                 if (ssize_t ret = mnl_socket_recvfrom(socket, buffer.data(), nlmsgSize); ret >= 0) {
                     if (mnl_cb_run(buffer.data(), ret, 0, port, callback, nullptr) == -1) {
                         throw "MNL callback error";
@@ -195,6 +202,13 @@ template <class IP> int PacketListener<IP>::callback(const nlmsghdr *nlh, void *
     const auto nfqHeader =
         static_cast<nfqnl_msg_packet_hdr *>(mnl_attr_get_payload(attr[NFQA_PACKET_HDR]));
     const uint32_t packetId = ntohl(nfqHeader->packet_id);
+    if (snortShutdownRequested()) {
+        sendVerdict(packetId, NF_ACCEPT);
+        if (measure) {
+            perfMetrics.observeNfqTotalUs(PerfMetrics::nowUs() - startUs);
+        }
+        return MNL_CB_OK;
+    }
     const auto direction = nfqueueHookToDirection(nfqHeader->hook);
     if (!direction.has_value()) {
         LOG(ERROR) << __FUNCTION__ << " - unsupported NFQUEUE hook: "

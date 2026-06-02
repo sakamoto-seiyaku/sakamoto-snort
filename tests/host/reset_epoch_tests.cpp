@@ -40,7 +40,30 @@ TEST(SnortShutdownCoordinatorTest, RequestWakesTimedWait) {
 
     EXPECT_TRUE(woke.load(std::memory_order_acquire));
     EXPECT_TRUE(snortShutdownRequested());
+
     snortResetShutdownForTests();
+    EXPECT_FALSE(snortShutdownRequested());
+}
+
+TEST(SnortShutdownCoordinatorTest, FatalRequestWakesTimedWaitAndIsResettable) {
+    snortResetShutdownForTests();
+    std::atomic_bool woke{false};
+
+    std::thread waiter([&] {
+        woke.store(snortWaitForShutdownFor(std::chrono::minutes(60)), std::memory_order_release);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    snortRequestFatalShutdown();
+    waiter.join();
+
+    EXPECT_TRUE(woke.load(std::memory_order_acquire));
+    EXPECT_TRUE(snortShutdownRequested());
+    EXPECT_TRUE(snortFatalShutdownRequested());
+
+    snortResetShutdownForTests();
+    EXPECT_FALSE(snortShutdownRequested());
+    EXPECT_FALSE(snortFatalShutdownRequested());
 }
 
 TEST(SnortSessionBudgetTest, ControlBudgetIsBoundedAndReleasedByToken) {

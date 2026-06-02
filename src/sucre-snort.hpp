@@ -47,7 +47,9 @@ void snortEndResetEpoch() noexcept;
 void snortConfigureProcessSignals();
 void snortStartSignalWaiter();
 void snortRequestShutdown();
-bool snortShutdownRequested();
+void snortRequestFatalShutdown() noexcept;
+bool snortShutdownRequested() noexcept;
+bool snortFatalShutdownRequested() noexcept;
 bool snortWaitForShutdownFor(std::chrono::milliseconds timeout);
 void snortResetShutdownForTests();
 
