@@ -5,6 +5,10 @@
 
 #include <FlowTelemetry.hpp>
 
+#if defined(__ANDROID__)
+#include <android/sharedmem.h>
+#endif
+
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -12,6 +16,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -87,6 +92,18 @@ private:
     std::size_t _size = 0;
 };
 
+#if defined(__ANDROID__)
+int createSharedMemoryFd(const char *name, const std::uint64_t size,
+                         bool &needsTruncate) noexcept {
+    if (size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    needsTruncate = false;
+    return ASharedMemory_create(name, static_cast<std::size_t>(size));
+}
+#else
+
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001
 #endif
@@ -99,6 +116,13 @@ int sysMemfdCreate(const char *name) noexcept {
     errno = ENOSYS;
     return -1;
 #endif
+}
+
+int createSharedMemoryFd(const char *name, const std::uint64_t size,
+                         bool &needsTruncate) noexcept {
+    (void)size;
+    needsTruncate = true;
+    return sysMemfdCreate(name);
 }
 
 int openTmpUnlinked() noexcept {
@@ -114,6 +138,8 @@ int openTmpUnlinked() noexcept {
     }
     return fd;
 }
+
+#endif
 
 } // namespace
 
@@ -177,7 +203,9 @@ bool FlowTelemetry::open(void *ownerKey, const bool canPassFd, const Level level
         return false;
     }
 
-    int fd = sysMemfdCreate("sucre-snort-telemetry");
+    bool needsTruncate = true;
+    int fd = createSharedMemoryFd("sucre-snort-telemetry", cfg.ringDataBytes, needsTruncate);
+#if !defined(__ANDROID__)
     if (fd < 0) {
         // Host sandboxes may deny memfd_create; fall back to an unlinked tmp file.
         fd = openTmpUnlinked();
@@ -186,9 +214,14 @@ bool FlowTelemetry::open(void *ownerKey, const bool canPassFd, const Level level
             return false;
         }
     }
+#endif
+    if (fd < 0) {
+        outError = std::string("shared memory fd create failed: ") + std::strerror(errno);
+        return false;
+    }
 
     UniqueFd memfd(fd);
-    if (::ftruncate(memfd.get(), static_cast<off_t>(cfg.ringDataBytes)) != 0) {
+    if (needsTruncate && ::ftruncate(memfd.get(), static_cast<off_t>(cfg.ringDataBytes)) != 0) {
         outError = std::string("ftruncate failed: ") + std::strerror(errno);
         return false;
     }

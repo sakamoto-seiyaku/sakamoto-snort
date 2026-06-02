@@ -96,6 +96,7 @@ if(SNORT_DAEMON_BUILD_ID STREQUAL "")
   endif()
 endif()
 
+find_library(SNORT_ANDROID_LIBRARY android REQUIRED)
 find_library(SNORT_ANDROID_LOG_LIBRARY log REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -139,6 +140,7 @@ target_link_libraries(
     snort_netfilter_queue
     snort_netfilter_mnl
     snort_netfilter_nfnetlink
+    "${SNORT_ANDROID_LIBRARY}"
     "${SNORT_ANDROID_LOG_LIBRARY}"
     Threads::Threads
 )
