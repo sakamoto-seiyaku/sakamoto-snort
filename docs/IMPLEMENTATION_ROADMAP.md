@@ -1,7 +1,7 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-05-11
-状态：当前共识（以仓库内 code + tests + OpenSpec 主规格为准）
+更新时间：2026-06-18
+状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `SNORT` 为准；OpenSpec 仅作历史归档）
 
 ## 0. 阅读指南
 
@@ -15,6 +15,7 @@
 运行环境术语（工程化讨论统一用这套）：
 - `Host`：本机 `gtest/CTest`
 - `Host + ASAN`：同一套 Host case 的 AddressSanitizer 变体
+- `Host + UBSan`：同一套 Host case 的 UndefinedBehaviorSanitizer 变体；日常 host gate 顺序为 normal → ASAN → UBSan
 - `Device / DX`：ADB + root 真机集成（smoke/diagnostics/IP 模组/perf/longrun）
 - `Native Debug`：真机原生调试（LLDB / VS Code + CodeLLDB），见 `docs/tooling/VSCODE_CMAKE_WORKFLOW.md`
 
@@ -25,7 +26,7 @@ Status 口径（全篇统一）：
 - `[DONE YYYY-MM-DD]`：已落地并归档/收敛
 - `[NOW]`：当前正在做（本周/本迭代）
 - `[NEXT]`：下一步紧接着做（已明确但未开始）
-- `[BACKLOG]`：明确后置（不挡当前主线）
+- `[CANDIDATE]`：候选方向；不代表已有开放任务，进入实现前必须先有 Plane work item
 - `[NOTE]`：战略/架构判断（非任务，不与 TODO 混用）
 
 单一真相 / 索引：
@@ -37,9 +38,10 @@ Status 口径（全篇统一）：
 - 对外接口规范（vNext-only）：`docs/INTERFACE_SPECIFICATION.md`
 - 可观测性口径：`docs/INTERFACE_SPECIFICATION.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md`
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
-- OpenSpec 主规格：`openspec/specs/`
+- Plane 工作入口：`docs/agents/issue-tracker.md`；本次文档整理 parent item 为 `SNORT-1`
+- OpenSpec 历史归档：`archive/openspec/changes/archive/` 与 `archive/openspec/specs/`（仅作历史参考；不再作为当前流程约束）
 
-长期约束（对后续所有 change 生效）：
+长期约束（对后续所有 Plane work item / implementation slice 生效）：
 - 工程化任务只做 test/debug/tooling；不得顺势夹带产品功能实现。
 - 如确需极小的 test seam / debug seam，必须先说明必要性，并把范围压到最小。
 
@@ -47,15 +49,15 @@ Status 口径（全篇统一）：
 
 ### 1.1 工程化（测试/工作流）
 
-- 当前默认开发 preset 已把 `SNORT_ENABLE_DEVICE_TESTS=OFF`，因此 `dev-debug` 与 `host-asan-clang` 会先收敛到纯 Host 回归。
+- 当前默认开发 preset 已把 `SNORT_ENABLE_DEVICE_TESTS=OFF`，因此 `dev-debug`、`host-asan-clang` 与 `host-ubsan-clang` 会先收敛到纯 Host 回归。
 - Device/DX active/optional 入口（vNext-only；smoke fail-fast）：
   - smoke：`dx-smoke`（platform → control → datapath）
   - diagnostics：`dx-diagnostics` / `dx-diagnostics-perf-network-load`
   - optional casebook：`dx-casebook-other`（`## 其他` Case 1–2；不进默认 `dx-smoke` 主链）
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
 - Device/DX 冒烟 casebook 已补齐；后续以 casebook 为验收口径维护（见 2.2）。
-- 真机冒烟过程中发现的 **snort 本体问题**统一记录在 `docs/testing/DEVICE_SMOKE_SNORT_BUGS.md`（避免混进 casebook/脚本变更里）。
-- OpenSpec 当前 active changes：无（`openspec list` 当前为空）。下一轮需要先讨论并选择新的 change。
+- 真机冒烟过程中发现的 **snort 本体问题**进入 Plane `SNORT`；`docs/testing/DEVICE_SMOKE_SNORT_BUGS.md` 仅保留复现与证据索引。既有 SIGTERM/SIGKILL 记录已迁移到 `SNORT-2`。
+- 根目录 OpenSpec 工作区已迁出到 `archive/openspec/`；后续新工作默认走 Plane + docs/decisions/CONTEXT.md 工作流，不再为默认流程创建 OpenSpec change。
 - 2026-04-30 已收口的后端支撑闭环：
   - Flow Telemetry：常态观测原始事实层 MVP；前端 Activity 新需求已暴露 raw facts completeness 缺口。
   - Debug Stream explainability：tracked 调试取证链条。
@@ -74,47 +76,47 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
 - Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Debug Stream 保留为深度取证能力，Metrics 保留为后端低基数健康状态。
 - 前端支撑所需的后端原语已基本闭环：Debug Stream explainability、checkpoint / rollback、Flow Telemetry export channel 均已落地；但 Flow Telemetry `FLOW` record 对 Activity 所需 raw facts 仍有字段完整性缺口，已纳入下一轮后端能力扩展。
-- [NEXT] NFQUEUE topology modes 是 counter rollback 修复后的下一项后端任务：保留当前/default `split-in-out`，新增实验 `shared-flow-pool`，并通过持久化 vNext device config `nfqueue.topology` 选择下次启动使用的拓扑。
+- [NOTE] NFQUEUE topology / power / performance 后续不再作为文档内隐式 TODO 追踪；已归入 Plane `SNORT-8` 做架构 triage。任何默认值调整或新 datapath mode 都应先由该项拆出明确 work item。
 
 ## 2. 已完成（事实清单）
 
 ### 2.1 工程化（DX workflow / 真机测试组织）
 
-- [DONE 2026-04-23] `rework-dx-smoke`：收敛 active smoke 入口到 `dx-smoke{,-platform,-control,-datapath}`（spec：`openspec/specs/dx-smoke-workflow/spec.md`）
-- [DONE 2026-04-24] `rework-dx-diagnostics`：收敛 active diagnostics 入口到 `dx-diagnostics{,-perf-network-load}`（spec：`openspec/specs/dx-diagnostics-workflow/spec.md`）
-- [DONE 2026-03-24] `add-ip-test-component`：IP 真机测试模组（Tier‑1 netns+veth + profiles；spec：`openspec/specs/ip-test-component/spec.md`）
+- [DONE 2026-04-23] `rework-dx-smoke`：收敛 active smoke 入口到 `dx-smoke{,-platform,-control,-datapath}`（spec：`archive/openspec/specs/dx-smoke-workflow/spec.md`）
+- [DONE 2026-04-24] `rework-dx-diagnostics`：收敛 active diagnostics 入口到 `dx-diagnostics{,-perf-network-load}`（spec：`archive/openspec/specs/dx-diagnostics-workflow/spec.md`）
+- [DONE 2026-03-24] `add-ip-test-component`：IP 真机测试模组（Tier‑1 netns+veth + profiles；spec：`archive/openspec/specs/ip-test-component/spec.md`）
 - [DONE 2026-03-24] `add-iprules-cacheoff-build-variant`：cache-off 变体 + perf 对照记录（记录：`docs/testing/PERFORMANCE_TEST_RECORD.md`）
 - [DONE 2026-04-22] `update-post-domain-ip-fusion-rollup`：后置 rollup（验证/文档/longrun 归位；仅保留为 archive 记录）
-- [DONE 2026-04-30] `migrate-root-daemon-to-ndk-r29`：root daemon build/deploy/debug 主路径迁移到 NDK r29，归档 Soong/Android source active 入口，产出 `build-output/sucre-snort-ndk` 与 APK-native `.so` handoff artifact（spec：`openspec/specs/root-daemon-ndk-release/spec.md`、`openspec/specs/vscode-cmake-development/spec.md`）
+- [DONE 2026-04-30] `migrate-root-daemon-to-ndk-r29`：root daemon build/deploy/debug 主路径迁移到 NDK r29，归档 Soong/Android source active 入口，产出 `build-output/sucre-snort-ndk` 与 APK-native `.so` handoff artifact（spec：`archive/openspec/specs/root-daemon-ndk-release/spec.md`、`archive/openspec/specs/vscode-cmake-development/spec.md`）
 
 ### 2.2 工程化（Device smoke casebook 补齐）
 
-- [DONE 2026-04-24] `complete-device-smoke-casebook-platform`：补齐 platform gate 可解释性（host 工具链 + vNext HELLO sanity + `--skip-deploy` 语义；spec：`openspec/specs/dx-smoke-platform-gate/spec.md`）
-- [DONE 2026-04-25] `complete-device-smoke-casebook-domain`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；spec：`openspec/specs/dx-smoke-domain-casebook/spec.md`）
-- [DONE 2026-04-25] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、`block.enabled=0`、`iprules.enabled=0`、payload bytes、维度级 traffic/reasons/stats、pkt stream 字段；spec：`openspec/specs/dx-smoke-ip-casebook/spec.md`）
-- [DONE 2026-04-25] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（`ct.state/direction` 最小闭环、create-on-accept、block 不 create entry；spec：`openspec/specs/dx-smoke-conntrack-casebook/spec.md`）
-- [DONE 2026-04-25] `complete-device-smoke-casebook-other`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 其他` Case 1–2（perfmetrics.enabled 可用性验证、极端规模 limits sanity；spec：`openspec/specs/dx-smoke-other-casebook/spec.md`）
+- [DONE 2026-04-24] `complete-device-smoke-casebook-platform`：补齐 platform gate 可解释性（host 工具链 + vNext HELLO sanity + `--skip-deploy` 语义；spec：`archive/openspec/specs/dx-smoke-platform-gate/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-domain`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；spec：`archive/openspec/specs/dx-smoke-domain-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、`block.enabled=0`、`iprules.enabled=0`、payload bytes、维度级 traffic/reasons/stats、pkt stream 字段；spec：`archive/openspec/specs/dx-smoke-ip-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（`ct.state/direction` 最小闭环、create-on-accept、block 不 create entry；spec：`archive/openspec/specs/dx-smoke-conntrack-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-other`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 其他` Case 1–2（perfmetrics.enabled 可用性验证、极端规模 limits sanity；spec：`archive/openspec/specs/dx-smoke-other-casebook/spec.md`）
 
 ### 2.3 功能（Domain+IP；后端已收敛）
 
-- [DONE 2026-04-21] vNext codec + ctl：`add-control-vnext-codec-ctl`（spec：`openspec/specs/control-vnext-codec/spec.md`、`openspec/specs/sucre-snort-ctl/spec.md`）
-- [DONE 2026-04-21] vNext daemon base（meta/inventory/config）：`add-control-vnext-daemon-base`（spec：`openspec/specs/control-vnext-daemon-base/spec.md`）
-- [DONE 2026-04-21] vNext domain surface：`add-control-vnext-domain-surface`（spec：`openspec/specs/control-vnext-domain-surface/spec.md`）
-- [DONE 2026-04-22] vNext iprules surface：`add-control-vnext-iprules-surface`（spec：`openspec/specs/control-vnext-iprules-surface/spec.md`）
-- [DONE 2026-04-22] vNext metrics surface（traffic/conntrack/perf/reasons/domainSources）：`add-control-vnext-metrics`（spec：`openspec/specs/control-vnext-metrics-surface/spec.md`、`openspec/specs/traffic-observability/spec.md`、`openspec/specs/conntrack-observability/spec.md`）
-- [DONE 2026-04-22] vNext stream surface（pkt/dns/activity + notice/barrier）：`add-control-vnext-stream`（spec：`openspec/specs/control-vnext-stream-surface/spec.md`）
-- [DONE 2026-04-22] legacy 冻结收口 + lane 分轨：`stabilize-control-transition-surface`（spec：`openspec/specs/control-transition-surface/spec.md`）
-- [DONE 2026-03-24] pktstream 可观测性：`add-pktstream-observability`（spec：`openspec/specs/pktstream-observability/spec.md`）
-- [DONE 2026-03-24] IPRULES v1（IPv4 L3/L4 + per-rule stats）：`add-app-ip-l3l4-rules-engine`（spec：`openspec/specs/app-ip-l3l4-rules/spec.md`）
-- [DONE 2026-03-27] DomainPolicy observability（policySource counters）：`add-domain-policy-observability`（spec：`openspec/specs/domain-policy-observability/spec.md`）
-- [DONE 2026-03-30] L4 conntrack core：`add-iprules-conntrack-core`（spec：`openspec/specs/l4-conntrack-core/spec.md`）
+- [DONE 2026-04-21] vNext codec + ctl：`add-control-vnext-codec-ctl`（spec：`archive/openspec/specs/control-vnext-codec/spec.md`、`archive/openspec/specs/sucre-snort-ctl/spec.md`）
+- [DONE 2026-04-21] vNext daemon base（meta/inventory/config）：`add-control-vnext-daemon-base`（spec：`archive/openspec/specs/control-vnext-daemon-base/spec.md`）
+- [DONE 2026-04-21] vNext domain surface：`add-control-vnext-domain-surface`（spec：`archive/openspec/specs/control-vnext-domain-surface/spec.md`）
+- [DONE 2026-04-22] vNext iprules surface：`add-control-vnext-iprules-surface`（spec：`archive/openspec/specs/control-vnext-iprules-surface/spec.md`）
+- [DONE 2026-04-22] vNext metrics surface（traffic/conntrack/perf/reasons/domainSources）：`add-control-vnext-metrics`（spec：`archive/openspec/specs/control-vnext-metrics-surface/spec.md`、`archive/openspec/specs/traffic-observability/spec.md`、`archive/openspec/specs/conntrack-observability/spec.md`）
+- [DONE 2026-04-22] vNext stream surface（pkt/dns/activity + notice/barrier）：`add-control-vnext-stream`（spec：`archive/openspec/specs/control-vnext-stream-surface/spec.md`）
+- [DONE 2026-04-22] legacy 冻结收口 + lane 分轨：`stabilize-control-transition-surface`（spec：`archive/openspec/specs/control-transition-surface/spec.md`）
+- [DONE 2026-03-24] pktstream 可观测性：`add-pktstream-observability`（spec：`archive/openspec/specs/pktstream-observability/spec.md`）
+- [DONE 2026-03-24] IPRULES v1（IPv4 L3/L4 + per-rule stats）：`add-app-ip-l3l4-rules-engine`（spec：`archive/openspec/specs/app-ip-l3l4-rules/spec.md`）
+- [DONE 2026-03-27] DomainPolicy observability（policySource counters）：`add-domain-policy-observability`（spec：`archive/openspec/specs/domain-policy-observability/spec.md`）
+- [DONE 2026-03-30] L4 conntrack core：`add-iprules-conntrack-core`（spec：`archive/openspec/specs/l4-conntrack-core/spec.md`）
 - [DONE 2026-04-27] IPRULES IPv4/IPv6 双栈：`add-iprules-dual-stack-ipv6`（required `family`/mk2、IPv6 header walker + `l4Status`、conntrack byFamily metrics、host + device Tier‑1 回归；决策入口：`docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`）
-- [DONE 2026-04-27] DomainPolicy device-wide 命名收敛：`rename-domain-policy-global-to-domain-device-wide`（`GLOBAL_*` 对外收敛为 `DOMAIN_DEVICE_WIDE_*`；spec：`openspec/specs/domain-policy-observability/spec.md`）
-- [DONE 2026-04-28] DomainRules per-rule observability：`add-domainrules-per-rule-observability`（域名规则命中/状态观测补齐；spec：`openspec/specs/domainrules-per-rule-observability/spec.md`）
-- [DONE 2026-03-15] perfmetrics：`add-perfmetrics-observability`（spec：`openspec/specs/perfmetrics-observability/spec.md`）
-- [DONE 2026-04-30] Flow Telemetry Plane：`add-flow-telemetry-plane`（shared-memory ring export channel、`TELEMETRY.OPEN/CLOSE`、`METRICS.GET(name=telemetry)`、`FLOW` / `DNS_DECISION` records、host + 真机 + perf + longrun 回归；spec：`openspec/specs/control-vnext-telemetry-surface/spec.md`、`openspec/specs/flow-telemetry-export-channel/spec.md`、`openspec/specs/flow-telemetry-records/spec.md`）
-- [DONE 2026-04-30] Debug Stream explainability：`add-debug-stream-explainability`（tracked DNS / packet stream 自包含 `explain` 取证链条、规则/名单/mask/iface/IPRULES candidate snapshots、host + device domain/IP smoke 回归；spec：`openspec/specs/debug-stream-explainability/spec.md`、`openspec/specs/control-vnext-stream-surface/spec.md`）
-- [DONE 2026-04-30] Policy Bundle Checkpoints：`add-policy-bundle-checkpoints`（固定 `0..2` checkpoint slots、64 MiB policy-only bundle、DomainLists 私有 staging + atomic restore、runtime epoch cleanup、host sanitizer + device smoke 回归；spec：`openspec/specs/policy-bundle-checkpoints/spec.md`、`openspec/specs/control-vnext-checkpoint-surface/spec.md`、`openspec/specs/dx-smoke-checkpoint-casebook/spec.md`）
+- [DONE 2026-04-27] DomainPolicy device-wide 命名收敛：`rename-domain-policy-global-to-domain-device-wide`（`GLOBAL_*` 对外收敛为 `DOMAIN_DEVICE_WIDE_*`；spec：`archive/openspec/specs/domain-policy-observability/spec.md`）
+- [DONE 2026-04-28] DomainRules per-rule observability：`add-domainrules-per-rule-observability`（域名规则命中/状态观测补齐；spec：`archive/openspec/specs/domainrules-per-rule-observability/spec.md`）
+- [DONE 2026-03-15] perfmetrics：`add-perfmetrics-observability`（spec：`archive/openspec/specs/perfmetrics-observability/spec.md`）
+- [DONE 2026-04-30] Flow Telemetry Plane：`add-flow-telemetry-plane`（shared-memory ring export channel、`TELEMETRY.OPEN/CLOSE`、`METRICS.GET(name=telemetry)`、`FLOW` / `DNS_DECISION` records、host + 真机 + perf + longrun 回归；spec：`archive/openspec/specs/control-vnext-telemetry-surface/spec.md`、`archive/openspec/specs/flow-telemetry-export-channel/spec.md`、`archive/openspec/specs/flow-telemetry-records/spec.md`）
+- [DONE 2026-04-30] Debug Stream explainability：`add-debug-stream-explainability`（tracked DNS / packet stream 自包含 `explain` 取证链条、规则/名单/mask/iface/IPRULES candidate snapshots、host + device domain/IP smoke 回归；spec：`archive/openspec/specs/debug-stream-explainability/spec.md`、`archive/openspec/specs/control-vnext-stream-surface/spec.md`）
+- [DONE 2026-04-30] Policy Bundle Checkpoints：`add-policy-bundle-checkpoints`（固定 `0..2` checkpoint slots、64 MiB policy-only bundle、DomainLists 私有 staging + atomic restore、runtime epoch cleanup、host sanitizer + device smoke 回归；spec：`archive/openspec/specs/policy-bundle-checkpoints/spec.md`、`archive/openspec/specs/control-vnext-checkpoint-surface/spec.md`、`archive/openspec/specs/dx-smoke-checkpoint-casebook/spec.md`）
 
 ### 2.4 稳定性（运行期并发边界）
 
@@ -137,7 +139,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-30] Debug Stream explainability 已覆盖 tracked DNS / packet verdict 的自包含取证链条；它继续定位为深度调试，不替代 Flow Telemetry records 或 Metrics。
 - [DONE 2026-04-30] Policy Bundle Checkpoints 已覆盖后端固定槽位 checkpoint / rollback 原语；前端仍负责命名、历史、备注、工作流与导入导出包。
 - [DONE 2026-04-30] NDK r29 root daemon workflow 已成为当前 daemon build/deploy/debug 基线；后续 APK/RuntimeService 集成不再依赖 Android source / Soong daemon 路径。
-- [NOTE] 当前没有 active OpenSpec change；下一步应先选定产品/工程方向，再创建新 change。
+- [NOTE] OpenSpec 工作流已归档；下一步应先讨论并选定产品/工程方向，再在 Plane 中创建 work item 或更新相应设计文档。
 
 ### 3.2 候选 A：前端 / RuntimeService handoff（偏产品集成）
 
@@ -154,26 +156,27 @@ Status 口径（全篇统一）：
 
 ### 3.4 候选 C：后端能力扩展（偏新能力）
 
-- [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
+- [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、历史 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
 - [NEXT] NFQUEUE topology modes：新增 `nfqueue.topology` string enum device config，默认 `split-in-out`；新增实验值 `shared-flow-pool`，让同一 IP family 的 `INPUT` / `OUTPUT` 规则使用相同 queue range，从而利用 NFQUEUE connection stickiness 尽量把同一双向 flow 放到同一 queue/listener thread。该配置只要求持久化并在 daemon next start 生效，不做热切换；前端/RuntimeService 负责 stop/start daemon。`shared-flow-pool` 的必要前提是方向不能再依赖 `_inputTLS`，必须从每包 NFQUEUE hook 推导 `LOCAL_IN` / `LOCAL_OUT`。功能语义应与 `split-in-out` 一致，后续通过真机性能与稳定性对比再决定是否调整默认值。
-- [BACKLOG] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
-- [BACKLOG] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
-- [BACKLOG] 更强的 L4 stateful semantics：超出当前 `ct.state/ct.direction` 最小闭环的扩展能力。
-- [BACKLOG] L7 / HTTP / HTTPS 被动识别：暂不作为已承诺主线。
+- [CANDIDATE] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
+- [CANDIDATE] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
+- [CANDIDATE] 更强的 L4 stateful semantics：超出当前 `ct.state/ct.direction` 最小闭环的扩展能力。
+- [CANDIDATE] L7 / HTTP / HTTPS 被动识别：暂不作为已承诺主线。
 
 ### 3.5 文档收尾（降低误读）
 
 - [DONE 2026-04-29] Flow Telemetry 纲领文件已从讨论草案收口为工作决策文档。
 - [DONE 2026-04-30] Flow Telemetry 接口已随 `add-flow-telemetry-plane` 同步到 `docs/INTERFACE_SPECIFICATION.md`。
-- [DONE 2026-05-04] Flow Telemetry raw facts completeness 已同步 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`，新的 `FLOW` v1 binary layout 以接口文档 offset 表为准。
-- [DONE 2026-04-30] Debug Stream explainability 与 Policy Bundle Checkpoints 已同步到 OpenSpec 主规格；`docs/INTERFACE_SPECIFICATION.md` 后续只在接口新增/变更时刷新。
+- [DONE 2026-05-04] Flow Telemetry raw facts completeness 已同步历史 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`，新的 `FLOW` v1 binary layout 以接口文档 offset 表为准。
+- [NOTE] Traffic Explorer 的 Direction split 需求不再驱动 snort producer 变更；当前 native `FLOW` 已稳定导出 `inPackets/inBytes/outPackets/outBytes`，后续工作只在 app 侧 retained summary 传播与 UI 聚合。
+- [DONE 2026-04-30] Debug Stream explainability 与 Policy Bundle Checkpoints 已同步到历史 OpenSpec 主规格；`docs/INTERFACE_SPECIFICATION.md` 后续只在接口新增/变更时刷新。
 - [NOTE] 当前 `docs/INTERFACE_SPECIFICATION.md` 已收敛为 vNext-only 契约（legacy 版已归档）；若下一轮先做 Flow Telemetry raw facts completeness，应先更新 telemetry ABI 契约；若先做前端 handoff，则优先补 RuntimeService / APK packaging 契约文档。
 
-## 4. 后置 / Backlog（不挡主线）
+## 4. 后置候选（不挡主线）
 
-- [BACKLOG] 后端新能力候选集中在 3.4；讨论前不主动开 change，避免把产品集成期切回底层扩张期。
-- [BACKLOG] 前端/consumer 侧的 Top-K、timeline、history、Geo/ASN、注释、查询索引与 checkpoint 命名/历史不进入 daemon backlog，除非实现时暴露出明确的后端契约缺口。
-- [BACKLOG] 若下一轮优先做 RuntimeService / APK handoff，应同步补充发布、升级、回滚、日志采集与 crash/tombstone 诊断口径。
+- [CANDIDATE] 后端新能力候选集中在 3.4；讨论前不主动开实现任务，避免把产品集成期切回底层扩张期。
+- [CANDIDATE] 前端/consumer 侧的 Top-K、timeline、history、Geo/ASN、注释、查询索引与 checkpoint 命名/历史不进入 daemon backlog，除非实现时暴露出明确的后端契约缺口。
+- [CANDIDATE] 若下一轮优先做 RuntimeService / APK handoff，应同步补充发布、升级、回滚、日志采集与 crash/tombstone 诊断口径。
 
 ---
 

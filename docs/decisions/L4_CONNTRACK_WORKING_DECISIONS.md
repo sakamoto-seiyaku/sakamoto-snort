@@ -2,8 +2,8 @@
 
 更新时间：2026-05-11
 状态：纲领性工作结论（历史设计回执；能力已落地，后续评审/重构仍应对照本文）
-对应主规格：`openspec/specs/l4-conntrack-core/spec.md`  
-对应历史 change：`openspec/changes/archive/2026-03-30-add-iprules-conntrack-core/`
+对应历史主规格：`archive/openspec/specs/l4-conntrack-core/spec.md`
+对应历史 change：`archive/openspec/changes/archive/2026-03-30-add-iprules-conntrack-core/`
 
 ---
 
@@ -18,7 +18,7 @@
 - 哪些东西明确不做，避免范围失控。
 
 本文不回答：
-- 具体 change 的任务拆分、接口字面量、类图与测试清单；
+- 具体 Plane work item / implementation slice 的任务拆分、接口字面量、类图与测试清单；
 - NAT / ALG / DPI / HTTP 识别这类已超出当前产品边界的话题；
 - “如何一步到位做成通用防火墙”的泛化设计。
 
@@ -199,7 +199,7 @@ L4 conntrack 和 v1 的关系应理解为：
 | B. per-UID 缓存在 `App`（带 epoch） | 2 个原子读（epoch+caps），常态无查找 | epoch 变化时做一次查找并刷新 | 中 | 需要在 `App` 引入 iprules capabilities；要处理并发刷新 | **推荐默认**：规则变更频率低，适合 amortize |
 | C. 引擎 API 合并：单次查找同时给出 `UidView* + caps` 并复用 | 0 次额外查找（复用同一次 view 定位） | 无 | 中/高 | 需要改动引擎对外 API / TLS cache 边界 | 适合在 baseline 仍不够好时再做 |
 
-推荐结论（用于后续 change 实现默认路线）：
+推荐结论（用于后续实现切片的默认路线）：
 - 优先采用 **B（App+epoch 缓存）** 作为 gating 的主实现策略：在规则 epoch 稳定时，gating 近似“零额外开销”；epoch 变化很少发生时刷新一次即可。
 
 3. **内存模型必须可控**

@@ -1,3 +1,7 @@
+# Historical note
+
+This file is an archived multi-user design history record. Current selector and control-plane authority lives in `docs/INTERFACE_SPECIFICATION.md`, current terminology lives in `CONTEXT.md`, and open follow-up work belongs in Plane project `SNORT`.
+
 # sucre-snort 多用户重构设计文档
 
 ## ✅ 实施状态（对齐到当前仓库，2026-04-22）

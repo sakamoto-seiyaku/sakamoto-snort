@@ -1,10 +1,10 @@
 # DX 真机测试重组纲领
 
-更新时间：2026-04-23  
-状态：讨论稿 / 当前共识
+更新时间：2026-06-18
+状态：active charter / 当前共识
 
-本文件用于记录当前对 `Device / DX` 真机测试体系重组的阶段性共识。  
-目标不是立即展开实现细节，而是先把后续拆 change 时必须遵守的分类、边界、迁移方向讲清楚。
+本文件用于记录当前对 `Device / DX` 真机测试体系重组的阶段性共识。
+目标不是维护本地任务列表，而是把后续 Plane work item / implementation slice 必须遵守的分类、边界、迁移方向讲清楚。
 
 ## 1. 适用范围与边界
 
@@ -101,7 +101,7 @@
 - 决定某个脚本是否本次就删除、改名、合并
 - 维护与当前代码强绑定的逐项迁移清单
 
-凡是已经进入“具体到某个脚本 / 某个 case / 某次迁移范围”的问题，都应在后续具体实现类 change 中决定，而不是继续堆在纲领文件里。
+凡是已经进入“具体到某个脚本 / 某个 case / 某次迁移范围”的问题，都应在后续具体实现类 Plane work item 中决定，而不是继续堆在纲领文件里。
 
 ## 3. 对当前现状的判断
 
@@ -109,8 +109,8 @@
 
 当前仓库里，domain 相关真机覆盖已经存在，问题已经从“缺不缺”转为“怎么重组”：
 
-- `tests/archive/integration/run.sh`（legacy 回查）
-  - 包含 `IT-12`（legacy surface），覆盖 `METRICS.DOMAIN.SOURCES*` 的历史用例
+- `tests/archive/integration/run.sh`（archived legacy 回查）
+  - 包含 `IT-12`，覆盖旧版 domain source counters 的历史用例
 - `tests/integration/vnext-baseline.sh`
   - 已覆盖 `DOMAINRULES / DOMAINPOLICY / DOMAINLISTS`
   - 并已覆盖 `METRICS.GET(name=domainSources)`（vNext 版本的 DomainPolicy source counters）
@@ -375,17 +375,17 @@ active `diagnostics` 最终只保留 **1 个总入口 + 1 个子入口**（`CTes
 
 但这仍属于后续实现阶段的结构化动作；本文件当前只记录方向，不视为已落地状态。
 
-## 7. 本文件在后续 change 中的角色
+## 7. 本文件在后续 Plane work item 中的角色
 
-本文件是后续拆分 change 前的纲领约束。  
-后续如果要启动实现类 change，应以本文件作为上层边界，至少回答清楚：
+本文件是后续拆分 Plane work item 前的纲领约束。
+后续如果要启动实现类 work item，应以本文件作为上层边界，至少回答清楚：
 
 - 这次改动属于 `smoke` 还是 `diagnostics`
 - 是否仍然混用了 legacy / compat 接口
 - 是在收敛 active 主线，还是仅在迁移源/archive 中做整理
 - 是否把本应进入 `vNext` 主线的覆盖继续留在 legacy 脚本里
 
-若某个 change 开始处理具体 legacy 入口，则该 change 自身必须补齐：
+若某个 work item 开始处理具体 legacy 入口，则该 work item 自身必须补齐：
 
 - 本次触及哪些 legacy 入口
 - 对应的 `vNext` 承接入口是什么

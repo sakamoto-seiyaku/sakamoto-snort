@@ -1,3 +1,7 @@
+# Historical note
+
+This file is an archived P0/P1 backend planning snapshot. Current roadmap and open work are tracked through `docs/IMPLEMENTATION_ROADMAP.md` and Plane project `SNORT`.
+
 # P0/P1 后端调研：工作决策记录（临时）
 
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。

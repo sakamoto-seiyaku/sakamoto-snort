@@ -15,7 +15,7 @@
 - 后续控制面、matchKey、datapath、conntrack 与观测应遵守什么方向。
 
 本文不回答：
-- 具体 OpenSpec change 的任务拆分；
+- 具体 Plane work item / implementation slice 的任务拆分；
 - 具体类图、函数签名、测试脚本实现；
 - `ip-leak`、device-wide/global IP rules、L7/DPI 等其它后置议题。
 
@@ -23,7 +23,7 @@
 
 ## 1. 为什么现在提前 IPv6
 
-当前 roadmap 中 IPv6 新规则语义仍在 backlog，而 IPRULES v1 已经落地为 IPv4 L3/L4 + per-rule stats + userspace conntrack。
+本文写作时，IPv6 新规则语义仍在 backlog，而 IPRULES v1 已经落地为 IPv4 L3/L4 + per-rule stats + userspace conntrack。当前仓库已完成 IPRULES IPv4/IPv6 双栈落地，本文保留为该设计决策的回执。
 
 如果继续把 IPv6 放到文档收尾之后，后续前端、配置生成器、vNext 契约和测试口径很可能先围绕 IPv4-only 模型固化。等发布前或发布后再补 IPv6，就会迫使系统把 IPv6 当成额外兼容层处理，导致：
 - 规则对象语义不纯；
@@ -276,23 +276,23 @@ observability：
 
 ---
 
-## 7. 后续 OpenSpec / 文档 / 验收入口
+## 7. 历史交付 / 文档 / 验收入口
 
-后续 IPv6 支持应由一个总 OpenSpec change 承接，change 名称固定为 `add-iprules-dual-stack-ipv6`，避免出现“控制面已双栈、datapath/conntrack/observability 尚未双栈”的半成品规格状态。
+IPv6 支持已作为一条完整交付线落地，历史交付名为 `add-iprules-dual-stack-ipv6`。本文保留当时的范围边界，避免后续讨论退回“控制面已双栈、datapath/conntrack/observability 尚未双栈”的半成品模型。
 
-该 change 的 tasks 内部可以分阶段，但必须覆盖同一条交付线：
+历史交付覆盖：
 - vNext IPRULES schema：`family`、IPv6 CIDR、`proto=other`、`mk2`、`PREFLIGHT.byFamily`；
 - IPRULES engine：按 family 编译 hot view/key/cache，保留 IPv4 轻路径；
 - datapath parser：统一栈上解析结果、IPv6 header walker、fragment / invalid / `l4Status`；
 - Conntrack：IPv6 支持、按 family 分表、全局共享 `maxEntries`、`byFamily` metrics；
 - observability：packet stream `l4Status`、conntrack metrics、per-rule stats 与 reasonId 口径；
-- tests/docs：host 单测、真机 Tier-1、active docs/specs/roadmap 同步。
+- tests/docs：host 单测、真机 Tier-1、active docs/roadmap 同步。
 
-旧文档同步边界：
-- active OpenSpec specs、roadmap 与当前会被引用的设计文档必须更新为双栈口径；
-- `archive/` 下的历史 change 记录不重写，避免破坏归档语境。
+当前文档同步边界：
+- `docs/INTERFACE_SPECIFICATION.md`、roadmap 与当前会被引用的设计文档必须保持双栈口径；
+- `archive/openspec/` 下的历史 change/spec 记录不作为当前流程约束，不主动重写，避免破坏归档语境。
 
-默认验收边界：
+持续验收边界：
 - host 单测必须覆盖 schema/canonicalization、IPv4 回归、IPv6 CIDR、`mk2`、parser/walker、fragment/invalid、conntrack key/state、metrics shape、restore failure；
 - 真机 Tier-1 必须覆盖 IPv4 回归、IPv6 allow/block、IPv6 `ct.state/ct.direction`、fragment/invalid 或 `l4Status` 可观测性、`PREFLIGHT.byFamily` 与 `METRICS.GET(name=conntrack).byFamily`；
 - perf longrun / overnight matrix 不作为该 change 的默认必过项；若发现热路径回归风险，应另行记录并补 perf 验证。

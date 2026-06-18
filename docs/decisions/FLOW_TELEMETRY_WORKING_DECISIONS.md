@@ -1,9 +1,9 @@
 # Flow Telemetry（流记录导出层）：工作决策与原则（收口版）
 
 更新时间：2026-04-29
-状态：工作纲领收口版（用于指导后续 OpenSpec change 与接口文档同步；本文不代表已实现）
+状态：已落地的设计记录（用于解释 Flow Telemetry 的分层边界与后续扩展原则；对外 ABI 以 `docs/INTERFACE_SPECIFICATION.md` 为准）
 相关既有能力：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/INTERFACE_SPECIFICATION.md`（vNext stream/metrics）
-兼容性前提：当前尚无已发布前端应用与既有稳定 ABI，因此本阶段**不需要**为“向前兼容”保守设计；允许 breaking changes。待 spec 收口并进入发布阶段后，再把 ABI/版本化作为硬约束。
+兼容性前提：本文记录的是发布前设计收口语境；当前 ABI / offset / command shape 的权威来源是 `docs/INTERFACE_SPECIFICATION.md`。后续扩展通过 Plane work item 驱动，并同步接口规范、实现与测试。
 
 ---
 
@@ -180,7 +180,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 ## 7. 设计收口结论
 
-本节按 A-E 记录已经收口的设计结论，作为后续 OpenSpec change、接口文档与实现任务拆分的输入。
+本节按 A-E 记录已经收口并落地过的设计结论，作为后续 Plane work item、接口文档与实现切片拆分的输入。
 
 ### A. 观测对象与语义（Flow 是什么）
 
@@ -216,7 +216,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 - Flow Telemetry MVP 已打通 bounded records 与真实 producer，但前端 Activity 对“理论完整的 flow telemetry 原始事实”提出了新增要求；这些要求属于 **FlowRecord raw facts completeness**，不是 Debug Stream explainability，也不是前端自行推导即可完全补齐的字段。
 - 下一轮 FlowRecord 扩展采用 **直接替换现有 `FLOW` payload v1 布局**：
   - 不新增 `FLOW v2`，不保留旧 102-byte layout 兼容窗口，不双写旧/新 records。
-  - daemon、native telemetry consumer、前端 consumer、OpenSpec spec 与 `docs/INTERFACE_SPECIFICATION.md` 必须同轮更新。
+  - daemon、native telemetry consumer、前端 consumer、`docs/INTERFACE_SPECIFICATION.md` 与测试必须同轮更新。
   - 旧 consumer 读取新 payload 的行为视为不兼容；发布前仍可这样处理，因为当前尚无稳定前端 ABI。
 - Fragment / invalid / unavailable L4 不应伪造成正常 TCP/UDP/ICMP flow：
   - 对这类包使用同一 `FLOW` 顶层 record 表达 `L3_OBSERVATION` / special flow 口径。
@@ -324,7 +324,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
   - session/ring header 承载 ABI version；普通 record 不重复携带完整 ABI version。
   - 每条 record 通过 `recordType + payloadSize` 定界；各 record payload 维护自己的 `payloadVersion`。
   - 字段演进只允许 append；旧 consumer 可根据 `payloadSize` 跳过尾部新增字段。
-  - Raw facts completeness 这轮例外：允许直接替换现有 `FLOW` payload v1，旧 102-byte layout 不再视为兼容契约；替换完成后，OpenSpec spec 与 `docs/INTERFACE_SPECIFICATION.md` 必须成为唯一权威 offset 表。
+  - Raw facts completeness 这轮例外：允许直接替换现有 `FLOW` payload v1，旧 102-byte layout 不再视为兼容契约；替换完成后，`docs/INTERFACE_SPECIFICATION.md` 必须成为唯一权威 offset 表。
 
 - `TELEMETRY.OPEN`：
   - OPEN 请求同时设置/确认 `telemetryLevel`。
@@ -490,11 +490,10 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
   - MVP 已于 2026-04-30 落地；前端 Activity 新需求暴露出的 raw facts completeness 属于后续 `FLOW` record 扩展，不改变 Flow Telemetry 与 Debug Stream / Metrics 的分层。
 
 - 文档与接口同步：
-  - 本文件是工作纲领；正式接口与命令/字段细节后续通过 OpenSpec change 与 `docs/INTERFACE_SPECIFICATION.md` 同步。
-  - 前端仓库需要使用的接口约定，以同步后的 `docs/INTERFACE_SPECIFICATION.md` 为准。
+  - 本文件是设计记录；正式接口、命令、字段和 binary layout 以 `docs/INTERFACE_SPECIFICATION.md` 为准。
+  - 前端仓库需要使用的接口约定，以当前 `docs/INTERFACE_SPECIFICATION.md` 为准。
 
-- 后续 change 拆分与测试要求：
-  - 第一个 change 应聚焦 ring/session ABI POC：先打通 shared-memory fixed-slot ring、OPEN/CLOSE/抢占、fd 传递与 polling reader，不接真实业务热路径。
-  - 后续再拆 FlowRecord producer、DnsDecisionRecord producer、control/state/metrics integration。
-  - Debug Stream explainability 是独立 change，不属于 Flow Telemetry MVP。
-  - 每个 change 都必须包含对应单元测试与真机测试；第一步至少要有模拟前端读取 mmap 的真机通路验证。
+- 后续 work item 拆分与测试要求：
+  - 新增 telemetry 能力应通过 Plane work item 拆分，并同步 daemon、native consumer、前端 consumer、接口规范与测试。
+  - Debug Stream explainability 是独立能力，不属于 Flow Telemetry 常态 records。
+  - 每个实现切片都必须包含对应单元测试与真机测试；涉及 ABI 的切片至少要有模拟前端读取 mmap 的真机通路验证。

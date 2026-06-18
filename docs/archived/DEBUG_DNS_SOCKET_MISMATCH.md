@@ -1,3 +1,7 @@
+# Historical note
+
+This file is archived debug evidence for an older DNS socket / legacy workflow mismatch. Current control-plane and stream contracts live in `docs/INTERFACE_SPECIFICATION.md`; current testing entrypoints live in `docs/testing/`.
+
 # DNS Socket 名称不匹配故障排查
 
 ## 故障现象

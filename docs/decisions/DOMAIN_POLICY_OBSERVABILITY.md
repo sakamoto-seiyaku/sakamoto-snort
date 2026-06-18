@@ -1,11 +1,11 @@
 # 域名策略可观测性（DomainPolicy）：`policySource` 归因与常态 counters（DNS 口径）
 
-> 当前状态（2026-03-26）：A/C/D、IPRULES v1、IP 真机测试模组与 observability **B 层**均已落地。  
+> 当前状态（2026-06-18）：A/C/D、IPRULES v1、IP 真机测试模组与 observability **B 层**均已落地。
 > 本文件保留为 B 层设计/验收口径回执；后续若进入 domain+IP fusion，应基于本文已落地语义继续收敛，而不是回退到概念讨论。
-> 对应 OpenSpec 历史 change：`openspec/changes/archive/2026-03-27-add-domain-policy-observability/`
+> 对应 OpenSpec 历史 change：`archive/openspec/changes/archive/2026-03-27-add-domain-policy-observability/`
 
 > 本文档用于固化“域名策略（现有功能已完成）”在可观测性上的**归因模型**与**常态 counters**设计，避免后续 IP 规则方向变化导致域名侧返工。  
-> 约束：不新增观测通路；常态统计必须不依赖 vNext packet stream；不做全局 safety-mode；不做域名规则 per-rule counters。
+> 约束：不新增观测通路；常态统计必须不依赖 vNext packet stream；不做全局 safety-mode。域名规则 per-rule observability 已在后续能力中独立落地，不属于本文的 B 层 counters。
 
 ---
 
@@ -19,7 +19,7 @@
 1. 明确一个稳定、可枚举的 **`policySource`**（命中来源归因），与当前 `App::blocked()` 的分支顺序一一对应。
 2. 定义一组 **常态 counters（拉取式）**：按 `policySource` 的 allow/block 计数（**按 DNS 请求口径**），支持 **device-wide + per-app(UID)**。
 3. 明确接口/RESET/测试口径，使该能力可以直接进入后续实现而不再回到“概念讨论”状态。
-4. 明确非目标：域名规则 per-rule counters（regex/wildcard/listId 级别）延后。
+4. 明确非目标：域名规则 per-rule counters（regex/wildcard/listId 级别）不归入本文的 `domainSources` B 层；后续已作为独立 `domainRuleStats` 能力落地。
 
 ---
 
@@ -92,7 +92,7 @@
 现状 `CustomRules` 会把多条规则合并成一条大 regex，匹配时只返回 bool，无法回溯“命中哪条规则”：  
 参考：`src/CustomRules.cpp#L64`。
 
-因此域名规则 per-rule hit 统计（regex/wildcard）需要改匹配结构，属于更大的重构，明确延后。
+因此本文不把域名规则 per-rule hit 统计（regex/wildcard）纳入 `domainSources` B 层。后续 `domainRuleStats` 已独立落地；当前接口权威见 `docs/INTERFACE_SPECIFICATION.md`。
 
 ---
 
@@ -110,25 +110,21 @@
 
 ### 3.2 对外接口（控制命令）
 
-新增命令族（拉取式）：
+当前 vNext 命令族（拉取式）：
 
-- `METRICS.DOMAIN.SOURCES`
-  - 返回：device-wide 汇总（since boot）
-- `METRICS.DOMAIN.SOURCES.APP <uid|str> [USER <userId>]`
-  - 返回：该 app 的 counters（since boot）
-- `METRICS.DOMAIN.SOURCES.RESET`
-  - 行为：清空所有 device-wide 与 per-app counters
-- `METRICS.DOMAIN.SOURCES.RESET.APP <uid|str> [USER <userId>]`
-  - 行为：仅清空指定 app 的 counters
+- `METRICS.GET {"name":"domainSources"}`：返回 device-wide 汇总（since boot）
+- `METRICS.GET {"name":"domainSources","app":selector}`：返回该 app 的 counters（since boot）
+- `METRICS.RESET {"name":"domainSources"}`：清空所有 device-wide 与 per-app counters
+- `METRICS.RESET {"name":"domainSources","app":selector}`：仅清空指定 app 的 counters
 
-> 多用户语义：参数解析沿用 control 现有 `<uid|str> USER <userId>` 约定（见 `docs/INTERFACE_SPECIFICATION.md` 的多用户参数约定）。
-> 落地时需同步更新 `docs/INTERFACE_SPECIFICATION.md`。
+> 多用户语义：`app` 使用 vNext selector（见 `docs/INTERFACE_SPECIFICATION.md`）。
+> 对外接口权威以 `docs/INTERFACE_SPECIFICATION.md` 为准。
 
 补充约束：
 
-- `METRICS.DOMAIN.SOURCES` 与 `METRICS.DOMAIN.SOURCES.APP ...` 都必须返回**固定 wrapper JSON**，而不是裸对象或文本。
-- 参数非法时返回 `NOK`。
-- `METRICS.DOMAIN.SOURCES.APP ...` / `...RESET.APP ...` 在 app 未匹配时返回 `NOK`；不得沿用部分 legacy GET 命令“无响应（0 bytes）”的历史行为。
+- `METRICS.GET(name=domainSources)` 与 app 维度查询都必须返回**固定 wrapper JSON**，而不是裸对象或文本。
+- 参数非法时返回 vNext error envelope。
+- app 未匹配时返回 vNext selector error；不得沿用部分 legacy GET 命令“无响应（0 bytes）”的历史行为。
 - 只读查询不得创建新 app、不得引入持久化副作用。
 
 ### 3.3 JSON shape 与兼容性
@@ -168,11 +164,11 @@ per-app：
 
 ### 3.4 RESET 语义（必须先定）
 
-- `METRICS.DOMAIN.SOURCES.RESET` 与 `...RESET.APP ...` 必须提供**严格 reset 边界**：
+- `METRICS.RESET {"name":"domainSources"}` 与 app 维度 reset 必须提供**严格 reset 边界**：
   - `OK` 返回之后，后续新发生的 DNS 判决只能记入 reset 之后的 counters；
   - 不允许出现“部分 shard 已清零、部分未清零、边界请求随机丢失/保留”的不确定语义。
 - 实现可选：
-  - 与当前 `METRICS.REASONS.RESET` 一样，通过 exclusive listener quiesce 保证边界；
+  - 与现有 metrics reset 一样，通过 exclusive listener quiesce 保证边界；
   - 或者使用 epoch/bank swap 达到等价效果。
 - 无论采用哪种实现，接口层语义都应视为“严格 reset”，测试也必须按严格口径验收。
 
@@ -201,8 +197,8 @@ per-app：
 ## 4. 与其它可观测性的关系（避免割裂）
 
 - A 层（Packet `reasonId` counters）与 C 层（IP per-rule stats）已在各自 change 中落地，本文仅固化域名侧 B 层。
-- B 层已通过独立 OpenSpec change 落地；后续只在 domain+IP fusion 阶段回看命名与跨层融合问题。
-- 未来如需把 ip-leak 纳入“域名观测”，建议以 **单独维度**追加（例如 `METRICS.IPLEAK.*`），不要混进 `METRICS.DOMAIN.SOURCES`，避免语义混乱。
+- B 层已落地；历史 OpenSpec change 只作交付证据，后续命名与跨层融合问题通过 Plane work item + `docs/decisions/` / `docs/INTERFACE_SPECIFICATION.md` 同步。
+- 未来如需把 ip-leak 纳入“域名观测”，建议以 **单独维度**追加（例如 `METRICS.IPLEAK.*`），不要混进 `domainSources` 指标，避免语义混乱。
 
 ---
 
@@ -217,11 +213,11 @@ per-app：
 5. 关闭 `_useCustomList`：所有命中都落在 `MASK_FALLBACK`（allow 或 block）
 6. `BLOCK=0` 时 counters 不增长
 7. `tracked=0` 时 counters 仍正常增长
-8. `METRICS.DOMAIN.SOURCES.RESET` 后所有 device-wide/per-app 计数归零；随后重新发送 DNS 请求可再次增长
-9. `METRICS.DOMAIN.SOURCES.RESET.APP ...` 只清空目标 app，不影响其它 app 与 device-wide 总量之外的独立 app 视图
+8. `METRICS.RESET {"name":"domainSources"}` 后所有 device-wide/per-app 计数归零；随后重新发送 DNS 请求可再次增长
+9. `METRICS.RESET {"name":"domainSources","app":selector}` 只清空目标 app，不影响其它 app 与 device-wide 总量之外的独立 app 视图
 
 建议测试分层：
 
 - host/unit：对 `App::blockedWithSource()` 或等价 source classifier 做优先级与 `_useCustomList=0` 的纯逻辑测试。
-- host-driven integration：通过控制口 +（不依赖系统 resolver hook 的）DEV seam 触发 DomainPolicy verdict，闭环验证 `METRICS.DOMAIN.SOURCES*`、`RESET` / `RESET.APP`、`BLOCK=0`、`tracked=0`。
+- host-driven integration：通过控制口 +（不依赖系统 resolver hook 的）DEV seam 触发 DomainPolicy verdict，闭环验证 `METRICS.GET/RESET(name=domainSources)`、app 维度 reset、`BLOCK=0`、`tracked=0`。
 - 回归口径：至少要覆盖 device-wide 与 per-app 结果一致性，以及 reset 边界的严格语义。

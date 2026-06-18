@@ -90,11 +90,14 @@
 - `tests/device/ip/run.sh --profile perf` 当前在默认 `IPTEST_PERF_TRAFFIC_RULES=2000` 的大 ruleset 下可能出现 `BLOCKED: ... IPRULES.APPLY transport failed (rc=126)`。
   - 将 `IPTEST_PERF_TRAFFIC_RULES` 降到 `200` 可跑通（说明 vNext control 链路 OK；问题集中在“大 ruleset apply”的执行路径/承载方式）。
 
-## 5. TODO（后续补齐并持续追加结果）
+## 5. Plane follow-ups（后续测量与修复）
 
-- IPRULES 热路径开销对比（同一负载下）：
+- `SNORT-3`：`tests/device/ip/run.sh --profile perf` 在默认 `IPTEST_PERF_TRAFFIC_RULES=2000` 下的 large ruleset apply failure（`rc=126`）需要 current-head 复现与定位。
+- `SNORT-4`：IPRULES 热路径开销对比（同一负载下）：
   - `IPRULES=0` vs `IPRULES=1`（少量规则、典型规则集、接近上限的复杂度）
     - 同时记录：
     - `METRICS.GET(name=perf).result.perf.nfq_total_us` 分布变化
     - `/proc/net/netfilter/nfnetlink_queue` 是否出现 backlog/丢包迹象
     - CPU（若需要，后续补充统一采集方式）
+
+本文件只保留 dated measurement evidence；开放状态、分派与验收以 Plane `SNORT` 为准。

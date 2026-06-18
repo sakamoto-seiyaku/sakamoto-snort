@@ -59,19 +59,19 @@ build or graph-regeneration target.
 
 ## APK-Native Staging
 
-This backend change only stages the APK-native shaped daemon artifact:
+This backend slice only stages the APK-native shaped daemon artifact:
 
 ```text
 build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so
 ```
 
-It does not build the Flutter APK. A later frontend integration change should
+It does not build the Flutter APK. A later frontend RuntimeService / packaging Plane work item should
 wire this staged directory into the Android packaging flow and verify install
 behavior.
 
 ## RuntimeService Launch Contract
 
-The future frontend APK packaging path should include the staged artifact at:
+The frontend APK packaging path should include the staged artifact at:
 
 ```text
 lib/arm64-v8a/libsucre_snortd.so
@@ -83,8 +83,8 @@ RuntimeService should resolve:
 ${applicationInfo.nativeLibraryDir}/libsucre_snortd.so
 ```
 
-and launch that filesystem path through the root execution path. That later APK
-packaging change must force native library extraction or legacy JNI library
+and launch that filesystem path through the root execution path. That APK
+packaging integration slice must force native library extraction or legacy JNI library
 packaging so `nativeLibraryDir` contains a real executable file.
 
 After launch, RuntimeService should call vNext `HELLO` and validate:

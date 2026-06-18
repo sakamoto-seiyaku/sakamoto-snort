@@ -51,6 +51,14 @@ cmake --build --preset host-asan-clang --target snort-host-tests
 ctest --preset host-asan-clang -L host
 ```
 
+Host-side UBSan lane 固定使用 Clang：
+
+```bash
+cmake --preset host-ubsan-clang
+cmake --build --preset host-ubsan-clang --target snort-host-tests
+ctest --preset host-ubsan-clang -L host
+```
+
 Conntrack ThreadSanitizer 专项固定使用 Clang，默认只跑 Conntrack stress：
 
 ```bash
@@ -66,13 +74,15 @@ repo-root workflow 会：
 3. 通过 `CTest` 暴露 gtest case，供 VS Code Testing 发现
    - `dev-debug`：`H.<可执行文件>.<GTestSuite>.<TestName>`
    - `host-asan-clang`：`H.ASAN.<可执行文件>.<GTestSuite>.<TestName>`
+   - `host-ubsan-clang`：`H.UBSAN.<可执行文件>.<GTestSuite>.<TestName>`
    - `host-coverage-clang`：`H.COV.<可执行文件>.<GTestSuite>.<TestName>`
 4. 通过 `snort-host-tests` / `ctest -L host` 运行当前 host-side 单元测试
 
 补充入口：
 
 - `snort-host-tests-asan`：同一套 host 用例的 ASAN lane
-- `snort-host-tests-gate`：按顺序运行 normal → ASAN
+- `snort-host-tests-ubsan`：同一套 host 用例的 UBSan lane
+- `snort-host-tests-gate`：按顺序运行 normal → ASAN → UBSan
 - `snort-host-coverage`：Clang/LLVM 覆盖率产物（`summary.txt` + `coverage.json`）
 
 ## 当前边界

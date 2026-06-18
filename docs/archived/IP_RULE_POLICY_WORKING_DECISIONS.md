@@ -1,3 +1,7 @@
+# Historical note
+
+This file is an archived early IP rule policy decision record. Current IPRULES authority is `docs/INTERFACE_SPECIFICATION.md`, `docs/decisions/IPRULES_DUAL_STACK_WORKING_DECISIONS.md`, `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`, and `docs/testing/ip/IP_TEST_MODULE.md`.
+
 # IP 规则引擎：工作决策与原则（P0/P1）
 
 > 注：本文中历史使用的 “P0/P1” 仅指当时的**功能分批草案**，不对应当前测试 / 调试 roadmap 的 `P0/P1/P2/P3`。

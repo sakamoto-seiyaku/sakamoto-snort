@@ -1,11 +1,11 @@
 # Device / DX 冒烟测试 Casebook（真机端到端；人话版）
 
-更新时间：2026-04-25
+更新时间：2026-06-18
 
-这份文档是**调查输出**（不做实现）：把当前“真机端到端能不能用”的测试，按 **Case（下规则→触发→看输出）**写清楚：
+这份文档是 **Device / DX active acceptance casebook**：把当前“真机端到端能不能用”的测试，按 **Case（下规则→触发→看输出）**写清楚：
 - 哪些已经在 smoke 里测到了（现有覆盖）
-- 哪些“看了但没看全”（需要完善断言/输出）
-- 哪些“场景本身没覆盖”（需要新增 Case）
+- 哪些“看了但没看全”（需要完善断言/输出；开放工作以 Plane `SNORT` 为准）
+- 哪些“场景本身没覆盖”（需要新增 Case；开放工作以 Plane `SNORT` 为准）
 - 哪些现在挂在 diagnostics 但其实更像 smoke（功能可用性验证）
 
 ---
@@ -37,7 +37,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - **When（操作/触发）**：下什么规则、发什么流量、怎么触发
 - **Then（期望输出）**：要看到哪些输出（连通性 / stream / metrics / stats）
 - **现有覆盖**：现在脚本里哪里已经测了（脚本 + check id）
-- **缺口**：还缺哪些输出没看 / 还缺哪些场景没测（只列，不实现）
+- **覆盖状态**：已覆盖 / 部分覆盖 / Plane follow-up
 - **编号规则**：每个模块内 Case 从 1 重新开始；跨模块引用用「模块 / Case N」。
 
 ---
@@ -1191,34 +1191,21 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 
 ---
 
-## 7) 缺口清单（按你要的两类：完善已有 / 新增用例）
+## 7) Coverage status and Plane follow-ups
 
-### A) 完善已有用例（同一场景，补“该看的输出”）
-1) **IP allow/block/iface/would（已补齐）**：`VNXDP-06/08f/09f/10g` 已把 `nc` 成败变成硬断言
-2) **traffic metrics**：从 “total>=1” 升级为“维度级增长”
-    - IP（已补齐）：`VNXDP-06d/08i/09i/10j/11h/12j/13i~13k` 覆盖 `txp/rxp/rxb` 维度；bytes 走「IP / Case 8」固定读写 N bytes
-    - DNS：看 `dns.allow/dns.block`
-3) **reasons metrics（IP 已补齐）**：`VNXDP-06c/08h/09h/10i/11g/12i/13g~13h` 覆盖原因 bucket 与 payload bytes
-4) **per-rule stats（IP bytes 已补齐）**：`VNXDP-13l~13n` 覆盖 `hitBytes`；`wouldHitBytes` 仍不在短连接 would case 中做 hard assert
-5) **dns stream 事件字段**：补更多字段类型/一致性校验（不只看 blocked/policySource）
-6) **pkt stream 事件字段**：补“字段契约”的集中断言（见「可观测性 / Case 1」）
+本节不作为本地 TODO tracker。开放 work item、状态与分派以 Plane `SNORT` 为准。
 
-### B) 新增用例（现在没有这个“人话场景”）
-1) **域名：DNS 真机真实解析端到端冒烟（已纳入 `VNT-DOM-08`；域名 / Case 8）**
-    - 明确“netd hook 不活跃”= BLOCKED（给出 prepare 命令）
-    - 同时覆盖 shell uid=2000 + 真实 app uid 两条触发路径
-2) **域名：DNS netd inject 端到端（已纳入 `VNT-DOM-03`；域名 / Case 3）**
-3) **域名：tracked=0 suppressed notice（已纳入 `VNT-DOM-04`；域名 / Case 4）**
-4) **域名：domain.custom.enabled 语义（已纳入 `VNT-DOM-05`；域名 / Case 5）**
-5) **域名：device vs app policy 优先级（已纳入 `VNT-DOM-06`；域名 / Case 6）**
-6) **域名：DomainLists enable/disable + allow 覆盖 block（已纳入 `VNT-DOM-07`；域名 / Case 7）**
-7) **可观测性：DNS→IP 绑定→pkt stream 带 domain（可观测性 / Case 2）**
-8) **可观测性：pkt tracked=0 suppressed notice（可观测性 / Case 3）**
-9) **IP：iprules.enabled=0 的 gating correctness（已纳入 `VNXDP-12*`；IP / Case 7）**
-10) **IP：payload 读写稳定触发 bytes（已纳入 `VNXDP-13*`；IP / Case 8）**
-11) **conntrack（L4 state）最小闭环纳入 smoke（已纳入 `VNXCT-01~12c`；IP - Conntrack / Case 1）**
-12) **域名：DOMAINRULES(ruleIds) 端到端（已纳入 `VNT-DOM-09`；域名 / Case 9）**
-13) **其他：极端规模下的控制面下发/limits sanity（其他 / Case 2）**
+已补齐的覆盖：
+- IP allow/block/iface/would：`VNXDP-06/08f/09f/10g` 已把 `nc` 成败变成硬断言。
+- IP traffic metrics：`VNXDP-06d/08i/09i/10j/11h/12j/13i~13k` 覆盖 `txp/rxp/rxb` 维度；bytes 走「IP / Case 8」固定读写 N bytes。
+- IP reasons metrics：`VNXDP-06c/08h/09h/10i/11g/12i/13g~13h` 覆盖原因 bucket 与 payload bytes。
+- IP per-rule stats bytes：`VNXDP-13l~13n` 覆盖 `hitBytes`；短连接 would case 不把 `wouldHitBytes` 作为 hard assert。
+- 域名 Case 3-9、IP `iprules.enabled=0` gating、payload bytes、Conntrack 最小闭环、其他 Case 1-2 均已纳入相应 active 或 optional entrypoint。
+
+Plane follow-ups：
+- `SNORT-5`：集中补 DNS / pkt stream 字段契约断言。
+- `SNORT-6`：补 DNS→IP 绑定→pkt stream 带 domain 的 Device / DX smoke。
+- `SNORT-7`：补 pkt stream `tracked=0` suppressed notice smoke。
 
 ---
 

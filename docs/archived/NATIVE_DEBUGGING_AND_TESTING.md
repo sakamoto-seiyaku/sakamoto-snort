@@ -1,3 +1,7 @@
+# Historical note
+
+This file is archived historical workflow material. Current build, test, and native debug authority lives in `docs/tooling/`, `docs/testing/README.md`, `tests/host/README.md`, and `tests/integration/README.md`.
+
 # sucre-snort 原生调试与测试工作流（WSL2 / VS Code / Codex CLI）
 
 更新时间：2026-03-14  

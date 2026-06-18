@@ -58,7 +58,7 @@ vNext app selector（`args.app`）约定:
   - `nfqueue.topology` 为 device-scope string enum：`"split-in-out"`（默认）或 `"shared-flow-pool"`。
 - `CONFIG.SET` | `{"scope":"device"|"app","app"?:selector,"set":{k:v...}}` | `ok` |
   - `set` key 集合与 `CONFIG.GET` 一致；不支持的 key → `INVALID_ARGUMENT`。
-  - `nfqueue.topology` 会持久化到 settings，但只在 daemon 下次启动时用于安装 NFQUEUE rules；`CONFIG.SET` 不热重建当前 listener / iptables。前端或 RuntimeService 负责 stop/start daemon。
+  - `nfqueue.topology` 会持久化到 settings，但只在 daemon 下次启动时用于安装 NFQUEUE rules；`CONFIG.SET` 不热重建当前 listener / iptables。UI 前端只表达用户意图，RuntimeService 负责 stop/start daemon、清理/重建 NFQUEUE hooks 并在启动后执行 `HELLO` 校验。
 
 2.4 域名规则与策略（Domain）
 - `DOMAINRULES.GET` | `{}` | `result={rules[]}` |
