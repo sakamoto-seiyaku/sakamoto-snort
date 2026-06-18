@@ -1191,9 +1191,9 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 
 ---
 
-## 7) Coverage status and Plane follow-ups
+## 7) Coverage status and deferred notes
 
-本节不作为本地 TODO tracker。开放 work item、状态与分派以 Plane `SNORT` 为准。
+本节不作为本地 TODO tracker。当前架构重置阶段只有 Plane `SNORT-10` 是 active item；旧迁移项 `SNORT-5..7` 已取消。
 
 已补齐的覆盖：
 - IP allow/block/iface/would：`VNXDP-06/08f/09f/10g` 已把 `nc` 成败变成硬断言。
@@ -1202,10 +1202,10 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - IP per-rule stats bytes：`VNXDP-13l~13n` 覆盖 `hitBytes`；短连接 would case 不把 `wouldHitBytes` 作为 hard assert。
 - 域名 Case 3-9、IP `iprules.enabled=0` gating、payload bytes、Conntrack 最小闭环、其他 Case 1-2 均已纳入相应 active 或 optional entrypoint。
 
-Plane follow-ups：
-- `SNORT-5`：集中补 DNS / pkt stream 字段契约断言。
-- `SNORT-6`：补 DNS→IP 绑定→pkt stream 带 domain 的 Device / DX smoke。
-- `SNORT-7`：补 pkt stream `tracked=0` suppressed notice smoke。
+Deferred notes for `SNORT-10`：
+- DNS / pkt stream 字段契约断言是否仍需要独立 smoke，应在架构重构讨论后决定。
+- DNS→IP 绑定→pkt stream 带 domain 的 Device / DX smoke 是否保留，应先明确 Domain/DNS 与 datapath 的边界。
+- pkt stream `tracked=0` suppressed notice smoke 是否作为主线验收，应先明确 Debug Stream / Flow Telemetry / Metrics 的职责分工。
 
 ---
 

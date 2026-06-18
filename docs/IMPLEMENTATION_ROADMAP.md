@@ -38,7 +38,7 @@ Status 口径（全篇统一）：
 - 对外接口规范（vNext-only）：`docs/INTERFACE_SPECIFICATION.md`
 - 可观测性口径：`docs/INTERFACE_SPECIFICATION.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md`
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
-- Plane 工作入口：`docs/agents/issue-tracker.md`；本次文档整理 parent item 为 `SNORT-1`
+- Plane 工作入口：`docs/agents/issue-tracker.md`；当前唯一 active item 为 `SNORT-10`（NFQUEUE / DNS / datapath performance architecture refactor discussion）
 - OpenSpec 历史归档：`archive/openspec/changes/archive/` 与 `archive/openspec/specs/`（仅作历史参考；不再作为当前流程约束）
 
 长期约束（对后续所有 Plane work item / implementation slice 生效）：
@@ -56,7 +56,7 @@ Status 口径（全篇统一）：
   - optional casebook：`dx-casebook-other`（`## 其他` Case 1–2；不进默认 `dx-smoke` 主链）
   - IP 模组：`tests/device/ip/run.sh --profile smoke|matrix|stress|perf|longrun`
 - Device/DX 冒烟 casebook 已补齐；后续以 casebook 为验收口径维护（见 2.2）。
-- 真机冒烟过程中发现的 **snort 本体问题**进入 Plane `SNORT`；`docs/testing/DEVICE_SMOKE_SNORT_BUGS.md` 仅保留复现与证据索引。既有 SIGTERM/SIGKILL 记录已迁移到 `SNORT-2`。
+- 真机冒烟过程中发现的 **snort 本体问题**仍可在 docs 中保留复现证据；在当前架构重置阶段，不再拆成分散 backlog，先纳入 `SNORT-10` 讨论或等架构结论后再单独建项。
 - 根目录 OpenSpec 工作区已迁出到 `archive/openspec/`；后续新工作默认走 Plane + docs/decisions/CONTEXT.md 工作流，不再为默认流程创建 OpenSpec change。
 - 2026-04-30 已收口的后端支撑闭环：
   - Flow Telemetry：常态观测原始事实层 MVP；前端 Activity 新需求已暴露 raw facts completeness 缺口。
@@ -76,7 +76,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
 - Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Debug Stream 保留为深度取证能力，Metrics 保留为后端低基数健康状态。
 - 前端支撑所需的后端原语已基本闭环：Debug Stream explainability、checkpoint / rollback、Flow Telemetry export channel 均已落地；但 Flow Telemetry `FLOW` record 对 Activity 所需 raw facts 仍有字段完整性缺口，已纳入下一轮后端能力扩展。
-- [NOTE] NFQUEUE topology / power / performance 后续不再作为文档内隐式 TODO 追踪；已归入 Plane `SNORT-8` 做架构 triage。任何默认值调整或新 datapath mode 都应先由该项拆出明确 work item。
+- [NOTE] NFQUEUE topology / power / performance 不再作为文档内隐式 TODO 追踪；当前统一归入 Plane `SNORT-10` 做架构重构讨论。任何默认值调整、新 datapath mode 或代码重构都应先由该项产出明确决策。
 
 ## 2. 已完成（事实清单）
 

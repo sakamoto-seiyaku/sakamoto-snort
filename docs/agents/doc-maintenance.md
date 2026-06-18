@@ -39,15 +39,9 @@ Use these only as background:
 
 Plane project `SNORT` is the source of truth for open work.
 
-- Parent cleanup item: `SNORT-1`
-- Daemon SIGTERM/SIGKILL evidence: `SNORT-2`
-- Large IPRULES ruleset apply failure: `SNORT-3`
-- IPRULES hot-path measurement matrix: `SNORT-4`
-- DNS/pkt stream field contract assertions: `SNORT-5`
-- DNS-to-IP binding pkt stream domain smoke: `SNORT-6`
-- pkt `tracked=0` suppressed notice smoke: `SNORT-7`
-- NFQUEUE power/performance architecture follow-ups: `SNORT-8`
-- Active docs refresh item: `SNORT-9`
+- Current active item: `SNORT-10` - NFQUEUE / DNS / datapath performance architecture refactor discussion.
+- Historical cleanup/migration items: `SNORT-1..8` are cancelled after the workspace reset and must not be treated as active backlog.
+- Completed setup item: `SNORT-9`.
 
 Docs may link to these work items and keep evidence, but they must not keep their own `Open`, `TODO`, or unchecked bug ledgers.
 

@@ -1,6 +1,6 @@
 # Review note
 
-This is a point-in-time architecture/performance review, not the active tracker. Accepted follow-up work is tracked in Plane item `SNORT-8` or promoted into `docs/decisions/`.
+This is a point-in-time architecture/performance review, not the active tracker. The current active discussion is Plane item `SNORT-10`; older migrated follow-up item `SNORT-8` is cancelled.
 
 # NFQUEUE 性能与架构审计报告
 

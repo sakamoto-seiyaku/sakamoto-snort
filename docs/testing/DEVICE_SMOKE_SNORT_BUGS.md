@@ -49,11 +49,11 @@
 
 ## Evidence migrated to Plane
 
-### SNORT-2：daemon 有时不响应 SIGTERM，deploy 需强制 SIGKILL
+### Historical evidence：daemon 有时不响应 SIGTERM，deploy 需强制 SIGKILL
 **发现时间**：2026-04-24
 **关联 Case**：Platform / Case 1（`dx-smoke-platform` → `dev/dev-deploy.sh`）
 **环境**：28201JEGR0XPAJ；Magisk root；deploy（非 `--skip-deploy`）；commit `6cdab3c55ccbf5615e1fefcce3bef27563b38ba8`
-**Plane**：`SNORT-2`（needs current-head repro）
+**Plane**：旧迁移项 `SNORT-2` 已取消；如 current-head 仍复现，先纳入 `SNORT-10` 架构/生命周期讨论再决定是否拆出独立 bug。
 
 **复现步骤**
 1) `bash tests/integration/dx-smoke-platform.sh --serial 28201JEGR0XPAJ`
