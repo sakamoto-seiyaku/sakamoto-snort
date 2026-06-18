@@ -1,32 +1,25 @@
-# Issue tracker: Plane MCP
+# Issue tracker: Plane REST via plane-ops
 
-Issues, PRDs, epics, and implementation tasks for this repo live in Plane. Use the Plane MCP tools for all tracker operations.
+Issues, PRDs, epics, and implementation tasks for this repo live in Plane. Use the global `plane-ops` skill for all tracker operations; do not use Plane MCP.
 
 ## Default project
 
-Use this project unless the user explicitly names a different Plane project:
+Use the `plane-ops` skill defaults unless the user explicitly names a different Plane project. Non-sensitive Plane defaults live in `~/.agents/skills/plane-ops/defaults.json`; the API key lives in the system keyring.
 
-| Field | Value |
-| ----- | ----- |
-| Plane identifier | `SNORT` |
-| Plane project ID | `9939eb81-377d-43be-9611-8b2eb7cb0fab` |
-| Plane display name | `Sakamoto Snort` |
-| Repo slug | `sakamoto-snort` |
-
-Plane rejected `sakamoto-snort` as a project display name because project names cannot contain special characters. The project display name is `Sakamoto Snort`; the repo slug remains `sakamoto-snort`.
+The current default tracker identifier is `SNORT`, and the repo slug is `sakamoto-snort`.
 
 ## Conventions
 
-- Use `list_projects` only when validating project existence or resolving a user-named project. For this repo's default work, use the pinned `SNORT` project above.
-- Use `create_work_item`, `retrieve_work_item`, `retrieve_work_item_by_identifier`, `update_work_item`, and `list_work_items` for work item operations.
-- Use `list_labels`, `create_label`, and `manage_work_item_label` for triage labels.
-- Use `list_states` and `update_work_item` for Plane workflow state transitions.
-- Use `create_work_item_comment` and `list_work_item_comments` for discussion/history.
-- For epics, call `resolve_work_item_type(project_id, "Epic")`, then create a normal work item with that `type_id`.
+- Use `plane-ops project list|resolve` only when validating project existence or resolving a user-named project.
+- Use `plane-ops work-item list|get|create|update|move|comment|archive|bulk-archive` for work item operations.
+- Use `plane-ops label list|create|resolve` for triage labels.
+- Use `plane-ops state list|resolve` and `plane-ops work-item move` for workflow state transitions.
+- Use `plane-ops type list|schema|resolve` only when the backend reports type support; this self-hosted Plane may return `supported: false`.
+- If Codex sandbox blocks keyring or network access, rerun the same `plane-ops` command with sandbox escalation.
 
 ## When a skill says "publish to the issue tracker"
 
-Create or update Plane work items through the Plane MCP tools. Do not create GitHub/GitLab issues, and do not use `.scratch/` as the primary issue tracker unless the user explicitly asks for a temporary local draft.
+Create or update Plane work items through `plane-ops`. Do not create GitHub/GitLab issues, and do not use `.scratch/` as the primary issue tracker unless the user explicitly asks for a temporary local draft.
 
 ## Docs are not the tracker
 

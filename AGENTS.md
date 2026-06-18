@@ -3,7 +3,7 @@
 
 ### Issue tracker
 
-Issues and PRDs are tracked in Plane through the Plane MCP tools, using the default `SNORT` project. See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in Plane through the global `plane-ops` skill, using its default project. Do not use Plane MCP. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
