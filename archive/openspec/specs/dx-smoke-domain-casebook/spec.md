@@ -1,0 +1,217 @@
+# dx-smoke-domain-casebook Specification
+
+## Purpose
+TBD - created by archiving change complete-device-smoke-casebook-domain. Update Purpose after archive.
+## Requirements
+### Requirement: dx-smoke-control 承接 Domain casebook 全部域名 Case
+`dx-smoke-control` MUST 将 `docs/testing/DEVICE_SMOKE_CASEBOOK.md` 的 `## 域名` 下 Case 1–9 作为 active vNext smoke 的测试责任，并 MUST 为每个 case 提供可回查 check id。
+
+#### Scenario: Domain casebook 覆盖完整
+- **WHEN** 开发者运行 `dx-smoke-control`
+- **THEN** 测试 SHALL 执行 Domain Case 1、2、3、4、5、6、7、8、9 的自动化检查
+- **AND** 每条检查 SHALL 使用 vNext 控制面或 vNext DEV-only trigger
+- **AND** active 执行路径 SHALL NOT 调用 legacy 文本协议命令
+
+### Requirement: Domain surface 补齐负向契约
+`dx-smoke-control` MUST 在现有 `DOMAINRULES`、`DOMAINPOLICY`、`DOMAINLISTS`、`DOMAINLISTS.IMPORT` 基线之外，验证 casebook Domain Case 1 的负向契约，防止状态损坏被误报为通过。
+
+#### Scenario: DOMAINLISTS.IMPORT unknown listId 被拒绝
+- **WHEN** 测试对不存在的 `listId` 执行 `DOMAINLISTS.IMPORT`
+- **THEN** 响应 SHALL 为失败
+- **AND** 错误 SHALL 表达 `INVALID_ARGUMENT` 或等价参数错误语义
+- **AND** 输出 SHALL 包含可排查 hint
+
+#### Scenario: 删除仍被 policy 引用的 ruleId 被拒绝
+- **WHEN** 测试尝试删除仍被 `DOMAINPOLICY` 引用的 `ruleId`
+- **THEN** 响应 SHALL 为失败
+- **AND** 错误 SHALL 表达冲突或参数错误语义
+- **AND** 输出 SHALL 包含冲突 rule/policy 的可解释信息
+
+### Requirement: DomainSources 使用 bucket 级断言
+`dx-smoke-control` MUST 补齐 casebook Domain Case 2 的 bucket 级 `domainSources` 覆盖，而不只断言 total 增长。
+
+#### Scenario: domainSources reset gating growth 仍成立
+- **WHEN** 测试 reset `domainSources` 并分别在 `block.enabled=0` 与 `block.enabled=1` 下触发 Domain 判决
+- **THEN** reset 后 total SHALL 为 0
+- **AND** `block.enabled=0` 时 counters SHALL 不增长
+- **AND** `block.enabled=1` 时 counters SHALL 增长
+
+#### Scenario: domainSources 覆盖 APP DEVICE_WIDE FALLBACK buckets
+- **WHEN** 测试执行 Domain Case 3、6、7
+- **THEN** `domainSources(app)` SHALL 覆盖 `CUSTOM_*`、`DOMAIN_DEVICE_WIDE_*`、`MASK_FALLBACK` 的 allow/block bucket
+- **AND** 每个 bucket 的增长 SHALL 与对应 DNS verdict 一致
+
+### Requirement: DNS netd inject e2e 覆盖 stream traffic domainSources
+`dx-smoke-control` MUST 通过 `dx-netd-inject` 稳定触发 casebook Domain Case 3，并验证 dns stream、`traffic.dns` 与 `domainSources` 的端到端一致性。
+
+#### Scenario: app custom allow block DNS 注入可观测
+- **WHEN** 测试为目标 uid 设置 `tracked=1`、`domain.custom.enabled=1`，并下发 app scope allow/block domains
+- **AND** 测试启动 `STREAM.START(type=dns)` 后注入 allow 与 block 两个唯一域名
+- **THEN** stream SHALL 包含对应 uid/domain 的两条 `type=dns` 事件
+- **AND** allow 事件 SHALL 为 `blocked=false`、`getips=true`、`policySource=CUSTOM_WHITELIST`、`scope=APP`、`useCustomList=true`
+- **AND** block 事件 SHALL 为 `blocked=true`、`getips=false`、`policySource=CUSTOM_BLACKLIST`、`scope=APP`、`useCustomList=true`
+- **AND** per-app `traffic.dns.allow` 与 `traffic.dns.block` SHALL 增长
+- **AND** per-app `domainSources` 的 `CUSTOM_WHITELIST.allow` 与 `CUSTOM_BLACKLIST.block` SHALL 增长
+
+### Requirement: DNS tracked disabled 输出 suppressed notice
+`dx-smoke-control` MUST 覆盖 casebook Domain Case 4：`tracked=0` 时不输出本次 DNS event，但仍输出 suppressed notice 并增长 metrics。
+
+#### Scenario: tracked disabled suppresses dns events but keeps metrics
+- **WHEN** 测试将目标 uid 设置为 `tracked=0` 并启动 `STREAM.START(type=dns)`
+- **AND** 测试通过 `dx-netd-inject` 注入唯一域名
+- **THEN** stream SHALL NOT 输出本次注入对应的 `type=dns` 事件
+- **AND** stream SHALL 输出 `type=notice`、`notice=suppressed`、`stream=dns`
+- **AND** suppressed notice SHALL 包含 DNS traffic snapshot 与 tracked 开启提示
+- **AND** per-app `traffic.dns.*` 与 `domainSources` SHALL 增长
+
+### Requirement: domain.custom.enabled 改变 Domain 判决路径
+`dx-smoke-control` MUST 覆盖 casebook Domain Case 5，验证 `domain.custom.enabled` 的 0/1 状态会改变 DomainPolicy 判决路径。
+
+#### Scenario: custom enabled uses app policy and custom disabled falls back
+- **WHEN** 测试对唯一域名下发 app scope block domain
+- **AND** 测试在 `domain.custom.enabled=1` 下执行 Domain 判决
+- **THEN** verdict SHALL 为 `blocked=true` 且 `policySource=CUSTOM_BLACKLIST`
+- **WHEN** 测试在同一域名上切换 `domain.custom.enabled=0` 后再次执行 Domain 判决
+- **THEN** verdict SHALL 回落到 `policySource=MASK_FALLBACK`、`scope=FALLBACK`
+- **AND** `domainSources(app)` SHALL 记录 `CUSTOM_BLACKLIST.block` 与 `MASK_FALLBACK.allow` 或 `MASK_FALLBACK.block` 的增长
+
+### Requirement: APP policy 优先级高于 DEVICE_WIDE policy
+`dx-smoke-control` MUST 覆盖 casebook Domain Case 6，验证 APP 策略覆盖 DEVICE_WIDE 策略，且 stream 与 metrics 的 source/scope 可解释。
+
+#### Scenario: app allow overrides device block
+- **WHEN** device policy block 唯一域名且 app policy allow 同一域名
+- **AND** 测试通过 `dx-netd-inject` 注入该域名
+- **THEN** DNS event SHALL 为 `blocked=false`
+- **AND** `policySource` SHALL 为 `CUSTOM_WHITELIST`
+- **AND** `scope` SHALL 为 `APP`
+
+#### Scenario: app block overrides device allow
+- **WHEN** device policy allow 唯一域名且 app policy block 同一域名
+- **AND** 测试通过 `dx-netd-inject` 注入该域名
+- **THEN** DNS event SHALL 为 `blocked=true`
+- **AND** `policySource` SHALL 为 `CUSTOM_BLACKLIST`
+- **AND** `scope` SHALL 为 `APP`
+
+#### Scenario: device policy applies when app policy is absent
+- **WHEN** device policy block 唯一域名且 app policy 不包含该域名
+- **AND** 测试通过 `dx-netd-inject` 注入该域名
+- **THEN** DNS event SHALL 为 `blocked=true`
+- **AND** `policySource` SHALL 为 `DOMAIN_DEVICE_WIDE_BLOCKED`
+- **AND** `scope` SHALL 为 `DEVICE_WIDE`
+
+### Requirement: DomainLists enable disable 与 allow 覆盖 block 影响判决
+`dx-smoke-control` MUST 覆盖 casebook Domain Case 7，验证 DomainLists 不只是能 apply/import，还会实际影响 DNS verdict。
+
+#### Scenario: enabled block list blocks matching domain
+- **WHEN** 测试创建 enabled block list 并导入唯一域名
+- **AND** 目标 uid 使用 `domain.custom.enabled=0` 与覆盖该 list bit 的 `block.mask`
+- **AND** 测试通过 `dx-netd-inject` 注入该域名
+- **THEN** DNS event SHALL 为 `policySource=MASK_FALLBACK`、`scope=FALLBACK`、`blocked=true`、`useCustomList=false`
+- **AND** `domMask` 与 `appMask` SHALL 包含对应 list bit
+
+#### Scenario: disabled block list no longer blocks matching domain
+- **WHEN** 测试将同一 block list 设置为 `enabled=0` 后再次注入同一域名
+- **THEN** DNS event SHALL 为 `blocked=false`
+- **AND** `domMask` SHALL 不再包含 disabled list bit
+
+#### Scenario: allow list overrides enabled block list
+- **WHEN** 同一唯一域名同时存在于 enabled block list 与 enabled allow list
+- **AND** 测试通过 `dx-netd-inject` 注入该域名
+- **THEN** DNS event SHALL 为 `blocked=false`
+- **AND** `useCustomList` SHALL 为 false
+- **AND** per-app `traffic.dns` 与 `domainSources` SHALL 记录 `MASK_FALLBACK` allow/block 路径增长
+
+### Requirement: 真机真实 resolver DNS e2e 有明确 BLOCKED 语义
+`dx-smoke-control` MUST 覆盖 casebook Domain Case 8：在 netd resolv hook 就绪时执行真实 resolver DNS e2e；hook 未就绪时报告 `BLOCKED`，不得静默通过。
+
+#### Scenario: resolver hook inactive reports BLOCKED
+- **WHEN** 测试无法确认 netd resolv hook 已激活
+- **THEN** Domain Case 8 SHALL 报告 `BLOCKED`
+- **AND** 输出 SHALL 包含 `dev/dev-netd-resolv.sh status|prepare` 或等价修复提示
+
+#### Scenario: resolver hook active produces DNS stream metrics
+- **WHEN** netd resolv hook 已激活
+- **AND** 测试为目标 uid 下发会 block 唯一域名的策略并触发真实 DNS 解析
+- **THEN** dns stream SHALL 包含匹配 uid/domain 的 `type=dns` 事件
+- **AND** 事件 SHALL 为 `blocked=true`、`getips=false`
+- **AND** per-app `traffic.dns.block` 与对应 `domainSources` bucket SHALL 增长
+
+### Requirement: DOMAINRULES ruleIds 端到端覆盖 CUSTOM_RULE buckets
+`dx-smoke-control` MUST 覆盖 casebook Domain Case 9，通过 `DOMAINRULES` + `DOMAINPOLICY(ruleIds)` 验证 `CUSTOM_RULE_WHITE` 与 `CUSTOM_RULE_BLACK`。
+
+#### Scenario: DOMAINRULES allow and block ruleIds are observable
+- **WHEN** 测试创建一条 exact-domain allow rule 与一条 regex block rule
+- **AND** app scope policy 引用两条 ruleIds
+- **AND** 测试通过 `dx-netd-inject` 分别注入 allow 与 block 唯一域名
+- **THEN** allow DNS event SHALL 为 `blocked=false`、`getips=true`、`policySource=CUSTOM_RULE_WHITE`、`scope=APP`
+- **AND** block DNS event SHALL 为 `blocked=true`、`getips=false`、`policySource=CUSTOM_RULE_BLACK`、`scope=APP`
+- **AND** per-app `traffic.dns.allow` 与 `traffic.dns.block` SHALL 增长
+- **AND** per-app `domainSources` 的 `CUSTOM_RULE_WHITE.allow` 与 `CUSTOM_RULE_BLACK.block` SHALL 增长
+
+### Requirement: Domain casebook tests restore mutated state
+Every Domain casebook test in `dx-smoke-control` MUST restore mutable device/app state that it changes, including config keys, app/domain policy, domain rules, and domain lists.
+
+#### Scenario: Domain case cleanup preserves later tests
+- **WHEN** a Domain case changes config, policy, rules, or lists
+- **THEN** the test SHALL restore the previous state before the next case starts
+- **AND** cleanup failures SHALL fail the test unless the run is already reporting `BLOCKED`
+
+### Requirement: Domain Case 9 覆盖 dns ruleId 归因与 METRICS.domainRuleStats
+`dx-smoke-control` MUST 在既有 Domain Case 9（`DOMAINRULES` + `DOMAINPOLICY(ruleIds)`）基础上，额外覆盖：
+
+1. dns stream `type=dns` 事件在 `policySource=CUSTOM_RULE_*` 时输出 `ruleId`；
+2. `METRICS.GET(name=domainRuleStats)` 的 per-rule counters 随 **tracked DNS verdict** 增长；
+3. `METRICS.RESET(name=domainRuleStats)` 的清零语义与后续再增长。
+
+#### Scenario: CUSTOM_RULE buckets 的 dns event 输出 ruleId 且 domainRuleStats 计数增长
+- **GIVEN** 测试创建一条 allow rule（`ruleId=a`）与一条 block rule（`ruleId=b`），并通过 app scope policy 引用两条 ruleIds
+- **AND** 测试为目标 uid 设置 `tracked=1` 并启动 `STREAM.START(type=dns)`
+- **WHEN** 测试通过 `dx-netd-inject` 注入分别命中 allow 与 block 的两个唯一域名
+- **THEN** allow DNS event MUST 为 `policySource=CUSTOM_RULE_WHITE` 且包含 `ruleId=a`
+- **AND** block DNS event MUST 为 `policySource=CUSTOM_RULE_BLACK` 且包含 `ruleId=b`
+- **AND** `METRICS.GET(name=domainRuleStats)` 中 `ruleId=a` 的 `allowHits` MUST 增长
+- **AND** `METRICS.GET(name=domainRuleStats)` 中 `ruleId=b` 的 `blockHits` MUST 增长
+
+#### Scenario: domainRuleStats reset 后归零并可再次增长
+- **GIVEN** `METRICS.GET(name=domainRuleStats)` 中至少一个 counter 大于 0
+- **WHEN** 测试执行 `METRICS.RESET(name=domainRuleStats)`
+- **THEN** 后续 `METRICS.GET(name=domainRuleStats)` 中所有 counters MUST 为 0
+- **WHEN** 之后再次注入一次可命中某 ruleId 的 DNS 判决
+- **THEN** 对应 counter MUST 再次增长
+
+### Requirement: Domain smoke covers DNS Debug Stream explainability
+Domain device smoke MUST include coverage proving that tracked `dns` Debug Stream events carry enough explanation to reconstruct DomainPolicy decisions.
+
+The coverage MUST verify at least:
+- app-scope rule winner
+- device-wide rule winner
+- mask fallback winner
+- tracked disabled suppression
+- self-contained rule/list/mask evidence without Flow Telemetry, Metrics, or follow-up rule queries
+
+The test MUST use vNext control paths and MUST NOT depend on Flow Telemetry records or Metrics output to prove the explain chain.
+
+#### Scenario: DNS app rule explanation is visible on device
+- **GIVEN** a target app has `tracked=1` and app-scope DomainPolicy ruleIds
+- **WHEN** device DNS injection triggers a domain that matches an app block rule
+- **THEN** the captured `type="dns"` stream event SHALL include `explain.kind="dns-policy"`
+- **AND** the `app.custom.blockRules` stage SHALL be the winner and include the expected `ruleId` and rule snapshot
+
+#### Scenario: DNS device-wide explanation is visible on device
+- **GIVEN** a target app has `tracked=1` and no overriding app policy for the test domain
+- **AND** device-wide DomainPolicy ruleIds decide the domain
+- **WHEN** device DNS injection triggers that domain
+- **THEN** the captured `type="dns"` stream event SHALL include a winning `deviceWide.allow` or `deviceWide.block` stage
+- **AND** the event SHALL expose the expected `policySource` and self-contained rule or list-entry attribution
+
+#### Scenario: DNS mask fallback evidence is visible on device
+- **GIVEN** a target app has `tracked=1` and no matching app or device-wide custom policy for the test domain
+- **WHEN** device DNS injection triggers that domain
+- **THEN** the captured `type="dns"` stream event SHALL include a winning `maskFallback` stage
+- **AND** the stage SHALL expose the effective mask evidence needed to explain the final allow/block decision
+
+#### Scenario: tracked disabled suppresses DNS explanation
+- **GIVEN** a target app has `tracked=0`
+- **WHEN** device DNS injection triggers a domain while `STREAM.START(type="dns")` is subscribed
+- **THEN** the stream SHALL NOT emit a per-event `dns` explanation for that injected domain
+- **AND** the stream SHALL emit or preserve the existing suppressed notice behavior
