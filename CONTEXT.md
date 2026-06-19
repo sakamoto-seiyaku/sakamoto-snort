@@ -22,6 +22,18 @@ _Avoid_: storage layer, reporting backend
 The Android-side owner of daemon startup, shutdown, artifact handoff, configuration sync, and post-start health checks.
 _Avoid_: UI directly managing the native daemon
 
+**Daemon lifecycle**:
+Whether the native daemon process is running under the Android-side service owner. It is separate from daemon feature gates such as policy or observability switches.
+_Avoid_: `block.enabled`, component gate, empty daemon mode
+
+**Component gate**:
+A daemon configuration switch that enables or disables a specific policy or observability component while the daemon process remains running.
+_Avoid_: daemon lifecycle, process stop/start
+
+**block.enabled**:
+The device-level gate for verdict-affecting filtering work across domain and IP policy. It is not the daemon lifecycle switch.
+_Avoid_: daemon stop, daemon idle mode
+
 **Device / DX**:
 The rooted Android integration lane driven by host and ADB scripts, split into smoke gates, diagnostics, and targeted device modules.
 _Avoid_: old phase labels such as p0/p1/p2
@@ -52,11 +64,31 @@ _Avoid_: `GLOBAL_*`
 The final DomainPolicy fallback that decides from the app mask and domain mask when explicit app or device-wide policy does not decide.
 _Avoid_: default allow, global fallback
 
+**Domain-IP Association**:
+The optional association layer that records learned domain-to-IP relationships for enrichment, debug evidence, and features such as IP leak handling. Its data sources are separate from DomainPolicy and may include DNS observation paths that do not block or modify DNS requests.
+_Avoid_: DomainPolicy itself, Basic IPRULES matcher, RDNS, Host cache
+
+**Resolved-IP Policy**:
+An optional packet enforcement capability that uses DNS-learned Domain-IP Association data to apply domain-derived policy to resolved IP traffic.
+_Avoid_: ip-leak, IP link, Basic IPRULES, DomainPolicy itself
+
 ### IP And L4 Policy
 
 **IPRULES**:
 The per-app L3/L4 IP rule engine for IPv4 and IPv6 packet policy, per-rule stats, and packet attribution.
 _Avoid_: IPv4 rules, firewall rules without the IPRULES scope
+
+**Basic IPRULES**:
+IP packet rules that use packet facts without requiring L4 Conntrack state.
+_Avoid_: stateful rules, `ct.*` rules
+
+**Stateful IPRULES**:
+Advanced IP packet rules that use L4 Conntrack state such as `ct.state` or `ct.direction`.
+_Avoid_: ordinary IP rules, baseline packet policy
+
+**Hot-path capability summary**:
+A compiled hot-path summary of which policy or observation consumers are needed for a packet subject, such as Conntrack, future DPI, Traffic Windows, Domain-IP Association, or debug evidence. The first read should be a 64-bit primary mask, with lazy secondary masks for richer CT/DPI/association pruning.
+_Avoid_: scanning rules on every packet, enabling advanced facts globally
 
 **family**:
 The explicit IPRULES rule field declaring `ipv4` or `ipv6`; it is not inferred from `src` or `dst`.
@@ -74,21 +106,29 @@ _Avoid_: treating it as the daemon-assigned `ruleId`
 The daemon-assigned committed rule identity used in stats, packet attribution, and print output.
 _Avoid_: assuming it is stable across every whole-policy apply unless the specific contract says so
 
+**Rule execution mode**:
+The per-rule state that decides whether a packet-side rule is disabled, actively enforced, or evaluated only for dry-run hit observation. Enforce and observe use the same winner attribution shape; observe differs by not applying the declared action to the actual verdict.
+_Avoid_: treating shadow evaluation as only an external debug session
+
+**Rule hit counters**:
+Low-cost per-rule counters owned by packet-side rules. An enabled rule that wins the normal scan increments its own hit counter whether it is in enforce or observe mode; record exports, when present, should use the same winner attribution fields rather than a separate observe-only model.
+_Avoid_: separate shadow stats model, per-packet allocation, Debug Stream
+
 **wouldRuleId / wouldDrop**:
-Shadow-evaluation fields that describe a rule that would have affected a packet without changing the actual verdict.
-_Avoid_: interpreting would fields as the executed verdict
+Legacy would-match fields from the old packet stream model. The refactored packet-side rule model should use `ruleId` plus rule execution mode instead of a parallel would-match attribution shape.
+_Avoid_: new observe-mode attribution, compatibility-driven API design
 
 **reasonId**:
 Packet verdict attribution such as `IFACE_BLOCK`, `ALLOW_DEFAULT`, `IP_RULE_ALLOW`, or `IP_RULE_BLOCK`.
-_Avoid_: treating reasonId as the verdict itself
+_Avoid_: treating reasonId as the actual verdict itself
 
 **IFACE_BLOCK**:
 A high-priority packet verdict caused by interface-kind mask policy, not by an IPRULES rule hit.
 _Avoid_: IP rule block
 
 **L4 Conntrack**:
-The userspace connection state layer that provides flow identity, orig/reply direction, and `new/established/invalid` semantics for IPRULES and telemetry.
-_Avoid_: packet cache, exact cache
+The userspace connection state layer that provides flow identity, orig/reply direction, and `new/established/invalid` semantics for advanced policy and observation. It is a strategic datapath primitive for `ct.*` rules, full-flow observation, future DPI/L7 policy, and gateway mode; it is not a baseline or ordinary Traffic Windows dependency.
+_Avoid_: packet cache, exact cache, baseline accounting, ordinary-user default feature
 
 **ct consumer**:
 An active rule or telemetry path that needs conntrack state for a UID and family.
@@ -138,6 +178,18 @@ _Avoid_: always-on dashboard source, Debug Stream
 A telemetry record for flow begin, update, or end facts, including cumulative counters and final execution metadata.
 _Avoid_: per-packet event
 
+**Fact Records**:
+Observation records for things that actually happened, such as flow lifecycle facts, DNS decisions, packet verdicts, counters, and final attribution.
+_Avoid_: explain evidence, shadow evaluation, rule hit counters
+
+**Explain Evidence**:
+Diagnostic evidence that explains why a verdict happened, including evaluated stages, winners, skipped stages, and rule snapshots.
+_Avoid_: fact records, shadow evaluation, ordinary history
+
+**Shadow Evaluation**:
+Dry-run policy evaluation that reports what a candidate or non-enforcing policy would have matched without changing the actual verdict.
+_Avoid_: executed verdict, fact records, explain evidence
+
 **DNS_DECISION record**:
 A telemetry record for blocked DNS decisions and DomainPolicy attribution. It is separate from packet and flow records.
 _Avoid_: DNS-to-IP join record
@@ -154,13 +206,33 @@ _Avoid_: daemon-side Top-K or history database
 Pull-style low-cardinality counters and health/performance summaries.
 _Avoid_: using metrics for Top-K, history, timeline, or high-cardinality destination analytics
 
+**Baseline accounting**:
+The always-on low-cardinality traffic accounting available while the dataplane is running, scoped to app/device packet totals and original IP packet bytes.
+_Avoid_: copied-prefix length, L4 payload-only bytes, Flow Telemetry, Debug Stream, destination history, Top-K analytics
+
+**Traffic Windows**:
+Bounded relative-time traffic summaries for ordinary UI activity views, centered on accepted usage bytes/packets with blocked packet counts as separate policy-attempt counters. They are designed for ordinary-user long-lived enablement, not arbitrary absolute-time history, and new windows only accumulate from the time they become active.
+_Avoid_: baseline accounting, blocked bytes as usage, full history store, arbitrary time-range query, Flow Telemetry records, Debug Stream
+
+**Traffic Windows Top-K**:
+The bounded heavy-hitter summaries inside Traffic Windows, such as remote IP, protocol, and protocol-port leaders. Remote IP leaders may be approximate with a bounded error; small ordering differences near the tail are not audit-grade facts.
+_Avoid_: exact destination ledger, unbounded per-destination map, full dimensional cube
+
+**Diagnostic Focus**:
+The single active, session-owned per-app or per-UID diagnostic focus gate that allows heavier packet/DNS explain, diagnostic streams, and focused diagnostic metrics for the selected subject.
+_Avoid_: baseline accounting, Traffic Windows, Flow Telemetry, ordinary observability, global debug mode, persistent app configuration
+
 **Debug Stream**:
-A vNext short-window evidence stream for DNS or packet investigation, normally gated by tracked app state.
+A vNext short-window evidence stream for DNS or packet investigation, normally gated by Diagnostic Focus.
 _Avoid_: long-term telemetry, normal dashboard API
 
+**Packet Diagnostics**:
+The user-facing packet/IPRULES diagnostic mode opened by a diagnostics session. It is session-owned, targets one app or UID, emits JSON diagnostic events with full explain evidence, and is not part of normal telemetry records.
+_Avoid_: Flow Telemetry, Traffic Windows, persistent app setting, developer internal trace
+
 **tracked**:
-An app-level gate for Debug Stream visibility and suppressed-event behavior. It does not gate Flow Telemetry records or DomainPolicy source metrics.
-_Avoid_: treating tracked as the general observability enable switch
+Legacy name for the old app-level Debug Stream gate. The refactored packet diagnostics model should use Diagnostic Focus instead.
+_Avoid_: new configuration name, persistent diagnostics state, treating tracked as the general observability enable switch
 
 **PerfMetrics**:
 Short-window latency and health instrumentation for diagnosing datapath cost.
