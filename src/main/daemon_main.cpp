@@ -5,9 +5,13 @@
 
 #include <ControlServer.hpp>
 #include <DaemonRuntime.hpp>
+#include <NfqueuePassThroughRuntime.hpp>
 
 int main() {
     SnortRuntime::installSignalHandlers();
+
+    SnortDatapath::Nfqueue::Ipv4PassThroughRuntime datapath;
+    (void)datapath.start();
 
     SnortControlVNext::ControlServer server;
     return server.run();

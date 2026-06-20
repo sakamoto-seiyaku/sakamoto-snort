@@ -39,6 +39,73 @@ PY
   echo "PASS: $label"
 }
 
+assert_ipv4_hooks() {
+  local rules missing=0
+  rules="$(adb_su "iptables -S 2>/dev/null" | tr -d '\r')"
+
+  for rule in \
+    "-N sucre-snort_INPUT" \
+    "-N sucre-snort_OUTPUT" \
+    "-A INPUT -j sucre-snort_INPUT" \
+    "-A OUTPUT -j sucre-snort_OUTPUT" \
+    "-A sucre-snort_INPUT -i lo -j RETURN" \
+    "-A sucre-snort_OUTPUT -o lo -j RETURN"
+  do
+    if ! printf '%s\n' "$rules" | grep -Fqx -- "$rule"; then
+      echo "missing iptables rule: $rule" >&2
+      missing=1
+    fi
+  done
+
+  for rule in \
+    "-A sucre-snort_INPUT -p udp -m udp --sport 53 -j RETURN" \
+    "-A sucre-snort_OUTPUT -p udp -m udp --dport 53 -j RETURN" \
+    "-A sucre-snort_INPUT -p tcp -m tcp --sport 53 -j RETURN" \
+    "-A sucre-snort_OUTPUT -p tcp -m tcp --dport 53 -j RETURN" \
+    "-A sucre-snort_INPUT -p udp -m udp --sport 853 -j RETURN" \
+    "-A sucre-snort_OUTPUT -p udp -m udp --dport 853 -j RETURN" \
+    "-A sucre-snort_INPUT -p tcp -m tcp --sport 853 -j RETURN" \
+    "-A sucre-snort_OUTPUT -p tcp -m tcp --dport 853 -j RETURN" \
+    "-A sucre-snort_INPUT -p udp -m udp --sport 5353 -j RETURN" \
+    "-A sucre-snort_OUTPUT -p udp -m udp --dport 5353 -j RETURN" \
+    "-A sucre-snort_INPUT -p tcp -m tcp --sport 5353 -j RETURN" \
+    "-A sucre-snort_OUTPUT -p tcp -m tcp --dport 5353 -j RETURN"
+  do
+    if ! printf '%s\n' "$rules" | grep -Fqx -- "$rule"; then
+      echo "missing DNS bypass rule: $rule" >&2
+      missing=1
+    fi
+  done
+
+  if ! printf '%s\n' "$rules" | grep -Eq -- '^-A sucre-snort_INPUT -j NFQUEUE .*--queue-bypass' ||
+     ! printf '%s\n' "$rules" | grep -Eq -- '^-A sucre-snort_OUTPUT -j NFQUEUE .*--queue-bypass'; then
+    echo "missing IPv4 NFQUEUE queue-bypass rules" >&2
+    missing=1
+  fi
+
+  if [[ $missing -ne 0 ]]; then
+    echo "FAIL: IPv4 hooks" >&2
+    printf '%s\n' "$rules" | grep sucre-snort >&2 || true
+    exit 1
+  fi
+  echo "PASS: IPv4 hooks"
+}
+
+assert_ipv4_traffic_best_effort() {
+  if ! adb_cmd shell "command -v ping >/dev/null 2>&1"; then
+    echo "BLOCKED: IPv4 traffic smoke needs ping on device" >&2
+    exit 77
+  fi
+
+  if adb_cmd shell "ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1"; then
+    echo "PASS: IPv4 traffic"
+    return 0
+  fi
+
+  echo "BLOCKED: IPv4 traffic smoke could not reach 1.1.1.1 from device" >&2
+  exit 77
+}
+
 hello="$(ctl_cmd HELLO)"
 JSON="$hello" python3 - <<'PY' || {
 import json
@@ -59,6 +126,8 @@ PY
 }
 echo "PASS: HELLO shape"
 
+assert_ipv4_hooks
+assert_ipv4_traffic_best_effort
 assert_ok "RESETALL no-op" "$(ctl_cmd RESETALL)"
 assert_ok "QUIT" "$(ctl_cmd QUIT)"
 echo "dx-snort10-base: PASS"
