@@ -5,7 +5,10 @@
 
 #pragma once
 
+#include <NfqueueTopology.hpp>
+
 #include <cstdint>
+#include <optional>
 
 namespace SnortDatapath::Nfqueue {
 
@@ -20,6 +23,7 @@ struct SentVerdict {
 
 struct QueueEvent {
     std::uint32_t packetId = 0;
+    NfqueuePacketDirection direction = NfqueuePacketDirection::Input;
 };
 
 enum class PassThroughResult : std::uint8_t {
@@ -34,6 +38,8 @@ public:
     virtual bool sendVerdict(std::uint32_t packetId, std::uint32_t verdict) = 0;
 };
 
+[[nodiscard]] std::optional<QueueEvent> makeQueueEventFromHook(std::uint32_t packetId,
+                                                               std::uint8_t hook) noexcept;
 [[nodiscard]] PassThroughResult acceptPassThroughEvent(const QueueEvent &event, VerdictSink &sink);
 
 } // namespace SnortDatapath::Nfqueue

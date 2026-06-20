@@ -18,5 +18,7 @@ public:
 
 [[nodiscard]] bool installIpv4PassThroughHooks(const HookPlanConfig &config,
                                                HookCommandExecutor &executor);
+[[nodiscard]] bool installDualStackPassThroughHooks(const DualStackHookPlanConfig &config,
+                                                    HookCommandExecutor &executor);
 
 } // namespace SnortDatapath::Nfqueue

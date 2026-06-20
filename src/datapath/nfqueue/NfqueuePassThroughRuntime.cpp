@@ -88,26 +88,46 @@ struct QueueContext {
     std::uint32_t queue = 0;
 };
 
+int socketFamily(const SnortDatapath::Nfqueue::NfqueueAddressFamily family) {
+    switch (family) {
+    case SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv4:
+        return AF_INET;
+    case SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv6:
+        return AF_INET6;
+    }
+    return AF_INET;
+}
+
+const char *familyName(const SnortDatapath::Nfqueue::NfqueueAddressFamily family) {
+    switch (family) {
+    case SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv4:
+        return "IPv4";
+    case SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv6:
+        return "IPv6";
+    }
+    return "unknown";
+}
+
 bool sendConfigMessage(mnl_socket *socket, const nlmsghdr *nlh) {
     return mnl_socket_sendto(socket, nlh, nlh->nlmsg_len) >= 0;
 }
 
-bool configureQueue(mnl_socket *socket, const std::uint32_t queue) {
+bool configureQueue(mnl_socket *socket, const SnortDatapath::Nfqueue::PassThroughListenerPlan plan) {
     std::vector<char> buffer(MNL_SOCKET_BUFFER_SIZE);
 
-    nlmsghdr *nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_CONFIG, queue);
-    nfq_nlmsg_cfg_put_cmd(nlh, AF_INET, NFQNL_CFG_CMD_BIND);
+    nlmsghdr *nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_CONFIG, plan.queue);
+    nfq_nlmsg_cfg_put_cmd(nlh, socketFamily(plan.family), NFQNL_CFG_CMD_BIND);
     if (!sendConfigMessage(socket, nlh)) {
         return false;
     }
 
-    nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_CONFIG, queue);
+    nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_CONFIG, plan.queue);
     nfq_nlmsg_cfg_put_params(nlh, NFQNL_COPY_META, 0);
     if (!sendConfigMessage(socket, nlh)) {
         return false;
     }
 
-    nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_CONFIG, queue);
+    nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_CONFIG, plan.queue);
     mnl_attr_put_u32(nlh, NFQA_CFG_FLAGS, htonl(NFQA_CFG_F_FAIL_OPEN));
     mnl_attr_put_u32(nlh, NFQA_CFG_MASK, htonl(NFQA_CFG_F_FAIL_OPEN));
     return sendConfigMessage(socket, nlh);
@@ -129,33 +149,42 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     const auto *header =
         static_cast<nfqnl_msg_packet_hdr *>(mnl_attr_get_payload(attrs[NFQA_PACKET_HDR]));
     SocketVerdictSink sink(context->socket, context->queue);
-    const auto result = SnortDatapath::Nfqueue::acceptPassThroughEvent(
-        SnortDatapath::Nfqueue::QueueEvent{.packetId = ntohl(header->packet_id)}, sink);
+    const auto event = SnortDatapath::Nfqueue::makeQueueEventFromHook(
+        ntohl(header->packet_id), header->hook);
+    if (!event.has_value()) {
+        std::cerr << "NFQUEUE unsupported hook " << static_cast<unsigned int>(header->hook)
+                  << " on queue " << context->queue << "\n";
+        (void)sink.sendVerdict(ntohl(header->packet_id), SnortDatapath::Nfqueue::kNfAcceptVerdict);
+        return MNL_CB_OK;
+    }
+    const auto result = SnortDatapath::Nfqueue::acceptPassThroughEvent(*event, sink);
     if (result != SnortDatapath::Nfqueue::PassThroughResult::VerdictAccepted) {
         std::cerr << "NFQUEUE verdict send failed on queue " << context->queue << "\n";
     }
     return MNL_CB_OK;
 }
 
-void listenQueue(const std::uint32_t queue) {
+void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener) {
     while (!SnortRuntime::shutdownRequested()) {
         mnl_socket *socket = mnl_socket_open(NETLINK_NETFILTER);
         if (socket == nullptr) {
-            std::cerr << "NFQUEUE socket open failed: " << std::strerror(errno) << "\n";
+            std::cerr << familyName(listener.family) << " NFQUEUE socket open failed: "
+                      << std::strerror(errno) << "\n";
             sleep(1);
             continue;
         }
 
         if (mnl_socket_bind(socket, 0, MNL_SOCKET_AUTOPID) < 0) {
-            std::cerr << "NFQUEUE socket bind failed: " << std::strerror(errno) << "\n";
+            std::cerr << familyName(listener.family) << " NFQUEUE socket bind failed: "
+                      << std::strerror(errno) << "\n";
             mnl_socket_close(socket);
             sleep(1);
             continue;
         }
 
-        if (!configureQueue(socket, queue)) {
-            std::cerr << "NFQUEUE configure failed for queue " << queue << ": "
-                      << std::strerror(errno) << "\n";
+        if (!configureQueue(socket, listener)) {
+            std::cerr << familyName(listener.family) << " NFQUEUE configure failed for queue "
+                      << listener.queue << ": " << std::strerror(errno) << "\n";
             mnl_socket_close(socket);
             sleep(1);
             continue;
@@ -164,7 +193,7 @@ void listenQueue(const std::uint32_t queue) {
         int noEnobufs = 1;
         (void)mnl_socket_setsockopt(socket, NETLINK_NO_ENOBUFS, &noEnobufs, sizeof(noEnobufs));
 
-        QueueContext context{.socket = socket, .queue = queue};
+        QueueContext context{.socket = socket, .queue = listener.queue};
         const unsigned int port = mnl_socket_get_portid(socket);
         std::vector<char> buffer(MNL_SOCKET_BUFFER_SIZE);
         while (!SnortRuntime::shutdownRequested()) {
@@ -173,13 +202,13 @@ void listenQueue(const std::uint32_t queue) {
                 if (errno == EINTR) {
                     continue;
                 }
-                std::cerr << "NFQUEUE recv failed on queue " << queue << ": "
+                std::cerr << "NFQUEUE recv failed on queue " << listener.queue << ": "
                           << std::strerror(errno) << "\n";
                 break;
             }
             if (mnl_cb_run(buffer.data(), static_cast<unsigned int>(received), 0, port,
                            passThroughCallback, &context) == -1) {
-                std::cerr << "NFQUEUE callback failed on queue " << queue << ": "
+                std::cerr << "NFQUEUE callback failed on queue " << listener.queue << ": "
                           << std::strerror(errno) << "\n";
                 break;
             }
@@ -192,6 +221,28 @@ void listenQueue(const std::uint32_t queue) {
 } // namespace
 
 namespace SnortDatapath::Nfqueue {
+
+DualStackPassThroughRuntime::DualStackPassThroughRuntime(DualStackPassThroughRuntimeConfig config)
+    : config_(std::move(config)) {}
+
+bool DualStackPassThroughRuntime::start() {
+    const auto runtimePlan = makeDualStackPassThroughRuntimePlan(config_);
+
+    SystemHookCommandExecutor executor;
+    (void)installDualStackPassThroughHooks(runtimePlan.hookPlan, executor);
+
+    for (const auto listener : runtimePlan.listeners) {
+        std::thread([listener] { listenQueue(listener); }).detach();
+    }
+
+    std::cerr << "Dual-stack NFQUEUE pass-through listening on IPv4 queues "
+              << runtimePlan.hookPlan.ipv4FirstQueue << ":"
+              << (runtimePlan.hookPlan.ipv4FirstQueue + runtimePlan.hookPlan.queuesPerFamily - 1)
+              << " and IPv6 queues " << runtimePlan.hookPlan.ipv6FirstQueue << ":"
+              << (runtimePlan.hookPlan.ipv6FirstQueue + runtimePlan.hookPlan.queuesPerFamily - 1)
+              << "\n";
+    return true;
+}
 
 Ipv4PassThroughRuntime::Ipv4PassThroughRuntime(Ipv4PassThroughRuntimeConfig config)
     : config_(std::move(config)) {}
@@ -209,7 +260,12 @@ bool Ipv4PassThroughRuntime::start() {
                                       executor);
 
     for (std::uint32_t i = 0; i < queuePlan.listeners.count; ++i) {
-        std::thread([queue = queuePlan.listeners.first + i] { listenQueue(queue); }).detach();
+        std::thread([queue = queuePlan.listeners.first + i] {
+            listenQueue(PassThroughListenerPlan{
+                .family = NfqueueAddressFamily::Ipv4,
+                .queue = queue,
+            });
+        }).detach();
     }
 
     std::cerr << "IPv4 NFQUEUE pass-through listening on queues " << queuePlan.listeners.first

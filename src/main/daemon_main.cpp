@@ -10,7 +10,7 @@
 int main() {
     SnortRuntime::installSignalHandlers();
 
-    SnortDatapath::Nfqueue::Ipv4PassThroughRuntime datapath;
+    SnortDatapath::Nfqueue::DualStackPassThroughRuntime datapath;
     (void)datapath.start();
 
     SnortControlVNext::ControlServer server;

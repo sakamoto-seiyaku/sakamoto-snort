@@ -39,9 +39,11 @@ PY
   echo "PASS: $label"
 }
 
-assert_ipv4_hooks() {
+assert_family_hooks() {
+  local executable="$1"
+  local label="$2"
   local rules missing=0
-  rules="$(adb_su "iptables -S 2>/dev/null" | tr -d '\r')"
+  rules="$(adb_su "$executable -S 2>/dev/null" | tr -d '\r')"
 
   for rule in \
     "-N sucre-snort_INPUT" \
@@ -52,7 +54,7 @@ assert_ipv4_hooks() {
     "-A sucre-snort_OUTPUT -o lo -j RETURN"
   do
     if ! printf '%s\n' "$rules" | grep -Fqx -- "$rule"; then
-      echo "missing iptables rule: $rule" >&2
+      echo "missing $executable rule: $rule" >&2
       missing=1
     fi
   done
@@ -72,23 +74,32 @@ assert_ipv4_hooks() {
     "-A sucre-snort_OUTPUT -p tcp -m tcp --dport 5353 -j RETURN"
   do
     if ! printf '%s\n' "$rules" | grep -Fqx -- "$rule"; then
-      echo "missing DNS bypass rule: $rule" >&2
+      echo "missing $label DNS bypass rule: $rule" >&2
       missing=1
     fi
   done
 
   if ! printf '%s\n' "$rules" | grep -Eq -- '^-A sucre-snort_INPUT -j NFQUEUE .*--queue-bypass' ||
      ! printf '%s\n' "$rules" | grep -Eq -- '^-A sucre-snort_OUTPUT -j NFQUEUE .*--queue-bypass'; then
-    echo "missing IPv4 NFQUEUE queue-bypass rules" >&2
+    echo "missing $label NFQUEUE queue-bypass rules" >&2
     missing=1
   fi
 
   if [[ $missing -ne 0 ]]; then
-    echo "FAIL: IPv4 hooks" >&2
+    echo "FAIL: $label hooks" >&2
     printf '%s\n' "$rules" | grep sucre-snort >&2 || true
     exit 1
   fi
-  echo "PASS: IPv4 hooks"
+  echo "PASS: $label hooks"
+}
+
+assert_dual_stack_hooks() {
+  assert_family_hooks "iptables" "IPv4"
+  if adb_su "command -v ip6tables >/dev/null 2>&1"; then
+    assert_family_hooks "ip6tables" "IPv6"
+  else
+    echo "SKIP: IPv6 hooks (ip6tables unavailable on device)"
+  fi
 }
 
 assert_ipv4_traffic_best_effort() {
@@ -126,7 +137,7 @@ PY
 }
 echo "PASS: HELLO shape"
 
-assert_ipv4_hooks
+assert_dual_stack_hooks
 assert_ipv4_traffic_best_effort
 assert_ok "RESETALL no-op" "$(ctl_cmd RESETALL)"
 assert_ok "QUIT" "$(ctl_cmd QUIT)"

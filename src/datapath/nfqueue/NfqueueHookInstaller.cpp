@@ -7,13 +7,25 @@
 
 namespace SnortDatapath::Nfqueue {
 
-bool installIpv4PassThroughHooks(const HookPlanConfig &config, HookCommandExecutor &executor) {
+namespace {
+
+bool executePlan(const HookPlan &plan, HookCommandExecutor &executor) {
     bool ok = true;
-    const auto plan = makeIpv4PassThroughHookPlan(config);
     for (const auto &command : plan.commands) {
         ok = executor.execute(command) && ok;
     }
     return ok;
+}
+
+} // namespace
+
+bool installIpv4PassThroughHooks(const HookPlanConfig &config, HookCommandExecutor &executor) {
+    return executePlan(makeIpv4PassThroughHookPlan(config), executor);
+}
+
+bool installDualStackPassThroughHooks(const DualStackHookPlanConfig &config,
+                                      HookCommandExecutor &executor) {
+    return executePlan(makeDualStackPassThroughHookPlan(config), executor);
 }
 
 } // namespace SnortDatapath::Nfqueue
