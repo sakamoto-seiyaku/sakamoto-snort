@@ -6,6 +6,7 @@
 
 > 本文档用于固化“域名策略（现有功能已完成）”在可观测性上的**归因模型**与**常态 counters**设计，避免后续 IP 规则方向变化导致域名侧返工。  
 > 约束：不新增观测通路；常态统计必须不依赖 vNext packet stream；不做全局 safety-mode。域名规则 per-rule observability 已在后续能力中独立落地，不属于本文的 B 层 counters。
+> SNORT-10 说明：本文属于 DNS/domain line 的已落地设计回执。文中 `tracked` / dns stream / resolver-hook / traffic.dns 相关描述是 pre-SNORT-10 DNS-line current-head evidence；SNORT-10 packet-side 重构不扩展、不桥接 DNS stream。当前 packet diagnostics authority 见 `docs/INTERFACE_SPECIFICATION.md` 与 `NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md`。
 
 ---
 

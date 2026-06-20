@@ -147,12 +147,12 @@
 - IP 模组：
   - `tests/device/ip/run.sh --profile matrix`：PASS
   - `tests/device/ip/run.sh --profile stress`：PASS
-  - `tests/device/ip/run.sh --profile perf`：当前默认大 ruleset（`IPTEST_PERF_TRAFFIC_RULES=2000`）可能 `BLOCKED: ... IPRULES.APPLY transport failed (rc=126)`；将规则数降到 `200` 可跑通（说明 vNext control 链路 OK，问题集中在“大 ruleset apply”的执行路径）
+  - `tests/device/ip/run.sh --profile perf`：当前默认大 ruleset（`IPTEST_PERF_TRAFFIC_RULES=2000`）可能 `BLOCKED: ... IPRULES.APPLY transport failed (rc=126)`；这是 SNORT-17 Authoring Layer 落地前的 pre-SNORT-10 direct-apply current-head evidence，将规则数降到 `200` 可跑通（说明 vNext control 链路 OK，问题集中在旧 direct apply 的执行路径/承载方式）
   - `--profile longrun`：本次未覆盖验证（默认 600s）
 
 已知问题（后续专项完善方向）：
 - `dx-diagnostics-perf-network-load` 的 DNS 观测在部分设备/环境下不稳定（依赖 netd resolv hook）；需要补充更稳定的 DNS 触发/判定口径，或避免用 `SKIP:` 文本触发 CTest skip regex
-- `IPRULES.APPLY` 大 ruleset 的参数承载路径需要加固（疑似触发 host 侧命令行参数长度限制）；需要 `sucre-snort-ctl` 支持 args file/stdin 或 runner 侧改为分批/压缩传输
+- pre-SNORT-10 direct `IPRULES.APPLY` 大 ruleset 的参数承载路径需要加固（疑似触发 host 侧命令行参数长度限制）；这不是 SNORT-10 新 mutation contract，后续应随 SNORT-17 Authoring Layer / transport 设计一起处理。
 
 ## 4. 当前入口的重组归类
 

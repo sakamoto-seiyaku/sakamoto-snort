@@ -33,7 +33,7 @@
 - 内部同步模型从“`mutexListeners` 排斥 reset 的主要 mutation”收敛为“save/reset coordinator 串行化持久化事务，reset epoch 约束热路径发布”。
 - legacy control 与 vNext control 不再各自拼装 reset 流程，只进入统一的 `snortResetAll()`。
 - manager 对象获取被拆成 `find()` / `prepare()` / `publishPrepared()`：锁外只允许可丢弃准备，发布必须处于当前 epoch 的共享锁窗口。
-- legacy `DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 冻结为 no-op；实时观测只支持 vNext `STREAM.START(type=dns|pkt|activity)`。
+- legacy `DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 冻结为 no-op。SNORT-10 后 packet-side 实时诊断只支持 `DIAGNOSTICS.START(channel=packet)`；旧 vNext `STREAM.START(type=pkt|activity)` 不作为新接口目标。DNS stream 暂时冻结，不并入本轮 packet-side 重构。
 - vNext 普通 mutation 不再借用 `mutexListeners` 作为外层串行化；`mutexListeners` 收敛为启动、`RESETALL` 与 packet / DNS 短共享窗口。
 - 该变更不新增配置项、不改变控制命令 schema、不改变 save 文件格式。
 
@@ -58,7 +58,7 @@
 - reverse-DNS。
 - save tree 清理之外的任意非 reset 期间目录重建。
 - 大 JSON 构造、批量 parse / compile / file import。
-- 普通 vNext `CONFIG.SET`、domain apply/import、`IPRULES.APPLY`、`METRICS.RESET` 的完整 handler。
+- 普通 vNext `CONFIG.SET`、domain apply/import、pre-SNORT-10 direct `IPRULES.APPLY`、`METRICS.RESET` 的完整 handler。
 
 ## 持久化边界
 
@@ -73,7 +73,7 @@
 - 大 vNext mutation 仍会与其他 vNext mutation 串行，但不再阻塞 packet / DNS 获取 `mutexListeners` shared lock。
 - `RESETALL` 期间阻塞热路径是预期语义；性能尖峰应只出现在 reset 窗口。
 - `snortSave()` 与 `snortResetAll()` 互斥只影响低频 save/reset 控制路径，不进入 packet / DNS verdict 热循环。
-- 当前没有写死百分比预算；如果后续需要量化，应以 `nfq_total_us`、`dns_decision_us`、reset stress 和实际设备 perf 数据为准。
+- 当前没有写死百分比预算；如果后续需要量化，应以 `packetVerdictLatencyUs`、reset stress 和实际设备 perf 数据为准。pre-SNORT-10 `nfq_total_us` / `dns_decision_us` 只作为历史记录字段。
 
 ## 验证口径
 
@@ -81,4 +81,4 @@
 - Host + ASAN：`cmake --build --preset dev-debug --target snort-host-tests-asan`。
 - Android build：`cmake --build --preset dev-debug --target snort-build-ndk`。
 - Device/DX 后续建议：并发 `RESETALL`、DNS inject、IP traffic，并观察 reset 后没有 stale app/domain/host event 或旧 save 文件回写。
-- Device/DX 后续建议：并发大 `DOMAINLISTS.IMPORT` / `IPRULES.APPLY` 与 datapath perf，观察 `nfq_total_us` tail latency 不再因普通 vNext mutation 持有 `mutexListeners` 而尖峰。
+- Device/DX 后续建议：并发大 `DOMAINLISTS.IMPORT` / pre-SNORT-10 direct `IPRULES.APPLY` 与 datapath perf，观察 `packetVerdictLatencyUs` tail latency 不再因普通 vNext mutation 持有 `mutexListeners` 而尖峰。

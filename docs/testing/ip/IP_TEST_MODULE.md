@@ -61,7 +61,7 @@ Tier‑1 的目的：在真机内创建封闭网络拓扑，避免公网/DNS/CDN
 
 主指标（建议）：
 - `rate_mib_s`：Tier‑1 真实读取的 payload bytes / seconds
-- `METRICS.GET(name=perf).result.perf.nfq_total_us`：NFQUEUE 端到端耗时分布（`avg/p50/p95/p99/max`）
+- `METRICS.GET(name=perf).result.perf.packetVerdictLatencyUs`：NFQUEUE callback start 到 verdict send return 的 daemon-side 耗时分布（`avg/p50/p95/p99/max`）；pre-SNORT-10 `nfq_total_us` 只作为迁移 alias / historical field name。
 
 固定口径（默认值；Pixel 6a 推荐）：
 - 负载：`IPTEST_PERF_LOAD_MODE=mix`（默认；多 worker + 多 IP/port + 短连接 churn）

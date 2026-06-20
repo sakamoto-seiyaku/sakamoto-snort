@@ -5,6 +5,11 @@
 相关既有能力：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/INTERFACE_SPECIFICATION.md`（vNext stream/metrics）
 兼容性前提：本文记录的是发布前设计收口语境；当前 ABI / offset / command shape 的权威来源是 `docs/INTERFACE_SPECIFICATION.md`。后续扩展通过 Plane work item 驱动，并同步接口规范、实现与测试。
 
+SNORT-10 一致性说明（2026-06-20）：
+- 本文的 FlowRecord / shared-memory ABI / bounded export / raw facts completeness 结论仍然有效。
+- 本文早期使用的 `tracked`、generic Debug Stream、`STREAM.START(type=pkt)`、以及 `IFACE_BLOCK` 先进入 Flow/CT 的语义，已被 SNORT-10 Packet Diagnostics 与 Base-before-CT pipeline 覆盖。
+- Flow Telemetry 是显式 CT observation consumer，不是普通路径 CT 常开理由；`IFACE_BLOCK` 或 Basic enforce block 已产生 final block 时，即使 telemetry active 也不为该 blocked packet 拉起 CT 或生成正常 `FLOW` record。
+
 ---
 
 ## 0. 背景：为什么“再加几个 metrics”不对
@@ -13,8 +18,8 @@
 
 当前后端的观测体系主要由两类组成：
 
-- **Metrics（拉取式 counters）**：适合固定维度、低基数、低成本统计（例如 traffic/reasons/domainSources）。
-- **Stream（订阅式事件流）**：适合深诊断与逐事件追溯，但它天然高吞吐、高带宽压力；并且目前和 `tracked` 绑定，容易把“基础可视化”误绑成“深诊断开关”。
+- **Metrics（拉取式 counters）**：适合固定维度、低基数、低成本统计（例如 reasons/domainSources/perf/telemetry health）。Traffic Windows 已从旧 traffic metrics 中拆出为独立 surface。
+- **Diagnostics / Debug Stream（订阅式事件流）**：适合深诊断与逐事件追溯，但它天然高吞吐、高带宽压力；SNORT-10 packet 侧使用 session-owned Packet Diagnostics，不再使用持久 `tracked` 作为 packet debug gate。
 
 结论：我们缺的不是“再加 Top-K 的后端接口”，而是一个明确的**Telemetry Plane（流记录导出层）**，用于把 dataplane 的关键事实以**有边界**的方式导出，让前端（或上层组件）完成存储/查询/聚合。
 
@@ -35,7 +40,7 @@
    - 目标：配置策略、开关观测细节、提供少量即时调试查询。
    - 约束：不承担长期数据存储；不要求提供高基数查询（那是 telemetry consumer 的责任）。
 
-> 注：`STREAM.START(type=pkt|dns)` 属于 Control Plane 的调试工具；Flow Telemetry 属于 Telemetry Plane。两者可以复用 ring/drop 的实现技巧，但语义与定位必须分离。
+> 注：SNORT-10 packet 侧调试工具是 `DIAGNOSTICS.START(channel=packet)`；DNS stream 暂时冻结。Flow Telemetry 属于 Telemetry Plane。二者可以复用 ring/drop 的实现技巧，但语义与定位必须分离。
 
 ---
 
@@ -90,14 +95,14 @@ Dataplane 写 telemetry 必须满足：
 
 ### 3.3 Flow Telemetry 等级必须窄而清晰
 
-Flow Telemetry 只定义常态 records 的开关，不承载 Debug Stream 或 Summary 聚合模式：
+Flow Telemetry 只定义常态 records 的开关，不承载 Packet Diagnostics 或 Summary 聚合模式：
 
 - **Off**：不导出 Flow/DNS records，仅保留必要的低成本 counters/state。
 - **Flow**：导出 `FLOW` / `DNS_DECISION` records（bounded、best-effort、可丢弃）。
 
-`Debug` 属于 vNext Debug Stream，不是 Flow Telemetry level。`Summary` 不进入 MVP；前端需要的 Top-K/timeline/history 由 consumer 基于 records 自行计算。
+`Debug` / Packet Diagnostics 属于显式诊断 session，不是 Flow Telemetry level。`Summary` 不进入 MVP；前端需要的 Top-K/timeline/history 由 consumer 基于 records 自行计算。
 
-> 关键：`tracked` 与 Flow Telemetry 完全解耦；tracked 只保留为 Debug Stream 降噪与更细粒度 Metrics 的门控。
+> 关键：Diagnostic Focus 与 Flow Telemetry 完全解耦；Diagnostic Focus 只属于显式诊断 session，不影响 FlowRecord / DnsDecisionRecord 是否产生。
 
 ### 3.4 与现有 conntrack 的关系（优先复用语义）
 
@@ -148,7 +153,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 - **FlowRecord kind**：`FLOW` record payload 内部的 `BEGIN / UPDATE / END` 语义；它不是三个顶层 record type。
 - **Export**：从 daemon 导出 record 的动作（best-effort，允许 drop）。
 - **Consumer**：接收 record 并负责持久化/查询/聚合的组件（Android 上可能落在前端/manager）。
-- **Debug Stream**：现有 vNext `STREAM`（逐事件 tail）。
+- **Packet Diagnostics**：SNORT-10 packet-side vNext JSON 诊断事件流，session-owned，取代旧 packet Debug Stream / `tracked` 语义。
 
 ---
 
@@ -171,7 +176,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 2. 顶层 MVP record type 只有 `FLOW` 与 `DNS_DECISION`；`FLOW` 内部再区分 `BEGIN / UPDATE / END`。
 3. FlowRecord 使用累计 counters（`totalPackets/totalBytes`）；窗口增量由 consumer 依据前后累计值计算。
 4. 导出触发由包驱动：create、decision/CT state change、threshold、max export interval、idle/end/resource retire。
-5. FlowRecord 只记录最终执行结果；Debug Stream 承担深度解释链条，不把 `wouldRuleId`/候选规则写入常态 records。
+5. FlowRecord 只记录最终执行结果；Packet Diagnostics 承担 packet-side 深度解释链条，不把 `wouldRuleId`/候选规则写入常态 records。
 6. DNS 与 IP/flow 在常态 records 中不做 join；DNS blocked timeline 使用独立 `DnsDecisionRecord`。
 7. Export 通道是单 consumer、全局 MPSC、fixed-slot overwrite shared-memory ring；普通 records 由 consumer polling 读取。
 8. RESETALL 重建 telemetry session；前端必须清空本地 records 与活跃组装状态后重新 OPEN。
@@ -194,15 +199,15 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 - 我们倾向 **L4-first**，且 Flow 模式 record **必须携带 `flowInstanceId`**；5-tuple 仅作为 key（可复用/可冲突），不作为 identity。
 - `flowInstanceId` 生成采用“**分配式**”：在 telemetry flow instance 开始时一次性生成并写入 entry；若 telemetry session boundary 后复用既有 CT entry，必须开启新的 telemetry flow instance。records 中单独携带 timestamp 字段用于排序/时间线；不要求 `flowInstanceId` 可排序。
 - Flow record 的导出应尽量“包驱动”：create/state-change/count-threshold/expire-retire 触发；不引入一个为了“定期上报还活着”的额外扫描线程（扫描仅作为 bounded GC/timeout 的实现细节）。
-- Conntrack（状态/实例跟踪）常开；records 导出与 consumer/telemetry level 绑定（未连接 consumer 时不写 records，只计数/记录 drop reason）。
-  - Flow Telemetry 是 conntrack observation consumer；只要 `level=flow` consumer active，就必须为可追踪 L4 包采集 CT state/direction，不能依赖 `iprules.enabled=1`。
+- Conntrack 不再定义为普通路径常开；Flow Telemetry 是显式 conntrack observation consumer。records 导出与 consumer/telemetry level 绑定（未连接 consumer 时不写 records，只计数/记录 drop reason）。
+  - 只要 `level=flow` consumer active，就会让 eligible subject/packet 具备 CT observation consumer 语义；但 Base / Basic final block 仍可在 CT 前短路。
+  - `IFACE_BLOCK` 或 Basic enforce block 已产生 final block 的 packet 不进入 CT，不生成 `FLOW` lifecycle record。blocked visibility 由 reason metrics、Traffic Windows `blockedPackets` 与 Packet Diagnostics 承担。
   - `iprules.enabled` 只控制 IP rules policy evaluation / explainability；telemetry-only CT observation 不得改变 packet verdict。
   - 性能要求：避免在多个深层路径反复判断导出开关。倾向在每包处理的上层一次性读取 `exporter` 指针/开关并向下透传，使“是否导出”至多是**每包一次**的极薄判断。
 
-- TCP mid-stream pickup（strict vs loose）结论：
-  - 默认采用 **loose pickup**：允许未见 SYN 的 TCP 包触发“拾取已建立连接”的 tracking（更符合 Android/daemon 可能后启动的现实）。
-  - 对 loose pickup 的 entry：需要配套更短的超时，并在 records 中带一个明确标记位（例如 `pickedUpMidStream=1`），以便 consumer 与策略层能区分这类 entry。
-  - 提供可选配置 **strict 模式**：禁用 mid-stream pickup，把非 SYN 的“新流”视为 INVALID/不建表（用于更强硬的安全策略或调试）。
+- TCP mid-stream pickup 由 L4 Conntrack 语义决定，不由 Flow Telemetry 另行定义：
+  - 第一阶段采用 OVS 同级别的 loose 语义，不额外提供 strict 模式。
+  - FlowRecord 中的 `pickedUpMidStream` 只是 observation flag，用于标记 incomplete lifecycle；它不引入 telemetry 专属 timeout 或策略行为。
 
 #### A2（Record types）已收口结论
 
@@ -213,7 +218,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 #### A3（Raw facts completeness / 前端 Activity 缺口）新增结论
 
-- Flow Telemetry MVP 已打通 bounded records 与真实 producer，但前端 Activity 对“理论完整的 flow telemetry 原始事实”提出了新增要求；这些要求属于 **FlowRecord raw facts completeness**，不是 Debug Stream explainability，也不是前端自行推导即可完全补齐的字段。
+- Flow Telemetry MVP 已打通 bounded records 与真实 producer，但前端 Activity 对“理论完整的 flow telemetry 原始事实”提出了新增要求；这些要求属于 **FlowRecord raw facts completeness**，不是 Packet Diagnostics explainability，也不是前端自行推导即可完全补齐的字段。
 - 下一轮 FlowRecord 扩展采用 **直接替换现有 `FLOW` payload v1 布局**：
   - 不新增 `FLOW v2`，不保留旧 102-byte layout 兼容窗口，不双写旧/新 records。
   - daemon、native telemetry consumer、前端 consumer、`docs/INTERFACE_SPECIFICATION.md` 与测试必须同轮更新。
@@ -226,14 +231,14 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 ### B. 记录内容边界（Schema：facts 输出）
 
 5. 必备字段清单（最小）：timestamp、五元组、方向、uid/userId、ifaceKind/ifindex、ipVersion、proto、bytes/packets、verdict。
-6. 归因策略：FlowRecord 记录最终 `reasonId/ruleId`；DnsDecisionRecord 记录 DNS blocked 侧归因。
-7. DNS↔IP join：常态 records 不做 join；如需深度关联，由 Debug Stream 后续独立补齐。
+6. 归因策略：FlowRecord 记录最终 `reasonId/ruleId/ruleMode`；DnsDecisionRecord 记录 DNS blocked 侧归因。
+7. DNS↔IP join：常态 records 不做 join；本轮 packet-side Packet Diagnostics 不输出 DNS/IP join，DNS stream 冻结，后续 Domain/DNS 线单独设计。
 
 #### B 段已收口结论
 
-- 常态 FlowRecord 只记录**最终执行结果**，不承载 Debug Stream 的取证字段。
+- 常态 FlowRecord 只记录**最终执行结果**，不承载 Packet Diagnostics 的取证字段。
   - `wouldRuleId`、would-block、候选规则、shadow/why-not 等解释链条不进入 FlowRecord，也不进入 `decisionKey`。
-  - 这些能力若需要补齐，应在 vNext Debug Stream 上补齐，不在常态 records 里重复实现。
+  - 这些能力若需要补齐，应在 Packet Diagnostics 上补齐，不在常态 records 里重复实现。
 
 - Flow segment / UPDATE 的 `decisionKey` 采用：
   - `ctState`
@@ -241,6 +246,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
   - 显式 `verdict` / action
   - `reasonId`
   - `ruleId`（optional；仅最终执行结果有稳定 ruleId 时携带）
+  - `ruleMode`（`none|enforce|observe`；无 rule winner 时为 `none`）
 
 - `decisionKey` 变化时才表示该 flow 的执行状态段发生变化；计数增长本身不切段，只按 packets/bytes/time 阈值触发 UPDATE。
 
@@ -252,26 +258,25 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
   - 结束：`endReason`，最小枚举见 D 段。
   - 判决：显式 `verdict` / `action`，`reasonId` 只解释原因，不作为 allow/block 的唯一推导源。
   - Known flags：`uidKnown`、`ifindexKnown`，避免 `uid=0` / `ifindex=0` 与真实 root / any / unknown 混淆。
-  - Lifecycle flags：`pickedUpMidStream` 必须从预留状态变为可用语义，用于标记 loose pickup / incomplete lifecycle。
+  - Lifecycle flags：`pickedUpMidStream` 必须从预留状态变为可用语义，用于标记 CT loose pickup / incomplete lifecycle。
 
-- `IFACE_BLOCK` 保持最高优先级 verdict，但不作为 telemetry 的旁路系统：
-  - 包进入后先进入统一 Flow/CT 观测载体，再按策略优先级判定 `IFACE_BLOCK`。
-  - `IFACE_BLOCK` 作为 `reasonId=IFACE_BLOCK, ruleId=null` 的最终执行结果写入 FlowRecord。
-  - 这意味着 `IFACE_BLOCK` 可形成 `NEW + IFACE_BLOCK` 等 flow 段；该语义表示 daemon 观察到的 flow/attempt，不表示该连接已被允许建立。
+- `IFACE_BLOCK` 保持最高优先级 verdict，并且是 Base stage final block：
+  - SNORT-10 中 `IFACE_BLOCK` 不再为了 telemetry 先进入统一 Flow/CT 观测载体。
+  - `IFACE_BLOCK` 命中后 packet 在 CT 前 short-circuit，不生成 `FLOW` lifecycle record，不创建 block / deny-flow entry。
+  - 这避免 full-flow observation 把明确 blocked attempts 变成 CT 成本；需要解释时使用 Packet Diagnostics，普通计数使用 reason metrics 与 Traffic Windows `blockedPackets`。
 
-- BLOCK/IFACE_BLOCK entry 采用一套 Flow/CT 表，不拆 deny-flow table：
-  - 首包/当前段为 BLOCK（含 `IFACE_BLOCK`）时使用短 TTL。
-  - 后续包如果仍为 BLOCK，则刷新 TTL 时最多刷新到 block 短 TTL。
-  - 后续包如果变为 ALLOW / DEFAULT_ALLOW，则切换到正常 CT/flow 语义与正常 TTL。
+- Basic enforce block 与 `IFACE_BLOCK` 采用相同边界：
+  - Basic stage final block 不进入 CT、不进入 L2 cache、不扫描 Stateful/DPI、不生成 `FLOW` lifecycle record。
+  - Basic allow / observe-final-allow 若 subject 有 CT consumer，则仍可更新统一 CT entry / flow attachments，但不继续扫描 Stateful/DPI。
 
 - FlowRecord 的 counters 只携带累计值：
   - 使用 `totalPackets/totalBytes`，不在 record 中额外携带 since-last-export delta。
   - 新增 per-direction cumulative counters：`inPackets/inBytes` 与 `outPackets/outBytes`，用于前端 RX/TX、上/下行与方向拆分统计。
   - consumer 如需窗口增量，可基于同一 `flowInstanceId` 的前后累计值自行计算；gap 由 per-flow `recordSeq` 暴露。
 
-- FlowRecord 只携带 `ruleId`，不携带 `rulesEpoch`、`clientRuleId` 或规则文本。
+- FlowRecord 只携带 `ruleId` 与 `ruleMode`，不携带 `rulesEpoch`、`clientRuleId`、规则文本、`declaredAction` 或 `actionApplied`。
   - 前置约束：前端/控制面必须保证 `ruleId` 在可追溯历史内不被重用；规则修改若会改变历史解释，应分配新的 `ruleId`，或先执行 RESETALL 并清空 records。
-  - 该约束同样适用于 Debug Stream 的规则解释语义。
+  - 该约束同样适用于 Packet Diagnostics 的规则解释语义。
 
 - DNS 常态 records 与 packet/CT FlowRecord 是**两套 record 格式**：
   - DNS 拦截 timeline 使用独立的 `DnsDecisionRecord`（blocked-only）。
@@ -280,7 +285,7 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 - DNS 与 IP/flow 在常态 records 中不做 join：
   - FlowRecord 不携带 `domainHint`、domain name、domainRuleId 或 domain->IP 映射信息。
-  - 深度调试时，DNS/IP 关联、域名规则解释、packet verdict 证据链应由 Debug Stream 自身提供完整信息；常态 records 不作为 Debug Stream 取证链条的依赖。
+  - 本轮 packet-side Packet Diagnostics 不输出 DNS/IP join，DNS stream 冻结；常态 records 不作为任何诊断取证链条的依赖。
 
 - Interface 归因本轮只记录 observed interface：
   - FlowRecord 继续导出观测到的 `ifindex` 与 `ifaceKindBit`，并新增 `ifindexKnown` 表明该值是否来自 netfilter attr。
@@ -357,14 +362,13 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 - Flow/CT 表 hard cap 基线：
   - 采用 `global maxFlowEntries + per-uid maxEntriesPerUid`。
-  - 资源压力下不承诺复杂 LRU、多级配额或 BLOCK/IFACE_BLOCK 优先驱逐；先做 bounded sweep，仍满则拒绝创建新的 telemetry/flow entry。
+  - 资源压力下不承诺复杂 LRU、多级配额或 block-entry 优先驱逐；先做 bounded sweep，仍满则拒绝创建新的 telemetry/flow entry。`IFACE_BLOCK` / Basic final block 不进入 CT/Flow 表，因此不存在 block/deny-flow entry 驱逐策略。
 
-- TTL 默认值与可配置性：
-  - `blockTtl = 10 s`（适用于 BLOCK / IFACE_BLOCK 段；持续 BLOCK 刷新 TTL 时最多刷新到该短 TTL）。
-  - `pickupTtl = 30 s`（适用于 loose mid-stream pickup entry）。
+- Timeout / TTL 默认值与可配置性：
+  - Flow Telemetry 不定义独立 `blockTtl` 或 `pickupTtl`。blocked pre-CT packet 不建 flow entry；TCP mid-stream pickup 使用 L4 Conntrack 的 OVS-loose 语义与 OVS timeout policy。
   - `invalidTtl = 1 s` 或不入表（实现阶段按热路径和解析边界再定）；若导出，则按 `L3_OBSERVATION` / special flow 口径，不伪造正常 L4 flow。
-  - 正常 ALLOW TCP/UDP/ICMP/OTHER timeout 复用现有 Conntrack timeout。
-  - 上述 TTL 必须经控制面分别可配置；默认值仅作为发布基线。
+  - 正常 ALLOW TCP/UDP/ICMP/OTHER timeout 复用 L4 Conntrack timeout。
+  - `invalidTtl` 可经控制面配置；默认值仅作为发布基线。
 
 - 默认导出触发阈值（更保守）：
   - `bytesThreshold = 128 KiB`
@@ -413,13 +417,13 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 - 控制面参数更新语义：
   - `slotBytes`、`ringDataBytes`、ABI/version/framing 相关变更需要重建 telemetry session。
-  - `telemetryLevel`、`bytesThreshold`、`packetsThreshold`、`maxExportInterval`、`blockTtl`、`pickupTtl`、`invalidTtl`、`maxFlowEntries`、`maxEntriesPerUid` 可热更新。
+  - `telemetryLevel`、`bytesThreshold`、`packetsThreshold`、`maxExportInterval`、`invalidTtl`、`maxFlowEntries`、`maxEntriesPerUid` 可热更新。
   - cap 降低时不要求同步清表；影响后续 create/sweep。
 
 - 验收/benchmark 标准：
   - 采用相对目标：固定压测下，Flow Telemetry On 相比 Off 的吞吐下降目标不超过 5%-10%。
   - 若测试环境无法稳定测吞吐，则至少报告 p50/p95/p99 verdict path 延迟对比，不作为硬 fail。
-  - 必须覆盖：consumer absent、consumer connected、ring full/drop、RESETALL session rebuild、resource pressure、per-flow `recordSeq` gap、IPv4/IPv6、TCP/UDP/ICMP/unknown L4/fragment/extension header、allow/default allow/block/iface block/DNS blocked record。
+  - 必须覆盖：consumer absent、consumer connected、ring full/drop、RESETALL session rebuild、resource pressure、per-flow `recordSeq` gap、IPv4/IPv6、TCP/UDP/ICMP/unknown L4/fragment/extension header、allow/default allow、Base/Basic final block 不生成 `FLOW` lifecycle record、DNS blocked record。
 
 #### C/D 段已收口结论
 
@@ -434,32 +438,32 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 ### E. 与现有体系的关系（Stream/Metrics/控制面）
 
-13. Stream 的定位：长期 Debug-only，用于深度取证，不服务常态 UI 观测。
+13. Packet Diagnostics 的定位：长期 Debug-only，用于深度取证，不服务常态 UI 观测。
 14. Metrics 的定位：低基数 daemon 自检/运行态健康指标为主；前端常态 cockpit 统计由 consumer 从 records 计算。
-15. 控制面开关：Flow Telemetry 只提供 `Off / Flow`，Debug Stream 与 Metrics 独立控制。
+15. 控制面开关：Flow Telemetry 只提供 `Off / Flow`，Packet Diagnostics 与 Metrics 独立控制。
 
 #### E 段已收口结论
 
-- Stream：长期保留为 Debug-only 能力，不服务常态 UI 观测、timeline、Top-K 或 dashboard 数据。
-- Stream 的用途是短时间深度调试/取证：排查策略是否生效、策略之间是否互相覆盖、用户自定义策略是否写错、拦截路径哪里出现异常等。
-- Stream（调试）依赖 `tracked` 门控：其主要价值是降噪与减少干扰；调试场景下由上层选择性开启 tracked 来获取指定 app/对象的 per-pkt / per-dns debug trace。
+- Packet Diagnostics：长期保留为 Debug-only 能力，不服务常态 UI 观测、timeline、Top-K 或 dashboard 数据。
+- Packet Diagnostics 的用途是短时间深度调试/取证：排查策略是否生效、策略之间是否互相覆盖、用户自定义策略是否写错、拦截路径哪里出现异常等。
+- Packet Diagnostics 由 session-owned Diagnostic Focus 降噪；旧持久 `tracked` 不再作为 packet-side gate。
 - Legacy/边缘功能（例如 `IP_LEAK`）：保持冻结状态，不作为本设计需要扩展或重新解释的能力。
 - Metrics：继续保留，并通过 vNext 接口允许前端查询；但其定位首先是后端自检/运行态诊断/低基数状态快照。
-- Metrics 可包含 traffic/reason/rule hit/drop/resource/telemetry health 等快速计数；前端可将其作为快速状态参考，但高基数 timeline/Top-K/历史查询应以 records 为原始数据自行计算与定义口径。
-- `tracked` 与 Flow Telemetry 完全解耦：tracked 不影响 FlowRecord / DnsDecisionRecord 是否产生。
-- `tracked` 只影响 Debug Stream 与更细粒度 Metrics；例如 tracked app 可获得 per-pkt 处理延迟 p95/p99 等更重的性能数据。
+- Metrics 可包含 reason/rule hit/drop/resource/telemetry health 等快速计数；Traffic Windows 承担普通 traffic window 视图；高基数 timeline/Top-K/历史查询应以 records 或对应专门 surface 的数据自行计算与定义口径。
+- Diagnostic Focus 与 Flow Telemetry 完全解耦：Diagnostic Focus 不影响 FlowRecord / DnsDecisionRecord 是否产生。
+- Focused diagnostics 只影响显式诊断事件与可选 focused diagnostic metrics；普通 perf detail / profiling 由 PerfMetrics level 控制，不由 `tracked` 控制。
 
 - 控制面开关保持分离：
   - Flow Telemetry records 只提供 `Off / Flow`，没有 Debug level。
-  - Debug Stream 由 `STREAM.START(type=pkt|dns, ...)` 独立控制。
+  - Packet Diagnostics 由 `DIAGNOSTICS.START(channel=packet, ...)` 独立控制；DNS stream 当前冻结，不并入本轮 packet-side 重构。
   - Metrics 由 metrics 查询接口独立拉取。
   - 不引入一个同时改变 records/stream/metrics 的全局 debug 开关。
 
-- Debug Stream 的完善属于后续独立任务：
-  - 本文只确认 Debug Stream 是深度调试/取证的长期承载，不在本文定义其完整字段与实现任务。
-  - Flow Telemetry 不依赖 Debug Stream；Debug Stream 也不依赖 FlowRecord 作为取证链条的一部分。
-  - 后续独立任务需要补齐“策略链条证据”（explainability）字段/语义，以支持定位“规则 A 为何未生效/被覆盖”等问题。
-  - 深度溯源的目标是：在 Debug 场景下尽量做到“只靠 Stream 即可还原每个 DNS 请求与每个 packet verdict 的证据链”；常态 records 不作为深度取证的必要依赖。
+- Packet Diagnostics 的完善属于 SNORT-10 packet-side 诊断任务：
+  - 本文只确认 diagnostics 是深度调试/取证的长期承载，不把它并入 Flow Telemetry ABI。
+  - Flow Telemetry 不依赖 Packet Diagnostics；Packet Diagnostics 也不依赖 FlowRecord 作为取证链条的一部分。
+  - packet 侧解释链条由 Diagnostics 输出 stages / skipped reasons / rule snapshots / candidates。
+  - DNS stream 当前冻结，后续 Domain/DNS line 重新打开时再设计。
 
 - Legacy / IP_LEAK / 旧 stats 边界：
   - `IP_LEAK` 已处于冻结状态，不作为本设计需要扩展或重新解释的能力。
@@ -486,8 +490,8 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 - Flow Telemetry MVP 范围：
   - 包含：ring/session ABI、`FLOW` record、`DNS_DECISION` record、control params、minimal telemetry state、测试。
-  - 不包含：Debug Stream explainability、前端持久化/查询库、复杂 metrics cleanup、DNS↔IP/domain join、Summary mode。
-  - MVP 已于 2026-04-30 落地；前端 Activity 新需求暴露出的 raw facts completeness 属于后续 `FLOW` record 扩展，不改变 Flow Telemetry 与 Debug Stream / Metrics 的分层。
+  - 不包含：Packet Diagnostics explainability、前端持久化/查询库、复杂 metrics cleanup、DNS↔IP/domain join、Summary mode。
+  - MVP 已于 2026-04-30 落地；前端 Activity 新需求暴露出的 raw facts completeness 属于后续 `FLOW` record 扩展，不改变 Flow Telemetry 与 Packet Diagnostics / Metrics 的分层。
 
 - 文档与接口同步：
   - 本文件是设计记录；正式接口、命令、字段和 binary layout 以 `docs/INTERFACE_SPECIFICATION.md` 为准。
@@ -495,5 +499,5 @@ Flow Telemetry 的“shared memory + control/signaling socket + drop semantics�
 
 - 后续 work item 拆分与测试要求：
   - 新增 telemetry 能力应通过 Plane work item 拆分，并同步 daemon、native consumer、前端 consumer、接口规范与测试。
-  - Debug Stream explainability 是独立能力，不属于 Flow Telemetry 常态 records。
+  - Packet Diagnostics explainability 是独立能力，不属于 Flow Telemetry 常态 records。
   - 每个实现切片都必须包含对应单元测试与真机测试；涉及 ABI 的切片至少要有模拟前端读取 mmap 的真机通路验证。

@@ -47,11 +47,15 @@
 - `docs/IMPLEMENTATION_ROADMAP.md` 已同步 CT A++ runtime 为下一实现切片，并把 `shared-flow-pool` / owner handoff 降为后续候选变量。
 - `docs/testing/DEVICE_SMOKE_CASEBOOK.md` 已标注旧 Conntrack smoke case 的 create-on-accept / block-no-create 语义属于 pre-SNORT-10 历史验收口径。
 
-仍待专题讨论：
-- DNS / Domain diagnostics：DNS stream 当前冻结，后续整理 Domain/DNS 线时重做。
-- 诊断 / 尝试 / 救援恢复这些工作流如何衔接。
+当前仍待专题讨论：
+- 无。当前已讨论模块均已达到可拆分任务状态；暂不进入 issue 拆分。
 
-后续在本轮模块都达到可拆分状态后，再拆 Conntrack A++ implementation work items；DPI adapter / classifier 选型作为最后的独立专题。
+后置专题，不进入当前 Play-facing 第一轮：
+- DPI adapter / classifier 选型，作为最后的独立专题。
+- DNS / Domain diagnostics：DNS stream 当前冻结，后续整理 Domain/DNS 线时重做，顺序排在 DPI / L7 之后。
+- 测试 / 发布验收流程：第一版原则是完成大于完美，只先落最小测试原则并沿用当前已有测试层级做到类似覆盖深度；更细的受控性能回归、版本间基准比较、合并主分支前硬 gate 与 power audit 属于后置横切验收专题，等第一个重构版本完成后再完善。
+
+后续在所有需要先讨论的模块都达到可拆分状态后，再拆 Conntrack A++ implementation work items；后置专题按 DPI / L7 -> DNS / Domain -> 测试 / 发布验收流程顺序另开。
 
 ## 已形成的主边界
 
@@ -60,7 +64,7 @@
 - Traffic Windows basic tier 常驻，维护低基数 app/device/window/direction counters 与 app ranking。
 - Traffic Windows detail tier 默认开启但可由用户/前端关闭，维护 remote IP / protocol / protocol-port Top-K；它必须被设计成适合长期常开，不能退化成诊断级高成本路径。
 - Traffic Windows 的目标之一是摆脱 Conntrack / Flow Telemetry consumer 聚合依赖；basic tier 与 detail tier 都必须基于 `PacketFacts` 与最终 verdict 更新，不得为了 Traffic Windows 启用 Conntrack。
-- Traffic Windows 不依赖 Domain-IP Association，也不存储或输出 domain hint。前端如果需要把 remote IP 显示成域名，应独立调用 Domain-IP Association batch lookup。
+- Traffic Windows 不依赖 Domain-IP Association，也不存储或输出 domain hint。当前 Play-facing 第一轮不提供 IP→domain hint；未来如果前端需要把 remote IP 显示成域名，应走独立 Domain-IP Association batch lookup，而不是塞进 Traffic Windows。
 - Conntrack 从普通用户默认路径剥离，作为 Stateful IPRULES、完整流观测、未来 DPI/L7、未来 FORWARD 的高级 primitive。
 - CT acquisition 的 gate 是 subject/app 级高级能力 gate，不是同一 app 内按单条规则逐包细分；Basic enforce block 可以在 CT 前短路，Basic allow / observe-final-allow 下仍应更新 CT。
 - CT 状态更新与最终 verdict 解耦；CT entry 由自身 timeout / eviction 管理，后续 Stateful / DPI block 不回滚 CT。
@@ -80,16 +84,21 @@
 
 状态：packet-side observability 第一版边界已收口；不再把 Debug Stream、Flow Telemetry、packet diagnostics、observe/enforce runtime 归因当作概念未决项。
 
-仍待专题讨论：
-- DNS / Domain diagnostics：DNS stream 当前冻结，后续整理 Domain/DNS 线时重做。
-- 策略试运行、诊断、救援恢复这些用户工作流如何衔接；如需 Shadow Evaluation 产品工作流，另起专题，不反向改变已收口的 packet-side observe/enforce 语义。
+状态：安全修改策略工作流的主边界已收口；Try / Diagnose / Rescue 不作为三个平行 daemon 模块，而是前端围绕后端已定原语组织的一个连续用户工作流。具体入口、文案、提示节奏和页面组织属于前端实现细节，不反向改变 packet-side observe/enforce、Packet Diagnostics 或 Checkpoint Restore 语义。
+
+后置专题，不进入当前 Play-facing 第一轮：
+- DNS / Domain diagnostics：DNS stream 当前冻结，后续整理 Domain/DNS 线时重做，顺序排在 DPI / L7 之后。
 
 当前状态：
 - Packet diagnostics 与 observe / enforce 归因模型已收口；IPRULES Authoring Layer v1 已收口。
 - Flow Telemetry / Fact Records 与 Debug Stream / Explain Evidence 的传输和语义边界已收口：Flow Telemetry 是常态 shared-memory records；Packet diagnostics 是显式 vNext JSON explain stream；二者不统一 transport，也不互相依赖。
 - 已确认业务语义先分三类：Fact Records、Explain Evidence、Shadow Evaluation。
 - Shadow Evaluation 作为业务语义名称保留；它不是当前 packet-side `observe` runtime 的第二套 matcher 或第二套 stats 模型。
-- 诊断 / 尝试 / 救援暂不定模块名；后续只作为工作流专题继续拆。
+- 安全修改策略工作流面向用户表达为一条连续路径：先观察 -> 确认后拦截 -> 出问题先恢复联网 -> 需要时查看原因 -> 恢复旧策略或调整规则。
+- Try / 试运行对应已定的 `observe` binding mode：用户可以把某个 app / UID 的 rule 或 rule group 以 `bindingMode=observe` Commit + Apply 到真实 Runtime Snapshot。它不是 Draft preview、不是前端本地模拟，也不是第二套 shadow engine。
+- Diagnose / 诊断对应 Packet Diagnostics：用户在看不懂命中 / 未命中原因时，对具体 app / UID 开启显式短 session 获取 Explain Evidence。诊断补解释，不改变 verdict，也不是试运行的必要条件。
+- Rescue / 救援恢复对应 component gate 与 Checkpoint Restore：断网或误拦截时先用 `block.enabled=0` 或关闭相关 policy gate 恢复联网，再按需要 restore 到上一个可用 Checkpoint。救援路径不得依赖 diagnostics，避免把恢复联网路径变重。
+- 前端可以把这些能力组织成“安全修改策略”的单一产品体验；后端不新增全局 `safety-mode`、全局 dry-run、Try module、Diagnose module 或 Rescue module。
 - Packet-side rules 需要统一的 effective rule execution mode：`enforce` / `observe`。该 mode 不是 rule 自身的 authoring 状态，而是从 complete Linux UID 直接绑定到 rule / rule group 的 `bindingMode` 继承；`disabled` 属于 source / apply status，不进入 runtime mode。
 - `observe` 规则参与与 `enforce` 相同的扫描路径；winner 为 `observe` 时记录 observe hit，不执行 action，并按相同扫描退出点结束。
 - `observe` winner 必须 short-circuit 后续规则与后续 stage；不能因为 observe 不执行 action 就继续扫描。
@@ -269,6 +278,7 @@
 - capability summary 服务 stage/pipeline 调度，目标是在热路径上避免 Conntrack、DPI、Traffic Windows、Diagnostics 各模块重复做 subject/app lookup。
 - CT 是当前 subject/app 级高级能力 gate；不在同一 app 内按单条 CT 规则的 cheap precondition 决定每个 packet 是否进入 CT。DPI 后续实现时也走 subject/app 级高级能力 gate，并隐含 CT consumer。
 - Base / CT pipeline 已收口，不再作为 prefilter 未决项：Interface policy 与 Basic IPRULES 先基于 `PacketFacts` 评估；L1 `FinalBlock` 直接 block 且不进入 CT；L1 `FinalAllow` / observe-final-allow 不扫描 Stateful / DPI，但若 subject/app 有 CT consumer，仍更新统一 CT entry / flow attachments；只有 L1 `PassToAdvanced` 且 subject/app 需要 CT / advanced policy 时，才取得 `CtFacts` 并进入 Stateful IPRULES。DPI 是后续 stage；Resolved-IP Policy 是后置 fallback，不进入 IPRULES hot views。
+- Flow Telemetry / full-flow observation 是 CT observation consumer，但不覆盖 Base/Basic final block 边界：`IFACE_BLOCK` 或 Basic enforce block 已经产生 final block 的 packet 不为 telemetry 拉起 CT，也不生成正常 FlowRecord；blocked visibility 走 reason metrics、Traffic Windows `blockedPackets` 与 Packet Diagnostics。
 - Policy decision cache 第一版拆成 L1 Base cache 与 L2 Post-CT cache；L2 只处理 L1 `PassToAdvanced` 的 packet，不处理 L1 final allow / observe-final-allow。
 - L1/L2 cache entry 不能只保存 verdict，必须保存 rule attribution 与 stats handle，保证 cache hit 与重新扫描的 counters / diagnostics 归因一致。
 - L2 Post-CT cache 是 per-worker policy cache，不是 CT entry attachment；CT session 只保存 flow/session state 与 flow-level facts。
@@ -294,13 +304,7 @@
 
 ### 5. Domain-IP Association / Resolved-IP Policy / RDNS
 
-状态：模块边界已收口；仍待专题讨论的是存储参数、API schema 与诊断 evidence 细节，不再重新讨论它是否属于 DomainPolicy / IPRULES。
-
-仍待专题讨论：
-- Association store 的 TTL、cap、confidence / source metadata 与淘汰策略。
-- Domain-IP Association batch lookup 的具体 API schema。
-- Resolved-IP Policy 的诊断 evidence 与控制面 schema。
-- RDNS 后台队列、cache TTL / rate limit 与诊断接口。
+状态：模块边界已收口；Play-facing 第一轮不实现 Domain-IP Association storage、batch lookup、Resolved-IP Policy enforcement 或 RDNS 后台化。本线整体后置到 DNS / Domain 能力重新打开时，且优先级排在 DPI / L7 专题之后。
 
 当前状态：
 - Domain-IP Association 独立 gate 已确认。
@@ -308,6 +312,7 @@
 - 当前第一版 producer 可先接现有 DNS verdict path；DNS Observation Source 只作为 future producer contract，不进当前第一轮实现。
 - Resolved-IP Policy 是 Domain-IP Association 的可选 enforcement consumer，作为后置 fallback stage；它不进入 `basicView` / `statefulView` / `dpiView`。
 - RDNS 已降级为诊断 enrichment；不得在 packet verdict path 同步执行，不作为 association 主数据源，不参与 DomainPolicy / IPRULES verdict。
+- TTL / cap / confidence / source metadata、batch lookup API、Resolved-IP diagnostic evidence、RDNS queue/cache/rate limit 都不进入当前第一轮问题清单；等 DNS / Domain line reopened 后再一并设计。
 
 ### 6. IPRULES Compiler 分层
 
@@ -347,31 +352,85 @@
 
 ### 8. RuntimeService / 前端 Gate Contract
 
-状态：daemon lifecycle / component gate / product profile 边界已收口；仍待专题讨论的是前端产品默认值与跨能力 hot-update 矩阵。
-
-仍待专题讨论：
-- 哪些能力由普通 UI 长期启用，哪些只在诊断 session 开启。
-- 除已明确的能力外，其它配置哪些 next-start-only，哪些可热更新。
+状态：daemon lifecycle / component gate / product profile / onboarding profile gate 边界已收口；不再作为概念未决专题。前端初始化选择普通用户 / 高级用户后，通过启用 / 隐藏能力和写入配置形成默认能力矩阵；后端不引入 product profile enum。
 
 当前状态：
 - RuntimeService 表达 native daemon lifecycle；`block.enabled` 是 daemon 内部 component / policy gate，不是 daemon lifecycle。
 - `nfqueue.topology` 属于 next-start-only：`CONFIG.SET` 不热重建当前 listener / iptables，前端表达用户意图，RuntimeService 负责 stop/start daemon、清理/重建 NFQUEUE hooks 并在启动后校验。
 - 后端不引入 Google Play / full build profile 枚举。
-- 前端版本通过启用 / 隐藏能力形成产品形态。
+- 前端版本与用户 onboarding profile 通过启用 / 隐藏能力形成产品形态。
+- 普通用户默认开启 packet datapath、PacketFacts、Traffic Windows basic tier、已收口的 Traffic Windows 配置与 Basic IPRULES 等常规能力。
+- 高级用户默认开启 CT / Stateful IPRULES 相关能力；CT 仍通过 subject/app caps 与 active consumers 进入 packet path，不变成普通用户的全局每包成本。
+- Packet diagnostics / Diagnostic Focus 与 Flow Telemetry full records 属于显式 session / consumer 能力，不因普通后台 UI 常驻开启。
+- Domain-IP Association、Resolved-IP Policy、RDNS 与 DPI 不进入当前 Play-facing 第一轮普通 UI；DPI 最后单独讨论，DNS / Domain line 在 DPI 之后再打开。
+- 已明确的 hot-update / lifecycle 口径：policy runtime snapshot、Traffic Windows config/reset、diagnostic session、telemetry session、component gates 可以按各自边界热更新；`nfqueue.topology` next-start-only。
 
-### 9. Measurement / Perf 验收矩阵
+### 9. Measurement / Perf 指标与验收矩阵
 
-状态：仍需整理具体验收矩阵；这是测试 / 验收专题，不是前述模块概念未决。
-
-仍待专题讨论：
-- baseline、Traffic Windows、CT、DPI、Domain-IP Association、Debug Stream 分别怎么测。
-- idle current、scheduler wakeups、NFQUEUE queue stats。
-- verdict p50 / p95 / p99。
-- 各模块启用前后的预算。
+状态：PerfMetrics / datapath performance observability 指标层已收口，达到可拆分任务状态。测试组织、真机 / 单元测试、受控性能回归、合并主分支前 gate 与 power audit 不在本模块继续展开，后置为横切验收专题。
 
 当前状态：
+- Performance 指标属于可观测性数据，不等同于测试用例、发布 gate 或 work item 拆分。
+- 第一类最直接指标是 per-packet datapath latency。当前已有 `nfq_total_us` 从 NFQUEUE callback 开始计时，到 `sendVerdict()` 返回后记录，覆盖 daemon 内解析、策略、观测更新与 verdict 回写调用成本。
+- `nfq_total_us` 不覆盖 packet 在内核队列等待的时间、进入 callback 前的 kernel -> userspace copy 成本、应用侧网络 RTT 或远端网络延迟。
+- 现有 `p50` / `p95` / `p99` 是 histogram bucket 上界，不是精确分位点；`min` / `avg` / `max` 是真实样本聚合。
+- `PerfMetrics` 是 datapath performance observability 能力；SNORT-10 默认持久 level 是低扰动 `basic`，用于发现明显 datapath 退化和队列健康问题。旧 `perfmetrics.enabled=0` 的“默认关闭”只描述 pre-SNORT-10/current-head bool 实现，不作为 SNORT-10 默认契约；普通 UI 不应把 `detail` / `profiling` 当作常驻 dashboard 数据源。
+- `packetVerdictLatencyUs` / 当前 `nfq_total_us` 的语义边界保持不变；当前要收口的是采集路径自身的热路径成本。
+- `PerfMetrics` 开启后仍处在 packet hot path 上，不能因为它是诊断 / 测量能力就接受粗糙实现。采集成本本身必须被压到最低，并作为性能优化对象度量：时间读取、bucket 计算、min/max、histogram 与 sample 计数都应避免全局锁、跨线程争用、heap allocation 和不必要的 atomic RMW。
+- 当前实现已经做到 disabled 近似零成本，但 enabled path 仍有每包两次 monotonic clock read、bucket 计算、多个 relaxed atomic update 与 min/max CAS；这只是现状，不应视为 SNORT-10 最终性能上限。
+
+分层方向：
+- `perf basic` 是默认低扰动层，目标是长期可开、发现明显 datapath 退化和队列健康问题，而不是提供审计级精确分位数。basic 必须包含低频 sampled `packetVerdictLatencyUs`；如果默认层没有 latency，策略、consumer 或 hot-path 结构变慢时就无法在 base 状态发现问题。basic 必须明确 `sampled=true`，并同时输出 `eligiblePackets`、`sampledPackets`、`samplePeriod` / `sampleRate`，避免把 sampled p95/p99 误读为全量 p95/p99。
+- `perf detail` 是显式高成本诊断 / 测量层，目标是开发 / 回归 / 排障时取得更完整的 latency 分布、stage breakdown 与慢样本证据。detail 可以每包采样；生命周期由前端产品策略决定。后端提供开启、停止、状态查询和可选 duration 机制，但不强制最大运行时长；如果前端未指定 duration，则 detail 保持开启直到前端停止、切回 basic / off、daemon 重启或 `RESETALL`。
+- `perf profiling` 是同一个 PerfMetrics 模型里的 developer / release profiling level，第一版要实现，但不进入普通用户 UI，也不属于 ordinary detail。它由开发者、CI 或发版前自动化流程显式调用，用于 per-stage latency breakdown 和发版性能回归。它不需要独立 command namespace / surface，避免把 perf 控制面拆复杂。
+- 现有 `perfmetrics.enabled=1` 语义更接近 detail/full timing，不应直接作为 default-on basic。第一版接口可以把配置重塑为 `perfmetrics.level=off|basic|detail|profiling`；旧 bool 兼容不作为设计约束。
+- `perfmetrics.level` 持久化语义：`basic` 是默认持久 level；`off` 与 `detail` 可以按前端产品策略持久化；`profiling` 不持久化。daemon 重启、`RESETALL` 或 profiling 结束后回到上一个非 profiling level，通常是 `basic`，也可能是前端设置的 `off` / `detail`。
+
+basic 实现原则：
+- 先采样、后计时。packet 进入时先用 per-worker packet counter / bitmask / budget 决定是否采样；未采样 packet 不调用 `clock_gettime`，不更新 latency histogram。
+- basic 第一版采用固定 power-of-two per-worker deterministic sampling，不做自适应采样。每个 worker 维护本地 packet counter，并带 worker-local offset；例如 `sample = ((++counter + workerOffset) & (samplePeriod - 1)) == 0`。`samplePeriod` 必须是配置 / 输出的一部分。
+- basic 默认 `samplePeriod=1024`；合法范围为 `256..65536`，且必须是 power-of-two。basic 不允许 `samplePeriod=1` 的每包采样；每包采样只属于 detail 显式高成本层。
+- 未采样 packet 只更新极低成本本地计数，例如 eligible packet count、queue health / error counters；不能做全局 atomic RMW、CAS min/max、heap allocation、JSON、socket write 或日志。
+- basic/detail 共用同一个轻量 `LatencyHistogram` 结构；两级只区别采样率、启用边界和是否输出额外 breakdown，不维护两套统计结构。
+- `LatencyHistogram` 使用 fixed dense exponential histogram / HdrHistogram-style buckets。bucket 数为编译期常量，不使用 `std::vector` 或动态分配，不引入完整 HdrHistogram 依赖。bucket array 由 worker-local shard 持有，热路径只写本 worker 的 plain counters；控制面查询时合并。
+- `p50` / `p95` / `p99` 继续表示 bucket upper bound；`min` / `avg` / `max` 在 basic 中只对 sampled packets 有意义，response 必须通过 `sampled=true` 与 sample counters 明确这一点。
+- basic 的默认健康面必须同时包含 sampled latency 与 NFQUEUE health。sampled latency 用于发现策略 / consumer / hot-path 结构退化；queue backlog/depth、kernel drops、user drops、recv/verdict errors、queue skew、pps/bps、samples/sec 用于发现饱和、丢包和调度问题。
+- NFQUEUE health 是 perf basic 的附属健康面，不作为复杂产品功能扩展。第一版只暴露 aggregate 低成本字段：`recvErrors`、`verdictErrors`、`kernelDrops`、`userDrops`、`queueDepth` / `currentQueued`、`queueSkew`、`packets`、`bytes`、`sampledPackets` / `samplesPerSec`，以及可由窗口字段推导或直接返回的 `packetsPerSec` / `bytesPerSec`。若返回 rate 字段，必须明确它们来自当前 `epoch` window，不是独立采样流。
+- `perf basic` 不默认返回 per-queue 详单数组；`queueSkew` 足够作为普通面判断多队列不均衡的信号。per-queue breakdown 只进入 `profiling` 或后续开发者诊断输出，不进入普通 basic response。
+- v1 perf 指标只承认边界清楚的两类数据：`packetVerdictLatencyUs` 表示 daemon-side callback-to-verdict 成本，`nfqueueHealth` 表示队列深度、丢包、错误、不均衡和吞吐健康信号。kernel queue wait、进入 callback 前的 kernel -> userspace copy、应用侧网络 RTT、远端网络延迟不伪装成 datapath latency。policy cost、Traffic Windows cost、CT cost、diagnostics output cost 等内部阶段成本只在 `perf profiling` 的 `profiling.perStageLatencyUs` 中表达，不进入 basic/detail 的普通用户指标面。
+
+detail 实现原则：
+- detail 使用同一套 worker-local `LatencyHistogram`，只是采样率更高，必要时每包采样；不得回到共享 atomic histogram。
+- 面向普通前端 / 用户的 detail 仍以总 `packetVerdictLatencyUs` 分布为主，例如 sampled packets、avg、p50、p95、p99、max 等；不默认展示或采集每个内部阶段耗时。
+- per-stage latency breakdown（例如 parse、base policy、CT、Traffic Windows update、diagnostic output、send verdict）属于 `perf profiling`，不属于普通 detail 用户面。它用于发版前 CI / 自动化回归比较每个处理阶段的耗时变化；需要开发者或自动化流程独立显式开启，不能随 detail 默认启用。
+- 慢样本 / full trace 只进入 bounded fixed-size ring，满了 drop 并计数；不得阻塞 verdict 或在 packet path 做动态分配。
+- detail 的资源边界由后端保证：histogram / ring / stage counters 都必须固定容量或明确 bounded；即使前端长期保持 detail 开启，也只能持续承担已声明的热路径成本，不能出现无界内存增长或输出反压。
+- per-flow 性能数据只有在 CT / Flow Telemetry 已经作为 consumer 启用时才可记录；不能为了 perf detail 偷偷拉起 CT。
+- reset / config change / query 使用 epoch 或 bank swap。`METRICS.RESET(name=perf)` 返回后，新 packet 必须进入新 bank；控制面不得清空正在被 worker 写入的 active arrays。
+- Worker perf state 至少包含双 bank：热路径只写当前 worker 的 active bank；控制面 reset / config change 在慢路径准备新 bank / epoch 后发布。旧 bank 等 worker quiescent 后清理复用。
+- `METRICS.GET(name=perf)` 合并当前 epoch 的 worker-local banks；snapshot 可以是 best-effort，但必须返回 epoch / window start 等窗口身份，不能读半初始化对象或依赖全局 histogram lock。
+- perf 指标读取统一走 `METRICS.GET(name=perf)`，不拆多个 GET command / surface。response 使用 `level` 区分 `basic|detail|profiling`，并返回 `packetVerdictLatencyUs`、NFQUEUE health，以及 profiling level 下可选的 `profiling.perStageLatencyUs`。
+- 新主字段名使用 `packetVerdictLatencyUs`，表示 NFQUEUE callback 开始到 verdict send 完成的 daemon-side packet verdict latency。旧 `nfq_total_us` 可在迁移期作为 alias 或兼容字段存在，但不作为 SNORT-10 新语义中心。
+- `perfmetrics.level` 是 device config key，通过 `CONFIG.GET/SET` 管理；不新增 `METRICS.SET`、`PERF.START` 或独立 profiling command。`METRICS.GET(name=perf)` 只负责读取当前窗口，`METRICS.RESET(name=perf)` 只负责清理窗口 / 切新 epoch，不改变 level。
+- 任意 `perfmetrics.level` 实际变化都必须切新 epoch / reset 当前 perf window，包括 `off -> basic`、`basic -> detail`、`detail -> profiling`、`profiling -> basic` 等。相同 level 的 idempotent `CONFIG.SET` 是 no-op，不 reset。这样避免不同采样率、不同字段集合或 profiling breakdown 混在同一个窗口内。
+- `perfmetrics.level=off` 时，`METRICS.GET(name=perf)` 只返回 `level:"off"`，不输出空 histogram、sample counters 或 NFQUEUE health 字段，避免把关闭状态伪装成有效的零样本数据。
+- 除 `off` 外，所有 perf response 都必须返回公共窗口字段：`level`、`epoch`、`windowStartMonoMs`，以及用于计算窗口长度的 `nowMonoMs` 或等价字段。前端、CI 与发版回归必须基于这些字段判断数据是否属于同一个测量窗口。
+- 性能对比记录使用统一模型，不为 Traffic Windows、CT、Packet Diagnostics 各自发明记录格式。每条记录包含 `scenario`、`build`、`config`、`metrics` 或 `metricsBefore` / `metricsAfter`、`notes`。`scenario` 表示受控流量场景名，例如 `baseline-basic-policy`、`traffic-windows-basic`、`ct-stateful-policy`、`packet-diagnostics-session`；`build` 记录 git commit / build variant / device profile；`config` 记录 `perfmetrics.level`、`samplePeriod`、NFQUEUE topology、Traffic Windows / CT / diagnostics 等能力开关；`metrics` 直接嵌入当前 `METRICS.GET(name=perf)` shape；`notes` 只用于人工解释，不作为机器判断核心。
+- baseline、Traffic Windows、CT、Packet Diagnostics 等能力启用前后的对比维度都通过同一记录模型表达；差异只体现在 `scenario` 与 `config`，CI / 发版 gate 后续也复用这套记录模型。
+
+后置到横切验收专题：
+- 第一版测试原则是完成大于完美：先保证每个实现切片有最低限度、能防止明显回归的测试，不在第一版追求完整覆盖率、完整发布 gate 或完整性能基准体系。
+- 第一版测试范围先继承当前仓库已有三层：host-side unit / gtest，host-driven integration / control baseline，Device/DX 真机 smoke。目标是做到与当前代码类似的基本保障深度，而不是在 SNORT-10 第一轮就设计完整发布 gate 矩阵。
+- SNORT-10 各模块按风险落测试层级：纯逻辑优先 host unit；控制面 / API / snapshot 优先 host-driven integration；真正触及 NFQUEUE、verdict、iptables hook、daemon/device interaction 的改动必须有 Device/DX smoke。不要机械要求每个模块第一版都补满 unit + integration + 真机全套。
+- 当前已有入口包括 `snort-host-tests` / `snort-host-tests-gate`，`tests/integration/vnext-baseline.sh` / `dx-smoke-control.sh`，以及 `tests/integration/dx-smoke.sh` / `dx-smoke-datapath.sh` / `tests/device/ip/run.sh --profile smoke`。SNORT-10 各模块实现时应补对应层级的最小用例，但不把长期性能基准体系作为第一版前置条件。
+- 更细的受控性能回归、每个版本和上一版本的基准对比、自动化性能流程、merge-to-main 硬 gate、idle current、scheduler wakeups、CPU frequency residency、battery current 等 power audit 流程，等第一版重构完成并形成基准后再完善。
+
+后置到 future 能力专题：
+- DPI、Domain-IP Association、RDNS 不进入当前 Play-facing 第一轮性能指标矩阵，只在 future 专题打开后再补。
+
+备注：
 - 原 review 已提出 power audit 和 perf matrix 方向。
-- 具体矩阵待后续整理。
+- 具体发布验收矩阵后置到横切验收专题，不作为 PerfMetrics 模块继续讨论项。
 
 ### 10. IPRULES Authoring Layer
 

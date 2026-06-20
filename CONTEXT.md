@@ -163,7 +163,7 @@ The subject/app-level decision that eligible packets should enter L4 Conntrack b
 _Avoid_: global CT enable for all packets, single-rule prefilter deciding CT entry
 
 **Unified CT entry**:
-The single flow/session state record owned by L4 Conntrack for a given tracked flow. Flow Telemetry counters, DPI state/results, debug/export state, and other flow-level attachments hang from this entry rather than creating separate per-consumer CT tables.
+The single flow/session state record owned by L4 Conntrack for a given observed flow. Flow Telemetry counters, DPI state/results, debug/export state, and other flow-level attachments hang from this entry rather than creating separate per-consumer CT tables.
 _Avoid_: DPI-specific CT table, telemetry CT table, duplicate flow tables
 
 **DPI / L7 Policy**:
@@ -226,6 +226,10 @@ _Avoid_: fact records, shadow evaluation, ordinary history
 Dry-run policy evaluation that reports what a candidate or non-enforcing policy would have matched without changing the actual verdict.
 _Avoid_: executed verdict, fact records, explain evidence
 
+**Safe Policy Change Workflow**:
+The user-facing workflow for changing packet policy with a clear recovery path: observe-mode apply for trying a policy, Packet Diagnostics for explaining behavior, and component gates plus Checkpoint Restore for rescue. It is a frontend/product workflow over daemon primitives, not a separate daemon policy mode.
+_Avoid_: standalone Try/Diagnose/Rescue daemon modules, global safety mode, global dry-run, shadow engine, diagnostics as a rescue prerequisite
+
 **DNS_DECISION record**:
 A telemetry record for blocked DNS decisions and DomainPolicy attribution. It is separate from packet and flow records.
 _Avoid_: DNS-to-IP join record
@@ -251,12 +255,12 @@ The optional detail tier inside Traffic Windows: bounded heavy-hitter summaries 
 _Avoid_: exact destination ledger, unbounded per-destination map, full dimensional cube
 
 **Diagnostic Focus**:
-The single active, session-owned per-app or per-UID diagnostic focus gate that allows heavier packet/DNS explain, diagnostic streams, and focused diagnostic metrics for the selected subject.
+The single active, session-owned per-app or per-UID diagnostic focus gate that allows heavier packet/IPRULES explain, diagnostic streams, and focused diagnostic metrics for the selected subject.
 _Avoid_: Traffic Windows, Flow Telemetry, ordinary observability, global debug mode, persistent app configuration
 
 **Debug Stream**:
-A vNext short-window evidence stream for DNS or packet investigation, normally gated by Diagnostic Focus.
-_Avoid_: long-term telemetry, normal dashboard API
+A legacy / generic name for short-window debug evidence streams. In the refactored packet-side model, use Packet Diagnostics and Diagnostic Focus; the old DNS stream remains a frozen DNS-line capability until the Domain/DNS line is reopened.
+_Avoid_: long-term telemetry, normal dashboard API, new packet diagnostics API name
 
 **Packet Diagnostics**:
 The user-facing packet/IPRULES diagnostic mode opened by a diagnostics session. It is session-owned, targets one app or UID, emits JSON diagnostic events with full explain evidence, and is not part of normal telemetry records.
@@ -267,8 +271,12 @@ Legacy name for the old app-level Debug Stream gate. The refactored packet diagn
 _Avoid_: new configuration name, persistent diagnostics state, treating tracked as the general observability enable switch
 
 **PerfMetrics**:
-Short-window latency and health instrumentation for diagnosing datapath cost.
-_Avoid_: always-on product dashboard metrics
+Latency and health instrumentation for diagnosing datapath cost. PerfMetrics has a low-disturbance basic tier for default health observation, an explicit detail tier for heavier diagnosis and measurement, and a developer/release profiling level for per-stage latency breakdown. Frontend policy controls whether detail runs briefly or remains enabled; developer tooling or CI controls profiling. The daemon provides bounded collection mechanisms. When enabled, its own collection work is part of the packet hot path and must remain bounded and aggressively minimized.
+_Avoid_: always-on product dashboard metrics, treating diagnostic measurement overhead as free, exposing profiling breakdown as ordinary user detail, separate profiling command surface
+
+**Datapath Performance Indicators**:
+Observable measurements of packet path cost, such as per-packet datapath latency and NFQUEUE queue health. They describe runtime performance data; separate test and release gates decide when those measurements must be collected or enforced.
+_Avoid_: unit test suite, release checklist, network RTT, always-on product dashboard KPI
 
 **RDNS / rdns.enabled**:
 Diagnostic-only reverse-DNS enrichment. It may help explain traffic, but it is not an enforcement dependency.
@@ -321,7 +329,7 @@ Verdict-affecting daemon state such as DomainPolicy, DomainLists, IPRULES, confi
 _Avoid_: mixing it with observational session buffers
 
 **Observability session state**:
-Runtime state for streams, telemetry consumers, suppressed notices, and record assembly. RESETALL or checkpoint restore may force clients to reopen sessions.
+Runtime state for diagnostics sessions, telemetry consumers, frozen legacy streams, and record assembly. RESETALL or checkpoint restore may force clients to reopen sessions.
 _Avoid_: treating it as durable policy
 
 **Counters**:

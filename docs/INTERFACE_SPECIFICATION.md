@@ -1,8 +1,8 @@
 # sucre-snort 接口规范
 
-版本: v3.8
+版本: v3.10
 目标平台: Android 16, KernelSU
-更新时间: 2026-04-30
+更新时间: 2026-06-20
 
 ---
 
@@ -22,7 +22,7 @@
 - request envelope：`{"id":1,"cmd":"...","args":{}}`（`args` 必须是 object）
 - response envelope：`{"id":1,"ok":true,"result":{...}}` / `{"id":1,"ok":false,"error":{...}}`
 - strict reject：顶层/args 出现未知 key → `SYNTAX_ERROR`；未知 `cmd` → `UNSUPPORTED_COMMAND`。
-- stream event：事件 frame 为 JSON object（无 `id/ok`），顶层必须含 `type`；见 `STREAM.*`。
+- event mode：`DIAGNOSTICS.START` 成功后该连接进入事件输出模式；事件 frame 为 JSON object（无 `id/ok`），顶层必须含 `type`。
 - 备注：对外契约以本文为准；v3.7 及更早的协议/命令面设计材料已归档到 `docs/archived/`（非权威）。
 
 vNext app selector（`args.app`）约定:
@@ -39,7 +39,7 @@ vNext app selector（`args.app`）约定:
 - `HELLO` | `{}` | `result={protocol,protocolVersion,framing,maxRequestBytes,maxResponseBytes,daemonBuildId,artifactAbi,capabilities[]}` |
   - `protocol="control-vnext"`，`protocolVersion=1`，`framing="netstring"`。
   - `daemonBuildId` / `artifactAbi` 用于前端诊断当前 daemon 与 native artifact 身份。
-  - `capabilities[]` 当前包含：`"control-vnext"`、`"nfqueue-datapath"`、`"apk-native-artifact"`。
+  - `capabilities[]` 当前包含：`"control-vnext"`、`"nfqueue-datapath"`、`"apk-native-artifact"`、`"traffic-windows"`、`"packet-diagnostics"`。
 - `QUIT` | `{}` | `ok` | response 写出后关闭连接
 - `RESETALL` | `{}` | `ok` | 清空设置、统计、域名、规则、列表并持久化
 
@@ -52,9 +52,11 @@ vNext app selector（`args.app`）约定:
 
 2.3 配置（Config）
 - `CONFIG.GET` | `{"scope":"device"|"app","app"?:selector,"keys":string[]}` | `result={values:{k:v...}}` |
-  - device scope keys：`block.enabled` / `iprules.enabled` / `rdns.enabled` / `perfmetrics.enabled` / `block.mask.default` / `block.ifaceKindMask.default` / `nfqueue.topology`
-  - app scope keys：`tracked` / `block.mask` / `block.ifaceKindMask` / `domain.custom.enabled`
-  - 所有开关值为 `0|1`（u32）；mask 为 `u8`（用 u32 传输）。
+  - device scope keys：`block.enabled` / `iprules.enabled` / `rdns.enabled` / `perfmetrics.level` / `perfmetrics.samplePeriod` / `block.mask.default` / `block.ifaceKindMask.default` / `nfqueue.topology`
+  - app scope keys：`block.mask` / `block.ifaceKindMask` / `domain.custom.enabled`
+  - 所有 toggle 开关值为 `0|1`（u32）；mask 为 `u8`（用 u32 传输）。
+  - `perfmetrics.level` 为 device-scope string enum：`"off"|"basic"|"detail"|"profiling"`；默认 `"basic"`。
+  - `perfmetrics.samplePeriod` 为 power-of-two u32，合法范围 `256..65536`，basic 默认 `1024`；每包采样只属于 detail/profiling。
   - `nfqueue.topology` 为 device-scope string enum：`"split-in-out"`（默认）或 `"shared-flow-pool"`。
 - `CONFIG.SET` | `{"scope":"device"|"app","app"?:selector,"set":{k:v...}}` | `ok` |
   - `set` key 集合与 `CONFIG.GET` 一致；不支持的 key → `INVALID_ARGUMENT`。
@@ -83,7 +85,17 @@ vNext app selector（`args.app`）约定:
   - 限制：`maxImportDomains=1,000,000`；`maxImportBytes=16MB`（超限 `error.limits + error.hint`）。
   - `listId` 必须已存在（用 `DOMAINLISTS.APPLY` 创建）；`listKind/mask` 必须与已存元数据一致。
 
-2.6 IP 规则（IPRules）
+2.6 IP 规则（IPRules；pre-SNORT-10 current-head direct mutation surface）
+
+SNORT-10 Authoring Layer 一致性说明：下面 `IPRULES.PREFLIGHT/PRINT/APPLY`
+是 pre-SNORT-10 current-head 的直接 per-app mutation surface 记录，不是
+SNORT-10 新目标的权威 mutation contract。SNORT-10 新目标以 Authoring
+Layer v1 为准：daemon 持有 Authoring Policy Bundle，状态点为 `Draft`、
+`Committed Policy Revision`、最近 5 个 `Checkpoint` 与 `Runtime Snapshot`；
+流程为 `Edit Draft -> Commit Draft -> Apply Commit -> Checkpoint + Runtime Snapshot`；
+packet path 只读取 `Runtime Snapshot`。具体 command names / JSON schema / draft CRUD /
+checkpoint id / persistence / migration 策略在 SNORT-17 implementation slice 中定义。
+
 - `IPRULES.PREFLIGHT` | `{}` | `result={summary,byFamily,limits,warnings,violations}` |
 - `IPRULES.PRINT` | `{"app":selector}` | `result={uid,rules[]}` |
   - `rules[]` item（只读快照，含统计）：`{ruleId:u32,clientRuleId:string,matchKey:string,action,priority,enabled,enforce,log,family,dir,iface,ifindex,proto,ct,src,dst,sport,dport,stats}`
@@ -97,27 +109,34 @@ vNext app selector（`args.app`）约定:
     - `mk2|family=<ipv4|ipv6>|dir=<...>|iface=<...>|ifindex=<...>|proto=<...>|ctstate=<...>|ctdir=<...>|src=<...>|dst=<...>|sport=<...>|dport=<...>`
     - CIDR 规范化为网络地址（host bits 清零）；`ifindex=0` 表示 any；`proto=icmp|other` 时 `sport/dport=any`。
 
-2.7 策略检查点（Checkpoint）
+2.7 策略检查点（Checkpoint；pre-SNORT-10 current-head）
+
+SNORT-10 Authoring Layer 一致性说明：下面固定 slot 的 `CHECKPOINT.*` 是 pre-SNORT-10 current-head control surface 记录。SNORT-10 新目标以 IPRULES Authoring Layer v1 为准：`Draft -> Commit -> Apply -> Checkpoint + Runtime Snapshot`，checkpoint 为最近 5 个 full Authoring Policy Bundle snapshot，具体新 API schema 后续在 authoring/API 实现切片中定义。后续 issue 拆分不得把固定 `0..2` slot surface 当作 SNORT-10 新目标。
+
 - `CHECKPOINT.LIST` | `{}` | `result={slots[],slotCount,maxSlotBytes}` |
-  - 固定只暴露 3 个 slot：`0/1/2`；`slots[]` 必须按 `slot` 升序返回。
+  - pre-SNORT-10 slot surface 固定只暴露 3 个 slot：`0/1/2`；`slots[]` 必须按 `slot` 升序返回。
   - slot item：`{slot:u32,present:bool,formatVersion?:u32,sizeBytes?:u64,createdAt?:u64}`；后 3 项仅 `present=true` 时出现。
 - `CHECKPOINT.SAVE` | `{"slot":0|1|2}` | `result={slot:{slot,present,formatVersion?,sizeBytes?,createdAt?},maxSlotBytes}` |
   - 原子替换所选 slot；bundle 超过 64 MiB 时返回 `CAPACITY_EXCEEDED`，旧 slot 内容保持可恢复。
 - `CHECKPOINT.RESTORE` | `{"slot":0|1|2}` | `result={slot:{slot,present,formatVersion?,sizeBytes?,createdAt?},maxSlotBytes}` |
   - 空 slot 返回 `NOT_FOUND`。
   - restore 先完整解析/验证 bundle（版本、DomainPolicy rule 引用、DomainLists 元数据/内容、IPRULES preflight 等），失败时 live policy 不变。
-  - 成功后开启新的 policy runtime epoch：清 conntrack、learned domain/IP/host 关联、IPRULES cache、旧 policy epoch 的 metrics、active stream state 与 telemetry session；客户端需要重新打开 stream/telemetry consumer。
+  - 成功后开启新的 policy runtime epoch：清 conntrack、IPRULES cache、旧 policy epoch 的 metrics、active diagnostics session 与 telemetry session；客户端需要重新打开 diagnostics / telemetry consumer。Domain-IP Association 不属于当前 Play-facing 第一轮。
 - `CHECKPOINT.CLEAR` | `{"slot":0|1|2}` | `result={slot:{slot,present,formatVersion?,sizeBytes?,createdAt?},maxSlotBytes}` |
   - 幂等删除所选 slot；空 slot 也返回 `ok=true` 且 `slot.present=false`。
 - 所有 `CHECKPOINT.*` 命令 strict JSON；未知 `args` key 返回 `SYNTAX_ERROR`，缺少 `slot` 返回 `MISSING_ARGUMENT`，非法 slot 返回 `INVALID_ARGUMENT`。
 - bundle 仅包含 verdict-affecting policy：device/app verdict config、DomainRules、DomainPolicy、DomainLists 元数据与内容、IPRULES rules/nextRuleId；不包含 frontend metadata、历史、统计、stream replay、Flow Telemetry records、Geo/ASN、health/billing/diagnostic export。
 
-2.8 观测（Metrics/Stream/Telemetry）
+2.8 观测（Metrics / Telemetry / Traffic Windows / Diagnostics）
 - `METRICS.GET` | `{"name":name,"app"?:selector}` | `result` |
-  - `name=perf` → `result.perf{nfq_total_us,dns_decision_us}`；每项为 `{samples,min,avg,p50,p95,p99,max}`（单位 `us`）。
-  - `name=reasons` → `result.reasons{IFACE_BLOCK,IP_LEAK_BLOCK,ALLOW_DEFAULT,IP_RULE_ALLOW,IP_RULE_BLOCK}`；每项为 `{packets,bytes}`。
+  - `name=perf` → `result.perf`；shape 由 `perfmetrics.level` 决定：
+    - `level="off"` 时只返回 `{level:"off"}`。
+    - 非 off 时返回 `{level,epoch,windowStartMonoMs,nowMonoMs,packetVerdictLatencyUs,nfqueueHealth,profiling?}`。
+    - `packetVerdictLatencyUs` 表示 NFQUEUE callback start 到 verdict send return 的 daemon-side 成本；不包含 kernel queue wait、kernel→userspace copy 前置成本、app RTT 或远端网络延迟。
+    - `basic` 使用 sampled latency，必须返回 `sampled=true`、`eligiblePackets`、`sampledPackets`、`samplePeriod`；p50/p95/p99 为 bucket upper bound。
+    - `profiling` 可额外返回 `profiling.perStageLatencyUs`，只供开发 / CI / 发版前测量，不作为普通用户 detail 面。
+  - `name=reasons` → `result.reasons{IFACE_BLOCK,ALLOW_DEFAULT,IP_RULE_ALLOW,IP_RULE_BLOCK}`；每项为 `{packets,bytes}`。Resolved-IP / DPI 相关 reason 只在对应后续模块实现时新增。
   - `name=domainSources` → `result.sources{...}`（device 或 app 维度）；app 维度额外返回 `{uid,userId,app}`。
-  - `name=traffic` → `result.traffic{dns,rxp,rxb,txp,txb}`；每项为 `{allow,block}`（device 或 app 维度）。
   - `name=conntrack` → `result.conntrack{totalEntries,creates,expiredRetires,overflowDrops,byFamily{ipv4,ipv6}}`。
   - `name=domainRuleStats` → `result.domainRuleStats{rules[]}`（device-only；禁止 `args.app`）：
     - `rules[]` item：`{ruleId:u32,allowHits:u64,blockHits:u64}`（按 `ruleId` 升序；baseline 全量覆盖）。
@@ -126,7 +145,8 @@ vNext app selector（`args.app`）约定:
     - `consumerPresent`: 当前是否存在 telemetry consumer session（boolean；`enabled=false` 时必为 false）。
     - `lastDropReason`: `"none"|"consumerAbsent"|"slotBusy"|"recordTooLarge"|"disabled"|"resourcePressure"`。
 - `METRICS.RESET` | `{"name":name,"app"?:selector}` | `ok` |
-  - 支持 reset：`perf` / `reasons` / `domainSources` / `traffic` / `domainRuleStats`。
+  - 支持 reset：`perf` / `reasons` / `domainSources` / `domainRuleStats`。
+  - `METRICS.RESET(name=perf)` 清当前 perf window / 切新 epoch，不改变 `perfmetrics.level`。
   - `METRICS.RESET(name=conntrack)`：不支持，返回 `INVALID_ARGUMENT`（提示使用 `RESETALL`）。
 - `TELEMETRY.OPEN` | `{"level":"off"|"flow","config"?:{...}}` | `result={actualLevel,sessionId,abiVersion,slotBytes,slotCount,ringDataBytes,maxPayloadBytes,writeTicketSnapshot}` |
   - `level=off` 等价于关闭 telemetry（同 `TELEMETRY.CLOSE`）；返回 `actualLevel="off"`。
@@ -135,12 +155,55 @@ vNext app selector（`args.app`）约定:
   - `config`（可选覆盖，未知 key → `SYNTAX_ERROR`）：
     - ring: `slotBytes(u32)`, `ringDataBytes(u64)`
     - poll/emit: `pollIntervalMs(u32)`, `bytesThreshold(u64)`, `packetsThreshold(u64)`, `maxExportIntervalMs(u32)`
-    - TTL: `blockTtlMs(u32)`, `pickupTtlMs(u32)`, `invalidTtlMs(u32)`
+    - TTL: `invalidTtlMs(u32)`
     - limits: `maxFlowEntries(u32)`, `maxEntriesPerUid(u32)`
   - records 通过 shared-memory ring 输出；二进制 ABI 见下方 “Flow Telemetry shared-memory ABI”。
 - `TELEMETRY.CLOSE` | `{}` | `ok` |
   - idempotent；会作废旧 session（consumer 端需停止 ingest 并在需要时重新 OPEN）。
   - daemon 可在关闭前 bounded best-effort 导出 `FLOW END(endReason=TELEMETRY_DISABLED)`；cleanup 预算按 scanned bucket / entry 计算，ring write 失败也不能扩大扫描范围；consumer 仍必须把 session boundary 当作活跃状态截断点，不能要求每个 active flow 都有 disabled END。
+- `TRAFFIC_WINDOWS.CONFIG.GET` | `{}` | `result={config}` |
+  - `config={enabled:0|1,detailEnabled:0|1,windows:[{durationSec:u32}]}`；默认 windows 为 `900/3600/18000/86400`。
+- `TRAFFIC_WINDOWS.CONFIG.SET` | `{"set":{enabled?:0|1,detailEnabled?:0|1,windows?:[{durationSec:u32}]}}` | `ok` |
+  - `set:{}` 合法且 no-op；`windows` 一旦出现必须提交完整数组，数量 `1..4`，每个 duration `60..86400` 且不重复。
+  - 任意有效配置变化都 reset 全部 Traffic Windows runtime state；response 不返回 `reset` 字段。
+- `TRAFFIC_WINDOWS.GET` | `{"durationSec":u32,"app"?:selector,"topKLimit"?:u32}` | `result={enabled:0}` or `result={durationSec,coveredSec,scope,detailEnabled,directions,uid?,userId?,app?}` |
+  - `durationSec` 必须匹配一个 active window；一次只返回一个 window。
+  - `topKLimit` 默认 10，合法范围 `1..64`，只控制每个 Top-K array 的返回数量，不进入持久配置。
+  - 当 Traffic Windows `enabled=0` 时只返回 `{enabled:0}`，不返回 zero-filled window。
+  - 当 `enabled=1` 时，`directions.in/out` 必须固定出现；`scope="device"` 不返回 app identity，`scope="app"` 返回 `{uid,userId,app}`。
+  - 每个 direction item 包含 `{acceptedPackets,acceptedBytes,blockedPackets,remoteIpTopK[],protocolTopK[],protocolPortTopK[]}`。
+  - `detailEnabled=0` 时仍返回 basic counters，并把三个 Top-K array 返回为空数组；Top-K 只统计 accepted traffic。
+  - 不返回 blocked bytes，不返回 DNS traffic，不返回 domain hint。
+- `TRAFFIC_WINDOWS.APPS` | `{"durationSec":u32,"limit"?:u32}` | `result={enabled:0}` or `result={durationSec,coveredSec,apps[]}` |
+  - `limit` 默认 50，上限 200。
+  - 当 Traffic Windows `enabled=0` 时只返回 `{enabled:0}`，不返回空 ranking。
+  - 只返回该 window 内有 accepted traffic 的 app；blocked-only app 不进入 ranking。
+  - app item 至少包含 `{uid,userId,app,totalAcceptedBytes,totalAcceptedPackets,directions}`；`directions.in/out` 只包含 basic counters `{acceptedPackets,acceptedBytes,blockedPackets}`。
+  - 排序为 `totalAcceptedBytes desc, totalAcceptedPackets desc, uid asc`。
+- `TRAFFIC_WINDOWS.RESET` | `{}` | `ok` |
+  - 清空 device aggregate 与所有 per-app Traffic Windows runtime state，不修改持久化配置。
+- `DIAGNOSTICS.START` | `{"channel":"packet","app":selector}` | `result={channel,uid,userId,app}` |
+  - 第一版只支持 `channel="packet"`，一次只允许一个 active Diagnostic Focus。
+  - 需要 `block.enabled=1` 且 `iprules.enabled=1`；否则返回明确错误，不进入事件模式。
+  - 成功后该连接进入 diagnostics event mode；同一连接除 `DIAGNOSTICS.STOP` 外的普通 command 返回 `STATE_CONFLICT`。
+  - Focus 由 session 持有；`DIAGNOSTICS.STOP` 只接受 owning diagnostics connection 上的请求，socket detach 或连接关闭也会释放。已有 active session 时新的 START 返回 conflict；普通新 control connection 不能停止别的 session。
+- `DIAGNOSTICS.STOP` | `{}` | `ok` |
+  - ack 后服务端关闭该 diagnostics 连接，不回到普通 control mode。
+
+Packet diagnostics event（JSON object，无 `id/ok`）：
+- `diagnostic.packet`：`{type:"diagnostic.packet",timestamp,uid,userId,app,packet,inputs,gates,final,stages[]}`
+  - `packet` 至少包含 `{packetDirection,nfqueueHook,ipVersion,protocol,l4Status,portsAvailable,srcIp?,dstIp?,srcPort,dstPort,originalIpBytes,copiedBytes,truncated,ifindex?,ifaceKind?}`。
+  - `gates` 集中输出 `{blockEnabled,iprulesEnabled,resolvedIpPolicyEnabled?}`。
+  - `final` 使用统一 winner 模型：`{accepted,reasonId,ruleId?,ruleMode?}`；不输出 `wouldRuleId` / `wouldDrop`。source rule 声明动作由 `ruleSnapshots[].action` 表达，不在 `final` 中重复输出。
+  - `stages[]` 固定顺序：`ifaceBlock` → `basicIprules` → `statefulIprules` → `resolvedIpPolicy` → `defaultAllow`。未来 DPI 实现后在 `statefulIprules` 与 `resolvedIpPolicy` 之间加入 `dpiPolicy`。
+  - 每个 stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner?,skipReason?,ruleSnapshots?,candidates?}`。
+  - 诊断事件不输出 legacy `host` / `domain` 字段；IP→domain 展示属于后续 Domain-IP Association 查询能力，当前 Play-facing 第一轮不实现。
+- `diagnostic.notice`：`{type:"diagnostic.notice",notice:"dropped"|"stopped",channel:"packet",...}`。
+  - 只保留 dropped/stopped 类保护性 notice；不输出 started notice 或 suppressed notice。
+
+DNS stream 冻结说明：
+- 旧 DNS debug stream 暂时冻结，不并入 `DIAGNOSTICS.*`，本轮不扩展、不删除、不桥接。当前前端不调用它；只要不影响 packet hot path，就不纳入 SNORT-10 packet-side 重构。
+- packet-side `STREAM.START(type=pkt|activity)`、replay、`tracked` gate、suppressed notice、activity stream 不属于 SNORT-10 新接口 contract。
 
 Flow Telemetry shared-memory ABI（`abiVersion=1`）:
 - 默认 sizing：`slotBytes=1024`、`ringDataBytes=16777216`（16 MiB）、`slotCount=16384`、`slotHeaderBytes=24`、`maxPayloadBytes=1000`。
@@ -174,7 +237,7 @@ slot header（offset from slot start）:
 | 5 | `packetDir` | u8 | `0=unknown`, `1=in`, `2=out`；真实 packet 方向 |
 | 6 | `flowOriginDir` | u8 | `0=unknown`, `1=in`, `2=out`；flow/observation 首包方向 |
 | 7 | `verdict` | u8 | `0=unknown`, `1=allow`, `2=block` |
-| 8 | `reasonId` | u8 | `0=IFACE_BLOCK`, `1=IP_LEAK_BLOCK`, `2=ALLOW_DEFAULT`, `3=IP_RULE_ALLOW`, `4=IP_RULE_BLOCK` |
+| 8 | `reasonId` | u8 | `0=IFACE_BLOCK`, `1=ALLOW_DEFAULT`, `2=IP_RULE_ALLOW`, `3=IP_RULE_BLOCK`, `4=RESERVED` |
 | 9 | `ifaceKindBit` | u8 | 见 §4 `ifaceKind` 位 |
 | 10 | `l4Status` | u8 | `0=KNOWN_L4`, `1=OTHER_TERMINAL`, `2=FRAGMENT`, `3=INVALID_OR_UNAVAILABLE_L4` |
 | 11 | `flags` | u8 | bit0 `hasRuleId`, bit1 `isIpv6`, bit2 `pickedUpMidStream`, bit3 `uidKnown`, bit4 `ifindexKnown`, bit5 `portsAvailable` |
@@ -185,7 +248,8 @@ slot header（offset from slot start）:
 | 18 | `icmpType` | u8 | ICMP/ICMPv6 type；非 ICMP 为 0 |
 | 19 | `icmpCode` | u8 | ICMP/ICMPv6 code；非 ICMP 为 0 |
 | 20 | `icmpId` | u16 | ICMP/ICMPv6 id；不可用时为 0 |
-| 22 | `reserved0` | u16 | 保留 |
+| 22 | `ruleMode` | u8 | `0=none`, `1=enforce`, `2=observe`；无 rule winner 时为 `none` |
+| 23 | `reserved0` | u8 | 保留 |
 | 24 | `timestampNs` | u64 | record event/export monotonic timestamp |
 | 32 | `firstSeenNs` | u64 | flow/observation 首个 packet monotonic timestamp |
 | 40 | `lastSeenNs` | u64 | flow/observation 最近 packet monotonic timestamp；END 中不等同于 retire/export 时间 |
@@ -204,9 +268,11 @@ slot header（offset from slot start）:
 | 148 | `outBytes` | u64 | cumulative outbound bytes |
 | 156 | `ruleId` | u32 | 仅当 `flags.hasRuleId=1` 时有效 |
 
-`observationKind=L3_OBSERVATION` 用于 fragment / invalid / unavailable L4 的 telemetry-only L3 observation：`portsAvailable=0`，`srcPort=dstPort=0`，不伪造正常 TCP/UDP/ICMP lifecycle。`DNS_DECISION` 仍是独立 blocked-only record，`FLOW` 不携带 DNS/IP join、domain hint、would-match 或 Debug Stream explainability 字段。
+`observationKind=L3_OBSERVATION` 用于 fragment / invalid / unavailable L4 的 telemetry-only L3 observation：`portsAvailable=0`，`srcPort=dstPort=0`，不伪造正常 TCP/UDP/ICMP lifecycle。`DNS_DECISION` 仍是独立 blocked-only record，`FLOW` 不携带 DNS/IP join、domain hint、would-match 或 Packet Diagnostics explainability 字段。
 
-Flow Telemetry 的 CT facts producer 与 `iprules.enabled` 解耦：当 `level=flow` consumer active 时，daemon 会为可追踪 L4 包采集 `ctState/ctDir`，即使 IP rules policy evaluation 已关闭；该 telemetry-only observation 不改变 packet verdict。资源驱逐会 best-effort 写 `FLOW END(endReason=RESOURCE_EVICTED)`，写失败只进入 telemetry drop/pressure 口径。
+`reasonId` 使用共享 packet verdict reason enum；SNORT-10 第一轮正常 `FLOW` records 不发出 `IFACE_BLOCK`，因为 Interface / Basic final block 会在 CT 前 short-circuit。该 enum value 仅保留为共享 reason id 的稳定值。
+
+Flow Telemetry 是显式 CT observation consumer，与 `iprules.enabled` 解耦：当 `level=flow` consumer active 时，eligible 且未被 Base/Basic final block 短路的可追踪 L4 包会采集 `ctState/ctDir`，即使 IP rules policy evaluation 已关闭；该 telemetry-only observation 不改变 packet verdict。`IFACE_BLOCK` 或 Basic enforce block 已产生 final block 的 packet 不为 telemetry 拉起 CT，也不生成正常 `FLOW` record。资源驱逐会 best-effort 写 `FLOW END(endReason=RESOURCE_EVICTED)`，写失败只进入 telemetry drop/pressure 口径。
 
 `recordType=2` DNS_DECISION payload v1（blocked-only；fixed header `32` bytes）:
 
@@ -226,57 +292,8 @@ Flow Telemetry 的 CT facts producer 与 `iprules.enabled` 解耦：当 `level=f
 | 32 | `queryName` | bytes[`queryNameLen`] | 原始 bytes，非 NUL 结尾；超 255 bytes 时截断并置 `queryNameTruncated` |
 
 payload 演进规则：每个 payload 自带 `payloadVersion`；consumer 必须先验证自身需要的最小长度，再用 `payloadSize` 跳过未知尾部。当前 `FLOW` v1 的 raw-facts completeness 是一次明确的 breaking replacement；后续非 breaking 字段才按 append-only 处理。
-- `STREAM.START` | `{"type":"dns"|"pkt"|"activity","horizonSec"?:u32,"minSize"?:u32}` | `ok` |
-  - `dns/pkt` 是 tracked Debug Stream surface：用于短时 per-event 取证，不是常态 records/history/timeline/Top-K API。
-  - `dns/pkt` 支持 replay 参数（会被 clamp 到 caps）；replay 只读取 bounded in-process debug prebuffer，不查询 Flow Telemetry、Metrics 或持久化历史。
-  - `activity` 禁止携带 `horizonSec/minSize`（否则 `SYNTAX_ERROR`），且不属于 Debug Stream explainability surface。
-  - 进入 stream mode 后，除 `STREAM.START/STOP` 外的命令一律 `STATE_CONFLICT`。
-  - 输出顺序：`STREAM.START` response → `notice.started` → replay/实时事件。
-- `STREAM.STOP` | `{}` | `ok` |
-  - ack barrier：服务端会先丢弃队列中尚未写出的事件/notice，再发送 STOP response。
 
-vNext stream 事件（JSON object，无 `id/ok`）:
-- `notice.started`：`{ "type":"notice", "notice":"started", "stream":"dns"|"pkt"|"activity", "horizonSec"?:u32, "minSize"?:u32 }`
-- `notice.suppressed`：`{type:"notice",notice:"suppressed",stream,windowMs:u32,traffic:{dns|rxp|rxb|txp|txb:{allow,block}},hint:string}`
-  - 仅说明 tracked gate 导致 debug event 未输出；不是 Metrics replacement。
-- `notice.dropped`：`{type:"notice",notice:"dropped",stream,windowMs:u32,droppedEvents:u64}`
-  - 仅说明 queued debug evidence 丢失；不是 Metrics replacement。
-- `dns`：`{type:"dns",timestamp:string,uid:u32,userId:u32,app:string,domain:string,domMask:u32,appMask:u32,blocked:bool,policySource:string,useCustomList:bool,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",getips:bool,ruleId?:u32,explain:object}`
-  - 顶层字段是 compatibility summaries；`explain` 是权威 debug evidence。
-  - `ruleId` 仅在 tracked app 且 `policySource` 来自规则分支且 decision 实际来自 rule（非名单）时出现。
-  - `explain.version=1`，`explain.kind="dns-policy"`。
-  - `explain.inputs={blockEnabled:bool,tracked:bool,domainCustomEnabled:bool,useCustomList:bool,domain:string,domMask:u32,appMask:u32}`。
-  - `explain.final={blocked:bool,getips:bool,policySource:string,scope:"APP"|"DEVICE_WIDE"|"FALLBACK",ruleId?:u32}`。
-  - `explain.stages[]` 固定顺序：
-    `app.custom.allowList` → `app.custom.blockList` → `app.custom.allowRules` → `app.custom.blockRules` → `deviceWide.allow` → `deviceWide.block` → `maskFallback`。
-  - 每个 DNS stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`。
-  - `skipReason` 固定取值：`disabled` / `shortCircuited` / `noMatch` / `l4Unavailable` / `fragment` / `ctUnavailable`。
-  - 规则 stage 可含 `ruleIds[]` 与 `ruleSnapshots[]`；rule snapshot 至少为 `{ruleId,type,pattern,scope,action}`。
-  - 名单 stage 可含 `listEntrySnapshots[]`；list-entry snapshot 至少为 `{type,pattern,scope,action}`。
-  - `maskFallback` stage 含 `maskFallback={domMask,appMask,effectiveMask,outcome}`，用于无需额外查询当前 mask 即可解释 fallback verdict。
-- `pkt`：
-  `{ "type":"pkt", "timestamp":string, "uid":u32, "userId":u32, "app":string, "direction":"in"|"out", "ipVersion":4|6, "protocol":"tcp"|"udp"|"icmp"|"other", "l4Status":"known-l4"|"other-terminal"|"fragment"|"invalid-or-unavailable-l4", "srcIp"?:string, "dstIp"?:string, "srcPort":u32, "dstPort":u32, "length":u32, "ifindex":u32, "ifaceKindBit":u32, "interface"?:string, "host"?:string, "domain"?:string, "accepted":bool, "reasonId":string, "ruleId"?:u32, "wouldRuleId"?:u32, "wouldDrop"?:bool, "explain":object }`
-  - 顶层字段是 compatibility summaries；`explain` 是权威 debug evidence。
-  - `l4Status` 恒存在；当 `l4Status!=known-l4` 时 `srcPort/dstPort=0`。
-  - 顶层 `wouldDrop` 是 true-only optional：仅当 would-rule 命中 drop 时出现，consumer 不应期待显式 `false`。
-  - `explain.version=1`，`explain.kind="packet-verdict"`。
-  - `explain.inputs={blockEnabled:bool,iprulesEnabled:bool,direction:"in"|"out",ipVersion:4|6,protocol:string,l4Status:string,ifindex:u32,ifaceKindBit:u32,ifaceKind:string,conntrackEvaluated:bool,conntrack?:{state,direction}}`。
-  - `explain.final={accepted:bool,reasonId:string,ruleId?:u32,wouldRuleId?:u32,wouldDrop?:bool}`。
-  - `explain.final.wouldDrop` 同样为 true-only optional；缺省不表示 JSON boolean false 字段存在。
-  - `explain.stages[]` 固定顺序：`ifaceBlock` → `iprules.enforce` → `domainIpLeak` → `iprules.would`。
-  - 每个 packet stage 至少包含 `{name,enabled,evaluated,matched,outcome,winner,truncated}`；跳过时含 `skipReason`，取值同 DNS stage。
-  - IPRULES stage 可含 `ruleIds[]` 与 `ruleSnapshots[]`；rule snapshot 至少为 `{ruleId,clientRuleId,matchKey,action,enforce,log,family,dir,iface,ifindex,proto,ct,src,dst,sport,dport,priority}`。
-  - `ifaceBlock` stage 含 `ifaceBlock={appIfaceMask,packetIfaceKindBit,evaluatedIntersection,packetIfaceKind,outcome,shortCircuitReason?}`。
-- `activity`：`{type:"activity",timestamp:string,blockEnabled:bool}`
-  - `activity` 不输出 `explain`，不承载新 telemetry/history 语义。
-
-Debug Stream explain candidate 限制:
-- `maxExplainCandidatesPerStage=64`。
-- Domain rule candidates 按 `ruleId` 升序；IPRULES candidates 按 effective evaluation order（`priority` 降序，`ruleId` 升序）。
-- 超过上限时 stage 输出 `truncated=true`，可廉价得知时输出 `omittedCandidateCount`；winning rule snapshot 必须保留。
-- `dns/pkt` Debug Stream 不新增 Flow Telemetry records、Metrics names、DEV query surface、persistent storage、Top-K、timeline/history 聚合、Geo/ASN 或 DNS-to-packet join。
-
-语义锁定参考: 本文（§2.6/§2.7/§2.8 的枚举、字段口径与 telemetry ABI 即为锁定语义）。
+语义锁定参考: 本文（§2.6/§2.7/§2.8 的枚举、字段口径、Traffic Windows / Diagnostics 命令面与 telemetry ABI 即为锁定语义）。
 
 ---
 
@@ -307,8 +324,7 @@ Debug Stream explain candidate 限制:
 - vNext TCP 端口: `controlVNextPort=60607`（仅当存在 `/data/snort/telnet` 文件时开启）。
 - vNext Unix socket: `sucre-snort-control-vnext`（Android abstract namespace；常见路径为 `/dev/socket/sucre-snort-control-vnext`）。
 - vNext payload 限制: `controlVNextMaxRequestBytes=16MB`、`controlVNextMaxResponseBytes=16MB`。
-- vNext stream caps：`maxHorizonSec=300`、`maxRingEvents=256`、`maxPendingEvents=256`。
-- `activityNotificationIntervalMs=500`
+- packet diagnostics caps：`maxDiagnosticPendingEvents=256`；诊断通道超出 bounded queue 后只输出 dropped notice，不阻塞 verdict。
 - blockMask 位（u8）:
   - BlockingList/DomainList mask 必须是单 bit：`1/2/4/8/16/32/64`
   - App blockMask 可组合 `1/2/4/8/16/32/64` 与 `128(custom)`；若包含 `8(reinforced)` 则会隐式包含 `1(standard)`。
@@ -323,16 +339,16 @@ Debug Stream explain candidate 限制:
 - response:
   - `ok=true` 时可省略 `result`。
   - `ok=false` 时必含 `error` object；至少含 `{code,message}`，并可能附带 `hint/candidates/conflicts/limits/preflight/truncated` 等扩展字段。
-- `STREAM.START` 后连接进入 stream mode：除 `STREAM.START/STOP` 外其他命令均返回 `STATE_CONFLICT`。
+- `DIAGNOSTICS.START` 后连接进入 diagnostics event mode：同一 owning diagnostics connection 除 `DIAGNOSTICS.STOP` 外其他命令均返回 `STATE_CONFLICT`；普通新 control connection 不能停止已有 diagnostics session。
 
 开关与数值约定：
-- 设备/应用配置的布尔开关统一使用 `0|1`（u32），不是 JSON boolean（例如 `block.enabled`、`tracked`）。
-- stream 事件中的 `blocked/accepted/...` 为 JSON boolean（见 §2.8）。
+- 设备/应用配置的布尔开关统一使用 `0|1`（u32），不是 JSON boolean（例如 `block.enabled`）。
+- diagnostics / telemetry / stream-like event 中的 `blocked/accepted/...` 为 JSON boolean（见 §2.8）。
 
 容量与限制：
 - 单帧最大请求/响应 payload：16MB（也会通过 `HELLO` 返回）。
 - `DOMAINLISTS.IMPORT` 附加限制：`domains` 数量 ≤ 1,000,000；domain 字符串总字节数 ≤ 16MB。
-- `CHECKPOINT.*` slot bundle 上限：64 MiB/slot；slot ID 固定为 `0..2`。
+- pre-SNORT-10 `CHECKPOINT.*` slot bundle 上限：64 MiB/slot；slot ID 固定为 `0..2`。SNORT-10 Authoring Layer checkpoint API 后续另定。
 
 多用户支持：
 - 多数 app 维度命令通过 `args.app` 明确指定 userId 或 uid；服务端在 `result` 中返回 `{uid,userId,app}` 以便客户端校验。
@@ -345,9 +361,9 @@ Debug Stream explain candidate 限制:
 清单: APPS.LIST, IFACES.LIST
 配置: CONFIG.GET, CONFIG.SET
 域名: DOMAINRULES.GET/APPLY, DOMAINPOLICY.GET/APPLY, DOMAINLISTS.GET/APPLY/IMPORT, DEV.DOMAIN.QUERY(dev)
-IP: IPRULES.PREFLIGHT/PRINT/APPLY
-检查点: CHECKPOINT.LIST/SAVE/RESTORE/CLEAR
-观测: METRICS.GET, METRICS.RESET, TELEMETRY.OPEN, TELEMETRY.CLOSE, STREAM.START, STREAM.STOP
+IP: IPRULES.PREFLIGHT/PRINT/APPLY（pre-SNORT-10 current-head direct mutation surface）；SNORT-10 Authoring Layer API 待 SNORT-17 定义
+检查点: CHECKPOINT.LIST/SAVE/RESTORE/CLEAR（pre-SNORT-10 fixed-slot surface）；SNORT-10 latest-five Authoring checkpoints API 待 SNORT-17 定义
+观测: METRICS.GET, METRICS.RESET, TELEMETRY.OPEN, TELEMETRY.CLOSE, TRAFFIC_WINDOWS.CONFIG.GET/SET, TRAFFIC_WINDOWS.GET/APPS/RESET, DIAGNOSTICS.START/STOP
 
 ---
 
@@ -365,7 +381,7 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
   - 全局统计: `/data/snort/save/stats_total`
   - 拦截列表元数据: `/data/snort/save/blocking_lists`
   - 域名清单目录: `/data/snort/save/domains_lists/`
-  - 策略检查点目录: `/data/snort/save/policy_checkpoints/slot0.bundle` .. `slot2.bundle`
+  - pre-SNORT-10 策略检查点目录: `/data/snort/save/policy_checkpoints/slot0.bundle` .. `slot2.bundle`
 - 包清单: `/data/system/packages.list`
 
 ---
@@ -387,7 +403,7 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
   - device: `sucre-snort-ctl CONFIG.SET '{\"scope\":\"device\",\"set\":{\"block.enabled\":1}}'`
   - nfqueue topology: `sucre-snort-ctl CONFIG.GET '{\"scope\":\"device\",\"keys\":[\"nfqueue.topology\"]}'`
   - nfqueue topology next start: `sucre-snort-ctl CONFIG.SET '{\"scope\":\"device\",\"set\":{\"nfqueue.topology\":\"shared-flow-pool\"}}'`
-  - app: `sucre-snort-ctl CONFIG.SET '{\"scope\":\"app\",\"app\":{\"uid\":10123},\"set\":{\"tracked\":1}}'`
+  - perf level: `sucre-snort-ctl CONFIG.SET '{\"scope\":\"device\",\"set\":{\"perfmetrics.level\":\"basic\"}}'`
 - 域名策略
   - `sucre-snort-ctl DOMAINRULES.GET`
   - `sucre-snort-ctl DOMAINPOLICY.GET '{\"scope\":\"device\"}'`
@@ -397,21 +413,26 @@ IP: IPRULES.PREFLIGHT/PRINT/APPLY
   - `sucre-snort-ctl DOMAINLISTS.APPLY '{\"upsert\":[{\"listId\":\"00000000-0000-0000-0000-000000000000\",\"listKind\":\"block\",\"mask\":1,\"enabled\":1,\"url\":\"\",\"name\":\"\",\"updatedAt\":\"\",\"etag\":\"\",\"outdated\":0,\"domainsCount\":0}]}'`
   - `sucre-snort-ctl DOMAINLISTS.IMPORT '{\"listId\":\"00000000-0000-0000-0000-000000000000\",\"listKind\":\"block\",\"mask\":1,\"clear\":1,\"domains\":[\"example.com\"]}'`
 - IP 规则
+  - 以下为 pre-SNORT-10 current-head direct mutation surface；SNORT-10 Authoring Layer 新 API 待 SNORT-17 定义。
   - `sucre-snort-ctl IPRULES.PREFLIGHT`
   - `sucre-snort-ctl IPRULES.PRINT '{\"app\":{\"uid\":10123}}'`
   - `sucre-snort-ctl IPRULES.APPLY @/tmp/iprules_apply.json` → `{uid,rules:[{clientRuleId,ruleId,matchKey}]}`（matchKey 为 mk2）
 - 策略检查点
+  - 以下为 pre-SNORT-10 current-head slot surface；SNORT-10 Authoring Layer 新 API 待单独定义。
   - `sucre-snort-ctl CHECKPOINT.LIST`
   - `sucre-snort-ctl CHECKPOINT.SAVE '{\"slot\":0}'`
   - `sucre-snort-ctl CHECKPOINT.RESTORE '{\"slot\":0}'`
   - `sucre-snort-ctl CHECKPOINT.CLEAR '{\"slot\":0}'`
 - 统计
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"perf\"}'`
-  - `sucre-snort-ctl METRICS.GET '{\"name\":\"traffic\"}'`
-  - `sucre-snort-ctl METRICS.RESET '{\"name\":\"traffic\"}'`
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"domainRuleStats\"}'`
   - `sucre-snort-ctl METRICS.RESET '{\"name\":\"domainRuleStats\"}'`
   - `sucre-snort-ctl METRICS.GET '{\"name\":\"telemetry\"}'`
-- 流（运行 10 秒内）
-  - `sucre-snort-ctl --follow STREAM.START '{\"type\":\"dns\",\"horizonSec\":0,\"minSize\":0}'` → `notice.started` + `type=dns` 事件
-  - `sucre-snort-ctl STREAM.STOP` → ack response
+- Traffic Windows
+  - `sucre-snort-ctl TRAFFIC_WINDOWS.CONFIG.GET`
+  - `sucre-snort-ctl TRAFFIC_WINDOWS.GET '{\"durationSec\":900}'`
+  - `sucre-snort-ctl TRAFFIC_WINDOWS.APPS '{\"durationSec\":900,\"limit\":20}'`
+  - `sucre-snort-ctl TRAFFIC_WINDOWS.RESET`
+- Packet diagnostics（运行 10 秒内）
+  - `sucre-snort-ctl --follow DIAGNOSTICS.START '{\"channel\":\"packet\",\"app\":{\"uid\":10123}}'` → `type=diagnostic.packet` / `diagnostic.notice`
+  - 停止方式：关闭该 `--follow` 连接，或在 CLI 支持同连接交互控制时在 owning diagnostics connection 上发送 `DIAGNOSTICS.STOP`；不要用新的普通 control 连接停止别的 diagnostics session。

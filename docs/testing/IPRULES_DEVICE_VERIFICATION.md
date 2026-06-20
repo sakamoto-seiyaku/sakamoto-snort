@@ -1,6 +1,6 @@
 # IPRULES v1 真机验证矩阵（L3/L4 Firewall）
 
-> Historical verification record. Current Device / DX entrypoints live in `docs/testing/README.md` and `docs/testing/ip/IP_TEST_MODULE.md`; open follow-up work belongs in Plane project `SNORT`.
+> Historical verification record. Current Device / DX entrypoints live in `docs/testing/README.md` and `docs/testing/ip/IP_TEST_MODULE.md`; open follow-up work belongs in Plane project `SNORT`. Terms such as vNext packet stream, would-block / would overlay, and `enforce=0` describe IPRULES v1 historical evidence. SNORT-10 packet diagnostics use Packet Diagnostics / `ruleMode=observe|enforce` and unified winner attribution instead.
 
 目的：在 **真机** 上验证 `IPRULES v1` 的端到端行为（控制面下发 → NFQUEUE 真实流量 → 判决/统计/vNext packet stream 可观测），覆盖 TCP/UDP/ICMP 与关键组合/边界条件。
 说明：host-side gtest 只能验证引擎/解析/确定性，不足以作为最终验收；本文保留为 IPRULES v1 已归档 change 的真机验证记录。

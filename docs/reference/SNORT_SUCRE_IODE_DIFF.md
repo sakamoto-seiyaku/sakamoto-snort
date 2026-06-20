@@ -1,5 +1,7 @@
 # sucre-snort vs iode-snort 差异总结
 
+> Reference-only lineage document. This file compares historical/current-head implementations and may mention old Host/Streamable/stream concepts. Do not use it as a SNORT-10 interface or implementation contract; current authority is `docs/INTERFACE_SPECIFICATION.md` plus `docs/decisions/`.
+
 ## 1. 核心架构变更
 
 ### 域名列表管理

@@ -8,6 +8,11 @@
 - 哪些“场景本身没覆盖”（需要新增 Case；开放工作以 Plane `SNORT` 为准）
 - 哪些现在挂在 diagnostics 但其实更像 smoke（功能可用性验证）
 
+SNORT-10 一致性说明：
+- 本文保留部分 pre-SNORT-10 current-head / frozen 测试证据；这些证据不能覆盖当前 SNORT-10 接口契约。
+- packet-side 诊断目标是 session-owned Packet Diagnostics：`DIAGNOSTICS.START(channel=packet)`、`diagnostic.packet.final.{accepted,reasonId,ruleId?,ruleMode?}`。
+- 旧 generic `STREAM.START(type=pkt|activity)`、持久 `tracked` gate、`wouldRuleId/wouldDrop`、suppressed notice、legacy `host/domain` packet join、旧 `METRICS.GET(name=traffic)` 和 `perfmetrics.enabled` bool 只作为 current-head / historical evidence，后续 issue 不得以它们为新目标。
+
 ---
 
 ## 0) 入口速查（现在怎么跑）
@@ -101,16 +106,16 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 ---
 
-### Case 3：Stream 基本机制可用（activity）
+### Case 3：pre-SNORT-10 Stream 基本机制可用（activity；frozen current-head evidence）
 **目的**
 - START 能收到 started notice + 至少 1 条事件；STOP 有 barrier（短窗口内不再有 frame）。
-- 这条等价于“stream 框架 sanity”，后面 `dns/pkt` stream 都复用同一套 START/STOP/notice 语义。
+- 这条只证明 legacy/generic stream current-head 能力；SNORT-10 packet-side 诊断不继续扩展 activity stream，而使用 Packet Diagnostics。
 
 **Given**
 - 控制面可用。
 
 **When**
-- `STREAM.START(type=activity)` → 收事件 → `STREAM.STOP`。
+- legacy `STREAM.START(type=activity)` → 收事件 → `STREAM.STOP`。
 
 **Then（期望输出）**
 - 收到 `notice.started`（stream=activity）
@@ -169,10 +174,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
   - `block.enabled`（全局 gating：domain/ip/metrics/streams）
   - `iprules.enabled`（IPRULES 是否生效）
   - `rdns.enabled`（reverse dns；可能影响部分 DNS/域名相关行为）
-  - `perfmetrics.enabled`（perf metrics 开关语义；见「其他 / Case 1」）
+  - `perfmetrics.level`（SNORT-10 perf metrics level；pre-SNORT-10 `perfmetrics.enabled` 仅作迁移 evidence，见「其他 / Case 1」）
   - `block.mask.default`、`block.ifaceKindMask.default`（默认 mask；影响 fallback / iface block 默认值）
 - app scope：
-  - `tracked`（是否输出 stream；dns/pkt 都依赖）
+  - `tracked`（pre-SNORT-10 DNS/packet stream gate；SNORT-10 packet diagnostics 不依赖它，DNS stream 暂时冻结）
   - `domain.custom.enabled`（是否参与 custom domain policy；影响 policySource/判决路径）
   - `block.mask`、`block.ifaceKindMask`（app 侧 mask；影响 MASK_FALLBACK / IFACE_BLOCK）
 
@@ -287,6 +292,8 @@ Diagnostics（现在只有 1 条聚合脚本）：
 ---
 
 ## 域名
+
+SNORT-10 说明：本章节保留 DNS/domain line 的 pre-SNORT-10 current-head / frozen evidence。这里的 `tracked`、DNS stream、suppressed notice、`traffic.dns` 与 resolver-hook case 只说明现有 DNS 线测试事实；SNORT-10 packet-side 重构不把这些能力迁入 Packet Diagnostics，也不实现 Domain-IP Association / Resolved-IP Policy / RDNS 联动。
 
 ### Case 1：Domain surface（下规则/下策略/下 list）跑通（功能面基线）
 **目的**
@@ -654,20 +661,22 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 这一组 Case 的目标：验证 `IPRULES/IFACE_BLOCK` 在真机 Tier‑1 受控拓扑下的端到端可用性（下规则→触发→看 verdict + 输出）。
 
+SNORT-10 口径：下面直接 `IPRULES.PREFLIGHT/APPLY/PRINT` 的控制面步骤是 pre-SNORT-10 current-head evidence。SNORT-10 新目标应通过 Authoring Layer 的 Draft / Commit / Apply / Runtime Snapshot 生效模型表达；datapath 断言仍可复用 verdict、reason、rule stats、Packet Diagnostics、Traffic Windows 等语义。
+
 关键口径/开关（避免“以为测了，其实没测到”）：
 - `block.enabled`：全局 datapath gate；关掉后 NFQ 不介入，pkt stream / reasons / traffic 都不会增长（也不会产生 pkt suppressed）。
 - `iprules.enabled`：IPRULES fast path gate（当前仅 IPv4）；关掉后即使 rules 存在也不会命中，reason 回落到 `ALLOW_DEFAULT`（除非走 legacy `IP_LEAK_BLOCK`）。
 - **bytes 指标口径**：`traffic.*b` 与 per-rule `*Bytes` 统计的是 NFQUEUE 看到的 IP 包长度（包含 IP header；不包含 L2）。`nc -z` 也会增长 bytes，但量很小且波动；要做“稳定/有意义”的 bytes 断言，推荐固定读写 N bytes 的 payload 流量（见「IP / Case 8」）。
 
-### Case 1：IPRULES surface（能 preflight/apply/print，返回契约正确）
+### Case 1：pre-SNORT-10 direct IPRULES surface（能 preflight/apply/print，返回契约正确）
 **目的**
-- 验证 IPRULES 控制面功能可用（不做流量）。
+- 记录 current-head direct IPRULES 控制面功能可用（不做流量）。SNORT-10 新 mutation/checkpoint contract 以 Authoring Layer 为目标，不以这个 direct surface 继续扩展。
 
 **Given**
 - 控制面可用；有 app uid。
 
 **When**
-- `IPRULES.PREFLIGHT` → `IPRULES.APPLY` → `IPRULES.PRINT`
+- pre-SNORT-10 direct `IPRULES.PREFLIGHT` → `IPRULES.APPLY` → `IPRULES.PRINT`
 
 **Then（期望输出）**
 - preflight 有 summary/limits/warnings/violations
@@ -692,25 +701,25 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - 目标 uid：shell 2000（稳定）
 
 **When**
-- `IPRULES.APPLY(action=allow,enforce=1,dst=peer/32,dport=443)`
-- `STREAM.START(type=pkt)` 抓包事件
-- （建议，为了确定性）`METRICS.RESET(name=traffic, app)`、`METRICS.RESET(name=reasons)`
+- pre-SNORT-10 direct `IPRULES.APPLY(action=allow,enforce=1,dst=peer/32,dport=443)`
+- SNORT-10 target：`DIAGNOSTICS.START(channel=packet, app=...)` 抓 `diagnostic.packet`；pre-SNORT-10 current-head 可用 pkt stream 作为历史 evidence。
+- （建议，为了确定性）`METRICS.RESET(name=reasons)`；Traffic Windows 可用时用 `TRAFFIC_WINDOWS.RESET` / `TRAFFIC_WINDOWS.GET` 验证 traffic window，旧 `METRICS.RESET(name=traffic, app)` 仅作 current-head evidence。
 - 触发：`nc -z peer_ip 443`
 
 **Then（期望输出）**
 - 功能面：`nc` 应该成功（这才是“人话冒烟”的核心）
-- pkt stream：满足「可观测性 / Case 1」字段契约，且 `reasonId=IP_RULE_ALLOW`、`accepted=true`、`ruleId` 匹配
+- Packet Diagnostics：满足「可观测性 / Case 1」字段契约，且 `final.reasonId=IP_RULE_ALLOW`、`final.accepted=true`、`final.ruleId` 匹配、`final.ruleMode=enforce`
 - metrics：
   - `reasons.IP_RULE_ALLOW.packets>=1`
-  - `traffic(app).txp.allow>=1`（不要只看 total）
-  - （可选：若触发了 payload 流量）`traffic(app).txb.allow>=1` 且 `reasons.IP_RULE_ALLOW.bytes>=1`
+  - Traffic Windows app scope `directions.out.acceptedPackets>=1`（旧 current-head evidence 可继续看 `traffic(app).txp.allow>=1`，不要只看 total）
+  - （可选：若触发了 payload 流量）Traffic Windows `acceptedBytes>=1` 且 `reasons.IP_RULE_ALLOW.bytes>=1`
 - per-rule stats：`hitPackets>=1`（可选：payload 时 `hitBytes>=1`）
 
 **现有覆盖**
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-05~07`
 
 **缺口**
-- 已补齐：`VNXDP-06` 硬断言 TCP 成功；`VNXDP-06b~06d` 断言 pkt stream、`reasons.IP_RULE_ALLOW` 与 `traffic.txp.allow`；`VNXDP-07` 断言 rule `hitPackets`。
+- 已补齐：`VNXDP-06` 硬断言 TCP 成功；`VNXDP-06b~06d` 当前断言 pre-SNORT-10 pkt stream、`reasons.IP_RULE_ALLOW` 与旧 `traffic.txp.allow`；SNORT-10 后应迁移到 Packet Diagnostics 与 Traffic Windows；`VNXDP-07` 断言 rule `hitPackets`。
 - bytes hard assert 归入「IP / Case 8」的 payload 流量闭环（`VNXDP-13*`），避免在短连接上做波动断言。
 
 ---
@@ -723,53 +732,53 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - 同 Case 2。
 
 **When**
-- `IPRULES.APPLY(action=block,enforce=1,...)`
-- `STREAM.START(type=pkt)`
-- （建议，为了确定性）`METRICS.RESET(name=traffic, app)`、`METRICS.RESET(name=reasons)`
+- pre-SNORT-10 direct `IPRULES.APPLY(action=block,enforce=1,...)`
+- SNORT-10 target：`DIAGNOSTICS.START(channel=packet, app=...)`；pre-SNORT-10 current-head 可用 pkt stream 作为历史 evidence。
+- （建议，为了确定性）`METRICS.RESET(name=reasons)`；Traffic Windows 可用时用 `TRAFFIC_WINDOWS.RESET` / `GET`，旧 `METRICS.RESET(name=traffic, app)` 仅作 current-head evidence。
 - 触发：`nc -z peer_ip 443`
 
 **Then（期望输出）**
 - 功能面：`nc` 应该失败
-- pkt stream：满足「可观测性 / Case 1」字段契约，且 `reasonId=IP_RULE_BLOCK`、`accepted=false`、`ruleId` 匹配
+- Packet Diagnostics：满足「可观测性 / Case 1」字段契约，且 `final.reasonId=IP_RULE_BLOCK`、`final.accepted=false`、`final.ruleId` 匹配、`final.ruleMode=enforce`
 - metrics：
   - `reasons.IP_RULE_BLOCK.packets>=1`
-  - `traffic(app).txp.block>=1`
+  - Traffic Windows app scope `directions.out.blockedPackets>=1`（旧 current-head evidence 可继续看 `traffic(app).txp.block>=1`）
 - per-rule stats：`hitPackets>=1`
 
 **现有覆盖**
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-08*`
 
 **缺口**
-- 已补齐：`VNXDP-08f` 硬断言 TCP 失败；`VNXDP-08g~08j` 断言 pkt stream、`reasons.IP_RULE_BLOCK`、`traffic.txp.block` 与 rule `hitPackets`。
+- 已补齐：`VNXDP-08f` 硬断言 TCP 失败；`VNXDP-08g~08j` 当前断言 pre-SNORT-10 pkt stream、`reasons.IP_RULE_BLOCK`、旧 `traffic.txp.block` 与 rule `hitPackets`；SNORT-10 后应迁移到 Packet Diagnostics 与 Traffic Windows。
 
 ---
 
-### Case 4：Would‑match overlay（enforce=0）解释性闭环
+### Case 4：Observe mode（pre-SNORT-10 enforce=0 / would-match evidence 的替代目标）
 **目的**
-- 验证 wouldRuleId：最终 ACCEPT 但带 wouldRuleId（可解释）。
+- 验证 observe 规则：规则作为 winner 命中，但实际 verdict 仍按 observe 语义保持 allow，并通过 `ruleMode=observe` 解释。旧 `wouldRuleId/wouldDrop` 只作为 pre-SNORT-10 evidence，不作为 SNORT-10 目标。
 
 **Given**
 - Tier‑1 就绪；最终应是 allow（基线默认允许或已有 allow rule）。
 
 **When**
-- 下发 `action=block,enforce=0,log=1` 的规则
-- `STREAM.START(type=pkt)`
-- （建议，为了确定性）`METRICS.RESET(name=traffic, app)`、`METRICS.RESET(name=reasons)`
+- 下发 observe-mode 的 block rule（pre-SNORT-10 current-head 可对应 `action=block,enforce=0,log=1`）
+- SNORT-10 target：`DIAGNOSTICS.START(channel=packet, app=...)`
+- （建议，为了确定性）`METRICS.RESET(name=reasons)`；旧 `METRICS.RESET(name=traffic, app)` 仅作 current-head evidence。
 - 触发：`nc -z peer_ip 443`
 
 **Then（期望输出）**
-- pkt stream：满足「可观测性 / Case 1」字段契约，且 `reasonId=ALLOW_DEFAULT`、`accepted=true`、无 `ruleId`、有 `wouldRuleId=<该规则>`、且 `wouldDrop=true`
+- Packet Diagnostics：满足「可观测性 / Case 1」字段契约，且 `final.accepted=true`、`final.ruleId=<该规则>`、`final.ruleMode=observe`；`reasonId` 跟随 actual verdict，不输出 `wouldRuleId/wouldDrop`
 - metrics：
   - `reasons.ALLOW_DEFAULT.packets>=1`
-  - `traffic(app).txp.allow>=1`
-- per-rule stats：`wouldHitPackets>=1`（可选：payload 时 `wouldHitBytes>=1`）
+  - Traffic Windows app scope `directions.out.acceptedPackets>=1`（旧 current-head evidence 可继续看 `traffic(app).txp.allow>=1`）
+- per-rule stats：observe winner 仍计入该 rule 的 hit counters；旧 `wouldHitPackets/wouldHitBytes` 只作 pre-SNORT-10 evidence
 
 **现有覆盖**
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-09*`
 
 **缺口**
-- 已补齐：`VNXDP-09f` 硬断言 TCP 成功；`VNXDP-09g~09j` 断言 `ALLOW_DEFAULT + wouldRuleId`、`reasons.ALLOW_DEFAULT`、`traffic.txp.allow` 与 `wouldHitPackets`。
-- `wouldHitBytes` 仍不在短连接 case 中做 hard assert；bytes 口径统一由「IP / Case 8」payload 流量覆盖。
+- 已补齐：`VNXDP-09f` 硬断言 TCP 成功；`VNXDP-09g~09j` 当前断言 pre-SNORT-10 `ALLOW_DEFAULT + wouldRuleId`、`reasons.ALLOW_DEFAULT`、旧 `traffic.txp.allow` 与 `wouldHitPackets`；SNORT-10 后应迁移到 `ruleMode=observe` 与统一 winner attribution。
+- bytes 口径统一由「IP / Case 8」payload 流量覆盖。
 
 ---
 
@@ -783,22 +792,22 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **When**
 - `CONFIG.SET(scope=app,set={"block.ifaceKindMask":<bit>})`
-- `STREAM.START(type=pkt)`
-- （建议，为了确定性）`METRICS.RESET(name=traffic, app)`、`METRICS.RESET(name=reasons)`
+- SNORT-10 target：`DIAGNOSTICS.START(channel=packet, app=...)`；pre-SNORT-10 current-head 可用 pkt stream 作为历史 evidence。
+- （建议，为了确定性）`METRICS.RESET(name=reasons)`；Traffic Windows 可用时用 `TRAFFIC_WINDOWS.RESET` / `GET`，旧 `METRICS.RESET(name=traffic, app)` 仅作 current-head evidence。
 - 触发：`nc -z peer_ip 443`
 
 **Then（期望输出）**
-- pkt stream：满足「可观测性 / Case 1」字段契约，且 `reasonId=IFACE_BLOCK`、`accepted=false`、不含 `ruleId/wouldRuleId`
+- Packet Diagnostics：满足「可观测性 / Case 1」字段契约，且 `final.reasonId=IFACE_BLOCK`、`final.accepted=false`、不含 `ruleId` / `ruleMode`
 - metrics：
   - `reasons.IFACE_BLOCK.packets>=1`
-  - `traffic(app).txp.block>=1`
+  - Traffic Windows app scope `directions.out.blockedPackets>=1`（旧 current-head evidence 可继续看 `traffic(app).txp.block>=1`）
 - per-rule stats：不因 IFACE_BLOCK 增长（证明“不是 rule 命中”）
 
 **现有覆盖**
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-10*`
 
 **缺口**
-- 已补齐：`VNXDP-10g` 硬断言 TCP 失败；`VNXDP-10h~10k` 断言 `IFACE_BLOCK` pkt stream、`reasons.IFACE_BLOCK`、`traffic.txp.block`，以及 shadow rule stats 不增长。
+- 已补齐：`VNXDP-10g` 硬断言 TCP 失败；`VNXDP-10h~10k` 当前断言 pre-SNORT-10 `IFACE_BLOCK` pkt stream、`reasons.IFACE_BLOCK`、旧 `traffic.txp.block`，以及 shadow rule stats 不增长；SNORT-10 后应迁移到 Packet Diagnostics 与 Traffic Windows。
 
 ---
 
@@ -810,17 +819,17 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - Tier‑1 就绪。
 
 **When**
-- reset reasons/traffic → `block.enabled=0` → 触发流量 → GET reasons/traffic
+- reset reasons / Traffic Windows（pre-SNORT-10 current-head 可 reset 旧 traffic metrics）→ `block.enabled=0` → 触发流量 → GET reasons / Traffic Windows
 
 **Then（期望输出）**
 - `METRICS.GET(name=reasons)`：totalPackets==0
-- `METRICS.GET(name=traffic, app)`：total==0
+- Traffic Windows app scope：accepted / blocked counters 不增长（pre-SNORT-10 current-head 可用旧 `METRICS.GET(name=traffic, app)` total==0 作为 evidence）
 
 **现有覆盖**
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-11*`
 
 **缺口**
-- 已补齐：`VNXDP-11e~11h` 断言 `block.enabled=0` 时 TCP 仍可通、无匹配 pkt stream verdict、reasons 为 0、per-app traffic 为 0。
+- 已补齐：`VNXDP-11e~11h` 断言 `block.enabled=0` 时 TCP 仍可通、无匹配 pre-SNORT-10 pkt stream verdict、reasons 为 0、per-app legacy traffic 为 0；SNORT-10 后应迁移到 Traffic Windows。
 
 ---
 
@@ -832,47 +841,47 @@ Diagnostics（现在只有 1 条聚合脚本）：
 **Given**
 - Tier‑1 环境就绪（netns+veth），peer 起 TCP server（443）
 - `block.enabled=1`
-- 目标 uid：shell 2000（稳定），且 `tracked=1`（为了看到 pkt stream）
+- 目标 uid：shell 2000（稳定）；pre-SNORT-10 current-head 若要看 pkt stream 需要 `tracked=1`，SNORT-10 应使用 Packet Diagnostics。
 
 **When**
 1) 下发一条会命中的 block rule（`enforce=1`，dst=peer/32,dport=443）
 2) `CONFIG.SET(scope=device,set={"iprules.enabled":0})`
-3) `STREAM.START(type=pkt)` + `METRICS.RESET(name=reasons)` + `METRICS.RESET(name=traffic, app)`
+3) SNORT-10 target：`DIAGNOSTICS.START(channel=packet, app=...)` + `METRICS.RESET(name=reasons)` + `TRAFFIC_WINDOWS.RESET`；pre-SNORT-10 current-head 可用 pkt stream + 旧 traffic reset 作为 evidence。
 4) 触发：`nc -z peer_ip 443`（应允许连通）
 5) （可选）`CONFIG.SET(scope=device,set={"iprules.enabled":1})` 后重复触发一次（应被拦截）
 
 **Then（期望输出）**
 - `iprules.enabled=0` 阶段：
   - 功能面：`nc` 应该成功
-  - pkt stream：`reasonId=ALLOW_DEFAULT`、`accepted=true`，且不含 `ruleId/wouldRuleId`
-  - metrics：`reasons.ALLOW_DEFAULT.packets>=1` 且 `traffic(app).txp.allow>=1`
+  - Packet Diagnostics：`final.reasonId=ALLOW_DEFAULT`、`final.accepted=true`，且不含 `ruleId`
+  - metrics：`reasons.ALLOW_DEFAULT.packets>=1` 且 Traffic Windows app scope `directions.out.acceptedPackets>=1`
   - per-rule stats：该 rule 的 `hitPackets` 不应增长（或至少不因这次触发增长）
 - （可选）`iprules.enabled=1` 阶段（回归到「IP / Case 3」预期）：
-  - `nc` 应该失败；pkt stream 命中 `IP_RULE_BLOCK + ruleId`
+  - `nc` 应该失败；Packet Diagnostics 命中 `IP_RULE_BLOCK + ruleId`
 
 **现有覆盖**
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-12*`
 
 **缺口**
-- 已补齐：`VNXDP-12c~12m` 覆盖 `iprules.enabled=0` correctness（TCP 成功、`ALLOW_DEFAULT`、traffic/reasons allow bucket、rule stats 不增长、恢复 `iprules.enabled=1`）。
+- 已补齐：`VNXDP-12c~12m` 当前覆盖 pre-SNORT-10 correctness（TCP 成功、`ALLOW_DEFAULT`、legacy traffic/reasons allow bucket、rule stats 不增长、恢复 `iprules.enabled=1`）；SNORT-10 后应迁移到 Packet Diagnostics 与 Traffic Windows。
 
 ---
 
-### Case 8：Tier‑1 allow（payload 版：稳定触发 traffic.*b + hitBytes）
+### Case 8：Tier‑1 allow（payload 版：稳定触发 Traffic Windows bytes + hitBytes）
 **目的**
-- 你提到的“稳定触发 traffic metrics”里，**bytes** 这一块最容易被 `nc -z` 的短连接/握手波动影响；这条 Case 用固定读写 N bytes 的流量，把 bytes 断言做成稳定、可重复。
+- 你提到的“稳定触发 traffic metrics”里，**bytes** 这一块最容易被 `nc -z` 的短连接/握手波动影响；SNORT-10 后应以 Traffic Windows accepted bytes 与 reasons/rule stats 作为稳定、可重复断言。
 - 顺便补上 IPRULES `dir=in` 的最小覆盖（当前 smoke 主要是 `dir=out`）。
 
 **Given**
 - Tier‑1 环境就绪（netns+veth），peer 起 TCP zero server（443；见 `iptest_tier1_start_tcp_zero_server`）
 - `block.enabled=1`、`iprules.enabled=1`
-- 目标 uid：shell 2000（稳定），且 `tracked=1`（便于看 pkt stream；非必需）
+- 目标 uid：shell 2000（稳定）；pre-SNORT-10 current-head 若要看 pkt stream 可设 `tracked=1`，SNORT-10 应使用 Packet Diagnostics。
 
 **When**
 1) 下发两条 allow（覆盖 out + in；ct 都用 any，避免引入 CT 复杂度）：
    - r_out：`dir=out`、`dst=peer/32`、`dport=443`、`action=allow,enforce=1`
    - r_in：`dir=in`、`src=peer/32`、`sport=443`、`action=allow,enforce=1`
-2) `METRICS.RESET(name=traffic, app)`、`METRICS.RESET(name=reasons)`
+2) `TRAFFIC_WINDOWS.RESET`、`METRICS.RESET(name=reasons)`（pre-SNORT-10 current-head 可用旧 `METRICS.RESET(name=traffic, app)` 作为 evidence）
 3) 触发 payload（固定读 N bytes）：
    - 脚本内推荐：`iptest_tier1_tcp_count_bytes 443 65536 2000`（期望输出 `65536`）
    - 手动等价：`nc -n -w 5 <peer_ip> 443 | head -c 65536 | wc -c`
@@ -881,20 +890,20 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - 功能面：读到的 bytes **应等于** N（例如 `65536`）
 - metrics（至少这些要增长）：
   - `reasons.IP_RULE_ALLOW.packets>=1` 且 `reasons.IP_RULE_ALLOW.bytes>=65536`
-  - `traffic(app).rxp.allow>=1` 且 `traffic(app).rxb.allow>=65536`
-  - `traffic(app).txp.allow>=1`（client 侧握手/ACK，证明 out 方向也被观测到）
+  - Traffic Windows app scope `directions.in.acceptedPackets>=1` 且 `directions.in.acceptedBytes>=65536`
+  - Traffic Windows app scope `directions.out.acceptedPackets>=1`（client 侧握手/ACK，证明 out 方向也被观测到）
 - per-rule stats（解释闭环）：
   - r_in：`hitPackets>=1` 且 `hitBytes>=65536`（主要 payload 在入站方向）
   - r_out：`hitPackets>=1`（握手/ACK；bytes 可不做阈值）
-- （可选）pkt stream：能看到 `direction=in/out` 的 `IP_RULE_ALLOW` 事件，并分别带对应 `ruleId`
+- （可选）Packet Diagnostics：能看到 `packetDirection=in/out` 的 `IP_RULE_ALLOW` 事件，并分别带对应 `ruleId`
 
 **现有覆盖**
 - payload 触发 + bytes 断言在 `tests/device/ip/cases/22_conntrack_ct.sh` 里已有（`iptest_tier1_tcp_count_bytes`），但它验证的是 CT，且不在 smoke profile。
 - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-13*`
 
 **缺口**
-- 已补齐：`VNXDP-13f~13n` 用固定 `65536` bytes payload 断言 `traffic.rxb.allow`、`traffic.txp.allow`、`reasons.IP_RULE_ALLOW.bytes`、inbound rule `hitBytes` 与 outbound rule `hitPackets`。
-- 可选 pkt stream 的 in/out 双方向事件未作为 hard gate；当前 smoke 用 payload metrics + per-rule stats 完成 bytes 闭环，避免增加 flake。
+- 已补齐：`VNXDP-13f~13n` 当前用固定 `65536` bytes payload 断言 pre-SNORT-10 `traffic.rxb.allow`、`traffic.txp.allow`、`reasons.IP_RULE_ALLOW.bytes`、inbound rule `hitBytes` 与 outbound rule `hitPackets`；SNORT-10 后应迁移到 Traffic Windows。
+- 可选 Packet Diagnostics 的 in/out 双方向事件未作为 hard gate；当前 smoke 用 payload metrics + per-rule stats 完成 bytes 闭环，避免增加 flake。
 
 ---
 
@@ -959,53 +968,52 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 ## 可观测性
 
-这一组 Case 的目标：把“我们已有的输出能不能稳定看到、字段/维度是不是对的、能不能把 DNS 和 pkt 串起来”说清楚。
+这一组 Case 的目标：把“我们已有的输出能不能稳定看到、字段/维度是不是对的”说清楚。SNORT-10 packet-side 以 Packet Diagnostics 为诊断入口；DNS↔IP/domain join 不属于当前 Play-facing 第一轮，后续 Domain/DNS line 单独设计。
 
-### Case 1：pkt stream 基线（started notice → pkt event → stop barrier；字段契约）
+### Case 1：Packet Diagnostics 基线（START response → diagnostic.packet event → owning session stop/close；字段契约）
 **目的**
-- pkt stream 能跑起来，并且 event 的字段 shape 稳定（方便后续用例复用，不用每条都猜字段）。
+- Packet Diagnostics 能跑起来，并且 `diagnostic.packet` event 的字段 shape 稳定（方便后续用例复用，不用每条都猜字段）。
 
 **Given**
 - `block.enabled=1`
-- 目标 uid：`tracked=1`（否则会走 suppressed）
+- `iprules.enabled=1`
+- 目标 uid / app 由 `DIAGNOSTICS.START(channel=packet, app=...)` 显式指定；不依赖持久 `tracked`。
 - 能稳定触发至少 1 个数据包（推荐用「IP / Case 2」的 Tier‑1 allow 场景触发 `nc -z peer_ip 443`）
 
 **When**
-- `STREAM.START(type=pkt)`（等待 `notice.started`）
+- `DIAGNOSTICS.START(channel=packet, app=...)`，START response 返回 `{channel,uid,userId,app}` 后同一连接进入事件模式。
 - 触发 1~3 个包（任意可控流量）
-- `STREAM.STOP`
+- 停止 owning diagnostics connection：关闭连接，或在同一连接支持交互控制时发送 `DIAGNOSTICS.STOP`；不要另开普通 control connection 停止别的 session。
 
 **Then（期望输出）**
-- 有 `type=notice notice=started stream=pkt`
-- 至少 1 条 `type=pkt` 事件，且字段类型正确（最小集合）：
+- 没有 started notice；START command response 即生效配置。
+- 至少 1 条 `type=diagnostic.packet` 事件，且字段类型正确（最小集合）：
   - `timestamp`（string）、`uid`（int）、`userId`（int）、`app`（string）
-  - `direction`（in/out）、`ipVersion`（4/6）、`protocol`（tcp/udp/icmp/other）
-  - `srcIp/dstIp`（string）、`srcPort/dstPort`（int）、`length`（int）
-  - `ifindex`（int）、`ifaceKindBit`（int）
-  - `accepted`（bool）、`reasonId`（string）
-  - 可选字段：`ruleId` / `wouldRuleId` / `wouldDrop` / `domain` / `host`（存在时类型必须正确）
-  - 若存在 `wouldRuleId`，则必须同时存在 `wouldDrop=true`
-  - `host` 仅在 `rdns.enabled=1` 且 PTR/反查成功时出现（best-effort；不建议硬断言）
-- STOP 后短窗口内不应再收到 frame（best-effort barrier）
+  - `packet.packetDirection`、`packet.nfqueueHook`、`packet.ipVersion`、`packet.protocol`、`packet.l4Status`、`packet.portsAvailable`
+  - `packet.srcIp/dstIp?`、`packet.srcPort/dstPort`、`packet.originalIpBytes`、`packet.copiedBytes`、`packet.truncated`
+  - `packet.ifindex?`、`packet.ifaceKind?`
+  - `final.accepted`、`final.reasonId`、`final.ruleId?`、`final.ruleMode?`
+  - 不输出 `wouldRuleId` / `wouldDrop` / legacy `domain` / `host`
+- stop / close 后 diagnostics focus 被释放；若通道丢事件，只能输出 dropped/stopped 类 notice，不输出 started/suppressed notice。
 
 **现有覆盖**
-- 多条 datapath smoke 已经在用 pkt stream（但字段覆盖不系统）：
+- 多条 datapath smoke 当前仍在用 pre-SNORT-10 pkt stream（字段覆盖不系统，需要迁移）：
   - `tests/device/ip/cases/16_iprules_vnext_datapath_smoke.sh`：`VNXDP-05~10`
 
 **缺口**
-- （完善）补一条“字段契约”的集中断言（避免每条用例各写各的）
+- （完善）补一条 Packet Diagnostics “字段契约”的集中断言（避免每条用例各写各的）
 
 ---
 
-### Case 2：DNS→IP 绑定→pkt stream 带 domain（跨域名/IP 的可观测闭环）
+### Case 2：DNS→IP 绑定→packet domain hint（后置；不属于 SNORT-10 第一轮）
 **目的**
-- 走一条“真机真实解析 + 返回 IP（getips=1）”的路径，把 IP 绑定到 domain；
-- 后续对该 IP 的请求应在 pkt stream 里带 `domain` 字段，完成 DNS→pkt 的关联闭环。
+- 这条记录的是旧设计里想验证的 DNS→IP→packet `domain` hint 闭环。
+- SNORT-10 第一轮不实现 Domain-IP Association / Resolved-IP Policy / RDNS 联动；Packet Diagnostics 不输出 legacy `domain` / `host` 字段。
 
 **Given**
 - `block.enabled=1`
 - **netd resolv hook 已激活**（否则这条 Case 应明确 BLOCKED；见「Platform / Case 9」）
-- 目标 uid：`tracked=1`
+- 目标 uid：旧 current-head 可用 `tracked=1`；SNORT-10 不依赖该持久配置。
 - 选择一个“可稳定解析且可访问”的域名（建议 `example.com`；也可用内网环境的稳定域名）
 - 需要让该域名走 allow（确保 `getips=1`）：
   - （推荐）对该 uid：`domain.custom.enabled=1` + 把 domain 放到 app policy allow.domains（custom whitelist）
@@ -1014,29 +1022,30 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - `RESETALL`（清理旧的 IP 绑定/stream ring，避免误判）
 - 下发 allow 策略（确保 DNS verdict 为 allow）
 - （建议）先用 `DEV.DOMAIN.QUERY(app,domain)` 确认该 domain 当前会判为 allow（`blocked=false`）
-- `METRICS.RESET(name=traffic, app)`（用于确认 DNS 决策确实发生）
+- 旧 `METRICS.RESET(name=traffic, app)`（仅用于 current-head DNS 决策 evidence）
 - 开始观测：
-  - `STREAM.START(type=pkt)`
+  - legacy `STREAM.START(type=pkt)`（pre-SNORT-10 current-head evidence）
 - 触发一次真实解析 + 随后产生到该解析 IP 的流量：
   - 例：`nc -z -w 2 example.com 80`（会先解析再发包；网络不通时可能失败，但应至少解析成功）
-- `STREAM.STOP`
+- legacy `STREAM.STOP`
 - （可选）如果想同时看 dns stream：需要**另起一个 vNext 连接**跑 `STREAM.START(type=dns)`（同一连接不允许同时 start 两种 stream）
 
 **Then（期望输出）**
-- `METRICS.GET(name=traffic, app)` 的 `traffic.dns.allow>=1`（确认 DNS 决策发生）
-- pkt stream：出现至少 1 条 `type=pkt` 事件带 `domain=="example.com"`（或你选的域名）
+- 旧 `METRICS.GET(name=traffic, app)` 的 `traffic.dns.allow>=1`（确认 DNS 决策发生；SNORT-10 不保留该 traffic shape）
+- legacy pkt stream：若仍运行旧能力，可出现 `type=pkt` 事件带 `domain=="example.com"`（或你选的域名）；这不是 SNORT-10 packet diagnostics target。
 
 **现有覆盖**
-- 无（目前 smoke 里没有把 DNS 的 IP 绑定与 pkt stream 的 `domain` 字段关联起来）
+- 无；本条后置，不纳入 SNORT-10 第一轮。
 
 **缺口**
-- （新增）把这条闭环纳入 smoke，用来验证“端到端可观测性”而不仅是“单点输出存在”
+- 后续 Domain/DNS line 若重新打开 Domain-IP Association / Resolved-IP Policy / RDNS，再重新定义测试目标；当前不补进 SNORT-10 packet-side smoke。
 
 ---
 
-### Case 3：pkt stream 的 tracked=0 可解释闭环（suppressed notice；不出 pkt event）
+### Case 3：pre-SNORT-10 pkt stream 的 tracked=0 可解释闭环（suppressed notice；legacy evidence）
 **目的**
-- 你要的典型“人话冒烟”之一：当某个 uid/app `tracked=0` 时，pkt stream **不应**输出 `type=pkt` 事件（避免泄露）；但系统仍应通过 `notice.suppressed` 给出“确实有流量在跑”的汇总信号（带 traffic snapshot + hint）。
+- 这条只记录旧 tracked-stream 模型的 current-head evidence：当某个 uid/app `tracked=0` 时，pkt stream **不应**输出 `type=pkt` 事件；旧系统通过 `notice.suppressed` 给出汇总信号。
+- SNORT-10 Packet Diagnostics 按 UID/app 显式开启当前 session，不输出 suppressed notice。
 - 这条 Case 用来快速排除两类误判：
   1) “没看到 pkt event 就以为 datapath 没跑”（其实是 tracked=0）
   2) “开了 stream 但啥也没看到”（其实是没触发到流量 / block.enabled=0）
@@ -1053,10 +1062,10 @@ Diagnostics（现在只有 1 条聚合脚本）：
 1) `RESETALL`（清理旧状态，避免其他 uid 的 tracked 污染）
 2) `CONFIG.SET(scope=device,set={block.enabled:1, iprules.enabled:1})`
 3) `CONFIG.SET(scope=app,app={uid:<uid>},set={tracked:0})`
-4) `STREAM.START(type=pkt)`（等待 `notice.started`）
+4) legacy `STREAM.START(type=pkt)`（等待 `notice.started`）
 5) 触发一次 payload 流量（固定读 N bytes；例如 `iptest_tier1_tcp_count_bytes 443 65536 <uid>`）
 6) 等待 >= 1s（suppressed notice 以 1s 粒度 best-effort 推送）
-7) `STREAM.STOP`
+7) legacy `STREAM.STOP`
 
 **Then（期望输出）**
 - stream 中**不应**出现 `type=pkt` 事件（因为 tracked=0）
@@ -1064,7 +1073,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
   - `windowMs`（约 1000ms）
   - `traffic`（至少 `rxp/rxb/txp/txb` 中某些维度的 allow/block 有非 0）
   - `hint`（提示如何启用 tracked 或改用 `METRICS.GET(name=traffic)`）
-- （可选交叉验证）`METRICS.GET(name=traffic, app)` 对该 uid 也应有增长（证明 datapath 真实跑过）
+- （可选交叉验证）旧 `METRICS.GET(name=traffic, app)` 对该 uid 也应有增长（证明 datapath 真实跑过；SNORT-10 traffic 目标为 Traffic Windows）
 
 **现有覆盖**
 - 无（现有 smoke 主要都把目标 uid 设成 `tracked=1`，所以看不到 suppressed notice 行为）
@@ -1078,45 +1087,46 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 这一组 Case 的目标：把一些“开关语义/可用性验证”用 smoke 口径写清楚（不依赖公网大跑量）；对应的重负载/诊断脚本仍留在 diagnostics。
 
-### Case 1：perfmetrics.enabled 功能语义（off 必须 0；on 必须增长）
+### Case 1：`perfmetrics.level` 功能语义（off 必须近似零成本；basic/detail 必须增长）
 **目的**
-- 验证 `perfmetrics.enabled` 开关真正生效：
-  - off：即使有流量，perf metrics 也不采样（samples 必须为 0）
-  - on：有流量就应能采样到（samples 必须增长）
+- 验证 `perfmetrics.level` 开关真正生效：
+  - `off`：`METRICS.GET(name=perf)` 只返回 `{level:"off"}`。
+  - `basic`：以低扰动 sampling 方式输出 `packetVerdictLatencyUs`、`nfqueueHealth` 与 sampled counters。
+  - `detail` / `profiling`：显式高成本测量模式，不作为普通 smoke 的常驻默认。
 - 这条属于 smoke（功能能不能用），不是“测极限性能”。
 
 **Given**
 - 控制面可用。
 - 有一条**可重复、非公网依赖**的流量触发方式（推荐复用「IP / Case 8」的 Tier‑1 payload 流量）。
-- 注意：流量必须实际走到 datapath/NFQUEUE；否则 `samples` 可能一直为 0，容易误判成 “perfmetrics.enabled 没生效”。
+- 注意：流量必须实际走到 datapath/NFQUEUE；否则 `sampledPackets` 可能一直为 0，容易误判成 “perfmetrics.level 没生效”。
 
 **When**
 （建议：整条 Case 先读 orig，最后 restore，避免污染其他 Case。）
 
 1) 保存原值：
-   - `CONFIG.GET(scope=device, keys=["perfmetrics.enabled"])`
+   - `CONFIG.GET(scope=device, keys=["perfmetrics.level"])`
 2) 关闭采样窗口（off）：
-   - `CONFIG.SET(scope=device, set={"perfmetrics.enabled":0})`
+   - `CONFIG.SET(scope=device, set={"perfmetrics.level":"off"})`
    - `METRICS.RESET(name=perf)`
    - 触发一次 payload 流量（固定读 N bytes；例如 65536；见「IP / Case 8」）
    - `METRICS.GET(name=perf)`
-3) 开启采样窗口（on）：
-   - `CONFIG.SET(scope=device, set={"perfmetrics.enabled":1})`
+3) 开启 basic 采样窗口：
+   - `CONFIG.SET(scope=device, set={"perfmetrics.level":"basic"})`
    - `METRICS.RESET(name=perf)`
    - 再触发一次 payload 流量（同样固定读 N bytes）
    - `METRICS.GET(name=perf)`
-4) 幂等性（1→1 不清空 aggregates）：
-   - `CONFIG.SET(scope=device, set={"perfmetrics.enabled":1})`
+4) 幂等性（basic→basic 不清空 aggregates）：
+   - `CONFIG.SET(scope=device, set={"perfmetrics.level":"basic"})`
    - `METRICS.GET(name=perf)`（不 reset）
 5) 非法值拒绝：
-   - `CONFIG.SET(scope=device, set={"perfmetrics.enabled":2})`
+   - `CONFIG.SET(scope=device, set={"perfmetrics.level":"invalid"})`
 6) restore 原值：
-   - `CONFIG.SET(scope=device, set={"perfmetrics.enabled":<orig>})`
+   - `CONFIG.SET(scope=device, set={"perfmetrics.level":<orig>})`
 
 **Then（期望输出）**
-- off：`nfq_total_us.samples==0`
-- on：`nfq_total_us.samples>=1`
-- 1→1 幂等：第二次 GET 的 `nfq_total_us.samples` 不应小于第一次 on 后的 samples
+- off：只返回 `{level:"off"}`，不返回 latency histogram。
+- basic：`packetVerdictLatencyUs.sampled=true` 且 `sampledPackets>=1`（在确有 eligible packet 的前提下）。
+- basic→basic 幂等：第二次 GET 的 `packetVerdictLatencyUs.sampledPackets` 不应小于第一次 basic 后的 sampled packets。
 - 非法值：应返回 `INVALID_ARGUMENT`（并且不应改变当前配置）
 - （可选）`dns_decision_us.*`：
   - 只有当 netd resolv hook 活跃且你确实触发了 DNS 解析时才可能增长；
@@ -1124,12 +1134,9 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 **现有覆盖**
 - optional casebook（非默认 gate）：`tests/device/diagnostics/dx-casebook-other.sh --case perfmetrics`
-  - `VNXOTH-01a`：保存 `perfmetrics.enabled` 原值
-  - `VNXOTH-01b~01d`：`perfmetrics.enabled=0` + `METRICS.RESET(name=perf)` + Tier‑1 payload 后 `nfq_total_us.samples==0`
-  - `VNXOTH-01e~01g`：`perfmetrics.enabled=1` + reset + Tier‑1 payload 后 `nfq_total_us.samples>=1`
-  - `VNXOTH-01h~01i`：`1→1` 幂等不清空 `nfq_total_us.samples`
-  - `VNXOTH-01j~01k`：非法值 `2` 返回 `INVALID_ARGUMENT` 且当前有效值不变
-  - `VNXOTH-01l`：`dns_decision_us` 保持 optional/non-gate（无 active netd resolver hook 时不硬断言）
+  - 当前 `VNXOTH-01*` 是 pre-SNORT-10 `perfmetrics.enabled` / `nfq_total_us` evidence；SNORT-10 后应迁移到 `perfmetrics.level` 与 `packetVerdictLatencyUs`。
+  - 迁移后：保存 `perfmetrics.level` 原值；验证 `off` 只返回 `{level:"off"}`；验证 `basic` 下 `packetVerdictLatencyUs.sampledPackets>=1`；验证 `basic→basic` 不清空 sampled counters；验证非法 level 返回 `INVALID_ARGUMENT`。
+  - `VNXOTH-01l`：旧 `dns_decision_us` 保持 pre-SNORT-10 optional/non-gate evidence（无 active netd resolver hook 时不硬断言）
 - diagnostics（重负载/公网下载版）：`tests/device/diagnostics/dx-diagnostics-perf-network-load.sh`
   - 里面已包含 off=0 / on=grow / 1→1 幂等 / 非法值拒绝 的验证，但它依赖设备侧 downloader + 公网 URL（更偏诊断/性能）。
 
@@ -1162,7 +1169,7 @@ A) **DOMAINLISTS.IMPORT：超大 domains payload**
 3) `DOMAINLISTS.IMPORT(listId=Lbig, listKind=..., mask=..., clear=1, domains=[...])`
 4) （建议）`DOMAINLISTS.GET` 回查 domainsCount 是否更新；并确认控制面仍可继续 `HELLO`
 
-B) **IPRULES.APPLY：超多规则 + preflight limits**
+B) **pre-SNORT-10 direct IPRULES.APPLY：超多规则 + preflight limits**
 1) `RESETALL`，并确保 `block.enabled=1`、`iprules.enabled=1`
 2) 生成一组规则（同一个 uid；保证 `matchKey` 唯一，例如固定 dst，递增 dport；全部 `enabled=1`）：
    - 先做 under-limit（例如 1100 条）：应成功，但 `IPRULES.PREFLIGHT` 应出现 `rulesTotal` 的 warning（recommended 上限为 1000）
@@ -1173,7 +1180,7 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - `DOMAINLISTS.IMPORT` over-limit 时：
   - 返回 `INVALID_ARGUMENT`，message 类似 `import payload too large`
   - `error.limits` 必须包含 `maxImportDomains=1000000`、`maxImportBytes=16777216`，并带 `hint`（chunk 导入）
-- `IPRULES.APPLY` over-limit 时：
+- pre-SNORT-10 direct `IPRULES.APPLY` over-limit 时：
   - 返回 `INVALID_ARGUMENT`
   - `error.preflight.violations` 中应包含 `rulesTotal` 的 limit（hard=5000）
 - 上述两类失败都不应导致 daemon crash/控制面不可用（失败后 `HELLO` 仍 OK）
@@ -1184,8 +1191,8 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
   - `VNXOTH-02b~02d`：创建 disabled test list、under-limit import 成功、`domainsCount` 回查正确
   - `VNXOTH-02e~02f`：over-limit `DOMAINLISTS.IMPORT` 返回 `INVALID_ARGUMENT` + `error.limits` + hint，且失败后 `HELLO` 仍 OK
   - `VNXOTH-02g~02j`：`RESETALL` 后 under-hard-limit IPRULES 大规则集 apply 成功，并通过 `IPRULES.PREFLIGHT` 看到 `rulesTotal` warning
-  - `VNXOTH-02k~02n`：over-hard-limit `IPRULES.APPLY` 返回 `INVALID_ARGUMENT` + `error.preflight.violations.rulesTotal`，失败 all-or-nothing，且后续 `HELLO` / `IPRULES.PREFLIGHT` 仍 OK
-- Host gtest：已覆盖 `DOMAINLISTS.IMPORT` limits 与 `IPRULES.APPLY` preflight hard-limit 的结构化错误（见 coverage matrix）。
+  - `VNXOTH-02k~02n`：pre-SNORT-10 direct over-hard-limit `IPRULES.APPLY` 返回 `INVALID_ARGUMENT` + `error.preflight.violations.rulesTotal`，失败 all-or-nothing，且后续 `HELLO` / `IPRULES.PREFLIGHT` 仍 OK
+- Host gtest：已覆盖 `DOMAINLISTS.IMPORT` limits 与 pre-SNORT-10 direct `IPRULES.APPLY` preflight hard-limit 的结构化错误（见 coverage matrix）。
 
 **缺口**
 - 已补齐为**可选** diagnostics/casebook runner；不进入默认 `dx-smoke` 主链。
@@ -1205,9 +1212,9 @@ B) **IPRULES.APPLY：超多规则 + preflight limits**
 - 域名 Case 3-9、IP `iprules.enabled=0` gating、payload bytes、Conntrack 最小闭环、其他 Case 1-2 均已纳入相应 active 或 optional entrypoint。
 
 Deferred notes for `SNORT-10`：
-- DNS / pkt stream 字段契约断言是否仍需要独立 smoke，应在架构重构讨论后决定。
-- DNS→IP 绑定→pkt stream 带 domain 的 Device / DX smoke 是否保留，应先明确 Domain/DNS 与 datapath 的边界。
-- pkt stream `tracked=0` suppressed notice smoke 是否作为主线验收，应先明确 Debug Stream / Flow Telemetry / Metrics 的职责分工。
+- packet-side 字段契约应迁移到 Packet Diagnostics / `diagnostic.packet`；legacy pkt stream 字段契约只保留 current-head evidence。
+- DNS→IP 绑定→pkt stream 带 domain 的 Device / DX smoke 后置到 Domain/DNS line；SNORT-10 第一轮不实现 Domain-IP Association / Resolved-IP Policy / RDNS 联动。
+- pkt stream `tracked=0` suppressed notice smoke 不作为 SNORT-10 packet-side 主线验收；Packet Diagnostics 是 session-owned 显式诊断，不输出 suppressed notice。
 
 ---
 

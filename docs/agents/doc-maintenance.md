@@ -1,6 +1,6 @@
 # Documentation Maintenance Map
 
-Last updated: 2026-06-18
+Last updated: 2026-06-20
 
 This file records how Matt skills and future agents should treat the documentation tree after the OpenSpec workflow moved to `archive/openspec/` and Plane `SNORT` became the active tracker.
 
@@ -63,8 +63,25 @@ Docs may link to these work items and keep evidence, but they must not keep thei
 
 `CONTEXT.md` should keep absorbing stable terminology when docs or implementation work clarifies it:
 
-- `clientRuleId`, `ruleId`, `wouldRuleId`, `wouldDrop`, and would/shadow evaluation semantics.
+- `clientRuleId`, `ruleId`, observe/enforce `ruleMode`, unified winner attribution, and legacy would/shadow terms. `wouldRuleId` / `wouldDrop` are legacy names, not current SNORT-10 vocabulary.
 - Complete Linux UID, `appId`, `userId`, app selector, selector ambiguity, and selector not found.
 - Policy state vs observability session state vs counters vs reset/session boundaries.
 - Legacy/backlog terms: `ip-leak`, Domain-IP bridge, `BLOCKIPLEAKS`, `GETBLACKIPS`, `MAXAGEIP`.
 - Diagnostic-only reverse DNS: `RDNS` / `rdns.enabled`.
+
+## SNORT-10 Stale Active-Contract Scan
+
+Before creating implementation issues from SNORT-10 docs, scan active planning and testing docs for old contract terms. Hits are acceptable only when the surrounding text explicitly marks them as historical, frozen, current-head evidence, or reference-only.
+
+```bash
+rtk rg -n 'STREAM\.START\(type=(pkt|activity)|\btracked\b|wouldRuleId|wouldDrop|notice\.suppressed|suppressed notice|METRICS\.(GET|RESET)\(name=traffic|traffic\.dns|perfmetrics\.enabled|nfq_total_us|dns_decision_us' \
+  docs/testing docs/IMPLEMENTATION_ROADMAP.md docs/INTERFACE_SPECIFICATION.md docs/decisions \
+  --glob '!docs/testing/archive/**' --glob '!docs/testing/ip/archive/**'
+```
+
+Positive replacement vocabulary for source plans and issue splits:
+
+- Packet diagnostics: `DIAGNOSTICS.START(channel=packet)`, `diagnostic.packet.final`, `ruleMode`.
+- Traffic views: `TRAFFIC_WINDOWS.*`, reason metrics, `domainSources` for DNS policy attribution.
+- Perf observability: `perfmetrics.level`, `packetVerdictLatencyUs`, `nfqueueHealth`.
+- Authoring: Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot; old direct `IPRULES.APPLY` and fixed `CHECKPOINT.*` are pre-SNORT-10 current-head surfaces.

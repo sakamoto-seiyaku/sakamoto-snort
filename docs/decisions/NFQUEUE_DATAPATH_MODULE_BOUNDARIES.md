@@ -34,6 +34,8 @@ daemon lifecycle 由 Android-side `RuntimeService` / 前台服务负责。daemon
 
 `block.enabled` 是 daemon 内部的组件 / 策略 gate。它控制过滤类 policy 是否执行，不表示 native daemon 停止，也不表示 NFQUEUE hook 被移除。
 
+Play-facing 前端初始化选择普通用户 / 高级用户，并通过启用 / 隐藏能力和写入配置形成默认能力矩阵；后端不承载 product profile enum。普通用户默认开启 packet datapath、PacketFacts、Traffic Windows basic tier、已收口的 Traffic Windows 配置与 Basic IPRULES 等常规能力。高级用户默认开启 CT / Stateful IPRULES 相关能力；这只改变发布的配置 / caps，不改变 CT hot-path 语义：CT 仍由 subject/app caps 与 active consumers 决定进入 packet path，普通用户路径不得为 CT 付费。
+
 当前不引入 daemon 内部“空转但无 NFQUEUE hook”的产品语义。若进程运行且 dataplane 存在，NFQUEUE 仍可接收 packet；具体组件是否参与由各自 gate 和 hot-path capability summary 决定。
 
 ## 3. NFQUEUE copy 与基础字节口径
@@ -63,7 +65,7 @@ Traffic Windows 是普通用户可以长期启用的 online 观测层，不是�
 SNORT-10 后的新接口不保留旧 `METRICS.GET(name=traffic)` shape；Traffic Windows 使用一个独立命令族承载 basic tier 与 detail tier，避免把旧的 DNS / rxp / rxb / txp / txb / allow / block 混合口径带入新模型。
 `HELLO.capabilities[]` 应加入 `traffic-windows`，前端据此发现 `TRAFFIC_WINDOWS.*` surface；旧 `METRICS.GET(name=traffic)` 能力应随新 surface 清理。
 Traffic Windows 的目标之一是摆脱 Conntrack / Flow Telemetry consumer 聚合依赖；basic tier 与 detail tier 都必须基于 `PacketFacts` 与最终 verdict 更新，不得为了 Traffic Windows 启用 Conntrack。
-Traffic Windows 不依赖 Domain-IP Association，也不存储或输出 domain hint。前端如果需要把 remote IP 显示成域名，应独立调用 Domain-IP Association batch lookup。
+Traffic Windows 不依赖 Domain-IP Association，也不存储或输出 domain hint。当前 Play-facing 第一轮不提供 IP→domain hint；未来如果前端需要把 remote IP 显示成域名，应走独立 Domain-IP Association batch lookup，而不是塞进 Traffic Windows。
 
 时间语义：
 - 只支持 relative trailing windows，例如 `last 15m`、`last 1h`、`last 5h`。
@@ -165,7 +167,7 @@ Top-K item 都返回 `acceptedBytes` 与 `acceptedPackets`；remote IP 排名主
 Top-K 输出排序必须稳定：先按 `acceptedBytes` 降序，再按 `acceptedPackets` 降序，最后按 key 的稳定二进制顺序升序。这样同值项不会在多次查询之间随机抖动。
 `protocolTopK[]` 和 `protocolPortTopK[]` 的 protocol 字段使用 IP header / terminal L4 protocol number，例如 TCP=6、UDP=17、ICMP=1、ICMPv6=58；不使用字符串 token，也不把 ICMPv4/ICMPv6 折叠为同一个公开值。对 L4 invalid/unavailable 但 IP envelope 和 remote IP 可用的 accepted packet，`protocolTopK[]` 使用 reserved sentinel `protocol=255` 归入 unknown/error bucket；Traffic Windows 输出里 `255` 一律表示 unknown/error bucket，不再区分真实 header value 255。这类 packet 不进入 `protocolPortTopK[]`。
 
-Traffic Windows 不直接输出 domain hint。前端如果需要把 remote IP 显示成域名，应独立调用 Domain-IP Association 的 batch lookup。
+Traffic Windows 不直接输出 domain hint。未来如果前端需要把 remote IP 显示成域名，应独立调用 Domain-IP Association 的 batch lookup；当前第一轮不实现该 lookup。
 
 ### 4.3 Packet diagnostics 与高级观测边界
 
@@ -181,6 +183,11 @@ Packet diagnostics 第一版定位为用户主动开启的 IPRULES / packet poli
 - packet-side diagnostics 重构不保留旧兼容中间层：旧 `tracked` 持久状态、generic `STREAM.*` packet 模型、replay prebuffer、suppressed notice、legacy `host` / domain join、`wouldRuleId` / `wouldDrop` 平行归因与旧 activity stream 状态应在同一语义重构中直接删除或替换，而不是先桥接到新模型。
 
 Packet diagnostics 是显式高成本模式，可以输出完整 explain、stage、skipped reason、rule snapshot 与候选路径；但它面向用户策略排查，不输出 raw hot-path capability mask、compiler table 等开发者内部结构。开发者性能 trace 后续走独立路径。
+
+Try / Diagnose / Rescue 不作为三个 daemon 模块实现。它们组成前端主导的“安全修改策略”工作流，并复用已定后端原语：
+- Try 使用真实 Authoring / Commit / Apply 流程，只是绑定使用 `bindingMode=observe`；它发布到 Runtime Snapshot，命中时记录归因和 rule hit，但实际 verdict 保持 allow。
+- Diagnose 使用 Packet Diagnostics 和 Diagnostic Focus，为具体 app / UID 输出 Explain Evidence；它补解释，不改变 verdict，也不是 Try 的必要前置条件。
+- Rescue 使用 component gates 与 Checkpoint Restore。恢复联网的短路径必须优先于排查路径，不能要求用户先打开诊断或理解 explain stream 才能恢复网络。
 
 DNS stream 暂时冻结，不并入 `DIAGNOSTICS.*`，本轮不扩展、不删除、不桥接。当前前端不调用 DNS stream；只要它不被调用且不影响 packet hot path，就不把它纳入 packet-side 重构范围。后续 Domain/DNS 线单独整理时再决定替代模型。现有 activity stream 只输出 `blockEnabled` 状态，不迁移到新模型；前端需要状态时使用 `CONFIG.GET(block.enabled)`。
 
@@ -210,6 +217,8 @@ CT acquisition 的 gate 是 subject/app 级高级能力 gate，不是同一 app 
 CT 的热路径执行点必须区分两件事：是否需要进入 CT，以及进入 CT 后如何更新 flow/session state。CT 不是 verdict-gated 的 accepted-flow 账本；它是独立的 L4 flow/session 状态机。只要 packet path 决定进入 CT，CT 就按自身状态机执行 lookup / create / update，并产出 `CtFacts`。后续 Stateful / DPI policy 若基于这些 `CtFacts` 产生 block，block 只影响 packet verdict，不回滚 CT，也不要求 CT 做 preview / commit 两阶段提交；CT entry 由自身 timeout / eviction 机制清理。
 
 对已启用 CT / DPI 高级能力的 app/subject，Interface policy 与 Basic IPRULES 仍先用 `PacketFacts` 评估。若 Basic enforce block 产生最终 block，则该 packet 可以在进入 CT 前被短路，避免不必要的 CT 状态更新。若 Basic enforce allow 或 Basic observe winner 产生最终 allow，则后续 Stateful / DPI policy 仍按 short-circuit 不再评估，但该 packet 仍应进入 CT 并更新统一 CT entry，保证同一 flow/session 的后续包、DPI state 与 flow attachments 不因 Basic allow 短路而断裂。
+
+完整流观测 / Flow Telemetry 虽然是 CT observation consumer，但不覆盖上述 Base/Basic final block 边界。`IFACE_BLOCK` 或 Basic enforce block 已经产生 final block 的 packet 不为 telemetry 拉起 CT，不创建 block/deny-flow entry，也不生成 `FLOW` lifecycle record；blocked visibility 由 reason metrics、Traffic Windows `blockedPackets` 与 Packet Diagnostics 承担。
 
 当 Basic IPRULES 没有产生 winner 且 subject/app 需要 Stateful / DPI 时，packet path 进入 CT 并取得 `CtFacts`，继续评估 Stateful IPRULES / DPI stage。此时 CT 状态更新与最终 verdict 解耦：CT 已经观察到这个 packet 并推进对应 flow/session 状态；如果后续 Stateful / DPI block 命中，直接执行 block verdict 即可。
 
@@ -279,7 +288,7 @@ Domain-IP Association / Resolved-IP facts 不属于 IPRULES 条件字段，也�
 
 ### 5.3 IPRULES Authoring Layer / 生效模型
 
-状态：v1 authoring / rule group / checkpoint 生效模型已收口；后续只拆具体 API schema、持久化格式与实现 work items，不再重新打开本节概念边界。
+状态：v1 authoring / rule group / checkpoint 生效模型已收口；后续只拆具体 API schema、持久化格式与实现 work items，不再重新打开本节概念边界。本节是 SNORT-10 目标模型，supersedes pre-SNORT-10 direct `IPRULES.APPLY` mutation surface 与固定 `CHECKPOINT.*` slot surface；具体新 API schema 在 SNORT-17 implementation slice 中定义。
 
 Authoring layer 只保留四个相互关联的状态点：
 - `Draft`：草稿 / 工作区 Authoring Policy Bundle。它是 daemon control-plane / persisted store 中的可复用规则、规则组、规则组嵌套与 complete Linux UID 生效绑定；前端只通过 daemon 命令读取和修改它，不拥有独立规则数据库。v1 规则组嵌套上限固定为 3 层，后续高级 / 付费能力可以提高该限制，但不影响当前模型。Draft 可能包含未 commit 的修改；不影响 datapath。
@@ -443,6 +452,8 @@ Resolved-IP Policy 是很靠后的 fallback。它不应覆盖用户明确写的 
 
 ## 9. DomainPolicy、Domain-IP Association 与 Resolved-IP Policy
 
+当前 Play-facing 第一轮不实现 Domain-IP Association storage、batch lookup、Resolved-IP Policy enforcement 或 RDNS 后台化。本节只保留分层边界，避免 Host / packet path / Traffic Windows / IPRULES 在本轮继续耦合 domain hints；具体 store、API、diagnostic evidence 与 RDNS queue/cache/rate limit 等细节等 DNS / Domain line 重新打开后再设计，且优先级排在 DPI / L7 专题之后。
+
 ### 9.1 DomainPolicy
 
 DomainPolicy 继续负责 domain-level allow/block policy 与 DNS verdict attribution。它不应和 IPRULES 合并成一个规则系统。
@@ -457,7 +468,7 @@ Domain-IP Association 是独立模块，不是 DomainPolicy 自身，也不是 B
 - 记录 DNS learned domain-to-IP relationships。
 - 支持 UI enrichment / debug evidence。
 - 支持 Resolved-IP Policy。
-- 提供 batch lookup，让前端把 IP 转成 domain hint。
+- 未来提供 batch lookup，让前端把 IP 转成 domain hint；当前 Play-facing 第一轮不实现该 API。
 
 它必须有独立 enable gate，并与 DNS blocking / DomainPolicy 解耦：
 - DNS blocking 可以关闭，association 仍可通过观察路径收集。
@@ -527,22 +538,23 @@ FORWARD / hotspot gateway mode 是未来方向，不进入当前第一轮实现�
 - 把所有 DPI protocol 放进主 hot-path capability mask。
 
 暂缓：
-- 第三层高级观测的最终命名。
-- Flow Telemetry / Debug Stream / shadow evaluation 是否共享统一 transport。
 - DNS Observation Source 的实现。
 - FORWARD / hotspot gateway mode。
 - DPI 库选型与具体 adapter。
 
 ## 13. 后续实现拆分建议
 
-后续应按以下顺序拆 Plane work item：
-1. 修正 NFQUEUE bounded copy 与 original IP packet bytes 口径。
-2. 去除 packet hot path 的 per-packet allocation quick wins，例如 verdict buffer 复用。
-3. 引入 `PacketFacts` 栈上输入模型，减少 Host / Domain 耦合。
-4. 抽出 Domain-IP Association 模块与独立 gate。
-5. 降级 RDNS 为后台诊断 enrichment。
-6. 重新整理 Resolved-IP Policy stage。
-7. 设计 Hot-path capability summary 与 advanced prefilter。
-8. 按 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 第 7.8 / 7.9 节实现 Conntrack A++ runtime：`liburcu-qsbr`、自研专用 CT hash table、分片 bit-slice、entry lifetime、attachment 更新、timeout / eviction 与 Stateful / DPI consumer 边界。
-9. 拆分并实现 Traffic Windows 第一版闭环。
-10. 单独讨论 observability / Debug Stream / shadow evaluation 边界。
+SNORT-10 当前 Play-facing 第一轮应围绕已经收口的模块拆 Plane work item：
+1. 修正 NFQUEUE bounded copy 与 original IP packet bytes 口径，并引入 `PacketFacts` 栈上输入模型。
+2. 清理 packet hot path 的 legacy 状态与 per-packet allocation quick wins，例如旧 `tracked`、legacy Host/domain join、verdict buffer 复用等；DNS stream 暂时冻结不动，只要不被前端调用且不影响 packet hot path。
+3. 实现 Hot-path capability summary、advanced prefilter 与 L1/L2 policy decision cache。
+4. 按 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 第 7.8 / 7.9 节实现 Conntrack A++ runtime：`liburcu-qsbr`、自研专用 CT hash table、分片 bit-slice、entry lifetime、attachment 更新、timeout / eviction 与 Stateful consumer 边界。
+5. 拆分并实现 Traffic Windows 第一版闭环。
+6. 拆分并实现 Packet Diagnostics / Diagnostic Focus 第一版边界。
+7. 拆分并实现 IPRULES Authoring Layer v1、Apply / Restore / Checkpoint 与 Runtime Snapshot 生效模型。
+8. 拆分并实现 PerfMetrics / datapath performance indicators 第一版。
+
+不进入当前第一轮拆分：
+- DPI adapter / classifier / result schema / protocol ID / category / rule matching schema。DPI 是后续独立专题。
+- Domain-IP Association storage、batch lookup、Resolved-IP Policy enforcement、RDNS 后台化与 DNS Observation Source。DNS / Domain 线等 DPI / L7 之后再重新打开。
+- 完整测试 / 发布 gate、版本间性能基准、power audit。第一版只沿用当前 unit / integration / Device smoke 测试层级，按风险补最小必要测试。

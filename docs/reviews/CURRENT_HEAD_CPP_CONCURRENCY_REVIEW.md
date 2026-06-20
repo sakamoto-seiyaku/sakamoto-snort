@@ -1,5 +1,7 @@
 # 当前 HEAD C++ 并发 / 内存安全专项审查
 
+> Reference-only / point-in-time review. This file may mention pre-SNORT-10 current-head surfaces such as `STREAM.START(type=...)`, suppressed notice, `IPRULES.APPLY`, `perfmetrics.enabled`, or `nfq_total_us`. Current SNORT-10 interface authority is `docs/INTERFACE_SPECIFICATION.md` plus `docs/decisions/`; packet-side diagnostics target Packet Diagnostics / Diagnostic Focus, not legacy stream contracts.
+
 审查目标：原始仓库 HEAD `67477db`；后续修复状态按当前工作树更新。
 
 审查模式：原始报告只审查，不修代码、不重构、不提交 patch。后续标记为 `[FIXED]` 的 finding 表示已在当前工作树中修复，并补充实际修复方式。

@@ -2,6 +2,8 @@
 
 This is a point-in-time architecture/performance review, not the active tracker. The current active discussion is Plane item `SNORT-10`; older migrated follow-up item `SNORT-8` is cancelled.
 
+SNORT-10 supersession note: current interface authority is `docs/INTERFACE_SPECIFICATION.md` plus `docs/decisions/`. This review may mention pre-SNORT-10 terms such as `tracked`, Debug Stream, `perfmetrics.enabled`, `nfq_total_us`, or would/shadow evaluation; treat those as current-head review evidence, not as the target contract. SNORT-10 packet diagnostics use Packet Diagnostics / Diagnostic Focus, PerfMetrics uses `perfmetrics.level` / `packetVerdictLatencyUs`, and Traffic Windows replaces the old traffic metrics shape.
+
 # NFQUEUE 性能与架构审计报告
 
 日期：2026-06-16

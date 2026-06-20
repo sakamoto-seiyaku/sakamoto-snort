@@ -40,7 +40,7 @@ Status 口径（全篇统一）：
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
 - NFQUEUE / packet datapath 重构边界：`docs/decisions/NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md`
 - L4 Conntrack / CT A++ runtime 决策：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`
-- Plane 工作入口：`docs/agents/issue-tracker.md`；当前唯一 active item 为 `SNORT-10`（NFQUEUE / DNS / datapath performance architecture refactor discussion）
+- Plane 工作入口：`docs/agents/issue-tracker.md`；`SNORT-10` 是架构讨论 parent，当前已形成 `SNORT-12..19` 模块 PRD，implementation issue 拆分前先完成文档一致性清理。
 - OpenSpec 历史归档：`archive/openspec/changes/archive/` 与 `archive/openspec/specs/`（仅作历史参考；不再作为当前流程约束）
 
 长期约束（对后续所有 Plane work item / implementation slice 生效）：
@@ -62,8 +62,8 @@ Status 口径（全篇统一）：
 - 根目录 OpenSpec 工作区已迁出到 `archive/openspec/`；后续新工作默认走 Plane + docs/decisions/CONTEXT.md 工作流，不再为默认流程创建 OpenSpec change。
 - 2026-04-30 已收口的后端支撑闭环：
   - Flow Telemetry：常态观测原始事实层 MVP；前端 Activity 新需求已暴露 raw facts completeness 缺口。
-  - Debug Stream explainability：tracked 调试取证链条。
-  - Policy Bundle Checkpoints：固定槽位 policy-only snapshot / atomic restore。
+  - Packet diagnostics / legacy Debug Stream：旧 tracked 调试取证链条是 pre-SNORT-10 历史能力；SNORT-10 packet 侧目标为 session-owned Packet Diagnostics / Diagnostic Focus，DNS stream 暂时冻结。
+  - Policy Bundle Checkpoints：固定槽位 policy-only snapshot / atomic restore 是 pre-SNORT-10 历史原语；SNORT-10 Authoring Layer 使用 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 模型。
   - NDK r29 root daemon workflow：当前 daemon build/deploy/debug 基线。
 
 ### 1.2 功能（Domain + IP + Flow Telemetry）
@@ -71,14 +71,14 @@ Status 口径（全篇统一）：
 - Domain+IP 的“后端融合”（vNext control 平面 + observability 口径 + datapath 接线）已完成并稳定回归；IPv4/IPv6 双栈、L4 conntrack core、DomainPolicy device-wide 命名收敛、DomainRules per-rule observability 均已完成。
 - SNORT-10 架构讨论已收口 Traffic Windows、Hot-path Capability Summary / Advanced Prefilter、CT / DPI pipeline 边界，以及 A 方案内的 Conntrack A++ runtime baseline。后续实现 CT 时默认按全局共享 authoritative CT table、自研专用 CT hash table、当前 field-mix hash 与 `liburcu-qsbr` 推进；C/owner handoff 与 NFQUEUE/userspace 分流实验不混入该 baseline。
 - A/B/C/D 口径已经全部落地：
-  - A：pkt verdict 可观测（`reasonId/ruleId/wouldRuleId`）
+  - A：packet verdict 可观测（`reasonId/ruleId` + rule execution mode；旧 `wouldRuleId/wouldDrop` 已被 SNORT-10 归入 legacy stream 口径）
   - B：DomainPolicy counters（`policySource` / `domainSources`）
   - C：IP per-rule stats（随 IPRULES v1 一起落地）
-  - D：perfmetrics（`nfq_total_us` / `dns_decision_us` 等）
+  - D：PerfMetrics（SNORT-10 新口径为 `packetVerdictLatencyUs` / `nfqueueHealth`，旧 `nfq_total_us` 只可作为迁移 alias）
 - IPRULES dual-stack（IPv4/IPv6）+ L4 conntrack core 已落地；真机 Tier-1 模组（netns+veth）已成为 datapath 的主要可重复验收环境。
 - [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
-- Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Debug Stream 保留为深度取证能力，Metrics 保留为后端低基数健康状态。
-- 前端支撑所需的后端原语已基本闭环：Debug Stream explainability、checkpoint / rollback、Flow Telemetry export channel 均已落地；但 Flow Telemetry `FLOW` record 对 Activity 所需 raw facts 仍有字段完整性缺口，已纳入下一轮后端能力扩展。
+- Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Packet Diagnostics 承担 packet-side 深度取证，Metrics 保留为后端低基数健康状态。
+- 前端支撑所需的历史后端原语已基本闭环：legacy Debug Stream explainability、checkpoint / rollback、Flow Telemetry export channel 均已落地；SNORT-10 后 packet-side explain 目标改为 Packet Diagnostics，不再扩展旧 tracked packet stream。
 - [NOTE] NFQUEUE topology / power / performance 不再作为文档内隐式 TODO 追踪；当前统一归入 Plane `SNORT-10` 做架构重构讨论。任何默认值调整、新 datapath mode 或代码重构都应先由该项产出明确决策。
 
 ## 2. 已完成（事实清单）
@@ -95,10 +95,10 @@ Status 口径（全篇统一）：
 ### 2.2 工程化（Device smoke casebook 补齐）
 
 - [DONE 2026-04-24] `complete-device-smoke-casebook-platform`：补齐 platform gate 可解释性（host 工具链 + vNext HELLO sanity + `--skip-deploy` 语义；spec：`archive/openspec/specs/dx-smoke-platform-gate/spec.md`）
-- [DONE 2026-04-25] `complete-device-smoke-casebook-domain`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；spec：`archive/openspec/specs/dx-smoke-domain-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-domain`：补齐 pre-SNORT-10 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；spec：`archive/openspec/specs/dx-smoke-domain-casebook/spec.md`）
 - [DONE 2026-04-25] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、`block.enabled=0`、`iprules.enabled=0`、payload bytes、维度级 traffic/reasons/stats、pkt stream 字段；spec：`archive/openspec/specs/dx-smoke-ip-casebook/spec.md`）
 - [DONE 2026-04-25] `complete-device-smoke-casebook-conntrack`：补齐历史 Conntrack 模块 smoke 口径（`ct.state/direction` 最小闭环、create-on-accept、block 不 create entry；spec：`archive/openspec/specs/dx-smoke-conntrack-casebook/spec.md`）。SNORT-10 后的新 CT runtime 语义以 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 为准，不再把 create-on-accept / block 不 create entry 作为新架构原则。
-- [DONE 2026-04-25] `complete-device-smoke-casebook-other`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 其他` Case 1–2（perfmetrics.enabled 可用性验证、极端规模 limits sanity；spec：`archive/openspec/specs/dx-smoke-other-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-other`：补齐 pre-SNORT-10 `DEVICE_SMOKE_CASEBOOK.md` `## 其他` Case 1–2（`perfmetrics.enabled` 可用性验证、极端规模 limits sanity；spec：`archive/openspec/specs/dx-smoke-other-casebook/spec.md`）
 
 ### 2.3 功能（Domain+IP；后端已收敛）
 
@@ -124,7 +124,7 @@ Status 口径（全篇统一）：
 ### 2.4 稳定性（运行期并发边界）
 
 - [DONE 2026-04-26] RESETALL runtime 并发边界：修复 `RESETALL` 与周期性 `snortSave()` 竞态，以及 packet / DNS 热路径锁外准备对象跨 reset 发布问题；设计口径见 `docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`，审查状态见 `docs/reviews/CURRENT_HEAD_CPP_CONCURRENCY_REVIEW.md`。
-- [DONE 2026-04-26] legacy stream 冻结：`DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 不再作为实时事件通道；支持入口统一到 vNext `STREAM.START(type=dns|pkt|activity)`，消除 legacy 同步 socket write 对热路径与 `RESETALL` 的反压风险。
+- [DONE 2026-04-26] legacy stream 冻结：`DNSSTREAM` / `PKTSTREAM` / `ACTIVITYSTREAM` 不再作为实时事件通道；当时支持入口统一到 vNext `STREAM.START(type=dns|pkt|activity)`，但 SNORT-10 packet 侧新目标为 `DIAGNOSTICS.START(channel=packet)`，DNS stream 暂时冻结。
 - [DONE 2026-04-26] vNext mutation / datapath 锁拆分：新增 control mutation mutex，普通 vNext apply/import/config/metrics reset 不再持有 `mutexListeners` 覆盖大 CPU / I/O 工作；`RESETALL` 仍按 save/reset → control mutation → datapath quiesce 顺序完整串行化。
 - [DONE 2026-04-26] daemon lifecycle ownership：`stabilize-daemon-lifecycle-ownership`（main-owned shutdown、session-owned fd、active session budget、send deadline；并更新 concurrency review lifecycle findings）
 
@@ -132,15 +132,15 @@ Status 口径（全篇统一）：
 
 - [DONE 2026-04-26] `sync-iprules-dual-stack-authority-docs`：同步 dual-stack IPRULES 的权威设计/契约文档，避免跨文档漂移与误读。
 - [DONE 2026-04-27] 接口规范收敛：重写 `docs/INTERFACE_SPECIFICATION.md` 为 vNext-only，并归档 legacy 版到 `docs/archived/INTERFACE_SPECIFICATION_v3.7_2026-04-26_legacy.md`。
-- [DONE 2026-04-29] Flow Telemetry 工作纲领收口：`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md` 明确常态 records、Debug Stream、Metrics 与 `tracked` 的边界。
+- [DONE 2026-04-29] Flow Telemetry 工作纲领收口：`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md` 明确常态 records、Debug Stream、Metrics 与旧 `tracked` 的历史边界；SNORT-10 后 packet-side 诊断以 Packet Diagnostics / Diagnostic Focus 为目标。
 
 ## 3. 下一步候选（待讨论后排序）
 
 ### 3.1 当前后端闭环状态
 
 - [DONE 2026-04-30] Flow Telemetry MVP 已覆盖常态 records 初始原始事实层；前端 Activity 新需求暴露的 ICMP、方向、L4 状态、END/time/verdict/known flags、L3 observation 等 raw facts completeness 缺口进入 3.4 下一轮。
-- [DONE 2026-04-30] Debug Stream explainability 已覆盖 tracked DNS / packet verdict 的自包含取证链条；它继续定位为深度调试，不替代 Flow Telemetry records 或 Metrics。
-- [DONE 2026-04-30] Policy Bundle Checkpoints 已覆盖后端固定槽位 checkpoint / rollback 原语；前端仍负责命名、历史、备注、工作流与导入导出包。
+- [DONE 2026-04-30] Debug Stream explainability 已覆盖 tracked DNS / packet verdict 的历史自包含取证链条；SNORT-10 packet 侧由 Packet Diagnostics / Diagnostic Focus 取代，DNS stream 暂时冻结。
+- [DONE 2026-04-30] Policy Bundle Checkpoints 已覆盖 pre-SNORT-10 后端固定槽位 checkpoint / rollback 原语；SNORT-10 Authoring Layer 以 latest-five Checkpoint / Runtime Snapshot 模型为新目标。
 - [DONE 2026-04-30] NDK r29 root daemon workflow 已成为当前 daemon build/deploy/debug 基线；后续 APK/RuntimeService 集成不再依赖 Android source / Soong daemon 路径。
 - [NOTE] OpenSpec 工作流已归档；下一步应先讨论并选定产品/工程方向，再在 Plane 中创建 work item 或更新相应设计文档。
 
@@ -148,19 +148,19 @@ Status 口径（全篇统一）：
 
 - [NEXT] APK-native daemon packaging handoff：把 `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so` 纳入前端 APK 打包链路，并定义 release/debug artifact 验收。
 - [NEXT] RuntimeService root launch：由 `${applicationInfo.nativeLibraryDir}/libsucre_snortd.so` 启动 daemon，校验 `HELLO.daemonBuildId/artifactAbi/capabilities`，并明确失败回退与日志采集口径。
-- [NEXT] checkpoint UX 接线：前端用固定 slot 实现命名 checkpoint、undo/rollback、自救入口、导入导出工作流；daemon 不扩展为历史数据库。
+- [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
 - [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
 
 ### 3.3 候选 B：vNext 迁移与 legacy 下线（偏接口收敛）
 
-- [NEXT] `migrate-to-control-vnext`：前端与对外工具默认切到 vNext，覆盖 tracked UX、checkpoint UX、telemetry consumer、迁移期开关、回滚口径与 legacy 并存窗口。
+- [NEXT] `migrate-to-control-vnext`：前端与对外工具默认切到 vNext，覆盖 Packet Diagnostics / Diagnostic Focus UX、Authoring Layer / Checkpoint Restore UX、telemetry consumer、迁移期开关、回滚口径与 legacy 并存窗口。
 - [NEXT] legacy control 下线判据：明确 `60606` / legacy command 的保留期限、兼容窗口、诊断入口替代方案和最终删除条件。
 - [NOTE] 这条线依赖真实版本/发布策略配合，适合在前端 RuntimeService handoff 基本可跑后推进。
 
 ### 3.4 候选 C：后端能力扩展（偏新能力）
 
 - [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、历史 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
-- [NEXT] Conntrack A++ runtime implementation：按 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 第 7.8 / 7.9 节实现 A 方案内 baseline：全局共享 authoritative CT table、自研专用 fixed-bucket intrusive table、当前 specialized field-mix hash、`liburcu-qsbr`、不重叠 shard/bucket bit slices、per-shard pool、worker-local hot cache、hot/cold split attachments 与 bounded sweep / reclaim。
+- [NEXT] SNORT-10 implementation issue split：先从 `SNORT-12 Packet Datapath Foundation` 与 `SNORT-13 Hot-Path Capability and Policy Cache` 拆 tracer-bullet issues，再进入 `SNORT-14 Conntrack A++ Runtime`。涉及 IPRULES mutation/control 的切片必须等 `SNORT-17 IPRULES Authoring Layer v1` 按 Authoring Layer 模型拆分，不得回到旧 direct `IPRULES.APPLY` 目标。CT A++ 仍按 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 第 7.8 / 7.9 节实现 A 方案内 baseline，但不作为第一张 implementation issue 的起点。
 - [CANDIDATE] NFQUEUE topology / userspace handoff experiments：`shared-flow-pool`、per-flow owner / handoff、或其它 flow steering 方案只能作为 CT A++ baseline 之后的 perf / contention 变量；不得作为 CT correctness 前提，也不得把 C/owner handoff 混入当前 A 方案实现。
 - [CANDIDATE] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
 - [CANDIDATE] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
@@ -189,8 +189,8 @@ Status 口径（全篇统一）：
 以下几点用于承接“domain-only 旧骨架 + 新增 IP 一条腿”后的中长期整理方向；当前仅记录问题意识与推荐顺序，不视为已定方案：
 
 - **DomainPolicy 命名边界已收口，后续以接口同步为主**：`GLOBAL_*` 已对外收敛为 `DOMAIN_DEVICE_WIDE_*`；后续不再把它列为主线 backlog，只在接口文档/测试发现漂移时修正。
-- **可观测性分层已进入产品集成阶段**：旧的 A/B/C/D counters/stream/perfmetrics 已落地；Flow Telemetry MVP 已补齐前端常态 Top-K/timeline/history 所需的原始 records 层；Debug Stream explainability 已补齐深度取证链条。后续重点不再是继续给 daemon 增加聚合口径，而是把 `Flow Telemetry records`（业务事实）、`Debug Stream`（深度取证）、`Metrics`（后端低基数健康状态）接到 consumer / 前端工作流。
-- **checkpoint / rollback 后端原语已落地**：前端仍负责命名、历史、备注、工作流与导入导出包；daemon 只提供固定槽位 policy bundle snapshot 与 atomic restore，避免前端用多条 apply 命令模拟回滚时出现半恢复。
+- **可观测性分层已进入产品集成阶段**：旧的 A/B/C/D counters/stream/perfmetrics 已落地；Flow Telemetry MVP 已补齐前端常态 Top-K/timeline/history 所需的原始 records 层。SNORT-10 packet-side 深度取证目标是 Packet Diagnostics / Diagnostic Focus，旧 Debug Stream 只保留为历史能力与 DNS-line 冻结背景。后续重点不再是继续给 daemon 增加聚合口径，而是把 `Flow Telemetry records`（业务事实）、`Packet Diagnostics`（深度取证）、`Metrics`（后端低基数健康状态）接到 consumer / 前端工作流。
+- **checkpoint / rollback 历史后端原语已落地**：pre-SNORT-10 daemon 已提供固定槽位 policy bundle snapshot 与 atomic restore，避免前端用多条 apply 命令模拟回滚时出现半恢复。SNORT-10 Authoring Layer 不继续以固定槽位作为目标，而是使用 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 模型。
 - **`ip-leak` 继续后置，但必须重新定义定位**：它横跨 domain 与 IP，两边都相关；当前不宜提前混入已收敛主线。需要在统一口径下重新回答它到底是“补位能力 / 默认关闭能力 / 某类场景下的重要能力”中的哪一种。
 - **L4 conntrack core 已落地，SNORT-10 后进入 A++ runtime 重构**：当前仓库已经具备最小闭环的 userspace conntrack（`ct.state/ct.direction` + hot-path gating + host/真机验证）；后续实现重点是按 CT A++ baseline 重构 runtime 成本模型与并发/lifetime 边界。当前纲领入口见 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`；实现原则仍是“以 OVS conntrack 语义为母本做 C++ 重实现”，不是重新设计另一套状态系统。
 - **L7 / HTTP / HTTPS 识别暂不作为已承诺主线**：现阶段更稳的产品定位仍是 DNS/domain-policy + IPv4 L3/L4 判决与观测。更高层协议识别是否值得做、能做到什么程度，应在后续单独评估，而不是默认沿着“继续往上解包”自然推进。

@@ -3,6 +3,12 @@
 更新时间：2026-04-27
 状态：已落地（设计回执；对外接口与测试口径以 `docs/INTERFACE_SPECIFICATION.md` / `docs/testing/` 为准）
 
+SNORT-10 一致性说明（2026-06-20）：
+- 本文的双栈规则模型、`family`、IPv6 parser/header walker、`mk2`、byFamily metrics 等结论仍然有效。
+- 本文的 `IPRULES.PREFLIGHT/PRINT/APPLY` 控制面描述属于 pre-SNORT-10 direct mutation surface 的双栈化记录；SNORT-10 新目标的 mutation / checkpoint contract 以 Authoring Layer v1 为准。
+- 本文早期写法中的 legacy/domain fallback、vNext packet stream / `wouldRuleId` 归因、Conntrack preview/commit accepted-only 语义，已被 `NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md` 与 `SNORT_10_DISCUSSION_NOTES.md` 覆盖。
+- 后续实现拆分不得从本文恢复旧 packet stream、旧 Host/domain fallback 或 CT accepted-flow ledger 模型。
+
 ---
 
 ## 0. 目标与范围
@@ -55,9 +61,9 @@
    - 热路径不得新增锁、重 IO 或每包动态分配。
    - 控制面继续通过编译后快照原子发布，热路径只能看到旧或新完整版本。
 
-5. **观测通路不新增**
-   - 继续复用 vNext packet stream、reason metrics、per-rule stats 和现有 metrics 查询。
+5. **观测通路不按 family 拆分**
    - 不为 IPv6 单独新增另一套事件或统计通道。
+   - SNORT-10 后 packet explain 走 Packet Diagnostics；普通低基数统计继续使用 reason metrics、per-rule stats 与对应 metrics 查询。
 
 6. **外部模型统一，内部允许按 family 优化**
    - 对外必须是同一个 IPRULES 规则模型；不得暴露成 IPv4 主模型 + IPv6 特例。
@@ -109,7 +115,7 @@
 
 ## 4. 控制面与协议口径
 
-vNext 命令名保持不变：
+pre-SNORT-10 direct mutation surface 的 vNext 命令名保持不变：
 - `IPRULES.PREFLIGHT`
 - `IPRULES.PRINT`
 - `IPRULES.APPLY`
@@ -192,7 +198,7 @@ mk2|family=ipv6|dir=out|iface=any|ifindex=0|proto=tcp|ctstate=any|ctdir=any|src=
 datapath：
 - IPv4 与 IPv6 都应进入 IPRULES 判决层。
 - `IFACE_BLOCK` 继续是高于 IPRULES 的 hard-drop。
-- IPRULES 未命中时继续回到后续 legacy/domain 路径。
+- IPRULES 未命中后进入 SNORT-10 固定 pipeline 的后续 stage：Stateful IPRULES、未来 DPI / L7、后置 Resolved-IP Policy，最后 default allow。旧 legacy Host/domain fallback 不再作为 packet-side 目标路径。
 - datapath parser 应产出统一的栈上解析结果，至少包含 `family`、`src/dst`、terminal 或 declared `proto`、端口可用性、fragment 标志与 `l4Status`。
 - IPv6 不能只解析 40 字节 base header；目标设计必须解析可跳过的 extension header，找到 terminal TCP/UDP/ICMPv6/other。
 - IPv6 header walker 的发布级预算固定为最多 8 个 extension headers / 256 bytes；超过预算时给出稳定的“不可获得 L4”结果，不得越界读或猜测端口。
@@ -202,7 +208,7 @@ datapath：
 - IPv4/IPv6 fragments 统一不做 reassembly。
 - fragment 可按 `family/src/dst/dir/iface/proto` 参与规则判决；IPv4 使用 IP protocol 字段，IPv6 使用 Fragment header 中可安全取得的 declared next-header。
 - fragment 带端口约束的规则不得匹配；即使首片中实际携带 L4 header，也不为端口或 conntrack 开特殊通道。
-- fragment 的 `ct.state` 固定视为 `invalid`、`ct.direction` 固定视为 `any`，不创建也不更新 conntrack entry。
+- fragment 不创建也不更新正常 conntrack entry；Stateful IPRULES 在无可用 `CtFacts` 时按 SNORT-10 规则 no-match / diagnostics 解释处理，不伪造正常 L4 lifecycle。
 - IPRULES datapath 应把包解析结果统一归为四类：
   - `known-l4`：IPv4 为 TCP/UDP/ICMP 且必要头部可安全解析；IPv6 为 header walker 找到 TCP/UDP/ICMPv6 且必要头部可安全解析。
   - `other-terminal`：合法但非 TCP/UDP/ICMP-family 的 terminal protocol；这类才匹配 `proto=other`。
@@ -210,12 +216,12 @@ datapath：
   - `invalid-or-unavailable-l4`：L3 envelope 可用，但 declared L4 或 IPv6 header chain 无法安全得到可用 L4。
 - IPv4 下，合法 IP header + 非 TCP/UDP/ICMP protocol 是 `other-terminal`；declared TCP/UDP/ICMP 但头部过短、TCP doff 异常或长度不一致是 `invalid-or-unavailable-l4`。
 - IPv6 下，ESP、No Next Header、未知合法 terminal protocol 是 `other-terminal`；header chain 长度异常、无法安全继续或 walker 预算耗尽是 `invalid-or-unavailable-l4`。
-- `invalid-or-unavailable-l4` 仍进入 IPRULES 判决：端口不可用，不匹配普通 `proto=other`，但可由 `ct.state=invalid` 规则接管。
-- 对 declared L4 头部过短、TCP `doff` 异常或长度不一致等 `invalid-or-unavailable-l4` 情形，listener 层不得直接 `NF_DROP`；必须以“可判决输入”继续流经 IPRULES/后续路径，并按本文口径产出端口不可用与 `ct=invalid/any` 结果。
+- `invalid-or-unavailable-l4` 仍进入 Basic IPRULES 判决：端口不可用，不匹配普通 `proto=other`。Stateful `ct.*` 规则只有在 packet path 实际进入 CT 且可产出对应 `CtFacts` 时才评估。
+- 对 declared L4 头部过短、TCP `doff` 异常或长度不一致等 `invalid-or-unavailable-l4` 情形，listener 层不得直接 `NF_DROP`；必须以“可判决输入”继续流经 Basic IPRULES / 后续 pipeline，并按 PacketFacts 口径产出端口不可用与 `l4Status` 结果。
 - `invalid-or-unavailable-l4` 若能安全获得 declared / terminal proto，则规则层 `proto=tcp|udp|icmp` 可按该 proto 匹配。
 - `proto=any` 匹配所有 L3 key 可构造的 `invalid-or-unavailable-l4` 包。
 - `proto=other` 只匹配合法 `other-terminal`，不得匹配 `invalid-or-unavailable-l4`。
-- 对 `invalid-or-unavailable-l4`，端口一律视为不可用；带 `sport/dport` 约束的规则不得匹配；如实际执行 CT 维度匹配，其结果固定为 `invalid/any`。
+- 对 `invalid-or-unavailable-l4`，端口一律视为不可用；带 `sport/dport` 约束的规则不得匹配；不得为了兼容旧 `invalid/any` 口径伪造 CT facts。
 - `invalid-or-unavailable-l4` 不创建、不更新 conntrack entry。
 - 如果连 L3 envelope 都无法安全解析到构造 IPRULES key 所需的 family/src/dst，则不属于规则层 invalid 接管范围，listener 层保持 fail-open 策略。
 - IPRULES 内部应按 family 编译 hot view/key/cache；外部 schema 统一，内部保留 IPv4 轻路径并新增 IPv6 view/key。
@@ -227,8 +233,8 @@ conntrack：
 - Conntrack 对外输入模型保持统一，对内按 family 分表，避免 IPv4 CT 热路径被迫使用 128-bit 地址 key。
 - `maxEntries` 保持全局共享上限，两张 family 表共享同一个总 entry 预算，不设置 per-family 配额或公平性策略。
 - timeout policy 与状态机按 L4 语义共用，不按 family 分叉。
-- Conntrack hot-path gating 应从当前 UID 粒度升级为 `uid+family` 粒度。
-- 只有当前 packet family 的 active rules 存在非平凡 `ct.*` consumer 时，才执行对应 family 的 conntrack；另一 family 不应因此承担额外 CT 成本。
+- Conntrack hot-path gating 应从当前 UID 粒度升级为 complete Linux UID + family 粒度，并由 SNORT-10 `SubjectHotPathCaps` 表达。
+- 只有当前 packet family 的 compiled-active rules 或 active observation consumer 存在非平凡 CT consumer 时，才执行对应 family 的 conntrack；另一 family 不应因此承担额外 CT 成本。
 - `ct.state=any` 且 `ct.direction=any` 不构成 CT consumer。
 - 实现上可以在 rules epoch 下缓存每个 UID 的 family CT consumer bitmask，避免热路径重复扫描规则。
 - ICMPv6 conntrack 对齐当前 IPv4 ICMP 能力层级：只支持 Echo Request / Echo Reply pseudo-state，type `128/129`、code `0`。
@@ -237,26 +243,25 @@ conntrack：
 - IPv6 的 ESP、No Next Header、未知但合法 terminal protocol 都进入同一套 `other` pseudo-state；key 使用 `uid + family + proto + src/dst`，不含端口。
 - Conntrack 输入模型必须区分 family 或按 family 分表，避免 IPv4 地址与 IPv4-mapped IPv6 地址产生同一 flow 身份。
 - IPv6 传入 Conntrack 的 L4 payload length 必须从 terminal L4 header 开始计算，不得使用 IPv6 base header 后的原始 payload 长度。
-- preview / commit 语义沿用现有设计：策略前可 inspect，只有最终 accepted 的 `new/orig` miss 才 commit 创建 entry。
+- CT 不再沿用 preview / commit accepted-only 语义。SNORT-10 中只要 packet path 决定进入 CT，CT 就按自身状态机 lookup / create / update；后续 Stateful / DPI block 不回滚 CT。Basic / Interface final block 可以在 CT 前短路。
 
 observability：
-- vNext packet stream 继续使用 `ipVersion`、`srcIp`、`dstIp`、`reasonId`、`ruleId/wouldRuleId` 表达包事件。
-- vNext packet stream 新增 `l4Status`，取值为 `known-l4|other-terminal|fragment|invalid-or-unavailable-l4`。
-- `type="pkt"` 逐包事件必须 always-present 输出 `l4Status`；`notice="suppressed"|"dropped"|"started"` 不新增 `l4Status`。
-- `l4Status` 是 packet parser 结果，不只属于 IPRULES 命中；只要构造 `type="pkt"` 事件，即使 `IPRULES=0` 或未命中 IPRULES，也必须输出。
+- SNORT-10 后 packet explain 由 `DIAGNOSTICS.START(channel=packet)` 输出，不再扩展 generic `STREAM.START(type=pkt)`。
+- Packet diagnostics 使用统一 winner attribution：`reasonId`、`ruleId`、`ruleMode`、actual verdict；不输出 `wouldRuleId` / `wouldDrop`。
+- diagnostics packet evidence 必须 always-present 输出 `l4Status`，取值为 `known-l4|other-terminal|fragment|invalid-or-unavailable-l4`。
+- `l4Status` 是 PacketFacts parser 结果，不只属于 IPRULES 命中。
 - `l4Status` 只暴露稳定状态枚举，不暴露 parser 内部 reasonCode。
-- packet stream 的 `protocol` 不新增 `invalid/unavailable` token；能识别 declared/terminal 为 TCP/UDP/ICMP-family 时填对应 token，否则填 `other`。
+- diagnostics 的 `protocol` 不新增 `invalid/unavailable` token；能识别 declared/terminal 为 TCP/UDP/ICMP-family 时填对应 token，否则填 `other`。
 - `protocol=other` 不再单独表示“合法 other”，前端必须结合 `l4Status=other-terminal` 判断合法 other terminal。
-- 端口不可用时，packet stream 的 `srcPort/dstPort` 仍保持 always-present number，并输出 `0`；由 `l4Status` 解释这是端口不可用，而不是端口 0 规则命中。
-- `ct{state,direction}` 继续为可选字段，只在该包因当前 UID+family 存在 active CT consumer 而实际执行 CT inspect 时输出；不要求最终 winner rule 自身带 `ct.*`。
-- fragment / invalid / unavailable 在执行 CT inspect 时输出 `ct.state=invalid`、`ct.direction=any`。
+- 端口不可用时，diagnostics 的 `srcPort/dstPort` 仍保持 always-present number，并输出 `0`；由 `l4Status` / `portsAvailable=false` 解释这是端口不可用，而不是端口 0 规则命中。
+- `conntrack{state,direction}` 只在该包实际进入 CT 并取得 `CtFacts` 时输出；不要求最终 winner rule 自身带 `ct.*`。
 - `METRICS.GET(name=conntrack)` 继续保留现有总字段 `totalEntries/creates/expiredRetires/overflowDrops`。
 - `METRICS.GET(name=conntrack)` 新增 `byFamily.ipv4/ipv6`，每个 family 分项完整包含 `totalEntries/creates/expiredRetires/overflowDrops`。
 - Conntrack overflow 按当前创建失败包的 family 归因到 `byFamily.<family>.overflowDrops`，同时增加总 `overflowDrops`。
 - `totalEntries` 语义上是 IPv4 + IPv6 entries 总数；conntrack metrics 是 best-effort snapshot，并发更新时不承诺总字段与 `byFamily` 逐字段强一致。
 - `conntrack` 仍不提供独立 reset；`METRICS.RESET(name=conntrack)` 保持拒绝，只有 `RESETALL` 清空 conntrack table 与 counters。
 - `IP_RULE_ALLOW` / `IP_RULE_BLOCK` reasonId 不按 family 分裂。
-- 除 `METRICS.GET(name=conntrack).byFamily` 与 `IPRULES.PREFLIGHT.byFamily` 外，不为 reasons / traffic metrics 增加 family 维度。
+- 除 `METRICS.GET(name=conntrack).byFamily` 与 `IPRULES.PREFLIGHT.byFamily` 外，不为 reasons / Traffic Windows 增加 family 维度。
 - 前端仍通过 `ruleId -> clientRuleId` join 解释规则来源。
 - per-rule stats 继续归属于具体 rule；family 是 rule 的字段，不是 stats 的外层维度。
 
