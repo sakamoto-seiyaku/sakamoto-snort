@@ -900,10 +900,12 @@ Diagnostics（现在只有 1 条聚合脚本）：
 
 ## IP - Conntrack
 
+> SNORT-10 note: this section records the pre-SNORT-10 current-head smoke casebook. New CT runtime semantics are defined by `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`; `create-on-accept` and `block 不 create entry` are historical test expectations, not the post-SNORT-10 architecture rule.
+
 ### Case 1：conntrack（ct.new / ct.established）最小闭环
 **目的**
 - 验证 `ct.state/ct.direction` 语义可用：能按 state/direction 区分，能形成明确“该通/该断”，并且解释闭环（per-rule stats + reasons）。
-- （建议同一条 Case 里顺手确认）conntrack **create-on-accept** 语义：allow 会创建 entry；block 不会创建 entry（用 `METRICS.GET(name=conntrack)` 观察）。
+- 记录历史 conntrack **create-on-accept** 语义：allow 会创建 entry；block 不会创建 entry（用 `METRICS.GET(name=conntrack)` 观察）。
 
 **Given**
 - Tier‑1 就绪；peer 起 TCP server（默认 18081）
@@ -951,7 +953,7 @@ Diagnostics（现在只有 1 条聚合脚本）：
   - `VNXCT-09~12c`：block verdict、reasons、block rule stats、block 不 create conntrack entry
 
 **缺口**
-- 已补齐：该 Case 已作为 smoke 级用例纳入 active datapath gate；更强 flow-state / perf / matrix 扩展仍留在 IP 专项 profile。
+- 历史当前实现已补齐：该 Case 已作为 smoke 级用例纳入 active datapath gate。SNORT-10 后的 CT A++ runtime 需要按新语义重写/替换对应 smoke 断言。
 
 ---
 

@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-06-18
+更新时间：2026-06-20
 状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `SNORT` 为准；OpenSpec 仅作历史归档）
 
 ## 0. 阅读指南
@@ -38,6 +38,8 @@ Status 口径（全篇统一）：
 - 对外接口规范（vNext-only）：`docs/INTERFACE_SPECIFICATION.md`
 - 可观测性口径：`docs/INTERFACE_SPECIFICATION.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md`
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
+- NFQUEUE / packet datapath 重构边界：`docs/decisions/NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md`
+- L4 Conntrack / CT A++ runtime 决策：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`
 - Plane 工作入口：`docs/agents/issue-tracker.md`；当前唯一 active item 为 `SNORT-10`（NFQUEUE / DNS / datapath performance architecture refactor discussion）
 - OpenSpec 历史归档：`archive/openspec/changes/archive/` 与 `archive/openspec/specs/`（仅作历史参考；不再作为当前流程约束）
 
@@ -67,6 +69,7 @@ Status 口径（全篇统一）：
 ### 1.2 功能（Domain + IP + Flow Telemetry）
 
 - Domain+IP 的“后端融合”（vNext control 平面 + observability 口径 + datapath 接线）已完成并稳定回归；IPv4/IPv6 双栈、L4 conntrack core、DomainPolicy device-wide 命名收敛、DomainRules per-rule observability 均已完成。
+- SNORT-10 架构讨论已收口 Traffic Windows、Hot-path Capability Summary / Advanced Prefilter、CT / DPI pipeline 边界，以及 A 方案内的 Conntrack A++ runtime baseline。后续实现 CT 时默认按全局共享 authoritative CT table、自研专用 CT hash table、当前 field-mix hash 与 `liburcu-qsbr` 推进；C/owner handoff 与 NFQUEUE/userspace 分流实验不混入该 baseline。
 - A/B/C/D 口径已经全部落地：
   - A：pkt verdict 可观测（`reasonId/ruleId/wouldRuleId`）
   - B：DomainPolicy counters（`policySource` / `domainSources`）
@@ -94,7 +97,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-24] `complete-device-smoke-casebook-platform`：补齐 platform gate 可解释性（host 工具链 + vNext HELLO sanity + `--skip-deploy` 语义；spec：`archive/openspec/specs/dx-smoke-platform-gate/spec.md`）
 - [DONE 2026-04-25] `complete-device-smoke-casebook-domain`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 域名` Case 1–9（dns stream e2e、traffic/domainSources bucket、suppressed notice、真实 resolver hook BLOCKED 语义、DOMAINRULES(ruleIds)；spec：`archive/openspec/specs/dx-smoke-domain-casebook/spec.md`）
 - [DONE 2026-04-25] `complete-device-smoke-casebook-ip`：补齐 IP 模块 smoke 口径（allow/block/would-match、`block.enabled=0`、`iprules.enabled=0`、payload bytes、维度级 traffic/reasons/stats、pkt stream 字段；spec：`archive/openspec/specs/dx-smoke-ip-casebook/spec.md`）
-- [DONE 2026-04-25] `complete-device-smoke-casebook-conntrack`：补齐 Conntrack 模块 smoke 口径（`ct.state/direction` 最小闭环、create-on-accept、block 不 create entry；spec：`archive/openspec/specs/dx-smoke-conntrack-casebook/spec.md`）
+- [DONE 2026-04-25] `complete-device-smoke-casebook-conntrack`：补齐历史 Conntrack 模块 smoke 口径（`ct.state/direction` 最小闭环、create-on-accept、block 不 create entry；spec：`archive/openspec/specs/dx-smoke-conntrack-casebook/spec.md`）。SNORT-10 后的新 CT runtime 语义以 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 为准，不再把 create-on-accept / block 不 create entry 作为新架构原则。
 - [DONE 2026-04-25] `complete-device-smoke-casebook-other`：补齐 `DEVICE_SMOKE_CASEBOOK.md` `## 其他` Case 1–2（perfmetrics.enabled 可用性验证、极端规模 limits sanity；spec：`archive/openspec/specs/dx-smoke-other-casebook/spec.md`）
 
 ### 2.3 功能（Domain+IP；后端已收敛）
@@ -157,7 +160,8 @@ Status 口径（全篇统一）：
 ### 3.4 候选 C：后端能力扩展（偏新能力）
 
 - [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、历史 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
-- [NEXT] NFQUEUE topology modes：新增 `nfqueue.topology` string enum device config，默认 `split-in-out`；新增实验值 `shared-flow-pool`，让同一 IP family 的 `INPUT` / `OUTPUT` 规则使用相同 queue range，从而利用 NFQUEUE connection stickiness 尽量把同一双向 flow 放到同一 queue/listener thread。该配置只要求持久化并在 daemon next start 生效，不做热切换；前端/RuntimeService 负责 stop/start daemon。`shared-flow-pool` 的必要前提是方向不能再依赖 `_inputTLS`，必须从每包 NFQUEUE hook 推导 `LOCAL_IN` / `LOCAL_OUT`。功能语义应与 `split-in-out` 一致，后续通过真机性能与稳定性对比再决定是否调整默认值。
+- [NEXT] Conntrack A++ runtime implementation：按 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 第 7.8 / 7.9 节实现 A 方案内 baseline：全局共享 authoritative CT table、自研专用 fixed-bucket intrusive table、当前 specialized field-mix hash、`liburcu-qsbr`、不重叠 shard/bucket bit slices、per-shard pool、worker-local hot cache、hot/cold split attachments 与 bounded sweep / reclaim。
+- [CANDIDATE] NFQUEUE topology / userspace handoff experiments：`shared-flow-pool`、per-flow owner / handoff、或其它 flow steering 方案只能作为 CT A++ baseline 之后的 perf / contention 变量；不得作为 CT correctness 前提，也不得把 C/owner handoff 混入当前 A 方案实现。
 - [CANDIDATE] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
 - [CANDIDATE] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
 - [CANDIDATE] 更强的 L4 stateful semantics：超出当前 `ct.state/ct.direction` 最小闭环的扩展能力。
@@ -188,7 +192,7 @@ Status 口径（全篇统一）：
 - **可观测性分层已进入产品集成阶段**：旧的 A/B/C/D counters/stream/perfmetrics 已落地；Flow Telemetry MVP 已补齐前端常态 Top-K/timeline/history 所需的原始 records 层；Debug Stream explainability 已补齐深度取证链条。后续重点不再是继续给 daemon 增加聚合口径，而是把 `Flow Telemetry records`（业务事实）、`Debug Stream`（深度取证）、`Metrics`（后端低基数健康状态）接到 consumer / 前端工作流。
 - **checkpoint / rollback 后端原语已落地**：前端仍负责命名、历史、备注、工作流与导入导出包；daemon 只提供固定槽位 policy bundle snapshot 与 atomic restore，避免前端用多条 apply 命令模拟回滚时出现半恢复。
 - **`ip-leak` 继续后置，但必须重新定义定位**：它横跨 domain 与 IP，两边都相关；当前不宜提前混入已收敛主线。需要在统一口径下重新回答它到底是“补位能力 / 默认关闭能力 / 某类场景下的重要能力”中的哪一种。
-- **L4 conntrack core 已落地，但更强的 flow-state 仍应谨慎后置**：当前仓库已经具备最小闭环的 userspace conntrack（`ct.state/ct.direction` + hot-path gating + host/真机验证）；后续若继续扩展更强的 L4 状态语义，仍应作为独立能力评估其热路径成本、内存模型与 Android 设备约束。当前纲领入口见 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`；实现原则仍是“以 OVS conntrack 语义为母本做 C++ 重实现”，不是重新设计另一套状态系统。
+- **L4 conntrack core 已落地，SNORT-10 后进入 A++ runtime 重构**：当前仓库已经具备最小闭环的 userspace conntrack（`ct.state/ct.direction` + hot-path gating + host/真机验证）；后续实现重点是按 CT A++ baseline 重构 runtime 成本模型与并发/lifetime 边界。当前纲领入口见 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`；实现原则仍是“以 OVS conntrack 语义为母本做 C++ 重实现”，不是重新设计另一套状态系统。
 - **L7 / HTTP / HTTPS 识别暂不作为已承诺主线**：现阶段更稳的产品定位仍是 DNS/domain-policy + IPv4 L3/L4 判决与观测。更高层协议识别是否值得做、能做到什么程度，应在后续单独评估，而不是默认沿着“继续往上解包”自然推进。
 
 ## Appendix B. 架构边界上的当前判断（NOTE；非任务）

@@ -1,7 +1,7 @@
 # L4 Conntrack：工作决策与原则
 
-更新时间：2026-05-11
-状态：纲领性工作结论（历史设计回执；能力已落地，后续评审/重构仍应对照本文）
+更新时间：2026-06-20
+状态：纲领性工作结论（历史设计回执；能力已落地，SNORT-10 A++ runtime 重构仍应对照本文）
 对应历史主规格：`archive/openspec/specs/l4-conntrack-core/spec.md`
 对应历史 change：`archive/openspec/changes/archive/2026-03-30-add-iprules-conntrack-core/`
 
@@ -144,23 +144,32 @@ L4 conntrack 和 v1 的关系应理解为：
 
 也就是说，conntrack 不是为了替换现有 classifier，而是为了给它补一个以前不存在的状态层。
 
-### 5.1 与 decision cache 的关系：`ct.*` 会改变“同五元组”的判决输入
+### 5.1 与 pipeline / decision cache 的关系：`ct.*` 会改变 stateful stage 输入
 
 当前 IPRULES v1 的 hot-path 结构包含：
 - exact decision cache（TLS）
 - 编译后的 classifier snapshot（按 `uid` 分 view）
 
-一旦规则允许匹配 `ct.*`，同一五元组在不同时间可能对应不同的 `ct.state`（例如 `new → established`）。因此：
-- **必须先做 conntrack preview/update**，得到当前包的 `ct.state/ct.direction`
-- 再把 `ct.state/ct.direction` **纳入 hot-path key**（例如扩展 `PacketKeyV4`）
-- 再进入 decision cache / classifier snapshot
+一旦规则允许匹配 `ct.*`，同一五元组在不同时间可能对应不同的 `ct.state`（例如 `new → established`）。因此 stateful stage 的 policy decision cache 若存在，key 必须包含当前包实际取得的 `ct.state/ct.direction`；cache 只能跳过重复 matcher scan，不能决定是否进入 CT，也不能改变 stage order。
 
 否则会出现“缓存命中但 `ct.state` 已变化”的错误判决。
 
-补充约束：
-- 对 miss/new 的首包，preview 阶段不得在 verdict 未知时提前创建 entry；
-- 只有最终 verdict=ACCEPT 时才允许 commit 新 entry；
-- 否则会出现“`ct.state=new` 的 DROP 污染后续重传、导致连接绕过 block”的错误语义。
+SNORT-10 后的 CT runtime 口径不再采用旧的 “preview miss -> verdict accept 后 commit new entry” 作为通用模型。新的边界是：
+- Interface policy 与 Basic IPRULES 先用 `PacketFacts` 评估；若产生 enforce block，该 packet 可在进入 CT 前 short-circuit。
+- 若 subject/app 已启用 CT / DPI / flow-level 高级能力，且前序 Basic stage 没有产生 block，则 packet 进入 CT，CT 按自身 L4 状态机 lookup / create / update，并产出 `CtFacts`。
+- CT 更新与最终 verdict 解耦。后续 Stateful / DPI stage 若命中 block，只影响本 packet verdict，不回滚 CT entry，也不把 CT 当作 accepted-flow 账本。
+- Basic allow 或 observe winner 产生最终 allow 时，后续 Stateful / DPI evaluator 仍按 short-circuit 不再扫描；但该 packet 仍可进入 CT 并更新统一 flow/session entry，保证后续 flow attachments、DPI state 与 flow-level observation 不断裂。
+- Policy decision cache 必须被定义为 stage evaluator 的纯函数结果缓存；cache hit / miss 不得改变 fact acquisition 顺序。
+
+SNORT-10 后的 policy decision cache 采用两级口径：
+- L1 Base policy cache 缓存 Interface / Basic IPRULES stage result；它不含 CT / DPI facts。
+- L2 Post-CT policy cache 只在 L1 result 为 `PassToAdvanced` 后启用；它使用完整 packet projection + `CtFacts` + `DpiFacts` key 缓存 Stateful / DPI stage scan result。
+- L1 `FinalBlock` 不进入 CT；L1 `FinalAllow` / observe-final-allow 在需要 CT 时只更新 CT / flow attachments，不查 L2。
+- L2 逻辑上独立于 CT core，不把 CT entry 变成永久 verdict 存储；CT entry 只提供 flow/session state 与 flow-level facts。
+- L2 可以缓存 no-winner / default allow。DPI 未识别时 `DpiFacts` key 为 `unknown`；DPI 出现具体识别结果后 key 变化并自然 miss，再按完整 facts 重新扫描。
+- L1/L2 第一版物理形态均为 per-worker TLS fixed-size direct-mapped exact cache。L2 不挂 CT entry，不做共享表，不把 policy scan result 写回 CT session；CT A++ hot entry / cold attachments 不承担 policy cache 写入、失效或并发竞争。
+- L1/L2 hash 可以复用完整 base projection hash，并在 L2 增量 mix CT / DPI / epoch 字段；cache hit 必须比较完整 logical key 与 epoch，不能只比较 hash。
+- cache hit 的结果必须与直接扫描 stage 得到的结果等价：entry 至少保存 result kind、winning `ruleId`、rule mode、declared action、stats handle / pointer 与 snapshot lifetime handle；cache hit 后仍按正常路径更新 rule counters 与 attribution。
 
 ---
 
@@ -178,29 +187,23 @@ L4 conntrack 和 v1 的关系应理解为：
    - 当前 v1 的 `IPRULES=0` 语义不能被 stateful 扩展反向污染；
    - 若未来 conntrack 需要单独总开关，也要做到关闭后不在每包路径上残留不必要成本。
 
-2.1 **Conntrack gating（按 UID）是必需的性能妥协**
+2.1 **Conntrack gating（subject/app 级）是必需的性能边界**
    - conntrack update 不应成为“无条件的全局每包成本”；
-   - gating SHOULD 至少做到按 `uid` 粒度：仅当该 `uid` 的 active rules 使用 `ct.*` 时才对该 `uid` 的包执行 conntrack update；
-   - 该妥协带来的语义后果是可接受且必须明确记录：当某 `uid` 之前没有 `ct` consumer（未 tracking），后续才新增 `ct.*` 规则时，**既有连接在一段时间内会被视为 `new/invalid` 等非理想状态**；本项目接受这是 Android 上为降低常态成本付出的代价。
+   - 普通用户 / 普通 app 不应为 CT 付费；
+   - 但一旦某 subject/app 启用了 `ct.*` policy / observe rule、`dpi.*` policy / observe rule、完整 Flow Telemetry consumer 或未来 gateway consumer，该 subject/app 的 eligible packets 就进入 CT；
+   - 不在同一 app 内按单条 CT 规则的 cheap precondition 决定“这个 packet 是否需要 CT”。这种过细 gate 会把 pipeline、cache、DPI state 与 flow attachments 搅复杂，得不偿失。
 
-这里的 “使用 `ct.*` / ct consumer” 必须严格定义为：
-- 仅当某 `uid` 的 active rules 中 **至少存在一条规则** 具有非平凡 `ct` 约束时，才视为该 `uid` 需要 conntrack。
-- “非平凡” 的判定规则：
-  - `ct.state != any` **或** `ct.direction != any` → 视为 consumer
-  - `ct.state=any` 且 `ct.direction=any`（或根本未声明 `ct.*`）→ 视为 **无 consumer**（不应触发 conntrack update）
+这里的 “ct consumer” 必须按高级能力 gate 理解：
+- `ct.*` enforce / observe 规则都是 consumer；
+- `dpi.*` enforce / observe 规则隐含 CT consumer，因为 DPI state / result 绑定在 CT flow/session entry 上；
+- Flow Telemetry `level=flow` 是 observation consumer，但启用 CT 不等于启用 Flow Telemetry；
+- `ct.state=any` 且 `ct.direction=any`、或根本未声明 `ct.*` 的 Basic rule，不构成 CT consumer。
 
-2.2 **Gating 的“查询方式”需要优化：避免每包多一次 UID→规则集能力查询**
-   - 目标：在热路径上避免出现“为了判断需不需要 conntrack，又做一次额外的 `uid → compiled view` 查找”的重复工作。
-   - 这是工程/性能折中的问题，不是语义问题。我们需要明确可选方案与各自代价（实现时以其中一个为主，其它留作备选/对照）：
-
-| 方案 | 热路径每包额外成本 | 规则更新时成本 | 实现复杂度 | 风险点 | 备注 |
-|---|---:|---:|---:|---|---|
-| A. 直接查 snapshot：`uidUsesCt(uid)` | 1 次 map/hash 查找（每包） | 无 | 低 | 常态开销偏大，且容易和 evaluate() 重复查找 | 仅作为最小可行 baseline |
-| B. per-UID 缓存在 `App`（带 epoch） | 2 个原子读（epoch+caps），常态无查找 | epoch 变化时做一次查找并刷新 | 中 | 需要在 `App` 引入 iprules capabilities；要处理并发刷新 | **推荐默认**：规则变更频率低，适合 amortize |
-| C. 引擎 API 合并：单次查找同时给出 `UidView* + caps` 并复用 | 0 次额外查找（复用同一次 view 定位） | 无 | 中/高 | 需要改动引擎对外 API / TLS cache 边界 | 适合在 baseline 仍不够好时再做 |
-
-推荐结论（用于后续实现切片的默认路线）：
-- 优先采用 **B（App+epoch 缓存）** 作为 gating 的主实现策略：在规则 epoch 稳定时，gating 近似“零额外开销”；epoch 变化很少发生时刷新一次即可。
+2.2 **Gating 的“查询方式”需要合并：避免每包多次 UID→能力查询**
+   - 目标：在热路径上避免出现“为了判断需不需要 Conntrack、DPI、Traffic Windows、Diagnostics，各模块分别做一次 `uid → compiled view/caps` 查询”的重复工作。
+   - 后续默认方向是 `Hot-path capability summary`：慢路径把 subject/app 的 policy / observation capabilities 预编译进只读 snapshot；packet path 合成 `GlobalHotPathCaps | SubjectHotPathCaps` 后按 bit 决定 stage/fact acquisition。
+   - per-UID `App + epoch` 缓存仍可作为某些实现切片的局部技巧，但它不是最终抽象；最终抽象应是一次 subject caps lookup 供所有高级模块复用。
+   - 如果全局 caps 已证明没有任何 subject-scoped policy / expensive fact consumer，packet path 可以跳过 subject caps lookup。
 
 3. **内存模型必须可控**
    - 连接表容量、timeout、清理策略都必须明确；
@@ -213,7 +216,8 @@ L4 conntrack 和 v1 的关系应理解为：
 
 3.2 **容量上限：设一个足够大的硬上限 + 明确 overflow 行为**
    - conntrack table MUST 有硬上限（不能无界增长）。
-   - Android 常态流量下预期不会触顶；因此上限可设置得相对大（第一版可先取一个较大的常量，并在实现后结合 `sizeof(entry)` 与真机观察再微调）。
+   - Android 单机设备不是服务器 conntrack 场景；设计中心应按 active flows 万级以内理解，不能用百万级 flow 作为普通手机热路径优化前提。
+   - Android 常态流量下预期不会触顶；因此上限应结合 `sizeof(entry)`、统一 CT attachments、真机观察与电量/内存预算确定。默认 hard cap 可以偏保守地服务万级 flow，并允许诊断/高级模式配置更高上限，但不得把 1M 级表项作为默认设计目标。
    - 但仍必须定义 overflow 行为（避免触顶时崩溃或进入不确定状态）：
      - 优先尝试回收已过期 entry（受限预算、不得扫描全表）。
      - 若仍无法创建新 entry：该包的 conntrack 输出 SHALL 退化为 `ct.state=invalid`（并记录计数），且不创建/不插入 entry。
@@ -388,9 +392,13 @@ L4 conntrack 和 v1 的关系应理解为：
 说明：
 - 若未来 perf/真机验证显示该 baseline 仍不足（例如过期堆积严重），再引入 dedicated sweep thread 作为后续优化 change；第一阶段不默认上线程。
 
-### 7.8 QSBR/SMR 落点（baseline）
+### 7.8 QSBR/SMR 落点（A++ baseline）
 
-conntrack 需要延迟回收（deferred reclamation）以避免并发下的 UAF。第一阶段 baseline 采用 **最小化自研 epoch/QSBR**（不引入第三方依赖），并把 “quiescent” 的落点收敛到 conntrack update 的天然边界。
+conntrack 需要延迟回收（deferred reclamation）以避免并发下的 UAF。SNORT-10 A++ runtime 的 baseline 是 **`liburcu-qsbr`**：
+- 不继续维护项目自研 epoch/QSBR 作为主方案；
+- `liburcu-qsbr` 用于 read-side lifetime 与 deferred reclamation；
+- CT hash table 仍是项目自研专用表，不直接切到通用 `cds_lfht`；
+- QSBR 选择不改变 OVS 级 conntrack 语义，只改变 entry lifetime / reclaim 机制。
 
 **核心约束：**
 - unlink（删除可见性）与 free（释放内存）必须解耦；
@@ -398,26 +406,97 @@ conntrack 需要延迟回收（deferred reclamation）以避免并发下的 UAF�
 - correctness 不依赖 “同流同线程”，因此 SMR 必须对多线程并发 update 成立。
 
 **建议落点：**
-1. **read-side boundary：以 conntrack.update 调用为单位**
-   - 在进入 `conntrack.update(...)` / `inspectForPolicy(...)` 时进入 read-side（记录 thread-local / per-thread slot 的 active epoch）；
-   - 在 update 返回时立刻标记 quiescent（退出 read-side）。
-   - 这样可以避免在包处理链路的多个层次插入 SMR 标记点。
+1. **read-side boundary：优先放在 worker packet loop / packet batch**
+   - listener / worker thread 初始化时注册到 `liburcu-qsbr`；
+   - 阻塞等待 NFQUEUE 消息或长时间不处理 packet 时应处于 offline / quiescent；
+   - 处理 packet 或 packet batch 时进入 online/read-side，CT lookup/update 在该边界内执行；
+   - packet/batch 完成后报告 `rcu_quiescent_state()`，让 retire/free 能及时推进。
+   - 不把 `rcu_read_lock()` / `rcu_read_unlock()` 写成 CT 内部每个小函数重复进入/退出的成本；边界应尽量外提到 worker loop。
 
 2. **retire list + grace period free**
    - entry 被 expire/delete 后：
      - 先从 hash table/bucket unlink，使其对新 lookup 不可见；
-     - 将其加入 shard 的 `retireList`（记录 retireEpoch），不得立即 free；
-   - sweep/慢路径在合适时机推进 epoch，并在满足 grace period 后批量 free retireList 中的 entry。
-   - baseline free 条件收敛为“所有已注册 read-side slot 均处于 quiescent”，并在 delete 窗口用短 atomic reclaim gate 阻止新 reader 进入；这样避免新 reader 通过 lockless bucket load 观察到刚 unlink 的旧指针后，与 retired free 交错。
+     - 通过 `call_rcu` / 等价 QSBR callback 延迟释放或归还 pool；
+   - unlink 在 shard writer lock 下完成；free / pool recycle 不得在读者仍可能持有 entry pointer 时发生。
+   - 不允许在持有 shard lock 时同步等待 grace period，避免 writer 与 QSBR reader/worker 死锁或长尾阻塞。
 
 3. **线程注册**
-   - 参与 conntrack.update 的线程在首次调用时注册一个 epoch slot；
-   - 测试环境下允许线程动态创建/退出，但必须保证退出前处于 quiescent，避免阻塞回收。
+   - 所有可能进入 CT read-side 的 packet worker、测试 worker 和查询/维护线程都必须注册；
+   - 线程退出前必须 unregister，并确保不再持有 CT entry pointer；
+   - 长时间阻塞或执行无关 I/O 的线程必须 offline，避免阻塞 grace period。
 
 说明：
-- 如果未来需要更强的工具/语义支持（或自研 SMR 维护风险过高），再评估引入 `liburcu`；第一阶段 baseline 以最小依赖为目标。
+- `liburcu-qsbr` 是为了降低自研 SMR 正确性风险，同时把 read-side 成本压到很低；引入它后，不应再保留另一套并行自研 epoch 作为默认路径。
 
-### 7.9 参考实现与替代方案（用于 sanity check）
+### 7.9 CT A++ hash table 方向（A 方案内的极限化）
+
+本节只讨论 **A 方案**：全局共享 authoritative CT table。它不尝试解决 C 方案 / owner handoff / per-flow single-owner 的问题。A 方案的剩余不可消除成本是同一 flow 被多个 worker 更新时的 cache-line bouncing；这只能由 owner/handoff 类架构继续降低。
+
+A++ 的主线是：**自研专用 fixed-bucket intrusive CT table + 当前 specialized field-mix hash + `liburcu-qsbr`**。
+
+默认不采用通用 hash map：
+- 不用 `std::unordered_map`、Folly F14、Abseil flat_hash_map、uthash 作为 CT authoritative table；
+- 不把 DPDK `rte_hash` 作为默认依赖；
+- 不把 `liburcu-cds` 的 `cds_lfht` 作为主实现。
+
+`cds_lfht` 的定位：
+- `cds_lfht` 是 `liburcu-cds` 提供的通用 lock-free RCU hash table；
+- 它可用于 benchmark / reference / sanity check；
+- 但 CT table 的 key 固定、容量可预分配、entry intrusive、state hot/cold 可控，专用表更容易压低常数项和 cache footprint。
+
+A++ 表结构约束：
+1. **canonical key 一次构造**
+   - packet 进入 CT 后构造方向无关 canonical key，同时得到本包相对 orig/reply 的方向；
+   - entry 不再依赖 `key + revKey` 双存储 / 双比较作为热路径常态；
+   - 命中候选后仍必须 full-key compare，hash/fingerprint 只做快速筛选。
+
+2. **hash 只算一次并复用**
+   - 默认继续使用当前 specialized field-mix hash 路线；
+   - 不把 VPP 自加 session manager 的表驱动 32-bit CRC stacking 原样迁入；
+   - `hash64` 应同时服务 shard index、bucket index、worker-local hot cache fingerprint / index；
+   - 若未来引入 ARMv8 CRC32C intrinsic，只作为目标机 benchmark 后的候选，不改变 full-key compare 约束。
+
+3. **shard/bucket bit slice 不重叠**
+   - shard 数与 bucket 数必须是 power-of-two；
+   - shard index 与 bucket index 必须使用不同 hash bit slice，例如 `bucket = low bits`、`shard = next bits` 或等价方案；
+   - 不允许 `shard = h % shardCount` 与 `bucket = h & bucketMask` 共享同一批低位，避免每个 shard 实际只使用少量 bucket。
+
+4. **read hit 无结构锁**
+   - bucket head 使用 RCU-safe atomic pointer；
+   - hit path 在 QSBR read-side 内遍历短链、比较 fingerprint/hash、full-key compare；
+   - 命中后只更新 entry-local hot fields，不触碰全表 LRU、全局 list 或需要跨 entry 的结构。
+
+5. **create/delete/expire 只锁 shard**
+   - miss/create 在 shard writer lock 下 double-check 后插入；
+   - unlink/delete/expire 在 shard lock 下从 bucket 链移除；
+   - free / recycle 通过 QSBR grace period 延迟。
+
+6. **per-shard pool / free-list**
+   - create path 不应常态调用 `new/delete`；
+   - entry 从 per-shard pool 或固定 chunk allocator 获取；
+   - pool recycle 必须经过 QSBR grace period，避免 worker-local hot cache 或读者持有旧 pointer 时 UAF。
+
+7. **worker-local hot cache**
+   - 稳定 flow 命中先查 worker-local direct-mapped / small set-associative cache；
+   - cache entry 至少保存 hash/fingerprint、generation 与 entry pointer / pool handle；
+   - 命中后仍验证 generation/fingerprint 与 full canonical key，不能因 retire/reuse 产生 UAF 或误命中。
+
+8. **稳定状态少写**
+   - TCP established 后普通 ACK/data 包不应反复 CAS 已稳定状态；
+   - expiration / last-seen 可做 coarse refresh，只有超过刷新阈值才写；
+   - per-packet stats、Flow Telemetry counters、DPI result 等应放在 attachment / cold path，不污染 CT core hot cache line。
+
+9. **hot/cold entry split**
+   - CT core hot entry 只放 lookup/update 必要字段：key/hash、next、expiration、协议状态、方向/状态摘要；
+   - Flow Telemetry、DPI、debug/export、长统计等作为 consumer-specific attachments 或 cold extension；
+   - 启用 CT 不等于所有 attachments 都存在或都更新。
+
+10. **GC 从常态 hot path 拿走**
+   - 常态 packet hit path 不做 sweep；
+   - create path 可以在容量压力下做 bounded per-shard reclaim；
+   - 后台/维护路径负责常态 expire/sweep；若使用 hot-path best-effort sweep，也必须是低频 `try_lock` 且失败直接跳过。
+
+### 7.10 参考实现与替代方案（用于 sanity check）
 
 本节用于回答两类问题：
 - 我们的并发模型是不是社区的经典最佳实践；
@@ -456,29 +535,30 @@ conntrack 需要延迟回收（deferred reclamation）以避免并发下的 UAF�
    - 代价：强依赖 steering 前提（拓扑、hash、一致性、以及双向汇聚）；一旦前提破裂会出现 correctness 问题或需要复杂的迁移/同步机制。
    - 结论：适合作为 perf mode 的上限探索，但仍需 thread-safe baseline；并且在 NFQUEUE/userspace 模型下不应优先押注。
 
-3. **通用并发 map/RCU 库直接复用**
+3. **通用并发 map 直接复用**
    - 方式：引入大型第三方并发容器（C++ concurrent hash map / hazard pointer / epoch GC）。
    - 优点：少写底层并发代码。
    - 代价：依赖体积、可移植性、Android 构建复杂度、调试复杂度显著上升；且这些库不提供 TCP/ICMP/other 的 conntrack 语义与状态机。
-   - 结论：除非证明我们维护不起最小化自研并发骨架，否则不作为首选。
+   - 结论：不作为 CT authoritative table 的默认方向；CT 表采用专用 intrusive fixed-bucket 结构。
 
 **可复用的 SMR/并发构件（只解决“安全回收/并发容器”，不提供 conntrack 语义）：**
-- `liburcu`（Userspace RCU）：提供多种 RCU 变体（含 QSBR），以及延迟回收机制；适合作为“lookup lockless + deferred free”的底层支撑，但引入新依赖与 Android 构建/部署成本。  
+- `liburcu-qsbr`（Userspace RCU QSBR flavor）：A++ baseline 的 read-side lifetime / deferred reclamation 支撑。
   - https://liburcu.org/
-- Concurrency Kit（`ck_epoch` / `ck_ht` 等）：提供 epoch-based reclamation 与并发数据结构，适合作为最小化 SMR 支撑；同样需要评估依赖引入成本与可维护性。  
+- `liburcu-cds` / `cds_lfht`：通用 lock-free RCU hash table，可作为 benchmark / reference baseline；不作为默认 CT 表。
+- Concurrency Kit（`ck_epoch` / `ck_ht` 等）：可作为对照或 fallback 研究对象；默认不引入。
   - https://github.com/concurrencykit/ck
-- `libcds`（Concurrent Data Structures）：C++ 并发数据结构库，包含 hazard pointer / user-space RCU 等多种回收策略与 map 实现；功能强但引入成本与复杂度更高。  
+- `libcds`（Concurrent Data Structures）：功能强但引入成本与复杂度更高；默认不引入。
   - https://github.com/khizmax/libcds
 
 说明：
-- 这些库能减少我们在 “deferred reclamation / RCU/epoch” 层的自研代码量；
+- `liburcu-qsbr` 解决的是 lifetime / grace period，不替代 CT 表结构或协议状态机；
 - 但它们不能替代 conntrack 的协议状态机与语义实现；
-- 是否引入应以“工程风险 vs 依赖成本”评估为准，而不是默认“有库就用库”。
+- 通用 hash table / map 是否更快必须用目标 Android 设备 benchmark 证明，不能凭库名决定。
 
 **结论（回答“是否已是最优解 / liburcu 何时引入”）：**
 - 在“不依赖内核 conntrack/ebpf”、“在当前 NFQUEUE 多线程现实下 correctness 成立”、“热路径开销尽量低”的约束下，本文推荐的并发骨架属于**工程意义上的最优折中（Pareto 最优）**：若不改变前提（例如强 flow steering/per-flow single-owner，或把 state 下沉到内核），很难出现“本质更低开销”的新方案。
-- `liburcu` **不是只在需要更高性能时才引入**；更准确的引入动机包括：降低自研 SMR 的正确性/维护风险，或需要更完整的 userspace RCU 语义与工具支持。  
-  但它会带来依赖与 Android 构建/部署成本，因此默认仍应优先选择“最小化自研 QSBR/epoch”或轻量 vendor（如 `ck_epoch`），在性能剖析或维护风险证明必要时再引入 `liburcu`。
+- `liburcu-qsbr` 已选为 A++ baseline；引入动机不是“有库就用库”，而是把自研 SMR 正确性风险从 CT hot-path 重构中移出，同时保持 QSBR read-side 低成本。
+- `cds_lfht` 不是 `liburcu-qsbr` 的同义词。前者是通用 hash table，后者是 RCU flavor / lifetime 机制。本项目只默认采用后者。
 
 ---
 

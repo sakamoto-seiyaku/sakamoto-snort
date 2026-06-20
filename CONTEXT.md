@@ -86,8 +86,20 @@ _Avoid_: stateful rules, `ct.*` rules
 Advanced IP packet rules that use L4 Conntrack state such as `ct.state` or `ct.direction`.
 _Avoid_: ordinary IP rules, baseline packet policy
 
+**PacketFacts**:
+Packet-local facts derived once from NFQUEUE metadata and a bounded original-IP-packet prefix, shared by packet policy and observation consumers. PacketFacts do not contain domain hints, Conntrack state, or DPI identification results.
+_Avoid_: Host object, per-module parser state, Domain-IP Association facts
+
+**CtFacts**:
+Conntrack-derived facts for the current packet and flow/session, such as `ct.state` and `ct.direction`, available only after the packet path enters L4 Conntrack. CtFacts are policy inputs, not an accepted-flow ledger.
+_Avoid_: PacketFacts, packet cache, verdict history
+
+**DpiFacts**:
+Future flow/session-level protocol identification facts attached to the same flow/session state used by Conntrack. DpiFacts depend on CT flow identity and are not packet-local protocol guesses.
+_Avoid_: IP protocol number, Traffic Windows protocol Top-K, standalone DPI cache
+
 **Hot-path capability summary**:
-A compiled hot-path summary of which policy or observation consumers are needed for a packet subject, such as Conntrack, future DPI, Traffic Windows, Domain-IP Association, or debug evidence. The first read should be a 64-bit primary mask, with lazy secondary masks for richer CT/DPI/association pruning.
+A compiled hot-path summary of which policy or observation consumers are needed for a packet subject, such as Conntrack, future DPI, Traffic Windows, Domain-IP Association, or debug evidence. It is the shared gate input for stage and fact acquisition, not a per-module rule scan.
 _Avoid_: scanning rules on every packet, enabling advanced facts globally
 
 **family**:
@@ -95,7 +107,7 @@ The explicit IPRULES rule field declaring `ipv4` or `ipv6`; it is not inferred f
 _Avoid_: `family=any`, no-family IPv4 default
 
 **matchKey**:
-The canonical rule match identity used for conflict detection and apply-result mappings. The current form is `mk2`, which includes `family` and match dimensions but excludes action, priority, rule ids, and stats.
+The canonical rule match identity used for duplicate-match warnings, explicit conflict checks, and apply-result mappings. The current form is `mk2`, which includes `family` and match dimensions but excludes action, priority, rule ids, and stats.
 _Avoid_: treating `clientRuleId`, `ruleId`, or priority as part of the match identity
 
 **clientRuleId**:
@@ -106,16 +118,28 @@ _Avoid_: treating it as the daemon-assigned `ruleId`
 The daemon-assigned committed rule identity used in stats, packet attribution, and print output.
 _Avoid_: assuming it is stable across every whole-policy apply unless the specific contract says so
 
+**Policy Binding Mode**:
+The `enforce|observe` choice on a direct complete-Linux-UID binding to a rule or rule group. Rule-group internal references are structural and do not carry an observe/enforce choice.
+_Avoid_: per-rule observe state, group-internal observe override
+
+**Policy Binding Mode Conflict**:
+A source-graph conflict where one complete Linux UID makes the same source rule applicable with both enforce and observe effective modes. Same-mode multi-path references to the same rule are not conflicts.
+_Avoid_: automatic mode precedence, treating same-rule multi-path references as cycles
+
+**Duplicate Match Warning**:
+A non-blocking commit or preflight warning where one complete Linux UID would receive multiple distinct source rules with the same matchKey. It is surfaced clearly to the user but does not make the policy invalid, does not require a daemon/control-plane confirmation token, and does not alter deterministic runtime winner selection by stage, priority, and ruleId.
+_Avoid_: commit failure, source graph conflict, hidden dedupe of distinct rules
+
 **Rule execution mode**:
-The per-rule state that decides whether a packet-side rule is disabled, actively enforced, or evaluated only for dry-run hit observation. Enforce and observe use the same winner attribution shape; observe differs by not applying the declared action to the actual verdict.
+The effective packet-side mode of a rule occurrence, inherited from the complete-Linux-UID policy binding that made the rule applicable. Enforce applies the rule's declared action; observe records the same winner attribution but leaves the actual verdict allow.
 _Avoid_: treating shadow evaluation as only an external debug session
 
 **Rule hit counters**:
-Low-cost per-rule counters owned by packet-side rules. An enabled rule that wins the normal scan increments its own hit counter whether it is in enforce or observe mode; record exports, when present, should use the same winner attribution fields rather than a separate observe-only model.
+Low-cost per-rule counters owned by packet-side rules. An active rule occurrence that wins the normal scan increments its own hit counter whether its effective mode is enforce or observe; record exports, when present, should use the same winner attribution fields rather than a separate observe-only model.
 _Avoid_: separate shadow stats model, per-packet allocation, Debug Stream
 
 **wouldRuleId / wouldDrop**:
-Legacy would-match fields from the old packet stream model. The refactored packet-side rule model should use `ruleId` plus rule execution mode instead of a parallel would-match attribution shape.
+Legacy would-match fields from the old packet stream model. The refactored packet-side rule model should use `ruleId` plus effective rule execution mode instead of a parallel would-match attribution shape.
 _Avoid_: new observe-mode attribution, compatibility-driven API design
 
 **reasonId**:
@@ -127,12 +151,24 @@ A high-priority packet verdict caused by interface-kind mask policy, not by an I
 _Avoid_: IP rule block
 
 **L4 Conntrack**:
-The userspace connection state layer that provides flow identity, orig/reply direction, and `new/established/invalid` semantics for advanced policy and observation. It is a strategic datapath primitive for `ct.*` rules, full-flow observation, future DPI/L7 policy, and gateway mode; it is not a baseline or ordinary Traffic Windows dependency.
-_Avoid_: packet cache, exact cache, baseline accounting, ordinary-user default feature
+The userspace connection state layer that provides flow identity, orig/reply direction, and `new/established/invalid` semantics for advanced policy and observation. It updates its own flow/session state once the packet path enters CT; it is not a baseline dependency, Traffic Windows dependency, or verdict-gated accepted-flow ledger.
+_Avoid_: packet cache, exact cache, accepted-flow ledger, Traffic Windows basic tier, ordinary-user default feature
 
 **ct consumer**:
-An active rule or telemetry path that needs conntrack state for a UID and family.
-_Avoid_: assuming conntrack is an unconditional per-packet cost
+An active policy or observation consumer that makes a packet subject pay the L4 Conntrack acquisition cost, such as `ct.*` rules, `dpi.*` rules, full-flow telemetry, or gateway mode. CT consumers are subject/app-level gates, not per-rule cheap-precondition gates.
+_Avoid_: unconditional per-packet CT, per-rule CT gate, ordinary Basic IPRULES
+
+**CT acquisition gate**:
+The subject/app-level decision that eligible packets should enter L4 Conntrack before stateful or DPI-dependent facts are used. It keeps ordinary subjects off CT while avoiding per-rule packet-by-packet CT gating inside an advanced subject.
+_Avoid_: global CT enable for all packets, single-rule prefilter deciding CT entry
+
+**Unified CT entry**:
+The single flow/session state record owned by L4 Conntrack for a given tracked flow. Flow Telemetry counters, DPI state/results, debug/export state, and other flow-level attachments hang from this entry rather than creating separate per-consumer CT tables.
+_Avoid_: DPI-specific CT table, telemetry CT table, duplicate flow tables
+
+**DPI / L7 Policy**:
+Future advanced policy based on flow/session protocol identification. It depends on L4 Conntrack flow identity, and its result is a flow-level fact attached to the unified CT entry.
+_Avoid_: packet-local DPI result, Traffic Windows protocol counters, replacing L3/L4 IPRULES
 
 **l4Status**:
 The packet parser classification for known L4, legal other terminal protocol, fragment, or invalid/unavailable L4.
@@ -206,21 +242,17 @@ _Avoid_: daemon-side Top-K or history database
 Pull-style low-cardinality counters and health/performance summaries.
 _Avoid_: using metrics for Top-K, history, timeline, or high-cardinality destination analytics
 
-**Baseline accounting**:
-The always-on low-cardinality traffic accounting available while the dataplane is running, scoped to app/device packet totals and original IP packet bytes.
-_Avoid_: copied-prefix length, L4 payload-only bytes, Flow Telemetry, Debug Stream, destination history, Top-K analytics
-
 **Traffic Windows**:
-Bounded relative-time traffic summaries for ordinary UI activity views, centered on accepted usage bytes/packets with blocked packet counts as separate policy-attempt counters. They are designed for ordinary-user long-lived enablement, not arbitrary absolute-time history, and new windows only accumulate from the time they become active.
-_Avoid_: baseline accounting, blocked bytes as usage, full history store, arbitrary time-range query, Flow Telemetry records, Debug Stream
+Bounded relative-time traffic summaries for ordinary UI activity views. Traffic Windows have a basic always-on tier for low-cardinality app/device/window/direction counters and app ranking, and an optional detail tier for heavier Top-K summaries. Both tiers share the same device-scope configured windows. Per-app Traffic Windows are keyed by complete Linux UID, so the same appId in different Android users/profiles has separate counts. New windows only accumulate from the time they become active.
+_Avoid_: separate Traffic Accounting concept, blocked bytes as usage, full history store, arbitrary time-range query, Flow Telemetry records, Debug Stream
 
 **Traffic Windows Top-K**:
-The bounded heavy-hitter summaries inside Traffic Windows, such as remote IP, protocol, and protocol-port leaders. Remote IP leaders may be approximate with a bounded error; small ordering differences near the tail are not audit-grade facts.
+The optional detail tier inside Traffic Windows: bounded heavy-hitter summaries such as remote IP, protocol, and protocol-port leaders. Remote IP leaders may be approximate; small ordering differences near the tail are not audit-grade facts.
 _Avoid_: exact destination ledger, unbounded per-destination map, full dimensional cube
 
 **Diagnostic Focus**:
 The single active, session-owned per-app or per-UID diagnostic focus gate that allows heavier packet/DNS explain, diagnostic streams, and focused diagnostic metrics for the selected subject.
-_Avoid_: baseline accounting, Traffic Windows, Flow Telemetry, ordinary observability, global debug mode, persistent app configuration
+_Avoid_: Traffic Windows, Flow Telemetry, ordinary observability, global debug mode, persistent app configuration
 
 **Debug Stream**:
 A vNext short-window evidence stream for DNS or packet investigation, normally gated by Diagnostic Focus.
@@ -244,9 +276,41 @@ _Avoid_: making IPRULES enforcement depend on reverse DNS
 
 ### Runtime State
 
-**Policy Bundle Checkpoint**:
-A fixed-slot daemon snapshot and restore primitive for verdict-affecting policy state.
-_Avoid_: frontend history database, user-facing checkpoint metadata store
+**Authoring Policy Bundle**:
+The persisted control-plane policy source graph made of reusable rules, reusable rule groups, bounded group nesting, and complete-Linux-UID applicability bindings with binding mode. It may keep package/app display metadata, but policy identity is the complete Linux UID. v1 rule-group nesting is capped at 3 group levels. The frontend edits this model through daemon commands; it is not a frontend-owned database and is not a compiled hot-path view.
+_Avoid_: Runtime Snapshot, packet rule table, frontend-only state
+
+**Stale UID Binding**:
+An Authoring Policy Bundle binding whose complete Linux UID is not currently present on the device. It is valid saved configuration, not a commit validation failure. It remains user configuration for control-plane display and cleanup, but does not contribute runtime rules or capability summaries while stale.
+_Avoid_: automatic deletion, package-name identity, runtime subject
+
+**Draft**:
+The editable Authoring Policy Bundle working state. It may contain uncommitted changes and is not an apply or restore source until committed.
+_Avoid_: committed policy, runtime policy, checkpoint, hot-path snapshot
+
+**Policy Commit / Committed Policy Revision**:
+A persisted Authoring Policy Bundle revision produced from the draft after policy validation succeeds. It is the source for apply, but committing it never changes the datapath by itself; failed apply does not roll it back. It can be reset by restoring a checkpoint, including when it has not yet been applied.
+_Avoid_: editable draft, checkpoint, runtime snapshot
+
+**Draft Commit**:
+The atomic operation that validates the draft and makes it the current committed policy revision. Failed commit leaves the draft edits available and leaves the committed policy unchanged.
+_Avoid_: policy apply, checkpoint creation, runtime switch
+
+**Checkpoint / Policy Bundle Checkpoint**:
+One retained full Authoring Policy Bundle snapshot from a successful apply, including the source rules, rule groups, complete-Linux-UID bindings, and per-rule apply status from that apply. A checkpoint may record both active and inactive rules, but it is not an editable draft, not an uncommitted policy revision, not a diff chain, and not the in-memory hot-path runtime view.
+_Avoid_: Draft, uncommitted policy revision, frontend history database, Runtime Snapshot
+
+**Runtime Snapshot**:
+The in-memory datapath view compiled from the selected checkpoint, including hot-path views and capability summaries. Packet execution reads this view, not the draft or checkpoint storage.
+_Avoid_: persisted checkpoint, editable policy draft, frontend rule group
+
+**Policy Apply**:
+The atomic operation that compiles the current committed Authoring Policy Bundle into a runtime snapshot and records a checkpoint of the source bundle. Failed apply leaves the committed policy unchanged, creates no checkpoint, and does not change the runtime snapshot.
+_Avoid_: draft commit, partial runtime switch, checkpoint restore
+
+**Checkpoint Restore**:
+The atomic operation that makes a selected checkpoint's Authoring Policy Bundle snapshot the current committed policy and runtime source. It is not a new apply, does not rewrite the checkpoint's apply-time status, and fails if the runtime snapshot cannot be rebuilt from that checkpoint. It requires no uncommitted draft changes; failed restore leaves the draft, committed policy, selected checkpoint, and runtime snapshot unchanged.
+_Avoid_: draft save, partial rollback, best-effort restore, recomputed apply status
 
 **RESETALL**:
 The full reset pipeline that returns daemon memory state, observation state, and persisted save tree to a clean baseline.
