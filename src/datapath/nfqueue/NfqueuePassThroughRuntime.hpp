@@ -8,8 +8,11 @@
 #include <NfqueueHookPlan.hpp>
 #include <NfqueueTopology.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace SnortDatapath::Nfqueue {
@@ -38,6 +41,35 @@ struct DualStackPassThroughRuntimeConfig {
 struct DualStackPassThroughRuntimePlan {
     DualStackHookPlanConfig hookPlan;
     std::vector<PassThroughListenerPlan> listeners;
+};
+
+class PassThroughWorkerGroup {
+public:
+    PassThroughWorkerGroup() = default;
+    ~PassThroughWorkerGroup() { join(); }
+
+    PassThroughWorkerGroup(const PassThroughWorkerGroup &) = delete;
+    PassThroughWorkerGroup &operator=(const PassThroughWorkerGroup &) = delete;
+    PassThroughWorkerGroup(PassThroughWorkerGroup &&) = delete;
+    PassThroughWorkerGroup &operator=(PassThroughWorkerGroup &&) = delete;
+
+    template <typename Worker> void start(Worker &&worker) {
+        workers_.emplace_back(std::forward<Worker>(worker));
+    }
+
+    void join() {
+        for (auto &worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+        workers_.clear();
+    }
+
+    [[nodiscard]] std::size_t workerCount() const noexcept { return workers_.size(); }
+
+private:
+    std::vector<std::thread> workers_;
 };
 
 [[nodiscard]] inline DualStackPassThroughRuntimePlan makeDualStackPassThroughRuntimePlan(
@@ -71,11 +103,13 @@ struct DualStackPassThroughRuntimePlan {
 class DualStackPassThroughRuntime {
 public:
     explicit DualStackPassThroughRuntime(DualStackPassThroughRuntimeConfig config = {});
+    ~DualStackPassThroughRuntime();
 
     [[nodiscard]] bool start();
 
 private:
     DualStackPassThroughRuntimeConfig config_;
+    PassThroughWorkerGroup workers_;
 };
 
 struct Ipv4PassThroughRuntimeConfig {
@@ -89,11 +123,13 @@ struct Ipv4PassThroughRuntimeConfig {
 class Ipv4PassThroughRuntime {
 public:
     explicit Ipv4PassThroughRuntime(Ipv4PassThroughRuntimeConfig config = {});
+    ~Ipv4PassThroughRuntime();
 
     [[nodiscard]] bool start();
 
 private:
     Ipv4PassThroughRuntimeConfig config_;
+    PassThroughWorkerGroup workers_;
 };
 
 } // namespace SnortDatapath::Nfqueue

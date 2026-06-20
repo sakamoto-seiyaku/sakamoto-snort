@@ -26,4 +26,28 @@ PassThroughResult acceptPassThroughEvent(const QueueEvent &event, VerdictSink &s
     return PassThroughResult::VerdictAccepted;
 }
 
+PassThroughResult acceptPassThroughMetadata(const PassThroughMetadata &metadata,
+                                            VerdictSink &sink) {
+    const auto event = makeQueueEventFromHook(metadata.packetId, metadata.hook);
+    if (event.has_value()) {
+        return acceptPassThroughEvent(*event, sink);
+    }
+    if (!sink.sendVerdict(metadata.packetId, kNfAcceptVerdict)) {
+        return PassThroughResult::VerdictSendFailed;
+    }
+    return PassThroughResult::VerdictAccepted;
+}
+
+PassThroughResult acceptPassThroughPacketHeader(const PassThroughPacketHeader &header,
+                                                VerdictSink &sink) {
+    if (!header.packetId.has_value()) {
+        return PassThroughResult::NoPacketId;
+    }
+    return acceptPassThroughMetadata(PassThroughMetadata{
+                                         .packetId = *header.packetId,
+                                         .hook = header.hook,
+                                     },
+                                     sink);
+}
+
 } // namespace SnortDatapath::Nfqueue

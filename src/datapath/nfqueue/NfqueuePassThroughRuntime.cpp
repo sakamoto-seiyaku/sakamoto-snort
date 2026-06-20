@@ -13,6 +13,7 @@
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
 #include <arpa/inet.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -20,12 +21,14 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
+
+constexpr int kQueuePollTimeoutMs = 250;
 
 class SystemHookCommandExecutor final : public SnortDatapath::Nfqueue::HookCommandExecutor {
 public:
@@ -143,21 +146,25 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     }
     if (attrs[NFQA_PACKET_HDR] == nullptr) {
         std::cerr << "NFQUEUE packet header missing on queue " << context->queue << "\n";
+        SocketVerdictSink sink(context->socket, context->queue);
+        (void)SnortDatapath::Nfqueue::acceptPassThroughPacketHeader(
+            SnortDatapath::Nfqueue::PassThroughPacketHeader{
+                .packetId = std::nullopt,
+                .hook = 0,
+            },
+            sink);
         return MNL_CB_OK;
     }
 
     const auto *header =
         static_cast<nfqnl_msg_packet_hdr *>(mnl_attr_get_payload(attrs[NFQA_PACKET_HDR]));
     SocketVerdictSink sink(context->socket, context->queue);
-    const auto event = SnortDatapath::Nfqueue::makeQueueEventFromHook(
-        ntohl(header->packet_id), header->hook);
-    if (!event.has_value()) {
-        std::cerr << "NFQUEUE unsupported hook " << static_cast<unsigned int>(header->hook)
-                  << " on queue " << context->queue << "\n";
-        (void)sink.sendVerdict(ntohl(header->packet_id), SnortDatapath::Nfqueue::kNfAcceptVerdict);
-        return MNL_CB_OK;
-    }
-    const auto result = SnortDatapath::Nfqueue::acceptPassThroughEvent(*event, sink);
+    const auto result = SnortDatapath::Nfqueue::acceptPassThroughPacketHeader(
+        SnortDatapath::Nfqueue::PassThroughPacketHeader{
+            .packetId = ntohl(header->packet_id),
+            .hook = header->hook,
+        },
+        sink);
     if (result != SnortDatapath::Nfqueue::PassThroughResult::VerdictAccepted) {
         std::cerr << "NFQUEUE verdict send failed on queue " << context->queue << "\n";
     }
@@ -196,7 +203,30 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener)
         QueueContext context{.socket = socket, .queue = listener.queue};
         const unsigned int port = mnl_socket_get_portid(socket);
         std::vector<char> buffer(MNL_SOCKET_BUFFER_SIZE);
+        pollfd pollFd{
+            .fd = mnl_socket_get_fd(socket),
+            .events = POLLIN,
+            .revents = 0,
+        };
         while (!SnortRuntime::shutdownRequested()) {
+            pollFd.revents = 0;
+            const int ready = ::poll(&pollFd, 1, kQueuePollTimeoutMs);
+            if (ready < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                std::cerr << "NFQUEUE poll failed on queue " << listener.queue << ": "
+                          << std::strerror(errno) << "\n";
+                break;
+            }
+            if (ready == 0) {
+                continue;
+            }
+            if ((pollFd.revents & POLLIN) == 0) {
+                std::cerr << "NFQUEUE poll closed on queue " << listener.queue << "\n";
+                break;
+            }
+
             const ssize_t received = mnl_socket_recvfrom(socket, buffer.data(), buffer.size());
             if (received < 0) {
                 if (errno == EINTR) {
@@ -225,14 +255,19 @@ namespace SnortDatapath::Nfqueue {
 DualStackPassThroughRuntime::DualStackPassThroughRuntime(DualStackPassThroughRuntimeConfig config)
     : config_(std::move(config)) {}
 
+DualStackPassThroughRuntime::~DualStackPassThroughRuntime() {
+    workers_.join();
+}
+
 bool DualStackPassThroughRuntime::start() {
+    workers_.join();
     const auto runtimePlan = makeDualStackPassThroughRuntimePlan(config_);
 
     SystemHookCommandExecutor executor;
     (void)installDualStackPassThroughHooks(runtimePlan.hookPlan, executor);
 
     for (const auto listener : runtimePlan.listeners) {
-        std::thread([listener] { listenQueue(listener); }).detach();
+        workers_.start([listener] { listenQueue(listener); });
     }
 
     std::cerr << "Dual-stack NFQUEUE pass-through listening on IPv4 queues "
@@ -247,7 +282,12 @@ bool DualStackPassThroughRuntime::start() {
 Ipv4PassThroughRuntime::Ipv4PassThroughRuntime(Ipv4PassThroughRuntimeConfig config)
     : config_(std::move(config)) {}
 
+Ipv4PassThroughRuntime::~Ipv4PassThroughRuntime() {
+    workers_.join();
+}
+
 bool Ipv4PassThroughRuntime::start() {
+    workers_.join();
     const auto queuePlan =
         makeNfqueueQueuePlan(config_.topology, config_.firstQueue, config_.queueCount);
 
@@ -260,12 +300,12 @@ bool Ipv4PassThroughRuntime::start() {
                                       executor);
 
     for (std::uint32_t i = 0; i < queuePlan.listeners.count; ++i) {
-        std::thread([queue = queuePlan.listeners.first + i] {
+        workers_.start([queue = queuePlan.listeners.first + i] {
             listenQueue(PassThroughListenerPlan{
                 .family = NfqueueAddressFamily::Ipv4,
                 .queue = queue,
             });
-        }).detach();
+        });
     }
 
     std::cerr << "IPv4 NFQUEUE pass-through listening on queues " << queuePlan.listeners.first

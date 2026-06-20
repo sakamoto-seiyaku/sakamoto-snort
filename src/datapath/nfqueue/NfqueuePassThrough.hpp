@@ -26,9 +26,20 @@ struct QueueEvent {
     NfqueuePacketDirection direction = NfqueuePacketDirection::Input;
 };
 
+struct PassThroughMetadata {
+    std::uint32_t packetId = 0;
+    std::uint8_t hook = 0;
+};
+
+struct PassThroughPacketHeader {
+    std::optional<std::uint32_t> packetId;
+    std::uint8_t hook = 0;
+};
+
 enum class PassThroughResult : std::uint8_t {
     VerdictAccepted,
     VerdictSendFailed,
+    NoPacketId,
 };
 
 class VerdictSink {
@@ -41,5 +52,9 @@ public:
 [[nodiscard]] std::optional<QueueEvent> makeQueueEventFromHook(std::uint32_t packetId,
                                                                std::uint8_t hook) noexcept;
 [[nodiscard]] PassThroughResult acceptPassThroughEvent(const QueueEvent &event, VerdictSink &sink);
+[[nodiscard]] PassThroughResult acceptPassThroughMetadata(const PassThroughMetadata &metadata,
+                                                          VerdictSink &sink);
+[[nodiscard]] PassThroughResult acceptPassThroughPacketHeader(
+    const PassThroughPacketHeader &header, VerdictSink &sink);
 
 } // namespace SnortDatapath::Nfqueue

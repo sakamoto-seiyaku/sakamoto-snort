@@ -10,6 +10,10 @@
 
 #include <NfqueueTopology.hpp>
 
+#include <atomic>
+#include <optional>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 namespace {
@@ -25,6 +29,19 @@ public:
     }
 
     std::vector<SnortDatapath::Nfqueue::SentVerdict> verdicts;
+};
+
+class FailingVerdictSink final : public SnortDatapath::Nfqueue::VerdictSink {
+public:
+    bool sendVerdict(const std::uint32_t packetId, const std::uint32_t verdict) override {
+        attempts.push_back(SnortDatapath::Nfqueue::SentVerdict{
+            .packetId = packetId,
+            .verdict = verdict,
+        });
+        return false;
+    }
+
+    std::vector<SnortDatapath::Nfqueue::SentVerdict> attempts;
 };
 
 class RecordingHookExecutor final : public SnortDatapath::Nfqueue::HookCommandExecutor {
@@ -176,6 +193,58 @@ TEST(NfqueuePassThroughTest, QueueEventDirectionComesFromNfqueueHook) {
                      .has_value());
 }
 
+TEST(NfqueuePassThroughTest, UnsupportedHookWithPacketIdAcceptsFailOpenExactlyOnce) {
+    RecordingVerdictSink sink;
+
+    const auto result = SnortDatapath::Nfqueue::acceptPassThroughMetadata(
+        SnortDatapath::Nfqueue::PassThroughMetadata{
+            .packetId = 77,
+            .hook = kNfqueueHookForward,
+        },
+        sink);
+
+    EXPECT_EQ(result, SnortDatapath::Nfqueue::PassThroughResult::VerdictAccepted);
+    ASSERT_EQ(sink.verdicts.size(), 1U);
+    EXPECT_EQ(sink.verdicts[0],
+              (SnortDatapath::Nfqueue::SentVerdict{
+                  .packetId = 77,
+                  .verdict = SnortDatapath::Nfqueue::kNfAcceptVerdict,
+              }));
+}
+
+TEST(NfqueuePassThroughTest, MissingPacketHeaderDoesNotSendVerdictOrRequirePayload) {
+    RecordingVerdictSink sink;
+
+    const auto result = SnortDatapath::Nfqueue::acceptPassThroughPacketHeader(
+        SnortDatapath::Nfqueue::PassThroughPacketHeader{
+            .packetId = std::nullopt,
+            .hook = kNfqueueHookLocalIn,
+        },
+        sink);
+
+    EXPECT_EQ(result, SnortDatapath::Nfqueue::PassThroughResult::NoPacketId);
+    EXPECT_TRUE(sink.verdicts.empty());
+}
+
+TEST(NfqueuePassThroughTest, VerdictFailureOnUnsupportedHookIsReported) {
+    FailingVerdictSink sink;
+
+    const auto result = SnortDatapath::Nfqueue::acceptPassThroughMetadata(
+        SnortDatapath::Nfqueue::PassThroughMetadata{
+            .packetId = 88,
+            .hook = kNfqueueHookForward,
+        },
+        sink);
+
+    EXPECT_EQ(result, SnortDatapath::Nfqueue::PassThroughResult::VerdictSendFailed);
+    ASSERT_EQ(sink.attempts.size(), 1U);
+    EXPECT_EQ(sink.attempts[0],
+              (SnortDatapath::Nfqueue::SentVerdict{
+                  .packetId = 88,
+                  .verdict = SnortDatapath::Nfqueue::kNfAcceptVerdict,
+              }));
+}
+
 TEST(NfqueueIpv4PassThroughTest, InstallerExecutesIpv4HookPlan) {
     RecordingHookExecutor executor;
     const auto queuePlan = makeNfqueueQueuePlan(NfqueueTopology::SplitInOut, 0, 2);
@@ -256,4 +325,18 @@ TEST(NfqueueDualStackPassThroughTest, RuntimePlanStartsEveryIpv4AndIpv6ListenerQ
                   {SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv6, 16},
                   {SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv6, 17},
               }));
+}
+
+TEST(NfqueuePassThroughLifecycleTest, WorkerGroupJoinsAndReleasesWorkers) {
+    SnortDatapath::Nfqueue::PassThroughWorkerGroup workers;
+    std::atomic_uint completed{0};
+
+    workers.start([&completed] { completed.fetch_add(1, std::memory_order_relaxed); });
+    workers.start([&completed] { completed.fetch_add(1, std::memory_order_relaxed); });
+
+    EXPECT_EQ(workers.workerCount(), 2U);
+    workers.join();
+
+    EXPECT_EQ(completed.load(std::memory_order_relaxed), 2U);
+    EXPECT_EQ(workers.workerCount(), 0U);
 }
