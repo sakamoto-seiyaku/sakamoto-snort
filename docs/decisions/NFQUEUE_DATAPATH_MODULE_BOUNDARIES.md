@@ -178,10 +178,11 @@ Packet diagnostics 第一版定位为用户主动开启的 IPRULES / packet poli
 - 不支持 replay；不保留 `horizonSec` / `minSize`；没有 active consumer 时不构造 explain 或维护诊断 replay ring。
 - 不迁移旧 `wouldRuleId` / `wouldDrop` 平行归因模型；observe-mode winner 使用 `ruleId + reasonId + ruleMode + verdict` 的同一 winner 归因格式。
 - 不输出 legacy `host` / domain 字段；IP 到域名展示由前端按需查询 Domain-IP Association。
+- packet-side diagnostics 重构不保留旧兼容中间层：旧 `tracked` 持久状态、generic `STREAM.*` packet 模型、replay prebuffer、suppressed notice、legacy `host` / domain join、`wouldRuleId` / `wouldDrop` 平行归因与旧 activity stream 状态应在同一语义重构中直接删除或替换，而不是先桥接到新模型。
 
 Packet diagnostics 是显式高成本模式，可以输出完整 explain、stage、skipped reason、rule snapshot 与候选路径；但它面向用户策略排查，不输出 raw hot-path capability mask、compiler table 等开发者内部结构。开发者性能 trace 后续走独立路径。
 
-DNS stream 暂时冻结，不并入 `DIAGNOSTICS.*`，等 Domain/DNS 线单独整理。现有 activity stream 只输出 `blockEnabled` 状态，不迁移到新模型；前端需要状态时使用 `CONFIG.GET(block.enabled)`。
+DNS stream 暂时冻结，不并入 `DIAGNOSTICS.*`，本轮不扩展、不删除、不桥接。当前前端不调用 DNS stream；只要它不被调用且不影响 packet hot path，就不把它纳入 packet-side 重构范围。后续 Domain/DNS 线单独整理时再决定替代模型。现有 activity stream 只输出 `blockEnabled` 状态，不迁移到新模型；前端需要状态时使用 `CONFIG.GET(block.enabled)`。
 
 ## 5. Conntrack、IPRULES 与未来 DPI
 
@@ -337,30 +338,34 @@ daemon 的 control-plane / persisted store 必须持久化 Draft、当前 Commit
 - primary mask 只表达 coarse `may need` gate，不是当前 packet 的最终执行计划；packet-specific 精确剪枝由 Advanced Prefilter 在 `PacketFacts` 已构造后完成。
 - 使用更多 bit 换取更少后续流程是可以接受的；第一版可规划低 48 bit 给当前/近期 hot-path pruning，高 16 bit 保留。
 - primary mask 低 48 bit 第一版按职责分区：
-  - `0..15`：policy stage may-run bits，例如 Basic IPRULES、Stateful IPRULES、DPI Policy、Resolved-IP Policy。
+  - `0..15`：policy stage may-run bits：`hasIfaceBlock`、`hasBasicIprules`、`hasStatefulIprules`、`hasDpiPolicy`、`hasResolvedIpPolicy`。`defaultAllow` 是 fallback，不是 consumer，不分配 primary bit。
   - `16..31`：expensive fact bits，例如 CT facts、DPI facts、Association facts。fact bits 是跨 consumer 共享的输入需求，不按模块重复拆分。
   - `32..47`：observation/output bits，例如 Traffic Windows basic/detail、Flow Telemetry、Packet Diagnostics。
   - `48..63`：保留。
-- 第一版采用两层 capability 合成：
-  - `GlobalHotPathCaps.primary` 表达全局 gate / 全局 consumer，例如 Traffic Windows、Flow Telemetry、active Packet Diagnostics session、全局模块开关。
+- 第一轮 implementation scope 必须覆盖当前已有的 CT / Stateful IPRULES 能力：仓库已经支持 `ct.*` 规则，因此 `needsCt` / CT acquisition / `CtFacts` / Stateful stage 不是 future placeholder。DPI / L7 相关 bit、view、secondary detail 只作为后续专题的预留边界；当前不要求实现 DPI classifier、DPI result schema 或 DPI policy evaluator。
+- 第一版采用两层 capability 合成；这是已确认的 hot-path 合成模型，packet path 不再引入 `PacketPlan`、`globalEnableMask`、clear mask 或其它第三层热路径代数：
+  - `GlobalHotPathCaps.primary` 表达全局 gate / 全局 consumer，例如 Traffic Windows、Flow Telemetry、active Packet Diagnostics session，以及由全局模块开关导致的全局需求。它不是用来逐包清除、重写或二次过滤 subject caps 的 enable mask。
   - `SubjectHotPathCaps.primary` 表达当前 packet subject 的 policy / observation consumer，例如该 subject 是否可能有 Basic IPRULES、Stateful IPRULES、Resolved-IP Policy 或 DPI Policy。
-  - packet path 使用 `primary = global.primary | subject.primary`。
+  - packet path 使用 `primary = global.primary | subject.primary`；这个 OR 是唯一的 hot-path 合成规则。
   - 当前 local-device 模式下，packet subject key 固定为 `{complete Linux UID, IP family}`；IPv4 与 IPv6 caps 分开生成和查询。未来 FORWARD / hotspot gateway mode 可扩展出 gateway client、source IP、MAC 或 ingress iface 等 subject，不把 summary 模型写死为 UID-only。
 - `SubjectHotPathCaps` 只由 compiled-active rules 和 active observation consumers 贡献。用户 disabled rule、`compile-inactive` rule、validation-failed rule、entitlement-failed rule 都不得贡献 caps。特别是 compile-inactive `dpi.*` rule 不得让 subject 出现 `needsCt` / `needsDpi`。
+- `block.enabled`、`iprules.enabled`、DPI enabled 等 component gates 的语义在 caps 生成 / 发布边界解决：disabled consumer 不贡献 bit；packet path 不再用额外 mask 对 `global | subject` 做二次过滤。
+- `hasIfaceBlock` 归属 `GlobalHotPathCaps`：它表示全局 pipeline 中可能需要运行 Interface policy / `IFACE_BLOCK` stage。即使具体 stage evidence 需要使用 packet iface、direction、hook 或 app/interface 配置，它也不进入 `SubjectHotPathCaps`，不要求为了判断 stage 是否存在而先做 subject caps lookup。
+- 除 `hasIfaceBlock` 外，policy stage bits 第一版归属 `SubjectHotPathCaps`：`hasBasicIprules` 来自该 subject/family 的 active `basicView` consumer；`hasStatefulIprules` 来自实际 CT-consuming active `statefulView` consumer；`hasDpiPolicy` 后续来自 active DPI / L7 policy consumer；`hasResolvedIpPolicy` 来自该 subject/family 的 active Resolved-IP Policy consumer。语法上等价 no-op 的 `ct.*` 条件不应制造 CT / Stateful caps。
 - 当 global caps 已足以证明没有任何 subject-scoped policy / expensive fact consumer 时，packet path 可以跳过 subject caps lookup。
 - `SubjectHotPathCaps` 由配置、policy、session 或 package/user 变化的慢路径预编译成只读 snapshot 后原子发布；packet path 不应让 IPRULES、Traffic Windows、Diagnostics、Association、DPI 等模块各自重复执行 gate 判断。
 - 当前阶段只规定 `SubjectHotPathCaps` 的语义、epoch 边界与贡献来源，不规定物理存储形态。实现可沿用当前 `uid + family` gate/cache 方向并按测量决定 sparse table、dense index、app-local epoch cache 或其它布局。
 - 预编译 / snapshot / 索引结构只有在降低每包时间成本、减少重复查询、避免锁/分配或改善 cache locality 时才成立；不能为了抽象本身增加普通 packet path 成本。
 - 不把 500+ DPI protocol 直接放入 primary mask。
-- 允许 lazy secondary masks，例如 `ctDetail`、`dpiDetail`、`assocDetail`。
-- 只有 primary 对应 bit 命中时，才读取 secondary mask。
-- secondary 拆分粒度必须受控：第一版只按 expensive fact family 拆，例如 CT、DPI、Association；不继续拆到单规则、单协议、单字段或过深层级，避免过多分支、指针跳转和 cache miss 吃掉剪枝收益。
-- secondary 只有在能显著减少昂贵事实计算或候选扫描时才引入；若一个 detail 的读取成本接近直接执行 cheap precondition，则优先保持扁平。
+- 不把 DPI protocol、rule group、单条 rule 或 diagnostic field 放入 primary mask；这些属于 compiled view / secondary detail / diagnostics payload 的内部维度。
+- 第一轮不实现 `ctDetail` secondary mask：当前 CT 对外策略事实只有 `ct.state` / `ct.direction`，`inspectForPolicy()` 一次产出完整 `CtFacts` / `PolicyView`，字段级 secondary 不能减少 CT acquisition 成本。`needsCt` primary bit 足够表达当前 CT / Stateful IPRULES 需求。
+- lazy secondary masks 只保留后续能力边界。若后续引入 DPI、Association 等更昂贵事实，也只在能显著减少昂贵事实计算或候选扫描时引入，并且只按 expensive fact family 拆；不继续拆到单规则、单协议、单字段或过深层级，避免过多分支、指针跳转和 cache miss 吃掉剪枝收益。
+- 只有 primary 对应 bit 命中时，未来 secondary mask 才允许被读取。
 - 不在每包路径扫描规则列表。
 
 Basic evaluator 和 advanced prefilter 可以共享编译结构，但概念上分开：
 - Basic evaluator 直接产出 allow/block verdict。
-- Advanced Prefilter 是现有 compiled classifier 的 `PacketFacts` projection view，不是第二套规则引擎，也不是独立规则列表。CT acquisition 不由 Advanced Prefilter 在同一 app 内逐包决定；CT 由 subject/app 级 caps 决定。Advanced Prefilter 主要用于 DPI 等更高成本事实的 packet/flow-specific gate。
+- Advanced Prefilter 是现有 compiled classifier 的 `PacketFacts` projection view，不是第二套规则引擎，也不是独立规则列表。CT acquisition 不由 Advanced Prefilter 在同一 app 内逐包决定；当前 CT 由 subject/app 级 caps 决定。Advanced Prefilter 后续主要用于 DPI 等更高成本事实的 packet/flow-specific gate。
 - UID / family subject caps 表达“这个 subject 是否启用 CT / DPI 等 advanced consumer”。如果 subject/app 启用 CT，eligible packets 取得 `CtFacts`；如果没有启用 CT，packet path 不得为了查询 CT/DPI cache 或高级规则而提前进入 CT。
 - Would / observe 规则是正式 consumer，不是仅在 facts 已经存在时顺带评估的附属输出。Stateful / DPI 的 would / observe 规则必须参与 subject caps；DPI observe/enforce 规则还必须参与 DPI projection view。
 - Advanced Prefilter 不产出 verdict，也不提前选择 rule winner。DPI projection 的当前结论只作为后续 DPI 专题的基准：它应去掉 DPI 条件，只用 cheap facts / 已有 flow facts 判断 packet/flow-specific `needsDpi`，并且不得替代完整 DPI policy evaluator。`needsDpi` 隐含 subject/app 需要 CT；packet path 必须先取得 CT / flow state，再读取或更新绑定在该 flow 上的 DPI state / result。最终 winner 与 allow/block/observe/default 仍由固定 verdict pipeline 中的各 stage evaluator 基于完整 facts 产出。
@@ -400,6 +405,17 @@ Basic evaluator 和 advanced prefilter 可以共享编译结构，但概念上�
 - ifindex / ifaceKind。
 - original IP packet bytes。
 - timestamp。
+
+`PacketFacts` 的 endpoint / numeric representation 作为 packet input 层的 canonical shape：
+- IP endpoint 使用固定二进制 endpoint 表达：`family/ipVersion` 加 16-byte address buffer。IPv4 使用约定的前 4 bytes，其余 bytes 置 0；IPv6 使用完整 16 bytes。地址字节保持 parser 得到的 network byte order；key compare / hash 必须包含 family，避免 IPv4、IPv6 或 IPv4-mapped IPv6 混淆。
+- `remote IP` / `remotePort` 在 `PacketFacts` 构造阶段按 packet direction 归一化：outbound 取 dst，inbound 取 src。
+- ports / remotePort、uid / userId、ifindex、original IP packet bytes 等数值字段使用 host-order numeric value；protocol 使用 IP header / terminal L4 protocol number。
+- IPRULES、Conntrack、Telemetry、Traffic Windows、Diagnostics 可以从 `PacketFacts` 投影出各自需要的 key 或 ABI shape，例如 IPRULES / Conntrack 的 IPv4 host-order `uint32_t` key，但这些 projection 不能反过来定义 packet input 层事实。
+
+bounded copy / parser failure 的第一版降级保持 KISS：
+- 如果连 IP envelope 都不能可靠解析，则不构造 `PacketFacts`，packet fail-open accept；不更新 Traffic Windows，不伪造 Flow Telemetry `FLOW` record。若有 active diagnostics，只能输出 parser failure / dropped 级别诊断。
+- 如果 IP envelope 可解析，但 terminal L4 / ports 不完整或不可用，则仍构造 `PacketFacts`，但标记 `l4Status=INVALID_OR_UNAVAILABLE_L4` 或 `FRAGMENT`、`portsAvailable=false`、ports / remotePort 为 0，并保留 `originalIpBytes` 与 copied/truncated 诊断字段。
+- 在 L4 不完整或不可用时，Interface policy 与不依赖 ports / CT / DPI 的 Basic IPRULES 仍可按已有 facts 工作；port 条件 no-match，CT / DPI 不创建正常 flow/session。Traffic Windows 只在 `originalIpBytes` 可信时更新 basic counters；detail tier 不进入 protocol-port Top-K。Flow Telemetry 使用 `L3_OBSERVATION`，不伪造正常 L4 lifecycle。
 
 ## 8. Verdict pipeline
 
@@ -489,7 +505,7 @@ RDNS 边界：
 - Packet path 使用 `PacketFacts` / remote endpoint facts。
 - Domain-IP Association 查询返回轻量 association result / domain hint。
 - RDNS 不再写入 packet verdict path 的 Host。
-- `Host` 如保留，应只属于 debug/enrichment 层，而不是 verdict API 的核心输入。
+- packet-side 重构不保留 Host-backed 兼容路径；`Host` 如保留，应只属于非热路径 debug/enrichment 层，而不是 verdict API、packet diagnostics、Traffic Windows、Flow Telemetry 或 IPRULES 的核心输入。
 
 ## 11. Future FORWARD / hotspot gateway mode
 

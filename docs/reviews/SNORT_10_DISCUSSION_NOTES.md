@@ -28,7 +28,7 @@
 - 旧 `wouldRuleId` / `wouldDrop`、`tracked`、generic `STREAM.*`、activity stream、replay 参数的去留。
 - Packet diagnostic event 的主要字段口径与 stage pipeline。
 - Traffic Windows 第一版设计闭环：配置 / 查询接口、basic/detail tier、reset/time 语义、hot-path 数据结构与 Top-K 边界。
-- Hot-path Capability Summary / Advanced Prefilter 的第一轮边界：64-bit primary mask、lazy secondary masks、subject/app 粒度、CT/DPI 高级能力 gate。
+- Hot-path Capability Summary / Advanced Prefilter 的第一轮边界：64-bit primary mask、`GlobalHotPathCaps | SubjectHotPathCaps` 合成模型、CT 当前 subject/app gate、第一轮不实现 `ctDetail`，DPI 仅保留 future 边界。
 - Conntrack A++ runtime 在 A 方案内的 baseline：全局共享 authoritative CT table、自研专用 fixed-bucket intrusive table、当前 field-mix hash、`liburcu-qsbr`、不重叠 shard/bucket bit slices。
 - Policy decision cache 第一版两级模型：L1 Base policy cache 与 L2 Post-CT policy cache；L2 只在 L1 `PassToAdvanced` 后启用，使用完整 packet projection + CT facts + DPI key。
 - L1/L2 cache hit 必须等价于直接扫描 stage result：cache entry 保存 winner attribution 与 stats handle，hit 后仍更新 rule counters / attribution；完整 diagnostics candidate list 不进入 hot-path cache。
@@ -51,7 +51,7 @@
 - DNS / Domain diagnostics：DNS stream 当前冻结，后续整理 Domain/DNS 线时重做。
 - 诊断 / 尝试 / 救援恢复这些工作流如何衔接。
 
-下一轮建议继续拆 Conntrack A++ implementation work items，并单独展开 DPI adapter / classifier 选型边界。
+后续在本轮模块都达到可拆分状态后，再拆 Conntrack A++ implementation work items；DPI adapter / classifier 选型作为最后的独立专题。
 
 ## 已形成的主边界
 
@@ -78,19 +78,18 @@
 
 ### 1. Observability / Debug Stream / Shadow Evaluation
 
-需要讨论：
-- Debug Stream、Flow Telemetry、would/shadow evaluation 的边界。
-- 哪些是事实记录，哪些是调试证据，哪些是策略模拟结果。
-- 是否共享统一 transport。
-- 如果统一 transport，record type 如何分层。
-- 策略发布前后的 shadow / would workflow 如何表达。
-- 诊断、策略试运行、救援恢复这些工作流如何共享 evidence，但在用户体验上保持顺滑切换。
+状态：packet-side observability 第一版边界已收口；不再把 Debug Stream、Flow Telemetry、packet diagnostics、observe/enforce runtime 归因当作概念未决项。
+
+仍待专题讨论：
+- DNS / Domain diagnostics：DNS stream 当前冻结，后续整理 Domain/DNS 线时重做。
+- 策略试运行、诊断、救援恢复这些用户工作流如何衔接；如需 Shadow Evaluation 产品工作流，另起专题，不反向改变已收口的 packet-side observe/enforce 语义。
 
 当前状态：
-- Packet diagnostics 与 observe / enforce 归因模型已初步收口；IPRULES Authoring Layer v1 已收口；DNS / Domain diagnostics、救援 / 尝试工作流仍待专题讨论。
-- 临时原则：不要在完整设计前让 Debug Stream 和 FlowRecord 互相吞并。
+- Packet diagnostics 与 observe / enforce 归因模型已收口；IPRULES Authoring Layer v1 已收口。
+- Flow Telemetry / Fact Records 与 Debug Stream / Explain Evidence 的传输和语义边界已收口：Flow Telemetry 是常态 shared-memory records；Packet diagnostics 是显式 vNext JSON explain stream；二者不统一 transport，也不互相依赖。
 - 已确认业务语义先分三类：Fact Records、Explain Evidence、Shadow Evaluation。
-- 诊断 / 尝试 / 救援暂不定模块名；后续需要作为工作流专题继续拆。
+- Shadow Evaluation 作为业务语义名称保留；它不是当前 packet-side `observe` runtime 的第二套 matcher 或第二套 stats 模型。
+- 诊断 / 尝试 / 救援暂不定模块名；后续只作为工作流专题继续拆。
 - Packet-side rules 需要统一的 effective rule execution mode：`enforce` / `observe`。该 mode 不是 rule 自身的 authoring 状态，而是从 complete Linux UID 直接绑定到 rule / rule group 的 `bindingMode` 继承；`disabled` 属于 source / apply status，不进入 runtime mode。
 - `observe` 规则参与与 `enforce` 相同的扫描路径；winner 为 `observe` 时记录 observe hit，不执行 action，并按相同扫描退出点结束。
 - `observe` winner 必须 short-circuit 后续规则与后续 stage；不能因为 observe 不执行 action 就继续扫描。
@@ -115,7 +114,7 @@
 - 新模型不支持“先开启诊断并缓存、后消费”的 replay 语义；Diagnostic Focus 只有在 active consumer 存在时才产生重诊断数据。
 - 新模型删除 `horizonSec` / `minSize` 这类 replay 参数；诊断 stream 只输出订阅建立之后的新事件。
 - 第一版 Diagnostic Focus 主要服务 packet / IPRULES 诊断；DNS stream 暂不扩展、不新增联动能力。
-- DNS stream 暂时冻结：本轮不并入 `DIAGNOSTICS.*`，不扩展，也不删除；后续整理 Domain/DNS 线时重新设计。
+- DNS stream 暂时冻结：本轮不并入 `DIAGNOSTICS.*`，不扩展、不删除、不桥接；当前前端不调用它，只要不调用且不影响 packet hot path，就不纳入 packet-side 重构范围。后续整理 Domain/DNS 线时重新设计。
 - 单次诊断只开启一个 channel，不支持同时开启 packet + DNS 的组合 session。
 - Packet diagnostics 删除 `suppressed notice`；新模型按 UID 显式诊断，其他 UID 不属于 scope，不需要按旧 tracked-stream 模型报告 suppressed traffic。
 - Packet diagnostics 保留 `dropped notice`，仅表示诊断通道自身因 bounded queue / consumer 慢等原因丢失诊断事件。
@@ -252,19 +251,24 @@
 
 ### 3. Hot-path Capability Summary / Advanced Prefilter
 
-需要讨论：
-- primary mask bit 分区。
-- secondary masks 的结构。
-- Basic / Stateful / DPI / Resolved-IP 的 PacketFacts-only prefilter。
-- 如何避免每个模块重复判断自己是否工作。
-- capability summary 的 subject 粒度。
+状态：合成模型、CT 当前范围、secondary mask 与 Base/CT pipeline 已收口；后续可以进入 implementation work-item 拆分。已归属 primary bit 的最终常量命名属于实现命名问题，不作为概念未决专题。
 
 当前状态：
 - 64-bit primary mask 已确认。
-- DPI 只占 primary 里的粗粒度 `needsDpi` bit。
-- 允许 lazy secondary masks。
+- 两层合成模型已确认：packet path 使用 `primary = GlobalHotPathCaps.primary | SubjectHotPathCaps.primary`，且这个 OR 是唯一的 hot-path 合成规则。
+- 不引入 `PacketPlan`、`globalEnableMask`、clear mask 或第三层 runtime plan；component gates 在 caps 生成 / 发布边界解决，disabled consumer 不贡献 bit，packet path 不对 `global | subject` 做二次过滤。
+- v1 policy stage bits 固定为 `hasIfaceBlock`、`hasBasicIprules`、`hasStatefulIprules`、`hasDpiPolicy`、`hasResolvedIpPolicy`；`defaultAllow` 是 fallback，不分配 primary bit。
+- `hasIfaceBlock` 归 `GlobalHotPathCaps`，表示全局 pipeline 可能需要运行 Interface policy / `IFACE_BLOCK` stage；具体命中仍由 stage evaluator 使用 packet iface / direction / hook / app-interface evidence 判断，不进入 `SubjectHotPathCaps`。
+- 第一轮 implementation scope 必须覆盖当前已有的 CT / Stateful IPRULES 能力：仓库已经支持 `ct.*` 规则，因此 `needsCt` / CT acquisition / `CtFacts` / Stateful stage 不是 future placeholder。
+- DPI / L7 相关 bit、view、secondary detail 只作为后续专题的预留边界；当前不要求实现 DPI classifier、DPI result schema 或 DPI policy evaluator。
+- 除 `hasIfaceBlock` 外，policy stage bits 第一版归 `SubjectHotPathCaps`：`hasBasicIprules` 来自 active `basicView` consumer；`hasStatefulIprules` 来自实际 CT-consuming active `statefulView` consumer；`hasDpiPolicy` 后续来自 active DPI / L7 policy consumer；`hasResolvedIpPolicy` 来自 active Resolved-IP Policy consumer。
+- 后续 DPI 只占 primary 里的粗粒度 `needsDpi` bit。
+- DPI protocol、rule group、单条 rule 或 diagnostic field 不进入 primary mask。
+- 第一轮不实现 `ctDetail` secondary mask：当前 CT 对外策略事实只有 `ct.state` / `ct.direction`，`inspectForPolicy()` 一次产出完整 `CtFacts` / `PolicyView`，字段级 secondary 不能减少 CT acquisition 成本。`needsCt` primary bit 足够表达当前 CT / Stateful IPRULES 需求。
+- lazy secondary masks 只保留后续能力边界；`dpiDetail` / `assocDetail` 不属于当前实现范围。
 - capability summary 服务 stage/pipeline 调度，目标是在热路径上避免 Conntrack、DPI、Traffic Windows、Diagnostics 各模块重复做 subject/app lookup。
-- CT / DPI 是 subject/app 级高级能力 gate；不在同一 app 内按单条 CT 规则的 cheap precondition 决定每个 packet 是否进入 CT。
+- CT 是当前 subject/app 级高级能力 gate；不在同一 app 内按单条 CT 规则的 cheap precondition 决定每个 packet 是否进入 CT。DPI 后续实现时也走 subject/app 级高级能力 gate，并隐含 CT consumer。
+- Base / CT pipeline 已收口，不再作为 prefilter 未决项：Interface policy 与 Basic IPRULES 先基于 `PacketFacts` 评估；L1 `FinalBlock` 直接 block 且不进入 CT；L1 `FinalAllow` / observe-final-allow 不扫描 Stateful / DPI，但若 subject/app 有 CT consumer，仍更新统一 CT entry / flow attachments；只有 L1 `PassToAdvanced` 且 subject/app 需要 CT / advanced policy 时，才取得 `CtFacts` 并进入 Stateful IPRULES。DPI 是后续 stage；Resolved-IP Policy 是后置 fallback，不进入 IPRULES hot views。
 - Policy decision cache 第一版拆成 L1 Base cache 与 L2 Post-CT cache；L2 只处理 L1 `PassToAdvanced` 的 packet，不处理 L1 final allow / observe-final-allow。
 - L1/L2 cache entry 不能只保存 verdict，必须保存 rule attribution 与 stats handle，保证 cache hit 与重新扫描的 counters / diagnostics 归因一致。
 - L2 Post-CT cache 是 per-worker policy cache，不是 CT entry attachment；CT session 只保存 flow/session state 与 flow-level facts。
@@ -272,38 +276,42 @@
 
 ### 4. PacketFacts / Bounded Copy / Parser
 
-需要讨论：
+状态：已达到可拆任务状态；后续进入 implementation work-item 拆分，不再作为概念未决专题。
+
+已收口：
 - `512` bytes bounded copy 下的 parser 边界。
 - original IP packet bytes 的提取与校验。
 - IPv6 extension header walker 与预算。
 - `PacketFacts` 栈上模型。
 - 从 packet path 移除 Host materialization。
-
-当前状态：
 - bounded copy 第一版默认 `512` bytes。
 - bytes 口径为 original IP packet bytes，不是 copied prefix length。
+- `PacketFacts` endpoint / numeric representation 是 packet input 层 canonical shape：family + 16-byte network-order address buffer，IPv4 使用前 4 bytes 且其余归零；ports / remotePort / uid / userId / ifindex / original bytes 使用 host-order numeric value。
+- IPRULES、Conntrack、Telemetry、Traffic Windows、Diagnostics 只能从 `PacketFacts` 投影自己的 key / ABI shape，不能反向定义 packet input facts。
+- bounded copy / parser failure 降级保持 KISS：IP envelope 不可解析则不构造 `PacketFacts` 并 fail-open；IP 可解析但 L4 不完整/不可用则构造 `PacketFacts` 并标记 `l4Status` / `portsAvailable=false`，不伪造正常 L4 lifecycle。
+- packet-side 重构直接删除或替换旧 `tracked` packet state、generic `STREAM.*` packet 模型、replay prebuffer、suppressed notice、legacy `host/domain` join、`wouldRuleId/wouldDrop` 平行归因与旧 activity stream 状态，不做兼容桥。
+- DNS stream 冻结不动：本轮不并入 packet diagnostics，不扩展、不删除、不桥接；前端不调用且不影响 packet hot path 即可。
 
 ### 5. Domain-IP Association / Resolved-IP Policy / RDNS
 
-需要讨论：
-- Association store 的 TTL、cap、source、confidence。
-- DNS verdict producer 与未来 DNS observation producer 的接口。
-- batch lookup API。
-- Resolved-IP Policy stage 的输入与输出。
-- RDNS 后台队列、cache 与诊断接口。
+状态：模块边界已收口；仍待专题讨论的是存储参数、API schema 与诊断 evidence 细节，不再重新讨论它是否属于 DomainPolicy / IPRULES。
+
+仍待专题讨论：
+- Association store 的 TTL、cap、confidence / source metadata 与淘汰策略。
+- Domain-IP Association batch lookup 的具体 API schema。
+- Resolved-IP Policy 的诊断 evidence 与控制面 schema。
+- RDNS 后台队列、cache TTL / rate limit 与诊断接口。
 
 当前状态：
 - Domain-IP Association 独立 gate 已确认。
-- DNS Observation Source 只作为 future producer contract，不进当前第一轮实现。
-- RDNS 降级为诊断 enrichment。
+- Domain-IP Association 不是 DomainPolicy 自身，也不是 Basic IPRULES matcher；它支持 UI enrichment、debug evidence、Resolved-IP Policy 与 batch lookup。
+- 当前第一版 producer 可先接现有 DNS verdict path；DNS Observation Source 只作为 future producer contract，不进当前第一轮实现。
+- Resolved-IP Policy 是 Domain-IP Association 的可选 enforcement consumer，作为后置 fallback stage；它不进入 `basicView` / `statefulView` / `dpiView`。
+- RDNS 已降级为诊断 enrichment；不得在 packet verdict path 同步执行，不作为 association 主数据源，不参与 DomainPolicy / IPRULES verdict。
 
 ### 6. IPRULES Compiler 分层
 
-需要讨论：
-- Basic IPRULES 与 Stateful IPRULES 是否继续共用 engine。
-- CT-consuming / DPI-consuming rules 的 preflight 与 compile。
-- 高级规则如何拆 cheap precondition 与 expensive condition。
-- 前端如何得知某条规则会启用高级成本。
+状态：概念边界已收口；后续只拆具体 API schema、持久化格式、编译器实现 work items 与前端展示细节，不再重新讨论 Basic / Stateful 是否共用 compiler 或 hot views 如何分层。
 
 当前状态：
 - 概念上分 Basic / Stateful。
@@ -318,38 +326,44 @@
 - `dpiProjectionView4/6` / future `dpiView4/6` 先作为 DPI / L7 后续专题的架构占位和讨论基准；当前只确定 `dpi.*` 不污染 Basic / Stateful views，具体 DPI projection 字段、classifier 时机、result schema 与 cache 细节后置。
 - `compile-inactive` 只适用于规则本身通过 validation、且产品 / build / entitlement 支持该能力，但当前配置未启用对应 runtime capability 的情况。例如合法 active `dpi.*` 规则在 DPI 未开启时可 per-rule compile-inactive，整批 apply 仍可成功，其它规则进入新 snapshot。compile-inactive 规则可保留在后端规则组 / committed `RuleStore` / checkpoint 中，但不得降级编入 Basic / Stateful、不得参与 `SubjectHotPathCaps`、不得进入 hot views，也不得静默丢弃。runtime plane 必须等价于这条规则不存在：无 `RuleRef`、无 runtime stats、无 hit / would-hit counters、无 diagnostics/cache attribution、无扫描或 verdict 痕迹。响应必须带 `ruleId` / `clientRuleId`、compile status 与 reason 供前端展示。规则 validation 失败、产品 / build / entitlement 不支持或付费能力未授权时，apply / preflight 失败。
 - compiler / control plane 必须能报告每条 committed rule 的结构化 compile status，语义至少包含 `active`、`disabled`、`compile-inactive`；每条结果至少能稳定定位规则并携带 status / stable reason code。具体 API shape 后续 authoring/API 设计时再定。
+- Rule stage 由 compiler 根据规则引用的 facts 自动决定，不由用户显式指定：只引用 `PacketFacts` 的规则进入 Basic IPRULES，引用 `ct.*` 的规则进入 Stateful IPRULES，引用 `dpi.*` 的规则后续进入 DPI / L7 Policy。
+- 高级规则的 cheap precondition / expensive condition 拆分已经确定：cheap precondition 只用 `PacketFacts`；`ct.*` 规则的存在决定 subject/app 级 CT acquisition，不在同一 app 内按单条 CT 规则 cheap precondition 逐包决定是否进入 CT。
 
 ### 7. Conntrack / DPI 长期路线
 
-需要讨论：
-- Conntrack 作为高级 primitive 的生命周期与资源模型。
-- DPI 库 vendor / pin 策略。
-- DPI result 的稳定 ID、category、规则匹配方式。
-- libprotoident / nDPI 这类库如何通过 adapter 隔离。
-- 未来 FORWARD / hotspot gateway mode 的约束。
+状态：Conntrack 当前路线已收口；DPI / L7 与未来 FORWARD / hotspot gateway mode 是后续独立专题，不属于当前 CT / Stateful IPRULES 第一轮实现的未决项。
+
+仍待后续专题讨论：
+- DPI adapter / classifier 选型、vendor / pin 策略、稳定 protocol ID / category / rule matching schema。
+- `libprotoident` / nDPI 等库如何通过 adapter 隔离。
+- 未来 FORWARD / hotspot gateway mode 的 subject 扩展、ownership 与资源边界。
 
 当前状态：
 - Conntrack A++ runtime 在 A 方案内已选 baseline：自研专用 fixed-bucket intrusive CT table + 当前 specialized field-mix hash + `liburcu-qsbr`。
 - `liburcu-qsbr` 负责 read-side lifetime / deferred reclamation；`cds_lfht` 是通用 lock-free RCU hash table，只作为 benchmark / reference，不作为默认 CT 表。
 - C/owner handoff 与 NFQUEUE / userspace 分流仍是未来单独架构，不混入当前 A++ baseline。
-- DPI 需要二级 matcher。
-- 第三方库 enum ordinal 不应作为长期稳定 API。
+- Conntrack 不是未来 DPI；它是当前 `ct.*` / Stateful IPRULES 必须覆盖的能力。
+- DPI 当前只保留边界原则：后续需要二级 matcher；第三方库 enum ordinal 不应作为长期稳定 API；DPI result 绑定统一 CT entry，不维护独立 CT 表。
 
 ### 8. RuntimeService / 前端 Gate Contract
 
-需要讨论：
-- 哪些能力由普通 UI 长期启用。
-- 哪些能力只在诊断 session 开启。
-- 哪些配置 next-start-only，哪些可热更新。
-- 不同前端版本如何通过 gate 选择能力，而不是要求后端 product profile。
+状态：daemon lifecycle / component gate / product profile 边界已收口；仍待专题讨论的是前端产品默认值与跨能力 hot-update 矩阵。
+
+仍待专题讨论：
+- 哪些能力由普通 UI 长期启用，哪些只在诊断 session 开启。
+- 除已明确的能力外，其它配置哪些 next-start-only，哪些可热更新。
 
 当前状态：
+- RuntimeService 表达 native daemon lifecycle；`block.enabled` 是 daemon 内部 component / policy gate，不是 daemon lifecycle。
+- `nfqueue.topology` 属于 next-start-only：`CONFIG.SET` 不热重建当前 listener / iptables，前端表达用户意图，RuntimeService 负责 stop/start daemon、清理/重建 NFQUEUE hooks 并在启动后校验。
 - 后端不引入 Google Play / full build profile 枚举。
 - 前端版本通过启用 / 隐藏能力形成产品形态。
 
 ### 9. Measurement / Perf 验收矩阵
 
-需要讨论：
+状态：仍需整理具体验收矩阵；这是测试 / 验收专题，不是前述模块概念未决。
+
+仍待专题讨论：
 - baseline、Traffic Windows、CT、DPI、Domain-IP Association、Debug Stream 分别怎么测。
 - idle current、scheduler wakeups、NFQUEUE queue stats。
 - verdict p50 / p95 / p99。

@@ -320,6 +320,9 @@ void DnsListener::clientRun(const int socket) {
                 app->observeTrafficDns(blocked);
             }
 
+            // Frozen legacy DNS debug stream: do not extend or bridge during the
+            // packet-side diagnostics refactor. It stays untouched until the
+            // Domain/DNS diagnostics line is reopened.
             if (blockEnabled) {
                 if (tracked) {
                     if (ruleId.has_value()) {
