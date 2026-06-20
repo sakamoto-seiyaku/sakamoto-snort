@@ -136,24 +136,15 @@ void printHelp(std::ostream &out) {
            "  --max-frames <N>    Stop after printing N frames (response+events)\n"
            "  -h, --help          Show help\n"
            "\n"
-           "Command directory (vNext v1):\n"
+           "Command directory (SNORT-10 base):\n"
            "  Meta: HELLO, QUIT, RESETALL\n"
-           "  Inventory: APPS.LIST, IFACES.LIST\n"
-           "  Config: CONFIG.GET, CONFIG.SET\n"
-	           "  Domain: DOMAINRULES.GET/APPLY, DOMAINPOLICY.GET/APPLY, DOMAINLISTS.GET/APPLY/IMPORT\n"
-	           "  IP: IPRULES.PREFLIGHT/PRINT/APPLY\n"
-	           "  Checkpoint: CHECKPOINT.LIST/SAVE/RESTORE/CLEAR\n"
-	           "  Observability: METRICS.GET, METRICS.RESET, STREAM.START, STREAM.STOP\n"
-	           "\n"
+           "  Later module slices reintroduce inventory, config, policy, diagnostics, and metrics commands.\n"
+           "\n"
            "Examples:\n"
 	           "  sucre-snort-ctl --tcp 127.0.0.1:60607 hello\n"
 	           "  sucre-snort-ctl HELLO\n"
-           "  sucre-snort-ctl APPS.LIST '{\"query\":\"com.\",\"userId\":0,\"limit\":50}'\n"
-           "  sucre-snort-ctl --follow STREAM.START '{\"type\":\"dns\",\"horizonSec\":0,\"minSize\":0}'\n"
-           "  sucre-snort-ctl CHECKPOINT.SAVE '{\"slot\":0}'\n"
-           "  sucre-snort-ctl CHECKPOINT.RESTORE '{\"slot\":0}'\n"
-           "  sucre-snort-ctl IPRULES.APPLY @/tmp/iprules_apply.json\n"
-           "  cat /tmp/iprules_apply.json | sucre-snort-ctl IPRULES.APPLY -\n";
+           "  sucre-snort-ctl RESETALL\n"
+           "  sucre-snort-ctl QUIT\n";
 }
 
 std::optional<uint16_t> parseU16(const std::string_view token) {

@@ -98,6 +98,50 @@ clear_debugger_residue() {
     fi
 }
 
+daemon_process_names() {
+    printf '%s\n' "$PROC_NAME" "libsucre_snortd.so" "sucre-snort-ndk"
+}
+
+find_daemon_pids() {
+    local name
+    for name in $(daemon_process_names); do
+        adb_su "pidof $name 2>/dev/null || true" | tr -d '\r'
+    done | tr ' ' '\n' | awk 'NF' | sort -u
+}
+
+stop_existing_daemons() {
+    local name pid pids
+
+    pids="$(find_daemon_pids)"
+    for pid in $pids; do
+        clear_debugger_residue "$pid"
+    done
+
+    for name in $(daemon_process_names); do
+        adb_su "killall $name 2>/dev/null || true"
+    done
+
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pids="$(find_daemon_pids)"
+        if [[ -z "$pids" ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    pids="$(find_daemon_pids)"
+    if [[ -n "$pids" ]]; then
+        for pid in $pids; do
+            clear_debugger_residue "$pid"
+        done
+        echo "⚠️  进程未能在宽限期内退出，强制终止..."
+        for pid in $pids; do
+            adb_su "kill -9 $pid 2>/dev/null || true"
+        done
+        sleep 1
+    fi
+}
+
 show_help() {
     cat <<EOF
 用法: $0 [选项]
@@ -160,40 +204,21 @@ echo "二进制: $BINARY"
 echo "目标路径: $TARGET"
 echo ""
 
-echo "[1/6] 停止现有进程..."
-CURRENT_PID=$(adb_su "pidof $PROC_NAME 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)
-if [[ -n "$CURRENT_PID" ]]; then
-    clear_debugger_residue "$CURRENT_PID"
-fi
-adb_su "killall $PROC_NAME 2>/dev/null || true"
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if ! adb_su "pidof $PROC_NAME >/dev/null 2>&1" >/dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-done
-if adb_su "pidof $PROC_NAME >/dev/null 2>&1" >/dev/null 2>&1; then
-    CURRENT_PID=$(adb_su "pidof $PROC_NAME 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n' || true)
-    if [[ -n "$CURRENT_PID" ]]; then
-        clear_debugger_residue "$CURRENT_PID"
-    fi
-    echo "⚠️  进程未能在宽限期内退出，强制终止..."
-    adb_su "killall -9 $PROC_NAME 2>/dev/null || true"
-    sleep 1
-fi
-adb_su "rm -f /dev/socket/sucre-snort-control /dev/socket/sucre-snort-netd 2>/dev/null || true"
+echo "[1/5] 停止现有进程..."
+stop_existing_daemons
+adb_su "rm -f /dev/socket/sucre-snort-control /dev/socket/sucre-snort-control-vnext /dev/socket/sucre-snort-netd 2>/dev/null || true"
 
-echo "[2/6] 推送二进制文件..."
+echo "[2/5] 推送二进制文件..."
 adb_push_file "$BINARY" "$TARGET" 2>&1 | grep -E "pushed|[0-9]+ KB/s|[0-9]+ MB/s" || true
 
-echo "[3/6] 设置权限..."
+echo "[3/5] 设置权限..."
 adb_su "chmod 755 $TARGET"
 
 if [[ $CLEAR_LOG -eq 1 ]]; then
-    echo "[4/6] 清理旧日志..."
+    echo "[4/5] 清理旧日志..."
     adb_su "mkdir -p $LOG_DIR && : > $LOG"
 else
-    echo "[4/6] 保留现有日志..."
+    echo "[4/5] 保留现有日志..."
     adb_su "mkdir -p $LOG_DIR"
 fi
 
@@ -204,10 +229,10 @@ if [[ $STAGE_ONLY -eq 1 ]]; then
     exit 0
 fi
 
-echo "[5/6] 启动守护进程..."
+echo "[5/5] 启动守护进程..."
 adb_su "$TARGET >> $LOG 2>&1 &"
 
-echo "[6/6] 健康检查..."
+echo "=== 健康检查 ==="
 sleep 2
 
 ERRORS=0
@@ -221,23 +246,7 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
-echo -n "  控制 Socket: "
-if adb_su "ls /dev/socket/sucre-snort-control" >/dev/null 2>&1; then
-    echo "✓ 已创建"
-else
-    echo "❌ 未创建"
-    ERRORS=$((ERRORS + 1))
-fi
-
-echo -n "  DNS Socket: "
-if adb_su "ls /dev/socket/sucre-snort-netd" >/dev/null 2>&1; then
-    echo "✓ 已创建"
-else
-    echo "❌ 未创建"
-    ERRORS=$((ERRORS + 1))
-fi
-
-echo -n "  控制协议 HELLO: "
+echo -n "  vNext HELLO: "
 if request_vnext_hello; then
     echo "✓ OK"
 else
@@ -269,5 +278,5 @@ echo ""
 echo "=== 快速命令 ==="
 echo "实时日志:    ${ADB_BIN} -s $(adb_target_desc) shell su -c \"tail -f $LOG\""
 echo "进程状态:    ${ADB_BIN} -s $(adb_target_desc) shell su -c \"ps -AZ | grep sucre\""
-echo "Socket状态:  ${ADB_BIN} -s $(adb_target_desc) shell su -c \"ls -lZ /dev/socket/sucre*\""
+echo "vNext HELLO:  build-output/cmake/dev-debug/tests/host/sucre-snort-ctl --tcp 127.0.0.1:${CONTROL_FORWARD_PORT} HELLO"
 echo "诊断工具:    bash dev/dev-diagnose.sh --serial $(adb_target_desc)"

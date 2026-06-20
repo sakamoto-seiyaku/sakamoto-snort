@@ -120,9 +120,20 @@ if(SNORT_ENABLE_HOST_TESTS)
   )
     list(APPEND SNORT_HOST_TEST_ENV "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
   endif()
+  set(SNORT_HOST_TEST_PREFIX)
+  if(
+    CMAKE_CXX_FLAGS MATCHES "-fsanitize=address"
+    OR CMAKE_C_FLAGS MATCHES "-fsanitize=address"
+    OR CMAKE_EXE_LINKER_FLAGS MATCHES "-fsanitize=address"
+  )
+    find_program(SNORT_SETARCH_EXECUTABLE setarch)
+    if(SNORT_SETARCH_EXECUTABLE)
+      list(APPEND SNORT_HOST_TEST_PREFIX "${SNORT_SETARCH_EXECUTABLE}" "${CMAKE_SYSTEM_PROCESSOR}" "-R")
+    endif()
+  endif()
   add_custom_target(
     snort-host-tests
-    COMMAND "${CMAKE_COMMAND}" -E env ${SNORT_HOST_TEST_ENV} "${CMAKE_CTEST_COMMAND}" --output-on-failure -L host
+    COMMAND ${SNORT_HOST_TEST_PREFIX} "${CMAKE_COMMAND}" -E env ${SNORT_HOST_TEST_ENV} "${CMAKE_CTEST_COMMAND}" --output-on-failure -L host
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     COMMENT "Run sucre-snort host-side gtest lane via CTest"
     USES_TERMINAL
@@ -148,33 +159,6 @@ if(SNORT_ENABLE_HOST_TESTS)
     COMMAND "${CMAKE_COMMAND}" --build --preset host-ubsan-clang --target snort-host-tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Run sucre-snort host-side gtest lane with UBSAN via a dedicated preset"
-    USES_TERMINAL
-    VERBATIM
-  )
-
-  find_program(SNORT_SETARCH_EXECUTABLE setarch)
-  set(SNORT_TSAN_CONNTRACK_TEST "${CMAKE_SOURCE_DIR}/build-output/cmake/host-tsan-clang/tests/host/conntrack_tests")
-  if(SNORT_SETARCH_EXECUTABLE)
-    set(
-      SNORT_TSAN_CONNTRACK_COMMAND
-      "${SNORT_SETARCH_EXECUTABLE}" "${CMAKE_SYSTEM_PROCESSOR}" "-R"
-      "${CMAKE_COMMAND}" "-E" "env" "TSAN_OPTIONS=halt_on_error=1"
-      "${SNORT_TSAN_CONNTRACK_TEST}"
-    )
-  else()
-    set(
-      SNORT_TSAN_CONNTRACK_COMMAND
-      "${CMAKE_COMMAND}" "-E" "env" "TSAN_OPTIONS=halt_on_error=1"
-      "${SNORT_TSAN_CONNTRACK_TEST}"
-    )
-  endif()
-  add_custom_target(
-    snort-host-tests-tsan
-    COMMAND "${CMAKE_COMMAND}" --preset host-tsan-clang
-    COMMAND "${CMAKE_COMMAND}" --build --preset host-tsan-clang --target conntrack_tests
-    COMMAND ${SNORT_TSAN_CONNTRACK_COMMAND}
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Run Conntrack host stress tests with ThreadSanitizer"
     USES_TERMINAL
     VERBATIM
   )
@@ -292,7 +276,7 @@ endif()
 message(STATUS "sucre-snort repo-root workflow workspace configured")
 message(STATUS "Build/debug targets: snort-build-ndk, snort-deploy-stage, snort-debug-run-workflow, snort-debug-attach-workflow, snort-debug-cleanup, snort-debug-status")
 if(SNORT_ENABLE_HOST_TESTS)
-  message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-ubsan, snort-host-tests-tsan, snort-host-tests-gate")
+  message(STATUS "Host test targets: snort-host-tests, snort-host-tests-asan, snort-host-tests-ubsan, snort-host-tests-gate")
   if(TARGET snort-host-coverage)
     message(STATUS "Host coverage target: snort-host-coverage")
   endif()
@@ -300,7 +284,7 @@ else()
   message(STATUS "Host tests disabled: SNORT_ENABLE_HOST_TESTS=OFF")
 endif()
 if(SNORT_ENABLE_DEVICE_TESTS)
-  message(STATUS "Device test targets: snort-dx-smoke, snort-dx-smoke-platform, snort-dx-smoke-control, snort-dx-smoke-datapath, snort-dx-casebook-other")
+  message(STATUS "Device test targets: snort-dx-snort10-base")
 else()
   message(STATUS "Device tests disabled: SNORT_ENABLE_DEVICE_TESTS=OFF")
 endif()

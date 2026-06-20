@@ -109,7 +109,7 @@ set_target_properties(
 )
 target_include_directories(
   sucre-snort-ndk
-  PRIVATE "${CMAKE_SOURCE_DIR}/src"
+  PRIVATE ${SUCRE_SNORT_MAINLINE_INCLUDE_DIRS}
 )
 target_include_directories(
   sucre-snort-ndk
