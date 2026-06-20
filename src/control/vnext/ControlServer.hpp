@@ -5,19 +5,23 @@
 
 #pragma once
 
+#include <RuntimeControl.hpp>
+
 namespace SnortControlVNext {
 
 class ControlServer {
 public:
-    ControlServer() = default;
+    explicit ControlServer(SnortRuntime::BaseRuntimeControl &runtime);
     ControlServer(const ControlServer &) = delete;
     ControlServer &operator=(const ControlServer &) = delete;
 
     int run();
+    void serveClient(int clientFd);
 
 private:
     static int createAbstractListener();
-    static void serveClient(int clientFd);
+
+    SnortRuntime::BaseRuntimeControl &runtime_;
 };
 
 } // namespace SnortControlVNext

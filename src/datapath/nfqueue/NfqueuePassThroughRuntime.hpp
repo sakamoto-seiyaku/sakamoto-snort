@@ -7,7 +7,9 @@
 
 #include <NfqueueHookPlan.hpp>
 #include <NfqueueTopology.hpp>
+#include <RuntimeControl.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -100,16 +102,19 @@ private:
     return plan;
 }
 
-class DualStackPassThroughRuntime {
+class DualStackPassThroughRuntime final : public SnortRuntime::BaseRuntimeControl {
 public:
     explicit DualStackPassThroughRuntime(DualStackPassThroughRuntimeConfig config = {});
     ~DualStackPassThroughRuntime();
 
     [[nodiscard]] bool start();
+    [[nodiscard]] bool nfqueuePassThroughReady() const noexcept override;
+    [[nodiscard]] bool resetBaseRuntime() noexcept override;
 
 private:
     DualStackPassThroughRuntimeConfig config_;
     PassThroughWorkerGroup workers_;
+    std::atomic_bool ready_{false};
 };
 
 struct Ipv4PassThroughRuntimeConfig {

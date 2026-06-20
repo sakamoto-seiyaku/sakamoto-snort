@@ -35,13 +35,18 @@ vNext app selector（`args.app`）约定:
 
 说明格式: 命令 | 参数 | 返回 | 备注
 
+SNORT-20 / pre-SNORT-12 base note: the active reconstructed daemon currently
+supports only `HELLO`, `RESETALL`, and `QUIT`. Later sections describe the
+module contracts to use as those modules are reintroduced; commands outside the
+active base return `UNSUPPORTED_COMMAND`.
+
 2.1 通用（Meta）
 - `HELLO` | `{}` | `result={protocol,protocolVersion,framing,maxRequestBytes,maxResponseBytes,daemonBuildId,artifactAbi,capabilities[]}` |
   - `protocol="control-vnext"`，`protocolVersion=1`，`framing="netstring"`。
   - `daemonBuildId` / `artifactAbi` 用于前端诊断当前 daemon 与 native artifact 身份。
-  - `capabilities[]` 当前包含：`"control-vnext"`、`"nfqueue-datapath"`、`"apk-native-artifact"`、`"traffic-windows"`、`"packet-diagnostics"`。
+  - pre-SNORT-12 pass-through base capabilities: `"snort10-base"`，and `"nfqueue-pass-through"` once the base NFQUEUE pass-through runtime is ready. Later modules add their own capability strings when their command families are reintroduced.
 - `QUIT` | `{}` | `ok` | response 写出后关闭连接
-- `RESETALL` | `{}` | `ok` | 清空设置、统计、域名、规则、列表并持久化
+- `RESETALL` | `{}` | `ok` | pre-SNORT-12 base 仅复位或重装 base-owned NFQUEUE hook/listener/runtime state；不得恢复旧 APPS、CONFIG、IPRULES mutation、packet streams、domain state、checkpoints 或 metrics streams。
 
 2.2 清单（Inventory）
 - `APPS.LIST` | `{"query"?:string,"userId"?:u32,"limit"?:u32}` | `result={apps[],truncated}` |

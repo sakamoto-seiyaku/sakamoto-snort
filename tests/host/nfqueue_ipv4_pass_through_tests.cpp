@@ -54,6 +54,20 @@ public:
     std::vector<SnortDatapath::Nfqueue::IptablesCommand> commands;
 };
 
+class IdempotentCleanupFailingHookExecutor final
+    : public SnortDatapath::Nfqueue::HookCommandExecutor {
+public:
+    bool execute(const SnortDatapath::Nfqueue::IptablesCommand &command) override {
+        commands.push_back(command);
+        if (command.args.size() >= 2 && (command.args[1] == "-N" || command.args[1] == "-D")) {
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<SnortDatapath::Nfqueue::IptablesCommand> commands;
+};
+
 } // namespace
 
 TEST(NfqueueIpv4PassThroughTest, BuildsIpv4PassThroughHookPlan) {
@@ -270,6 +284,21 @@ TEST(NfqueueIpv4PassThroughTest, InstallerExecutesIpv4HookPlan) {
                   .args = {"-w", "-A", "sucre-snort_OUTPUT", "-j", "NFQUEUE", "--queue-bypass",
                            "--queue-num", "1"},
               }));
+}
+
+TEST(NfqueueIpv4PassThroughTest, InstallerIgnoresIdempotentCreateAndDeleteFailures) {
+    IdempotentCleanupFailingHookExecutor executor;
+    const auto queuePlan = makeNfqueueQueuePlan(NfqueueTopology::SplitInOut, 0, 2);
+
+    const bool installed = SnortDatapath::Nfqueue::installIpv4PassThroughHooks(
+        SnortDatapath::Nfqueue::HookPlanConfig{
+            .inputChain = "sucre-snort_INPUT",
+            .outputChain = "sucre-snort_OUTPUT",
+            .queuePlan = queuePlan,
+        },
+        executor);
+
+    EXPECT_TRUE(installed);
 }
 
 TEST(NfqueueDualStackPassThroughTest, InstallerExecutesDualStackHookPlan) {

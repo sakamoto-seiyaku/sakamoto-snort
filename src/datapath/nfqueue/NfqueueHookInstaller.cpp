@@ -9,10 +9,17 @@ namespace SnortDatapath::Nfqueue {
 
 namespace {
 
+bool isIdempotentSetupOrCleanup(const IptablesCommand &command) {
+    return command.args.size() >= 2 && (command.args[1] == "-N" || command.args[1] == "-D");
+}
+
 bool executePlan(const HookPlan &plan, HookCommandExecutor &executor) {
     bool ok = true;
     for (const auto &command : plan.commands) {
-        ok = executor.execute(command) && ok;
+        const bool commandOk = executor.execute(command);
+        if (!commandOk && !isIdempotentSetupOrCleanup(command)) {
+            ok = false;
+        }
     }
     return ok;
 }

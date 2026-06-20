@@ -13,6 +13,6 @@ int main() {
     SnortDatapath::Nfqueue::DualStackPassThroughRuntime datapath;
     (void)datapath.start();
 
-    SnortControlVNext::ControlServer server;
+    SnortControlVNext::ControlServer server(datapath);
     return server.run();
 }

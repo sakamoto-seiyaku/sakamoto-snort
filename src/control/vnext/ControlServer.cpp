@@ -8,21 +8,26 @@
 #include <ControlVNextCodec.hpp>
 #include <DaemonRuntime.hpp>
 #include <RuntimeConfig.hpp>
+#include <RuntimeControl.hpp>
 
 #include <rapidjson/document.h>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -53,7 +58,27 @@ bool writeAll(const int fd, const std::string_view bytes) {
     return true;
 }
 
-rapidjson::Document makeHelloResult() {
+int androidInitSocketFd(const char *const name) noexcept {
+    if (name == nullptr || *name == '\0') {
+        return -1;
+    }
+
+    const std::string envName = std::string("ANDROID_SOCKET_") + name;
+    const char *const value = std::getenv(envName.c_str());
+    if (value == nullptr || *value == '\0') {
+        return -1;
+    }
+
+    errno = 0;
+    char *end = nullptr;
+    const long fd = std::strtol(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || fd < 0 || fd > INT_MAX) {
+        return -1;
+    }
+    return static_cast<int>(fd);
+}
+
+rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runtime) {
     rapidjson::Document result(rapidjson::kObjectType);
     auto &alloc = result.GetAllocator();
 
@@ -79,18 +104,26 @@ rapidjson::Document makeHelloResult() {
 
     rapidjson::Value capabilities(rapidjson::kArrayType);
     capabilities.PushBack("snort10-base", alloc);
+    if (runtime.nfqueuePassThroughReady()) {
+        capabilities.PushBack("nfqueue-pass-through", alloc);
+    }
     result.AddMember("capabilities", capabilities, alloc);
 
     return result;
 }
 
-rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request) {
+rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
+                                    SnortRuntime::BaseRuntimeControl &runtime) {
     if (request.cmd == "HELLO") {
-        rapidjson::Document result = makeHelloResult();
+        rapidjson::Document result = makeHelloResult(runtime);
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 
     if (request.cmd == "RESETALL") {
+        if (!runtime.resetBaseRuntime()) {
+            return ControlVNext::makeErrorResponse(request.id, "RUNTIME_RESET_FAILED",
+                                                   "base runtime reset failed");
+        }
         return ControlVNext::makeOkResponse(request.id, nullptr);
     }
 
@@ -99,7 +132,7 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request) {
         return ControlVNext::makeOkResponse(request.id, nullptr);
     }
 
-    return ControlVNext::makeErrorResponse(request.id, "UNKNOWN_COMMAND",
+    return ControlVNext::makeErrorResponse(request.id, "UNSUPPORTED_COMMAND",
                                            "unsupported command in SNORT-10 base");
 }
 
@@ -117,6 +150,8 @@ bool sendDocument(const int fd, const rapidjson::Document &doc) {
 } // namespace
 
 namespace SnortControlVNext {
+
+ControlServer::ControlServer(SnortRuntime::BaseRuntimeControl &runtime) : runtime_(runtime) {}
 
 int ControlServer::createAbstractListener() {
     const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -195,7 +230,7 @@ void ControlServer::serveClient(const int clientFd) {
                 return;
             }
 
-            const auto response = dispatchRequest(request);
+            const auto response = dispatchRequest(request, runtime_);
             if (!sendDocument(clientFd, response)) {
                 return;
             }
@@ -207,28 +242,73 @@ void ControlServer::serveClient(const int clientFd) {
 }
 
 int ControlServer::run() {
-    const int serverFd = createAbstractListener();
-    if (serverFd < 0) {
+    std::vector<int> serverFds;
+
+    const int initFd = androidInitSocketFd(SnortConfig::kControlVNextSocketName);
+    if (initFd >= 0) {
+        if (::listen(initFd, SnortConfig::kControlListenBacklog) < 0) {
+            std::cerr << "control init socket listen failed: " << std::strerror(errno) << "\n";
+            ::close(initFd);
+            return 1;
+        }
+        serverFds.push_back(initFd);
+        std::cerr << "SNORT-10 base control listening on init socket "
+                  << SnortConfig::kControlVNextSocketName << "\n";
+    }
+
+    const int abstractFd = createAbstractListener();
+    if (abstractFd >= 0) {
+        serverFds.push_back(abstractFd);
+        std::cerr << "SNORT-10 base control listening on @"
+                  << SnortConfig::kControlVNextSocketName << "\n";
+    } else if (serverFds.empty()) {
         return 1;
     }
 
-    std::cerr << "SNORT-10 base control listening on @"
-              << SnortConfig::kControlVNextSocketName << "\n";
+    std::vector<pollfd> pollFds;
+    pollFds.reserve(serverFds.size());
+    for (const int fd : serverFds) {
+        pollFds.push_back(pollfd{.fd = fd, .events = POLLIN, .revents = 0});
+    }
 
     while (!SnortRuntime::shutdownRequested()) {
-        const int clientFd = ::accept(serverFd, nullptr, nullptr);
-        if (clientFd < 0) {
+        for (auto &pollFd : pollFds) {
+            pollFd.revents = 0;
+        }
+
+        const int ready = ::poll(pollFds.data(), pollFds.size(), -1);
+        if (ready < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            std::cerr << "control accept failed: " << std::strerror(errno) << "\n";
-            continue;
+            std::cerr << "control poll failed: " << std::strerror(errno) << "\n";
+            break;
         }
-        serveClient(clientFd);
-        ::close(clientFd);
+
+        for (const auto &pollFd : pollFds) {
+            if ((pollFd.revents & POLLIN) == 0) {
+                continue;
+            }
+
+            const int clientFd = ::accept(pollFd.fd, nullptr, nullptr);
+            if (clientFd < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                std::cerr << "control accept failed: " << std::strerror(errno) << "\n";
+                continue;
+            }
+            serveClient(clientFd);
+            ::close(clientFd);
+            if (SnortRuntime::shutdownRequested()) {
+                break;
+            }
+        }
     }
 
-    ::close(serverFd);
+    for (const int fd : serverFds) {
+        ::close(fd);
+    }
     return 0;
 }
 

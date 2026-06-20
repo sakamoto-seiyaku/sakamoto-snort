@@ -99,3 +99,17 @@ add_sucre_snort_host_test(
   control_vnext_codec_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlVNextCodec.cpp"
 )
+add_sucre_snort_host_test(
+  control_server_contract_tests
+  control_server_contract_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlServer.cpp"
+  "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/main/DaemonRuntime.cpp"
+)
+add_sucre_snort_host_test(
+  control_server_init_socket_tests
+  control_server_init_socket_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlServer.cpp"
+  "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlVNextCodec.cpp"
+  "${SUCRE_SNORT_ROOT}/src/main/DaemonRuntime.cpp"
+)

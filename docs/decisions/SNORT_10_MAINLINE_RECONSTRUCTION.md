@@ -33,27 +33,32 @@ The new active `src/` layout starts as a minimal root daemon base:
 
 ## Active Base Scope
 
-The active daemon in this baseline provides only enough behavior to build,
-run, and smoke-test the reconstructed process before packet datapath work
-starts:
+The active daemon in this baseline now provides the pass-through predecessor
+needed before SNORT-12 packet parsing work starts:
 
 - listens on abstract unix socket `@sucre-snort-control-vnext`;
+- accepts an inherited Android init socket named `sucre-snort-control-vnext`
+  when launched by init/service plumbing;
 - accepts control-vNext netstring JSON frames;
 - supports `HELLO`, `RESETALL`, and `QUIT`;
-- exposes `HELLO.capabilities=["snort10-base"]`;
-- runs host unit tests for isolated helpers and the control-vNext codec;
+- starts the dual-stack NFQUEUE pass-through hook/listener/verdict runtime;
+- exposes `HELLO.capabilities=["snort10-base","nfqueue-pass-through"]` once
+  pass-through runtime readiness is true;
+- runs host unit tests for isolated helpers, the control-vNext codec, the
+  pass-through runtime contract, and control socket launch paths;
 - provides one device smoke entry, `snort-dx-snort10-base`, for
-  `HELLO` / `RESETALL` / `QUIT`.
+  `HELLO` / `RESETALL` / `QUIT` plus pass-through hook readiness.
 
-`RESETALL` is intentionally a no-op in this base because no runtime policy,
-datapath state, stream state, CT table, telemetry producer, or authoring store
-has been reintroduced yet.
+`RESETALL` in this base only reinstalls or quiesces base-owned NFQUEUE
+hook/listener/runtime state. It must not restore old policy/config mutation,
+stream state, CT tables, telemetry producers, domain state, checkpoints, or an
+authoring store.
 
 ## Explicit Exclusions
 
 These are not part of this baseline and must not be pulled in implicitly:
 
-- NFQUEUE listener, packet verdict loop, bounded packet copy, or `PacketFacts`.
+- Bounded packet copy or `PacketFacts`.
 - Hot-path capability table, policy cache, or advanced prefilter.
 - CT runtime, CT hash table, `CtFacts`, or CT consumers.
 - Traffic Windows basic/detail tiers.
@@ -77,7 +82,9 @@ The planned implementation order remains:
 7. SNORT-18 PerfMetrics / Datapath Performance Indicators.
 8. SNORT-19 First-round Integration / Device Acceptance.
 
-SNORT-12 is the first module allowed to reintroduce packet-path execution.
+SNORT-12 is the first module allowed to reintroduce bounded packet copy,
+PacketFacts construction, parser status semantics, or non-pass-through packet
+processing.
 SNORT-14 is the first module allowed to reintroduce CT. SNORT-17 is the first
 module allowed to reintroduce policy mutation APIs.
 

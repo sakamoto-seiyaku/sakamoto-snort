@@ -20,6 +20,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -264,11 +265,12 @@ bool DualStackPassThroughRuntime::start() {
     const auto runtimePlan = makeDualStackPassThroughRuntimePlan(config_);
 
     SystemHookCommandExecutor executor;
-    (void)installDualStackPassThroughHooks(runtimePlan.hookPlan, executor);
+    const bool hooksInstalled = installDualStackPassThroughHooks(runtimePlan.hookPlan, executor);
 
     for (const auto listener : runtimePlan.listeners) {
         workers_.start([listener] { listenQueue(listener); });
     }
+    ready_.store(true, std::memory_order_release);
 
     std::cerr << "Dual-stack NFQUEUE pass-through listening on IPv4 queues "
               << runtimePlan.hookPlan.ipv4FirstQueue << ":"
@@ -276,7 +278,27 @@ bool DualStackPassThroughRuntime::start() {
               << " and IPv6 queues " << runtimePlan.hookPlan.ipv6FirstQueue << ":"
               << (runtimePlan.hookPlan.ipv6FirstQueue + runtimePlan.hookPlan.queuesPerFamily - 1)
               << "\n";
-    return true;
+    if (!hooksInstalled) {
+        std::cerr << "Dual-stack NFQUEUE pass-through hook reinstall reported failures\n";
+    }
+    return hooksInstalled;
+}
+
+bool DualStackPassThroughRuntime::nfqueuePassThroughReady() const noexcept {
+    return ready_.load(std::memory_order_acquire);
+}
+
+bool DualStackPassThroughRuntime::resetBaseRuntime() noexcept {
+    try {
+        const auto runtimePlan = makeDualStackPassThroughRuntimePlan(config_);
+        SystemHookCommandExecutor executor;
+        return installDualStackPassThroughHooks(runtimePlan.hookPlan, executor);
+    } catch (const std::exception &e) {
+        std::cerr << "Dual-stack NFQUEUE pass-through reset failed: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "Dual-stack NFQUEUE pass-through reset failed: unknown exception\n";
+    }
+    return false;
 }
 
 Ipv4PassThroughRuntime::Ipv4PassThroughRuntime(Ipv4PassThroughRuntimeConfig config)

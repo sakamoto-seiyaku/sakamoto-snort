@@ -128,6 +128,7 @@ assert r["protocol"] == "control-vnext"
 assert r["protocolVersion"] == 1
 assert r["framing"] == "netstring"
 assert "snort10-base" in r.get("capabilities", [])
+assert "nfqueue-pass-through" in r.get("capabilities", [])
 assert r["maxRequestBytes"] > 0
 assert r["maxResponseBytes"] > 0
 PY
@@ -139,6 +140,6 @@ echo "PASS: HELLO shape"
 
 assert_dual_stack_hooks
 assert_ipv4_traffic_best_effort
-assert_ok "RESETALL no-op" "$(ctl_cmd RESETALL)"
+assert_ok "RESETALL pass-through runtime" "$(ctl_cmd RESETALL)"
 assert_ok "QUIT" "$(ctl_cmd QUIT)"
 echo "dx-snort10-base: PASS"
