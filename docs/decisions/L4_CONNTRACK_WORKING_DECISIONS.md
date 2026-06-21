@@ -577,7 +577,7 @@ A++ 表结构约束：
 
 补充两条实现约束（与 OVS 语义一致）：
 - `ct.direction` 采用 **首包创建方向**（orig/reply）的口径；不做“端点排序/字典序归一化”式的重新定义。
-- conntrack key **包含 `uid`**（Android per-app firewall 语义），但 **不包含接口信息**（`ifindex/ifaceKind`），避免因接口切换把同一连接拆成多条 entry。
+- conntrack flow identity **不包含 `uid`**。complete Linux UID 属于 packet/session attribution 与 subject-scoped policy/caps 输入，不是 CT key 的一部分。CT 也 **不包含接口信息**（`ifindex/ifaceKind`），避免因接口切换把同一连接拆成多条 entry。Android per-app firewall 语义由 PacketFacts/subject caps/policy stage 处理，不通过把 UID 塞进 CT key 实现。
 
 补充两条“输入解析”约束（后续实现必须对齐 OVS 的需求强度）：
 - **TCP 不能只解析端口**：为了保持 OVS 级的 TCP conntrack 语义，conntrack core 必须获得 TCP header 的关键原始字段（至少包含 `flags/seq/ack/window/dataOffset`，并按需解析 `wscale` 选项与 payload length）。这些字段应在解析端口的同一阶段被提取出来并传给 conntrack update（不是让上层猜）。

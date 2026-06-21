@@ -14,6 +14,10 @@ _Avoid_: legacy control, `60606` as the current surface
 The configuration and debug surface for immediate daemon operations. It does not own long-term storage, high-cardinality analytics, or dashboard history.
 _Avoid_: analytics backend, history store
 
+**QUIT**:
+The vNext control-plane command for ending the current control session after its response is written. It is not Daemon lifecycle and must not be used as the native daemon process shutdown signal.
+_Avoid_: daemon shutdown, process stop, RuntimeService stop
+
 **Dataplane**:
 The runtime packet and DNS execution path that produces verdicts and maintains only bounded hot-path state.
 _Avoid_: storage layer, reporting backend
@@ -25,6 +29,18 @@ _Avoid_: UI directly managing the native daemon
 **Daemon lifecycle**:
 Whether the native daemon process is running under the Android-side service owner. It is separate from daemon feature gates such as policy or observability switches.
 _Avoid_: `block.enabled`, component gate, empty daemon mode
+
+**packet-pass-through**:
+The base runtime capability that means the daemon can receive hooked IPv4 and IPv6 packets through its current packet capture Adapter and fail-open accept them. It is not an NFQUEUE Implementation name, listener-thread-started signal, or best-effort hook state; hook installation failure or unavailable setup for either family means the capability is not ready.
+_Avoid_: `nfqueue-pass-through`, listener started, best-effort hook state, partial datapath readiness
+
+**HELLO capabilities**:
+The vNext `HELLO.capabilities[]` list of runtime capabilities that are currently usable by clients. Build-supported but failed, disabled, or not-ready capabilities are explained through Runtime health instead of appearing as usable capabilities.
+_Avoid_: build feature list, error channel, planned module list, development milestone names such as `snort10-base`
+
+**Runtime health**:
+Low-cardinality status for active daemon runtime capabilities that explains whether each owned runtime capability is `ok` or `error`. Its reason codes are diagnostic and may name the failing active Adapter; dual-stack runtime capabilities should expose per-family status when one family can fail independently. Control Plane may remain available to report runtime health even when a runtime capability failed startup.
+_Avoid_: capability list, metrics stream, telemetry records, daemon lifecycle
 
 **Component gate**:
 A daemon configuration switch that enables or disables a specific policy or observability component while the daemon process remains running.
@@ -87,8 +103,12 @@ Advanced IP packet rules that use L4 Conntrack state such as `ct.state` or `ct.d
 _Avoid_: ordinary IP rules, baseline packet policy
 
 **PacketFacts**:
-Packet-local facts derived once from NFQUEUE metadata and a bounded original-IP-packet prefix, shared by packet policy and observation consumers. PacketFacts do not contain domain hints, Conntrack state, or DPI identification results.
-_Avoid_: Host object, per-module parser state, Domain-IP Association facts
+Packet-local facts derived once from the active packet capture Adapter metadata and a bounded original-IP-packet prefix, shared by packet policy and observation consumers. PacketFacts do not contain domain hints, Conntrack state, DPI identification results, or Adapter-specific transport handles.
+_Avoid_: Host object, per-module parser state, Domain-IP Association facts, NFQUEUE-only facts
+
+**Packet capture Adapter**:
+The datapath input boundary that receives L3 IP packets from a concrete capture mode and supplies normalized packet metadata to PacketFacts construction.
+_Avoid_: policy engine, packet parser, verdict pipeline
 
 **CtFacts**:
 Conntrack-derived facts for the current packet and flow/session, such as `ct.state` and `ct.direction`, available only after the packet path enters L4 Conntrack. CtFacts are policy inputs, not an accepted-flow ledger.
@@ -151,7 +171,7 @@ A high-priority packet verdict caused by interface-kind mask policy, not by an I
 _Avoid_: IP rule block
 
 **L4 Conntrack**:
-The userspace connection state layer that provides flow identity, orig/reply direction, and `new/established/invalid` semantics for advanced policy and observation. It updates its own flow/session state once the packet path enters CT; it is not a baseline dependency, Traffic Windows dependency, or verdict-gated accepted-flow ledger.
+The userspace connection state layer that provides flow identity, orig/reply direction, and `new/established/invalid` semantics for advanced policy and observation. It updates its own flow/session state once the packet path enters CT; complete Linux UID is packet/session attribution used by subject-scoped policy and capability gates, not the CT flow identity. CT is not a baseline dependency, Traffic Windows dependency, or verdict-gated accepted-flow ledger.
 _Avoid_: packet cache, exact cache, accepted-flow ledger, Traffic Windows basic tier, ordinary-user default feature
 
 **ct consumer**:
@@ -183,6 +203,10 @@ _Avoid_: treating queue topology as a correctness guarantee
 **complete Linux UID**:
 The full Android UID including userId high bits and appId low bits. Core daemon identity uses complete Linux UID.
 _Avoid_: treating appId alone as a globally unique app identity
+
+**UID attribution**:
+The packet/session fact acquisition step that determines the complete Linux UID for a packet when the capture Adapter did not provide it directly. It is not TUN metadata and not CT flow identity; unknown attribution remains `uidKnown=false`.
+_Avoid_: guessing VPN app UID, appId-only attribution, CT key identity
 
 **appId**:
 The per-package Android app id portion of a UID. Multiple Android users may have distinct complete UIDs for the same appId.
@@ -321,8 +345,9 @@ The atomic operation that makes a selected checkpoint's Authoring Policy Bundle 
 _Avoid_: draft save, partial rollback, best-effort restore, recomputed apply status
 
 **RESETALL**:
-The full reset pipeline that returns daemon memory state, observation state, and persisted save tree to a clean baseline.
-_Avoid_: partial config reset, per-feature clear command
+The full reset pipeline that returns daemon memory state, observation state, configuration state, and persisted save tree to a clean baseline while the native daemon process remains under RuntimeService lifecycle ownership.
+If an active runtime owner cannot return its state to the clean baseline, the RESETALL command fails and the failure is also reflected in Runtime health.
+_Avoid_: daemon restart, daemon shutdown, process recycle, partial config reset, per-feature clear command, best-effort success
 
 **Policy state**:
 Verdict-affecting daemon state such as DomainPolicy, DomainLists, IPRULES, config gates, and checkpoint contents.
