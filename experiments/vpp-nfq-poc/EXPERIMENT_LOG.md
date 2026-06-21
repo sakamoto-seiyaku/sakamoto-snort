@@ -493,3 +493,135 @@ NOTES.md: 将 Next Checkpoint 从“先 clone/build VPP”改为“最小启动�
 ```sh
 DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
 ```
+
+### 24. 最小 VPP 启动第一次试跑
+
+新增文件：
+
+```text
+experiments/vpp-nfq-poc/configs/minimal-startup.conf
+experiments/vpp-nfq-poc/scripts/run-vpp-minimal.sh
+```
+
+启动命令：
+
+```sh
+/usr/bin/timeout 5s experiments/vpp-nfq-poc/scripts/run-vpp-minimal.sh
+```
+
+结果：
+
+```text
+exit code 124
+```
+
+解释：`timeout` 到 5 秒后发送 SIGTERM，VPP 收到 SIGTERM 后退出；这说明最小配置下 VPP 可以常驻运行，不是立即启动失败。
+
+观察到的非阻塞输出：
+
+```text
+pre-allocating 19 additional 2048K hugepages on numa node 0
+falling back to non-hugepage backed buffer pool
+vat_plugin_register: ... plugin not loaded
+received SIGTERM ... exiting
+```
+
+当前判断：
+
+```text
+hugepage fallback 不阻塞最小启动，但后续可以尝试用 buffers page-size default 收掉噪声。
+vat plugin 提示来自 plugin default disable 后 vat/vat2 侧仍扫描注册，不阻塞最小启动。
+```
+
+### 25. 最小启动配置收掉 hugepage fallback
+
+配置调整：
+
+```text
+minimal-startup.conf 增加 buffers { page-size default }
+```
+
+再次执行：
+
+```sh
+/usr/bin/timeout 5s experiments/vpp-nfq-poc/scripts/run-vpp-minimal.sh
+```
+
+结果：
+
+```text
+exit code 124
+```
+
+观察：
+
+```text
+hugepage prealloc/fallback 输出消失。
+仍有 vat_plugin_register: ... plugin not loaded 提示。
+VPP 收到 timeout SIGTERM 后正常退出。
+```
+
+当前判断：最小 VPP 启动已经可重复；后续 idle CPU 采样可以用这个 config 作为基线。
+
+### 26. 最小 VPP idle CPU 采样
+
+新增脚本和 target：
+
+```text
+scripts/run-vpp-idle-cpu.sh
+make vpp-idle-cpu
+```
+
+第一次采样方法：
+
+```text
+ps -L -p <pid> -o pid,tid,psr,pcpu,comm
+```
+
+结果约为：
+
+```text
+23.5%, 16.0%, 12.9%, 10.6%, 9.5%
+```
+
+问题：`ps %CPU` 是进程生命周期平均值，会被 VPP 启动阶段拉高，不能代表 idle 稳态。
+
+脚本调整：改用 `/proc/<pid>/task/<tid>/stat` 的 `utime+stime` tick delta 计算瞬时 CPU，并增加 `WARMUP=3`。
+
+在没有 `poll-sleep-usec` 时，瞬时 idle 约为：
+
+```text
+2.956%, 2.978%, 3.973%, 2.978%, 2.979%
+```
+
+配置调整：
+
+```text
+unix { poll-sleep-usec 1000 }
+```
+
+再次采样结果：
+
+```text
+0.992%, 0.992%, 1.985%, 0.993%, 0.993%
+```
+
+当前判断：最小 VPP 在没有收发流量时不是单核 100% busy loop；通过 `poll-sleep-usec 1000` 可以把当前宿主上的 idle CPU 降到约 1% 单线程。后续 NFQUEUE adapter 仍要验证启用 fd/input node 后 idle 是否保持这个量级。
+
+### 27. 同步最小启动和 idle CPU 文档
+
+更新内容：
+
+```text
+README.md: 增加 make vpp-idle-cpu 入口和最小 VPP idle 结果。
+NOTES.md: 将 Next steps 更新为 nfqueue_poc 插件、VPP verdict smoke、NFQUEUE fd/input idle 复测。
+```
+
+当前明确结论：
+
+```text
+VPP v26.02 build 成功。
+最小 VPP 可以启动。
+最小 VPP 在 poll-sleep-usec 1000 下 idle 约 1% CPU，不是单核 100% busy loop。
+尚未验证 VPP NFQUEUE adapter 的收包/verdict/idle。
+```

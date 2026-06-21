@@ -22,6 +22,7 @@ make smoke-accept
 make smoke-drop
 make smoke-ratio
 make idle-cpu
+make vpp-idle-cpu
 ```
 
 Fetch upstream VPP `v26.02` into this experiment directory:
@@ -142,6 +143,28 @@ vpp v26.02-release built by root on f2a0f575d39a at 2026-06-21T14:45:41
 ```
 
 This proves upstream VPP can be built in this experiment lane. It still does not prove VPP can own NFQUEUE verdicts.
+
+## VPP Minimal Startup / Idle Result
+
+Minimal config:
+
+```text
+experiments/vpp-nfq-poc/configs/minimal-startup.conf
+```
+
+Run:
+
+```sh
+make vpp-idle-cpu
+```
+
+Observed with `poll-sleep-usec 1000`:
+
+```text
+vpp_main idle instantaneous CPU: about 1% on this host
+```
+
+This proves the minimal VPP process is not a DPDK-style single-core 100% busy loop in this configuration. It still needs to be re-tested after adding the NFQUEUE input path.
 
 ## Notes
 

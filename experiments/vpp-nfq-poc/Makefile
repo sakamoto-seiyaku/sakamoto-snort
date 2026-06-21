@@ -1,4 +1,4 @@
-.PHONY: build-smoke docker-build docker-shell fetch-vpp build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu setup-netns cleanup-netns collect-cpu
+.PHONY: build-smoke docker-build docker-shell fetch-vpp build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu setup-netns cleanup-netns collect-cpu
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
 
@@ -34,6 +34,9 @@ smoke-ratio:
 
 idle-cpu:
 	./scripts/run-idle-cpu.sh
+
+vpp-idle-cpu:
+	./scripts/run-vpp-idle-cpu.sh
 
 collect-cpu:
 	./scripts/collect-cpu.sh

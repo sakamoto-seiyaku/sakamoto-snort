@@ -111,10 +111,9 @@ VPP `v26.02` now builds successfully in the Docker lane.
 
 Next steps:
 
-1. Confirm minimal `vpp` startup from the install tree with an explicit runtime/config directory.
-2. Sample idle CPU for a no-interface/no-packet VPP process.
-3. Add the smallest `nfqueue_poc` plugin patch.
-4. Re-run accept/drop/ratio/idle cases through VPP.
+1. Add the smallest `nfqueue_poc` plugin patch.
+2. Re-run accept/drop/ratio/idle cases through VPP.
+3. Re-check idle CPU with NFQUEUE fd/input node enabled.
 
 ## VPP Source / Build Policy
 
@@ -155,3 +154,34 @@ Host version check:
 ```sh
 /usr/bin/timeout 5s experiments/vpp-nfq-poc/work/vpp/build-root/install-vpp-native/vpp/bin/vpp -v
 ```
+
+## Minimal Startup / Idle CPU
+
+Minimal startup config:
+
+```text
+experiments/vpp-nfq-poc/configs/minimal-startup.conf
+```
+
+The config disables runtime plugins by default and sets:
+
+```text
+buffers { page-size default }
+unix { poll-sleep-usec 1000 }
+```
+
+`buffers { page-size default }` avoids hugepage prealloc/fallback noise in this host experiment. `poll-sleep-usec 1000` reduces no-traffic idle CPU from roughly 3% to roughly 1% instantaneous CPU for the main VPP thread on this host.
+
+Run:
+
+```sh
+make vpp-idle-cpu
+```
+
+Current observed result:
+
+```text
+vpp_main idle instantaneous CPU: about 1% on this host
+```
+
+This is not yet the final answer for the NFQUEUE adapter. Re-check after the fd-ready NFQUEUE input node is enabled.

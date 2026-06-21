@@ -1,4 +1,5 @@
 /build/
 /work/
+/runtime/
 /results/*
 !/results/.gitkeep
