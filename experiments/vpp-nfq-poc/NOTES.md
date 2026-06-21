@@ -2,6 +2,8 @@
 
 Status: living notes for this throwaway experiment.
 
+For raw chronological execution notes, see `EXPERIMENT_LOG.md`.
+
 ## 2026-06-21 Baseline
 
 The plain C NFQUEUE smoke layer is viable inside Docker after adding:
@@ -105,10 +107,51 @@ The plugin must not set the node to permanent polling just to make NFQUEUE work.
 
 ## Next Checkpoint
 
-Before cloning/building VPP:
+VPP `v26.02` now builds successfully in the Docker lane.
 
-1. Commit the current smoke harness.
-2. Add VPP fetch/build scripts that place source and build output outside git-tracked files.
-3. Confirm upstream `v26.02` build dependencies in the same Docker image or a derived one.
-4. Add the smallest `nfqueue_poc` plugin patch.
-5. Re-run accept/drop/ratio/idle cases through VPP.
+Next steps:
+
+1. Confirm minimal `vpp` startup from the install tree with an explicit runtime/config directory.
+2. Sample idle CPU for a no-interface/no-packet VPP process.
+3. Add the smallest `nfqueue_poc` plugin patch.
+4. Re-run accept/drop/ratio/idle cases through VPP.
+
+## VPP Source / Build Policy
+
+VPP source and build output stay inside the experiment directory but outside git tracking by default:
+
+```text
+experiments/vpp-nfq-poc/work/vpp
+```
+
+Fetch command:
+
+```sh
+DOCKER_NETWORK=bridge ./scripts/run-container.sh make fetch-vpp
+```
+
+Build command:
+
+```sh
+DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
+```
+
+Do not commit the VPP source tree or build output. `work/` is ignored. If later we need a plugin patch, keep it as a small patch or source overlay under this experiment directory.
+
+Installed binary after a successful build:
+
+```text
+experiments/vpp-nfq-poc/work/vpp/build-root/install-vpp-native/vpp/bin/vpp
+```
+
+Installed plugin example:
+
+```text
+experiments/vpp-nfq-poc/work/vpp/build-root/install-vpp-native/vpp/lib/x86_64-linux-gnu/vpp_plugins/snort_plugin.so
+```
+
+Host version check:
+
+```sh
+/usr/bin/timeout 5s experiments/vpp-nfq-poc/work/vpp/build-root/install-vpp-native/vpp/bin/vpp -v
+```

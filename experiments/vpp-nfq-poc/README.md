@@ -24,6 +24,26 @@ make smoke-ratio
 make idle-cpu
 ```
 
+Fetch upstream VPP `v26.02` into this experiment directory:
+
+```sh
+DOCKER_NETWORK=bridge ./scripts/run-container.sh make fetch-vpp
+```
+
+Build VPP after optionally installing upstream dependencies:
+
+```sh
+DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
+```
+
+The VPP source tree defaults to:
+
+```text
+experiments/vpp-nfq-poc/work/vpp
+```
+
+Override with `VPP_WORK_ROOT` or `VPP_DIR`.
+
 The smoke scripts create a temporary veth pair:
 
 ```text
@@ -98,8 +118,34 @@ Observed metadata in this container:
 
 This proves the Linux/Docker NFQUEUE harness is viable enough to proceed to a VPP adapter POC. It does not yet prove anything about VPP plugin correctness.
 
+## VPP Build Result
+
+Last run: 2026-06-21, upstream VPP `v26.02`.
+
+Observed:
+
+- `make build-vpp`: passed inside Docker with `DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default VPP_INSTALL_DEPS=1 JOBS=4`.
+- `bin/vpp` was linked and installed.
+- `snort_plugin.so`, `af_packet_plugin.so`, `af_xdp_plugin.so`, `tap_plugin.so`, and `dpdk_plugin.so` were linked.
+- `vpp -v` works on the host from the install tree.
+
+Installed binary:
+
+```text
+experiments/vpp-nfq-poc/work/vpp/build-root/install-vpp-native/vpp/bin/vpp
+```
+
+Version output:
+
+```text
+vpp v26.02-release built by root on f2a0f575d39a at 2026-06-21T14:45:41
+```
+
+This proves upstream VPP can be built in this experiment lane. It still does not prove VPP can own NFQUEUE verdicts.
+
 ## Notes
 
 - Run this in Docker first. Running NFQUEUE experiments directly on a host can affect local networking if the rule is changed incorrectly.
 - The smoke program does not call `nfq_unbind_pf()` unless explicitly passed `--unbind-existing`.
 - The VPP source tree, build output, core files, and packet captures must not be committed here.
+- Raw chronological experiment notes are kept in `EXPERIMENT_LOG.md`.

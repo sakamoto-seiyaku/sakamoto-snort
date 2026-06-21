@@ -1,4 +1,4 @@
-.PHONY: build-smoke docker-build docker-shell smoke-accept smoke-drop smoke-ratio idle-cpu setup-netns cleanup-netns collect-cpu
+.PHONY: build-smoke docker-build docker-shell fetch-vpp build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu setup-netns cleanup-netns collect-cpu
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
 
@@ -10,6 +10,12 @@ docker-build:
 
 docker-shell:
 	./scripts/run-container.sh bash
+
+fetch-vpp:
+	./scripts/fetch-vpp.sh
+
+build-vpp:
+	./scripts/build-vpp.sh
 
 setup-netns:
 	./scripts/setup-netns.sh up

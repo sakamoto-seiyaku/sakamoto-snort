@@ -8,6 +8,7 @@ RUN apt-get update \
     build-essential \
     ca-certificates \
     curl \
+    git \
     iproute2 \
     iptables \
     iputils-ping \
@@ -18,6 +19,8 @@ RUN apt-get update \
     nftables \
     pkg-config \
     procps \
+    python3 \
+    sudo \
     tcpdump \
   && rm -rf /var/lib/apt/lists/*
 
