@@ -144,7 +144,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-30] Policy Bundle Checkpoints 已覆盖 pre-SNORT-10 后端固定槽位 checkpoint / rollback 原语；SNORT-10 Authoring Layer 以 latest-five Checkpoint / Runtime Snapshot 模型为新目标。
 - [DONE 2026-04-30] NDK r29 root daemon workflow 已成为当前 daemon build/deploy/debug 基线；后续 APK/RuntimeService 集成不再依赖 Android source / Soong daemon 路径。
 - [NOTE] OpenSpec 工作流已归档；下一步应先讨论并选定产品/工程方向，再在 Plane 中创建 work item 或更新相应设计文档。
-- [NOW] SNORT-10 mainline reconstruction：旧 `src/` 已归档为 `archive/current-head/src/`，新 active `src/` 只保留 pre-SNORT-12 daemon/control base；旧 legacy control 与旧 direct mutation surface 不进入 active build。边界见 `docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`。
+- [NOW] SNORT-10 mainline reconstruction：旧 `src/` 已归档为 `archive/current-head/src/`，新 active `src/` 只保留 pre-SNORT-12 daemon/control/NFQUEUE pass-through base；旧 legacy control 与旧 direct mutation surface 不进入 active build。边界见 `docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`。
 
 ### 3.2 候选 A：前端 / RuntimeService handoff（偏产品集成）
 
@@ -162,7 +162,7 @@ Status 口径（全篇统一）：
 ### 3.4 候选 C：后端能力扩展（偏新能力）
 
 - [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、历史 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
-- [NEXT] SNORT-10 implementation issue split：当前代码基线先停在 SNORT-12 之前；接下来从 `SNORT-12 Packet Datapath Foundation` 与 `SNORT-13 Hot-Path Capability and Policy Cache` 拆 tracer-bullet issues，再进入 `SNORT-14 Conntrack A++ Runtime`。涉及 IPRULES mutation/control 的切片必须等 `SNORT-17 IPRULES Authoring Layer v1` 按 Authoring Layer 模型拆分，不得回到旧 direct `IPRULES.APPLY` 目标。CT A++ 仍按 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 第 7.8 / 7.9 节实现 A 方案内 baseline，但不作为第一张 implementation issue 的起点。
+- [NEXT] SNORT-10 implementation issue split：当前代码基线先停在 SNORT-12 之前；pre-SNORT-12 base owns deploy/start, `HELLO`/`RESETALL`/`QUIT`, and dual-stack NFQUEUE pass-through acceptance. SNORT-12 starts the packet datapath foundation only at bounded copy, PacketFacts, parser statuses, and the packet processor seam. 接下来从 `SNORT-12 Packet Datapath Foundation` 与 `SNORT-13 Hot-Path Capability and Policy Cache` 拆 tracer-bullet issues，再进入 `SNORT-14 Conntrack A++ Runtime`。涉及 IPRULES mutation/control 的切片必须等 `SNORT-17 IPRULES Authoring Layer v1` 按 Authoring Layer 模型拆分，不得回到旧 direct `IPRULES.APPLY` 目标。CT A++ 仍按 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md` 第 7.8 / 7.9 节实现 A 方案内 baseline，但不作为第一张 implementation issue 的起点。
 - [CANDIDATE] NFQUEUE topology / userspace handoff experiments：`shared-flow-pool`、per-flow owner / handoff、或其它 flow steering 方案只能作为 CT A++ baseline 之后的 perf / contention 变量；不得作为 CT correctness 前提，也不得把 C/owner handoff 混入当前 A 方案实现。
 - [CANDIDATE] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
 - [CANDIDATE] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。

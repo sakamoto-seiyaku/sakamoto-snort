@@ -5,6 +5,7 @@
 ## 当前入口
 
 repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
+- `dx-snort10-base` / target `snort-dx-snort10-base`（pre-SNORT-12 NFQUEUE pass-through base acceptance；deploy/start + restart；vNext-only）
 - `dx-smoke`（DX smoke 总入口；固定顺序 `platform -> control -> datapath`；vNext-only）
 - `dx-smoke-platform`（平台 gate；vNext-only）
 - `dx-smoke-control`（vNext 控制面基线；vNext-only）
@@ -13,6 +14,8 @@ repo-root CMake workspace 已暴露 lane 级 `CTest` 入口：
 - `dx-diagnostics-perf-network-load`（真机真实下载负载下的 perf metrics 观测；vNext-only）
 
 对应到底层脚本仍然是：
+- `tests/integration/dx-snort10-base.sh`
+  - pre-SNORT-12 base gate：部署/启动 NDK daemon，校验 `HELLO` capability、IPv4/IPv6 hooks where available、traffic pass-through、`RESETALL`、`QUIT` 后无 stale daemon process，并重新部署验证 restart readiness
 - `tests/integration/dx-smoke.sh`
   - 总入口（只做聚合与顺序 gate）
 - `tests/integration/dx-smoke-platform.sh`
@@ -74,6 +77,9 @@ cmake --preset dev-debug -DSNORT_ENABLE_DEVICE_TESTS=ON
 
 # DX smoke gate（repo-root CTest 入口）
 cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke$
+
+# pre-SNORT-12 base gate
+cmake --build --preset dev-debug --target snort-dx-snort10-base
 
 # 分段入口（按需）
 cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-smoke-platform$

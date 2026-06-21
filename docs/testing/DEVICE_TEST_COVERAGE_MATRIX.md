@@ -44,6 +44,19 @@ Archive（仅回查；不算 active 覆盖）：
 
 ## 2) 覆盖矩阵
 
+### 2.0 pre-SNORT-12 Base Gate
+
+`snort-dx-snort10-base` is the acceptance gate for the reconstructed base before
+SNORT-12 starts. It covers deploy/start, `HELLO` with `nfqueue-pass-through`,
+IPv4 hooks, IPv6 hooks where `ip6tables` exists, best-effort IPv4/IPv6 traffic
+pass-through, `RESETALL`, `QUIT`, no stale daemon process after shutdown, and
+redeploy/restart readiness. The accepted verification path keeps
+`snort-host-tests-gate` and `snort-build-ndk` ahead of this real-device gate.
+
+SNORT-12 remains limited to bounded copy, PacketFacts, parser statuses, and the
+packet processor seam. It must not be used as the first point where basic
+NFQUEUE hook/listener/pass-through plumbing becomes accepted.
+
 ### 2.1 Smoke 覆盖矩阵（Device / DX）
 
 | Feature / 断言点 | `dx-smoke-platform` (`tests/integration/dx-smoke-platform.sh`) | `dx-smoke-control` (`tests/integration/vnext-baseline.sh`) | `dx-smoke-datapath` (`tests/device/ip/run.sh --profile smoke`) | Host gtest（参考；不等同真机覆盖） |

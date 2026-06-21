@@ -101,6 +101,9 @@ cmake --build --preset host-coverage-clang --target snort-host-coverage
 ```bash
 cmake --preset dev-debug -DSNORT_ENABLE_DEVICE_TESTS=ON
 
+# pre-SNORT-12 base gate: deploy/start + NFQUEUE pass-through acceptance
+cmake --build --preset dev-debug --target snort-dx-snort10-base
+
 # 总入口（固定顺序：platform -> control -> datapath）
 cmake --build --preset dev-debug --target snort-dx-smoke
 
@@ -118,6 +121,7 @@ cd build-output/cmake/dev-debug && ctest --output-on-failure -R ^dx-diagnostics-
 ```
 
 说明：
+- pre-SNORT-12 base acceptance path is `snort-host-tests-gate` -> `snort-build-ndk` -> `snort-dx-snort10-base`. The base gate deploys the NDK daemon, verifies `HELLO` advertises `nfqueue-pass-through`, checks IPv4/IPv6 hooks where available, verifies pass-through traffic, sends `RESETALL`/`QUIT`, asserts no stale daemon process remains, and redeploys for restart readiness.
 - `dx-smoke-control` 复用 `tests/integration/vnext-baseline.sh`（vNext-only）。
 - `dx-smoke-datapath` 调用 `tests/device/ip/run.sh --profile smoke`（vNext-only）。
 - diagnostics 主入口：`dx-diagnostics` / `dx-diagnostics-perf-network-load`（vNext-only）。

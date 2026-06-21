@@ -37,3 +37,7 @@ add_custom_target(
 if(TARGET sucre-snort-ctl)
   add_dependencies(snort-dx-snort10-base sucre-snort-ctl)
 endif()
+
+if(TARGET snort-build-ndk)
+  add_dependencies(snort-dx-snort10-base snort-build-ndk)
+endif()

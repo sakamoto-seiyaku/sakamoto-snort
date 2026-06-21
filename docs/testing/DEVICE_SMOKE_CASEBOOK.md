@@ -105,6 +105,33 @@ Diagnostics（现在只有 1 条聚合脚本）：
 - 无
 
 ---
+### Case 2a：pre-SNORT-12 NFQUEUE pass-through base gate
+**目的**
+- 把 SNORT-12 之前的重建基线验收为真实 NFQUEUE pass-through daemon foundation。
+
+**Given**
+- rooted 真机、adb 可用。
+- host 侧已构建 `sucre-snort-ctl`，并可构建 NDK daemon artifact。
+
+**When**
+- 跑 `snort-host-tests-gate` -> `snort-build-ndk` -> `snort-dx-snort10-base`。
+
+**Then（期望输出）**
+- NDK daemon 被部署并启动，且只有一个 active daemon process。
+- `HELLO.capabilities[]` 包含 `snort10-base` 与 `nfqueue-pass-through`。
+- IPv4 hooks 存在；如果设备提供 `ip6tables`，IPv6 hooks 也存在。
+- IPv4 traffic pass-through 成功；如果设备具备 IPv6 route/ping 能力，IPv6 traffic pass-through 成功。
+- `RESETALL` 只重装 base-owned pass-through runtime state。
+- `QUIT` 后没有 stale daemon process；重新部署后 `HELLO` 仍通过。
+
+**现有覆盖**
+- `tests/integration/dx-snort10-base.sh`
+- CMake target: `snort-dx-snort10-base`
+
+**边界**
+- SNORT-12 才开始 bounded copy、PacketFacts、parser statuses、packet processor seam；本 case 不要求也不允许把这些工作提前塞进 base gate。
+
+---
 
 ### Case 3：pre-SNORT-10 Stream 基本机制可用（activity；frozen current-head evidence）
 **目的**
