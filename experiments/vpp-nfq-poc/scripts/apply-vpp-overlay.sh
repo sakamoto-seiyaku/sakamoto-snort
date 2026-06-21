@@ -12,6 +12,11 @@ if [ ! -d "$VPP_DIR/src" ]; then
   exit 1
 fi
 
+if [ ! -w "$VPP_DIR/src/plugins/nfqueue_poc/CMakeLists.txt" ] &&
+  [ "${INSIDE_VPP_NFQ_CONTAINER:-0}" != "1" ]; then
+  exec "$SCRIPT_DIR/run-container.sh" env INSIDE_VPP_NFQ_CONTAINER=1 ./scripts/apply-vpp-overlay.sh
+fi
+
 cp -R --no-preserve=ownership,timestamps "$OVERLAY_DIR/src/." "$VPP_DIR/src/"
 
 echo "Applied overlay to $VPP_DIR"
