@@ -625,3 +625,474 @@ VPP v26.02 build 成功。
 最小 VPP 在 poll-sleep-usec 1000 下 idle 约 1% CPU，不是单核 100% busy loop。
 尚未验证 VPP NFQUEUE adapter 的收包/verdict/idle。
 ```
+
+### 28. 开始 `nfqueue_poc` overlay，宿主写入 VPP tree 权限失败
+
+新增 overlay：
+
+```text
+experiments/vpp-nfq-poc/overlay/src/plugins/nfqueue_poc/
+experiments/vpp-nfq-poc/scripts/apply-vpp-overlay.sh
+make apply-vpp-overlay
+```
+
+首次在宿主执行：
+
+```sh
+make -C experiments/vpp-nfq-poc apply-vpp-overlay
+```
+
+失败：
+
+```text
+cp: cannot create directory '.../work/vpp/src/./plugins/nfqueue_poc': Permission denied
+cp: preserving times for '.../work/vpp/src/./plugins': Operation not permitted
+```
+
+原因：`work/vpp` 是之前 Docker 容器 root clone/build 出来的，宿主用户没有写权限。
+
+处理策略：不修改整个 VPP tree owner；后续用同一个 Docker lane 里的 root 执行 overlay apply/build：
+
+```sh
+DOCKER_CAP_PROFILE=default ./scripts/run-container.sh make apply-vpp-overlay
+```
+
+### 29. 容器 apply overlay 第二次失败：`cp -a` preserve ownership
+
+容器内执行：
+
+```sh
+./scripts/run-container.sh make apply-vpp-overlay
+```
+
+失败：
+
+```text
+cp: failed to preserve ownership for '.../nfqueue_poc/*.c': Operation not permitted
+```
+
+原因：`cp -a` 会保留 owner/timestamp，当前 bind mount 不允许容器对这些目标执行 chown/utime。
+
+处理：`apply-vpp-overlay.sh` 改为：
+
+```sh
+cp -R --no-preserve=ownership,timestamps "$OVERLAY_DIR/src/." "$VPP_DIR/src/"
+```
+
+### 30. overlay apply 成功
+
+命令：
+
+```sh
+./scripts/run-container.sh make apply-vpp-overlay
+```
+
+结果：
+
+```text
+Applied overlay to .../experiments/vpp-nfq-poc/work/vpp
+```
+
+下一步：运行 VPP 增量 build，验证 `nfqueue_poc` CMake 和 C 代码是否能编译。
+
+### 31. overlay 后第一次增量 build 失败：容器没有持久化 VPP build deps
+
+命令：
+
+```sh
+./scripts/run-container.sh env JOBS=4 make build-vpp
+```
+
+失败：
+
+```text
+/usr/bin/bash: line 1: cmake: command not found
+make[2]: *** [Makefile:644: vpp-configure] Error 127
+```
+
+原因：前一次 `VPP_INSTALL_DEPS=1` 是在一次性 Docker container 内安装 apt 包，容器退出后依赖没有固化到 `sakamoto-vpp-nfq-poc:dev` image。VPP build output 留在 bind mount，但重新 configure/build 仍需要 cmake/ninja/clang 等工具。
+
+处理策略：本轮先重跑带网络的 build lane：
+
+```sh
+DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
+```
+
+后续可选优化：把 VPP build deps 烘进专用 Docker image，避免每次增量 build 都重新 apt install。
+
+### 32. 子代理源码调查结论：原版无 NFQUEUE 插件，POC 先 CLI-only
+
+Pauli 调查结论：
+
+```text
+原版 VPP tree 里没有现成 libnetfilter_queue / nfq_* 插件。
+add_vpp_plugin() 支持 LINK_LIBRARIES。
+最小 CLI-only 插件不需要 .api、API_FILES、node、multiarch。
+```
+
+建议参考路径：
+
+```text
+src/plugins/snort/      外部队列/fd/回注关系最接近
+src/plugins/netmap/     简单 fd -> input node 参考
+src/plugins/af_packet/  新式 interface/rx queue/fd-ready 参考
+src/plugins/af_xdp/     新式 interface/rx queue/fd-ready 参考
+src/plugins/tap/        fd-ready/rx queue 参考
+src/plugins/memif/      fd-ready/connection lifecycle 参考
+```
+
+当前本轮 POC 选择：
+
+```text
+第一刀只做 CLI-only nfqueue_poc。
+VPP clib_file read callback 直接 drain NFQUEUE fd，并在 libnetfilter_queue callback 中直接 NF_ACCEPT/NF_DROP。
+暂不创建 VPP interface，不分配 vlib_buffer，不接 graph node。
+```
+
+原因：这个切片最小化变量，先验证 VPP 进程是否能持有 NFQUEUE fd 并给出 verdict。若通过，再进入 fd-ready -> input node -> buffer/graph 的第二刀。
+
+### 33. 重跑 build 命令位置错误：Docker env 传进了容器内
+
+错误命令：
+
+```sh
+./scripts/run-container.sh env DOCKER_NETWORK=bridge VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
+```
+
+失败：
+
+```text
+sudo: PERM_SUDOERS: setresuid(-1, 1, -1): Operation not permitted
+```
+
+原因：`DOCKER_NETWORK=bridge` 和 `DOCKER_CAP_PROFILE=default` 必须作为 `run-container.sh` 的宿主环境变量传入；放在 `env ... make build-vpp` 后面只会进入容器内部，不会影响 Docker run 参数。于是容器仍用了默认 `DOCKER_CAP_PROFILE=smoke`，cap-drop 下 sudo 失败。
+
+正确命令：
+
+```sh
+DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
+```
+
+### 34. 正确 build lane 已启动
+
+命令：
+
+```sh
+DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
+```
+
+当前状态：
+
+```text
+install-dep 重新开始。
+计划安装 229 个包，下载约 251 MB，解包约 1335 MB。
+```
+
+等待结果：依赖安装后会重新 configure/build VPP，并验证 `nfqueue_poc` overlay 是否被 CMake 发现和编译。
+
+### 35. overlay 插件随 VPP build 成功安装
+
+命令：
+
+```sh
+DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
+```
+
+结果：
+
+```text
+VPP build completed
+```
+
+安装产物确认：
+
+```text
+work/vpp/build-root/install-vpp-native/vpp/include/vpp_plugins/nfqueue_poc/nfqueue_poc.h
+work/vpp/build-root/install-vpp-native/vpp/lib/x86_64-linux-gnu/vpp_plugins/nfqueue_poc_plugin.so
+```
+
+结论：第一版 CLI-only `nfqueue_poc` overlay 已被 VPP CMake 发现，并完成编译、链接、安装。
+
+下一步：做更小的启动验证，确认 VPP 能加载 `nfqueue_poc_plugin.so`，并且 CLI 命令可见；之后再进入真正 NFQUEUE verdict smoke。
+
+### 36. 插件 CLI 检查前的运行时依赖检查
+
+目的：在真正跑 NFQUEUE 前，先验证 VPP 能加载 `nfqueue_poc_plugin.so`，并且 `show nfqueue-poc` CLI 可见。
+
+先检查主机依赖：
+
+```sh
+ldd work/vpp/build-root/install-vpp-native/vpp/lib/x86_64-linux-gnu/vpp_plugins/nfqueue_poc_plugin.so
+```
+
+结果：
+
+```text
+libnetfilter_queue.so.1 => not found
+```
+
+结论：主机不能直接加载这个插件，CLI/queue 验证应在实验 Docker image 中跑，因为 image 内已安装 `libnetfilter-queue-dev`。
+
+随后检查容器内 VPP 运行时依赖：
+
+```sh
+./scripts/run-container.sh ldd .../bin/vpp
+```
+
+结果：
+
+```text
+libunwind.so.8 => not found
+```
+
+处理：把 `libunwind8` 加入 `experiments/vpp-nfq-poc/Dockerfile`。这属于运行时依赖，不应该只依赖一次性 build container 里的 `make install-dep`。
+
+额外坑：`run-container.sh` 使用固定容器名 `sakamoto-vpp-nfq-poc`，并发执行两个 `run-container.sh` 会冲突：
+
+```text
+Conflict. The container name "/sakamoto-vpp-nfq-poc" is already in use
+```
+
+当前处理：后续容器实验串行执行。
+
+### 37. 增加插件 CLI 启动检查入口
+
+新增：
+
+```text
+configs/nfqueue-poc-startup.conf
+scripts/run-vpp-nfqueue-cli-check.sh
+make vpp-nfqueue-cli-check
+```
+
+检查范围：
+
+```text
+1. 用只启用 nfqueue_poc_plugin.so 的 startup config 启动 VPP。
+2. 等待 /tmp/sakamoto-vpp-nfq-poc/cli.sock 出现。
+3. 用 vppctl 执行 show plugins。
+4. 用 vppctl 执行 show nfqueue-poc。
+```
+
+当前状态：正在重建 Docker image，并运行：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-cli-check
+```
+
+### 38. 插件 CLI 检查第一次运行失败：results 目录权限
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-cli-check
+```
+
+失败点：
+
+```text
+./scripts/run-vpp-nfqueue-cli-check.sh: line 39:
+/work/sakamoto-snort/experiments/vpp-nfq-poc/results/vpp-nfqueue-cli-check.log:
+Permission denied
+```
+
+原因：`results/` 在宿主侧是 `0755 js:js`。当前 Docker 环境下容器 root 不能直接写这个 bind mount 目录。之前部分结果文件已有 `root:root`，说明这条路径容易产生权限不一致。
+
+处理：`run-container.sh` 在宿主侧启动容器前执行：
+
+```sh
+mkdir -p "$POC_DIR/results"
+chmod 0777 "$POC_DIR/results"
+```
+
+这样后续实验脚本可以稳定写入 `results/`。
+
+### 39. 插件 CLI 检查通过
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-cli-check
+```
+
+结果：
+
+```text
+1. nfqueue_poc_plugin.so  26.02-release  NFQUEUE verdict POC
+enabled 0 queue 0 mode accept-all drop-ratio 0 fd -1
+seen 0 accept 0 drop 0 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+```
+
+结论：
+
+```text
+VPP 可以加载 nfqueue_poc_plugin.so。
+CLI 注册成功：show nfqueue-poc 可用。
+当前还没有验证 nfqueue-poc enable、NFQUEUE fd、verdict、真实包通过/丢弃。
+```
+
+下一步：把已有 plain C NFQUEUE smoke 的 netns/iptables 拓扑复用起来，改为由 VPP 插件持有 queue 42 并给出 accept/drop/drop-ratio verdict。
+
+### 40. VPP NFQUEUE smoke 入口新增
+
+新增：
+
+```text
+scripts/run-vpp-nfqueue-smoke.sh
+make vpp-nfqueue-accept
+make vpp-nfqueue-drop
+make vpp-nfqueue-ratio
+```
+
+设计：
+
+```text
+1. 复用 setup-netns.sh 创建 nfq-host <-> nfq-peer，并插入 OUTPUT NFQUEUE 规则。
+2. 启动只加载 nfqueue_poc_plugin.so 的 VPP。
+3. vppctl: nfqueue-poc enable queue 42 mode <mode>。
+4. ping -I nfq-host -c 20 10.200.42.2。
+5. vppctl: show nfqueue-poc，读取 seen/accept/drop。
+6. 根据 mode 检查 ping 返回码和 VPP verdict 计数。
+```
+
+### 41. VPP NFQUEUE accept-all 第一次运行：功能通过，脚本断言失败
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-accept
+```
+
+实际包处理结果：
+
+```text
+20 packets transmitted, 20 received, 0% packet loss
+seen 20 accept 20 drop 0 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+```
+
+结论：VPP 插件已经能持有 NFQUEUE queue 42，并返回 `NF_ACCEPT` verdict。
+
+脚本失败点：
+
+```text
+./scripts/run-vpp-nfqueue-smoke.sh: line 114: ping_rc: unbound variable
+```
+
+原因：脚本主体包在 `{ ... } | tee "$LOG"` 管道里执行，`ping_rc` 在 subshell 中赋值，管道结束后外层 shell 读不到。
+
+处理：改为：
+
+```sh
+exec > >(tee "$LOG") 2>&1
+```
+
+主体流程不再放入管道，变量作用域保持在当前 shell。
+
+### 42. VPP NFQUEUE accept-all 重跑通过
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-accept
+```
+
+结果：
+
+```text
+20 packets transmitted, 20 received, 0% packet loss
+seen 20 accept 20 drop 0 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+ping_rc=0
+```
+
+结论：`accept-all` 路径完整通过。VPP 插件能接收 queue 42 上的 ICMP OUTPUT 包，并给出 `NF_ACCEPT` verdict。
+
+### 43. VPP NFQUEUE drop-all 通过
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-drop
+```
+
+结果：
+
+```text
+20 packets transmitted, 0 received, 100% packet loss
+seen 20 accept 0 drop 20 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+ping_rc=1
+```
+
+结论：`drop-all` 路径完整通过。VPP 插件给出的 `NF_DROP` verdict 会让对应 NFQUEUE 包被内核丢弃。
+
+### 44. VPP NFQUEUE drop-ratio=50 通过
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-ratio
+```
+
+结果：
+
+```text
+20 packets transmitted, 10 received, 50% packet loss
+seen 20 accept 10 drop 10 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+ping_rc=0
+```
+
+结论：混合 verdict 路径通过。VPP 插件可以对同一个 NFQUEUE queue 中的包逐包选择 `NF_ACCEPT` 或 `NF_DROP`。
+
+当前 POC 已证明：
+
+```text
+1. 原版 VPP 加 overlay 后可以加载 Linux-only nfqueue_poc 插件。
+2. VPP 进程可以持有 NFQUEUE fd。
+3. VPP clib_file read callback 可以接收 queued packet。
+4. VPP 插件 callback 可以对 packet id 调用 nfq_set_verdict。
+5. accept/drop/ratio 三个行为都能反馈到内核转发结果。
+```
+
+下一步：在 `nfqueue-poc enable` 且无流量时重新测 VPP idle CPU，确认 fd-ready 路径没有退化成单核忙轮询。
+
+### 45. VPP NFQUEUE enabled idle CPU 通过
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-idle-cpu
+```
+
+配置：
+
+```text
+nfqueue-poc enable queue 42 mode accept-all
+SAMPLES=5 DELAY=1 WARMUP=3
+```
+
+无流量采样：
+
+```text
+vpp_main CPU%: 0.996, 1.993, 0.997, 0.997, 1.993
+```
+
+插入 5 个 ping 包：
+
+```text
+5 packets transmitted, 5 received, 0% packet loss
+seen 5 accept 5 drop 0 missing-id 0
+```
+
+流量后再次空闲采样：
+
+```text
+vpp_main CPU%: 1.993, 0.996, 1.993, 0.000, 1.993
+```
+
+结论：在当前 `clib_file` fd-ready 直 verdict POC 中，`nfqueue-poc enable` 后 VPP 空闲 CPU 没有出现单核 100% 忙轮询，观测值和 minimal VPP 大致同量级。
+
+这不等于最终性能结论；后续进入 vlib_buffer/graph/worker 版本后仍需重测。

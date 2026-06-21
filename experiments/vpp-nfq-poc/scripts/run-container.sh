@@ -17,6 +17,8 @@ fi
 
 mkdir -p "$VPP_WORK_ROOT"
 chmod 0777 "$VPP_WORK_ROOT"
+mkdir -p "$POC_DIR/results"
+chmod 0777 "$POC_DIR/results"
 
 tty_args=()
 if [ -t 0 ] && [ -t 1 ]; then

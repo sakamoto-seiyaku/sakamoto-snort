@@ -1,4 +1,4 @@
-.PHONY: build-smoke docker-build docker-shell fetch-vpp build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu setup-netns cleanup-netns collect-cpu
+.PHONY: build-smoke docker-build docker-shell fetch-vpp apply-vpp-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu setup-netns cleanup-netns collect-cpu
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
 
@@ -13,6 +13,9 @@ docker-shell:
 
 fetch-vpp:
 	./scripts/fetch-vpp.sh
+
+apply-vpp-overlay:
+	./scripts/apply-vpp-overlay.sh
 
 build-vpp:
 	./scripts/build-vpp.sh
@@ -37,6 +40,21 @@ idle-cpu:
 
 vpp-idle-cpu:
 	./scripts/run-vpp-idle-cpu.sh
+
+vpp-nfqueue-cli-check:
+	./scripts/run-vpp-nfqueue-cli-check.sh
+
+vpp-nfqueue-accept:
+	./scripts/run-vpp-nfqueue-smoke.sh accept-all
+
+vpp-nfqueue-drop:
+	./scripts/run-vpp-nfqueue-smoke.sh drop-all
+
+vpp-nfqueue-ratio:
+	./scripts/run-vpp-nfqueue-smoke.sh drop-ratio=50
+
+vpp-nfqueue-idle-cpu:
+	./scripts/run-vpp-nfqueue-idle-cpu.sh
 
 collect-cpu:
 	./scripts/collect-cpu.sh

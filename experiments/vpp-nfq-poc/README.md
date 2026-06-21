@@ -23,6 +23,11 @@ make smoke-drop
 make smoke-ratio
 make idle-cpu
 make vpp-idle-cpu
+make vpp-nfqueue-cli-check
+make vpp-nfqueue-accept
+make vpp-nfqueue-drop
+make vpp-nfqueue-ratio
+make vpp-nfqueue-idle-cpu
 ```
 
 Fetch upstream VPP `v26.02` into this experiment directory:
@@ -165,6 +170,20 @@ vpp_main idle instantaneous CPU: about 1% on this host
 ```
 
 This proves the minimal VPP process is not a DPDK-style single-core 100% busy loop in this configuration. It still needs to be re-tested after adding the NFQUEUE input path.
+
+## VPP NFQUEUE Verdict Result
+
+Last run: 2026-06-21, upstream VPP `v26.02` with local `nfqueue_poc` overlay.
+
+Observed:
+
+- `make vpp-nfqueue-cli-check`: VPP loaded `nfqueue_poc_plugin.so`; `show nfqueue-poc` CLI worked.
+- `make vpp-nfqueue-accept`: ping 20/20, `seen=20 accept=20 drop=0`.
+- `make vpp-nfqueue-drop`: ping 0/20, `seen=20 accept=0 drop=20`.
+- `make vpp-nfqueue-ratio`: ping 10/20, `seen=20 accept=10 drop=10`.
+- `make vpp-nfqueue-idle-cpu`: with queue 42 enabled and no traffic, `vpp_main` sampled around 0-2% CPU in this container.
+
+This proves VPP can own the NFQUEUE fd and return userspace verdicts in this Linux POC. The current plugin verdicts directly from a `clib_file` read callback. It does not yet allocate `vlib_buffer_t`, enter the VPP graph, expose packet metadata, or prove multi-worker behavior.
 
 ## Notes
 

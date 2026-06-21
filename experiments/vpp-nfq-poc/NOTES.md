@@ -107,13 +107,14 @@ The plugin must not set the node to permanent polling just to make NFQUEUE work.
 
 ## Next Checkpoint
 
-VPP `v26.02` now builds successfully in the Docker lane.
+VPP `v26.02` now builds successfully in the Docker lane, and the first Linux-only NFQUEUE plugin POC can return verdicts.
 
 Next steps:
 
-1. Add the smallest `nfqueue_poc` plugin patch.
-2. Re-run accept/drop/ratio/idle cases through VPP.
-3. Re-check idle CPU with NFQUEUE fd/input node enabled.
+1. Decide whether the next slice should stay as direct callback verdict or move packet ownership into `vlib_buffer_t`.
+2. Add packet metadata extraction to the VPP-side POC: packet id, hook, ifindex, mark, UID/GID, payload length.
+3. Design the handoff from NFQUEUE fd-ready input into graph processing without turning the node into permanent polling.
+4. Re-check idle CPU and verdict behavior after the graph/buffer slice.
 
 ## VPP Source / Build Policy
 
@@ -185,3 +186,44 @@ vpp_main idle instantaneous CPU: about 1% on this host
 ```
 
 This is not yet the final answer for the NFQUEUE adapter. Re-check after the fd-ready NFQUEUE input node is enabled.
+
+## NFQUEUE Plugin Verdict POC
+
+Local overlay:
+
+```text
+experiments/vpp-nfq-poc/overlay/src/plugins/nfqueue_poc/
+```
+
+Current shape:
+
+```text
+nfqueue-poc enable queue 42 mode accept-all|drop-all|drop-ratio <n>
+  -> nfq_open / nfq_bind_pf / nfq_create_queue
+  -> nfq_fd registered with clib_file_add
+  -> read callback drains recv(..., MSG_DONTWAIT)
+  -> nfq_handle_packet invokes callback
+  -> callback calls nfq_set_verdict(packet_id, NF_ACCEPT|NF_DROP)
+```
+
+Observed result:
+
+```text
+accept-all:     ping 20/20, seen=20 accept=20 drop=0
+drop-all:       ping 0/20,  seen=20 accept=0  drop=20
+drop-ratio=50:  ping 10/20, seen=20 accept=10 drop=10
+idle enabled:   vpp_main sampled around 0-2% CPU with queue enabled and no traffic
+```
+
+This answers the first Linux question positively: upstream VPP can be adapted to own an NFQUEUE fd and return verdicts without busy polling in this minimal form.
+
+Open limitations:
+
+```text
+No VPP interface yet.
+No vlib_buffer_t allocation yet.
+No VPP graph processing yet.
+No UID/GID/ifindex metadata extraction in the VPP plugin yet.
+No worker handoff or multi-worker behavior yet.
+No Android/VPN/TUN path yet.
+```

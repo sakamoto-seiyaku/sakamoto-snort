@@ -15,6 +15,7 @@ RUN apt-get update \
     libmnl-dev \
     libnetfilter-queue-dev \
     libnfnetlink-dev \
+    libunwind8 \
     netcat-openbsd \
     nftables \
     pkg-config \

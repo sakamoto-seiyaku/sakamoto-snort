@@ -2,7 +2,7 @@
 
 日期：2026-06-21
 分支：`research/vpp-nfq-poc`
-状态：实验任务定义 / 暂停点。本文只定义下一步实验，不表示已经开始 clone、build、patch 或运行。
+状态：第一阶段 Linux / Docker POC 已完成 Case A-D。本文先保留原始任务定义，并在末尾记录当前实验结果。
 
 ## 1. 实验目标
 
@@ -236,7 +236,47 @@ Linux packet
 
 这些都必须等 Linux NFQUEUE + idle CPU POC 有结果后再讨论。
 
-## 12. 参考
+## 12. 当前结果
+
+实验目录：
+
+```text
+experiments/vpp-nfq-poc/
+```
+
+当前实现不是完整 VPP graph datapath，而是第一刀 CLI-only overlay：
+
+```text
+overlay/src/plugins/nfqueue_poc/
+```
+
+已验证：
+
+- VPP `v26.02` 可以在 Docker lane 中构建。
+- VPP 可以加载 `nfqueue_poc_plugin.so`。
+- 插件可以持有 NFQUEUE queue 42 的 fd。
+- 插件可以在 `clib_file` read callback 中接收 queued packet。
+- 插件可以通过 `nfq_set_verdict()` 回写 `NF_ACCEPT` / `NF_DROP`。
+- `accept-all`：ping 20/20，`seen=20 accept=20 drop=0`。
+- `drop-all`：ping 0/20，`seen=20 accept=0 drop=20`。
+- `drop-ratio=50`：ping 10/20，`seen=20 accept=10 drop=10`。
+- `nfqueue-poc enable` 后 idle CPU 采样约 0-2%，没有观察到单核 100% 忙轮询。
+
+尚未验证：
+
+- Case E queue pressure。
+- packet metadata extraction：UID/GID、ifindex、mark、timestamp。
+- `vlib_buffer_t` / VPP graph node / worker handoff。
+- Android root NFQUEUE。
+- Android VPN `tun-fd` / HEV 路径。
+
+原始时间顺序记录见：
+
+```text
+experiments/vpp-nfq-poc/EXPERIMENT_LOG.md
+```
+
+## 13. 参考
 
 - FDio VPP upstream: https://github.com/FDio/vpp
 - FDio VPP tags: https://github.com/FDio/vpp/tags
