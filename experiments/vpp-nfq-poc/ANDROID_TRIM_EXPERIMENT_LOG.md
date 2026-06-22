@@ -2170,3 +2170,167 @@ timer floor 解决了 sub-ms timer 被截成 epoll timeout 0 的问题。
 而且 100ms/1000ms floor 会延后 VPP 内部 timer，属于策略取舍，不应在没有更完整
 datapath 验证前作为默认 runtime 行为。
 ```
+
+## 14. Android root minimal: 显式禁用默认 process/timer 实验
+
+目的：
+
+```text
+验证“明确禁用掉不需要的 VPP 默认 process/timer”是否能把无流量 idle CPU
+压到接近日常可接受的极低水平。
+```
+
+实验前备份：
+
+```text
+backup/vpp-nfq-poc-before-vnet-timer-disable-20260622-202711-e52e5c6
+```
+
+### 14.1 禁用项
+
+在生成的 VPP worktree 中临时修改以下默认 process，使其只等待事件，不再周期性挂
+timer：
+
+```text
+src/vnet/ip/reass/ip4_full_reass.c  ip4_full_reass_walk_expired
+src/vnet/ip/reass/ip6_full_reass.c  ip6_full_reass_walk_expired
+src/vnet/ip/reass/ip4_sv_reass.c    ip4_sv_reass_walk_expired
+src/vnet/ip/reass/ip6_sv_reass.c    ip6_sv_reass_walk_expired
+src/vnet/ip6-nd/ip6_mld.c           ip6_mld_event_process
+src/vnet/ip6-nd/ip6_ra.c            ip6_ra_event_process
+src/vnet/fib/fib_walk.c             fib_walk_process
+src/vlib/stats/collector.c          stat_segment_collector_process
+```
+
+实验修改形态：
+
+```c
+#ifdef __ANDROID__
+  uword *sakamoto_idle_event_data = 0;
+  while (1)
+    {
+      vlib_process_wait_for_event (vm);
+      while (vlib_process_get_events (vm, &sakamoto_idle_event_data) != ~0)
+        vec_reset_length (sakamoto_idle_event_data);
+    }
+#endif
+```
+
+### 14.2 process-only 禁用结果
+
+构建目标：
+
+```text
+android-vpp-build-release-no-multiarch-no-ipsec
+android-vpp-stage-release-no-multiarch-no-ipsec
+```
+
+Android 真机 root minimal 启动成功。`show runtime` 确认这些 process 已经不再
+周期性运行，而是进入 `event wait`：
+
+```text
+fib-walk                              event wait  suspends 1
+ip4-full-reassembly-expire-wal        event wait  suspends 1
+ip4-sv-reassembly-expire-walk         event wait  suspends 1
+ip6-full-reassembly-expire-wal        event wait  suspends 1
+ip6-mld-process                       event wait  suspends 1
+ip6-ra-process                        event wait  suspends 1
+ip6-sv-reassembly-expire-walk         event wait  suspends 1
+statseg-collector-process             event wait  suspends 1
+```
+
+60s CPU tick-delta：
+
+```text
+pid=715 clk=100
+Name: vpp_main
+Threads: 1
+RSS: 102216 KB
+samples:
+  1.944, 1.557, 1.748, 1.945, 1.557, 1.760,
+  1.555, 1.749, 1.752, 1.750, 1.752, 1.944
+avg=1.751 min=1.555 max=1.945 n=12
+```
+
+结论：
+
+```text
+显式禁用这些默认 process 生效了，但 idle CPU 仍约 1.75%。
+这没有达到“无流量时极少占用”的目标。
+```
+
+### 14.3 叠加 Android max_timeout_ms=1000
+
+继续在 `src/vlib/file.c` 临时设置：
+
+```c
+#ifdef __ANDROID__
+  max_timeout_ms = 1000;
+#endif
+```
+
+60s CPU tick-delta：
+
+```text
+pid=898 clk=100
+Name: vpp_main
+Threads: 1
+RSS: 102236 KB
+samples:
+  1.759, 1.750, 1.751, 1.563, 1.753, 1.944,
+  1.547, 1.555, 1.750, 1.750, 1.558, 1.954
+avg=1.720 min=1.547 max=1.954 n=12
+```
+
+`show runtime`：
+
+```text
+loops/sec 467.95
+```
+
+simpleperf 30s：
+
+```text
+Samples recorded: 928
+Samples lost: 0
+```
+
+热点仍然落在：
+
+```text
+vlib_main
+vlib_file_poll
+__epoll_pwait
+process_expired_timers
+vlib_tw_timer_expire_timers
+tw_timer_expire_timers_internal_1t_3w_1024sl_ov
+```
+
+符号化关键地址：
+
+```text
+libvlib.so+0x3c818
+  vlib_tw_timer_expire_timers
+  process_expired_timers
+  work/vpp/src/vlib/main.c:1412
+
+libvppinfra.so+0x5f560 / 0x5f55c / 0x5f568 / 0x5f690 / 0x5f5d0 / 0x60a60
+  tw_timer_expire_timers_internal_1t_3w_1024sl_ov
+```
+
+### 14.4 结论
+
+```text
+这条“表面禁用几个明显默认 process”的路线验证失败，收益不够。
+
+它能把相关 process 从周期 timer 改成 event wait，但 full libvnet/VLIB runtime
+仍然在 process_expired_timers / VLIB timer wheel / epoll 调度上保留明显 idle 成本。
+
+当前结果不能支撑 Android 常驻 VPN/包处理进程使用完整 VPP/libvnet runtime。
+下一步应该转向：
+  1. vlib-only / vpp_lite runtime；
+  2. 更强的编译期裁剪，直接不注册不需要的 VNET subsystem；
+  3. 或者只抽取 VPP 的 buffer/node/graph 能力，避免完整 libvnet 默认 runtime。
+
+继续零散禁用默认 process 预计收益有限，不应作为主线。
+```
