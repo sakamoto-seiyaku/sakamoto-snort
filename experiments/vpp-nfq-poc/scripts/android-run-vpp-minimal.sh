@@ -12,7 +12,7 @@ SKIP_PUSH="${SKIP_PUSH:-0}"
 STOP_AFTER="${STOP_AFTER:-1}"
 WAIT_SECS="${WAIT_SECS:-3}"
 VPP_EXTRA_ARGS="${VPP_EXTRA_ARGS:-}"
-VPP_PLUGIN_PATH_ARGS="${VPP_PLUGIN_PATH_ARGS:-plugin_path $REMOTE_ROOT/plugins}"
+VPP_PLUGIN_PATH_ARGS="${VPP_PLUGIN_PATH_ARGS-plugin_path $REMOTE_ROOT/plugins}"
 
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 

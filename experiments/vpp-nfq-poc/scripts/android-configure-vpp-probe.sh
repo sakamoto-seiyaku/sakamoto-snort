@@ -9,6 +9,8 @@ VPP_DIR="${VPP_DIR:-$VPP_WORK_ROOT/vpp}"
 VPP_SRC_DIR="${VPP_SRC_DIR:-$VPP_DIR/src}"
 BUILD_DIR="${BUILD_DIR:-$VPP_WORK_ROOT/vpp-android-configure-probe}"
 SAKAMOTO_NETFILTER_ROOT="${SAKAMOTO_NETFILTER_ROOT:-$REPO_ROOT/third_party/netfilter}"
+VPP_PLUGINS="${VPP_PLUGINS:-}"
+VPP_EXCLUDED_PLUGINS="${VPP_EXCLUDED_PLUGINS:-}"
 LOG_DIR="$POC_DIR/results"
 LOG="$LOG_DIR/android-vpp-configure-probe.log"
 
@@ -35,14 +37,15 @@ rm -rf "$BUILD_DIR"
   echo "android_api=$ANDROID_API"
   echo "vlib_process_log2_stack_size=$VLIB_PROCESS_LOG2_STACK_SIZE"
   echo "sakamoto_netfilter_root=$SAKAMOTO_NETFILTER_ROOT"
+  echo "vpp_plugins=$VPP_PLUGINS"
+  echo "vpp_excluded_plugins=$VPP_EXCLUDED_PLUGINS"
   echo
 
   export GIT_CONFIG_COUNT=1
   export GIT_CONFIG_KEY_0=safe.directory
   export GIT_CONFIG_VALUE_0="$VPP_DIR"
 
-  set +e
-  cmake \
+  cmake_args=(
     -S "$VPP_SRC_DIR" \
     -B "$BUILD_DIR" \
     -G Ninja \
@@ -53,6 +56,16 @@ rm -rf "$BUILD_DIR"
     -DVLIB_PROCESS_LOG2_STACK_SIZE="$VLIB_PROCESS_LOG2_STACK_SIZE" \
     -DSAKAMOTO_NETFILTER_ROOT="$SAKAMOTO_NETFILTER_ROOT" \
     -DVPP_HOST_TOOLS_ONLY=OFF
+  )
+  if [ -n "$VPP_PLUGINS" ]; then
+    cmake_args+=(-DVPP_PLUGINS="$VPP_PLUGINS")
+  fi
+  if [ -n "$VPP_EXCLUDED_PLUGINS" ]; then
+    cmake_args+=(-DVPP_EXCLUDED_PLUGINS="$VPP_EXCLUDED_PLUGINS")
+  fi
+
+  set +e
+  cmake "${cmake_args[@]}"
   rc=$?
   set -e
 
