@@ -14,6 +14,7 @@ zipalign_bin="${ZIPALIGN:-zipalign}"
 ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 clang="${ANDROID_CLANG:-${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
 vpp_stage_dir="${VPP_STAGE_DIR:-${poc_dir}/work/android-vpp-core-stage}"
+hev_stage_dir="${ANDROID_HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
 
 die() {
   echo "error: $*" >&2
@@ -63,7 +64,8 @@ echo "building JNI probe"
   -Werror \
   -o "$jni_dir/libvpnfdprobe.so" \
   "$app_dir/native/vpn_fd_probe.c" \
-  -llog
+  -llog \
+  -ldl
 
 if [[ -x "$vpp_stage_dir/bin/vpp" ]]; then
   echo "packaging VPP runtime"
@@ -77,6 +79,13 @@ if [[ -x "$vpp_stage_dir/bin/vpp" ]]; then
   done
 else
   echo "warning: VPP stage not found, building Phase 1-only APK: $vpp_stage_dir" >&2
+fi
+
+if [[ -f "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" ]]; then
+  echo "packaging HEV runtime"
+  cp "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" "$jni_dir/"
+else
+  echo "warning: HEV stage not found, building APK without HEV: $hev_stage_dir" >&2
 fi
 
 echo "compiling Java sources"

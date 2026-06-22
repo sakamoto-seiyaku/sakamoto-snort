@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <jni.h>
@@ -36,6 +37,12 @@ static bool g_vpp_monitor_running;
 static pid_t g_vpp_pid = -1;
 static char g_vpp_cli_sock[PATH_BUF_SIZE];
 static char g_vpp_cli_log[PATH_BUF_SIZE];
+
+static pid_t g_hev_pid = -1;
+static int g_hev_driver_fd = -1;
+static char g_hev_log_path[PATH_BUF_SIZE];
+
+typedef int (*hev_main_from_str_fn)(const char *config, unsigned int config_len, int tun_fd);
 
 static void log_line(FILE *file, const char *fmt, ...) {
     char line[512];
@@ -105,6 +112,34 @@ static int set_cloexec(int fd, bool enabled) {
         flags &= ~FD_CLOEXEC;
     }
     return fcntl(fd, F_SETFD, flags);
+}
+
+static void terminate_child(pid_t pid) {
+    if (pid <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < 10; i++) {
+        int status = 0;
+        pid_t rv = waitpid(pid, &status, WNOHANG);
+        if (rv == pid || (rv < 0 && errno == ECHILD)) {
+            return;
+        }
+        usleep(100000);
+    }
+
+    kill(pid, SIGTERM);
+    for (int i = 0; i < 10; i++) {
+        int status = 0;
+        pid_t rv = waitpid(pid, &status, WNOHANG);
+        if (rv == pid || (rv < 0 && errno == ECHILD)) {
+            return;
+        }
+        usleep(100000);
+    }
+
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
 }
 
 static void append_cli_output(FILE *file, const char *label, const char *buf, ssize_t len) {
@@ -562,5 +597,164 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
 
     if (was_monitoring) {
         pthread_join(g_vpp_monitor_thread, NULL);
+    }
+}
+
+static void run_hev_child(const char *native_dir, const char *log_path, int fd) {
+    char hev_path[PATH_BUF_SIZE];
+    const char config[] =
+            "tunnel:\n"
+            "  mtu: 1500\n"
+            "socks5:\n"
+            "  address: 127.0.0.1\n"
+            "  port: 9\n"
+            "  udp: tcp\n"
+            "misc:\n"
+            "  log-file: stderr\n"
+            "  log-level: info\n"
+            "  connect-timeout: 2000\n"
+            "  tcp-read-write-timeout: 5000\n"
+            "  udp-read-write-timeout: 5000\n";
+
+    int out = open(log_path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    if (out >= 0) {
+        dup2(out, STDOUT_FILENO);
+        dup2(out, STDERR_FILENO);
+        if (out > STDERR_FILENO) {
+            close(out);
+        }
+    }
+
+    snprintf(hev_path, sizeof(hev_path), "%s/libhev-socks5-tunnel.so", native_dir);
+    void *handle = dlopen(hev_path, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        dprintf(STDERR_FILENO, "dlopen failed: %s\n", dlerror());
+        _exit(121);
+    }
+
+    void *sym = dlsym(handle, "hev_socks5_tunnel_main_from_str");
+    if (!sym) {
+        dprintf(STDERR_FILENO, "dlsym failed: %s\n", dlerror());
+        _exit(122);
+    }
+
+    set_cloexec(fd, false);
+    hev_main_from_str_fn main_from_str = (hev_main_from_str_fn)sym;
+    int rc = main_from_str(config, (unsigned int)strlen(config), fd);
+    dprintf(STDERR_FILENO, "hev main returned rc=%d\n", rc);
+    _exit(rc == 0 ? 0 : 123);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartHevProbe(
+        JNIEnv *env, jclass clazz, jstring native_library_dir, jstring files_dir) {
+    (void)clazz;
+
+    const char *native_dir = (*env)->GetStringUTFChars(env, native_library_dir, NULL);
+    if (!native_dir) {
+        return -1;
+    }
+    const char *app_files = (*env)->GetStringUTFChars(env, files_dir, NULL);
+    if (!app_files) {
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    if (g_hev_pid > 0) {
+        pthread_mutex_unlock(&g_lock);
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        return -2;
+    }
+    pthread_mutex_unlock(&g_lock);
+
+    char logs_dir[PATH_BUF_SIZE];
+    char log_path[PATH_BUF_SIZE];
+    char hev_path[PATH_BUF_SIZE];
+    snprintf(logs_dir, sizeof(logs_dir), "%s/logs", app_files);
+    snprintf(log_path, sizeof(log_path), "%s/hev-probe.log", logs_dir);
+    snprintf(hev_path, sizeof(hev_path), "%s/libhev-socks5-tunnel.so", native_dir);
+
+    if (!path_exists(hev_path)) {
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        return -3;
+    }
+    if (mkdir_p(logs_dir) < 0) {
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        return -4;
+    }
+    unlink(log_path);
+
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds) < 0) {
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        return -5;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        return -6;
+    }
+
+    if (pid == 0) {
+        close(fds[0]);
+        run_hev_child(native_dir, log_path, fds[1]);
+        _exit(127);
+    }
+
+    close(fds[1]);
+    usleep(300000);
+
+    int status = 0;
+    pid_t exited = waitpid(pid, &status, WNOHANG);
+    if (exited == pid) {
+        close(fds[0]);
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        return -7;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    g_hev_pid = pid;
+    g_hev_driver_fd = fds[0];
+    snprintf(g_hev_log_path, sizeof(g_hev_log_path), "%s", log_path);
+    pthread_mutex_unlock(&g_lock);
+
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "started HEV pid=%d log=%s", pid, log_path);
+    (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+    (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+    return 0;
+}
+
+JNIEXPORT void JNICALL
+Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopHevProbe(JNIEnv *env, jclass clazz) {
+    (void)env;
+    (void)clazz;
+
+    pthread_mutex_lock(&g_lock);
+    pid_t pid = g_hev_pid;
+    int fd = g_hev_driver_fd;
+    char log_path[PATH_BUF_SIZE];
+    snprintf(log_path, sizeof(log_path), "%s", g_hev_log_path);
+    g_hev_pid = -1;
+    g_hev_driver_fd = -1;
+    g_hev_log_path[0] = '\0';
+    pthread_mutex_unlock(&g_lock);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    terminate_child(pid);
+    if (pid > 0) {
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "stopped HEV pid=%d log=%s", pid,
+                            log_path);
     }
 }

@@ -13,6 +13,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_MODE = "mode";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
+    public static final String MODE_HEV = "hev";
 
     private static final String TAG = "SnortVpnLite";
     private static final String VPN_ADDRESS = "10.111.0.2";
@@ -31,6 +32,10 @@ public final class SnortVpnService extends VpnService {
     private static native int nativeStartVppProbe(int fd, String nativeLibraryDir, String filesDir);
 
     private static native void nativeStopVppProbe();
+
+    private static native int nativeStartHevProbe(String nativeLibraryDir, String filesDir);
+
+    private static native void nativeStopHevProbe();
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -53,6 +58,13 @@ public final class SnortVpnService extends VpnService {
     }
 
     private synchronized void startVpn(String mode) {
+        if (MODE_HEV.equals(mode)) {
+            int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
+                    getFilesDir().getAbsolutePath());
+            Log.i(TAG, "nativeStartHevProbe rc=" + rc);
+            return;
+        }
+
         if (vpnFd != null) {
             Log.i(TAG, "VPN already active");
             return;
@@ -96,6 +108,7 @@ public final class SnortVpnService extends VpnService {
     private synchronized void stopVpn() {
         nativeStopProbe();
         nativeStopVppProbe();
+        nativeStopHevProbe();
         if (vpnFd != null) {
             try {
                 vpnFd.close();

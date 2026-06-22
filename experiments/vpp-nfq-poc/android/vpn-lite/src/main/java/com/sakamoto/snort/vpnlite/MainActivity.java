@@ -60,6 +60,12 @@ public final class MainActivity extends Activity {
         startVpp.setOnClickListener(v -> startVpn(SnortVpnService.MODE_VPP));
         row.addView(startVpp, weight());
 
+        Button startHev = new Button(this);
+        startHev.setAllCaps(false);
+        startHev.setText("HEV");
+        startHev.setOnClickListener(v -> startVpn(SnortVpnService.MODE_HEV));
+        row.addView(startHev, weight());
+
         Button stop = new Button(this);
         stop.setAllCaps(false);
         stop.setText("Stop");
@@ -84,6 +90,12 @@ public final class MainActivity extends Activity {
     }
 
     private void startVpn(String mode) {
+        if (SnortVpnService.MODE_HEV.equals(mode)) {
+            appendLog("starting HEV probe without VPN");
+            startVpnService(mode);
+            return;
+        }
+
         Intent prepare = VpnService.prepare(this);
         if (prepare != null) {
             appendLog("requesting VPN permission");
@@ -111,6 +123,12 @@ public final class MainActivity extends Activity {
     }
 
     private void applyIntentExtras(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("stop", false)) {
+            appendLog("intent stop=true");
+            main.postDelayed(this::stopVpn, 300);
+            return;
+        }
+
         if (intent != null && intent.getBooleanExtra("start", false)) {
             String mode = intent.getStringExtra(SnortVpnService.EXTRA_MODE);
             if (mode == null) {

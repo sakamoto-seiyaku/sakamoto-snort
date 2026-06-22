@@ -584,3 +584,121 @@ Step 3C：Android VPP + HEV full datapath
     先用受控 SOCKS5 endpoint。
     再处理 Android VpnService.protect()，防止 HEV upstream socket 被 VPN 自己截回。
 ```
+
+## 18. Android Phase 3A：HEV 打包和 lifecycle probe
+
+目标：
+
+```text
+只验证 HEV Android .so 能进入 APK，并能在 Android app context 下由 JNI 启动/停止。
+不申请 VPN。
+不接 VPP。
+不验证 datapath。
+```
+
+实现：
+
+```text
+新增 scripts/android-build-hev.sh：
+  使用 HEV upstream Android.mk。
+  NDK ndk-build APP_ABI=arm64-v8a APP_PLATFORM=android-31。
+  stage:
+    work/android-hev-stage/lib/arm64-v8a/libhev-socks5-tunnel.so
+
+vpn-lite build-debug-apk.sh：
+  如果 android-hev-stage 存在，把 libhev-socks5-tunnel.so 打进 APK。
+
+vpn-lite native：
+  nativeStartHevProbe(nativeLibraryDir, filesDir)
+    socketpair(AF_UNIX, SOCK_SEQPACKET)
+    fork child
+    child dlopen libhev-socks5-tunnel.so
+    dlsym hev_socks5_tunnel_main_from_str
+    传 socketpair child fd 作为 HEV external tun_fd
+  nativeStopHevProbe()
+    close parent socketpair fd
+    wait / SIGTERM / SIGKILL child
+
+Activity:
+  支持 mode=hev，不走 VpnService.prepare()。
+  支持 --ez stop true，方便 adb 触发 Stop。
+```
+
+构建：
+
+```text
+make android-hev-build
+
+结果：
+  work/android-hev-stage/lib/arm64-v8a/libhev-socks5-tunnel.so
+  size: 313.7K
+  ELF: ARM aarch64 shared object, stripped
+  dynamic deps: libc.so, libm.so, libdl.so
+```
+
+APK：
+
+```text
+experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+
+关键输出：
+  building JNI probe
+  packaging VPP runtime
+  packaging HEV runtime
+  compiling Java sources
+  dexing
+  linking APK
+  zipalign
+  signing
+  ok: .../snort-vpn-lite-debug.apk
+
+APK 内容确认：
+  lib/arm64-v8a/libhev-socks5-tunnel.so
+```
+
+设备验证：
+
+```text
+设备：
+  28201JEGR0XPAJ
+  Pixel 6a / Android 16
+
+安装：
+  experiments/vpp-nfq-poc/android/vpn-lite/scripts/install-debug-apk.sh
+  Success
+
+启动 HEV probe：
+  adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode hev
+
+logcat:
+  I SnortVpnLiteNative: started HEV pid=24901 log=/data/user/0/com.sakamoto.snort.vpnlite/files/logs/hev-probe.log
+  I SnortVpnLite: nativeStartHevProbe rc=0
+
+进程：
+  app parent exists
+  HEV child exists under same app uid
+
+HEV log:
+  [2026-06-22 11:47:01] [I] set limit nofile
+
+停止：
+  adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez stop true
+
+logcat:
+  I SnortVpnLiteNative: stopped HEV pid=24901 log=/data/user/0/com.sakamoto.snort.vpnlite/files/logs/hev-probe.log
+  I SnortVpnLite: VPN stopped
+
+停止后：
+  HEV child 不再存在。
+  最后 force-stop app 清理 Activity parent。
+```
+
+结论：
+
+```text
+Android Phase 3A 通过。
+HEV Android .so 可以构建、打包、dlopen、启动并停止。
+本轮没有观察到 Linux C3 中的 free(): invalid size。
+但 3A 没有流量，不代表 HEV Android datapath/lifecycle 已完全干净。
+下一步进入 3B：Android VPP forward-fd bridge。
+```
