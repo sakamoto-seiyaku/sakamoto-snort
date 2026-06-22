@@ -52,7 +52,6 @@ unix {
   nobanner
   full-coredump
   runtime-dir $REMOTE_ROOT/runtime
-  poll-sleep-usec 1000
   log $REMOTE_ROOT/logs/vpp.log
   cli-listen $REMOTE_ROOT/runtime/cli.sock
 }

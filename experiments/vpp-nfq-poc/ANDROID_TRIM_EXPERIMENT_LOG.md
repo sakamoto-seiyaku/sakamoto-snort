@@ -1831,3 +1831,152 @@ nanosleep + epoll_wait + syscall/调度开销。
   B. epoll_wait timeout/timer wheel 导致的周期唤醒。
   C. 其它 VPP process/timer/API/statseg/CLI 事件不断唤醒 main loop。
 ```
+
+## 12. Round 4F: Android 默认删除 poll-sleep-usec
+
+目的：
+
+```text
+把上轮 flamegraph 结论落成当前 Android 默认配置。
+
+不再在 Android startup.conf 中设置 poll-sleep-usec 1000。
+原因：poll-sleep-usec 会让 vlib_file_poll 先 nanosleep，再进入 epoll_wait。
+这会引入固定周期 nanosleep syscall/调度开销，而且 fd ready 不能打断 nanosleep。
+```
+
+修改：
+
+```text
+删除以下 Android 路径里的 poll-sleep-usec 1000：
+
+experiments/vpp-nfq-poc/scripts/android-stage-vpp-core.sh
+experiments/vpp-nfq-poc/scripts/android-stage-vpp-lite.sh
+experiments/vpp-nfq-poc/android/vpn-lite/native/vpn_fd_probe.c
+```
+
+不修改：
+
+```text
+host POC configs 和历史实验说明暂不改。
+它们记录的是早期 Linux/host 实验结论，不代表当前 Android 默认策略。
+```
+
+### 12.1 no-IPsec root minimal 验证
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-stage-release-no-multiarch-no-ipsec
+grep -n "poll-sleep-usec" \
+  experiments/vpp-nfq-poc/work/android-vpp-release-no-multiarch-no-ipsec-stage/runtime/startup.conf
+make -C experiments/vpp-nfq-poc android-vpp-minimal-release-no-multiarch-no-ipsec
+```
+
+结果：
+
+```text
+stage startup.conf:
+  0 matches for 'poll-sleep-usec'
+
+root minimal:
+  VPP process WCHAN: do_epoll_wait
+  vppctl show version: rc=0
+  stdout: <empty>
+```
+
+判断：
+
+```text
+删除 poll-sleep-usec 后，VPP idle 进入 do_epoll_wait 路径，而不是 __arm64_sys_nanosleep。
+```
+
+### 12.2 no-IPsec app 3C datapath 验证
+
+APK 构建和安装：
+
+```sh
+VPP_STAGE_DIR=/home/js/Git/sakamoto/sakamoto-snort/experiments/vpp-nfq-poc/work/android-vpp-release-no-multiarch-no-ipsec-stage \
+  experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+
+experiments/vpp-nfq-poc/android/vpn-lite/scripts/install-debug-apk.sh
+```
+
+app 生成的 startup.conf：
+
+```text
+unix {
+  nodaemon
+  nobanner
+  runtime-dir /data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime
+  log /data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp.log
+  cli-listen /data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+  startup-config /data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.exec
+}
+```
+
+启动：
+
+```text
+mode=vpp-hev
+
+logcat:
+  started VPP HEV pid=31270
+  started VPP pid=31269 fd=126 mode=2
+  nativeStartVppProbe fd=126 vppMode=2 rc=0
+```
+
+HTTP probe：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+```
+
+最终 `show tun-poc`：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 22 bytes 1698 tx 9 bytes 476
+shim-rx 9 bytes 476 shim-tx 22 bytes 1698
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+app idle tick-delta 短采样：
+
+```text
+pid=31269 clk=100
+RSS: 111,584 KB
+
+5 秒窗口 CPU samples:
+  2.367, 2.161, 1.961, 2.353, 1.953, 2.344
+
+avg: 2.190%
+min: 1.953%
+max: 2.367%
+```
+
+对比 Round 4D：
+
+```text
+poll-sleep-usec 1000 app idle avg: 2.680%
+unset poll-sleep-usec app idle avg: 2.190%
+```
+
+Round 4F 结论：
+
+```text
+当前结果策略：
+  Android 默认不设置 poll-sleep-usec。
+
+原因：
+  1. 包路径仍然是 clib_file/epoll read callback，不引入包 fd 轮询。
+  2. vpp_main idle 从 nanosleep 固定睡眠路径回到 epoll_wait 路径。
+  3. no-IPsec Android 3C datapath 仍通过。
+  4. app idle CPU 短采样从约 2.68% 降到约 2.19%。
+
+这不是最终极限优化，但它是当前证据支持的最小正确改动。
+更激进的 epoll timeout / timer wheel 修改应作为下一轮 VPP main loop 定点优化，而不是 Android 默认先上。
+```
