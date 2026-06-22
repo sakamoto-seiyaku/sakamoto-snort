@@ -1563,3 +1563,142 @@ no-IPsec 第一刀收益明确但不巨大：
 
 下一步如果继续裁剪，更大的候选不是 IPsec，而是 host stack/session/tcp、L2/MPLS/device/virtio、reassembly/GSO、API/VAT/test 等更大块。
 ```
+
+## 10. Round 4D: Android idle CPU 复测
+
+目的：
+
+```text
+重新确认 Android 真机空闲时 VPP 自身 CPU 占用。
+早期日志里的 6.6% - 7.5% 来自 ps %CPU 短观察；4A/4B/4C 后续又只有 5 秒短采样。
+本轮改用 /proc/<pid>/stat tick delta，以 5 秒窗口连续采样 12 次，约 60 秒。
+```
+
+采样公式：
+
+```text
+clk = getconf CLK_TCK
+process_ticks = utime + stime from /proc/<pid>/stat
+cpu% = (delta_ticks / clk) / elapsed_seconds * 100
+```
+
+注意：
+
+```text
+这里的 CPU% 是单进程相对单核的占用。
+Android 设备后台仍可能产生少量系统流量；app idle 场景只表示我们没有主动发 HTTP probe。
+```
+
+### 10.1 release + no-multiarch root minimal
+
+场景：
+
+```text
+stage: work/android-vpp-release-no-multiarch-stage
+启动方式: android-run-vpp-minimal.sh
+STOP_AFTER=0
+不启用 tun_poc，不启用 nfqueue_poc，不走 VpnService/HEV。
+```
+
+结果：
+
+```text
+pid=28490 clk=100
+RSS: 116,616 KB
+
+5 秒窗口 CPU samples:
+  2.756, 2.348, 1.949, 2.148, 2.153, 2.740,
+  2.729, 1.961, 2.724, 2.559, 2.153, 2.941
+
+avg: 2.430%
+min: 1.949%
+max: 2.941%
+```
+
+### 10.2 release + no-multiarch + no-IPsec root minimal
+
+场景：
+
+```text
+stage: work/android-vpp-release-no-multiarch-no-ipsec-stage
+启动方式: android-run-vpp-minimal.sh
+STOP_AFTER=0
+不启用 tun_poc，不启用 nfqueue_poc，不走 VpnService/HEV。
+```
+
+结果：
+
+```text
+pid=28696 clk=100
+RSS: 102,612 KB
+
+5 秒窗口 CPU samples:
+  2.569, 2.353, 2.549, 2.544, 2.554, 2.353,
+  1.754, 2.344, 2.745, 1.969, 2.549, 2.144
+
+avg: 2.369%
+min: 1.754%
+max: 2.745%
+```
+
+per-thread 10 秒采样：
+
+```text
+pid=28696 elapsed=10.08 clk=100
+tid=28696 cpu=2.381 comm=vpp_main
+```
+
+判断：
+
+```text
+空闲 CPU 主要来自 vpp_main。
+没有看到 worker/plugin 线程占满 CPU。
+```
+
+### 10.3 release + no-multiarch + no-IPsec app idle
+
+场景：
+
+```text
+APK: no-IPsec stage 打包后的 vpn-lite debug APK
+启动方式: mode=vpp-hev
+不主动发送 HTTP probe。
+VpnService、VPP、HEV 已启动。
+```
+
+启动：
+
+```text
+started VPP HEV pid=28286
+started VPP pid=28285 fd=126 mode=2
+nativeStartVppProbe fd=126 vppMode=2 rc=0
+```
+
+结果：
+
+```text
+pid=28285 clk=100
+RSS: 113,916 KB
+
+5 秒窗口 CPU samples:
+  2.761, 2.734, 2.935, 2.941, 2.941, 2.157,
+  2.549, 2.750, 2.539, 2.157, 3.143, 2.554
+
+avg: 2.680%
+min: 2.157%
+max: 3.143%
+```
+
+Round 4D 结论：
+
+```text
+当前 release/no-multiarch 系列在 Android 真机 idle 时，VPP 自身不是 6% - 7% 基线。
+更可信的 tick-delta 复测结果是：
+
+  4B root minimal: 约 2.43%
+  4C root minimal: 约 2.37%
+  4C app idle:     约 2.68%
+
+no-IPsec 对 idle CPU 没有明显帮助，主要收益仍是体积和 RSS。
+当前 idle CPU 来源集中在 vpp_main，下一步如果要继续压 CPU，应优先研究 VPP main loop/timer/poll-sleep 行为，而不是继续裁 IPsec。
+```
