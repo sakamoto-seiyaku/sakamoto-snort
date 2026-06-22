@@ -1070,3 +1070,230 @@ release build 已通过 Android 3C L3 VPN datapath 验收。
 
 这一步仍不裁 VPP 功能，只验证 multiarch 关闭后体积、RSS、CPU 和 Android 3C 是否继续成立。
 ```
+
+## 8. Round 4B 执行记录：release + no ARM multiarch
+
+目标：
+
+```text
+在 Round 4A release 基础上关闭 AArch64 multiarch variants。
+不裁 VPP 功能。
+不改 tun_poc / HEV / vpn-lite datapath。
+```
+
+新增入口：
+
+```text
+Makefile:
+  ANDROID_RELEASE_NOMARCH_BUILD_DIR
+  ANDROID_RELEASE_NOMARCH_STAGE_DIR
+  ANDROID_RELEASE_NOMARCH_CMAKE_ARGS
+
+  android-vpp-configure-release-no-multiarch
+  android-vpp-build-release-no-multiarch
+  android-vpp-stage-release-no-multiarch
+  android-vpp-push-release-no-multiarch
+  android-vpp-minimal-release-no-multiarch
+```
+
+关闭的 CMake option：
+
+```text
+-DVPP_MARCH_VARIANT_OCTEONTX2=OFF
+-DVPP_MARCH_VARIANT_THUNDERX2T99=OFF
+-DVPP_MARCH_VARIANT_CORTEXA72=OFF
+-DVPP_MARCH_VARIANT_NEOVERSEN1=OFF
+-DVPP_MARCH_VARIANT_NEOVERSEV2=OFF
+```
+
+### 8.1 configure
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-configure-release-no-multiarch
+```
+
+关键结果：
+
+```text
+build_dir: work/vpp-android-release-no-multiarch
+Build type: release
+Plugins: nfqueue_poc tun_poc
+Multiarch variants: <empty>
+
+CMakeCache:
+  VPP_MARCH_VARIANT_OCTEONTX2=OFF
+  VPP_MARCH_VARIANT_THUNDERX2T99=OFF
+  VPP_MARCH_VARIANT_CORTEXA72=OFF
+  VPP_MARCH_VARIANT_NEOVERSEN1=OFF
+  VPP_MARCH_VARIANT_NEOVERSEV2=OFF
+```
+
+### 8.2 build and stage
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-build-release-no-multiarch
+make -C experiments/vpp-nfq-poc android-vpp-stage-release-no-multiarch
+```
+
+结果：
+
+```text
+release no-multiarch stage total: 11M
+
+bin/vpp:                         103,040 bytes
+bin/vppctl:                       10,624 bytes
+lib/libsvm.so:                   104,184 bytes
+lib/libvlib.so:                  683,216 bytes
+lib/libvlibapi.so:                67,992 bytes
+lib/libvlibmemory.so:            158,672 bytes
+lib/libvnet.so:                9,167,104 bytes
+lib/libvppinfra.so:              467,744 bytes
+plugins/nfqueue_poc_plugin.so:    52,120 bytes
+plugins/tun_poc_plugin.so:        18,136 bytes
+```
+
+对比：
+
+```text
+debug/O0-ish stripped stage:       186M
+release stripped stage:             29M
+release no-multiarch stripped stage: 11M
+
+release libvnet.so:             27,169,424 bytes
+release no-multiarch libvnet.so:  9,167,104 bytes
+
+release libvnet .text:          24,152,008 bytes
+release no-multiarch .text:      6,478,808 bytes
+```
+
+判断：
+
+```text
+关闭 ARM multiarch 在 release 基础上仍有明显收益。
+当前 full VPP runtime 仍保留所有功能，但 Android stage 已经从 186M 降到 11M。
+```
+
+### 8.3 no-multiarch minimal 真机启动
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-minimal-release-no-multiarch
+```
+
+真机结果：
+
+```text
+设备：Pixel 6a / Android 16 / root via su
+
+remote pushed no-multiarch stage:
+  libvnet.so: 8.7M
+  libvlib.so: 667K
+  libvppinfra.so: 457K
+
+vppctl show version:
+  vpp v26.02-release built by js on Main at 2026-06-22T07:51:07
+  vppctl_rc=0
+
+root minimal VPP RSS:
+  116,664 KB
+```
+
+### 8.4 Android 3C no-multiarch datapath 验收
+
+APK 构建：
+
+```sh
+VPP_STAGE_DIR=/home/js/Git/sakamoto/sakamoto-snort/experiments/vpp-nfq-poc/work/android-vpp-release-no-multiarch-stage \
+  experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+```
+
+APK 结果：
+
+```text
+snort-vpn-lite-debug.apk: 3.6M
+APK uncompressed entries total: 11,198,283 bytes
+lib/arm64-v8a/libvnet.so: 9,167,104 bytes
+lib/arm64-v8a/libhev-socks5-tunnel.so: 321,232 bytes
+```
+
+启动：
+
+```text
+mode=vpp-hev
+
+logcat:
+  started VPP pid=27591 fd=126 mode=2
+  started VPP HEV pid=27592
+  nativeStartVppProbe fd=126 vppMode=2 rc=0
+```
+
+HTTP probe：
+
+```sh
+printf 'GET /probe HTTP/1.0\r\nHost: example.test\r\n\r\n' |
+  adb shell nc -w 5 93.184.216.34 80
+```
+
+结果：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+```
+
+SOCKS5 smoke server：
+
+```text
+connect 93.184.216.34:80
+payload-len 43
+GET /probe HTTP/1.0
+Host: example.test
+```
+
+最终 `show tun-poc`：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 23 bytes 1746 tx 11 bytes 556
+shim-rx 11 bytes 556 shim-tx 23 bytes 1746
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+release no-multiarch app context VPP 资源短采样：
+
+```text
+RSS: 126,388 KB
+CPU samples: 3, 5, 0, 0, 0
+```
+
+清理：
+
+```text
+Stop intent + force-stop app。
+kill device-local sakamoto-socks5-smoke。
+确认无 vpp / vpnlite / sakamoto-socks5 / HEV 残留。
+```
+
+Round 4B 结论：
+
+```text
+release + no ARM multiarch 已通过 Android 3C L3 VPN datapath 验收。
+
+当前最重要的体积结论：
+  186M -> 29M -> 11M
+
+当前最重要的 APK 结论：
+  release APK:              8.1M
+  release no-multiarch APK: 3.6M
+
+当前 VPP 仍保留 libvnet 中的 IPsec、host stack、reassembly、device/L2/MPLS 等功能。
+下一步 Round 4C 再开始源码级功能裁剪。
+```
