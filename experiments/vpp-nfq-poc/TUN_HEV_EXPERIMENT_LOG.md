@@ -80,6 +80,24 @@ TUN fd outbound
 主 TUN fd 的集成方式。如果 HEV API 强制独占主 TUN fd，则不能直接作为当前架构的 egress
 engine，需要替代 adapter 或魔改。
 
+### POC-C1：HEV external fd + socketpair shim
+
+先不接 VPP，验证 HEV 是否能消费非 `/dev/net/tun` 的 packet-oriented fd：
+
+```text
+test driver
+  -> SOCK_SEQPACKET socketpair one end
+  -> HEV external tun_fd receives the other end
+  -> test driver sends synthetic IPv4/TCP packets
+  -> HEV lwIP accepts the TCP flow
+  -> HEV connects to local test SOCKS5 server
+  -> SOCKS5 server returns HTTP payload
+  -> HEV writes response packet back to socketpair
+  -> test driver observes inbound IPv4/TCP packet
+```
+
+这个阶段只回答 HEV placement 是否有不魔改的通路，不证明 VPP plugin 已经接好。
+
 ## 3. 当前执行记录
 
 ```text
@@ -231,6 +249,115 @@ engine，需要替代 adapter 或魔改。
     VPP 可以从该 fd 收到 L3 packet，处理后写回同一个 fd。
     这证明 Android VpnService 提供 tun-fd 的生命周期模型，至少可以被 VPP 插件形式接入。
     HEV egress 尚未验证；下一阶段不能假设 HEV 能直接按这个模型工作。
+
+2026-06-22
+  HEV 上游源码/API 调查：
+    拉取：
+      https://github.com/heiher/hev-socks5-tunnel
+    本次验证版本：
+      2.15.0-3-g3911f79
+      commit 3911f79
+
+  公开 API：
+    hev_socks5_tunnel_main(config_path, tun_fd)
+    hev_socks5_tunnel_main_from_file(config_path, tun_fd)
+    hev_socks5_tunnel_main_from_str(config_str, config_len, tun_fd)
+    hev_socks5_tunnel_quit()
+    hev_socks5_tunnel_stats(...)
+
+  源码观察：
+    src/hev-socks5-tunnel.c tunnel_init(extern_tun_fd >= 0)：
+      只对 fd 设置 FIONBIO，然后保存为 tun_fd。
+      不强制 ioctl(TUNSETIFF)，不校验 fd 必须来自 /dev/net/tun。
+
+    src/hev-tunnel.h Linux 分支：
+      hev_tunnel_read 使用 hev_task_io_read(fd, ...)，返回 lwIP pbuf。
+      hev_tunnel_write 使用 write/writev(fd, ...)，把 lwIP output 写回 fd。
+
+    src/hev-socks5-tunnel.c：
+      lwip_io_task_entry 从 tun_fd 读 packet 并喂给 netif.input。
+      netif_output_handler 把 lwIP output 写回同一个 tun_fd。
+
+  结论：
+    HEV 没有公开 packet callback API。
+    但 external tun_fd 分支实际上只需要一个可 poll/read/write 的 packet fd。
+    因此 SOCK_SEQPACKET socketpair 具备作为 HEV-side shim fd 的可能性。
+
+2026-06-22
+  新增实验脚本：
+    scripts/fetch-hev.sh
+    scripts/build-hev.sh
+    scripts/hev-socketpair-probe.py
+    scripts/run-hev-socketpair-probe.sh
+
+  新增 Makefile 目标：
+    fetch-hev
+    build-hev
+    hev-socketpair-probe
+
+  说明：
+    fetch-hev 默认 pin 到 HEV commit 3911f79，避免后续 upstream main 漂移导致实验不可复现。
+
+2026-06-22
+  宿主机执行：
+    cd experiments/vpp-nfq-poc
+    make hev-socketpair-probe
+
+  结果：
+    成功。
+
+  关键输出：
+    packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x12 len=0
+    packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x10 len=0
+    packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x18 len=40
+    SOCKS event: ('greeting', b'\x05\x01\x00')
+    SOCKS event: ('connect', '93.184.216.34', 80)
+    SOCKS event: ('payload', b'GET /probe HTTP/1.0\r\nHost: example.test\r\n\r\n')
+    response payload: b'HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK'
+
+  结论：
+    HEV 可以从 SOCK_SEQPACKET socketpair 收到 synthetic outbound IPv4/TCP packet。
+    HEV 会通过 SOCKS5 CONNECT 访问对应远端地址。
+    HEV 会把 upstream response 重新封装成 inbound IPv4/TCP packet 写回 socketpair。
+
+2026-06-22
+  Docker 内执行：
+    DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh \
+      make build-hev hev-socketpair-probe
+
+  第一次结果：
+    probe 成功，但 build log 出现 Git dubious ownership 噪声。
+
+  处理：
+    scripts/build-hev.sh 增加 safe.directory 配置，覆盖 HEV root 和 submodules。
+
+  第二次结果：
+    build-hev 与 hev-socketpair-probe 均成功，且无 dubious ownership 噪声。
+
+  Docker 关键输出：
+    packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x12 len=0
+    packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x10 len=0
+    packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x18 len=40
+    SOCKS event: ('greeting', b'\x05\x01\x00')
+    SOCKS event: ('connect', '93.184.216.34', 80)
+    SOCKS event: ('payload', b'GET /probe HTTP/1.0\r\nHost: example.test\r\n\r\n')
+    response payload: b'HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK'
+
+  日志：
+    results/hev-socketpair-probe.log
+
+2026-06-22
+  重要限制：
+    probe 使用 Python ctypes 直接在线程里调用 hev_socks5_tunnel_quit() 时，
+    HEV task-system cleanup 曾触发 free()/munmap_chunk() abort。
+
+  处理：
+    probe 改为 fork 子进程运行 HEV，父进程持有 driver 端 socketpair。
+    实验结束时由父进程 terminate HEV 子进程。
+
+  判断：
+    这不影响 socketpair shim 的 datapath 结论。
+    但后续 native/JNI 集成必须单独验证 HEV lifecycle/quit，不能从 Python ctypes 线程结果外推。
 ```
 
 ## 4. 新增 POC-B 文件
@@ -264,11 +391,22 @@ POC-B 状态：
   external TUN fd -> VPP plugin -> packet handling -> write back same TUN fd
 ```
 
+POC-C1 状态：
+
+```text
+已通过：
+  synthetic packet driver -> SOCK_SEQPACKET shim -> HEV -> SOCKS5 -> HEV -> SOCK_SEQPACKET shim
+
+尚未通过：
+  VPP plugin -> HEV shim -> VPP plugin -> main TUN fd
+```
+
 下一步：
 
 ```text
-1. 调查 HEV 是否支持非独占主 TUN fd 的 packet I/O 接入。
-2. 若 HEV 只能独占 TUN fd，设计 socketpair/shim fd 或替代 egress adapter。
-3. 验证 allow packet 从 VPP 送入 HEV，HEV response 再回到 VPP path。
-4. 验证 inbound 回包由 VPP 写回主 TUN fd。
+1. 给 tun_poc 增加 HEV shim fd 模式：main TUN fd 与 HEV socketpair fd 分离。
+2. outbound：main TUN fd -> VPP/tun_poc -> HEV shim fd。
+3. inbound：HEV shim fd -> VPP/tun_poc -> shared packet path -> main TUN fd。
+4. 保持 SOCK_SEQPACKET，不使用 SOCK_STREAM，避免 IP packet 边界被合并或拆分。
+5. 单独验证 native/JNI 下 HEV quit/lifecycle，不使用 Python ctypes 线程结果做结论。
 ```
