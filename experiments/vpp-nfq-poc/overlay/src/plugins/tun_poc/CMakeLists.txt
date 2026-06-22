@@ -12,5 +12,5 @@ add_vpp_plugin(tun_poc
   vlib
   vppinfra
 
-  SUPPORTED_OS_LIST Linux
+  SUPPORTED_OS_LIST Linux Android
 )

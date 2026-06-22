@@ -13,8 +13,11 @@ STRIP="${STRIP:-1}"
 BIN_SRC="$BUILD_DIR/bin/vpp"
 VPPCTL_SRC="$BUILD_DIR/bin/vppctl"
 LIB_SRC="$BUILD_DIR/lib/aarch64-linux-android"
-PLUGIN_SRC="$LIB_SRC/vpp_plugins/nfqueue_poc_plugin.so"
 REMOTE_ROOT="${REMOTE_ROOT:-/data/local/tmp/vpp-nfq-poc}"
+plugins=(
+  nfqueue_poc_plugin.so
+  tun_poc_plugin.so
+)
 
 libs=(
   libvnet.so
@@ -41,9 +44,11 @@ fi
 for lib in "${libs[@]}"; do
   cp "$LIB_SRC/$lib" "$STAGE_DIR/lib/$lib"
 done
-if [ -f "$PLUGIN_SRC" ]; then
-  cp "$PLUGIN_SRC" "$STAGE_DIR/plugins/nfqueue_poc_plugin.so"
-fi
+for plugin in "${plugins[@]}"; do
+  if [ -f "$LIB_SRC/vpp_plugins/$plugin" ]; then
+    cp "$LIB_SRC/vpp_plugins/$plugin" "$STAGE_DIR/plugins/$plugin"
+  fi
+done
 
 cat >"$STAGE_DIR/runtime/startup.conf" <<EOF
 unix {
@@ -73,11 +78,13 @@ plugins {
   plugin default { disable }
 EOF
 
-if [ -f "$STAGE_DIR/plugins/nfqueue_poc_plugin.so" ]; then
-  cat >>"$STAGE_DIR/runtime/startup.conf" <<EOF
-  plugin nfqueue_poc_plugin.so { enable }
+for plugin in "${plugins[@]}"; do
+  if [ -f "$STAGE_DIR/plugins/$plugin" ]; then
+    cat >>"$STAGE_DIR/runtime/startup.conf" <<EOF
+  plugin $plugin { enable }
 EOF
-fi
+  fi
+done
 
 cat >>"$STAGE_DIR/runtime/startup.conf" <<EOF
 }
@@ -85,9 +92,10 @@ EOF
 
 if [ "$STRIP" = "1" ]; then
   "$STRIP_BIN" --strip-unneeded "$STAGE_DIR/bin"/* "$STAGE_DIR"/lib/*.so
-  if [ -f "$STAGE_DIR/plugins/nfqueue_poc_plugin.so" ]; then
-    "$STRIP_BIN" --strip-unneeded "$STAGE_DIR/plugins/nfqueue_poc_plugin.so"
-  fi
+  for plugin in "$STAGE_DIR"/plugins/*.so; do
+    [ -f "$plugin" ] || continue
+    "$STRIP_BIN" --strip-unneeded "$plugin"
+  done
 fi
 
 echo "# Android VPP core stage"

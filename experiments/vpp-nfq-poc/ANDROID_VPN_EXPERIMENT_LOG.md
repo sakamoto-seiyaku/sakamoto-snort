@@ -297,3 +297,97 @@ full-route VPN 未接转发时会黑洞流量；实验结束后已 force-stop ap
 暂不接 HEV。
 暂不要求设备外网可用。
 ```
+
+## 12. Phase 2 准备：Android tun_poc plugin
+
+变更：
+
+```text
+overlay/src/plugins/tun_poc/CMakeLists.txt
+  SUPPORTED_OS_LIST Linux Android
+
+scripts/android-stage-vpp-core.sh
+  stage nfqueue_poc_plugin.so 和 tun_poc_plugin.so
+  startup.conf 中启用所有已 stage 的 POC plugin
+```
+
+构建命令：
+
+```sh
+cd experiments/vpp-nfq-poc
+VPP_PLUGINS="nfqueue_poc;tun_poc" ./scripts/android-configure-vpp-probe.sh
+./scripts/android-build-vpp-probe.sh
+TARGET=vppctl ./scripts/android-build-vpp-probe.sh
+TARGET=nfqueue_poc_plugin ./scripts/android-build-vpp-probe.sh
+TARGET=tun_poc_plugin ./scripts/android-build-vpp-probe.sh
+./scripts/android-stage-vpp-core.sh
+```
+
+构建结果：
+
+```text
+cmake_rc=0
+vpp build_rc=0
+vppctl build_rc=0
+nfqueue_poc_plugin build_rc=0
+tun_poc_plugin build_rc=0
+stage size: 186M
+plugins:
+  nfqueue_poc_plugin.so: 72K
+  tun_poc_plugin.so: 21K
+```
+
+root 启动验证：
+
+```text
+VPP pid: 22952
+vppctl show version: rc=0
+vpp v26.02-release built by js on Main at 2026-06-22T02:38:52
+```
+
+`show tun-poc`：
+
+```text
+enabled 0 fd -1 mode count-only
+rx 0 bytes 0 tx 0 bytes 0
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 write-errors 0
+```
+
+结论：
+
+```text
+Android VPP runtime 已可加载 tun_poc plugin。
+这一步只验证插件存在与 CLI 可用，尚未把 Android VpnService fd 传给 VPP。
+```
+
+## 13. Phase 2 下一步：APK 内 fd -> VPP
+
+下一步最小实现：
+
+```text
+1. vpn-lite APK 打包 VPP runtime：
+   - libvpppoc.so 作为 executable payload，对应 staged bin/vpp；
+   - libvppctlpoc.so 可选，第一轮 JNI 可不依赖 vppctl；
+   - VPP dependent libs 和 plugin .so 放进 nativeLibraryDir。
+2. SnortVpnService 增加 VPP probe 模式：
+   - establish() -> detachFd();
+   - native fork();
+   - child dup2(rawFd, 3);
+   - child execve(nativeLibraryDir/libvpppoc.so, ... -c app files startup.conf);
+   - startup.conf plugin path 指向 nativeLibraryDir；
+   - 启动后执行/注入 tun-poc enable fd 3 mode count-only。
+3. 第一轮验收只看：
+   - VPP 进程由 app/VpnService 启动；
+   - tun-poc enable fd 3 成功；
+   - 产生流量后 show tun-poc rx 增长；
+   - 停止服务能杀掉 VPP，VPN 清空。
+```
+
+待确认风险：
+
+```text
+app UID 下 VPP shm/runtime 目录是否能稳定创建。
+app context 下 exec nativeLibraryDir 中的 VPP executable 是否被 SELinux 允许。
+VPP CLI socket 由 app 自己使用时是否需要 vppctl，还是 native 内直接写 startup exec file。
+```
