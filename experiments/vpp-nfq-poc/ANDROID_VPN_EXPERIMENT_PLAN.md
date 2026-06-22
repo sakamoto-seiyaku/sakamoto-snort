@@ -2,7 +2,7 @@
 
 日期：2026-06-22
 分支：`research/vpp-nfq-poc`
-状态：Phase 1 已通过；Phase 2 count-only 已在 Pixel 6a / Android 16 上通过；Linux/Docker Phase 3 前置 POC 已通过；Android Phase 3A HEV 打包/lifecycle 已通过；Android Phase 3B 待开始。
+状态：Phase 1 已通过；Phase 2 count-only 已在 Pixel 6a / Android 16 上通过；Linux/Docker Phase 3 前置 POC 已通过；Android Phase 3A HEV 打包/lifecycle 已通过；Android Phase 3B VPP forward-fd bridge 已通过；Android Phase 3C 待开始。
 
 ## 1. 目标
 

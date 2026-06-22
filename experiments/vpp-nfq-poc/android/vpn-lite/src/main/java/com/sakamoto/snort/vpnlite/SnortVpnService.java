@@ -13,6 +13,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_MODE = "mode";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
+    public static final String MODE_VPP_FORWARD = "vpp-forward";
     public static final String MODE_HEV = "hev";
 
     private static final String TAG = "SnortVpnLite";
@@ -29,7 +30,8 @@ public final class SnortVpnService extends VpnService {
 
     private static native void nativeStopProbe();
 
-    private static native int nativeStartVppProbe(int fd, String nativeLibraryDir, String filesDir);
+    private static native int nativeStartVppProbe(int fd, String nativeLibraryDir, String filesDir,
+                                                  boolean forwardMode);
 
     private static native void nativeStopVppProbe();
 
@@ -91,10 +93,12 @@ public final class SnortVpnService extends VpnService {
 
             int rawFd = vpnFd.detachFd();
             vpnFd = null;
-            if (MODE_VPP.equals(mode)) {
+            if (MODE_VPP.equals(mode) || MODE_VPP_FORWARD.equals(mode)) {
+                boolean forwardMode = MODE_VPP_FORWARD.equals(mode);
                 int rc = nativeStartVppProbe(rawFd, getApplicationInfo().nativeLibraryDir,
-                        getFilesDir().getAbsolutePath());
-                Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " rc=" + rc);
+                        getFilesDir().getAbsolutePath(), forwardMode);
+                Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " forward=" + forwardMode
+                        + " rc=" + rc);
             } else {
                 int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS);
                 Log.i(TAG, "nativeStartProbe fd=" + rawFd + " rc=" + rc + " log=" + logPath);

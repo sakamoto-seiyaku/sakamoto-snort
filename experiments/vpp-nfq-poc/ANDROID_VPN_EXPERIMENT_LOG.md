@@ -702,3 +702,125 @@ HEV Android .so 可以构建、打包、dlopen、启动并停止。
 但 3A 没有流量，不代表 HEV Android datapath/lifecycle 已完全干净。
 下一步进入 3B：Android VPP forward-fd bridge。
 ```
+
+## 19. Android Phase 3B：VPP forward-fd bridge
+
+目标：
+
+```text
+验证 Android VpnService fd -> VPP main fd -> SOCK_SEQPACKET shim fd 的双向桥接。
+本阶段不接 HEV。
+shim 另一端由 native probe 持有，只记录 packet，并对 IPv4 ICMP echo 做本地反射。
+```
+
+实现：
+
+```text
+新增 mode：
+  vpp-forward
+
+Java:
+  mode=vpp-forward 仍走 VpnService.prepare() 和 full-route VPN。
+  nativeStartVppProbe(fd, nativeLibraryDir, filesDir, forwardMode=true)
+
+native:
+  socketpair(AF_UNIX, SOCK_SEQPACKET)
+  VPP child:
+    fd 3 = Android VpnService detached tun-fd
+    fd 4 = socketpair VPP end
+  VPP startup.exec:
+    tun-poc enable fd 3 mode forward-fd shim-fd 4
+    show tun-poc
+  parent:
+    shim driver thread reads socketpair peer
+    logs packets into files/vpp/logs/vpp-shim.log
+    reflects IPv4 ICMP echo requests back into socketpair
+```
+
+构建：
+
+```text
+重新同步 overlay：
+  scripts/apply-vpp-overlay.sh
+  scripts/apply-vpp-android-overlay.sh
+
+重新构建 Android tun_poc_plugin：
+  TARGET=tun_poc_plugin ./scripts/android-build-vpp-probe.sh
+
+重新 stage：
+  ./scripts/android-stage-vpp-core.sh
+
+重新构建 APK：
+  android/vpn-lite/scripts/build-debug-apk.sh
+```
+
+Android 启动：
+
+```text
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp-forward
+```
+
+关键 logcat：
+
+```text
+I SnortVpnLiteNative: started VPP pid=25099 fd=126 forward=1 conf=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.conf
+I SnortVpnLite: nativeStartVppProbe fd=126 forward=true rc=0
+I SnortVpnLiteNative: vpp shim driver start fd=125
+I SnortVpnLiteNative: vpp monitor start pid=25099 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+```
+
+shim driver 观察到 VPP 转出的真实 VPN 包：
+
+```text
+packet=4 len=60 ipv4 proto=6 10.111.0.2 -> 74.125.135.188
+packet=7 len=1278 ipv4 proto=17 10.111.0.2 -> 216.239.34.223
+...
+```
+
+ICMP 反射测试：
+
+```text
+adb shell ping -c 1 -W 2 1.1.1.1
+
+结果：
+  1 packets transmitted, 1 received, 0% packet loss
+  64 bytes from 1.1.1.1: icmp_seq=1 ttl=64
+
+shim log:
+  packet=38 len=84 ipv4 proto=1 10.111.0.2 -> 1.1.1.1
+  shim reflected icmp len=84 written=84
+```
+
+实时 VPP 计数：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 41 bytes 20867 tx 1 bytes 84
+shim-rx 1 bytes 84 shim-tx 41 bytes 20867
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+停止：
+
+```text
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez stop true
+
+logcat:
+  I SnortVpnLiteNative: vpp shim driver stop packets=43
+  I SnortVpnLite: VPN stopped
+
+停止后：
+  无 VPP child 残留。
+  最后 force-stop app 清理 Activity parent。
+```
+
+结论：
+
+```text
+Android Phase 3B 通过。
+Android VpnService fd 可以由 VPP/tun_poc forward-fd 桥到 SOCK_SEQPACKET shim。
+main rx -> shim tx 成立：真实 VPN 包进入 shim driver。
+shim rx -> main tx 成立：shim driver 写回 ICMP reply，VPP 写回 main tun-fd，ping 收到 reply。
+下一步进入 3C：把 shim driver 替换为 HEV。
+```

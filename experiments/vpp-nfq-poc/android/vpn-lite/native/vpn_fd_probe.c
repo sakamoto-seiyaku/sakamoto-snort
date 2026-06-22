@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,7 @@
 #define BUF_SIZE 4096
 #define PATH_BUF_SIZE 1024
 #define VPP_TUN_FD 3
+#define VPP_SHIM_FD 4
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_thread;
@@ -34,9 +36,13 @@ static char g_log_path[PATH_BUF_SIZE];
 
 static pthread_t g_vpp_monitor_thread;
 static bool g_vpp_monitor_running;
+static pthread_t g_vpp_shim_thread;
+static bool g_vpp_shim_running;
 static pid_t g_vpp_pid = -1;
+static int g_vpp_shim_fd = -1;
 static char g_vpp_cli_sock[PATH_BUF_SIZE];
 static char g_vpp_cli_log[PATH_BUF_SIZE];
+static char g_vpp_shim_log[PATH_BUF_SIZE];
 
 static pid_t g_hev_pid = -1;
 static int g_hev_driver_fd = -1;
@@ -240,6 +246,145 @@ static void describe_packet(FILE *file, const unsigned char *buf, ssize_t len, i
     log_line(file, "packet=%d len=%zd version=%u short-or-unknown", count, len, version);
 }
 
+static uint16_t internet_checksum(const unsigned char *data, size_t len) {
+    uint32_t sum = 0;
+
+    while (len > 1) {
+        sum += ((uint16_t)data[0] << 8) | data[1];
+        data += 2;
+        len -= 2;
+    }
+    if (len > 0) {
+        sum += ((uint16_t)data[0] << 8);
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xffffU) + (sum >> 16);
+    }
+    return htons((uint16_t)~sum);
+}
+
+static ssize_t reflect_icmp4(unsigned char *packet, ssize_t packet_len) {
+    if (packet_len < 28 || (packet[0] >> 4) != 4) {
+        return -1;
+    }
+
+    size_t ihl = (size_t)(packet[0] & 0x0fU) * 4U;
+    uint16_t total_len_be;
+    memcpy(&total_len_be, packet + 2, sizeof(total_len_be));
+    size_t total_len = ntohs(total_len_be);
+    if (ihl < 20 || total_len < ihl + 8 || total_len > (size_t)packet_len) {
+        return -1;
+    }
+    if (packet[9] != IPPROTO_ICMP) {
+        return -1;
+    }
+    if (packet[ihl] != 8 || packet[ihl + 1] != 0) {
+        return -1;
+    }
+
+    unsigned char src[4];
+    memcpy(src, packet + 12, sizeof(src));
+    memcpy(packet + 12, packet + 16, sizeof(src));
+    memcpy(packet + 16, src, sizeof(src));
+
+    packet[8] = 64;
+    packet[10] = 0;
+    packet[11] = 0;
+    uint16_t ip_sum = internet_checksum(packet, ihl);
+    memcpy(packet + 10, &ip_sum, sizeof(ip_sum));
+
+    packet[ihl] = 0;
+    packet[ihl + 2] = 0;
+    packet[ihl + 3] = 0;
+    uint16_t icmp_sum = internet_checksum(packet + ihl, total_len - ihl);
+    memcpy(packet + ihl + 2, &icmp_sum, sizeof(icmp_sum));
+    return (ssize_t)total_len;
+}
+
+static void *vpp_shim_thread(void *arg) {
+    (void)arg;
+    unsigned char buf[BUF_SIZE];
+    int count = 0;
+
+    pthread_mutex_lock(&g_lock);
+    int fd = g_vpp_shim_fd;
+    char log_path[PATH_BUF_SIZE];
+    snprintf(log_path, sizeof(log_path), "%s", g_vpp_shim_log);
+    pthread_mutex_unlock(&g_lock);
+
+    FILE *file = fopen(log_path, "a");
+    log_line(file, "vpp shim driver start fd=%d", fd);
+
+    while (1) {
+        pthread_mutex_lock(&g_lock);
+        bool running = g_vpp_shim_running;
+        fd = g_vpp_shim_fd;
+        pthread_mutex_unlock(&g_lock);
+        if (!running || fd < 0) {
+            break;
+        }
+
+        struct pollfd pfd = {
+                .fd = fd,
+                .events = POLLIN,
+        };
+        int ready = poll(&pfd, 1, 500);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EBADF) {
+                pthread_mutex_lock(&g_lock);
+                bool stopping = !g_vpp_shim_running;
+                pthread_mutex_unlock(&g_lock);
+                if (stopping) {
+                    break;
+                }
+            }
+            log_line(file, "shim poll error errno=%d %s", errno, strerror(errno));
+            break;
+        }
+        if (ready == 0) {
+            continue;
+        }
+
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            if (errno == EBADF) {
+                pthread_mutex_lock(&g_lock);
+                bool stopping = !g_vpp_shim_running;
+                pthread_mutex_unlock(&g_lock);
+                if (stopping) {
+                    break;
+                }
+            }
+            log_line(file, "shim read error errno=%d %s", errno, strerror(errno));
+            break;
+        }
+        if (n == 0) {
+            log_line(file, "shim read eof");
+            break;
+        }
+
+        count++;
+        describe_packet(file, buf, n, count);
+        ssize_t reply_len = reflect_icmp4(buf, n);
+        if (reply_len > 0) {
+            ssize_t written = write(fd, buf, (size_t)reply_len);
+            log_line(file, "shim reflected icmp len=%zd written=%zd", reply_len, written);
+        }
+    }
+
+    log_line(file, "vpp shim driver stop packets=%d", count);
+    if (file) {
+        fclose(file);
+    }
+    return NULL;
+}
+
 static void *probe_thread(void *arg) {
     (void)arg;
     unsigned char buf[BUF_SIZE];
@@ -384,7 +529,8 @@ static void *vpp_monitor_thread(void *arg) {
 
 static int write_vpp_files(const char *native_dir, const char *files_dir,
                            char *startup_conf, size_t startup_conf_len,
-                           char *stdout_log, size_t stdout_log_len) {
+                           char *stdout_log, size_t stdout_log_len,
+                           bool forward_mode) {
     char vpp_dir[PATH_BUF_SIZE];
     char runtime_dir[PATH_BUF_SIZE];
     char logs_dir[PATH_BUF_SIZE];
@@ -406,12 +552,14 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     snprintf(vpp_log, sizeof(vpp_log), "%s/vpp.log", logs_dir);
     snprintf(g_vpp_cli_sock, sizeof(g_vpp_cli_sock), "%s/cli.sock", runtime_dir);
     snprintf(g_vpp_cli_log, sizeof(g_vpp_cli_log), "%s/vpp-cli.log", logs_dir);
+    snprintf(g_vpp_shim_log, sizeof(g_vpp_shim_log), "%s/vpp-shim.log", logs_dir);
 
     if (mkdir_p(runtime_dir) < 0 || mkdir_p(logs_dir) < 0 || mkdir_p(shm_dir) < 0) {
         return -1;
     }
     unlink(g_vpp_cli_sock);
     unlink(g_vpp_cli_log);
+    unlink(g_vpp_shim_log);
     unlink(stdout_log);
     unlink(vpp_log);
 
@@ -420,10 +568,17 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
         snprintf(plugin_name, sizeof(plugin_name), "%s", "libtun_poc_plugin.so");
     }
 
-    snprintf(exec_text, sizeof(exec_text),
-             "tun-poc enable fd %d mode count-only\n"
-             "show tun-poc\n",
-             VPP_TUN_FD);
+    if (forward_mode) {
+        snprintf(exec_text, sizeof(exec_text),
+                 "tun-poc enable fd %d mode forward-fd shim-fd %d\n"
+                 "show tun-poc\n",
+                 VPP_TUN_FD, VPP_SHIM_FD);
+    } else {
+        snprintf(exec_text, sizeof(exec_text),
+                 "tun-poc enable fd %d mode count-only\n"
+                 "show tun-poc\n",
+                 VPP_TUN_FD);
+    }
     if (write_text_file(startup_exec, exec_text) < 0) {
         return -1;
     }
@@ -463,7 +618,8 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
 
 JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
-        JNIEnv *env, jclass clazz, jint fd, jstring native_library_dir, jstring files_dir) {
+        JNIEnv *env, jclass clazz, jint fd, jstring native_library_dir, jstring files_dir,
+        jboolean forward_mode) {
     (void)clazz;
 
     const char *native_dir = (*env)->GetStringUTFChars(env, native_library_dir, NULL);
@@ -489,8 +645,9 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         close(fd);
         return -2;
     }
+    bool use_forward = forward_mode == JNI_TRUE;
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
-                        stdout_log, sizeof(stdout_log)) < 0) {
+                        stdout_log, sizeof(stdout_log), use_forward) < 0) {
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
@@ -507,8 +664,20 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     }
     pthread_mutex_unlock(&g_lock);
 
+    int shim_fds[2] = {-1, -1};
+    if (use_forward && socketpair(AF_UNIX, SOCK_SEQPACKET, 0, shim_fds) < 0) {
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        close(fd);
+        return -7;
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
+        if (shim_fds[0] >= 0) {
+            close(shim_fds[0]);
+            close(shim_fds[1]);
+        }
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
@@ -516,11 +685,41 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     }
 
     if (pid == 0) {
-        if (fd != VPP_TUN_FD) {
-            dup2(fd, VPP_TUN_FD);
-            close(fd);
+        int tun_fd = fd;
+        int shim_child_fd = use_forward ? shim_fds[1] : -1;
+        if (use_forward) {
+            close(shim_fds[0]);
+
+            if (tun_fd == VPP_SHIM_FD) {
+                int moved = fcntl(tun_fd, F_DUPFD_CLOEXEC, VPP_SHIM_FD + 1);
+                if (moved < 0) {
+                    _exit(126);
+                }
+                close(tun_fd);
+                tun_fd = moved;
+            }
+            if (shim_child_fd == VPP_TUN_FD) {
+                int moved = fcntl(shim_child_fd, F_DUPFD_CLOEXEC, VPP_SHIM_FD + 1);
+                if (moved < 0) {
+                    _exit(126);
+                }
+                close(shim_child_fd);
+                shim_child_fd = moved;
+            }
+        }
+
+        if (tun_fd != VPP_TUN_FD) {
+            dup2(tun_fd, VPP_TUN_FD);
+            close(tun_fd);
         }
         set_cloexec(VPP_TUN_FD, false);
+        if (use_forward) {
+            if (shim_child_fd != VPP_SHIM_FD) {
+                dup2(shim_child_fd, VPP_SHIM_FD);
+                close(shim_child_fd);
+            }
+            set_cloexec(VPP_SHIM_FD, false);
+        }
 
         int out = open(stdout_log, O_CREAT | O_WRONLY | O_APPEND, 0600);
         if (out >= 0) {
@@ -540,11 +739,36 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     }
 
     close(fd);
+    if (use_forward) {
+        close(shim_fds[1]);
+    }
 
     pthread_mutex_lock(&g_lock);
     g_vpp_pid = pid;
     g_vpp_monitor_running = true;
+    if (use_forward) {
+        g_vpp_shim_fd = shim_fds[0];
+        g_vpp_shim_running = true;
+    }
     pthread_mutex_unlock(&g_lock);
+
+    if (use_forward) {
+        int shim_rc = pthread_create(&g_vpp_shim_thread, NULL, vpp_shim_thread, NULL);
+        if (shim_rc != 0) {
+            close(shim_fds[0]);
+            kill(pid, SIGTERM);
+            pthread_mutex_lock(&g_lock);
+            g_vpp_shim_running = false;
+            g_vpp_shim_fd = -1;
+            g_vpp_monitor_running = false;
+            g_vpp_pid = -1;
+            pthread_mutex_unlock(&g_lock);
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -8;
+        }
+    }
 
     int rc = pthread_create(&g_vpp_monitor_thread, NULL, vpp_monitor_thread, NULL);
     if (rc != 0) {
@@ -552,15 +776,26 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         pthread_mutex_lock(&g_lock);
         g_vpp_monitor_running = false;
         g_vpp_pid = -1;
+        bool was_shim = g_vpp_shim_running;
+        int shim_fd = g_vpp_shim_fd;
+        g_vpp_shim_running = false;
+        g_vpp_shim_fd = -1;
         pthread_mutex_unlock(&g_lock);
+        if (shim_fd >= 0) {
+            close(shim_fd);
+        }
+        if (was_shim) {
+            pthread_join(g_vpp_shim_thread, NULL);
+        }
         waitpid(pid, NULL, 0);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
-        return -6;
+        return -9;
     }
 
-    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "started VPP pid=%d fd=%d conf=%s", pid, fd,
-                        startup_conf);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                        "started VPP pid=%d fd=%d forward=%d conf=%s", pid, fd,
+                        use_forward ? 1 : 0, startup_conf);
     (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
     (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
     return 0;
@@ -574,10 +809,17 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     pthread_mutex_lock(&g_lock);
     pid_t pid = g_vpp_pid;
     bool was_monitoring = g_vpp_monitor_running;
+    bool was_shim_running = g_vpp_shim_running;
+    int shim_fd = g_vpp_shim_fd;
     g_vpp_pid = -1;
     g_vpp_monitor_running = false;
+    g_vpp_shim_running = false;
+    g_vpp_shim_fd = -1;
     pthread_mutex_unlock(&g_lock);
 
+    if (shim_fd >= 0) {
+        close(shim_fd);
+    }
     if (pid > 0) {
         kill(pid, SIGTERM);
         for (int i = 0; i < 10; i++) {
@@ -597,6 +839,9 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
 
     if (was_monitoring) {
         pthread_join(g_vpp_monitor_thread, NULL);
+    }
+    if (was_shim_running) {
+        pthread_join(g_vpp_shim_thread, NULL);
     }
 }
 
