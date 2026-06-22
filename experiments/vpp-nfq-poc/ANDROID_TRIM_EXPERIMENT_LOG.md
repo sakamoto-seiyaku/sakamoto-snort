@@ -4,7 +4,7 @@
 分支：`research/vpp-nfq-poc`
 
 本文记录第三组 Android VPP 裁剪实验。目标是确认在只把 VPP 当包处理框架使用时，
-裁掉不需要的 VPP 插件后，Android 产物大小和 idle CPU 基线能否下降。
+裁掉不需要的 VPP 代码和插件后，Android 产物大小、RSS 和 idle CPU 基线能否下降。
 
 ## 0. 当前可运行状态
 
@@ -31,6 +31,39 @@
 因此当前结论不是“Android VPP 不能跑”，而是“能跑，但原版 runtime 体积和 idle
 CPU 基线偏重”。本日志后续的 `vpp_lite` 是裁剪探索分支；它目前还不能替代已跑通的
 原版 Android VPP POC。
+
+截至 Android Phase 3C，另一个更重要的可运行基线已经成立：
+
+```text
+Android TCP client
+  -> VpnService L3 tun-fd
+  -> VPP/tun_poc forward-fd
+  -> SOCK_SEQPACKET shim
+  -> HEV
+  -> device-local SOCKS5 smoke server
+  -> HEV
+  -> VPP/tun_poc forward-fd
+  -> VpnService L3 tun-fd
+  -> Android TCP client
+
+HTTP client 已收到:
+  HTTP/1.0 200 OK
+  Content-Length: 2
+
+  OK
+
+VPP/tun_poc:
+  enabled 1 fd 3 shim-fd 4 mode forward-fd
+  rx 21 bytes 1650 tx 11 bytes 556
+  shim-rx 11 bytes 556 shim-tx 21 bytes 1650
+  parse/read/write/shim errors all 0
+```
+
+所以后续裁剪的主验收不再只是“VPP 能启动”或“NFQUEUE allow/drop 能过”，而是：
+
+```text
+裁剪后的 VPP runtime 必须仍能跑通 Android 3C 的 L3 VPN datapath。
+```
 
 ## 1. 已知基线
 
@@ -414,7 +447,7 @@ udp:
 
 bonding/span/gso/virtio/mpls/srv6/ipip/teib/pg/syslog/bfd/sfdp:
   当前 Android NFQUEUE/VPN POC 没有直接需求。
-  可逐组裁剪，但每组都要过最小启动和 NFQUEUE smoke。
+  可逐组裁剪，但每组都要过最小启动和 Android 3C VPN smoke。
 ```
 
 第四层，高风险或暂缓：
@@ -440,20 +473,25 @@ ip/reass/* 是最大功能级体积来源之一，但不是简单“肯定可裁
 ```text
 Round 4A: release build
   只加 CMAKE_BUILD_TYPE=release，不裁功能。
-  记录 libvnet.so、stage total、RSS、idle CPU、NFQUEUE smoke。
+  记录 libvnet.so、stage total、RSS、idle CPU。
+  验收 Android 3C L3 VPN datapath。
 
 Round 4B: release + disable ARM multiarch variants
   在 4A 基础上关闭 octeontx2/thunderx2t99/cortexa72/neoversen1/neoversev2。
   先保留 baseline armv8-a+crc。
+  验收 Android 3C L3 VPN datapath。
 
 Round 4C: release + no multiarch + no ipsec
   裁 ipsec/esp/ah/crypto 相关 vnet 段。
+  验收 Android 3C L3 VPN datapath。
 
 Round 4D: release + no multiarch + no host stack
   裁 tcp/session/tls；udp 单独决定是否裁。
+  验收 Android 3C L3 VPN datapath。
 
 Round 4E: release + no multiarch + no obvious device/features
   裁 bonding/span/gso/virtio/mpls/srv6/ipip/teib/pg/syslog/bfd/sfdp 等。
+  验收 Android 3C L3 VPN datapath。
 
 Round 4F: reassembly policy decision
   决定是否保留 ip/reass/*。这个需要产品语义确认，不应跟普通“无用模块裁剪”混在一起。
@@ -465,4 +503,288 @@ Round 4F: reassembly policy decision
 当前最划算的路径不是先手写 vpp_lite，也不是先裁 TCP/UDP。
 应该先把原版 VPP Android 构建变成 optimized baseline，然后关闭无关 ARM multiarch variants。
 这两步完成后，再看 libvnet.so 还剩多大，再进入 ipsec/host-stack/设备功能裁剪。
+```
+
+## 5. Android 3C 后的裁剪验收边界
+
+新的裁剪目标：
+
+```text
+在不破坏 L3 VPN datapath 的前提下，降低 VPP Android runtime 的体积、RSS 和 idle CPU。
+```
+
+后续每一轮裁剪都必须记录同一组数字：
+
+```text
+1. stripped stage total。
+2. bin/vpp、libvnet.so、libvlib.so、libvppinfra.so、plugin .so 的尺寸。
+3. APK 中 native payload 增量，必要时记录安装后 nativeLibraryDir 尺寸。
+4. VPP 进程 RSS。
+5. 无流量 idle CPU 短采样。
+6. Android 3C HTTP smoke 是否通过。
+7. 停止后 VPP / HEV / app / SOCKS5 smoke server 是否有残留。
+```
+
+Android 3C smoke 的最低验收：
+
+```text
+1. vpn-lite app 能以 mode=vpp-hev 启动。
+2. VPP CLI socket 可用。
+3. startup.exec 能执行：
+     tun-poc enable fd 3 mode forward-fd shim-fd 4
+4. HEV 能连接测试 SOCKS5 endpoint。
+5. Android nc HTTP client 能收到固定 OK response。
+6. show tun-poc 中 main rx/tx 与 shim rx/tx 均增长。
+7. parse/read/write/shim error 计数保持 0。
+8. stop / force-stop 后无子进程残留。
+```
+
+当前两个体积端点：
+
+```text
+可用上限:
+  full Android VPP stage: 186M
+  libvnet.so:             175M
+  Android 3C datapath:    已通过
+
+不可用下限:
+  vpp_lite stage:         11M
+  libvnet.so:             无
+  Android 3C datapath:    未通过，当前甚至不能稳定启动到 CLI
+```
+
+因此 `vpp_lite` 只能作为“理论下限”参考，不能作为主线裁剪路径。主线应从已通过
+Android 3C 的 full runtime 开始，每轮只改变一个变量。
+
+## 6. 下一阶段任务拆分
+
+### 6.1 Round 4A：优化构建基线
+
+任务：
+
+```text
+只把 Android VPP 构建切到 release 或等价优化构建。
+不裁 VPP 功能。
+不改 tun_poc / HEV / vpn-lite datapath。
+```
+
+需要调查并记录：
+
+```text
+1. VPP upstream Android CMake 下 CMAKE_BUILD_TYPE=release 是否稳定可用。
+2. release 默认是 -O3、是否启用 LTO。
+3. 如需最小体积，-Os/-Oz 是否可以作为单独实验，而不是直接混入 4A。
+4. release 后 libvnet.so 的 .text 是否明显下降。
+5. release 后 Android 3C 是否仍通过。
+```
+
+已定位源码：
+
+```text
+work/vpp/src/CMakeLists.txt
+  CMAKE_BUILD_TYPE 支持 release/debug/coverity/gcov。
+  release 分支会添加：
+    -O3 -fstack-protector -fno-common
+    _FORTIFY_SOURCE=2
+  release 下如果 check_ipo_supported 通过，VPP_USE_LTO option 默认 ON。
+
+实验入口优先用 CMake 参数：
+  -DCMAKE_BUILD_TYPE=release
+  -DVPP_USE_LTO=ON/OFF
+
+4A 只做 release 默认行为。
+如果要比较体积优化，单独做 4A.1：release + VPP_USE_LTO=OFF。
+如果要试 -Os/-Oz，单独做 4A.2，不混入 4A。
+```
+
+预期判断：
+
+```text
+如果 4A 失败，先修构建方式，不继续做功能裁剪。
+如果 4A 通过，4A 成为新的所有后续裁剪基线。
+```
+
+### 6.2 Round 4B：关闭 Android ARM multiarch variants
+
+任务：
+
+```text
+在 4A 基础上关闭不需要的 AArch64 multiarch variants：
+  octeontx2
+  thunderx2t99
+  cortexa72
+  neoversen1
+  neoversev2
+
+先保留 baseline armv8-a+crc 路径。
+```
+
+原因：
+
+```text
+当前 libvnet.so 的体积被 multiarch 重复编译明显放大。
+这一步比先裁 TCP/UDP 更可能有大收益，且对 datapath 语义影响较小。
+```
+
+已定位源码：
+
+```text
+work/vpp/src/cmake/cpu.cmake
+  AArch64 默认 baseline:
+    VPP_DEFAULT_MARCH_FLAGS=-march=armv8-a+crc
+
+  Android 当前可显式关闭的 ON variants:
+    VPP_MARCH_VARIANT_OCTEONTX2
+    VPP_MARCH_VARIANT_THUNDERX2T99
+    VPP_MARCH_VARIANT_CORTEXA72
+    VPP_MARCH_VARIANT_NEOVERSEN1
+    VPP_MARCH_VARIANT_NEOVERSEV2
+
+  qdf24xx 和 neoversen2 默认已经 OFF。
+
+实验入口优先用 CMake 参数：
+  -DVPP_MARCH_VARIANT_OCTEONTX2=OFF
+  -DVPP_MARCH_VARIANT_THUNDERX2T99=OFF
+  -DVPP_MARCH_VARIANT_CORTEXA72=OFF
+  -DVPP_MARCH_VARIANT_NEOVERSEN1=OFF
+  -DVPP_MARCH_VARIANT_NEOVERSEV2=OFF
+```
+
+暂不优先使用：
+
+```text
+VPP_BUILD_NATIVE_ONLY
+
+原因：
+  Android 是 cross compile，native CPU 是构建机而不是真机。
+  这里要的是稳定 AArch64 baseline，不是 host native。
+```
+
+验收：
+
+```text
+Android 3C 必须通过。
+如果只影响性能、不影响功能，记录 idle CPU 和 smoke latency 的粗略变化即可。
+```
+
+### 6.3 Round 4C：裁 IPsec/crypto
+
+任务：
+
+```text
+在 4B 基础上裁 VPP IPsec/ESP/AH/crypto 相关代码路径。
+```
+
+原因：
+
+```text
+当前 datapath 只需要 L3 packet interception、policy/verdict 和交给 HEV 发包。
+不需要 VPP 自己做 IPsec tunnel 或 ESP encrypt/decrypt。
+```
+
+风险：
+
+```text
+IP feature arc 中可能注册了 ipsec 相关 feature。
+不能只删 object，必须同步处理注册和依赖。
+```
+
+已定位源码入口：
+
+```text
+work/vpp/src/vnet/CMakeLists.txt
+  ipsec/ipsec*.c
+  ipsec/esp_*.c
+  ipsec/ah_*.c
+  ipsec/ipsec*.api
+
+这些目前直接编入 libvnet.so，不是普通 plugin 开关。
+所以 4C 需要 overlay patch 或上游源码改动，不是单纯 VPP_PLUGINS 能解决。
+```
+
+### 6.4 Round 4D：裁 VPP host stack
+
+任务：
+
+```text
+在 4B 或 4C 基础上裁 tcp/session/tls。
+udp 是否裁剪要单独拆一轮。
+```
+
+原因：
+
+```text
+HEV 使用自己的 lwIP/转发逻辑。
+当前 VPP 只作为包处理框架，不需要 VPP 终止 TCP 连接，也不需要 VPP session/TLS。
+```
+
+注意：
+
+```text
+不能把“能解析 TCP/UDP header”和“需要 VPP TCP/UDP host stack”混在一起。
+策略匹配需要的是 header metadata，不代表要保留 VPP host stack。
+```
+
+已定位源码入口：
+
+```text
+work/vpp/src/vnet/CMakeLists.txt
+  tcp/tcp*.c
+  session/session*.c
+  session/application*.c
+  tls/tls*.c
+
+这些同样直接编入 libvnet.so。
+4D 需要源码级开关或 overlay patch，并要注意 VPP app/vlibmemory 是否间接依赖 session。
+```
+
+### 6.5 Round 4E：裁无关 device/L2/MPLS 等功能
+
+候选：
+
+```text
+bonding
+span
+gso
+virtio
+mpls
+srv6
+ipip
+teib
+pg
+syslog
+bfd
+sfdp
+```
+
+原则：
+
+```text
+这些先按组裁，不一次性全删。
+每组都要过 Android 3C。
+如果某组和 VPP 启动、interface、buffer、feature arc 强耦合，先退回并记录原因。
+```
+
+### 6.6 Round 4F：L3 fragment/reassembly 产品语义
+
+这是单独决策，不只是体积优化：
+
+```text
+ip/reass/* 是大头之一。
+但裁掉后，fragmented packet 只能按 fragment 处理，无法稳定恢复完整 L4 flow。
+```
+
+需要先回答：
+
+```text
+第一版是否允许“不支持 fragmented packet deep inspection”？
+如果允许，可以裁 reassembly，并把 fragment 行为定义为 allow/log/drop 中的一种明确策略。
+如果不允许，就要保留 reassembly 或另做更小的 fragment 处理实现。
+```
+
+暂定判断：
+
+```text
+4F 不应该早于 4A/4B。
+如果 release + no multiarch 已经把体积压到可接受范围，reassembly 可以先不动。
 ```

@@ -232,3 +232,20 @@ experiments/vpp-nfq-poc/ANDROID_VPN_EXPERIMENT_LOG.md
 判断
 下一步
 ```
+
+## 5. Phase 3C 之后
+
+Android Phase 3C 已证明 L3 VPN datapath 可行：
+
+```text
+VpnService tun-fd -> VPP/tun_poc -> HEV -> SOCKS5/upstream -> HEV -> VPP/tun_poc -> tun-fd
+```
+
+下一阶段不继续扩展 VPN POC 功能，而是转入 VPP runtime 裁剪实验：
+
+```text
+experiments/vpp-nfq-poc/ANDROID_TRIM_EXPERIMENT_LOG.md
+```
+
+裁剪实验的验收边界是：在降低 VPP Android runtime 体积、RSS 和 idle CPU 的同时，
+仍然跑通本计划中的 Android 3C L3 VPN datapath。
