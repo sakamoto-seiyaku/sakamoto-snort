@@ -2334,3 +2334,187 @@ libvppinfra.so+0x5f560 / 0x5f55c / 0x5f568 / 0x5f690 / 0x5f5d0 / 0x60a60
 
 继续零散禁用默认 process 预计收益有限，不应作为主线。
 ```
+
+## 15. Android root minimal: VLIB timer 来源插桩
+
+目的：
+
+```text
+用火焰图/simpleperf + VLIB timer 定向插桩确认 idle CPU 到底来自什么。
+重点区分：
+  1. 是否还有某个 VNET 子系统 timer 在反复过期；
+  2. 还是没有真实过期事件后，VLIB 主循环仍然有结构性 idle 成本。
+```
+
+实验前备份：
+
+```text
+backup/vpp-nfq-poc-before-timer-source-instrument-20260622-204240-dfde680
+```
+
+### 15.1 插桩点
+
+临时修改生成的 VPP worktree：
+
+```text
+src/vlib/main.c
+  process_expired_timers()
+```
+
+记录每 5 秒窗口内：
+
+```text
+expired_total
+PROCESS_NODE
+TIMED_EVENT
+SCHED_NODE
+PROCESS_NODE 对应的 process node name
+```
+
+这个插桩没有进入正式仓库源码，只用于 Android 真机实验。
+
+### 15.2 未禁用默认 process 的结果
+
+Android root minimal 空闲启动，不接 NFQ/hev，不处理流量。
+
+每 5 秒窗口：
+
+```text
+report=1 expired_total=211 process=211 timed_event=0 sched=0
+report=2 expired_total=214 process=214 timed_event=0 sched=0
+report=3 expired_total=212 process=212 timed_event=0 sched=0
+report=4 expired_total=215 process=215 timed_event=0 sched=0
+```
+
+主要来源：
+
+```text
+ip6-full-reassembly-expire-walk  99-100 / 5s
+ip4-full-reassembly-expire-walk  99-100 / 5s
+ip6-ra-process                   5 / 5s
+ip6-mld-process                  5 / 5s
+fib-walk                         2-3 / 5s
+
+偶发：
+  ip6-sv-reassembly-expire-walk
+  ip4-sv-reassembly-expire-walk
+  statseg-collector-process
+  startup-config-process
+  api-rx-from-ring
+```
+
+结论：
+
+```text
+未禁用默认 process 时，VLIB timer wheel 的真实过期事件几乎全是 PROCESS_NODE。
+最大来源是 IPv4/IPv6 full reassembly expire walk。
+这解释了 baseline 火焰图中 process_expired_timers / vlib_tw_timer_expire_timers 的大块。
+```
+
+### 15.3 禁用默认 process 后的结果
+
+保留同一个 timer-source 插桩，再临时禁用以下 process：
+
+```text
+ip4-full-reassembly-expire-walk
+ip6-full-reassembly-expire-walk
+ip4-sv-reassembly-expire-walk
+ip6-sv-reassembly-expire-walk
+ip6-mld-process
+ip6-ra-process
+fib-walk
+statseg-collector-process
+```
+
+每 5 秒窗口：
+
+```text
+report=1 expired_total=1 process=1 timed_event=0 sched=0
+  startup-config-process count=1
+
+report=2 expired_total=0 process=0 timed_event=0 sched=0
+report=3 expired_total=0 process=0 timed_event=0 sched=0
+
+report=4 expired_total=1 process=1 timed_event=0 sched=0
+  api-rx-from-ring count=1
+```
+
+结论：
+
+```text
+这些默认 process 确实是主要的真实周期 timer 来源。
+禁用后，空闲窗口里基本没有真实过期 timer。
+剩余 idle CPU 不是“还有某个隐藏 process 高频过期”导致。
+```
+
+### 15.4 禁用后 simpleperf
+
+在“禁用默认 process + 过期事件基本为 0”的状态下再次抓 simpleperf：
+
+```text
+simpleperf record -e cpu-clock -f 1000 -p 1380 --call-graph dwarf --duration 30
+
+Samples recorded: 942
+Samples lost: 0
+```
+
+top children：
+
+```text
+vlib_main                         100.00%
+libvlib.so+3c968                   56.69%
+vlib_file_poll                     36.41%
+__epoll_pwait                      34.82%
+```
+
+地址符号化：
+
+```text
+libvlib.so+0x3c968
+  vlib_tw_timer_expire_timers
+  src/vlib/tw_funcs.h:82
+  process_expired_timers
+  src/vlib/main.c:1462
+
+libvppinfra.so+0x5f55c / +0x5f568 / +0x5f560 / ...
+  tw_timer_expire_timers_internal_1t_3w_1024sl_ov
+  src/vppinfra/tw_timer_template.c
+```
+
+本地保存：
+
+```text
+experiments/vpp-nfq-poc/results/simpleperf-vpp-idle-disabled-no-expired/
+  vpp-idle-disabled-no-expired.perf.data
+  report-children.txt
+  report-callgraph.txt
+```
+
+### 15.5 当前判断
+
+```text
+火焰图能确认两件事：
+
+1. baseline 的 VLIB timer wheel 热点主要来自默认 VNET process timers：
+   ip4/ip6 full reassembly expire walk 是最大来源。
+
+2. 显式禁用这些 process 后，真实过期 timer 基本消失，
+   但 simpleperf 仍显示 CPU 落在：
+     vlib_main
+     process_expired_timers / vlib_tw_timer_expire_timers
+     vlib_file_poll / __epoll_pwait
+
+所以剩余问题已经不是“哪个具体 VNET process 还在跑”，
+而是完整 VPP/VLIB 主循环在无工作时仍持续做 timer wheel 检查、epoll 进入/退出、
+调度相关工作。
+```
+
+工程含义：
+
+```text
+继续零散禁用单个默认 process 可以去掉真实周期 timer，但不能把 idle CPU 压到目标。
+下一步如果要继续压 idle，需要研究主循环级别的低功耗 idle 策略：
+  - 没有 active timer / pending work 时走更长 sleep；
+  - 避免每轮都进入 process_expired_timers；
+  - 或者转向 vlib-only / vpp_lite，减少完整 libvnet runtime 带来的默认主循环成本。
+```
