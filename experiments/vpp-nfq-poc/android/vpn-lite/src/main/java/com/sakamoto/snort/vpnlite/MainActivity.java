@@ -21,6 +21,7 @@ public final class MainActivity extends Activity {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextView logView;
+    private String pendingMode = SnortVpnService.MODE_NATIVE;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -50,8 +51,14 @@ public final class MainActivity extends Activity {
         Button start = new Button(this);
         start.setAllCaps(false);
         start.setText("Start VPN Probe");
-        start.setOnClickListener(v -> startVpn());
+        start.setOnClickListener(v -> startVpn(SnortVpnService.MODE_NATIVE));
         row.addView(start, weight());
+
+        Button startVpp = new Button(this);
+        startVpp.setAllCaps(false);
+        startVpp.setText("Start VPP");
+        startVpp.setOnClickListener(v -> startVpn(SnortVpnService.MODE_VPP));
+        row.addView(startVpp, weight());
 
         Button stop = new Button(this);
         stop.setAllCaps(false);
@@ -76,15 +83,16 @@ public final class MainActivity extends Activity {
         return root;
     }
 
-    private void startVpn() {
+    private void startVpn(String mode) {
         Intent prepare = VpnService.prepare(this);
         if (prepare != null) {
             appendLog("requesting VPN permission");
+            pendingMode = mode;
             startActivityForResult(prepare, VPN_REQUEST_CODE);
             return;
         }
         appendLog("VPN permission already granted");
-        startVpnService();
+        startVpnService(mode);
     }
 
     private void stopVpn() {
@@ -94,17 +102,23 @@ public final class MainActivity extends Activity {
         startService(intent);
     }
 
-    private void startVpnService() {
+    private void startVpnService(String mode) {
         Intent intent = new Intent(this, SnortVpnService.class);
         intent.setAction(SnortVpnService.ACTION_START);
+        intent.putExtra(SnortVpnService.EXTRA_MODE, mode);
         startService(intent);
-        appendLog("service start requested");
+        appendLog("service start requested: " + mode);
     }
 
     private void applyIntentExtras(Intent intent) {
         if (intent != null && intent.getBooleanExtra("start", false)) {
-            appendLog("intent start=true");
-            main.postDelayed(() -> startVpn(), 300);
+            String mode = intent.getStringExtra(SnortVpnService.EXTRA_MODE);
+            if (mode == null) {
+                mode = SnortVpnService.MODE_NATIVE;
+            }
+            appendLog("intent start=true mode=" + mode);
+            String requestedMode = mode;
+            main.postDelayed(() -> startVpn(requestedMode), 300);
         }
     }
 
@@ -116,10 +130,11 @@ public final class MainActivity extends Activity {
         }
         if (resultCode == RESULT_OK) {
             appendLog("VPN permission granted");
-            startVpnService();
+            startVpnService(pendingMode);
         } else {
             appendLog("VPN permission denied: result=" + resultCode);
         }
+        pendingMode = SnortVpnService.MODE_NATIVE;
     }
 
     private void appendLog(String line) {

@@ -2,7 +2,7 @@
 
 日期：2026-06-22
 分支：`research/vpp-nfq-poc`
-状态：Phase 1 已实现并在 Pixel 6a / Android 16 上通过；Phase 2 待开始。
+状态：Phase 1 已通过；Phase 2 count-only 已在 Pixel 6a / Android 16 上通过；Phase 3 待开始。
 
 ## 1. 目标
 

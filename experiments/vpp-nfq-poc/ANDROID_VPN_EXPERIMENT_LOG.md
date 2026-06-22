@@ -391,3 +391,125 @@ app UID 下 VPP shm/runtime 目录是否能稳定创建。
 app context 下 exec nativeLibraryDir 中的 VPP executable 是否被 SELinux 允许。
 VPP CLI socket 由 app 自己使用时是否需要 vppctl，还是 native 内直接写 startup exec file。
 ```
+
+## 14. Phase 2 实现：APK 内 fd -> VPP count-only
+
+实现变更：
+
+```text
+vpn-lite build-debug-apk.sh:
+  如果存在 work/android-vpp-core-stage，则把 VPP runtime 打包进 APK：
+    libvpppoc.so        <- staged bin/vpp
+    libvppctlpoc.so     <- staged bin/vppctl
+    libvnet/libvlib/... <- VPP dependent libs
+    tun_poc_plugin.so   <- VPP plugin
+
+SnortVpnService:
+  新增 mode=vpp。
+  默认 mode=native 保留 Phase 1 行为。
+
+vpn_fd_probe.c:
+  nativeStartVppProbe(fd, nativeLibraryDir, filesDir)
+  fork child:
+    dup2(detached tun-fd, 3)
+    LD_LIBRARY_PATH=nativeLibraryDir
+    SAKAMOTO_ANDROID_SHM_DIR=files/vpp/shm
+    exec nativeLibraryDir/libvpppoc.so -c files/vpp/runtime/startup.conf
+  startup-config 自动执行：
+    tun-poc enable fd 3 mode count-only
+  monitor thread 通过 VPP CLI socket 周期性执行：
+    show tun-poc
+```
+
+Android 特有修正：
+
+```text
+1. app UID 不能写 /data/local/tmp/vpp-shm。
+   处理：Android shm file backend 支持 SAKAMOTO_ANDROID_SHM_DIR 环境变量。
+
+2. untrusted_app seccomp 禁止 arm64 syscall 236 get_mempolicy。
+   处理：Android 下禁用 VPP NUMA get/set_mempolicy 路径，固定使用 numa node 0。
+
+3. APK extracted native dir 可以包含 tun_poc_plugin.so。
+   实机确认 package manager 会提取非 lib* 前缀的 .so entry。
+```
+
+构建与安装：
+
+```text
+building JNI probe
+packaging VPP runtime
+compiling Java sources
+dexing
+linking APK
+zipalign
+signing
+ok: experiments/vpp-nfq-poc/android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk
+
+Performing Incremental Install
+Success
+```
+
+启动命令：
+
+```sh
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp
+```
+
+关键 logcat：
+
+```text
+I SnortVpnLiteNative: started VPP pid=23811 fd=126 conf=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.conf
+I SnortVpnLite: nativeStartVppProbe fd=126 rc=0
+I SnortVpnLiteNative: vpp monitor start pid=23811 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+I SnortVpnLiteNative: vpp monitor stop
+```
+
+`show tun-poc` 采样：
+
+```text
+enabled 1 fd 3 mode count-only
+rx 7 bytes 472 tx 0 bytes 0
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 write-errors 0
+
+enabled 1 fd 3 mode count-only
+rx 10 bytes 664 tx 0 bytes 0
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 write-errors 0
+
+enabled 1 fd 3 mode count-only
+rx 11 bytes 724 tx 0 bytes 0
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 write-errors 0
+```
+
+结论：
+
+```text
+Phase 2 count-only 通过。
+Android VpnService detached L3 tun-fd 可以通过 fork/exec 传给 APK 内 VPP。
+VPP/tun_poc 可以在 app context 下 enable fd 3，并从该 fd 读到 VPN packet。
+当前模式只读不转发，因此 full-route VPN 期间设备流量仍会被黑洞；实验结束已 force-stop app。
+```
+
+## 15. Phase 3 入口：VPP -> HEV -> VPP
+
+下一步目标：
+
+```text
+保留当前 main tun-fd -> VPP owner 模型。
+在 VPP 内把 allow packet 写入 HEV shim fd。
+HEV 回包从 shim fd 回到 VPP。
+VPP 再写回 Android main tun-fd。
+```
+
+下一步最小验收：
+
+```text
+1. VPP mode 增加 forward-to-shim，而不是 count-only。
+2. APK/native 创建 SOCK_SEQPACKET socketpair。
+3. HEV 使用 socketpair 一端作为 external tun_fd。
+4. VPP/tun_poc 使用另一端作为 HEV shim fd。
+5. 观测 outbound rx、shim tx、shim rx、main tun tx 均增长。
+```

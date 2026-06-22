@@ -10,6 +10,9 @@ import java.io.File;
 public final class SnortVpnService extends VpnService {
     public static final String ACTION_START = "com.sakamoto.snort.vpnlite.START";
     public static final String ACTION_STOP = "com.sakamoto.snort.vpnlite.STOP";
+    public static final String EXTRA_MODE = "mode";
+    public static final String MODE_NATIVE = "native";
+    public static final String MODE_VPP = "vpp";
 
     private static final String TAG = "SnortVpnLite";
     private static final String VPN_ADDRESS = "10.111.0.2";
@@ -25,6 +28,10 @@ public final class SnortVpnService extends VpnService {
 
     private static native void nativeStopProbe();
 
+    private static native int nativeStartVppProbe(int fd, String nativeLibraryDir, String filesDir);
+
+    private static native void nativeStopVppProbe();
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
@@ -34,7 +41,8 @@ public final class SnortVpnService extends VpnService {
             return START_NOT_STICKY;
         }
 
-        startVpn();
+        String mode = intent == null ? MODE_NATIVE : intent.getStringExtra(EXTRA_MODE);
+        startVpn(mode == null ? MODE_NATIVE : mode);
         return START_STICKY;
     }
 
@@ -44,7 +52,7 @@ public final class SnortVpnService extends VpnService {
         super.onDestroy();
     }
 
-    private synchronized void startVpn() {
+    private synchronized void startVpn(String mode) {
         if (vpnFd != null) {
             Log.i(TAG, "VPN already active");
             return;
@@ -71,8 +79,14 @@ public final class SnortVpnService extends VpnService {
 
             int rawFd = vpnFd.detachFd();
             vpnFd = null;
-            int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS);
-            Log.i(TAG, "nativeStartProbe fd=" + rawFd + " rc=" + rc + " log=" + logPath);
+            if (MODE_VPP.equals(mode)) {
+                int rc = nativeStartVppProbe(rawFd, getApplicationInfo().nativeLibraryDir,
+                        getFilesDir().getAbsolutePath());
+                Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " rc=" + rc);
+            } else {
+                int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS);
+                Log.i(TAG, "nativeStartProbe fd=" + rawFd + " rc=" + rc + " log=" + logPath);
+            }
         } catch (Exception e) {
             Log.e(TAG, "startVpn failed", e);
             stopVpn();
@@ -81,6 +95,7 @@ public final class SnortVpnService extends VpnService {
 
     private synchronized void stopVpn() {
         nativeStopProbe();
+        nativeStopVppProbe();
         if (vpnFd != null) {
             try {
                 vpnFd.close();

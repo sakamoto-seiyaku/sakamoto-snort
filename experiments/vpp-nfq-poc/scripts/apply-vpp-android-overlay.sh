@@ -76,6 +76,15 @@ else
   perl -0pi -e 's@if \("" STREQUAL "Android"\)@if("\${CMAKE_SYSTEM_NAME}" STREQUAL "Android")@g' "$VPP_SRC_DIR/vlib/CMakeLists.txt"
 fi
 
+if [ -f "$VPP_SRC_DIR/vppinfra/linux/mem.c" ] &&
+  ! grep -q "SAKAMOTO_ANDROID_NUMA_SYSCALL_SHIM" "$VPP_SRC_DIR/vppinfra/linux/mem.c"; then
+  perl -0pi -e 's@#include <linux/memfd.h>@#include <linux/memfd.h>\n\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_NUMA_SYSCALL_SHIM 1\n#endif@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
+  perl -0pi -e 's@  /\* numa nodes \*/\n  if \(syscall \(__NR_get_mempolicy, &mode, &nodemask, maxnode, va, flags\) == 0\)\n    mm->numa_node_bitmap = nodemask;@  /* numa nodes */\n#ifdef __ANDROID__\n  mm->numa_node_bitmap = 1;\n#else\n  if (syscall (__NR_get_mempolicy, &mode, &nodemask, maxnode, va, flags) == 0)\n    mm->numa_node_bitmap = nodemask;\n#endif@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
+  perl -0pi -e 's@  if \(syscall \(__NR_move_pages, 0, n_pages, ptr, 0, status, 0\) != 0\)@#ifdef __ANDROID__\n  stats->unknown = n_pages;\n  goto done;\n#endif\n\n  if (syscall (__NR_move_pages, 0, n_pages, ptr, 0, status, 0) != 0)@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
+  perl -0pi -e 's@  /\* no numa support \*/@#ifdef __ANDROID__\n  if (numa_node)\n    {\n      vec_reset_length (mm->error);\n      mm->error = clib_error_return (mm->error, "%s: numa not supported",\n                                     (char *) __func__);\n      return CLIB_MEM_ERROR;\n    }\n  return 0;\n#endif\n\n  /* no numa support */@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
+  perl -0pi -e 's@  if \(syscall \(__NR_set_mempolicy, MPOL_DEFAULT, 0, 0\)\)@#ifdef __ANDROID__\n  return 0;\n#endif\n\n  if (syscall (__NR_set_mempolicy, MPOL_DEFAULT, 0, 0))@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
+fi
+
 if [ -f "$VPP_SRC_DIR/vppinfra/mem_intercept.c" ] &&
   ! grep -q "SAKAMOTO_ANDROID_MALLOC_USABLE_SIZE_SHIM" "$VPP_SRC_DIR/vppinfra/mem_intercept.c"; then
   perl -0pi -e 's@__clib_export size_t\nmalloc_usable_size \(void \*p\)\n\{\n@#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_MALLOC_USABLE_SIZE_SHIM 1\ntypedef const void *sakamoto_android_malloc_usable_size_arg_t;\n#else\ntypedef void *sakamoto_android_malloc_usable_size_arg_t;\n#endif\n\n__clib_export size_t\nmalloc_usable_size (sakamoto_android_malloc_usable_size_arg_t p)\n{\n@' "$VPP_SRC_DIR/vppinfra/mem_intercept.c"
@@ -86,6 +95,16 @@ fi
 if [ -f "$VPP_SRC_DIR/svm/svm_common.h" ] &&
   ! grep -q "SAKAMOTO_ANDROID_SHM_OPEN_FILE_BACKEND" "$VPP_SRC_DIR/svm/svm_common.h"; then
   perl -0pi -e 's@#include <vppinfra/types.h>@#include <vppinfra/types.h>\n\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_SHM_OPEN_FILE_BACKEND 1\n#include <errno.h>\n#include <fcntl.h>\n#include <stdio.h>\n#include <sys/stat.h>\n#include <unistd.h>\n\n#define SAKAMOTO_ANDROID_SHM_DIR "/data/local/tmp/vpp-shm"\n\nstatic inline int\nsakamoto_android_shm_path (const char *name, char *path, size_t path_len)\n{\n  char clean[256];\n  const char *p = name;\n  size_t i = 0;\n\n  if (!p || !p[0])\n    {\n      errno = EINVAL;\n      return -1;\n    }\n  while (*p == 47)\n    p++;\n  for (; *p && i + 1 < sizeof (clean); p++)\n    clean[i++] = (*p == 47) ? 95 : *p;\n  if (*p || i == 0)\n    {\n      errno = *p ? ENAMETOOLONG : EINVAL;\n      return -1;\n    }\n  clean[i] = 0;\n\n  if (mkdir (SAKAMOTO_ANDROID_SHM_DIR, 0777) < 0 && errno != EEXIST)\n    return -1;\n  if (snprintf (path, path_len, "%s/%s", SAKAMOTO_ANDROID_SHM_DIR, clean) >=\n      (int) path_len)\n    {\n      errno = ENAMETOOLONG;\n      return -1;\n    }\n  return 0;\n}\n\nstatic inline int\nsakamoto_android_shm_open (const char *name, int oflag, mode_t mode)\n{\n  char path[512];\n  if (sakamoto_android_shm_path (name, path, sizeof (path)) < 0)\n    return -1;\n  return open (path, oflag, mode);\n}\n\nstatic inline int\nsakamoto_android_shm_unlink (const char *name)\n{\n  char path[512];\n  if (sakamoto_android_shm_path (name, path, sizeof (path)) < 0)\n    return -1;\n  return unlink (path);\n}\n\n#define shm_open sakamoto_android_shm_open\n#define shm_unlink sakamoto_android_shm_unlink\n#endif@' "$VPP_SRC_DIR/svm/svm_common.h"
+fi
+if [ -f "$VPP_SRC_DIR/svm/svm_common.h" ] &&
+  grep -q "SAKAMOTO_ANDROID_SHM_OPEN_FILE_BACKEND" "$VPP_SRC_DIR/svm/svm_common.h"; then
+  if ! grep -q "#include <stdlib.h>" "$VPP_SRC_DIR/svm/svm_common.h"; then
+    perl -0pi -e 's@#include <stdio.h>@#include <stdio.h>\n#include <stdlib.h>@' "$VPP_SRC_DIR/svm/svm_common.h"
+  fi
+  if ! grep -q "SAKAMOTO_ANDROID_DEFAULT_SHM_DIR" "$VPP_SRC_DIR/svm/svm_common.h"; then
+    perl -0pi -e 's@#define SAKAMOTO_ANDROID_SHM_DIR "/data/local/tmp/vpp-shm"\n@#define SAKAMOTO_ANDROID_DEFAULT_SHM_DIR "/data/local/tmp/vpp-shm"\n\nstatic inline const char *\nsakamoto_android_shm_dir (void)\n{\n  const char *dir = getenv ("SAKAMOTO_ANDROID_SHM_DIR");\n  return (dir && dir[0]) ? dir : SAKAMOTO_ANDROID_DEFAULT_SHM_DIR;\n}\n@' "$VPP_SRC_DIR/svm/svm_common.h"
+  fi
+  perl -0pi -e 's@mkdir \(SAKAMOTO_ANDROID_SHM_DIR, 0777\)@mkdir (sakamoto_android_shm_dir (), 0777)@g; s@"%s/%s", SAKAMOTO_ANDROID_SHM_DIR, clean@"%s/%s", sakamoto_android_shm_dir (), clean@g' "$VPP_SRC_DIR/svm/svm_common.h"
 fi
 
 if [ -f "$VPP_SRC_DIR/svm/CMakeLists.txt" ] &&

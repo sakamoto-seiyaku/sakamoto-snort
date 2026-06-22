@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 app_dir="$(cd -- "${script_dir}/.." && pwd)"
+poc_dir="$(cd -- "${app_dir}/../.." && pwd)"
 
 sdk_prebuilts="${ANDROID_LINEAGE_SDK_PREBUILTS:-/home/js/android/lineage/prebuilts/sdk}"
 android_jar="${ANDROID_JAR:-${sdk_prebuilts}/36/public/android.jar}"
@@ -12,6 +13,7 @@ apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
 ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 clang="${ANDROID_CLANG:-${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
+vpp_stage_dir="${VPP_STAGE_DIR:-${poc_dir}/work/android-vpp-core-stage}"
 
 die() {
   echo "error: $*" >&2
@@ -62,6 +64,20 @@ echo "building JNI probe"
   -o "$jni_dir/libvpnfdprobe.so" \
   "$app_dir/native/vpn_fd_probe.c" \
   -llog
+
+if [[ -x "$vpp_stage_dir/bin/vpp" ]]; then
+  echo "packaging VPP runtime"
+  cp "$vpp_stage_dir/bin/vpp" "$jni_dir/libvpppoc.so"
+  if [[ -x "$vpp_stage_dir/bin/vppctl" ]]; then
+    cp "$vpp_stage_dir/bin/vppctl" "$jni_dir/libvppctlpoc.so"
+  fi
+  for so in "$vpp_stage_dir"/lib/*.so "$vpp_stage_dir"/plugins/*.so; do
+    [[ -f "$so" ]] || continue
+    cp "$so" "$jni_dir/$(basename "$so")"
+  done
+else
+  echo "warning: VPP stage not found, building Phase 1-only APK: $vpp_stage_dir" >&2
+fi
 
 echo "compiling Java sources"
 mapfile -t java_sources < <(find "$app_dir/src/main/java" -name '*.java' | sort)
