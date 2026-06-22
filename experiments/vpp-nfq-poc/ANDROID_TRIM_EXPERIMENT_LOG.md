@@ -788,3 +788,285 @@ ip/reass/* 是大头之一。
 4F 不应该早于 4A/4B。
 如果 release + no multiarch 已经把体积压到可接受范围，reassembly 可以先不动。
 ```
+
+## 7. Round 4A 执行记录：release build
+
+目标：
+
+```text
+只切 Android VPP release build。
+不裁功能。
+不关闭 ARM multiarch。
+不改 Android 3C datapath。
+```
+
+新增入口：
+
+```text
+scripts/android-configure-vpp-probe.sh:
+  VPP_CMAKE_BUILD_TYPE
+  VPP_USE_LTO
+  VPP_EXTRA_CMAKE_ARGS
+
+Makefile:
+  android-vpp-configure-release
+  android-vpp-build-release
+  android-vpp-stage-release
+  android-vpp-push-release
+  android-vpp-minimal-release
+```
+
+### 7.1 configure
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-configure-release
+```
+
+关键结果：
+
+```text
+build_dir: work/vpp-android-release
+Build type: release
+Plugins: nfqueue_poc tun_poc
+Multiarch variants: octeontx2 thunderx2t99 cortexa72 neoversen1 neoversev2
+cmake_rc=0
+```
+
+注意：
+
+```text
+configure summary 的 C flags 行没有直接展示 -O3。
+实际编译命令中确认存在：
+  -O3 -fstack-protector -fno-common
+```
+
+### 7.2 release build 踩坑
+
+release 打开了 `-Werror -Wall`，Android NDK headers 和既有 Android shim 暴露了几个
+debug build 没遇到的问题。
+
+已修正：
+
+```text
+1. vppinfra/maplog.c
+   open(path, O_RDWR/O_RDONLY, 0600) 没有 O_CREAT。
+   Android fortify 报：
+     'open' has superfluous mode bits
+   修正：去掉无效 mode 参数。
+
+2. vppinfra/linux/mem.c
+   Android NUMA syscall shim 跳过 get_mempolicy 后，nodemask/maxnode/flags/va/mode
+   在 release 下变成 unused。
+   修正：Android 分支显式 (void) 标记。
+
+3. svm/svm.c
+   open(a->backing_file, O_RDWR, 0777) 没有 O_CREAT。
+   修正：去掉无效 mode 参数。
+
+4. vnet/sfdp/timer/timer.h
+   字段名 u32 __unused 在 Android headers 下会出问题。
+   修正：改为 u32 unused。
+```
+
+这些修正都放进 `scripts/apply-vpp-android-overlay.sh`，不是只改临时 `work/vpp`。
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc apply-vpp-android-overlay
+make -C experiments/vpp-nfq-poc android-vpp-build-release
+```
+
+结果：
+
+```text
+vpp / vppctl / nfqueue_poc_plugin / tun_poc_plugin 全部构建成功。
+```
+
+### 7.3 stage size
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-stage-release
+```
+
+结果：
+
+```text
+release stage total: 29M
+
+bin/vpp:                         103,040 bytes
+bin/vppctl:                       10,624 bytes
+lib/libsvm.so:                   110,992 bytes
+lib/libvlib.so:                1,921,800 bytes
+lib/libvlibapi.so:                67,992 bytes
+lib/libvlibmemory.so:            158,672 bytes
+lib/libvnet.so:               27,169,424 bytes
+lib/libvppinfra.so:              467,744 bytes
+plugins/nfqueue_poc_plugin.so:    52,120 bytes
+plugins/tun_poc_plugin.so:        18,136 bytes
+```
+
+对比旧基线：
+
+```text
+debug/O0-ish stripped stage: 186M
+release stripped stage:      29M
+
+debug/O0-ish libvnet.so:     183,480,048 bytes
+release libvnet.so:           27,169,424 bytes
+
+debug/O0-ish libvnet .text:  180,289,520 bytes
+release libvnet .text:        24,152,008 bytes
+```
+
+判断：
+
+```text
+Round 4A 单独就把 stage 从 186M 降到 29M。
+这说明之前 175M libvnet.so 的最大问题确实是非 release 优化构建，而不是必须先裁模块。
+```
+
+### 7.4 release minimal 真机启动
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-minimal-release
+```
+
+修正记录：
+
+```text
+第一次手动给 android-vpp-minimal-probe 传 STAGE_DIR 时，Makefile 变量没有传进脚本环境，
+导致 push 流程重新用默认 core stage 覆盖了 release stage。
+
+已增加专门的 android-vpp-push-release / android-vpp-minimal-release target。
+```
+
+真机结果：
+
+```text
+设备：Pixel 6a / Android 16 / root via su
+
+remote pushed release stage:
+  libvnet.so: 26M
+  libvlib.so: 1.8M
+  libvppinfra.so: 457K
+
+vppctl show version:
+  vpp v26.02-release built by js on Main at 2026-06-22T06:50:22
+  vppctl_rc=0
+
+root minimal VPP RSS:
+  138,688 KB
+```
+
+### 7.5 Android 3C release datapath 验收
+
+APK 构建：
+
+```sh
+VPP_STAGE_DIR=/home/js/Git/sakamoto/sakamoto-snort/experiments/vpp-nfq-poc/work/android-vpp-release-stage \
+  experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+```
+
+APK 结果：
+
+```text
+snort-vpn-lite-debug.apk: 8.1M
+APK uncompressed entries total: 30,445,995 bytes
+lib/arm64-v8a/libvnet.so: 27,169,424 bytes
+lib/arm64-v8a/libhev-socks5-tunnel.so: 321,232 bytes
+```
+
+启动：
+
+```text
+mode=vpp-hev
+
+logcat:
+  started VPP pid=26866 fd=126 mode=2
+  started VPP HEV pid=26867
+  nativeStartVppProbe fd=126 vppMode=2 rc=0
+```
+
+说明：
+
+```text
+vpp monitor stop 是 vpn-lite 当前固定采样线程结束，不代表 VPP 退出。
+后续 ps 和 vppctl 确认 VPP 仍在运行。
+```
+
+HTTP probe：
+
+```sh
+printf 'GET /probe HTTP/1.0\r\nHost: example.test\r\n\r\n' |
+  adb shell nc -w 5 93.184.216.34 80
+```
+
+结果：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+```
+
+SOCKS5 smoke server：
+
+```text
+connect 93.184.216.34:80
+payload-len 43
+GET /probe HTTP/1.0
+Host: example.test
+```
+
+最终 `show tun-poc`：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 24 bytes 1794 tx 11 bytes 556
+shim-rx 11 bytes 556 shim-tx 24 bytes 1794
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+release app context VPP 资源短采样：
+
+```text
+RSS: 159,764 KB
+CPU samples: 1, 1, 5, 3, 3
+```
+
+清理：
+
+```text
+Stop intent + force-stop app。
+kill device-local sakamoto-socks5-smoke。
+确认无 vpp / vpnlite / sakamoto-socks5 / HEV 残留。
+```
+
+额外观察：
+
+```text
+VPP plugin loader 会扫描 app nativeLibraryDir 下所有 .so，
+因此 logcat 中有 “Not a plugin: libvnet.so/libhev-socks5-tunnel.so/...” 噪音。
+当前不影响 datapath；后续如果要清理日志，可以把 VPP plugin path 指向单独 plugin-only 目录。
+```
+
+Round 4A 结论：
+
+```text
+release build 已通过 Android 3C L3 VPN datapath 验收。
+29M stage / 8.1M APK 已经比原始 186M 基线小很多。
+
+下一步应继续 Round 4B：
+  release + 关闭 ARM multiarch variants。
+
+这一步仍不裁 VPP 功能，只验证 multiarch 关闭后体积、RSS、CPU 和 Android 3C 是否继续成立。
+```

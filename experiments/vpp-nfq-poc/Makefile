@@ -1,6 +1,8 @@
-.PHONY: build-smoke docker-build docker-shell fetch-vpp fetch-hev build-hev apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu vpp-tun-poc-build vpp-tun-poc-smoke vpp-tun-forward-fd-smoke vpp-tun-hev-smoke hev-socketpair-probe android-preflight android-hev-build android-socks5-smoke-server-build android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
+.PHONY: build-smoke docker-build docker-shell fetch-vpp fetch-hev build-hev apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu vpp-tun-poc-build vpp-tun-poc-smoke vpp-tun-forward-fd-smoke vpp-tun-hev-smoke hev-socketpair-probe android-preflight android-hev-build android-socks5-smoke-server-build android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-release android-vpp-build-release android-vpp-stage-release android-vpp-push-release android-vpp-minimal-release android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
+ANDROID_RELEASE_BUILD_DIR ?= $(CURDIR)/work/vpp-android-release
+ANDROID_RELEASE_STAGE_DIR ?= $(CURDIR)/work/android-vpp-release-stage
 ANDROID_TRIM_BUILD_DIR ?= $(CURDIR)/work/vpp-android-trim-nfqueue
 ANDROID_TRIM_STAGE_DIR ?= $(CURDIR)/work/android-vpp-trim-nfqueue-stage
 ANDROID_LITE_STAGE_DIR ?= $(CURDIR)/work/android-vpp-lite-stage
@@ -117,6 +119,24 @@ android-vpp-version-probe:
 
 android-vpp-minimal-probe:
 	./scripts/android-run-vpp-minimal.sh
+
+android-vpp-configure-release:
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" VPP_CMAKE_BUILD_TYPE=release VPP_PLUGINS="nfqueue_poc;tun_poc" ./scripts/android-configure-vpp-probe.sh
+
+android-vpp-build-release:
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" ./scripts/android-build-vpp-probe.sh
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" TARGET=vppctl ./scripts/android-build-vpp-probe.sh
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" TARGET=nfqueue_poc_plugin ./scripts/android-build-vpp-probe.sh
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" TARGET=tun_poc_plugin ./scripts/android-build-vpp-probe.sh
+
+android-vpp-stage-release:
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" STAGE_DIR="$(ANDROID_RELEASE_STAGE_DIR)" ./scripts/android-stage-vpp-core.sh
+
+android-vpp-push-release:
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" STAGE_DIR="$(ANDROID_RELEASE_STAGE_DIR)" ./scripts/android-push-vpp-core.sh
+
+android-vpp-minimal-release:
+	BUILD_DIR="$(ANDROID_RELEASE_BUILD_DIR)" STAGE_DIR="$(ANDROID_RELEASE_STAGE_DIR)" ./scripts/android-run-vpp-minimal.sh
 
 android-vpp-configure-trim-nfqueue:
 	BUILD_DIR="$(ANDROID_TRIM_BUILD_DIR)" VPP_PLUGINS=nfqueue_poc ./scripts/android-configure-vpp-probe.sh

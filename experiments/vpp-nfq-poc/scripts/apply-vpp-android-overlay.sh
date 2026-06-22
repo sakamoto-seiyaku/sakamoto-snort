@@ -62,6 +62,12 @@ if [ -f "$VPP_SRC_DIR/vppinfra/clib.h" ] &&
   perl -0pi -e 's@#include <stdalign.h>@#include <stdalign.h>\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_BZERO_SHIM 1\n#include <string.h>\n#ifndef bzero\n#define bzero(p, n) memset ((p), 0, (n))\n#endif\n#endif@' "$VPP_SRC_DIR/vppinfra/clib.h"
 fi
 
+if [ -f "$VPP_SRC_DIR/vppinfra/maplog.c" ] &&
+  ! grep -q "SAKAMOTO_ANDROID_MAPLOG_OPEN_MODE_FIX" "$VPP_SRC_DIR/vppinfra/maplog.c"; then
+  perl -0pi -e 's@#include <vppinfra/maplog.h>@#include <vppinfra/maplog.h>\n\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_MAPLOG_OPEN_MODE_FIX 1\n#endif@' "$VPP_SRC_DIR/vppinfra/maplog.c"
+  perl -0pi -e 's@open \(\(char \*\) mm->header_filename, O_RDWR, 0600\)@open ((char *) mm->header_filename, O_RDWR)@g; s@open \(\(char \*\) header_filename, O_RDONLY, 0600\)@open ((char *) header_filename, O_RDONLY)@g; s@open \(\(char \*\) this_filename, O_RDONLY, 0600\)@open ((char *) this_filename, O_RDONLY)@g' "$VPP_SRC_DIR/vppinfra/maplog.c"
+fi
+
 if [ -f "$VPP_SRC_DIR/vlib/CMakeLists.txt" ] &&
   ! grep -q "SAKAMOTO_ANDROID_VLIB_LINUX_SRCS" "$VPP_SRC_DIR/vlib/CMakeLists.txt"; then
   perl -0pi -e 's@elseif\("\$\{CMAKE_SYSTEM_NAME\}" STREQUAL "FreeBSD"\)@elseif("\${CMAKE_SYSTEM_NAME}" STREQUAL "Android")\nset(PLATFORM_SOURCES\n  # SAKAMOTO_ANDROID_VLIB_LINUX_SRCS\n  linux/pci.c\n  linux/vfio.c\n  linux/vmbus.c\n)\n\nset(PLATFORM_HEADERS\n  linux/vfio.h\n)\nelseif("\${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")@' "$VPP_SRC_DIR/vlib/CMakeLists.txt"
@@ -83,6 +89,12 @@ if [ -f "$VPP_SRC_DIR/vppinfra/linux/mem.c" ] &&
   perl -0pi -e 's@  if \(syscall \(__NR_move_pages, 0, n_pages, ptr, 0, status, 0\) != 0\)@#ifdef __ANDROID__\n  stats->unknown = n_pages;\n  goto done;\n#endif\n\n  if (syscall (__NR_move_pages, 0, n_pages, ptr, 0, status, 0) != 0)@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
   perl -0pi -e 's@  /\* no numa support \*/@#ifdef __ANDROID__\n  if (numa_node)\n    {\n      vec_reset_length (mm->error);\n      mm->error = clib_error_return (mm->error, "%s: numa not supported",\n                                     (char *) __func__);\n      return CLIB_MEM_ERROR;\n    }\n  return 0;\n#endif\n\n  /* no numa support */@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
   perl -0pi -e 's@  if \(syscall \(__NR_set_mempolicy, MPOL_DEFAULT, 0, 0\)\)@#ifdef __ANDROID__\n  return 0;\n#endif\n\n  if (syscall (__NR_set_mempolicy, MPOL_DEFAULT, 0, 0))@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
+fi
+if [ -f "$VPP_SRC_DIR/vppinfra/linux/mem.c" ] &&
+  grep -q "SAKAMOTO_ANDROID_NUMA_SYSCALL_SHIM" "$VPP_SRC_DIR/vppinfra/linux/mem.c" &&
+  ! grep -q "SAKAMOTO_ANDROID_NUMA_UNUSED_RELEASE_FIX" "$VPP_SRC_DIR/vppinfra/linux/mem.c"; then
+  perl -0pi -e 's@#define SAKAMOTO_ANDROID_NUMA_SYSCALL_SHIM 1@#define SAKAMOTO_ANDROID_NUMA_SYSCALL_SHIM 1\n#define SAKAMOTO_ANDROID_NUMA_UNUSED_RELEASE_FIX 1@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
+  perl -0pi -e 's@#ifdef __ANDROID__\n  mm->numa_node_bitmap = 1;@#ifdef __ANDROID__\n  (void) nodemask;\n  (void) maxnode;\n  (void) flags;\n  (void) va;\n  (void) mode;\n  mm->numa_node_bitmap = 1;@' "$VPP_SRC_DIR/vppinfra/linux/mem.c"
 fi
 
 if [ -f "$VPP_SRC_DIR/vppinfra/mem_intercept.c" ] &&
@@ -107,6 +119,12 @@ if [ -f "$VPP_SRC_DIR/svm/svm_common.h" ] &&
   perl -0pi -e 's@mkdir \(SAKAMOTO_ANDROID_SHM_DIR, 0777\)@mkdir (sakamoto_android_shm_dir (), 0777)@g; s@"%s/%s", SAKAMOTO_ANDROID_SHM_DIR, clean@"%s/%s", sakamoto_android_shm_dir (), clean@g' "$VPP_SRC_DIR/svm/svm_common.h"
 fi
 
+if [ -f "$VPP_SRC_DIR/svm/svm.c" ] &&
+  ! grep -q "SAKAMOTO_ANDROID_SVM_OPEN_MODE_FIX" "$VPP_SRC_DIR/svm/svm.c"; then
+  perl -0pi -e 's@#include <vppinfra/clib.h>@#include <vppinfra/clib.h>\n\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_SVM_OPEN_MODE_FIX 1\n#endif@' "$VPP_SRC_DIR/svm/svm.c"
+  perl -0pi -e 's@open \(a->backing_file, O_RDWR, 0777\)@open (a->backing_file, O_RDWR)@g' "$VPP_SRC_DIR/svm/svm.c"
+fi
+
 if [ -f "$VPP_SRC_DIR/svm/CMakeLists.txt" ] &&
   ! grep -q "SAKAMOTO_ANDROID_SVM_PLATFORM_LIBS" "$VPP_SRC_DIR/svm/CMakeLists.txt"; then
   perl -0pi -e 's@##############################################################################\n# svm shared library@##############################################################################\n# svm shared library\n##############################################################################\nif("\${CMAKE_SYSTEM_NAME}" STREQUAL "Android")\n  # SAKAMOTO_ANDROID_SVM_PLATFORM_LIBS\n  set(SAKAMOTO_ANDROID_SVM_LIBS vppinfra)\n  set(SAKAMOTO_ANDROID_SVMDB_LIBS svm vppinfra)\nelse()\n  set(SAKAMOTO_ANDROID_SVM_LIBS vppinfra rt pthread)\n  set(SAKAMOTO_ANDROID_SVMDB_LIBS svm vppinfra rt pthread)\nendif()\n\n##############################################################################\n# svm shared library@' "$VPP_SRC_DIR/svm/CMakeLists.txt"
@@ -125,5 +143,11 @@ for f in "$VPP_SRC_DIR/vlibmemory/memclnt_api.c" \
     perl -0pi -e 's@#include <strings.h>\n#endif@#include <string.h>\n#define index(s, c) strchr ((s), (c))\n#endif@' "$f"
   fi
 done
+
+if [ -f "$VPP_SRC_DIR/vnet/sfdp/timer/timer.h" ] &&
+  ! grep -q "SAKAMOTO_ANDROID_SFDP_UNUSED_FIELD_FIX" "$VPP_SRC_DIR/vnet/sfdp/timer/timer.h"; then
+  perl -0pi -e 's@#include <vnet/sfdp/sfdp.h>@#include <vnet/sfdp/sfdp.h>\n\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_SFDP_UNUSED_FIELD_FIX 1\n#endif@' "$VPP_SRC_DIR/vnet/sfdp/timer/timer.h"
+  perl -0pi -e 's@u32 __unused;@u32 unused;@g' "$VPP_SRC_DIR/vnet/sfdp/timer/timer.h"
+fi
 
 echo "Applied Android CMake overlay to $VPP_SRC_DIR"

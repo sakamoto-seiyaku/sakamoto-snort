@@ -11,6 +11,9 @@ BUILD_DIR="${BUILD_DIR:-$VPP_WORK_ROOT/vpp-android-configure-probe}"
 SAKAMOTO_NETFILTER_ROOT="${SAKAMOTO_NETFILTER_ROOT:-$REPO_ROOT/third_party/netfilter}"
 VPP_PLUGINS="${VPP_PLUGINS:-}"
 VPP_EXCLUDED_PLUGINS="${VPP_EXCLUDED_PLUGINS:-}"
+VPP_CMAKE_BUILD_TYPE="${VPP_CMAKE_BUILD_TYPE:-}"
+VPP_USE_LTO="${VPP_USE_LTO:-}"
+VPP_EXTRA_CMAKE_ARGS="${VPP_EXTRA_CMAKE_ARGS:-}"
 LOG_DIR="$POC_DIR/results"
 LOG="$LOG_DIR/android-vpp-configure-probe.log"
 
@@ -39,6 +42,9 @@ rm -rf "$BUILD_DIR"
   echo "sakamoto_netfilter_root=$SAKAMOTO_NETFILTER_ROOT"
   echo "vpp_plugins=$VPP_PLUGINS"
   echo "vpp_excluded_plugins=$VPP_EXCLUDED_PLUGINS"
+  echo "vpp_cmake_build_type=$VPP_CMAKE_BUILD_TYPE"
+  echo "vpp_use_lto=$VPP_USE_LTO"
+  echo "vpp_extra_cmake_args=$VPP_EXTRA_CMAKE_ARGS"
   echo
 
   export GIT_CONFIG_COUNT=1
@@ -62,6 +68,16 @@ rm -rf "$BUILD_DIR"
   fi
   if [ -n "$VPP_EXCLUDED_PLUGINS" ]; then
     cmake_args+=(-DVPP_EXCLUDED_PLUGINS="$VPP_EXCLUDED_PLUGINS")
+  fi
+  if [ -n "$VPP_CMAKE_BUILD_TYPE" ]; then
+    cmake_args+=(-DCMAKE_BUILD_TYPE="$VPP_CMAKE_BUILD_TYPE")
+  fi
+  if [ -n "$VPP_USE_LTO" ]; then
+    cmake_args+=(-DVPP_USE_LTO="$VPP_USE_LTO")
+  fi
+  if [ -n "$VPP_EXTRA_CMAKE_ARGS" ]; then
+    read -r -a extra_cmake_args <<<"$VPP_EXTRA_CMAKE_ARGS"
+    cmake_args+=("${extra_cmake_args[@]}")
   fi
 
   set +e
