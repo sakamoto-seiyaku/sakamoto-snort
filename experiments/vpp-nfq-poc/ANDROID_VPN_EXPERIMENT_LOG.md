@@ -513,3 +513,74 @@ VPP 再写回 Android main tun-fd。
 4. VPP/tun_poc 使用另一端作为 HEV shim fd。
 5. 观测 outbound rx、shim tx、shim rx、main tun tx 均增长。
 ```
+
+## 16. Linux Phase 3 前置结果同步
+
+Android 真机实验前，先在 Linux/Docker 完成了三组前置验证。
+
+```text
+POC-C1:
+  synthetic packet driver -> SOCK_SEQPACKET shim -> HEV -> SOCKS5 -> HEV -> SOCK_SEQPACKET shim
+  已通过。
+
+POC-C2:
+  main TUN fd -> VPP/tun_poc forward-fd -> SOCK_SEQPACKET shim
+  SOCK_SEQPACKET shim -> VPP/tun_poc forward-fd -> main TUN fd
+  已通过。
+
+POC-C3:
+  curl/Linux TCP -> main TUN fd -> VPP -> HEV -> SOCKS5 -> HEV -> VPP -> main TUN fd -> curl
+  已通过一次完整 HTTP flow。
+```
+
+POC-C3 关键结果：
+
+```text
+curl output:
+  OK
+
+SOCKS event:
+  connect 93.184.216.34:80
+  payload includes GET /probe HTTP/1.0
+
+show tun-poc after curl:
+  enabled 1 fd 53 shim-fd 54 mode forward-fd
+  rx 7 bytes 390 tx 6 bytes 284
+  shim-rx 6 bytes 284 shim-tx 7 bytes 390
+  errors all 0
+```
+
+保留风险：
+
+```text
+HEV stderr/stdout:
+  free(): invalid size
+
+当前判断：
+  datapath 已经成立。
+  但 HEV lifecycle/memory 行为不能视为干净，需要在 Android 3A 单独验证。
+```
+
+## 17. Android Phase 3 执行计划
+
+```text
+Step 3A：Android HEV 打包和最小 lifecycle probe
+  目标：
+    HEV Android .so 进入 vpn-lite APK。
+    JNI 能启动 HEV main_from_str(socketpair fd)。
+    先验证依赖、符号、启动、停止、stderr/log。
+  不接 VPP 主 fd，不承诺 datapath。
+
+Step 3B：Android VPP forward-fd bridge
+  目标：
+    VpnService fd -> VPP main fd。
+    socketpair VPP 端 -> tun_poc shim-fd。
+    使用本地 probe/driver 或受控 packet 验证四向计数。
+  不先把 HEV 混进来。
+
+Step 3C：Android VPP + HEV full datapath
+  目标：
+    VpnService fd -> VPP -> HEV -> SOCKS5/upstream -> HEV -> VPP -> VpnService fd。
+    先用受控 SOCKS5 endpoint。
+    再处理 Android VpnService.protect()，防止 HEV upstream socket 被 VPN 自己截回。
+```

@@ -2,7 +2,7 @@
 
 日期：2026-06-22
 分支：`research/vpp-nfq-poc`
-状态：Phase 1 已通过；Phase 2 count-only 已在 Pixel 6a / Android 16 上通过；Phase 3 待开始。
+状态：Phase 1 已通过；Phase 2 count-only 已在 Pixel 6a / Android 16 上通过；Linux/Docker Phase 3 前置 POC 已通过；Android Phase 3 待开始。
 
 ## 1. 目标
 
@@ -152,6 +152,19 @@ HEV external tun_fd 可以是 SOCK_SEQPACKET socketpair。
 HEV 能从 shim fd 收 synthetic IPv4/TCP packet。
 HEV 能通过 SOCKS5 CONNECT 转发。
 HEV 能把 upstream response 写回 shim fd。
+
+Linux/Docker POC-C2 已证明：
+VPP/tun_poc forward-fd 可以桥接 main TUN fd 与 SOCK_SEQPACKET shim fd。
+main fd -> VPP -> shim、shim -> VPP -> main fd 两个方向均可用。
+
+Linux/Docker POC-C3 已证明：
+真实 Linux kernel TCP/curl flow 可以经过：
+  main TUN fd -> VPP -> HEV -> SOCKS5 -> HEV -> VPP -> main TUN fd
+curl 收到 HTTP body。
+
+已知风险：
+POC-C3 中 HEV 子进程 stderr 输出 free(): invalid size。
+当前 harness 检查点没有观察到 HEV 提前退出，但 Android/JNI 前必须保留为 lifecycle/memory 风险。
 ```
 
 Android Phase 3 实现方向：
@@ -166,6 +179,27 @@ Android Phase 3 实现方向：
 6. inbound packet:
    HEV shim fd -> VPP -> main tun-fd
 7. HEV upstream socket 必须由 Android VPN owner protect()。
+```
+
+Android Phase 3 分步执行：
+
+```text
+Step 3A：Android HEV 打包和最小 lifecycle probe
+  只把 HEV Android .so 放进 APK。
+  JNI 能 dlopen/link 到 hev_socks5_tunnel_main_from_str。
+  使用 socketpair 启动/停止 HEV，先不接主 VpnService fd。
+  目标是暴露 Android 上的依赖、符号、线程/进程和退出问题。
+
+Step 3B：Android VPP forward-fd bridge
+  APK/native 创建 SOCK_SEQPACKET socketpair。
+  VPP/tun_poc 使用主 VpnService fd + VPP 端 shim fd。
+  HEV 端先可由本地 probe/driver 持有，验证 VPP 四向计数：
+    main rx、shim tx、shim rx、main tx。
+
+Step 3C：Android VPP + HEV full datapath
+  HEV 持有 shim 另一端。
+  先使用可控 SOCKS5 endpoint。
+  再处理 Android VpnService.protect()，避免 HEV upstream socket 被 VPN 回环捕获。
 ```
 
 验收：

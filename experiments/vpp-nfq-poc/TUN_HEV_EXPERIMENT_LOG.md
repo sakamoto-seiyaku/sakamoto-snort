@@ -410,17 +410,37 @@ POC-C2 状态：
 已通过：
   main TUN fd -> VPP/tun_poc forward-fd -> SOCK_SEQPACKET shim
   SOCK_SEQPACKET shim -> VPP/tun_poc forward-fd -> main TUN fd
+```
 
-尚未通过：
-  main TUN fd -> VPP/tun_poc -> HEV -> SOCKS5 -> HEV -> VPP/tun_poc -> main TUN fd
+POC-C3 状态：
+
+```text
+已通过：
+  Linux kernel TCP/curl -> main TUN fd
+  main TUN fd -> VPP/tun_poc forward-fd -> SOCK_SEQPACKET shim
+  SOCK_SEQPACKET shim -> HEV -> local SOCKS5 server
+  local SOCKS5 response -> HEV -> SOCK_SEQPACKET shim
+  SOCK_SEQPACKET shim -> VPP/tun_poc forward-fd -> main TUN fd -> curl
+
+限制：
+  HEV 子进程 stderr 输出 free(): invalid size。
+  harness 在 after-curl / after-show 检查点仍观察到 HEV process alive。
+  这说明 datapath 已经成立，但 HEV lifecycle/memory 行为需要作为 Android 前置风险继续追踪。
+```
+
+Android 尚未通过：
+
+```text
+  Android VpnService tun-fd -> VPP forward-fd -> HEV -> egress -> VPP -> tun-fd
 ```
 
 下一步：
 
 ```text
-1. 把 HEV 子进程接到 forward-fd shim 的另一端。
-2. 用 synthetic TCP/HTTP 或真实 TUN TCP flow 验证 HEV SOCKS5 egress。
-3. 单独验证 native/JNI 下 HEV quit/lifecycle，不使用 Python ctypes 线程结果做结论。
+1. 把当前 Linux C3 结果同步到 Android 实验计划。
+2. Android 上先做最小 HEV 接入：VpnService fd -> VPP forward-fd -> HEV。
+3. 单独验证 native/JNI 下 HEV quit/lifecycle，不使用 Python ctypes 线程结果做最终结论。
+4. HEV stderr 的 free(): invalid size 需要保留为风险项，不能因为 datapath 通过而忽略。
 ```
 
 ## 5. POC-C2：VPP forward-fd shim bridge
@@ -494,4 +514,85 @@ vpp-tun-forward-fd-smoke:
 VPP/tun_poc 可以作为 main TUN fd 与 HEV-side packet fd 之间的双向桥。
 这一步只证明 adapter 形状成立。
 尚未证明 HEV 接在 shim 后、完整 TCP/SOCKS5 egress 在 VPP 两侧都可用。
+```
+
+## 6. POC-C3：VPP forward-fd + HEV + SOCKS5 egress
+
+```text
+2026-06-22
+  新增脚本：
+    scripts/run-vpp-tun-hev-smoke.sh
+    scripts/run-vpp-tun-hev-smoke.py
+
+  新增 Makefile target：
+    vpp-tun-hev-smoke
+
+  实验拓扑：
+    curl http://93.184.216.34/probe
+      -> Linux route 93.184.216.34/32 dev tun-poc-hev0
+      -> main TUN fd 53
+      -> VPP tun_poc mode forward-fd
+      -> SOCK_SEQPACKET shim fd 54
+      -> HEV external tun fd
+      -> local SOCKS5 server
+      -> HEV response packet
+      -> SOCK_SEQPACKET shim
+      -> VPP tun_poc forward-fd
+      -> main TUN fd
+      -> Linux TCP stack
+      -> curl receives HTTP body
+```
+
+验证：
+
+```text
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-hev-smoke
+```
+
+结果：
+
+```text
+curl output:
+  OK
+
+SOCKS events:
+  greeting b'\x05\x01\x00'
+  connect 93.184.216.34:80
+  payload:
+    GET /probe HTTP/1.0
+    Host: 93.184.216.34
+    User-Agent: curl/7.88.1
+    Accept: */*
+
+show tun-poc before curl:
+  enabled 1 fd 53 shim-fd 54 mode forward-fd
+  rx 1 bytes 48 tx 0 bytes 0
+  shim-rx 0 bytes 0 shim-tx 1 bytes 48
+  errors all 0
+
+show tun-poc after curl:
+  enabled 1 fd 53 shim-fd 54 mode forward-fd
+  rx 7 bytes 390 tx 6 bytes 284
+  shim-rx 6 bytes 284 shim-tx 7 bytes 390
+  errors all 0
+
+HEV stderr/stdout:
+  free(): invalid size
+```
+
+结论：
+
+```text
+Linux/Docker 下，完整 VPN-mode 数据面形状已经成立：
+  main TUN fd -> VPP -> HEV -> SOCKS5 -> HEV -> VPP -> main TUN fd
+
+这个结果比 C1/C2 更强：
+  C1 只证明 HEV 能吃 socketpair。
+  C2 只证明 VPP 能桥接 main fd 与 shim fd。
+  C3 证明真实 Linux TCP flow 可以穿过 VPP + HEV shim 并回到 kernel TCP stack。
+
+但 C3 不是最终通过：
+  HEV 输出 free(): invalid size。
+  当前 harness 只说明该输出没有阻断一次 HTTP flow，也没有在检查点观察到 HEV process 退出。
+  Android/JNI 集成前，仍需要对 HEV lifecycle / cleanup / memory 行为单独压测。
 ```
