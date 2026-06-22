@@ -2518,3 +2518,313 @@ experiments/vpp-nfq-poc/results/simpleperf-vpp-idle-disabled-no-expired/
   - 避免每轮都进入 process_expired_timers；
   - 或者转向 vlib-only / vpp_lite，减少完整 libvnet runtime 带来的默认主循环成本。
 ```
+
+### 15.6 剩余 1.7% idle CPU 的具体路径拆解
+
+先区分两个数字：
+
+```text
+最终 idle CPU 百分比：
+  来自 /proc tick-delta 60s 测量。
+
+热点占比：
+  来自 simpleperf 30s 采样，只能说明 CPU 时间在 VPP 进程内部怎么分布。
+  simpleperf + DWARF callgraph 本身有额外开销，所以不能直接把 942 samples 换算成最终 CPU%。
+```
+
+目前最可信的“真实 timer 已禁用后”CPU 数字：
+
+```text
+禁用默认 process timers:
+  avg=1.751% min=1.555% max=1.945% n=12
+
+禁用默认 process timers + max_timeout_ms=1000:
+  avg=1.720% min=1.547% max=1.954% n=12
+```
+
+也就是说，把真实周期 timer 来源去掉后，Android root minimal VPP 仍然约
+`1.7%` idle CPU。
+
+在这个状态下，timer-source 插桩显示 5 秒窗口里基本没有真实过期事件：
+
+```text
+report=2 expired_total=0 process=0 timed_event=0 sched=0
+report=3 expired_total=0 process=0 timed_event=0 sched=0
+```
+
+因此剩余 CPU 不是某个包处理节点、某个 VNET 协议功能，或者某个隐藏 process timer
+仍在高频工作。剩余路径可以拆成下面几段。
+
+#### 15.6.1 主循环每轮固定执行的 idle 检查
+
+源码位置：
+
+```text
+src/vlib/main.c
+  vlib_main_or_worker_loop()
+```
+
+即使没有包、没有 pending frame、没有真实过期 timer，主线程仍然在 `while (1)` 主
+循环里做这些固定检查：
+
+```text
+line 1541:
+  cpu_time_now = clib_cpu_time_now()
+
+line 1543-1546:
+  如果 file_poll_skip_loops 为 0，调用 vlib_file_poll()
+
+line 1548-1582:
+  遍历 node type，检查 polling node / interrupt node
+
+line 1607-1608:
+  queue_signal_callback()
+
+line 1613-1616:
+  检查并清空 pending_frames
+
+line 1642:
+  expired_timers = process_expired_timers(expired_timers)
+
+line 1703-1708:
+  更新 main loop counter、再次读取时间、维护 loops/sec 统计
+```
+
+这些单次都不重，但在 idle 时仍会随着 epoll wakeup 反复执行。`show runtime` 里曾
+观察到禁用 process + `max_timeout_ms=1000` 后仍有：
+
+```text
+loops/sec 467.95
+```
+
+这意味着即使没有业务工作，VPP 主循环仍然大约每秒跑数百轮。每一轮都至少包含一次
+时间读取、状态检查、timer wheel 过期检查、loop accounting。
+
+#### 15.6.2 `process_expired_timers()` 的“空扫 timer wheel”
+
+源码位置：
+
+```text
+src/vlib/main.c
+  process_expired_timers()
+
+src/vlib/tw_funcs.h
+  vlib_tw_timer_expire_timers()
+
+src/vppinfra/tw_timer_template.c
+  tw_timer_expire_timers_internal_1t_3w_1024sl_ov()
+```
+
+主循环在 `src/vlib/main.c:1642` 每轮调用：
+
+```c
+expired_timers = process_expired_timers (expired_timers);
+```
+
+`process_expired_timers()` 内部第一步是：
+
+```c
+v = vlib_tw_timer_expire_timers (vm, v);
+```
+
+`vlib_tw_timer_expire_timers()` 做了两件事：
+
+```text
+1. vec_reset_length(v)
+2. 如果 vm->n_tw_timers > 0:
+     读取 vlib_time_now(vm)
+     调用 tw_timer_expire_timers_vec(...)
+     根据 vec_len(v) 扣减 vm->n_tw_timers
+```
+
+这里的关键点：
+
+```text
+即使最终 expired_total=0，只要 vm->n_tw_timers > 0，
+它仍然会读取当前时间并进入 timer wheel expire 函数。
+```
+
+`tw_timer_expire_timers_internal()` 里又会：
+
+```text
+line 507-514:
+  判断 now 是否早于 next_run_time；
+  计算从 last_run_time 到 now 经过了多少 timer tick；
+  如果 nticks == 0 则返回。
+
+line 535-801:
+  如果有 tick 需要推进，则推进 fast/slow/glacier wheel；
+  扫描对应 slot；
+  即使 slot 里没有真正过期 timer，也要更新 current_tick/current_index/last_run_time。
+```
+
+simpleperf 对应：
+
+```text
+libvlib.so+0x3c968
+  vlib_tw_timer_expire_timers
+  process_expired_timers
+
+children: 56.69%
+```
+
+这 56.69% 不是说有真实 timer 在执行回调，而是 CPU 样本落在“主循环定期检查
+timer wheel 是否有过期事件”的路径上。timer-source 插桩已经证明这个状态下
+`expired_total` 基本是 0。
+
+#### 15.6.3 `vlib_file_poll()` 的 sleep timeout 计算和 epoll 系统调用
+
+源码位置：
+
+```text
+src/vlib/file.c
+  vlib_file_poll()
+```
+
+进入睡眠前，`vlib_file_poll()` 做的不是单纯 `epoll_wait()`：
+
+```text
+line 132-142:
+  检查是否最近有 vectors、是否有 polling input node、API queue 是否非空。
+  如果认为系统忙，则不睡，设置 skip_loops。
+
+line 154-158:
+  扫描 node_interrupts，检查是否有 pending interrupt。
+
+line 162:
+  标记 thread_sleeps = 1。
+
+line 164:
+  ticks = vlib_tw_timer_first_expires_in_ticks(vm)
+
+line 166-172:
+  根据下一次 timer 到期时间计算 epoll timeout；
+  默认 max_timeout_ms = 10。
+
+line 181-182:
+  epoll_wait(epoll_fd, ..., timeout_ms)
+```
+
+这里还有第二条 timer wheel 相关路径：
+
+```text
+vlib_tw_timer_first_expires_in_ticks()
+  -> tw_timer_first_expires_in_ticks()
+  -> 扫 fast_slot_bitmap，估算下一次 timer 到期时间
+```
+
+simpleperf 对应：
+
+```text
+vlib_file_poll       children 36.41%
+__epoll_pwait        children 34.82%
+
+callgraph:
+  vlib_file_poll
+    __epoll_pwait
+      __arm64_sys_epoll_pwait
+        do_epoll_wait
+          schedule_hrtimeout_range
+            schedule
+              __schedule
+                finish_task_switch
+```
+
+这部分不是用户态忙等，而是 VPP 进入 Android kernel 的 epoll 等待路径和醒来/调度
+路径。由于默认 `max_timeout_ms=10`，没有其它干预时最多约 10ms 就会醒一次；之前
+把它拉到 1000ms 后，CPU 只从约 `1.751%` 到 `1.720%`，说明 timeout 上限不是唯一
+问题，主循环醒来后仍然会执行 timer wheel 和 loop accounting。
+
+#### 15.6.4 Android kernel 调度/唤醒成本
+
+simpleperf 里 `__epoll_pwait` 下的内核路径主要是：
+
+```text
+do_epoll_wait
+schedule_hrtimeout_range
+schedule
+__schedule
+finish_task_switch
+```
+
+还可以看到一些 Android/Pixel kernel 背景路径：
+
+```text
+run_rebalance_domains
+rebalance_domains
+load_balance
+cpu_overutilized
+simple_interactive_timer
+run_timer_softirq
+```
+
+这说明采样中有一部分时间落在“线程睡眠、被 timer 或系统事件唤醒、重新调度回来”
+的内核成本上。它不是 VPP 在处理包，但它由 VPP 主循环周期性进入 epoll、周期性醒
+来共同触发。
+
+#### 15.6.5 插桩和 simpleperf 自身带来的小噪声
+
+这轮 `simpleperf-vpp-idle-disabled-no-expired` 是带 timer-source 插桩的二进制，
+报告中还有：
+
+```text
+_clib_error / syslog / vsyslog / async_safe_write_log
+```
+
+这是 `[SAKAMOTO-TIMER]` 每 5 秒报告一次带来的日志开销。它帮助确认
+`expired_total=0`，但不应该被当成最终 runtime 成本。最终 CPU 百分比仍以不带这
+个插桩的 60s tick-delta 为准。
+
+#### 15.6.6 更准确的当前结论
+
+```text
+旧说法：
+  “完整 VPP/VLIB 主循环形态本身仍有 idle 成本。”
+
+更准确的说法：
+  在 Android root minimal idle、真实 VNET process timers 已基本消除后，
+  剩余约 1.7% CPU 来自 VPP main thread 的固定 idle loop：
+
+    1. vlib_main_or_worker_loop 每轮固定读取时间、检查 pending work、
+       检查 polling/interrupt node、维护 loop 统计；
+
+    2. 每轮调用 process_expired_timers()，只要 vm->n_tw_timers 非 0，
+       即使没有真实过期事件，也会读取时间并推进/检查 VLIB timer wheel；
+
+    3. vlib_file_poll() 每次准备睡眠前还会扫描是否有 polling/interrupt/API work，
+       再调用 vlib_tw_timer_first_expires_in_ticks() 估算 epoll timeout；
+
+    4. epoll_wait 进入 Android kernel 后产生 schedule_hrtimeout_range、
+       schedule、finish_task_switch 等睡眠/唤醒/调度成本。
+
+  所以问题不是“哪个协议模块在干活”，而是 full VPP runtime 当前 idle path
+  没有一个真正的深睡眠状态；它仍按通用高性能 packet-processing 主循环持续维护
+  timer wheel、polling/interrupt 状态、epoll timeout 和 runtime 统计。
+```
+
+这也解释了为什么单独把几个 VNET process 改成 `event wait` 后，真实 timer 基本消失，
+但 CPU 没有掉到接近 0：
+
+```text
+它去掉的是“真实 timer event 的来源”；
+没有去掉的是“每轮主循环仍然检查 timer/event/poll/epoll 的机制”。
+```
+
+后续若要继续压低 idle，需要验证的是主循环低功耗条件，而不是继续找某个具体协议
+timer：
+
+```text
+候选判断条件：
+  no pending_frames
+  no process_restore_current
+  no polling input node
+  no node_interrupt pending
+  no api_queue_nonempty
+  no worker frame queue work
+  no active near-term VLIB timer
+
+满足时：
+  避免每轮 process_expired_timers；
+  避免每轮 timer_first_expires_in_ticks；
+  使用更长 epoll timeout 或 eventfd 驱动唤醒。
+```
