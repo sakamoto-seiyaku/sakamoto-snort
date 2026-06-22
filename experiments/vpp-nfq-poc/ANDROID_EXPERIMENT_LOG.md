@@ -1287,3 +1287,59 @@ Android 真机上，nfqueue_poc enable 后的短 idle 采样没有出现单核 1
 它不替代后续长期压测、不同 governor、锁屏/息屏、不同设备和真实业务流量
 下的性能评估。
 ```
+
+## 21. 对照采样：只加载插件但不 enable NFQUEUE
+
+目的：
+
+```text
+确认 7% 左右 CPU 是否来自 nfqueue_poc enable 后的 NFQUEUE 收包路径，
+还是当前 VPP minimal runtime 自身基线。
+```
+
+启动：
+
+```sh
+env SKIP_PUSH=1 STOP_AFTER=0 WAIT_SECS=3 \
+  make -C experiments/vpp-nfq-poc android-vpp-minimal-probe
+```
+
+状态：
+
+```text
+VPP 启动成功。
+nfqueue_poc_plugin.so 已加载。
+未执行 nfqueue-poc enable。
+```
+
+采样：
+
+```text
+pid=18365
+PID   NAME  STAT  %CPU  RSS
+18365 vpp   S      8.6  321080
+18365 vpp   S      8.5  321080
+18365 vpp   S      8.4  321080
+18365 vpp   S      8.3  321080
+18365 vpp   S      8.1  321080
+18365 vpp   S      7.9  321080
+18365 vpp   S      7.5  321080
+18365 vpp   S      7.5  321080
+18365 vpp   S      7.5  321080
+18365 vpp   S      7.6  321080
+```
+
+清理：
+
+```text
+pidof vpp: empty
+/proc/net/netfilter/nfnetlink_queue: empty
+```
+
+结论：
+
+```text
+只启动 VPP 并加载插件、不 enable NFQUEUE 时，CPU 也稳定到约 7.5%。
+因此前一节 nfqueue_poc enable 后约 7.0% - 7.5% 的短 idle 观测，
+更像当前 Android VPP minimal runtime 基线，而不是 NFQUEUE fd 忙轮询。
+```

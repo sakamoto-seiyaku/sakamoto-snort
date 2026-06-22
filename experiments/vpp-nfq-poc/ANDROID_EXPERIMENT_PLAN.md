@@ -211,8 +211,12 @@ nfqueue-poc enable queue 42 mode accept-all，无测试规则/无流量：
 短 OUTPUT ICMP 流量后删除规则并停流：
   ps %CPU 约 7.0%。
 
+对照：只启动 VPP 并加载 nfqueue_poc_plugin.so，但不执行 nfqueue-poc enable：
+  ps %CPU 约 7.5%，与 enable 后同量级。
+
 结论：
   当前 Android 真机短采样没有出现单核 100% 忙轮询。
+  这个 7%左右更像当前 VPP minimal runtime 基线，而不是 NFQUEUE 收包忙轮询。
   这不是长期压测或正式性能结论。
 ```
 
