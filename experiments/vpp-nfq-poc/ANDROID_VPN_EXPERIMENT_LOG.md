@@ -824,3 +824,170 @@ main rx -> shim tx 成立：真实 VPN 包进入 shim driver。
 shim rx -> main tx 成立：shim driver 写回 ICMP reply，VPP 写回 main tun-fd，ping 收到 reply。
 下一步进入 3C：把 shim driver 替换为 HEV。
 ```
+
+## 20. Android Phase 3C：VPP + HEV full datapath
+
+目标：
+
+```text
+把 3B 的 native shim driver 替换为 HEV。
+验证 Android 真机上完整路径：
+  Android TCP client
+    -> VpnService main tun-fd
+    -> VPP/tun_poc forward-fd
+    -> SOCK_SEQPACKET shim
+    -> HEV
+    -> SOCKS5 server
+    -> HEV
+    -> VPP/tun_poc forward-fd
+    -> main tun-fd
+    -> Android TCP client
+```
+
+实现：
+
+```text
+新增 mode：
+  vpp-hev
+
+Java:
+  mode=vpp-hev -> nativeStartVppProbe(..., vppMode=2)
+
+native:
+  VPP child:
+    fd 3 = Android VpnService detached tun-fd
+    fd 4 = socketpair VPP end
+    startup.exec:
+      tun-poc enable fd 3 mode forward-fd shim-fd 4
+  HEV child:
+    socketpair HEV end as external tun_fd
+    dlopen libhev-socks5-tunnel.so
+    hev_socks5_tunnel_main_from_str(config, fd)
+    SOCKS5 upstream:
+      127.0.0.1:41080
+```
+
+重要路径调整：
+
+```text
+原计划先尝试 adb reverse tcp:41080 tcp:41080，让 HEV 连接设备 127.0.0.1:41080 到宿主机 SOCKS5。
+实际验证中，该设备/ADB 组合下 adb reverse 没有打到宿主机监听端口。
+因此改为设备本机 SOCKS5 smoke server：
+  scripts/android-socks5-smoke-server.c
+  scripts/android-build-socks5-smoke-server.sh
+  make android-socks5-smoke-server-build
+```
+
+设备 SOCKS5 smoke server：
+
+```text
+监听：
+  127.0.0.1:41080
+
+行为：
+  接 SOCKS5 no-auth。
+  记录 CONNECT 目标和 payload。
+  返回固定：
+    HTTP/1.0 200 OK
+    Content-Length: 2
+
+    OK
+```
+
+验证命令摘要：
+
+```text
+make android-socks5-smoke-server-build
+adb push build/android-socks5-smoke-server /data/local/tmp/sakamoto-socks5-smoke
+adb shell chmod 755 /data/local/tmp/sakamoto-socks5-smoke
+adb shell 'nohup /data/local/tmp/sakamoto-socks5-smoke > /data/local/tmp/sakamoto-socks5-smoke.log 2>&1 < /dev/null &'
+
+android/vpn-lite/scripts/install-debug-apk.sh
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp-hev
+
+printf 'GET /probe HTTP/1.0\r\nHost: example.test\r\n\r\n' |
+  adb shell nc -w 5 -W 5 93.184.216.34 80
+```
+
+HTTP client 结果：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+```
+
+logcat：
+
+```text
+I SnortVpnLiteNative: started VPP HEV pid=26026 log=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-hev.log
+I SnortVpnLiteNative: started VPP pid=26025 fd=126 mode=2 conf=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.conf
+I SnortVpnLite: nativeStartVppProbe fd=126 vppMode=2 rc=0
+I SnortVpnLiteNative: vpp monitor start pid=26025 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+```
+
+SOCKS5 smoke server log：
+
+```text
+android socks5 smoke server ready 127.0.0.1:41080
+
+accepted
+greeting ok
+connect 74.125.142.188:5228
+payload-len 532
+  background Google/mtalk TLS flow
+
+accepted
+greeting ok
+connect 93.184.216.34:80
+payload-len 43
+GET /probe HTTP/1.0
+Host: example.test
+```
+
+VPP/tun_poc 计数：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 21 bytes 1650 tx 11 bytes 556
+shim-rx 11 bytes 556 shim-tx 21 bytes 1650
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+HEV log：
+
+```text
+[2026-06-22 13:14:18] [I] set limit nofile
+[2026-06-22 13:14:21] [I] ... socks5 client tcp -> [74.125.142.188]:5228
+[2026-06-22 13:14:23] [I] ... socks5 client tcp -> [93.184.216.34]:80
+```
+
+停止：
+
+```text
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez stop true
+adb shell am force-stop com.sakamoto.snort.vpnlite
+adb shell pkill -f sakamoto-socks5-smoke
+
+logcat:
+  I SnortVpnLiteNative: stopped HEV pid=26026 log=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-hev.log
+  I SnortVpnLite: VPN stopped
+
+停止后：
+  无 VPP / HEV / app / socks5 smoke server 残留。
+```
+
+结论：
+
+```text
+Android Phase 3C 通过。
+Android 真机上，VpnService fd + VPP forward-fd + HEV + SOCKS5 的完整 datapath 已经成立。
+本轮未观察到 Linux C3 中的 free(): invalid size。
+
+仍需后续单独设计：
+  1. 正式 upstream socket protect() 路径，而不是测试用设备本机 SOCKS5。
+  2. HEV lifecycle 压测和多连接场景。
+  3. 将 POC 经验回收进正式 runtime/owner 边界，而不是直接搬实验代码。
+```

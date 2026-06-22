@@ -14,6 +14,7 @@ public final class SnortVpnService extends VpnService {
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
     public static final String MODE_VPP_FORWARD = "vpp-forward";
+    public static final String MODE_VPP_HEV = "vpp-hev";
     public static final String MODE_HEV = "hev";
 
     private static final String TAG = "SnortVpnLite";
@@ -31,7 +32,7 @@ public final class SnortVpnService extends VpnService {
     private static native void nativeStopProbe();
 
     private static native int nativeStartVppProbe(int fd, String nativeLibraryDir, String filesDir,
-                                                  boolean forwardMode);
+                                                  int vppMode);
 
     private static native void nativeStopVppProbe();
 
@@ -93,11 +94,17 @@ public final class SnortVpnService extends VpnService {
 
             int rawFd = vpnFd.detachFd();
             vpnFd = null;
-            if (MODE_VPP.equals(mode) || MODE_VPP_FORWARD.equals(mode)) {
-                boolean forwardMode = MODE_VPP_FORWARD.equals(mode);
+            if (MODE_VPP.equals(mode) || MODE_VPP_FORWARD.equals(mode)
+                    || MODE_VPP_HEV.equals(mode)) {
+                int vppMode = 0;
+                if (MODE_VPP_FORWARD.equals(mode)) {
+                    vppMode = 1;
+                } else if (MODE_VPP_HEV.equals(mode)) {
+                    vppMode = 2;
+                }
                 int rc = nativeStartVppProbe(rawFd, getApplicationInfo().nativeLibraryDir,
-                        getFilesDir().getAbsolutePath(), forwardMode);
-                Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " forward=" + forwardMode
+                        getFilesDir().getAbsolutePath(), vppMode);
+                Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " vppMode=" + vppMode
                         + " rc=" + rc);
             } else {
                 int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS);

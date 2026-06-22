@@ -43,12 +43,15 @@ static int g_vpp_shim_fd = -1;
 static char g_vpp_cli_sock[PATH_BUF_SIZE];
 static char g_vpp_cli_log[PATH_BUF_SIZE];
 static char g_vpp_shim_log[PATH_BUF_SIZE];
+static char g_vpp_hev_log[PATH_BUF_SIZE];
 
 static pid_t g_hev_pid = -1;
 static int g_hev_driver_fd = -1;
 static char g_hev_log_path[PATH_BUF_SIZE];
 
 typedef int (*hev_main_from_str_fn)(const char *config, unsigned int config_len, int tun_fd);
+
+static void run_hev_child(const char *native_dir, const char *log_path, int fd, int socks_port);
 
 static void log_line(FILE *file, const char *fmt, ...) {
     char line[512];
@@ -553,6 +556,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     snprintf(g_vpp_cli_sock, sizeof(g_vpp_cli_sock), "%s/cli.sock", runtime_dir);
     snprintf(g_vpp_cli_log, sizeof(g_vpp_cli_log), "%s/vpp-cli.log", logs_dir);
     snprintf(g_vpp_shim_log, sizeof(g_vpp_shim_log), "%s/vpp-shim.log", logs_dir);
+    snprintf(g_vpp_hev_log, sizeof(g_vpp_hev_log), "%s/vpp-hev.log", logs_dir);
 
     if (mkdir_p(runtime_dir) < 0 || mkdir_p(logs_dir) < 0 || mkdir_p(shm_dir) < 0) {
         return -1;
@@ -560,6 +564,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     unlink(g_vpp_cli_sock);
     unlink(g_vpp_cli_log);
     unlink(g_vpp_shim_log);
+    unlink(g_vpp_hev_log);
     unlink(stdout_log);
     unlink(vpp_log);
 
@@ -619,7 +624,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
 JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         JNIEnv *env, jclass clazz, jint fd, jstring native_library_dir, jstring files_dir,
-        jboolean forward_mode) {
+        jint vpp_mode) {
     (void)clazz;
 
     const char *native_dir = (*env)->GetStringUTFChars(env, native_library_dir, NULL);
@@ -645,7 +650,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         close(fd);
         return -2;
     }
-    bool use_forward = forward_mode == JNI_TRUE;
+    bool use_forward = vpp_mode == 1 || vpp_mode == 2;
+    bool use_hev = vpp_mode == 2;
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
                         stdout_log, sizeof(stdout_log), use_forward) < 0) {
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
@@ -655,7 +661,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     }
 
     pthread_mutex_lock(&g_lock);
-    if (g_vpp_pid > 0) {
+    if (g_vpp_pid > 0 || (use_hev && g_hev_pid > 0)) {
         pthread_mutex_unlock(&g_lock);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
@@ -746,13 +752,53 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     pthread_mutex_lock(&g_lock);
     g_vpp_pid = pid;
     g_vpp_monitor_running = true;
-    if (use_forward) {
+    if (use_forward && !use_hev) {
         g_vpp_shim_fd = shim_fds[0];
         g_vpp_shim_running = true;
     }
     pthread_mutex_unlock(&g_lock);
 
-    if (use_forward) {
+    if (use_hev) {
+        pid_t hev_pid = fork();
+        if (hev_pid < 0) {
+            close(shim_fds[0]);
+            kill(pid, SIGTERM);
+            pthread_mutex_lock(&g_lock);
+            g_vpp_monitor_running = false;
+            g_vpp_pid = -1;
+            pthread_mutex_unlock(&g_lock);
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -8;
+        }
+        if (hev_pid == 0) {
+            run_hev_child(native_dir, g_vpp_hev_log, shim_fds[0], 41080);
+            _exit(127);
+        }
+        close(shim_fds[0]);
+        usleep(300000);
+        int status = 0;
+        pid_t exited = waitpid(hev_pid, &status, WNOHANG);
+        if (exited == hev_pid) {
+            kill(pid, SIGTERM);
+            pthread_mutex_lock(&g_lock);
+            g_vpp_monitor_running = false;
+            g_vpp_pid = -1;
+            pthread_mutex_unlock(&g_lock);
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -9;
+        }
+        pthread_mutex_lock(&g_lock);
+        g_hev_pid = hev_pid;
+        g_hev_driver_fd = -1;
+        snprintf(g_hev_log_path, sizeof(g_hev_log_path), "%s", g_vpp_hev_log);
+        pthread_mutex_unlock(&g_lock);
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "started VPP HEV pid=%d log=%s",
+                            hev_pid, g_vpp_hev_log);
+    } else if (use_forward) {
         int shim_rc = pthread_create(&g_vpp_shim_thread, NULL, vpp_shim_thread, NULL);
         if (shim_rc != 0) {
             close(shim_fds[0]);
@@ -766,7 +812,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             waitpid(pid, NULL, 0);
             (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
             (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
-            return -8;
+            return -10;
         }
     }
 
@@ -787,15 +833,23 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         if (was_shim) {
             pthread_join(g_vpp_shim_thread, NULL);
         }
+        if (use_hev) {
+            pthread_mutex_lock(&g_lock);
+            pid_t hev_pid = g_hev_pid;
+            g_hev_pid = -1;
+            g_hev_log_path[0] = '\0';
+            pthread_mutex_unlock(&g_lock);
+            terminate_child(hev_pid);
+        }
         waitpid(pid, NULL, 0);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
-        return -9;
+        return -11;
     }
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-                        "started VPP pid=%d fd=%d forward=%d conf=%s", pid, fd,
-                        use_forward ? 1 : 0, startup_conf);
+                        "started VPP pid=%d fd=%d mode=%d conf=%s", pid, fd,
+                        vpp_mode, startup_conf);
     (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
     (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
     return 0;
@@ -845,21 +899,24 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     }
 }
 
-static void run_hev_child(const char *native_dir, const char *log_path, int fd) {
+static void run_hev_child(const char *native_dir, const char *log_path, int fd, int socks_port) {
     char hev_path[PATH_BUF_SIZE];
-    const char config[] =
+    char config[1024];
+
+    snprintf(config, sizeof(config),
             "tunnel:\n"
             "  mtu: 1500\n"
             "socks5:\n"
             "  address: 127.0.0.1\n"
-            "  port: 9\n"
+            "  port: %d\n"
             "  udp: tcp\n"
             "misc:\n"
             "  log-file: stderr\n"
             "  log-level: info\n"
             "  connect-timeout: 2000\n"
             "  tcp-read-write-timeout: 5000\n"
-            "  udp-read-write-timeout: 5000\n";
+            "  udp-read-write-timeout: 5000\n",
+            socks_port);
 
     int out = open(log_path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
     if (out >= 0) {
@@ -951,7 +1008,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartHevProbe(
 
     if (pid == 0) {
         close(fds[0]);
-        run_hev_child(native_dir, log_path, fds[1]);
+        run_hev_child(native_dir, log_path, fds[1], 9);
         _exit(127);
     }
 
