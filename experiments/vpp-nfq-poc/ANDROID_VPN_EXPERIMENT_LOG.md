@@ -991,3 +991,68 @@ Android 真机上，VpnService fd + VPP forward-fd + HEV + SOCKS5 的完整 data
   2. HEV lifecycle 压测和多连接场景。
   3. 将 POC 经验回收进正式 runtime/owner 边界，而不是直接搬实验代码。
 ```
+
+## 21. Android Phase 3C 在 VPP idle profile 下复测通过
+
+时间：2026-06-23
+
+背景：
+
+```text
+VPP Android runtime 后续增加了 SAKAMOTO_VPP_ANDROID_IDLE_PROFILE。
+该 profile 会调整 VLIB timer tick、idle epoll max timeout，并禁用一组默认 process timer。
+需要确认它没有破坏 VPN/TUN/HEV datapath。
+```
+
+复测入口：
+
+```text
+VPP_STAGE_DIR=$PWD/experiments/vpp-nfq-poc/work/android-vpp-release-no-multiarch-no-ipsec-idle-stage \
+  experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+
+experiments/vpp-nfq-poc/android/vpn-lite/scripts/install-debug-apk.sh
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp-hev
+```
+
+HTTP probe：
+
+```text
+printf 'GET /probe HTTP/1.0\r\nHost: example.test\r\n\r\n' |
+  adb shell nc -w 5 -W 5 93.184.216.34 80
+```
+
+结果：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+```
+
+VPP/tun_poc：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 15 bytes 1359 tx 5 bytes 252
+shim-rx 5 bytes 252 shim-tx 15 bytes 1359
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+idle CPU after request：
+
+```text
+VPP child:
+  avg=0.030% over 60s
+
+HEV child:
+  avg=0.000% over 60s
+```
+
+结论：
+
+```text
+Android Phase 3C 在 VPP idle profile 下仍通过。
+完整 VPN datapath 未被 idle profile 破坏。
+详细原始记录见 ANDROID_TRIM_EXPERIMENT_LOG.md 的 Round 4J。
+```

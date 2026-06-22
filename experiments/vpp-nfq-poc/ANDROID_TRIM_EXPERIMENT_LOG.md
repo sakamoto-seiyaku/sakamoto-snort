@@ -3497,3 +3497,221 @@ handle-errors 0 recv-errors 0 enobufs 0
 Android idle profile 没有破坏 NFQUEUE OUTPUT verdict 路径。
 accept-all / drop-all 都按预期工作。
 ```
+
+## 18. Round 4J: Android VPN/TUN/HEV datapath under idle profile
+
+时间：2026-06-23
+
+目标：
+
+```text
+复测 Android Phase 3C：
+  VpnService tun-fd
+    -> APK 内 VPP/tun_poc forward-fd
+    -> SOCK_SEQPACKET shim
+    -> HEV
+    -> 设备本机 SOCKS5 smoke server
+    -> HEV
+    -> VPP/tun_poc
+    -> VpnService tun-fd
+
+本轮唯一关键变化：
+  APK 打包的是 Android VPP idle profile stage。
+```
+
+### 18.1 构建和打包
+
+SOCKS5 smoke server：
+
+```text
+make -C experiments/vpp-nfq-poc android-socks5-smoke-server-build
+
+result:
+  experiments/vpp-nfq-poc/build/android-socks5-smoke-server
+  ELF 64-bit ARM aarch64 executable
+  size: 9.9K
+```
+
+APK 构建时显式指定 idle profile stage：
+
+```text
+VPP_STAGE_DIR=$PWD/experiments/vpp-nfq-poc/work/android-vpp-release-no-multiarch-no-ipsec-idle-stage \
+  experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+```
+
+关键输出：
+
+```text
+building JNI probe
+packaging VPP runtime
+packaging HEV runtime
+compiling Java sources
+dexing
+linking APK
+zipalign
+signing
+ok: .../android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk
+```
+
+安装：
+
+```text
+experiments/vpp-nfq-poc/android/vpn-lite/scripts/install-debug-apk.sh
+
+result:
+  Success
+```
+
+### 18.2 启动 VPP/HEV VPN datapath
+
+启动设备本机 SOCKS5 server：
+
+```text
+adb push android-socks5-smoke-server /data/local/tmp/sakamoto-socks5-smoke
+adb shell 'nohup /data/local/tmp/sakamoto-socks5-smoke \
+  >/data/local/tmp/sakamoto-socks5-smoke.log 2>&1 < /dev/null &'
+```
+
+SOCKS5 log：
+
+```text
+android socks5 smoke server ready 127.0.0.1:41080
+```
+
+启动 APK：
+
+```text
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity \
+  --ez start true --es mode vpp-hev
+```
+
+logcat：
+
+```text
+I SnortVpnLiteNative: started VPP HEV pid=11158 log=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-hev.log
+I SnortVpnLiteNative: started VPP pid=11157 fd=128 mode=2 conf=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.conf
+I SnortVpnLite: nativeStartVppProbe fd=128 vppMode=2 rc=0
+I SnortVpnLiteNative: vpp monitor start pid=11157 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+```
+
+进程：
+
+```text
+sakamoto-socks5-smoke
+com.sakamoto.snort.vpnlite
+vpp
+com.sakamoto.snort.vpnlite  # HEV child
+```
+
+### 18.3 HTTP datapath result
+
+请求：
+
+```text
+printf 'GET /probe HTTP/1.0\r\nHost: example.test\r\n\r\n' |
+  adb shell nc -w 5 -W 5 93.184.216.34 80
+```
+
+结果：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+```
+
+SOCKS5 smoke server log：
+
+```text
+accepted
+greeting ok
+connect 74.125.142.188:5228
+payload-len 532
+  background Google/mtalk TLS flow
+
+accepted
+greeting ok
+connect 93.184.216.34:80
+payload-len 43
+GET /probe HTTP/1.0
+Host: example.test
+```
+
+VPP/tun_poc 计数：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 15 bytes 1359 tx 5 bytes 252
+shim-rx 5 bytes 252 shim-tx 15 bytes 1359
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+HEV log：
+
+```text
+[2026-06-23 06:42:04] [I] set limit nofile
+[2026-06-23 06:42:08] [I] ... socks5 client tcp -> [74.125.142.188]:5228
+[2026-06-23 06:42:08] [I] ... io timeout
+[2026-06-23 06:42:25] [I] ... socks5 client tcp -> [93.184.216.34]:80
+```
+
+判断：
+
+```text
+Android idle profile 没有破坏 VPN/TUN/HEV full datapath。
+HTTP probe 通过完整链路拿到 OK。
+VPP forward-fd 四向计数增长，且错误计数均为 0。
+```
+
+### 18.4 VPN + VPP + HEV 保持运行后的 idle CPU
+
+HTTP probe 结束后，保持 VPN/VPP/HEV 运行，采样 VPP child 和 HEV child 60s：
+
+```text
+VPP pid=11157:
+samples: 0.000, 0.000, 0.178, 0.000, 0.000, 0.000,
+         0.000, 0.000, 0.178, 0.000, 0.000, 0.000
+avg=0.030 min=0.000 max=0.178 n=12
+
+HEV child pid=11158:
+samples: 0.000, 0.000, 0.000, 0.000, 0.000, 0.000,
+         0.000, 0.000, 0.000, 0.000, 0.000, 0.000
+avg=0.000 min=0.000 max=0.000 n=12
+```
+
+结论：
+
+```text
+在完整 VPN/VPP/HEV datapath 运行过一次请求后，VPP child idle CPU 仍保持约 0.03%。
+HEV child 在本轮 idle 窗口没有可见 CPU 消耗。
+```
+
+### 18.5 清理
+
+清理：
+
+```text
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez stop true
+adb shell am force-stop com.sakamoto.snort.vpnlite
+kill /data/local/tmp/sakamoto-socks5-smoke
+```
+
+确认：
+
+```text
+ps -A:
+  无 vpnlite / vpp / hev / sakamoto-socks5-smoke 残留
+
+/proc/net/netfilter/nfnetlink_queue:
+  无输出
+```
+
+记录：
+
+```text
+早期一次清理命令使用 `pkill -f sakamoto-socks5-smoke`，命中了当前 wrapper
+命令行并中断本地步骤；未改变实验状态。
+后续清理改为扫描设备 `/proc/*/cmdline` 后按 PID kill。
+```
