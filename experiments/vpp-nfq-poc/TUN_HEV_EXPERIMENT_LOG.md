@@ -372,9 +372,10 @@ overlay/src/plugins/tun_poc/
 configs/tun-poc-startup.conf
 scripts/tun-vpp-wrapper.py
 scripts/run-vpp-tun-poc-smoke.sh
+scripts/run-vpp-tun-forward-fd-smoke.py
 ```
 
-`tun_poc` 当前只实现两个模式：
+`tun_poc` 当前实现三个模式：
 
 ```text
 count-only:
@@ -382,6 +383,11 @@ count-only:
 
 reflect-icmp:
   读 IPv4 ICMP echo request，构造 echo reply 写回同一个 TUN fd。
+
+forward-fd:
+  主 TUN fd 与 shim fd 分离。
+  outbound 从主 fd 读，写入 shim fd。
+  inbound 从 shim fd 读，写回主 fd。
 ```
 
 POC-B 状态：
@@ -396,17 +402,96 @@ POC-C1 状态：
 ```text
 已通过：
   synthetic packet driver -> SOCK_SEQPACKET shim -> HEV -> SOCKS5 -> HEV -> SOCK_SEQPACKET shim
+```
+
+POC-C2 状态：
+
+```text
+已通过：
+  main TUN fd -> VPP/tun_poc forward-fd -> SOCK_SEQPACKET shim
+  SOCK_SEQPACKET shim -> VPP/tun_poc forward-fd -> main TUN fd
 
 尚未通过：
-  VPP plugin -> HEV shim -> VPP plugin -> main TUN fd
+  main TUN fd -> VPP/tun_poc -> HEV -> SOCKS5 -> HEV -> VPP/tun_poc -> main TUN fd
 ```
 
 下一步：
 
 ```text
-1. 给 tun_poc 增加 HEV shim fd 模式：main TUN fd 与 HEV socketpair fd 分离。
-2. outbound：main TUN fd -> VPP/tun_poc -> HEV shim fd。
-3. inbound：HEV shim fd -> VPP/tun_poc -> shared packet path -> main TUN fd。
-4. 保持 SOCK_SEQPACKET，不使用 SOCK_STREAM，避免 IP packet 边界被合并或拆分。
-5. 单独验证 native/JNI 下 HEV quit/lifecycle，不使用 Python ctypes 线程结果做结论。
+1. 把 HEV 子进程接到 forward-fd shim 的另一端。
+2. 用 synthetic TCP/HTTP 或真实 TUN TCP flow 验证 HEV SOCKS5 egress。
+3. 单独验证 native/JNI 下 HEV quit/lifecycle，不使用 Python ctypes 线程结果做结论。
+```
+
+## 5. POC-C2：VPP forward-fd shim bridge
+
+```text
+2026-06-22
+  修改 tun_poc：
+    新增 mode forward-fd。
+    CLI：
+      tun-poc enable fd <main_fd> mode forward-fd shim-fd <shim_fd>
+    show tun-poc 额外输出：
+      shim-rx / shim-tx
+      read/write/shim-read/shim-write errors
+
+  行为：
+    main fd read  -> shim fd write
+    shim fd read  -> main fd write
+    不做策略、不做 CT、不管理 HEV 生命周期。
+
+  新增脚本：
+    scripts/run-vpp-tun-forward-fd-smoke.py
+
+  新增 Makefile target：
+    vpp-tun-forward-fd-smoke
+```
+
+验证：
+
+```text
+DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh make vpp-tun-poc-build
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-poc-smoke
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-forward-fd-smoke
+```
+
+结果：
+
+```text
+vpp-tun-poc-build:
+  tun_poc_plugin.so 构建成功。
+
+vpp-tun-poc-smoke:
+  reflect-icmp 旧路径仍通过。
+  ping -I tun-poc0 -c 5 -W 1 198.18.0.2:
+    5 transmitted, 5 received, 0% packet loss
+
+vpp-tun-forward-fd-smoke:
+  tun ifname=tun-poc-forward tun-fd=53 shim-fd=54
+
+  before ping:
+    enabled 1 fd 53 shim-fd 54 mode forward-fd
+    rx 1 bytes 48 tx 0 bytes 0
+    shim-rx 0 bytes 0 shim-tx 1 bytes 48
+    errors all 0
+
+  shim observed:
+    198.19.0.1 -> 198.19.0.2 icmp_type=8 len=84
+
+  ping:
+    1 transmitted, 1 received, 0% packet loss
+
+  after ping:
+    enabled 1 fd 53 shim-fd 54 mode forward-fd
+    rx 2 bytes 132 tx 1 bytes 84
+    shim-rx 1 bytes 84 shim-tx 2 bytes 132
+    errors all 0
+```
+
+结论：
+
+```text
+VPP/tun_poc 可以作为 main TUN fd 与 HEV-side packet fd 之间的双向桥。
+这一步只证明 adapter 形状成立。
+尚未证明 HEV 接在 shim 后、完整 TCP/SOCKS5 egress 在 VPP 两侧都可用。
 ```
