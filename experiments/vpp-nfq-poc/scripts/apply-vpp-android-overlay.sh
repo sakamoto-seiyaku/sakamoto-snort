@@ -150,4 +150,59 @@ if [ -f "$VPP_SRC_DIR/vnet/sfdp/timer/timer.h" ] &&
   perl -0pi -e 's@u32 __unused;@u32 unused;@g' "$VPP_SRC_DIR/vnet/sfdp/timer/timer.h"
 fi
 
+if [ -f "$VPP_SRC_DIR/vnet/CMakeLists.txt" ] &&
+  ! grep -q "option(SAKAMOTO_VPP_NO_IPSEC" "$VPP_SRC_DIR/vnet/CMakeLists.txt"; then
+  perl -0pi -e 's@(option\(VPP_IP_FIB_MTRIE_16 "[^"]+" ON\)\n)@$1\noption(SAKAMOTO_VPP_NO_IPSEC "Build without libvnet IPsec sources and feature registrations." OFF)\nif(SAKAMOTO_VPP_NO_IPSEC)\n  add_definitions(-DSAKAMOTO_VPP_NO_IPSEC=1)\nendif()\n@' "$VPP_SRC_DIR/vnet/CMakeLists.txt"
+fi
+if [ -f "$VPP_SRC_DIR/vnet/CMakeLists.txt" ] &&
+  ! grep -q "if(NOT SAKAMOTO_VPP_NO_IPSEC)" "$VPP_SRC_DIR/vnet/CMakeLists.txt"; then
+  perl -0pi -e 's@(##############################################################################\n# Layer 3 protocol: IPSec\n##############################################################################\n)(.*?)(\n##############################################################################\n# Layer 4 protocol: tcp\n##############################################################################)@$1if(NOT SAKAMOTO_VPP_NO_IPSEC)\n$2endif()\n$3@s' "$VPP_SRC_DIR/vnet/CMakeLists.txt"
+fi
+if [ -f "$VPP_SRC_DIR/vnet/CMakeLists.txt" ] &&
+  ! grep -q "SAKAMOTO_VNET_VAT_TEST_SOURCES" "$VPP_SRC_DIR/vnet/CMakeLists.txt"; then
+  perl -0pi -e 's@add_vat_test_library\(vnet\n  interface_test\.c\n  ip/ip_test\.c\n  arp/arp_test\.c\n  ip6-nd/ip6_nd_test\.c\n  session/session_test\.c\n  l2/l2_test\.c\n  ipsec/ipsec_test\.c\n\)@set(SAKAMOTO_VNET_VAT_TEST_SOURCES\n  interface_test.c\n  ip/ip_test.c\n  arp/arp_test.c\n  ip6-nd/ip6_nd_test.c\n  session/session_test.c\n  l2/l2_test.c\n)\nif(NOT SAKAMOTO_VPP_NO_IPSEC)\n  list(APPEND SAKAMOTO_VNET_VAT_TEST_SOURCES ipsec/ipsec_test.c)\nendif()\n\nadd_vat_test_library(vnet\n  \${SAKAMOTO_VNET_VAT_TEST_SOURCES}\n)@' "$VPP_SRC_DIR/vnet/CMakeLists.txt"
+fi
+if [ -f "$VPP_SRC_DIR/vnet/CMakeLists.txt" ] &&
+  grep -q "SAKAMOTO_VNET_VAT_TEST_SOURCES" "$VPP_SRC_DIR/vnet/CMakeLists.txt" &&
+  ! grep -q '\${SAKAMOTO_VNET_VAT_TEST_SOURCES}' "$VPP_SRC_DIR/vnet/CMakeLists.txt"; then
+  perl -0pi -e 's@add_vat_test_library\(vnet\n\s*\n\)@add_vat_test_library(vnet\n  \${SAKAMOTO_VNET_VAT_TEST_SOURCES}\n)@' "$VPP_SRC_DIR/vnet/CMakeLists.txt"
+fi
+
+if [ -f "$VPP_SRC_DIR/vnet/ip/ip4_forward.c" ] &&
+  ! grep -q "SAKAMOTO_VPP_NO_IPSEC" "$VPP_SRC_DIR/vnet/ip/ip4_forward.c"; then
+  perl -0pi -e 's@  \.runs_before = VNET_FEATURES \("ipsec4-input-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n  .runs_before = VNET_FEATURES ("vpath-input-ip4"),\n#else\n  .runs_before = VNET_FEATURES ("ipsec4-input-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip4_forward.c"
+  perl -0pi -e 's@(VNET_FEATURE_INIT \(ip4_ipsec, static\) =\n\{\n  \.arc_name = "ip4-unicast",\n  \.node_name = "ipsec4-input-feature",\n  \.runs_before = VNET_FEATURES \("vpath-input-ip4"\),\n\};)@#ifndef SAKAMOTO_VPP_NO_IPSEC\n$1\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip4_forward.c"
+  perl -0pi -e 's@  \.runs_before = VNET_FEATURES \("ipsec4-output-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n  .runs_before = VNET_FEATURES ("interface-output"),\n#else\n  .runs_before = VNET_FEATURES ("ipsec4-output-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip4_forward.c"
+  perl -0pi -e 's@(VNET_FEATURE_INIT \(ip4_ipsec_output, static\) =\n\{\n  \.arc_name = "ip4-output",\n  \.node_name = "ipsec4-output-feature",\n  \.runs_before = VNET_FEATURES \("interface-output"\),\n\};)@#ifndef SAKAMOTO_VPP_NO_IPSEC\n$1\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip4_forward.c"
+fi
+
+if [ -f "$VPP_SRC_DIR/vnet/ip/ip6_forward.c" ] &&
+  ! grep -q "SAKAMOTO_VPP_NO_IPSEC" "$VPP_SRC_DIR/vnet/ip/ip6_forward.c"; then
+  perl -0pi -e 's@  \.runs_before = VNET_FEATURES \("ipsec6-input-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n  .runs_before = VNET_FEATURES ("l2tp-decap"),\n#else\n  .runs_before = VNET_FEATURES ("ipsec6-input-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip6_forward.c"
+  perl -0pi -e 's@(VNET_FEATURE_INIT \(ip6_ipsec, static\) =\n\{\n  \.arc_name = "ip6-unicast",\n  \.node_name = "ipsec6-input-feature",\n  \.runs_before = VNET_FEATURES \("l2tp-decap"\),\n\};)@#ifndef SAKAMOTO_VPP_NO_IPSEC\n$1\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip6_forward.c"
+  perl -0pi -e 's@  \.runs_before = VNET_FEATURES \("ipsec6-output-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n  .runs_before = VNET_FEATURES ("interface-output"),\n#else\n  .runs_before = VNET_FEATURES ("ipsec6-output-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip6_forward.c"
+  perl -0pi -e 's@(VNET_FEATURE_INIT \(ip6_ipsec_output, static\) = \{\n  \.arc_name = "ip6-output",\n  \.node_name = "ipsec6-output-feature",\n  \.runs_before = VNET_FEATURES \("interface-output"\),\n\};)@#ifndef SAKAMOTO_VPP_NO_IPSEC\n$1\n#endif@' "$VPP_SRC_DIR/vnet/ip/ip6_forward.c"
+fi
+
+if [ -f "$VPP_SRC_DIR/vnet/interface_output.c" ] &&
+  ! grep -q "SAKAMOTO_VPP_NO_IPSEC" "$VPP_SRC_DIR/vnet/interface_output.c"; then
+  perl -0pi -e 's@(VNET_FEATURE_INIT \(ipsec_if_tx, static\) = \{\n  \.arc_name = "interface-output",\n  \.node_name = "ipsec-if-output",\n  \.runs_before = VNET_FEATURES \("interface-output-arc-end"\),\n\};)@#ifndef SAKAMOTO_VPP_NO_IPSEC\n$1\n#endif@' "$VPP_SRC_DIR/vnet/interface_output.c"
+fi
+
+if [ -f "$VPP_SRC_DIR/vnet/gso/node.c" ] &&
+  ! grep -q "SAKAMOTO_VPP_NO_IPSEC" "$VPP_SRC_DIR/vnet/gso/node.c"; then
+  perl -0pi -e 's@  \.runs_before = VNET_FEATURES \("ipsec4-output-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n  .runs_before = VNET_FEATURES ("interface-output"),\n#else\n  .runs_before = VNET_FEATURES ("ipsec4-output-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/gso/node.c"
+  perl -0pi -e 's@  \.runs_before = VNET_FEATURES \("ipsec6-output-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n  .runs_before = VNET_FEATURES ("interface-output"),\n#else\n  .runs_before = VNET_FEATURES ("ipsec6-output-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/gso/node.c"
+fi
+
+if [ -f "$VPP_SRC_DIR/vnet/ip/reass/ip4_full_reass.c" ] &&
+  ! grep -q "SAKAMOTO_VPP_NO_IPSEC" "$VPP_SRC_DIR/vnet/ip/reass/ip4_full_reass.c"; then
+  perl -0pi -e 's@  \.runs_before = VNET_FEATURES \("ip4-lookup", "ipsec4-input-feature",\n\t\t\t\t"ip4-sv-reassembly-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n  .runs_before = VNET_FEATURES ("ip4-lookup", "ip4-sv-reassembly-feature"),\n#else\n  .runs_before = VNET_FEATURES ("ip4-lookup", "ipsec4-input-feature",\n\t\t\t\t"ip4-sv-reassembly-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/ip/reass/ip4_full_reass.c"
+fi
+
+if [ -f "$VPP_SRC_DIR/vnet/ip/reass/ip6_full_reass.c" ] &&
+  ! grep -q "SAKAMOTO_VPP_NO_IPSEC" "$VPP_SRC_DIR/vnet/ip/reass/ip6_full_reass.c"; then
+  perl -0pi -e 's@    \.runs_before = VNET_FEATURES \("ip6-lookup",\n                                  "ipsec6-input-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n    .runs_before = VNET_FEATURES ("ip6-lookup"),\n#else\n    .runs_before = VNET_FEATURES ("ip6-lookup",\n                                  "ipsec6-input-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/ip/reass/ip6_full_reass.c"
+fi
+
 echo "Applied Android CMake overlay to $VPP_SRC_DIR"

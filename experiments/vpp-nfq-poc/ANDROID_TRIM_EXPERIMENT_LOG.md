@@ -1297,3 +1297,269 @@ release + no ARM multiarch 已通过 Android 3C L3 VPN datapath 验收。
 当前 VPP 仍保留 libvnet 中的 IPsec、host stack、reassembly、device/L2/MPLS 等功能。
 下一步 Round 4C 再开始源码级功能裁剪。
 ```
+
+## 9. Round 4C: release + no-multiarch + no IPsec 源码级裁剪
+
+目标：
+
+```text
+在 Round 4B 基线上继续裁剪 libvnet 中当前用不到的 IPsec 模块。
+先只裁 IPsec，保留 crypto。
+原因：BFD 等非 IPsec 模块也引用 vnet crypto，crypto 不能和 IPsec 第一刀一起砍。
+```
+
+新增入口：
+
+```text
+Makefile:
+  ANDROID_RELEASE_NOIPSEC_BUILD_DIR
+  ANDROID_RELEASE_NOIPSEC_STAGE_DIR
+  ANDROID_RELEASE_NOIPSEC_CMAKE_ARGS
+
+  android-vpp-configure-release-no-multiarch-no-ipsec
+  android-vpp-build-release-no-multiarch-no-ipsec
+  android-vpp-stage-release-no-multiarch-no-ipsec
+  android-vpp-push-release-no-multiarch-no-ipsec
+  android-vpp-minimal-release-no-multiarch-no-ipsec
+```
+
+overlay 变更：
+
+```text
+新增 CMake option:
+  -DSAKAMOTO_VPP_NO_IPSEC=ON
+
+开启后：
+  1. vnet/CMakeLists.txt 不编译 ipsec/* source、header、API 和 ipsec_test.c。
+  2. 定义 SAKAMOTO_VPP_NO_IPSEC=1。
+  3. ip4/ip6/interface-output feature arc 不注册 IPsec feature。
+  4. ip4/ip6 前序 feature 直接 runs_before 到下一个非 IPsec 节点。
+```
+
+### 9.1 configure 失败记录和修正
+
+第一轮 configure 失败：
+
+```text
+CMake Error at cmake/library.cmake:121 (cmake_parse_arguments):
+  cmake_parse_arguments must be called with at least 4 arguments.
+
+原因：
+  overlay 用 perl 生成 add_vat_test_library(vnet ${SAKAMOTO_VNET_VAT_TEST_SOURCES}) 时，
+  ${...} 被 perl replacement 当成变量吃掉，导致 CMake 实际看到：
+
+    add_vat_test_library(vnet
+
+    )
+
+修正：
+  在 perl replacement 中转义为 \${SAKAMOTO_VNET_VAT_TEST_SOURCES}。
+  同时增加一次修复分支，自动修复已经被坏 overlay 改写过的 work/vpp 源码。
+```
+
+### 9.2 feature arc 残留引用修正
+
+第一轮 minimal 启动成功，但 stdout 有 feature warning：
+
+```text
+feature node 'ipsec6-output-feature' not found (after 'gso-ip6', arc 'ip6-output')
+feature node 'ipsec6-input-feature' not found (after 'ip6-full-reassembly-feature', arc 'ip6-unicast')
+feature node 'ipsec4-output-feature' not found (after 'gso-ip4', arc 'ip4-output')
+feature node 'ipsec4-input-feature' not found (after 'ip4-full-reassembly-feature', arc 'ip4-unicast')
+vppctl_rc=0
+```
+
+判断：
+
+```text
+只旁路 ip4_forward/ip6_forward/interface_output 不够。
+GSO 和 full reassembly 也有 runs_before 到 IPsec feature 的排序约束。
+这些不是 IPsec 模块本体，但 no-IPsec 构建不能留下 dangling feature 名称。
+```
+
+修正：
+
+```text
+vnet/gso/node.c:
+  no-IPsec 时 gso-ip4 / gso-ip6 runs_before interface-output。
+
+vnet/ip/reass/ip4_full_reass.c:
+  no-IPsec 时 ip4-full-reassembly-feature runs_before ip4-lookup 和 ip4-sv-reassembly-feature。
+
+vnet/ip/reass/ip6_full_reass.c:
+  no-IPsec 时 ip6-full-reassembly-feature runs_before ip6-lookup。
+```
+
+修正后 minimal stdout 为空，VPP log 只有启动和 vppctl 命令记录，没有 feature warning。
+
+### 9.3 build and stage
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-configure-release-no-multiarch-no-ipsec
+make -C experiments/vpp-nfq-poc android-vpp-build-release-no-multiarch-no-ipsec
+make -C experiments/vpp-nfq-poc android-vpp-stage-release-no-multiarch-no-ipsec
+```
+
+结果：
+
+```text
+release no-multiarch no-IPsec stage total: 9.4M
+stage du -sb: 9,789,841 bytes
+
+bin/vpp:                         103,040 bytes
+bin/vppctl:                       10,624 bytes
+lib/libsvm.so:                   104,184 bytes
+lib/libvlib.so:                  683,216 bytes
+lib/libvlibapi.so:                67,992 bytes
+lib/libvlibmemory.so:            158,672 bytes
+lib/libvnet.so:                8,103,096 bytes
+lib/libvppinfra.so:              467,744 bytes
+plugins/nfqueue_poc_plugin.so:    52,120 bytes
+plugins/tun_poc_plugin.so:        18,136 bytes
+```
+
+对比：
+
+```text
+release no-multiarch stage:          11M
+release no-multiarch no-IPsec stage: 9.4M
+
+release no-multiarch libvnet.so:          9,167,104 bytes
+release no-multiarch no-IPsec libvnet.so: 8,103,096 bytes
+delta:                                   -1,064,008 bytes
+
+release no-multiarch libvnet .text:          0x62dbd8
+release no-multiarch no-IPsec libvnet .text: 0x55e980
+delta:                                      -0xcf258 bytes
+```
+
+符号检查：
+
+```text
+nm -D libvnet.so | grep -E " (ipsec|esp|ah)_| ipsec|esp_encrypt|esp_decrypt|ah_encrypt|ah_decrypt"
+结果为空。
+
+nm -D libvnet.so | grep -i ipsec 仍可看到 flow_match_ip4_ipsec_ah/esp。
+这是 flow 匹配里的协议枚举/格式化符号，不是 IPsec datapath 模块。
+```
+
+### 9.4 no-IPsec minimal 真机启动
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpp-minimal-release-no-multiarch-no-ipsec
+```
+
+结果：
+
+```text
+设备：Pixel 6a / Android 16 / root via su
+
+vppctl show version:
+  vpp v26.02-release built by js on Main at 2026-06-22T08:23:15
+  vppctl_rc=0
+
+root minimal VPP RSS:
+  102,396 KB
+
+stdout:
+  <empty after feature arc fix>
+```
+
+### 9.5 Android 3C no-IPsec datapath 验收
+
+APK 构建：
+
+```sh
+VPP_STAGE_DIR=/home/js/Git/sakamoto/sakamoto-snort/experiments/vpp-nfq-poc/work/android-vpp-release-no-multiarch-no-ipsec-stage \
+  experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+```
+
+APK 结果：
+
+```text
+snort-vpn-lite-debug.apk: 3.3M
+APK file size: 3,511,883 bytes
+APK uncompressed entries total: 10,134,275 bytes
+lib/arm64-v8a/libvnet.so: 8,103,096 bytes
+```
+
+启动：
+
+```text
+mode=vpp-hev
+
+logcat:
+  started VPP HEV pid=28115
+  started VPP pid=28114 fd=127 mode=2
+  nativeStartVppProbe fd=127 vppMode=2 rc=0
+```
+
+HTTP probe：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+```
+
+SOCKS5 smoke server：
+
+```text
+connect 93.184.216.34:80
+payload-len 43
+GET /probe HTTP/1.0
+Host: example.test
+```
+
+最终 `show tun-poc`：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 22 bytes 1698 tx 11 bytes 556
+shim-rx 11 bytes 556 shim-tx 22 bytes 1698
+short 0 non-ipv4 0 non-icmp 0 non-echo 0
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+app context VPP 资源短采样：
+
+```text
+RSS: 111,704 KB
+CPU samples: 0, 5, 0, 0, 0
+```
+
+清理：
+
+```text
+Stop intent + force-stop app。
+kill device-local sakamoto-socks5-smoke。
+确认无 vpp / vpnlite / sakamoto-socks5 / HEV 残留。
+```
+
+Round 4C 结论：
+
+```text
+release + no ARM multiarch + no IPsec 已通过 Android 3C L3 VPN datapath 验收。
+
+体积链路：
+  debug/O0-ish stripped stage:              186M
+  release stripped stage:                    29M
+  release no-multiarch stripped stage:       11M
+  release no-multiarch no-IPsec stage:      9.4M
+
+APK 链路：
+  release APK:                              8.1M
+  release no-multiarch APK:                 3.6M
+  release no-multiarch no-IPsec APK:        3.3M
+
+no-IPsec 第一刀收益明确但不巨大：
+  libvnet.so 少约 1.06MB。
+  APK 少约 0.3MB。
+
+下一步如果继续裁剪，更大的候选不是 IPsec，而是 host stack/session/tcp、L2/MPLS/device/virtio、reassembly/GSO、API/VAT/test 等更大块。
+```

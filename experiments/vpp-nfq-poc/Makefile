@@ -1,4 +1,4 @@
-.PHONY: build-smoke docker-build docker-shell fetch-vpp fetch-hev build-hev apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu vpp-tun-poc-build vpp-tun-poc-smoke vpp-tun-forward-fd-smoke vpp-tun-hev-smoke hev-socketpair-probe android-preflight android-hev-build android-socks5-smoke-server-build android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-release android-vpp-build-release android-vpp-stage-release android-vpp-push-release android-vpp-minimal-release android-vpp-configure-release-no-multiarch android-vpp-build-release-no-multiarch android-vpp-stage-release-no-multiarch android-vpp-push-release-no-multiarch android-vpp-minimal-release-no-multiarch android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
+.PHONY: build-smoke docker-build docker-shell fetch-vpp fetch-hev build-hev apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu vpp-tun-poc-build vpp-tun-poc-smoke vpp-tun-forward-fd-smoke vpp-tun-hev-smoke hev-socketpair-probe android-preflight android-hev-build android-socks5-smoke-server-build android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-release android-vpp-build-release android-vpp-stage-release android-vpp-push-release android-vpp-minimal-release android-vpp-configure-release-no-multiarch android-vpp-build-release-no-multiarch android-vpp-stage-release-no-multiarch android-vpp-push-release-no-multiarch android-vpp-minimal-release-no-multiarch android-vpp-configure-release-no-multiarch-no-ipsec android-vpp-build-release-no-multiarch-no-ipsec android-vpp-stage-release-no-multiarch-no-ipsec android-vpp-push-release-no-multiarch-no-ipsec android-vpp-minimal-release-no-multiarch-no-ipsec android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
 ANDROID_RELEASE_BUILD_DIR ?= $(CURDIR)/work/vpp-android-release
@@ -6,6 +6,9 @@ ANDROID_RELEASE_STAGE_DIR ?= $(CURDIR)/work/android-vpp-release-stage
 ANDROID_RELEASE_NOMARCH_BUILD_DIR ?= $(CURDIR)/work/vpp-android-release-no-multiarch
 ANDROID_RELEASE_NOMARCH_STAGE_DIR ?= $(CURDIR)/work/android-vpp-release-no-multiarch-stage
 ANDROID_RELEASE_NOMARCH_CMAKE_ARGS ?= -DVPP_MARCH_VARIANT_OCTEONTX2=OFF -DVPP_MARCH_VARIANT_THUNDERX2T99=OFF -DVPP_MARCH_VARIANT_CORTEXA72=OFF -DVPP_MARCH_VARIANT_NEOVERSEN1=OFF -DVPP_MARCH_VARIANT_NEOVERSEV2=OFF
+ANDROID_RELEASE_NOIPSEC_BUILD_DIR ?= $(CURDIR)/work/vpp-android-release-no-multiarch-no-ipsec
+ANDROID_RELEASE_NOIPSEC_STAGE_DIR ?= $(CURDIR)/work/android-vpp-release-no-multiarch-no-ipsec-stage
+ANDROID_RELEASE_NOIPSEC_CMAKE_ARGS ?= $(ANDROID_RELEASE_NOMARCH_CMAKE_ARGS) -DSAKAMOTO_VPP_NO_IPSEC=ON
 ANDROID_TRIM_BUILD_DIR ?= $(CURDIR)/work/vpp-android-trim-nfqueue
 ANDROID_TRIM_STAGE_DIR ?= $(CURDIR)/work/android-vpp-trim-nfqueue-stage
 ANDROID_LITE_STAGE_DIR ?= $(CURDIR)/work/android-vpp-lite-stage
@@ -158,6 +161,25 @@ android-vpp-push-release-no-multiarch:
 
 android-vpp-minimal-release-no-multiarch:
 	BUILD_DIR="$(ANDROID_RELEASE_NOMARCH_BUILD_DIR)" STAGE_DIR="$(ANDROID_RELEASE_NOMARCH_STAGE_DIR)" ./scripts/android-run-vpp-minimal.sh
+
+android-vpp-configure-release-no-multiarch-no-ipsec:
+	./scripts/apply-vpp-android-overlay.sh
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" VPP_CMAKE_BUILD_TYPE=release VPP_PLUGINS="nfqueue_poc;tun_poc" VPP_EXTRA_CMAKE_ARGS="$(ANDROID_RELEASE_NOIPSEC_CMAKE_ARGS)" ./scripts/android-configure-vpp-probe.sh
+
+android-vpp-build-release-no-multiarch-no-ipsec:
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" ./scripts/android-build-vpp-probe.sh
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" TARGET=vppctl ./scripts/android-build-vpp-probe.sh
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" TARGET=nfqueue_poc_plugin ./scripts/android-build-vpp-probe.sh
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" TARGET=tun_poc_plugin ./scripts/android-build-vpp-probe.sh
+
+android-vpp-stage-release-no-multiarch-no-ipsec:
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" STAGE_DIR="$(ANDROID_RELEASE_NOIPSEC_STAGE_DIR)" ./scripts/android-stage-vpp-core.sh
+
+android-vpp-push-release-no-multiarch-no-ipsec:
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" STAGE_DIR="$(ANDROID_RELEASE_NOIPSEC_STAGE_DIR)" ./scripts/android-push-vpp-core.sh
+
+android-vpp-minimal-release-no-multiarch-no-ipsec:
+	BUILD_DIR="$(ANDROID_RELEASE_NOIPSEC_BUILD_DIR)" STAGE_DIR="$(ANDROID_RELEASE_NOIPSEC_STAGE_DIR)" ./scripts/android-run-vpp-minimal.sh
 
 android-vpp-configure-trim-nfqueue:
 	BUILD_DIR="$(ANDROID_TRIM_BUILD_DIR)" VPP_PLUGINS=nfqueue_poc ./scripts/android-configure-vpp-probe.sh
