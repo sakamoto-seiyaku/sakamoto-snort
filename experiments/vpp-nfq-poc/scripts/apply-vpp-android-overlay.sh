@@ -205,4 +205,97 @@ if [ -f "$VPP_SRC_DIR/vnet/ip/reass/ip6_full_reass.c" ] &&
   perl -0pi -e 's@    \.runs_before = VNET_FEATURES \("ip6-lookup",\n                                  "ipsec6-input-feature"\),@#ifdef SAKAMOTO_VPP_NO_IPSEC\n    .runs_before = VNET_FEATURES ("ip6-lookup"),\n#else\n    .runs_before = VNET_FEATURES ("ip6-lookup",\n                                  "ipsec6-input-feature"),\n#endif@' "$VPP_SRC_DIR/vnet/ip/reass/ip6_full_reass.c"
 fi
 
+if [ -f "$VPP_SRC_DIR/CMakeLists.txt" ] &&
+  ! grep -q "option(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE" "$VPP_SRC_DIR/CMakeLists.txt"; then
+  perl -0pi -e 's@(option\(VPP_ENABLE_TRAJECTORY_TRACE "Build vpp with trajectory tracing enabled" OFF\)\nif\(VPP_ENABLE_TRAJECTORY_TRACE\)\n  add_compile_definitions\(VLIB_BUFFER_TRACE_TRAJECTORY=1\)\nendif\(\)\n)@$1\noption(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE "Enable Sakamoto Android minimal idle runtime profile." OFF)\nif(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE)\n  add_compile_definitions(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE=1)\nendif()\n@' "$VPP_SRC_DIR/CMakeLists.txt"
+fi
+
+python3 - "$VPP_SRC_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+
+def replace_once(rel, old, new):
+    path = src / rel
+    if not path.exists():
+        return
+    text = path.read_text()
+    if new in text:
+        return
+    if old not in text:
+        raise SystemExit(f"pattern not found in {rel}")
+    path.write_text(text.replace(old, new, 1))
+
+
+replace_once(
+    "vlib/tw_funcs.h",
+    "#define VLIB_TW_TICKS_PER_SECOND 1e5 /* 10 us */",
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "#define VLIB_TW_TICKS_PER_SECOND 1e3 /* 1 ms */\n"
+    "#else\n"
+    "#define VLIB_TW_TICKS_PER_SECOND 1e5 /* 10 us */\n"
+    "#endif",
+)
+
+replace_once(
+    "vlib/file.c",
+    "  int timeout_ms = 0, max_timeout_ms = 10;\n  u32 ticks;",
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  int timeout_ms = 0, max_timeout_ms = 1000;\n"
+    "#else\n"
+    "  int timeout_ms = 0, max_timeout_ms = 10;\n"
+    "#endif\n"
+    "  u32 ticks;",
+)
+
+idle_wait_block = """
+#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+  uword *sakamoto_idle_event_data = 0;
+  while (1)
+    {
+      vlib_process_wait_for_event (vm);
+      while (vlib_process_get_events (vm, &sakamoto_idle_event_data) != ~0)
+        vec_reset_length (sakamoto_idle_event_data);
+    }
+#endif
+"""
+
+for rel in (
+    "vnet/ip/reass/ip4_full_reass.c",
+    "vnet/ip/reass/ip6_full_reass.c",
+    "vnet/ip/reass/ip4_sv_reass.c",
+    "vnet/ip/reass/ip6_sv_reass.c",
+):
+    replace_once(
+        rel,
+        "  uword event_type, *event_data = 0;\n",
+        "  uword event_type, *event_data = 0;\n" + idle_wait_block,
+    )
+
+for rel in ("vnet/ip6-nd/ip6_mld.c", "vnet/ip6-nd/ip6_ra.c"):
+    replace_once(
+        rel,
+        "  /* init code here */\n\n  while (1)\n",
+        "  /* init code here */\n" + idle_wait_block + "\n  while (1)\n",
+    )
+
+replace_once(
+    "vnet/fib/fib_walk.c",
+    "    sleep_time = fib_walk_sleep_duration[FIB_WALK_SHORT_SLEEP];\n\n    while (1)\n",
+    "    sleep_time = fib_walk_sleep_duration[FIB_WALK_SHORT_SLEEP];\n"
+    + idle_wait_block
+    + "\n    while (1)\n",
+)
+
+replace_once(
+    "vlib/stats/collector.c",
+    "  sm->directory_vector[STAT_COUNTER_BOOTTIME].value = unix_time_now ();\n\n  while (1)\n",
+    "  sm->directory_vector[STAT_COUNTER_BOOTTIME].value = unix_time_now ();\n"
+    + idle_wait_block
+    + "\n  while (1)\n",
+)
+PY
+
 echo "Applied Android CMake overlay to $VPP_SRC_DIR"

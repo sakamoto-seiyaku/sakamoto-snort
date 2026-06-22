@@ -3133,3 +3133,367 @@ experiments/vpp-nfq-poc/results/simpleperf-vpp-idle-disabled-floor1000-tick1ms/
   需要把 timer 精度、默认 process 启动、idle sleep 策略做成可配置 profile，
   并用有流量的 NFQUEUE/TUN/HEV 回归测试守住行为。
 ```
+
+## 17. Round 4I: 拆掉过激 timeout floor 后重新验证
+
+时间：2026-06-22
+
+上一轮 `0.03% - 0.05%` 的低 CPU 结果同时包含两个 `file.c` 行为：
+
+```text
+1. Android 下 max_timeout_ms = 1000。
+2. 只要 ticks != 0 且 timeout_ms < max_timeout_ms，就强行 timeout_ms = 1000。
+```
+
+第 2 条会把真实短 timer 也推迟到 1 秒，语义风险明显偏大。
+这一轮把变量拆开验证。
+
+### 17.1 保留 1ms tick + 默认 process event wait + max_timeout_ms=1000
+
+临时变量：
+
+```text
+1. 8 个默认 process timer 改成 event wait。
+2. Android VLIB timer wheel tick 从 10us 粗化到 1ms。
+3. Android 下 max_timeout_ms = 1000。
+4. 不再把已有短 timer 强行推到 1000ms。
+```
+
+也就是说 `file.c` 只放宽最大 sleep：
+
+```text
+int timeout_ms = 0, max_timeout_ms = 10;
+#ifdef __ANDROID__
+  max_timeout_ms = 1000;
+#endif
+```
+
+保留原始语义：
+
+```text
+timeout_ms = ticks / (VLIB_TW_TICKS_PER_SECOND / 1000)
+timeout_ms = min(timeout_ms, max_timeout_ms)
+```
+
+Android 60s tick-delta：
+
+```text
+samples: 0.000, 0.190, 0.000, 0.000, 0.000, 0.190,
+         0.000, 0.000, 0.000, 0.000, 0.000, 0.189
+avg=0.047 min=0.000 max=0.190 n=12
+```
+
+`show runtime`：
+
+```text
+Time 69.3, 10 sec internal node vector rate 0.00 loops/sec 119.64
+```
+
+结论：
+
+```text
+强行把短 timer 推迟到 1000ms 不是必要条件。
+
+保留正常 min(timeout_ms, max_timeout_ms) 语义，只把 Android idle 下最大 epoll
+sleep 放宽到 1000ms，仍能得到约 0.05% 的空闲 CPU。
+```
+
+需要注意：
+
+```text
+loops/sec 仍约 120，不是 1Hz。
+说明此时仍有近端 timer 或控制面活动让主循环醒来。
+但 1ms timer wheel 已经把每轮 catch-up 成本降到很低。
+```
+
+### 17.2 再去掉 max_timeout_ms=1000，只保留 1ms tick + 默认 process event wait
+
+临时变量：
+
+```text
+1. 8 个默认 process timer 改成 event wait。
+2. Android VLIB timer wheel tick 从 10us 粗化到 1ms。
+3. file.c 完全回到默认 max_timeout_ms = 10。
+```
+
+第一轮 60s：
+
+```text
+samples: 0.190, 0.380, 0.571, 0.000, 0.571, 0.000,
+         0.379, 0.380, 0.763, 0.572, 0.757, 0.759
+avg=0.444 min=0.000 max=0.763 n=12
+
+show runtime:
+Time 69.0, 10 sec internal node vector rate 0.00 loops/sec 102.65
+```
+
+第二轮稳态 60s：
+
+```text
+samples: 0.755, 0.564, 0.376, 0.566, 0.567, 0.565,
+         0.565, 0.378, 0.379, 0.566, 0.376, 0.378
+avg=0.503 min=0.376 max=0.755 n=12
+
+show runtime:
+Time 157.4, 10 sec internal node vector rate 0.00 loops/sec 333.64
+```
+
+结论：
+
+```text
+只做 1ms tick + 默认 process event wait，可以把 1.3% - 1.7% 降到约 0.5%，
+但仍高于我们希望的日常空闲基线。
+
+因此 max_timeout_ms=1000 仍然有价值。
+但它应该只是最大 sleep 上限，不应该强行覆盖已经算出来的短 timer。
+```
+
+### 17.3 当前推荐的低功耗候选组合
+
+更保守的候选组合是：
+
+```text
+1. Android/minimal runtime 下禁用不需要的默认 process timer：
+   - ip4-full-reassembly-expire-walk
+   - ip6-full-reassembly-expire-walk
+   - ip4-sv-reassembly-expire-walk
+   - ip6-sv-reassembly-expire-walk
+   - ip6-mld-process
+   - ip6-ra-process
+   - fib-walk
+   - statseg-collector-process
+
+2. Android/minimal runtime 下把 VLIB timer wheel tick 从 10us 粗化到 1ms。
+
+3. Android/minimal runtime 下把 `vlib_file_poll()` 的 `max_timeout_ms`
+   从 10 放宽到 1000。
+
+4. 保留原始 timeout 计算：
+   timeout_ms = min(computed_timer_timeout_ms, max_timeout_ms)
+   不把真实短 timer 强行推迟到 1 秒。
+```
+
+这比上一轮 `1000ms floor` 安全：
+
+```text
+无近端 timer 时允许睡得更久；
+有近端 timer 时仍按 timer wheel 计算出的时间醒来；
+timer wheel catch-up 成本由 1ms tick 解决。
+```
+
+下一步不应该再讨论泛泛的 “VPP idle loop”，而应把这个候选组合整理成一个显式
+Android/minimal runtime profile，并跑三类回归：
+
+```text
+1. Android 空闲 CPU：确认仍约 0.05%。
+2. Android NFQUEUE accept/drop：确认 verdict 路径不受影响。
+3. Android TUN/HEV smoke：确认 VPN fd path 不受 1ms timer tick 和 idle sleep
+   上限影响。
+```
+
+### 17.4 已整理为显式 Android idle profile
+
+新增构建开关：
+
+```text
+SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+```
+
+位置：
+
+```text
+experiments/vpp-nfq-poc/scripts/apply-vpp-android-overlay.sh
+```
+
+语义：
+
+```text
+默认 OFF。
+只有显式配置 `-DSAKAMOTO_VPP_ANDROID_IDLE_PROFILE=ON` 时生效。
+```
+
+新增 Makefile 目标：
+
+```text
+android-vpp-configure-release-no-multiarch-no-ipsec-idle
+android-vpp-build-release-no-multiarch-no-ipsec-idle
+android-vpp-stage-release-no-multiarch-no-ipsec-idle
+android-vpp-push-release-no-multiarch-no-ipsec-idle
+android-vpp-minimal-release-no-multiarch-no-ipsec-idle
+```
+
+实际 configure 参数：
+
+```text
+-DSAKAMOTO_VPP_NO_IPSEC=ON
+-DSAKAMOTO_VPP_ANDROID_IDLE_PROFILE=ON
+```
+
+profile 包含：
+
+```text
+1. `VLIB_TW_TICKS_PER_SECOND`
+   Android idle profile 下从 1e5 改为 1e3。
+
+2. `vlib_file_poll()`
+   Android idle profile 下 `max_timeout_ms` 从 10 改为 1000。
+   保留 `timeout_ms = min(computed_timeout_ms, max_timeout_ms)`。
+   不再强行把短 timer 推迟到 1000ms。
+
+3. 8 个默认 process timer
+   Android idle profile 下改为 `event wait`：
+   - ip4-full-reassembly-expire-walk
+   - ip6-full-reassembly-expire-walk
+   - ip4-sv-reassembly-expire-walk
+   - ip6-sv-reassembly-expire-walk
+   - ip6-mld-process
+   - ip6-ra-process
+   - fib-walk
+   - statseg-collector-process
+```
+
+宏保护后的源码检查：
+
+```text
+src/CMakeLists.txt:
+  option(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE ...)
+  add_compile_definitions(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE=1)
+
+src/vlib/tw_funcs.h:
+  #ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+  #define VLIB_TW_TICKS_PER_SECOND 1e3
+  #else
+  #define VLIB_TW_TICKS_PER_SECOND 1e5
+  #endif
+
+src/vlib/file.c:
+  #ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+    int timeout_ms = 0, max_timeout_ms = 1000;
+  #else
+    int timeout_ms = 0, max_timeout_ms = 10;
+  #endif
+```
+
+### 17.5 正式 profile 的 Android 空闲 CPU 验证
+
+使用新目标构建并推送：
+
+```text
+make -C experiments/vpp-nfq-poc \
+  android-vpp-configure-release-no-multiarch-no-ipsec-idle \
+  android-vpp-build-release-no-multiarch-no-ipsec-idle \
+  android-vpp-stage-release-no-multiarch-no-ipsec-idle
+```
+
+Android 启动结果：
+
+```text
+VPP pid: 3717
+stdout/log: 只有启动日志，没有 no-ipsec feature warning。
+```
+
+60s tick-delta：
+
+```text
+samples: 0.189, 0.190, 0.000, 0.000, 0.000, 0.000,
+         0.000, 0.000, 0.190, 0.000, 0.000, 0.000
+avg=0.047 min=0.000 max=0.190 n=12
+```
+
+`show runtime`：
+
+```text
+Time 69.2, 10 sec internal node vector rate 0.00 loops/sec 75.65
+```
+
+结论：
+
+```text
+正式 profile 复现了手工实验的低功耗结果。
+```
+
+### 17.6 NFQUEUE enable 后无流量 idle 验证
+
+命令：
+
+```text
+vppctl show plugins | grep nfqueue_poc
+vppctl show nfqueue-poc
+vppctl nfqueue-poc enable queue 42 mode accept-all
+vppctl show nfqueue-poc
+```
+
+结果：
+
+```text
+nfqueue_poc_plugin.so  26.02-release  NFQUEUE verdict POC
+
+enabled 1 queue 42 mode accept-all drop-ratio 50 fd 12
+seen 0 accept 0 drop 0 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+```
+
+NFQUEUE fd 已注册后，无 iptables 测试规则、无主动流量，60s tick-delta：
+
+```text
+samples: 0.000, 0.000, 0.000, 0.000, 0.000, 0.000,
+         0.188, 0.000, 0.000, 0.000, 0.000, 0.000
+avg=0.016 min=0.000 max=0.188 n=12
+```
+
+结论：
+
+```text
+NFQUEUE fd 挂到 VPP epoll 后没有造成 idle 忙轮询。
+```
+
+### 17.7 NFQUEUE OUTPUT accept/drop 回归
+
+临时规则：
+
+```text
+iptables -w -I OUTPUT 1 -p icmp -d 1.1.1.1 \
+  -j NFQUEUE --queue-num 42 --queue-bypass
+```
+
+accept-all：
+
+```text
+vppctl nfqueue-poc enable queue 42 mode accept-all
+ping -c 4 -W 1 1.1.1.1
+
+4 packets transmitted, 4 received, 0% packet loss
+
+show nfqueue-poc:
+enabled 1 queue 42 mode accept-all drop-ratio 50 fd 12
+seen 4 accept 4 drop 0 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+```
+
+drop-all：
+
+```text
+vppctl nfqueue-poc disable
+vppctl nfqueue-poc enable queue 42 mode drop-all
+ping -c 4 -W 1 1.1.1.1
+
+4 packets transmitted, 0 received, 100% packet loss
+
+show nfqueue-poc:
+enabled 1 queue 42 mode drop-all drop-ratio 50 fd 12
+seen 4 accept 0 drop 4 missing-id 0
+handle-errors 0 recv-errors 0 enobufs 0
+```
+
+清理：
+
+```text
+临时 OUTPUT 1.1.1.1 NFQUEUE 规则已删除。
+```
+
+结论：
+
+```text
+Android idle profile 没有破坏 NFQUEUE OUTPUT verdict 路径。
+accept-all / drop-all 都按预期工作。
+```
