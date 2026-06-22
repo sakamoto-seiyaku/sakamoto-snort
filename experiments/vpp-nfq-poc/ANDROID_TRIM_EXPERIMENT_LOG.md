@@ -1702,3 +1702,132 @@ Round 4D 结论：
 no-IPsec 对 idle CPU 没有明显帮助，主要收益仍是体积和 RSS。
 当前 idle CPU 来源集中在 vpp_main，下一步如果要继续压 CPU，应优先研究 VPP main loop/timer/poll-sleep 行为，而不是继续裁 IPsec。
 ```
+
+## 11. Round 4E: Android idle CPU simpleperf 火焰图
+
+目的：
+
+```text
+不再推测 idle CPU 来源，直接对 Android 真机上的 VPP idle 进程抓 simpleperf 调用栈。
+```
+
+场景：
+
+```text
+stage: release + no-multiarch + no-IPsec
+启动方式: android-run-vpp-minimal.sh
+poll-sleep-usec: 1000
+VPP pid: 29855
+流量: 无主动流量
+```
+
+采样命令：
+
+```sh
+simpleperf record \
+  -e cpu-clock \
+  -f 1000 \
+  -p 29855 \
+  --call-graph dwarf \
+  --duration 30 \
+  -o /data/local/tmp/vpp-idle.perf.data
+```
+
+采样结果：
+
+```text
+Recorded for 30.0128 seconds.
+Samples recorded: 2,551
+Samples lost: 0
+```
+
+本地 artifacts：
+
+```text
+experiments/vpp-nfq-poc/results/simpleperf-vpp-idle/vpp-idle.perf.data
+experiments/vpp-nfq-poc/results/simpleperf-vpp-idle/report.html
+experiments/vpp-nfq-poc/results/simpleperf-vpp-idle/report-children.txt
+experiments/vpp-nfq-poc/results/simpleperf-vpp-idle/report-callgraph.txt
+```
+
+文本聚合关键结果：
+
+```text
+Children  Self    Symbol
+99.02%    3.10%   vlib_main
+73.50%    1.33%   vlib_file_poll
+65.15%    2.31%   nanosleep
+42.85%    9.88%   __arm64_sys_nanosleep
+31.79%    10.00%  do_nanosleep
+17.29%    1.84%   schedule
+13.37%    13.09%  finish_task_switch
+6.94%     0.71%   __epoll_pwait
+2.16%     0.59%   __arm64_sys_epoll_pwait
+```
+
+完整调用图中的主路径：
+
+```text
+clib_calljmp
+  -> vlib_main
+    -> vlib_file_poll
+      -> nanosleep
+        -> __arm64_sys_nanosleep
+          -> do_nanosleep
+            -> schedule
+
+clib_calljmp
+  -> vlib_main
+    -> vlib_file_poll
+      -> __epoll_pwait
+        -> __arm64_sys_epoll_pwait
+          -> do_epoll_wait
+```
+
+代码位置：
+
+```text
+work/vpp/src/vlib/file.c
+
+if (is_main && um->poll_sleep_usec)
+  {
+    nanosleep(...poll_sleep_usec...);
+    goto epoll;
+  }
+
+epoll:
+  epoll_wait(..., timeout_ms);
+```
+
+Round 4E 结论：
+
+```text
+火焰图确认：当前 idle CPU 主要不是 tun_poc/nfqueue_poc 包路径轮询。
+CPU 时间集中在 VPP main thread 的 vlib_file_poll：
+  1. 显式 poll-sleep-usec 触发的 nanosleep syscall 路径。
+  2. 随后的 epoll_wait/epoll_pwait 路径。
+
+因此当前剩余 idle CPU 的直接原因，是 VPP main loop 在 idle 下仍周期性执行
+nanosleep + epoll_wait + syscall/调度开销。
+
+这和包 fd 是否事件驱动是两件事：
+  tun_poc/nfqueue_poc 已用 clib_file_add/read_function 挂到 VPP epoll。
+  但 vpp_main 自己仍按主循环节奏醒来。
+```
+
+下一步建议：
+
+```text
+不要继续猜。
+下一轮应加 VPP main loop 计数器或 trace：
+  - 每秒 vlib_file_poll 调用次数
+  - 每秒 nanosleep 次数
+  - 每秒 epoll_wait 次数
+  - epoll_wait 返回 0 / >0 / error 的次数
+  - timeout_ms 分布
+
+这样可以区分：
+  A. poll-sleep-usec 固定 sleep 导致的周期唤醒。
+  B. epoll_wait timeout/timer wheel 导致的周期唤醒。
+  C. 其它 VPP process/timer/API/statseg/CLI 事件不断唤醒 main loop。
+```
