@@ -1,4 +1,4 @@
-.PHONY: build-smoke docker-build docker-shell fetch-vpp apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu android-preflight android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
+.PHONY: build-smoke docker-build docker-shell fetch-vpp apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu vpp-tun-poc-build vpp-tun-poc-smoke android-preflight android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
 ANDROID_TRIM_BUILD_DIR ?= $(CURDIR)/work/vpp-android-trim-nfqueue
@@ -61,6 +61,13 @@ vpp-nfqueue-ratio:
 
 vpp-nfqueue-idle-cpu:
 	./scripts/run-vpp-nfqueue-idle-cpu.sh
+
+vpp-tun-poc-build:
+	./scripts/apply-vpp-overlay.sh
+	TARGET=tun_poc_plugin ./scripts/build-vpp-plugin.sh
+
+vpp-tun-poc-smoke:
+	./scripts/run-vpp-tun-poc-smoke.sh
 
 android-preflight:
 	./scripts/android-preflight.sh

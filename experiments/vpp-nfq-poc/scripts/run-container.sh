@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$POC_DIR/../.." && pwd)"
 IMAGE="${IMAGE:-sakamoto-vpp-nfq-poc:dev}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-none}"
 DOCKER_CAP_PROFILE="${DOCKER_CAP_PROFILE:-smoke}"
+DOCKER_TUN_DEVICE="${DOCKER_TUN_DEVICE:-0}"
 VPP_WORK_ROOT="${VPP_WORK_ROOT:-$POC_DIR/work}"
 
 docker build -t "$IMAGE" "$POC_DIR"
@@ -46,10 +47,24 @@ case "$DOCKER_CAP_PROFILE" in
     ;;
 esac
 
+device_args=()
+case "$DOCKER_TUN_DEVICE" in
+  0|false|no)
+    ;;
+  1|true|yes)
+    device_args=(--device /dev/net/tun:/dev/net/tun)
+    ;;
+  *)
+    echo "unknown DOCKER_TUN_DEVICE=$DOCKER_TUN_DEVICE" >&2
+    exit 2
+    ;;
+esac
+
 exec docker run --rm "${tty_args[@]}" \
   --name sakamoto-vpp-nfq-poc \
   --network "$DOCKER_NETWORK" \
   "${cap_args[@]}" \
+  "${device_args[@]}" \
   --tmpfs /run \
   -e VPP_WORK_ROOT="$VPP_WORK_ROOT" \
   -v "$REPO_ROOT:/work/sakamoto-snort" \
