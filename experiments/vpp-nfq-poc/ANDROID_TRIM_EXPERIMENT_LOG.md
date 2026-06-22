@@ -1980,3 +1980,193 @@ Round 4F 结论：
 这不是最终极限优化，但它是当前证据支持的最小正确改动。
 更激进的 epoll timeout / timer wheel 修改应作为下一轮 VPP main loop 定点优化，而不是 Android 默认先上。
 ```
+
+## 13. Round 4G: Android idle CPU 深挖结果
+
+目的：
+
+```text
+确认 unset poll-sleep-usec 后，为什么 root minimal / app idle 仍有约 2% CPU。
+用户预期是：无流量时应该只有极少 CPU 占用。
+```
+
+### 13.1 纯 root minimal 复测
+
+先排除 vpn-lite / HEV / app 监控线程干扰：
+
+```text
+stage: release + no-multiarch + no-IPsec
+启动方式: root minimal
+不启用 tun_poc，不启用 nfqueue_poc，不走 VpnService/HEV
+poll-sleep-usec: unset
+```
+
+60 秒 tick-delta：
+
+```text
+pid=31728 clk=100
+Name: vpp_main
+Threads: 1
+RSS: 102,612 KB
+
+5 秒窗口 CPU samples:
+  1.935, 2.151, 2.332, 2.348, 1.952, 2.141,
+  1.953, 2.348, 2.156, 2.333, 1.958, 2.351
+
+avg: 2.163%
+min: 1.935%
+max: 2.351%
+```
+
+结论：
+
+```text
+2% idle 不是 vpn-lite / HEV / app 监控线程导致。
+纯 VPP root minimal、单线程、无主动流量时也存在。
+```
+
+### 13.2 unset poll-sleep-usec 后的 simpleperf
+
+采样：
+
+```text
+simpleperf record -e cpu-clock -f 1000 -p 31728 --call-graph dwarf --duration 30
+Samples recorded: 1,088
+Samples lost: 0
+```
+
+关键热点：
+
+```text
+vlib_main          97.79%
+vlib_file_poll     45.68%
+__epoll_pwait      42.74%
+do_epoll_wait      30.61%
+schedule           23.71%
+
+process_expired_timers / vlib_tw_timer_expire_timers:
+  libvlib.so+0x3c8c4
+  libvppinfra.so+0x5f55c / +0x5f560 / +0x5f568 ...
+```
+
+符号化后确认：
+
+```text
+libvlib.so+0x3c8c4:
+  vlib_tw_timer_expire_timers
+  process_expired_timers
+
+libvppinfra.so+0x5f55c 等:
+  tw_timer_expire_timers_internal_1t_3w_1024sl_ov
+```
+
+### 13.3 临时计数器结果
+
+在实验 worktree 的 `vlib/file.c` 加临时 `show file-poll-debug` 计数器。
+
+unset poll-sleep-usec 且未设置 timer floor 时，10 秒左右观测：
+
+```text
+calls 11969
+skip_vectors 0
+skip_polling_nodes 0
+skip_api_queue 0
+pending_interrupts 0
+epoll_calls 11969
+epoll_timeout_zero 10035
+epoll_timeout_positive 1934
+epoll_return_zero 11962
+epoll_return_ready 7
+timeout_min 0
+timeout_max 1000
+timeout_avg 1.667
+```
+
+关键结论：
+
+```text
+不是 polling input node 导致忙轮询。
+也不是 api_queue 或 pending interrupt。
+
+直接原因是：
+  VPP timer wheel 返回的正 ticks 小于 1ms；
+  vlib_file_poll 中 ticks -> timeout_ms 使用整数除法；
+  小于 1ms 的正 timeout 被截断成 0；
+  epoll_wait(timeout=0) 变成非阻塞轮询。
+```
+
+### 13.4 timer floor 实验
+
+实验性修改：
+
+```c
+timeout_ms = ticks / (VLIB_TW_TICKS_PER_SECOND / 1000);
+
+// Android 实验：正 timeout 不小于 N ms
+if (timeout_ms < N && ticks != 0)
+  timeout_ms = N;
+```
+
+结果：
+
+```text
+N = 1ms:
+  epoll_timeout_zero 降为 0
+  epoll 平均 timeout 约 8.6ms
+  CPU avg: 1.706%
+
+N = 100ms:
+  epoll 平均 timeout 约 102ms
+  CPU avg: 1.527%
+
+N = 1000ms:
+  epoll 平均 timeout 1000ms
+  CPU avg: 1.479%
+  simpleperf samples: 495 / 30s
+```
+
+对比：
+
+```text
+unset poll-sleep-usec baseline:
+  CPU avg: 2.163%
+  simpleperf samples: 1,088 / 30s
+
+timer floor 1000ms:
+  CPU avg: 1.479%
+  simpleperf samples: 495 / 30s
+```
+
+### 13.5 结论
+
+```text
+只改 epoll timeout 不够。
+
+poll-sleep-usec 删除解决了 nanosleep 固定唤醒问题。
+timer floor 解决了 sub-ms timer 被截成 epoll timeout 0 的问题。
+但完整 libvnet runtime 仍会注册大量默认 process/timer：
+  ip4/ip6 full reassembly expire walk
+  ip4/ip6 sv reassembly expire walk
+  ip6 mld / ra
+  fib-walk
+  statseg collector
+  以及其它 vnet 默认 process
+
+在 1Hz epoll 下，simpleperf 剩余热点仍主要是：
+  process_expired_timers
+  vlib_tw_timer_expire_timers
+  tw_timer_expire_timers_internal_1t_3w_1024sl_ov
+
+所以当前可证结论是：
+  使用完整 libvnet 的 VPP Android runtime，即使不处理任何包，也不是低功耗 idle 形态。
+  要达到“无流量时极少 CPU”，必须继续裁掉或禁用不需要的 vnet 默认 process/timer，
+  或推进 vlib-only / vpp_lite runtime，而不是继续只调 poll-sleep-usec。
+```
+
+当前不建议把 timer floor 作为最终提交：
+
+```text
+它能减少 wake 次数，但没有把 CPU 压到目标量级。
+而且 100ms/1000ms floor 会延后 VPP 内部 timer，属于策略取舍，不应在没有更完整
+datapath 验证前作为默认 runtime 行为。
+```
