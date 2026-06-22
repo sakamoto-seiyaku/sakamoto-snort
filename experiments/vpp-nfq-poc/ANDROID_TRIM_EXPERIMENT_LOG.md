@@ -2828,3 +2828,308 @@ timer：
   避免每轮 timer_first_expires_in_ticks；
   使用更长 epoll timeout 或 eventfd 驱动唤醒。
 ```
+
+## 16. Round 4H: 继续收口 idle CPU 的直接原因
+
+时间：2026-06-22
+
+上一轮已经确认：
+
+```text
+默认 VNET process timers 被禁用后，真实 expired timer 基本消失。
+但 Android 空闲 CPU 仍约 1.3% - 1.7%。
+```
+
+这一轮继续只回答一个问题：
+
+```text
+剩余 CPU 到底是哪个 idle 路径造成的？
+```
+
+### 16.1 `vlib_file_poll()` 原因插桩
+
+临时在 `src/vlib/file.c::vlib_file_poll()` 加计数：
+
+```text
+calls
+epoll calls
+ready == 0
+timeout == 0
+timeout > 0
+polling input nodes
+API queue nonempty
+node interrupt pending
+sleep / poll_sleep / vectors / input_polling / api_queue / worker_barrier /
+worker_recent / interrupt
+```
+
+关键输出：
+
+```text
+report=1 window=5.008 calls=2003 epoll=2003 ready0=2003
+timeout0=1608 timeout_pos=395 timeout_avg=14
+polling_inputs=0 api=0 skip_loops=0
+reasons sleep=2003 poll_sleep=0 vectors=0 input_polling=0 api_queue=0
+worker_barrier=0 worker_recent=0 interrupt=0
+
+report=2 window=5.008 calls=1238 epoll=1238 ready0=1238
+timeout0=750 timeout_pos=488 timeout_avg=9
+reasons sleep=1238
+
+report=3 window=5.007 calls=1103 epoll=1103 ready0=1103
+timeout0=614 timeout_pos=489 timeout_avg=9
+reasons sleep=1103
+
+report=4 window=5.007 calls=1060 epoll=1060 ready0=1060
+timeout0=571 timeout_pos=489 timeout_avg=9
+reasons sleep=1060
+```
+
+结论：
+
+```text
+不是 polling input node 在忙轮询。
+不是 API queue。
+不是 node interrupt。
+不是 poll-sleep-usec。
+
+VPP 确实走的是 sleep path。
+但 sleep path 里大量 epoll timeout 被算成 0ms。
+```
+
+直接原因是 `vlib_file_poll()` 里 timeout 的整数换算：
+
+```text
+ticks = vlib_tw_timer_first_expires_in_ticks(vm)
+timeout_ms = ticks / ((u32) VLIB_TW_TICKS_PER_SECOND / 1000)
+```
+
+默认 `VLIB_TW_TICKS_PER_SECOND = 1e5`，即 10us/tick。
+
+当下一个 timer 离现在小于 1ms 时：
+
+```text
+ticks > 0
+timeout_ms == 0
+epoll_wait(..., timeout = 0)
+```
+
+所以这里不是“不睡”，而是“打算睡，但 timeout 被截断成 0ms，变成非阻塞 epoll”。
+
+### 16.2 只加 1000ms floor 仍不够
+
+临时修改：
+
+```text
+Android 下 max_timeout_ms = 1000
+
+if (ticks != 0 && timeout_ms < max_timeout_ms)
+  timeout_ms = max_timeout_ms;
+```
+
+同时保留 8 个默认 process timer 禁用：
+
+```text
+ip4-full-reassembly-expire-walk
+ip6-full-reassembly-expire-walk
+ip4-sv-reassembly-expire-walk
+ip6-sv-reassembly-expire-walk
+ip6-mld-process
+ip6-ra-process
+fib-walk
+statseg-collector-process
+```
+
+60s tick-delta：
+
+```text
+第一轮：
+samples: 0.190, 0.951, 1.333, 1.330, 1.517, 1.325,
+         1.321, 1.321, 1.517, 1.326, 1.328, 1.331
+avg=1.233 min=0.190 max=1.517 n=12
+
+第二轮稳态：
+samples: 1.322, 1.133, 1.316, 1.506, 1.322, 1.318,
+         1.512, 1.323, 1.696, 1.316, 1.504, 1.313
+avg=1.382 min=1.133 max=1.696 n=12
+```
+
+`show runtime`：
+
+```text
+Time 85.8, 10 sec internal node vector rate 0.00 loops/sec 1.03
+```
+
+simpleperf 30s：
+
+```text
+Samples recorded: 469
+Samples lost: 0
+```
+
+top：
+
+```text
+vlib_main               100.00%
+libvlib.so+3c82c         99.36%
+vlib_file_poll            0.43%
+__epoll_pwait             0.43%
+```
+
+地址符号化：
+
+```text
+libvlib.so+0x3c82c:
+  vlib_tw_timer_expire_timers
+  src/vlib/tw_funcs.h:82
+  process_expired_timers
+  src/vlib/main.c:1412
+
+libvppinfra.so+0x5f560/+5f55c/+5f568/...:
+  tw_timer_expire_timers_internal_1t_3w_1024sl_ov
+  src/vppinfra/tw_timer_template.c:742/743/749/773/793/535
+```
+
+这个结果非常关键：
+
+```text
+1000ms floor 已经把 epoll/kernel wakeup 成本基本打掉。
+epoll 在 simpleperf 里只剩 0.43%。
+
+但 CPU 仍约 1.3% - 1.4%。
+```
+
+原因不是一秒醒一次太频繁，而是一秒醒一次后，
+`process_expired_timers()` 需要把 VLIB timing wheel 从上次时间推进到当前时间。
+
+默认 10us/tick：
+
+```text
+1 second ~= 100,000 timer ticks
+```
+
+所以 1000ms floor 把“频繁醒来”变成了“低频醒来但每次做大量 timer-wheel catch-up”。
+
+### 16.3 Android 下把 VLIB timer tick 粗化到 1ms
+
+继续保持：
+
+```text
+8 个默认 process timer 禁用
+vlib_file_poll 1000ms floor
+无主动流量
+```
+
+只新增一个变量：
+
+```c
+#ifdef __ANDROID__
+#define VLIB_TW_TICKS_PER_SECOND 1e3 /* 1 ms, Android idle experiment */
+#else
+#define VLIB_TW_TICKS_PER_SECOND 1e5 /* 10 us */
+#endif
+```
+
+编译、推送并启动 Android 真机 VPP 后，60s tick-delta：
+
+```text
+第一轮：
+samples: 0.000, 0.191, 0.000, 0.000, 0.000, 0.190,
+         0.190, 0.000, 0.000, 0.000, 0.000, 0.000
+avg=0.048 min=0.000 max=0.191 n=12
+
+第二轮稳态：
+samples: 0.000, 0.188, 0.000, 0.000, 0.000, 0.000,
+         0.000, 0.000, 0.000, 0.188, 0.000, 0.000
+avg=0.031 min=0.000 max=0.188 n=12
+```
+
+`show runtime`：
+
+```text
+Time 154.0, 10 sec internal node vector rate 0.00 loops/sec 1.03
+```
+
+simpleperf 30s：
+
+```text
+Samples recorded: 11
+Samples lost: 0
+```
+
+设备端文本报告保存到：
+
+```text
+experiments/vpp-nfq-poc/results/simpleperf-vpp-idle-disabled-floor1000-tick1ms/
+  vpp-idle-disabled-floor1000-tick1ms.perf.data
+  report-children.txt
+```
+
+因为只有 11 个样本，报告中的百分比不能当作稳定热点解释。
+它只能说明此时 VPP 进程几乎没有 CPU 时间可供采样。
+
+### 16.4 当前更精确结论
+
+这轮把问题从“完整 VPP/VLIB 主循环 idle 成本”继续收口成更具体的路径：
+
+```text
+1. 默认 VNET process timers 会制造真实周期 timer。
+   这会让 process_expired_timers() 持续处理 timer event。
+
+2. 禁用这些 process timer 后，真实 expired timer 基本消失，
+   但 VLIB main loop 仍每轮检查 timer wheel。
+
+3. `vlib_file_poll()` 会根据 timer wheel 的下一次到期时间计算 epoll timeout。
+   默认 10us tick 下，很多 <1ms 的剩余时间被整数截断成 0ms，
+   造成 idle 下大量 epoll_wait(timeout=0)。
+
+4. 加 1000ms floor 后，epoll/kernel wakeup 成本基本消失，
+   但每次醒来都要让 10us timing wheel catch up 约 100,000 tick/s，
+   CPU 仍约 1.3% - 1.4%。
+
+5. Android 下把 VLIB timer tick 粗化为 1ms 后，
+   catch-up 从约 100,000 tick/s 降到约 1,000 tick/s，
+   空闲 CPU 降到约 0.03% - 0.05%。
+```
+
+所以当前最直接的判断：
+
+```text
+剩余空闲 CPU 的主要原因不是某个协议插件忙轮询，
+也不是 NFQUEUE/TUN/HEV 包路径。
+
+它主要是 VLIB timer wheel 在 Android idle 场景下的时间粒度过细，
+叠加 `vlib_file_poll()` timeout 计算和 main loop 每轮 timer 检查造成的。
+```
+
+### 16.5 风险和下一步
+
+1ms tick 只是实验结论，不应直接当成最终方案提交进产品分支。
+
+需要继续验证：
+
+```text
+1. VPP/VNET 哪些 timer 依赖 10us 级精度。
+2. 我们 Android minimal runtime 是否真的需要这些高精度 timer。
+3. NFQUEUE/TUN 输入输出在有流量时，1ms timer tick 是否影响吞吐、延迟、CT 超时、
+   packet handoff、CLI/API 响应。
+4. 更合理的实现是否应该是 Android/minimal runtime profile，而不是裸改全局
+   VLIB_TW_TICKS_PER_SECOND。
+5. 如果未来保留 VPP 完整协议栈能力，就不能简单假设 1ms tick 对所有插件都安全。
+```
+
+当前可接受的方向：
+
+```text
+短期实验：
+  继续用“禁用默认 process timer + 1000ms floor + 1ms timer tick”做 Android
+  minimal runtime idle 基线。
+
+中期设计：
+  把它整理为 Android/minimal runtime profile，明确声明这是 Sakamoto packet
+  processing profile，不是通用 VPP runtime。
+
+长期：
+  需要把 timer 精度、默认 process 启动、idle sleep 策略做成可配置 profile，
+  并用有流量的 NFQUEUE/TUN/HEV 回归测试守住行为。
+```
