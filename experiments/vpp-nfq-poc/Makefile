@@ -1,4 +1,4 @@
-.PHONY: build-smoke docker-build docker-shell fetch-vpp fetch-hev build-hev apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu vpp-tun-poc-build vpp-tun-poc-smoke vpp-tun-forward-fd-smoke vpp-tun-hev-smoke hev-socketpair-probe android-preflight android-hev-build android-socks5-smoke-server-build android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-release android-vpp-build-release android-vpp-stage-release android-vpp-push-release android-vpp-minimal-release android-vpp-configure-release-no-multiarch android-vpp-build-release-no-multiarch android-vpp-stage-release-no-multiarch android-vpp-push-release-no-multiarch android-vpp-minimal-release-no-multiarch android-vpp-configure-release-no-multiarch-no-ipsec android-vpp-build-release-no-multiarch-no-ipsec android-vpp-stage-release-no-multiarch-no-ipsec android-vpp-push-release-no-multiarch-no-ipsec android-vpp-minimal-release-no-multiarch-no-ipsec android-vpp-configure-release-no-multiarch-no-ipsec-idle android-vpp-build-release-no-multiarch-no-ipsec-idle android-vpp-stage-release-no-multiarch-no-ipsec-idle android-vpp-push-release-no-multiarch-no-ipsec-idle android-vpp-minimal-release-no-multiarch-no-ipsec-idle android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
+.PHONY: build-smoke docker-build docker-shell fetch-vpp fetch-hev build-hev apply-vpp-overlay apply-vpp-android-overlay build-vpp smoke-accept smoke-drop smoke-ratio idle-cpu vpp-idle-cpu vpp-nfqueue-cli-check vpp-nfqueue-accept vpp-nfqueue-drop vpp-nfqueue-ratio vpp-nfqueue-idle-cpu vpp-tun-poc-build vpp-tun-poc-smoke vpp-tun-forward-fd-smoke vpp-tun-hev-smoke hev-socketpair-probe android-preflight android-hev-build android-socks5-smoke-server-build android-thread-affinity-probe android-vpp-worker-affinity-probe android-vpp-placement-matrix android-vpp-configure-probe android-vpp-build-probe android-vpp-build-nfqueue-plugin android-vpp-stage-core android-vpp-push-core android-vpp-version-probe android-vpp-minimal-probe android-vpp-configure-release android-vpp-build-release android-vpp-stage-release android-vpp-push-release android-vpp-minimal-release android-vpp-configure-release-no-multiarch android-vpp-build-release-no-multiarch android-vpp-stage-release-no-multiarch android-vpp-push-release-no-multiarch android-vpp-minimal-release-no-multiarch android-vpp-configure-release-no-multiarch-no-ipsec android-vpp-build-release-no-multiarch-no-ipsec android-vpp-stage-release-no-multiarch-no-ipsec android-vpp-push-release-no-multiarch-no-ipsec android-vpp-minimal-release-no-multiarch-no-ipsec android-vpp-configure-release-no-multiarch-no-ipsec-idle android-vpp-build-release-no-multiarch-no-ipsec-idle android-vpp-stage-release-no-multiarch-no-ipsec-idle android-vpp-push-release-no-multiarch-no-ipsec-idle android-vpp-minimal-release-no-multiarch-no-ipsec-idle android-vpp-configure-trim-nfqueue android-vpp-build-trim-nfqueue android-vpp-stage-trim-nfqueue android-vpp-push-trim-nfqueue android-vpp-minimal-trim-nfqueue android-vpp-build-lite android-vpp-stage-lite android-vpp-push-lite android-vpp-minimal-lite setup-netns cleanup-netns collect-cpu
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
 ANDROID_RELEASE_BUILD_DIR ?= $(CURDIR)/work/vpp-android-release
@@ -107,6 +107,15 @@ android-hev-build:
 
 android-socks5-smoke-server-build:
 	./scripts/android-build-socks5-smoke-server.sh
+
+android-thread-affinity-probe:
+	./scripts/android-run-thread-affinity-probe.sh
+
+android-vpp-worker-affinity-probe:
+	./scripts/android-run-vpp-worker-affinity-probe.sh
+
+android-vpp-placement-matrix:
+	./scripts/android-run-vpp-placement-matrix.sh
 
 android-vpp-configure-probe:
 	./scripts/android-configure-vpp-probe.sh

@@ -1343,3 +1343,290 @@ pidof vpp: empty
 因此前一节 nfqueue_poc enable 后约 7.0% - 7.5% 的短 idle 观测，
 更像当前 Android VPP minimal runtime 基线，而不是 NFQUEUE fd 忙轮询。
 ```
+
+## 22. Android 线程 affinity POC：替换 no-op shim
+
+背景：
+
+```text
+早期 Android overlay 为了越过 vlib/threads.c 编译失败，把
+pthread_setaffinity_np() 做成 no-op。
+
+后续判断这会影响 VPP worker placement、功耗和吞吐实验，不能长期保留。
+```
+
+新增 probe：
+
+```text
+scripts/android-thread-affinity-probe.c
+scripts/android-run-thread-affinity-probe.sh
+make android-thread-affinity-probe
+```
+
+NDK/header 观察：
+
+```text
+编译目标仍是 android-31。
+NDK r29 的 pthread_setaffinity_np() 声明 guarded by API 36，因此 android-31
+编译态不能直接调用该符号。
+
+pthread_gettid_np() 可用。
+sched_setaffinity() / cpu_set_t 在 sched.h 里受 GNU feature macro 影响；
+VPP include 环境下不应依赖直接声明。
+```
+
+真机 probe 结果：
+
+```text
+设备：Pixel 6a / Android 16 / API 36
+
+shell user:
+  runtime_pthread_setaffinity_np=present
+  sched_setaffinity(tid,cpu=0..3) rc=0
+  dlsym pthread_setaffinity_np rc=0
+  worker hist: 每个 worker 2000/2000 samples 均停留在目标 CPU
+
+root user:
+  同样成功，worker 0..3 分别固定在 CPU 0..3
+```
+
+修正：
+
+```text
+scripts/apply-vpp-android-overlay.sh:
+  Android pthread_setaffinity_np shim 从 no-op 改为：
+
+    tid = pthread_gettid_np(thread)
+    syscall(SYS_sched_setaffinity, tid, cpusetsize, cpuset)
+
+  返回值保持 pthread_setaffinity_np 风格：
+    成功返回 0
+    失败返回 errno / EINVAL
+
+选择 syscall 而不是 sched_setaffinity() wrapper，是为了避开 VPP include
+环境中 GNU feature macro 未开启导致的 cpu_set_t / sched_setaffinity 声明缺失。
+```
+
+验证：
+
+```text
+apply-vpp-android-overlay.sh 重新应用到 work/vpp/src。
+
+BUILD_DIR=.../vpp-android-release-no-multiarch-no-ipsec-idle \
+  TARGET=vpp JOBS=4 scripts/android-build-vpp-probe.sh
+
+结果：
+  Linking C executable bin/vpp
+  build_rc=0
+
+随后 stage / push / minimal startup：
+  vppctl show version 成功
+  vppctl_rc=0
+```
+
+结论：
+
+```text
+Android 下线程绑核不需要继续 no-op。
+在 android-31 编译目标上，可以用 pthread_gettid_np + SYS_sched_setaffinity
+实现 VPP 需要的 pthread_setaffinity_np 语义。
+
+这仍需后续在 VPP 多 worker 配置中验证实际 worker thread placement、CPU mask
+选择策略、big/little core 分配、以及对 idle/throughput/power 的影响。
+```
+
+## 23. Android VPP worker affinity 验证通过
+
+新增 probe：
+
+```text
+scripts/android-run-vpp-worker-affinity-probe.sh
+make android-vpp-worker-affinity-probe
+```
+
+probe 行为：
+
+```text
+1. 复用已 stage/push 的 Android VPP runtime。
+2. 临时生成 runtime/startup-workers.conf。
+3. 配置 VPP:
+     cpu {
+       main-core <MAIN_CORE>
+       corelist-workers <WORKER_CORES>
+     }
+4. 启动后同时读取：
+     vppctl show threads
+     /proc/<pid>/task/<tid>/status Cpus_allowed_list
+     /proc/<pid>/task/<tid>/stat 当前 CPU
+```
+
+设备 CPU 拓扑：
+
+```text
+Pixel 6a / Android 16:
+  cpu 0-3: capacity 160,  max_freq 1803000
+  cpu 4-5: capacity 498,  max_freq 2253000
+  cpu 6-7: capacity 1024, max_freq 2802000
+```
+
+高性能核验证：
+
+```sh
+MAIN_CORE=4 WORKER_CORES=6-7 \
+  make -C experiments/vpp-nfq-poc android-vpp-worker-affinity-probe
+```
+
+`show threads`：
+
+```text
+vpp_main  LWP 18302  lcore 4  Core 4
+vpp_wk_0  LWP 18303  lcore 6  Core 6
+vpp_wk_1  LWP 18304  lcore 7  Core 7
+```
+
+`/proc` affinity：
+
+```text
+18302 comm=vpp_main cpu=4 allowed=4
+18303 comm=vpp_wk_0 cpu=6 allowed=6
+18304 comm=vpp_wk_1 cpu=7 allowed=7
+```
+
+结论：
+
+```text
+新的 Android pthread_setaffinity_np shim 不只是单独 pthread probe 可用；
+VPP 自己的 main/worker thread pinning 也能实际生效。
+
+当前可以显式把 main 放到 mid core、workers 放到 big cores。
+下一步应在这个基础上做 idle / NFQUEUE / VPN datapath 的功耗和吞吐对比：
+  A. main=0 workers=1-2 低功耗核
+  B. main=4 workers=6-7 高性能核
+  C. main=4 worker=5 或 main=0 worker=4 单 worker 折中配置
+```
+
+## 24. Android VPP core placement 矩阵和 datapath 回归
+
+新增矩阵脚本：
+
+```text
+scripts/android-run-vpp-placement-matrix.sh
+make android-vpp-placement-matrix
+```
+
+脚本行为：
+
+```text
+1. 按 SCENARIOS 生成临时 startup 配置。
+2. 对每个场景配置:
+     cpu {
+       main-core <main>
+       corelist-workers <workers>
+     }
+3. 启动 VPP 后读取:
+     vppctl show threads
+     /proc/<pid>/task/<tid>/status Cpus_allowed_list
+     /proc/<pid>/task/<tid>/stat 当前 CPU 和 tick
+4. 可选启用 nfqueue_poc no-traffic idle 采样。
+5. 可选执行 OUTPUT accept-all / drop-all datapath 回归。
+```
+
+完整矩阵：
+
+```sh
+LOG=results/android-vpp-placement-matrix-full.log \
+  make -C experiments/vpp-nfq-poc android-vpp-placement-matrix
+```
+
+场景：
+
+```text
+low:        main=0 workers=1-2
+single-mid: main=0 workers=4
+big:        main=4 workers=6-7
+```
+
+placement 结果：
+
+```text
+low:
+  vpp_main allowed=0
+  vpp_wk_0 allowed=1
+  vpp_wk_1 allowed=2
+
+single-mid:
+  vpp_main allowed=0
+  vpp_wk_0 allowed=4
+
+big:
+  vpp_main allowed=4
+  vpp_wk_0 allowed=6
+  vpp_wk_1 allowed=7
+```
+
+短 idle 采样：
+
+```text
+low baseline:             [0.0, 0.0, 0.0] avg=0.000 max=0.000
+low nfqueue-enabled:      [0.0, 0.2, 0.0] avg=0.067 max=0.200
+
+single-mid baseline:      [0.0, 0.0, 0.0] avg=0.000 max=0.000
+single-mid nfqueue:       [0.0, 0.2, 0.0] avg=0.067 max=0.200
+
+big baseline:             [0.0, 0.0, 0.2] avg=0.067 max=0.200
+big nfqueue-enabled:      [0.0, 0.0, 0.0] avg=0.000 max=0.000
+```
+
+更长 idle 窗口：
+
+```text
+low, 6 x 5s:
+  baseline:        [0.0, 0.0, 0.0, 0.2, 0.0, 0.0] avg=0.033 max=0.200
+  nfqueue-enabled: [1.2, 0.0, 0.2, 0.2, 0.0, 0.0] avg=0.267 max=1.200
+
+big, 6 x 5s:
+  baseline:        [0.0, 0.0, 0.0, 0.0, 0.4, 0.0] avg=0.067 max=0.400
+  nfqueue-enabled: [0.0, 0.0, 0.4, 0.0, 0.0, 0.0] avg=0.067 max=0.400
+```
+
+datapath 回归：
+
+```text
+big:
+  accept-all: ping 4/4, seen 4 accept 4 drop 0
+  drop-all:   ping 0/4, seen 4 accept 0 drop 4
+
+low:
+  accept-all: ping 4/4, seen 4 accept 4 drop 0
+  drop-all:   ping 0/4, seen 4 accept 0 drop 4
+
+single-mid:
+  accept-all: ping 4/4, seen 4 accept 4 drop 0
+  drop-all:   ping 0/4, seen 4 accept 0 drop 4
+```
+
+清理状态：
+
+```text
+pidof_vpp=
+nfqueue_rules:
+nfnetlink_queue:
+```
+
+结论：
+
+```text
+Android 下 VPP main/worker core placement 已经可控，且 /proc affinity
+与 vppctl show threads 一致。
+
+低功耗核、单 mid worker、高性能核三种 placement 下，NFQUEUE accept/drop
+datapath 行为保持正确。
+
+idle profile 下，no-traffic baseline 和 NFQUEUE enabled 的 tick 采样整体接近 0；
+少量 0.2%-1.2% 的尖峰更像短窗口调度/tick 噪声，未观察到持续 busy loop。
+
+这仍不是功耗、热稳定性或吞吐结论。下一步应在固定 placement 下做：
+  1. 持续流量吞吐和延迟测试。
+  2. big/mid/little placement 的 power/thermal 对比。
+  3. VPN/TUN 实际链路里的 NFQUEUE verdict 压力测试。
+```

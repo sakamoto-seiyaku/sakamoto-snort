@@ -52,9 +52,20 @@ fi
 
 if [ -f "$VPP_SRC_DIR/vppinfra/unix.h" ] &&
   ! grep -q "SAKAMOTO_ANDROID_PTHREAD_AFFINITY_SHIM" "$VPP_SRC_DIR/vppinfra/unix.h"; then
-  perl -0pi -e 's@#include <vppinfra/error.h>@#include <vppinfra/error.h>\n\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_PTHREAD_AFFINITY_SHIM 1\n#include <pthread.h>\n#include <sched.h>\nstatic inline int\npthread_setaffinity_np (pthread_t thread, size_t cpusetsize,\n\t\t\tconst void *cpuset)\n{\n  (void) thread;\n  (void) cpusetsize;\n  (void) cpuset;\n  return 0;\n}\n#endif@' "$VPP_SRC_DIR/vppinfra/unix.h"
+  perl -0pi -e 's@#include <vppinfra/error.h>@#include <vppinfra/error.h>\n\n#ifdef __ANDROID__\n#define SAKAMOTO_ANDROID_PTHREAD_AFFINITY_SHIM 1\n#include <errno.h>\n#include <pthread.h>\n#include <sys/syscall.h>\n#include <unistd.h>\nstatic inline int\npthread_setaffinity_np (pthread_t thread, size_t cpusetsize,\n\t\t\tconst void *cpuset)\n{\n  pid_t tid = pthread_gettid_np (thread);\n  if (tid < 0)\n    return ESRCH;\n  if (syscall (SYS_sched_setaffinity, tid, cpusetsize, cpuset) == 0)\n    return 0;\n  return errno ? errno : EINVAL;\n}\n#endif@' "$VPP_SRC_DIR/vppinfra/unix.h"
 else
   perl -0pi -e 's@const cpu_set_t \*cpuset@const void *cpuset@g' "$VPP_SRC_DIR/vppinfra/unix.h"
+fi
+if [ -f "$VPP_SRC_DIR/vppinfra/unix.h" ] &&
+  grep -q "SAKAMOTO_ANDROID_PTHREAD_AFFINITY_SHIM" "$VPP_SRC_DIR/vppinfra/unix.h" &&
+  ! grep -q "sched_setaffinity (tid" "$VPP_SRC_DIR/vppinfra/unix.h"; then
+  perl -0pi -e 's@#define SAKAMOTO_ANDROID_PTHREAD_AFFINITY_SHIM 1\n#include <pthread.h>@#define SAKAMOTO_ANDROID_PTHREAD_AFFINITY_SHIM 1\n#include <errno.h>\n#include <pthread.h>@' "$VPP_SRC_DIR/vppinfra/unix.h"
+  perl -0pi -e 's@static inline int\npthread_setaffinity_np \(pthread_t thread, size_t cpusetsize,\n\t\t\tconst void \*cpuset\)\n\{\n  \(void\) thread;\n  \(void\) cpusetsize;\n  \(void\) cpuset;\n  return 0;\n\}@static inline int\npthread_setaffinity_np (pthread_t thread, size_t cpusetsize,\n\t\t\tconst void *cpuset)\n{\n  pid_t tid = pthread_gettid_np (thread);\n  if (tid < 0)\n    return ESRCH;\n  if (sched_setaffinity (tid, cpusetsize, (const cpu_set_t *) cpuset) == 0)\n    return 0;\n  return errno ? errno : EINVAL;\n}@' "$VPP_SRC_DIR/vppinfra/unix.h"
+fi
+if [ -f "$VPP_SRC_DIR/vppinfra/unix.h" ] &&
+  grep -q "sched_setaffinity (tid" "$VPP_SRC_DIR/vppinfra/unix.h"; then
+  perl -0pi -e 's@#include <sched.h>@#include <sys/syscall.h>\n#include <unistd.h>@' "$VPP_SRC_DIR/vppinfra/unix.h"
+  perl -0pi -e 's@sched_setaffinity \(tid, cpusetsize, \(const cpu_set_t \*\) cpuset\)@syscall (SYS_sched_setaffinity, tid, cpusetsize, cpuset)@' "$VPP_SRC_DIR/vppinfra/unix.h"
 fi
 
 if [ -f "$VPP_SRC_DIR/vppinfra/clib.h" ] &&

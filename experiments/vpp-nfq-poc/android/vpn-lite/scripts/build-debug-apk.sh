@@ -13,7 +13,13 @@ apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
 ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 clang="${ANDROID_CLANG:-${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
-vpp_stage_dir="${VPP_STAGE_DIR:-${poc_dir}/work/android-vpp-core-stage}"
+default_vpp_stage_dir="${poc_dir}/work/android-vpp-release-no-multiarch-no-ipsec-idle-stage"
+legacy_vpp_stage_dir="${poc_dir}/work/android-vpp-core-stage"
+vpp_stage_dir="${VPP_STAGE_DIR:-${default_vpp_stage_dir}}"
+if [[ -z "${VPP_STAGE_DIR:-}" && ! -x "$vpp_stage_dir/bin/vpp" && -x "$legacy_vpp_stage_dir/bin/vpp" ]]; then
+  echo "warning: optimized VPP stage not found, falling back to legacy stage: $legacy_vpp_stage_dir" >&2
+  vpp_stage_dir="$legacy_vpp_stage_dir"
+fi
 hev_stage_dir="${ANDROID_HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
 
 die() {
@@ -54,6 +60,7 @@ keystore="$build_dir/debug.keystore"
 rm -rf "$classes_dir" "$dex_dir" "$gen_dir" "$jni_root" "$intermediates" "$outputs"
 mkdir -p "$classes_dir" "$dex_dir" "$gen_dir" "$jni_dir" "$intermediates" "$outputs"
 
+echo "vpp_stage_dir=$vpp_stage_dir"
 echo "building JNI probe"
 "$clang" \
   -shared \

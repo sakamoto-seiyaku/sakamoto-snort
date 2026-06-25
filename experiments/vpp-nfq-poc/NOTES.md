@@ -4,6 +4,8 @@ Status: living notes for this throwaway experiment.
 
 For raw chronological execution notes, see `EXPERIMENT_LOG.md`.
 
+For the Android ARM multiarch conclusion, see `ANDROID_ARM_MULTIARCH_MEMO.md`.
+
 ## 2026-06-21 Baseline
 
 The plain C NFQUEUE smoke layer is viable inside Docker after adding:

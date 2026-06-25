@@ -3715,3 +3715,257 @@ ps -A:
 命令行并中断本地步骤；未改变实验状态。
 后续清理改为扫描设备 `/proc/*/cmdline` 后按 PID kill。
 ```
+
+## 19. 当前 multiarch / platform 优化开关状态复核
+
+问题：
+
+```text
+确认当前 Android VPP POC 是否为了压缩体积，关掉了 VPP 面向平台/CPU 的优化编译路径。
+```
+
+实际状态：
+
+```text
+当前常用 Android VPP runtime:
+  work/vpp-android-release-no-multiarch-no-ipsec-idle
+
+CMakeCache:
+  CMAKE_BUILD_TYPE=release
+  SAKAMOTO_VPP_NO_IPSEC=ON
+  SAKAMOTO_VPP_ANDROID_IDLE_PROFILE=ON
+  VPP_BUILD_NATIVE_ONLY=OFF
+  VPP_MARCH_VARIANT_OCTEONTX2=OFF
+  VPP_MARCH_VARIANT_THUNDERX2T99=OFF
+  VPP_MARCH_VARIANT_CORTEXA72=OFF
+  VPP_MARCH_VARIANT_NEOVERSEN1=OFF
+  VPP_MARCH_VARIANT_NEOVERSEN2=OFF
+  VPP_MARCH_VARIANT_NEOVERSEV2=OFF
+```
+
+解释：
+
+```text
+这里没有使用 VPP_BUILD_NATIVE_ONLY，也没有指定 VPP_PLATFORM。
+Android 是 cross compile，native-only 会指向构建机 CPU，不适合作为 Android 设备产物策略。
+
+当前策略是保留默认 AArch64 baseline:
+  -march=armv8-a+crc
+
+同时关闭额外 multiarch dispatch variants:
+  octeontx2 / thunderx2t99 / cortexa72 / neoversen1 / neoversev2
+```
+
+build.ninja 复核：
+
+```text
+release:
+  CLIB_MARCH_VARIANT=cortexa72   102
+  CLIB_MARCH_VARIANT=neoversen1  102
+  CLIB_MARCH_VARIANT=neoversev2  102
+  CLIB_MARCH_VARIANT=octeontx2   102
+  CLIB_MARCH_VARIANT=thunderx2t99 102
+
+release no-multiarch no-IPsec idle:
+  CLIB_MARCH_VARIANT=*           0
+  baseline -march=armv8-a+crc    679 compile commands
+```
+
+体积链路复核：
+
+```text
+debug/O0-ish core stage:
+  stage total: 186M
+  libvnet.so:  183,480,048 bytes
+
+release stage:
+  stage total: 29M
+  libvnet.so:  27,169,424 bytes
+
+release no-multiarch stage:
+  stage total: 11M
+  libvnet.so:  9,167,104 bytes
+
+release no-multiarch no-IPsec idle stage:
+  stage total: 9.4M
+  libvnet.so:  8,059,840 bytes
+```
+
+结论：
+
+```text
+“关平台优化”这个说法需要精确化：
+  1. 我们没有关掉 baseline armv8-a+crc 编译优化。
+  2. 我们关掉的是 VPP 对若干 ARM server/platform CPU 的 multiarch 重复编译和运行时 dispatch。
+
+这会减少特定 CPU variant 的专门调优路径，可能影响峰值吞吐/每包成本；
+但对 Android 手机 SoC 来说，默认打开的 octeontx2/thunderx2t99/neoverse/cortex-a72
+并不一定匹配实际 big/mid/little core。
+
+你的记忆是对的：关 multiarch 不是唯一体积来源。
+最大第一步是从非 release/O0-ish 变为 release:
+  186M -> 29M
+
+第二步关 multiarch 仍然很明显:
+  29M -> 11M
+
+再裁 IPsec 收益较小:
+  11M -> 9.4M
+```
+
+APK 打包脚本风险修正：
+
+```text
+之前 android/vpn-lite/scripts/build-debug-apk.sh 默认 VPP_STAGE_DIR 指向:
+  work/android-vpp-core-stage
+
+该目录当前仍是旧的 186M core stage，libvnet.so 为 183,480,048 bytes。
+如果后续忘记显式传 VPP_STAGE_DIR，可能误打入旧 fat runtime。
+
+已改为默认使用:
+  work/android-vpp-release-no-multiarch-no-ipsec-idle-stage
+
+如果该优化 stage 不存在，但旧 core stage 存在，则显式 warning 后 fallback。
+```
+
+验证：
+
+```text
+不传 VPP_STAGE_DIR 重新执行:
+  android/vpn-lite/scripts/build-debug-apk.sh
+
+输出:
+  vpp_stage_dir=.../work/android-vpp-release-no-multiarch-no-ipsec-idle-stage
+  packaging VPP runtime
+  ok: .../android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk
+
+APK:
+  snort-vpn-lite-debug.apk: 3.4M
+  lib/arm64-v8a/libvnet.so: 8,059,840 bytes
+```
+
+## 20. ARM multiarch 与 Android big.LITTLE 语义复核
+
+问题：
+
+```text
+VPP 的 ARM multiarch 优化是否会像 Android big/mid/little core placement 一样，
+按 worker 当前所在 CPU core 类型选择 A55/A76/X1 等不同实现？
+```
+
+结论：
+
+```text
+不会。
+
+VPP multiarch 是进程启动/constructor 阶段的函数版本选择，选择粒度是函数或 node
+variant，不是 worker thread，也不是当前正在运行的 CPU core。
+```
+
+源码依据：
+
+```text
+vlib/node.c:
+  vlib_register_all_node_march_variants()
+    -> 为 default / octeontx2 / thunderx2t99 / cortexa72 / neoversen1 ...
+       注册 node function variant
+    -> 每个 variant 调 clib_cpu_march_priority_<variant>()
+    -> 按 priority 选择默认 march variant
+
+vppinfra/cpu.h:
+  CLIB_MARCH_FN / CLIB_MARCH_FN_CONSTRUCTOR
+    -> constructor 比较 CLIB_MARCH_FN_PRIORITY()
+    -> 设置全局 selected function pointer
+
+vppinfra/cpu.c:
+  clib_get_cpu_info()
+    -> 读取 /proc/cpuinfo 的 CPU implementer / CPU part
+    -> 缓存在 static clib_cpu_info_t
+```
+
+这意味着：
+
+```text
+VPP 不是这样：
+  worker on A55 -> A55 版本
+  worker on A76 -> A76 版本
+  worker on X1  -> X1 版本
+
+而是这样：
+  process startup -> 选一个全局最佳 variant/default -> 后续 worker 共用这套函数指针
+```
+
+Pixel 6a / Android 16 实机 CPU part：
+
+```text
+cpu 0-3:
+  implementer 0x41
+  part 0xd05  Cortex-A55
+
+cpu 4-5:
+  implementer 0x41
+  part 0xd0b  Cortex-A76
+
+cpu 6-7:
+  implementer 0x41
+  part 0xd44  Cortex-X1
+```
+
+VPP 当前 ARM variant 表：
+
+```text
+octeontx2     Marvell Octeon TX2
+thunderx2t99  Marvell ThunderX2 T99
+qdf24xx       Qualcomm Centriq 2400
+cortexa72     ARM Cortex-A72
+neoversen1    ARM Neoverse N1
+neoversen2    ARM Neoverse N2
+neoversev2    ARM Neoverse V2
+```
+
+判断：
+
+```text
+Pixel 6a 的 A55 / A76 / X1 不在 VPP 当前 ARM multiarch variant 表里。
+
+因此，即使重新打开默认 ARM multiarch variants，这台 Android 设备也大概率不会选中
+cortexa72 / neoverse / octeon 专用版本，最终仍会落到 default baseline。
+```
+
+对当前 no-multiarch 策略的影响：
+
+```text
+关闭 ARM multiarch 主要移除的是 ARM server / infrastructure CPU 的重复编译版本：
+  Octeon TX2 / ThunderX2 / Centriq / Cortex-A72 / Neoverse N1/V2
+
+这不是关闭 Android 手机 SoC 的 A55/A76/X1 专用路径；
+当前 VPP 源码里本来也没有这些手机 core 专用 variant。
+```
+
+仍然保留的 ARM 基础优化：
+
+```text
+baseline:
+  -march=armv8-a+crc
+
+保留：
+  AArch64 baseline codegen
+  NEON 128-bit vector helpers
+  ARM CRC32 intrinsic path
+
+不等同于纯 C / 无 SIMD / 无 CRC。
+```
+
+风险边界：
+
+```text
+对同质 ARM server 机器，关闭 multiarch 可能明显影响峰值吞吐。
+对当前 Android 手机 POC，风险更偏向“未知吞吐差异”，不是已知丢失某个 A55/A76/X1
+专用优化。
+
+当前优先级仍应是：
+  1. 用 no-multiarch baseline + worker core placement 跑吞吐/延迟。
+  2. 如果 CPU-bound 明显，再考虑重新打开或新增更匹配的 A76/X1 variant。
+  3. 真正支持 big.LITTLE 最理想的是 per-worker/per-core-class dispatch，但这不是
+     当前 VPP multiarch 机制现成提供的能力。
+```
