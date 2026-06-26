@@ -1252,6 +1252,68 @@ dumpsys connectivity did not show active package VPN entry
 
 结论：Android VPN mode 的核心 fd handoff 已经跑通：VpnService fd -> native helper -> fork/exec packaged VPP -> `tun_poc enable fd 3` -> VPP 读到真实 VPN packet。下一步可以试 `mode=vpp-forward`，让 app 内 shim fd 反射 ICMP，验证 VPN 模式下最小回包。
 
+### 27. Android VpnService fd -> packaged VPP forward-fd -> shim ICMP reflect
+
+问题：Android VPN mode 下，VPP 不只读包，还能不能通过 `forward-fd` 把 packet 交给 app 内 native shim，由 shim 写回 ICMP echo reply，让发起方看到 ping 成功？
+
+命令要点：
+
+```sh
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp-forward
+su 12540 -c /system/bin/ping -c 3 -W 1 1.1.1.1
+cat /data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-cli.log
+cat /data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-shim.log
+```
+
+结果：
+
+```text
+nativeStartVppProbe fd=112 vppMode=1 rc=0
+started VPP pid=6308 fd=112 mode=1
+vpp shim driver start fd=109
+
+ping:
+3 packets transmitted, 3 received, 0% packet loss
+ping_rc=0
+```
+
+VPP counters:
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 13 bytes 892
+tx 3 bytes 252
+shim-rx 3 bytes 252
+shim-tx 13 bytes 892
+parse-errors 0
+read-errors 0
+write-errors 0
+shim-read-errors 0
+shim-write-errors 0
+```
+
+Shim log:
+
+```text
+packet=10 len=84 ipv4 proto=1 10.111.0.2 -> 1.1.1.1
+shim reflected icmp len=84 written=84
+packet=11 len=84 ipv4 proto=1 10.111.0.2 -> 1.1.1.1
+shim reflected icmp len=84 written=84
+packet=13 len=84 ipv4 proto=1 10.111.0.2 -> 1.1.1.1
+shim reflected icmp len=84 written=84
+```
+
+清理验证：
+
+```text
+force-stop com.sakamoto.snort.vpnlite
+no com.sakamoto.snort.vpnlite pid
+no vpp pid
+dumpsys connectivity did not show active package VPN entry
+```
+
+结论：Android VPN mode 的最小回包闭环可行：VpnService TUN fd -> app-packaged VPP `tun_poc forward-fd` -> app native shim -> TUN reply。这个 POC 不是真实转发/NAT/HEV，但证明 VPP 可以在 APK 内接 VPN fd 并参与 packet round-trip。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
