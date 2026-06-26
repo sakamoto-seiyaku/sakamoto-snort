@@ -12,7 +12,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Root mode block by package UID | Real app TCP SYNs are dropped; app connect times out. | Experiments 32, 39 |
 | Root mode allow by package UID | Real app HTTP succeeds and events carry `ruleId=allow-uid`. | Experiments 35, 38 |
 | Package JSON helper | package name -> UID -> JSON -> VPP CLI works for allow/block. | Experiments 38, 39 |
-| Root mode IPv6 static dst block | Real app IPv6 loopback HTTP is blocked by `block-ip6-dst ::1`. | Experiment 36 |
+| Root mode IPv6 static dst block | Real app IPv6 loopback and public IPv6 HTTP are blocked by exact dst rules. | Experiments 36, 43 |
 | VPN data path | App traffic enters `VpnService -> packaged VPP -> HEV -> SOCKS5`. | Experiment 33 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
