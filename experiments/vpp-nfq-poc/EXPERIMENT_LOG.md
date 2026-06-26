@@ -575,6 +575,54 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：Android root 模式下 IPv4 和 IPv6 都可以用 owner UID rule 先收窄到 NFQUEUE。当前插件一次只启用一个 `family ip4|ip6`，因此真正 dual-stack app policy 还需要下一步验证双队列/双 family 方案，或把插件扩展为同时绑定 AF_INET 和 AF_INET6。
 
+### 14. 当前 nfqueue_poc dual-family 限制
+
+问题：当前单实例 `nfqueue_poc` 能不能同时处理 IPv4 和 IPv6 queue？如果不能，系统行为是什么？
+
+实测方法：
+
+- VPP 先 `nfqueue-poc enable queue 42 family ip4 mode accept-all`。
+- 之后再尝试 `nfqueue-poc enable queue 43 family ip6 mode accept-all`。
+- 同时插入两条 owner UID 规则：
+  - IPv4: `iptables ... --uid-owner 2000 --queue-num 42 --queue-bypass`
+  - IPv6: `ip6tables ... --uid-owner 2000 --queue-num 43 --queue-bypass`
+- 分别执行 shell IPv4 ping 和 shell IPv6 ping。
+
+结果：
+
+```text
+second enable output: nfqueue-poc enable: nfqueue_poc already enabled on queue 42
+second_enable_rc=0
+ping4_rc=0
+ping6_rc=0
+/proc/net/netfilter/nfnetlink_queue: queue 42 only
+seen=3 accept=3 drop=0
+event_count=3
+ipv4_count=3
+ipv6_count=0
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv4","proto":1,"payloadLen":84,"uidKnown":true,"uid":2000,"dstIp":"127.0.0.1","verdict":"allow","reason":"mode_accept_all","ruleId":null}
+```
+
+小故障：
+
+- 第一次脚本把 `second_enable_rc != 0` 当成断言，结果失败。
+- 实际 VPP CLI 已打印错误，但 `vppctl` 返回码仍是 0；后续自动化不要只靠 `vppctl` rc 判断 CLI 命令是否成功。
+
+清理验证：
+
+```text
+no vpp process
+no temporary queue 42/43 iptables/ip6tables rules
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：当前 POC 插件只有一个全局 queue/family state，dual-stack app policy 不能靠连续两次 `enable` 达成。下一步需要选一个最小方案：扩展插件为两个 nfqueue handles，或者先启动两个 VPP/插件实例，或者根模式临时分阶段只验证单 family。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
