@@ -532,6 +532,49 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：Android `ip6tables` legacy 路径支持 `owner --uid-owner` 和 NFQUEUE 组合。root 模式 POC 可以先用 UID owner rule 做 app selector，让 VPP 只处理目标 app/UID 的包；这比把所有 OUTPUT 包都送进 VPP 更接近第一版 app-first policy。
 
+### 13. Android IPv4 owner UID -> NFQUEUE narrow queue
+
+问题：同样的 UID owner prefilter 在 Android IPv4 `iptables` 路径是否成立，并且 VPP event 是否能正确输出 IPv4 facts？
+
+命令要点：
+
+```sh
+SKIP_PUSH=1 STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+vppctl nfqueue-poc enable queue 42 family ip4 mode accept-all event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-ip4-owner-shell-uid.ndjson
+iptables -w -I OUTPUT 1 -o lo -p icmp -d 127.0.0.1 -m owner --uid-owner 2000 -j NFQUEUE --queue-num 42 --queue-bypass
+adb shell /system/bin/ping -c 3 -W 1 127.0.0.1
+adb_su /system/bin/ping -c 2 -W 1 127.0.0.1
+```
+
+结果：
+
+```text
+shell IPv4 ping: 3 transmitted, 3 received, shell_ping_rc=0
+root IPv4 ping:  2 transmitted, 2 received, root_ping_rc=0
+seen=3 accept=3 drop=0
+event_count=3
+uid2000_count=3
+uid_unknown_count=0
+ipv4_count=3
+dst_count=3
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv4","proto":1,"payloadLen":84,"uidKnown":true,"uid":2000,"dstIp":"127.0.0.1","verdict":"allow","reason":"mode_accept_all","ruleId":null}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --queue-num 42 iptables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：Android root 模式下 IPv4 和 IPv6 都可以用 owner UID rule 先收窄到 NFQUEUE。当前插件一次只启用一个 `family ip4|ip6`，因此真正 dual-stack app policy 还需要下一步验证双队列/双 family 方案，或把插件扩展为同时绑定 AF_INET 和 AF_INET6。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
