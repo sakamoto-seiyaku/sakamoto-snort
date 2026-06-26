@@ -368,6 +368,67 @@ event-write-errors=0
 
 结论：Android root NFQUEUE 可以提供 UID metadata，足够继续 app UID policy POC；但 loopback 场景会混入 uidUnknown 包，真实 app/Wi-Fi/Mobile 规则要单独验证。
 
+### 10. Android IPv6 NFQUEUE shell UID block
+
+问题：用 UID 作为 app-first policy key 时，VPP 能不能按 UID 直接 block Android 流量？
+
+最小改动：
+
+- `nfqueue_poc` 增加 throwaway 模式：`mode block-uid <uid>`。
+- 命中 `uidKnown && uid == block_uid` 时 drop，reason=`uid_block`，ruleId=`block-uid`。
+- 未命中或 UID unknown 时 default allow。
+
+构建：
+
+```sh
+./scripts/apply-vpp-overlay.sh
+./scripts/apply-vpp-android-overlay.sh
+BUILD_DIR=work/vpp-android-release-no-multiarch-no-ipsec-idle \
+TARGET=nfqueue_poc_plugin ./scripts/android-build-vpp-probe.sh
+```
+
+结果：
+
+```text
+target=nfqueue_poc_plugin build_rc=0
+```
+
+命令要点：
+
+```sh
+STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+vppctl nfqueue-poc enable queue 42 family ip6 mode block-uid 2000 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-ip6-block-uid-shell.ndjson
+ip6tables -w -I OUTPUT 1 -o lo -p ipv6-icmp -d ::1 -j NFQUEUE --queue-num 42 --queue-bypass
+adb shell /system/bin/ping6 -c 3 -W 1 ::1
+```
+
+结果：
+
+```text
+adb shell id: uid=2000(shell)
+ping: 3 transmitted, 0 received
+ping_rc=1
+seen=3 accept=0 drop=3
+rule-match=3 rule-miss=0
+event-write-errors=0
+```
+
+事件样例：
+
+```json
+{"uidKnown":true,"uid":2000,"dstIp":"::1","verdict":"block","reason":"uid_block","ruleId":"block-uid"}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --queue-num 42 ip6tables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：Android root NFQUEUE + VPP 可以实现最小 UID-level block。这是 0.2 app 默认 block/allow 的核心可行性信号；下一步应把临时 CLI mode 替换为可加载 policy 文件，或用真实 app UID 验证非 shell app 流量。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

@@ -15,6 +15,7 @@ typedef enum
   NFQUEUE_POC_MODE_DROP_ALL,
   NFQUEUE_POC_MODE_DROP_RATIO,
   NFQUEUE_POC_MODE_BLOCK_IP6_DST,
+  NFQUEUE_POC_MODE_BLOCK_UID,
 } nfqueue_poc_mode_t;
 
 typedef enum
@@ -31,6 +32,7 @@ typedef struct
   nfqueue_poc_mode_t mode;
   nfqueue_poc_family_t family;
   u32 drop_ratio;
+  u32 block_uid;
   u8 block_ip6_dst[16];
   u8 *event_log_path;
   FILE *event_log_file;
@@ -60,6 +62,7 @@ extern nfqueue_poc_main_t nfqueue_poc_main;
 clib_error_t *nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
 				  nfqueue_poc_family_t family,
 				  nfqueue_poc_mode_t mode, u32 drop_ratio,
+				  u32 block_uid,
 				  const u8 *block_ip6_dst,
 				  const char *event_log_path,
 				  u8 unbind_existing);

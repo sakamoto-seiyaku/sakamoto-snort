@@ -32,6 +32,8 @@ format_nfqueue_poc_mode (u8 *s, va_list *args)
       return format (s, "drop-ratio");
     case NFQUEUE_POC_MODE_BLOCK_IP6_DST:
       return format (s, "block-ip6-dst");
+    case NFQUEUE_POC_MODE_BLOCK_UID:
+      return format (s, "block-uid");
     }
 
   return format (s, "unknown");
@@ -257,6 +259,18 @@ nfqueue_poc_choose_verdict (nfqueue_poc_main_t *nm,
       return NF_ACCEPT;
     case NFQUEUE_POC_MODE_BLOCK_IP6_DST:
       return nfqueue_poc_block_ip6_dst_verdict (nm, facts, reason, rule_id);
+    case NFQUEUE_POC_MODE_BLOCK_UID:
+      if (facts->uid_known && facts->uid == nm->block_uid)
+	{
+	  nm->rule_match++;
+	  *reason = "uid_block";
+	  *rule_id = "block-uid";
+	  return NF_DROP;
+	}
+      nm->rule_miss++;
+      *reason = facts->uid_known ? "default_allow_uid_miss" :
+				   "default_allow_uid_unknown";
+      return NF_ACCEPT;
     }
 
   *reason = "unknown_mode_drop";
@@ -353,7 +367,7 @@ nfqueue_poc_configure_queue (struct nfq_q_handle *queue)
 clib_error_t *
 nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
 		    nfqueue_poc_family_t family, nfqueue_poc_mode_t mode,
-		    u32 drop_ratio, const u8 *block_ip6_dst,
+		    u32 drop_ratio, u32 block_uid, const u8 *block_ip6_dst,
 		    const char *event_log_path, u8 unbind_existing)
 {
   nfqueue_poc_main_t *nm = &nfqueue_poc_main;
@@ -426,6 +440,7 @@ nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
   nm->mode = mode;
   nm->family = family;
   nm->drop_ratio = drop_ratio;
+  nm->block_uid = block_uid;
   if (block_ip6_dst)
     clib_memcpy (nm->block_ip6_dst, block_ip6_dst, sizeof (nm->block_ip6_dst));
   else
@@ -512,6 +527,7 @@ nfqueue_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   nfqueue_poc_family_t family = NFQUEUE_POC_FAMILY_IP4;
   u32 queue_num = 42;
   u32 drop_ratio = 50;
+  u32 block_uid = 0;
   u8 unbind_existing = 0;
   u8 *block_ip6_dst_text = 0;
   u8 *event_log_path = 0;
@@ -551,6 +567,8 @@ nfqueue_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	  mode = NFQUEUE_POC_MODE_BLOCK_IP6_DST;
 	  block_ip6_dst_set = 1;
 	}
+      else if (unformat (input, "mode block-uid %u", &block_uid))
+	mode = NFQUEUE_POC_MODE_BLOCK_UID;
       else if (unformat (input, "unbind-existing"))
 	unbind_existing = 1;
       else if (unformat (input, "event-log %s", &event_log_path))
@@ -568,7 +586,7 @@ nfqueue_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
     return clib_error_return (0, "block-ip6-dst requires an IPv6 address");
 
   err = nfqueue_poc_enable (
-    vm, (u16) queue_num, family, mode, drop_ratio,
+    vm, (u16) queue_num, family, mode, drop_ratio, block_uid,
     block_ip6_dst_set ? block_ip6_dst : 0, (char *) event_log_path,
     unbind_existing);
   vec_free (event_log_path);
@@ -580,7 +598,7 @@ VLIB_CLI_COMMAND (nfqueue_poc_enable_command, static) = {
   .short_help = "nfqueue-poc enable [queue <n>] "
 		"[family ip4|ip6] "
 		"[mode accept-all|drop-all|drop-ratio <n>|"
-		"block-ip6-dst <addr>] "
+		"block-ip6-dst <addr>|block-uid <uid>] "
 		"[event-log <path>] "
 		"[unbind-existing]",
   .function = nfqueue_poc_enable_command_fn,
@@ -614,9 +632,9 @@ nfqueue_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   (void) cmd;
 
   vlib_cli_output (
-    vm, "enabled %u queue %u family %U mode %U drop-ratio %u fd %d",
+    vm, "enabled %u queue %u family %U mode %U drop-ratio %u block-uid %u fd %d",
     nm->enabled, nm->queue_num, format_nfqueue_poc_family, nm->family,
-    format_nfqueue_poc_mode, nm->mode, nm->drop_ratio, nm->fd);
+    format_nfqueue_poc_mode, nm->mode, nm->drop_ratio, nm->block_uid, nm->fd);
   vlib_cli_output (vm, "seen %llu accept %llu drop %llu missing-id %llu",
 		   nm->seen, nm->accepted, nm->dropped, nm->missing_id);
   vlib_cli_output (vm, "handle-errors %llu recv-errors %llu enobufs %llu",
