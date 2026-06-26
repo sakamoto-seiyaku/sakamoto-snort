@@ -1,0 +1,39 @@
+# VPP/NFQUEUE POC Status
+
+This is a throwaway checkpoint for the current fast POC lane. Detailed raw notes
+remain in `EXPERIMENT_LOG.md`.
+
+## Verified
+
+| Area | Status | Evidence |
+| --- | --- | --- |
+| Android app traffic generator | App process can issue HTTP probes and log results. | Experiment 31 |
+| Root mode package UID metadata | iptables owner + NFQUEUE + VPP sees real app UID 12540. | Experiments 32, 35, 39 |
+| Root mode block by package UID | Real app TCP SYNs are dropped; app connect times out. | Experiments 32, 39 |
+| Root mode allow by package UID | Real app HTTP succeeds and events carry `ruleId=allow-uid`. | Experiments 35, 38 |
+| Package JSON helper | package name -> UID -> JSON -> VPP CLI works for allow/block. | Experiments 38, 39 |
+| Root mode IPv6 static dst block | Real app IPv6 loopback HTTP is blocked by `block-ip6-dst ::1`. | Experiment 36 |
+| VPN data path | App traffic enters `VpnService -> packaged VPP -> HEV -> SOCKS5`. | Experiment 33 |
+| VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
+| VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
+| VPN no-block regression | Default `vpp-hev` forwarding still works after adding static block. | Experiment 42 |
+| VPN teardown loop | 3 start/HTTP/stop cycles completed without HEV fatal pattern or VPP leak. | Experiment 37 |
+
+## Current Design Implications
+
+- Root mode is the verified path for per-packet UID attribution.
+- VPN mode can choose app membership with `VpnService.Builder`, but TUN/VPP packets
+  do not contain UID metadata.
+- VPN mode can still do static IP packet rules inside VPP.
+- The first useful product slice can be package UID allow/block in root mode, plus
+  VPN app include/exclude and static IP block POCs.
+
+## Known Gaps
+
+- VPN mode per-packet app attribution is not solved.
+- IPv6 in VPN mode has not been validated; current VPN setup is IPv4 route only.
+- Domain/DNS rules are not validated; current rules use package UID or exact IP.
+- Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
+  multi-queue plugin design.
+- No sustained performance or battery test has been run beyond idle/short loops.
+- The Android app is still a POC shell, not a product UI or policy manager.
