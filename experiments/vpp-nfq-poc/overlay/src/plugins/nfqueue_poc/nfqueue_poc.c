@@ -59,58 +59,207 @@ nfqueue_poc_address_family (nfqueue_poc_family_t family)
   return family == NFQUEUE_POC_FAMILY_IP6 ? AF_INET6 : AF_INET;
 }
 
-static u32
-nfqueue_poc_block_ip6_dst_verdict (nfqueue_poc_main_t *nm, struct nfq_data *nfa)
+typedef struct
+{
+  int payload_len;
+  u8 ip_version;
+  u8 proto;
+  u8 uid_known;
+  u32 uid;
+  u8 dst_valid;
+  u8 dst[16];
+} nfqueue_poc_packet_facts_t;
+
+static void
+nfqueue_poc_collect_facts (struct nfq_data *nfa,
+			   nfqueue_poc_packet_facts_t *facts)
 {
   unsigned char *payload = 0;
-  int payload_len;
 
-  payload_len = nfq_get_payload (nfa, &payload);
-  if (payload_len < 0 || !payload)
+  clib_memset (facts, 0, sizeof (*facts));
+  facts->payload_len = nfq_get_payload (nfa, &payload);
+  if (nfq_get_uid (nfa, &facts->uid))
+    facts->uid_known = 1;
+
+  if (facts->payload_len < 1 || !payload)
+    return;
+
+  facts->ip_version = payload[0] >> 4;
+  if (facts->ip_version == 4 && facts->payload_len >= 20)
+    {
+      facts->proto = payload[9];
+      clib_memcpy (facts->dst, payload + 16, 4);
+      facts->dst_valid = 1;
+    }
+  else if (facts->ip_version == 6 && facts->payload_len >= 40)
+    {
+      facts->proto = payload[6];
+      clib_memcpy (facts->dst, payload + 24, 16);
+      facts->dst_valid = 1;
+    }
+}
+
+static const char *
+nfqueue_poc_family_name (const nfqueue_poc_packet_facts_t *facts)
+{
+  if (facts->ip_version == 4)
+    return "ipv4";
+  if (facts->ip_version == 6)
+    return "ipv6";
+  return "unknown";
+}
+
+static void
+nfqueue_poc_format_dst (const nfqueue_poc_packet_facts_t *facts, char *buf,
+			size_t len)
+{
+  int af;
+
+  buf[0] = 0;
+  if (!facts->dst_valid)
+    return;
+
+  af = facts->ip_version == 6 ? AF_INET6 : AF_INET;
+  if (!inet_ntop (af, facts->dst, buf, len))
+    buf[0] = 0;
+}
+
+static void
+nfqueue_poc_write_event (nfqueue_poc_main_t *nm, u32 id,
+			 const nfqueue_poc_packet_facts_t *facts,
+			 u32 verdict, const char *reason,
+			 const char *rule_id)
+{
+  char dst[INET6_ADDRSTRLEN];
+  int rv;
+
+  if (!nm->event_log_file)
+    return;
+
+  nfqueue_poc_format_dst (facts, dst, sizeof (dst));
+
+  rv = fprintf (nm->event_log_file,
+		"{\"type\":\"packet\",\"mode\":\"nfq\",\"queue\":%u,"
+		"\"packetId\":%u,\"family\":\"%s\",\"proto\":%u,"
+		"\"payloadLen\":%d,\"uidKnown\":%s,",
+		nm->queue_num, id, nfqueue_poc_family_name (facts),
+		facts->proto, facts->payload_len,
+		facts->uid_known ? "true" : "false");
+  if (rv < 0)
+    {
+      nm->event_write_errors++;
+      return;
+    }
+
+  if (facts->uid_known)
+    rv = fprintf (nm->event_log_file, "\"uid\":%u,", facts->uid);
+  else
+    rv = fprintf (nm->event_log_file, "\"uid\":null,");
+  if (rv < 0)
+    {
+      nm->event_write_errors++;
+      return;
+    }
+
+  if (dst[0])
+    rv = fprintf (nm->event_log_file, "\"dstIp\":\"%s\",", dst);
+  else
+    rv = fprintf (nm->event_log_file, "\"dstIp\":null,");
+  if (rv < 0)
+    {
+      nm->event_write_errors++;
+      return;
+    }
+
+  rv = fprintf (nm->event_log_file,
+		"\"verdict\":\"%s\",\"reason\":\"%s\",\"ruleId\":",
+		verdict == NF_ACCEPT ? "allow" : "block", reason);
+  if (rv < 0)
+    {
+      nm->event_write_errors++;
+      return;
+    }
+
+  if (rule_id)
+    rv = fprintf (nm->event_log_file, "\"%s\"}\n", rule_id);
+  else
+    rv = fprintf (nm->event_log_file, "null}\n");
+  if (rv < 0 || fflush (nm->event_log_file) != 0)
+    nm->event_write_errors++;
+}
+
+static u32
+nfqueue_poc_block_ip6_dst_verdict (
+  nfqueue_poc_main_t *nm, const nfqueue_poc_packet_facts_t *facts,
+  const char **reason, const char **rule_id)
+{
+  if (facts->payload_len < 0)
     {
       nm->payload_missing++;
       nm->rule_miss++;
+      *reason = "default_allow_no_payload";
       return NF_ACCEPT;
     }
 
-  if (payload_len < 40 || ((payload[0] >> 4) != 6))
+  if (facts->ip_version != 6 || !facts->dst_valid)
     {
       nm->parse_errors++;
       nm->rule_miss++;
+      *reason = "default_allow_parse_error";
       return NF_ACCEPT;
     }
 
-  if (memcmp (payload + 24, nm->block_ip6_dst, 16) == 0)
+  if (memcmp (facts->dst, nm->block_ip6_dst, 16) == 0)
     {
       nm->rule_match++;
+      *reason = "exact_ip6_dst";
+      *rule_id = "block-ip6-dst";
       return NF_DROP;
     }
 
   nm->rule_miss++;
+  *reason = "default_allow";
   return NF_ACCEPT;
 }
 
 static u32
-nfqueue_poc_choose_verdict (nfqueue_poc_main_t *nm, struct nfq_data *nfa)
+nfqueue_poc_choose_verdict (nfqueue_poc_main_t *nm,
+			    const nfqueue_poc_packet_facts_t *facts,
+			    const char **reason, const char **rule_id)
 {
+  *rule_id = 0;
+
   switch (nm->mode)
     {
     case NFQUEUE_POC_MODE_ACCEPT_ALL:
+      *reason = "mode_accept_all";
       return NF_ACCEPT;
     case NFQUEUE_POC_MODE_DROP_ALL:
+      *reason = "mode_drop_all";
       return NF_DROP;
     case NFQUEUE_POC_MODE_DROP_RATIO:
       if (nm->drop_ratio == 0)
-	return NF_ACCEPT;
+	{
+	  *reason = "mode_drop_ratio_allow";
+	  return NF_ACCEPT;
+	}
       if (nm->drop_ratio >= 100)
-	return NF_DROP;
-      return ((nm->seen * nm->drop_ratio) % 100) < nm->drop_ratio ?
-	       NF_DROP :
-	       NF_ACCEPT;
+	{
+	  *reason = "mode_drop_ratio_drop";
+	  return NF_DROP;
+	}
+      if (((nm->seen * nm->drop_ratio) % 100) < nm->drop_ratio)
+	{
+	  *reason = "mode_drop_ratio_drop";
+	  return NF_DROP;
+	}
+      *reason = "mode_drop_ratio_allow";
+      return NF_ACCEPT;
     case NFQUEUE_POC_MODE_BLOCK_IP6_DST:
-      return nfqueue_poc_block_ip6_dst_verdict (nm, nfa);
+      return nfqueue_poc_block_ip6_dst_verdict (nm, facts, reason, rule_id);
     }
 
+  *reason = "unknown_mode_drop";
   return NF_DROP;
 }
 
@@ -120,6 +269,9 @@ nfqueue_poc_packet_cb (struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 {
   nfqueue_poc_main_t *nm = data;
   struct nfqnl_msg_packet_hdr *ph;
+  nfqueue_poc_packet_facts_t facts;
+  const char *reason = "unknown";
+  const char *rule_id = 0;
   u32 id = 0;
   u32 verdict;
 
@@ -136,11 +288,14 @@ nfqueue_poc_packet_cb (struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
       return 0;
     }
 
-  verdict = nfqueue_poc_choose_verdict (nm, nfa);
+  nfqueue_poc_collect_facts (nfa, &facts);
+  verdict = nfqueue_poc_choose_verdict (nm, &facts, &reason, &rule_id);
   if (verdict == NF_ACCEPT)
     nm->accepted++;
   else
     nm->dropped++;
+
+  nfqueue_poc_write_event (nm, id, &facts, verdict, reason, rule_id);
 
   return nfq_set_verdict (qh, id, verdict, 0, 0);
 }
@@ -199,7 +354,7 @@ clib_error_t *
 nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
 		    nfqueue_poc_family_t family, nfqueue_poc_mode_t mode,
 		    u32 drop_ratio, const u8 *block_ip6_dst,
-		    u8 unbind_existing)
+		    const char *event_log_path, u8 unbind_existing)
 {
   nfqueue_poc_main_t *nm = &nfqueue_poc_main;
   clib_file_t template = { 0 };
@@ -255,6 +410,18 @@ nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
       goto error;
     }
 
+  if (event_log_path)
+    {
+      nm->event_log_file = fopen (event_log_path, "w");
+      if (!nm->event_log_file)
+	{
+	  err = clib_error_return_unix (0, "open event log %s",
+					event_log_path);
+	  goto error;
+	}
+      nm->event_log_path = format (0, "%s%c", event_log_path, 0);
+    }
+
   nm->queue_num = queue_num;
   nm->mode = mode;
   nm->family = family;
@@ -275,6 +442,7 @@ nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
   nm->parse_errors = 0;
   nm->rule_match = 0;
   nm->rule_miss = 0;
+  nm->event_write_errors = 0;
 
   template.read_function = nfqueue_poc_fd_read_ready;
   template.file_descriptor = nm->fd;
@@ -319,6 +487,18 @@ nfqueue_poc_disable (void)
       nm->rx_buf = 0;
     }
 
+  if (nm->event_log_file)
+    {
+      fclose (nm->event_log_file);
+      nm->event_log_file = 0;
+    }
+
+  if (nm->event_log_path)
+    {
+      vec_free (nm->event_log_path);
+      nm->event_log_path = 0;
+    }
+
   nm->fd = -1;
   nm->file_index = ~0;
 }
@@ -327,12 +507,14 @@ static clib_error_t *
 nfqueue_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			       vlib_cli_command_t *cmd)
 {
+  clib_error_t *err;
   nfqueue_poc_mode_t mode = NFQUEUE_POC_MODE_ACCEPT_ALL;
   nfqueue_poc_family_t family = NFQUEUE_POC_FAMILY_IP4;
   u32 queue_num = 42;
   u32 drop_ratio = 50;
   u8 unbind_existing = 0;
   u8 *block_ip6_dst_text = 0;
+  u8 *event_log_path = 0;
   u8 block_ip6_dst[16] = { 0 };
   u8 block_ip6_dst_set = 0;
 
@@ -371,6 +553,8 @@ nfqueue_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	}
       else if (unformat (input, "unbind-existing"))
 	unbind_existing = 1;
+      else if (unformat (input, "event-log %s", &event_log_path))
+	;
       else
 	return clib_error_return (0, "unknown input `%U'",
 				  format_unformat_error, input);
@@ -383,9 +567,12 @@ nfqueue_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   if (mode == NFQUEUE_POC_MODE_BLOCK_IP6_DST && !block_ip6_dst_set)
     return clib_error_return (0, "block-ip6-dst requires an IPv6 address");
 
-  return nfqueue_poc_enable (
+  err = nfqueue_poc_enable (
     vm, (u16) queue_num, family, mode, drop_ratio,
-    block_ip6_dst_set ? block_ip6_dst : 0, unbind_existing);
+    block_ip6_dst_set ? block_ip6_dst : 0, (char *) event_log_path,
+    unbind_existing);
+  vec_free (event_log_path);
+  return err;
 }
 
 VLIB_CLI_COMMAND (nfqueue_poc_enable_command, static) = {
@@ -394,6 +581,7 @@ VLIB_CLI_COMMAND (nfqueue_poc_enable_command, static) = {
 		"[family ip4|ip6] "
 		"[mode accept-all|drop-all|drop-ratio <n>|"
 		"block-ip6-dst <addr>] "
+		"[event-log <path>] "
 		"[unbind-existing]",
   .function = nfqueue_poc_enable_command_fn,
 };
@@ -436,6 +624,9 @@ nfqueue_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (
     vm, "payload-missing %llu parse-errors %llu rule-match %llu rule-miss %llu",
     nm->payload_missing, nm->parse_errors, nm->rule_match, nm->rule_miss);
+  vlib_cli_output (vm, "event-log %s event-write-errors %llu",
+		   nm->event_log_path ? (char *) nm->event_log_path : "-",
+		   nm->event_write_errors);
   return 0;
 }
 

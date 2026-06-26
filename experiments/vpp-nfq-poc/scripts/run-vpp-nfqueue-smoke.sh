@@ -7,6 +7,8 @@ IP_FAMILY="${IP_FAMILY:-inet}"
 HOST_IF="${HOST_IF:-nfq-host}"
 COUNT="${COUNT:-20}"
 EXPECTED_VERDICT="${EXPECTED_VERDICT:-}"
+EVENT_LOG="${EVENT_LOG:-}"
+EXPECT_EVENTS="${EXPECT_EVENTS:-0}"
 
 case "$IP_FAMILY" in
   inet|ip4|ipv4)
@@ -77,6 +79,11 @@ esac
 
 mkdir -p "$LOG_DIR" "$VPP_RUNTIME_ROOT/vpp-run"
 rm -f "$CLI_SOCK" "$VPP_RUNTIME_ROOT/vpp.log"
+if [ -n "$EVENT_LOG" ]; then
+  rm -f "$EVENT_LOG"
+  mkdir -p "$(dirname "$EVENT_LOG")"
+  cli_mode="$cli_mode event-log $EVENT_LOG"
+fi
 exec > >(tee "$LOG") 2>&1
 
 vpp_pid=""
@@ -129,6 +136,21 @@ set -e
 echo
 "$VPPCTL_BIN" -s "$CLI_SOCK" show nfqueue-poc
 echo "ping_rc=$ping_rc"
+
+if [ "$EXPECT_EVENTS" = "1" ]; then
+  if [ ! -s "$EVENT_LOG" ]; then
+    echo "expected non-empty event log: $EVENT_LOG" >&2
+    exit 1
+  fi
+  event_count="$(grep -c '\"type\":\"packet\"' "$EVENT_LOG" || true)"
+  if [ "$event_count" -eq 0 ]; then
+    echo "expected packet events in $EVENT_LOG" >&2
+    exit 1
+  fi
+  echo
+  echo "event_log=$EVENT_LOG event_count=$event_count"
+  tail -n 5 "$EVENT_LOG"
+fi
 
 stats_line="$(grep '^seen ' "$LOG" | tail -n 1)"
 seen="$(awk '{ print $2 }' <<<"$stats_line" | tr -cd '0-9')"

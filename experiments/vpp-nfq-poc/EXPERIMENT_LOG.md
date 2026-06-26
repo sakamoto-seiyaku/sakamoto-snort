@@ -111,6 +111,42 @@ block fd00:42::99: ping 20/20, seen=20 accept=20 drop=0  rule-match=0  rule-miss
 
 结论：VPP callback 层可以完成最小 IPv6 exact `/128` 判定。下一步再做可加载规则文件或事件输出。
 
+### 04. VPP NFQUEUE NDJSON event output
+
+问题：VPP callback 返回 verdict 的同时，能不能输出足够给 Activity/Cockpit 使用的 packet event？
+
+最小改动：
+
+- `nfqueue-poc enable` 增加 `event-log <path>`。
+- callback 中收集最小 packet facts：family、proto、payloadLen、UID、dstIp、verdict、reason、ruleId。
+- 每个包写一行 NDJSON，并立即 flush。
+- runner 增加 `EVENT_LOG=<path>` 和 `EXPECT_EVENTS=1` 断言。
+- 增加 `vpp-nfqueue-ipv6-events` 入口，复用 `block-ip6-dst=fd00:42::2`。
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-ipv6-events
+```
+
+结果：
+
+```text
+ping 0/20
+seen=20 accept=0 drop=20
+rule-match=20 rule-miss=0
+event-write-errors=0
+event_count=20
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":20,"family":"ipv6","proto":58,"payloadLen":104,"uidKnown":true,"uid":0,"dstIp":"fd00:42::2","verdict":"block","reason":"exact_ip6_dst","ruleId":"block-ip6-dst"}
+```
+
+结论：VPP POC 可以产出基础 Activity 事件。下一步可以做最小 `rules` 加载，或先把 Android root NFQ 也验证到 UID/event。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

@@ -7,6 +7,7 @@
 #include <vlib/file.h>
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
+#include <stdio.h>
 
 typedef enum
 {
@@ -31,6 +32,8 @@ typedef struct
   nfqueue_poc_family_t family;
   u32 drop_ratio;
   u8 block_ip6_dst[16];
+  u8 *event_log_path;
+  FILE *event_log_file;
 
   struct nfq_handle *handle;
   struct nfq_q_handle *queue;
@@ -49,6 +52,7 @@ typedef struct
   u64 parse_errors;
   u64 rule_match;
   u64 rule_miss;
+  u64 event_write_errors;
 } nfqueue_poc_main_t;
 
 extern nfqueue_poc_main_t nfqueue_poc_main;
@@ -57,6 +61,7 @@ clib_error_t *nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
 				  nfqueue_poc_family_t family,
 				  nfqueue_poc_mode_t mode, u32 drop_ratio,
 				  const u8 *block_ip6_dst,
+				  const char *event_log_path,
 				  u8 unbind_existing);
 void nfqueue_poc_disable (void);
 u8 *format_nfqueue_poc_mode (u8 *s, va_list *args);
