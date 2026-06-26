@@ -1045,6 +1045,53 @@ shim-write-errors 0
 
 结论：VPP `tun_poc` 的 TUN fd -> shim fd -> TUN reply 路径可用。VPN mode POC 可以优先沿这个 fd bridge 思路继续推进，下一步才需要把 Android VpnService 交出的 TUN fd 接入同样模型。
 
+### 23. Docker VPP TUN -> HEV SOCKS smoke
+
+问题：现有 `vpp-tun-hev-smoke` 是否还能把 TUN 流量经 VPP `forward-fd` 接到 HEV，再到本地 SOCKS5 server，完成一次 HTTP probe？
+
+命令：
+
+```sh
+DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-hev-smoke
+```
+
+结果：
+
+```text
+SOCKS5 server port=38567
+HEV pid=16 vpp-shim-fd=54
+before curl:
+  mode forward-fd
+  rx 1 bytes 48
+  shim-tx 1 bytes 48
+curl output:
+  OK
+SOCKS event: greeting
+SOCKS event: connect 93.184.216.34:80
+SOCKS event: payload GET /probe HTTP/1.0
+after curl:
+  rx 7 bytes 390
+  tx 6 bytes 284
+  shim-rx 6 bytes 284
+  shim-tx 7 bytes 390
+  parse-errors 0
+  read-errors 0
+  write-errors 0
+  shim-read-errors 0
+  shim-write-errors 0
+```
+
+重要风险：
+
+```text
+HEV stderr/stdout:
+free(): invalid size
+```
+
+命令整体返回 0，说明 HTTP probe 完成；但 HEV 退出时的 allocator 错误不能忽略，后续如果继续沿 HEV 路线做 Android VPN mode，需要单独最小化/定位这个 teardown 崩溃。
+
+结论：Docker/Linux 侧 TUN -> VPP forward-fd -> HEV -> SOCKS5 的数据面可以跑通一次 HTTP probe。这给 VPN mode 一个可继续探索的方向；当前主要风险是 HEV teardown 内存错误，以及 Android VpnService fd 尚未接入验证。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
