@@ -23,6 +23,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_PATH = "path";
     public static final String EXTRA_ALLOWED_PACKAGE = "allowedPackage";
     public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
+    public static final String EXTRA_BLOCK_IP4_DST = "blockIp4Dst";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
     public static final String MODE_VPP_FORWARD = "vpp-forward";
@@ -44,7 +45,7 @@ public final class SnortVpnService extends VpnService {
     private static native void nativeStopProbe();
 
     private static native int nativeStartVppProbe(int fd, String nativeLibraryDir, String filesDir,
-                                                  int vppMode);
+                                                  int vppMode, String blockIp4Dst);
 
     private static native void nativeStopVppProbe();
 
@@ -69,7 +70,9 @@ public final class SnortVpnService extends VpnService {
         String allowedPackage = intent == null ? null : intent.getStringExtra(EXTRA_ALLOWED_PACKAGE);
         String disallowedPackage = intent == null ? null
                 : intent.getStringExtra(EXTRA_DISALLOWED_PACKAGE);
-        startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage);
+        String blockIp4Dst = intent == null ? null : intent.getStringExtra(EXTRA_BLOCK_IP4_DST);
+        startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage,
+                blockIp4Dst);
         return START_STICKY;
     }
 
@@ -80,7 +83,7 @@ public final class SnortVpnService extends VpnService {
     }
 
     private synchronized void startVpn(String mode, String allowedPackage,
-                                       String disallowedPackage) {
+                                       String disallowedPackage, String blockIp4Dst) {
         if (MODE_HEV.equals(mode)) {
             int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
                     getFilesDir().getAbsolutePath());
@@ -131,7 +134,8 @@ public final class SnortVpnService extends VpnService {
                     vppMode = 2;
                 }
                 int rc = nativeStartVppProbe(rawFd, getApplicationInfo().nativeLibraryDir,
-                        getFilesDir().getAbsolutePath(), vppMode);
+                        getFilesDir().getAbsolutePath(), vppMode,
+                        blockIp4Dst == null ? "" : blockIp4Dst);
                 Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " vppMode=" + vppMode
                         + " rc=" + rc);
             } else {

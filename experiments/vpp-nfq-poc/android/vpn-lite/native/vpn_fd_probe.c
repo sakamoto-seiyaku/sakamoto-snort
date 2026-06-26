@@ -533,7 +533,7 @@ static void *vpp_monitor_thread(void *arg) {
 static int write_vpp_files(const char *native_dir, const char *files_dir,
                            char *startup_conf, size_t startup_conf_len,
                            char *stdout_log, size_t stdout_log_len,
-                           bool forward_mode) {
+                           bool forward_mode, const char *block_ip4_dst) {
     char vpp_dir[PATH_BUF_SIZE];
     char runtime_dir[PATH_BUF_SIZE];
     char logs_dir[PATH_BUF_SIZE];
@@ -543,7 +543,8 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     char plugin_name[64] = "tun_poc_plugin.so";
     char plugin_path[PATH_BUF_SIZE];
     char conf[4096];
-    char exec_text[256];
+    char exec_text[320];
+    char block_arg[80] = "";
 
     snprintf(vpp_dir, sizeof(vpp_dir), "%s/vpp", files_dir);
     snprintf(runtime_dir, sizeof(runtime_dir), "%s/runtime", vpp_dir);
@@ -573,11 +574,15 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
         snprintf(plugin_name, sizeof(plugin_name), "%s", "libtun_poc_plugin.so");
     }
 
+    if (block_ip4_dst && block_ip4_dst[0]) {
+        snprintf(block_arg, sizeof(block_arg), " block-ip4-dst %s", block_ip4_dst);
+    }
+
     if (forward_mode) {
         snprintf(exec_text, sizeof(exec_text),
-                 "tun-poc enable fd %d mode forward-fd shim-fd %d\n"
+                 "tun-poc enable fd %d mode forward-fd shim-fd %d%s\n"
                  "show tun-poc\n",
-                 VPP_TUN_FD, VPP_SHIM_FD);
+                 VPP_TUN_FD, VPP_SHIM_FD, block_arg);
     } else {
         snprintf(exec_text, sizeof(exec_text),
                  "tun-poc enable fd %d mode count-only\n"
@@ -623,7 +628,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
 JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         JNIEnv *env, jclass clazz, jint fd, jstring native_library_dir, jstring files_dir,
-        jint vpp_mode) {
+        jint vpp_mode, jstring block_ip4_dst) {
     (void)clazz;
 
     const char *native_dir = (*env)->GetStringUTFChars(env, native_library_dir, NULL);
@@ -637,6 +642,13 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         close(fd);
         return -1;
     }
+    const char *block_dst = (*env)->GetStringUTFChars(env, block_ip4_dst, NULL);
+    if (!block_dst) {
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        close(fd);
+        return -12;
+    }
 
     char vpp_path[PATH_BUF_SIZE];
     char startup_conf[PATH_BUF_SIZE];
@@ -644,6 +656,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     snprintf(vpp_path, sizeof(vpp_path), "%s/libvpppoc.so", native_dir);
 
     if (!path_exists(vpp_path)) {
+        (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
@@ -652,7 +665,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     bool use_forward = vpp_mode == 1 || vpp_mode == 2;
     bool use_hev = vpp_mode == 2;
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
-                        stdout_log, sizeof(stdout_log), use_forward) < 0) {
+                        stdout_log, sizeof(stdout_log), use_forward, block_dst) < 0) {
+        (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
@@ -662,6 +676,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     pthread_mutex_lock(&g_lock);
     if (g_vpp_pid > 0 || (use_hev && g_hev_pid > 0)) {
         pthread_mutex_unlock(&g_lock);
+        (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
@@ -671,6 +686,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
 
     int shim_fds[2] = {-1, -1};
     if (use_forward && socketpair(AF_UNIX, SOCK_SEQPACKET, 0, shim_fds) < 0) {
+        (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
@@ -683,6 +699,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             close(shim_fds[0]);
             close(shim_fds[1]);
         }
+        (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
@@ -767,6 +784,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             g_vpp_pid = -1;
             pthread_mutex_unlock(&g_lock);
             waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
             (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
             (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
             return -8;
@@ -786,6 +804,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             g_vpp_pid = -1;
             pthread_mutex_unlock(&g_lock);
             waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
             (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
             (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
             return -9;
@@ -809,6 +828,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             g_vpp_pid = -1;
             pthread_mutex_unlock(&g_lock);
             waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
             (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
             (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
             return -10;
@@ -841,6 +861,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             terminate_child(hev_pid);
         }
         waitpid(pid, NULL, 0);
+        (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         return -11;
@@ -849,6 +870,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
                         "started VPP pid=%d fd=%d mode=%d conf=%s", pid, fd,
                         vpp_mode, startup_conf);
+    (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
     (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
     (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
     return 0;

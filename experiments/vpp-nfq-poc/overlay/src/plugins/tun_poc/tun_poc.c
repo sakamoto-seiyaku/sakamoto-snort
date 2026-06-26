@@ -168,6 +168,42 @@ tun_poc_reflect_icmp4 (tun_poc_main_t *tm, u8 *packet, ssize_t packet_len)
 			       &tm->tx_bytes, &tm->write_errors);
 }
 
+static u8
+tun_poc_should_block_ip4_dst (tun_poc_main_t *tm, const u8 *packet,
+			      ssize_t packet_len)
+{
+  const tun_poc_ip4_header_t *ip4;
+  uword ihl;
+  uword total_len;
+
+  if (!tm->block_ip4_dst_set)
+    return 0;
+
+  if (packet_len < (ssize_t) sizeof (*ip4))
+    {
+      tm->short_packets++;
+      return 0;
+    }
+
+  ip4 = (const tun_poc_ip4_header_t *) packet;
+  if ((ip4->version_ihl >> 4) != 4)
+    {
+      tm->non_ipv4++;
+      return 0;
+    }
+
+  ihl = (ip4->version_ihl & 0x0f) * 4;
+  total_len = ntohs (ip4->total_length);
+  if (ihl < sizeof (*ip4) || total_len < ihl ||
+      total_len > (uword) packet_len)
+    {
+      tm->parse_errors++;
+      return 0;
+    }
+
+  return ip4->dst == tm->block_ip4_dst;
+}
+
 static clib_error_t *
 tun_poc_main_fd_read_ready (clib_file_t *f)
 {
@@ -183,10 +219,18 @@ tun_poc_main_fd_read_ready (clib_file_t *f)
 	  if (tm->mode == TUN_POC_MODE_REFLECT_ICMP)
 	    tun_poc_reflect_icmp4 (tm, tm->rx_buf, rv);
 	  else if (tm->mode == TUN_POC_MODE_FORWARD_FD)
-	    (void) tun_poc_write_packet (tm->shim_fd, tm->rx_buf, rv,
-					 &tm->shim_tx_packets,
-					 &tm->shim_tx_bytes,
-					 &tm->shim_write_errors);
+	    {
+	      if (tun_poc_should_block_ip4_dst (tm, tm->rx_buf, rv))
+		{
+		  tm->blocked_packets++;
+		  tm->blocked_bytes += rv;
+		  continue;
+		}
+	      (void) tun_poc_write_packet (tm->shim_fd, tm->rx_buf, rv,
+					   &tm->shim_tx_packets,
+					   &tm->shim_tx_bytes,
+					   &tm->shim_write_errors);
+	    }
 	  continue;
 	}
 
@@ -239,7 +283,8 @@ tun_poc_shim_fd_read_ready (clib_file_t *f)
 }
 
 clib_error_t *
-tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd)
+tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
+		u8 block_ip4_dst_set, u32 block_ip4_dst)
 {
   tun_poc_main_t *tm = &tun_poc_main;
   clib_file_t template = { 0 };
@@ -275,6 +320,8 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd)
   tm->fd = fd;
   tm->shim_fd = shim_fd;
   tm->mode = mode;
+  tm->block_ip4_dst_set = block_ip4_dst_set;
+  tm->block_ip4_dst = block_ip4_dst;
   tm->rx_packets = 0;
   tm->rx_bytes = 0;
   tm->tx_packets = 0;
@@ -283,6 +330,8 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd)
   tm->shim_rx_bytes = 0;
   tm->shim_tx_packets = 0;
   tm->shim_tx_bytes = 0;
+  tm->blocked_packets = 0;
+  tm->blocked_bytes = 0;
   tm->short_packets = 0;
   tm->non_ipv4 = 0;
   tm->non_icmp = 0;
@@ -346,6 +395,9 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   tun_poc_mode_t mode = TUN_POC_MODE_REFLECT_ICMP;
   int fd = -1;
   int shim_fd = -1;
+  u8 *block_ip4_dst_text = 0;
+  u32 block_ip4_dst = 0;
+  u8 block_ip4_dst_set = 0;
 
   (void) cmd;
 
@@ -361,19 +413,32 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	mode = TUN_POC_MODE_REFLECT_ICMP;
       else if (unformat (input, "mode forward-fd"))
 	mode = TUN_POC_MODE_FORWARD_FD;
+      else if (unformat (input, "block-ip4-dst %s", &block_ip4_dst_text))
+	{
+	  if (inet_pton (AF_INET, (char *) block_ip4_dst_text,
+			 &block_ip4_dst) != 1)
+	    {
+	      vec_free (block_ip4_dst_text);
+	      return clib_error_return (0, "invalid IPv4 address");
+	    }
+	  vec_free (block_ip4_dst_text);
+	  block_ip4_dst_text = 0;
+	  block_ip4_dst_set = 1;
+	}
       else
 	return clib_error_return (0, "unknown input `%U'",
 				  format_unformat_error, input);
     }
 
-  return tun_poc_enable (vm, fd, mode, shim_fd);
+  return tun_poc_enable (vm, fd, mode, shim_fd, block_ip4_dst_set,
+			 block_ip4_dst);
 }
 
 VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
   .path = "tun-poc enable",
   .short_help =
     "tun-poc enable fd <n> [mode count-only|reflect-icmp|forward-fd] "
-    "[shim-fd <n>]",
+    "[shim-fd <n>] [block-ip4-dst <addr>]",
   .function = tun_poc_enable_command_fn,
 };
 
@@ -400,9 +465,15 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			 vlib_cli_command_t *cmd)
 {
   tun_poc_main_t *tm = &tun_poc_main;
+  char block_dst[INET_ADDRSTRLEN] = "-";
 
   (void) input;
   (void) cmd;
+
+  if (tm->block_ip4_dst_set &&
+      !inet_ntop (AF_INET, &tm->block_ip4_dst, block_dst,
+		  sizeof (block_dst)))
+    block_dst[0] = '-';
 
   vlib_cli_output (vm, "enabled %u fd %d shim-fd %d mode %U", tm->enabled,
 		   tm->fd, tm->shim_fd, format_tun_poc_mode, tm->mode);
@@ -412,6 +483,8 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
 		   "shim-rx %llu bytes %llu shim-tx %llu bytes %llu",
 		   tm->shim_rx_packets, tm->shim_rx_bytes,
 		   tm->shim_tx_packets, tm->shim_tx_bytes);
+  vlib_cli_output (vm, "blocked %llu bytes %llu block-ip4-dst %s",
+		   tm->blocked_packets, tm->blocked_bytes, block_dst);
   vlib_cli_output (vm,
 		   "short %llu non-ipv4 %llu non-icmp %llu non-echo %llu",
 		   tm->short_packets, tm->non_ipv4, tm->non_icmp,

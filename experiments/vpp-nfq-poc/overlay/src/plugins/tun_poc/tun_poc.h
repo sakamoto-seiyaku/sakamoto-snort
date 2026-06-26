@@ -21,6 +21,8 @@ typedef struct
   int shim_fd;
   u32 file_index;
   u32 shim_file_index;
+  u8 block_ip4_dst_set;
+  u32 block_ip4_dst;
   u8 *rx_buf;
 
   u64 rx_packets;
@@ -31,6 +33,8 @@ typedef struct
   u64 shim_rx_bytes;
   u64 shim_tx_packets;
   u64 shim_tx_bytes;
+  u64 blocked_packets;
+  u64 blocked_bytes;
   u64 short_packets;
   u64 non_ipv4;
   u64 non_icmp;
@@ -44,8 +48,9 @@ typedef struct
 
 extern tun_poc_main_t tun_poc_main;
 
-clib_error_t *tun_poc_enable (vlib_main_t *vm, int fd,
-			      tun_poc_mode_t mode, int shim_fd);
+clib_error_t *tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode,
+			      int shim_fd, u8 block_ip4_dst_set,
+			      u32 block_ip4_dst);
 void tun_poc_disable (void);
 u8 *format_tun_poc_mode (u8 *s, va_list *args);
 

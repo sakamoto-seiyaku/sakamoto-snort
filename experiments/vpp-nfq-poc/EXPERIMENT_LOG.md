@@ -2148,6 +2148,90 @@ no 41080 listener
 4. root/NFQUEUE 模式才是目前已验证的 UID attribution 路径。
 ```
 
+### 41. Android VPN/VPP/HEV static IPv4 dst block inside tun_poc
+
+问题：第 40 步证明 VPN mode 可以用 `VpnService.Builder` 做 per-app include/exclude，但进入 TUN/VPP 后没有 UID metadata。第一版 VPN mode 仍需要至少验证“VPP 内按静态 IP 规则拦截”是否可行。
+
+实现：
+
+```text
+tun-poc enable ... block-ip4-dst <addr>
+```
+
+只在 TUN -> shim/HEV 的 `forward-fd` 出口方向检查 IPv4 dst：
+
+```text
+命中 dst -> drop packet, blocked_packets++, blocked_bytes++
+未命中 -> 原样写入 shim fd 给 HEV
+HEV -> TUN 回包方向不做过滤
+```
+
+app 启动参数：
+
+```text
+--es blockIp4Dst 142.251.13.94
+```
+
+native 写出的 VPP startup.exec：
+
+```text
+tun-poc enable fd 3 mode forward-fd shim-fd 4 block-ip4-dst 142.251.13.94
+show tun-poc
+```
+
+验证配置：
+
+```text
+mode: vpp-hev
+allowedPackage: com.sakamoto.snort.vpnlite
+blockIp4Dst: 142.251.13.94
+app HTTP probe: 142.251.13.94:80 /vpn-block
+SOCKS5 smoke server: 127.0.0.1:41080
+```
+
+结果：
+
+```text
+app log:
+start host=142.251.13.94 port=80 path=/vpn-block
+fail elapsedMs=5010 error=SocketTimeoutException: failed to connect to /142.251.13.94 (port 80) from /10.111.0.2 ... after 5000ms
+
+SOCKS log:
+ready only; no connect 142.251.13.94:80
+
+HEV log:
+set limit nofile
+no socks5 client tcp -> [142.251.13.94]:80
+```
+
+VPP counters：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 9 bytes 580 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 6 bytes 400
+blocked 3 bytes 180 block-ip4-dst 142.251.13.94
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no socks5 server process
+no 41080 listener
+```
+
+结论：
+
+```text
+1. VPN/VPP/HEV 路径里，VPP 可以在交给 HEV 前按静态 IPv4 dst drop。
+2. app 侧表现为从 VPN 地址 10.111.0.2 发起连接后超时；SOCKS/HEV 都看不到目标连接。
+3. 这补上了 VPN mode 的“静态 IP 规则拦截”最小 POC。
+4. 这仍不解决 VPN mode 的 per-packet UID attribution；按应用选择 VPN 范围靠 Builder app list，按 IP/包内容拦截靠 VPP TUN path。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
