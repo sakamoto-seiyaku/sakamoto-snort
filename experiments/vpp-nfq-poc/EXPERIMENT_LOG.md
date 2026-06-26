@@ -2232,6 +2232,46 @@ no 41080 listener
 4. 这仍不解决 VPN mode 的 per-packet UID attribution；按应用选择 VPN 范围靠 Builder app list，按 IP/包内容拦截靠 VPP TUN path。
 ```
 
+### 42. Android VPN/VPP/HEV no-block regression after tun_poc block rule
+
+问题：第 41 步给 `tun_poc` 加了 `block-ip4-dst`。需要确认默认不传 `blockIp4Dst` 时，原有 VPN/VPP/HEV 转发不退化。
+
+命令：
+
+```sh
+CYCLES=1 scripts/android-run-vpp-hev-app-http-loop.sh
+```
+
+结果：
+
+```text
+app log:
+start host=142.251.13.94 port=80 path=/loop-1
+ok bytes=40 elapsedMs=6 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+SOCKS log:
+connect 142.251.13.94:80
+GET /loop-1 HTTP/1.0
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 20 bytes 1643 tx 10 bytes 520
+shim-rx 10 bytes 520 shim-tx 20 bytes 1643
+blocked 0 bytes 0 block-ip4-dst -
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no socks5 server process
+no 41080 listener
+```
+
+结论：`block-ip4-dst` 是 opt-in；默认 vpp-hev 转发路径保持可用。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
