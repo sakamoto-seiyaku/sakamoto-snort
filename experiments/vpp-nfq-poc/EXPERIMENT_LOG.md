@@ -1469,6 +1469,71 @@ SIGABRT
 
 结论：Android `vpp-hev` 显式 stop 路径本轮未复现 Docker 中的 `free(): invalid size`。这不是稳定性结论，只说明 Android app stop intent 可以触发 `stopped HEV` 并完成一次干净清理；后续还需要多次循环和异常路径测试。
 
+### 30. Android root/NFQUEUE real egress synthetic UID probe
+
+问题：root 模式下不用 VPN，直接用 iptables owner match 把已安装 app UID 的真实公网 TCP 出口包送入 NFQUEUE/VPP，能否做 allow/block 规则验证？
+
+配置：
+
+```text
+package: com.sakamoto.snort.vpnlite
+uid: 12540
+dst: 93.184.216.34:80
+queue: 42
+iptables: -p tcp -d 93.184.216.34 --dport 80 -m owner --uid-owner 12540 -j NFQUEUE --queue-num 42 --queue-bypass
+generator: su 12540 -c "/system/bin/nc -4 -w 5 -W 5 93.184.216.34 80"
+```
+
+结果：
+
+```text
+baseline_rc=1
+allow_rc=1
+block_rc=1
+```
+
+VPP `accept-all` 仍然看到了包：
+
+```text
+seen 3 accept 3 drop 0 missing-id 0
+```
+
+VPP `block-uid` 也能按 UID 丢包，并输出事件：
+
+```text
+seen 2 accept 0 drop 2 missing-id 0
+uid=12540 dstIp=93.184.216.34 verdict=block reason=uid_block
+```
+
+额外排查：
+
+```text
+su 12540 nc -z 74.125.199.188:5228 -> timeout
+su 12540 nc -z 142.250.107.188:443 -> timeout
+su 12540 nc -z 1.1.1.1:443 -> timeout
+su 12540 nc -z 8.8.8.8:53 -> timeout
+su 12540 nc -z 93.184.216.34:80 -> timeout
+shell ping 1.1.1.1 -> 0% packet loss
+su 12540 ping 1.1.1.1 -> ping: sendmsg: Operation not permitted
+```
+
+清理验证：
+
+```text
+no vpp pid
+no queue 42 iptables rule
+empty nfnetlink_queue
+```
+
+结论：
+
+```text
+1. 当前 Pixel 6a 上，用 `su <app_uid>` 伪造真实公网 app 流量不是可靠 generator。
+2. 这个 synthetic UID 进程可以产生被 owner match 归到 UID 12540 的 TCP SYN，VPP/NFQUEUE 能看到并按 UID block。
+3. 但 baseline/allow 都无法完成公网 TCP 连接，且 `su 12540 ping` 直接缺少权限，所以不能用它判断真实 app egress 的可达性。
+4. 下一步必须让实际 app 进程自己发 HTTP/TCP，再分别验证 root/NFQUEUE 和 VPN/VPP/HEV 路径。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
