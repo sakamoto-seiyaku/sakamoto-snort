@@ -1139,6 +1139,60 @@ response payload: HTTP/1.0 200 OK ... OK
 
 结论：HEV 本身在更小 socketpair probe 中可完成 HTTP payload 往返；第 23 步 allocator 错误更可能和 TUN/VPP forward-fd 集成或 teardown 顺序相关，需要后续单独最小化。
 
+### 25. Android VpnService native TUN fd probe
+
+问题：实验 APK `com.sakamoto.snort.vpnlite` 能否在 Pixel 6a 上通过 `VpnService.Builder.establish()` 拿到 Android VPN TUN fd，并让 native probe 读取 L3 packet header？
+
+前置：
+
+```text
+installed package: com.sakamoto.snort.vpnlite
+versionName=0.1-debug
+versionCode=1
+lastUpdateTime=2026-06-23 06:40:50
+android.permission.INTERNET: granted=true
+```
+
+本轮未重装 APK，避免打断已有 VPN 授权状态。
+
+命令要点：
+
+```sh
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode native
+su 12540 -c /system/bin/ping -c 1 -W 1 1.1.1.1
+cat /data/user/0/com.sakamoto.snort.vpnlite/files/logs/vpn-fd-probe.log
+```
+
+结果：
+
+```text
+nativeStartProbe fd=110 rc=0
+probe start fd=110 max_packets=32
+packet=1 len=76 ipv6 next=0 fe80::... -> ff02::16
+packet=2 len=48 ipv6 next=58 fe80::... -> ff02::2
+packet=4 len=60 ipv4 proto=6 10.111.0.2 -> 142.250.107.188
+packet=9 len=84 ipv4 proto=1 10.111.0.2 -> 1.1.1.1
+```
+
+触发 ping：
+
+```text
+1 packets transmitted, 0 received
+ping_rc=1
+```
+
+这是预期内的：native mode 只读 header，不回包/转发，所以 full-route VPN 会黑洞该 ping。
+
+清理验证：
+
+```text
+force-stop com.sakamoto.snort.vpnlite
+no com.sakamoto.snort.vpnlite pid
+dumpsys connectivity did not show active package VPN entry
+```
+
+结论：Android app/VpnService 路径可以拿到 TUN fd，native 层能读到真实 VPN packet header。这是 VPN mode 的关键可行性信号；下一步可以尝试 `mode=vpp`，把同一个 detached fd 交给 Android 打包的 VPP `tun_poc`。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
