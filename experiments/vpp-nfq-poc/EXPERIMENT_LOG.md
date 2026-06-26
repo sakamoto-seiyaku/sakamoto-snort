@@ -491,6 +491,47 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：当前不用改 VPP policy loader，也可以先把 “规则文件 -> VPP CLI -> NFQUEUE verdict -> NDJSON event” 串起来。这个 POC 足够支撑下一步继续做更像 app policy 的文件形状，或者换成真实 app UID / Wi-Fi 路径验证。
 
+### 12. Android ip6tables owner UID -> NFQUEUE narrow queue
+
+问题：Android root 模式下，能不能先用 `ip6tables -m owner --uid-owner` 在内核侧按 UID 收窄进入 NFQUEUE 的流量，减少 VPP 需要处理的包，并避开 loopback accept-all 时出现的 uidUnknown paired packets？
+
+命令要点：
+
+```sh
+SKIP_PUSH=1 STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+vppctl nfqueue-poc enable queue 42 family ip6 mode accept-all event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-ip6-owner-shell-uid.ndjson
+ip6tables -w -I OUTPUT 1 -o lo -p ipv6-icmp -d ::1 -m owner --uid-owner 2000 -j NFQUEUE --queue-num 42 --queue-bypass
+adb shell /system/bin/ping6 -c 3 -W 1 ::1
+adb_su /system/bin/ping6 -c 2 -W 1 ::1
+```
+
+结果：
+
+```text
+shell ping: 3 transmitted, 3 received, shell_ping_rc=0
+root ping:  2 transmitted, 2 received, root_ping_rc=0
+seen=3 accept=3 drop=0
+event_count=3
+uid2000_count=3
+uid_unknown_count=0
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv6","proto":58,"payloadLen":104,"uidKnown":true,"uid":2000,"dstIp":"::1","verdict":"allow","reason":"mode_accept_all","ruleId":null}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --queue-num 42 ip6tables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：Android `ip6tables` legacy 路径支持 `owner --uid-owner` 和 NFQUEUE 组合。root 模式 POC 可以先用 UID owner rule 做 app selector，让 VPP 只处理目标 app/UID 的包；这比把所有 OUTPUT 包都送进 VPP 更接近第一版 app-first policy。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
