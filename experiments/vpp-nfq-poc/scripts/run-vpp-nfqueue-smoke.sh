@@ -71,6 +71,10 @@ case "$MODE" in
       EXPECTED_VERDICT="drop"
     fi
     ;;
+  allow-uid=*)
+    allow_uid="${MODE#allow-uid=}"
+    cli_mode="mode allow-uid $allow_uid"
+    ;;
   *)
     echo "unknown mode: $MODE" >&2
     exit 2
@@ -215,6 +219,16 @@ case "$MODE" in
 	exit 2
 	;;
     esac
+    ;;
+  allow-uid=*)
+    if [ "$ping_rc" -ne 0 ]; then
+      echo "allow-uid expected ping success, got rc=$ping_rc" >&2
+      exit 1
+    fi
+    if [ "$accepted" -eq 0 ] || [ "$dropped" -ne 0 ] || [ "$rule_match" -eq 0 ]; then
+      echo "allow-uid expected accepts and rule matches, got seen=$seen accept=$accepted drop=$dropped rule_match=$rule_match rule_miss=$rule_miss" >&2
+      exit 1
+    fi
     ;;
 esac
 

@@ -1701,6 +1701,51 @@ no 41080 listener
 3. full-route VPN 会携带背景 Google 长连接，如 74.125.199.188:5228；后续 POC 里需要把目标流量和背景流量区分记录。
 ```
 
+### 34. VPP NFQUEUE explicit allow-uid event attribution
+
+问题：第 32 步 root/NFQUEUE allow path 用 `accept-all` 可以放行，但 event 里 `ruleId=null`。如果第一版 UI/日志需要解释“哪条 allow 规则放行”，需要最小 rule attribution。
+
+实现：
+
+```text
+新增 nfqueue_poc mode allow-uid <uid>
+UID 命中时:
+  verdict=allow
+  reason=uid_allow
+  ruleId=allow-uid
+  rule-match++
+UID 未命中时:
+  verdict=allow
+  reason=default_allow_uid_miss/default_allow_uid_unknown
+  rule-miss++
+```
+
+Docker/netns 验证：
+
+```sh
+./scripts/run-container.sh \
+  env EXPECT_EVENTS=1 EVENT_LOG=results/vpp-nfqueue-allow-uid-root.ndjson \
+  ./scripts/run-vpp-nfqueue-smoke.sh allow-uid=0
+```
+
+结果：
+
+```text
+20 packets transmitted, 20 received, 0% packet loss
+enabled 1 queue 42 family ip4 mode allow-uid drop-ratio 50 block-uid 0 fd 12
+seen 20 accept 20 drop 0 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 20 rule-miss 0
+event_count=20
+```
+
+事件样例：
+
+```json
+{"uidKnown":true,"uid":0,"dstIp":"10.200.42.2","verdict":"allow","reason":"uid_allow","ruleId":"allow-uid"}
+```
+
+结论：VPP 插件现在可以给 allow verdict 输出明确 rule attribution。下一步需要把 Android/root-mode 使用的 staged plugin 更新后，用真实 app HTTP 再跑一遍 `allow-uid 12540`。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

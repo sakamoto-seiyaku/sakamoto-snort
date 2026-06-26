@@ -32,6 +32,8 @@ format_nfqueue_poc_mode (u8 *s, va_list *args)
       return format (s, "drop-ratio");
     case NFQUEUE_POC_MODE_BLOCK_IP6_DST:
       return format (s, "block-ip6-dst");
+    case NFQUEUE_POC_MODE_ALLOW_UID:
+      return format (s, "allow-uid");
     case NFQUEUE_POC_MODE_BLOCK_UID:
       return format (s, "block-uid");
     }
@@ -259,6 +261,18 @@ nfqueue_poc_choose_verdict (nfqueue_poc_main_t *nm,
       return NF_ACCEPT;
     case NFQUEUE_POC_MODE_BLOCK_IP6_DST:
       return nfqueue_poc_block_ip6_dst_verdict (nm, facts, reason, rule_id);
+    case NFQUEUE_POC_MODE_ALLOW_UID:
+      if (facts->uid_known && facts->uid == nm->block_uid)
+	{
+	  nm->rule_match++;
+	  *reason = "uid_allow";
+	  *rule_id = "allow-uid";
+	  return NF_ACCEPT;
+	}
+      nm->rule_miss++;
+      *reason = facts->uid_known ? "default_allow_uid_miss" :
+				   "default_allow_uid_unknown";
+      return NF_ACCEPT;
     case NFQUEUE_POC_MODE_BLOCK_UID:
       if (facts->uid_known && facts->uid == nm->block_uid)
 	{
@@ -569,6 +583,8 @@ nfqueue_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	}
       else if (unformat (input, "mode block-uid %u", &block_uid))
 	mode = NFQUEUE_POC_MODE_BLOCK_UID;
+      else if (unformat (input, "mode allow-uid %u", &block_uid))
+	mode = NFQUEUE_POC_MODE_ALLOW_UID;
       else if (unformat (input, "unbind-existing"))
 	unbind_existing = 1;
       else if (unformat (input, "event-log %s", &event_log_path))
@@ -598,7 +614,7 @@ VLIB_CLI_COMMAND (nfqueue_poc_enable_command, static) = {
   .short_help = "nfqueue-poc enable [queue <n>] "
 		"[family ip4|ip6] "
 		"[mode accept-all|drop-all|drop-ratio <n>|"
-		"block-ip6-dst <addr>|block-uid <uid>] "
+		"block-ip6-dst <addr>|allow-uid <uid>|block-uid <uid>] "
 		"[event-log <path>] "
 		"[unbind-existing]",
   .function = nfqueue_poc_enable_command_fn,
