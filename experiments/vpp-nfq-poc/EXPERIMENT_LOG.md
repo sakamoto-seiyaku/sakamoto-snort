@@ -2272,6 +2272,72 @@ no 41080 listener
 
 结论：`block-ip4-dst` 是 opt-in；默认 vpp-hev 转发路径保持可用。
 
+### 43. Android root/NFQUEUE app-process public IPv6 static dst block
+
+问题：第 36 步的 IPv6 静态 dst block 用的是 loopback `::1`。设备实际有 IPv6 路由后，需要验证公网 IPv6 目标也能被 root/NFQUEUE/VPP exact dst rule 拦截。
+
+preflight：
+
+```text
+ip -6 route:
+default via fe80::249b:8bff:fefd:87c5 dev wlan0 table 1047
+
+ping6 2606:4700:4700::1111:
+1 transmitted, 1 received, 0% packet loss
+
+app HTTP baseline:
+2606:4700:4700::1111:80 /ipv6-public -> HTTP/1.1 400 Bad Request, elapsedMs=306
+```
+
+NFQUEUE 规则：
+
+```text
+ip6tables -w -I OUTPUT 1 -p tcp -d 2606:4700:4700::1111 --dport 80 -m owner --uid-owner 12540 -j NFQUEUE --queue-num 42 --queue-bypass
+```
+
+`accept-all` 结果：
+
+```text
+app log:
+start host=2606:4700:4700::1111 port=80 path=/ip6-public-accept
+ok bytes=256 elapsedMs=396 first=HTTP/1.1 400 Bad Request ...
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip6 mode accept-all drop-ratio 50 block-uid 0 fd 12
+seen 5 accept 5 drop 0 missing-id 0
+event: uid=12540 dstIp=2606:4700:4700::1111 verdict=allow reason=mode_accept_all
+```
+
+`block-ip6-dst 2606:4700:4700::1111` 结果：
+
+```text
+app log:
+start host=2606:4700:4700::1111 port=80 path=/ip6-public-block
+fail elapsedMs=5012 error=SocketTimeoutException: failed to connect to /2606:4700:4700::1111 (port 80) from /fd76:d462:c4e3:0:871a:d43:6032:9047 ... after 5000ms
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip6 mode block-ip6-dst drop-ratio 50 block-uid 0 fd 12
+seen 3 accept 0 drop 3 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 3 rule-miss 0
+```
+
+事件样例：
+
+```json
+{"uidKnown":true,"uid":12540,"dstIp":"2606:4700:4700::1111","verdict":"block","reason":"exact_ip6_dst","ruleId":"block-ip6-dst"}
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no queue 42 ip6tables rule
+empty nfnetlink_queue
+```
+
+结论：root-mode IPv6 static dst block 不仅在 loopback 生效，也能拦截真实 app process 的公网 IPv6 TCP。第一版 IPv6 静态规则 POC 可以从 loopback 升级为实际网络结论。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
