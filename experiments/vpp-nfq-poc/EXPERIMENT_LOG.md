@@ -1807,6 +1807,81 @@ empty nfnetlink_queue
 
 结论：Android root-mode 现在同时具备真实 app process block attribution 和 allow attribution。第一版静态规则 POC 可以表达 package UID 的 allow/block 两种事件，不再只能用 `accept-all` 做匿名放行。
 
+### 36. Android root/NFQUEUE app-process IPv6 static dst block
+
+问题：真实 app 进程 + IPv6 + 静态 dst 规则是否可行？公网 IPv6 不稳定，本轮先用可控 loopback `::1` 和本地 IPv6 HTTP smoke server 验证数据面与事件归因。
+
+baseline：
+
+```text
+server: /system/bin/nc -6 -l -s ::1 -p 18080
+app HTTP probe: ::1:18080 /ipv6-baseline
+
+app log:
+ok bytes=40 elapsedMs=7 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+server log:
+GET /ipv6-baseline HTTP/1.0
+Host: ::1
+```
+
+NFQUEUE 规则：
+
+```text
+ip6tables -w -I OUTPUT 1 -p tcp -d ::1 --dport 18080 -m owner --uid-owner 12540 -j NFQUEUE --queue-num 42 --queue-bypass
+```
+
+`accept-all` 结果：
+
+```text
+app log:
+start host=::1 port=18080 path=/ip6-accept
+ok bytes=40 elapsedMs=7 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+server log:
+GET /ip6-accept HTTP/1.0
+Host: ::1
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip6 mode accept-all drop-ratio 50 block-uid 0 fd 12
+seen 5 accept 5 drop 0 missing-id 0
+event: uid=12540 dstIp=::1 verdict=allow reason=mode_accept_all
+```
+
+`block-ip6-dst ::1` 结果：
+
+```text
+app log:
+start host=::1 port=18080 path=/ip6-block
+fail elapsedMs=5013 error=SocketTimeoutException: failed to connect to /::1 (port 18080) from /::1 ... after 5000ms
+
+server log:
+empty
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip6 mode block-ip6-dst drop-ratio 50 block-uid 0 fd 12
+seen 3 accept 0 drop 3 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 3 rule-miss 0
+```
+
+事件样例：
+
+```json
+{"uidKnown":true,"uid":12540,"dstIp":"::1","verdict":"block","reason":"exact_ip6_dst","ruleId":"block-ip6-dst"}
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no nc6 server process
+no queue 42 ip6tables rule
+empty nfnetlink_queue
+```
+
+结论：IPv6 静态 dst block 在 Android root-mode 下对真实 app process 生效。第一版静态规则可以覆盖 IPv4 package UID allow/block 和 IPv6 exact-dst block；公网 IPv6 连通性另行验证，不阻塞规则语义 POC。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
