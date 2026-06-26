@@ -1565,6 +1565,78 @@ ok: experiments/vpp-nfq-poc/android/vpn-lite/build/outputs/snort-vpn-lite-debug.
 
 结论：现在有了一个真实 app 进程 HTTP generator，可以继续验证 baseline、root/NFQUEUE、VPN/VPP/HEV 三条路径，不再依赖 `su UID`。
 
+### 32. Android root/NFQUEUE app-process HTTP allow/block
+
+问题：第 30 步证明 `su <app_uid>` 不是可靠公网流量源。实际 app 进程自己发 TCP/HTTP 时，root-mode iptables owner + NFQUEUE + VPP 是否能完成 allow/block？
+
+稳定目标选择：
+
+```text
+baseline app HTTP probe:
+connectivitycheck.gstatic.com:80/generate_204 -> HTTP/1.0 204 No Content
+142.251.13.94:80/generate_204 -> HTTP/1.0 204 No Content
+93.184.216.34:80 -> connect 后 read timeout
+neverssl.com:80 -> read timeout
+```
+
+本轮使用固定 IPv4：
+
+```text
+package: com.sakamoto.snort.vpnlite
+uid: 12540
+dst: 142.251.13.94:80
+iptables: -p tcp -d 142.251.13.94 --dport 80 -m owner --uid-owner 12540 -j NFQUEUE --queue-num 42 --queue-bypass
+```
+
+`accept-all` 结果：
+
+```text
+app log:
+start host=142.251.13.94 port=80 path=/nfq-accept
+ok bytes=256 elapsedMs=695 first=HTTP/1.0 404 Not Found ...
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip4 mode accept-all drop-ratio 50 block-uid 0 fd 12
+seen 6 accept 6 drop 0 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 0 rule-miss 0
+
+event sample:
+uidKnown=true uid=12540 dstIp=142.251.13.94 verdict=allow reason=mode_accept_all ruleId=null
+```
+
+`block-uid 12540` 结果：
+
+```text
+app log:
+start host=142.251.13.94 port=80 path=/nfq-block
+fail elapsedMs=5012 error=SocketTimeoutException: failed to connect to /142.251.13.94 (port 80) from /192.168.4.151 ... after 5000ms
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip4 mode block-uid drop-ratio 50 block-uid 12540 fd 12
+seen 3 accept 0 drop 3 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 3 rule-miss 0
+
+event sample:
+uidKnown=true uid=12540 dstIp=142.251.13.94 verdict=block reason=uid_block ruleId=block-uid
+```
+
+清理验证：
+
+```text
+no vpp pid
+no queue 42 iptables rule
+empty nfnetlink_queue
+```
+
+结论：
+
+```text
+1. root-mode “package UID -> iptables owner -> NFQUEUE -> VPP verdict” 对真实 app 进程公网 TCP 生效。
+2. allow path 会放行完整 TCP/HTTP 往返；block path 会丢 SYN，app 侧表现为 connect timeout。
+3. 事件元数据能拿到 uid=12540 和 dstIp，满足第一版静态规则/用户应用归因的最小需求。
+4. allow 仍然没有 ruleId，当前只是 mode_accept_all；如果产品侧要解释“哪条 allow 规则命中”，需要新增显式 allow rule mode。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
