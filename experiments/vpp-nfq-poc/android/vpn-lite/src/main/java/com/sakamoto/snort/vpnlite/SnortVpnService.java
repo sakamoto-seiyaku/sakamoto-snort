@@ -21,6 +21,8 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_HOST = "host";
     public static final String EXTRA_PORT = "port";
     public static final String EXTRA_PATH = "path";
+    public static final String EXTRA_ALLOWED_PACKAGE = "allowedPackage";
+    public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
     public static final String MODE_VPP_FORWARD = "vpp-forward";
@@ -64,7 +66,10 @@ public final class SnortVpnService extends VpnService {
         }
 
         String mode = intent == null ? MODE_NATIVE : intent.getStringExtra(EXTRA_MODE);
-        startVpn(mode == null ? MODE_NATIVE : mode);
+        String allowedPackage = intent == null ? null : intent.getStringExtra(EXTRA_ALLOWED_PACKAGE);
+        String disallowedPackage = intent == null ? null
+                : intent.getStringExtra(EXTRA_DISALLOWED_PACKAGE);
+        startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage);
         return START_STICKY;
     }
 
@@ -74,7 +79,8 @@ public final class SnortVpnService extends VpnService {
         super.onDestroy();
     }
 
-    private synchronized void startVpn(String mode) {
+    private synchronized void startVpn(String mode, String allowedPackage,
+                                       String disallowedPackage) {
         if (MODE_HEV.equals(mode)) {
             int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
                     getFilesDir().getAbsolutePath());
@@ -99,6 +105,14 @@ public final class SnortVpnService extends VpnService {
                     .setMtu(1500)
                     .addAddress(VPN_ADDRESS, 32)
                     .addRoute("0.0.0.0", 0);
+            if (allowedPackage != null && !allowedPackage.isEmpty()) {
+                builder.addAllowedApplication(allowedPackage);
+                Log.i(TAG, "VPN allowed package=" + allowedPackage);
+            }
+            if (disallowedPackage != null && !disallowedPackage.isEmpty()) {
+                builder.addDisallowedApplication(disallowedPackage);
+                Log.i(TAG, "VPN disallowed package=" + disallowedPackage);
+            }
 
             vpnFd = builder.establish();
             if (vpnFd == null) {

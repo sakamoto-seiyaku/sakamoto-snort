@@ -2057,6 +2057,97 @@ empty nfnetlink_queue
 
 结论：package name -> UID -> JSON rule -> VPP CLI -> Android app-process HTTP block attribution 也闭环。package allow/block 两条最小规则链路都能用同一 helper 生成。
 
+### 40. Android VPN mode per-app include/exclude POC
+
+问题：root/NFQUEUE 模式可以从 NFQUEUE metadata 得到 UID；VPN/TUN 模式下 VPP 只看到 raw IP packet，没有 UID。第一版如果要在 VPN 模式做 app 粗粒度策略，需要验证 `VpnService.Builder.addAllowedApplication/addDisallowedApplication` 是否能作为 per-app 入口控制。
+
+新增 adb-only POC extras：
+
+```text
+--es allowedPackage <package>
+--es disallowedPackage <package>
+```
+
+Service 启动 VPN 时把这些 extras 传给：
+
+```text
+builder.addAllowedApplication(package)
+builder.addDisallowedApplication(package)
+```
+
+#### disallowedPackage=self
+
+命令要点：
+
+```sh
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity \
+  --ez start true --es mode vpp-hev \
+  --es disallowedPackage com.sakamoto.snort.vpnlite
+
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity \
+  --ez appHttpProbe true --es host 142.251.13.94 --ei port 80 --es path /vpn-disallowed
+```
+
+结果：
+
+```text
+app log:
+ok bytes=256 elapsedMs=620 first=HTTP/1.0 404 Not Found ...
+
+SOCKS log:
+no connect 142.251.13.94:80
+```
+
+观察：SOCKS 仍看到一个 `74.125.142.188:5228` 背景连接，说明 full-route VPN 还在处理其它系统/Google app 的流量；被排除的是本实验 app 自己。
+
+#### allowedPackage=self
+
+命令要点：
+
+```sh
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity \
+  --ez start true --es mode vpp-hev \
+  --es allowedPackage com.sakamoto.snort.vpnlite
+
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity \
+  --ez appHttpProbe true --es host 142.251.13.94 --ei port 80 --es path /vpn-allowed
+```
+
+结果：
+
+```text
+app log:
+ok bytes=40 elapsedMs=13 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+SOCKS log:
+connect 142.251.13.94:80
+GET /vpn-allowed HTTP/1.0
+```
+
+HEV log：
+
+```text
+socks5 client tcp -> [142.251.13.94]:80
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no socks5 server process
+no 41080 listener
+```
+
+结论：
+
+```text
+1. VPN mode 可以用 VpnService Builder 的 allowed/disallowed app list 做 per-app 粗粒度 include/exclude。
+2. 这不是 VPP 内部的 UID 识别；进入 TUN/VPP 后仍只有 IP packet。
+3. 因此第一版如果要“按应用”选择 VPN 代理范围，可以先用 Builder app list；如果要在 VPN 内按应用解释每个 packet 的 allow/block，仍缺 per-packet UID 来源。
+4. root/NFQUEUE 模式才是目前已验证的 UID attribution 路径。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

@@ -22,6 +22,8 @@ public final class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextView logView;
     private String pendingMode = SnortVpnService.MODE_NATIVE;
+    private String pendingAllowedPackage = "";
+    private String pendingDisallowedPackage = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -90,9 +92,13 @@ public final class MainActivity extends Activity {
     }
 
     private void startVpn(String mode) {
+        startVpn(mode, "", "");
+    }
+
+    private void startVpn(String mode, String allowedPackage, String disallowedPackage) {
         if (SnortVpnService.MODE_HEV.equals(mode)) {
             appendLog("starting HEV probe without VPN");
-            startVpnService(mode);
+            startVpnService(mode, allowedPackage, disallowedPackage);
             return;
         }
 
@@ -100,11 +106,13 @@ public final class MainActivity extends Activity {
         if (prepare != null) {
             appendLog("requesting VPN permission");
             pendingMode = mode;
+            pendingAllowedPackage = allowedPackage;
+            pendingDisallowedPackage = disallowedPackage;
             startActivityForResult(prepare, VPN_REQUEST_CODE);
             return;
         }
         appendLog("VPN permission already granted");
-        startVpnService(mode);
+        startVpnService(mode, allowedPackage, disallowedPackage);
     }
 
     private void stopVpn() {
@@ -125,9 +133,15 @@ public final class MainActivity extends Activity {
     }
 
     private void startVpnService(String mode) {
+        startVpnService(mode, "", "");
+    }
+
+    private void startVpnService(String mode, String allowedPackage, String disallowedPackage) {
         Intent intent = new Intent(this, SnortVpnService.class);
         intent.setAction(SnortVpnService.ACTION_START);
         intent.putExtra(SnortVpnService.EXTRA_MODE, mode);
+        intent.putExtra(SnortVpnService.EXTRA_ALLOWED_PACKAGE, allowedPackage);
+        intent.putExtra(SnortVpnService.EXTRA_DISALLOWED_PACKAGE, disallowedPackage);
         startService(intent);
         appendLog("service start requested: " + mode);
     }
@@ -163,7 +177,19 @@ public final class MainActivity extends Activity {
             }
             appendLog("intent start=true mode=" + mode);
             String requestedMode = mode;
-            main.postDelayed(() -> startVpn(requestedMode), 300);
+            String allowedPackage = intent.getStringExtra(SnortVpnService.EXTRA_ALLOWED_PACKAGE);
+            if (allowedPackage == null) {
+                allowedPackage = "";
+            }
+            String disallowedPackage = intent.getStringExtra(
+                    SnortVpnService.EXTRA_DISALLOWED_PACKAGE);
+            if (disallowedPackage == null) {
+                disallowedPackage = "";
+            }
+            String requestedAllowedPackage = allowedPackage;
+            String requestedDisallowedPackage = disallowedPackage;
+            main.postDelayed(() -> startVpn(requestedMode, requestedAllowedPackage,
+                    requestedDisallowedPackage), 300);
         }
     }
 
@@ -175,11 +201,13 @@ public final class MainActivity extends Activity {
         }
         if (resultCode == RESULT_OK) {
             appendLog("VPN permission granted");
-            startVpnService(pendingMode);
+            startVpnService(pendingMode, pendingAllowedPackage, pendingDisallowedPackage);
         } else {
             appendLog("VPN permission denied: result=" + resultCode);
         }
         pendingMode = SnortVpnService.MODE_NATIVE;
+        pendingAllowedPackage = "";
+        pendingDisallowedPackage = "";
     }
 
     private void appendLog(String line) {
