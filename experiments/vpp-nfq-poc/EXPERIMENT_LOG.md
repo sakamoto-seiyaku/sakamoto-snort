@@ -623,6 +623,62 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：当前 POC 插件只有一个全局 queue/family state，dual-stack app policy 不能靠连续两次 `enable` 达成。下一步需要选一个最小方案：扩展插件为两个 nfqueue handles，或者先启动两个 VPP/插件实例，或者根模式临时分阶段只验证单 family。
 
+### 15. 两个 VPP 进程分别处理 IPv4/IPv6 queue
+
+问题：不改 `nfqueue_poc` 插件的情况下，能否临时启动两个 VPP 进程，一个 bind IPv4 queue 42，一个 bind IPv6 queue 43，从而完成 dual-stack root-mode POC？
+
+做法：
+
+- 生成两份临时 startup config：
+  - `ip4`: runtime/log/cli/statseg/api prefix/shm dir 全部独立。
+  - `ip6`: runtime/log/cli/statseg/api prefix/shm dir 全部独立。
+- 两个进程都只加载 `nfqueue_poc_plugin.so`。
+- `SAKAMOTO_ANDROID_SHM_DIR` 分别指向不同目录，避免 Android shm backend 冲突。
+- `ip4` 进程：`nfqueue-poc enable queue 42 family ip4 mode accept-all`。
+- `ip6` 进程：`nfqueue-poc enable queue 43 family ip6 mode accept-all`。
+- 插入 IPv4/IPv6 owner UID 规则后分别跑 shell ping。
+
+第一次小故障：
+
+```text
+environment: line 55: $!: unbound variable
+```
+
+原因：远端启动命令里的 `echo $!` 被本地 `set -u` shell 提前展开。修正为在本地双引号里使用 `\$!` 后重跑通过。
+
+结果：
+
+```text
+processes: two vpp pids, 5197 and 5211
+vppctl show version: both OK
+ping4_rc=0
+ping6_rc=0
+/proc/net/netfilter/nfnetlink_queue:
+  queue 42 pid 5197 queued 3
+  queue 43 pid 5211 queued 3
+ip4 counters: seen=3 accept=3 drop=0
+ip6 counters: seen=3 accept=3 drop=0
+ip4 events: count4=3
+ip6 events: count6=3
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv4","proto":1,"payloadLen":84,"uidKnown":true,"uid":2000,"dstIp":"127.0.0.1","verdict":"allow","reason":"mode_accept_all","ruleId":null}
+{"type":"packet","mode":"nfq","queue":43,"packetId":1,"family":"ipv6","proto":58,"payloadLen":104,"uidKnown":true,"uid":2000,"dstIp":"::1","verdict":"allow","reason":"mode_accept_all","ruleId":null}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary queue 42/43 iptables/ip6tables rules
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：双 VPP 进程 workaround 在 Pixel 6a 上可行，可以作为不改插件时的 dual-stack POC 方案。但它会带来两个进程、两套 CLI/event/runtime 管理，长期更合理的方向仍然是扩展插件支持多个 queue/family handle。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
