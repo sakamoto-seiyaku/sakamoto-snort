@@ -272,6 +272,56 @@ event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-events.ndjson event-write-errors 
 
 结论：Android 侧更新后的 `nfqueue_poc` 可以绑定 IPv6 NFQUEUE queue 并打开 event log。下一步插入一条不冲突的窄 `ip6tables` OUTPUT rule，验证真实 IPv6 包进入 VPP。
 
+### 08. Android IPv6 loopback NFQUEUE exact block
+
+问题：Pixel 6a 上真实 IPv6 包能不能进入 VPP NFQUEUE，并由 VPP exact `/128` 规则 drop，同时输出事件？
+
+选择：
+
+- 使用 loopback `::1`，避免依赖外部 IPv6 网络。
+- 临时规则插入 OUTPUT 顶部，只匹配 `-o lo -p ipv6-icmp -d ::1`。
+- 使用 queue 42，避开 preflight 看到的现有 `sucre-snort` queue `0:7`。
+
+命令要点：
+
+```sh
+SKIP_PUSH=1 STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+vppctl nfqueue-poc enable queue 42 family ip6 mode block-ip6-dst ::1 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-ip6-loopback.ndjson
+ip6tables -w -I OUTPUT 1 -o lo -p ipv6-icmp -d ::1 -j NFQUEUE --queue-num 42 --queue-bypass
+/system/bin/ping6 -c 3 -W 1 ::1
+```
+
+第一次小故障：
+
+- 用 `ping -6` 时 Android/system ping 报 `invalid option -- 6`，VPP `seen=0`。
+- 改用 `/system/bin/ping6` 后重跑。
+
+结果：
+
+```text
+ping: 3 transmitted, 0 received
+ping_rc=1
+seen=3 accept=0 drop=3
+rule-match=3 rule-miss=0
+event-write-errors=0
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv6","proto":58,"payloadLen":104,"uidKnown":true,"uid":0,"dstIp":"::1","verdict":"block","reason":"exact_ip6_dst","ruleId":"block-ip6-dst"}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --queue-num 42 ip6tables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：Android root + VPP NFQUEUE 可以拦截真实 IPv6 包，执行 exact `/128` block，并产出 NDJSON 事件。下一步可以验证 Android app UID 维度，或先做可加载规则文件。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
