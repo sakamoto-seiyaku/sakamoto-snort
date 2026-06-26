@@ -2406,6 +2406,76 @@ no 41080 listener
 3. VPN mode 要支持 IPv6，必须单独 POC addAddress(IPv6) + addRoute(::/0) + tun/HEV IPv6 forwarding。
 ```
 
+### 45. Android VPN/VPP/HEV public IPv6 forwarding
+
+问题：第 44 步确认 IPv4-only VPN 下 allowed app 的公网 IPv6 会 `NoRouteToHost`。现在验证显式加入 IPv6 VPN address/route 后，真实 app IPv6 是否能进入 VPP/HEV/SOCKS。
+
+新增 adb-only extra：
+
+```text
+--ez enableIpv6 true
+```
+
+Service 配置：
+
+```text
+builder.addAddress("fd00:111:111::2", 128)
+builder.addRoute("::", 0)
+```
+
+验证配置：
+
+```text
+mode: vpp-hev
+allowedPackage: com.sakamoto.snort.vpnlite
+enableIpv6: true
+app HTTP probe: 2606:4700:4700::1111:80 /vpn-ip6-enabled
+SOCKS5 smoke server: 127.0.0.1:41080
+```
+
+结果：
+
+```text
+app log:
+start host=2606:4700:4700::1111 port=80 path=/vpn-ip6-enabled
+ok bytes=40 elapsedMs=10 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+SOCKS log:
+connect 2606:4700:4700::1111:80
+GET /vpn-ip6-enabled HTTP/1.0
+Host: 2606:4700:4700::1111
+
+HEV log:
+socks5 client tcp -> [2606:4700:4700::1111]:80
+```
+
+VPP counters：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 10 bytes 800 tx 4 bytes 284
+shim-rx 4 bytes 284 shim-tx 10 bytes 800
+blocked 0 bytes 0 block-ip4-dst -
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no socks5 server process
+no 41080 listener
+```
+
+结论：
+
+```text
+1. VPN/VPP/HEV 可以转发真实 app process 的公网 IPv6 TCP。
+2. 第 44 步的 NoRouteToHost 是 IPv4-only VPN 配置缺口，不是 HEV/VPP 不能处理 IPv6。
+3. VPN mode 现在有 IPv4/IPv6 forwarding POC；下一步若需要规则，应给 tun_poc 增加 IPv6 static dst block。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

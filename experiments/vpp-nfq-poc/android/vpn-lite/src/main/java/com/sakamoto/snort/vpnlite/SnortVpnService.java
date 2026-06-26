@@ -24,6 +24,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_ALLOWED_PACKAGE = "allowedPackage";
     public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
     public static final String EXTRA_BLOCK_IP4_DST = "blockIp4Dst";
+    public static final String EXTRA_ENABLE_IPV6 = "enableIpv6";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
     public static final String MODE_VPP_FORWARD = "vpp-forward";
@@ -32,6 +33,7 @@ public final class SnortVpnService extends VpnService {
 
     private static final String TAG = "SnortVpnLite";
     private static final String VPN_ADDRESS = "10.111.0.2";
+    private static final String VPN_ADDRESS_V6 = "fd00:111:111::2";
     private static final int MAX_LOGGED_PACKETS = 32;
 
     static {
@@ -71,8 +73,9 @@ public final class SnortVpnService extends VpnService {
         String disallowedPackage = intent == null ? null
                 : intent.getStringExtra(EXTRA_DISALLOWED_PACKAGE);
         String blockIp4Dst = intent == null ? null : intent.getStringExtra(EXTRA_BLOCK_IP4_DST);
+        boolean enableIpv6 = intent != null && intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
         startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage,
-                blockIp4Dst);
+                blockIp4Dst, enableIpv6);
         return START_STICKY;
     }
 
@@ -83,7 +86,8 @@ public final class SnortVpnService extends VpnService {
     }
 
     private synchronized void startVpn(String mode, String allowedPackage,
-                                       String disallowedPackage, String blockIp4Dst) {
+                                       String disallowedPackage, String blockIp4Dst,
+                                       boolean enableIpv6) {
         if (MODE_HEV.equals(mode)) {
             int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
                     getFilesDir().getAbsolutePath());
@@ -108,6 +112,11 @@ public final class SnortVpnService extends VpnService {
                     .setMtu(1500)
                     .addAddress(VPN_ADDRESS, 32)
                     .addRoute("0.0.0.0", 0);
+            if (enableIpv6) {
+                builder.addAddress(VPN_ADDRESS_V6, 128)
+                        .addRoute("::", 0);
+                Log.i(TAG, "VPN IPv6 enabled address=" + VPN_ADDRESS_V6);
+            }
             if (allowedPackage != null && !allowedPackage.isEmpty()) {
                 builder.addAllowedApplication(allowedPackage);
                 Log.i(TAG, "VPN allowed package=" + allowedPackage);

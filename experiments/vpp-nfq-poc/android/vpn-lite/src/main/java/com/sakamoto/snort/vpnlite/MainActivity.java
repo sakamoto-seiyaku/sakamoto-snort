@@ -25,6 +25,7 @@ public final class MainActivity extends Activity {
     private String pendingAllowedPackage = "";
     private String pendingDisallowedPackage = "";
     private String pendingBlockIp4Dst = "";
+    private boolean pendingEnableIpv6 = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -93,14 +94,15 @@ public final class MainActivity extends Activity {
     }
 
     private void startVpn(String mode) {
-        startVpn(mode, "", "", "");
+        startVpn(mode, "", "", "", false);
     }
 
     private void startVpn(String mode, String allowedPackage, String disallowedPackage,
-                          String blockIp4Dst) {
+                          String blockIp4Dst, boolean enableIpv6) {
         if (SnortVpnService.MODE_HEV.equals(mode)) {
             appendLog("starting HEV probe without VPN");
-            startVpnService(mode, allowedPackage, disallowedPackage, blockIp4Dst);
+            startVpnService(mode, allowedPackage, disallowedPackage, blockIp4Dst,
+                    enableIpv6);
             return;
         }
 
@@ -111,11 +113,12 @@ public final class MainActivity extends Activity {
             pendingAllowedPackage = allowedPackage;
             pendingDisallowedPackage = disallowedPackage;
             pendingBlockIp4Dst = blockIp4Dst;
+            pendingEnableIpv6 = enableIpv6;
             startActivityForResult(prepare, VPN_REQUEST_CODE);
             return;
         }
         appendLog("VPN permission already granted");
-        startVpnService(mode, allowedPackage, disallowedPackage, blockIp4Dst);
+        startVpnService(mode, allowedPackage, disallowedPackage, blockIp4Dst, enableIpv6);
     }
 
     private void stopVpn() {
@@ -136,17 +139,18 @@ public final class MainActivity extends Activity {
     }
 
     private void startVpnService(String mode) {
-        startVpnService(mode, "", "", "");
+        startVpnService(mode, "", "", "", false);
     }
 
     private void startVpnService(String mode, String allowedPackage, String disallowedPackage,
-                                 String blockIp4Dst) {
+                                 String blockIp4Dst, boolean enableIpv6) {
         Intent intent = new Intent(this, SnortVpnService.class);
         intent.setAction(SnortVpnService.ACTION_START);
         intent.putExtra(SnortVpnService.EXTRA_MODE, mode);
         intent.putExtra(SnortVpnService.EXTRA_ALLOWED_PACKAGE, allowedPackage);
         intent.putExtra(SnortVpnService.EXTRA_DISALLOWED_PACKAGE, disallowedPackage);
         intent.putExtra(SnortVpnService.EXTRA_BLOCK_IP4_DST, blockIp4Dst);
+        intent.putExtra(SnortVpnService.EXTRA_ENABLE_IPV6, enableIpv6);
         startService(intent);
         appendLog("service start requested: " + mode);
     }
@@ -195,11 +199,13 @@ public final class MainActivity extends Activity {
             if (blockIp4Dst == null) {
                 blockIp4Dst = "";
             }
+            boolean enableIpv6 = intent.getBooleanExtra(SnortVpnService.EXTRA_ENABLE_IPV6,
+                    false);
             String requestedAllowedPackage = allowedPackage;
             String requestedDisallowedPackage = disallowedPackage;
             String requestedBlockIp4Dst = blockIp4Dst;
             main.postDelayed(() -> startVpn(requestedMode, requestedAllowedPackage,
-                    requestedDisallowedPackage, requestedBlockIp4Dst), 300);
+                    requestedDisallowedPackage, requestedBlockIp4Dst, enableIpv6), 300);
         }
     }
 
@@ -212,7 +218,7 @@ public final class MainActivity extends Activity {
         if (resultCode == RESULT_OK) {
             appendLog("VPN permission granted");
             startVpnService(pendingMode, pendingAllowedPackage, pendingDisallowedPackage,
-                    pendingBlockIp4Dst);
+                    pendingBlockIp4Dst, pendingEnableIpv6);
         } else {
             appendLog("VPN permission denied: result=" + resultCode);
         }
@@ -220,6 +226,7 @@ public final class MainActivity extends Activity {
         pendingAllowedPackage = "";
         pendingDisallowedPackage = "";
         pendingBlockIp4Dst = "";
+        pendingEnableIpv6 = false;
     }
 
     private void appendLog(String line) {
