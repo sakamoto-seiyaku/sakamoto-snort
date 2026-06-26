@@ -23,6 +23,8 @@ typedef struct
   u32 shim_file_index;
   u8 block_ip4_dst_set;
   u32 block_ip4_dst;
+  u8 block_ip6_dst_set;
+  u8 block_ip6_dst[16];
   u8 *rx_buf;
 
   u64 rx_packets;

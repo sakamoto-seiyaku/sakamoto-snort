@@ -2476,6 +2476,86 @@ no 41080 listener
 3. VPN mode 现在有 IPv4/IPv6 forwarding POC；下一步若需要规则，应给 tun_poc 增加 IPv6 static dst block。
 ```
 
+### 46. Android VPN/VPP/HEV static IPv6 dst block inside tun_poc
+
+问题：第 45 步证明 VPN/VPP/HEV 能转发公网 IPv6。现在补齐 VPN mode 的 IPv6 静态 dst block。
+
+实现：
+
+```text
+tun-poc enable ... block-ip6-dst <addr>
+```
+
+和 IPv4 block 一样，只在 TUN -> shim/HEV 的 `forward-fd` 出口方向检查 dst，命中则 drop 并累加 `blocked` 计数。
+
+app 启动参数：
+
+```text
+--ez enableIpv6 true
+--es blockIp6Dst 2606:4700:4700::1111
+```
+
+native 写出的 VPP startup.exec：
+
+```text
+tun-poc enable fd 3 mode forward-fd shim-fd 4 block-ip6-dst 2606:4700:4700::1111
+show tun-poc
+```
+
+验证配置：
+
+```text
+mode: vpp-hev
+allowedPackage: com.sakamoto.snort.vpnlite
+enableIpv6: true
+blockIp6Dst: 2606:4700:4700::1111
+app HTTP probe: 2606:4700:4700::1111:80 /vpn-ip6-block
+SOCKS5 smoke server: 127.0.0.1:41080
+```
+
+结果：
+
+```text
+app log:
+start host=2606:4700:4700::1111 port=80 path=/vpn-ip6-block
+fail elapsedMs=5014 error=SocketTimeoutException: failed to connect to /2606:4700:4700::1111 (port 80) from /fd00:111:111::2 ... after 5000ms
+
+SOCKS log:
+ready only; no connect 2606:4700:4700::1111:80
+
+HEV log:
+set limit nofile
+no socks5 client tcp -> [2606:4700:4700::1111]:80
+```
+
+VPP counters：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 9 bytes 700 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 6 bytes 460
+blocked 3 bytes 240 block-ip4-dst -
+block-ip6-dst 2606:4700:4700::1111
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no socks5 server process
+no 41080 listener
+```
+
+结论：
+
+```text
+1. VPN/VPP/HEV 路径里，VPP 可以在交给 HEV 前按静态 IPv6 dst drop。
+2. VPN mode 现在具备 IPv4 和 IPv6 static dst block POC。
+3. 这仍然是 IP 规则，不是 per-packet app UID 规则；app 维度仍靠 VpnService Builder include/exclude。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

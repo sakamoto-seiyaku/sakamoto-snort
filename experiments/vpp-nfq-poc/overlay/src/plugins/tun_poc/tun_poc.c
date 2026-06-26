@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <string.h>
 #include <unistd.h>
 
 #define TUN_POC_RX_BUF_SIZE 65536
@@ -169,14 +170,35 @@ tun_poc_reflect_icmp4 (tun_poc_main_t *tm, u8 *packet, ssize_t packet_len)
 }
 
 static u8
-tun_poc_should_block_ip4_dst (tun_poc_main_t *tm, const u8 *packet,
-			      ssize_t packet_len)
+tun_poc_should_block_static_dst (tun_poc_main_t *tm, const u8 *packet,
+				 ssize_t packet_len)
 {
   const tun_poc_ip4_header_t *ip4;
   uword ihl;
   uword total_len;
+  u8 version;
 
-  if (!tm->block_ip4_dst_set)
+  if (!tm->block_ip4_dst_set && !tm->block_ip6_dst_set)
+    return 0;
+
+  if (packet_len < 1)
+    {
+      tm->short_packets++;
+      return 0;
+    }
+
+  version = packet[0] >> 4;
+  if (version == 6 && tm->block_ip6_dst_set)
+    {
+      if (packet_len < 40)
+	{
+	  tm->short_packets++;
+	  return 0;
+	}
+      return memcmp (packet + 24, tm->block_ip6_dst, 16) == 0;
+    }
+
+  if (version != 4 || !tm->block_ip4_dst_set)
     return 0;
 
   if (packet_len < (ssize_t) sizeof (*ip4))
@@ -184,13 +206,7 @@ tun_poc_should_block_ip4_dst (tun_poc_main_t *tm, const u8 *packet,
       tm->short_packets++;
       return 0;
     }
-
   ip4 = (const tun_poc_ip4_header_t *) packet;
-  if ((ip4->version_ihl >> 4) != 4)
-    {
-      tm->non_ipv4++;
-      return 0;
-    }
 
   ihl = (ip4->version_ihl & 0x0f) * 4;
   total_len = ntohs (ip4->total_length);
@@ -220,7 +236,7 @@ tun_poc_main_fd_read_ready (clib_file_t *f)
 	    tun_poc_reflect_icmp4 (tm, tm->rx_buf, rv);
 	  else if (tm->mode == TUN_POC_MODE_FORWARD_FD)
 	    {
-	      if (tun_poc_should_block_ip4_dst (tm, tm->rx_buf, rv))
+	      if (tun_poc_should_block_static_dst (tm, tm->rx_buf, rv))
 		{
 		  tm->blocked_packets++;
 		  tm->blocked_bytes += rv;
@@ -322,6 +338,8 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->mode = mode;
   tm->block_ip4_dst_set = block_ip4_dst_set;
   tm->block_ip4_dst = block_ip4_dst;
+  tm->block_ip6_dst_set = 0;
+  clib_memset (tm->block_ip6_dst, 0, sizeof (tm->block_ip6_dst));
   tm->rx_packets = 0;
   tm->rx_bytes = 0;
   tm->tx_packets = 0;
@@ -396,8 +414,11 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   int fd = -1;
   int shim_fd = -1;
   u8 *block_ip4_dst_text = 0;
+  u8 *block_ip6_dst_text = 0;
   u32 block_ip4_dst = 0;
+  u8 block_ip6_dst[16] = { 0 };
   u8 block_ip4_dst_set = 0;
+  u8 block_ip6_dst_set = 0;
 
   (void) cmd;
 
@@ -425,20 +446,39 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	  block_ip4_dst_text = 0;
 	  block_ip4_dst_set = 1;
 	}
+      else if (unformat (input, "block-ip6-dst %s", &block_ip6_dst_text))
+	{
+	  if (inet_pton (AF_INET6, (char *) block_ip6_dst_text,
+			 block_ip6_dst) != 1)
+	    {
+	      vec_free (block_ip6_dst_text);
+	      return clib_error_return (0, "invalid IPv6 address");
+	    }
+	  vec_free (block_ip6_dst_text);
+	  block_ip6_dst_text = 0;
+	  block_ip6_dst_set = 1;
+	}
       else
 	return clib_error_return (0, "unknown input `%U'",
 				  format_unformat_error, input);
     }
 
-  return tun_poc_enable (vm, fd, mode, shim_fd, block_ip4_dst_set,
-			 block_ip4_dst);
+  clib_error_t *err =
+    tun_poc_enable (vm, fd, mode, shim_fd, block_ip4_dst_set, block_ip4_dst);
+  if (!err && block_ip6_dst_set)
+    {
+      tun_poc_main.block_ip6_dst_set = 1;
+      clib_memcpy (tun_poc_main.block_ip6_dst, block_ip6_dst,
+		   sizeof (tun_poc_main.block_ip6_dst));
+    }
+  return err;
 }
 
 VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
   .path = "tun-poc enable",
   .short_help =
     "tun-poc enable fd <n> [mode count-only|reflect-icmp|forward-fd] "
-    "[shim-fd <n>] [block-ip4-dst <addr>]",
+    "[shim-fd <n>] [block-ip4-dst <addr>] [block-ip6-dst <addr>]",
   .function = tun_poc_enable_command_fn,
 };
 
@@ -466,6 +506,7 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
 {
   tun_poc_main_t *tm = &tun_poc_main;
   char block_dst[INET_ADDRSTRLEN] = "-";
+  char block_dst6[INET6_ADDRSTRLEN] = "-";
 
   (void) input;
   (void) cmd;
@@ -474,6 +515,10 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
       !inet_ntop (AF_INET, &tm->block_ip4_dst, block_dst,
 		  sizeof (block_dst)))
     block_dst[0] = '-';
+  if (tm->block_ip6_dst_set &&
+      !inet_ntop (AF_INET6, tm->block_ip6_dst, block_dst6,
+		  sizeof (block_dst6)))
+    block_dst6[0] = '-';
 
   vlib_cli_output (vm, "enabled %u fd %d shim-fd %d mode %U", tm->enabled,
 		   tm->fd, tm->shim_fd, format_tun_poc_mode, tm->mode);
@@ -485,6 +530,7 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
 		   tm->shim_tx_packets, tm->shim_tx_bytes);
   vlib_cli_output (vm, "blocked %llu bytes %llu block-ip4-dst %s",
 		   tm->blocked_packets, tm->blocked_bytes, block_dst);
+  vlib_cli_output (vm, "block-ip6-dst %s", block_dst6);
   vlib_cli_output (vm,
 		   "short %llu non-ipv4 %llu non-icmp %llu non-echo %llu",
 		   tm->short_packets, tm->non_ipv4, tm->non_icmp,
