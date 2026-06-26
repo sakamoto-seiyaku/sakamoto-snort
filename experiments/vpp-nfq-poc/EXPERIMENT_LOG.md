@@ -1009,6 +1009,42 @@ ping_rc=0
 
 结论：Docker/Linux 侧 VPP TUN fd 基础可用。后续 TUN/VPN POC 运行时必须显式传 `DOCKER_TUN_DEVICE=1`；Android VpnService/TUN 方向可以复用 `tun_poc` 的 fd 接入思路，但还没有验证 Android app 提供 TUN fd。
 
+### 22. Docker VPP TUN forward-fd smoke
+
+问题：比 reflect 更接近 VPN/app side 的模式是：VPP 从 TUN fd 收包后，把 packet 转发到另一个 userspace shim fd，再由 shim 回包。现有 `tun_poc forward-fd` 是否仍可用？
+
+命令：
+
+```sh
+DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-forward-fd-smoke
+```
+
+结果：
+
+```text
+tun ifname=tun-poc-forward tun-fd=53 shim-fd=54
+mode forward-fd
+shim observed 198.19.0.1 -> 198.19.0.2 icmp_type=8 len=84
+ping: 1 transmitted, 1 received, 0% packet loss
+after ping:
+rx 2 bytes 132
+tx 1 bytes 84
+shim-rx 1 bytes 84
+shim-tx 2 bytes 132
+parse-errors 0
+read-errors 0
+write-errors 0
+shim-read-errors 0
+shim-write-errors 0
+```
+
+观察：
+
+- 启用后先出现一个 `shim observed non-icmp packet len=48`，和 before-ping counters 的初始 packet 对应；后续真正 ICMP echo 正常。
+- 这一步只验证 Linux userspace fd bridge，不代表 Android VpnService fd 生命周期已解决。
+
+结论：VPP `tun_poc` 的 TUN fd -> shim fd -> TUN reply 路径可用。VPN mode POC 可以优先沿这个 fd bridge 思路继续推进，下一步才需要把 Android VpnService 交出的 TUN fd 接入同样模型。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
