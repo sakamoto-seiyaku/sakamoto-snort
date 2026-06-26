@@ -814,6 +814,50 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：现在已有最小控制面闭环：`package name -> UID -> JSON rule -> VPP CLI -> NFQUEUE verdict -> event`。这还不是正式 app UI，但足够支撑下一步做“列出用户应用/付费应用、选择一个 package、下发 UID 规则”的 POC。
 
+### 18. third-party package inventory JSON
+
+问题：app-first control plane 需要先列出“用户安装应用”。能不能用 Android package manager 输出第三方 package、UID 和 INTERNET 权限，供后续选择 app 下发规则？
+
+最小改动：
+
+- 增加 `scripts/android-list-user-packages-json.sh`。
+- 增加 `make android-list-user-packages-json`。
+- 数据源是 `cmd package list packages -3 -U`，逐包用 `dumpsys package` 标记 `android.permission.INTERNET: granted=true`。
+
+命令：
+
+```sh
+make android-list-user-packages-json > /tmp/sakamoto-user-packages.json
+python3 -m json.tool /tmp/sakamoto-user-packages.json
+```
+
+结果：
+
+```text
+package_count=11
+internet_count=10
+```
+
+样例输出：
+
+```json
+{
+  "schema": "sakamoto-android-user-packages-v0",
+  "source": {
+    "type": "android-package-manager",
+    "thirdPartyOnly": true
+  },
+  "packages": [
+    {"package": "com.celzero.bravedns", "uid": 12526, "internetGranted": true},
+    {"package": "com.emanuelef.remote_capture", "uid": 12532, "internetGranted": true},
+    {"package": "com.js.nowakelock", "uid": 12206, "internetGranted": false},
+    {"package": "com.sakamoto.snort.vpnlite", "uid": 12540, "internetGranted": true}
+  ]
+}
+```
+
+结论：root-mode POC 的 app selector 已有最小数据源：能列出第三方包、UID、网络权限。下一步可以把这个列表和第 17 步的 package->rule helper 连接起来，做“选择一个 package 生成规则并下发”的更完整控制面 POC。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
