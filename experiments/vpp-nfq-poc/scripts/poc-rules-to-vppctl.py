@@ -29,8 +29,8 @@ def load_single_rule(path: Path) -> tuple[dict, dict]:
         raise ValueError("rules[0] must be an object")
     if rule.get("enabled", True) is False:
         raise ValueError("POC rule must be enabled")
-    if rule.get("action", "block") != "block":
-        raise ValueError("POC supports only action=block")
+    if rule.get("action", "block") not in ("allow", "block"):
+        raise ValueError("POC supports only action=allow|block")
     return root, rule
 
 
@@ -40,15 +40,19 @@ def rule_to_cli(root: dict, rule: dict, event_log: str | None) -> list[str]:
 
     cmd = ["nfqueue-poc", "enable", "queue", str(queue), "family", family]
 
-    if "uid" in rule and "dst" not in rule:
+    action = rule.get("action", "block")
+    if "uid" not in rule and "dst" not in rule:
+        raise ValueError("POC rule needs uid or dst")
+
+    if action == "allow":
+        cmd += ["mode", "accept-all"]
+    elif "uid" in rule and "dst" not in rule:
         cmd += ["mode", "block-uid", str(int(rule["uid"]))]
     elif "dst" in rule:
         network = ipaddress.ip_network(str(rule["dst"]), strict=False)
         if network.version != 6 or network.prefixlen != 128:
             raise ValueError("POC exact dst supports only IPv6 /128")
         cmd += ["mode", "block-ip6-dst", str(network.network_address)]
-    else:
-        raise ValueError("POC rule needs uid or dst")
 
     event_log = event_log or root.get("eventLog")
     if event_log:

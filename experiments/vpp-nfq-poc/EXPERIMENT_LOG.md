@@ -907,6 +907,61 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：现在 root-mode app UID block POC 可以一条命令复现。它仍是 throwaway runner，但已经足够作为后续快速验证入口：换不同 package，就能验证 UID 选择、规则生成、VPP verdict 和事件输出是否连通。
 
+### 20. package allow action POC
+
+问题：0.2 app-first policy 不只有 block，也需要 allow。当前 JSON helper 能否支持 `action=allow`，并映射到 VPP 放行路径？
+
+最小改动：
+
+- `poc-rules-to-vppctl.py` 支持 `action=allow|block`。
+- `action=allow` 映射为 `nfqueue-poc ... mode accept-all`。
+- 仍要求规则里存在 `uid` 或 `dst` selector，避免误生成全局 allow。
+- `android-package-rules-json.sh` 的 rule id 从固定 `block-...` 改为 `${ACTION}-...`。
+
+本地输出：
+
+```text
+allow-com-sakamoto-snort-vpnlite allow
+nfqueue-poc enable queue 42 family ip4 mode accept-all event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-package-allow-vpnlite.ndjson
+```
+
+Android 实跑：
+
+```sh
+ACTION=allow make android-package-rules-json PACKAGE=com.sakamoto.snort.vpnlite
+vppctl <generated allow CLI>
+iptables -w -I OUTPUT 1 -o lo -p icmp -d 127.0.0.1 -m owner --uid-owner 12540 -j NFQUEUE --queue-num 42 --queue-bypass
+su 12540 -c /system/bin/ping -c 3 -W 1 127.0.0.1
+```
+
+结果：
+
+```text
+ping: 3 transmitted, 3 received
+ping_rc=0
+seen=3 accept=3 drop=0
+event_count=3
+uid_count=3
+allow_count=3
+block_count=0
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv4","proto":1,"payloadLen":84,"uidKnown":true,"uid":12540,"dstIp":"127.0.0.1","verdict":"allow","reason":"mode_accept_all","ruleId":null}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --uid-owner 12540 iptables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：allow 的最小行为可以用 owner rule + VPP `accept-all` 完成，包能通过并产生活动事件。限制是当前 allow event 没有 rule attribution（`ruleId=null`），后续如果 Activity/Cockpit 要解释“被哪条 allow 规则放行”，需要在插件里新增显式 allow rule mode 或 event rule id 注入。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

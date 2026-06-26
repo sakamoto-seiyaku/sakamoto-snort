@@ -44,7 +44,7 @@ if [[ "$package_dump" == *"android.permission.INTERNET: granted=true"* ]]; then
   internet_granted="true"
 fi
 
-rule_id="block-${PACKAGE//./-}"
+rule_id="$ACTION-${PACKAGE//./-}"
 
 emit_json() {
   cat <<JSON
