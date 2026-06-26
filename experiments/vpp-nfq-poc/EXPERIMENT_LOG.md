@@ -679,6 +679,60 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：双 VPP 进程 workaround 在 Pixel 6a 上可行，可以作为不改插件时的 dual-stack POC 方案。但它会带来两个进程、两套 CLI/event/runtime 管理，长期更合理的方向仍然是扩展插件支持多个 queue/family handle。
 
+### 16. 已安装 package UID block POC
+
+问题：不再使用 `shell` UID，而是从 Android package manager 取一个真实已安装 app 的 UID，能否作为 app-first policy key 被 owner rule 和 VPP `block-uid` 同时识别？
+
+选择：
+
+```text
+package=com.sakamoto.snort.vpnlite
+uid=12540
+appId=12540
+android.permission.INTERNET: granted=true
+```
+
+注意：本轮 traffic generator 是 `su 12540 -c /system/bin/ping ...`，UID 来自已安装 package，但进程不是这个 app 自身的 Activity/Service，SELinux context 仍是 KernelSU 相关上下文。这个 POC 验证 UID policy key，不等价于真实 app 发包。
+
+命令要点：
+
+```sh
+SKIP_PUSH=1 STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+vppctl nfqueue-poc enable queue 42 family ip4 mode block-uid 12540 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-ip4-vpnlite-uid-block.ndjson
+iptables -w -I OUTPUT 1 -o lo -p icmp -d 127.0.0.1 -m owner --uid-owner 12540 -j NFQUEUE --queue-num 42 --queue-bypass
+su 12540 -c /system/bin/ping -c 3 -W 1 127.0.0.1
+```
+
+结果：
+
+```text
+baseline before NFQUEUE: su 12540 ping 127.0.0.1 succeeds
+blocked run: 3 transmitted, 0 received
+ping_rc=1
+seen=3 accept=0 drop=3
+rule-match=3 rule-miss=0
+event_count=3
+uid_count=3
+block_count=3
+reason_count=3
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv4","proto":1,"payloadLen":84,"uidKnown":true,"uid":12540,"dstIp":"127.0.0.1","verdict":"block","reason":"uid_block","ruleId":"block-uid"}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --uid-owner 12540 iptables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：Android package UID 可以作为 root-mode app policy 的最小 key：package manager 能提供 UID，iptables owner rule 能按 UID queue，VPP NFQUEUE metadata 能看到同一个 UID，`block-uid` verdict 能阻断。下一步要验证真实 app 进程发包，或做从 package name 到 UID/rule 的自动化。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
