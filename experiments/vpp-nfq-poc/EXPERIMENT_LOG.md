@@ -858,6 +858,55 @@ internet_count=10
 
 结论：root-mode POC 的 app selector 已有最小数据源：能列出第三方包、UID、网络权限。下一步可以把这个列表和第 17 步的 package->rule helper 连接起来，做“选择一个 package 生成规则并下发”的更完整控制面 POC。
 
+### 19. one-command package block POC runner
+
+问题：能不能把前几步手动流程收敛成一个可重复命令，验证“选择 package -> 生成规则 -> 启动 VPP -> 安装 owner rule -> 阻断 UID 流量 -> 清理”的闭环？
+
+最小改动：
+
+- 增加 `scripts/android-run-package-block-poc.sh PACKAGE`。
+- 增加 `make android-package-block-poc PACKAGE=...`。
+- runner 内部复用：
+  - `android-package-rules-json.sh`
+  - `poc-rules-to-vppctl.py`
+  - `android-run-vpp-minimal.sh`
+  - `iptables -m owner --uid-owner <uid> -j NFQUEUE`
+  - `su <uid> -c /system/bin/ping ...`
+
+命令：
+
+```sh
+make android-package-block-poc PACKAGE=com.sakamoto.snort.vpnlite
+```
+
+结果：
+
+```text
+app_uid=12540
+generated_cli=nfqueue-poc enable queue 42 family ip4 mode block-uid 12540 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-package-block-poc.ndjson
+ping as uid 12540: 3 transmitted, 0 received
+ping_rc=1
+seen=3 accept=0 drop=3
+rule-match=3 rule-miss=0
+event_count=3 uid_count=3 block_count=3
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv4","proto":1,"payloadLen":84,"uidKnown":true,"uid":12540,"dstIp":"127.0.0.1","verdict":"block","reason":"uid_block","ruleId":"block-uid"}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --uid-owner 12540 iptables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：现在 root-mode app UID block POC 可以一条命令复现。它仍是 throwaway runner，但已经足够作为后续快速验证入口：换不同 package，就能验证 UID 选择、规则生成、VPP verdict 和事件输出是否连通。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
