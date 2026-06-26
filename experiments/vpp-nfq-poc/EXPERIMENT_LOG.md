@@ -1314,6 +1314,103 @@ dumpsys connectivity did not show active package VPN entry
 
 结论：Android VPN mode 的最小回包闭环可行：VpnService TUN fd -> app-packaged VPP `tun_poc forward-fd` -> app native shim -> TUN reply。这个 POC 不是真实转发/NAT/HEV，但证明 VPP 可以在 APK 内接 VPN fd 并参与 packet round-trip。
 
+### 28. Android VpnService fd -> packaged VPP -> HEV -> SOCKS5 HTTP
+
+问题：Android `mode=vpp-hev` 能否完成更接近 VPN 数据面的链路：VpnService TUN fd -> packaged VPP `forward-fd` -> HEV -> 127.0.0.1:41080 SOCKS5 server -> HTTP response？
+
+前置：
+
+- APK 已包含 `libhev-socks5-tunnel.so`。
+- 设备有 `/system/bin/nc`。
+- `scripts/android-socks5-smoke-server.c` 可编译为 arm64 server，监听 `127.0.0.1:41080`。
+
+小故障：
+
+```text
+1. adb push 到 /data/local/tmp/vpp-nfq-poc 失败：
+   remote couldn't create file: Permission denied
+   处理：root chmod 777 临时目录后再 push。
+
+2. 第一轮 server bind 失败：
+   bind: Address already in use
+   同时 HTTP nc 得到 Connection reset by peer。
+   处理：确认 41080 无监听后重跑。
+
+3. 清理命令 pkill -f android-socks5-smoke-server 会匹配当前 adb shell 命令行并把自己杀掉，导致脚本 exit 137。
+   处理：只用 pid 文件清理本轮 server，避免 pkill -f。
+```
+
+成功命令要点：
+
+```sh
+make android-socks5-smoke-server-build
+adb push build/android-socks5-smoke-server /data/local/tmp/vpp-nfq-poc/android-socks5-smoke-server
+adb_su "nohup /data/local/tmp/vpp-nfq-poc/android-socks5-smoke-server >... & echo $! >...pid"
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp-hev
+su 12540 -c "/system/bin/nc -4 -w 5 -W 5 93.184.216.34 80" < http-request.txt
+```
+
+HTTP 结果：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+http_rc=0
+```
+
+SOCKS5 server 观察：
+
+```text
+android socks5 smoke server ready 127.0.0.1:41080
+accepted
+greeting ok
+connect 93.184.216.34:80
+payload-len 43
+GET /probe HTTP/1.0
+Host: example.test
+```
+
+VPP counters：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 21 bytes 1662
+tx 10 bytes 520
+shim-rx 10 bytes 520
+shim-tx 21 bytes 1662
+parse-errors 0
+read-errors 0
+write-errors 0
+shim-read-errors 0
+shim-write-errors 0
+```
+
+HEV log：
+
+```text
+started VPP HEV pid=6999
+socks5 client tcp -> [93.184.216.34]:80
+```
+
+额外观察：
+
+- HEV 也转发了系统/Google 连接，如 `74.125.199.188:5228`，说明 full-route VPN 会带入背景流量。
+- 本轮没有在截取日志中看到 Docker 第 23 步那种 `free(): invalid size`，但 stop 后也没有专门检查 HEV 完整退出日志；后续仍需 teardown 专项。
+
+清理验证：
+
+```text
+force-stop com.sakamoto.snort.vpnlite
+no com.sakamoto.snort.vpnlite pid
+no vpp pid
+no 41080 listener
+no socks5 server process
+```
+
+结论：Android VPN mode 的 VPP+HEV 数据面可以完成一次真实 TCP/HTTP 往返。至此两条路线都有关键 POC：root/NFQUEUE app UID block/allow 可行，VPN/VPP/HEV fd bridge 也可行。下一步应围绕规则语义、事件归因、真实 app traffic、teardown 稳定性继续小步验证。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
