@@ -180,6 +180,45 @@ remote_root: /data/local/tmp/vpp-nfq-poc prepared
 
 结论：Pixel 6a root/NFQUEUE lane 可继续。下一步优先验证 Android 上的 VPP binary/plugin 仍可启动，再接 Android IPv6 NFQUEUE。
 
+### 06. Pixel 6a Android VPP minimal startup
+
+问题：现有 Android stage artifact 是否还能在 Pixel 6a 上启动 VPP，并通过 `vppctl` 控制？
+
+命令：
+
+```sh
+make android-vpp-minimal-release-no-multiarch-no-ipsec-idle
+```
+
+使用 stage：
+
+```text
+work/android-vpp-release-no-multiarch-no-ipsec-idle-stage
+```
+
+推送后远端体积：
+
+```text
+bin/vpp: 101K
+bin/vppctl: 10K
+lib/libvnet.so: 7.6M
+plugins/nfqueue_poc_plugin.so: 51K
+plugins/tun_poc_plugin.so: 18K
+stage total: 9.4M
+```
+
+结果：
+
+```text
+remote_root=/data/local/tmp/vpp-nfq-poc
+process: root ... S vpp
+vpp log: ***** Start: PID 3702 *****
+vppctl show version: vpp v26.02-release built by js on Main at 2026-06-22T13:45:00
+vppctl_rc=0
+```
+
+结论：Pixel 6a 上的 trimmed/no-IPsec idle VPP stage 仍可启动并接受 CLI。下一步可以用这个 remote root 继续 Android NFQUEUE POC。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
