@@ -1637,6 +1637,70 @@ empty nfnetlink_queue
 4. allow 仍然没有 ruleId，当前只是 mode_accept_all；如果产品侧要解释“哪条 allow 规则命中”，需要新增显式 allow rule mode。
 ```
 
+### 33. Android VPN/VPP/HEV app-process HTTP path
+
+问题：真实 app 进程自己发 HTTP 时，会不会进入它自己启动的 `VpnService -> packaged VPP -> HEV -> SOCKS5` 管道？还是被系统排除在 VPN 外直接走公网？
+
+配置：
+
+```text
+mode: vpp-hev
+SOCKS5 smoke server: 127.0.0.1:41080
+app HTTP probe: 142.251.13.94:80 /vpn-app
+```
+
+结果：
+
+```text
+app-http-probe.log:
+start host=142.251.13.94 port=80 path=/vpn-app
+ok bytes=40 elapsedMs=7 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+```
+
+SOCKS5 server 看到两条连接：
+
+```text
+connect 74.125.199.188:5228
+connect 142.251.13.94:80
+payload-len 65
+GET /vpn-app HTTP/1.0
+Host: 142.251.13.94
+Connection: close
+```
+
+VPP counters：
+
+```text
+enabled 1 fd 3 shim-fd 4 mode forward-fd
+rx 20 bytes 1644 tx 10 bytes 520
+shim-rx 10 bytes 520 shim-tx 20 bytes 1644
+parse-errors 0 read-errors 0 write-errors 0 shim-read-errors 0 shim-write-errors 0
+```
+
+HEV log：
+
+```text
+socks5 client tcp -> [74.125.199.188]:5228
+socks5 client tcp -> [142.251.13.94]:80
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no socks5 server process
+no 41080 listener
+```
+
+结论：
+
+```text
+1. 实验 app 自己发出的 HTTP 会进入自己建立的 VpnService/VPP/HEV 路径。
+2. 这条 VPN 路径不是只对 `su UID` synthetic generator 成立；真实 app process 也成立。
+3. full-route VPN 会携带背景 Google 长连接，如 74.125.199.188:5228；后续 POC 里需要把目标流量和背景流量区分记录。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
