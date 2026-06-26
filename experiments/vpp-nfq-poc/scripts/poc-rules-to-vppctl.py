@@ -45,7 +45,9 @@ def rule_to_cli(root: dict, rule: dict, event_log: str | None) -> list[str]:
         raise ValueError("POC rule needs uid or dst")
 
     if action == "allow":
-        cmd += ["mode", "accept-all"]
+        if "uid" not in rule or "dst" in rule:
+            raise ValueError("POC allow rule supports uid only")
+        cmd += ["mode", "allow-uid", str(int(rule["uid"]))]
     elif "uid" in rule and "dst" not in rule:
         cmd += ["mode", "block-uid", str(int(rule["uid"]))]
     elif "dst" in rule:

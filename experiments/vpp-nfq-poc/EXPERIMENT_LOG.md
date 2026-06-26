@@ -1955,6 +1955,61 @@ socks5 server process leak
 
 结论：Android `VpnService -> packaged VPP -> HEV -> SOCKS5` 对真实 app process 的 3 轮启动/HTTP/stop 循环通过。本轮仍不是压力测试结论，但足够支持下一步继续围绕规则语义和 root/VPN 模式差异做 POC。
 
+### 38. package allow JSON helper -> allow-uid attribution
+
+问题：第 20 步时 `action=allow` 只能映射到 `accept-all`，导致 allow event 没有 `ruleId`。第 34/35 步已经新增并验证 `allow-uid`，现在需要让 package rule helper 也走这条路径。
+
+改动：
+
+```text
+poc-rules-to-vppctl.py:
+  action=allow + uid -> mode allow-uid <uid>
+  allow 缺 uid 或混入 dst -> 报错
+```
+
+规则生成：
+
+```sh
+ACTION=allow FAMILY=ip4 scripts/android-package-rules-json.sh com.sakamoto.snort.vpnlite /tmp/sakamoto-vpnlite-allow-rules.json
+scripts/poc-rules-to-vppctl.py /tmp/sakamoto-vpnlite-allow-rules.json --event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-helper-allow-uid.ndjson
+```
+
+生成 CLI：
+
+```text
+nfqueue-poc enable queue 42 family ip4 mode allow-uid 12540 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-helper-allow-uid.ndjson
+```
+
+真实 app HTTP 验证：
+
+```text
+app log:
+start host=142.251.13.94 port=80 path=/helper-allow
+ok bytes=256 elapsedMs=659 first=HTTP/1.0 404 Not Found ...
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip4 mode allow-uid drop-ratio 50 block-uid 12540 fd 12
+seen 6 accept 6 drop 0 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 6 rule-miss 0
+```
+
+事件样例：
+
+```json
+{"uidKnown":true,"uid":12540,"dstIp":"142.251.13.94","verdict":"allow","reason":"uid_allow","ruleId":"allow-uid"}
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no queue 42 iptables rule
+empty nfnetlink_queue
+```
+
+结论：package name -> UID -> JSON rule -> VPP CLI -> Android app-process HTTP allow attribution 这条链路闭环。后续 app/UI 可以先基于 package UID 静态 allow/block 做第一版解释，不需要完整规则引擎。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
