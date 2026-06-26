@@ -13,7 +13,14 @@ typedef enum
   NFQUEUE_POC_MODE_ACCEPT_ALL,
   NFQUEUE_POC_MODE_DROP_ALL,
   NFQUEUE_POC_MODE_DROP_RATIO,
+  NFQUEUE_POC_MODE_BLOCK_IP6_DST,
 } nfqueue_poc_mode_t;
+
+typedef enum
+{
+  NFQUEUE_POC_FAMILY_IP4,
+  NFQUEUE_POC_FAMILY_IP6,
+} nfqueue_poc_family_t;
 
 typedef struct
 {
@@ -21,7 +28,9 @@ typedef struct
   u8 unbind_existing;
   u16 queue_num;
   nfqueue_poc_mode_t mode;
+  nfqueue_poc_family_t family;
   u32 drop_ratio;
+  u8 block_ip6_dst[16];
 
   struct nfq_handle *handle;
   struct nfq_q_handle *queue;
@@ -36,14 +45,21 @@ typedef struct
   u64 handle_errors;
   u64 recv_errors;
   u64 enobufs;
+  u64 payload_missing;
+  u64 parse_errors;
+  u64 rule_match;
+  u64 rule_miss;
 } nfqueue_poc_main_t;
 
 extern nfqueue_poc_main_t nfqueue_poc_main;
 
 clib_error_t *nfqueue_poc_enable (vlib_main_t *vm, u16 queue_num,
+				  nfqueue_poc_family_t family,
 				  nfqueue_poc_mode_t mode, u32 drop_ratio,
+				  const u8 *block_ip6_dst,
 				  u8 unbind_existing);
 void nfqueue_poc_disable (void);
 u8 *format_nfqueue_poc_mode (u8 *s, va_list *args);
+u8 *format_nfqueue_poc_family (u8 *s, va_list *args);
 
 #endif /* included_nfqueue_poc_h */

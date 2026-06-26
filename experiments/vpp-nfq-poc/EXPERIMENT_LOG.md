@@ -2,6 +2,115 @@
 
 状态：按时间顺序追加的实验流水。这里记录真实执行路径、问题和当前进度，避免后续重复踩坑。
 
+## 2026-06-26
+
+### 01. Docker IPv6 NFQUEUE plain smoke
+
+问题：不涉及 VPP 时，当前 Docker/netns NFQUEUE harness 能不能稳定 queue 和 verdict IPv6 包？
+
+最小改动：
+
+- `setup-netns.sh` 增加 `IP_FAMILY=inet6` 分支。
+- IPv6 地址固定为 `fd00:42::1/64 -> fd00:42::2/64`。
+- IPv6 规则使用 `ip6tables OUTPUT -p ipv6-icmp -d fd00:42::2 -j NFQUEUE --queue-num 42`。
+- 增加 `smoke-ipv6-accept` / `smoke-ipv6-drop` / `smoke-ipv6-ratio` 入口。
+
+命令：
+
+```sh
+./scripts/run-container.sh make smoke-ipv6-accept
+./scripts/run-container.sh make smoke-ipv6-drop
+```
+
+结果：
+
+```text
+smoke-ipv6-accept: 20 transmitted, 20 received
+smoke-ipv6-drop:   20 transmitted, 0 received
+```
+
+观察：
+
+```text
+hwproto=0x86dd
+payload_len=104
+hook=3
+uid=0 gid=0 present
+timestamp absent
+```
+
+结论：Docker IPv6 NFQUEUE 基线可用。下一步把同一条 IPv6 accept/drop 路径接到 VPP `nfqueue_poc`。
+
+### 02. VPP IPv6 NFQUEUE accept/drop
+
+问题：VPP `nfqueue_poc` 能不能绑定 IPv6 NFQUEUE 并返回 IPv6 verdict？
+
+最小改动：
+
+- `nfqueue_poc` CLI 增加 `family ip4|ip6`。
+- `family ip6` 时使用 `nfq_bind_pf(AF_INET6)`。
+- `run-vpp-nfqueue-smoke.sh` 跟随 `IP_FAMILY=inet6` 调用 `nfqueue-poc enable ... family ip6`。
+- 增加 `vpp-nfqueue-ipv6-accept` / `vpp-nfqueue-ipv6-drop` / `vpp-nfqueue-ipv6-ratio` 入口。
+
+构建：
+
+```sh
+./scripts/apply-vpp-overlay.sh
+DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env TARGET=nfqueue_poc_plugin ./scripts/build-vpp-plugin.sh
+```
+
+宿主机直接构建失败一次，原因是 `work/vpp` build tree 由容器创建，宿主机 CMake 写入时遇到权限和 git safe.directory 问题。结论：这个 lane 继续在 Docker 里构建插件。
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-ipv6-accept
+./scripts/run-container.sh make vpp-nfqueue-ipv6-drop
+```
+
+结果：
+
+```text
+vpp-nfqueue-ipv6-accept: ping 20/20, seen=20 accept=20 drop=0
+vpp-nfqueue-ipv6-drop:   ping 0/20,  seen=20 accept=0  drop=20
+handle-errors=0 recv-errors=0 enobufs=0
+```
+
+结论：VPP 侧 IPv6 NFQUEUE verdict 路径可用。下一步可以在 VPP callback 中解析 IPv6 dst，先做 hardcoded `/128` exact block。
+
+### 03. VPP IPv6 `/128` exact dst block
+
+问题：不做 JSON/规则系统，只在 VPP callback 里解析 IPv6 payload dst，能不能完成 exact `/128` block？
+
+最小改动：
+
+- `nfqueue_poc` 增加 throwaway 模式：`mode block-ip6-dst <addr>`。
+- 只检查 IPv6 header destination address：payload offset 24，长度 16。
+- 命中时 `NF_DROP`，未命中/default allow。
+- `show nfqueue-poc` 增加 `payload-missing`、`parse-errors`、`rule-match`、`rule-miss`。
+- 增加 `vpp-nfqueue-ipv6-block-peer` 和 `vpp-nfqueue-ipv6-block-miss`。
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-nfqueue-ipv6-block-peer
+./scripts/run-container.sh make vpp-nfqueue-ipv6-block-miss
+```
+
+结果：
+
+```text
+block fd00:42::2:  ping 0/20,  seen=20 accept=0  drop=20 rule-match=20 rule-miss=0
+block fd00:42::99: ping 20/20, seen=20 accept=20 drop=0  rule-match=0  rule-miss=20
+```
+
+小故障：
+
+- 第一次 miss 验证成功但脚本打印 `integer expression expected`，原因是 VPP CLI 输出带 CR，shell 解析 `rule_miss` 时未清理。
+- 已在 runner 里对解析出的 counter 做数字过滤后重跑通过。
+
+结论：VPP callback 层可以完成最小 IPv6 exact `/128` 判定。下一步再做可加载规则文件或事件输出。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
