@@ -1092,6 +1092,53 @@ free(): invalid size
 
 结论：Docker/Linux 侧 TUN -> VPP forward-fd -> HEV -> SOCKS5 的数据面可以跑通一次 HTTP probe。这给 VPN mode 一个可继续探索的方向；当前主要风险是 HEV teardown 内存错误，以及 Android VpnService fd 尚未接入验证。
 
+### 24. HEV socketpair probe teardown comparison
+
+问题：第 23 步的 `free(): invalid size` 是否能在更小的 HEV socketpair-only probe 中复现？如果不能，问题可能和 VPP/TUN/forward-fd 集成 teardown 有关。
+
+第一次运行：
+
+```sh
+./scripts/run-container.sh make hev-socketpair-probe
+```
+
+数据面通过，但 runner 出现日志权限问题：
+
+```text
+tee: .../results/hev-socketpair-probe.log: Permission denied
+SOCKS event: greeting
+SOCKS event: connect 93.184.216.34:80
+SOCKS event: payload GET /probe HTTP/1.0
+HEV exitcode: -15
+response payload: HTTP/1.0 200 OK ... OK
+```
+
+修正：
+
+```text
+scripts/run-hev-socketpair-probe.sh: tee 前 rm -f 旧 log，避免 stale log 权限影响重复运行。
+```
+
+重跑结果：
+
+```text
+packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x12 len=0
+packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x10 len=0
+packet 93.184.216.34:80 -> 10.0.0.2:42424 flags=0x18 len=40
+SOCKS event: greeting
+SOCKS event: connect 93.184.216.34:80
+SOCKS event: payload GET /probe HTTP/1.0
+HEV exitcode: -15
+response payload: HTTP/1.0 200 OK ... OK
+```
+
+观察：
+
+- socketpair-only HEV probe 没有出现 `free(): invalid size`。
+- HEV 是被 SIGTERM 结束，exitcode `-15` 属于当前 probe 的预期清理方式。
+
+结论：HEV 本身在更小 socketpair probe 中可完成 HTTP payload 往返；第 23 步 allocator 错误更可能和 TUN/VPP forward-fd 集成或 teardown 顺序相关，需要后续单独最小化。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

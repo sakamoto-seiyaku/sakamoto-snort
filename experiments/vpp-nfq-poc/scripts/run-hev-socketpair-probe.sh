@@ -13,6 +13,7 @@ if [ ! -f "$HEV_DIR/bin/libhev-socks5-tunnel.so" ]; then
 fi
 
 mkdir -p "$LOG_DIR"
+rm -f "$LOG"
 exec > >(tee "$LOG") 2>&1
 
 export LD_LIBRARY_PATH="$HEV_DIR/bin:$HEV_DIR/third-part/yaml/bin:$HEV_DIR/third-part/lwip/bin:$HEV_DIR/third-part/hev-task-system/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
