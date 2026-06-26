@@ -1746,6 +1746,67 @@ event_count=20
 
 结论：VPP 插件现在可以给 allow verdict 输出明确 rule attribution。下一步需要把 Android/root-mode 使用的 staged plugin 更新后，用真实 app HTTP 再跑一遍 `allow-uid 12540`。
 
+### 35. Android root/NFQUEUE app-process allow-uid attribution
+
+问题：第 34 步只在 Docker/netns 上证明了 `allow-uid`。Android root-mode、真实 app 进程、真实公网 TCP 下，更新后的 staged plugin 是否同样能输出 allow rule attribution？
+
+构建/推送：
+
+```sh
+BUILD_DIR=work/vpp-android-release-no-multiarch-no-ipsec-idle \
+  TARGET=nfqueue_poc_plugin \
+  scripts/android-build-vpp-probe.sh
+
+BUILD_DIR=work/vpp-android-release-no-multiarch-no-ipsec-idle \
+  STAGE_DIR=work/android-vpp-release-no-multiarch-no-ipsec-idle-stage \
+  scripts/android-stage-vpp-core.sh
+
+BUILD_DIR=work/vpp-android-release-no-multiarch-no-ipsec-idle \
+  STAGE_DIR=work/android-vpp-release-no-multiarch-no-ipsec-idle-stage \
+  scripts/android-push-vpp-core.sh
+```
+
+验证配置：
+
+```text
+package: com.sakamoto.snort.vpnlite
+uid: 12540
+dst: 142.251.13.94:80
+iptables: -p tcp -d 142.251.13.94 --dport 80 -m owner --uid-owner 12540 -j NFQUEUE --queue-num 42 --queue-bypass
+VPP: nfqueue-poc enable queue 42 family ip4 mode allow-uid 12540 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-app-http-allow-uid.ndjson
+```
+
+结果：
+
+```text
+app log:
+start host=142.251.13.94 port=80 path=/allow-uid
+ok bytes=256 elapsedMs=631 first=HTTP/1.0 404 Not Found ...
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip4 mode allow-uid drop-ratio 50 block-uid 12540 fd 12
+seen 6 accept 6 drop 0 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 6 rule-miss 0
+event-write-errors 0
+```
+
+事件样例：
+
+```json
+{"uidKnown":true,"uid":12540,"dstIp":"142.251.13.94","verdict":"allow","reason":"uid_allow","ruleId":"allow-uid"}
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no queue 42 iptables rule
+empty nfnetlink_queue
+```
+
+结论：Android root-mode 现在同时具备真实 app process block attribution 和 allow attribution。第一版静态规则 POC 可以表达 package UID 的 allow/block 两种事件，不再只能用 `accept-all` 做匿名放行。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
