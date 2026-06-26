@@ -733,6 +733,87 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：Android package UID 可以作为 root-mode app policy 的最小 key：package manager 能提供 UID，iptables owner rule 能按 UID queue，VPP NFQUEUE metadata 能看到同一个 UID，`block-uid` verdict 能阻断。下一步要验证真实 app 进程发包，或做从 package name 到 UID/rule 的自动化。
 
+### 17. package name -> rules JSON -> VPP CLI -> UID block
+
+问题：用户选择的是 app/package，不是 UID。能不能先做一个薄的 host-side helper，把 Android package name 解析成当前 POC JSON policy，再复用 `poc-rules-to-vppctl.py` 生成 VPP CLI 并完成阻断？
+
+最小改动：
+
+- 增加 `scripts/android-package-rules-json.sh PACKAGE [OUT_JSON]`。
+- 增加 `make android-package-rules-json PACKAGE=...`。
+- helper 通过 `cmd package list packages -U` 取 UID，通过 `dumpsys package` 标记 `INTERNET` 是否 granted。
+- 输出仍是现有 POC schema，VPP 侧不新增 JSON parser。
+
+小故障和修正：
+
+```text
+1. Make target 默认 echo recipe，导致重定向出的 JSON 第一行是命令文本。
+   修正：target recipe 改为 @./scripts/android-package-rules-json.sh ...
+
+2. 脚本用 dumpsys | tr | grep -q，在 set -o pipefail 下被 grep -q 的提前退出影响，
+   INTERNET granted 被误判为 false。
+   修正：先收完整 dumpsys 到变量，再用 shell pattern 判断。
+```
+
+本地输出：
+
+```json
+{
+  "schema": "sakamoto-vpp-poc-rules-v0",
+  "source": {
+    "type": "android-package",
+    "package": "com.sakamoto.snort.vpnlite",
+    "uid": 12540,
+    "internetGranted": true
+  },
+  "queue": 42,
+  "family": "ip4",
+  "rules": [
+    {
+      "id": "block-com-sakamoto-snort-vpnlite",
+      "enabled": true,
+      "action": "block",
+      "uid": 12540,
+      "package": "com.sakamoto.snort.vpnlite"
+    }
+  ]
+}
+```
+
+生成的 VPP CLI：
+
+```text
+nfqueue-poc enable queue 42 family ip4 mode block-uid 12540 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-package-json-vpnlite.ndjson
+```
+
+Android 实跑结果：
+
+```text
+ping as uid 12540: 3 transmitted, 0 received
+ping_rc=1
+seen=3 accept=0 drop=3
+rule-match=3 rule-miss=0
+event_count=3
+uid_count=3
+block_count=3
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv4","proto":1,"payloadLen":84,"uidKnown":true,"uid":12540,"dstIp":"127.0.0.1","verdict":"block","reason":"uid_block","ruleId":"block-uid"}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --uid-owner 12540 iptables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：现在已有最小控制面闭环：`package name -> UID -> JSON rule -> VPP CLI -> NFQUEUE verdict -> event`。这还不是正式 app UI，但足够支撑下一步做“列出用户应用/付费应用、选择一个 package、下发 UID 规则”的 POC。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
