@@ -429,6 +429,68 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：Android root NFQUEUE + VPP 可以实现最小 UID-level block。这是 0.2 app 默认 block/allow 的核心可行性信号；下一步应把临时 CLI mode 替换为可加载 policy 文件，或用真实 app UID 验证非 shell app 流量。
 
+### 11. JSON policy helper -> VPP CLI -> Android UID block
+
+问题：不先在 VPP 插件里嵌 JSON parser，只用 host-side helper 把最小 policy 文件转成现有 `nfqueue-poc` CLI，能不能完成一次可记录的规则文件闭环？
+
+最小改动：
+
+- 增加 `configs/rules-block-shell-uid.json`，描述 queue 42 / ip6 / block uid 2000。
+- 增加 `scripts/poc-rules-to-vppctl.py`，只支持 POC 单条 enabled block rule。
+- 增加 `make poc-rules-cli-check`，先验证 JSON -> CLI 输出稳定。
+
+本地 helper 验证：
+
+```sh
+make poc-rules-cli-check
+```
+
+输出：
+
+```text
+nfqueue-poc enable queue 42 family ip6 mode block-uid 2000 event-log /tmp/sakamoto-events.ndjson
+```
+
+Android 实跑命令要点：
+
+```sh
+SKIP_PUSH=1 STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+./scripts/poc-rules-to-vppctl.py configs/rules-block-shell-uid.json \
+  --event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-json-block-uid-shell.ndjson
+vppctl <generated_cli>
+ip6tables -w -I OUTPUT 1 -o lo -p ipv6-icmp -d ::1 -j NFQUEUE --queue-num 42 --queue-bypass
+adb shell /system/bin/ping6 -c 3 -W 1 ::1
+```
+
+结果：
+
+```text
+generated_cli=nfqueue-poc enable queue 42 family ip6 mode block-uid 2000 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-json-block-uid-shell.ndjson
+adb shell id: uid=2000(shell)
+ping: 3 transmitted, 0 received
+ping_rc=1
+seen=3 accept=0 drop=3
+rule-match=3 rule-miss=0
+event-write-errors=0
+event_count=3
+```
+
+事件样例：
+
+```json
+{"type":"packet","mode":"nfq","queue":42,"packetId":1,"family":"ipv6","proto":58,"payloadLen":104,"uidKnown":true,"uid":2000,"dstIp":"::1","verdict":"block","reason":"uid_block","ruleId":"block-uid"}
+```
+
+清理验证：
+
+```text
+no vpp process
+no temporary --queue-num 42 ip6tables rule
+empty /proc/net/netfilter/nfnetlink_queue
+```
+
+结论：当前不用改 VPP policy loader，也可以先把 “规则文件 -> VPP CLI -> NFQUEUE verdict -> NDJSON event” 串起来。这个 POC 足够支撑下一步继续做更像 app policy 的文件形状，或者换成真实 app UID / Wi-Fi 路径验证。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

@@ -1,0 +1,13 @@
+{
+  "schema": "sakamoto-vpp-poc-rules-v0",
+  "queue": 42,
+  "family": "ip6",
+  "rules": [
+    {
+      "id": "block-shell-uid",
+      "enabled": true,
+      "action": "block",
+      "uid": 2000
+    }
+  ]
+}
