@@ -16,6 +16,8 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN data path | App traffic enters `VpnService -> packaged VPP -> HEV -> SOCKS5`. | Experiment 33 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
+| VPN IPv6 forwarding | `enableIpv6` adds IPv6 address/route and HEV forwards public IPv6. | Experiment 45 |
+| VPN static IPv6 dst block | `tun-poc block-ip6-dst` drops app IPv6 traffic before HEV. | Experiment 46 |
 | VPN no-block regression | Default `vpp-hev` forwarding still works after adding static block. | Experiment 42 |
 | VPN teardown loop | 3 start/HTTP/stop cycles completed without HEV fatal pattern or VPP leak. | Experiment 37 |
 
@@ -31,7 +33,6 @@ remain in `EXPERIMENT_LOG.md`.
 ## Known Gaps
 
 - VPN mode per-packet app attribution is not solved.
-- IPv6 in VPN mode has not been validated; current VPN setup is IPv4 route only.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.
