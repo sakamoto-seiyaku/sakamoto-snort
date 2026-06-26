@@ -322,6 +322,52 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：Android root + VPP NFQUEUE 可以拦截真实 IPv6 包，执行 exact `/128` block，并产出 NDJSON 事件。下一步可以验证 Android app UID 维度，或先做可加载规则文件。
 
+### 09. Android IPv6 NFQUEUE shell UID metadata
+
+问题：Android NFQUEUE metadata 能否为非 root 进程提供 UID，作为 app-first policy 的基础？
+
+选择：
+
+- 仍使用 loopback `::1` 和临时 queue 42。
+- VPP 用 `accept-all`，避免 block 干扰 UID 观察。
+- 流量由非 root `shell` 用户执行 `/system/bin/ping6`。
+
+命令要点：
+
+```sh
+SKIP_PUSH=1 STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+vppctl nfqueue-poc enable queue 42 family ip6 mode accept-all event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-ip6-shell-uid.ndjson
+ip6tables -w -I OUTPUT 1 -o lo -p ipv6-icmp -d ::1 -j NFQUEUE --queue-num 42 --queue-bypass
+adb shell /system/bin/ping6 -c 3 -W 1 ::1
+```
+
+结果：
+
+```text
+adb shell id: uid=2000(shell)
+ping: 3 transmitted, 3 received
+seen=6 accept=6 drop=0
+event-write-errors=0
+```
+
+事件观察：
+
+```json
+{"uidKnown":true,"uid":2000,"dstIp":"::1","verdict":"allow"}
+{"uidKnown":false,"uid":null,"dstIp":"::1","verdict":"allow"}
+{"uidKnown":true,"uid":2000,"dstIp":"::1","verdict":"allow"}
+{"uidKnown":false,"uid":null,"dstIp":"::1","verdict":"allow"}
+{"uidKnown":true,"uid":2000,"dstIp":"::1","verdict":"allow"}
+{"uidKnown":false,"uid":null,"dstIp":"::1","verdict":"allow"}
+```
+
+判断：
+
+- shell 发起的 IPv6 loopback 请求有 UID=2000。
+- 同一次 loopback ping 产生 6 个 OUTPUT 事件，3 个有 UID、3 个无 UID；后者大概率是 loopback paired direction/artifact，需要后续按 direction/hook/iface 做更清晰区分。
+
+结论：Android root NFQUEUE 可以提供 UID metadata，足够继续 app UID policy POC；但 loopback 场景会混入 uidUnknown 包，真实 app/Wi-Fi/Mobile 规则要单独验证。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
