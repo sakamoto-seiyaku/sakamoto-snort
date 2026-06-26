@@ -219,6 +219,59 @@ vppctl_rc=0
 
 结论：Pixel 6a 上的 trimmed/no-IPsec idle VPP stage 仍可启动并接受 CLI。下一步可以用这个 remote root 继续 Android NFQUEUE POC。
 
+### 07. Android nfqueue_poc family/event rebuild + CLI check
+
+问题：今天新增的 `family ip6` 和 `event-log` 代码能否交叉编译到 Android，并在 Pixel 6a 上被 VPP CLI 接受？
+
+构建：
+
+```sh
+./scripts/apply-vpp-overlay.sh
+./scripts/apply-vpp-android-overlay.sh
+make android-vpp-build-release-no-multiarch-no-ipsec-idle
+```
+
+结果：
+
+```text
+target=vpp build_rc=0
+target=nfqueue_poc_plugin build_rc=0
+Android nfqueue_poc_plugin.so linked
+```
+
+推送/启动：
+
+```sh
+BUILD_DIR=work/vpp-android-release-no-multiarch-no-ipsec-idle \
+STAGE_DIR=work/android-vpp-release-no-multiarch-no-ipsec-idle-stage \
+STOP_AFTER=0 ./scripts/android-run-vpp-minimal.sh
+```
+
+更新后远端插件：
+
+```text
+/data/local/tmp/vpp-nfq-poc/plugins/nfqueue_poc_plugin.so: 55K
+```
+
+CLI 验证：
+
+```sh
+vppctl nfqueue-poc enable queue 42 family ip6 mode accept-all event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-events.ndjson
+vppctl show nfqueue-poc
+cat /proc/net/netfilter/nfnetlink_queue
+vppctl nfqueue-poc disable
+```
+
+结果：
+
+```text
+enabled 1 queue 42 family ip6 mode accept-all drop-ratio 50 fd 12
+event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-events.ndjson event-write-errors 0
+/proc/net/netfilter/nfnetlink_queue: 42 ... pid 3777 ...
+```
+
+结论：Android 侧更新后的 `nfqueue_poc` 可以绑定 IPv6 NFQUEUE queue 并打开 event log。下一步插入一条不冲突的窄 `ip6tables` OUTPUT rule，验证真实 IPv6 包进入 VPP。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
