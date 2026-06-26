@@ -962,6 +962,53 @@ empty /proc/net/netfilter/nfnetlink_queue
 
 结论：allow 的最小行为可以用 owner rule + VPP `accept-all` 完成，包能通过并产生活动事件。限制是当前 allow event 没有 rule attribution（`ruleId=null`），后续如果 Activity/Cockpit 要解释“被哪条 allow 规则放行”，需要在插件里新增显式 allow rule mode 或 event rule id 注入。
 
+### 21. Docker VPP TUN reflect smoke
+
+问题：VPN/TUN 方向先不碰 Android app，先确认现有 Docker/Linux `tun_poc` 基础是否仍可运行：VPP 能否接收 TUN fd 上的 IPv4 ICMP，并反射 echo reply？
+
+第一次运行：
+
+```sh
+./scripts/run-container.sh make vpp-tun-poc-smoke
+```
+
+失败：
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: '/dev/net/tun'
+VPP exited before CLI socket appeared
+```
+
+原因：`run-container.sh` 默认不把宿主 `/dev/net/tun` 传进容器。
+
+宿主确认：
+
+```text
+/dev/net/tun exists, character special file, mode 0666
+```
+
+重跑：
+
+```sh
+DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-poc-smoke
+```
+
+结果：
+
+```text
+enable command: tun-poc enable fd 3 mode reflect-icmp
+ping -I tun-poc0 -c 5 -W 1 198.18.0.2
+5 packets transmitted, 5 received, 0% packet loss
+rx 7 bytes 516
+tx 5 bytes 420
+parse-errors 0
+read-errors 0
+write-errors 0
+ping_rc=0
+```
+
+结论：Docker/Linux 侧 VPP TUN fd 基础可用。后续 TUN/VPN POC 运行时必须显式传 `DOCKER_TUN_DEVICE=1`；Android VpnService/TUN 方向可以复用 `tun_poc` 的 fd 接入思路，但还没有验证 Android app 提供 TUN fd。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
