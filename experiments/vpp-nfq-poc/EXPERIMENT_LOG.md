@@ -2010,6 +2010,53 @@ empty nfnetlink_queue
 
 结论：package name -> UID -> JSON rule -> VPP CLI -> Android app-process HTTP allow attribution 这条链路闭环。后续 app/UI 可以先基于 package UID 静态 allow/block 做第一版解释，不需要完整规则引擎。
 
+### 39. package block JSON helper -> real app-process block
+
+问题：第 38 步闭合了 package allow helper。为了对称验证第一版 package 静态规则，block 也需要走 package JSON helper，而不是手写 CLI。
+
+规则生成：
+
+```sh
+ACTION=block FAMILY=ip4 scripts/android-package-rules-json.sh com.sakamoto.snort.vpnlite /tmp/sakamoto-vpnlite-block-rules.json
+scripts/poc-rules-to-vppctl.py /tmp/sakamoto-vpnlite-block-rules.json --event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-helper-block-uid.ndjson
+```
+
+生成 CLI：
+
+```text
+nfqueue-poc enable queue 42 family ip4 mode block-uid 12540 event-log /data/local/tmp/vpp-nfq-poc/logs/nfq-helper-block-uid.ndjson
+```
+
+真实 app HTTP 验证：
+
+```text
+app log:
+start host=142.251.13.94 port=80 path=/helper-block
+fail elapsedMs=5013 error=SocketTimeoutException: failed to connect to /142.251.13.94 (port 80) from /192.168.4.151 ... after 5000ms
+
+show nfqueue-poc:
+enabled 1 queue 42 family ip4 mode block-uid drop-ratio 50 block-uid 12540 fd 12
+seen 3 accept 0 drop 3 missing-id 0
+payload-missing 0 parse-errors 0 rule-match 3 rule-miss 0
+```
+
+事件样例：
+
+```json
+{"uidKnown":true,"uid":12540,"dstIp":"142.251.13.94","verdict":"block","reason":"uid_block","ruleId":"block-uid"}
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no queue 42 iptables rule
+empty nfnetlink_queue
+```
+
+结论：package name -> UID -> JSON rule -> VPP CLI -> Android app-process HTTP block attribution 也闭环。package allow/block 两条最小规则链路都能用同一 helper 生成。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
