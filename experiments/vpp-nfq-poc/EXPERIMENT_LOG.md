@@ -1882,6 +1882,79 @@ empty nfnetlink_queue
 
 结论：IPv6 静态 dst block 在 Android root-mode 下对真实 app process 生效。第一版静态规则可以覆盖 IPv4 package UID allow/block 和 IPv6 exact-dst block；公网 IPv6 连通性另行验证，不阻塞规则语义 POC。
 
+### 37. Android VPN/VPP/HEV app-process HTTP 3-cycle loop
+
+问题：单次 `vpp-hev` stop 没有复现 Docker 里的 `free(): invalid size`，但还需要小循环验证启动、真实 app HTTP、stop、清理是否能连续跑。
+
+新增：
+
+```text
+scripts/android-run-vpp-hev-app-http-loop.sh
+默认 CYCLES=3
+每轮:
+  1. force-stop app
+  2. start mode=vpp-hev
+  3. app process HTTP probe -> 142.251.13.94:80 /loop-N
+  4. 检查 app 收到 SOCKS smoke server 的 HTTP/1.0 200 OK
+  5. stop intent
+  6. 检查 HEV log 无 free()/Fatal signal/SIGABRT
+  7. force-stop 后检查无 vpp 残留
+```
+
+同时把 `android-socks5-smoke-server` 的 accept 上限从 8 提到 32，避免循环中背景 Google 连接提前耗尽 server quota。
+
+命令：
+
+```sh
+scripts/android-run-vpp-hev-app-http-loop.sh
+```
+
+结果：
+
+```text
+cycle 1:
+  app HTTP -> HTTP/1.0 200 OK, elapsedMs=10
+  socks_connect_count=1
+  vpp monitor stop
+  HEV: socks5 client tcp -> [142.251.13.94]:80
+  cycle 1 ok
+
+cycle 2:
+  app HTTP -> HTTP/1.0 200 OK, elapsedMs=10
+  socks_connect_count=2
+  vpp monitor stop
+  HEV: socks5 client tcp -> [142.251.13.94]:80
+  cycle 2 ok
+
+cycle 3:
+  app HTTP -> HTTP/1.0 200 OK, elapsedMs=10
+  socks_connect_count=3
+  vpp monitor stop
+  HEV: socks5 client tcp -> [142.251.13.94]:80
+  cycle 3 ok
+```
+
+SOCKS server 最终日志包含：
+
+```text
+GET /loop-1 HTTP/1.0
+GET /loop-2 HTTP/1.0
+GET /loop-3 HTTP/1.0
+```
+
+未观察到：
+
+```text
+free(): invalid size
+Fatal signal
+SIGABRT
+vpp process leak
+socks5 server process leak
+41080 listener leak
+```
+
+结论：Android `VpnService -> packaged VPP -> HEV -> SOCKS5` 对真实 app process 的 3 轮启动/HTTP/stop 循环通过。本轮仍不是压力测试结论，但足够支持下一步继续围绕规则语义和 root/VPN 模式差异做 POC。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档

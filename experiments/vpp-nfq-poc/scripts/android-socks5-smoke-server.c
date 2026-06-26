@@ -172,7 +172,7 @@ int main (void)
     }
 
   log_now ("android socks5 smoke server ready 127.0.0.1:41080");
-  for (int i = 0; i < 8; i++)
+  for (int i = 0; i < 32; i++)
     {
       int fd = accept (server, NULL, NULL);
       if (fd < 0)
