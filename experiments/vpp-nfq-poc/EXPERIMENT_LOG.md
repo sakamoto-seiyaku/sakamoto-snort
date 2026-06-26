@@ -147,6 +147,39 @@ event_count=20
 
 结论：VPP POC 可以产出基础 Activity 事件。下一步可以做最小 `rules` 加载，或先把 Android root NFQ 也验证到 UID/event。
 
+### 05. Pixel 6a Android preflight
+
+问题：当前连接的 Pixel 6a 是否可以继续 Android root / NFQUEUE / VPP POC？
+
+命令：
+
+```sh
+make android-preflight
+```
+
+结果：
+
+```text
+adb_serial=28201JEGR0XPAJ
+root: uid=0(root) gid=0(root) context=u:r:ksu:s0
+abi: arm64-v8a
+sdk/release/model: 36 / 16 / Pixel 6a
+selinux: Enforcing
+iptables: v1.8.11 legacy
+ip6tables: v1.8.11 legacy
+NFQUEUE target help: present
+remote_root: /data/local/tmp/vpp-nfq-poc prepared
+```
+
+重要观察：
+
+- 设备上已经存在 `sucre-snort_INPUT` / `sucre-snort_OUTPUT` NFQUEUE chains。
+- IPv4 queue balance: `0:1` input, `2:3` output。
+- IPv6 queue balance: `4:5` input, `6:7` output。
+- 下一步 Android NFQ POC 应使用不冲突的窄队列，或先显式记录/清理旧链，避免误判。
+
+结论：Pixel 6a root/NFQUEUE lane 可继续。下一步优先验证 Android 上的 VPP binary/plugin 仍可启动，再接 Android IPv6 NFQUEUE。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
