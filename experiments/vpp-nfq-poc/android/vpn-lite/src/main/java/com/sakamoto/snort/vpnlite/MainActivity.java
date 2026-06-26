@@ -114,6 +114,16 @@ public final class MainActivity extends Activity {
         startService(intent);
     }
 
+    private void startAppHttpProbe(String host, int port, String path) {
+        Intent intent = new Intent(this, SnortVpnService.class);
+        intent.setAction(SnortVpnService.ACTION_HTTP_PROBE);
+        intent.putExtra(SnortVpnService.EXTRA_HOST, host);
+        intent.putExtra(SnortVpnService.EXTRA_PORT, port);
+        intent.putExtra(SnortVpnService.EXTRA_PATH, path);
+        startService(intent);
+        appendLog("app HTTP probe requested: " + host + ":" + port + path);
+    }
+
     private void startVpnService(String mode) {
         Intent intent = new Intent(this, SnortVpnService.class);
         intent.setAction(SnortVpnService.ACTION_START);
@@ -127,6 +137,23 @@ public final class MainActivity extends Activity {
             appendLog("intent stop=true");
             main.postDelayed(this::stopVpn, 300);
             return;
+        }
+
+        if (intent != null && intent.getBooleanExtra("appHttpProbe", false)) {
+            String host = intent.getStringExtra(SnortVpnService.EXTRA_HOST);
+            if (host == null || host.isEmpty()) {
+                host = "93.184.216.34";
+            }
+            int port = intent.getIntExtra(SnortVpnService.EXTRA_PORT, 80);
+            String path = intent.getStringExtra(SnortVpnService.EXTRA_PATH);
+            if (path == null || path.isEmpty()) {
+                path = "/";
+            }
+            String requestedHost = host;
+            String requestedPath = path;
+            appendLog("intent appHttpProbe=true host=" + host + " port=" + port
+                    + " path=" + path);
+            main.postDelayed(() -> startAppHttpProbe(requestedHost, port, requestedPath), 300);
         }
 
         if (intent != null && intent.getBooleanExtra("start", false)) {

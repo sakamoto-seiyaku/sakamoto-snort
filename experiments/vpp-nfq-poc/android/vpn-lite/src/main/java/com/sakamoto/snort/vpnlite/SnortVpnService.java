@@ -5,12 +5,22 @@ import android.net.VpnService;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
+import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 
 public final class SnortVpnService extends VpnService {
     public static final String ACTION_START = "com.sakamoto.snort.vpnlite.START";
     public static final String ACTION_STOP = "com.sakamoto.snort.vpnlite.STOP";
+    public static final String ACTION_HTTP_PROBE = "com.sakamoto.snort.vpnlite.HTTP_PROBE";
     public static final String EXTRA_MODE = "mode";
+    public static final String EXTRA_HOST = "host";
+    public static final String EXTRA_PORT = "port";
+    public static final String EXTRA_PATH = "path";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
     public static final String MODE_VPP_FORWARD = "vpp-forward";
@@ -46,6 +56,10 @@ public final class SnortVpnService extends VpnService {
         if (ACTION_STOP.equals(action)) {
             stopVpn();
             stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_HTTP_PROBE.equals(action)) {
+            startHttpProbe(intent);
             return START_NOT_STICKY;
         }
 
@@ -113,6 +127,74 @@ public final class SnortVpnService extends VpnService {
         } catch (Exception e) {
             Log.e(TAG, "startVpn failed", e);
             stopVpn();
+        }
+    }
+
+    private void startHttpProbe(Intent intent) {
+        String host = intent == null ? null : intent.getStringExtra(EXTRA_HOST);
+        if (host == null || host.isEmpty()) {
+            host = "93.184.216.34";
+        }
+        int port = intent == null ? 80 : intent.getIntExtra(EXTRA_PORT, 80);
+        String path = intent == null ? null : intent.getStringExtra(EXTRA_PATH);
+        if (path == null || path.isEmpty()) {
+            path = "/";
+        }
+        if (!path.startsWith("/")) {
+            path = "/" + path;
+        }
+
+        final String probeHost = host;
+        final int probePort = port;
+        final String probePath = path;
+        Thread thread = new Thread(() -> runHttpProbe(probeHost, probePort, probePath),
+                "snort-app-http-probe");
+        thread.start();
+    }
+
+    private void runHttpProbe(String host, int port, String path) {
+        long started = System.currentTimeMillis();
+        File logsDir = new File(getFilesDir(), "logs");
+        if (!logsDir.isDirectory() && !logsDir.mkdirs()) {
+            Log.w(TAG, "failed to create logs dir: " + logsDir);
+        }
+        File logPath = new File(logsDir, "app-http-probe.log");
+        appendHttpProbeLog(logPath, "start host=" + host + " port=" + port + " path=" + path);
+
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 5000);
+            socket.setSoTimeout(5000);
+            String request = "GET " + path + " HTTP/1.0\r\n"
+                    + "Host: " + host + "\r\n"
+                    + "Connection: close\r\n"
+                    + "\r\n";
+            OutputStream out = socket.getOutputStream();
+            out.write(request.getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            BufferedInputStream in = new BufferedInputStream(socket.getInputStream());
+            byte[] buf = new byte[256];
+            int n = in.read(buf);
+            String first = n <= 0 ? "" : new String(buf, 0, n, StandardCharsets.ISO_8859_1)
+                    .replace('\r', ' ').replace('\n', ' ');
+            long elapsed = System.currentTimeMillis() - started;
+            appendHttpProbeLog(logPath, "ok bytes=" + n + " elapsedMs=" + elapsed
+                    + " first=" + first);
+            Log.i(TAG, "app HTTP probe ok host=" + host + " port=" + port + " bytes=" + n);
+        } catch (Exception e) {
+            long elapsed = System.currentTimeMillis() - started;
+            appendHttpProbeLog(logPath, "fail elapsedMs=" + elapsed + " error="
+                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+            Log.w(TAG, "app HTTP probe failed host=" + host + " port=" + port, e);
+        }
+    }
+
+    private void appendHttpProbeLog(File logPath, String line) {
+        String text = System.currentTimeMillis() + " " + line + "\n";
+        try (FileOutputStream out = new FileOutputStream(logPath, true)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            Log.w(TAG, "write HTTP probe log failed: " + logPath, e);
         }
     }
 

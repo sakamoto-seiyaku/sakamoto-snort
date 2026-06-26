@@ -1534,6 +1534,37 @@ empty nfnetlink_queue
 4. 下一步必须让实际 app 进程自己发 HTTP/TCP，再分别验证 root/NFQUEUE 和 VPN/VPP/HEV 路径。
 ```
 
+### 31. Android app-process HTTP probe entry
+
+问题：为了替代不可靠的 `su <app_uid>` synthetic generator，需要让实验 app 自己在进程内发起 TCP/HTTP，并把结果写入 app 私有日志。
+
+实现：
+
+```text
+SnortVpnService.ACTION_HTTP_PROBE
+extras: host, port, path
+log: /data/user/0/com.sakamoto.snort.vpnlite/files/logs/app-http-probe.log
+adb入口: MainActivity --ez appHttpProbe true --es host <ip-or-host> --ei port <port> --es path <path>
+```
+
+构建验证：
+
+```sh
+experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+```
+
+结果：
+
+```text
+compiling Java sources
+dexing
+linking APK
+signing
+ok: experiments/vpp-nfq-poc/android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk
+```
+
+结论：现在有了一个真实 app 进程 HTTP generator，可以继续验证 baseline、root/NFQUEUE、VPN/VPP/HEV 三条路径，不再依赖 `su UID`。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
