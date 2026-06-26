@@ -1411,6 +1411,64 @@ no socks5 server process
 
 结论：Android VPN mode 的 VPP+HEV 数据面可以完成一次真实 TCP/HTTP 往返。至此两条路线都有关键 POC：root/NFQUEUE app UID block/allow 可行，VPN/VPP/HEV fd bridge 也可行。下一步应围绕规则语义、事件归因、真实 app traffic、teardown 稳定性继续小步验证。
 
+### 29. Android VPP+HEV explicit stop teardown probe
+
+问题：第 23 步 Docker HEV 路径出现过 `free(): invalid size`。Android `mode=vpp-hev` 在完成 HTTP 后，如果显式走 app stop intent，是否会复现 allocator/Fatal signal 问题？
+
+命令要点：
+
+```sh
+start local 127.0.0.1:41080 socks5 smoke server
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp-hev
+su 12540 -c "nc -4 -w 5 -W 5 93.184.216.34 80" < http-request-teardown.txt
+adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez stop true
+```
+
+结果：
+
+```text
+HTTP/1.0 200 OK
+Content-Length: 2
+
+OK
+http_rc=0
+```
+
+SOCKS5 server：
+
+```text
+connect 93.184.216.34:80
+payload-len 46
+GET /teardown HTTP/1.0
+Host: example.test
+```
+
+HEV/VPP stop log：
+
+```text
+started VPP HEV pid=7196
+started VPP pid=7195 fd=112 mode=2
+vpp monitor stop
+stopped HEV pid=7196 log=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-hev.log
+VPN stopped
+```
+
+未观察到：
+
+```text
+free(): invalid size
+Fatal signal
+SIGABRT
+```
+
+脚本小故障：
+
+- stop intent 后 app Activity 进程仍可短暂存在，SOCKS server 也仍在等待 trap cleanup。
+- 本轮脚本把这两个“即将被 cleanup 清掉的进程”当成失败，exit 9。
+- trap 后再次检查：无 app pid、无 vpp pid、无 41080 listener、无 socks5 server process。
+
+结论：Android `vpp-hev` 显式 stop 路径本轮未复现 Docker 中的 `free(): invalid size`。这不是稳定性结论，只说明 Android app stop intent 可以触发 `stopped HEV` 并完成一次干净清理；后续还需要多次循环和异常路径测试。
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
