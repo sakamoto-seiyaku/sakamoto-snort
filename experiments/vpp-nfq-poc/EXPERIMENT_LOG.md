@@ -2338,6 +2338,74 @@ empty nfnetlink_queue
 
 结论：root-mode IPv6 static dst block 不仅在 loopback 生效，也能拦截真实 app process 的公网 IPv6 TCP。第一版 IPv6 静态规则 POC 可以从 loopback 升级为实际网络结论。
 
+### 44. Android VPN mode current IPv6 gap with IPv4-only VpnService
+
+问题：root-mode 公网 IPv6 已验证。当前 VPN app 只配置：
+
+```text
+addAddress(10.111.0.2/32)
+addRoute(0.0.0.0/0)
+```
+
+需要确认 VPN mode 下真实 app 公网 IPv6 是绕过 VPN、进入 VPN，还是直接不可达。
+
+对照 baseline：
+
+```text
+无 VPN 时 app HTTP:
+2606:4700:4700::1111:80 /ipv6-public -> HTTP/1.1 400 Bad Request, elapsedMs=306
+```
+
+VPN 配置：
+
+```text
+mode: vpp-hev
+allowedPackage: com.sakamoto.snort.vpnlite
+no IPv6 VPN address
+no ::/0 route
+app HTTP probe: 2606:4700:4700::1111:80 /vpn-ip6-current
+```
+
+结果：
+
+```text
+app log:
+start host=2606:4700:4700::1111 port=80 path=/vpn-ip6-current
+fail elapsedMs=6 error=NoRouteToHostException: Host unreachable
+
+SOCKS log:
+ready only; no connect 2606:4700:4700::1111:80
+
+show tun-poc:
+rx 6 bytes 400
+shim-tx 6 bytes 400
+blocked 0 bytes 0 block-ip4-dst -
+```
+
+HEV log：
+
+```text
+set limit nofile
+no socks5 client tcp -> [2606:4700:4700::1111]:80
+```
+
+清理验证：
+
+```text
+no app pid
+no vpp pid
+no socks5 server process
+no 41080 listener
+```
+
+结论：
+
+```text
+1. 设备本身有公网 IPv6 可达性，但当前 IPv4-only VPN 配置下，allowed app 的 IPv6 连接变成 NoRouteToHost。
+2. 该 IPv6 流量没有绕过 VPN 成功直连，也没有进入 HEV/SOCKS。
+3. VPN mode 要支持 IPv6，必须单独 POC addAddress(IPv6) + addRoute(::/0) + tun/HEV IPv6 forwarding。
+```
+
 ## 2026-06-21
 
 ### 01. 创建实验分支和任务文档
