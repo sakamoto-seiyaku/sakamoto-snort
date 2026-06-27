@@ -1206,7 +1206,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
                            char *stdout_log, size_t stdout_log_len,
                            bool forward_mode, bool handoff_mode,
                            bool owner_resolver_mode, int block_owner_uid,
-                           int redirect_thread,
+                           int redirect_thread, bool owner_cache_enabled,
                            const char *block_ip4_dst,
                            const char *block_ip6_dst) {
     char vpp_dir[PATH_BUF_SIZE];
@@ -1224,6 +1224,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     char resolver_arg[64] = "";
     char owner_block_arg[64] = "";
     char redirect_arg[64] = "";
+    char owner_cache_arg[32] = "";
     char cpu_text[64] = "";
 
     snprintf(vpp_dir, sizeof(vpp_dir), "%s/vpp", files_dir);
@@ -1275,13 +1276,16 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     if (redirect_thread >= 0) {
         snprintf(redirect_arg, sizeof(redirect_arg), " redirect-thread %d", redirect_thread);
     }
+    if (owner_cache_enabled) {
+        snprintf(owner_cache_arg, sizeof(owner_cache_arg), " owner-cache");
+    }
 
     if (handoff_mode) {
         snprintf(exec_text, sizeof(exec_text),
-                 "tun-poc enable fd %d mode handoff-forward-fd shim-fd %d target-thread 1%s%s%s%s%s\n"
+                 "tun-poc enable fd %d mode handoff-forward-fd shim-fd %d target-thread 1%s%s%s%s%s%s\n"
                  "show tun-poc\n",
                  VPP_TUN_FD, VPP_SHIM_FD, resolver_arg, owner_block_arg,
-                 block_arg, block6_arg, redirect_arg);
+                 block_arg, block6_arg, redirect_arg, owner_cache_arg);
         snprintf(cpu_text, sizeof(cpu_text),
                  "\n"
                  "cpu {\n"
@@ -1339,7 +1343,7 @@ JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         JNIEnv *env, jclass clazz, jint fd, jstring native_library_dir, jstring files_dir,
         jint vpp_mode, jstring block_ip4_dst, jstring block_ip6_dst, jint block_owner_uid,
-        jint redirect_thread, jobject owner_lookup) {
+        jint redirect_thread, jboolean owner_cache_enabled, jobject owner_lookup) {
 
     const char *native_dir = (*env)->GetStringUTFChars(env, native_library_dir, NULL);
     if (!native_dir) {
@@ -1388,8 +1392,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     bool use_hev = vpp_mode == 2 || use_owner_gate || use_handoff_hev;
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
                         stdout_log, sizeof(stdout_log), use_forward, use_handoff_hev,
-                        use_owner_resolver, block_owner_uid, redirect_thread, block_dst,
-                        block6_dst) < 0) {
+                        use_owner_resolver, block_owner_uid, redirect_thread,
+                        owner_cache_enabled == JNI_TRUE, block_dst, block6_dst) < 0) {
         (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
         (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);

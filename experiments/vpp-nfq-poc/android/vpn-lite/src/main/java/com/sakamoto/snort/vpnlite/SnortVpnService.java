@@ -33,6 +33,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_BLOCK_IP6_DST = "blockIp6Dst";
     public static final String EXTRA_BLOCK_OWNER_UID = "blockOwnerUid";
     public static final String EXTRA_REDIRECT_THREAD = "redirectThread";
+    public static final String EXTRA_OWNER_CACHE = "ownerCache";
     public static final String EXTRA_ENABLE_IPV6 = "enableIpv6";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
@@ -63,6 +64,7 @@ public final class SnortVpnService extends VpnService {
                                                   int vppMode, String blockIp4Dst,
                                                   String blockIp6Dst, int blockOwnerUid,
                                                   int redirectThread,
+                                                  boolean ownerCache,
                                                   SnortVpnService ownerLookup);
 
     private static native void nativeStopVppProbe();
@@ -96,9 +98,11 @@ public final class SnortVpnService extends VpnService {
         String blockIp6Dst = intent == null ? null : intent.getStringExtra(EXTRA_BLOCK_IP6_DST);
         int blockOwnerUid = intent == null ? -1 : intent.getIntExtra(EXTRA_BLOCK_OWNER_UID, -1);
         int redirectThread = intent == null ? -1 : intent.getIntExtra(EXTRA_REDIRECT_THREAD, -1);
+        boolean ownerCache = intent != null && intent.getBooleanExtra(EXTRA_OWNER_CACHE, false);
         boolean enableIpv6 = intent != null && intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
         startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage,
-                blockIp4Dst, blockIp6Dst, blockOwnerUid, redirectThread, enableIpv6);
+                blockIp4Dst, blockIp6Dst, blockOwnerUid, redirectThread, ownerCache,
+                enableIpv6);
         return START_STICKY;
     }
 
@@ -111,7 +115,8 @@ public final class SnortVpnService extends VpnService {
     private synchronized void startVpn(String mode, String allowedPackage,
                                        String disallowedPackage, String blockIp4Dst,
                                        String blockIp6Dst, int blockOwnerUid,
-                                       int redirectThread, boolean enableIpv6) {
+                                       int redirectThread, boolean ownerCache,
+                                       boolean enableIpv6) {
         if (MODE_HEV.equals(mode)) {
             int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
                     getFilesDir().getAbsolutePath());
@@ -178,10 +183,11 @@ public final class SnortVpnService extends VpnService {
                         getFilesDir().getAbsolutePath(), vppMode,
                         blockIp4Dst == null ? "" : blockIp4Dst,
                         blockIp6Dst == null ? "" : blockIp6Dst,
-                        blockOwnerUid, redirectThread, this);
+                        blockOwnerUid, redirectThread, ownerCache, this);
                 Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " vppMode=" + vppMode
                         + " blockOwnerUid=" + blockOwnerUid
-                        + " redirectThread=" + redirectThread + " rc=" + rc);
+                        + " redirectThread=" + redirectThread
+                        + " ownerCache=" + ownerCache + " rc=" + rc);
             } else {
                 int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS,
                         this);

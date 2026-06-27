@@ -37,6 +37,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP worker-to-worker redirect | On Pixel 6a, VPP worker thread 1 re-enqueues app HTTP packets to worker thread 2, and worker thread 2 forwards through HEV/SOCKS. | Experiment 71 |
 | Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
+| Android VPN VPP owner cache | VPP worker can cache a tuple owner UID, avoid repeated Android resolver queries on the same TCP tuple, and keep `last-uid` at the package UID on the allow path. | Experiment 78 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
 | Android VPN VPP IPv6 owner UID drop | VPP worker parses IPv6 TCP, queries Android owner UID, and drops real app packets by package UID before HEV/SOCKS. | Experiment 73 |
 | Android VPN VPP UDP owner UID drop | VPP worker queries Android owner UID for a UDP packet and drops by package UID. | Experiment 70 |
@@ -84,8 +85,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - Android tuple->UID bridging works with VPP as the packet owner: Java/NDK only
   resolves UID over `resolver-fd`; VPP worker keeps packet forwarding/verdict.
 - Android owner lookup can return the package UID for early TCP packets and `-1`
-  for later packets on the same tuple, so production needs an owner cache rather
-  than trusting only `last-uid`.
+  for later packets on the same tuple. A minimal VPP-side tuple cache is now
+  proven for one active tuple; production still needs real cache sizing,
+  expiry, reverse-flow semantics, and concurrency rules.
 - Android VPP-internal UID drop is now verified for IPv4 TCP: resolver provides
   UID, VPP worker applies `block-owner-uid`, and HEV/SOCKS sees no target
   connection.
@@ -101,8 +103,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The older VPN owner gate experiments remain mis-scoped. Experiments 48/50/51
   gate in the parent native process before `tun_poc`; use Experiments 68-70 for
   VPP-internal Android UID filtering evidence.
-- VPN VPP-internal owner cache is not verified. Experiment 52 caches in the
-  parent native process.
+- The older owner cache experiment is mis-scoped. Experiment 52 caches in the
+  parent native process; use Experiment 78 for VPP-internal cache evidence.
 - VPP handoff worker-side static rules are verified for IPv4 drop, IPv4
   miss/allow, and IPv6 drop. IPv6 miss/allow can be added if needed, but the
   main IPv6 verdict path is no longer unknown.
@@ -110,9 +112,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   without IPv6 extension headers. Mock tuple->UID resolver integration is
   verified, and Android resolver bridging is verified for IPv4/IPv6 TCP/UDP.
   IPv6 extension headers remain separate.
-- VPP worker can synchronously query a tuple owner resolver over an fd and
-  enforce a UID drop verdict. Owner cache, async lookup, and performance remain
-  separate POCs.
+- VPP worker can synchronously query a tuple owner resolver over an fd, cache a
+  same-tuple owner UID, and enforce a UID drop verdict. Production cache design,
+  async lookup, and performance remain separate POCs.
 - Worker-to-worker re-handoff is verified for a short ICMP forward path, IPv4
   UDP/TCP mock UID drop, Android HTTP allow path through HEV, Android IPv4/IPv6
   TCP real UID drop after redirect, and Android IPv4 UDP real UID drop after
@@ -122,7 +124,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   drop, worker-to-worker redirect allow, Android resolver UID query, Android TCP
   UID drop, Android redirected IPv4/IPv6 TCP UID drop, Android redirected
   IPv4/IPv6 UDP UID drop, Android IPv6 TCP UID drop, Android UDP UID drop, and
-  Android IPv6 UDP UID drop through HEV. Owner caching remains separate.
+  Android IPv6 UDP UID drop through HEV. A single-entry owner cache POC is
+  verified; production cache policy remains separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

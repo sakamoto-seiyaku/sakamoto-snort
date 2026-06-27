@@ -344,6 +344,62 @@ tun_poc_record_l4_tuple (tun_poc_main_t *tm, const u8 *packet,
   tm->tuple_parse_errors++;
 }
 
+static u8
+tun_poc_owner_cache_lookup (tun_poc_main_t *tm)
+{
+  if (!tm->owner_cache_enabled || !tm->owner_cache_valid ||
+      !tm->last_tuple_valid)
+    return 0;
+
+  if (tm->owner_cache_ip_version != tm->last_tuple_ip_version ||
+      tm->owner_cache_protocol != tm->last_tuple_protocol ||
+      tm->owner_cache_src_port != tm->last_tuple_src_port ||
+      tm->owner_cache_dst_port != tm->last_tuple_dst_port)
+    return 0;
+
+  if (tm->last_tuple_ip_version == 4)
+    {
+      if (tm->owner_cache_ip4_src != tm->last_tuple_ip4_src ||
+	  tm->owner_cache_ip4_dst != tm->last_tuple_ip4_dst)
+	return 0;
+    }
+  else if (tm->last_tuple_ip_version == 6)
+    {
+      if (memcmp (tm->owner_cache_ip6_src, tm->last_tuple_ip6_src,
+		  sizeof (tm->owner_cache_ip6_src)) ||
+	  memcmp (tm->owner_cache_ip6_dst, tm->last_tuple_ip6_dst,
+		  sizeof (tm->owner_cache_ip6_dst)))
+	return 0;
+    }
+  else
+    return 0;
+
+  tm->last_owner_uid = tm->owner_cache_uid;
+  tm->owner_cache_hits++;
+  return 1;
+}
+
+static void
+tun_poc_owner_cache_store (tun_poc_main_t *tm, i32 uid)
+{
+  if (!tm->owner_cache_enabled || !tm->last_tuple_valid || uid < 0)
+    return;
+
+  tm->owner_cache_valid = 1;
+  tm->owner_cache_ip_version = tm->last_tuple_ip_version;
+  tm->owner_cache_protocol = tm->last_tuple_protocol;
+  tm->owner_cache_src_port = tm->last_tuple_src_port;
+  tm->owner_cache_dst_port = tm->last_tuple_dst_port;
+  tm->owner_cache_ip4_src = tm->last_tuple_ip4_src;
+  tm->owner_cache_ip4_dst = tm->last_tuple_ip4_dst;
+  clib_memcpy (tm->owner_cache_ip6_src, tm->last_tuple_ip6_src,
+	       sizeof (tm->owner_cache_ip6_src));
+  clib_memcpy (tm->owner_cache_ip6_dst, tm->last_tuple_ip6_dst,
+	       sizeof (tm->owner_cache_ip6_dst));
+  tm->owner_cache_uid = uid;
+  tm->owner_cache_stores++;
+}
+
 static void
 tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 {
@@ -358,6 +414,13 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 
   if (!tm->resolver_enabled || tm->resolver_fd < 0 || !tm->last_tuple_valid)
     return;
+
+  if (tm->owner_cache_enabled)
+    {
+      if (tun_poc_owner_cache_lookup (tm))
+	return;
+      tm->owner_cache_misses++;
+    }
 
   if (tm->last_tuple_ip_version == 4)
     {
@@ -423,6 +486,7 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 
   tm->last_owner_uid = uid;
   tm->resolver_hits++;
+  tun_poc_owner_cache_store (tm, uid);
 }
 
 static void
@@ -855,11 +919,27 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   clib_memset (tm->last_tuple_ip6_dst, 0, sizeof (tm->last_tuple_ip6_dst));
   tm->resolver_enabled = 0;
   tm->last_owner_uid = -1;
+  tm->owner_cache_enabled = 0;
+  tm->owner_cache_valid = 0;
+  tm->owner_cache_ip_version = 0;
+  tm->owner_cache_protocol = 0;
+  tm->owner_cache_src_port = 0;
+  tm->owner_cache_dst_port = 0;
+  tm->owner_cache_ip4_src = 0;
+  tm->owner_cache_ip4_dst = 0;
+  clib_memset (tm->owner_cache_ip6_src, 0,
+	       sizeof (tm->owner_cache_ip6_src));
+  clib_memset (tm->owner_cache_ip6_dst, 0,
+	       sizeof (tm->owner_cache_ip6_dst));
+  tm->owner_cache_uid = -1;
   tm->block_owner_uid_set = 0;
   tm->block_owner_uid = -1;
   tm->resolver_queries = 0;
   tm->resolver_hits = 0;
   tm->resolver_errors = 0;
+  tm->owner_cache_hits = 0;
+  tm->owner_cache_misses = 0;
+  tm->owner_cache_stores = 0;
   tm->uid_blocked_packets = 0;
   tm->uid_blocked_bytes = 0;
   tm->overflow_thread_hits = 0;
@@ -941,6 +1021,7 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 block_ip6_dst[16] = { 0 };
   u8 block_ip4_dst_set = 0;
   u8 block_ip6_dst_set = 0;
+  u8 owner_cache_enabled = 0;
   u32 handoff_target_thread = ~0;
   u32 redirect_target_thread = ~0;
 
@@ -956,6 +1037,8 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	;
       else if (unformat (input, "block-owner-uid %d", &block_owner_uid))
 	;
+      else if (unformat (input, "owner-cache"))
+	owner_cache_enabled = 1;
       else if (unformat (input, "mode count-only"))
 	mode = TUN_POC_MODE_COUNT_ONLY;
       else if (unformat (input, "mode reflect-icmp"))
@@ -1029,9 +1112,11 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
     }
   if (!err && resolver_fd >= 0)
     {
-      tun_poc_main.resolver_fd = resolver_fd;
-      tun_poc_main.resolver_enabled = 1;
-    }
+	  tun_poc_main.resolver_fd = resolver_fd;
+	  tun_poc_main.resolver_enabled = 1;
+	}
+  if (!err && owner_cache_enabled)
+    tun_poc_main.owner_cache_enabled = 1;
   if (!err && block_owner_uid >= 0)
     {
       tun_poc_main.block_owner_uid_set = 1;
@@ -1054,7 +1139,7 @@ VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
     "handoff-forward-fd] "
     "[shim-fd <n>] [resolver-fd <n>] [target-thread <n>] "
     "[redirect-thread <n>] "
-    "[block-owner-uid <uid>] [block-ip4-dst <addr>] "
+    "[block-owner-uid <uid>] [owner-cache] [block-ip4-dst <addr>] "
     "[block-ip6-dst <addr>]",
   .function = tun_poc_enable_command_fn,
 };
@@ -1175,6 +1260,11 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     "last-uid %d",
     tm->resolver_enabled, tm->resolver_fd, tm->resolver_queries,
     tm->resolver_hits, tm->resolver_errors, tm->last_owner_uid);
+  vlib_cli_output (
+    vm,
+    "owner-cache enabled %u valid %u hits %llu misses %llu stores %llu uid %d",
+    tm->owner_cache_enabled, tm->owner_cache_valid, tm->owner_cache_hits,
+    tm->owner_cache_misses, tm->owner_cache_stores, tm->owner_cache_uid);
   vlib_cli_output (
     vm, "uid-block enabled %u uid %d packets %llu bytes %llu",
     tm->block_owner_uid_set, tm->block_owner_uid, tm->uid_blocked_packets,

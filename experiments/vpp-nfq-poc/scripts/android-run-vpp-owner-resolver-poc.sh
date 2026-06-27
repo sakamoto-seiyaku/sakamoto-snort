@@ -12,6 +12,7 @@ HOST="${HOST:-142.251.13.94}"
 PORT="${PORT:-80}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-}"
 REDIRECT_THREAD="${REDIRECT_THREAD:-}"
+OWNER_CACHE="${OWNER_CACHE:-0}"
 ENABLE_IPV6="${ENABLE_IPV6:-0}"
 EXPECT_DROP="${EXPECT_DROP:-0}"
 START_WAIT="${START_WAIT:-6}"
@@ -51,6 +52,7 @@ echo "host=$HOST"
 echo "port=$PORT"
 echo "block_owner_uid=$BLOCK_OWNER_UID"
 echo "redirect_thread=$REDIRECT_THREAD"
+echo "owner_cache=$OWNER_CACHE"
 echo "enable_ipv6=$ENABLE_IPV6"
 echo "expect_drop=$EXPECT_DROP"
 
@@ -97,6 +99,9 @@ if [[ -n "$BLOCK_OWNER_UID" ]]; then
 fi
 if [[ -n "$REDIRECT_THREAD" ]]; then
   start_args+=(--ei redirectThread "$REDIRECT_THREAD")
+fi
+if [[ "$OWNER_CACHE" == "1" ]]; then
+  start_args+=(--ez ownerCache true)
 fi
 if [[ "$ENABLE_IPV6" == "1" ]]; then
   start_args+=(--ez enableIpv6 true)
@@ -153,6 +158,16 @@ fi
 if [[ "$ENABLE_IPV6" == "1" ]] && ! grep -Eq 'last-tuple ip6 proto 6 .* -> .*:80' <<<"$vpp_cli"; then
   echo "expected VPP IPv6 TCP last tuple" >&2
   exit 1
+fi
+if [[ "$OWNER_CACHE" == "1" ]]; then
+  if ! grep -Eq 'owner-cache enabled 1 valid 1 hits [1-9].* stores [1-9].* uid '"$package_uid" <<<"$vpp_cli"; then
+    echo "expected VPP owner-cache hit/store for package uid $package_uid" >&2
+    exit 1
+  fi
+  if ! grep -Eq 'resolver enabled 1 fd 5 queries [1-9].* last-uid '"$package_uid" <<<"$vpp_cli"; then
+    echo "expected VPP resolver/cache last uid to remain package uid $package_uid" >&2
+    exit 1
+  fi
 fi
 if ! grep -Eq "resolver query=.* uid=$package_uid" <<<"$resolver_log"; then
   echo "expected native resolver log with uid=$package_uid" >&2

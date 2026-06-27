@@ -5577,3 +5577,78 @@ Android redirect 后 IPv6 UDP VPP-internal real UID drop 成立：
   end-to-end 成立。
   IPv6 extension headers、packet ordering、cache、异步 resolver 和性能仍需单独验证。
 ```
+
+### 78. Android VPP worker can cache owner UID for a TCP tuple
+
+问题：第 68 步观察到同一 TCP tuple 前几包能返回 package UID，后续查询可能返回 `-1`。
+如果每包都同步查 `ConnectivityManager.getConnectionOwnerUid`，allow path 的 `last-uid` 会被
+后续 `-1` 覆盖。这里验证一个最小 VPP-side owner cache：VPP worker 在 resolver 返回非负
+UID 后缓存当前 tuple，后续同 tuple packet 直接用 VPP cache，不再查 resolver。
+
+最小实现：
+
+```text
+VPP CLI:
+  owner-cache
+
+Android extra:
+  ownerCache=true
+
+test:
+  app HTTP probe -> 142.251.13.94:80
+  expect app HTTP 200
+  expect SOCKS connect count increases
+  expect resolver query count is lower than tuple packet count
+  expect owner-cache stores and hits increase inside VPP
+  expect last-uid remains package UID 12540
+```
+
+命令：
+
+```sh
+make android-vpp-build-release-no-multiarch-no-ipsec-idle android-vpp-stage-release-no-multiarch-no-ipsec-idle
+make android-vpp-owner-resolver-cache-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+ok bytes=40 elapsedMs=14 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 11 bytes 696 tx 4 bytes 204
+shim-rx 4 bytes 204 shim-tx 11 bytes 696
+handoff target-thread 1 fq 21 enqueued 11 bytes 696 congestion-drops 0 alloc-errors 0 worker-packets 11 bytes 696
+tuple parsed 5 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip4 proto 6 10.111.0.2:59744 -> 142.251.13.94:80
+resolver enabled 1 fd 5 queries 1 hits 1 errors 0 last-uid 12540
+owner-cache enabled 1 valid 1 hits 4 misses 1 stores 1 uid 12540
+uid-block enabled 0 uid -1 packets 0 bytes 0
+thread-hits worker-probe last 1 t0 0 t1 7 t2 0 t3 0
+
+resolver log:
+resolver query=1 proto=6 10.111.0.2:59744 -> 142.251.13.94:80 uid=12540
+
+HEV:
+socks5 client tcp -> [142.251.13.94]:80
+socks_count_after=1
+```
+
+结论：
+
+```text
+VPP-internal owner cache POC 成立：
+  cache lives in tun_poc/VPP, not parent native gate
+  resolver returned UID once
+  VPP stored tuple -> UID
+  later same-tuple packets hit VPP cache
+  allow path stayed functional and last-uid remained package UID
+
+边界：
+  这是 single-entry tuple cache POC。
+  没有 TTL/expiry、LRU、reverse-flow mapping、multi-worker ownership model、
+  connection close cleanup, or collision policy。
+  resolver 仍是同步 query；async resolver 和性能仍需单独验证。
+```
