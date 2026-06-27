@@ -154,6 +154,37 @@ def wait_for_echo_request(sock: socket.socket, logger: Logger, remote_ip: str) -
     raise TimeoutError("timed out waiting for ICMP echo request on shim fd")
 
 
+def observe_echo_request(
+    sock: socket.socket,
+    logger: Logger,
+    remote_ip: str,
+    timeout_seconds: float,
+) -> bytes | None:
+    deadline = time.monotonic() + timeout_seconds
+    old_timeout = sock.gettimeout()
+    sock.settimeout(0.2)
+    try:
+        while time.monotonic() < deadline:
+            try:
+                packet = sock.recv(65535)
+            except socket.timeout:
+                continue
+            parsed = parse_ip4_icmp(packet)
+            if parsed is None:
+                logger.log(f"shim observed non-icmp packet len={len(packet)}")
+                continue
+            logger.log(
+                "shim observed "
+                f"{parsed['src']} -> {parsed['dst']} "
+                f"icmp_type={parsed['icmp_type']} len={parsed['total_len']}"
+            )
+            if parsed["dst"] == remote_ip and parsed["icmp_type"] == ICMP_ECHO:
+                return bytes(parsed["packet"])
+        return None
+    finally:
+        sock.settimeout(old_timeout)
+
+
 def parse_counters(show_output: str) -> tuple[int, int, int, int]:
     rx_match = re.search(r"^rx (\d+) bytes \d+ tx (\d+) bytes", show_output, re.MULTILINE)
     shim_match = re.search(
@@ -167,6 +198,13 @@ def parse_counters(show_output: str) -> tuple[int, int, int, int]:
         int(shim_match.group(1)),
         int(shim_match.group(2)),
     )
+
+
+def parse_blocked_packets(show_output: str) -> int:
+    match = re.search(r"^blocked (\d+) bytes \d+", show_output, re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"could not parse blocked packets:\n{show_output}")
+    return int(match.group(1))
 
 
 def parse_worker_probe_hits(show_output: str) -> dict[str, int]:
@@ -200,6 +238,8 @@ def main() -> int:
         default="forward-fd",
     )
     parser.add_argument("--target-thread", type=int, default=1)
+    parser.add_argument("--block-ip4-dst")
+    parser.add_argument("--expect-drop", action="store_true")
     args = parser.parse_args()
 
     log_dir = Path(args.log_dir)
@@ -250,6 +290,8 @@ def main() -> int:
         ]
         if args.tun_poc_mode == "handoff-forward-fd":
             enable_command.extend(["target-thread", str(args.target_thread)])
+        if args.block_ip4_dst:
+            enable_command.extend(["block-ip4-dst", args.block_ip4_dst])
 
         enable = run_vppctl(Path(args.vppctl_bin), cli_sock, *enable_command)
         logger.log("enable output:")
@@ -265,20 +307,34 @@ def main() -> int:
             stderr=subprocess.STDOUT,
             text=True,
         )
-        request = wait_for_echo_request(driver_sock, logger, args.remote_ip)
-        reply = build_icmp_reply(request)
-        driver_sock.send(reply)
+        if args.expect_drop:
+            request = observe_echo_request(driver_sock, logger, args.remote_ip, 2.5)
+            if request is not None:
+                raise RuntimeError("expected drop, but shim observed target ICMP echo request")
+        else:
+            request = wait_for_echo_request(driver_sock, logger, args.remote_ip)
+            reply = build_icmp_reply(request)
+            driver_sock.send(reply)
         ping_output, _ = ping.communicate(timeout=5)
         logger.log("ping output:")
         logger.log(ping_output.rstrip())
-        if ping.returncode != 0:
+        if args.expect_drop and ping.returncode == 0:
+            raise RuntimeError("expected ping failure for drop POC")
+        if not args.expect_drop and ping.returncode != 0:
             raise RuntimeError(f"ping failed rc={ping.returncode}")
 
         after = run_vppctl(Path(args.vppctl_bin), cli_sock, "show", "tun-poc")
         logger.log("after ping:")
         logger.log(after.rstrip())
         rx_packets, tx_packets, shim_rx_packets, shim_tx_packets = parse_counters(after)
-        if not all(value > 0 for value in (rx_packets, tx_packets, shim_rx_packets, shim_tx_packets)):
+        if args.expect_drop:
+            blocked_packets = parse_blocked_packets(after)
+            if rx_packets <= 0 or blocked_packets <= 0:
+                raise RuntimeError(
+                    f"expected rx and blocked counters, got rx={rx_packets} "
+                    f"blocked={blocked_packets}"
+                )
+        elif not all(value > 0 for value in (rx_packets, tx_packets, shim_rx_packets, shim_tx_packets)):
             raise RuntimeError(
                 "expected all forward-fd counters to increase, got "
                 f"rx={rx_packets} tx={tx_packets} "

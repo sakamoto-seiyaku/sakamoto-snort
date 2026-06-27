@@ -4276,3 +4276,56 @@ VPP 内部 worker verdict/forward 的基本路径成立：
   worker node 直接写 shim fd，不是完整 VPP interface/graph 设计。
   下一步要在 worker 上验证 static rule drop/allow，尤其 IPv4/IPv6 dst block。
 ```
+
+### 57. VPP worker can drop handoff TUN packets by IPv4 static dst rule
+
+问题：第 56 步证明 worker 可以 forward 到 shim。现在验证 worker 上执行静态规则 verdict 是否能真的 drop packet。
+
+最小实现：
+
+```text
+mode:
+  handoff-forward-fd
+
+rule:
+  block-ip4-dst 198.19.0.2
+
+expected:
+  TUN packet handoff 到 worker thread 1
+  worker 匹配 IPv4 dst 后计入 blocked
+  worker 不写 shim fd
+  ping 超时失败
+```
+
+命令：
+
+```sh
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-forward-fd-ipv4-drop
+```
+
+结果：
+
+```text
+after ping:
+enabled 1 fd 53 shim-fd 54 mode handoff-forward-fd
+rx 2 bytes 132 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 1 bytes 48
+blocked 1 bytes 84 block-ip4-dst 198.19.0.2
+handoff target-thread 1 fq 34 enqueued 2 bytes 132 congestion-drops 0 alloc-errors 0 worker-packets 2 bytes 132
+thread-hits rx-node last 0 t0 2 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+
+ping:
+  1 transmitted, 0 received, 100% packet loss
+```
+
+结论：
+
+```text
+VPP worker-side IPv4 static dst drop 成立。
+packet verdict 在 VPP worker node 内完成，不是在 parent native gate。
+
+边界：
+  这里只验证 IPv4 dst exact match。
+  下一步需要验证 worker-side IPv4 miss/allow 和 IPv6 dst drop。
+```

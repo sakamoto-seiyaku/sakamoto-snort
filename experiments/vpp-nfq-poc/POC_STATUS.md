@@ -24,6 +24,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP TUN fd callback thread ownership | With `workers 2`, current `tun_poc` `clib_file` fd callbacks still run on VPP thread 0, not workers. | Experiment 54 |
 | VPP TUN software handoff to worker | A `tun-poc-rx-handoff` input node can allocate a VPP buffer and enqueue it to `tun-poc-worker-probe` on worker thread 1. | Experiment 55 |
 | VPP worker forward to shim fd | In `handoff-forward-fd` mode, worker thread 1 forwards handoff TUN packets to the shim fd and ping succeeds. | Experiment 56 |
+| VPP worker IPv4 static dst drop | In `handoff-forward-fd` mode, worker thread 1 blocks IPv4 ICMP to `198.19.0.2` before shim and ping fails. | Experiment 57 |
 
 ## Demoted / Mis-scoped
 
@@ -59,8 +60,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   the parent native process before `tun_poc`, not inside VPP.
 - VPN VPP-internal owner cache is not verified. Experiment 52 caches in the
   parent native process.
-- VPP handoff worker-side static rule verdict is not verified yet. Experiment
-  56 proves worker-side forwarding, not worker-side drop/allow policy.
+- VPP handoff worker-side IPv4 drop is verified. Worker-side IPv4 miss/allow
+  and IPv6 drop still need separate POCs.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.
