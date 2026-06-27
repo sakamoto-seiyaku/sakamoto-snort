@@ -4933,3 +4933,76 @@ Android VPP worker -> native resolver fd -> Java ConnectivityManager -> UID resp
   因此产品化不能只看 last-uid；需要 VPP/bridge owner cache 策略。
   本步只验证 allow/query path，尚未验证 VPP worker 的真实 UID drop。
 ```
+
+### 69. Android VPP worker can drop by real app owner UID
+
+问题：第 68 步只验证 Android resolver bridge 能把真实 package UID 返回给 VPP worker。
+这里验证 verdict 是否也能留在 VPP worker：`block-owner-uid=<package_uid>` 后，真实 app
+TCP SYN 是否被 VPP drop，HEV/SOCKS 是否看不到目标连接。
+
+最小实现：
+
+```text
+Android mode:
+  vpp-hev-owner-resolver
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 resolver-fd 5 block-owner-uid 12540
+
+test:
+  app HTTP probe -> 142.251.13.94:80
+  package_uid=12540
+  expect app timeout
+  expect SOCKS connect count unchanged
+  expect resolver uid=12540
+  expect uid-block counter increases inside VPP
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-uid-drop-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+fail elapsedMs=5011 error=SocketTimeoutException: failed to connect to /142.251.13.94 (port 80) from /10.111.0.2 ...
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+blocked 3 bytes 180 block-ip4-dst -
+handoff target-thread 1 fq 21 enqueued 9 bytes 580 congestion-drops 0 alloc-errors 0 worker-packets 9 bytes 580
+tuple parsed 3 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip4 proto 6 10.111.0.2:52600 -> 142.251.13.94:80
+resolver enabled 1 fd 5 queries 3 hits 3 errors 0 last-uid 12540
+uid-block enabled 1 uid 12540 packets 3 bytes 180
+thread-hits worker-probe last 1 t0 0 t1 5 t2 0 t3 0
+
+resolver log:
+resolver query=1 proto=6 10.111.0.2:52600 -> 142.251.13.94:80 uid=12540
+resolver query=2 proto=6 10.111.0.2:52600 -> 142.251.13.94:80 uid=12540
+resolver query=3 proto=6 10.111.0.2:52600 -> 142.251.13.94:80 uid=12540
+
+HEV:
+no socks5 client tcp -> [142.251.13.94]:80
+socks_count_after=0
+```
+
+结论：
+
+```text
+Android VPN VPP-internal real UID drop 成立：
+  VPP worker parses tuple
+  VPP worker queries Android resolver fd
+  native/Java returns package UID
+  VPP worker applies block-owner-uid and drops before HEV/SOCKS
+
+这一步纠正了 parent native gate 的偏差：packet verdict 不在 parent gate，留在 VPP worker。
+
+边界：
+  这里只验证 IPv4 TCP。
+  没有 owner cache；第 68 步已经观察到 allow path 后续 packet 可能返回 -1。
+  IPv6/UDP Android resolver drop、cache 策略、异步查询和性能仍需单独验证。
+```

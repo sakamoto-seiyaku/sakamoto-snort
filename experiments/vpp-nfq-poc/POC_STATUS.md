@@ -36,6 +36,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP worker handoff | On Pixel 6a, app HTTP enters `VpnService -> packaged VPP handoff-forward-fd worker -> HEV -> SOCKS5`; VPP worker thread 1 handles the packet path. | Experiment 66 |
 | Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
+| Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
 
 ## Demoted / Mis-scoped
 
@@ -74,6 +75,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - Android owner lookup can return the package UID for early TCP packets and `-1`
   for later packets on the same tuple, so production needs an owner cache rather
   than trusting only `last-uid`.
+- Android VPP-internal UID drop is now verified for IPv4 TCP: resolver provides
+  UID, VPP worker applies `block-owner-uid`, and HEV/SOCKS sees no target
+  connection.
 - Worker-side processing can forward back into the current shim/HEV style path,
   so worker verdicts can be tested without designing the final interface shape.
 - The first useful product slice can be package UID allow/block in root mode, plus
@@ -100,8 +104,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   IPv4 UDP/TCP mock UID drop. It does not yet prove a production sharding
   policy, packet ordering behavior, Android resolver behavior, or performance.
 - Android worker handoff is verified for IPv4 TCP/HTTP allow, static IPv4 dst
-  drop, and Android resolver UID query through HEV. Android UID drop verdict is
-  still separate.
+  drop, Android resolver UID query, and Android UID drop through HEV. IPv6
+  Android resolver/drop and owner caching remain separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.
