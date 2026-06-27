@@ -4741,3 +4741,67 @@ resolver 仍只提供 UID；drop verdict 在第二个 VPP worker node 内执行�
   resolver 仍是 Docker/Python mock，不是 Android ConnectivityManager。
   没有验证 sharding 策略、顺序语义、负载、异步查询或 owner cache。
 ```
+
+### 66. Android VPP/HEV can use VPP worker handoff
+
+问题：Docker 已验证 `handoff-forward-fd`，但 Android packaged VPP 仍可能因为线程、fd、
+stage 版本或 HEV socketpair 差异失败。这里验证真实 Pixel 6a 上，app HTTP 能进入
+`VpnService -> packaged VPP worker -> HEV -> SOCKS5`。
+
+最小实现：
+
+```text
+Android mode:
+  vpp-hev-handoff
+
+native startup:
+  cpu { workers 2 }
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1
+
+test:
+  allowedPackage = com.sakamoto.snort.vpnlite
+  app HTTP probe -> 142.251.13.94:80
+  local Android SOCKS5 smoke server on 127.0.0.1:41080
+```
+
+命令：
+
+```sh
+make android-vpp-build-release-no-multiarch-no-ipsec-idle android-vpp-stage-release-no-multiarch-no-ipsec-idle
+make android-vpp-hev-handoff-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+ok bytes=40 elapsedMs=7 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 11 bytes 693 tx 4 bytes 204
+shim-rx 4 bytes 204 shim-tx 11 bytes 693
+handoff target-thread 1 fq 21 enqueued 11 bytes 693 congestion-drops 0 alloc-errors 0 worker-packets 11 bytes 693
+last-tuple ip4 proto 6 10.111.0.2:49354 -> 142.251.13.94:80
+thread-hits main last 0 t0 7 t1 0 t2 0 t3 0
+thread-hits rx-node last 0 t0 7 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 7 t2 0 t3 0
+
+HEV:
+socks5 client tcp -> [142.251.13.94]:80
+socks_count_after=1
+```
+
+结论：
+
+```text
+Android packaged VPP 的 worker handoff path 成立：
+  fd callback/input node 仍在 main thread
+  VPP buffer 被 handoff 到 worker thread 1
+  worker thread 1 写 shim fd 给 HEV
+  app HTTP 完成真实 SOCKS5 往返
+
+边界：
+  这里只验证 IPv4 TCP/HTTP allow path。
+  Android worker-side static drop、Android resolver bridge、真实 UID drop 仍需单独验证。
+```

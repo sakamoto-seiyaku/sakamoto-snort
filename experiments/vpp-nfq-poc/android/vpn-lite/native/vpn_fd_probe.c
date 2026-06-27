@@ -1021,7 +1021,8 @@ static void *vpp_monitor_thread(void *arg) {
 static int write_vpp_files(const char *native_dir, const char *files_dir,
                            char *startup_conf, size_t startup_conf_len,
                            char *stdout_log, size_t stdout_log_len,
-                           bool forward_mode, const char *block_ip4_dst,
+                           bool forward_mode, bool handoff_mode,
+                           const char *block_ip4_dst,
                            const char *block_ip6_dst) {
     char vpp_dir[PATH_BUF_SIZE];
     char runtime_dir[PATH_BUF_SIZE];
@@ -1035,6 +1036,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     char exec_text[320];
     char block_arg[80] = "";
     char block6_arg[128] = "";
+    char cpu_text[64] = "";
 
     snprintf(vpp_dir, sizeof(vpp_dir), "%s/vpp", files_dir);
     snprintf(runtime_dir, sizeof(runtime_dir), "%s/runtime", vpp_dir);
@@ -1073,7 +1075,17 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
         snprintf(block6_arg, sizeof(block6_arg), " block-ip6-dst %s", block_ip6_dst);
     }
 
-    if (forward_mode) {
+    if (handoff_mode) {
+        snprintf(exec_text, sizeof(exec_text),
+                 "tun-poc enable fd %d mode handoff-forward-fd shim-fd %d target-thread 1%s%s\n"
+                 "show tun-poc\n",
+                 VPP_TUN_FD, VPP_SHIM_FD, block_arg, block6_arg);
+        snprintf(cpu_text, sizeof(cpu_text),
+                 "\n"
+                 "cpu {\n"
+                 "  workers 2\n"
+                 "}\n");
+    } else if (forward_mode) {
         snprintf(exec_text, sizeof(exec_text),
                  "tun-poc enable fd %d mode forward-fd shim-fd %d%s%s\n"
                  "show tun-poc\n",
@@ -1098,6 +1110,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
              "  startup-config %s\n"
              "}\n"
              "\n"
+             "%s"
              "api-segment {\n"
              "  prefix snort-vpn-lite\n"
              "}\n"
@@ -1115,8 +1128,8 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
              "  plugin default { disable }\n"
              "  plugin %s { enable }\n"
              "}\n",
-             runtime_dir, vpp_log, g_vpp_cli_sock, startup_exec, runtime_dir,
-             native_dir, plugin_name);
+             runtime_dir, vpp_log, g_vpp_cli_sock, startup_exec, cpu_text,
+             runtime_dir, native_dir, plugin_name);
     return write_text_file(startup_conf, conf);
 }
 
@@ -1167,11 +1180,12 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         return -2;
     }
     bool use_owner_gate = vpp_mode == 3;
-    bool use_forward = vpp_mode == 1 || vpp_mode == 2 || use_owner_gate;
-    bool use_hev = vpp_mode == 2 || use_owner_gate;
+    bool use_handoff_hev = vpp_mode == 4;
+    bool use_forward = vpp_mode == 1 || vpp_mode == 2 || use_owner_gate || use_handoff_hev;
+    bool use_hev = vpp_mode == 2 || use_owner_gate || use_handoff_hev;
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
-                        stdout_log, sizeof(stdout_log), use_forward, block_dst,
-                        block6_dst) < 0) {
+                        stdout_log, sizeof(stdout_log), use_forward, use_handoff_hev,
+                        block_dst, block6_dst) < 0) {
         (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
         (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
