@@ -39,6 +39,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
 | Android VPN VPP UDP owner UID drop | VPP worker queries Android owner UID for a UDP packet and drops by package UID. | Experiment 70 |
+| Android VPN redirected worker owner UID drop | On Pixel 6a, worker thread 1 re-enqueues app TCP packets to worker thread 2; worker thread 2 queries Android owner UID and drops by package UID. | Experiment 72 |
 
 ## Demoted / Mis-scoped
 
@@ -67,7 +68,7 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   worker through another frame queue; this answers the "can VPP internally
   redirect after software steering" question for this POC shape.
 - Tuple owner lookup and UID verdicts still work after a worker-to-worker
-  redirect, at least for the Docker mock resolver path.
+  redirect in both Docker mock resolver and Android real resolver paths.
 - Android VPN mode can run the same `handoff-forward-fd` VPP worker path before
   HEV; this removes the Docker-only caveat for the basic worker handoff.
 - Android VPP worker-to-worker redirect is verified on Pixel 6a for the HTTP
@@ -108,13 +109,14 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   enforce a UID drop verdict. Owner cache, async lookup, and performance remain
   separate POCs.
 - Worker-to-worker re-handoff is verified for a short ICMP forward path, IPv4
-  UDP/TCP mock UID drop, and Android HTTP allow path through HEV. It does not
-  yet prove a production sharding policy, packet ordering behavior, Android
-  resolver behavior after redirect, or performance.
+  UDP/TCP mock UID drop, Android HTTP allow path through HEV, and Android TCP
+  real UID drop after redirect. It does not yet prove a production sharding
+  policy, packet ordering behavior, UDP redirect behavior on Android, or
+  performance.
 - Android worker handoff is verified for IPv4 TCP/HTTP allow, static IPv4 dst
   drop, worker-to-worker redirect allow, Android resolver UID query, Android TCP
-  UID drop, and Android UDP UID drop through HEV. IPv6 Android resolver/drop and
-  owner caching remain separate.
+  UID drop, Android redirected TCP UID drop, and Android UDP UID drop through
+  HEV. IPv6 Android resolver/drop and owner caching remain separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

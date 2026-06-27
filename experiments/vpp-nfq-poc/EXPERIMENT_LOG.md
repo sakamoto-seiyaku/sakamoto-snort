@@ -5135,3 +5135,80 @@ Android VPP worker-to-worker redirect 成立：
   redirect 后 Android resolver + UID verdict 还没验证。
   这不是生产 sharding policy，也没有回答 packet ordering 或性能。
 ```
+
+### 72. Android redirected VPP worker can drop by real app owner UID
+
+问题：第 71 步只验证 Android redirect 后 allow/forward。这里验证 packet 从 worker 1
+redirect 到 worker 2 之后，worker 2 是否还能执行 tuple parse、Android owner resolver query、
+以及 UID drop verdict。
+
+最小实现：
+
+```text
+Android extra:
+  redirectThread=2
+  blockOwnerUid=<package_uid>
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 resolver-fd 5 block-owner-uid 12540 redirect-thread 2
+
+test:
+  app HTTP probe -> 142.251.13.94:80
+  expect app timeout
+  expect SOCKS connect count unchanged
+  expect worker-probe thread 1 hit
+  expect worker-redirect thread 2 hit
+  expect resolver UID 12540
+  expect uid-block counter increases inside VPP
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-redirect-uid-drop-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+fail elapsedMs=5009 error=SocketTimeoutException: failed to connect to /142.251.13.94 (port 80) from /10.111.0.2 ...
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 9 bytes 580 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 6 bytes 400
+blocked 3 bytes 180 block-ip4-dst -
+handoff target-thread 1 fq 21 enqueued 9 bytes 580 congestion-drops 0 alloc-errors 0 worker-packets 9 bytes 580
+redirect enabled 1 target-thread 2 fq 22 enqueued 9 bytes 580 congestion-drops 0 worker-packets 9 bytes 580
+tuple parsed 3 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip4 proto 6 10.111.0.2:56728 -> 142.251.13.94:80
+resolver enabled 1 fd 5 queries 3 hits 3 errors 0 last-uid 12540
+uid-block enabled 1 uid 12540 packets 3 bytes 180
+thread-hits worker-probe last 1 t0 0 t1 5 t2 0 t3 0
+thread-hits worker-redirect last 2 t0 0 t1 0 t2 5 t3 0
+
+resolver log:
+resolver query=1 proto=6 10.111.0.2:56728 -> 142.251.13.94:80 uid=12540
+resolver query=2 proto=6 10.111.0.2:56728 -> 142.251.13.94:80 uid=12540
+resolver query=3 proto=6 10.111.0.2:56728 -> 142.251.13.94:80 uid=12540
+
+HEV:
+no socks5 client tcp -> [142.251.13.94]:80
+socks_count_after=0
+```
+
+结论：
+
+```text
+Android redirect 后 VPP-internal real UID drop 成立：
+  thread 0 fd/input -> worker 1 handoff -> worker 2 redirect
+  worker 2 parses TCP tuple
+  worker 2 queries Android resolver fd
+  worker 2 applies block-owner-uid
+  HEV/SOCKS does not see the target TCP connect
+
+边界：
+  这里只验证 TCP UID drop。
+  UDP redirect、IPv6 redirect、packet ordering、异步 resolver 和性能仍需单独验证。
+```
