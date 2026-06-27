@@ -10,6 +10,7 @@ PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 HOST="${HOST:-8.8.8.8}"
 PORT="${PORT:-53}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-package}"
+ENABLE_IPV6="${ENABLE_IPV6:-0}"
 EXPECT_DROP="${EXPECT_DROP:-1}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-5}"
@@ -41,6 +42,7 @@ echo "adb_serial=$(adb_target_desc)"
 echo "package=$PACKAGE"
 echo "udp=$HOST:$PORT"
 echo "block_owner_uid=$BLOCK_OWNER_UID"
+echo "enable_ipv6=$ENABLE_IPV6"
 echo "expect_drop=$EXPECT_DROP"
 
 if [[ "$BUILD_APK" == "1" ]]; then
@@ -74,6 +76,9 @@ start_args=(shell am start -n "$PACKAGE/.MainActivity" \
   --es allowedPackage "$PACKAGE")
 if [[ -n "$BLOCK_OWNER_UID" ]]; then
   start_args+=(--ei blockOwnerUid "$BLOCK_OWNER_UID")
+fi
+if [[ "$ENABLE_IPV6" == "1" ]]; then
+  start_args+=(--ez enableIpv6 true)
 fi
 adb_cmd "${start_args[@]}"
 sleep "$START_WAIT"
@@ -114,9 +119,17 @@ if ! grep -q 'ok bytes=' <<<"$udp_log"; then
   echo "expected UDP probe send ok" >&2
   exit 1
 fi
-if ! grep -Eq 'last-tuple ip4 proto 17 .* -> '"$HOST:$PORT" <<<"$vpp_cli"; then
-  echo "expected VPP last tuple to be UDP $HOST:$PORT" >&2
-  exit 1
+if [[ "$ENABLE_IPV6" == "1" ]]; then
+  if ! grep -Fq 'last-tuple ip6 proto 17' <<<"$vpp_cli" \
+    || ! grep -Fq -- "-> [$HOST]:$PORT" <<<"$vpp_cli"; then
+    echo "expected VPP IPv6 UDP last tuple to $HOST:$PORT" >&2
+    exit 1
+  fi
+else
+  if ! grep -Eq 'last-tuple ip4 proto 17 .* -> '"$HOST:$PORT" <<<"$vpp_cli"; then
+    echo "expected VPP last tuple to be UDP $HOST:$PORT" >&2
+    exit 1
+  fi
 fi
 if ! grep -Eq 'resolver enabled 1 fd 5 queries [1-9].* hits [1-9].* errors 0' <<<"$vpp_cli"; then
   echo "expected VPP resolver UDP hits without errors" >&2

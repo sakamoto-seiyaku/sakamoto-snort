@@ -5286,3 +5286,71 @@ Android VPN VPP-internal IPv6 TCP UID drop 成立：
   只覆盖普通 IPv6 base header，不覆盖 extension headers。
   IPv6 UDP owner drop、redirect 后 IPv6 verdict、cache、异步查询和性能仍需单独验证。
 ```
+
+### 74. Android VPP worker can drop IPv6 UDP by real app owner UID
+
+问题：第 73 步补齐了 IPv6 TCP。这里补 IPv6 UDP send packet：VPP worker 是否能解析
+IPv6 UDP tuple、通过 Android resolver 拿到真实 UID，并在 VPP worker 内 drop。
+
+最小实现：
+
+```text
+Android extra:
+  enableIpv6=true
+  blockOwnerUid=<package_uid>
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 resolver-fd 5 block-owner-uid 12540
+
+test:
+  app UDP probe -> [2606:4700:4700::1111]:53
+  expect UDP send succeeds at app API level
+  expect VPP last-tuple ip6 proto 17
+  expect resolver UID 12540
+  expect uid-block counter increases inside VPP
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-ipv6-udp-drop-poc
+```
+
+结果：
+
+```text
+app-udp-probe.log:
+ok bytes=24 elapsedMs=3006
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 7 bytes 532 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 6 bytes 460
+blocked 1 bytes 72 block-ip4-dst -
+handoff target-thread 1 fq 21 enqueued 7 bytes 532 congestion-drops 0 alloc-errors 0 worker-packets 7 bytes 532
+tuple parsed 1 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip6 proto 17 [fd00:111:111::2]:33570 -> [2606:4700:4700::1111]:53
+resolver enabled 1 fd 5 queries 1 hits 1 errors 0 last-uid 12540
+uid-block enabled 1 uid 12540 packets 1 bytes 72
+thread-hits worker-probe last 1 t0 0 t1 3 t2 0 t3 0
+
+resolver log:
+resolver query=1 proto=17 fd00:111:111::2:33570 -> 2606:4700:4700::1111:53 uid=12540
+```
+
+结论：
+
+```text
+Android VPN VPP-internal IPv6 UDP UID drop 成立：
+  VpnService IPv6 route sends app IPv6 UDP packet into packaged VPP
+  VPP worker parses IPv6 UDP tuple
+  VPP worker queries Android resolver fd
+  native/Java returns package UID
+  VPP worker applies block-owner-uid
+
+边界：
+  这里只验证 UDP send packet 的 owner lookup + VPP verdict。
+  当前 smoke server 不是完整 UDP ASSOCIATE 服务器，所以这里不声明 IPv6 UDP proxy
+  end-to-end 成立。
+  IPv6 extension headers、redirect 后 IPv6 verdict、cache、异步查询和性能仍需单独验证。
+```
