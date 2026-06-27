@@ -37,6 +37,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
+| Android VPN VPP UDP owner UID drop | VPP worker queries Android owner UID for a UDP packet and drops by package UID. | Experiment 70 |
 
 ## Demoted / Mis-scoped
 
@@ -49,14 +50,14 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 
 ## Current Design Implications
 
-- Root mode is the verified path for per-packet UID attribution.
+- Root mode is the verified low-friction path for package UID attribution.
 - VPN mode can choose app membership with `VpnService.Builder`.
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
 - VPN mode can still do static IP packet rules inside VPP.
-- VPN mode VPP-internal UID filtering is proven only with a Docker mock
-  resolver. The Android resolver bridge still needs to keep packet verdicts
-  inside VPP; Java/NDK may only resolve tuple -> UID.
+- VPN mode VPP-internal UID filtering is proven on Android for IPv4 TCP and
+  IPv4 UDP send packets: Java/NDK only resolves tuple -> UID, while VPP keeps
+  packet forwarding/verdict ownership.
 - Current `tun_poc` fd adapter does not get worker distribution automatically;
   software steering/handoff must be explicit if we want worker processing.
 - VPP frame-queue handoff is viable once the packet is represented as a VPP
@@ -78,16 +79,18 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - Android VPP-internal UID drop is now verified for IPv4 TCP: resolver provides
   UID, VPP worker applies `block-owner-uid`, and HEV/SOCKS sees no target
   connection.
+- Android VPP-internal UID drop is also verified for IPv4 UDP send packets.
 - Worker-side processing can forward back into the current shim/HEV style path,
   so worker verdicts can be tested without designing the final interface shape.
-- The first useful product slice can be package UID allow/block in root mode, plus
-  VPN app include/exclude and static IP block POCs. VPN UID filtering is not in
-  the Android verified slice until the Android resolver bridge passes.
+- The first useful product slice can be package UID allow/block in root mode,
+  plus VPN app include/exclude, static IP block, and Android VPP owner UID
+  filtering for IPv4 TCP/UDP.
 
 ## Known Gaps
 
-- VPN VPP-internal UID enforcement is not verified. Experiments 48/50/51 gate in
-  the parent native process before `tun_poc`, not inside VPP.
+- The older VPN owner gate experiments remain mis-scoped. Experiments 48/50/51
+  gate in the parent native process before `tun_poc`; use Experiments 68-70 for
+  VPP-internal Android UID filtering evidence.
 - VPN VPP-internal owner cache is not verified. Experiment 52 caches in the
   parent native process.
 - VPP handoff worker-side static rules are verified for IPv4 drop, IPv4
@@ -95,17 +98,18 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   main IPv6 verdict path is no longer unknown.
 - VPP worker-side IPv4/IPv6 TCP/UDP tuple parsing is verified for packets
   without IPv6 extension headers. Mock tuple->UID resolver integration is
-  verified; Android resolver bridging remains separate.
-- VPP worker can synchronously query a mock tuple owner resolver over an fd and
-  enforce a mock UID drop verdict. Android
-  `ConnectivityManager.getConnectionOwnerUid` bridging and owner cache remain
+  verified, and Android resolver bridging is verified for IPv4 TCP/UDP. IPv6
+  Android resolver/drop remains separate.
+- VPP worker can synchronously query a tuple owner resolver over an fd and
+  enforce a UID drop verdict. Owner cache, async lookup, and performance remain
   separate POCs.
 - Worker-to-worker re-handoff is verified for a short ICMP forward path and
   IPv4 UDP/TCP mock UID drop. It does not yet prove a production sharding
   policy, packet ordering behavior, Android resolver behavior, or performance.
 - Android worker handoff is verified for IPv4 TCP/HTTP allow, static IPv4 dst
-  drop, Android resolver UID query, and Android UID drop through HEV. IPv6
-  Android resolver/drop and owner caching remain separate.
+  drop, Android resolver UID query, Android TCP UID drop, and Android UDP UID
+  drop through HEV. IPv6 Android resolver/drop and owner caching remain
+  separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

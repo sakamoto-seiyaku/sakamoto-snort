@@ -5006,3 +5006,65 @@ Android VPN VPP-internal real UID drop 成立：
   没有 owner cache；第 68 步已经观察到 allow path 后续 packet 可能返回 -1。
   IPv6/UDP Android resolver drop、cache 策略、异步查询和性能仍需单独验证。
 ```
+
+### 70. Android VPP worker can drop UDP by real app owner UID
+
+问题：第 69 步只验证了 Android 上的 IPv4 TCP UID drop。这里验证 UDP send packet
+是否同样能走 `VpnService -> VPP worker -> resolver fd -> Java owner UID -> VPP verdict`，
+并且 verdict 不落到 parent native gate。
+
+最小实现：
+
+```text
+Android mode:
+  vpp-hev-owner-resolver
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 resolver-fd 5 block-owner-uid 12540
+
+test:
+  app UDP probe -> 8.8.8.8:53
+  package_uid=12540
+  expect UDP send succeeds at app API level
+  expect VPP worker parses proto 17 tuple
+  expect resolver returns package UID
+  expect uid-block counter increases inside VPP
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-udp-drop-poc
+```
+
+结果：
+
+```text
+app-udp-probe.log:
+ok bytes=24 elapsedMs=3009
+
+show tun-poc:
+last-tuple ip4 proto 17 10.111.0.2:58817 -> 8.8.8.8:53
+resolver enabled 1 fd 5 queries 1 hits 1 errors 0 last-uid 12540
+uid-block enabled 1 uid 12540 packets 1 bytes 52
+thread-hits worker-probe last 1 t0 0 t1 3 t2 0 t3 0
+
+resolver log:
+resolver query=1 proto=17 10.111.0.2:58817 -> 8.8.8.8:53 uid=12540
+```
+
+结论：
+
+```text
+Android VPN VPP-internal UDP UID drop 成立：
+  VPP worker parses UDP tuple
+  VPP worker queries Android resolver fd
+  native/Java returns package UID
+  VPP worker applies block-owner-uid and drops before HEV/SOCKS path
+
+边界：
+  这里只验证 UDP send packet 的 owner lookup + VPP verdict。
+  当前 smoke server 不是完整 UDP ASSOCIATE 服务器，所以这里不声明 UDP proxy
+  end-to-end 成立。
+  IPv6 UDP、redirect 后 Android resolver、cache、异步查询和性能仍需单独验证。
+```
