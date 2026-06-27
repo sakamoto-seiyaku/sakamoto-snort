@@ -4043,3 +4043,49 @@ getConnectionOwnerUid 的可见窗口问题有最小可行缓解：
 这仍不是产品设计：
   cache size、eviction、TCP close、UDP timeout、policy epoch 都还需要后续接口/规则设计时决定。
 ```
+
+### 53. Scope correction: owner gate is not VPP-internal filtering
+
+问题：第 48/50/51/52 步把“VPN mode 能不能按 owner UID 阻断”验证成了 parent native gate：
+
+```text
+real TUN fd -> parent native gate -> VPP fd -> tun_poc -> HEV
+```
+
+这不满足当前 POC 目标。目标必须是：
+
+```text
+real TUN fd -> VPP plugin/node -> VPP decides drop/forward -> HEV
+```
+
+重新分类：
+
+```text
+Experiment 47/49:
+  保留为 Android API 可用性 POC。
+  只证明 active VpnService 进程可以 tuple -> UID。
+
+Experiment 48/50/51:
+  降级为 mis-scoped。
+  它们证明 parent native gate 可阻断，但没有证明 VPP 内部过滤。
+
+Experiment 52:
+  降级为 mis-scoped。
+  它证明 parent native cache 可恢复 owner UID，但没有证明 VPP 内部 owner cache。
+```
+
+修正后的下一步：
+
+```text
+1. 先验证当前 tun_poc 在 VPP 多线程启动时实际在哪个 VPP thread 处理 fd-read packet。
+2. 验证 VPP worker/handoff/redirect 能否把一个软件读取的 packet 交给指定 worker。
+3. 再做 VPP 内部 tuple -> UID resolver POC：
+   VPP parses packet tuple -> asks Java/NDK resolver -> VPP receives uid -> VPP plugin decides drop/forward.
+```
+
+结论：
+
+```text
+VPN mode VPP-internal UID filtering remains unverified.
+The packet decision must move back into VPP.
+```
