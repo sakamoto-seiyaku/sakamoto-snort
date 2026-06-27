@@ -3650,3 +3650,66 @@ vpp_main CPU%: 1.993, 0.996, 1.993, 0.000, 1.993
 结论：在当前 `clib_file` fd-ready 直 verdict POC 中，`nfqueue-poc enable` 后 VPP 空闲 CPU 没有出现单核 100% 忙轮询，观测值和 minimal VPP 大致同量级。
 
 这不等于最终性能结论；后续进入 vlib_buffer/graph/worker 版本后仍需重测。
+
+### 47. Android VPN native packet tuple -> owner UID lookup
+
+问题：VPN mode 下，`VpnService` 收到的 TCP/UDP packet 只有 L3/L4 tuple，没有 UID metadata。Android 官方提供
+`ConnectivityManager.getConnectionOwnerUid()`；这里先不接规则引擎，只验证 active VPN 进程里能不能用 packet tuple 查回 app UID。
+
+最小实现：
+
+```text
+SnortVpnService native mode:
+  TUN packet -> native parser -> Java helper -> ConnectivityManager.getConnectionOwnerUid()
+
+native parser:
+  IPv4 TCP/UDP: src/dst address + src/dst port
+  IPv6 TCP/UDP: no-extension-header baseline only
+
+Java helper:
+  queryConnectionOwnerUidForPacket(protocol, localAddress, localPort, remoteAddress, remotePort)
+```
+
+新增脚本：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpn-owner-uid-poc
+```
+
+第一次运行问题：
+
+```text
+1. script 在 `cmd package list packages -U | awk ... exit` 上因为 pipefail/SIGPIPE 返回 141。
+   修复为先收完整 package list 再 awk。
+
+2. TCP 返回目标 APK UID，UDP 初次返回 -1。
+   原因是 UDP DatagramSocket 发送后立刻关闭，owner 查询时连接记录已经不可见。
+   修复为 connected UDP socket 发送后保持 3 秒再关闭。
+```
+
+通过结果：
+
+```text
+package_uid=12540
+
+packet=8 len=60 ipv4 proto=6 10.111.0.2:41576 -> 142.251.13.94:80 ownerUid=12540
+packet=9 len=52 ipv4 proto=17 10.111.0.2:52674 -> 8.8.8.8:53 ownerUid=12540
+
+app HTTP probe:
+  expected timeout, because native VPN probe does not forward packets.
+
+app UDP probe:
+  ok bytes=24 elapsedMs=3006
+```
+
+结论：
+
+```text
+VPN mode per-packet app attribution 的 0->1 能力成立：
+  active VpnService process 可以从 TCP/UDP packet tuple 反查 UID。
+
+当前只证明 native VPN probe 可以查 UID；还没有证明 VPP/HEV path 内联 UID block。
+下一步若要把它用于 VPN mode 拦截，需要做一个更小的 gate POC：
+  TUN read -> owner UID lookup -> drop/forward
+然后再决定这个 gate 放在 VPP 前、VPP 父进程 bridge、还是 VPP 插件外部旁路。
+```

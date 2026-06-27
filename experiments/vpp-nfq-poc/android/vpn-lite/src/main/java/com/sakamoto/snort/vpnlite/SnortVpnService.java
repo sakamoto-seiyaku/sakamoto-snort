@@ -1,14 +1,19 @@
 package com.sakamoto.snort.vpnlite;
 
 import android.content.Intent;
+import android.net.ConnectivityManager;
 import android.net.VpnService;
 import android.os.ParcelFileDescriptor;
+import android.os.Process;
 import android.util.Log;
 
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -17,6 +22,7 @@ public final class SnortVpnService extends VpnService {
     public static final String ACTION_START = "com.sakamoto.snort.vpnlite.START";
     public static final String ACTION_STOP = "com.sakamoto.snort.vpnlite.STOP";
     public static final String ACTION_HTTP_PROBE = "com.sakamoto.snort.vpnlite.HTTP_PROBE";
+    public static final String ACTION_UDP_PROBE = "com.sakamoto.snort.vpnlite.UDP_PROBE";
     public static final String EXTRA_MODE = "mode";
     public static final String EXTRA_HOST = "host";
     public static final String EXTRA_PORT = "port";
@@ -43,7 +49,8 @@ public final class SnortVpnService extends VpnService {
 
     private ParcelFileDescriptor vpnFd;
 
-    private static native int nativeStartProbe(int fd, String logPath, int maxPackets);
+    private static native int nativeStartProbe(int fd, String logPath, int maxPackets,
+                                               SnortVpnService ownerLookup);
 
     private static native void nativeStopProbe();
 
@@ -67,6 +74,10 @@ public final class SnortVpnService extends VpnService {
         }
         if (ACTION_HTTP_PROBE.equals(action)) {
             startHttpProbe(intent);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_UDP_PROBE.equals(action)) {
+            startUdpProbe(intent);
             return START_NOT_STICKY;
         }
 
@@ -152,7 +163,8 @@ public final class SnortVpnService extends VpnService {
                 Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " vppMode=" + vppMode
                         + " rc=" + rc);
             } else {
-                int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS);
+                int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS,
+                        this);
                 Log.i(TAG, "nativeStartProbe fd=" + rawFd + " rc=" + rc + " log=" + logPath);
             }
         } catch (Exception e) {
@@ -180,6 +192,20 @@ public final class SnortVpnService extends VpnService {
         final String probePath = path;
         Thread thread = new Thread(() -> runHttpProbe(probeHost, probePort, probePath),
                 "snort-app-http-probe");
+        thread.start();
+    }
+
+    private void startUdpProbe(Intent intent) {
+        String host = intent == null ? null : intent.getStringExtra(EXTRA_HOST);
+        if (host == null || host.isEmpty()) {
+            host = "8.8.8.8";
+        }
+        int port = intent == null ? 53 : intent.getIntExtra(EXTRA_PORT, 53);
+
+        final String probeHost = host;
+        final int probePort = port;
+        Thread thread = new Thread(() -> runUdpProbe(probeHost, probePort),
+                "snort-app-udp-probe");
         thread.start();
     }
 
@@ -220,12 +246,70 @@ public final class SnortVpnService extends VpnService {
         }
     }
 
+    private void runUdpProbe(String host, int port) {
+        long started = System.currentTimeMillis();
+        File logsDir = new File(getFilesDir(), "logs");
+        if (!logsDir.isDirectory() && !logsDir.mkdirs()) {
+            Log.w(TAG, "failed to create logs dir: " + logsDir);
+        }
+        File logPath = new File(logsDir, "app-udp-probe.log");
+        appendProbeLog(logPath, "start host=" + host + " port=" + port);
+
+        try (DatagramSocket socket = new DatagramSocket()) {
+            InetAddress remote = InetAddress.getByName(host);
+            socket.connect(remote, port);
+            byte[] payload = "snort-vpn-lite-udp-probe".getBytes(StandardCharsets.US_ASCII);
+            DatagramPacket packet = new DatagramPacket(payload, payload.length);
+            socket.send(packet);
+            Thread.sleep(3000);
+            long elapsed = System.currentTimeMillis() - started;
+            appendProbeLog(logPath, "ok bytes=" + payload.length + " elapsedMs=" + elapsed);
+            Log.i(TAG, "app UDP probe ok host=" + host + " port=" + port
+                    + " bytes=" + payload.length);
+        } catch (Exception e) {
+            long elapsed = System.currentTimeMillis() - started;
+            appendProbeLog(logPath, "fail elapsedMs=" + elapsed + " error="
+                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+            Log.w(TAG, "app UDP probe failed host=" + host + " port=" + port, e);
+        }
+    }
+
     private void appendHttpProbeLog(File logPath, String line) {
+        appendProbeLog(logPath, line);
+    }
+
+    private void appendProbeLog(File logPath, String line) {
         String text = System.currentTimeMillis() + " " + line + "\n";
         try (FileOutputStream out = new FileOutputStream(logPath, true)) {
             out.write(text.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
-            Log.w(TAG, "write HTTP probe log failed: " + logPath, e);
+            Log.w(TAG, "write probe log failed: " + logPath, e);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private int queryConnectionOwnerUidForPacket(int protocol, String localAddress, int localPort,
+                                                 String remoteAddress, int remotePort) {
+        try {
+            ConnectivityManager connectivityManager =
+                    (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (connectivityManager == null) {
+                return Process.INVALID_UID;
+            }
+            InetSocketAddress local = new InetSocketAddress(
+                    InetAddress.getByName(localAddress), localPort);
+            InetSocketAddress remote = new InetSocketAddress(
+                    InetAddress.getByName(remoteAddress), remotePort);
+            int uid = connectivityManager.getConnectionOwnerUid(protocol, local, remote);
+            Log.i(TAG, "owner uid query proto=" + protocol + " "
+                    + localAddress + ":" + localPort + " -> "
+                    + remoteAddress + ":" + remotePort + " uid=" + uid);
+            return uid;
+        } catch (Exception e) {
+            Log.w(TAG, "owner uid query failed proto=" + protocol + " "
+                    + localAddress + ":" + localPort + " -> "
+                    + remoteAddress + ":" + remotePort, e);
+            return Process.INVALID_UID;
         }
     }
 

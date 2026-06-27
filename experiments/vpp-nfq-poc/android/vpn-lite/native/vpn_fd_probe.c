@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <jni.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -33,6 +34,9 @@ static bool g_running;
 static int g_fd = -1;
 static int g_max_packets;
 static char g_log_path[PATH_BUF_SIZE];
+static JavaVM *g_jvm;
+static jobject g_owner_lookup;
+static jmethodID g_owner_lookup_method;
 
 static pthread_t g_vpp_monitor_thread;
 static bool g_vpp_monitor_running;
@@ -51,6 +55,15 @@ static char g_hev_log_path[PATH_BUF_SIZE];
 
 typedef int (*hev_main_from_str_fn)(const char *config, unsigned int config_len, int tun_fd);
 
+typedef struct {
+    bool valid;
+    int protocol;
+    char local_addr[INET6_ADDRSTRLEN];
+    char remote_addr[INET6_ADDRSTRLEN];
+    uint16_t local_port;
+    uint16_t remote_port;
+} owner_query_t;
+
 static void run_hev_child(const char *native_dir, const char *log_path, int fd, int socks_port);
 
 static void log_line(FILE *file, const char *fmt, ...) {
@@ -66,6 +79,87 @@ static void log_line(FILE *file, const char *fmt, ...) {
         fprintf(file, "%s\n", line);
         fflush(file);
     }
+}
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+    (void)reserved;
+    g_jvm = vm;
+    return JNI_VERSION_1_6;
+}
+
+static void clear_owner_lookup(JNIEnv *env) {
+    pthread_mutex_lock(&g_lock);
+    jobject owner = g_owner_lookup;
+    g_owner_lookup = NULL;
+    g_owner_lookup_method = NULL;
+    pthread_mutex_unlock(&g_lock);
+
+    if (owner) {
+        (*env)->DeleteGlobalRef(env, owner);
+    }
+}
+
+static int query_owner_uid(const owner_query_t *query) {
+    if (!query || !query->valid || !g_jvm) {
+        return -1;
+    }
+
+    JNIEnv *env = NULL;
+    bool detach = false;
+    jint env_rc = (*g_jvm)->GetEnv(g_jvm, (void **)&env, JNI_VERSION_1_6);
+    if (env_rc == JNI_EDETACHED) {
+        if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK) {
+            return -1;
+        }
+        detach = true;
+    } else if (env_rc != JNI_OK || !env) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    jobject owner = g_owner_lookup;
+    jmethodID method = g_owner_lookup_method;
+    pthread_mutex_unlock(&g_lock);
+    if (!owner || !method) {
+        if (detach) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return -1;
+    }
+
+    jstring local_addr = (*env)->NewStringUTF(env, query->local_addr);
+    jstring remote_addr = (*env)->NewStringUTF(env, query->remote_addr);
+    if (!local_addr || !remote_addr) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        if (local_addr) {
+            (*env)->DeleteLocalRef(env, local_addr);
+        }
+        if (remote_addr) {
+            (*env)->DeleteLocalRef(env, remote_addr);
+        }
+        if (detach) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return -1;
+    }
+
+    jint uid = (*env)->CallIntMethod(env, owner, method, (jint)query->protocol,
+                                     local_addr, (jint)query->local_port,
+                                     remote_addr, (jint)query->remote_port);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        uid = -1;
+    }
+
+    (*env)->DeleteLocalRef(env, local_addr);
+    (*env)->DeleteLocalRef(env, remote_addr);
+    if (detach) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
+    return (int)uid;
 }
 
 static bool path_exists(const char *path) {
@@ -221,6 +315,74 @@ static int run_cli_command(const char *sock_path, const char *command, FILE *fil
     return total > 0 ? 0 : -1;
 }
 
+static uint16_t read_be16(const unsigned char *data) {
+    return (uint16_t)(((uint16_t)data[0] << 8U) | (uint16_t)data[1]);
+}
+
+static bool parse_owner_query_ipv4(const unsigned char *buf, ssize_t len,
+                                   owner_query_t *query) {
+    if (!query || len < 20 || (buf[0] >> 4) != 4) {
+        return false;
+    }
+
+    size_t packet_len = (size_t)len;
+    size_t ihl = (size_t)(buf[0] & 0x0fU) * 4U;
+    if (ihl < 20 || packet_len < ihl + 4U) {
+        return false;
+    }
+
+    int protocol = (int)buf[9];
+    if (protocol != IPPROTO_TCP && protocol != IPPROTO_UDP) {
+        return false;
+    }
+    size_t min_l4 = protocol == IPPROTO_UDP ? 8U : 4U;
+    if (packet_len < ihl + min_l4) {
+        return false;
+    }
+
+    memset(query, 0, sizeof(*query));
+    query->valid = true;
+    query->protocol = protocol;
+    query->local_port = read_be16(buf + ihl);
+    query->remote_port = read_be16(buf + ihl + 2U);
+    if (!inet_ntop(AF_INET, buf + 12, query->local_addr, sizeof(query->local_addr)) ||
+        !inet_ntop(AF_INET, buf + 16, query->remote_addr, sizeof(query->remote_addr))) {
+        query->valid = false;
+        return false;
+    }
+    return true;
+}
+
+static bool parse_owner_query_ipv6(const unsigned char *buf, ssize_t len,
+                                   owner_query_t *query) {
+    if (!query || len < 40 || (buf[0] >> 4) != 6) {
+        return false;
+    }
+
+    size_t packet_len = (size_t)len;
+    size_t offset = 40U;
+    int protocol = (int)buf[6];
+    if (protocol != IPPROTO_TCP && protocol != IPPROTO_UDP) {
+        return false;
+    }
+    size_t min_l4 = protocol == IPPROTO_UDP ? 8U : 4U;
+    if (packet_len < offset + min_l4) {
+        return false;
+    }
+
+    memset(query, 0, sizeof(*query));
+    query->valid = true;
+    query->protocol = protocol;
+    query->local_port = read_be16(buf + offset);
+    query->remote_port = read_be16(buf + offset + 2U);
+    if (!inet_ntop(AF_INET6, buf + 8, query->local_addr, sizeof(query->local_addr)) ||
+        !inet_ntop(AF_INET6, buf + 24, query->remote_addr, sizeof(query->remote_addr))) {
+        query->valid = false;
+        return false;
+    }
+    return true;
+}
+
 static void describe_packet(FILE *file, const unsigned char *buf, ssize_t len, int count) {
     if (len < 1) {
         log_line(file, "packet=%d len=%zd empty", count, len);
@@ -233,7 +395,17 @@ static void describe_packet(FILE *file, const unsigned char *buf, ssize_t len, i
         char dst[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, buf + 12, src, sizeof(src));
         inet_ntop(AF_INET, buf + 16, dst, sizeof(dst));
-        log_line(file, "packet=%d len=%zd ipv4 proto=%u %s -> %s", count, len, buf[9], src, dst);
+        owner_query_t query;
+        if (parse_owner_query_ipv4(buf, len, &query)) {
+            int uid = query_owner_uid(&query);
+            log_line(file, "packet=%d len=%zd ipv4 proto=%d %s:%u -> %s:%u ownerUid=%d",
+                     count, len, query.protocol, query.local_addr,
+                     (unsigned int)query.local_port, query.remote_addr,
+                     (unsigned int)query.remote_port, uid);
+        } else {
+            log_line(file, "packet=%d len=%zd ipv4 proto=%u %s -> %s", count, len, buf[9],
+                     src, dst);
+        }
         return;
     }
 
@@ -242,7 +414,17 @@ static void describe_packet(FILE *file, const unsigned char *buf, ssize_t len, i
         char dst[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, buf + 8, src, sizeof(src));
         inet_ntop(AF_INET6, buf + 24, dst, sizeof(dst));
-        log_line(file, "packet=%d len=%zd ipv6 next=%u %s -> %s", count, len, buf[6], src, dst);
+        owner_query_t query;
+        if (parse_owner_query_ipv6(buf, len, &query)) {
+            int uid = query_owner_uid(&query);
+            log_line(file, "packet=%d len=%zd ipv6 proto=%d %s:%u -> %s:%u ownerUid=%d",
+                     count, len, query.protocol, query.local_addr,
+                     (unsigned int)query.local_port, query.remote_addr,
+                     (unsigned int)query.remote_port, uid);
+        } else {
+            log_line(file, "packet=%d len=%zd ipv6 next=%u %s -> %s", count, len, buf[6],
+                     src, dst);
+        }
         return;
     }
 
@@ -438,17 +620,47 @@ static void *probe_thread(void *arg) {
 
 JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartProbe(
-        JNIEnv *env, jclass clazz, jint fd, jstring log_path, jint max_packets) {
-    (void)clazz;
+        JNIEnv *env, jclass clazz, jint fd, jstring log_path, jint max_packets,
+        jobject owner_lookup) {
     const char *path = (*env)->GetStringUTFChars(env, log_path, NULL);
     if (!path) {
         close(fd);
         return -1;
     }
 
+    if (!g_jvm && (*env)->GetJavaVM(env, &g_jvm) != JNI_OK) {
+        (*env)->ReleaseStringUTFChars(env, log_path, path);
+        close(fd);
+        return -4;
+    }
+
+    jmethodID owner_method = NULL;
+    jobject owner_global = NULL;
+    if (owner_lookup) {
+        owner_method = (*env)->GetMethodID(env, clazz, "queryConnectionOwnerUidForPacket",
+                                           "(ILjava/lang/String;ILjava/lang/String;I)I");
+        if (!owner_method || (*env)->ExceptionCheck(env)) {
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+            }
+            (*env)->ReleaseStringUTFChars(env, log_path, path);
+            close(fd);
+            return -5;
+        }
+        owner_global = (*env)->NewGlobalRef(env, owner_lookup);
+        if (!owner_global) {
+            (*env)->ReleaseStringUTFChars(env, log_path, path);
+            close(fd);
+            return -6;
+        }
+    }
+
     pthread_mutex_lock(&g_lock);
     if (g_running) {
         pthread_mutex_unlock(&g_lock);
+        if (owner_global) {
+            (*env)->DeleteGlobalRef(env, owner_global);
+        }
         (*env)->ReleaseStringUTFChars(env, log_path, path);
         close(fd);
         return -2;
@@ -457,6 +669,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartProbe(
     snprintf(g_log_path, sizeof(g_log_path), "%s", path);
     g_fd = fd;
     g_max_packets = max_packets;
+    g_owner_lookup = owner_global;
+    g_owner_lookup_method = owner_method;
     g_running = true;
     int flags = fcntl(g_fd, F_GETFL, 0);
     if (flags >= 0) {
@@ -472,7 +686,12 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartProbe(
         g_running = false;
         close(g_fd);
         g_fd = -1;
+        g_owner_lookup = NULL;
+        g_owner_lookup_method = NULL;
         pthread_mutex_unlock(&g_lock);
+        if (owner_global) {
+            (*env)->DeleteGlobalRef(env, owner_global);
+        }
         return -3;
     }
     return 0;
@@ -496,6 +715,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopProbe(JNIEnv *env, jcl
     if (was_running) {
         pthread_join(g_thread, NULL);
     }
+    clear_owner_lookup(env);
 }
 
 static void *vpp_monitor_thread(void *arg) {
