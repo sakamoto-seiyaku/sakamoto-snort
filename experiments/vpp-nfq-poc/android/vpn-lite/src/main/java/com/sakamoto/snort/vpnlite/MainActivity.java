@@ -148,13 +148,14 @@ public final class MainActivity extends Activity {
         appendLog("app HTTP probe requested: " + host + ":" + port + path);
     }
 
-    private void startAppUdpProbe(String host, int port) {
+    private void startAppUdpProbe(String host, int port, int count) {
         Intent intent = new Intent(this, SnortVpnService.class);
         intent.setAction(SnortVpnService.ACTION_UDP_PROBE);
         intent.putExtra(SnortVpnService.EXTRA_HOST, host);
         intent.putExtra(SnortVpnService.EXTRA_PORT, port);
+        intent.putExtra(SnortVpnService.EXTRA_COUNT, count);
         startService(intent);
-        appendLog("app UDP probe requested: " + host + ":" + port);
+        appendLog("app UDP probe requested: " + host + ":" + port + " count=" + count);
     }
 
     private void startVpnService(String mode) {
@@ -209,9 +210,11 @@ public final class MainActivity extends Activity {
                 host = "8.8.8.8";
             }
             int port = intent.getIntExtra(SnortVpnService.EXTRA_PORT, 53);
+            int count = intent.getIntExtra(SnortVpnService.EXTRA_COUNT, 1);
             String requestedHost = host;
-            appendLog("intent appUdpProbe=true host=" + host + " port=" + port);
-            main.postDelayed(() -> startAppUdpProbe(requestedHost, port), 300);
+            appendLog("intent appUdpProbe=true host=" + host + " port=" + port
+                    + " count=" + count);
+            main.postDelayed(() -> startAppUdpProbe(requestedHost, port, count), 300);
         }
 
         if (intent != null && intent.getBooleanExtra("start", false)) {

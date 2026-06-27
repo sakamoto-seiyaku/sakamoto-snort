@@ -9,10 +9,13 @@ REPO_ROOT="$(cd "$POC_DIR/../.." && pwd)"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 HOST="${HOST:-8.8.8.8}"
 PORT="${PORT:-53}"
+UDP_COUNT="${UDP_COUNT:-1}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-package}"
 REDIRECT_THREAD="${REDIRECT_THREAD:-}"
+OWNER_CACHE="${OWNER_CACHE:-0}"
 ENABLE_IPV6="${ENABLE_IPV6:-0}"
 EXPECT_DROP="${EXPECT_DROP:-1}"
+EXPECT_MIN_UID_BLOCK_PACKETS="${EXPECT_MIN_UID_BLOCK_PACKETS:-1}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-5}"
 STOP_WAIT="${STOP_WAIT:-2}"
@@ -42,8 +45,10 @@ echo "# Android VPP owner UDP resolver POC"
 echo "adb_serial=$(adb_target_desc)"
 echo "package=$PACKAGE"
 echo "udp=$HOST:$PORT"
+echo "udp_count=$UDP_COUNT"
 echo "block_owner_uid=$BLOCK_OWNER_UID"
 echo "redirect_thread=$REDIRECT_THREAD"
+echo "owner_cache=$OWNER_CACHE"
 echo "enable_ipv6=$ENABLE_IPV6"
 echo "expect_drop=$EXPECT_DROP"
 
@@ -82,6 +87,9 @@ fi
 if [[ -n "$REDIRECT_THREAD" ]]; then
   start_args+=(--ei redirectThread "$REDIRECT_THREAD")
 fi
+if [[ "$OWNER_CACHE" == "1" ]]; then
+  start_args+=(--ez ownerCache true)
+fi
 if [[ "$ENABLE_IPV6" == "1" ]]; then
   start_args+=(--ez enableIpv6 true)
 fi
@@ -93,7 +101,8 @@ echo "## app UDP probe"
 adb_cmd shell am start -n "$PACKAGE/.MainActivity" \
   --ez appUdpProbe true \
   --es host "$HOST" \
-  --ei port "$PORT"
+  --ei port "$PORT" \
+  --ei count "$UDP_COUNT"
 sleep "$PROBE_WAIT"
 
 echo
@@ -124,6 +133,10 @@ if ! grep -q 'ok bytes=' <<<"$udp_log"; then
   echo "expected UDP probe send ok" >&2
   exit 1
 fi
+if ! grep -q "packets=$UDP_COUNT" <<<"$udp_log"; then
+  echo "expected UDP probe packets=$UDP_COUNT" >&2
+  exit 1
+fi
 if [[ "$ENABLE_IPV6" == "1" ]]; then
   if ! grep -Fq 'last-tuple ip6 proto 17' <<<"$vpp_cli" \
     || ! grep -Fq -- "-> [$HOST]:$PORT" <<<"$vpp_cli"; then
@@ -139,6 +152,12 @@ fi
 if ! grep -Eq 'resolver enabled 1 fd 5 queries [1-9].* hits [1-9].* errors 0' <<<"$vpp_cli"; then
   echo "expected VPP resolver UDP hits without errors" >&2
   exit 1
+fi
+if [[ "$OWNER_CACHE" == "1" ]]; then
+  if ! grep -Eq 'owner-cache enabled 1 valid 1 hits [1-9].* stores [1-9].* uid '"$package_uid" <<<"$vpp_cli"; then
+    echo "expected VPP owner-cache hit/store for package uid $package_uid" >&2
+    exit 1
+  fi
 fi
 if ! grep -Eq "resolver query=.* proto=17 .* -> $HOST:$PORT uid=$package_uid" <<<"$resolver_log"; then
   echo "expected native resolver UDP log with uid=$package_uid" >&2
@@ -161,6 +180,20 @@ fi
 if [[ "$EXPECT_DROP" == "1" ]]; then
   if ! grep -Eq 'uid-block enabled 1 uid '"$package_uid"' packets [1-9]' <<<"$vpp_cli"; then
     echo "expected VPP UDP uid-block counter for package uid $package_uid" >&2
+    exit 1
+  fi
+  uid_block_packets="$(awk -v uid="$package_uid" '
+    $1 == "uid-block" && $2 == "enabled" && $3 == "1" && $4 == "uid" && $5 == uid {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "packets") {
+          print $(i + 1)
+        }
+      }
+    }
+  ' <<<"$vpp_cli" | tail -n 1)"
+  uid_block_packets="${uid_block_packets:-0}"
+  if (( uid_block_packets < EXPECT_MIN_UID_BLOCK_PACKETS )); then
+    echo "expected at least $EXPECT_MIN_UID_BLOCK_PACKETS VPP uid-block packets, got $uid_block_packets" >&2
     exit 1
   fi
 else

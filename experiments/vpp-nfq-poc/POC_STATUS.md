@@ -38,6 +38,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
 | Android VPN VPP owner cache | VPP worker can cache a tuple owner UID, avoid repeated Android resolver queries on the same TCP tuple, and keep `last-uid` at the package UID on the allow path. | Experiment 78 |
+| Android VPN VPP owner-cache UDP burst | App can send a 20-packet UDP burst through VPP; VPP owner-cache reduces resolver queries to one and drops all 20 packets by UID. | Experiment 79 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
 | Android VPN VPP IPv6 owner UID drop | VPP worker parses IPv6 TCP, queries Android owner UID, and drops real app packets by package UID before HEV/SOCKS. | Experiment 73 |
 | Android VPN VPP UDP owner UID drop | VPP worker queries Android owner UID for a UDP packet and drops by package UID. | Experiment 70 |
@@ -88,6 +89,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   for later packets on the same tuple. A minimal VPP-side tuple cache is now
   proven for one active tuple; production still needs real cache sizing,
   expiry, reverse-flow semantics, and concurrency rules.
+- A short 20-packet UDP owner-cache burst works on Pixel 6a: VPP parses and
+  drops all 20 packets while resolver queries stay at one. This is not a
+  sustained throughput or battery result.
 - Android VPP-internal UID drop is now verified for IPv4 TCP: resolver provides
   UID, VPP worker applies `block-owner-uid`, and HEV/SOCKS sees no target
   connection.
@@ -129,5 +133,6 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.
-- No sustained performance or battery test has been run beyond idle/short loops.
+- No sustained performance or battery test has been run beyond idle/short loops
+  and the 20-packet UDP owner-cache burst.
 - The Android app is still a POC shell, not a product UI or policy manager.

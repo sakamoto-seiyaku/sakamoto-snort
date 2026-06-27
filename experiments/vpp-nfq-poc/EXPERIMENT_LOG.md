@@ -5652,3 +5652,74 @@ VPP-internal owner cache POC 成立：
   connection close cleanup, or collision policy。
   resolver 仍是同步 query；async resolver 和性能仍需单独验证。
 ```
+
+### 79. Android VPP owner-cache can handle a short UDP burst
+
+问题：第 78 步证明同一 TCP tuple 可以 cache UID。这里用更直接的短 burst 验证：app 在同一个
+UDP socket 上发 20 个 packet，VPP worker 是否能全部解析/drop，同时 owner-cache 是否把
+resolver query 降到 1 次。
+
+最小实现：
+
+```text
+Android UDP probe:
+  count=20
+
+VPP CLI:
+  owner-cache
+  block-owner-uid=<package_uid>
+
+test:
+  app UDP probe -> 8.8.8.8:53 count=20
+  expect app send reports packets=20
+  expect VPP tuple parsed 20
+  expect resolver queries 1
+  expect owner-cache hits 19
+  expect uid-block packets 20
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-udp-cache-burst-poc
+```
+
+结果：
+
+```text
+app-udp-probe.log:
+start host=8.8.8.8 port=53 count=20
+ok bytes=480 packets=20 elapsedMs=3010
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 26 bytes 1440 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 6 bytes 400
+blocked 20 bytes 1040 block-ip4-dst -
+handoff target-thread 1 fq 21 enqueued 26 bytes 1440 congestion-drops 0 alloc-errors 0 worker-packets 26 bytes 1440
+tuple parsed 20 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip4 proto 17 10.111.0.2:54785 -> 8.8.8.8:53
+resolver enabled 1 fd 5 queries 1 hits 1 errors 0 last-uid 12540
+owner-cache enabled 1 valid 1 hits 19 misses 1 stores 1 uid 12540
+uid-block enabled 1 uid 12540 packets 20 bytes 1040
+thread-hits worker-probe last 1 t0 0 t1 4 t2 0 t3 0
+
+resolver log:
+resolver query=1 proto=17 10.111.0.2:54785 -> 8.8.8.8:53 uid=12540
+```
+
+结论：
+
+```text
+短 burst 下 VPP owner-cache POC 成立：
+  app 连续发 20 个 UDP packet
+  VPP worker 解析 20 个 UDP tuple
+  resolver 只查 1 次
+  VPP cache 命中 19 次
+  VPP UID verdict drop 20 个 packet
+
+边界：
+  这不是正式性能基准，只是小批量可行性验证。
+  没有吞吐曲线、延迟分布、CPU/battery、长时间运行、并发 app、多 tuple、多 worker cache
+  一致性或 backpressure 结论。
+```

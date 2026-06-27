@@ -27,6 +27,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_HOST = "host";
     public static final String EXTRA_PORT = "port";
     public static final String EXTRA_PATH = "path";
+    public static final String EXTRA_COUNT = "count";
     public static final String EXTRA_ALLOWED_PACKAGE = "allowedPackage";
     public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
     public static final String EXTRA_BLOCK_IP4_DST = "blockIp4Dst";
@@ -227,10 +228,13 @@ public final class SnortVpnService extends VpnService {
             host = "8.8.8.8";
         }
         int port = intent == null ? 53 : intent.getIntExtra(EXTRA_PORT, 53);
+        int count = intent == null ? 1 : intent.getIntExtra(EXTRA_COUNT, 1);
+        count = Math.max(1, Math.min(1000, count));
 
         final String probeHost = host;
         final int probePort = port;
-        Thread thread = new Thread(() -> runUdpProbe(probeHost, probePort),
+        final int probeCount = count;
+        Thread thread = new Thread(() -> runUdpProbe(probeHost, probePort, probeCount),
                 "snort-app-udp-probe");
         thread.start();
     }
@@ -272,26 +276,31 @@ public final class SnortVpnService extends VpnService {
         }
     }
 
-    private void runUdpProbe(String host, int port) {
+    private void runUdpProbe(String host, int port, int count) {
         long started = System.currentTimeMillis();
         File logsDir = new File(getFilesDir(), "logs");
         if (!logsDir.isDirectory() && !logsDir.mkdirs()) {
             Log.w(TAG, "failed to create logs dir: " + logsDir);
         }
         File logPath = new File(logsDir, "app-udp-probe.log");
-        appendProbeLog(logPath, "start host=" + host + " port=" + port);
+        appendProbeLog(logPath, "start host=" + host + " port=" + port + " count=" + count);
 
         try (DatagramSocket socket = new DatagramSocket()) {
             InetAddress remote = InetAddress.getByName(host);
             socket.connect(remote, port);
             byte[] payload = "snort-vpn-lite-udp-probe".getBytes(StandardCharsets.US_ASCII);
             DatagramPacket packet = new DatagramPacket(payload, payload.length);
-            socket.send(packet);
+            int sent = 0;
+            for (int i = 0; i < count; i++) {
+                socket.send(packet);
+                sent++;
+            }
             Thread.sleep(3000);
             long elapsed = System.currentTimeMillis() - started;
-            appendProbeLog(logPath, "ok bytes=" + payload.length + " elapsedMs=" + elapsed);
+            appendProbeLog(logPath, "ok bytes=" + (payload.length * sent)
+                    + " packets=" + sent + " elapsedMs=" + elapsed);
             Log.i(TAG, "app UDP probe ok host=" + host + " port=" + port
-                    + " bytes=" + payload.length);
+                    + " packets=" + sent + " bytes=" + (payload.length * sent));
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - started;
             appendProbeLog(logPath, "fail elapsedMs=" + elapsed + " error="
