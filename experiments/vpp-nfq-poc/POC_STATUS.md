@@ -31,6 +31,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker IPv6 TCP/UDP tuple parse | Worker thread 1 parses IPv6 UDP and TCP src/dst addresses and ports after TUN handoff. | Experiment 61 |
 | VPP worker mock tuple owner resolver | Worker thread 1 sends IPv4 UDP/TCP tuples to a resolver fd and records mock UID 4242. | Experiment 62 |
 | VPP worker mock UID verdict | Worker thread 1 drops IPv4 UDP/TCP packets when the mock resolver returns blocked UID 4242. | Experiment 63 |
+| VPP worker-to-worker redirect | Worker thread 1 can re-enqueue a VPP buffer to worker thread 2 through another frame queue; worker thread 2 forwards to shim and ping succeeds. | Experiment 64 |
 
 ## Demoted / Mis-scoped
 
@@ -55,6 +56,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   software steering/handoff must be explicit if we want worker processing.
 - VPP frame-queue handoff is viable once the packet is represented as a VPP
   buffer and the enqueue happens from a VLIB node context.
+- A worker node can re-enqueue an already handed-off VPP buffer to a different
+  worker through another frame queue; this answers the "can VPP internally
+  redirect after software steering" question for this POC shape.
 - Worker-side processing can forward back into the current shim/HEV style path,
   so worker verdicts can be tested without designing the final interface shape.
 - The first useful product slice can be package UID allow/block in root mode, plus
@@ -77,6 +81,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   enforce a mock UID drop verdict. Android
   `ConnectivityManager.getConnectionOwnerUid` bridging and owner cache remain
   separate POCs.
+- Worker-to-worker re-handoff is verified only for a short ICMP forward path.
+  It does not yet prove a production sharding policy, packet ordering behavior,
+  or resolver/cache handoff under load.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

@@ -33,6 +33,9 @@ typedef struct
   u8 *rx_buf;
   u32 handoff_frame_queue_index;
   u32 handoff_target_thread;
+  u32 redirect_frame_queue_index;
+  u32 redirect_target_thread;
+  u8 redirect_enabled;
 
   u64 rx_packets;
   u64 rx_bytes;
@@ -57,6 +60,11 @@ typedef struct
   u64 handoff_enqueued_bytes;
   u64 handoff_congestion_drops;
   u64 handoff_alloc_errors;
+  u64 redirect_enqueued_packets;
+  u64 redirect_enqueued_bytes;
+  u64 redirect_congestion_drops;
+  u64 redirect_worker_packets;
+  u64 redirect_worker_bytes;
   u64 worker_probe_packets;
   u64 worker_probe_bytes;
   u64 tuple_parsed_packets;
@@ -84,11 +92,13 @@ typedef struct
   u64 shim_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 rx_node_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 worker_probe_thread_hits[TUN_POC_MAX_THREAD_HITS];
+  u64 worker_redirect_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 overflow_thread_hits;
   u32 last_main_fd_thread_index;
   u32 last_shim_fd_thread_index;
   u32 last_rx_node_thread_index;
   u32 last_worker_probe_thread_index;
+  u32 last_worker_redirect_thread_index;
 } tun_poc_main_t;
 
 extern tun_poc_main_t tun_poc_main;

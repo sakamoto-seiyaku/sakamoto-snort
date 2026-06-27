@@ -4627,3 +4627,59 @@ VPP-internal UID verdict POC 成立：
   resolver 仍是 mock，不是 Android ConnectivityManager。
   当前是同步阻塞查询，没有 owner cache。
 ```
+
+### 64. VPP worker can redirect a handed-off packet to another worker
+
+问题：前面的 handoff 只证明 main/input node 可以把 TUN 包送到 worker 1。这里验证如果
+worker 1 发现包应该由别的 worker 处理，是否还能使用 VPP 内部机制把同一个 VPP buffer
+再送到 worker 2。
+
+最小实现：
+
+```text
+tun_poc CLI:
+  redirect-thread <n>
+
+worker behavior:
+  tun-poc-rx-handoff reads TUN fd on thread 0
+  frame queue sends VPP buffer to tun-poc-worker-probe on thread 1
+  worker-probe re-enqueues that buffer to tun-poc-worker-redirect on thread 2
+  worker-redirect performs the normal handoff-forward-fd write to shim
+```
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-tun-poc-build
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-forward-fd-redirect-smoke
+```
+
+结果：
+
+```text
+show threads:
+0 vpp_main
+1 vpp_wk_0
+2 vpp_wk_1
+
+after ping:
+handoff target-thread 1 fq 34 enqueued 2 bytes 132 congestion-drops 0 alloc-errors 0 worker-packets 2 bytes 132
+redirect enabled 1 target-thread 2 fq 35 enqueued 2 bytes 132 congestion-drops 0 worker-packets 2 bytes 132
+thread-hits main last 0 t0 2 t1 0 t2 0 t3 0
+thread-hits rx-node last 0 t0 2 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+thread-hits worker-redirect last 2 t0 0 t1 0 t2 2 t3 0
+ping: 1 transmitted, 1 received, 0% packet loss
+```
+
+结论：
+
+```text
+VPP 内部 worker->worker redirect POC 成立。
+这个路径没有绕过 VPP：包已经是 VPP buffer，worker 1 通过 frame queue 转给 worker 2，
+worker 2 再执行后续转发。
+
+边界：
+  这里只验证短路径 ICMP forward。
+  还没验证生产级 sharding 策略、顺序语义、resolver/cache 在 re-handoff 下的行为或性能。
+```

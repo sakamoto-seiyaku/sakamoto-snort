@@ -245,6 +245,42 @@ def parse_worker_probe_hits(show_output: str) -> dict[str, int]:
     return {key: int(value) for key, value in zip(keys, match.groups())}
 
 
+def parse_worker_redirect_hits(show_output: str) -> dict[str, int]:
+    match = re.search(
+        r"^thread-hits worker-redirect last (\d+) "
+        r"t0 (\d+) t1 (\d+) t2 (\d+) t3 (\d+)",
+        show_output,
+        re.MULTILINE,
+    )
+    if not match:
+        raise RuntimeError(f"could not parse worker-redirect hits:\n{show_output}")
+    keys = ("last", "t0", "t1", "t2", "t3")
+    return {key: int(value) for key, value in zip(keys, match.groups())}
+
+
+def parse_redirect_counters(show_output: str) -> dict[str, int]:
+    match = re.search(
+        r"^redirect enabled (\d+) target-thread (\d+) fq (\d+) "
+        r"enqueued (\d+) bytes (\d+) congestion-drops (\d+) "
+        r"worker-packets (\d+) bytes (\d+)",
+        show_output,
+        re.MULTILINE,
+    )
+    if not match:
+        raise RuntimeError(f"could not parse redirect counters:\n{show_output}")
+    keys = (
+        "enabled",
+        "target_thread",
+        "frame_queue",
+        "enqueued_packets",
+        "enqueued_bytes",
+        "congestion_drops",
+        "worker_packets",
+        "worker_bytes",
+    )
+    return {key: int(value) for key, value in zip(keys, match.groups())}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ifname", default="tun-poc-forward0")
@@ -263,6 +299,7 @@ def main() -> int:
         default="forward-fd",
     )
     parser.add_argument("--target-thread", type=int, default=1)
+    parser.add_argument("--redirect-thread", type=int)
     parser.add_argument("--block-ip4-dst")
     parser.add_argument("--block-ip6-dst")
     parser.add_argument("--expect-drop", action="store_true")
@@ -317,6 +354,8 @@ def main() -> int:
         ]
         if args.tun_poc_mode == "handoff-forward-fd":
             enable_command.extend(["target-thread", str(args.target_thread)])
+            if args.redirect_thread is not None:
+                enable_command.extend(["redirect-thread", str(args.redirect_thread)])
         if args.block_ip4_dst:
             enable_command.extend(["block-ip4-dst", args.block_ip4_dst])
         if args.block_ip6_dst:
@@ -386,6 +425,22 @@ def main() -> int:
             target_key = f"t{args.target_thread}"
             if worker_hits.get(target_key, 0) <= 0:
                 raise RuntimeError(f"expected worker-probe on target thread: {worker_hits}")
+            if args.redirect_thread is not None:
+                redirect = parse_redirect_counters(after)
+                redirect_hits = parse_worker_redirect_hits(after)
+                redirect_key = f"t{args.redirect_thread}"
+                if redirect["enabled"] != 1:
+                    raise RuntimeError(f"expected redirect enabled: {redirect}")
+                if redirect["target_thread"] != args.redirect_thread:
+                    raise RuntimeError(f"unexpected redirect target: {redirect}")
+                if redirect["enqueued_packets"] <= 0 or redirect["worker_packets"] <= 0:
+                    raise RuntimeError(f"expected redirect counters to increase: {redirect}")
+                if redirect["congestion_drops"] != 0:
+                    raise RuntimeError(f"unexpected redirect congestion: {redirect}")
+                if redirect_hits.get(redirect_key, 0) <= 0:
+                    raise RuntimeError(
+                        f"expected worker-redirect on target thread: {redirect_hits}"
+                    )
 
         logger.log()
         logger.log(f"vpp tun forward-fd smoke log: {log_dir / 'vpp-tun-forward-fd-smoke.log'}")

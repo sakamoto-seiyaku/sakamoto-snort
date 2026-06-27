@@ -53,10 +53,13 @@ tun_poc_main_t tun_poc_main = {
   .shim_file_index = ~0,
   .handoff_frame_queue_index = ~0,
   .handoff_target_thread = ~0,
+  .redirect_frame_queue_index = ~0,
+  .redirect_target_thread = ~0,
 };
 
 extern vlib_node_registration_t tun_poc_rx_handoff_node;
 extern vlib_node_registration_t tun_poc_worker_probe_node;
+extern vlib_node_registration_t tun_poc_worker_redirect_node;
 
 u8 *
 format_tun_poc_mode (u8 *s, va_list *args)
@@ -422,6 +425,37 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
   tm->resolver_hits++;
 }
 
+static void
+tun_poc_process_worker_packet (tun_poc_main_t *tm, const u8 *packet,
+			       u32 packet_len)
+{
+  tun_poc_record_l4_tuple (tm, packet, packet_len);
+  tun_poc_query_owner_resolver (tm);
+
+  if (tm->block_owner_uid_set && tm->last_owner_uid == tm->block_owner_uid)
+    {
+      tm->uid_blocked_packets++;
+      tm->uid_blocked_bytes += packet_len;
+      tm->blocked_packets++;
+      tm->blocked_bytes += packet_len;
+      return;
+    }
+
+  if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
+    {
+      if (tun_poc_should_block_static_dst (tm, packet, packet_len))
+	{
+	  tm->blocked_packets++;
+	  tm->blocked_bytes += packet_len;
+	  return;
+	}
+      (void) tun_poc_write_packet (tm->shim_fd, packet, packet_len,
+				   &tm->shim_tx_packets,
+				   &tm->shim_tx_bytes,
+				   &tm->shim_write_errors);
+    }
+}
+
 static clib_error_t *
 tun_poc_main_fd_read_ready (clib_file_t *f)
 {
@@ -576,8 +610,7 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
   tun_poc_main_t *tm = &tun_poc_main;
   u32 *from = vlib_frame_vector_args (frame);
   u32 n_left = frame->n_vectors;
-
-  (void) node;
+  u32 *to_free = 0;
 
   tun_poc_note_thread_hit (tm->worker_probe_thread_hits,
 			   &tm->last_worker_probe_thread_index,
@@ -591,41 +624,76 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
 
       tm->worker_probe_packets++;
       tm->worker_probe_bytes += packet_len;
-      tun_poc_record_l4_tuple (tm, packet, packet_len);
-      tun_poc_query_owner_resolver (tm);
-
-      if (tm->block_owner_uid_set &&
-	  tm->last_owner_uid == tm->block_owner_uid)
+      if (tm->redirect_enabled &&
+	  tm->redirect_target_thread != vlib_get_thread_index ())
 	{
-	  tm->uid_blocked_packets++;
-	  tm->uid_blocked_bytes += packet_len;
-	  tm->blocked_packets++;
-	  tm->blocked_bytes += packet_len;
+	  u16 target_thread = (u16) tm->redirect_target_thread;
+	  u32 bi = from[i];
+	  u32 n_enq;
+
+	  n_enq = vlib_buffer_enqueue_to_thread (
+	    vm, node, tm->redirect_frame_queue_index, &bi, &target_thread, 1,
+	    1 /* drop on congestion */);
+	  if (n_enq == 1)
+	    {
+	      tm->redirect_enqueued_packets++;
+	      tm->redirect_enqueued_bytes += packet_len;
+	      continue;
+	    }
+
+	  tm->redirect_congestion_drops++;
+	  vec_add1 (to_free, from[i]);
 	  continue;
 	}
 
-      if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
-	{
-	  if (tun_poc_should_block_static_dst (tm, packet, packet_len))
-	    {
-	      tm->blocked_packets++;
-	      tm->blocked_bytes += packet_len;
-	      continue;
-	    }
-	  (void) tun_poc_write_packet (tm->shim_fd, packet, packet_len,
-				       &tm->shim_tx_packets,
-				       &tm->shim_tx_bytes,
-				       &tm->shim_write_errors);
-	}
+      tun_poc_process_worker_packet (tm, packet, packet_len);
+      vec_add1 (to_free, from[i]);
     }
 
-  vlib_buffer_free (vm, from, n_left);
+  if (vec_len (to_free) > 0)
+    vlib_buffer_free (vm, to_free, vec_len (to_free));
+  vec_free (to_free);
   return n_left;
 }
 
 VLIB_REGISTER_NODE (tun_poc_worker_probe_node) = {
   .name = "tun-poc-worker-probe",
   .function = tun_poc_worker_probe_node_fn,
+  .type = VLIB_NODE_TYPE_INTERNAL,
+  .vector_size = sizeof (u32),
+};
+
+VLIB_NODE_FN (tun_poc_worker_redirect_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  tun_poc_main_t *tm = &tun_poc_main;
+  u32 *from = vlib_frame_vector_args (frame);
+  u32 n_left = frame->n_vectors;
+
+  (void) node;
+
+  tun_poc_note_thread_hit (tm->worker_redirect_thread_hits,
+			   &tm->last_worker_redirect_thread_index,
+			   &tm->overflow_thread_hits);
+
+  for (u32 i = 0; i < n_left; i++)
+    {
+      vlib_buffer_t *b = vlib_get_buffer (vm, from[i]);
+      u8 *packet = vlib_buffer_get_current (b);
+      u32 packet_len = vlib_buffer_length_in_chain (vm, b);
+
+      tm->redirect_worker_packets++;
+      tm->redirect_worker_bytes += packet_len;
+      tun_poc_process_worker_packet (tm, packet, packet_len);
+    }
+
+  vlib_buffer_free (vm, from, n_left);
+  return n_left;
+}
+
+VLIB_REGISTER_NODE (tun_poc_worker_redirect_node) = {
+  .name = "tun-poc-worker-redirect",
+  .function = tun_poc_worker_redirect_node_fn,
   .type = VLIB_NODE_TYPE_INTERNAL,
   .vector_size = sizeof (u32),
 };
@@ -639,6 +707,8 @@ tun_poc_handoff_init (vlib_main_t *vm)
 
   tm->handoff_frame_queue_index =
     vlib_frame_queue_main_init (tun_poc_worker_probe_node.index, 0);
+  tm->redirect_frame_queue_index =
+    vlib_frame_queue_main_init (tun_poc_worker_redirect_node.index, 0);
   return 0;
 }
 
@@ -708,6 +778,10 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
        mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
       tm->handoff_frame_queue_index == ~0)
     return clib_error_return (0, "handoff frame queue is not initialized");
+  if ((mode == TUN_POC_MODE_HANDOFF_PROBE ||
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
+      tm->redirect_frame_queue_index == ~0)
+    return clib_error_return (0, "redirect frame queue is not initialized");
 
   err = tun_poc_set_nonblocking (fd, "tun fd");
   if (err)
@@ -735,6 +809,8 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->block_ip6_dst_set = 0;
   clib_memset (tm->block_ip6_dst, 0, sizeof (tm->block_ip6_dst));
   tm->handoff_target_thread = vlib_get_n_threads () > 1 ? 1 : 0;
+  tm->redirect_target_thread = ~0;
+  tm->redirect_enabled = 0;
   tm->rx_packets = 0;
   tm->rx_bytes = 0;
   tm->tx_packets = 0;
@@ -758,6 +834,11 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->handoff_enqueued_bytes = 0;
   tm->handoff_congestion_drops = 0;
   tm->handoff_alloc_errors = 0;
+  tm->redirect_enqueued_packets = 0;
+  tm->redirect_enqueued_bytes = 0;
+  tm->redirect_congestion_drops = 0;
+  tm->redirect_worker_packets = 0;
+  tm->redirect_worker_bytes = 0;
   tm->worker_probe_packets = 0;
   tm->worker_probe_bytes = 0;
   tm->tuple_parsed_packets = 0;
@@ -786,11 +867,14 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->last_shim_fd_thread_index = ~0;
   tm->last_rx_node_thread_index = ~0;
   tm->last_worker_probe_thread_index = ~0;
+  tm->last_worker_redirect_thread_index = ~0;
   clib_memset (tm->main_fd_thread_hits, 0, sizeof (tm->main_fd_thread_hits));
   clib_memset (tm->shim_fd_thread_hits, 0, sizeof (tm->shim_fd_thread_hits));
   clib_memset (tm->rx_node_thread_hits, 0, sizeof (tm->rx_node_thread_hits));
   clib_memset (tm->worker_probe_thread_hits, 0,
 	       sizeof (tm->worker_probe_thread_hits));
+  clib_memset (tm->worker_redirect_thread_hits, 0,
+	       sizeof (tm->worker_redirect_thread_hits));
 
   template.read_function = tun_poc_main_fd_read_ready;
   template.file_descriptor = tm->fd;
@@ -838,6 +922,8 @@ tun_poc_disable (void)
   tm->resolver_fd = -1;
   tm->file_index = ~0;
   tm->shim_file_index = ~0;
+  tm->redirect_enabled = 0;
+  tm->redirect_target_thread = ~0;
 }
 
 static clib_error_t *
@@ -856,6 +942,7 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 block_ip4_dst_set = 0;
   u8 block_ip6_dst_set = 0;
   u32 handoff_target_thread = ~0;
+  u32 redirect_target_thread = ~0;
 
   (void) cmd;
 
@@ -880,6 +967,9 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
       else if (unformat (input, "mode handoff-forward-fd"))
 	mode = TUN_POC_MODE_HANDOFF_FORWARD_FD;
       else if (unformat (input, "target-thread %u", &handoff_target_thread))
+	;
+      else if (unformat (input, "redirect-thread %u",
+			 &redirect_target_thread))
 	;
       else if (unformat (input, "block-ip4-dst %s", &block_ip4_dst_text))
 	{
@@ -917,11 +1007,26 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
     return clib_error_return (0, "target-thread %u is outside VPP thread "
 				 "range 0..%u",
 			      handoff_target_thread, vlib_get_n_threads () - 1);
+  if (redirect_target_thread != ~0 &&
+      mode != TUN_POC_MODE_HANDOFF_PROBE &&
+      mode != TUN_POC_MODE_HANDOFF_FORWARD_FD)
+    return clib_error_return (0, "redirect-thread requires handoff mode");
+  if (redirect_target_thread != ~0 &&
+      redirect_target_thread >= vlib_get_n_threads ())
+    return clib_error_return (0, "redirect-thread %u is outside VPP thread "
+				 "range 0..%u",
+			      redirect_target_thread,
+			      vlib_get_n_threads () - 1);
 
   clib_error_t *err =
     tun_poc_enable (vm, fd, mode, shim_fd, block_ip4_dst_set, block_ip4_dst);
   if (!err && handoff_target_thread != ~0)
     tun_poc_main.handoff_target_thread = handoff_target_thread;
+  if (!err && redirect_target_thread != ~0)
+    {
+      tun_poc_main.redirect_enabled = 1;
+      tun_poc_main.redirect_target_thread = redirect_target_thread;
+    }
   if (!err && resolver_fd >= 0)
     {
       tun_poc_main.resolver_fd = resolver_fd;
@@ -948,6 +1053,7 @@ VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
     "[mode count-only|reflect-icmp|forward-fd|handoff-probe|"
     "handoff-forward-fd] "
     "[shim-fd <n>] [resolver-fd <n>] [target-thread <n>] "
+    "[redirect-thread <n>] "
     "[block-owner-uid <uid>] [block-ip4-dst <addr>] "
     "[block-ip6-dst <addr>]",
   .function = tun_poc_enable_command_fn,
@@ -1042,6 +1148,14 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     tm->worker_probe_packets, tm->worker_probe_bytes);
   vlib_cli_output (
     vm,
+    "redirect enabled %u target-thread %u fq %u enqueued %llu bytes %llu "
+    "congestion-drops %llu worker-packets %llu bytes %llu",
+    tm->redirect_enabled, tm->redirect_target_thread,
+    tm->redirect_frame_queue_index, tm->redirect_enqueued_packets,
+    tm->redirect_enqueued_bytes, tm->redirect_congestion_drops,
+    tm->redirect_worker_packets, tm->redirect_worker_bytes);
+  vlib_cli_output (
+    vm,
     "tuple parsed %llu errors %llu non-tcp-udp %llu last-valid %u",
     tm->tuple_parsed_packets, tm->tuple_parse_errors, tm->tuple_non_tcp_udp,
     tm->last_tuple_valid);
@@ -1087,6 +1201,14 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     tm->last_worker_probe_thread_index, tm->worker_probe_thread_hits[0],
     tm->worker_probe_thread_hits[1], tm->worker_probe_thread_hits[2],
     tm->worker_probe_thread_hits[3]);
+  vlib_cli_output (
+    vm,
+    "thread-hits worker-redirect last %u t0 %llu t1 %llu t2 %llu t3 %llu",
+    tm->last_worker_redirect_thread_index,
+    tm->worker_redirect_thread_hits[0],
+    tm->worker_redirect_thread_hits[1],
+    tm->worker_redirect_thread_hits[2],
+    tm->worker_redirect_thread_hits[3]);
   return 0;
 }
 
