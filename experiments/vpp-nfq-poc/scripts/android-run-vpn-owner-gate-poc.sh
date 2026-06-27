@@ -8,7 +8,8 @@ POC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$POC_DIR/../.." && pwd)"
 REMOTE_ROOT="${REMOTE_ROOT:-/data/local/tmp/vpp-nfq-poc}"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
-HOST="${HOST:-142.251.13.94}"
+IP_FAMILY="${IP_FAMILY:-inet4}"
+HOST="${HOST:-}"
 PORT="${PORT:-80}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-7}"
@@ -16,7 +17,7 @@ STOP_WAIT="${STOP_WAIT:-3}"
 BUILD_APK="${BUILD_APK:-1}"
 INSTALL_APK="${INSTALL_APK:-1}"
 LOG_DIR="$POC_DIR/results"
-LOG="$LOG_DIR/android-vpn-owner-gate-poc.log"
+LOG="$LOG_DIR/android-vpn-owner-gate-$IP_FAMILY-poc.log"
 SERVER_BIN="$POC_DIR/build/android-socks5-smoke-server"
 REMOTE_SERVER="$REMOTE_ROOT/android-socks5-smoke-server"
 SOCKS_LOG="$REMOTE_ROOT/logs/android-socks5-smoke-server-owner-gate.log"
@@ -29,6 +30,21 @@ source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 
 mkdir -p "$LOG_DIR"
 "$SCRIPT_DIR/android-build-socks5-smoke-server.sh" >/dev/null
+
+case "$IP_FAMILY" in
+  inet4)
+    HOST="${HOST:-142.251.13.94}"
+    ENABLE_IPV6=false
+    ;;
+  inet6)
+    HOST="${HOST:-2606:4700:4700::1111}"
+    ENABLE_IPV6=true
+    ;;
+  *)
+    echo "unsupported IP_FAMILY=$IP_FAMILY; expected inet4 or inet6" >&2
+    exit 1
+    ;;
+esac
 
 cleanup() {
   adb_cmd shell am start -n "$PACKAGE/.MainActivity" --ez stop true >/dev/null 2>&1 || true
@@ -43,6 +59,7 @@ exec > >(tee "$LOG") 2>&1
 echo "# Android VPN owner gate POC"
 echo "adb_serial=$(adb_target_desc)"
 echo "package=$PACKAGE"
+echo "ip_family=$IP_FAMILY"
 echo "host=$HOST"
 echo "port=$PORT"
 
@@ -92,11 +109,15 @@ run_case() {
   before_count="${before_count:-0}"
   echo "socks_count_before=$before_count"
 
-  adb_cmd shell am start -n "$PACKAGE/.MainActivity" \
+  start_args=(shell am start -n "$PACKAGE/.MainActivity" \
     --ez start true \
     --es mode vpp-hev-owner-gate \
     --es allowedPackage "$PACKAGE" \
-    --ei blockOwnerUid "$block_uid"
+    --ei blockOwnerUid "$block_uid")
+  if [[ "$ENABLE_IPV6" == "true" ]]; then
+    start_args+=(--ez enableIpv6 true)
+  fi
+  adb_cmd "${start_args[@]}"
   sleep "$START_WAIT"
 
   adb_cmd shell am start -n "$PACKAGE/.MainActivity" \

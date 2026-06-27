@@ -16,7 +16,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN data path | App traffic enters `VpnService -> packaged VPP -> HEV -> SOCKS5`. | Experiment 33 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
-| VPN owner UID gate before VPP/HEV | Parent native gate can drop package UID traffic before VPP while allowing UID misses through VPP/HEV. | Experiment 48 |
+| VPN owner UID gate before VPP/HEV | Parent native gate can drop IPv4/IPv6 package UID traffic before VPP while allowing UID misses through VPP/HEV. | Experiments 48, 50 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
 | VPN IPv6 forwarding | `enableIpv6` adds IPv6 address/route and HEV forwards public IPv6. | Experiment 45 |
 | VPN static IPv6 dst block | `tun-poc block-ip6-dst` drops app IPv6 traffic before HEV. | Experiment 46 |
@@ -29,7 +29,8 @@ remain in `EXPERIMENT_LOG.md`.
 - VPN mode can choose app membership with `VpnService.Builder`.
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
-- VPN mode can enforce package UID block in a parent native gate before VPP/HEV.
+- VPN mode can enforce IPv4/IPv6 package UID block in a parent native gate before
+  VPP/HEV.
 - VPN mode can still do static IP packet rules inside VPP.
 - The first useful product slice can be package UID allow/block in root mode, plus
   VPN app include/exclude, owner UID gate, and static IP block POCs.

@@ -3847,3 +3847,82 @@ app UDP probe:
 VPN mode owner UID lookup 现在覆盖 IPv4/IPv6 + TCP/UDP 的最小常规包头。
 当前 IPv6 parser 仍是 no-extension-header baseline；真实产品前如果要处理 IPv6 extension headers，需要单独补 walker。
 ```
+
+### 50. Android VPN IPv6 owner UID gate before VPP/HEV
+
+问题：第 48 步证明 IPv4 owner UID gate 可以在 VPP/HEV 前阻断。这里补 IPv6 forwarding path 上的 owner UID gate。
+
+脚本改动：
+
+```text
+scripts/android-run-vpn-owner-gate-poc.sh
+  IP_FAMILY=inet4: default IPv4 gate
+  IP_FAMILY=inet6: enables VpnService IPv6 address/route and probes public IPv6
+
+Makefile:
+  android-vpn-owner-gate-poc
+  android-vpn-owner-gate-ipv6-poc
+```
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpn-owner-gate-ipv6-poc
+make -C experiments/vpp-nfq-poc android-vpn-owner-gate-poc
+```
+
+IPv6 allow-miss：
+
+```text
+block_uid=112540
+app HTTP:
+  HTTP/1.0 200 OK
+
+gate:
+  gate forward packet=7 len=80 proto=6 fd00:111:111::2:46714 -> 2606:4700:4700::1111:80 ownerUid=12540
+
+HEV:
+  socks5 client tcp -> [2606:4700:4700::1111]:80
+
+SOCKS:
+  connect 2606:4700:4700::1111:80
+```
+
+IPv6 block-hit：
+
+```text
+block_uid=12540
+app HTTP:
+  SocketTimeoutException from /fd00:111:111::2:47934 after 5000ms
+
+gate:
+  gate drop packet=7 len=80 proto=6 fd00:111:111::2:47934 -> 2606:4700:4700::1111:80 ownerUid=12540
+  gate drop packet=8 len=80 proto=6 fd00:111:111::2:47934 -> 2606:4700:4700::1111:80 ownerUid=12540
+  gate drop packet=9 len=80 proto=6 fd00:111:111::2:47934 -> 2606:4700:4700::1111:80 ownerUid=12540
+
+SOCKS:
+  connect count did not increase
+```
+
+回归：
+
+```text
+默认 IPv4 owner gate POC 重跑通过：
+  allow-miss: HTTP/1.0 200 OK
+  block-hit: gate drop ownerUid=12540, SOCKS connect count unchanged
+```
+
+观察：
+
+```text
+IPv6 allow-miss 中连接后段 packet 偶尔返回 ownerUid=-1。
+这说明 getConnectionOwnerUid 的可见窗口仍然重要；真实实现需要在首包/SYN 阶段建 flow owner cache。
+当前 block-hit 在 SYN/retry 阶段已经稳定拿到 ownerUid=12540 并 drop。
+```
+
+结论：
+
+```text
+VPN owner UID gate 现在覆盖 IPv4/IPv6 TCP 转发路径。
+加上第 49 步的 UDP owner lookup，VPN mode 的 package UID static block 0->1 风险基本解除。
+```
