@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <unistd.h>
+#include <vlib/threads.h>
 
 #define TUN_POC_RX_BUF_SIZE 65536
 
@@ -87,6 +88,18 @@ tun_poc_write_packet (int fd, const u8 *packet, ssize_t packet_len,
   (*packets)++;
   (*bytes) += packet_len;
   return 0;
+}
+
+static void
+tun_poc_note_thread_hit (u64 *hits, u32 *last_thread_index, u64 *overflow)
+{
+  u32 thread_index = vlib_get_thread_index ();
+
+  *last_thread_index = thread_index;
+  if (thread_index < TUN_POC_MAX_THREAD_HITS)
+    hits[thread_index]++;
+  else
+    (*overflow)++;
 }
 
 static u16
@@ -225,6 +238,10 @@ tun_poc_main_fd_read_ready (clib_file_t *f)
 {
   tun_poc_main_t *tm = (tun_poc_main_t *) f->private_data;
 
+  tun_poc_note_thread_hit (tm->main_fd_thread_hits,
+			   &tm->last_main_fd_thread_index,
+			   &tm->overflow_thread_hits);
+
   while (1)
     {
       ssize_t rv = read (tm->fd, tm->rx_buf, TUN_POC_RX_BUF_SIZE);
@@ -270,6 +287,9 @@ tun_poc_shim_fd_read_ready (clib_file_t *f)
   tun_poc_main_t *tm = &tun_poc_main;
 
   (void) f;
+  tun_poc_note_thread_hit (tm->shim_fd_thread_hits,
+			   &tm->last_shim_fd_thread_index,
+			   &tm->overflow_thread_hits);
 
   while (1)
     {
@@ -359,6 +379,11 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->write_errors = 0;
   tm->shim_read_errors = 0;
   tm->shim_write_errors = 0;
+  tm->overflow_thread_hits = 0;
+  tm->last_main_fd_thread_index = ~0;
+  tm->last_shim_fd_thread_index = ~0;
+  clib_memset (tm->main_fd_thread_hits, 0, sizeof (tm->main_fd_thread_hits));
+  clib_memset (tm->shim_fd_thread_hits, 0, sizeof (tm->shim_fd_thread_hits));
 
   template.read_function = tun_poc_main_fd_read_ready;
   template.file_descriptor = tm->fd;
@@ -541,6 +566,17 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     "shim-read-errors %llu shim-write-errors %llu",
     tm->parse_errors, tm->read_errors, tm->write_errors,
     tm->shim_read_errors, tm->shim_write_errors);
+  vlib_cli_output (
+    vm,
+    "thread-hits main last %u t0 %llu t1 %llu t2 %llu t3 %llu overflow %llu",
+    tm->last_main_fd_thread_index, tm->main_fd_thread_hits[0],
+    tm->main_fd_thread_hits[1], tm->main_fd_thread_hits[2],
+    tm->main_fd_thread_hits[3], tm->overflow_thread_hits);
+  vlib_cli_output (
+    vm, "thread-hits shim last %u t0 %llu t1 %llu t2 %llu t3 %llu",
+    tm->last_shim_fd_thread_index, tm->shim_fd_thread_hits[0],
+    tm->shim_fd_thread_hits[1], tm->shim_fd_thread_hits[2],
+    tm->shim_fd_thread_hits[3]);
   return 0;
 }
 

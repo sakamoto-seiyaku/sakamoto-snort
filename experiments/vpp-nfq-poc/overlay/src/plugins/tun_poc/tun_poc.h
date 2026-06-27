@@ -6,6 +6,8 @@
 #include <vlib/vlib.h>
 #include <vlib/file.h>
 
+#define TUN_POC_MAX_THREAD_HITS 64
+
 typedef enum
 {
   TUN_POC_MODE_COUNT_ONLY,
@@ -46,6 +48,11 @@ typedef struct
   u64 write_errors;
   u64 shim_read_errors;
   u64 shim_write_errors;
+  u64 main_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
+  u64 shim_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
+  u64 overflow_thread_hits;
+  u32 last_main_fd_thread_index;
+  u32 last_shim_fd_thread_index;
 } tun_poc_main_t;
 
 extern tun_poc_main_t tun_poc_main;

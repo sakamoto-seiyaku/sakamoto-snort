@@ -4089,3 +4089,61 @@ Experiment 52:
 VPN mode VPP-internal UID filtering remains unverified.
 The packet decision must move back into VPP.
 ```
+
+### 54. VPP workers do not automatically receive `tun_poc` fd callbacks
+
+问题：当前 `tun_poc` 使用 `clib_file` fd-ready 回调从 TUN fd / shim fd 读包。VPP 多 worker 启动时，这些 packet 是否会被自动分流到 worker？
+
+最小实现：
+
+```text
+tun_poc:
+  record vlib_get_thread_index() on main fd callback
+  record vlib_get_thread_index() on shim fd callback
+  show tun-poc prints:
+    thread-hits main last ...
+    thread-hits shim last ...
+
+startup config:
+  cpu { workers 2 }
+```
+
+新增：
+
+```text
+configs/tun-poc-workers-startup.conf
+scripts/run-vpp-tun-worker-thread-smoke.sh
+make vpp-tun-worker-thread-smoke
+```
+
+命令：
+
+```sh
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-worker-thread-smoke
+```
+
+结果：
+
+```text
+show threads:
+0      vpp_main
+1      vpp_wk_0
+2      vpp_wk_1
+
+after ping:
+thread-hits main last 0 t0 2 t1 0 t2 0 t3 0 overflow 0
+thread-hits shim last 0 t0 1 t1 0 t2 0 t3 0
+
+ping:
+  1 transmitted, 1 received
+```
+
+结论：
+
+```text
+当前 tun_poc adapter 形状不会自动分流到 VPP worker。
+TUN fd read、shim fd read 都发生在 VPP thread 0，即 vpp_main。
+
+如果要让 VPP 内部多线程处理 VPN/TUN packet，必须显式做软件 steering/handoff。
+下一步应验证：从 thread 0 软件读入 packet 后，能否通过 VPP handoff/redirect 机制交给指定 worker node 处理。
+```

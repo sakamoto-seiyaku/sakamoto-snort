@@ -21,6 +21,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN static IPv6 dst block | `tun-poc block-ip6-dst` drops app IPv6 traffic before HEV. | Experiment 46 |
 | VPN no-block regression | Default `vpp-hev` forwarding still works after adding static block. | Experiment 42 |
 | VPN teardown loop | 3 start/HTTP/stop cycles completed without HEV fatal pattern or VPP leak. | Experiment 37 |
+| VPP TUN fd callback thread ownership | With `workers 2`, current `tun_poc` `clib_file` fd callbacks still run on VPP thread 0, not workers. | Experiment 54 |
 
 ## Demoted / Mis-scoped
 
@@ -40,6 +41,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - VPN mode can still do static IP packet rules inside VPP.
 - VPN mode VPP-internal UID filtering is not proven. The next valid POC must keep
   packet verdicts inside a VPP plugin/node; Java/NDK may only resolve tuple -> UID.
+- Current `tun_poc` fd adapter does not get worker distribution automatically;
+  software steering/handoff must be explicit if we want worker processing.
 - The first useful product slice can be package UID allow/block in root mode, plus
   VPN app include/exclude and static IP block POCs. VPN UID filtering is not in
   the verified slice until VPP-internal enforcement passes.
@@ -50,8 +53,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   the parent native process before `tun_poc`, not inside VPP.
 - VPN VPP-internal owner cache is not verified. Experiment 52 caches in the
   parent native process.
-- VPP multi-thread packet ownership, software steering, handoff, and redirect
-  behavior are not verified for the VPN/TUN plugin shape.
+- VPP software steering, handoff, and redirect behavior are not verified for the
+  VPN/TUN plugin shape. Experiment 54 only proves current fd callbacks stay on
+  thread 0.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

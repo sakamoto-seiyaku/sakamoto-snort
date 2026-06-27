@@ -215,6 +215,10 @@ def main() -> int:
         vpp_log_file.close()
 
         wait_for_cli(vpp_proc, cli_sock, vpp_stdout_log)
+        threads = run_vppctl(Path(args.vppctl_bin), cli_sock, "show", "threads")
+        logger.log("show threads:")
+        logger.log(threads.rstrip())
+
         enable = run_vppctl(
             Path(args.vppctl_bin),
             cli_sock,
