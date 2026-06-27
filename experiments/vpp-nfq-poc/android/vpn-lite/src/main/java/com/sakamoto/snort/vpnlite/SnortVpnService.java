@@ -39,6 +39,7 @@ public final class SnortVpnService extends VpnService {
     public static final String MODE_VPP_HEV = "vpp-hev";
     public static final String MODE_VPP_HEV_HANDOFF = "vpp-hev-handoff";
     public static final String MODE_VPP_HEV_OWNER_GATE = "vpp-hev-owner-gate";
+    public static final String MODE_VPP_HEV_OWNER_RESOLVER = "vpp-hev-owner-resolver";
     public static final String MODE_HEV = "hev";
 
     private static final String TAG = "SnortVpnLite";
@@ -156,7 +157,8 @@ public final class SnortVpnService extends VpnService {
             vpnFd = null;
             if (MODE_VPP.equals(mode) || MODE_VPP_FORWARD.equals(mode)
                     || MODE_VPP_HEV.equals(mode) || MODE_VPP_HEV_HANDOFF.equals(mode)
-                    || MODE_VPP_HEV_OWNER_GATE.equals(mode)) {
+                    || MODE_VPP_HEV_OWNER_GATE.equals(mode)
+                    || MODE_VPP_HEV_OWNER_RESOLVER.equals(mode)) {
                 int vppMode = 0;
                 if (MODE_VPP_FORWARD.equals(mode)) {
                     vppMode = 1;
@@ -166,6 +168,8 @@ public final class SnortVpnService extends VpnService {
                     vppMode = 3;
                 } else if (MODE_VPP_HEV_HANDOFF.equals(mode)) {
                     vppMode = 4;
+                } else if (MODE_VPP_HEV_OWNER_RESOLVER.equals(mode)) {
+                    vppMode = 5;
                 }
                 int rc = nativeStartVppProbe(rawFd, getApplicationInfo().nativeLibraryDir,
                         getFilesDir().getAbsolutePath(), vppMode,
@@ -326,8 +330,8 @@ public final class SnortVpnService extends VpnService {
     }
 
     private synchronized void stopVpn() {
-        nativeStopProbe();
         nativeStopVppProbe();
+        nativeStopProbe();
         nativeStopHevProbe();
         if (vpnFd != null) {
             try {

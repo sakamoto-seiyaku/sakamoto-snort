@@ -27,6 +27,7 @@
 #define PATH_BUF_SIZE 1024
 #define VPP_TUN_FD 3
 #define VPP_SHIM_FD 4
+#define VPP_RESOLVER_FD 5
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_thread;
@@ -44,15 +45,19 @@ static pthread_t g_vpp_shim_thread;
 static bool g_vpp_shim_running;
 static pthread_t g_vpp_gate_thread;
 static bool g_vpp_gate_running;
+static pthread_t g_vpp_resolver_thread;
+static bool g_vpp_resolver_running;
 static pid_t g_vpp_pid = -1;
 static int g_vpp_shim_fd = -1;
 static int g_vpp_gate_tun_fd = -1;
 static int g_vpp_gate_vpp_fd = -1;
 static int g_vpp_gate_block_uid = -1;
+static int g_vpp_resolver_fd = -1;
 static char g_vpp_cli_sock[PATH_BUF_SIZE];
 static char g_vpp_cli_log[PATH_BUF_SIZE];
 static char g_vpp_shim_log[PATH_BUF_SIZE];
 static char g_vpp_gate_log[PATH_BUF_SIZE];
+static char g_vpp_resolver_log[PATH_BUF_SIZE];
 static char g_vpp_hev_log[PATH_BUF_SIZE];
 
 static pid_t g_hev_pid = -1;
@@ -111,6 +116,34 @@ static void clear_owner_lookup(JNIEnv *env) {
     if (owner) {
         (*env)->DeleteGlobalRef(env, owner);
     }
+}
+
+static int init_owner_lookup(JNIEnv *env, jclass clazz, jobject owner_lookup,
+                             jobject *owner_global_out, jmethodID *owner_method_out) {
+    if (!g_jvm && (*env)->GetJavaVM(env, &g_jvm) != JNI_OK) {
+        return -1;
+    }
+    if (!owner_lookup) {
+        return -2;
+    }
+
+    jmethodID owner_method = (*env)->GetMethodID(env, clazz, "queryConnectionOwnerUidForPacket",
+                                                 "(ILjava/lang/String;ILjava/lang/String;I)I");
+    if (!owner_method || (*env)->ExceptionCheck(env)) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        return -3;
+    }
+
+    jobject owner_global = (*env)->NewGlobalRef(env, owner_lookup);
+    if (!owner_global) {
+        return -4;
+    }
+
+    *owner_global_out = owner_global;
+    *owner_method_out = owner_method;
+    return 0;
 }
 
 static int query_owner_uid(const owner_query_t *query) {
@@ -838,6 +871,156 @@ static void *vpp_gate_thread(void *arg) {
     return NULL;
 }
 
+static bool parse_resolver_query_line(const char *line, owner_query_t *query) {
+    char family[8];
+    char local_addr[INET6_ADDRSTRLEN];
+    char remote_addr[INET6_ADDRSTRLEN];
+    int protocol = 0;
+    unsigned int local_port = 0;
+    unsigned int remote_port = 0;
+
+    if (!line || !query) {
+        return false;
+    }
+    if (sscanf(line, "resolve %7s proto %d %45s %u %45s %u",
+               family, &protocol, local_addr, &local_port,
+               remote_addr, &remote_port) != 6) {
+        return false;
+    }
+    if ((strcmp(family, "ip4") != 0 && strcmp(family, "ip6") != 0) ||
+        (protocol != IPPROTO_TCP && protocol != IPPROTO_UDP) ||
+        local_port > 65535U || remote_port > 65535U) {
+        return false;
+    }
+
+    memset(query, 0, sizeof(*query));
+    query->valid = true;
+    query->protocol = protocol;
+    query->local_port = (uint16_t)local_port;
+    query->remote_port = (uint16_t)remote_port;
+    snprintf(query->local_addr, sizeof(query->local_addr), "%s", local_addr);
+    snprintf(query->remote_addr, sizeof(query->remote_addr), "%s", remote_addr);
+    return true;
+}
+
+static void resolver_process_line(FILE *file, int fd, const char *line, int *queries) {
+    owner_query_t query;
+    int uid = -1;
+
+    (*queries)++;
+    if (parse_resolver_query_line(line, &query)) {
+        uid = query_owner_uid(&query);
+        log_line(file, "resolver query=%d proto=%d %s:%u -> %s:%u uid=%d",
+                 *queries, query.protocol, query.local_addr,
+                 (unsigned int)query.local_port, query.remote_addr,
+                 (unsigned int)query.remote_port, uid);
+    } else {
+        log_line(file, "resolver parse-fail query=%d line=%s", *queries, line);
+    }
+
+    char response[64];
+    int len = snprintf(response, sizeof(response), "uid %d\n", uid);
+    if (len > 0) {
+        ssize_t written = write(fd, response, (size_t)len);
+        if (written != len) {
+            log_line(file, "resolver write error written=%zd errno=%d %s",
+                     written, errno, strerror(errno));
+        }
+    }
+}
+
+static void *vpp_resolver_thread(void *arg) {
+    (void)arg;
+    char buffer[1024];
+    size_t buffered = 0;
+    int queries = 0;
+
+    pthread_mutex_lock(&g_lock);
+    int fd = g_vpp_resolver_fd;
+    char log_path[PATH_BUF_SIZE];
+    snprintf(log_path, sizeof(log_path), "%s", g_vpp_resolver_log);
+    pthread_mutex_unlock(&g_lock);
+
+    FILE *file = fopen(log_path, "a");
+    log_line(file, "resolver start fd=%d", fd);
+
+    while (1) {
+        pthread_mutex_lock(&g_lock);
+        bool running = g_vpp_resolver_running;
+        fd = g_vpp_resolver_fd;
+        pthread_mutex_unlock(&g_lock);
+        if (!running || fd < 0) {
+            break;
+        }
+
+        struct pollfd pfd = {
+                .fd = fd,
+                .events = POLLIN,
+        };
+        int ready = poll(&pfd, 1, 500);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EBADF) {
+                pthread_mutex_lock(&g_lock);
+                bool stopping = !g_vpp_resolver_running;
+                pthread_mutex_unlock(&g_lock);
+                if (stopping) {
+                    break;
+                }
+            }
+            log_line(file, "resolver poll error errno=%d %s", errno, strerror(errno));
+            break;
+        }
+        if (ready == 0) {
+            continue;
+        }
+
+        ssize_t n = read(fd, buffer + buffered, sizeof(buffer) - buffered - 1U);
+        if (n < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            log_line(file, "resolver read error errno=%d %s", errno, strerror(errno));
+            break;
+        }
+        if (n == 0) {
+            log_line(file, "resolver read eof");
+            break;
+        }
+        buffered += (size_t)n;
+        buffer[buffered] = '\0';
+
+        char *line_start = buffer;
+        while (1) {
+            char *newline = strchr(line_start, '\n');
+            if (!newline) {
+                break;
+            }
+            *newline = '\0';
+            resolver_process_line(file, fd, line_start, &queries);
+            line_start = newline + 1;
+        }
+
+        size_t remaining = strlen(line_start);
+        if (remaining > 0 && line_start != buffer) {
+            memmove(buffer, line_start, remaining);
+        }
+        buffered = remaining;
+        if (buffered >= sizeof(buffer) - 1U) {
+            log_line(file, "resolver buffer overflow, dropping partial query");
+            buffered = 0;
+        }
+    }
+
+    log_line(file, "resolver stop queries=%d", queries);
+    if (file) {
+        fclose(file);
+    }
+    return NULL;
+}
+
 static void *probe_thread(void *arg) {
     (void)arg;
     unsigned char buf[BUF_SIZE];
@@ -982,8 +1165,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopProbe(JNIEnv *env, jcl
     }
     if (was_running) {
         pthread_join(g_thread, NULL);
+        clear_owner_lookup(env);
     }
-    clear_owner_lookup(env);
 }
 
 static void *vpp_monitor_thread(void *arg) {
@@ -1022,6 +1205,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
                            char *startup_conf, size_t startup_conf_len,
                            char *stdout_log, size_t stdout_log_len,
                            bool forward_mode, bool handoff_mode,
+                           bool owner_resolver_mode, int block_owner_uid,
                            const char *block_ip4_dst,
                            const char *block_ip6_dst) {
     char vpp_dir[PATH_BUF_SIZE];
@@ -1036,6 +1220,8 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     char exec_text[320];
     char block_arg[80] = "";
     char block6_arg[128] = "";
+    char resolver_arg[64] = "";
+    char owner_block_arg[64] = "";
     char cpu_text[64] = "";
 
     snprintf(vpp_dir, sizeof(vpp_dir), "%s/vpp", files_dir);
@@ -1050,6 +1236,8 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     snprintf(g_vpp_cli_log, sizeof(g_vpp_cli_log), "%s/vpp-cli.log", logs_dir);
     snprintf(g_vpp_shim_log, sizeof(g_vpp_shim_log), "%s/vpp-shim.log", logs_dir);
     snprintf(g_vpp_gate_log, sizeof(g_vpp_gate_log), "%s/vpp-owner-gate.log", logs_dir);
+    snprintf(g_vpp_resolver_log, sizeof(g_vpp_resolver_log), "%s/vpp-owner-resolver.log",
+             logs_dir);
     snprintf(g_vpp_hev_log, sizeof(g_vpp_hev_log), "%s/vpp-hev.log", logs_dir);
 
     if (mkdir_p(runtime_dir) < 0 || mkdir_p(logs_dir) < 0 || mkdir_p(shm_dir) < 0) {
@@ -1059,6 +1247,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     unlink(g_vpp_cli_log);
     unlink(g_vpp_shim_log);
     unlink(g_vpp_gate_log);
+    unlink(g_vpp_resolver_log);
     unlink(g_vpp_hev_log);
     unlink(stdout_log);
     unlink(vpp_log);
@@ -1074,12 +1263,20 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     if (block_ip6_dst && block_ip6_dst[0]) {
         snprintf(block6_arg, sizeof(block6_arg), " block-ip6-dst %s", block_ip6_dst);
     }
+    if (owner_resolver_mode) {
+        snprintf(resolver_arg, sizeof(resolver_arg), " resolver-fd %d", VPP_RESOLVER_FD);
+    }
+    if (block_owner_uid >= 0) {
+        snprintf(owner_block_arg, sizeof(owner_block_arg), " block-owner-uid %d",
+                 block_owner_uid);
+    }
 
     if (handoff_mode) {
         snprintf(exec_text, sizeof(exec_text),
-                 "tun-poc enable fd %d mode handoff-forward-fd shim-fd %d target-thread 1%s%s\n"
+                 "tun-poc enable fd %d mode handoff-forward-fd shim-fd %d target-thread 1%s%s%s%s\n"
                  "show tun-poc\n",
-                 VPP_TUN_FD, VPP_SHIM_FD, block_arg, block6_arg);
+                 VPP_TUN_FD, VPP_SHIM_FD, resolver_arg, owner_block_arg,
+                 block_arg, block6_arg);
         snprintf(cpu_text, sizeof(cpu_text),
                  "\n"
                  "cpu {\n"
@@ -1180,12 +1377,13 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         return -2;
     }
     bool use_owner_gate = vpp_mode == 3;
-    bool use_handoff_hev = vpp_mode == 4;
+    bool use_owner_resolver = vpp_mode == 5;
+    bool use_handoff_hev = vpp_mode == 4 || use_owner_resolver;
     bool use_forward = vpp_mode == 1 || vpp_mode == 2 || use_owner_gate || use_handoff_hev;
     bool use_hev = vpp_mode == 2 || use_owner_gate || use_handoff_hev;
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
                         stdout_log, sizeof(stdout_log), use_forward, use_handoff_hev,
-                        block_dst, block6_dst) < 0) {
+                        use_owner_resolver, block_owner_uid, block_dst, block6_dst) < 0) {
         (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
         (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
@@ -1230,8 +1428,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         return -7;
     }
 
-    pid_t pid = fork();
-    if (pid < 0) {
+    int resolver_fds[2] = {-1, -1};
+    if (use_owner_resolver && socketpair(AF_UNIX, SOCK_STREAM, 0, resolver_fds) < 0) {
         if (gate_fds[0] >= 0) {
             close(gate_fds[0]);
             close(gate_fds[1]);
@@ -1245,12 +1443,35 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
+        return -19;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        if (gate_fds[0] >= 0) {
+            close(gate_fds[0]);
+            close(gate_fds[1]);
+        }
+        if (shim_fds[0] >= 0) {
+            close(shim_fds[0]);
+            close(shim_fds[1]);
+        }
+        if (resolver_fds[0] >= 0) {
+            close(resolver_fds[0]);
+            close(resolver_fds[1]);
+        }
+        (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
+        (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
+        (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+        (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+        close(fd);
         return -5;
     }
 
     if (pid == 0) {
         int tun_fd = use_owner_gate ? gate_fds[1] : fd;
         int shim_child_fd = use_forward ? shim_fds[1] : -1;
+        int resolver_child_fd = use_owner_resolver ? resolver_fds[1] : -1;
         if (use_owner_gate) {
             close(gate_fds[0]);
             if (fd != tun_fd) {
@@ -1259,22 +1480,36 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         }
         if (use_forward) {
             close(shim_fds[0]);
+        }
+        if (use_owner_resolver) {
+            close(resolver_fds[0]);
+        }
 
-            if (tun_fd == VPP_SHIM_FD) {
-                int moved = fcntl(tun_fd, F_DUPFD_CLOEXEC, VPP_SHIM_FD + 1);
+        if (use_forward || use_owner_resolver) {
+            if (tun_fd == VPP_SHIM_FD || tun_fd == VPP_RESOLVER_FD) {
+                int moved = fcntl(tun_fd, F_DUPFD_CLOEXEC, VPP_RESOLVER_FD + 1);
                 if (moved < 0) {
                     _exit(126);
                 }
                 close(tun_fd);
                 tun_fd = moved;
             }
-            if (shim_child_fd == VPP_TUN_FD) {
-                int moved = fcntl(shim_child_fd, F_DUPFD_CLOEXEC, VPP_SHIM_FD + 1);
+            if (shim_child_fd == VPP_TUN_FD || shim_child_fd == VPP_RESOLVER_FD) {
+                int moved = fcntl(shim_child_fd, F_DUPFD_CLOEXEC, VPP_RESOLVER_FD + 1);
                 if (moved < 0) {
                     _exit(126);
                 }
                 close(shim_child_fd);
                 shim_child_fd = moved;
+            }
+            if (resolver_child_fd == VPP_TUN_FD || resolver_child_fd == VPP_SHIM_FD) {
+                int moved = fcntl(resolver_child_fd, F_DUPFD_CLOEXEC,
+                                  VPP_RESOLVER_FD + 1);
+                if (moved < 0) {
+                    _exit(126);
+                }
+                close(resolver_child_fd);
+                resolver_child_fd = moved;
             }
         }
 
@@ -1289,6 +1524,13 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
                 close(shim_child_fd);
             }
             set_cloexec(VPP_SHIM_FD, false);
+        }
+        if (use_owner_resolver) {
+            if (resolver_child_fd != VPP_RESOLVER_FD) {
+                dup2(resolver_child_fd, VPP_RESOLVER_FD);
+                close(resolver_child_fd);
+            }
+            set_cloexec(VPP_RESOLVER_FD, false);
         }
 
         int out = open(stdout_log, O_CREAT | O_WRONLY | O_APPEND, 0600);
@@ -1316,6 +1558,9 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     if (use_forward) {
         close(shim_fds[1]);
     }
+    if (use_owner_resolver) {
+        close(resolver_fds[1]);
+    }
 
     pthread_mutex_lock(&g_lock);
     g_vpp_pid = pid;
@@ -1333,6 +1578,9 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             if (use_owner_gate) {
                 close(gate_fds[0]);
                 close(fd);
+            }
+            if (use_owner_resolver) {
+                close(resolver_fds[0]);
             }
             kill(pid, SIGTERM);
             pthread_mutex_lock(&g_lock);
@@ -1358,6 +1606,9 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             if (use_owner_gate) {
                 close(gate_fds[0]);
                 close(fd);
+            }
+            if (use_owner_resolver) {
+                close(resolver_fds[0]);
             }
             kill(pid, SIGTERM);
             pthread_mutex_lock(&g_lock);
@@ -1524,6 +1775,74 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         }
     }
 
+    if (use_owner_resolver) {
+        jobject owner_global = NULL;
+        jmethodID owner_method = NULL;
+        int owner_rc = init_owner_lookup(env, clazz, owner_lookup,
+                                         &owner_global, &owner_method);
+        if (owner_rc != 0) {
+            close(resolver_fds[0]);
+            kill(pid, SIGTERM);
+            pthread_mutex_lock(&g_lock);
+            g_vpp_monitor_running = false;
+            g_vpp_pid = -1;
+            pthread_mutex_unlock(&g_lock);
+            if (use_hev) {
+                pthread_mutex_lock(&g_lock);
+                pid_t hev_pid = g_hev_pid;
+                g_hev_pid = -1;
+                g_hev_log_path[0] = '\0';
+                pthread_mutex_unlock(&g_lock);
+                terminate_child(hev_pid);
+            }
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -20;
+        }
+
+        pthread_mutex_lock(&g_lock);
+        g_vpp_resolver_fd = resolver_fds[0];
+        g_vpp_resolver_running = true;
+        g_owner_lookup = owner_global;
+        g_owner_lookup_method = owner_method;
+        pthread_mutex_unlock(&g_lock);
+
+        int resolver_rc = pthread_create(&g_vpp_resolver_thread, NULL,
+                                         vpp_resolver_thread, NULL);
+        if (resolver_rc != 0) {
+            pthread_mutex_lock(&g_lock);
+            g_vpp_resolver_running = false;
+            g_vpp_resolver_fd = -1;
+            g_owner_lookup = NULL;
+            g_owner_lookup_method = NULL;
+            pthread_mutex_unlock(&g_lock);
+            (*env)->DeleteGlobalRef(env, owner_global);
+            close(resolver_fds[0]);
+            kill(pid, SIGTERM);
+            pthread_mutex_lock(&g_lock);
+            g_vpp_monitor_running = false;
+            g_vpp_pid = -1;
+            pthread_mutex_unlock(&g_lock);
+            if (use_hev) {
+                pthread_mutex_lock(&g_lock);
+                pid_t hev_pid = g_hev_pid;
+                g_hev_pid = -1;
+                g_hev_log_path[0] = '\0';
+                pthread_mutex_unlock(&g_lock);
+                terminate_child(hev_pid);
+            }
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -21;
+        }
+    }
+
     int rc = pthread_create(&g_vpp_monitor_thread, NULL, vpp_monitor_thread, NULL);
     if (rc != 0) {
         kill(pid, SIGTERM);
@@ -1535,12 +1854,16 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         bool was_gate = g_vpp_gate_running;
         int gate_tun_fd = g_vpp_gate_tun_fd;
         int gate_vpp_fd = g_vpp_gate_vpp_fd;
+        bool was_resolver = g_vpp_resolver_running;
+        int resolver_fd = g_vpp_resolver_fd;
         g_vpp_shim_running = false;
         g_vpp_shim_fd = -1;
         g_vpp_gate_running = false;
         g_vpp_gate_tun_fd = -1;
         g_vpp_gate_vpp_fd = -1;
         g_vpp_gate_block_uid = -1;
+        g_vpp_resolver_running = false;
+        g_vpp_resolver_fd = -1;
         pthread_mutex_unlock(&g_lock);
         if (shim_fd >= 0) {
             close(shim_fd);
@@ -1551,11 +1874,19 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         if (gate_vpp_fd >= 0) {
             close(gate_vpp_fd);
         }
+        if (resolver_fd >= 0) {
+            close(resolver_fd);
+        }
         if (was_shim) {
             pthread_join(g_vpp_shim_thread, NULL);
         }
         if (was_gate) {
             pthread_join(g_vpp_gate_thread, NULL);
+        }
+        if (was_resolver) {
+            pthread_join(g_vpp_resolver_thread, NULL);
+        }
+        if (was_gate || was_resolver) {
             clear_owner_lookup(env);
         }
         if (use_hev) {
@@ -1594,9 +1925,11 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     bool was_monitoring = g_vpp_monitor_running;
     bool was_shim_running = g_vpp_shim_running;
     bool was_gate_running = g_vpp_gate_running;
+    bool was_resolver_running = g_vpp_resolver_running;
     int shim_fd = g_vpp_shim_fd;
     int gate_tun_fd = g_vpp_gate_tun_fd;
     int gate_vpp_fd = g_vpp_gate_vpp_fd;
+    int resolver_fd = g_vpp_resolver_fd;
     g_vpp_pid = -1;
     g_vpp_monitor_running = false;
     g_vpp_shim_running = false;
@@ -1605,6 +1938,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     g_vpp_gate_tun_fd = -1;
     g_vpp_gate_vpp_fd = -1;
     g_vpp_gate_block_uid = -1;
+    g_vpp_resolver_running = false;
+    g_vpp_resolver_fd = -1;
     pthread_mutex_unlock(&g_lock);
 
     if (shim_fd >= 0) {
@@ -1615,6 +1950,9 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     }
     if (gate_vpp_fd >= 0) {
         close(gate_vpp_fd);
+    }
+    if (resolver_fd >= 0) {
+        close(resolver_fd);
     }
     if (pid > 0) {
         kill(pid, SIGTERM);
@@ -1641,6 +1979,11 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     }
     if (was_gate_running) {
         pthread_join(g_vpp_gate_thread, NULL);
+    }
+    if (was_resolver_running) {
+        pthread_join(g_vpp_resolver_thread, NULL);
+    }
+    if (was_gate_running || was_resolver_running) {
         clear_owner_lookup(env);
     }
 }

@@ -4864,3 +4864,72 @@ Android VPP worker-side static IPv4 dst drop 成立。
   这里只验证 IPv4 TCP dst exact drop。
   IPv6 worker drop、Android resolver bridge、真实 UID verdict 仍需单独验证。
 ```
+
+### 68. Android VPP worker can query ConnectivityManager owner resolver
+
+问题：Docker mock resolver 已验证 VPP worker 能通过 fd 查询 UID。这里验证 Android
+真实 `ConnectivityManager.getConnectionOwnerUid` 能否接到 VPP worker path：native/Java
+只提供 tuple->UID，packet forwarding/verdict 仍在 VPP worker 内。
+
+最小实现：
+
+```text
+Android mode:
+  vpp-hev-owner-resolver
+
+native startup:
+  socketpair fd 5 is passed to VPP as resolver-fd
+  native resolver thread reads:
+    resolve ip4 proto 6 10.111.0.2 42790 142.251.13.94 80
+  native calls Java queryConnectionOwnerUidForPacket(...)
+  native writes:
+    uid 12540
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 resolver-fd 5
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+ok bytes=40 elapsedMs=587 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+handoff target-thread 1 fq 21 enqueued 11 bytes 696 congestion-drops 0 alloc-errors 0 worker-packets 11 bytes 696
+tuple parsed 5 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip4 proto 6 10.111.0.2:42790 -> 142.251.13.94:80
+resolver enabled 1 fd 5 queries 5 hits 5 errors 0 last-uid -1
+uid-block enabled 0 uid -1 packets 0 bytes 0
+thread-hits worker-probe last 1 t0 0 t1 7 t2 0 t3 0
+
+resolver log:
+resolver query=1 proto=6 10.111.0.2:42790 -> 142.251.13.94:80 uid=12540
+resolver query=2 proto=6 10.111.0.2:42790 -> 142.251.13.94:80 uid=12540
+resolver query=3 proto=6 10.111.0.2:42790 -> 142.251.13.94:80 uid=12540
+resolver query=4 proto=6 10.111.0.2:42790 -> 142.251.13.94:80 uid=-1
+resolver query=5 proto=6 10.111.0.2:42790 -> 142.251.13.94:80 uid=-1
+
+HEV:
+socks5 client tcp -> [142.251.13.94]:80
+socks_count_after=1
+```
+
+结论：
+
+```text
+Android VPP worker -> native resolver fd -> Java ConnectivityManager -> UID response 成立。
+这次没有 parent native gate；resolver thread 只返回 UID，VPP worker 仍负责 packet path。
+
+重要边界：
+  同一 TCP tuple 早期查询能返回 package UID 12540，后续查询可能返回 -1。
+  因此产品化不能只看 last-uid；需要 VPP/bridge owner cache 策略。
+  本步只验证 allow/query path，尚未验证 VPP worker 的真实 UID drop。
+```
