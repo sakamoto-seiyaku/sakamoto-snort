@@ -34,6 +34,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker-to-worker redirect | Worker thread 1 can re-enqueue a VPP buffer to worker thread 2 through another frame queue; worker thread 2 forwards to shim and ping succeeds. | Experiment 64 |
 | VPP redirected worker mock UID verdict | Worker thread 1 can re-enqueue IPv4 UDP/TCP packets to worker thread 2; worker thread 2 queries the mock resolver and drops by UID. | Experiment 65 |
 | Android VPN VPP worker handoff | On Pixel 6a, app HTTP enters `VpnService -> packaged VPP handoff-forward-fd worker -> HEV -> SOCKS5`; VPP worker thread 1 handles the packet path. | Experiment 66 |
+| Android VPN VPP worker-to-worker redirect | On Pixel 6a, VPP worker thread 1 re-enqueues app HTTP packets to worker thread 2, and worker thread 2 forwards through HEV/SOCKS. | Experiment 71 |
 | Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
@@ -69,6 +70,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   redirect, at least for the Docker mock resolver path.
 - Android VPN mode can run the same `handoff-forward-fd` VPP worker path before
   HEV; this removes the Docker-only caveat for the basic worker handoff.
+- Android VPP worker-to-worker redirect is verified on Pixel 6a for the HTTP
+  allow path: thread 1 receives the handoff, thread 2 receives the redirected
+  frame, and HEV/SOCKS still gets the TCP connection.
 - Android worker handoff can enforce a static IPv4 dst drop before HEV; this
   keeps the verdict inside VPP instead of the parent native process.
 - Android tuple->UID bridging works with VPP as the packet owner: Java/NDK only
@@ -103,13 +107,14 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - VPP worker can synchronously query a tuple owner resolver over an fd and
   enforce a UID drop verdict. Owner cache, async lookup, and performance remain
   separate POCs.
-- Worker-to-worker re-handoff is verified for a short ICMP forward path and
-  IPv4 UDP/TCP mock UID drop. It does not yet prove a production sharding
-  policy, packet ordering behavior, Android resolver behavior, or performance.
+- Worker-to-worker re-handoff is verified for a short ICMP forward path, IPv4
+  UDP/TCP mock UID drop, and Android HTTP allow path through HEV. It does not
+  yet prove a production sharding policy, packet ordering behavior, Android
+  resolver behavior after redirect, or performance.
 - Android worker handoff is verified for IPv4 TCP/HTTP allow, static IPv4 dst
-  drop, Android resolver UID query, Android TCP UID drop, and Android UDP UID
-  drop through HEV. IPv6 Android resolver/drop and owner caching remain
-  separate.
+  drop, worker-to-worker redirect allow, Android resolver UID query, Android TCP
+  UID drop, and Android UDP UID drop through HEV. IPv6 Android resolver/drop and
+  owner caching remain separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

@@ -11,6 +11,7 @@ PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 HOST="${HOST:-142.251.13.94}"
 PORT="${PORT:-80}"
 BLOCK_IP4_DST="${BLOCK_IP4_DST:-}"
+REDIRECT_THREAD="${REDIRECT_THREAD:-}"
 EXPECT_DROP="${EXPECT_DROP:-0}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-7}"
@@ -48,6 +49,7 @@ echo "package=$PACKAGE"
 echo "host=$HOST"
 echo "port=$PORT"
 echo "block_ip4_dst=$BLOCK_IP4_DST"
+echo "redirect_thread=$REDIRECT_THREAD"
 echo "expect_drop=$EXPECT_DROP"
 
 if [[ "$BUILD_APK" == "1" ]]; then
@@ -81,6 +83,9 @@ start_args=(shell am start -n "$PACKAGE/.MainActivity" \
   --es allowedPackage "$PACKAGE")
 if [[ -n "$BLOCK_IP4_DST" ]]; then
   start_args+=(--es blockIp4Dst "$BLOCK_IP4_DST")
+fi
+if [[ -n "$REDIRECT_THREAD" ]]; then
+  start_args+=(--ei redirectThread "$REDIRECT_THREAD")
 fi
 adb_cmd "${start_args[@]}"
 sleep "$START_WAIT"
@@ -160,6 +165,16 @@ fi
 if ! grep -Eq 'thread-hits worker-probe last 1 .* t1 [1-9]' <<<"$vpp_cli"; then
   echo "expected worker-probe thread hit on VPP worker 1" >&2
   exit 1
+fi
+if [[ -n "$REDIRECT_THREAD" ]]; then
+  if ! grep -Eq 'redirect enabled 1 target-thread '"$REDIRECT_THREAD"' .* enqueued [1-9].* worker-packets [1-9]' <<<"$vpp_cli"; then
+    echo "expected VPP redirect counters on target thread $REDIRECT_THREAD" >&2
+    exit 1
+  fi
+  if ! grep -Eq 'thread-hits worker-redirect last '"$REDIRECT_THREAD"' .* t'"$REDIRECT_THREAD"' [1-9]' <<<"$vpp_cli"; then
+    echo "expected worker-redirect thread hit on VPP worker $REDIRECT_THREAD" >&2
+    exit 1
+  fi
 fi
 if grep -E 'free\(\): invalid size|Fatal signal|SIGABRT' <<<"$hev_log" >/dev/null; then
   echo "saw HEV fatal pattern" >&2

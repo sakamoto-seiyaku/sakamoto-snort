@@ -5068,3 +5068,70 @@ Android VPN VPP-internal UDP UID drop 成立：
   end-to-end 成立。
   IPv6 UDP、redirect 后 Android resolver、cache、异步查询和性能仍需单独验证。
 ```
+
+### 71. Android VPP worker-to-worker redirect can forward app HTTP
+
+问题：Docker 已经验证 worker 1 可以把 VPP buffer re-enqueue 到 worker 2。这里验证同样
+机制在 Pixel 6a 的真实 `VpnService -> packaged VPP -> HEV -> SOCKS5` 路径里是否成立，
+避免只拿 Docker 结论回答 Android 多线程分流问题。
+
+最小实现：
+
+```text
+Android extra:
+  redirectThread=2
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 redirect-thread 2
+
+test:
+  app HTTP probe -> 142.251.13.94:80
+  expect app HTTP 200
+  expect SOCKS connect count increases
+  expect worker-probe last/t1 shows first worker
+  expect worker-redirect last/t2 shows second worker
+```
+
+命令：
+
+```sh
+make android-vpp-hev-handoff-redirect-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+ok bytes=40 elapsedMs=9 first=HTTP/1.0 200 OK  Content-Length: 2    OK
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 11 bytes 693 tx 4 bytes 204
+shim-rx 4 bytes 204 shim-tx 11 bytes 693
+handoff target-thread 1 fq 21 enqueued 11 bytes 693 congestion-drops 0 alloc-errors 0 worker-packets 11 bytes 693
+redirect enabled 1 target-thread 2 fq 22 enqueued 11 bytes 693 congestion-drops 0 worker-packets 11 bytes 693
+last-tuple ip4 proto 6 10.111.0.2:41292 -> 142.251.13.94:80
+thread-hits main last 0 t0 7 t1 0 t2 0 t3 0 overflow 0
+thread-hits rx-node last 0 t0 7 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 7 t2 0 t3 0
+thread-hits worker-redirect last 2 t0 0 t1 0 t2 7 t3 0
+
+HEV:
+socks5 client tcp -> [142.251.13.94]:80
+socks_count_after=1
+```
+
+结论：
+
+```text
+Android VPP worker-to-worker redirect 成立：
+  fd/input 仍在 thread 0
+  software handoff 把 TUN packet 转成 VPP buffer 后进入 worker 1
+  worker 1 可以用 VPP frame queue re-enqueue 到 worker 2
+  worker 2 继续处理并 forward 到 shim/HEV
+
+边界：
+  这里只验证 redirect 后 allow/forward。
+  redirect 后 Android resolver + UID verdict 还没验证。
+  这不是生产 sharding policy，也没有回答 packet ordering 或性能。
+```
