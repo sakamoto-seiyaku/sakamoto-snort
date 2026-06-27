@@ -30,6 +30,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker IPv4 TCP/UDP tuple parse | Worker thread 1 parses IPv4 UDP and TCP src/dst addresses and ports after TUN handoff. | Experiment 60 |
 | VPP worker IPv6 TCP/UDP tuple parse | Worker thread 1 parses IPv6 UDP and TCP src/dst addresses and ports after TUN handoff. | Experiment 61 |
 | VPP worker mock tuple owner resolver | Worker thread 1 sends IPv4 UDP/TCP tuples to a resolver fd and records mock UID 4242. | Experiment 62 |
+| VPP worker mock UID verdict | Worker thread 1 drops IPv4 UDP/TCP packets when the mock resolver returns blocked UID 4242. | Experiment 63 |
 
 ## Demoted / Mis-scoped
 
@@ -47,8 +48,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
 - VPN mode can still do static IP packet rules inside VPP.
-- VPN mode VPP-internal UID filtering is not proven. The next valid POC must keep
-  packet verdicts inside a VPP plugin/node; Java/NDK may only resolve tuple -> UID.
+- VPN mode VPP-internal UID filtering is proven only with a Docker mock
+  resolver. The Android resolver bridge still needs to keep packet verdicts
+  inside VPP; Java/NDK may only resolve tuple -> UID.
 - Current `tun_poc` fd adapter does not get worker distribution automatically;
   software steering/handoff must be explicit if we want worker processing.
 - VPP frame-queue handoff is viable once the packet is represented as a VPP
@@ -57,7 +59,7 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   so worker verdicts can be tested without designing the final interface shape.
 - The first useful product slice can be package UID allow/block in root mode, plus
   VPN app include/exclude and static IP block POCs. VPN UID filtering is not in
-  the verified slice until VPP-internal enforcement passes.
+  the Android verified slice until the Android resolver bridge passes.
 
 ## Known Gaps
 
@@ -71,9 +73,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - VPP worker-side IPv4/IPv6 TCP/UDP tuple parsing is verified for packets
   without IPv6 extension headers. Mock tuple->UID resolver integration is
   verified; Android resolver bridging remains separate.
-- VPP worker can synchronously query a mock tuple owner resolver over an fd.
-  Android `ConnectivityManager.getConnectionOwnerUid` bridging and UID verdict
-  enforcement are still separate POCs.
+- VPP worker can synchronously query a mock tuple owner resolver over an fd and
+  enforce a mock UID drop verdict. Android
+  `ConnectivityManager.getConnectionOwnerUid` bridging and owner cache remain
+  separate POCs.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

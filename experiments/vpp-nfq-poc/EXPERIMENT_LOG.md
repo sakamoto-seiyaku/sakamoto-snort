@@ -4570,3 +4570,60 @@ packet verdict 仍在 VPP worker path 内；resolver 只提供 UID。
   当前只记录 UID，不基于 UID drop/allow。
   同步 poll/read 会阻塞 worker，产品化时需要异步、cache、timeout 策略。
 ```
+
+### 63. VPP worker can drop by mock resolver UID
+
+问题：第 62 步只证明 VPP worker 能拿到 mock UID。这里验证 packet verdict 也能留在 VPP worker：resolver 返回 UID 后，worker 根据 UID drop，不写 shim。
+
+最小实现：
+
+```text
+tun_poc CLI:
+  block-owner-uid 4242
+
+worker behavior:
+  parse tuple
+  query resolver
+  if last_owner_uid == block_owner_uid:
+    increment uid-block and blocked counters
+    free VPP buffer
+    do not write shim fd
+```
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-tun-poc-build
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-resolver-uid-drop
+```
+
+结果：
+
+```text
+resolver query: resolve ip4 proto 17 198.19.30.1 43101 198.19.30.2 53101
+after udp:
+resolver enabled 1 fd 55 queries 1 hits 1 errors 0 last-uid 4242
+uid-block enabled 1 uid 4242 packets 1 bytes 37
+shim-rx 0 bytes 0 shim-tx 1 bytes 48
+
+resolver query: resolve ip4 proto 6 198.19.30.1 43102 198.19.30.2 53102
+after tcp:
+resolver enabled 1 fd 55 queries 2 hits 2 errors 0 last-uid 4242
+uid-block enabled 1 uid 4242 packets 2 bytes 97
+blocked 2 bytes 97
+shim-rx 0 bytes 0 shim-tx 1 bytes 48
+thread-hits worker-probe last 1 t0 0 t1 3 t2 0 t3 0
+```
+
+结论：
+
+```text
+VPP-internal UID verdict POC 成立：
+  resolver 只提供 UID
+  drop verdict 在 VPP worker node 内执行
+  UDP/TCP packet 都没有继续写到 shim
+
+边界：
+  resolver 仍是 mock，不是 Android ConnectivityManager。
+  当前是同步阻塞查询，没有 owner cache。
+```

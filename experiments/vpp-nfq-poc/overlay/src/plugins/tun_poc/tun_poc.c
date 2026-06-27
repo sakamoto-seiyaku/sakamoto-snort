@@ -594,6 +594,16 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
       tun_poc_record_l4_tuple (tm, packet, packet_len);
       tun_poc_query_owner_resolver (tm);
 
+      if (tm->block_owner_uid_set &&
+	  tm->last_owner_uid == tm->block_owner_uid)
+	{
+	  tm->uid_blocked_packets++;
+	  tm->uid_blocked_bytes += packet_len;
+	  tm->blocked_packets++;
+	  tm->blocked_bytes += packet_len;
+	  continue;
+	}
+
       if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
 	{
 	  if (tun_poc_should_block_static_dst (tm, packet, packet_len))
@@ -764,9 +774,13 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   clib_memset (tm->last_tuple_ip6_dst, 0, sizeof (tm->last_tuple_ip6_dst));
   tm->resolver_enabled = 0;
   tm->last_owner_uid = -1;
+  tm->block_owner_uid_set = 0;
+  tm->block_owner_uid = -1;
   tm->resolver_queries = 0;
   tm->resolver_hits = 0;
   tm->resolver_errors = 0;
+  tm->uid_blocked_packets = 0;
+  tm->uid_blocked_bytes = 0;
   tm->overflow_thread_hits = 0;
   tm->last_main_fd_thread_index = ~0;
   tm->last_shim_fd_thread_index = ~0;
@@ -834,6 +848,7 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   int fd = -1;
   int shim_fd = -1;
   int resolver_fd = -1;
+  int block_owner_uid = -1;
   u8 *block_ip4_dst_text = 0;
   u8 *block_ip6_dst_text = 0;
   u32 block_ip4_dst = 0;
@@ -851,6 +866,8 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
       else if (unformat (input, "shim-fd %d", &shim_fd))
 	;
       else if (unformat (input, "resolver-fd %d", &resolver_fd))
+	;
+      else if (unformat (input, "block-owner-uid %d", &block_owner_uid))
 	;
       else if (unformat (input, "mode count-only"))
 	mode = TUN_POC_MODE_COUNT_ONLY;
@@ -910,6 +927,11 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
       tun_poc_main.resolver_fd = resolver_fd;
       tun_poc_main.resolver_enabled = 1;
     }
+  if (!err && block_owner_uid >= 0)
+    {
+      tun_poc_main.block_owner_uid_set = 1;
+      tun_poc_main.block_owner_uid = block_owner_uid;
+    }
   if (!err && block_ip6_dst_set)
     {
       tun_poc_main.block_ip6_dst_set = 1;
@@ -926,7 +948,8 @@ VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
     "[mode count-only|reflect-icmp|forward-fd|handoff-probe|"
     "handoff-forward-fd] "
     "[shim-fd <n>] [resolver-fd <n>] [target-thread <n>] "
-    "[block-ip4-dst <addr>] [block-ip6-dst <addr>]",
+    "[block-owner-uid <uid>] [block-ip4-dst <addr>] "
+    "[block-ip6-dst <addr>]",
   .function = tun_poc_enable_command_fn,
 };
 
@@ -1038,6 +1061,10 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     "last-uid %d",
     tm->resolver_enabled, tm->resolver_fd, tm->resolver_queries,
     tm->resolver_hits, tm->resolver_errors, tm->last_owner_uid);
+  vlib_cli_output (
+    vm, "uid-block enabled %u uid %d packets %llu bytes %llu",
+    tm->block_owner_uid_set, tm->block_owner_uid, tm->uid_blocked_packets,
+    tm->uid_blocked_bytes);
   vlib_cli_output (
     vm,
     "thread-hits main last %u t0 %llu t1 %llu t2 %llu t3 %llu overflow %llu",

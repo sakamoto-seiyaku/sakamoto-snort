@@ -69,6 +69,18 @@ def parse_resolver(show_output: str) -> dict[str, int]:
     return {key: int(value) for key, value in zip(keys, match.groups())}
 
 
+def parse_uid_block(show_output: str) -> dict[str, int]:
+    match = re.search(
+        r"^uid-block enabled (\d+) uid (-?\d+) packets (\d+) bytes (\d+)",
+        show_output,
+        re.MULTILINE,
+    )
+    if not match:
+        raise RuntimeError(f"could not parse uid block counters:\n{show_output}")
+    keys = ("enabled", "uid", "packets", "bytes")
+    return {key: int(value) for key, value in zip(keys, match.groups())}
+
+
 def wait_for_resolver_hits(
     vppctl_bin: Path,
     cli_sock: Path,
@@ -97,6 +109,8 @@ def main() -> int:
     parser.add_argument("--resolver-fd", type=int, default=55)
     parser.add_argument("--target-thread", type=int, default=1)
     parser.add_argument("--mock-uid", type=int, default=4242)
+    parser.add_argument("--block-owner-uid", type=int)
+    parser.add_argument("--expect-uid-drop", action="store_true")
     parser.add_argument("--runtime-root", default="/tmp/sakamoto-vpp-nfq-poc")
     parser.add_argument("--vpp-bin", required=True)
     parser.add_argument("--vppctl-bin", required=True)
@@ -151,9 +165,7 @@ def main() -> int:
         vpp_log_file.close()
 
         helper.wait_for_cli(vpp_proc, cli_sock, vpp_stdout_log)
-        helper.run_vppctl(
-            Path(args.vppctl_bin),
-            cli_sock,
+        enable_command = [
             "tun-poc",
             "enable",
             "fd",
@@ -166,7 +178,11 @@ def main() -> int:
             str(resolver_fd),
             "target-thread",
             str(args.target_thread),
-        )
+        ]
+        if args.block_owner_uid is not None:
+            enable_command.extend(["block-owner-uid", str(args.block_owner_uid)])
+
+        helper.run_vppctl(Path(args.vppctl_bin), cli_sock, *enable_command)
 
         tuple_smoke.send_udp("inet", actual_ifname, args.local_ip, 43101, args.remote_ip, 53101)
         udp_show, udp_resolver = wait_for_resolver_hits(
@@ -183,6 +199,11 @@ def main() -> int:
         logger.log("after tcp:")
         logger.log(tcp_show.rstrip())
         logger.log(f"tcp_resolver={tcp_resolver}")
+        if args.expect_uid_drop:
+            uid_block = parse_uid_block(tcp_show)
+            if uid_block["uid"] != args.block_owner_uid or uid_block["packets"] < 2:
+                raise RuntimeError(f"expected uid drop for both UDP/TCP packets: {uid_block}")
+            logger.log(f"uid_block={uid_block}")
         logger.log()
         logger.log("ok: tun_poc worker queried mock resolver for IPv4 UDP and TCP tuples")
         return 0
