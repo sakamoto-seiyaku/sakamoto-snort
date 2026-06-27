@@ -12,6 +12,7 @@ HOST="${HOST:-142.251.13.94}"
 PORT="${PORT:-80}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-}"
 REDIRECT_THREAD="${REDIRECT_THREAD:-}"
+ENABLE_IPV6="${ENABLE_IPV6:-0}"
 EXPECT_DROP="${EXPECT_DROP:-0}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-7}"
@@ -50,6 +51,7 @@ echo "host=$HOST"
 echo "port=$PORT"
 echo "block_owner_uid=$BLOCK_OWNER_UID"
 echo "redirect_thread=$REDIRECT_THREAD"
+echo "enable_ipv6=$ENABLE_IPV6"
 echo "expect_drop=$EXPECT_DROP"
 
 if [[ "$BUILD_APK" == "1" ]]; then
@@ -95,6 +97,9 @@ if [[ -n "$BLOCK_OWNER_UID" ]]; then
 fi
 if [[ -n "$REDIRECT_THREAD" ]]; then
   start_args+=(--ei redirectThread "$REDIRECT_THREAD")
+fi
+if [[ "$ENABLE_IPV6" == "1" ]]; then
+  start_args+=(--ez enableIpv6 true)
 fi
 adb_cmd "${start_args[@]}"
 sleep "$START_WAIT"
@@ -143,6 +148,10 @@ if ! grep -q 'mode handoff-forward-fd' <<<"$vpp_cli"; then
 fi
 if ! grep -Eq 'resolver enabled 1 fd 5 queries [1-9].* hits [1-9].* errors 0' <<<"$vpp_cli"; then
   echo "expected VPP resolver hits without errors" >&2
+  exit 1
+fi
+if [[ "$ENABLE_IPV6" == "1" ]] && ! grep -Eq 'last-tuple ip6 proto 6 .* -> .*:80' <<<"$vpp_cli"; then
+  echo "expected VPP IPv6 TCP last tuple" >&2
   exit 1
 fi
 if ! grep -Eq "resolver query=.* uid=$package_uid" <<<"$resolver_log"; then

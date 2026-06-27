@@ -5212,3 +5212,77 @@ Android redirect 后 VPP-internal real UID drop 成立：
   这里只验证 TCP UID drop。
   UDP redirect、IPv6 redirect、packet ordering、异步 resolver 和性能仍需单独验证。
 ```
+
+### 73. Android VPP worker can drop IPv6 TCP by real app owner UID
+
+问题：Android VPP owner resolver/drop 已验证 IPv4 TCP 和 IPv4 UDP send packet。这里补
+IPv6 TCP：`enableIpv6=true` 后，VPP worker 是否能解析 IPv6 TCP tuple、通过 Android
+resolver 拿到真实 UID，并在 VPP worker 内 drop。
+
+最小实现：
+
+```text
+Android extra:
+  enableIpv6=true
+  blockOwnerUid=<package_uid>
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 resolver-fd 5 block-owner-uid 12540
+
+test:
+  app HTTP probe -> [2606:4700:4700::1111]:80
+  expect app timeout from fd00:111:111::2
+  expect VPP last-tuple ip6 proto 6
+  expect resolver UID 12540
+  expect uid-block counter increases inside VPP
+  expect SOCKS connect count unchanged
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-ipv6-uid-drop-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+fail elapsedMs=5013 error=SocketTimeoutException: failed to connect to /2606:4700:4700::1111 (port 80) from /fd00:111:111::2 ...
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 9 bytes 700 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 6 bytes 460
+blocked 3 bytes 240 block-ip4-dst -
+handoff target-thread 1 fq 21 enqueued 9 bytes 700 congestion-drops 0 alloc-errors 0 worker-packets 9 bytes 700
+tuple parsed 3 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip6 proto 6 [fd00:111:111::2]:55018 -> [2606:4700:4700::1111]:80
+resolver enabled 1 fd 5 queries 3 hits 3 errors 0 last-uid 12540
+uid-block enabled 1 uid 12540 packets 3 bytes 240
+thread-hits worker-probe last 1 t0 0 t1 5 t2 0 t3 0
+
+resolver log:
+resolver query=1 proto=6 fd00:111:111::2:55018 -> 2606:4700:4700::1111:80 uid=12540
+resolver query=2 proto=6 fd00:111:111::2:55018 -> 2606:4700:4700::1111:80 uid=12540
+resolver query=3 proto=6 fd00:111:111::2:55018 -> 2606:4700:4700::1111:80 uid=12540
+
+HEV:
+no socks5 client tcp -> [2606:4700:4700::1111]:80
+socks_count_after=0
+```
+
+结论：
+
+```text
+Android VPN VPP-internal IPv6 TCP UID drop 成立：
+  VpnService IPv6 route sends app IPv6 packets into packaged VPP
+  VPP worker parses IPv6 TCP tuple
+  VPP worker queries Android resolver fd
+  native/Java returns package UID
+  VPP worker applies block-owner-uid before HEV/SOCKS
+
+边界：
+  只覆盖普通 IPv6 base header，不覆盖 extension headers。
+  IPv6 UDP owner drop、redirect 后 IPv6 verdict、cache、异步查询和性能仍需单独验证。
+```

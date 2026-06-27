@@ -38,6 +38,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
+| Android VPN VPP IPv6 owner UID drop | VPP worker parses IPv6 TCP, queries Android owner UID, and drops real app packets by package UID before HEV/SOCKS. | Experiment 73 |
 | Android VPN VPP UDP owner UID drop | VPP worker queries Android owner UID for a UDP packet and drops by package UID. | Experiment 70 |
 | Android VPN redirected worker owner UID drop | On Pixel 6a, worker thread 1 re-enqueues app TCP packets to worker thread 2; worker thread 2 queries Android owner UID and drops by package UID. | Experiment 72 |
 
@@ -57,9 +58,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
 - VPN mode can still do static IP packet rules inside VPP.
-- VPN mode VPP-internal UID filtering is proven on Android for IPv4 TCP and
-  IPv4 UDP send packets: Java/NDK only resolves tuple -> UID, while VPP keeps
-  packet forwarding/verdict ownership.
+- VPN mode VPP-internal UID filtering is proven on Android for IPv4 TCP, IPv4
+  UDP send packets, and IPv6 TCP: Java/NDK only resolves tuple -> UID, while
+  VPP keeps packet forwarding/verdict ownership.
 - Current `tun_poc` fd adapter does not get worker distribution automatically;
   software steering/handoff must be explicit if we want worker processing.
 - VPP frame-queue handoff is viable once the packet is represented as a VPP
@@ -89,7 +90,7 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   so worker verdicts can be tested without designing the final interface shape.
 - The first useful product slice can be package UID allow/block in root mode,
   plus VPN app include/exclude, static IP block, and Android VPP owner UID
-  filtering for IPv4 TCP/UDP.
+  filtering for IPv4 TCP/UDP and IPv6 TCP.
 
 ## Known Gaps
 
@@ -103,8 +104,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   main IPv6 verdict path is no longer unknown.
 - VPP worker-side IPv4/IPv6 TCP/UDP tuple parsing is verified for packets
   without IPv6 extension headers. Mock tuple->UID resolver integration is
-  verified, and Android resolver bridging is verified for IPv4 TCP/UDP. IPv6
-  Android resolver/drop remains separate.
+  verified, and Android resolver bridging is verified for IPv4 TCP/UDP plus
+  IPv6 TCP. IPv6 UDP resolver/drop and IPv6 extension headers remain separate.
 - VPP worker can synchronously query a tuple owner resolver over an fd and
   enforce a UID drop verdict. Owner cache, async lookup, and performance remain
   separate POCs.
@@ -115,8 +116,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   performance.
 - Android worker handoff is verified for IPv4 TCP/HTTP allow, static IPv4 dst
   drop, worker-to-worker redirect allow, Android resolver UID query, Android TCP
-  UID drop, Android redirected TCP UID drop, and Android UDP UID drop through
-  HEV. IPv6 Android resolver/drop and owner caching remain separate.
+  UID drop, Android redirected TCP UID drop, Android IPv6 TCP UID drop, and
+  Android UDP UID drop through HEV. IPv6 UDP and owner caching remain separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.
