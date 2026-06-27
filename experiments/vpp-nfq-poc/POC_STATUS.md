@@ -43,6 +43,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP IPv6 UDP owner UID drop | VPP worker queries Android owner UID for an IPv6 UDP packet and drops by package UID. | Experiment 74 |
 | Android VPN redirected worker owner UID drop | On Pixel 6a, worker thread 1 re-enqueues app TCP packets to worker thread 2; worker thread 2 queries Android owner UID and drops by package UID. | Experiment 72 |
 | Android VPN redirected worker IPv6 owner UID drop | On Pixel 6a, worker thread 2 drops redirected IPv6 TCP packets after querying Android owner UID. | Experiment 75 |
+| Android VPN redirected worker UDP owner UID drop | On Pixel 6a, worker thread 2 drops redirected IPv4 UDP packets after querying Android owner UID. | Experiment 76 |
 
 ## Demoted / Mis-scoped
 
@@ -112,15 +113,15 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   enforce a UID drop verdict. Owner cache, async lookup, and performance remain
   separate POCs.
 - Worker-to-worker re-handoff is verified for a short ICMP forward path, IPv4
-  UDP/TCP mock UID drop, Android HTTP allow path through HEV, and Android
-  IPv4/IPv6 TCP real UID drop after redirect. It does not yet prove a
-  production sharding policy, packet ordering behavior, UDP redirect behavior on
-  Android, or performance.
+  UDP/TCP mock UID drop, Android HTTP allow path through HEV, Android IPv4/IPv6
+  TCP real UID drop after redirect, and Android IPv4 UDP real UID drop after
+  redirect. It does not yet prove a production sharding policy, packet ordering
+  behavior, IPv6 UDP redirect behavior on Android, or performance.
 - Android worker handoff is verified for IPv4 TCP/HTTP allow, static IPv4 dst
   drop, worker-to-worker redirect allow, Android resolver UID query, Android TCP
-  UID drop, Android redirected IPv4/IPv6 TCP UID drop, Android IPv6 TCP UID
-  drop, Android UDP UID drop, and Android IPv6 UDP UID drop through HEV. Owner
-  caching remains separate.
+  UID drop, Android redirected IPv4/IPv6 TCP UID drop, Android redirected IPv4
+  UDP UID drop, Android IPv6 TCP UID drop, Android UDP UID drop, and Android
+  IPv6 UDP UID drop through HEV. Owner caching remains separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

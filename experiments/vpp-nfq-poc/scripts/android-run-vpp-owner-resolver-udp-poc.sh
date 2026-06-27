@@ -10,6 +10,7 @@ PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 HOST="${HOST:-8.8.8.8}"
 PORT="${PORT:-53}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-package}"
+REDIRECT_THREAD="${REDIRECT_THREAD:-}"
 ENABLE_IPV6="${ENABLE_IPV6:-0}"
 EXPECT_DROP="${EXPECT_DROP:-1}"
 START_WAIT="${START_WAIT:-6}"
@@ -42,6 +43,7 @@ echo "adb_serial=$(adb_target_desc)"
 echo "package=$PACKAGE"
 echo "udp=$HOST:$PORT"
 echo "block_owner_uid=$BLOCK_OWNER_UID"
+echo "redirect_thread=$REDIRECT_THREAD"
 echo "enable_ipv6=$ENABLE_IPV6"
 echo "expect_drop=$EXPECT_DROP"
 
@@ -76,6 +78,9 @@ start_args=(shell am start -n "$PACKAGE/.MainActivity" \
   --es allowedPackage "$PACKAGE")
 if [[ -n "$BLOCK_OWNER_UID" ]]; then
   start_args+=(--ei blockOwnerUid "$BLOCK_OWNER_UID")
+fi
+if [[ -n "$REDIRECT_THREAD" ]]; then
+  start_args+=(--ei redirectThread "$REDIRECT_THREAD")
 fi
 if [[ "$ENABLE_IPV6" == "1" ]]; then
   start_args+=(--ez enableIpv6 true)
@@ -142,6 +147,16 @@ fi
 if ! grep -Eq 'thread-hits worker-probe last 1 .* t1 [1-9]' <<<"$vpp_cli"; then
   echo "expected worker-probe thread hit on VPP worker 1" >&2
   exit 1
+fi
+if [[ -n "$REDIRECT_THREAD" ]]; then
+  if ! grep -Eq 'redirect enabled 1 target-thread '"$REDIRECT_THREAD"' .* enqueued [1-9].* worker-packets [1-9]' <<<"$vpp_cli"; then
+    echo "expected VPP redirect counters on target thread $REDIRECT_THREAD" >&2
+    exit 1
+  fi
+  if ! grep -Eq 'thread-hits worker-redirect last '"$REDIRECT_THREAD"' .* t'"$REDIRECT_THREAD"' [1-9]' <<<"$vpp_cli"; then
+    echo "expected worker-redirect thread hit on VPP worker $REDIRECT_THREAD" >&2
+    exit 1
+  fi
 fi
 if [[ "$EXPECT_DROP" == "1" ]]; then
   if ! grep -Eq 'uid-block enabled 1 uid '"$package_uid"' packets [1-9]' <<<"$vpp_cli"; then
