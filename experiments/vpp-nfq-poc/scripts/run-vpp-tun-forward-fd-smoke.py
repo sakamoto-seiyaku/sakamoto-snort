@@ -19,8 +19,10 @@ TUNSETIFF = 0x400454CA
 IFF_TUN = 0x0001
 IFF_NO_PI = 0x1000
 IPPROTO_ICMP = 1
+IPPROTO_ICMPV6 = 58
 ICMP_ECHO = 8
 ICMP_ECHOREPLY = 0
+ICMPV6_ECHO = 128
 
 
 class Logger:
@@ -115,6 +117,23 @@ def parse_ip4_icmp(packet: bytes) -> dict[str, object] | None:
     }
 
 
+def parse_ip6_icmp(packet: bytes) -> dict[str, object] | None:
+    if len(packet) < 48 or packet[0] >> 4 != 6 or packet[6] != IPPROTO_ICMPV6:
+        return None
+    payload_len = struct.unpack("!H", packet[4:6])[0]
+    total_len = 40 + payload_len
+    if payload_len < 8 or total_len > len(packet):
+        return None
+    return {
+        "total_len": total_len,
+        "src": socket.inet_ntop(socket.AF_INET6, packet[8:24]),
+        "dst": socket.inet_ntop(socket.AF_INET6, packet[24:40]),
+        "icmp_type": packet[40],
+        "icmp_code": packet[41],
+        "packet": packet[:total_len],
+    }
+
+
 def build_icmp_reply(request: bytes) -> bytes:
     parsed = parse_ip4_icmp(request)
     if parsed is None:
@@ -159,6 +178,7 @@ def observe_echo_request(
     logger: Logger,
     remote_ip: str,
     timeout_seconds: float,
+    ip_family: str = "inet",
 ) -> bytes | None:
     deadline = time.monotonic() + timeout_seconds
     old_timeout = sock.gettimeout()
@@ -169,7 +189,12 @@ def observe_echo_request(
                 packet = sock.recv(65535)
             except socket.timeout:
                 continue
-            parsed = parse_ip4_icmp(packet)
+            if ip_family == "inet6":
+                parsed = parse_ip6_icmp(packet)
+                echo_type = ICMPV6_ECHO
+            else:
+                parsed = parse_ip4_icmp(packet)
+                echo_type = ICMP_ECHO
             if parsed is None:
                 logger.log(f"shim observed non-icmp packet len={len(packet)}")
                 continue
@@ -178,7 +203,7 @@ def observe_echo_request(
                 f"{parsed['src']} -> {parsed['dst']} "
                 f"icmp_type={parsed['icmp_type']} len={parsed['total_len']}"
             )
-            if parsed["dst"] == remote_ip and parsed["icmp_type"] == ICMP_ECHO:
+            if parsed["dst"] == remote_ip and parsed["icmp_type"] == echo_type:
                 return bytes(parsed["packet"])
         return None
     finally:
@@ -239,7 +264,9 @@ def main() -> int:
     )
     parser.add_argument("--target-thread", type=int, default=1)
     parser.add_argument("--block-ip4-dst")
+    parser.add_argument("--block-ip6-dst")
     parser.add_argument("--expect-drop", action="store_true")
+    parser.add_argument("--ip-family", choices=("inet", "inet6"), default="inet")
     args = parser.parse_args()
 
     log_dir = Path(args.log_dir)
@@ -292,6 +319,8 @@ def main() -> int:
             enable_command.extend(["target-thread", str(args.target_thread)])
         if args.block_ip4_dst:
             enable_command.extend(["block-ip4-dst", args.block_ip4_dst])
+        if args.block_ip6_dst:
+            enable_command.extend(["block-ip6-dst", args.block_ip6_dst])
 
         enable = run_vppctl(Path(args.vppctl_bin), cli_sock, *enable_command)
         logger.log("enable output:")
@@ -301,17 +330,29 @@ def main() -> int:
         logger.log("before ping:")
         logger.log(before.rstrip())
 
+        ping_command = ["ping"]
+        if args.ip_family == "inet6":
+            ping_command.append("-6")
+        ping_command.extend(["-I", actual_ifname, "-c", "1", "-W", "2", args.remote_ip])
         ping = subprocess.Popen(
-            ["ping", "-I", actual_ifname, "-c", "1", "-W", "2", args.remote_ip],
+            ping_command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
         if args.expect_drop:
-            request = observe_echo_request(driver_sock, logger, args.remote_ip, 2.5)
+            request = observe_echo_request(
+                driver_sock,
+                logger,
+                args.remote_ip,
+                2.5,
+                args.ip_family,
+            )
             if request is not None:
                 raise RuntimeError("expected drop, but shim observed target ICMP echo request")
         else:
+            if args.ip_family != "inet":
+                raise RuntimeError("non-drop IPv6 reply generation is not implemented")
             request = wait_for_echo_request(driver_sock, logger, args.remote_ip)
             reply = build_icmp_reply(request)
             driver_sock.send(reply)

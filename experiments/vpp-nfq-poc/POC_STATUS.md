@@ -26,6 +26,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker forward to shim fd | In `handoff-forward-fd` mode, worker thread 1 forwards handoff TUN packets to the shim fd and ping succeeds. | Experiment 56 |
 | VPP worker IPv4 static dst drop | In `handoff-forward-fd` mode, worker thread 1 blocks IPv4 ICMP to `198.19.0.2` before shim and ping fails. | Experiment 57 |
 | VPP worker IPv4 static dst miss | In `handoff-forward-fd` mode, an unmatched IPv4 dst rule does not overmatch and ping succeeds. | Experiment 58 |
+| VPP worker IPv6 static dst drop | In `handoff-forward-fd` mode, worker thread 1 blocks IPv6 ICMP to `fd00:42::2` before shim and ping fails. | Experiment 59 |
 
 ## Demoted / Mis-scoped
 
@@ -61,8 +62,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   the parent native process before `tun_poc`, not inside VPP.
 - VPN VPP-internal owner cache is not verified. Experiment 52 caches in the
   parent native process.
-- VPP handoff worker-side IPv4 drop and miss/allow are verified. Worker-side
-  IPv6 drop still needs a separate POC.
+- VPP handoff worker-side static rules are verified for IPv4 drop, IPv4
+  miss/allow, and IPv6 drop. IPv6 miss/allow can be added if needed, but the
+  main IPv6 verdict path is no longer unknown.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

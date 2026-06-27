@@ -4369,3 +4369,57 @@ VPP worker-side IPv4 static dst rule does not overmatch:
 
 IPv4 worker-side static rule 0->1 now has both match/drop and miss/allow coverage.
 ```
+
+### 59. VPP worker can drop handoff TUN packets by IPv6 static dst rule
+
+问题：验证 worker-side static rule 在 IPv6 下也能 drop，并且 verdict 仍发生在 VPP worker node 内。
+
+命令：
+
+```sh
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-forward-fd-ipv6-drop
+```
+
+配置：
+
+```text
+mode:
+  handoff-forward-fd
+
+TUN:
+  fd00:42::1/64 -> fd00:42::2
+
+rule:
+  block-ip6-dst fd00:42::2
+```
+
+结果：
+
+```text
+shim observed:
+  fe80::... -> ff02::2 icmp_type=133 len=48
+  no fd00:42::1 -> fd00:42::2 echo request reached shim
+
+after ping:
+rx 2 bytes 152 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 1 bytes 48
+blocked 1 bytes 104 block-ip6-dst fd00:42::2
+handoff target-thread 1 fq 34 enqueued 2 bytes 152 congestion-drops 0 alloc-errors 0 worker-packets 2 bytes 152
+thread-hits rx-node last 0 t0 2 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+
+ping:
+  1 transmitted, 0 received, 100% packet loss
+```
+
+结论：
+
+```text
+VPP worker-side IPv6 exact dst drop 成立。
+和 IPv4 一样，packet 已 handoff 到 worker thread 后才做 verdict。
+
+当前 worker-side static rule 覆盖：
+  IPv4 match/drop
+  IPv4 miss/allow
+  IPv6 match/drop
+```
