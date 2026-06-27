@@ -169,6 +169,19 @@ def parse_counters(show_output: str) -> tuple[int, int, int, int]:
     )
 
 
+def parse_worker_probe_hits(show_output: str) -> dict[str, int]:
+    match = re.search(
+        r"^thread-hits worker-probe last (\d+) "
+        r"t0 (\d+) t1 (\d+) t2 (\d+) t3 (\d+)",
+        show_output,
+        re.MULTILINE,
+    )
+    if not match:
+        raise RuntimeError(f"could not parse worker-probe hits:\n{show_output}")
+    keys = ("last", "t0", "t1", "t2", "t3")
+    return {key: int(value) for key, value in zip(keys, match.groups())}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ifname", default="tun-poc-forward0")
@@ -181,6 +194,12 @@ def main() -> int:
     parser.add_argument("--vppctl-bin", required=True)
     parser.add_argument("--vpp-config", required=True)
     parser.add_argument("--log-dir", required=True)
+    parser.add_argument(
+        "--tun-poc-mode",
+        choices=("forward-fd", "handoff-forward-fd"),
+        default="forward-fd",
+    )
+    parser.add_argument("--target-thread", type=int, default=1)
     args = parser.parse_args()
 
     log_dir = Path(args.log_dir)
@@ -219,18 +238,20 @@ def main() -> int:
         logger.log("show threads:")
         logger.log(threads.rstrip())
 
-        enable = run_vppctl(
-            Path(args.vppctl_bin),
-            cli_sock,
+        enable_command = [
             "tun-poc",
             "enable",
             "fd",
             str(args.tun_fd),
             "mode",
-            "forward-fd",
+            args.tun_poc_mode,
             "shim-fd",
             str(shim_fd),
-        )
+        ]
+        if args.tun_poc_mode == "handoff-forward-fd":
+            enable_command.extend(["target-thread", str(args.target_thread)])
+
+        enable = run_vppctl(Path(args.vppctl_bin), cli_sock, *enable_command)
         logger.log("enable output:")
         logger.log(enable.rstrip())
 
@@ -263,6 +284,11 @@ def main() -> int:
                 f"rx={rx_packets} tx={tx_packets} "
                 f"shim-rx={shim_rx_packets} shim-tx={shim_tx_packets}"
             )
+        if args.tun_poc_mode == "handoff-forward-fd":
+            worker_hits = parse_worker_probe_hits(after)
+            target_key = f"t{args.target_thread}"
+            if worker_hits.get(target_key, 0) <= 0:
+                raise RuntimeError(f"expected worker-probe on target thread: {worker_hits}")
 
         logger.log()
         logger.log(f"vpp tun forward-fd smoke log: {log_dir / 'vpp-tun-forward-fd-smoke.log'}")

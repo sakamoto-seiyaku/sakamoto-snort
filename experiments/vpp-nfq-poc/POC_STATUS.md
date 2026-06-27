@@ -23,6 +23,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN teardown loop | 3 start/HTTP/stop cycles completed without HEV fatal pattern or VPP leak. | Experiment 37 |
 | VPP TUN fd callback thread ownership | With `workers 2`, current `tun_poc` `clib_file` fd callbacks still run on VPP thread 0, not workers. | Experiment 54 |
 | VPP TUN software handoff to worker | A `tun-poc-rx-handoff` input node can allocate a VPP buffer and enqueue it to `tun-poc-worker-probe` on worker thread 1. | Experiment 55 |
+| VPP worker forward to shim fd | In `handoff-forward-fd` mode, worker thread 1 forwards handoff TUN packets to the shim fd and ping succeeds. | Experiment 56 |
 
 ## Demoted / Mis-scoped
 
@@ -46,6 +47,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   software steering/handoff must be explicit if we want worker processing.
 - VPP frame-queue handoff is viable once the packet is represented as a VPP
   buffer and the enqueue happens from a VLIB node context.
+- Worker-side processing can forward back into the current shim/HEV style path,
+  so worker verdicts can be tested without designing the final interface shape.
 - The first useful product slice can be package UID allow/block in root mode, plus
   VPN app include/exclude and static IP block POCs. VPN UID filtering is not in
   the verified slice until VPP-internal enforcement passes.
@@ -56,9 +59,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   the parent native process before `tun_poc`, not inside VPP.
 - VPN VPP-internal owner cache is not verified. Experiment 52 caches in the
   parent native process.
-- VPP handoff-to-worker is verified only as a probe that counts and frees the
-  packet. Worker-side verdict plus rejoining the forward-fd/HEV path is still
-  not verified.
+- VPP handoff worker-side static rule verdict is not verified yet. Experiment
+  56 proves worker-side forwarding, not worker-side drop/allow policy.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

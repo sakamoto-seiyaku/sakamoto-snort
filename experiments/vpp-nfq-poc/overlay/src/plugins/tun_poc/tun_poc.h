@@ -14,6 +14,7 @@ typedef enum
   TUN_POC_MODE_REFLECT_ICMP,
   TUN_POC_MODE_FORWARD_FD,
   TUN_POC_MODE_HANDOFF_PROBE,
+  TUN_POC_MODE_HANDOFF_FORWARD_FD,
 } tun_poc_mode_t;
 
 typedef struct

@@ -4217,3 +4217,62 @@ VPP 内部 handoff 方向成立：
   当前 worker-probe node 只计数并 free buffer，没有把 packet 再送回 forward-fd/HEV 路径。
   下一步要验证 worker 上做静态规则 verdict 后，是否能 drop 或继续转发到 shim/HEV。
 ```
+
+### 56. VPP worker can forward handoff TUN packets to shim fd
+
+问题：第 55 步只证明 packet 可以被 handoff 到 worker 并计数/free。还需要验证 worker 上处理完 packet 后，能不能继续走当前 `forward-fd`/HEV 形态，把包写到 shim fd。
+
+最小实现：
+
+```text
+新增 tun_poc mode:
+  handoff-forward-fd
+
+path:
+  TUN fd ready on thread 0
+  -> tun-poc-rx-handoff input node reads packet on thread 0
+  -> vlib_buffer_enqueue_to_thread(target-thread 1)
+  -> tun-poc-worker-probe runs on worker thread 1
+  -> worker node writes packet bytes to shim fd
+  -> shim fd callback reads reply on thread 0 and writes back to TUN
+```
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-tun-poc-build
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-forward-fd-smoke
+```
+
+结果：
+
+```text
+show threads:
+0      vpp_main
+1      vpp_wk_0
+2      vpp_wk_1
+
+after ping:
+enabled 1 fd 53 shim-fd 54 mode handoff-forward-fd
+rx 2 bytes 132 tx 1 bytes 84
+shim-rx 1 bytes 84 shim-tx 2 bytes 132
+handoff target-thread 1 fq 34 enqueued 2 bytes 132 congestion-drops 0 alloc-errors 0 worker-packets 2 bytes 132
+thread-hits rx-node last 0 t0 2 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+
+ping:
+  1 transmitted, 1 received, 0% packet loss
+```
+
+结论：
+
+```text
+VPP 内部 worker verdict/forward 的基本路径成立：
+  packet 可以从 thread 0 TUN input handoff 到 worker
+  worker 可以做处理后把 packet 写到 shim fd
+  现有 shim read-back 路径可以完成 ping 闭环
+
+这仍是 POC：
+  worker node 直接写 shim fd，不是完整 VPP interface/graph 设计。
+  下一步要在 worker 上验证 static rule drop/allow，尤其 IPv4/IPv6 dst block。
+```

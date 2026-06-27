@@ -64,6 +64,8 @@ format_tun_poc_mode (u8 *s, va_list *args)
       return format (s, "forward-fd");
     case TUN_POC_MODE_HANDOFF_PROBE:
       return format (s, "handoff-probe");
+    case TUN_POC_MODE_HANDOFF_FORWARD_FD:
+      return format (s, "handoff-forward-fd");
     }
 
   return format (s, "unknown");
@@ -251,7 +253,8 @@ tun_poc_main_fd_read_ready (clib_file_t *f)
 			   &tm->last_main_fd_thread_index,
 			   &tm->overflow_thread_hits);
 
-  if (tm->mode == TUN_POC_MODE_HANDOFF_PROBE)
+  if (tm->mode == TUN_POC_MODE_HANDOFF_PROBE ||
+      tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
     {
       vlib_node_set_interrupt_pending (vlib_get_main (),
 				       tun_poc_rx_handoff_node.index);
@@ -310,7 +313,9 @@ VLIB_NODE_FN (tun_poc_rx_handoff_node)
 			   &tm->last_rx_node_thread_index,
 			   &tm->overflow_thread_hits);
 
-  if (!tm->enabled || tm->mode != TUN_POC_MODE_HANDOFF_PROBE)
+  if (!tm->enabled ||
+      (tm->mode != TUN_POC_MODE_HANDOFF_PROBE &&
+       tm->mode != TUN_POC_MODE_HANDOFF_FORWARD_FD))
     return 0;
 
   while (processed < TUN_POC_HANDOFF_BURST)
@@ -403,8 +408,25 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
   for (u32 i = 0; i < n_left; i++)
     {
       vlib_buffer_t *b = vlib_get_buffer (vm, from[i]);
+      u8 *packet = vlib_buffer_get_current (b);
+      u32 packet_len = vlib_buffer_length_in_chain (vm, b);
+
       tm->worker_probe_packets++;
-      tm->worker_probe_bytes += vlib_buffer_length_in_chain (vm, b);
+      tm->worker_probe_bytes += packet_len;
+
+      if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
+	{
+	  if (tun_poc_should_block_static_dst (tm, packet, packet_len))
+	    {
+	      tm->blocked_packets++;
+	      tm->blocked_bytes += packet_len;
+	      continue;
+	    }
+	  (void) tun_poc_write_packet (tm->shim_fd, packet, packet_len,
+				       &tm->shim_tx_packets,
+				       &tm->shim_tx_bytes,
+				       &tm->shim_write_errors);
+	}
     }
 
   vlib_buffer_free (vm, from, n_left);
@@ -483,11 +505,17 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
     return clib_error_return (0, "tun_poc already enabled on fd %d", tm->fd);
   if (fd < 0)
     return clib_error_return (0, "fd must be non-negative");
-  if (mode == TUN_POC_MODE_FORWARD_FD && shim_fd < 0)
-    return clib_error_return (0, "forward-fd mode requires shim-fd");
-  if (mode == TUN_POC_MODE_FORWARD_FD && shim_fd == fd)
+  if ((mode == TUN_POC_MODE_FORWARD_FD ||
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
+      shim_fd < 0)
+    return clib_error_return (0, "%U mode requires shim-fd",
+			      format_tun_poc_mode, mode);
+  if ((mode == TUN_POC_MODE_FORWARD_FD ||
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
+      shim_fd == fd)
     return clib_error_return (0, "shim-fd must differ from fd");
-  if (mode == TUN_POC_MODE_HANDOFF_PROBE &&
+  if ((mode == TUN_POC_MODE_HANDOFF_PROBE ||
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
       tm->handoff_frame_queue_index == ~0)
     return clib_error_return (0, "handoff frame queue is not initialized");
 
@@ -495,7 +523,8 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   if (err)
     return err;
 
-  if (mode == TUN_POC_MODE_FORWARD_FD)
+  if (mode == TUN_POC_MODE_FORWARD_FD ||
+      mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
     {
       err = tun_poc_set_nonblocking (shim_fd, "tun shim fd");
       if (err)
@@ -557,7 +586,8 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   template.description = format (0, "tun-poc fd %d", fd);
   tm->file_index = clib_file_add (&file_main, &template);
 
-  if (mode == TUN_POC_MODE_FORWARD_FD)
+  if (mode == TUN_POC_MODE_FORWARD_FD ||
+      mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
     {
       clib_memset (&template, 0, sizeof (template));
       template.read_function = tun_poc_shim_fd_read_ready;
@@ -628,6 +658,8 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	mode = TUN_POC_MODE_FORWARD_FD;
       else if (unformat (input, "mode handoff-probe"))
 	mode = TUN_POC_MODE_HANDOFF_PROBE;
+      else if (unformat (input, "mode handoff-forward-fd"))
+	mode = TUN_POC_MODE_HANDOFF_FORWARD_FD;
       else if (unformat (input, "target-thread %u", &handoff_target_thread))
 	;
       else if (unformat (input, "block-ip4-dst %s", &block_ip4_dst_text))
@@ -659,7 +691,8 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 				  format_unformat_error, input);
     }
 
-  if (mode == TUN_POC_MODE_HANDOFF_PROBE &&
+  if ((mode == TUN_POC_MODE_HANDOFF_PROBE ||
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
       handoff_target_thread != ~0 &&
       handoff_target_thread >= vlib_get_n_threads ())
     return clib_error_return (0, "target-thread %u is outside VPP thread "
@@ -683,7 +716,8 @@ VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
   .path = "tun-poc enable",
   .short_help =
     "tun-poc enable fd <n> "
-    "[mode count-only|reflect-icmp|forward-fd|handoff-probe] "
+    "[mode count-only|reflect-icmp|forward-fd|handoff-probe|"
+    "handoff-forward-fd] "
     "[shim-fd <n>] [target-thread <n>] [block-ip4-dst <addr>] "
     "[block-ip6-dst <addr>]",
   .function = tun_poc_enable_command_fn,
