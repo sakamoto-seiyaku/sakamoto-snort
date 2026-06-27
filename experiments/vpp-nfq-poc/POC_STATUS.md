@@ -29,6 +29,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker IPv6 static dst drop | In `handoff-forward-fd` mode, worker thread 1 blocks IPv6 ICMP to `fd00:42::2` before shim and ping fails. | Experiment 59 |
 | VPP worker IPv4 TCP/UDP tuple parse | Worker thread 1 parses IPv4 UDP and TCP src/dst addresses and ports after TUN handoff. | Experiment 60 |
 | VPP worker IPv6 TCP/UDP tuple parse | Worker thread 1 parses IPv6 UDP and TCP src/dst addresses and ports after TUN handoff. | Experiment 61 |
+| VPP worker mock tuple owner resolver | Worker thread 1 sends IPv4 UDP/TCP tuples to a resolver fd and records mock UID 4242. | Experiment 62 |
 
 ## Demoted / Mis-scoped
 
@@ -68,8 +69,11 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   miss/allow, and IPv6 drop. IPv6 miss/allow can be added if needed, but the
   main IPv6 verdict path is no longer unknown.
 - VPP worker-side IPv4/IPv6 TCP/UDP tuple parsing is verified for packets
-  without IPv6 extension headers. Tuple->UID resolver integration remains a
-  separate POC.
+  without IPv6 extension headers. Mock tuple->UID resolver integration is
+  verified; Android resolver bridging remains separate.
+- VPP worker can synchronously query a mock tuple owner resolver over an fd.
+  Android `ConnectivityManager.getConnectionOwnerUid` bridging and UID verdict
+  enforcement are still separate POCs.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

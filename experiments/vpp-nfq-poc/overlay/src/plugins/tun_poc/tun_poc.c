@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <vlib/buffer_node.h>
@@ -46,6 +48,7 @@ typedef struct __attribute__ ((packed))
 tun_poc_main_t tun_poc_main = {
   .fd = -1,
   .shim_fd = -1,
+  .resolver_fd = -1,
   .file_index = ~0,
   .shim_file_index = ~0,
   .handoff_frame_queue_index = ~0,
@@ -338,6 +341,87 @@ tun_poc_record_l4_tuple (tun_poc_main_t *tm, const u8 *packet,
   tm->tuple_parse_errors++;
 }
 
+static void
+tun_poc_query_owner_resolver (tun_poc_main_t *tm)
+{
+  char src[INET6_ADDRSTRLEN] = { 0 };
+  char dst[INET6_ADDRSTRLEN] = { 0 };
+  char query[256];
+  char response[64];
+  struct pollfd pfd = { 0 };
+  int query_len;
+  int uid;
+  ssize_t rv;
+
+  if (!tm->resolver_enabled || tm->resolver_fd < 0 || !tm->last_tuple_valid)
+    return;
+
+  if (tm->last_tuple_ip_version == 4)
+    {
+      if (!inet_ntop (AF_INET, &tm->last_tuple_ip4_src, src, sizeof (src)) ||
+	  !inet_ntop (AF_INET, &tm->last_tuple_ip4_dst, dst, sizeof (dst)))
+	{
+	  tm->resolver_errors++;
+	  return;
+	}
+    }
+  else if (tm->last_tuple_ip_version == 6)
+    {
+      if (!inet_ntop (AF_INET6, tm->last_tuple_ip6_src, src, sizeof (src)) ||
+	  !inet_ntop (AF_INET6, tm->last_tuple_ip6_dst, dst, sizeof (dst)))
+	{
+	  tm->resolver_errors++;
+	  return;
+	}
+    }
+  else
+    return;
+
+  query_len = snprintf (query, sizeof (query),
+			"resolve ip%u proto %u %s %u %s %u\n",
+			tm->last_tuple_ip_version, tm->last_tuple_protocol, src,
+			tm->last_tuple_src_port, dst,
+			tm->last_tuple_dst_port);
+  if (query_len <= 0 || query_len >= (int) sizeof (query))
+    {
+      tm->resolver_errors++;
+      return;
+    }
+
+  tm->resolver_queries++;
+  rv = write (tm->resolver_fd, query, query_len);
+  if (rv != query_len)
+    {
+      tm->resolver_errors++;
+      return;
+    }
+
+  pfd.fd = tm->resolver_fd;
+  pfd.events = POLLIN;
+  if (poll (&pfd, 1, 500) <= 0 || !(pfd.revents & POLLIN))
+    {
+      tm->resolver_errors++;
+      return;
+    }
+
+  rv = read (tm->resolver_fd, response, sizeof (response) - 1);
+  if (rv <= 0)
+    {
+      tm->resolver_errors++;
+      return;
+    }
+  response[rv] = 0;
+
+  if (sscanf (response, "uid %d", &uid) != 1)
+    {
+      tm->resolver_errors++;
+      return;
+    }
+
+  tm->last_owner_uid = uid;
+  tm->resolver_hits++;
+}
+
 static clib_error_t *
 tun_poc_main_fd_read_ready (clib_file_t *f)
 {
@@ -508,6 +592,7 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
       tm->worker_probe_packets++;
       tm->worker_probe_bytes += packet_len;
       tun_poc_record_l4_tuple (tm, packet, packet_len);
+      tun_poc_query_owner_resolver (tm);
 
       if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
 	{
@@ -633,6 +718,7 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
 
   tm->fd = fd;
   tm->shim_fd = shim_fd;
+  tm->resolver_fd = -1;
   tm->mode = mode;
   tm->block_ip4_dst_set = block_ip4_dst_set;
   tm->block_ip4_dst = block_ip4_dst;
@@ -676,6 +762,11 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->last_tuple_ip4_dst = 0;
   clib_memset (tm->last_tuple_ip6_src, 0, sizeof (tm->last_tuple_ip6_src));
   clib_memset (tm->last_tuple_ip6_dst, 0, sizeof (tm->last_tuple_ip6_dst));
+  tm->resolver_enabled = 0;
+  tm->last_owner_uid = -1;
+  tm->resolver_queries = 0;
+  tm->resolver_hits = 0;
+  tm->resolver_errors = 0;
   tm->overflow_thread_hits = 0;
   tm->last_main_fd_thread_index = ~0;
   tm->last_shim_fd_thread_index = ~0;
@@ -730,6 +821,7 @@ tun_poc_disable (void)
 
   tm->fd = -1;
   tm->shim_fd = -1;
+  tm->resolver_fd = -1;
   tm->file_index = ~0;
   tm->shim_file_index = ~0;
 }
@@ -741,6 +833,7 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   tun_poc_mode_t mode = TUN_POC_MODE_REFLECT_ICMP;
   int fd = -1;
   int shim_fd = -1;
+  int resolver_fd = -1;
   u8 *block_ip4_dst_text = 0;
   u8 *block_ip6_dst_text = 0;
   u32 block_ip4_dst = 0;
@@ -756,6 +849,8 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
       if (unformat (input, "fd %d", &fd))
 	;
       else if (unformat (input, "shim-fd %d", &shim_fd))
+	;
+      else if (unformat (input, "resolver-fd %d", &resolver_fd))
 	;
       else if (unformat (input, "mode count-only"))
 	mode = TUN_POC_MODE_COUNT_ONLY;
@@ -810,6 +905,11 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
     tun_poc_enable (vm, fd, mode, shim_fd, block_ip4_dst_set, block_ip4_dst);
   if (!err && handoff_target_thread != ~0)
     tun_poc_main.handoff_target_thread = handoff_target_thread;
+  if (!err && resolver_fd >= 0)
+    {
+      tun_poc_main.resolver_fd = resolver_fd;
+      tun_poc_main.resolver_enabled = 1;
+    }
   if (!err && block_ip6_dst_set)
     {
       tun_poc_main.block_ip6_dst_set = 1;
@@ -825,8 +925,8 @@ VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
     "tun-poc enable fd <n> "
     "[mode count-only|reflect-icmp|forward-fd|handoff-probe|"
     "handoff-forward-fd] "
-    "[shim-fd <n>] [target-thread <n>] [block-ip4-dst <addr>] "
-    "[block-ip6-dst <addr>]",
+    "[shim-fd <n>] [resolver-fd <n>] [target-thread <n>] "
+    "[block-ip4-dst <addr>] [block-ip6-dst <addr>]",
   .function = tun_poc_enable_command_fn,
 };
 
@@ -932,6 +1032,12 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
 		     tm->last_tuple_ip_version, tm->last_tuple_protocol,
 		     tuple_src, tm->last_tuple_src_port, tuple_dst,
 		     tm->last_tuple_dst_port);
+  vlib_cli_output (
+    vm,
+    "resolver enabled %u fd %d queries %llu hits %llu errors %llu "
+    "last-uid %d",
+    tm->resolver_enabled, tm->resolver_fd, tm->resolver_queries,
+    tm->resolver_hits, tm->resolver_errors, tm->last_owner_uid);
   vlib_cli_output (
     vm,
     "thread-hits main last %u t0 %llu t1 %llu t2 %llu t3 %llu overflow %llu",

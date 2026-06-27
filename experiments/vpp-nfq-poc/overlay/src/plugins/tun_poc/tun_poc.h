@@ -23,6 +23,7 @@ typedef struct
   tun_poc_mode_t mode;
   int fd;
   int shim_fd;
+  int resolver_fd;
   u32 file_index;
   u32 shim_file_index;
   u8 block_ip4_dst_set;
@@ -70,6 +71,11 @@ typedef struct
   u32 last_tuple_ip4_dst;
   u8 last_tuple_ip6_src[16];
   u8 last_tuple_ip6_dst[16];
+  u8 resolver_enabled;
+  i32 last_owner_uid;
+  u64 resolver_queries;
+  u64 resolver_hits;
+  u64 resolver_errors;
   u64 main_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 shim_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 rx_node_thread_hits[TUN_POC_MAX_THREAD_HITS];
