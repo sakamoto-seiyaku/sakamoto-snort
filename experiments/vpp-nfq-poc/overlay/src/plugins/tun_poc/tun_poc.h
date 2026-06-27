@@ -13,6 +13,7 @@ typedef enum
   TUN_POC_MODE_COUNT_ONLY,
   TUN_POC_MODE_REFLECT_ICMP,
   TUN_POC_MODE_FORWARD_FD,
+  TUN_POC_MODE_HANDOFF_PROBE,
 } tun_poc_mode_t;
 
 typedef struct
@@ -28,6 +29,8 @@ typedef struct
   u8 block_ip6_dst_set;
   u8 block_ip6_dst[16];
   u8 *rx_buf;
+  u32 handoff_frame_queue_index;
+  u32 handoff_target_thread;
 
   u64 rx_packets;
   u64 rx_bytes;
@@ -48,11 +51,21 @@ typedef struct
   u64 write_errors;
   u64 shim_read_errors;
   u64 shim_write_errors;
+  u64 handoff_enqueued_packets;
+  u64 handoff_enqueued_bytes;
+  u64 handoff_congestion_drops;
+  u64 handoff_alloc_errors;
+  u64 worker_probe_packets;
+  u64 worker_probe_bytes;
   u64 main_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 shim_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
+  u64 rx_node_thread_hits[TUN_POC_MAX_THREAD_HITS];
+  u64 worker_probe_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 overflow_thread_hits;
   u32 last_main_fd_thread_index;
   u32 last_shim_fd_thread_index;
+  u32 last_rx_node_thread_index;
+  u32 last_worker_probe_thread_index;
 } tun_poc_main_t;
 
 extern tun_poc_main_t tun_poc_main;

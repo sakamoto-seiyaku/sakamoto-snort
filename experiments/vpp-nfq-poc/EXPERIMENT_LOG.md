@@ -4147,3 +4147,73 @@ TUN fd read、shim fd read 都发生在 VPP thread 0，即 vpp_main。
 如果要让 VPP 内部多线程处理 VPN/TUN packet，必须显式做软件 steering/handoff。
 下一步应验证：从 thread 0 软件读入 packet 后，能否通过 VPP handoff/redirect 机制交给指定 worker node 处理。
 ```
+
+### 55. VPP frame-queue handoff can move TUN packets to a worker
+
+问题：如果 TUN fd 事件只在 thread 0 触发，VPP 内部能不能把软件读入的 packet 转成 VPP buffer，再通过 VPP frame queue 交给 worker node？
+
+最小实现：
+
+```text
+tun_poc handoff-probe mode:
+  clib_file fd-ready callback:
+    only records thread hit and calls vlib_node_set_interrupt_pending()
+
+  tun-poc-rx-handoff input node:
+    runs on VPP thread 0
+    reads TUN fd
+    allocates one VPP buffer
+    copies packet bytes into the buffer
+    calls vlib_buffer_enqueue_to_thread(... target-thread 1 ...)
+
+  tun-poc-worker-probe internal node:
+    receives the frame queue packet on worker thread
+    records thread hit
+    counts bytes
+    frees the buffer
+```
+
+新增：
+
+```text
+scripts/run-vpp-tun-handoff-probe-smoke.py
+make vpp-tun-handoff-probe-smoke
+```
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-tun-poc-build
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-probe-smoke
+```
+
+结果：
+
+```text
+show threads:
+0      vpp_main
+1      vpp_wk_0
+2      vpp_wk_1
+
+after ping:
+handoff target-thread 1 fq 34 enqueued 2 bytes 132 congestion-drops 0 alloc-errors 0 worker-packets 2 bytes 132
+thread-hits main last 0 t0 2 t1 0 t2 0 t3 0 overflow 0
+thread-hits rx-node last 0 t0 2 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+```
+
+结论：
+
+```text
+VPP 内部 handoff 方向成立：
+  fd-ready callback / TUN rx input node 仍在 thread 0
+  packet 进入 VPP buffer 后，可以用 vlib_buffer_enqueue_to_thread()
+  交给指定 worker thread 的 internal node 处理
+
+这回答了“发现包不该当前线程处理时，能不能用 VPP 内部机制重定向”的 0->1：
+  可以，但需要 packet 已经是 VPP buffer，并且 enqueue 调用发生在 VLIB node 上下文里。
+
+边界：
+  当前 worker-probe node 只计数并 free buffer，没有把 packet 再送回 forward-fd/HEV 路径。
+  下一步要验证 worker 上做静态规则 verdict 后，是否能 drop 或继续转发到 shim/HEV。
+```
