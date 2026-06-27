@@ -4805,3 +4805,62 @@ Android packaged VPP 的 worker handoff path 成立：
   这里只验证 IPv4 TCP/HTTP allow path。
   Android worker-side static drop、Android resolver bridge、真实 UID drop 仍需单独验证。
 ```
+
+### 67. Android VPP worker handoff can drop static IPv4 dst before HEV
+
+问题：第 66 步只验证 Android worker handoff allow path。这里验证静态 IPv4 dst drop
+也发生在 VPP worker 内，而不是 Android parent native gate。
+
+最小实现：
+
+```text
+Android mode:
+  vpp-hev-handoff
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 block-ip4-dst 142.251.13.94
+
+test:
+  app HTTP probe -> 142.251.13.94:80
+  expect app timeout
+  expect SOCKS connect count unchanged
+  expect VPP blocked counter increases on worker path
+```
+
+命令：
+
+```sh
+make android-vpp-hev-handoff-ipv4-drop-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+fail elapsedMs=5013 error=SocketTimeoutException: failed to connect to /142.251.13.94 (port 80) from /10.111.0.2 ...
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+blocked 3 bytes 180 block-ip4-dst 142.251.13.94
+handoff target-thread 1 fq 21 enqueued 9 bytes 580 congestion-drops 0 alloc-errors 0 worker-packets 9 bytes 580
+tuple parsed 3 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip4 proto 6 10.111.0.2:34514 -> 142.251.13.94:80
+thread-hits main last 0 t0 5 t1 0 t2 0 t3 0
+thread-hits rx-node last 0 t0 5 t1 0 t2 0 t3 0
+thread-hits worker-probe last 1 t0 0 t1 5 t2 0 t3 0
+
+HEV:
+no socks5 client tcp -> [142.251.13.94]:80
+socks_count_after=0
+```
+
+结论：
+
+```text
+Android VPP worker-side static IPv4 dst drop 成立。
+包进入 VPP worker thread 1 后被 `tun_poc` drop，没有交给 HEV/SOCKS。
+
+边界：
+  这里只验证 IPv4 TCP dst exact drop。
+  IPv6 worker drop、Android resolver bridge、真实 UID verdict 仍需单独验证。
+```

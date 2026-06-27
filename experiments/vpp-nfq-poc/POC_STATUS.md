@@ -34,6 +34,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker-to-worker redirect | Worker thread 1 can re-enqueue a VPP buffer to worker thread 2 through another frame queue; worker thread 2 forwards to shim and ping succeeds. | Experiment 64 |
 | VPP redirected worker mock UID verdict | Worker thread 1 can re-enqueue IPv4 UDP/TCP packets to worker thread 2; worker thread 2 queries the mock resolver and drops by UID. | Experiment 65 |
 | Android VPN VPP worker handoff | On Pixel 6a, app HTTP enters `VpnService -> packaged VPP handoff-forward-fd worker -> HEV -> SOCKS5`; VPP worker thread 1 handles the packet path. | Experiment 66 |
+| Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 
 ## Demoted / Mis-scoped
 
@@ -65,6 +66,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   redirect, at least for the Docker mock resolver path.
 - Android VPN mode can run the same `handoff-forward-fd` VPP worker path before
   HEV; this removes the Docker-only caveat for the basic worker handoff.
+- Android worker handoff can enforce a static IPv4 dst drop before HEV; this
+  keeps the verdict inside VPP instead of the parent native process.
 - Worker-side processing can forward back into the current shim/HEV style path,
   so worker verdicts can be tested without designing the final interface shape.
 - The first useful product slice can be package UID allow/block in root mode, plus
@@ -90,9 +93,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - Worker-to-worker re-handoff is verified for a short ICMP forward path and
   IPv4 UDP/TCP mock UID drop. It does not yet prove a production sharding
   policy, packet ordering behavior, Android resolver behavior, or performance.
-- Android worker handoff is verified for IPv4 TCP/HTTP through HEV. Android
-  worker-side static drop and Android resolver UID verdict are still separate
-  POCs.
+- Android worker handoff is verified for IPv4 TCP/HTTP allow and static IPv4
+  dst drop through HEV. Android resolver UID verdict is still separate.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

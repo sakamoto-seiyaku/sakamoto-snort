@@ -10,6 +10,8 @@ REMOTE_ROOT="${REMOTE_ROOT:-/data/local/tmp/vpp-nfq-poc}"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 HOST="${HOST:-142.251.13.94}"
 PORT="${PORT:-80}"
+BLOCK_IP4_DST="${BLOCK_IP4_DST:-}"
+EXPECT_DROP="${EXPECT_DROP:-0}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-7}"
 STOP_WAIT="${STOP_WAIT:-3}"
@@ -45,6 +47,8 @@ echo "adb_serial=$(adb_target_desc)"
 echo "package=$PACKAGE"
 echo "host=$HOST"
 echo "port=$PORT"
+echo "block_ip4_dst=$BLOCK_IP4_DST"
+echo "expect_drop=$EXPECT_DROP"
 
 if [[ "$BUILD_APK" == "1" ]]; then
   "$POC_DIR/android/vpn-lite/scripts/build-debug-apk.sh"
@@ -71,10 +75,14 @@ echo "socks_count_before=$before_count"
 
 echo
 echo "## start vpp-hev-handoff"
-adb_cmd shell am start -n "$PACKAGE/.MainActivity" \
+start_args=(shell am start -n "$PACKAGE/.MainActivity" \
   --ez start true \
   --es mode vpp-hev-handoff \
-  --es allowedPackage "$PACKAGE"
+  --es allowedPackage "$PACKAGE")
+if [[ -n "$BLOCK_IP4_DST" ]]; then
+  start_args+=(--es blockIp4Dst "$BLOCK_IP4_DST")
+fi
+adb_cmd "${start_args[@]}"
 sleep "$START_WAIT"
 
 echo
@@ -114,13 +122,32 @@ echo "## stop"
 adb_cmd shell am start -n "$PACKAGE/.MainActivity" --ez stop true
 sleep "$STOP_WAIT"
 
-if ! grep -q 'HTTP/1.0 200 OK' <<<"$app_log"; then
-  echo "expected app HTTP 200 through vpp-hev-handoff" >&2
-  exit 1
-fi
-if [[ "$after_count" -le "$before_count" ]]; then
-  echo "expected SOCKS connect count to increase" >&2
-  exit 1
+if [[ "$EXPECT_DROP" == "1" ]]; then
+  if grep -q 'HTTP/1.0 200 OK' <<<"$app_log"; then
+    echo "expected app HTTP to be blocked by VPP worker" >&2
+    exit 1
+  fi
+  if [[ "$after_count" -ne "$before_count" ]]; then
+    echo "expected no new SOCKS connect when VPP worker drops" >&2
+    exit 1
+  fi
+  if [[ -n "$BLOCK_IP4_DST" ]] && ! grep -q "block-ip4-dst $BLOCK_IP4_DST" <<<"$vpp_cli"; then
+    echo "expected VPP block-ip4-dst $BLOCK_IP4_DST in CLI log" >&2
+    exit 1
+  fi
+  if ! grep -Eq 'blocked [1-9]' <<<"$vpp_cli"; then
+    echo "expected VPP blocked counter to increase" >&2
+    exit 1
+  fi
+else
+  if ! grep -q 'HTTP/1.0 200 OK' <<<"$app_log"; then
+    echo "expected app HTTP 200 through vpp-hev-handoff" >&2
+    exit 1
+  fi
+  if [[ "$after_count" -le "$before_count" ]]; then
+    echo "expected SOCKS connect count to increase" >&2
+    exit 1
+  fi
 fi
 if ! grep -q 'mode handoff-forward-fd' <<<"$vpp_cli"; then
   echo "expected VPP tun_poc mode handoff-forward-fd" >&2
@@ -149,4 +176,8 @@ if [[ -n "$leftovers" ]]; then
 fi
 
 echo
-echo "ok: Android vpp-hev-handoff forwarded app HTTP through VPP worker handoff"
+if [[ "$EXPECT_DROP" == "1" ]]; then
+  echo "ok: Android vpp-hev-handoff dropped app HTTP in VPP worker handoff"
+else
+  echo "ok: Android vpp-hev-handoff forwarded app HTTP through VPP worker handoff"
+fi
