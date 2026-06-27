@@ -4683,3 +4683,61 @@ worker 2 再执行后续转发。
   这里只验证短路径 ICMP forward。
   还没验证生产级 sharding 策略、顺序语义、resolver/cache 在 re-handoff 下的行为或性能。
 ```
+
+### 65. Redirected VPP worker can query mock resolver and drop by UID
+
+问题：第 64 步只证明 worker->worker redirect 后还能 forward ICMP。这里验证真正的
+TCP/UDP tuple -> resolver -> UID verdict 能否放在第二个 worker 上执行。
+
+最小实现：
+
+```text
+tun_poc CLI:
+  target-thread 1
+  redirect-thread 2
+  resolver-fd 55
+  block-owner-uid 4242
+
+worker behavior:
+  worker 1 receives the VPP buffer and re-enqueues it
+  worker 2 parses IPv4 UDP/TCP tuple
+  worker 2 queries mock resolver
+  worker 2 drops packets whose returned UID is 4242
+```
+
+命令：
+
+```sh
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-resolver-redirect-uid-drop
+```
+
+结果：
+
+```text
+after udp:
+redirect enabled 1 target-thread 2 fq 35 enqueued 2 bytes 85 congestion-drops 0 worker-packets 2 bytes 85
+last-tuple ip4 proto 17 198.19.30.1:43101 -> 198.19.30.2:53101
+resolver enabled 1 fd 55 queries 1 hits 1 errors 0 last-uid 4242
+uid-block enabled 1 uid 4242 packets 1 bytes 37
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+thread-hits worker-redirect last 2 t0 0 t1 0 t2 2 t3 0
+
+after tcp:
+redirect enabled 1 target-thread 2 fq 35 enqueued 3 bytes 145 congestion-drops 0 worker-packets 3 bytes 145
+last-tuple ip4 proto 6 198.19.30.1:43102 -> 198.19.30.2:53102
+resolver enabled 1 fd 55 queries 2 hits 2 errors 0 last-uid 4242
+uid-block enabled 1 uid 4242 packets 2 bytes 97
+thread-hits worker-probe last 1 t0 0 t1 3 t2 0 t3 0
+thread-hits worker-redirect last 2 t0 0 t1 0 t2 3 t3 0
+```
+
+结论：
+
+```text
+worker-to-worker redirect 后继续做 VPP-internal UID verdict 成立。
+resolver 仍只提供 UID；drop verdict 在第二个 VPP worker node 内执行。
+
+边界：
+  resolver 仍是 Docker/Python mock，不是 Android ConnectivityManager。
+  没有验证 sharding 策略、顺序语义、负载、异步查询或 owner cache。
+```

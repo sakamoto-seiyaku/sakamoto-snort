@@ -32,6 +32,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker mock tuple owner resolver | Worker thread 1 sends IPv4 UDP/TCP tuples to a resolver fd and records mock UID 4242. | Experiment 62 |
 | VPP worker mock UID verdict | Worker thread 1 drops IPv4 UDP/TCP packets when the mock resolver returns blocked UID 4242. | Experiment 63 |
 | VPP worker-to-worker redirect | Worker thread 1 can re-enqueue a VPP buffer to worker thread 2 through another frame queue; worker thread 2 forwards to shim and ping succeeds. | Experiment 64 |
+| VPP redirected worker mock UID verdict | Worker thread 1 can re-enqueue IPv4 UDP/TCP packets to worker thread 2; worker thread 2 queries the mock resolver and drops by UID. | Experiment 65 |
 
 ## Demoted / Mis-scoped
 
@@ -59,6 +60,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - A worker node can re-enqueue an already handed-off VPP buffer to a different
   worker through another frame queue; this answers the "can VPP internally
   redirect after software steering" question for this POC shape.
+- Tuple owner lookup and UID verdicts still work after a worker-to-worker
+  redirect, at least for the Docker mock resolver path.
 - Worker-side processing can forward back into the current shim/HEV style path,
   so worker verdicts can be tested without designing the final interface shape.
 - The first useful product slice can be package UID allow/block in root mode, plus
@@ -81,9 +84,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   enforce a mock UID drop verdict. Android
   `ConnectivityManager.getConnectionOwnerUid` bridging and owner cache remain
   separate POCs.
-- Worker-to-worker re-handoff is verified only for a short ICMP forward path.
-  It does not yet prove a production sharding policy, packet ordering behavior,
-  or resolver/cache handoff under load.
+- Worker-to-worker re-handoff is verified for a short ICMP forward path and
+  IPv4 UDP/TCP mock UID drop. It does not yet prove a production sharding
+  policy, packet ordering behavior, Android resolver behavior, or performance.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

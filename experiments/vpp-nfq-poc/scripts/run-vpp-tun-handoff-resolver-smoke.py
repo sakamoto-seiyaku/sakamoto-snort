@@ -108,6 +108,7 @@ def main() -> int:
     parser.add_argument("--shim-fd", type=int, default=54)
     parser.add_argument("--resolver-fd", type=int, default=55)
     parser.add_argument("--target-thread", type=int, default=1)
+    parser.add_argument("--redirect-thread", type=int)
     parser.add_argument("--mock-uid", type=int, default=4242)
     parser.add_argument("--block-owner-uid", type=int)
     parser.add_argument("--expect-uid-drop", action="store_true")
@@ -179,6 +180,8 @@ def main() -> int:
             "target-thread",
             str(args.target_thread),
         ]
+        if args.redirect_thread is not None:
+            enable_command.extend(["redirect-thread", str(args.redirect_thread)])
         if args.block_owner_uid is not None:
             enable_command.extend(["block-owner-uid", str(args.block_owner_uid)])
 
@@ -204,6 +207,23 @@ def main() -> int:
             if uid_block["uid"] != args.block_owner_uid or uid_block["packets"] < 2:
                 raise RuntimeError(f"expected uid drop for both UDP/TCP packets: {uid_block}")
             logger.log(f"uid_block={uid_block}")
+        if args.redirect_thread is not None:
+            redirect = helper.parse_redirect_counters(tcp_show)
+            worker_hits = helper.parse_worker_probe_hits(tcp_show)
+            redirect_hits = helper.parse_worker_redirect_hits(tcp_show)
+            target_key = f"t{args.target_thread}"
+            redirect_key = f"t{args.redirect_thread}"
+            if worker_hits.get(target_key, 0) <= 0:
+                raise RuntimeError(f"expected worker-probe on target thread: {worker_hits}")
+            if redirect["enabled"] != 1 or redirect["target_thread"] != args.redirect_thread:
+                raise RuntimeError(f"unexpected redirect state: {redirect}")
+            if redirect["enqueued_packets"] < 2 or redirect["worker_packets"] < 2:
+                raise RuntimeError(f"expected redirected UDP/TCP packets: {redirect}")
+            if redirect["congestion_drops"] != 0:
+                raise RuntimeError(f"unexpected redirect congestion: {redirect}")
+            if redirect_hits.get(redirect_key, 0) <= 0:
+                raise RuntimeError(f"expected worker-redirect on target thread: {redirect_hits}")
+            logger.log(f"redirect={redirect}")
         logger.log()
         logger.log("ok: tun_poc worker queried mock resolver for IPv4 UDP and TCP tuples")
         return 0
