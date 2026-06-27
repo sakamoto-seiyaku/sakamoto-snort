@@ -5354,3 +5354,81 @@ Android VPN VPP-internal IPv6 UDP UID drop 成立：
   end-to-end 成立。
   IPv6 extension headers、redirect 后 IPv6 verdict、cache、异步查询和性能仍需单独验证。
 ```
+
+### 75. Android redirected VPP worker can drop IPv6 TCP by real app owner UID
+
+问题：第 72 步验证 redirect 后 IPv4 TCP UID drop，第 73 步验证不 redirect 的 IPv6 TCP
+UID drop。这里验证 IPv6 TCP packet 被 worker 1 redirect 到 worker 2 后，worker 2 是否仍能
+完成 Android resolver query 和 UID drop verdict。
+
+最小实现：
+
+```text
+Android extra:
+  enableIpv6=true
+  redirectThread=2
+  blockOwnerUid=<package_uid>
+
+VPP startup:
+  tun-poc enable fd 3 mode handoff-forward-fd shim-fd 4 target-thread 1 resolver-fd 5 block-owner-uid 12540 redirect-thread 2
+
+test:
+  app HTTP probe -> [2606:4700:4700::1111]:80
+  expect app timeout
+  expect worker-probe thread 1 hit
+  expect worker-redirect thread 2 hit
+  expect VPP last-tuple ip6 proto 6
+  expect resolver UID 12540
+  expect uid-block counter increases inside VPP
+```
+
+命令：
+
+```sh
+make android-vpp-owner-resolver-ipv6-redirect-uid-drop-poc
+```
+
+结果：
+
+```text
+app-http-probe.log:
+fail elapsedMs=5014 error=SocketTimeoutException: failed to connect to /2606:4700:4700::1111 (port 80) from /fd00:111:111::2 ...
+
+show tun-poc:
+enabled 1 fd 3 shim-fd 4 mode handoff-forward-fd
+rx 9 bytes 700 tx 0 bytes 0
+shim-rx 0 bytes 0 shim-tx 6 bytes 460
+blocked 3 bytes 240 block-ip4-dst -
+handoff target-thread 1 fq 21 enqueued 9 bytes 700 congestion-drops 0 alloc-errors 0 worker-packets 9 bytes 700
+redirect enabled 1 target-thread 2 fq 22 enqueued 9 bytes 700 congestion-drops 0 worker-packets 9 bytes 700
+tuple parsed 3 errors 0 non-tcp-udp 6 last-valid 1
+last-tuple ip6 proto 6 [fd00:111:111::2]:40896 -> [2606:4700:4700::1111]:80
+resolver enabled 1 fd 5 queries 3 hits 3 errors 0 last-uid 12540
+uid-block enabled 1 uid 12540 packets 3 bytes 240
+thread-hits worker-probe last 1 t0 0 t1 5 t2 0 t3 0
+thread-hits worker-redirect last 2 t0 0 t1 0 t2 5 t3 0
+
+resolver log:
+resolver query=1 proto=6 fd00:111:111::2:40896 -> 2606:4700:4700::1111:80 uid=12540
+resolver query=2 proto=6 fd00:111:111::2:40896 -> 2606:4700:4700::1111:80 uid=12540
+resolver query=3 proto=6 fd00:111:111::2:40896 -> 2606:4700:4700::1111:80 uid=12540
+
+HEV:
+no socks5 client tcp -> [2606:4700:4700::1111]:80
+socks_count_after=0
+```
+
+结论：
+
+```text
+Android redirect 后 IPv6 TCP VPP-internal real UID drop 成立：
+  thread 0 fd/input -> worker 1 handoff -> worker 2 redirect
+  worker 2 parses IPv6 TCP tuple
+  worker 2 queries Android resolver fd
+  worker 2 applies block-owner-uid
+  HEV/SOCKS does not see the target TCP connect
+
+边界：
+  这里只验证 IPv6 TCP，不验证 IPv6 extension headers。
+  UDP redirect、packet ordering、cache、异步 resolver 和性能仍需单独验证。
+```
