@@ -58,6 +58,18 @@ typedef struct
   u64 handoff_alloc_errors;
   u64 worker_probe_packets;
   u64 worker_probe_bytes;
+  u64 tuple_parsed_packets;
+  u64 tuple_parse_errors;
+  u64 tuple_non_tcp_udp;
+  u8 last_tuple_valid;
+  u8 last_tuple_ip_version;
+  u8 last_tuple_protocol;
+  u16 last_tuple_src_port;
+  u16 last_tuple_dst_port;
+  u32 last_tuple_ip4_src;
+  u32 last_tuple_ip4_dst;
+  u8 last_tuple_ip6_src[16];
+  u8 last_tuple_ip6_dst[16];
   u64 main_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 shim_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 rx_node_thread_hits[TUN_POC_MAX_THREAD_HITS];

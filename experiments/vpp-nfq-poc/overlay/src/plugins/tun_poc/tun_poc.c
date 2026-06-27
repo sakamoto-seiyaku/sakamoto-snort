@@ -37,6 +37,12 @@ typedef struct __attribute__ ((packed))
   u16 sequence;
 } tun_poc_icmp_header_t;
 
+typedef struct __attribute__ ((packed))
+{
+  u16 src_port;
+  u16 dst_port;
+} tun_poc_l4_ports_t;
+
 tun_poc_main_t tun_poc_main = {
   .fd = -1,
   .shim_fd = -1,
@@ -244,6 +250,94 @@ tun_poc_should_block_static_dst (tun_poc_main_t *tm, const u8 *packet,
   return ip4->dst == tm->block_ip4_dst;
 }
 
+static void
+tun_poc_record_l4_tuple (tun_poc_main_t *tm, const u8 *packet,
+			 ssize_t packet_len)
+{
+  const tun_poc_ip4_header_t *ip4;
+  const tun_poc_l4_ports_t *ports;
+  uword l4_offset;
+  uword total_len;
+  u8 version;
+  u8 protocol;
+
+  if (packet_len < 1)
+    {
+      tm->tuple_parse_errors++;
+      return;
+    }
+
+  version = packet[0] >> 4;
+  if (version == 4)
+    {
+      if (packet_len < (ssize_t) sizeof (*ip4))
+	{
+	  tm->tuple_parse_errors++;
+	  return;
+	}
+
+      ip4 = (const tun_poc_ip4_header_t *) packet;
+      l4_offset = (ip4->version_ihl & 0x0f) * 4;
+      total_len = ntohs (ip4->total_length);
+      protocol = ip4->protocol;
+      if (l4_offset < sizeof (*ip4) ||
+	  total_len < l4_offset + sizeof (*ports) ||
+	  total_len > (uword) packet_len)
+	{
+	  tm->tuple_parse_errors++;
+	  return;
+	}
+
+      if (protocol != IPPROTO_TCP && protocol != IPPROTO_UDP)
+	{
+	  tm->tuple_non_tcp_udp++;
+	  return;
+	}
+
+      ports = (const tun_poc_l4_ports_t *) (packet + l4_offset);
+      tm->last_tuple_valid = 1;
+      tm->last_tuple_ip_version = 4;
+      tm->last_tuple_protocol = protocol;
+      tm->last_tuple_src_port = ntohs (ports->src_port);
+      tm->last_tuple_dst_port = ntohs (ports->dst_port);
+      tm->last_tuple_ip4_src = ip4->src;
+      tm->last_tuple_ip4_dst = ip4->dst;
+      tm->tuple_parsed_packets++;
+      return;
+    }
+
+  if (version == 6)
+    {
+      if (packet_len < 40 + (ssize_t) sizeof (*ports))
+	{
+	  tm->tuple_parse_errors++;
+	  return;
+	}
+
+      protocol = packet[6];
+      if (protocol != IPPROTO_TCP && protocol != IPPROTO_UDP)
+	{
+	  tm->tuple_non_tcp_udp++;
+	  return;
+	}
+
+      ports = (const tun_poc_l4_ports_t *) (packet + 40);
+      tm->last_tuple_valid = 1;
+      tm->last_tuple_ip_version = 6;
+      tm->last_tuple_protocol = protocol;
+      tm->last_tuple_src_port = ntohs (ports->src_port);
+      tm->last_tuple_dst_port = ntohs (ports->dst_port);
+      clib_memcpy (tm->last_tuple_ip6_src, packet + 8,
+		   sizeof (tm->last_tuple_ip6_src));
+      clib_memcpy (tm->last_tuple_ip6_dst, packet + 24,
+		   sizeof (tm->last_tuple_ip6_dst));
+      tm->tuple_parsed_packets++;
+      return;
+    }
+
+  tm->tuple_parse_errors++;
+}
+
 static clib_error_t *
 tun_poc_main_fd_read_ready (clib_file_t *f)
 {
@@ -413,6 +507,7 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
 
       tm->worker_probe_packets++;
       tm->worker_probe_bytes += packet_len;
+      tun_poc_record_l4_tuple (tm, packet, packet_len);
 
       if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
 	{
@@ -569,6 +664,18 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->handoff_alloc_errors = 0;
   tm->worker_probe_packets = 0;
   tm->worker_probe_bytes = 0;
+  tm->tuple_parsed_packets = 0;
+  tm->tuple_parse_errors = 0;
+  tm->tuple_non_tcp_udp = 0;
+  tm->last_tuple_valid = 0;
+  tm->last_tuple_ip_version = 0;
+  tm->last_tuple_protocol = 0;
+  tm->last_tuple_src_port = 0;
+  tm->last_tuple_dst_port = 0;
+  tm->last_tuple_ip4_src = 0;
+  tm->last_tuple_ip4_dst = 0;
+  clib_memset (tm->last_tuple_ip6_src, 0, sizeof (tm->last_tuple_ip6_src));
+  clib_memset (tm->last_tuple_ip6_dst, 0, sizeof (tm->last_tuple_ip6_dst));
   tm->overflow_thread_hits = 0;
   tm->last_main_fd_thread_index = ~0;
   tm->last_shim_fd_thread_index = ~0;
@@ -748,6 +855,8 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   tun_poc_main_t *tm = &tun_poc_main;
   char block_dst[INET_ADDRSTRLEN] = "-";
   char block_dst6[INET6_ADDRSTRLEN] = "-";
+  char tuple_src[INET6_ADDRSTRLEN] = "-";
+  char tuple_dst[INET6_ADDRSTRLEN] = "-";
 
   (void) input;
   (void) cmd;
@@ -760,6 +869,24 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
       !inet_ntop (AF_INET6, tm->block_ip6_dst, block_dst6,
 		  sizeof (block_dst6)))
     block_dst6[0] = '-';
+  if (tm->last_tuple_valid && tm->last_tuple_ip_version == 4)
+    {
+      if (!inet_ntop (AF_INET, &tm->last_tuple_ip4_src, tuple_src,
+		      sizeof (tuple_src)))
+	tuple_src[0] = '-';
+      if (!inet_ntop (AF_INET, &tm->last_tuple_ip4_dst, tuple_dst,
+		      sizeof (tuple_dst)))
+	tuple_dst[0] = '-';
+    }
+  else if (tm->last_tuple_valid && tm->last_tuple_ip_version == 6)
+    {
+      if (!inet_ntop (AF_INET6, tm->last_tuple_ip6_src, tuple_src,
+		      sizeof (tuple_src)))
+	tuple_src[0] = '-';
+      if (!inet_ntop (AF_INET6, tm->last_tuple_ip6_dst, tuple_dst,
+		      sizeof (tuple_dst)))
+	tuple_dst[0] = '-';
+    }
 
   vlib_cli_output (vm, "enabled %u fd %d shim-fd %d mode %U", tm->enabled,
 		   tm->fd, tm->shim_fd, format_tun_poc_mode, tm->mode);
@@ -790,6 +917,15 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     tm->handoff_enqueued_packets, tm->handoff_enqueued_bytes,
     tm->handoff_congestion_drops, tm->handoff_alloc_errors,
     tm->worker_probe_packets, tm->worker_probe_bytes);
+  vlib_cli_output (
+    vm,
+    "tuple parsed %llu errors %llu non-tcp-udp %llu last-valid %u",
+    tm->tuple_parsed_packets, tm->tuple_parse_errors, tm->tuple_non_tcp_udp,
+    tm->last_tuple_valid);
+  vlib_cli_output (vm, "last-tuple ip%u proto %u %s:%u -> %s:%u",
+		   tm->last_tuple_ip_version, tm->last_tuple_protocol,
+		   tuple_src, tm->last_tuple_src_port, tuple_dst,
+		   tm->last_tuple_dst_port);
   vlib_cli_output (
     vm,
     "thread-hits main last %u t0 %llu t1 %llu t2 %llu t3 %llu overflow %llu",

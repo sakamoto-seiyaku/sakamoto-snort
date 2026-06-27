@@ -27,6 +27,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPP worker IPv4 static dst drop | In `handoff-forward-fd` mode, worker thread 1 blocks IPv4 ICMP to `198.19.0.2` before shim and ping fails. | Experiment 57 |
 | VPP worker IPv4 static dst miss | In `handoff-forward-fd` mode, an unmatched IPv4 dst rule does not overmatch and ping succeeds. | Experiment 58 |
 | VPP worker IPv6 static dst drop | In `handoff-forward-fd` mode, worker thread 1 blocks IPv6 ICMP to `fd00:42::2` before shim and ping fails. | Experiment 59 |
+| VPP worker IPv4 TCP/UDP tuple parse | Worker thread 1 parses IPv4 UDP and TCP src/dst addresses and ports after TUN handoff. | Experiment 60 |
 
 ## Demoted / Mis-scoped
 
@@ -65,6 +66,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - VPP handoff worker-side static rules are verified for IPv4 drop, IPv4
   miss/allow, and IPv6 drop. IPv6 miss/allow can be added if needed, but the
   main IPv6 verdict path is no longer unknown.
+- VPP worker-side IPv4 TCP/UDP tuple parsing is verified. IPv6 tuple parsing
+  and tuple->UID resolver integration remain separate POCs.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

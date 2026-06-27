@@ -4423,3 +4423,51 @@ VPP worker-side IPv6 exact dst drop 成立。
   IPv4 miss/allow
   IPv6 match/drop
 ```
+
+### 60. VPP worker parses IPv4 TCP/UDP tuples after TUN handoff
+
+问题：后续 VPN UID resolver 需要 VPP 内部先解析 packet tuple。这里先验证 handoff 到 worker 后，VPP worker node 能解析 IPv4 TCP/UDP 的 src/dst/port。
+
+最小实现：
+
+```text
+tun_poc worker node:
+  parse IPv4 IHL / total length / protocol
+  if protocol is TCP or UDP:
+    record src addr, dst addr, src port, dst port
+  show tun-poc:
+    tuple parsed ...
+    last-tuple ip4 proto ...
+```
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-tun-poc-build
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-tuple-smoke
+```
+
+结果：
+
+```text
+after udp:
+tuple parsed 1 errors 0 non-tcp-udp 1 last-valid 1
+last-tuple ip4 proto 17 198.19.20.1:43001 -> 198.19.20.2:53001
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+
+after tcp:
+tuple parsed 2 errors 0 non-tcp-udp 1 last-valid 1
+last-tuple ip4 proto 6 198.19.20.1:43002 -> 198.19.20.2:53002
+thread-hits worker-probe last 1 t0 0 t1 3 t2 0 t3 0
+```
+
+结论：
+
+```text
+VPP worker-side IPv4 TCP/UDP tuple parsing 成立。
+这仍没有接 Android ConnectivityManager UID resolver；它只验证 VPP 内部能提供 resolver 所需 tuple。
+
+下一步：
+  验证 IPv6 TCP/UDP tuple parsing。
+  然后再接 mock resolver / Android resolver。
+```
