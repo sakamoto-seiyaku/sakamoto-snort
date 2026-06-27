@@ -17,6 +17,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN owner UID gate before VPP/HEV | Parent native gate can drop IPv4/IPv6 TCP/UDP package UID traffic before VPP while allowing UID misses through VPP/HEV. | Experiments 48, 50, 51 |
+| VPN owner flow cache fallback | Parent native gate can reuse a cached tuple owner when `getConnectionOwnerUid` later returns invalid for the same flow. | Experiment 52 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
 | VPN IPv6 forwarding | `enableIpv6` adds IPv6 address/route and HEV forwards public IPv6. | Experiment 45 |
 | VPN static IPv6 dst block | `tun-poc block-ip6-dst` drops app IPv6 traffic before HEV. | Experiment 46 |
@@ -31,6 +32,8 @@ remain in `EXPERIMENT_LOG.md`.
   process from packet tuples.
 - VPN mode can enforce IPv4/IPv6 TCP/UDP package UID block in a parent native gate
   before VPP/HEV.
+- VPN mode needs a flow owner cache for packets that arrive after the platform
+  owner lookup window closes; the minimal fallback is verified.
 - VPN mode can still do static IP packet rules inside VPP.
 - The first useful product slice can be package UID allow/block in root mode, plus
   VPN app include/exclude, owner UID gate, and static IP block POCs.
@@ -39,6 +42,8 @@ remain in `EXPERIMENT_LOG.md`.
 
 - VPP plugin-internal UID enforcement is not verified; Experiment 48 gates in the
   parent native process before `tun_poc`, not inside VPP.
+- Flow owner cache eviction/lifecycle is only a fixed-size POC, not a product
+  design.
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.

@@ -70,6 +70,14 @@ typedef struct {
     uint16_t remote_port;
 } owner_query_t;
 
+#define OWNER_CACHE_SIZE 64
+
+typedef struct {
+    bool valid;
+    owner_query_t query;
+    int uid;
+} owner_cache_entry_t;
+
 static void run_hev_child(const char *native_dir, const char *log_path, int fd, int socks_port);
 
 static void log_line(FILE *file, const char *fmt, ...) {
@@ -412,6 +420,48 @@ static bool parse_owner_query_packet(const unsigned char *buf, ssize_t len,
     return false;
 }
 
+static bool owner_query_equal(const owner_query_t *a, const owner_query_t *b) {
+    return a->valid && b->valid &&
+           a->protocol == b->protocol &&
+           a->local_port == b->local_port &&
+           a->remote_port == b->remote_port &&
+           strcmp(a->local_addr, b->local_addr) == 0 &&
+           strcmp(a->remote_addr, b->remote_addr) == 0;
+}
+
+static int owner_cache_lookup(const owner_cache_entry_t *cache, const owner_query_t *query) {
+    if (!cache || !query || !query->valid) {
+        return -1;
+    }
+    for (int i = 0; i < OWNER_CACHE_SIZE; i++) {
+        if (cache[i].valid && owner_query_equal(&cache[i].query, query)) {
+            return cache[i].uid;
+        }
+    }
+    return -1;
+}
+
+static void owner_cache_store(owner_cache_entry_t *cache, int *next_slot,
+                              const owner_query_t *query, int uid) {
+    if (!cache || !next_slot || !query || !query->valid || uid < 0) {
+        return;
+    }
+    for (int i = 0; i < OWNER_CACHE_SIZE; i++) {
+        if (cache[i].valid && owner_query_equal(&cache[i].query, query)) {
+            cache[i].uid = uid;
+            return;
+        }
+    }
+    int slot = *next_slot;
+    if (slot < 0 || slot >= OWNER_CACHE_SIZE) {
+        slot = 0;
+    }
+    cache[slot].valid = true;
+    cache[slot].query = *query;
+    cache[slot].uid = uid;
+    *next_slot = (slot + 1) % OWNER_CACHE_SIZE;
+}
+
 static void describe_packet(FILE *file, const unsigned char *buf, ssize_t len, int count) {
     if (len < 1) {
         log_line(file, "packet=%d len=%zd empty", count, len);
@@ -601,7 +651,8 @@ static void *vpp_shim_thread(void *arg) {
 
 static void drain_gate_tun_to_vpp(FILE *file, int tun_fd, int vpp_fd, int block_uid,
                                   unsigned char *buf, int *from_tun, int *dropped,
-                                  int *forwarded) {
+                                  int *forwarded, owner_cache_entry_t *owner_cache,
+                                  int *owner_cache_next) {
     while (1) {
         ssize_t n = read(tun_fd, buf, BUF_SIZE);
         if (n < 0) {
@@ -628,14 +679,26 @@ static void drain_gate_tun_to_vpp(FILE *file, int tun_fd, int vpp_fd, int block_
         owner_query_t query;
         bool have_owner = parse_owner_query_packet(buf, n, &query);
         int uid = have_owner ? query_owner_uid(&query) : -1;
+        bool cached_uid = false;
+        if (have_owner) {
+            if (uid >= 0) {
+                owner_cache_store(owner_cache, owner_cache_next, &query, uid);
+            } else {
+                int cached = owner_cache_lookup(owner_cache, &query);
+                if (cached >= 0) {
+                    uid = cached;
+                    cached_uid = true;
+                }
+            }
+        }
         if (block_uid >= 0 && uid == block_uid) {
             (*dropped)++;
             if (have_owner) {
                 log_line(file,
-                         "gate drop packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d",
+                         "gate drop packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d cached=%d",
                          *from_tun, n, query.protocol, query.local_addr,
                          (unsigned int)query.local_port, query.remote_addr,
-                         (unsigned int)query.remote_port, uid);
+                         (unsigned int)query.remote_port, uid, cached_uid ? 1 : 0);
             } else {
                 log_line(file, "gate drop packet=%d len=%zd ownerUid=%d",
                          *from_tun, n, uid);
@@ -652,10 +715,10 @@ static void drain_gate_tun_to_vpp(FILE *file, int tun_fd, int vpp_fd, int block_
         (*forwarded)++;
         if (have_owner) {
             log_line(file,
-                     "gate forward packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d",
+                     "gate forward packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d cached=%d",
                      *from_tun, n, query.protocol, query.local_addr,
                      (unsigned int)query.local_port, query.remote_addr,
-                     (unsigned int)query.remote_port, uid);
+                     (unsigned int)query.remote_port, uid, cached_uid ? 1 : 0);
         }
     }
 }
@@ -703,6 +766,9 @@ static void *vpp_gate_thread(void *arg) {
     int forwarded = 0;
     int dropped = 0;
     int to_tun = 0;
+    owner_cache_entry_t owner_cache[OWNER_CACHE_SIZE];
+    int owner_cache_next = 0;
+    memset(owner_cache, 0, sizeof(owner_cache));
 
     pthread_mutex_lock(&g_lock);
     int tun_fd = g_vpp_gate_tun_fd;
@@ -756,7 +822,8 @@ static void *vpp_gate_thread(void *arg) {
 
         if (pfds[0].revents & POLLIN) {
             drain_gate_tun_to_vpp(file, tun_fd, vpp_fd, block_uid, buf,
-                                  &from_tun, &dropped, &forwarded);
+                                  &from_tun, &dropped, &forwarded, owner_cache,
+                                  &owner_cache_next);
         }
         if (pfds[1].revents & POLLIN) {
             drain_gate_vpp_to_tun(file, tun_fd, vpp_fd, buf, &from_vpp, &to_tun);

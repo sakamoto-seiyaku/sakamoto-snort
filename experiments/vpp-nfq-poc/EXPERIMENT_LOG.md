@@ -3991,3 +3991,55 @@ VPN owner UID gate 已覆盖：
 对 0->1 来说，VPN mode 按 package UID 做静态拦截已经成立。
 后续工程设计需要补 flow owner cache、规则更新接口、以及是否把 gate 固化在 VPP 前还是重新设计 VPP/plugin 边界。
 ```
+
+### 52. Android VPN owner gate flow-owner cache fallback
+
+问题：第 50 步观察到同一个 TCP flow 后段 packet 可能返回 `ownerUid=-1`。这不是首包 block 的阻塞问题，但会影响后续
+allow/telemetry/规则变更语义。这里做最小 flow owner cache POC。
+
+最小实现：
+
+```text
+owner gate thread local cache:
+  key: protocol + local addr/port + remote addr/port
+  value: uid
+  size: 64 fixed slots, round-robin replacement
+
+gate behavior:
+  getConnectionOwnerUid() >= 0:
+    store tuple -> uid
+  getConnectionOwnerUid() < 0:
+    if tuple cache hit, use cached uid and log cached=1
+```
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpn-owner-gate-poc
+make -C experiments/vpp-nfq-poc android-vpn-owner-gate-ipv6-poc
+```
+
+结果：
+
+```text
+IPv4 gate regression:
+  allow/block POC passed.
+  This run did not need fallback; all logged TCP packets returned uid directly.
+
+IPv6 gate:
+  gate forward packet=7  ... ownerUid=12540 cached=0
+  gate forward packet=8  ... ownerUid=12540 cached=0
+  gate forward packet=9  ... ownerUid=12540 cached=0
+  gate forward packet=10 ... ownerUid=12540 cached=0
+  gate forward packet=11 ... ownerUid=12540 cached=1
+```
+
+结论：
+
+```text
+getConnectionOwnerUid 的可见窗口问题有最小可行缓解：
+  首次查询成功后，同 flow 后续 packet 可以从本地 tuple cache 恢复 owner UID。
+
+这仍不是产品设计：
+  cache size、eviction、TCP close、UDP timeout、policy epoch 都还需要后续接口/规则设计时决定。
+```
