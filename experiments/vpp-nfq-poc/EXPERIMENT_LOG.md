@@ -3926,3 +3926,68 @@ IPv6 allow-miss 中连接后段 packet 偶尔返回 ownerUid=-1。
 VPN owner UID gate 现在覆盖 IPv4/IPv6 TCP 转发路径。
 加上第 49 步的 UDP owner lookup，VPN mode 的 package UID static block 0->1 风险基本解除。
 ```
+
+### 51. Android VPN UDP owner UID gate before VPP/HEV
+
+问题：第 48/50 步验证了 TCP gate，UDP 只在第 47/49 步验证了 owner lookup。这里补 UDP gate 的 hit/miss 判定。
+
+范围：
+
+```text
+验证 gate decision：
+  UDP ownerUid miss -> forward to VPP fd
+  UDP ownerUid hit  -> drop before VPP
+
+不验证 SOCKS UDP 端到端响应：
+  当前 smoke server 不是完整 UDP ASSOCIATE server。
+```
+
+新增脚本：
+
+```text
+scripts/android-run-vpn-owner-gate-udp-poc.sh
+
+Makefile:
+  android-vpn-owner-gate-udp-poc
+  android-vpn-owner-gate-udp-ipv6-poc
+```
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpn-owner-gate-udp-poc
+make -C experiments/vpp-nfq-poc android-vpn-owner-gate-udp-ipv6-poc
+```
+
+IPv4 结果：
+
+```text
+allow-miss:
+  gate forward packet=7 len=52 proto=17 10.111.0.2:59604 -> 8.8.8.8:53 ownerUid=12540
+
+block-hit:
+  gate drop packet=7 len=52 proto=17 10.111.0.2:41175 -> 8.8.8.8:53 ownerUid=12540
+```
+
+IPv6 结果：
+
+```text
+allow-miss:
+  gate forward packet=7 len=72 proto=17 fd00:111:111::2:43417 -> 2606:4700:4700::1111:53 ownerUid=12540
+
+block-hit:
+  gate drop packet=7 len=72 proto=17 fd00:111:111::2:58032 -> 2606:4700:4700::1111:53 ownerUid=12540
+```
+
+结论：
+
+```text
+VPN owner UID gate 已覆盖：
+  IPv4 TCP block/allow
+  IPv6 TCP block/allow
+  IPv4 UDP gate forward/drop
+  IPv6 UDP gate forward/drop
+
+对 0->1 来说，VPN mode 按 package UID 做静态拦截已经成立。
+后续工程设计需要补 flow owner cache、规则更新接口、以及是否把 gate 固化在 VPP 前还是重新设计 VPP/plugin 边界。
+```
