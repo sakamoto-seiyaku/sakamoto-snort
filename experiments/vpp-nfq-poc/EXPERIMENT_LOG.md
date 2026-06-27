@@ -3713,3 +3713,83 @@ VPN mode per-packet app attribution 的 0->1 能力成立：
   TUN read -> owner UID lookup -> drop/forward
 然后再决定这个 gate 放在 VPP 前、VPP 父进程 bridge、还是 VPP 插件外部旁路。
 ```
+
+### 48. Android VPN owner UID gate before VPP/HEV
+
+问题：第 47 步只证明 `VpnService` native probe 能从 TCP/UDP tuple 查 UID。这里继续验证查到 UID 后能否在真实
+`VPP -> HEV -> SOCKS5` 转发链路前阻断。
+
+最小实现：
+
+```text
+新增 mode:
+  vpp-hev-owner-gate
+
+fd 拓扑：
+  real Android TUN fd
+    -> parent native gate thread
+    -> SOCK_SEQPACKET fd used as VPP fd 3
+    -> tun_poc forward-fd
+    -> HEV shim fd 4
+    -> SOCKS5 smoke server
+
+gate 行为：
+  TUN -> parse TCP/UDP tuple -> getConnectionOwnerUid()
+  ownerUid == blockOwnerUid: drop
+  otherwise: write packet to VPP fd
+  VPP return packets: write back to real TUN fd
+```
+
+新增脚本：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpn-owner-gate-poc
+```
+
+通过结果：
+
+```text
+package_uid=12540
+miss_uid=112540
+```
+
+allow-miss：
+
+```text
+block_uid=112540
+app HTTP:
+  HTTP/1.0 200 OK
+
+gate:
+  gate forward ... 10.111.0.2:59832 -> 142.251.13.94:80 ownerUid=12540
+
+SOCKS:
+  connect 142.251.13.94:80
+```
+
+block-hit：
+
+```text
+block_uid=12540
+app HTTP:
+  SocketTimeoutException from /10.111.0.2:53680 after 5000ms
+
+gate:
+  gate drop packet=7 len=60 proto=6 10.111.0.2:53680 -> 142.251.13.94:80 ownerUid=12540
+  gate drop packet=8 len=60 proto=6 10.111.0.2:53680 -> 142.251.13.94:80 ownerUid=12540
+  gate drop packet=9 len=60 proto=6 10.111.0.2:53680 -> 142.251.13.94:80 ownerUid=12540
+
+SOCKS:
+  connect count did not increase
+```
+
+结论：
+
+```text
+VPN mode 下按 package UID block 的 0->1 能力成立：
+  active VpnService process 可以先查 UID，再在 VPP/HEV 前阻断命中 UID 的 TCP packet。
+
+这不是最终架构结论：
+  当前 gate 位于 parent native process，不在 VPP plugin 内。
+  但它已经回答“VPN 模式能不能按 app UID 阻断”的基础问题：可以。
+```

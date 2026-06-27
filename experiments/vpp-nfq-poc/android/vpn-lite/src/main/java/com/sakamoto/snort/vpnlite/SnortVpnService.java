@@ -31,11 +31,13 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
     public static final String EXTRA_BLOCK_IP4_DST = "blockIp4Dst";
     public static final String EXTRA_BLOCK_IP6_DST = "blockIp6Dst";
+    public static final String EXTRA_BLOCK_OWNER_UID = "blockOwnerUid";
     public static final String EXTRA_ENABLE_IPV6 = "enableIpv6";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
     public static final String MODE_VPP_FORWARD = "vpp-forward";
     public static final String MODE_VPP_HEV = "vpp-hev";
+    public static final String MODE_VPP_HEV_OWNER_GATE = "vpp-hev-owner-gate";
     public static final String MODE_HEV = "hev";
 
     private static final String TAG = "SnortVpnLite";
@@ -56,7 +58,8 @@ public final class SnortVpnService extends VpnService {
 
     private static native int nativeStartVppProbe(int fd, String nativeLibraryDir, String filesDir,
                                                   int vppMode, String blockIp4Dst,
-                                                  String blockIp6Dst);
+                                                  String blockIp6Dst, int blockOwnerUid,
+                                                  SnortVpnService ownerLookup);
 
     private static native void nativeStopVppProbe();
 
@@ -87,9 +90,10 @@ public final class SnortVpnService extends VpnService {
                 : intent.getStringExtra(EXTRA_DISALLOWED_PACKAGE);
         String blockIp4Dst = intent == null ? null : intent.getStringExtra(EXTRA_BLOCK_IP4_DST);
         String blockIp6Dst = intent == null ? null : intent.getStringExtra(EXTRA_BLOCK_IP6_DST);
+        int blockOwnerUid = intent == null ? -1 : intent.getIntExtra(EXTRA_BLOCK_OWNER_UID, -1);
         boolean enableIpv6 = intent != null && intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
         startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage,
-                blockIp4Dst, blockIp6Dst, enableIpv6);
+                blockIp4Dst, blockIp6Dst, blockOwnerUid, enableIpv6);
         return START_STICKY;
     }
 
@@ -101,7 +105,8 @@ public final class SnortVpnService extends VpnService {
 
     private synchronized void startVpn(String mode, String allowedPackage,
                                        String disallowedPackage, String blockIp4Dst,
-                                       String blockIp6Dst, boolean enableIpv6) {
+                                       String blockIp6Dst, int blockOwnerUid,
+                                       boolean enableIpv6) {
         if (MODE_HEV.equals(mode)) {
             int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
                     getFilesDir().getAbsolutePath());
@@ -149,19 +154,22 @@ public final class SnortVpnService extends VpnService {
             int rawFd = vpnFd.detachFd();
             vpnFd = null;
             if (MODE_VPP.equals(mode) || MODE_VPP_FORWARD.equals(mode)
-                    || MODE_VPP_HEV.equals(mode)) {
+                    || MODE_VPP_HEV.equals(mode) || MODE_VPP_HEV_OWNER_GATE.equals(mode)) {
                 int vppMode = 0;
                 if (MODE_VPP_FORWARD.equals(mode)) {
                     vppMode = 1;
                 } else if (MODE_VPP_HEV.equals(mode)) {
                     vppMode = 2;
+                } else if (MODE_VPP_HEV_OWNER_GATE.equals(mode)) {
+                    vppMode = 3;
                 }
                 int rc = nativeStartVppProbe(rawFd, getApplicationInfo().nativeLibraryDir,
                         getFilesDir().getAbsolutePath(), vppMode,
                         blockIp4Dst == null ? "" : blockIp4Dst,
-                        blockIp6Dst == null ? "" : blockIp6Dst);
+                        blockIp6Dst == null ? "" : blockIp6Dst,
+                        blockOwnerUid, this);
                 Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " vppMode=" + vppMode
-                        + " rc=" + rc);
+                        + " blockOwnerUid=" + blockOwnerUid + " rc=" + rc);
             } else {
                 int rc = nativeStartProbe(rawFd, logPath.getAbsolutePath(), MAX_LOGGED_PACKETS,
                         this);
