@@ -4329,3 +4329,43 @@ packet verdict 在 VPP worker node 内完成，不是在 parent native gate。
   这里只验证 IPv4 dst exact match。
   下一步需要验证 worker-side IPv4 miss/allow 和 IPv6 dst drop。
 ```
+
+### 58. VPP worker IPv4 static dst miss still forwards
+
+问题：第 57 步证明 worker 上 IPv4 dst match 可以 drop。这里验证 miss/allow：配置一个不匹配目标地址的 IPv4 block rule，目标 packet 应继续转发。
+
+命令：
+
+```sh
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-forward-fd-ipv4-miss
+```
+
+结果：
+
+```text
+rule:
+  block-ip4-dst 198.19.0.99
+
+actual ping dst:
+  198.19.0.2
+
+after ping:
+rx 2 bytes 132 tx 1 bytes 84
+shim-rx 1 bytes 84 shim-tx 2 bytes 132
+blocked 0 bytes 0 block-ip4-dst 198.19.0.99
+handoff target-thread 1 fq 34 enqueued 2 bytes 132 congestion-drops 0 alloc-errors 0 worker-packets 2 bytes 132
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+
+ping:
+  1 transmitted, 1 received, 0% packet loss
+```
+
+结论：
+
+```text
+VPP worker-side IPv4 static dst rule does not overmatch:
+  exact dst miss forwards to shim
+  ping succeeds
+
+IPv4 worker-side static rule 0->1 now has both match/drop and miss/allow coverage.
+```
