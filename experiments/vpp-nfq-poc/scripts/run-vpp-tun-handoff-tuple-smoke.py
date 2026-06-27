@@ -27,23 +27,49 @@ def bind_to_device(sock: socket.socket, ifname: str) -> None:
     sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, ifname.encode() + b"\0")
 
 
-def send_udp(ifname: str, src_ip: str, src_port: int, dst_ip: str, dst_port: int) -> None:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def endpoint(ip_family: str, ip: str, port: int) -> tuple[object, ...]:
+    if ip_family == "inet6":
+        return (ip, port, 0, 0)
+    return (ip, port)
+
+
+def socket_family(ip_family: str) -> socket.AddressFamily:
+    if ip_family == "inet6":
+        return socket.AF_INET6
+    return socket.AF_INET
+
+
+def send_udp(
+    ip_family: str,
+    ifname: str,
+    src_ip: str,
+    src_port: int,
+    dst_ip: str,
+    dst_port: int,
+) -> None:
+    sock = socket.socket(socket_family(ip_family), socket.SOCK_DGRAM)
     try:
         bind_to_device(sock, ifname)
-        sock.bind((src_ip, src_port))
-        sock.sendto(b"tuple-udp", (dst_ip, dst_port))
+        sock.bind(endpoint(ip_family, src_ip, src_port))
+        sock.sendto(b"tuple-udp", endpoint(ip_family, dst_ip, dst_port))
     finally:
         sock.close()
 
 
-def send_tcp_syn(ifname: str, src_ip: str, src_port: int, dst_ip: str, dst_port: int) -> None:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def send_tcp_syn(
+    ip_family: str,
+    ifname: str,
+    src_ip: str,
+    src_port: int,
+    dst_ip: str,
+    dst_port: int,
+) -> None:
+    sock = socket.socket(socket_family(ip_family), socket.SOCK_STREAM)
     try:
         bind_to_device(sock, ifname)
-        sock.bind((src_ip, src_port))
+        sock.bind(endpoint(ip_family, src_ip, src_port))
         sock.setblocking(False)
-        sock.connect_ex((dst_ip, dst_port))
+        sock.connect_ex(endpoint(ip_family, dst_ip, dst_port))
         time.sleep(0.2)
     finally:
         sock.close()
@@ -51,19 +77,23 @@ def send_tcp_syn(ifname: str, src_ip: str, src_port: int, dst_ip: str, dst_port:
 
 def parse_last_tuple(show_output: str) -> dict[str, object]:
     match = re.search(
-        r"^last-tuple ip(\d+) proto (\d+) ([^:]+):(\d+) -> ([^:]+):(\d+)",
+        r"^last-tuple ip(\d+) proto (\d+) "
+        r"(?:\[([^\]]+)\]|([^:]+)):(\d+) -> "
+        r"(?:\[([^\]]+)\]|([^:]+)):(\d+)",
         show_output,
         re.MULTILINE,
     )
     if not match:
         raise RuntimeError(f"could not parse last tuple:\n{show_output}")
+    src = match.group(3) or match.group(4)
+    dst = match.group(6) or match.group(7)
     return {
         "ip_version": int(match.group(1)),
         "protocol": int(match.group(2)),
-        "src": match.group(3),
-        "src_port": int(match.group(4)),
-        "dst": match.group(5),
-        "dst_port": int(match.group(6)),
+        "src": src,
+        "src_port": int(match.group(5)),
+        "dst": dst,
+        "dst_port": int(match.group(8)),
     }
 
 
@@ -89,6 +119,7 @@ def main() -> int:
     parser.add_argument("--addr", default="198.19.20.1/24")
     parser.add_argument("--local-ip", default="198.19.20.1")
     parser.add_argument("--remote-ip", default="198.19.20.2")
+    parser.add_argument("--ip-family", choices=("inet", "inet6"), default="inet")
     parser.add_argument("--tun-fd", type=int, default=53)
     parser.add_argument("--shim-fd", type=int, default=54)
     parser.add_argument("--target-thread", type=int, default=1)
@@ -152,12 +183,21 @@ def main() -> int:
 
         udp_src_port = 43001
         udp_dst_port = 53001
-        send_udp(actual_ifname, args.local_ip, udp_src_port, args.remote_ip, udp_dst_port)
+        ip_version = 6 if args.ip_family == "inet6" else 4
+
+        send_udp(
+            args.ip_family,
+            actual_ifname,
+            args.local_ip,
+            udp_src_port,
+            args.remote_ip,
+            udp_dst_port,
+        )
         udp_show, udp_tuple = wait_for_tuple(
             Path(args.vppctl_bin),
             cli_sock,
             {
-                "ip_version": 4,
+                "ip_version": ip_version,
                 "protocol": 17,
                 "src": args.local_ip,
                 "src_port": udp_src_port,
@@ -171,12 +211,19 @@ def main() -> int:
 
         tcp_src_port = 43002
         tcp_dst_port = 53002
-        send_tcp_syn(actual_ifname, args.local_ip, tcp_src_port, args.remote_ip, tcp_dst_port)
+        send_tcp_syn(
+            args.ip_family,
+            actual_ifname,
+            args.local_ip,
+            tcp_src_port,
+            args.remote_ip,
+            tcp_dst_port,
+        )
         tcp_show, tcp_tuple = wait_for_tuple(
             Path(args.vppctl_bin),
             cli_sock,
             {
-                "ip_version": 4,
+                "ip_version": ip_version,
                 "protocol": 6,
                 "src": args.local_ip,
                 "src_port": tcp_src_port,
@@ -188,7 +235,7 @@ def main() -> int:
         logger.log(tcp_show.rstrip())
         logger.log(f"tcp_tuple={tcp_tuple}")
         logger.log()
-        logger.log("ok: tun_poc worker parsed IPv4 UDP and TCP tuples")
+        logger.log(f"ok: tun_poc worker parsed IPv{ip_version} UDP and TCP tuples")
         return 0
     finally:
         try:

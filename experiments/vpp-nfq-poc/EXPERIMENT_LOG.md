@@ -4471,3 +4471,50 @@ VPP worker-side IPv4 TCP/UDP tuple parsing 成立。
   验证 IPv6 TCP/UDP tuple parsing。
   然后再接 mock resolver / Android resolver。
 ```
+
+### 61. VPP worker parses IPv6 TCP/UDP tuples after TUN handoff
+
+问题：补齐 IPv6 TCP/UDP tuple parse。当前只验证普通 IPv6 base header，不覆盖 extension headers。
+
+变更：
+
+```text
+show tun-poc:
+  IPv6 last-tuple uses [addr]:port format to avoid colon ambiguity
+
+tuple smoke:
+  supports --ip-family inet6
+  sends UDP and TCP through an IPv6 TUN route
+```
+
+命令：
+
+```sh
+./scripts/run-container.sh make vpp-tun-poc-build
+DOCKER_CAP_PROFILE=smoke DOCKER_TUN_DEVICE=1 ./scripts/run-container.sh make vpp-tun-handoff-tuple-ipv6-smoke
+```
+
+结果：
+
+```text
+after udp:
+tuple parsed 1 errors 0 non-tcp-udp 1 last-valid 1
+last-tuple ip6 proto 17 [fd00:43::1]:43001 -> [fd00:43::2]:53001
+thread-hits worker-probe last 1 t0 0 t1 2 t2 0 t3 0
+
+after tcp:
+tuple parsed 2 errors 0 non-tcp-udp 1 last-valid 1
+last-tuple ip6 proto 6 [fd00:43::1]:43002 -> [fd00:43::2]:53002
+thread-hits worker-probe last 1 t0 0 t1 3 t2 0 t3 0
+```
+
+结论：
+
+```text
+VPP worker-side IPv6 TCP/UDP tuple parsing 成立。
+VPP 内部现在能为 IPv4/IPv6 + TCP/UDP 提供 tuple。
+
+边界：
+  IPv6 extension headers 尚未处理。
+  tuple->UID resolver 仍未接到 VPP worker path。
+```

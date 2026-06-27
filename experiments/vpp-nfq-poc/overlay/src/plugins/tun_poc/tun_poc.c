@@ -922,10 +922,16 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     "tuple parsed %llu errors %llu non-tcp-udp %llu last-valid %u",
     tm->tuple_parsed_packets, tm->tuple_parse_errors, tm->tuple_non_tcp_udp,
     tm->last_tuple_valid);
-  vlib_cli_output (vm, "last-tuple ip%u proto %u %s:%u -> %s:%u",
-		   tm->last_tuple_ip_version, tm->last_tuple_protocol,
-		   tuple_src, tm->last_tuple_src_port, tuple_dst,
-		   tm->last_tuple_dst_port);
+  if (tm->last_tuple_valid && tm->last_tuple_ip_version == 6)
+    vlib_cli_output (vm, "last-tuple ip6 proto %u [%s]:%u -> [%s]:%u",
+		     tm->last_tuple_protocol, tuple_src,
+		     tm->last_tuple_src_port, tuple_dst,
+		     tm->last_tuple_dst_port);
+  else
+    vlib_cli_output (vm, "last-tuple ip%u proto %u %s:%u -> %s:%u",
+		     tm->last_tuple_ip_version, tm->last_tuple_protocol,
+		     tuple_src, tm->last_tuple_src_port, tuple_dst,
+		     tm->last_tuple_dst_port);
   vlib_cli_output (
     vm,
     "thread-hits main last %u t0 %llu t1 %llu t2 %llu t3 %llu overflow %llu",
