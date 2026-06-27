@@ -7,16 +7,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$POC_DIR/../.." && pwd)"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
-TCP_HOST="${TCP_HOST:-142.251.13.94}"
+IP_FAMILY="${IP_FAMILY:-inet4}"
+TCP_HOST="${TCP_HOST:-}"
 TCP_PORT="${TCP_PORT:-80}"
-UDP_HOST="${UDP_HOST:-8.8.8.8}"
+UDP_HOST="${UDP_HOST:-}"
 UDP_PORT="${UDP_PORT:-53}"
 START_WAIT="${START_WAIT:-3}"
 PROBE_WAIT="${PROBE_WAIT:-7}"
 BUILD_APK="${BUILD_APK:-1}"
 INSTALL_APK="${INSTALL_APK:-1}"
 LOG_DIR="$POC_DIR/results"
-LOG="$LOG_DIR/android-vpn-owner-uid-poc.log"
+LOG="$LOG_DIR/android-vpn-owner-uid-$IP_FAMILY-poc.log"
 APP_LOG_ROOT="/data/user/0/$PACKAGE/files/logs"
 VPN_LOG="$APP_LOG_ROOT/vpn-fd-probe.log"
 HTTP_LOG="$APP_LOG_ROOT/app-http-probe.log"
@@ -25,6 +26,25 @@ UDP_LOG="$APP_LOG_ROOT/app-udp-probe.log"
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 
 mkdir -p "$LOG_DIR"
+
+case "$IP_FAMILY" in
+  inet4)
+    TCP_HOST="${TCP_HOST:-142.251.13.94}"
+    UDP_HOST="${UDP_HOST:-8.8.8.8}"
+    EXPECT_LOG_FAMILY="ipv4"
+    ENABLE_IPV6=false
+    ;;
+  inet6)
+    TCP_HOST="${TCP_HOST:-2606:4700:4700::1111}"
+    UDP_HOST="${UDP_HOST:-2606:4700:4700::1111}"
+    EXPECT_LOG_FAMILY="ipv6"
+    ENABLE_IPV6=true
+    ;;
+  *)
+    echo "unsupported IP_FAMILY=$IP_FAMILY; expected inet4 or inet6" >&2
+    exit 1
+    ;;
+esac
 
 cleanup() {
   adb_cmd shell am start -n "$PACKAGE/.MainActivity" --ez stop true >/dev/null 2>&1 || true
@@ -38,6 +58,7 @@ exec > >(tee "$LOG") 2>&1
 echo "# Android VPN owner UID POC"
 echo "adb_serial=$(adb_target_desc)"
 echo "package=$PACKAGE"
+echo "ip_family=$IP_FAMILY"
 echo "tcp=$TCP_HOST:$TCP_PORT"
 echo "udp=$UDP_HOST:$UDP_PORT"
 
@@ -62,7 +83,11 @@ adb_su "rm -f '$VPN_LOG' '$HTTP_LOG' '$UDP_LOG'"
 
 echo
 echo "## start native VPN probe"
-adb_cmd shell am start -n "$PACKAGE/.MainActivity" --ez start true --es mode native
+start_args=(shell am start -n "$PACKAGE/.MainActivity" --ez start true --es mode native)
+if [[ "$ENABLE_IPV6" == "true" ]]; then
+  start_args+=(--ez enableIpv6 true)
+fi
+adb_cmd "${start_args[@]}"
 sleep "$START_WAIT"
 
 echo
@@ -95,14 +120,14 @@ echo
 echo "## app-udp-probe.log"
 adb_su "cat '$UDP_LOG' 2>/dev/null || true" | tr -d '\r'
 
-if ! grep -Eq "ipv4 proto=6 .*ownerUid=$package_uid" <<<"$vpn_log"; then
-  echo "expected TCP ownerUid=$package_uid in VPN packet log" >&2
+if ! grep -Eq "$EXPECT_LOG_FAMILY proto=6 .*ownerUid=$package_uid" <<<"$vpn_log"; then
+  echo "expected $EXPECT_LOG_FAMILY TCP ownerUid=$package_uid in VPN packet log" >&2
   exit 1
 fi
-if ! grep -Eq "ipv4 proto=17 .*ownerUid=$package_uid" <<<"$vpn_log"; then
-  echo "expected UDP ownerUid=$package_uid in VPN packet log" >&2
+if ! grep -Eq "$EXPECT_LOG_FAMILY proto=17 .*ownerUid=$package_uid" <<<"$vpn_log"; then
+  echo "expected $EXPECT_LOG_FAMILY UDP ownerUid=$package_uid in VPN packet log" >&2
   exit 1
 fi
 
 echo
-echo "ok: VPN packet tuple owner UID lookup returned package uid for TCP and UDP"
+echo "ok: VPN $EXPECT_LOG_FAMILY packet tuple owner UID lookup returned package uid for TCP and UDP"

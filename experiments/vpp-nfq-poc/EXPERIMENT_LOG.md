@@ -3793,3 +3793,57 @@ VPN mode 下按 package UID block 的 0->1 能力成立：
   当前 gate 位于 parent native process，不在 VPP plugin 内。
   但它已经回答“VPN 模式能不能按 app UID 阻断”的基础问题：可以。
 ```
+
+### 49. Android VPN native IPv6 packet tuple -> owner UID lookup
+
+问题：第 47 步验证了 IPv4 TCP/UDP owner UID 查询。这里补 IPv6 TCP/UDP，避免后续误以为
+`getConnectionOwnerUid()` 只覆盖 IPv4。
+
+脚本改动：
+
+```text
+scripts/android-run-vpn-owner-uid-poc.sh
+  IP_FAMILY=inet4: default, keeps previous IPv4 behavior
+  IP_FAMILY=inet6: enables VpnService IPv6 address/route and probes IPv6 TCP/UDP
+
+Makefile:
+  android-vpn-owner-uid-poc
+  android-vpn-owner-uid-ipv6-poc
+```
+
+命令：
+
+```sh
+make -C experiments/vpp-nfq-poc android-vpn-owner-uid-ipv6-poc
+make -C experiments/vpp-nfq-poc android-vpn-owner-uid-poc
+```
+
+IPv6 结果：
+
+```text
+package_uid=12540
+
+packet=8 len=80 ipv6 proto=6 fd00:111:111::2:58766 -> 2606:4700:4700::1111:80 ownerUid=12540
+packet=9 len=72 ipv6 proto=17 fd00:111:111::2:40353 -> 2606:4700:4700::1111:53 ownerUid=12540
+
+app HTTP probe:
+  expected timeout, because native VPN probe does not forward packets.
+
+app UDP probe:
+  ok bytes=24 elapsedMs=3009
+```
+
+回归：
+
+```text
+默认 IPv4 owner UID POC 重跑通过：
+  ipv4 proto=6 ownerUid=12540
+  ipv4 proto=17 ownerUid=12540
+```
+
+结论：
+
+```text
+VPN mode owner UID lookup 现在覆盖 IPv4/IPv6 + TCP/UDP 的最小常规包头。
+当前 IPv6 parser 仍是 no-extension-header baseline；真实产品前如果要处理 IPv6 extension headers，需要单独补 walker。
+```
