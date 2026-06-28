@@ -13,6 +13,17 @@ Executive summary
 
 结论。 值得继续投入，但前提是严格收缩首版目标：先验证“高级 Android/跨 Android-Linux 的个人防火墙与可解释网络诊断”是否有人愿意付费，而不是验证“跨平台 packet engine 本身是否先进”。如果 12 周内无法拿到一批愿意长期使用并付费的 power users / homelab / 开发者用户，那么这个方向应该及时止损。
 
+VPP 核心 POC 更新（2026-06-28）
+事实。 最近一轮 POC 已纠正早期 “parent native gate” 偏差：VPN mode 的 packet verdict 可以留在 VPP worker 内完成。Java/NDK 只作为 tuple -> UID resolver，不能把 drop/allow 放在 VPP 前面。`VpnService -> packaged VPP -> HEV/SOCKS` 路径上，VPP worker 已能解析 tuple、查询 Android `ConnectivityManager.getConnectionOwnerUid`，并按 owner UID drop。
+
+事实。 多线程方面，当前 `tun_poc` fd callback 不会自动分发到 worker；TUN fd / shim fd read 仍在 VPP thread 0。可行路径是先把 packet 转成 VPP buffer，再用 VLIB frame queue 显式 handoff 到 worker。已验证 worker 1 可以继续用 frame queue redirect 到 worker 2，且 Pixel 6a 上 redirect 后仍能 forward 或继续执行 UID verdict。
+
+事实。 Android VPN VPP-internal owner verdict 已覆盖 IPv4/IPv6 + TCP/UDP send packets，包括 redirect 后 verdict。VPP worker 解析 tuple，resolver fd 调 Android API 返回 UID，VPP worker 应用 `block-owner-uid`。单 entry owner cache POC 能避免同一 tuple 后续 owner lookup 返回 `-1` 破坏判定；20 包 UDP burst 下 resolver query 1 次、cache hit 19 次、VPP drop 20 包。
+
+结论。 第一版能力边界可以比本调研初版更收缩：Android-first 是合理路线；VPN mode 的 VPP 核心路径已经支持 app include/exclude、静态 IP block、基于 owner UID 的 IPv4/IPv6 TCP/UDP allow/block POC；root mode 仍是低摩擦 package UID 路径。暂时不应承诺 domain/DNS、多规则引擎、跨平台统一实现或生产级 sharding/cache/async resolver。
+
+警告。 Experiments 48/50/51/52 只证明 parent native gate/cache 可行，不能作为 VPP-internal verdict 证据。以后讨论“VPP 是核心”时，以 `experiments/vpp-nfq-poc/POC_STATUS.md` 与 `EXPERIMENT_LOG.md` 中 Experiments 68-79 为主要 Android VPN owner verdict 依据。
+
 竞品矩阵
 未注明发布日期的官方产品页、商店页、GitHub 仓库与官方文档，均为 2026-06-25 访问。Play / App Store 的“Updated on”与页面显示日期保留原值。
 
