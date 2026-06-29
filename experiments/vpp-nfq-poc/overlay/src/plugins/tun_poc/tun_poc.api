@@ -1,0 +1,59 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+option version = "0.1.0";
+
+/** \brief Query the current TUN POC runtime status.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+*/
+define tun_poc_status
+{
+  u32 client_index;
+  u32 context;
+};
+
+/** \brief Current TUN POC runtime status.
+    @param context - sender context, to match reply w/ request
+    @param retval - return value for request
+    @param enabled - non-zero when tun_poc owns the fd path
+    @param mode - tun_poc_mode_t numeric value
+    @param rx_packets - packets read from the TUN fd
+    @param tx_packets - packets written back to the TUN fd
+    @param shim_tx_packets - packets forwarded to the shim fd
+    @param blocked_packets - packets dropped by static or UID verdict
+    @param tuple_parsed_packets - TCP/UDP tuples parsed on worker path
+    @param resolver_queries - owner resolver requests issued by VPP
+    @param resolver_hits - owner resolver replies parsed by VPP
+    @param resolver_errors - owner resolver query/parse failures
+    @param owner_cache_hits - VPP-side owner cache hits
+    @param owner_cache_misses - VPP-side owner cache misses
+    @param owner_cache_stores - VPP-side owner cache stores
+    @param uid_blocked_packets - packets dropped by owner UID
+    @param last_owner_uid - last UID returned by resolver/cache
+*/
+define tun_poc_status_reply
+{
+  u32 context;
+  i32 retval;
+  bool enabled;
+  u32 mode;
+  u64 rx_packets;
+  u64 tx_packets;
+  u64 shim_tx_packets;
+  u64 blocked_packets;
+  u64 tuple_parsed_packets;
+  u64 resolver_queries;
+  u64 resolver_hits;
+  u64 resolver_errors;
+  u64 owner_cache_hits;
+  u64 owner_cache_misses;
+  u64 owner_cache_stores;
+  u64 uid_blocked_packets;
+  i32 last_owner_uid;
+};
+
+/*
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */

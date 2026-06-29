@@ -229,3 +229,85 @@ No UID/GID/ifindex metadata extraction in the VPP plugin yet.
 No worker handoff or multi-worker behavior yet.
 No Android/VPN/TUN path yet.
 ```
+
+## TUN POC Binary API Status
+
+Local overlay:
+
+```text
+experiments/vpp-nfq-poc/overlay/src/plugins/tun_poc/
+  tun_poc.api
+  tun_poc_api.c
+```
+
+Raw VPP API references used for this slice:
+
+```text
+work/vpp/src/plugins/arping/arping.api
+work/vpp/src/plugins/arping/arping_api.c
+work/vpp/src/plugins/af_packet/af_packet.api
+work/vpp/src/plugins/af_packet/af_packet_api.c
+work/vpp/src/vpp-api/python/vpp_papi/vpp_papi.py
+work/vpp/src/vpp-api/python/vpp_papi/vpp_transport_socket.py
+```
+
+Observed VPP plugin API pattern:
+
+```text
+add_vpp_plugin(... API_FILES <plugin>.api ...)
+include <plugin>/<plugin>.api_enum.h
+include <plugin>/<plugin>.api_types.h
+include <plugin>/<plugin>.api.c
+setup_message_id_table()
+VLIB_API_INIT_FUNCTION(...)
+```
+
+Current status API:
+
+```text
+tun_poc_status -> tun_poc_status_reply
+
+Fields:
+  enabled, mode
+  rx_packets, tx_packets, shim_tx_packets, blocked_packets
+  tuple_parsed_packets
+  resolver_queries, resolver_hits, resolver_errors
+  owner_cache_hits, owner_cache_misses, owner_cache_stores
+  uid_blocked_packets
+  last_owner_uid
+```
+
+Run:
+
+```sh
+CCACHE_DIR=/tmp/ccache make vpp-tun-poc-build
+make vpp-tun-poc-api-status-smoke
+```
+
+Observed result:
+
+```text
+tun_poc_status reply:
+  retval=0
+  enabled=0 mode=0
+  counters rx=0 tx=0 shim_tx=0 blocked=0
+  owner queries=0 hits=0 cache_hits=0 uid_blocks=0 last_uid=-1
+```
+
+This proves the minimal non-CLI status surface:
+
+```text
+VPP API generator produces tun_poc.api.json and VAPI C/C++ headers.
+tun_poc registers a binary API message table at startup.
+Python PAPI can call tun_poc_status over socksvr and receive typed counters.
+```
+
+Boundary:
+
+```text
+This is read-only status.
+It does not implement fd handoff through VPP API.
+It does not implement policy replace/commit/rollback.
+It does not prove Rust VAPI or a thin C ABI shim.
+It does not define final API installation/packaging.
+```

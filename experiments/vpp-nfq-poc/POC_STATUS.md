@@ -37,6 +37,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP worker-to-worker redirect | On Pixel 6a, VPP worker thread 1 re-enqueues app HTTP packets to worker thread 2, and worker thread 2 forwards through HEV/SOCKS. | Experiment 71 |
 | Android VPN VPP worker IPv4 static drop | On Pixel 6a, `vpp-hev-handoff` drops app TCP SYNs to a blocked IPv4 dst inside VPP worker thread 1 before HEV/SOCKS. | Experiment 67 |
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
+| VPP binary API status surface | `tun_poc` exposes a generated `tun_poc_status` binary API; Python PAPI calls it over `socksvr` and receives typed status/counters without parsing CLI output. | Experiment 80 |
 | Android VPN VPP owner cache | VPP worker can cache a tuple owner UID, avoid repeated Android resolver queries on the same TCP tuple, and keep `last-uid` at the package UID on the allow path. | Experiment 78 |
 | Android VPN VPP owner-cache UDP burst | App can send a 20-packet UDP burst through VPP; VPP owner-cache reduces resolver queries to one and drops all 20 packets by UID. | Experiment 79 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
@@ -85,6 +86,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   keeps the verdict inside VPP instead of the parent native process.
 - Android tuple->UID bridging works with VPP as the packet owner: Java/NDK only
   resolves UID over `resolver-fd`; VPP worker keeps packet forwarding/verdict.
+- The first non-CLI VPP control surface is proven at status-read scope:
+  `tun_poc_status` is generated through VPP API tooling and callable through
+  Python PAPI over `socksvr`. This supports keeping CLI as dev/debug only while
+  future Tauri/Rust control targets VPP binary API/VAPI.
 - Android owner lookup can return the package UID for early TCP packets and `-1`
   for later packets on the same tuple. A minimal VPP-side tuple cache is now
   proven for one active tuple; production still needs real cache sizing,
@@ -136,3 +141,6 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - No sustained performance or battery test has been run beyond idle/short loops
   and the 20-packet UDP owner-cache burst.
 - The Android app is still a POC shell, not a product UI or policy manager.
+- The binary API POC is read-only status. It does not yet cover fd handoff,
+  policy replace/commit/rollback, Rust VAPI integration, API packaging, or
+  Android packaged VPP.

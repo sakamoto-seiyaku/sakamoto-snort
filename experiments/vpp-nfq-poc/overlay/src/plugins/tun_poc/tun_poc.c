@@ -55,6 +55,9 @@ tun_poc_main_t tun_poc_main = {
   .handoff_target_thread = ~0,
   .redirect_frame_queue_index = ~0,
   .redirect_target_thread = ~0,
+  .last_owner_uid = -1,
+  .owner_cache_uid = -1,
+  .block_owner_uid = -1,
 };
 
 extern vlib_node_registration_t tun_poc_rx_handoff_node;

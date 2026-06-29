@@ -4,6 +4,10 @@ add_vpp_plugin(tun_poc
   SOURCES
   plugin.c
   tun_poc.c
+  tun_poc_api.c
+
+  API_FILES
+  tun_poc.api
 
   INSTALL_HEADERS
   tun_poc.h
