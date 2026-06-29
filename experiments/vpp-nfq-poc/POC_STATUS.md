@@ -42,6 +42,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VAPI C client status call | A small C client consumes generated `tun_poc.api.vapi.h`, connects to VPP `socksvr`, and calls `vapi_tun_poc_status`. | Experiment 82 |
 | Rust FFI C-shim status call | Rust calls a thin C ABI shim with `repr(C)` status output; the shim hides generated VAPI types and calls `tun_poc_status` through VPP `socksvr`. | Experiment 83 |
 | Rust FFI C-shim owner policy mutation | Rust calls the same C ABI shim to set `owner_cache_enabled` and `block_owner_uid=4242`; a follow-up status read confirms the mutation. | Experiment 84 |
+| Rust shim staged SDK smoke | A local SDK staging directory can hold the public shim header, static shim lib, and VPP client runtime libs; Rust links/runs from it when the launcher sets `LD_LIBRARY_PATH` to the staged lib dir. | Experiment 85 |
 | Android VPN VPP owner cache | VPP worker can cache a tuple owner UID, avoid repeated Android resolver queries on the same TCP tuple, and keep `last-uid` at the package UID on the allow path. | Experiment 78 |
 | Android VPN VPP owner-cache UDP burst | App can send a 20-packet UDP burst through VPP; VPP owner-cache reduces resolver queries to one and drops all 20 packets by UID. | Experiment 79 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
@@ -106,6 +107,11 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The same Rust-facing C ABI shape can also mutate POC owner policy and verify
   it through typed status, so the minimal control-plane read/write loop is
   proven without CLI parsing.
+- The Rust shim can be staged into a local Linux SDK with public header,
+  static shim lib, and VPP client runtime libs. On this host, copied VPP libs
+  retain build-tree RUNPATH, so the smoke uses launcher-managed
+  `LD_LIBRARY_PATH=<sdk>/lib`; final packaging needs rpath rewrite or an
+  equivalent loader plan.
 - Android owner lookup can return the package UID for early TCP packets and `-1`
   for later packets on the same tuple. A minimal VPP-side tuple cache is now
   proven for one active tuple; production still needs real cache sizing,
@@ -159,8 +165,8 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The Android app is still a POC shell, not a product UI or policy manager.
 - The binary API POC only covers status and a direct owner-policy knob mutation.
   It does not yet cover fd handoff, compiled policy blobs, snapshot epoch,
-  replace/commit/rollback, Rust VAPI integration, API packaging, concurrency, or
-  Android packaged VPP.
+  replace/commit/rollback, Rust VAPI integration, concurrency, or Android
+  packaged VPP.
 - The VAPI C client POC is a smoke client only. It does not define the stable C
   ABI that Rust should call, and it still consumes generated headers from the
   local VPP build tree.
@@ -169,3 +175,6 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The Rust FFI owner-policy mutation POC still mutates direct POC knobs only. It
   does not define the final compiled policy schema, epoch model, transaction
   semantics, or connection lifetime strategy.
+- The staged SDK POC is local Linux only. It does not produce a versioned SDK,
+  does not patch VPP shared-library RUNPATH to `$ORIGIN`, and does not prove
+  Android or Tauri bundling.

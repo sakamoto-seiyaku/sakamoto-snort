@@ -297,6 +297,7 @@ make vpp-tun-poc-api-policy-smoke
 make vpp-tun-poc-vapi-c-status-smoke
 make vpp-tun-poc-rust-shim-status-smoke
 make vpp-tun-poc-rust-shim-policy-smoke
+make vpp-tun-poc-rust-shim-sdk-smoke
 ```
 
 Observed result:
@@ -323,10 +324,19 @@ tun_poc_status via Rust FFI shim:
   counters rx=0 tx=0 shim_tx=0 blocked=0
   owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
 
-tun_poc_owner_policy_set via Rust FFI shim:
-  retval=0
-tun_poc_status after Rust FFI mutation:
-  owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+Rust FFI policy smoke:
+  tun_poc_owner_policy_set via Rust FFI shim:
+    retval=0
+  tun_poc_status after Rust FFI mutation:
+    owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+
+Staged SDK smoke:
+  tun_poc_owner_policy_set via Rust FFI shim:
+    retval=0
+  tun_poc_status after Rust FFI mutation:
+    owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+  staged sdk: /tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/sdk
+  loader env: LD_LIBRARY_PATH=/tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/sdk/lib
 ```
 
 This proves the minimal non-CLI status surface:
@@ -339,6 +349,7 @@ Python PAPI can call tun_poc_owner_policy_set over socksvr and mutate POC policy
 Generated VAPI C headers can be consumed by a small external C client for status calls.
 Rust can call a thin C ABI shim, which hides generated VAPI types and reaches tun_poc_status.
 Rust can also call the same C ABI shim to mutate owner policy and verify it through status.
+The Rust shim client can link and run from a staged local Linux SDK when the launcher sets the loader path to the staged lib dir.
 ```
 
 Boundary:
@@ -348,7 +359,7 @@ This is read-only status plus direct mutation of POC owner policy knobs.
 It does not implement fd handoff through VPP API.
 It does not implement compiled policy blobs, snapshot epochs, or replace/commit/rollback.
 It does not prove Rust-native VAPI bindings.
-It does not define final API installation/packaging.
+It does not define final Android/Tauri installation packaging.
 ```
 
 VAPI C client notes:
@@ -397,4 +408,25 @@ The policy smoke sets:
 owner_cache_enabled=1
 block_owner_uid_set=1
 block_owner_uid=4242
+```
+
+Staged SDK notes:
+
+```text
+scripts/run-vpp-tun-poc-rust-shim-sdk-smoke.py
+
+Staged files:
+  sdk/include/tun_poc_control_shim.h
+  sdk/lib/libtun_poc_control_shim.a
+  sdk/lib/libvapiclient.so*
+  sdk/lib/libvlibmemoryclient.so*
+  sdk/lib/libvlibapi.so*
+  sdk/lib/libsvm.so*
+  sdk/lib/libvppinfra.so*
+
+Loader note:
+  copied VPP native libs keep RUNPATH pointing at the original install tree.
+  patchelf is not available in this environment.
+  the smoke therefore sets LD_LIBRARY_PATH=<sdk>/lib and verifies with ldd
+  before running the Rust client.
 ```

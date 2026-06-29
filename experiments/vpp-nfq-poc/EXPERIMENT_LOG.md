@@ -6145,3 +6145,82 @@ It still opens a short-lived VAPI connection per shim call.
 It does not cover async/reconnect/thread ownership rules.
 It does not package the shim for Android or desktop release builds.
 ```
+
+### 85. Rust shim can run from a staged local SDK
+
+问题：第 83/84 步的 Rust smoke 仍直接从 VPP install/build tree 链接 `libvapiclient` 和编译
+shim。产品化前需要知道最小可 stage 的 client-side SDK 边界：public C ABI header、shim static
+lib、VPP client runtime libs、Rust binary 是否能从一个 staging 目录运行。
+
+最小实现：
+
+```text
+scripts/run-vpp-tun-poc-rust-shim-sdk-smoke.py:
+  stage /tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/sdk/include/tun_poc_control_shim.h
+  build and stage sdk/lib/libtun_poc_control_shim.a
+  copy VPP client runtime libs into sdk/lib:
+    libvapiclient.so
+    libvlibmemoryclient.so
+    libvlibapi.so
+    libsvm.so
+    libvppinfra.so
+  build Rust policy smoke with -L native=<sdk>/lib
+  verify ldd resolves VPP client libs to <sdk>/lib when LD_LIBRARY_PATH=<sdk>/lib
+  run Rust policy smoke against a real local VPP socksvr
+```
+
+命令：
+
+```sh
+make vpp-tun-poc-rust-shim-sdk-smoke
+```
+
+结果：
+
+```text
+tun_poc_owner_policy_set via Rust FFI shim:
+  retval=0
+tun_poc_status after Rust FFI mutation:
+  owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+staged sdk: /tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/sdk
+loader env: LD_LIBRARY_PATH=/tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/sdk/lib
+rust ffi client: /tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/tun_poc_rust_policy_sdk
+vpp stdout log: /tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/vpp-stdout.log
+```
+
+重要发现：
+
+```text
+VPP native build installs libvapiclient.so with RUNPATH pointing at the original
+install tree. Copying the .so files alone is not enough for a fully relocatable
+Linux SDK on this host.
+
+Because patchelf is not installed in this environment, the POC uses:
+  LD_LIBRARY_PATH=<staged-sdk>/lib
+
+With that loader env, ldd verification confirms VPP client libs resolve from
+the staged SDK before the Rust smoke runs.
+```
+
+结论：
+
+```text
+Staged SDK POC 成立 for local Linux smoke:
+  Rust links against staged libtun_poc_control_shim.a and staged VPP client libs
+  runtime loading can be forced to staged libs with launcher loader env
+  the staged Rust binary can still mutate tun_poc policy over VPP socksvr
+
+Packaging implication:
+  desktop packaging needs either launcher-managed loader path or rpath rewrite
+  Android packaging needs an equivalent native library loading plan
+```
+
+边界：
+
+```text
+This is a local Linux staging smoke only.
+It does not produce a versioned installable SDK artifact.
+It does not patch copied VPP shared-library RUNPATH to $ORIGIN.
+It does not prove Android packaging or Tauri bundling.
+It still compiles the shim from source during staging.
+```
