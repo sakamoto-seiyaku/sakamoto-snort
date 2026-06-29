@@ -160,7 +160,11 @@ def main() -> int:
         print(
             "  owner "
             f"queries={reply.resolver_queries} hits={reply.resolver_hits} "
-            f"cache_hits={reply.owner_cache_hits} uid_blocks={reply.uid_blocked_packets} "
+            f"cache_enabled={int(reply.owner_cache_enabled)} "
+            f"cache_hits={reply.owner_cache_hits} "
+            f"block_uid_set={int(reply.block_owner_uid_set)} "
+            f"block_uid={reply.block_owner_uid} "
+            f"uid_blocks={reply.uid_blocked_packets} "
             f"last_uid={reply.last_owner_uid}"
         )
         print(f"vpp stdout log: {stdout_log}")

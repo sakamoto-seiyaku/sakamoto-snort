@@ -5837,3 +5837,78 @@ It does not test Android packaged VPP or root mode.
 The generated tun_poc.api.json currently lives in the build tree for this POC;
 API installation/packaging policy is still separate.
 ```
+
+### 81. `tun_poc` owner policy can be mutated through VPP binary API
+
+问题：第 80 步只证明 binary API 可以读 status。这里验证 product control plane 需要的最小
+write/mutation 形态：不用 CLI，直接通过 VPP binary API 设置 `owner-cache` 和
+`block-owner-uid` 这两个现有 POC policy knobs。
+
+最小实现：
+
+```text
+tun_poc.api:
+  autoreply define tun_poc_owner_policy_set {
+    bool owner_cache_enabled;
+    bool block_owner_uid_set;
+    i32 block_owner_uid;
+  }
+
+tun_poc_api.c:
+  vl_api_tun_poc_owner_policy_set_t_handler mutates tun_poc_main:
+    owner_cache_enabled
+    owner_cache_valid reset when cache is disabled
+    block_owner_uid_set
+    block_owner_uid
+
+status reply now also exposes:
+  owner_cache_enabled
+  block_owner_uid_set
+  block_owner_uid
+```
+
+命令：
+
+```sh
+CCACHE_DIR=/tmp/ccache make vpp-tun-poc-build
+make vpp-tun-poc-api-status-smoke
+make vpp-tun-poc-api-policy-smoke
+```
+
+结果：
+
+```text
+make vpp-tun-poc-api-status-smoke:
+  tun_poc_status reply:
+    retval=0
+    enabled=0 mode=0
+    counters rx=0 tx=0 shim_tx=0 blocked=0
+    owner queries=0 hits=0 cache_enabled=0 cache_hits=0 block_uid_set=0
+      block_uid=-1 uid_blocks=0 last_uid=-1
+
+make vpp-tun-poc-api-policy-smoke:
+  tun_poc_owner_policy_set reply:
+    retval=0
+  tun_poc_status after mutation:
+    owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+```
+
+结论：
+
+```text
+最小 VPP binary API mutation POC 成立：
+  product control can set POC policy knobs through typed binary API
+  the mutation is visible through typed status
+  no VPP CLI command or CLI output parsing is needed for this control path
+```
+
+边界：
+
+```text
+This is not a production policy API.
+It directly mutates POC global state, not an epoch/snapshot model.
+It does not compile a policy blob.
+It does not implement replace/commit/rollback.
+It does not validate datapath behavior after mutation because no TUN fd is enabled in this smoke.
+It does not cover concurrency, worker cache ownership, or Android packaged VPP.
+```

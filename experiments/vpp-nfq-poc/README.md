@@ -30,6 +30,7 @@ make vpp-nfqueue-ratio
 make vpp-nfqueue-idle-cpu
 make vpp-tun-poc-build
 make vpp-tun-poc-api-status-smoke
+make vpp-tun-poc-api-policy-smoke
 ```
 
 Fetch upstream VPP `v26.02` into this experiment directory:
@@ -194,3 +195,4 @@ This proves VPP can own the NFQUEUE fd and return userspace verdicts in this Lin
 - The VPP source tree, build output, core files, and packet captures must not be committed here.
 - Raw chronological experiment notes are kept in `EXPERIMENT_LOG.md`.
 - `vpp-tun-poc-api-status-smoke` starts local VPP with `socksvr` and calls the generated `tun_poc_status` binary API through Python PAPI. It does not open TUN fds or require Android.
+- `vpp-tun-poc-api-policy-smoke` uses the same binary API path to set POC owner-policy knobs and confirm them through typed status.

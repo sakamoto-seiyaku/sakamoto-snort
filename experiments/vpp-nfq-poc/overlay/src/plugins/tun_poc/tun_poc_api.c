@@ -15,6 +15,26 @@ static u16 tun_poc_msg_id_base;
 #include <vlibapi/api_helper_macros.h>
 
 static void
+vl_api_tun_poc_owner_policy_set_t_handler (
+  vl_api_tun_poc_owner_policy_set_t *mp)
+{
+  tun_poc_main_t *tm = &tun_poc_main;
+  vl_api_tun_poc_owner_policy_set_reply_t *rmp;
+  int rv = 0;
+
+  tm->owner_cache_enabled = mp->owner_cache_enabled;
+  if (!tm->owner_cache_enabled)
+    tm->owner_cache_valid = 0;
+
+  tm->block_owner_uid_set = mp->block_owner_uid_set;
+  tm->block_owner_uid =
+    tm->block_owner_uid_set ? (i32) clib_net_to_host_u32 (mp->block_owner_uid) :
+			      -1;
+
+  REPLY_MACRO (VL_API_TUN_POC_OWNER_POLICY_SET_REPLY);
+}
+
+static void
 vl_api_tun_poc_status_t_handler (vl_api_tun_poc_status_t *mp)
 {
   tun_poc_main_t *tm = &tun_poc_main;
@@ -38,12 +58,16 @@ vl_api_tun_poc_status_t_handler (vl_api_tun_poc_status_t *mp)
 		    clib_host_to_net_u64 (tm->resolver_hits);
 		  rmp->resolver_errors =
 		    clib_host_to_net_u64 (tm->resolver_errors);
+		  rmp->owner_cache_enabled = tm->owner_cache_enabled;
 		  rmp->owner_cache_hits =
 		    clib_host_to_net_u64 (tm->owner_cache_hits);
 		  rmp->owner_cache_misses =
 		    clib_host_to_net_u64 (tm->owner_cache_misses);
 		  rmp->owner_cache_stores =
 		    clib_host_to_net_u64 (tm->owner_cache_stores);
+		  rmp->block_owner_uid_set = tm->block_owner_uid_set;
+		  rmp->block_owner_uid =
+		    clib_host_to_net_u32 ((u32) tm->block_owner_uid);
 		  rmp->uid_blocked_packets =
 		    clib_host_to_net_u64 (tm->uid_blocked_packets);
 		  rmp->last_owner_uid =

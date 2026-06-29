@@ -12,6 +12,22 @@ define tun_poc_status
   u32 context;
 };
 
+/** \brief Set the current POC owner policy knobs.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param owner_cache_enabled - non-zero enables VPP-side tuple owner cache
+    @param block_owner_uid_set - non-zero enables UID block verdict
+    @param block_owner_uid - UID to block when block_owner_uid_set is non-zero
+*/
+autoreply define tun_poc_owner_policy_set
+{
+  u32 client_index;
+  u32 context;
+  bool owner_cache_enabled;
+  bool block_owner_uid_set;
+  i32 block_owner_uid;
+};
+
 /** \brief Current TUN POC runtime status.
     @param context - sender context, to match reply w/ request
     @param retval - return value for request
@@ -25,9 +41,12 @@ define tun_poc_status
     @param resolver_queries - owner resolver requests issued by VPP
     @param resolver_hits - owner resolver replies parsed by VPP
     @param resolver_errors - owner resolver query/parse failures
+    @param owner_cache_enabled - non-zero when VPP-side owner cache is enabled
     @param owner_cache_hits - VPP-side owner cache hits
     @param owner_cache_misses - VPP-side owner cache misses
     @param owner_cache_stores - VPP-side owner cache stores
+    @param block_owner_uid_set - non-zero when UID block verdict is enabled
+    @param block_owner_uid - UID to block when block_owner_uid_set is non-zero
     @param uid_blocked_packets - packets dropped by owner UID
     @param last_owner_uid - last UID returned by resolver/cache
 */
@@ -45,9 +64,12 @@ define tun_poc_status_reply
   u64 resolver_queries;
   u64 resolver_hits;
   u64 resolver_errors;
+  bool owner_cache_enabled;
   u64 owner_cache_hits;
   u64 owner_cache_misses;
   u64 owner_cache_stores;
+  bool block_owner_uid_set;
+  i32 block_owner_uid;
   u64 uid_blocked_packets;
   i32 last_owner_uid;
 };

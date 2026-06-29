@@ -277,11 +277,23 @@ Fields:
   last_owner_uid
 ```
 
+Current mutation API:
+
+```text
+tun_poc_owner_policy_set -> tun_poc_owner_policy_set_reply
+
+Fields:
+  owner_cache_enabled
+  block_owner_uid_set
+  block_owner_uid
+```
+
 Run:
 
 ```sh
 CCACHE_DIR=/tmp/ccache make vpp-tun-poc-build
 make vpp-tun-poc-api-status-smoke
+make vpp-tun-poc-api-policy-smoke
 ```
 
 Observed result:
@@ -291,7 +303,12 @@ tun_poc_status reply:
   retval=0
   enabled=0 mode=0
   counters rx=0 tx=0 shim_tx=0 blocked=0
-  owner queries=0 hits=0 cache_hits=0 uid_blocks=0 last_uid=-1
+  owner queries=0 hits=0 cache_enabled=0 cache_hits=0 block_uid_set=0 block_uid=-1 uid_blocks=0 last_uid=-1
+
+tun_poc_owner_policy_set reply:
+  retval=0
+tun_poc_status after mutation:
+  owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
 ```
 
 This proves the minimal non-CLI status surface:
@@ -300,14 +317,15 @@ This proves the minimal non-CLI status surface:
 VPP API generator produces tun_poc.api.json and VAPI C/C++ headers.
 tun_poc registers a binary API message table at startup.
 Python PAPI can call tun_poc_status over socksvr and receive typed counters.
+Python PAPI can call tun_poc_owner_policy_set over socksvr and mutate POC policy knobs.
 ```
 
 Boundary:
 
 ```text
-This is read-only status.
+This is read-only status plus direct mutation of POC owner policy knobs.
 It does not implement fd handoff through VPP API.
-It does not implement policy replace/commit/rollback.
+It does not implement compiled policy blobs, snapshot epochs, or replace/commit/rollback.
 It does not prove Rust VAPI or a thin C ABI shim.
 It does not define final API installation/packaging.
 ```
