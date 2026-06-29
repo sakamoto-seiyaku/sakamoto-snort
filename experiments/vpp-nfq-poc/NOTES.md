@@ -295,6 +295,7 @@ CCACHE_DIR=/tmp/ccache make vpp-tun-poc-build
 make vpp-tun-poc-api-status-smoke
 make vpp-tun-poc-api-policy-smoke
 make vpp-tun-poc-vapi-c-status-smoke
+make vpp-tun-poc-rust-shim-status-smoke
 ```
 
 Observed result:
@@ -315,6 +316,11 @@ tun_poc_status via VAPI C:
   enabled=0 mode=0 retval=0
   counters rx=0 tx=0 shim_tx=0 blocked=0
   owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
+
+tun_poc_status via Rust FFI shim:
+  enabled=0 mode=0 retval=0
+  counters rx=0 tx=0 shim_tx=0 blocked=0
+  owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
 ```
 
 This proves the minimal non-CLI status surface:
@@ -325,6 +331,7 @@ tun_poc registers a binary API message table at startup.
 Python PAPI can call tun_poc_status over socksvr and receive typed counters.
 Python PAPI can call tun_poc_owner_policy_set over socksvr and mutate POC policy knobs.
 Generated VAPI C headers can be consumed by a small external C client for status calls.
+Rust can call a thin C ABI shim, which hides generated VAPI types and reaches tun_poc_status.
 ```
 
 Boundary:
@@ -333,7 +340,7 @@ Boundary:
 This is read-only status plus direct mutation of POC owner policy knobs.
 It does not implement fd handoff through VPP API.
 It does not implement compiled policy blobs, snapshot epochs, or replace/commit/rollback.
-It does not prove Rust VAPI or a thin C ABI shim.
+It does not prove Rust-native VAPI bindings.
 It does not define final API installation/packaging.
 ```
 
@@ -352,4 +359,24 @@ The smoke includes:
 
 The runtime root is under /tmp to avoid Unix socket path length limits for
 socksvr/statseg sockets.
+```
+
+Rust FFI shim notes:
+
+```text
+clients/tun_poc_control_shim.h
+clients/tun_poc_control_shim.c
+clients/tun_poc_rust_status.rs
+scripts/run-vpp-tun-poc-rust-shim-status-smoke.py
+
+Public Rust-facing surface:
+  tun_poc_control_shim_abi_version()
+  tun_poc_status_get(const char *api_sock, tun_poc_status_out_t *out)
+
+The shim keeps VAPI generated headers and message types on the C side.
+Rust sees only fixed-width repr(C) fields.
+
+The smoke links:
+  libtun_poc_control_shim.a
+  libvapiclient.so
 ```

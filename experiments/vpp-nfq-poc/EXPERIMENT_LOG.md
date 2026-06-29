@@ -5993,3 +5993,77 @@ It does not expose Rust FFI yet.
 It does not package generated VAPI headers outside the build tree.
 It does not test Android packaged VPP.
 ```
+
+### 83. Rust can call `tun_poc_status` through a thin C ABI shim
+
+问题：第 82 步证明小型 C client 可以直接消费生成的 VAPI header。Tauri/Rust 层更适合依赖一个薄
+C ABI，而不是直接绑定 VPP/VAPI 生成类型。这里验证 Rust 是否可以通过 `repr(C)` struct 和 extern
+函数调用这个 C shim，再由 shim 调 VPP `socksvr`。
+
+最小实现：
+
+```text
+clients/tun_poc_control_shim.h:
+  public C ABI only
+  TUN_POC_CONTROL_SHIM_ABI_VERSION = 1
+  tun_poc_status_out_t with fixed-width integer fields
+  tun_poc_control_shim_abi_version()
+  tun_poc_status_get(api_sock, out)
+
+clients/tun_poc_control_shim.c:
+  includes generated VAPI headers internally
+  connects to VPP socksvr through vapi_connect_ex(..., use_uds=true)
+  calls vapi_tun_poc_status(...)
+  copies generated reply into tun_poc_status_out_t
+
+clients/tun_poc_rust_status.rs:
+  defines matching #[repr(C)] TunPocStatusOut
+  checks shim ABI version
+  calls tun_poc_status_get(api_sock, &mut out)
+
+scripts/run-vpp-tun-poc-rust-shim-status-smoke.py:
+  builds the C shim object and static archive
+  builds the Rust smoke binary with rustc
+  starts local VPP with tun_poc_plugin and socksvr API socket
+  runs Rust against the socket
+```
+
+命令：
+
+```sh
+make vpp-tun-poc-rust-shim-status-smoke
+```
+
+结果：
+
+```text
+tun_poc_status via Rust FFI shim:
+  enabled=0 mode=0 retval=0
+  counters rx=0 tx=0 shim_tx=0 blocked=0
+  owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
+rust ffi client: /tmp/sakamoto-vpp-tun-poc-rust-shim-status/tun_poc_rust_status
+vpp stdout log: /tmp/sakamoto-vpp-tun-poc-rust-shim-status/vpp-stdout.log
+```
+
+结论：
+
+```text
+Rust FFI shim POC 成立：
+  Rust can call a stable-looking C ABI without including generated VAPI headers
+  the C shim can hide VAPI generated types behind fixed-width output structs
+  the path reaches real VPP socksvr and typed tun_poc_status
+
+This is the recommended substrate for a future Tauri command layer:
+  Tauri/Rust -> small C ABI shim -> VAPI -> VPP binary API
+```
+
+边界：
+
+```text
+This only calls status.
+The ABI is a POC shape, not a finalized library contract.
+It does not cover async calls, reconnect policy, threading, or cancellation.
+It does not expose owner-policy mutation through the C shim yet.
+It does not package generated VAPI headers/libs for Android or desktop release builds.
+It does not test a real Tauri command or Android packaged VPP.
+```
