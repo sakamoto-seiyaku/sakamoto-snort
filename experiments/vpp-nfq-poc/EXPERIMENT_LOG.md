@@ -5912,3 +5912,84 @@ It does not implement replace/commit/rollback.
 It does not validate datapath behavior after mutation because no TUN fd is enabled in this smoke.
 It does not cover concurrency, worker cache ownership, or Android packaged VPP.
 ```
+
+### 82. Generated VAPI C client can call `tun_poc_status`
+
+问题：第 80/81 步用 Python PAPI 验证了 binary API read/write。Tauri/Rust 推荐路径仍需要一个薄 C
+ABI shim 或生成客户端层。这里验证生成的 VAPI C header 能否直接被小型 C client 使用，通过
+`socksvr` 调用 `tun_poc_status`。
+
+最小实现：
+
+```text
+clients/tun_poc_vapi_status.c:
+  include <vapi/memclnt.api.vapi.h>
+  include <vapi/vlib.api.vapi.h>
+  include <tun_poc.api.vapi.h>
+  DEFINE_VAPI_MSG_IDS_MEMCLNT_API_JSON
+  DEFINE_VAPI_MSG_IDS_VLIB_API_JSON
+  DEFINE_VAPI_MSG_IDS_TUN_POC_API_JSON
+  vapi_connect_ex(..., use_uds=true)
+  vapi_alloc_tun_poc_status()
+  vapi_tun_poc_status(...)
+
+scripts/run-vpp-tun-poc-vapi-c-status-smoke.py:
+  compile C client against install-vpp-native headers/libs and generated tun_poc VAPI header
+  start local VPP with tun_poc_plugin and socksvr API socket
+  run the C client against the socket
+```
+
+命令：
+
+```sh
+make vpp-tun-poc-vapi-c-status-smoke
+```
+
+结果：
+
+```text
+tun_poc_status via VAPI C:
+  enabled=0 mode=0 retval=0
+  counters rx=0 tx=0 shim_tx=0 blocked=0
+  owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
+vapi c client: /tmp/sakamoto-vpp-tun-poc-vapi-c-status/tun_poc_vapi_status
+vpp stdout log: /tmp/sakamoto-vpp-tun-poc-vapi-c-status/vpp-stdout.log
+```
+
+构建注意：
+
+```text
+The smoke compiles with:
+  -D_DEFAULT_SOURCE
+  -Wno-unused-parameter
+  -Wno-sign-compare
+
+Reason:
+  Generated VPP VAPI headers use htobe*/be*toh feature macros and emit benign
+  warnings in unused generated inline functions. The POC keeps local client
+  warnings enabled but does not treat generated-header warnings as fatal.
+
+The VPP runtime root is under /tmp to keep socksvr/statseg Unix socket paths
+below path length limits.
+```
+
+结论：
+
+```text
+VAPI C client POC 成立：
+  generated tun_poc.api.vapi.h can be consumed by a small C client
+  the client can connect to VPP socksvr over UDS
+  the client can call vapi_tun_poc_status and receive typed fields
+
+This is the lower layer needed for a future thin C ABI shim callable from Rust/Tauri.
+```
+
+边界：
+
+```text
+This only calls status.
+It is a smoke client, not a stable shim ABI.
+It does not expose Rust FFI yet.
+It does not package generated VAPI headers outside the build tree.
+It does not test Android packaged VPP.
+```

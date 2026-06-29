@@ -39,6 +39,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
 | VPP binary API status surface | `tun_poc` exposes a generated `tun_poc_status` binary API; Python PAPI calls it over `socksvr` and receives typed status/counters without parsing CLI output. | Experiment 80 |
 | VPP binary API owner policy mutation | Python PAPI sets `owner_cache_enabled` and `block_owner_uid=4242` through `tun_poc_owner_policy_set`; typed status confirms the mutation. | Experiment 81 |
+| VAPI C client status call | A small C client consumes generated `tun_poc.api.vapi.h`, connects to VPP `socksvr`, and calls `vapi_tun_poc_status`. | Experiment 82 |
 | Android VPN VPP owner cache | VPP worker can cache a tuple owner UID, avoid repeated Android resolver queries on the same TCP tuple, and keep `last-uid` at the package UID on the allow path. | Experiment 78 |
 | Android VPN VPP owner-cache UDP burst | App can send a 20-packet UDP burst through VPP; VPP owner-cache reduces resolver queries to one and drops all 20 packets by UID. | Experiment 79 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
@@ -94,6 +95,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The same binary API path can mutate POC owner policy knobs:
   `tun_poc_owner_policy_set` sets owner-cache and block-owner-UID state, and
   `tun_poc_status` confirms the update without CLI output parsing.
+- Generated VAPI C headers are usable from a small external C client for the
+  status path. This is the immediate substrate for a thin C ABI shim callable
+  from Rust/Tauri.
 - Android owner lookup can return the package UID for early TCP packets and `-1`
   for later packets on the same tuple. A minimal VPP-side tuple cache is now
   proven for one active tuple; production still needs real cache sizing,
@@ -149,3 +153,6 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   It does not yet cover fd handoff, compiled policy blobs, snapshot epoch,
   replace/commit/rollback, Rust VAPI integration, API packaging, concurrency, or
   Android packaged VPP.
+- The VAPI C client POC is a smoke client only. It does not define the stable C
+  ABI that Rust should call, and it still consumes generated headers from the
+  local VPP build tree.

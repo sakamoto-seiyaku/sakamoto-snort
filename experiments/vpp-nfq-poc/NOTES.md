@@ -294,6 +294,7 @@ Run:
 CCACHE_DIR=/tmp/ccache make vpp-tun-poc-build
 make vpp-tun-poc-api-status-smoke
 make vpp-tun-poc-api-policy-smoke
+make vpp-tun-poc-vapi-c-status-smoke
 ```
 
 Observed result:
@@ -309,6 +310,11 @@ tun_poc_owner_policy_set reply:
   retval=0
 tun_poc_status after mutation:
   owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+
+tun_poc_status via VAPI C:
+  enabled=0 mode=0 retval=0
+  counters rx=0 tx=0 shim_tx=0 blocked=0
+  owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
 ```
 
 This proves the minimal non-CLI status surface:
@@ -318,6 +324,7 @@ VPP API generator produces tun_poc.api.json and VAPI C/C++ headers.
 tun_poc registers a binary API message table at startup.
 Python PAPI can call tun_poc_status over socksvr and receive typed counters.
 Python PAPI can call tun_poc_owner_policy_set over socksvr and mutate POC policy knobs.
+Generated VAPI C headers can be consumed by a small external C client for status calls.
 ```
 
 Boundary:
@@ -328,4 +335,21 @@ It does not implement fd handoff through VPP API.
 It does not implement compiled policy blobs, snapshot epochs, or replace/commit/rollback.
 It does not prove Rust VAPI or a thin C ABI shim.
 It does not define final API installation/packaging.
+```
+
+VAPI C client notes:
+
+```text
+clients/tun_poc_vapi_status.c
+scripts/run-vpp-tun-poc-vapi-c-status-smoke.py
+
+The smoke links against:
+  install-vpp-native/vpp/lib/x86_64-linux-gnu/libvapiclient.so
+
+The smoke includes:
+  install-vpp-native/vpp/include
+  build-vpp-native/vpp/CMakeFiles/vpp-api/vapi
+
+The runtime root is under /tmp to avoid Unix socket path length limits for
+socksvr/statseg sockets.
 ```
