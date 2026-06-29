@@ -6067,3 +6067,81 @@ It does not expose owner-policy mutation through the C shim yet.
 It does not package generated VAPI headers/libs for Android or desktop release builds.
 It does not test a real Tauri command or Android packaged VPP.
 ```
+
+### 84. Rust can mutate `tun_poc` owner policy through the C ABI shim
+
+问题：第 83 步只验证了 Rust-facing status read。Tauri 控制面还需要 write path。这里把
+`tun_poc_owner_policy_set` 暴露到同一个薄 C ABI shim，验证 Rust 可以设置 POC owner policy，
+再读 status 确认 mutation。
+
+最小实现：
+
+```text
+clients/tun_poc_control_shim.h:
+  tun_poc_owner_policy_t
+  tun_poc_owner_policy_set(api_sock, policy, vpp_retval)
+
+clients/tun_poc_control_shim.c:
+  allocates vapi_msg_tun_poc_owner_policy_set
+  copies owner_cache_enabled/block_owner_uid_set/block_owner_uid into payload
+  calls vapi_tun_poc_owner_policy_set
+  returns transport/shim rc and optional VPP retval
+
+clients/tun_poc_rust_policy.rs:
+  defines matching #[repr(C)] TunPocOwnerPolicy
+  verifies fresh policy is disabled
+  calls tun_poc_owner_policy_set(... block_owner_uid=4242 ...)
+  calls tun_poc_status_get and validates the new fields
+
+scripts/run-vpp-tun-poc-rust-shim-policy-smoke.py:
+  reuses the Rust shim build helper
+  starts local VPP with tun_poc_plugin and socksvr
+  runs the Rust policy client against the socket
+```
+
+命令：
+
+```sh
+make vpp-tun-poc-rust-shim-status-smoke
+make vpp-tun-poc-rust-shim-policy-smoke
+```
+
+结果：
+
+```text
+make vpp-tun-poc-rust-shim-status-smoke:
+  tun_poc_status via Rust FFI shim:
+    enabled=0 mode=0 retval=0
+    counters rx=0 tx=0 shim_tx=0 blocked=0
+    owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
+
+make vpp-tun-poc-rust-shim-policy-smoke:
+  tun_poc_owner_policy_set via Rust FFI shim:
+    retval=0
+  tun_poc_status after Rust FFI mutation:
+    owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+```
+
+结论：
+
+```text
+Rust FFI shim write POC 成立：
+  Rust can call the thin C ABI shim for both read and write paths
+  the C shim hides generated VAPI message structs from Rust
+  owner policy mutation reaches real VPP binary API over socksvr
+  typed status confirms the mutation without CLI parsing
+
+For the Tauri discussion, the minimum communication shape is now proven:
+  Tauri/Rust -> C ABI shim -> VAPI -> VPP binary API
+```
+
+边界：
+
+```text
+This only mutates POC owner policy knobs.
+It is not the final policy model.
+It does not implement compiled policy blobs, epochs, replace/commit/rollback, or rollback-on-failure.
+It still opens a short-lived VAPI connection per shim call.
+It does not cover async/reconnect/thread ownership rules.
+It does not package the shim for Android or desktop release builds.
+```

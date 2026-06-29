@@ -31,8 +31,19 @@ typedef struct
   int32_t last_owner_uid;
 } tun_poc_status_out_t;
 
+typedef struct
+{
+  uint8_t owner_cache_enabled;
+  uint8_t block_owner_uid_set;
+  uint16_t reserved0;
+  int32_t block_owner_uid;
+} tun_poc_owner_policy_t;
+
 uint32_t tun_poc_control_shim_abi_version (void);
 int tun_poc_status_get (const char *api_sock, tun_poc_status_out_t *out);
+int tun_poc_owner_policy_set (const char *api_sock,
+			      const tun_poc_owner_policy_t *policy,
+			      int32_t *vpp_retval);
 
 #ifdef __cplusplus
 }

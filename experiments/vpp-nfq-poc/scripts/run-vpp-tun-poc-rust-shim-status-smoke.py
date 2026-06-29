@@ -19,16 +19,21 @@ def load_status_smoke_module():
     return module
 
 
-def build_shim_and_rust_client(poc_dir: Path, runtime_root: Path) -> Path:
+def build_shim_and_rust_client(
+    poc_dir: Path,
+    runtime_root: Path,
+    rust_source_name: str = "tun_poc_rust_status.rs",
+    rust_bin_name: str = "tun_poc_rust_status",
+) -> Path:
     vpp_src = poc_dir / "work" / "vpp"
     vpp_install = vpp_src / "build-root" / "install-vpp-native" / "vpp"
     vpp_build = vpp_src / "build-root" / "build-vpp-native" / "vpp"
     lib_dir = vpp_install / "lib" / "x86_64-linux-gnu"
     shim_source = poc_dir / "clients" / "tun_poc_control_shim.c"
-    rust_source = poc_dir / "clients" / "tun_poc_rust_status.rs"
+    rust_source = poc_dir / "clients" / rust_source_name
     shim_object = runtime_root / "tun_poc_control_shim.o"
     shim_lib = runtime_root / "libtun_poc_control_shim.a"
-    rust_bin = runtime_root / "tun_poc_rust_status"
+    rust_bin = runtime_root / rust_bin_name
 
     subprocess.run(
         [

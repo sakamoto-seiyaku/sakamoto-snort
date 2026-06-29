@@ -296,6 +296,7 @@ make vpp-tun-poc-api-status-smoke
 make vpp-tun-poc-api-policy-smoke
 make vpp-tun-poc-vapi-c-status-smoke
 make vpp-tun-poc-rust-shim-status-smoke
+make vpp-tun-poc-rust-shim-policy-smoke
 ```
 
 Observed result:
@@ -321,6 +322,11 @@ tun_poc_status via Rust FFI shim:
   enabled=0 mode=0 retval=0
   counters rx=0 tx=0 shim_tx=0 blocked=0
   owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
+
+tun_poc_owner_policy_set via Rust FFI shim:
+  retval=0
+tun_poc_status after Rust FFI mutation:
+  owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
 ```
 
 This proves the minimal non-CLI status surface:
@@ -332,6 +338,7 @@ Python PAPI can call tun_poc_status over socksvr and receive typed counters.
 Python PAPI can call tun_poc_owner_policy_set over socksvr and mutate POC policy knobs.
 Generated VAPI C headers can be consumed by a small external C client for status calls.
 Rust can call a thin C ABI shim, which hides generated VAPI types and reaches tun_poc_status.
+Rust can also call the same C ABI shim to mutate owner policy and verify it through status.
 ```
 
 Boundary:
@@ -367,11 +374,14 @@ Rust FFI shim notes:
 clients/tun_poc_control_shim.h
 clients/tun_poc_control_shim.c
 clients/tun_poc_rust_status.rs
+clients/tun_poc_rust_policy.rs
 scripts/run-vpp-tun-poc-rust-shim-status-smoke.py
+scripts/run-vpp-tun-poc-rust-shim-policy-smoke.py
 
 Public Rust-facing surface:
   tun_poc_control_shim_abi_version()
   tun_poc_status_get(const char *api_sock, tun_poc_status_out_t *out)
+  tun_poc_owner_policy_set(const char *api_sock, const tun_poc_owner_policy_t *policy, int32_t *vpp_retval)
 
 The shim keeps VAPI generated headers and message types on the C side.
 Rust sees only fixed-width repr(C) fields.
@@ -379,4 +389,12 @@ Rust sees only fixed-width repr(C) fields.
 The smoke links:
   libtun_poc_control_shim.a
   libvapiclient.so
+```
+
+The policy smoke sets:
+
+```text
+owner_cache_enabled=1
+block_owner_uid_set=1
+block_owner_uid=4242
 ```
