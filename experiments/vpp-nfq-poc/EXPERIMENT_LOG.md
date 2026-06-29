@@ -6224,3 +6224,87 @@ It does not patch copied VPP shared-library RUNPATH to $ORIGIN.
 It does not prove Android packaging or Tauri bundling.
 It still compiles the shim from source during staging.
 ```
+
+### 86. Rust can reuse one C-shim VAPI client handle
+
+问题：第 83/84 步的 one-shot shim 每次调用都 open/connect/call/disconnect。Tauri 常驻进程更适合
+持有一个可复用 control client handle。这里验证 C ABI 是否能暴露 opaque client，并让 Rust 在同一
+VAPI 连接上连续执行 status、policy set、status、policy clear、status。
+
+最小实现：
+
+```text
+clients/tun_poc_control_shim.h:
+  typedef struct tun_poc_client tun_poc_client_t;
+  tun_poc_client_open(api_sock, &client)
+  tun_poc_client_close(client)
+  tun_poc_client_status_get(client, out)
+  tun_poc_client_owner_policy_set(client, policy, vpp_retval)
+
+clients/tun_poc_control_shim.c:
+  owns vapi_ctx_t inside opaque tun_poc_client
+  one-shot APIs now delegate to open/call/close
+
+clients/tun_poc_rust_persistent.rs:
+  opens one client
+  reads fresh status
+  sets owner_cache_enabled=1/block_owner_uid=4242
+  reads status and validates mutation
+  clears owner policy
+  reads status and validates clear
+  closes the client
+```
+
+命令：
+
+```sh
+make vpp-tun-poc-rust-shim-status-smoke
+make vpp-tun-poc-rust-shim-policy-smoke
+make vpp-tun-poc-rust-shim-persistent-smoke
+```
+
+结果：
+
+```text
+make vpp-tun-poc-rust-shim-status-smoke:
+  tun_poc_status via Rust FFI shim:
+    enabled=0 mode=0 retval=0
+    counters rx=0 tx=0 shim_tx=0 blocked=0
+    owner cache_enabled=0 block_uid_set=0 block_uid=-1 last_uid=-1
+
+make vpp-tun-poc-rust-shim-policy-smoke:
+  tun_poc_owner_policy_set via Rust FFI shim:
+    retval=0
+  tun_poc_status after Rust FFI mutation:
+    owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+
+make vpp-tun-poc-rust-shim-persistent-smoke:
+  tun_poc persistent Rust FFI shim:
+    before owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+    after_set owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+    after_clear owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+```
+
+结论：
+
+```text
+Persistent shim client POC 成立：
+  C ABI can expose an opaque client handle
+  Rust can keep the handle across multiple calls
+  VAPI blocking calls work over one reused socksvr connection
+  existing one-shot status/policy APIs remain compatible
+
+This reduces the product need to choose between:
+  one-shot helpers for simple commands/tests
+  managed long-lived client for Tauri stateful control
+```
+
+边界：
+
+```text
+This proves only single-threaded reuse.
+It does not define Send/Sync ownership for Rust.
+It does not implement reconnect after VPP restart.
+It does not cover cancellation, async command queues, or concurrent calls.
+It still mutates POC owner-policy knobs, not final compiled policy snapshots.
+```

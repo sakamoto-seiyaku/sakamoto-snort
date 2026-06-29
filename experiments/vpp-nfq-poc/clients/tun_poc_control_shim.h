@@ -39,7 +39,16 @@ typedef struct
   int32_t block_owner_uid;
 } tun_poc_owner_policy_t;
 
+typedef struct tun_poc_client tun_poc_client_t;
+
 uint32_t tun_poc_control_shim_abi_version (void);
+int tun_poc_client_open (const char *api_sock, tun_poc_client_t **client_out);
+int tun_poc_client_close (tun_poc_client_t *client);
+int tun_poc_client_status_get (tun_poc_client_t *client,
+			       tun_poc_status_out_t *out);
+int tun_poc_client_owner_policy_set (tun_poc_client_t *client,
+				     const tun_poc_owner_policy_t *policy,
+				     int32_t *vpp_retval);
 int tun_poc_status_get (const char *api_sock, tun_poc_status_out_t *out);
 int tun_poc_owner_policy_set (const char *api_sock,
 			      const tun_poc_owner_policy_t *policy,

@@ -35,6 +35,7 @@ make vpp-tun-poc-vapi-c-status-smoke
 make vpp-tun-poc-rust-shim-status-smoke
 make vpp-tun-poc-rust-shim-policy-smoke
 make vpp-tun-poc-rust-shim-sdk-smoke
+make vpp-tun-poc-rust-shim-persistent-smoke
 ```
 
 Fetch upstream VPP `v26.02` into this experiment directory:
@@ -204,3 +205,4 @@ This proves VPP can own the NFQUEUE fd and return userspace verdicts in this Lin
 - `vpp-tun-poc-rust-shim-status-smoke` compiles a thin C ABI shim plus a Rust FFI client, then calls `tun_poc_status` through VPP `socksvr`.
 - `vpp-tun-poc-rust-shim-policy-smoke` uses the same Rust FFI shim path to set owner-policy knobs and confirm the mutation through typed status.
 - `vpp-tun-poc-rust-shim-sdk-smoke` stages the shim header/lib plus VPP client runtime libs into a local SDK, verifies staged linkage with `LD_LIBRARY_PATH`, then runs the Rust policy smoke.
+- `vpp-tun-poc-rust-shim-persistent-smoke` opens one C-shim client handle and reuses one VAPI connection for status, policy set, status, policy clear, and status.

@@ -3,6 +3,7 @@
 #include "tun_poc_control_shim.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 #include <endian.h>
 
@@ -25,6 +26,11 @@ enum
   TUN_POC_SHIM_ECALL = -5,
   TUN_POC_SHIM_ENOREPLY = -6,
   TUN_POC_SHIM_EDISCONNECT = -7,
+};
+
+struct tun_poc_client
+{
+  vapi_ctx_t ctx;
 };
 
 typedef struct
@@ -155,36 +161,107 @@ tun_poc_copy_status (tun_poc_status_out_t *out,
 }
 
 int
-tun_poc_status_get (const char *api_sock, tun_poc_status_out_t *out)
+tun_poc_client_open (const char *api_sock, tun_poc_client_t **client_out)
 {
-  tun_poc_status_call_t call;
-  vapi_ctx_t ctx;
+  tun_poc_client_t *client;
   vapi_error_e rv;
-  int rc;
 
-  if (api_sock == NULL || out == NULL)
+  if (api_sock == NULL || client_out == NULL)
     return TUN_POC_SHIM_EINVAL;
+  *client_out = NULL;
 
-  rv = vapi_ctx_alloc (&ctx);
+  client = calloc (1, sizeof (*client));
+  if (client == NULL)
+    return TUN_POC_SHIM_EALLOC;
+
+  rv = vapi_ctx_alloc (&client->ctx);
   if (rv != VAPI_OK)
-    return TUN_POC_SHIM_ECTX;
+    {
+      free (client);
+      return TUN_POC_SHIM_ECTX;
+    }
 
-  rv = vapi_connect_ex (ctx, "tun-poc-control-shim", api_sock, 64, 32,
+  rv = vapi_connect_ex (client->ctx, "tun-poc-control-shim", api_sock, 64, 32,
 			VAPI_MODE_BLOCKING, true, true);
   if (rv != VAPI_OK)
     {
-      vapi_ctx_free (ctx);
+      vapi_ctx_free (client->ctx);
+      free (client);
       return TUN_POC_SHIM_ECONNECT;
     }
 
-  rc = tun_poc_call_status (ctx, &call);
+  *client_out = client;
+  return 0;
+}
+
+int
+tun_poc_client_close (tun_poc_client_t *client)
+{
+  vapi_error_e rv;
+
+  if (client == NULL)
+    return TUN_POC_SHIM_EINVAL;
+
+  rv = vapi_disconnect (client->ctx);
+  vapi_ctx_free (client->ctx);
+  free (client);
+  if (rv != VAPI_OK)
+    return TUN_POC_SHIM_EDISCONNECT;
+
+  return 0;
+}
+
+int
+tun_poc_client_status_get (tun_poc_client_t *client, tun_poc_status_out_t *out)
+{
+  tun_poc_status_call_t call;
+  int rc;
+
+  if (client == NULL || out == NULL)
+    return TUN_POC_SHIM_EINVAL;
+
+  rc = tun_poc_call_status (client->ctx, &call);
   if (rc == 0)
     tun_poc_copy_status (out, &call.reply);
 
-  rv = vapi_disconnect (ctx);
-  vapi_ctx_free (ctx);
-  if (rv != VAPI_OK)
-    return TUN_POC_SHIM_EDISCONNECT;
+  return rc;
+}
+
+int
+tun_poc_client_owner_policy_set (tun_poc_client_t *client,
+				 const tun_poc_owner_policy_t *policy,
+				 int32_t *vpp_retval)
+{
+  tun_poc_policy_set_call_t call;
+  int rc;
+
+  if (client == NULL || policy == NULL)
+    return TUN_POC_SHIM_EINVAL;
+  if (vpp_retval != NULL)
+    *vpp_retval = 0;
+
+  rc = tun_poc_call_policy_set (client->ctx, policy, &call);
+  if (rc == 0 && vpp_retval != NULL)
+    *vpp_retval = call.reply.retval;
+
+  return rc;
+}
+
+int
+tun_poc_status_get (const char *api_sock, tun_poc_status_out_t *out)
+{
+  tun_poc_client_t *client;
+  int rc;
+  int close_rc;
+
+  rc = tun_poc_client_open (api_sock, &client);
+  if (rc != 0)
+    return rc;
+
+  rc = tun_poc_client_status_get (client, out);
+  close_rc = tun_poc_client_close (client);
+  if (rc == 0 && close_rc != 0)
+    return close_rc;
 
   return rc;
 }
@@ -194,36 +271,18 @@ tun_poc_owner_policy_set (const char *api_sock,
 			  const tun_poc_owner_policy_t *policy,
 			  int32_t *vpp_retval)
 {
-  tun_poc_policy_set_call_t call;
-  vapi_ctx_t ctx;
-  vapi_error_e rv;
+  tun_poc_client_t *client;
   int rc;
+  int close_rc;
 
-  if (api_sock == NULL || policy == NULL)
-    return TUN_POC_SHIM_EINVAL;
-  if (vpp_retval != NULL)
-    *vpp_retval = 0;
+  rc = tun_poc_client_open (api_sock, &client);
+  if (rc != 0)
+    return rc;
 
-  rv = vapi_ctx_alloc (&ctx);
-  if (rv != VAPI_OK)
-    return TUN_POC_SHIM_ECTX;
-
-  rv = vapi_connect_ex (ctx, "tun-poc-control-shim", api_sock, 64, 32,
-			VAPI_MODE_BLOCKING, true, true);
-  if (rv != VAPI_OK)
-    {
-      vapi_ctx_free (ctx);
-      return TUN_POC_SHIM_ECONNECT;
-    }
-
-  rc = tun_poc_call_policy_set (ctx, policy, &call);
-  if (rc == 0 && vpp_retval != NULL)
-    *vpp_retval = call.reply.retval;
-
-  rv = vapi_disconnect (ctx);
-  vapi_ctx_free (ctx);
-  if (rv != VAPI_OK)
-    return TUN_POC_SHIM_EDISCONNECT;
+  rc = tun_poc_client_owner_policy_set (client, policy, vpp_retval);
+  close_rc = tun_poc_client_close (client);
+  if (rc == 0 && close_rc != 0)
+    return close_rc;
 
   return rc;
 }

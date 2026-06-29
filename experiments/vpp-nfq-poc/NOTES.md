@@ -298,6 +298,7 @@ make vpp-tun-poc-vapi-c-status-smoke
 make vpp-tun-poc-rust-shim-status-smoke
 make vpp-tun-poc-rust-shim-policy-smoke
 make vpp-tun-poc-rust-shim-sdk-smoke
+make vpp-tun-poc-rust-shim-persistent-smoke
 ```
 
 Observed result:
@@ -334,9 +335,14 @@ Staged SDK smoke:
   tun_poc_owner_policy_set via Rust FFI shim:
     retval=0
   tun_poc_status after Rust FFI mutation:
-    owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+  owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
   staged sdk: /tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/sdk
   loader env: LD_LIBRARY_PATH=/tmp/sakamoto-vpp-tun-poc-rust-shim-sdk/sdk/lib
+
+tun_poc persistent Rust FFI shim:
+  before owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+  after_set owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+  after_clear owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
 ```
 
 This proves the minimal non-CLI status surface:
@@ -350,6 +356,7 @@ Generated VAPI C headers can be consumed by a small external C client for status
 Rust can call a thin C ABI shim, which hides generated VAPI types and reaches tun_poc_status.
 Rust can also call the same C ABI shim to mutate owner policy and verify it through status.
 The Rust shim client can link and run from a staged local Linux SDK when the launcher sets the loader path to the staged lib dir.
+Rust can keep one opaque C-shim client handle open and reuse the same VAPI connection for multiple read/write calls.
 ```
 
 Boundary:
@@ -360,6 +367,7 @@ It does not implement fd handoff through VPP API.
 It does not implement compiled policy blobs, snapshot epochs, or replace/commit/rollback.
 It does not prove Rust-native VAPI bindings.
 It does not define final Android/Tauri installation packaging.
+It does not define async/reconnect/thread ownership for a long-lived client.
 ```
 
 VAPI C client notes:
@@ -386,11 +394,17 @@ clients/tun_poc_control_shim.h
 clients/tun_poc_control_shim.c
 clients/tun_poc_rust_status.rs
 clients/tun_poc_rust_policy.rs
+clients/tun_poc_rust_persistent.rs
 scripts/run-vpp-tun-poc-rust-shim-status-smoke.py
 scripts/run-vpp-tun-poc-rust-shim-policy-smoke.py
+scripts/run-vpp-tun-poc-rust-shim-persistent-smoke.py
 
 Public Rust-facing surface:
   tun_poc_control_shim_abi_version()
+  tun_poc_client_open(const char *api_sock, tun_poc_client_t **client_out)
+  tun_poc_client_close(tun_poc_client_t *client)
+  tun_poc_client_status_get(tun_poc_client_t *client, tun_poc_status_out_t *out)
+  tun_poc_client_owner_policy_set(tun_poc_client_t *client, const tun_poc_owner_policy_t *policy, int32_t *vpp_retval)
   tun_poc_status_get(const char *api_sock, tun_poc_status_out_t *out)
   tun_poc_owner_policy_set(const char *api_sock, const tun_poc_owner_policy_t *policy, int32_t *vpp_retval)
 
