@@ -102,6 +102,10 @@ typedef struct
   u64 owner_cache_stores;
   u64 uid_blocked_packets;
   u64 uid_blocked_bytes;
+  u8 pending_owner_policy_valid;
+  u8 pending_owner_cache_enabled;
+  u8 pending_block_owner_uid_set;
+  i32 pending_block_owner_uid;
   u64 main_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 shim_fd_thread_hits[TUN_POC_MAX_THREAD_HITS];
   u64 rx_node_thread_hits[TUN_POC_MAX_THREAD_HITS];

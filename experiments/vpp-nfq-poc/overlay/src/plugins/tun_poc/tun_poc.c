@@ -58,6 +58,7 @@ tun_poc_main_t tun_poc_main = {
   .last_owner_uid = -1,
   .owner_cache_uid = -1,
   .block_owner_uid = -1,
+  .pending_block_owner_uid = -1,
 };
 
 extern vlib_node_registration_t tun_poc_rx_handoff_node;

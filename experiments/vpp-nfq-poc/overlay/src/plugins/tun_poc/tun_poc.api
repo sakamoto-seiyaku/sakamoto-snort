@@ -28,6 +28,42 @@ autoreply define tun_poc_owner_policy_set
   i32 block_owner_uid;
 };
 
+/** \brief Stage POC owner policy knobs without changing active policy.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param owner_cache_enabled - non-zero enables VPP-side tuple owner cache
+    @param block_owner_uid_set - non-zero enables UID block verdict
+    @param block_owner_uid - UID to block when block_owner_uid_set is non-zero
+*/
+autoreply define tun_poc_owner_policy_stage
+{
+  u32 client_index;
+  u32 context;
+  bool owner_cache_enabled;
+  bool block_owner_uid_set;
+  i32 block_owner_uid;
+};
+
+/** \brief Commit staged POC owner policy knobs to active policy.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+*/
+autoreply define tun_poc_owner_policy_commit
+{
+  u32 client_index;
+  u32 context;
+};
+
+/** \brief Discard staged POC owner policy knobs.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+*/
+autoreply define tun_poc_owner_policy_rollback
+{
+  u32 client_index;
+  u32 context;
+};
+
 /** \brief Current TUN POC runtime status.
     @param context - sender context, to match reply w/ request
     @param retval - return value for request

@@ -6441,3 +6441,73 @@ It does not define async scheduling or cancellation.
 It does not test mutation interleaving, restart while locked, or poisoning recovery.
 It uses an unsafe Send wrapper around the opaque pointer and relies on external serialization.
 ```
+
+### 89. VPP binary API can stage, rollback, and commit owner policy
+
+问题：此前 owner-policy API 是直接 mutation。产品策略更新更接近 replace/commit/rollback：先准备新策略，
+确认无误后 commit；失败或取消时 rollback。这里先在 VPP binary API 层验证最小 transaction 语义。
+
+最小实现：
+
+```text
+tun_poc.api:
+  tun_poc_owner_policy_stage(owner_cache_enabled, block_owner_uid_set, block_owner_uid)
+  tun_poc_owner_policy_commit()
+  tun_poc_owner_policy_rollback()
+
+tun_poc_main_t:
+  pending_owner_policy_valid
+  pending_owner_cache_enabled
+  pending_block_owner_uid_set
+  pending_block_owner_uid
+
+tun_poc_api.c:
+  stage writes pending fields only
+  rollback clears pending fields
+  commit applies pending fields to active owner policy and clears pending
+  direct owner_policy_set remains as the immediate mutation path
+```
+
+命令：
+
+```sh
+CCACHE_DIR=/tmp/ccache make vpp-tun-poc-build
+make vpp-tun-poc-api-status-smoke
+make vpp-tun-poc-api-policy-smoke
+make vpp-tun-poc-api-policy-transaction-smoke
+```
+
+结果：
+
+```text
+tun_poc_owner_policy transaction via binary API:
+  stage retval=0
+  after_stage active owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+  rollback retval=0
+  after_rollback active owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+  commit retval=0
+  after_commit active owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+vpp stdout log: /tmp/sakamoto-vpp-tun-poc-api-policy-transaction/vpp-stdout.log
+```
+
+结论：
+
+```text
+Owner-policy transaction POC 成立：
+  stage does not affect active status
+  rollback discards staged state
+  commit is the only step that changes active owner policy
+  direct owner_policy_set remains compatible
+
+This proves the VPP side can support a two-phase product policy update shape.
+```
+
+边界：
+
+```text
+This is only owner-policy knobs, not a compiled policy blob.
+It has no policy epoch/generation in status yet.
+It does not validate schema, size limits, partial failure, or multi-client ownership.
+It does not expose transaction APIs through the C shim/Rust layer yet.
+It does not make datapath reads lock-free or atomic beyond this POC global-state update.
+```

@@ -39,6 +39,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPN VPP owner resolver bridge | VPP worker queries a native Android resolver fd; native calls `ConnectivityManager.getConnectionOwnerUid` and returns the real package UID while HTTP still succeeds. | Experiment 68 |
 | VPP binary API status surface | `tun_poc` exposes a generated `tun_poc_status` binary API; Python PAPI calls it over `socksvr` and receives typed status/counters without parsing CLI output. | Experiment 80 |
 | VPP binary API owner policy mutation | Python PAPI sets `owner_cache_enabled` and `block_owner_uid=4242` through `tun_poc_owner_policy_set`; typed status confirms the mutation. | Experiment 81 |
+| VPP binary API owner policy transaction | Python PAPI stages owner-policy knobs, confirms active status is unchanged, rolls back, stages again, commits, and confirms active status changes only after commit. | Experiment 89 |
 | VAPI C client status call | A small C client consumes generated `tun_poc.api.vapi.h`, connects to VPP `socksvr`, and calls `vapi_tun_poc_status`. | Experiment 82 |
 | Rust FFI C-shim status call | Rust calls a thin C ABI shim with `repr(C)` status output; the shim hides generated VAPI types and calls `tun_poc_status` through VPP `socksvr`. | Experiment 83 |
 | Rust FFI C-shim owner policy mutation | Rust calls the same C ABI shim to set `owner_cache_enabled` and `block_owner_uid=4242`; a follow-up status read confirms the mutation. | Experiment 84 |
@@ -101,6 +102,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The same binary API path can mutate POC owner policy knobs:
   `tun_poc_owner_policy_set` sets owner-cache and block-owner-UID state, and
   `tun_poc_status` confirms the update without CLI output parsing.
+- The VPP binary API can also stage, rollback, and commit owner-policy knobs:
+  staged policy does not affect active status, rollback discards it, and commit
+  is the step that changes active state.
 - Generated VAPI C headers are usable from a small external C client for the
   status path. This is the immediate substrate for a thin C ABI shim callable
   from Rust/Tauri.
@@ -176,10 +180,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - No sustained performance or battery test has been run beyond idle/short loops
   and the 20-packet UDP owner-cache burst.
 - The Android app is still a POC shell, not a product UI or policy manager.
-- The binary API POC only covers status and a direct owner-policy knob mutation.
-  It does not yet cover fd handoff, compiled policy blobs, snapshot epoch,
-  replace/commit/rollback, Rust VAPI integration, concurrency, or Android
-  packaged VPP.
+- The binary API POC covers status, direct owner-policy mutation, and a minimal
+  owner-policy transaction. It does not yet cover fd handoff, compiled policy
+  blobs, snapshot epoch/generation, Rust VAPI integration, or Android packaged
+  VPP.
 - The VAPI C client POC is a smoke client only. It does not define the stable C
   ABI that Rust should call, and it still consumes generated headers from the
   local VPP build tree.

@@ -294,6 +294,7 @@ Run:
 CCACHE_DIR=/tmp/ccache make vpp-tun-poc-build
 make vpp-tun-poc-api-status-smoke
 make vpp-tun-poc-api-policy-smoke
+make vpp-tun-poc-api-policy-transaction-smoke
 make vpp-tun-poc-vapi-c-status-smoke
 make vpp-tun-poc-rust-shim-status-smoke
 make vpp-tun-poc-rust-shim-policy-smoke
@@ -316,6 +317,14 @@ tun_poc_owner_policy_set reply:
   retval=0
 tun_poc_status after mutation:
   owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
+
+tun_poc_owner_policy transaction via binary API:
+  stage retval=0
+  after_stage active owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+  rollback retval=0
+  after_rollback active owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+  commit retval=0
+  after_commit active owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
 
 tun_poc_status via VAPI C:
   enabled=0 mode=0 retval=0
@@ -363,6 +372,7 @@ VPP API generator produces tun_poc.api.json and VAPI C/C++ headers.
 tun_poc registers a binary API message table at startup.
 Python PAPI can call tun_poc_status over socksvr and receive typed counters.
 Python PAPI can call tun_poc_owner_policy_set over socksvr and mutate POC policy knobs.
+Python PAPI can stage, rollback, and commit owner-policy knobs through typed binary API.
 Generated VAPI C headers can be consumed by a small external C client for status calls.
 Rust can call a thin C ABI shim, which hides generated VAPI types and reaches tun_poc_status.
 Rust can also call the same C ABI shim to mutate owner policy and verify it through status.
@@ -377,7 +387,7 @@ Boundary:
 ```text
 This is read-only status plus direct mutation of POC owner policy knobs.
 It does not implement fd handoff through VPP API.
-It does not implement compiled policy blobs, snapshot epochs, or replace/commit/rollback.
+It does not implement compiled policy blobs or snapshot epochs.
 It does not prove Rust-native VAPI bindings.
 It does not define final Android/Tauri installation packaging.
 It does not define async/reconnect/thread ownership for a long-lived client.
@@ -390,6 +400,7 @@ VAPI C client notes:
 ```text
 clients/tun_poc_vapi_status.c
 scripts/run-vpp-tun-poc-vapi-c-status-smoke.py
+scripts/run-vpp-tun-poc-api-policy-transaction-smoke.py
 
 The smoke links against:
   install-vpp-native/vpp/lib/x86_64-linux-gnu/libvapiclient.so

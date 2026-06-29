@@ -15,6 +15,18 @@ static u16 tun_poc_msg_id_base;
 #include <vlibapi/api_helper_macros.h>
 
 static void
+tun_poc_apply_owner_policy (tun_poc_main_t *tm, u8 owner_cache_enabled,
+			    u8 block_owner_uid_set, i32 block_owner_uid)
+{
+  tm->owner_cache_enabled = owner_cache_enabled;
+  if (!tm->owner_cache_enabled)
+    tm->owner_cache_valid = 0;
+
+  tm->block_owner_uid_set = block_owner_uid_set;
+  tm->block_owner_uid = tm->block_owner_uid_set ? block_owner_uid : -1;
+}
+
+static void
 vl_api_tun_poc_owner_policy_set_t_handler (
   vl_api_tun_poc_owner_policy_set_t *mp)
 {
@@ -22,16 +34,70 @@ vl_api_tun_poc_owner_policy_set_t_handler (
   vl_api_tun_poc_owner_policy_set_reply_t *rmp;
   int rv = 0;
 
-  tm->owner_cache_enabled = mp->owner_cache_enabled;
-  if (!tm->owner_cache_enabled)
-    tm->owner_cache_valid = 0;
-
-  tm->block_owner_uid_set = mp->block_owner_uid_set;
-  tm->block_owner_uid =
-    tm->block_owner_uid_set ? (i32) clib_net_to_host_u32 (mp->block_owner_uid) :
-			      -1;
+  tun_poc_apply_owner_policy (
+    tm, mp->owner_cache_enabled, mp->block_owner_uid_set,
+    (i32) clib_net_to_host_u32 (mp->block_owner_uid));
 
   REPLY_MACRO (VL_API_TUN_POC_OWNER_POLICY_SET_REPLY);
+}
+
+static void
+vl_api_tun_poc_owner_policy_stage_t_handler (
+  vl_api_tun_poc_owner_policy_stage_t *mp)
+{
+  tun_poc_main_t *tm = &tun_poc_main;
+  vl_api_tun_poc_owner_policy_stage_reply_t *rmp;
+  int rv = 0;
+
+  tm->pending_owner_policy_valid = 1;
+  tm->pending_owner_cache_enabled = mp->owner_cache_enabled;
+  tm->pending_block_owner_uid_set = mp->block_owner_uid_set;
+  tm->pending_block_owner_uid =
+    tm->pending_block_owner_uid_set ?
+      (i32) clib_net_to_host_u32 (mp->block_owner_uid) :
+      -1;
+
+  REPLY_MACRO (VL_API_TUN_POC_OWNER_POLICY_STAGE_REPLY);
+}
+
+static void
+vl_api_tun_poc_owner_policy_commit_t_handler (
+  vl_api_tun_poc_owner_policy_commit_t *mp)
+{
+  tun_poc_main_t *tm = &tun_poc_main;
+  vl_api_tun_poc_owner_policy_commit_reply_t *rmp;
+  int rv = 0;
+
+  if (!tm->pending_owner_policy_valid)
+    rv = -1;
+  else
+    {
+      tun_poc_apply_owner_policy (tm, tm->pending_owner_cache_enabled,
+				  tm->pending_block_owner_uid_set,
+				  tm->pending_block_owner_uid);
+      tm->pending_owner_policy_valid = 0;
+      tm->pending_owner_cache_enabled = 0;
+      tm->pending_block_owner_uid_set = 0;
+      tm->pending_block_owner_uid = -1;
+    }
+
+  REPLY_MACRO (VL_API_TUN_POC_OWNER_POLICY_COMMIT_REPLY);
+}
+
+static void
+vl_api_tun_poc_owner_policy_rollback_t_handler (
+  vl_api_tun_poc_owner_policy_rollback_t *mp)
+{
+  tun_poc_main_t *tm = &tun_poc_main;
+  vl_api_tun_poc_owner_policy_rollback_reply_t *rmp;
+  int rv = 0;
+
+  tm->pending_owner_policy_valid = 0;
+  tm->pending_owner_cache_enabled = 0;
+  tm->pending_block_owner_uid_set = 0;
+  tm->pending_block_owner_uid = -1;
+
+  REPLY_MACRO (VL_API_TUN_POC_OWNER_POLICY_ROLLBACK_REPLY);
 }
 
 static void
