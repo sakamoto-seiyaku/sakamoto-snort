@@ -299,6 +299,7 @@ make vpp-tun-poc-rust-shim-status-smoke
 make vpp-tun-poc-rust-shim-policy-smoke
 make vpp-tun-poc-rust-shim-sdk-smoke
 make vpp-tun-poc-rust-shim-persistent-smoke
+make vpp-tun-poc-rust-shim-reconnect-smoke
 ```
 
 Observed result:
@@ -343,6 +344,12 @@ tun_poc persistent Rust FFI shim:
   before owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
   after_set owner_cache_enabled=1 block_owner_uid_set=1 block_owner_uid=4242
   after_clear owner_cache_enabled=0 block_owner_uid_set=0 block_owner_uid=-1
+
+Rust FFI reconnect smoke:
+  initial_status_ok
+  stale_status_failed rc=-5
+  stale_client_close rc=-7
+  reopen_status_ok
 ```
 
 This proves the minimal non-CLI status surface:
@@ -357,6 +364,7 @@ Rust can call a thin C ABI shim, which hides generated VAPI types and reaches tu
 Rust can also call the same C ABI shim to mutate owner policy and verify it through status.
 The Rust shim client can link and run from a staged local Linux SDK when the launcher sets the loader path to the staged lib dir.
 Rust can keep one opaque C-shim client handle open and reuse the same VAPI connection for multiple read/write calls.
+A stale persistent handle fails after VPP stops, and a fresh handle can open/status after VPP restarts on the same socksvr path.
 ```
 
 Boundary:
@@ -368,6 +376,7 @@ It does not implement compiled policy blobs, snapshot epochs, or replace/commit/
 It does not prove Rust-native VAPI bindings.
 It does not define final Android/Tauri installation packaging.
 It does not define async/reconnect/thread ownership for a long-lived client.
+It does not implement automatic reconnect, backoff, or command replay.
 ```
 
 VAPI C client notes:
@@ -395,9 +404,11 @@ clients/tun_poc_control_shim.c
 clients/tun_poc_rust_status.rs
 clients/tun_poc_rust_policy.rs
 clients/tun_poc_rust_persistent.rs
+clients/tun_poc_rust_reconnect.rs
 scripts/run-vpp-tun-poc-rust-shim-status-smoke.py
 scripts/run-vpp-tun-poc-rust-shim-policy-smoke.py
 scripts/run-vpp-tun-poc-rust-shim-persistent-smoke.py
+scripts/run-vpp-tun-poc-rust-shim-reconnect-smoke.py
 
 Public Rust-facing surface:
   tun_poc_control_shim_abi_version()

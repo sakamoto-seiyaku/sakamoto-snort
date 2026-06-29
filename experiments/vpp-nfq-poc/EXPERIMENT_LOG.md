@@ -6308,3 +6308,75 @@ It does not implement reconnect after VPP restart.
 It does not cover cancellation, async command queues, or concurrent calls.
 It still mutates POC owner-policy knobs, not final compiled policy snapshots.
 ```
+
+### 87. Stale C-shim client fails after VPP stop, fresh client opens after restart
+
+问题：第 86 步证明了 persistent client 可以复用同一 VAPI 连接。这里继续验证 VPP 进程重启时的
+底层行为：旧 handle 是否会假成功或卡死；VPP 重启后新 handle 是否可以重新 open/status。
+
+最小实现：
+
+```text
+clients/tun_poc_rust_reconnect.rs:
+  opens one persistent C-shim client
+  reads initial status and prints initial_status_ok
+  waits for a marker file from the Python harness
+  calls status on the stale handle after VPP has stopped
+  expects a non-zero rc and prints stale_status_failed
+  closes the stale client
+  waits for VPP restart marker
+  opens a fresh client and reads status
+  prints reopen_status_ok
+
+scripts/run-vpp-tun-poc-rust-shim-reconnect-smoke.py:
+  starts VPP #1 and waits for socksvr
+  starts the Rust reconnect probe
+  waits for initial_status_ok
+  stops VPP #1
+  releases the stale probe marker
+  starts VPP #2 with the same socksvr path
+  releases the reopen marker
+  waits for reopen_status_ok
+```
+
+命令：
+
+```sh
+make vpp-tun-poc-rust-shim-reconnect-smoke
+```
+
+结果：
+
+```text
+initial_status_ok
+stale_status_failed rc=-5
+stale_client_close rc=-7
+reopen_status_ok
+rust ffi client: /tmp/sakamoto-vpp-tun-poc-rust-shim-reconnect/tun_poc_rust_reconnect
+vpp first stdout log: /tmp/sakamoto-vpp-tun-poc-rust-shim-reconnect/vpp-stdout-1.log
+vpp second stdout log: /tmp/sakamoto-vpp-tun-poc-rust-shim-reconnect/vpp-stdout-2.log
+```
+
+结论：
+
+```text
+Restart/reopen POC 成立：
+  stale persistent handle does not report a false success after VPP stops
+  stale status call returned rc=-5 in this run
+  stale close returned rc=-7 in this run
+  fresh client open/status succeeds after VPP restarts on the same socksvr path
+
+Product implication:
+  reconnect can be implemented above the shim handle boundary
+  stale-handle errors must be treated as connection-loss signals
+```
+
+边界：
+
+```text
+This is not automatic reconnect.
+It does not classify every possible VAPI/socket error.
+It does not preserve in-flight commands across restart.
+It does not define backoff, health polling, or command replay semantics.
+It does not test concurrent users of the same handle during restart.
+```

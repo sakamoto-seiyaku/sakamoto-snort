@@ -44,6 +44,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Rust FFI C-shim owner policy mutation | Rust calls the same C ABI shim to set `owner_cache_enabled` and `block_owner_uid=4242`; a follow-up status read confirms the mutation. | Experiment 84 |
 | Rust shim staged SDK smoke | A local SDK staging directory can hold the public shim header, static shim lib, and VPP client runtime libs; Rust links/runs from it when the launcher sets `LD_LIBRARY_PATH` to the staged lib dir. | Experiment 85 |
 | Rust FFI persistent C-shim client | Rust opens one opaque C-shim client handle and reuses one VAPI connection for status, owner-policy set, status, owner-policy clear, and status. | Experiment 86 |
+| Rust FFI C-shim reconnect boundary | After VPP stops, a stale persistent handle returns an error instead of false success; after VPP restarts, a fresh handle can open and read status on the same `socksvr` path. | Experiment 87 |
 | Android VPN VPP owner cache | VPP worker can cache a tuple owner UID, avoid repeated Android resolver queries on the same TCP tuple, and keep `last-uid` at the package UID on the allow path. | Experiment 78 |
 | Android VPN VPP owner-cache UDP burst | App can send a 20-packet UDP burst through VPP; VPP owner-cache reduces resolver queries to one and drops all 20 packets by UID. | Experiment 79 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
@@ -116,6 +117,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The Rust-facing C ABI can expose an opaque persistent client handle, and Rust
   can reuse one VAPI connection across multiple status/mutation calls. This
   supports a stateful Tauri control layer without forcing per-command reconnects.
+- A stale persistent handle returns an error after VPP stops, and a fresh handle
+  can open/status after VPP restarts on the same `socksvr` path. Reconnect can
+  live above the shim handle boundary, but stale-handle errors must be treated
+  as connection-loss signals.
 - Android owner lookup can return the package UID for early TCP packets and `-1`
   for later packets on the same tuple. A minimal VPP-side tuple cache is now
   proven for one active tuple; production still needs real cache sizing,
@@ -185,3 +190,5 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The persistent shim client POC is single-threaded. It does not define Rust
   `Send`/`Sync`, reconnect after VPP restart, cancellation, async command
   queues, or concurrent access rules.
+- The reconnect boundary POC does not implement automatic reconnect, backoff,
+  health polling, in-flight command recovery, or command replay semantics.
