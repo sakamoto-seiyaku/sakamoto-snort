@@ -6380,3 +6380,64 @@ It does not preserve in-flight commands across restart.
 It does not define backoff, health polling, or command replay semantics.
 It does not test concurrent users of the same handle during restart.
 ```
+
+### 88. Rust can serialize multi-threaded access to one C-shim client
+
+问题：第 86 步只证明了单线程复用 persistent handle。Tauri commands 可能来自不同 Rust 任务或线程。
+这里不尝试证明 VAPI context 可并发调用，而是验证保守模型：Rust 用 `Mutex` 串行保护同一个
+opaque C-shim client，多线程轮流执行 status 调用。
+
+最小实现：
+
+```text
+clients/tun_poc_rust_serialized.rs:
+  opens one tun_poc_client_t
+  wraps the raw pointer in Arc<Mutex<SharedClient>>
+  spawns 4 Rust threads
+  each thread performs 5 status calls while holding the mutex
+  joins all threads
+  closes the client once
+
+scripts/run-vpp-tun-poc-rust-shim-serialized-smoke.py:
+  builds the same C shim
+  builds the Rust serialized client
+  starts local VPP with tun_poc_plugin and socksvr
+  runs the Rust client against the socket
+```
+
+命令：
+
+```sh
+make vpp-tun-poc-rust-shim-serialized-smoke
+```
+
+结果：
+
+```text
+tun_poc serialized Rust FFI shim threads:
+  threads=4 calls_per_thread=5 total_calls=20
+rust ffi client: /tmp/sakamoto-vpp-tun-poc-rust-shim-serialized/tun_poc_rust_serialized
+vpp stdout log: /tmp/sakamoto-vpp-tun-poc-rust-shim-serialized/vpp-stdout.log
+```
+
+结论：
+
+```text
+Serialized threaded access POC 成立：
+  one persistent C-shim client can be shared behind a Rust Mutex
+  calls from multiple Rust threads can be serialized through the same handle
+  20 status calls completed successfully against real VPP socksvr
+
+Product implication:
+  a Tauri state object can own a single control client behind a mutex/queue
+  the conservative contract is serialized access, not concurrent VAPI calls
+```
+
+边界：
+
+```text
+This does not prove lock-free or concurrent calls on one VAPI context.
+It does not define async scheduling or cancellation.
+It does not test mutation interleaving, restart while locked, or poisoning recovery.
+It uses an unsafe Send wrapper around the opaque pointer and relies on external serialization.
+```

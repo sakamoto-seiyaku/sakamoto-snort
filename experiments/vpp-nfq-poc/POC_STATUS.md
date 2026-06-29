@@ -45,6 +45,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Rust shim staged SDK smoke | A local SDK staging directory can hold the public shim header, static shim lib, and VPP client runtime libs; Rust links/runs from it when the launcher sets `LD_LIBRARY_PATH` to the staged lib dir. | Experiment 85 |
 | Rust FFI persistent C-shim client | Rust opens one opaque C-shim client handle and reuses one VAPI connection for status, owner-policy set, status, owner-policy clear, and status. | Experiment 86 |
 | Rust FFI C-shim reconnect boundary | After VPP stops, a stale persistent handle returns an error instead of false success; after VPP restarts, a fresh handle can open and read status on the same `socksvr` path. | Experiment 87 |
+| Rust FFI serialized threaded access | Four Rust threads share one persistent C-shim client behind a `Mutex` and complete 20 serialized status calls against VPP `socksvr`. | Experiment 88 |
 | Android VPN VPP owner cache | VPP worker can cache a tuple owner UID, avoid repeated Android resolver queries on the same TCP tuple, and keep `last-uid` at the package UID on the allow path. | Experiment 78 |
 | Android VPN VPP owner-cache UDP burst | App can send a 20-packet UDP burst through VPP; VPP owner-cache reduces resolver queries to one and drops all 20 packets by UID. | Experiment 79 |
 | Android VPN VPP owner UID drop | VPP worker queries Android owner UID and drops real app TCP SYNs by package UID before HEV/SOCKS. | Experiment 69 |
@@ -121,6 +122,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   can open/status after VPP restarts on the same `socksvr` path. Reconnect can
   live above the shim handle boundary, but stale-handle errors must be treated
   as connection-loss signals.
+- Multiple Rust threads can share one persistent C-shim client behind a mutex
+  and serialize calls. This gives Tauri a conservative state-object model
+  without claiming VAPI context calls are safe concurrently.
 - Android owner lookup can return the package UID for early TCP packets and `-1`
   for later packets on the same tuple. A minimal VPP-side tuple cache is now
   proven for one active tuple; production still needs real cache sizing,
@@ -192,3 +196,6 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   queues, or concurrent access rules.
 - The reconnect boundary POC does not implement automatic reconnect, backoff,
   health polling, in-flight command recovery, or command replay semantics.
+- The serialized threaded access POC does not prove concurrent calls on one
+  VAPI context, mutation interleaving, async scheduling, cancellation, or
+  poisoning recovery.

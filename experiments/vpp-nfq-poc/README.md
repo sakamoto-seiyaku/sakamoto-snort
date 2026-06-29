@@ -37,6 +37,7 @@ make vpp-tun-poc-rust-shim-policy-smoke
 make vpp-tun-poc-rust-shim-sdk-smoke
 make vpp-tun-poc-rust-shim-persistent-smoke
 make vpp-tun-poc-rust-shim-reconnect-smoke
+make vpp-tun-poc-rust-shim-serialized-smoke
 ```
 
 Fetch upstream VPP `v26.02` into this experiment directory:
@@ -208,3 +209,4 @@ This proves VPP can own the NFQUEUE fd and return userspace verdicts in this Lin
 - `vpp-tun-poc-rust-shim-sdk-smoke` stages the shim header/lib plus VPP client runtime libs into a local SDK, verifies staged linkage with `LD_LIBRARY_PATH`, then runs the Rust policy smoke.
 - `vpp-tun-poc-rust-shim-persistent-smoke` opens one C-shim client handle and reuses one VAPI connection for status, policy set, status, policy clear, and status.
 - `vpp-tun-poc-rust-shim-reconnect-smoke` stops VPP under a persistent client, verifies the stale handle fails, restarts VPP, and verifies a fresh handle can read status.
+- `vpp-tun-poc-rust-shim-serialized-smoke` shares one persistent C-shim client behind a Rust `Mutex` and runs serialized status calls from four threads.
