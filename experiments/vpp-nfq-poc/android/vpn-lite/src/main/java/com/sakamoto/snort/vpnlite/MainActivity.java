@@ -183,6 +183,16 @@ public final class MainActivity extends Activity {
     }
 
     private void applyIntentExtras(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("runtimeStart", false)) {
+            appendLog("intent runtimeStart=true");
+            main.postDelayed(() -> startRuntimeService(false), 300);
+        }
+
+        if (intent != null && intent.getBooleanExtra("runtimeStop", false)) {
+            appendLog("intent runtimeStop=true");
+            main.postDelayed(() -> startRuntimeService(true), 300);
+        }
+
         if (intent != null && intent.getBooleanExtra("stop", false)) {
             appendLog("intent stop=true");
             main.postDelayed(this::stopVpn, 300);
@@ -292,6 +302,14 @@ public final class MainActivity extends Activity {
                     requestedDisallowedPackage, requestedBlockIp4Dst, requestedBlockIp6Dst,
                     blockOwnerUid, redirectThread, ownerCache, enableIpv6), 300);
         }
+    }
+
+    private void startRuntimeService(boolean stop) {
+        Intent intent = new Intent(this, SnortRuntimeService.class);
+        intent.setAction(stop ? SnortRuntimeService.ACTION_STOP
+                : SnortRuntimeService.ACTION_START);
+        startService(intent);
+        appendLog(stop ? "runtime stop requested" : "runtime start requested");
     }
 
     @Override

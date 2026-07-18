@@ -600,3 +600,71 @@ results/sakamoto-11-rust-reconnect-20260719-000932/
 返回 disconnect error，不能把它误判为数据面失败。恢复策略应关闭旧 handle、等待新 API
 socket ready、创建 fresh handle；当前未定义自动 backoff、in-flight command recovery、
 command replay 或并发 reconnect ownership。
+
+## SAKAMOTO-12：APK-native daemon packaging 与 RuntimeService HELLO gate
+
+状态：通过，GO（APK 打包、root handoff、HELLO 合同和停止清理边界已成立）。
+
+实验目的：把 `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so` 放入 APK，验证
+普通 APK Service 能否定位 `nativeLibraryDir` 中的 ELF，经 root 路径启动 daemon，并在启动
+成功前用 vNext `HELLO` 校验 ABI、build id 和 capability；随后验证停止不留下 root daemon。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 每次执行前 `dumpsys battery unplug`，正式运行确认 `USB powered: false`；结束执行
+  `dumpsys battery reset`，最终确认 `USB powered: true`。
+- APK 打包路径：`lib/arm64-v8a/libsucre_snortd.so`；运行时路径：
+  `${applicationInfo.nativeLibraryDir}/libsucre_snortd.so`。
+- daemon artifact SHA-256：
+  `fe2b15dc87d28404e4c6c912ecbc9dea658104b0666e604519b8113a22f00b57`。
+- APK SHA-256：
+  `9309b5d6dcac3509fc4da585a0e33469e720b93ed13d0f68325b401b4cc8a21c`。
+- KernelSU Superuser grant：必须由 KernelSU Manager 对该 APK 显式授权；这是本轮设备前置
+  条件，不是 APK 自己可以绕过的权限。
+
+### 失败方法与定位
+
+1. `ProcessBuilder("su", ...)`：app UID 的 PATH 中没有 `su`，直接得到
+   `Cannot run program "su": error=2`。
+2. 改成 `/system/bin/su`：在 KernelSU 尚未给 APK 授权时，app mount namespace 中仍看不到
+   该路径，同样得到 `error=2`。ADB shell 能看到该文件不能证明 app 进程能看到。
+3. 在 KernelSU Manager 开启 APK 的 Superuser 后，root launch 和 HELLO 成功；这确认问题
+   是 root 授权/namespace 前置条件，不是 APK-native ELF 缺失。
+4. 初版 harness 以行首匹配 `runtime_start_result`，但 RuntimeService 每行都有毫秒时间戳，
+   造成启动成功后的假失败；改为匹配带时间戳的行尾字段。
+5. 初版 root daemon 过滤只匹配 `ps` 的用户列 `root`，Android 实际输出数字 UID `0`，
+   造成 daemon 已运行时的假失败；过滤器改为接受 `0` 和 `root`。
+6. 初版停止只调用 Java `Process.destroy()/waitFor()`。`su` 已 `exec` daemon 后，Java
+   wrapper 不可靠地反映真实 daemon 生命周期，导致 daemon 残留；修正为 root launch 写入
+   daemon PID，再由 stop 通过 root shell 执行 TERM、等待、必要时 KILL。
+
+### 正式结果
+
+```text
+run_id: 20260719-004405
+package_uid: 12540
+root_daemon_pid: 11367
+native_library_dir: present, executable
+hello_protocol: control-vnext
+hello_artifact_abi: arm64-v8a
+hello_daemon_build_id: ndk-r29-7c897161e637
+hello_capability_snort10_base: true
+hello_capability_nfqueue_pass_through: true
+hello_result: pass (attempt=12)
+runtime_start_result: pass
+runtime_stop: pass; no root libsucre_snortd.so after stop/cleanup
+USB powered after unplug: false
+USB powered after reset: true
+```
+
+原始证据：
+
+```text
+results/sakamoto-12-runtime-service-20260719-004405/
+```
+
+结论：Android debug APK 已能承载同一 NDK daemon artifact，并以 RuntimeService 完成
+`APK -> KernelSU root -> daemon -> HELLO` 最小纵向切片。后续仍需单独验证 Android
+Service/process death、自动重启/backoff、前台服务通知、release signing、升级/回滚和
+crash/tombstone 采集；本轮不宣称最终 Tauri UI 或 release packaging。

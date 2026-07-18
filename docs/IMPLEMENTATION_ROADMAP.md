@@ -148,8 +148,8 @@ Status 口径（全篇统一）：
 
 ### 3.2 候选 A：前端 / RuntimeService handoff（偏产品集成）
 
-- [NEXT] APK-native daemon packaging handoff：把 `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so` 纳入前端 APK 打包链路，并定义 release/debug artifact 验收。
-- [NEXT] RuntimeService root launch：由 `${applicationInfo.nativeLibraryDir}/libsucre_snortd.so` 启动 daemon，校验 `HELLO.daemonBuildId/artifactAbi/capabilities`，并明确失败回退与日志采集口径。
+- [DONE 2026-07-19] SAKAMOTO-12 APK-native daemon packaging handoff：debug APK 已纳入 `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so`，并完成真机安装、artifact hash 与进程快照验收；release signing/upgrade/rollback 仍未覆盖。
+- [DONE 2026-07-19] SAKAMOTO-12 RuntimeService root launch：由 `${applicationInfo.nativeLibraryDir}/libsucre_snortd.so` 启动 daemon，校验 `HELLO.daemonBuildId/artifactAbi/capabilities`，并以本地 runtime log、PID 文件和 root TERM/KILL 完成停止清理；KernelSU 授权、foreground service、crash/restart policy 仍待独立 POC。
 - [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
 - [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
 

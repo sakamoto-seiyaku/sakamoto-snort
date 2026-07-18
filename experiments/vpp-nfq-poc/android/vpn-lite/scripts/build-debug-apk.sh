@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 app_dir="$(cd -- "${script_dir}/.." && pwd)"
 poc_dir="$(cd -- "${app_dir}/../.." && pwd)"
+repo_root="$(cd -- "${poc_dir}/../.." && pwd)"
 
 sdk_prebuilts="${ANDROID_LINEAGE_SDK_PREBUILTS:-/home/js/android/lineage/prebuilts/sdk}"
 android_jar="${ANDROID_JAR:-${sdk_prebuilts}/36/public/android.jar}"
@@ -26,6 +27,7 @@ android_vpp_build_dir="${VPP_ANDROID_BUILD_DIR:-${poc_dir}/work/vpp-android-conf
 android_vpp_client_lib_dir="${VPP_ANDROID_CLIENT_LIB_DIR:-${android_vpp_build_dir}/lib/aarch64-linux-android}"
 android_vpp_src_dir="${VPP_ANDROID_SOURCE_DIR:-${poc_dir}/work/vpp/src}"
 hev_stage_dir="${ANDROID_HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
+daemon_artifact="${SNORT_ANDROID_DAEMON_ARTIFACT:-${repo_root}/build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so}"
 
 die() {
   echo "error: $*" >&2
@@ -55,6 +57,7 @@ command -v "$zipalign_bin" >/dev/null 2>&1 || [[ -x "$zipalign_bin" ]] || die "m
 require_file "$android_vpp_client_lib_dir/libvapiclient.so"
 require_file "$android_vpp_client_lib_dir/libvlibmemoryclient.so"
 require_file "$android_vpp_build_dir/CMakeFiles/vpp-api/vapi/tun_poc.api.vapi.h"
+require_file "$daemon_artifact"
 
 build_dir="$app_dir/build"
 classes_dir="$build_dir/classes"
@@ -69,6 +72,9 @@ keystore="$build_dir/debug.keystore"
 
 rm -rf "$classes_dir" "$dex_dir" "$gen_dir" "$jni_root" "$intermediates" "$outputs"
 mkdir -p "$classes_dir" "$dex_dir" "$gen_dir" "$jni_dir" "$intermediates" "$outputs"
+
+echo "packaging APK-native daemon artifact"
+cp "$daemon_artifact" "$jni_dir/libsucre_snortd.so"
 
 rust_staticlib="$intermediates/libvpp_rust_control_probe.a"
 echo "building Rust Android control probe"

@@ -65,9 +65,8 @@ This backend slice only stages the APK-native shaped daemon artifact:
 build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so
 ```
 
-It does not build the Flutter APK. A later frontend RuntimeService / packaging Plane work item should
-wire this staged directory into the Android packaging flow and verify install
-behavior.
+It does not build the Flutter APK. The Android VPN-lite POC now wires this
+staged directory into a debug APK and verifies install behavior in SAKAMOTO-12.
 
 ## RuntimeService Launch Contract
 
@@ -94,6 +93,23 @@ artifactAbi == "arm64-v8a"
 daemonBuildId is non-empty
 capabilities contains stable compatibility strings
 ```
+
+SAKAMOTO-12 validated the contract on Pixel 6a / Android 16 / `arm64-v8a`:
+
+```text
+APK-native daemon SHA-256: fe2b15dc87d28404e4c6c912ecbc9dea658104b0666e604519b8113a22f00b57
+HELLO artifactAbi: arm64-v8a
+HELLO daemonBuildId: ndk-r29-7c897161e637
+HELLO capabilities: snort10-base, nfqueue-pass-through
+```
+
+The debug POC requires an explicit KernelSU Superuser grant for the APK. Before
+that grant, the app process cannot see `/system/bin/su` in its mount namespace;
+the root launch path therefore fails before the daemon starts. The service writes
+the root daemon PID to an app-private runtime file and uses that PID for TERM/KILL
+cleanup because killing the Java `Process` wrapper alone is not reliable after
+`su` executes the daemon. This is a debug POC result, not a release permission,
+foreground-service, upgrade, or rollback contract.
 
 ## Device Validation
 

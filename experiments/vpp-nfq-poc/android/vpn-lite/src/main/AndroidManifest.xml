@@ -32,5 +32,9 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+
+        <service
+            android:name=".SnortRuntimeService"
+            android:exported="false" />
     </application>
 </manifest>

@@ -24,6 +24,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android packaged Rust FFI typed control | Ordinary app UID APK packages a Rust staticlib behind JNI; Rust calls only the stable C ABI shim, performs typed status/set/clear against app-private VPP `socksvr`, and passes 5/5 rounds without `su`. | SAKAMOTO-9 |
 | Android VPP abnormal child exit and stop/restart | App UID `SIGTERM` is issued without `su`; the long-lived monitor reaps the VPP child, removes stale runtime sockets, and the explicit stop/restart path starts a new VPP PID whose Rust typed control passes. | SAKAMOTO-10 |
 | Android Rust persistent client reconnect | One Rust opaque client passes initial status, fails with `rc=-5` after VPP stop, tolerates disconnect `close_rc=-7`, and a fresh client passes status after VPP restart. | SAKAMOTO-11 |
+| Android APK-native daemon packaging and RuntimeService HELLO gate | APK packages the staged `libsucre_snortd.so`; after an explicit KernelSU app grant, an ordinary APK Service launches it through root, validates `HELLO` ABI/build/capabilities, and stops with no root daemon residue. | SAKAMOTO-12 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -262,6 +263,16 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The serialized threaded access POC does not prove concurrent calls on one
   VAPI context, mutation interleaving, async scheduling, cancellation, or
   poisoning recovery.
+- APK-native daemon packaging and the minimal RuntimeService root handoff are
+  proven on one Pixel 6a: `nativeLibraryDir` contains the staged ELF, and the
+  service gates startup on `HELLO` metadata before reporting success. The app
+  requires an explicit KernelSU Superuser grant; its mount namespace cannot use
+  `/system/bin/su` before that grant.
+- RuntimeService stop tracks the daemon PID and terminates it through a root
+  shell. Killing only the Java `Process` wrapper is insufficient after `su`
+  executes the daemon. Automatic service/process restart, foreground-service
+  policy, release signing, upgrade/rollback, and tombstone collection remain
+  unverified.
 - SAKAMOTO-10 validates one app-UID `SIGTERM` child-death path and explicit
   stop/restart on one Pixel 6a. It does not yet cover process crash signals,
   Android service/process death, automatic VPP restart policy, or concurrent
