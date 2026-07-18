@@ -25,6 +25,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android VPP abnormal child exit and stop/restart | App UID `SIGTERM` is issued without `su`; the long-lived monitor reaps the VPP child, removes stale runtime sockets, and the explicit stop/restart path starts a new VPP PID whose Rust typed control passes. | SAKAMOTO-10 |
 | Android Rust persistent client reconnect | One Rust opaque client passes initial status, fails with `rc=-5` after VPP stop, tolerates disconnect `close_rc=-7`, and a fresh client passes status after VPP restart. | SAKAMOTO-11 |
 | Android APK-native daemon packaging and RuntimeService HELLO gate | APK packages the staged `libsucre_snortd.so`; after an explicit KernelSU app grant, an ordinary APK Service launches it through root, validates `HELLO` ABI/build/capabilities, and stops with no root daemon residue. | SAKAMOTO-12 |
+| Android RuntimeService process-death boundary | `am force-stop` removes the APK process but leaves the root daemon orphaned under PID 1; explicit root cleanup and a fresh RuntimeService launch recover. Automatic recovery/cleanup is HOLD. | SAKAMOTO-13 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -273,6 +274,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   executes the daemon. Automatic service/process restart, foreground-service
   policy, release signing, upgrade/rollback, and tombstone collection remain
   unverified.
+- APK process death is a release blocker for the current root handoff: on Pixel
+  6a, `am force-stop` leaves `libsucre_snortd.so` alive as a root child of PID 1.
+  An external root cleanup can remove it and a fresh RuntimeService can recover,
+  but the APK has no automatic orphan detection or restart/cleanup path.
 - SAKAMOTO-10 validates one app-UID `SIGTERM` child-death path and explicit
   stop/restart on one Pixel 6a. It does not yet cover process crash signals,
   Android service/process death, automatic VPP restart policy, or concurrent

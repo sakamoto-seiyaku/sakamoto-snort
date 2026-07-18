@@ -668,3 +668,48 @@ results/sakamoto-12-runtime-service-20260719-004405/
 `APK -> KernelSU root -> daemon -> HELLO` 最小纵向切片。后续仍需单独验证 Android
 Service/process death、自动重启/backoff、前台服务通知、release signing、升级/回滚和
 crash/tombstone 采集；本轮不宣称最终 Tauri UI 或 release packaging。
+
+## SAKAMOTO-13：RuntimeService process-death 与 root daemon orphan boundary
+
+状态：实验通过，产品判定 HOLD（已证明当前 root handoff 在 APK 进程死亡后不能自动收敛）。
+
+实验目的：启动 S12 的 APK-native root daemon，强制停止 APK 进程，观察 daemon 是否随
+Service 一起退出；随后只用显式 root cleanup 清理，再验证 RuntimeService 是否能重新启动。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式运行使用 `dumpsys battery unplug`，确认 `USB powered: false`；结束 reset 后确认
+  `USB powered: true`。
+- APK SHA-256：
+  `9790f36d93045f5f2843b522553d1a4aad05b0119e7edb9959c688ff74f525e6`。
+- daemon artifact SHA-256：
+  `fe2b15dc87d28404e4c6c912ecbc9dea658104b0666e604519b8113a22f00b57`。
+
+### 正式结果
+
+```text
+run_id: 20260719-004844
+baseline_root_daemon_pid: 11861
+after_force_stop: APK absent; root libsucre_snortd.so still alive as PID 11861, PPID 1
+explicit_root_cleanup: no daemon
+recovery_root_daemon_pid: 12044
+recovered_runtime_stop: no daemon
+result: observation pass
+decision: HOLD automatic recovery; explicit root cleanup required
+```
+
+原始证据：
+
+```text
+results/sakamoto-13-runtime-process-death-20260719-004844/
+```
+
+### 结论与阻塞
+
+`am force-stop com.sakamoto.snort.vpnlite` 会杀掉 APK/Service，但不会杀掉已由
+`/system/bin/su` exec 的 root daemon；daemon 被 reparent 到 PID 1，继续占用控制 socket
+和 NFQUEUE 相关资源。当前只能依赖外部 root `killall` 清理，随后 fresh RuntimeService
+可以恢复。这个结果阻塞 Android release handoff；继续做前台服务、升级/回滚或长稳 POC
+之前，必须先决定并验证 root supervisor、daemon 自清理握手或可接受的系统级 lifecycle
+契约。本轮没有把外部 killall 伪装成自动恢复。
