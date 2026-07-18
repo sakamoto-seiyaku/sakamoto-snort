@@ -6,7 +6,7 @@ Issues, PRDs, epics, and implementation tasks for this repo live in Plane. Use t
 
 Use the `plane-ops` skill defaults unless the user explicitly names a different Plane project. Non-sensitive Plane defaults live in `~/.agents/skills/plane-ops/defaults.json`; the API key lives in the system keyring.
 
-The current default tracker identifier is `SNORT`, and the repo slug is `sakamoto-snort`.
+The current default Plane project is `Sakamoto`, with tracker identifier `SAKAMOTO`. The repository slug remains `sakamoto-snort`.
 
 ## Conventions
 

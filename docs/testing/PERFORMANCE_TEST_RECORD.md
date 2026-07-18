@@ -102,4 +102,4 @@
     - `/proc/net/netfilter/nfnetlink_queue` 是否出现 backlog/丢包迹象
     - CPU（若需要，后续补充统一采集方式）
 
-本文件只保留 dated measurement evidence；开放状态、分派与验收以 Plane `SNORT` 为准。
+本文件只保留 dated measurement evidence；开放状态、分派与验收以 Plane `Sakamoto` 为准。

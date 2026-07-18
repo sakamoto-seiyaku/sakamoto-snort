@@ -6,6 +6,8 @@
 
 ## 当前主入口
 
+- ADB / APP device operations：`./dev/adb`（WSL 下自动处理 Windows
+  `adb.exe`、`/init` fallback 和路径转换）
 - Daemon build：`cmake --build --preset dev-debug --target snort-build-ndk`
   或 `bash dev/dev-build-ndk.sh`
 - Daemon deploy：`bash dev/dev-deploy.sh`
@@ -56,6 +58,9 @@
 ## 常用命令
 
 ```bash
+./dev/adb devices -l
+./dev/adb logcat
+
 cmake --preset dev-debug
 cmake --build --preset dev-debug --target snort-build-ndk
 bash dev/dev-build-ndk.sh
@@ -86,3 +91,6 @@ python3 dev/dev-vscode-debug-task.py cleanup
 
 - `dev/` 不承载产品逻辑实现。
 - 当前 daemon 构建路径只有 NDK r29；不要在活跃 workflow 中恢复 Soong daemon build target。
+- 本仓库内任何 Android 真机或 APP 操作统一使用 `./dev/adb`，不要直接调用
+  `/mnt/c/.../adb.exe` 或依赖相邻 `sakamoto-app` 仓库的 wrapper。现有 device
+  helper 会自动优先选择该入口；外部工具可显式设置 `ADB="$PWD/dev/adb"`。

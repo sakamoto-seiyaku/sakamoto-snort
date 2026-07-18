@@ -4,8 +4,8 @@
 
 这份文档是 **Device / DX active acceptance casebook**：把当前“真机端到端能不能用”的测试，按 **Case（下规则→触发→看输出）**写清楚：
 - 哪些已经在 smoke 里测到了（现有覆盖）
-- 哪些“看了但没看全”（需要完善断言/输出；开放工作以 Plane `SNORT` 为准）
-- 哪些“场景本身没覆盖”（需要新增 Case；开放工作以 Plane `SNORT` 为准）
+- 哪些“看了但没看全”（需要完善断言/输出；开放工作以 Plane `Sakamoto` 为准）
+- 哪些“场景本身没覆盖”（需要新增 Case；开放工作以 Plane `Sakamoto` 为准）
 - 哪些现在挂在 diagnostics 但其实更像 smoke（功能可用性验证）
 
 SNORT-10 一致性说明：
@@ -1229,7 +1229,7 @@ B) **pre-SNORT-10 direct IPRULES.APPLY：超多规则 + preflight limits**
 
 ## 7) Coverage status and deferred notes
 
-本节不作为本地 TODO tracker。当前架构重置阶段只有 Plane `SNORT-10` 是 active item；旧迁移项 `SNORT-5..7` 已取消。
+本节不作为本地 TODO tracker。新的开放工作进入 Plane `Sakamoto`；`SNORT-5..10` 只作为 workspace reset 前的历史标识保留。
 
 已补齐的覆盖：
 - IP allow/block/iface/would：`VNXDP-06/08f/09f/10g` 已把 `nc` 成败变成硬断言。

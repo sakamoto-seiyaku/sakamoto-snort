@@ -1,0 +1,95 @@
+#!/bin/bash
+# Canonical ADB wrapper for WSL2 device operations in this repository.
+#
+# Prefer Windows adb.exe for device compatibility. If direct WSL interop is
+# unavailable, retry through /init, then fall back to a working adb on PATH.
+
+set -euo pipefail
+
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
+WIN_ADB="/mnt/c/Android/SDK/platform-tools/adb.exe"
+WIN_CMD="/mnt/c/Windows/System32/cmd.exe"
+WINDOWS_ADB_COMMAND=()
+
+to_win_path() {
+    local wsl_path="$1"
+    if [[ "$wsl_path" =~ ^/mnt/([a-zA-Z])/(.*)$ ]]; then
+        local drive="${BASH_REMATCH[1]}"
+        local rest="${BASH_REMATCH[2]//\//\\}"
+        printf "%s:\\%s" "${drive^^}" "$rest"
+        return 0
+    fi
+    if command -v wslpath >/dev/null 2>&1; then
+        wslpath -w "$wsl_path"
+        return 0
+    fi
+    printf "%s" "$wsl_path"
+}
+
+can_run_adb_candidate() {
+    "$@" version >/dev/null 2>&1
+}
+
+select_windows_adb() {
+    [ -x "$WIN_ADB" ] || return 1
+
+    WINDOWS_ADB_COMMAND=("$WIN_ADB")
+    if can_run_adb_candidate "$WIN_ADB"; then
+        return 0
+    fi
+
+    if [ -x /init ] && [ -x "$WIN_CMD" ]; then
+        WINDOWS_ADB_COMMAND=(/init "$WIN_CMD" /C "$(to_win_path "$WIN_ADB")")
+        if can_run_adb_candidate "${WINDOWS_ADB_COMMAND[@]}"; then
+            return 0
+        fi
+    fi
+
+    WINDOWS_ADB_COMMAND=()
+    return 1
+}
+
+can_use_path_adb() {
+    local path_adb
+    local resolved_path
+    path_adb="$(command -v adb || true)"
+    [ -n "$path_adb" ] || return 1
+    resolved_path="$(cd "$(dirname "$path_adb")" && pwd -P)/$(basename "$path_adb")"
+    if [ "$resolved_path" = "$SCRIPT_PATH" ]; then
+        return 1
+    fi
+    if "$path_adb" version >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+if [ -n "${SAKAMOTO_ADB:-}" ]; then
+    if [ ! -x "$SAKAMOTO_ADB" ] && ! command -v "$SAKAMOTO_ADB" >/dev/null 2>&1; then
+        echo "[Sakamoto] ERROR: Explicit SAKAMOTO_ADB could not be launched: $SAKAMOTO_ADB" 1>&2
+        exit 127
+    fi
+    exec "$SAKAMOTO_ADB" "$@"
+fi
+
+if select_windows_adb; then
+    converted=()
+    for arg in "$@"; do
+        if [[ "$arg" =~ ^/mnt/[a-zA-Z]/ ]] || [[ "$arg" == /* && -e "$arg" ]]; then
+            converted+=("$(to_win_path "$arg")")
+        else
+            converted+=("$arg")
+        fi
+    done
+    if [[ "${WINDOWS_ADB_COMMAND[1]:-}" == "$WIN_CMD" ]]; then
+        cd /mnt/c
+    fi
+    exec "${WINDOWS_ADB_COMMAND[@]}" "${converted[@]}"
+fi
+
+if can_use_path_adb; then
+    exec "$(command -v adb)" "$@"
+fi
+
+echo "[Sakamoto] ERROR: adb not found. Install Android platform-tools or set SAKAMOTO_ADB." 1>&2
+exit 1

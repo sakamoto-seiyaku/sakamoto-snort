@@ -146,7 +146,7 @@ NFQUEUE hook/listener/pass-through plumbing becomes accepted.
 
 ## 4) 覆盖分类（可测但未测项进入 Plane）
 
-本节不作为本地 backlog。若某项需要推进，先在 Plane `SNORT` 建立 work item，再回写本文作为覆盖状态或证据索引。
+本节不作为本地 backlog。若某项需要推进，先在 Plane `Sakamoto` 建立 work item，再回写本文作为覆盖状态或证据索引。
 
 > 归类规则（与讨论一致）：失败若基本等价于“功能契约/完整性被破坏，需要修代码”，则应进入 smoke；否则进 diagnostics（或先留在 host）。
 

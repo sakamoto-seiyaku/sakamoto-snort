@@ -1,7 +1,7 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
 更新时间：2026-06-20
-状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `SNORT` 为准；OpenSpec 仅作历史归档）
+状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `Sakamoto` / `SAKAMOTO` 为准；OpenSpec 仅作历史归档）
 
 ## 0. 阅读指南
 
@@ -41,7 +41,7 @@ Status 口径（全篇统一）：
 - NFQUEUE / packet datapath 重构边界：`docs/decisions/NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md`
 - L4 Conntrack / CT A++ runtime 决策：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`
 - SNORT-10 mainline 重组基线：`docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`
-- Plane 工作入口：`docs/agents/issue-tracker.md`；`SNORT-10` 是架构讨论 parent，当前已形成 `SNORT-12..19` 模块 PRD；mainline 重组基线先停在 SNORT-12 之前，implementation issue 从 SNORT-12 开始拆。
+- Plane 工作入口：`docs/agents/issue-tracker.md`。`SNORT-10` 与 `SNORT-12..19` 是 workspace reset 前的历史规划标识，不是当前 Plane 项目标识；新的开放工作使用 `SAKAMOTO-*`。
 - OpenSpec 历史归档：`archive/openspec/changes/archive/` 与 `archive/openspec/specs/`（仅作历史参考；不再作为当前流程约束）
 
 长期约束（对后续所有 Plane work item / implementation slice 生效）：
@@ -80,7 +80,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-30] Flow Telemetry MVP 已完成：bounded shared-memory records、vNext `TELEMETRY.OPEN/CLOSE`、minimal telemetry metrics、`FLOW` / blocked-only `DNS_DECISION` producers、真机 mmap consumer 通路与 Flow On/Off perf 对照均已落地。
 - Flow Telemetry 的分层边界已收口：常态 records 只包含业务事实（`FLOW` / `DNS_DECISION`），Packet Diagnostics 承担 packet-side 深度取证，Metrics 保留为后端低基数健康状态。
 - 前端支撑所需的历史后端原语已基本闭环：legacy Debug Stream explainability、checkpoint / rollback、Flow Telemetry export channel 均已落地；SNORT-10 后 packet-side explain 目标改为 Packet Diagnostics，不再扩展旧 tracked packet stream。
-- [NOTE] NFQUEUE topology / power / performance 不再作为文档内隐式 TODO 追踪；当前统一归入 Plane `SNORT-10` 做架构重构讨论。任何默认值调整、新 datapath mode 或代码重构都应先由该项产出明确决策。
+- [NOTE] NFQUEUE topology / power / performance 不再作为文档内隐式 TODO 追踪；新的开放工作统一进入 Plane `Sakamoto`。历史 `SNORT-10` 只保留为架构讨论背景。
 
 ## 2. 已完成（事实清单）
 

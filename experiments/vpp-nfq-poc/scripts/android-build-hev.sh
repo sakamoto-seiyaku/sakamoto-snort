@@ -16,6 +16,14 @@ if [ ! -f "$HEV_DIR/Android.mk" ]; then
   "$SCRIPT_DIR/fetch-hev.sh"
 fi
 
+PROTECT_PATCH="$POC_DIR/patches/hev-android-socket-protect.patch"
+if git -C "$HEV_DIR" apply --reverse --check "$PROTECT_PATCH" >/dev/null 2>&1; then
+  : # already applied
+else
+  git -C "$HEV_DIR" apply --check "$PROTECT_PATCH"
+  git -C "$HEV_DIR" apply "$PROTECT_PATCH"
+fi
+
 if [ ! -x "$NDK_BUILD" ]; then
   echo "ndk-build not found or not executable: $NDK_BUILD" >&2
   exit 1

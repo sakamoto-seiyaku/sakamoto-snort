@@ -1,0 +1,72 @@
+diff --git a/src/core/src/hev-socks5-client.c b/src/core/src/hev-socks5-client.c
+index 637f0b4..120afad 100644
+--- a/src/core/src/hev-socks5-client.c
++++ b/src/core/src/hev-socks5-client.c
+@@ -290,6 +290,14 @@ hev_socks5_client_connect (HevSocks5Client *self, const char *addr, int port)
+         return -1;
+     }
+ 
++    res = hev_socks5_protect_socket (fd);
++    if (res < 0) {
++        LOG_E ("%p socks5 client protect fd %d", self, fd);
++        hev_task_del_fd (hev_task_self (), fd);
++        close (fd);
++        return -1;
++    }
++
+     sap = (struct sockaddr *)&saddr;
+     klass = HEV_OBJECT_GET_CLASS (self);
+     res = klass->binder (HEV_SOCKS5 (self), fd, sap);
+diff --git a/src/core/src/hev-socks5-misc.c b/src/core/src/hev-socks5-misc.c
+index d413b84..b2511e7 100644
+--- a/src/core/src/hev-socks5-misc.c
++++ b/src/core/src/hev-socks5-misc.c
+@@ -29,6 +29,9 @@ static int task_stack_size = 8192;
+ static int udp_recv_buffer_size = 512 * 1024;
+ static int udp_copy_buffer_nums = 10;
+ 
++static HevSocks5SocketProtectFunc socket_protect_func;
++static void *socket_protect_data;
++
+ int
+ hev_socks5_task_io_yielder (HevTaskYieldType type, void *data)
+ {
+@@ -53,6 +56,22 @@ hev_socks5_task_io_yielder (HevTaskYieldType type, void *data)
+     return 0;
+ }
+ 
++void
++hev_socks5_set_socket_protect (HevSocks5SocketProtectFunc func, void *data)
++{
++    socket_protect_func = func;
++    socket_protect_data = data;
++}
++
++int
++hev_socks5_protect_socket (int fd)
++{
++    if (!socket_protect_func)
++        return 0;
++
++    return socket_protect_func (fd, socket_protect_data);
++}
++
+ int
+ hev_socks5_socket (int type)
+ {
+diff --git a/src/core/src/hev-socks5-misc.h b/src/core/src/hev-socks5-misc.h
+index 3485ad4..3ce3186 100644
+--- a/src/core/src/hev-socks5-misc.h
++++ b/src/core/src/hev-socks5-misc.h
+@@ -18,6 +18,11 @@ extern "C" {
+ 
+ int hev_socks5_task_io_yielder (HevTaskYieldType type, void *data);
+ 
++typedef int (*HevSocks5SocketProtectFunc) (int fd, void *data);
++
++void hev_socks5_set_socket_protect (HevSocks5SocketProtectFunc func, void *data);
++int hev_socks5_protect_socket (int fd);
++
+ void hev_socks5_set_connect_timeout (int timeout);
+ void hev_socks5_set_tcp_timeout (int timeout);
+ void hev_socks5_set_udp_timeout (int timeout);

@@ -157,7 +157,7 @@ int main (void)
   memset (&addr, 0, sizeof (addr));
   addr.sin_family = AF_INET;
   addr.sin_port = htons (41080);
-  inet_pton (AF_INET, "127.0.0.1", &addr.sin_addr);
+  addr.sin_addr.s_addr = htonl (INADDR_ANY);
   if (bind (server, (struct sockaddr *) &addr, sizeof (addr)) < 0)
     {
       perror ("bind");
@@ -171,8 +171,8 @@ int main (void)
       return 1;
     }
 
-  log_now ("android socks5 smoke server ready 127.0.0.1:41080");
-  for (int i = 0; i < 32; i++)
+  log_now ("android socks5 smoke server ready 0.0.0.0:41080");
+  for (;;)
     {
       int fd = accept (server, NULL, NULL);
       if (fd < 0)

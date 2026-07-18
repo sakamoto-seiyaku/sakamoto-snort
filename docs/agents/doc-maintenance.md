@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-20
 
-This file records how Matt skills and future agents should treat the documentation tree after the OpenSpec workflow moved to `archive/openspec/` and Plane `SNORT` became the active tracker.
+This file records how Matt skills and future agents should treat the documentation tree after the OpenSpec workflow moved to `archive/openspec/` and Plane `Sakamoto` became the active tracker.
 
 ## Classification Rules
 
@@ -37,11 +37,10 @@ Use these only as background:
 
 ## Work Tracking Policy
 
-Plane project `SNORT` is the source of truth for open work.
+Plane project `Sakamoto` (`SAKAMOTO`) is the source of truth for open work.
 
-- Current active item: `SNORT-10` - NFQUEUE / DNS / datapath performance architecture refactor discussion.
-- Historical cleanup/migration items: `SNORT-1..8` are cancelled after the workspace reset and must not be treated as active backlog.
-- Completed setup item: `SNORT-9`.
+- Current VPP foundation PRD: `SAKAMOTO-1`.
+- `SNORT-1..19` references predate the tracker reset and must be treated as historical planning identifiers, not current Plane work items.
 
 Docs may link to these work items and keep evidence, but they must not keep their own `Open`, `TODO`, or unchecked bug ledgers.
 

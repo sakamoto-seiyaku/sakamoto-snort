@@ -1,6 +1,7 @@
 #!/bin/bash
 
 SNORT_DEFAULT_ANDROID_SDK_ROOT="${SNORT_DEFAULT_ANDROID_SDK_ROOT:-/home/js/.local/share/android-sdk}"
+SNORT_DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 pick_adb_bin() {
     local -a candidates=()
@@ -32,6 +33,8 @@ pick_adb_bin() {
     if [[ -n "${ADB:-}" ]]; then
         append_candidate "$ADB"
     fi
+
+    append_candidate "$SNORT_DEV_DIR/adb"
 
     append_sdk_adb_candidates "${ANDROID_SDK_ROOT:-}"
     append_sdk_adb_candidates "${ANDROID_HOME:-}"

@@ -1,10 +1,10 @@
 # NFQUEUE / DNS / Datapath 模块边界工作决策
 
 更新时间：2026-06-19
-状态：SNORT-10 架构讨论阶段的已确认边界；实现切片仍需后续 Plane work item 拆分
+状态：历史 SNORT-10 架构讨论阶段的已确认边界；实现切片仍需在当前 Plane `Sakamoto` 拆分
 输入材料：
 - `docs/reviews/NFQUEUE_PERFORMANCE_ARCHITECTURE_REVIEW.md`
-- Plane `SNORT-10`：NFQUEUE / DNS / datapath performance architecture refactor discussion
+- 历史规划标识 `SNORT-10`：NFQUEUE / DNS / datapath performance architecture refactor discussion
 
 ## 0. 背景
 

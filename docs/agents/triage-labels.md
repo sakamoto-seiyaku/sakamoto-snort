@@ -1,6 +1,6 @@
 # Triage Labels
 
-The skills use five canonical triage roles. Map them to Plane labels with the same strings in the default `SNORT` project. Label IDs live in the global `plane-ops` skill defaults, not in repo docs.
+The skills use five canonical triage roles. Map them to Plane labels with the same strings in the default `Sakamoto` project. Label IDs live in the global `plane-ops` skill defaults, not in repo docs.
 
 | Label in mattpocock/skills | Label in Plane | Meaning |
 | -------------------------- | -------------- | ------- |

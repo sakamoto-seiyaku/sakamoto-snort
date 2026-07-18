@@ -14,6 +14,9 @@ remain in `EXPERIMENT_LOG.md`.
 | Package JSON helper | package name -> UID -> JSON -> VPP CLI works for allow/block. | Experiments 38, 39 |
 | Root mode IPv6 static dst block | Real app IPv6 loopback and public IPv6 HTTP are blocked by exact dst rules. | Experiments 36, 43 |
 | VPN data path | App traffic enters `VpnService -> packaged VPP -> HEV -> SOCKS5`. | Experiment 33 |
+| VPN app UID / no-su matrix | On Pixel 6a, APK, VPP, and HEV run as UID 12540 in `untrusted_app`; an ADB-shell-only harness passes IPv4/IPv6 TCP/UDP allow/drop without invoking `su`. | SAKAMOTO-2 |
+| VPN upstream socket protect | HEV hands each SOCKS upstream fd to the app parent before connect; real `VpnService.protect(fd)` succeeds for 3 IPv4 and 3 IPv6 external-destination requests, while forced failure aborts before SOCKS accept. | SAKAMOTO-3 |
+| VPN VPP/HEV 50-cycle lifecycle | Fixed APK/config on Pixel 6a completes 50 app-UID start/HTTP/protect/stop cycles with stable active fd counts, no RSS growth trend, and no stopped process, `tun0`, or route-rule residue. | SAKAMOTO-4 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -133,6 +136,12 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   for later packets on the same tuple. A minimal VPP-side tuple cache is now
   proven for one active tuple; production still needs real cache sizing,
   expiry, reverse-flow semantics, and concurrency rules.
+- HEV upstream protection is viable across the current fork boundary. The child
+  retains the original socket, sends a duplicate through `SCM_RIGHTS`, and waits
+  for the app parent to call Java `VpnService.protect` before bind/connect.
+- Recreating the app, VPP, and HEV processes on each stop/start is stable over a
+  50-cycle short-flow run. Active fd counts remain exactly 120/24/121 for the
+  app/VPP/HEV processes, and stopped route rules return to the baseline each time.
 - A short 20-packet UDP owner-cache burst works on Pixel 6a: VPP parses and
   drops all 20 packets while resolver queries stay at one. This is not a
   sustained throughput or battery result.
@@ -179,6 +188,19 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   multi-queue plugin design.
 - No sustained performance or battery test has been run beyond idle/short loops
   and the 20-packet UDP owner-cache burst.
+- The app UID / no-su matrix ran on a Pixel 6a whose bootloader is unlocked and
+  whose verified boot state is orange. It proves runtime identity, not the
+  separate release check on a never-rooted, bootloader-locked device.
+- The protect POC uses a synchronous one-request-at-a-time fd broker, discovers a
+  fixed `wlan0` IPv4 address for its device-local SOCKS endpoint, and uses a mock
+  SOCKS server that returns HTTP 200 instead of relaying payloads to the public
+  destination. It proves the protect boundary and non-recursion, not production
+  broker concurrency or full public SOCKS relay behavior.
+- The 50-cycle lifecycle POC uses one short IPv4 HTTP probe per cycle. It does
+  not cover long-lived flows, parallel traffic, network handover, process death,
+  device sleep, or teardown after sustained operation. Its first formal attempt
+  also exposed a harness-only 32-accept SOCKS server limit; the valid 50-cycle
+  result was rerun from scratch after removing that limit.
 - The Android app is still a POC shell, not a product UI or policy manager.
 - The binary API POC covers status, direct owner-policy mutation, and a minimal
   owner-policy transaction. It does not yet cover fd handoff, compiled policy

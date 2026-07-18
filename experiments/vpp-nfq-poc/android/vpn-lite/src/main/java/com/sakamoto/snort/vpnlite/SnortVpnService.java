@@ -56,6 +56,17 @@ public final class SnortVpnService extends VpnService {
 
     private ParcelFileDescriptor vpnFd;
 
+    public boolean protectSocketForNative(int fd) {
+        File forceFailure = new File(getFilesDir(), "force-protect-failure");
+        if (forceFailure.isFile()) {
+            Log.w(TAG, "forced VpnService.protect failure fd=" + fd);
+            return false;
+        }
+        boolean protectedSocket = protect(fd);
+        Log.i(TAG, "VpnService.protect fd=" + fd + " result=" + protectedSocket);
+        return protectedSocket;
+    }
+
     private static native int nativeStartProbe(int fd, String logPath, int maxPackets,
                                                SnortVpnService ownerLookup);
 

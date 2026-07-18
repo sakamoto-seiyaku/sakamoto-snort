@@ -2,6 +2,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <jni.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -59,12 +60,20 @@ static char g_vpp_shim_log[PATH_BUF_SIZE];
 static char g_vpp_gate_log[PATH_BUF_SIZE];
 static char g_vpp_resolver_log[PATH_BUF_SIZE];
 static char g_vpp_hev_log[PATH_BUF_SIZE];
+static char g_vpp_protect_log[PATH_BUF_SIZE];
+
+static pthread_t g_protect_thread;
+static bool g_protect_running;
+static int g_protect_fd = -1;
+static jobject g_protect_service;
+static jmethodID g_protect_method;
 
 static pid_t g_hev_pid = -1;
 static int g_hev_driver_fd = -1;
 static char g_hev_log_path[PATH_BUF_SIZE];
 
 typedef int (*hev_main_from_str_fn)(const char *config, unsigned int config_len, int tun_fd);
+typedef void (*hev_set_socket_protect_fn)(int (*func)(int fd, void *data), void *data);
 
 typedef struct {
     bool valid;
@@ -83,7 +92,8 @@ typedef struct {
     int uid;
 } owner_cache_entry_t;
 
-static void run_hev_child(const char *native_dir, const char *log_path, int fd, int socks_port);
+static void run_hev_child(const char *native_dir, const char *log_path, int fd,
+                          int socks_port, int protect_fd);
 
 static void log_line(FILE *file, const char *fmt, ...) {
     char line[512];
@@ -98,6 +108,165 @@ static void log_line(FILE *file, const char *fmt, ...) {
         fprintf(file, "%s\n", line);
         fflush(file);
     }
+}
+
+static int send_fd_and_wait_result(int broker_fd, int socket_fd) {
+    char payload = 'P';
+    char control[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = {.iov_base = &payload, .iov_len = sizeof(payload)};
+    struct msghdr msg = {0};
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cmsg), &socket_fd, sizeof(socket_fd));
+    if (sendmsg(broker_fd, &msg, 0) != sizeof(payload)) {
+        return -1;
+    }
+
+    int result = -1;
+    ssize_t received;
+    do {
+        received = recv(broker_fd, &result, sizeof(result), 0);
+    } while (received < 0 && errno == EINTR);
+    return received == sizeof(result) && result == 1 ? 0 : -1;
+}
+
+static int recv_protect_fd(int broker_fd) {
+    char payload;
+    char control[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = {.iov_base = &payload, .iov_len = sizeof(payload)};
+    struct msghdr msg = {0};
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    ssize_t received;
+    do {
+        received = recvmsg(broker_fd, &msg, 0);
+    } while (received < 0 && errno == EINTR);
+    if (received <= 0) {
+        return -1;
+    }
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS ||
+        cmsg->cmsg_len < CMSG_LEN(sizeof(int))) {
+        errno = EBADMSG;
+        return -1;
+    }
+    int fd = -1;
+    memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
+    return fd;
+}
+
+static void *protect_broker_thread(void *unused) {
+    (void)unused;
+    JNIEnv *env = NULL;
+    bool attached = false;
+    if ((*g_jvm)->GetEnv(g_jvm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK) {
+            return NULL;
+        }
+        attached = true;
+    }
+
+    FILE *file = fopen(g_vpp_protect_log, "a");
+    log_line(file, "protect broker start fd=%d", g_protect_fd);
+    for (;;) {
+        pthread_mutex_lock(&g_lock);
+        bool running = g_protect_running;
+        int broker_fd = g_protect_fd;
+        pthread_mutex_unlock(&g_lock);
+        if (!running || broker_fd < 0) {
+            break;
+        }
+
+        int socket_fd = recv_protect_fd(broker_fd);
+        if (socket_fd < 0) {
+            pthread_mutex_lock(&g_lock);
+            running = g_protect_running;
+            pthread_mutex_unlock(&g_lock);
+            if (running && errno != EBADF && errno != ECONNRESET) {
+                log_line(file, "protect broker receive stop errno=%d %s", errno,
+                         strerror(errno));
+            }
+            break;
+        }
+
+        jboolean protected_socket = (*env)->CallBooleanMethod(
+            env, g_protect_service, g_protect_method, (jint)socket_fd);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionDescribe(env);
+            (*env)->ExceptionClear(env);
+            protected_socket = JNI_FALSE;
+        }
+        int result = protected_socket == JNI_TRUE ? 1 : 0;
+        log_line(file, "protect fd=%d result=%d", socket_fd, result);
+        close(socket_fd);
+        if (send(broker_fd, &result, sizeof(result), 0) != sizeof(result)) {
+            log_line(file, "protect result send failed errno=%d %s", errno,
+                     strerror(errno));
+            break;
+        }
+    }
+    log_line(file, "protect broker stop");
+    if (file) {
+        fclose(file);
+    }
+    if (attached) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
+    return NULL;
+}
+
+static void stop_protect_broker(JNIEnv *env) {
+    pthread_mutex_lock(&g_lock);
+    bool was_running = g_protect_running;
+    int fd = g_protect_fd;
+    jobject service = g_protect_service;
+    g_protect_running = false;
+    g_protect_fd = -1;
+    g_protect_service = NULL;
+    g_protect_method = NULL;
+    pthread_mutex_unlock(&g_lock);
+
+    if (fd >= 0) {
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+    }
+    if (was_running) {
+        pthread_join(g_protect_thread, NULL);
+    }
+    if (service) {
+        (*env)->DeleteGlobalRef(env, service);
+    }
+}
+
+static int find_wlan_ipv4(char *address, size_t address_len) {
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) < 0) {
+        return -1;
+    }
+    int result = -1;
+    for (struct ifaddrs *it = interfaces; it; it = it->ifa_next) {
+        if (!it->ifa_addr || strcmp(it->ifa_name, "wlan0") != 0 ||
+            it->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        struct sockaddr_in *addr = (struct sockaddr_in *)it->ifa_addr;
+        if (inet_ntop(AF_INET, &addr->sin_addr, address, address_len)) {
+            result = 0;
+            break;
+        }
+    }
+    freeifaddrs(interfaces);
+    return result;
 }
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
@@ -1582,8 +1751,49 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     pthread_mutex_unlock(&g_lock);
 
     if (use_hev) {
+        int protect_fds[2] = {-1, -1};
+        jmethodID protect_method = (*env)->GetMethodID(
+            env, clazz, "protectSocketForNative", "(I)Z");
+        if (!owner_lookup || !protect_method || (*env)->ExceptionCheck(env)) {
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+            }
+            close(shim_fds[0]);
+            kill(pid, SIGTERM);
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -20;
+        }
+        jobject protect_service = (*env)->NewGlobalRef(env, owner_lookup);
+        if (!protect_service || socketpair(AF_UNIX, SOCK_SEQPACKET, 0, protect_fds) < 0) {
+            if (protect_service) {
+                (*env)->DeleteGlobalRef(env, protect_service);
+            }
+            close(shim_fds[0]);
+            kill(pid, SIGTERM);
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -21;
+        }
+        snprintf(g_vpp_protect_log, sizeof(g_vpp_protect_log),
+                 "%s/vpp/logs/vpp-protect.log", app_files);
+        pthread_mutex_lock(&g_lock);
+        g_protect_fd = protect_fds[0];
+        g_protect_service = protect_service;
+        g_protect_method = protect_method;
+        g_protect_running = true;
+        pthread_mutex_unlock(&g_lock);
+
         pid_t hev_pid = fork();
         if (hev_pid < 0) {
+            close(protect_fds[1]);
+            stop_protect_broker(env);
             close(shim_fds[0]);
             if (use_owner_gate) {
                 close(gate_fds[0]);
@@ -1605,14 +1815,34 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             return -8;
         }
         if (hev_pid == 0) {
-            run_hev_child(native_dir, g_vpp_hev_log, shim_fds[0], 41080);
+            close(protect_fds[0]);
+            run_hev_child(native_dir, g_vpp_hev_log, shim_fds[0], 41080,
+                          protect_fds[1]);
             _exit(127);
         }
+        close(protect_fds[1]);
         close(shim_fds[0]);
+        int protect_rc = pthread_create(&g_protect_thread, NULL,
+                                        protect_broker_thread, NULL);
+        if (protect_rc != 0) {
+            terminate_child(hev_pid);
+            pthread_mutex_lock(&g_lock);
+            g_protect_running = false;
+            pthread_mutex_unlock(&g_lock);
+            stop_protect_broker(env);
+            kill(pid, SIGTERM);
+            waitpid(pid, NULL, 0);
+            (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            return -22;
+        }
         usleep(300000);
         int status = 0;
         pid_t exited = waitpid(hev_pid, &status, WNOHANG);
         if (exited == hev_pid) {
+            stop_protect_broker(env);
             if (use_owner_gate) {
                 close(gate_fds[0]);
                 close(fd);
@@ -1927,7 +2157,6 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
 
 JNIEXPORT void JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, jclass clazz) {
-    (void)env;
     (void)clazz;
 
     pthread_mutex_lock(&g_lock);
@@ -1996,17 +2225,29 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     if (was_gate_running || was_resolver_running) {
         clear_owner_lookup(env);
     }
+    stop_protect_broker(env);
 }
 
-static void run_hev_child(const char *native_dir, const char *log_path, int fd, int socks_port) {
+static int hev_child_protect_socket(int socket_fd, void *data) {
+    int broker_fd = *(int *)data;
+    return send_fd_and_wait_result(broker_fd, socket_fd);
+}
+
+static void run_hev_child(const char *native_dir, const char *log_path, int fd,
+                          int socks_port, int protect_fd) {
     char hev_path[PATH_BUF_SIZE];
     char config[1024];
+    char socks_address[INET_ADDRSTRLEN] = "127.0.0.1";
+    if (protect_fd >= 0 && find_wlan_ipv4(socks_address, sizeof(socks_address)) < 0) {
+        dprintf(STDERR_FILENO, "failed to find wlan0 IPv4 address\n");
+        _exit(120);
+    }
 
     snprintf(config, sizeof(config),
             "tunnel:\n"
             "  mtu: 1500\n"
             "socks5:\n"
-            "  address: 127.0.0.1\n"
+            "  address: %s\n"
             "  port: %d\n"
             "  udp: tcp\n"
             "misc:\n"
@@ -2015,7 +2256,7 @@ static void run_hev_child(const char *native_dir, const char *log_path, int fd, 
             "  connect-timeout: 2000\n"
             "  tcp-read-write-timeout: 5000\n"
             "  udp-read-write-timeout: 5000\n",
-            socks_port);
+            socks_address, socks_port);
 
     int out = open(log_path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
     if (out >= 0) {
@@ -2037,6 +2278,19 @@ static void run_hev_child(const char *native_dir, const char *log_path, int fd, 
     if (!sym) {
         dprintf(STDERR_FILENO, "dlsym failed: %s\n", dlerror());
         _exit(122);
+    }
+
+    if (protect_fd >= 0) {
+        void *protect_sym = dlsym(handle, "hev_socks5_set_socket_protect");
+        if (!protect_sym) {
+            dprintf(STDERR_FILENO, "protect dlsym failed: %s\n", dlerror());
+            _exit(124);
+        }
+        hev_set_socket_protect_fn set_socket_protect =
+            (hev_set_socket_protect_fn)protect_sym;
+        set_socket_protect(hev_child_protect_socket, &protect_fd);
+        dprintf(STDERR_FILENO, "protect callback enabled broker-fd=%d socks=%s:%d\n",
+                protect_fd, socks_address, socks_port);
     }
 
     set_cloexec(fd, false);
@@ -2107,7 +2361,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartHevProbe(
 
     if (pid == 0) {
         close(fds[0]);
-        run_hev_child(native_dir, log_path, fds[1], 9);
+        run_hev_child(native_dir, log_path, fds[1], 9, -1);
         _exit(127);
     }
 
