@@ -17,6 +17,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN app UID / no-su matrix | On Pixel 6a, APK, VPP, and HEV run as UID 12540 in `untrusted_app`; an ADB-shell-only harness passes IPv4/IPv6 TCP/UDP allow/drop without invoking `su`. | SAKAMOTO-2 |
 | VPN upstream socket protect | HEV hands each SOCKS upstream fd to the app parent before connect; real `VpnService.protect(fd)` succeeds for 3 IPv4 and 3 IPv6 external-destination requests, while forced failure aborts before SOCKS accept. | SAKAMOTO-3 |
 | VPN VPP/HEV 50-cycle lifecycle | Fixed APK/config on Pixel 6a completes 50 app-UID start/HTTP/protect/stop cycles with stable active fd counts, no RSS growth trend, and no stopped process, `tun0`, or route-rule residue. | SAKAMOTO-4 |
+| VPN network failure/recovery | On Pixel 6a, proxy refusal, a paused SOCKS listener, and Wi-Fi off each fail without killing app/VPP; restarting proxy or Wi-Fi restores IPv4/IPv6 probes without reinstall or manual cleanup. | SAKAMOTO-5 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -201,6 +202,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   device sleep, or teardown after sustained operation. Its first formal attempt
   also exposed a harness-only 32-accept SOCKS server limit; the valid 50-cycle
   result was rerun from scratch after removing that limit.
+- The network recovery POC proves proxy refusal, a short listener blackhole, and
+  the controlled Wi-Fi off/on transition on one Pixel 6a. The device did not
+  expose a second independently controllable upstream network, so cellular,
+  USB-tether, and cross-network handover remain unverified.
 - The Android app is still a POC shell, not a product UI or policy manager.
 - The binary API POC covers status, direct owner-policy mutation, and a minimal
   owner-policy transaction. It does not yet cover fd handoff, compiled policy

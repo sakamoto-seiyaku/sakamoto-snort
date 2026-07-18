@@ -205,3 +205,38 @@ SOCKS accepts: 50
 结论：GO。固定配置和短 HTTP 探针下未发现启动失败、崩溃、fd/RSS 增长、进程残留或
 TUN/路由残留。该结论不覆盖长连接、并发流、Android 网络切换、系统杀进程或长时间
 运行后的 teardown。
+
+## SAKAMOTO-5: 网络切换与上游故障恢复
+
+状态：通过，部分 GO。
+
+设备网络能力：Pixel 6a / Android 16 当前仅确认一条可控上游：Wi-Fi
+`Openwrt_5G`，IPv4 `192.168.4.151/24`，IPv6 `fd76:d462:c4e3:0:3b9a:e320:779f:e3f1/64`。
+未发现可在本次 POC 中独立控制的第二条蜂窝、USB tether 或其他 Wi-Fi 网络，因此“不同
+上游网络切换”未宣称通过。
+
+场景结果：
+
+| 场景 | 失败表现 | 进程状态 | 恢复结果 |
+| --- | --- | --- | --- |
+| 正常 IPv4/IPv6 基线 | 无 | app/VPP 存活 | IPv4/IPv6 均 HTTP 200 |
+| 代理不可达：停止 SOCKS server | IPv4 `Connection reset`，app 日志约 3.5 s | app/VPP PID 仍存在 | 重启 server 后 IPv4/IPv6 均 HTTP 200 |
+| 短时黑洞：`kill -STOP` SOCKS server | 无 HTTP 响应，后续 app timeout 记录在 logcat | app/VPP 存活 | `kill -CONT` 后 IPv4 HTTP 200 |
+| Wi-Fi 断开 | `ip route` 和 IPv6 route 均为空，IPv4 `Connection reset` | app/VPP PID 仍存在 | Wi-Fi 恢复后 IPv4/IPv6 均 HTTP 200 |
+
+每个恢复请求都在同一已安装 APK 和同一 VPN service 上完成，不需要重装、重启 app 或
+人工清理。每次上游 socket 仍记录真实 `VpnService.protect(fd)=true`，没有发现 HEV/VPP
+崩溃、无限重试或失控进程。
+
+原始证据：
+
+```text
+results/sakamoto-5-network-recovery-20260718-123309/
+```
+
+注意：第一次脚本运行使用不兼容的 `date +%s%3N` 打印耗时，字段不可信；判定使用 app
+自身 epoch 日志、HTTP 结果、PID、路由和 logcat。脚本已改为秒级 lower-bound 字段，原始
+结果不回写。
+
+结论：代理不可达、短时黑洞、当前 Wi-Fi 断开/恢复均 GO；第二条真实上游网络切换仍
+OPEN，不能从本次单网络设备实验外推。
