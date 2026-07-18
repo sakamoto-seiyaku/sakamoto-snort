@@ -222,6 +222,18 @@ public final class MainActivity extends Activity {
             main.postDelayed(() -> startAppUdpProbe(requestedHost, port, count, durationSeconds), 300);
         }
 
+        if (intent != null && intent.getBooleanExtra("controlProbe", false)) {
+            int blockOwnerUid = intent.getIntExtra(SnortVpnService.EXTRA_BLOCK_OWNER_UID, -1);
+            int rounds = intent.getIntExtra(SnortVpnService.EXTRA_ROUNDS, 1);
+            appendLog("intent controlProbe=true blockOwnerUid=" + blockOwnerUid
+                    + " rounds=" + rounds);
+            Intent control = new Intent(this, SnortVpnService.class);
+            control.setAction(SnortVpnService.ACTION_CONTROL_PROBE);
+            control.putExtra(SnortVpnService.EXTRA_BLOCK_OWNER_UID, blockOwnerUid);
+            control.putExtra(SnortVpnService.EXTRA_ROUNDS, rounds);
+            main.postDelayed(() -> startService(control), 300);
+        }
+
         if (intent != null && intent.getBooleanExtra("start", false)) {
             String mode = intent.getStringExtra(SnortVpnService.EXTRA_MODE);
             if (mode == null) {

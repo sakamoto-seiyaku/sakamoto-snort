@@ -14,6 +14,7 @@ add_vpp_plugin(tun_poc
 
   LINK_LIBRARIES
   vlib
+  vlibmemory
   vppinfra
 
   SUPPORTED_OS_LIST Linux Android

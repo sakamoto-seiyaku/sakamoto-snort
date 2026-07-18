@@ -241,6 +241,25 @@ def replace_once(rel, old, new):
 
 
 replace_once(
+    "vpp-api/vapi/CMakeLists.txt",
+    "add_vpp_library(vapiclient\n",
+    "if(\"${CMAKE_SYSTEM_NAME}\" STREQUAL \"Android\")\n"
+    "  # Android bionic exports pthread/rt symbols from libc.\n"
+    "  set(SAKAMOTO_ANDROID_VAPI_PLATFORM_LIBS m)\n"
+    "else()\n"
+    "  set(SAKAMOTO_ANDROID_VAPI_PLATFORM_LIBS pthread m rt)\n"
+    "endif()\n\n"
+    "add_vpp_library(vapiclient\n",
+)
+
+replace_once(
+    "vpp-api/vapi/CMakeLists.txt",
+    "  LINK_LIBRARIES vppinfra vlibmemoryclient svm pthread m rt",
+    "  LINK_LIBRARIES vppinfra vlibmemoryclient svm ${SAKAMOTO_ANDROID_VAPI_PLATFORM_LIBS}",
+)
+
+
+replace_once(
     "vlib/tw_funcs.h",
     "#define VLIB_TW_TICKS_PER_SECOND 1e5 /* 10 us */",
     "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"

@@ -1486,6 +1486,10 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
              "}\n"
              "\n"
              "%s"
+             "socksvr {\n"
+             "  socket-name %s/api.sock\n"
+             "}\n"
+             "\n"
              "api-segment {\n"
              "  prefix snort-vpn-lite\n"
              "}\n"
@@ -1504,7 +1508,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
              "  plugin %s { enable }\n"
              "}\n",
              runtime_dir, vpp_log, g_vpp_cli_sock, startup_exec, cpu_text,
-             runtime_dir, native_dir, plugin_name);
+             runtime_dir, runtime_dir, native_dir, plugin_name);
     return write_text_file(startup_conf, conf);
 }
 

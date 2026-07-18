@@ -25,6 +25,7 @@ public final class SnortVpnService extends VpnService {
     public static final String ACTION_STOP = "com.sakamoto.snort.vpnlite.STOP";
     public static final String ACTION_HTTP_PROBE = "com.sakamoto.snort.vpnlite.HTTP_PROBE";
     public static final String ACTION_UDP_PROBE = "com.sakamoto.snort.vpnlite.UDP_PROBE";
+    public static final String ACTION_CONTROL_PROBE = "com.sakamoto.snort.vpnlite.CONTROL_PROBE";
     public static final String EXTRA_MODE = "mode";
     public static final String EXTRA_HOST = "host";
     public static final String EXTRA_PORT = "port";
@@ -39,6 +40,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_REDIRECT_THREAD = "redirectThread";
     public static final String EXTRA_OWNER_CACHE = "ownerCache";
     public static final String EXTRA_ENABLE_IPV6 = "enableIpv6";
+    public static final String EXTRA_ROUNDS = "rounds";
     public static final String MODE_NATIVE = "native";
     public static final String MODE_VPP = "vpp";
     public static final String MODE_VPP_FORWARD = "vpp-forward";
@@ -88,6 +90,9 @@ public final class SnortVpnService extends VpnService {
 
     private static native void nativeStopHevProbe();
 
+    private static native int nativeRunVppControlProbe(String filesDir, int blockOwnerUid,
+                                                       int rounds);
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
@@ -102,6 +107,10 @@ public final class SnortVpnService extends VpnService {
         }
         if (ACTION_UDP_PROBE.equals(action)) {
             startUdpProbe(intent);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_CONTROL_PROBE.equals(action)) {
+            startControlProbe(intent);
             return START_NOT_STICKY;
         }
 
@@ -119,6 +128,19 @@ public final class SnortVpnService extends VpnService {
                 blockIp4Dst, blockIp6Dst, blockOwnerUid, redirectThread, ownerCache,
                 enableIpv6);
         return START_STICKY;
+    }
+
+    private void startControlProbe(Intent intent) {
+        final int blockOwnerUid = intent == null
+                ? -1 : intent.getIntExtra(EXTRA_BLOCK_OWNER_UID, -1);
+        final int rounds = intent == null ? 1 : intent.getIntExtra(EXTRA_ROUNDS, 1);
+        Thread thread = new Thread(() -> {
+            int rc = nativeRunVppControlProbe(getFilesDir().getAbsolutePath(), blockOwnerUid,
+                    rounds);
+            Log.i(TAG, "nativeRunVppControlProbe uid=" + Process.myUid()
+                    + " blockOwnerUid=" + blockOwnerUid + " rounds=" + rounds + " rc=" + rc);
+        }, "snort-vpp-control-probe");
+        thread.start();
     }
 
     @Override

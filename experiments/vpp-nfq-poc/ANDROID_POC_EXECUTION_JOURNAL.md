@@ -355,3 +355,70 @@ results/sakamoto-7-throughput-risk-20260718-131158/
 崩溃、进程退出、RSS 持续泄漏或 app send error；但不能据此放行熄屏后台 TCP 发版。
 下一步应先做“屏亮 vs 熄屏/Doze、前台 service/后台 service”的对照，定位约 4 秒延迟
 来自系统调度还是数据面路径，再决定产品 keepalive/前台服务策略。
+
+## SAKAMOTO-8：Android 打包 VAPI C ABI 与 typed control
+
+状态：通过，GO（Android 普通 app UID typed control 已成立）。
+
+实验目的：把现有 `tun_poc_control_shim` 和 VPP VAPI client 依赖放入 APK，VPP 在
+`files/vpp/runtime/api.sock` 提供 app-private `socksvr`，由 Android app UID JNI 调用
+typed `status -> owner policy set -> status -> clear -> status`，确认不依赖 CLI 解析和
+`su`。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / arm64-v8a / package UID `12540`。
+- 每次执行前 `dumpsys battery unplug`，正式运行确认 `USB powered: false`；结束执行
+  `dumpsys battery reset`，最终快照确认 `USB powered: true`、Awake。
+- APK SHA-256：
+  `bf4220c69b3be0dabcd36253538bd12c79d2a640fb7ca38937004b952898a309`。
+- VPP runtime stage：`work/android-vpp-api-stage`；VPP SHA-256：
+  `ebbb2c1bdfe20bbde1123e8182144911fe9ab6a83f01b898ee75b2fc745ff0dd`。
+- 5 轮，每轮新建一次 VAPI client handle；每轮都读取初始状态、设置
+  `owner_cache_enabled=1/block_owner_uid=12540`、读取确认、清除并读取确认。
+
+### 过程中的关键失败与修正
+
+第一次使用旧的优化 Android stage 时，VAPI socket 可以连接，但 typed status 返回
+`-5`，VPP 日志出现 `no handler for msg id 65535`。继续检查发现 APK 中的
+`tun_poc_plugin.so` 与生成 VAPI client 不是同一构建产物；configure tree 也曾只构建
+client，未重编当前 plugin，且 Android plugin target 缺少 `vlibmemory` 链接依赖。
+
+修正顺序：
+
+1. 在 `overlay/src/plugins/tun_poc/CMakeLists.txt` 为 Android plugin 增加
+   `vlibmemory` 链接依赖。
+2. 重新应用 overlay，重配置 Android configure tree，构建
+   `vapiclient vlibmemoryclient tun_poc_plugin`。
+3. 从同一 configure tree 重新生成 `android-vpp-api-stage`，让 VPP core、plugin、
+   generated VAPI header 和 client libraries 同源。
+4. Android overlay 固化 `vapiclient` 的 bionic 平台链接差异，移除不可用的独立
+   `pthread/rt` 链接，后续可由 CMake 直接重建，不再依赖手工链接。
+5. VPP startup config 新增 app-private：
+   `socksvr { socket-name <files>/vpp/runtime/api.sock }`。
+
+### 正式结果
+
+```text
+API socket: ready
+rounds: 5/5 pass
+status_before_rc: 0 (5/5)
+policy_set_rc/vpp_retval: 0/0 (5/5)
+status_set: owner_cache=1 block_uid_set=1 block_uid=12540 (5/5)
+policy_clear_rc/vpp_retval: 0/0 (5/5)
+status_after: owner_cache=0 block_uid_set=0 block_uid=-1 (5/5)
+client uid: 12540
+su: not used
+cleanup: no app/VPP residual process; battery override reset
+```
+
+原始证据：
+
+```text
+results/sakamoto-8-vapi-control-20260718-231537/
+```
+
+结论：Android 普通 app UID 已能加载打包的 VAPI C client，通过 app-private UDS 对同一
+UID 的 VPP 执行 typed control；API socket、C ABI shim、generated VAPI、VPP plugin 的
+构建一致性是硬前提。当前仍是 POC：头文件来自本地 VPP build tree，尚未进入 Rust SDK、
+Tauri command 或版本化发布包。

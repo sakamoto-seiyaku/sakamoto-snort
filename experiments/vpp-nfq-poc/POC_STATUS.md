@@ -20,6 +20,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN network failure/recovery | On Pixel 6a, proxy refusal, a paused SOCKS listener, and Wi-Fi off each fail without killing app/VPP; restarting proxy or Wi-Fi restores IPv4/IPv6 probes without reinstall or manual cleanup. | SAKAMOTO-5 |
 | VPN screen-off idle/wake | With simulated battery unplug and a 600-second Doze window, app/VPP/HEV stay alive for 20/20 samples, CPU/RSS stay flat, and IPv4/IPv6 probes both recover after wake. | SAKAMOTO-6 |
 | VPN sustained TCP/UDP risk baseline | Three 300-second TCP and three 300-second UDP rounds with simulated battery unplug and screen-off Doze keep app/VPP/HEV alive for 96/96 samples with zero app errors; TCP p95/p99 remains about 4.05/4.06 seconds, so resource stability is GO but background TCP release is HOLD. | SAKAMOTO-7 |
+| Android packaged VAPI C ABI typed control | Ordinary app UID APK packages generated VAPI client libs plus the public C shim, connects to app-private VPP `socksvr`, reads typed status, sets/clears owner policy, and confirms each mutation in 5/5 rounds without `su`. | SAKAMOTO-8 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -108,6 +109,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The same binary API path can mutate POC owner policy knobs:
   `tun_poc_owner_policy_set` sets owner-cache and block-owner-UID state, and
   `tun_poc_status` confirms the update without CLI output parsing.
+- Android can now package that typed VAPI path inside the ordinary app UID:
+  JNI calls the stable-shaped C shim, the shim calls generated VAPI, and VPP
+  remains the policy owner behind an app-private `socksvr` socket. The APK
+  still uses a POC build stage and has no Rust/Tauri control layer yet.
 - The VPP binary API can also stage, rollback, and commit owner-policy knobs:
   staged policy does not affect active status, rollback discards it, and commit
   is the step that changes active state.
@@ -221,10 +226,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   wake recovery, with device-level batterystats as an equivalent wakeup signal;
   it is not a long-term battery certification or physical cable-removal result.
 - The Android app is still a POC shell, not a product UI or policy manager.
-- The binary API POC covers status, direct owner-policy mutation, and a minimal
-  owner-policy transaction. It does not yet cover fd handoff, compiled policy
-  blobs, snapshot epoch/generation, Rust VAPI integration, or Android packaged
-  VPP.
+- The binary API POC covers status, direct owner-policy mutation, a minimal
+  owner-policy transaction, and Android packaging of the C ABI path. It does
+  not yet cover fd handoff, compiled policy blobs, snapshot epoch/generation,
+  Rust VAPI integration, or a Tauri command surface.
 - The VAPI C client POC is a smoke client only. It does not define the stable C
   ABI that Rust should call, and it still consumes generated headers from the
   local VPP build tree.
@@ -233,9 +238,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The Rust FFI owner-policy mutation POC still mutates direct POC knobs only. It
   does not define the final compiled policy schema, epoch model, transaction
   semantics, or connection lifetime strategy.
-- The staged SDK POC is local Linux only. It does not produce a versioned SDK,
-  does not patch VPP shared-library RUNPATH to `$ORIGIN`, and does not prove
-  Android or Tauri bundling.
+- The staged SDK POC is still local Linux only for the reusable SDK layout. The
+  Android SAKAMOTO-8 APK proves a packaged C ABI smoke path, but does not
+  produce a versioned SDK, patch VPP shared-library RUNPATH to `$ORIGIN`, or
+  prove Tauri bundling.
 - The persistent shim client POC is single-threaded. It does not define Rust
   `Send`/`Sync`, reconnect after VPP restart, cancellation, async command
   queues, or concurrent access rules.

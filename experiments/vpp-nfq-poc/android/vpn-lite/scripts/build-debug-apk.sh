@@ -20,6 +20,9 @@ if [[ -z "${VPP_STAGE_DIR:-}" && ! -x "$vpp_stage_dir/bin/vpp" && -x "$legacy_vp
   echo "warning: optimized VPP stage not found, falling back to legacy stage: $legacy_vpp_stage_dir" >&2
   vpp_stage_dir="$legacy_vpp_stage_dir"
 fi
+android_vpp_build_dir="${VPP_ANDROID_BUILD_DIR:-${poc_dir}/work/vpp-android-configure-probe}"
+android_vpp_client_lib_dir="${VPP_ANDROID_CLIENT_LIB_DIR:-${android_vpp_build_dir}/lib/aarch64-linux-android}"
+android_vpp_src_dir="${VPP_ANDROID_SOURCE_DIR:-${poc_dir}/work/vpp/src}"
 hev_stage_dir="${ANDROID_HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
 
 die() {
@@ -45,6 +48,9 @@ require_cmd java
 require_cmd keytool
 require_cmd zip
 command -v "$zipalign_bin" >/dev/null 2>&1 || [[ -x "$zipalign_bin" ]] || die "missing zipalign: $zipalign_bin"
+require_file "$android_vpp_client_lib_dir/libvapiclient.so"
+require_file "$android_vpp_client_lib_dir/libvlibmemoryclient.so"
+require_file "$android_vpp_build_dir/CMakeFiles/vpp-api/vapi/tun_poc.api.vapi.h"
 
 build_dir="$app_dir/build"
 classes_dir="$build_dir/classes"
@@ -61,6 +67,7 @@ rm -rf "$classes_dir" "$dex_dir" "$gen_dir" "$jni_root" "$intermediates" "$outpu
 mkdir -p "$classes_dir" "$dex_dir" "$gen_dir" "$jni_dir" "$intermediates" "$outputs"
 
 echo "vpp_stage_dir=$vpp_stage_dir"
+echo "android_vpp_client_lib_dir=$android_vpp_client_lib_dir"
 echo "building JNI probe"
 "$clang" \
   -shared \
@@ -69,8 +76,23 @@ echo "building JNI probe"
   -Wall \
   -Wextra \
   -Werror \
+  -Wno-unused-parameter \
+  -I"$poc_dir/clients" \
+  -I"$android_vpp_src_dir" \
+  -I"$android_vpp_src_dir/vpp-api" \
+  -I"$android_vpp_build_dir/CMakeFiles" \
+  -I"$android_vpp_build_dir/CMakeFiles/vpp-api" \
+  -I"$android_vpp_build_dir/CMakeFiles/vpp-api/vapi" \
   -o "$jni_dir/libvpnfdprobe.so" \
   "$app_dir/native/vpn_fd_probe.c" \
+  "$app_dir/native/vpp_control_probe.c" \
+  "$poc_dir/clients/tun_poc_control_shim.c" \
+  -L"$android_vpp_client_lib_dir" \
+  -lvapiclient \
+  -lvlibmemoryclient \
+  -lvlibapi \
+  -lsvm \
+  -lvppinfra \
   -llog \
   -ldl
 
@@ -84,6 +106,8 @@ if [[ -x "$vpp_stage_dir/bin/vpp" ]]; then
     [[ -f "$so" ]] || continue
     cp "$so" "$jni_dir/$(basename "$so")"
   done
+  cp "$android_vpp_client_lib_dir/libvlibmemoryclient.so" "$jni_dir/"
+  cp "$android_vpp_client_lib_dir/libvapiclient.so" "$jni_dir/"
 else
   echo "warning: VPP stage not found, building Phase 1-only APK: $vpp_stage_dir" >&2
 fi
