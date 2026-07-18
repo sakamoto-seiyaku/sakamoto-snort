@@ -55,6 +55,8 @@ static int g_vpp_gate_vpp_fd = -1;
 static int g_vpp_gate_block_uid = -1;
 static int g_vpp_resolver_fd = -1;
 static char g_vpp_cli_sock[PATH_BUF_SIZE];
+static char g_vpp_api_sock[PATH_BUF_SIZE];
+static char g_vpp_statseg_sock[PATH_BUF_SIZE];
 static char g_vpp_cli_log[PATH_BUF_SIZE];
 static char g_vpp_shim_log[PATH_BUF_SIZE];
 static char g_vpp_gate_log[PATH_BUF_SIZE];
@@ -1338,6 +1340,27 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopProbe(JNIEnv *env, jcl
     }
 }
 
+static void vpp_unlink_runtime_sockets(void) {
+    unlink(g_vpp_cli_sock);
+    unlink(g_vpp_api_sock);
+    unlink(g_vpp_statseg_sock);
+}
+
+static bool vpp_monitor_reap_child(FILE *file, pid_t pid) {
+    int status = 0;
+    pid_t exited = waitpid(pid, &status, WNOHANG);
+    if (exited == pid) {
+        log_line(file, "vpp child exited pid=%d status=%d", pid, status);
+        vpp_unlink_runtime_sockets();
+        return true;
+    }
+    if (exited < 0 && errno == ECHILD) {
+        log_line(file, "vpp child already reaped pid=%d", pid);
+        return true;
+    }
+    return false;
+}
+
 static void *vpp_monitor_thread(void *arg) {
     (void)arg;
     FILE *file = fopen(g_vpp_cli_log, "a");
@@ -1349,7 +1372,20 @@ static void *vpp_monitor_thread(void *arg) {
     pthread_mutex_unlock(&g_lock);
 
     log_line(file, "vpp monitor start pid=%d cli=%s", pid, sock_path);
-    sleep(3);
+
+    for (int tick = 0; tick < 30; tick++) {
+        pthread_mutex_lock(&g_lock);
+        bool running = g_vpp_monitor_running;
+        pthread_mutex_unlock(&g_lock);
+        if (!running) {
+            break;
+        }
+
+        if (vpp_monitor_reap_child(file, pid)) {
+            break;
+        }
+        usleep(100000);
+    }
 
     for (int i = 0; i < 8; i++) {
         pthread_mutex_lock(&g_lock);
@@ -1359,8 +1395,34 @@ static void *vpp_monitor_thread(void *arg) {
             break;
         }
 
+        if (vpp_monitor_reap_child(file, pid)) {
+            break;
+        }
+
         run_cli_command(sock_path, "show tun-poc", file);
-        sleep(1);
+        for (int tick = 0; tick < 10; tick++) {
+            pthread_mutex_lock(&g_lock);
+            running = g_vpp_monitor_running;
+            pthread_mutex_unlock(&g_lock);
+            if (!running) {
+                break;
+            }
+            usleep(100000);
+        }
+    }
+
+    for (;;) {
+        pthread_mutex_lock(&g_lock);
+        bool running = g_vpp_monitor_running;
+        pthread_mutex_unlock(&g_lock);
+        if (!running) {
+            break;
+        }
+
+        if (vpp_monitor_reap_child(file, pid)) {
+            break;
+        }
+        usleep(100000);
     }
 
     log_line(file, "vpp monitor stop");
@@ -1405,6 +1467,8 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     snprintf(stdout_log, stdout_log_len, "%s/vpp-stdout.log", logs_dir);
     snprintf(vpp_log, sizeof(vpp_log), "%s/vpp.log", logs_dir);
     snprintf(g_vpp_cli_sock, sizeof(g_vpp_cli_sock), "%s/cli.sock", runtime_dir);
+    snprintf(g_vpp_api_sock, sizeof(g_vpp_api_sock), "%s/api.sock", runtime_dir);
+    snprintf(g_vpp_statseg_sock, sizeof(g_vpp_statseg_sock), "%s/statseg.sock", runtime_dir);
     snprintf(g_vpp_cli_log, sizeof(g_vpp_cli_log), "%s/vpp-cli.log", logs_dir);
     snprintf(g_vpp_shim_log, sizeof(g_vpp_shim_log), "%s/vpp-shim.log", logs_dir);
     snprintf(g_vpp_gate_log, sizeof(g_vpp_gate_log), "%s/vpp-owner-gate.log", logs_dir);
@@ -2206,13 +2270,23 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
                 pid = -1;
                 break;
             }
+            if (rv < 0 && errno == ECHILD) {
+                pid = -1;
+                break;
+            }
             usleep(100000);
         }
         if (pid > 0) {
-            kill(pid, SIGKILL);
-            waitpid(pid, NULL, 0);
+            if (kill(pid, SIGKILL) < 0 && errno == ESRCH) {
+                pid = -1;
+            }
+            if (pid > 0) {
+                waitpid(pid, NULL, 0);
+            }
         }
     }
+
+    vpp_unlink_runtime_sockets();
 
     if (was_monitoring) {
         pthread_join(g_vpp_monitor_thread, NULL);

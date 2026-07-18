@@ -22,6 +22,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN sustained TCP/UDP risk baseline | Three 300-second TCP and three 300-second UDP rounds with simulated battery unplug and screen-off Doze keep app/VPP/HEV alive for 96/96 samples with zero app errors; TCP p95/p99 remains about 4.05/4.06 seconds, so resource stability is GO but background TCP release is HOLD. | SAKAMOTO-7 |
 | Android packaged VAPI C ABI typed control | Ordinary app UID APK packages generated VAPI client libs plus the public C shim, connects to app-private VPP `socksvr`, reads typed status, sets/clears owner policy, and confirms each mutation in 5/5 rounds without `su`. | SAKAMOTO-8 |
 | Android packaged Rust FFI typed control | Ordinary app UID APK packages a Rust staticlib behind JNI; Rust calls only the stable C ABI shim, performs typed status/set/clear against app-private VPP `socksvr`, and passes 5/5 rounds without `su`. | SAKAMOTO-9 |
+| Android VPP abnormal child exit and stop/restart | App UID `SIGTERM` is issued without `su`; the long-lived monitor reaps the VPP child, removes stale runtime sockets, and the explicit stop/restart path starts a new VPP PID whose Rust typed control passes. | SAKAMOTO-10 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -115,6 +116,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   remains the policy owner behind an app-private `socksvr` socket. SAKAMOTO-9
   also proves an Android Rust staticlib can call the same shim without exposing
   generated VAPI types to Rust; the APK still has no real Tauri command surface.
+- Android VPP child lifecycle now has a tested abnormal-exit boundary: the
+  app-UID monitor reaps a killed VPP child, removes `api.sock`, `cli.sock`, and
+  `statseg.sock`, and leaves explicit stop/restart to the service lifecycle.
+  A fresh VPP PID and fresh Rust typed control session pass after restart.
 - The VPP binary API can also stage, rollback, and commit owner-policy knobs:
   staged policy does not affect active status, rollback discards it, and commit
   is the step that changes active state.
@@ -252,3 +257,7 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - The serialized threaded access POC does not prove concurrent calls on one
   VAPI context, mutation interleaving, async scheduling, cancellation, or
   poisoning recovery.
+- SAKAMOTO-10 validates one app-UID `SIGTERM` child-death path and explicit
+  stop/restart on one Pixel 6a. It does not yet cover process crash signals,
+  Android service/process death, automatic VPP restart policy, or concurrent
+  stop versus child-exit races.

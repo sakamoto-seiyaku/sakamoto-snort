@@ -476,3 +476,69 @@ results/sakamoto-9-rust-control-20260718-232721/
 结论：Android 普通 app UID 内的 Rust 控制层可以通过稳定 C ABI 调用 packaged VAPI，
 对 app-private VPP 执行 typed read/write/rollback。当前仍是 POC：Rust staticlib 尚未
 进入版本化 SDK、异步/重连模型或真实 Tauri command。
+
+## SAKAMOTO-10：Android VPP 异常退出与 stop/restart
+
+状态：通过，GO（普通 app UID 下的 VPP child 异常退出、socket 清理和显式重启边界已成立）。
+
+实验目的：验证 VPP child 被 app UID 直接终止后，父进程是否回收 child、运行时 socket 是否
+留下 stale 文件，以及 `VpnService stop -> start` 是否能获得新 VPP child 并恢复 typed control。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / arm64-v8a / package UID `12540`。
+- 每次执行前 `dumpsys battery unplug`；正式运行确认 `USB powered: false`；结束执行
+  `dumpsys battery reset`，最终确认 `USB powered: true`。
+- kill 使用 `run-as com.sakamoto.snort.vpnlite /system/bin/kill -TERM <vpp-pid>`，
+  不使用 `su`。
+- APK SHA-256：
+  `c5621f57f44fd496120e747934850f54389d7c0e91442c62f390da73e64bff9e`。
+- VPP runtime stage：`work/android-vpp-api-stage`；VPP SHA-256：
+  `ebbb2c1bdfe20bbde1123e8182144911fe9ab6a83f01b898ee75b2fc745ff0dd`。
+
+### 首次失败与定位
+
+- 首次运行 `results/sakamoto-10-abnormal-restart-20260718-233443/`：app UID
+  `SIGTERM` 已成功，Rust control 在异常退出后按预期失败，但旧 VPP PID 变为
+  `State: Z (zombie)`，`api.sock` 仍存在；原因是原 monitor 只做有限次 CLI 轮询，
+  没有持续 `waitpid`，stop 之前不会回收 child，也没有清理 runtime socket。
+- 中间两次假回归使用了错误的 APK VPP stage：APK 实际打入
+  `release-no-multiarch-no-ipsec-idle-stage`（SHA `e439...`），而正式 S8/S9 使用
+  `android-vpp-api-stage`（SHA `ebbb...`）；表现为 API socket 可连接但 typed status
+  无回包。结论：APK 内 VPP、generated VAPI client 和记录中的 runtime stage 必须同轮
+  对齐，不能只看 socket `ready`。
+
+### 最小修复
+
+- `vpp_monitor_thread` 在 CLI 轮询结束后继续存活，周期性执行
+  `waitpid(pid, WNOHANG)`，直到显式 stop 或检测到 child 退出。
+- 检测到 child 退出后回收 PID，并清理 `api.sock`、`cli.sock`、`statseg.sock`。
+- `nativeStopVppProbe` 对已经被 monitor 回收的 child 处理 `ECHILD/ESRCH`，随后仍
+  关闭辅助 FD、join 线程并清理运行时 socket。
+
+### 正式结果
+
+```text
+run_id: 20260718-235841
+package_uid: 12540
+initial_app_pid: 5294
+initial_vpp_pid: 5330
+app-UID SIGTERM: accepted; vpp_exit=observed
+after kill: old VPP PID absent; State Z absent; api_socket=absent
+after kill Rust control: open_rc=-3 / result=fail (expected dead-child boundary)
+after stop: no VPP process
+restart_vpp_pid: 5613 (new PID)
+after restart Rust typed control: pass
+cleanup: no UID 12540 residual VPP/app process; battery override reset
+```
+
+原始证据：
+
+```text
+results/sakamoto-10-abnormal-restart-20260718-235841/
+```
+
+结论：Android app UID 下，VPP child 异常退出可以被父进程回收，stale API/runtime
+socket 不再残留；显式 stop/restart 后新 child 可恢复 Rust -> C ABI -> VAPI typed control。
+当前只验证 `SIGTERM + explicit stop/restart`，未覆盖 crash signal、Android service/process
+death、自动重启策略和 stop/child-exit 并发竞态。
