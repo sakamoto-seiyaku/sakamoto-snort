@@ -18,6 +18,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN upstream socket protect | HEV hands each SOCKS upstream fd to the app parent before connect; real `VpnService.protect(fd)` succeeds for 3 IPv4 and 3 IPv6 external-destination requests, while forced failure aborts before SOCKS accept. | SAKAMOTO-3 |
 | VPN VPP/HEV 50-cycle lifecycle | Fixed APK/config on Pixel 6a completes 50 app-UID start/HTTP/protect/stop cycles with stable active fd counts, no RSS growth trend, and no stopped process, `tun0`, or route-rule residue. | SAKAMOTO-4 |
 | VPN network failure/recovery | On Pixel 6a, proxy refusal, a paused SOCKS listener, and Wi-Fi off each fail without killing app/VPP; restarting proxy or Wi-Fi restores IPv4/IPv6 probes without reinstall or manual cleanup. | SAKAMOTO-5 |
+| VPN screen-off idle/wake | With simulated battery unplug and a 600-second Doze window, app/VPP/HEV stay alive for 20/20 samples, CPU/RSS stay flat, and IPv4/IPv6 probes both recover after wake. | SAKAMOTO-6 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -206,6 +207,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   the controlled Wi-Fi off/on transition on one Pixel 6a. The device did not
   expose a second independently controllable upstream network, so cellular,
   USB-tether, and cross-network handover remain unverified.
+- The idle/wake POC uses `dumpsys battery unplug` because USB charging otherwise
+  contaminates Doze observations. It proves one 600-second Pixel 6a window and
+  wake recovery, with device-level batterystats as an equivalent wakeup signal;
+  it is not a long-term battery certification or physical cable-removal result.
 - The Android app is still a POC shell, not a product UI or policy manager.
 - The binary API POC covers status, direct owner-policy mutation, and a minimal
   owner-policy transaction. It does not yet cover fd handoff, compiled policy

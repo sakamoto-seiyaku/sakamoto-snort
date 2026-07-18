@@ -240,3 +240,49 @@ results/sakamoto-5-network-recovery-20260718-123309/
 
 结论：代理不可达、短时黑洞、当前 Wi-Fi 断开/恢复均 GO；第二条真实上游网络切换仍
 OPEN，不能从本次单网络设备实验外推。
+
+## SAKAMOTO-6: 熄屏空闲与唤醒流量恢复
+
+状态：通过，GO（不是长期功耗认证）。
+
+实验修正：初始尝试发现 USB 供电会污染 Doze 观察；随后使用
+`dumpsys battery unplug` 模拟断开电源，确认 `AC/USB/Wireless powered=false` 后从头
+重跑。另发现屏幕会在前置流量探针期间自动熄灭，因此脚本在采样 0 前再次确认
+`mWakefulness=Awake`，只有确认亮屏后才发送关屏事件。
+
+固定条件：Pixel 6a / Android 16 / 电量 100% / USB 模拟断电 / Wi-Fi 保持连接 / 当前
+APK SHA-256 `c6f60a59431be006a0d13caa92cf35c97f45b2a003d7b84be86b9f87aecaaf00` / VPP
+SHA-256 `e439686e741cc9066e0e3ace8392c22df5ad943c075715f786180d2cd91f5d35`。
+
+结果：
+
+```text
+screen-off window: 600 seconds
+Dozing + screen-off samples: 20/20
+app/VPP/HEV alive samples: 22/22 (pre, 20 idle, wake)
+pre-wake IPv4/IPv6: 2/2 HTTP 200
+post-wake IPv4/IPv6: 2/2 HTTP 200
+```
+
+CPU tick（`/proc/<pid>/stat` utime+stime）：
+
+| 进程 | 熄屏前 | 唤醒后 | 窗口增量 |
+| --- | ---: | ---: | ---: |
+| app | 479 | 499 | +20 |
+| VPP | 933 | 971 | +38 |
+| HEV | 1 | 1 | +0 |
+
+RSS：app `155252 -> 155464 KB`，VPP 固定 `127448 KB`，HEV 固定 `46480 KB`。
+设备级 batterystats 记录 `Time on battery 13m57s`、`screen off 12m33s`、
+`Device full idling 11m57s`、`Total partial wakelock 11.092s`；该等效指标包含启动和
+唤醒前后，不应当作单独 app 的精确功耗归因。未发现 app/VPP/HEV 崩溃或退出。
+
+原始证据：
+
+```text
+results/sakamoto-6-idle-wake-20260718-124742/
+```
+
+结论：当前 idle profile 可以继续进入下一阶段；它在熄屏 Doze 窗口保持数据面进程存活，
+并能在唤醒后恢复 IPv4/IPv6 流量。仍不等同于长期电池认证、不同温度/电量曲线或真实
+物理拔线实验。
