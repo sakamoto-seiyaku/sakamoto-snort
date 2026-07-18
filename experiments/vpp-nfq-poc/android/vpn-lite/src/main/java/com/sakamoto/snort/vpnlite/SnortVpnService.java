@@ -28,6 +28,8 @@ public final class SnortVpnService extends VpnService {
     public static final String ACTION_CONTROL_PROBE = "com.sakamoto.snort.vpnlite.CONTROL_PROBE";
     public static final String ACTION_RUST_CONTROL_PROBE =
             "com.sakamoto.snort.vpnlite.RUST_CONTROL_PROBE";
+    public static final String ACTION_RUST_RECONNECT_PROBE =
+            "com.sakamoto.snort.vpnlite.RUST_RECONNECT_PROBE";
     public static final String EXTRA_MODE = "mode";
     public static final String EXTRA_HOST = "host";
     public static final String EXTRA_PORT = "port";
@@ -98,6 +100,9 @@ public final class SnortVpnService extends VpnService {
     private static native int nativeRunRustVppControlProbe(String filesDir, int blockOwnerUid,
                                                            int rounds);
 
+    private static native int nativeRunRustVppReconnectProbe(String filesDir,
+                                                              int timeoutSeconds);
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
@@ -120,6 +125,10 @@ public final class SnortVpnService extends VpnService {
         }
         if (ACTION_RUST_CONTROL_PROBE.equals(action)) {
             startRustControlProbe(intent);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_RUST_RECONNECT_PROBE.equals(action)) {
+            startRustReconnectProbe(intent);
             return START_NOT_STICKY;
         }
 
@@ -162,6 +171,18 @@ public final class SnortVpnService extends VpnService {
             Log.i(TAG, "nativeRunRustVppControlProbe uid=" + Process.myUid()
                     + " blockOwnerUid=" + blockOwnerUid + " rounds=" + rounds + " rc=" + rc);
         }, "snort-rust-vpp-control-probe");
+        thread.start();
+    }
+
+    private void startRustReconnectProbe(Intent intent) {
+        final int timeoutSeconds = intent == null ? 60
+                : Math.max(5, Math.min(120, intent.getIntExtra(EXTRA_DURATION_SECONDS, 60)));
+        Thread thread = new Thread(() -> {
+            int rc = nativeRunRustVppReconnectProbe(getFilesDir().getAbsolutePath(),
+                    timeoutSeconds);
+            Log.i(TAG, "nativeRunRustVppReconnectProbe uid=" + Process.myUid()
+                    + " timeoutSeconds=" + timeoutSeconds + " rc=" + rc);
+        }, "snort-rust-vpp-reconnect-probe");
         thread.start();
     }
 

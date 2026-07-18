@@ -542,3 +542,61 @@ results/sakamoto-10-abnormal-restart-20260718-235841/
 socket 不再残留；显式 stop/restart 后新 child 可恢复 Rust -> C ABI -> VAPI typed control。
 当前只验证 `SIGTERM + explicit stop/restart`，未覆盖 crash signal、Android service/process
 death、自动重启策略和 stop/child-exit 并发竞态。
+
+## SAKAMOTO-11：Android Rust persistent client stale-handle reconnect
+
+状态：通过，GO（persistent Rust opaque client 的 stale-handle 与 fresh-handle reconnect
+边界已成立）。
+
+实验目的：同一 Rust client 在 VPP stop 前后保持不变，验证旧连接不会假成功；VPP 重启后
+沿用同一 app-private API socket 创建 fresh client 并恢复 typed status。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / arm64-v8a / package UID `12540`。
+- Rust staticlib 通过稳定 C ABI opaque client 调用 generated VAPI；marker 文件由
+  `run-as` 创建，未使用 `su`。
+- 每次执行前 `dumpsys battery unplug`，正式运行确认 `USB powered: false`；结束执行
+  `dumpsys battery reset`，最终确认 `USB powered: true`。
+- APK SHA-256：
+  `ba01c6e898f9c732b50ddbed34ce9c8fadaf71005a622769393f219d63e5bdc5`。
+- VPP runtime stage：`work/android-vpp-api-stage`；VPP SHA-256：
+  `ebbb2c1bdfe20bbde1123e8182144911fe9ab6a83f01b898ee75b2fc745ff0dd`。
+
+### 首次失败与修正
+
+- 首次运行 `results/sakamoto-11-rust-reconnect-20260719-000654/`：旧 client
+  `stale_status_rc=-5` 已按预期失败，但 `stale_close_rc=-7` 使 probe 过早判失败，
+  没有进入 reopen 阶段。
+- `-7` 是 VAPI disconnect 关闭错误，不是 stale status 假成功；修正为记录并接受该
+  预期断连结果，继续等待 fresh handle。
+
+### 正式结果
+
+```text
+run_id: 20260719-000932
+package_uid: 12540
+initial_app_pid: 7009
+initial_vpp_pid: 7045
+initial_open_rc: 0
+initial_status_rc: 0
+stale_status_rc: -5 (same client, after VPP stop)
+stale_close_rc: -7 (expected disconnect close error)
+restart_vpp_pid: 7205 (new PID)
+fresh_open_rc: 0
+fresh_status_rc: 0
+fresh_close_rc: 0
+result: pass
+cleanup: no UID 12540 residual VPP/app process; battery override reset
+```
+
+原始证据：
+
+```text
+results/sakamoto-11-rust-reconnect-20260719-000932/
+```
+
+结论：Rust 控制层必须把 stale status error 作为连接丢失信号；旧 handle 的 close 也可能
+返回 disconnect error，不能把它误判为数据面失败。恢复策略应关闭旧 handle、等待新 API
+socket ready、创建 fresh handle；当前未定义自动 backoff、in-flight command recovery、
+command replay 或并发 reconnect ownership。

@@ -23,6 +23,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android packaged VAPI C ABI typed control | Ordinary app UID APK packages generated VAPI client libs plus the public C shim, connects to app-private VPP `socksvr`, reads typed status, sets/clears owner policy, and confirms each mutation in 5/5 rounds without `su`. | SAKAMOTO-8 |
 | Android packaged Rust FFI typed control | Ordinary app UID APK packages a Rust staticlib behind JNI; Rust calls only the stable C ABI shim, performs typed status/set/clear against app-private VPP `socksvr`, and passes 5/5 rounds without `su`. | SAKAMOTO-9 |
 | Android VPP abnormal child exit and stop/restart | App UID `SIGTERM` is issued without `su`; the long-lived monitor reaps the VPP child, removes stale runtime sockets, and the explicit stop/restart path starts a new VPP PID whose Rust typed control passes. | SAKAMOTO-10 |
+| Android Rust persistent client reconnect | One Rust opaque client passes initial status, fails with `rc=-5` after VPP stop, tolerates disconnect `close_rc=-7`, and a fresh client passes status after VPP restart. | SAKAMOTO-11 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -120,6 +121,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   app-UID monitor reaps a killed VPP child, removes `api.sock`, `cli.sock`, and
   `statseg.sock`, and leaves explicit stop/restart to the service lifecycle.
   A fresh VPP PID and fresh Rust typed control session pass after restart.
+- Android Rust control now has a persistent-handle reconnect boundary: a stale
+  client returns an error after VPP stop, its close may also report the expected
+  disconnect error, and a fresh opaque client can status successfully after a
+  new VPP PID is ready.
 - The VPP binary API can also stage, rollback, and commit owner-policy knobs:
   staged policy does not affect active status, rollback discards it, and commit
   is the step that changes active state.
@@ -261,3 +266,7 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   stop/restart on one Pixel 6a. It does not yet cover process crash signals,
   Android service/process death, automatic VPP restart policy, or concurrent
   stop versus child-exit races.
+- SAKAMOTO-11 validates one persistent Rust handle and one fresh-handle
+  reconnect on one Pixel 6a. It does not define automatic backoff, health
+  polling, in-flight command recovery, command replay, or concurrent reconnect
+  ownership.

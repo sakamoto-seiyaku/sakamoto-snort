@@ -3,8 +3,12 @@
 use std::ffi::CStr;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
+use std::mem::MaybeUninit;
 use std::os::raw::{c_char, c_int};
+use std::path::Path;
 use std::ptr;
+use std::thread;
+use std::time::Duration;
 
 #[repr(C)]
 struct TunPocClient {
@@ -38,6 +42,26 @@ struct TunPocOwnerPolicy {
     block_owner_uid_set: u8,
     reserved0: u16,
     block_owner_uid: i32,
+}
+
+fn status_rc(client: *mut TunPocClient) -> c_int {
+    let mut status = MaybeUninit::<TunPocStatusOut>::zeroed();
+    unsafe { tun_poc_client_status_get(client, status.as_mut_ptr()) }
+}
+
+fn wait_for_marker(log: &mut impl Write, label: &str, path: &Path, timeout_seconds: c_int) -> bool {
+    let deadline = timeout_seconds.clamp(5, 120) as u64 * 10;
+    for _ in 0..deadline {
+        if path.exists() {
+            let _ = writeln!(log, "{label}_marker_seen=1 path={}", path.display());
+            let _ = log.flush();
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let _ = writeln!(log, "{label}_marker_seen=0 path={}", path.display());
+    let _ = log.flush();
+    false
 }
 
 unsafe extern "C" {
@@ -234,4 +258,123 @@ pub unsafe extern "C" fn sakamoto_rust_vpp_control_probe(
     );
     let _ = log.flush();
     result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_rust_vpp_reconnect_probe(
+    api_sock: *const c_char,
+    log_path: *const c_char,
+    stale_marker: *const c_char,
+    reopen_marker: *const c_char,
+    timeout_seconds: c_int,
+) -> c_int {
+    if api_sock.is_null() || log_path.is_null() || stale_marker.is_null() || reopen_marker.is_null()
+    {
+        return -1;
+    }
+
+    let log_path = match CStr::from_ptr(log_path).to_str() {
+        Ok(path) => path,
+        Err(_) => return -2,
+    };
+    let stale_marker = CStr::from_ptr(stale_marker).to_string_lossy().into_owned();
+    let reopen_marker = CStr::from_ptr(reopen_marker).to_string_lossy().into_owned();
+    let mut log = match OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(log_path)
+    {
+        Ok(log) => log,
+        Err(_) => return -3,
+    };
+
+    let uid = getuid();
+    let _ = writeln!(
+        log,
+        "abi_version={} uid={} api_sock={} timeout_seconds={}",
+        tun_poc_control_shim_abi_version(),
+        uid,
+        CStr::from_ptr(api_sock).to_string_lossy(),
+        timeout_seconds
+    );
+
+    let mut old_client = ptr::null_mut();
+    let initial_open_rc = tun_poc_client_open(api_sock, &mut old_client);
+    let _ = writeln!(log, "initial_open_rc={initial_open_rc}");
+    if initial_open_rc != 0 || old_client.is_null() {
+        let _ = writeln!(log, "result=fail rc={initial_open_rc}");
+        return if initial_open_rc != 0 {
+            initial_open_rc
+        } else {
+            -4
+        };
+    }
+
+    let initial_status_rc = status_rc(old_client);
+    let _ = writeln!(log, "initial_status_rc={initial_status_rc}");
+    if initial_status_rc != 0 {
+        let close_rc = tun_poc_client_close(old_client);
+        let _ = writeln!(log, "initial_close_rc={close_rc} result=fail");
+        return initial_status_rc;
+    }
+    let _ = writeln!(log, "ready=1");
+    let _ = log.flush();
+
+    if !wait_for_marker(&mut log, "stale", Path::new(&stale_marker), timeout_seconds) {
+        let close_rc = tun_poc_client_close(old_client);
+        let _ = writeln!(log, "stale_close_rc={close_rc} result=fail rc=-5");
+        return -5;
+    }
+
+    let stale_status_rc = status_rc(old_client);
+    let _ = writeln!(log, "stale_status_rc={stale_status_rc}");
+    if stale_status_rc == 0 {
+        let close_rc = tun_poc_client_close(old_client);
+        let _ = writeln!(log, "stale_close_rc={close_rc} result=fail rc=-6");
+        return -6;
+    }
+    let stale_close_rc = tun_poc_client_close(old_client);
+    let _ = writeln!(log, "stale_close_rc={stale_close_rc}");
+    if stale_close_rc != 0 {
+        let _ = writeln!(log, "stale_close_error=expected_disconnect");
+    }
+
+    if !wait_for_marker(
+        &mut log,
+        "reopen",
+        Path::new(&reopen_marker),
+        timeout_seconds,
+    ) {
+        let _ = writeln!(log, "result=fail rc=-7");
+        return -7;
+    }
+
+    let mut new_client = ptr::null_mut();
+    let fresh_open_rc = tun_poc_client_open(api_sock, &mut new_client);
+    let _ = writeln!(log, "fresh_open_rc={fresh_open_rc}");
+    if fresh_open_rc != 0 || new_client.is_null() {
+        let _ = writeln!(log, "result=fail rc={fresh_open_rc}");
+        return if fresh_open_rc != 0 {
+            fresh_open_rc
+        } else {
+            -8
+        };
+    }
+    let fresh_status_rc = status_rc(new_client);
+    let _ = writeln!(log, "fresh_status_rc={fresh_status_rc}");
+    let fresh_close_rc = tun_poc_client_close(new_client);
+    let _ = writeln!(log, "fresh_close_rc={fresh_close_rc}");
+    if fresh_status_rc != 0 {
+        let _ = writeln!(log, "result=fail rc={fresh_status_rc}");
+        return fresh_status_rc;
+    }
+    if fresh_close_rc != 0 {
+        let _ = writeln!(log, "result=fail rc={fresh_close_rc}");
+        return fresh_close_rc;
+    }
+
+    let _ = writeln!(log, "result=pass rc=0");
+    let _ = log.flush();
+    0
 }

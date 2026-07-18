@@ -246,6 +246,15 @@ public final class MainActivity extends Activity {
             main.postDelayed(() -> startService(control), 300);
         }
 
+        if (intent != null && intent.getBooleanExtra("rustReconnectProbe", false)) {
+            int timeoutSeconds = intent.getIntExtra(SnortVpnService.EXTRA_DURATION_SECONDS, 60);
+            appendLog("intent rustReconnectProbe=true timeoutSeconds=" + timeoutSeconds);
+            Intent reconnect = new Intent(this, SnortVpnService.class);
+            reconnect.setAction(SnortVpnService.ACTION_RUST_RECONNECT_PROBE);
+            reconnect.putExtra(SnortVpnService.EXTRA_DURATION_SECONDS, timeoutSeconds);
+            main.postDelayed(() -> startService(reconnect), 300);
+        }
+
         if (intent != null && intent.getBooleanExtra("start", false)) {
             String mode = intent.getStringExtra(SnortVpnService.EXTRA_MODE);
             if (mode == null) {
