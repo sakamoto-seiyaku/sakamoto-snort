@@ -17,6 +17,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 
 public final class SnortVpnService extends VpnService {
     public static final String ACTION_START = "com.sakamoto.snort.vpnlite.START";
@@ -28,6 +30,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_PORT = "port";
     public static final String EXTRA_PATH = "path";
     public static final String EXTRA_COUNT = "count";
+    public static final String EXTRA_DURATION_SECONDS = "durationSeconds";
     public static final String EXTRA_ALLOWED_PACKAGE = "allowedPackage";
     public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
     public static final String EXTRA_BLOCK_IP4_DST = "blockIp4Dst";
@@ -228,7 +231,15 @@ public final class SnortVpnService extends VpnService {
         final String probeHost = host;
         final int probePort = port;
         final String probePath = path;
-        Thread thread = new Thread(() -> runHttpProbe(probeHost, probePort, probePath),
+        final int durationSeconds = intent == null ? 0
+                : Math.max(0, Math.min(3600, intent.getIntExtra(EXTRA_DURATION_SECONDS, 0)));
+        Thread thread = new Thread(() -> {
+            if (durationSeconds > 0) {
+                runHttpStreamProbe(probeHost, probePort, probePath, durationSeconds);
+            } else {
+                runHttpProbe(probeHost, probePort, probePath);
+            }
+        },
                 "snort-app-http-probe");
         thread.start();
     }
@@ -245,7 +256,15 @@ public final class SnortVpnService extends VpnService {
         final String probeHost = host;
         final int probePort = port;
         final int probeCount = count;
-        Thread thread = new Thread(() -> runUdpProbe(probeHost, probePort, probeCount),
+        final int durationSeconds = intent == null ? 0
+                : Math.max(0, Math.min(3600, intent.getIntExtra(EXTRA_DURATION_SECONDS, 0)));
+        Thread thread = new Thread(() -> {
+            if (durationSeconds > 0) {
+                runUdpStreamProbe(probeHost, probePort, durationSeconds);
+            } else {
+                runUdpProbe(probeHost, probePort, probeCount);
+            }
+        },
                 "snort-app-udp-probe");
         thread.start();
     }
@@ -287,6 +306,74 @@ public final class SnortVpnService extends VpnService {
         }
     }
 
+    private void runHttpStreamProbe(String host, int port, String path, int durationSeconds) {
+        long started = System.currentTimeMillis();
+        long deadline = started + durationSeconds * 1000L;
+        File logsDir = new File(getFilesDir(), "logs");
+        if (!logsDir.isDirectory() && !logsDir.mkdirs()) {
+            Log.w(TAG, "failed to create logs dir: " + logsDir);
+        }
+        File logPath = new File(logsDir, "app-http-probe.log");
+        int requests = 0;
+        int successes = 0;
+        long requestBytes = 0;
+        long responseBytes = 0;
+        int errors = 0;
+        ArrayList<Long> latencies = new ArrayList<>();
+        appendHttpProbeLog(logPath, "stream-start host=" + host + " port=" + port
+                + " durationSeconds=" + durationSeconds);
+        while (System.currentTimeMillis() < deadline) {
+            requests++;
+            long requestStarted = System.currentTimeMillis();
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress(host, port), 5000);
+                socket.setSoTimeout(5000);
+                String request = "GET " + path + " HTTP/1.0\r\n"
+                        + "Host: " + host + "\r\n"
+                        + "Connection: close\r\n\r\n";
+                byte[] requestData = request.getBytes(StandardCharsets.US_ASCII);
+                OutputStream out = socket.getOutputStream();
+                out.write(requestData);
+                out.flush();
+                requestBytes += requestData.length;
+                BufferedInputStream in = new BufferedInputStream(socket.getInputStream());
+                byte[] buf = new byte[512];
+                int n;
+                int total = 0;
+                while ((n = in.read(buf)) > 0) {
+                    total += n;
+                }
+                responseBytes += total;
+                if (total > 0) {
+                    successes++;
+                    latencies.add(System.currentTimeMillis() - requestStarted);
+                }
+            } catch (Exception e) {
+                errors++;
+            }
+        }
+        long elapsed = System.currentTimeMillis() - started;
+        appendHttpProbeLog(logPath, "stream-done requests=" + requests
+                + " successes=" + successes + " errors=" + errors
+                + " requestBytes=" + requestBytes + " responseBytes=" + responseBytes
+                + " elapsedMs=" + elapsed + " latencyMsP50=" + percentileMillis(latencies, 0.50)
+                + " latencyMsP95=" + percentileMillis(latencies, 0.95)
+                + " latencyMsP99=" + percentileMillis(latencies, 0.99));
+        Log.i(TAG, "app HTTP stream done host=" + host + " requests=" + requests
+                + " successes=" + successes + " errors=" + errors
+                + " elapsedMs=" + elapsed);
+    }
+
+    private long percentileMillis(ArrayList<Long> values, double percentile) {
+        if (values.isEmpty()) {
+            return -1;
+        }
+        Collections.sort(values);
+        int index = (int) Math.ceil(percentile * values.size()) - 1;
+        index = Math.max(0, Math.min(index, values.size() - 1));
+        return values.get(index);
+    }
+
     private void runUdpProbe(String host, int port, int count) {
         long started = System.currentTimeMillis();
         File logsDir = new File(getFilesDir(), "logs");
@@ -318,6 +405,44 @@ public final class SnortVpnService extends VpnService {
                     + e.getClass().getSimpleName() + ": " + e.getMessage());
             Log.w(TAG, "app UDP probe failed host=" + host + " port=" + port, e);
         }
+    }
+
+    private void runUdpStreamProbe(String host, int port, int durationSeconds) {
+        long started = System.currentTimeMillis();
+        long deadline = started + durationSeconds * 1000L;
+        File logsDir = new File(getFilesDir(), "logs");
+        if (!logsDir.isDirectory() && !logsDir.mkdirs()) {
+            Log.w(TAG, "failed to create logs dir: " + logsDir);
+        }
+        File logPath = new File(logsDir, "app-udp-probe.log");
+        byte[] payload = "snort-vpn-lite-udp-stream".getBytes(StandardCharsets.US_ASCII);
+        long sent = 0;
+        int errors = 0;
+        appendProbeLog(logPath, "stream-start host=" + host + " port=" + port
+                + " durationSeconds=" + durationSeconds + " payloadBytes=" + payload.length);
+        try (DatagramSocket socket = new DatagramSocket()) {
+            InetAddress remote = InetAddress.getByName(host);
+            socket.connect(remote, port);
+            DatagramPacket packet = new DatagramPacket(payload, payload.length);
+            while (System.currentTimeMillis() < deadline) {
+                try {
+                    socket.send(packet);
+                    sent++;
+                } catch (Exception e) {
+                    errors++;
+                }
+                if ((sent & 1023) == 0) {
+                    Thread.yield();
+                }
+            }
+        } catch (Exception e) {
+            errors++;
+        }
+        long elapsed = System.currentTimeMillis() - started;
+        appendProbeLog(logPath, "stream-done packets=" + sent + " errors=" + errors
+                + " bytes=" + (sent * payload.length) + " elapsedMs=" + elapsed);
+        Log.i(TAG, "app UDP stream done host=" + host + " packets=" + sent
+                + " errors=" + errors + " elapsedMs=" + elapsed);
     }
 
     private void appendHttpProbeLog(File logPath, String line) {

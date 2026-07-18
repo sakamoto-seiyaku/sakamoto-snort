@@ -286,3 +286,72 @@ results/sakamoto-6-idle-wake-20260718-124742/
 结论：当前 idle profile 可以继续进入下一阶段；它在熄屏 Doze 窗口保持数据面进程存活，
 并能在唤醒后恢复 IPv4/IPv6 流量。仍不等同于长期电池认证、不同温度/电量曲线或真实
 物理拔线实验。
+
+## SAKAMOTO-7: 5 分钟持续流量风险基线
+
+状态：测试通过；资源稳定 GO，熄屏 TCP 延迟 HOLD 发版。
+
+实验目的：在同一 Android 真机、同一 VPP/HEV 配置下，分别执行 3 轮 300 秒 TCP 和
+UDP 持续负载，观察 Doze 场景中的延迟、发包量、错误、CPU、RSS、CPU placement 和
+温度。该 POC 不是公网带宽认证：当前设备本地 SOCKS smoke server 只返回固定 HTTP
+200，UDP 也没有 UDP ASSOCIATE relay，因此 TCP 字节量代表路径/连接 churn，UDP 字节量
+代表 app UID 发包和 VPP 路径负载，不代表公网有效吞吐。
+
+### 固定条件与执行修正
+
+- Pixel 6a / Android 16 / Wi-Fi `Openwrt_5G`；APK SHA-256
+  `575cf3f2eb23f19dc60614563f3ccd282a998f7a77e4bbd6c47cba85179fc3f3`；VPP SHA-256
+  `e439686e741cc9066e0e3ace8392c22df5ad943c075715f786180d2cd91f5d35`。
+- 每次正式测量前执行 `dumpsys battery unplug`，并确认 `USB powered: false`；屏幕关闭后
+  进入 `mWakefulness=Dozing`，采样中 `deviceidle mState=IDLE`。结束后执行
+  `dumpsys battery reset`，恢复 `Awake`。
+- TCP：`142.251.13.94:80`，HTTP/1.0 短连接循环，300 秒，warm-up 15 秒，15 秒采样。
+  UDP：`8.8.8.8:53`，25 字节 payload tight loop，同样 300 秒和采样周期。
+- 每个采样保存进程表、`/proc` CPU tick/processor/cpuset、RSS、电池、thermalservice、
+  power、deviceidle、VPP CLI、HEV、应用日志和 logcat；流水账为结果目录下的 `run.log`。
+- 冒烟阶段发现两个 harness 问题：Activity 没有转发 `durationSeconds`，导致 stream
+  extra 不会进入 Service；已补齐 Activity -> Service 传递。WSL2 下未引用的
+  `/proc/cpuinfo` 被 Windows `adb.exe` 改写成本机路径；已改为远端 shell 字符串后再正式运行。
+
+### 正式结果
+
+| 轮次 | TCP requests/success | TCP error | TCP response bytes/s | p50/p95/p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 75/75 | 0 | 9.987 B/s | 4043/4063/4071 |
+| 2 | 76/76 | 0 | 10.051 B/s | 4030/4054/4063 |
+| 3 | 76/76 | 0 | 10.086 B/s | 4042/4067/4077 |
+
+| 轮次 | UDP packets | UDP error | UDP bytes/s |
+| --- | ---: | ---: | ---: |
+| 1 | 6,938,262 | 0 | 578,188.500 |
+| 2 | 6,970,444 | 0 | 580,870.333 |
+| 3 | 6,892,774 | 0 | 574,395.919 |
+
+三轮 TCP 均稳定出现约 4 秒级延迟；这是在 USB 已模拟断电且设备处于熄屏 Doze 的
+重复现象，不是单轮异常。当前证据只能确认与该 Doze/后台条件相关，不能单凭本 POC
+断言根因是 Android 调度、HEV、VPP 或 mock SOCKS server，需用屏亮/前台 service 对照
+实验拆分。
+
+稳定性与资源：
+
+- app/VPP/HEV 存活样本 `96/96`；TCP、UDP 六轮应用层 error 均为 `0`。
+- 电池温度正式样本固定 `342`（约 34.2 C）；reset 后设备回到 USB powered，结束温度
+  `346`（约 34.6 C）。
+- TCP 采样 RSS 范围：app `154088..158012 KB`，VPP `127556..127724 KB`，HEV
+  `46380..46436 KB`。UDP：app `153632..157004 KB`，VPP `127332..127516 KB`，
+  HEV `46372..46400 KB`。
+- 每轮 CPU tick 增量（app/VPP/HEV）：TCP `216/69/61`、`128/37/40`、`215/71/63`；
+  UDP `25570/16932/439`、`25692/17017/436`、`25630/16978/435`。UDP 的高 app tick
+  是 tight-loop 发包负载的直接表现；当前允许 CPU 集合为 `0-3`，未固定单核。
+- 停止后无 app/VPP/HEV 残留，屏幕恢复 Awake，battery override 已 reset。
+
+原始证据：
+
+```text
+results/sakamoto-7-throughput-risk-20260718-131158/
+```
+
+结论：可以继续 Android POC，当前 VPP/HEV 在 30 分钟级持续 TCP/UDP 负载下未出现
+崩溃、进程退出、RSS 持续泄漏或 app send error；但不能据此放行熄屏后台 TCP 发版。
+下一步应先做“屏亮 vs 熄屏/Doze、前台 service/后台 service”的对照，定位约 4 秒延迟
+来自系统调度还是数据面路径，再决定产品 keepalive/前台服务策略。

@@ -19,6 +19,7 @@ remain in `EXPERIMENT_LOG.md`.
 | VPN VPP/HEV 50-cycle lifecycle | Fixed APK/config on Pixel 6a completes 50 app-UID start/HTTP/protect/stop cycles with stable active fd counts, no RSS growth trend, and no stopped process, `tun0`, or route-rule residue. | SAKAMOTO-4 |
 | VPN network failure/recovery | On Pixel 6a, proxy refusal, a paused SOCKS listener, and Wi-Fi off each fail without killing app/VPP; restarting proxy or Wi-Fi restores IPv4/IPv6 probes without reinstall or manual cleanup. | SAKAMOTO-5 |
 | VPN screen-off idle/wake | With simulated battery unplug and a 600-second Doze window, app/VPP/HEV stay alive for 20/20 samples, CPU/RSS stay flat, and IPv4/IPv6 probes both recover after wake. | SAKAMOTO-6 |
+| VPN sustained TCP/UDP risk baseline | Three 300-second TCP and three 300-second UDP rounds with simulated battery unplug and screen-off Doze keep app/VPP/HEV alive for 96/96 samples with zero app errors; TCP p95/p99 remains about 4.05/4.06 seconds, so resource stability is GO but background TCP release is HOLD. | SAKAMOTO-7 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -147,6 +148,11 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - A short 20-packet UDP owner-cache burst works on Pixel 6a: VPP parses and
   drops all 20 packets while resolver queries stay at one. This is not a
   sustained throughput or battery result.
+- SAKAMOTO-7 establishes a 30-minute-class sustained-load baseline with
+  simulated battery unplug. App/VPP/HEV stayed alive and RSS/temperature were
+  stable, but screen-off Doze TCP latency was consistently about four seconds.
+  Treat this as a release blocker until a screen-on versus background-service
+  comparison separates Android scheduling from the VPP/HEV path.
 - Android VPP-internal UID drop is now verified for IPv4 TCP: resolver provides
   UID, VPP worker applies `block-owner-uid`, and HEV/SOCKS sees no target
   connection.
@@ -188,8 +194,11 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - Domain/DNS rules are not validated; current rules use package UID or exact IP.
 - Root mode dual IPv4+IPv6 still relies on the earlier workaround, not a clean
   multi-queue plugin design.
-- No sustained performance or battery test has been run beyond idle/short loops
-  and the 20-packet UDP owner-cache burst.
+- SAKAMOTO-7 is a controlled path-risk baseline, not a product throughput or
+  battery certification: the TCP endpoint is a device-local mock SOCKS server
+  that returns fixed HTTP 200, and UDP has no end-to-end UDP ASSOCIATE relay.
+  Public relay throughput, packet drops at the network boundary, and power
+  attribution to the individual app/VPP/HEV processes remain open.
 - The app UID / no-su matrix ran on a Pixel 6a whose bootloader is unlocked and
   whose verified boot state is orange. It proves runtime identity, not the
   separate release check on a never-rooted, bootloader-locked device.
