@@ -13,6 +13,8 @@ apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
 ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 clang="${ANDROID_CLANG:-${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
+rustc="${RUSTC:-$(command -v rustc || true)}"
+rust_source="${VPP_ANDROID_RUST_SOURCE:-${app_dir}/rust/vpp_rust_control_probe.rs}"
 default_vpp_stage_dir="${poc_dir}/work/android-vpp-release-no-multiarch-no-ipsec-idle-stage"
 legacy_vpp_stage_dir="${poc_dir}/work/android-vpp-core-stage"
 vpp_stage_dir="${VPP_STAGE_DIR:-${default_vpp_stage_dir}}"
@@ -43,6 +45,8 @@ require_file "$aapt2"
 require_file "$d8_jar"
 require_file "$apksigner_jar"
 require_file "$clang"
+[[ -n "$rustc" && -x "$rustc" ]] || die "missing executable rustc: $rustc"
+require_file "$rust_source"
 require_cmd javac
 require_cmd java
 require_cmd keytool
@@ -66,6 +70,17 @@ keystore="$build_dir/debug.keystore"
 rm -rf "$classes_dir" "$dex_dir" "$gen_dir" "$jni_root" "$intermediates" "$outputs"
 mkdir -p "$classes_dir" "$dex_dir" "$gen_dir" "$jni_dir" "$intermediates" "$outputs"
 
+rust_staticlib="$intermediates/libvpp_rust_control_probe.a"
+echo "building Rust Android control probe"
+"$rustc" \
+  --edition=2021 \
+  --target aarch64-linux-android \
+  --crate-type staticlib \
+  -C opt-level=2 \
+  -C panic=abort \
+  -o "$rust_staticlib" \
+  "$rust_source"
+
 echo "vpp_stage_dir=$vpp_stage_dir"
 echo "android_vpp_client_lib_dir=$android_vpp_client_lib_dir"
 echo "building JNI probe"
@@ -86,7 +101,9 @@ echo "building JNI probe"
   -o "$jni_dir/libvpnfdprobe.so" \
   "$app_dir/native/vpn_fd_probe.c" \
   "$app_dir/native/vpp_control_probe.c" \
+  "$app_dir/native/vpp_rust_control_probe.c" \
   "$poc_dir/clients/tun_poc_control_shim.c" \
+  "$rust_staticlib" \
   -L"$android_vpp_client_lib_dir" \
   -lvapiclient \
   -lvlibmemoryclient \

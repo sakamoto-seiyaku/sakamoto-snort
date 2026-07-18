@@ -422,3 +422,57 @@ results/sakamoto-8-vapi-control-20260718-231537/
 UID 的 VPP 执行 typed control；API socket、C ABI shim、generated VAPI、VPP plugin 的
 构建一致性是硬前提。当前仍是 POC：头文件来自本地 VPP build tree，尚未进入 Rust SDK、
 Tauri command 或版本化发布包。
+
+## SAKAMOTO-9：Android 打包 Rust FFI 与 typed control
+
+状态：通过，GO（Android 普通 app UID 的 Rust -> C ABI -> VAPI 路径已成立）。
+
+实验目的：把 Rust 控制层编译为 `aarch64-linux-android` staticlib，放入同一 APK，
+由 JNI 只负责路径和调度；Rust 仅调用稳定 C ABI opaque client，不接触 generated VAPI
+类型，完成 `status -> owner policy set -> status -> clear -> status`。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / arm64-v8a / package UID `12540`。
+- Rust target：`aarch64-linux-android`；APK 内 Rust staticlib 与 C JNI、VAPI client、
+  VPP plugin 同一轮构建。
+- 每次执行前 `dumpsys battery unplug`，正式运行确认 `USB powered: false`；结束执行
+  `dumpsys battery reset`，最终确认 `USB powered: true`、Awake。
+- APK SHA-256：
+  `e6f8963fbd9ec8d6b8192b2194ad56d4b13f7d42a7baf4f9d3dbda9510bd5973`。
+- VPP runtime stage：`work/android-vpp-api-stage`；VPP SHA-256：
+  `ebbb2c1bdfe20bbde1123e8182144911fe9ab6a83f01b898ee75b2fc745ff0dd`。
+
+### 关键实现边界
+
+- Rust FFI 只声明 `tun_poc_client_*`、`tun_poc_status_out_t` 和
+  `tun_poc_owner_policy_t`；generated VAPI 仍隐藏在 C shim 内。
+- JNI 不实现控制逻辑，只生成 app-private socket/log 路径并调用 Rust 导出函数。
+- Rust 每轮新建并关闭一个 opaque client；本票不宣称异步、自动重连、并发访问或
+  Tauri command 语义。
+
+### 正式结果
+
+```text
+API socket: ready
+rounds: 5/5 pass
+Rust abi_version: 1
+Rust client uid: 12540
+status_before_rc: 0 (5/5)
+policy_set_rc/vpp_retval: 0/0 (5/5)
+status_set: owner_cache=1 block_uid_set=1 block_uid=12540 (5/5)
+policy_clear_rc/vpp_retval: 0/0 (5/5)
+status_after: owner_cache=0 block_uid_set=0 block_uid=-1 (5/5)
+su: not used
+cleanup: no app/VPP residual process; battery override reset
+```
+
+原始证据：
+
+```text
+results/sakamoto-9-rust-control-20260718-232721/
+```
+
+结论：Android 普通 app UID 内的 Rust 控制层可以通过稳定 C ABI 调用 packaged VAPI，
+对 app-private VPP 执行 typed read/write/rollback。当前仍是 POC：Rust staticlib 尚未
+进入版本化 SDK、异步/重连模型或真实 Tauri command。
