@@ -168,6 +168,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-07-19] SAKAMOTO-28 RuntimeService app process death cleanup：直接 kill Android app PID，不调用 runtimeStop，root daemon 通过 parent-death guard 退出，control socket 与双栈 NFQUEUE hook 自动消失，fresh recovery 通过；更广泛 OEM kill reason/tombstone 采集仍待验证。
 - [DONE 2026-07-19] SAKAMOTO-29 RuntimeService reboot recovery：RuntimeService 活跃时 reboot，启动后无 root daemon、app process、control socket、双栈 hook 且无自动拉起，fresh start/stop recovery 通过；OEM boot policy 与 reboot 中断安装未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-30 APK signature/key rotation boundary：不同签名 key 的同 package APK 被 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` 拒绝，原 package 保持存在，原签名 APK RuntimeService recovery 通过；正式 release key rotation、签名 lineage 与 staged migration 未覆盖。
+- [DONE 2026-07-19] SAKAMOTO-31 RuntimeService notification permission denial：撤销 `POST_NOTIFICATIONS` 后 `startForeground`、root daemon 与 RuntimeService 启动仍通过，受控停止无 daemon/socket/NFQUEUE 残留；恢复授权后 fresh recovery 通过。该结论仅覆盖 Android 16 Pixel 6a debug APK，不等同于 release notification UX 验收。
 - [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
 - [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
 

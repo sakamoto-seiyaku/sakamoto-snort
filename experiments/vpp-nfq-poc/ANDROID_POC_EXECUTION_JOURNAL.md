@@ -1631,3 +1631,54 @@ results/sakamoto-30-apk-signature-rotation-20260719-133513/
 Android package manager 能阻止不同签名 key 覆盖同 package，且原安装仍可启动 RuntimeService。
 这证明当前安装链的基本 key mismatch fail closed；尚未覆盖 release signing lineage、key rotation
 兼容策略、staged migration、数据迁移和升级中断恢复。
+
+## SAKAMOTO-31：RuntimeService notification permission denial
+
+状态：实验通过；撤销 `POST_NOTIFICATIONS` 后，当前 foreground-service 实现仍能启动 RuntimeService
+和 root daemon，停止清理及恢复授权后的 recovery 均通过。
+
+### 目标与方法
+
+在同一 Pixel 6a debug APK 上通过 `pm revoke` 撤销 `POST_NOTIFICATIONS`，再启动 RuntimeService，
+分别观察 `startForeground`、root daemon、控制 socket、NFQUEUE hook 和 notification snapshot；随后
+受控停止、恢复通知授权，并验证 fresh start/stop cleanup。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-133843`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- daemon SHA-256：`1ba3d1e8b2302d829473d5a87af792dfdb9d9dc3382b949144d0cdef5b0d614f`。
+- HELLO build id：`ndk-r29-3b9b1cc0851e`。
+- 权限快照：`POST_NOTIFICATIONS: granted=false`。
+
+### 正式结果
+
+```text
+notification permission: denied
+foreground_service_start: pass; notification_id=1001
+RuntimeService/root daemon start: pass
+denied-running: root daemon present
+denied-stopped: daemon/socket/NFQUEUE hooks absent
+permission restored recovery: runtime_start_pass
+recovery stop: daemon/socket/NFQUEUE hooks absent
+result: pass; notification denial does not block the current runtime boundary
+```
+
+原始证据：
+
+```text
+results/sakamoto-31-runtime-notification-denial-20260719-133843/
+```
+
+### 失败方法与定位
+
+本轮没有 harness 或设备失败；拒绝授权路径本身按预期完成了显式行为记录，未将“通知是否出现在
+系统 drawer”误判为 RuntimeService 启动失败。`dumpsys notification` snapshot 保留在结果目录，
+用于区分 `startForeground` 成功和通知展示策略。
+
+### 技术结论与边界
+
+当前 Android 16 Pixel 6a debug 环境中，通知权限被拒绝不会阻断已实现的 `startForeground`、root
+daemon 启动或控制链路；停止清理和重新授权 recovery 均成立。该 POC 只证明系统/当前 target SDK
+组合下的运行边界，不证明 release notification UX、用户运行时授权弹窗、OEM 策略、通知渠道升级
+行为或长时间 foreground-service 限制。

@@ -43,6 +43,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android RuntimeService app process death cleanup | Directly killing the Android app PID without `runtimeStop` causes the root daemon to exit through its parent-death guard; control socket and NFQUEUE hooks disappear without manual root cleanup, and fresh recovery passes. | SAKAMOTO-28 |
 | Android RuntimeService reboot recovery | Rebooting while RuntimeService is active leaves no root daemon, app process, control socket, or NFQUEUE hook and does not auto-start the runtime; fresh RuntimeService start/stop recovery passes. | SAKAMOTO-29 |
 | Android APK signature mismatch and key rotation boundary | An alternate-key APK with the same package is rejected as `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; the original package remains installed and its RuntimeService recovery starts/stops cleanly. | SAKAMOTO-30 |
+| Android RuntimeService notification permission denial | With `POST_NOTIFICATIONS` revoked, `startForeground` and root RuntimeService startup still pass on Pixel 6a; controlled stop leaves no daemon/socket/NFQUEUE residue, and granting permission enables clean recovery. | SAKAMOTO-31 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
