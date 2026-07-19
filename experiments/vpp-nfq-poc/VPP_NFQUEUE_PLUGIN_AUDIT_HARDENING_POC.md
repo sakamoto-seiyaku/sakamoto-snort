@@ -1,6 +1,6 @@
 # VPP experimental NFQUEUE plugin audit and hardening POC
 
-状态：已登记，未开始正式执行
+状态：已登记，未开始正式执行；Android-only
 
 Plane：`SAKAMOTO-32`
 
@@ -13,9 +13,9 @@ VPP graph 并回写 verdict”，但这不等于它具备正式平台 Adapter �
 
 1. 当前插件的源码、版本、依赖和许可证是否可以被项目正式接管。
 2. 插件是否完整实现 Snort 所需的 NFQUEUE packet/verdict/metadata/teardown 语义。
-3. 插件是否能在选定 VPP 版本、Linux 和 Android arm64 上稳定构建与运行。
+3. 插件是否能在选定 VPP 版本和 Android arm64 真机上稳定构建与运行。
 4. 暴露的问题能否修复并形成项目自有、可测试、可维护的 NFQUEUE Adapter。
-5. 修复后是否满足性能、功耗、队列背压和故障边界，能够进入主线设计。
+5. 修复后是否满足 Android 性能、功耗、队列背压和故障边界，能够进入主线设计。
 
 本 POC 结束前，插件只能称为实验输入，不能称为正式 NFQUEUE Adapter。
 
@@ -36,7 +36,7 @@ VPP graph 并回写 verdict”，但这不等于它具备正式平台 Adapter �
 
 - 固定 VPP upstream tag/commit、插件来源 commit 和本地 patch。
 - 记录插件与 VPP 内部 API、libnetfilter_queue、libmnl、libnfnetlink 的依赖关系。
-- 检查许可证、版权声明、第三方代码边界和是否允许随 Android/Linux 产物发布。
+- 检查许可证、版权声明、第三方代码边界和是否允许随 Android 产物发布。
 - 对比 deprecated 插件与选定 VPP 版本的 API/ABI，列出所有本地修改点。
 - 产出 provenance、license、dependency 和 compatibility matrix。
 
@@ -68,28 +68,25 @@ VPP graph 并回写 verdict”，但这不等于它具备正式平台 Adapter �
 - 为 queue、fd、listener、worker handoff 和 shutdown 建立显式状态机。
 - 所有修复必须有单独 commit、测试和变更原因，不接受只为让 smoke 通过的局部 workaround。
 
-### Phase D：Linux 真实 NFQUEUE 验收
+### Phase D：Android arm64 真机 NFQUEUE 语义验收
 
-在隔离 network namespace/Docker 环境先完成：
+所有功能验证只在 Android 真机执行，不在 Linux、Docker 或 network namespace 上执行等价验收。
+Host/Linux 只允许承担源码审计、交叉编译和脚本打包辅助，不产生 POC 通过证据。
 
-- accept-all、drop-all、固定比例 verdict。
+沿用 Pixel 6a / Android 16 / arm64-v8a，至少完成：
+
+- root NFQUEUE 启停、双栈 hook 安装和实际 ACCEPT/DROP。
 - IPv4/IPv6、INPUT/OUTPUT、单 queue/多 queue。
 - 固定 packet 数下每个 packet 恰好一次 verdict，无漏 verdict、重复 verdict 或 queue 卡死。
 - truncated/malformed/large packet、EAGAIN/EINTR、fd close、queue reset、插件重启。
-- 进程正常停止、SIGTERM、SIGKILL、VPP restart 后 hook、queue、socket 和 rule 的状态。
-- VPP graph/node/worker 计数与内核 NFQUEUE 计数相互核对。
+- VPP graph/node/worker 计数与 Android 内核 NFQUEUE 计数相互核对。
 
-### Phase E：Android arm64 真机验收
+### Phase E：Android 生命周期和故障验收
 
-沿用 Pixel 6a / Android 16 / arm64-v8a，但只把 Android 作为 Adapter 和交付环境验证：
-
-- root NFQUEUE 启停、双栈 hook 安装和实际 ACCEPT/DROP。
-- app UID、UID/ifindex/hook metadata 能力和未知值语义。
 - RuntimeService stop、App process death、daemon crash、reboot 的 hook/queue 清理。
+- root 权限拒绝、artifact mismatch、daemon restart 和 supervisor cleanup 边界。
 - USB 断电、屏幕关闭、短 Doze 下无流量和有流量行为。
 - APK 中实际插件/daemon artifact 与构建 commit、VPP tag、插件 patch 一致。
-
-Android 真机通过不能替代 Linux 语义测试；Linux 通过也不能替代 Android ABI、root 和电量边界。
 
 ### Phase F：性能、功耗和准入结论
 
@@ -97,7 +94,7 @@ Android 真机通过不能替代 Linux 语义测试；Linux 通过也不能替�
 
 - verdict latency p50/p95/p99。
 - queue backlog、queue drop、user drop、packet loss 和异常 verdict 数。
-- 单 queue/多 queue、queue 数量、worker 数量和 CPU placement 对比。
+- 单 queue/多 queue、queue 数量、worker 数量和 Android CPU placement 对比。
 - 无流量 idle CPU、scheduler wakeup、RSS、短时电流/热状态。
 - bounded copy 与较大 copy range 的吞吐、延迟和功耗差异。
 
@@ -112,7 +109,7 @@ Android 真机通过不能替代 Linux 语义测试；Linux 通过也不能替�
 - malformed/truncated packet 导致越界、崩溃、未定义行为或错误 packet length。
 - 正常停止、异常退出或重启留下不可接受的 NFQUEUE hook/queue/rule 残留。
 - 多线程/worker handoff 下 correctness 依赖未证明的 queue 偶然 stickiness。
-- Android 与 Linux 使用不同未记录的语义，导致同一 Adapter contract 不成立。
+- Android 不同 queue/family/hook/生命周期路径产生未记录的语义差异，导致 Adapter contract 不成立。
 - 关键路径引入无界 copy、阻塞 I/O、动态分配或锁，且没有性能预算证据。
 - 只能依靠 deprecated VPP API 的未维护 patch 运行，无法冻结可维护版本边界。
 
@@ -121,12 +118,13 @@ Android 真机通过不能替代 Linux 语义测试；Linux 通过也不能替�
 - `NFQUEUE_PLUGIN_AUDIT.md`：逐项 finding，严重性、证据、修复状态和剩余风险。
 - provenance/license/dependency/VPP-version compatibility matrix。
 - 项目自有 Adapter 的 fix commits 和 patch 说明。
-- Linux、Android 真机测试矩阵与每次 run manifest。
+- Android 真机测试矩阵与每次 run manifest；不得以 Linux/Docker 结果替代真机证据。
 - 原始 log、计数器快照、性能/功耗数据和失败复现脚本。
 - 明确的 Go / Conditional-Go / No-Go 结论。
 
 ## 6. 结论解释
 
-只有当源码审计、修复、Linux 语义验收、Android arm64 真机验收和性能/功耗预算全部通过，才能
-把该插件作为 VPP 统一数据面的正式 NFQUEUE Adapter。否则 VPP core 的设计可以继续，但产品必须
-保留 VPN/TUN Adapter 或其它已验证入口，不能把实验插件当成架构已闭合的事实。
+只有当源码审计、修复、Android arm64 真机语义验收、Android 生命周期验收和性能/功耗预算全部
+通过，才能把该插件作为 VPP 统一数据面的正式 NFQUEUE Adapter。Linux/Host 结果只能作为辅助
+证据，不能替代 Android 结论。否则 VPP core 的设计可以继续，但产品必须保留 VPN/TUN Adapter
+或其它已验证入口，不能把实验插件当成架构已闭合的事实。
