@@ -1,6 +1,6 @@
 # VPP experimental NFQUEUE plugin audit and hardening POC
 
-状态：已登记，未开始正式执行；Android-only
+状态：Android 基线与首轮硬化已执行；生产准入 HOLD；Android-only
 
 Plane：`SAKAMOTO-32`
 
@@ -128,3 +128,62 @@ Host/Linux 只允许承担源码审计、交叉编译和脚本打包辅助，不
 通过，才能把该插件作为 VPP 统一数据面的正式 NFQUEUE Adapter。Linux/Host 结果只能作为辅助
 证据，不能替代 Android 结论。否则 VPP core 的设计可以继续，但产品必须保留 VPN/TUN Adapter
 或其它已验证入口，不能把实验插件当成架构已闭合的事实。
+
+## 7. Android 执行记录
+
+### 7.1 固定构件与设备
+
+正式硬化复测：`20260719-141956`。
+
+```text
+device: Pixel 6a / Android 16 / arm64-v8a / adb 28201JEGR0XPAJ
+USB: dumpsys battery unplug；结束由 trap reset
+VPP: 9258530f3804a152578ce11cc7c8a1e9eab88ed0 / v26.02
+plugin source SHA-256: 6e02160066a504ded4b1e75eb3a182bb70fad7847158adfce1254aa4438e0492
+plugin CMake SHA-256: ada3277cbebe8624e41e88c2215843ddc6758505c7acd11461c5286b402a79ff
+Android plugin artifact SHA-256: eebc350f9eb95562a8cbbd6df981edf7eb6cd0c88b6730d23d64ff0395766ce0
+staged payload: 9.4M
+raw result: experiments/vpp-nfq-poc/results/sakamoto-32-nfqueue-plugin-audit-20260719-141956/
+```
+
+### 7.2 已验证事实
+
+- Android arm64 交叉编译 `vpp`、`vppctl`、`nfqueue_poc_plugin` 均成功，插件在真机正确加载。
+- IPv4/IPv6 的 INPUT/OUTPUT `ACCEPT`、`DROP` 各通过；IPv4/IPv6 OUTPUT 的 20 包 `drop-ratio 50`
+  均得到 `seen=20 accepted=10 dropped=10`。
+- 每个 verdict case 的 `show nfqueue-poc` 均报告 `copy-range 512`，并且
+  `handle-errors=0 recv-errors=0 enobufs=0 event-write-errors=0`。
+- 保持 iptables NFQUEUE 规则有效时执行 `nfqueue-poc disable`，Android
+  `/proc/net/netfilter/nfnetlink_queue` 立即变为 0 行；最终 VPP、queue、NFQUEUE hook 全部为 0。
+- 无流量 10 秒 `/proc` 采样：plugin disabled 的 `utime/stime` 增量为 `1/0` jiffy，enabled 为
+  `0/0`；两组 `VmRSS` 均为 `102984 kB`。这是短时 idle 基线，不是功耗或长期 CPU 预算结论。
+- IPv4 event log 记录了 packet ID、family、proto、payloadLen、UID、目标地址和 verdict；4/4
+  放行事件完整写入。
+
+### 7.3 首轮失败方法与修正
+
+- `20260719-140840`：Windows/WSL adb wrapper 对目录 push 产生了嵌套 `bin/bin` 等路径，VPP
+  无法启动。修正 `android-push-vpp-core.sh` 为逐文件 push，并在设备端列出最终路径。
+- `20260719-141157`：功能矩阵已通过，但 harness 删除规则使用错误的 `-I` 变换，造成重复
+  NFQUEUE 规则并误报 residue。修正为显式 `-D` 删除循环，并补齐 IPv6 `ping6` 与 50% ratio
+  断言；修正后的正式 run 为 `20260719-141956`。
+
+### 7.4 Finding 与准入状态
+
+| ID | Finding | 状态 | 影响 |
+| --- | --- | --- | --- |
+| F-01 | 原实现向内核请求 `0xffff` full copy；本轮改为 bounded `512`。`nfq_get_payload()` 现在只能代表 copied prefix，original packet length 仍未单独保留。 | 部分修复 | Parser/telemetry 不能把 `payloadLen` 当 original length；需要明确 truncation/original-length contract。 |
+| F-02 | `recv()` 遇到 `ENOBUFS` 原来在 read-ready 回调内 `continue`，可能形成忙循环；本轮改为计数后退出本次回调。 | 已修复，需压力复测 | 仍缺 kernel drop/backlog 压力与恢复预算。 |
+| F-03 | event log 在 packet callback 中多次 `fprintf` 并逐包 `fflush`，属于同步 I/O 热路径。 | 未修复 | 不能在生产路径开启；必须改为异步、有界 telemetry 或明确移除。 |
+| F-04 | 缺失 `packet_id` 时只能计数并返回，无法安全发 verdict；当前行为可能使该 packet 没有明确结论。 | 未修复 | 必须定义 Adapter offline/fail-open/fail-closed 策略并加入 fault injection。 |
+| F-05 | 一个 plugin instance 只绑定一个 address family、一个 queue；当前 dual-stack 验证通过重启实例完成，不代表单实例双栈/多 queue。 | 未修复 | 正式 Adapter 拓扑和并发模型尚未成立。 |
+| F-06 | IPv6 parser 只读取固定头部，未处理 extension header；malformed/truncated 路径目前存在 default-allow 语义。 | 未修复 | 需要 parser status、truncation/original length 和产品 fail-open/fail-closed 决策。 |
+
+结论：本轮是 **Android NFQUEUE 基线 Conditional-Go**，证明当前构件可以在真机完成基本
+verdict 和 teardown；对正式 NFQUEUE Adapter 仍是 **No-Go/HOLD**。F-01/F-02 的修复已在
+overlay 中，并完成真机回归，但 F-03 至 F-06 以及 backlog、latency、crash/reboot、malformed
+packet、multi-queue 和长时 CPU/功耗证据仍未通过，不得进入统一 VPP 数据面准入。
+
+下一轮仍只在 Android 真机执行：先完成异步 event path、parser/original-length contract 和
+missing-ID fault policy，再做 queue overflow、daemon/plugin crash、reboot、dual-stack/multi-queue
+拓扑与 p50/p95/p99 latency 测量。Linux/Docker 继续只承担源码、交叉编译和打包辅助。

@@ -1682,3 +1682,63 @@ results/sakamoto-31-runtime-notification-denial-20260719-133843/
 daemon 启动或控制链路；停止清理和重新授权 recovery 均成立。该 POC 只证明系统/当前 target SDK
 组合下的运行边界，不证明 release notification UX、用户运行时授权弹窗、OEM 策略、通知渠道升级
 行为或长时间 foreground-service 限制。
+
+## SAKAMOTO-32：Android VPP experimental NFQUEUE plugin audit and hardening
+
+状态：Android 基线通过；生产准入 HOLD；F-03 至 F-06 未闭合。
+
+### 目标
+
+只在 Pixel 6a Android 16 arm64 真机审计当前实验性 `nfqueue_poc` 插件。Linux/Host 仅用于
+源码审计、Android 交叉编译和打包辅助，不作为功能验收环境。USB 供电用
+`dumpsys battery unplug` 模拟断开，结束由 trap 恢复。
+
+### 正式构件
+
+```text
+run=20260719-141956
+adb_serial=28201JEGR0XPAJ
+vpp=9258530f3804a152578ce11cc7c8a1e9eab88ed0 / v26.02
+plugin_source_sha256=6e02160066a504ded4b1e75eb3a182bb70fad7847158adfce1254aa4438e0492
+plugin_artifact_sha256=eebc350f9eb95562a8cbbd6df981edf7eb6cd0c88b6730d23d64ff0395766ce0
+stage_size=9.4M
+raw_log=results/sakamoto-32-nfqueue-plugin-audit-20260719-141956/
+```
+
+### 执行与结果
+
+- Android arm64 `vpp`、`vppctl`、`nfqueue_poc_plugin` 构建和加载通过。
+- IPv4/IPv6 INPUT/OUTPUT 的 ACCEPT/DROP 全部通过；两组 20 包 `drop-ratio 50` 均为
+  `accepted=10 dropped=10`。
+- 每个 case 的 `show nfqueue-poc` 均为 `copy-range 512`，`handle-errors=0`、`recv-errors=0`、
+  `enobufs=0`、`event-write-errors=0`。
+- 保持 NFQUEUE 规则有效时先执行 plugin disable，`nfnetlink_queue` 立即清零；最终 VPP、队列、
+  NFQUEUE hook 均无残留。
+- 10 秒 idle `/proc` 原始采样：disabled `utime/stime=1/0` jiffy，enabled `0/0`，两者
+  `VmRSS=102984 kB`。仅是短时基线，不代表长期 CPU/功耗结论。
+- event log 4/4 IPv4 packet 记录完整，包含 packet ID、family、proto、payloadLen、UID、dst 和 verdict。
+
+### 失败方法与修正
+
+1. `20260719-140840`：目录 push 在 Windows/WSL adb wrapper 下形成嵌套目录，VPP 启动失败；
+   改为逐文件 push，并增加设备端路径快照。
+2. `20260719-141157`：功能 case 已通过，但 harness 把规则删除误变成重新插入，误报 residue；
+   改为显式 `-D` 删除循环，并补齐 `ping6`、ratio 混合 verdict 和最终清理断言。
+
+### 硬化变更
+
+- 原 `nfq_set_mode(..., 0xffff)` 改为 bounded copy range `512`；CLI show 明确报告该值。
+- `recv()` 遇到 `ENOBUFS` 只计数并退出本次 read-ready callback，避免错误路径忙循环。
+- push harness 修复为逐文件传输，避免构件布局被 adb wrapper 改写。
+
+### 未闭合 finding
+
+- event log 在 packet callback 内逐包同步 `fprintf/fflush`，不能作为生产 telemetry path。
+- 缺失 `packet_id` 无法安全发 verdict，当前只计数返回；需要明确 offline/fail-open/fail-closed 策略。
+- 一个实例只绑定一个 family/queue；本轮双栈是重启实例分别验证，不是单实例双栈/多 queue 证明。
+- IPv6 extension header、truncated/malformed packet、original length 与 copied prefix 尚无完整 contract，
+  当前部分路径仍是 default-allow。
+
+结论：SAKAMOTO-32 Android 基线为 Conditional-Go；正式 NFQUEUE Adapter 仍 No-Go/HOLD。后续仍只
+在 Android 真机做异步 event path、parser/original-length、missing-ID fault policy、queue overflow、
+crash/reboot、dual-stack/multi-queue 和 p50/p95/p99 latency 验证。

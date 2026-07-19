@@ -12,6 +12,8 @@
 #include <unistd.h>
 
 #define NFQUEUE_POC_RX_BUF_SIZE 65536
+/* The POC only parses the network-layer header; do not copy full packets. */
+#define NFQUEUE_POC_COPY_RANGE 512
 
 nfqueue_poc_main_t nfqueue_poc_main = {
   .fd = -1,
@@ -353,7 +355,8 @@ nfqueue_poc_fd_read_ready (clib_file_t *f)
       if (errno == ENOBUFS)
 	{
 	  nm->enobufs++;
-	  continue;
+	  /* Leave the read-ready callback so a kernel drop cannot spin this thread. */
+	  return 0;
 	}
 
       nm->recv_errors++;
@@ -364,7 +367,7 @@ nfqueue_poc_fd_read_ready (clib_file_t *f)
 static clib_error_t *
 nfqueue_poc_configure_queue (struct nfq_q_handle *queue)
 {
-  if (nfq_set_mode (queue, NFQNL_COPY_PACKET, 0xffff) < 0)
+  if (nfq_set_mode (queue, NFQNL_COPY_PACKET, NFQUEUE_POC_COPY_RANGE) < 0)
     return clib_error_return_unix (0, "nfq_set_mode NFQNL_COPY_PACKET");
 
   if (nfq_set_queue_maxlen (queue, 4096) < 0)
@@ -648,9 +651,10 @@ nfqueue_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   (void) cmd;
 
   vlib_cli_output (
-    vm, "enabled %u queue %u family %U mode %U drop-ratio %u block-uid %u fd %d",
+    vm, "enabled %u queue %u family %U mode %U copy-range %u drop-ratio %u block-uid %u fd %d",
     nm->enabled, nm->queue_num, format_nfqueue_poc_family, nm->family,
-    format_nfqueue_poc_mode, nm->mode, nm->drop_ratio, nm->block_uid, nm->fd);
+    format_nfqueue_poc_mode, nm->mode, NFQUEUE_POC_COPY_RANGE, nm->drop_ratio,
+    nm->block_uid, nm->fd);
   vlib_cli_output (vm, "seen %llu accept %llu drop %llu missing-id %llu",
 		   nm->seen, nm->accepted, nm->dropped, nm->missing_id);
   vlib_cli_output (vm, "handle-errors %llu recv-errors %llu enobufs %llu",

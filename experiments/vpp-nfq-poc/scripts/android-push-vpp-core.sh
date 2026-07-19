@@ -26,11 +26,20 @@ echo "stage_dir=$STAGE_DIR"
 echo "stage_script=$STAGE_SCRIPT"
 
 adb_su "rm -rf '$REMOTE_ROOT/bin' '$REMOTE_ROOT/lib' '$REMOTE_ROOT/plugins' '$REMOTE_ROOT/runtime/startup.conf'; mkdir -p '$REMOTE_ROOT/bin' '$REMOTE_ROOT/lib' '$REMOTE_ROOT/plugins' '$REMOTE_ROOT/runtime' '$REMOTE_ROOT/logs'; chmod 777 '$REMOTE_ROOT' '$REMOTE_ROOT/bin' '$REMOTE_ROOT/lib' '$REMOTE_ROOT/plugins' '$REMOTE_ROOT/runtime'"
-adb_cmd push "$STAGE_DIR/bin/." "$REMOTE_ROOT/bin/"
-adb_cmd push "$STAGE_DIR/lib/." "$REMOTE_ROOT/lib/"
-adb_cmd push "$STAGE_DIR/plugins/." "$REMOTE_ROOT/plugins/"
+for file in "$STAGE_DIR/bin"/*; do
+  [ -f "$file" ] || continue
+  adb_push_file "$file" "$REMOTE_ROOT/bin/$(basename "$file")"
+done
+for file in "$STAGE_DIR/lib"/*; do
+  [ -f "$file" ] || continue
+  adb_push_file "$file" "$REMOTE_ROOT/lib/$(basename "$file")"
+done
+for file in "$STAGE_DIR/plugins"/*; do
+  [ -f "$file" ] || continue
+  adb_push_file "$file" "$REMOTE_ROOT/plugins/$(basename "$file")"
+done
 adb_cmd push "$STAGE_DIR/runtime/startup.conf" "$REMOTE_ROOT/runtime/startup.conf"
-adb_su "chmod 755 '$REMOTE_ROOT' '$REMOTE_ROOT/bin' '$REMOTE_ROOT/lib' '$REMOTE_ROOT/plugins' '$REMOTE_ROOT/runtime'; chmod 755 '$REMOTE_ROOT/bin'/* '$REMOTE_ROOT/lib'/*.so; find '$REMOTE_ROOT/plugins' -type f -name '*.so' -exec chmod 755 {} +; chmod 644 '$REMOTE_ROOT/runtime/startup.conf'; ls -lh '$REMOTE_ROOT/bin' '$REMOTE_ROOT/lib' '$REMOTE_ROOT/plugins' '$REMOTE_ROOT/runtime/startup.conf'"
+adb_su "chmod 755 '$REMOTE_ROOT' '$REMOTE_ROOT/bin' '$REMOTE_ROOT/lib' '$REMOTE_ROOT/plugins' '$REMOTE_ROOT/runtime'; find '$REMOTE_ROOT/bin' -type f -exec chmod 755 {} +; find '$REMOTE_ROOT/lib' -type f -name '*.so' -exec chmod 755 {} +; find '$REMOTE_ROOT/plugins' -type f -name '*.so' -exec chmod 755 {} +; chmod 644 '$REMOTE_ROOT/runtime/startup.conf'; find '$REMOTE_ROOT/bin' '$REMOTE_ROOT/lib' '$REMOTE_ROOT/plugins' -maxdepth 1 -type f -printf '%p %s %m\\n' | sort; ls -l '$REMOTE_ROOT/runtime/startup.conf'"
 
 echo "# Done"
 echo "push log: $LOG"
