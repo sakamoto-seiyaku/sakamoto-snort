@@ -18,6 +18,7 @@ Use these first:
 - `CONTEXT.md`
 - `docs/agents/`
 - `docs/README.md`
+- `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` when discussing the current Android/VPP architecture or POC conclusions
 - `docs/IMPLEMENTATION_ROADMAP.md`
 - `docs/INTERFACE_SPECIFICATION.md`
 - `docs/decisions/`
@@ -39,7 +40,8 @@ Use these only as background:
 
 Plane project `Sakamoto` (`SAKAMOTO`) is the source of truth for open work.
 
-- Current VPP foundation PRD: `SAKAMOTO-1`.
+- VPP foundation POC planning lineage: `SAKAMOTO-1`. Its original Linux-first POC sequence is superseded by `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`; Plane still owns the work-item state.
+- Current unfinished Android NFQUEUE plugin admission audit: `SAKAMOTO-32`.
 - `SNORT-1..19` references predate the tracker reset and must be treated as historical planning identifiers, not current Plane work items.
 
 Docs may link to these work items and keep evidence, but they must not keep their own `Open`, `TODO`, or unchecked bug ledgers.

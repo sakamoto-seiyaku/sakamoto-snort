@@ -12,6 +12,7 @@
 
 - `docs/IMPLEMENTATION_ROADMAP.md`：当前实现主线、阶段状态与优先级
 - `docs/INTERFACE_SPECIFICATION.md`：对外控制面 / stream 接口汇总
+- `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`：Android/VPP POC 事实、当前实现边界与下一轮架构讨论入口
 - `docs/testing/HOST_TEST_SURVEY.md`：当前 Host 端测试现状、sanitizer lane 与覆盖缺口
 
 ## Subdirectories
@@ -29,8 +30,9 @@
 
 1. `CONTEXT.md`
 2. `docs/agents/domain.md`
-3. `docs/IMPLEMENTATION_ROADMAP.md`
-4. `docs/INTERFACE_SPECIFICATION.md`
-5. `docs/decisions/`
-6. `docs/testing/README.md` or `docs/tooling/` when the task touches tests/build/debug
-7. `docs/reviews/`, `docs/reference/`, `docs/archived/`, and `archive/openspec/` only when the user asks for historical context or the active docs explicitly point there
+3. `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` when the task touches the current Android/VPP architecture or POC conclusions
+4. `docs/IMPLEMENTATION_ROADMAP.md`
+5. `docs/INTERFACE_SPECIFICATION.md`
+6. `docs/decisions/`
+7. `docs/testing/README.md` or `docs/tooling/` when the task touches tests/build/debug
+8. `docs/reviews/`, `docs/reference/`, `docs/archived/`, and `archive/openspec/` only when the user asks for historical context or the active docs explicitly point there
