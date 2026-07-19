@@ -946,3 +946,57 @@ results/sakamoto-17-daemon-signal-boundary-20260719-105412/
 SIGTERM 路径可以依赖 daemon destructor 完成 NFQUEUE cleanup；SIGKILL 路径不能运行析构函数，
 因此 daemon/socket 消失并不等价于网络 hook 已清理。后续 Android handoff 必须在 supervisor、
 service stop 或独立 root cleanup 边界上补齐异常终止兜底，再进入 release 评估。
+
+## SAKAMOTO-18：RuntimeService foreground/background lifecycle smoke
+
+状态：实验完成；短周期后台/锁屏存活与数据面 smoke GO，foreground service 能力 HOLD。
+
+实验目的：确认 RuntimeService 在 Activity 退到后台、短暂锁屏期间是否保持 daemon、控制 socket、
+双栈 NFQUEUE hook 与一次数据面探针一致，并判断当前实现是否已经满足 Android foreground-service
+的基本状态要求。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-110315`；后台与锁屏快照期间为 `USB powered: false`，结束 reset 后为
+  `USB powered: true`。
+- APK SHA-256：
+  `b8f7f26ec2b75ef38a3855409ac93cb2246a51bf4c0249968a3312c0fa5f1ba1`。
+- daemon artifact SHA-256：
+  `646d1697c25cd0e98cefd56ba3ee40c2c580971e5a09a26a57c1afa4f293755e`。
+- HELLO build id：`ndk-r29-aa4c8b15f7ac`；`versionName=0.1-debug`。
+
+### 正式结果
+
+```text
+run_id: 20260719-110315
+RuntimeService start/HELLO: pass
+started: daemon/socket/NFQUEUE hooks present; foreground_service=absent; notification=absent
+data_plane: adb reverse 127.0.0.1:18080 -> host one-shot HTTP 200, elapsedMs=9
+background after HOME + 3s: daemon/socket/NFQUEUE hooks present
+locked for 5s: daemon/socket/NFQUEUE hooks present; foreground_service=absent; notification=absent
+controlled stop: no daemon; socket absent; NFQUEUE hooks absent
+result: lifecycle smoke pass; foreground-service product requirement HOLD
+```
+
+原始证据：
+
+```text
+results/sakamoto-18-runtime-foreground-20260719-110315/
+```
+
+### 失败方法与定位
+
+1. `20260719-110053` 首轮使用外部 `142.251.13.94:80` 作为 HTTP 目标，5 秒连接超时；
+   RuntimeService 的 HELLO、hook、后台/锁屏和停止状态均正常，但外部网络可达性不应混入本
+   POC，因此该轮不作为数据面结论。
+2. 最终 run 改用 `adb reverse` 连接主机一次性 HTTP server，收到 `HTTP/1.0 200 OK`，
+   消除了外部网络变量。
+
+### 技术结论
+
+当前普通 `Service` 可在短暂 HOME 与锁屏期间保持 root daemon、抽象控制 socket 和双栈
+NFQUEUE hook，短数据面链路也可用；但 manifest/service 没有 foreground-service 实现，
+`dumpsys activity services` 显示 `startForegroundCount:0`，未观察到本包通知。因而后台短 smoke
+不能替代正式 Android foreground-service；需要补齐 `startForeground`、notification channel、
+manifest 类型及对应停止/升级策略后，才能解除 release handoff 的 HOLD。
