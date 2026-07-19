@@ -843,3 +843,57 @@ results/sakamoto-15-runtime-hook-cleanup-20260719-101700/
   安装后进程崩溃、权限拒绝、重复 jump、升级/回滚及 release APK。
 - `HookCommandExecutor` 当前只返回 bool，因此缺失对象的错误按命令类型归类为幂等清理；
   后续若需要区分 permission denied，必须扩展命令结果，而不是继续扩大忽略范围。
+
+## SAKAMOTO-16：Android RuntimeService repeated lifecycle residue baseline
+
+状态：实验通过；短周期重复启停与 force-stop/recovery GO。长稳、foreground service、Doze、
+升级/回滚和 SIGKILL cleanup 不在本轮范围内。
+
+实验目的：在单台 Android 设备上用 5 次短 normal start/stop 验证 lifecycle 与 hook cleanup
+可重复；先预置 IPv4/IPv6 私有链和顶层 jump，确认安装逻辑不会叠加重复 jump；最后执行一次
+APK force-stop 和 fresh RuntimeService recovery。全程不做人工 root cleanup，结束由 harness
+自动恢复 USB 电源模拟。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-104415`；关键快照为 `USB powered: false`，结束快照为
+  `USB powered: true`。
+- APK SHA-256：
+  `170d9623fd85211c9ef076a7c0039b1b2e9b8cf8e6c135c47c7e730c3543c062`。
+- daemon artifact SHA-256：
+  `44b34d15b601029fe2434f1358939163dc829f6f0d3e27913fa9597c06f52dd0`。
+- HELLO build id：`ndk-r29-93b6441aa676`。
+
+### 正式结果
+
+```text
+run_id: 20260719-104415
+preexisting_state: IPv4/IPv6 private chains and 4 top-level jumps present
+cycle_1_to_5: HELLO pass; exactly 4 top-level jumps while running
+cycle_1_to_5_stop: no root daemon; no control socket; no NFQUEUE hooks/chains; cleanup=pass
+force_stop: daemon absent without manual cleanup; hooks/socket absent
+force_stop: parent monitor detected reparenting
+recovery: fresh RuntimeService start/stop passed; no residue
+result: pass
+decision: SAKAMOTO-16 short lifecycle repeatability GO
+```
+
+原始证据：
+
+```text
+results/sakamoto-16-runtime-repeat-20260719-104415/
+```
+
+### 失败方法与定位
+
+1. `20260719-103437` 在预置链阶段因 harness 多行 `adb_su` quoting 提前退出；`EXIT` trap
+   已恢复设备，未计入结论。改为逐条 root command，并将原始输出落盘。
+2. `20260719-103608` 的 5 次 normal cycle 全部通过，但旧预置命令未真正生效，force-stop
+   场景还暴露了前一轮 delayed `runtimeStop` intent 与下一次 `runtimeStart` 的竞态；不计入
+   正式结果。独立 fresh start 复验通过。
+3. `20260719-104053` 的 5 次 normal cycle 全部通过；在清空 Activity 进程前直接进入最后
+   force-stop 场景时 HELLO gate 超时。最终 harness 在该场景前先 force-stop Activity、等待
+   进程状态收敛，并在每次 stop 后等待 delayed intent 排空。
+4. 正式 run 验证预置状态归一化为每个 family 一个 INPUT/OUTPUT jump；5 次 normal stop 和
+   force-stop 均通过 cleanup，不把上述 harness 失败误报为产品失败。
