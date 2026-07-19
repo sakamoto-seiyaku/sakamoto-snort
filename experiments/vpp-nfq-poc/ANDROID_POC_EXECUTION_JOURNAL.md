@@ -1580,3 +1580,54 @@ results/sakamoto-29-runtime-reboot-recovery-20260719-132940/
 当前 debug APK 没有 boot receiver 或隐式自启动路径；设备重启会自然清掉 daemon、app process、
 socket 和 kernel hook，用户显式启动后可以 fresh recovery。尚未覆盖 OEM 自启动策略、重启期间
 APK upgrade/rollback 中断、加密存储未解锁和 boot-time root manager 行为。
+
+## SAKAMOTO-30：APK signature mismatch and key rotation boundary
+
+状态：实验通过；alternate signing key 的同 package APK 被系统拒绝，原 package 未被破坏，原签名 recovery 通过。
+
+### 目标与方法
+
+在当前 debug APK 已安装的设备上，使用 alternate key 对同 package、同版本 APK 签名并执行
+`adb install -r`，观察 Android 是否拒绝签名不匹配、原 package 是否保持可用；随后用原 debug
+签名路径启动/停止 RuntimeService，验证安装失败没有破坏后续 recovery。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-133513`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- 原 APK SHA-256：
+  `f064a39118fe75eabb38c0668d00b0786aecd3b976676a900cc44a04a320dfa0`。
+- alternate-key APK SHA-256：
+  `712c4ec19cdbcbb3acdacb7de0f07eea87b2d90787f67219cbc11cc67ef01d6c`。
+- daemon SHA-256：
+  `96e17888971f3fc592cade7c1fe5a37d6c42658eb526600fab9b63cd560467ac`。
+- HELLO build id：`ndk-r29-d5b53b43da25`。
+
+### 正式结果
+
+```text
+alternate-key install: rejected
+reason: INSTALL_FAILED_UPDATE_INCOMPATIBLE; signatures do not match
+original package: still present
+original-signature recovery: runtime_start_pass
+recovery stop: daemon/socket/NFQUEUE hooks absent
+result: pass; same-package key mismatch fail closed
+```
+
+原始证据：
+
+```text
+results/sakamoto-30-apk-signature-rotation-20260719-133513/
+```
+
+### 失败方法与定位
+
+首次 harness `20260719-133246` 使用了错误的 apksigner 路径，未进入安装验证；实际构建脚本
+使用 `/home/js/android/lineage/prebuilts/sdk/tools/linux/lib/apksigner.jar`，修正路径后正式 run
+完整通过。该失败只属于 harness 前置配置，不属于 Android 签名结论。
+
+### 技术结论与边界
+
+Android package manager 能阻止不同签名 key 覆盖同 package，且原安装仍可启动 RuntimeService。
+这证明当前安装链的基本 key mismatch fail closed；尚未覆盖 release signing lineage、key rotation
+兼容策略、staged migration、数据迁移和升级中断恢复。
