@@ -160,6 +160,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-07-19] SAKAMOTO-20 APK upgrade/rollback hook residue：同一 debug 签名下 versionCode 1→2 升级与 2→1 回滚均在 RuntimeService 活跃时完成；旧 daemon、socket、双栈 hook 自动清理，新旧版本重新启动均归一为 4 个顶层 jump，停止清理通过；release signing/key rotation、数据迁移和中断安装仍未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-21 RuntimeService foreground service implementation：增加 `startForeground`、`snort-runtime` notification channel、`specialUse` manifest 类型和 debug 通知权限；后台/5 秒锁屏期间 foreground state、notification、daemon/socket/hook 与本地探针均通过，受控停止清理通过；用户运行时通知授权、release UX、重启/OEM 长稳仍待验证。
 - [DONE 2026-07-19] SAKAMOTO-22 RuntimeService supervisor cleanup：观察 root daemon 非预期退出后自动清理双栈 NFQUEUE jump/chain 与 PID 文件；SIGKILL 后 daemon、control socket、hook 均消失，fresh start/stop recovery 通过；crash backoff、并发 stop/kill、service process death 与 release 行为仍待验证。
+- [DONE 2026-07-19] SAKAMOTO-23 daemon crash/restart boundary：`SIGABRT` 后 RuntimeService 能观察非预期退出并清理 daemon/socket/NFQUEUE hook；5 秒 bounded window 内未发生自动重启，fresh manual recovery 通过；自动重启、backoff、重复 crash policy 与 release 行为仍为 HOLD。
 - [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
 - [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
 

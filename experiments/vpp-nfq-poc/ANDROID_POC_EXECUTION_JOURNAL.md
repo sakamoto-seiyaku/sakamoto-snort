@@ -1206,3 +1206,57 @@ unexpected_root_exit_cleanup=pass
 退出后执行 root cleanup，fresh RuntimeService 可以重新安装四个双栈顶层 jump 并正常停止。
 本轮只覆盖一台 Pixel 6a、一次 SIGKILL 序列；未覆盖 crash backoff、连续崩溃、并发 stop/kill、
 service process death、权限拒绝和 release 签名行为。
+
+## SAKAMOTO-23：daemon crash and bounded restart boundary
+
+状态：crash cleanup 通过；自动重启/backoff 为 HOLD，当前实现不自动拉起 daemon。
+
+### 目标与方法
+
+在 SAKAMOTO-22 的 supervisor cleanup 基础上，用可捕获的 `SIGABRT` 模拟 daemon crash，观察
+RuntimeService 是否能识别异常退出、清理 hook，以及是否在有限窗口内自动重启。测试脚本在
+异常清理后等待 5 秒，再执行一次 fresh manual recovery；`SIGTERM` 作为同一 run 的正常对照。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-115143`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- APK SHA-256：
+  `5d75428849f1d1a548defea024b91c68970154f7d8bf2354a2d15bbfcc990f89`。
+- daemon artifact SHA-256：
+  `17eabcb7e9bdb967e1d968d952109684d99b9a6011060a9f4e84041dc6d39c82`。
+- HELLO build id：`ndk-r29-6dcbdc1bfd62`。
+
+### 正式结果
+
+```text
+SIGTERM: runtime start pass; daemon/socket/NFQUEUE hooks cleaned; recovery pass
+SIGABRT: runtime start pass; daemon PID 14698 terminated
+SIGABRT: unexpected_root_exit=observed
+SIGABRT: unexpected_root_exit_cleanup=pass
+SIGABRT: daemon/socket/NFQUEUE hooks absent after cleanup
+SIGABRT: no_automatic_restart_within_5s
+fresh manual recovery: start/stop pass; hooks absent after stop
+result: pass for crash boundary; automatic restart/backoff HOLD
+```
+
+原始证据：
+
+```text
+results/sakamoto-23-daemon-crash-restart-20260719-115143/
+```
+
+关键 runtime log：
+
+```text
+root_process_exit=observed
+unexpected_root_exit=observed
+unexpected_root_exit_cleanup=pass
+```
+
+### 技术结论与边界
+
+当前 RuntimeService 具备“观察 crash -> 清理 root daemon 网络残留”的能力，但没有自动重启
+策略；5 秒内没有隐式拉起，避免了无界重启风暴。fresh manual recovery 可以正常重新安装
+双栈 hook。尚未验证重复 crash/backoff、服务进程死亡、并发 stop/kill、权限拒绝或 release
+策略，因此不能把当前结果当作最终 crash resilience 方案。

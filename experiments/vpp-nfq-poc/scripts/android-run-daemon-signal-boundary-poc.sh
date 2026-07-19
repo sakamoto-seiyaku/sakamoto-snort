@@ -10,6 +10,10 @@ PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 WAIT_SECONDS="${WAIT_SECONDS:-20}"
 POC_ID="${POC_ID:-17-daemon-signal-boundary}"
 EXPECT_AUTOMATIC_SIGKILL_CLEANUP="${EXPECT_AUTOMATIC_SIGKILL_CLEANUP:-0}"
+CRASH_SIGNAL="${CRASH_SIGNAL:-KILL}"
+CRASH_LABEL="${CRASH_LABEL:-SIGKILL}"
+EXPECT_AUTOMATIC_CRASH_CLEANUP="${EXPECT_AUTOMATIC_CRASH_CLEANUP:-$EXPECT_AUTOMATIC_SIGKILL_CLEANUP}"
+EXPECT_NO_AUTOMATIC_RESTART="${EXPECT_NO_AUTOMATIC_RESTART:-0}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
 RESULT_DIR="$POC_DIR/results/sakamoto-$POC_ID-$RUN_ID"
 RUN_LOG="$RESULT_DIR/run.log"
@@ -245,53 +249,63 @@ stop_runtime sigterm-recovery-stop
 capture_state sigterm-recovered-stopped
 if hooks_present; then echo "FAIL: SIGTERM recovery hooks remain" >&2; failures=$((failures + 1)); else echo "sigterm_recovery=nfqueue_hooks_absent"; fi
 
-echo "uncatchable SIGKILL boundary"
-start_runtime sigkill
-capture_state sigkill-started
-if hooks_present; then echo "sigkill_start=nfqueue_hooks_present"; else failures=$((failures + 1)); echo "FAIL: SIGKILL hooks absent" >&2; fi
-sigkill_pid="$(daemon_pid)"
-if [[ -z "$sigkill_pid" ]]; then
-  echo "FAIL: SIGKILL daemon PID missing" >&2
+echo "uncatchable $CRASH_LABEL boundary"
+start_runtime crash
+capture_state crash-started
+if hooks_present; then echo "crash_start=nfqueue_hooks_present"; else failures=$((failures + 1)); echo "FAIL: $CRASH_LABEL hooks absent" >&2; fi
+crash_pid="$(daemon_pid)"
+if [[ -z "$crash_pid" ]]; then
+  echo "FAIL: $CRASH_LABEL daemon PID missing" >&2
   failures=$((failures + 1))
 else
-  echo "sigkill_pid=$sigkill_pid"
-  adb_su "kill -KILL $sigkill_pid"
+  echo "crash_pid=$crash_pid"
+  adb_su "kill -$CRASH_SIGNAL $crash_pid"
 fi
-if wait_for_no_daemon; then echo "sigkill=no_root_daemon"; else echo "FAIL: SIGKILL daemon remains" >&2; failures=$((failures + 1)); fi
-capture_state sigkill-before-manual-cleanup
-assert_no_residue sigkill-before-manual-cleanup
-if [[ "$EXPECT_AUTOMATIC_SIGKILL_CLEANUP" == "1" ]]; then
+if wait_for_no_daemon; then echo "crash=no_root_daemon"; else echo "FAIL: $CRASH_LABEL daemon remains" >&2; failures=$((failures + 1)); fi
+capture_state crash-before-manual-cleanup
+assert_no_residue crash-before-manual-cleanup
+if [[ "$EXPECT_AUTOMATIC_CRASH_CLEANUP" == "1" ]]; then
   if wait_for_runtime_log 'unexpected_root_exit_cleanup=pass$'; then
-    echo "sigkill=supervisor_cleanup_log_pass"
+    echo "crash=supervisor_cleanup_log_pass"
   else
-    echo "FAIL: SIGKILL supervisor cleanup log missing" >&2
+    echo "FAIL: $CRASH_LABEL supervisor cleanup log missing" >&2
     failures=$((failures + 1))
   fi
-  capture_state sigkill-after-supervisor-cleanup
+  capture_state crash-after-supervisor-cleanup
   if hooks_present; then
-    echo "FAIL: SIGKILL supervisor left hooks" >&2
+    echo "FAIL: $CRASH_LABEL supervisor left hooks" >&2
     failures=$((failures + 1))
   else
-    echo "sigkill=supervisor_cleanup_complete"
+    echo "crash=supervisor_cleanup_complete"
   fi
 else
-  if hooks_present; then echo "sigkill=hooks_remain_before_manual_cleanup"; else echo "sigkill=hooks_absent_before_manual_cleanup"; fi
-  if app_read "$RUNTIME_LOG" | rg -q 'hook cleanup=pass$'; then echo "sigkill=unexpected_cleanup_log"; else echo "sigkill=no_destructor_cleanup_log"; fi
+  if hooks_present; then echo "crash=hooks_remain_before_manual_cleanup"; else echo "crash=hooks_absent_before_manual_cleanup"; fi
+  if app_read "$RUNTIME_LOG" | rg -q 'hook cleanup=pass$'; then echo "crash=unexpected_cleanup_log"; else echo "crash=no_destructor_cleanup_log"; fi
 
-  echo "manual cleanup after SIGKILL evidence"
+  echo "manual cleanup after $CRASH_LABEL evidence"
   clear_hooks
   adb_cmd shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
-  capture_state sigkill-after-manual-cleanup
-  if hooks_present; then echo "FAIL: manual SIGKILL cleanup left hooks" >&2; failures=$((failures + 1)); else echo "sigkill=manual_cleanup_complete"; fi
+  capture_state crash-after-manual-cleanup
+  if hooks_present; then echo "FAIL: manual $CRASH_LABEL cleanup left hooks" >&2; failures=$((failures + 1)); else echo "crash=manual_cleanup_complete"; fi
 fi
 
-echo "SIGKILL recovery"
-start_runtime sigkill-recovery
-capture_state sigkill-recovered-started
-if hooks_present; then echo "sigkill_recovery=nfqueue_hooks_present"; else echo "FAIL: SIGKILL recovery hooks absent" >&2; failures=$((failures + 1)); fi
-stop_runtime sigkill-recovery-stop
-capture_state sigkill-recovered-stopped
-if hooks_present; then echo "FAIL: SIGKILL recovery hooks remain" >&2; failures=$((failures + 1)); else echo "sigkill_recovery=nfqueue_hooks_absent"; fi
+if [[ "$EXPECT_NO_AUTOMATIC_RESTART" == "1" ]]; then
+  sleep 5
+  if [[ -n "$(daemon_pids)" ]]; then
+    echo "FAIL: $CRASH_LABEL unexpectedly restarted daemon" >&2
+    failures=$((failures + 1))
+  else
+    echo "crash=no_automatic_restart_within_5s"
+  fi
+fi
+
+echo "$CRASH_LABEL recovery"
+start_runtime crash-recovery
+capture_state crash-recovered-started
+if hooks_present; then echo "crash_recovery=nfqueue_hooks_present"; else echo "FAIL: $CRASH_LABEL recovery hooks absent" >&2; failures=$((failures + 1)); fi
+stop_runtime crash-recovery-stop
+capture_state crash-recovered-stopped
+if hooks_present; then echo "FAIL: $CRASH_LABEL recovery hooks remain" >&2; failures=$((failures + 1)); else echo "crash_recovery=nfqueue_hooks_absent"; fi
 
 if [[ "$failures" != "0" ]]; then
   echo "FAIL: $POC_ID harness failures=$failures"
