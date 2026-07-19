@@ -38,6 +38,8 @@ constexpr int kSendFlags =
     0;
 #endif
 
+constexpr int kControlPollTimeoutMs = 250;
+
 bool writeAll(const int fd, const std::string_view bytes) {
     const char *data = bytes.data();
     std::size_t remaining = bytes.size();
@@ -276,7 +278,7 @@ int ControlServer::run() {
             pollFd.revents = 0;
         }
 
-        const int ready = ::poll(pollFds.data(), pollFds.size(), -1);
+        const int ready = ::poll(pollFds.data(), pollFds.size(), kControlPollTimeoutMs);
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;

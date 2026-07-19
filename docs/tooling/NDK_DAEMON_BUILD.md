@@ -111,6 +111,22 @@ cleanup because killing the Java `Process` wrapper alone is not reliable after
 `su` executes the daemon. This is a debug POC result, not a release permission,
 foreground-service, upgrade, or rollback contract.
 
+## APK POC Build Identity
+
+The APK build scripts package the already-staged
+`build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so`; they do not rebuild
+the daemon source. After changing daemon code, rebuild the NDK artifact first:
+
+```bash
+bash dev/dev-build-ndk.sh
+bash experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh
+```
+
+SAKAMOTO-14 first produced an invalid run because the APK still contained the
+pre-change artifact. The formal run was accepted only after the staged artifact
+reported `hello_daemon_build_id=ndk-r29-f0c2da8f030e` and its hash was captured
+alongside the APK hash.
+
 ## Device Validation
 
 Dogfood the NDK daemon directly before APK RuntimeService integration:

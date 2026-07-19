@@ -713,3 +713,69 @@ results/sakamoto-13-runtime-process-death-20260719-004844/
 可以恢复。这个结果阻塞 Android release handoff；继续做前台服务、升级/回滚或长稳 POC
 之前，必须先决定并验证 root supervisor、daemon 自清理握手或可接受的系统级 lifecycle
 契约。本轮没有把外部 killall 伪装成自动恢复。
+
+## SAKAMOTO-14：daemon parent-death containment 与 orphan cleanup 边界
+
+状态：部分通过，进程回收 GO；NFQUEUE/iptables cleanup HOLD。
+
+实验目的：在不做人工 root cleanup 的条件下，验证 APK 被 `am force-stop` 后，root
+daemon 是否能自行退出、控制 socket 是否消失、规则残留是否可接受，以及 fresh
+RuntimeService 是否能恢复。正式运行仍模拟 USB 断电，原始快照保留在本地结果目录。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-094838`；`dumpsys battery unplug` 后 `USB powered: false`，结束
+  cleanup/reset 后恢复为 `USB powered: true`。
+- APK SHA-256：
+  `14dbf9fa022ba503c7a78b57b0da18d4714fc760b8c062a77439993c4fabe845`。
+- daemon artifact SHA-256：
+  `5e2c6da707cf2c8cf2c9a11a5d152cb1b145c2ef3cdd7f1cb7db77db7023c198`。
+- HELLO build id：`ndk-r29-f0c2da8f030e`。
+
+### 失败方法与定位
+
+1. 首次 `20260719-092709` 使用了旧 APK-native artifact，daemon 没有打印 parent-death
+   guard；该 run 判为构建身份错误，不计入结论。先执行 `bash dev/dev-build-ndk.sh`，再
+   打包 APK，并在结果中同时记录 APK/artifact hash。
+2. 仅在 daemon 内调用 `prctl(PR_SET_PDEATHSIG, SIGTERM)`：正式前置 run
+   `092955`、`093442`、`093643` 中 guard 日志存在，但 force-stop 后 daemon 仍为
+   `PPID=1`，没有 `shutdown signal received`。把控制 socket 的无限 `poll` 改为 250ms
+   超时没有改变结果。
+3. 将 Java `snort-runtime-start` 线程改为在 HELLO 后 `Process.waitFor()`，使其在 daemon
+   存活期间保持运行；`094511` 仍未观察到 PDEATHSIG。临时将信号换为不可捕获的
+   `SIGKILL` 也未改变 orphan 结果，说明问题不是 SIGTERM handler 或 graceful loop。
+4. 最终保留 PDEATHSIG 作为第一层保护，并增加每 100ms 一次的 `getppid()` monitor：记录
+   创建时 parent PID；发现 parent 变化（本机表现为 reparent 到 PID 1）后设置同一
+   shutdown flag，让控制 server、NFQUEUE worker 和 main-owned cleanup 收敛。
+
+### 正式结果
+
+```text
+run_id: 20260719-094838
+baseline_root_daemon_pid: 21895
+baseline_parent_pid: 21857
+after_force_stop: APK absent
+after_force_stop: daemon absent without manual root cleanup
+after_force_stop: abstract control socket absent
+after_force_stop: sucre-snort_INPUT/OUTPUT and NFQUEUE rules remain
+evidence: runtime log contains "parent monitor detected reparenting"
+recovery_root_daemon_pid: 22123
+recovered_runtime_stop: no root daemon
+result: process containment pass
+decision: HOLD network hook cleanup
+```
+
+原始证据：
+
+```text
+results/sakamoto-14-runtime-pdeath-20260719-094838/
+```
+
+### 结论与后续
+
+S14 已解决“APK 死亡后 root daemon 孤儿化并继续占用控制 socket”的进程边界问题；
+恢复链也已成立。它没有解决 iptables/NFQUEUE 规则的生命周期：`after-force-stop/hooks.txt`
+仍包含 IPv4/IPv6 两组 `sucre-snort_INPUT/OUTPUT` 链及 queue-balance 规则。下一张 Android
+POC 应只验证 daemon shutdown 时的 hook uninstall/rollback 顺序、部分安装失败和重复启动
+幂等性；在该 POC 通过前，Android release handoff 继续 HOLD。

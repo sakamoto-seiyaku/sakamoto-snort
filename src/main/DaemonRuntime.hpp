@@ -8,6 +8,8 @@
 namespace SnortRuntime {
 
 void installSignalHandlers();
+[[nodiscard]] bool installParentDeathGuard() noexcept;
+void joinParentDeathMonitor() noexcept;
 void requestShutdown() noexcept;
 bool shutdownRequested() noexcept;
 

@@ -9,10 +9,15 @@
 
 int main() {
     SnortRuntime::installSignalHandlers();
+    if (!SnortRuntime::installParentDeathGuard()) {
+        return 1;
+    }
 
     SnortDatapath::Nfqueue::DualStackPassThroughRuntime datapath;
     (void)datapath.start();
 
     SnortControlVNext::ControlServer server(datapath);
-    return server.run();
+    const int result = server.run();
+    SnortRuntime::joinParentDeathMonitor();
+    return result;
 }

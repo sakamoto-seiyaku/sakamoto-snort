@@ -26,6 +26,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android Rust persistent client reconnect | One Rust opaque client passes initial status, fails with `rc=-5` after VPP stop, tolerates disconnect `close_rc=-7`, and a fresh client passes status after VPP restart. | SAKAMOTO-11 |
 | Android APK-native daemon packaging and RuntimeService HELLO gate | APK packages the staged `libsucre_snortd.so`; after an explicit KernelSU app grant, an ordinary APK Service launches it through root, validates `HELLO` ABI/build/capabilities, and stops with no root daemon residue. | SAKAMOTO-12 |
 | Android RuntimeService process-death boundary | `am force-stop` removes the APK process but leaves the root daemon orphaned under PID 1; explicit root cleanup and a fresh RuntimeService launch recover. Automatic recovery/cleanup is HOLD. | SAKAMOTO-13 |
+| Android daemon orphan containment after APK process death | On Pixel 6a, `am force-stop` reparenting is detected by the daemon's `getppid()` monitor; the daemon and abstract control socket exit without manual root cleanup, and a fresh RuntimeService recovers. NFQUEUE/iptables chains remain, so network-hook cleanup is HOLD. | SAKAMOTO-14 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -82,6 +83,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 ## Current Design Implications
 
 - Root mode is the verified low-friction path for package UID attribution.
+- The Android root handoff now has a proven process-containment POC: after APK
+  death, the daemon detects reparenting to PID 1 and exits; this does not yet
+  clean the NFQUEUE/iptables hooks.
 - VPN mode can choose app membership with `VpnService.Builder`.
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
@@ -274,10 +278,14 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   executes the daemon. Automatic service/process restart, foreground-service
   policy, release signing, upgrade/rollback, and tombstone collection remain
   unverified.
-- APK process death is a release blocker for the current root handoff: on Pixel
-  6a, `am force-stop` leaves `libsucre_snortd.so` alive as a root child of PID 1.
-  An external root cleanup can remove it and a fresh RuntimeService can recover,
-  but the APK has no automatic orphan detection or restart/cleanup path.
+- SAKAMOTO-13 established the original APK process-death failure: `am force-stop`
+  left `libsucre_snortd.so` alive as a root child of PID 1.
+- SAKAMOTO-14 proves daemon/socket containment with a `getppid()` monitor after
+  the Android `PR_SET_PDEATHSIG` path failed to fire reliably in this launch
+  chain. The daemon exits without manual root cleanup and fresh RuntimeService
+  recovery works, but the destructor does not remove the NFQUEUE/iptables
+  chains. Automatic hook cleanup, foreground-service policy, release signing,
+  upgrade/rollback, and tombstone collection remain unverified.
 - SAKAMOTO-10 validates one app-UID `SIGTERM` child-death path and explicit
   stop/restart on one Pixel 6a. It does not yet cover process crash signals,
   Android service/process death, automatic VPP restart policy, or concurrent

@@ -88,6 +88,13 @@ public final class SnortRuntimeService extends Service {
                 appendLog("root_launch=started");
                 if (waitForHello()) {
                     appendLog("runtime_start_result=pass");
+                    try {
+                        process.waitFor();
+                        appendLog("root_process_exit=observed");
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        appendLog("root_process_exit=interrupted");
+                    }
                 } else {
                     appendLog("runtime_start_result=fail reason=hello_gate_timeout");
                     stopRuntime();
