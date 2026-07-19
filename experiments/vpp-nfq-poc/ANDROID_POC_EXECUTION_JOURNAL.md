@@ -1539,3 +1539,44 @@ results/sakamoto-28-runtime-app-process-death-20260719-132635/
 RuntimeService 继续运行，也不依赖事后 root cleanup；fresh RuntimeService 可以重新安装 hook
 并正常停止。尚未覆盖 OEM 特有的 cached/empty process kill、低内存回收原因、tombstone 采集
 和同时发生的 upgrade/reboot race。
+
+## SAKAMOTO-29：RuntimeService reboot recovery
+
+状态：实验通过；RuntimeService 活跃时重启后无 stale runtime residue、无自动拉起，fresh recovery 通过。
+
+### 目标与方法
+
+在 RuntimeService、root daemon、control socket 和双栈 NFQUEUE hook 均活跃时直接 reboot 设备，
+等待 `sys.boot_completed=1` 后检查 daemon、app process、socket、hook 和 service state；随后
+显式启动 RuntimeService，验证正常恢复和停止清理。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-132940`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- daemon SHA-256：
+  `883a62fb07714869b58dc999f9f2fa0f678eb2a243e19c63c37828a867896eb6`。
+- HELLO build id：`ndk-r29-46d8b6ed9827`。
+
+### 正式结果
+
+```text
+before reboot: runtime_start_pass; root daemon present
+after reboot: no root daemon; control socket absent; NFQUEUE hooks absent; app process absent
+after reboot: no automatic RuntimeService start observed
+fresh recovery: runtime_start_pass
+recovery stop: daemon/socket/NFQUEUE hooks absent
+result: pass; reboot residue/recovery GO
+```
+
+原始证据：
+
+```text
+results/sakamoto-29-runtime-reboot-recovery-20260719-132940/
+```
+
+### 技术结论与边界
+
+当前 debug APK 没有 boot receiver 或隐式自启动路径；设备重启会自然清掉 daemon、app process、
+socket 和 kernel hook，用户显式启动后可以 fresh recovery。尚未覆盖 OEM 自启动策略、重启期间
+APK upgrade/rollback 中断、加密存储未解锁和 boot-time root manager 行为。
