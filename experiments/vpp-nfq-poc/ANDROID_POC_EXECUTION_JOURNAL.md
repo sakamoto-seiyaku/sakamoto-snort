@@ -1496,3 +1496,46 @@ results/sakamoto-27-runtime-live-revocation-20260719-132309/
 即使新 RuntimeService 仍能启动，app force-stop 后 daemon 的 parent-death cleanup 仍然成立。恢复
 授权需要 reboot 才能形成可验证的 fresh state。产品若要求用户运行中撤权，不能只依赖当前 allowlist
 文件修改，必须定义 KernelSU 管理器刷新/重启机制或明确把撤权语义限定为下次 boot。
+
+## SAKAMOTO-28：RuntimeService app process death cleanup
+
+状态：实验通过；直接杀 Android app PID 后 root daemon、control socket、双栈 NFQUEUE hook 均自动清理，fresh recovery 通过。
+
+### 目标与方法
+
+区别于显式 `runtimeStop` 和 `am force-stop`，本轮先让 RuntimeService 正常启动，再直接取得
+package PID，以 root shell 对 Android app 进程执行 `kill -KILL`。观察 daemon 的 parent-death
+guard、socket、NFQUEUE hook 是否自动收敛；过程不调用 root cleanup，之后再做 fresh start/stop。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-132635`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- daemon SHA-256：
+  `a4b9c5a6d632d7d669fad7af1fb2bc3c592732afd5ac4b5e7f411f23882ea2c1`。
+- HELLO build id：`ndk-r29-5d15ab048bf2`。
+
+### 正式结果
+
+```text
+baseline: runtime_start_pass; root daemon PID 7505 present
+direct app kill: app PID 7462 killed without runtimeStop
+after app death: daemon absent without manual cleanup
+after app death: control socket absent; NFQUEUE hooks absent
+fresh recovery: runtime_start_pass
+recovery stop: daemon/socket/NFQUEUE hooks absent
+result: pass; app process death containment GO
+```
+
+原始证据：
+
+```text
+results/sakamoto-28-runtime-app-process-death-20260719-132635/
+```
+
+### 技术结论与边界
+
+当前 daemon 的 parent-death monitor 能覆盖 Android app/Service 进程被直接杀死的路径，不依赖
+RuntimeService 继续运行，也不依赖事后 root cleanup；fresh RuntimeService 可以重新安装 hook
+并正常停止。尚未覆盖 OEM 特有的 cached/empty process kill、低内存回收原因、tombstone 采集
+和同时发生的 upgrade/reboot race。
