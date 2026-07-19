@@ -779,3 +779,63 @@ S14 已解决“APK 死亡后 root daemon 孤儿化并继续占用控制 socket�
 仍包含 IPv4/IPv6 两组 `sucre-snort_INPUT/OUTPUT` 链及 queue-balance 规则。下一张 Android
 POC 应只验证 daemon shutdown 时的 hook uninstall/rollback 顺序、部分安装失败和重复启动
 幂等性；在该 POC 通过前，Android release handoff 继续 HOLD。
+
+## SAKAMOTO-15：Android daemon shutdown 的 NFQUEUE hook cleanup
+
+状态：实验通过；双栈 hook cleanup GO。Android release handoff 仍受 foreground service、
+release signing、升级/回滚和 crash/tombstone 口径约束。
+
+实验目的：在单台 Android 设备上验证 daemon 正常停止和 APK `am force-stop` 触发的
+`getppid()` orphan monitor 都能完成 IPv4/IPv6 NFQUEUE hook 的 detach、flush、delete；
+过程中不做人工 root cleanup，并验证 fresh RuntimeService 可恢复。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-101700`；开始时执行 `dumpsys battery unplug`，所有关键快照均为
+  `USB powered: false`；脚本结束后执行 battery reset，设备恢复 USB 供电。
+- APK SHA-256：
+  `31ba5429550070ba7943668fff5613f9b0d55d0a34b08e2d749e9786bd1a2c04`。
+- daemon artifact SHA-256：
+  `16e45499c0d9aa93af9b720b8c7db21db223fb2a9b34604e4e2f3e003bcdee58`。
+- HELLO build id：`ndk-r29-7e61fe3f68b6`。
+
+### 实现与验证
+
+1. 新增独立 cleanup plan：按 IPv4、IPv6 顺序分别删除 INPUT/OUTPUT jump，flush 并删除
+   `sucre-snort_INPUT` / `sucre-snort_OUTPUT`；不存在的 `-D/-F/-X` 对象按幂等成功处理。
+2. `Ipv4PassThroughRuntime` 与 `DualStackPassThroughRuntime` 在 worker join 后执行 cleanup，
+   因而 normal stop 和 orphan monitor shutdown 走同一条 main-owned destructor 路径。
+3. host NFQUEUE 测试 13/13 通过，覆盖双栈命令顺序及缺失链 cleanup。
+4. 正式 Android 流程依次验证：normal start hooks present；normal stop daemon/hooks absent；
+   fresh restart hooks present；APK force-stop 后不做手工 root cleanup，daemon、control socket、
+   hooks 均 absent，日志包含 `parent monitor detected reparenting` 和
+   `Dual-stack NFQUEUE pass-through hook cleanup=pass`；最后 fresh recovery 与 stop 通过。
+
+### 正式结果
+
+```text
+run_id: 20260719-101700
+normal_start: IPv4/IPv6 chains and NFQUEUE rules present
+normal_stop: no root daemon; no NFQUEUE hooks/chains; cleanup=pass
+force_stop: daemon absent without manual cleanup; control socket absent
+force_stop: no NFQUEUE hooks/chains; parent monitor detected reparenting
+recovery: fresh RuntimeService start and stop passed; no daemon/hooks remained
+result: pass
+decision: SAKAMOTO-15 cleanup GO; product release handoff remains gated by separate lifecycle POCs
+```
+
+原始证据：
+
+```text
+results/sakamoto-15-runtime-hook-cleanup-20260719-101700/
+```
+
+### 失败方法与边界
+
+- 启动阶段日志中的 `Chain already exists` 属于重复安装的幂等分支，不影响启动结果；正式
+  stopped/force-stopped 快照确认链和 jump 最终均已消失。
+- 本轮只覆盖一台 Pixel 6a、当前 KernelSU 授权和当前双栈 pass-through 规则；未覆盖部分
+  安装后进程崩溃、权限拒绝、重复 jump、升级/回滚及 release APK。
+- `HookCommandExecutor` 当前只返回 bool，因此缺失对象的错误按命令类型归类为幂等清理；
+  后续若需要区分 permission denied，必须扩展命令结果，而不是继续扩大忽略范围。

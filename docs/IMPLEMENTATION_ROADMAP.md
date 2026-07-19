@@ -152,6 +152,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-07-19] SAKAMOTO-12 RuntimeService root launch：由 `${applicationInfo.nativeLibraryDir}/libsucre_snortd.so` 启动 daemon，校验 `HELLO.daemonBuildId/artifactAbi/capabilities`，并以本地 runtime log、PID 文件和 root TERM/KILL 完成停止清理；KernelSU 授权、foreground service、crash/restart policy 仍待独立 POC。
 - [DONE 2026-07-19] SAKAMOTO-13 RuntimeService process-death observation：确认 `am force-stop` 后 root daemon 会孤儿化为 PID 1 子进程；该历史失败边界由 SAKAMOTO-14 继续处理。
 - [HOLD 2026-07-19] SAKAMOTO-14 RuntimeService process-death containment：daemon `getppid()` monitor 能在 APK 被 force-stop 后自动退出，控制 socket 消失，fresh RuntimeService 可恢复；但 NFQUEUE/iptables 链仍残留，网络 hook cleanup 尚未成立，Android release handoff 继续 HOLD。
+- [DONE 2026-07-19] SAKAMOTO-15 NFQUEUE hook cleanup：正常停止与 APK force-stop 均能清理 IPv4/IPv6 hook、链和控制 socket，fresh RuntimeService 恢复通过；foreground service、release signing、升级/回滚与 tombstone 仍待验证。
 - [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
 - [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
 

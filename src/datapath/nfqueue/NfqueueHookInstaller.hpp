@@ -20,5 +20,9 @@ public:
                                                HookCommandExecutor &executor);
 [[nodiscard]] bool installDualStackPassThroughHooks(const DualStackHookPlanConfig &config,
                                                     HookCommandExecutor &executor);
+[[nodiscard]] bool removeIpv4PassThroughHooks(const HookCleanupPlanConfig &config,
+                                              HookCommandExecutor &executor);
+[[nodiscard]] bool removeDualStackPassThroughHooks(const HookCleanupPlanConfig &config,
+                                                   HookCommandExecutor &executor);
 
 } // namespace SnortDatapath::Nfqueue

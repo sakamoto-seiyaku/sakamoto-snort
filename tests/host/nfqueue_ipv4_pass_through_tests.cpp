@@ -68,6 +68,20 @@ public:
     std::vector<SnortDatapath::Nfqueue::IptablesCommand> commands;
 };
 
+class MissingHookCleanupExecutor final : public SnortDatapath::Nfqueue::HookCommandExecutor {
+public:
+    bool execute(const SnortDatapath::Nfqueue::IptablesCommand &command) override {
+        commands.push_back(command);
+        if (command.args.size() >= 2 && (command.args[1] == "-D" || command.args[1] == "-F" ||
+                                         command.args[1] == "-X")) {
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<SnortDatapath::Nfqueue::IptablesCommand> commands;
+};
+
 } // namespace
 
 TEST(NfqueueIpv4PassThroughTest, BuildsIpv4PassThroughHookPlan) {
@@ -327,6 +341,36 @@ TEST(NfqueueDualStackPassThroughTest, InstallerExecutesDualStackHookPlan) {
                   .executable = "/system/bin/ip6tables",
                   .args = {"-w", "-A", "sucre-snort_OUTPUT", "-j", "NFQUEUE", "--queue-bypass",
                            "--queue-balance", "2:3"},
+              }));
+}
+
+TEST(NfqueueDualStackPassThroughTest, CleanupDetachesAndDeletesBothFamilies) {
+    MissingHookCleanupExecutor executor;
+
+    const bool removed = SnortDatapath::Nfqueue::removeDualStackPassThroughHooks(
+        SnortDatapath::Nfqueue::HookCleanupPlanConfig{
+            .inputChain = "sucre-snort_INPUT",
+            .outputChain = "sucre-snort_OUTPUT",
+        },
+        executor);
+
+    EXPECT_TRUE(removed);
+    ASSERT_EQ(executor.commands.size(), 12U);
+    EXPECT_EQ(executor.commands.front(),
+              (SnortDatapath::Nfqueue::IptablesCommand{
+                  .executable = "/system/bin/iptables",
+                  .args = {"-w", "-D", "INPUT", "-j", "sucre-snort_INPUT"},
+              }));
+    EXPECT_EQ(executor.commands[5],
+              (SnortDatapath::Nfqueue::IptablesCommand{
+                  .executable = "/system/bin/iptables",
+                  .args = {"-w", "-X", "sucre-snort_OUTPUT"},
+              }));
+    EXPECT_EQ(executor.commands[6].executable, "/system/bin/ip6tables");
+    EXPECT_EQ(executor.commands.back(),
+              (SnortDatapath::Nfqueue::IptablesCommand{
+                  .executable = "/system/bin/ip6tables",
+                  .args = {"-w", "-X", "sucre-snort_OUTPUT"},
               }));
 }
 

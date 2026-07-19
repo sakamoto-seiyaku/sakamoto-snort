@@ -30,6 +30,11 @@ struct HookPlanConfig {
     NfqueueQueuePlan queuePlan;
 };
 
+struct HookCleanupPlanConfig {
+    std::string inputChain;
+    std::string outputChain;
+};
+
 struct DualStackHookPlanConfig {
     std::string inputChain;
     std::string outputChain;
@@ -41,5 +46,9 @@ struct DualStackHookPlanConfig {
 
 [[nodiscard]] HookPlan makeIpv4PassThroughHookPlan(const HookPlanConfig &config);
 [[nodiscard]] HookPlan makeDualStackPassThroughHookPlan(const DualStackHookPlanConfig &config);
+[[nodiscard]] HookPlan makeIpv4PassThroughHookCleanupPlan(
+    const HookCleanupPlanConfig &config);
+[[nodiscard]] HookPlan makeDualStackPassThroughHookCleanupPlan(
+    const HookCleanupPlanConfig &config);
 
 } // namespace SnortDatapath::Nfqueue

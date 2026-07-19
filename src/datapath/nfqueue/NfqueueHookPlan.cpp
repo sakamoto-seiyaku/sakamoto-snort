@@ -80,6 +80,20 @@ void appendPlan(SnortDatapath::Nfqueue::HookPlan &target,
                            std::make_move_iterator(source.commands.end()));
 }
 
+SnortDatapath::Nfqueue::HookPlan makePassThroughHookCleanupPlanForExecutable(
+    const SnortDatapath::Nfqueue::HookCleanupPlanConfig &config, const char *executable) {
+    SnortDatapath::Nfqueue::HookPlan plan;
+
+    addCommand(plan, executable, {"-w", "-D", "INPUT", "-j", config.inputChain});
+    addCommand(plan, executable, {"-w", "-D", "OUTPUT", "-j", config.outputChain});
+    addCommand(plan, executable, {"-w", "-F", config.inputChain});
+    addCommand(plan, executable, {"-w", "-F", config.outputChain});
+    addCommand(plan, executable, {"-w", "-X", config.inputChain});
+    addCommand(plan, executable, {"-w", "-X", config.outputChain});
+
+    return plan;
+}
+
 } // namespace
 
 namespace SnortDatapath::Nfqueue {
@@ -108,6 +122,16 @@ HookPlan makeDualStackPassThroughHookPlan(const DualStackHookPlanConfig &config)
                                                                config.queuesPerFamily),
                          },
                          kIpv6Iptables));
+    return plan;
+}
+
+HookPlan makeIpv4PassThroughHookCleanupPlan(const HookCleanupPlanConfig &config) {
+    return makePassThroughHookCleanupPlanForExecutable(config, kIpv4Iptables);
+}
+
+HookPlan makeDualStackPassThroughHookCleanupPlan(const HookCleanupPlanConfig &config) {
+    HookPlan plan = makeIpv4PassThroughHookCleanupPlan(config);
+    appendPlan(plan, makePassThroughHookCleanupPlanForExecutable(config, kIpv6Iptables));
     return plan;
 }
 

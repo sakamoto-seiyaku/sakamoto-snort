@@ -258,6 +258,22 @@ DualStackPassThroughRuntime::DualStackPassThroughRuntime(DualStackPassThroughRun
 
 DualStackPassThroughRuntime::~DualStackPassThroughRuntime() {
     workers_.join();
+    ready_.store(false, std::memory_order_release);
+    try {
+        SystemHookCommandExecutor executor;
+        const bool hooksRemoved = removeDualStackPassThroughHooks(
+            HookCleanupPlanConfig{
+                .inputChain = config_.inputChain,
+                .outputChain = config_.outputChain,
+            },
+            executor);
+        std::cerr << "Dual-stack NFQUEUE pass-through hook cleanup="
+                  << (hooksRemoved ? "pass" : "fail") << "\n";
+    } catch (const std::exception &e) {
+        std::cerr << "Dual-stack NFQUEUE pass-through hook cleanup=fail: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "Dual-stack NFQUEUE pass-through hook cleanup=fail: unknown exception\n";
+    }
 }
 
 bool DualStackPassThroughRuntime::start() {
@@ -306,6 +322,21 @@ Ipv4PassThroughRuntime::Ipv4PassThroughRuntime(Ipv4PassThroughRuntimeConfig conf
 
 Ipv4PassThroughRuntime::~Ipv4PassThroughRuntime() {
     workers_.join();
+    try {
+        SystemHookCommandExecutor executor;
+        const bool hooksRemoved = removeIpv4PassThroughHooks(
+            HookCleanupPlanConfig{
+                .inputChain = config_.inputChain,
+                .outputChain = config_.outputChain,
+            },
+            executor);
+        std::cerr << "IPv4 NFQUEUE pass-through hook cleanup="
+                  << (hooksRemoved ? "pass" : "fail") << "\n";
+    } catch (const std::exception &e) {
+        std::cerr << "IPv4 NFQUEUE pass-through hook cleanup=fail: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "IPv4 NFQUEUE pass-through hook cleanup=fail: unknown exception\n";
+    }
 }
 
 bool Ipv4PassThroughRuntime::start() {
