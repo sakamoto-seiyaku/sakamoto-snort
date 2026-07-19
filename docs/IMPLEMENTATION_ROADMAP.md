@@ -154,6 +154,7 @@ Status 口径（全篇统一）：
 - [HOLD 2026-07-19] SAKAMOTO-14 RuntimeService process-death containment：daemon `getppid()` monitor 能在 APK 被 force-stop 后自动退出，控制 socket 消失，fresh RuntimeService 可恢复；但 NFQUEUE/iptables 链仍残留，网络 hook cleanup 尚未成立，Android release handoff 继续 HOLD。
 - [DONE 2026-07-19] SAKAMOTO-15 NFQUEUE hook cleanup：正常停止与 APK force-stop 均能清理 IPv4/IPv6 hook、链和控制 socket，fresh RuntimeService 恢复通过；foreground service、release signing、升级/回滚与 tombstone 仍待验证。
 - [DONE 2026-07-19] SAKAMOTO-16 RuntimeService repeated lifecycle residue：5 次短周期 normal start/stop、预置双栈链/jump 幂等归一化、APK force-stop 与 fresh recovery 均通过；长稳、foreground service、Doze、升级/回滚与 SIGKILL 仍待验证。
+- [HOLD 2026-07-19] SAKAMOTO-17 daemon SIGTERM/SIGKILL cleanup boundary：SIGTERM 可通过 daemon destructor 清理双栈 NFQUEUE hook；SIGKILL 后 daemon/socket 虽退出但 hook 残留，必须由 supervisor 或显式 root cleanup 兜底，自动恢复边界仍未满足。
 - [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
 - [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
 

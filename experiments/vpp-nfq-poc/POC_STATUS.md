@@ -29,6 +29,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android daemon orphan containment after APK process death | On Pixel 6a, `am force-stop` reparenting is detected by the daemon's `getppid()` monitor; the daemon and abstract control socket exit without manual root cleanup, and a fresh RuntimeService recovers. NFQUEUE/iptables chains remain, so network-hook cleanup is HOLD. | SAKAMOTO-14 |
 | Android NFQUEUE hook cleanup on daemon shutdown | On Pixel 6a, both normal RuntimeService stop and APK `am force-stop` detach/flush/delete the IPv4/IPv6 NFQUEUE hooks; no daemon, control socket, or `sucre-snort_*` chain remains, and a fresh RuntimeService recovers. | SAKAMOTO-15 |
 | Android RuntimeService repeated lifecycle residue baseline | On Pixel 6a, five bounded normal start/stop cycles plus an APK force-stop/recovery pass keep exactly four dual-stack top-level jumps while running and leave no daemon, control socket, NFQUEUE rule, or private chain after each stop; pre-existing chains do not duplicate jumps. | SAKAMOTO-16 |
+| Android daemon signal cleanup boundary | SIGTERM exits through the daemon destructor and removes the daemon, control socket, and NFQUEUE hooks; SIGKILL removes only the daemon/socket and leaves NFQUEUE hooks until explicit root cleanup. Fresh recovery passes after both boundaries. | SAKAMOTO-17 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -93,6 +94,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   already-present dual-stack chain/jump state is normalized to exactly one
   INPUT and one OUTPUT jump per family, and each stop returns the device to the
   no-daemon/no-hook baseline.
+- Graceful daemon termination is cleanup-safe, but SIGKILL cannot run the
+  destructor: NFQUEUE hooks remain after the process and control socket exit.
+  A release handoff therefore needs an explicit supervisor or root cleanup
+  boundary rather than relying on daemon destruction alone.
 - VPN mode can choose app membership with `VpnService.Builder`.
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
@@ -299,6 +304,9 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - SAKAMOTO-16 does not cover long-run endurance, foreground-service behavior,
   Doze latency, APK upgrade/rollback, or SIGKILL cleanup; the force-stop path
   still uses the previously proven parent monitor.
+- SAKAMOTO-17 covers one Pixel 6a and confirms the SIGTERM/SIGKILL boundary,
+  but does not provide an automatic supervisor, crash backoff, concurrent kill
+  handling, or permission-denial matrix. The SIGKILL cleanup path remains HOLD.
 - SAKAMOTO-10 validates one app-UID `SIGTERM` child-death path and explicit
   stop/restart on one Pixel 6a. It does not yet cover process crash signals,
   Android service/process death, automatic VPP restart policy, or concurrent

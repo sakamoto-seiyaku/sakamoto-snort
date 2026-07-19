@@ -897,3 +897,52 @@ results/sakamoto-16-runtime-repeat-20260719-104415/
    进程状态收敛，并在每次 stop 后等待 delayed intent 排空。
 4. 正式 run 验证预置状态归一化为每个 family 一个 INPUT/OUTPUT jump；5 次 normal stop 和
    force-stop 均通过 cleanup，不把上述 harness 失败误报为产品失败。
+
+## SAKAMOTO-17：Android daemon SIGTERM/SIGKILL cleanup boundary
+
+状态：实验完成；SIGTERM cleanup GO，SIGKILL 自动 cleanup HOLD。该 POC 只判断退出信号与
+网络 hook 残留边界，不把人工 root cleanup 计入自动清理能力。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-105412`；运行中关键快照为 `USB powered: false`，结束 reset 后为
+  `USB powered: true`。
+- APK SHA-256：
+  `6c1c374af2a7124c95b421f7fc648c7d233f28d74c2784539d2cc1aeb450d7dd`。
+- daemon artifact SHA-256：
+  `12eaba5c376fdb7a629dce937500faefde3730115cfcee3a42596cfc5719df7f`。
+- `versionName=0.1-debug`。
+
+### 正式结果
+
+```text
+run_id: 20260719-105412
+SIGTERM: daemon exits; control socket absent; NFQUEUE hooks absent; destructor cleanup log=pass
+SIGTERM recovery: fresh RuntimeService start/stop and hook cleanup pass
+SIGKILL: daemon and control socket exit; NFQUEUE hooks remain before manual cleanup
+SIGKILL: destructor cleanup log absent, as expected for uncatchable signal
+manual root cleanup: hooks removed; fresh RuntimeService recovery and final stop pass
+result: graceful cleanup pass; forced-kill cleanup boundary HOLD
+```
+
+原始证据：
+
+```text
+results/sakamoto-17-daemon-signal-boundary-20260719-105412/
+```
+
+### 失败方法与定位
+
+1. `20260719-105036` 使用无 `-W` 的 `am start`，启动阶段受 Android Activity 返回时序影响而
+   超时；手工使用 `am start -W` 后运行正常，不计入产品结论。
+2. `20260719-105216` 已观察到 SIGKILL 后 hook 残留，但 harness 的多行 `adb_su` 清理命令
+   未实际执行；恢复阶段随后清掉了设备，不能把该轮当作手工清理证据。
+3. 最终 harness 改为逐条 root 命令，并使用 `am start -W`；正式 run 完整记录了 SIGKILL
+   后残留、无 destructor cleanup log、显式清理及 fresh recovery。
+
+### 技术结论
+
+SIGTERM 路径可以依赖 daemon destructor 完成 NFQUEUE cleanup；SIGKILL 路径不能运行析构函数，
+因此 daemon/socket 消失并不等价于网络 hook 已清理。后续 Android handoff 必须在 supervisor、
+service stop 或独立 root cleanup 边界上补齐异常终止兜底，再进入 release 评估。
