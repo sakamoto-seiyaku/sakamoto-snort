@@ -1000,3 +1000,46 @@ NFQUEUE hook，短数据面链路也可用；但 manifest/service 没有 foregro
 `dumpsys activity services` 显示 `startForegroundCount:0`，未观察到本包通知。因而后台短 smoke
 不能替代正式 Android foreground-service；需要补齐 `startForeground`、notification channel、
 manifest 类型及对应停止/升级策略后，才能解除 release handoff 的 HOLD。
+
+## SAKAMOTO-19：RuntimeService short Doze differential
+
+状态：实验通过；短 forced deep Doze retention 与 wake recovery GO。该 POC 不作为长期电量或
+后台稳定性认证，也不改变 SAKAMOTO-18 的 foreground-service HOLD。
+
+实验目的：在模拟 USB 断电、锁屏并强制进入 deep Doze 后，观察 RuntimeService daemon、控制
+socket、双栈 NFQUEUE hook 是否保持；解除 Doze 后用确定性的本地 HTTP 探针确认数据面恢复。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-110805`；Doze 快照为 `mScreenOn=false`、`mWakefulness=Dozing`、
+  `mState=IDLE`，且 `USB powered: false`；结束 reset 后为 `USB powered: true`。
+- APK SHA-256：
+  `6af56992eca699a10310e356da5aab2cdd08c60b5098360fe056138a3fba476e`。
+- daemon artifact SHA-256：
+  `54a3024f8493bdbcf093bd4b3f54883d50bfb9dee7b6081f72ec966eb03f9a73`。
+- HELLO build id：`ndk-r29-a3d8ad641d20`；`versionName=0.1-debug`。
+
+### 正式结果
+
+```text
+run_id: 20260719-110805
+baseline: daemon/socket/NFQUEUE hooks present; local HTTP probe pass
+forced Doze: command reports deep idle; 10-second snapshot mScreenOn=false, mState=IDLE
+forced Doze: daemon/socket/NFQUEUE hooks present
+wake: daemon/socket/NFQUEUE hooks present; local HTTP probe pass, elapsedMs=13
+controlled stop: no daemon; socket absent; NFQUEUE hooks absent
+result: pass; short Doze retention and wake recovery GO
+```
+
+原始证据：
+
+```text
+results/sakamoto-19-runtime-doze-20260719-110805/
+```
+
+### 技术结论
+
+在当前 Pixel 6a、当前授权和当前双栈 hook 方案下，短 forced deep Doze 不会杀掉 RuntimeService
+daemon，也不会自动清掉控制 socket 或 NFQUEUE hook；解除 Doze 后数据面可恢复。仍未验证自然
+Doze 进入、maintenance window、长时间 idle、网络切换、OEM 进程回收和电量归因。
