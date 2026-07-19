@@ -1,9 +1,15 @@
 package com.sakamoto.snort.vpnlite;
 
 import android.app.Service;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.Context;
 import android.content.Intent;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.content.pm.ServiceInfo;
+import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -26,6 +32,8 @@ public final class SnortRuntimeService extends Service {
     private static final String TAG = "SnortRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
     private static final String CONTROL_SOCKET = "sucre-snort-control-vnext";
+    private static final String FOREGROUND_CHANNEL_ID = "snort-runtime";
+    private static final int FOREGROUND_NOTIFICATION_ID = 1001;
     private static final int HELLO_ATTEMPTS = 20;
     private static final long HELLO_RETRY_MS = 250L;
 
@@ -35,17 +43,69 @@ public final class SnortRuntimeService extends Service {
     private File daemonPidFile;
 
     @Override
+    public void onCreate() {
+        super.onCreate();
+        createForegroundChannel();
+    }
+
+    @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
             stopRuntime();
+            stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action) || action == null) {
+            if (!startForegroundRuntime()) {
+                stopSelf();
+                return START_NOT_STICKY;
+            }
             startRuntime();
         }
         return START_NOT_STICKY;
+    }
+
+    private void createForegroundChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+        NotificationChannel channel = new NotificationChannel(
+                FOREGROUND_CHANNEL_ID,
+                "Snort runtime",
+                NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription("Root-managed VPP runtime status");
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.createNotificationChannel(channel);
+        }
+    }
+
+    private boolean startForegroundRuntime() {
+        Notification notification = new Notification.Builder(this, FOREGROUND_CHANNEL_ID)
+                .setContentTitle("Snort runtime")
+                .setContentText("VPP network runtime is active")
+                .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setOngoing(true)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .build();
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(FOREGROUND_NOTIFICATION_ID, notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(FOREGROUND_NOTIFICATION_ID, notification);
+            }
+            appendLog("foreground_service_start=pass notification_id="
+                    + FOREGROUND_NOTIFICATION_ID);
+            return true;
+        } catch (RuntimeException e) {
+            appendLog("foreground_service_start=fail reason="
+                    + e.getClass().getSimpleName() + " message=" + String.valueOf(e.getMessage()));
+            Log.e(TAG, "foreground service start failed", e);
+            return false;
+        }
     }
 
     private void startRuntime() {
@@ -272,6 +332,7 @@ public final class SnortRuntimeService extends Service {
     @Override
     public void onDestroy() {
         stopRuntime();
+        stopForeground(true);
         super.onDestroy();
     }
 

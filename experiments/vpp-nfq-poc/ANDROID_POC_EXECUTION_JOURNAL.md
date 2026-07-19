@@ -1095,3 +1095,52 @@ results/sakamoto-20-apk-upgrade-rollback-20260719-111451/
 进程；parent-death containment 与 daemon destructor 随后清理旧 daemon、socket 和双栈 hook，
 新旧版本都能重新安装 hook 且不重复顶层 jump。该结论不覆盖 release key rotation、daemon
 协议/数据迁移不兼容、安装中断或 OEM 发布策略。
+
+## SAKAMOTO-21：RuntimeService foreground service implementation
+
+状态：实验通过；S21 清除了 SAKAMOTO-18 的短生命周期 foreground-service HOLD。
+
+变更范围：`SnortRuntimeService` 创建 `snort-runtime` notification channel，启动 daemon 前调用
+`startForeground`，Android 14+ 使用 `specialUse` foreground-service type；manifest 增加对应
+foreground-service 权限、special-use subtype 和 `POST_NOTIFICATIONS`。debug harness 通过 shell
+grant 通知权限，避免把用户授权流程混入本轮。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-113743`；后台与锁屏快照期间为 `USB powered: false`，结束 reset 后为
+  `USB powered: true`。
+- APK SHA-256：
+  `b1db51a75492054c469d8bb317cdd7f0644b554bb4c2b8ca725175499c6aa180`。
+- daemon artifact SHA-256：
+  `5ebe23b989dfde12cedf6a9a6a6c433e37cab8efff711be5f5bf37e52acccc41`。
+- HELLO build id：`ndk-r29-0bd3127abf47`；`versionName=0.1-debug`。
+
+### 正式结果
+
+```text
+run_id: 20260719-113743
+foreground_service_start: pass; notification_id=1001
+started: foreground_service=present; daemon/socket/NFQUEUE hooks present
+data_plane: local adb-reverse HTTP probe pass
+background after HOME + 3s: foreground_service=present; notification=present; daemon/socket/hooks present
+locked for 5s: foreground_service=present; notification=present; daemon/socket/hooks present
+controlled stop: no daemon; socket absent; NFQUEUE hooks absent
+result: pass; short foreground-service lifecycle GO
+```
+
+原始证据：
+
+```text
+results/sakamoto-21-runtime-foreground-implementation-20260719-113743/
+```
+
+### 观测边界
+
+启动后的第一份即时 notification snapshot 尚未列出本包记录，但 foreground log 已通过；
+3 秒后台和 5 秒锁屏 snapshot 均出现 `pkg=com.sakamoto.snort.vpnlite`、`id=1001`、
+`channel=snort-runtime` 的 ongoing foreground notification。说明是通知发布时序，不是
+`startForeground` 失败。
+
+本轮只证明 debug shell 已授予通知权限下的最小 foreground-service 生命周期；未覆盖用户
+运行时授权、release notification UX、重启、OEM 电量策略和长时间 foreground-service 限制。

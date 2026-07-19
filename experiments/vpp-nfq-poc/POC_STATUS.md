@@ -33,6 +33,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android RuntimeService foreground/background lifecycle smoke | On Pixel 6a, RuntimeService, control socket, and dual-stack NFQUEUE hooks survive a background transition and 5-second lock-screen interval; a local adb-reverse HTTP probe passes and controlled stop cleans all residue. No foreground-service state, notification, or `startForeground` call is present, so release foreground lifecycle remains HOLD. | SAKAMOTO-18 |
 | Android RuntimeService short Doze differential | With simulated USB unplug and screen off, forced deep Doze is entered for 10 seconds; daemon, control socket, and dual-stack NFQUEUE hooks remain present, and pre/post-Doze local HTTP probes pass after wake. Controlled stop cleans all residue. | SAKAMOTO-19 |
 | Android APK upgrade/rollback hook residue boundary | On Pixel 6a, upgrading from versionCode 1 to 2 and rolling back from 2 to 1 while RuntimeService is active both remove the old daemon, control socket, and NFQUEUE hooks automatically; each version starts with exactly four top-level jumps and stops cleanly. | SAKAMOTO-20 |
+| Android RuntimeService foreground service implementation | Added a notification channel, `startForeground`, `specialUse` foreground-service manifest declaration, and debug notification permission grant. On Pixel 6a, foreground state and app notification remain present through HOME and 5-second lock screen; local probe and stop cleanup pass. | SAKAMOTO-21 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -114,6 +115,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   rollback: the active old/new RuntimeService process is removed, its daemon
   exits, and the dual-stack hooks/socket disappear before the replacement
   version starts. Both version transitions normalize to four top-level jumps.
+- RuntimeService now enters Android foreground-service state with an ongoing
+  `snort-runtime` notification before root daemon startup. The state and
+  notification survive the tested HOME and lock-screen window; this removes
+  the SAKAMOTO-18 short-lifecycle foreground-service HOLD.
 - VPN mode can choose app membership with `VpnService.Builder`.
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
@@ -326,8 +331,13 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - SAKAMOTO-18 covers only a short background and 5-second lock-screen window;
   it does not validate Doze policy, long suspension, reboot, OEM process
   eviction, notification-channel behavior after upgrade, or a real foreground
-  service implementation. The current foreground-service requirement remains
-  HOLD.
+  service implementation. SAKAMOTO-21 now covers the minimum debug
+  implementation, but long Doze, reboot, OEM eviction, release notification
+  permission flow, and upgrade notification behavior remain open.
+- SAKAMOTO-21 covers one debug APK on one Pixel 6a and grants
+  `POST_NOTIFICATIONS` through the debug shell. It does not validate the
+  user-facing runtime permission request, release notification UX, reboot,
+  OEM policy, or long-running foreground-service limits.
 - SAKAMOTO-19 covers one forced 10-second deep Doze interval on one Pixel 6a;
   it does not cover natural Doze entry, maintenance windows, long idle,
   network handover, reboot, OEM eviction, or battery attribution. Foreground

@@ -10,8 +10,9 @@ PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-18080}"
 WAIT_SECONDS="${WAIT_SECONDS:-20}"
+POC_ID="${POC_ID:-18-runtime-foreground}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
-RESULT_DIR="$POC_DIR/results/sakamoto-18-runtime-foreground-$RUN_ID"
+RESULT_DIR="$POC_DIR/results/sakamoto-$POC_ID-$RUN_ID"
 RUN_LOG="$RESULT_DIR/run.log"
 RUNTIME_LOG="files/logs/runtime-service.log"
 APP_HTTP_LOG="files/logs/app-http-probe.log"
@@ -211,7 +212,7 @@ cleanup() {
 
 trap cleanup EXIT
 
-echo "# SAKAMOTO-18 Android RuntimeService foreground/background lifecycle smoke"
+echo "# SAKAMOTO-$POC_ID Android RuntimeService foreground/background lifecycle smoke"
 echo "run_id=$RUN_ID"
 echo "adb_serial=$(resolve_adb_serial)"
 device_preflight
@@ -229,6 +230,7 @@ bash "$REPO_ROOT/dev/dev-build-ndk.sh"
 echo "building and installing Android APK"
 bash "$POC_DIR/android/vpn-lite/scripts/build-debug-apk.sh"
 bash "$POC_DIR/android/vpn-lite/scripts/install-debug-apk.sh"
+adb_cmd shell pm grant "$PACKAGE" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 capture_identity
 
 echo "starting RuntimeService from foreground activity"
@@ -247,7 +249,7 @@ echo "one data-plane HTTP probe before background transition"
 start_local_http_probe_server
 adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" \
   --ez appHttpProbe true --es host "$HOST" --ei port "$PORT" \
-  --es path "/sakamoto-18-runtime-foreground" >/dev/null
+  --es path "/sakamoto-$POC_ID" >/dev/null
 sleep 6
 capture_state probe
 stop_local_http_probe_server
