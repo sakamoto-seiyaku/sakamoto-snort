@@ -32,6 +32,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android daemon signal cleanup boundary | SIGTERM exits through the daemon destructor and removes the daemon, control socket, and NFQUEUE hooks; SIGKILL removes only the daemon/socket and leaves NFQUEUE hooks until explicit root cleanup. Fresh recovery passes after both boundaries. | SAKAMOTO-17 |
 | Android RuntimeService foreground/background lifecycle smoke | On Pixel 6a, RuntimeService, control socket, and dual-stack NFQUEUE hooks survive a background transition and 5-second lock-screen interval; a local adb-reverse HTTP probe passes and controlled stop cleans all residue. No foreground-service state, notification, or `startForeground` call is present, so release foreground lifecycle remains HOLD. | SAKAMOTO-18 |
 | Android RuntimeService short Doze differential | With simulated USB unplug and screen off, forced deep Doze is entered for 10 seconds; daemon, control socket, and dual-stack NFQUEUE hooks remain present, and pre/post-Doze local HTTP probes pass after wake. Controlled stop cleans all residue. | SAKAMOTO-19 |
+| Android APK upgrade/rollback hook residue boundary | On Pixel 6a, upgrading from versionCode 1 to 2 and rolling back from 2 to 1 while RuntimeService is active both remove the old daemon, control socket, and NFQUEUE hooks automatically; each version starts with exactly four top-level jumps and stops cleanly. | SAKAMOTO-20 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -109,6 +110,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   RuntimeService daemon, control socket, and dual-stack hooks; local HTTP
   probes pass both before Doze and after wake. This is a short retention
   result, not a battery or long-suspension guarantee.
+- APK package replacement is currently clean across a short upgrade and
+  rollback: the active old/new RuntimeService process is removed, its daemon
+  exits, and the dual-stack hooks/socket disappear before the replacement
+  version starts. Both version transitions normalize to four top-level jumps.
 - VPN mode can choose app membership with `VpnService.Builder`.
 - VPN mode can recover IPv4/IPv6 TCP/UDP owners in the active `VpnService`
   process from packet tuples.
@@ -327,6 +332,11 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   it does not cover natural Doze entry, maintenance windows, long idle,
   network handover, reboot, OEM eviction, or battery attribution. Foreground
   service policy remains the SAKAMOTO-18 HOLD.
+- SAKAMOTO-20 covers only debug APKs signed by the same local key, versionCode
+  1/2, one Pixel 6a, and one active-process upgrade plus rollback pair. It does
+  not cover release signing/key rotation, schema-incompatible daemon changes,
+  interrupted installs, staged rollout, data migration, or crash/tombstone
+  collection.
 - SAKAMOTO-10 validates one app-UID `SIGTERM` child-death path and explicit
   stop/restart on one Pixel 6a. It does not yet cover process crash signals,
   Android service/process death, automatic VPP restart policy, or concurrent

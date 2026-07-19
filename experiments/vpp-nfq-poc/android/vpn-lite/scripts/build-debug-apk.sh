@@ -12,6 +12,8 @@ aapt2="${AAPT2:-${sdk_prebuilts}/tools/linux/bin/aapt2}"
 d8_jar="${D8_JAR:-${sdk_prebuilts}/tools/linux/lib/d8.jar}"
 apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
+apk_version_code="${APK_VERSION_CODE:-1}"
+apk_version_name="${APK_VERSION_NAME:-0.1-debug}"
 ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 clang="${ANDROID_CLANG:-${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
 rustc="${RUSTC:-$(command -v rustc || true)}"
@@ -169,8 +171,8 @@ echo "linking APK"
   --java "$gen_dir" \
   --min-sdk-version 31 \
   --target-sdk-version 36 \
-  --version-code 1 \
-  --version-name 0.1-debug \
+  --version-code "$apk_version_code" \
+  --version-name "$apk_version_name" \
   --debug-mode
 
 cp "$base_apk" "$unsigned_apk"

@@ -1043,3 +1043,55 @@ results/sakamoto-19-runtime-doze-20260719-110805/
 在当前 Pixel 6a、当前授权和当前双栈 hook 方案下，短 forced deep Doze 不会杀掉 RuntimeService
 daemon，也不会自动清掉控制 socket 或 NFQUEUE hook；解除 Doze 后数据面可恢复。仍未验证自然
 Doze 进入、maintenance window、长时间 idle、网络切换、OEM 进程回收和电量归因。
+
+## SAKAMOTO-20：APK upgrade/rollback hook residue boundary
+
+状态：实验通过；同签名 debug APK 的 active-process upgrade/rollback 与 hook residue GO。
+
+实验目的：构造 versionCode 1/2 的两个 APK，在 RuntimeService 活跃时分别执行升级和回滚，
+观察包替换是否留下旧 daemon、抽象控制 socket、双栈 NFQUEUE hook 或重复顶层 jump；随后用
+新旧版本各自重新启动/停止确认可恢复。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / 当前 KernelSU 授权；运行中 USB 模拟断电，结束恢复。
+- 正式 run `20260719-111451`。
+- old：`versionCode=1`, `versionName=0.1-poc-old`，APK SHA-256：
+  `613742d6ef008d082ee8a18e58da75733c31c64a47958232136f9265d5eb72a5`。
+- new：`versionCode=2`, `versionName=0.2-poc-new`，APK SHA-256：
+  `48cc23938de35605c1a71c21cd78e500337dc4ea08d7e89933d2269c493faf4f`。
+- daemon artifact SHA-256：
+  `31313752d8f55353436d30bee1cbc5102cbf7c46e89fc3490cdb3cbfff52eed2`。
+- HELLO build id：`ndk-r29-2d0d473bd07f`。
+
+### 正式结果
+
+```text
+run_id: 20260719-111451
+old active before upgrade: version 0.1-poc-old; daemon/socket/hooks present; top_level_jump_count=4
+upgrade old -> new while active: version 0.2-poc-new; no daemon/socket/hooks residue; cleanup=pass
+new after upgrade: start/stop pass; daemon/socket/hooks active only while running; top_level_jump_count=4
+rollback new -> old while active: version 0.1-poc-old; no daemon/socket/hooks residue; cleanup=pass
+old after rollback: start/stop pass; daemon/socket/hooks active only while running; top_level_jump_count=4
+result: pass; upgrade/rollback cleanup GO on this device
+```
+
+原始证据：
+
+```text
+results/sakamoto-20-apk-upgrade-rollback-20260719-111451/
+```
+
+### 失败方法与定位
+
+1. `20260719-111320` 正确生成并安装 versionCode 1/2，但 harness 用 `rg -q` 直接消费
+   `adb dumpsys package` 管道，在 `pipefail` 下因提前关闭管道把版本断言误报为失败；原始
+   package snapshot 已显示版本正确，未计入产品结论。
+2. 修正为先完整读取 package dump 再匹配后，正式 run 完成全部 upgrade/rollback 观察。
+
+### 技术结论
+
+在同一 debug 签名、同一 daemon ABI 和单台 Pixel 6a 条件下，Android 包替换会终止旧 APK
+进程；parent-death containment 与 daemon destructor 随后清理旧 daemon、socket 和双栈 hook，
+新旧版本都能重新安装 hook 且不重复顶层 jump。该结论不覆盖 release key rotation、daemon
+协议/数据迁移不兼容、安装中断或 OEM 发布策略。
