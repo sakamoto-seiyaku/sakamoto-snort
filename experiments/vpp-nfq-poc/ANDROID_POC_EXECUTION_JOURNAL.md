@@ -1445,3 +1445,54 @@ runtime_start_result=fail reason=artifact_hash_mismatch
 发现的“只看非空 build ID”问题，但安全性仍依赖 APK 签名和可信的 expected hash 来源；尚未覆盖
 release signing/key rotation、签名校验策略、asset 与 native library 同时被重新打包、APK 升级中断
 以及设备上已有旧 APK 的迁移行为。
+
+## SAKAMOTO-27：RuntimeService live KernelSU permission revocation
+
+状态：实验通过；不重启撤权未即时生效，运行中撤权策略为 HOLD；force-stop cleanup 与 reboot recovery 通过。
+
+### 目标与方法
+
+在已有 root RuntimeService 活跃时，仅修改 KernelSU app profile 的 allow byte，不重启设备，观察：
+后续 RuntimeService 新启动是否立即失去 `su` 权限；原 daemon 在 app force-stop 后是否清理；恢复
+allowlist 并重启后是否可以 fresh recovery。设备 allowlist 先完整备份，结束由 trap 或显式 restore
+恢复。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540` / KernelSU allow offset `1824`。
+- 正式 run `20260719-132309`；第一次 run `20260719-132054` 保留作 reboot 后 activity settling harness 失败证据。
+- 正常 daemon SHA-256：
+  `0ab23032d1056d291671acbbd7f5f8c9487bfc0132d025b00b456345ca092998`。
+- HELLO build id：`ndk-r29-28dcd8f3c32e`。
+
+### 正式结果
+
+```text
+authorized start: runtime_start_pass; root daemon present
+allow byte -> 0 without reboot: recorded
+app force-stop: daemon absent; control socket absent; NFQUEUE hooks absent
+new RuntimeService start without reboot: runtime_start_pass
+conclusion: live revoke not effective without reboot
+restore allowlist + reboot: recovery runtime_start_pass
+recovery stop: daemon/socket/NFQUEUE hooks absent
+result: POC pass; live revocation without reboot HOLD
+```
+
+原始证据：
+
+```text
+results/sakamoto-27-runtime-live-revocation-20260719-132309/
+```
+
+### 失败方法与定位
+
+第一次正式 harness `20260719-132054` 在恢复重启后立即启动 activity，recovery log 为空；设备
+随后验证 app UID `su -c id` 已是 root，说明是 Android reboot 后 activity/service settling race，
+不是 KernelSU allowlist 恢复失败。加入 2 秒 settling wait 后，`20260719-132309` 完整通过。
+
+### 技术结论与边界
+
+当前 KernelSU 设备上，allowlist 文件字节变化不会在同一次 boot 中立即刷新 app UID 的授权判定；
+即使新 RuntimeService 仍能启动，app force-stop 后 daemon 的 parent-death cleanup 仍然成立。恢复
+授权需要 reboot 才能形成可验证的 fresh state。产品若要求用户运行中撤权，不能只依赖当前 allowlist
+文件修改，必须定义 KernelSU 管理器刷新/重启机制或明确把撤权语义限定为下次 boot。

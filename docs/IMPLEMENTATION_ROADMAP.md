@@ -164,6 +164,7 @@ Status 口径（全篇统一）：
 - [DONE 2026-07-19] SAKAMOTO-24 RuntimeService root permission denial：KernelSU deny 时 app UID 的 `/system/bin/su` 不可执行，RuntimeService 明确记录 `runtime_start_result=fail`，无 daemon/socket/NFQUEUE 残留；恢复 allowlist 并重启后 fresh start/stop 通过；用户授权 UX、live revocation 与 release 策略仍待验证。
 - [HOLD 2026-07-19] SAKAMOTO-25 RuntimeService artifact mismatch boundary：错误 ELF 与 HELLO protocol mismatch 均在成功前 fail closed 且无残留，正常构件恢复通过；同 ABI 但篡改非空 build ID 仍被当前 gate 接受，预期 build ID/hash 绑定、签名构件校验与 release 策略待补。
 - [DONE 2026-07-19] SAKAMOTO-26 RuntimeService APK daemon hash gate：build script 将发布期 expected SHA-256 写入 APK asset，RuntimeService 在 root launch 前校验 extracted daemon；正常/恢复通过，同 ABI 篡改构件在 `root_launch=started` 前失败且无残留。APK signing/key trust、release key rotation 与 asset/daemon 同时被替换的攻击模型仍未覆盖。
+- [HOLD 2026-07-19] SAKAMOTO-27 live KernelSU permission revocation：不重启修改 app allow byte 后，后续 `su` 请求仍可成功，说明授权状态由 KernelSU 缓存/启动态加载；app force-stop cleanup 与 allowlist restore/reboot recovery 通过。运行中撤权与无需 reboot 的策略仍待定义。
 - [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
 - [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
 
