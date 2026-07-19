@@ -17,11 +17,14 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.concurrent.TimeUnit;
 
 /** Minimal RuntimeService POC: root-launch the packaged daemon and gate on HELLO. */
@@ -32,6 +35,7 @@ public final class SnortRuntimeService extends Service {
     private static final String TAG = "SnortRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
     private static final String CONTROL_SOCKET = "sucre-snort-control-vnext";
+    private static final String EXPECTED_DAEMON_HASH_ASSET = "daemon.sha256";
     private static final String FOREGROUND_CHANNEL_ID = "snort-runtime";
     private static final int FOREGROUND_NOTIFICATION_ID = 1001;
     private static final int HELLO_ATTEMPTS = 20;
@@ -134,6 +138,23 @@ public final class SnortRuntimeService extends Service {
             appendLog("daemon_exists=" + daemon.isFile() + " executable=" + daemon.canExecute());
             if (!daemon.isFile() || !daemon.canExecute()) {
                 appendLog("runtime_start_result=fail reason=daemon_artifact_unavailable");
+                return;
+            }
+            try {
+                String expectedHash = readExpectedDaemonHash();
+                String actualHash = sha256(daemon);
+                appendLog("artifact_hash_expected=" + expectedHash);
+                appendLog("artifact_hash_actual=" + actualHash);
+                if (!expectedHash.equalsIgnoreCase(actualHash)) {
+                    appendLog("runtime_start_result=fail reason=artifact_hash_mismatch");
+                    stopRuntime();
+                    return;
+                }
+                appendLog("artifact_hash_result=pass");
+            } catch (Exception e) {
+                appendLog("runtime_start_result=fail reason=artifact_hash_unavailable message="
+                        + String.valueOf(e.getMessage()));
+                stopRuntime();
                 return;
             }
 
@@ -269,6 +290,43 @@ public final class SnortRuntimeService extends Service {
         } finally {
             socket.close();
         }
+    }
+
+    private String readExpectedDaemonHash() throws IOException {
+        try (InputStream input = getAssets().open(EXPECTED_DAEMON_HASH_ASSET)) {
+            ByteArrayOutputStream value = new ByteArrayOutputStream();
+            byte[] buffer = new byte[128];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count > 0) {
+                    value.write(buffer, 0, count);
+                }
+            }
+            String hash = value.toString(StandardCharsets.US_ASCII.name()).trim();
+            if (!hash.matches("[0-9a-fA-F]{64}")) {
+                throw new IOException("invalid expected daemon SHA-256 asset");
+            }
+            return hash;
+        }
+    }
+
+    private static String sha256(File file) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] buffer = new byte[32 * 1024];
+        try (InputStream input = new FileInputStream(file)) {
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count > 0) {
+                    digest.update(buffer, 0, count);
+                }
+            }
+        }
+        byte[] hash = digest.digest();
+        StringBuilder output = new StringBuilder(hash.length * 2);
+        for (byte value : hash) {
+            output.append(String.format("%02x", value & 0xff));
+        }
+        return output.toString();
     }
 
     private static byte[] readFully(InputStream input, int length) throws IOException {

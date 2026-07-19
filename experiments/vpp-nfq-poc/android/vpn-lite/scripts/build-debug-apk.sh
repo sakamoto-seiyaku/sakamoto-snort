@@ -30,6 +30,7 @@ android_vpp_client_lib_dir="${VPP_ANDROID_CLIENT_LIB_DIR:-${android_vpp_build_di
 android_vpp_src_dir="${VPP_ANDROID_SOURCE_DIR:-${poc_dir}/work/vpp/src}"
 hev_stage_dir="${ANDROID_HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
 daemon_artifact="${SNORT_ANDROID_DAEMON_ARTIFACT:-${repo_root}/build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so}"
+expected_daemon_sha256="${SNORT_EXPECTED_DAEMON_SHA256:-}"
 
 die() {
   echo "error: $*" >&2
@@ -67,16 +68,23 @@ dex_dir="$build_dir/dex"
 gen_dir="$build_dir/generated"
 jni_root="$build_dir/jni"
 jni_dir="$jni_root/lib/arm64-v8a"
+assets_dir="$build_dir/assets"
 intermediates="$build_dir/intermediates"
 outputs="$build_dir/outputs"
 manifest="$app_dir/src/main/AndroidManifest.xml"
 keystore="$build_dir/debug.keystore"
 
-rm -rf "$classes_dir" "$dex_dir" "$gen_dir" "$jni_root" "$intermediates" "$outputs"
-mkdir -p "$classes_dir" "$dex_dir" "$gen_dir" "$jni_dir" "$intermediates" "$outputs"
+rm -rf "$classes_dir" "$dex_dir" "$gen_dir" "$jni_root" "$assets_dir" "$intermediates" "$outputs"
+mkdir -p "$classes_dir" "$dex_dir" "$gen_dir" "$jni_dir" "$assets_dir" "$intermediates" "$outputs"
 
 echo "packaging APK-native daemon artifact"
 cp "$daemon_artifact" "$jni_dir/libsucre_snortd.so"
+if [[ -z "$expected_daemon_sha256" ]]; then
+  expected_daemon_sha256="$(sha256sum "$daemon_artifact" | awk '{print $1}')"
+fi
+[[ "$expected_daemon_sha256" =~ ^[[:xdigit:]]{64}$ ]] || die "invalid expected daemon SHA-256: $expected_daemon_sha256"
+printf '%s\n' "$expected_daemon_sha256" >"$assets_dir/daemon.sha256"
+echo "expected_daemon_sha256=$expected_daemon_sha256"
 
 rust_staticlib="$intermediates/libvpp_rust_control_probe.a"
 echo "building Rust Android control probe"
@@ -183,6 +191,10 @@ cp "$base_apk" "$unsigned_apk"
 (
   cd "$jni_root"
   zip -q -r "$unsigned_apk" lib
+)
+(
+  cd "$build_dir"
+  zip -q -r "$unsigned_apk" assets
 )
 
 if [[ ! -f "$keystore" ]]; then

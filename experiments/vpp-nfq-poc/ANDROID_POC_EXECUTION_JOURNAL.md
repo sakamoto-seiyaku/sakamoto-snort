@@ -1385,3 +1385,63 @@ mismatch。保留该结果目录 `20260719-122444` 作为 harness 失败证据�
 和 `snort10-base` capability，即使 build ID 被篡改仍可启动；Java 侧没有比较预期 build ID、
 构件 hash 或签名。因此现阶段“HELLO gate 通过”不等于“启动的是被期望的构件”，下一步应先定义
 构件身份来源和签名/hash 校验，再决定是否进入 release handoff。
+
+## SAKAMOTO-26：RuntimeService APK daemon artifact hash gate
+
+状态：POC 通过；hash 校验已在 `su` 启动前生效。
+
+### 目标与方法
+
+针对 SAKAMOTO-25 暴露的“同 ABI、非空 build ID 仍可被接受”问题，把发布期 expected daemon
+SHA-256 写入 APK `assets/daemon.sha256`。RuntimeService 对
+`${applicationInfo.nativeLibraryDir}/libsucre_snortd.so` 计算 SHA-256，只有 expected/actual
+一致才继续 root launch 与 HELLO gate。
+
+正式 harness 在构建篡改 daemon 时仍注入正常 daemon 的 expected hash，避免出现“篡改后重新
+生成 expected hash”导致的假通过。顺序为：正常构件启动/停止、同 ABI 修改 build ID 但沿用
+正常 expected hash、正常构件 recovery。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-131457`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- 正常 daemon SHA-256：
+  `a755c370246c340ca1f3d1b04737f013b43b6fad0004b9c1bc9bdb17cb9a2cec`。
+- 篡改 daemon SHA-256：
+  `4907e34da4dda3c783c1211f01ffae28cb340973617b2e9f90182323c307a3c3`。
+- HELLO build id：`ndk-r29-9d8618263743`。
+
+### 正式结果
+
+```text
+normal: artifact_hash_expected == artifact_hash_actual; artifact_hash_result=pass
+normal: root_launch=started; HELLO pass; daemon/socket/NFQUEUE present while running
+normal stop: no daemon; control socket absent; NFQUEUE hooks absent
+altered: expected normal hash != actual altered hash
+altered: runtime_start_result=fail reason=artifact_hash_mismatch
+altered: no root_launch=started; no daemon; control socket absent; NFQUEUE hooks absent
+recovery: artifact hash pass; root launch/HELLO pass; stop cleanup pass
+result: pass; pre-root artifact identity gate GO
+```
+
+原始证据：
+
+```text
+results/sakamoto-26-runtime-artifact-hash-20260719-131457/
+```
+
+篡改态 runtime log：
+
+```text
+artifact_hash_expected=a755c370246c340ca1f3d1b04737f013b43b6fad0004b9c1bc9bdb17cb9a2cec
+artifact_hash_actual=4907e34da4dda3c783c1211f01ffae28cb340973617b2e9f90182323c307a3c3
+runtime_start_result=fail reason=artifact_hash_mismatch
+```
+
+### 技术结论与边界
+
+当前 APK-native debug 路径已证明：构件 hash 不匹配时，RuntimeService 在 `su` 之前 fail closed，
+不会创建 root daemon、控制 socket 或 NFQUEUE hook；正常构件仍可恢复。这个 gate 解决了 S25
+发现的“只看非空 build ID”问题，但安全性仍依赖 APK 签名和可信的 expected hash 来源；尚未覆盖
+release signing/key rotation、签名校验策略、asset 与 native library 同时被重新打包、APK 升级中断
+以及设备上已有旧 APK 的迁移行为。
