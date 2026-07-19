@@ -793,7 +793,8 @@ release signing、升级/回滚和 crash/tombstone 口径约束。
 
 - Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
 - 正式 run `20260719-101700`；开始时执行 `dumpsys battery unplug`，所有关键快照均为
-  `USB powered: false`；脚本结束后执行 battery reset，设备恢复 USB 供电。
+  `USB powered: false`；run 后发现初版 harness 未注册 `EXIT` cleanup，立即手工执行
+  battery reset，`post-run-manual-reset.txt` 记录最终 `USB powered: true`。
 - APK SHA-256：
   `31ba5429550070ba7943668fff5613f9b0d55d0a34b08e2d749e9786bd1a2c04`。
 - daemon artifact SHA-256：
@@ -835,6 +836,9 @@ results/sakamoto-15-runtime-hook-cleanup-20260719-101700/
 
 - 启动阶段日志中的 `Chain already exists` 属于重复安装的幂等分支，不影响启动结果；正式
   stopped/force-stopped 快照确认链和 jump 最终均已消失。
+- 正式 run 通过后发现 harness 初版定义了 cleanup 函数但没有注册 `trap cleanup EXIT`，因此
+  自动 reset 未执行；该设备状态已立即手工恢复并留存 `post-run-manual-reset.txt`，随后补上
+  `EXIT` trap，后续失败时也会恢复电源模拟状态。这个 harness 问题不影响本轮的断电快照结论。
 - 本轮只覆盖一台 Pixel 6a、当前 KernelSU 授权和当前双栈 pass-through 规则；未覆盖部分
   安装后进程崩溃、权限拒绝、重复 jump、升级/回滚及 release APK。
 - `HookCommandExecutor` 当前只返回 bool，因此缺失对象的错误按命令类型归类为幂等清理；

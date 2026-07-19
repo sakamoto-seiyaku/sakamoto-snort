@@ -127,6 +127,7 @@ stop_existing() {
 }
 
 cleanup() {
+  local exit_code=$?
   stop_existing || true
   if [[ "$battery_unplugged" == "1" ]]; then
     adb_cmd shell dumpsys battery reset >/dev/null 2>&1 || true
@@ -139,7 +140,13 @@ cleanup() {
     echo "cleanup FAIL: root daemon remains" >&2
     failures=$((failures + 1))
   fi
+  if [[ "$failures" != "0" && "$exit_code" == "0" ]]; then
+    exit_code=1
+  fi
+  return "$exit_code"
 }
+
+trap cleanup EXIT
 
 assert_hooks_present() {
   local phase="$1"
