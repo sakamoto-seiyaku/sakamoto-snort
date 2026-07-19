@@ -1324,3 +1324,64 @@ KernelSU deny 的 app UID 看不到可执行的 `/system/bin/su`，RuntimeServic
 没有创建 root daemon、控制 socket 或 NFQUEUE hook；授权恢复后原路径可正常启动。当前只证明
 debug APK、单设备、一次 deny/restore；未覆盖用户授权交互、运行中撤权、服务进程死亡、其他
 root 管理器与 release 策略。
+
+## SAKAMOTO-25：RuntimeService artifact mismatch startup boundary
+
+状态：错误 ABI / HELLO contract mismatch fail closed；正常构件恢复通过；篡改 build identity 被当前 gate 接受，身份绑定为 HOLD。
+
+### 目标与方法
+
+验证 APK-native daemon 发生错误 ABI、HELLO 协议不匹配或构件身份变化时，RuntimeService 是否在
+成功前失败，并清理 daemon、control socket、双栈 NFQUEUE hook；最后用正常构件做 recovery。
+测试保持单设备、短窗口、模拟 USB 断电，不引入持续流量。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-122659`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- 正常 daemon SHA-256：
+  `0414a2d6a3ea3876c8a5abe28f4280351440f3943813ae0dbf418f7f46537e55`。
+- 错误 ABI 使用 host `/bin/true`，SHA-256：
+  `c79bf44242829108e323378531f4ac839513ca1fba45efd6583643526e1e9fd2`。
+- altered identity daemon SHA-256：
+  `41a602add83cd9d96e09238d61de7386b4c7a637c1be9d9b318f0ef808111c1c`。
+- contract mismatch daemon SHA-256：
+  `b590d50a4d76e8598b8b432a6dcd1c561e115cf5348100dbe86f17aa71a74af9`。
+- 正常 HELLO build id：`ndk-r29-455b61c8a573`；篡改后仍为非空的
+  `ndk-r29-f55b61c8a573`。
+
+### 正式结果
+
+```text
+wrong ABI: hello gate timeout; no root daemon; control socket absent; NFQUEUE hooks absent
+altered build identity: HELLO pass; runtime start pass; stop leaves no daemon/socket/NFQUEUE hook
+HELLO protocol mismatch: hello_protocol=control-xnext; contract_mismatch detected;
+  runtime start failure; no root daemon; control socket absent; NFQUEUE hooks absent
+valid artifact recovery: runtime start pass; stop leaves no daemon/socket/NFQUEUE hook
+result: POC pass; artifact identity/hash binding HOLD
+```
+
+关键证据：
+
+```text
+results/sakamoto-25-runtime-artifact-mismatch-20260719-122659/
+```
+
+contract mismatch runtime log 重复记录 `hello_result=fail reason=contract_mismatch`，最终记录
+`runtime_start_result=fail reason=hello_gate_timeout`；正常 recovery 的 HELLO 回到
+`control-vnext` 与 `ndk-r29-455b61c8a573`。
+
+### 失败方法与定位
+
+第一次协议篡改把 daemon 中两个 `control-vnext` 字符串副本都改成了 `control-xnext`，其中一个
+实际属于 abstract socket 名，结果是 Java 只得到 `Connection refused`，没有进入 HELLO contract
+mismatch。保留该结果目录 `20260719-122444` 作为 harness 失败证据；随后定位到 protocol 字段
+副本 offset `15321`，只修改该副本后正式 run 通过。
+
+### 技术结论与边界
+
+当前 RuntimeService gate 能拒绝错误 ELF 和可解析但 protocol 不匹配的 daemon，并在失败后清理
+所有已观察到的 root/network residue。可是同 ABI daemon 只要返回正确 protocol、非空 build ID
+和 `snort10-base` capability，即使 build ID 被篡改仍可启动；Java 侧没有比较预期 build ID、
+构件 hash 或签名。因此现阶段“HELLO gate 通过”不等于“启动的是被期望的构件”，下一步应先定义
+构件身份来源和签名/hash 校验，再决定是否进入 release handoff。
