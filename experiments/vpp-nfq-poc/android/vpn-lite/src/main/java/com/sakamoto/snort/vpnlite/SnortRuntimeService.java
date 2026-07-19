@@ -151,6 +151,12 @@ public final class SnortRuntimeService extends Service {
                     try {
                         process.waitFor();
                         appendLog("root_process_exit=observed");
+                        if (isUnexpectedProcessExit(process)) {
+                            appendLog("unexpected_root_exit=observed");
+                            appendLog(cleanupRootHooks()
+                                    ? "unexpected_root_exit_cleanup=pass"
+                                    : "unexpected_root_exit_cleanup=fail");
+                        }
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         appendLog("root_process_exit=interrupted");
@@ -166,6 +172,12 @@ public final class SnortRuntimeService extends Service {
             }
         }, "snort-runtime-start");
         worker.start();
+    }
+
+    private boolean isUnexpectedProcessExit(Process process) {
+        synchronized (processLock) {
+            return daemonProcess == process;
+        }
     }
 
     private boolean waitForHello() {
@@ -325,6 +337,38 @@ public final class SnortRuntimeService extends Service {
             return exited;
         } catch (Exception e) {
             Log.e(TAG, "root daemon stop failed", e);
+            return false;
+        }
+    }
+
+    private boolean cleanupRootHooks() {
+        File pidFile;
+        synchronized (processLock) {
+            daemonProcess = null;
+            pidFile = daemonPidFile;
+            daemonPidFile = null;
+        }
+        String pidPath = pidFile == null ? "" : shellQuote(pidFile.getAbsolutePath());
+        String command = "for table in /system/bin/iptables /system/bin/ip6tables; do "
+                + "while $table -w -D INPUT -j sucre-snort_INPUT 2>/dev/null; do :; done; "
+                + "while $table -w -D OUTPUT -j sucre-snort_OUTPUT 2>/dev/null; do :; done; "
+                + "$table -w -F sucre-snort_INPUT 2>/dev/null || true; "
+                + "$table -w -F sucre-snort_OUTPUT 2>/dev/null || true; "
+                + "$table -w -X sucre-snort_INPUT 2>/dev/null || true; "
+                + "$table -w -X sucre-snort_OUTPUT 2>/dev/null || true; "
+                + "done";
+        if (!pidPath.isEmpty()) {
+            command += "; rm -f " + pidPath;
+        }
+        try {
+            Process cleaner = new ProcessBuilder(SU_PATH, "0", "sh", "-c", command).start();
+            boolean exited = cleaner.waitFor(5, TimeUnit.SECONDS);
+            if (!exited) {
+                cleaner.destroyForcibly();
+            }
+            return exited;
+        } catch (Exception e) {
+            Log.e(TAG, "unexpected root cleanup failed", e);
             return false;
         }
     }

@@ -8,8 +8,10 @@ POC_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd -- "$POC_DIR/../.." && pwd)"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 WAIT_SECONDS="${WAIT_SECONDS:-20}"
+POC_ID="${POC_ID:-17-daemon-signal-boundary}"
+EXPECT_AUTOMATIC_SIGKILL_CLEANUP="${EXPECT_AUTOMATIC_SIGKILL_CLEANUP:-0}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
-RESULT_DIR="$POC_DIR/results/sakamoto-17-daemon-signal-boundary-$RUN_ID"
+RESULT_DIR="$POC_DIR/results/sakamoto-$POC_ID-$RUN_ID"
 RUN_LOG="$RESULT_DIR/run.log"
 RUNTIME_LOG="files/logs/runtime-service.log"
 
@@ -171,7 +173,9 @@ assert_no_residue() {
 start_runtime() {
   local phase="$1"
   adb_cmd shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
-  sleep 1
+  # Let Android finish the previous activity/service transition before the
+  # foreground-service start is requested from the new activity instance.
+  sleep 2
   app_cmd rm -f "$RUNTIME_LOG" >/dev/null 2>&1 || true
   adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" --ez runtimeStart true >/dev/null
   if ! wait_for_runtime_log 'runtime_start_result=pass$'; then
@@ -193,7 +197,7 @@ stop_runtime() {
   sleep 1
 }
 
-echo "# SAKAMOTO-17 Android daemon signal cleanup boundary POC"
+echo "# SAKAMOTO-$POC_ID Android daemon signal cleanup boundary POC"
 echo "run_id=$RUN_ID"
 echo "adb_serial=$(resolve_adb_serial)"
 
@@ -213,6 +217,7 @@ bash "$REPO_ROOT/dev/dev-build-ndk.sh"
 echo "building and installing Android APK"
 bash "$POC_DIR/android/vpn-lite/scripts/build-debug-apk.sh"
 bash "$POC_DIR/android/vpn-lite/scripts/install-debug-apk.sh"
+adb_cmd shell pm grant "$PACKAGE" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 capture_identity
 
 echo "graceful SIGTERM boundary"
@@ -255,14 +260,30 @@ fi
 if wait_for_no_daemon; then echo "sigkill=no_root_daemon"; else echo "FAIL: SIGKILL daemon remains" >&2; failures=$((failures + 1)); fi
 capture_state sigkill-before-manual-cleanup
 assert_no_residue sigkill-before-manual-cleanup
-if hooks_present; then echo "sigkill=hooks_remain_before_manual_cleanup"; else echo "sigkill=hooks_absent_before_manual_cleanup"; fi
-if app_read "$RUNTIME_LOG" | rg -q 'hook cleanup=pass$'; then echo "sigkill=unexpected_cleanup_log"; else echo "sigkill=no_destructor_cleanup_log"; fi
+if [[ "$EXPECT_AUTOMATIC_SIGKILL_CLEANUP" == "1" ]]; then
+  if wait_for_runtime_log 'unexpected_root_exit_cleanup=pass$'; then
+    echo "sigkill=supervisor_cleanup_log_pass"
+  else
+    echo "FAIL: SIGKILL supervisor cleanup log missing" >&2
+    failures=$((failures + 1))
+  fi
+  capture_state sigkill-after-supervisor-cleanup
+  if hooks_present; then
+    echo "FAIL: SIGKILL supervisor left hooks" >&2
+    failures=$((failures + 1))
+  else
+    echo "sigkill=supervisor_cleanup_complete"
+  fi
+else
+  if hooks_present; then echo "sigkill=hooks_remain_before_manual_cleanup"; else echo "sigkill=hooks_absent_before_manual_cleanup"; fi
+  if app_read "$RUNTIME_LOG" | rg -q 'hook cleanup=pass$'; then echo "sigkill=unexpected_cleanup_log"; else echo "sigkill=no_destructor_cleanup_log"; fi
 
-echo "manual cleanup after SIGKILL evidence"
-clear_hooks
-adb_cmd shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
-capture_state sigkill-after-manual-cleanup
-if hooks_present; then echo "FAIL: manual SIGKILL cleanup left hooks" >&2; failures=$((failures + 1)); else echo "sigkill=manual_cleanup_complete"; fi
+  echo "manual cleanup after SIGKILL evidence"
+  clear_hooks
+  adb_cmd shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
+  capture_state sigkill-after-manual-cleanup
+  if hooks_present; then echo "FAIL: manual SIGKILL cleanup left hooks" >&2; failures=$((failures + 1)); else echo "sigkill=manual_cleanup_complete"; fi
+fi
 
 echo "SIGKILL recovery"
 start_runtime sigkill-recovery
@@ -273,9 +294,9 @@ capture_state sigkill-recovered-stopped
 if hooks_present; then echo "FAIL: SIGKILL recovery hooks remain" >&2; failures=$((failures + 1)); else echo "sigkill_recovery=nfqueue_hooks_absent"; fi
 
 if [[ "$failures" != "0" ]]; then
-  echo "FAIL: SAKAMOTO-17 harness failures=$failures"
+  echo "FAIL: $POC_ID harness failures=$failures"
   echo "result_dir=$RESULT_DIR"
   exit 1
 fi
-echo "PASS: SAKAMOTO-17 daemon signal cleanup boundary"
+echo "PASS: $POC_ID daemon signal cleanup boundary"
 echo "result_dir=$RESULT_DIR"

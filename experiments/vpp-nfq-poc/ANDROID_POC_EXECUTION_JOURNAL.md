@@ -1144,3 +1144,65 @@ results/sakamoto-21-runtime-foreground-implementation-20260719-113743/
 
 本轮只证明 debug shell 已授予通知权限下的最小 foreground-service 生命周期；未覆盖用户
 运行时授权、release notification UX、重启、OEM 电量策略和长时间 foreground-service 限制。
+
+## SAKAMOTO-22：supervisor cleanup after daemon SIGKILL
+
+状态：实验通过；RuntimeService 已能在 root daemon 非预期退出后自动清理 NFQUEUE hook。
+
+### 目标与变更
+
+验证不可捕获的 `SIGKILL` 是否会留下 IPv4/IPv6 NFQUEUE jump、private chain 或 PID 文件。
+RuntimeService 的 daemon wait worker 在观察到当前 daemon `Process` 非预期退出后，调用 root
+cleanup：删除双栈 jump，flush/delete `sucre-snort_INPUT` 与 `sucre-snort_OUTPUT`，并删除 PID
+文件。正常 stop 会先清空 `daemonProcess`，不会误触发该分支。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540`。
+- 正式 run `20260719-114641`；测试期间模拟 USB 断电，结束由 trap 恢复供电并清理设备。
+- APK SHA-256：
+  `c3b4210e0568024d5ec46e27f52f636fe4b0ab99c31f609d07fbd4dd3d8efcea`。
+- daemon artifact SHA-256：
+  `a62debf145a71c955351742cb10bb441a949f4fe2c45c79ca7e172897f169bfa`。
+- HELLO build id：`ndk-r29-fb033154e9b5`。
+
+### 正式结果
+
+```text
+SIGTERM: runtime start pass; daemon/socket/hooks cleaned; recovery pass
+SIGKILL: runtime start pass; daemon pid 13386 killed
+SIGKILL: unexpected_root_exit=observed
+SIGKILL: unexpected_root_exit_cleanup=pass
+SIGKILL: daemon/socket/NFQUEUE hooks absent before manual cleanup
+SIGKILL recovery: fresh start/stop pass
+result: pass; supervisor cleanup GO on this device
+```
+
+原始证据：
+
+```text
+results/sakamoto-22-sigkill-supervisor-20260719-114641/
+```
+
+关键 runtime log：
+
+```text
+root_process_exit=observed
+unexpected_root_exit=observed
+unexpected_root_exit_cleanup=pass
+```
+
+### 失败方法与定位
+
+首次 run `20260719-114308` 在 `sigterm RuntimeService start failed` 处退出，未进入 signal
+边界；logcat 显示 Android 在上一轮 activity/service transition 尚未稳定时，将 delayed
+`startService` 判定为 background start，报 `BackgroundServiceStartNotAllowedException`。
+该失败属于 harness 启动时序，不是 daemon 或 supervisor 结论。`start_runtime` 在
+`am force-stop` 后增加 2 秒 settling wait 后，正式 run 完整通过。
+
+### 技术结论与边界
+
+在当前 debug RuntimeService 实现中，SIGKILL 不再留下 NFQUEUE hook；supervisor 观察到 daemon
+退出后执行 root cleanup，fresh RuntimeService 可以重新安装四个双栈顶层 jump 并正常停止。
+本轮只覆盖一台 Pixel 6a、一次 SIGKILL 序列；未覆盖 crash backoff、连续崩溃、并发 stop/kill、
+service process death、权限拒绝和 release 签名行为。

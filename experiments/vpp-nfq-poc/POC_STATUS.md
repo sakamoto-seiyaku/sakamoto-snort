@@ -34,6 +34,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android RuntimeService short Doze differential | With simulated USB unplug and screen off, forced deep Doze is entered for 10 seconds; daemon, control socket, and dual-stack NFQUEUE hooks remain present, and pre/post-Doze local HTTP probes pass after wake. Controlled stop cleans all residue. | SAKAMOTO-19 |
 | Android APK upgrade/rollback hook residue boundary | On Pixel 6a, upgrading from versionCode 1 to 2 and rolling back from 2 to 1 while RuntimeService is active both remove the old daemon, control socket, and NFQUEUE hooks automatically; each version starts with exactly four top-level jumps and stops cleanly. | SAKAMOTO-20 |
 | Android RuntimeService foreground service implementation | Added a notification channel, `startForeground`, `specialUse` foreground-service manifest declaration, and debug notification permission grant. On Pixel 6a, foreground state and app notification remain present through HOME and 5-second lock screen; local probe and stop cleanup pass. | SAKAMOTO-21 |
+| Android supervisor cleanup after daemon SIGKILL | RuntimeService observes an unexpected root daemon exit, removes the daemon's dual-stack NFQUEUE jumps/chains and PID file, and leaves no daemon, control socket, or hook after SIGKILL; a fresh start/stop recovery passes. | SAKAMOTO-22 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -325,9 +326,11 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
 - SAKAMOTO-16 does not cover long-run endurance, foreground-service behavior,
   Doze latency, APK upgrade/rollback, or SIGKILL cleanup; the force-stop path
   still uses the previously proven parent monitor.
-- SAKAMOTO-17 covers one Pixel 6a and confirms the SIGTERM/SIGKILL boundary,
-  but does not provide an automatic supervisor, crash backoff, concurrent kill
-  handling, or permission-denial matrix. The SIGKILL cleanup path remains HOLD.
+- SAKAMOTO-17 remains the signal-boundary baseline: it confirms the historical
+  SIGTERM/SIGKILL difference without an automatic supervisor. SAKAMOTO-22 adds
+  the RuntimeService supervisor cleanup path and clears the SIGKILL hook-cleanup
+  HOLD for this debug implementation, but crash backoff, concurrent kill
+  handling, and the permission-denial matrix remain open.
 - SAKAMOTO-18 covers only a short background and 5-second lock-screen window;
   it does not validate Doze policy, long suspension, reboot, OEM process
   eviction, notification-channel behavior after upgrade, or a real foreground
@@ -338,6 +341,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   `POST_NOTIFICATIONS` through the debug shell. It does not validate the
   user-facing runtime permission request, release notification UX, reboot,
   OEM policy, or long-running foreground-service limits.
+- SAKAMOTO-22 covers one debug APK on one Pixel 6a and one SIGKILL recovery
+  sequence. The supervisor removes hooks only after observing the daemon child
+  exit; crash backoff, simultaneous stop/kill races, service process death, and
+  release behavior remain unverified.
 - SAKAMOTO-19 covers one forced 10-second deep Doze interval on one Pixel 6a;
   it does not cover natural Doze entry, maintenance windows, long idle,
   network handover, reboot, OEM eviction, or battery attribution. Foreground
