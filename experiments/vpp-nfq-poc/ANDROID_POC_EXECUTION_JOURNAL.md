@@ -1260,3 +1260,67 @@ unexpected_root_exit_cleanup=pass
 策略；5 秒内没有隐式拉起，避免了无界重启风暴。fresh manual recovery 可以正常重新安装
 双栈 hook。尚未验证重复 crash/backoff、服务进程死亡、并发 stop/kill、权限拒绝或 release
 策略，因此不能把当前结果当作最终 crash resilience 方案。
+
+## SAKAMOTO-24：RuntimeService root permission denial boundary
+
+状态：实验通过；KernelSU deny 下 RuntimeService fail closed，授权恢复后 fresh recovery 通过。
+
+### 目标与方法
+
+验证 KernelSU/root 授权不可用时，RuntimeService 是否显式失败，以及是否在 root daemon 启动
+前留下 socket、NFQUEUE hook 或 private chain。正式 harness 备份设备 allowlist，在 KernelSU
+v3 profile record 中只切换目标 app 的 `allow_su` 字节（offset `1824`），重启加载 deny，执行
+RuntimeService start；随后恢复该字节并再次重启，执行授权 recovery。shell UID 仍保持 root，
+用于观察设备状态和恢复 allowlist。
+
+### 固定条件
+
+- Pixel 6a / Android 16 / `arm64-v8a` / package UID `12540` / KernelSU Manager `v3.2.4`。
+- 正式 run `20260719-121337`；deny/restore 各重启一次，USB 断电状态在重启后重新设置，结束由
+  trap 恢复供电并清理设备。
+- APK SHA-256：
+  `f47c7dd64bae2ddb7af2008a76e2bbc114b9efb29b1e8c4efc0b75256e8ff880`。
+- daemon artifact SHA-256：
+  `8534f859f5cbb79a98e743517c7114043a182a356a28ffa5f1fb312397708f9d`。
+- HELLO build id：`ndk-r29-2b2a11fe680c`（仅授权 recovery 产生 HELLO）。
+
+### 正式结果
+
+```text
+KernelSU deny: root_authorization_byte=0
+denied: runtime_start_failure_logged
+denied: no_root_daemon; control_socket_absent; nfqueue_hooks_absent
+KernelSU restore: root_authorization_byte=1; reboot completed
+authorized recovery: runtime_start_pass; root_daemon_present while running
+authorized recovery stop: no_root_daemon; control_socket_absent; nfqueue_hooks_absent
+result: pass; fail-closed permission boundary GO
+```
+
+原始证据：
+
+```text
+results/sakamoto-24-runtime-permission-denial-20260719-121337/
+```
+
+拒绝态 runtime log：
+
+```text
+foreground_service_start=pass notification_id=1001
+runtime_start_result=fail reason=IOException message=Cannot run program "/system/bin/su": error=2, No such file or directory
+```
+
+### 失败方法与定位
+
+首次 run `20260719-115827` 的 deny 观察通过，但 harness 用 Manager 固定坐标恢复授权，
+实际落到了安装页，导致 recovery 失败。该 run 保留作 harness 失败证据；正式 harness 改为
+备份 allowlist、按 profile record offset 切换授权位并重启，避免 UI 状态竞态，随后完整通过。
+恢复时还确认 KernelSU deny 会把 profile union 视为 non-root；只改 allow 位会触发
+`invalid selinux_domain`，因此正式恢复使用同一 allowlist 中有效 root profile union 的设备模板，
+只保留目标 app 的 key/UID/allow 边界。
+
+### 技术结论与边界
+
+KernelSU deny 的 app UID 看不到可执行的 `/system/bin/su`，RuntimeService 在 HELLO 前失败，
+没有创建 root daemon、控制 socket 或 NFQUEUE hook；授权恢复后原路径可正常启动。当前只证明
+debug APK、单设备、一次 deny/restore；未覆盖用户授权交互、运行中撤权、服务进程死亡、其他
+root 管理器与 release 策略。

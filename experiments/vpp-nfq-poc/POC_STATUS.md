@@ -36,6 +36,7 @@ remain in `EXPERIMENT_LOG.md`.
 | Android RuntimeService foreground service implementation | Added a notification channel, `startForeground`, `specialUse` foreground-service manifest declaration, and debug notification permission grant. On Pixel 6a, foreground state and app notification remain present through HOME and 5-second lock screen; local probe and stop cleanup pass. | SAKAMOTO-21 |
 | Android supervisor cleanup after daemon SIGKILL | RuntimeService observes an unexpected root daemon exit, removes the daemon's dual-stack NFQUEUE jumps/chains and PID file, and leaves no daemon, control socket, or hook after SIGKILL; a fresh start/stop recovery passes. | SAKAMOTO-22 |
 | Android daemon crash and restart boundary | `SIGABRT` is observed as an unexpected root exit; supervisor cleanup removes daemon/socket/NFQUEUE hooks, no automatic restart occurs within a 5-second bounded window, and a fresh manual recovery passes. Automatic restart/backoff remains HOLD. | SAKAMOTO-23 |
+| Android RuntimeService root permission denial boundary | KernelSU deny makes app-UID `/system/bin/su` unavailable; RuntimeService logs explicit `runtime_start_result=fail`, leaves no daemon/socket/NFQUEUE hook, and authorized rebooted recovery starts/stops cleanly. | SAKAMOTO-24 |
 | VPN per-app include/exclude | `allowedPackage` / `disallowedPackage` controls app membership in VPN. | Experiment 40 |
 | VPN packet owner UID lookup | Active `VpnService` native probe can parse IPv4/IPv6 TCP/UDP packet tuples and resolve them to the APK UID with `ConnectivityManager.getConnectionOwnerUid`. | Experiments 47, 49 |
 | VPN static IPv4 dst block | `tun-poc block-ip4-dst` drops app traffic before HEV. | Experiment 41 |
@@ -350,6 +351,10 @@ These are useful Android-side facts, but they do not prove VPP-internal filterin
   the same device. It proves crash cleanup and makes the absence of automatic
   restart explicit; restart backoff, repeated crash policy, and release behavior
   remain unverified.
+- SAKAMOTO-24 covers one KernelSU deny/restore cycle on one Pixel 6a. Denied
+  launch fails before root daemon creation and leaves no network residue;
+  user-facing grant UX, live permission revocation, other root managers, and
+  release policy remain unverified.
 - SAKAMOTO-19 covers one forced 10-second deep Doze interval on one Pixel 6a;
   it does not cover natural Doze entry, maintenance windows, long idle,
   network handover, reboot, OEM eviction, or battery attribution. Foreground
