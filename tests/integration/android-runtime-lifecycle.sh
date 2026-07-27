@@ -73,6 +73,13 @@ for _ in $(seq 1 24); do
 done
 [[ "$running" == 1 ]] || { echo "runtime did not reach running" >&2; exit 1; }
 
+owner_token="$(adb_cmd shell run-as "$package" cat files/profiles/root/vpp/runtime/owner.token \
+  2>/dev/null | tr -d '\r\n' || true)"
+[[ "$owner_token" =~ ^[0-9a-fA-F-]{36}$ ]] || {
+  echo "runtime owner token was not durably persisted" >&2
+  exit 1
+}
+
 process_dump="$(adb_cmd shell ps -A -o PID,NAME,args | tr -d '\r')"
 runtime_count="$(grep -c 'libvpp_runtime.so' <<<"$process_dump" || true)"
 [[ "$runtime_count" == 1 ]] || {

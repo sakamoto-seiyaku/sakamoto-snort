@@ -24,9 +24,7 @@ import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /** Android lifecycle authority for exactly one packaged VPP runtime. */
 public final class SnortRuntimeService extends Service {
@@ -38,6 +36,8 @@ public final class SnortRuntimeService extends Service {
     private static final String SU_PATH = "/system/bin/su";
     private static final String VPP_BINARY = "libvpp_runtime.so";
     private static final String VPPCTL_BINARY = "libvppctl.so";
+    private static final String OWNER_TOKEN_FILE = "owner.token";
+    private static final String OWNER_TOKEN_ENV = "SAKAMOTO_VPP_OWNER_TOKEN";
     private static final String MANIFEST_ASSET = "vpp-runtime.properties";
     private static final String HASH_ASSET = "vpp-runtime.sha256";
     private static final String CHANNEL_ID = "snort-runtime";
@@ -352,9 +352,14 @@ public final class SnortRuntimeService extends Service {
         File runtimeDirectory = new File(currentProfile, "runtime");
         File logDirectory = new File(currentProfile, "logs");
         File shmDirectory = new File(currentProfile, "shm");
+        String ownerToken = readOwnerToken();
+        if (ownerToken.isEmpty()) {
+            throw new IOException("VPP owner token is absent from the durable profile");
+        }
         String command = "umask 022; echo $$ > " + shellQuote(pidFile.getPath())
                 + "; export LD_LIBRARY_PATH=" + shellQuote(nativeDir.getPath())
                 + " SAKAMOTO_ANDROID_SHM_DIR=" + shellQuote(shmDirectory.getPath())
+                + " " + OWNER_TOKEN_ENV + "=" + shellQuote(ownerToken)
                 + "; exec " + shellQuote(vpp.getPath())
                 + " plugin_path " + shellQuote(nativeDir.getPath())
                 + " -c " + shellQuote(new File(currentProfile, "startup.conf").getPath())
@@ -656,13 +661,18 @@ public final class SnortRuntimeService extends Service {
         if (!processExists(pid)) {
             return false;
         }
-        File expected = new File(new File(getApplicationInfo().nativeLibraryDir), VPP_BINARY);
+        initializeProfilePaths();
+        String ownerToken = readOwnerToken();
+        File startup = new File(profileRoot, "startup.conf");
         String processDirectory = "/proc/" + pid;
-        String command = "test -r " + processDirectory + "/cmdline && ("
-                + "tr '\\0' ' ' <" + processDirectory + "/cmdline | grep -F -- "
-                + shellQuote(expected.getPath()) + " >/dev/null || "
-                + "readlink " + processDirectory + "/exe | grep -F -- "
-                + shellQuote(expected.getPath()) + " >/dev/null)";
+        String command = "test -r " + processDirectory + "/cmdline && tr '\\0' ' ' <"
+                + processDirectory + "/cmdline | grep -F -- " + shellQuote(startup.getPath())
+                + " >/dev/null";
+        if (!ownerToken.isEmpty()) {
+            command += " && test -r " + processDirectory + "/environ && tr '\\0' '\\n' <"
+                    + processDirectory + "/environ | grep -F -- "
+                    + shellQuote(OWNER_TOKEN_ENV + "=" + ownerToken) + " >/dev/null";
+        }
         return runRootCommand(command, 2L);
     }
 
@@ -774,6 +784,7 @@ public final class SnortRuntimeService extends Service {
                 || (!shm.isDirectory() && !shm.mkdirs())) {
             throw new IOException("unable to create VPP profile directories");
         }
+        ensureOwnerToken(runtime);
         String config = "unix {\n"
                 + "  nodaemon\n  nobanner\n"
                 + "  runtime-dir " + runtime.getPath() + "\n"
@@ -814,6 +825,46 @@ public final class SnortRuntimeService extends Service {
         }
         if (pidFile == null) {
             pidFile = new File(profileRoot, "runtime/vpp.pid");
+        }
+    }
+
+    /**
+     * The profile is kept below app-private files, so this identity survives
+     * APK/native-library rotation while still being unique to this runtime.
+     */
+    private void ensureOwnerToken(File runtimeDirectory) throws IOException {
+        File tokenFile = new File(runtimeDirectory, OWNER_TOKEN_FILE);
+        if (tokenFile.isFile()) {
+            String token = readOwnerToken();
+            if (!token.isEmpty()) {
+                return;
+            }
+            throw new IOException("durable VPP owner token is unreadable");
+        }
+        String token = java.util.UUID.randomUUID().toString();
+        try (FileOutputStream output = new FileOutputStream(tokenFile)) {
+            output.write(token.getBytes(StandardCharsets.US_ASCII));
+            output.write('\n');
+            output.getFD().sync();
+        }
+    }
+
+    private String readOwnerToken() {
+        initializeProfilePaths();
+        File tokenFile = new File(new File(profileRoot, "runtime"), OWNER_TOKEN_FILE);
+        try (FileInputStream input = new FileInputStream(tokenFile)) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            byte[] buffer = new byte[64];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count > 0) {
+                    bytes.write(buffer, 0, count);
+                }
+            }
+            String token = bytes.toString(StandardCharsets.US_ASCII.name()).trim();
+            return token.matches("[0-9a-fA-F-]{36}") ? token : "";
+        } catch (Exception ignored) {
+            return "";
         }
     }
 
@@ -918,21 +969,26 @@ public final class SnortRuntimeService extends Service {
     @Override
     public void onDestroy() {
         destroying = true;
+        stopRequested = true;
         if (hasDurableRuntime()) {
-            stopRequested = true;
-            Future<?> cleanup = lifecycle.submit(this::stopRuntime);
-            try {
-                cleanup.get(15L, TimeUnit.SECONDS);
-            } catch (TimeoutException error) {
-                publishError("cleanup_failed", "service destroyed before runtime cleanup completed",
-                        true, currentPid());
-                cleanup.cancel(true);
-            } catch (Exception error) {
-                publishError("cleanup_failed", "service destruction cleanup failed: "
-                        + messageOf(error), true, currentPid());
+            // onDestroy runs on the main thread. Keep the durable STOPPING
+            // projection until the serial cleanup worker confirms removal.
+            RuntimeSnapshot current = snapshot == null
+                    ? RuntimeSnapshot.stopped() : snapshot;
+            if (!RuntimeSnapshot.STATE_STOPPING.equals(current.state)) {
+                publish(RuntimeSnapshot.stopping(current));
             }
         }
-        lifecycle.shutdownNow();
+        // Always enqueue the cleanup behind any already-running lifecycle
+        // operation. shutdown() is deliberately called by that worker so a
+        // queued start cannot be dropped and no main-thread wait is needed.
+        lifecycle.execute(() -> {
+            try {
+                stopRuntime();
+            } finally {
+                lifecycle.shutdown();
+            }
+        });
         super.onDestroy();
     }
 
