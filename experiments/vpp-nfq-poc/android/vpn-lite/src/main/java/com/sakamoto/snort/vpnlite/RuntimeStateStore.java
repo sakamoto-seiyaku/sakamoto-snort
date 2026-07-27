@@ -24,22 +24,33 @@ public final class RuntimeStateStore {
         try (FileInputStream input = new FileInputStream(stateFile)) {
             properties.load(input);
             int schemaVersion = Integer.parseInt(properties.getProperty("schemaVersion", "0"));
-            if (schemaVersion != RuntimeSnapshot.SCHEMA_VERSION) {
+            if (schemaVersion != 1 && schemaVersion != RuntimeSnapshot.SCHEMA_VERSION) {
                 throw new IOException("unsupported runtime snapshot schema: " + schemaVersion);
             }
+            String state = properties.getProperty("state", RuntimeSnapshot.STATE_STOPPED);
+            if ("startup_error".equals(state)) {
+                state = RuntimeSnapshot.STATE_ERROR;
+            }
             return new RuntimeSnapshot(
-                    properties.getProperty("state", RuntimeSnapshot.STATE_STOPPED),
+                    state,
                     properties.getProperty("profile", RuntimeSnapshot.PROFILE_ROOT),
+                    properties.getProperty("protocol", ""),
                     properties.getProperty("version", ""),
                     properties.getProperty("abi", ""),
+                    properties.getProperty("abiEvidence", ""),
                     properties.getProperty("health", "unknown"),
                     properties.getProperty("errorCode", ""),
                     properties.getProperty("errorMessage", ""),
+                    Boolean.parseBoolean(properties.getProperty("mayBeActive",
+                            Boolean.toString(RuntimeSnapshot.STATE_STARTING.equals(state)
+                                    || RuntimeSnapshot.STATE_RUNNING.equals(state)
+                                    || RuntimeSnapshot.STATE_STOPPING.equals(state)))),
                     parseLong(properties.getProperty("pid", "-1"), -1L),
                     parseLong(properties.getProperty("updatedAtMillis", "0"), 0L));
         } catch (Exception ignored) {
-            return RuntimeSnapshot.startupError(RuntimeSnapshot.PROFILE_ROOT, "", "",
-                    "state_projection_corrupt", "runtime state could not be read");
+            return RuntimeSnapshot.error(RuntimeSnapshot.PROFILE_ROOT, "", "", "", "",
+                    "state_projection_corrupt", "runtime state could not be read",
+                    false, -1L);
         }
     }
 
@@ -53,11 +64,14 @@ public final class RuntimeStateStore {
         properties.setProperty("schemaVersion", Integer.toString(RuntimeSnapshot.SCHEMA_VERSION));
         properties.setProperty("state", snapshot.state);
         properties.setProperty("profile", snapshot.profile);
+        properties.setProperty("protocol", snapshot.protocol);
         properties.setProperty("version", snapshot.version);
         properties.setProperty("abi", snapshot.abi);
+        properties.setProperty("abiEvidence", snapshot.abiEvidence);
         properties.setProperty("health", snapshot.health);
         properties.setProperty("errorCode", snapshot.errorCode);
         properties.setProperty("errorMessage", snapshot.errorMessage);
+        properties.setProperty("mayBeActive", Boolean.toString(snapshot.mayBeActive));
         properties.setProperty("pid", Long.toString(snapshot.pid));
         properties.setProperty("updatedAtMillis", Long.toString(snapshot.updatedAtMillis));
 

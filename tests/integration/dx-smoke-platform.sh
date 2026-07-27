@@ -336,6 +336,14 @@ else
   log_skip "lifecycle restart skipped (--skip-deploy)"
 fi
 
+log_section "Android RuntimeService Lifecycle"
+runtime_cmd=(bash "$SCRIPT_DIR/android-runtime-lifecycle.sh")
+if [[ -n "${ADB_SERIAL:-}" ]]; then
+  runtime_cmd+=(--serial "$ADB_SERIAL")
+fi
+"${runtime_cmd[@]}" || exit $?
+log_pass "single packaged VPP runtime lifecycle ok"
+
 if [[ $CLEANUP_FORWARD -eq 1 ]]; then
   log_info "移除 adb forward..."
   remove_control_vnext_forward "$VNEXT_PORT"

@@ -5,16 +5,17 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 app_dir="$(cd -- "${script_dir}/.." && pwd)"
 poc_dir="$(cd -- "${app_dir}/../.." && pwd)"
+repo_root="$(cd -- "${poc_dir}/../.." && pwd)"
 sdk_prebuilts="${ANDROID_LINEAGE_SDK_PREBUILTS:-/home/js/android/lineage/prebuilts/sdk}"
 android_jar="${ANDROID_JAR:-${sdk_prebuilts}/36/public/android.jar}"
 aapt2="${AAPT2:-${sdk_prebuilts}/tools/linux/bin/aapt2}"
 d8_jar="${D8_JAR:-${sdk_prebuilts}/tools/linux/lib/d8.jar}"
 apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
-stage_dir="${VPP_STAGE_DIR:-${poc_dir}/work/android-vpp-release-no-multiarch-no-ipsec-idle-stage}"
-legacy_stage_dir="${poc_dir}/work/android-vpp-core-stage"
-if [[ -z "${VPP_STAGE_DIR:-}" && ! -x "$stage_dir/bin/vpp" && -x "$legacy_stage_dir/bin/vpp" ]]; then
-  stage_dir="$legacy_stage_dir"
+stage_dir="${VPP_RUNTIME_STAGE_DIR:-${repo_root}/build-output/android-vpp-runtime/stage}"
+if [[ ! -x "$stage_dir/bin/vpp" || ! -x "$stage_dir/bin/vppctl" ]]; then
+  VPP_RUNTIME_STAGE_DIR="$stage_dir" \
+    bash "$script_dir/stage-vpp-runtime.sh" >/dev/null
 fi
 
 die() { echo "error: $*" >&2; exit 1; }

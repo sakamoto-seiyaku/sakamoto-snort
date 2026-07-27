@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+app_dir="$(cd -- "$script_dir/.." && pwd)"
+poc_dir="$(cd -- "$app_dir/../.." && pwd)"
+repo_root="$(cd -- "$poc_dir/../.." && pwd)"
+
+runtime_root="${VPP_RUNTIME_BUILD_ROOT:-$repo_root/build-output/android-vpp-runtime}"
+build_dir="$runtime_root/build"
+stage_dir="${VPP_RUNTIME_STAGE_DIR:-$runtime_root/stage}"
+vpp_dir="${VPP_SOURCE_TREE:-$poc_dir/work/vpp}"
+vpp_source="$vpp_dir/src"
+product_path="/usr/bin:/bin:${PATH}"
+
+if [[ ! -f "$vpp_source/CMakeLists.txt" ]]; then
+  echo "error: VPP source tree is unavailable: $vpp_source" >&2
+  echo "fetch the pinned VPP source before building the product runtime" >&2
+  exit 1
+fi
+
+if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || ! -x "$stage_dir/bin/vpp" \
+      || ! -x "$stage_dir/bin/vppctl" ]]; then
+  PATH="$product_path" VPP_DIR="$vpp_dir" "$poc_dir/scripts/apply-vpp-android-overlay.sh"
+  PATH="$product_path" VPP_DIR="$vpp_dir" \
+    BUILD_DIR="$build_dir" \
+    VPP_CMAKE_BUILD_TYPE=release \
+    VPP_USE_LTO=OFF \
+    VPP_PLUGINS="nfqueue_poc;tun_poc" \
+    VPP_EXTRA_CMAKE_ARGS="-DPython3_EXECUTABLE=/usr/bin/python3 -DVPP_MARCH_VARIANT_OCTEONTX2=OFF -DVPP_MARCH_VARIANT_THUNDERX2T99=OFF -DVPP_MARCH_VARIANT_CORTEXA72=OFF -DVPP_MARCH_VARIANT_NEOVERSEN1=OFF -DVPP_MARCH_VARIANT_NEOVERSEV2=OFF -DSAKAMOTO_VPP_NO_IPSEC=ON -DSAKAMOTO_VPP_ANDROID_IDLE_PROFILE=ON" \
+    "$poc_dir/scripts/android-configure-vpp-probe.sh"
+  PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" TARGET=vpp \
+    "$poc_dir/scripts/android-build-vpp-probe.sh"
+  PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" TARGET=vppctl \
+    "$poc_dir/scripts/android-build-vpp-probe.sh"
+  PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" STAGE_DIR="$stage_dir" \
+    "$poc_dir/scripts/android-stage-vpp-core.sh"
+fi
+
+printf '%s\n' "$stage_dir"

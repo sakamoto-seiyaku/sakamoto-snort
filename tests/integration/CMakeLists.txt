@@ -35,24 +35,41 @@ add_custom_target(
 )
 
 add_sucre_snort_shell_test(
-  android-runtime-lifecycle
-  "${SUCRE_SNORT_INTEGRATION_ROOT}/android-runtime-lifecycle.sh"
-  "android-runtime;device;lifecycle;smoke"
+  dx-smoke
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke.sh"
+  "dx-smoke;device;root-required;smoke"
+)
+add_sucre_snort_shell_test(
+  dx-smoke-platform
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke-platform.sh"
+  "dx-smoke;device;root-required;smoke;platform"
+)
+add_sucre_snort_shell_test(
+  dx-smoke-control
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke-control.sh"
+  "dx-smoke;device;root-required;smoke;control"
+)
+add_sucre_snort_shell_test(
+  dx-smoke-datapath
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/dx-smoke-datapath.sh"
+  "dx-smoke;device;root-required;smoke;datapath"
 )
 
 add_custom_target(
-  snort-dx-android-runtime
-  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^android-runtime-lifecycle$
+  snort-dx-smoke
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^dx-smoke$
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  COMMENT "Run Android RuntimeService lifecycle smoke via CTest"
+  COMMENT "Run the strict platform -> control -> datapath device gate"
   USES_TERMINAL
   VERBATIM
 )
 
 if(TARGET sucre-snort-ctl)
   add_dependencies(snort-dx-snort10-base sucre-snort-ctl)
+  add_dependencies(snort-dx-smoke sucre-snort-ctl)
 endif()
 
 if(TARGET snort-build-ndk)
   add_dependencies(snort-dx-snort10-base snort-build-ndk)
+  add_dependencies(snort-dx-smoke snort-build-ndk)
 endif()
