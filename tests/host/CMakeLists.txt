@@ -114,6 +114,17 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
 )
 add_sucre_snort_host_test(
+  fragment_steering_tests
+  fragment_steering_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+)
+add_sucre_snort_host_test(
+  nfqueue_packet_lease_adapter_tests
+  nfqueue_packet_lease_adapter_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueuePacketLeaseAdapter.cpp"
+)
+add_sucre_snort_host_test(
   nfqueue_ipv4_pass_through_tests
   nfqueue_ipv4_pass_through_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueHookInstaller.cpp"

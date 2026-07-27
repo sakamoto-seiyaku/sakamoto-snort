@@ -24,7 +24,9 @@ set(
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueuePassThrough.cpp"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueuePassThroughRuntime.cpp"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueueFlowAdapter.cpp"
+  "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueuePacketLeaseAdapter.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/FlowSteering.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/PacketCaptureAdapter.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/FlowGraphInjection.cpp"
+  "${CMAKE_SOURCE_DIR}/src/core/flow/FragmentSteering.cpp"
 )

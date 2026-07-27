@@ -7,6 +7,7 @@
 
 #include <DaemonRuntime.hpp>
 #include <NfqueueHookInstaller.hpp>
+#include <NfqueuePacketLeaseAdapter.hpp>
 #include <NfqueuePassThrough.hpp>
 
 #include <libmnl/libmnl.h>
@@ -23,7 +24,7 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
-#include <optional>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -71,15 +72,23 @@ public:
     }
 };
 
-class SocketVerdictSink final : public SnortDatapath::Nfqueue::VerdictSink {
+class SocketVerdictSink final
+    : public SnortDatapath::Nfqueue::NfqueuePacketLeaseVerdictSink {
 public:
     SocketVerdictSink(mnl_socket *socket, const std::uint32_t queue)
         : socket_(socket), queue_(queue) {}
 
-    bool sendVerdict(const std::uint32_t packetId, const std::uint32_t verdict) override {
+    bool sendVerdict(
+        const std::uint32_t packetId,
+        const SnortDatapath::Nfqueue::NfqueuePacketLeaseVerdict verdict) override {
         std::vector<char> buffer(MNL_SOCKET_BUFFER_SIZE);
         nlmsghdr *nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_VERDICT, queue_);
-        nfq_nlmsg_verdict_put(nlh, static_cast<int>(packetId), static_cast<int>(verdict));
+        const auto kernelVerdict = verdict
+            == SnortDatapath::Nfqueue::NfqueuePacketLeaseVerdict::Accept
+            ? SnortDatapath::Nfqueue::kNfAcceptVerdict
+            : 0U;
+        nfq_nlmsg_verdict_put(
+            nlh, static_cast<int>(packetId), static_cast<int>(kernelVerdict));
         return mnl_socket_sendto(socket_, nlh, nlh->nlmsg_len) >= 0;
     }
 
@@ -92,6 +101,7 @@ struct QueueContext {
     mnl_socket *socket = nullptr;
     std::uint32_t queue = 0;
     SnortDatapath::Nfqueue::NfqueueFlowAdapter *flowAdapter = nullptr;
+    SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter *leaseAdapter = nullptr;
 };
 
 int socketFamily(const SnortDatapath::Nfqueue::NfqueueAddressFamily family) {
@@ -158,13 +168,6 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     }
     if (attrs[NFQA_PACKET_HDR] == nullptr) {
         std::cerr << "NFQUEUE packet header missing on queue " << context->queue << "\n";
-        SocketVerdictSink sink(context->socket, context->queue);
-        (void)SnortDatapath::Nfqueue::acceptPassThroughPacketHeader(
-            SnortDatapath::Nfqueue::PassThroughPacketHeader{
-                .packetId = std::nullopt,
-                .hook = 0,
-            },
-            sink);
         return MNL_CB_OK;
     }
 
@@ -182,17 +185,32 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
         originalLengthHint = ntohl(mnl_attr_get_u32(attrs[NFQA_CAP_LEN]));
     }
 
+    const auto packetId = ntohl(header->packet_id);
+    const auto admission = context->leaseAdapter->admit(packetId);
+    if (admission.status
+        != SnortDatapath::Nfqueue::NfqueuePacketLeaseAdmissionStatus::Retained) {
+        if (admission.status
+            == SnortDatapath::Nfqueue::NfqueuePacketLeaseAdmissionStatus::CapacityFailOpen) {
+            std::cerr << "NFQUEUE lease capacity fail-open on queue " << context->queue << "\n";
+        }
+        return MNL_CB_OK;
+    }
+
     const std::span<const std::uint8_t> packetPayload(payload, payloadLength);
+    const auto verdictFailuresBefore = context->leaseAdapter->counters().verdictSendFailures;
     const auto gateResult = context->flowAdapter->process(
         context->queue, header->hook, packetPayload, originalLengthHint);
-    SocketVerdictSink sink(context->socket, context->queue);
-    const auto result = SnortDatapath::Nfqueue::acceptPassThroughPacketHeader(
-        SnortDatapath::Nfqueue::PassThroughPacketHeader{
-            .packetId = ntohl(header->packet_id),
-            .hook = header->hook,
-        },
-        sink);
-    if (result != SnortDatapath::Nfqueue::PassThroughResult::VerdictAccepted) {
+    const auto terminalReason = gateResult
+        == SnortDatapath::Nfqueue::NfqueueFlowAdapterResult::FlowAccepted
+        ? SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::Accepted
+        : SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::FailOpen;
+    const auto completion = context->leaseAdapter->complete(
+        *admission.identity, terminalReason);
+    if (completion
+        != SnortDatapath::Nfqueue::NfqueuePacketLeaseCompletionStatus::Completed) {
+        std::cerr << "NFQUEUE lease completion rejected on queue " << context->queue << "\n";
+    }
+    if (context->leaseAdapter->counters().verdictSendFailures > verdictFailuresBefore) {
         context->flowAdapter->recordVerdictSendFailure();
         std::cerr << "NFQUEUE verdict send failed on queue " << context->queue << "\n";
     }
@@ -204,6 +222,7 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
 
 void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
                  SnortDatapath::Nfqueue::NfqueueFlowAdapter &flowAdapter) {
+    std::uint32_t laneGeneration = 1;
     while (!SnortRuntime::shutdownRequested()) {
         mnl_socket *socket = mnl_socket_open(NETLINK_NETFILTER);
         if (socket == nullptr) {
@@ -232,10 +251,19 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
         int noEnobufs = 1;
         (void)mnl_socket_setsockopt(socket, NETLINK_NO_ENOBUFS, &noEnobufs, sizeof(noEnobufs));
 
+        SocketVerdictSink sink(socket, listener.queue);
+        SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter leaseAdapter(
+            SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapterConfig{
+                .pendingCapacity = flowAdapter.queueCapacity(),
+                .laneGeneration = laneGeneration,
+                .queueNumber = listener.queue,
+            },
+            sink);
         QueueContext context{
             .socket = socket,
             .queue = listener.queue,
             .flowAdapter = &flowAdapter,
+            .leaseAdapter = &leaseAdapter,
         };
         const unsigned int port = mnl_socket_get_portid(socket);
         std::vector<char> buffer(MNL_SOCKET_BUFFER_SIZE);
@@ -256,6 +284,8 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
                 break;
             }
             if (ready == 0) {
+                (void)leaseAdapter.expire(
+                    SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter::Clock::now());
                 continue;
             }
             if ((pollFd.revents & POLLIN) == 0) {
@@ -280,7 +310,11 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
             }
         }
 
+        (void)leaseAdapter.shutdown();
         mnl_socket_close(socket);
+        laneGeneration = laneGeneration == std::numeric_limits<std::uint32_t>::max()
+            ? 1U
+            : laneGeneration + 1U;
     }
 }
 
