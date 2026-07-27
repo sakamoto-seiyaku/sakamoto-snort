@@ -6,6 +6,7 @@
 #include <NfqueuePacketLeaseAdapter.hpp>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -16,6 +17,9 @@ namespace {
 NfqueuePacketLeaseAdapterConfig validateConfig(NfqueuePacketLeaseAdapterConfig config) {
     if (config.pendingCapacity == 0) {
         throw std::invalid_argument("NFQUEUE lease adapter requires pending capacity");
+    }
+    if (config.completionHistoryCapacity == 0) {
+        config.completionHistoryCapacity = config.pendingCapacity;
     }
     if (config.laneGeneration == 0) {
         throw std::invalid_argument("NFQUEUE lease adapter requires lane generation");
@@ -32,32 +36,51 @@ bool samePacketContext(const NfqueuePacketLeaseIdentity &left,
         && left.queueNumber == right.queueNumber && left.packetId == right.packetId;
 }
 
-NfqueuePacketLeaseVerdict verdictFor(
+using TerminalCounter = std::uint64_t NfqueuePacketLeaseCounters::*;
+
+struct TerminalPolicy final {
+    NfqueuePacketLeaseVerdict verdict;
+    TerminalCounter counter;
+};
+
+constexpr std::array<TerminalPolicy, 6> kTerminalPolicies{
+    TerminalPolicy{
+        .verdict = NfqueuePacketLeaseVerdict::Accept,
+        .counter = &NfqueuePacketLeaseCounters::accepted,
+    },
+    TerminalPolicy{
+        .verdict = NfqueuePacketLeaseVerdict::Drop,
+        .counter = &NfqueuePacketLeaseCounters::dropped,
+    },
+    TerminalPolicy{
+        .verdict = NfqueuePacketLeaseVerdict::Accept,
+        .counter = &NfqueuePacketLeaseCounters::failOpen,
+    },
+    TerminalPolicy{
+        .verdict = NfqueuePacketLeaseVerdict::Drop,
+        .counter = &NfqueuePacketLeaseCounters::timeout,
+    },
+    TerminalPolicy{
+        .verdict = NfqueuePacketLeaseVerdict::Drop,
+        .counter = &NfqueuePacketLeaseCounters::shutdown,
+    },
+    TerminalPolicy{
+        .verdict = NfqueuePacketLeaseVerdict::Accept,
+        .counter = &NfqueuePacketLeaseCounters::capacity,
+    },
+};
+
+const TerminalPolicy *terminalPolicyFor(
     const NfqueuePacketLeaseTerminalReason reason) noexcept {
-    switch (reason) {
-    case NfqueuePacketLeaseTerminalReason::Accepted:
-    case NfqueuePacketLeaseTerminalReason::FailOpen:
-    case NfqueuePacketLeaseTerminalReason::Capacity:
-        return NfqueuePacketLeaseVerdict::Accept;
-    case NfqueuePacketLeaseTerminalReason::Dropped:
-    case NfqueuePacketLeaseTerminalReason::Timeout:
-    case NfqueuePacketLeaseTerminalReason::Shutdown:
-        return NfqueuePacketLeaseVerdict::Drop;
+    const auto index = static_cast<std::size_t>(reason);
+    if (index >= kTerminalPolicies.size()) {
+        return nullptr;
     }
-    return NfqueuePacketLeaseVerdict::Drop;
+    return &kTerminalPolicies[index];
 }
 
 bool validTerminalReason(const NfqueuePacketLeaseTerminalReason reason) noexcept {
-    switch (reason) {
-    case NfqueuePacketLeaseTerminalReason::Accepted:
-    case NfqueuePacketLeaseTerminalReason::Dropped:
-    case NfqueuePacketLeaseTerminalReason::FailOpen:
-    case NfqueuePacketLeaseTerminalReason::Timeout:
-    case NfqueuePacketLeaseTerminalReason::Shutdown:
-    case NfqueuePacketLeaseTerminalReason::Capacity:
-        return true;
-    }
-    return false;
+    return terminalPolicyFor(reason) != nullptr;
 }
 
 } // namespace
@@ -65,12 +88,14 @@ bool validTerminalReason(const NfqueuePacketLeaseTerminalReason reason) noexcept
 NfqueuePacketLeaseAdapter::NfqueuePacketLeaseAdapter(
     NfqueuePacketLeaseAdapterConfig config, NfqueuePacketLeaseVerdictSink &sink)
     : config_(validateConfig(std::move(config))), sink_(std::ref(sink)),
-      pendingEntries_(config_.pendingCapacity), terminalHistory_(config_.pendingCapacity) {}
+      pendingEntries_(config_.pendingCapacity),
+      terminalHistory_(config_.completionHistoryCapacity) {}
 
 NfqueuePacketLeaseAdapter::NfqueuePacketLeaseAdapter(
     NfqueuePacketLeaseAdapterConfig config, NfqueuePacketLeaseVerdictCallback callback)
     : config_(validateConfig(std::move(config))), callback_(std::move(callback)),
-      pendingEntries_(config_.pendingCapacity), terminalHistory_(config_.pendingCapacity) {
+      pendingEntries_(config_.pendingCapacity),
+      terminalHistory_(config_.completionHistoryCapacity) {
     if (!callback_) {
         throw std::invalid_argument("NFQUEUE lease adapter requires a verdict callback");
     }
@@ -170,43 +195,58 @@ void NfqueuePacketLeaseAdapter::rememberTerminal(
     if (historySize_ < terminalHistory_.size()) {
         ++historySize_;
     }
+    counters_.completionHighWatermark = std::max(
+        counters_.completionHighWatermark, historySize_);
 }
 
 void NfqueuePacketLeaseAdapter::countTerminal(
     const NfqueuePacketLeaseTerminalReason reason) noexcept {
-    switch (reason) {
-    case NfqueuePacketLeaseTerminalReason::Accepted:
-        ++counters_.accepted;
-        break;
-    case NfqueuePacketLeaseTerminalReason::Dropped:
-        ++counters_.dropped;
-        break;
-    case NfqueuePacketLeaseTerminalReason::FailOpen:
-        ++counters_.failOpen;
-        break;
-    case NfqueuePacketLeaseTerminalReason::Timeout:
-        ++counters_.timeout;
-        break;
-    case NfqueuePacketLeaseTerminalReason::Shutdown:
-        ++counters_.shutdown;
-        break;
-    case NfqueuePacketLeaseTerminalReason::Capacity:
-        ++counters_.capacity;
-        break;
+    if (const auto *policy = terminalPolicyFor(reason); policy != nullptr) {
+        ++(counters_.*(policy->counter));
     }
+}
+
+bool NfqueuePacketLeaseAdapter::recordTerminal(
+    const NfqueuePacketLeaseIdentity &identity,
+    const NfqueuePacketLeaseTerminalReason reason) noexcept {
+    const auto *policy = terminalPolicyFor(reason);
+    if (policy == nullptr) {
+        return false;
+    }
+    rememberTerminal(identity, reason);
+    countTerminal(reason);
+    return sendVerdict(identity.packetId, policy->verdict);
 }
 
 bool NfqueuePacketLeaseAdapter::terminalize(
     const std::size_t index, const NfqueuePacketLeaseTerminalReason reason) noexcept {
     auto &entry = pendingEntries_[index];
     const auto identity = entry.identity;
-    rememberTerminal(identity, reason);
-    countTerminal(reason);
+    const bool verdictSent = recordTerminal(identity, reason);
     entry.active = false;
     if (pending_ > 0) {
         --pending_;
     }
-    return sendVerdict(identity.packetId, verdictFor(reason));
+    if (!verdictSent) {
+        ++counters_.completionFaults;
+        ++counters_.completionVerdictSendFailures;
+    }
+    return verdictSent;
+}
+
+NfqueuePacketLeaseAdmission NfqueuePacketLeaseAdapter::failOpenForCapacity(
+    const NfqueuePacketLeaseIdentity &identity) noexcept {
+    ++counters_.capacityAdmissions;
+    const bool verdictSent = recordTerminal(
+        identity, NfqueuePacketLeaseTerminalReason::Capacity);
+    if (!verdictSent) {
+        ++counters_.admissionVerdictSendFailures;
+    }
+    return NfqueuePacketLeaseAdmission{
+        .status = NfqueuePacketLeaseAdmissionStatus::CapacityFailOpen,
+        .identity = identity,
+        .verdictSent = verdictSent,
+    };
 }
 
 NfqueuePacketLeaseAdmission NfqueuePacketLeaseAdapter::admit(
@@ -235,31 +275,11 @@ NfqueuePacketLeaseAdmission NfqueuePacketLeaseAdapter::admit(
     }
 
     const auto identity = makeIdentity(packetId);
-    if (pending_ >= config_.pendingCapacity) {
-        rememberTerminal(identity, NfqueuePacketLeaseTerminalReason::Capacity);
-        countTerminal(NfqueuePacketLeaseTerminalReason::Capacity);
-        const bool verdictSent = sendVerdict(packetId, verdictFor(
-            NfqueuePacketLeaseTerminalReason::Capacity));
-        return NfqueuePacketLeaseAdmission{
-            .status = NfqueuePacketLeaseAdmissionStatus::CapacityFailOpen,
-            .identity = identity,
-            .verdictSent = verdictSent,
-        };
-    }
-
     const auto freeEntry = std::find_if(
         pendingEntries_.begin(), pendingEntries_.end(),
         [](const PendingEntry &entry) { return !entry.active; });
-    if (freeEntry == pendingEntries_.end()) {
-        rememberTerminal(identity, NfqueuePacketLeaseTerminalReason::Capacity);
-        countTerminal(NfqueuePacketLeaseTerminalReason::Capacity);
-        const bool verdictSent = sendVerdict(packetId, verdictFor(
-            NfqueuePacketLeaseTerminalReason::Capacity));
-        return NfqueuePacketLeaseAdmission{
-            .status = NfqueuePacketLeaseAdmissionStatus::CapacityFailOpen,
-            .identity = identity,
-            .verdictSent = verdictSent,
-        };
+    if (pending_ >= config_.pendingCapacity || freeEntry == pendingEntries_.end()) {
+        return failOpenForCapacity(identity);
     }
 
     freeEntry->identity = identity;
@@ -284,8 +304,9 @@ NfqueuePacketLeaseCompletionStatus NfqueuePacketLeaseAdapter::complete(
     }
 
     if (const auto index = activeIndexForIdentity(identity); index.has_value()) {
-        (void)terminalize(*index, reason);
-        return NfqueuePacketLeaseCompletionStatus::Completed;
+        return terminalize(*index, reason)
+            ? NfqueuePacketLeaseCompletionStatus::Completed
+            : NfqueuePacketLeaseCompletionStatus::VerdictSendFailure;
     }
 
     const auto activeIndex = activeIndexForPacket(identity.packetId);

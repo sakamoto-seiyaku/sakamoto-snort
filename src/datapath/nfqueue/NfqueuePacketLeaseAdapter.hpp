@@ -79,6 +79,8 @@ enum class NfqueuePacketLeaseCompletionStatus : std::uint8_t {
     Stale,
     Missing,
     InvalidOutcome,
+    /** The lease is terminal, but the one verdict send attempt failed. */
+    VerdictSendFailure,
 };
 
 struct NfqueuePacketLeaseCounters {
@@ -95,8 +97,18 @@ struct NfqueuePacketLeaseCounters {
     std::uint64_t invalidCompletions = 0;
     std::uint64_t duplicateAdmissions = 0;
     std::uint64_t closedAdmissions = 0;
+    /** Capacity rejects that were fail-opened without retaining a lease. */
+    std::uint64_t capacityAdmissions = 0;
+    /** Aggregate count across capacity and retained-lease terminal paths. */
     std::uint64_t verdictSendFailures = 0;
+    /** Send failures while emitting a capacity fail-open verdict. */
+    std::uint64_t admissionVerdictSendFailures = 0;
+    /** Retained leases terminalized without a delivered verdict intent. */
+    std::uint64_t completionFaults = 0;
+    /** Subset of completionFaults caused by the verdict sink returning/failing. */
+    std::uint64_t completionVerdictSendFailures = 0;
     std::size_t highWatermark = 0;
+    std::size_t completionHighWatermark = 0;
 };
 
 struct NfqueuePacketLeaseAdapterConfig {
@@ -104,6 +116,8 @@ struct NfqueuePacketLeaseAdapterConfig {
     std::uint32_t laneGeneration = 1;
     std::uint32_t queueNumber = 0;
     std::chrono::steady_clock::duration completionTimeout = std::chrono::seconds(5);
+    /** Zero means the fixed completion history mirrors pendingCapacity. */
+    std::size_t completionHistoryCapacity = 0;
 };
 
 /**
@@ -172,8 +186,28 @@ public:
     [[nodiscard]] std::size_t pendingCapacity() const noexcept {
         return config_.pendingCapacity;
     }
+    /** Capacity of the fixed terminal-completion history buffer. */
+    [[nodiscard]] std::size_t completionCapacity() const noexcept {
+        return config_.completionHistoryCapacity;
+    }
+    /** The pending registry is the bounded ingress buffer for this adapter. */
+    [[nodiscard]] std::size_t bufferCapacity() const noexcept {
+        return config_.pendingCapacity;
+    }
     [[nodiscard]] std::size_t highWatermark() const noexcept {
         return counters_.highWatermark;
+    }
+    [[nodiscard]] std::size_t pendingHighWatermark() const noexcept {
+        return counters_.highWatermark;
+    }
+    [[nodiscard]] std::size_t completionHighWatermark() const noexcept {
+        return counters_.completionHighWatermark;
+    }
+    [[nodiscard]] std::size_t bufferHighWatermark() const noexcept {
+        return counters_.highWatermark;
+    }
+    [[nodiscard]] std::size_t completionRecords() const noexcept {
+        return historySize_;
     }
     [[nodiscard]] const NfqueuePacketLeaseCounters &counters() const noexcept {
         return counters_;
@@ -212,6 +246,10 @@ private:
         const NfqueuePacketLeaseIdentity &identity) const noexcept;
     [[nodiscard]] bool sendVerdict(std::uint32_t packetId,
                                    NfqueuePacketLeaseVerdict verdict) noexcept;
+    [[nodiscard]] NfqueuePacketLeaseAdmission failOpenForCapacity(
+        const NfqueuePacketLeaseIdentity &identity) noexcept;
+    [[nodiscard]] bool recordTerminal(const NfqueuePacketLeaseIdentity &identity,
+                                      NfqueuePacketLeaseTerminalReason reason) noexcept;
     void rememberTerminal(const NfqueuePacketLeaseIdentity &identity,
                           NfqueuePacketLeaseTerminalReason reason) noexcept;
     void countTerminal(NfqueuePacketLeaseTerminalReason reason) noexcept;

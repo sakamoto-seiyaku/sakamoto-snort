@@ -54,7 +54,7 @@ function(add_sucre_snort_host_test target)
       ${SUCRE_SNORT_MAINLINE_INCLUDE_DIRS}
   )
   target_include_directories(${target} SYSTEM PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
-  target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
   target_link_libraries(${target} PRIVATE GTest::gtest_main)
   set_property(GLOBAL APPEND PROPERTY SUCRE_SNORT_HOST_TEST_TARGETS ${target})
   add_test(NAME "${SUCRE_SNORT_HOST_TEST_LANE}.${target}" COMMAND ${target})
@@ -74,7 +74,7 @@ function(add_sucre_snort_host_tool target)
       ${SUCRE_SNORT_MAINLINE_INCLUDE_DIRS}
   )
   target_include_directories(${target} SYSTEM PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
-  target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endfunction()
 
 add_sucre_snort_host_tool(
@@ -100,6 +100,7 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/PacketCaptureAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
 )
 add_sucre_snort_host_test(
   vpp_graph_injection_tests

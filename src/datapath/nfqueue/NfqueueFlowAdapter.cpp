@@ -31,7 +31,8 @@ namespace SnortDatapath::Nfqueue {
 NfqueueFlowAdapter::NfqueueFlowAdapter(NfqueueFlowAdapterConfig config)
     : config_(validateConfig(std::move(config))),
       steering_(Flow::WorkerLayout(config_.workerCount, config_.hashSeed), config_.queueCapacity),
-      graphGate_(steering_) {}
+      graphGate_(steering_),
+      fragmentSteering_(steering_.distribution().selector(), config_.fragmentSteering) {}
 
 NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const std::uint32_t captureQueue, const std::uint8_t hook,
@@ -39,6 +40,11 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const std::uint32_t originalLengthHint) noexcept {
     std::lock_guard lock(mutex_);
     ++counters_.packetsSeen;
+
+    if (fragmentTick_ != std::numeric_limits<std::uint64_t>::max()) {
+        ++fragmentTick_;
+    }
+    const auto fragmentTick = fragmentTick_;
 
     const auto hookDirection = nfqueueHookToDirection(hook);
     const auto direction = hookDirection.has_value() && nfqueueDirectionIsInput(*hookDirection)
@@ -63,30 +69,119 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     }
 
     ++counters_.normalizedPackets;
-    const auto key = Flow::CanonicalFlowKey::from(facts);
-    if (!key.has_value()) {
+    if (!hookDirection.has_value()) {
+        static_cast<void>(fragmentSteering_.expire(fragmentTick));
         ++counters_.parsePassThroughPackets;
-        if (facts.fragmented) {
-            ++counters_.fragmentPassThroughPackets;
-        }
         return NfqueueFlowAdapterResult::FailOpenParse;
     }
 
-    auto &distribution = steering_.distribution();
-    const auto owner = distribution.selector().ownerFor(*key);
-    std::array<Flow::PacketSubmission, 1> submissions{
-        Flow::PacketSubmission{.facts = std::move(facts)}};
-    const auto graphResult = graphGate_.inject(submissions[0], owner);
-    if (graphResult == Flow::GraphInjectionResult::CapacityDrop) {
-        ++counters_.capacityPassThroughPackets;
-        return NfqueueFlowAdapterResult::FailOpenCapacity;
+    const auto injectFacts = [this](Flow::PacketFacts graphFacts,
+                                    const std::uint32_t owner) noexcept {
+        std::array<Flow::PacketSubmission, 1> submissions{
+            Flow::PacketSubmission{.facts = std::move(graphFacts)}};
+        const auto graphResult = graphGate_.inject(submissions[0], owner);
+        if (graphResult == Flow::GraphInjectionResult::CapacityDrop) {
+            ++counters_.capacityPassThroughPackets;
+            return NfqueueFlowAdapterResult::FailOpenCapacity;
+        }
+        if (graphResult == Flow::GraphInjectionResult::Accepted) {
+            ++counters_.acceptedPackets;
+            return NfqueueFlowAdapterResult::FlowAccepted;
+        }
+        ++counters_.ownerFaultPassThroughPackets;
+        return NfqueueFlowAdapterResult::FailOpenOwnerFault;
+    };
+
+    if (facts.fragmented) {
+        Flow::FragmentReassemblyResult fragment{};
+        try {
+            fragment = fragmentSteering_.submit(
+                std::as_bytes(payload), originalLength, fragmentTick);
+        } catch (...) {
+            ++counters_.fragmentCapacityPackets;
+            ++counters_.fragmentPassThroughPackets;
+            ++counters_.capacityPassThroughPackets;
+            return NfqueueFlowAdapterResult::FragmentCapacity;
+        }
+        switch (fragment.status) {
+        case Flow::FragmentSubmitStatus::Buffered:
+            ++counters_.fragmentBufferedPackets;
+            ++counters_.fragmentPassThroughPackets;
+            ++counters_.parsePassThroughPackets;
+            return NfqueueFlowAdapterResult::FragmentBuffered;
+        case Flow::FragmentSubmitStatus::Duplicate:
+            ++counters_.fragmentDuplicatePackets;
+            ++counters_.fragmentPassThroughPackets;
+            ++counters_.parsePassThroughPackets;
+            return NfqueueFlowAdapterResult::FragmentDuplicate;
+        case Flow::FragmentSubmitStatus::Timeout:
+            ++counters_.fragmentTimeoutPackets;
+            ++counters_.fragmentPassThroughPackets;
+            ++counters_.parsePassThroughPackets;
+            return NfqueueFlowAdapterResult::FragmentTimeout;
+        case Flow::FragmentSubmitStatus::Malformed:
+            ++counters_.fragmentMalformedPackets;
+            ++counters_.fragmentPassThroughPackets;
+            ++counters_.parsePassThroughPackets;
+            return NfqueueFlowAdapterResult::FragmentMalformed;
+        case Flow::FragmentSubmitStatus::Conflict:
+            ++counters_.fragmentConflictPackets;
+            ++counters_.fragmentPassThroughPackets;
+            ++counters_.parsePassThroughPackets;
+            return NfqueueFlowAdapterResult::FragmentConflict;
+        case Flow::FragmentSubmitStatus::Capacity:
+            ++counters_.fragmentCapacityPackets;
+            ++counters_.fragmentPassThroughPackets;
+            ++counters_.capacityPassThroughPackets;
+            return NfqueueFlowAdapterResult::FragmentCapacity;
+        case Flow::FragmentSubmitStatus::Reassembled:
+            break;
+        case Flow::FragmentSubmitStatus::NotFragment:
+            break;
+        }
+
+        if (fragment.status == Flow::FragmentSubmitStatus::Reassembled) {
+            ++counters_.fragmentReassembledPackets;
+            if (fragment.owner.has_value()) {
+                ++counters_.fragmentOwnerMetadataPackets;
+            }
+
+            auto reassembledFacts = captureAdapter.normalize(
+                std::span<const std::byte>{fragment.packet},
+                static_cast<std::uint32_t>(fragment.packet.size()), direction, domain);
+            const auto key = Flow::CanonicalFlowKey::from(reassembledFacts);
+            if (!key.has_value()) {
+                ++counters_.fragmentMalformedPackets;
+                ++counters_.fragmentPassThroughPackets;
+                ++counters_.parsePassThroughPackets;
+                return NfqueueFlowAdapterResult::FragmentMalformed;
+            }
+
+            auto owner = steering_.distribution().selector().ownerFor(*key);
+            if (fragment.owner.has_value()) {
+                if (fragment.owner->flowKey != *key
+                    || fragment.owner->finalOwner != owner) {
+                    ++counters_.fragmentConflictPackets;
+                    ++counters_.fragmentPassThroughPackets;
+                    ++counters_.parsePassThroughPackets;
+                    return NfqueueFlowAdapterResult::FragmentConflict;
+                }
+                owner = fragment.owner->finalOwner;
+            }
+            return injectFacts(std::move(reassembledFacts), owner);
+        }
     }
-    if (graphResult == Flow::GraphInjectionResult::Accepted) {
-        ++counters_.acceptedPackets;
-        return NfqueueFlowAdapterResult::FlowAccepted;
+
+    static_cast<void>(fragmentSteering_.expire(fragmentTick));
+
+    const auto key = Flow::CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        ++counters_.parsePassThroughPackets;
+        return NfqueueFlowAdapterResult::FailOpenParse;
     }
-    ++counters_.ownerFaultPassThroughPackets;
-    return NfqueueFlowAdapterResult::FailOpenOwnerFault;
+
+    const auto owner = steering_.distribution().selector().ownerFor(*key);
+    return injectFacts(std::move(facts), owner);
 }
 
 void NfqueueFlowAdapter::recordVerdictSendFailure() noexcept {

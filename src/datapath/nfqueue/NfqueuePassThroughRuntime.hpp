@@ -8,6 +8,7 @@
 #include <NfqueueHookPlan.hpp>
 #include <NfqueueTopology.hpp>
 #include <RuntimeControl.hpp>
+#include <FragmentSteering.hpp>
 #include <FlowGraphInjection.hpp>
 
 #include <atomic>
@@ -40,6 +41,7 @@ struct NfqueueFlowAdapterConfig {
     std::uint64_t hashSeed = 0;
     std::size_t queueCapacity = 64;
     std::uint32_t copyPrefixBytes = 512;
+    Flow::FragmentSteeringConfig fragmentSteering;
 };
 
 struct DualStackPassThroughRuntimeConfig {
@@ -56,6 +58,12 @@ enum class NfqueueFlowAdapterResult : std::uint8_t {
     FailOpenParse,
     FailOpenCapacity,
     FailOpenOwnerFault,
+    FragmentBuffered,
+    FragmentDuplicate,
+    FragmentTimeout,
+    FragmentMalformed,
+    FragmentConflict,
+    FragmentCapacity,
 };
 
 struct NfqueueFlowAdapterCounters {
@@ -75,6 +83,57 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t ownerGuardMismatches = 0;
     std::uint64_t correctiveHandoffs = 0;
     std::uint64_t secondMismatchDrops = 0;
+    std::uint64_t fragmentBufferedPackets = 0;
+    std::uint64_t fragmentDuplicatePackets = 0;
+    std::uint64_t fragmentReassembledPackets = 0;
+    std::uint64_t fragmentMalformedPackets = 0;
+    std::uint64_t fragmentConflictPackets = 0;
+    std::uint64_t fragmentTimeoutPackets = 0;
+    std::uint64_t fragmentCapacityPackets = 0;
+    std::uint64_t fragmentOwnerMetadataPackets = 0;
+};
+
+struct NfqueueRuntimeFaultSnapshot final {
+    std::uint64_t listenerOpenFailures = 0;
+    std::uint64_t listenerBindFailures = 0;
+    std::uint64_t queueConfigFailures = 0;
+    std::uint64_t packetParseFailures = 0;
+    std::uint64_t missingPacketHeaders = 0;
+    std::uint64_t receiveFailures = 0;
+    std::uint64_t callbackFailures = 0;
+};
+
+/** Runtime I/O faults are kept separate from policy and flow-gate counters. */
+class NfqueueRuntimeFaultCounters final {
+public:
+    void recordListenerOpenFailure() noexcept { ++listenerOpenFailures_; }
+    void recordListenerBindFailure() noexcept { ++listenerBindFailures_; }
+    void recordQueueConfigFailure() noexcept { ++queueConfigFailures_; }
+    void recordPacketParseFailure() noexcept { ++packetParseFailures_; }
+    void recordMissingPacketHeader() noexcept { ++missingPacketHeaders_; }
+    void recordReceiveFailure() noexcept { ++receiveFailures_; }
+    void recordCallbackFailure() noexcept { ++callbackFailures_; }
+
+    [[nodiscard]] NfqueueRuntimeFaultSnapshot snapshot() const noexcept {
+        return {
+            .listenerOpenFailures = listenerOpenFailures_.load(std::memory_order_relaxed),
+            .listenerBindFailures = listenerBindFailures_.load(std::memory_order_relaxed),
+            .queueConfigFailures = queueConfigFailures_.load(std::memory_order_relaxed),
+            .packetParseFailures = packetParseFailures_.load(std::memory_order_relaxed),
+            .missingPacketHeaders = missingPacketHeaders_.load(std::memory_order_relaxed),
+            .receiveFailures = receiveFailures_.load(std::memory_order_relaxed),
+            .callbackFailures = callbackFailures_.load(std::memory_order_relaxed),
+        };
+    }
+
+private:
+    std::atomic<std::uint64_t> listenerOpenFailures_{0};
+    std::atomic<std::uint64_t> listenerBindFailures_{0};
+    std::atomic<std::uint64_t> queueConfigFailures_{0};
+    std::atomic<std::uint64_t> packetParseFailures_{0};
+    std::atomic<std::uint64_t> missingPacketHeaders_{0};
+    std::atomic<std::uint64_t> receiveFailures_{0};
+    std::atomic<std::uint64_t> callbackFailures_{0};
 };
 
 /**
@@ -113,6 +172,8 @@ private:
     NfqueueFlowAdapterConfig config_;
     Flow::FlowSteeringRuntime steering_;
     Flow::FlowGraphInjectionGate graphGate_;
+    Flow::FragmentSteering fragmentSteering_;
+    std::uint64_t fragmentTick_ = 0;
     mutable std::mutex mutex_;
     NfqueueFlowAdapterCounters counters_;
 };
@@ -190,11 +251,15 @@ public:
     [[nodiscard]] NfqueueFlowAdapterCounters flowAdapterCounters() const noexcept {
         return flowAdapter_.counters();
     }
+    [[nodiscard]] NfqueueRuntimeFaultSnapshot runtimeFaultCounters() const noexcept {
+        return runtimeFaults_.snapshot();
+    }
 
 private:
     DualStackPassThroughRuntimeConfig config_;
     NfqueueFlowAdapter flowAdapter_;
     PassThroughWorkerGroup workers_;
+    NfqueueRuntimeFaultCounters runtimeFaults_;
     std::atomic_bool ready_{false};
 };
 
@@ -216,11 +281,15 @@ public:
     [[nodiscard]] NfqueueFlowAdapterCounters flowAdapterCounters() const noexcept {
         return flowAdapter_.counters();
     }
+    [[nodiscard]] NfqueueRuntimeFaultSnapshot runtimeFaultCounters() const noexcept {
+        return runtimeFaults_.snapshot();
+    }
 
 private:
     Ipv4PassThroughRuntimeConfig config_;
     NfqueueFlowAdapter flowAdapter_;
     PassThroughWorkerGroup workers_;
+    NfqueueRuntimeFaultCounters runtimeFaults_;
 };
 
 } // namespace SnortDatapath::Nfqueue

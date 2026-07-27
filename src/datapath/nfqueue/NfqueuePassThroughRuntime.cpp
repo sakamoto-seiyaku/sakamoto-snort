@@ -102,6 +102,7 @@ struct QueueContext {
     std::uint32_t queue = 0;
     SnortDatapath::Nfqueue::NfqueueFlowAdapter *flowAdapter = nullptr;
     SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter *leaseAdapter = nullptr;
+    SnortDatapath::Nfqueue::NfqueueRuntimeFaultCounters *runtimeFaults = nullptr;
 };
 
 int socketFamily(const SnortDatapath::Nfqueue::NfqueueAddressFamily family) {
@@ -163,10 +164,12 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     nlattr *attrs[NFQA_MAX + 1] = {};
 
     if (nfq_nlmsg_parse(nlh, attrs) < 0) {
+        context->runtimeFaults->recordPacketParseFailure();
         std::cerr << "NFQUEUE parse failed on queue " << context->queue << "\n";
         return MNL_CB_ERROR;
     }
     if (attrs[NFQA_PACKET_HDR] == nullptr) {
+        context->runtimeFaults->recordMissingPacketHeader();
         std::cerr << "NFQUEUE packet header missing on queue " << context->queue << "\n";
         return MNL_CB_OK;
     }
@@ -221,11 +224,13 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
 }
 
 void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
-                 SnortDatapath::Nfqueue::NfqueueFlowAdapter &flowAdapter) {
+                 SnortDatapath::Nfqueue::NfqueueFlowAdapter &flowAdapter,
+                 SnortDatapath::Nfqueue::NfqueueRuntimeFaultCounters &runtimeFaults) {
     std::uint32_t laneGeneration = 1;
     while (!SnortRuntime::shutdownRequested()) {
         mnl_socket *socket = mnl_socket_open(NETLINK_NETFILTER);
         if (socket == nullptr) {
+            runtimeFaults.recordListenerOpenFailure();
             std::cerr << familyName(listener.family) << " NFQUEUE socket open failed: "
                       << std::strerror(errno) << "\n";
             sleep(1);
@@ -233,6 +238,7 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
         }
 
         if (mnl_socket_bind(socket, 0, MNL_SOCKET_AUTOPID) < 0) {
+            runtimeFaults.recordListenerBindFailure();
             std::cerr << familyName(listener.family) << " NFQUEUE socket bind failed: "
                       << std::strerror(errno) << "\n";
             mnl_socket_close(socket);
@@ -241,6 +247,7 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
         }
 
         if (!configureQueue(socket, listener, flowAdapter)) {
+            runtimeFaults.recordQueueConfigFailure();
             std::cerr << familyName(listener.family) << " NFQUEUE configure failed for queue "
                       << listener.queue << ": " << std::strerror(errno) << "\n";
             mnl_socket_close(socket);
@@ -264,6 +271,7 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
             .queue = listener.queue,
             .flowAdapter = &flowAdapter,
             .leaseAdapter = &leaseAdapter,
+            .runtimeFaults = &runtimeFaults,
         };
         const unsigned int port = mnl_socket_get_portid(socket);
         std::vector<char> buffer(MNL_SOCKET_BUFFER_SIZE);
@@ -300,10 +308,12 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
                 }
                 std::cerr << "NFQUEUE recv failed on queue " << listener.queue << ": "
                           << std::strerror(errno) << "\n";
+                runtimeFaults.recordReceiveFailure();
                 break;
             }
             if (mnl_cb_run(buffer.data(), static_cast<unsigned int>(received), 0, port,
                            passThroughCallback, &context) == -1) {
+                runtimeFaults.recordCallbackFailure();
                 std::cerr << "NFQUEUE callback failed on queue " << listener.queue << ": "
                           << std::strerror(errno) << "\n";
                 break;
@@ -326,16 +336,8 @@ DualStackPassThroughRuntime::DualStackPassThroughRuntime(DualStackPassThroughRun
     : config_(std::move(config)), flowAdapter_(config_.flowAdapter) {}
 
 DualStackPassThroughRuntime::~DualStackPassThroughRuntime() {
-    workers_.join();
+    SnortRuntime::requestShutdown();
     ready_.store(false, std::memory_order_release);
-    const auto flowCounters = flowAdapter_.counters();
-    std::cerr << "Dual-stack NFQUEUE flow gate packets=" << flowCounters.packetsSeen
-              << " accepted=" << flowCounters.acceptedPackets
-              << " parse_pass=" << flowCounters.parsePassThroughPackets
-              << " fragments=" << flowCounters.fragmentPassThroughPackets
-              << " capacity_pass=" << flowCounters.capacityPassThroughPackets
-              << " owner_fault=" << flowCounters.ownerFaultPassThroughPackets
-              << " verdict_fail=" << flowCounters.verdictSendFailures << "\n";
     try {
         SystemHookCommandExecutor executor;
         const bool hooksRemoved = removeDualStackPassThroughHooks(
@@ -351,6 +353,22 @@ DualStackPassThroughRuntime::~DualStackPassThroughRuntime() {
     } catch (...) {
         std::cerr << "Dual-stack NFQUEUE pass-through hook cleanup=fail: unknown exception\n";
     }
+    workers_.join();
+    const auto flowCounters = flowAdapter_.counters();
+    const auto runtimeFaults = runtimeFaults_.snapshot();
+    std::cerr << "Dual-stack NFQUEUE flow gate packets=" << flowCounters.packetsSeen
+              << " accepted=" << flowCounters.acceptedPackets
+              << " parse_pass=" << flowCounters.parsePassThroughPackets
+              << " fragments=" << flowCounters.fragmentPassThroughPackets
+              << " capacity_pass=" << flowCounters.capacityPassThroughPackets
+              << " owner_fault=" << flowCounters.ownerFaultPassThroughPackets
+              << " verdict_fail=" << flowCounters.verdictSendFailures
+              << " listener_open_fail=" << runtimeFaults.listenerOpenFailures
+              << " listener_bind_fail=" << runtimeFaults.listenerBindFailures
+              << " queue_config_fail=" << runtimeFaults.queueConfigFailures
+              << " packet_parse_fail=" << runtimeFaults.packetParseFailures
+              << " receive_fail=" << runtimeFaults.receiveFailures
+              << " callback_fail=" << runtimeFaults.callbackFailures << "\n";
 }
 
 bool DualStackPassThroughRuntime::start() {
@@ -367,7 +385,9 @@ bool DualStackPassThroughRuntime::start() {
     }
 
     for (const auto listener : runtimePlan.listeners) {
-        workers_.start([this, listener] { listenQueue(listener, flowAdapter_); });
+        workers_.start([this, listener] {
+            listenQueue(listener, flowAdapter_, runtimeFaults_);
+        });
     }
     ready_.store(true, std::memory_order_release);
 
@@ -401,15 +421,7 @@ Ipv4PassThroughRuntime::Ipv4PassThroughRuntime(Ipv4PassThroughRuntimeConfig conf
     : config_(std::move(config)), flowAdapter_(config_.flowAdapter) {}
 
 Ipv4PassThroughRuntime::~Ipv4PassThroughRuntime() {
-    workers_.join();
-    const auto flowCounters = flowAdapter_.counters();
-    std::cerr << "IPv4 NFQUEUE flow gate packets=" << flowCounters.packetsSeen
-              << " accepted=" << flowCounters.acceptedPackets
-              << " parse_pass=" << flowCounters.parsePassThroughPackets
-              << " fragments=" << flowCounters.fragmentPassThroughPackets
-              << " capacity_pass=" << flowCounters.capacityPassThroughPackets
-              << " owner_fault=" << flowCounters.ownerFaultPassThroughPackets
-              << " verdict_fail=" << flowCounters.verdictSendFailures << "\n";
+    SnortRuntime::requestShutdown();
     try {
         SystemHookCommandExecutor executor;
         const bool hooksRemoved = removeIpv4PassThroughHooks(
@@ -425,6 +437,22 @@ Ipv4PassThroughRuntime::~Ipv4PassThroughRuntime() {
     } catch (...) {
         std::cerr << "IPv4 NFQUEUE pass-through hook cleanup=fail: unknown exception\n";
     }
+    workers_.join();
+    const auto flowCounters = flowAdapter_.counters();
+    const auto runtimeFaults = runtimeFaults_.snapshot();
+    std::cerr << "IPv4 NFQUEUE flow gate packets=" << flowCounters.packetsSeen
+              << " accepted=" << flowCounters.acceptedPackets
+              << " parse_pass=" << flowCounters.parsePassThroughPackets
+              << " fragments=" << flowCounters.fragmentPassThroughPackets
+              << " capacity_pass=" << flowCounters.capacityPassThroughPackets
+              << " owner_fault=" << flowCounters.ownerFaultPassThroughPackets
+              << " verdict_fail=" << flowCounters.verdictSendFailures
+              << " listener_open_fail=" << runtimeFaults.listenerOpenFailures
+              << " listener_bind_fail=" << runtimeFaults.listenerBindFailures
+              << " queue_config_fail=" << runtimeFaults.queueConfigFailures
+              << " packet_parse_fail=" << runtimeFaults.packetParseFailures
+              << " receive_fail=" << runtimeFaults.receiveFailures
+              << " callback_fail=" << runtimeFaults.callbackFailures << "\n";
 }
 
 bool Ipv4PassThroughRuntime::start() {
@@ -450,7 +478,7 @@ bool Ipv4PassThroughRuntime::start() {
             listenQueue(PassThroughListenerPlan{
                 .family = NfqueueAddressFamily::Ipv4,
                 .queue = queue,
-            }, flowAdapter_);
+            }, flowAdapter_, runtimeFaults_);
         });
     }
 

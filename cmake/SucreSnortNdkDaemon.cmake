@@ -128,6 +128,7 @@ target_compile_options(
     -fexceptions
     -Wall
     -Wextra
+    -Wpedantic
     -Werror
     -Wno-unused-parameter
     -Wno-unused-variable

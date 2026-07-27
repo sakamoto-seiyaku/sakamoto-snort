@@ -240,4 +240,34 @@ TEST(NfqueuePacketLeaseAdapterTest, LaneAndQueueIdentityRejectWrongCompletions) 
     EXPECT_EQ(intents.size(), 1U);
 }
 
+TEST(NfqueuePacketLeaseAdapterTest, SendFailureIsObservableWithoutRetryingVerdict) {
+    std::size_t sendAttempts = 0;
+    NfqueuePacketLeaseAdapter adapter(
+        NfqueuePacketLeaseAdapterConfig{
+            .pendingCapacity = 2,
+            .laneGeneration = 16,
+            .queueNumber = 59,
+            .completionHistoryCapacity = 4,
+        },
+        [&sendAttempts](const std::uint32_t, const NfqueuePacketLeaseVerdict) {
+            ++sendAttempts;
+            return false;
+        });
+    const auto admission = adapter.admit(1014, NfqueuePacketLeaseAdapter::TimePoint{});
+    ASSERT_TRUE(admission.identity.has_value());
+
+    EXPECT_EQ(adapter.complete(
+                  *admission.identity, NfqueuePacketLeaseTerminalReason::Accepted),
+              NfqueuePacketLeaseCompletionStatus::VerdictSendFailure);
+    EXPECT_EQ(adapter.complete(
+                  *admission.identity, NfqueuePacketLeaseTerminalReason::Accepted),
+              NfqueuePacketLeaseCompletionStatus::Duplicate);
+    EXPECT_EQ(adapter.pending(), 0U);
+    EXPECT_EQ(sendAttempts, 1U);
+    EXPECT_EQ(adapter.counters().verdictSendFailures, 1U);
+    EXPECT_EQ(adapter.counters().completionFaults, 1U);
+    EXPECT_EQ(adapter.counters().completionVerdictSendFailures, 1U);
+    EXPECT_EQ(adapter.completionHighWatermark(), 1U);
+}
+
 } // namespace
