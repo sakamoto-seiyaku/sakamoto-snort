@@ -252,9 +252,9 @@ TEST(FlowSteeringTest, CorrectiveRequeueRejectsNonOwnerTarget) {
     ASSERT_EQ(distribution.submit(std::span<const PacketFacts>{packets}), 1U);
     const auto descriptorId = distribution.dequeue(owner);
     ASSERT_TRUE(descriptorId.has_value());
-    auto *descriptor = distribution.descriptor(*descriptorId);
+    const auto *descriptor = distribution.descriptor(*descriptorId);
     ASSERT_NE(descriptor, nullptr);
-    ASSERT_TRUE(descriptor->lease.requestCorrectiveHandoff());
+    EXPECT_TRUE(distribution.requestCorrectiveHandoff(*descriptorId));
 
     EXPECT_FALSE(distribution.requeueCorrective(*descriptorId, wrongOwner));
     EXPECT_EQ(distribution.descriptor(*descriptorId), nullptr);

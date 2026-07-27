@@ -325,6 +325,10 @@ bool DualStackPassThroughRuntime::start() {
 
     SystemHookCommandExecutor executor;
     const bool hooksInstalled = installDualStackPassThroughHooks(runtimePlan.hookPlan, executor);
+    if (!hooksInstalled) {
+        std::cerr << "Dual-stack NFQUEUE hook install failed; listener startup skipped\n";
+        return false;
+    }
 
     for (const auto listener : runtimePlan.listeners) {
         workers_.start([this, listener] { listenQueue(listener, flowAdapter_); });
@@ -337,10 +341,7 @@ bool DualStackPassThroughRuntime::start() {
               << " and IPv6 queues " << runtimePlan.hookPlan.ipv6FirstQueue << ":"
               << (runtimePlan.hookPlan.ipv6FirstQueue + runtimePlan.hookPlan.queuesPerFamily - 1)
               << "\n";
-    if (!hooksInstalled) {
-        std::cerr << "Dual-stack NFQUEUE pass-through hook reinstall reported failures\n";
-    }
-    return hooksInstalled;
+    return true;
 }
 
 bool DualStackPassThroughRuntime::nfqueuePassThroughReady() const noexcept {
@@ -396,12 +397,17 @@ bool Ipv4PassThroughRuntime::start() {
         makeNfqueueQueuePlan(config_.topology, config_.firstQueue, config_.queueCount);
 
     SystemHookCommandExecutor executor;
-    (void)installIpv4PassThroughHooks(HookPlanConfig{
-                                          .inputChain = config_.inputChain,
-                                          .outputChain = config_.outputChain,
-                                          .queuePlan = queuePlan,
-                                      },
-                                      executor);
+    const bool hooksInstalled = installIpv4PassThroughHooks(
+        HookPlanConfig{
+            .inputChain = config_.inputChain,
+            .outputChain = config_.outputChain,
+            .queuePlan = queuePlan,
+        },
+        executor);
+    if (!hooksInstalled) {
+        std::cerr << "IPv4 NFQUEUE hook install failed; listener startup skipped\n";
+        return false;
+    }
 
     for (std::uint32_t i = 0; i < queuePlan.listeners.count; ++i) {
         workers_.start([this, queue = queuePlan.listeners.first + i] {

@@ -74,6 +74,10 @@ TEST(NfqueueFlowAdapterTest, NormalizesAndRunsSharedOwnerGate) {
     EXPECT_EQ(counters.acceptedPackets, 2U);
     EXPECT_EQ(counters.parsePassThroughPackets, 0U);
     EXPECT_EQ(counters.ownerFaultPassThroughPackets, 0U);
+    EXPECT_EQ(counters.directPackets, 2U);
+    EXPECT_EQ(counters.ownerGuardPasses, 2U);
+    EXPECT_EQ(counters.ownerGuardMismatches, 0U);
+    EXPECT_EQ(counters.normalWorkerHandoffs, 0U);
 }
 
 TEST(NfqueueFlowAdapterTest, FragmentsAndBadHooksFailOpenWithoutPorts) {
@@ -91,6 +95,7 @@ TEST(NfqueueFlowAdapterTest, FragmentsAndBadHooksFailOpenWithoutPorts) {
     const auto counters = adapter.counters();
     EXPECT_EQ(counters.fragmentPassThroughPackets, 2U);
     EXPECT_EQ(counters.parsePassThroughPackets, 2U);
+    EXPECT_EQ(counters.directPackets, 0U);
 }
 
 TEST(NfqueueFlowAdapterTest, RejectsInvalidQueueCapacity) {

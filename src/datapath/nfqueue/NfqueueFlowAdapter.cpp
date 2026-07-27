@@ -81,14 +81,12 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     }
 
     const auto descriptorId = distribution.dequeue(owner);
-    auto *descriptor = descriptorId.has_value() ? distribution.descriptor(*descriptorId) : nullptr;
-    if (descriptor == nullptr) {
+    if (!descriptorId.has_value() || distribution.descriptor(*descriptorId) == nullptr) {
         ++counters_.ownerFaultPassThroughPackets;
         return NfqueueFlowAdapterResult::FailOpenOwnerFault;
     }
 
-    const auto decision = steering_.ownerGuard().check(owner, descriptor->facts,
-                                                       descriptor->lease);
+    const auto decision = distribution.checkOwner(*descriptorId, owner, steering_.ownerGuard());
     if (decision == Flow::OwnerGuardDecision::Local
         && distribution.complete(*descriptorId, Flow::PacketLeaseOutcome::Accepted)) {
         ++counters_.acceptedPackets;
@@ -98,20 +96,15 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     if (decision == Flow::OwnerGuardDecision::CorrectiveHandoff
         && distribution.requeueCorrective(*descriptorId, owner)) {
         const auto retryId = distribution.dequeue(owner);
-        auto *retryDescriptor = retryId.has_value() ? distribution.descriptor(*retryId) : nullptr;
-        if (retryDescriptor != nullptr
-            && steering_.ownerGuard().check(owner, retryDescriptor->facts,
-                                             retryDescriptor->lease) == Flow::OwnerGuardDecision::Local
+        if (retryId.has_value() && distribution.descriptor(*retryId) != nullptr
+            && distribution.checkOwner(*retryId, owner, steering_.ownerGuard())
+                   == Flow::OwnerGuardDecision::Local
             && distribution.complete(*retryId, Flow::PacketLeaseOutcome::Accepted)) {
             ++counters_.acceptedPackets;
             return NfqueueFlowAdapterResult::FlowAccepted;
         }
         if (retryId.has_value()) {
-            if (auto *faultDescriptor = distribution.descriptor(*retryId);
-                faultDescriptor != nullptr) {
-                if (!faultDescriptor->lease.isTerminal()) {
-                    (void)faultDescriptor->lease.drop();
-                }
+            if (distribution.descriptor(*retryId) != nullptr) {
                 (void)distribution.complete(*retryId, Flow::PacketLeaseOutcome::Dropped);
             }
         }
@@ -120,11 +113,7 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     // The owner guard owns a fault's terminal DROP state. The distribution
     // releases the descriptor while the external NFQUEUE verdict stays
     // fail-open for the packet capture adapter.
-    if (auto *faultDescriptor = distribution.descriptor(*descriptorId);
-        faultDescriptor != nullptr) {
-        if (!faultDescriptor->lease.isTerminal()) {
-            (void)faultDescriptor->lease.drop();
-        }
+    if (distribution.descriptor(*descriptorId) != nullptr) {
         (void)distribution.complete(*descriptorId, Flow::PacketLeaseOutcome::Dropped);
     }
     ++counters_.ownerFaultPassThroughPackets;
@@ -138,7 +127,18 @@ void NfqueueFlowAdapter::recordVerdictSendFailure() noexcept {
 
 NfqueueFlowAdapterCounters NfqueueFlowAdapter::counters() const noexcept {
     std::lock_guard lock(mutex_);
-    return counters_;
+    auto result = counters_;
+    const auto &distributionCounters = steering_.distribution().counters();
+    const auto &guardCounters = steering_.ownerGuard().counters();
+    result.directPackets = distributionCounters.directPackets;
+    result.parseDrops = distributionCounters.parseDrops;
+    result.capacityDrops = distributionCounters.capacityDrops;
+    result.normalWorkerHandoffs = distributionCounters.normalWorkerHandoffs;
+    result.ownerGuardPasses = guardCounters.localPass;
+    result.ownerGuardMismatches = guardCounters.mismatches;
+    result.correctiveHandoffs = guardCounters.correctiveHandoffs;
+    result.secondMismatchDrops = guardCounters.secondMismatchDrops;
+    return result;
 }
 
 } // namespace SnortDatapath::Nfqueue

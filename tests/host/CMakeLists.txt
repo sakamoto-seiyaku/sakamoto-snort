@@ -101,6 +101,12 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/PacketCaptureAdapter.cpp"
 )
 add_sucre_snort_host_test(
+  vpp_graph_injection_tests
+  vpp_graph_injection_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+)
+add_sucre_snort_host_test(
   packet_capture_adapter_tests
   packet_capture_adapter_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/core/flow/PacketCaptureAdapter.cpp"

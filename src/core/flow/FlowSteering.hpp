@@ -119,6 +119,9 @@ enum class PacketLeaseOutcome : std::uint8_t {
     Dropped,
 };
 
+enum class OwnerGuardDecision : std::uint8_t;
+class OwnerGuard;
+
 /** One adapter packet may acquire exactly one terminal outcome. */
 class PacketLease final {
 public:
@@ -173,6 +176,10 @@ struct DistributionCounters {
 /**
  * Primary distribution model. Queues are fixed at runtime construction and
  * packets are placed directly into their calculated worker queue.
+ *
+ * The object is lane-confined rather than internally synchronized. An
+ * adapter that shares one instance across ingress threads must serialize the
+ * complete dequeue/guard/completion transaction, as the NFQUEUE adapter does.
  */
 class PrimarySoftwareDistribution final {
 public:
@@ -183,8 +190,12 @@ public:
     [[nodiscard]] std::size_t queueDepth(std::uint32_t worker) const noexcept;
     [[nodiscard]] std::optional<PacketDescriptorId> dequeue(
         std::uint32_t worker) noexcept;
-    [[nodiscard]] PacketDescriptor *descriptor(PacketDescriptorId id) noexcept;
+    [[nodiscard]] const PacketDescriptor *descriptor(PacketDescriptorId id) noexcept;
     [[nodiscard]] const PacketDescriptor *descriptor(PacketDescriptorId id) const noexcept;
+    [[nodiscard]] bool requestCorrectiveHandoff(PacketDescriptorId id) noexcept;
+    [[nodiscard]] OwnerGuardDecision checkOwner(PacketDescriptorId id,
+                                                 std::uint32_t currentWorker,
+                                                 OwnerGuard &guard) noexcept;
     [[nodiscard]] bool complete(PacketDescriptorId id, PacketLeaseOutcome outcome) noexcept;
     [[nodiscard]] bool requeueCorrective(PacketDescriptorId id,
                                           std::uint32_t targetWorker) noexcept;

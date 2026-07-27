@@ -142,7 +142,7 @@ void parseIpv4(PacketFacts &facts, const std::span<const std::byte> bytes) noexc
     if ((fragmentField & 0x8000U) != 0) {
         return;
     }
-    if ((fragmentField & 0x3fffU) != 0) {
+    if ((fragmentField & 0x2000U) != 0 || (fragmentField & 0x1fffU) != 0) {
         facts.fragmented = true;
         facts.parseStatus = ParseStatus::Fragment;
         return;

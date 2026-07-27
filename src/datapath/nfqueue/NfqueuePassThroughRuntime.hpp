@@ -67,6 +67,14 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t capacityPassThroughPackets = 0;
     std::uint64_t ownerFaultPassThroughPackets = 0;
     std::uint64_t verdictSendFailures = 0;
+    std::uint64_t directPackets = 0;
+    std::uint64_t parseDrops = 0;
+    std::uint64_t capacityDrops = 0;
+    std::uint64_t normalWorkerHandoffs = 0;
+    std::uint64_t ownerGuardPasses = 0;
+    std::uint64_t ownerGuardMismatches = 0;
+    std::uint64_t correctiveHandoffs = 0;
+    std::uint64_t secondMismatchDrops = 0;
 };
 
 /**

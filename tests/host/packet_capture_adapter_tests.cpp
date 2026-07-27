@@ -133,10 +133,10 @@ TEST(PacketCaptureAdapterTest, RootAndVpnNormalizeIntoOneRuntimeOwner) {
     for (int index = 0; index < 2; ++index) {
         const auto descriptorId = runtime.distribution().dequeue(expectedWorker);
         ASSERT_TRUE(descriptorId.has_value());
-        auto *descriptor = runtime.distribution().descriptor(*descriptorId);
-        ASSERT_NE(descriptor, nullptr);
-        EXPECT_EQ(runtime.ownerGuard().check(expectedWorker, descriptor->facts,
-                                             descriptor->lease), OwnerGuardDecision::Local);
+        ASSERT_NE(runtime.distribution().descriptor(*descriptorId), nullptr);
+        EXPECT_EQ(runtime.distribution().checkOwner(*descriptorId, expectedWorker,
+                                                     runtime.ownerGuard()),
+                  OwnerGuardDecision::Local);
         EXPECT_TRUE(runtime.distribution().complete(*descriptorId,
                                                     PacketLeaseOutcome::Accepted));
     }
