@@ -345,9 +345,11 @@ bool PrimarySoftwareDistribution::complete(
         ++counters_.staleDescriptorHandles;
         return false;
     }
-    const bool completed = outcome == PacketLeaseOutcome::Accepted
+    const bool alreadyCompleted = outcome != PacketLeaseOutcome::Open
+        && entry->lease.outcome() == outcome;
+    const bool completed = alreadyCompleted || (outcome == PacketLeaseOutcome::Accepted
         ? entry->lease.accept() : outcome == PacketLeaseOutcome::Dropped
-        ? entry->lease.drop() : false;
+        ? entry->lease.drop() : false);
     if (!completed) {
         return false;
     }
