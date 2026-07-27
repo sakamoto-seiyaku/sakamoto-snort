@@ -1,11 +1,13 @@
 package com.sakamoto.snort.vpnlite;
 
 import android.app.Activity;
+import android.Manifest;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.pm.PackageManager;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -18,9 +20,13 @@ import java.util.Locale;
 
 public final class MainActivity extends Activity {
     private static final int VPN_REQUEST_CODE = 1001;
+    private static final int NOTIFICATION_REQUEST_CODE = 1002;
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final LocalProductBackend productBackend = new LocalProductBackend();
     private TextView logView;
+    private TextView runtimeStatusView;
+    private boolean pendingRuntimeStart;
     private String pendingMode = SnortVpnService.MODE_NATIVE;
     private String pendingAllowedPackage = "";
     private String pendingDisallowedPackage = "";
@@ -64,8 +70,8 @@ public final class MainActivity extends Activity {
 
         Button startVpp = new Button(this);
         startVpp.setAllCaps(false);
-        startVpp.setText("Start VPP");
-        startVpp.setOnClickListener(v -> startVpn(SnortVpnService.MODE_VPP));
+        startVpp.setText("Start VPP Runtime");
+        startVpp.setOnClickListener(v -> startRuntimeService(false));
         row.addView(startVpp, weight());
 
         Button startHev = new Button(this);
@@ -77,9 +83,17 @@ public final class MainActivity extends Activity {
         Button stop = new Button(this);
         stop.setAllCaps(false);
         stop.setText("Stop");
-        stop.setOnClickListener(v -> stopVpn());
+        stop.setOnClickListener(v -> {
+            startRuntimeService(true);
+            stopVpn();
+        });
         row.addView(stop, weight());
 
+        runtimeStatusView = new TextView(this);
+        runtimeStatusView.setTextSize(15);
+        runtimeStatusView.setText(productBackend.getRuntimeSnapshot(this).displayText());
+        runtimeStatusView.setPadding(0, 0, 0, dp(12));
+        root.addView(runtimeStatusView, fillWrap());
         root.addView(row, fillWrap());
 
         logView = new TextView(this);
@@ -149,15 +163,28 @@ public final class MainActivity extends Activity {
         appendLog("app HTTP probe requested: " + host + ":" + port + path);
     }
 
-    private void startAppUdpProbe(String host, int port, int count, int durationSeconds) {
+    private void startAppUdpProbe(String host, int port, int count, int durationSeconds,
+                                  int payloadBytes) {
         Intent intent = new Intent(this, SnortVpnService.class);
         intent.setAction(SnortVpnService.ACTION_UDP_PROBE);
         intent.putExtra(SnortVpnService.EXTRA_HOST, host);
         intent.putExtra(SnortVpnService.EXTRA_PORT, port);
         intent.putExtra(SnortVpnService.EXTRA_COUNT, count);
+        intent.putExtra(SnortVpnService.EXTRA_PAYLOAD_BYTES, payloadBytes);
         intent.putExtra(SnortVpnService.EXTRA_DURATION_SECONDS, durationSeconds);
         startService(intent);
         appendLog("app UDP probe requested: " + host + ":" + port + " count=" + count);
+    }
+
+    private void startAppPingProbe(String host, int size, int count) {
+        Intent intent = new Intent(this, SnortVpnService.class);
+        intent.setAction(SnortVpnService.ACTION_PING_PROBE);
+        intent.putExtra(SnortVpnService.EXTRA_HOST, host);
+        intent.putExtra(SnortVpnService.EXTRA_SIZE, size);
+        intent.putExtra(SnortVpnService.EXTRA_COUNT, count);
+        startService(intent);
+        appendLog("app ping probe requested: " + host + " size=" + size
+                + " count=" + count);
     }
 
     private void startVpnService(String mode) {
@@ -225,11 +252,26 @@ public final class MainActivity extends Activity {
             }
             int port = intent.getIntExtra(SnortVpnService.EXTRA_PORT, 53);
             int count = intent.getIntExtra(SnortVpnService.EXTRA_COUNT, 1);
+            int payloadBytes = intent.getIntExtra(SnortVpnService.EXTRA_PAYLOAD_BYTES, 0);
             int durationSeconds = intent.getIntExtra(SnortVpnService.EXTRA_DURATION_SECONDS, 0);
             String requestedHost = host;
             appendLog("intent appUdpProbe=true host=" + host + " port=" + port
                     + " count=" + count);
-            main.postDelayed(() -> startAppUdpProbe(requestedHost, port, count, durationSeconds), 300);
+            main.postDelayed(() -> startAppUdpProbe(requestedHost, port, count, durationSeconds,
+                    payloadBytes), 300);
+        }
+
+        if (intent != null && intent.getBooleanExtra("appPingProbe", false)) {
+            String host = intent.getStringExtra(SnortVpnService.EXTRA_HOST);
+            if (host == null || host.isEmpty()) {
+                host = "1.1.1.1";
+            }
+            int size = intent.getIntExtra(SnortVpnService.EXTRA_SIZE, 4000);
+            int count = intent.getIntExtra(SnortVpnService.EXTRA_COUNT, 1);
+            String requestedHost = host;
+            appendLog("intent appPingProbe=true host=" + host + " size=" + size
+                    + " count=" + count);
+            main.postDelayed(() -> startAppPingProbe(requestedHost, size, count), 300);
         }
 
         if (intent != null && intent.getBooleanExtra("controlProbe", false)) {
@@ -305,11 +347,72 @@ public final class MainActivity extends Activity {
     }
 
     private void startRuntimeService(boolean stop) {
-        Intent intent = new Intent(this, SnortRuntimeService.class);
-        intent.setAction(stop ? SnortRuntimeService.ACTION_STOP
-                : SnortRuntimeService.ACTION_START);
-        startService(intent);
+        if (!stop && !SnortRuntimeService.notificationsReady(this)) {
+            pendingRuntimeStart = true;
+            if (android.os.Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                        NOTIFICATION_REQUEST_CODE);
+            }
+            appendLog("runtime start blocked: notification permission required");
+            return;
+        }
+        if (stop) {
+            productBackend.stopProtection(this);
+        } else {
+            productBackend.startProtection(this);
+        }
         appendLog(stop ? "runtime stop requested" : "runtime start requested");
+        refreshRuntimeStatus();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshRuntimeStatus();
+        main.postDelayed(runtimeStatusPoll, 500L);
+    }
+
+    @Override
+    protected void onPause() {
+        main.removeCallbacks(runtimeStatusPoll);
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        main.removeCallbacks(runtimeStatusPoll);
+        super.onDestroy();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != NOTIFICATION_REQUEST_CODE) {
+            return;
+        }
+        boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        boolean shouldStart = pendingRuntimeStart;
+        pendingRuntimeStart = false;
+        appendLog(granted ? "notification permission granted" : "notification permission denied");
+        if (granted && shouldStart) {
+            startRuntimeService(false);
+        }
+    }
+
+    private final Runnable runtimeStatusPoll = new Runnable() {
+        @Override
+        public void run() {
+            refreshRuntimeStatus();
+            main.postDelayed(this, 500L);
+        }
+    };
+
+    private void refreshRuntimeStatus() {
+        if (runtimeStatusView != null) {
+            runtimeStatusView.setText(productBackend.getRuntimeSnapshot(this).displayText());
+        }
     }
 
     @Override

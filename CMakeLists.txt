@@ -95,6 +95,12 @@ if(SNORT_ENABLE_HOST_TESTS)
   enable_language(CXX)
   add_subdirectory(tests/host)
 
+  add_test(
+    NAME android-runtime-contract
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/android/runtime-contract-test.sh"
+  )
+  set_tests_properties(android-runtime-contract PROPERTIES LABELS "host;android-runtime")
+
   get_property(SNORT_HOST_TEST_TARGETS GLOBAL PROPERTY SUCRE_SNORT_HOST_TEST_TARGETS)
   set(SNORT_HOST_TEST_ENV)
   if(

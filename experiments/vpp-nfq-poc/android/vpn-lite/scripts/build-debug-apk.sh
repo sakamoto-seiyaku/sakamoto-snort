@@ -1,227 +1,78 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Active SAKAMOTO-46 APK build: package one VPP runtime and its dependencies.
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 app_dir="$(cd -- "${script_dir}/.." && pwd)"
 poc_dir="$(cd -- "${app_dir}/../.." && pwd)"
-repo_root="$(cd -- "${poc_dir}/../.." && pwd)"
-
 sdk_prebuilts="${ANDROID_LINEAGE_SDK_PREBUILTS:-/home/js/android/lineage/prebuilts/sdk}"
 android_jar="${ANDROID_JAR:-${sdk_prebuilts}/36/public/android.jar}"
 aapt2="${AAPT2:-${sdk_prebuilts}/tools/linux/bin/aapt2}"
 d8_jar="${D8_JAR:-${sdk_prebuilts}/tools/linux/lib/d8.jar}"
 apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
-apk_version_code="${APK_VERSION_CODE:-1}"
-apk_version_name="${APK_VERSION_NAME:-0.1-debug}"
-ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
-clang="${ANDROID_CLANG:-${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
-rustc="${RUSTC:-$(command -v rustc || true)}"
-rust_source="${VPP_ANDROID_RUST_SOURCE:-${app_dir}/rust/vpp_rust_control_probe.rs}"
-default_vpp_stage_dir="${poc_dir}/work/android-vpp-release-no-multiarch-no-ipsec-idle-stage"
-legacy_vpp_stage_dir="${poc_dir}/work/android-vpp-core-stage"
-vpp_stage_dir="${VPP_STAGE_DIR:-${default_vpp_stage_dir}}"
-if [[ -z "${VPP_STAGE_DIR:-}" && ! -x "$vpp_stage_dir/bin/vpp" && -x "$legacy_vpp_stage_dir/bin/vpp" ]]; then
-  echo "warning: optimized VPP stage not found, falling back to legacy stage: $legacy_vpp_stage_dir" >&2
-  vpp_stage_dir="$legacy_vpp_stage_dir"
+stage_dir="${VPP_STAGE_DIR:-${poc_dir}/work/android-vpp-release-no-multiarch-no-ipsec-idle-stage}"
+legacy_stage_dir="${poc_dir}/work/android-vpp-core-stage"
+if [[ -z "${VPP_STAGE_DIR:-}" && ! -x "$stage_dir/bin/vpp" && -x "$legacy_stage_dir/bin/vpp" ]]; then
+  stage_dir="$legacy_stage_dir"
 fi
-android_vpp_build_dir="${VPP_ANDROID_BUILD_DIR:-${poc_dir}/work/vpp-android-configure-probe}"
-android_vpp_client_lib_dir="${VPP_ANDROID_CLIENT_LIB_DIR:-${android_vpp_build_dir}/lib/aarch64-linux-android}"
-android_vpp_src_dir="${VPP_ANDROID_SOURCE_DIR:-${poc_dir}/work/vpp/src}"
-hev_stage_dir="${ANDROID_HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
-daemon_artifact="${SNORT_ANDROID_DAEMON_ARTIFACT:-${repo_root}/build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so}"
-expected_daemon_sha256="${SNORT_EXPECTED_DAEMON_SHA256:-}"
 
-die() {
-  echo "error: $*" >&2
-  exit 1
-}
-
-require_file() {
-  [[ -f "$1" ]] || die "missing file: $1"
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
-}
-
-require_file "$android_jar"
-require_file "$aapt2"
-require_file "$d8_jar"
-require_file "$apksigner_jar"
-require_file "$clang"
-[[ -n "$rustc" && -x "$rustc" ]] || die "missing executable rustc: $rustc"
-require_file "$rust_source"
-require_cmd javac
-require_cmd java
-require_cmd keytool
-require_cmd zip
-command -v "$zipalign_bin" >/dev/null 2>&1 || [[ -x "$zipalign_bin" ]] || die "missing zipalign: $zipalign_bin"
-require_file "$android_vpp_client_lib_dir/libvapiclient.so"
-require_file "$android_vpp_client_lib_dir/libvlibmemoryclient.so"
-require_file "$android_vpp_build_dir/CMakeFiles/vpp-api/vapi/tun_poc.api.vapi.h"
-require_file "$daemon_artifact"
+die() { echo "error: $*" >&2; exit 1; }
+for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
+  [[ -f "$file" ]] || die "missing file: $file"
+done
+command -v javac >/dev/null || die "missing javac"
+command -v java >/dev/null || die "missing java"
+command -v keytool >/dev/null || die "missing keytool"
+command -v zip >/dev/null || die "missing zip"
+command -v "$zipalign_bin" >/dev/null || die "missing zipalign: $zipalign_bin"
 
 build_dir="$app_dir/build"
 classes_dir="$build_dir/classes"
 dex_dir="$build_dir/dex"
-gen_dir="$build_dir/generated"
-jni_root="$build_dir/jni"
-jni_dir="$jni_root/lib/arm64-v8a"
+jni_dir="$build_dir/jni/lib/arm64-v8a"
 assets_dir="$build_dir/assets"
 intermediates="$build_dir/intermediates"
 outputs="$build_dir/outputs"
-manifest="$app_dir/src/main/AndroidManifest.xml"
-keystore="$build_dir/debug.keystore"
+rm -rf "$classes_dir" "$dex_dir" "$build_dir/jni" "$assets_dir" "$intermediates" "$outputs"
+mkdir -p "$classes_dir" "$dex_dir" "$jni_dir" "$assets_dir" "$intermediates" "$outputs"
 
-rm -rf "$classes_dir" "$dex_dir" "$gen_dir" "$jni_root" "$assets_dir" "$intermediates" "$outputs"
-mkdir -p "$classes_dir" "$dex_dir" "$gen_dir" "$jni_dir" "$assets_dir" "$intermediates" "$outputs"
+cp "$stage_dir/bin/vpp" "$jni_dir/libvpp_runtime.so"
+cp "$stage_dir/bin/vppctl" "$jni_dir/libvppctl.so"
+chmod 755 "$jni_dir/libvpp_runtime.so" "$jni_dir/libvppctl.so"
+for so in "$stage_dir"/lib/*.so "$stage_dir"/plugins/*.so; do
+  [[ -f "$so" ]] || continue
+  cp "$so" "$jni_dir/$(basename "$so")"
+  chmod 755 "$jni_dir/$(basename "$so")"
+done
+version="${VPP_RUNTIME_VERSION:-$(strings "$stage_dir/bin/vpp" | awk '/vpp v[0-9]/{print $2; exit}')}"
+[[ "$version" =~ ^v[0-9]+\.[0-9]+ ]] || die "unable to determine VPP version"
+printf 'version=%s\nabi=arm64-v8a\nprotocol=vpp-runtime-health/v1\n' "$version" >"$assets_dir/vpp-runtime.properties"
+sha256sum "$jni_dir/libvpp_runtime.so" | awk '{print $1}' >"$assets_dir/vpp-runtime.sha256"
 
-echo "packaging APK-native daemon artifact"
-cp "$daemon_artifact" "$jni_dir/libsucre_snortd.so"
-if [[ -z "$expected_daemon_sha256" ]]; then
-  expected_daemon_sha256="$(sha256sum "$daemon_artifact" | awk '{print $1}')"
-fi
-[[ "$expected_daemon_sha256" =~ ^[[:xdigit:]]{64}$ ]] || die "invalid expected daemon SHA-256: $expected_daemon_sha256"
-printf '%s\n' "$expected_daemon_sha256" >"$assets_dir/daemon.sha256"
-echo "expected_daemon_sha256=$expected_daemon_sha256"
-
-rust_staticlib="$intermediates/libvpp_rust_control_probe.a"
-echo "building Rust Android control probe"
-"$rustc" \
-  --edition=2021 \
-  --target aarch64-linux-android \
-  --crate-type staticlib \
-  -C opt-level=2 \
-  -C panic=abort \
-  -o "$rust_staticlib" \
-  "$rust_source"
-
-echo "vpp_stage_dir=$vpp_stage_dir"
-echo "android_vpp_client_lib_dir=$android_vpp_client_lib_dir"
-echo "building JNI probe"
-"$clang" \
-  -shared \
-  -fPIC \
-  -O2 \
-  -Wall \
-  -Wextra \
-  -Werror \
-  -Wno-unused-parameter \
-  -I"$poc_dir/clients" \
-  -I"$android_vpp_src_dir" \
-  -I"$android_vpp_src_dir/vpp-api" \
-  -I"$android_vpp_build_dir/CMakeFiles" \
-  -I"$android_vpp_build_dir/CMakeFiles/vpp-api" \
-  -I"$android_vpp_build_dir/CMakeFiles/vpp-api/vapi" \
-  -o "$jni_dir/libvpnfdprobe.so" \
-  "$app_dir/native/vpn_fd_probe.c" \
-  "$app_dir/native/vpp_control_probe.c" \
-  "$app_dir/native/vpp_rust_control_probe.c" \
-  "$poc_dir/clients/tun_poc_control_shim.c" \
-  "$rust_staticlib" \
-  -L"$android_vpp_client_lib_dir" \
-  -lvapiclient \
-  -lvlibmemoryclient \
-  -lvlibapi \
-  -lsvm \
-  -lvppinfra \
-  -llog \
-  -ldl
-
-if [[ -x "$vpp_stage_dir/bin/vpp" ]]; then
-  echo "packaging VPP runtime"
-  cp "$vpp_stage_dir/bin/vpp" "$jni_dir/libvpppoc.so"
-  if [[ -x "$vpp_stage_dir/bin/vppctl" ]]; then
-    cp "$vpp_stage_dir/bin/vppctl" "$jni_dir/libvppctlpoc.so"
-  fi
-  for so in "$vpp_stage_dir"/lib/*.so "$vpp_stage_dir"/plugins/*.so; do
-    [[ -f "$so" ]] || continue
-    cp "$so" "$jni_dir/$(basename "$so")"
-  done
-  cp "$android_vpp_client_lib_dir/libvlibmemoryclient.so" "$jni_dir/"
-  cp "$android_vpp_client_lib_dir/libvapiclient.so" "$jni_dir/"
-else
-  echo "warning: VPP stage not found, building Phase 1-only APK: $vpp_stage_dir" >&2
-fi
-
-if [[ -f "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" ]]; then
-  echo "packaging HEV runtime"
-  cp "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" "$jni_dir/"
-else
-  echo "warning: HEV stage not found, building APK without HEV: $hev_stage_dir" >&2
-fi
-
-echo "compiling Java sources"
-mapfile -t java_sources < <(find "$app_dir/src/main/java" -name '*.java' | sort)
-[[ "${#java_sources[@]}" -gt 0 ]] || die "no Java sources found"
-javac -Xlint:-options -source 8 -target 8 -classpath "$android_jar" -d "$classes_dir" "${java_sources[@]}"
-
-echo "dexing"
+mapfile -t sources < <(find "$app_dir/src/main/java" -name '*.java' | sort)
+javac -Xlint:-options -source 8 -target 8 -classpath "$android_jar" -d "$classes_dir" "${sources[@]}"
 mapfile -t class_files < <(find "$classes_dir" -name '*.class' | sort)
-[[ "${#class_files[@]}" -gt 0 ]] || die "no class files found"
-java -cp "$d8_jar" com.android.tools.r8.D8 \
-  --min-api 31 \
-  --lib "$android_jar" \
-  --output "$dex_dir" \
-  "${class_files[@]}"
+java -cp "$d8_jar" com.android.tools.r8.D8 --min-api 31 --lib "$android_jar" --output "$dex_dir" "${class_files[@]}"
 
 base_apk="$intermediates/base.apk"
 unsigned_apk="$intermediates/unsigned.apk"
 aligned_apk="$intermediates/aligned.apk"
-debug_apk="$outputs/snort-vpn-lite-debug.apk"
-
-echo "linking APK"
-"$aapt2" link \
-  -o "$base_apk" \
-  -I "$android_jar" \
-  --manifest "$manifest" \
-  --java "$gen_dir" \
-  --min-sdk-version 31 \
-  --target-sdk-version 36 \
-  --version-code "$apk_version_code" \
-  --version-name "$apk_version_name" \
-  --debug-mode
-
+apk="$outputs/sakamoto-runtime-debug.apk"
+"$aapt2" link -o "$base_apk" -I "$android_jar" --manifest "$app_dir/src/main/AndroidManifest.xml" \
+  --min-sdk-version 31 --target-sdk-version 36 --version-code "${APK_VERSION_CODE:-1}" \
+  --version-name "${APK_VERSION_NAME:-0.1-runtime-debug}" --debug-mode
 cp "$base_apk" "$unsigned_apk"
-(
-  cd "$dex_dir"
-  zip -q -r "$unsigned_apk" classes.dex
-)
-(
-  cd "$jni_root"
-  zip -q -r "$unsigned_apk" lib
-)
-(
-  cd "$build_dir"
-  zip -q -r "$unsigned_apk" assets
-)
-
-if [[ ! -f "$keystore" ]]; then
-  echo "creating debug keystore"
-  keytool -genkeypair \
-    -keystore "$keystore" \
-    -storepass android \
-    -keypass android \
-    -alias androiddebugkey \
-    -keyalg RSA \
-    -keysize 2048 \
-    -validity 10000 \
+(cd "$dex_dir" && zip -q -r "$unsigned_apk" classes.dex)
+(cd "$build_dir/jni" && zip -q -r "$unsigned_apk" lib)
+(cd "$build_dir" && zip -q -r "$unsigned_apk" assets)
+if [[ ! -f "$build_dir/debug.keystore" ]]; then
+  keytool -genkeypair -keystore "$build_dir/debug.keystore" -storepass android -keypass android \
+    -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
     -dname "CN=Android Debug,O=sakamoto,C=US" >/dev/null
 fi
-
-echo "zipalign"
 "$zipalign_bin" -f -p 4 "$unsigned_apk" "$aligned_apk"
-
-echo "signing"
-java -jar "$apksigner_jar" sign \
-  --ks "$keystore" \
-  --ks-pass pass:android \
-  --key-pass pass:android \
-  --ks-key-alias androiddebugkey \
-  --out "$debug_apk" \
-  "$aligned_apk"
-
-java -jar "$apksigner_jar" verify --print-certs "$debug_apk" >/dev/null
-
-echo "ok: $debug_apk"
+java -jar "$apksigner_jar" sign --ks "$build_dir/debug.keystore" --ks-pass pass:android \
+  --key-pass pass:android --ks-key-alias androiddebugkey --out "$apk" "$aligned_apk"
+java -jar "$apksigner_jar" verify --print-certs "$apk" >/dev/null
+echo "ok: $apk"

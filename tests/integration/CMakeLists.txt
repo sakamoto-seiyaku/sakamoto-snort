@@ -34,6 +34,21 @@ add_custom_target(
   VERBATIM
 )
 
+add_sucre_snort_shell_test(
+  android-runtime-lifecycle
+  "${SUCRE_SNORT_INTEGRATION_ROOT}/android-runtime-lifecycle.sh"
+  "android-runtime;device;lifecycle;smoke"
+)
+
+add_custom_target(
+  snort-dx-android-runtime
+  COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R ^android-runtime-lifecycle$
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+  COMMENT "Run Android RuntimeService lifecycle smoke via CTest"
+  USES_TERMINAL
+  VERBATIM
+)
+
 if(TARGET sucre-snort-ctl)
   add_dependencies(snort-dx-snort10-base sucre-snort-ctl)
 endif()
