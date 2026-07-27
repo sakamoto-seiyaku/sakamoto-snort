@@ -89,12 +89,17 @@ struct CanonicalFlowKey {
     friend bool operator==(const CanonicalFlowKey &, const CanonicalFlowKey &) = default;
 };
 
-struct WorkerLayout {
-    std::uint32_t workerCount = 1;
-    std::uint64_t hashSeed = 0;
-
+class WorkerLayout final {
+public:
     WorkerLayout() = default;
     WorkerLayout(std::uint32_t count, std::uint64_t seed);
+
+    [[nodiscard]] std::uint32_t workerCount() const noexcept { return workerCount_; }
+    [[nodiscard]] std::uint64_t hashSeed() const noexcept { return hashSeed_; }
+
+private:
+    std::uint32_t workerCount_ = 1;
+    std::uint64_t hashSeed_ = 0;
 };
 
 class OwnerSelector final {
@@ -136,7 +141,9 @@ private:
     std::uint32_t duplicateTerminalAttempts_ = 0;
 };
 
-struct PacketEnvelope {
+using PacketDescriptorId = std::uint32_t;
+
+struct PacketDescriptor {
     PacketFacts facts;
     PacketLease lease;
     std::uint32_t targetWorker = std::numeric_limits<std::uint32_t>::max();
@@ -146,7 +153,8 @@ struct DistributionCounters {
     std::uint64_t directPackets = 0;
     std::uint64_t parseDrops = 0;
     std::uint64_t capacityDrops = 0;
-    std::uint64_t terminalDrops = 0;
+    std::uint64_t alreadyTerminalPackets = 0;
+    std::uint64_t staleDescriptorHandles = 0;
     std::uint64_t normalWorkerHandoffs = 0;
 };
 
@@ -158,17 +166,31 @@ class PrimarySoftwareDistribution final {
 public:
     PrimarySoftwareDistribution(WorkerLayout layout, std::size_t queueCapacity);
 
-    [[nodiscard]] std::size_t submit(std::span<PacketEnvelope> packets) noexcept;
+    [[nodiscard]] std::size_t submit(std::span<const PacketFacts> packets) noexcept;
     [[nodiscard]] std::size_t queueDepth(std::uint32_t worker) const noexcept;
-    [[nodiscard]] const std::vector<PacketEnvelope *> &queue(
-        std::uint32_t worker) const noexcept;
+    [[nodiscard]] std::optional<PacketDescriptorId> dequeue(
+        std::uint32_t worker) noexcept;
+    [[nodiscard]] PacketDescriptor *descriptor(PacketDescriptorId id) noexcept;
+    [[nodiscard]] const PacketDescriptor *descriptor(PacketDescriptorId id) const noexcept;
+    [[nodiscard]] bool complete(PacketDescriptorId id, PacketLeaseOutcome outcome) noexcept;
+    [[nodiscard]] bool requeueCorrective(PacketDescriptorId id,
+                                          std::uint32_t targetWorker) noexcept;
     [[nodiscard]] const DistributionCounters &counters() const noexcept { return counters_; }
     [[nodiscard]] const OwnerSelector &selector() const noexcept { return selector_; }
 
 private:
+    struct WorkerQueue {
+        std::vector<PacketDescriptorId> ids;
+        std::size_t head = 0;
+    };
+
     OwnerSelector selector_;
     std::size_t queueCapacity_ = 0;
-    std::vector<std::vector<PacketEnvelope *>> queues_;
+    std::vector<PacketDescriptor> descriptors_;
+    std::vector<PacketDescriptorId> freeDescriptors_;
+    std::vector<WorkerQueue> queues_;
+    std::vector<bool> activeDescriptors_;
+    std::vector<bool> queuedDescriptors_;
     DistributionCounters counters_;
 };
 
@@ -187,13 +209,34 @@ struct OwnerGuardCounters {
 
 class OwnerGuard final {
 public:
+    explicit OwnerGuard(WorkerLayout layout);
+
     [[nodiscard]] OwnerGuardDecision check(
-        std::uint32_t currentWorker, std::uint32_t expectedWorker,
+        std::uint32_t currentWorker, const PacketFacts &facts,
         PacketLease &lease) noexcept;
     [[nodiscard]] const OwnerGuardCounters &counters() const noexcept { return counters_; }
 
 private:
+    OwnerSelector selector_;
     OwnerGuardCounters counters_;
+};
+
+/** Pragmatic shared seam used by both normalized packet-capture adapters. */
+class FlowSteeringRuntime final {
+public:
+    FlowSteeringRuntime(WorkerLayout layout, std::size_t queueCapacity)
+        : distribution_(layout, queueCapacity), guard_(layout) {}
+
+    [[nodiscard]] PrimarySoftwareDistribution &distribution() noexcept { return distribution_; }
+    [[nodiscard]] const PrimarySoftwareDistribution &distribution() const noexcept {
+        return distribution_;
+    }
+    [[nodiscard]] OwnerGuard &ownerGuard() noexcept { return guard_; }
+    [[nodiscard]] const OwnerGuard &ownerGuard() const noexcept { return guard_; }
+
+private:
+    PrimarySoftwareDistribution distribution_;
+    OwnerGuard guard_;
 };
 
 } // namespace SnortDatapath::Flow
