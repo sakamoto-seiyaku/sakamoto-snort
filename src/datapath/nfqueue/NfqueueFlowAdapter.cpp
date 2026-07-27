@@ -30,7 +30,8 @@ namespace SnortDatapath::Nfqueue {
 
 NfqueueFlowAdapter::NfqueueFlowAdapter(NfqueueFlowAdapterConfig config)
     : config_(validateConfig(std::move(config))),
-      steering_(Flow::WorkerLayout(config_.workerCount, config_.hashSeed), config_.queueCapacity) {}
+      steering_(Flow::WorkerLayout(config_.workerCount, config_.hashSeed), config_.queueCapacity),
+      graphGate_(steering_) {}
 
 NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const std::uint32_t captureQueue, const std::uint8_t hook,
@@ -75,46 +76,14 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const auto owner = distribution.selector().ownerFor(*key);
     std::array<Flow::PacketSubmission, 1> submissions{
         Flow::PacketSubmission{.facts = std::move(facts)}};
-    if (distribution.submit(std::span<Flow::PacketSubmission>{submissions}) != 1) {
+    const auto graphResult = graphGate_.inject(submissions[0], owner);
+    if (graphResult == Flow::GraphInjectionResult::CapacityDrop) {
         ++counters_.capacityPassThroughPackets;
         return NfqueueFlowAdapterResult::FailOpenCapacity;
     }
-
-    const auto descriptorId = distribution.dequeue(owner);
-    if (!descriptorId.has_value() || distribution.descriptor(*descriptorId) == nullptr) {
-        ++counters_.ownerFaultPassThroughPackets;
-        return NfqueueFlowAdapterResult::FailOpenOwnerFault;
-    }
-
-    const auto decision = distribution.checkOwner(*descriptorId, owner, steering_.ownerGuard());
-    if (decision == Flow::OwnerGuardDecision::Local
-        && distribution.complete(*descriptorId, Flow::PacketLeaseOutcome::Accepted)) {
+    if (graphResult == Flow::GraphInjectionResult::Accepted) {
         ++counters_.acceptedPackets;
         return NfqueueFlowAdapterResult::FlowAccepted;
-    }
-
-    if (decision == Flow::OwnerGuardDecision::CorrectiveHandoff
-        && distribution.requeueCorrective(*descriptorId, owner)) {
-        const auto retryId = distribution.dequeue(owner);
-        if (retryId.has_value() && distribution.descriptor(*retryId) != nullptr
-            && distribution.checkOwner(*retryId, owner, steering_.ownerGuard())
-                   == Flow::OwnerGuardDecision::Local
-            && distribution.complete(*retryId, Flow::PacketLeaseOutcome::Accepted)) {
-            ++counters_.acceptedPackets;
-            return NfqueueFlowAdapterResult::FlowAccepted;
-        }
-        if (retryId.has_value()) {
-            if (distribution.descriptor(*retryId) != nullptr) {
-                (void)distribution.complete(*retryId, Flow::PacketLeaseOutcome::Dropped);
-            }
-        }
-    }
-
-    // The owner guard owns a fault's terminal DROP state. The distribution
-    // releases the descriptor while the external NFQUEUE verdict stays
-    // fail-open for the packet capture adapter.
-    if (distribution.descriptor(*descriptorId) != nullptr) {
-        (void)distribution.complete(*descriptorId, Flow::PacketLeaseOutcome::Dropped);
     }
     ++counters_.ownerFaultPassThroughPackets;
     return NfqueueFlowAdapterResult::FailOpenOwnerFault;

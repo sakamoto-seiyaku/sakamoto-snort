@@ -71,6 +71,29 @@ TEST(VppGraphInjectionTest, GraphGateBoundsOneCorrectiveHandoff) {
     EXPECT_EQ(gate.inject(submission, wrongWorker), GraphInjectionResult::Accepted);
     EXPECT_EQ(gate.counters().correctiveHandoffs, 1U);
     EXPECT_EQ(gate.counters().ownerFaultDrops, 0U);
+
+    OwnerGuard guard(WorkerLayout{2, 0x55aa});
+    PacketLease lease;
+    EXPECT_EQ(guard.check(wrongWorker, packetFacts, lease), OwnerGuardDecision::CorrectiveHandoff);
+    EXPECT_EQ(guard.check(wrongWorker, packetFacts, lease), OwnerGuardDecision::Drop);
+    EXPECT_EQ(guard.counters().secondMismatchDrops, 1U);
+}
+
+TEST(VppGraphInjectionTest, GraphGateReportsBoundedTargetCongestion) {
+    FlowSteeringRuntime runtime(WorkerLayout{1, 0x55aa}, 1);
+    FlowGraphInjectionGate gate(runtime);
+    PacketSubmission blocker{.facts = facts(AdapterKind::RootNfqueue)};
+    ASSERT_EQ(runtime.distribution().submit(std::span<PacketSubmission>(&blocker, 1)), 1U);
+
+    PacketSubmission congested{.facts = facts(AdapterKind::VpnTun, true)};
+    EXPECT_EQ(gate.inject(congested, 0), GraphInjectionResult::CapacityDrop);
+    EXPECT_EQ(gate.counters().capacityDrops, 1U);
+
+    const auto owner = runtime.distribution().selector().ownerFor(
+        *CanonicalFlowKey::from(blocker.facts));
+    const auto blockerId = runtime.distribution().dequeue(owner);
+    ASSERT_TRUE(blockerId.has_value());
+    EXPECT_TRUE(runtime.distribution().complete(*blockerId, PacketLeaseOutcome::Accepted));
 }
 
 TEST(VppGraphInjectionTest, GraphGateRejectsNonCanonicalPacketDeterministically) {

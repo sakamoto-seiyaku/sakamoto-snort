@@ -99,6 +99,7 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueFlowAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/PacketCaptureAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
 )
 add_sucre_snort_host_test(
   vpp_graph_injection_tests

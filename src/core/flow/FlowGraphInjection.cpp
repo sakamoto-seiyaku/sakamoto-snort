@@ -26,7 +26,17 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
     }
 
     const auto descriptorId = distribution.dequeue(owner);
-    if (!descriptorId.has_value() || distribution.descriptor(*descriptorId) == nullptr) {
+    const auto *descriptor = descriptorId.has_value()
+        ? distribution.descriptor(*descriptorId)
+        : nullptr;
+    const auto descriptorKey = descriptor == nullptr
+        ? std::optional<CanonicalFlowKey>{}
+        : CanonicalFlowKey::from(descriptor->facts);
+    if (!descriptorId.has_value() || descriptor == nullptr || !descriptorKey.has_value()
+        || distribution.selector().ownerFor(*descriptorKey) != owner) {
+        if (descriptorId.has_value() && descriptor != nullptr) {
+            (void)distribution.complete(*descriptorId, PacketLeaseOutcome::Dropped);
+        }
         ++counters_.ownerFaultDrops;
         return GraphInjectionResult::OwnerFaultDrop;
     }

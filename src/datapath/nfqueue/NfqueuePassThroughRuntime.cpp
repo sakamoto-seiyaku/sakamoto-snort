@@ -321,12 +321,14 @@ DualStackPassThroughRuntime::~DualStackPassThroughRuntime() {
 
 bool DualStackPassThroughRuntime::start() {
     workers_.join();
+    ready_.store(false, std::memory_order_release);
     const auto runtimePlan = makeDualStackPassThroughRuntimePlan(config_);
 
     SystemHookCommandExecutor executor;
     const bool hooksInstalled = installDualStackPassThroughHooks(runtimePlan.hookPlan, executor);
     if (!hooksInstalled) {
         std::cerr << "Dual-stack NFQUEUE hook install failed; listener startup skipped\n";
+        ready_.store(false, std::memory_order_release);
         return false;
     }
 

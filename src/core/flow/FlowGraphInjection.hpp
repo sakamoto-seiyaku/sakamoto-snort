@@ -33,6 +33,10 @@ struct GraphInjectionCounters {
  * adapter can feed normalized PacketSubmissions here; the gate performs the
  * direct owner enqueue, owner guard, corrective handoff, and completion in
  * one bounded transaction.
+ *
+ * The gate is lane-confined and does not add a second lock around the
+ * runtime. Callers sharing it must serialize inject(); the NFQUEUE adapter
+ * owns that serialization for its listener set.
  */
 class FlowGraphInjectionGate final {
 public:

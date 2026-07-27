@@ -8,7 +8,7 @@
 #include <NfqueueHookPlan.hpp>
 #include <NfqueueTopology.hpp>
 #include <RuntimeControl.hpp>
-#include <FlowSteering.hpp>
+#include <FlowGraphInjection.hpp>
 
 #include <atomic>
 #include <cstddef>
@@ -112,6 +112,7 @@ public:
 private:
     NfqueueFlowAdapterConfig config_;
     Flow::FlowSteeringRuntime steering_;
+    Flow::FlowGraphInjectionGate graphGate_;
     mutable std::mutex mutex_;
     NfqueueFlowAdapterCounters counters_;
 };
