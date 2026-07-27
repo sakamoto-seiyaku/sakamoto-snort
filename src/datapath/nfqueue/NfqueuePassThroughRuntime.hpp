@@ -44,6 +44,13 @@ struct NfqueueFlowAdapterConfig {
     Flow::FragmentSteeringConfig fragmentSteering;
 };
 
+struct NfqueuePacketMetadata final {
+    std::uint32_t linuxUid = 0;
+    std::uint32_t inputInterfaceIndex = 0;
+    std::uint32_t outputInterfaceIndex = 0;
+    std::uint32_t networkContext = 0;
+};
+
 struct DualStackPassThroughRuntimeConfig {
     std::string inputChain = "sucre-snort_INPUT";
     std::string outputChain = "sucre-snort_OUTPUT";
@@ -157,7 +164,8 @@ public:
     [[nodiscard]] NfqueueFlowAdapterResult process(
         std::uint32_t captureQueue, std::uint8_t hook,
         std::span<const std::uint8_t> payload,
-        std::uint32_t originalLengthHint = 0) noexcept;
+        std::uint32_t originalLengthHint = 0,
+        NfqueuePacketMetadata metadata = {}) noexcept;
     void recordVerdictSendFailure() noexcept;
 
     [[nodiscard]] NfqueueFlowAdapterCounters counters() const noexcept;

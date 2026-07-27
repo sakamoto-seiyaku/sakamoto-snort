@@ -37,7 +37,8 @@ NfqueueFlowAdapter::NfqueueFlowAdapter(NfqueueFlowAdapterConfig config)
 NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const std::uint32_t captureQueue, const std::uint8_t hook,
     const std::span<const std::uint8_t> payload,
-    const std::uint32_t originalLengthHint) noexcept {
+    const std::uint32_t originalLengthHint,
+    const NfqueuePacketMetadata metadata) noexcept {
     std::lock_guard lock(mutex_);
     ++counters_.packetsSeen;
 
@@ -52,10 +53,14 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
         : Flow::DevicePacketDirection::Output;
     const Flow::FlowDomain domain{
         .adapter = Flow::AdapterKind::RootNfqueue,
-        .linuxUid = 0,
+        .linuxUid = metadata.linuxUid,
         .captureQueue = captureQueue,
-        .networkContext = 0,
+        .networkContext = metadata.networkContext,
         .runtimeProfile = 0,
+        .interfaceIndex = hookDirection.has_value()
+            && nfqueueDirectionIsInput(*hookDirection)
+            ? metadata.inputInterfaceIndex
+            : metadata.outputInterfaceIndex,
     };
     const auto originalLength = originalLengthHint == 0
         ? static_cast<std::uint32_t>(payload.size())

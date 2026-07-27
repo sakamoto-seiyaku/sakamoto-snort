@@ -55,6 +55,7 @@ struct FlowDomain {
     std::uint32_t captureQueue = 0;
     std::uint32_t networkContext = 0;
     std::uint32_t runtimeProfile = 0;
+    std::uint32_t interfaceIndex = 0;
 };
 
 struct PacketFacts {

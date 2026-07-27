@@ -187,6 +187,16 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     if (attrs[NFQA_CAP_LEN] != nullptr) {
         originalLengthHint = ntohl(mnl_attr_get_u32(attrs[NFQA_CAP_LEN]));
     }
+    SnortDatapath::Nfqueue::NfqueuePacketMetadata metadata{};
+    if (attrs[NFQA_UID] != nullptr) {
+        metadata.linuxUid = ntohl(mnl_attr_get_u32(attrs[NFQA_UID]));
+    }
+    if (attrs[NFQA_IFINDEX_INDEV] != nullptr) {
+        metadata.inputInterfaceIndex = ntohl(mnl_attr_get_u32(attrs[NFQA_IFINDEX_INDEV]));
+    }
+    if (attrs[NFQA_IFINDEX_OUTDEV] != nullptr) {
+        metadata.outputInterfaceIndex = ntohl(mnl_attr_get_u32(attrs[NFQA_IFINDEX_OUTDEV]));
+    }
 
     const auto packetId = ntohl(header->packet_id);
     const auto admission = context->leaseAdapter->admit(packetId);
@@ -202,7 +212,7 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     const std::span<const std::uint8_t> packetPayload(payload, payloadLength);
     const auto verdictFailuresBefore = context->leaseAdapter->counters().verdictSendFailures;
     const auto gateResult = context->flowAdapter->process(
-        context->queue, header->hook, packetPayload, originalLengthHint);
+        context->queue, header->hook, packetPayload, originalLengthHint, metadata);
     const auto terminalReason = gateResult
         == SnortDatapath::Nfqueue::NfqueueFlowAdapterResult::FlowAccepted
         ? SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::Accepted
