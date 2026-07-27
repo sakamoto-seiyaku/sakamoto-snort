@@ -5,6 +5,7 @@ set(
   "${CMAKE_SOURCE_DIR}/src/control/vnext"
   "${CMAKE_SOURCE_DIR}/src/platform/android"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue"
+  "${CMAKE_SOURCE_DIR}/src/core/flow"
   "${CMAKE_SOURCE_DIR}/src/core/packet"
   "${CMAKE_SOURCE_DIR}/src/core/policy"
   "${CMAKE_SOURCE_DIR}/src/core/metrics"
@@ -22,4 +23,5 @@ set(
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueueHookPlan.cpp"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueuePassThrough.cpp"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueuePassThroughRuntime.cpp"
+  "${CMAKE_SOURCE_DIR}/src/core/flow/FlowSteering.cpp"
 )

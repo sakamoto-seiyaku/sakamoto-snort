@@ -33,6 +33,7 @@ set(
   "${SUCRE_SNORT_ROOT}/src/control/vnext"
   "${SUCRE_SNORT_ROOT}/src/platform/android"
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue"
+  "${SUCRE_SNORT_ROOT}/src/core/flow"
   "${SUCRE_SNORT_ROOT}/src/core/packet"
   "${SUCRE_SNORT_ROOT}/src/core/policy"
   "${SUCRE_SNORT_ROOT}/src/core/metrics"
@@ -87,6 +88,11 @@ add_sucre_snort_host_test(package_state_tests package_state_tests.cpp)
 add_sucre_snort_host_test(reason_metrics_tests reason_metrics_tests.cpp)
 add_sucre_snort_host_test(ipv6_l4_walker_tests ipv6_l4_walker_tests.cpp)
 add_sucre_snort_host_test(nfqueue_topology_tests nfqueue_topology_tests.cpp)
+add_sucre_snort_host_test(
+  flow_steering_tests
+  flow_steering_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+)
 add_sucre_snort_host_test(
   nfqueue_ipv4_pass_through_tests
   nfqueue_ipv4_pass_through_tests.cpp
