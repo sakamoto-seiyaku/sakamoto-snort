@@ -122,6 +122,12 @@ enum class PacketLeaseOutcome : std::uint8_t {
 /** One adapter packet may acquire exactly one terminal outcome. */
 class PacketLease final {
 public:
+    PacketLease() = default;
+    PacketLease(const PacketLease &) = delete;
+    PacketLease &operator=(const PacketLease &) = delete;
+    PacketLease(PacketLease &&other) noexcept;
+    PacketLease &operator=(PacketLease &&other) noexcept;
+
     [[nodiscard]] bool accept() noexcept;
     [[nodiscard]] bool drop() noexcept;
     [[nodiscard]] bool requestCorrectiveHandoff() noexcept;
@@ -141,7 +147,13 @@ private:
     std::uint32_t duplicateTerminalAttempts_ = 0;
 };
 
-using PacketDescriptorId = std::uint32_t;
+using PacketDescriptorSlot = std::uint32_t;
+using PacketDescriptorId = std::uint64_t;
+
+struct PacketSubmission {
+    PacketFacts facts;
+    PacketLease lease;
+};
 
 struct PacketDescriptor {
     PacketFacts facts;
@@ -166,6 +178,7 @@ class PrimarySoftwareDistribution final {
 public:
     PrimarySoftwareDistribution(WorkerLayout layout, std::size_t queueCapacity);
 
+    [[nodiscard]] std::size_t submit(std::span<PacketSubmission> packets) noexcept;
     [[nodiscard]] std::size_t submit(std::span<const PacketFacts> packets) noexcept;
     [[nodiscard]] std::size_t queueDepth(std::uint32_t worker) const noexcept;
     [[nodiscard]] std::optional<PacketDescriptorId> dequeue(
@@ -187,11 +200,15 @@ private:
     OwnerSelector selector_;
     std::size_t queueCapacity_ = 0;
     std::vector<PacketDescriptor> descriptors_;
-    std::vector<PacketDescriptorId> freeDescriptors_;
+    std::vector<PacketDescriptorSlot> freeDescriptors_;
     std::vector<WorkerQueue> queues_;
     std::vector<bool> activeDescriptors_;
     std::vector<bool> queuedDescriptors_;
+    std::vector<std::uint32_t> descriptorGenerations_;
     DistributionCounters counters_;
+
+    bool enqueue(const PacketFacts &facts, PacketLease *lease) noexcept;
+    void releaseDropped(PacketDescriptorSlot slot) noexcept;
 };
 
 enum class OwnerGuardDecision : std::uint8_t {
@@ -210,6 +227,7 @@ struct OwnerGuardCounters {
 class OwnerGuard final {
 public:
     explicit OwnerGuard(WorkerLayout layout);
+    explicit OwnerGuard(const OwnerSelector &selector);
 
     [[nodiscard]] OwnerGuardDecision check(
         std::uint32_t currentWorker, const PacketFacts &facts,
@@ -225,7 +243,7 @@ private:
 class FlowSteeringRuntime final {
 public:
     FlowSteeringRuntime(WorkerLayout layout, std::size_t queueCapacity)
-        : distribution_(layout, queueCapacity), guard_(layout) {}
+        : distribution_(layout, queueCapacity), guard_(distribution_.selector()) {}
 
     [[nodiscard]] PrimarySoftwareDistribution &distribution() noexcept { return distribution_; }
     [[nodiscard]] const PrimarySoftwareDistribution &distribution() const noexcept {

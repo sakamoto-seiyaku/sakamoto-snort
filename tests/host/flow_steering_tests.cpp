@@ -204,4 +204,60 @@ TEST(FlowSteeringTest, PacketLeaseHasOneTerminalOutcome) {
     EXPECT_EQ(lease.duplicateTerminalAttempts(), 1U);
 }
 
+TEST(FlowSteeringTest, DescriptorHandlesRejectReusedStaleIds) {
+    PrimarySoftwareDistribution distribution(WorkerLayout{1, 7}, 1);
+    const auto facts = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                                 {10, 0, 0, 1}, {192, 0, 2, 1}, 40000, 443);
+    const auto key = CanonicalFlowKey::from(facts);
+    ASSERT_TRUE(key.has_value());
+    const auto owner = distribution.selector().ownerFor(*key);
+    const std::array first{facts};
+    ASSERT_EQ(distribution.submit(std::span<const PacketFacts>{first}), 1U);
+    const auto firstId = distribution.dequeue(owner);
+    ASSERT_TRUE(firstId.has_value());
+    ASSERT_TRUE(distribution.complete(*firstId, PacketLeaseOutcome::Accepted));
+
+    ASSERT_EQ(distribution.submit(std::span<const PacketFacts>{first}), 1U);
+    const auto secondId = distribution.dequeue(owner);
+    ASSERT_TRUE(secondId.has_value());
+    EXPECT_NE(*firstId, *secondId);
+    EXPECT_FALSE(distribution.complete(*firstId, PacketLeaseOutcome::Dropped));
+    EXPECT_TRUE(distribution.complete(*secondId, PacketLeaseOutcome::Accepted));
+}
+
+TEST(FlowSteeringTest, SubmissionRejectsCapacityWithTerminalLease) {
+    PrimarySoftwareDistribution distribution(WorkerLayout{1, 7}, 1);
+    const auto facts = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                                 {10, 0, 0, 1}, {192, 0, 2, 1}, 40000, 443);
+    std::array submissions{
+        PacketSubmission{.facts = facts},
+        PacketSubmission{.facts = facts},
+    };
+
+    EXPECT_EQ(distribution.submit(std::span<PacketSubmission>{submissions}), 1U);
+    EXPECT_EQ(distribution.counters().capacityDrops, 1U);
+    EXPECT_TRUE(submissions[0].lease.isTerminal());
+    EXPECT_TRUE(submissions[1].lease.isTerminal());
+}
+
+TEST(FlowSteeringTest, CorrectiveRequeueRejectsNonOwnerTarget) {
+    PrimarySoftwareDistribution distribution(WorkerLayout{2, 7}, 1);
+    const auto facts = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                                 {10, 0, 0, 1}, {192, 0, 2, 1}, 40000, 443);
+    const auto key = CanonicalFlowKey::from(facts);
+    ASSERT_TRUE(key.has_value());
+    const auto owner = distribution.selector().ownerFor(*key);
+    const auto wrongOwner = (owner + 1U) % 2U;
+    const std::array packets{facts};
+    ASSERT_EQ(distribution.submit(std::span<const PacketFacts>{packets}), 1U);
+    const auto descriptorId = distribution.dequeue(owner);
+    ASSERT_TRUE(descriptorId.has_value());
+    auto *descriptor = distribution.descriptor(*descriptorId);
+    ASSERT_NE(descriptor, nullptr);
+    ASSERT_TRUE(descriptor->lease.requestCorrectiveHandoff());
+
+    EXPECT_FALSE(distribution.requeueCorrective(*descriptorId, wrongOwner));
+    EXPECT_EQ(distribution.descriptor(*descriptorId), nullptr);
+}
+
 } // namespace

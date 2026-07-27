@@ -15,6 +15,7 @@ constexpr std::uint8_t kTcpProtocol = 6;
 constexpr std::uint8_t kUdpProtocol = 17;
 constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+constexpr std::uint64_t kDescriptorSlotMask = 0xffffffffULL;
 
 bool addressLess(const IpAddress &left, const IpAddress &right) noexcept {
     if (left.family != right.family) {
@@ -40,6 +41,33 @@ void hashAddress(std::uint64_t &hash, const IpAddress &address) noexcept {
 void hashU16(std::uint64_t &hash, const std::uint16_t value) noexcept {
     hashByte(hash, static_cast<std::uint8_t>(value >> 8U));
     hashByte(hash, static_cast<std::uint8_t>(value & 0xffU));
+}
+
+PacketDescriptorSlot descriptorSlot(const PacketDescriptorId id) noexcept {
+    return static_cast<PacketDescriptorSlot>(id & kDescriptorSlotMask);
+}
+
+std::uint32_t descriptorGeneration(const PacketDescriptorId id) noexcept {
+    return static_cast<std::uint32_t>(id >> 32U);
+}
+
+PacketDescriptorId makeDescriptorId(const PacketDescriptorSlot slot,
+                                    const std::uint32_t generation) noexcept {
+    return (static_cast<PacketDescriptorId>(generation) << 32U) | slot;
+}
+
+void compactQueue(std::vector<PacketDescriptorId> &ids, std::size_t &head) noexcept {
+    if (head == 0) {
+        return;
+    }
+    if (head == ids.size()) {
+        ids.clear();
+        head = 0;
+        return;
+    }
+    std::move(ids.begin() + static_cast<std::ptrdiff_t>(head), ids.end(), ids.begin());
+    ids.resize(ids.size() - head);
+    head = 0;
 }
 
 } // namespace
@@ -120,6 +148,26 @@ bool PacketLease::accept() noexcept {
     return true;
 }
 
+PacketLease::PacketLease(PacketLease &&other) noexcept
+    : outcome_(other.outcome_), corrections_(other.corrections_),
+      duplicateTerminalAttempts_(other.duplicateTerminalAttempts_) {
+    other.outcome_ = PacketLeaseOutcome::Dropped;
+    other.corrections_ = 0;
+    other.duplicateTerminalAttempts_ = 0;
+}
+
+PacketLease &PacketLease::operator=(PacketLease &&other) noexcept {
+    if (this != &other) {
+        outcome_ = other.outcome_;
+        corrections_ = other.corrections_;
+        duplicateTerminalAttempts_ = other.duplicateTerminalAttempts_;
+        other.outcome_ = PacketLeaseOutcome::Dropped;
+        other.corrections_ = 0;
+        other.duplicateTerminalAttempts_ = 0;
+    }
+    return *this;
+}
+
 bool PacketLease::drop() noexcept {
     if (isTerminal()) {
         ++duplicateTerminalAttempts_;
@@ -147,7 +195,7 @@ std::size_t checkedDescriptorCount(const WorkerLayout &layout, const std::size_t
         throw std::length_error("PrimarySoftwareDistribution descriptor pool is too large");
     }
     const auto count = queueCapacity * layout.workerCount();
-    if (count > std::numeric_limits<PacketDescriptorId>::max()) {
+    if (count > std::numeric_limits<PacketDescriptorSlot>::max()) {
         throw std::length_error("PrimarySoftwareDistribution descriptor id space is exhausted");
     }
     return count;
@@ -161,44 +209,83 @@ PrimarySoftwareDistribution::PrimarySoftwareDistribution(
       descriptors_(checkedDescriptorCount(layout, queueCapacity_)),
       freeDescriptors_(), queues_(layout.workerCount()),
       activeDescriptors_(descriptors_.size(), false),
-      queuedDescriptors_(descriptors_.size(), false) {
+      queuedDescriptors_(descriptors_.size(), false),
+      descriptorGenerations_(descriptors_.size(), 0) {
     freeDescriptors_.reserve(descriptors_.size());
     for (std::size_t index = descriptors_.size(); index > 0; --index) {
-        freeDescriptors_.push_back(static_cast<PacketDescriptorId>(index - 1));
+        freeDescriptors_.push_back(static_cast<PacketDescriptorSlot>(index - 1));
     }
     for (auto &queue : queues_) {
         queue.ids.reserve(queueCapacity_);
     }
 }
 
+bool PrimarySoftwareDistribution::enqueue(const PacketFacts &facts, PacketLease *lease) noexcept {
+    if (lease != nullptr && lease->isTerminal()) {
+        ++counters_.alreadyTerminalPackets;
+        return false;
+    }
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        if (lease != nullptr) {
+            (void)lease->drop();
+        }
+        ++counters_.parseDrops;
+        return false;
+    }
+    const auto owner = selector_.ownerFor(*key);
+    auto &target = queues_[owner];
+    compactQueue(target.ids, target.head);
+    if (target.ids.size() >= queueCapacity_ || freeDescriptors_.empty()) {
+        if (lease != nullptr) {
+            (void)lease->drop();
+        }
+        ++counters_.capacityDrops;
+        return false;
+    }
+    const auto slot = freeDescriptors_.back();
+    freeDescriptors_.pop_back();
+    auto generation = descriptorGenerations_[slot] + 1U;
+    if (generation == 0) {
+        generation = 1;
+    }
+    descriptorGenerations_[slot] = generation;
+    const auto descriptorId = makeDescriptorId(slot, generation);
+    auto &descriptor = descriptors_[slot];
+    PacketLease descriptorLease;
+    if (lease != nullptr) {
+        descriptorLease = std::move(*lease);
+    }
+    descriptor = PacketDescriptor{
+        .facts = facts,
+        .lease = std::move(descriptorLease),
+        .targetWorker = owner,
+    };
+    activeDescriptors_[slot] = true;
+    queuedDescriptors_[slot] = true;
+    target.ids.push_back(descriptorId);
+    ++counters_.directPackets;
+    return true;
+}
+
+std::size_t PrimarySoftwareDistribution::submit(
+    const std::span<PacketSubmission> packets) noexcept {
+    std::size_t queued = 0;
+    for (auto &packet : packets) {
+        if (enqueue(packet.facts, &packet.lease)) {
+            ++queued;
+        }
+    }
+    return queued;
+}
+
 std::size_t PrimarySoftwareDistribution::submit(
     const std::span<const PacketFacts> packets) noexcept {
     std::size_t queued = 0;
     for (const auto &facts : packets) {
-        const auto key = CanonicalFlowKey::from(facts);
-        if (!key.has_value()) {
-            ++counters_.parseDrops;
-            continue;
+        if (enqueue(facts, nullptr)) {
+            ++queued;
         }
-        const auto owner = selector_.ownerFor(*key);
-        auto &target = queues_[owner];
-        if (target.ids.size() - target.head >= queueCapacity_ || freeDescriptors_.empty()) {
-            ++counters_.capacityDrops;
-            continue;
-        }
-        const auto descriptorId = freeDescriptors_.back();
-        freeDescriptors_.pop_back();
-        auto &descriptor = descriptors_[descriptorId];
-        descriptor = PacketDescriptor{
-            .facts = facts,
-            .lease = {},
-            .targetWorker = owner,
-        };
-        activeDescriptors_[descriptorId] = true;
-        queuedDescriptors_[descriptorId] = true;
-        target.ids.push_back(descriptorId);
-        ++counters_.directPackets;
-        ++queued;
     }
     return queued;
 }
@@ -223,23 +310,27 @@ std::optional<PacketDescriptorId> PrimarySoftwareDistribution::dequeue(
         return std::nullopt;
     }
     const auto descriptorId = queue.ids[queue.head++];
-    queuedDescriptors_[descriptorId] = false;
+    queuedDescriptors_[descriptorSlot(descriptorId)] = false;
     return descriptorId;
 }
 
 PacketDescriptor *PrimarySoftwareDistribution::descriptor(const PacketDescriptorId id) noexcept {
-    if (id >= descriptors_.size() || !activeDescriptors_[id]) {
+    const auto slot = descriptorSlot(id);
+    if (slot >= descriptors_.size() || descriptorGeneration(id) == 0
+        || descriptorGenerations_[slot] != descriptorGeneration(id) || !activeDescriptors_[slot]) {
         return nullptr;
     }
-    return &descriptors_[id];
+    return &descriptors_[slot];
 }
 
 const PacketDescriptor *PrimarySoftwareDistribution::descriptor(
     const PacketDescriptorId id) const noexcept {
-    if (id >= descriptors_.size() || !activeDescriptors_[id]) {
+    const auto slot = descriptorSlot(id);
+    if (slot >= descriptors_.size() || descriptorGeneration(id) == 0
+        || descriptorGenerations_[slot] != descriptorGeneration(id) || !activeDescriptors_[slot]) {
         return nullptr;
     }
-    return &descriptors_[id];
+    return &descriptors_[slot];
 }
 
 bool PrimarySoftwareDistribution::complete(
@@ -249,7 +340,8 @@ bool PrimarySoftwareDistribution::complete(
         ++counters_.staleDescriptorHandles;
         return false;
     }
-    if (queuedDescriptors_[id]) {
+    const auto slot = descriptorSlot(id);
+    if (queuedDescriptors_[slot]) {
         ++counters_.staleDescriptorHandles;
         return false;
     }
@@ -259,38 +351,53 @@ bool PrimarySoftwareDistribution::complete(
     if (!completed) {
         return false;
     }
-    activeDescriptors_[id] = false;
-    queuedDescriptors_[id] = false;
-    freeDescriptors_.push_back(id);
+    activeDescriptors_[slot] = false;
+    queuedDescriptors_[slot] = false;
+    freeDescriptors_.push_back(slot);
     return true;
+}
+
+void PrimarySoftwareDistribution::releaseDropped(const PacketDescriptorSlot slot) noexcept {
+    auto &entry = descriptors_[slot];
+    if (entry.lease.drop()) {
+        activeDescriptors_[slot] = false;
+        queuedDescriptors_[slot] = false;
+        freeDescriptors_.push_back(slot);
+    }
 }
 
 bool PrimarySoftwareDistribution::requeueCorrective(
     const PacketDescriptorId id, const std::uint32_t targetWorker) noexcept {
     auto *entry = descriptor(id);
+    const auto slot = descriptorSlot(id);
     if (entry == nullptr || targetWorker >= queues_.size()
-        || entry->lease.correctionCount() != 1 || queuedDescriptors_[id]
+        || entry->lease.correctionCount() != 1 || queuedDescriptors_[slot]
         || entry->lease.isTerminal()) {
         ++counters_.staleDescriptorHandles;
         return false;
     }
+    const auto key = CanonicalFlowKey::from(entry->facts);
+    if (!key.has_value() || selector_.ownerFor(*key) != targetWorker) {
+        ++counters_.staleDescriptorHandles;
+        releaseDropped(slot);
+        return false;
+    }
     auto &target = queues_[targetWorker];
-    if (target.ids.size() - target.head >= queueCapacity_) {
+    compactQueue(target.ids, target.head);
+    if (target.ids.size() >= queueCapacity_) {
         ++counters_.capacityDrops;
-        if (entry->lease.drop()) {
-            activeDescriptors_[id] = false;
-            queuedDescriptors_[id] = false;
-            freeDescriptors_.push_back(id);
-        }
+        releaseDropped(slot);
         return false;
     }
     entry->targetWorker = targetWorker;
-    queuedDescriptors_[id] = true;
+    queuedDescriptors_[slot] = true;
     target.ids.push_back(id);
     return true;
 }
 
 OwnerGuard::OwnerGuard(WorkerLayout layout) : selector_(layout) {}
+
+OwnerGuard::OwnerGuard(const OwnerSelector &selector) : selector_(selector) {}
 
 OwnerGuardDecision OwnerGuard::check(
     const std::uint32_t currentWorker, const PacketFacts &facts,
