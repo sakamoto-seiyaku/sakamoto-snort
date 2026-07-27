@@ -16,7 +16,10 @@ public final class LocalProductBackend {
         return RuntimeStateStore.read(context.getFilesDir());
     }
 
-    public void startProtection(Context context) {
+    public StartResult startProtection(Context context) {
+        if (!SnortRuntimeService.notificationsReady(context)) {
+            return StartResult.NOTIFICATION_REQUIRED;
+        }
         Intent intent = new Intent(context, SnortRuntimeService.class)
                 .setAction(SnortRuntimeService.ACTION_START)
                 .putExtra(SnortRuntimeService.EXTRA_CONTROL_PROTOCOL_VERSION,
@@ -26,6 +29,7 @@ public final class LocalProductBackend {
         } else {
             context.startService(intent);
         }
+        return StartResult.ACCEPTED;
     }
 
     public void stopProtection(Context context) {
@@ -34,5 +38,10 @@ public final class LocalProductBackend {
                 .putExtra(SnortRuntimeService.EXTRA_CONTROL_PROTOCOL_VERSION,
                         CONTROL_PROTOCOL_VERSION);
         context.startService(intent);
+    }
+
+    public enum StartResult {
+        ACCEPTED,
+        NOTIFICATION_REQUIRED
     }
 }

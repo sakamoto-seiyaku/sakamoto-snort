@@ -24,7 +24,9 @@ import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Android lifecycle authority for exactly one packaged VPP runtime. */
 public final class SnortRuntimeService extends Service {
@@ -56,6 +58,8 @@ public final class SnortRuntimeService extends Service {
 
     private volatile boolean stopRequested;
     private volatile boolean foregroundStarted;
+    private volatile boolean destroying;
+    private volatile long monitoredPid = -1L;
     private RuntimeSnapshot snapshot;
     private Process vppProcess;
     private File profileRoot;
@@ -68,6 +72,7 @@ public final class SnortRuntimeService extends Service {
         createNotificationChannel();
         snapshot = RuntimeStateStore.read(getFilesDir());
         initializeProfilePaths();
+        lifecycle.execute(this::reconcileDurableRuntime);
     }
 
     @Override
@@ -81,7 +86,7 @@ public final class SnortRuntimeService extends Service {
                         currentMayBeActive(), currentPid());
                 stopIfInactive();
             });
-            return START_NOT_STICKY;
+            return START_STICKY;
         }
 
         if (ACTION_STOP.equals(action)) {
@@ -96,7 +101,7 @@ public final class SnortRuntimeService extends Service {
             }
             lifecycle.execute(this::startRuntime);
         }
-        return START_NOT_STICKY;
+        return START_STICKY;
     }
 
     private void createNotificationChannel() {
@@ -142,6 +147,10 @@ public final class SnortRuntimeService extends Service {
                 foregroundStarted = false;
                 return false;
             }
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null && snapshot != null) {
+                manager.notify(NOTIFICATION_ID, buildNotification(snapshot));
+            }
             appendLog("foreground_service=ready notification_id=" + NOTIFICATION_ID);
             return true;
         } catch (RuntimeException error) {
@@ -154,6 +163,11 @@ public final class SnortRuntimeService extends Service {
 
     private void startRuntime() {
         initializeProfilePaths();
+        if (destroying) {
+            stopRequested = true;
+            stopRuntime();
+            return;
+        }
         if (runtimeExists()) {
             appendLog("start ignored: exactly one runtime is already active");
             return;
@@ -224,6 +238,7 @@ public final class SnortRuntimeService extends Service {
             VppHealthHandshake.Result health = waitForHealth(nativeDir, profileRoot,
                     expectedProtocol, expectedVersion, expectedAbi, actualDeviceAbi, process);
             if (stopRequested) {
+                stopRuntime();
                 return;
             }
             if (!health.isReady()) {
@@ -248,10 +263,88 @@ public final class SnortRuntimeService extends Service {
             monitorExit(process);
         } catch (Exception error) {
             Log.e(TAG, "VPP runtime startup failed", error);
-            if (!stopRequested) {
+            if (stopRequested) {
+                stopRuntime();
+            } else {
                 failWithCleanup("runtime_start_failed", messageOf(error));
             }
         }
+    }
+
+    /** Reconcile durable state before accepting a new lifecycle command. */
+    private void reconcileDurableRuntime() {
+        initializeProfilePaths();
+        long pid = currentPid();
+        if (pid > 0L && processExists(pid)) {
+            if (!isPidAlive(pid)) {
+                publishError("runtime_pid_identity_mismatch",
+                        "recorded PID does not identify the packaged VPP; refusing to kill it",
+                        true, pid);
+                return;
+            }
+            adoptRuntime(pid);
+            return;
+        }
+
+        boolean durableResidue = profileRoot.exists()
+                || (snapshot != null && snapshot.isActive());
+        if (!durableResidue) {
+            return;
+        }
+
+        CleanupResult cleanup = removeAndVerifyProfile(profileRoot, pid, null);
+        if (!cleanup.ok) {
+            publishError("cleanup_failed", "durable runtime recovery: " + cleanup.detail,
+                    true, cleanup.pid);
+            return;
+        }
+        clearProfileHandles();
+        publishError("runtime_recovered", "previous VPP owner was no longer active",
+                false, -1L);
+    }
+
+    /** Adopt an already-running product VPP after Android recreated this service. */
+    private void adoptRuntime(long pid) {
+        initializeProfilePaths();
+        if (monitoredPid == pid && snapshot != null
+                && RuntimeSnapshot.STATE_RUNNING.equals(snapshot.state)) {
+            return;
+        }
+        try {
+            Properties manifest = readManifest();
+            String protocol = manifest.getProperty("protocol", "").trim();
+            String version = manifest.getProperty("version", "").trim();
+            String abi = manifest.getProperty("abi", "").trim();
+            String device = deviceAbi();
+            if (!VppHealthHandshake.PROTOCOL.equals(protocol)
+                    || version.isEmpty() || !abi.equals(device)) {
+                publishError("runtime_manifest_invalid",
+                        "durable VPP could not be adopted: manifest mismatch", true, pid);
+                monitorPid(pid);
+                return;
+            }
+
+            File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
+            File cliSocket = new File(profileRoot, "runtime/cli.sock");
+            CommandResult command = cliSocket.exists()
+                    ? runVppctl(nativeDir, cliSocket, "show version")
+                    : new CommandResult(125, "runtime CLI socket is absent");
+            VppHealthHandshake.Result health = VppHealthHandshake.parse(
+                    protocol, version, abi, device, command.exitCode, command.output);
+            if (!health.isReady()) {
+                publishError(health.errorCode.isEmpty()
+                                ? "runtime_recovery_health_failed" : health.errorCode,
+                        "adopted VPP health check failed: " + command.output.trim(),
+                        true, pid);
+            } else {
+                publish(RuntimeSnapshot.running(RuntimeSnapshot.PROFILE_ROOT,
+                        health.protocol, health.version, health.abi, health.abiEvidence,
+                        health.health, pid));
+            }
+        } catch (Exception error) {
+            publishError("runtime_recovery_failed", messageOf(error), true, pid);
+        }
+        monitorPid(pid);
     }
 
     private Process launchVpp(File vpp, File nativeDir, File currentProfile)
@@ -333,6 +426,58 @@ public final class SnortRuntimeService extends Service {
         monitor.start();
     }
 
+    private void monitorPid(long pid) {
+        synchronized (stateLock) {
+            if (monitoredPid == pid) {
+                return;
+            }
+            monitoredPid = pid;
+        }
+        Thread monitor = new Thread(() -> {
+            boolean stillAlive = true;
+            try {
+                while (!destroying && isPidAlive(pid)) {
+                    Thread.sleep(250L);
+                }
+                stillAlive = processExists(pid);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            } finally {
+                final boolean observedAlive = stillAlive;
+                if (!destroying) {
+                    lifecycle.execute(() -> handleAdoptedProcessExit(pid, observedAlive));
+                }
+            }
+        }, "snort-adopted-vpp-monitor");
+        monitor.setDaemon(true);
+        monitor.start();
+    }
+
+    private void handleAdoptedProcessExit(long pid, boolean stillAlive) {
+        if (monitoredPid == pid) {
+            monitoredPid = -1L;
+        }
+        if (currentPid() != pid || destroying
+                || stopRequested || (snapshot != null
+                && RuntimeSnapshot.STATE_STOPPING.equals(snapshot.state))) {
+            return;
+        }
+        if (stillAlive && !isPidAlive(pid)) {
+            publishError("runtime_pid_identity_mismatch",
+                    "adopted PID changed identity; refusing to kill it", true, pid);
+            return;
+        }
+        CleanupResult cleanup = removeAndVerifyProfile(profileRoot, pid, null);
+        if (!cleanup.ok) {
+            publishError("cleanup_failed", "adopted VPP exited; " + cleanup.detail,
+                    true, cleanup.pid);
+            return;
+        }
+        clearProfileHandles();
+        publishError("unexpected_exit", "adopted VPP exited unexpectedly", false, -1L);
+        stopIfInactive();
+    }
+
     private void handleProcessExit(Process process, int exitCode) {
         if (process != vppProcess) {
             return;
@@ -381,10 +526,16 @@ public final class SnortRuntimeService extends Service {
             stopForeground(true);
             foregroundStarted = false;
         }
-        stopSelf();
+        if (!destroying) {
+            stopSelf();
+        }
     }
 
     private CleanupResult terminateAndClean(File currentProfile, long pid, Process process) {
+        if (pid > 0L && processExists(pid) && !isPidAlive(pid)) {
+            return CleanupResult.failure(pid,
+                    "recorded PID no longer identifies the packaged VPP; refusing to kill it");
+        }
         File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
         File cliSocket = new File(currentProfile, "runtime/cli.sock");
         if (cliSocket.exists()) {
@@ -483,11 +634,36 @@ public final class SnortRuntimeService extends Service {
             return true;
         }
         long pid = currentPid();
-        return pid > 0L && isPidAlive(pid);
+        if (pid <= 0L || !processExists(pid)) {
+            return false;
+        }
+        if (!isPidAlive(pid)) {
+            publishError("runtime_pid_identity_mismatch",
+                    "recorded PID does not identify the packaged VPP; refusing to start another",
+                    true, pid);
+            return true;
+        }
+        adoptRuntime(pid);
+        return true;
     }
 
-    private boolean isPidAlive(long pid) {
+    private boolean processExists(long pid) {
         return pid > 0L && runRootCommand("kill -0 " + pid, 2L);
+    }
+
+    /** True only when the PID is alive and still identifies this packaged VPP. */
+    private boolean isPidAlive(long pid) {
+        if (!processExists(pid)) {
+            return false;
+        }
+        File expected = new File(new File(getApplicationInfo().nativeLibraryDir), VPP_BINARY);
+        String processDirectory = "/proc/" + pid;
+        String command = "test -r " + processDirectory + "/cmdline && ("
+                + "tr '\\0' ' ' <" + processDirectory + "/cmdline | grep -F -- "
+                + shellQuote(expected.getPath()) + " >/dev/null || "
+                + "readlink " + processDirectory + "/exe | grep -F -- "
+                + shellQuote(expected.getPath()) + " >/dev/null)";
+        return runRootCommand(command, 2L);
     }
 
     private void failWithoutRuntime(String code, String message) {
@@ -558,7 +734,9 @@ public final class SnortRuntimeService extends Service {
             stopForeground(true);
             foregroundStarted = false;
         }
-        stopSelf();
+        if (!destroying) {
+            stopSelf();
+        }
     }
 
     private Properties readManifest() throws IOException {
@@ -739,8 +917,29 @@ public final class SnortRuntimeService extends Service {
 
     @Override
     public void onDestroy() {
-        lifecycle.shutdown();
+        destroying = true;
+        if (hasDurableRuntime()) {
+            stopRequested = true;
+            Future<?> cleanup = lifecycle.submit(this::stopRuntime);
+            try {
+                cleanup.get(15L, TimeUnit.SECONDS);
+            } catch (TimeoutException error) {
+                publishError("cleanup_failed", "service destroyed before runtime cleanup completed",
+                        true, currentPid());
+                cleanup.cancel(true);
+            } catch (Exception error) {
+                publishError("cleanup_failed", "service destruction cleanup failed: "
+                        + messageOf(error), true, currentPid());
+            }
+        }
+        lifecycle.shutdownNow();
         super.onDestroy();
+    }
+
+    private boolean hasDurableRuntime() {
+        initializeProfilePaths();
+        return processAlive(vppProcess) || profileRoot.exists()
+                || currentPid() > 0L || (snapshot != null && snapshot.isActive());
     }
 
     @Override

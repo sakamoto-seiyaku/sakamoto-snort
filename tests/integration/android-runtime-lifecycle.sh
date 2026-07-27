@@ -7,12 +7,13 @@ package="com.sakamoto.snort.vpnlite"
 activity="$package/.MainActivity"
 apk="$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/build/outputs/sakamoto-runtime-debug.apk"
 state_path="files/runtime-state/snapshot.properties"
+target_serial="${ADB_SERIAL:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --serial)
-      ADB_SERIAL="$2"
-      export ADB_SERIAL
+      [[ $# -ge 2 && -n "$2" ]] || { echo "--serial requires a device serial" >&2; exit 2; }
+      target_serial="$2"
       shift 2
       ;;
     *)
@@ -22,29 +23,42 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-bash "$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh"
-
-device_count="$($adb devices | tr -d '\r' | awk '$2 == "device" {count++} END {print count + 0}')"
-if [[ "$device_count" != "1" ]]; then
-  echo "BLOCKED: expected one Android device through ./dev/adb, found $device_count" >&2
-  exit 77
+if [[ -z "$target_serial" ]]; then
+  mapfile -t devices < <("$adb" devices | tr -d '\r' | awk '$2 == "device" {print $1}')
+  if [[ "${#devices[@]}" != 1 ]]; then
+    echo "BLOCKED: specify --serial when ./dev/adb sees multiple devices" >&2
+    exit 77
+  fi
+  target_serial="${devices[0]}"
+else
+  target_state="$("$adb" -s "$target_serial" get-state 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ "$target_state" != "device" ]]; then
+    echo "BLOCKED: requested Android device is unavailable: $target_serial" >&2
+    exit 77
+  fi
 fi
 
+adb_cmd() {
+  "$adb" -s "$target_serial" "$@"
+}
+
+bash "$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/scripts/build-debug-apk.sh"
+
 stop_runtime() {
-  "$adb" shell am start -n "$activity" --ez runtimeStop true >/dev/null 2>&1 || true
+  adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null 2>&1 || true
   sleep 1
 }
 trap stop_runtime EXIT
 
-"$adb" install -r "$apk" >/dev/null
-"$adb" shell pm grant "$package" android.permission.POST_NOTIFICATIONS
-"$adb" shell am force-stop "$package"
-"$adb" shell am start -n "$activity" --ez runtimeStart true >/dev/null
-"$adb" shell am start -n "$activity" --ez runtimeStart true >/dev/null
+adb_cmd install -r "$apk" >/dev/null
+adb_cmd shell pm grant "$package" android.permission.POST_NOTIFICATIONS
+adb_cmd shell am force-stop "$package"
+adb_cmd shell am start -n "$activity" --ez runtimeStart true >/dev/null
+adb_cmd shell am start -n "$activity" --ez runtimeStart true >/dev/null
 
 running=0
 for _ in $(seq 1 24); do
-  state="$($adb shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
   if grep -q '^state=running$' <<<"$state" \
       && grep -q '^health=ok$' <<<"$state" \
       && grep -q '^protocol=vpp-runtime-health/v1$' <<<"$state" \
@@ -59,28 +73,28 @@ for _ in $(seq 1 24); do
 done
 [[ "$running" == 1 ]] || { echo "runtime did not reach running" >&2; exit 1; }
 
-process_dump="$($adb shell ps -A -o PID,NAME,args | tr -d '\r')"
+process_dump="$(adb_cmd shell ps -A -o PID,NAME,args | tr -d '\r')"
 runtime_count="$(grep -c 'libvpp_runtime.so' <<<"$process_dump" || true)"
 [[ "$runtime_count" == 1 ]] || {
   echo "duplicate start produced $runtime_count VPP runtimes" >&2
   exit 1
 }
 
-fgs_dump="$($adb shell dumpsys activity services "$package")"
+fgs_dump="$(adb_cmd shell dumpsys activity services "$package")"
 grep -q 'startForegroundCount=1' <<<"$fgs_dump"
-notification_dump="$($adb shell dumpsys notification --noredact)"
+notification_dump="$(adb_cmd shell dumpsys notification --noredact)"
 grep -q 'Protection running' <<<"$notification_dump"
 
 # Home and reopen exercise Activity/WebView projection without stopping the service.
-"$adb" shell input keyevent KEYCODE_HOME
-"$adb" shell am start -n "$activity" >/dev/null
-state="$($adb shell run-as "$package" cat "$state_path" | tr -d '\r')"
+adb_cmd shell input keyevent KEYCODE_HOME
+adb_cmd shell am start -n "$activity" >/dev/null
+state="$(adb_cmd shell run-as "$package" cat "$state_path" | tr -d '\r')"
 grep -q '^state=running$' <<<"$state"
 
 stop_runtime
 stopped=0
 for _ in $(seq 1 20); do
-  state="$($adb shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
   if grep -q '^state=stopped$' <<<"$state" \
       && grep -q '^mayBeActive=false$' <<<"$state"; then
     stopped=1
@@ -90,13 +104,13 @@ for _ in $(seq 1 20); do
 done
 [[ "$stopped" == 1 ]] || { echo "runtime did not reach verified stopped" >&2; exit 1; }
 
-process_dump="$($adb shell ps -A -o NAME,args)"
+process_dump="$(adb_cmd shell ps -A -o NAME,args)"
 if grep -q 'libvpp_runtime.so' <<<"$process_dump"; then
   echo "VPP process survived clean stop" >&2
   exit 1
 fi
 
-"$adb" shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
+adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
   && test ! -e files/profiles/root/vpp/runtime/cli.sock \
   && test ! -e files/profiles/root/vpp/runtime/statseg.sock \
   && test ! -e files/profiles/root/vpp/shm'"

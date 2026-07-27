@@ -95,7 +95,8 @@ public final class MainActivity extends Activity {
     }
 
     private void requestStart() {
-        if (!SnortRuntimeService.notificationsReady(this)) {
+        LocalProductBackend.StartResult result = productBackend.startProtection(this);
+        if (result == LocalProductBackend.StartResult.NOTIFICATION_REQUIRED) {
             pendingRuntimeStart = true;
             if (android.os.Build.VERSION.SDK_INT >= 33
                     && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -106,7 +107,6 @@ public final class MainActivity extends Activity {
             showAction("Start requires the visible protection notification.");
             return;
         }
-        productBackend.startProtection(this);
         showAction("Start requested.");
         refreshRuntimeStatus();
     }
