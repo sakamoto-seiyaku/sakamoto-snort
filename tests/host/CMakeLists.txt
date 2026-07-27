@@ -94,6 +94,13 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
 )
 add_sucre_snort_host_test(
+  nfqueue_flow_adapter_tests
+  nfqueue_flow_adapter_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueFlowAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/PacketCaptureAdapter.cpp"
+)
+add_sucre_snort_host_test(
   packet_capture_adapter_tests
   packet_capture_adapter_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/core/flow/PacketCaptureAdapter.cpp"
