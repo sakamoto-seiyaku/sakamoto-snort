@@ -210,7 +210,15 @@ void setIpv6Address(IpAddress &address, const std::span<const std::byte> bytes,
             return result;
         }
 
+        ParsedFragment fragment{};
+        fragment.key.family = AddressFamily::Ipv4;
+        setIpv4Address(fragment.key.source, bytes, 12);
+        setIpv4Address(fragment.key.destination, bytes, 16);
+        fragment.key.ipProtocol = byteAt(bytes, 9);
+        fragment.key.identification = readNetworkU16(bytes, 4);
+
         if (headerLength > maxPacketBytes) {
+            result.fragment = std::move(fragment);
             result.kind = FragmentParseKind::Capacity;
             return result;
         }
@@ -218,16 +226,11 @@ void setIpv6Address(IpAddress &address, const std::span<const std::byte> bytes,
             - headerLength;
         if (fragmentOffset > maxPayloadBytes
             || payloadLength > maxPayloadBytes - fragmentOffset) {
+            result.fragment = std::move(fragment);
             result.kind = FragmentParseKind::Capacity;
             return result;
         }
 
-        ParsedFragment fragment{};
-        fragment.key.family = AddressFamily::Ipv4;
-        setIpv4Address(fragment.key.source, bytes, 12);
-        setIpv4Address(fragment.key.destination, bytes, 16);
-        fragment.key.ipProtocol = byteAt(bytes, 9);
-        fragment.key.identification = readNetworkU16(bytes, 4);
         fragment.headerLength = headerLength;
         fragment.payloadOffset = headerLength;
         fragment.payloadLength = payloadLength;
@@ -275,20 +278,22 @@ void setIpv6Address(IpAddress &address, const std::span<const std::byte> bytes,
         return result;
     }
 
-    const auto maxPayloadBytes = static_cast<std::size_t>(maxPacketBytes)
-        - kIpv6HeaderLength;
-    if (fragmentOffset > maxPayloadBytes
-        || fragmentPayloadLength > maxPayloadBytes - fragmentOffset) {
-        result.kind = FragmentParseKind::Capacity;
-        return result;
-    }
-
     ParsedFragment fragment{};
     fragment.key.family = AddressFamily::Ipv6;
     setIpv6Address(fragment.key.source, bytes, 8);
     setIpv6Address(fragment.key.destination, bytes, 24);
     fragment.key.ipProtocol = byteAt(bytes, kIpv6HeaderLength);
     fragment.key.identification = readNetworkU32(bytes, kIpv6HeaderLength + 4);
+
+    const auto maxPayloadBytes = static_cast<std::size_t>(maxPacketBytes)
+        - kIpv6HeaderLength;
+    if (fragmentOffset > maxPayloadBytes
+        || fragmentPayloadLength > maxPayloadBytes - fragmentOffset) {
+        result.fragment = std::move(fragment);
+        result.kind = FragmentParseKind::Capacity;
+        return result;
+    }
+
     fragment.headerLength = kIpv6HeaderLength;
     fragment.payloadOffset = kIpv6HeaderLength + kIpv6FragmentHeaderLength;
     fragment.payloadLength = fragmentPayloadLength;
@@ -450,7 +455,10 @@ FragmentReassemblyResult FragmentSteering::submit(
     }
     if (parsed.kind == FragmentParseKind::Capacity) {
         ++counters_.capacityDrops;
-        return {.status = FragmentSubmitStatus::Capacity};
+        return {
+            .status = FragmentSubmitStatus::Capacity,
+            .datagramKey = parsed.fragment.key,
+        };
     }
     if (parsed.kind != FragmentParseKind::Fragment) {
         ++counters_.malformedPackets;
@@ -467,7 +475,10 @@ FragmentReassemblyResult FragmentSteering::submit(
         && timedOut(now, states_[stateIndex].lastSeen, config_.timeoutTicks)) {
         resetState(states_[stateIndex]);
         ++counters_.timeoutDatagrams;
-        return {.status = FragmentSubmitStatus::Timeout};
+        return {
+            .status = FragmentSubmitStatus::Timeout,
+            .datagramKey = fragment.key,
+        };
     }
     static_cast<void>(expire(now));
     stateIndex = findState(fragment.key);
@@ -476,7 +487,10 @@ FragmentReassemblyResult FragmentSteering::submit(
         stateIndex = findFreeState();
         if (stateIndex == kNoState) {
             ++counters_.capacityDrops;
-            return {.status = FragmentSubmitStatus::Capacity};
+            return {
+                .status = FragmentSubmitStatus::Capacity,
+                .datagramKey = fragment.key,
+            };
         }
 
         auto &state = states_[stateIndex];
@@ -502,7 +516,10 @@ FragmentReassemblyResult FragmentSteering::submit(
                                incomingHeader.begin()))) {
             resetState(state);
             ++counters_.conflictPackets;
-            return {.status = FragmentSubmitStatus::Conflict};
+            return {
+                .status = FragmentSubmitStatus::Conflict,
+                .datagramKey = fragment.key,
+            };
         }
         if (state.firstHeader.empty()) {
             state.firstHeader.assign(incomingHeader.begin(), incomingHeader.end());
@@ -513,7 +530,10 @@ FragmentReassemblyResult FragmentSteering::submit(
                 || state.owner->finalOwner != selector_.ownerFor(*fragment.ownerKey))) {
             resetState(state);
             ++counters_.conflictPackets;
-            return {.status = FragmentSubmitStatus::Conflict};
+            return {
+                .status = FragmentSubmitStatus::Conflict,
+                .datagramKey = fragment.key,
+            };
         }
         if (!state.owner.has_value() && fragment.ownerKey.has_value()) {
             state.owner = FragmentOwnerMetadata{
@@ -529,7 +549,10 @@ FragmentReassemblyResult FragmentSteering::submit(
             : fragmentEnd != *state.finalPayloadLength) {
             resetState(state);
             ++counters_.conflictPackets;
-            return {.status = FragmentSubmitStatus::Conflict};
+            return {
+                .status = FragmentSubmitStatus::Conflict,
+                .datagramKey = fragment.key,
+            };
         }
     } else if (!fragment.moreFragments) {
         state.finalPayloadLength = fragmentEnd;
@@ -539,7 +562,10 @@ FragmentReassemblyResult FragmentSteering::submit(
             if (pieceEnd > fragmentEnd) {
                 resetState(state);
                 ++counters_.conflictPackets;
-                return {.status = FragmentSubmitStatus::Conflict};
+                return {
+                    .status = FragmentSubmitStatus::Conflict,
+                    .datagramKey = fragment.key,
+                };
             }
         }
     }
@@ -555,7 +581,10 @@ FragmentReassemblyResult FragmentSteering::submit(
         if (existing != bytes[fragment.payloadOffset + index]) {
             resetState(state);
             ++counters_.conflictPackets;
-            return {.status = FragmentSubmitStatus::Conflict};
+            return {
+                .status = FragmentSubmitStatus::Conflict,
+                .datagramKey = fragment.key,
+            };
         }
     }
 
@@ -564,7 +593,10 @@ FragmentReassemblyResult FragmentSteering::submit(
         if (state.pieces.size() >= config_.maxFragmentsPerDatagram) {
             resetState(state);
             ++counters_.capacityDrops;
-            return {.status = FragmentSubmitStatus::Capacity};
+            return {
+                .status = FragmentSubmitStatus::Capacity,
+                .datagramKey = fragment.key,
+            };
         }
 
         FragmentPiece piece{};
@@ -583,9 +615,13 @@ FragmentReassemblyResult FragmentSteering::submit(
         if (result.packet.empty()) {
             resetState(state);
             ++counters_.malformedPackets;
-            return {.status = FragmentSubmitStatus::Malformed};
+            return {
+                .status = FragmentSubmitStatus::Malformed,
+                .datagramKey = fragment.key,
+            };
         }
         result.owner = state.owner;
+        result.datagramKey = state.key;
         resetState(state);
         ++counters_.reassembledPackets;
         return result;
@@ -593,11 +629,17 @@ FragmentReassemblyResult FragmentSteering::submit(
 
     if (fullyCovered) {
         ++counters_.duplicatePackets;
-        return {.status = FragmentSubmitStatus::Duplicate};
+        return {
+            .status = FragmentSubmitStatus::Duplicate,
+            .datagramKey = fragment.key,
+        };
     }
 
     ++counters_.bufferedPackets;
-    return {.status = FragmentSubmitStatus::Buffered};
+    return {
+        .status = FragmentSubmitStatus::Buffered,
+        .datagramKey = fragment.key,
+    };
 }
 
 } // namespace SnortDatapath::Flow

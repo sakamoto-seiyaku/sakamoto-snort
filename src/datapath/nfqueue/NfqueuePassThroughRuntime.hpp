@@ -6,15 +6,19 @@
 #pragma once
 
 #include <NfqueueHookPlan.hpp>
+#include <NfqueueFragmentLeaseBook.hpp>
+#include <NfqueuePacketLeaseAdapter.hpp>
 #include <NfqueueTopology.hpp>
 #include <RuntimeControl.hpp>
 #include <FragmentSteering.hpp>
 #include <FlowGraphInjection.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -42,6 +46,24 @@ struct NfqueueFlowAdapterConfig {
     std::size_t queueCapacity = 64;
     std::uint32_t copyPrefixBytes = 512;
     Flow::FragmentSteeringConfig fragmentSteering;
+    std::size_t fragmentLeaseCapacityPerDatagram = 64;
+};
+
+/** Origin lane for a retained fragment packet lease. */
+struct NfqueueFragmentLeaseContext final {
+    std::optional<NfqueuePacketLeaseIdentity> identity;
+    NfqueueFragmentLeaseCompletionMailbox *mailbox = nullptr;
+    bool *routed = nullptr;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return identity.has_value() && mailbox != nullptr;
+    }
+
+    void markRouted() const noexcept {
+        if (routed != nullptr) {
+            *routed = true;
+        }
+    }
 };
 
 struct NfqueuePacketMetadata final {
@@ -165,7 +187,12 @@ public:
         std::uint32_t captureQueue, std::uint8_t hook,
         std::span<const std::uint8_t> payload,
         std::uint32_t originalLengthHint = 0,
-        NfqueuePacketMetadata metadata = {}) noexcept;
+        NfqueuePacketMetadata metadata = {},
+        NfqueueFragmentLeaseContext leaseContext = {}) noexcept;
+    /** Expire with one shared monotonic clock; non-zero is a deterministic test advance. */
+    void expireFragments(std::uint64_t testAdvanceMilliseconds = 0) noexcept;
+    void detachFragmentLeaseMailbox(
+        NfqueueFragmentLeaseCompletionMailbox &mailbox) noexcept;
     void recordVerdictSendFailure() noexcept;
 
     [[nodiscard]] NfqueueFlowAdapterCounters counters() const noexcept;
@@ -175,15 +202,24 @@ public:
     [[nodiscard]] std::size_t queueCapacity() const noexcept {
         return config_.queueCapacity;
     }
+    [[nodiscard]] std::size_t fragmentLeaseMailboxCapacity() const noexcept {
+        return config_.fragmentSteering.maxDatagrams
+            * config_.fragmentLeaseCapacityPerDatagram;
+    }
 
 private:
     NfqueueFlowAdapterConfig config_;
     Flow::FlowSteeringRuntime steering_;
     Flow::FlowGraphInjectionGate graphGate_;
     Flow::FragmentSteering fragmentSteering_;
+    NfqueueFragmentLeaseBook fragmentLeaseBook_;
+    std::chrono::steady_clock::time_point fragmentEpoch_ =
+        std::chrono::steady_clock::now();
     std::uint64_t fragmentTick_ = 0;
     mutable std::mutex mutex_;
     NfqueueFlowAdapterCounters counters_;
+
+    [[nodiscard]] std::uint64_t monotonicFragmentNow() noexcept;
 };
 
 struct DualStackPassThroughRuntimePlan {

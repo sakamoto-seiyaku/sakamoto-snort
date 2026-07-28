@@ -102,6 +102,7 @@ struct QueueContext {
     std::uint32_t queue = 0;
     SnortDatapath::Nfqueue::NfqueueFlowAdapter *flowAdapter = nullptr;
     SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter *leaseAdapter = nullptr;
+    SnortDatapath::Nfqueue::NfqueueFragmentLeaseCompletionMailbox *completionMailbox = nullptr;
     SnortDatapath::Nfqueue::NfqueueRuntimeFaultCounters *runtimeFaults = nullptr;
 };
 
@@ -161,6 +162,7 @@ bool configureQueue(mnl_socket *socket,
 
 int passThroughCallback(const nlmsghdr *nlh, void *data) {
     auto *context = static_cast<QueueContext *>(data);
+    static_cast<void>(context->completionMailbox->drain(*context->leaseAdapter));
     nlattr *attrs[NFQA_MAX + 1] = {};
 
     if (nfq_nlmsg_parse(nlh, attrs) < 0) {
@@ -210,18 +212,26 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     }
 
     const std::span<const std::uint8_t> packetPayload(payload, payloadLength);
+    bool leaseRouted = false;
     const auto verdictFailuresBefore = context->leaseAdapter->counters().verdictSendFailures;
     const auto gateResult = context->flowAdapter->process(
-        context->queue, header->hook, packetPayload, originalLengthHint, metadata);
-    const auto terminalReason = gateResult
-        == SnortDatapath::Nfqueue::NfqueueFlowAdapterResult::FlowAccepted
-        ? SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::Accepted
-        : SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::FailOpen;
-    const auto completion = context->leaseAdapter->complete(
-        *admission.identity, terminalReason);
-    if (completion
-        != SnortDatapath::Nfqueue::NfqueuePacketLeaseCompletionStatus::Completed) {
-        std::cerr << "NFQUEUE lease completion rejected on queue " << context->queue << "\n";
+        context->queue, header->hook, packetPayload, originalLengthHint, metadata,
+        SnortDatapath::Nfqueue::NfqueueFragmentLeaseContext{
+            .identity = admission.identity,
+            .mailbox = context->completionMailbox,
+            .routed = &leaseRouted,
+        });
+    if (!leaseRouted) {
+        const auto terminalReason = gateResult
+            == SnortDatapath::Nfqueue::NfqueueFlowAdapterResult::FlowAccepted
+            ? SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::Accepted
+            : SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::FailOpen;
+        const auto completion = context->leaseAdapter->complete(
+            *admission.identity, terminalReason);
+        if (completion
+            != SnortDatapath::Nfqueue::NfqueuePacketLeaseCompletionStatus::Completed) {
+            std::cerr << "NFQUEUE lease completion rejected on queue " << context->queue << "\n";
+        }
     }
     if (context->leaseAdapter->counters().verdictSendFailures > verdictFailuresBefore) {
         context->flowAdapter->recordVerdictSendFailure();
@@ -269,6 +279,8 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
         (void)mnl_socket_setsockopt(socket, NETLINK_NO_ENOBUFS, &noEnobufs, sizeof(noEnobufs));
 
         SocketVerdictSink sink(socket, listener.queue);
+        SnortDatapath::Nfqueue::NfqueueFragmentLeaseCompletionMailbox completionMailbox(
+            flowAdapter.fragmentLeaseMailboxCapacity());
         SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter leaseAdapter(
             SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapterConfig{
                 .pendingCapacity = flowAdapter.queueCapacity(),
@@ -281,6 +293,7 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
             .queue = listener.queue,
             .flowAdapter = &flowAdapter,
             .leaseAdapter = &leaseAdapter,
+            .completionMailbox = &completionMailbox,
             .runtimeFaults = &runtimeFaults,
         };
         const unsigned int port = mnl_socket_get_portid(socket);
@@ -291,6 +304,10 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
             .revents = 0,
         };
         while (!SnortRuntime::shutdownRequested()) {
+            flowAdapter.expireFragments();
+            static_cast<void>(completionMailbox.drain(leaseAdapter));
+            (void)leaseAdapter.expire(
+                SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter::Clock::now());
             pollFd.revents = 0;
             const int ready = ::poll(&pollFd, 1, kQueuePollTimeoutMs);
             if (ready < 0) {
@@ -302,8 +319,7 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
                 break;
             }
             if (ready == 0) {
-                (void)leaseAdapter.expire(
-                    SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter::Clock::now());
+                static_cast<void>(completionMailbox.drain(leaseAdapter));
                 continue;
             }
             if ((pollFd.revents & POLLIN) == 0) {
@@ -328,9 +344,14 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
                           << std::strerror(errno) << "\n";
                 break;
             }
+            static_cast<void>(completionMailbox.drain(leaseAdapter));
         }
 
+        static_cast<void>(completionMailbox.drain(leaseAdapter));
+        flowAdapter.detachFragmentLeaseMailbox(completionMailbox);
+        static_cast<void>(completionMailbox.drain(leaseAdapter));
         (void)leaseAdapter.shutdown();
+        static_cast<void>(completionMailbox.drain(leaseAdapter));
         mnl_socket_close(socket);
         laneGeneration = laneGeneration == std::numeric_limits<std::uint32_t>::max()
             ? 1U

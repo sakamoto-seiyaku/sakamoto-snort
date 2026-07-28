@@ -51,6 +51,8 @@ struct FragmentReassemblyResult final {
     FragmentSubmitStatus status = FragmentSubmitStatus::Malformed;
     std::vector<std::byte> packet;
     std::optional<FragmentOwnerMetadata> owner;
+    /** Datagram identity when this result can be tied to an IP fragment. */
+    std::optional<FragmentKey> datagramKey;
 
     [[nodiscard]] bool hasPacket() const noexcept {
         return status == FragmentSubmitStatus::Reassembled && !packet.empty();

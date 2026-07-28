@@ -120,6 +120,44 @@ FragmentReassemblyResult submit(FragmentSteering &steering,
     return steering.submit(packet, static_cast<std::uint32_t>(packet.size()), now);
 }
 
+FragmentKey ipv4Key(const std::uint16_t identification) {
+    return {
+        .family = AddressFamily::Ipv4,
+        .source = IpAddress::v4({10, 0, 0, 1}),
+        .destination = IpAddress::v4({192, 0, 2, 1}),
+        .ipProtocol = 6,
+        .identification = identification,
+    };
+}
+
+FragmentKey ipv6Key(const std::uint32_t identification) {
+    std::array<std::uint8_t, 16> source{};
+    source[0] = 0x20;
+    source[1] = 0x01;
+    source[2] = 0x0d;
+    source[3] = 0xb8;
+    source[15] = 1;
+    std::array<std::uint8_t, 16> destination{};
+    destination[0] = 0x20;
+    destination[1] = 0x01;
+    destination[2] = 0x0d;
+    destination[3] = 0xb8;
+    destination[15] = 2;
+    return {
+        .family = AddressFamily::Ipv6,
+        .source = IpAddress::v6(source),
+        .destination = IpAddress::v6(destination),
+        .ipProtocol = 6,
+        .identification = identification,
+    };
+}
+
+void expectDatagramKey(const FragmentReassemblyResult &result,
+                       const FragmentKey &expected) {
+    ASSERT_TRUE(result.datagramKey.has_value());
+    EXPECT_EQ(*result.datagramKey, expected);
+}
+
 TEST(FragmentSteeringTest, IPv4SameKeyCoLocatesAndCapturesInitialFlowOwner) {
     FragmentSteering steering(WorkerLayout{2, 0x1234}, config());
     const auto first = firstPayload();
@@ -132,6 +170,8 @@ TEST(FragmentSteeringTest, IPv4SameKeyCoLocatesAndCapturesInitialFlowOwner) {
 
     EXPECT_EQ(buffered.status, FragmentSubmitStatus::Buffered);
     EXPECT_EQ(complete.status, FragmentSubmitStatus::Reassembled);
+    expectDatagramKey(buffered, ipv4Key(0x4242));
+    expectDatagramKey(complete, ipv4Key(0x4242));
     ASSERT_TRUE(complete.owner.has_value());
     EXPECT_EQ(complete.owner->flowKey.ipProtocol, 6);
     EXPECT_EQ(complete.owner->flowKey.portA, 40000);
@@ -158,11 +198,16 @@ TEST(FragmentSteeringTest, IPv6SameKeyCoLocatesButDifferentIdentificationCannotJ
     const auto otherInitial = ipv6Fragment(0x55667788, 0, true, first);
     const auto final = ipv6Fragment(0x11223344, 24, false, second);
 
-    EXPECT_EQ(submit(steering, initial, 1).status, FragmentSubmitStatus::Buffered);
-    EXPECT_EQ(submit(steering, otherInitial, 2).status, FragmentSubmitStatus::Capacity);
+    const auto buffered = submit(steering, initial, 1);
+    const auto capacity = submit(steering, otherInitial, 2);
     const auto complete = submit(steering, final, 3);
 
+    EXPECT_EQ(buffered.status, FragmentSubmitStatus::Buffered);
+    EXPECT_EQ(capacity.status, FragmentSubmitStatus::Capacity);
     EXPECT_EQ(complete.status, FragmentSubmitStatus::Reassembled);
+    expectDatagramKey(buffered, ipv6Key(0x11223344));
+    expectDatagramKey(capacity, ipv6Key(0x55667788));
+    expectDatagramKey(complete, ipv6Key(0x11223344));
     ASSERT_TRUE(complete.owner.has_value());
     EXPECT_EQ(complete.owner->flowKey.family, AddressFamily::Ipv6);
     EXPECT_EQ(complete.packet[6], byte(6)); // Fragment header removed.

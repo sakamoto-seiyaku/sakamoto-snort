@@ -21,6 +21,10 @@ SnortDatapath::Nfqueue::NfqueueFlowAdapterConfig validateConfig(
         || config.copyPrefixBytes > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
         throw std::invalid_argument("NFQUEUE flow adapter requires a valid copy prefix");
     }
+    if (config.fragmentLeaseCapacityPerDatagram == 0) {
+        throw std::invalid_argument(
+            "NFQUEUE flow adapter requires fragment lease capacity");
+    }
     return config;
 }
 
@@ -32,20 +36,22 @@ NfqueueFlowAdapter::NfqueueFlowAdapter(NfqueueFlowAdapterConfig config)
     : config_(validateConfig(std::move(config))),
       steering_(Flow::WorkerLayout(config_.workerCount, config_.hashSeed), config_.queueCapacity),
       graphGate_(steering_),
-      fragmentSteering_(steering_.distribution().selector(), config_.fragmentSteering) {}
+      fragmentSteering_(steering_.distribution().selector(), config_.fragmentSteering),
+      fragmentLeaseBook_(config_.fragmentSteering.maxDatagrams,
+                         config_.fragmentLeaseCapacityPerDatagram) {}
 
 NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const std::uint32_t captureQueue, const std::uint8_t hook,
     const std::span<const std::uint8_t> payload,
     const std::uint32_t originalLengthHint,
-    const NfqueuePacketMetadata metadata) noexcept {
+    const NfqueuePacketMetadata metadata,
+    NfqueueFragmentLeaseContext leaseContext) noexcept {
     std::lock_guard lock(mutex_);
     ++counters_.packetsSeen;
 
-    if (fragmentTick_ != std::numeric_limits<std::uint64_t>::max()) {
-        ++fragmentTick_;
-    }
-    const auto fragmentTick = fragmentTick_;
+    const auto fragmentTick = monotonicFragmentNow();
+    static_cast<void>(fragmentLeaseBook_.expire(
+        fragmentTick, config_.fragmentSteering.timeoutTicks));
 
     const auto hookDirection = nfqueueHookToDirection(hook);
     const auto direction = hookDirection.has_value() && nfqueueDirectionIsInput(*hookDirection)
@@ -110,31 +116,73 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
         }
         switch (fragment.status) {
         case Flow::FragmentSubmitStatus::Buffered:
+            if (fragment.datagramKey.has_value() && leaseContext.valid()) {
+                if (fragmentLeaseBook_.retain(
+                        *fragment.datagramKey, *leaseContext.identity,
+                        *leaseContext.mailbox, fragmentTick)) {
+                    leaseContext.markRouted();
+                } else if (leaseContext.mailbox->post(
+                               *leaseContext.identity,
+                               NfqueuePacketLeaseTerminalReason::FailOpen)) {
+                    leaseContext.markRouted();
+                }
+            }
             ++counters_.fragmentBufferedPackets;
             ++counters_.fragmentPassThroughPackets;
             ++counters_.parsePassThroughPackets;
             return NfqueueFlowAdapterResult::FragmentBuffered;
         case Flow::FragmentSubmitStatus::Duplicate:
+            if (fragment.datagramKey.has_value() && leaseContext.valid()) {
+                if (fragmentLeaseBook_.retain(
+                        *fragment.datagramKey, *leaseContext.identity,
+                        *leaseContext.mailbox, fragmentTick)) {
+                    leaseContext.markRouted();
+                } else if (leaseContext.mailbox->post(
+                               *leaseContext.identity,
+                               NfqueuePacketLeaseTerminalReason::FailOpen)) {
+                    leaseContext.markRouted();
+                }
+            }
             ++counters_.fragmentDuplicatePackets;
             ++counters_.fragmentPassThroughPackets;
             ++counters_.parsePassThroughPackets;
             return NfqueueFlowAdapterResult::FragmentDuplicate;
         case Flow::FragmentSubmitStatus::Timeout:
+            if (fragment.datagramKey.has_value()) {
+                static_cast<void>(fragmentLeaseBook_.complete(
+                    *fragment.datagramKey,
+                    NfqueuePacketLeaseTerminalReason::FailOpen));
+            }
             ++counters_.fragmentTimeoutPackets;
             ++counters_.fragmentPassThroughPackets;
             ++counters_.parsePassThroughPackets;
             return NfqueueFlowAdapterResult::FragmentTimeout;
         case Flow::FragmentSubmitStatus::Malformed:
+            if (fragment.datagramKey.has_value()) {
+                static_cast<void>(fragmentLeaseBook_.complete(
+                    *fragment.datagramKey,
+                    NfqueuePacketLeaseTerminalReason::FailOpen));
+            }
             ++counters_.fragmentMalformedPackets;
             ++counters_.fragmentPassThroughPackets;
             ++counters_.parsePassThroughPackets;
             return NfqueueFlowAdapterResult::FragmentMalformed;
         case Flow::FragmentSubmitStatus::Conflict:
+            if (fragment.datagramKey.has_value()) {
+                static_cast<void>(fragmentLeaseBook_.complete(
+                    *fragment.datagramKey,
+                    NfqueuePacketLeaseTerminalReason::FailOpen));
+            }
             ++counters_.fragmentConflictPackets;
             ++counters_.fragmentPassThroughPackets;
             ++counters_.parsePassThroughPackets;
             return NfqueueFlowAdapterResult::FragmentConflict;
         case Flow::FragmentSubmitStatus::Capacity:
+            if (fragment.datagramKey.has_value()) {
+                static_cast<void>(fragmentLeaseBook_.complete(
+                    *fragment.datagramKey,
+                    NfqueuePacketLeaseTerminalReason::FailOpen));
+            }
             ++counters_.fragmentCapacityPackets;
             ++counters_.fragmentPassThroughPackets;
             ++counters_.capacityPassThroughPackets;
@@ -156,6 +204,11 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
                 static_cast<std::uint32_t>(fragment.packet.size()), direction, domain);
             const auto key = Flow::CanonicalFlowKey::from(reassembledFacts);
             if (!key.has_value()) {
+                if (fragment.datagramKey.has_value()) {
+                    static_cast<void>(fragmentLeaseBook_.complete(
+                        *fragment.datagramKey,
+                        NfqueuePacketLeaseTerminalReason::FailOpen));
+                }
                 ++counters_.fragmentMalformedPackets;
                 ++counters_.fragmentPassThroughPackets;
                 ++counters_.parsePassThroughPackets;
@@ -166,6 +219,11 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
             if (fragment.owner.has_value()) {
                 if (fragment.owner->flowKey != *key
                     || fragment.owner->finalOwner != owner) {
+                    if (fragment.datagramKey.has_value()) {
+                        static_cast<void>(fragmentLeaseBook_.complete(
+                            *fragment.datagramKey,
+                            NfqueuePacketLeaseTerminalReason::FailOpen));
+                    }
                     ++counters_.fragmentConflictPackets;
                     ++counters_.fragmentPassThroughPackets;
                     ++counters_.parsePassThroughPackets;
@@ -173,7 +231,16 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
                 }
                 owner = fragment.owner->finalOwner;
             }
-            return injectFacts(std::move(reassembledFacts), owner);
+            const auto graphResult = injectFacts(std::move(reassembledFacts), owner);
+            const auto terminalReason = graphResult
+                == NfqueueFlowAdapterResult::FlowAccepted
+                ? NfqueuePacketLeaseTerminalReason::Accepted
+                : NfqueuePacketLeaseTerminalReason::FailOpen;
+            if (fragment.datagramKey.has_value()) {
+                static_cast<void>(fragmentLeaseBook_.complete(
+                    *fragment.datagramKey, terminalReason));
+            }
+            return graphResult;
         }
     }
 
@@ -187,6 +254,37 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
 
     const auto owner = steering_.distribution().selector().ownerFor(*key);
     return injectFacts(std::move(facts), owner);
+}
+
+std::uint64_t NfqueueFlowAdapter::monotonicFragmentNow() noexcept {
+    const auto elapsed = std::chrono::steady_clock::now() - fragmentEpoch_;
+    const auto wallMilliseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+    if (wallMilliseconds > fragmentTick_) {
+        fragmentTick_ = wallMilliseconds;
+    }
+    return fragmentTick_;
+}
+
+void NfqueueFlowAdapter::expireFragments(
+    const std::uint64_t testAdvanceMilliseconds) noexcept {
+    std::lock_guard lock(mutex_);
+    static_cast<void>(monotonicFragmentNow());
+    if (testAdvanceMilliseconds
+        >= std::numeric_limits<std::uint64_t>::max() - fragmentTick_) {
+        fragmentTick_ = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        fragmentTick_ += testAdvanceMilliseconds;
+    }
+    static_cast<void>(fragmentLeaseBook_.expire(
+        fragmentTick_, config_.fragmentSteering.timeoutTicks));
+    static_cast<void>(fragmentSteering_.expire(fragmentTick_));
+}
+
+void NfqueueFlowAdapter::detachFragmentLeaseMailbox(
+    NfqueueFragmentLeaseCompletionMailbox &mailbox) noexcept {
+    std::lock_guard lock(mutex_);
+    static_cast<void>(fragmentLeaseBook_.detach(mailbox));
 }
 
 void NfqueueFlowAdapter::recordVerdictSendFailure() noexcept {

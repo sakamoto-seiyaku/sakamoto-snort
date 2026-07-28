@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -74,6 +75,27 @@ std::pair<std::vector<std::uint8_t>, std::vector<std::uint8_t>> tcpFragments(
            identification);
     putU16(std::as_writable_bytes(std::span<std::uint8_t>{final}), 6, 3);
     return {std::move(first), std::move(final)};
+}
+
+struct VerdictIntent final {
+    std::uint32_t packetId = 0;
+    NfqueuePacketLeaseVerdict verdict = NfqueuePacketLeaseVerdict::Drop;
+};
+
+NfqueuePacketLeaseAdapter makeLeaseAdapter(
+    std::vector<VerdictIntent> &intents, const std::uint32_t queueNumber) {
+    return NfqueuePacketLeaseAdapter(
+        NfqueuePacketLeaseAdapterConfig{
+            .pendingCapacity = 8,
+            .laneGeneration = 19,
+            .queueNumber = queueNumber,
+            .completionTimeout = std::chrono::seconds(30),
+        },
+        [&intents](const std::uint32_t packetId,
+                   const NfqueuePacketLeaseVerdict verdict) {
+            intents.push_back(VerdictIntent{.packetId = packetId, .verdict = verdict});
+            return true;
+        });
 }
 
 TEST(NfqueueFlowAdapterTest, NormalizesAndRunsSharedOwnerGate) {
@@ -176,6 +198,141 @@ TEST(NfqueueFlowAdapterTest, DuplicateFragmentDoesNotEnterPortPolicy) {
     EXPECT_EQ(counters.directPackets, 1U);
 }
 
+TEST(NfqueueFlowAdapterTest, FragmentLeaseVerdictsReturnToOriginalLanes) {
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .fragmentSteering = Flow::FragmentSteeringConfig{
+            .maxDatagrams = 4,
+            .maxFragmentsPerDatagram = 4,
+            .maxPacketBytes = 128,
+            .timeoutTicks = 10,
+        },
+        .fragmentLeaseCapacityPerDatagram = 4,
+    });
+    std::vector<VerdictIntent> firstIntents;
+    std::vector<VerdictIntent> finalIntents;
+    auto firstLane = makeLeaseAdapter(firstIntents, 10);
+    auto finalLane = makeLeaseAdapter(finalIntents, 11);
+    NfqueueFragmentLeaseCompletionMailbox firstMailbox(8);
+    NfqueueFragmentLeaseCompletionMailbox finalMailbox(8);
+    const auto [first, final] = tcpFragments(0x7373);
+    const auto firstAdmission = firstLane.admit(2001);
+    const auto finalAdmission = finalLane.admit(2002);
+    ASSERT_TRUE(firstAdmission.identity.has_value());
+    ASSERT_TRUE(finalAdmission.identity.has_value());
+
+    bool firstRouted = false;
+    EXPECT_EQ(adapter.process(
+                  10, kNfqueueHookLocalIn,
+                  std::span<const std::uint8_t>{first}, first.size(), {},
+                  NfqueueFragmentLeaseContext{
+                      .identity = firstAdmission.identity,
+                      .mailbox = &firstMailbox,
+                      .routed = &firstRouted}),
+              NfqueueFlowAdapterResult::FragmentBuffered);
+    EXPECT_TRUE(firstRouted);
+    EXPECT_EQ(firstLane.pending(), 1U);
+
+    bool finalRouted = false;
+    EXPECT_EQ(adapter.process(
+                  11, kNfqueueHookLocalIn,
+                  std::span<const std::uint8_t>{final}, final.size(), {},
+                  NfqueueFragmentLeaseContext{
+                      .identity = finalAdmission.identity,
+                      .mailbox = &finalMailbox,
+                      .routed = &finalRouted}),
+              NfqueueFlowAdapterResult::FlowAccepted);
+    EXPECT_FALSE(finalRouted);
+
+    EXPECT_EQ(finalLane.complete(
+                  *finalAdmission.identity,
+                  NfqueuePacketLeaseTerminalReason::Accepted),
+              NfqueuePacketLeaseCompletionStatus::Completed);
+    EXPECT_EQ(firstMailbox.drain(firstLane), 1U);
+    EXPECT_EQ(firstLane.pending(), 0U);
+    ASSERT_EQ(firstIntents.size(), 1U);
+    ASSERT_EQ(finalIntents.size(), 1U);
+    EXPECT_EQ(firstIntents[0].verdict, NfqueuePacketLeaseVerdict::Accept);
+    EXPECT_EQ(finalIntents[0].verdict, NfqueuePacketLeaseVerdict::Accept);
+}
+
+TEST(NfqueueFlowAdapterTest, FragmentLeaseBookExpiresBeforeLeaseWatchdog) {
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .fragmentSteering = Flow::FragmentSteeringConfig{
+            .maxDatagrams = 2,
+            .maxFragmentsPerDatagram = 4,
+            .maxPacketBytes = 128,
+            .timeoutTicks = 1,
+        },
+        .fragmentLeaseCapacityPerDatagram = 4,
+    });
+    std::vector<VerdictIntent> intents;
+    auto lane = makeLeaseAdapter(intents, 12);
+    NfqueueFragmentLeaseCompletionMailbox mailbox(4);
+    const auto [first, unusedFinal] = tcpFragments(0x7474);
+    static_cast<void>(unusedFinal);
+    const auto admission = lane.admit(2003);
+    ASSERT_TRUE(admission.identity.has_value());
+
+    bool routed = false;
+    EXPECT_EQ(adapter.process(
+                  12, kNfqueueHookLocalIn,
+                  std::span<const std::uint8_t>{first}, first.size(), {},
+                  NfqueueFragmentLeaseContext{
+                      .identity = admission.identity,
+                      .mailbox = &mailbox,
+                      .routed = &routed}),
+              NfqueueFlowAdapterResult::FragmentBuffered);
+    EXPECT_TRUE(routed);
+    adapter.expireFragments(2);
+    EXPECT_EQ(mailbox.drain(lane), 1U);
+    EXPECT_EQ(lane.pending(), 0U);
+    ASSERT_EQ(intents.size(), 1U);
+    EXPECT_EQ(intents[0].verdict, NfqueuePacketLeaseVerdict::Drop);
+    EXPECT_EQ(lane.counters().timeout, 1U);
+}
+
+TEST(NfqueueFlowAdapterTest, ReassembledNonL4DatagramCompletesHeldLeasesFailOpen) {
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .fragmentSteering = Flow::FragmentSteeringConfig{
+            .maxDatagrams = 2,
+            .maxFragmentsPerDatagram = 4,
+            .maxPacketBytes = 128,
+            .timeoutTicks = 10,
+        },
+        .fragmentLeaseCapacityPerDatagram = 4,
+    });
+    std::vector<VerdictIntent> intents;
+    auto lane = makeLeaseAdapter(intents, 13);
+    NfqueueFragmentLeaseCompletionMailbox mailbox(4);
+    auto [first, final] = tcpFragments(0x7575);
+    first[9] = 1;
+    final[9] = 1;
+    const auto admission = lane.admit(2004);
+    ASSERT_TRUE(admission.identity.has_value());
+
+    bool routed = false;
+    EXPECT_EQ(adapter.process(
+                  13, kNfqueueHookLocalIn,
+                  std::span<const std::uint8_t>{first}, first.size(), {},
+                  NfqueueFragmentLeaseContext{
+                      .identity = admission.identity,
+                      .mailbox = &mailbox,
+                      .routed = &routed}),
+              NfqueueFlowAdapterResult::FragmentBuffered);
+    EXPECT_TRUE(routed);
+    EXPECT_EQ(adapter.process(13, kNfqueueHookLocalIn,
+                              std::span<const std::uint8_t>{final}, final.size()),
+              NfqueueFlowAdapterResult::FragmentMalformed);
+    EXPECT_EQ(mailbox.drain(lane), 1U);
+    ASSERT_EQ(intents.size(), 1U);
+    EXPECT_EQ(intents[0].verdict, NfqueuePacketLeaseVerdict::Accept);
+    EXPECT_EQ(lane.counters().failOpen, 1U);
+}
+
 TEST(NfqueueFlowAdapterTest, TimeoutAndCapacityHaveDeterministicFragmentResults) {
     const auto [first, final] = tcpFragments(0x6161);
     const auto [otherFirst, unusedFinal] = tcpFragments(0x6262);
@@ -196,10 +353,11 @@ TEST(NfqueueFlowAdapterTest, TimeoutAndCapacityHaveDeterministicFragmentResults)
     EXPECT_EQ(timeoutAdapter.process(1, kNfqueueHookLocalIn,
                                      std::span<const std::uint8_t>{normal}, normal.size()),
               NfqueueFlowAdapterResult::FlowAccepted);
+    timeoutAdapter.expireFragments(2);
     EXPECT_EQ(timeoutAdapter.process(1, kNfqueueHookLocalIn,
                                      std::span<const std::uint8_t>{final}, final.size()),
-              NfqueueFlowAdapterResult::FragmentTimeout);
-    EXPECT_EQ(timeoutAdapter.counters().fragmentTimeoutPackets, 1U);
+              NfqueueFlowAdapterResult::FragmentBuffered);
+    EXPECT_EQ(timeoutAdapter.counters().fragmentTimeoutPackets, 0U);
 
     NfqueueFlowAdapter capacityAdapter(NfqueueFlowAdapterConfig{
         .fragmentSteering = Flow::FragmentSteeringConfig{

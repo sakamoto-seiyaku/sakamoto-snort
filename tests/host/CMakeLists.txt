@@ -101,6 +101,8 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/PacketCaptureAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueFragmentLeaseBook.cpp"
+  "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueuePacketLeaseAdapter.cpp"
 )
 add_sucre_snort_host_test(
   vpp_graph_injection_tests
@@ -124,6 +126,13 @@ add_sucre_snort_host_test(
   nfqueue_packet_lease_adapter_tests
   nfqueue_packet_lease_adapter_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueuePacketLeaseAdapter.cpp"
+)
+add_sucre_snort_host_test(
+  nfqueue_fragment_lease_book_tests
+  nfqueue_fragment_lease_book_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueFragmentLeaseBook.cpp"
+  "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueuePacketLeaseAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
 )
 add_sucre_snort_host_test(
   nfqueue_ipv4_pass_through_tests
