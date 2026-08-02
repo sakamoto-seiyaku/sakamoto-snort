@@ -1,0 +1,605 @@
+diff --git a/src/vlib/main.h b/src/vlib/main.h
+--- a/src/vlib/main.h
++++ b/src/vlib/main.h
+@@ -29,6 +29,10 @@
+ #define VLIB_WAKE_DIAGNOSTICS 0
+ #endif
+ 
++#ifndef VLIB_WAKE_FAULT_INJECTION
++#define VLIB_WAKE_FAULT_INJECTION 0
++#endif
++
+ typedef struct
+ {
+   u8 trace_filter_enable;
+@@ -186,11 +190,19 @@
+   u64 epoll_waits;
+   u8 wakeup_pending;
+   u8 thread_sleeps;
++  CLIB_ALIGN_MARK (wakeup_epoch_state_align, 8);
++  u64 wakeup_epoch_state;
++  u32 wakeup_channel_fault;
++#if VLIB_WAKE_FAULT_INJECTION
++  u32 wakeup_inject_plan;
++#endif
+   u64 wakeup_calls;
+   u64 wakeup_sleeps_seen;
+   u64 wakeup_pending_claims;
+   u64 wakeup_writes;
+   u64 wakeup_write_errors;
++  u64 wakeup_write_retries;
++  u64 wakeup_write_eagain;
+   u64 sleep_attempts;
+   u64 sleep_frame_queue_rechecks;
+   u64 sleep_epoll_wakeups;
+diff --git a/src/vlib/threads.h b/src/vlib/threads.h
+--- a/src/vlib/threads.h
++++ b/src/vlib/threads.h
+@@ -486,56 +486,370 @@
+  * Release barrier after workers sync
+  */
+ void vlib_workers_continue (void);
++
++typedef enum
++{
++  VLIB_WAKE_PHASE_AWAKE = 0,
++  VLIB_WAKE_PHASE_PREPARING_TO_SLEEP = 1,
++  VLIB_WAKE_PHASE_SLEEPING = 2,
++  VLIB_WAKE_PHASE_NOTIFIED = 3,
++  VLIB_WAKE_PHASE_DRAINING = 4,
++  /* Internal refinement of model NOTIFIED while write_required is true. */
++  VLIB_WAKE_PHASE_NOTIFYING = 5,
++} vlib_wake_phase_t;
++
++typedef enum
++{
++  VLIB_WAKE_FAULT_NONE = 0,
++  VLIB_WAKE_FAULT_EBADF = 1,
++  VLIB_WAKE_FAULT_EINVAL = 2,
++  VLIB_WAKE_FAULT_SHORT_WRITE = 3,
++  VLIB_WAKE_FAULT_EINTR_EXHAUSTED = 4,
++  VLIB_WAKE_FAULT_EPOCH_EXHAUSTED = 5,
++  VLIB_WAKE_FAULT_WRITE_ERROR = 6,
++  VLIB_WAKE_FAULT_CAS_EXHAUSTED = 7,
++  VLIB_WAKE_FAULT_STATE_ERROR = 8,
++} vlib_wake_fault_t;
++
++typedef enum
++{
++  VLIB_WAKE_INJECT_OFF = 0,
++  VLIB_WAKE_INJECT_SUCCESS = 1,
++  VLIB_WAKE_INJECT_EINTR = 2,
++  VLIB_WAKE_INJECT_EAGAIN = 3,
++  VLIB_WAKE_INJECT_EBADF = 4,
++  VLIB_WAKE_INJECT_EINVAL = 5,
++  VLIB_WAKE_INJECT_SHORT = 6,
++} vlib_wake_inject_outcome_t;
++
++#define VLIB_WAKE_PHASE_MASK ((u64) 7)
++#define VLIB_WAKE_EPOCH_MASK (~VLIB_WAKE_PHASE_MASK)
++#define VLIB_WAKE_EPOCH_INCREMENT ((u64) 8)
++#define VLIB_WAKE_CAS_ATTEMPTS 64
++#define VLIB_WAKE_POC_EXIT_STATUS 86
++#define VLIB_WAKE_INJECT_OUTCOME_MASK ((u32) 0xff)
++#define VLIB_WAKE_INJECT_REMAINING_SHIFT 8
++#define VLIB_WAKE_INJECT_PLAN(outcome, remaining)                              \
++  ((u32) (outcome) | ((u32) (remaining) << VLIB_WAKE_INJECT_REMAINING_SHIFT))
++
++static_always_inline vlib_wake_phase_t
++vlib_wakeup_epoch_phase (u64 state)
++{
++  return (vlib_wake_phase_t) (state & VLIB_WAKE_PHASE_MASK);
++}
++
++static_always_inline int
++vlib_thread_is_sleeping (vlib_main_t *vm)
++{
++  u64 state;
++
++  if (vlib_frame_queue_wakeup_mode == 0 ||
++      vlib_frame_queue_wakeup_mode == 3)
++    return __atomic_load_n (&vm->thread_sleeps, __ATOMIC_ACQUIRE) != 0;
++
++  state = __atomic_load_n (&vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
++
++  return vlib_wakeup_epoch_phase (state) == VLIB_WAKE_PHASE_SLEEPING;
++}
++
++static_always_inline void
++vlib_wakeup_record_fault (vlib_main_t *vm, vlib_wake_fault_t fault)
++{
++  u32 expected = VLIB_WAKE_FAULT_NONE;
++
++  /* The first low-cardinality correctness fault is stable for postmortem. */
++  __atomic_compare_exchange_n (&vm->wakeup_channel_fault, &expected, fault, 0,
++			       __ATOMIC_RELEASE, __ATOMIC_RELAXED);
++  vlib_exit_with_status (vlib_get_first_main (), VLIB_WAKE_POC_EXIT_STATUS);
++}
++
++static_always_inline void
++vlib_wakeup_epoch_set_phase (vlib_main_t *vm, vlib_wake_phase_t phase)
++{
++  u64 state = __atomic_load_n (&vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
++  u64 desired;
++
++  for (u32 attempt = 0; attempt < VLIB_WAKE_CAS_ATTEMPTS; attempt++)
++    {
++      desired = (state & VLIB_WAKE_EPOCH_MASK) | phase;
++      if (__atomic_compare_exchange_n (&vm->wakeup_epoch_state, &state,
++				       desired, 0, __ATOMIC_ACQ_REL,
++				       __ATOMIC_ACQUIRE))
++	return;
++    }
++
++  vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_CAS_EXHAUSTED);
++}
++
++static_always_inline int
++vlib_wakeup_epoch_begin_draining (vlib_main_t *vm)
++{
++  u64 state = __atomic_load_n (&vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
++  u64 desired;
++
++  for (u32 attempt = 0; attempt < VLIB_WAKE_CAS_ATTEMPTS; attempt++)
++    {
++      /* Model write_required: the worker cannot retire an active writer. */
++      if (vlib_wakeup_epoch_phase (state) == VLIB_WAKE_PHASE_NOTIFYING)
++	return 0;
++      desired =
++	(state & VLIB_WAKE_EPOCH_MASK) | VLIB_WAKE_PHASE_DRAINING;
++      if (__atomic_compare_exchange_n (&vm->wakeup_epoch_state, &state,
++				       desired, 0, __ATOMIC_ACQ_REL,
++				       __ATOMIC_ACQUIRE))
++	return 1;
++    }
++
++  vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_CAS_EXHAUSTED);
++  return 0;
++}
++
++static_always_inline int
++vlib_wakeup_epoch_retire_notifying (vlib_main_t *vm,
++				    vlib_wake_phase_t phase)
++{
++  u64 state = __atomic_load_n (&vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
++  u64 desired;
++
++  for (u32 attempt = 0; attempt < VLIB_WAKE_CAS_ATTEMPTS; attempt++)
++    {
++      if (PREDICT_FALSE (vlib_wakeup_epoch_phase (state) !=
++			 VLIB_WAKE_PHASE_NOTIFYING))
++	{
++	  vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_STATE_ERROR);
++	  return 0;
++	}
++      desired = (state & VLIB_WAKE_EPOCH_MASK) | phase;
++      if (__atomic_compare_exchange_n (&vm->wakeup_epoch_state, &state,
++				       desired, 0, __ATOMIC_ACQ_REL,
++				       __ATOMIC_ACQUIRE))
++	return 1;
++    }
++
++  vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_CAS_EXHAUSTED);
++  return 0;
++}
++
++static_always_inline ssize_t
++vlib_wakeup_eventfd_write (vlib_main_t *vm, u64 *val)
++{
++#if VLIB_WAKE_FAULT_INJECTION
++  u32 plan;
++  u32 outcome = VLIB_WAKE_INJECT_OFF;
++
++  /* Barrier direct wakes are control-plane progress, never fault subjects. */
++  if (__atomic_load_n (vlib_worker_threads->wait_at_barrier,
++		       __ATOMIC_ACQUIRE))
++    return write (vm->wakeup_fd, val, sizeof (*val));
++
++  plan = __atomic_load_n (&vm->wakeup_inject_plan, __ATOMIC_ACQUIRE);
++
++  for (u32 attempt = 0; attempt < VLIB_WAKE_CAS_ATTEMPTS; attempt++)
++    {
++      u32 remaining = plan >> VLIB_WAKE_INJECT_REMAINING_SHIFT;
++      u32 desired;
++
++      if (remaining == 0)
++	break;
++      outcome = plan & VLIB_WAKE_INJECT_OUTCOME_MASK;
++      desired = VLIB_WAKE_INJECT_PLAN (outcome, remaining - 1);
++      if (!__atomic_compare_exchange_n (
++	    &vm->wakeup_inject_plan, &plan, desired, 0, __ATOMIC_ACQ_REL,
++	    __ATOMIC_ACQUIRE))
++	continue;
++
++      switch (outcome)
++	{
++	case VLIB_WAKE_INJECT_SUCCESS:
++	  return write (vm->wakeup_fd, val, sizeof (*val));
++	case VLIB_WAKE_INJECT_EINTR:
++	  errno = EINTR;
++	  return -1;
++	case VLIB_WAKE_INJECT_EAGAIN:
++	  {
++	    ssize_t rv = write (vm->wakeup_fd, val, sizeof (*val));
++
++	    /* Injected EAGAIN still means the eventfd is actually readable. */
++	    if (rv == sizeof (*val) || (rv < 0 && errno == EAGAIN))
++	      {
++		errno = EAGAIN;
++		return -1;
++	      }
++	    return rv;
++	  }
++	case VLIB_WAKE_INJECT_EBADF:
++	  errno = EBADF;
++	  return -1;
++	case VLIB_WAKE_INJECT_EINVAL:
++	  errno = EINVAL;
++	  return -1;
++	case VLIB_WAKE_INJECT_SHORT:
++	  return sizeof (u32);
++	default:
++	  return write (vm->wakeup_fd, val, sizeof (*val));
++	}
++    }
++  if (PREDICT_FALSE ((plan >> VLIB_WAKE_INJECT_REMAINING_SHIFT) != 0))
++    {
++      vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_CAS_EXHAUSTED);
++      errno = EIO;
++      return -1;
++    }
++#endif
++  return write (vm->wakeup_fd, val, sizeof (*val));
++}
++
+ static_always_inline void
+ vlib_thread_wakeup (clib_thread_index_t thread_index)
+ {
+   vlib_main_t *vm = vlib_get_main_by_index (thread_index);
+-  ssize_t rv;
++  u64 state;
++  u64 desired;
++  vlib_wake_phase_t phase;
++  int owns_sleep_notification = 0;
++  int published = 0;
+   u64 val = 1;
+ 
+   if (VLIB_WAKE_DIAGNOSTICS)
+     __atomic_fetch_add (&vm->wakeup_calls, 1, __ATOMIC_RELAXED);
+-  __atomic_thread_fence (__ATOMIC_SEQ_CST);
+-  if (PREDICT_FALSE (vlib_frame_queue_wakeup_mode == 3))
++
++  if (PREDICT_FALSE (vlib_frame_queue_wakeup_mode == 0 ||
++		     vlib_frame_queue_wakeup_mode == 3))
+     {
+-      if (__atomic_exchange_n (&vm->wakeup_pending, 1, __ATOMIC_ACQ_REL) == 0)
++      ssize_t rv;
++
++      /* Preserve the P5 legacy path, including its barrier direct call. */
++      __atomic_thread_fence (__ATOMIC_SEQ_CST);
++      if (vlib_frame_queue_wakeup_mode == 3 ||
++	  __atomic_load_n (&vm->thread_sleeps, __ATOMIC_ACQUIRE))
+ 	{
+-	  if (VLIB_WAKE_DIAGNOSTICS)
+-	    __atomic_fetch_add (&vm->wakeup_pending_claims, 1, __ATOMIC_RELAXED);
+-	  rv = write (vm->wakeup_fd, &val, sizeof (u64));
+-	  if (rv == sizeof (u64))
++	  if (VLIB_WAKE_DIAGNOSTICS && vlib_frame_queue_wakeup_mode != 3)
++	    __atomic_fetch_add (&vm->wakeup_sleeps_seen, 1,
++				__ATOMIC_RELAXED);
++	  if (__atomic_exchange_n (&vm->wakeup_pending, 1,
++				 __ATOMIC_ACQ_REL) == 0)
+ 	    {
+ 	      if (VLIB_WAKE_DIAGNOSTICS)
+-		__atomic_fetch_add (&vm->wakeup_writes, 1, __ATOMIC_RELAXED);
+-	    }
+-	  else
+-	    {
++		__atomic_fetch_add (&vm->wakeup_pending_claims, 1,
++				    __ATOMIC_RELAXED);
++	      rv = write (vm->wakeup_fd, &val, sizeof (val));
+ 	      if (VLIB_WAKE_DIAGNOSTICS)
+-		__atomic_fetch_add (&vm->wakeup_write_errors, 1, __ATOMIC_RELAXED);
++		{
++		  if (rv == sizeof (val))
++		    __atomic_fetch_add (&vm->wakeup_writes, 1,
++					__ATOMIC_RELAXED);
++		  else
++		    __atomic_fetch_add (&vm->wakeup_write_errors, 1,
++					__ATOMIC_RELAXED);
++		}
+ 	    }
+ 	}
+       return;
+     }
+-  if (__atomic_load_n (&vm->thread_sleeps, __ATOMIC_ACQUIRE))
++
++  if (PREDICT_FALSE (__atomic_load_n (&vm->wakeup_channel_fault,
++				      __ATOMIC_ACQUIRE) !=
++		     VLIB_WAKE_FAULT_NONE))
++    return;
++
++  state = __atomic_load_n (&vm->wakeup_epoch_state, __ATOMIC_RELAXED);
++  for (u32 cas_attempt = 0; cas_attempt < VLIB_WAKE_CAS_ATTEMPTS;
++       cas_attempt++)
+     {
+-      if (VLIB_WAKE_DIAGNOSTICS)
+-	__atomic_fetch_add (&vm->wakeup_sleeps_seen, 1, __ATOMIC_RELAXED);
+-      if (__atomic_exchange_n (&vm->wakeup_pending, 1, __ATOMIC_ACQ_REL) == 0)
++
++      /*
++       * The frame and check_frame_queues release stores precede this release
++       * CAS.  A worker acquire observes the publish epoch before it can sleep.
++       */
++      if (PREDICT_FALSE ((state & VLIB_WAKE_EPOCH_MASK) ==
++			 VLIB_WAKE_EPOCH_MASK))
+ 	{
++	  vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_EPOCH_EXHAUSTED);
++	  return;
++	}
++
++      phase = vlib_wakeup_epoch_phase (state);
++      desired = state + VLIB_WAKE_EPOCH_INCREMENT;
++      if (phase == VLIB_WAKE_PHASE_PREPARING_TO_SLEEP)
++	desired = (desired & VLIB_WAKE_EPOCH_MASK) | VLIB_WAKE_PHASE_NOTIFIED;
++      else if (phase == VLIB_WAKE_PHASE_SLEEPING)
++	desired = (desired & VLIB_WAKE_EPOCH_MASK) | VLIB_WAKE_PHASE_NOTIFYING;
++
++      if (__atomic_compare_exchange_n (&vm->wakeup_epoch_state, &state,
++				       desired, 0, __ATOMIC_RELEASE,
++				       __ATOMIC_RELAXED))
++	{
++	  owns_sleep_notification = phase == VLIB_WAKE_PHASE_SLEEPING;
++	  published = 1;
++	  break;
++	}
++    }
++
++  if (PREDICT_FALSE (!published))
++    {
++      vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_CAS_EXHAUSTED);
++      return;
++    }
++
++  if (phase == VLIB_WAKE_PHASE_SLEEPING && VLIB_WAKE_DIAGNOSTICS)
++    __atomic_fetch_add (&vm->wakeup_sleeps_seen, 1, __ATOMIC_RELAXED);
++  if ((phase == VLIB_WAKE_PHASE_PREPARING_TO_SLEEP ||
++       phase == VLIB_WAKE_PHASE_SLEEPING) &&
++      VLIB_WAKE_DIAGNOSTICS)
++    __atomic_fetch_add (&vm->wakeup_pending_claims, 1, __ATOMIC_RELAXED);
++
++  if (!owns_sleep_notification)
++    return;
++
++  for (u32 attempt = 0; attempt < 3; attempt++)
++    {
++      ssize_t rv = vlib_wakeup_eventfd_write (vm, &val);
++
++      if (rv == sizeof (val))
++	{
++	  if (!vlib_wakeup_epoch_retire_notifying (
++		vm, VLIB_WAKE_PHASE_NOTIFIED))
++	    return;
+ 	  if (VLIB_WAKE_DIAGNOSTICS)
+-	    __atomic_fetch_add (&vm->wakeup_pending_claims, 1, __ATOMIC_RELAXED);
+-	  rv = write (vm->wakeup_fd, &val, sizeof (u64));
+-	  if (rv == sizeof (u64))
+-	    {
+-	      if (VLIB_WAKE_DIAGNOSTICS)
+-		__atomic_fetch_add (&vm->wakeup_writes, 1, __ATOMIC_RELAXED);
+-	    }
+-	  else
+-	    {
+-	      if (VLIB_WAKE_DIAGNOSTICS)
+-		__atomic_fetch_add (&vm->wakeup_write_errors, 1, __ATOMIC_RELAXED);
+-	    }
++	    __atomic_fetch_add (&vm->wakeup_writes, 1, __ATOMIC_RELAXED);
++	  return;
++	}
++
++      if (rv < 0 && errno == EAGAIN)
++	{
++	  if (!vlib_wakeup_epoch_retire_notifying (
++		vm, VLIB_WAKE_PHASE_NOTIFIED))
++	    return;
++	  if (VLIB_WAKE_DIAGNOSTICS)
++	    __atomic_fetch_add (&vm->wakeup_write_eagain, 1,
++				__ATOMIC_RELAXED);
++	  return;
++	}
++
++      if (rv < 0 && errno == EINTR && attempt < 2)
++	{
++	  if (VLIB_WAKE_DIAGNOSTICS)
++	    __atomic_fetch_add (&vm->wakeup_write_retries, 1,
++				__ATOMIC_RELAXED);
++	  continue;
+ 	}
++
++      if (VLIB_WAKE_DIAGNOSTICS)
++	__atomic_fetch_add (&vm->wakeup_write_errors, 1, __ATOMIC_RELAXED);
++      if (!vlib_wakeup_epoch_retire_notifying (
++	    vm, VLIB_WAKE_PHASE_DRAINING))
++	return;
++      if (rv >= 0)
++	vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_SHORT_WRITE);
++      else if (errno == EBADF)
++	vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_EBADF);
++      else if (errno == EINVAL)
++	vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_EINVAL);
++      else if (errno == EINTR)
++	vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_EINTR_EXHAUSTED);
++      else
++	vlib_wakeup_record_fault (vm, VLIB_WAKE_FAULT_WRITE_ERROR);
++      return;
+     }
+ }
+ 
+diff --git a/src/vlib/file.c b/src/vlib/file.c
+--- a/src/vlib/file.c
++++ b/src/vlib/file.c
+@@ -106,7 +106,12 @@
+   struct epoll_event *e, epoll_events[16];
+   int n_fds_ready;
+   int is_main = (vm->thread_index == 0);
++  int epoch_protocol = vlib_frame_queue_wakeup_mode != 0 &&
++		       vlib_frame_queue_wakeup_mode != 3;
++  int epoch_service = 0;
++  int epoch_draining = 0;
+   int announced_sleep = 0;
++  u64 preparing_state = 0;
+   u64 sleep_started = 0;
+ #ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+   int timeout_ms = 0, max_timeout_ms = 1000;
+@@ -115,6 +120,15 @@
+ #endif
+   u32 ticks;
+ 
++  if (epoch_protocol &&
++      vlib_wakeup_epoch_phase (__atomic_load_n (&vm->wakeup_epoch_state,
++						__ATOMIC_ACQUIRE)) !=
++	VLIB_WAKE_PHASE_AWAKE)
++    {
++      epoch_service = 1;
++      goto epoll;
++    }
++
+   /*
+    * If we've been asked for a fixed-sleep between main loop polls,
+    * do so right away.
+@@ -161,9 +175,42 @@
+    * to other threads that they need to wakeup us if they need our attention */
+   if (VLIB_WAKE_DIAGNOSTICS)
+     __atomic_fetch_add (&vm->sleep_attempts, 1, __ATOMIC_RELAXED);
+-  __atomic_store_n (&vm->thread_sleeps, 1, __ATOMIC_RELAXED);
+-  announced_sleep = 1;
+-  __atomic_thread_fence (__ATOMIC_SEQ_CST);
++
++  if (epoch_protocol)
++    {
++      u64 awake_state =
++	__atomic_load_n (&vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
++
++      if (vlib_wakeup_epoch_phase (awake_state) != VLIB_WAKE_PHASE_AWAKE)
++	{
++	  epoch_service = 1;
++	  goto epoll;
++	}
++      preparing_state =
++	(awake_state & VLIB_WAKE_EPOCH_MASK) |
++	VLIB_WAKE_PHASE_PREPARING_TO_SLEEP;
++      /*
++       * This acquire/release announce joins the producer publish chain.  The
++       * following acquire rechecks must complete before the exact sleep CAS.
++       */
++      if (!__atomic_compare_exchange_n (
++	    &vm->wakeup_epoch_state, &awake_state, preparing_state, 0,
++	    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
++	{
++	  if (vlib_wakeup_epoch_phase (awake_state) != VLIB_WAKE_PHASE_AWAKE)
++	    epoch_service = 1;
++	  goto epoll;
++	}
++      epoch_service = 1;
++      announced_sleep = 1;
++    }
++  else
++    {
++      /* Preserve the P5 disabled-mode behavior exactly. */
++      __atomic_store_n (&vm->thread_sleeps, 1, __ATOMIC_RELAXED);
++      announced_sleep = 1;
++      __atomic_thread_fence (__ATOMIC_SEQ_CST);
++    }
+ 
+   /*
+    * Close the sleep-transition race with cross-thread publishers.  Either
+@@ -174,18 +221,18 @@
+     {
+       if (VLIB_WAKE_DIAGNOSTICS)
+ 	__atomic_fetch_add (&vm->sleep_frame_queue_rechecks, 1, __ATOMIC_RELAXED);
+-      goto epoll;
++      goto sleep_recheck_failed;
+     }
+ 
+   if (is_main && vm->api_queue_nonempty)
+-    goto epoll;
++    goto sleep_recheck_failed;
+ 
+   if (is_main == 0 && *vlib_worker_threads->wait_at_barrier)
+-    goto epoll;
++    goto sleep_recheck_failed;
+ 
+   for (int nt = 0; nt < VLIB_N_NODE_TYPE; nt++)
+     if (nm->node_interrupts[nt] && clib_interrupt_is_any_pending (nm->node_interrupts[nt]))
+-      goto epoll;
++      goto sleep_recheck_failed;
+ 
+   ticks = vlib_tw_timer_first_expires_in_ticks (vm);
+ 
+@@ -197,6 +244,25 @@
+   else
+     timeout_ms = max_timeout_ms;
+ 
++  if (epoch_protocol)
++    {
++      u64 sleeping_state =
++	(preparing_state & VLIB_WAKE_EPOCH_MASK) | VLIB_WAKE_PHASE_SLEEPING;
++
++      /* Only the unchanged complete PREPARING word is allowed to block. */
++      if (!__atomic_compare_exchange_n (
++	    &vm->wakeup_epoch_state, &preparing_state, sleeping_state, 0,
++	    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
++	{
++	  timeout_ms = 0;
++	  goto epoll;
++	}
++    }
++
++  goto epoll;
++
++sleep_recheck_failed:
++  timeout_ms = 0;
+   goto epoll;
+ 
+ skip_loops:
+@@ -222,11 +288,15 @@
+ 	;
+     }
+ 
+-  __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELAXED);
++  if (epoch_service)
++    epoch_draining = vlib_wakeup_epoch_begin_draining (vm);
++  else if (!epoch_protocol)
++    __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELAXED);
+ 
+   if (n_fds_ready < 0)
+     {
+-      __atomic_store_n (&vm->wakeup_pending, 0, __ATOMIC_RELEASE);
++      if (!epoch_protocol)
++	__atomic_store_n (&vm->wakeup_pending, 0, __ATOMIC_RELEASE);
+       if (unix_error_is_fatal (errno))
+ 	vlib_panic_with_error (vm, clib_error_return_unix (0, "epoll_wait"));
+ 
+@@ -242,7 +312,8 @@
+       clib_file_t *f = e->data.ptr;
+       clib_error_t *err;
+ 
+-      if (announced_sleep && VLIB_WAKE_DIAGNOSTICS && f->file_descriptor == vm->wakeup_fd)
++      if ((announced_sleep || epoch_service) && VLIB_WAKE_DIAGNOSTICS &&
++	  f->file_descriptor == vm->wakeup_fd)
+ 	__atomic_fetch_add (&vm->sleep_epoll_wakeups, 1, __ATOMIC_RELAXED);
+ 
+       if (PREDICT_FALSE (!f->active))
+@@ -311,7 +382,10 @@
+    * racing before this clear is covered by the sleep-side work recheck; one
+    * racing after it owns a fresh eventfd notification.
+    */
+-  __atomic_store_n (&vm->wakeup_pending, 0, __ATOMIC_RELEASE);
++  if (epoch_service && epoch_draining)
++    vlib_wakeup_epoch_set_phase (vm, VLIB_WAKE_PHASE_AWAKE);
++  else if (!epoch_protocol)
++    __atomic_store_n (&vm->wakeup_pending, 0, __ATOMIC_RELEASE);
+ 
+   /* removing fd from epoll instance doesn't remove event from epoll queue
+    * so we need to be sure epoll queue is empty before freeing */
+

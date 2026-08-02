@@ -122,6 +122,17 @@ typedef struct {
     u64 wake_pending_claims;
     u64 wake_writes;
     u64 wake_write_errors;
+    u64 wake_write_retries;
+    u64 wake_write_eagain;
+    u64 wake_epoch_max;
+    u64 wake_faults;
+    u64 wake_fault_code;
+    u64 wake_phase_awake;
+    u64 wake_phase_preparing;
+    u64 wake_phase_sleeping;
+    u64 wake_phase_notified;
+    u64 wake_phase_draining;
+    u64 wake_phase_notifying;
     u64 sleep_attempts;
     u64 sleep_frame_queue_rechecks;
     u64 sleep_epoll_wakeups;
@@ -156,6 +167,67 @@ static const char *handoff_perf_mode_name(handoff_perf_mode_t mode) {
 
 static const char *handoff_perf_distribution_name(handoff_perf_distribution_t distribution) {
     return distribution == HANDOFF_PERF_DIST_UNIFORM ? "uniform" : "hot";
+}
+
+static u64 handoff_perf_outstanding_packets(handoff_perf_main_t *hm) {
+    u64 settled = hm->ingress_drops;
+
+    for (u32 thread = 0; thread < HANDOFF_PERF_MAX_THREADS; thread++) {
+        settled += hm->thread[thread].terminal_packets;
+        settled += hm->thread[thread].return_drops;
+    }
+    return settled <= hm->generated_packets ? hm->generated_packets - settled : ~0ULL;
+}
+
+static clib_error_t *handoff_perf_set_wake_mode(vlib_main_t *vm, handoff_perf_main_t *hm,
+                                                u8 mode) {
+    u64 outstanding = handoff_perf_outstanding_packets(hm);
+
+    if (hm->running || hm->live_tokens != 0 || outstanding != 0)
+        return clib_error_return(0,
+                                 "wake mode change requires stopped benchmark with zero "
+                                 "live/outstanding packets");
+#ifdef HANDOFF_PERF_WAKE_PATCH
+    clib_error_t *error = 0;
+
+    if (vm->thread_index != 0)
+        return clib_error_return(0, "wake mode change requires main thread");
+
+    /* Barrier wakeups use the old mode; publish the new mode only inside. */
+    vlib_worker_thread_barrier_sync(vm);
+    for (u32 thread = 0; thread < vlib_get_n_threads(); thread++) {
+        vlib_main_t *thread_vm = vlib_get_main_by_index(thread);
+        u64 state = __atomic_load_n(&thread_vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
+        u32 fault = __atomic_load_n(&thread_vm->wakeup_channel_fault, __ATOMIC_ACQUIRE);
+
+        if (vlib_wakeup_epoch_phase(state) == VLIB_WAKE_PHASE_NOTIFYING) {
+            error = clib_error_return(0, "thread %u still owns a wake write", thread);
+            break;
+        }
+        if (fault != VLIB_WAKE_FAULT_NONE) {
+            error = clib_error_return(0, "thread %u has stable wake fault %u", thread, fault);
+            break;
+        }
+    }
+    if (error == 0) {
+        for (u32 thread = 0; thread < vlib_get_n_threads(); thread++) {
+            vlib_main_t *thread_vm = vlib_get_main_by_index(thread);
+            u64 state = __atomic_load_n(&thread_vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
+
+            __atomic_store_n(&thread_vm->thread_sleeps, 0, __ATOMIC_RELAXED);
+            __atomic_store_n(&thread_vm->wakeup_pending, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&thread_vm->wakeup_epoch_state,
+                             (state & VLIB_WAKE_EPOCH_MASK) | VLIB_WAKE_PHASE_AWAKE,
+                             __ATOMIC_RELEASE);
+        }
+        __atomic_store_n(&vlib_frame_queue_wakeup_mode, mode, __ATOMIC_RELEASE);
+    }
+    vlib_worker_thread_barrier_release(vm);
+    if (error != 0)
+        return error;
+#endif
+    hm->wake_workers = mode;
+    return 0;
 }
 
 static void handoff_perf_reset_stats(handoff_perf_main_t *hm) {
@@ -201,6 +273,8 @@ static void handoff_perf_reset_diagnostics(handoff_perf_main_t *hm) {
         __atomic_store_n(&thread_vm->wakeup_pending_claims, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&thread_vm->wakeup_writes, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&thread_vm->wakeup_write_errors, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&thread_vm->wakeup_write_retries, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&thread_vm->wakeup_write_eagain, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&thread_vm->sleep_attempts, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&thread_vm->sleep_frame_queue_rechecks, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&thread_vm->sleep_epoll_wakeups, 0, __ATOMIC_RELAXED);
@@ -233,6 +307,9 @@ static handoff_perf_diagnostics_t handoff_perf_get_diagnostics(handoff_perf_main
 
     for (u32 thread = 0; thread < vlib_get_n_threads(); thread++) {
         vlib_main_t *thread_vm = vlib_get_main_by_index(thread);
+        u64 wake_state;
+        u32 wake_fault;
+        vlib_wake_phase_t wake_phase;
 
         diagnostics.wake_calls += __atomic_load_n(&thread_vm->wakeup_calls, __ATOMIC_RELAXED);
         diagnostics.wake_sleeps_seen +=
@@ -242,6 +319,26 @@ static handoff_perf_diagnostics_t handoff_perf_get_diagnostics(handoff_perf_main
         diagnostics.wake_writes += __atomic_load_n(&thread_vm->wakeup_writes, __ATOMIC_RELAXED);
         diagnostics.wake_write_errors +=
             __atomic_load_n(&thread_vm->wakeup_write_errors, __ATOMIC_RELAXED);
+        diagnostics.wake_write_retries +=
+            __atomic_load_n(&thread_vm->wakeup_write_retries, __ATOMIC_RELAXED);
+        diagnostics.wake_write_eagain +=
+            __atomic_load_n(&thread_vm->wakeup_write_eagain, __ATOMIC_RELAXED);
+        wake_state = __atomic_load_n(&thread_vm->wakeup_epoch_state, __ATOMIC_ACQUIRE);
+        wake_phase = vlib_wakeup_epoch_phase(wake_state);
+        diagnostics.wake_epoch_max = clib_max(diagnostics.wake_epoch_max, wake_state >> 3);
+        wake_fault = __atomic_load_n(&thread_vm->wakeup_channel_fault, __ATOMIC_ACQUIRE);
+        if (wake_fault != VLIB_WAKE_FAULT_NONE) {
+            diagnostics.wake_faults++;
+            if (diagnostics.wake_fault_code == VLIB_WAKE_FAULT_NONE)
+                diagnostics.wake_fault_code = wake_fault;
+        }
+        diagnostics.wake_phase_awake += wake_phase == VLIB_WAKE_PHASE_AWAKE;
+        diagnostics.wake_phase_preparing +=
+            wake_phase == VLIB_WAKE_PHASE_PREPARING_TO_SLEEP;
+        diagnostics.wake_phase_sleeping += wake_phase == VLIB_WAKE_PHASE_SLEEPING;
+        diagnostics.wake_phase_notified += wake_phase == VLIB_WAKE_PHASE_NOTIFIED;
+        diagnostics.wake_phase_draining += wake_phase == VLIB_WAKE_PHASE_DRAINING;
+        diagnostics.wake_phase_notifying += wake_phase == VLIB_WAKE_PHASE_NOTIFYING;
         diagnostics.sleep_attempts += __atomic_load_n(&thread_vm->sleep_attempts, __ATOMIC_RELAXED);
         diagnostics.sleep_frame_queue_rechecks +=
             __atomic_load_n(&thread_vm->sleep_frame_queue_rechecks, __ATOMIC_RELAXED);
@@ -544,8 +641,12 @@ VLIB_NODE_FN(handoff_perf_source_node)
             if (handoff_perf_should_sample(hm, sequence)) {
                 remote_sample_buffers[remote_sample_count++] = buffers[i];
                 hm->sampled_remote_enqueues++;
+#ifdef HANDOFF_PERF_WAKE_PATCH
+                if (vlib_thread_is_sleeping(vlib_get_main_by_index(target))) {
+#else
                 if (__atomic_load_n(&vlib_get_main_by_index(target)->thread_sleeps,
                                     __ATOMIC_ACQUIRE)) {
+#endif
                     hm->sampled_target_sleeping++;
                     vlib_get_buffer(vm, buffers[i])->opaque[2] = 1;
                 }
@@ -717,6 +818,7 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
     u64 offered_pps = 0;
     u64 sample_seed = 20260802;
     u32 wake_workers = 0;
+    clib_error_t *error;
 
     (void)cmd;
     if (hm->running)
@@ -771,6 +873,10 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
     if (hm->live_tokens != 0)
         return clib_error_return(0, "previous token pool is not cleaned up");
 
+    error = handoff_perf_set_wake_mode(vm, hm, (u8)wake_workers);
+    if (error != 0)
+        return error;
+
     hm->mode = mode;
     hm->distribution = distribution;
     hm->burst_size = burst;
@@ -779,10 +885,6 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
     hm->sample_seed = sample_seed;
     hm->configured_tokens = configured_tokens;
     hm->offered_pps = offered_pps;
-    hm->wake_workers = (u8)wake_workers;
-#ifdef HANDOFF_PERF_WAKE_PATCH
-    vlib_frame_queue_wakeup_mode = (u8)wake_workers;
-#endif
     hm->worker_count = vlib_get_n_threads() - 1;
     handoff_perf_reset_stats(hm);
     handoff_perf_reset_diagnostics(hm);
@@ -796,9 +898,9 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
             vlib_buffer_free(vm, hm->available, hm->available_count);
         hm->available_count = 0;
         hm->live_tokens = 0;
-#ifdef HANDOFF_PERF_WAKE_PATCH
-        vlib_frame_queue_wakeup_mode = 0;
-#endif
+        error = handoff_perf_set_wake_mode(vm, hm, 0);
+        if (error != 0)
+            return error;
         return clib_error_return(0, "could only allocate %u of %u tokens",
                                  configured_tokens - hm->alloc_errors, configured_tokens);
     }
@@ -880,6 +982,7 @@ VLIB_CLI_COMMAND(handoff_perf_resume_command, static) = {
 static clib_error_t *handoff_perf_cleanup_command_fn(vlib_main_t *vm, unformat_input_t *input,
                                                      vlib_cli_command_t *cmd) {
     handoff_perf_main_t *hm = &handoff_perf_main;
+    clib_error_t *error;
 
     (void)input;
     (void)cmd;
@@ -893,9 +996,9 @@ static clib_error_t *handoff_perf_cleanup_command_fn(vlib_main_t *vm, unformat_i
         vlib_buffer_free(vm, hm->available, hm->available_count);
     hm->available_count = 0;
     hm->live_tokens = 0;
-#ifdef HANDOFF_PERF_WAKE_PATCH
-    vlib_frame_queue_wakeup_mode = 0;
-#endif
+    error = handoff_perf_set_wake_mode(vm, hm, 0);
+    if (error != 0)
+        return error;
     vlib_cli_output(vm, "handoff-perf token pool cleaned");
     return 0;
 }
@@ -912,19 +1015,17 @@ handoff_perf_wake_mode_command_fn (vlib_main_t *vm, unformat_input_t *input,
 {
     handoff_perf_main_t *hm = &handoff_perf_main;
     u32 mode = ~0;
+    clib_error_t *error;
 
     (void) vm;
     (void) cmd;
-    if (hm->running || hm->live_tokens != 0)
-        return clib_error_return (0, "stop and clean up benchmark before changing wake mode");
     if (!unformat (input, "%u", &mode) ||
         unformat_check_input (input) != UNFORMAT_END_OF_INPUT || mode > 3)
         return clib_error_return (0, "wake mode must be 0, 1, 2, or 3");
 
-    hm->wake_workers = (u8) mode;
-#ifdef HANDOFF_PERF_WAKE_PATCH
-    vlib_frame_queue_wakeup_mode = (u8) mode;
-#endif
+    error = handoff_perf_set_wake_mode(vm, hm, (u8)mode);
+    if (error != 0)
+        return error;
     vlib_cli_output (vm, "handoff-perf wake mode %u", mode);
     return 0;
 }
@@ -933,6 +1034,71 @@ VLIB_CLI_COMMAND (handoff_perf_wake_mode_command, static) = {
     .path = "handoff-perf wake-mode",
     .short_help = "handoff-perf wake-mode <0|1|2|3>",
     .function = handoff_perf_wake_mode_command_fn,
+};
+
+static clib_error_t *
+handoff_perf_wake_fault_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                                    vlib_cli_command_t *cmd)
+{
+#if VLIB_WAKE_FAULT_INJECTION
+    handoff_perf_main_t *hm = &handoff_perf_main;
+    u32 thread = ~0;
+    u32 outcome = VLIB_WAKE_INJECT_OFF;
+    u32 count = 0;
+    u32 plan;
+
+    (void) cmd;
+    if (unformat (input, "thread %u off", &thread))
+        ;
+    else if (unformat (input, "thread %u success count %u", &thread, &count))
+        outcome = VLIB_WAKE_INJECT_SUCCESS;
+    else if (unformat (input, "thread %u eintr count %u", &thread, &count))
+        outcome = VLIB_WAKE_INJECT_EINTR;
+    else if (unformat (input, "thread %u eagain count %u", &thread, &count))
+        outcome = VLIB_WAKE_INJECT_EAGAIN;
+    else if (unformat (input, "thread %u ebadf count %u", &thread, &count))
+        outcome = VLIB_WAKE_INJECT_EBADF;
+    else if (unformat (input, "thread %u einval count %u", &thread, &count))
+        outcome = VLIB_WAKE_INJECT_EINVAL;
+    else if (unformat (input, "thread %u short count %u", &thread, &count))
+        outcome = VLIB_WAKE_INJECT_SHORT;
+    else
+        return clib_error_return (0, "expected thread <index> <outcome> count <1..3>");
+
+    if (unformat_check_input (input) != UNFORMAT_END_OF_INPUT ||
+        (outcome != VLIB_WAKE_INJECT_OFF && (count == 0 || count > 3)))
+        return clib_error_return (0, "fault injection count must be 1..3");
+    if (thread == 0 || thread >= vlib_get_n_threads ())
+        return clib_error_return (0, "fault injection target must be worker thread 1..%u",
+                                  vlib_get_n_threads () - 1);
+    if (hm->running || hm->live_tokens != 0 || handoff_perf_outstanding_packets(hm) != 0)
+        return clib_error_return (0,
+                                  "fault injection requires stopped benchmark with zero "
+                                  "live/outstanding packets");
+    if (vm->thread_index != 0)
+        return clib_error_return (0, "fault injection requires main thread");
+
+    plan = VLIB_WAKE_INJECT_PLAN(outcome, count);
+    vlib_worker_thread_barrier_sync(vm);
+    __atomic_store_n (&vlib_get_main_by_index(thread)->wakeup_inject_plan, plan,
+                      __ATOMIC_RELEASE);
+    vlib_worker_thread_barrier_release(vm);
+    vlib_cli_output (vm, "handoff-perf wake fault thread %u outcome %u count %u", thread,
+                     outcome, count);
+    return 0;
+#else
+    (void) vm;
+    (void) input;
+    (void) cmd;
+    return clib_error_return (0, "wake fault injection unavailable in this build");
+#endif
+}
+
+VLIB_CLI_COMMAND (handoff_perf_wake_fault_command, static) = {
+    .path = "handoff-perf wake-fault",
+    .short_help = "handoff-perf wake-fault thread <index> "
+                  "<off|success|eintr|eagain|ebadf|einval|short> [count <1..3>]",
+    .function = handoff_perf_wake_fault_command_fn,
 };
 
 static clib_error_t *handoff_perf_show_command_fn(vlib_main_t *vm, unformat_input_t *input,
@@ -1045,6 +1211,29 @@ static clib_error_t *handoff_perf_show_command_fn(vlib_main_t *vm, unformat_inpu
                     diagnostics.sleep_epoll_timeouts, diagnostics.sleep_cycles,
                     diagnostics.sleep_max_cycles, diagnostics.fq_full_waits,
                     diagnostics.fq_full_wait_cycles, diagnostics.fq_full_wait_max_cycles);
+    vlib_cli_output(vm,
+                    "wake-state epoch-max %llu faults %llu fault-code %llu awake %llu preparing %llu "
+                    "sleeping %llu notified %llu draining %llu notifying %llu write-retries %llu "
+                    "write-eagain %llu",
+                    diagnostics.wake_epoch_max, diagnostics.wake_faults,
+                    diagnostics.wake_fault_code,
+                    diagnostics.wake_phase_awake, diagnostics.wake_phase_preparing,
+                    diagnostics.wake_phase_sleeping, diagnostics.wake_phase_notified,
+                    diagnostics.wake_phase_draining, diagnostics.wake_phase_notifying,
+                    diagnostics.wake_write_retries,
+                    diagnostics.wake_write_eagain);
+#if VLIB_WAKE_FAULT_INJECTION
+    for (u32 thread = 1; thread < vlib_get_n_threads (); thread++) {
+        u32 plan = __atomic_load_n(
+            &vlib_get_main_by_index(thread)->wakeup_inject_plan, __ATOMIC_ACQUIRE);
+
+        vlib_cli_output(vm, "wake-injection thread %u available outcome %u remaining %u",
+                        thread, plan & VLIB_WAKE_INJECT_OUTCOME_MASK,
+                        plan >> VLIB_WAKE_INJECT_REMAINING_SHIFT);
+    }
+#else
+    vlib_cli_output (vm, "wake-injection unavailable");
+#endif
     vlib_cli_output(vm, "sleep-proof sampled-remote-enqueues %llu target-sleeping %llu",
                     hm->sampled_remote_enqueues, hm->sampled_target_sleeping);
     vlib_cli_output(vm,
