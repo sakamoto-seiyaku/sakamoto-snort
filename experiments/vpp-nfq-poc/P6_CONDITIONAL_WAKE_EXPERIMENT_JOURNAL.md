@@ -466,3 +466,226 @@ Verdict: **GO for the current P6b implementation, clean build, and non-performan
 not accept the candidate's full correctness. P6c must still supply the exhaustive atomic-step enumeration,
 C11 happens-before argument, focused litmus, million-transition widened stress, injected eventfd outcomes,
 spurious wake/EINTR, coalescing, sustained-awake, and teardown evidence before any performance experiment.
+
+## P6c — race, memory-order, and fault evidence
+
+Status: **the first read-only P6c gate returned HOLD; the corrected local suite passed and repeat review is
+pending**. No P6d performance measurement ran during this work.
+
+### Atomic-step enumeration and C11 evidence
+
+The P6c throwaway harness lives in `prototypes/conditional_wake_p6/`. The final exhaustive model splits both
+producer payload/frame publication, packed-state load and CAS retry, worker announce/rechecks/sleep-confirm,
+`NOTIFYING` ownership and eventfd write, owner retirement load/CAS retry, epoll readable/spurious/EINTR,
+begin-drain load/CAS retry, drain, clear load/CAS retry, awake dispatch, and teardown steps. Its semantic key
+retains both producer PCs, the worker PC, all CAS snapshots, memory-visibility masks, injection ownership, and
+residue state; only the explanatory trace is excluded. Lost wake is checked at every explored state, before a
+spurious return could mask a stranded worker.
+
+The bounded one-worker/two-producer/one-item-per-producer enumeration passed with 15,734 states, 20,379 action
+edges, 1,638 terminals (64 normal and 1,574 teardown), and zero counterexamples. The deterministic local fault
+matrix passed 13/13 cases. The matching acquire/release chains and evidence boundaries are recorded in
+`P6C_HAPPENS_BEFORE.md`.
+
+The focused persistent-thread C11 harness uses the fixed seed `0x5A4B20260802`, real release/acquire/acq_rel
+atomics, the implementation's 64-attempt CAS budgets, a single-attempt worker announce, and deterministic
+`sched_yield()` widening. The complete `--long` suite exited 0 after 1,000,000 rounds: 598,763 sleep
+confirmations, 598,763 notification claims, and zero lost wakes, visibility failures, double notifications,
+or CAS exhaustions. Its trailing ASan/UBSan 200-round smoke also passed.
+
+An earlier long-suite tail exposed a host-tool issue and is retained as diagnostic evidence. The one-million
+unsanitized litmus itself passed, but LeakSanitizer's exit scan recursively emitted `DEADLYSIGNAL`. A minimal
+pthread ASan binary passed; plain and UBSan-only litmus binaries passed; gdb showed the only abort inside
+`__lsan::CheckForLeaks()` after all harness threads exited. The same ASan litmus passed with
+`ASAN_OPTIONS=detect_leaks=0`. The harness performs no heap allocation, so the runner now disables only the
+broken LeakSanitizer exit scan; ASan memory checks and UBSan remain enabled. Re-running both the 1,000-round
+short suite and the complete million-round suite then passed end-to-end.
+
+Harness hashes:
+
+```text
+p6c_exhaustive.py=a422e406d0c2d365646098700f523c7fa3fcfbbe1576a6e5b46da06cb99dc3d9
+p6c_litmus.c=14ba0f037a6ba90af689bff03485341aed385fbdaee21b43658197ec3daa7255
+fault_scenarios.py=d9fbb292de2100a01d5a031a5bd8c4d79f9efb57583ff967811ed0a2e62df3f2
+run_p6c.sh=8b8449016365658bc9ea706f912a966187c8989300eb7de8cf7ea616c9f13d78
+run_vpp_p6c_faults.py=e32766117a3caf939a6f54197b76204bb0e8dde4145fe6e9d70aeca1dbf89d8c
+P6C_HAPPENS_BEFORE.md=b9661b3ab1503e57619a0c621dac3e16202c4036887fc43e979bca018c2840f9
+```
+
+### Injector-enabled build and actual VPP campaign
+
+For runtime correctness only, the isolated source changed the diagnostics and injection default macros from
+zero to one; the protocol patch and plugin source were unchanged. Ninja removed 2,606 scoped outputs and the
+same warnings-as-errors target set rebuilt 1422/1422 with exit status 0. These artifacts are prohibited from
+P6d performance use.
+
+```text
+diagnostic main.h=fb9d2e16d73e63cacdd93c8ef46c1b211ba61772ea5c7b324f4ac53772e6b9cb
+threads.h=6700e2f24941ca9333c0318d7ddfae706ea49991c820520dccd12f537a6153dd
+file.c=9072a41dfe0de5f9faa8e509429981ea1d0e0b6ce642f0f94bed3003a3b2e4e5
+diagnostic vpp=c6de562ad29dcc9b7469335d018213841316df69489449d8f201f5ad8d6097fe
+vppctl=4af2ddceeaf3d21e1d2e17124eda32ddf641adee4964ac6b3a7e624b432a07e7
+diagnostic plugin=d51f8c6dfc353cf78810a4e72be95da4fa08cfcd9b900cd842ee6b2ad782d946
+```
+
+The first actual campaign, `/tmp/sakamoto-p6c-vpp-runtime-20260802-01`, is preserved as failed-harness
+evidence. Four recoverable cases timed out without consuming their plans, while all four terminal faults and
+the coalescing, sustained-awake, and barrier/no-work cases passed. The differential diagnosis showed that the
+driver's 200 ms CLI polling repeatedly took the worker barrier; VPP's 0.5-second post-barrier sleep guard then
+prevented the target from ever entering `SLEEPING`. This was a harness timing fault, not an injected protocol
+outcome. The driver was changed to provide a 1.2-second CLI-free interval before each observation; no protocol
+or assertion changed.
+
+The corrected campaign `/tmp/sakamoto-p6c-vpp-runtime-20260802-02` passed 11/11 cases and exited 0. Its summary
+hash is `013f51cc25fff94fc9f98d6ec7130badb38cbcecc8f47083f971925e4dd35a86`.
+
+- Recoverable success, one EINTR, two EINTR, and readable EAGAIN each consumed the per-worker plan, exited 0,
+  closed `generated=ingress=terminal=reclaimed=1`, and left zero drops, faults, debt, tokens, or wake residue.
+  The EINTR counters were respectively one and two retries; EAGAIN recorded one readable-EAGAIN transition.
+- Three EINTR attempts, EBADF, EINVAL, and short write each triggered on queued work and exited with the fixed
+  status 86 in about 1.48 seconds including startup, providing bounded controlled-teardown evidence. The
+  bounded model and static C mapping establish pre-exit claim retirement/stable fault; no post-destruction
+  counter claim is made.
+- Burst coalescing closed 192 packets with four observed sleep edges/claims/writes, so no more than one write
+  occurred per observed edge and writes were strictly fewer than packets.
+- The sustained-awake trigger closed 53,248 packets; all 51 writes mapped exactly to 51 real sleep edges and
+  claims, with no unattributed per-packet write.
+- The no-work barrier sequence `2 -> 3 -> 2 -> 0` retained zero generated work, queue debt, faults, and wake
+  residue and exited 0.
+
+Actual epoll EINTR and spurious-return semantics are covered by the bounded model and focused local matrix;
+the actual no-work worker-barrier sequence exercises real eventfd control-plane wakeups. No claim is made that
+an external signal deterministically interrupted the target worker's `epoll_wait` in this campaign.
+
+### First P6c read-only gate: HOLD
+
+Luna found that the first bounded model and documentation did not faithfully represent the implementation's
+nonfatal `epoll_wait` EINTR path. The model retried while blocked, but `file.c` first invokes
+`vlib_wakeup_epoch_begin_draining()` after every epoll return. A nonfatal EINTR therefore transitions to
+`DRAINING`, returns from `file_poll` without an eventfd callback or clear, and is serviced by a zero-timeout
+subsequent file poll. A concurrent `NOTIFYING` owner must retire before begin-draining can succeed. The first
+model also placed frame-queue dispatch before `DRAINING -> AWAKE`, while the implementation clears to AWAKE
+after file callbacks and only later dispatches frame queues from the main loop. Finally, its lost-wake test
+allowed any unrelated not-yet-finished producer to exempt a stranded queued item. The 11-case VPP campaign
+did not deliberately interrupt the target worker's epoll syscall, so it could not close the model mismatch.
+
+Verdict: **HOLD**. All P6d work remained prohibited.
+
+### Corrected EINTR/order model and repeated local evidence
+
+The corrected exhaustive worker path is now: epoll return (readable, spurious, or EINTR), acquire load and
+CAS/retry into `DRAINING`, eventfd-only callback for a readable result, clear to `AWAKE`, then a separate awake
+main-loop frame dispatch. EINTR returns immediately while retaining `DRAINING`; the next non-AWAKE file poll
+uses zero timeout and either services a retained readable event or clears after timeout. The model explicitly
+covers both EINTR without a notification owner and EINTR racing `NOTIFYING`, where begin-draining refuses
+until the writer retires. Lost wake is checked per queued item: only that item's own unfinished publication or
+an active owner whose notification coverage includes that item may defer the finding. An unrelated producer
+cannot rescue or exempt it. The deterministic matrix now includes both EINTR paths and the corrected
+file-callback-before-clear-before-frame-dispatch order.
+
+The main thread reran the complete local suite. The bounded enumeration passed with 20,670 states, 26,804
+action edges, and 2,246 terminals (64 normal and 2,182 teardown), zero counterexamples, and both EINTR coverage
+flags true. The fixed matrix passed 14/14 cases. A 1,000-round focused run passed with 614 sleep confirmations
+and claims, followed by a 200-round ASan/UBSan smoke. The complete fixed-seed run then passed 1,000,000 rounds
+with 610,032 sleep confirmations, 610,032 notification claims, and zero lost wakes, visibility failures,
+double notifications, or CAS exhaustions; its trailing 200-round ASan/UBSan smoke also passed.
+
+Corrected harness hashes:
+
+```text
+p6c_exhaustive.py=69152cfa6c9da13cfd3e22d9b3f04d2db3afdf4a93d5da3e17adc755727f4c2d
+p6c_litmus.c=5497d3f12ced5549695defc7cef587430fac107bf1c2c26c596db1a9315f34ba
+fault_scenarios.py=1b44d27e207d6695b13f87485cbc670a01ec54b7f27cb6ec4176d930764bd445
+run_p6c.sh=8b8449016365658bc9ea706f912a966187c8989300eb7de8cf7ea616c9f13d78
+run_vpp_p6c_faults.py=e32766117a3caf939a6f54197b76204bb0e8dde4145fe6e9d70aeca1dbf89d8c
+P6C_HAPPENS_BEFORE.md=83fda9fd98e4d1e4c1b789327985869b7d951291af3e5895e1668ece4935eff4
+README.md=a615b6b13321add7b944d970883a5fd9e79f60c25c80bc0064a72fc405d7c883
+```
+
+A separate targeted runtime probe is preserved at `/tmp/sakamoto-p6c-epoll-eintr.ywJwrC`. With the
+injector-enabled VPP in mode 2, no benchmark traffic, main core 0, and worker core 1, the main thread resolved
+worker TID 824410 and delivered 20 `SIGWINCH` signals to that exact TID via `tgkill`, spaced 10 ms apart. VPP
+logged all 20 deliveries at the same syscall-wrapper PC and remained healthy. Before/after snapshots retained
+zero generated work, debt, faults, or transition residue; the final state was two AWAKE VMs and process
+termination by SIGTERM exited 0. Diagnostics changed from 6 calls/0 observed sleeps to 8 calls/1 sleep,
+1 claim, 1 write, and 1 epoll wakeup. This is direct targeted-signal runtime evidence consistent with an
+interrupted worker wait and successful recovery, but it is not claimed as instruction-level proof that every
+delivery returned `EINTR`; the faithful bounded model and source mapping carry that semantic proof.
+
+### Second P6c read-only gate: HOLD
+
+Luna confirmed the corrected counts, hashes, zero-counterexample result, 14/14 matrix, actual VPP campaign,
+and bounded interpretation of the targeted signal probe. It found two remaining blockers:
+
+1. When an EINTR return races `NOTIFYING`, the implementation invokes begin-draining exactly once in that
+   `file_poll`. If it is rejected, the negative-return branch immediately returns. The model instead waited
+   for owner retirement and retried begin-draining inside the original poll. The next poll boundary therefore
+   remained source-order inaccurate.
+2. The reviewer's exact-source ASan/UBSan 200-round rerun became a one-task, 100%-CPU process and did not
+   finish after several minutes. A sanitizer pass that was not independently reproducible could not satisfy
+   the gate.
+
+Verdict: **HOLD**. P6d remained prohibited.
+
+### Second-order correction and sanitizer-runtime diagnosis
+
+The model now returns from the original EINTR poll immediately after a `NOTIFYING` begin-draining rejection.
+Only a subsequent non-AWAKE file poll retries begin-draining. That next poll may itself be rejected while the
+owner remains active, or may enter `DRAINING` after owner retirement and perform the zero-timeout service. The
+matrix was changed to assert the same poll boundary. Coverage now separately records EINTR without an owner,
+current-poll concurrent-NOTIFYING rejection, and next-poll rejection.
+
+The first corrected enumeration exposed one `zero_residue` counterexample in model-only notification coverage
+metadata after callback drain, a DRAINING publication, and timeout clear. Retiring that metadata at the real
+clear boundary fixed the representation; no invariant or legal interleaving was weakened. The main thread
+independently reran the final model: 32,032 states, 41,298 edges, and 3,374 terminals (78 normal and 3,296
+teardown), with zero counterexamples and all three EINTR coverage flags true. The fixed matrix passed 14/14.
+
+The main thread reproduced the sanitizer failure outside the runner: the same GCC ASan/UBSan binary passed
+once and timed out on the second of repeated 200-round executions. Repeated runs also produced recursive
+`AddressSanitizer:DEADLYSIGNAL`; the WSL2 kernel logged `WSL CaptureCrash` and `overflowed sigaltstack`.
+Clang's independent ASan runtime failed similarly within four runs, while the unsanitized million-round
+binary remained healthy. Running the same binaries under gdb produced 100/100 clean exits. The discriminating
+condition was process ASLR: `setarch x86_64 -R` produced 100/100 clean GCC ASan runs and 100/100 clean Clang
+ASan runs. This isolates a WSL2 ASLR/sanitizer signal-runtime failure rather than a harness synchronization
+loop.
+
+`run_p6c.sh` now applies `setarch $(uname -m) -R` only to the 200-round sanitizer smoke and only when the
+kernel osrelease identifies Microsoft WSL. Leak scanning remains disabled because the harness performs no
+heap allocation; ASan memory instrumentation and UBSan remain enabled. The ordinary litmus, including the
+million-round run, retains normal ASLR and is unchanged.
+
+The exact final runner then passed the 1,000-round suite and the complete million-round suite. The final long
+run recorded 593,445 sleep confirmations and 593,445 notification claims, with zero lost wakes, visibility
+failures, double notifications, or CAS exhaustions; the isolated ASan/UBSan 200-round tail passed.
+
+Final repeat-gate hashes:
+
+```text
+p6c_exhaustive.py=436ec248325827d727c80cb3ce64bf1d2a4573a3033ac7eb2697b8d621953fd8
+fault_scenarios.py=dea937e40ea1763df6a23325820a168ecf1b4490119d62648408423330c80f1e
+P6C_HAPPENS_BEFORE.md=65a90abcb4fbb54b3f4780664ede53bdf7febd5251bf230c16a3b50daaca8dac
+README.md=67998fcf4b5a58eddd69626605de6c6323b92d9b336b40e4b56fdde07213728f
+p6c_litmus.c=5497d3f12ced5549695defc7cef587430fac107bf1c2c26c596db1a9315f34ba
+run_p6c.sh=19956273371816841cd0667290fd91af808fb641dc4a44a05e79d5798d9a6ca1
+run_vpp_p6c_faults.py=e32766117a3caf939a6f54197b76204bb0e8dde4145fe6e9d70aeca1dbf89d8c
+```
+
+### P6c third read-only gate: GO
+
+Luna independently reran the final exhaustive model and deterministic matrix and reproduced 32,032 states,
+41,298 edges, 3,374 terminals (78 normal and 3,296 teardown), zero counterexamples, all three EINTR coverage
+flags true, and 14/14 passing scenarios. It verified that a current-poll `NOTIFYING` rejection returns
+immediately, the next non-AWAKE poll is a distinct invocation that may reject again, and callback, successful
+clear, and later frame dispatch match `file.c` and the main loop. Model-only notification coverage remains in
+the semantic key and zero-residue checks and retires only at a real callback or successful AWAKE clear; the
+per-item lost-wake invariant was not weakened.
+
+The review also accepted the WSL2 sanitizer isolation. Kernel and preserved diagnostic artifacts substantiate
+the cross-runtime failure, 100 zero-error process-ASLR-disabled runs exist for each GCC and Clang ASan, and
+Luna independently ran both preserved binaries under `setarch -R` with zero failures. Only the WSL sanitizer
+smoke uses this isolation; the ordinary million-transition path is unchanged. All final hashes matched, and
+the actual VPP 11/11 campaign and bounded targeted-signal claims remain valid.
+
+Verdict: **GO for committing P6c and proceeding to the diagnostics-disabled P6d build only**. No performance
+result is accepted by this verdict.
