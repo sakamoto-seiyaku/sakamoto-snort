@@ -8,6 +8,7 @@ import android.os.Process;
 import android.util.Log;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
@@ -25,6 +26,7 @@ public final class SnortVpnService extends VpnService {
     public static final String ACTION_STOP = "com.sakamoto.snort.vpnlite.STOP";
     public static final String ACTION_HTTP_PROBE = "com.sakamoto.snort.vpnlite.HTTP_PROBE";
     public static final String ACTION_UDP_PROBE = "com.sakamoto.snort.vpnlite.UDP_PROBE";
+    public static final String ACTION_PING_PROBE = "com.sakamoto.snort.vpnlite.PING_PROBE";
     public static final String ACTION_CONTROL_PROBE = "com.sakamoto.snort.vpnlite.CONTROL_PROBE";
     public static final String ACTION_RUST_CONTROL_PROBE =
             "com.sakamoto.snort.vpnlite.RUST_CONTROL_PROBE";
@@ -35,6 +37,8 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_PORT = "port";
     public static final String EXTRA_PATH = "path";
     public static final String EXTRA_COUNT = "count";
+    public static final String EXTRA_PAYLOAD_BYTES = "payloadBytes";
+    public static final String EXTRA_SIZE = "size";
     public static final String EXTRA_DURATION_SECONDS = "durationSeconds";
     public static final String EXTRA_ALLOWED_PACKAGE = "allowedPackage";
     public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
@@ -50,6 +54,17 @@ public final class SnortVpnService extends VpnService {
     public static final String MODE_VPP_FORWARD = "vpp-forward";
     public static final String MODE_VPP_HEV = "vpp-hev";
     public static final String MODE_VPP_HEV_HANDOFF = "vpp-hev-handoff";
+    public static final String MODE_VPP_HEV_DIRECT_OWNER = "vpp-hev-direct-owner";
+    public static final String MODE_VPP_HEV_DIRECT_OWNER_POLLING =
+            "vpp-hev-direct-owner-polling";
+    public static final String MODE_VPP_HEV_DIRECT_OWNER_FAULT =
+            "vpp-hev-direct-owner-fault";
+    public static final String MODE_VPP_HEV_DIRECT_OWNER_RETURN =
+            "vpp-hev-direct-owner-return";
+    public static final String MODE_VPP_HEV_DIRECT_OWNER_SINGLE_WRITER =
+            "vpp-hev-direct-owner-single-writer";
+    public static final String MODE_VPP_HEV_FRAGMENT_OWNER = "vpp-hev-fragment-owner";
+    public static final String MODE_VPP_FRAGMENT_OWNER = "vpp-fragment-owner";
     public static final String MODE_VPP_HEV_OWNER_GATE = "vpp-hev-owner-gate";
     public static final String MODE_VPP_HEV_OWNER_RESOLVER = "vpp-hev-owner-resolver";
     public static final String MODE_HEV = "hev";
@@ -117,6 +132,10 @@ public final class SnortVpnService extends VpnService {
         }
         if (ACTION_UDP_PROBE.equals(action)) {
             startUdpProbe(intent);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_PING_PROBE.equals(action)) {
+            startPingProbe(intent);
             return START_NOT_STICKY;
         }
         if (ACTION_CONTROL_PROBE.equals(action)) {
@@ -245,6 +264,13 @@ public final class SnortVpnService extends VpnService {
             vpnFd = null;
             if (MODE_VPP.equals(mode) || MODE_VPP_FORWARD.equals(mode)
                     || MODE_VPP_HEV.equals(mode) || MODE_VPP_HEV_HANDOFF.equals(mode)
+                    || MODE_VPP_HEV_DIRECT_OWNER.equals(mode)
+                    || MODE_VPP_HEV_DIRECT_OWNER_POLLING.equals(mode)
+                    || MODE_VPP_HEV_DIRECT_OWNER_FAULT.equals(mode)
+                    || MODE_VPP_HEV_DIRECT_OWNER_RETURN.equals(mode)
+                    || MODE_VPP_HEV_DIRECT_OWNER_SINGLE_WRITER.equals(mode)
+                    || MODE_VPP_HEV_FRAGMENT_OWNER.equals(mode)
+                    || MODE_VPP_FRAGMENT_OWNER.equals(mode)
                     || MODE_VPP_HEV_OWNER_GATE.equals(mode)
                     || MODE_VPP_HEV_OWNER_RESOLVER.equals(mode)) {
                 int vppMode = 0;
@@ -256,6 +282,20 @@ public final class SnortVpnService extends VpnService {
                     vppMode = 3;
                 } else if (MODE_VPP_HEV_HANDOFF.equals(mode)) {
                     vppMode = 4;
+                } else if (MODE_VPP_HEV_DIRECT_OWNER.equals(mode)) {
+                    vppMode = 6;
+                } else if (MODE_VPP_HEV_DIRECT_OWNER_POLLING.equals(mode)) {
+                    vppMode = 7;
+                } else if (MODE_VPP_HEV_DIRECT_OWNER_FAULT.equals(mode)) {
+                    vppMode = 8;
+                } else if (MODE_VPP_HEV_DIRECT_OWNER_RETURN.equals(mode)) {
+                    vppMode = 9;
+                } else if (MODE_VPP_HEV_DIRECT_OWNER_SINGLE_WRITER.equals(mode)) {
+                    vppMode = 10;
+                } else if (MODE_VPP_HEV_FRAGMENT_OWNER.equals(mode)) {
+                    vppMode = 11;
+                } else if (MODE_VPP_FRAGMENT_OWNER.equals(mode)) {
+                    vppMode = 12;
                 } else if (MODE_VPP_HEV_OWNER_RESOLVER.equals(mode)) {
                     vppMode = 5;
                 }
@@ -317,20 +357,60 @@ public final class SnortVpnService extends VpnService {
         int port = intent == null ? 53 : intent.getIntExtra(EXTRA_PORT, 53);
         int count = intent == null ? 1 : intent.getIntExtra(EXTRA_COUNT, 1);
         count = Math.max(1, Math.min(1000, count));
+        int payloadBytes = intent == null ? 0 : intent.getIntExtra(EXTRA_PAYLOAD_BYTES, 0);
+        payloadBytes = Math.max(0, Math.min(60000, payloadBytes));
 
         final String probeHost = host;
         final int probePort = port;
         final int probeCount = count;
+        final int probePayloadBytes = payloadBytes;
         final int durationSeconds = intent == null ? 0
                 : Math.max(0, Math.min(3600, intent.getIntExtra(EXTRA_DURATION_SECONDS, 0)));
         Thread thread = new Thread(() -> {
             if (durationSeconds > 0) {
                 runUdpStreamProbe(probeHost, probePort, durationSeconds);
             } else {
-                runUdpProbe(probeHost, probePort, probeCount);
+                runUdpProbe(probeHost, probePort, probeCount, probePayloadBytes);
             }
         },
                 "snort-app-udp-probe");
+        thread.start();
+    }
+
+    private void startPingProbe(Intent intent) {
+        String host = intent == null ? null : intent.getStringExtra(EXTRA_HOST);
+        if (host == null || host.isEmpty()) {
+            host = "1.1.1.1";
+        }
+        int size = intent == null ? 4000 : intent.getIntExtra(EXTRA_SIZE, 4000);
+        int count = intent == null ? 1 : intent.getIntExtra(EXTRA_COUNT, 1);
+        size = Math.max(0, Math.min(60000, size));
+        count = Math.max(1, Math.min(10, count));
+        final String probeHost = host;
+        final int probeSize = size;
+        final int probeCount = count;
+        Thread thread = new Thread(() -> {
+            try {
+                java.lang.Process process = new ProcessBuilder("/system/bin/ping", "-c",
+                        Integer.toString(probeCount), "-s", Integer.toString(probeSize),
+                        "-W", "5", probeHost).redirectErrorStream(true).start();
+                ByteArrayOutputStream outputBuffer = new ByteArrayOutputStream();
+                byte[] outputChunk = new byte[256];
+                int outputRead;
+                while ((outputRead = process.getInputStream().read(outputChunk)) > 0) {
+                    outputBuffer.write(outputChunk, 0, outputRead);
+                }
+                byte[] output = outputBuffer.toByteArray();
+                int rc = process.waitFor();
+                File logPath = new File(getFilesDir(), "logs/app-ping-probe.log");
+                appendProbeLog(logPath, "rc=" + rc + " host=" + probeHost + " size="
+                        + probeSize + " count=" + probeCount + " output="
+                        + new String(output, StandardCharsets.UTF_8).replace('\n', ' '));
+            } catch (Exception e) {
+                File logPath = new File(getFilesDir(), "logs/app-ping-probe.log");
+                appendProbeLog(logPath, "fail host=" + probeHost + " error=" + e);
+            }
+        }, "snort-app-ping-probe");
         thread.start();
     }
 
@@ -439,7 +519,7 @@ public final class SnortVpnService extends VpnService {
         return values.get(index);
     }
 
-    private void runUdpProbe(String host, int port, int count) {
+    private void runUdpProbe(String host, int port, int count, int payloadBytes) {
         long started = System.currentTimeMillis();
         File logsDir = new File(getFilesDir(), "logs");
         if (!logsDir.isDirectory() && !logsDir.mkdirs()) {
@@ -451,7 +531,12 @@ public final class SnortVpnService extends VpnService {
         try (DatagramSocket socket = new DatagramSocket()) {
             InetAddress remote = InetAddress.getByName(host);
             socket.connect(remote, port);
-            byte[] payload = "snort-vpn-lite-udp-probe".getBytes(StandardCharsets.US_ASCII);
+            byte[] payload = payloadBytes > 0 ? new byte[payloadBytes]
+                    : "snort-vpn-lite-udp-probe".getBytes(StandardCharsets.US_ASCII);
+            if (payloadBytes > 0) {
+                byte[] prefix = "snort-vpn-lite-udp-fragment".getBytes(StandardCharsets.US_ASCII);
+                System.arraycopy(prefix, 0, payload, 0, Math.min(prefix.length, payload.length));
+            }
             DatagramPacket packet = new DatagramPacket(payload, payload.length);
             int sent = 0;
             for (int i = 0; i < count; i++) {

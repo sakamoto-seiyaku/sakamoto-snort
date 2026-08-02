@@ -19,4 +19,20 @@ fi
 
 cp -R --no-preserve=ownership,timestamps "$OVERLAY_DIR/src/." "$VPP_DIR/src/"
 
+if [ "${SKIP_CORE_PATCHES:-0}" != "1" ]; then
+  for overlay_patch in "$OVERLAY_DIR"/patches/*.patch; do
+    [ -e "$overlay_patch" ] || continue
+    if git -C "$VPP_DIR" apply --check "$overlay_patch" 2>/dev/null; then
+      git -C "$VPP_DIR" apply "$overlay_patch"
+    elif git -C "$VPP_DIR" apply --reverse --check "$overlay_patch" 2>/dev/null; then
+      : # Already applied.
+    else
+      echo "Overlay patch does not apply cleanly: $overlay_patch" >&2
+      exit 1
+    fi
+  done
+else
+  echo "Skipped overlay core patches by explicit request"
+fi
+
 echo "Applied overlay to $VPP_DIR"

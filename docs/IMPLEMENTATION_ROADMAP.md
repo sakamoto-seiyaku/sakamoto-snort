@@ -31,6 +31,7 @@ Status 口径（全篇统一）：
 - `[NOTE]`：战略/架构判断（非任务，不与 TODO 混用）
 
 单一真相 / 索引：
+- 产品、UI、内容与发布基线：`docs/product/ANDROID_L4_PRODUCT_PLAN.md`
 - Host 现状盘点：`docs/testing/HOST_TEST_SURVEY.md`
 - Device/DX 重组纲领：`docs/testing/DEVICE_TEST_REORGANIZATION_CHARTER.md`
 - Device/DX 冒烟 casebook：`docs/testing/DEVICE_SMOKE_CASEBOOK.md`
@@ -40,7 +41,10 @@ Status 口径（全篇统一）：
 - 可观测性口径：`docs/INTERFACE_SPECIFICATION.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md`
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
 - NFQUEUE / packet datapath 重构边界：`docs/decisions/NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md`
-- L4 Conntrack / CT A++ runtime 决策：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`
+- per-worker flow ownership：`docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md`
+- VPP-native packet I/O Adapter boundary：`docs/adr/0006-vpp-native-packet-io-adapters.md`
+- one policy bundle 与 stage-owned rule families：`docs/adr/0001-policy-bundle-staged-enforcement.md`
+- L4 Conntrack stateful 语义参考：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`
 - SNORT-10 mainline 重组基线：`docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`
 - Android/VPP 当前交接：`docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`
 - Plane 工作入口：`docs/agents/issue-tracker.md`。`SNORT-10` 与 `SNORT-12..19` 是 workspace reset 前的历史规划标识，不是当前 Plane 项目标识；新的开放工作使用 `SAKAMOTO-*`。
@@ -73,7 +77,10 @@ Status 口径（全篇统一）：
 
 - 当前 active executable 是 pre-SNORT-12 daemon/control/NFQUEUE pass-through base；以下 Domain+IP、CT、Telemetry 完成项是 `archive/current-head/` 保留的 pre-SNORT-10 历史实现证据，不是当前 active runtime capability。
 - pre-SNORT-10 current-head 的 Domain+IP“后端融合”（vNext control 平面 + observability 口径 + datapath 接线）曾完成稳定回归；IPv4/IPv6 双栈、L4 conntrack core、DomainPolicy device-wide 命名收敛、DomainRules per-rule observability 均保留为迁移证据。
-- SNORT-10 架构讨论已收口 Traffic Windows、Hot-path Capability Summary / Advanced Prefilter、CT / DPI pipeline 边界，以及 A 方案内的 Conntrack A++ runtime baseline。后续实现 CT 时默认按全局共享 authoritative CT table、自研专用 CT hash table、当前 field-mix hash 与 `liburcu-qsbr` 推进；C/owner handoff 与 NFQUEUE/userspace 分流实验不混入该 baseline。
+- 目标 VPP runtime 已收敛为 per-worker、per-flow single-owner；Root/NFQUEUE 与 VPN/TUN
+  Packet Capture Adapter 必须进入统一 flow steering。旧 SNORT-10 的全局共享 CT A++
+  baseline 已被取代，但 PacketFacts、consumer-driven facts、bounded observability 和
+  policy stage 等边界继续保留。
 - A/B/C/D 口径已经全部落地：
   - A：packet verdict 可观测（`reasonId/ruleId` + rule execution mode；旧 `wouldRuleId/wouldDrop` 已被 SNORT-10 归入 legacy stream 口径）
   - B：DomainPolicy counters（`policySource` / `domainSources`）
@@ -138,11 +145,12 @@ Status 口径（全篇统一）：
 - [DONE 2026-04-27] 接口规范收敛：重写 `docs/INTERFACE_SPECIFICATION.md` 为 vNext-only，并归档 legacy 版到 `docs/archived/INTERFACE_SPECIFICATION_v3.7_2026-04-26_legacy.md`。
 - [DONE 2026-04-29] Flow Telemetry 工作纲领收口：`docs/decisions/FLOW_TELEMETRY_WORKING_DECISIONS.md` 明确常态 records、Debug Stream、Metrics 与旧 `tracked` 的历史边界；SNORT-10 后 packet-side 诊断以 Packet Diagnostics / Diagnostic Focus 为目标。
 
-## 3. 下一步候选（待讨论后排序）
+## 3. 当前产品主线与后续候选
 
-2026-07-19 顺序覆盖：当前唯一 `[NOW]` 路径是 Android/VPP D0-D5 架构对齐。下列历史
-`[NEXT]` 在 D0-D5 接受前均视为 deferred，不得据此直接创建 implementation ticket 或恢复
-archived runtime。
+2026-07-19 顺序覆盖：当前唯一 `[NOW]` 路径是定义 Android L4 Product Release 与共同的
+UI/content/release 基线。先收口用户场景、UI 信息架构、product-facing view model 和完成标准，
+再将第一条端到端场景拆成 Plane vertical slices。历史 `[NEXT]` 不得越过该产品基线直接恢复
+archived runtime 或创建孤立的数据面实现任务。
 
 ### 3.1 当前后端闭环状态
 
@@ -150,10 +158,10 @@ archived runtime。
 - [DONE 2026-04-30] Debug Stream explainability 已覆盖 tracked DNS / packet verdict 的历史自包含取证链条；SNORT-10 packet 侧由 Packet Diagnostics / Diagnostic Focus 取代，DNS stream 暂时冻结。
 - [DONE 2026-04-30] Policy Bundle Checkpoints 已覆盖 pre-SNORT-10 后端固定槽位 checkpoint / rollback 原语；SNORT-10 Authoring Layer 以 latest-five Checkpoint / Runtime Snapshot 模型为新目标。
 - [DONE 2026-04-30] NDK r29 root daemon workflow 已成为当前 daemon build/deploy/debug 基线；后续 APK/RuntimeService 集成不再依赖 Android source / Soong daemon 路径。
-- [NOTE] OpenSpec 工作流已归档；下一步应先讨论并选定产品/工程方向，再在 Plane 中创建 work item 或更新相应设计文档。
-- [NOW] SNORT-10 mainline reconstruction：旧 `src/` 已归档为 `archive/current-head/src/`，新 active `src/` 只保留 pre-SNORT-12 daemon/control/NFQUEUE pass-through base；旧 legacy control 与旧 direct mutation surface 不进入 active build。边界见 `docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`。
+- [NOTE] OpenSpec 工作流已归档；新的产品/工程工作在产品计划稳定后进入 Plane。
+- [NOTE] SNORT-10 mainline reconstruction 是当前代码基线：旧 `src/` 已归档为 `archive/current-head/src/`，新 active `src/` 只保留 pre-SNORT-12 daemon/control/NFQUEUE pass-through base；旧 legacy control 与旧 direct mutation surface 不进入 active build。边界见 `docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`。
 
-### 3.2 候选 A：前端 / RuntimeService handoff（偏产品集成）
+### 3.2 当前主线：Android L4 Product Release
 
 - [DONE 2026-07-19] SAKAMOTO-12 APK-native daemon packaging handoff：debug APK 已纳入 `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so`，并完成真机安装、artifact hash 与进程快照验收；release signing/upgrade/rollback 仍未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-12 RuntimeService root launch：由 `${applicationInfo.nativeLibraryDir}/libsucre_snortd.so` 启动 daemon，校验 `HELLO.daemonBuildId/artifactAbi/capabilities`，并以本地 runtime log、PID 文件和 root TERM/KILL 完成停止清理；KernelSU 授权、foreground service、crash/restart policy 仍待独立 POC。
@@ -176,10 +184,60 @@ archived runtime。
 - [DONE 2026-07-19] SAKAMOTO-29 RuntimeService reboot recovery：RuntimeService 活跃时 reboot，启动后无 root daemon、app process、control socket、双栈 hook 且无自动拉起，fresh start/stop recovery 通过；OEM boot policy 与 reboot 中断安装未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-30 APK signature/key rotation boundary：不同签名 key 的同 package APK 被 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` 拒绝，原 package 保持存在，原签名 APK RuntimeService recovery 通过；正式 release key rotation、签名 lineage 与 staged migration 未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-31 RuntimeService notification permission denial：撤销 `POST_NOTIFICATIONS` 后 `startForeground`、root daemon 与 RuntimeService 启动仍通过，受控停止无 daemon/socket/NFQUEUE 残留；恢复授权后 fresh recovery 通过。该结论仅覆盖 Android 16 Pixel 6a debug APK，不等同于 release notification UX 验收。
-- [HOLD 2026-07-19] SAKAMOTO-32 VPP experimental NFQUEUE plugin audit and hardening（Android-only）：Pixel 6a Android 16 arm64 已完成当前 v26.02 构件的 IPv4/IPv6 INPUT/OUTPUT verdict、50% ratio、active queue teardown、bounded copy 与短时 idle 基线；生产准入仍 HOLD，剩余异步 event path、original-length/truncation、missing-ID fault policy、single-family/multi-queue、backlog、crash/reboot、latency 和长期 CPU/功耗证据暂停继续 POC，先进入 Android/VPP 架构对齐。Linux/Host 只做源码审计和构建辅助，不作为功能验收环境。专项规格见 `experiments/vpp-nfq-poc/VPP_NFQUEUE_PLUGIN_AUDIT_HARDENING_POC.md`。
-- [NOW 2026-07-19] Android/VPP architecture alignment：停止扩展 POC 队列，先按 `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` 的 D0-D5 顺序确定 process/privilege topology、Packet Capture Adapter、VPP graph/threading、control/policy/health、Android lifecycle/security 与 module admission gate。D0 接受前不创建 implementation tickets，也不把实验 overlay 提升为产品模块。
-- [NEXT] SNORT-10 Authoring / Restore UX 接线：前端围绕 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 实现安全修改、undo/rollback、自救入口与导入导出工作流；pre-SNORT-10 固定 slot 只作为 current-head compatibility 记录，不作为新目标。
-- [NEXT] Flow Telemetry consumer：前端/consumer 负责 mmap record 消费、落盘、索引、Top-K、timeline/history 与 UI 查询，daemon 继续只导出 bounded records。
+- [HOLD 2026-08-02] SAKAMOTO-32 VPP experimental NFQUEUE plugin audit and hardening（Android-only）：
+  Pixel 6a P0-P5 已收口 multi-queue Initial Placement、约 50% scoped canonical mismatch、bounded
+  canonical-return/origin verdict correctness、shared-TX rejection、credit-depth sensitivity 与
+  conditional-wake latency/idle split decision。架构采用 ADR-0006 的 VPP-native Adapter hot path，
+  但生产准入继续 HOLD：真实 verdict failure debt/teardown、完整 L3 direct materialization、IPv4/IPv6/
+  fragment/Q=W、production capacity/credit、长期 soak，以及优化后新 wake artifact 尚未验收。当前
+  wake patch 因 idle CPU gate 失败不得进入 release；功耗无外部功率仪，仍为 INCONCLUSIVE。
+- [NOW 2026-07-19] Android L4 Product Release definition：按 `docs/product/ANDROID_L4_PRODUCT_PLAN.md`
+  收口 Android-only、Root/VPN Runtime Profile、Basic L4、Product UI、content、help、release 和
+  community feedback；当前先稳定核心产品接口并推进 Root/NFQUEUE 数据面 vertical slice，详细
+  UI 设计后移集中处理，但仍保留为该 Release 的完成条件。
+- [NOTE] VPP flow runtime 使用 per-worker single-owner；旧 shared CT A++ baseline
+  已被 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 取代。
+- [NEXT] FlowSteering vertical slice：工程顺序先完成 Root/NFQUEUE，再将 VPN/TUN 接入同一个
+  deep Module Interface；这不拆分产品阶段，Android L4 Product Release 必须同时完成两种互斥
+  Runtime Profile。两种 Packet capture Adapter 都使用 VPP-native plugin hot path；Rust 只通过
+  粗粒度 compatibility ABI 管理 lifecycle、configuration、policy snapshot、status 与 diagnostics，
+  不接收逐包 callback 或 live VPP buffer。普通
+  报文由 Primary Software Distribution 以包含 IP protocol 的 direction-independent canonical
+  五元组选择最终 owner，按目标 worker 组 batch/frame 并第一次直接投递，UID 不参与分流；
+  Worker Layout 与 per-worker pool/cache capacity 启动时固定。Owner Guard 必须在任何私有 state
+  更新前执行；只允许一次 Corrective Handoff，第二次 mismatch 丢弃。IP 分片参考 fork 的两阶段
+  handoff，在 bounded reassembly worker co-locate/reassemble，再把 policy-ready packet 交给首片
+  五元组选择的最终 owner；验证双向首次同 owner、corrective-handoff fault path、fragment
+  disorder/duplicate/overlap/timeout、queue congestion 和 worker skew。
+- [NOTE] Conditional wake 只保留机制方向：旧 artifact 的 sleep-confirmed p99 改善约 44%，但 final
+  patch 相对 exact-unpatched 的 idle CPU gate 失败。后续必须先产生优化后的新 hashed artifact，再以
+  独立预注册 prototype 同时验收 idle non-regression、latency regression、write-failure recovery 和
+  widened transition-race stress；不得继续给旧 artifact 追加样本或把 mode3 persistent wake 产品化。
+- [NEXT] 第一条 vertical slice：安装/授权 → 启动保护 → 选择应用 → 创建 IP/端口规则 →
+  在 Activity 看到实际阻止与原因 → 删除规则并验证恢复。切片必须同时覆盖 UI、Rust control
+  plane、VPP dataplane、测试、帮助和 release evidence。
+- [NOTE] Android L4 Product Release 的完整范围同时包含 app Wi-Fi/Mobile/VPN Network Gate
+  和 advanced Basic IPRULES（双栈 CIDR、五元组、端口范围、方向与接口）；这些表达能力不再
+  拆成后续 CIDR/Ports 产品版本。vertical slice 仍按最小端到端场景逐步交付。
+- [NEXT] `stellar_acl`-style L4PolicyMatcher：只实现一个 priority-tiered stateless classifier，
+  只按 complete Linux UID 建外层 SubjectView，内含 network Gate bit mask 与独立 IPv4/IPv6
+  classifier；direction/network/interface/protocol/CIDR/port 保留为桶内 matcher 维度。在 priority
+  level 内使用 mask shape、masked hash 和 bounded port-range residual check；按 `priority asc,
+  explicit order asc, ruleId asc` 编译连续 WinnerRank，并以 subtable bestPossibleRank 安全早停；
+  以 Android correctness、packet cost、memory、apply cost 和 worst-case probes 验收，不引入 ACL
+  session/cache。
+- [NEXT] Early-drop Activity boundary：Gate/L4 `DROP` 不创建 FlowEntry；热路径更新精确 app/rule
+  counters，并写入 fixed-capacity worker ActivityAccumulator。只有 `PASS_NEXT` lookup/create
+  FlowEntry；Accumulator eviction 只影响 UI detail，必须有明确 lost/evicted observability metrics。
+- [NEXT] Protocol Identification Release：Android L4 Product Release 稳定后，在同一个
+  worker-private FlowEntry 上增加 libprotoident，使用 Recognize-then-enforce；不引入 early hold、
+  full CT、stream reassembly 或复杂 QUIC 适配。当前 graph 在 Adapter completion 前产生的同步
+  识别事实可立即作用于当前 packet；异步结果只影响后续 packet。
+- [NEXT] VPN transport release evidence：对 pinned HEV build 完成真实外网 IPv4/IPv6 TCP 与
+  UDP relay 端到端验收；ICMP Echo 只有通过 capability/device tests 后才发布，其它 protocol
+  不属于 VPN 第一版 forwarding promise。Transport failure 必须与 policy DROP 分开归因。
+- [NOTE] SNORT-10 Authoring / Restore UX 和 Flow Telemetry consumer 的历史目标只保留为
+  可复用设计输入；其最终产品形态必须由 Android L4 UI 场景驱动。
 
 ### 3.3 候选 B：vNext 迁移与 legacy 下线（偏接口收敛）
 
@@ -190,12 +248,18 @@ archived runtime。
 ### 3.4 候选 C：后端能力扩展（偏新能力）
 
 - [DONE 2026-05-04] Flow Telemetry raw facts completeness：直接替换现有 `FLOW` payload v1 layout（不做 v2/兼容窗口/双写），补齐 ICMP type/code/id、`packetDir/flowOriginDir`、per-direction cumulative counters、`l4Status/portsAvailable`、L3 observation、`endReason`、`firstSeenNs/lastSeenNs`、显式 `verdict/action`、`uidKnown/ifindexKnown` 与可用的 `pickedUpMidStream` 语义；runtime producer 已补齐 `IPRULES=0` 时的 telemetry CT observation、`RESOURCE_EVICTED` END、按 scan budget 限制的 bounded `TELEMETRY_DISABLED` END cleanup，以及 `ruleId=0` 的 known/unknown 区分；已同步 daemon、native consumer、历史 OpenSpec 主规格与 `docs/INTERFACE_SPECIFICATION.md`。
-- [NEXT] Android/VPP design decisions：先完成 handoff 中 D0 deployment/process topology，再依次完成 D1 Packet Capture Adapter、D2 VPP graph/threading、D3 control/policy/health、D4 Android lifecycle/security、D5 module migration/admission gate。设计接受后，SNORT-12 Packet Datapath Foundation 仍只从 bounded copy、PacketFacts、parser status 和 packet processor boundary 开始；SNORT-13 再进入 Hot-Path Capability and Policy Cache，SNORT-14 再进入 Conntrack A++。IPRULES mutation/control 必须等 Authoring Layer contract，不得恢复旧 direct `IPRULES.APPLY`。这些名称是模块顺序，不是当前可直接创建的 implementation ticket。
-- [CANDIDATE] NFQUEUE topology / userspace handoff experiments：`shared-flow-pool`、per-flow owner / handoff、或其它 flow steering 方案只能作为 CT A++ baseline 之后的 perf / contention 变量；不得作为 CT correctness 前提，也不得把 C/owner handoff 混入当前 A 方案实现。
+- [NEXT] Android/VPP implementation planning：产品流程稳定后，把 handoff 中 D0-D4 的 process、
+  Packet Capture Adapter、VPP graph、control/health 和 lifecycle 约束映射到第一条 vertical slice。
+  PacketFacts、parser status、bounded queues、exactly-one verdict 和 immutable Runtime Snapshot
+  继续作为底层准入要求；不恢复旧 direct `IPRULES.APPLY`。
+- [NOTE] flow steering / owner handoff 是 per-worker correctness 基础，不再是 CT A++ 之后的
+  可选 perf mode。具体 hash、queue 和 backpressure Interface 随第一条 vertical slice 收口。
 - [CANDIDATE] `ip-leak` 重新纳入设计：在统一 DomainPolicy + IPRULES 口径下决定启用条件、优先级、可观测性与控制面形态。
 - [CANDIDATE] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
-- [CANDIDATE] 更强的 L4 stateful semantics：超出当前 `ct.state/ct.direction` 最小闭环的扩展能力。
-- [CANDIDATE] L7 / HTTP / HTTPS 被动识别：暂不作为已承诺主线。
+- [CANDIDATE] 更强的 L4 stateful semantics：在 Protocol Identification Release 之后重新排序；
+  不进入前两个产品版本。
+- [NEXT] libprotoident application protocol identification：第二阶段已承诺，但只实现
+  Recognize-then-enforce；L7 HTTP/TLS/QUIC metadata 仍不属于近期承诺。
 
 ### 3.5 文档收尾（降低误读）
 
@@ -222,8 +286,12 @@ archived runtime。
 - **可观测性分层已进入产品集成阶段**：旧的 A/B/C/D counters/stream/perfmetrics 已落地；Flow Telemetry MVP 已补齐前端常态 Top-K/timeline/history 所需的原始 records 层。SNORT-10 packet-side 深度取证目标是 Packet Diagnostics / Diagnostic Focus，旧 Debug Stream 只保留为历史能力与 DNS-line 冻结背景。后续重点不再是继续给 daemon 增加聚合口径，而是把 `Flow Telemetry records`（业务事实）、`Packet Diagnostics`（深度取证）、`Metrics`（后端低基数健康状态）接到 consumer / 前端工作流。
 - **checkpoint / rollback 历史后端原语已落地**：pre-SNORT-10 daemon 已提供固定槽位 policy bundle snapshot 与 atomic restore，避免前端用多条 apply 命令模拟回滚时出现半恢复。SNORT-10 Authoring Layer 不继续以固定槽位作为目标，而是使用 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 模型。
 - **`ip-leak` 继续后置，但必须重新定义定位**：它横跨 domain 与 IP，两边都相关；当前不宜提前混入已收敛主线。需要在统一口径下重新回答它到底是“补位能力 / 默认关闭能力 / 某类场景下的重要能力”中的哪一种。
-- **L4 conntrack core 已落地，SNORT-10 后进入 A++ runtime 重构**：当前仓库已经具备最小闭环的 userspace conntrack（`ct.state/ct.direction` + hot-path gating + host/真机验证）；后续实现重点是按 CT A++ baseline 重构 runtime 成本模型与并发/lifetime 边界。当前纲领入口见 `docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`；实现原则仍是“以 OVS conntrack 语义为母本做 C++ 重实现”，不是重新设计另一套状态系统。
-- **L7 / HTTP / HTTPS 识别暂不作为已承诺主线**：现阶段更稳的产品定位仍是 DNS/domain-policy + IPv4 L3/L4 判决与观测。更高层协议识别是否值得做、能做到什么程度，应在后续单独评估，而不是默认沿着“继续往上解包”自然推进。
+- **Flow runtime 转向 per-worker single-owner**：历史 userspace conntrack 与 OVS-derived semantics
+  保留为未来 stateful 参考，但 shared CT A++ 不再是 runtime 重构目标。第一版只建立产品 Activity
+  和后续 libprotoident 所需的 bounded PASS_NEXT FlowEntry；early drop 使用独立 bounded
+  ActivityAccumulator，不承诺完整 CT。
+- **libprotoident 是第二阶段，metadata 不是**：application protocol identification 已成为明确的
+  阶段性发版目标；HTTP/TLS/QUIC metadata、stream reassembly 和复杂 QUIC 适配继续后置。
 
 ## Appendix B. 架构边界上的当前判断（NOTE；非任务）
 

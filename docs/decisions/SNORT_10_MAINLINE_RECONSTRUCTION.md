@@ -1,7 +1,9 @@
 # SNORT-10 Mainline Reconstruction Baseline
 
 Status: implementation baseline for the `snort10-mainline-reconstruction`
-branch, 2026-06-20.
+branch, updated 2026-07-19. The clean-mainline source decision remains active;
+the later Conntrack A++ module order is superseded by
+`PER_WORKER_FLOW_OWNERSHIP.md` and the Android L4 product plan.
 
 This document records the code-shape decision for rebuilding the daemon
 mainline after the SNORT-10 architecture discussion. It does not replace the

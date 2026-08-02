@@ -16,6 +16,18 @@
 #define TUN_POC_RX_BUF_SIZE 65536
 #define TUN_POC_HANDOFF_BURST 32
 
+#define TUN_POC_PROCESS_CONSUMED 0
+#define TUN_POC_PROCESS_REQUEUED 1
+#define TUN_POC_PROCESS_COMPLETION 2
+
+#define TUN_POC_FRAGMENT_CLASSIFY_ERROR 0
+#define TUN_POC_FRAGMENT_CLASSIFY_NON_FRAGMENT 1
+#define TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT 2
+#define TUN_POC_OPAQUE_FRAGMENT  (1u << 0)
+#define TUN_POC_OPAQUE_FRAGMENT_TRANSITION (1u << 1)
+#define TUN_POC_OPAQUE_FRAGMENT_FIRST (1u << 2)
+#define TUN_POC_OPAQUE_OWNER_ONLY (1u << 3)
+
 typedef struct __attribute__ ((packed))
 {
   u8 version_ihl;
@@ -45,16 +57,47 @@ typedef struct __attribute__ ((packed))
   u16 dst_port;
 } tun_poc_l4_ports_t;
 
+typedef struct
+{
+  u8 version;
+  u8 protocol;
+  u8 addr_len;
+  u16 src_port;
+  u16 dst_port;
+  u8 src[16];
+  u8 dst[16];
+} tun_poc_direct_tuple_t;
+
+typedef struct
+{
+  u8 version;
+  u8 protocol;
+  u8 is_fragment;
+  u8 malformed;
+  u8 first;
+  u8 more;
+  u8 addr_len;
+  u32 fragment_id;
+  u32 offset;
+  u32 payload_len;
+  u8 src[16];
+  u8 dst[16];
+} tun_poc_fragment_info_t;
+
 tun_poc_main_t tun_poc_main = {
   .fd = -1,
   .shim_fd = -1,
   .resolver_fd = -1,
   .file_index = ~0,
   .shim_file_index = ~0,
+  .polling_thread_index = 0,
+  .shim_polling_thread_index = 0,
   .handoff_frame_queue_index = ~0,
   .handoff_target_thread = ~0,
   .redirect_frame_queue_index = ~0,
   .redirect_target_thread = ~0,
+  .completion_frame_queue_index = ~0,
+  .completion_target_thread = 0,
   .last_owner_uid = -1,
   .owner_cache_uid = -1,
   .block_owner_uid = -1,
@@ -64,6 +107,7 @@ tun_poc_main_t tun_poc_main = {
 extern vlib_node_registration_t tun_poc_rx_handoff_node;
 extern vlib_node_registration_t tun_poc_worker_probe_node;
 extern vlib_node_registration_t tun_poc_worker_redirect_node;
+extern vlib_node_registration_t tun_poc_completion_node;
 
 u8 *
 format_tun_poc_mode (u8 *s, va_list *args)
@@ -82,9 +126,29 @@ format_tun_poc_mode (u8 *s, va_list *args)
       return format (s, "handoff-probe");
     case TUN_POC_MODE_HANDOFF_FORWARD_FD:
       return format (s, "handoff-forward-fd");
+    case TUN_POC_MODE_DIRECT_OWNER:
+      return format (s, "direct-owner");
+    case TUN_POC_MODE_DIRECT_OWNER_FAULT:
+      return format (s, "direct-owner-fault");
+    case TUN_POC_MODE_DIRECT_OWNER_RETURN:
+      return format (s, "direct-owner-return");
+    case TUN_POC_MODE_DIRECT_OWNER_SINGLE_WRITER:
+      return format (s, "direct-owner-single-writer");
+    case TUN_POC_MODE_FRAGMENT_OWNER:
+      return format (s, "fragment-owner");
     }
 
   return format (s, "unknown");
+}
+
+static inline u8
+tun_poc_is_direct_owner_mode (tun_poc_mode_t mode)
+{
+  return mode == TUN_POC_MODE_DIRECT_OWNER ||
+         mode == TUN_POC_MODE_DIRECT_OWNER_FAULT ||
+         mode == TUN_POC_MODE_DIRECT_OWNER_RETURN ||
+         mode == TUN_POC_MODE_DIRECT_OWNER_SINGLE_WRITER ||
+         mode == TUN_POC_MODE_FRAGMENT_OWNER;
 }
 
 static clib_error_t *
@@ -349,6 +413,572 @@ tun_poc_record_l4_tuple (tun_poc_main_t *tm, const u8 *packet,
 }
 
 static u8
+tun_poc_parse_direct_tuple (const u8 *packet, u32 packet_len,
+			    tun_poc_direct_tuple_t *tuple)
+{
+  const tun_poc_ip4_header_t *ip4;
+  const tun_poc_l4_ports_t *ports;
+  uword l4_offset;
+  uword total_len;
+  u8 version;
+
+  clib_memset (tuple, 0, sizeof (*tuple));
+  if (packet_len < 1)
+    return 0;
+
+  version = packet[0] >> 4;
+  if (version == 4)
+    {
+      if (packet_len < sizeof (*ip4))
+	return 0;
+
+      ip4 = (const tun_poc_ip4_header_t *) packet;
+      l4_offset = (ip4->version_ihl & 0x0f) * 4;
+      total_len = ntohs (ip4->total_length);
+      if (l4_offset < sizeof (*ip4) ||
+	  total_len < l4_offset + sizeof (*ports) ||
+	  total_len > packet_len)
+	return 0;
+      if (ip4->protocol != IPPROTO_TCP && ip4->protocol != IPPROTO_UDP)
+	return 0;
+
+      ports = (const tun_poc_l4_ports_t *) (packet + l4_offset);
+      tuple->version = 4;
+      tuple->protocol = ip4->protocol;
+      tuple->addr_len = 4;
+      tuple->src_port = ntohs (ports->src_port);
+      tuple->dst_port = ntohs (ports->dst_port);
+      clib_memcpy (tuple->src, &ip4->src, 4);
+      clib_memcpy (tuple->dst, &ip4->dst, 4);
+      return 1;
+    }
+
+  if (version == 6)
+    {
+      if (packet_len < 40 + sizeof (*ports))
+	return 0;
+      if (packet[6] != IPPROTO_TCP && packet[6] != IPPROTO_UDP)
+	return 0;
+
+      ports = (const tun_poc_l4_ports_t *) (packet + 40);
+      tuple->version = 6;
+      tuple->protocol = packet[6];
+      tuple->addr_len = 16;
+      tuple->src_port = ntohs (ports->src_port);
+      tuple->dst_port = ntohs (ports->dst_port);
+      clib_memcpy (tuple->src, packet + 8, 16);
+      clib_memcpy (tuple->dst, packet + 24, 16);
+      return 1;
+    }
+
+  return 0;
+}
+
+static u64
+tun_poc_hash_bytes (u64 hash, const u8 *data, uword len)
+{
+  while (len--)
+    {
+      hash ^= *data++;
+      hash *= 1099511628211ULL;
+    }
+  return hash;
+}
+
+static u8
+tun_poc_parse_fragment_info (const u8 *packet, u32 packet_len,
+			      tun_poc_fragment_info_t *info)
+{
+  u8 version;
+
+  clib_memset (info, 0, sizeof (*info));
+  if (packet_len < 1)
+    return TUN_POC_FRAGMENT_CLASSIFY_ERROR;
+
+  version = packet[0] >> 4;
+  if (version == 4)
+    {
+      const tun_poc_ip4_header_t *ip4;
+      u32 ihl;
+      u32 total_len;
+      u16 frag_off;
+
+      if (packet_len < sizeof (*ip4))
+	return TUN_POC_FRAGMENT_CLASSIFY_ERROR;
+      ip4 = (const tun_poc_ip4_header_t *) packet;
+      ihl = (ip4->version_ihl & 0x0f) * 4;
+      total_len = ntohs (ip4->total_length);
+      if (ihl < sizeof (*ip4) || total_len < ihl || total_len > packet_len)
+	{
+	  info->malformed = 1;
+	  return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+	}
+      frag_off = ntohs (ip4->frag_off);
+      info->version = 4;
+      info->protocol = ip4->protocol;
+      info->addr_len = 4;
+      info->fragment_id = ntohs (ip4->id);
+      clib_memcpy (info->src, &ip4->src, 4);
+      clib_memcpy (info->dst, &ip4->dst, 4);
+      if ((frag_off & 0x3fff) == 0)
+	return TUN_POC_FRAGMENT_CLASSIFY_NON_FRAGMENT;
+
+      info->offset = (u32) (frag_off & 0x1fff) * 8;
+      info->payload_len = total_len - ihl;
+      info->first = info->offset == 0;
+      info->more = (frag_off & 0x2000) != 0;
+      clib_memcpy (info->src, &ip4->src, 4);
+      clib_memcpy (info->dst, &ip4->dst, 4);
+      if (info->payload_len == 0 || info->offset + info->payload_len > 65535 ||
+	  (info->more && (info->payload_len & 7)))
+	info->malformed = 1;
+      return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+    }
+
+  if (version == 6)
+    {
+      u8 next_header;
+      u32 cursor = 40;
+      u32 total_len;
+
+      if (packet_len < 40)
+	return TUN_POC_FRAGMENT_CLASSIFY_ERROR;
+      total_len = 40 + ntohs (*(const u16 *) (packet + 4));
+      if (total_len > packet_len)
+	{
+	  info->malformed = 1;
+	  return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+	}
+      next_header = packet[6];
+      info->version = 6;
+      info->protocol = next_header;
+      info->addr_len = 16;
+      clib_memcpy (info->src, packet + 8, 16);
+      clib_memcpy (info->dst, packet + 24, 16);
+
+      /* Walk the bounded extension chain until the Fragment header. */
+      for (u32 depth = 0; depth < 8; depth++)
+	{
+	  u32 ext_len;
+	  if (next_header == IPPROTO_FRAGMENT)
+	    {
+	      u16 off_flags;
+	      if (cursor + 8 > total_len)
+		{
+		  info->malformed = 1;
+		  return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+		}
+	      off_flags = ntohs (*(const u16 *) (packet + cursor + 2));
+	      info->version = 6;
+	      info->protocol = packet[cursor];
+	      info->addr_len = 16;
+	      info->fragment_id = ntohl (*(const u32 *) (packet + cursor + 4));
+	      info->offset = (u32) ((off_flags >> 3) & 0x1fff) * 8;
+	      info->payload_len = total_len - cursor - 8;
+	      info->first = info->offset == 0;
+	      info->more = (off_flags & 1) != 0;
+	      if (info->payload_len == 0 || info->offset + info->payload_len > 0x1fffffff ||
+		  (info->more && (info->payload_len & 7)))
+		info->malformed = 1;
+	      return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+	    }
+	  if (next_header == IPPROTO_HOPOPTS || next_header == IPPROTO_ROUTING ||
+	      next_header == IPPROTO_DSTOPTS)
+	    {
+	      if (cursor + 2 > total_len)
+		{
+		  info->malformed = 1;
+		  return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+		}
+	      ext_len = ((u32) packet[cursor + 1] + 1) * 8;
+	    }
+	  else if (next_header == IPPROTO_AH)
+	    {
+	      if (cursor + 2 > total_len)
+		{
+		  info->malformed = 1;
+		  return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+		}
+	      ext_len = ((u32) packet[cursor + 1] + 2) * 4;
+	    }
+	  else
+	    return TUN_POC_FRAGMENT_CLASSIFY_NON_FRAGMENT;
+	  if (ext_len < 8 || cursor + ext_len > total_len)
+	    {
+	      info->malformed = 1;
+	      return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+	    }
+	  next_header = packet[cursor];
+	  cursor += ext_len;
+	}
+      info->malformed = 1;
+      return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+    }
+
+  return TUN_POC_FRAGMENT_CLASSIFY_ERROR;
+}
+
+static u64
+tun_poc_fragment_key_hash (const tun_poc_fragment_info_t *info)
+{
+  u8 key[1 + 1 + 4 + 16 + 16];
+  u8 *p = key;
+
+  *p++ = info->version;
+  *p++ = info->protocol;
+  *p++ = (u8) (info->fragment_id >> 24);
+  *p++ = (u8) (info->fragment_id >> 16);
+  *p++ = (u8) (info->fragment_id >> 8);
+  *p++ = (u8) info->fragment_id;
+  clib_memcpy (p, info->src, info->addr_len);
+  p += info->addr_len;
+  clib_memcpy (p, info->dst, info->addr_len);
+  p += info->addr_len;
+  return tun_poc_hash_bytes (1469598103934665603ULL, key, p - key);
+}
+
+static u64
+tun_poc_hash_direct_tuple (const tun_poc_direct_tuple_t *tuple, u8 canonical)
+{
+  u8 key[1 + 1 + 16 + 2 + 16 + 2];
+  const u8 *first_addr = tuple->src;
+  const u8 *second_addr = tuple->dst;
+  u16 first_port = tuple->src_port;
+  u16 second_port = tuple->dst_port;
+  u8 *p = key;
+  int address_order;
+
+  if (canonical)
+    {
+      address_order = memcmp (tuple->src, tuple->dst, tuple->addr_len);
+      if (address_order > 0 ||
+	  (address_order == 0 && tuple->src_port > tuple->dst_port))
+	{
+	  first_addr = tuple->dst;
+	  second_addr = tuple->src;
+	  first_port = tuple->dst_port;
+	  second_port = tuple->src_port;
+	}
+    }
+
+  *p++ = tuple->version;
+  *p++ = tuple->protocol;
+  clib_memcpy (p, first_addr, tuple->addr_len);
+  p += tuple->addr_len;
+  *p++ = (u8) (first_port >> 8);
+  *p++ = (u8) first_port;
+  clib_memcpy (p, second_addr, tuple->addr_len);
+  p += tuple->addr_len;
+  *p++ = (u8) (second_port >> 8);
+  *p++ = (u8) second_port;
+
+  return tun_poc_hash_bytes (1469598103934665603ULL, key,
+			     (uword) (p - key));
+}
+
+static u8
+tun_poc_direct_owner_for_packet (tun_poc_main_t *tm, const u8 *packet,
+				 u32 packet_len, u32 *owner, u64 *canonical_hash,
+				 u64 *direction_hash)
+{
+  tun_poc_direct_tuple_t tuple;
+
+  if (!tun_poc_parse_direct_tuple (packet, packet_len, &tuple) ||
+      tm->direct_worker_count == 0)
+    return 0;
+
+  *canonical_hash = tun_poc_hash_direct_tuple (&tuple, 1);
+  *direction_hash = tun_poc_hash_direct_tuple (&tuple, 0);
+  *owner = (u32) (*canonical_hash % tm->direct_worker_count);
+  return 1;
+}
+
+static u8
+tun_poc_ip_owner_for_packet (tun_poc_main_t *tm,
+			       const tun_poc_fragment_info_t *info,
+			       u32 *owner, u64 *canonical_hash,
+			       u64 *direction_hash)
+{
+  u8 key[1 + 1 + 4 + 16 + 16];
+  u8 *p = key;
+
+  if (tm->direct_worker_count == 0 || info->addr_len == 0)
+    return 0;
+  *p++ = info->version;
+  *p++ = info->protocol;
+  clib_memcpy (p, info->src, info->addr_len);
+  p += info->addr_len;
+  clib_memcpy (p, info->dst, info->addr_len);
+  p += info->addr_len;
+  *canonical_hash = tun_poc_hash_bytes (1469598103934665603ULL, key,
+					      p - key);
+  *direction_hash = *canonical_hash;
+  *owner = (u32) (*canonical_hash % tm->direct_worker_count);
+  return 1;
+}
+
+static u8
+tun_poc_fragment_ranges_complete (const tun_poc_fragment_entry_t *entry)
+{
+  u32 covered = 0;
+  u8 progressed;
+
+  if (!entry->first_seen || !entry->last_seen || entry->final_end == 0)
+    return 0;
+
+  do
+    {
+      progressed = 0;
+      for (u32 i = 0; i < TUN_POC_FRAGMENT_MAX_RANGES; i++)
+	{
+	  const tun_poc_fragment_range_t *range = &entry->ranges[i];
+	  if (!range->valid || range->start > covered || range->end <= covered)
+	    continue;
+	  covered = range->end;
+	  progressed = 1;
+	}
+    }
+  while (progressed && covered < entry->final_end);
+
+  return covered >= entry->final_end;
+}
+
+static void
+tun_poc_fragment_expire (tun_poc_main_t *tm, f64 now)
+{
+  if (tm->fragment_timeout_seconds <= 0)
+    return;
+
+  for (u32 i = 0; i < TUN_POC_FRAGMENT_MAX_ENTRIES; i++)
+    {
+      tun_poc_fragment_entry_t *entry = &tm->fragment_entries[i];
+      if (!entry->valid || now - entry->last_seen_time <
+	      tm->fragment_timeout_seconds)
+	continue;
+      entry->valid = 0;
+      tm->fragment_timeout_drops++;
+      tm->fragment_terminal_drops++;
+    }
+}
+
+static u8
+tun_poc_fragment_owner_for_packet (tun_poc_main_t *tm, const u8 *packet,
+				    u32 packet_len, u32 *owner,
+				    u64 *canonical_hash, u64 *direction_hash,
+				    u8 *is_fragment, u8 *owner_only, u8 *is_first,
+				    u8 *transitioned)
+{
+  tun_poc_fragment_info_t info;
+  u8 kind;
+  f64 now;
+  u64 key_hash;
+  u32 slot = ~0;
+  tun_poc_fragment_entry_t *entry;
+
+  *is_fragment = 0;
+  *owner_only = 0;
+  *is_first = 0;
+  *transitioned = 0;
+  kind = tun_poc_parse_fragment_info (packet, packet_len, &info);
+  if (kind == TUN_POC_FRAGMENT_CLASSIFY_ERROR)
+    return 0;
+  if (kind == TUN_POC_FRAGMENT_CLASSIFY_NON_FRAGMENT)
+	{
+	  if (tun_poc_direct_owner_for_packet (tm, packet, packet_len, owner,
+						 canonical_hash, direction_hash))
+	    return 1;
+	  if (!tun_poc_ip_owner_for_packet (tm, &info, owner, canonical_hash,
+					      direction_hash))
+	    return 0;
+	  *owner_only = 1;
+	  return 1;
+	}
+
+  tm->fragment_packets++;
+  tm->fragment_bytes += packet_len;
+  if (info.malformed)
+    {
+      tm->fragment_malformed++;
+      tm->fragment_terminal_drops++;
+      return 0;
+    }
+
+  *is_fragment = 1;
+  *is_first = info.first;
+  if (info.first)
+    tm->fragment_first_packets++;
+  else
+    tm->fragment_nonfirst_packets++;
+  if (!info.more)
+    tm->fragment_last_packets++;
+
+  now = vlib_time_now (vlib_get_main ());
+  tun_poc_fragment_expire (tm, now);
+  key_hash = tun_poc_fragment_key_hash (&info);
+  *canonical_hash = key_hash;
+  *direction_hash = key_hash;
+
+  for (u32 i = 0; i < TUN_POC_FRAGMENT_MAX_ENTRIES; i++)
+    {
+      tun_poc_fragment_entry_t *candidate = &tm->fragment_entries[i];
+      if (candidate->valid && candidate->key_hash == key_hash &&
+	  candidate->version == info.version &&
+	  candidate->protocol == info.protocol &&
+	  candidate->fragment_id == info.fragment_id)
+	{
+	  slot = i;
+	  break;
+	}
+      if (slot == ~0 && !candidate->valid)
+	slot = i;
+    }
+
+  if (slot == ~0)
+    {
+      tm->fragment_capacity_drops++;
+      tm->fragment_terminal_drops++;
+      return 0;
+    }
+
+  entry = &tm->fragment_entries[slot];
+  if (!entry->valid)
+    {
+      clib_memset (entry, 0, sizeof (*entry));
+      entry->valid = 1;
+      entry->version = info.version;
+      entry->protocol = info.protocol;
+      entry->fragment_id = info.fragment_id;
+      entry->key_hash = key_hash;
+      entry->owner = (u32) (key_hash % tm->direct_worker_count);
+    }
+  entry->last_seen_time = now;
+
+  for (u32 i = 0; i < TUN_POC_FRAGMENT_MAX_RANGES; i++)
+    {
+      tun_poc_fragment_range_t *range = &entry->ranges[i];
+      if (!range->valid)
+	continue;
+      if (range->start == info.offset &&
+	  range->end == info.offset + info.payload_len)
+	{
+	  tm->fragment_duplicate_drops++;
+	  tm->fragment_terminal_drops++;
+	  return 0;
+	}
+      if (info.offset < range->end &&
+	  info.offset + info.payload_len > range->start)
+	{
+	  tm->fragment_overlap_drops++;
+	  tm->fragment_terminal_drops++;
+	  return 0;
+	}
+    }
+
+  if (entry->range_count >= TUN_POC_FRAGMENT_MAX_RANGES)
+    {
+      tm->fragment_capacity_drops++;
+      tm->fragment_terminal_drops++;
+      return 0;
+    }
+  for (u32 i = 0; i < TUN_POC_FRAGMENT_MAX_RANGES; i++)
+    if (!entry->ranges[i].valid)
+      {
+	entry->ranges[i].valid = 1;
+	entry->ranges[i].start = info.offset;
+	entry->ranges[i].end = info.offset + info.payload_len;
+	entry->range_count++;
+	break;
+      }
+
+  if (info.first)
+    {
+      tun_poc_direct_tuple_t tuple;
+      if (tun_poc_parse_direct_tuple (packet, packet_len, &tuple))
+	{
+	  *canonical_hash = tun_poc_hash_direct_tuple (&tuple, 1);
+	  *direction_hash = tun_poc_hash_direct_tuple (&tuple, 0);
+	  entry->flow_owner =
+	    (u32) (*canonical_hash % tm->direct_worker_count);
+	  entry->flow_owner_valid = 1;
+	}
+      entry->first_seen = 1;
+    }
+  if (!info.more)
+    {
+      entry->last_seen = 1;
+      entry->final_end = info.offset + info.payload_len;
+    }
+
+  if (entry->flow_owner_valid && !entry->transitioned &&
+      tun_poc_fragment_ranges_complete (entry))
+    {
+      entry->transitioned = 1;
+      tm->fragment_flow_owner_transitions++;
+      tm->fragment_reassembly_success++;
+      *transitioned = 1;
+    }
+
+  *owner = entry->transitioned && entry->flow_owner_valid ?
+	entry->flow_owner : entry->owner;
+  if (*owner < TUN_POC_MAX_DIRECT_WORKERS)
+    tm->fragment_owner_mask |= 1ULL << *owner;
+  return TUN_POC_FRAGMENT_CLASSIFY_FRAGMENT;
+}
+
+static void
+tun_poc_direct_note_reverse_projection (tun_poc_main_t *tm, const u8 *packet,
+					 u32 packet_len, u32 owner)
+{
+  tun_poc_direct_tuple_t tuple;
+  u8 address[16];
+  u16 port;
+  u64 reverse_hash;
+  u32 reverse_owner;
+
+  if (!tun_poc_parse_direct_tuple (packet, packet_len, &tuple))
+    return;
+
+  clib_memcpy (address, tuple.src, sizeof (address));
+  clib_memcpy (tuple.src, tuple.dst, sizeof (tuple.src));
+  clib_memcpy (tuple.dst, address, sizeof (tuple.dst));
+  port = tuple.src_port;
+  tuple.src_port = tuple.dst_port;
+  tuple.dst_port = port;
+  reverse_hash = tun_poc_hash_direct_tuple (&tuple, 1);
+  reverse_owner = (u32) (reverse_hash % tm->direct_worker_count);
+  if (reverse_owner == owner)
+    tm->direct_reverse_projection_matches++;
+  else
+    tm->direct_reverse_projection_mismatch++;
+}
+
+static void
+tun_poc_direct_note_key (tun_poc_main_t *tm, u32 owner, u64 canonical_hash,
+			 u64 direction_hash)
+{
+  for (u32 i = 0; i < TUN_POC_DIRECT_SEEN_KEYS; i++)
+    {
+      if (!tm->direct_seen_valid[i] ||
+	  tm->direct_seen_canonical_hash[i] != canonical_hash)
+	continue;
+      if (tm->direct_seen_direction_hash[i] != direction_hash)
+	{
+	  tm->direct_reverse_matches++;
+	  if (tm->direct_seen_owner[i] != owner)
+	    tm->direct_reverse_owner_mismatch++;
+	}
+      break;
+    }
+
+  u32 slot = tm->direct_seen_cursor++ % TUN_POC_DIRECT_SEEN_KEYS;
+  tm->direct_seen_valid[slot] = 1;
+  tm->direct_seen_canonical_hash[slot] = canonical_hash;
+  tm->direct_seen_direction_hash[slot] = direction_hash;
+  tm->direct_seen_owner[slot] = owner;
+  tm->direct_target_worker_mask |= 1ULL << owner;
+}
+
+static u8
 tun_poc_owner_cache_lookup (tun_poc_main_t *tm)
 {
   if (!tm->owner_cache_enabled || !tm->owner_cache_valid ||
@@ -493,12 +1123,113 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
   tun_poc_owner_cache_store (tm, uid);
 }
 
-static void
-tun_poc_process_worker_packet (tun_poc_main_t *tm, const u8 *packet,
-			       u32 packet_len)
+static u8
+tun_poc_process_worker_packet (tun_poc_main_t *tm, vlib_main_t *vm,
+			       vlib_node_runtime_t *node, u32 bi)
 {
-  tun_poc_record_l4_tuple (tm, packet, packet_len);
-  tun_poc_query_owner_resolver (tm);
+  vlib_buffer_t *b = vlib_get_buffer (vm, bi);
+  const u8 *packet = vlib_buffer_get_current (b);
+  u32 packet_len = vlib_buffer_length_in_chain (vm, b);
+  u8 fragment_marker = tm->mode == TUN_POC_MODE_FRAGMENT_OWNER &&
+			       (b->opaque[3] & TUN_POC_OPAQUE_FRAGMENT);
+  u8 owner_only_marker = tm->mode == TUN_POC_MODE_FRAGMENT_OWNER &&
+				 (b->opaque[3] & TUN_POC_OPAQUE_OWNER_ONLY);
+  u8 owner_metadata_marker = fragment_marker || owner_only_marker;
+
+  if (tun_poc_is_direct_owner_mode (tm->mode))
+    {
+      u32 owner = ~0;
+      u32 actual_thread = vlib_get_thread_index ();
+      u32 actual_owner = actual_thread > 0 ? actual_thread - 1 : ~0;
+      u64 canonical_hash = 0;
+      u64 direction_hash = 0;
+
+	  if (owner_metadata_marker)
+	owner = b->opaque[2];
+      else if (!tun_poc_direct_owner_for_packet (tm, packet, packet_len, &owner,
+						   &canonical_hash,
+						   &direction_hash))
+	{
+	  tm->direct_parse_errors++;
+	  return 0;
+	}
+
+      if (actual_owner < TUN_POC_MAX_DIRECT_WORKERS)
+	{
+	  if (!fragment_marker)
+	    {
+	      tm->direct_worker_packets[actual_owner]++;
+	      tm->direct_worker_bytes[actual_owner] += packet_len;
+	    }
+	  else if (actual_owner == owner)
+	    tm->fragment_owner_guard_pass++;
+	  else
+	    tm->fragment_owner_guard_mismatch++;
+	}
+	if ((tm->mode == TUN_POC_MODE_DIRECT_OWNER_RETURN ||
+	     tm->mode == TUN_POC_MODE_DIRECT_OWNER_SINGLE_WRITER) && b->opaque[1])
+	  {
+	    tm->direct_return_worker_packets++;
+	    tm->direct_return_worker_bytes += packet_len;
+	  }
+	if (!fragment_marker && tm->mode == TUN_POC_MODE_DIRECT_OWNER_FAULT &&
+	    b->opaque[0] == 4 && actual_owner == owner)
+	  {
+	    /* The second fault is deliberately injected after the corrective
+	     * enqueue. This is the bounded DROP branch of the Owner Guard POC. */
+	    tm->direct_owner_guard_mismatch++;
+	    tm->direct_second_mismatch_drops++;
+	    return 0;
+	  }
+
+	if (fragment_marker)
+	  {
+	    if (actual_owner != owner)
+	      return 0;
+	  }
+	else if (actual_owner == owner)
+	  {
+	tm->direct_owner_guard_pass++;
+	if (tm->mode == TUN_POC_MODE_DIRECT_OWNER_FAULT && b->opaque[0] == 3)
+	  tm->direct_fault_single_completed++;
+	  }
+      else
+	{
+	  tm->direct_owner_guard_mismatch++;
+	  if (tm->mode == TUN_POC_MODE_DIRECT_OWNER_FAULT &&
+	      (b->opaque[0] == 1 || b->opaque[0] == 2))
+	    {
+	      u16 target_thread = (u16) (owner + 1);
+	      u32 n_enq;
+
+	      b->opaque[0] += 2;
+	      n_enq = vlib_buffer_enqueue_to_thread (
+		vm, node, tm->handoff_frame_queue_index, &bi, &target_thread, 1,
+		1 /* drop on congestion */);
+	      if (n_enq == 1)
+		{
+		  tm->direct_corrective_handoffs++;
+		  return 1;
+		}
+
+	      tm->direct_corrective_drops++;
+	    }
+	  return 0;
+	}
+    }
+
+  if (fragment_marker)
+    {
+      tm->last_tuple_valid = 0;
+      tm->last_owner_uid = -1;
+      if (b->opaque[3] & TUN_POC_OPAQUE_FRAGMENT_FIRST)
+	tun_poc_record_l4_tuple (tm, packet, packet_len);
+    }
+	else if (!owner_only_marker)
+	tun_poc_record_l4_tuple (tm, packet, packet_len);
+	if ((!fragment_marker && !owner_only_marker) ||
+	    (b->opaque[3] & TUN_POC_OPAQUE_FRAGMENT_FIRST))
+    tun_poc_query_owner_resolver (tm);
 
   if (tm->block_owner_uid_set && tm->last_owner_uid == tm->block_owner_uid)
     {
@@ -506,22 +1237,52 @@ tun_poc_process_worker_packet (tun_poc_main_t *tm, const u8 *packet,
       tm->uid_blocked_bytes += packet_len;
       tm->blocked_packets++;
       tm->blocked_bytes += packet_len;
-      return;
+      return 0;
     }
 
-  if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
+  if (tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+      tun_poc_is_direct_owner_mode (tm->mode))
     {
       if (tun_poc_should_block_static_dst (tm, packet, packet_len))
 	{
 	  tm->blocked_packets++;
 	  tm->blocked_bytes += packet_len;
-	  return;
+	  return 0;
 	}
-      (void) tun_poc_write_packet (tm->shim_fd, packet, packet_len,
-				   &tm->shim_tx_packets,
-				   &tm->shim_tx_bytes,
-				   &tm->shim_write_errors);
+	  if (tm->mode == TUN_POC_MODE_DIRECT_OWNER_SINGLE_WRITER)
+	    {
+	      u16 target_thread = (u16) tm->completion_target_thread;
+	      u32 n_enq = vlib_buffer_enqueue_to_thread (
+		vm, node, tm->completion_frame_queue_index, &bi, &target_thread, 1,
+		1 /* drop on congestion */);
+	      if (n_enq == 1)
+		{
+		  tm->completion_enqueued_packets++;
+		  tm->completion_enqueued_bytes += packet_len;
+		  return TUN_POC_PROCESS_COMPLETION;
+		}
+	      tm->completion_eagain_drops++;
+	      tm->completion_terminal_drops++;
+	      return TUN_POC_PROCESS_CONSUMED;
+	    }
+          if ((tm->mode == TUN_POC_MODE_DIRECT_OWNER_RETURN ||
+               tm->mode == TUN_POC_MODE_DIRECT_OWNER_SINGLE_WRITER ||
+               tm->mode == TUN_POC_MODE_FRAGMENT_OWNER) &&
+              b->opaque[1])
+	    {
+	      (void) tun_poc_write_packet (tm->fd, packet, packet_len,
+					   &tm->direct_return_tx_packets,
+					   &tm->direct_return_tx_bytes,
+					   &tm->write_errors);
+	    }
+	  else
+	    (void) tun_poc_write_packet (tm->shim_fd, packet, packet_len,
+					 &tm->shim_tx_packets,
+					 &tm->shim_tx_bytes,
+					 &tm->shim_write_errors);
     }
+
+	      return TUN_POC_PROCESS_CONSUMED;
 }
 
 static clib_error_t *
@@ -534,7 +1295,8 @@ tun_poc_main_fd_read_ready (clib_file_t *f)
 			   &tm->overflow_thread_hits);
 
   if (tm->mode == TUN_POC_MODE_HANDOFF_PROBE ||
-      tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
+      tm->mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+      tun_poc_is_direct_owner_mode (tm->mode))
     {
       vlib_node_set_interrupt_pending (vlib_get_main (),
 				       tun_poc_rx_handoff_node.index);
@@ -595,7 +1357,8 @@ VLIB_NODE_FN (tun_poc_rx_handoff_node)
 
   if (!tm->enabled ||
       (tm->mode != TUN_POC_MODE_HANDOFF_PROBE &&
-       tm->mode != TUN_POC_MODE_HANDOFF_FORWARD_FD))
+       tm->mode != TUN_POC_MODE_HANDOFF_FORWARD_FD &&
+       !tun_poc_is_direct_owner_mode (tm->mode)))
     return 0;
 
   while (processed < TUN_POC_HANDOFF_BURST)
@@ -603,6 +1366,13 @@ VLIB_NODE_FN (tun_poc_rx_handoff_node)
       u32 bi = ~0;
       vlib_buffer_t *b;
       u16 target_thread;
+      u32 direct_owner = ~0;
+      u64 direct_canonical_hash = 0;
+      u64 direct_direction_hash = 0;
+      u8 fragment_packet = 0;
+      u8 owner_only = 0;
+      u8 fragment_first = 0;
+      u8 fragment_transition = 0;
       ssize_t rv;
       u32 n_enq;
 
@@ -619,30 +1389,102 @@ VLIB_NODE_FN (tun_poc_rx_handoff_node)
 	      continue;
 	    }
 
+          if (tm->mode == TUN_POC_MODE_FRAGMENT_OWNER)
+	    {
+	      if (!tun_poc_fragment_owner_for_packet (
+		    tm, tm->rx_buf, (u32) rv, &direct_owner,
+		    &direct_canonical_hash, &direct_direction_hash,
+		    &fragment_packet, &owner_only, &fragment_first,
+		    &fragment_transition))
+		{
+		  tm->direct_parse_errors++;
+		  processed++;
+		  continue;
+		}
+	      if (!fragment_packet && !owner_only)
+		{
+		  tun_poc_direct_note_key (tm, direct_owner, direct_canonical_hash,
+					   direct_direction_hash);
+		  tun_poc_direct_note_reverse_projection (tm, tm->rx_buf, (u32) rv,
+							 direct_owner);
+		}
+	    }
+	  else if (tun_poc_is_direct_owner_mode (tm->mode))
+	    {
+	      if (!tun_poc_direct_owner_for_packet (
+		    tm, tm->rx_buf, (u32) rv, &direct_owner,
+		    &direct_canonical_hash, &direct_direction_hash))
+		{
+		  tm->direct_parse_errors++;
+		  processed++;
+		  continue;
+		}
+      tun_poc_direct_note_key (tm, direct_owner, direct_canonical_hash,
+				       direct_direction_hash);
+      tun_poc_direct_note_reverse_projection (tm, tm->rx_buf, (u32) rv,
+						       direct_owner);
+	    }
+
 	  if (vlib_buffer_alloc (vm, &bi, 1) != 1)
 	    {
-	      tm->handoff_alloc_errors++;
+          if (tun_poc_is_direct_owner_mode (tm->mode))
+		tm->direct_alloc_errors++;
+	      else
+		tm->handoff_alloc_errors++;
 	      processed++;
 	      continue;
 	    }
 
 	  b = vlib_get_buffer (vm, bi);
 	  b->flags = 0;
+	  b->opaque[2] = (fragment_packet || owner_only) ? direct_owner : 0;
+	  b->opaque[3] = fragment_packet ? TUN_POC_OPAQUE_FRAGMENT :
+			 owner_only ? TUN_POC_OPAQUE_OWNER_ONLY : 0;
+	  if (fragment_packet && fragment_first)
+	    b->opaque[3] |= TUN_POC_OPAQUE_FRAGMENT_FIRST;
+	  if (fragment_packet && fragment_transition)
+	    b->opaque[3] |= TUN_POC_OPAQUE_FRAGMENT_TRANSITION;
+	  b->opaque[1] = 0; /* primary TUN ingress lane */
 	  b->current_data = 0;
 	  b->current_length = rv;
 	  clib_memcpy_fast (vlib_buffer_get_current (b), tm->rx_buf, rv);
 
-	  target_thread = (u16) tm->handoff_target_thread;
+      target_thread = tun_poc_is_direct_owner_mode (tm->mode)
+                       ? (u16) (direct_owner + 1)
+			   : (u16) tm->handoff_target_thread;
+      if (tm->mode == TUN_POC_MODE_DIRECT_OWNER_FAULT &&
+	  tm->direct_fault_injected < 2)
+	    {
+	      b->opaque[0] = (u32) (1 + tm->direct_fault_injected);
+	      tm->direct_fault_injected++;
+	      target_thread = (u16) (((direct_owner + 1) %
+				      tm->direct_worker_count) + 1);
+	    }
+	  else
+	    b->opaque[0] = 0;
 	  n_enq = vlib_buffer_enqueue_to_thread (
 	    vm, node, tm->handoff_frame_queue_index, &bi, &target_thread, 1,
 	    1 /* drop on congestion */);
 	  if (n_enq == 1)
 	    {
-	      tm->handoff_enqueued_packets++;
-	      tm->handoff_enqueued_bytes += rv;
+		if (tun_poc_is_direct_owner_mode (tm->mode))
+		{
+		  tm->direct_enqueued_packets++;
+		  tm->direct_enqueued_bytes += rv;
+		}
+	      else
+		{
+		  tm->handoff_enqueued_packets++;
+		  tm->handoff_enqueued_bytes += rv;
+		}
 	    }
 	  else
-	    tm->handoff_congestion_drops++;
+	    {
+      if (tun_poc_is_direct_owner_mode (tm->mode))
+		tm->direct_congestion_drops++;
+	      else
+		tm->handoff_congestion_drops++;
+	    }
 
 	  processed++;
 	  continue;
@@ -687,7 +1529,6 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
   for (u32 i = 0; i < n_left; i++)
     {
       vlib_buffer_t *b = vlib_get_buffer (vm, from[i]);
-      u8 *packet = vlib_buffer_get_current (b);
       u32 packet_len = vlib_buffer_length_in_chain (vm, b);
 
       tm->worker_probe_packets++;
@@ -714,8 +1555,8 @@ VLIB_NODE_FN (tun_poc_worker_probe_node)
 	  continue;
 	}
 
-      tun_poc_process_worker_packet (tm, packet, packet_len);
-      vec_add1 (to_free, from[i]);
+      if (!tun_poc_process_worker_packet (tm, vm, node, from[i]))
+	vec_add1 (to_free, from[i]);
     }
 
   if (vec_len (to_free) > 0)
@@ -737,8 +1578,7 @@ VLIB_NODE_FN (tun_poc_worker_redirect_node)
   tun_poc_main_t *tm = &tun_poc_main;
   u32 *from = vlib_frame_vector_args (frame);
   u32 n_left = frame->n_vectors;
-
-  (void) node;
+  u32 *to_free = 0;
 
   tun_poc_note_thread_hit (tm->worker_redirect_thread_hits,
 			   &tm->last_worker_redirect_thread_index,
@@ -747,21 +1587,84 @@ VLIB_NODE_FN (tun_poc_worker_redirect_node)
   for (u32 i = 0; i < n_left; i++)
     {
       vlib_buffer_t *b = vlib_get_buffer (vm, from[i]);
-      u8 *packet = vlib_buffer_get_current (b);
       u32 packet_len = vlib_buffer_length_in_chain (vm, b);
 
       tm->redirect_worker_packets++;
       tm->redirect_worker_bytes += packet_len;
-      tun_poc_process_worker_packet (tm, packet, packet_len);
+      if (!tun_poc_process_worker_packet (tm, vm, node, from[i]))
+	vec_add1 (to_free, from[i]);
     }
 
-  vlib_buffer_free (vm, from, n_left);
+  if (vec_len (to_free) > 0)
+    vlib_buffer_free (vm, to_free, vec_len (to_free));
+  vec_free (to_free);
   return n_left;
 }
 
 VLIB_REGISTER_NODE (tun_poc_worker_redirect_node) = {
   .name = "tun-poc-worker-redirect",
   .function = tun_poc_worker_redirect_node_fn,
+  .type = VLIB_NODE_TYPE_INTERNAL,
+  .vector_size = sizeof (u32),
+};
+
+VLIB_NODE_FN (tun_poc_completion_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  tun_poc_main_t *tm = &tun_poc_main;
+  u32 *from = vlib_frame_vector_args (frame);
+  u32 n_left = frame->n_vectors;
+
+  (void) node;
+
+  for (u32 i = 0; i < n_left; i++)
+    {
+      vlib_buffer_t *b = vlib_get_buffer (vm, from[i]);
+      u32 packet_len = vlib_buffer_length_in_chain (vm, b);
+
+      tm->completion_processed_packets++;
+      tm->completion_processed_bytes += packet_len;
+
+      /* Fault injection models a bounded non-blocking write failure at the
+       * single completion owner. The buffer has a terminal outcome here. */
+      if (tm->completion_fault_budget > 0)
+	{
+	  tm->completion_fault_budget--;
+	  tm->completion_eagain_drops++;
+	  tm->completion_terminal_drops++;
+	  vlib_buffer_free_one (vm, from[i]);
+	  continue;
+	}
+
+      if (b->opaque[1])
+	{
+	  if (tun_poc_write_packet (tm->fd, vlib_buffer_get_current (b),
+				     packet_len, &tm->direct_return_tx_packets,
+				     &tm->direct_return_tx_bytes,
+				     &tm->write_errors) < 0)
+	    {
+	      tm->completion_eagain_drops++;
+	      tm->completion_terminal_drops++;
+	    }
+	}
+      else if (tun_poc_write_packet (tm->shim_fd, vlib_buffer_get_current (b),
+					 packet_len, &tm->shim_tx_packets,
+					 &tm->shim_tx_bytes,
+					 &tm->shim_write_errors) < 0)
+	{
+	  tm->completion_eagain_drops++;
+	  tm->completion_terminal_drops++;
+	}
+
+      vlib_buffer_free_one (vm, from[i]);
+    }
+
+  return n_left;
+}
+
+VLIB_REGISTER_NODE (tun_poc_completion_node) = {
+  .name = "tun-poc-completion",
+  .function = tun_poc_completion_node_fn,
   .type = VLIB_NODE_TYPE_INTERNAL,
   .vector_size = sizeof (u32),
 };
@@ -777,6 +1680,8 @@ tun_poc_handoff_init (vlib_main_t *vm)
     vlib_frame_queue_main_init (tun_poc_worker_probe_node.index, 0);
   tm->redirect_frame_queue_index =
     vlib_frame_queue_main_init (tun_poc_worker_redirect_node.index, 0);
+  tm->completion_frame_queue_index =
+    vlib_frame_queue_main_init (tun_poc_completion_node.index, 0);
   return 0;
 }
 
@@ -799,6 +1704,87 @@ tun_poc_shim_fd_read_ready (clib_file_t *f)
 	{
 	  tm->shim_rx_packets++;
 	  tm->shim_rx_bytes += rv;
+          if (tm->mode == TUN_POC_MODE_DIRECT_OWNER_RETURN ||
+              tm->mode == TUN_POC_MODE_DIRECT_OWNER_SINGLE_WRITER ||
+              tm->mode == TUN_POC_MODE_FRAGMENT_OWNER)
+	    {
+	      vlib_main_t *vm = vlib_get_main ();
+	      vlib_node_runtime_t *node =
+		vlib_node_get_runtime (vm, tun_poc_rx_handoff_node.index);
+	      u32 bi = ~0;
+	      u32 owner = ~0;
+	      u64 canonical_hash = 0;
+	      u64 direction_hash = 0;
+	      u8 fragment_packet = 0;
+	      u8 owner_only = 0;
+	      u8 fragment_first = 0;
+	      u8 fragment_transition = 0;
+
+	      if (tm->mode == TUN_POC_MODE_FRAGMENT_OWNER)
+		{
+		  if (!tun_poc_fragment_owner_for_packet (
+			  tm, tm->rx_buf, (u32) rv, &owner, &canonical_hash,
+			  &direction_hash, &fragment_packet, &owner_only,
+			  &fragment_first, &fragment_transition))
+		    {
+		      tm->direct_parse_errors++;
+		      continue;
+		    }
+		}
+	      else if (!tun_poc_direct_owner_for_packet (
+			 tm, tm->rx_buf, (u32) rv, &owner, &canonical_hash,
+			 &direction_hash))
+		{
+		  tm->direct_parse_errors++;
+		  continue;
+		}
+	      if (!fragment_packet && !owner_only)
+		{
+		  tun_poc_direct_note_key (tm, owner, canonical_hash,
+					   direction_hash);
+		  tun_poc_direct_note_reverse_projection (tm, tm->rx_buf, (u32) rv,
+							 owner);
+		}
+	      if (vlib_buffer_alloc (vm, &bi, 1) != 1)
+		{
+		  tm->direct_alloc_errors++;
+		  continue;
+		}
+
+	      vlib_buffer_t *b = vlib_get_buffer (vm, bi);
+	      b->flags = 0;
+	      b->opaque[0] = 0;
+	      b->opaque[2] = (fragment_packet || owner_only) ? owner : 0;
+	      b->opaque[3] = fragment_packet ? TUN_POC_OPAQUE_FRAGMENT :
+			       owner_only ? TUN_POC_OPAQUE_OWNER_ONLY : 0;
+	      if (fragment_packet && fragment_first)
+		b->opaque[3] |= TUN_POC_OPAQUE_FRAGMENT_FIRST;
+	      if (fragment_packet && fragment_transition)
+		b->opaque[3] |= TUN_POC_OPAQUE_FRAGMENT_TRANSITION;
+	      b->opaque[1] = 1; /* transport-return ingress lane */
+	      b->current_data = 0;
+	      b->current_length = rv;
+	      clib_memcpy_fast (vlib_buffer_get_current (b), tm->rx_buf, rv);
+
+	      u16 target_thread = (u16) (owner + 1);
+	      u32 n_enq = vlib_buffer_enqueue_to_thread (
+		vm, node, tm->handoff_frame_queue_index, &bi, &target_thread, 1,
+		1 /* drop on congestion */);
+	      if (n_enq == 1)
+		{
+		  tm->direct_return_enqueued_packets++;
+		  tm->direct_return_enqueued_bytes += rv;
+		  tm->direct_enqueued_packets++;
+		  tm->direct_enqueued_bytes += rv;
+		}
+	      else
+		{
+		  tm->direct_return_congestion_drops++;
+		  tm->direct_congestion_drops++;
+		  vlib_buffer_free_one (vm, bi);
+		}
+	      continue;
+	    }
 	  (void) tun_poc_write_packet (tm->fd, tm->rx_buf, rv,
 				       &tm->tx_packets, &tm->tx_bytes,
 				       &tm->write_errors);
@@ -821,7 +1807,8 @@ tun_poc_shim_fd_read_ready (clib_file_t *f)
 
 clib_error_t *
 tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
-		u8 block_ip4_dst_set, u32 block_ip4_dst)
+		 u8 block_ip4_dst_set, u32 block_ip4_dst,
+		 u32 polling_thread_index)
 {
   tun_poc_main_t *tm = &tun_poc_main;
   clib_file_t template = { 0 };
@@ -834,29 +1821,47 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   if (fd < 0)
     return clib_error_return (0, "fd must be non-negative");
   if ((mode == TUN_POC_MODE_FORWARD_FD ||
-       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+       tun_poc_is_direct_owner_mode (mode)) &&
       shim_fd < 0)
     return clib_error_return (0, "%U mode requires shim-fd",
 			      format_tun_poc_mode, mode);
   if ((mode == TUN_POC_MODE_FORWARD_FD ||
-       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+       tun_poc_is_direct_owner_mode (mode)) &&
       shim_fd == fd)
     return clib_error_return (0, "shim-fd must differ from fd");
   if ((mode == TUN_POC_MODE_HANDOFF_PROBE ||
-       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+       tun_poc_is_direct_owner_mode (mode)) &&
       tm->handoff_frame_queue_index == ~0)
     return clib_error_return (0, "handoff frame queue is not initialized");
   if ((mode == TUN_POC_MODE_HANDOFF_PROBE ||
-       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD) &&
+       mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+       tun_poc_is_direct_owner_mode (mode)) &&
       tm->redirect_frame_queue_index == ~0)
     return clib_error_return (0, "redirect frame queue is not initialized");
+  if (tun_poc_is_direct_owner_mode (mode) &&
+      vlib_num_workers () < 2)
+    return clib_error_return (0,
+			      "direct-owner requires at least two VPP workers");
+  if (tun_poc_is_direct_owner_mode (mode) &&
+      vlib_num_workers () > TUN_POC_MAX_DIRECT_WORKERS)
+    return clib_error_return (0, "direct-owner worker count exceeds %u",
+			      TUN_POC_MAX_DIRECT_WORKERS);
+  if (polling_thread_index != ~0 &&
+      polling_thread_index >= vlib_get_n_threads ())
+    return clib_error_return (0, "polling-thread %u is outside VPP thread "
+			      "range 0..%u", polling_thread_index,
+			      vlib_get_n_threads () - 1);
 
   err = tun_poc_set_nonblocking (fd, "tun fd");
   if (err)
     return err;
 
   if (mode == TUN_POC_MODE_FORWARD_FD ||
-      mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
+      mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+      tun_poc_is_direct_owner_mode (mode))
     {
       err = tun_poc_set_nonblocking (shim_fd, "tun shim fd");
       if (err)
@@ -871,6 +1876,10 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->fd = fd;
   tm->shim_fd = shim_fd;
   tm->resolver_fd = -1;
+  tm->polling_thread_index = polling_thread_index == ~0
+				 ? vlib_get_thread_index ()
+				 : polling_thread_index;
+  tm->shim_polling_thread_index = tm->polling_thread_index;
   tm->mode = mode;
   tm->block_ip4_dst_set = block_ip4_dst_set;
   tm->block_ip4_dst = block_ip4_dst;
@@ -902,6 +1911,69 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->handoff_enqueued_bytes = 0;
   tm->handoff_congestion_drops = 0;
   tm->handoff_alloc_errors = 0;
+  tm->direct_worker_count = vlib_num_workers ();
+  tm->direct_enqueued_packets = 0;
+  tm->direct_enqueued_bytes = 0;
+  tm->direct_congestion_drops = 0;
+  tm->direct_alloc_errors = 0;
+  tm->direct_parse_errors = 0;
+  tm->direct_owner_guard_pass = 0;
+  tm->direct_owner_guard_mismatch = 0;
+  tm->direct_corrective_handoffs = 0;
+  tm->direct_corrective_drops = 0;
+  tm->direct_second_mismatch_drops = 0;
+  tm->direct_fault_injected = 0;
+  tm->direct_fault_single_completed = 0;
+  tm->direct_return_enqueued_packets = 0;
+  tm->direct_return_enqueued_bytes = 0;
+  tm->direct_return_congestion_drops = 0;
+  tm->direct_return_worker_packets = 0;
+  tm->direct_return_worker_bytes = 0;
+  tm->direct_return_tx_packets = 0;
+  tm->direct_return_tx_bytes = 0;
+  tm->fragment_packets = 0;
+  tm->fragment_bytes = 0;
+  tm->fragment_first_packets = 0;
+  tm->fragment_nonfirst_packets = 0;
+  tm->fragment_last_packets = 0;
+  tm->fragment_malformed = 0;
+  tm->fragment_capacity_drops = 0;
+  tm->fragment_timeout_drops = 0;
+  tm->fragment_overlap_drops = 0;
+  tm->fragment_duplicate_drops = 0;
+  tm->fragment_owner_guard_pass = 0;
+  tm->fragment_owner_guard_mismatch = 0;
+  tm->fragment_flow_owner_transitions = 0;
+  tm->fragment_reassembly_success = 0;
+  tm->fragment_terminal_drops = 0;
+  tm->fragment_table_evictions = 0;
+  tm->fragment_owner_mask = 0;
+  tm->fragment_cursor = 0;
+  tm->fragment_timeout_seconds = 5.0;
+  clib_memset (tm->fragment_entries, 0, sizeof (tm->fragment_entries));
+  tm->completion_target_thread = 0;
+  tm->completion_fault_budget = 0;
+  tm->completion_enqueued_packets = 0;
+  tm->completion_enqueued_bytes = 0;
+  tm->completion_processed_packets = 0;
+  tm->completion_processed_bytes = 0;
+  tm->completion_eagain_drops = 0;
+  tm->completion_terminal_drops = 0;
+  tm->direct_reverse_matches = 0;
+  tm->direct_reverse_owner_mismatch = 0;
+  tm->direct_reverse_projection_matches = 0;
+  tm->direct_reverse_projection_mismatch = 0;
+  tm->direct_target_worker_mask = 0;
+  tm->direct_seen_cursor = 0;
+  clib_memset (tm->direct_worker_packets, 0,
+	       sizeof (tm->direct_worker_packets));
+  clib_memset (tm->direct_worker_bytes, 0, sizeof (tm->direct_worker_bytes));
+  clib_memset (tm->direct_seen_canonical_hash, 0,
+	       sizeof (tm->direct_seen_canonical_hash));
+  clib_memset (tm->direct_seen_direction_hash, 0,
+	       sizeof (tm->direct_seen_direction_hash));
+  clib_memset (tm->direct_seen_owner, 0, sizeof (tm->direct_seen_owner));
+  clib_memset (tm->direct_seen_valid, 0, sizeof (tm->direct_seen_valid));
   tm->redirect_enqueued_packets = 0;
   tm->redirect_enqueued_bytes = 0;
   tm->redirect_congestion_drops = 0;
@@ -962,16 +2034,19 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
 
   template.read_function = tun_poc_main_fd_read_ready;
   template.file_descriptor = tm->fd;
+  template.polling_thread_index = tm->polling_thread_index;
   template.private_data = (uword) tm;
   template.description = format (0, "tun-poc fd %d", fd);
   tm->file_index = clib_file_add (&file_main, &template);
 
   if (mode == TUN_POC_MODE_FORWARD_FD ||
-      mode == TUN_POC_MODE_HANDOFF_FORWARD_FD)
+      mode == TUN_POC_MODE_HANDOFF_FORWARD_FD ||
+      tun_poc_is_direct_owner_mode (mode))
     {
       clib_memset (&template, 0, sizeof (template));
       template.read_function = tun_poc_shim_fd_read_ready;
       template.file_descriptor = tm->shim_fd;
+      template.polling_thread_index = tm->shim_polling_thread_index;
       template.private_data = (uword) tm;
       template.description = format (0, "tun-poc shim fd %d", shim_fd);
       tm->shim_file_index = clib_file_add (&file_main, &template);
@@ -1028,6 +2103,8 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 owner_cache_enabled = 0;
   u32 handoff_target_thread = ~0;
   u32 redirect_target_thread = ~0;
+  u32 polling_thread_index = ~0;
+  u32 completion_eagain_budget = 0;
 
   (void) cmd;
 
@@ -1053,11 +2130,26 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	mode = TUN_POC_MODE_HANDOFF_PROBE;
       else if (unformat (input, "mode handoff-forward-fd"))
 	mode = TUN_POC_MODE_HANDOFF_FORWARD_FD;
+      else if (unformat (input, "mode direct-owner-fault"))
+	mode = TUN_POC_MODE_DIRECT_OWNER_FAULT;
+      else if (unformat (input, "mode direct-owner-return"))
+	mode = TUN_POC_MODE_DIRECT_OWNER_RETURN;
+      else if (unformat (input, "mode direct-owner-single-writer"))
+	mode = TUN_POC_MODE_DIRECT_OWNER_SINGLE_WRITER;
+      else if (unformat (input, "mode fragment-owner"))
+	mode = TUN_POC_MODE_FRAGMENT_OWNER;
+      else if (unformat (input, "mode direct-owner"))
+	mode = TUN_POC_MODE_DIRECT_OWNER;
+      else if (unformat (input, "completion-eagain %u",
+				 &completion_eagain_budget))
+	;
       else if (unformat (input, "target-thread %u", &handoff_target_thread))
 	;
       else if (unformat (input, "redirect-thread %u",
 			 &redirect_target_thread))
-	;
+		;
+      else if (unformat (input, "polling-thread %u", &polling_thread_index))
+		;
       else if (unformat (input, "block-ip4-dst %s", &block_ip4_dst_text))
 	{
 	  if (inet_pton (AF_INET, (char *) block_ip4_dst_text,
@@ -1106,7 +2198,8 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			      vlib_get_n_threads () - 1);
 
   clib_error_t *err =
-    tun_poc_enable (vm, fd, mode, shim_fd, block_ip4_dst_set, block_ip4_dst);
+    tun_poc_enable (vm, fd, mode, shim_fd, block_ip4_dst_set, block_ip4_dst,
+			 polling_thread_index);
   if (!err && handoff_target_thread != ~0)
     tun_poc_main.handoff_target_thread = handoff_target_thread;
   if (!err && redirect_target_thread != ~0)
@@ -1129,9 +2222,11 @@ tun_poc_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   if (!err && block_ip6_dst_set)
     {
       tun_poc_main.block_ip6_dst_set = 1;
-      clib_memcpy (tun_poc_main.block_ip6_dst, block_ip6_dst,
-		   sizeof (tun_poc_main.block_ip6_dst));
-    }
+	  clib_memcpy (tun_poc_main.block_ip6_dst, block_ip6_dst,
+		       sizeof (tun_poc_main.block_ip6_dst));
+	    }
+  if (!err)
+    tun_poc_main.completion_fault_budget = completion_eagain_budget;
   return err;
 }
 
@@ -1140,9 +2235,10 @@ VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
   .short_help =
     "tun-poc enable fd <n> "
     "[mode count-only|reflect-icmp|forward-fd|handoff-probe|"
-    "handoff-forward-fd] "
+    "handoff-forward-fd|direct-owner|direct-owner-fault|direct-owner-return|"
+    "direct-owner-single-writer|fragment-owner] [completion-eagain <n>] "
     "[shim-fd <n>] [resolver-fd <n>] [target-thread <n>] "
-    "[redirect-thread <n>] "
+    "[redirect-thread <n>] [polling-thread <n>] "
     "[block-owner-uid <uid>] [owner-cache] [block-ip4-dst <addr>] "
     "[block-ip6-dst <addr>]",
   .function = tun_poc_enable_command_fn,
@@ -1175,9 +2271,14 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   char block_dst6[INET6_ADDRSTRLEN] = "-";
   char tuple_src[INET6_ADDRSTRLEN] = "-";
   char tuple_dst[INET6_ADDRSTRLEN] = "-";
+  u32 direct_target_workers = 0;
 
   (void) input;
   (void) cmd;
+
+  for (u32 i = 0; i < TUN_POC_MAX_DIRECT_WORKERS; i++)
+    if (tm->direct_target_worker_mask & (1ULL << i))
+      direct_target_workers++;
 
   if (tm->block_ip4_dst_set &&
       !inet_ntop (AF_INET, &tm->block_ip4_dst, block_dst,
@@ -1208,6 +2309,8 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
 
   vlib_cli_output (vm, "enabled %u fd %d shim-fd %d mode %U", tm->enabled,
 		   tm->fd, tm->shim_fd, format_tun_poc_mode, tm->mode);
+  vlib_cli_output (vm, "polling-thread main %u shim %u",
+		   tm->polling_thread_index, tm->shim_polling_thread_index);
   vlib_cli_output (vm, "rx %llu bytes %llu tx %llu bytes %llu",
 		   tm->rx_packets, tm->rx_bytes, tm->tx_packets, tm->tx_bytes);
   vlib_cli_output (vm,
@@ -1235,6 +2338,71 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     tm->handoff_enqueued_packets, tm->handoff_enqueued_bytes,
     tm->handoff_congestion_drops, tm->handoff_alloc_errors,
     tm->worker_probe_packets, tm->worker_probe_bytes);
+  vlib_cli_output (
+    vm,
+    "direct workers %u target-workers %u enqueued %llu bytes %llu "
+    "congestion-drops %llu alloc-errors %llu parse-errors %llu",
+    tm->direct_worker_count, direct_target_workers,
+    tm->direct_enqueued_packets, tm->direct_enqueued_bytes,
+    tm->direct_congestion_drops, tm->direct_alloc_errors,
+    tm->direct_parse_errors);
+  vlib_cli_output (
+    vm,
+    "direct owner-guard pass %llu mismatch %llu reverse-matches %llu "
+    "reverse-owner-mismatch %llu reverse-projection-matches %llu "
+    "reverse-projection-mismatch %llu corrective-handoff %llu "
+    "corrective-drop %llu second-mismatch-drop %llu fault-injected %llu "
+    "single-completed %llu",
+    tm->direct_owner_guard_pass, tm->direct_owner_guard_mismatch,
+    tm->direct_reverse_matches, tm->direct_reverse_owner_mismatch,
+    tm->direct_reverse_projection_matches,
+    tm->direct_reverse_projection_mismatch, tm->direct_corrective_handoffs,
+    tm->direct_corrective_drops, tm->direct_second_mismatch_drops,
+    tm->direct_fault_injected, tm->direct_fault_single_completed);
+  vlib_cli_output (
+    vm,
+    "direct worker-hits t0 %llu t1 %llu t2 %llu t3 %llu "
+    "bytes t0 %llu t1 %llu t2 %llu t3 %llu",
+    tm->direct_worker_packets[0], tm->direct_worker_packets[1],
+    tm->direct_worker_packets[2], tm->direct_worker_packets[3],
+    tm->direct_worker_bytes[0], tm->direct_worker_bytes[1],
+    tm->direct_worker_bytes[2], tm->direct_worker_bytes[3]);
+  vlib_cli_output (
+    vm,
+    "direct return enqueued %llu bytes %llu congestion-drops %llu "
+    "worker-packets %llu bytes %llu tx %llu bytes %llu",
+    tm->direct_return_enqueued_packets, tm->direct_return_enqueued_bytes,
+    tm->direct_return_congestion_drops, tm->direct_return_worker_packets,
+    tm->direct_return_worker_bytes, tm->direct_return_tx_packets,
+    tm->direct_return_tx_bytes);
+  vlib_cli_output (
+    vm,
+    "fragment packets %llu bytes %llu first %llu nonfirst %llu last %llu",
+    tm->fragment_packets, tm->fragment_bytes, tm->fragment_first_packets,
+    tm->fragment_nonfirst_packets, tm->fragment_last_packets);
+  vlib_cli_output (
+    vm,
+    "fragment malformed %llu capacity-drops %llu timeout-drops %llu "
+    "overlap-drops %llu duplicate-drops %llu terminal-drops %llu evictions %llu",
+    tm->fragment_malformed, tm->fragment_capacity_drops,
+    tm->fragment_timeout_drops, tm->fragment_overlap_drops,
+    tm->fragment_duplicate_drops, tm->fragment_terminal_drops,
+    tm->fragment_table_evictions);
+  vlib_cli_output (
+    vm,
+    "fragment owner-guard pass %llu mismatch %llu transitions %llu "
+    "reassembly-success %llu owner-mask 0x%llx",
+    tm->fragment_owner_guard_pass, tm->fragment_owner_guard_mismatch,
+    tm->fragment_flow_owner_transitions, tm->fragment_reassembly_success,
+    tm->fragment_owner_mask);
+  vlib_cli_output (
+    vm,
+    "completion target-thread %u fq %u enqueued %llu bytes %llu "
+    "processed %llu bytes %llu eagain-drops %llu terminal-drops %llu",
+    tm->completion_target_thread, tm->completion_frame_queue_index,
+    tm->completion_enqueued_packets, tm->completion_enqueued_bytes,
+    tm->completion_processed_packets, tm->completion_processed_bytes,
+    tm->completion_eagain_drops, tm->completion_terminal_drops);
   vlib_cli_output (
     vm,
     "redirect enabled %u target-thread %u fq %u enqueued %llu bytes %llu "

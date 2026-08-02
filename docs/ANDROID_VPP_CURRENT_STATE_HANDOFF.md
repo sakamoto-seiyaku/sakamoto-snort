@@ -1,12 +1,55 @@
 # Android / VPP 当前现状与架构交接
 
-状态：当前权威交接文档，2026-07-19。
+状态：当前权威交接文档；Android/VPP 基线 2026-07-19，handoff POC 决策更新于 2026-08-02。
 
 范围：Android 优先的产品基础、VPP 引入、root/NFQUEUE 与
 VpnService/TUN 两种运行路径。Linux 的实现和功能验证暂缓，除非后续设计决策明确恢复。
 
 证据基线：分支 `dev/vpp-base`，提交 `c572874`。本文只总结事实和边界，不把 POC
 代码提升为产品代码。
+
+后续产品与架构决策（2026-07-19）：
+
+- 第一目标已收敛为 `docs/product/ANDROID_L4_PRODUCT_PLAN.md` 中的 Android L4 Product
+  Release；Linux 不阻塞该版本；
+- Root/VPN 仍是同一产品的互斥 Runtime Profile；
+- production process topology 已确认采用 Option A：Android RuntimeService 监督当前
+  Runtime Profile 唯一的 VPP runtime；root 加载 NFQUEUE Adapter，VPN 加载 TUN Adapter，
+  两者共享同一 Sakamoto VPP graph、worker runtime 与 policy engine，不保留平行数据面；
+- ADR-0006 已用 P0-P5 证据取代逐包 Rust–VPP–Rust bridge：NFQUEUE/TUN/HEV packet I/O、
+  live-buffer ownership、canonical handoff、origin-lane completion 与 native buffer return 留在
+  VPP-native Adapter plugin；Rust 只保留 lifecycle、configuration、policy snapshot、status、
+  diagnostics 与版本化 compatibility ABI；
+- VPP flow runtime 采用 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 的 per-worker
+  single-owner 模型；Worker Layout 与 per-worker pool/cache capacity 启动时固定。普通报文由
+  Primary Software Distribution 严格按包含 IP protocol 的 direction-independent canonical
+  五元组第一次直接投递最终 owner，正反包保证同 worker，UID 不参与分流；Owner Guard 只允许
+  一次 Corrective Handoff，第二次 mismatch 丢弃。IP 分片参考 fork 的 fragment co-location、
+  bounded reassembly 与重组后最终 owner handoff，该阶段转换不属于纠偏；
+- 第二阶段以 libprotoident Protocol Identification Release 为阶段性目标，采用
+  Recognize-then-enforce，不做首包 hold、full CT、stream reassembly 或复杂 QUIC 适配。
+
+本文第 8-11 节保留实现前约束；其中曾描述 Rust Platform I/O Lane、逐包 Completion Frame 跨
+Rust ABI 和 Rust buffer-return wrapper 的段落已由 ADR-0006 取代，不再是当前 contract。
+
+### 2026-08-02 handoff POC 收口
+
+- P2：multi-NFQUEUE 与 kernel `queue-balance` 作为 Initial Placement **GO（scoped）**。Pixel 6a
+  address-diverse UDP 的 canonical mismatch 约为 Q2 `50.40%`、Q4 `51.18%`；因此 queue balance
+  不能替代 canonical FlowOwner，也不能保证省掉多数软件分流。port-only 变化还产生全流量单 queue
+  反例，elephant/mice 则证明 flow balance 不等于 packet/work balance。
+- P3：W2/Q2 bounded canonical-owner processing + origin-lane verdict return 的 zero-error correctness
+  **GO（scoped）**。正常、overload、stale/duplicate 与 lifecycle ledger 均闭合；真实
+  `nfq_set_verdict()` failure 后的 FAILED debt settlement 仍未证明。
+- P4：选择 hybrid：owner-local packet 留在 origin fast path，mismatch 才进入 bounded canonical
+  processing 与 Canonical Return。shared-TX/trylock direct-hit median 仅约 `52.6%` mixed、`60.9%`
+  all-remote，且 CPU/context 更差，正式拒绝。pool128 只证明 credit depth 需要定容，不是产品常量。
+- P5：conditional wake 的 sleep-confirmed p99 `505332→282672` cycles，改善 `44.06%`，机制方向
+  **GO**；但 diagnostics-disabled final patch 相对 exact-unpatched 的 idle C-A mean `+0.057600 pp`、
+  one-sided 95% upper `+0.125564 pp`，未满足 `upper<=+0.05 pp`，当前实现 **release NO-GO**。
+  功耗没有外部功率仪，继续为 **INCONCLUSIVE**。
+- 本轮相同 artifact 不再追加样本。conditional wake 只有在优化产生新的 hashed artifact 后，才启动
+  独立、预注册的 idle/latency prototype；当前 patch 和 mode3 persistent wake 不进入产品实现。
 
 ## 1. 本文怎么用
 
@@ -285,7 +328,7 @@ stage，并在同一 Pixel 6a 上模拟 USB 断电。
 | Finding | 阻塞原因 |
 | --- | --- |
 | callback 内同步 `fprintf` 且每包 `fflush` | verdict hot path 存在 blocking I/O；必须移除或改成 bounded async telemetry。 |
-| missing packet ID 没有 verdict strategy | packet 可能没有明确结论；必须定义 offline/fail-open/fail-closed 和 fault injection。 |
+| missing packet ID 没有 verdict strategy | 已定为 Adapter-boundary `INGRESS_IDENTITY_MISSING`：不创建 PacketLease、不进入 VPP、不伪造 completion；依赖 kernel fail-open/bypass，并要求 fault injection 证明有界证据。 |
 | copied prefix 被当成 payload length | 没有 original packet length 与 truncation，parser/telemetry 语义不完整。 |
 | 一个 instance 只绑定一个 family、一个 queue | 正式双栈测试通过重启 instance 完成，不证明单个产品 runtime 的 dual-stack/multi-queue concurrency。 |
 | IPv6 parser 假定固定 header | extension header、malformed、truncated L4 不符合目标 parser-status contract。 |
@@ -304,12 +347,45 @@ No-Go/HOLD。原始证据位于
   dataplane process。
 - Packet Capture Adapter 负责平台 ingress metadata 和 normalized packet boundary。
   NFQUEUE、TUN 是 Adapter，不是 policy engine。
-- packet processor 接收 original L3 bytes 与 bounded copied-prefix 语义。
-  `copiedPrefixBytes` 不能冒充 original packet length。
+- 当前 Adapter contract 携带 `originalLength`、`capturedLength` 与完整 received L3 span；
+  Functional Closure 不截断 packet。bounded-prefix truncation 仅是需要重新测量和显式决策的未来
+  优化，历史 `copiedPrefixBytes` 不能冒充 original packet length 或当前可用 payload。
+- Functional Closure 要求 user-space single materialization：TUN 预分配 VPP buffer/chain 并
+  直接读取，NFQUEUE 将 netlink datagram 直接接收到 VPP-owned ingress storage 后投影其 L3
+  span；不得先进入 Adapter full-packet scratch buffer 再全量复制进 VPP。现有 `tun_poc` 的
+  `rx_buf -> clib_memcpy_fast(VPP buffer)` 与 `nfqueue_poc` callback-scoped recv buffer 只算
+  POC evidence，不是 production topology。若 platform/API 实证无法直接物化，必须提交 POC、
+  measured cost 与新的显式决策，不能静默加入 full copy。
+- VPP graph 内的 parsing、policy、observation、Primary Distribution、owner handoff 和一次
+  Corrective Handoff 只能移动 buffer index/ownership 与 side metadata，不得 clone、copy 或
+  reserialize 全包。已检查的 `stellar_lpi` baseline 直接原地读取 L4 payload，只保存少量派生
+  session feature/id/counter，不是 packet-copy exception。fragment/TCP reassembly 或未来
+  recognizer 实证需要保留 selected payload 时，必须作为 named bounded exception 定义
+  capacity/lifetime budget 并单独测量；不能借此保存无界 packet history。
+- normal parser/policy/session/recognition/distribution/observation node 对 packet bytes 只读。
+  Root `ACCEPT` 不提交 NFQUEUE replacement payload；VPN policy 将同一份未修改 L3 bytes
+  交给 HEV。只有 named graph node（fragment/TCP reassembly、未来显式 NAT、packet
+  synthesis）可获得 mutation authority，并负责 checksum/length/capacity/evidence；普通节点
+  临时 mutate-then-restore 也禁止。
+- 第一版沿用魔改 `flow_dissector` 的 contiguous-buffer envelope，不提前实现 chain-aware
+  parser，也禁止 full-packet linearization。已核实 fork 在 commit `2634598b3a` 将
+  `VLIB_BUFFER_DEFAULT_DATA_SIZE` 从 2048 改为 9000；Android POC 的 `buffers { page-size default }`
+  没有覆盖 data size。Functional Closure 首版继承该 9000-byte data size 与 fork 的初始默认
+  pool sizing，先建立可运行基线；VPP pool buffer 按并发 occupancy 循环复用，不随累计流量增长。
+  data size 或 buffer count 仅在获得 RSS、occupancy 与 overload 实测后调整，不预先缩到 2048。
+  Android Functional Closure 通过目标 Root/VPN 设备
+  验证该 envelope；VPN 首版将 Android TUN 与 HEV-facing MTU 统一固定为 1500。1280 仅作为
+  未来由具体 device/path 实测问题触发的 IPv6-compatible fallback，dual-stack profile 不支持
+  低于 1280 的 1250/1200。当前不动态跟随 underlay MTU。本轮不选择 `NFQA_CFG_F_GSO` policy，也不修改系统
+  或网卡 offload。若仍出现超限，长度检查禁止 partial parse，不产生 Policy Verdict；Root 以
+  `ACCEPT` fail open，并累计 generic `UNSUPPORTED_CONTIGUOUS_ENVELOPE`。Linux GSO/jumbo 与
+  关闭 interface GSO 等 workaround 等真实部署出现问题后再重新决策。
 - `PacketFacts` 是 packet-local、轻量、once-parse，只包含 normalized L3/L4 fact 与 parser
   status，不包含 CT/DPI/domain handle。
-- 无有效 L3 envelope 时 fail open，且不生成伪记录。L3 有效但 L4 不可用时保留
-  `l4Status`、`portsAvailable=false` 和 original-byte accounting。
+- 共享 VPP graph 按魔改 VPP 的 validation 语义处理 packet content：无效 L3 envelope
+  runtime drop，不生成 Policy Verdict 或伪记录。L3 有效但 L4 不可用或不支持时保留
+  `l4Status`、`portsAvailable=false` 和 original-byte accounting；依赖缺失 fact 的
+  predicate no-match，其余可求值 stage 继续执行。
 - expensive fact 由 coarse hot-path capability bit 按 consumer 驱动。
 - verdict stage order 决定正确性；NFQUEUE queue/thread topology 不决定正确性。
 - CT 是后续显式 consumer，不是 basic packet rule 或 Traffic Windows 的前置条件。
@@ -319,16 +395,16 @@ No-Go/HOLD。原始证据位于
 - Authoring 使用 Draft -> Commit -> Apply -> Checkpoint 加 Runtime Snapshot，不恢复旧
   direct `IPRULES.APPLY`。
 
-## 7. 当前最先要解决的架构冲突
+## 7. 已解决的 production process topology
 
-仓库中有两条都有效、但尚未连接的基线：
+仓库曾有两条都有效、但尚未连接的基线：
 
 - reconstructed daemon 已定义清晰的 SNORT-10 module boundary 和 Android lifecycle，
   但 dataplane 是 raw NFQUEUE，active feature set 也被刻意压到最小；
 - VPP POC 已证明 common dataplane 和 typed control 方向可行，但仍是 overlay code，
   platform/Adapter 语义未获批准。
 
-第一个设计决定是 production process topology。实际只有三个候选：
+以下三个候选用于记录当时的取舍；当前已接受 Option A，Option B/C 不再是并列候选：
 
 ### Option A：RuntimeService 监督 VPP，VPP 内使用平台 Adapter
 
@@ -356,24 +432,63 @@ privilege/isolation 必要性时才应选择。
 短期迁移最少，但会复制 policy、parser、metrics、control 和 correctness 工作，也违背
 “基于 VPP 的 Linux/Android 统一基础”目标。它只能是过渡 fallback，不应是默认架构。
 
-现有证据指向 Option A，但这只是下一轮讨论的工作候选，不是本文新接受的决策。
+Option A 已确认为 production topology：任何时刻只有当前 Runtime Profile 的一个 VPP
+runtime；Root/NFQUEUE 与 VPN/TUN 共享 dataplane、worker graph、policy 和 control semantics，
+只替换 Packet Capture Adapter、权限与 profile-owned I/O/lifecycle。Option B/C 仅保留为历史
+取舍背景，不应在后续讨论中重新作为默认候选。
 
 ## 8. 进入实现计划前的设计顺序
 
 下一轮按以下依赖顺序做决定，不再从某个独立 POC 或实现 ticket 开始。
 
-### D0. Deployment 与 process topology
+### D0. Deployment 与 process topology（已完成）
 
-确定 Option A/B/C；定义 Android root/VPN profile、process UID、executable/library
-packaging、socket、writable directory、HEV placement 和唯一 lifecycle owner。
+已确定 Option A 与唯一 lifecycle owner。Android root/VPN profile 的具体 process UID、
+executable/library packaging、socket、writable directory 和 HEV placement 在正式实现切片中
+收敛，不改变单 VPP runtime、互斥 profile 和共享 dataplane 的已接受语义。
 
 输出：一张 process/privilege 图，以及 startup/stop/crash state machine。
 
 ### D1. Packet Capture Adapter contract
 
-定义 NFQUEUE/TUN ingress metadata、original length 与 copied prefix、parser status、
-exactly-one verdict ownership、missing-ID、queue offline、fail-open/fail-closed 和 Adapter
-health。
+定义 NFQUEUE/TUN ingress metadata、`originalLength`、`capturedLength`、完整 received L3 span、parser status、
+exactly-one completion ownership、missing-ID、queue offline、fail-open/fail-closed 和 Adapter
+health。一次 completion operation 在第一版只执行一次物理投递，并以 `SUCCEEDED`、
+`FAILED_DEFINITE` 或 `OUTCOME_UNKNOWN` 三态结束；无法证明 receiver 是否接收时必须使用
+`OUTCOME_UNKNOWN`，不得伪报成功或确定失败，三态均不触发自动 retry。后两类按低基数
+outcome、Adapter/channel 与稳定 reason 累计 bounded counter、保留有界 first/last
+diagnostics，并向 Runtime health 暴露 failure reason；Functional Closure 暂不规定 health
+锁存/自动恢复时序或详细 UI 展示。不得
+逐包同步写日志、保留无界失败历史、重新进入 VPP 或重新执行 policy。
+
+NFQUEUE ingress 缺少 queue instance/generation 或 packet ID 等 mandatory completion identity
+时，在 Adapter boundary 记录 bounded `INGRESS_IDENTITY_MISSING` fault，不创建 PacketLease、
+不进入 VPP，也不产生 Policy Verdict 或伪造 Adapter Completion outcome。kernel queue
+fail-open/bypass 可以独立释放 packet，但产品不得宣称自己提交或证明了 `ACCEPT`。
+
+VPN outbound 在 HEV 接受 packet ownership 时记 Adapter Completion `SUCCEEDED`，HEV
+拒绝时记 `FAILED_DEFINITE`；接管后的 connect/socket/network-send 失败只属于 Transport
+Outcome，不能回写 completion。返回 App 的 packet 以最终 TUN write 作为 Adapter
+Completion。Root/NFQUEUE completion 只证明 kernel 是否接收 terminal verdict，不证明后续
+host/network delivery。
+
+Adapter teardown 先 quiesce 新 ingress，再在 completion/transport 尚可用时对已有 PacketLease
+做固定短期限 drain，最后才拆 channel。已有 Policy Verdict 照常完成；deadline 时普通、尚未求值
+的 Root lease 在 identity 仍可完成时 `ACCEPT`，VPN lease 记录 completion/transport failure 后
+释放。fragment reassembly failure 与 repeated owner mismatch 等已分类的 non-fail-open runtime
+fault 仍 runtime drop。不得跨 Adapter generation 排队、重放或重新求值。
+
+为使普通 pre-policy capacity fail-open 在 single-materialization 约束下可执行，每条 active
+ingress lane 从既有 VPP pool 中保留一组 startup-fixed、worker-local、bounded buffer，作为
+Fail-Open Reserve；不另建 pool，也不跨 worker 共享。首版 buffer data size 独立继承
+Contiguous Parser Envelope 的 9000 bytes，但每 lane reserve 数量必须由 production capacity
+matrix 的 peak concurrent occupancy、burst、exhaustion、RSS、latency 与目标 profile 实测确定，
+任何 POC 数量都不是 contract。normal ingress buffer 耗尽时，
+packet 直接物化到 reserve 且不进入 parser/flow/policy graph：Root 仅凭 completion identity
+提交 `ACCEPT`，VPN 将 unchanged packet 直接交给 HEV。reserve 不动态增长、不等待容量；它也
+耗尽时允许明确丢包，累计 bounded capacity-fault evidence 并降低 Adapter/runtime health。
+buffer 在 Root completion 或 HEV ownership transfer 后立即归还。该机制只吸收瞬时压力，不承诺在内存耗尽或
+transport failure 下仍能保持联网。
 
 输出：不依赖 libnetfilter_queue 或 VPP callback 内部类型的 C/C++ contract，以及
 malformed/truncated 示例。
@@ -381,8 +496,64 @@ malformed/truncated 示例。
 ### D2. VPP graph 与 threading model
 
 定义 callback-to-node、buffer allocation、flow sharding、ordering、dual-stack/multi-queue、
-bounded frame queue、backpressure、worker handoff 和 teardown barrier。同步 UID lookup、
+bounded frame queue、backpressure、worker handoff 和上述 bounded teardown barrier。同步 UID lookup、
 packet logging 均不得在无预算时停留在 hot path。
+
+Adapter Initial Execution Placement 与最终 FlowOwner 明确分离。Root/NFQUEUE 的独立 queue lane
+由 VPP-native Adapter plugin 独占收取并直接映射到 ingress execution contexts，不允许把所有 queue
+汇聚到 main thread。VPN/TUN 从 Android 转交的单一 fd owner 开始。两者随后调用同一 OwnerSelector：
+命中 owner 时 local continue，否则只移动 live buffer index 与 side metadata，执行一次 Primary
+Handoff。NFQUEUE queue ID 只决定初始位置，不能成为最终 FlowOwner。
+
+Root 保留多个 connection-stable `queue-balance` queues，不启用 CPU fanout。每条 native lane 独占
+自身 queue/socket 的 receive 与 verdict；FlowOwner 不调用共享 `nfq_q_handle`。local packet 在 origin
+lane 完成；remote packet 由 canonical owner 产生 terminal intent，再通过 bounded Canonical Return
+回到 origin。origin 使用原 queue generation 与 packet ID 进行唯一一次物理 verdict，记录三态
+Adapter Completion，随后走 VPP 原生 buffer return。Completion Frame 不复制 packet bytes，也不
+建立 Rust packet owner、第二个 buffer、LeaseSlot table 或 per-packet heap object。
+
+`Q=W` 是 production capacity matrix 的初始候选，不是 POC 已证明常量。Pixel 6a 的 scoped P2
+结果显示 address-diverse Q2/Q4 与 canonical owner 约有 50% mismatch；multi-queue 提供 receive
+parallelism，但不能替代 Primary Software Distribution。P4 已拒绝 shared-TX/trylock，并选择
+owner-local fast path + mismatch-only bounded canonical processing/return。queue、worker、pool、ring、
+completion credit 和 Fail-Open Reserve 均需由目标 throughput、burst、latency、drop、CPU、power 与
+thermal matrix 定容；POC 的 pool32/128 或 reserve32 都不是产品常量。
+
+VPN 首版使用一个 native TUN/HEV Platform I/O Lane。Android 仍负责 VpnService TUN 创建、权限与
+`protect()`，然后把所需 descriptors 交给受监督的 VPP runtime；运行中的 packet I/O、policy/runtime
+completion 与 native buffer return 位于 Adapter plugin。允许的 outbound packet 交给 HEV，return
+packet 写 TUN，policy drop 在同一 ownership domain 完成。HEV 接受 ownership 后的失败只属于
+Transport Outcome。只有真机证据证明单 I/O owner 是瓶颈后，才讨论拆分 TUN 与 HEV owners。
+
+Root/VPN PacketLease 仍由 live VPP buffer 与内联固定 metadata 承载；normal path 只有 VPP 原生
+buffer pool，所有 graph、handoff、completion 与 return 都在 C/VPP ownership domain。Rust 不接收
+逐包 callback，不拥有 platform packet fd 或 live VPP buffer，只通过粗粒度 non-unwinding ABI 管理
+lifecycle、configuration、immutable policy snapshot、status 与 diagnostics。teardown 必须先 quiesce
+ingress，在 completion channel 仍可用时有界排空 obligated buffers，再关闭 Adapter generation。
+
+conditional wake 的机制方向保留但实现未接受：当前 P5 artifact 的 sleep-confirmed latency GO，
+相对 exact-unpatched idle CPU NO-GO。新的 handshake 必须生成独立 hashed artifact，重新通过预注册
+idle/latency gate；当前 patch 与 persistent/per-packet wake 不得成为 release 实现。
+
+
+buffer allocation/ingress 还必须证明 user-space single materialization：包括 TUN direct
+read/readv into VPP buffer chain、NFQUEUE netlink receive into VPP-owned storage，以及不存在
+Adapter-to-VPP full-packet memcpy 的代码与性能证据。还必须分别测量 normal ingress pool 与
+per-ingress-lane Fail-Open Reserve 的耗尽路径，证明 reserve bypass 不进入 graph、不阻塞或动态扩容，
+并在 reserve exhaustion 时产生明确 loss counter 与 health evidence。
+
+worker distribution/handoff evidence 必须同时证明只传 VPP buffer index/ownership，不复制或
+clone packet bytes；任何 fragment/recognition content-retention exception 需要独立 counter、
+容量边界和压力结果。
+
+graph review 还必须列出全部 Packet Byte Mutation Authority node；未列出的 node 视为 read-only，
+并验证 Root 无 replacement payload、VPN policy-to-HEV bytes unchanged。
+
+Android acceptance 要证明目标 Root/VPN device path 与固定 1500-byte TUN/HEV MTU 位于 contiguous
+parser envelope，并验证通用长度检查不会 silent partial parse；测试至少覆盖 IPv4/IPv6、Wi-Fi、
+移动网络与大包 TCP/UDP，同时记录 9000-byte buffer/default-pool baseline 的 RSS、峰值 occupancy
+和 exhaustion evidence。Linux GSO/jumbo acceptance 延后到真实
+部署证明需要时定义。
 
 输出：node graph、ownership table、queue capacity、overload policy 和 counters。
 
@@ -410,7 +581,7 @@ policy、reboot、upgrade/rollback、socket/SVM cleanup 和 notification。
 1. Packet Capture Adapter 与 bounded PacketFacts foundation。
 2. Hot-path capability 与 policy cache。
 3. basic dual-stack IPRULES verdict slice 与 compiled policy authoring。
-4. CT A++ 作为后续显式 consumer。
+4. bounded worker-private FlowEntry；完整 Stateful CT 作为更后的显式产品阶段。
 5. Traffic Windows、Diagnostics、PerfMetrics、Flow Telemetry。
 6. UID/IP control 和 lifecycle 稳定后再恢复 DNS/domain。
 
@@ -434,16 +605,10 @@ loss、queue occupancy、power、thermal 和 recovery budget。Plane implementat
 
 ## 10. 新对话的第一个目标
 
-不要先运行新 POC、拆 ticket 或修改 production code。先选择并完整定义 D0。建议从
-Option A 作为待证伪候选开始：
-
-> 一个由 Android RuntimeService 监督的 VPP runtime；root NFQUEUE Adapter 与 app-UID
-> TUN Adapter 进入同一个 Sakamoto VPP packet graph；Tauri/Rust 通过版本化 C ABI/VAPI
-> 作为产品 control plane；HEV 是被显式监督的 VPN transport dependency。
-
-第一轮讨论要用 privilege separation、process death、packaging、control reconnect、
-exactly-one verdict 和双 profile 代码共享去挑战或修正它。D0 接受后先写入
-`docs/decisions/`，再进入 D1。
+不要重新讨论是否采用两个 dataplane，也不要把已经完成的 ingress/worker POC 当成待验证
+架构。以已接受的 Option A 和 per-worker single-owner 决策为起点，把正式实现按 Android L4
+Product Release 的端到端 vertical slice 收敛；privilege、packaging、control reconnect、
+exactly-one verdict 和 profile-owned cleanup 作为切片内的产品化约束。
 
 ## 11. 新对话启动提示词
 
@@ -460,8 +625,8 @@ Plane 是 tracker，使用 plane-ops，不使用 Plane MCP。SAKAMOTO-2..31 是�
 POC；SAKAMOTO-32 是未完成的 production-admission audit，不能据此把 nfqueue_poc 当成
 产品代码。Linux 暂缓，Android 是近期发版优先平台。
 
-本轮不要运行新 POC、创建 implementation ticket 或修改 production code。先处理设计阶段
-D0：比较交接文档中的三种 process topology，重点挑战 Option A，并给出具体的 Android
-process、privilege、packaging、startup、stop、crash、recovery 模型。回答时严格区分：
-已证明事实、已接受决策、尚未证明的假设、本轮新决策。
+不要重新比较 Option A/B/C；Option A、Root/VPN 互斥、单 VPP runtime、共享 dataplane 和
+per-worker single-owner 已接受。下一步从 Android L4 Product Release 的第一条端到端
+vertical slice 制定正式实现计划。回答时严格区分：已证明事实、已接受决策、尚未证明的假设、
+本轮新决策。
 ```

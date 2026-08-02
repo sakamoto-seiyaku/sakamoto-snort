@@ -92,6 +92,8 @@ add_vpp_plugin(nfqueue_poc
   SOURCES
   plugin.c
   nfqueue_poc.c
+  nfqueue_balance_poc.c
+  nfqueue_handoff_poc.c
 
   INSTALL_HEADERS
   nfqueue_poc.h

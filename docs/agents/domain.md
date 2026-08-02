@@ -4,9 +4,11 @@ This is a single-context repo.
 
 ## Before exploring, read these
 
+- `docs/product/README.md` and its routed plan before product scope, UI/UX, content, release, or community work.
 - `docs/IMPLEMENTATION_ROADMAP.md` for current phase, implementation order, and boundaries.
 - `docs/INTERFACE_SPECIFICATION.md` before control-plane, API, stream, telemetry, RuntimeService, or frontend-contract work.
 - `docs/decisions/` for architectural and domain decisions.
+- `docs/adr/` for accepted hard-to-reverse architecture decisions produced by domain-modeling sessions.
 - `docs/README.md` for the documentation map.
 - `docs/agents/doc-maintenance.md` before reorganizing, archiving, or refreshing documentation.
 - Focused docs under `docs/testing/`, `docs/reviews/`, `docs/reference/`, or `docs/tooling/` when relevant to the task.
@@ -23,3 +25,6 @@ If `CONTEXT.md` does not exist, proceed silently. Do not create it upfront; crea
 ## Vocabulary and decisions
 
 Use the project's existing domain language from the roadmap and decision docs. If a proposal contradicts `docs/decisions/`, surface the conflict explicitly instead of silently overriding prior decisions.
+
+Product outcomes and UI flows live under `docs/product/`. Do not infer a product promise from a VPP POC,
+an internal capability, or an archived backend feature.

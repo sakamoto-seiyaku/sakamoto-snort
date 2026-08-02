@@ -1436,6 +1436,12 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
                            char *startup_conf, size_t startup_conf_len,
                            char *stdout_log, size_t stdout_log_len,
                            bool forward_mode, bool handoff_mode,
+                           bool direct_owner_mode,
+                           bool fragment_owner_mode,
+                           bool direct_polling_mode,
+                           bool direct_fault_mode,
+                           bool direct_return_mode,
+                           bool direct_single_writer_mode,
                            bool owner_resolver_mode, int block_owner_uid,
                            int redirect_thread, bool owner_cache_enabled,
                            const char *block_ip4_dst,
@@ -1513,7 +1519,26 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
         snprintf(owner_cache_arg, sizeof(owner_cache_arg), " owner-cache");
     }
 
-    if (handoff_mode) {
+    if (direct_owner_mode) {
+        const char *polling_arg = direct_polling_mode ? " polling-thread 1" : "";
+        const char *completion_arg = direct_single_writer_mode ?
+                                     " completion-eagain 2" : "";
+        const char *owner_mode = fragment_owner_mode ? "fragment-owner" :
+                                 direct_fault_mode ? "direct-owner-fault" :
+                                 direct_return_mode ? "direct-owner-return" :
+                                 direct_single_writer_mode ?
+                                 "direct-owner-single-writer" : "direct-owner";
+        snprintf(exec_text, sizeof(exec_text),
+                 "tun-poc enable fd %d mode %s shim-fd %d%s%s\n"
+                 "show tun-poc\n",
+                 VPP_TUN_FD, owner_mode, VPP_SHIM_FD, polling_arg,
+                 completion_arg);
+        snprintf(cpu_text, sizeof(cpu_text),
+                 "\n"
+                 "cpu {\n"
+                 "  workers 2\n"
+                 "}\n");
+    } else if (handoff_mode) {
         snprintf(exec_text, sizeof(exec_text),
                  "tun-poc enable fd %d mode handoff-forward-fd shim-fd %d target-thread 1%s%s%s%s%s%s\n"
                  "show tun-poc\n",
@@ -1546,6 +1571,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
              "  runtime-dir %s\n"
              "  log %s\n"
              "  cli-listen %s\n"
+             "  cli-no-pager\n"
              "  startup-config %s\n"
              "}\n"
              "\n"
@@ -1625,10 +1651,25 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     bool use_owner_gate = vpp_mode == 3;
     bool use_owner_resolver = vpp_mode == 5;
     bool use_handoff_hev = vpp_mode == 4 || use_owner_resolver;
-    bool use_forward = vpp_mode == 1 || vpp_mode == 2 || use_owner_gate || use_handoff_hev;
-    bool use_hev = vpp_mode == 2 || use_owner_gate || use_handoff_hev;
+    bool use_fragment_owner = vpp_mode == 11 || vpp_mode == 12;
+    bool use_fragment_no_hev = vpp_mode == 12;
+    bool use_direct_owner = vpp_mode == 6 || vpp_mode == 7;
+    bool use_direct_polling = vpp_mode == 7;
+    bool use_direct_fault = vpp_mode == 8;
+    bool use_direct_return = vpp_mode == 9;
+    bool use_direct_single_writer = vpp_mode == 10;
+    use_direct_owner = use_direct_owner || use_direct_fault || use_direct_return ||
+                       use_direct_single_writer || use_fragment_owner;
+    bool use_forward = vpp_mode == 1 || vpp_mode == 2 || use_owner_gate ||
+                       use_handoff_hev || use_direct_owner;
+    bool use_hev = vpp_mode == 2 || use_owner_gate || use_handoff_hev ||
+                   (use_direct_owner && !use_fragment_no_hev);
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
                         stdout_log, sizeof(stdout_log), use_forward, use_handoff_hev,
+                        use_direct_owner, use_fragment_owner, use_direct_polling,
+                        use_direct_fault,
+                        use_direct_return,
+                        use_direct_single_writer,
                         use_owner_resolver, block_owner_uid, redirect_thread,
                         owner_cache_enabled == JNI_TRUE, block_dst, block6_dst) < 0) {
         (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);

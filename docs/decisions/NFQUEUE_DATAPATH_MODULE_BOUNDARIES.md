@@ -1,7 +1,12 @@
 # NFQUEUE / DNS / Datapath 模块边界工作决策
 
-更新时间：2026-06-19
-状态：历史 SNORT-10 架构讨论阶段的已确认边界；实现切片仍需在当前 Plane `Sakamoto` 拆分
+更新时间：2026-07-19
+状态：部分被取代。PacketFacts、consumer-driven fact、stage、bounded observability 等边界
+仍有效；全局共享 CT A++ 与 owner/handoff 仅作未来实验的结论，已由
+`PER_WORKER_FLOW_OWNERSHIP.md` 取代；分立的 stage priority 空间继续保留，但“前序 allow 永久
+终止后续策略”和 L1 `FinalAllow` cache 语义已由 stage-owned `DROP / PASS_NEXT` pipeline 取代，
+见 `docs/adr/0001-policy-bundle-staged-enforcement.md`。本文同层 `priority desc, ruleId asc` 是旧
+Snort 实现记录；当前 L4 固定为 `priority asc, explicit order asc, ruleId asc` 并编译为 WinnerRank。
 输入材料：
 - `docs/reviews/NFQUEUE_PERFORMANCE_ARCHITECTURE_REVIEW.md`
 - 历史规划标识 `SNORT-10`：NFQUEUE / DNS / datapath performance architecture refactor discussion
@@ -11,6 +16,9 @@
 当前 daemon 来自以 DNS/domain 拦截为主的历史系统，后续叠加了 IPRULES、Conntrack、Flow Telemetry、Debug Stream、Checkpoint、vNext control 等能力。功能本身有价值，但模块边界和热路径成本边界已经混在一起。
 
 本文件记录当前讨论中已经确认的边界。它不是实现任务列表，也不替代接口规范。后续实现前应把每一块拆成独立 Plane work item，并补充对应测试与真机测量。
+
+目标 VPP runtime 现在以稳定 flow steering 和 per-worker single-owner 为正确性前提。
+本文后续 `CT A++` shared-table 段落仅保留为历史方案记录。
 
 ## 1. 总原则
 
@@ -255,9 +263,9 @@ IPRULES compiler 第一版保留统一入口：一次 apply / restore 输入一�
 这些 hot views 可以复用当前 IPRULES 的 mask/subtable/bucket 编译技术，但只能复用技术和辅助代码，不复用同一个 compiled container。`basicView4/6` 与 `statefulView4/6` 必须是独立 hot views，分别拥有自己的 priority order、subtable order、bucket 集合与 scan 入口：
 - `basicView4/6` 只编译不引用 CT / DPI 的规则；其 mask signature 不应包含 `ctState` / `ctDir`，Basic hot path 不扫描 Stateful bucket。
 - `statefulView4/6` 只编译引用 `ct.*` 的规则；可继续使用相同的 mask/subtable/bucket 思路来组织 `PacketFacts + CtFacts` 条件。
-- 当前实现里的 enforce / would 双通道候选组织不能作为 SNORT-10 最终语义照搬。SNORT-10 中 compiled `RuleRef.mode=enforce|observe` 来自 complete-Linux-UID direct binding mode，并在同一 stage 内按同一 `priority desc, ruleId asc` 竞争同一个 winner；实现可以保留 exact/range 等物理优化，但不能先扫 enforce 再扫 observe。
-- bucket 内的第一版物理模型应改成 unified candidate model：`exactRules` 与 `rangeRules` 两类候选列表，`RuleRef` 携带 effective `mode=enforce|observe` 与 source rule `action=allow|block`，两类列表都按 `priority desc, ruleId asc` 排序。lookup 可以先取得 exact best candidate，再只扫描仍有可能打败 exact candidate 的 range candidates。
-- 跨 subtable 剪枝不能只依赖 `maxPriority`。每个 subtable / view order 需要维护能表达 tie-break 的 best-possible key，例如 `{maxPriority, minRuleIdAtMaxPriority}`；当当前 best winner 已经不可能被后续 subtable 打败时才停止扫描。否则同 priority 下更小 `ruleId` 的 observe / enforce candidate 可能被错误跳过。
+- 当前实现里的 enforce / would 双通道候选组织不能作为 SNORT-10 最终语义照搬。compiled `RuleRef.mode=enforce|observe` 来自 complete-Linux-UID direct binding mode，并在同一 stage 内按同一 WinnerRank 竞争一个 winner；实现可以保留 exact/range 等物理优化，但不能先扫 enforce 再扫 observe。
+- bucket 内的物理模型使用 `exactRules` 与 `rangeRules` 两类候选，`RuleRef` 携带 effective `mode=enforce|observe`、source action 和按 `priority asc, explicit order asc, ruleId asc` 编译的 WinnerRank。lookup 可以先取得 exact best candidate，再只扫描仍可能打败它的 range candidates。
+- 跨 subtable 剪枝不能只依赖 priority。每个 subtable 维护最小 `bestPossibleRank`；当当前 WinnerRank 已优于所有后续 bound 时才停止，避免同 priority 下更早 explicit order 的候选被错误跳过。
 
 Rule stage 由 compiler 根据规则引用的 facts 自动决定，不由用户显式指定：
 - 只引用 `PacketFacts` 的规则进入 Basic IPRULES。
@@ -300,7 +308,7 @@ Authoring layer 只保留四个相互关联的状态点：
 
 Commit 必须原子化。它先对 Draft 完成策略合法性校验，包括 schema / normalization / rule reference / rule-group cycle detection / v1 group nesting depth <= 3 / product-build support / entitlement / policy binding mode conflict 等控制面约束；只有全部成功后才替换当前 Committed Policy Revision，并让 Draft 回到 clean 状态。Commit 失败时不得更新 Committed Policy Revision，也不得清理 Draft 的未 commit 修改；用户仍可继续编辑或丢弃 Draft。当前 runtime capability 是否启用不属于 Commit 成败条件；stale UID binding 也不属于 Commit validation failure。例如合法且已授权的 `dpi.*` 规则可以 commit，即使当前 DPI runtime 未启用，后续 Apply / Restore 再把它报告为 `compile-inactive`。Commit / preflight 还必须返回 non-blocking warnings，例如 duplicate match warning；warning 必须明确给出可回溯 source refs 供前端提示用户，但不得把合法策略变成 commit failure，也不要求 `confirmWarnings` / confirmation token 之类的 daemon/control-plane 二次确认状态。
 
-单条 rule 是可复用实体，允许被多个 rule group 引用，也允许被某个 complete Linux UID 直接绑定。只有 complete Linux UID 直接绑定到 rule 或 rule group 时携带 `bindingMode=enforce|observe`；rule group 内部的 `group -> rule` 与 `group -> subgroup` 引用只表达结构关系，不携带 observe/enforce mode。同一 complete Linux UID 展开后若让同一个 source `ruleId` 同时获得 `enforce` 与 `observe` effective mode，则这是 policy binding mode conflict，Commit / preflight 必须失败并返回冲突的 UID、ruleId 与 direct binding refs；不得自动选择 enforce、自动选择 observe，或在 runtime 中保留两个不同 mode 的同 rule occurrence。若同一 rule 经多个路径以相同 effective mode 到达同一 subject，则允许通过，Apply 编译时必须按 complete Linux UID 生效路径展开 group graph，并在同一 subject / stage / ruleId / effective mode 维度去重，只保留一个 runtime RuleRef，避免同一 rule 因多条引用路径重复进入同一个 runtime hot view 或被扫描多次。去重不改变 ruleId、priority、source rule action 或从 direct binding 继承的 effective mode。若同一 complete Linux UID 展开后存在多个不同 source `ruleId` 拥有相同 `matchKey`，包括 action / priority 也完全相同的情况，这只是 duplicate match warning，不是 source graph conflict；Commit 可以成功，但响应必须明确提示相关 UID、matchKey、ruleIds 与 source refs。runtime 不对这些不同 ruleId 做隐藏 dedupe，最终 winner 仍只由固定 pipeline、stage、`priority desc, ruleId asc` 决定。
+单条 rule 是可复用实体，允许被多个 rule group 引用，也允许被某个 complete Linux UID 直接绑定。只有 complete Linux UID 直接绑定到 rule 或 rule group 时携带 `bindingMode=enforce|observe`；rule group 内部的 `group -> rule` 与 `group -> subgroup` 引用只表达结构关系，不携带 observe/enforce mode。同一 complete Linux UID 展开后若让同一个 source `ruleId` 同时获得 `enforce` 与 `observe` effective mode，则这是 policy binding mode conflict，Commit / preflight 必须失败并返回冲突的 UID、ruleId 与 direct binding refs；不得自动选择 enforce、自动选择 observe，或在 runtime 中保留两个不同 mode 的同 rule occurrence。若同一 rule 经多个路径以相同 effective mode 到达同一 subject，则允许通过，Apply 编译时必须按 complete Linux UID 生效路径展开 group graph，并在同一 subject / stage / ruleId / effective mode 维度去重，只保留一个 runtime RuleRef，避免同一 rule 因多条引用路径重复进入同一个 runtime hot view 或被扫描多次。去重不改变 ruleId、priority、source rule action 或从 direct binding 继承的 effective mode。若同一 complete Linux UID 展开后存在多个不同 source `ruleId` 拥有相同 `matchKey`，包括 action / priority 也完全相同的情况，这只是 duplicate match warning，不是 source graph conflict；Commit 可以成功，但响应必须明确提示相关 UID、matchKey、ruleIds 与 source refs。runtime 不对这些不同 ruleId 做隐藏 dedupe，L4 winner 只由 `priority asc, explicit order asc, ruleId asc` 编译出的 WinnerRank 决定。
 
 rule group 也是可复用实体，允许被多个 complete Linux UID 绑定，也允许被其它 rule group 引用，受 v1 嵌套深度上限约束。Authoring / UI 可以保存并显示 package name、app label、user/profile 等辅助 metadata，但这些 metadata 不参与策略身份判断、编译去重或 hot-path key；daemon 策略生效 key 必须是 complete Linux UID，不能用 appId 或 packageName 作为 runtime identity。Apply 编译时每个 complete Linux UID subject 独立展开、独立去重、独立生成 hot views 与 `SubjectHotPathCaps`；同一个 group 被多个 complete Linux UID 使用不得造成跨 subject runtime coupling。
 
@@ -428,6 +436,11 @@ bounded copy / parser failure 的第一版降级保持 KISS：
 
 ## 8. Verdict pipeline
 
+> 历史说明：本节的 fact acquisition 顺序和 short-circuit 成本原则仍可作为参考；下方“各
+> stage priority 空间独立、Basic winner 无条件终止后续规则”的策略语义已被统一 authoring
+> policy 与 staged runtime view 决策取代；同层 winner 也不再采用本节的无-specificity
+> `priority, ruleId` 顺序。当前完整语义见 ADR 0001。
+
 目标 pipeline 顺序：
 1. Interface policy / `IFACE_BLOCK`。
 2. Basic IPRULES。
@@ -436,15 +449,17 @@ bounded copy / parser failure 的第一版降级保持 KISS：
 5. Resolved-IP Policy。
 6. Default allow。
 
-任何 stage 产生 winner 后，后续 stage 必须 short-circuit。
+任何 stage 产生 enforce block winner 后返回 `DROP` 并 short-circuit；allow 或 observe winner 返回
+`PASS_NEXT`，后续 active stage 仍可使用其自己的 facts 和 priority space。
 
-Pipeline stage 顺序高于跨 stage rule priority。Rule priority 只在同一 stage 内决定 winner；各 stage 的 priority 空间独立解释，跨 stage priority 不比较。Basic IPRULES 一旦产出 winner，Stateful IPRULES、DPI / L7 Policy、Resolved-IP Policy 都不再评估。SNORT-10 不保留“Basic / Stateful / DPI 规则在一个全局 priority 空间竞争”的旧语义或潜在语义。
+Pipeline stage 顺序高于跨 stage rule priority。Rule priority 只在同一 stage 内决定 winner；各 stage 的 priority 空间独立解释，跨 stage priority 不比较。Basic IPRULES block 会终止后续评估；Basic allow 只是 `PASS_NEXT`。不保留“Basic / Stateful / DPI 规则在一个全局 priority 空间竞争”的旧语义或潜在语义。
 
 Runtime rule effect 拆成 `action` 与 effective `mode` 两个维度：`action=allow|block` 是 source rule 声明动作，`mode=enforce|observe` 是从 complete-Linux-UID direct binding 继承的执行模式。`mode=enforce` 与 `mode=observe` 不是两套规则类型；它们共享 matcher、priority、tie-break、projection、winner attribution 与 rule runtime 形态。二者唯一语义差异是 winner effect：命中后是否真正执行 declared action。`would-block`、`would-allow` 只是 `mode=observe` 下的派生解释，不是独立 action 或独立 matcher。
 
-Observe-mode RuleRef 是正式 consumer，也是 short-circuit winner。前序 stage 已经产出任意 winner 后，后续 stage 的 enforce / observe 规则都不再评估，也不得为了后续规则继续计算 CT / DPI / Association facts。
+Observe-mode RuleRef 是正式 consumer，但不会造成跨 stage short-circuit。只有前序 stage 返回
+`DROP` 后，后续 stage 的 enforce / observe 规则才不再评估。
 
-同一 stage 内，`mode=enforce` 与 `mode=observe` 规则按同一 priority / tie-break 竞争同一个 winner；tie-break 固定为 `priority desc, ruleId asc`，不引入 specificity score。不存在“先扫 enforce，再扫 observe”的次级通道。任一模式的规则成为 winner 后，都停止该 stage 内后续候选评估并终止后续 stage。二者差异只在 winner effect：`mode=enforce` winner 应用 `action=allow|block` verdict；`mode=observe` winner 记录本次 observe 命中，不执行 declared action，最终 packet verdict 固定为 allow。
+同一 stage 内，`mode=enforce` 与 `mode=observe` 规则按同一 WinnerRank 竞争一个 winner；顺序固定为 `priority asc, explicit order asc, ruleId asc`，不引入 specificity score，也不存在“先扫 enforce，再扫 observe”的次级通道。该 stage 选出 winner 后停止本 stage 候选评估；`mode=enforce, action=block` 返回 `DROP`，`mode=enforce, action=allow` 或 `mode=observe` 返回 `PASS_NEXT`。
 
 `reasonId` 表达 actual packet verdict 原因，不表达 observe winner 的 declared action。`mode=observe, action=block` 命中时，最终 verdict 仍是 allow，reasonId 使用现有 allow 语义；第一版不为 observe winner 新增 reasonId。Declared action、ruleId 与 mode 通过 rule attribution / diagnostics 字段表达，不复用实际 block reason。
 

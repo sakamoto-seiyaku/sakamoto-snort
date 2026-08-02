@@ -10,6 +10,7 @@
 
 ## Root entrypoints
 
+- `docs/product/README.md`：当前产品定义、UI/UX、内容与发布口径入口
 - `docs/IMPLEMENTATION_ROADMAP.md`：当前实现主线、阶段状态与优先级
 - `docs/INTERFACE_SPECIFICATION.md`：对外控制面 / stream 接口汇总
 - `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`：Android/VPP POC 事实、当前实现边界与下一轮架构讨论入口
@@ -17,7 +18,9 @@
 
 ## Subdirectories
 
+- `docs/product/`：权威产品计划、UI/UX、文案、帮助、发布和社区运营口径
 - `docs/decisions/`：设计原则、工作决策、上位约束
+- `docs/adr/`：通过领域讨论确认的、难以回退的架构决定
 - `docs/testing/README.md`：测试文档入口（Host / Device / perf）
 - `docs/testing/`：测试纲领、runbook、结果记录
 - `docs/tooling/`：开发、调试、工作流
@@ -30,9 +33,10 @@
 
 1. `CONTEXT.md`
 2. `docs/agents/domain.md`
-3. `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` when the task touches the current Android/VPP architecture or POC conclusions
-4. `docs/IMPLEMENTATION_ROADMAP.md`
-5. `docs/INTERFACE_SPECIFICATION.md`
-6. `docs/decisions/`
-7. `docs/testing/README.md` or `docs/tooling/` when the task touches tests/build/debug
-8. `docs/reviews/`, `docs/reference/`, `docs/archived/`, and `archive/openspec/` only when the user asks for historical context or the active docs explicitly point there
+3. `docs/product/README.md` when the task touches product scope, UI, content, release, or community
+4. `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` when the task touches the current Android/VPP architecture or POC conclusions
+5. `docs/IMPLEMENTATION_ROADMAP.md`
+6. `docs/INTERFACE_SPECIFICATION.md`
+7. `docs/decisions/` 与 `docs/adr/`
+8. `docs/testing/README.md` or `docs/tooling/` when the task touches tests/build/debug
+9. `docs/reviews/`, `docs/reference/`, `docs/archived/`, and `archive/openspec/` only when the user asks for historical context or the active docs explicitly point there

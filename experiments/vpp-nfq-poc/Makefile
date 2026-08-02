@@ -139,6 +139,11 @@ android-vpp-owner-resolver-ipv6-udp-drop-poc:
 android-vpp-owner-resolver-ipv6-udp-redirect-drop-poc:
 	@HOST=2606:4700:4700::1111 BLOCK_OWNER_UID=package REDIRECT_THREAD=2 ENABLE_IPV6=1 EXPECT_DROP=1 ./scripts/android-run-vpp-owner-resolver-udp-poc.sh
 
+vpp-handoff-perf-poc:
+	@PYTHONPATH=/home/js/android/lineage/external/ply/ply ./scripts/apply-vpp-overlay.sh
+	@PYTHONPATH=/home/js/android/lineage/external/ply/ply ./scripts/build-vpp-handoff-perf.sh
+	@./scripts/run-vpp-handoff-perf-poc.py
+
 idle-cpu:
 	./scripts/run-idle-cpu.sh
 

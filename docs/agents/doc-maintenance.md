@@ -18,6 +18,7 @@ Use these first:
 - `CONTEXT.md`
 - `docs/agents/`
 - `docs/README.md`
+- `docs/product/` for product scope, UI/UX, content, release, and community work
 - `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` when discussing the current Android/VPP architecture or POC conclusions
 - `docs/IMPLEMENTATION_ROADMAP.md`
 - `docs/INTERFACE_SPECIFICATION.md`
@@ -51,6 +52,7 @@ Docs may link to these work items and keep evidence, but they must not keep thei
 | Path | Classification | Handling |
 | --- | --- | --- |
 | `docs/agents/` | `authoritative-current` | Matt skills / Plane / domain-doc workflow context. |
+| `docs/product/` | `authoritative-current` | Product outcomes, UI/UX, content, release, and community operating baseline. |
 | `docs/decisions/` | `authoritative-current` | Active decision records after refresh; interface details still defer to `docs/INTERFACE_SPECIFICATION.md`. |
 | `docs/testing/` | mixed | Active runbooks, casebooks, and evidence. Open work must link to Plane. |
 | `docs/tooling/` | `authoritative-current` | Active build/debug workflow docs. |

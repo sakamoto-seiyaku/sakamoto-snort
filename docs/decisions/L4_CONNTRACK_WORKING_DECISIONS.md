@@ -1,7 +1,10 @@
 # L4 Conntrack：工作决策与原则
 
-更新时间：2026-06-20
-状态：纲领性工作结论（历史设计回执；能力已落地，SNORT-10 A++ runtime 重构仍应对照本文）
+更新时间：2026-07-19
+状态：部分被取代。L4 stateful 语义仍是参考；全局共享 A++ authoritative CT table、
+topology-independent correctness 和 owner/handoff 仅作未来性能实验的结论，已由
+`PER_WORKER_FLOW_OWNERSHIP.md` 取代；L1 allow 跳过后续 DPI policy 的语义已由 stage-owned
+`DROP / PASS_NEXT` pipeline 取代，见 `docs/adr/0001-policy-bundle-staged-enforcement.md`。
 对应历史主规格：`archive/openspec/specs/l4-conntrack-core/spec.md`
 对应历史 change：`archive/openspec/changes/archive/2026-03-30-add-iprules-conntrack-core/`
 
@@ -21,6 +24,10 @@
 - 具体 Plane work item / implementation slice 的任务拆分、接口字面量、类图与测试清单；
 - NAT / ALG / DPI / HTTP 识别这类已超出当前产品边界的话题；
 - “如何一步到位做成通用防火墙”的泛化设计。
+
+阅读提示：本文后续所有 A/A++、`liburcu-qsbr` shared-table 和“不依赖同流同线程”段落只
+保留为已评估方案记录，不再是目标 VPP runtime baseline。后续 CT 应建立在 per-worker
+single-owner FlowEntry 上；是否复用本文的 OVS-derived state semantics 另行按产品阶段决定。
 
 ---
 
@@ -145,6 +152,10 @@ L4 conntrack 和 v1 的关系应理解为：
 也就是说，conntrack 不是为了替换现有 classifier，而是为了给它补一个以前不存在的状态层。
 
 ### 5.1 与 pipeline / decision cache 的关系：`ct.*` 会改变 stateful stage 输入
+
+> 历史说明：本节关于 cache key 必须包含实际 facts、cache 不得改变 fact acquisition 的原则
+> 仍有效；下方 L1 `FinalAllow` 无条件跳过后续 policy 的结论不再有效。当前每个 Enforcement
+> Stage 只返回 `DROP` 或 `PASS_NEXT`，并保留 stage-local rule priority。
 
 当前 IPRULES v1 的 hot-path 结构包含：
 - exact decision cache（TLS）

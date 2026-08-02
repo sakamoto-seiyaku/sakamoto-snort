@@ -1,0 +1,173 @@
+diff --git a/src/vlib/buffer_funcs.c b/src/vlib/buffer_funcs.c
+index 168215f9..eb6b3ec7 100644
+--- a/src/vlib/buffer_funcs.c
++++ b/src/vlib/buffer_funcs.c
+@@ -284,17 +284,20 @@ retry:
+       wait_started = clib_cpu_time_now ();
+       while (new_tail >= fq->head + nelts)
+ 	vlib_worker_thread_barrier_check ();
+-      wait_cycles = clib_cpu_time_now () - wait_started;
+-      __atomic_fetch_add (&fq->full_waits, 1, __ATOMIC_RELAXED);
+-      __atomic_fetch_add (&fq->full_wait_cycles, wait_cycles,
+-			  __ATOMIC_RELAXED);
+-      wait_max = __atomic_load_n (&fq->full_wait_max_cycles,
+-				  __ATOMIC_RELAXED);
+-      while (wait_cycles > wait_max &&
+-	     !__atomic_compare_exchange_n (&fq->full_wait_max_cycles, &wait_max,
+-					   wait_cycles, 1, __ATOMIC_RELAXED,
+-					   __ATOMIC_RELAXED))
+-	;
++      if (VLIB_WAKE_DIAGNOSTICS)
++	{
++	  wait_cycles = clib_cpu_time_now () - wait_started;
++	  __atomic_fetch_add (&fq->full_waits, 1, __ATOMIC_RELAXED);
++	  __atomic_fetch_add (&fq->full_wait_cycles, wait_cycles,
++			      __ATOMIC_RELAXED);
++	  wait_max = __atomic_load_n (&fq->full_wait_max_cycles,
++				      __ATOMIC_RELAXED);
++	  while (wait_cycles > wait_max &&
++		 !__atomic_compare_exchange_n (
++		   &fq->full_wait_max_cycles, &wait_max, wait_cycles, 1,
++		   __ATOMIC_RELAXED, __ATOMIC_RELAXED))
++	    ;
++	}
+     }
+ 
+   if (!__atomic_compare_exchange_n (&fq->tail, &tail, new_tail, 0 /* weak */,
+diff --git a/src/vlib/file.c b/src/vlib/file.c
+index 04b89fc4..23dc3057 100644
+--- a/src/vlib/file.c
++++ b/src/vlib/file.c
+@@ -161,7 +161,8 @@ vlib_file_poll (vlib_main_t *vm)
+ 
+   /* at this point we know that thread is going to sleep, so let's annonce
+    * to other threads that they need to wakeup us if they need our attention */
+-  __atomic_fetch_add (&vm->sleep_attempts, 1, __ATOMIC_RELAXED);
++  if (VLIB_WAKE_DIAGNOSTICS)
++    __atomic_fetch_add (&vm->sleep_attempts, 1, __ATOMIC_RELAXED);
+   __atomic_store_n (&vm->thread_sleeps, 1, __ATOMIC_RELAXED);
+   announced_sleep = 1;
+   __atomic_thread_fence (__ATOMIC_SEQ_CST);
+@@ -173,8 +174,9 @@ vlib_file_poll (vlib_main_t *vm)
+    */
+   if (__atomic_load_n (&vm->check_frame_queues, __ATOMIC_ACQUIRE))
+     {
+-      __atomic_fetch_add (&vm->sleep_frame_queue_rechecks, 1,
+-			  __ATOMIC_RELAXED);
++      if (VLIB_WAKE_DIAGNOSTICS)
++	__atomic_fetch_add (&vm->sleep_frame_queue_rechecks, 1,
++			    __ATOMIC_RELAXED);
+       goto epoll;
+     }
+ 
+@@ -206,12 +208,12 @@ skip_loops:
+   vm->file_poll_skip_loops = 1024;
+ 
+ epoll:
+-  if (announced_sleep)
++  if (announced_sleep && VLIB_WAKE_DIAGNOSTICS)
+     sleep_started = clib_cpu_time_now ();
+   n_fds_ready = epoll_wait (vm->epoll_fd, epoll_events,
+ 			    ARRAY_LEN (epoll_events), timeout_ms);
+ 
+-  if (announced_sleep)
++  if (announced_sleep && VLIB_WAKE_DIAGNOSTICS)
+     {
+       u64 cycles = clib_cpu_time_now () - sleep_started;
+       u64 max_cycles = __atomic_load_n (&vm->sleep_max_cycles,
+@@ -247,7 +249,8 @@ epoll:
+       clib_file_t *f = e->data.ptr;
+       clib_error_t *err;
+ 
+-      if (announced_sleep && f->file_descriptor == vm->wakeup_fd)
++      if (announced_sleep && VLIB_WAKE_DIAGNOSTICS &&
++	  f->file_descriptor == vm->wakeup_fd)
+ 	__atomic_fetch_add (&vm->sleep_epoll_wakeups, 1, __ATOMIC_RELAXED);
+ 
+       if (PREDICT_FALSE (!f->active))
+diff --git a/src/vlib/main.h b/src/vlib/main.h
+index 9a7db5ac..dd9976ae 100644
+--- a/src/vlib/main.h
++++ b/src/vlib/main.h
+@@ -26,6 +26,10 @@
+ #define VLIB_ELOG_MAIN_LOOP 0
+ #endif
+ 
++#ifndef VLIB_WAKE_DIAGNOSTICS
++#define VLIB_WAKE_DIAGNOSTICS 0
++#endif
++
+ typedef struct
+ {
+   u8 trace_filter_enable;
+diff --git a/src/vlib/threads.h b/src/vlib/threads.h
+index b4e82a6f..18168742 100644
+--- a/src/vlib/threads.h
++++ b/src/vlib/threads.h
+@@ -505,36 +505,54 @@ vlib_thread_wakeup (clib_thread_index_t thread_index)
+   ssize_t rv;
+   u64 val = 1;
+ 
+-  __atomic_fetch_add (&vm->wakeup_calls, 1, __ATOMIC_RELAXED);
++  if (VLIB_WAKE_DIAGNOSTICS)
++    __atomic_fetch_add (&vm->wakeup_calls, 1, __ATOMIC_RELAXED);
+   __atomic_thread_fence (__ATOMIC_SEQ_CST);
+   if (PREDICT_FALSE (vlib_frame_queue_wakeup_mode == 3))
+     {
+       if (__atomic_exchange_n (&vm->wakeup_pending, 1, __ATOMIC_ACQ_REL) == 0)
+ 	{
+-	  __atomic_fetch_add (&vm->wakeup_pending_claims, 1,
+-			      __ATOMIC_RELAXED);
++	  if (VLIB_WAKE_DIAGNOSTICS)
++	    __atomic_fetch_add (&vm->wakeup_pending_claims, 1,
++				  __ATOMIC_RELAXED);
+ 	  rv = write (vm->wakeup_fd, &val, sizeof (u64));
+ 	  if (rv == sizeof (u64))
+-	    __atomic_fetch_add (&vm->wakeup_writes, 1, __ATOMIC_RELAXED);
++	    {
++	      if (VLIB_WAKE_DIAGNOSTICS)
++		__atomic_fetch_add (&vm->wakeup_writes, 1,
++				    __ATOMIC_RELAXED);
++	    }
+ 	  else
+-	    __atomic_fetch_add (&vm->wakeup_write_errors, 1,
+-				__ATOMIC_RELAXED);
++	    {
++	      if (VLIB_WAKE_DIAGNOSTICS)
++		__atomic_fetch_add (&vm->wakeup_write_errors, 1,
++				    __ATOMIC_RELAXED);
++	    }
+ 	}
+       return;
+     }
+   if (__atomic_load_n (&vm->thread_sleeps, __ATOMIC_ACQUIRE))
+     {
+-      __atomic_fetch_add (&vm->wakeup_sleeps_seen, 1, __ATOMIC_RELAXED);
++      if (VLIB_WAKE_DIAGNOSTICS)
++	__atomic_fetch_add (&vm->wakeup_sleeps_seen, 1, __ATOMIC_RELAXED);
+       if (__atomic_exchange_n (&vm->wakeup_pending, 1, __ATOMIC_ACQ_REL) == 0)
+ 	{
+-	  __atomic_fetch_add (&vm->wakeup_pending_claims, 1,
+-			      __ATOMIC_RELAXED);
++	  if (VLIB_WAKE_DIAGNOSTICS)
++	    __atomic_fetch_add (&vm->wakeup_pending_claims, 1,
++				  __ATOMIC_RELAXED);
+ 	  rv = write (vm->wakeup_fd, &val, sizeof (u64));
+ 	  if (rv == sizeof (u64))
+-	    __atomic_fetch_add (&vm->wakeup_writes, 1, __ATOMIC_RELAXED);
++	    {
++	      if (VLIB_WAKE_DIAGNOSTICS)
++		__atomic_fetch_add (&vm->wakeup_writes, 1,
++				    __ATOMIC_RELAXED);
++	    }
+ 	  else
+-	    __atomic_fetch_add (&vm->wakeup_write_errors, 1,
+-				__ATOMIC_RELAXED);
++	    {
++	      if (VLIB_WAKE_DIAGNOSTICS)
++		__atomic_fetch_add (&vm->wakeup_write_errors, 1,
++				    __ATOMIC_RELAXED);
++	    }
+ 	}
+     }
+ }
