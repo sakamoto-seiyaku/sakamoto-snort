@@ -876,16 +876,17 @@ def main() -> int:
     parser.add_argument("--phase", choices=("idle", "latency", "all"), default="all")
     parser.add_argument("--result-dir", type=Path, default=DEFAULT_RESULT)
     args = parser.parse_args()
+    result_dir = args.result_dir.resolve()
     if args.self_test:
         self_test()
         print("P6d runner self-test: PASS")
         return 0
     if args.preflight:
-        return preflight(args.result_dir)
+        return preflight(result_dir)
     if not args.execute:
         print(json_text(protocol_plan(), default=str), end="")
         return 0
-    return execute(args.phase, args.result_dir)
+    return execute(args.phase, result_dir)
 
 
 if __name__ == "__main__":

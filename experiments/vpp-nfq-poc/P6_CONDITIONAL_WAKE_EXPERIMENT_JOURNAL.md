@@ -779,3 +779,21 @@ starting only the frozen P6d campaign; it accepts no campaign result.
 ```text
 final P6d runner=df21181bfdf497c37e5dc653953c89d274e6edbd49a5dc72738d1ecb9d179d47
 ```
+
+### P6d formal attempt 01: pre-arm runner failure
+
+The committed-runner untimed preflight `/tmp/sakamoto-p6d-preflight-20260803-03` passed A/B/C 3/3 with
+`timed_arms_started=0`. Formal attempt 01 then started with the repository-relative result directory
+`experiments/vpp-nfq-poc/results/2026-08-03/vpp-wake-p6-formal-01`. It failed closed before the first arm's
+startup configuration reached the device: the runner passed the relative local `startup.conf` path to the
+repo adb wrapper, whose execution context could not stat that path. The preserved manifest, raw row, failure,
+and strict non-GO summary prove that no warmup or sample window started.
+
+The entry point now resolves the result directory to an absolute path before either preflight or execute.
+This changes no artifact, order, duration, estimator, validity rule, or statistic. Device-free compilation,
+self-test, and diff checks pass.
+
+```text
+attempt-01 verdict=INVALID before any timed arm
+absolute-result-path runner=d91235716c41379e21e6978f5f40bf4dbcf186aa11e692e4134ba4f1d1711139
+```
