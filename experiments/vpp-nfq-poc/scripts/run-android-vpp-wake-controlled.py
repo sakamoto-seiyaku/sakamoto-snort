@@ -456,6 +456,7 @@ class EnvironmentGuard:
             raise GuardError(f"CLK_TCK changed: {before_hz}->{after_hz}")
         hz = before_hz
         busy: list[dict[str, Any]] = []
+        churn_observations: list[dict[str, Any]] = []
 
         def classify(pid: int, ticks: int, process: dict[str, Any] | None,
                      reason: str, identity: dict[str, Any]) -> None:
@@ -499,9 +500,29 @@ class EnvironmentGuard:
                      {"starttime": starttime, "stat_comm": comm})
         for pid in sorted(set(before_process) - set(after_process)):
             ticks, comm, starttime = before_process[pid]
-            classify(pid, ticks, before_ps.get(pid),
-                     "before-only-total-ticks-upper-bound-churn",
-                     {"starttime": starttime, "stat_comm": comm})
+            if ticks < 0:
+                raise GuardError(f"process ticks decreased for pid {pid}: {ticks}")
+            lifetime_upper_percent = 100.0 * ticks / hz / elapsed
+            if lifetime_upper_percent <= PROCESS_CPU_MAX_PERCENT:
+                continue
+            if not comm.startswith("kworker/"):
+                raise GuardError(
+                    "unquantifiable-before-only-churn:"
+                    f"pid={pid} stat_comm={comm!r} starttime={starttime} "
+                    f"lifetime_ticks={ticks} upper_bound_percent={lifetime_upper_percent:.3f}")
+            process = before_ps.get(pid)
+            churn_observations.append({
+                "pid": pid,
+                "comm": str(process["comm"]) if process is not None else None,
+                "stat_comm": comm,
+                "starttime": starttime,
+                "identity": {"starttime": starttime, "stat_comm": comm},
+                "lifetime_ticks": ticks,
+                "lifetime_ticks_as_window_upper_bound_percent": lifetime_upper_percent,
+                "window_percent": None,
+                "covered_by": "aggregate_idle",
+                "reason": "before-only-kworker-lifetime-unquantifiable",
+            })
         return {"sample_seconds": elapsed,
                 "sample_seconds_semantics": (
                     "CLOCK_MONOTONIC host wait between endpoint commands; process ticks span "
@@ -512,7 +533,8 @@ class EnvironmentGuard:
                     "first after section, excluding guard endpoint collection overhead"),
                 "per_cpu_idle_percent": idle_fractions,
                 "aggregate_idle_percent_of_800": sum(idle_fractions.values()),
-                "non_test_processes_over_5_percent": busy}
+                "non_test_processes_over_5_percent": busy,
+                "process_churn_observations": churn_observations}
 
     def readiness_snapshot(self, label: str) -> dict[str, Any]:
         start = len(self.events)
@@ -989,11 +1011,12 @@ def self_test() -> None:
         f"cpu{cpu} 100 0 0 900 0 0 0 0\n" for cpu in range(8))
     after_cpu_lines = "".join(
         f"cpu{cpu} 100 0 0 1900 0 0 0 0\n" for cpu in range(8))
-    before_only_stats = synthetic_stat(1, "init", 100, 1) + synthetic_stat(40, "churn", 30, 40)
+    before_only_stats = (synthetic_stat(1, "init", 100, 1)
+                         + synthetic_stat(40, "kworker/u16:7-events", 30, 40))
     after_only_stats = synthetic_stat(1, "init", 100, 1) + synthetic_stat(30, "vpp", 30, 30)
     before_only_ps = (
         "PID UID NAME ARGS\n1 0 init /system/bin/init\n"
-        "40 1000 churn /system/bin/churn\n")
+        "40 0 kworker/u16:7-events [kworker/u16:7-events]\n")
     after_only_ps = (
         "PID UID NAME ARGS\n1 0 init /system/bin/init\n"
         "30 1000 vpp /system/bin/not-a-p6-root\n")
@@ -1009,10 +1032,35 @@ def self_test() -> None:
           mock.patch.object(time, "monotonic", side_effect=[0.0, 5.0])):
         synthetic_result = cpu_guard.cpu_window()
     reasons = {entry["reason"] for entry in synthetic_result["non_test_processes_over_5_percent"]}
-    assert reasons == {"after-only-total-ticks-upper-bound",
-                       "before-only-total-ticks-upper-bound-churn"}
+    assert reasons == {"after-only-total-ticks-upper-bound"}
+    assert synthetic_result["process_churn_observations"] == [{
+        "pid": 40,
+        "comm": "kworker/u16:7-events",
+        "stat_comm": "kworker/u16:7-events",
+        "starttime": 40,
+        "identity": {"starttime": 40, "stat_comm": "kworker/u16:7-events"},
+        "lifetime_ticks": 30,
+        "lifetime_ticks_as_window_upper_bound_percent": 6.0,
+        "window_percent": None,
+        "covered_by": "aggregate_idle",
+        "reason": "before-only-kworker-lifetime-unquantifiable",
+    }]
     assert not any(root in entry["cmdline"] for root in REMOTE_VPP_ROOTS
                    for entry in synthetic_result["non_test_processes_over_5_percent"])
+    invalid_before = synthetic_before.replace(
+        "(kworker/u16:7-events)", "(ordinary-churn)").replace(
+            "kworker/u16:7-events [kworker/u16:7-events]",
+            "ordinary-churn /system/bin/ordinary-churn")
+    with (mock.patch.object(cpu_guard, "output", side_effect=[invalid_before, synthetic_after]),
+          mock.patch.object(time, "sleep"),
+          mock.patch.object(time, "monotonic", side_effect=[0.0, 5.0])):
+        try:
+            cpu_guard.cpu_window()
+        except GuardError as error:
+            assert "unquantifiable-before-only-churn" in str(error)
+            assert "upper_bound_percent=6.000" in str(error)
+        else:
+            raise AssertionError("high-tick non-kworker before-only churn must fail closed")
     current_pgid, current_starttime = EnvironmentGuard.host_process_identity(os.getpid())
     assert current_pgid == os.getpgrp() and current_starttime > 0
     with tempfile.TemporaryDirectory(prefix="p6-guard-timeout-test-") as temporary:
