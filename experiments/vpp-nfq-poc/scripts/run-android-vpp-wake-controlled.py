@@ -201,7 +201,9 @@ class EnvironmentGuard:
             rf"(?ms)^  Package \[{re.escape(VENDING)}\].*?(?=^  Package \[|\Z)", text)
         if not package:
             return None
-        uid = re.search(r"(?m)^    userId=([0-9]+)\s*$", package.group(0))
+        # Android package dumps use either userId= or appId= for the package's
+        # user-0 Linux identity, depending on platform release/build.
+        uid = re.search(r"(?m)^    (?:userId|appId)=([0-9]+)\s*$", package.group(0))
         return int(uid.group(1)) if uid else None
 
     def cpufreq_vector(self) -> list[str]:
@@ -805,7 +807,7 @@ def self_test() -> None:
     assert EnvironmentGuard.parse_thermal(thermal) == (
         0, {"thermal-cpufreq-0": 0}, 36.5)
     packages = ("  Package [com.android.vending] (current):\n"
-                "    userId=10123\n"
+                "    appId=10123\n"
                 "    versionName=52\n"
                 "    User 0: installed=true enabled=1 stopped=true\n"
                 "  Package [com.android.vending] (disabled-system):\n"
@@ -813,6 +815,8 @@ def self_test() -> None:
                 "    User 0: installed=true enabled=0 stopped=false\n")
     assert EnvironmentGuard.parse_vending_state(packages) == 1
     assert EnvironmentGuard.parse_vending_uid(packages) == 10123
+    assert EnvironmentGuard.parse_vending_uid(
+        packages.replace("appId=10123", "userId=10123")) == 10123
     device_processes = (
         "PID=12\tUID=10123\tCOMM=process\tCMD=com.android.vending:background\n"
         "PID=13\tUID=0\tCOMM=dex2oat64\tCMD=dex2oat64 --zip-fd=4\n")
