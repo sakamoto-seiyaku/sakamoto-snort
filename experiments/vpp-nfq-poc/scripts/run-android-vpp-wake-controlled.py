@@ -327,14 +327,24 @@ class EnvironmentGuard:
         status_match = re.search(r"(?m)^Thermal Status:\s*([0-9]+)\s*$", text)
         if not status_match:
             raise GuardError("thermal global status unavailable")
+        temperatures_match = re.search(
+            r"(?ms)^Current temperatures from HAL:\s*\n(.*?)"
+            r"(?=^[^\s].*:\s*$|\Z)", text)
+        cooling_match = re.search(
+            r"(?ms)^Current cooling devices from HAL:\s*\n(.*?)"
+            r"(?=^[^\s].*:\s*$|\Z)", text)
+        if not temperatures_match or not cooling_match:
+            raise GuardError("current HAL thermal sections unavailable")
+        temperatures_text = temperatures_match.group(1)
+        cooling_text = cooling_match.group(1)
         cooling = {name: int(value) for value, name in re.findall(
-            r"CoolingDevice\{mValue=([0-9]+),[^}]*mName=([^,}]+)", text)
+            r"CoolingDevice\{mValue=([0-9]+),[^}]*mName=([^,}]+)", cooling_text)
                    if name.startswith("thermal-cpufreq-")}
         if not cooling:
             raise GuardError("CPU thermal cooling-device states unavailable")
         skin_matches = re.findall(
             r"Temperature\{mValue=([0-9]+(?:\.[0-9]+)?),[^}]*mName=VIRTUAL-SKIN(?:-[^,}]*)?",
-            text, re.I)
+            temperatures_text, re.I)
         if not skin_matches:
             raise GuardError("VIRTUAL-SKIN temperature unavailable")
         return int(status_match.group(1)), cooling, max(float(value) for value in skin_matches)
@@ -908,8 +918,13 @@ def self_test() -> None:
         12: (42, "thing with spaces (and) parens", 12345),
         13: (15, "simple", 23456)}
     thermal = ("Thermal Status: 0\n"
-               "CoolingDevice{mValue=0, mType=2, mName=thermal-cpufreq-0}\n"
-               "Temperature{mValue=36.5, mType=3, mName=VIRTUAL-SKIN, mStatus=0}\n")
+               "Cached temperatures:\n"
+               "\tTemperature{mValue=41.5, mType=3, mName=VIRTUAL-SKIN, mStatus=0}\n"
+               "Current temperatures from HAL:\n"
+               "\tTemperature{mValue=36.5, mType=3, mName=VIRTUAL-SKIN, mStatus=0}\n"
+               "Current cooling devices from HAL:\n"
+               "\tCoolingDevice{mValue=0, mType=2, mName=thermal-cpufreq-0}\n"
+               "Temperature static thresholds from HAL:\n")
     assert EnvironmentGuard.parse_thermal(thermal) == (
         0, {"thermal-cpufreq-0": 0}, 36.5)
     packages = ("  Package [com.android.vending] (current):\n"
