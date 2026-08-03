@@ -247,23 +247,28 @@ class EnvironmentGuard:
         self.flush_events(f"{phase}.json", start)
 
     def device_processes(self) -> list[dict[str, Any]]:
-        text = self.output(
-            "for p in /proc/[0-9]*; do [ -r \"$p/status\" ] || continue; "
-            "pid=${p##*/}; uid=$(awk '/^Uid:/{print $2; exit}' \"$p/status\" 2>/dev/null); "
-            "comm=$(cat \"$p/comm\" 2>/dev/null | tr '\\t\\n' '  '); "
-            "cmd=$(tr '\\000\\t\\n' '   ' <\"$p/cmdline\" 2>/dev/null); "
-            "printf 'PID=%s\\tUID=%s\\tCOMM=%s\\tCMD=%s\\n' \"$pid\" \"$uid\" \"$comm\" \"$cmd\"; done")
+        text = self.output("ps -A -ww -o PID,UID,NAME,ARGS")
         return self.parse_device_processes(text)
 
     @staticmethod
     def parse_device_processes(text: str) -> list[dict[str, Any]]:
+        lines = [line for line in text.splitlines() if line.strip()]
+        if not lines or lines[0].split() != ["PID", "UID", "NAME", "ARGS"]:
+            raise GuardError("unexpected toybox ps header")
         processes: list[dict[str, Any]] = []
-        for line in text.splitlines():
-            match = re.match(
-                r"PID=([0-9]+)\tUID=([0-9]+)\tCOMM=([^\t]*)\tCMD=(.*)", line)
-            if match:
-                processes.append({"pid": int(match.group(1)), "uid": int(match.group(2)),
-                                  "comm": match.group(3), "cmdline": match.group(4)})
+        seen: set[int] = set()
+        for line in lines[1:]:
+            fields = line.strip().split(None, 3)
+            if len(fields) != 4 or not fields[0].isdigit() or not fields[1].isdigit():
+                raise GuardError(f"unparseable toybox ps row: {line!r}")
+            pid = int(fields[0])
+            if pid in seen:
+                raise GuardError(f"duplicate PID in toybox ps: {pid}")
+            seen.add(pid)
+            processes.append({"pid": pid, "uid": int(fields[1]),
+                              "comm": fields[2], "cmdline": fields[3]})
+        if not processes or 1 not in seen:
+            raise GuardError("toybox ps snapshot is empty or missing PID 1")
         return processes
 
     def vpp_processes(self) -> list[dict[str, Any]]:
@@ -348,31 +353,85 @@ class EnvironmentGuard:
         return result
 
     @staticmethod
-    def parse_process_stats(text: str) -> dict[int, tuple[int, str, str]]:
-        result: dict[int, tuple[int, str, str]] = {}
+    def parse_process_stats(text: str) -> dict[int, tuple[int, str, int]]:
+        """Parse concatenated proc stat rows as ticks, comm, and start-time."""
+        result: dict[int, tuple[int, str, int]] = {}
         for line in text.splitlines():
-            match = re.match(r"PID=([0-9]+)\tTICKS=([0-9]+)\tCOMM=([^\t]*)\tCMD=(.*)", line)
-            if match:
-                result[int(match.group(1))] = (
-                    int(match.group(2)), match.group(3), match.group(4))
+            if not line.strip():
+                continue
+            first_space = line.find(" ")
+            close = line.rfind(") ")
+            if first_space <= 0 or close <= first_space + 1:
+                raise GuardError(f"unparseable /proc stat row: {line!r}")
+            pid_text = line[:first_space]
+            if not pid_text.isdigit() or line[first_space + 1] != "(":
+                raise GuardError(f"unparseable /proc stat identity: {line!r}")
+            pid = int(pid_text)
+            comm = line[first_space + 2:close]
+            rest = line[close + 2:].split()
+            # After removing `pid (comm) `, rest[0] is field 3 (state), so
+            # utime/stime fields 14/15 are indices 11/12.
+            if len(rest) < 20 or len(rest[0]) != 1:
+                raise GuardError(f"incomplete /proc stat row for pid {pid}")
+            try:
+                ticks = int(rest[11]) + int(rest[12])
+                starttime = int(rest[19])  # field 22
+            except ValueError as error:
+                raise GuardError(f"invalid process counters for pid {pid}") from error
+            if pid in result:
+                raise GuardError(f"duplicate /proc stat PID: {pid}")
+            result[pid] = (ticks, comm, starttime)
+        if not result or 1 not in result:
+            raise GuardError("process stat snapshot is empty or missing PID 1")
         return result
 
+    @classmethod
+    def parse_cpu_snapshot(cls, text: str) -> tuple[
+            dict[int, tuple[int, int]], dict[int, tuple[int, str, int]],
+            dict[int, dict[str, Any]], int]:
+        marker_names = {"__PROC_STAT__", "__PROCESS_STATS__", "__PS__", "__CLK_TCK__"}
+        sections: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in text.splitlines():
+            if line in marker_names:
+                if line in sections:
+                    raise GuardError(f"duplicate CPU snapshot section: {line}")
+                sections[line] = []
+                current = line
+            elif current is None:
+                if line.strip():
+                    raise GuardError(f"CPU snapshot data precedes section marker: {line!r}")
+            else:
+                sections[current].append(line)
+        if set(sections) != marker_names:
+            raise GuardError(
+                f"incomplete batched CPU snapshot sections: {sorted(sections)}")
+        proc_text = "\n".join(sections["__PROC_STAT__"])
+        process_text = "\n".join(sections["__PROCESS_STATS__"])
+        ps_text = "\n".join(sections["__PS__"])
+        hz_text = "\n".join(sections["__CLK_TCK__"])
+        hz_lines = [line.strip() for line in hz_text.splitlines() if line.strip()]
+        if len(hz_lines) != 1 or not hz_lines[0].isdigit():
+            raise GuardError(f"invalid CLK_TCK evidence: {hz_lines}")
+        ps = {int(process["pid"]): process
+              for process in cls.parse_device_processes(ps_text)}
+        return cls.parse_proc_stat(proc_text), cls.parse_process_stats(process_text), ps, int(hz_lines[0])
+
     def cpu_window(self) -> dict[str, Any]:
-        proc_command = (
-            "cat /proc/stat; echo __PROCESSES__; hz=$(getconf CLK_TCK); echo CLK_TCK=$hz; "
-            "for p in /proc/[0-9]*; do [ -r \"$p/stat\" ] || continue; "
-            "pid=${p##*/}; s=$(cat \"$p/stat\" 2>/dev/null) || continue; "
-            "rest=${s#*) }; set -- $rest; ticks=$(($12+$13)); "
-            "comm=$(cat \"$p/comm\" 2>/dev/null | tr '\\t\\n' '  '); "
-            "cmd=$(tr '\\000\\t\\n' '   ' <\"$p/cmdline\" 2>/dev/null); "
-            "printf 'PID=%s\\tTICKS=%s\\tCOMM=%s\\tCMD=%s\\n' \"$pid\" \"$ticks\" \"$comm\" \"$cmd\"; done")
-        before_text = self.output(proc_command)
+        process_sections = (
+            "echo __PROCESS_STATS__; "
+            "cat /proc/[0-9]*/stat 2>/dev/null; echo __PS__; "
+            "ps -A -ww -o PID,UID,NAME,ARGS; echo __CLK_TCK__; getconf CLK_TCK")
+        before_command = process_sections + "; echo __PROC_STAT__; cat /proc/stat"
+        after_command = "echo __PROC_STAT__; cat /proc/stat; " + process_sections
+        before_text = self.output(before_command)
         before_mono = time.monotonic()
         time.sleep(CPU_SAMPLE_SECONDS)
-        after_text = self.output(proc_command)
-        elapsed = time.monotonic() - before_mono
-        before_cpu = self.parse_proc_stat(before_text.split("__PROCESSES__", 1)[0])
-        after_cpu = self.parse_proc_stat(after_text.split("__PROCESSES__", 1)[0])
+        after_mono = time.monotonic()
+        after_text = self.output(after_command)
+        elapsed = after_mono - before_mono
+        before_cpu, before_process, before_ps, before_hz = self.parse_cpu_snapshot(before_text)
+        after_cpu, after_process, after_ps, after_hz = self.parse_cpu_snapshot(after_text)
         common_cpus = sorted(set(before_cpu) & set(after_cpu))
         if len(common_cpus) != 8:
             raise GuardError(f"expected eight CPU accounting rows, got {common_cpus}")
@@ -383,23 +442,65 @@ class EnvironmentGuard:
             if total_delta <= 0 or not (0 <= idle_delta <= total_delta):
                 raise GuardError(f"invalid /proc/stat delta for cpu{cpu}")
             idle_fractions[str(cpu)] = 100.0 * idle_delta / total_delta
-        hz_match = re.search(r"CLK_TCK=([0-9]+)", before_text)
-        if not hz_match:
-            raise GuardError("CLK_TCK unavailable")
-        hz = int(hz_match.group(1))
-        before_process = self.parse_process_stats(before_text)
-        after_process = self.parse_process_stats(after_text)
+        if before_hz != after_hz:
+            raise GuardError(f"CLK_TCK changed: {before_hz}->{after_hz}")
+        hz = before_hz
         busy: list[dict[str, Any]] = []
+
+        def classify(pid: int, ticks: int, process: dict[str, Any] | None,
+                     reason: str, identity: dict[str, Any]) -> None:
+            if ticks < 0:
+                raise GuardError(f"process ticks decreased for pid {pid}: {ticks}")
+            percent = 100.0 * ticks / hz / elapsed
+            if percent <= PROCESS_CPU_MAX_PERCENT:
+                return
+            if process is None:
+                raise GuardError(
+                    f"process pid {pid} used upper-bound {percent:.3f}% but has no ps metadata")
+            cmdline = str(process["cmdline"])
+            if any(root in cmdline for root in REMOTE_VPP_ROOTS):
+                return
+            busy.append({"pid": pid, "uid": int(process["uid"]),
+                         "comm": str(process["comm"]), "cmdline": cmdline,
+                         "single_core_percent": percent, "reason": reason,
+                         "identity": identity})
+
         for pid in sorted(set(before_process) & set(after_process)):
-            delta = after_process[pid][0] - before_process[pid][0]
-            percent = 100.0 * delta / hz / elapsed
-            comm, cmdline = after_process[pid][1:]
-            is_test = ("/data/local/tmp/vpp-p6/" in cmdline
-                       or comm == "vpp" or comm.startswith("vpp_"))
-            if percent > PROCESS_CPU_MAX_PERCENT and not is_test:
-                busy.append({"pid": pid, "comm": comm, "cmdline": cmdline,
-                             "single_core_percent": percent})
-        return {"sample_seconds": elapsed, "per_cpu_idle_percent": idle_fractions,
+            before_ticks, before_comm, before_starttime = before_process[pid]
+            after_ticks, after_comm, after_starttime = after_process[pid]
+            # starttime is the stable Linux process-identity token. Kernel worker
+            # comm values may legitimately change with their current workqueue.
+            if before_starttime != after_starttime:
+                raise GuardError(
+                    f"process identity changed for common pid {pid}: "
+                    f"starttime {before_starttime}->{after_starttime}")
+            if (before_comm != after_comm
+                    and not (before_comm.startswith("kworker/")
+                             and after_comm.startswith("kworker/"))):
+                raise GuardError(
+                    f"process comm changed for stable pid {pid}: "
+                    f"{before_comm!r}->{after_comm!r}")
+            delta = after_ticks - before_ticks
+            classify(pid, delta, after_ps.get(pid), "common-pid-tick-delta",
+                     {"starttime": after_starttime, "stat_comm": after_comm})
+        for pid in sorted(set(after_process) - set(before_process)):
+            ticks, comm, starttime = after_process[pid]
+            classify(pid, ticks, after_ps.get(pid), "after-only-total-ticks-upper-bound",
+                     {"starttime": starttime, "stat_comm": comm})
+        for pid in sorted(set(before_process) - set(after_process)):
+            ticks, comm, starttime = before_process[pid]
+            classify(pid, ticks, before_ps.get(pid),
+                     "before-only-total-ticks-upper-bound-churn",
+                     {"starttime": starttime, "stat_comm": comm})
+        return {"sample_seconds": elapsed,
+                "sample_seconds_semantics": (
+                    "CLOCK_MONOTONIC host wait between endpoint commands; process ticks span "
+                    "the wider before-to-after process-stat interval, so "
+                    "single-core percentages are conservative"),
+                "aggregate_window_semantics": (
+                    "before /proc/stat is the final before section and after /proc/stat is the "
+                    "first after section, excluding guard endpoint collection overhead"),
+                "per_cpu_idle_percent": idle_fractions,
                 "aggregate_idle_percent_of_800": sum(idle_fractions.values()),
                 "non_test_processes_over_5_percent": busy}
 
@@ -798,9 +899,14 @@ def self_test() -> None:
     proc = "cpu  10 0 5 80 5 0 0 0\ncpu0 5 0 2 40 3 0 0 0\ncpu7 5 0 3 40 2 0 0 0\n"
     parsed = EnvironmentGuard.parse_proc_stat(proc)
     assert parsed == {0: (50, 43), 7: (50, 42)}
-    processes = "PID=12\tTICKS=99\tCOMM=thing\tCMD=/system/bin/thing --x\n"
+    processes = (
+        "1 (init) S 0 1 1 0 0 0 0 0 0 0 3 1 0 0 20 0 1 0 100\n"
+        "12 (thing with spaces (and) parens) R 1 2 3 4 5 6 7 8 9 10 40 2 0 0 20 0 1 0 12345\n"
+        "13 (simple) S 1 2 3 4 5 6 7 8 9 10 7 8 0 0 20 0 1 0 23456\n")
     assert EnvironmentGuard.parse_process_stats(processes) == {
-        12: (99, "thing", "/system/bin/thing --x")}
+        1: (4, "init", 100),
+        12: (42, "thing with spaces (and) parens", 12345),
+        13: (15, "simple", 23456)}
     thermal = ("Thermal Status: 0\n"
                "CoolingDevice{mValue=0, mType=2, mName=thermal-cpufreq-0}\n"
                "Temperature{mValue=36.5, mType=3, mName=VIRTUAL-SKIN, mStatus=0}\n")
@@ -818,14 +924,80 @@ def self_test() -> None:
     assert EnvironmentGuard.parse_vending_uid(
         packages.replace("appId=10123", "userId=10123")) == 10123
     device_processes = (
-        "PID=12\tUID=10123\tCOMM=process\tCMD=com.android.vending:background\n"
-        "PID=13\tUID=0\tCOMM=dex2oat64\tCMD=dex2oat64 --zip-fd=4\n")
+        "  PID   UID NAME       ARGS\n"
+        "    1     0 init       /system/bin/init\n"
+        "   12 10123 process    com.android.vending:background --long argument\n"
+        "   13     0 dex2oat64  dex2oat64 --zip-fd=4\n")
     assert EnvironmentGuard.parse_device_processes(device_processes) == [
+        {"pid": 1, "uid": 0, "comm": "init", "cmdline": "/system/bin/init"},
         {"pid": 12, "uid": 10123, "comm": "process",
-         "cmdline": "com.android.vending:background"},
+         "cmdline": "com.android.vending:background --long argument"},
         {"pid": 13, "uid": 0, "comm": "dex2oat64",
          "cmdline": "dex2oat64 --zip-fd=4"},
     ]
+    before_cpu_snapshot = (
+        "__PROCESS_STATS__\n" + processes + "__PS__\n" + device_processes
+        + "__CLK_TCK__\n100\n__PROC_STAT__\n" + proc)
+    after_cpu_snapshot = (
+        "__PROC_STAT__\n" + proc + "__PROCESS_STATS__\n" + processes
+        + "__PS__\n" + device_processes + "__CLK_TCK__\n100\n")
+    for cpu_snapshot in (before_cpu_snapshot, after_cpu_snapshot):
+        snapshot_cpu, snapshot_processes, snapshot_ps, snapshot_hz = (
+            EnvironmentGuard.parse_cpu_snapshot(cpu_snapshot))
+        assert snapshot_cpu == parsed and snapshot_processes[12][0] == 42
+        assert snapshot_ps[12]["cmdline"].startswith(VENDING) and snapshot_hz == 100
+    for parser, empty in (
+            (EnvironmentGuard.parse_device_processes, "PID UID NAME ARGS\n"),
+            (EnvironmentGuard.parse_process_stats, "")):
+        try:
+            parser(empty)
+        except GuardError:
+            pass
+        else:
+            raise AssertionError("empty process snapshot must fail closed")
+    for parser, missing_init in (
+            (EnvironmentGuard.parse_device_processes,
+             "PID UID NAME ARGS\n12 1000 app /system/bin/app\n"),
+            (EnvironmentGuard.parse_process_stats, processes.split("\n", 1)[1])):
+        try:
+            parser(missing_init)
+        except GuardError:
+            pass
+        else:
+            raise AssertionError("process snapshot missing PID 1 must fail closed")
+
+    def synthetic_stat(pid: int, comm: str, ticks: int, starttime: int) -> str:
+        return (f"{pid} ({comm}) S 0 1 1 0 0 0 0 0 0 0 {ticks} 0 "
+                f"0 0 20 0 1 0 {starttime}\n")
+
+    before_cpu_lines = "".join(
+        f"cpu{cpu} 100 0 0 900 0 0 0 0\n" for cpu in range(8))
+    after_cpu_lines = "".join(
+        f"cpu{cpu} 100 0 0 1900 0 0 0 0\n" for cpu in range(8))
+    before_only_stats = synthetic_stat(1, "init", 100, 1) + synthetic_stat(40, "churn", 30, 40)
+    after_only_stats = synthetic_stat(1, "init", 100, 1) + synthetic_stat(30, "vpp", 30, 30)
+    before_only_ps = (
+        "PID UID NAME ARGS\n1 0 init /system/bin/init\n"
+        "40 1000 churn /system/bin/churn\n")
+    after_only_ps = (
+        "PID UID NAME ARGS\n1 0 init /system/bin/init\n"
+        "30 1000 vpp /system/bin/not-a-p6-root\n")
+    synthetic_before = (
+        "__PROCESS_STATS__\n" + before_only_stats + "__PS__\n" + before_only_ps
+        + "__CLK_TCK__\n100\n__PROC_STAT__\n" + before_cpu_lines)
+    synthetic_after = (
+        "__PROC_STAT__\n" + after_cpu_lines + "__PROCESS_STATS__\n" + after_only_stats
+        + "__PS__\n" + after_only_ps + "__CLK_TCK__\n100\n")
+    cpu_guard = EnvironmentGuard(Path("/device-free"), preflight_only=True)
+    with (mock.patch.object(cpu_guard, "output", side_effect=[synthetic_before, synthetic_after]),
+          mock.patch.object(time, "sleep"),
+          mock.patch.object(time, "monotonic", side_effect=[0.0, 5.0])):
+        synthetic_result = cpu_guard.cpu_window()
+    reasons = {entry["reason"] for entry in synthetic_result["non_test_processes_over_5_percent"]}
+    assert reasons == {"after-only-total-ticks-upper-bound",
+                       "before-only-total-ticks-upper-bound-churn"}
+    assert not any(root in entry["cmdline"] for root in REMOTE_VPP_ROOTS
+                   for entry in synthetic_result["non_test_processes_over_5_percent"])
     current_pgid, current_starttime = EnvironmentGuard.host_process_identity(os.getpid())
     assert current_pgid == os.getpgrp() and current_starttime > 0
     with tempfile.TemporaryDirectory(prefix="p6-guard-timeout-test-") as temporary:
