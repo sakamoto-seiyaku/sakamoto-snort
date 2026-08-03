@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -39,6 +40,7 @@ CPU_SAMPLE_SECONDS = 5
 COOLING_INTERVAL_SECONDS = 5 * 60
 MAX_COOLING_SECONDS = 2 * 60 * 60
 SKIN_MAX_C = 37.0
+SKIN_TREND_TOLERANCE_C = 0.1
 AGGREGATE_IDLE_MIN_PERCENT = 790.0
 PROCESS_CPU_MAX_PERCENT = 5.0
 MANAGED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -577,16 +579,84 @@ class EnvironmentGuard:
             self.flush_events(f"readiness-{label}.json", start)
 
     @staticmethod
-    def require_final_trend(points: list[dict[str, Any]]) -> None:
-        if len(points) < 4:
-            raise GuardError("fewer than four readiness points in final 15-minute window")
+    def require_final_trend(points: list[dict[str, Any]]) -> dict[str, Any]:
+        """Return a JSON-safe, fail-closed assessment of the final four points."""
         final = points[-4:]
-        errors = [f"{point['label']}:{point['errors']}" for point in final if not point["valid"]]
-        temperatures = [float(point["virtual_skin_c"]) for point in final]
-        if any(later > earlier for earlier, later in zip(temperatures, temperatures[1:])):
-            errors.append(f"VIRTUAL-SKIN final trend is rising: {temperatures}")
-        if errors:
-            raise GuardError("readiness gate failed: " + "; ".join(errors))
+        all_points_valid = len(final) == 4 and all(
+            bool(point.get("valid", False)) for point in final)
+        temperatures: list[float | None] = []
+        for point in final:
+            try:
+                value = float(point.get("virtual_skin_c"))
+            except (TypeError, ValueError, OverflowError):
+                value = math.nan
+            temperatures.append(value if math.isfinite(value) else None)
+        all_finite = len(temperatures) == 4 and all(
+            temperature is not None for temperature in temperatures)
+        all_at_or_below = all_finite and all(
+            temperature is not None and temperature <= SKIN_MAX_C
+            for temperature in temperatures)
+        adjacent: list[float | None] = []
+        for earlier, later in zip(temperatures, temperatures[1:]):
+            adjacent.append(None if earlier is None or later is None else later - earlier)
+        deltas_finite = len(adjacent) == 3 and all(delta is not None for delta in adjacent)
+        max_rise = max(delta for delta in adjacent if delta is not None) if deltas_finite else None
+        net_delta = (temperatures[-1] - temperatures[0]
+                     if all_finite and temperatures[0] is not None
+                     and temperatures[-1] is not None else None)
+        epsilon = 1e-12
+        adjacent_ok = (max_rise is not None
+                       and max_rise <= SKIN_TREND_TOLERANCE_C + epsilon)
+        net_ok = (net_delta is not None
+                  and net_delta <= SKIN_TREND_TOLERANCE_C + epsilon)
+        checks = {
+            "exactly_four_points": len(final) == 4,
+            "all_points_valid": all_points_valid,
+            "all_temperatures_finite": all_finite,
+            "all_at_or_below_37c": all_at_or_below,
+            "max_adjacent_rise_within_tolerance": adjacent_ok,
+            "net_rise_within_tolerance": net_ok,
+        }
+        errors: list[str] = []
+        if not checks["exactly_four_points"]:
+            errors.append(f"final-point-count={len(final)} expected=4")
+        if not all_points_valid:
+            invalid = [f"{point.get('label', '?')}:{point.get('errors', [])}"
+                       for point in final if not bool(point.get("valid", False))]
+            errors.append(f"invalid-final-points={invalid}")
+        if not all_finite:
+            errors.append("non-finite-final-temperature")
+        if all_finite and not all_at_or_below:
+            errors.append(f"final-temperature-above-{SKIN_MAX_C:.1f}c")
+        if not adjacent_ok:
+            errors.append(
+                f"max-adjacent-rise={max_rise} exceeds tolerance={SKIN_TREND_TOLERANCE_C}")
+        if not net_ok:
+            errors.append(f"net-rise={net_delta} exceeds tolerance={SKIN_TREND_TOLERANCE_C}")
+        return {
+            "final_four_virtual_skin_c": temperatures,
+            "adjacent_deltas_c": adjacent,
+            "net_delta_c": net_delta,
+            "max_adjacent_rise_c": max_rise,
+            "tolerance_c": SKIN_TREND_TOLERANCE_C,
+            "all_points_valid": all_points_valid,
+            "all_at_or_below_37c": all_at_or_below,
+            "checks": checks,
+            "valid": all(checks.values()),
+            "errors": errors,
+        }
+
+    def write_soak_summary(self, points: list[dict[str, Any]],
+                           assessment: dict[str, Any]) -> dict[str, Any]:
+        summary = {
+            "started_utc": points[0].get("timestamp_utc") if points else None,
+            "finished_utc": points[-1].get("timestamp_utc") if points else None,
+            "points": points,
+            **assessment,
+        }
+        write_json(self.audit_dir / "soak-summary.json", summary)
+        self.write_manifest()
+        return summary
 
     def soak(self) -> list[dict[str, Any]]:
         points: list[dict[str, Any]] = []
@@ -599,13 +669,10 @@ class EnvironmentGuard:
             index += 1
             target = deadline - SOAK_SECONDS + index * SOAK_INTERVAL_SECONDS
             time.sleep(max(0.0, target - time.monotonic()))
-        self.require_final_trend(points)
-        write_json(self.audit_dir / "soak-summary.json", {
-            "started_utc": points[0]["timestamp_utc"],
-            "finished_utc": points[-1]["timestamp_utc"], "points": points,
-            "final_four_virtual_skin_c": [point["virtual_skin_c"] for point in points[-4:]],
-            "valid": True})
-        self.write_manifest()
+        assessment = self.require_final_trend(points)
+        self.write_soak_summary(points, assessment)
+        if not assessment["valid"]:
+            raise GuardError("readiness gate failed: " + "; ".join(assessment["errors"]))
         return points
 
     def run_child(self, args: list[str], label: str) -> int:
@@ -1121,16 +1188,57 @@ def self_test() -> None:
         assert test_guard.run_child(
             ["/bin/sh", "-c", "sleep 60 & exit 0"], "self-test") == 0
         assert test_guard.child is None and test_guard.child_pgid is None
-    good = [{"label": str(index), "valid": True, "errors": [], "virtual_skin_c": value}
-            for index, value in enumerate((37.0, 36.9, 36.9, 36.8))]
-    EnvironmentGuard.require_final_trend(good)
-    try:
-        EnvironmentGuard.require_final_trend([
-            *good[:3], {"label": "3", "valid": True, "errors": [], "virtual_skin_c": 37.0}])
-    except GuardError:
-        pass
-    else:
-        raise AssertionError("rising final thermal point must fail")
+    def thermal_points(values: tuple[float, float, float, float],
+                       invalid_index: int | None = None) -> list[dict[str, Any]]:
+        return [{"label": str(index), "timestamp_utc": f"t{index}",
+                 "valid": index != invalid_index,
+                 "errors": ["injected-invalid"] if index == invalid_index else [],
+                 "virtual_skin_c": value}
+                for index, value in enumerate(values)]
+
+    controlled_12 = EnvironmentGuard.require_final_trend(
+        thermal_points((36.4, 36.2, 36.1, 36.144602)))
+    assert controlled_12["valid"]
+    assert abs(controlled_12["adjacent_deltas_c"][-1] - 0.044602) < 1e-12
+    assert controlled_12["net_delta_c"] < 0
+    adjacent_failure = EnvironmentGuard.require_final_trend(
+        thermal_points((36.0, 36.0, 36.0, 36.101)))
+    assert not adjacent_failure["valid"]
+    assert not adjacent_failure["checks"]["max_adjacent_rise_within_tolerance"]
+    net_failure = EnvironmentGuard.require_final_trend(
+        thermal_points((36.0, 36.04, 36.08, 36.12)))
+    assert not net_failure["valid"]
+    assert net_failure["checks"]["max_adjacent_rise_within_tolerance"]
+    assert not net_failure["checks"]["net_rise_within_tolerance"]
+    boundary = EnvironmentGuard.require_final_trend(
+        thermal_points((36.0, 36.1, 36.0, 36.1)))
+    assert boundary["valid"] and boundary["tolerance_c"] == 0.1
+    invalid = EnvironmentGuard.require_final_trend(
+        thermal_points((36.0, 36.0, 36.0, 36.0), invalid_index=2))
+    assert not invalid["valid"] and not invalid["all_points_valid"]
+    for nonfinite in (math.nan, math.inf, -math.inf):
+        assessment = EnvironmentGuard.require_final_trend(
+            thermal_points((36.0, 36.0, 36.0, nonfinite)))
+        assert not assessment["valid"]
+        assert assessment["final_four_virtual_skin_c"][-1] is None
+        json.dumps(assessment, allow_nan=False)
+    above_limit = EnvironmentGuard.require_final_trend(
+        thermal_points((36.0, 36.0, 36.0, 37.0001)))
+    assert not above_limit["valid"] and not above_limit["all_at_or_below_37c"]
+    with tempfile.TemporaryDirectory(prefix="p6-guard-trend-test-") as temporary:
+        trend_guard = EnvironmentGuard(Path(temporary) / "result", preflight_only=True)
+        trend_guard.audit_dir.mkdir(parents=True)
+        written = trend_guard.write_soak_summary(
+            thermal_points((36.0, 36.04, 36.08, 36.12)), net_failure)
+        assert not written["valid"] and written["errors"]
+        persisted = json.loads((trend_guard.audit_dir / "soak-summary.json").read_text())
+        for key in ("final_four_virtual_skin_c", "adjacent_deltas_c", "net_delta_c",
+                    "max_adjacent_rise_c", "tolerance_c", "all_points_valid",
+                    "all_at_or_below_37c", "checks", "valid", "errors"):
+            assert key in persisted
+        manifest = json.loads(
+            (trend_guard.audit_dir / "sha256-manifest.json").read_text())
+        assert "soak-summary.json" in manifest["files"]
 
 
 def main() -> int:
