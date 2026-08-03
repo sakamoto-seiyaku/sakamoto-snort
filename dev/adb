@@ -40,9 +40,24 @@ select_windows_adb() {
 
     if [ -x /init ] && [ -x "$WIN_CMD" ]; then
         WINDOWS_ADB_COMMAND=(/init "$WIN_CMD" /C "$(to_win_path "$WIN_ADB")")
+        # The /init/cmd.exe bridge is the normal WSL2 route in environments
+        # where invoking adb.exe directly returns Exec format error.  Do not
+        # add a separate `adb version` health probe here: a transient probe
+        # failure previously made the wrapper report "adb not found" without
+        # attempting the real command.  Let that real command report its
+        # actual transport failure instead.
+        # If a known-good PATH adb exists, retain the probe so a broken bridge
+        # can still fall through to that alternative.  On the normal WSL2
+        # route there is no such alternative, so avoid a probe whose transient
+        # failure would discard the real command.
+        if ! can_use_path_adb; then
+            return 0
+        fi
         if can_run_adb_candidate "${WINDOWS_ADB_COMMAND[@]}"; then
             return 0
         fi
+        WINDOWS_ADB_COMMAND=()
+        return 1
     fi
 
     WINDOWS_ADB_COMMAND=()
