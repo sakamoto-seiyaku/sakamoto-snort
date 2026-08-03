@@ -70,6 +70,7 @@ typedef struct {
     u32 available_count;
     u32 available[HANDOFF_PERF_MAX_TOKENS];
     u64 offered_pps;
+    u8 require_sleeping;
     f64 rate_credit;
     f64 rate_fraction;
     f64 rate_last_schedule;
@@ -93,6 +94,7 @@ typedef struct {
     u64 reclaim_overflows;
     u64 clock_anomalies;
     u64 credit_stalls;
+    u64 sleep_wait_retries;
     u64 producer_cycles;
     u64 producer_batches;
     u64 primary_enqueue_cycles;
@@ -241,6 +243,7 @@ static void handoff_perf_reset_stats(handoff_perf_main_t *hm) {
     hm->reclaim_overflows = 0;
     hm->clock_anomalies = 0;
     hm->credit_stalls = 0;
+    hm->sleep_wait_retries = 0;
     hm->producer_cycles = 0;
     hm->producer_batches = 0;
     hm->primary_enqueue_cycles = 0;
@@ -582,12 +585,14 @@ VLIB_NODE_FN(handoff_perf_source_node)
     u32 remote_sample_buffers[HANDOFF_PERF_MAX_BURST];
     u32 local_sample_buffers[HANDOFF_PERF_MAX_BURST];
     u16 targets[HANDOFF_PERF_MAX_BURST];
-    u32 budget;
+    u32 budget = 0;
     u32 allocated;
     u32 remote_count = 0;
     u32 local_count = 0;
     u32 remote_sample_count = 0;
     u32 local_sample_count = 0;
+    u8 required_target_sleeping = 0;
+    u8 sleep_deferred = 0;
     u64 batch_started;
 
     (void)frame;
@@ -595,6 +600,21 @@ VLIB_NODE_FN(handoff_perf_source_node)
         return 0;
 
     handoff_perf_drain_reclaim(hm);
+    if (hm->require_sleeping && hm->rate_credit >= hm->burst_size) {
+        u16 target = handoff_perf_remote_target(hm, hm->generated_packets);
+
+#ifdef HANDOFF_PERF_WAKE_PATCH
+        required_target_sleeping = vlib_thread_is_sleeping(vlib_get_main_by_index(target));
+#else
+        required_target_sleeping =
+            __atomic_load_n(&vlib_get_main_by_index(target)->thread_sleeps, __ATOMIC_ACQUIRE);
+#endif
+        if (!required_target_sleeping) {
+            hm->sleep_wait_retries++;
+            sleep_deferred = 1;
+            goto rearm;
+        }
+    }
     budget = handoff_perf_rate_budget(hm);
     if (budget == 0)
         goto rearm;
@@ -641,14 +661,20 @@ VLIB_NODE_FN(handoff_perf_source_node)
             if (handoff_perf_should_sample(hm, sequence)) {
                 remote_sample_buffers[remote_sample_count++] = buffers[i];
                 hm->sampled_remote_enqueues++;
-#ifdef HANDOFF_PERF_WAKE_PATCH
-                if (vlib_thread_is_sleeping(vlib_get_main_by_index(target))) {
-#else
-                if (__atomic_load_n(&vlib_get_main_by_index(target)->thread_sleeps,
-                                    __ATOMIC_ACQUIRE)) {
-#endif
+                if (hm->require_sleeping) {
+                    ASSERT(required_target_sleeping);
                     hm->sampled_target_sleeping++;
-                    vlib_get_buffer(vm, buffers[i])->opaque[2] = 1;
+                    b->opaque[2] = 1;
+                } else {
+#ifdef HANDOFF_PERF_WAKE_PATCH
+                    if (vlib_thread_is_sleeping(vlib_get_main_by_index(target))) {
+#else
+                    if (__atomic_load_n(&vlib_get_main_by_index(target)->thread_sleeps,
+                                        __ATOMIC_ACQUIRE)) {
+#endif
+                        hm->sampled_target_sleeping++;
+                        b->opaque[2] = 1;
+                    }
                 }
             }
         }
@@ -686,8 +712,11 @@ VLIB_NODE_FN(handoff_perf_source_node)
     hm->producer_cycles += clib_cpu_time_now() - batch_started;
     hm->producer_batches++;
 rearm:
-    if (hm->running && (hm->offered_pps == 0 || (hm->rate_credit >= hm->burst_size &&
-                                                 hm->available_count >= hm->burst_size)))
+    /* A sleeping-target deferral keeps whole credit; the 100us rate process
+     * will retrigger this node on its next scheduler tick. */
+    if (hm->running && !sleep_deferred &&
+        (hm->offered_pps == 0 ||
+         (hm->rate_credit >= hm->burst_size && hm->available_count >= hm->burst_size)))
         vlib_node_set_interrupt_pending(vm, handoff_perf_source_node.index);
     return budget;
 }
@@ -818,6 +847,7 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
     u64 offered_pps = 0;
     u64 sample_seed = 20260802;
     u32 wake_workers = 0;
+    u8 require_sleeping = 0;
     clib_error_t *error;
 
     (void)cmd;
@@ -853,6 +883,8 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
             ;
         else if (unformat(input, "wake-workers %u", &wake_workers))
             ;
+        else if (unformat(input, "require-sleeping"))
+            require_sleeping = 1;
         else
             return clib_error_return(0, "unknown input `%U'", format_unformat_error, input);
     }
@@ -870,6 +902,17 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
         return clib_error_return(0, "tokens must be burst..%u", HANDOFF_PERF_MAX_TOKENS);
     if (wake_workers > 3)
         return clib_error_return(0, "wake-workers must be 0, 1, 2, or 3");
+    if (require_sleeping &&
+        (offered_pps != 1 || mode != HANDOFF_PERF_MODE_ONE ||
+         distribution != HANDOFF_PERF_DIST_HOT || burst != 1 || sample_rate != 1 ||
+         vlib_get_n_threads() != 2 || (wake_workers != 2 && wake_workers != 3)))
+        return clib_error_return(
+            0, "require-sleeping requires rate 1, mode handoff-one, distribution hot, "
+               "burst 1, sample-rate 1, exactly one worker, and wake-workers 2 or 3");
+#ifndef HANDOFF_PERF_WAKE_PATCH
+    if (require_sleeping)
+        return clib_error_return(0, "require-sleeping requires a wake-patched build");
+#endif
     if (hm->live_tokens != 0)
         return clib_error_return(0, "previous token pool is not cleaned up");
 
@@ -885,6 +928,7 @@ static clib_error_t *handoff_perf_start_command_fn(vlib_main_t *vm, unformat_inp
     hm->sample_seed = sample_seed;
     hm->configured_tokens = configured_tokens;
     hm->offered_pps = offered_pps;
+    hm->require_sleeping = require_sleeping;
     hm->worker_count = vlib_get_n_threads() - 1;
     handoff_perf_reset_stats(hm);
     handoff_perf_reset_diagnostics(hm);
@@ -926,7 +970,7 @@ VLIB_CLI_COMMAND(handoff_perf_start_command, static) = {
                   "mixed-local-fastpath|always-enqueue> burst <1..256> "
                   "packet-size <bytes> distribution <hot|uniform> "
                   "sample-rate <packets> seed <u64> tokens <count> rate <pps|0> "
-                  "wake-workers <0|1|2|3>",
+                  "wake-workers <0|1|2|3> [require-sleeping]",
     .function = handoff_perf_start_command_fn,
 };
 
@@ -1162,11 +1206,13 @@ static clib_error_t *handoff_perf_show_command_fn(vlib_main_t *vm, unformat_inpu
     vlib_cli_output(vm,
                     "running %u mode %s distribution %s burst %u packet-size %u "
                     "sample-rate %u offered-pps %llu workers %u tokens-live %u "
-                    "tokens-available %u wake-workers %u measurement-seconds %.9f",
+                    "tokens-available %u wake-workers %u require-sleeping %u "
+                    "measurement-seconds %.9f",
                     hm->running, handoff_perf_mode_name(hm->mode),
                     handoff_perf_distribution_name(hm->distribution), hm->burst_size,
                     hm->packet_size, hm->sample_rate, hm->offered_pps, hm->worker_count,
-                    hm->live_tokens, hm->available_count, hm->wake_workers, measurement_seconds);
+                    hm->live_tokens, hm->available_count, hm->wake_workers, hm->require_sleeping,
+                    measurement_seconds);
     vlib_cli_output(vm,
                     "generated %llu bytes %llu local %llu ingress-enqueued %llu "
                     "ingress-drops %llu alloc-errors %llu terminal %llu bytes %llu "
@@ -1234,8 +1280,11 @@ static clib_error_t *handoff_perf_show_command_fn(vlib_main_t *vm, unformat_inpu
 #else
     vlib_cli_output (vm, "wake-injection unavailable");
 #endif
-    vlib_cli_output(vm, "sleep-proof sampled-remote-enqueues %llu target-sleeping %llu",
-                    hm->sampled_remote_enqueues, hm->sampled_target_sleeping);
+    vlib_cli_output(vm,
+                    "sleep-proof sampled-remote-enqueues %llu target-sleeping %llu "
+                    "sleep-wait-retries %llu",
+                    hm->sampled_remote_enqueues, hm->sampled_target_sleeping,
+                    hm->sleep_wait_retries);
     vlib_cli_output(vm,
                     "exact-latency samples %u overflows %llu p50 %llu p95 %llu p99 %llu",
                     exact_count, hm->exact_latency_overflows,

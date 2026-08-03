@@ -797,3 +797,61 @@ self-test, and diff checks pass.
 attempt-01 verdict=INVALID before any timed arm
 absolute-result-path runner=d91235716c41379e21e6978f5f40bf4dbcf186aa11e692e4134ba4f1d1711139
 ```
+
+## 2026-08-03 12:40:11 +0800 — attempt 02 eligibility failure and corrected sleep-confirmed harness
+
+The relative-path preflight `vpp-wake-p6-preflight-path-04` passed A/B/C 3/3 with
+`timed_arms_started=0`, so formal attempt 02 restarted from idle block 1. All sixteen idle arms completed with
+valid environment and ledger evidence. Their provisional `C-A` mean was `+0.068329 pp` and one-sided 95%
+upper bound `+0.121976 pp`; these values are not a final gate because the later latency failure caused the
+campaign to be rejected and the B/C artifact was subsequently changed.
+
+Latency block 1 B closed 600/600. C closed generated, ingress, terminal, reclaimed, samples, and exact samples
+at 600 with zero drop, overflow, fault, debt, or residue, but only 599 events were observed at the exact
+pre-enqueue `SLEEPING` phase. The runner failed closed and preserved attempt 02. The 1 pps producer and the
+Android idle build's 1000 ms maximum epoll timeout can collide at the same phase boundary; the excluded event
+was therefore an eligibility failure, not a lost wake. A separate 120-event C diagnostic passed 120/120, which
+showed the failure was intermittent but did not justify repeatedly restarting until a favorable 600/600 run.
+An independent read-only review returned HOLD on an unchanged restart.
+
+The measurement harness now has an opt-in `require-sleeping` mode restricted to the exact formal B/C shape:
+one worker, handoff-one, hot, burst 1, sample-rate 1, rate 1, and wake mode 3 or 2. A whole rate credit is not
+consumed and no buffer is allocated or published until the target is observed sleeping; the successful
+pre-enqueue observation is reused as the sample tag. The existing 100 us rate process retries deferred credit.
+The plugin resets and reports `sleep-wait-retries`. The runner still requires exact 20/20 and 600/600 equality,
+and additionally fails closed on reported wake mode, `scheduled-packets`, and zero `backlog-packets`; it records
+both canonical plugin-source and runner hashes.
+
+The first review of that correction found that mode 3's legacy `thread_sleeps` observation occurred before the
+worker's frame-queue, barrier, and interrupt rechecks, whereas mode 2 entered packed `SLEEPING` only after them.
+The P6 patch now delays only mode 3's release-store until all rechecks and timeout calculation have succeeded,
+immediately before epoll. Mode 0 retains the P5 pre-recheck relaxed store and seq-cst fence exactly. Mode 3 wake
+remains unconditional, and direct/recheck-failed paths never advertise sleeping.
+
+The updated arm64 build completed 90/90 selected Ninja steps. `bin/vpp`, `vppctl`, `libvnet`, and the CMake
+cache remained byte-identical; the dynamically linked `libvlib` and plugin changed. The zero-timed preflight
+`vpp-wake-p6-preflight-require-sleeping-05` passed A/B/C 3/3 on Pixel 6a. CLI probes rejected rate 2 and wake
+mode 1 and accepted the exact formal command. The P6c local exhaustive/fault/C11/litmus/sanitizer suite passed.
+
+A complete non-formal B/C qualification run at `/tmp/sakamoto-p6d-require-sleeping-bc620-01` then passed both
+arms: each ran 20 warm-up plus 600 measured events, reported the expected mode, closed generated, scheduled,
+terminal, exact, target-sleeping, and exact-sleep counts at 600, had zero backlog/error/residue, and finished in
+625.94/625.69 seconds. Both naturally recorded zero retries. A causal barrier diagnostic at
+`/tmp/sakamoto-p6d-deferred-credit-01` forced 29,626 retries; after interference stopped it closed all five
+generated/scheduled/sleep-confirmed events with zero backlog and cleaned up, directly exercising deferred-credit
+conservation. These are qualification diagnostics, not formal performance samples.
+
+```text
+P6 patch 0003=457fdfbf8aa52c61760dbd61d9d6a4a9f47bfdade8d4ecf743fa749d8d271574
+canonical plugin source=0c0b250cc5cb64cad556cbf7131267e1b48a9d91a371f292e9ea155ecbc2a129
+runner=5aa00bf4613cadd44109d1afc853df19dc7cf304fbcb31cd0e3ba9cf7543925c
+B/C vpp=aa46433d8c6db73b1959ea6a4566227da7ea0eec9edafd7c3afece5ee227f504
+B/C vppctl=89390cc0237bd8051cc935d25a1c09278821f70f4b000e92b48a87892a130372
+B/C plugin=8a06e66e29a8441106a032362e6ba2020b99ce37f9944587c34f55e5c05f8e23
+B/C libvlib=43c5f94c8ebbf0d92aea5233fec374de745f6448734882fe468ba0e904dba555
+B/C libvnet=50bde9c1782ba199432beeabf733d4ad73db32d65d8c413728acb5782ee17c8d
+B/C CMakeCache=b08b41e769cc022e5b624f8dcfcb870d9bafe8c13455f676f719eb5f2c70e222
+```
+
+Formal attempt 03 remains blocked pending a final independent read-only gate on this complete correction and
+evidence set. It must restart from idle block 1; no attempt-02 sample may be appended.

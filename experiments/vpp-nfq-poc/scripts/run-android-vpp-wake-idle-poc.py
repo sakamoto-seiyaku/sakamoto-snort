@@ -29,6 +29,8 @@ PATCHED = Path(os.environ.get("P6_PATCHED_BUILD", POC / "work/vpp-android-config
 UNPATCHED = Path(os.environ.get("P6_UNPATCHED_BUILD", "/tmp/sakamoto-p5-unpatched-build"))
 PATCHED_SOURCE = Path(os.environ.get("P6_PATCHED_SOURCE", POC / "work/vpp/src/vlib"))
 UNPATCHED_SOURCE = Path(os.environ.get("P6_UNPATCHED_SOURCE", "/tmp/sakamoto-p5-unpatched-20260802/src/vlib"))
+CANONICAL_PLUGIN_SOURCE = POC / "overlay/src/plugins/handoff_perf_poc/handoff_perf_poc.c"
+RUNNER_SOURCE = Path(__file__).resolve()
 RUN_ID = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 DEFAULT_RESULT = POC / "results" / dt.date.today().isoformat() / f"vpp-wake-idle-p6-{RUN_ID}"
 
@@ -41,6 +43,8 @@ LATENCY_WARMUP_EVENTS = 20
 LATENCY_MEASURED_EVENTS = 600
 LATENCY_TOTAL_EVENTS = LATENCY_WARMUP_EVENTS + LATENCY_MEASURED_EVENTS
 LATENCY_RATE_PPS = 1
+LATENCY_REQUIRE_SLEEPING = True
+REQUIRE_SLEEPING_CLI = "require-sleeping"
 LATENCY_ARM_TIMEOUT_SECONDS = 660.0
 METRIC_INTERVAL_SECONDS = 5.0
 MAX_MISSING_FRACTION = 0.01
@@ -59,13 +63,17 @@ REMOTE_BASE = "/data/local/tmp/vpp-p6"
 
 CONFIG_RE = re.compile(
     r"running (?P<running>\d+).*?tokens-live (?P<tokens_live>\d+) "
-    r"tokens-available (?P<tokens_available>\d+) wake-workers (?P<reported_wake_mode>\d+)", re.S)
+    r"tokens-available (?P<tokens_available>\d+) wake-workers (?P<reported_wake_mode>\d+)"
+    r"(?: require-sleeping (?P<reported_require_sleeping>\d+))?", re.S)
 COUNTERS_RE = re.compile(
     r"generated (?P<generated>\d+).*?ingress-enqueued (?P<ingress>\d+) "
     r"ingress-drops (?P<ingress_drops>\d+) alloc-errors (?P<alloc_errors>\d+) "
     r"terminal (?P<terminal>\d+).*?return-drops (?P<return_drops>\d+) reclaimed (?P<reclaimed>\d+) "
     r"reclaim-overflows (?P<reclaim_overflows>\d+) clock-anomalies (?P<clock_anomalies>\d+) "
     r"credit-stalls (?P<credit_stalls>\d+) outstanding-packets (?P<outstanding>\d+)", re.S)
+RATE_RE = re.compile(
+    r"rate-scheduler scheduled-packets (?P<scheduled_packets>\d+) "
+    r"backlog-packets (?P<backlog_packets>\d+(?:\.\d+)?)")
 CYCLES_RE = re.compile(
     r"samples (?P<samples>\d+) latency-min (?P<latency_min>\d+) latency-mean (?P<latency_mean>[0-9.]+) "
     r"latency-p50-upper (?P<p50>\d+) latency-p95-upper (?P<p95>\d+) "
@@ -78,7 +86,10 @@ WAKE_STATE_RE = re.compile(
     r"wake-state epoch-max (?P<epoch_max>\d+) faults (?P<wake_faults>\d+) fault-code (?P<wake_fault_code>\d+) "
     r"awake (?P<awake>\d+) preparing (?P<preparing>\d+) sleeping (?P<sleeping>\d+) "
     r"notified (?P<notified>\d+) draining (?P<draining>\d+) notifying (?P<notifying>\d+)")
-SLEEP_RE = re.compile(r"sleep-proof sampled-remote-enqueues (?P<sampled_remote>\d+) target-sleeping (?P<target_sleeping>\d+)")
+SLEEP_RE = re.compile(
+    r"sleep-proof sampled-remote-enqueues (?P<sampled_remote>\d+) "
+    r"target-sleeping (?P<target_sleeping>\d+)"
+    r"(?: sleep-wait-retries (?P<sleep_wait_retries>\d+))?")
 EXACT_RE = re.compile(r"exact-latency samples (?P<exact_samples>\d+) overflows (?P<exact_overflows>\d+) "
                       r"p50 (?P<exact_p50>\d+) p95 (?P<exact_p95>\d+) p99 (?P<exact_p99>\d+)")
 EXACT_SLEEP_RE = re.compile(
@@ -130,11 +141,13 @@ def ctl(arm: str, command: str, check: bool = True) -> str:
 
 def parse_show(text: str) -> dict[str, int | float]:
     parsed: dict[str, int | float] = {}
-    for regex in (CONFIG_RE, COUNTERS_RE, CYCLES_RE, WAKE_RE, WAKE_STATE_RE, SLEEP_RE, EXACT_RE, EXACT_SLEEP_RE):
+    for regex in (CONFIG_RE, COUNTERS_RE, RATE_RE, CYCLES_RE, WAKE_RE, WAKE_STATE_RE, SLEEP_RE,
+                  EXACT_RE, EXACT_SLEEP_RE):
         match = regex.search(text)
         if match:
             for key, value in match.groupdict().items():
-                parsed[key] = float(value) if "." in value else int(value)
+                if value is not None:
+                    parsed[key] = float(value) if "." in value else int(value)
     return parsed
 
 
@@ -476,8 +489,14 @@ def run_rate_segment(arm: str, events: int, command: str | None, deadline: float
     return show, parsed, samples, missing, expected
 
 
-def latency_ledger_errors(parsed: dict[str, int | float], expected: int, measured: bool) -> list[str]:
+def latency_ledger_errors(parsed: dict[str, int | float], expected: int, arm: str,
+                          measured: bool) -> list[str]:
     errors: list[str] = []
+    if arm not in ("B", "C"):
+        errors.append(f"unsupported-latency-arm={arm}")
+        expected_wake_mode = -1
+    else:
+        expected_wake_mode = int(ARMS[arm]["wake_mode"])
     for key in ("generated", "ingress", "terminal", "reclaimed", "samples", "sampled_remote", "exact_samples"):
         if int(parsed.get(key, -1)) != expected:
             errors.append(f"{key}={parsed.get(key)} expected={expected}")
@@ -490,9 +509,27 @@ def latency_ledger_errors(parsed: dict[str, int | float], expected: int, measure
         errors.append(f"target_sleeping={parsed.get('target_sleeping')} expected={expected}")
     if int(parsed.get("exact_sleep_samples", -1)) != expected:
         errors.append(f"exact_sleep_samples={parsed.get('exact_sleep_samples')} expected={expected}")
+    if int(parsed.get("scheduled_packets", -1)) != expected:
+        errors.append(f"scheduled_packets={parsed.get('scheduled_packets')} expected={expected}")
+    if float(parsed.get("backlog_packets", math.nan)) != 0.0:
+        errors.append(f"backlog_packets={parsed.get('backlog_packets')} expected=0.0")
+    if int(parsed.get("reported_wake_mode", -1)) != expected_wake_mode:
+        errors.append(f"wake_mode={parsed.get('reported_wake_mode')} expected={expected_wake_mode}")
+    if int(parsed.get("reported_require_sleeping", -1)) != 1:
+        errors.append(f"require_sleeping={parsed.get('reported_require_sleeping')} expected=1")
+    if "sleep_wait_retries" not in parsed:
+        errors.append("sleep_wait_retries=missing")
     if measured and expected != LATENCY_MEASURED_EVENTS:
         errors.append("internal-measured-count")
     return errors
+
+
+def latency_start_command(arm: str) -> str:
+    if arm not in ("B", "C"):
+        raise ValueError(f"latency require-sleeping is only supported for patched B/C arms, got {arm}")
+    return ("handoff-perf start mode handoff-one distribution hot burst 1 packet-size 64 "
+            f"sample-rate 1 seed {SEED} tokens 1 rate {LATENCY_RATE_PPS} "
+            f"wake-workers {ARMS[arm]['wake_mode']} {REQUIRE_SLEEPING_CLI}")
 
 
 def latency_case(block: int, arm: str, order_index: int, result_dir: Path) -> dict[str, object]:
@@ -503,13 +540,11 @@ def latency_case(block: int, arm: str, order_index: int, result_dir: Path) -> di
     try:
         before = environment_sample(arm)
         save_environment(case_dir, "environment-before", before)
-        command = ("handoff-perf start mode handoff-one distribution hot burst 1 packet-size 64 "
-                   f"sample-rate 1 seed {SEED} tokens 1 rate {LATENCY_RATE_PPS} "
-                   f"wake-workers {ARMS[arm]['wake_mode']}")
+        command = latency_start_command(arm)
         warm_show, warm, warm_samples, warm_missing, warm_expected = run_rate_segment(
             arm, LATENCY_WARMUP_EVENTS, command, deadline, before,
             case_dir / "warmup-environment-intervals.json")
-        warm_errors = latency_ledger_errors(warm, LATENCY_WARMUP_EVENTS, measured=False)
+        warm_errors = latency_ledger_errors(warm, LATENCY_WARMUP_EVENTS, arm, measured=False)
         warm_errors += environment_errors([before, *warm_samples], warm_missing, warm_expected)
         (case_dir / "warmup-show.txt").write_text(warm_show)
         write_json(case_dir / "warmup-environment-samples.json", warm_samples)
@@ -522,7 +557,7 @@ def latency_case(block: int, arm: str, order_index: int, result_dir: Path) -> di
         measured_show, measured, measured_samples, measured_missing, measured_expected = run_rate_segment(
             arm, LATENCY_MEASURED_EVENTS, None, deadline, before,
             case_dir / "measured-environment-intervals.json")
-        measured_errors = latency_ledger_errors(measured, LATENCY_MEASURED_EVENTS, measured=True)
+        measured_errors = latency_ledger_errors(measured, LATENCY_MEASURED_EVENTS, arm, measured=True)
         after = environment_sample(arm)
         save_environment(case_dir, "environment-after", after)
         environment = environment_errors([before, *warm_samples, *measured_samples, after],
@@ -550,6 +585,8 @@ def latency_case(block: int, arm: str, order_index: int, result_dir: Path) -> di
                    "cleanup_state": cleanup_state,
                    "metric_intervals": warm_expected + measured_expected,
                    "metric_intervals_missing": warm_missing + measured_missing,
+                   "require_sleeping": LATENCY_REQUIRE_SLEEPING,
+                   "sleep_wait_retries": measured.get("sleep_wait_retries"),
                    "exact_sleep_p50": measured.get("exact_sleep_p50"),
                    "exact_sleep_p99": measured.get("exact_sleep_p99")}
         write_json(case_dir / "environment-intervals.json", [*warm_samples, *measured_samples])
@@ -660,6 +697,12 @@ def artifact_manifest() -> dict[str, object]:
     return {"binaries": artifacts,
             "sources": {"patched": {str(PATCHED_SOURCE / name): digest(PATCHED_SOURCE / name) for name in source_names},
                         "unpatched": {str(UNPATCHED_SOURCE / name): digest(UNPATCHED_SOURCE / name) for name in source_names}},
+            "measurement_harness": {
+                "require_sleeping": LATENCY_REQUIRE_SLEEPING,
+                "canonical_plugin_source": str(CANONICAL_PLUGIN_SOURCE),
+                "canonical_plugin_sha256": digest(CANONICAL_PLUGIN_SOURCE),
+                "runner_source": str(RUNNER_SOURCE),
+                "runner_sha256": digest(RUNNER_SOURCE)},
             "patched_build_cache": digest(PATCHED / "CMakeCache.txt"), "vlib_wake_diagnostics": 0}
 
 
@@ -734,6 +777,8 @@ def protocol_plan() -> dict[str, object]:
                         "events_per_arm": LATENCY_TOTAL_EVENTS, "warmup_events": LATENCY_WARMUP_EVENTS,
                         "measured_events": LATENCY_MEASURED_EVENTS, "timeout_seconds": LATENCY_ARM_TIMEOUT_SECONDS,
                         "arms": {"B": ARMS["B"], "C": ARMS["C"]},
+                        "require_sleeping": LATENCY_REQUIRE_SLEEPING,
+                        "sleep_wait_retries": "diagnostic only; zero is valid",
                         "p99_lower_gate": P99_LOWER_GATE, "p50_upper_gate": P50_UPPER_GATE},
             "fixed_arm_count": 32, "fixed_arm_time_upper_seconds": 32 * 660,
             "fixed_arm_time_upper": "5h52m plus staging and settlement",
@@ -749,18 +794,53 @@ def self_test() -> None:
     assert (ARMS["B"]["wake_mode"], ARMS["C"]["wake_mode"]) == (3, 2)
     assert len(IDLE_ORDERS) * 2 + len(LATENCY_ORDERS) * 2 == 32
     assert 32 * 660 == 21120
+    for arm in ("B", "C"):
+        command = latency_start_command(arm)
+        assert command.endswith(f"wake-workers {ARMS[arm]['wake_mode']} {REQUIRE_SLEEPING_CLI}")
+        assert command.count(REQUIRE_SLEEPING_CLI) == 1
+    try:
+        latency_start_command("A")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("exact-unpatched A must not receive require-sleeping")
     mean, lower, upper = one_sided_bounds([0.01] * 8)
     assert abs(mean - 0.01) < 1e-12 and abs(lower - 0.01) < 1e-12 and abs(upper - 0.01) < 1e-12
-    sample = ("generated 600 bytes 1 local 0 ingress-enqueued 600 ingress-drops 0 alloc-errors 0 "
+    sample = ("running 0 mode handoff-one distribution hot burst 1 packet-size 64 sample-rate 1 "
+              "offered-pps 1 workers 1 tokens-live 0 tokens-available 0 wake-workers 2 require-sleeping 1\n"
+              "generated 600 bytes 1 local 0 ingress-enqueued 600 ingress-drops 0 alloc-errors 0 "
               "terminal 600 bytes 1 return-enqueued 0 return-drops 0 reclaimed 600 reclaim-overflows 0 "
               "clock-anomalies 0 credit-stalls 0 outstanding-packets 0\n"
+              "rate-scheduler scheduled-packets 600 backlog-packets 0.00 timer-wakes 600 "
+              "missed-wakes 0 wake-requests 600 tick-usec 100\n"
               "samples 600 latency-min 1 latency-mean 2.0 latency-p50-upper 2 latency-p95-upper 3 latency-p99-upper 4 latency-max 5\n"
               "wake-diagnostics calls 1 sleeps-seen 1 pending-claims 0 writes 1 write-errors 0 fq-full-waits 0\n"
               "wake-state epoch-max 1 faults 0 fault-code 0 awake 2 preparing 0 sleeping 0 notified 0 draining 0 notifying 0\n"
-              "sleep-proof sampled-remote-enqueues 600 target-sleeping 600\n"
+              "sleep-proof sampled-remote-enqueues 600 target-sleeping 600 sleep-wait-retries 0\n"
               "exact-latency samples 600 overflows 0 p50 2 p95 3 p99 4\n"
               "exact-sleep-latency samples 600 overflows 0 p50 2 p95 3 p99 4")
-    assert not latency_ledger_errors(parse_show(sample), 600, measured=True)
+    assert not latency_ledger_errors(parse_show(sample), 600, "C", measured=True)
+    b_sample = sample.replace("wake-workers 2", "wake-workers 3")
+    assert not latency_ledger_errors(parse_show(b_sample), 600, "B", measured=True)
+    assert parse_show(sample)["sleep_wait_retries"] == 0
+    retried = sample.replace("sleep-wait-retries 0", "sleep-wait-retries 7")
+    assert parse_show(retried)["sleep_wait_retries"] == 7
+    assert not latency_ledger_errors(parse_show(retried), 600, "C", measured=True)
+    assert any("wake_mode=" in error
+               for error in latency_ledger_errors(parse_show(sample), 600, "B", measured=True))
+    no_config = sample.split("\n", 1)[1]
+    assert any("wake_mode=None" in error
+               for error in latency_ledger_errors(parse_show(no_config), 600, "C", measured=True))
+    assert any("scheduled_packets=" in error for error in latency_ledger_errors(
+        parse_show(sample.replace("scheduled-packets 600", "scheduled-packets 599")),
+        600, "C", measured=True))
+    assert any("backlog_packets=" in error for error in latency_ledger_errors(
+        parse_show(sample.replace("backlog-packets 0.00", "backlog-packets 1.00")),
+        600, "C", measured=True))
+    assert any("unsupported-latency-arm=A" in error
+               for error in latency_ledger_errors(parse_show(sample), 600, "A", measured=True))
+    legacy_sleep = parse_show("sleep-proof sampled-remote-enqueues 12 target-sleeping 11")
+    assert legacy_sleep == {"sampled_remote": 12, "target_sleeping": 11}
     partial_idle = summarize([
         {"phase": "idle", "block": 1, "arm": "A", "valid": True,
          "cpu_single_core_percent": 0.1},

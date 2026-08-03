@@ -438,12 +438,13 @@ diff --git a/src/vlib/threads.h b/src/vlib/threads.h
 diff --git a/src/vlib/file.c b/src/vlib/file.c
 --- a/src/vlib/file.c
 +++ b/src/vlib/file.c
-@@ -106,7 +106,12 @@
+@@ -106,7 +106,13 @@
    struct epoll_event *e, epoll_events[16];
    int n_fds_ready;
    int is_main = (vm->thread_index == 0);
 +  int epoch_protocol = vlib_frame_queue_wakeup_mode != 0 &&
 +		       vlib_frame_queue_wakeup_mode != 3;
++  int mode3_sleep_observation = vlib_frame_queue_wakeup_mode == 3;
 +  int epoch_service = 0;
 +  int epoch_draining = 0;
    int announced_sleep = 0;
@@ -451,7 +452,7 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
    u64 sleep_started = 0;
  #ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
    int timeout_ms = 0, max_timeout_ms = 1000;
-@@ -115,6 +120,15 @@
+@@ -115,6 +121,15 @@
  #endif
    u32 ticks;
  
@@ -467,7 +468,7 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
    /*
     * If we've been asked for a fixed-sleep between main loop polls,
     * do so right away.
-@@ -161,9 +175,42 @@
+@@ -161,9 +176,42 @@
     * to other threads that they need to wakeup us if they need our attention */
    if (VLIB_WAKE_DIAGNOSTICS)
      __atomic_fetch_add (&vm->sleep_attempts, 1, __ATOMIC_RELAXED);
@@ -503,7 +504,7 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
 +      epoch_service = 1;
 +      announced_sleep = 1;
 +    }
-+  else
++  else if (!mode3_sleep_observation)
 +    {
 +      /* Preserve the P5 disabled-mode behavior exactly. */
 +      __atomic_store_n (&vm->thread_sleeps, 1, __ATOMIC_RELAXED);
@@ -513,7 +514,7 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
  
    /*
     * Close the sleep-transition race with cross-thread publishers.  Either
-@@ -174,18 +221,18 @@
+@@ -174,18 +222,18 @@
      {
        if (VLIB_WAKE_DIAGNOSTICS)
  	__atomic_fetch_add (&vm->sleep_frame_queue_rechecks, 1, __ATOMIC_RELAXED);
@@ -536,7 +537,7 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
  
    ticks = vlib_tw_timer_first_expires_in_ticks (vm);
  
-@@ -197,6 +244,25 @@
+@@ -197,6 +245,35 @@
    else
      timeout_ms = max_timeout_ms;
  
@@ -554,6 +555,16 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
 +	  goto epoll;
 +	}
 +    }
++  else if (mode3_sleep_observation)
++    {
++      /*
++       * Mode 3 observes only a sleep that survived every work recheck.  The
++       * release pairs with the probe's acquire load; its wake stays
++       * unconditional and does not depend on this observation.
++       */
++      __atomic_store_n (&vm->thread_sleeps, 1, __ATOMIC_RELEASE);
++      announced_sleep = 1;
++    }
 +
 +  goto epoll;
 +
@@ -562,13 +573,15 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
    goto epoll;
  
  skip_loops:
-@@ -222,11 +288,15 @@
+@@ -222,11 +299,17 @@
  	;
      }
  
 -  __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELAXED);
 +  if (epoch_service)
 +    epoch_draining = vlib_wakeup_epoch_begin_draining (vm);
++  else if (mode3_sleep_observation)
++    __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELEASE);
 +  else if (!epoch_protocol)
 +    __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELAXED);
  
@@ -580,7 +593,7 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
        if (unix_error_is_fatal (errno))
  	vlib_panic_with_error (vm, clib_error_return_unix (0, "epoll_wait"));
  
-@@ -242,7 +312,8 @@
+@@ -242,7 +325,8 @@
        clib_file_t *f = e->data.ptr;
        clib_error_t *err;
  
@@ -590,7 +603,7 @@ diff --git a/src/vlib/file.c b/src/vlib/file.c
  	__atomic_fetch_add (&vm->sleep_epoll_wakeups, 1, __ATOMIC_RELAXED);
  
        if (PREDICT_FALSE (!f->active))
-@@ -311,7 +382,10 @@
+@@ -311,7 +395,10 @@
     * racing before this clear is covered by the sleep-side work recheck; one
     * racing after it owns a fresh eventfd notification.
     */
