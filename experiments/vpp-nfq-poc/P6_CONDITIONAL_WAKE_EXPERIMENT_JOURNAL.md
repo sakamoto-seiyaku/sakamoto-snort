@@ -689,3 +689,93 @@ the actual VPP 11/11 campaign and bounded targeted-signal claims remain valid.
 
 Verdict: **GO for committing P6c and proceeding to the diagnostics-disabled P6d build only**. No performance
 result is accepted by this verdict.
+
+## P6d — diagnostics-disabled device artifact and runner readiness
+
+Status: **diagnostics-disabled Android artifacts built and device preflight passed; runner read-only gate
+pending**. No timed P6d arm has started.
+
+The isolated native source restored both `VLIB_WAKE_DIAGNOSTICS` and `VLIB_WAKE_FAULT_INJECTION` from one to
+zero. Its final `main.h`, `threads.h`, and `file.c` hashes returned exactly to the P6b accepted diag-off hashes.
+A scoped Ninja clean removed 2,606 outputs. The first direct build invocation stopped at 16/1422 because the
+interactive PATH selected a local Python without the already installed system `ply` module. Re-running the
+same preserved build graph with `/usr/bin` ahead of that local interpreter completed the remaining 1,419
+steps with exit 0; no source or assertion changed. This host artifact is build evidence only, not a device
+measurement artifact.
+
+The Android work tree already contained the accepted P5 overlay. The generic overlay helper copied the final
+plugin, then safely stopped because historical patch 0001 could not be independently reverse-checked after
+0002 had been layered on it. The P6-only 0003 patch independently passed `git apply --check` and was applied
+directly. Diagnostics and injection remained zero. The Android target clean removed 2,556 outputs; the
+preserved API36/AArch64 build reconfigured and completed all 1,508 `vpp`, `vppctl`, and
+`handoff_perf_poc_plugin` steps with exit 0. `readelf` identifies both A and B/C binaries as AArch64 ELF64 PIE.
+
+Frozen device artifacts:
+
+```text
+A exact-unpatched vpp=cdba5eaaeac85cc465eca5e9c40ce8db9728646cb0811d233a04fb5f99736a99
+A exact-unpatched vppctl=80b720c7b10789bf64a09cc317ff35d3bdc52d7b82b1b0d5672ede361ae32d94
+A exact-unpatched plugin=7ce524b8acb6219882178633777d17573bb0260c793ecbebcb09dd895c569a70
+B/C P6 diag-off vpp=aa46433d8c6db73b1959ea6a4566227da7ea0eec9edafd7c3afece5ee227f504
+B/C P6 diag-off vppctl=89390cc0237bd8051cc935d25a1c09278821f70f4b000e92b48a87892a130372
+B/C P6 diag-off plugin=fc3c1cfbf8a3afe95a6b550bd873313f1f55a38543076cba770d9ac77f2b5feb
+B/C CMakeCache=b08b41e769cc022e5b624f8dcfcb870d9bafe8c13455f676f719eb5f2c70e222
+P6 main.h=0765897cea9c600c5ec9a65cc99d5ed3c29e727da2732560365f812882c19652
+P6 threads.h=6700e2f24941ca9333c0318d7ddfae706ea49991c820520dccd12f537a6153dd
+P6 file.c=9072a41dfe0de5f9faa8e509429981ea1d0e0b6ce642f0f94bed3003a3b2e4e5
+pre-readiness runner=25b0f92bdff0b4759ceff111141b0bd9664ab0bfacc564316bc44f12c194882f
+```
+
+The rewritten runner defaults to plan-only and locks all protocol constants. It uses the repo-local
+`./dev/adb` wrapper, A as exact-unpatched, B and C as the same P6 binary with respectively mode 3 persistent
+control and mode 2 conditional wake, the exact frozen pair orders, the fixed seed, and the required paired
+one-sided bounds. It invalidates and stops the campaign at the first invalid arm; no block may be appended.
+Device-free `py_compile`, self-test, plan validation, and diff checks passed.
+
+The first untimed preflight, `/tmp/sakamoto-p6d-preflight-20260803-01`, is retained as runner-negative
+evidence. All remote hashes, modes, placements, graph tasks, counters, and wake states were correct, but the
+parser treated `neutral_therm` sensor status 1 as global CPU throttling even though Android reported `Thermal
+Status: 0` and every `thermal-cpufreq-*` cooling state was zero. The validity rule was corrected to reject a
+nonzero Android global thermal status or any nonzero CPU cooling state while continuing to preserve every
+raw sensor and cooling record.
+
+The repeated untimed preflight `/tmp/sakamoto-p6d-preflight-20260803-02` passed A/B/C 3/3. It reproduced all
+remote hashes, observed modes 0/3/2, exactly `vpp_main` on CPU0 and `vpp_wk_0` on CPU1 with matching allowed
+sets, online CPUs, complete cpufreq configuration and residency, global thermal status zero, all CPU cooling
+states zero, and zero generated traffic, debt, faults, or transition residue. It stopped every process and
+reports `timed_arms_started=0`.
+
+### P6d runner readiness reviews
+
+The first read-only runner review returned **HOLD**. Although the frozen orders, artifacts, mode 3/2 control,
+arm durations, estimators, statistical bounds, device evidence, and safe default all matched the authority,
+`summarize()` dereferenced fields and divided denominators before checking row validity. A realistic first
+invalid second arm could therefore prevent `summary.json` from being written. Environment invalidity was
+also deferred until an arm ended, and an invalid 20-event warmup still proceeded into the 600 measured events.
+
+The runner was made fail-closed: summaries accept arbitrary partial/invalid rows, pair only valid finite
+metrics with positive B denominators, and always produce non-GO output; environment samples are checked
+incrementally; missing intervals abort as soon as the final <=1% limit becomes impossible; and an invalid
+warmup writes `measured_started=false` and never starts the measured segment.
+
+The repeat review remained **HOLD** because partial bounds were encoded as non-standard JSON NaN/infinities,
+and an incremental environment failure preserved only its error string. It also found that each new window
+used its first sample as a new baseline, allowing a boundary cpufreq/task change to escape until the end of
+the window. All JSON writing now uses `allow_nan=False` and unavailable bounds are `null`. Every collection
+window receives the preceding boundary/campaign baseline and checkpoints every successful sample including
+raw data before validation; missing and invalid checkpoints include the latest error. Cross-boundary changes
+therefore abort on the first interval.
+
+The next micro-review found one final **HOLD**: idle boundary `before`/`after` samples were captured but written
+only after later validation/calculation, so the exact offending boundary could still be lost. Every idle and
+latency boundary sample is now written immediately after capture and before any validation, CLI, parsing, or
+metric calculation. Device-free compilation, expanded fail-closed self-tests, strict plan parsing, and diff
+checks passed after every correction.
+
+Luna's final read-only verdict is **GO**. It reproduced the strict JSON and self-tests and verified immediate
+boundary persistence with no late duplicate writes. This verdict authorizes committing the runner and
+starting only the frozen P6d campaign; it accepts no campaign result.
+
+```text
+final P6d runner=df21181bfdf497c37e5dc653953c89d274e6edbd49a5dc72738d1ecb9d179d47
+```

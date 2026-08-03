@@ -1,66 +1,69 @@
 #!/usr/bin/env python3
-"""PROTOTYPE: Android A/B/C VPP wake latency and stopped-generator idle CPU test."""
+"""P6d formal Pixel 6a idle/latency runner.
+
+The default action is ``--plan``.  Device mutation and the roughly six-hour formal run
+require an explicit ``--execute``.  Protocol constants are intentionally not
+CLI-tunable: changing one creates a different experiment.
+"""
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import random
 import re
 import shlex
 import statistics
 import subprocess
 import time
+from typing import Callable
 
 REPO = Path(__file__).resolve().parents[3]
 POC = REPO / "experiments/vpp-nfq-poc"
 ADB = REPO / "dev/adb"
-PATCHED = Path(os.environ.get("P5_PATCHED_BUILD", POC / "work/vpp-android-configure-probe"))
-UNPATCHED = Path(os.environ.get("P5_UNPATCHED_BUILD", "/tmp/sakamoto-p5-unpatched-build"))
+PATCHED = Path(os.environ.get("P6_PATCHED_BUILD", POC / "work/vpp-android-configure-probe"))
+UNPATCHED = Path(os.environ.get("P6_UNPATCHED_BUILD", "/tmp/sakamoto-p5-unpatched-build"))
+PATCHED_SOURCE = Path(os.environ.get("P6_PATCHED_SOURCE", POC / "work/vpp/src/vlib"))
+UNPATCHED_SOURCE = Path(os.environ.get("P6_UNPATCHED_SOURCE", "/tmp/sakamoto-p5-unpatched-20260802/src/vlib"))
 RUN_ID = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-RESULT = Path(os.environ.get("RESULT_DIR", POC / "results" / dt.date.today().isoformat() / f"vpp-wake-idle-p5-{RUN_ID}"))
-PROFILE = os.environ.get("PROFILE", "smoke")
-PHASE = os.environ.get("PHASE", "all")
-ARM_FILTER = os.environ.get("ARM_FILTER", "A B C").split()
-EXPECT_WAKE_DIAGNOSTICS = os.environ.get("EXPECT_WAKE_DIAGNOSTICS", "1") == "1"
-REQUIRE_PERFORMANCE_GO = os.environ.get(
-    "REQUIRE_PERFORMANCE_GO", "1" if PROFILE == "full" else "0"
-) == "1"
-SEED = int(os.environ.get("SEED", "20260802"))
+DEFAULT_RESULT = POC / "results" / dt.date.today().isoformat() / f"vpp-wake-idle-p6-{RUN_ID}"
 
-if PROFILE == "full":
-    IDLE_WARMUP, IDLE_SECONDS, BLOCKS = 60.0, 600.0, 3
-    LATENCY_SECONDS, LATENCY_REPS, MIN_SAMPLES = 320.0, 3, 300
-elif PROFILE == "pilot":
-    IDLE_WARMUP, IDLE_SECONDS, BLOCKS = 10.0, 60.0, 3
-    LATENCY_SECONDS, LATENCY_REPS, MIN_SAMPLES = 65.0, 3, 60
-else:
-    IDLE_WARMUP, IDLE_SECONDS, BLOCKS = 2.0, 10.0, 1
-    LATENCY_SECONDS, LATENCY_REPS, MIN_SAMPLES = 12.0, 1, 8
-
-IDLE_WARMUP = float(os.environ.get("IDLE_WARMUP", IDLE_WARMUP))
-IDLE_SECONDS = float(os.environ.get("IDLE_SECONDS", IDLE_SECONDS))
-BLOCKS = int(os.environ.get("BLOCKS", BLOCKS))
-LATENCY_SECONDS = float(os.environ.get("LATENCY_SECONDS", LATENCY_SECONDS))
-LATENCY_REPS = int(os.environ.get("LATENCY_REPS", LATENCY_REPS))
-MIN_SAMPLES = int(os.environ.get("MIN_SAMPLES", MIN_SAMPLES))
+SEED = 0x5A4B20260802
+IDLE_ORDERS = ("AC", "CA", "CA", "AC", "CA", "AC", "AC", "CA")
+LATENCY_ORDERS = ("BC", "CB", "BC", "CB", "CB", "BC", "CB", "BC")
+IDLE_WARMUP_SECONDS = 60.0
+IDLE_SAMPLE_SECONDS = 600.0
+LATENCY_WARMUP_EVENTS = 20
+LATENCY_MEASURED_EVENTS = 600
+LATENCY_TOTAL_EVENTS = LATENCY_WARMUP_EVENTS + LATENCY_MEASURED_EVENTS
+LATENCY_RATE_PPS = 1
+LATENCY_ARM_TIMEOUT_SECONDS = 660.0
+METRIC_INTERVAL_SECONDS = 5.0
+MAX_MISSING_FRACTION = 0.01
+T95_DF7 = 1.894578605
+IDLE_UPPER_GATE_PP = 0.05
+P99_LOWER_GATE = 0.20
+P50_UPPER_GATE = 0.10
 
 ARMS = {
     "A": {"label": "exact-unpatched", "build": UNPATCHED, "wake_mode": 0},
-    "B": {"label": "patched-off", "build": PATCHED, "wake_mode": 0},
-    "C": {"label": "patched-conditional", "build": PATCHED, "wake_mode": 2},
+    "B": {"label": "p6-patched-persistent-control", "build": PATCHED, "wake_mode": 3},
+    "C": {"label": "p6-patched-conditional", "build": PATCHED, "wake_mode": 2},
 }
 LIBS = ("libsvm.so", "libvlib.so", "libvlibapi.so", "libvlibmemory.so", "libvnet.so", "libvppinfra.so")
-REMOTE_BASE = "/data/local/tmp/vpp-p5"
+REMOTE_BASE = "/data/local/tmp/vpp-p6"
 
+CONFIG_RE = re.compile(
+    r"running (?P<running>\d+).*?tokens-live (?P<tokens_live>\d+) "
+    r"tokens-available (?P<tokens_available>\d+) wake-workers (?P<reported_wake_mode>\d+)", re.S)
 COUNTERS_RE = re.compile(
     r"generated (?P<generated>\d+).*?ingress-enqueued (?P<ingress>\d+) "
     r"ingress-drops (?P<ingress_drops>\d+) alloc-errors (?P<alloc_errors>\d+) "
-    r"terminal (?P<terminal>\d+).*?reclaimed (?P<reclaimed>\d+) "
+    r"terminal (?P<terminal>\d+).*?return-drops (?P<return_drops>\d+) reclaimed (?P<reclaimed>\d+) "
     r"reclaim-overflows (?P<reclaim_overflows>\d+) clock-anomalies (?P<clock_anomalies>\d+) "
     r"credit-stalls (?P<credit_stalls>\d+) outstanding-packets (?P<outstanding>\d+)", re.S)
 CYCLES_RE = re.compile(
@@ -71,6 +74,10 @@ WAKE_RE = re.compile(
     r"wake-diagnostics calls (?P<wake_calls>\d+) sleeps-seen (?P<sleeps_seen>\d+) "
     r"pending-claims (?P<pending_claims>\d+) writes (?P<writes>\d+) "
     r"write-errors (?P<write_errors>\d+).*?fq-full-waits (?P<fq_full_waits>\d+)", re.S)
+WAKE_STATE_RE = re.compile(
+    r"wake-state epoch-max (?P<epoch_max>\d+) faults (?P<wake_faults>\d+) fault-code (?P<wake_fault_code>\d+) "
+    r"awake (?P<awake>\d+) preparing (?P<preparing>\d+) sleeping (?P<sleeping>\d+) "
+    r"notified (?P<notified>\d+) draining (?P<draining>\d+) notifying (?P<notifying>\d+)")
 SLEEP_RE = re.compile(r"sleep-proof sampled-remote-enqueues (?P<sampled_remote>\d+) target-sleeping (?P<target_sleeping>\d+)")
 EXACT_RE = re.compile(r"exact-latency samples (?P<exact_samples>\d+) overflows (?P<exact_overflows>\d+) "
                       r"p50 (?P<exact_p50>\d+) p95 (?P<exact_p95>\d+) p99 (?P<exact_p99>\d+)")
@@ -104,8 +111,12 @@ def digest(path: Path) -> str:
     return h.hexdigest()
 
 
-def artifact(arm: str, relative: str) -> Path:
-    return Path(ARMS[arm]["build"]) / relative
+def json_text(value: object, *, default: Callable[[object], object] | None = None) -> str:
+    return json.dumps(value, indent=2, allow_nan=False, default=default) + "\n"
+
+
+def write_json(path: Path, value: object, *, default: Callable[[object], object] | None = None) -> None:
+    path.write_text(json_text(value, default=default))
 
 
 def remote_root(arm: str) -> str:
@@ -115,6 +126,26 @@ def remote_root(arm: str) -> str:
 def ctl(arm: str, command: str, check: bool = True) -> str:
     root = remote_root(arm)
     return su(f"LD_LIBRARY_PATH={root}/lib {root}/bin/vppctl -s {root}/runtime/cli.sock {command}", check)
+
+
+def parse_show(text: str) -> dict[str, int | float]:
+    parsed: dict[str, int | float] = {}
+    for regex in (CONFIG_RE, COUNTERS_RE, CYCLES_RE, WAKE_RE, WAKE_STATE_RE, SLEEP_RE, EXACT_RE, EXACT_SLEEP_RE):
+        match = regex.search(text)
+        if match:
+            for key, value in match.groupdict().items():
+                parsed[key] = float(value) if "." in value else int(value)
+    return parsed
+
+
+def device_identity() -> dict[str, str]:
+    values = su("getprop ro.product.model; getprop ro.build.version.release; getprop ro.build.version.sdk").splitlines()
+    if len(values) != 3:
+        raise RuntimeError(f"could not read device identity: {values}")
+    identity = {"model": values[0].strip(), "android_release": values[1].strip(), "api": values[2].strip()}
+    if identity != {"model": "Pixel 6a", "android_release": "16", "api": "36"}:
+        raise RuntimeError(f"P6d requires Pixel 6a Android 16/API36, got {identity}")
+    return identity
 
 
 def stage_one(arm: str) -> None:
@@ -128,9 +159,9 @@ def stage_one(arm: str) -> None:
         raise RuntimeError(f"missing artifacts for {arm}: {missing}")
     su(f"mkdir -p {root}/bin {root}/lib {root}/plugins {root}/runtime {root}/logs; "
        f"chmod 777 {root}/bin {root}/lib {root}/plugins {root}/runtime {root}/logs")
-    run([str(ADB), "push", str(paths[0]), f"{root}/bin/vpp"], timeout=600)
-    run([str(ADB), "push", str(paths[1]), f"{root}/bin/vppctl"], timeout=600)
-    run([str(ADB), "push", str(plugin), f"{root}/plugins/handoff_perf_poc_plugin.so"], timeout=600)
+    destinations = [f"{root}/bin/vpp", f"{root}/bin/vppctl", f"{root}/plugins/handoff_perf_poc_plugin.so"]
+    for path, destination in zip(paths[:3], destinations):
+        run([str(ADB), "push", str(path), destination], timeout=600)
     for path in paths[3:]:
         run([str(ADB), "push", str(path), f"{root}/lib/{path.name}"], timeout=1200)
     su(f"chmod 755 {root}/bin/vpp {root}/bin/vppctl")
@@ -138,7 +169,7 @@ def stage_one(arm: str) -> None:
 
 def stage() -> None:
     stage_one("A")
-    stage_one("B")
+    stage_one("B")  # B and C deliberately share this staged binary.
 
 
 def write_config(arm: str, case_dir: Path) -> Path:
@@ -152,7 +183,7 @@ def write_config(arm: str, case_dir: Path) -> Path:
   cli-listen {root}/runtime/cli.sock
 }}
 cpu {{ main-core 0 corelist-workers 1 }}
-api-segment {{ prefix vpp-p5-{arm.lower()} }}
+api-segment {{ prefix vpp-p6-{arm.lower()} }}
 statseg {{ socket-name {root}/runtime/statseg.sock }}
 buffers {{ page-size default }}
 plugins {{
@@ -166,7 +197,10 @@ plugins {{
 
 def stop_vpp(arm: str) -> None:
     root = remote_root(arm)
-    su(f"if [ -f {root}/runtime/vpp.pid ]; then p=$(cat {root}/runtime/vpp.pid); kill -TERM $p 2>/dev/null || true; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 $p 2>/dev/null || break; sleep .1; done; kill -0 $p 2>/dev/null && kill -KILL $p 2>/dev/null || true; fi; rm -f {root}/runtime/cli.sock {root}/runtime/vpp.pid", False)
+    su(f"if [ -f {root}/runtime/vpp.pid ]; then p=$(cat {root}/runtime/vpp.pid); "
+       "kill -TERM $p 2>/dev/null || true; for i in 1 2 3 4 5 6 7 8 9 10; do "
+       "kill -0 $p 2>/dev/null || break; sleep .1; done; kill -0 $p 2>/dev/null && "
+       f"kill -KILL $p 2>/dev/null || true; fi; rm -f {root}/runtime/cli.sock {root}/runtime/vpp.pid", False)
 
 
 def start_vpp(arm: str, case_dir: Path) -> None:
@@ -174,16 +208,16 @@ def start_vpp(arm: str, case_dir: Path) -> None:
     stop_vpp(arm)
     config = write_config(arm, case_dir)
     run([str(ADB), "push", str(config), f"{root}/runtime/startup.conf"])
-    su(f"cd {root}; LD_LIBRARY_PATH={root}/lib nohup {root}/bin/vpp -c {root}/runtime/startup.conf >{root}/logs/stdout.log 2>&1 </dev/null & echo $! >{root}/runtime/vpp.pid")
+    su(f"cd {root}; LD_LIBRARY_PATH={root}/lib nohup {root}/bin/vpp -c {root}/runtime/startup.conf "
+       f">{root}/logs/stdout.log 2>&1 </dev/null & echo $! >{root}/runtime/vpp.pid")
     for _ in range(100):
         time.sleep(.1)
-        probe = ctl(arm, "show version", False)
-        if "vpp v" in probe.lower():
+        if "vpp v" in ctl(arm, "show version", False).lower():
             break
     else:
-        log = su(f"cat {root}/logs/stdout.log; cat {root}/logs/vpp.log", False)
-        raise RuntimeError(f"VPP startup timeout for {arm}:\n{log}")
-    (case_dir / "threads.txt").write_text(ctl(arm, "show threads"))
+        raise RuntimeError(f"VPP startup timeout for {arm}:\n{su(f'cat {root}/logs/stdout.log', False)}")
+    threads = ctl(arm, "show threads")
+    (case_dir / "threads.txt").write_text(threads)
     if arm != "A":
         expected = f"handoff-perf wake mode {ARMS[arm]['wake_mode']}"
         result = ctl(arm, f"handoff-perf wake-mode {ARMS[arm]['wake_mode']}")
@@ -191,284 +225,667 @@ def start_vpp(arm: str, case_dir: Path) -> None:
             raise RuntimeError(f"failed to set wake mode: {result}")
 
 
-def process_sample(arm: str) -> dict[str, object]:
+def raw_environment(arm: str) -> str:
     root = remote_root(arm)
-    pid = int(su(f"cat {root}/runtime/vpp.pid").strip())
-    tids = su(f"for t in /proc/{pid}/task/*; do echo ${{t##*/}}; done").split()
-    tasks: dict[str, dict[str, int | str]] = {}
-    battery: dict[str, int | str] = {}
-    for tid in tids:
-        raw = su(f"cat /proc/{pid}/task/{tid}/stat; cat /proc/{pid}/task/{tid}/schedstat; "
-                 f"cat /proc/{pid}/task/{tid}/comm; cat /proc/{pid}/task/{tid}/status")
-        lines = raw.splitlines()
-        stat = lines[0].split()
-        sched = lines[1].split()
-        name = lines[2]
-        status = {line.split(":", 1)[0]: line.split(":", 1)[1].strip()
-                  for line in lines[3:] if ":" in line}
-        tasks[tid] = {"name": name, "ticks": int(stat[13]) + int(stat[14]), "cpu": int(stat[38]),
-                      "runtime_ns": int(sched[0]), "wait_ns": int(sched[1]), "slices": int(sched[2]),
-                      "voluntary": int(status["voluntary_ctxt_switches"]),
-                      "involuntary": int(status["nonvoluntary_ctxt_switches"])}
-    for line in su("for f in status capacity current_now voltage_now charge_counter temp; do "
-                   "p=/sys/class/power_supply/battery/$f; [ -r $p ] && echo \"$f $(cat $p)\"; done").splitlines():
-        key, value = line.split(None, 1)
-        battery[key] = int(value) if value.lstrip("-").isdigit() else value
-    if len(tasks) != 2:
-        raise RuntimeError(f"expected main+one worker, got {tasks}")
-    return {"monotonic_ns": time.monotonic_ns(), "tasks": tasks, "battery": battery}
+    return su(
+        f"p=$(cat {root}/runtime/vpp.pid); echo __ONLINE__; cat /sys/devices/system/cpu/online; "
+        "echo __CPUFREQ__; for d in /sys/devices/system/cpu/cpufreq/policy*; do "
+        "[ -d $d ] || continue; echo POLICY=${d##*/}; for f in affected_cpus scaling_governor scaling_min_freq "
+        "scaling_max_freq scaling_cur_freq cpuinfo_min_freq cpuinfo_max_freq; do [ -r $d/$f ] && echo $f=$(cat $d/$f); done; "
+        "[ -r $d/stats/time_in_state ] && { echo TIME_IN_STATE; cat $d/stats/time_in_state; }; done; "
+        "echo __THERMAL_SYSFS__; for f in /sys/class/thermal/thermal_zone*/temp "
+        "/sys/class/thermal/cooling_device*/cur_state; do [ -r $f ] && echo $f=$(cat $f); done; "
+        "echo __THERMAL_SERVICE__; dumpsys thermalservice; echo __TASKS__; "
+        "for t in /proc/$p/task/*; do tid=${t##*/}; echo TID=$tid; cat $t/comm; cat $t/stat; cat $t/schedstat; "
+        "grep -E '^(Cpus_allowed_list|voluntary_ctxt_switches|nonvoluntary_ctxt_switches):' $t/status; done; "
+        "echo __PROCESS__; cat /proc/$p/stat; echo CLK_TCK=$(getconf CLK_TCK)")
 
 
-def sample_delta(before: dict[str, object], after: dict[str, object]) -> dict[str, object]:
-    before_tasks = before["tasks"]
-    after_tasks = after["tasks"]
-    rows = []
-    for tid, start in before_tasks.items():
-        if tid not in after_tasks or after_tasks[tid]["name"] != start["name"]:
-            raise RuntimeError("VPP task identity changed during measurement")
-        end = after_tasks[tid]
-        row = {"tid": int(tid), "name": start["name"]}
-        for key in ("ticks", "runtime_ns", "wait_ns", "slices", "voluntary", "involuntary"):
-            row[key] = int(end[key]) - int(start[key])
-            if row[key] < 0:
-                raise RuntimeError(f"negative {key} delta")
-        rows.append(row)
-    elapsed_ns = int(after["monotonic_ns"]) - int(before["monotonic_ns"])
-    return {"elapsed_ns": elapsed_ns, "tasks": rows,
-            "total_runtime_ns": sum(row["runtime_ns"] for row in rows),
-            "total_contexts": sum(row["voluntary"] + row["involuntary"] for row in rows)}
+def parse_environment(raw: str, captured_ns: int | None = None) -> dict[str, object]:
+    captured_ns = time.monotonic_ns() if captured_ns is None else captured_ns
+    online_match = re.search(r"__ONLINE__\n([^\n]+)", raw)
+    process_match = re.search(r"__PROCESS__\n([^\n]+)\nCLK_TCK=(\d+)", raw)
+    if not online_match or not process_match:
+        raise RuntimeError("incomplete environment sample")
+    tasks: list[dict[str, object]] = []
+    task_area = raw.split("__TASKS__\n", 1)[1].split("__PROCESS__\n", 1)[0]
+    for chunk in task_area.split("TID=")[1:]:
+        lines = chunk.strip().splitlines()
+        tid, name, stat_line, sched_line = int(lines[0]), lines[1], lines[2], lines[3]
+        stat, sched = stat_line.split(), sched_line.split()
+        status = {line.split(":", 1)[0]: line.split(":", 1)[1].strip() for line in lines[4:] if ":" in line}
+        tasks.append({"tid": tid, "name": name, "cpu": int(stat[38]),
+                      "ticks": int(stat[13]) + int(stat[14]), "runtime_ns": int(sched[0]),
+                      "wait_ns": int(sched[1]), "slices": int(sched[2]),
+                      "cpus_allowed": status.get("Cpus_allowed_list", ""),
+                      "voluntary": int(status.get("voluntary_ctxt_switches", -1)),
+                      "involuntary": int(status.get("nonvoluntary_ctxt_switches", -1))})
+    process_stat = process_match.group(1).split()
+    freq_area = raw.split("__CPUFREQ__\n", 1)[1].split("__THERMAL_SYSFS__\n", 1)[0]
+    stable_freq = re.findall(r"(POLICY=policy\d+|scaling_governor=\S+|scaling_min_freq=\d+|scaling_max_freq=\d+)", freq_area)
+    policy_count = len(re.findall(r"^POLICY=", freq_area, re.M))
+    freq_config_complete = policy_count > 0 and all(
+        len(re.findall(rf"^{field}=", freq_area, re.M)) == policy_count
+        for field in ("scaling_governor", "scaling_min_freq", "scaling_max_freq"))
+    thermal_area = raw.split("__THERMAL_SERVICE__\n", 1)[1].split("__TASKS__\n", 1)[0]
+    global_thermal = re.search(r"^Thermal Status:\s*(\d+)$", thermal_area, re.M)
+    thermal_statuses = [int(value) for value in re.findall(
+        r"mStatus\s*=\s*(\d+)", thermal_area)]
+    cpu_cooling_states = {
+        name: int(value) for value, name in re.findall(
+            r"CoolingDevice\{mValue=(\d+),[^}]*mName=(thermal-cpufreq-[^},]+)", thermal_area)
+    }
+    graph = [task for task in tasks if task["name"] == "vpp_main" or str(task["name"]).startswith("vpp_wk_")]
+    return {"monotonic_ns": captured_ns, "online": online_match.group(1).strip(),
+            "tasks": tasks, "graph_tasks": graph,
+            "process_ticks": int(process_stat[13]) + int(process_stat[14]),
+            "clk_tck": int(process_match.group(2)), "stable_freq": stable_freq,
+            "freq_config_complete": freq_config_complete,
+            "cpufreq_residency_available": "TIME_IN_STATE" in freq_area,
+            "thermal_global_status": int(global_thermal.group(1)) if global_thermal else None,
+            "thermal_statuses": thermal_statuses, "cpu_cooling_states": cpu_cooling_states,
+            "thermal_throttled": (global_thermal is not None and int(global_thermal.group(1)) != 0)
+            or any(cpu_cooling_states.values()),
+            "raw": raw}
 
 
-def parse_show(text: str) -> dict[str, int | float]:
-    result: dict[str, int | float] = {}
-    for regex in (COUNTERS_RE, CYCLES_RE, WAKE_RE, SLEEP_RE, EXACT_RE, EXACT_SLEEP_RE):
-        match = regex.search(text)
-        if match:
-            for key, value in match.groupdict().items():
-                result[key] = float(value) if "." in value else int(value)
+def environment_sample(arm: str) -> dict[str, object]:
+    raw = raw_environment(arm)
+    return parse_environment(raw, time.monotonic_ns())
+
+
+def cpu_list(value: str) -> set[int]:
+    result: set[int] = set()
+    for part in value.split(","):
+        bounds = part.split("-", 1)
+        first, last = int(bounds[0]), int(bounds[-1])
+        result.update(range(first, last + 1))
     return result
 
 
-def idle_case(block: int, arm: str, index: int) -> dict[str, object]:
-    case_dir = RESULT / "idle" / f"{index:02d}-block{block}-{arm}-{ARMS[arm]['label']}"
+def environment_errors(samples: list[dict[str, object]], missing: int, expected_intervals: int) -> list[str]:
+    errors: list[str] = []
+    if missing / expected_intervals > MAX_MISSING_FRACTION:
+        errors.append(f"missing-metric-intervals={missing}/{expected_intervals}")
+    if not samples:
+        return errors + ["no-environment-samples"]
+    baseline_freq = samples[0]["stable_freq"]
+    baseline_tids = {int(t["tid"]): str(t["name"]) for t in samples[0]["graph_tasks"]}
+    if len(baseline_tids) != 2 or sorted(baseline_tids.values()) != ["vpp_main", "vpp_wk_0"]:
+        errors.append(f"unexpected-graph-tasks={baseline_tids}")
+    if not baseline_freq or not samples[0]["freq_config_complete"]:
+        errors.append("cpufreq-config-unavailable")
+    if not samples[0]["cpufreq_residency_available"]:
+        errors.append("cpufreq-residency-unavailable")
+    if samples[0]["thermal_global_status"] is None or not samples[0]["cpu_cooling_states"]:
+        errors.append("thermal-status-unavailable")
+    for index, sample in enumerate(samples):
+        if not {0, 1}.issubset(cpu_list(str(sample["online"]))):
+            errors.append(f"cpu-offline@{index}={sample['online']}")
+        if sample["stable_freq"] != baseline_freq:
+            errors.append(f"cpufreq-config-changed@{index}")
+        if not sample["freq_config_complete"] or not sample["cpufreq_residency_available"]:
+            errors.append(f"cpufreq-evidence-missing@{index}")
+        if sample["thermal_global_status"] is None or not sample["cpu_cooling_states"]:
+            errors.append(f"thermal-status-missing@{index}")
+        if sample["thermal_throttled"]:
+            errors.append(f"thermal-throttled@{index}")
+        graph = {int(t["tid"]): t for t in sample["graph_tasks"]}
+        if {tid: str(task["name"]) for tid, task in graph.items()} != baseline_tids:
+            errors.append(f"graph-task-identity@{index}")
+            continue
+        for task in graph.values():
+            target = 0 if task["name"] == "vpp_main" else 1
+            if task["cpu"] != target or task["cpus_allowed"] != str(target):
+                errors.append(f"migration@{index}:{task['name']} cpu={task['cpu']} allowed={task['cpus_allowed']}")
+            if int(task["voluntary"]) < 0 or int(task["involuntary"]) < 0:
+                errors.append(f"context-evidence-missing@{index}:{task['name']}")
+    return errors
+
+
+def collect_window(arm: str, seconds: float, baseline: dict[str, object], checkpoint: Path
+                   ) -> tuple[list[dict[str, object]], int, int]:
+    deadline = time.monotonic() + seconds
+    # Boundary samples are taken by the caller.  Keep the final internal sample
+    # one interval before the boundary so environment collection cannot lengthen
+    # the arm's CLOCK_MONOTONIC estimator window.
+    expected = max(1, math.floor(seconds / METRIC_INTERVAL_SECONDS) - 1)
+    samples: list[dict[str, object]] = []
+    missing = 0
+    last_error: str | None = None
+
+    def save_checkpoint() -> None:
+        write_json(checkpoint, {"expected_intervals": expected, "missing": missing,
+                                "last_error": last_error, "samples": samples})
+
+    for interval in range(expected):
+        target = deadline - seconds + (interval + 1) * METRIC_INTERVAL_SECONDS
+        time.sleep(max(0.0, target - time.monotonic()))
+        try:
+            samples.append(environment_sample(arm))
+            save_checkpoint()
+            errors = environment_errors([baseline, *samples], missing, expected)
+            if errors:
+                raise RuntimeError("environment-invalid:" + ";".join(errors))
+        except (RuntimeError, subprocess.SubprocessError) as error:
+            if isinstance(error, RuntimeError) and str(error).startswith("environment-invalid:"):
+                last_error = str(error)
+                save_checkpoint()
+                raise
+            missing += 1
+            last_error = f"{type(error).__name__}:{error}"
+            save_checkpoint()
+            if missing / expected > MAX_MISSING_FRACTION:
+                raise RuntimeError(
+                    f"missing-metric-intervals={missing}/{expected};last={type(error).__name__}:{error}")
+    time.sleep(max(0.0, deadline - time.monotonic()))
+    return samples, missing, expected
+
+
+def process_cpu_percent(before: dict[str, object], after: dict[str, object]) -> float:
+    if before["clk_tck"] != after["clk_tck"]:
+        raise RuntimeError("CLK_TCK changed")
+    ticks = int(after["process_ticks"]) - int(before["process_ticks"])
+    elapsed = (int(after["monotonic_ns"]) - int(before["monotonic_ns"])) / 1e9
+    if ticks < 0 or elapsed <= 0:
+        raise RuntimeError("invalid process CPU delta")
+    return 100.0 * (ticks / int(before["clk_tck"])) / elapsed
+
+
+def save_environment(case_dir: Path, name: str, sample: dict[str, object]) -> None:
+    raw = str(sample["raw"])
+    (case_dir / f"{name}.txt").write_text(raw)
+    structured = {key: value for key, value in sample.items() if key != "raw"}
+    write_json(case_dir / f"{name}.json", structured)
+
+
+def idle_case(block: int, arm: str, order_index: int, result_dir: Path) -> dict[str, object]:
+    case_dir = result_dir / "idle" / f"{order_index:02d}-block{block + 1}-{arm}-{ARMS[arm]['label']}"
     case_dir.mkdir(parents=True)
     start_vpp(arm, case_dir)
     try:
-        time.sleep(IDLE_WARMUP)
+        warm_baseline = environment_sample(arm)
+        save_environment(case_dir, "warmup-environment-baseline", warm_baseline)
+        warm_samples, warm_missing, warm_expected = collect_window(
+            arm, IDLE_WARMUP_SECONDS, warm_baseline, case_dir / "warmup-environment-intervals.json")
         show_before = ctl(arm, "show handoff-perf")
-        before = process_sample(arm)
-        time.sleep(IDLE_SECONDS)
-        after = process_sample(arm)
+        before = environment_sample(arm)
+        save_environment(case_dir, "environment-before", before)
+        boundary_errors = environment_errors([warm_baseline, *warm_samples, before], warm_missing, warm_expected)
+        if boundary_errors:
+            raise RuntimeError("warmup-boundary-invalid:" + ";".join(boundary_errors))
+        interval_samples, missing, expected = collect_window(
+            arm, IDLE_SAMPLE_SECONDS, before, case_dir / "sample-environment-intervals.json")
+        after = environment_sample(arm)
+        save_environment(case_dir, "environment-after", after)
         show_after = ctl(arm, "show handoff-perf")
-        delta = sample_delta(before, after)
-        wake_before, wake_after = parse_show(show_before), parse_show(show_after)
-        wake_delta = {key: int(wake_after.get(key, 0)) - int(wake_before.get(key, 0))
-                      for key in ("wake_calls", "writes", "write_errors", "fq_full_waits")}
-        graph_tasks = [row for row in delta["tasks"] if row["name"] == "vpp_main" or str(row["name"]).startswith("vpp_wk_")]
-        no_datapath = all(int(wake_after.get(key, -1)) == 0
-                          for key in ("generated", "ingress", "terminal", "outstanding"))
-        valid = (len(graph_tasks) == 2 and no_datapath and wake_delta["write_errors"] == 0
-                 and wake_delta["fq_full_waits"] == 0)
-        payload = {"phase": "idle", "block": block, "order_index": index, "arm": arm,
+        parsed_before, parsed_after = parse_show(show_before), parse_show(show_after)
+        errors = environment_errors([warm_baseline, *warm_samples, before, *interval_samples, after],
+                                    warm_missing + missing, warm_expected + expected)
+        for key in ("generated", "ingress", "terminal", "reclaimed", "outstanding"):
+            if int(parsed_after.get(key, -1)) != 0:
+                errors.append(f"idle-{key}={parsed_after.get(key)}")
+        for key in ("write_errors", "fq_full_waits", "wake_faults", "notifying"):
+            if int(parsed_after.get(key, 0)) != 0:
+                errors.append(f"idle-{key}={parsed_after.get(key)}")
+        payload = {"phase": "idle", "block": block + 1, "order_index": order_index, "arm": arm,
                    "label": ARMS[arm]["label"], "wake_mode": ARMS[arm]["wake_mode"],
-                   "valid": valid, "wake_delta": wake_delta, **delta,
-                   "datapath_after": {key: wake_after.get(key) for key in
-                                      ("generated", "ingress", "terminal", "outstanding")},
-                   "cpu_single_core_percent": delta["total_runtime_ns"] / delta["elapsed_ns"] * 100,
-                   "battery_before": before["battery"], "battery_after": after["battery"]}
-        (case_dir / "before.json").write_text(json.dumps(before, indent=2) + "\n")
-        (case_dir / "after.json").write_text(json.dumps(after, indent=2) + "\n")
+                   "valid": not errors, "errors": errors,
+                   "cpu_single_core_percent": process_cpu_percent(before, after),
+                   "process_ticks_delta": int(after["process_ticks"]) - int(before["process_ticks"]),
+                   "elapsed_monotonic_ns": int(after["monotonic_ns"]) - int(before["monotonic_ns"]),
+                   "warmup_metric_intervals": warm_expected, "warmup_missing": warm_missing,
+                   "sample_metric_intervals": expected, "sample_missing": missing,
+                   "before_counters": parsed_before, "after_counters": parsed_after}
+        write_json(case_dir / "environment-intervals.json", interval_samples)
         (case_dir / "show-before.txt").write_text(show_before)
         (case_dir / "show-after.txt").write_text(show_after)
-        (case_dir / "result.json").write_text(json.dumps(payload, indent=2) + "\n")
+        write_json(case_dir / "result.json", payload)
         return payload
     finally:
         stop_vpp(arm)
 
 
-def latency_case(repetition: int, arm: str, index: int) -> dict[str, object]:
-    case_dir = RESULT / "latency" / f"{index:02d}-rep{repetition}-{arm}-{ARMS[arm]['label']}"
+def settle(arm: str, deadline: float) -> tuple[str, dict[str, int | float]]:
+    show, parsed = "", {}
+    while time.monotonic() < deadline:
+        show = ctl(arm, "show handoff-perf")
+        parsed = parse_show(show)
+        if int(parsed.get("outstanding", -1)) == 0:
+            return show, parsed
+        time.sleep(.01)
+    raise TimeoutError("latency arm did not settle before 660-second deadline")
+
+
+def run_rate_segment(arm: str, events: int, command: str | None, deadline: float,
+                     baseline: dict[str, object], checkpoint: Path
+                     ) -> tuple[str, dict[str, int | float], list[dict[str, object]], int, int]:
+    response = ctl(arm, command) if command else ctl(arm, "handoff-perf resume")
+    expected = "handoff-perf started" if command else "handoff-perf resumed with counters reset"
+    if expected not in response:
+        raise RuntimeError(response)
+    # The rate scheduler grants its first whole packet after one second.  A
+    # quarter-second guard stops after the requested whole credit but before the
+    # next one; the exact generated count below remains the acceptance rule.
+    segment_seconds = events / LATENCY_RATE_PPS + 0.25
+    samples, missing, expected = collect_window(arm, segment_seconds, baseline, checkpoint)
+    if time.monotonic() >= deadline:
+        raise TimeoutError("latency arm exceeded 660-second deadline")
+    ctl(arm, "handoff-perf stop")
+    show, parsed = settle(arm, deadline)
+    return show, parsed, samples, missing, expected
+
+
+def latency_ledger_errors(parsed: dict[str, int | float], expected: int, measured: bool) -> list[str]:
+    errors: list[str] = []
+    for key in ("generated", "ingress", "terminal", "reclaimed", "samples", "sampled_remote", "exact_samples"):
+        if int(parsed.get(key, -1)) != expected:
+            errors.append(f"{key}={parsed.get(key)} expected={expected}")
+    for key in ("ingress_drops", "alloc_errors", "return_drops", "reclaim_overflows", "clock_anomalies",
+                "credit_stalls", "outstanding", "write_errors", "fq_full_waits", "wake_faults",
+                "wake_fault_code", "notifying", "exact_overflows", "exact_sleep_overflows"):
+        if int(parsed.get(key, -1)) != 0:
+            errors.append(f"{key}={parsed.get(key)}")
+    if int(parsed.get("target_sleeping", -1)) != expected:
+        errors.append(f"target_sleeping={parsed.get('target_sleeping')} expected={expected}")
+    if int(parsed.get("exact_sleep_samples", -1)) != expected:
+        errors.append(f"exact_sleep_samples={parsed.get('exact_sleep_samples')} expected={expected}")
+    if measured and expected != LATENCY_MEASURED_EVENTS:
+        errors.append("internal-measured-count")
+    return errors
+
+
+def latency_case(block: int, arm: str, order_index: int, result_dir: Path) -> dict[str, object]:
+    case_dir = result_dir / "latency" / f"{order_index:02d}-block{block + 1}-{arm}-{ARMS[arm]['label']}"
     case_dir.mkdir(parents=True)
     start_vpp(arm, case_dir)
+    deadline = time.monotonic() + LATENCY_ARM_TIMEOUT_SECONDS
     try:
+        before = environment_sample(arm)
+        save_environment(case_dir, "environment-before", before)
         command = ("handoff-perf start mode handoff-one distribution hot burst 1 packet-size 64 "
-                   f"sample-rate 1 seed {SEED} tokens 1 rate 1 wake-workers {ARMS[arm]['wake_mode']}")
-        started = ctl(arm, command)
-        if "handoff-perf started" not in started:
-            raise RuntimeError(started)
-        time.sleep(2.2)
-        ctl(arm, "handoff-perf stop")
-        warmup_show = ""
-        for _ in range(200):
-            warmup_show = ctl(arm, "show handoff-perf")
-            if parse_show(warmup_show).get("outstanding") == 0:
-                break
-            time.sleep(.01)
-        resumed = ctl(arm, "handoff-perf resume")
-        if "handoff-perf resumed with counters reset" not in resumed:
-            raise RuntimeError(resumed)
-        time.sleep(LATENCY_SECONDS)
-        ctl(arm, "handoff-perf stop")
-        parsed: dict[str, int | float] = {}
-        show = ""
-        for _ in range(200):
-            show = ctl(arm, "show handoff-perf")
-            parsed = parse_show(show)
-            if parsed.get("outstanding") == 0:
-                break
-            time.sleep(.01)
-        clock = ctl(arm, "show clock")
-        errors = []
-        generated = int(parsed.get("generated", -1))
-        for key in ("ingress", "terminal", "reclaimed", "samples", "sampled_remote",
-                    "exact_samples"):
-            if int(parsed.get(key, -2)) != generated:
-                errors.append(f"{key}!={generated}")
-        if generated < MIN_SAMPLES:
-            errors.append(f"samples<{MIN_SAMPLES}")
-        for key in ("ingress_drops", "alloc_errors", "reclaim_overflows", "clock_anomalies",
-                    "outstanding", "write_errors", "fq_full_waits"):
-            if int(parsed.get(key, -1)) != 0:
-                errors.append(f"{key}={parsed.get(key)}")
-        if int(parsed.get("exact_overflows", -1)) != 0:
-            errors.append(f"exact_overflows={parsed.get('exact_overflows')}")
-        if int(parsed.get("target_sleeping", -1)) < MIN_SAMPLES:
-            errors.append(f"sleep-confirmed<{MIN_SAMPLES}")
-        if int(parsed.get("exact_sleep_samples", -2)) != int(parsed.get("target_sleeping", -1)):
-            errors.append("sleep-latency-ledger")
-        if int(parsed.get("exact_sleep_overflows", -1)) != 0:
-            errors.append(f"exact_sleep_overflows={parsed.get('exact_sleep_overflows')}")
-        if (arm == "C" and EXPECT_WAKE_DIAGNOSTICS
-                and (int(parsed.get("sleeps_seen", 0)) == 0 or int(parsed.get("writes", 0)) == 0)):
-            errors.append("conditional-wake-not-observed")
-        ctl(arm, "handoff-perf cleanup")
-        payload = {"phase": "latency", "repetition": repetition, "order_index": index,
+                   f"sample-rate 1 seed {SEED} tokens 1 rate {LATENCY_RATE_PPS} "
+                   f"wake-workers {ARMS[arm]['wake_mode']}")
+        warm_show, warm, warm_samples, warm_missing, warm_expected = run_rate_segment(
+            arm, LATENCY_WARMUP_EVENTS, command, deadline, before,
+            case_dir / "warmup-environment-intervals.json")
+        warm_errors = latency_ledger_errors(warm, LATENCY_WARMUP_EVENTS, measured=False)
+        warm_errors += environment_errors([before, *warm_samples], warm_missing, warm_expected)
+        (case_dir / "warmup-show.txt").write_text(warm_show)
+        write_json(case_dir / "warmup-environment-samples.json", warm_samples)
+        if warm_errors:
+            failure = {"phase": "latency-warmup", "block": block + 1, "arm": arm,
+                       "valid": False, "errors": warm_errors, "warmup": warm,
+                       "measured_started": False}
+            write_json(case_dir / "warmup-failure.json", failure)
+            raise RuntimeError("warmup-invalid:" + ";".join(warm_errors))
+        measured_show, measured, measured_samples, measured_missing, measured_expected = run_rate_segment(
+            arm, LATENCY_MEASURED_EVENTS, None, deadline, before,
+            case_dir / "measured-environment-intervals.json")
+        measured_errors = latency_ledger_errors(measured, LATENCY_MEASURED_EVENTS, measured=True)
+        after = environment_sample(arm)
+        save_environment(case_dir, "environment-after", after)
+        environment = environment_errors([before, *warm_samples, *measured_samples, after],
+                                         warm_missing + measured_missing,
+                                         warm_expected + measured_expected)
+        cleanup = ctl(arm, "handoff-perf cleanup")
+        if "handoff-perf token pool cleaned" not in cleanup:
+            measured_errors.append("cleanup-failed")
+        cleanup_show = ctl(arm, "show handoff-perf")
+        cleanup_state = parse_show(cleanup_show)
+        for key in ("running", "tokens_live", "tokens_available", "outstanding", "wake_faults",
+                    "wake_fault_code", "notifying"):
+            if int(cleanup_state.get(key, -1)) != 0:
+                measured_errors.append(f"cleanup-{key}={cleanup_state.get(key)}")
+        elapsed = LATENCY_ARM_TIMEOUT_SECONDS - (deadline - time.monotonic())
+        errors = warm_errors + measured_errors + environment
+        if elapsed > LATENCY_ARM_TIMEOUT_SECONDS:
+            errors.append(f"arm-timeout={elapsed}")
+        payload = {"phase": "latency", "block": block + 1, "order_index": order_index,
                    "arm": arm, "label": ARMS[arm]["label"], "wake_mode": ARMS[arm]["wake_mode"],
-                   "valid": not errors, "errors": errors, **parsed}
-        (case_dir / "start.txt").write_text(started)
-        (case_dir / "warmup-show.txt").write_text(warmup_show)
-        (case_dir / "resume.txt").write_text(resumed)
-        (case_dir / "show.txt").write_text(show)
-        (case_dir / "clock.txt").write_text(clock)
-        (case_dir / "result.json").write_text(json.dumps(payload, indent=2) + "\n")
+                   "valid": not errors, "errors": errors, "seed": SEED, "rate_pps": LATENCY_RATE_PPS,
+                   "warmup_events": LATENCY_WARMUP_EVENTS, "measured_events": LATENCY_MEASURED_EVENTS,
+                   "total_events": int(warm.get("generated", -1)) + int(measured.get("generated", -1)),
+                   "overall_seconds": elapsed, "warmup": warm, "measured": measured,
+                   "cleanup_state": cleanup_state,
+                   "metric_intervals": warm_expected + measured_expected,
+                   "metric_intervals_missing": warm_missing + measured_missing,
+                   "exact_sleep_p50": measured.get("exact_sleep_p50"),
+                   "exact_sleep_p99": measured.get("exact_sleep_p99")}
+        write_json(case_dir / "environment-intervals.json", [*warm_samples, *measured_samples])
+        (case_dir / "measured-show.txt").write_text(measured_show)
+        (case_dir / "cleanup.txt").write_text(cleanup)
+        (case_dir / "cleanup-show.txt").write_text(cleanup_show)
+        write_json(case_dir / "result.json", payload)
         return payload
     finally:
         stop_vpp(arm)
 
 
-def ci_upper(values: list[float]) -> float:
-    if len(values) < 2:
-        return math.inf
-    one_sided_t95 = {2: 6.314, 3: 2.920, 4: 2.353, 5: 2.132}.get(len(values), 1.645)
-    return statistics.fmean(values) + one_sided_t95 * statistics.stdev(values) / math.sqrt(len(values))
+def one_sided_bounds(values: list[float]) -> tuple[float | None, float | None, float | None]:
+    if len(values) != 8:
+        return None, None, None
+    mean = statistics.fmean(values)
+    margin = T95_DF7 * statistics.stdev(values) / math.sqrt(8)
+    return mean, mean - margin, mean + margin
 
 
 def summarize(rows: list[dict[str, object]]) -> dict[str, object]:
-    idle = [row for row in rows if row["phase"] == "idle"]
-    latency = [row for row in rows if row["phase"] == "latency"]
-    summary: dict[str, object] = {"all_cases_valid": all(bool(row["valid"]) for row in rows)}
+    idle = [row for row in rows if row.get("phase") == "idle"]
+    latency = [row for row in rows if row.get("phase") == "latency"]
+    summary_errors: list[str] = []
+    summary: dict[str, object] = {
+        "all_cases_valid": len(rows) > 0 and all(bool(row.get("valid", False)) for row in rows),
+        "errors": summary_errors,
+    }
+    for row in rows:
+        if not bool(row.get("valid", False)):
+            reasons = row.get("errors", ["invalid-row"])
+            summary_errors.append(
+                f"row-{row.get('phase', 'unknown')}-block-{row.get('block', '?')}-{row.get('arm', '?')}:"
+                f"{reasons}")
+
+    def finite_metric(row: dict[str, object], key: str) -> float | None:
+        if not bool(row.get("valid", False)):
+            return None
+        try:
+            value = float(row[key])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        return value if math.isfinite(value) else None
+
     if idle:
-        by_block = {block: {row["arm"]: row for row in idle if row["block"] == block}
-                    for block in sorted({int(row["block"]) for row in idle})}
-        cb = [float(pair["C"]["cpu_single_core_percent"]) - float(pair["B"]["cpu_single_core_percent"])
-              for pair in by_block.values() if "B" in pair and "C" in pair]
-        ba = [float(pair["B"]["cpu_single_core_percent"]) - float(pair["A"]["cpu_single_core_percent"])
-              for pair in by_block.values() if "A" in pair and "B" in pair]
-        ca = [float(pair["C"]["cpu_single_core_percent"]) - float(pair["A"]["cpu_single_core_percent"])
-              for pair in by_block.values() if "A" in pair and "C" in pair]
-        wake_excess = [{key: int(pair["C"]["wake_delta"][key]) - int(pair["B"]["wake_delta"][key])
-                        for key in ("wake_calls", "writes")}
-                       for pair in by_block.values() if "B" in pair and "C" in pair]
-        summary["idle"] = {"C_minus_B_cpu_pp": cb, "C_minus_B_95pct_one_sided_upper_pp": ci_upper(cb),
-                           "B_minus_A_cpu_pp": ba, "B_minus_A_95pct_one_sided_upper_pp": ci_upper(ba),
-                           "C_minus_B_wake_counts": wake_excess,
-                           "C_minus_A_cpu_pp": ca,
-                           "C_minus_A_95pct_one_sided_upper_pp": ci_upper(ca),
-                           "go": ((len(cb) >= 3 and ci_upper(cb) <= .05
-                                   and all(item["wake_calls"] <= 1 and item["writes"] <= 1
-                                           for item in wake_excess))
-                                  or (not cb and len(ca) >= 3 and ci_upper(ca) <= .05))
-                                 and all(bool(row["valid"]) for row in idle)}
+        differences: list[float] = []
+        for block in range(1, 9):
+            a_row = next((row for row in idle if row.get("block") == block and row.get("arm") == "A"), {})
+            c_row = next((row for row in idle if row.get("block") == block and row.get("arm") == "C"), {})
+            a = finite_metric(a_row, "cpu_single_core_percent")
+            c = finite_metric(c_row, "cpu_single_core_percent")
+            if a is None or c is None:
+                summary_errors.append(f"idle-block-{block}:missing-valid-finite-A/C-cpu-metric")
+                continue
+            differences.append(c - a)
+        mean, lower, upper = one_sided_bounds(differences)
+        summary["idle"] = {"C_minus_A_cpu_pp": differences, "mean_pp": mean,
+                           "one_sided_95_lower_pp": lower, "one_sided_95_upper_pp": upper,
+                           "errors": [error for error in summary_errors if error.startswith("idle-")],
+                           "t_df7": T95_DF7, "go": len(differences) == 8 and upper is not None
+                           and upper <= IDLE_UPPER_GATE_PP
+                           and all(bool(row.get("valid", False)) for row in idle)}
     if latency:
-        valid_b = [row for row in latency if row["arm"] == "B" and row["valid"]]
-        valid_c = [row for row in latency if row["arm"] == "C" and row["valid"]]
-        b_p99 = statistics.median(float(row["exact_sleep_p99"]) for row in valid_b) if valid_b else math.inf
-        c_p99 = statistics.median(float(row["exact_sleep_p99"]) for row in valid_c) if valid_c else math.inf
-        b_p50 = statistics.median(float(row["exact_sleep_p50"]) for row in valid_b) if valid_b else math.inf
-        c_p50 = statistics.median(float(row["exact_sleep_p50"]) for row in valid_c) if valid_c else math.inf
-        summary["latency"] = {"B_median_exact_p99_cycles": b_p99, "C_median_exact_p99_cycles": c_p99,
-                              "p99_improvement_fraction": 1 - c_p99 / b_p99 if math.isfinite(b_p99) else None,
-                              "B_median_exact_p50_cycles": b_p50, "C_median_exact_p50_cycles": c_p50,
-                              "go": len(valid_b) == LATENCY_REPS and len(valid_c) == LATENCY_REPS
-                                    and c_p99 <= .8 * b_p99 and c_p50 <= 1.1 * b_p50}
-    summary["power"] = {"status": "INCONCLUSIVE", "reason": "no calibrated external power meter; battery sysfs retained as proxy only"}
+        p99_improvements: list[float] = []
+        p50_regressions: list[float] = []
+        for block in range(1, 9):
+            b_row = next((row for row in latency if row.get("block") == block and row.get("arm") == "B"), {})
+            c_row = next((row for row in latency if row.get("block") == block and row.get("arm") == "C"), {})
+            b99 = finite_metric(b_row, "exact_sleep_p99")
+            c99 = finite_metric(c_row, "exact_sleep_p99")
+            b50 = finite_metric(b_row, "exact_sleep_p50")
+            c50 = finite_metric(c_row, "exact_sleep_p50")
+            if None in (b99, c99, b50, c50):
+                summary_errors.append(f"latency-block-{block}:missing-valid-finite-B/C-quantile")
+                continue
+            assert b99 is not None and c99 is not None and b50 is not None and c50 is not None
+            if b99 <= 0 or b50 <= 0:
+                summary_errors.append(f"latency-block-{block}:nonpositive-B-denominator-p99={b99}-p50={b50}")
+                continue
+            p99_improvements.append((b99 - c99) / b99)
+            p50_regressions.append((c50 - b50) / b50)
+        p99_mean, p99_lower, p99_upper = one_sided_bounds(p99_improvements)
+        p50_mean, p50_lower, p50_upper = one_sided_bounds(p50_regressions)
+        summary["latency"] = {"paired_p99_improvement": p99_improvements, "p99_mean": p99_mean,
+                              "p99_one_sided_95_lower": p99_lower, "p99_one_sided_95_upper": p99_upper,
+                              "paired_p50_regression": p50_regressions, "p50_mean": p50_mean,
+                              "p50_one_sided_95_lower": p50_lower, "p50_one_sided_95_upper": p50_upper,
+                              "errors": [error for error in summary_errors if error.startswith("latency-")],
+                              "t_df7": T95_DF7, "go": len(p99_improvements) == 8
+                              and p99_lower is not None and p50_upper is not None
+                              and p99_lower >= P99_LOWER_GATE and p50_upper <= P50_UPPER_GATE
+                              and all(bool(row.get("valid", False)) for row in latency)}
+    if summary_errors:
+        summary["all_cases_valid"] = False
+    summary["power"] = {"status": "INCONCLUSIVE", "reason": "no calibrated external power meter"}
     return summary
 
 
-def manifest() -> dict[str, object]:
-    idle_orders = ([['A', 'C'], ['C', 'A']] if ARM_FILTER == ['A', 'C'] else
-                   [['A', 'B', 'C'], ['C', 'A', 'B'], ['B', 'C', 'A']])
-    result: dict[str, object] = {"prototype": True, "run_id": RUN_ID, "profile": PROFILE,
-        "phase": PHASE, "seed": SEED, "idle_warmup_seconds": IDLE_WARMUP,
-        "arm_filter": ARM_FILTER, "expect_wake_diagnostics": EXPECT_WAKE_DIAGNOSTICS,
-        "require_performance_go": REQUIRE_PERFORMANCE_GO,
-        "idle_seconds": IDLE_SECONDS, "blocks": BLOCKS, "latency_seconds": LATENCY_SECONDS,
-        "latency_repetitions": LATENCY_REPS, "minimum_latency_samples": MIN_SAMPLES,
-        "idle_orders": idle_orders,
-        "power_claim": "INCONCLUSIVE without external meter", "artifacts": {}}
+def artifact_manifest() -> dict[str, object]:
+    artifacts: dict[str, object] = {}
     for arm in ("A", "B"):
         build = Path(ARMS[arm]["build"])
         files = [build / "bin/vpp", build / "bin/vppctl",
                  build / "lib/aarch64-linux-android/vpp_plugins/handoff_perf_poc_plugin.so"]
         files += [build / "lib/aarch64-linux-android" / name for name in LIBS]
-        result["artifacts"][arm] = {str(path): digest(path) for path in files}
-    patched_source = POC / "work/vpp/src/vlib"
-    unpatched_source = Path("/tmp/sakamoto-p5-unpatched-20260802/src/vlib")
+        artifacts[arm] = {str(path): digest(path) for path in files}
     source_names = ("main.h", "threads.h", "file.c", "buffer_funcs.c")
-    result["source_artifacts"] = {
-        "patched": {str(patched_source / name): digest(patched_source / name) for name in source_names},
-        "unpatched": {str(unpatched_source / name): digest(unpatched_source / name) for name in source_names},
-        "patched_build_cache": digest(PATCHED / "CMakeCache.txt"),
-        "vlib_wake_diagnostics": 0,
-    }
-    return result
+    return {"binaries": artifacts,
+            "sources": {"patched": {str(PATCHED_SOURCE / name): digest(PATCHED_SOURCE / name) for name in source_names},
+                        "unpatched": {str(UNPATCHED_SOURCE / name): digest(UNPATCHED_SOURCE / name) for name in source_names}},
+            "patched_build_cache": digest(PATCHED / "CMakeCache.txt"), "vlib_wake_diagnostics": 0}
 
 
-def main() -> int:
-    if PHASE not in ("idle", "latency", "all"):
-        raise RuntimeError("PHASE must be idle, latency, or all")
-    RESULT.mkdir(parents=True, exist_ok=False)
-    (RESULT / "manifest.json").write_text(json.dumps(manifest(), indent=2) + "\n")
+def staged_paths(arm: str) -> list[tuple[Path, str]]:
+    build = Path(ARMS[arm]["build"])
+    root = remote_root(arm)
+    local = [build / "bin/vpp", build / "bin/vppctl",
+             build / "lib/aarch64-linux-android/vpp_plugins/handoff_perf_poc_plugin.so"]
+    local += [build / "lib/aarch64-linux-android" / name for name in LIBS]
+    remote = [f"{root}/bin/vpp", f"{root}/bin/vppctl", f"{root}/plugins/handoff_perf_poc_plugin.so"]
+    remote += [f"{root}/lib/{name}" for name in LIBS]
+    return list(zip(local, remote))
+
+
+def preflight(result_dir: Path) -> int:
+    result_dir.mkdir(parents=True, exist_ok=False)
+    identity = device_identity()
     stage()
     rows: list[dict[str, object]] = []
     try:
-        if PHASE in ("idle", "all"):
-            if ARM_FILTER == ["A", "C"]:
-                orders = [["A", "C"], ["C", "A"]]
-            else:
-                orders = [["A", "B", "C"], ["C", "A", "B"], ["B", "C", "A"]]
-            for block in range(BLOCKS):
-                for arm in orders[block % len(orders)]:
-                    rows.append(idle_case(block, arm, len(rows)))
-                    (RESULT / "raw.json").write_text(json.dumps(rows, indent=2) + "\n")
-        if PHASE in ("latency", "all"):
-            cases = [(rep, arm) for rep in range(LATENCY_REPS) for arm in ("B", "C")]
-            random.Random(SEED).shuffle(cases)
-            for repetition, arm in cases:
-                rows.append(latency_case(repetition, arm, len(rows)))
-                (RESULT / "raw.json").write_text(json.dumps(rows, indent=2) + "\n")
+        for arm in ("A", "B", "C"):
+            case_dir = result_dir / f"{arm}-{ARMS[arm]['label']}"
+            case_dir.mkdir()
+            start_vpp(arm, case_dir)
+            try:
+                sample = environment_sample(arm)
+                show = ctl(arm, "show handoff-perf")
+                parsed = parse_show(show)
+                errors = environment_errors([sample], 0, 1)
+                for key in ("generated", "ingress", "terminal", "reclaimed", "outstanding",
+                            "write_errors", "fq_full_waits", "wake_faults", "notifying"):
+                    if int(parsed.get(key, 0)) != 0:
+                        errors.append(f"preflight-{key}={parsed.get(key)}")
+                if arm != "A" and int(parsed.get("reported_wake_mode", -1)) != int(ARMS[arm]["wake_mode"]):
+                    errors.append(f"wake-mode={parsed.get('reported_wake_mode')} expected={ARMS[arm]['wake_mode']}")
+                if "generated " not in show:
+                    errors.append("handoff-perf-plugin-unavailable")
+                remote_hashes: dict[str, str] = {}
+                for local, remote in staged_paths(arm):
+                    observed = su(f"sha256sum {remote}").split()[0]
+                    remote_hashes[remote] = observed
+                    if observed != digest(local):
+                        errors.append(f"remote-hash-mismatch={remote}")
+                payload = {"arm": arm, "label": ARMS[arm]["label"],
+                           "configured_wake_mode": None if arm == "A" else ARMS[arm]["wake_mode"],
+                           "valid": not errors, "errors": errors, "remote_hashes": remote_hashes,
+                           "counters": parsed}
+                save_environment(case_dir, "environment", sample)
+                (case_dir / "show.txt").write_text(show)
+                write_json(case_dir / "result.json", payload)
+                rows.append(payload)
+            finally:
+                stop_vpp(arm)
     finally:
         stop_vpp("A")
         stop_vpp("B")
+    summary = {"preflight": True, "device": identity, "timed_arms_started": 0,
+               "all_cases_valid": len(rows) == 3 and all(bool(row["valid"]) for row in rows), "cases": rows}
+    write_json(result_dir / "summary.json", summary)
+    print(json_text({"result": str(result_dir), "summary": summary}), end="")
+    return 0 if summary["all_cases_valid"] else 1
+
+
+def protocol_plan() -> dict[str, object]:
+    return {"protocol": "P6d", "default_action": "plan-only", "seed_hex": hex(SEED),
+            "device": {"model": "Pixel 6a", "android": "16", "api": 36, "adb": str(ADB)},
+            "idle": {"orders": IDLE_ORDERS, "pairs": 8, "warmup_seconds": IDLE_WARMUP_SECONDS,
+                     "sample_seconds": IDLE_SAMPLE_SECONDS, "arms": {"A": ARMS["A"], "C": ARMS["C"]},
+                     "estimator": "100 * delta process CPU time / delta CLOCK_MONOTONIC",
+                     "one_sided_t95_df7": T95_DF7, "upper_gate_pp": IDLE_UPPER_GATE_PP},
+            "latency": {"orders": LATENCY_ORDERS, "pairs": 8, "rate_pps": LATENCY_RATE_PPS,
+                        "events_per_arm": LATENCY_TOTAL_EVENTS, "warmup_events": LATENCY_WARMUP_EVENTS,
+                        "measured_events": LATENCY_MEASURED_EVENTS, "timeout_seconds": LATENCY_ARM_TIMEOUT_SECONDS,
+                        "arms": {"B": ARMS["B"], "C": ARMS["C"]},
+                        "p99_lower_gate": P99_LOWER_GATE, "p50_upper_gate": P50_UPPER_GATE},
+            "fixed_arm_count": 32, "fixed_arm_time_upper_seconds": 32 * 660,
+            "fixed_arm_time_upper": "5h52m plus staging and settlement",
+            "restart_rule": "any invalid arm invalidates the campaign; preserve it and restart from block 1"}
+
+
+def self_test() -> None:
+    assert IDLE_ORDERS == ("AC", "CA", "CA", "AC", "CA", "AC", "AC", "CA")
+    assert LATENCY_ORDERS == ("BC", "CB", "BC", "CB", "CB", "BC", "CB", "BC")
+    assert SEED == 0x5A4B20260802 and LATENCY_TOTAL_EVENTS == 620 and T95_DF7 == 1.894578605
+    assert ARMS["A"]["wake_mode"] == 0  # informational only; A never receives a wake-mode CLI.
+    assert ARMS["B"]["build"] == ARMS["C"]["build"] == PATCHED
+    assert (ARMS["B"]["wake_mode"], ARMS["C"]["wake_mode"]) == (3, 2)
+    assert len(IDLE_ORDERS) * 2 + len(LATENCY_ORDERS) * 2 == 32
+    assert 32 * 660 == 21120
+    mean, lower, upper = one_sided_bounds([0.01] * 8)
+    assert abs(mean - 0.01) < 1e-12 and abs(lower - 0.01) < 1e-12 and abs(upper - 0.01) < 1e-12
+    sample = ("generated 600 bytes 1 local 0 ingress-enqueued 600 ingress-drops 0 alloc-errors 0 "
+              "terminal 600 bytes 1 return-enqueued 0 return-drops 0 reclaimed 600 reclaim-overflows 0 "
+              "clock-anomalies 0 credit-stalls 0 outstanding-packets 0\n"
+              "samples 600 latency-min 1 latency-mean 2.0 latency-p50-upper 2 latency-p95-upper 3 latency-p99-upper 4 latency-max 5\n"
+              "wake-diagnostics calls 1 sleeps-seen 1 pending-claims 0 writes 1 write-errors 0 fq-full-waits 0\n"
+              "wake-state epoch-max 1 faults 0 fault-code 0 awake 2 preparing 0 sleeping 0 notified 0 draining 0 notifying 0\n"
+              "sleep-proof sampled-remote-enqueues 600 target-sleeping 600\n"
+              "exact-latency samples 600 overflows 0 p50 2 p95 3 p99 4\n"
+              "exact-sleep-latency samples 600 overflows 0 p50 2 p95 3 p99 4")
+    assert not latency_ledger_errors(parse_show(sample), 600, measured=True)
+    partial_idle = summarize([
+        {"phase": "idle", "block": 1, "arm": "A", "valid": True,
+         "cpu_single_core_percent": 0.1},
+        {"phase": "idle", "block": 1, "arm": "C", "valid": False,
+         "errors": ["exception"]},
+    ])
+    assert not partial_idle["all_cases_valid"] and not partial_idle["idle"]["go"]
+    assert partial_idle["idle"]["errors"]
+    json.dumps(partial_idle, allow_nan=False)
+    zero_denominators = summarize([
+        {"phase": "latency", "block": 1, "arm": "B", "valid": True,
+         "exact_sleep_p50": 0, "exact_sleep_p99": 0},
+        {"phase": "latency", "block": 1, "arm": "C", "valid": True,
+         "exact_sleep_p50": 1, "exact_sleep_p99": 1},
+    ])
+    assert not zero_denominators["latency"]["go"]
+    assert any("nonpositive-B-denominator" in error for error in zero_denominators["errors"])
+    json.dumps(zero_denominators, allow_nan=False)
+    invalid_none = summarize([
+        {"phase": "latency", "block": 1, "arm": "B", "valid": True,
+         "exact_sleep_p50": 10, "exact_sleep_p99": 20},
+        {"phase": "latency", "block": 1, "arm": "C", "valid": False,
+         "exact_sleep_p50": None, "exact_sleep_p99": None},
+    ])
+    assert not invalid_none["latency"]["go"] and not invalid_none["latency"]["paired_p99_improvement"]
+    json.dumps(invalid_none, allow_nan=False)
+    base_environment = {
+        "online": "0-7", "stable_freq": ["POLICY=policy0", "scaling_governor=schedutil",
+                                             "scaling_min_freq=300000", "scaling_max_freq=1800000"],
+        "freq_config_complete": True, "cpufreq_residency_available": True,
+        "thermal_global_status": 0, "cpu_cooling_states": {"cpu0": 0}, "thermal_throttled": False,
+        "graph_tasks": [
+            {"tid": 1, "name": "vpp_main", "cpu": 0, "cpus_allowed": "0",
+             "voluntary": 0, "involuntary": 0},
+            {"tid": 2, "name": "vpp_wk_0", "cpu": 1, "cpus_allowed": "1",
+             "voluntary": 0, "involuntary": 0},
+        ],
+    }
+    changed_environment = {**base_environment, "stable_freq": [*base_environment["stable_freq"],
+                                                                  "scaling_max_freq=1900000"]}
+    cross_boundary = environment_errors([base_environment, changed_environment], 0, 100)
+    assert "cpufreq-config-changed@1" in cross_boundary
+
+
+def execute(phase: str, result_dir: Path) -> int:
+    result_dir.mkdir(parents=True, exist_ok=False)
+    rows: list[dict[str, object]] = []
+    aborted = False
+
+    def record(case_phase: str, block: int, arm: str, operation: Callable[[], dict[str, object]]) -> bool:
+        try:
+            row = operation()
+        except Exception as error:
+            row = {"phase": case_phase, "block": block + 1, "arm": arm, "valid": False,
+                   "errors": [f"exception:{type(error).__name__}:{error}"]}
+            failure = result_dir / f"failure-{case_phase}-block{block + 1}-{arm}.json"
+            write_json(failure, row)
+        rows.append(row)
+        write_json(result_dir / "raw.json", rows)
+        return bool(row["valid"])
+
+    try:
+        identity = device_identity()
+        manifest = {**protocol_plan(), "run_id": RUN_ID, "phase": phase, "device_observed": identity,
+                    "artifacts": artifact_manifest()}
+        write_json(result_dir / "manifest.json", manifest, default=str)
+        stage()
+        if phase in ("idle", "all"):
+            for block, order in enumerate(IDLE_ORDERS):
+                for arm in order:
+                    if not record("idle", block, arm,
+                                  lambda block=block, arm=arm: idle_case(block, arm, len(rows), result_dir)):
+                        aborted = True
+                        break
+                if aborted:
+                    break
+        if phase in ("latency", "all") and not aborted:
+            for block, order in enumerate(LATENCY_ORDERS):
+                for arm in order:
+                    if not record("latency", block, arm,
+                                  lambda block=block, arm=arm: latency_case(block, arm, len(rows), result_dir)):
+                        aborted = True
+                        break
+                if aborted:
+                    break
+    except Exception as error:
+        rows.append({"phase": "setup", "block": 0, "arm": "setup", "valid": False,
+                     "errors": [f"exception:{type(error).__name__}:{error}"]})
+        write_json(result_dir / "setup-failure.json", rows[-1])
+    finally:
+        for arm in ("A", "B"):
+            try:
+                stop_vpp(arm)
+            except Exception as error:
+                rows.append({"phase": "teardown", "block": 0, "arm": arm, "valid": False,
+                             "errors": [f"exception:{type(error).__name__}:{error}"]})
+        write_json(result_dir / "raw.json", rows)
     summary = summarize(rows)
-    (RESULT / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    print(json.dumps({"result": str(RESULT), "summary": summary}, indent=2))
-    gates_pass = bool(summary["all_cases_valid"])
-    if REQUIRE_PERFORMANCE_GO and PHASE in ("idle", "all"):
-        gates_pass = gates_pass and bool(summary["idle"]["go"])
-    if REQUIRE_PERFORMANCE_GO and PHASE in ("latency", "all"):
-        gates_pass = gates_pass and bool(summary["latency"]["go"])
-    return 0 if gates_pass else 1
+    write_json(result_dir / "summary.json", summary)
+    print(json_text({"result": str(result_dir), "summary": summary}), end="")
+    required = [name for name in ("idle", "latency") if phase in (name, "all")]
+    return 0 if summary["all_cases_valid"] and all(
+        bool(summary.get(name, {}).get("go")) for name in required) else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--execute", action="store_true", help="explicitly run the fixed formal device protocol")
+    action.add_argument("--preflight", action="store_true", help="stage and run untimed A/B/C device controls only")
+    action.add_argument("--self-test", action="store_true", help="run device-free protocol/parser checks")
+    action.add_argument("--plan", action="store_true", help="print the frozen protocol (default)")
+    parser.add_argument("--phase", choices=("idle", "latency", "all"), default="all")
+    parser.add_argument("--result-dir", type=Path, default=DEFAULT_RESULT)
+    args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        print("P6d runner self-test: PASS")
+        return 0
+    if args.preflight:
+        return preflight(args.result_dir)
+    if not args.execute:
+        print(json_text(protocol_plan(), default=str), end="")
+        return 0
+    return execute(args.phase, args.result_dir)
 
 
 if __name__ == "__main__":
