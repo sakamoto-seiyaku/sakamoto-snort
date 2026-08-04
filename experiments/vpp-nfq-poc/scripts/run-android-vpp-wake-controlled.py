@@ -41,8 +41,8 @@ COOLING_INTERVAL_SECONDS = 5 * 60
 MAX_COOLING_SECONDS = 2 * 60 * 60
 SKIN_MAX_C = 37.0
 SKIN_TREND_TOLERANCE_C = 0.1
-AGGREGATE_IDLE_MIN_PERCENT = 790.0
-PROCESS_CPU_MAX_PERCENT = 5.0
+AGGREGATE_IDLE_REFERENCE_PERCENT = 790.0
+PROCESS_CPU_OBSERVATION_REFERENCE_PERCENT = 5.0
 MANAGED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 RESTORE_COMMANDS = {
@@ -465,18 +465,33 @@ class EnvironmentGuard:
             if ticks < 0:
                 raise GuardError(f"process ticks decreased for pid {pid}: {ticks}")
             percent = 100.0 * ticks / hz / elapsed
-            if percent <= PROCESS_CPU_MAX_PERCENT:
+            if percent <= PROCESS_CPU_OBSERVATION_REFERENCE_PERCENT:
                 return
             if process is None:
-                raise GuardError(
-                    f"process pid {pid} used upper-bound {percent:.3f}% but has no ps metadata")
+                busy.append({
+                    "pid": pid,
+                    "ticks": ticks,
+                    "single_core_percent": percent,
+                    "reason": reason,
+                    "identity": identity,
+                    "metadata_missing": True,
+                    "observation_unquantifiable": True,
+                    "qualification_gate": False,
+                    "reference_percent": PROCESS_CPU_OBSERVATION_REFERENCE_PERCENT,
+                    "status": "over-reference-metadata-missing",
+                })
+                return
             cmdline = str(process["cmdline"])
             if any(root in cmdline for root in REMOTE_VPP_ROOTS):
                 return
             busy.append({"pid": pid, "uid": int(process["uid"]),
                          "comm": str(process["comm"]), "cmdline": cmdline,
                          "single_core_percent": percent, "reason": reason,
-                         "identity": identity})
+                         "identity": identity, "qualification_gate": False,
+                         "reference_percent": PROCESS_CPU_OBSERVATION_REFERENCE_PERCENT,
+                         "metadata_missing": False,
+                         "observation_unquantifiable": False,
+                         "status": "over-reference-observation"})
 
         for pid in sorted(set(before_process) & set(after_process)):
             before_ticks, before_comm, before_starttime = before_process[pid]
@@ -505,13 +520,8 @@ class EnvironmentGuard:
             if ticks < 0:
                 raise GuardError(f"process ticks decreased for pid {pid}: {ticks}")
             lifetime_upper_percent = 100.0 * ticks / hz / elapsed
-            if lifetime_upper_percent <= PROCESS_CPU_MAX_PERCENT:
+            if lifetime_upper_percent <= PROCESS_CPU_OBSERVATION_REFERENCE_PERCENT:
                 continue
-            if not comm.startswith("kworker/"):
-                raise GuardError(
-                    "unquantifiable-before-only-churn:"
-                    f"pid={pid} stat_comm={comm!r} starttime={starttime} "
-                    f"lifetime_ticks={ticks} upper_bound_percent={lifetime_upper_percent:.3f}")
             process = before_ps.get(pid)
             churn_observations.append({
                 "pid": pid,
@@ -522,9 +532,39 @@ class EnvironmentGuard:
                 "lifetime_ticks": ticks,
                 "lifetime_ticks_as_window_upper_bound_percent": lifetime_upper_percent,
                 "window_percent": None,
-                "covered_by": "aggregate_idle",
-                "reason": "before-only-kworker-lifetime-unquantifiable",
+                "covered_by": "aggregate-idle-observation",
+                "observation_unquantifiable": True,
+                "qualification_gate": False,
+                "reference_percent": PROCESS_CPU_OBSERVATION_REFERENCE_PERCENT,
+                "reason": ("before-only-kworker-lifetime-unquantifiable"
+                           if comm.startswith("kworker/")
+                           else "before-only-user-lifetime-unquantifiable"),
             })
+        aggregate_idle = sum(idle_fractions.values())
+        aggregate_observation = {
+            "qualification_gate": False,
+            "reference_percent": AGGREGATE_IDLE_REFERENCE_PERCENT,
+            "observed_percent": aggregate_idle,
+            "status": ("at-or-above-reference" if aggregate_idle
+                       >= AGGREGATE_IDLE_REFERENCE_PERCENT else "below-reference"),
+        }
+        unquantifiable_count = (sum(bool(item.get("observation_unquantifiable")) for item in busy)
+                                + sum(bool(item.get("observation_unquantifiable"))
+                                      for item in churn_observations))
+        total_observations = len(busy) + len(churn_observations)
+        process_observation = {
+            "qualification_gate": False,
+            "reference_percent": PROCESS_CPU_OBSERVATION_REFERENCE_PERCENT,
+            "status": ("unquantifiable-observations-present" if unquantifiable_count
+                       else "observations-over-reference-present" if total_observations
+                       else "no-observations-over-reference"),
+            "observation_count": total_observations,
+            "busy_observation_count": len(busy),
+            "churn_observation_count": len(churn_observations),
+            "unquantifiable_observation_count": unquantifiable_count,
+            "observations": busy,
+            "churn_observations": churn_observations,
+        }
         return {"sample_seconds": elapsed,
                 "sample_seconds_semantics": (
                     "CLOCK_MONOTONIC host wait between endpoint commands; process ticks span "
@@ -534,8 +574,10 @@ class EnvironmentGuard:
                     "before /proc/stat is the final before section and after /proc/stat is the "
                     "first after section, excluding guard endpoint collection overhead"),
                 "per_cpu_idle_percent": idle_fractions,
-                "aggregate_idle_percent_of_800": sum(idle_fractions.values()),
+                "aggregate_idle_percent_of_800": aggregate_idle,
+                "aggregate_idle_observation": aggregate_observation,
                 "non_test_processes_over_5_percent": busy,
+                "process_cpu_observation": process_observation,
                 "process_churn_observations": churn_observations}
 
     def readiness_snapshot(self, label: str) -> dict[str, Any]:
@@ -556,10 +598,6 @@ class EnvironmentGuard:
                 errors.append(f"cpu-cooling-active={active_cooling}")
             if skin_c > SKIN_MAX_C:
                 errors.append(f"VIRTUAL-SKIN={skin_c:.3f}>{SKIN_MAX_C:.1f}")
-            if cpu["aggregate_idle_percent_of_800"] < AGGREGATE_IDLE_MIN_PERCENT:
-                errors.append(f"aggregate-idle={cpu['aggregate_idle_percent_of_800']:.3f}<790")
-            if cpu["non_test_processes_over_5_percent"]:
-                errors.append("non-test-process-over-5-percent")
             if cpufreq != self.baseline_cpufreq:
                 errors.append("cpufreq-vector-differs-from-before-audit")
             snapshot = {"timestamp_utc": utc_now(), "label": label,
@@ -1137,9 +1175,19 @@ def self_test() -> None:
         "lifetime_ticks": 30,
         "lifetime_ticks_as_window_upper_bound_percent": 6.0,
         "window_percent": None,
-        "covered_by": "aggregate_idle",
+        "covered_by": "aggregate-idle-observation",
+        "observation_unquantifiable": True,
+        "qualification_gate": False,
+        "reference_percent": 5.0,
         "reason": "before-only-kworker-lifetime-unquantifiable",
     }]
+    assert synthetic_result["aggregate_idle_observation"] == {
+        "qualification_gate": False, "reference_percent": 790.0,
+        "observed_percent": 800.0, "status": "at-or-above-reference"}
+    assert synthetic_result["process_cpu_observation"]["qualification_gate"] is False
+    assert synthetic_result["process_cpu_observation"]["status"] == (
+        "unquantifiable-observations-present")
+    assert synthetic_result["process_cpu_observation"]["observation_count"] == 2
     assert not any(root in entry["cmdline"] for root in REMOTE_VPP_ROOTS
                    for entry in synthetic_result["non_test_processes_over_5_percent"])
     invalid_before = synthetic_before.replace(
@@ -1149,13 +1197,84 @@ def self_test() -> None:
     with (mock.patch.object(cpu_guard, "output", side_effect=[invalid_before, synthetic_after]),
           mock.patch.object(time, "sleep"),
           mock.patch.object(time, "monotonic", side_effect=[0.0, 5.0])):
-        try:
-            cpu_guard.cpu_window()
-        except GuardError as error:
-            assert "unquantifiable-before-only-churn" in str(error)
-            assert "upper_bound_percent=6.000" in str(error)
-        else:
-            raise AssertionError("high-tick non-kworker before-only churn must fail closed")
+        ordinary_churn_result = cpu_guard.cpu_window()
+    ordinary_observation = ordinary_churn_result["process_churn_observations"][0]
+    assert ordinary_observation["reason"] == "before-only-user-lifetime-unquantifiable"
+    assert ordinary_observation["observation_unquantifiable"] is True
+    assert ordinary_observation["qualification_gate"] is False
+
+    metadata_missing_after = synthetic_after.replace(
+        "30 1000 vpp /system/bin/not-a-p6-root\n", "")
+    with (mock.patch.object(cpu_guard, "output",
+                            side_effect=[synthetic_before, metadata_missing_after]),
+          mock.patch.object(time, "sleep"),
+          mock.patch.object(time, "monotonic", side_effect=[0.0, 5.0])):
+        metadata_missing_result = cpu_guard.cpu_window()
+    missing = metadata_missing_result["non_test_processes_over_5_percent"][0]
+    assert missing == {
+        "pid": 30, "ticks": 30, "single_core_percent": 6.0,
+        "reason": "after-only-total-ticks-upper-bound",
+        "identity": {"starttime": 30, "stat_comm": "vpp"},
+        "metadata_missing": True, "observation_unquantifiable": True,
+        "qualification_gate": False, "reference_percent": 5.0,
+        "status": "over-reference-metadata-missing",
+    }
+    assert metadata_missing_result["process_cpu_observation"]["status"] == (
+        "unquantifiable-observations-present")
+
+    def cpu_payload(aggregate: float, include_busy: bool) -> dict[str, Any]:
+        payload = json.loads(json.dumps(synthetic_result))
+        payload["aggregate_idle_percent_of_800"] = aggregate
+        payload["aggregate_idle_observation"]["observed_percent"] = aggregate
+        payload["aggregate_idle_observation"]["status"] = (
+            "at-or-above-reference" if aggregate >= 790 else "below-reference")
+        if not include_busy:
+            payload["non_test_processes_over_5_percent"] = []
+            payload["process_cpu_observation"]["observations"] = []
+            payload["process_cpu_observation"]["busy_observation_count"] = 0
+            payload["process_cpu_observation"]["observation_count"] = len(
+                payload["process_churn_observations"])
+            payload["process_cpu_observation"]["status"] = (
+                "unquantifiable-observations-present")
+        return payload
+
+    for aggregate, include_busy in ((789.0, False), (800.0, True), (789.0, True)):
+        readiness_guard = EnvironmentGuard(Path("/device-free-readiness"), preflight_only=True)
+        readiness_guard.baseline_cpufreq = ["stable"]
+        with (mock.patch.object(readiness_guard, "screen_off"),
+              mock.patch.object(readiness_guard, "assert_quiet_packages"),
+              mock.patch.object(readiness_guard, "assert_no_vpp"),
+              mock.patch.object(readiness_guard, "output", return_value=thermal),
+              mock.patch.object(readiness_guard, "cpufreq_vector", return_value=["stable"]),
+              mock.patch.object(readiness_guard, "cpu_window",
+                                return_value=cpu_payload(aggregate, include_busy)),
+              mock.patch.object(readiness_guard, "flush_events")):
+            readiness = readiness_guard.readiness_snapshot("cpu-observation-test")
+        assert readiness["valid"] and not readiness["errors"]
+        assert readiness["cpu"]["aggregate_idle_observation"]["qualification_gate"] is False
+        assert readiness["cpu"]["process_cpu_observation"]["qualification_gate"] is False
+    with tempfile.TemporaryDirectory(prefix="p6-guard-missing-ps-test-") as temporary:
+        readiness_guard = EnvironmentGuard(Path(temporary) / "result", preflight_only=True)
+        readiness_guard.audit_dir.mkdir(parents=True)
+        readiness_guard.baseline_cpufreq = ["stable"]
+        with (mock.patch.object(readiness_guard, "screen_off"),
+              mock.patch.object(readiness_guard, "assert_quiet_packages"),
+              mock.patch.object(readiness_guard, "assert_no_vpp"),
+              mock.patch.object(readiness_guard, "output", return_value=thermal),
+              mock.patch.object(readiness_guard, "cpufreq_vector", return_value=["stable"]),
+              mock.patch.object(readiness_guard, "cpu_window",
+                                return_value=metadata_missing_result)):
+            readiness = readiness_guard.readiness_snapshot("metadata-missing")
+        assert readiness["valid"] and not readiness["errors"]
+        persisted = json.loads(
+            (readiness_guard.audit_dir / "readiness-metadata-missing.json").read_text())
+        persisted_snapshot = persisted["commands"][-1]["snapshot"]
+        assert persisted_snapshot["valid"]
+        assert persisted_snapshot["cpu"]["process_cpu_observation"]["status"] == (
+            "unquantifiable-observations-present")
+        manifest = json.loads(
+            (readiness_guard.audit_dir / "sha256-manifest.json").read_text())
+        assert "readiness-metadata-missing.json" in manifest["files"]
     current_pgid, current_starttime = EnvironmentGuard.host_process_identity(os.getpid())
     assert current_pgid == os.getpgrp() and current_starttime > 0
     with tempfile.TemporaryDirectory(prefix="p6-guard-timeout-test-") as temporary:
