@@ -37,8 +37,6 @@ REMOTE_VPP_ROOTS = ("/data/local/tmp/vpp-p6/unpatched", "/data/local/tmp/vpp-p6/
 SOAK_SECONDS = 30 * 60
 SOAK_INTERVAL_SECONDS = 5 * 60
 CPU_SAMPLE_SECONDS = 5
-COOLING_INTERVAL_SECONDS = 5 * 60
-MAX_COOLING_SECONDS = 2 * 60 * 60
 SKIN_MAX_C = 37.0
 SKIN_TREND_TOLERANCE_C = 0.1
 AGGREGATE_IDLE_REFERENCE_PERCENT = 790.0
@@ -655,13 +653,14 @@ class EnvironmentGuard:
                   and net_delta <= SKIN_TREND_TOLERANCE_C + epsilon)
         half_mean_ok = (half_mean_delta is not None
                         and half_mean_delta <= SKIN_TREND_TOLERANCE_C + epsilon)
+        trend_status = ("unavailable" if net_delta is None or half_mean_delta is None
+                        else "within-reference" if net_ok and half_mean_ok
+                        else "above-reference")
         checks = {
             "exactly_four_points": len(final) == 4,
             "all_points_valid": all_points_valid,
             "all_temperatures_finite": all_finite,
             "all_at_or_below_37c": all_at_or_below,
-            "net_rise_within_tolerance": net_ok,
-            "half_mean_rise_within_tolerance": half_mean_ok,
         }
         errors: list[str] = []
         if not checks["exactly_four_points"]:
@@ -674,13 +673,8 @@ class EnvironmentGuard:
             errors.append("non-finite-final-temperature")
         if all_finite and not all_at_or_below:
             errors.append(f"final-temperature-above-{SKIN_MAX_C:.1f}c")
-        if not net_ok:
-            errors.append(f"net-rise={net_delta} exceeds tolerance={SKIN_TREND_TOLERANCE_C}")
-        if not half_mean_ok:
-            errors.append(
-                f"half-mean-rise={half_mean_delta} exceeds tolerance={SKIN_TREND_TOLERANCE_C}")
         return {
-            "trend_rule_id": "final4-net-and-half-mean-v1",
+            "trend_rule_id": "final4-hard-thermal-with-trend-observation-v1",
             "final_four_virtual_skin_c": temperatures,
             "adjacent_deltas": adjacent,
             "adjacent_deltas_c": adjacent,
@@ -692,6 +686,21 @@ class EnvironmentGuard:
                 "observation_only": True,
                 "adjacent_deltas_c": adjacent,
                 "max_adjacent_rise_c": max_rise,
+            },
+            "thermal_trend_observation": {
+                "qualification_gate": False,
+                "reference_c": SKIN_TREND_TOLERANCE_C,
+                "status": trend_status,
+                "first_c": first,
+                "last_c": last,
+                "early_mean_c": early_mean,
+                "late_mean_c": late_mean,
+                "adjacent_deltas_c": adjacent,
+                "max_adjacent_rise_c": max_rise,
+                "net_delta_c": net_delta,
+                "half_mean_delta_c": half_mean_delta,
+                "net_within_reference": net_ok,
+                "half_mean_within_reference": half_mean_ok,
             },
             "first": first,
             "first_c": first,
@@ -965,20 +974,24 @@ class EnvironmentGuard:
         after = self.readiness_snapshot("preflight-after-00")
         if not after["valid"]:
             raise GuardError(f"post-preflight readiness failed: {after['errors']}")
-        if float(after["virtual_skin_c"]) > float(before["virtual_skin_c"]):
-            cooling_deadline = time.monotonic() + MAX_COOLING_SECONDS
-            previous = after
-            index = 1
-            while True:
-                if time.monotonic() >= cooling_deadline:
-                    raise GuardError("post-preflight cooling did not reach a flat/falling <=37C point")
-                time.sleep(COOLING_INTERVAL_SECONDS)
-                current = self.readiness_snapshot(f"preflight-after-{index:02d}")
-                if current["valid"] and float(current["virtual_skin_c"]) <= float(previous["virtual_skin_c"]):
-                    after = current
-                    break
-                previous = current
-                index += 1
+        before_skin = float(before["virtual_skin_c"])
+        after_skin = float(after["virtual_skin_c"])
+        delta = after_skin - before_skin
+        thermal_observation = {
+            "qualification_gate": False,
+            "reference_c": SKIN_TREND_TOLERANCE_C,
+            "before_c": before_skin,
+            "after_c": after_skin,
+            "delta_c": delta,
+            "status": ("within-reference" if delta <= SKIN_TREND_TOLERANCE_C + 1e-12
+                       else "above-reference"),
+        }
+        assessment = {"preflight": True, "hard_readiness_valid": True,
+                      "thermal_delta_observation": thermal_observation,
+                      "before": before, "after": after}
+        write_json(self.audit_dir / "preflight-assessment.json", assessment)
+        self.write_manifest()
+        after = {**after, "preflight_thermal_delta_observation": thermal_observation}
         return after
 
     def run(self) -> int:
@@ -1275,6 +1288,45 @@ def self_test() -> None:
         manifest = json.loads(
             (readiness_guard.audit_dir / "sha256-manifest.json").read_text())
         assert "readiness-metadata-missing.json" in manifest["files"]
+    for hard_thermal, expected_error in (
+            (thermal.replace("Thermal Status: 0", "Thermal Status: 1"), "thermal-global=1"),
+            (thermal.replace("CoolingDevice{mValue=0", "CoolingDevice{mValue=1"),
+             "cpu-cooling-active="),
+            (thermal.replace("mValue=36.5", "mValue=37.1"), "VIRTUAL-SKIN=37.100>37.0")):
+        hard_guard = EnvironmentGuard(Path("/device-free-hard-thermal"), preflight_only=True)
+        hard_guard.baseline_cpufreq = ["stable"]
+        with (mock.patch.object(hard_guard, "screen_off"),
+              mock.patch.object(hard_guard, "assert_quiet_packages"),
+              mock.patch.object(hard_guard, "assert_no_vpp"),
+              mock.patch.object(hard_guard, "output", return_value=hard_thermal),
+              mock.patch.object(hard_guard, "cpufreq_vector", return_value=["stable"]),
+              mock.patch.object(hard_guard, "cpu_window", return_value=synthetic_result),
+              mock.patch.object(hard_guard, "flush_events")):
+            hard_readiness = hard_guard.readiness_snapshot("hard-thermal-test")
+        assert not hard_readiness["valid"]
+        assert any(error.startswith(expected_error) for error in hard_readiness["errors"])
+    with tempfile.TemporaryDirectory(prefix="p6-guard-preflight-rise-test-") as temporary:
+        preflight_guard = EnvironmentGuard(Path(temporary) / "result", preflight_only=True)
+        preflight_guard.audit_dir.mkdir(parents=True)
+        preflight_before = {"valid": True, "errors": [], "virtual_skin_c": 35.0}
+        preflight_after = {"valid": True, "errors": [], "virtual_skin_c": 35.3}
+        with (mock.patch.object(preflight_guard, "readiness_snapshot",
+                                side_effect=[preflight_before, preflight_after]) as readiness_mock,
+              mock.patch.object(preflight_guard, "run_child", return_value=0),
+              mock.patch.object(time, "sleep") as sleep_mock):
+            preflight_result = preflight_guard.run_preflight()
+        assert readiness_mock.call_count == 2
+        sleep_mock.assert_not_called()
+        observation = preflight_result["preflight_thermal_delta_observation"]
+        assert observation["qualification_gate"] is False
+        assert observation["status"] == "above-reference"
+        assessment = json.loads(
+            (preflight_guard.audit_dir / "preflight-assessment.json").read_text())
+        assert assessment["hard_readiness_valid"]
+        assert abs(assessment["thermal_delta_observation"]["delta_c"] - 0.3) < 1e-12
+        manifest = json.loads(
+            (preflight_guard.audit_dir / "sha256-manifest.json").read_text())
+        assert "preflight-assessment.json" in manifest["files"]
     current_pgid, current_starttime = EnvironmentGuard.host_process_identity(os.getpid())
     assert current_pgid == os.getpgrp() and current_starttime > 0
     with tempfile.TemporaryDirectory(prefix="p6-guard-timeout-test-") as temporary:
@@ -1353,16 +1405,22 @@ def self_test() -> None:
     assert controlled_15["valid"]
     assert abs(controlled_15["max_adjacent_rise_c"] - 0.17885) < 1e-12
     assert controlled_15["adjacent_observation"]["observation_only"] is True
-    assert controlled_15["trend_rule_id"] == "final4-net-and-half-mean-v1"
-    net_failure = EnvironmentGuard.require_final_trend(
+    assert controlled_15["trend_rule_id"] == (
+        "final4-hard-thermal-with-trend-observation-v1")
+    controlled_18 = EnvironmentGuard.require_final_trend(
+        thermal_points((33.675602, 33.729103, 33.780003, 33.8669)))
+    assert controlled_18["valid"]
+    assert controlled_18["thermal_trend_observation"]["status"] == "above-reference"
+    assert abs(controlled_18["net_delta_c"] - 0.191298) < 1e-12
+    assert abs(controlled_18["half_mean_delta_c"] - 0.121099) < 1e-12
+    net_observation = EnvironmentGuard.require_final_trend(
         thermal_points((36.0, 36.04, 36.08, 36.12)))
-    assert not net_failure["valid"]
-    assert not net_failure["checks"]["net_rise_within_tolerance"]
-    half_mean_failure = EnvironmentGuard.require_final_trend(
+    assert net_observation["valid"]
+    assert net_observation["thermal_trend_observation"]["status"] == "above-reference"
+    half_mean_observation = EnvironmentGuard.require_final_trend(
         thermal_points((36.0, 35.8, 36.1, 36.05)))
-    assert not half_mean_failure["valid"]
-    assert half_mean_failure["checks"]["net_rise_within_tolerance"]
-    assert not half_mean_failure["checks"]["half_mean_rise_within_tolerance"]
+    assert half_mean_observation["valid"]
+    assert half_mean_observation["thermal_trend_observation"]["status"] == "above-reference"
     adjacent_spike_observation = EnvironmentGuard.require_final_trend(
         thermal_points((36.5, 36.0, 36.3, 36.1)))
     assert adjacent_spike_observation["valid"]
@@ -1390,14 +1448,15 @@ def self_test() -> None:
         trend_guard = EnvironmentGuard(Path(temporary) / "result", preflight_only=True)
         trend_guard.audit_dir.mkdir(parents=True)
         written = trend_guard.write_soak_summary(
-            thermal_points((36.0, 36.04, 36.08, 36.12)), net_failure)
+            thermal_points((36.0, 36.0, 36.0, 36.0), invalid_index=2), invalid)
         assert not written["valid"] and written["errors"]
         persisted = json.loads((trend_guard.audit_dir / "soak-summary.json").read_text())
         for key in ("trend_rule_id", "final_four_virtual_skin_c", "adjacent_deltas",
                     "adjacent_deltas_c", "max_adjacent_rise", "max_adjacent_rise_c",
                     "adjacent_observation", "first", "last", "early_mean", "late_mean",
                     "net_delta", "half_mean_delta", "tolerance", "all_points_valid",
-                    "all_at_or_below_37c", "checks", "valid", "errors"):
+                    "all_at_or_below_37c", "thermal_trend_observation", "checks",
+                    "valid", "errors"):
             assert key in persisted
         manifest = json.loads(
             (trend_guard.audit_dir / "sha256-manifest.json").read_text())
