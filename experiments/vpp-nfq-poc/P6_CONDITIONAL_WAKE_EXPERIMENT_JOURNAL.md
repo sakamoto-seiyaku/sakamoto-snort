@@ -853,5 +853,58 @@ B/C libvnet=50bde9c1782ba199432beeabf733d4ad73db32d65d8c413728acb5782ee17c8d
 B/C CMakeCache=b08b41e769cc022e5b624f8dcfcb870d9bafe8c13455f676f719eb5f2c70e222
 ```
 
-Formal attempt 03 remains blocked pending a final independent read-only gate on this complete correction and
-evidence set. It must restart from idle block 1; no attempt-02 sample may be appended.
+At that point, formal attempt 03 remained blocked pending a final independent read-only gate on this complete
+correction and evidence set. It had to restart from idle block 1; no attempt-02 sample could be appended.
+
+## 2026-08-04 — controlled-19 qualification, controlled-20 invalid formal, and controlled-21 final formal
+
+The aligned-gate qualification was completed before the fresh formal campaign. The untimed preflight
+`experiments/vpp-nfq-poc/results/2026-08-04/vpp-wake-p6-controlled-19-qualification-preflight` passed all three
+arms (`all_cases_valid=true`, `timed_arms_started=0`). The corresponding controlled-19 environmental qualification
+passed hard readiness before and after the preflight and all seven soak points (`valid=true`, every point at or below
+37 C); the thermal trend was retained as a non-gating observation. The qualification artifacts are preserved and
+are not formal performance evidence.
+
+Controlled-20 was a fresh formal campaign and is invalid. All sixteen idle arms completed, but the idle estimate was
+`mean=+0.077159 pp`, one-sided 95% upper `+0.085287 pp`, above the pre-registered `+0.05 pp` gate. Latency arm
+`28-block7-C-p6-patched-conditional` failed closed at measured environment interval 63 with
+`environment-invalid:thermal-throttled@63` (Android global thermal status became 1; the CPU cooling states were
+zero). The campaign summary has `all_cases_valid=false`, no final latency quantiles, and power remains
+`INCONCLUSIVE` because no calibrated external meter was available. Its result directory and failure artifact are
+retained exactly; no arm or statistic from controlled-20 is appended to any later campaign.
+
+Controlled-21 restarted from block 1 with a fresh result directory and completed all fixed 32 arms: 16/16 idle and
+16/16 latency arms are valid, with no failure artifact. The formal environment gates stayed valid (seven soak points,
+all at or below 37 C; preflight and post-preflight hard readiness valid; thermal trend observation within reference).
+The protocol result is **non-GO**, despite `all_cases_valid=true`:
+
+* Idle paired `C-A` process-CPU difference: mean `+0.076355 pp`; one-sided 95% upper `+0.091950 pp` versus the
+  `<= +0.05 pp` gate (**fail**).
+* Latency paired p99 improvement: mean `-0.010542` and one-sided 95% lower `-0.031099` (about `-3.11%`) versus
+  the `>= 0.20` (`20%`) gate (**fail**).
+* Latency paired p50 regression: mean `-0.000208` and one-sided 95% upper `+0.000540` (about `+0.054%`) versus
+  the `<= 0.10` (`10%`) gate (**pass**).
+* External power remains **INCONCLUSIVE**: no calibrated external power meter was available.
+
+The runner source and frozen-arm protocol were unchanged for this campaign. The source commit was
+`551d09c30f68b594e9e5704c6509998536983e1d`; the formal result directory is
+`experiments/vpp-nfq-poc/results/2026-08-04/vpp-wake-p6-controlled-21-formal`. The result manifest records the
+Pixel 6a / Android 16 / API 36 device, exact arm orders, artifact hashes, `require_sleeping=true`, and the
+restart rule. The formal summary and raw array are retained for independent re-analysis.
+
+The runner's restore result was valid with original Vending state 1 restored, dexopt restoration persisted, and no
+VPP process or runtime socket/PID residue. A post-run wrapper-only device audit observed Vending enabled for user 0,
+Android thermal status 0, and zero CPU thermal cooling states. These checks do not turn the non-GO performance result
+into a GO; they only establish clean device restoration.
+
+```text
+controlled-19 preflight summary=ee39b323d8aa481df308496f7640044a78890be706c047d6bdc8f4791ebb5638
+controlled-19 soak summary=0f22b806bf80d22c60f610a3fecb837bcde2cf509ecf6b1db059de8069709bfa
+controlled-20 formal summary=preserved under .../vpp-wake-p6-controlled-20-formal/formal/summary.json (all_cases_valid=false)
+controlled-21 formal manifest=91b8aab29f724fd721feb70dec285f60f3315c8d1c315c9d5482665d5eee1c33
+controlled-21 formal summary=afea98f8bc809351870a317cc705556f5c84039bcad582f2b139af8b52606652
+controlled-21 formal raw=9ddd93b897a94d70fad90452c64de68fcf9fdca3b3e5f9aa6377b303fcc7bec6
+```
+
+The invalid-formal restart rule remains in force: controlled-20 is preserved but cannot be reused or appended, and
+controlled-21 is the only complete formal campaign eligible for the final P6d conclusion.
