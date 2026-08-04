@@ -32,11 +32,15 @@ P3 proved route, ownership, and ledger correctness with throwaway copied-prefix 
 the production no-copy/live-buffer integration. Its prefix length, pool depth, queue count, and worker count
 are scoped experimental parameters, not normative implementation constants.
 
-Conditional worker wake is not accepted as part of this ADR. The POC proved that sleeping-worker
-publish-to-terminal p99 improved by about 44%, but the tested diagnostics-disabled handshake failed the
-pre-registered idle CPU gate relative to exact-unpatched VPP. The wake mechanism therefore remains a
-separate prototype and release gate: an optimized new artifact must pass both idle non-regression and
-sleep-confirmed latency regression before adoption. Persistent/per-packet wake remains diagnostic-only.
+Conditional worker wake is not accepted as part of this ADR. An early P5 diagnostic observed about 44%
+sleeping-worker publish-to-terminal p99 improvement, but that result was not a product acceptance result.
+The final P6d campaign-21 completed all 32 formal arms validly and still failed the pre-registered gates:
+idle C-A one-sided 95% upper `+0.091950 pp` exceeded `+0.05 pp`, while sleep-confirmed p99 improvement
+had a one-sided 95% lower bound of `-3.110%` versus the `20%` target. The p50 regression gate passed at
+about `+0.054%`; external power remained inconclusive. The wake mechanism therefore remains research-only,
+and persistent/per-packet wake remains diagnostic-only. A future adoption discussion requires a new mechanism
+hypothesis, independently hashed artifact, and a fresh pre-registered campaign that passes both idle and
+sleep-confirmed latency gates.
 
 ## Consequences
 

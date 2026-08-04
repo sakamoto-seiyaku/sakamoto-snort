@@ -1,6 +1,6 @@
 # Android / VPP 当前现状与架构交接
 
-状态：当前权威交接文档；Android/VPP 基线 2026-07-19，handoff POC 决策更新于 2026-08-02。
+状态：当前权威交接文档；Android/VPP 基线 2026-07-19，handoff POC 决策更新于 2026-08-04。
 
 范围：Android 优先的产品基础、VPP 引入、root/NFQUEUE 与
 VpnService/TUN 两种运行路径。Linux 的实现和功能验证暂缓，除非后续设计决策明确恢复。
@@ -44,12 +44,15 @@ Rust ABI 和 Rust buffer-return wrapper 的段落已由 ADR-0006 取代，不再
 - P4：选择 hybrid：owner-local packet 留在 origin fast path，mismatch 才进入 bounded canonical
   processing 与 Canonical Return。shared-TX/trylock direct-hit median 仅约 `52.6%` mixed、`60.9%`
   all-remote，且 CPU/context 更差，正式拒绝。pool128 只证明 credit depth 需要定容，不是产品常量。
-- P5：conditional wake 的 sleep-confirmed p99 `505332→282672` cycles，改善 `44.06%`，机制方向
-  **GO**；但 diagnostics-disabled final patch 相对 exact-unpatched 的 idle C-A mean `+0.057600 pp`、
-  one-sided 95% upper `+0.125564 pp`，未满足 `upper<=+0.05 pp`，当前实现 **release NO-GO**。
-  功耗没有外部功率仪，继续为 **INCONCLUSIVE**。
-- 本轮相同 artifact 不再追加样本。conditional wake 只有在优化产生新的 hashed artifact 后，才启动
-  独立、预注册的 idle/latency prototype；当前 patch 和 mode3 persistent wake 不进入产品实现。
+- P5 的早期诊断曾观察到 sleep-confirmed p99 `505332→282672` cycles、约 `44.06%` 改善；这只是
+  机制方向证据，不是产品收益结论。diagnostics-disabled final patch 当时已经未通过 idle CPU gate。
+- P6d 最终正式 campaign-21 在 Pixel 6a / Android 16/API 36 上完成 32/32 个有效 arms，但协议结果为
+  **non-GO**：idle C-A 的单侧 95% 上界 `+0.091950 pp`（门槛 `<=+0.05 pp`）失败，sleep-confirmed
+  p99 改善下界 `-3.110%`（门槛 `>=20%`）失败；p50 回归上界约 `+0.054%` 通过。功耗没有外部功率仪，
+  仍为 **INCONCLUSIVE**。逐臂数据、环境审计、恢复记录和 hash 见
+  `experiments/vpp-nfq-poc/P6_CONDITIONAL_WAKE_EXPERIMENT_JOURNAL.md` 及其 campaign-21 result directory。
+- 因此当前 conditional-wake patch 和 mode3 persistent wake 不进入产品实现，也不再给旧 artifact 追加
+  样本。只有新的机制假设、新 hashed artifact 和独立预注册协议，才可能重新开启这条研究路径。
 
 ## 1. 本文怎么用
 
@@ -531,9 +534,10 @@ buffer pool，所有 graph、handoff、completion 与 return 都在 C/VPP owners
 lifecycle、configuration、immutable policy snapshot、status 与 diagnostics。teardown 必须先 quiesce
 ingress，在 completion channel 仍可用时有界排空 obligated buffers，再关闭 Adapter generation。
 
-conditional wake 的机制方向保留但实现未接受：当前 P5 artifact 的 sleep-confirmed latency GO，
-相对 exact-unpatched idle CPU NO-GO。新的 handshake 必须生成独立 hashed artifact，重新通过预注册
-idle/latency gate；当前 patch 与 persistent/per-packet wake 不得成为 release 实现。
+conditional wake 的机制方向保留为历史研究，但当前实现未接受：P6d final campaign-21 的 32 个 arms
+全部有效，仍未通过预注册 idle CPU 与 sleep-confirmed p99 gates。当前 patch 与 persistent/per-packet
+wake 不得成为 release 实现；只有新机制假设、新 hashed artifact 和新的预注册协议同时通过，才可重新
+讨论调度实现。
 
 
 buffer allocation/ingress 还必须证明 user-space single materialization：包括 TUN direct

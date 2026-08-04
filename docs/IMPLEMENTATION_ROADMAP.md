@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-07-19
+更新时间：2026-08-04
 状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `Sakamoto` / `SAKAMOTO` 为准；OpenSpec 仅作历史归档）
 
 ## 0. 阅读指南
@@ -184,13 +184,15 @@ archived runtime 或创建孤立的数据面实现任务。
 - [DONE 2026-07-19] SAKAMOTO-29 RuntimeService reboot recovery：RuntimeService 活跃时 reboot，启动后无 root daemon、app process、control socket、双栈 hook 且无自动拉起，fresh start/stop recovery 通过；OEM boot policy 与 reboot 中断安装未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-30 APK signature/key rotation boundary：不同签名 key 的同 package APK 被 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` 拒绝，原 package 保持存在，原签名 APK RuntimeService recovery 通过；正式 release key rotation、签名 lineage 与 staged migration 未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-31 RuntimeService notification permission denial：撤销 `POST_NOTIFICATIONS` 后 `startForeground`、root daemon 与 RuntimeService 启动仍通过，受控停止无 daemon/socket/NFQUEUE 残留；恢复授权后 fresh recovery 通过。该结论仅覆盖 Android 16 Pixel 6a debug APK，不等同于 release notification UX 验收。
-- [HOLD 2026-08-02] SAKAMOTO-32 VPP experimental NFQUEUE plugin audit and hardening（Android-only）：
+- [HOLD 2026-08-04] SAKAMOTO-32 VPP experimental NFQUEUE plugin audit and hardening（Android-only）：
   Pixel 6a P0-P5 已收口 multi-queue Initial Placement、约 50% scoped canonical mismatch、bounded
   canonical-return/origin verdict correctness、shared-TX rejection、credit-depth sensitivity 与
   conditional-wake latency/idle split decision。架构采用 ADR-0006 的 VPP-native Adapter hot path，
   但生产准入继续 HOLD：真实 verdict failure debt/teardown、完整 L3 direct materialization、IPv4/IPv6/
-  fragment/Q=W、production capacity/credit、长期 soak，以及优化后新 wake artifact 尚未验收。当前
-  wake patch 因 idle CPU gate 失败不得进入 release；功耗无外部功率仪，仍为 INCONCLUSIVE。
+  fragment/Q=W、production capacity/credit 和长期 soak 仍未验收。P6d final campaign-21 已完成 32/32
+  有效 arms，但 idle C-A 单侧 95% 上界 `+0.091950 pp` 超过 `+0.05 pp`，sleep-confirmed p99 下界
+  `-3.110%` 低于 `20%` 目标；p50 回归上界 `+0.054%` 通过。当前 wake patch 因有效正式实验
+  non-GO 不得进入 release；功耗无外部功率仪，仍为 INCONCLUSIVE。
 - [NOW 2026-07-19] Android L4 Product Release definition：按 `docs/product/ANDROID_L4_PRODUCT_PLAN.md`
   收口 Android-only、Root/VPN Runtime Profile、Basic L4、Product UI、content、help、release 和
   community feedback；当前先稳定核心产品接口并推进 Root/NFQUEUE 数据面 vertical slice，详细
@@ -209,10 +211,11 @@ archived runtime 或创建孤立的数据面实现任务。
   handoff，在 bounded reassembly worker co-locate/reassemble，再把 policy-ready packet 交给首片
   五元组选择的最终 owner；验证双向首次同 owner、corrective-handoff fault path、fragment
   disorder/duplicate/overlap/timeout、queue congestion 和 worker skew。
-- [NOTE] Conditional wake 只保留机制方向：旧 artifact 的 sleep-confirmed p99 改善约 44%，但 final
-  patch 相对 exact-unpatched 的 idle CPU gate 失败。后续必须先产生优化后的新 hashed artifact，再以
-  独立预注册 prototype 同时验收 idle non-regression、latency regression、write-failure recovery 和
-  widened transition-race stress；不得继续给旧 artifact 追加样本或把 mode3 persistent wake 产品化。
+- [NOTE] Conditional wake 当前只保留为研究方向：P5 早期诊断的约 44% sleep-confirmed p99 改善未被最终
+  正式协议复现；P6d campaign-21 的 32 个 arms 全部有效，但 idle CPU 与 p99 gates 均 non-GO，p50
+  gate 通过，功耗 inconclusive。当前 patch 和 mode3 persistent wake 不产品化；若未来重新开启，必须
+  先提出新的机制假设，生成新的 hashed artifact，并用独立预注册协议验收 idle、latency、恢复和
+  transition-race 条件，不能给旧 artifact 追加样本。
 - [NEXT] 第一条 vertical slice：安装/授权 → 启动保护 → 选择应用 → 创建 IP/端口规则 →
   在 Activity 看到实际阻止与原因 → 删除规则并验证恢复。切片必须同时覆盖 UI、Rust control
   plane、VPP dataplane、测试、帮助和 release evidence。

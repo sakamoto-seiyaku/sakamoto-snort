@@ -1,6 +1,6 @@
 # Per-worker single-owner flow runtime
 
-状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20。
+状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20，conditional-wake 证据更新于 2026-08-04。
 
 Sakamoto 的目标 VPP dataplane 使用 per-worker、per-flow single-owner 模型：Root/NFQUEUE
 与 VPN/TUN Packet Capture Adapter 在进入需要 flow state 的 worker graph 前执行稳定分流，
@@ -101,10 +101,12 @@ CPU/context activity 比 canonical return 更差。选定的 hybrid topology 保
 只对 mismatch 使用 bounded canonical processing + Canonical Return。POC 中 32/128 descriptor depth
 只证明 credit sizing 是一等容量参数，不构成生产常量。
 
-Conditional wake 方向单独保留为 HOLD：sleep-confirmed publish-to-terminal p99 的正式结果改善约
-44%，但 diagnostics-disabled final handshake 相对 exact-unpatched 的 idle CPU gate 失败。当前 wake
-patch 和 mode3 persistent wake 都不得进入 release；只有优化后的新 artifact 同时通过预注册 idle
-non-regression 与 latency regression，才可更新本决策的调度实现。
+Conditional wake 方向继续保持 HOLD。P5 早期诊断曾观察到 sleep-confirmed publish-to-terminal p99 约
+44% 改善，但 P6d final campaign-21 的 32 个 formal arms 全部有效后，idle C-A 单侧 95% 上界仍为
+`+0.091950 pp`（门槛 `<=+0.05 pp`，失败），sleep-confirmed p99 改善下界为 `-3.110%`（门槛
+`>=20%`，失败）；p50 回归上界约 `+0.054%` 通过，功耗因无外部功率仪 inconclusive。当前 wake
+patch 和 mode3 persistent wake 都不得进入 release；只有新的机制假设、新 hashed artifact 和新的
+预注册 idle/latency campaign 同时通过，才可更新本决策的调度实现。
 
 IP 分片采用 fork VPP handoff 的两阶段结构，但不照抄其 hash 实现：
 
