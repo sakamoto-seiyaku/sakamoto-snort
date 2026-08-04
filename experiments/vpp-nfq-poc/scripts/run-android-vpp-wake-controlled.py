@@ -601,21 +601,29 @@ class EnvironmentGuard:
             adjacent.append(None if earlier is None or later is None else later - earlier)
         deltas_finite = len(adjacent) == 3 and all(delta is not None for delta in adjacent)
         max_rise = max(delta for delta in adjacent if delta is not None) if deltas_finite else None
-        net_delta = (temperatures[-1] - temperatures[0]
-                     if all_finite and temperatures[0] is not None
-                     and temperatures[-1] is not None else None)
+        first = temperatures[0] if all_finite else None
+        last = temperatures[-1] if all_finite else None
+        early_mean = ((temperatures[0] + temperatures[1]) / 2
+                      if all_finite and temperatures[0] is not None
+                      and temperatures[1] is not None else None)
+        late_mean = ((temperatures[2] + temperatures[3]) / 2
+                     if all_finite and temperatures[2] is not None
+                     and temperatures[3] is not None else None)
+        net_delta = last - first if first is not None and last is not None else None
+        half_mean_delta = (late_mean - early_mean
+                           if early_mean is not None and late_mean is not None else None)
         epsilon = 1e-12
-        adjacent_ok = (max_rise is not None
-                       and max_rise <= SKIN_TREND_TOLERANCE_C + epsilon)
         net_ok = (net_delta is not None
                   and net_delta <= SKIN_TREND_TOLERANCE_C + epsilon)
+        half_mean_ok = (half_mean_delta is not None
+                        and half_mean_delta <= SKIN_TREND_TOLERANCE_C + epsilon)
         checks = {
             "exactly_four_points": len(final) == 4,
             "all_points_valid": all_points_valid,
             "all_temperatures_finite": all_finite,
             "all_at_or_below_37c": all_at_or_below,
-            "max_adjacent_rise_within_tolerance": adjacent_ok,
             "net_rise_within_tolerance": net_ok,
+            "half_mean_rise_within_tolerance": half_mean_ok,
         }
         errors: list[str] = []
         if not checks["exactly_four_points"]:
@@ -628,16 +636,36 @@ class EnvironmentGuard:
             errors.append("non-finite-final-temperature")
         if all_finite and not all_at_or_below:
             errors.append(f"final-temperature-above-{SKIN_MAX_C:.1f}c")
-        if not adjacent_ok:
-            errors.append(
-                f"max-adjacent-rise={max_rise} exceeds tolerance={SKIN_TREND_TOLERANCE_C}")
         if not net_ok:
             errors.append(f"net-rise={net_delta} exceeds tolerance={SKIN_TREND_TOLERANCE_C}")
+        if not half_mean_ok:
+            errors.append(
+                f"half-mean-rise={half_mean_delta} exceeds tolerance={SKIN_TREND_TOLERANCE_C}")
         return {
+            "trend_rule_id": "final4-net-and-half-mean-v1",
             "final_four_virtual_skin_c": temperatures,
+            "adjacent_deltas": adjacent,
             "adjacent_deltas_c": adjacent,
+            "net_delta": net_delta,
             "net_delta_c": net_delta,
+            "max_adjacent_rise": max_rise,
             "max_adjacent_rise_c": max_rise,
+            "adjacent_observation": {
+                "observation_only": True,
+                "adjacent_deltas_c": adjacent,
+                "max_adjacent_rise_c": max_rise,
+            },
+            "first": first,
+            "first_c": first,
+            "last": last,
+            "last_c": last,
+            "early_mean": early_mean,
+            "early_mean_c": early_mean,
+            "late_mean": late_mean,
+            "late_mean_c": late_mean,
+            "half_mean_delta": half_mean_delta,
+            "half_mean_delta_c": half_mean_delta,
+            "tolerance": SKIN_TREND_TOLERANCE_C,
             "tolerance_c": SKIN_TREND_TOLERANCE_C,
             "all_points_valid": all_points_valid,
             "all_at_or_below_37c": all_at_or_below,
@@ -1197,22 +1225,36 @@ def self_test() -> None:
                 for index, value in enumerate(values)]
 
     controlled_12 = EnvironmentGuard.require_final_trend(
-        thermal_points((36.4, 36.2, 36.1, 36.144602)))
+        thermal_points((29.611002, 29.577553, 29.54075, 29.585352)))
     assert controlled_12["valid"]
     assert abs(controlled_12["adjacent_deltas_c"][-1] - 0.044602) < 1e-12
     assert controlled_12["net_delta_c"] < 0
-    adjacent_failure = EnvironmentGuard.require_final_trend(
-        thermal_points((36.0, 36.0, 36.0, 36.101)))
-    assert not adjacent_failure["valid"]
-    assert not adjacent_failure["checks"]["max_adjacent_rise_within_tolerance"]
+    controlled_15 = EnvironmentGuard.require_final_trend(
+        thermal_points((29.921251, 30.100101, 30.03795, 29.89235)))
+    assert controlled_15["valid"]
+    assert abs(controlled_15["max_adjacent_rise_c"] - 0.17885) < 1e-12
+    assert controlled_15["adjacent_observation"]["observation_only"] is True
+    assert controlled_15["trend_rule_id"] == "final4-net-and-half-mean-v1"
     net_failure = EnvironmentGuard.require_final_trend(
         thermal_points((36.0, 36.04, 36.08, 36.12)))
     assert not net_failure["valid"]
-    assert net_failure["checks"]["max_adjacent_rise_within_tolerance"]
     assert not net_failure["checks"]["net_rise_within_tolerance"]
+    half_mean_failure = EnvironmentGuard.require_final_trend(
+        thermal_points((36.0, 35.8, 36.1, 36.05)))
+    assert not half_mean_failure["valid"]
+    assert half_mean_failure["checks"]["net_rise_within_tolerance"]
+    assert not half_mean_failure["checks"]["half_mean_rise_within_tolerance"]
+    adjacent_spike_observation = EnvironmentGuard.require_final_trend(
+        thermal_points((36.5, 36.0, 36.3, 36.1)))
+    assert adjacent_spike_observation["valid"]
+    assert adjacent_spike_observation["max_adjacent_rise_c"] > 0.2
+    assert adjacent_spike_observation["net_delta_c"] < 0
+    assert adjacent_spike_observation["half_mean_delta_c"] < 0
     boundary = EnvironmentGuard.require_final_trend(
-        thermal_points((36.0, 36.1, 36.0, 36.1)))
+        thermal_points((36.0, 36.0, 36.1, 36.1)))
     assert boundary["valid"] and boundary["tolerance_c"] == 0.1
+    assert abs(boundary["net_delta_c"] - 0.1) < 1e-12
+    assert abs(boundary["half_mean_delta_c"] - 0.1) < 1e-12
     invalid = EnvironmentGuard.require_final_trend(
         thermal_points((36.0, 36.0, 36.0, 36.0), invalid_index=2))
     assert not invalid["valid"] and not invalid["all_points_valid"]
@@ -1232,8 +1274,10 @@ def self_test() -> None:
             thermal_points((36.0, 36.04, 36.08, 36.12)), net_failure)
         assert not written["valid"] and written["errors"]
         persisted = json.loads((trend_guard.audit_dir / "soak-summary.json").read_text())
-        for key in ("final_four_virtual_skin_c", "adjacent_deltas_c", "net_delta_c",
-                    "max_adjacent_rise_c", "tolerance_c", "all_points_valid",
+        for key in ("trend_rule_id", "final_four_virtual_skin_c", "adjacent_deltas",
+                    "adjacent_deltas_c", "max_adjacent_rise", "max_adjacent_rise_c",
+                    "adjacent_observation", "first", "last", "early_mean", "late_mean",
+                    "net_delta", "half_mean_delta", "tolerance", "all_points_valid",
                     "all_at_or_below_37c", "checks", "valid", "errors"):
             assert key in persisted
         manifest = json.loads(
