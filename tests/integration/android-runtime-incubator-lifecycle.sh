@@ -108,7 +108,8 @@ ps -A -o PID,UID,args | while read -r pid ps_uid args; do
     token=\$(tr -d '[:space:]' <"\$token_file" 2>/dev/null) || continue
     echo "\$token" | grep -Eq '^[0-9A-Fa-f-]{36}$' || continue
     case "\$args" in *"\$startup"*) ;; *) continue ;; esac
-    env=\$(runcon u:r:ksu:s0 sh -c "tr '\\0' '\\n' </proc/\$pid/environ 2>/dev/null" 2>/dev/null) || continue
+    env=\$(runcon u:r:ksu:s0 cat "/proc/\$pid/environ" 2>/dev/null \
+      | tr '\\0' '\\n') || continue
     printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_OWNER_TOKEN=\$token" || continue
     printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_RUNTIME_DIR=\$runtime_dir" || continue
     printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_RUNTIME_PROFILE=\$profile" || continue
@@ -305,9 +306,11 @@ service_uid="$(adb_cmd shell su 0 sh -c "grep ^Uid: /proc/$service_pid/status" \
   | tr -d '\r' | awk '{print $2}')"
 [[ "$activity_uid" == "$app_uid" && "$service_uid" == "$app_uid" ]] \
   || { echo "Activity/service process UID identity mismatch" >&2; exit 1; }
-activity_cmdline="$(adb_cmd shell su 0 sh -c "tr '\0' ' ' </proc/$activity_pid/cmdline" \
+activity_cmdline="$(adb_cmd shell su 0 sh -c "runcon u:r:ksu:s0 cat /proc/$activity_pid/cmdline \
+  | tr '\0' ' '" \
   | tr -d '\r')"
-service_cmdline="$(adb_cmd shell su 0 sh -c "tr '\0' ' ' </proc/$service_pid/cmdline" \
+service_cmdline="$(adb_cmd shell su 0 sh -c "runcon u:r:ksu:s0 cat /proc/$service_pid/cmdline \
+  | tr '\0' ' '" \
   | tr -d '\r')"
 grep -Fq "$package" <<<"$activity_cmdline"
 grep -Fq "$package:runtime" <<<"$service_cmdline"
