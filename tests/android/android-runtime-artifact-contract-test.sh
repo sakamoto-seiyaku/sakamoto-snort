@@ -9,7 +9,21 @@ if [[ ! -f "$valid_stage/bin/vpp" || ! -f "$valid_stage/bin/vppctl" ]]; then
   valid_stage="$repo_root/experiments/vpp-nfq-poc/work/android-nfq-two-lane-stage"
 fi
 tmp_dir="$(mktemp -d)"
-trap 'rtk rm -rf "$tmp_dir"' EXIT
+build_dir="$repo_root/app/android-runtime/build"
+build_backup="$tmp_dir/build-backup"
+build_was_present=0
+restore_build() {
+  local exit_code=$?
+  if [[ "$build_was_present" == 1 ]]; then
+    rtk rm -rf "$build_dir"
+    rtk mv "$build_backup" "$build_dir"
+  else
+    rtk rm -rf "$build_dir"
+  fi
+  rtk rm -rf "$tmp_dir"
+  exit "$exit_code"
+}
+trap restore_build EXIT
 
 # A stage without VPP core must not produce an APK. Packet adapters are not a
 # build input for SAKAMOTO-67.
@@ -80,5 +94,28 @@ if rtk grep -Eq 'nfqueue_poc|tun_poc' <<<"$entries"; then
   echo "APK promoted an experiment Adapter artifact" >&2
   exit 1
 fi
+
+# The provenance check extracts a fresh pinned archive into build/. Verify the
+# APK boundary creates that parent itself rather than relying on a retained
+# generated checkout directory.
+if [[ -d "$build_dir" ]]; then
+  build_was_present=1
+  rtk mv "$build_dir" "$build_backup"
+fi
+if [[ -e "$build_dir" ]]; then
+  echo "unable to remove generated Android build directory for clean-build gate" >&2
+  exit 1
+fi
+set +e
+VPP_RUNTIME_STAGE_DIR="$valid_stage" "$build_script" >"$tmp_dir/clean-build.log" 2>&1
+clean_build_rc=$?
+set -e
+if [[ "$clean_build_rc" != 0 ]]; then
+  rtk cat "$tmp_dir/clean-build.log" >&2
+  echo "APK build failed when app/android-runtime/build was absent" >&2
+  exit 1
+fi
+[[ -f "$build_dir/outputs/sakamoto-runtime-debug.apk" ]] \
+  || { echo "clean-build gate did not produce an APK" >&2; exit 1; }
 
 echo "android runtime core artifact contract seam: PASS"

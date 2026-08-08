@@ -126,6 +126,9 @@ recorded_source_tree_digest="$(provenance_value sourceTreeSha256)"
 recorded_base_archive_digest="$(provenance_value baseArchiveSha256)"
 recorded_base_tree_digest="$(provenance_value baseTreeSha256)"
 recorded_overlay_digest="$(provenance_value overlaySha256)"
+overlay_script="$repo_root/experiments/vpp-nfq-poc/scripts/apply-vpp-android-overlay.sh"
+[[ -f "$overlay_script" ]] || die "repository VPP overlay script is missing: $overlay_script"
+actual_overlay_digest="$(sha256sum "$overlay_script" | awk '{print $1}')"
 [[ "$source_revision" == "$expected_source_revision" ]] \
   || die "runtime stage source revision is not the pinned product revision: $source_revision"
 [[ "$source_status" == "committed-snapshot" ]] \
@@ -148,6 +151,9 @@ git -C "$source_origin_repo" cat-file -e "$source_revision^{commit}" 2>/dev/null
   || die "runtime stage base tree digest is missing from provenance"
 [[ "$recorded_overlay_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
   || die "runtime stage overlay digest is missing from provenance"
+if [[ "$stage_dir_explicit" == 1 && "$recorded_overlay_digest" != "$actual_overlay_digest" ]]; then
+  die "runtime stage overlay digest does not match the repository overlay script"
+fi
 actual_base_archive_digest="$(git -C "$source_origin_repo" archive --format=tar --prefix=./ \
   "$source_revision" | sha256sum | awk '{print $1}')"
 [[ "$actual_base_archive_digest" == "$recorded_base_archive_digest" ]] \

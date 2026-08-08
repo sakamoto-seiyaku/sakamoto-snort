@@ -26,7 +26,9 @@ public final class AndroidRuntimeContractTest {
         ownershipInspectionKeepsIdentityInThePublicSeam();
         pidIdentityUsesPrivilegedProcContext();
         rootProbeUsesPrivilegedContextAndFailsClosed();
-        ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied();
+        ownershipInspectionBlocksLiveUnreadableEnvironment();
+        ownershipScanRechecksProcAfterReadRaces();
+        ownershipScanBlocksMatchingIdentityOnMismatchedExecutable();
         ownershipInspectionRejectsSameProfileMultiplicity();
         recordedPidRequiresAnExhaustiveSoleOwnerScan();
         launchShellTransitionFailsClosedUntilStableVpp();
@@ -404,9 +406,23 @@ public final class AndroidRuntimeContractTest {
                                 new RuntimeOwnershipReconciliation.CommandResult(125, ""));
         check(probeFailure == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
                 "a privileged probe/permission failure stays UNKNOWN");
+
+        RuntimeOwnershipReconciliation.PidIdentity vanishedDuringIdentity =
+                RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
+                        (profile, command, timeout) -> {
+                            if (command.startsWith("runcon u:r:ksu:s0 sh -c 'if kill -0")) {
+                                return new RuntimeOwnershipReconciliation.CommandResult(0, "");
+                            }
+                            check(command.contains("proc_probe_status=$?"),
+                                    "strong PID identity rechecks privileged proc presence after reads");
+                            return new RuntimeOwnershipReconciliation.CommandResult(2, "");
+                        });
+        check(vanishedDuringIdentity
+                        == RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                "a PID that vanishes during strong identity validation is already gone");
     }
 
-    private static void ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied() {
+    private static void ownershipInspectionBlocksLiveUnreadableEnvironment() {
         RuntimeOwnershipReconciliation.ProfileSpec spec = ownershipSpec();
         final String[] scanCommand = {""};
         RuntimeOwnershipReconciliation.OwnershipAudit live =
@@ -433,12 +449,12 @@ public final class AndroidRuntimeContractTest {
                     check(!command.contains("if ! test -r \"$proc/environ\""),
                             "root ownership scan has no unprivileged outer environ check");
                     return new RuntimeOwnershipReconciliation.CommandResult(
-                            10, "VPP_OWNER_COUNT=1\nVPP_OWNER_PID=4242\n");
+                            127, "VPP_OWNER_COUNT=0\nVPP_STRONG_IDENTITY_UNVERIFIED=1\n");
                 });
-        check(live.isVerifiedLive(),
-                "strong readable identity remains live when root /proc/environ is denied");
-        check(live.pid == 4242L,
-                "strong identity adoption preserves the audited PID");
+        check(live.isUnknown(),
+                "a live process with unreadable root /proc/environ remains unknown");
+        check("runtime_ownership_unverified".equals(live.errorCode),
+                "unreadable root /proc/environ has an explicit unverifiable error");
 
         final String[] mismatchOutput = {""};
         RuntimeOwnershipReconciliation.OwnershipAudit mismatch =
@@ -450,6 +466,42 @@ public final class AndroidRuntimeContractTest {
                 "a strong identity mismatch remains fail-closed when environment is denied");
         check(mismatchOutput[0].contains("VPP_STRONG_IDENTITY_MISMATCH"),
                 "ownership scan exposes a bounded strong-identity mismatch result");
+    }
+
+    private static void ownershipScanRechecksProcAfterReadRaces() {
+        String command = RuntimeOwnershipReconciliation.buildOwnershipScanCommand(ownershipSpec());
+        check(command.contains("proc_presence_status=$?"),
+                "every bounded proc read records the privileged recheck status");
+        check(command.contains(
+                        "case \"$proc_presence_status\" in 1) : ;; 0|*) uncertain=1 ;; esac"),
+                "only a status-1 disappearance is ignored; live/recheck failures stay unknown");
+        check(!command.contains(
+                        "if ! runcon u:r:ksu:s0 test -d \"$proc\"; then continue; fi"),
+                "a failed privileged existence recheck is not blindly treated as vanished");
+        check(command.contains("env_status=$?"),
+                "environment reader status remains explicit after the recheck");
+        check(command.contains("[ \"$env_status\" -ne 0 ]"),
+                "a live unreadable environment remains an uncertain identity");
+        check(command.contains("hash_line=$(") && command.contains("hash_status=$?"),
+                "hash reader status remains explicit before accepting executable identity");
+        check(command.contains("$snapshot_two_status\" in 0) exit 0"),
+                "a transition whose second snapshot is empty is treated as gone");
+    }
+
+    private static void ownershipScanBlocksMatchingIdentityOnMismatchedExecutable() {
+        String command = RuntimeOwnershipReconciliation.buildOwnershipScanCommand(ownershipSpec());
+        int shellBranch = command.indexOf("elif [ \"$exe\" = '/system/bin/sh' ]");
+        int identityBranch = shellBranch < 0 ? -1 : command.indexOf("else ", shellBranch);
+        check(identityBranch >= 0,
+                "ownership scan has an explicit non-shell executable branch");
+        String nonShell = command.substring(identityBranch);
+        check(nonShell.contains("/proc/$pid/environ"),
+                "mismatched executable candidates are checked against their environment identity");
+        check(nonShell.contains("strong_mismatch=1"),
+                "matching token/profile/runtime on an old executable blocks as unknown");
+        check(nonShell.contains("owner_status") && nonShell.contains("runtime_status")
+                        && nonShell.contains("profile_status"),
+                "unrelated shell/audit commands are filtered by all identity fields");
     }
 
     private static void ownershipInspectionRejectsSameProfileMultiplicity() {

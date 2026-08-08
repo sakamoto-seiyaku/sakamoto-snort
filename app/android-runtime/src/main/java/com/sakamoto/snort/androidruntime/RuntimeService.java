@@ -60,6 +60,13 @@ public final class RuntimeService extends VpnService {
     private static final int OWNERSHIP_RETRY_ATTEMPTS = 2;
     private static final int ROOT_COMMAND_UNAVAILABLE = -125;
 
+    private enum WaitResult {
+        GONE,
+        TIMED_OUT,
+        MISMATCH,
+        UNKNOWN
+    }
+
     private final Object stateLock = new Object();
     private final ExecutorService lifecycle = new ThreadPoolExecutor(
             1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8), runnable -> {
@@ -883,33 +890,70 @@ public final class RuntimeService extends VpnService {
                     "recorded PID identity changed; refusing to kill it");
         }
         if (identity == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN) {
-            return CleanupResult.failure(pid,
-                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
-                            ? "root_authorization_required" : "cleanup_failed",
-                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
-                            ? "recorded PID cannot be audited without root authorization"
-                            : "recorded PID identity could not be verified; refusing cleanup");
+            return cleanupIdentityFailure(pid,
+                    "recorded PID identity could not be verified before TERM");
         }
         // RuntimeService is the process supervisor. Product stop never sends
         // a CLI `quit`; TERM/KILL are the only lifecycle signals.
-        if (pid > 0L) {
+        // A missing PID is already gone. Never send TERM to a stale/reused
+        // numeric PID merely because the in-process handle or state file
+        // still remembers it.
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH && pid > 0L) {
             runPlatformCommand("kill -TERM " + pid, 2L);
         }
         if (process != null && process.isAlive()) {
             process.destroy();
         }
-        if (!waitUntilGone(process, pid, STOP_TERM_MILLIS)) {
-            if (pid > 0L) {
+        WaitResult termResult = waitUntilGone(process, pid, STOP_TERM_MILLIS);
+        if (termResult == WaitResult.UNKNOWN) {
+            return cleanupIdentityFailure(pid,
+                    "recorded PID identity became unverifiable while waiting after TERM");
+        }
+        if (termResult == WaitResult.MISMATCH) {
+            return CleanupResult.failure(pid,
+                    "recorded PID identity changed while waiting after TERM; refusing KILL");
+        }
+        if (termResult == WaitResult.TIMED_OUT) {
+            // Re-run the complete privileged identity probe immediately
+            // before KILL. Missing means gone; only an exact MATCH may be
+            // signalled, preventing stale PID reuse from receiving KILL.
+            identity = validatePid(pid);
+            if (identity == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN) {
+                return cleanupIdentityFailure(pid,
+                        "recorded PID identity could not be verified before KILL");
+            }
+            if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISMATCH) {
+                return CleanupResult.failure(pid,
+                        "recorded PID identity changed before KILL; refusing to kill it");
+            }
+            if (identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH && pid > 0L) {
                 runPlatformCommand("kill -KILL " + pid, 2L);
             }
             if (process != null && process.isAlive()) {
                 process.destroyForcibly();
             }
         }
-        if (!waitUntilGone(process, pid, STOP_KILL_MILLIS)) {
+        WaitResult killResult = termResult == WaitResult.GONE
+                ? WaitResult.GONE : waitUntilGone(process, pid, STOP_KILL_MILLIS);
+        if (killResult == WaitResult.UNKNOWN) {
+            return cleanupIdentityFailure(pid,
+                    "recorded PID identity became unverifiable after KILL");
+        }
+        if (killResult == WaitResult.MISMATCH) {
+            return CleanupResult.failure(pid,
+                    "recorded PID identity changed after KILL; refusing cleanup");
+        }
+        if (killResult != WaitResult.GONE) {
             return CleanupResult.failure(pid, "VPP process remained active after bounded stop");
         }
         return removeAndVerifyProfile(profile, pid, process);
+    }
+
+    private CleanupResult cleanupIdentityFailure(long pid, String detail) {
+        boolean unavailable = activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable();
+        return CleanupResult.failure(pid, unavailable ? "root_authorization_required"
+                        : "cleanup_failed",
+                unavailable ? "recorded PID cannot be audited without root authorization" : detail);
     }
 
     private CleanupResult removeAndVerifyProfile(File profile, long pid, Process process) {
@@ -920,7 +964,7 @@ public final class RuntimeService extends VpnService {
         // published its PID. Audit candidates whenever no in-process handle
         // remains, including a stale durable PID, before deleting residue.
         if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISSING
-                && process == null && profile != null && profile.exists()) {
+                && !processAlive(process) && profile != null && profile.exists()) {
             audit = auditOwnedProcess(profile);
         }
         RuntimeOwnershipReconciliation.CleanupDecision decision =
@@ -1006,20 +1050,37 @@ public final class RuntimeService extends VpnService {
         return RuntimeOwnershipReconciliation.inspect(spec, ownershipCommandRunner());
     }
 
-    private boolean waitUntilGone(Process process, long pid, long timeoutMillis) {
+    private WaitResult waitUntilGone(Process process, long pid, long timeoutMillis) {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         do {
-            if (!processAlive(process) && (pid <= 0L || processGone(pid))) {
-                return true;
+            RuntimeOwnershipReconciliation.PidIdentity identity = processGone(pid);
+            if (identity == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN) {
+                return WaitResult.UNKNOWN;
+            }
+            if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISMATCH) {
+                return WaitResult.MISMATCH;
+            }
+            if (!processAlive(process) && identity
+                    == RuntimeOwnershipReconciliation.PidIdentity.MISSING) {
+                return WaitResult.GONE;
             }
             try {
                 Thread.sleep(100L);
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
-                return false;
+                return WaitResult.TIMED_OUT;
             }
         } while (System.currentTimeMillis() < deadline);
-        return !processAlive(process) && (pid <= 0L || processGone(pid));
+        RuntimeOwnershipReconciliation.PidIdentity identity = processGone(pid);
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN) {
+            return WaitResult.UNKNOWN;
+        }
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISMATCH) {
+            return WaitResult.MISMATCH;
+        }
+        return !processAlive(process)
+                && identity == RuntimeOwnershipReconciliation.PidIdentity.MISSING
+                ? WaitResult.GONE : WaitResult.TIMED_OUT;
     }
 
     private boolean runtimeExists() {
@@ -1042,18 +1103,14 @@ public final class RuntimeService extends VpnService {
         return root.exists();
     }
 
-    private boolean processExists(long pid) {
-        return pid > 0L && probeProcess(pid) == 0;
-    }
-
-    private boolean processGone(long pid) {
+    private RuntimeOwnershipReconciliation.PidIdentity processGone(long pid) {
         if (pid <= 0L) {
-            return true;
+            return RuntimeOwnershipReconciliation.PidIdentity.MISSING;
         }
-        // A command failure is deliberately treated as "not gone".  The
-        // cleanup path must not remove durable ownership state merely because
-        // /proc or kill(2) was temporarily unavailable.
-        return probeProcess(pid) == 1;
+        // Reuse the complete privileged ownership probe. A bare kill -0 or
+        // /proc existence test cannot distinguish an inaccessible live owner
+        // from an absent PID and would make cleanup unsafe.
+        return validatePid(pid);
     }
 
     private boolean isPidAlive(long pid) {
@@ -1069,15 +1126,6 @@ public final class RuntimeService extends VpnService {
         RuntimeProfile profileType = selected == null ? RuntimeProfile.ROOT : selected;
         if (pid <= 0L) {
             return RuntimeOwnershipReconciliation.PidIdentity.MISSING;
-        }
-        // Preserve the dead-PID fast path: a missing packaged executable
-        // cannot turn an already-gone owner into an unverifiable live one.
-        int exists = probeProcess(profileType, pid);
-        if (exists == 1) {
-            return RuntimeOwnershipReconciliation.PidIdentity.MISSING;
-        }
-        if (exists != 0) {
-            return RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN;
         }
         File selectedRoot = profileDirectory(profileType);
         String token = readOwnerToken(selectedRoot);
@@ -1108,25 +1156,6 @@ public final class RuntimeService extends VpnService {
                                 : "app-UID /proc ownership audit is unavailable to this app process");
         return RuntimeOwnershipReconciliation.validatePid(
                 spec, pid, ownershipCommandRunner());
-    }
-
-    /**
-     * Distinguish an absent PID from a live-but-inaccessible one. A bare
-     * `kill -0` maps both ESRCH and EPERM to shell status 1, which would make
-     * a fail-closed cleanup path mistake an unauthorized live owner for a
-     * dead one.
-     */
-    private int probeProcess(long pid) {
-        return probeProcess(activeProfile, pid);
-    }
-
-    private int probeProcess(RuntimeProfile selected, long pid) {
-        if (pid <= 0L) {
-            return 1;
-        }
-        String command = "if kill -0 " + pid + " 2>/dev/null; then exit 0; "
-                + "elif test -e /proc/" + pid + "; then exit 2; else exit 1; fi";
-        return runPlatformCommandStatus(selected, command, 2L);
     }
 
     private boolean runPlatformCommand(String command, long timeoutSeconds) {

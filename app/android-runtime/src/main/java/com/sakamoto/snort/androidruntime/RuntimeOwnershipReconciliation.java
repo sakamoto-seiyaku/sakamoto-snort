@@ -543,6 +543,14 @@ public final class RuntimeOwnershipReconciliation {
         if (identity.status == 0) {
             return PidIdentity.MATCH;
         }
+        // The strong identity command can race an owner exit after the
+        // initial liveness probe.  Preserve that distinction: an absent PID
+        // is already gone, while a live-but-unreadable process remains
+        // unverifiable and a readable identity mismatch is a possible PID
+        // reuse.
+        if (identity.status == 2) {
+            return PidIdentity.MISSING;
+        }
         return identity.status == 1 ? PidIdentity.MISMATCH : PidIdentity.UNKNOWN;
     }
 
@@ -571,6 +579,16 @@ public final class RuntimeOwnershipReconciliation {
         String procReader = "0".equals(spec.expectedUid) ? "runcon u:r:ksu:s0 " : "";
         String procTest = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 test " : "test ";
+        // A failed /proc read is only a vanished candidate when the
+        // privileged existence recheck returns exactly status 1. A live
+        // process (status 0) or a failed recheck (status >1) is unknown.
+        String procReadUncertain = "proc_presence_status=0; " + procTest
+                + "-d \"$proc\" 2>/dev/null; proc_presence_status=$?; "
+                + "case \"$proc_presence_status\" in 1) : ;; 0|*) uncertain=1 ;; esac; "
+                + "continue; ";
+        String procInitialCheck = "proc_presence_status=0; " + procTest
+                + "-d \"$proc\" 2>/dev/null; proc_presence_status=$?; "
+                + "case \"$proc_presence_status\" in 0) : ;; 1) continue ;; *) uncertain=1; continue ;; esac; ";
         String cmdlineReader = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null\""
                 : "tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null";
@@ -613,20 +631,21 @@ public final class RuntimeOwnershipReconciliation {
                 // its bounded /proc reads.  Its disappearance is not an
                 // unreadable live owner; ignore that stale candidate and
                 // decide from the remaining stable snapshot.
-                + "if ! " + procTest + "-d \"$proc\"; then continue; fi; "
-                + "if ! " + procTest + "-r \"$proc/status\"; then uncertain=1; continue; fi; "
+                + procInitialCheck
+                + "if ! " + procTest + "-r \"$proc/status\"; then "
+                + procReadUncertain + "fi; "
                 + "uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
-                + "|| { uncertain=1; continue; }; "
-                + "if test -z \"$uid\"; then uncertain=1; continue; fi; "
+                + "|| { " + procReadUncertain + "}; "
+                + "if test -z \"$uid\"; then " + procReadUncertain + "fi; "
                 + "[ \"$uid\" = " + expectedUid + " ] || continue; "
                 + "if ! " + procTest + "-r \"$proc/exe\" || ! " + procTest
                 + "-r \"$proc/cmdline\"; then "
-                + "uncertain=1; continue; fi; "
+                + procReadUncertain + "fi; "
                 + "exe=$(" + procReader + "readlink \"$proc/exe\" 2>/dev/null) "
-                + "|| { uncertain=1; continue; }; "
-                + "test -n \"$exe\" || { uncertain=1; continue; }; "
+                + "|| { " + procReadUncertain + "}; "
+                + "test -n \"$exe\" || { " + procReadUncertain + "}; "
                 + "cmd=$(" + cmdlineReader + ") "
-                + "|| { uncertain=1; continue; }; "
+                + "|| { " + procReadUncertain + "}; "
                 + "case \"$cmd\" in *" + startup + "*) ;; *) continue ;; esac; "
                 + "if [ \"$exe\" = " + executable + " ]; then "
                 + "if [ \"$profile_config_mismatch\" -ne 0 ]; then "
@@ -634,9 +653,11 @@ public final class RuntimeOwnershipReconciliation {
                 + "if [ \"$profile_config_unverified\" -ne 0 ]; then "
                 + "uncertain=1; continue; fi; "
                 + "env_status=0; env=; "
-                + "if " + procTest + "-r \"$proc/environ\"; then "
+                + "if ! " + procTest + "-r \"$proc/environ\" 2>/dev/null; then "
+                + procReadUncertain + "fi; "
                 + "env=$(" + environReader + "); env_status=$?; "
-                + "else env_status=125; fi; "
+                + "if [ \"$env_status\" -ne 0 ]; then "
+                + procReadUncertain + "fi; "
                 + "if [ \"$env_status\" -eq 0 ]; then "
                 + "printf '%s\\n' \"$env\" | grep -F -- " + ownerToken
                 + " >/dev/null; grep_status=$?; "
@@ -650,13 +671,11 @@ public final class RuntimeOwnershipReconciliation {
                 + " >/dev/null; grep_status=$?; "
                 + "if [ \"$grep_status\" -eq 1 ]; then strong_mismatch=1; continue; fi; "
                 + "[ \"$grep_status\" -eq 0 ] || { uncertain=1; continue; }; "
-                + "elif [ " + expectedUid + " != '0' ] && [ \"$env_status\" -ne 0 ]; then "
-                + "uncertain=1; continue; fi; "
-                + "hash_line=$(" + procReader + "sha256sum \"$proc/exe\" 2>/dev/null) "
-                + "|| { uncertain=1; continue; }; "
-                + "hash=$(printf '%s\\n' \"$hash_line\" | awk '{print $1}') "
-                + "|| { uncertain=1; continue; }; "
-                + "test -n \"$hash\" || { uncertain=1; continue; }; "
+                + "hash_line=$(" + procReader + "sha256sum \"$proc/exe\" 2>/dev/null); hash_status=$?; "
+                + "if [ \"$hash_status\" -ne 0 ]; then " + procReadUncertain + "fi; "
+                + "hash=$(printf '%s\\n' \"$hash_line\" | awk '{print $1}'); "
+                + "hash_status=$?; if [ \"$hash_status\" -ne 0 ] || test -z \"$hash\"; then "
+                + procReadUncertain + "fi; "
                 + "[ \"$hash\" = " + shellQuote(spec.executableHash)
                 + " ] || { strong_mismatch=1; continue; }; "
                 + "match_count=$((match_count + 1)); "
@@ -667,6 +686,26 @@ public final class RuntimeOwnershipReconciliation {
                 + "case \"$cmd\" in *" + profileKey + "*" + profileValue + "*) ;; *) continue ;; esac; "
                 + "case \"$cmd\" in *'export '*'exec '*" + executable + "*'plugin_path'*' -c '*"
                 + startup + "*) transition_count=$((transition_count + 1));; esac; "
+                + "else "
+                // A candidate with the right UID/startup command but an old
+                // executable path is not harmless. Read its environment
+                // before filtering it: a matching token/runtime/profile is
+                // an unverifiable owner and must block reconciliation.
+                + "env_status=0; env=; "
+                + "if ! " + procTest + "-r \"$proc/environ\" 2>/dev/null; then "
+                + procReadUncertain + "fi; "
+                + "env=$(" + environReader + "); env_status=$?; "
+                + "if [ \"$env_status\" -ne 0 ]; then " + procReadUncertain + "fi; "
+                + "printf '%s\\n' \"$env\" | grep -F -- " + ownerToken
+                + " >/dev/null; owner_status=$?; "
+                + "printf '%s\\n' \"$env\" | grep -F -- " + runtimeEnv
+                + " >/dev/null; runtime_status=$?; "
+                + "printf '%s\\n' \"$env\" | grep -F -- " + profileEnv
+                + " >/dev/null; profile_status=$?; "
+                + "if [ \"$owner_status\" -gt 1 ] || [ \"$runtime_status\" -gt 1 ]"
+                + " || [ \"$profile_status\" -gt 1 ]; then uncertain=1; continue; fi; "
+                + "if [ \"$owner_status\" -eq 0 ] && [ \"$runtime_status\" -eq 0 ]"
+                + " && [ \"$profile_status\" -eq 0 ]; then strong_mismatch=1; continue; fi; "
                 + "fi; done; "
                 + "printf 'VPP_OWNER_COUNT=%s\\nVPP_TRANSITION_COUNT=%s\\n' "
                 + "\"$match_count\" \"$transition_count\"; "
@@ -685,7 +724,8 @@ public final class RuntimeOwnershipReconciliation {
                 + "12) sleep 0.05 || exit 127; "
                 + "snapshot_two=$(scan_snapshot); snapshot_two_status=$?; "
                 + "printf '%s\\n' \"$snapshot_two\"; "
-                + "case \"$snapshot_two_status\" in 10) exit 10 ;; 11) exit 11 ;; *) exit 127 ;; esac ;; "
+                + "case \"$snapshot_two_status\" in 0) exit 0 ;; 10) exit 10 ;; "
+                + "11|127) exit 127 ;; *) exit 127 ;; esac ;; "
                 + "*) exit 120 ;; esac";
     }
 
@@ -716,27 +756,60 @@ public final class RuntimeOwnershipReconciliation {
                 : "tr '\\0' '\\n' </proc/" + pid + "/environ 2>/dev/null";
         String procTest = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 test " : "test ";
-        return "profile_config=$(" + procReader + "cat " + startup + " 2>/dev/null)"
-                + " || exit 125"
-                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + runtimeDirLine
-                + " >/dev/null"
-                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + cliSocketLine
-                + " >/dev/null"
-                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + apiSocketLine
-                + " >/dev/null"
-                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + statsegSocketLine
-                + " >/dev/null"
-                + " && if ! " + procTest + "-r " + status + " || ! " + procTest + "-r " + cmdline
-                + " || ! " + procTest + "-r " + environ + " || ! " + procTest + "-r " + exe
-                + "; then exit 125; fi"
-                + " && uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' " + status + ")"
-                + " && test \"$uid\" = " + expectedUid
-                + " && exe=$(" + procReader + "readlink " + exe + ")"
-                + " && test \"$exe\" = " + executable
-                + " && " + cmdlineReader + " | grep -F -- " + startup + " >/dev/null"
-                + " && " + environReader + " | grep -F -- " + token + " >/dev/null"
-                + " && " + environReader + " | grep -F -- " + runtime + " >/dev/null"
-                + " && " + environReader + " | grep -F -- " + profile + " >/dev/null";
+        String procReadFailure = "proc_probe_status=0; " + procTest
+                + "-d /proc/" + pid + " 2>/dev/null; proc_probe_status=$?; "
+                + "case \"$proc_probe_status\" in 1) exit 2 ;; 0|*) exit 125 ;; esac; ";
+        String procInitialCheck = "proc_probe_status=0; " + procTest + "-d /proc/" + pid
+                + " 2>/dev/null; proc_probe_status=$?; case \"$proc_probe_status\" in "
+                + "0) : ;; 1) exit 2 ;; *) exit 125 ;; esac; ";
+        String checkMatch = "check_status=$?; case \"$check_status\" in 0) : ;; 1) exit 1 ;; *) exit 125 ;; esac; ";
+        return "profile_config=$(" + procReader + "cat " + startup + " 2>/dev/null); "
+                + "profile_config_status=$?; if [ \"$profile_config_status\" -ne 0 ]; then exit 125; fi; "
+                + "printf '%s\\n' \"$profile_config\" | grep -F -- " + runtimeDirLine
+                + " >/dev/null; " + checkMatch
+                + "printf '%s\\n' \"$profile_config\" | grep -F -- " + cliSocketLine
+                + " >/dev/null; " + checkMatch
+                + "printf '%s\\n' \"$profile_config\" | grep -F -- " + apiSocketLine
+                + " >/dev/null; " + checkMatch
+                + "printf '%s\\n' \"$profile_config\" | grep -F -- " + statsegSocketLine
+                + " >/dev/null; " + checkMatch
+                + procInitialCheck
+                + "if ! " + procTest + "-r " + status + " 2>/dev/null; then "
+                + procReadFailure + "fi; "
+                + "uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' "
+                + status + "); uid_status=$?; if [ \"$uid_status\" -ne 0 ]; then "
+                + procReadFailure + "fi; if test -z \"$uid\"; then " + procReadFailure + "fi; "
+                + "test \"$uid\" = " + expectedUid + " || exit 1; "
+                + "if ! " + procTest + "-r " + exe + " 2>/dev/null; then "
+                + procReadFailure + "fi; "
+                + "exe_value=$(" + procReader + "readlink " + exe + " 2>/dev/null); exe_status=$?; "
+                + "if [ \"$exe_status\" -ne 0 ]; then " + procReadFailure + "fi; "
+                + "if test -z \"$exe_value\"; then " + procReadFailure + "fi; "
+                + "test \"$exe_value\" = " + executable + " || exit 1; "
+                + "if ! " + procTest + "-r " + cmdline + " 2>/dev/null; then "
+                + procReadFailure + "fi; "
+                + "cmd_value=$(" + cmdlineReader + "); cmd_status=$?; "
+                + "if [ \"$cmd_status\" -ne 0 ]; then " + procReadFailure + "fi; "
+                + "if test -z \"$cmd_value\"; then " + procReadFailure + "fi; "
+                + "printf '%s\\n' \"$cmd_value\" | grep -F -- " + startup
+                + " >/dev/null; " + checkMatch
+                + "if ! " + procTest + "-r " + environ + " 2>/dev/null; then "
+                + procReadFailure + "fi; "
+                + "env_value=$(" + environReader + "); env_status=$?; "
+                + "if [ \"$env_status\" -ne 0 ]; then " + procReadFailure + "fi; "
+                + "printf '%s\\n' \"$env_value\" | grep -F -- " + token
+                + " >/dev/null; " + checkMatch
+                + "printf '%s\\n' \"$env_value\" | grep -F -- " + runtime
+                + " >/dev/null; " + checkMatch
+                + "printf '%s\\n' \"$env_value\" | grep -F -- " + profile
+                + " >/dev/null; " + checkMatch
+                + "if ! " + procTest + "-r " + exe + " 2>/dev/null; then "
+                + procReadFailure + "fi; "
+                + "hash_line=$(" + procReader + "sha256sum " + exe
+                + " 2>/dev/null); hash_status=$?; if [ \"$hash_status\" -ne 0 ]; then "
+                + procReadFailure + "fi; hash_value=$(printf '%s\\n' \"$hash_line\" | awk '{print $1}'); "
+                + "if test -z \"$hash_value\"; then " + procReadFailure + "fi; "
+                + "test \"$hash_value\" = " + shellQuote(spec.executableHash) + " || exit 1; exit 0";
     }
 
     /** Public shell seam for tests and for the service's bounded PID probe. */
