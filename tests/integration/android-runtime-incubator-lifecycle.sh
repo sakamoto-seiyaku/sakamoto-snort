@@ -463,7 +463,8 @@ adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
   && test ! -e files/profiles/root/vpp/shm'"
 final_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' || true)"
 printf '%s\n' "$final_processes" >"$evidence_file.final.ps"
-if grep -q 'libvpp_runtime.so' <<<"$final_processes"; then
+if awk '$2 == "libvpp_runtime.so" {found=1} END {exit found ? 0 : 1}' \
+    <<<"$final_processes"; then
   echo "VPP process residue remains after stop" >&2
   exit 1
 fi
