@@ -593,7 +593,11 @@ public final class RuntimeOwnershipReconciliation {
                 + "for pid in $candidate_pids; do "
                 + "is_audit_lineage \"$pid\" && continue; "
                 + "proc=/proc/$pid; "
-                + "if ! test -d \"$proc\"; then uncertain=1; continue; fi; "
+                // A process can exit between the exhaustive ps snapshot and
+                // its bounded /proc reads.  Its disappearance is not an
+                // unreadable live owner; ignore that stale candidate and
+                // decide from the remaining stable snapshot.
+                + "if ! test -d \"$proc\"; then continue; fi; "
                 + "if ! test -r \"$proc/status\"; then uncertain=1; continue; fi; "
                 + "uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
                 + "|| { uncertain=1; continue; }; "

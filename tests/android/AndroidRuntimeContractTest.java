@@ -344,6 +344,8 @@ public final class AndroidRuntimeContractTest {
                             "ownership scan defers corrupt startup metadata until a live candidate exists");
                     check(command.contains("profile_config_unverified=0"),
                             "ownership scan distinguishes unreadable startup metadata from stale residue");
+                    check(command.contains("if ! test -d \"$proc\"; then continue; fi;"),
+                            "ownership scan ignores a candidate that vanished after the process snapshot");
                     return new RuntimeOwnershipReconciliation.CommandResult(
                             10, "VPP_OWNER_COUNT=1\nVPP_OWNER_PID=4242\n");
                 });
