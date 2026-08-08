@@ -378,14 +378,29 @@ recreated_generation="$(awk -F= '$1 == "generation" {print $2}' <<<"$state")"
 [[ "$recreated_pid" == "$pid" && "$recreated_generation" == "$generation" ]] \
   || { echo "Activity recreation changed runtime PID/generation" >&2; exit 1; }
 assert_exactly_one_owner root "$recreated_pid"
-adb_cmd shell run-as "$package" cat files/logs/runtime-service.log \
-  | tr -d '\r' >"$evidence_file.query.log"
-query_after_count="$(grep -c 'health_query=vapi_result .*generated_vapi=true' \
-  "$evidence_file.query.log" || true)"
+query_after_count=0
+query_revision=""
+for _ in $(seq 1 15); do
+  adb_cmd shell run-as "$package" cat files/logs/runtime-service.log \
+    | tr -d '\r' >"$evidence_file.query.log"
+  query_after_count="$(grep -c 'health_query=vapi_result .*generated_vapi=true' \
+    "$evidence_file.query.log" || true)"
+  if [[ "$query_after_count" -gt "$query_baseline_count" ]]; then
+    query_revision="$(grep 'health_query=vapi_result .*generated_vapi=true' \
+      "$evidence_file.query.log" \
+      | sed -n 's/.*revision=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
+    if [[ "$query_revision" =~ ^[0-9]+$ ]] \
+        && grep -q "health_query=vapi_start revision=$query_revision" \
+          "$evidence_file.query.log" \
+        && grep -q "health_query=result revision=$query_revision" \
+          "$evidence_file.query.log"; then
+      break
+    fi
+  fi
+  sleep 1
+done
 [[ "$query_after_count" -gt "$query_baseline_count" ]] \
   || { echo "Activity recreation did not issue a new generated-VAPI query; evidence=$evidence_file.query.log" >&2; exit 1; }
-query_revision="$(grep 'health_query=vapi_result .*generated_vapi=true' "$evidence_file.query.log" \
-  | sed -n 's/.*revision=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
 [[ "$query_revision" =~ ^[0-9]+$ ]] \
   || { echo "generated-VAPI query has no bounded revision; evidence=$evidence_file.query.log" >&2; exit 1; }
 grep -q "health_query=vapi_start revision=$query_revision" "$evidence_file.query.log"
