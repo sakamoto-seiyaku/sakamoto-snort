@@ -787,19 +787,27 @@ public final class RuntimeService extends VpnService {
         String command =
                 "for proc in /proc/[0-9]*; do "
                 + "test -d \"$proc\" || continue; "
-                + "if ! test -r \"$proc/status\" || ! test -r \"$proc/cmdline\" "
-                + "|| ! test -r \"$proc/environ\" || ! test -r \"$proc/exe\"; then "
-                + "[ -e \"$proc\" ] && exit 121; continue; fi; "
+                // Android exposes kernel threads as root-owned /proc entries
+                // without an executable symlink. Filter by UID and command
+                // line before requiring the identity files that only a
+                // candidate VPP owner can provide.
+                + "if ! test -r \"$proc/status\"; then "
+                + "[ -e \"$proc/status\" ] && exit 121; continue; fi; "
                 + "uid=$(awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
-                + "|| exit 122; [ \"$uid\" = 0 ] || continue; "
+                + "|| { [ -e \"$proc/status\" ] && exit 122; continue; }; "
+                + "[ \"$uid\" = 0 ] || continue; "
+                + "if ! test -r \"$proc/cmdline\"; then "
+                + "[ -e \"$proc/cmdline\" ] && exit 124; continue; fi; "
+                + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
+                + "|| { [ -e \"$proc/cmdline\" ] && exit 124; continue; }; "
+                + "case \"$cmd\" in *" + shellQuote(startup) + "*) ;; *) continue ;; esac; "
+                + "if ! test -r \"$proc/environ\" || ! test -r \"$proc/exe\"; then "
+                + "[ -e \"$proc\" ] && exit 121; continue; fi; "
                 + "exe=$(readlink \"$proc/exe\" 2>/dev/null) "
                 + "|| { [ -e \"$proc\" ] && exit 123; continue; }; "
                 + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
-                + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
-                + "|| { [ -e \"$proc\" ] && exit 124; continue; }; "
                 + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null) "
                 + "|| { [ -e \"$proc\" ] && exit 125; continue; }; "
-                + "case \"$cmd\" in *" + shellQuote(startup) + "*) ;; *) continue ;; esac; "
                 + "printf '%s\\n' \"$env\" | grep -F -- "
                 + shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + token)
                 + " >/dev/null || continue; "
