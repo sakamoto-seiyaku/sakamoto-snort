@@ -48,18 +48,15 @@ Play-facing 前端初始化选择普通用户 / 高级用户，并通过启用 /
 
 ## 3. NFQUEUE copy 与基础字节口径
 
-> 本节的 512-byte bounded-prefix 与 Adapter-side parser 文字是 pre-Functional-Closure 历史基线；当前 Android closure 以 S65、ADR-0003、ADR-0006 和 `CONTEXT.md` 为准：完整 L3 进入 VPP-owned storage，解析由共享 VPP graph 执行，不能以 512 bytes 作为生产正确性假设。
+> 历史基线（pre-Functional-Closure，非当前生产规范）：旧 NFQUEUE 设计曾以 `NFQNL_COPY_PACKET, 0xffff` 近似整包 copy，并提出由 Adapter 解析 bounded prefix，第一版暂定 `512` bytes。该 512-byte / Adapter-side parser 路径只保留作迁移和性能讨论背景，不得作为当前正确性、闭环或实现依据。
 
-当前 `NFQNL_COPY_PACKET, 0xffff` 近似整包 copy，后续应改为 bounded prefix copy。第一版默认 copy prefix 先定为 `512` bytes。
+当前权威按 S65、ADR-0003、ADR-0006 和 `CONTEXT.md` 执行：完整 L3 进入 VPP-owned storage，解析由共享 VPP graph 执行，不以 512 bytes 作为生产正确性假设，也不把 Adapter-side parser 作为第二套 parser。任何 bounded-prefix copy 或 Adapter-side parser 优化都必须以后续实测证据和显式设计决策重新批准，不能从上述历史基线推导。
 
-边界：
-- 不切到 `NFQNL_COPY_META`，因为 packet parser 仍需要 IP / L4 header。
-- `512` 只是第一版默认值，后续由真机测量决定是否调整。
-- copied prefix length 不能再作为 packet length / traffic bytes。
-- baseline bytes 口径定义为 original IP packet bytes。
-- IPv4 original IP packet bytes 来自 IPv4 total length。
-- IPv6 original IP packet bytes 来自 IPv6 base header 的 payload length 加 40 bytes；该 payload length 包含 extension headers。
-- L4 payload length、terminal proto、ports、`l4Status` 等仍必须由 IPv4 parser / IPv6 extension-header walker 解析。
+原始长度/字节口径仍有效，且与历史 copy path 分开：
+- copied/captured prefix length 不能作为 packet length 或 Traffic Windows bytes。
+- `originalIpBytes` 定义为 original IP packet bytes；IPv4 取 IPv4 total length。
+- IPv6 取 IPv6 base header 的 payload length 加 40 bytes；该 payload length 包含 extension headers。
+- L4 payload length、terminal proto、ports、`l4Status` 等字段由共享 VPP parser / IPv6 extension-header walker 从完整 L3 解析；若 original length 无法可靠取得，不更新依赖它的统计。
 
 ## 4. 观测能力分层
 
