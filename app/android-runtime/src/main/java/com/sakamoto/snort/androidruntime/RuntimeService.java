@@ -788,14 +788,19 @@ public final class RuntimeService extends VpnService {
                 "for proc in /proc/[0-9]*; do "
                 + "test -d \"$proc\" || continue; "
                 // Android exposes kernel threads as root-owned /proc entries
-                // without an executable symlink. Filter by UID and command
-                // line before requiring the identity files that only a
+                // without an executable symlink. Filter by UID and executable
+                // before reading command lines and environments that only a
                 // candidate VPP owner can provide.
                 + "if ! test -r \"$proc/status\"; then "
                 + "[ -e \"$proc/status\" ] && exit 121; continue; fi; "
                 + "uid=$(awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
                 + "|| { [ -e \"$proc/status\" ] && exit 122; continue; }; "
                 + "[ \"$uid\" = 0 ] || continue; "
+                + "if ! test -r \"$proc/exe\"; then "
+                + "[ -e \"$proc/exe\" ] && exit 123; continue; fi; "
+                + "exe=$(readlink \"$proc/exe\" 2>/dev/null) "
+                + "|| { [ -e \"$proc/exe\" ] && exit 123; continue; }; "
+                + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
                 + "if ! test -r \"$proc/cmdline\"; then "
                 + "[ -e \"$proc/cmdline\" ] && exit 124; continue; fi; "
                 + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
@@ -803,9 +808,6 @@ public final class RuntimeService extends VpnService {
                 + "case \"$cmd\" in *" + shellQuote(startup) + "*) ;; *) continue ;; esac; "
                 + "if ! test -r \"$proc/environ\" || ! test -r \"$proc/exe\"; then "
                 + "[ -e \"$proc\" ] && exit 121; continue; fi; "
-                + "exe=$(readlink \"$proc/exe\" 2>/dev/null) "
-                + "|| { [ -e \"$proc\" ] && exit 123; continue; }; "
-                + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
                 + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null) "
                 + "|| { [ -e \"$proc\" ] && exit 125; continue; }; "
                 + "printf '%s\\n' \"$env\" | grep -F -- "
