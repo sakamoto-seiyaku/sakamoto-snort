@@ -862,7 +862,7 @@ public final class RuntimeService extends VpnService {
     }
 
     private boolean processExists(long pid) {
-        return pid > 0L && runPlatformCommandStatus("kill -0 " + pid, 2L) == 0;
+        return pid > 0L && probeProcess(pid) == 0;
     }
 
     private boolean processGone(long pid) {
@@ -872,7 +872,7 @@ public final class RuntimeService extends VpnService {
         // A command failure is deliberately treated as "not gone".  The
         // cleanup path must not remove durable ownership state merely because
         // /proc or kill(2) was temporarily unavailable.
-        return runPlatformCommandStatus("kill -0 " + pid, 2L) == 1;
+        return probeProcess(pid) == 1;
     }
 
     private boolean isPidAlive(long pid) {
@@ -883,7 +883,7 @@ public final class RuntimeService extends VpnService {
         if (pid <= 0L) {
             return PidIdentity.MISSING;
         }
-        int exists = runPlatformCommandStatus("kill -0 " + pid, 2L);
+        int exists = probeProcess(pid);
         if (exists == 1) {
             return PidIdentity.MISSING;
         }
@@ -926,6 +926,21 @@ public final class RuntimeService extends VpnService {
             return PidIdentity.MATCH;
         }
         return status == 1 ? PidIdentity.MISMATCH : PidIdentity.UNKNOWN;
+    }
+
+    /**
+     * Distinguish an absent PID from a live-but-inaccessible one. A bare
+     * `kill -0` maps both ESRCH and EPERM to shell status 1, which would make
+     * a fail-closed cleanup path mistake an unauthorized live owner for a
+     * dead one.
+     */
+    private int probeProcess(long pid) {
+        if (pid <= 0L) {
+            return 1;
+        }
+        String command = "if kill -0 " + pid + " 2>/dev/null; then exit 0; "
+                + "elif test -e /proc/" + pid + "; then exit 2; else exit 1; fi";
+        return runPlatformCommandStatus(command, 2L);
     }
 
     private boolean runPlatformCommand(String command, long timeoutSeconds) {
