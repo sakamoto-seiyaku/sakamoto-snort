@@ -30,7 +30,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Supervised Root/NFQUEUE or VPN/TUN VPP runtime" />
+                android:value="Supervised Root or VPN VPP core runtime; packet adapters unavailable" />
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

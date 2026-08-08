@@ -14,10 +14,7 @@ BIN_SRC="$BUILD_DIR/bin/vpp"
 VPPCTL_SRC="$BUILD_DIR/bin/vppctl"
 LIB_SRC="$BUILD_DIR/lib/aarch64-linux-android"
 REMOTE_ROOT="${REMOTE_ROOT:-/data/local/tmp/vpp-nfq-poc}"
-plugins=(
-  nfqueue_poc_plugin.so
-  tun_poc_plugin.so
-)
+plugins=()
 
 libs=(
   libvnet.so
@@ -26,6 +23,8 @@ libs=(
   libvlib.so
   libsvm.so
   libvppinfra.so
+  libvapiclient.so
+  libvlibmemoryclient.so
 )
 
 if [ ! -x "$BIN_SRC" ]; then

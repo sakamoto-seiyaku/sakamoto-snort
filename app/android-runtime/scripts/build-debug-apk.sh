@@ -21,47 +21,32 @@ zipalign_bin="${ZIPALIGN:-zipalign}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-profile_source="$app_dir/src/main/java/com/sakamoto/snort/androidruntime/RuntimeProfile.java"
-[[ -f "$profile_source" ]] || die "missing runtime profile contract: $profile_source"
-root_adapter="$(awk -F'"' '/^[[:space:]]*ROOT\(/ {print $6; exit}' "$profile_source")"
-vpn_adapter="$(awk -F'"' '/^[[:space:]]*VPN\(/ {print $6; exit}' "$profile_source")"
-[[ -n "$root_adapter" && -n "$vpn_adapter" ]] \
-  || die "unable to read profile adapter contract from $profile_source"
-
 required_stage_artifacts=(
   "$stage_dir/bin/vpp"
   "$stage_dir/bin/vppctl"
-  "$stage_dir/runtime/startup.conf"
-  "$stage_dir/plugins/${root_adapter#lib}"
-  "$stage_dir/plugins/${vpn_adapter#lib}"
 )
 stage_has_required_artifacts() {
   local file
   for file in "${required_stage_artifacts[@]}"; do
     [[ -f "$file" ]] || return 1
   done
-  grep -Eq "plugin[[:space:]]+${root_adapter#lib}[[:space:]]+\{[[:space:]]*enable[[:space:]]*\}" \
-    "$stage_dir/runtime/startup.conf" || return 1
-  grep -Eq "plugin[[:space:]]+${vpn_adapter#lib}[[:space:]]+\{[[:space:]]*enable[[:space:]]*\}" \
-    "$stage_dir/runtime/startup.conf" || return 1
 }
 
 # The default stage is produced by the repository-local POC staging pipeline.
 # Run that boundary on every default build so it can refresh a stage when its
 # configured source/build output is newer. An explicitly selected stage is
 # never replaced or supplemented implicitly: callers must provide both real
-# adapter artifacts and the stage startup contract themselves.
+# core artifacts and the stage's explicit build inputs themselves.
 if [[ "$stage_dir_explicit" == 0 ]]; then
   stage_script="$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/scripts/stage-vpp-runtime.sh"
   [[ -f "$stage_script" ]] || die "default runtime stage is incomplete and stage builder is absent: $stage_script"
   VPP_RUNTIME_STAGE_DIR="$stage_dir" bash "$stage_script"
 fi
 stage_has_required_artifacts \
-  || die "runtime stage is missing VPP core, profile adapters, or startup contract: $stage_dir"
+  || die "runtime stage is missing VPP core diagnostics: $stage_dir"
 
 for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" \
-    "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl" \
-    "$stage_dir/plugins/${root_adapter#lib}" "$stage_dir/plugins/${vpn_adapter#lib}"; do
+    "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
   [[ -f "$file" ]] || die "missing required build input: $file"
 done
 command -v javac >/dev/null || die "missing javac"
@@ -89,15 +74,44 @@ for so in "$stage_dir"/lib/*.so; do
   cp "$so" "$jni_dir/$(basename "$so")"
   chmod 755 "$jni_dir/$(basename "$so")"
 done
-# VPP stages use the conventional no-lib plugin filenames, while Android's
-# native-library packaging and RuntimeProfile contract use lib*.so names.
-# Rename the real plugin artifacts at this one packaging boundary.
-for adapter in "$root_adapter" "$vpn_adapter"; do
-  source_plugin="$stage_dir/plugins/${adapter#lib}"
-  [[ -f "$source_plugin" ]] || die "profile adapter is missing from runtime stage: $source_plugin"
-  cp "$source_plugin" "$jni_dir/$adapter"
-  chmod 755 "$jni_dir/$adapter"
+
+# Build the committed core control boundary against the generated VPE VAPI.
+# The generated headers and libvapiclient are build inputs, never runtime
+# packet adapters. They prove the running VPP binary through show_version.
+native_dir="$app_dir/src/main/native"
+vpp_source="${VPP_SOURCE_TREE:-$repo_root/experiments/vpp-nfq-poc/work/vpp}"
+vapi_build_dir="${VPP_RUNTIME_VAPI_BUILD_DIR:-}"
+if [[ -z "$vapi_build_dir" && -f "$stage_dir/runtime/vapi-build-dir" ]]; then
+  vapi_build_dir="$(tr -d '[:space:]' <"$stage_dir/runtime/vapi-build-dir")"
+fi
+vapi_build_dir="${vapi_build_dir:-$repo_root/experiments/vpp-nfq-poc/work/vpp-android-configure-probe}"
+vapi_header="$vapi_build_dir/CMakeFiles/vpp-api/vapi/vpe.api.vapi.h"
+vapi_lib_dir="$vapi_build_dir/lib/aarch64-linux-android"
+[[ -f "$native_dir/sakamoto_vpp_control.c" && -f "$native_dir/sakamoto_vpp_control_jni.c" ]] \
+  || die "missing committed native core control source"
+[[ -f "$vapi_header" ]] || die "generated VPE VAPI header is missing: $vapi_header"
+for vapi_lib in libvapiclient.so libvlibmemoryclient.so; do
+  [[ -f "$vapi_lib_dir/$vapi_lib" ]] \
+    || die "generated VAPI client library is missing: $vapi_lib_dir/$vapi_lib"
+  cp "$vapi_lib_dir/$vapi_lib" "$jni_dir/$vapi_lib"
+  chmod 755 "$jni_dir/$vapi_lib"
 done
+api_identity="$(grep -E 'name_with_crc.*"show_version_[0-9a-fA-F]{8}"' "$vapi_header" \
+  | head -n 1 | cut -d'"' -f2)"
+[[ "$api_identity" =~ ^show_version_[0-9a-fA-F]{8}$ ]] \
+  || die "unable to extract generated show_version API identity"
+ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
+control_clang="${ANDROID_CLANG:-$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
+[[ -x "$control_clang" ]] || die "Android clang is missing: $control_clang"
+"$control_clang" -shared -fPIC -std=c11 -Wall -Wextra \
+  -DSAKAMOTO_VPP_CONTROL_API_IDENTITY=\"$api_identity\" \
+  -I"$native_dir" -I"$vpp_source/src" -I"$vpp_source/src/vpp-api" \
+  -I"$vapi_build_dir/CMakeFiles/vpp-api" \
+  "$native_dir/sakamoto_vpp_control.c" \
+  "$native_dir/sakamoto_vpp_control_jni.c" \
+  -L"$jni_dir" -Wl,-rpath,'$ORIGIN' -Wl,-soname,libsakamoto_runtime_control.so \
+  -lvapiclient -ldl -lm -o "$jni_dir/libsakamoto_runtime_control.so"
+chmod 755 "$jni_dir/libsakamoto_runtime_control.so"
 
 version="${VPP_RUNTIME_VERSION:-$(strings "$stage_dir/bin/vpp" \
     | awk '/vpp v[0-9]/{if (!found) {print $2; found=1}}') }"
@@ -106,18 +120,7 @@ version="$(printf '%s' "$version" | tr -d '[:space:]')"
 artifact="sha256:$(sha256sum "$jni_dir/libvpp_runtime.so" | awk '{print $1}')"
 printf 'version=%s\nabi=arm64-v8a\nprotocol=vpp-runtime-health/v1\nartifact=%s\n' \
   "$version" "$artifact" >"$assets_dir/vpp-runtime.properties"
-printf 'adapter.root=%s\nadapter.vpn=%s\n' "$root_adapter" "$vpn_adapter" \
-  >>"$assets_dir/vpp-runtime.properties"
-for mapping in "root:$root_adapter" "vpn:$vpn_adapter"; do
-  profile="${mapping%%:*}"
-  adapter="${mapping#*:}"
-  declared="$(awk -F= -v key="adapter.$profile" '$1 == key {print $2}' \
-    "$assets_dir/vpp-runtime.properties")"
-  [[ "$declared" == "$adapter" ]] \
-    || die "manifest adapter.$profile disagrees with RuntimeProfile: $declared != $adapter"
-  [[ -f "$jni_dir/$declared" ]] \
-    || die "manifest adapter.$profile is not packaged: $declared"
-done
+printf 'apiIdentity=%s\n' "$api_identity" >>"$assets_dir/vpp-runtime.properties"
 printf '%s\n' "${artifact#sha256:}" >"$assets_dir/vpp-runtime.sha256"
 
 mapfile -t sources < <(find "$app_dir/src/main/java" -name '*.java' | sort)

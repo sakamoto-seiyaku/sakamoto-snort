@@ -23,7 +23,7 @@ public final class RuntimeStateStore {
         try (FileInputStream input = new FileInputStream(target)) {
             values.load(input);
             int schema = Integer.parseInt(values.getProperty("schemaVersion", "0"));
-            if (schema != RuntimeSnapshot.SCHEMA_VERSION) {
+            if (schema != 1 && schema != RuntimeSnapshot.SCHEMA_VERSION) {
                 throw new IOException("unsupported runtime snapshot schema: " + schema);
             }
             RuntimeProfile profile = RuntimeProfile.parse(values.getProperty("profile", "root"));
@@ -32,8 +32,9 @@ public final class RuntimeStateStore {
                     state, profile, values.getProperty("protocol", ""),
                     values.getProperty("version", ""), values.getProperty("artifact",
                             values.getProperty("abiEvidence", "")),
-                    values.getProperty("abi", ""), values.getProperty("adapter", profile.adapter),
-                    values.getProperty("health", "unknown"),
+                    values.getProperty("abi", ""),
+                    values.getProperty("adapterReadiness", values.getProperty("adapter", "")),
+                    values.getProperty("coreHealth", values.getProperty("health", "unknown")),
                     values.getProperty("errorCode", ""), values.getProperty("errorMessage", ""),
                     Boolean.parseBoolean(values.getProperty("mayBeActive", "false")),
                     parseLong(values.getProperty("pid", "-1"), -1L),
@@ -41,7 +42,7 @@ public final class RuntimeStateStore {
                     parseLong(values.getProperty("updatedAtMillis", "0"), 0L));
         } catch (Exception error) {
             return RuntimeSnapshot.error(RuntimeProfile.ROOT, RuntimeControlProtocol.NAME, "", "", "",
-                    RuntimeProfile.ROOT.adapter, "state_projection_corrupt",
+                    "", "state_projection_corrupt",
                     "runtime state could not be read", false, -1L);
         }
     }

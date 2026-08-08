@@ -1,13 +1,9 @@
 package com.sakamoto.snort.androidruntime;
 
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Runtime readiness contract. A VPP process is not product-ready until its
- * version, measured artifact identity, and selected profile adapter all agree.
- */
+/** Core VPP readiness contract; Adapter readiness is intentionally separate. */
 public final class VppHealthHandshake {
     public static final String PROTOCOL = "vpp-runtime-health/v1";
     private static final Pattern VERSION = Pattern.compile(
@@ -17,6 +13,41 @@ public final class VppHealthHandshake {
 
     private VppHealthHandshake() {}
 
+    /** Evaluate a real native generated-VAPI response for the core runtime. */
+    public static Result evaluate(RuntimeProfile profile, String manifestProtocol,
+                                  String expectedVersion, String expectedAbi,
+                                  String expectedArtifact, String expectedApiIdentity,
+                                  RuntimeControlNative.Status status) {
+        String protocol = clean(manifestProtocol);
+        String expected = clean(expectedVersion);
+        String artifact = clean(expectedArtifact);
+        String apiIdentity = clean(expectedApiIdentity);
+        String errorCode = "";
+        if (profile == null) {
+            errorCode = "health_profile_missing";
+        } else if (!PROTOCOL.equals(protocol)) {
+            errorCode = "health_protocol_mismatch";
+        } else if (expected.isEmpty() || status == null || !sameVersion(expected, status.version)) {
+            errorCode = "health_version_mismatch";
+        } else if (status.controlAbiVersion != RuntimeControlNative.CONTROL_ABI_VERSION) {
+            errorCode = "health_control_abi_mismatch";
+        } else if (status.transportCode != 0 || status.vppRetval != 0) {
+            errorCode = "health_vapi_failed";
+        } else if (!apiIdentity.isEmpty() && !apiIdentity.equals(status.apiIdentity)) {
+            errorCode = "health_api_identity_mismatch";
+        } else if (!"vpp".equalsIgnoreCase(status.program)
+                && !"vpe".equalsIgnoreCase(status.program)) {
+            errorCode = "health_program_mismatch";
+        }
+        return new Result(protocol, status == null ? "" : status.version, artifact,
+                clean(expectedAbi), RuntimeSnapshot.ADAPTER_UNAVAILABLE,
+                errorCode.isEmpty() ? "ok" : "error", errorCode);
+    }
+
+    /**
+     * Migration-only parser for old host evidence. It verifies core fields
+     * and never promotes a plugin line into Adapter readiness.
+     */
     public static Result parse(RuntimeProfile profile, String manifestProtocol,
                                String expectedVersion, String deviceAbi,
                                String expectedArtifact, int cliExitCode, String cliOutput) {
@@ -26,7 +57,6 @@ public final class VppHealthHandshake {
         String artifact = extractArtifact(output);
         String abi = clean(deviceAbi);
         String expected = clean(expectedArtifact);
-        String adapter = profile == null ? "" : profile.adapter;
         String errorCode = "";
         if (profile == null) {
             errorCode = "health_profile_missing";
@@ -39,14 +69,12 @@ public final class VppHealthHandshake {
             errorCode = "health_artifact_mismatch";
         } else if (cliExitCode != 0) {
             errorCode = "health_vppctl_failed";
-        } else if (!containsAdapterReady(profile, output)) {
-            errorCode = "health_adapter_not_ready";
         }
-        return new Result(protocol, version, artifact, abi, adapter,
+        return new Result(protocol, version, artifact, abi, RuntimeSnapshot.ADAPTER_UNAVAILABLE,
                 errorCode.isEmpty() ? "ok" : "error", errorCode);
     }
 
-    /** Compatibility overload for host callers that only have a root adapter. */
+    /** Compatibility overload for migration callers with no profile. */
     public static Result parse(String manifestProtocol, String expectedVersion,
                                String manifestAbi, String deviceAbi, int cliExitCode,
                                String cliOutput) {
@@ -65,7 +93,8 @@ public final class VppHealthHandshake {
         } else if (!expected.equals(version)) {
             errorCode = "health_version_mismatch";
         }
-        return new Result(protocol, version, "", actualAbi, RuntimeProfile.ROOT.adapter,
+        return new Result(protocol, version, "", actualAbi,
+                RuntimeSnapshot.ADAPTER_UNAVAILABLE,
                 errorCode.isEmpty() ? "ok" : "error", errorCode);
     }
 
@@ -85,13 +114,6 @@ public final class VppHealthHandshake {
         return matcher.find() ? matcher.group(1).trim() : "";
     }
 
-    private static boolean containsAdapterReady(RuntimeProfile profile, String output) {
-        String lower = output.toLowerCase(Locale.US);
-        return lower.contains(profile.adapter + " adapter ready")
-                || lower.contains("adapter=" + profile.adapter + ":ready")
-                || lower.contains("adapter: " + profile.adapter + " ready");
-    }
-
     private static String bounded(String value) {
         return value == null ? "" : value.length() <= 64 * 1024
                 ? value : value.substring(0, 64 * 1024);
@@ -99,6 +121,14 @@ public final class VppHealthHandshake {
 
     private static String clean(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static boolean sameVersion(String expected, String actual) {
+        String left = clean(expected);
+        String right = clean(actual);
+        return left.equals(right)
+                || (left.startsWith("v") && left.substring(1).equals(right))
+                || (right.startsWith("v") && right.substring(1).equals(left));
     }
 
     public static final class Result {
@@ -116,7 +146,7 @@ public final class VppHealthHandshake {
             this.version = version;
             this.artifact = artifact;
             this.abi = abi;
-            this.adapter = adapter;
+            this.adapter = RuntimeSnapshot.ADAPTER_UNAVAILABLE;
             this.health = health;
             this.errorCode = errorCode;
         }

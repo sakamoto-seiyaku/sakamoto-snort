@@ -45,6 +45,9 @@ adb_cmd install -r "$apk" >/dev/null
 adb_cmd shell pm grant "$package" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 adb_cmd shell am force-stop "$package"
 
+app_uid="$(adb_cmd shell run-as "$package" id -u | tr -d '\r\n')"
+[[ "$app_uid" =~ ^[0-9]+$ ]] || { echo "unable to resolve app UID" >&2; exit 1; }
+
 evidence_file="${ANDROID_RUNTIME_EVIDENCE_FILE:-/tmp/sakamoto-67-android-runtime-${target_serial}.log}"
 {
   echo "serial=$target_serial"
@@ -65,6 +68,8 @@ for _ in $(seq 1 30); do
   printf '%s\n' "$state" >"$evidence_file.state"
   if grep -q '^state=running$' <<<"$state" \
       && grep -q '^health=ok$' <<<"$state" \
+      && grep -q '^coreHealth=ok$' <<<"$state" \
+      && grep -q '^adapterReadiness=unavailable$' <<<"$state" \
       && grep -q '^protocol=vpp-runtime-health/v1$' <<<"$state" \
       && grep -q '^profile=root$' <<<"$state"; then
     running=1
@@ -87,6 +92,9 @@ grep -q '^state=running$' <<<"$state"
 
 pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
 [[ "$pid" =~ ^[0-9]+$ && "$pid" != 0 ]] || { echo "running snapshot has no PID" >&2; exit 1; }
+root_uid="$(adb_cmd shell "su 0 sh -c 'grep ^Uid: /proc/$pid/status'" \
+  | tr -d '\r' | awk '{print $2}')"
+[[ "$root_uid" == 0 ]] || { echo "root profile VPP UID was $root_uid" >&2; exit 1; }
 
 kill_evidence="$evidence_file.crash-kill"
 if ! kill_output="$(adb_cmd shell "su 0 sh -c 'kill -KILL $pid'" 2>&1)"; then
@@ -146,8 +154,10 @@ restart_running=0
 for _ in $(seq 1 30); do
   state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
   printf '%s\n' "$state" >"$evidence_file.restart.state"
-  if grep -q '^state=running$' <<<"$state" \
+    if grep -q '^state=running$' <<<"$state" \
       && grep -q '^health=ok$' <<<"$state" \
+      && grep -q '^coreHealth=ok$' <<<"$state" \
+      && grep -q '^adapterReadiness=unavailable$' <<<"$state" \
       && grep -q '^protocol=vpp-runtime-health/v1$' <<<"$state" \
       && grep -q '^profile=root$' <<<"$state"; then
     restart_running=1
@@ -162,6 +172,42 @@ done
 [[ "$restart_running" == 1 ]] \
   || { echo "runtime did not recover after crash; evidence=$evidence_file.restart.state" >&2; exit 1; }
 
+# Replace the root profile with the app-UID VPN core profile. This is a
+# lifecycle-only proof in SAKAMOTO-67; no TUN fd or packet Adapter is claimed.
+adb_cmd shell am start -n "$activity" --ez runtimeStart true --es runtimeProfile vpn >/dev/null
+vpn_running=0
+for _ in $(seq 1 30); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null \
+    | tr -d '\r' || true)"
+  printf '%s\n' "$state" >"$evidence_file.vpn.state"
+  if grep -q '^state=running$' <<<"$state" \
+      && grep -q '^profile=vpn$' <<<"$state" \
+      && grep -q '^health=ok$' <<<"$state" \
+      && grep -q '^coreHealth=ok$' <<<"$state" \
+      && grep -q '^adapterReadiness=unavailable$' <<<"$state"; then
+    vpn_running=1
+    break
+  fi
+  if grep -q '^state=error$' <<<"$state"; then
+    echo "VPN core start failed; evidence=$evidence_file.vpn.state" >&2
+    exit 1
+  fi
+  sleep 1
+done
+[[ "$vpn_running" == 1 ]] \
+  || { echo "VPN core did not reach running; evidence=$evidence_file.vpn.state" >&2; exit 1; }
+vpn_pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
+vpn_uid="$(adb_cmd shell "su 0 sh -c 'grep ^Uid: /proc/$vpn_pid/status'" \
+  | tr -d '\r' | awk '{print $2}')"
+[[ "$vpn_uid" == "$app_uid" ]] \
+  || { echo "VPN profile VPP UID was $vpn_uid, expected app UID $app_uid" >&2; exit 1; }
+adb_cmd shell input keyevent KEYCODE_HOME
+adb_cmd shell am start -n "$activity" >/dev/null
+sleep 1
+state="$(adb_cmd shell run-as "$package" cat "$state_path" | tr -d '\r')"
+grep -q '^state=running$' <<<"$state"
+grep -q '^profile=vpn$' <<<"$state"
+
 adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null
 for _ in $(seq 1 20); do
   state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
@@ -174,6 +220,7 @@ for _ in $(seq 1 20); do
 done
 grep -q '^state=stopped$' <<<"$state"
 adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
+  && test ! -e files/profiles/vpn/vpp \
   && test ! -e files/profiles/root/vpp/runtime/cli.sock \
   && test ! -e files/profiles/root/vpp/runtime/statseg.sock \
   && test ! -e files/profiles/root/vpp/shm'"

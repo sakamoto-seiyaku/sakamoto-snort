@@ -1,5 +1,6 @@
 import com.sakamoto.snort.androidruntime.RuntimeControlProtocol;
 import com.sakamoto.snort.androidruntime.RuntimeControlRequest;
+import com.sakamoto.snort.androidruntime.RuntimeControlNative;
 import com.sakamoto.snort.androidruntime.RuntimeProfile;
 import com.sakamoto.snort.androidruntime.RuntimeSnapshot;
 import com.sakamoto.snort.androidruntime.RuntimeStateStore;
@@ -12,10 +13,11 @@ import java.nio.file.Path;
 public final class AndroidRuntimeContractTest {
     public static void main(String[] args) throws Exception {
         requestRoundTripIsVersionedAndProfileAware();
-        profileAdapterManifestIdentityIsStable();
+        profileDoesNotExposeAdapterArtifacts();
         snapshotRoundTripPreservesBoundedHealthAndError();
         stoppedSnapshotRetainsRecentFailure();
-        healthRequiresArtifactAndProfileAdapterIdentity();
+        coreHealthDoesNotClaimAdapterReadiness();
+        nativeCoreHandshakeRequiresGeneratedIdentity();
         System.out.println("android runtime contract: PASS");
     }
 
@@ -48,7 +50,9 @@ public final class AndroidRuntimeContractTest {
         RuntimeSnapshot restored = RuntimeStateStore.read(files.toFile());
         check(restored.state.equals(RuntimeSnapshot.STATE_RUNNING), "running state round-trips");
         check(restored.profile == RuntimeProfile.ROOT, "root profile round-trips");
-        check("nfqueue".equals(restored.adapter), "adapter identity round-trips");
+        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(restored.adapterReadiness),
+                "adapter readiness remains explicitly unavailable");
+        check("ok".equals(restored.coreHealth), "core health round-trips separately");
         check(restored.pid == 42L, "owner pid round-trips");
 
         RuntimeSnapshot failure = RuntimeSnapshot.error(
@@ -87,28 +91,25 @@ public final class AndroidRuntimeContractTest {
         check(!restored.mayBeActive, "persisted terminal failure is inactive");
     }
 
-    private static void profileAdapterManifestIdentityIsStable() {
-        check("libnfqueue_poc_plugin.so".equals(RuntimeProfile.ROOT.adapterArtifact),
-                "root profile has a stable adapter artifact identity");
-        check("libtun_poc_plugin.so".equals(RuntimeProfile.VPN.adapterArtifact),
-                "VPN profile has a stable adapter artifact identity");
+    private static void profileDoesNotExposeAdapterArtifacts() {
+        check("root".equals(RuntimeProfile.ROOT.wireName), "root profile wire name is stable");
+        check("vpn".equals(RuntimeProfile.VPN.wireName), "VPN profile wire name is stable");
     }
 
-    private static void healthRequiresArtifactAndProfileAdapterIdentity() {
+    private static void coreHealthDoesNotClaimAdapterReadiness() {
         VppHealthHandshake.Result healthy = VppHealthHandshake.parse(
                 RuntimeProfile.ROOT, "vpp-runtime-health/v1", "v26.02-release", "arm64-v8a",
                 "artifact-sha256:abc", 0,
-                "Version: v26.02-release\nArtifact: artifact-sha256:abc\n"
-                        + "Plugin: nfqueue adapter ready\n");
-        check(healthy.isReady(), "matching version/artifact/adapter health is ready");
-        check("nfqueue".equals(healthy.adapter), "root adapter is reported");
+                "Version: v26.02-release\nArtifact: artifact-sha256:abc\n");
+        check(healthy.isReady(), "matching core version/artifact health is ready");
+        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(healthy.adapter),
+                "core health never reports Adapter readiness");
 
-        check(!VppHealthHandshake.parse(
+        check(VppHealthHandshake.parse(
                 RuntimeProfile.VPN, "vpp-runtime-health/v1", "v26.02-release", "arm64-v8a",
                 "artifact-sha256:abc", 0,
-                "Version: v26.02-release\nArtifact: artifact-sha256:abc\n"
-                        + "Plugin: nfqueue adapter ready\n").isReady(),
-                "VPN cannot claim readiness from the root adapter");
+                "Version: v26.02-release\nArtifact: artifact-sha256:abc\n").isReady(),
+                "VPN core health is independent of Adapter readiness");
         check(!VppHealthHandshake.parse(
                 RuntimeProfile.ROOT, "vpp-runtime-health/v1", "v26.02-release", "arm64-v8a",
                 "artifact-sha256:wrong", 0,
@@ -125,6 +126,23 @@ public final class AndroidRuntimeContractTest {
                 "vpp-runtime-health/v1", "v26.02-release", "arm64-v8a", "arm64-v8a", 0,
                 "Version: v26.02-release\n").isReady(),
                 "legacy health parser remains usable for migration evidence");
+    }
+
+    private static void nativeCoreHandshakeRequiresGeneratedIdentity() {
+        RuntimeControlNative.Status status = new RuntimeControlNative.Status(
+                RuntimeControlNative.CONTROL_ABI_VERSION, 0, 0, "show_version_51077d14",
+                "vpp", "v26.02-release", "", "");
+        check(VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
+                "v26.02-release", "arm64-v8a", "sha256:core", "show_version_51077d14",
+                status).isReady(), "generated VAPI core identity proves readiness");
+        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(
+                        VppHealthHandshake.evaluate(RuntimeProfile.VPN,
+                                "vpp-runtime-health/v1", "v26.02-release", "arm64-v8a",
+                                "sha256:core", "show_version_51077d14", status).adapter),
+                "native core handshake leaves VPN Adapter unavailable");
+        check(!VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
+                "v26.02-release", "arm64-v8a", "sha256:core", "wrong-api", status).isReady(),
+                "generated API identity mismatch fails closed");
     }
 
     private static void check(boolean condition, String message) {

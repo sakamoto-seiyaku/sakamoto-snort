@@ -15,20 +15,29 @@ java -cp "$out_dir" RuntimeContractTest
 # SAKAMOTO-67 production-incubator seam. The experiment remains covered below
 # as migration evidence, while this gate proves the forward app contract.
 rtk bash "$repo_root/tests/android/android-runtime-contract-test.sh"
-# Build/artifact seam: a core-only stage is rejected and a complete stage's
-# packaged adapters must agree with the runtime manifest names.
+# Build/artifact seam: the core runtime is packaged without experiment packet
+# adapter artifacts and carries a generated-VAPI identity.
 rtk bash "$repo_root/tests/android/android-runtime-artifact-contract-test.sh"
 production_service_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
 grep -q 'ACTION_START' "$production_service_source"
 grep -q 'RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION' "$production_service_source"
-grep -q 'adapterArtifact' "$production_service_source"
-grep -q 'shellQuote(command)' "$production_service_source"
-grep -q 'new ProcessBuilder(vppctl.getPath(), "-s", socket.getPath(), command)' \
-  "$production_service_source"
-grep -q 'manifestAdapterArtifact' "$production_service_source"
+grep -q 'RuntimeControlNative' "$production_service_source"
+grep -q 'apiIdentity' "$production_service_source"
+grep -q 'kill -TERM' "$production_service_source"
+grep -q 'kill -KILL' "$production_service_source"
+if grep -q 'vppctl.*quit' "$production_service_source"; then
+  echo "product stop must not use vppctl quit" >&2
+  exit 1
+fi
+grep -q 'ADAPTER_UNAVAILABLE' "$production_service_source"
 grep -q 'PidIdentity' "$production_service_source"
 grep -q 'onDestroy' "$production_activity_source"
+grep -q 'RuntimeControlBackend' "$production_activity_source"
+if grep -q 'LocalProductBackend' "$production_activity_source"; then
+  echo "Activity control adapter retained the misleading LocalProductBackend name" >&2
+  exit 1
+fi
 
 service_source="$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/src/main/java/com/sakamoto/snort/vpnlite/SnortRuntimeService.java"
 grep -q 'SAKAMOTO_VPP_OWNER_TOKEN' "$service_source"

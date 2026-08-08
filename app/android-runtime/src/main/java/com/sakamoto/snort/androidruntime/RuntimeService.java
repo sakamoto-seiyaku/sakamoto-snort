@@ -10,7 +10,6 @@ import android.content.pm.PackageManager;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.IBinder;
-import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
@@ -32,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * Sole Android lifecycle authority for one profile-owned VPP runtime.
  *
  * <p>The Activity sends only versioned product requests. This service owns
- * profile selection, foreground visibility, artifact/adapter health, process
+ * profile selection, foreground visibility, core-runtime health, process
  * supervision, and cleanup. It intentionally remains alive when the Activity
  * is closed or recreated.</p>
  */
@@ -44,14 +43,12 @@ public final class RuntimeService extends VpnService {
     private static final String TAG = "SakamotoRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
     private static final String VPP_BINARY = "libvpp_runtime.so";
-    private static final String VPPCTL_BINARY = "libvppctl.so";
     private static final String MANIFEST_ASSET = "vpp-runtime.properties";
     private static final String HASH_ASSET = "vpp-runtime.sha256";
     private static final String CHANNEL_ID = "sakamoto-runtime";
     private static final int NOTIFICATION_ID = 6701;
     private static final int HEALTH_ATTEMPTS = 24;
     private static final long HEALTH_RETRY_MILLIS = 250L;
-    private static final long STOP_GRACE_MILLIS = 2500L;
     private static final long STOP_TERM_MILLIS = 1500L;
     private static final long STOP_KILL_MILLIS = 1500L;
 
@@ -68,7 +65,6 @@ public final class RuntimeService extends VpnService {
     private volatile long monitoredPid = -1L;
     private RuntimeSnapshot snapshot;
     private Process vppProcess;
-    private ParcelFileDescriptor vpnFd;
     private RuntimeProfile activeProfile;
     private File profileRoot;
     private File pidFile;
@@ -206,13 +202,24 @@ public final class RuntimeService extends VpnService {
         if (requestedProfile == null) {
             requestedProfile = RuntimeProfile.ROOT;
         }
-        if (runtimeExists()) {
-            if (requestedProfile == activeProfile) {
+        RuntimeProfile previousProfile = activeProfile;
+        boolean previousRuntime = runtimeExists() || profileHasResidue(previousProfile)
+                || (snapshot != null && snapshot.isActive());
+        if (previousRuntime) {
+            if (requestedProfile == previousProfile && runtimeExists()) {
                 appendLog("start ignored: exactly one runtime is already active");
                 return;
             }
             stopRequested = true;
-            stopRuntime();
+            // Keep this service and its foreground notification alive while
+            // replacing profiles. A normal stop calls stopSelf(), which can
+            // race the queued replacement start and tear down the new core.
+            if (!stopRuntime(false)) {
+                // The previous profile remains authoritative. Never launch a
+                // second VPP while ownership or residue is uncertain.
+                stopRequested = false;
+                return;
+            }
         }
         activeProfile = requestedProfile;
         initializeProfilePaths(activeProfile);
@@ -230,18 +237,12 @@ public final class RuntimeService extends VpnService {
         String version = manifest.getProperty("version", "").trim();
         String abi = manifest.getProperty("abi", "").trim();
         String expectedArtifact = manifest.getProperty("artifact", "").trim();
-        String expectedAdapter;
-        try {
-            expectedAdapter = manifestAdapterArtifact(manifest, activeProfile);
-        } catch (IOException error) {
-            failWithoutRuntime("runtime_manifest_invalid", messageOf(error));
-            return;
-        }
+        String expectedApiIdentity = manifest.getProperty("apiIdentity", "").trim();
         String deviceAbi = deviceAbi();
         if (!VppHealthHandshake.PROTOCOL.equals(protocol) || version.isEmpty()
-                || abi.isEmpty() || expectedArtifact.isEmpty()) {
+                || abi.isEmpty() || expectedArtifact.isEmpty() || expectedApiIdentity.isEmpty()) {
             failWithoutRuntime("runtime_manifest_invalid",
-                    "protocol, version, abi and artifact identity are required");
+                    "protocol, version, abi, artifact and API identity are required");
             return;
         }
         if (!abi.equals(deviceAbi)) {
@@ -260,7 +261,6 @@ public final class RuntimeService extends VpnService {
 
         File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
         File vpp = new File(nativeDir, VPP_BINARY);
-        File adapter = new File(nativeDir, expectedAdapter);
         try {
             if (!vpp.isFile()) {
                 throw new IOException("VPP artifact is not packaged: " + VPP_BINARY);
@@ -271,9 +271,6 @@ public final class RuntimeService extends VpnService {
                         "artifact and SHA-256 assets disagree");
                 return;
             }
-            if (!adapter.isFile()) {
-                throw new IOException("profile adapter is not packaged: " + adapter.getName());
-            }
             String actualArtifact = "sha256:" + sha256(vpp);
             if (!expectedArtifact.equalsIgnoreCase(actualArtifact)) {
                 failWithoutRuntime("runtime_artifact_hash_mismatch",
@@ -283,20 +280,14 @@ public final class RuntimeService extends VpnService {
             if (!vpp.canExecute() && !vpp.setExecutable(true, false)) {
                 throw new IOException("VPP artifact is not executable");
             }
-            if (activeProfile == RuntimeProfile.VPN) {
-                if (!establishVpnAdapter()) {
-                    failWithoutRuntime("vpn_adapter_unavailable",
-                            "VPN authorization or TUN establishment failed");
-                    return;
-                }
-            }
-            prepareProfile(profileRoot, nativeDir, activeProfile, adapter.getName());
+            prepareProfile(profileRoot, activeProfile);
             Process process = launchVpp(vpp, nativeDir, profileRoot, activeProfile);
             vppProcess = process;
             appendLog("vpp_process=started profile=" + activeProfile.wireName
                     + " artifact=" + expectedArtifact);
             VppHealthHandshake.Result health = waitForHealth(nativeDir, profileRoot, protocol,
-                    version, deviceAbi, expectedArtifact, activeProfile, process);
+                    version, deviceAbi, expectedArtifact, expectedApiIdentity, activeProfile,
+                    process);
             if (stopRequested) {
                 stopRuntime();
                 return;
@@ -313,33 +304,14 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             publish(RuntimeSnapshot.running(activeProfile, protocol, version, expectedArtifact,
-                    deviceAbi, health.adapter, health.health, pid, generation));
+                    deviceAbi, "", health.health, pid, generation));
             appendLog("runtime_state=running profile=" + activeProfile.wireName
-                    + " version=" + version + " adapter=" + health.adapter);
+                    + " version=" + version + " core_health=" + health.health
+                    + " adapter=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE);
             monitorExit(process);
         } catch (Exception error) {
             Log.e(TAG, "VPP runtime startup failed", error);
             failWithCleanup("runtime_start_failed", messageOf(error));
-        }
-    }
-
-    private boolean establishVpnAdapter() {
-        if (vpnFd != null) {
-            return true;
-        }
-        try {
-            VpnService.Builder builder = new VpnService.Builder()
-                    .setSession("Sakamoto VPP")
-                    .setMtu(1500)
-                    .addAddress("10.111.0.2", 32)
-                    .addRoute("0.0.0.0", 0)
-                    .addAddress("fd00:111:111::2", 128)
-                    .addRoute("::", 0);
-            vpnFd = builder.establish();
-            return vpnFd != null;
-        } catch (RuntimeException error) {
-            appendLog("vpn_establish_failed=" + messageOf(error));
-            return false;
         }
     }
 
@@ -377,7 +349,6 @@ public final class RuntimeService extends VpnService {
                     true, cleanup.pid);
             return;
         }
-        closeVpnAdapter();
         publishError("runtime_recovered", "previous VPP owner was no longer active", false, -1L);
         publish(RuntimeSnapshot.stoppedAfter(snapshot));
     }
@@ -393,19 +364,12 @@ public final class RuntimeService extends VpnService {
             String version = manifest.getProperty("version", "").trim();
             String abi = manifest.getProperty("abi", "").trim();
             String artifact = manifest.getProperty("artifact", "").trim();
-            String expectedAdapter;
-            try {
-                expectedAdapter = manifestAdapterArtifact(manifest, activeProfile);
-            } catch (IOException error) {
-                publishError("runtime_manifest_invalid", messageOf(error), true, pid);
-                monitorPid(pid);
-                return;
-            }
+            String apiIdentity = manifest.getProperty("apiIdentity", "").trim();
             File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
             if (!VppHealthHandshake.PROTOCOL.equals(protocol) || version.isEmpty()
-                    || abi.isEmpty() || artifact.isEmpty()) {
+                    || abi.isEmpty() || artifact.isEmpty() || apiIdentity.isEmpty()) {
                 publishError("runtime_manifest_invalid",
-                        "protocol, version, abi and artifact identity are required", true, pid);
+                        "protocol, version, abi, artifact and API identity are required", true, pid);
                 monitorPid(pid);
                 return;
             }
@@ -417,7 +381,6 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             File vpp = new File(nativeDir, VPP_BINARY);
-            File adapter = new File(nativeDir, expectedAdapter);
             if (!vpp.isFile()) {
                 publishError("runtime_artifact_missing",
                         "VPP artifact is not packaged: " + VPP_BINARY, true, pid);
@@ -437,33 +400,20 @@ public final class RuntimeService extends VpnService {
                 monitorPid(pid);
                 return;
             }
-            if (!adapter.isFile()) {
-                publishError("runtime_adapter_missing",
-                        "profile adapter is not packaged: " + adapter.getName(), true, pid);
-                monitorPid(pid);
-                return;
+            File socket = new File(profileRoot, "runtime/api.sock");
+            if (activeProfile == RuntimeProfile.ROOT && socket.exists()) {
+                runRootCommand("chmod 0666 " + shellQuote(socket.getPath()), 2L);
             }
-            if (activeProfile == RuntimeProfile.VPN && !establishVpnAdapter()) {
-                publishError("vpn_adapter_unavailable",
-                        "VPN authorization or TUN establishment failed", true, pid);
-                monitorPid(pid);
-                return;
-            }
-            File socket = new File(profileRoot, "runtime/cli.sock");
-            CommandResult command = socket.exists()
-                    ? runHealthProbe(nativeDir, socket)
-                    : new CommandResult(125, "runtime CLI socket is absent");
-            String output = "Artifact: " + artifact + "\n" + command.output;
-            if (pluginIdentityPresent(command.output, activeProfile)) {
-                output += "\nPlugin: " + activeProfile.adapter + " adapter ready\n";
-            }
-            VppHealthHandshake.Result health = VppHealthHandshake.parse(activeProfile, protocol,
-                    version, abi, artifact, command.exitCode, output);
+            RuntimeControlNative.Status nativeStatus = socket.exists()
+                    ? RuntimeControlNative.query(socket.getPath())
+                    : RuntimeControlNative.Status.unavailable();
+            VppHealthHandshake.Result health = VppHealthHandshake.evaluate(activeProfile,
+                    protocol, version, abi, artifact, apiIdentity, nativeStatus);
             if (!health.isReady()) {
                 publishError(health.errorCode, "adopted runtime health failed", true, pid);
             } else {
                 publish(RuntimeSnapshot.running(activeProfile, protocol, version, artifact, abi,
-                        health.adapter, health.health, pid, generation));
+                        "", health.health, pid, generation));
             }
         } catch (Exception error) {
             publishError("runtime_recovery_failed", messageOf(error), true, pid);
@@ -485,7 +435,6 @@ public final class RuntimeService extends VpnService {
                 + " SAKAMOTO_ANDROID_SHM_DIR=" + shellQuote(shm.getPath())
                 + " SAKAMOTO_VPP_OWNER_TOKEN=" + shellQuote(token)
                 + " SAKAMOTO_RUNTIME_PROFILE=" + shellQuote(profile.wireName)
-                + " SAKAMOTO_RUNTIME_ADAPTER=" + shellQuote(profile.adapter)
                 + "; exec " + shellQuote(vpp.getPath()) + " plugin_path "
                 + shellQuote(nativeDir.getPath()) + " -c "
                 + shellQuote(new File(currentProfile, "startup.conf").getPath())
@@ -498,23 +447,33 @@ public final class RuntimeService extends VpnService {
 
     private VppHealthHandshake.Result waitForHealth(File nativeDir, File profile,
                                                     String protocol, String version, String abi,
-                                                    String artifact, RuntimeProfile selected,
-                                                    Process process) throws Exception {
-        File socket = new File(profile, "runtime/cli.sock");
-        VppHealthHandshake.Result last = VppHealthHandshake.parse(selected, protocol, version,
-                abi, artifact, -1, "");
+                                                    String artifact, String apiIdentity,
+                                                    RuntimeProfile selected, Process process)
+            throws Exception {
+        File socket = new File(profile, "runtime/api.sock");
+        VppHealthHandshake.Result last = VppHealthHandshake.evaluate(selected, protocol, version,
+                abi, artifact, apiIdentity, RuntimeControlNative.Status.unavailable());
         for (int attempt = 0; attempt < HEALTH_ATTEMPTS; attempt++) {
             if (stopRequested || !process.isAlive()) {
                 return last;
             }
             if (socket.exists()) {
-                CommandResult command = runHealthProbe(nativeDir, socket);
-                String output = "Artifact: " + artifact + "\n" + command.output;
-                if (pluginIdentityPresent(command.output, selected)) {
-                    output += "\nPlugin: " + selected.adapter + " adapter ready\n";
+                if (selected == RuntimeProfile.ROOT) {
+                    // Root VPP creates the private socksvr as root. The app
+                    // control shim is read-only and needs a bounded handoff
+                    // to query the same instance; no Adapter state is shared.
+                    runRootCommand("chmod 0666 " + shellQuote(socket.getPath()), 2L);
                 }
-                last = VppHealthHandshake.parse(selected, protocol, version, abi, artifact,
-                        command.exitCode, output);
+                RuntimeControlNative.Status nativeStatus =
+                        RuntimeControlNative.query(socket.getPath());
+                appendLog("core_control rc=" + nativeStatus.transportCode
+                        + " retval=" + nativeStatus.vppRetval
+                        + " abi=" + nativeStatus.controlAbiVersion
+                        + " api=" + nativeStatus.apiIdentity
+                        + " program=" + nativeStatus.program
+                        + " version=" + nativeStatus.version);
+                last = VppHealthHandshake.evaluate(selected, protocol, version, abi, artifact,
+                        apiIdentity, nativeStatus);
                 if (last.isReady()) {
                     return last;
                 }
@@ -522,48 +481,6 @@ public final class RuntimeService extends VpnService {
             Thread.sleep(HEALTH_RETRY_MILLIS);
         }
         return last;
-    }
-
-    private CommandResult runHealthProbe(File nativeDir, File socket) throws Exception {
-        CommandResult version = runVppctl(nativeDir, socket, "show version");
-        if (version.exitCode != 0) {
-            return version;
-        }
-        CommandResult plugins = runVppctl(nativeDir, socket, "show plugins");
-        return new CommandResult(plugins.exitCode, version.output + "\n" + plugins.output);
-    }
-
-    private CommandResult runVppctl(File nativeDir, File socket, String command) throws Exception {
-        File vppctl = new File(nativeDir, VPPCTL_BINARY);
-        if (!vppctl.isFile()) {
-            return new CommandResult(127, "vppctl artifact is not packaged");
-        }
-        // Pass the complete command as one argv element.  vppctl joins its
-        // arguments before sending them to the VPP CLI; letting a shell parse
-        // a multiline query would split it into separate shell commands.
-        ProcessBuilder builder;
-        if (activeProfile == RuntimeProfile.ROOT) {
-            String shell = "export LD_LIBRARY_PATH=" + shellQuote(nativeDir.getPath())
-                    + "; exec " + shellQuote(vppctl.getPath()) + " -s "
-                    + shellQuote(socket.getPath()) + " " + shellQuote(command);
-            builder = new ProcessBuilder(SU_PATH, "0", "sh", "-c", shell);
-        } else {
-            builder = new ProcessBuilder(vppctl.getPath(), "-s", socket.getPath(), command);
-            builder.environment().put("LD_LIBRARY_PATH", nativeDir.getPath());
-        }
-        Process process = builder.redirectErrorStream(true).start();
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        Thread reader = new Thread(() -> copyBounded(process.getInputStream(), output),
-                "sakamoto-vppctl-reader");
-        reader.start();
-        if (!process.waitFor(2, TimeUnit.SECONDS)) {
-            process.destroyForcibly();
-            reader.join(500L);
-            return new CommandResult(124, "vppctl health query timed out");
-        }
-        reader.join(500L);
-        return new CommandResult(process.exitValue(),
-                output.toString(StandardCharsets.UTF_8.name()));
     }
 
     private void monitorExit(Process process) {
@@ -616,7 +533,6 @@ public final class RuntimeService extends VpnService {
             publishError("cleanup_failed", "VPP exited; " + cleanup.detail, true, cleanup.pid);
             return;
         }
-        closeVpnAdapter();
         clearProfileHandles();
         publishError("unexpected_exit", "VPP owner exited unexpectedly", false, -1L);
         stopIfInactive();
@@ -637,21 +553,23 @@ public final class RuntimeService extends VpnService {
                     + cleanup.detail, true, cleanup.pid);
             return;
         }
-        closeVpnAdapter();
         clearProfileHandles();
         publishError("unexpected_exit", "VPP exited with status " + exitCode, false, -1L);
         stopIfInactive();
     }
 
-    private void stopRuntime() {
+    private boolean stopRuntime() {
+        return stopRuntime(true);
+    }
+
+    private boolean stopRuntime(boolean stopService) {
         initializeProfilePaths(activeProfile);
         long pid = currentPid();
-        boolean residue = profileRoot.exists() || pid > 0L || processAlive(vppProcess)
-                || vpnFd != null;
+        boolean residue = profileRoot.exists() || pid > 0L || processAlive(vppProcess);
         if (!residue && snapshot != null && RuntimeSnapshot.STATE_STOPPED.equals(snapshot.state)) {
             stopRequested = false;
             stopIfInactive();
-            return;
+            return true;
         }
         RuntimeSnapshot current = snapshot == null ? RuntimeSnapshot.stopped(activeProfile, generation)
                 : snapshot;
@@ -660,20 +578,20 @@ public final class RuntimeService extends VpnService {
         if (!cleanup.ok) {
             publishError("cleanup_failed", cleanup.detail, true, cleanup.pid);
             stopRequested = false;
-            return;
+            return false;
         }
         vppProcess = null;
-        closeVpnAdapter();
         clearProfileHandles();
         publish(RuntimeSnapshot.stoppedAfter(current));
         stopRequested = false;
-        if (foregroundStarted) {
+        if (stopService && foregroundStarted) {
             stopForeground(true);
             foregroundStarted = false;
         }
-        if (!destroying) {
+        if (stopService && !destroying) {
             stopSelf();
         }
+        return true;
     }
 
     private CleanupResult terminateAndClean(File profile, long pid, Process process) {
@@ -686,22 +604,13 @@ public final class RuntimeService extends VpnService {
             return CleanupResult.failure(pid,
                     "recorded PID identity could not be verified; refusing cleanup");
         }
-        File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
-        File socket = profile == null ? null : new File(profile, "runtime/cli.sock");
-        if (socket != null && socket.exists()) {
-            try {
-                runVppctl(nativeDir, socket, "quit");
-            } catch (Exception error) {
-                appendLog("vppctl_quit_failed=" + messageOf(error));
-            }
+        // RuntimeService is the process supervisor. Product stop never sends
+        // a CLI `quit`; TERM/KILL are the only lifecycle signals.
+        if (pid > 0L) {
+            runPlatformCommand("kill -TERM " + pid, 2L);
         }
-        if (!waitUntilGone(process, pid, STOP_GRACE_MILLIS)) {
-            if (pid > 0L) {
-                runPlatformCommand("kill -TERM " + pid, 2L);
-            }
-            if (process != null && process.isAlive()) {
-                process.destroy();
-            }
+        if (process != null && process.isAlive()) {
+            process.destroy();
         }
         if (!waitUntilGone(process, pid, STOP_TERM_MILLIS)) {
             if (pid > 0L) {
@@ -779,6 +688,14 @@ public final class RuntimeService extends VpnService {
         return true;
     }
 
+    private boolean profileHasResidue(RuntimeProfile profile) {
+        if (profile == null) {
+            return false;
+        }
+        File root = new File(getFilesDir(), "profiles/" + profile.wireName + "/vpp");
+        return root.exists();
+    }
+
     private boolean processExists(long pid) {
         return pid > 0L && runPlatformCommandStatus("kill -0 " + pid, 2L) == 0;
     }
@@ -824,9 +741,6 @@ public final class RuntimeService extends VpnService {
                 + shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + token) + " >/dev/null"
                 + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
                 + shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + activeProfile.wireName)
-                + " >/dev/null"
-                + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
-                + shellQuote("SAKAMOTO_RUNTIME_ADAPTER=" + activeProfile.adapter)
                 + " >/dev/null";
         int status = runPlatformCommandStatus(command, 2L);
         if (status == 0) {
@@ -858,7 +772,6 @@ public final class RuntimeService extends VpnService {
             return;
         }
         vppProcess = null;
-        closeVpnAdapter();
         clearProfileHandles();
         publishError(code, message, false, -1L);
         stopIfInactive();
@@ -944,8 +857,7 @@ public final class RuntimeService extends VpnService {
         }
     }
 
-    private void prepareProfile(File profile, File nativeDir, RuntimeProfile selected,
-                                String adapterName) throws IOException {
+    private void prepareProfile(File profile, RuntimeProfile selected) throws IOException {
         File runtime = new File(profile, "runtime");
         File logs = new File(profile, "logs");
         File shm = new File(profile, "shm");
@@ -958,10 +870,11 @@ public final class RuntimeService extends VpnService {
         String config = "unix {\n  nodaemon\n  nobanner\n  runtime-dir "
                 + runtime.getPath() + "\n  log " + new File(logs, "vpp.log").getPath()
                 + "\n  cli-listen " + new File(runtime, "cli.sock").getPath()
-                + "\n  cli-no-pager\n}\n\napi-segment {\n  prefix sakamoto-vpp-"
+                + "\n  cli-no-pager\n}\n\n"
+                + "socksvr {\n  socket-name " + new File(runtime, "api.sock").getPath()
+                + "\n}\n\napi-segment {\n  prefix sakamoto-vpp-"
                 + selected.wireName + "-v1\n}\n\nstatseg {\n  socket-name "
-                + new File(runtime, "statseg.sock").getPath() + "\n}\n\nplugins {\n  path "
-                + nativeDir.getPath() + "\n  plugin " + adapterName + " { enable }\n}\n";
+                + new File(runtime, "statseg.sock").getPath() + "\n}\n";
         try (FileOutputStream output = new FileOutputStream(new File(profile, "startup.conf"))) {
             output.write(config.getBytes(StandardCharsets.UTF_8));
             output.getFD().sync();
@@ -972,9 +885,11 @@ public final class RuntimeService extends VpnService {
         if (profile == null) {
             profile = RuntimeProfile.ROOT;
         }
-        if (activeProfile != profile || profileRoot == null) {
+        File expectedRoot = new File(getFilesDir(), "profiles/" + profile.wireName + "/vpp");
+        if (activeProfile != profile || profileRoot == null
+                || !expectedRoot.equals(profileRoot)) {
             activeProfile = profile;
-            profileRoot = new File(getFilesDir(), "profiles/" + profile.wireName + "/vpp");
+            profileRoot = expectedRoot;
             pidFile = new File(profileRoot, "runtime/vpp.pid");
         }
     }
@@ -1065,20 +980,6 @@ public final class RuntimeService extends VpnService {
         return value.toString();
     }
 
-    private static void copyBounded(InputStream input, ByteArrayOutputStream output) {
-        try (InputStream source = input) {
-            byte[] buffer = new byte[1024];
-            int count;
-            while ((count = source.read(buffer)) >= 0) {
-                if (count > 0 && output.size() < 64 * 1024) {
-                    output.write(buffer, 0, Math.min(count, 64 * 1024 - output.size()));
-                }
-            }
-        } catch (IOException ignored) {
-            // Exit code remains authoritative.
-        }
-    }
-
     private boolean runRootCommand(String command, long timeoutSeconds) {
         return runRootCommandStatus(command, timeoutSeconds) == 0;
     }
@@ -1113,46 +1014,6 @@ public final class RuntimeService extends VpnService {
             Log.w(TAG, "app command failed", error);
             return 125;
         }
-    }
-
-    private void closeVpnAdapter() {
-        ParcelFileDescriptor descriptor = vpnFd;
-        vpnFd = null;
-        if (descriptor != null) {
-            try {
-                descriptor.close();
-            } catch (IOException error) {
-                appendLog("vpn_fd_close_failed=" + messageOf(error));
-            }
-        }
-    }
-
-    private static String adapterArtifact(RuntimeProfile profile) {
-        return profile.adapterArtifact;
-    }
-
-    private static String manifestAdapterArtifact(Properties manifest, RuntimeProfile profile)
-            throws IOException {
-        String key = "adapter." + profile.wireName;
-        String expected = manifest.getProperty(key, "").trim();
-        String canonical = adapterArtifact(profile);
-        if (!canonical.equals(expected)) {
-            throw new IOException(key + " must identify " + canonical);
-        }
-        return expected;
-    }
-
-    private static boolean pluginIdentityPresent(String output, RuntimeProfile profile) {
-        if (output == null || profile == null) {
-            return false;
-        }
-        String lower = output.toLowerCase(Locale.US);
-        String artifact = adapterArtifact(profile).toLowerCase(Locale.US);
-        String stem = artifact.startsWith("lib") ? artifact.substring(3) : artifact;
-        if (stem.endsWith(".so")) {
-            stem = stem.substring(0, stem.length() - 3);
-        }
-        return lower.contains(artifact) || lower.contains(stem);
     }
 
     private static boolean deleteTree(File file) {
@@ -1228,16 +1089,6 @@ public final class RuntimeService extends VpnService {
             }
         } catch (IOException error) {
             Log.e(TAG, "runtime log write failed", error);
-        }
-    }
-
-    private static final class CommandResult {
-        final int exitCode;
-        final String output;
-
-        CommandResult(int exitCode, String output) {
-            this.exitCode = exitCode;
-            this.output = output;
         }
     }
 

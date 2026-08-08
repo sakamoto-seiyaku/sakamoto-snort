@@ -4,7 +4,6 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.net.VpnService;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -18,13 +17,12 @@ import android.widget.TextView;
 /** Minimal debug shell. It only issues versioned requests and renders snapshots. */
 public class DebugControlActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION = 1001;
-    private static final int VPN_PERMISSION = 1002;
     private static final long STATUS_POLL_MILLIS = 500L;
     private static final String EXTRA_RUNTIME_START = "runtimeStart";
     private static final String EXTRA_RUNTIME_STOP = "runtimeStop";
     private static final String EXTRA_RUNTIME_PROFILE = "runtimeProfile";
 
-    private final LocalProductBackend backend = new LocalProductBackend();
+    private final RuntimeControlBackend backend = new RuntimeControlBackend();
     private final Handler main = new Handler(Looper.getMainLooper());
     private Spinner profileSpinner;
     private TextView statusView;
@@ -54,9 +52,9 @@ public class DebugControlActivity extends Activity {
             main.post(this::stopRuntime);
         } else if (intent.getBooleanExtra(EXTRA_RUNTIME_START, false)) {
             String profile = intent.getStringExtra(EXTRA_RUNTIME_PROFILE);
-            if (RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
-                    && profileSpinner != null) {
-                profileSpinner.setSelection(1);
+            if (profileSpinner != null && profile != null) {
+                profileSpinner.setSelection(RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
+                        ? 1 : 0);
             }
             main.post(this::startSelected);
         }
@@ -109,8 +107,8 @@ public class DebugControlActivity extends Activity {
     private void startSelected() {
         RuntimeProfile profile = profileSpinner.getSelectedItemPosition() == 1
                 ? RuntimeProfile.VPN : RuntimeProfile.ROOT;
-        LocalProductBackend.StartResult result = backend.start(this, profile);
-        if (result == LocalProductBackend.StartResult.NOTIFICATION_REQUIRED) {
+        RuntimeControlBackend.StartResult result = backend.start(this, profile);
+        if (result == RuntimeControlBackend.StartResult.NOTIFICATION_REQUIRED) {
             pendingStart = true;
             if (android.os.Build.VERSION.SDK_INT >= 33
                     && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -119,11 +117,6 @@ public class DebugControlActivity extends Activity {
                         NOTIFICATION_PERMISSION);
             }
             action("Visible protection notification permission is required.");
-        } else if (result == LocalProductBackend.StartResult.VPN_PERMISSION_REQUIRED) {
-            pendingStart = true;
-            Intent prepare = VpnService.prepare(this);
-            startActivityForResult(prepare, VPN_PERMISSION);
-            action("VPN authorization is required.");
         } else {
             action("Start requested for " + profile.wireName + ".");
         }
@@ -140,10 +133,8 @@ public class DebugControlActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == VPN_PERMISSION && resultCode == RESULT_OK && pendingStart) {
-            pendingStart = false;
-            startSelected();
-        }
+        // SAKAMOTO-67 VPN is an app-UID core profile; TUN authorization is a
+        // later adapter seam and is intentionally not requested here.
     }
 
     @Override

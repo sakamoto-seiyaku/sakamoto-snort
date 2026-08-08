@@ -19,20 +19,15 @@ if [[ ! -f "$vpp_source/CMakeLists.txt" ]]; then
   exit 1
 fi
 
-build_plugin_dir="$build_dir/lib/aarch64-linux-android/vpp_plugins"
 stage_needs_refresh=0
 for artifact in \
   "$stage_dir/bin/vpp" \
-  "$stage_dir/bin/vppctl" \
-  "$stage_dir/plugins/nfqueue_poc_plugin.so" \
-  "$stage_dir/plugins/tun_poc_plugin.so"; do
+  "$stage_dir/bin/vppctl"; do
   [[ -f "$artifact" ]] || stage_needs_refresh=1
 done
 for pair in \
   "$build_dir/bin/vpp:$stage_dir/bin/vpp" \
-  "$build_dir/bin/vppctl:$stage_dir/bin/vppctl" \
-  "$build_plugin_dir/nfqueue_poc_plugin.so:$stage_dir/plugins/nfqueue_poc_plugin.so" \
-  "$build_plugin_dir/tun_poc_plugin.so:$stage_dir/plugins/tun_poc_plugin.so"; do
+  "$build_dir/bin/vppctl:$stage_dir/bin/vppctl"; do
   source_artifact="${pair%%:*}"
   staged_artifact="${pair#*:}"
   if [[ -f "$source_artifact" && ( ! -f "$staged_artifact" || "$source_artifact" -nt "$staged_artifact" ) ]]; then
@@ -46,19 +41,16 @@ if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || "$stage_needs_refresh" == 1 ]]; then
     BUILD_DIR="$build_dir" \
     VPP_CMAKE_BUILD_TYPE=release \
     VPP_USE_LTO=OFF \
-    VPP_PLUGINS="nfqueue_poc;tun_poc" \
+    VPP_PLUGINS="" \
     VPP_EXTRA_CMAKE_ARGS="-DPython3_EXECUTABLE=/usr/bin/python3 -DVPP_MARCH_VARIANT_OCTEONTX2=OFF -DVPP_MARCH_VARIANT_THUNDERX2T99=OFF -DVPP_MARCH_VARIANT_CORTEXA72=OFF -DVPP_MARCH_VARIANT_NEOVERSEN1=OFF -DVPP_MARCH_VARIANT_NEOVERSEV2=OFF -DSAKAMOTO_VPP_NO_IPSEC=ON -DSAKAMOTO_VPP_ANDROID_IDLE_PROFILE=ON" \
     "$poc_dir/scripts/android-configure-vpp-probe.sh"
   PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" TARGET=vpp \
     "$poc_dir/scripts/android-build-vpp-probe.sh"
   PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" TARGET=vppctl \
     "$poc_dir/scripts/android-build-vpp-probe.sh"
-  for plugin_target in nfqueue_poc_plugin tun_poc_plugin; do
-    PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" \
-      TARGET="$plugin_target" "$poc_dir/scripts/android-build-vpp-probe.sh"
-  done
   PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" STAGE_DIR="$stage_dir" \
     "$poc_dir/scripts/android-stage-vpp-core.sh"
+  printf '%s\n' "$build_dir" >"$stage_dir/runtime/vapi-build-dir"
 fi
 
 printf '%s\n' "$stage_dir"

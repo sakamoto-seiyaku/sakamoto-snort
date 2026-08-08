@@ -12,6 +12,7 @@ rtk javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/BoundedText.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeSnapshot.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeStateStore.java" \
+  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlNative.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/VppHealthHandshake.java" \
   "$repo_root/tests/android/AndroidRuntimeContractTest.java"
 rtk java -cp "$out_dir" AndroidRuntimeContractTest
