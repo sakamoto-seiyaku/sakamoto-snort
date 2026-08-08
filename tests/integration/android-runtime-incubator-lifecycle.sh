@@ -294,7 +294,17 @@ signal_verified_owner() {
       -v uid="$expected_uid" -v exe="$expected_exe" \
       'NF && $1 == profile && $2 == pid && $3 == uid && $4 == exe {found=1}
        END {exit found ? 0 : 1}' <<<"$owners" \
-    || { echo "owner identity changed before SIG$signal" >&2; return 1; }
+    || {
+      # A verified owner may exit between the caller's snapshot and this
+      # immediate revalidation. Treat a genuinely absent PID as already
+      # cleaned, but never signal a reused PID with different identity.
+      if awk -F '\t' -v pid="$expected_pid" 'NF && $2 == pid {found=1}
+          END {exit found ? 0 : 1}' <<<"$owners"; then
+        echo "owner PID was reused or changed identity before SIG$signal" >&2
+        return 1
+      fi
+      return 0
+    }
   adb_cmd shell su 0 sh -c "kill -$signal -- '$expected_pid'" >/dev/null 2>&1 \
     || { echo "SIG$signal failed for verified PID $expected_pid" >&2; return 1; }
 }
@@ -919,10 +929,17 @@ adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp'" >/dev/
 assert_exactly_one_owner vpn "$vpn_pid"
 adb_cmd shell input keyevent KEYCODE_HOME
 adb_cmd shell am start -n "$activity" >/dev/null
-sleep 1
-state="$(adb_cmd shell run-as "$package" cat "$state_path" | tr -d '\r')"
-grep -q '^state=running$' <<<"$state"
-grep -q '^profile=vpn$' <<<"$state"
+vpn_recreated=0
+for _ in $(seq 1 15); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  if grep -q '^state=running$' <<<"$state" && grep -q '^profile=vpn$' <<<"$state"; then
+    vpn_recreated=1
+    break
+  fi
+  sleep 1
+done
+[[ "$vpn_recreated" == 1 ]] \
+  || { echo "VPN profile was not retained after Activity recreation" >&2; exit 1; }
 
 # Complete the required Root -> VPN -> Root switch. The old VPN PID and its
 # entire profile tree must be gone before the new Root owner is accepted.

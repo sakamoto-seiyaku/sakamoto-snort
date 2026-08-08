@@ -14,6 +14,9 @@ if grep -Eq 'verified_owner_snapshot \|\| true|all_vpp_process_snapshot \|\| tru
 fi
 grep -q 'signal_verified_owner .*TERM' "$harness"
 grep -q 'signal_verified_owner .*KILL' "$harness"
+grep -q 'owner PID was reused or changed identity' "$harness"
+grep -q 'vpn_recreated=0' "$harness"
+grep -q 'VPN profile was not retained after Activity recreation' "$harness"
 grep -q 'OWNER_SCRIPT_OK=1' "$harness"
 preinstall_line="$(grep -n 'cleanup_verified_vpp_owners preinstall$' "$harness" | head -n 1 | cut -d: -f1)"
 install_line="$(grep -n 'adb_cmd install -r' "$harness" | head -n 1 | cut -d: -f1)"
