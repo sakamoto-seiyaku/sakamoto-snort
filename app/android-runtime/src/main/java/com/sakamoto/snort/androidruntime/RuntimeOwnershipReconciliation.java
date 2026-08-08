@@ -252,7 +252,13 @@ public final class RuntimeOwnershipReconciliation {
         return runtimeMayBeActive
                 && decision != null
                 && decision.isBlocked()
-                && "runtime_ownership_unverified".equals(decision.errorCode);
+                && ("runtime_ownership_unverified".equals(decision.errorCode)
+                // The bounded ownership shell uses status 120/124 for a
+                // disappearing /proc candidate or timeout. inspect() maps
+                // those command failures to cleanup_failed so callers cannot
+                // mistake an ordinary cleanup failure for this narrow race.
+                || isTransientOwnershipAuditFailure(decision.errorCode,
+                        decision.detail));
     }
 
     /** Result of the profile cleanup policy, before the service deletes files. */

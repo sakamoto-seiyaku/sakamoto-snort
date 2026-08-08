@@ -743,6 +743,32 @@ public final class AndroidRuntimeContractTest {
         check(!RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(unverified, false),
                 "inactive runtime keeps ownership-unverified fail-closed");
 
+        RuntimeOwnershipReconciliation.GlobalDecision transientScanFailure =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.ROOT),
+                        RuntimeOwnershipReconciliation.ProfileAudit.unknown(
+                                RuntimeProfile.VPN, "cleanup_failed",
+                                "app-UID /proc ownership scan returned status 120"),
+                        RuntimeOwnershipReconciliation.Projection.known(
+                                RuntimeProfile.VPN, true, 7981L));
+        check(RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(
+                        transientScanFailure, true),
+                "active runtime retries a bounded transient ownership scan failure");
+        check(!RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(
+                        transientScanFailure, false),
+                "inactive runtime keeps transient ownership scan failure fail-closed");
+
+        RuntimeOwnershipReconciliation.GlobalDecision ordinaryCleanupFailure =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.ROOT),
+                        RuntimeOwnershipReconciliation.ProfileAudit.unknown(
+                                RuntimeProfile.VPN, "cleanup_failed", "socket residue remains"),
+                        RuntimeOwnershipReconciliation.Projection.known(
+                                RuntimeProfile.VPN, true, 7981L));
+        check(!RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(
+                        ordinaryCleanupFailure, true),
+                "ordinary cleanup failures never downgrade into an audit retry");
+
         RuntimeOwnershipReconciliation.GlobalDecision ambiguous =
                 RuntimeOwnershipReconciliation.decide(
                         RuntimeOwnershipReconciliation.ProfileAudit.unknown(
