@@ -60,6 +60,21 @@ public final class RuntimeService extends VpnService {
     private static final int OWNERSHIP_RETRY_ATTEMPTS = 2;
     private static final int ROOT_COMMAND_UNAVAILABLE = -125;
 
+    /** Android instantiates the production service through the no-arg path. */
+    public RuntimeService() {
+        this(RuntimeStateStore.defaultWriter());
+    }
+
+    /**
+     * Host/instrumentation seam for deterministic durable-projection failure
+     * injection. The lifecycle still owns all Android side effects; only the
+     * filesystem publication boundary is replaceable.
+     */
+    public RuntimeService(RuntimeStateStore.Writer stateWriter) {
+        this.persistenceGate = new RuntimeStateStore.PersistenceGate(stateWriter,
+                RuntimeSnapshot.stopped());
+    }
+
     private enum WaitResult {
         GONE,
         TIMED_OUT,
@@ -80,6 +95,7 @@ public final class RuntimeService extends VpnService {
     private final AtomicLong healthQueryRevision = new AtomicLong();
     /** Reject delayed START/STOP intents before they can mutate lifecycle state. */
     private final RuntimeControlOrdering controlOrdering = new RuntimeControlOrdering();
+    private final RuntimeStateStore.PersistenceGate persistenceGate;
 
     private volatile boolean stopRequested;
     private volatile boolean foregroundStarted;
@@ -105,6 +121,7 @@ public final class RuntimeService extends VpnService {
         createNotificationChannel();
         RuntimeStateStore.ReadResult durable = RuntimeStateStore.readResult(getFilesDir());
         snapshot = durable.snapshot;
+        persistenceGate.setSnapshot(snapshot);
         durableProjectionRequiresAudit = !durable.present || !durable.valid;
         generation = snapshot.generation;
         activeProfile = snapshot.profile;
@@ -239,6 +256,10 @@ public final class RuntimeService extends VpnService {
     }
 
     private void markExplicitStartPending() {
+        if (persistenceGate.isPersistenceUnavailable()) {
+            appendLog("runtime_state_persistence=start_blocked pending_recovery");
+            return;
+        }
         RuntimeSnapshot current = snapshot;
         if (current == null || !RuntimeSnapshot.STATE_ERROR.equals(current.state)
                 || !current.mayBeActive) {
@@ -314,6 +335,14 @@ public final class RuntimeService extends VpnService {
         if (requestedProfile == null) {
             requestedProfile = RuntimeProfile.ROOT;
         }
+        // A successful ordinary publish is not enough to clear this latch:
+        // the durable projection may still describe an older owner. An
+        // explicit START first performs a bounded ownership audit and writes
+        // the current in-memory projection as a recovery probe. Only that
+        // sequence may make a new launch eligible again.
+        if (persistenceGate.isPersistenceUnavailable() && !recoverDurableProjectionBeforeStart()) {
+            return;
+        }
         RuntimeOwnershipReconciliation.GlobalDecision ownership =
                 auditGlobalOwnership(true);
         if (ownership.isBlocked()) {
@@ -378,8 +407,13 @@ public final class RuntimeService extends VpnService {
             return;
         }
 
-        publish(RuntimeSnapshot.starting(activeProfile, protocol, version, expectedArtifact,
-                generation));
+        if (!publish(RuntimeSnapshot.starting(activeProfile, protocol, version, expectedArtifact,
+                generation))) {
+            // No process has been launched yet. Keep the service fail-closed
+            // and leave the durable projection untouched rather than
+            // starting an owner that a restarted supervisor could not prove.
+            return;
+        }
         CleanupResult preflight = removeAndVerifyProfile(profileRoot, currentPid(), null);
         if (!preflight.ok) {
             publishCleanupFailure("pre-start residue: ", preflight, true);
@@ -430,8 +464,15 @@ public final class RuntimeService extends VpnService {
                         "health passed but the VPP owner PID was not active");
                 return;
             }
-            publish(RuntimeSnapshot.running(activeProfile, protocol, health.version,
-                    expectedArtifact, deviceAbi, health.health, pid, generation));
+            if (!publish(RuntimeSnapshot.running(activeProfile, protocol, health.version,
+                    expectedArtifact, deviceAbi, health.health, pid, generation))) {
+                // The owner is already live, but the supervisor could not
+                // publish its identity. Reuse the bounded strong-identity
+                // TERM/KILL path before returning to the caller.
+                failWithCleanup("runtime_state_persistence_unavailable",
+                        "runtime state could not be persisted after launch");
+                return;
+            }
             appendLog("runtime_state=running profile=" + activeProfile.wireName
                     + " version=" + version + " core_health=" + health.health
                     + " adapter=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE);
@@ -565,6 +606,41 @@ public final class RuntimeService extends VpnService {
                         snapshot.profile, snapshot.isActive(), snapshot.pid)
                 : RuntimeOwnershipReconciliation.Projection.unknown();
         return RuntimeOwnershipReconciliation.decide(root, vpn, projection);
+    }
+
+    /**
+     * Recover a failed durable projection only as an explicit pre-start
+     * transaction. A live owner is deliberately not adopted or replaced
+     * while the projection remains unavailable; the user must stop it first
+     * so this probe cannot bless an uncertain replacement.
+     */
+    private boolean recoverDurableProjectionBeforeStart() {
+        RuntimeOwnershipReconciliation.GlobalDecision ownership =
+                auditGlobalOwnership(false);
+        if (ownership.isBlocked()) {
+            publishGlobalOwnershipFailure(ownership);
+            appendLog("runtime_state_persistence=recovery_blocked ownership="
+                    + ownership.errorCode);
+            return false;
+        }
+        if (ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
+                || ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_VPN) {
+            appendLog("runtime_state_persistence=recovery_blocked live_owner="
+                    + ownership.ownerProfile.wireName + " pid=" + ownership.ownerPid);
+            return false;
+        }
+        if (!cleanGlobalResidue(ownership, "persistence recovery: ")) {
+            return false;
+        }
+        RuntimeStateStore.PersistenceGate.Result recovery = persistenceGate.recover(
+                getFilesDir(), true);
+        snapshot = recovery.snapshot;
+        if (!recovery.recovered) {
+            exposePersistenceFailure(recovery, "recovery_probe");
+            return false;
+        }
+        appendLog("runtime_state_persistence=recovered");
+        return true;
     }
 
     /**
@@ -854,12 +930,19 @@ public final class RuntimeService extends VpnService {
         boolean residue = profileRoot.exists() || pid > 0L || processAlive(vppProcess);
         if (!residue && snapshot != null && RuntimeSnapshot.STATE_STOPPED.equals(snapshot.state)) {
             stopRequested = false;
+            if (persistenceGate.isPersistenceUnavailable()) {
+                // Keep this service alive as the temporary in-memory error
+                // authority. A new service instance would not inherit the
+                // unavailable latch from the stale durable projection.
+                appendLog("runtime_state_persistence=stop_blocked pending_recovery");
+                return false;
+            }
             stopIfInactive();
             return true;
         }
         RuntimeSnapshot current = snapshot == null ? RuntimeSnapshot.stopped(activeProfile, generation)
                 : snapshot;
-        publish(RuntimeSnapshot.stopping(current));
+        boolean stoppingPublished = publish(RuntimeSnapshot.stopping(current));
         CleanupResult cleanup = terminateAndClean(profileRoot, pid, vppProcess);
         if (!cleanup.ok) {
             publishCleanupFailure("", cleanup, true);
@@ -868,16 +951,20 @@ public final class RuntimeService extends VpnService {
         }
         vppProcess = null;
         clearProfileHandles();
-        publish(RuntimeSnapshot.stoppedAfter(current));
+        boolean stoppedPublished = publish(RuntimeSnapshot.stoppedAfter(current));
         stopRequested = false;
-        if (stopService && foregroundStarted) {
+        if (stopService && foregroundStarted && !persistenceGate.isPersistenceUnavailable()) {
             stopForeground(true);
             foregroundStarted = false;
         }
-        if (stopService && !destroying) {
+        if (stopService && !destroying && !persistenceGate.isPersistenceUnavailable()) {
             stopSelf();
         }
-        return true;
+        // Cleanup is allowed to complete even when either projection write
+        // failed, but a replacement/new START must observe the unavailable
+        // latch and run the explicit recovery probe first.
+        return stoppingPublished && stoppedPublished
+                && !persistenceGate.isPersistenceUnavailable();
     }
 
     private CleanupResult terminateAndClean(File profile, long pid, Process process) {
@@ -1269,14 +1356,18 @@ public final class RuntimeService extends VpnService {
                 current.abi, code, message, mayBeActive, pid, current.generation));
     }
 
-    private void publish(RuntimeSnapshot next) {
+    private boolean publish(RuntimeSnapshot next) {
         synchronized (stateLock) {
-            try {
-                RuntimeStateStore.write(getFilesDir(), next);
-                snapshot = next;
-            } catch (IOException error) {
-                Log.e(TAG, "failed to persist runtime state", error);
-                return;
+            RuntimeStateStore.PersistenceGate.Result result = persistenceGate.publish(
+                    getFilesDir(), next, processAlive(vppProcess));
+            snapshot = result.snapshot;
+            if (!result.persisted) {
+                exposePersistenceFailure(result, "publish");
+                return false;
+            }
+            if (!result.launchAllowed) {
+                exposePersistenceFailure(result, "launch_blocked");
+                return false;
             }
             if (foregroundStarted) {
                 NotificationManager manager = getSystemService(NotificationManager.class);
@@ -1288,6 +1379,36 @@ public final class RuntimeService extends VpnService {
         appendLog("runtime_state=" + next.state + " profile=" + next.profile.wireName
                 + " health=" + next.health + (next.errorCode.isEmpty() ? ""
                 : " error=" + next.errorCode));
+        return true;
+    }
+
+    /**
+     * Keep a bounded local error projection when the durable write itself is
+     * unavailable. This deliberately does not call publish again: doing so
+     * would recurse through the same failing writer and hide the original
+     * lifecycle transition. The latch is cleared only by the explicit
+     * ownership-audited recovery probe above.
+     */
+    private void exposePersistenceFailure(RuntimeStateStore.PersistenceGate.Result result,
+                                          String phase) {
+        synchronized (stateLock) {
+            RuntimeSnapshot local = result == null || result.snapshot == null
+                    ? (snapshot == null
+                            ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot)
+                    : result.snapshot;
+            snapshot = local;
+            Log.e(TAG, "failed to persist runtime state: "
+                    + (result == null ? "missing persistence result" : result.detail));
+            if (foregroundStarted) {
+                NotificationManager manager = getSystemService(NotificationManager.class);
+                if (manager != null) {
+                    manager.notify(NOTIFICATION_ID, buildNotification(local));
+                }
+            }
+            appendLog("runtime_state_persistence=unavailable phase=" + phase
+                    + " state=" + local.state + " mayBeActive=" + local.mayBeActive
+                    + (local.pid > 0L ? " pid=" + local.pid : ""));
+        }
     }
 
     private Notification buildNotification(RuntimeSnapshot value) {
@@ -1307,6 +1428,10 @@ public final class RuntimeService extends VpnService {
     }
 
     private void stopIfInactive(int startId) {
+        if (persistenceGate.isPersistenceUnavailable()) {
+            appendLog("runtime_state_persistence=service_retained pending_recovery");
+            return;
+        }
         if (snapshot != null && snapshot.mayBeActive) {
             return;
         }

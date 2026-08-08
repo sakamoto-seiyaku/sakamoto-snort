@@ -10,6 +10,7 @@ import com.sakamoto.snort.androidruntime.VppHealthHandshake;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.io.IOException;
 
 /** Public-seam tests for the production Android runtime incubator. */
 public final class AndroidRuntimeContractTest {
@@ -18,6 +19,8 @@ public final class AndroidRuntimeContractTest {
         lifecycleRequestOrderingRejectsDelayedStarts();
         profileDoesNotExposeAdapterArtifacts();
         snapshotRoundTripPreservesBoundedHealthAndError();
+        runtimeStateWriterCanInjectPersistenceFailure();
+        persistenceFailureGateIsFailClosedUntilSafeRecovery();
         durableProjectionReadResultIsExplicit();
         durableOwnershipDecisionFailsClosed();
         globalOwnershipDecisionRequiresOneProjectionConsistentOwner();
@@ -105,6 +108,86 @@ public final class AndroidRuntimeContractTest {
         check(restoredFailure.errorCode.equals("cleanup_failed"), "error code round-trips");
         check(restoredFailure.errorMessage.length() <= RuntimeSnapshot.MAX_TEXT_LENGTH,
                 "error message is bounded");
+    }
+
+    private static void runtimeStateWriterCanInjectPersistenceFailure() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-67-runtime-writer");
+        RuntimeSnapshot snapshot = RuntimeSnapshot.stopped();
+        final boolean[] invoked = {false};
+        RuntimeStateStore.Writer writer = (root, value) -> {
+            invoked[0] = root.equals(files.toFile()) && value == snapshot;
+            throw new IOException("injected persistence failure");
+        };
+        try {
+            writer.write(files.toFile(), snapshot);
+            throw new AssertionError("injected writer must fail");
+        } catch (IOException expected) {
+            check(invoked[0], "writer seam receives the target and snapshot");
+        }
+    }
+
+    private static void persistenceFailureGateIsFailClosedUntilSafeRecovery() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-67-runtime-persistence-gate");
+        RuntimeSnapshot initial = RuntimeSnapshot.stopped();
+        final boolean[] failWrites = {true};
+        RuntimeStateStore.Writer writer = (root, value) -> {
+            if (failWrites[0]) {
+                throw new IOException("injected persistence failure");
+            }
+            RuntimeStateStore.write(root, value);
+        };
+        RuntimeStateStore.PersistenceGate gate =
+                new RuntimeStateStore.PersistenceGate(writer, initial);
+
+        RuntimeStateStore.PersistenceGate.Result prelaunch = gate.publish(
+                files.toFile(), RuntimeSnapshot.starting(RuntimeProfile.ROOT,
+                        "protocol", "version", "artifact", 1L), false);
+        check(!prelaunch.persisted, "pre-launch projection failure is reported");
+        check(!prelaunch.launchAllowed, "pre-launch projection failure blocks launch");
+        check(!prelaunch.cleanupRequired, "pre-launch failure has no owner to clean");
+        check(gate.isPersistenceUnavailable(), "projection failure latches unavailable state");
+        check("runtime_state_persistence_unavailable".equals(gate.snapshot().errorCode),
+                "projection failure exposes a bounded local error snapshot");
+
+        failWrites[0] = false;
+        RuntimeStateStore.PersistenceGate.Result ordinary = gate.publish(
+                files.toFile(), RuntimeSnapshot.stopped(RuntimeProfile.ROOT, 1L), false);
+        check(ordinary.persisted, "an ordinary write can recover the filesystem boundary");
+        check(gate.isPersistenceUnavailable(),
+                "ordinary write success does not clear the failure latch");
+
+        RuntimeStateStore.PersistenceGate.Result blockedStart = gate.publish(
+                files.toFile(), RuntimeSnapshot.starting(RuntimeProfile.ROOT,
+                        "protocol", "version", "artifact", 2L), false);
+        check(!blockedStart.launchAllowed,
+                "a new START remains blocked while recovery is not explicit");
+
+        failWrites[0] = true;
+        RuntimeStateStore.PersistenceGate.Result postlaunch = gate.publish(
+                files.toFile(), RuntimeSnapshot.running(RuntimeProfile.ROOT,
+                        "protocol", "version", "artifact", "abi", "ok", 77L, 2L), true);
+        check(!postlaunch.persisted, "post-launch projection failure is reported");
+        check(postlaunch.cleanupRequired,
+                "post-launch projection failure requires bounded owner cleanup");
+        check(gate.snapshot().mayBeActive,
+                "post-launch persistence failure retains active uncertainty");
+
+        RuntimeStateStore.PersistenceGate.Result stop = gate.publish(
+                files.toFile(), RuntimeSnapshot.stopping(gate.snapshot()), true);
+        check(stop.cleanupAllowed,
+                "STOP cleanup remains allowed while persistence is unavailable");
+
+        RuntimeStateStore.PersistenceGate.Result unsafeRecovery = gate.recover(
+                files.toFile(), false);
+        check(!unsafeRecovery.recovered,
+                "recovery cannot clear persistence failure before ownership audit");
+        failWrites[0] = false;
+        RuntimeStateStore.PersistenceGate.Result recovery = gate.recover(files.toFile(), true);
+        check(recovery.recovered, "safe ownership audit plus probe clears the latch");
+        check(!gate.isPersistenceUnavailable(), "explicit durable recovery clears the latch");
+        check(gate.publish(files.toFile(), RuntimeSnapshot.starting(RuntimeProfile.ROOT,
+                "protocol", "version", "artifact", 3L), false).launchAllowed,
+                "a later START is allowed after explicit durable recovery");
     }
 
     private static void durableProjectionReadResultIsExplicit() throws Exception {
