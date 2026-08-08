@@ -140,7 +140,7 @@ while read -r pid ps_uid args; do
     }
     printf '%s\\t%s\\t%s\\t%s\\n' "\$profile" "\$pid" "\$proc_uid" "\$exe"
   done
-done
+done <"\$ps_file"
 rm -f "\$ps_file" || fail ps_cleanup
 echo OWNER_SCRIPT_OK=1
 EOF
