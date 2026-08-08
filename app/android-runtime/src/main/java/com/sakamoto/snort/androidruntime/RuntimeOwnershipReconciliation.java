@@ -240,6 +240,19 @@ public final class RuntimeOwnershipReconciliation {
         }
     }
 
+    /**
+     * A live projection can briefly race an owner exit or a proc snapshot.
+     * Retry that narrow unverifiable case while retaining fail-closed
+     * behavior for ambiguity and all inactive projections.
+     */
+    public static boolean shouldRetryOwnershipAudit(GlobalDecision decision,
+                                                     boolean runtimeMayBeActive) {
+        return runtimeMayBeActive
+                && decision != null
+                && decision.isBlocked()
+                && "runtime_ownership_unverified".equals(decision.errorCode);
+    }
+
     /** Result of the profile cleanup policy, before the service deletes files. */
     public static final class CleanupDecision {
         public final CleanupAction action;

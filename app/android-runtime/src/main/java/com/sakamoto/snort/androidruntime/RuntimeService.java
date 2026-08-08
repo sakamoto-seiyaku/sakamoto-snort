@@ -56,6 +56,8 @@ public final class RuntimeService extends VpnService {
     private static final long HEALTH_RETRY_MILLIS = 250L;
     private static final long STOP_TERM_MILLIS = 1500L;
     private static final long STOP_KILL_MILLIS = 1500L;
+    private static final long OWNERSHIP_RETRY_MILLIS = 50L;
+    private static final int OWNERSHIP_RETRY_ATTEMPTS = 2;
     private static final int ROOT_COMMAND_UNAVAILABLE = -125;
 
     private final Object stateLock = new Object();
@@ -522,6 +524,27 @@ public final class RuntimeService extends VpnService {
      * recovered.
      */
     private RuntimeOwnershipReconciliation.GlobalDecision auditGlobalOwnership(
+            boolean projectionKnown) {
+        RuntimeOwnershipReconciliation.GlobalDecision decision =
+                auditGlobalOwnershipOnce(projectionKnown);
+        boolean runtimeMayBeActive = snapshot != null && snapshot.isActive();
+        for (int attempt = 0;
+                attempt < OWNERSHIP_RETRY_ATTEMPTS
+                        && RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(
+                                decision, runtimeMayBeActive);
+                attempt++) {
+            try {
+                Thread.sleep(OWNERSHIP_RETRY_MILLIS);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            decision = auditGlobalOwnershipOnce(projectionKnown);
+        }
+        return decision;
+    }
+
+    private RuntimeOwnershipReconciliation.GlobalDecision auditGlobalOwnershipOnce(
             boolean projectionKnown) {
         RuntimeOwnershipReconciliation.ProfileAudit root =
                 auditDurableProfile(RuntimeProfile.ROOT);

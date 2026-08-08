@@ -26,6 +26,7 @@ public final class AndroidRuntimeContractTest {
         ownershipInspectionRejectsSameProfileMultiplicity();
         recordedPidRequiresAnExhaustiveSoleOwnerScan();
         launchShellTransitionFailsClosedUntilStableVpp();
+        transientOwnershipAuditRetriesOnlyForActiveRuntime();
         stoppedSnapshotRetainsRecentFailure();
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
@@ -416,6 +417,30 @@ public final class AndroidRuntimeContractTest {
                 "candidate identity races remain unknown rather than residue");
         check("runtime_ownership_unverified".equals(uncertain.errorCode),
                 "candidate identity races have an explicit unverifiable error");
+    }
+
+    private static void transientOwnershipAuditRetriesOnlyForActiveRuntime() {
+        RuntimeOwnershipReconciliation.GlobalDecision unverified =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.unknown(
+                                RuntimeProfile.ROOT, "runtime_ownership_unverified",
+                                "candidate exited during proc snapshot"),
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        RuntimeOwnershipReconciliation.Projection.unknown());
+        check(RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(unverified, true),
+                "active runtime retries a transient ownership-unverified audit");
+        check(!RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(unverified, false),
+                "inactive runtime keeps ownership-unverified fail-closed");
+
+        RuntimeOwnershipReconciliation.GlobalDecision ambiguous =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.unknown(
+                                RuntimeProfile.ROOT, "runtime_ownership_ambiguous",
+                                "duplicate owner"),
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        RuntimeOwnershipReconciliation.Projection.unknown());
+        check(!RuntimeOwnershipReconciliation.shouldRetryOwnershipAudit(ambiguous, true),
+                "ambiguous ownership never downgrades into a retry");
     }
 
     private static void recordedPidRequiresAnExhaustiveSoleOwnerScan() {
