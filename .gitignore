@@ -8,6 +8,7 @@
 build-output/*
 Testing/
 build/*
+/app/android-runtime/build/
 /build-output/*
 __pycache__/
 *.pyc
