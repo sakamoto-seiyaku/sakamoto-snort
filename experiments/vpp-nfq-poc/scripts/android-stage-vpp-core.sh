@@ -11,6 +11,7 @@ STRIP_BIN="${STRIP_BIN:-$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm
 STRIP="${STRIP:-1}"
 VPP_SOURCE_REVISION="${VPP_SOURCE_REVISION:-unknown}"
 VPP_SOURCE_ORIGIN="${VPP_SOURCE_ORIGIN:-$VPP_DIR}"
+VPP_SOURCE_STATUS="${VPP_SOURCE_STATUS:-unknown}"
 
 BIN_SRC="$BUILD_DIR/bin/vpp"
 VPPCTL_SRC="$BUILD_DIR/bin/vppctl"
@@ -120,7 +121,7 @@ fi
   echo "sourceRevision=$VPP_SOURCE_REVISION"
   echo "sourceOrigin=$VPP_SOURCE_ORIGIN"
   echo "sourceTree=$VPP_DIR"
-  echo "sourceStatus=committed-snapshot"
+  echo "sourceStatus=$VPP_SOURCE_STATUS"
   echo "conditionalWakeSource=absent"
   echo "conditionalWakeBinary=absent"
   echo "vppSha256=$(sha256sum "$STAGE_DIR/bin/vpp" | awk '{print $1}')"

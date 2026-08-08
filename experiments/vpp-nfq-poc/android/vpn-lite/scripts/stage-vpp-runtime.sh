@@ -17,6 +17,7 @@ fi
 product_vpp_commit="${VPP_RUNTIME_SOURCE_REVISION:-9258530f3804a152578ce11cc7c8a1e9eab88ed0}"
 source_revision=""
 source_origin="$source_input"
+source_status=""
 if [[ "$source_explicit" == 0 ]]; then
   # The experiment checkout is intentionally mutable (and has carried the
   # rejected P6 conditional-wake patches).  Product builds consume a source
@@ -25,6 +26,7 @@ if [[ "$source_explicit" == 0 ]]; then
   git -C "$source_input" cat-file -e "$product_vpp_commit^{commit}" 2>/dev/null \
     || { echo "error: pinned VPP source commit is unavailable: $product_vpp_commit" >&2; exit 1; }
   source_revision="$product_vpp_commit"
+  source_status="committed-snapshot"
   vpp_dir="$runtime_root/source/$source_revision"
   source_origin="git:$source_input@$source_revision"
   marker="$vpp_dir/.sakamoto-source-revision"
@@ -39,6 +41,12 @@ else
   vpp_dir="$source_input"
   source_revision="$(git -C "$vpp_dir" rev-parse HEAD 2>/dev/null || true)"
   source_revision="${source_revision:-external}"
+  if git -C "$vpp_dir" diff --quiet -- 2>/dev/null \
+      && git -C "$vpp_dir" diff --cached --quiet -- 2>/dev/null; then
+    source_status="explicit-committed-tree"
+  else
+    source_status="explicit-working-tree"
+  fi
 fi
 vpp_source="$vpp_dir/src"
 product_path="/usr/bin:/bin:${PATH}"
@@ -110,6 +118,7 @@ if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || "$stage_needs_refresh" == 1 ]]; then
   done
   PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" STAGE_DIR="$stage_dir" \
     VPP_SOURCE_REVISION="$source_revision" VPP_SOURCE_ORIGIN="$source_origin" \
+    VPP_SOURCE_STATUS="$source_status" \
     "$poc_dir/scripts/android-stage-vpp-core.sh"
   printf '%s\n' "$build_dir" >"$stage_dir/runtime/vapi-build-dir"
 fi
