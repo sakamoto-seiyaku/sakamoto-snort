@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-08-04
+更新时间：2026-08-08
 状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `Sakamoto` / `SAKAMOTO` 为准；OpenSpec 仅作历史归档）
 
 ## 0. 阅读指南
@@ -42,6 +42,7 @@ Status 口径（全篇统一）：
 - RESETALL runtime 并发边界：`docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md`
 - NFQUEUE / packet datapath 重构边界：`docs/decisions/NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md`
 - per-worker flow ownership：`docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md`
+- Android Functional Closure contract 与 evidence matrix：`docs/decisions/ANDROID_FUNCTIONAL_CLOSURE_CONTRACT.md`
 - VPP-native packet I/O Adapter boundary：`docs/adr/0006-vpp-native-packet-io-adapters.md`
 - one policy bundle 与 stage-owned rule families：`docs/adr/0001-policy-bundle-staged-enforcement.md`
 - L4 Conntrack stateful 语义参考：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`

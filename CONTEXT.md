@@ -26,6 +26,10 @@ _Avoid_: storage layer, reporting backend
 The Android-side owner of daemon startup, shutdown, artifact handoff, configuration sync, and post-start health checks.
 _Avoid_: UI directly managing the native daemon
 
+**Debug Control Activity**:
+The minimal Android UI used during Functional Closure to select a Runtime Profile, start or stop the supervised runtime, operate the smallest test policy, and inspect bounded current or recent status and verdict evidence. It is not the release Product UI, the durable Activity Store, or an authority for policy, lifecycle, or packet state.
+_Avoid_: Product Activity, Activity Store, release UI, runtime owner, policy database
+
 **Runtime Profile**:
 The mutually exclusive product choice of Android `root` or `vpn` packet capture and lifecycle behavior. Exactly one VPP runtime is active; changing Runtime Profile replaces its platform Adapter and privilege topology, not the shared dataplane, policy identity, or Product UI information architecture.
 _Avoid_: separate Root product, separate VPN policy database, parallel Root/VPN dataplanes, packet worker topology
@@ -679,6 +683,14 @@ _Avoid_: making IPRULES enforcement depend on reverse DNS
 **Android L4 Product Release**:
 The first user-complete Android release: mutually exclusive Root/VPN Runtime Profiles, multi-user App-first Control, Wi-Fi/Mobile/VPN Network Gates, advanced per-app IPv4/IPv6 L4 Traffic Rules, bounded activity/statistics, health, recovery, Product UI, help, and release materials.
 _Avoid_: VPP POC milestone, backend-only L4 completion, Linux release
+
+**Closure Evidence Matrix**:
+The real-environment-first layered acceptance model for Android Functional Closure: exhaustive shared semantic vectors run at the Adapter-neutral VPP graph contract, each Root/VPN Adapter separately proves its platform ingress/completion/fault/teardown boundary, and both Runtime Profiles pass a representative Android end-to-end parity set. It preserves useful existing unit and integration fixtures, runs newly required device evidence on the available controlled target device with real installed applications and network paths whenever practical, and uses host or synthetic evidence only for boundaries that cannot be reproduced deterministically end to end without duplicating every shared combinatorial vector across both profiles.
+_Avoid_: POC result list, identical exhaustive device suites per profile, Root-only closure, pass-through smoke as semantic acceptance
+
+**Functional Closure Contract**:
+The revisable working contract that freezes accepted product and architecture invariants while exposing implementation choices, capacities, thresholds, and other evidence-driven variables to adjustment as POCs, code, and controlled-device results arrive. A contradictory result pauses the affected gate and triggers an explicit contract or ADR update; it never authorizes silently weakening a test to preserve a pass.
+_Avoid_: immutable final-release specification, historical POC checklist, implementation blueprint, silent gate relaxation
 
 **Protocol Identification Release**:
 The next stage release that adds libprotoident application protocol facts and protocol rules to the same worker-owned FlowEntry and existing Product UI. A libprotoident result is final and immediately actionable within this release's recognition capability; it is not a provisional hint awaiting scanner or protocol-decoder confirmation.
