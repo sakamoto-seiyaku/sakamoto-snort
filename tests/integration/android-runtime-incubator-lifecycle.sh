@@ -172,15 +172,15 @@ root_uid="$(adb_cmd shell "su 0 sh -c 'grep ^Uid: /proc/$pid/status'" \
 [[ "$root_uid" == 0 ]] || { echo "root profile VPP UID was $root_uid" >&2; exit 1; }
 
 kill_evidence="$evidence_file.activity-kill"
-if ! kill_output="$(adb_cmd shell su 0 sh -c "kill -KILL $activity_pid" 2>&1)"; then
-  printf 'pid=%s\nname=%s\ncommand=su 0 sh -c '\''kill -KILL %s'\''\n%s\n' \
-    "$activity_pid" "$package" "$activity_pid" "$kill_output" >"$kill_evidence"
+if ! kill_output="$(adb_cmd shell "run-as $package kill -KILL $activity_pid" 2>&1)"; then
+  printf 'pid=%s\nname=%s\ncommand=run-as %s kill -KILL %s\n%s\n' \
+    "$activity_pid" "$package" "$package" "$activity_pid" "$kill_output" >"$kill_evidence"
   echo "unable to kill validated Activity PID; evidence=$kill_evidence" >&2
   exit 1
 fi
-printf 'pid=%s\nname=%s\nuid=%s\nservicePid=%s\nserviceName=%s\ncommand=su 0 sh -c '\''kill -KILL %s'\''\n%s\n' \
+printf 'pid=%s\nname=%s\nuid=%s\nservicePid=%s\nserviceName=%s\ncommand=run-as %s kill -KILL %s\n%s\n' \
   "$activity_pid" "$package" "$activity_uid" "$service_pid" "$service_process_name" \
-  "$activity_pid" "$kill_output" >"$kill_evidence"
+  "$package" "$activity_pid" "$kill_output" >"$kill_evidence"
 for _ in $(seq 1 10); do
   if ! adb_cmd shell "su 0 sh -c 'kill -0 $activity_pid'" >/dev/null 2>&1; then
     break
@@ -292,7 +292,9 @@ orphan_before="$(adb_cmd shell su 0 sh -c "ls -ln /data/user/0/$package/files/pr
 printf 'vppPid=%s\nservicePid=%s\nactivityPid=%s\n%s\n' \
   "$orphan_vpp_pid" "$orphan_service_pid" "$orphan_activity_pid" "$orphan_before" \
   >"$evidence_file.orphan-before"
-adb_cmd shell su 0 sh -c "kill -KILL $orphan_vpp_pid; kill -KILL $orphan_service_pid; kill -KILL $orphan_activity_pid" >/dev/null
+adb_cmd shell su 0 sh -c "kill -KILL $orphan_vpp_pid" >/dev/null
+adb_cmd shell "run-as $package kill -KILL $orphan_service_pid" >/dev/null
+adb_cmd shell "run-as $package kill -KILL $orphan_activity_pid" >/dev/null
 for _ in $(seq 1 20); do
   orphan_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>/dev/null | tr -d '\r' || true)"
   if ! awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes" \
