@@ -72,6 +72,7 @@ public final class RuntimeService extends VpnService {
     private volatile boolean destroying;
     private volatile boolean cleanupFaultInjected;
     private volatile long latestStartRequestMillis;
+    private volatile int latestStartId;
     private volatile long monitoredPid = -1L;
     private RuntimeSnapshot snapshot;
     private Process vppProcess;
@@ -94,6 +95,7 @@ public final class RuntimeService extends VpnService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        latestStartId = Math.max(latestStartId, startId);
         String action = intent == null ? ACTION_QUERY : intent.getAction();
         if (action == null) {
             action = ACTION_QUERY;
@@ -174,17 +176,18 @@ public final class RuntimeService extends VpnService {
         if (currentMayBeActive() && !ensureForeground(activeProfile)) {
             return START_NOT_STICKY;
         }
-        queueHealthQuery();
+        queueHealthQuery(startId);
         return START_STICKY;
     }
 
-    private void queueHealthQuery() {
+    private void queueHealthQuery(int requestStartId) {
         if (!healthQueryScheduled.compareAndSet(false, true)) {
             return;
         }
         if (!enqueueLifecycle(() -> {
             try {
                 reconcileDurableRuntime(true);
+                stopIfInactive(requestStartId);
             } finally {
                 healthQueryScheduled.set(false);
             }
@@ -401,7 +404,6 @@ public final class RuntimeService extends VpnService {
         }
         boolean residue = profileRoot.exists() || (snapshot != null && snapshot.isActive());
         if (!residue) {
-            stopIfInactive();
             return;
         }
         // A process death can leave root-owned profile files behind after the
@@ -1034,7 +1036,17 @@ public final class RuntimeService extends VpnService {
     }
 
     private void stopIfInactive() {
+        stopIfInactive(latestStartId);
+    }
+
+    private void stopIfInactive(int startId) {
         if (snapshot != null && snapshot.mayBeActive) {
+            return;
+        }
+        if (startId <= 0) {
+            // onCreate's durable reconciliation has no startId. Do not stop
+            // the service here: a START intent may be queued immediately
+            // afterward and must not race an onDestroy/stopRequested flag.
             return;
         }
         if (foregroundStarted) {
@@ -1042,7 +1054,7 @@ public final class RuntimeService extends VpnService {
             foregroundStarted = false;
         }
         if (!destroying) {
-            stopSelf();
+            stopSelf(startId);
         }
     }
 
