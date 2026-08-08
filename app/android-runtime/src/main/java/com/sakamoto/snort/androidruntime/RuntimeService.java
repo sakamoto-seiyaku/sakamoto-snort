@@ -149,6 +149,13 @@ public final class RuntimeService extends VpnService {
             if (requestTimeMillis > latestStartRequestMillis) {
                 latestStartRequestMillis = requestTimeMillis;
             }
+            // A user retry is an explicit new lifecycle transaction. Clear a
+            // stale active error synchronously so queued health polls cannot
+            // make a still-pending retry look permanently failed. The
+            // serialized start/reconciliation audit remains authoritative and
+            // will immediately republish a fail-closed error if ownership is
+            // still ambiguous or cleanup still fails.
+            markExplicitStartPending();
             // A valid start request is authoritative over any delayed stop
             // from an Activity instance that has already been replaced.
             stopRequested = false;
@@ -217,6 +224,16 @@ public final class RuntimeService extends VpnService {
             appendLog("lifecycle_backpressure=rejected");
             return false;
         }
+    }
+
+    private void markExplicitStartPending() {
+        RuntimeSnapshot current = snapshot;
+        if (current == null || !RuntimeSnapshot.STATE_ERROR.equals(current.state)
+                || !current.mayBeActive) {
+            return;
+        }
+        publish(RuntimeSnapshot.starting(current.profile, current.protocol, current.version,
+                current.artifact, current.generation));
     }
 
     public static boolean notificationsReady(Context context) {
