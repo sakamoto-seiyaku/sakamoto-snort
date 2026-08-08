@@ -22,6 +22,7 @@ public final class AndroidRuntimeContractTest {
         pidlessLiveOwnerIsAdoptable();
         ownershipCleanupDecisionFailsClosed();
         ownershipInspectionKeepsIdentityInThePublicSeam();
+        ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied();
         ownershipInspectionRejectsSameProfileMultiplicity();
         recordedPidRequiresAnExhaustiveSoleOwnerScan();
         launchShellTransitionFailsClosedUntilStableVpp();
@@ -319,6 +320,44 @@ public final class AndroidRuntimeContractTest {
                                 : new RuntimeOwnershipReconciliation.CommandResult(0, ""));
         check(identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH,
                 "public PID validation seam accepts a complete identity match");
+    }
+
+    private static void ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied() {
+        RuntimeOwnershipReconciliation.ProfileSpec spec = ownershipSpec();
+        final String[] scanCommand = {""};
+        RuntimeOwnershipReconciliation.OwnershipAudit live =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) -> {
+                    scanCommand[0] = command;
+                    check(command.contains("env_status=$?"),
+                            "ownership scan records unreadable-environment status explicitly");
+                    check(command.contains("runtime-dir"),
+                            "ownership scan validates the profile runtime directory in startup.conf");
+                    check(command.contains("cli-listen"),
+                            "ownership scan validates the profile CLI socket in startup.conf");
+                    check(command.contains("socket-name"),
+                            "ownership scan validates profile API/statseg sockets in startup.conf");
+                    check(command.contains("runcon u:r:ksu:s0 sh -c"),
+                            "root ownership scan enters the privileged proc reader context");
+                    check(command.contains("</proc/$pid/environ"),
+                            "root ownership scan opens proc environment inside the reader context");
+                    return new RuntimeOwnershipReconciliation.CommandResult(
+                            10, "VPP_OWNER_COUNT=1\nVPP_OWNER_PID=4242\n");
+                });
+        check(live.isVerifiedLive(),
+                "strong readable identity remains live when root /proc/environ is denied");
+        check(live.pid == 4242L,
+                "strong identity adoption preserves the audited PID");
+
+        final String[] mismatchOutput = {""};
+        RuntimeOwnershipReconciliation.OwnershipAudit mismatch =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) -> {
+                    mismatchOutput[0] = "VPP_OWNER_COUNT=0\nVPP_STRONG_IDENTITY_MISMATCH=1\n";
+                    return new RuntimeOwnershipReconciliation.CommandResult(127, mismatchOutput[0]);
+                });
+        check(mismatch.isUnknown(),
+                "a strong identity mismatch remains fail-closed when environment is denied");
+        check(mismatchOutput[0].contains("VPP_STRONG_IDENTITY_MISMATCH"),
+                "ownership scan exposes a bounded strong-identity mismatch result");
     }
 
     private static void ownershipInspectionRejectsSameProfileMultiplicity() {

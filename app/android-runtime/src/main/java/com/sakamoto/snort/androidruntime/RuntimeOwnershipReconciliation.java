@@ -487,6 +487,16 @@ public final class RuntimeOwnershipReconciliation {
                             + parseOwnerCountDetail(result.output));
         }
         if (result.status == OWNER_UNCERTAIN_STATUS) {
+            if (result.output.contains("VPP_STRONG_IDENTITY_MISMATCH=1")) {
+                return OwnershipAudit.unknown(
+                        "runtime_ownership_ambiguous",
+                        "ownership scan found a strong profile identity mismatch");
+            }
+            if (result.output.contains("VPP_STRONG_IDENTITY_UNVERIFIED=1")) {
+                return OwnershipAudit.unknown(
+                        "runtime_ownership_unverified",
+                        "ownership scan could not read or validate the durable profile configuration");
+            }
             return OwnershipAudit.unknown(
                     "runtime_ownership_unverified",
                     "ownership scan observed a candidate identity race or unreadable identity");
@@ -537,6 +547,21 @@ public final class RuntimeOwnershipReconciliation {
         String ownerValue = shellQuote(spec.ownerToken);
         String runtimeValue = shellQuote(spec.runtimePath);
         String profileValue = shellQuote(spec.profile.wireName);
+        String runtimeDirLine = shellQuote("runtime-dir " + spec.runtimePath);
+        String cliSocketLine = shellQuote("cli-listen " + spec.runtimePath + "/cli.sock");
+        String apiSocketLine = shellQuote("socket-name " + spec.runtimePath + "/api.sock");
+        String statsegSocketLine = shellQuote("socket-name " + spec.runtimePath + "/statseg.sock");
+        // KernelSU launches the root shell in the Android shell SELinux
+        // domain. That domain cannot read app-data /proc entries even when
+        // the caller is UID 0; runcon restores the privileged reader context
+        // for each bounded probe while keeping the scan itself shell-owned.
+        String procReader = "0".equals(spec.expectedUid) ? "runcon u:r:ksu:s0 " : "";
+        String cmdlineReader = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null\""
+                : "tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null";
+        String environReader = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' '\\n' </proc/$pid/environ 2>/dev/null\""
+                : "tr '\\0' '\\n' </proc/$pid/environ 2>/dev/null";
         return "audit_pid=$$; "
                 + "is_audit_lineage() { lineage_pid=\"$1\"; lineage_depth=0; "
                 + "while test \"$lineage_depth\" -lt 8 && test -n \"$lineage_pid\"; do "
@@ -548,8 +573,18 @@ public final class RuntimeOwnershipReconciliation {
                 + "lineage_pid=\"$lineage_parent\"; "
                 + "lineage_depth=$((lineage_depth + 1)); done; return 1; }; "
                 + "scan_snapshot() { "
+                + "profile_config=$(" + procReader + "cat " + startup
+                + " 2>/dev/null); profile_config_status=$?; "
+                + "if [ \"$profile_config_status\" -ne 0 ]; then "
+                + "printf 'VPP_STRONG_IDENTITY_UNVERIFIED=1\\n'; return 127; fi; "
+                + "if ! printf '%s\\n' \"$profile_config\" | grep -F -- " + runtimeDirLine
+                + " >/dev/null || ! printf '%s\\n' \"$profile_config\" | grep -F -- "
+                + cliSocketLine + " >/dev/null || ! printf '%s\\n' \"$profile_config\" | grep -F -- "
+                + apiSocketLine + " >/dev/null || ! printf '%s\\n' \"$profile_config\" | grep -F -- "
+                + statsegSocketLine + " >/dev/null; then "
+                + "printf 'VPP_STRONG_IDENTITY_MISMATCH=1\\n'; return 127; fi; "
                 + "ps_output=$(ps -A -o PID,UID,args 2>/dev/null) || return 120; "
-                + "match_count=0; transition_count=0; first_pid=; uncertain=0; "
+                + "match_count=0; transition_count=0; first_pid=; uncertain=0; strong_mismatch=0; "
                 + "candidate_pids=$(printf '%s\\n' \"$ps_output\" | awk -v startup="
                 + startup + " -v expected_uid=" + expectedUid
                 + " '$1 ~ /^[0-9]+$/ && $2 == expected_uid"
@@ -559,41 +594,45 @@ public final class RuntimeOwnershipReconciliation {
                 + "proc=/proc/$pid; "
                 + "if ! test -d \"$proc\"; then uncertain=1; continue; fi; "
                 + "if ! test -r \"$proc/status\"; then uncertain=1; continue; fi; "
-                + "uid=$(awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
+                + "uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
                 + "|| { uncertain=1; continue; }; "
                 + "if test -z \"$uid\"; then uncertain=1; continue; fi; "
                 + "[ \"$uid\" = " + expectedUid + " ] || continue; "
                 + "if ! test -r \"$proc/exe\" || ! test -r \"$proc/cmdline\"; then "
                 + "uncertain=1; continue; fi; "
-                + "exe=$(readlink \"$proc/exe\" 2>/dev/null) "
+                + "exe=$(" + procReader + "readlink \"$proc/exe\" 2>/dev/null) "
                 + "|| { uncertain=1; continue; }; "
                 + "test -n \"$exe\" || { uncertain=1; continue; }; "
-                + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
+                + "cmd=$(" + cmdlineReader + ") "
                 + "|| { uncertain=1; continue; }; "
                 + "case \"$cmd\" in *" + startup + "*) ;; *) continue ;; esac; "
                 + "if [ \"$exe\" = " + executable + " ]; then "
-                + "if ! test -r \"$proc/environ\"; then uncertain=1; continue; fi; "
-                + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null) "
-                + "|| { uncertain=1; continue; }; "
+                + "env_status=0; env=; "
+                + "if test -r \"$proc/environ\"; then "
+                + "env=$(" + environReader + "); env_status=$?; "
+                + "else env_status=125; fi; "
+                + "if [ \"$env_status\" -eq 0 ]; then "
                 + "printf '%s\\n' \"$env\" | grep -F -- " + ownerToken
                 + " >/dev/null; grep_status=$?; "
-                + "if [ \"$grep_status\" -ne 0 ]; then "
-                + "[ \"$grep_status\" -eq 1 ] || uncertain=1; continue; fi; "
+                + "if [ \"$grep_status\" -eq 1 ]; then strong_mismatch=1; continue; fi; "
+                + "[ \"$grep_status\" -eq 0 ] || { uncertain=1; continue; }; "
                 + "printf '%s\\n' \"$env\" | grep -F -- " + runtimeEnv
                 + " >/dev/null; grep_status=$?; "
-                + "if [ \"$grep_status\" -ne 0 ]; then "
-                + "[ \"$grep_status\" -eq 1 ] || uncertain=1; continue; fi; "
+                + "if [ \"$grep_status\" -eq 1 ]; then strong_mismatch=1; continue; fi; "
+                + "[ \"$grep_status\" -eq 0 ] || { uncertain=1; continue; }; "
                 + "printf '%s\\n' \"$env\" | grep -F -- " + profileEnv
                 + " >/dev/null; grep_status=$?; "
-                + "if [ \"$grep_status\" -ne 0 ]; then "
-                + "[ \"$grep_status\" -eq 1 ] || uncertain=1; continue; fi; "
-                + "hash_line=$(sha256sum \"$proc/exe\" 2>/dev/null) "
+                + "if [ \"$grep_status\" -eq 1 ]; then strong_mismatch=1; continue; fi; "
+                + "[ \"$grep_status\" -eq 0 ] || { uncertain=1; continue; }; "
+                + "elif [ " + expectedUid + " != '0' ] && [ \"$env_status\" -ne 0 ]; then "
+                + "uncertain=1; continue; fi; "
+                + "hash_line=$(" + procReader + "sha256sum \"$proc/exe\" 2>/dev/null) "
                 + "|| { uncertain=1; continue; }; "
                 + "hash=$(printf '%s\\n' \"$hash_line\" | awk '{print $1}') "
                 + "|| { uncertain=1; continue; }; "
                 + "test -n \"$hash\" || { uncertain=1; continue; }; "
                 + "[ \"$hash\" = " + shellQuote(spec.executableHash)
-                + " ] || continue; "
+                + " ] || { strong_mismatch=1; continue; }; "
                 + "match_count=$((match_count + 1)); "
                 + "[ -n \"$first_pid\" ] || first_pid=\"$pid\"; "
                 + "elif [ \"$exe\" = '/system/bin/sh' ]; then "
@@ -605,6 +644,8 @@ public final class RuntimeOwnershipReconciliation {
                 + "fi; done; "
                 + "printf 'VPP_OWNER_COUNT=%s\\nVPP_TRANSITION_COUNT=%s\\n' "
                 + "\"$match_count\" \"$transition_count\"; "
+                + "if [ \"$strong_mismatch\" -ne 0 ]; then "
+                + "printf 'VPP_STRONG_IDENTITY_MISMATCH=1\\n'; return 127; fi; "
                 + "if [ \"$uncertain\" -ne 0 ]; then return 127; fi; "
                 + "if [ \"$match_count\" -gt 1 ]; then "
                 + "printf 'VPP_OWNER_PID=%s\\n' \"$first_pid\"; return 11; fi; "
@@ -633,16 +674,26 @@ public final class RuntimeOwnershipReconciliation {
         String token = shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + spec.ownerToken);
         String runtime = shellQuote("SAKAMOTO_VPP_RUNTIME_DIR=" + spec.runtimePath);
         String profile = shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + spec.profile.wireName);
+        // KernelSU's root shell domain cannot directly read another process's
+        // proc files on this device.  Use its privileged domain for root
+        // profiles while retaining the normal reader for app-owned profiles.
+        String procReader = "0".equals(spec.expectedUid) ? "runcon u:r:ksu:s0 " : "";
+        String cmdlineReader = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' ' ' </proc/" + pid + "/cmdline 2>/dev/null\""
+                : "tr '\\0' ' ' </proc/" + pid + "/cmdline 2>/dev/null";
+        String environReader = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' '\\n' </proc/" + pid + "/environ 2>/dev/null\""
+                : "tr '\\0' '\\n' </proc/" + pid + "/environ 2>/dev/null";
         return "if ! test -r " + status + " || ! test -r " + cmdline
                 + " || ! test -r " + environ + " || ! test -r " + exe + "; then exit 125; fi"
-                + " && uid=$(awk '$1 == \"Uid:\" {print $2; exit}' " + status + ")"
+                + " && uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' " + status + ")"
                 + " && test \"$uid\" = " + expectedUid
-                + " && exe=$(readlink " + exe + ")"
+                + " && exe=$(" + procReader + "readlink " + exe + ")"
                 + " && test \"$exe\" = " + executable
-                + " && tr '\\0' ' ' <" + cmdline + " | grep -F -- " + startup + " >/dev/null"
-                + " && tr '\\0' '\\n' <" + environ + " | grep -F -- " + token + " >/dev/null"
-                + " && tr '\\0' '\\n' <" + environ + " | grep -F -- " + runtime + " >/dev/null"
-                + " && tr '\\0' '\\n' <" + environ + " | grep -F -- " + profile + " >/dev/null";
+                + " && " + cmdlineReader + " | grep -F -- " + startup + " >/dev/null"
+                + " && " + environReader + " | grep -F -- " + token + " >/dev/null"
+                + " && " + environReader + " | grep -F -- " + runtime + " >/dev/null"
+                + " && " + environReader + " | grep -F -- " + profile + " >/dev/null";
     }
 
     private static String buildProbeCommand(long pid) {
