@@ -187,6 +187,7 @@ EOF
     return 1
   fi
   rm -f -- "$remote_script_host" || return 1
+  owner_output="$(printf '%s' "$owner_output" | tr -d '\r')"
   if ! grep -Fqx 'OWNER_SCRIPT_OK=1' <<<"$owner_output"; then
     echo "owner verifier did not report completion: $owner_output" >&2
     return 1
