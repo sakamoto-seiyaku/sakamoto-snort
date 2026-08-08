@@ -19,8 +19,28 @@ if [[ ! -f "$vpp_source/CMakeLists.txt" ]]; then
   exit 1
 fi
 
-if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || ! -x "$stage_dir/bin/vpp" \
-      || ! -x "$stage_dir/bin/vppctl" ]]; then
+build_plugin_dir="$build_dir/lib/aarch64-linux-android/vpp_plugins"
+stage_needs_refresh=0
+for artifact in \
+  "$stage_dir/bin/vpp" \
+  "$stage_dir/bin/vppctl" \
+  "$stage_dir/plugins/nfqueue_poc_plugin.so" \
+  "$stage_dir/plugins/tun_poc_plugin.so"; do
+  [[ -f "$artifact" ]] || stage_needs_refresh=1
+done
+for pair in \
+  "$build_dir/bin/vpp:$stage_dir/bin/vpp" \
+  "$build_dir/bin/vppctl:$stage_dir/bin/vppctl" \
+  "$build_plugin_dir/nfqueue_poc_plugin.so:$stage_dir/plugins/nfqueue_poc_plugin.so" \
+  "$build_plugin_dir/tun_poc_plugin.so:$stage_dir/plugins/tun_poc_plugin.so"; do
+  source_artifact="${pair%%:*}"
+  staged_artifact="${pair#*:}"
+  if [[ -f "$source_artifact" && ( ! -f "$staged_artifact" || "$source_artifact" -nt "$staged_artifact" ) ]]; then
+    stage_needs_refresh=1
+  fi
+done
+
+if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || "$stage_needs_refresh" == 1 ]]; then
   PATH="$product_path" VPP_DIR="$vpp_dir" "$poc_dir/scripts/apply-vpp-android-overlay.sh"
   PATH="$product_path" VPP_DIR="$vpp_dir" \
     BUILD_DIR="$build_dir" \
@@ -33,6 +53,10 @@ if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || ! -x "$stage_dir/bin/vpp" \
     "$poc_dir/scripts/android-build-vpp-probe.sh"
   PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" TARGET=vppctl \
     "$poc_dir/scripts/android-build-vpp-probe.sh"
+  for plugin_target in nfqueue_poc_plugin tun_poc_plugin; do
+    PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" \
+      TARGET="$plugin_target" "$poc_dir/scripts/android-build-vpp-probe.sh"
+  done
   PATH="$product_path" VPP_DIR="$vpp_dir" BUILD_DIR="$build_dir" STAGE_DIR="$stage_dir" \
     "$poc_dir/scripts/android-stage-vpp-core.sh"
 fi

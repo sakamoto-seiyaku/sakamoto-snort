@@ -15,6 +15,9 @@ java -cp "$out_dir" RuntimeContractTest
 # SAKAMOTO-67 production-incubator seam. The experiment remains covered below
 # as migration evidence, while this gate proves the forward app contract.
 rtk bash "$repo_root/tests/android/android-runtime-contract-test.sh"
+# Build/artifact seam: a core-only stage is rejected and a complete stage's
+# packaged adapters must agree with the runtime manifest names.
+rtk bash "$repo_root/tests/android/android-runtime-artifact-contract-test.sh"
 production_service_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
 grep -q 'ACTION_START' "$production_service_source"
