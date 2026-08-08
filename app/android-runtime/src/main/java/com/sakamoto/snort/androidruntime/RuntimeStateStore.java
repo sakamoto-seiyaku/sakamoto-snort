@@ -14,10 +14,15 @@ public final class RuntimeStateStore {
 
     private RuntimeStateStore() {}
 
-    public static RuntimeSnapshot read(File filesDir) {
+    /**
+     * Read the durable projection while retaining whether it was present and
+     * parseable. Supervisors must not infer that an invalid/missing
+     * projection means the default ROOT profile is inactive.
+     */
+    public static ReadResult readResult(File filesDir) {
         File target = stateFile(filesDir);
         if (!target.isFile()) {
-            return RuntimeSnapshot.stopped();
+            return ReadResult.absent(RuntimeSnapshot.stopped());
         }
         Properties values = new Properties();
         try (FileInputStream input = new FileInputStream(target)) {
@@ -28,7 +33,7 @@ public final class RuntimeStateStore {
             }
             RuntimeProfile profile = RuntimeProfile.parse(values.getProperty("profile", "root"));
             String state = values.getProperty("state", RuntimeSnapshot.STATE_STOPPED);
-            return new RuntimeSnapshot(
+            RuntimeSnapshot snapshot = new RuntimeSnapshot(
                     state, profile, values.getProperty("protocol", ""),
                     values.getProperty("version", ""), values.getProperty("artifact",
                             values.getProperty("abiEvidence", "")),
@@ -36,14 +41,20 @@ public final class RuntimeStateStore {
                     values.getProperty("coreHealth", values.getProperty("health", "unknown")),
                     values.getProperty("errorCode", ""), values.getProperty("errorMessage", ""),
                     Boolean.parseBoolean(values.getProperty("mayBeActive", "false")),
-                    parseLong(values.getProperty("pid", "-1"), -1L),
-                    parseLong(values.getProperty("generation", "0"), 0L),
-                    parseLong(values.getProperty("updatedAtMillis", "0"), 0L));
+                    parseLong(values, "pid", -1L),
+                    parseLong(values, "generation", 0L),
+                    parseLong(values, "updatedAtMillis", 0L));
+            return ReadResult.valid(snapshot);
         } catch (Exception error) {
-            return RuntimeSnapshot.error(RuntimeProfile.ROOT, RuntimeControlProtocol.NAME, "", "", "",
-                    "state_projection_corrupt",
-                    "runtime state could not be read", false, -1L);
+            return ReadResult.invalid(RuntimeSnapshot.error(RuntimeProfile.ROOT,
+                    RuntimeControlProtocol.NAME, "", "", "", "state_projection_corrupt",
+                    "runtime state could not be read", false, -1L));
         }
+    }
+
+    /** Compatibility reader for existing product callers. */
+    public static RuntimeSnapshot read(File filesDir) {
+        return readResult(filesDir).snapshot;
     }
 
     public static void write(File filesDir, RuntimeSnapshot snapshot) throws IOException {
@@ -75,11 +86,40 @@ public final class RuntimeStateStore {
         return new File(new File(filesDir, DIRECTORY), FILE);
     }
 
-    private static long parseLong(String value, long fallback) {
-        try {
-            return Long.parseLong(value);
-        } catch (Exception ignored) {
+    private static long parseLong(Properties values, String key, long fallback) throws IOException {
+        String value = values.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
             return fallback;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException error) {
+            throw new IOException("invalid runtime snapshot " + key, error);
+        }
+    }
+
+    /** Public persistence seam exposing projection health without Android APIs. */
+    public static final class ReadResult {
+        public final RuntimeSnapshot snapshot;
+        public final boolean present;
+        public final boolean valid;
+
+        private ReadResult(RuntimeSnapshot snapshot, boolean present, boolean valid) {
+            this.snapshot = snapshot;
+            this.present = present;
+            this.valid = valid;
+        }
+
+        private static ReadResult absent(RuntimeSnapshot snapshot) {
+            return new ReadResult(snapshot, false, true);
+        }
+
+        private static ReadResult valid(RuntimeSnapshot snapshot) {
+            return new ReadResult(snapshot, true, true);
+        }
+
+        private static ReadResult invalid(RuntimeSnapshot snapshot) {
+            return new ReadResult(snapshot, true, false);
         }
     }
 }

@@ -171,6 +171,14 @@ root_uid="$(adb_cmd shell "su 0 sh -c 'grep ^Uid: /proc/$pid/status'" \
   | tr -d '\r' | awk '{print $2}')"
 [[ "$root_uid" == 0 ]] || { echo "root profile VPP UID was $root_uid" >&2; exit 1; }
 
+# Capture the generated-VAPI query baseline before Activity recreation. A
+# startup `core_control` line is not evidence that the later ACTION_QUERY ran.
+query_baseline_log="$evidence_file.query-baseline.log"
+adb_cmd shell run-as "$package" cat files/logs/runtime-service.log \
+  | tr -d '\r' >"$query_baseline_log"
+query_baseline_count="$(grep -c 'health_query=vapi_result .*generated_vapi=true' \
+  "$query_baseline_log" || true)"
+
 kill_evidence="$evidence_file.activity-kill"
 if ! kill_output="$(adb_cmd shell "run-as $package kill -KILL $activity_pid" 2>&1)"; then
   printf 'pid=%s\nname=%s\ncommand=run-as %s kill -KILL %s\n%s\n' \
@@ -205,8 +213,16 @@ recreated_generation="$(awk -F= '$1 == "generation" {print $2}' <<<"$state")"
   || { echo "Activity recreation changed runtime PID/generation" >&2; exit 1; }
 adb_cmd shell run-as "$package" cat files/logs/runtime-service.log \
   | tr -d '\r' >"$evidence_file.query.log"
-grep -q 'core_control rc=' "$evidence_file.query.log" \
-  || { echo "active query did not leave generated-VAPI evidence" >&2; exit 1; }
+query_after_count="$(grep -c 'health_query=vapi_result .*generated_vapi=true' \
+  "$evidence_file.query.log" || true)"
+[[ "$query_after_count" -gt "$query_baseline_count" ]] \
+  || { echo "Activity recreation did not issue a new generated-VAPI query; evidence=$evidence_file.query.log" >&2; exit 1; }
+query_revision="$(grep 'health_query=vapi_result .*generated_vapi=true' "$evidence_file.query.log" \
+  | sed -n 's/.*revision=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
+[[ "$query_revision" =~ ^[0-9]+$ ]] \
+  || { echo "generated-VAPI query has no bounded revision; evidence=$evidence_file.query.log" >&2; exit 1; }
+grep -q "health_query=vapi_start revision=$query_revision" "$evidence_file.query.log"
+grep -q "health_query=result revision=$query_revision" "$evidence_file.query.log"
 
 kill_evidence="$evidence_file.crash-kill"
 if ! kill_output="$(adb_cmd shell "su 0 sh -c 'kill -KILL $pid'" 2>&1)"; then
@@ -259,11 +275,10 @@ if ! adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
 fi
 
 # Prove the bounded orphan-recovery seam independently of the normal exit
-# monitor. Kill the VPP owner and both Android processes without giving the
-# service a cleanup turn, then force-stop the package to suppress its
-# START_STICKY restart. Remove the durable PID fields while preserving
-# root-owned profile residue. A fresh QUERY must audit /proc ownership before
-# it is allowed to remove that residue.
+# monitor. Kill the Activity and isolated RuntimeService first, then force-stop
+# the package to suppress its START_STICKY restart while the root VPP owner is
+# still alive. A fresh manual Activity/service request must audit and adopt the
+# same live owner rather than launching a second VPP.
 adb_cmd shell am start -n "$activity" --ez runtimeStart true --es runtimeProfile root >/dev/null
 orphan_running=0
 for _ in $(seq 1 30); do
@@ -293,44 +308,56 @@ orphan_before="$(adb_cmd shell su 0 sh -c "ls -ln /data/user/0/$package/files/pr
 printf 'vppPid=%s\nservicePid=%s\nactivityPid=%s\n%s\n' \
   "$orphan_vpp_pid" "$orphan_service_pid" "$orphan_activity_pid" "$orphan_before" \
   >"$evidence_file.orphan-before"
-adb_cmd shell su 0 sh -c "kill -KILL $orphan_vpp_pid" >/dev/null
 adb_cmd shell "run-as $package kill -KILL $orphan_activity_pid" >/dev/null
 adb_cmd shell "run-as $package kill -KILL $orphan_service_pid" >/dev/null
 adb_cmd shell am force-stop "$package" >/dev/null
 for _ in $(seq 1 20); do
   orphan_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>/dev/null | tr -d '\r' || true)"
-  if ! awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes" \
+  if awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes" \
       && ! awk -v pid="$orphan_service_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes"; then
     break
   fi
   sleep 1
 done
-if awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes"; then
-  echo "orphan VPP owner did not exit; evidence=$evidence_file.orphan-before" >&2
+printf '%s\n' "$orphan_processes" >"$evidence_file.orphan-live.ps"
+if ! awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes"; then
+  echo "root VPP owner did not survive app-process death; evidence=$evidence_file.orphan-live.ps" >&2
   exit 1
 fi
-adb_cmd shell su 0 sh -c "rm -f /data/user/0/$package/files/profiles/root/vpp/runtime/vpp.pid" >/dev/null
-adb_cmd shell run-as "$package" sed -i 's/^pid=.*/pid=-1/' "$state_path"
-orphan_after="$(adb_cmd shell su 0 sh -c "find /data/user/0/$package/files/profiles/root/vpp -maxdepth 3 -print 2>/dev/null | sort" | tr -d '\r')"
-printf 'state_pid=-1\n%s\n' "$orphan_after" >"$evidence_file.orphan-residue"
-grep -q 'owner.token' <<<"$orphan_after"
-grep -q 'startup.conf' <<<"$orphan_after"
 
 adb_cmd shell am start -n "$activity" >/dev/null
-orphan_recovered=0
+orphan_adopted=0
 for _ in $(seq 1 30); do
   state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
   printf '%s\n' "$state" >"$evidence_file.orphan-recovery.state"
-  if grep -q '^state=stopped$' <<<"$state" \
-      && grep -q '^errorCode=runtime_recovered$' <<<"$state" \
-      && grep -q '^mayBeActive=false$' <<<"$state"; then
-    orphan_recovered=1
+  if grep -q '^state=running$' <<<"$state" \
+      && grep -q '^profile=root$' <<<"$state" \
+      && [[ "$(awk -F= '$1 == "pid" {print $2}' <<<"$state")" == "$orphan_vpp_pid" ]]; then
+    orphan_adopted=1
     break
   fi
   sleep 1
 done
-[[ "$orphan_recovered" == 1 ]] \
-  || { echo "orphan residue was not recovered; evidence=$evidence_file.orphan-recovery.state" >&2; exit 1; }
+[[ "$orphan_adopted" == 1 ]] \
+  || { echo "live orphan was not adopted with the same PID; evidence=$evidence_file.orphan-recovery.state" >&2; exit 1; }
+printf 'adoptedPid=%s\n' "$orphan_vpp_pid" >>"$evidence_file.orphan-recovery.state"
+
+# Once adoption is proven, a normal stop must clean the adopted owner and all
+# profile residue without creating a replacement process.
+adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null
+orphan_stopped=0
+for _ in $(seq 1 30); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "$state" >"$evidence_file.orphan-stop.state"
+  if grep -q '^state=stopped$' <<<"$state" \
+      && grep -q '^mayBeActive=false$' <<<"$state"; then
+    orphan_stopped=1
+    break
+  fi
+  sleep 1
+done
+[[ "$orphan_stopped" == 1 ]] \
+  || { echo "adopted orphan did not stop cleanly; evidence=$evidence_file.orphan-stop.state" >&2; exit 1; }
 adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp'" >/dev/null
 adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' >"$evidence_file.orphan-final.ps"
 if awk '$2 == "libvpp_runtime.so" {found=1} END {exit found ? 0 : 1}' \
@@ -445,6 +472,46 @@ state="$(adb_cmd shell run-as "$package" cat "$state_path" | tr -d '\r')"
 grep -q '^state=running$' <<<"$state"
 grep -q '^profile=vpn$' <<<"$state"
 
+# First stop the healthy VPN instance, then leave only app-owned profile files
+# with no PID/handle. A fresh VPN start must audit the app-UID candidate set,
+# delete the safe residue, and recover instead of leaving cleanup_failed.
+adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null
+for _ in $(seq 1 20); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "$state" >"$evidence_file.vpn-prepid-stop.state"
+  if grep -q '^state=stopped$' <<<"$state" \
+      && grep -q '^mayBeActive=false$' <<<"$state"; then
+    break
+  fi
+  sleep 1
+done
+grep -q '^state=stopped$' <<<"$state"
+adb_cmd shell run-as "$package" mkdir -p files/profiles/vpn/vpp/runtime files/profiles/vpn/vpp/logs files/profiles/vpn/vpp/shm
+adb_cmd shell "run-as $package sh -c 'cd /data/user/0/$package; printf 12345678-1234-1234-1234-123456789abc > files/profiles/vpn/vpp/runtime/owner.token; printf test > files/profiles/vpn/vpp/startup.conf; rm -f files/profiles/vpn/vpp/runtime/vpp.pid'"
+adb_cmd shell su 0 sh -c "find /data/user/0/$package/files/profiles/vpn/vpp -maxdepth 3 -print 2>/dev/null | sort" \
+  | tr -d '\r' >"$evidence_file.vpn-prepid-residue"
+adb_cmd shell am start -n "$activity" --ez runtimeStart true --es runtimeProfile vpn >/dev/null
+vpn_prepid_recovered=0
+for _ in $(seq 1 30); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "$state" >"$evidence_file.vpn-prepid.state"
+  if grep -q '^state=running$' <<<"$state" \
+      && grep -q '^profile=vpn$' <<<"$state" \
+      && grep -q '^health=ok$' <<<"$state" \
+      && ! grep -q '^errorCode=cleanup_failed$' <<<"$state"; then
+    vpn_prepid_recovered=1
+    break
+  fi
+  if grep -q '^state=error$' <<<"$state"; then
+    echo "VPN pre-PID residue recovery failed; evidence=$evidence_file.vpn-prepid.state" >&2
+    exit 1
+  fi
+  sleep 1
+done
+[[ "$vpn_prepid_recovered" == 1 ]] \
+  || { echo "VPN pre-PID residue did not recover; evidence=$evidence_file.vpn-prepid.state" >&2; exit 1; }
+
+# Final stop and residue/process proof.
 adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null
 for _ in $(seq 1 20); do
   state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"

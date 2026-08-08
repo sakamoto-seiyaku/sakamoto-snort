@@ -2,6 +2,7 @@ import com.sakamoto.snort.androidruntime.RuntimeControlProtocol;
 import com.sakamoto.snort.androidruntime.RuntimeControlRequest;
 import com.sakamoto.snort.androidruntime.RuntimeControlNative;
 import com.sakamoto.snort.androidruntime.RuntimeProfile;
+import com.sakamoto.snort.androidruntime.RuntimeOwnershipReconciliation;
 import com.sakamoto.snort.androidruntime.RuntimeSnapshot;
 import com.sakamoto.snort.androidruntime.RuntimeStateStore;
 import com.sakamoto.snort.androidruntime.VppHealthHandshake;
@@ -15,6 +16,8 @@ public final class AndroidRuntimeContractTest {
         requestRoundTripIsVersionedAndProfileAware();
         profileDoesNotExposeAdapterArtifacts();
         snapshotRoundTripPreservesBoundedHealthAndError();
+        durableProjectionReadResultIsExplicit();
+        durableOwnershipDecisionFailsClosed();
         stoppedSnapshotRetainsRecentFailure();
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
@@ -65,6 +68,62 @@ public final class AndroidRuntimeContractTest {
         check(restoredFailure.errorCode.equals("cleanup_failed"), "error code round-trips");
         check(restoredFailure.errorMessage.length() <= RuntimeSnapshot.MAX_TEXT_LENGTH,
                 "error message is bounded");
+    }
+
+    private static void durableProjectionReadResultIsExplicit() throws Exception {
+        Path missing = Files.createTempDirectory("sakamoto-67-runtime-missing");
+        RuntimeStateStore.ReadResult absent = RuntimeStateStore.readResult(missing.toFile());
+        check(!absent.present, "missing projection is reported as absent");
+        check(absent.valid, "missing projection is not a parse failure");
+        check(RuntimeSnapshot.STATE_STOPPED.equals(absent.snapshot.state),
+                "missing projection starts from an inactive snapshot");
+
+        Path corrupt = Files.createTempDirectory("sakamoto-67-runtime-corrupt");
+        Files.createDirectories(corrupt.resolve("runtime-state"));
+        Files.write(corrupt.resolve("runtime-state/snapshot.properties"),
+                "schemaVersion=not-a-number\nprofile=vpn\nstate=running\n"
+                        .getBytes("US-ASCII"));
+        RuntimeStateStore.ReadResult unreadable = RuntimeStateStore.readResult(corrupt.toFile());
+        check(unreadable.present, "corrupt projection is reported as present");
+        check(!unreadable.valid, "corrupt projection is reported as invalid");
+        check("state_projection_corrupt".equals(unreadable.snapshot.errorCode),
+                "corrupt projection has an explicit bounded error");
+
+        Path corruptPid = Files.createTempDirectory("sakamoto-67-runtime-pid-corrupt");
+        Files.createDirectories(corruptPid.resolve("runtime-state"));
+        Files.write(corruptPid.resolve("runtime-state/snapshot.properties"),
+                "schemaVersion=2\nprofile=vpn\nstate=running\npid=not-a-pid\n"
+                        .getBytes("US-ASCII"));
+        check(!RuntimeStateStore.readResult(corruptPid.toFile()).valid,
+                "malformed durable PID also requires reconciliation");
+    }
+
+    private static void durableOwnershipDecisionFailsClosed() {
+        check(RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
+                        == RuntimeOwnershipReconciliation.decide(
+                                RuntimeOwnershipReconciliation.Evidence.LIVE,
+                                RuntimeOwnershipReconciliation.Evidence.NONE),
+                "one live root owner can be adopted");
+        check(RuntimeOwnershipReconciliation.Action.ADOPT_VPN
+                        == RuntimeOwnershipReconciliation.decide(
+                                RuntimeOwnershipReconciliation.Evidence.NONE,
+                                RuntimeOwnershipReconciliation.Evidence.LIVE),
+                "one live VPN owner can be adopted");
+        check(RuntimeOwnershipReconciliation.Action.CLEAN
+                        == RuntimeOwnershipReconciliation.decide(
+                                RuntimeOwnershipReconciliation.Evidence.RESIDUE,
+                                RuntimeOwnershipReconciliation.Evidence.NONE),
+                "one dead residue profile can be cleaned");
+        check(RuntimeOwnershipReconciliation.Action.BLOCK
+                        == RuntimeOwnershipReconciliation.decide(
+                                RuntimeOwnershipReconciliation.Evidence.LIVE,
+                                RuntimeOwnershipReconciliation.Evidence.LIVE),
+                "two live owners are blocked");
+        check(RuntimeOwnershipReconciliation.Action.BLOCK
+                        == RuntimeOwnershipReconciliation.decide(
+                                RuntimeOwnershipReconciliation.Evidence.UNKNOWN,
+                                RuntimeOwnershipReconciliation.Evidence.NONE),
+                "unverifiable ownership is blocked");
     }
 
     private static void stoppedSnapshotRetainsRecentFailure() throws Exception {

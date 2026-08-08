@@ -35,6 +35,10 @@ if grep -q 'vppctl.*quit' "$production_service_source"; then
 fi
 grep -q 'ADAPTER_UNAVAILABLE' "$production_service_source"
 grep -q 'PidIdentity' "$production_service_source"
+grep -q 'health_query=vapi_start' "$production_service_source"
+grep -q 'health_query=vapi_result' "$production_service_source"
+grep -q 'android.os.Process.myUid' "$production_service_source"
+grep -q 'VPP_OWNER_PID=' "$production_service_source"
 grep -q 'onDestroy' "$production_activity_source"
 grep -q 'RuntimeControlBackend' "$production_activity_source"
 if grep -q 'LocalProductBackend' "$production_activity_source"; then
