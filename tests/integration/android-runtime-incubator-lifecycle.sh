@@ -333,7 +333,8 @@ done
   || { echo "orphan residue was not recovered; evidence=$evidence_file.orphan-recovery.state" >&2; exit 1; }
 adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp'" >/dev/null
 adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' >"$evidence_file.orphan-final.ps"
-if grep -q 'libvpp_runtime.so' "$evidence_file.orphan-final.ps"; then
+if awk '$2 == "libvpp_runtime.so" {found=1} END {exit found ? 0 : 1}' \
+    "$evidence_file.orphan-final.ps"; then
   echo "VPP process appeared during orphan recovery; evidence=$evidence_file.orphan-final.ps" >&2
   exit 1
 fi
