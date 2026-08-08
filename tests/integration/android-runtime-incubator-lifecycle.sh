@@ -401,6 +401,8 @@ fi
 printf 'pid=%s\ncommand=su 0 sh -c '\''kill -KILL %s'\''\n%s\n' \
   "$pid" "$pid" "$kill_output" >"$kill_evidence"
 crash_recovered=0
+crash_recovery_mode=""
+crash_recovered_pid=""
 for _ in $(seq 1 30); do
   state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null \
     | tr -d '\r' || true)"
@@ -421,23 +423,44 @@ for _ in $(seq 1 30); do
     echo "$state"
     echo "$process_snapshot"
   } >"$evidence_file.crash.state"
-  if [[ "$process_alive" == 0 ]] \
-      && [[ "$process_present" == 0 ]] \
-      && grep -q '^state=stopped$' <<<"$state" \
-      && grep -q '^errorCode=unexpected_exit$' <<<"$state" \
-      && grep -q '^mayBeActive=false$' <<<"$state"; then
-    crash_recovered=1
-    break
+  if [[ "$process_alive" == 0 ]] && [[ "$process_present" == 0 ]]; then
+    if grep -q '^state=stopped$' <<<"$state" \
+        && grep -q '^errorCode=unexpected_exit$' <<<"$state" \
+        && grep -q '^mayBeActive=false$' <<<"$state"; then
+      crash_recovered=1
+      crash_recovery_mode="durable-unexpected-exit"
+      break
+    fi
+    # START_STICKY plus the Activity's bounded QUERY loop may race the
+    # unexpected_exit projection. A new healthy owner is also a valid crash
+    # recovery outcome, but only after proving it is a different PID and the
+    # sole strongly verified packaged owner.
+    if grep -q '^state=running$' <<<"$state" \
+        && grep -q '^health=ok$' <<<"$state" \
+        && grep -q '^coreHealth=ok$' <<<"$state" \
+        && grep -q '^profile=root$' <<<"$state"; then
+      candidate_pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
+      if [[ "$candidate_pid" =~ ^[0-9]+$ ]] && [[ "$candidate_pid" != "$pid" ]] \
+          && assert_exactly_one_owner root "$candidate_pid"; then
+        crash_recovered=1
+        crash_recovery_mode="automatic-new-owner"
+        crash_recovered_pid="$candidate_pid"
+        break
+      fi
+    fi
   fi
   sleep 1
 done
 [[ "$crash_recovered" == 1 ]] \
-  || { echo "runtime crash was not recovered with durable unexpected_exit; evidence=$evidence_file.crash.state" >&2; exit 1; }
-if ! adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
-  && test ! -e files/profiles/root/vpp/runtime/cli.sock \
-  && test ! -e files/profiles/root/vpp/runtime/statseg.sock \
-  && test ! -e files/profiles/root/vpp/shm'"; then
-  echo "profile residue remains after crash recovery; evidence=$evidence_file.crash.state" >&2
+  || { echo "runtime crash was not recovered with durable exit or a new exact-one owner; evidence=$evidence_file.crash.state" >&2; exit 1; }
+printf 'crashRecoveryMode=%s\ncrashRecoveredPid=%s\n' \
+  "$crash_recovery_mode" "$crash_recovered_pid" >>"$evidence_file.crash.state"
+if [[ "$crash_recovery_mode" == "durable-unexpected-exit" ]] \
+    && ! adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
+      && test ! -e files/profiles/root/vpp/runtime/cli.sock \
+      && test ! -e files/profiles/root/vpp/runtime/statseg.sock \
+      && test ! -e files/profiles/root/vpp/shm'"; then
+  echo "profile residue remains after durable crash recovery; evidence=$evidence_file.crash.state" >&2
   exit 1
 fi
 
