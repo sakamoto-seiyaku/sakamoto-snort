@@ -14,6 +14,8 @@ public final class RuntimeOwnershipReconciliation {
     private static final int OWNER_MATCH_STATUS = 10;
     private static final int OWNER_AMBIGUOUS_STATUS = 11;
     private static final int OWNER_UNCERTAIN_STATUS = 127;
+    /** Dedicated inner-test status; runcon itself may also return 1. */
+    private static final int PROC_MISSING_STATUS = 42;
 
     public enum Evidence {
         NONE,
@@ -530,10 +532,10 @@ public final class RuntimeOwnershipReconciliation {
             return PidIdentity.UNKNOWN;
         }
         CommandResult probe = runner.run(spec.profile, buildProbeCommand(spec, pid), 2L);
-        if (probe == null || probe.status != 0 && probe.status != 1) {
+        if (probe == null || probe.status != 0 && probe.status != PROC_MISSING_STATUS) {
             return PidIdentity.UNKNOWN;
         }
-        if (probe.status == 1) {
+        if (probe.status == PROC_MISSING_STATUS) {
             return PidIdentity.MISSING;
         }
         CommandResult identity = runner.run(spec.profile, buildPidIdentityCommand(spec, pid), 2L);
@@ -548,7 +550,7 @@ public final class RuntimeOwnershipReconciliation {
         // is already gone, while a live-but-unreadable process remains
         // unverifiable and a readable identity mismatch is a possible PID
         // reuse.
-        if (identity.status == 2) {
+        if (identity.status == PROC_MISSING_STATUS) {
             return PidIdentity.MISSING;
         }
         return identity.status == 1 ? PidIdentity.MISMATCH : PidIdentity.UNKNOWN;
@@ -579,16 +581,23 @@ public final class RuntimeOwnershipReconciliation {
         String procReader = "0".equals(spec.expectedUid) ? "runcon u:r:ksu:s0 " : "";
         String procTest = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 test " : "test ";
+        String procPresence = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 sh -c "
+                        + shellQuote("if test -d \"$1\"; then exit 0; else rc=$?; "
+                                + "if [ \"$rc\" -eq 1 ]; then exit 42; else exit 43; fi; fi")
+                        + " sh \"$proc\""
+                : "if test -d \"$proc\"; then :; else rc=$?; "
+                        + "if [ \"$rc\" -eq 1 ]; then exit 42; else exit 43; fi; fi";
         // A failed /proc read is only a vanished candidate when the
-        // privileged existence recheck returns exactly status 1. A live
-        // process (status 0) or a failed recheck (status >1) is unknown.
-        String procReadUncertain = "proc_presence_status=0; " + procTest
-                + "-d \"$proc\" 2>/dev/null; proc_presence_status=$?; "
-                + "case \"$proc_presence_status\" in 1) : ;; 0|*) uncertain=1 ;; esac; "
+        // privileged existence recheck returns the dedicated absence status
+        // 42. A live process (status 0) or a failed runcon/recheck is unknown.
+        String procReadUncertain = "proc_presence_status=0; " + procPresence
+                + " 2>/dev/null; proc_presence_status=$?; "
+                + "case \"$proc_presence_status\" in 42) : ;; 0|*) uncertain=1 ;; esac; "
                 + "continue; ";
-        String procInitialCheck = "proc_presence_status=0; " + procTest
-                + "-d \"$proc\" 2>/dev/null; proc_presence_status=$?; "
-                + "case \"$proc_presence_status\" in 0) : ;; 1) continue ;; *) uncertain=1; continue ;; esac; ";
+        String procInitialCheck = "proc_presence_status=0; " + procPresence
+                + " 2>/dev/null; proc_presence_status=$?; "
+                + "case \"$proc_presence_status\" in 0) : ;; 42) continue ;; *) uncertain=1; continue ;; esac; ";
         String cmdlineReader = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null\""
                 : "tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null";
@@ -756,12 +765,19 @@ public final class RuntimeOwnershipReconciliation {
                 : "tr '\\0' '\\n' </proc/" + pid + "/environ 2>/dev/null";
         String procTest = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 test " : "test ";
-        String procReadFailure = "proc_probe_status=0; " + procTest
-                + "-d /proc/" + pid + " 2>/dev/null; proc_probe_status=$?; "
-                + "case \"$proc_probe_status\" in 1) exit 2 ;; 0|*) exit 125 ;; esac; ";
-        String procInitialCheck = "proc_probe_status=0; " + procTest + "-d /proc/" + pid
+        String procPresence = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 sh -c "
+                        + shellQuote("if test -d \"$1\"; then exit 0; else rc=$?; "
+                                + "if [ \"$rc\" -eq 1 ]; then exit 42; else exit 43; fi; fi")
+                        + " sh /proc/" + pid
+                : "if test -d /proc/" + pid + "; then :; else rc=$?; "
+                        + "if [ \"$rc\" -eq 1 ]; then exit 42; else exit 43; fi; fi";
+        String procReadFailure = "proc_probe_status=0; " + procPresence
+                + " 2>/dev/null; proc_probe_status=$?; "
+                + "case \"$proc_probe_status\" in 42) exit 42 ;; 0|*) exit 125 ;; esac; ";
+        String procInitialCheck = "proc_probe_status=0; " + procPresence
                 + " 2>/dev/null; proc_probe_status=$?; case \"$proc_probe_status\" in "
-                + "0) : ;; 1) exit 2 ;; *) exit 125 ;; esac; ";
+                + "0) : ;; 42) exit 42 ;; *) exit 125 ;; esac; ";
         String checkMatch = "check_status=$?; case \"$check_status\" in 0) : ;; 1) exit 1 ;; *) exit 125 ;; esac; ";
         return "profile_config=$(" + procReader + "cat " + startup + " 2>/dev/null); "
                 + "profile_config_status=$?; if [ \"$profile_config_status\" -ne 0 ]; then exit 125; fi; "
@@ -815,7 +831,7 @@ public final class RuntimeOwnershipReconciliation {
     /** Public shell seam for tests and for the service's bounded PID probe. */
     public static String buildProbeCommand(ProfileSpec spec, long pid) {
         String probe = "if kill -0 " + pid + " 2>/dev/null; then exit 0; "
-                + "elif test -e /proc/" + pid + "; then exit 2; else exit 1; fi";
+                + "elif test -e /proc/" + pid + "; then exit 2; else exit 42; fi";
         if (spec != null && "0".equals(spec.expectedUid)) {
             // Both kill(2) and /proc existence are security-context-sensitive
             // on Android. Running only the `test` branch through runcon still

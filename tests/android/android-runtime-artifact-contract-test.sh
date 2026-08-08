@@ -50,6 +50,14 @@ rtk grep -Eq 'vppctl|runtime stage' "$tmp_dir/missing.log"
 VPP_RUNTIME_STAGE_DIR="$valid_stage" "$build_script"
 
 apk="$repo_root/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk"
+apksigner_jar="${APKSIGNER_JAR:-/home/js/android/lineage/prebuilts/sdk/tools/linux/lib/apksigner.jar}"
+apk_cert_digest() {
+  java -jar "$apksigner_jar" verify --print-certs "$1" \
+    | awk -F': ' '/certificate SHA-256 digest/{gsub(":", "", $2); print tolower($2); exit}'
+}
+cert_before="$(apk_cert_digest "$apk")"
+[[ "$cert_before" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "unable to read APK signing certificate digest" >&2; exit 1; }
 manifest="$(rtk unzip -p "$apk" assets/vpp-runtime.properties)"
 provenance="$(rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties)"
 entries="$(rtk unzip -Z1 "$apk")"
@@ -117,5 +125,8 @@ if [[ "$clean_build_rc" != 0 ]]; then
 fi
 [[ -f "$build_dir/outputs/sakamoto-runtime-debug.apk" ]] \
   || { echo "clean-build gate did not produce an APK" >&2; exit 1; }
+cert_after="$(apk_cert_digest "$build_dir/outputs/sakamoto-runtime-debug.apk")"
+[[ "$cert_after" == "$cert_before" ]] \
+  || { echo "clean-build APK signing certificate changed" >&2; exit 1; }
 
 echo "android runtime core artifact contract seam: PASS"

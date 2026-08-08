@@ -387,7 +387,7 @@ public final class AndroidRuntimeContractTest {
                             calls[0]++;
                             check(command.contains("runcon u:r:ksu:s0"),
                                     "root probe command remains privileged");
-                            return new RuntimeOwnershipReconciliation.CommandResult(1, "");
+                            return new RuntimeOwnershipReconciliation.CommandResult(42, "");
                         });
         check(absent == RuntimeOwnershipReconciliation.PidIdentity.MISSING,
                 "a privileged probe proving /proc absence maps to MISSING");
@@ -407,6 +407,13 @@ public final class AndroidRuntimeContractTest {
         check(probeFailure == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
                 "a privileged probe/permission failure stays UNKNOWN");
 
+        RuntimeOwnershipReconciliation.PidIdentity runconFailure =
+                RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
+                        (profile, command, timeout) ->
+                                new RuntimeOwnershipReconciliation.CommandResult(1, ""));
+        check(runconFailure == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
+                "runcon launcher status 1 is not confused with an absent PID");
+
         RuntimeOwnershipReconciliation.PidIdentity vanishedDuringIdentity =
                 RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
                         (profile, command, timeout) -> {
@@ -415,7 +422,7 @@ public final class AndroidRuntimeContractTest {
                             }
                             check(command.contains("proc_probe_status=$?"),
                                     "strong PID identity rechecks privileged proc presence after reads");
-                            return new RuntimeOwnershipReconciliation.CommandResult(2, "");
+                            return new RuntimeOwnershipReconciliation.CommandResult(42, "");
                         });
         check(vanishedDuringIdentity
                         == RuntimeOwnershipReconciliation.PidIdentity.MISSING,
@@ -444,7 +451,7 @@ public final class AndroidRuntimeContractTest {
                             "ownership scan defers corrupt startup metadata until a live candidate exists");
                     check(command.contains("profile_config_unverified=0"),
                             "ownership scan distinguishes unreadable startup metadata from stale residue");
-                    check(command.contains("runcon u:r:ksu:s0 test -d \"$proc\""),
+                    check(command.contains("runcon u:r:ksu:s0 sh -c"),
                             "root ownership scan checks candidate existence in runcon context");
                     check(!command.contains("if ! test -r \"$proc/environ\""),
                             "root ownership scan has no unprivileged outer environ check");
@@ -473,8 +480,8 @@ public final class AndroidRuntimeContractTest {
         check(command.contains("proc_presence_status=$?"),
                 "every bounded proc read records the privileged recheck status");
         check(command.contains(
-                        "case \"$proc_presence_status\" in 1) : ;; 0|*) uncertain=1 ;; esac"),
-                "only a status-1 disappearance is ignored; live/recheck failures stay unknown");
+                        "case \"$proc_presence_status\" in 42) : ;; 0|*) uncertain=1 ;; esac"),
+                "only the encoded disappearance is ignored; runcon/live failures stay unknown");
         check(!command.contains(
                         "if ! runcon u:r:ksu:s0 test -d \"$proc\"; then continue; fi"),
                 "a failed privileged existence recheck is not blindly treated as vanished");
