@@ -9,6 +9,8 @@ STAGE_DIR="${STAGE_DIR:-$VPP_WORK_ROOT/android-vpp-core-stage}"
 NDK_ROOT="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 STRIP_BIN="${STRIP_BIN:-$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip}"
 STRIP="${STRIP:-1}"
+VPP_SOURCE_REVISION="${VPP_SOURCE_REVISION:-unknown}"
+VPP_SOURCE_ORIGIN="${VPP_SOURCE_ORIGIN:-$VPP_DIR}"
 
 BIN_SRC="$BUILD_DIR/bin/vpp"
 VPPCTL_SRC="$BUILD_DIR/bin/vppctl"
@@ -95,6 +97,35 @@ if [ "$STRIP" = "1" ]; then
     "$STRIP_BIN" --strip-unneeded "$plugin"
   done
 fi
+
+for artifact in "$STAGE_DIR/bin/vpp" "$STAGE_DIR/bin/vppctl"; do
+  [ -f "$artifact" ] || { echo "Missing staged VPP artifact: $artifact" >&2; exit 1; }
+  if strings "$artifact" | grep -Eq 'wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE'; then
+    echo "Rejected P6 conditional-wake symbols found in staged binary: $artifact" >&2
+    exit 1
+  fi
+done
+
+source_status="absent"
+if rg -n --hidden --glob '!*.o' --glob '!*.so' \
+    'wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE|0003-vlib-frame-queue-wakeup-epoch-state' \
+    "$VPP_DIR" >/dev/null 2>&1; then
+  source_status="present"
+fi
+[ "$source_status" = "absent" ] || {
+  echo "Rejected P6 conditional-wake source is present in $VPP_DIR" >&2
+  exit 1
+}
+{
+  echo "sourceRevision=$VPP_SOURCE_REVISION"
+  echo "sourceOrigin=$VPP_SOURCE_ORIGIN"
+  echo "sourceTree=$VPP_DIR"
+  echo "sourceStatus=committed-snapshot"
+  echo "conditionalWakeSource=absent"
+  echo "conditionalWakeBinary=absent"
+  echo "vppSha256=$(sha256sum "$STAGE_DIR/bin/vpp" | awk '{print $1}')"
+  echo "vppctlSha256=$(sha256sum "$STAGE_DIR/bin/vppctl" | awk '{print $1}')"
+} >"$STAGE_DIR/runtime/source-provenance.properties"
 
 echo "# Android VPP core stage"
 echo "stage_dir=$STAGE_DIR"

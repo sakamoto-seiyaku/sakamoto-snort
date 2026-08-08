@@ -33,7 +33,6 @@ public final class RuntimeStateStore {
                     values.getProperty("version", ""), values.getProperty("artifact",
                             values.getProperty("abiEvidence", "")),
                     values.getProperty("abi", ""),
-                    values.getProperty("adapterReadiness", values.getProperty("adapter", "")),
                     values.getProperty("coreHealth", values.getProperty("health", "unknown")),
                     values.getProperty("errorCode", ""), values.getProperty("errorMessage", ""),
                     Boolean.parseBoolean(values.getProperty("mayBeActive", "false")),
@@ -42,7 +41,7 @@ public final class RuntimeStateStore {
                     parseLong(values.getProperty("updatedAtMillis", "0"), 0L));
         } catch (Exception error) {
             return RuntimeSnapshot.error(RuntimeProfile.ROOT, RuntimeControlProtocol.NAME, "", "", "",
-                    "", "state_projection_corrupt",
+                    "state_projection_corrupt",
                     "runtime state could not be read", false, -1L);
         }
     }

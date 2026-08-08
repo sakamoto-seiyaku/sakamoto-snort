@@ -26,6 +26,9 @@ grep -q 'RuntimeControlNative' "$production_service_source"
 grep -q 'apiIdentity' "$production_service_source"
 grep -q 'kill -TERM' "$production_service_source"
 grep -q 'kill -KILL' "$production_service_source"
+grep -q 'root_authorization_required' "$production_service_source"
+grep -q 'SAKAMOTO_VPP_RUNTIME_DIR' "$production_service_source"
+grep -q 'sha256sum' "$production_service_source"
 if grep -q 'vppctl.*quit' "$production_service_source"; then
   echo "product stop must not use vppctl quit" >&2
   exit 1

@@ -40,7 +40,7 @@ public final class VppHealthHandshake {
             errorCode = "health_program_mismatch";
         }
         return new Result(protocol, status == null ? "" : status.version, artifact,
-                clean(expectedAbi), RuntimeSnapshot.ADAPTER_UNAVAILABLE,
+                clean(expectedAbi),
                 errorCode.isEmpty() ? "ok" : "error", errorCode);
     }
 
@@ -70,7 +70,7 @@ public final class VppHealthHandshake {
         } else if (cliExitCode != 0) {
             errorCode = "health_vppctl_failed";
         }
-        return new Result(protocol, version, artifact, abi, RuntimeSnapshot.ADAPTER_UNAVAILABLE,
+        return new Result(protocol, version, artifact, abi,
                 errorCode.isEmpty() ? "ok" : "error", errorCode);
     }
 
@@ -94,7 +94,6 @@ public final class VppHealthHandshake {
             errorCode = "health_version_mismatch";
         }
         return new Result(protocol, version, "", actualAbi,
-                RuntimeSnapshot.ADAPTER_UNAVAILABLE,
                 errorCode.isEmpty() ? "ok" : "error", errorCode);
     }
 
@@ -136,17 +135,15 @@ public final class VppHealthHandshake {
         public final String version;
         public final String artifact;
         public final String abi;
-        public final String adapter;
         public final String health;
         public final String errorCode;
 
-        Result(String protocol, String version, String artifact, String abi, String adapter,
-               String health, String errorCode) {
+        Result(String protocol, String version, String artifact, String abi, String health,
+               String errorCode) {
             this.protocol = protocol;
             this.version = version;
             this.artifact = artifact;
             this.abi = abi;
-            this.adapter = RuntimeSnapshot.ADAPTER_UNAVAILABLE;
             this.health = health;
             this.errorCode = errorCode;
         }

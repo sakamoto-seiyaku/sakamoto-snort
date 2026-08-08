@@ -45,7 +45,7 @@ public final class AndroidRuntimeContractTest {
         Path files = Files.createTempDirectory("sakamoto-67-runtime");
         RuntimeSnapshot running = RuntimeSnapshot.running(
                 RuntimeProfile.ROOT, "vpp-runtime-health/v1", "v26.02-release",
-                "arm64-v8a", "artifact-sha256:abc", "nfqueue", "ok", 42L);
+                "arm64-v8a", "artifact-sha256:abc", "ok", 42L);
         RuntimeStateStore.write(files.toFile(), running);
         RuntimeSnapshot restored = RuntimeStateStore.read(files.toFile());
         check(restored.state.equals(RuntimeSnapshot.STATE_RUNNING), "running state round-trips");
@@ -57,7 +57,7 @@ public final class AndroidRuntimeContractTest {
 
         RuntimeSnapshot failure = RuntimeSnapshot.error(
                 RuntimeProfile.VPN, "vpp-runtime-health/v1", "v26.02-release",
-                "arm64-v8a", "artifact-sha256:abc", "tun", "cleanup_failed",
+                "arm64-v8a", "artifact-sha256:abc", "cleanup_failed",
                 "socket residue remains", true, 77L);
         RuntimeStateStore.write(files.toFile(), failure);
         RuntimeSnapshot restoredFailure = RuntimeStateStore.read(files.toFile());
@@ -70,7 +70,7 @@ public final class AndroidRuntimeContractTest {
     private static void stoppedSnapshotRetainsRecentFailure() throws Exception {
         RuntimeSnapshot failure = RuntimeSnapshot.error(
                 RuntimeProfile.ROOT, "vpp-runtime-health/v1", "v26.02-release",
-                "arm64-v8a", "artifact-sha256:abc", "nfqueue", "unexpected_exit",
+                "arm64-v8a", "artifact-sha256:abc", "unexpected_exit",
                 "VPP owner exited with status 137", false, -1L, 8L);
         RuntimeSnapshot stopped = RuntimeSnapshot.stoppedAfter(failure);
         check(RuntimeSnapshot.STATE_STOPPED.equals(stopped.state),
@@ -102,8 +102,6 @@ public final class AndroidRuntimeContractTest {
                 "artifact-sha256:abc", 0,
                 "Version: v26.02-release\nArtifact: artifact-sha256:abc\n");
         check(healthy.isReady(), "matching core version/artifact health is ready");
-        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(healthy.adapter),
-                "core health never reports Adapter readiness");
 
         check(VppHealthHandshake.parse(
                 RuntimeProfile.VPN, "vpp-runtime-health/v1", "v26.02-release", "arm64-v8a",
@@ -135,10 +133,10 @@ public final class AndroidRuntimeContractTest {
         check(VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
                 "v26.02-release", "arm64-v8a", "sha256:core", "show_version_51077d14",
                 status).isReady(), "generated VAPI core identity proves readiness");
-        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(
-                        VppHealthHandshake.evaluate(RuntimeProfile.VPN,
-                                "vpp-runtime-health/v1", "v26.02-release", "arm64-v8a",
-                                "sha256:core", "show_version_51077d14", status).adapter),
+        RuntimeSnapshot vpn = RuntimeSnapshot.running(RuntimeProfile.VPN,
+                "vpp-runtime-health/v1", "v26.02-release", "sha256:core", "arm64-v8a",
+                "ok", 43L);
+        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(vpn.adapterReadiness),
                 "native core handshake leaves VPN Adapter unavailable");
         check(!VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
                 "v26.02-release", "arm64-v8a", "sha256:core", "wrong-api", status).isReady(),

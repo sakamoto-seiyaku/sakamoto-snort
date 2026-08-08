@@ -18,7 +18,6 @@ public final class RuntimeSnapshot {
 
     /** SAKAMOTO-67 does not own a packet Adapter yet. */
     public static final String ADAPTER_UNAVAILABLE = "unavailable";
-    public static final String ADAPTER_NOT_READY = "not_ready";
 
     public final String state;
     public final RuntimeProfile profile;
@@ -43,7 +42,7 @@ public final class RuntimeSnapshot {
     public final long updatedAtMillis;
 
     public RuntimeSnapshot(String state, RuntimeProfile profile, String protocol, String version,
-                           String artifact, String abi, String adapter, String health,
+                           String artifact, String abi, String health,
                            String errorCode, String errorMessage, boolean mayBeActive, long pid,
                            long generation, long updatedAtMillis) {
         this.state = requireState(state);
@@ -54,9 +53,6 @@ public final class RuntimeSnapshot {
         this.abiEvidence = this.artifact;
         this.abi = text(abi);
         this.coreHealth = text(health);
-        // Adapter readiness is deliberately not an input to this projection.
-        // In particular, plugin names from migration experiments can never
-        // become product state by being passed to a constructor.
         this.adapterReadiness = ADAPTER_UNAVAILABLE;
         this.adapter = this.adapterReadiness;
         this.health = this.coreHealth;
@@ -69,11 +65,11 @@ public final class RuntimeSnapshot {
     }
 
     public RuntimeSnapshot(String state, String profile, String protocol, String version,
-                           String artifact, String adapter, String health, String errorCode,
+                           String artifact, String health, String errorCode,
                            String errorMessage, boolean mayBeActive, long pid, long generation,
                            long updatedAtMillis) {
-        this(state, RuntimeProfile.parse(profile), protocol, version, artifact, "", adapter,
-                health, errorCode, errorMessage, mayBeActive, pid, generation, updatedAtMillis);
+        this(state, RuntimeProfile.parse(profile), protocol, version, artifact, "", health,
+                errorCode, errorMessage, mayBeActive, pid, generation, updatedAtMillis);
     }
 
     public static RuntimeSnapshot stopped() {
@@ -81,7 +77,7 @@ public final class RuntimeSnapshot {
     }
 
     public static RuntimeSnapshot stopped(RuntimeProfile profile, long generation) {
-        return new RuntimeSnapshot(STATE_STOPPED, profile, "", "", "", "", "",
+        return new RuntimeSnapshot(STATE_STOPPED, profile, "", "", "", "",
                 "unknown", "", "", false, -1L, generation, System.currentTimeMillis());
     }
 
@@ -91,7 +87,7 @@ public final class RuntimeSnapshot {
             return previous == null ? stopped() : stopped(previous.profile, previous.generation);
         }
         return new RuntimeSnapshot(STATE_STOPPED, previous.profile, previous.protocol,
-                previous.version, previous.artifact, previous.abi, "", "unknown",
+                previous.version, previous.artifact, previous.abi, "unknown",
                 previous.errorCode, previous.errorMessage, false, -1L, previous.generation,
                 System.currentTimeMillis());
     }
@@ -99,7 +95,7 @@ public final class RuntimeSnapshot {
     public static RuntimeSnapshot starting(RuntimeProfile profile, String protocol,
                                            String version, String artifact, long generation) {
         return new RuntimeSnapshot(STATE_STARTING, profile, protocol, version, artifact, "",
-                "", "checking", "", "", true, -1L, generation,
+                "checking", "", "", true, -1L, generation,
                 System.currentTimeMillis());
     }
 
@@ -110,36 +106,35 @@ public final class RuntimeSnapshot {
     }
 
     public static RuntimeSnapshot running(RuntimeProfile profile, String protocol, String version,
-                                          String artifact, String abi, String adapter,
-                                          String health, long pid) {
-        return running(profile, protocol, version, artifact, abi, adapter, health, pid, 0L);
+                                          String artifact, String abi, String health, long pid) {
+        return running(profile, protocol, version, artifact, abi, health, pid, 0L);
     }
 
     public static RuntimeSnapshot running(String profile, String protocol, String version,
                                           String abi, String abiEvidence, String health,
                                           long pid) {
         return running(RuntimeProfile.parse(profile), protocol, version, abiEvidence, abi,
-                "", health, pid);
+                health, pid);
     }
 
     public static RuntimeSnapshot running(RuntimeProfile profile, String protocol, String version,
-                                          String artifact, String abi, String adapter,
-                                          String health, long pid, long generation) {
+                                          String artifact, String abi, String health, long pid,
+                                          long generation) {
         return new RuntimeSnapshot(STATE_RUNNING, profile, protocol, version, artifact, abi,
-                "", health, "", "", true, pid, generation, System.currentTimeMillis());
+                health, "", "", true, pid, generation, System.currentTimeMillis());
     }
 
     public static RuntimeSnapshot stopping(RuntimeSnapshot current) {
         return new RuntimeSnapshot(STATE_STOPPING, current.profile, current.protocol,
-                current.version, current.artifact, current.abi, "", "stopping", "", "", true,
+                current.version, current.artifact, current.abi, "stopping", "", "", true,
                 current.pid, current.generation, System.currentTimeMillis());
     }
 
     public static RuntimeSnapshot error(RuntimeProfile profile, String protocol, String version,
-                                        String artifact, String abi, String adapter,
+                                        String artifact, String abi,
                                         String errorCode, String errorMessage, boolean mayBeActive,
                                         long pid) {
-        return error(profile, protocol, version, artifact, abi, adapter, errorCode, errorMessage,
+        return error(profile, protocol, version, artifact, abi, errorCode, errorMessage,
                 mayBeActive, pid, 0L);
     }
 
@@ -147,15 +142,15 @@ public final class RuntimeSnapshot {
                                         String abi, String abiEvidence, String errorCode,
                                         String errorMessage, boolean mayBeActive, long pid) {
         RuntimeProfile parsed = RuntimeProfile.parse(profile);
-        return error(parsed, protocol, version, abiEvidence, abi, "", errorCode,
+        return error(parsed, protocol, version, abiEvidence, abi, errorCode,
                 errorMessage, mayBeActive, pid);
     }
 
     public static RuntimeSnapshot error(RuntimeProfile profile, String protocol, String version,
-                                        String artifact, String abi, String adapter,
+                                        String artifact, String abi,
                                         String errorCode, String errorMessage, boolean mayBeActive,
                                         long pid, long generation) {
-        return new RuntimeSnapshot(STATE_ERROR, profile, protocol, version, artifact, abi, "",
+        return new RuntimeSnapshot(STATE_ERROR, profile, protocol, version, artifact, abi,
                 "error", errorCode, errorMessage, mayBeActive, pid, generation,
                 System.currentTimeMillis());
     }
@@ -224,7 +219,7 @@ public final class RuntimeSnapshot {
     }
 
     private RuntimeSnapshot withAbi(String value) {
-        return new RuntimeSnapshot(state, profile, protocol, version, artifact, value, "",
+        return new RuntimeSnapshot(state, profile, protocol, version, artifact, value,
                 coreHealth, errorCode, errorMessage, mayBeActive, pid, generation,
                 updatedAtMillis);
     }

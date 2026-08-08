@@ -1,9 +1,31 @@
 package com.sakamoto.snort.androidruntime;
 
+import java.util.concurrent.Callable;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 /** JNI facade for the versioned generated-VAPI core control shim. */
 public final class RuntimeControlNative {
     public static final int CONTROL_ABI_VERSION = 1;
+    private static final long QUERY_TIMEOUT_MILLIS = 2500L;
     private static final boolean LOADED;
+    /**
+     * The generated VAPI call is blocking native work. Keep at most one call
+     * in flight and one caller waiting behind it; Activity refreshes are
+     * intentionally back-pressured instead of growing an unbounded queue.
+     */
+    private static final ExecutorService QUERY_EXECUTOR = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1),
+            runnable -> {
+                Thread thread = new Thread(runnable, "sakamoto-vapi-query");
+                thread.setDaemon(true);
+                return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
 
     static {
         boolean loaded;
@@ -19,6 +41,31 @@ public final class RuntimeControlNative {
     private RuntimeControlNative() {}
 
     public static Status query(String apiSocket) {
+        if (!LOADED || apiSocket == null || apiSocket.trim().isEmpty()) {
+            return Status.unavailable();
+        }
+        final Future<Status> request;
+        try {
+            request = QUERY_EXECUTOR.submit(new Callable<Status>() {
+                @Override
+                public Status call() {
+                    return queryNative(apiSocket);
+                }
+            });
+        } catch (RejectedExecutionException error) {
+            return Status.unavailable();
+        }
+        try {
+            return request.get(QUERY_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException error) {
+            request.cancel(true);
+            return Status.unavailable();
+        } catch (Exception error) {
+            return Status.unavailable();
+        }
+    }
+
+    private static Status queryNative(String apiSocket) {
         if (!LOADED || apiSocket == null || apiSocket.trim().isEmpty()) {
             return Status.unavailable();
         }

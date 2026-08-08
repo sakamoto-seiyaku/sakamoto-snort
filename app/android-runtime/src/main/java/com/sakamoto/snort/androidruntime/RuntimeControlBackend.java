@@ -3,6 +3,7 @@ package com.sakamoto.snort.androidruntime;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.SystemClock;
 
 /** Activity-side request adapter; RuntimeService remains the lifecycle owner. */
 public final class RuntimeControlBackend {
@@ -12,6 +13,7 @@ public final class RuntimeControlBackend {
     }
 
     public RuntimeSnapshot query(Context context) {
+        queryService(context);
         return RuntimeStateStore.read(context.getFilesDir());
     }
 
@@ -36,6 +38,13 @@ public final class RuntimeControlBackend {
         context.startService(requestIntent(context, RuntimeControlRequest.query()));
     }
 
+    /** Debug-only seam used to prove replacement remains blocked on cleanup failure. */
+    public void setCleanupFault(Context context, boolean enabled) {
+        Intent intent = requestIntent(context, RuntimeControlRequest.query());
+        intent.putExtra(RuntimeControlProtocol.EXTRA_CLEANUP_FAULT, enabled);
+        context.startService(intent);
+    }
+
     private static Intent requestIntent(Context context, RuntimeControlRequest request) {
         Intent intent = new Intent(context, RuntimeService.class)
                 .setAction(request.action == RuntimeControlRequest.Action.START
@@ -44,7 +53,9 @@ public final class RuntimeControlBackend {
                         ? RuntimeControlProtocol.ACTION_STOP : RuntimeControlProtocol.ACTION_QUERY)
                 .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, request.protocolVersion)
                 .putExtra(RuntimeControlProtocol.EXTRA_ACTION, request.action.wireName)
-                .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_ID, request.requestId);
+                .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_ID, request.requestId)
+                .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_TIME_MILLIS,
+                        SystemClock.elapsedRealtime());
         if (request.profile != null) {
             intent.putExtra(RuntimeControlProtocol.EXTRA_PROFILE, request.profile.wireName);
         }

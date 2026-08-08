@@ -13,6 +13,10 @@ public final class RuntimeControlProtocol {
     public static final String EXTRA_ACTION = "runtimeControlAction";
     public static final String EXTRA_PROFILE = "runtimeProfile";
     public static final String EXTRA_REQUEST_ID = "runtimeRequestId";
+    /** Monotonic elapsed ordering lets the service discard delayed stale stop intents. */
+    public static final String EXTRA_REQUEST_TIME_MILLIS = "runtimeRequestTimeMillis";
+    /** Debug-only fault seam; ignored unless the app is debuggable. */
+    public static final String EXTRA_CLEANUP_FAULT = "runtimeCleanupFault";
 
     private RuntimeControlProtocol() {}
 }

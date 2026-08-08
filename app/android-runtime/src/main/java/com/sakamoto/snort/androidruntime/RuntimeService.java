@@ -7,6 +7,7 @@ import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ApplicationInfo;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.IBinder;
@@ -23,8 +24,11 @@ import java.security.MessageDigest;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -51,17 +55,23 @@ public final class RuntimeService extends VpnService {
     private static final long HEALTH_RETRY_MILLIS = 250L;
     private static final long STOP_TERM_MILLIS = 1500L;
     private static final long STOP_KILL_MILLIS = 1500L;
+    private static final int ROOT_COMMAND_UNAVAILABLE = -125;
 
     private final Object stateLock = new Object();
-    private final ExecutorService lifecycle = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "sakamoto-runtime-lifecycle");
-        thread.setDaemon(false);
-        return thread;
-    });
+    private final ExecutorService lifecycle = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8), runnable -> {
+                Thread thread = new Thread(runnable, "sakamoto-runtime-lifecycle");
+                thread.setDaemon(false);
+                return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
+    /** Coalesce Activity polling while one bounded generated-VAPI query runs. */
+    private final AtomicBoolean healthQueryScheduled = new AtomicBoolean();
 
     private volatile boolean stopRequested;
     private volatile boolean foregroundStarted;
     private volatile boolean destroying;
+    private volatile boolean cleanupFaultInjected;
+    private volatile long latestStartRequestMillis;
     private volatile long monitoredPid = -1L;
     private RuntimeSnapshot snapshot;
     private Process vppProcess;
@@ -79,7 +89,7 @@ public final class RuntimeService extends VpnService {
         generation = snapshot.generation;
         activeProfile = snapshot.profile;
         initializeProfilePaths(activeProfile);
-        lifecycle.execute(this::reconcileDurableRuntime);
+        enqueueLifecycle(this::reconcileDurableRuntime);
     }
 
     @Override
@@ -91,23 +101,40 @@ public final class RuntimeService extends VpnService {
         if (!ACTION_START.equals(action) && !ACTION_QUERY.equals(action)
                 && !ACTION_STOP.equals(action)) {
             final String rejectedAction = action;
-            lifecycle.execute(() -> publishError("unsupported_runtime_action",
+            enqueueLifecycle(() -> publishError("unsupported_runtime_action",
                     "unknown runtime action: " + rejectedAction,
                     currentMayBeActive(), currentPid()));
             return START_NOT_STICKY;
         }
         if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_ACTION)
                 && !action.equals(intent.getStringExtra(RuntimeControlProtocol.EXTRA_ACTION))) {
-            lifecycle.execute(() -> publishError("runtime_action_mismatch",
+            enqueueLifecycle(() -> publishError("runtime_action_mismatch",
                     "intent action and versioned action disagree", currentMayBeActive(), currentPid()));
             return START_NOT_STICKY;
         }
         int protocolVersion = intent == null ? RuntimeControlProtocol.VERSION
                 : intent.getIntExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, -1);
         if (protocolVersion != RuntimeControlProtocol.VERSION) {
-            lifecycle.execute(() -> publishError("unsupported_control_protocol",
+            enqueueLifecycle(() -> publishError("unsupported_control_protocol",
                     "expected " + RuntimeControlProtocol.NAME, currentMayBeActive(), currentPid()));
             return START_STICKY;
+        }
+
+        long requestTimeMillis = intent == null ? 0L
+                : intent.getLongExtra(RuntimeControlProtocol.EXTRA_REQUEST_TIME_MILLIS, 0L);
+        if (ACTION_START.equals(action)) {
+            if (requestTimeMillis > latestStartRequestMillis) {
+                latestStartRequestMillis = requestTimeMillis;
+            }
+            // A start request is authoritative over any delayed stop from an
+            // Activity instance that has already been replaced.
+            stopRequested = false;
+        }
+
+        if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_CLEANUP_FAULT)) {
+            final boolean enabled = intent.getBooleanExtra(
+                    RuntimeControlProtocol.EXTRA_CLEANUP_FAULT, false);
+            enqueueLifecycle(() -> setCleanupFault(enabled));
         }
 
         RuntimeProfile requested = null;
@@ -116,15 +143,20 @@ public final class RuntimeService extends VpnService {
                 requested = RuntimeProfile.parse(
                         intent.getStringExtra(RuntimeControlProtocol.EXTRA_PROFILE));
             } catch (IllegalArgumentException error) {
-                lifecycle.execute(() -> publishError("invalid_runtime_profile", error.getMessage(),
+                enqueueLifecycle(() -> publishError("invalid_runtime_profile", error.getMessage(),
                         currentMayBeActive(), currentPid()));
                 return START_NOT_STICKY;
             }
         }
 
         if (ACTION_STOP.equals(action)) {
+            if (requestTimeMillis > 0L && latestStartRequestMillis > requestTimeMillis) {
+                appendLog("ignored stale stop request=" + requestTimeMillis
+                        + " latestStart=" + latestStartRequestMillis);
+                return START_NOT_STICKY;
+            }
             stopRequested = true;
-            lifecycle.execute(this::stopRuntime);
+            enqueueLifecycle(this::stopRuntime);
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
@@ -133,17 +165,42 @@ public final class RuntimeService extends VpnService {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
-            lifecycle.execute(() -> startRuntime(profile));
+            enqueueLifecycle(() -> startRuntime(profile));
             return START_STICKY;
         }
-        // QUERY is intentionally side-effect free; the Activity reads the
-        // durable snapshot and may issue this request to wake a recreated
-        // service for durable-runtime reconciliation.
+        // QUERY is a public health request. It must reconcile the durable
+        // owner and issue a bounded generated-VAPI show_version call even
+        // when this service already monitors the same PID.
         if (currentMayBeActive() && !ensureForeground(activeProfile)) {
             return START_NOT_STICKY;
         }
-        lifecycle.execute(this::reconcileDurableRuntime);
+        queueHealthQuery();
         return START_STICKY;
+    }
+
+    private void queueHealthQuery() {
+        if (!healthQueryScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        if (!enqueueLifecycle(() -> {
+            try {
+                reconcileDurableRuntime(true);
+            } finally {
+                healthQueryScheduled.set(false);
+            }
+        })) {
+            healthQueryScheduled.set(false);
+        }
+    }
+
+    private boolean enqueueLifecycle(Runnable task) {
+        try {
+            lifecycle.execute(task);
+            return true;
+        } catch (RejectedExecutionException error) {
+            appendLog("lifecycle_backpressure=rejected");
+            return false;
+        }
     }
 
     public static boolean notificationsReady(Context context) {
@@ -233,20 +290,26 @@ public final class RuntimeService extends VpnService {
             failWithoutRuntime("runtime_manifest_unreadable", messageOf(error));
             return;
         }
-        String protocol = manifest.getProperty("protocol", "").trim();
-        String version = manifest.getProperty("version", "").trim();
-        String abi = manifest.getProperty("abi", "").trim();
-        String expectedArtifact = manifest.getProperty("artifact", "").trim();
-        String expectedApiIdentity = manifest.getProperty("apiIdentity", "").trim();
+        RuntimeArtifactIdentity identity = RuntimeArtifactIdentity.from(manifest);
+        String protocol = identity.protocol;
+        String version = identity.version;
+        String abi = identity.abi;
+        String expectedArtifact = identity.artifact;
+        String expectedApiIdentity = identity.apiIdentity;
         String deviceAbi = deviceAbi();
-        if (!VppHealthHandshake.PROTOCOL.equals(protocol) || version.isEmpty()
-                || abi.isEmpty() || expectedArtifact.isEmpty() || expectedApiIdentity.isEmpty()) {
-            failWithoutRuntime("runtime_manifest_invalid",
-                    "protocol, version, abi, artifact and API identity are required");
+        String identityError = identity.validationError(deviceAbi);
+        if (!identityError.isEmpty()) {
+            failWithoutRuntime(identityError, identity.validationMessage(deviceAbi));
             return;
         }
-        if (!abi.equals(deviceAbi)) {
-            failWithoutRuntime("runtime_abi_mismatch", "manifest=" + abi + ",device=" + deviceAbi);
+
+        if (activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()) {
+            publishError("root_authorization_required",
+                    "KernelSU/root execution is unavailable to this app process",
+                    profileRoot.exists(), currentPid());
+            if (!profileRoot.exists()) {
+                stopIfInactive();
+            }
             return;
         }
 
@@ -254,8 +317,7 @@ public final class RuntimeService extends VpnService {
                 generation));
         CleanupResult preflight = removeAndVerifyProfile(profileRoot, currentPid(), null);
         if (!preflight.ok) {
-            publishError("cleanup_failed", "pre-start residue: " + preflight.detail,
-                    true, preflight.pid);
+            publishCleanupFailure("pre-start residue: ", preflight, true);
             return;
         }
 
@@ -303,8 +365,8 @@ public final class RuntimeService extends VpnService {
                         "health passed but the VPP owner PID was not active");
                 return;
             }
-            publish(RuntimeSnapshot.running(activeProfile, protocol, version, expectedArtifact,
-                    deviceAbi, "", health.health, pid, generation));
+            publish(RuntimeSnapshot.running(activeProfile, protocol, health.version,
+                    expectedArtifact, deviceAbi, health.health, pid, generation));
             appendLog("runtime_state=running profile=" + activeProfile.wireName
                     + " version=" + version + " core_health=" + health.health
                     + " adapter=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE);
@@ -316,6 +378,10 @@ public final class RuntimeService extends VpnService {
     }
 
     private void reconcileDurableRuntime() {
+        reconcileDurableRuntime(false);
+    }
+
+    private void reconcileDurableRuntime(boolean forceHealthQuery) {
         initializeProfilePaths(activeProfile);
         if (snapshot != null && snapshot.isActive() && !foregroundStarted
                 && !ensureForeground(activeProfile)) {
@@ -324,7 +390,7 @@ public final class RuntimeService extends VpnService {
         long pid = currentPid();
         PidIdentity identity = validatePid(pid);
         if (identity == PidIdentity.MATCH) {
-            adoptRuntime(pid);
+            adoptRuntime(pid, forceHealthQuery);
             return;
         }
         if (identity == PidIdentity.MISMATCH || identity == PidIdentity.UNKNOWN) {
@@ -335,18 +401,15 @@ public final class RuntimeService extends VpnService {
         }
         boolean residue = profileRoot.exists() || (snapshot != null && snapshot.isActive());
         if (!residue) {
+            stopIfInactive();
             return;
         }
-        if (pid <= 0L && snapshot != null && snapshot.isActive() && profileRoot.exists()) {
-            publishError("runtime_pid_unverified",
-                    "durable runtime has profile residue but no owner PID; refusing cleanup",
-                    true, -1L);
-            return;
-        }
+        // A process death can leave root-owned profile files behind after the
+        // PID file has been lost. removeAndVerifyProfile performs a
+        // fail-closed ownership audit before it considers that residue safe.
         CleanupResult cleanup = removeAndVerifyProfile(profileRoot, pid, null);
         if (!cleanup.ok) {
-            publishError("cleanup_failed", "durable recovery: " + cleanup.detail,
-                    true, cleanup.pid);
+            publishCleanupFailure("durable recovery: ", cleanup, true);
             return;
         }
         publishError("runtime_recovered", "previous VPP owner was no longer active", false, -1L);
@@ -354,29 +417,27 @@ public final class RuntimeService extends VpnService {
     }
 
     private void adoptRuntime(long pid) {
-        if (monitoredPid == pid && snapshot != null
+        adoptRuntime(pid, false);
+    }
+
+    private void adoptRuntime(long pid, boolean forceHealthQuery) {
+        if (!forceHealthQuery && monitoredPid == pid && snapshot != null
                 && RuntimeSnapshot.STATE_RUNNING.equals(snapshot.state)) {
             return;
         }
         try {
             Properties manifest = readManifest();
-            String protocol = manifest.getProperty("protocol", "").trim();
-            String version = manifest.getProperty("version", "").trim();
-            String abi = manifest.getProperty("abi", "").trim();
-            String artifact = manifest.getProperty("artifact", "").trim();
-            String apiIdentity = manifest.getProperty("apiIdentity", "").trim();
+            RuntimeArtifactIdentity identity = RuntimeArtifactIdentity.from(manifest);
+            String protocol = identity.protocol;
+            String version = identity.version;
+            String abi = identity.abi;
+            String artifact = identity.artifact;
+            String apiIdentity = identity.apiIdentity;
             File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
-            if (!VppHealthHandshake.PROTOCOL.equals(protocol) || version.isEmpty()
-                    || abi.isEmpty() || artifact.isEmpty() || apiIdentity.isEmpty()) {
-                publishError("runtime_manifest_invalid",
-                        "protocol, version, abi, artifact and API identity are required", true, pid);
-                monitorPid(pid);
-                return;
-            }
             String actualAbi = deviceAbi();
-            if (!abi.equals(actualAbi)) {
-                publishError("runtime_abi_mismatch",
-                        "manifest=" + abi + ",device=" + actualAbi, true, pid);
+            String identityError = identity.validationError(actualAbi);
+            if (!identityError.isEmpty()) {
+                publishError(identityError, identity.validationMessage(actualAbi), true, pid);
                 monitorPid(pid);
                 return;
             }
@@ -410,10 +471,10 @@ public final class RuntimeService extends VpnService {
             VppHealthHandshake.Result health = VppHealthHandshake.evaluate(activeProfile,
                     protocol, version, abi, artifact, apiIdentity, nativeStatus);
             if (!health.isReady()) {
-                publishError(health.errorCode, "adopted runtime health failed", true, pid);
+                publishHealthError(health, "adopted runtime health failed", true, pid);
             } else {
-                publish(RuntimeSnapshot.running(activeProfile, protocol, version, artifact, abi,
-                        "", health.health, pid, generation));
+                publish(RuntimeSnapshot.running(activeProfile, protocol, health.version, artifact,
+                        abi, health.health, pid, generation));
             }
         } catch (Exception error) {
             publishError("runtime_recovery_failed", messageOf(error), true, pid);
@@ -433,6 +494,7 @@ public final class RuntimeService extends VpnService {
         String command = "umask 022; echo $$ > " + shellQuote(pidFile.getPath())
                 + "; export LD_LIBRARY_PATH=" + shellQuote(nativeDir.getPath())
                 + " SAKAMOTO_ANDROID_SHM_DIR=" + shellQuote(shm.getPath())
+                + " SAKAMOTO_VPP_RUNTIME_DIR=" + shellQuote(runtime.getPath())
                 + " SAKAMOTO_VPP_OWNER_TOKEN=" + shellQuote(token)
                 + " SAKAMOTO_RUNTIME_PROFILE=" + shellQuote(profile.wireName)
                 + "; exec " + shellQuote(vpp.getPath()) + " plugin_path "
@@ -492,7 +554,7 @@ public final class RuntimeService extends VpnService {
                 Thread.currentThread().interrupt();
                 return;
             }
-            lifecycle.execute(() -> handleProcessExit(process, exitCode));
+            enqueueLifecycle(() -> handleProcessExit(process, exitCode));
         }, "sakamoto-vpp-exit-monitor");
         monitor.start();
     }
@@ -513,7 +575,7 @@ public final class RuntimeService extends VpnService {
                 Thread.currentThread().interrupt();
             } finally {
                 if (!destroying) {
-                    lifecycle.execute(() -> handleAdoptedProcessExit(pid));
+                    enqueueLifecycle(() -> handleAdoptedProcessExit(pid));
                 }
             }
         }, "sakamoto-adopted-vpp-monitor");
@@ -530,7 +592,7 @@ public final class RuntimeService extends VpnService {
         }
         CleanupResult cleanup = terminateAndClean(profileRoot, pid, null);
         if (!cleanup.ok) {
-            publishError("cleanup_failed", "VPP exited; " + cleanup.detail, true, cleanup.pid);
+            publishCleanupFailure("VPP exited; ", cleanup, true);
             return;
         }
         clearProfileHandles();
@@ -549,8 +611,7 @@ public final class RuntimeService extends VpnService {
         }
         CleanupResult cleanup = terminateAndClean(profileRoot, currentPid(), process);
         if (!cleanup.ok) {
-            publishError("cleanup_failed", "VPP exited with status " + exitCode + "; "
-                    + cleanup.detail, true, cleanup.pid);
+            publishCleanupFailure("VPP exited with status " + exitCode + "; ", cleanup, true);
             return;
         }
         clearProfileHandles();
@@ -576,7 +637,7 @@ public final class RuntimeService extends VpnService {
         publish(RuntimeSnapshot.stopping(current));
         CleanupResult cleanup = terminateAndClean(profileRoot, pid, vppProcess);
         if (!cleanup.ok) {
-            publishError("cleanup_failed", cleanup.detail, true, cleanup.pid);
+            publishCleanupFailure("", cleanup, true);
             stopRequested = false;
             return false;
         }
@@ -595,6 +656,9 @@ public final class RuntimeService extends VpnService {
     }
 
     private CleanupResult terminateAndClean(File profile, long pid, Process process) {
+        if (cleanupFaultInjected) {
+            return CleanupResult.failure(pid, "debug cleanup fault injected");
+        }
         PidIdentity identity = validatePid(pid);
         if (identity == PidIdentity.MISMATCH) {
             return CleanupResult.failure(pid,
@@ -602,7 +666,11 @@ public final class RuntimeService extends VpnService {
         }
         if (identity == PidIdentity.UNKNOWN) {
             return CleanupResult.failure(pid,
-                    "recorded PID identity could not be verified; refusing cleanup");
+                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
+                            ? "root_authorization_required" : "cleanup_failed",
+                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
+                            ? "recorded PID cannot be audited without root authorization"
+                            : "recorded PID identity could not be verified; refusing cleanup");
         }
         // RuntimeService is the process supervisor. Product stop never sends
         // a CLI `quit`; TERM/KILL are the only lifecycle signals.
@@ -637,18 +705,38 @@ public final class RuntimeService extends VpnService {
         }
         if (identity == PidIdentity.UNKNOWN) {
             return CleanupResult.failure(pid,
-                    "recorded PID identity could not be verified; refusing cleanup");
+                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
+                            ? "root_authorization_required" : "cleanup_failed",
+                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
+                            ? "recorded PID cannot be audited without root authorization"
+                            : "recorded PID identity could not be verified; refusing cleanup");
         }
         if (processAlive(process)) {
             return CleanupResult.failure(pid, "VPP process handle remains active");
         }
         if (pid <= 0L && process == null && profile != null && profile.exists()) {
-            return CleanupResult.failure(pid,
-                    "profile residue has no durable owner PID; refusing cleanup");
+            OwnershipAudit audit = auditOwnedProcess(profile);
+            if (!audit.safe) {
+                return CleanupResult.failure(audit.pid, audit.errorCode,
+                        "profile residue ownership audit failed: " + audit.detail);
+            }
+            if (audit.pid > 0L) {
+                return CleanupResult.failure(audit.pid,
+                        "profile residue still belongs to a live VPP process");
+            }
         }
         if (profile != null && profile.exists()) {
             if (activeProfile == RuntimeProfile.ROOT) {
-                runRootCommand("rm -rf -- " + shellQuote(profile.getPath()), 5L);
+                int removalStatus = runRootCommandStatus(
+                        "rm -rf -- " + shellQuote(profile.getPath()), 5L);
+                if (removalStatus != 0) {
+                    return CleanupResult.failure(pid,
+                            removalStatus == ROOT_COMMAND_UNAVAILABLE
+                                    ? "root_authorization_required" : "cleanup_failed",
+                            removalStatus == ROOT_COMMAND_UNAVAILABLE
+                                    ? "privileged profile removal is unavailable to this app process"
+                                    : "privileged profile removal command failed");
+                }
             }
             if (profile.exists() && !deleteTree(profile)) {
                 return CleanupResult.failure(pid, "profile tree could not be removed");
@@ -658,6 +746,83 @@ public final class RuntimeService extends VpnService {
             return CleanupResult.failure(pid, "profile-owned runtime residue remains");
         }
         return CleanupResult.success();
+    }
+
+    /**
+     * Prove that no live VPP process owns a root profile before removing
+     * orphaned residue. The audit matches every ownership identity component
+     * written by launchVpp: root UID, exact startup path, executable path and
+     * hash, runtime directory, owner token, and selected profile. A live match
+     * blocks cleanup; an inspection error also blocks cleanup.
+     */
+    private OwnershipAudit auditOwnedProcess(File profile) {
+        if (profile == null || !profile.exists()) {
+            return OwnershipAudit.none();
+        }
+        if (activeProfile != RuntimeProfile.ROOT) {
+            return OwnershipAudit.unknown(
+                    "non-root profile cannot be audited without a durable PID");
+        }
+        if (!rootCommandAvailable()) {
+            return OwnershipAudit.unknown("root_authorization_required",
+                    "privileged /proc ownership audit is unavailable to this app process");
+        }
+        String token = readOwnerToken(profile);
+        if (token.isEmpty()) {
+            return OwnershipAudit.unknown("profile owner token is absent or invalid");
+        }
+        String startup = new File(profile, "startup.conf").getPath();
+        String runtime = new File(profile, "runtime").getPath();
+        File executableFile = new File(getApplicationInfo().nativeLibraryDir, VPP_BINARY);
+        String executable = executableFile.getPath();
+        final String executableHash;
+        try {
+            executableHash = sha256(executableFile);
+        } catch (Exception error) {
+            return OwnershipAudit.unknown("packaged VPP executable identity is unavailable");
+        }
+        String profileName = activeProfile.wireName;
+        String command =
+                "for proc in /proc/[0-9]*; do "
+                + "test -d \"$proc\" || continue; "
+                + "if ! test -r \"$proc/status\" || ! test -r \"$proc/cmdline\" "
+                + "|| ! test -r \"$proc/environ\" || ! test -r \"$proc/exe\"; then "
+                + "[ -e \"$proc\" ] && exit 121; continue; fi; "
+                + "uid=$(awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
+                + "|| exit 122; [ \"$uid\" = 0 ] || continue; "
+                + "exe=$(readlink \"$proc/exe\" 2>/dev/null) "
+                + "|| { [ -e \"$proc\" ] && exit 123; continue; }; "
+                + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
+                + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
+                + "|| { [ -e \"$proc\" ] && exit 124; continue; }; "
+                + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null) "
+                + "|| { [ -e \"$proc\" ] && exit 125; continue; }; "
+                + "case \"$cmd\" in *" + shellQuote(startup) + "*) ;; *) continue ;; esac; "
+                + "printf '%s\\n' \"$env\" | grep -F -- "
+                + shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + token)
+                + " >/dev/null || continue; "
+                + "printf '%s\\n' \"$env\" | grep -F -- "
+                + shellQuote("SAKAMOTO_VPP_RUNTIME_DIR=" + runtime)
+                + " >/dev/null || continue; "
+                + "printf '%s\\n' \"$env\" | grep -F -- "
+                + shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + profileName)
+                + " >/dev/null || continue; "
+                + "hash=$(sha256sum \"$proc/exe\" 2>/dev/null | awk '{print $1}') "
+                + "|| { [ -e \"$proc\" ] && exit 126; continue; }; "
+                + "[ \"$hash\" = " + shellQuote(executableHash) + " ] || continue; "
+                + "exit 10; done; exit 0";
+        int status = runRootCommandStatus(command, 3L);
+        if (status == 0) {
+            return OwnershipAudit.none();
+        }
+        if (status == 10) {
+            return OwnershipAudit.live(-1L);
+        }
+        if (status == ROOT_COMMAND_UNAVAILABLE) {
+            return OwnershipAudit.unknown("root_authorization_required",
+                    "privileged /proc ownership audit is unavailable to this app process");
+        }
+        return OwnershipAudit.unknown("root /proc ownership scan returned status " + status);
     }
 
     private boolean waitUntilGone(Process process, long pid, long timeoutMillis) {
@@ -731,14 +896,28 @@ public final class RuntimeService extends VpnService {
             return PidIdentity.UNKNOWN;
         }
         String startup = new File(profileRoot, "startup.conf").getPath();
+        String runtime = new File(profileRoot, "runtime").getPath();
+        String executable = new File(getApplicationInfo().nativeLibraryDir, VPP_BINARY).getPath();
         String cmdline = "/proc/" + pid + "/cmdline";
         String environ = "/proc/" + pid + "/environ";
-        String command = "if ! test -r " + shellQuote(cmdline) + " || ! test -r "
-                + shellQuote(environ) + "; then exit 125; fi"
+        String statusFile = "/proc/" + pid + "/status";
+        String exeFile = "/proc/" + pid + "/exe";
+        String expectedUid = activeProfile == RuntimeProfile.ROOT
+                ? "0" : Integer.toString(android.os.Process.myUid());
+        String command = "if ! test -r " + shellQuote(statusFile) + " || ! test -r "
+                + shellQuote(cmdline) + " || ! test -r " + shellQuote(environ)
+                + " || ! test -r " + shellQuote(exeFile) + "; then exit 125; fi"
+                + " && uid=$(awk '$1 == \"Uid:\" {print $2; exit}' "
+                + shellQuote(statusFile) + ")"
+                + " && test \"$uid\" = " + shellQuote(expectedUid)
+                + " && exe=$(readlink " + shellQuote(exeFile) + ")"
+                + " && test \"$exe\" = " + shellQuote(executable)
                 + " && tr '\\0' ' ' <" + shellQuote(cmdline) + " | grep -F -- "
                 + shellQuote(startup) + " >/dev/null"
                 + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
                 + shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + token) + " >/dev/null"
+                + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
+                + shellQuote("SAKAMOTO_VPP_RUNTIME_DIR=" + runtime) + " >/dev/null"
                 + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
                 + shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + activeProfile.wireName)
                 + " >/dev/null";
@@ -767,8 +946,7 @@ public final class RuntimeService extends VpnService {
     private void failWithCleanup(String code, String message) {
         CleanupResult cleanup = terminateAndClean(profileRoot, currentPid(), vppProcess);
         if (!cleanup.ok) {
-            publishError("cleanup_failed", code + ": " + message + "; " + cleanup.detail,
-                    true, cleanup.pid);
+            publishCleanupFailure(code + ": " + message + "; ", cleanup, true);
             return;
         }
         vppProcess = null;
@@ -781,8 +959,30 @@ public final class RuntimeService extends VpnService {
         RuntimeSnapshot current = snapshot == null
                 ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot;
         publish(RuntimeSnapshot.error(current.profile, current.protocol, current.version,
-                current.artifact, current.abi, current.adapter, code, message, mayBeActive, pid,
+                current.artifact, current.abi, code, message, mayBeActive, pid,
                 current.generation));
+    }
+
+    private void publishCleanupFailure(String prefix, CleanupResult cleanup,
+                                       boolean mayBeActive) {
+        String code = cleanup == null || cleanup.errorCode.isEmpty()
+                ? "cleanup_failed" : cleanup.errorCode;
+        String detail = cleanup == null ? "cleanup result is unavailable"
+                : prefix + cleanup.detail;
+        long pid = cleanup == null ? -1L : cleanup.pid;
+        publishError(code, detail, mayBeActive, pid);
+    }
+
+    private void publishHealthError(VppHealthHandshake.Result health, String message,
+                                    boolean mayBeActive, long pid) {
+        RuntimeSnapshot current = snapshot == null
+                ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot;
+        String version = health == null || health.version.isEmpty()
+                ? current.version : health.version;
+        String code = health == null || health.errorCode.isEmpty()
+                ? "health_handshake_failed" : health.errorCode;
+        publish(RuntimeSnapshot.error(current.profile, current.protocol, version, current.artifact,
+                current.abi, code, message, mayBeActive, pid, current.generation));
     }
 
     private void publish(RuntimeSnapshot next) {
@@ -829,6 +1029,15 @@ public final class RuntimeService extends VpnService {
         if (!destroying) {
             stopSelf();
         }
+    }
+
+    private void setCleanupFault(boolean enabled) {
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+            appendLog("ignored cleanup fault seam in non-debug build");
+            return;
+        }
+        cleanupFaultInjected = enabled;
+        appendLog("debug cleanup fault=" + enabled);
     }
 
     private Properties readManifest() throws IOException {
@@ -908,7 +1117,11 @@ public final class RuntimeService extends VpnService {
 
     private String readOwnerToken() {
         initializeProfilePaths(activeProfile);
-        File token = new File(new File(profileRoot, "runtime"), "owner.token");
+        return readOwnerToken(profileRoot);
+    }
+
+    private String readOwnerToken(File profile) {
+        File token = new File(new File(profile, "runtime"), "owner.token");
         try (FileInputStream input = new FileInputStream(token)) {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             byte[] buffer = new byte[64];
@@ -980,6 +1193,11 @@ public final class RuntimeService extends VpnService {
         return value.toString();
     }
 
+    private boolean rootCommandAvailable() {
+        File su = new File(SU_PATH);
+        return su.isFile() && su.canExecute();
+    }
+
     private boolean runRootCommand(String command, long timeoutSeconds) {
         return runRootCommandStatus(command, timeoutSeconds) == 0;
     }
@@ -994,7 +1212,7 @@ public final class RuntimeService extends VpnService {
             return process.exitValue();
         } catch (Exception error) {
             Log.w(TAG, "root command failed", error);
-            return 125;
+            return ROOT_COMMAND_UNAVAILABLE;
         }
     }
 
@@ -1054,13 +1272,22 @@ public final class RuntimeService extends VpnService {
         }
         // Main-thread destruction never waits. The serial worker drains an
         // in-flight start and performs bounded stop/cleanup before shutdown.
-        lifecycle.execute(() -> {
+        Runnable teardown = () -> {
             try {
                 stopRuntime();
             } finally {
                 lifecycle.shutdown();
             }
-        });
+        };
+        // Destruction supersedes queued queries/starts. Drop those stale
+        // requests so a bounded lifecycle queue always retains room for the
+        // teardown barrier; an in-flight task remains serialized ahead of it.
+        if (lifecycle instanceof ThreadPoolExecutor) {
+            ((ThreadPoolExecutor) lifecycle).getQueue().clear();
+        }
+        if (!enqueueLifecycle(teardown)) {
+            appendLog("lifecycle_teardown_rejected");
+        }
         super.onDestroy();
     }
 
@@ -1103,19 +1330,55 @@ public final class RuntimeService extends VpnService {
         final boolean ok;
         final long pid;
         final String detail;
+        final String errorCode;
 
-        private CleanupResult(boolean ok, long pid, String detail) {
+        private CleanupResult(boolean ok, long pid, String detail, String errorCode) {
             this.ok = ok;
             this.pid = pid;
             this.detail = detail;
+            this.errorCode = errorCode;
         }
 
         static CleanupResult success() {
-            return new CleanupResult(true, -1L, "");
+            return new CleanupResult(true, -1L, "", "");
         }
 
         static CleanupResult failure(long pid, String detail) {
-            return new CleanupResult(false, pid, detail);
+            return failure(pid, "cleanup_failed", detail);
+        }
+
+        static CleanupResult failure(long pid, String errorCode, String detail) {
+            return new CleanupResult(false, pid, detail, errorCode);
+        }
+    }
+
+    private static final class OwnershipAudit {
+        final boolean safe;
+        final long pid;
+        final String detail;
+        final String errorCode;
+
+        private OwnershipAudit(boolean safe, long pid, String detail, String errorCode) {
+            this.safe = safe;
+            this.pid = pid;
+            this.detail = detail;
+            this.errorCode = errorCode;
+        }
+
+        static OwnershipAudit none() {
+            return new OwnershipAudit(true, -1L, "no matching live owner", "");
+        }
+
+        static OwnershipAudit live(long pid) {
+            return new OwnershipAudit(false, pid, "matching live owner", "cleanup_failed");
+        }
+
+        static OwnershipAudit unknown(String detail) {
+            return unknown("cleanup_failed", detail);
+        }
+
+        static OwnershipAudit unknown(String errorCode, String detail) {
+            return new OwnershipAudit(false, -1L, detail, errorCode);
         }
     }
 }

@@ -25,6 +25,7 @@ required_stage_artifacts=(
   "$stage_dir/bin/vpp"
   "$stage_dir/bin/vppctl"
 )
+provenance_file="$stage_dir/runtime/source-provenance.properties"
 stage_has_required_artifacts() {
   local file
   for file in "${required_stage_artifacts[@]}"; do
@@ -49,6 +50,16 @@ for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" \
     "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
   [[ -f "$file" ]] || die "missing required build input: $file"
 done
+[[ -f "$provenance_file" ]] || die "runtime stage provenance is missing: $provenance_file"
+grep -Fqx 'conditionalWakeSource=absent' "$provenance_file" \
+  || die "runtime stage source provenance is not a clean-core proof"
+grep -Fqx 'conditionalWakeBinary=absent' "$provenance_file" \
+  || die "runtime stage binary provenance is not a clean-core proof"
+for artifact in "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
+  if strings "$artifact" | grep -Eq 'wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE'; then
+    die "runtime stage contains rejected conditional-wake symbols: $artifact"
+  fi
+done
 command -v javac >/dev/null || die "missing javac"
 command -v java >/dev/null || die "missing java"
 command -v keytool >/dev/null || die "missing keytool"
@@ -69,6 +80,9 @@ mkdir -p "$classes_dir" "$dex_dir" "$jni_dir" "$assets_dir" "$intermediates" "$o
 cp "$stage_dir/bin/vpp" "$jni_dir/libvpp_runtime.so"
 cp "$stage_dir/bin/vppctl" "$jni_dir/libvppctl.so"
 chmod 755 "$jni_dir/libvpp_runtime.so" "$jni_dir/libvppctl.so"
+if strings "$jni_dir/libvpp_runtime.so" | grep -Eq 'wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE'; then
+  die "packaged VPP core contains rejected conditional-wake symbols"
+fi
 for so in "$stage_dir"/lib/*.so; do
   [[ -f "$so" ]] || continue
   cp "$so" "$jni_dir/$(basename "$so")"
@@ -79,7 +93,12 @@ done
 # The generated headers and libvapiclient are build inputs, never runtime
 # packet adapters. They prove the running VPP binary through show_version.
 native_dir="$app_dir/src/main/native"
-vpp_source="${VPP_SOURCE_TREE:-$repo_root/experiments/vpp-nfq-poc/work/vpp}"
+vpp_source="${VPP_SOURCE_TREE:-}"
+if [[ -z "$vpp_source" && -f "$provenance_file" ]]; then
+  vpp_source="$(awk -F= '$1 == "sourceTree" {print substr($0, index($0, "=") + 1); exit}' \
+    "$provenance_file")"
+fi
+vpp_source="${vpp_source:-$repo_root/experiments/vpp-nfq-poc/work/vpp}"
 vapi_build_dir="${VPP_RUNTIME_VAPI_BUILD_DIR:-}"
 if [[ -z "$vapi_build_dir" && -f "$stage_dir/runtime/vapi-build-dir" ]]; then
   vapi_build_dir="$(tr -d '[:space:]' <"$stage_dir/runtime/vapi-build-dir")"
@@ -121,6 +140,14 @@ artifact="sha256:$(sha256sum "$jni_dir/libvpp_runtime.so" | awk '{print $1}')"
 printf 'version=%s\nabi=arm64-v8a\nprotocol=vpp-runtime-health/v1\nartifact=%s\n' \
   "$version" "$artifact" >"$assets_dir/vpp-runtime.properties"
 printf 'apiIdentity=%s\n' "$api_identity" >>"$assets_dir/vpp-runtime.properties"
+for key in sourceRevision sourceOrigin sourceTree sourceStatus conditionalWakeSource \
+    conditionalWakeBinary vppSha256 vppctlSha256; do
+  value="$(awk -F= -v wanted="$key" '$1 == wanted {print substr($0, index($0, "=") + 1); exit}' \
+    "$provenance_file")"
+  [[ -n "$value" ]] || die "runtime stage provenance is missing key: $key"
+  printf '%s=%s\n' "$key" "$value" >>"$assets_dir/vpp-runtime.properties"
+done
+cp "$provenance_file" "$assets_dir/vpp-runtime-provenance.properties"
 printf '%s\n' "${artifact#sha256:}" >"$assets_dir/vpp-runtime.sha256"
 
 mapfile -t sources < <(find "$app_dir/src/main/java" -name '*.java' | sort)

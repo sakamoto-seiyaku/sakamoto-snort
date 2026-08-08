@@ -21,6 +21,7 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_RUNTIME_START = "runtimeStart";
     private static final String EXTRA_RUNTIME_STOP = "runtimeStop";
     private static final String EXTRA_RUNTIME_PROFILE = "runtimeProfile";
+    private static final String EXTRA_RUNTIME_CLEANUP_FAULT = "runtimeCleanupFault";
 
     private final RuntimeControlBackend backend = new RuntimeControlBackend();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -47,6 +48,10 @@ public class DebugControlActivity extends Activity {
     private void applyControlIntent(Intent intent) {
         if (intent == null) {
             return;
+        }
+        if (intent.hasExtra(EXTRA_RUNTIME_CLEANUP_FAULT)) {
+            backend.setCleanupFault(this,
+                    intent.getBooleanExtra(EXTRA_RUNTIME_CLEANUP_FAULT, false));
         }
         if (intent.getBooleanExtra(EXTRA_RUNTIME_STOP, false)) {
             main.post(this::stopRuntime);

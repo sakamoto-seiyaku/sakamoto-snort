@@ -25,6 +25,7 @@
         </activity>
         <service
             android:name=".RuntimeService"
+            android:process=":runtime"
             android:exported="false"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="specialUse">
