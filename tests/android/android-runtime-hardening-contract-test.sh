@@ -4,6 +4,26 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 harness="$repo_root/tests/integration/android-runtime-incubator-lifecycle.sh"
 stage_script="$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/scripts/stage-vpp-runtime.sh"
+portability_scripts=(
+  "$repo_root/tests/android/android-runtime-contract-test.sh"
+  "$repo_root/tests/android/android-runtime-artifact-contract-test.sh"
+  "$repo_root/tests/android/runtime-contract-test.sh"
+  "$harness"
+)
+
+# Repository scripts must run on developer/CI hosts without the agent-only
+# RTK command proxy. Ignore comments while rejecting executable token use.
+if awk '
+  /^[[:space:]]*#/ { next }
+  /(^|[^[:alnum:]_])rtk([^[:alnum:]_]|$)/ {
+    print FILENAME ":" FNR ":" $0
+    found = 1
+  }
+  END { exit found ? 0 : 1 }
+' "${portability_scripts[@]}"; then
+  echo "runtime scripts depend on the agent-only rtk command" >&2
+  exit 1
+fi
 
 # A verifier failure is evidence of an unknown owner, never an empty owner
 # list. Signal paths must re-run the complete verifier before each signal.

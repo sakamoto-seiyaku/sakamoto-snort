@@ -64,7 +64,7 @@ adb_cmd() { adb_exec -s "$target_serial" "$@"; }
 
 "$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
 apk_sha256="$(sha256sum "$apk" | awk '{print $1}')"
-runtime_sha256="$(rtk unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
+runtime_sha256="$(unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
   | sha256sum | awk '{print $1}')"
 [[ "$apk_sha256" =~ ^[0-9a-fA-F]{64}$ && "$runtime_sha256" =~ ^[0-9a-fA-F]{64}$ ]] \
   || { echo "unable to bind APK/runtime SHA-256 evidence" >&2; exit 1; }
@@ -79,7 +79,7 @@ app_head_commit="$(git -C "$repo_root" rev-parse HEAD)"
   echo "appHeadCommit=$app_head_commit"
   echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >"$evidence_file"
-rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties \
+unzip -p "$apk" assets/vpp-runtime-provenance.properties \
   >"$evidence_file.provenance"
 {
   echo "provenance=$evidence_file.provenance"

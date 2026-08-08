@@ -15,12 +15,12 @@ build_was_present=0
 restore_build() {
   local exit_code=$?
   if [[ "$build_was_present" == 1 ]]; then
-    rtk rm -rf "$build_dir"
-    rtk mv "$build_backup" "$build_dir"
+    rm -rf "$build_dir"
+    mv "$build_backup" "$build_dir"
   else
-    rtk rm -rf "$build_dir"
+    rm -rf "$build_dir"
   fi
-  rtk rm -rf "$tmp_dir"
+  rm -rf "$tmp_dir"
   exit "$exit_code"
 }
 trap restore_build EXIT
@@ -28,22 +28,22 @@ trap restore_build EXIT
 # A stage without VPP core must not produce an APK. Packet adapters are not a
 # build input for SAKAMOTO-67.
 missing_stage="$tmp_dir/missing-core-stage"
-rtk mkdir -p "$missing_stage/bin" "$missing_stage/lib" "$missing_stage/plugins"
+mkdir -p "$missing_stage/bin" "$missing_stage/lib" "$missing_stage/plugins"
 source_stage="$default_stage"
 if [[ ! -f "$source_stage/bin/vpp" || ! -f "$source_stage/bin/vppctl" ]]; then
   source_stage="$valid_stage"
 fi
-rtk cp "$source_stage/bin/vpp" "$missing_stage/bin/vpp"
+cp "$source_stage/bin/vpp" "$missing_stage/bin/vpp"
 set +e
 VPP_RUNTIME_STAGE_DIR="$missing_stage" "$build_script" >"$tmp_dir/missing.log" 2>&1
 missing_rc=$?
 set -e
 if [[ "$missing_rc" == 0 ]]; then
-  rtk cat "$tmp_dir/missing.log" >&2
+  cat "$tmp_dir/missing.log" >&2
   echo "artifact contract accepted a stage without VPP diagnostics" >&2
   exit 1
 fi
-rtk grep -Eq 'vppctl|runtime stage' "$tmp_dir/missing.log"
+grep -Eq 'vppctl|runtime stage' "$tmp_dir/missing.log"
 
 [[ -f "$valid_stage/bin/vpp" && -f "$valid_stage/bin/vppctl" ]] \
   || { echo "missing VPP core stage input: $valid_stage" >&2; exit 1; }
@@ -58,14 +58,14 @@ apk_cert_digest() {
 cert_before="$(apk_cert_digest "$apk")"
 [[ "$cert_before" =~ ^[0-9a-f]{64}$ ]] \
   || { echo "unable to read APK signing certificate digest" >&2; exit 1; }
-manifest="$(rtk unzip -p "$apk" assets/vpp-runtime.properties)"
-provenance="$(rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties)"
-entries="$(rtk unzip -Z1 "$apk")"
-root_adapter="$(rtk awk -F= '$1 == "adapter.root" {print $2}' <<<"$manifest")"
-vpn_adapter="$(rtk awk -F= '$1 == "adapter.vpn" {print $2}' <<<"$manifest")"
+manifest="$(unzip -p "$apk" assets/vpp-runtime.properties)"
+provenance="$(unzip -p "$apk" assets/vpp-runtime-provenance.properties)"
+entries="$(unzip -Z1 "$apk")"
+root_adapter="$(awk -F= '$1 == "adapter.root" {print $2}' <<<"$manifest")"
+vpn_adapter="$(awk -F= '$1 == "adapter.vpn" {print $2}' <<<"$manifest")"
 [[ -z "$root_adapter" && -z "$vpn_adapter" ]] \
   || { echo "APK manifest exposes a packet Adapter identity" >&2; exit 1; }
-api_identity="$(rtk awk -F= '$1 == "apiIdentity" {print $2}' <<<"$manifest")"
+api_identity="$(awk -F= '$1 == "apiIdentity" {print $2}' <<<"$manifest")"
 [[ "$api_identity" =~ ^show_version_[0-9a-fA-F]{8}$ ]] \
   || { echo "manifest is missing generated show_version identity: $api_identity" >&2; exit 1; }
 grep -Fxq 'conditionalWakeSource=absent' <<<"$manifest"
@@ -73,12 +73,12 @@ grep -Fxq 'conditionalWakeBinary=absent' <<<"$manifest"
 grep -Fxq 'conditionalWakeSource=absent' <<<"$provenance"
 grep -Fxq 'conditionalWakeBinary=absent' <<<"$provenance"
 grep -Fxq 'sourceStatus=committed-snapshot' <<<"$provenance"
-source_tree="$(rtk awk -F= '$1 == "sourceTree" {print $2}' <<<"$provenance")"
-source_revision="$(rtk awk -F= '$1 == "sourceRevision" {print $2}' <<<"$provenance")"
-source_tree_digest="$(rtk awk -F= '$1 == "sourceTreeSha256" {print $2}' <<<"$provenance")"
-base_archive_digest="$(rtk awk -F= '$1 == "baseArchiveSha256" {print $2}' <<<"$provenance")"
-base_tree_digest="$(rtk awk -F= '$1 == "baseTreeSha256" {print $2}' <<<"$provenance")"
-overlay_digest="$(rtk awk -F= '$1 == "overlaySha256" {print $2}' <<<"$provenance")"
+source_tree="$(awk -F= '$1 == "sourceTree" {print $2}' <<<"$provenance")"
+source_revision="$(awk -F= '$1 == "sourceRevision" {print $2}' <<<"$provenance")"
+source_tree_digest="$(awk -F= '$1 == "sourceTreeSha256" {print $2}' <<<"$provenance")"
+base_archive_digest="$(awk -F= '$1 == "baseArchiveSha256" {print $2}' <<<"$provenance")"
+base_tree_digest="$(awk -F= '$1 == "baseTreeSha256" {print $2}' <<<"$provenance")"
+overlay_digest="$(awk -F= '$1 == "overlaySha256" {print $2}' <<<"$provenance")"
 [[ -f "$source_tree/.sakamoto-source-revision" ]] \
   || { echo "provenance source snapshot marker is missing" >&2; exit 1; }
 grep -Fxq "$source_revision" "$source_tree/.sakamoto-source-revision"
@@ -92,13 +92,13 @@ grep -Fxq "$source_revision" "$source_tree/.sakamoto-source-revision"
   || { echo "provenance repository overlay digest is missing" >&2; exit 1; }
 grep -Fxq 'sourceRevision=9258530f3804a152578ce11cc7c8a1e9eab88ed0' <<<"$manifest"
 grep -Fxq 'sourceRevision=9258530f3804a152578ce11cc7c8a1e9eab88ed0' <<<"$provenance"
-if rtk unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
+if unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
     | strings | grep -Eq 'wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE'; then
   echo "APK core binary contains rejected conditional-wake symbols" >&2
   exit 1
 fi
-rtk grep -Fxq 'lib/arm64-v8a/libsakamoto_runtime_control.so' <<<"$entries"
-if rtk grep -Eq 'nfqueue_poc|tun_poc' <<<"$entries"; then
+grep -Fxq 'lib/arm64-v8a/libsakamoto_runtime_control.so' <<<"$entries"
+if grep -Eq 'nfqueue_poc|tun_poc' <<<"$entries"; then
   echo "APK promoted an experiment Adapter artifact" >&2
   exit 1
 fi
@@ -108,7 +108,7 @@ fi
 # generated checkout directory.
 if [[ -d "$build_dir" ]]; then
   build_was_present=1
-  rtk mv "$build_dir" "$build_backup"
+  mv "$build_dir" "$build_backup"
 fi
 if [[ -e "$build_dir" ]]; then
   echo "unable to remove generated Android build directory for clean-build gate" >&2
@@ -119,7 +119,7 @@ VPP_RUNTIME_STAGE_DIR="$valid_stage" "$build_script" >"$tmp_dir/clean-build.log"
 clean_build_rc=$?
 set -e
 if [[ "$clean_build_rc" != 0 ]]; then
-  rtk cat "$tmp_dir/clean-build.log" >&2
+  cat "$tmp_dir/clean-build.log" >&2
   echo "APK build failed when app/android-runtime/build was absent" >&2
   exit 1
 fi
