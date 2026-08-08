@@ -529,7 +529,7 @@ public final class RuntimeOwnershipReconciliation {
         if (spec == null || runner == null) {
             return PidIdentity.UNKNOWN;
         }
-        CommandResult probe = runner.run(spec.profile, buildProbeCommand(pid), 2L);
+        CommandResult probe = runner.run(spec.profile, buildProbeCommand(spec, pid), 2L);
         if (probe == null || probe.status != 0 && probe.status != 1) {
             return PidIdentity.UNKNOWN;
         }
@@ -700,6 +700,10 @@ public final class RuntimeOwnershipReconciliation {
         String token = shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + spec.ownerToken);
         String runtime = shellQuote("SAKAMOTO_VPP_RUNTIME_DIR=" + spec.runtimePath);
         String profile = shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + spec.profile.wireName);
+        String runtimeDirLine = shellQuote("runtime-dir " + spec.runtimePath);
+        String cliSocketLine = shellQuote("cli-listen " + spec.runtimePath + "/cli.sock");
+        String apiSocketLine = shellQuote("socket-name " + spec.runtimePath + "/api.sock");
+        String statsegSocketLine = shellQuote("socket-name " + spec.runtimePath + "/statseg.sock");
         // KernelSU's root shell domain cannot directly read another process's
         // proc files on this device.  Use its privileged domain for root
         // profiles while retaining the normal reader for app-owned profiles.
@@ -712,7 +716,17 @@ public final class RuntimeOwnershipReconciliation {
                 : "tr '\\0' '\\n' </proc/" + pid + "/environ 2>/dev/null";
         String procTest = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 test " : "test ";
-        return "if ! " + procTest + "-r " + status + " || ! " + procTest + "-r " + cmdline
+        return "profile_config=$(" + procReader + "cat " + startup + " 2>/dev/null)"
+                + " || exit 125"
+                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + runtimeDirLine
+                + " >/dev/null"
+                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + cliSocketLine
+                + " >/dev/null"
+                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + apiSocketLine
+                + " >/dev/null"
+                + " && printf '%s\\n' \"$profile_config\" | grep -F -- " + statsegSocketLine
+                + " >/dev/null"
+                + " && if ! " + procTest + "-r " + status + " || ! " + procTest + "-r " + cmdline
                 + " || ! " + procTest + "-r " + environ + " || ! " + procTest + "-r " + exe
                 + "; then exit 125; fi"
                 + " && uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' " + status + ")"
@@ -725,9 +739,17 @@ public final class RuntimeOwnershipReconciliation {
                 + " && " + environReader + " | grep -F -- " + profile + " >/dev/null";
     }
 
-    private static String buildProbeCommand(long pid) {
-        return "if kill -0 " + pid + " 2>/dev/null; then exit 0; "
+    /** Public shell seam for tests and for the service's bounded PID probe. */
+    public static String buildProbeCommand(ProfileSpec spec, long pid) {
+        String probe = "if kill -0 " + pid + " 2>/dev/null; then exit 0; "
                 + "elif test -e /proc/" + pid + "; then exit 2; else exit 1; fi";
+        if (spec != null && "0".equals(spec.expectedUid)) {
+            // Both kill(2) and /proc existence are security-context-sensitive
+            // on Android. Running only the `test` branch through runcon still
+            // lets a shell-domain EPERM be misclassified as a missing PID.
+            return "runcon u:r:ksu:s0 sh -c " + shellQuote(probe);
+        }
+        return probe;
     }
 
     private static long parseOwnerPid(String output) {

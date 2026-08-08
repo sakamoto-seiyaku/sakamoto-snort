@@ -54,11 +54,20 @@ grep -Fxq 'sourceStatus=committed-snapshot' <<<"$provenance"
 source_tree="$(rtk awk -F= '$1 == "sourceTree" {print $2}' <<<"$provenance")"
 source_revision="$(rtk awk -F= '$1 == "sourceRevision" {print $2}' <<<"$provenance")"
 source_tree_digest="$(rtk awk -F= '$1 == "sourceTreeSha256" {print $2}' <<<"$provenance")"
+base_archive_digest="$(rtk awk -F= '$1 == "baseArchiveSha256" {print $2}' <<<"$provenance")"
+base_tree_digest="$(rtk awk -F= '$1 == "baseTreeSha256" {print $2}' <<<"$provenance")"
+overlay_digest="$(rtk awk -F= '$1 == "overlaySha256" {print $2}' <<<"$provenance")"
 [[ -f "$source_tree/.sakamoto-source-revision" ]] \
   || { echo "provenance source snapshot marker is missing" >&2; exit 1; }
 grep -Fxq "$source_revision" "$source_tree/.sakamoto-source-revision"
 [[ "$source_tree_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
   || { echo "provenance source tree digest is missing" >&2; exit 1; }
+[[ "$base_archive_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || { echo "provenance pinned base archive digest is missing" >&2; exit 1; }
+[[ "$base_tree_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || { echo "provenance extracted base tree digest is missing" >&2; exit 1; }
+[[ "$overlay_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || { echo "provenance repository overlay digest is missing" >&2; exit 1; }
 grep -Fxq 'sourceRevision=9258530f3804a152578ce11cc7c8a1e9eab88ed0' <<<"$manifest"
 grep -Fxq 'sourceRevision=9258530f3804a152578ce11cc7c8a1e9eab88ed0' <<<"$provenance"
 if rtk unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \

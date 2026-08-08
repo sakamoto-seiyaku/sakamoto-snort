@@ -18,37 +18,26 @@ product_vpp_commit="${VPP_RUNTIME_SOURCE_REVISION:-9258530f3804a152578ce11cc7c8a
 source_revision=""
 source_origin="$source_input"
 source_status=""
-if [[ "$source_explicit" == 0 ]]; then
-  # The experiment checkout is intentionally mutable (and has carried the
-  # rejected P6 conditional-wake patches).  Product builds consume a source
-  # snapshot made from its committed revision instead of mutating that
-  # checkout or accidentally promoting its working tree.
-  git -C "$source_input" cat-file -e "$product_vpp_commit^{commit}" 2>/dev/null \
-    || { echo "error: pinned VPP source commit is unavailable: $product_vpp_commit" >&2; exit 1; }
-  source_revision="$product_vpp_commit"
-  source_status="committed-snapshot"
-  vpp_dir="$runtime_root/source/$source_revision"
-  source_origin="git:$source_input@$source_revision"
-  marker="$vpp_dir/.sakamoto-source-revision"
-  if [[ ! -f "$marker" ]] || [[ "$(tr -d '[:space:]' <"$marker" 2>/dev/null || true)" != "$source_revision" ]]; then
-    rm -rf -- "$vpp_dir"
-    mkdir -p -- "$vpp_dir"
-    git -C "$source_input" archive --format=tar "$source_revision" \
-      | tar -x -C "$vpp_dir"
-    printf '%s\n' "$source_revision" >"$marker"
-  fi
-else
-  vpp_dir="$source_input"
-  source_revision="$(git -C "$vpp_dir" rev-parse HEAD 2>/dev/null || true)"
-  source_revision="${source_revision:-external}"
-  if [[ -n "$(git -C "$vpp_dir" status --porcelain --untracked-files=all 2>/dev/null || true)" ]]; then
-    source_status="explicit-working-tree"
-  else
-    source_status="explicit-committed-tree"
-  fi
-fi
-vpp_source="$vpp_dir/src"
-product_path="/usr/bin:/bin:${PATH}"
+
+# Hash the complete source snapshot deterministically. This deliberately
+# includes the relative path so the same bytes moved to another directory do
+# not silently acquire different provenance.
+source_tree_sha256() {
+  local tree="$1"
+  (
+    cd -- "$tree"
+    find . -type f -print0 | sort -z | xargs -0 -r sha256sum
+  ) | sha256sum | awk '{print $1}'
+}
+
+git_archive_sha256() {
+  local repo="$1" revision="$2"
+  # Explicit prefix keeps archive member names independent of the checkout
+  # directory. Git archive metadata is derived from the immutable commit, so
+  # this byte stream is reproducible for a pinned revision.
+  git -C "$repo" archive --format=tar --prefix=./ "$revision" \
+    | sha256sum | awk '{print $1}'
+}
 
 reject_conditional_wake() {
   local tree="$1"
@@ -65,22 +54,75 @@ reject_conditional_wake() {
   fi
 }
 
-reject_conditional_wake "$vpp_dir"
+provenance_file="$stage_dir/runtime/source-provenance.properties"
+overlay_script="$poc_dir/scripts/apply-vpp-android-overlay.sh"
+overlay_sha256="$(sha256sum "$overlay_script" | awk '{print $1}')"
+if [[ "$source_explicit" == 0 ]]; then
+  # The experiment checkout is intentionally mutable (and has carried the
+  # rejected P6 conditional-wake patches).  Product builds consume a source
+  # snapshot made from its committed revision instead of mutating that
+  # checkout or accidentally promoting its working tree.
+  git -C "$source_input" cat-file -e "$product_vpp_commit^{commit}" 2>/dev/null \
+    || { echo "error: pinned VPP source commit is unavailable: $product_vpp_commit" >&2; exit 1; }
+  source_revision="$product_vpp_commit"
+  source_status="committed-snapshot"
+  vpp_dir="$runtime_root/source/$source_revision"
+  source_origin="git:$source_input@$source_revision"
+  base_archive_sha256="$(git_archive_sha256 "$source_input" "$source_revision")" \
+    || { echo "error: unable to hash pinned VPP git archive" >&2; exit 1; }
 
-# Hash the complete post-overlay source snapshot deterministically.  The
-# revision marker alone proves only what the snapshot was intended to be; it
-# cannot detect a later edit to an extracted archive.  This digest is carried
-# into the stage provenance and checked again by the APK build boundary.
-source_tree_sha256() {
-  local tree="$1"
-  (
-    cd -- "$tree"
-    find . -type f -print0 | sort -z \
-      | while IFS= read -r -d '' file; do
-          printf '%s  %s\n' "$(sha256sum "$file" | awk '{print $1}')" "${file#./}"
-        done
-  ) | sha256sum | awk '{print $1}'
-}
+  # A retained source marker is not trusted. If an earlier provenance record
+  # exists, first reject any manual mutation of that retained post-overlay
+  # tree; then rebuild a clean pinned base and deterministically apply the
+  # repository Android overlay so legitimate overlay edits are preserved.
+  retained_source_tree_digest=""
+  recorded_source_tree_digest=""
+  if [[ -f "$provenance_file" && -d "$vpp_dir" ]]; then
+    recorded_source_tree_digest="$(awk -F= '$1 == "sourceTreeSha256" {print $2; exit}' \
+      "$provenance_file")"
+    if [[ "$recorded_source_tree_digest" =~ ^[0-9a-fA-F]{64}$ ]]; then
+      retained_source_tree_digest="$(source_tree_sha256 "$vpp_dir")"
+    fi
+  fi
+
+  mkdir -p -- "$runtime_root/source"
+  source_parent="$(mktemp -d "$runtime_root/source-rebuild.XXXXXX")"
+  fresh_vpp_dir="$source_parent/$source_revision"
+  mkdir -p -- "$fresh_vpp_dir"
+  git -C "$source_input" archive --format=tar --prefix=./ "$source_revision" \
+    | tar -x -C "$fresh_vpp_dir"
+  printf '%s\n' "$source_revision" >"$fresh_vpp_dir/.sakamoto-source-revision"
+  # The clean archive must be checked before overlay application. This is the
+  # digest bound to the pinned commit, independent of any retained marker.
+  base_tree_sha256="$(source_tree_sha256 "$fresh_vpp_dir")"
+  INSIDE_VPP_NFQ_CONTAINER=1 PATH="/usr/bin:/bin:${PATH}" VPP_DIR="$fresh_vpp_dir" \
+    "$overlay_script" >/dev/null
+  reject_conditional_wake "$fresh_vpp_dir"
+  fresh_source_tree_sha256="$(source_tree_sha256 "$fresh_vpp_dir")"
+  if [[ "$recorded_source_tree_digest" =~ ^[0-9a-fA-F]{64}$ \
+      && "$retained_source_tree_digest" != "$recorded_source_tree_digest" \
+      && "$fresh_source_tree_sha256" == "$recorded_source_tree_digest" ]]; then
+    echo "error: retained VPP source tree was manually mutated: $vpp_dir" >&2
+    rm -rf -- "$source_parent"
+    exit 1
+  fi
+  rm -rf -- "$vpp_dir"
+  mkdir -p -- "$(dirname -- "$vpp_dir")"
+  mv -- "$fresh_vpp_dir" "$vpp_dir"
+  rm -rf -- "$source_parent"
+else
+  vpp_dir="$source_input"
+  source_revision="$(git -C "$vpp_dir" rev-parse HEAD 2>/dev/null || true)"
+  source_revision="${source_revision:-external}"
+  if [[ -n "$(git -C "$vpp_dir" status --porcelain --untracked-files=all 2>/dev/null || true)" ]]; then
+    source_status="explicit-working-tree"
+  else
+    source_status="explicit-committed-tree"
+  fi
+fi
+vpp_source="$vpp_dir/src"
+product_path="/usr/bin:/bin:${PATH}"
+reject_conditional_wake "$vpp_dir"
 
 if [[ ! -f "$vpp_source/CMakeLists.txt" ]]; then
   echo "error: VPP source tree is unavailable: $vpp_source" >&2
@@ -102,6 +144,24 @@ fi
 if [[ -f "$provenance_file" ]] && ! grep -Eq '^sourceTreeSha256=[0-9a-fA-F]{64}$' "$provenance_file"; then
   stage_needs_refresh=1
 fi
+if [[ "$source_explicit" == 0 ]]; then
+  if [[ -f "$provenance_file" ]] && ! grep -Fqx "baseArchiveSha256=$base_archive_sha256" \
+      "$provenance_file"; then
+    stage_needs_refresh=1
+  fi
+  if [[ -f "$provenance_file" ]] && ! grep -Fqx "baseTreeSha256=$base_tree_sha256" \
+      "$provenance_file"; then
+    stage_needs_refresh=1
+  fi
+  if [[ -f "$provenance_file" ]] && ! grep -Fqx "overlaySha256=$overlay_sha256" \
+      "$provenance_file"; then
+    stage_needs_refresh=1
+  fi
+  if [[ -f "$provenance_file" ]] && ! grep -Fqx "sourceTreeSha256=$fresh_source_tree_sha256" \
+      "$provenance_file"; then
+    stage_needs_refresh=1
+  fi
+fi
 if [[ -f "$build_dir/CMakeCache.txt" ]] &&
     ! grep -Fqx "CMAKE_HOME_DIRECTORY:INTERNAL=$vpp_source" "$build_dir/CMakeCache.txt"; then
   stage_needs_refresh=1
@@ -117,7 +177,8 @@ for pair in \
 done
 
 if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || "$stage_needs_refresh" == 1 ]]; then
-  PATH="$product_path" VPP_DIR="$vpp_dir" "$poc_dir/scripts/apply-vpp-android-overlay.sh"
+  INSIDE_VPP_NFQ_CONTAINER=1 PATH="$product_path" VPP_DIR="$vpp_dir" \
+    "$poc_dir/scripts/apply-vpp-android-overlay.sh"
   PATH="$product_path" VPP_DIR="$vpp_dir" \
     BUILD_DIR="$build_dir" \
     VPP_CMAKE_BUILD_TYPE=release \
@@ -154,6 +215,29 @@ if [[ -f "$provenance_file" ]]; then
 else
   echo "error: staged VPP provenance is missing: $provenance_file" >&2
   exit 1
+fi
+
+ensure_provenance_key() {
+  local key="$1" expected="$2" existing rewrite
+  existing="$(awk -F= -v wanted="$key" '$1 == wanted {print substr($0, index($0, "=") + 1); exit}' \
+    "$provenance_file")"
+  if [[ -n "$existing" && "$existing" == "$expected" ]]; then
+    return 0
+  fi
+  if [[ -n "$existing" ]]; then
+    rewrite="$(mktemp "${provenance_file}.rewrite.XXXXXX")"
+    awk -F= -v wanted="$key" '$1 != wanted' "$provenance_file" >"$rewrite"
+    printf '%s=%s\n' "$key" "$expected" >>"$rewrite"
+    mv -- "$rewrite" "$provenance_file"
+  else
+    printf '%s=%s\n' "$key" "$expected" >>"$provenance_file"
+  fi
+}
+
+if [[ "$source_explicit" == 0 ]]; then
+  ensure_provenance_key baseArchiveSha256 "$base_archive_sha256"
+  ensure_provenance_key baseTreeSha256 "$base_tree_sha256"
+  ensure_provenance_key overlaySha256 "$overlay_sha256"
 fi
 
 for artifact in "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do

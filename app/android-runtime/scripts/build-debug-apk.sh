@@ -104,10 +104,7 @@ source_tree_sha256() {
   local tree="$1"
   (
     cd -- "$tree"
-    find . -type f -print0 | sort -z \
-      | while IFS= read -r -d '' file; do
-          printf '%s  %s\n' "$(sha256sum "$file" | awk '{print $1}')" "${file#./}"
-        done
+    find . -type f -print0 | sort -z | xargs -0 -r sha256sum
   ) | sha256sum | awk '{print $1}'
 }
 
@@ -126,6 +123,9 @@ source_status="$(provenance_value sourceStatus)"
 source_tree="$(provenance_value sourceTree)"
 source_origin="$(provenance_value sourceOrigin)"
 recorded_source_tree_digest="$(provenance_value sourceTreeSha256)"
+recorded_base_archive_digest="$(provenance_value baseArchiveSha256)"
+recorded_base_tree_digest="$(provenance_value baseTreeSha256)"
+recorded_overlay_digest="$(provenance_value overlaySha256)"
 [[ "$source_revision" == "$expected_source_revision" ]] \
   || die "runtime stage source revision is not the pinned product revision: $source_revision"
 [[ "$source_status" == "committed-snapshot" ]] \
@@ -142,6 +142,24 @@ source_origin_repo="${source_origin_repo%@${source_revision}}"
   || die "runtime stage source origin repository is missing: $source_origin_repo"
 git -C "$source_origin_repo" cat-file -e "$source_revision^{commit}" 2>/dev/null \
   || die "runtime stage source origin cannot prove pinned commit: $source_revision"
+[[ "$recorded_base_archive_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || die "runtime stage base archive digest is missing from provenance"
+[[ "$recorded_base_tree_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || die "runtime stage base tree digest is missing from provenance"
+[[ "$recorded_overlay_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || die "runtime stage overlay digest is missing from provenance"
+actual_base_archive_digest="$(git -C "$source_origin_repo" archive --format=tar --prefix=./ \
+  "$source_revision" | sha256sum | awk '{print $1}')"
+[[ "$actual_base_archive_digest" == "$recorded_base_archive_digest" ]] \
+  || die "runtime stage pinned base archive changed after provenance was recorded"
+base_probe_dir="$(mktemp -d "$build_dir/base-archive.XXXXXX")"
+git -C "$source_origin_repo" archive --format=tar --prefix=./ "$source_revision" \
+  | tar -x -C "$base_probe_dir"
+printf '%s\n' "$source_revision" >"$base_probe_dir/.sakamoto-source-revision"
+actual_base_tree_digest="$(source_tree_sha256 "$base_probe_dir")"
+rm -rf -- "$base_probe_dir"
+[[ "$actual_base_tree_digest" == "$recorded_base_tree_digest" ]] \
+  || die "runtime stage extracted base tree changed after provenance was recorded"
 [[ "$recorded_source_tree_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
   || die "runtime stage source tree digest is missing from provenance"
 actual_source_tree_digest="$(source_tree_sha256 "$source_tree")"
@@ -189,7 +207,8 @@ artifact="sha256:$(sha256sum "$jni_dir/libvpp_runtime.so" | awk '{print $1}')"
 printf 'version=%s\nabi=arm64-v8a\nprotocol=vpp-runtime-health/v1\nartifact=%s\n' \
   "$version" "$artifact" >"$assets_dir/vpp-runtime.properties"
 printf 'apiIdentity=%s\n' "$api_identity" >>"$assets_dir/vpp-runtime.properties"
-for key in sourceRevision sourceOrigin sourceTree sourceStatus conditionalWakeSource \
+for key in sourceRevision sourceOrigin sourceTree sourceStatus baseArchiveSha256 \
+    baseTreeSha256 overlaySha256 sourceTreeSha256 conditionalWakeSource \
     conditionalWakeBinary vppSha256 vppctlSha256; do
   value="$(awk -F= -v wanted="$key" '$1 == wanted {print substr($0, index($0, "=") + 1); exit}' \
     "$provenance_file")"

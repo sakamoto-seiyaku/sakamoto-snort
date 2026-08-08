@@ -25,6 +25,7 @@ public final class AndroidRuntimeContractTest {
         ownershipCleanupDecisionFailsClosed();
         ownershipInspectionKeepsIdentityInThePublicSeam();
         pidIdentityUsesPrivilegedProcContext();
+        rootProbeUsesPrivilegedContextAndFailsClosed();
         ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied();
         ownershipInspectionRejectsSameProfileMultiplicity();
         recordedPidRequiresAnExhaustiveSoleOwnerScan();
@@ -367,6 +368,42 @@ public final class AndroidRuntimeContractTest {
                 "root PID identity has no unprivileged outer environ check");
         check(identityCommand[0].contains("runcon u:r:ksu:s0 sh -c"),
                 "root PID identity reads proc data in runcon context");
+    }
+
+    private static void rootProbeUsesPrivilegedContextAndFailsClosed() {
+        RuntimeOwnershipReconciliation.ProfileSpec spec = ownershipSpec();
+        String probe = RuntimeOwnershipReconciliation.buildProbeCommand(spec, 4242L);
+        check(probe.contains("runcon u:r:ksu:s0 sh -c"),
+                "root PID probe runs both liveness and /proc existence in the privileged context");
+        check(probe.contains("kill -0 4242") && probe.contains("test -e /proc/4242"),
+                "root PID probe checks the exact PID in the privileged context");
+
+        final int[] calls = {0};
+        RuntimeOwnershipReconciliation.PidIdentity absent =
+                RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
+                        (profile, command, timeout) -> {
+                            calls[0]++;
+                            check(command.contains("runcon u:r:ksu:s0"),
+                                    "root probe command remains privileged");
+                            return new RuntimeOwnershipReconciliation.CommandResult(1, "");
+                        });
+        check(absent == RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                "a privileged probe proving /proc absence maps to MISSING");
+        check(calls[0] == 1, "an absent PID does not trigger identity inspection");
+
+        RuntimeOwnershipReconciliation.PidIdentity inaccessible =
+                RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
+                        (profile, command, timeout) ->
+                                new RuntimeOwnershipReconciliation.CommandResult(2, ""));
+        check(inaccessible == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
+                "a privileged probe that sees an inaccessible process stays UNKNOWN");
+
+        RuntimeOwnershipReconciliation.PidIdentity probeFailure =
+                RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
+                        (profile, command, timeout) ->
+                                new RuntimeOwnershipReconciliation.CommandResult(125, ""));
+        check(probeFailure == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
+                "a privileged probe/permission failure stays UNKNOWN");
     }
 
     private static void ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied() {

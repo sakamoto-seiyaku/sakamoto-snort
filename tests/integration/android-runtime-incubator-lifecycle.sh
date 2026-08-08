@@ -76,18 +76,29 @@ rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties \
 } >>"$evidence_file"
 
 verified_owner_snapshot() {
-  local remote_script remote_script_host remote_script_path owner_output
+  local remote_script remote_script_host remote_script_path owner_output remote_cleanup_status
   remote_script="$(cat <<EOF
+#!/system/bin/sh
+set -u
 app_data=/data/user/0/$package
 expected_app_uid=$app_uid
 expected_exe=$expected_runtime_path
 proc_reader='runcon u:r:ksu:s0 '
-ps -A -o PID,UID,args | while read -r pid ps_uid args; do
+fail() { echo "OWNER_SCRIPT_ERROR=\$1" >&2; exit 125; }
+ps_file="/data/local/tmp/sakamoto-67-vpp-owner-ps.\$\$"
+ps -A -o PID,UID,args >"\$ps_file" || fail ps
+while read -r pid ps_uid args; do
+  [ -n "\$pid" ] || continue
   case "\$args" in *libvpp_runtime.so*) ;; *) continue ;; esac
+  # A process may disappear between ps and /proc. That race is safe to
+  # ignore; an existing candidate that cannot be read is unknown ownership
+  # and must fail the complete verifier rather than become zero owners.
   [ -d "/proc/\$pid" ] || continue
-  proc_uid=\$(\$proc_reader awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || continue
+  proc_uid=\$(\$proc_reader awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || fail proc_uid
+  [ -n "\$proc_uid" ] || fail proc_uid_empty
   [ "\$proc_uid" = "0" ] || [ "\$proc_uid" = "\$expected_app_uid" ] || continue
-  exe=\$(\$proc_reader readlink "/proc/\$pid/exe" 2>/dev/null) || continue
+  exe=\$(\$proc_reader readlink "/proc/\$pid/exe" 2>/dev/null) || fail exe
+  [ -n "\$exe" ] || fail exe_empty
   # The installed package path is immutable and was bound to runtimeSha256
   # above. /proc/<pid>/exe content can become unreadable after VPP drops its
   # dumpability, so exact path identity is the strong packaged-owner proof.
@@ -101,78 +112,155 @@ ps -A -o PID,UID,args | while read -r pid ps_uid args; do
     token_file="\$runtime_dir/owner.token"
     [ -f "\$startup" ] && [ -f "\$token_file" ] || continue
     [ "\$proc_uid" = "\$profile_uid" ] || continue
-    grep -Fq "runtime-dir \$runtime_dir" "\$startup" 2>/dev/null || continue
-    grep -Fq "cli-listen \$runtime_dir/cli.sock" "\$startup" 2>/dev/null || continue
-    grep -Fq "socket-name \$runtime_dir/api.sock" "\$startup" 2>/dev/null || continue
-    grep -Fq "socket-name \$runtime_dir/statseg.sock" "\$startup" 2>/dev/null || continue
-    token=\$(tr -d '[:space:]' <"\$token_file" 2>/dev/null) || continue
+    grep -Fq "runtime-dir \$runtime_dir" "\$startup" 2>/dev/null || {
+      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail startup_runtime
+    }
+    grep -Fq "cli-listen \$runtime_dir/cli.sock" "\$startup" 2>/dev/null || {
+      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail startup_cli
+    }
+    grep -Fq "socket-name \$runtime_dir/api.sock" "\$startup" 2>/dev/null || {
+      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail startup_api
+    }
+    grep -Fq "socket-name \$runtime_dir/statseg.sock" "\$startup" 2>/dev/null || {
+      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail startup_statseg
+    }
+    token=\$(tr -d '[:space:]' <"\$token_file" 2>/dev/null) || fail owner_token
     echo "\$token" | grep -Eq '^[0-9A-Fa-f-]{36}$' || continue
     case "\$args" in *"\$startup"*) ;; *) continue ;; esac
-    env=\$(runcon u:r:ksu:s0 cat "/proc/\$pid/environ" 2>/dev/null \
-      | tr '\\0' '\\n') || continue
-    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_OWNER_TOKEN=\$token" || continue
-    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_RUNTIME_DIR=\$runtime_dir" || continue
-    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_RUNTIME_PROFILE=\$profile" || continue
+    env_raw=\$(runcon u:r:ksu:s0 cat "/proc/\$pid/environ" 2>/dev/null) || fail proc_environ
+    env=\$(printf '%s' "\$env_raw" | tr '\\0' '\\n') || fail proc_environ_translate
+    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_OWNER_TOKEN=\$token" || {
+      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail env_owner_token
+    }
+    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_RUNTIME_DIR=\$runtime_dir" || {
+      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail env_runtime
+    }
+    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_RUNTIME_PROFILE=\$profile" || {
+      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail env_profile
+    }
     printf '%s\\t%s\\t%s\\t%s\\n' "\$profile" "\$pid" "\$proc_uid" "\$exe"
   done
 done
+rm -f "\$ps_file" || fail ps_cleanup
+echo OWNER_SCRIPT_OK=1
 EOF
   )"
   # Passing this multiline program as an adb shell argument is lossy on the
   # Windows adb bridge (notably around pipes and backslashes). Push the exact
   # script, execute it as a file in the privileged shell, then remove it.
-  remote_script_host="${evidence_file}.owner-script"
-  remote_script_path="/data/local/tmp/sakamoto-67-vpp-owner-${target_serial}.sh"
-  printf '%s\n' "$remote_script" >"$remote_script_host"
-  adb_cmd push "$remote_script_host" "$remote_script_path" >/dev/null \
-    || { echo "unable to push owner verifier" >&2; return 1; }
-  owner_output="$(adb_cmd shell su 0 sh -c "sh $remote_script_path" 2>/dev/null \
-    | tr -d '\r' | awk 'NF' || true)"
-  adb_cmd shell su 0 sh -c "rm -f $remote_script_path" >/dev/null 2>&1 || true
-  printf '%s\n' "$owner_output"
+  remote_script_host="$(mktemp "${evidence_file}.owner-script.XXXXXX")" \
+    || { echo "unable to allocate owner verifier script" >&2; return 1; }
+  remote_script_path="/data/local/tmp/sakamoto-67-vpp-owner-${target_serial}-$$.sh"
+  if ! printf '%s\n' "$remote_script" >"$remote_script_host"; then
+    if ! rm -f -- "$remote_script_host"; then
+      echo "unable to clean owner verifier script after write failure" >&2
+    fi
+    echo "unable to write owner verifier script" >&2
+    return 1
+  fi
+  if ! adb_cmd push "$remote_script_host" "$remote_script_path" >/dev/null; then
+    if ! rm -f -- "$remote_script_host"; then
+      echo "unable to clean owner verifier script after push failure" >&2
+    fi
+    echo "unable to push owner verifier" >&2
+    return 1
+  fi
+  if ! owner_output="$(adb_cmd shell su 0 sh -c "sh '$remote_script_path'" 2>&1)"; then
+    remote_cleanup_status=0
+    if ! adb_cmd shell su 0 sh -c "rm -f '$remote_script_path'" >/dev/null 2>&1; then
+      remote_cleanup_status=1
+    fi
+    if ! rm -f -- "$remote_script_host"; then
+      remote_cleanup_status=1
+    fi
+    if [[ "$remote_cleanup_status" != 0 ]]; then
+      echo "owner verifier failed and temporary-script cleanup also failed" >&2
+    fi
+    echo "owner verifier execution failed: $owner_output" >&2
+    return 1
+  fi
+  if ! adb_cmd shell su 0 sh -c "rm -f '$remote_script_path'" >/dev/null 2>&1; then
+    if ! rm -f -- "$remote_script_host"; then
+      echo "owner verifier remote and host cleanup failed" >&2
+    fi
+    echo "owner verifier remote cleanup failed" >&2
+    return 1
+  fi
+  rm -f -- "$remote_script_host" || return 1
+  if ! grep -Fqx 'OWNER_SCRIPT_OK=1' <<<"$owner_output"; then
+    echo "owner verifier did not report completion: $owner_output" >&2
+    return 1
+  fi
+  printf '%s\n' "$owner_output" | awk '$1 != "OWNER_SCRIPT_OK=1" && $1 !~ /^OWNER_SCRIPT_ERROR=/'
 }
 
 all_vpp_process_snapshot() {
-  adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>/dev/null \
-    | tr -d '\r' | awk '$2 == "libvpp_runtime.so"'
+  local snapshot
+  if ! snapshot="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>&1)"; then
+    echo "all-VPP process inspection failed: $snapshot" >&2
+    return 1
+  fi
+  printf '%s\n' "$snapshot" | tr -d '\r' | awk '$2 == "libvpp_runtime.so"'
+}
+
+signal_verified_owner() {
+  local expected_profile="$1" expected_pid="$2" expected_uid="$3" expected_exe="$4" signal="$5"
+  [[ "$signal" == TERM || "$signal" == KILL ]] || {
+    echo "unsupported owner signal: $signal" >&2
+    return 1
+  }
+  local owners
+  owners="$(verified_owner_snapshot)" || {
+    echo "strong owner revalidation failed before SIG$signal" >&2
+    return 1
+  }
+  awk -F '\t' -v profile="$expected_profile" -v pid="$expected_pid" \
+      -v uid="$expected_uid" -v exe="$expected_exe" \
+      'NF && $1 == profile && $2 == pid && $3 == uid && $4 == exe {found=1}
+       END {exit found ? 0 : 1}' <<<"$owners" \
+    || { echo "owner identity changed before SIG$signal" >&2; return 1; }
+  adb_cmd shell su 0 sh -c "kill -$signal -- '$expected_pid'" >/dev/null 2>&1 \
+    || { echo "SIG$signal failed for verified PID $expected_pid" >&2; return 1; }
 }
 
 cleanup_verified_vpp_owners() {
   local phase="${1:-cleanup}"
   local owners pid profile owner_uid exe verified_after
-  owners="$(verified_owner_snapshot || true)"
-  printf 'phase=%s\n%s\n' "$phase" "$owners" >>"$evidence_file.owners" 2>/dev/null || true
+  owners="$(verified_owner_snapshot)" || {
+    echo "owner verifier failed during $phase; refusing cleanup" >&2
+    return 1
+  }
+  printf 'phase=%s\n%s\n' "$phase" "$owners" >>"$evidence_file.owners" \
+    || { echo "unable to write owner evidence" >&2; return 1; }
   while IFS=$'\t' read -r profile pid owner_uid exe; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    adb_cmd shell su 0 sh -c "kill -TERM $pid" >/dev/null 2>&1 || true
+    signal_verified_owner "$profile" "$pid" "$owner_uid" "$exe" TERM || return 1
   done <<<"$owners"
   for _ in $(seq 1 15); do
-    verified_after="$(verified_owner_snapshot || true)"
+    verified_after="$(verified_owner_snapshot)" || return 1
     [[ -z "$verified_after" ]] && break
     sleep 1
   done
-  verified_after="$(verified_owner_snapshot || true)"
+  verified_after="$(verified_owner_snapshot)" || return 1
   while IFS=$'\t' read -r profile pid owner_uid exe; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     # Re-read strong identity immediately before KILL. A reused PID or an
     # unreadable owner is never targeted by this cleanup helper.
-    if awk -F '\t' -v p="$profile" -v id="$pid" \
-        '$1 == p && $2 == id {found=1} END {exit found ? 0 : 1}' <<<"$verified_after"; then
-      adb_cmd shell su 0 sh -c "kill -KILL $pid" >/dev/null 2>&1 || true
-    fi
+    signal_verified_owner "$profile" "$pid" "$owner_uid" "$exe" KILL || return 1
   done <<<"$verified_after"
   for _ in $(seq 1 15); do
-    [[ -z "$(verified_owner_snapshot || true)" ]] && return 0
+    verified_after="$(verified_owner_snapshot)" || return 1
+    [[ -z "$verified_after" ]] && return 0
     sleep 1
   done
-  verified_after="$(verified_owner_snapshot || true)"
+  verified_after="$(verified_owner_snapshot)" || return 1
   [[ -z "$verified_after" ]] || {
     echo "verified VPP owner did not stop during $phase; evidence=$evidence_file.owners" >&2
     return 1
   }
   # A remaining packaged VPP with unreadable/ambiguous identity is a block,
   # not permission to broaden the kill target.
-  if [[ -n "$(all_vpp_process_snapshot || true)" ]]; then
+  if [[ -n "$(all_vpp_process_snapshot)" ]]; then
     echo "unverified packaged VPP owner remains during $phase; refusing to kill" >&2
     return 1
   fi
@@ -189,12 +277,18 @@ test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/api.sock\" || exit 1; \
 test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/statseg.sock\" || exit 1; \
 test ! -e \"\$app_data/files/profiles/\$p/vpp/shm\" || exit 1; \
 done"
-  residue="$(adb_cmd shell su 0 sh -c "$residue_script" 2>&1 | tr -d '\r' || true)"
+  if ! residue="$(adb_cmd shell su 0 sh -c "$residue_script" 2>&1)"; then
+    echo "residue inspection command failed: $residue" >&2
+    return 1
+  fi
+  residue="$(printf '%s' "$residue" | tr -d '\r')"
   [[ -z "$residue" ]] || {
     echo "VPP/profile/socket/shm residue remains: $residue" >&2
     return 1
   }
-  [[ -z "$(all_vpp_process_snapshot || true)" ]] || {
+  local all_vpp
+  all_vpp="$(all_vpp_process_snapshot)" || return 1
+  [[ -z "$all_vpp" ]] || {
     echo "packaged VPP process residue remains" >&2
     return 1
   }
@@ -213,7 +307,10 @@ wait_package_drained() {
 
 assert_exactly_one_owner() {
   local expected_profile="$1" expected_pid="$2" owners all_vpp count
-  owners="$(verified_owner_snapshot || true)"
+  owners="$(verified_owner_snapshot)" || {
+    echo "unable to obtain exactly-one owner evidence" >&2
+    return 1
+  }
   printf 'expectedProfile=%s\nexpectedPid=%s\n%s\n' \
     "$expected_profile" "$expected_pid" "$owners" >>"$evidence_file.exact-one"
   count="$(awk 'NF {n++} END {print n+0}' <<<"$owners")"
@@ -221,7 +318,7 @@ assert_exactly_one_owner() {
   awk -F '\t' -v profile="$expected_profile" -v pid="$expected_pid" \
     'NF && $1 == profile && $2 == pid {found=1} END {exit found ? 0 : 1}' <<<"$owners" \
     || { echo "verified owner does not match $expected_profile/$expected_pid" >&2; return 1; }
-  all_vpp="$(all_vpp_process_snapshot || true)"
+  all_vpp="$(all_vpp_process_snapshot)" || return 1
   [[ "$(awk 'NF {n++} END {print n+0}' <<<"$all_vpp")" == 1 ]] \
     || { echo "global packaged VPP count is not exactly one" >&2; return 1; }
 }
@@ -263,16 +360,18 @@ assert_no_runtime_residue
 
 cleanup() {
   local exit_code=$?
+  local cleanup_ok=1
   set +e
   adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null 2>&1 || true
-  cleanup_verified_vpp_owners exit || true
+  cleanup_verified_vpp_owners exit || cleanup_ok=0
   adb_cmd shell am force-stop "$package" >/dev/null 2>&1 || true
   wait_package_drained || true
-  cleanup_verified_vpp_owners exit-post-force-stop || true
+  cleanup_verified_vpp_owners exit-post-force-stop || cleanup_ok=0
   if ! assert_no_runtime_residue; then
     echo "EXIT cleanup residue verification failed; evidence=$evidence_file" >&2
-    [[ "$exit_code" == 0 ]] && exit_code=1
+    cleanup_ok=0
   fi
+  [[ "$cleanup_ok" == 1 ]] || exit_code=1
   exit "$exit_code"
 }
 trap cleanup EXIT
@@ -585,7 +684,8 @@ done
   || { echo "adopted orphan did not stop cleanly; evidence=$evidence_file.orphan-stop.state" >&2; exit 1; }
 adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp'" >/dev/null
 adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' >"$evidence_file.orphan-final.ps"
-if [[ -n "$(all_vpp_process_snapshot || true)" ]]; then
+orphan_final_vpp="$(all_vpp_process_snapshot)" || exit 1
+if [[ -n "$orphan_final_vpp" ]]; then
   echo "VPP process appeared during orphan recovery; evidence=$evidence_file.orphan-final.ps" >&2
   exit 1
 fi
@@ -796,7 +896,8 @@ grep -q '^state=stopped$' <<<"$state"
 assert_no_runtime_residue
 final_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' || true)"
 printf '%s\n' "$final_processes" >"$evidence_file.final.ps"
-if [[ -n "$(all_vpp_process_snapshot || true)" ]]; then
+final_vpp="$(all_vpp_process_snapshot)" || exit 1
+if [[ -n "$final_vpp" ]]; then
   echo "VPP process residue remains after stop" >&2
   exit 1
 fi
