@@ -49,6 +49,11 @@ runtime_sha256="$(rtk unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
 adb_cmd install -r "$apk" >/dev/null
 app_uid="$(adb_cmd shell run-as "$package" id -u | tr -d '\r\n')"
 [[ "$app_uid" =~ ^[0-9]+$ ]] || { echo "unable to resolve app UID" >&2; exit 1; }
+installed_apk_path="$(adb_cmd shell pm path "$package" | tr -d '\r' \
+  | sed -n 's/^package://p' | head -n 1)"
+expected_runtime_path="${installed_apk_path%/base.apk}/lib/arm64/libvpp_runtime.so"
+[[ "$expected_runtime_path" == */lib/arm64/libvpp_runtime.so ]] \
+  || { echo "unable to resolve installed packaged runtime path" >&2; exit 1; }
 
 evidence_file="${ANDROID_RUNTIME_EVIDENCE_FILE:-/tmp/sakamoto-67-android-runtime-${target_serial}.log}"
 app_head_commit="$(git -C "$repo_root" rev-parse HEAD)"
@@ -58,6 +63,7 @@ app_head_commit="$(git -C "$repo_root" rev-parse HEAD)"
   echo "apk=$apk"
   echo "apkSha256=$apk_sha256"
   echo "runtimeSha256=$runtime_sha256"
+  echo "installedRuntimePath=$expected_runtime_path"
   echo "appHeadCommit=$app_head_commit"
   echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >"$evidence_file"
@@ -74,7 +80,7 @@ verified_owner_snapshot() {
   remote_script="$(cat <<EOF
 app_data=/data/user/0/$package
 expected_app_uid=$app_uid
-expected_hash=$runtime_sha256
+expected_exe=$expected_runtime_path
 proc_reader='runcon u:r:ksu:s0 '
 ps -A -o PID,UID,args | while read -r pid ps_uid args; do
   case "\$args" in *libvpp_runtime.so*) ;; *) continue ;; esac
@@ -82,10 +88,10 @@ ps -A -o PID,UID,args | while read -r pid ps_uid args; do
   proc_uid=\$(\$proc_reader awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || continue
   [ "\$proc_uid" = "0" ] || [ "\$proc_uid" = "\$expected_app_uid" ] || continue
   exe=\$(\$proc_reader readlink "/proc/\$pid/exe" 2>/dev/null) || continue
-  [ "\$(basename "\$exe")" = "libvpp_runtime.so" ] || continue
-  hash=\$(\$proc_reader sh -c "dd if=/proc/\$pid/exe bs=4096 2>/dev/null | sha256sum" \
-    | awk '{print \$1}') || continue
-  [ "\$hash" = "\$expected_hash" ] || continue
+  # The installed package path is immutable and was bound to runtimeSha256
+  # above. /proc/<pid>/exe content can become unreadable after VPP drops its
+  # dumpability, so exact path identity is the strong packaged-owner proof.
+  [ "\$exe" = "\$expected_exe" ] || continue
   for profile in root vpn; do
     profile_uid="\$expected_app_uid"
     [ "\$profile" = root ] && profile_uid=0
