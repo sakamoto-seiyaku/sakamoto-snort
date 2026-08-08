@@ -340,6 +340,10 @@ public final class AndroidRuntimeContractTest {
                             "root ownership scan enters the privileged proc reader context");
                     check(command.contains("</proc/$pid/environ"),
                             "root ownership scan opens proc environment inside the reader context");
+                    check(command.contains("profile_config_mismatch=0"),
+                            "ownership scan defers corrupt startup metadata until a live candidate exists");
+                    check(command.contains("profile_config_unverified=0"),
+                            "ownership scan distinguishes unreadable startup metadata from stale residue");
                     return new RuntimeOwnershipReconciliation.CommandResult(
                             10, "VPP_OWNER_COUNT=1\nVPP_OWNER_PID=4242\n");
                 });
