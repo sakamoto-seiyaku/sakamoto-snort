@@ -113,11 +113,23 @@ while read -r pid ps_uid args; do
   # ignore; an existing candidate that cannot be read is unknown ownership
   # and must fail the complete verifier rather than become zero owners.
   [ -d "/proc/\$pid" ] || continue
-  proc_uid=\$(\$proc_reader awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || fail proc_uid
-  [ -n "\$proc_uid" ] || fail proc_uid_empty
+  proc_uid=\$(\$proc_reader awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || {
+    [ ! -d "/proc/\$pid" ] && continue
+    fail proc_uid
+  }
+  [ -n "\$proc_uid" ] || {
+    [ ! -d "/proc/\$pid" ] && continue
+    fail proc_uid_empty
+  }
   [ "\$proc_uid" = "0" ] || [ "\$proc_uid" = "\$expected_app_uid" ] || continue
-  exe=\$(\$proc_reader readlink "/proc/\$pid/exe" 2>/dev/null) || fail exe
-  [ -n "\$exe" ] || fail exe_empty
+  exe=\$(\$proc_reader readlink "/proc/\$pid/exe" 2>/dev/null) || {
+    [ ! -d "/proc/\$pid" ] && continue
+    fail exe
+  }
+  [ -n "\$exe" ] || {
+    [ ! -d "/proc/\$pid" ] && continue
+    fail exe_empty
+  }
   # The installed package path is immutable and was bound to runtimeSha256
   # above. /proc/<pid>/exe content can become unreadable after VPP drops its
   # dumpability, so exact path identity is the strong packaged-owner proof.
@@ -146,8 +158,14 @@ while read -r pid ps_uid args; do
     token=\$(tr -d '[:space:]' <"\$token_file" 2>/dev/null) || fail owner_token
     echo "\$token" | grep -Eq '^[0-9A-Fa-f-]{36}$' || continue
     case "\$args" in *"\$startup"*) ;; *) continue ;; esac
-    env_raw=\$(runcon u:r:ksu:s0 cat "/proc/\$pid/environ" 2>/dev/null) || fail proc_environ
-    env=\$(printf '%s' "\$env_raw" | tr '\\0' '\\n') || fail proc_environ_translate
+    env_raw=\$(runcon u:r:ksu:s0 cat "/proc/\$pid/environ" 2>/dev/null) || {
+      [ ! -d "/proc/\$pid" ] && continue
+      fail proc_environ
+    }
+    env=\$(printf '%s' "\$env_raw" | tr '\\0' '\\n') || {
+      [ ! -d "/proc/\$pid" ] && continue
+      fail proc_environ_translate
+    }
     printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_OWNER_TOKEN=\$token" || {
       rc=\$?; [ "\$rc" -eq 1 ] && continue; fail env_owner_token
     }
