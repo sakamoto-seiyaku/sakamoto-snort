@@ -67,6 +67,21 @@ reject_conditional_wake() {
 
 reject_conditional_wake "$vpp_dir"
 
+# Hash the complete post-overlay source snapshot deterministically.  The
+# revision marker alone proves only what the snapshot was intended to be; it
+# cannot detect a later edit to an extracted archive.  This digest is carried
+# into the stage provenance and checked again by the APK build boundary.
+source_tree_sha256() {
+  local tree="$1"
+  (
+    cd -- "$tree"
+    find . -type f -print0 | sort -z \
+      | while IFS= read -r -d '' file; do
+          printf '%s  %s\n' "$(sha256sum "$file" | awk '{print $1}')" "${file#./}"
+        done
+  ) | sha256sum | awk '{print $1}'
+}
+
 if [[ ! -f "$vpp_source/CMakeLists.txt" ]]; then
   echo "error: VPP source tree is unavailable: $vpp_source" >&2
   echo "fetch the pinned VPP source before building the product runtime" >&2
@@ -82,6 +97,9 @@ done
 provenance_file="$stage_dir/runtime/source-provenance.properties"
 [[ -f "$provenance_file" ]] || stage_needs_refresh=1
 if [[ -f "$provenance_file" ]] && ! grep -Fqx "sourceRevision=$source_revision" "$provenance_file"; then
+  stage_needs_refresh=1
+fi
+if [[ -f "$provenance_file" ]] && ! grep -Eq '^sourceTreeSha256=[0-9a-fA-F]{64}$' "$provenance_file"; then
   stage_needs_refresh=1
 fi
 if [[ -f "$build_dir/CMakeCache.txt" ]] &&
@@ -122,6 +140,22 @@ if [[ "${VPP_RUNTIME_REBUILD:-0}" == 1 || "$stage_needs_refresh" == 1 ]]; then
   printf '%s\n' "$build_dir" >"$stage_dir/runtime/vapi-build-dir"
 fi
 
+source_tree_digest="$(source_tree_sha256 "$vpp_dir")"
+if [[ -f "$provenance_file" ]]; then
+  recorded_source_tree_digest="$(awk -F= '$1 == "sourceTreeSha256" {print $2; exit}' \
+    "$provenance_file")"
+  if [[ -n "$recorded_source_tree_digest" && "$recorded_source_tree_digest" != "$source_tree_digest" ]]; then
+    echo "error: staged source tree changed after provenance was recorded: $vpp_dir" >&2
+    exit 1
+  fi
+  if [[ -z "$recorded_source_tree_digest" ]]; then
+    printf 'sourceTreeSha256=%s\n' "$source_tree_digest" >>"$provenance_file"
+  fi
+else
+  echo "error: staged VPP provenance is missing: $provenance_file" >&2
+  exit 1
+fi
+
 for artifact in "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
   [[ -f "$artifact" ]] || { echo "error: staged VPP artifact missing: $artifact" >&2; exit 1; }
   if strings "$artifact" | rg -q 'wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE'; then
@@ -130,6 +164,8 @@ for artifact in "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
   fi
 done
 [[ -f "$provenance_file" ]] || { echo "error: staged VPP provenance is missing: $provenance_file" >&2; exit 1; }
+grep -Fqx "sourceTreeSha256=$source_tree_digest" "$provenance_file" \
+  || { echo "error: staged source tree digest is not bound to provenance" >&2; exit 1; }
 grep -Fqx 'conditionalWakeSource=absent' "$provenance_file" \
   || { echo "error: staged source provenance does not prove conditional-wake absence" >&2; exit 1; }
 grep -Fqx 'conditionalWakeBinary=absent' "$provenance_file" \

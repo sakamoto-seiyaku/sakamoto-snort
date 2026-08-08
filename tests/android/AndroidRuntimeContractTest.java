@@ -1,5 +1,6 @@
 import com.sakamoto.snort.androidruntime.RuntimeControlProtocol;
 import com.sakamoto.snort.androidruntime.RuntimeControlRequest;
+import com.sakamoto.snort.androidruntime.RuntimeControlOrdering;
 import com.sakamoto.snort.androidruntime.RuntimeControlNative;
 import com.sakamoto.snort.androidruntime.RuntimeProfile;
 import com.sakamoto.snort.androidruntime.RuntimeOwnershipReconciliation;
@@ -14,6 +15,7 @@ import java.nio.file.Path;
 public final class AndroidRuntimeContractTest {
     public static void main(String[] args) throws Exception {
         requestRoundTripIsVersionedAndProfileAware();
+        lifecycleRequestOrderingRejectsDelayedStarts();
         profileDoesNotExposeAdapterArtifacts();
         snapshotRoundTripPreservesBoundedHealthAndError();
         durableProjectionReadResultIsExplicit();
@@ -22,6 +24,7 @@ public final class AndroidRuntimeContractTest {
         pidlessLiveOwnerIsAdoptable();
         ownershipCleanupDecisionFailsClosed();
         ownershipInspectionKeepsIdentityInThePublicSeam();
+        pidIdentityUsesPrivilegedProcContext();
         ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied();
         ownershipInspectionRejectsSameProfileMultiplicity();
         recordedPidRequiresAnExhaustiveSoleOwnerScan();
@@ -51,6 +54,28 @@ public final class AndroidRuntimeContractTest {
         check(RuntimeControlRequest.STOP.equals(
                 RuntimeControlRequest.stop().encode().get("action")),
                 "stop action has a stable wire name");
+    }
+
+    private static void lifecycleRequestOrderingRejectsDelayedStarts() {
+        RuntimeControlOrdering ordering = new RuntimeControlOrdering();
+        check(ordering.observe(100L, 1) == RuntimeControlOrdering.Decision.ACCEPT,
+                "first stamped lifecycle request is accepted");
+        check(ordering.observe(200L, 2) == RuntimeControlOrdering.Decision.ACCEPT,
+                "newer lifecycle request is accepted");
+        check(ordering.observe(150L, 3) == RuntimeControlOrdering.Decision.STALE,
+                "delayed older START is rejected after a newer STOP");
+        check(ordering.latestRequestTimeMillis() == 200L,
+                "stale request cannot replace latest lifecycle timestamp");
+        check(ordering.observe(0L, 4) == RuntimeControlOrdering.Decision.STALE,
+                "unstamped delayed request fails closed after stamped control");
+
+        RuntimeControlOrdering sameMillisecond = new RuntimeControlOrdering();
+        check(sameMillisecond.observe(500L, 8) == RuntimeControlOrdering.Decision.ACCEPT,
+                "same-millisecond request baseline is accepted");
+        check(sameMillisecond.observe(500L, 7) == RuntimeControlOrdering.Decision.STALE,
+                "older start ID breaks same-millisecond ties as stale");
+        check(sameMillisecond.observe(500L, 9) == RuntimeControlOrdering.Decision.ACCEPT,
+                "newer start ID wins same-millisecond tie");
     }
 
     private static void snapshotRoundTripPreservesBoundedHealthAndError() throws Exception {
@@ -316,11 +341,32 @@ public final class AndroidRuntimeContractTest {
 
         RuntimeOwnershipReconciliation.PidIdentity identity =
                 RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
-                        (profile, command, timeout) -> command.startsWith("if kill -0")
-                                ? new RuntimeOwnershipReconciliation.CommandResult(0, "")
-                                : new RuntimeOwnershipReconciliation.CommandResult(0, ""));
+                        (profile, command, timeout) ->
+                                new RuntimeOwnershipReconciliation.CommandResult(0, ""));
         check(identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH,
                 "public PID validation seam accepts a complete identity match");
+    }
+
+    private static void pidIdentityUsesPrivilegedProcContext() {
+        RuntimeOwnershipReconciliation.ProfileSpec spec = ownershipSpec();
+        final String[] identityCommand = {""};
+        RuntimeOwnershipReconciliation.PidIdentity identity =
+                RuntimeOwnershipReconciliation.validatePid(spec, 4242L,
+                        (profile, command, timeout) -> {
+                            if (!command.startsWith("if kill -0")) {
+                                identityCommand[0] = command;
+                            }
+                            return new RuntimeOwnershipReconciliation.CommandResult(0, "");
+                        });
+        check(identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH,
+                "root PID identity validation remains a complete match");
+        check(identityCommand[0].contains(
+                        "runcon u:r:ksu:s0 test -r '/proc/4242/environ'"),
+                "root PID identity checks /proc readability in runcon context");
+        check(!identityCommand[0].contains("if ! test -r '/proc/4242/environ'"),
+                "root PID identity has no unprivileged outer environ check");
+        check(identityCommand[0].contains("runcon u:r:ksu:s0 sh -c"),
+                "root PID identity reads proc data in runcon context");
     }
 
     private static void ownershipInspectionUsesReadableStrongIdentityWhenEnvironmentIsDenied() {
@@ -345,8 +391,10 @@ public final class AndroidRuntimeContractTest {
                             "ownership scan defers corrupt startup metadata until a live candidate exists");
                     check(command.contains("profile_config_unverified=0"),
                             "ownership scan distinguishes unreadable startup metadata from stale residue");
-                    check(command.contains("if ! test -d \"$proc\"; then continue; fi;"),
-                            "ownership scan ignores a candidate that vanished after the process snapshot");
+                    check(command.contains("runcon u:r:ksu:s0 test -d \"$proc\""),
+                            "root ownership scan checks candidate existence in runcon context");
+                    check(!command.contains("if ! test -r \"$proc/environ\""),
+                            "root ownership scan has no unprivileged outer environ check");
                     return new RuntimeOwnershipReconciliation.CommandResult(
                             10, "VPP_OWNER_COUNT=1\nVPP_OWNER_PID=4242\n");
                 });

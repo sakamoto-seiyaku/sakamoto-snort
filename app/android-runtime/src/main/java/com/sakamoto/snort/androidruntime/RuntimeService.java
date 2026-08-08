@@ -71,6 +71,8 @@ public final class RuntimeService extends VpnService {
     private final AtomicBoolean healthQueryScheduled = new AtomicBoolean();
     /** Monotonic bounded evidence revision for explicit QUERY requests. */
     private final AtomicLong healthQueryRevision = new AtomicLong();
+    /** Reject delayed START/STOP intents before they can mutate lifecycle state. */
+    private final RuntimeControlOrdering controlOrdering = new RuntimeControlOrdering();
 
     private volatile boolean stopRequested;
     private volatile boolean foregroundStarted;
@@ -80,7 +82,6 @@ public final class RuntimeService extends VpnService {
     private volatile boolean durableProjectionRequiresAudit;
     /** Set when that audit found ambiguity or unverifiable ownership. */
     private volatile boolean durableRecoveryBlocked;
-    private volatile long latestStartRequestMillis;
     private volatile int latestStartId;
     private volatile long monitoredPid = -1L;
     private RuntimeSnapshot snapshot;
@@ -135,6 +136,16 @@ public final class RuntimeService extends VpnService {
 
         long requestTimeMillis = intent == null ? 0L
                 : intent.getLongExtra(RuntimeControlProtocol.EXTRA_REQUEST_TIME_MILLIS, 0L);
+        if (ACTION_START.equals(action) || ACTION_STOP.equals(action)) {
+            RuntimeControlOrdering.Decision ordering = controlOrdering.observe(
+                    requestTimeMillis, startId);
+            if (ordering == RuntimeControlOrdering.Decision.STALE) {
+                appendLog("ignored stale " + action + " request=" + requestTimeMillis
+                        + " latest=" + controlOrdering.latestRequestTimeMillis()
+                        + " latestStartId=" + controlOrdering.latestRequestStartId());
+                return START_NOT_STICKY;
+            }
+        }
         RuntimeProfile requested = null;
         if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_PROFILE)) {
             try {
@@ -148,9 +159,6 @@ public final class RuntimeService extends VpnService {
         }
 
         if (ACTION_START.equals(action)) {
-            if (requestTimeMillis > latestStartRequestMillis) {
-                latestStartRequestMillis = requestTimeMillis;
-            }
             // A user retry is an explicit new lifecycle transaction. Clear a
             // stale active error synchronously so queued health polls cannot
             // make a still-pending retry look permanently failed. The
@@ -170,11 +178,6 @@ public final class RuntimeService extends VpnService {
         }
 
         if (ACTION_STOP.equals(action)) {
-            if (requestTimeMillis > 0L && latestStartRequestMillis > requestTimeMillis) {
-                appendLog("ignored stale stop request=" + requestTimeMillis
-                        + " latestStart=" + latestStartRequestMillis);
-                return START_NOT_STICKY;
-            }
             stopRequested = true;
             enqueueLifecycle(this::stopRuntime);
             return START_NOT_STICKY;

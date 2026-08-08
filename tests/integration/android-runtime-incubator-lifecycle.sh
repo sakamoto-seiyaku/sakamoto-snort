@@ -41,23 +41,181 @@ fi
 adb_cmd() { "$adb" -s "$target_serial" "$@"; }
 
 "$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
+apk_sha256="$(sha256sum "$apk" | awk '{print $1}')"
+runtime_sha256="$(rtk unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
+  | sha256sum | awk '{print $1}')"
+[[ "$apk_sha256" =~ ^[0-9a-fA-F]{64}$ && "$runtime_sha256" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || { echo "unable to bind APK/runtime SHA-256 evidence" >&2; exit 1; }
 adb_cmd install -r "$apk" >/dev/null
-# The harness owns this debug package's data and starts from a clean durable
-# projection; all crash/recreation/replacement assertions happen within this
-# invocation. Clearing here also removes residue from an interrupted run.
-adb_cmd shell pm clear "$package" >/dev/null
-# pm clear invokes the old isolated service's asynchronous onDestroy. Drain
-# that callback before the second clear so it cannot recreate profile residue.
-adb_cmd shell am force-stop "$package"
-for _ in $(seq 1 20); do
-  stale_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' \
-    | tr -d '\r' | awk -v app="$package" '$2 == app || $2 == app ":runtime"')"
-  [[ -z "$stale_processes" ]] && break
-  sleep 1
+app_uid="$(adb_cmd shell run-as "$package" id -u | tr -d '\r\n')"
+[[ "$app_uid" =~ ^[0-9]+$ ]] || { echo "unable to resolve app UID" >&2; exit 1; }
+
+evidence_file="${ANDROID_RUNTIME_EVIDENCE_FILE:-/tmp/sakamoto-67-android-runtime-${target_serial}.log}"
+app_head_commit="$(git -C "$repo_root" rev-parse HEAD)"
+{
+  echo "serial=$target_serial"
+  echo "package=$package"
+  echo "apk=$apk"
+  echo "apkSha256=$apk_sha256"
+  echo "runtimeSha256=$runtime_sha256"
+  echo "appHeadCommit=$app_head_commit"
+  echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} >"$evidence_file"
+rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties \
+  >"$evidence_file.provenance"
+{
+  echo "provenance=$evidence_file.provenance"
+  echo "validity=raw device lifecycle evidence; see per-step state/process files"
+  echo "residue_checks=verified VPP owners, profile trees, sockets, shm, and final process list"
+} >>"$evidence_file"
+
+verified_owner_snapshot() {
+  local remote_script
+  remote_script="$(cat <<EOF
+app_data=/data/user/0/$package
+expected_app_uid=$app_uid
+expected_hash=$runtime_sha256
+ps -A -o PID,UID,args | while read -r pid ps_uid args; do
+  case "\$args" in *libvpp_runtime.so*) ;; *) continue ;; esac
+  [ -d "/proc/\$pid" ] || continue
+  proc_uid=\$(awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || continue
+  [ "\$proc_uid" = "0" ] || [ "\$proc_uid" = "\$expected_app_uid" ] || continue
+  exe=\$(readlink "/proc/\$pid/exe" 2>/dev/null) || continue
+  [ "\$(basename "\$exe")" = "libvpp_runtime.so" ] || continue
+  hash=\$(sha256sum "/proc/\$pid/exe" 2>/dev/null | awk '{print \$1}') || continue
+  [ "\$hash" = "\$expected_hash" ] || continue
+  for profile in root vpn; do
+    profile_uid="\$expected_app_uid"
+    [ "\$profile" = root ] && profile_uid=0
+    profile_dir="\$app_data/files/profiles/\$profile/vpp"
+    runtime_dir="\$profile_dir/runtime"
+    startup="\$profile_dir/startup.conf"
+    token_file="\$runtime_dir/owner.token"
+    [ -f "\$startup" ] && [ -f "\$token_file" ] || continue
+    [ "\$proc_uid" = "\$profile_uid" ] || continue
+    grep -Fq "runtime-dir \$runtime_dir" "\$startup" 2>/dev/null || continue
+    grep -Fq "cli-listen \$runtime_dir/cli.sock" "\$startup" 2>/dev/null || continue
+    grep -Fq "socket-name \$runtime_dir/api.sock" "\$startup" 2>/dev/null || continue
+    grep -Fq "socket-name \$runtime_dir/statseg.sock" "\$startup" 2>/dev/null || continue
+    token=\$(tr -d '[:space:]' <"\$token_file" 2>/dev/null) || continue
+    echo "\$token" | grep -Eq '^[0-9A-Fa-f-]{36}$' || continue
+    case "\$args" in *"\$startup"*) ;; *) continue ;; esac
+    env=\$(runcon u:r:ksu:s0 sh -c "tr '\\0' '\\n' </proc/\$pid/environ 2>/dev/null" 2>/dev/null) || continue
+    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_OWNER_TOKEN=\$token" || continue
+    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_RUNTIME_DIR=\$runtime_dir" || continue
+    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_RUNTIME_PROFILE=\$profile" || continue
+    printf '%s\\t%s\\t%s\\t%s\\n' "\$profile" "\$pid" "\$proc_uid" "\$exe"
+  done
 done
-[[ -z "$stale_processes" ]] \
-  || { echo "BLOCKED: package processes did not drain after clear" >&2; exit 77; }
+EOF
+  )"
+  adb_cmd shell su 0 sh -c "$remote_script" | tr -d '\r' | awk 'NF'
+}
+
+all_vpp_process_snapshot() {
+  adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>/dev/null \
+    | tr -d '\r' | awk '$2 == "libvpp_runtime.so"'
+}
+
+cleanup_verified_vpp_owners() {
+  local phase="${1:-cleanup}"
+  local owners pid profile owner_uid exe verified_after
+  owners="$(verified_owner_snapshot || true)"
+  printf 'phase=%s\n%s\n' "$phase" "$owners" >>"$evidence_file.owners" 2>/dev/null || true
+  while IFS=$'\t' read -r profile pid owner_uid exe; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    adb_cmd shell su 0 sh -c "kill -TERM $pid" >/dev/null 2>&1 || true
+  done <<<"$owners"
+  for _ in $(seq 1 15); do
+    verified_after="$(verified_owner_snapshot || true)"
+    [[ -z "$verified_after" ]] && break
+    sleep 1
+  done
+  verified_after="$(verified_owner_snapshot || true)"
+  while IFS=$'\t' read -r profile pid owner_uid exe; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    # Re-read strong identity immediately before KILL. A reused PID or an
+    # unreadable owner is never targeted by this cleanup helper.
+    if awk -F '\t' -v p="$profile" -v id="$pid" \
+        '$1 == p && $2 == id {found=1} END {exit found ? 0 : 1}' <<<"$verified_after"; then
+      adb_cmd shell su 0 sh -c "kill -KILL $pid" >/dev/null 2>&1 || true
+    fi
+  done <<<"$verified_after"
+  for _ in $(seq 1 15); do
+    [[ -z "$(verified_owner_snapshot || true)" ]] && return 0
+    sleep 1
+  done
+  verified_after="$(verified_owner_snapshot || true)"
+  [[ -z "$verified_after" ]] || {
+    echo "verified VPP owner did not stop during $phase; evidence=$evidence_file.owners" >&2
+    return 1
+  }
+  # A remaining packaged VPP with unreadable/ambiguous identity is a block,
+  # not permission to broaden the kill target.
+  if [[ -n "$(all_vpp_process_snapshot || true)" ]]; then
+    echo "unverified packaged VPP owner remains during $phase; refusing to kill" >&2
+    return 1
+  fi
+}
+
+assert_no_runtime_residue() {
+  local residue
+  residue="$(adb_cmd shell su 0 sh -c "
+    app_data=/data/user/0/$package
+    for p in root vpn; do
+      test ! -e \"\$app_data/files/profiles/\$p/vpp\" || exit 1
+      test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/cli.sock\" || exit 1
+      test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/api.sock\" || exit 1
+      test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/statseg.sock\" || exit 1
+      test ! -e \"\$app_data/files/profiles/\$p/vpp/shm\" || exit 1
+    done
+  " 2>&1 | tr -d '\r' || true)"
+  [[ -z "$residue" ]] || {
+    echo "VPP/profile/socket/shm residue remains: $residue" >&2
+    return 1
+  }
+  [[ -z "$(all_vpp_process_snapshot || true)" ]] || {
+    echo "packaged VPP process residue remains" >&2
+    return 1
+  }
+}
+
+wait_package_drained() {
+  local stale_processes=""
+  for _ in $(seq 1 20); do
+    stale_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' \
+      | tr -d '\r' | awk -v app="$package" '$2 == app || $2 == app ":runtime"')"
+    [[ -z "$stale_processes" ]] && return 0
+    sleep 1
+  done
+  [[ -z "$stale_processes" ]]
+}
+
+assert_exactly_one_owner() {
+  local expected_profile="$1" expected_pid="$2" owners all_vpp count
+  owners="$(verified_owner_snapshot || true)"
+  printf 'expectedProfile=%s\nexpectedPid=%s\n%s\n' \
+    "$expected_profile" "$expected_pid" "$owners" >>"$evidence_file.exact-one"
+  count="$(awk 'NF {n++} END {print n+0}' <<<"$owners")"
+  [[ "$count" == 1 ]] || { echo "expected exactly one verified owner, got $count" >&2; return 1; }
+  awk -F '\t' -v profile="$expected_profile" -v pid="$expected_pid" \
+    'NF && $1 == profile && $2 == pid {found=1} END {exit found ? 0 : 1}' <<<"$owners" \
+    || { echo "verified owner does not match $expected_profile/$expected_pid" >&2; return 1; }
+  all_vpp="$(all_vpp_process_snapshot || true)"
+  [[ "$(awk 'NF {n++} END {print n+0}' <<<"$all_vpp")" == 1 ]] \
+    || { echo "global packaged VPP count is not exactly one" >&2; return 1; }
+}
+
+# Initial interrupted-run recovery: only strongly verified packaged owners
+# may be signalled. Any ambiguous/unverified process blocks the gate.
+cleanup_verified_vpp_owners initial-preclear
 adb_cmd shell pm clear "$package" >/dev/null
+adb_cmd shell am force-stop "$package"
+wait_package_drained || { echo "BLOCKED: package processes did not drain after clear" >&2; exit 77; }
+cleanup_verified_vpp_owners initial-postclear
+assert_no_runtime_residue
+adb_cmd shell pm clear "$package" >/dev/null
+
 notification_granted=0
 for _ in $(seq 1 20); do
   adb_cmd shell pm grant "$package" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
@@ -76,42 +234,26 @@ adb_cmd shell am force-stop "$package"
 # asynchronous onDestroy while the new Activity is already launching. Wait
 # for both package processes to leave before issuing the first start request,
 # otherwise the old cleanup callback can overwrite the new durable snapshot.
-for _ in $(seq 1 20); do
-  stale_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' \
-    | tr -d '\r' | awk -v app="$package" '$2 == app || $2 == app ":runtime"')"
-  [[ -z "$stale_processes" ]] && break
-  sleep 1
-done
-if [[ -n "$stale_processes" ]]; then
+if ! wait_package_drained; then
   echo "BLOCKED: package processes did not drain after force-stop" >&2
   exit 77
 fi
-app_uid="$(adb_cmd shell run-as "$package" id -u | tr -d '\r\n')"
-[[ "$app_uid" =~ ^[0-9]+$ ]] || { echo "unable to resolve app UID" >&2; exit 1; }
-
-evidence_file="${ANDROID_RUNTIME_EVIDENCE_FILE:-/tmp/sakamoto-67-android-runtime-${target_serial}.log}"
-{
-  echo "serial=$target_serial"
-  echo "package=$package"
-  echo "apk=$apk"
-  echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-} >"$evidence_file"
-rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties \
-  >"$evidence_file.provenance"
-{
-  echo "provenance=$evidence_file.provenance"
-  echo "validity=raw device lifecycle evidence; see per-step state/process files"
-  echo "residue_checks=profile trees and final process list"
-} >>"$evidence_file"
+cleanup_verified_vpp_owners initial-final
+assert_no_runtime_residue
 
 cleanup() {
+  local exit_code=$?
+  set +e
   adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null 2>&1 || true
-  for _ in $(seq 1 20); do
-    remaining="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>/dev/null \
-      | tr -d '\r' | awk -v app="$package" '$2 == app || $2 == app ":runtime"')"
-    [[ -z "$remaining" ]] && break
-    sleep 1
-  done
+  cleanup_verified_vpp_owners exit || true
+  adb_cmd shell am force-stop "$package" >/dev/null 2>&1 || true
+  wait_package_drained || true
+  cleanup_verified_vpp_owners exit-post-force-stop || true
+  if ! assert_no_runtime_residue; then
+    echo "EXIT cleanup residue verification failed; evidence=$evidence_file" >&2
+    [[ "$exit_code" == 0 ]] && exit_code=1
+  fi
+  exit "$exit_code"
 }
 trap cleanup EXIT
 
@@ -170,6 +312,8 @@ generation="$(awk -F= '$1 == "generation" {print $2}' <<<"$state")"
 root_uid="$(adb_cmd shell "su 0 sh -c 'grep ^Uid: /proc/$pid/status'" \
   | tr -d '\r' | awk '{print $2}')"
 [[ "$root_uid" == 0 ]] || { echo "root profile VPP UID was $root_uid" >&2; exit 1; }
+root_round_pid="$pid"
+assert_exactly_one_owner root "$root_round_pid"
 
 # Capture the generated-VAPI query baseline before Activity recreation. A
 # startup `core_control` line is not evidence that the later ACTION_QUERY ran.
@@ -211,6 +355,7 @@ recreated_pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
 recreated_generation="$(awk -F= '$1 == "generation" {print $2}' <<<"$state")"
 [[ "$recreated_pid" == "$pid" && "$recreated_generation" == "$generation" ]] \
   || { echo "Activity recreation changed runtime PID/generation" >&2; exit 1; }
+assert_exactly_one_owner root "$recreated_pid"
 adb_cmd shell run-as "$package" cat files/logs/runtime-service.log \
   | tr -d '\r' >"$evidence_file.query.log"
 query_after_count="$(grep -c 'health_query=vapi_result .*generated_vapi=true' \
@@ -298,6 +443,7 @@ done
 [[ "$orphan_running" == 1 ]] \
   || { echo "orphan setup did not reach running; evidence=$evidence_file.orphan-running.state" >&2; exit 1; }
 orphan_vpp_pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
+assert_exactly_one_owner root "$orphan_vpp_pid"
 orphan_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r')"
 orphan_service_pid="$(awk -v expected="$package:runtime" '$2 == expected {print $1; exit}' <<<"$orphan_processes")"
 orphan_activity_pid="$(awk -v expected="$package" '$2 == expected {print $1; exit}' <<<"$orphan_processes")"
@@ -358,6 +504,7 @@ for _ in $(seq 1 30); do
 done
 [[ "$orphan_adopted" == 1 ]] \
   || { echo "live orphan was not adopted with the same PID; evidence=$evidence_file.orphan-recovery.state" >&2; exit 1; }
+assert_exactly_one_owner root "$orphan_vpp_pid"
 printf 'adoptedPid=%s\n' "$orphan_vpp_pid" >>"$evidence_file.orphan-recovery.state"
 
 # Once adoption is proven, a normal stop must clean the adopted owner and all
@@ -378,11 +525,11 @@ done
   || { echo "adopted orphan did not stop cleanly; evidence=$evidence_file.orphan-stop.state" >&2; exit 1; }
 adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp'" >/dev/null
 adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' >"$evidence_file.orphan-final.ps"
-if awk '$2 == "libvpp_runtime.so" {found=1} END {exit found ? 0 : 1}' \
-    "$evidence_file.orphan-final.ps"; then
+if [[ -n "$(all_vpp_process_snapshot || true)" ]]; then
   echo "VPP process appeared during orphan recovery; evidence=$evidence_file.orphan-final.ps" >&2
   exit 1
 fi
+assert_no_runtime_residue
 
 # A recovered service must be able to start the same profile again before the
 # final clean stop. This catches a one-shot cleanup pass that only reports an
@@ -409,6 +556,8 @@ for _ in $(seq 1 30); do
 done
 [[ "$restart_running" == 1 ]] \
   || { echo "runtime did not recover after crash; evidence=$evidence_file.restart.state" >&2; exit 1; }
+restart_pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
+assert_exactly_one_owner root "$restart_pid"
 
 # A controlled debug seam must make cleanup fail closed: replacement is not
 # launched, and the old root PID/UID remains the sole owner until the seam is
@@ -442,6 +591,7 @@ fi
 root_fault_uid="$(adb_cmd shell "su 0 sh -c 'grep ^Uid: /proc/$root_fault_pid/status'" \
   | tr -d '\r' | awk '{print $2}')"
 [[ "$root_fault_uid" == 0 ]] || { echo "cleanup-fault root owner UID changed" >&2; exit 1; }
+assert_exactly_one_owner root "$root_fault_pid"
 if adb_cmd shell "run-as $package sh -c 'test -e files/profiles/vpn/vpp'" >/dev/null 2>&1; then
   echo "VPN profile residue was created during blocked replacement" >&2
   exit 1
@@ -483,6 +633,13 @@ vpn_uid="$(adb_cmd shell "su 0 sh -c 'grep ^Uid: /proc/$vpn_pid/status'" \
   | tr -d '\r' | awk '{print $2}')"
 [[ "$vpn_uid" == "$app_uid" ]] \
   || { echo "VPN profile VPP UID was $vpn_uid, expected app UID $app_uid" >&2; exit 1; }
+if adb_cmd shell "su 0 sh -c 'kill -0 $root_round_pid'" >/dev/null 2>&1; then
+  echo "old Root VPP owner remained alive after Root -> VPN switch" >&2
+  exit 1
+fi
+adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp'" >/dev/null \
+  || { echo "old Root profile residue remained after Root -> VPN switch" >&2; exit 1; }
+assert_exactly_one_owner vpn "$vpn_pid"
 adb_cmd shell input keyevent KEYCODE_HOME
 adb_cmd shell am start -n "$activity" >/dev/null
 sleep 1
@@ -490,8 +647,41 @@ state="$(adb_cmd shell run-as "$package" cat "$state_path" | tr -d '\r')"
 grep -q '^state=running$' <<<"$state"
 grep -q '^profile=vpn$' <<<"$state"
 
-# First stop the healthy VPN instance, then leave only app-owned profile files
-# with no PID/handle. A fresh VPN start must audit the app-UID candidate set,
+# Complete the required Root -> VPN -> Root switch. The old VPN PID and its
+# entire profile tree must be gone before the new Root owner is accepted.
+adb_cmd shell am start -n "$activity" --ez runtimeStart true --es runtimeProfile root >/dev/null
+root_return_running=0
+for _ in $(seq 1 30); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "$state" >"$evidence_file.root-return.state"
+  if grep -q '^state=running$' <<<"$state" \
+      && grep -q '^profile=root$' <<<"$state" \
+      && grep -q '^health=ok$' <<<"$state"; then
+    root_return_running=1
+    break
+  fi
+  if grep -q '^state=error$' <<<"$state"; then
+    echo "Root return failed; evidence=$evidence_file.root-return.state" >&2
+    exit 1
+  fi
+  sleep 1
+done
+[[ "$root_return_running" == 1 ]] \
+  || { echo "Root return did not reach running; evidence=$evidence_file.root-return.state" >&2; exit 1; }
+root_return_pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
+[[ "$root_return_pid" =~ ^[0-9]+$ && "$root_return_pid" != "$vpn_pid" ]] \
+  || { echo "Root return did not publish a new PID" >&2; exit 1; }
+if adb_cmd shell "su 0 sh -c 'kill -0 $vpn_pid'" >/dev/null 2>&1; then
+  echo "old VPN VPP owner remained alive after VPN -> Root switch" >&2
+  exit 1
+fi
+adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/vpn/vpp'" >/dev/null \
+  || { echo "old VPN profile residue remained after VPN -> Root switch" >&2; exit 1; }
+assert_exactly_one_owner root "$root_return_pid"
+
+# First stop the returned healthy Root instance, then leave only app-owned
+# VPN profile files with no PID/handle. A fresh VPN start must audit the
+# app-UID candidate set,
 # delete the safe residue, and recover instead of leaving cleanup_failed.
 adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null
 for _ in $(seq 1 20); do
@@ -528,6 +718,8 @@ for _ in $(seq 1 30); do
 done
 [[ "$vpn_prepid_recovered" == 1 ]] \
   || { echo "VPN pre-PID residue did not recover; evidence=$evidence_file.vpn-prepid.state" >&2; exit 1; }
+vpn_prepid_pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
+assert_exactly_one_owner vpn "$vpn_prepid_pid"
 
 # Final stop and residue/process proof.
 adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null
@@ -541,15 +733,10 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 grep -q '^state=stopped$' <<<"$state"
-adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
-  && test ! -e files/profiles/vpn/vpp \
-  && test ! -e files/profiles/root/vpp/runtime/cli.sock \
-  && test ! -e files/profiles/root/vpp/runtime/statseg.sock \
-  && test ! -e files/profiles/root/vpp/shm'"
+assert_no_runtime_residue
 final_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' || true)"
 printf '%s\n' "$final_processes" >"$evidence_file.final.ps"
-if awk '$2 == "libvpp_runtime.so" {found=1} END {exit found ? 0 : 1}' \
-    <<<"$final_processes"; then
+if [[ -n "$(all_vpp_process_snapshot || true)" ]]; then
   echo "VPP process residue remains after stop" >&2
   exit 1
 fi

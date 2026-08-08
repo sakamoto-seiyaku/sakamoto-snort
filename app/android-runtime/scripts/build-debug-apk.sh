@@ -99,6 +99,55 @@ if [[ -z "$vpp_source" && -f "$provenance_file" ]]; then
     "$provenance_file")"
 fi
 vpp_source="${vpp_source:-$repo_root/experiments/vpp-nfq-poc/work/vpp}"
+
+source_tree_sha256() {
+  local tree="$1"
+  (
+    cd -- "$tree"
+    find . -type f -print0 | sort -z \
+      | while IFS= read -r -d '' file; do
+          printf '%s  %s\n' "$(sha256sum "$file" | awk '{print $1}')" "${file#./}"
+        done
+  ) | sha256sum | awk '{print $1}'
+}
+
+# A pinned revision marker is not sufficient provenance: an extracted source
+# archive can be edited while retaining that marker.  Require the source
+# origin to contain the pinned commit, verify the marker, and compare the
+# complete post-overlay tree digest recorded by the staging boundary.
+expected_source_revision="${VPP_RUNTIME_SOURCE_REVISION:-9258530f3804a152578ce11cc7c8a1e9eab88ed0}"
+provenance_value() {
+  local key="$1"
+  awk -F= -v wanted="$key" '$1 == wanted {print substr($0, index($0, "=") + 1); exit}' \
+    "$provenance_file"
+}
+source_revision="$(provenance_value sourceRevision)"
+source_status="$(provenance_value sourceStatus)"
+source_tree="$(provenance_value sourceTree)"
+source_origin="$(provenance_value sourceOrigin)"
+recorded_source_tree_digest="$(provenance_value sourceTreeSha256)"
+[[ "$source_revision" == "$expected_source_revision" ]] \
+  || die "runtime stage source revision is not the pinned product revision: $source_revision"
+[[ "$source_status" == "committed-snapshot" ]] \
+  || die "runtime stage source provenance is not a committed snapshot: $source_status"
+[[ -d "$source_tree" ]] || die "runtime stage source snapshot is missing: $source_tree"
+marker="$source_tree/.sakamoto-source-revision"
+[[ -f "$marker" ]] && [[ "$(tr -d '[:space:]' <"$marker")" == "$source_revision" ]] \
+  || die "runtime stage source snapshot marker does not match pinned revision"
+[[ "$source_origin" == git:*@"$source_revision" ]] \
+  || die "runtime stage source origin is not bound to the pinned revision"
+source_origin_repo="${source_origin#git:}"
+source_origin_repo="${source_origin_repo%@${source_revision}}"
+[[ -d "$source_origin_repo" ]] \
+  || die "runtime stage source origin repository is missing: $source_origin_repo"
+git -C "$source_origin_repo" cat-file -e "$source_revision^{commit}" 2>/dev/null \
+  || die "runtime stage source origin cannot prove pinned commit: $source_revision"
+[[ "$recorded_source_tree_digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || die "runtime stage source tree digest is missing from provenance"
+actual_source_tree_digest="$(source_tree_sha256 "$source_tree")"
+[[ "$actual_source_tree_digest" == "$recorded_source_tree_digest" ]] \
+  || die "runtime stage source tree changed after provenance was recorded"
+
 vapi_build_dir="${VPP_RUNTIME_VAPI_BUILD_DIR:-}"
 if [[ -z "$vapi_build_dir" && -f "$stage_dir/runtime/vapi-build-dir" ]]; then
   vapi_build_dir="$(tr -d '[:space:]' <"$stage_dir/runtime/vapi-build-dir")"

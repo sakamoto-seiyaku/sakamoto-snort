@@ -29,6 +29,8 @@ public class DebugControlActivity extends Activity {
     private TextView statusView;
     private TextView actionView;
     private boolean pendingStart;
+    /** Keeps an explicit user selection visible until the service publishes it. */
+    private RuntimeProfile requestedProfile;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,8 +60,10 @@ public class DebugControlActivity extends Activity {
         } else if (intent.getBooleanExtra(EXTRA_RUNTIME_START, false)) {
             String profile = intent.getStringExtra(EXTRA_RUNTIME_PROFILE);
             if (profileSpinner != null && profile != null) {
-                profileSpinner.setSelection(RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
-                        ? 1 : 0);
+                RuntimeProfile selected = RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
+                        ? RuntimeProfile.VPN : RuntimeProfile.ROOT;
+                requestedProfile = selected;
+                profileSpinner.setSelection(selected == RuntimeProfile.VPN ? 1 : 0);
             }
             main.post(this::startSelected);
         }
@@ -112,6 +116,7 @@ public class DebugControlActivity extends Activity {
     private void startSelected() {
         RuntimeProfile profile = profileSpinner.getSelectedItemPosition() == 1
                 ? RuntimeProfile.VPN : RuntimeProfile.ROOT;
+        requestedProfile = profile;
         RuntimeControlBackend.StartResult result = backend.start(this, profile);
         if (result == RuntimeControlBackend.StartResult.NOTIFICATION_REQUIRED) {
             pendingStart = true;
@@ -182,7 +187,22 @@ public class DebugControlActivity extends Activity {
 
     private void refreshStatus() {
         if (statusView != null) {
-            statusView.setText(backend.query(this).displayText());
+            RuntimeSnapshot current = backend.query(this);
+            if (requestedProfile != null
+                    && current.profile == requestedProfile && current.isActive()) {
+                requestedProfile = null;
+            } else if (requestedProfile != null
+                    && RuntimeSnapshot.STATE_ERROR.equals(current.state)
+                    && !current.isActive()) {
+                requestedProfile = null;
+            }
+            // Activity recreation must reflect the durable service projection,
+            // including an active VPN profile. Selection is presentation-only;
+            // changing it never sends a START request.
+            if (requestedProfile == null && profileSpinner != null) {
+                profileSpinner.setSelection(current.profile == RuntimeProfile.VPN ? 1 : 0);
+            }
+            statusView.setText(current.displayText());
         }
     }
 

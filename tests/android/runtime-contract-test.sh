@@ -22,6 +22,8 @@ production_service_source="$repo_root/app/android-runtime/src/main/java/com/saka
 production_ownership_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
 grep -q 'ACTION_START' "$production_service_source"
+grep -q 'RuntimeControlOrdering' "$production_service_source"
+grep -q 'ignored stale ' "$production_service_source"
 grep -q 'RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION' "$production_service_source"
 grep -q 'RuntimeControlNative' "$production_service_source"
 grep -q 'apiIdentity' "$production_service_source"
@@ -42,6 +44,9 @@ grep -q 'VPP_OWNER_PID=' "$production_ownership_source"
 grep -q 'sha256sum' "$production_ownership_source"
 grep -q 'onDestroy' "$production_activity_source"
 grep -q 'RuntimeControlBackend' "$production_activity_source"
+grep -q 'backend.query' "$production_activity_source"
+grep -q 'current.profile == RuntimeProfile.VPN' "$production_activity_source"
+grep -q 'requestedProfile' "$production_activity_source"
 if grep -q 'LocalProductBackend' "$production_activity_source"; then
   echo "Activity control adapter retained the misleading LocalProductBackend name" >&2
   exit 1

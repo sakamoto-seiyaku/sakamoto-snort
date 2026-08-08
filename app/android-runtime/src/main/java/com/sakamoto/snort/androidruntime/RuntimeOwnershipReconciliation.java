@@ -569,6 +569,8 @@ public final class RuntimeOwnershipReconciliation {
         // the caller is UID 0; runcon restores the privileged reader context
         // for each bounded probe while keeping the scan itself shell-owned.
         String procReader = "0".equals(spec.expectedUid) ? "runcon u:r:ksu:s0 " : "";
+        String procTest = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 test " : "test ";
         String cmdlineReader = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null\""
                 : "tr '\\0' ' ' </proc/$pid/cmdline 2>/dev/null";
@@ -579,7 +581,8 @@ public final class RuntimeOwnershipReconciliation {
                 + "is_audit_lineage() { lineage_pid=\"$1\"; lineage_depth=0; "
                 + "while test \"$lineage_depth\" -lt 8 && test -n \"$lineage_pid\"; do "
                 + "[ \"$lineage_pid\" = \"$audit_pid\" ] && return 0; "
-                + "lineage_parent=$(awk '{print $4}' \"/proc/$lineage_pid/stat\" 2>/dev/null) "
+                + "lineage_parent=$(" + procReader
+                + "awk '{print $4}' \"/proc/$lineage_pid/stat\" 2>/dev/null) "
                 + "|| return 1; "
                 + "case \"$lineage_parent\" in ''|*[!0-9]*) return 1 ;; esac; "
                 + "[ \"$lineage_parent\" = \"$lineage_pid\" ] && return 1; "
@@ -610,13 +613,14 @@ public final class RuntimeOwnershipReconciliation {
                 // its bounded /proc reads.  Its disappearance is not an
                 // unreadable live owner; ignore that stale candidate and
                 // decide from the remaining stable snapshot.
-                + "if ! test -d \"$proc\"; then continue; fi; "
-                + "if ! test -r \"$proc/status\"; then uncertain=1; continue; fi; "
+                + "if ! " + procTest + "-d \"$proc\"; then continue; fi; "
+                + "if ! " + procTest + "-r \"$proc/status\"; then uncertain=1; continue; fi; "
                 + "uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
                 + "|| { uncertain=1; continue; }; "
                 + "if test -z \"$uid\"; then uncertain=1; continue; fi; "
                 + "[ \"$uid\" = " + expectedUid + " ] || continue; "
-                + "if ! test -r \"$proc/exe\" || ! test -r \"$proc/cmdline\"; then "
+                + "if ! " + procTest + "-r \"$proc/exe\" || ! " + procTest
+                + "-r \"$proc/cmdline\"; then "
                 + "uncertain=1; continue; fi; "
                 + "exe=$(" + procReader + "readlink \"$proc/exe\" 2>/dev/null) "
                 + "|| { uncertain=1; continue; }; "
@@ -630,7 +634,7 @@ public final class RuntimeOwnershipReconciliation {
                 + "if [ \"$profile_config_unverified\" -ne 0 ]; then "
                 + "uncertain=1; continue; fi; "
                 + "env_status=0; env=; "
-                + "if test -r \"$proc/environ\"; then "
+                + "if " + procTest + "-r \"$proc/environ\"; then "
                 + "env=$(" + environReader + "); env_status=$?; "
                 + "else env_status=125; fi; "
                 + "if [ \"$env_status\" -eq 0 ]; then "
@@ -706,8 +710,11 @@ public final class RuntimeOwnershipReconciliation {
         String environReader = "0".equals(spec.expectedUid)
                 ? "runcon u:r:ksu:s0 sh -c \"tr '\\0' '\\n' </proc/" + pid + "/environ 2>/dev/null\""
                 : "tr '\\0' '\\n' </proc/" + pid + "/environ 2>/dev/null";
-        return "if ! test -r " + status + " || ! test -r " + cmdline
-                + " || ! test -r " + environ + " || ! test -r " + exe + "; then exit 125; fi"
+        String procTest = "0".equals(spec.expectedUid)
+                ? "runcon u:r:ksu:s0 test " : "test ";
+        return "if ! " + procTest + "-r " + status + " || ! " + procTest + "-r " + cmdline
+                + " || ! " + procTest + "-r " + environ + " || ! " + procTest + "-r " + exe
+                + "; then exit 125; fi"
                 + " && uid=$(" + procReader + "awk '$1 == \"Uid:\" {print $2; exit}' " + status + ")"
                 + " && test \"$uid\" = " + expectedUid
                 + " && exe=$(" + procReader + "readlink " + exe + ")"
