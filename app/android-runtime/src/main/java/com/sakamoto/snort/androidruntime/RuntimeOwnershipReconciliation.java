@@ -477,6 +477,38 @@ public final class RuntimeOwnershipReconciliation {
     }
 
     /**
+     * Decide whether a transient post-stop ownership scan failure may be
+     * finalized as a clean terminal stop. The strong PID witness must already
+     * be MISSING, the in-process handle must be gone, and a fresh global audit
+     * must prove both profiles are NONE with no residue. Ordinary cleanup
+     * failures, live owners, and unreadable identities remain fail-closed.
+     */
+    public static boolean canFinalizeCleanStop(
+            PidIdentity identity, boolean processHandleAlive,
+            GlobalDecision globalOwnership, boolean profileResiduePresent,
+            String errorCode, String detail) {
+        if (!isTransientOwnershipAuditFailure(errorCode, detail)
+                || identity != PidIdentity.MISSING || processHandleAlive
+                || profileResiduePresent || globalOwnership == null
+                || globalOwnership.action != Action.CLEAN
+                || globalOwnership.cleanupProfile != null
+                || globalOwnership.root.evidence != Evidence.NONE
+                || globalOwnership.vpn.evidence != Evidence.NONE) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isTransientOwnershipAuditFailure(String errorCode, String detail) {
+        if (!"cleanup_failed".equals(value(errorCode))) {
+            return false;
+        }
+        String safeDetail = value(detail);
+        return safeDetail.contains("ownership scan returned status 120")
+                || safeDetail.contains("ownership scan returned status 124");
+    }
+
+    /**
      * Run the complete token/profile/executable/hash ownership inspection.
      * The shell seam reports LIVE only for exactly one verified process;
      * duplicate matches and candidate identity races remain UNKNOWN.

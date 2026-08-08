@@ -1027,6 +1027,10 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 grep -q '^state=stopped$' <<<"$state"
+grep -Fxq 'errorCode=' <<<"$state" \
+  || { echo "nominal final stop retained an error code; evidence=$evidence_file.final.state" >&2; exit 1; }
+grep -Fxq 'errorMessage=' <<<"$state" \
+  || { echo "nominal final stop retained an error message; evidence=$evidence_file.final.state" >&2; exit 1; }
 assert_no_runtime_residue
 final_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' || true)"
 printf '%s\n' "$final_processes" >"$evidence_file.final.ps"

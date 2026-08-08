@@ -944,14 +944,25 @@ public final class RuntimeService extends VpnService {
                 : snapshot;
         boolean stoppingPublished = publish(RuntimeSnapshot.stopping(current));
         CleanupResult cleanup = terminateAndClean(profileRoot, pid, vppProcess);
+        boolean cleanStopFinalized = false;
         if (!cleanup.ok) {
-            publishCleanupFailure("", cleanup, true);
-            stopRequested = false;
-            return false;
+            CleanupResult finalized = finalizeTransientStopIfGloballyClean(
+                    cleanup, pid, vppProcess);
+            if (finalized.ok) {
+                cleanup = finalized;
+                cleanStopFinalized = true;
+            } else {
+                publishCleanupFailure("", cleanup, true);
+                stopRequested = false;
+                return false;
+            }
         }
         vppProcess = null;
         clearProfileHandles();
-        boolean stoppedPublished = publish(RuntimeSnapshot.stoppedAfter(current));
+        RuntimeSnapshot stopped = cleanStopFinalized
+                ? RuntimeSnapshot.stopped(current.profile, current.generation)
+                : RuntimeSnapshot.stoppedAfter(current);
+        boolean stoppedPublished = publish(stopped);
         stopRequested = false;
         if (stopService && foregroundStarted && !persistenceGate.isPersistenceUnavailable()) {
             stopForeground(true);
@@ -965,6 +976,34 @@ public final class RuntimeService extends VpnService {
         // latch and run the explicit recovery probe first.
         return stoppingPublished && stoppedPublished
                 && !persistenceGate.isPersistenceUnavailable();
+    }
+
+    /**
+     * A post-stop ownership scan can lose a disappearing profile between the
+     * strong PID probe and its exhaustive scan. Retry only that bounded race;
+     * a fresh global NONE/NONE audit plus absent profile trees is the proof
+     * required to clear the transient error. All other cleanup failures stay
+     * fail-closed.
+     */
+    private CleanupResult finalizeTransientStopIfGloballyClean(
+            CleanupResult cleanup, long pid, Process process) {
+        if (cleanup == null || cleanup.ok) {
+            return cleanup == null ? CleanupResult.failure(pid, "cleanup result is unavailable")
+                    : cleanup;
+        }
+        RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(pid);
+        boolean processHandleAlive = processAlive(process);
+        RuntimeOwnershipReconciliation.GlobalDecision ownership =
+                auditGlobalOwnership(false);
+        boolean profileResiduePresent = profileDirectory(RuntimeProfile.ROOT).exists()
+                || profileDirectory(RuntimeProfile.VPN).exists();
+        if (!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                identity, processHandleAlive, ownership, profileResiduePresent,
+                cleanup.errorCode, cleanup.detail)) {
+            return cleanup;
+        }
+        appendLog("cleanup_audit_race=finalized_clean_stop");
+        return CleanupResult.success();
     }
 
     private CleanupResult terminateAndClean(File profile, long pid, Process process) {

@@ -27,6 +27,7 @@ public final class AndroidRuntimeContractTest {
         globalOwnershipDecisionRequiresOneProjectionConsistentOwner();
         pidlessLiveOwnerIsAdoptable();
         ownershipCleanupDecisionFailsClosed();
+        cleanStopDecisionRequiresGlobalProof();
         ownershipInspectionKeepsIdentityInThePublicSeam();
         pidIdentityUsesPrivilegedProcContext();
         rootProbeUsesPrivilegedContextAndFailsClosed();
@@ -402,6 +403,42 @@ public final class AndroidRuntimeContractTest {
         check(!unknown.canRemove(), "unknown ownership blocks profile cleanup");
     }
 
+    private static void cleanStopDecisionRequiresGlobalProof() {
+        RuntimeOwnershipReconciliation.GlobalDecision clean =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.ROOT),
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        RuntimeOwnershipReconciliation.Projection.unknown());
+        String transientAudit = "profile residue ownership audit failed: "
+                + "root /proc ownership scan returned status 120";
+        check(RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, clean, false, "cleanup_failed", transientAudit),
+                "status-120 audit race is clean only after global no-owner proof");
+        check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
+                        false, clean, false, "cleanup_failed", transientAudit),
+                "unverifiable PID never qualifies for clean stop");
+        check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, clean, true, "cleanup_failed", transientAudit),
+                "residual profile blocks clean stop finalization");
+        check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, clean, false, "cleanup_failed", "socket residue remains"),
+                "ordinary cleanup failures remain fail-closed");
+        RuntimeOwnershipReconciliation.GlobalDecision live =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.live(RuntimeProfile.ROOT, 9L,
+                                "owner"),
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        RuntimeOwnershipReconciliation.Projection.unknown());
+        check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, live, false, "cleanup_failed", transientAudit),
+                "global live ownership blocks clean stop finalization");
+    }
+
     private static void ownershipInspectionKeepsIdentityInThePublicSeam() {
         RuntimeOwnershipReconciliation.ProfileSpec spec =
                 new RuntimeOwnershipReconciliation.ProfileSpec(
@@ -581,7 +618,19 @@ public final class AndroidRuntimeContractTest {
     }
 
     private static void ownershipScanIsValidShell() throws Exception {
-        String command = RuntimeOwnershipReconciliation.buildOwnershipScanCommand(ownershipSpec());
+        assertGeneratedScanSyntax(ownershipSpec(), "root");
+        assertGeneratedScanSyntax(new RuntimeOwnershipReconciliation.ProfileSpec(
+                RuntimeProfile.VPN,
+                "/data/user/0/example/files/profiles/vpn/vpp/startup.conf",
+                "/data/user/0/example/files/profiles/vpn/vpp/runtime",
+                "/data/app/example/lib/arm64/libvpp_runtime.so",
+                "0123456789abcdef", "01234567-0123-0123-0123-0123456789ab",
+                "10123", 125, "cleanup_failed", "runner unavailable"), "app-UID");
+    }
+
+    private static void assertGeneratedScanSyntax(
+            RuntimeOwnershipReconciliation.ProfileSpec spec, String label) throws Exception {
+        String command = RuntimeOwnershipReconciliation.buildOwnershipScanCommand(spec);
         Path script = Files.createTempFile("sakamoto-ownership-scan", ".sh");
         try {
             Files.write(script, command.getBytes(StandardCharsets.UTF_8));
@@ -589,7 +638,7 @@ public final class AndroidRuntimeContractTest {
                     .redirectErrorStream(true)
                     .start();
             int status = syntaxCheck.waitFor();
-            check(status == 0, "generated ownership scan is valid POSIX shell");
+            check(status == 0, "generated " + label + " ownership scan is valid POSIX shell");
         } finally {
             Files.deleteIfExists(script);
         }
