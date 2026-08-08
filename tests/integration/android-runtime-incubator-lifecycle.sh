@@ -309,7 +309,7 @@ if awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <
 fi
 adb_cmd shell su 0 sh -c "rm -f /data/user/0/$package/files/profiles/root/vpp/runtime/vpp.pid" >/dev/null
 adb_cmd shell run-as "$package" sed -i 's/^pid=.*/pid=-1/' "$state_path"
-orphan_after="$(adb_cmd shell su 0 sh -c "find /data/user/0/$package/files/profiles/root/vpp -maxdepth 3 -printf '%u %g %p\\n' 2>/dev/null | sort" | tr -d '\r')"
+orphan_after="$(adb_cmd shell su 0 sh -c "find /data/user/0/$package/files/profiles/root/vpp -maxdepth 3 -print 2>/dev/null | sort" | tr -d '\r')"
 printf 'state_pid=-1\n%s\n' "$orphan_after" >"$evidence_file.orphan-residue"
 grep -q 'owner.token' <<<"$orphan_after"
 grep -q 'startup.conf' <<<"$orphan_after"
