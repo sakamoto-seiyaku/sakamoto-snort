@@ -48,6 +48,8 @@ Play-facing 前端初始化选择普通用户 / 高级用户，并通过启用 /
 
 ## 3. NFQUEUE copy 与基础字节口径
 
+> 本节的 512-byte bounded-prefix 与 Adapter-side parser 文字是 pre-Functional-Closure 历史基线；当前 Android closure 以 S65、ADR-0003、ADR-0006 和 `CONTEXT.md` 为准：完整 L3 进入 VPP-owned storage，解析由共享 VPP graph 执行，不能以 512 bytes 作为生产正确性假设。
+
 当前 `NFQNL_COPY_PACKET, 0xffff` 近似整包 copy，后续应改为 bounded prefix copy。第一版默认 copy prefix 先定为 `512` bytes。
 
 边界：
@@ -430,6 +432,9 @@ Basic evaluator 和 advanced prefilter 可以共享编译结构，但概念上�
 - IPRULES、Conntrack、Telemetry、Traffic Windows、Diagnostics 可以从 `PacketFacts` 投影出各自需要的 key 或 ABI shape，例如 IPRULES / Conntrack 的 IPv4 host-order `uint32_t` key，但这些 projection 不能反过来定义 packet input 层事实。
 
 bounded copy / parser failure 的第一版降级保持 KISS：
+
+> 本段的 pre-SNORT-10 fail-open parser wording is historical and does not override the accepted VPP validation contract; invalid L3 is a runtime drop with no Policy Verdict, while valid L3 with unavailable deeper facts remains evaluable by the stages that do not require those facts.
+
 - 如果连 IP envelope 都不能可靠解析，则不构造 `PacketFacts`，packet fail-open accept；不更新 Traffic Windows，不伪造 Flow Telemetry `FLOW` record。若有 active diagnostics，只能输出 parser failure / dropped 级别诊断。
 - 如果 IP envelope 可解析，但 terminal L4 / ports 不完整或不可用，则仍构造 `PacketFacts`，但标记 `l4Status=INVALID_OR_UNAVAILABLE_L4` 或 `FRAGMENT`、`portsAvailable=false`、ports / remotePort 为 0，并保留 `originalIpBytes` 与 copied/truncated 诊断字段。
 - 在 L4 不完整或不可用时，Interface policy 与不依赖 ports / CT / DPI 的 Basic IPRULES 仍可按已有 facts 工作；port 条件 no-match，CT / DPI 不创建正常 flow/session。Traffic Windows 只在 `originalIpBytes` 可信时更新 basic counters；detail tier 不进入 protocol-port Top-K。Flow Telemetry 使用 `L3_OBSERVATION`，不伪造正常 L4 lifecycle。

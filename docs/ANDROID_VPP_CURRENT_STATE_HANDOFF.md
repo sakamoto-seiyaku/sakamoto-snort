@@ -326,6 +326,8 @@ stage，并在同一 Pixel 6a 上模拟 USB 断电。
 - `ENOBUFS` 不再在 read-ready callback 内连续 spin；
 - disabled/enabled 短 idle 样本没有出现 NFQUEUE busy loop。
 
+> 以上是历史 POC 证据；其中 512-byte bounded-prefix/callback storage 结果不属于 Functional Closure。当前闭环以 S65、ADR-0003 和 `CONTEXT.md` 为准：完整 L3 直接物化到 VPP-owned storage，解析在共享 VPP graph 内完成。
+
 未关闭的 finding：
 
 | Finding | 阻塞原因 |

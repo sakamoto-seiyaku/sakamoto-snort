@@ -196,3 +196,40 @@ implementation ticket 必须在评论中记录：source revision、artifact iden
 SAKAMOTO-65 完成后，SAKAMOTO-66 与 SAKAMOTO-67 的设计/实现工作均解除该合同 blocker；二者不互相阻塞。SAKAMOTO-68 必须等待 65、66、67 全部完成。单线推进时，第一张正式编码票是 SAKAMOTO-67；SAKAMOTO-66 的共享语义审查必须在进入 SAKAMOTO-68 前完成。
 
 SAKAMOTO-48/49 保留为 C++/NFQUEUE/fragment baseline evidence；Android Root/VPN 产品验收归属 SAKAMOTO-66、68、69 和最终 closure gate，不再从旧 POC ticket 直接启动生产实现。
+
+## 10. SAKAMOTO-66 semantic audit / C++ migration status
+
+审查日期：2026-08-08。结论：**共享语义合同 PASS；生产实现迁移仍是后续准入条件。**
+
+### 10.1 Authority and migration rule
+
+本审查沿用本文第 1 节的权威顺序：已接受的 `docs/decisions/` 与 `CONTEXT.md` 定义不变量；本文定义 Functional Closure 验收边界；Plane implementation ticket 记录实现和原始证据；旧 C++/NFQUEUE 代码与测试只作为可复用的语义向量和迁移输入。不得把旧类、旧 enum、POC copied-prefix 或 POC counters 机械提升为 VPP-native production contract。
+
+| Target contract | Current C++ evidence | S66 disposition |
+| --- | --- | --- |
+| VPP parses one complete L3 packet and builds shared `PacketFacts` | `src/core/flow/PacketCaptureAdapter.*` parses in the Adapter and defaults to a 512-byte prefix | Migration input only; production parser/validation stays in the shared VPP graph and closure does not assume 512 bytes. |
+| One per-worker FlowOwner; buffer index/metadata handoff only | `src/core/flow/FlowSteering.*` and `FlowGraphInjection.*` use C++ descriptors and `PacketLease` values | Host/graph semantic baseline; not proof of live VPP buffer ownership, Primary Handoff, Completion Frame, or no-copy operation. |
+| Bounded Fragment Steering with final-owner transition and runtime-drop failures | `src/core/flow/FragmentSteering.*`, `NfqueueFlowAdapter.cpp`, and `NfqueueFragmentLeaseBook.*` use copied vectors and an independent lease table; failure paths currently use `FailOpen` | Reuse vectors and capacity tests only; production reassembly is the named mutation exception, and malformed/conflict/timeout/capacity failures drop all retained obligations without fail-open. |
+| Buffer-resident PacketLease, origin-lane completion, tri-state completion outcome | `NfqueuePacketLeaseAdapter.*` and `NfqueuePassThroughRuntime.*` use pending/history registries, two-state policy outcomes, and a per-verdict temporary buffer | Evidence only; production keeps inline VPP metadata, one physical attempt, `SUCCEEDED`/`FAILED_DEFINITE`/`OUTCOME_UNKNOWN`, native return after completion, and bounded health evidence. |
+| Shared Root/VPN conformance | `tests/host/{flow_steering,fragment_steering,packet_capture_adapter,nfqueue_*adapter,vpp_graph_injection}_tests.cpp` | Migration vectors; Root and VPN product acceptance remains in S66/S68/S69 and the final closure gate. |
+
+The old `SAKAMOTO-47..49` acceptance wording therefore cannot be used to infer production readiness. Existing accepted architectural decisions do not need reversal; the required change is to migrate implementation shape and record the evidence below.
+
+### 10.2 Compact shared conformance vectors
+
+The following vectors run once at the adapter-neutral Host/VPP graph layer. Root and VPN wrappers then prove only their platform ingress, completion, transport, fault, and teardown boundaries against the same expected result.
+
+| ID | Vector | Required result |
+| --- | --- | --- |
+| A — Flow identity | IPv4/IPv6 TCP/UDP forward and reverse packets across Root and VPN, with changed UID, NetworkContext, queue, interface, and Runtime Profile | Protocol is part of the direction-independent five-tuple; reverse packets select the same owner. UID/context/queue/profile do not select owner. Device `INPUT`/`OUTPUT` is independent from Flow `ORIG`/`REPLY`; first observed packet sets `ORIG` and `flowOriginDir`, reverse is `REPLY`, and a midstream first observation is not rewritten. Unknown UID uses the explicit fallback without wait, cache, replay, or retroactive verdict. |
+| B — Distribution and guard | Owner-local packet; remote initial placement; target queue congestion; first and second owner mismatches | Local path has no worker enqueue. Remote path performs exactly one Primary Handoff of buffer index/metadata. Congestion never redirects to another worker. One mismatch permits one Corrective Handoff; a repeated mismatch is a runtime `DROP`/owner fault with no redirect loop or fail-open. Worker Layout, selector, seed, and capacities are runtime-fixed. |
+| C — Parser, facts, and ingress identity | Complete valid L3; invalid version/header/declared length; valid L3 with unavailable or unsupported L4; oversize envelope; missing NFQUEUE completion identity | Shared VPP parser accepts valid complete L3 and preserves parser status/facts. Invalid L3 is a runtime drop with no Policy Verdict. Missing L4/ports no-match only predicates requiring them while other stages continue. Envelope overflow has no partial parse and follows the contract's bounded evidence. Missing queue generation/packet ID is `INGRESS_IDENTITY_MISSING`: no PacketLease, VPP entry, Policy Verdict, or fabricated completion. |
+| D — Fragment transition | Non-initial fragment; IPv4/IPv6 out-of-order fragments; identical duplicate; overlap/conflict; malformed/reserved/length error; timeout; datagram/fragment capacity; successful reassembly | Non-initial fragments never fabricate ports. All fragments co-locate under a temporary fragment key; the initial fragment's final owner is retained. Reassembly-to-final-owner transition does not consume Corrective Handoff. Duplicate is idempotent. Conflict, malformed, timeout, and capacity failure runtime-drop every retained obligation, produce no Policy Verdict, and never fail-open. |
+| E — Lease, completion, and teardown | Policy allow/drop; pre-policy capacity and reserve exhaustion; stale/duplicate completion; definite send rejection; ambiguous receiver; Root/VPN teardown; post-HEV transport failure | Each decided packet has one physical Adapter Completion attempt and then native buffer return. Completion is `SUCCEEDED`, `FAILED_DEFINITE`, or `OUTCOME_UNKNOWN`; no retry, graph re-entry, or policy re-evaluation. Stale/duplicate requests do not issue a second attempt. Teardown is quiesce → bounded drain → channel close: existing verdicts complete, ordinary unevaluated Root leases accept when identity remains completable, VPN records completion/transport failure separately, and fragment/owner-fault drops do not become fail-open. HEV post-handoff failure leaves Policy allow and Adapter completion intact while recording Transport failure. |
+| F — Adapter parity and evidence | Run A–E once through VPP graph injection; replay controlled vectors through Root NFQUEUE/netns and VPN TUN/HEV | Both Adapters supply equivalent normalized facts and consume the same owner/policy/revision semantics. Queue/fd/packet handles remain platform-private. Evidence proves direct materialization into VPP-owned storage, index/ownership handoff without packet-byte copies, origin-lane completion, bounded counters/health, and no generation or residue leak. |
+
+### 10.3 Plane disposition
+
+- `SAKAMOTO-47` is already **Done** (2026-07-28). Retain it as the C++ FlowSteering/graph-gate baseline, but clarify in the work item that Done means evidence/harness completion, not production VPP closure.
+- `SAKAMOTO-48` and `SAKAMOTO-49` are **In Progress** in Plane but are superseded as production starting points by this contract and SAKAMOTO-68/69. They must not advance as production implementation; close them as superseded/cancelled or explicitly close them as baseline-only evidence with that scope recorded and links to the replacement slices.
+- SAKAMOTO-66 review is complete only when the Plane comment records this disposition, the source revision, and the Host/VPP/Root/VPN evidence locations. A green C++ test run alone does not satisfy Functional Closure.
