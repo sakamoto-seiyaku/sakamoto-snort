@@ -429,6 +429,37 @@ public final class RuntimeService extends VpnService {
             return;
         }
         long pid = currentPid();
+        if (profileRoot.exists()) {
+            // A valid projection does not make its recorded PID authoritative.
+            // Reconcile the complete non-empty profile first so a duplicate
+            // owner or a launch-shell transition cannot be adopted/removed by
+            // the PID fast path.
+            RuntimeOwnershipReconciliation.ProfileAudit audit =
+                    auditDurableProfile(activeProfile);
+            if (audit.evidence == RuntimeOwnershipReconciliation.Evidence.LIVE) {
+                adoptRuntime(audit.pid, forceHealthQuery, queryRevision);
+                return;
+            }
+            if (audit.evidence == RuntimeOwnershipReconciliation.Evidence.UNKNOWN) {
+                String errorCode = audit.errorCode.isEmpty()
+                        ? "runtime_pid_unverified" : audit.errorCode;
+                publishError(errorCode,
+                        "durable VPP ownership could not be safely reconciled: " + audit.detail,
+                        true, pid);
+                return;
+            }
+            if (audit.evidence == RuntimeOwnershipReconciliation.Evidence.RESIDUE) {
+                CleanupResult cleanup = removeAndVerifyProfile(profileRoot, audit.pid, null);
+                if (!cleanup.ok) {
+                    publishCleanupFailure("durable recovery: ", cleanup, true);
+                    return;
+                }
+                publishError("runtime_recovered",
+                        "previous VPP owner was no longer active", false, -1L);
+                publish(RuntimeSnapshot.stoppedAfter(snapshot));
+                return;
+            }
+        }
         RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(pid);
         if (identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH) {
             adoptRuntime(pid, forceHealthQuery, queryRevision);
@@ -534,9 +565,11 @@ public final class RuntimeService extends VpnService {
             return RuntimeOwnershipReconciliation.ProfileAudit.none(selected);
         }
         RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(selected, pid);
+        // A durable PID is only one identity witness. Always run the bounded
+        // exhaustive profile scan while the profile is non-empty so a second
+        // same-token/profile/executable owner cannot bypass reconciliation.
         RuntimeOwnershipReconciliation.OwnershipAudit candidate =
-                identity == RuntimeOwnershipReconciliation.PidIdentity.MISSING
-                        ? auditOwnedProcess(selected, profileRoot) : null;
+                auditOwnedProcess(selected, profileRoot);
         return RuntimeOwnershipReconciliation.classifyDurableProfile(
                 selected, present, pid, identity, candidate);
     }

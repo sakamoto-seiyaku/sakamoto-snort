@@ -22,6 +22,8 @@ public final class AndroidRuntimeContractTest {
         ownershipCleanupDecisionFailsClosed();
         ownershipInspectionKeepsIdentityInThePublicSeam();
         ownershipInspectionRejectsSameProfileMultiplicity();
+        recordedPidRequiresAnExhaustiveSoleOwnerScan();
+        launchShellTransitionFailsClosedUntilStableVpp();
         stoppedSnapshotRetainsRecentFailure();
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
@@ -252,6 +254,94 @@ public final class AndroidRuntimeContractTest {
                 "candidate identity races remain unknown rather than residue");
         check("runtime_ownership_unverified".equals(uncertain.errorCode),
                 "candidate identity races have an explicit unverifiable error");
+    }
+
+    private static void recordedPidRequiresAnExhaustiveSoleOwnerScan() {
+        RuntimeOwnershipReconciliation.ProfileSpec spec = ownershipSpec();
+        final String[] scanCommand = {""};
+        RuntimeOwnershipReconciliation.OwnershipAudit duplicate =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) -> {
+                    scanCommand[0] = command;
+                    check(timeout == 3L, "recorded-PID ownership scan remains bounded");
+                    check(command.contains("match_count=0"),
+                            "recorded PID path still performs the exhaustive match loop");
+                    return new RuntimeOwnershipReconciliation.CommandResult(
+                            11, "VPP_OWNER_COUNT=2\nVPP_OWNER_PID=4242\n");
+                });
+        check(duplicate.isUnknown(),
+                "recorded PID plus another verified owner is not adoptable");
+        RuntimeOwnershipReconciliation.ProfileAudit blocked =
+                RuntimeOwnershipReconciliation.classifyDurableProfile(
+                        RuntimeProfile.ROOT, true, 4242L,
+                        RuntimeOwnershipReconciliation.PidIdentity.MATCH, duplicate);
+        check(blocked.evidence == RuntimeOwnershipReconciliation.Evidence.UNKNOWN,
+                "recorded PID plus another owner blocks durable reconciliation");
+
+        RuntimeOwnershipReconciliation.OwnershipAudit sole =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) ->
+                        new RuntimeOwnershipReconciliation.CommandResult(
+                                10, "VPP_OWNER_COUNT=1\nVPP_OWNER_PID=4242\n"));
+        RuntimeOwnershipReconciliation.ProfileAudit live =
+                RuntimeOwnershipReconciliation.classifyDurableProfile(
+                        RuntimeProfile.ROOT, true, 4242L,
+                        RuntimeOwnershipReconciliation.PidIdentity.MATCH, sole);
+        check(live.evidence == RuntimeOwnershipReconciliation.Evidence.LIVE,
+                "recorded PID matching the exhaustive sole owner remains live");
+        check(live.pid == 4242L, "sole-owner adoption preserves the recorded PID");
+
+        check(scanCommand[0].contains("audit_pid=$$"),
+                "ownership command identifies its own audit process");
+        check(scanCommand[0].contains("is_audit_lineage"),
+                "ownership command excludes its own process lineage");
+    }
+
+    private static void launchShellTransitionFailsClosedUntilStableVpp() {
+        RuntimeOwnershipReconciliation.ProfileSpec spec = ownershipSpec();
+        final String[] transitionCommand = {""};
+        RuntimeOwnershipReconciliation.OwnershipAudit shell =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) -> {
+                    transitionCommand[0] = command;
+                    return new RuntimeOwnershipReconciliation.CommandResult(
+                            127, "VPP_OWNER_COUNT=0\nVPP_TRANSITION_COUNT=1\n");
+                });
+        check(shell.isUnknown(),
+                "an exact launch-shaped shell remains transitional uncertainty");
+        RuntimeOwnershipReconciliation.ProfileAudit blocked =
+                RuntimeOwnershipReconciliation.classifyDurableProfile(
+                        RuntimeProfile.ROOT, true, -1L,
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING, shell);
+        check(blocked.evidence == RuntimeOwnershipReconciliation.Evidence.UNKNOWN,
+                "pre-PID launch shell blocks cleanup/replacement");
+        check(transitionCommand[0].contains("VPP_TRANSITION_COUNT="),
+                "ownership command reports transitional shell evidence");
+        check(transitionCommand[0].contains("/system/bin/sh"),
+                "ownership command recognizes the platform launch shell");
+        check(transitionCommand[0].contains("plugin_path"),
+                "shell transition requires the VPP launch command shape");
+        check(transitionCommand[0].contains("sleep 0.05"),
+                "shell transition uses a bounded stable second snapshot");
+
+        RuntimeOwnershipReconciliation.OwnershipAudit resolved =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) ->
+                        new RuntimeOwnershipReconciliation.CommandResult(
+                                10, "VPP_OWNER_COUNT=1\nVPP_OWNER_PID=4343\n"));
+        RuntimeOwnershipReconciliation.ProfileAudit adopted =
+                RuntimeOwnershipReconciliation.classifyDurableProfile(
+                        RuntimeProfile.ROOT, true, -1L,
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING, resolved);
+        check(adopted.evidence == RuntimeOwnershipReconciliation.Evidence.LIVE,
+                "a stable second snapshot with one VPP resolves the transition");
+        check(adopted.pid == 4343L, "stable transition adoption uses the verified VPP PID");
+    }
+
+    private static RuntimeOwnershipReconciliation.ProfileSpec ownershipSpec() {
+        return new RuntimeOwnershipReconciliation.ProfileSpec(
+                RuntimeProfile.ROOT,
+                "/data/user/0/example/files/profiles/root/vpp/startup.conf",
+                "/data/user/0/example/files/profiles/root/vpp/runtime",
+                "/data/app/example/lib/arm64/libvpp_runtime.so",
+                "0123456789abcdef", "01234567-0123-0123-0123-0123456789ab",
+                "0", 120, "root_authorization_required", "runner unavailable");
     }
 
     private static void stoppedSnapshotRetainsRecentFailure() throws Exception {
