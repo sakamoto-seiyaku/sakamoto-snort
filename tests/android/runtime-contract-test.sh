@@ -19,6 +19,7 @@ rtk bash "$repo_root/tests/android/android-runtime-contract-test.sh"
 # adapter artifacts and carries a generated-VAPI identity.
 rtk bash "$repo_root/tests/android/android-runtime-artifact-contract-test.sh"
 production_service_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+production_ownership_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
 grep -q 'ACTION_START' "$production_service_source"
 grep -q 'RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION' "$production_service_source"
@@ -28,7 +29,6 @@ grep -q 'kill -TERM' "$production_service_source"
 grep -q 'kill -KILL' "$production_service_source"
 grep -q 'root_authorization_required' "$production_service_source"
 grep -q 'SAKAMOTO_VPP_RUNTIME_DIR' "$production_service_source"
-grep -q 'sha256sum' "$production_service_source"
 if grep -q 'vppctl.*quit' "$production_service_source"; then
   echo "product stop must not use vppctl quit" >&2
   exit 1
@@ -38,7 +38,8 @@ grep -q 'PidIdentity' "$production_service_source"
 grep -q 'health_query=vapi_start' "$production_service_source"
 grep -q 'health_query=vapi_result' "$production_service_source"
 grep -q 'android.os.Process.myUid' "$production_service_source"
-grep -q 'VPP_OWNER_PID=' "$production_service_source"
+grep -q 'VPP_OWNER_PID=' "$production_ownership_source"
+grep -q 'sha256sum' "$production_ownership_source"
 grep -q 'onDestroy' "$production_activity_source"
 grep -q 'RuntimeControlBackend' "$production_activity_source"
 if grep -q 'LocalProductBackend' "$production_activity_source"; then

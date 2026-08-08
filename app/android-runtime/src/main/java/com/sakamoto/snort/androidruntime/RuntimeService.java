@@ -429,12 +429,13 @@ public final class RuntimeService extends VpnService {
             return;
         }
         long pid = currentPid();
-        PidIdentity identity = validatePid(pid);
-        if (identity == PidIdentity.MATCH) {
+        RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(pid);
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH) {
             adoptRuntime(pid, forceHealthQuery, queryRevision);
             return;
         }
-        if (identity == PidIdentity.MISMATCH || identity == PidIdentity.UNKNOWN) {
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISMATCH
+                || identity == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN) {
             publishError("runtime_pid_unverified",
                     "durable VPP owner PID could not be safely adopted; refusing cleanup",
                     true, pid);
@@ -465,8 +466,10 @@ public final class RuntimeService extends VpnService {
      */
     private boolean reconcileMissingOrCorruptProjection(boolean forceHealthQuery,
                                                         long queryRevision) {
-        DurableProfileAudit root = auditDurableProfile(RuntimeProfile.ROOT);
-        DurableProfileAudit vpn = auditDurableProfile(RuntimeProfile.VPN);
+        RuntimeOwnershipReconciliation.ProfileAudit root =
+                auditDurableProfile(RuntimeProfile.ROOT);
+        RuntimeOwnershipReconciliation.ProfileAudit vpn =
+                auditDurableProfile(RuntimeProfile.VPN);
         RuntimeOwnershipReconciliation.Action action =
                 RuntimeOwnershipReconciliation.decide(root.evidence, vpn.evidence);
         if (action == RuntimeOwnershipReconciliation.Action.BLOCK) {
@@ -478,7 +481,8 @@ public final class RuntimeService extends VpnService {
             return false;
         }
 
-        DurableProfileAudit owner = action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
+        RuntimeOwnershipReconciliation.ProfileAudit owner =
+                action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
                 ? root : action == RuntimeOwnershipReconciliation.Action.ADOPT_VPN ? vpn : null;
         if (owner != null) {
             if (owner.pid <= 0L) {
@@ -498,7 +502,8 @@ public final class RuntimeService extends VpnService {
         // CLEAN covers an empty pair and exactly one safely-audited residue
         // profile.  Never remove a profile before the decision seam has
         // proved that the other profile is empty.
-        DurableProfileAudit residue = root.evidence == RuntimeOwnershipReconciliation.Evidence.RESIDUE
+        RuntimeOwnershipReconciliation.ProfileAudit residue =
+                root.evidence == RuntimeOwnershipReconciliation.Evidence.RESIDUE
                 ? root : vpn.evidence == RuntimeOwnershipReconciliation.Evidence.RESIDUE ? vpn : null;
         if (residue != null) {
             activeProfile = residue.profile;
@@ -519,40 +524,21 @@ public final class RuntimeService extends VpnService {
         return true;
     }
 
-    private DurableProfileAudit auditDurableProfile(RuntimeProfile profile) {
+    private RuntimeOwnershipReconciliation.ProfileAudit auditDurableProfile(RuntimeProfile profile) {
         RuntimeProfile selected = profile == null ? RuntimeProfile.ROOT : profile;
         File profileRoot = profileDirectory(selected);
         boolean present = profileRoot.exists();
         File durablePid = new File(new File(profileRoot, "runtime"), "vpp.pid");
         long pid = readPid(durablePid);
-        if (pid > 0L) {
-            PidIdentity identity = validatePid(selected, pid);
-            if (identity == PidIdentity.MATCH) {
-                return DurableProfileAudit.live(selected, pid, "durable PID identity matches");
-            }
-            if (identity == PidIdentity.UNKNOWN) {
-                return DurableProfileAudit.unknown(selected,
-                        "durable PID identity could not be verified");
-            }
-            if (identity == PidIdentity.MISMATCH) {
-                return DurableProfileAudit.unknown(selected,
-                        "durable PID belongs to a different process");
-            }
-        }
         if (!present) {
-            return DurableProfileAudit.none(selected);
+            return RuntimeOwnershipReconciliation.ProfileAudit.none(selected);
         }
-        OwnershipAudit candidate = auditOwnedProcess(selected, profileRoot);
-        if (!candidate.safe) {
-            return DurableProfileAudit.unknown(selected,
-                    candidate.errorCode + ": " + candidate.detail);
-        }
-        if (candidate.pid > 0L) {
-            return DurableProfileAudit.live(selected,
-                    candidate.pid, "PID-less ownership candidate matches");
-        }
-        return DurableProfileAudit.residue(selected,
-                pid, "profile residue has no live owner");
+        RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(selected, pid);
+        RuntimeOwnershipReconciliation.OwnershipAudit candidate =
+                identity == RuntimeOwnershipReconciliation.PidIdentity.MISSING
+                        ? auditOwnedProcess(selected, profileRoot) : null;
+        return RuntimeOwnershipReconciliation.classifyDurableProfile(
+                selected, present, pid, identity, candidate);
     }
 
     private File profileDirectory(RuntimeProfile profile) {
@@ -560,8 +546,9 @@ public final class RuntimeService extends VpnService {
         return new File(getFilesDir(), "profiles/" + selected.wireName + "/vpp");
     }
 
-    private static String boundedOwnershipFailure(DurableProfileAudit root,
-                                                   DurableProfileAudit vpn) {
+    private static String boundedOwnershipFailure(
+            RuntimeOwnershipReconciliation.ProfileAudit root,
+            RuntimeOwnershipReconciliation.ProfileAudit vpn) {
         String detail = "durable ownership audit blocked: root=" + root.detail
                 + ", vpn=" + vpn.detail;
         return BoundedText.value(detail, RuntimeSnapshot.MAX_TEXT_LENGTH);
@@ -830,12 +817,12 @@ public final class RuntimeService extends VpnService {
         if (cleanupFaultInjected) {
             return CleanupResult.failure(pid, "debug cleanup fault injected");
         }
-        PidIdentity identity = validatePid(pid);
-        if (identity == PidIdentity.MISMATCH) {
+        RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(pid);
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISMATCH) {
             return CleanupResult.failure(pid,
                     "recorded PID identity changed; refusing to kill it");
         }
-        if (identity == PidIdentity.UNKNOWN) {
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN) {
             return CleanupResult.failure(pid,
                     activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
                             ? "root_authorization_required" : "cleanup_failed",
@@ -866,38 +853,22 @@ public final class RuntimeService extends VpnService {
     }
 
     private CleanupResult removeAndVerifyProfile(File profile, long pid, Process process) {
-        PidIdentity identity = validatePid(pid);
-        if (identity == PidIdentity.MATCH) {
-            return CleanupResult.failure(pid, "VPP PID remains active");
-        }
-        if (identity == PidIdentity.MISMATCH) {
-            return CleanupResult.failure(pid,
-                    "recorded PID identity changed; refusing to remove profile");
-        }
-        if (identity == PidIdentity.UNKNOWN) {
-            return CleanupResult.failure(pid,
-                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
-                            ? "root_authorization_required" : "cleanup_failed",
-                    activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()
-                            ? "recorded PID cannot be audited without root authorization"
-                            : "recorded PID identity could not be verified; refusing cleanup");
-        }
-        if (processAlive(process)) {
-            return CleanupResult.failure(pid, "VPP process handle remains active");
-        }
+        RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(pid);
+        RuntimeOwnershipReconciliation.OwnershipAudit audit =
+                RuntimeOwnershipReconciliation.OwnershipAudit.none();
         // A launch can create the app-UID profile before the shell has
         // published its PID. Audit candidates whenever no in-process handle
         // remains, including a stale durable PID, before deleting residue.
-        if (process == null && profile != null && profile.exists()) {
-            OwnershipAudit audit = auditOwnedProcess(profile);
-            if (!audit.safe) {
-                return CleanupResult.failure(audit.pid, audit.errorCode,
-                        "profile residue ownership audit failed: " + audit.detail);
-            }
-            if (audit.pid > 0L) {
-                return CleanupResult.failure(audit.pid,
-                        "profile residue still belongs to a live VPP process");
-            }
+        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISSING
+                && process == null && profile != null && profile.exists()) {
+            audit = auditOwnedProcess(profile);
+        }
+        RuntimeOwnershipReconciliation.CleanupDecision decision =
+                RuntimeOwnershipReconciliation.decideCleanup(
+                        activeProfile, identity, processAlive(process), audit,
+                        rootCommandAvailable());
+        if (!decision.canRemove()) {
+            return CleanupResult.failure(decision.pid, decision.errorCode, decision.detail);
         }
         if (profile != null && profile.exists()) {
             if (activeProfile == RuntimeProfile.ROOT) {
@@ -929,97 +900,50 @@ public final class RuntimeService extends VpnService {
      * hash, runtime directory, owner token, and selected profile. A live match
      * blocks cleanup; an inspection error also blocks cleanup.
      */
-    private OwnershipAudit auditOwnedProcess(File profile) {
+    private RuntimeOwnershipReconciliation.OwnershipAudit auditOwnedProcess(File profile) {
         return auditOwnedProcess(activeProfile, profile);
     }
 
-    private OwnershipAudit auditOwnedProcess(RuntimeProfile selected, File profile) {
+    private RuntimeOwnershipReconciliation.OwnershipAudit auditOwnedProcess(
+            RuntimeProfile selected, File profile) {
         RuntimeProfile profileType = selected == null ? RuntimeProfile.ROOT : selected;
         if (profile == null || !profile.exists()) {
-            return OwnershipAudit.none();
+            return RuntimeOwnershipReconciliation.OwnershipAudit.none();
         }
         if (profileType == RuntimeProfile.ROOT && !rootCommandAvailable()) {
-            return OwnershipAudit.unknown("root_authorization_required",
+            return RuntimeOwnershipReconciliation.OwnershipAudit.unknown(
+                    "root_authorization_required",
                     "privileged /proc ownership audit is unavailable to this app process");
         }
         String token = readOwnerToken(profile);
         if (token.isEmpty()) {
-            return OwnershipAudit.unknown("profile owner token is absent or invalid");
+            return RuntimeOwnershipReconciliation.OwnershipAudit.unknown(
+                    "profile owner token is absent or invalid");
         }
-        String startup = new File(profile, "startup.conf").getPath();
-        String runtime = new File(profile, "runtime").getPath();
         File executableFile = new File(getApplicationInfo().nativeLibraryDir, VPP_BINARY);
         String executable = executableFile.getPath();
         final String executableHash;
         try {
             executableHash = sha256(executableFile);
         } catch (Exception error) {
-            return OwnershipAudit.unknown("packaged VPP executable identity is unavailable");
+            return RuntimeOwnershipReconciliation.OwnershipAudit.unknown(
+                    "packaged VPP executable identity is unavailable");
         }
-        String profileName = profileType.wireName;
         String expectedUid = profileType == RuntimeProfile.ROOT
                 ? "0" : Integer.toString(android.os.Process.myUid());
-        String command =
-                // Use ps to narrow the volatile /proc inspection to root
-                // processes whose visible command already names this profile.
-                // Scanning every kernel-thread entry is too slow on Android
-                // and routinely exceeds the bounded root-command deadline.
-                "ps_output=$(ps -A -o PID,UID,args 2>/dev/null) || exit 120; "
-                + "for pid in $(printf '%s\\n' \"$ps_output\" | awk '$2 == "
-                + expectedUid + " && index($0, "
-                + shellQuote(startup) + ") {print $1}'); do "
-                + "proc=/proc/$pid; test -d \"$proc\" || continue; "
-                + "if ! test -r \"$proc/status\"; then "
-                + "[ -e \"$proc/status\" ] && exit 121; continue; fi; "
-                + "uid=$(awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
-                + "|| { [ -e \"$proc/status\" ] && exit 122; continue; }; "
-                + "[ \"$uid\" = " + shellQuote(expectedUid) + " ] || continue; "
-                + "if ! test -r \"$proc/exe\"; then "
-                + "[ -e \"$proc/exe\" ] && exit 123; continue; fi; "
-                + "exe=$(readlink \"$proc/exe\" 2>/dev/null) "
-                + "|| { [ -e \"$proc/exe\" ] && exit 123; continue; }; "
-                + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
-                + "if ! test -r \"$proc/cmdline\"; then "
-                + "[ -e \"$proc/cmdline\" ] && exit 124; continue; fi; "
-                + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
-                + "|| { [ -e \"$proc/cmdline\" ] && exit 124; continue; }; "
-                + "case \"$cmd\" in *" + shellQuote(startup) + "*) ;; *) continue ;; esac; "
-                + "if ! test -r \"$proc/environ\"; then "
-                + "[ -e \"$proc/environ\" ] && exit 125; continue; fi; "
-                + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null) "
-                + "|| { [ -e \"$proc\" ] && exit 125; continue; }; "
-                + "printf '%s\\n' \"$env\" | grep -F -- "
-                + shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + token)
-                + " >/dev/null || continue; "
-                + "printf '%s\\n' \"$env\" | grep -F -- "
-                + shellQuote("SAKAMOTO_VPP_RUNTIME_DIR=" + runtime)
-                + " >/dev/null || continue; "
-                + "printf '%s\\n' \"$env\" | grep -F -- "
-                + shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + profileName)
-                + " >/dev/null || continue; "
-                + "hash=$(sha256sum \"$proc/exe\" 2>/dev/null | awk '{print $1}') "
-                + "|| { [ -e \"$proc\" ] && exit 126; continue; }; "
-                + "[ \"$hash\" = " + shellQuote(executableHash) + " ] || continue; "
-                + "printf 'VPP_OWNER_PID=%s\\n' \"$pid\"; exit 10; done; exit 0";
-        CommandResult result = runProfileCommandResult(profileType, command, 3L);
-        int status = result.status;
-        if (status == 0) {
-            return OwnershipAudit.none();
-        }
-        if (status == 10) {
-            long ownerPid = parseOwnerPid(result.output);
-            return ownerPid > 0L ? OwnershipAudit.live(ownerPid)
-                    : OwnershipAudit.unknown("matching owner PID was not returned");
-        }
-        if (status == ROOT_COMMAND_UNAVAILABLE) {
-            return OwnershipAudit.unknown(profileType == RuntimeProfile.ROOT
-                            ? "root_authorization_required" : "cleanup_failed",
-                    profileType == RuntimeProfile.ROOT
-                            ? "privileged /proc ownership audit is unavailable to this app process"
-                            : "app-UID /proc ownership audit is unavailable to this app process");
-        }
-        return OwnershipAudit.unknown((profileType == RuntimeProfile.ROOT ? "root" : "app-UID")
-                + " /proc ownership scan returned status " + status);
+        RuntimeOwnershipReconciliation.ProfileSpec spec =
+                new RuntimeOwnershipReconciliation.ProfileSpec(
+                        profileType,
+                        new File(profile, "startup.conf").getPath(),
+                        new File(profile, "runtime").getPath(),
+                        executable, executableHash, token, expectedUid,
+                        profileType == RuntimeProfile.ROOT ? ROOT_COMMAND_UNAVAILABLE : 125,
+                        profileType == RuntimeProfile.ROOT
+                                ? "root_authorization_required" : "cleanup_failed",
+                        profileType == RuntimeProfile.ROOT
+                                ? "privileged /proc ownership audit is unavailable to this app process"
+                                : "app-UID /proc ownership audit is unavailable to this app process");
+        return RuntimeOwnershipReconciliation.inspect(spec, ownershipCommandRunner());
     }
 
     private boolean waitUntilGone(Process process, long pid, long timeoutMillis) {
@@ -1073,61 +997,57 @@ public final class RuntimeService extends VpnService {
     }
 
     private boolean isPidAlive(long pid) {
-        return validatePid(pid) == PidIdentity.MATCH;
+        return validatePid(pid) == RuntimeOwnershipReconciliation.PidIdentity.MATCH;
     }
 
-    private PidIdentity validatePid(long pid) {
+    private RuntimeOwnershipReconciliation.PidIdentity validatePid(long pid) {
         return validatePid(activeProfile, pid);
     }
 
-    private PidIdentity validatePid(RuntimeProfile selected, long pid) {
+    private RuntimeOwnershipReconciliation.PidIdentity validatePid(
+            RuntimeProfile selected, long pid) {
         RuntimeProfile profileType = selected == null ? RuntimeProfile.ROOT : selected;
         if (pid <= 0L) {
-            return PidIdentity.MISSING;
+            return RuntimeOwnershipReconciliation.PidIdentity.MISSING;
         }
+        // Preserve the dead-PID fast path: a missing packaged executable
+        // cannot turn an already-gone owner into an unverifiable live one.
         int exists = probeProcess(profileType, pid);
         if (exists == 1) {
-            return PidIdentity.MISSING;
+            return RuntimeOwnershipReconciliation.PidIdentity.MISSING;
         }
         if (exists != 0) {
-            return PidIdentity.UNKNOWN;
+            return RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN;
         }
         File selectedRoot = profileDirectory(profileType);
         String token = readOwnerToken(selectedRoot);
         if (token.isEmpty()) {
-            return PidIdentity.UNKNOWN;
+            return RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN;
         }
-        String startup = new File(selectedRoot, "startup.conf").getPath();
-        String runtime = new File(selectedRoot, "runtime").getPath();
-        String executable = new File(getApplicationInfo().nativeLibraryDir, VPP_BINARY).getPath();
-        String cmdline = "/proc/" + pid + "/cmdline";
-        String environ = "/proc/" + pid + "/environ";
-        String statusFile = "/proc/" + pid + "/status";
-        String exeFile = "/proc/" + pid + "/exe";
+        File executableFile = new File(getApplicationInfo().nativeLibraryDir, VPP_BINARY);
+        String executable = executableFile.getPath();
+        final String executableHash;
+        try {
+            executableHash = sha256(executableFile);
+        } catch (Exception error) {
+            return RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN;
+        }
         String expectedUid = profileType == RuntimeProfile.ROOT
                 ? "0" : Integer.toString(android.os.Process.myUid());
-        String command = "if ! test -r " + shellQuote(statusFile) + " || ! test -r "
-                + shellQuote(cmdline) + " || ! test -r " + shellQuote(environ)
-                + " || ! test -r " + shellQuote(exeFile) + "; then exit 125; fi"
-                + " && uid=$(awk '$1 == \"Uid:\" {print $2; exit}' "
-                + shellQuote(statusFile) + ")"
-                + " && test \"$uid\" = " + shellQuote(expectedUid)
-                + " && exe=$(readlink " + shellQuote(exeFile) + ")"
-                + " && test \"$exe\" = " + shellQuote(executable)
-                + " && tr '\\0' ' ' <" + shellQuote(cmdline) + " | grep -F -- "
-                + shellQuote(startup) + " >/dev/null"
-                + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
-                + shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + token) + " >/dev/null"
-                + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
-                + shellQuote("SAKAMOTO_VPP_RUNTIME_DIR=" + runtime) + " >/dev/null"
-                + " && tr '\\0' '\\n' <" + shellQuote(environ) + " | grep -F -- "
-                + shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + profileType.wireName)
-                + " >/dev/null";
-        int status = runPlatformCommandStatus(profileType, command, 2L);
-        if (status == 0) {
-            return PidIdentity.MATCH;
-        }
-        return status == 1 ? PidIdentity.MISMATCH : PidIdentity.UNKNOWN;
+        RuntimeOwnershipReconciliation.ProfileSpec spec =
+                new RuntimeOwnershipReconciliation.ProfileSpec(
+                        profileType,
+                        new File(selectedRoot, "startup.conf").getPath(),
+                        new File(selectedRoot, "runtime").getPath(),
+                        executable, executableHash, token, expectedUid,
+                        profileType == RuntimeProfile.ROOT ? ROOT_COMMAND_UNAVAILABLE : 125,
+                        profileType == RuntimeProfile.ROOT
+                                ? "root_authorization_required" : "cleanup_failed",
+                        profileType == RuntimeProfile.ROOT
+                                ? "privileged /proc ownership audit is unavailable to this app process"
+                                : "app-UID /proc ownership audit is unavailable to this app process");
+        return RuntimeOwnershipReconciliation.validatePid(
+                spec, pid, ownershipCommandRunner());
     }
 
     /**
@@ -1165,9 +1085,14 @@ public final class RuntimeService extends VpnService {
                 : runAppCommandStatus(command, timeoutSeconds);
     }
 
+    private RuntimeOwnershipReconciliation.CommandRunner ownershipCommandRunner() {
+        return (profile, command, timeoutSeconds) ->
+                runProfileCommandResult(profile, command, timeoutSeconds);
+    }
+
     /** Run a bounded ownership scan and retain its single-line PID evidence. */
-    private CommandResult runProfileCommandResult(RuntimeProfile selected, String command,
-                                                   long timeoutSeconds) {
+    private RuntimeOwnershipReconciliation.CommandResult runProfileCommandResult(
+            RuntimeProfile selected, String command, long timeoutSeconds) {
         RuntimeProfile profileType = selected == null ? RuntimeProfile.ROOT : selected;
         Process process = null;
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -1193,36 +1118,19 @@ public final class RuntimeService extends VpnService {
             reader.start();
             if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return new CommandResult(124, output.toString(StandardCharsets.UTF_8.name()));
+                return new RuntimeOwnershipReconciliation.CommandResult(
+                        124, output.toString(StandardCharsets.UTF_8.name()));
             }
             reader.join(250L);
-            return new CommandResult(process.exitValue(),
+            return new RuntimeOwnershipReconciliation.CommandResult(process.exitValue(),
                     output.toString(StandardCharsets.UTF_8.name()));
         } catch (Exception error) {
             if (process != null) {
                 process.destroyForcibly();
             }
-            return new CommandResult(profileType == RuntimeProfile.ROOT
+            return new RuntimeOwnershipReconciliation.CommandResult(profileType == RuntimeProfile.ROOT
                     ? ROOT_COMMAND_UNAVAILABLE : 125, output.toString());
         }
-    }
-
-    private static long parseOwnerPid(String output) {
-        if (output == null) {
-            return -1L;
-        }
-        for (String line : output.split("\\r?\\n")) {
-            if (!line.startsWith("VPP_OWNER_PID=")) {
-                continue;
-            }
-            try {
-                long pid = Long.parseLong(line.substring("VPP_OWNER_PID=".length()).trim());
-                return pid > 0L ? pid : -1L;
-            } catch (NumberFormatException ignored) {
-                return -1L;
-            }
-        }
-        return -1L;
     }
 
     private void failWithoutRuntime(String code, String message) {
@@ -1616,13 +1524,6 @@ public final class RuntimeService extends VpnService {
         }
     }
 
-    private enum PidIdentity {
-        MISSING,
-        MATCH,
-        MISMATCH,
-        UNKNOWN
-    }
-
     private static final class CleanupResult {
         final boolean ok;
         final long pid;
@@ -1649,80 +1550,4 @@ public final class RuntimeService extends VpnService {
         }
     }
 
-    private static final class CommandResult {
-        final int status;
-        final String output;
-
-        CommandResult(int status, String output) {
-            this.status = status;
-            this.output = output == null ? "" : output;
-        }
-    }
-
-    private static final class DurableProfileAudit {
-        final RuntimeProfile profile;
-        final RuntimeOwnershipReconciliation.Evidence evidence;
-        final long pid;
-        final String detail;
-
-        private DurableProfileAudit(RuntimeProfile profile,
-                                    RuntimeOwnershipReconciliation.Evidence evidence,
-                                    long pid, String detail) {
-            this.profile = profile;
-            this.evidence = evidence;
-            this.pid = pid;
-            this.detail = BoundedText.value(detail, RuntimeSnapshot.MAX_TEXT_LENGTH);
-        }
-
-        static DurableProfileAudit none(RuntimeProfile profile) {
-            return new DurableProfileAudit(profile,
-                    RuntimeOwnershipReconciliation.Evidence.NONE, -1L,
-                    "no durable profile or live owner");
-        }
-
-        static DurableProfileAudit live(RuntimeProfile profile, long pid, String detail) {
-            return new DurableProfileAudit(profile,
-                    RuntimeOwnershipReconciliation.Evidence.LIVE, pid, detail);
-        }
-
-        static DurableProfileAudit residue(RuntimeProfile profile, long pid, String detail) {
-            return new DurableProfileAudit(profile,
-                    RuntimeOwnershipReconciliation.Evidence.RESIDUE, pid, detail);
-        }
-
-        static DurableProfileAudit unknown(RuntimeProfile profile, String detail) {
-            return new DurableProfileAudit(profile,
-                    RuntimeOwnershipReconciliation.Evidence.UNKNOWN, -1L, detail);
-        }
-    }
-
-    private static final class OwnershipAudit {
-        final boolean safe;
-        final long pid;
-        final String detail;
-        final String errorCode;
-
-        private OwnershipAudit(boolean safe, long pid, String detail, String errorCode) {
-            this.safe = safe;
-            this.pid = pid;
-            this.detail = detail;
-            this.errorCode = errorCode;
-        }
-
-        static OwnershipAudit none() {
-            return new OwnershipAudit(true, -1L, "no matching live owner", "");
-        }
-
-        static OwnershipAudit live(long pid) {
-            return new OwnershipAudit(false, pid, "matching live owner", "cleanup_failed");
-        }
-
-        static OwnershipAudit unknown(String detail) {
-            return unknown("cleanup_failed", detail);
-        }
-
-        static OwnershipAudit unknown(String errorCode, String detail) {
-            return new OwnershipAudit(false, -1L, detail, errorCode);
-        }
-    }
 }

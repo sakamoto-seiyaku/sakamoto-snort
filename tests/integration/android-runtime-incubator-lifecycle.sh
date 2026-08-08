@@ -308,6 +308,12 @@ orphan_before="$(adb_cmd shell su 0 sh -c "ls -ln /data/user/0/$package/files/pr
 printf 'vppPid=%s\nservicePid=%s\nactivityPid=%s\n%s\n' \
   "$orphan_vpp_pid" "$orphan_service_pid" "$orphan_activity_pid" "$orphan_before" \
   >"$evidence_file.orphan-before"
+# Exercise the durable-audit path rather than the valid projection fast path:
+# remove only the durable PID and snapshot while the fully verified root VPP
+# owner remains alive. The fresh service must recover the owner from its token,
+# profile, executable, hash, UID, and runtime-directory evidence.
+adb_cmd shell input keyevent KEYCODE_HOME
+sleep 1
 adb_cmd shell "run-as $package kill -KILL $orphan_activity_pid" >/dev/null
 adb_cmd shell "run-as $package kill -KILL $orphan_service_pid" >/dev/null
 adb_cmd shell am force-stop "$package" >/dev/null
@@ -322,6 +328,18 @@ done
 printf '%s\n' "$orphan_processes" >"$evidence_file.orphan-live.ps"
 if ! awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes"; then
   echo "root VPP owner did not survive app-process death; evidence=$evidence_file.orphan-live.ps" >&2
+  exit 1
+fi
+
+# Now that the app processes are gone, remove only the durable PID and
+# projection while the verified root VPP owner remains alive. This forces the
+# fresh service through PID-less token/profile/executable/hash/UID adoption.
+adb_cmd shell su 0 sh -c "rm -f /data/user/0/$package/files/profiles/root/vpp/runtime/vpp.pid /data/user/0/$package/files/runtime-state/snapshot.properties"
+orphan_pidless_files="$(adb_cmd shell su 0 sh -c "ls -ln /data/user/0/$package/files/profiles/root/vpp/runtime/owner.token /data/user/0/$package/files/profiles/root/vpp/startup.conf /data/user/0/$package/files/profiles/root/vpp/runtime/vpp.pid /data/user/0/$package/files/runtime-state/snapshot.properties 2>&1" | tr -d '\r' || true)"
+printf '%s\n' "$orphan_pidless_files" >"$evidence_file.orphan-pidless"
+if grep -q '/vpp.pid$' <<<"$orphan_pidless_files" \
+    || grep -q '/snapshot.properties$' <<<"$orphan_pidless_files"; then
+  echo "orphan PID/projection removal did not take effect; evidence=$evidence_file.orphan-pidless" >&2
   exit 1
 fi
 
