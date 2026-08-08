@@ -27,6 +27,8 @@ if grep -Eq 'env_raw=\\\$\\\(runcon .*environ' "$harness"; then
   echo "owner verifier stores NUL-delimited /proc environ in command substitution" >&2
   exit 1
 fi
+grep -q 'trap .*cleanup_remote_temp' "$harness"
+grep -q 'sakamoto-67-vpp-owner-ps.\*' "$harness"
 
 # A retained marker is not provenance. The stage boundary must rebuild from a
 # pinned git archive, record the archive digest, then bind the final overlay

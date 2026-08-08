@@ -95,7 +95,7 @@ else
 fi
 
 verified_owner_snapshot() {
-  local remote_script remote_script_host remote_script_path owner_output remote_cleanup_status
+  local remote_script remote_script_host remote_script_path owner_output remote_cleanup_status remote_temp_cleanup
   remote_script="$(cat <<EOF
 #!/system/bin/sh
 set -u
@@ -105,6 +105,10 @@ expected_exe=$expected_runtime_path
 proc_reader='runcon u:r:ksu:s0 '
 fail() { echo "OWNER_SCRIPT_ERROR=\$1" >&2; exit 125; }
 ps_file="/data/local/tmp/sakamoto-67-vpp-owner-ps.\$\$"
+env_raw_file=""
+env_file=""
+cleanup_remote_temp() { rm -f "\$ps_file" "\$env_raw_file" "\$env_file"; }
+trap 'cleanup_remote_temp' 0 1 2 3 15
 ps -A -o PID,UID,args >"\$ps_file" || fail ps
 while read -r pid ps_uid args; do
   [ -n "\$pid" ] || continue
@@ -213,9 +217,10 @@ EOF
     echo "unable to push owner verifier" >&2
     return 1
   fi
+  remote_temp_cleanup="rm -f '$remote_script_path' /data/local/tmp/sakamoto-67-vpp-owner-ps.* /data/local/tmp/sakamoto-67-vpp-owner-env.*"
   if ! owner_output="$(adb_cmd shell su 0 sh -c "sh '$remote_script_path'" 2>&1)"; then
     remote_cleanup_status=0
-    if ! adb_cmd shell su 0 sh -c "rm -f '$remote_script_path'" >/dev/null 2>&1; then
+    if ! adb_cmd shell su 0 sh -c "$remote_temp_cleanup" >/dev/null 2>&1; then
       remote_cleanup_status=1
     fi
     if ! rm -f -- "$remote_script_host"; then
@@ -227,7 +232,7 @@ EOF
     echo "owner verifier execution failed: $owner_output" >&2
     return 1
   fi
-  if ! adb_cmd shell su 0 sh -c "rm -f '$remote_script_path'" >/dev/null 2>&1; then
+  if ! adb_cmd shell su 0 sh -c "$remote_temp_cleanup" >/dev/null 2>&1; then
     if ! rm -f -- "$remote_script_host"; then
       echo "owner verifier remote and host cleanup failed" >&2
     fi
