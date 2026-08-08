@@ -122,21 +122,6 @@ public final class RuntimeService extends VpnService {
 
         long requestTimeMillis = intent == null ? 0L
                 : intent.getLongExtra(RuntimeControlProtocol.EXTRA_REQUEST_TIME_MILLIS, 0L);
-        if (ACTION_START.equals(action)) {
-            if (requestTimeMillis > latestStartRequestMillis) {
-                latestStartRequestMillis = requestTimeMillis;
-            }
-            // A start request is authoritative over any delayed stop from an
-            // Activity instance that has already been replaced.
-            stopRequested = false;
-        }
-
-        if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_CLEANUP_FAULT)) {
-            final boolean enabled = intent.getBooleanExtra(
-                    RuntimeControlProtocol.EXTRA_CLEANUP_FAULT, false);
-            enqueueLifecycle(() -> setCleanupFault(enabled));
-        }
-
         RuntimeProfile requested = null;
         if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_PROFILE)) {
             try {
@@ -147,6 +132,21 @@ public final class RuntimeService extends VpnService {
                         currentMayBeActive(), currentPid()));
                 return START_NOT_STICKY;
             }
+        }
+
+        if (ACTION_START.equals(action)) {
+            if (requestTimeMillis > latestStartRequestMillis) {
+                latestStartRequestMillis = requestTimeMillis;
+            }
+            // A valid start request is authoritative over any delayed stop
+            // from an Activity instance that has already been replaced.
+            stopRequested = false;
+        }
+
+        if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_CLEANUP_FAULT)) {
+            final boolean enabled = intent.getBooleanExtra(
+                    RuntimeControlProtocol.EXTRA_CLEANUP_FAULT, false);
+            enqueueLifecycle(() -> setCleanupFault(enabled));
         }
 
         if (ACTION_STOP.equals(action)) {
