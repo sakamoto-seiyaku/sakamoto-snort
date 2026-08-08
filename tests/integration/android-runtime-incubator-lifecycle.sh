@@ -260,7 +260,8 @@ fi
 
 # Prove the bounded orphan-recovery seam independently of the normal exit
 # monitor. Kill the VPP owner and both Android processes without giving the
-# service a cleanup turn, then remove the durable PID fields while preserving
+# service a cleanup turn, then force-stop the package to suppress its
+# START_STICKY restart. Remove the durable PID fields while preserving
 # root-owned profile residue. A fresh QUERY must audit /proc ownership before
 # it is allowed to remove that residue.
 adb_cmd shell am start -n "$activity" --ez runtimeStart true --es runtimeProfile root >/dev/null
@@ -293,8 +294,9 @@ printf 'vppPid=%s\nservicePid=%s\nactivityPid=%s\n%s\n' \
   "$orphan_vpp_pid" "$orphan_service_pid" "$orphan_activity_pid" "$orphan_before" \
   >"$evidence_file.orphan-before"
 adb_cmd shell su 0 sh -c "kill -KILL $orphan_vpp_pid" >/dev/null
-adb_cmd shell "run-as $package kill -KILL $orphan_service_pid" >/dev/null
 adb_cmd shell "run-as $package kill -KILL $orphan_activity_pid" >/dev/null
+adb_cmd shell "run-as $package kill -KILL $orphan_service_pid" >/dev/null
+adb_cmd shell am force-stop "$package" >/dev/null
 for _ in $(seq 1 20); do
   orphan_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>/dev/null | tr -d '\r' || true)"
   if ! awk -v pid="$orphan_vpp_pid" '$1 == pid {found=1} END {exit found ? 0 : 1}' <<<"$orphan_processes" \
