@@ -276,7 +276,7 @@ public final class RuntimeService extends VpnService {
         // The serial onCreate reconciliation must audit both profiles before
         // any new process can be launched. Keep this guard as a second seam
         // against a reordered lifecycle request.
-        if (durableProjectionRequiresAudit || durableRecoveryBlocked) {
+        if (durableProjectionRequiresAudit) {
             publishError("runtime_ownership_unverified",
                     "Root/VPN durable ownership has not been safely reconciled",
                     true, currentPid());
