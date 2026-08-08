@@ -41,11 +41,10 @@ else
   vpp_dir="$source_input"
   source_revision="$(git -C "$vpp_dir" rev-parse HEAD 2>/dev/null || true)"
   source_revision="${source_revision:-external}"
-  if git -C "$vpp_dir" diff --quiet -- 2>/dev/null \
-      && git -C "$vpp_dir" diff --cached --quiet -- 2>/dev/null; then
-    source_status="explicit-committed-tree"
-  else
+  if [[ -n "$(git -C "$vpp_dir" status --porcelain --untracked-files=all 2>/dev/null || true)" ]]; then
     source_status="explicit-working-tree"
+  else
+    source_status="explicit-committed-tree"
   fi
 fi
 vpp_source="$vpp_dir/src"
