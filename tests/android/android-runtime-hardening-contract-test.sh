@@ -22,6 +22,11 @@ install_line="$(grep -n 'adb_cmd install -r' "$harness" | head -n 1 | cut -d: -f
   || { echo "APK replacement occurs before old-path owner cleanup" >&2; exit 1; }
 grep -q 'preinstallRuntimePath=' "$harness"
 grep -q 'packaged VPP remains after preinstall clear' "$harness"
+grep -q 'env_raw_file=' "$harness"
+if grep -Eq 'env_raw=\\\$\\\(runcon .*environ' "$harness"; then
+  echo "owner verifier stores NUL-delimited /proc environ in command substitution" >&2
+  exit 1
+fi
 
 # A retained marker is not provenance. The stage boundary must rebuild from a
 # pinned git archive, record the archive digest, then bind the final overlay

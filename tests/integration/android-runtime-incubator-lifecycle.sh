@@ -158,23 +158,34 @@ while read -r pid ps_uid args; do
     token=\$(tr -d '[:space:]' <"\$token_file" 2>/dev/null) || fail owner_token
     echo "\$token" | grep -Eq '^[0-9A-Fa-f-]{36}$' || continue
     case "\$args" in *"\$startup"*) ;; *) continue ;; esac
-    env_raw=\$(runcon u:r:ksu:s0 cat "/proc/\$pid/environ" 2>/dev/null) || {
+    env_raw_file="/data/local/tmp/sakamoto-67-vpp-owner-env.\$\$.\$pid.raw"
+    env_file="/data/local/tmp/sakamoto-67-vpp-owner-env.\$\$.\$pid"
+    cleanup_env() { rm -f "\$env_raw_file" "\$env_file" || fail env_cleanup; }
+    if ! runcon u:r:ksu:s0 cat "/proc/\$pid/environ" >"\$env_raw_file" 2>/dev/null; then
+      cleanup_env
       [ ! -d "/proc/\$pid" ] && continue
       fail proc_environ
-    }
-    env=\$(printf '%s' "\$env_raw" | tr '\\0' '\\n') || {
+    fi
+    if ! tr '\\0' '\\n' <"\$env_raw_file" >"\$env_file"; then
+      cleanup_env
       [ ! -d "/proc/\$pid" ] && continue
       fail proc_environ_translate
+    fi
+    env_match=1
+    grep -Fqx "SAKAMOTO_VPP_OWNER_TOKEN=\$token" "\$env_file" || {
+      rc=\$?
+      if [ "\$rc" -eq 1 ]; then env_match=0; else cleanup_env; fail env_owner_token; fi
     }
-    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_OWNER_TOKEN=\$token" || {
-      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail env_owner_token
+    grep -Fqx "SAKAMOTO_VPP_RUNTIME_DIR=\$runtime_dir" "\$env_file" || {
+      rc=\$?
+      if [ "\$rc" -eq 1 ]; then env_match=0; else cleanup_env; fail env_runtime; fi
     }
-    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_VPP_RUNTIME_DIR=\$runtime_dir" || {
-      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail env_runtime
+    grep -Fqx "SAKAMOTO_RUNTIME_PROFILE=\$profile" "\$env_file" || {
+      rc=\$?
+      if [ "\$rc" -eq 1 ]; then env_match=0; else cleanup_env; fail env_profile; fi
     }
-    printf '%s\\n' "\$env" | grep -Fqx "SAKAMOTO_RUNTIME_PROFILE=\$profile" || {
-      rc=\$?; [ "\$rc" -eq 1 ] && continue; fail env_profile
-    }
+    cleanup_env
+    [ "\$env_match" -eq 1 ] || continue
     printf '%s\\t%s\\t%s\\t%s\\n' "\$profile" "\$pid" "\$proc_uid" "\$exe"
   done
 done <"\$ps_file"
