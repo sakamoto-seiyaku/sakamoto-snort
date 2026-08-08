@@ -785,12 +785,14 @@ public final class RuntimeService extends VpnService {
         }
         String profileName = activeProfile.wireName;
         String command =
-                "for proc in /proc/[0-9]*; do "
-                + "test -d \"$proc\" || continue; "
-                // Android exposes kernel threads as root-owned /proc entries
-                // without an executable symlink. Filter by UID and executable
-                // before reading command lines and environments that only a
-                // candidate VPP owner can provide.
+                // Use ps to narrow the volatile /proc inspection to root
+                // processes whose visible command already names this profile.
+                // Scanning every kernel-thread entry is too slow on Android
+                // and routinely exceeds the bounded root-command deadline.
+                "ps_output=$(ps -A -o PID,UID,args 2>/dev/null) || exit 120; "
+                + "for pid in $(printf '%s\\n' \"$ps_output\" | awk '$2 == 0 && index($0, "
+                + shellQuote(startup) + ") {print $1}'); do "
+                + "proc=/proc/$pid; test -d \"$proc\" || continue; "
                 + "if ! test -r \"$proc/status\"; then "
                 + "[ -e \"$proc/status\" ] && exit 121; continue; fi; "
                 + "uid=$(awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
@@ -806,8 +808,8 @@ public final class RuntimeService extends VpnService {
                 + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
                 + "|| { [ -e \"$proc/cmdline\" ] && exit 124; continue; }; "
                 + "case \"$cmd\" in *" + shellQuote(startup) + "*) ;; *) continue ;; esac; "
-                + "if ! test -r \"$proc/environ\" || ! test -r \"$proc/exe\"; then "
-                + "[ -e \"$proc\" ] && exit 121; continue; fi; "
+                + "if ! test -r \"$proc/environ\"; then "
+                + "[ -e \"$proc/environ\" ] && exit 125; continue; fi; "
                 + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null) "
                 + "|| { [ -e \"$proc\" ] && exit 125; continue; }; "
                 + "printf '%s\\n' \"$env\" | grep -F -- "
