@@ -386,6 +386,13 @@ public final class RuntimeService extends VpnService {
 
     private void reconcileDurableRuntime(boolean forceHealthQuery) {
         initializeProfilePaths(activeProfile);
+        // A cleanup failure is a deliberate fail-closed state. Do not let a
+        // periodic QUERY re-adopt the still-live owner as "running" and
+        // thereby erase the replacement block before an explicit retry.
+        if (snapshot != null && RuntimeSnapshot.STATE_ERROR.equals(snapshot.state)
+                && "cleanup_failed".equals(snapshot.errorCode) && snapshot.mayBeActive) {
+            return;
+        }
         if (snapshot != null && snapshot.isActive() && !foregroundStarted
                 && !ensureForeground(activeProfile)) {
             return;
