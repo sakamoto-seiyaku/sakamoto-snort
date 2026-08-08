@@ -72,6 +72,20 @@ public final class RuntimeSnapshot {
                 "unknown", "", "", false, -1L, generation, System.currentTimeMillis());
     }
 
+    /**
+     * Terminal projection after cleanup. Preserve the most recent bounded
+     * failure reason while making ownership unambiguously inactive.
+     */
+    public static RuntimeSnapshot stoppedAfter(RuntimeSnapshot previous) {
+        if (previous == null || previous.errorCode.isEmpty()) {
+            return previous == null ? stopped() : stopped(previous.profile, previous.generation);
+        }
+        return new RuntimeSnapshot(STATE_STOPPED, previous.profile, previous.protocol,
+                previous.version, previous.artifact, previous.abi, previous.adapter, "unknown",
+                previous.errorCode, previous.errorMessage, false, -1L, previous.generation,
+                System.currentTimeMillis());
+    }
+
     public static RuntimeSnapshot starting(RuntimeProfile profile, String protocol,
                                            String version, String artifact, long generation) {
         return new RuntimeSnapshot(STATE_STARTING, profile, protocol, version, artifact, "",

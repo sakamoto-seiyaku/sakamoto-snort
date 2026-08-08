@@ -14,6 +14,7 @@ public final class AndroidRuntimeContractTest {
         requestRoundTripIsVersionedAndProfileAware();
         profileAdapterManifestIdentityIsStable();
         snapshotRoundTripPreservesBoundedHealthAndError();
+        stoppedSnapshotRetainsRecentFailure();
         healthRequiresArtifactAndProfileAdapterIdentity();
         System.out.println("android runtime contract: PASS");
     }
@@ -60,6 +61,30 @@ public final class AndroidRuntimeContractTest {
         check(restoredFailure.errorCode.equals("cleanup_failed"), "error code round-trips");
         check(restoredFailure.errorMessage.length() <= RuntimeSnapshot.MAX_TEXT_LENGTH,
                 "error message is bounded");
+    }
+
+    private static void stoppedSnapshotRetainsRecentFailure() throws Exception {
+        RuntimeSnapshot failure = RuntimeSnapshot.error(
+                RuntimeProfile.ROOT, "vpp-runtime-health/v1", "v26.02-release",
+                "arm64-v8a", "artifact-sha256:abc", "nfqueue", "unexpected_exit",
+                "VPP owner exited with status 137", false, -1L, 8L);
+        RuntimeSnapshot stopped = RuntimeSnapshot.stoppedAfter(failure);
+        check(RuntimeSnapshot.STATE_STOPPED.equals(stopped.state),
+                "terminal snapshot is stopped");
+        check("unexpected_exit".equals(stopped.errorCode),
+                "terminal snapshot retains recent failure code");
+        check("VPP owner exited with status 137".equals(stopped.errorMessage),
+                "terminal snapshot retains recent failure message");
+        check(!stopped.mayBeActive, "terminal failure cannot claim an active owner");
+        check(!stopped.isActive(), "terminal failure is inactive");
+        check(stopped.generation == 8L, "terminal snapshot retains generation");
+
+        Path files = Files.createTempDirectory("sakamoto-67-stopped-failure");
+        RuntimeStateStore.write(files.toFile(), stopped);
+        RuntimeSnapshot restored = RuntimeStateStore.read(files.toFile());
+        check("unexpected_exit".equals(restored.errorCode),
+                "terminal failure code survives persistence");
+        check(!restored.mayBeActive, "persisted terminal failure is inactive");
     }
 
     private static void profileAdapterManifestIdentityIsStable() {

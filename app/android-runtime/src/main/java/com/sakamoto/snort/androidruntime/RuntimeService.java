@@ -379,7 +379,7 @@ public final class RuntimeService extends VpnService {
         }
         closeVpnAdapter();
         publishError("runtime_recovered", "previous VPP owner was no longer active", false, -1L);
-        publish(RuntimeSnapshot.stopped(activeProfile, generation));
+        publish(RuntimeSnapshot.stoppedAfter(snapshot));
     }
 
     private void adoptRuntime(long pid) {
@@ -665,7 +665,7 @@ public final class RuntimeService extends VpnService {
         vppProcess = null;
         closeVpnAdapter();
         clearProfileHandles();
-        publish(RuntimeSnapshot.stopped(activeProfile, generation));
+        publish(RuntimeSnapshot.stoppedAfter(current));
         stopRequested = false;
         if (foregroundStarted) {
             stopForeground(true);

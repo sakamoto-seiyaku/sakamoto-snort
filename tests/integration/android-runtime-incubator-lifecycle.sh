@@ -87,18 +87,85 @@ grep -q '^state=running$' <<<"$state"
 
 pid="$(awk -F= '$1 == "pid" {print $2}' <<<"$state")"
 [[ "$pid" =~ ^[0-9]+$ && "$pid" != 0 ]] || { echo "running snapshot has no PID" >&2; exit 1; }
-adb_cmd shell "kill -KILL $pid" || true
-for _ in $(seq 1 20); do
-  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
-  if grep -q '^mayBeActive=false$' <<<"$state"; then
+
+kill_evidence="$evidence_file.crash-kill"
+if ! kill_output="$(adb_cmd shell "su 0 sh -c 'kill -KILL $pid'" 2>&1)"; then
+  printf 'pid=%s\ncommand=su 0 sh -c '\''kill -KILL %s'\''\n%s\n' \
+    "$pid" "$pid" "$kill_output" >"$kill_evidence"
+  echo "unable to kill validated VPP PID as root; evidence=$kill_evidence" >&2
+  exit 1
+fi
+printf 'pid=%s\ncommand=su 0 sh -c '\''kill -KILL %s'\''\n%s\n' \
+  "$pid" "$pid" "$kill_output" >"$kill_evidence"
+crash_recovered=0
+for _ in $(seq 1 30); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null \
+    | tr -d '\r' || true)"
+  process_snapshot="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' 2>/dev/null \
+    | tr -d '\r' || true)"
+  process_alive=0
+  if adb_cmd shell "su 0 sh -c 'kill -0 $pid'" >/dev/null 2>&1; then
+    process_alive=1
+  fi
+  process_present=0
+  if awk -v expected_pid="$pid" '$1 == expected_pid { found = 1 } END { exit found ? 0 : 1 }' \
+      <<<"$process_snapshot"; then
+    process_present=1
+  fi
+  {
+    echo "process_alive=$process_alive"
+    echo "process_present=$process_present"
+    echo "$state"
+    echo "$process_snapshot"
+  } >"$evidence_file.crash.state"
+  if [[ "$process_alive" == 0 ]] \
+      && [[ "$process_present" == 0 ]] \
+      && grep -q '^state=stopped$' <<<"$state" \
+      && grep -q '^errorCode=unexpected_exit$' <<<"$state" \
+      && grep -q '^mayBeActive=false$' <<<"$state"; then
+    crash_recovered=1
     break
   fi
   sleep 1
 done
+[[ "$crash_recovered" == 1 ]] \
+  || { echo "runtime crash was not recovered with durable unexpected_exit; evidence=$evidence_file.crash.state" >&2; exit 1; }
+if ! adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
+  && test ! -e files/profiles/root/vpp/runtime/cli.sock \
+  && test ! -e files/profiles/root/vpp/runtime/statseg.sock \
+  && test ! -e files/profiles/root/vpp/shm'"; then
+  echo "profile residue remains after crash recovery; evidence=$evidence_file.crash.state" >&2
+  exit 1
+fi
+
+# A recovered service must be able to start the same profile again before the
+# final clean stop. This catches a one-shot cleanup pass that only reports an
+# inactive state but leaves the lifecycle owner unusable.
+adb_cmd shell am start -n "$activity" --ez runtimeStart true --es runtimeProfile root >/dev/null
+restart_running=0
+for _ in $(seq 1 30); do
+  state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "$state" >"$evidence_file.restart.state"
+  if grep -q '^state=running$' <<<"$state" \
+      && grep -q '^health=ok$' <<<"$state" \
+      && grep -q '^protocol=vpp-runtime-health/v1$' <<<"$state" \
+      && grep -q '^profile=root$' <<<"$state"; then
+    restart_running=1
+    break
+  fi
+  if grep -q '^state=error$' <<<"$state"; then
+    echo "runtime restart failed; raw state evidence: $evidence_file.restart.state" >&2
+    exit 1
+  fi
+  sleep 1
+done
+[[ "$restart_running" == 1 ]] \
+  || { echo "runtime did not recover after crash; evidence=$evidence_file.restart.state" >&2; exit 1; }
 
 adb_cmd shell am start -n "$activity" --ez runtimeStop true >/dev/null
 for _ in $(seq 1 20); do
   state="$(adb_cmd shell run-as "$package" cat "$state_path" 2>/dev/null | tr -d '\r' || true)"
+  printf '%s\n' "$state" >"$evidence_file.final.state"
   if grep -q '^state=stopped$' <<<"$state" \
       && grep -q '^mayBeActive=false$' <<<"$state"; then
     break
@@ -110,7 +177,9 @@ adb_cmd shell "run-as $package sh -c 'test ! -e files/profiles/root/vpp \
   && test ! -e files/profiles/root/vpp/runtime/cli.sock \
   && test ! -e files/profiles/root/vpp/runtime/statseg.sock \
   && test ! -e files/profiles/root/vpp/shm'"
-if adb_cmd shell ps -A -o NAME,args | tr -d '\r' | grep -q 'libvpp_runtime.so'; then
+final_processes="$(adb_cmd shell su 0 sh -c 'ps -A -o PID,NAME,args' | tr -d '\r' || true)"
+printf '%s\n' "$final_processes" >"$evidence_file.final.ps"
+if grep -q 'libvpp_runtime.so' <<<"$final_processes"; then
   echo "VPP process residue remains after stop" >&2
   exit 1
 fi
