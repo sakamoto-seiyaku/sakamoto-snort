@@ -75,14 +75,16 @@ verified_owner_snapshot() {
 app_data=/data/user/0/$package
 expected_app_uid=$app_uid
 expected_hash=$runtime_sha256
+proc_reader='runcon u:r:ksu:s0 '
 ps -A -o PID,UID,args | while read -r pid ps_uid args; do
   case "\$args" in *libvpp_runtime.so*) ;; *) continue ;; esac
   [ -d "/proc/\$pid" ] || continue
-  proc_uid=\$(awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || continue
+  proc_uid=\$(\$proc_reader awk '\$1 == "Uid:" {print \$2; exit}' "/proc/\$pid/status" 2>/dev/null) || continue
   [ "\$proc_uid" = "0" ] || [ "\$proc_uid" = "\$expected_app_uid" ] || continue
-  exe=\$(readlink "/proc/\$pid/exe" 2>/dev/null) || continue
+  exe=\$(\$proc_reader readlink "/proc/\$pid/exe" 2>/dev/null) || continue
   [ "\$(basename "\$exe")" = "libvpp_runtime.so" ] || continue
-  hash=\$(sha256sum "/proc/\$pid/exe" 2>/dev/null | awk '{print \$1}') || continue
+  hash=\$(\$proc_reader sh -c "dd if=/proc/\$pid/exe bs=4096 2>/dev/null | sha256sum" \
+    | awk '{print \$1}') || continue
   [ "\$hash" = "\$expected_hash" ] || continue
   for profile in root vpn; do
     profile_uid="\$expected_app_uid"
@@ -297,9 +299,9 @@ service_uid="$(adb_cmd shell su 0 sh -c "grep ^Uid: /proc/$service_pid/status" \
   | tr -d '\r' | awk '{print $2}')"
 [[ "$activity_uid" == "$app_uid" && "$service_uid" == "$app_uid" ]] \
   || { echo "Activity/service process UID identity mismatch" >&2; exit 1; }
-activity_cmdline="$(adb_cmd shell su 0 sh -c "tr -d '\0' </proc/$activity_pid/cmdline" \
+activity_cmdline="$(adb_cmd shell su 0 sh -c "tr '\0' ' ' </proc/$activity_pid/cmdline" \
   | tr -d '\r')"
-service_cmdline="$(adb_cmd shell su 0 sh -c "tr -d '\0' </proc/$service_pid/cmdline" \
+service_cmdline="$(adb_cmd shell su 0 sh -c "tr '\0' ' ' </proc/$service_pid/cmdline" \
   | tr -d '\r')"
 grep -Fq "$package" <<<"$activity_cmdline"
 grep -Fq "$package:runtime" <<<"$service_cmdline"
