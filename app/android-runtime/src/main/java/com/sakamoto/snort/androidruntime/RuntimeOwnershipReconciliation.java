@@ -183,6 +183,63 @@ public final class RuntimeOwnershipReconciliation {
         }
     }
 
+    /** Durable product projection facts used to validate a global owner. */
+    public static final class Projection {
+        public final boolean known;
+        public final RuntimeProfile profile;
+        public final boolean active;
+        public final long pid;
+
+        private Projection(boolean known, RuntimeProfile profile, boolean active, long pid) {
+            this.known = known;
+            this.profile = profile == null ? RuntimeProfile.ROOT : profile;
+            this.active = active;
+            this.pid = pid;
+        }
+
+        public static Projection unknown() {
+            return new Projection(false, RuntimeProfile.ROOT, false, -1L);
+        }
+
+        public static Projection known(RuntimeProfile profile, boolean active, long pid) {
+            return new Projection(true, profile, active, pid);
+        }
+    }
+
+    /** One global ownership decision after both Root and VPN audits complete. */
+    public static final class GlobalDecision {
+        public final Action action;
+        public final ProfileAudit root;
+        public final ProfileAudit vpn;
+        public final RuntimeProfile ownerProfile;
+        public final long ownerPid;
+        public final RuntimeProfile cleanupProfile;
+        public final long cleanupPid;
+        public final String errorCode;
+        public final String detail;
+
+        private GlobalDecision(Action action, ProfileAudit root, ProfileAudit vpn,
+                               RuntimeProfile ownerProfile, long ownerPid,
+                               RuntimeProfile cleanupProfile, long cleanupPid,
+                               String errorCode, String detail) {
+            this.action = action == null ? Action.BLOCK : action;
+            this.root = root == null ? ProfileAudit.unknown(RuntimeProfile.ROOT,
+                    "root ownership audit is unavailable") : root;
+            this.vpn = vpn == null ? ProfileAudit.unknown(RuntimeProfile.VPN,
+                    "VPN ownership audit is unavailable") : vpn;
+            this.ownerProfile = ownerProfile;
+            this.ownerPid = ownerPid;
+            this.cleanupProfile = cleanupProfile;
+            this.cleanupPid = cleanupPid;
+            this.errorCode = value(errorCode);
+            this.detail = value(detail);
+        }
+
+        public boolean isBlocked() {
+            return action == Action.BLOCK;
+        }
+    }
+
     /** Result of the profile cleanup policy, before the service deletes files. */
     public static final class CleanupDecision {
         public final CleanupAction action;
@@ -235,6 +292,83 @@ public final class RuntimeOwnershipReconciliation {
             return Action.ADOPT_VPN;
         }
         return Action.CLEAN;
+    }
+
+    /**
+     * Reconcile the complete Root/VPN ownership set against one durable
+     * projection. This is the only global decision seam: callers must audit
+     * both profiles first and then use this result before adopting, cleaning,
+     * or launching either profile.
+     */
+    public static GlobalDecision decide(ProfileAudit root, ProfileAudit vpn,
+                                        Projection projection) {
+        ProfileAudit safeRoot = root == null
+                ? ProfileAudit.unknown(RuntimeProfile.ROOT, "root ownership audit is unavailable")
+                : root;
+        ProfileAudit safeVpn = vpn == null
+                ? ProfileAudit.unknown(RuntimeProfile.VPN, "VPN ownership audit is unavailable")
+                : vpn;
+        Projection safeProjection = projection == null ? Projection.unknown() : projection;
+        Action action = decide(safeRoot.evidence, safeVpn.evidence);
+        if (action == Action.BLOCK) {
+            String errorCode = safeRoot.evidence == Evidence.UNKNOWN && !safeRoot.errorCode.isEmpty()
+                    ? safeRoot.errorCode
+                    : safeVpn.evidence == Evidence.UNKNOWN && !safeVpn.errorCode.isEmpty()
+                            ? safeVpn.errorCode : "runtime_ownership_ambiguous";
+            return new GlobalDecision(Action.BLOCK, safeRoot, safeVpn, null, -1L,
+                    null, -1L, errorCode,
+                    ownershipConflictDetail(safeRoot, safeVpn));
+        }
+
+        if (action == Action.ADOPT_ROOT || action == Action.ADOPT_VPN) {
+            ProfileAudit owner = action == Action.ADOPT_ROOT ? safeRoot : safeVpn;
+            if (owner.pid <= 0L) {
+                return new GlobalDecision(Action.BLOCK, safeRoot, safeVpn, null, -1L,
+                        null, -1L, "runtime_ownership_unverified",
+                        "globally verified live owner did not provide a usable PID");
+            }
+            if (safeProjection.known) {
+                if (!safeProjection.active) {
+                    return new GlobalDecision(Action.BLOCK, safeRoot, safeVpn, null, -1L,
+                            null, -1L, "runtime_ownership_ambiguous",
+                            "a live durable owner conflicts with an inactive runtime projection");
+                }
+                if (safeProjection.profile != owner.profile) {
+                    return new GlobalDecision(Action.BLOCK, safeRoot, safeVpn, null, -1L,
+                            null, -1L, "runtime_ownership_ambiguous",
+                            "live durable owner profile differs from the runtime projection");
+                }
+                // A valid active projection can be observed during the
+                // launch-shell window before its PID has been durably
+                // published. The exhaustive owner scan is authoritative in
+                // that case; a non-missing recorded PID, however, must match
+                // exactly and never be silently replaced.
+                if (safeProjection.pid > 0L && safeProjection.pid != owner.pid) {
+                    return new GlobalDecision(Action.BLOCK, safeRoot, safeVpn, null, -1L,
+                            null, -1L, "runtime_ownership_ambiguous",
+                            "live durable owner PID differs from the runtime projection");
+                }
+            }
+            return new GlobalDecision(action, safeRoot, safeVpn, owner.profile, owner.pid,
+                    null, -1L, "", owner.detail);
+        }
+
+        RuntimeProfile cleanupProfile = null;
+        long cleanupPid = -1L;
+        if (safeRoot.evidence == Evidence.RESIDUE) {
+            cleanupProfile = RuntimeProfile.ROOT;
+            cleanupPid = safeRoot.pid;
+        } else if (safeVpn.evidence == Evidence.RESIDUE) {
+            cleanupProfile = RuntimeProfile.VPN;
+            cleanupPid = safeVpn.pid;
+        }
+        return new GlobalDecision(Action.CLEAN, safeRoot, safeVpn, null, -1L,
+                cleanupProfile, cleanupPid, "", cleanupProfile == null
+                        ? "no durable Root/VPN owner or residue" : "one safely audited profile residue");
+    }
+
+    private static String ownershipConflictDetail(ProfileAudit root, ProfileAudit vpn) {
+        return "durable ownership audit blocked: root=" + root.detail + ", vpn=" + vpn.detail;
     }
 
     /**

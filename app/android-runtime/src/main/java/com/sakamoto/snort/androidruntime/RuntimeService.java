@@ -285,11 +285,19 @@ public final class RuntimeService extends VpnService {
         if (requestedProfile == null) {
             requestedProfile = RuntimeProfile.ROOT;
         }
-        RuntimeProfile previousProfile = activeProfile;
-        boolean previousRuntime = runtimeExists() || profileHasResidue(previousProfile)
-                || (snapshot != null && snapshot.isActive());
-        if (previousRuntime) {
-            if (requestedProfile == previousProfile && runtimeExists()) {
+        RuntimeOwnershipReconciliation.GlobalDecision ownership =
+                auditGlobalOwnership(true);
+        if (ownership.isBlocked()) {
+            publishGlobalOwnershipFailure(ownership);
+            return;
+        }
+        if (ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
+                || ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_VPN) {
+            RuntimeProfile previousProfile = ownership.ownerProfile;
+            activeProfile = previousProfile;
+            initializeProfilePaths(activeProfile);
+            if (requestedProfile == previousProfile) {
+                adoptRuntime(ownership.ownerPid);
                 appendLog("start ignored: exactly one runtime is already active");
                 return;
             }
@@ -303,6 +311,8 @@ public final class RuntimeService extends VpnService {
                 stopRequested = false;
                 return;
             }
+        } else if (!cleanGlobalResidue(ownership, "pre-start residue: ")) {
+            return;
         }
         activeProfile = requestedProfile;
         initializeProfilePaths(activeProfile);
@@ -412,147 +422,47 @@ public final class RuntimeService extends VpnService {
     }
 
     private void reconcileDurableRuntime(boolean forceHealthQuery, long queryRevision) {
-        if (durableProjectionRequiresAudit
-                && !reconcileMissingOrCorruptProjection(forceHealthQuery, queryRevision)) {
+        RuntimeOwnershipReconciliation.GlobalDecision ownership =
+                auditGlobalOwnership(!durableProjectionRequiresAudit);
+        if (ownership.isBlocked()) {
+            publishGlobalOwnershipFailure(ownership);
             return;
         }
-        initializeProfilePaths(activeProfile);
         // A cleanup failure is a deliberate fail-closed state. Do not let a
         // periodic QUERY re-adopt the still-live owner as "running" and
         // thereby erase the replacement block before an explicit retry.
         if (snapshot != null && RuntimeSnapshot.STATE_ERROR.equals(snapshot.state)
-                && "cleanup_failed".equals(snapshot.errorCode) && snapshot.mayBeActive) {
-            return;
-        }
-        if (snapshot != null && snapshot.isActive() && !foregroundStarted
-                && !ensureForeground(activeProfile)) {
-            return;
-        }
-        long pid = currentPid();
-        if (profileRoot.exists()) {
-            // A valid projection does not make its recorded PID authoritative.
-            // Reconcile the complete non-empty profile first so a duplicate
-            // owner or a launch-shell transition cannot be adopted/removed by
-            // the PID fast path.
-            RuntimeOwnershipReconciliation.ProfileAudit audit =
-                    auditDurableProfile(activeProfile);
-            if (audit.evidence == RuntimeOwnershipReconciliation.Evidence.LIVE) {
-                adoptRuntime(audit.pid, forceHealthQuery, queryRevision);
-                return;
-            }
-            if (audit.evidence == RuntimeOwnershipReconciliation.Evidence.UNKNOWN) {
-                String errorCode = audit.errorCode.isEmpty()
-                        ? "runtime_pid_unverified" : audit.errorCode;
-                publishError(errorCode,
-                        "durable VPP ownership could not be safely reconciled: " + audit.detail,
-                        true, pid);
-                return;
-            }
-            if (audit.evidence == RuntimeOwnershipReconciliation.Evidence.RESIDUE) {
-                CleanupResult cleanup = removeAndVerifyProfile(profileRoot, audit.pid, null);
-                if (!cleanup.ok) {
-                    publishCleanupFailure("durable recovery: ", cleanup, true);
-                    return;
-                }
-                publishError("runtime_recovered",
-                        "previous VPP owner was no longer active", false, -1L);
-                publish(RuntimeSnapshot.stoppedAfter(snapshot));
-                return;
-            }
-        }
-        RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(pid);
-        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH) {
-            adoptRuntime(pid, forceHealthQuery, queryRevision);
-            return;
-        }
-        if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISMATCH
-                || identity == RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN) {
-            publishError("runtime_pid_unverified",
-                    "durable VPP owner PID could not be safely adopted; refusing cleanup",
-                    true, pid);
-            return;
-        }
-        boolean residue = profileRoot.exists() || (snapshot != null && snapshot.isActive());
-        if (!residue) {
-            return;
-        }
-        // A process death can leave root-owned profile files behind after the
-        // PID file has been lost. removeAndVerifyProfile performs a
-        // fail-closed ownership audit before it considers that residue safe.
-        CleanupResult cleanup = removeAndVerifyProfile(profileRoot, pid, null);
-        if (!cleanup.ok) {
-            publishCleanupFailure("durable recovery: ", cleanup, true);
-            return;
-        }
-        publishError("runtime_recovered", "previous VPP owner was no longer active", false, -1L);
-        publish(RuntimeSnapshot.stoppedAfter(snapshot));
-    }
-
-    /**
-     * Recover when the product projection is absent or unreadable.  The
-     * projection is only a UI-facing cache; Root and VPN profile directories,
-     * PID identities, and process ownership evidence are the durable runtime
-     * authority.  Both profiles are audited before this service may launch a
-     * replacement process.
-     */
-    private boolean reconcileMissingOrCorruptProjection(boolean forceHealthQuery,
-                                                        long queryRevision) {
-        RuntimeOwnershipReconciliation.ProfileAudit root =
-                auditDurableProfile(RuntimeProfile.ROOT);
-        RuntimeOwnershipReconciliation.ProfileAudit vpn =
-                auditDurableProfile(RuntimeProfile.VPN);
-        RuntimeOwnershipReconciliation.Action action =
-                RuntimeOwnershipReconciliation.decide(root.evidence, vpn.evidence);
-        if (action == RuntimeOwnershipReconciliation.Action.BLOCK) {
+                && "cleanup_failed".equals(snapshot.errorCode) && snapshot.mayBeActive
+                && (ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
+                || ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_VPN)) {
             durableRecoveryBlocked = true;
-            activeProfile = RuntimeProfile.ROOT;
-            initializeProfilePaths(activeProfile);
-            publishError("runtime_ownership_ambiguous",
-                    boundedOwnershipFailure(root, vpn), true, -1L);
-            return false;
+            publishError(snapshot.errorCode, snapshot.errorMessage, true, snapshot.pid);
+            return;
         }
-
-        RuntimeOwnershipReconciliation.ProfileAudit owner =
-                action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
-                ? root : action == RuntimeOwnershipReconciliation.Action.ADOPT_VPN ? vpn : null;
-        if (owner != null) {
-            if (owner.pid <= 0L) {
-                durableRecoveryBlocked = true;
-                publishError("runtime_ownership_unverified",
-                        "live durable owner did not provide a usable PID", true, -1L);
-                return false;
-            }
-            activeProfile = owner.profile;
+        if (ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT
+                || ownership.action == RuntimeOwnershipReconciliation.Action.ADOPT_VPN) {
+            activeProfile = ownership.ownerProfile;
             initializeProfilePaths(activeProfile);
             durableProjectionRequiresAudit = false;
             durableRecoveryBlocked = false;
-            adoptRuntime(owner.pid, forceHealthQuery, queryRevision);
-            return true;
+            adoptRuntime(ownership.ownerPid, forceHealthQuery, queryRevision);
+            return;
         }
-
-        // CLEAN covers an empty pair and exactly one safely-audited residue
-        // profile.  Never remove a profile before the decision seam has
-        // proved that the other profile is empty.
-        RuntimeOwnershipReconciliation.ProfileAudit residue =
-                root.evidence == RuntimeOwnershipReconciliation.Evidence.RESIDUE
-                ? root : vpn.evidence == RuntimeOwnershipReconciliation.Evidence.RESIDUE ? vpn : null;
-        if (residue != null) {
-            activeProfile = residue.profile;
-            initializeProfilePaths(activeProfile);
-            CleanupResult cleanup = removeAndVerifyProfile(profileRoot, residue.pid, null);
-            if (!cleanup.ok) {
-                durableRecoveryBlocked = true;
-                publishCleanupFailure("durable reconciliation: ", cleanup, true);
-                return false;
-            }
+        if (!cleanGlobalResidue(ownership, "durable recovery: ")) {
+            return;
         }
         activeProfile = snapshot == null || snapshot.profile == null
                 ? RuntimeProfile.ROOT : snapshot.profile;
         initializeProfilePaths(activeProfile);
         durableProjectionRequiresAudit = false;
         durableRecoveryBlocked = false;
-        publish(RuntimeSnapshot.stopped(activeProfile, generation));
-        return true;
+        if (snapshot != null && snapshot.isActive()) {
+            publishError("runtime_recovered", "previous VPP owner was no longer active",
+                    false, -1L);
+            publish(RuntimeSnapshot.stoppedAfter(snapshot));
+        } else if (snapshot == null) {
+            publish(RuntimeSnapshot.stopped(activeProfile, generation));
+        }
     }
 
     private RuntimeOwnershipReconciliation.ProfileAudit auditDurableProfile(RuntimeProfile profile) {
@@ -585,6 +495,80 @@ public final class RuntimeService extends VpnService {
         String detail = "durable ownership audit blocked: root=" + root.detail
                 + ", vpn=" + vpn.detail;
         return BoundedText.value(detail, RuntimeSnapshot.MAX_TEXT_LENGTH);
+    }
+
+    /**
+     * Audit both mutually-exclusive profile directories before any lifecycle
+     * path may adopt, clean, or launch a VPP process. A valid snapshot is a
+     * projection witness only; missing/corrupt projections deliberately pass
+     * an unknown projection so a sole globally verified owner can still be
+     * recovered.
+     */
+    private RuntimeOwnershipReconciliation.GlobalDecision auditGlobalOwnership(
+            boolean projectionKnown) {
+        RuntimeOwnershipReconciliation.ProfileAudit root =
+                auditDurableProfile(RuntimeProfile.ROOT);
+        RuntimeOwnershipReconciliation.ProfileAudit vpn =
+                auditDurableProfile(RuntimeProfile.VPN);
+        RuntimeOwnershipReconciliation.Projection projection = projectionKnown && snapshot != null
+                ? RuntimeOwnershipReconciliation.Projection.known(
+                        snapshot.profile, snapshot.isActive(), snapshot.pid)
+                : RuntimeOwnershipReconciliation.Projection.unknown();
+        return RuntimeOwnershipReconciliation.decide(root, vpn, projection);
+    }
+
+    /**
+     * Remove only the one residue named by a completed global CLEAN decision.
+     * The opposite profile was audited as NONE by the same decision and is
+     * never implicitly removed or treated as harmless here.
+     */
+    private boolean cleanGlobalResidue(
+            RuntimeOwnershipReconciliation.GlobalDecision ownership, String prefix) {
+        if (ownership == null || ownership.action != RuntimeOwnershipReconciliation.Action.CLEAN) {
+            return false;
+        }
+        if (ownership.cleanupProfile == null) {
+            return true;
+        }
+        activeProfile = ownership.cleanupProfile;
+        initializeProfilePaths(activeProfile);
+        CleanupResult cleanup = removeAndVerifyProfile(
+                profileRoot, ownership.cleanupPid, null);
+        if (!cleanup.ok) {
+            durableRecoveryBlocked = true;
+            publishCleanupFailure(prefix == null ? "" : prefix, cleanup, true);
+            return false;
+        }
+        return true;
+    }
+
+    /** Publish one bounded, fail-closed error for any global ownership block. */
+    private void publishGlobalOwnershipFailure(
+            RuntimeOwnershipReconciliation.GlobalDecision ownership) {
+        durableRecoveryBlocked = true;
+        RuntimeProfile selected = snapshot == null || snapshot.profile == null
+                ? RuntimeProfile.ROOT : snapshot.profile;
+        activeProfile = selected;
+        initializeProfilePaths(activeProfile);
+        String code = ownership == null || ownership.errorCode.isEmpty()
+                ? "runtime_ownership_ambiguous" : ownership.errorCode;
+        String detail = ownership == null
+                ? "Root/VPN durable ownership decision is unavailable"
+                : boundedOwnershipFailure(ownership.root, ownership.vpn);
+        long pid = -1L;
+        boolean liveRoot = ownership != null
+                && ownership.root.evidence == RuntimeOwnershipReconciliation.Evidence.LIVE;
+        boolean liveVpn = ownership != null
+                && ownership.vpn.evidence == RuntimeOwnershipReconciliation.Evidence.LIVE;
+        if (liveRoot && !liveVpn && ownership.root.pid > 0L) {
+            pid = ownership.root.pid;
+        } else if (liveVpn && !liveRoot && ownership.vpn.pid > 0L) {
+            pid = ownership.vpn.pid;
+        } else if (snapshot != null && snapshot.isActive() && snapshot.pid > 0L) {
+            pid = snapshot.pid;
+        }
+        boolean mayBeActive = snapshot != null && snapshot.isActive() || liveRoot || liveVpn;
+        publishError(code, detail, mayBeActive, pid);
     }
 
     private void adoptRuntime(long pid) {

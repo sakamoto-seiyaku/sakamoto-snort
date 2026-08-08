@@ -18,6 +18,7 @@ public final class AndroidRuntimeContractTest {
         snapshotRoundTripPreservesBoundedHealthAndError();
         durableProjectionReadResultIsExplicit();
         durableOwnershipDecisionFailsClosed();
+        globalOwnershipDecisionRequiresOneProjectionConsistentOwner();
         pidlessLiveOwnerIsAdoptable();
         ownershipCleanupDecisionFailsClosed();
         ownershipInspectionKeepsIdentityInThePublicSeam();
@@ -130,6 +131,122 @@ public final class AndroidRuntimeContractTest {
                                 RuntimeOwnershipReconciliation.Evidence.UNKNOWN,
                                 RuntimeOwnershipReconciliation.Evidence.NONE),
                 "unverifiable ownership is blocked");
+    }
+
+    private static void globalOwnershipDecisionRequiresOneProjectionConsistentOwner() {
+        RuntimeOwnershipReconciliation.ProfileAudit rootLive =
+                RuntimeOwnershipReconciliation.ProfileAudit.live(
+                        RuntimeProfile.ROOT, 42L, "root owner");
+        RuntimeOwnershipReconciliation.ProfileAudit vpnLive =
+                RuntimeOwnershipReconciliation.ProfileAudit.live(
+                        RuntimeProfile.VPN, 77L, "vpn owner");
+        RuntimeOwnershipReconciliation.Projection rootProjection =
+                RuntimeOwnershipReconciliation.Projection.known(RuntimeProfile.ROOT, true, 42L);
+
+        RuntimeOwnershipReconciliation.GlobalDecision twoLive =
+                RuntimeOwnershipReconciliation.decide(rootLive, vpnLive, rootProjection);
+        check(twoLive.action == RuntimeOwnershipReconciliation.Action.BLOCK,
+                "a valid Root projection plus a live VPN owner is blocked globally");
+        check(twoLive.root == rootLive && twoLive.vpn == vpnLive,
+                "global decision retains both profile audit results");
+
+        RuntimeOwnershipReconciliation.ProfileAudit vpnResidue =
+                RuntimeOwnershipReconciliation.ProfileAudit.residue(
+                        RuntimeProfile.VPN, -1L, "safe residue");
+        RuntimeOwnershipReconciliation.GlobalDecision hiddenResidue =
+                RuntimeOwnershipReconciliation.decide(rootLive, vpnResidue, rootProjection);
+        check(hiddenResidue.action == RuntimeOwnershipReconciliation.Action.BLOCK,
+                "an opposite safe residue cannot hide a second-profile ownership conflict");
+
+        RuntimeOwnershipReconciliation.GlobalDecision soleRoot =
+                RuntimeOwnershipReconciliation.decide(
+                        rootLive,
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        rootProjection);
+        check(soleRoot.action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT,
+                "a sole projected Root owner is adoptable");
+        check(soleRoot.ownerProfile == RuntimeProfile.ROOT && soleRoot.ownerPid == 42L,
+                "Root adoption keeps the audited owner identity");
+
+        RuntimeOwnershipReconciliation.GlobalDecision wrongPid =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.live(
+                                RuntimeProfile.ROOT, 43L, "different owner"),
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        rootProjection);
+        check(wrongPid.action == RuntimeOwnershipReconciliation.Action.BLOCK,
+                "a projected PID mismatch fails closed");
+
+        RuntimeOwnershipReconciliation.GlobalDecision vpnMismatch =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.ROOT),
+                        vpnLive,
+                        rootProjection);
+        check(vpnMismatch.action == RuntimeOwnershipReconciliation.Action.BLOCK,
+                "a live VPN owner cannot replace a projected Root owner silently");
+
+        RuntimeOwnershipReconciliation.GlobalDecision oppositeUnknown =
+                RuntimeOwnershipReconciliation.decide(
+                        rootLive,
+                        RuntimeOwnershipReconciliation.ProfileAudit.unknown(
+                                RuntimeProfile.VPN, "VPN audit unavailable"),
+                        rootProjection);
+        check(oppositeUnknown.action == RuntimeOwnershipReconciliation.Action.BLOCK,
+                "an uncertain opposite profile blocks an otherwise valid owner");
+
+        RuntimeOwnershipReconciliation.GlobalDecision missingProjectedPid =
+                RuntimeOwnershipReconciliation.decide(
+                        rootLive,
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        RuntimeOwnershipReconciliation.Projection.known(
+                                RuntimeProfile.ROOT, true, -1L));
+        check(missingProjectedPid.action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT,
+                "an active projection without a recorded PID can adopt its exact owner");
+
+        RuntimeOwnershipReconciliation.GlobalDecision missingProjectedPidCrossProfile =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.ROOT),
+                        vpnLive,
+                        RuntimeOwnershipReconciliation.Projection.known(
+                                RuntimeProfile.ROOT, true, -1L));
+        check(missingProjectedPidCrossProfile.action == RuntimeOwnershipReconciliation.Action.BLOCK,
+                "a missing projected PID cannot make a cross-profile owner safe");
+
+        RuntimeOwnershipReconciliation.GlobalDecision corruptProjection =
+                RuntimeOwnershipReconciliation.decide(
+                        rootLive,
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        RuntimeOwnershipReconciliation.Projection.unknown());
+        check(corruptProjection.action == RuntimeOwnershipReconciliation.Action.ADOPT_ROOT,
+                "a sole globally verified owner remains adoptable without a projection");
+
+        RuntimeOwnershipReconciliation.GlobalDecision oppositeResidueSymmetric =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.residue(
+                                RuntimeProfile.ROOT, -1L, "safe residue"),
+                        vpnLive,
+                        RuntimeOwnershipReconciliation.Projection.unknown());
+        check(oppositeResidueSymmetric.action == RuntimeOwnershipReconciliation.Action.BLOCK,
+                "safe residue in Root cannot hide a live VPN owner");
+
+        RuntimeOwnershipReconciliation.GlobalDecision soleVpn =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.ROOT),
+                        vpnLive,
+                        RuntimeOwnershipReconciliation.Projection.known(RuntimeProfile.VPN, true, 77L));
+        check(soleVpn.action == RuntimeOwnershipReconciliation.Action.ADOPT_VPN,
+                "a sole projected VPN owner is adoptable symmetrically");
+
+        RuntimeOwnershipReconciliation.GlobalDecision clean =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.residue(
+                                RuntimeProfile.ROOT, -1L, "safe residue"),
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        rootProjection);
+        check(clean.action == RuntimeOwnershipReconciliation.Action.CLEAN,
+                "a globally sole safe residue can be cleaned");
+        check(clean.cleanupProfile == RuntimeProfile.ROOT,
+                "global cleanup identifies the one residue profile");
     }
 
     private static void pidlessLiveOwnerIsAdoptable() {
