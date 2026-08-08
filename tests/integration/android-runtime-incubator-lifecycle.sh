@@ -46,15 +46,6 @@ runtime_sha256="$(rtk unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
   | sha256sum | awk '{print $1}')"
 [[ "$apk_sha256" =~ ^[0-9a-fA-F]{64}$ && "$runtime_sha256" =~ ^[0-9a-fA-F]{64}$ ]] \
   || { echo "unable to bind APK/runtime SHA-256 evidence" >&2; exit 1; }
-adb_cmd install -r "$apk" >/dev/null
-app_uid="$(adb_cmd shell run-as "$package" id -u | tr -d '\r\n')"
-[[ "$app_uid" =~ ^[0-9]+$ ]] || { echo "unable to resolve app UID" >&2; exit 1; }
-installed_apk_path="$(adb_cmd shell pm path "$package" | tr -d '\r' \
-  | sed -n 's/^package://p' | head -n 1)"
-expected_runtime_path="${installed_apk_path%/base.apk}/lib/arm64/libvpp_runtime.so"
-[[ "$expected_runtime_path" == */lib/arm64/libvpp_runtime.so ]] \
-  || { echo "unable to resolve installed packaged runtime path" >&2; exit 1; }
-
 evidence_file="${ANDROID_RUNTIME_EVIDENCE_FILE:-/tmp/sakamoto-67-android-runtime-${target_serial}.log}"
 app_head_commit="$(git -C "$repo_root" rev-parse HEAD)"
 {
@@ -63,7 +54,6 @@ app_head_commit="$(git -C "$repo_root" rev-parse HEAD)"
   echo "apk=$apk"
   echo "apkSha256=$apk_sha256"
   echo "runtimeSha256=$runtime_sha256"
-  echo "installedRuntimePath=$expected_runtime_path"
   echo "appHeadCommit=$app_head_commit"
   echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >"$evidence_file"
@@ -74,6 +64,35 @@ rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties \
   echo "validity=raw device lifecycle evidence; see per-step state/process files"
   echo "residue_checks=verified VPP owners, profile trees, sockets, shm, and final process list"
 } >>"$evidence_file"
+
+# Resolve the currently installed package before replacing it. Android may
+# rotate the extracted APK directory on install; any old VPP owner must be
+# strongly matched against that old executable path and cleaned before the
+# new path is installed, otherwise the owner becomes unverifiable residue.
+existing_pm_status=0
+existing_pm_output="$(adb_cmd shell pm path "$package" 2>&1)" || existing_pm_status=$?
+[[ "$existing_pm_status" == 0 ]] \
+  || { echo "unable to inspect currently installed package before replacement: $existing_pm_output" >&2; exit 1; }
+existing_installed_apk_path="$(printf '%s\n' "$existing_pm_output" | tr -d '\r' \
+  | sed -n 's/^package://p' | head -n 1)"
+preinstall_identity_ready=0
+if [[ -n "$existing_installed_apk_path" ]]; then
+  existing_uid_status=0
+  existing_uid_output="$(adb_cmd shell run-as "$package" id -u 2>&1)" || existing_uid_status=$?
+  existing_app_uid="$(printf '%s' "$existing_uid_output" | tr -d '\r\n')"
+  [[ "$existing_uid_status" == 0 && "$existing_app_uid" =~ ^[0-9]+$ ]] \
+    || { echo "unable to resolve currently installed app UID before replacement: $existing_uid_output" >&2; exit 1; }
+  existing_runtime_path="${existing_installed_apk_path%/base.apk}/lib/arm64/libvpp_runtime.so"
+  [[ "$existing_runtime_path" == */lib/arm64/libvpp_runtime.so ]] \
+    || { echo "unable to resolve currently installed packaged runtime path" >&2; exit 1; }
+  app_uid="$existing_app_uid"
+  expected_runtime_path="$existing_runtime_path"
+  preinstall_identity_ready=1
+  echo "preinstallRuntimePath=$existing_runtime_path" >>"$evidence_file"
+else
+  app_uid=""
+  expected_runtime_path=""
+fi
 
 verified_owner_snapshot() {
   local remote_script remote_script_host remote_script_path owner_output remote_cleanup_status
@@ -323,6 +342,47 @@ assert_exactly_one_owner() {
   [[ "$(awk 'NF {n++} END {print n+0}' <<<"$all_vpp")" == 1 ]] \
     || { echo "global packaged VPP count is not exactly one" >&2; return 1; }
 }
+
+# Clean any owner from the currently installed APK before replacing it. This
+# keeps the old executable path available for strong identity matching and
+# proves there is no packaged VPP left before installation can rotate paths.
+if [[ "$preinstall_identity_ready" == 1 ]]; then
+  cleanup_verified_vpp_owners preinstall
+  adb_cmd shell am force-stop "$package"
+  wait_package_drained || {
+    echo "BLOCKED: package processes did not drain before APK replacement" >&2
+    exit 77
+  }
+  cleanup_verified_vpp_owners preinstall-post-force-stop
+  adb_cmd shell pm clear "$package" >/dev/null
+  stale_vpp="$(all_vpp_process_snapshot)" || {
+    echo "unable to inspect packaged VPP after preinstall clear" >&2
+    exit 1
+  }
+  [[ -z "$stale_vpp" ]] || {
+    echo "BLOCKED: packaged VPP remains after preinstall clear" >&2
+    exit 77
+  }
+else
+  stale_vpp="$(all_vpp_process_snapshot)" || {
+    echo "unable to inspect packaged VPP before APK replacement" >&2
+    exit 1
+  }
+  [[ -z "$stale_vpp" ]] || {
+    echo "BLOCKED: packaged VPP exists without an installed package identity" >&2
+    exit 77
+  }
+fi
+
+adb_cmd install -r "$apk" >/dev/null
+app_uid="$(adb_cmd shell run-as "$package" id -u | tr -d '\r\n')"
+[[ "$app_uid" =~ ^[0-9]+$ ]] || { echo "unable to resolve app UID" >&2; exit 1; }
+installed_apk_path="$(adb_cmd shell pm path "$package" | tr -d '\r' \
+  | sed -n 's/^package://p' | head -n 1)"
+expected_runtime_path="${installed_apk_path%/base.apk}/lib/arm64/libvpp_runtime.so"
+[[ "$expected_runtime_path" == */lib/arm64/libvpp_runtime.so ]] \
+  || { echo "unable to resolve installed packaged runtime path" >&2; exit 1; }
+echo "installedRuntimePath=$expected_runtime_path" >>"$evidence_file"
 
 # Initial interrupted-run recovery: only strongly verified packaged owners
 # may be signalled. Any ambiguous/unverified process blocks the gate.

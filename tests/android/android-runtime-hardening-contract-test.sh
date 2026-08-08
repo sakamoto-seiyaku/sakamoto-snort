@@ -15,6 +15,13 @@ fi
 grep -q 'signal_verified_owner .*TERM' "$harness"
 grep -q 'signal_verified_owner .*KILL' "$harness"
 grep -q 'OWNER_SCRIPT_OK=1' "$harness"
+preinstall_line="$(grep -n 'cleanup_verified_vpp_owners preinstall$' "$harness" | head -n 1 | cut -d: -f1)"
+install_line="$(grep -n 'adb_cmd install -r' "$harness" | head -n 1 | cut -d: -f1)"
+[[ "$preinstall_line" =~ ^[0-9]+$ && "$install_line" =~ ^[0-9]+$ \
+    && "$preinstall_line" -lt "$install_line" ]] \
+  || { echo "APK replacement occurs before old-path owner cleanup" >&2; exit 1; }
+grep -q 'preinstallRuntimePath=' "$harness"
+grep -q 'packaged VPP remains after preinstall clear' "$harness"
 
 # A retained marker is not provenance. The stage boundary must rebuild from a
 # pinned git archive, record the archive digest, then bind the final overlay
