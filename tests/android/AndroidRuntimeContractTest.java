@@ -10,6 +10,7 @@ import com.sakamoto.snort.androidruntime.VppHealthHandshake;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 
 /** Public-seam tests for the production Android runtime incubator. */
@@ -31,6 +32,7 @@ public final class AndroidRuntimeContractTest {
         rootProbeUsesPrivilegedContextAndFailsClosed();
         ownershipInspectionBlocksLiveUnreadableEnvironment();
         ownershipScanRechecksProcAfterReadRaces();
+        ownershipScanIsValidShell();
         ownershipScanBlocksMatchingIdentityOnMismatchedExecutable();
         ownershipInspectionRejectsSameProfileMultiplicity();
         recordedPidRequiresAnExhaustiveSoleOwnerScan();
@@ -576,6 +578,21 @@ public final class AndroidRuntimeContractTest {
                 "hash reader status remains explicit before accepting executable identity");
         check(command.contains("$snapshot_two_status\" in 0) exit 0"),
                 "a transition whose second snapshot is empty is treated as gone");
+    }
+
+    private static void ownershipScanIsValidShell() throws Exception {
+        String command = RuntimeOwnershipReconciliation.buildOwnershipScanCommand(ownershipSpec());
+        Path script = Files.createTempFile("sakamoto-ownership-scan", ".sh");
+        try {
+            Files.write(script, command.getBytes(StandardCharsets.UTF_8));
+            Process syntaxCheck = new ProcessBuilder("sh", "-n", script.toString())
+                    .redirectErrorStream(true)
+                    .start();
+            int status = syntaxCheck.waitFor();
+            check(status == 0, "generated ownership scan is valid POSIX shell");
+        } finally {
+            Files.deleteIfExists(script);
+        }
     }
 
     private static void ownershipScanBlocksMatchingIdentityOnMismatchedExecutable() {

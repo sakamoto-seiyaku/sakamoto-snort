@@ -667,7 +667,6 @@ public final class RuntimeOwnershipReconciliation {
                 + "env=$(" + environReader + "); env_status=$?; "
                 + "if [ \"$env_status\" -ne 0 ]; then "
                 + procReadUncertain + "fi; "
-                + "if [ \"$env_status\" -eq 0 ]; then "
                 + "printf '%s\\n' \"$env\" | grep -F -- " + ownerToken
                 + " >/dev/null; grep_status=$?; "
                 + "if [ \"$grep_status\" -eq 1 ]; then strong_mismatch=1; continue; fi; "
