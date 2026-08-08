@@ -8,6 +8,28 @@ activity="$package/.DebugControlActivity"
 apk="$repo_root/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk"
 state_path="files/runtime-state/snapshot.properties"
 target_serial="${ADB_SERIAL:-}"
+adb_timeout_seconds="${ANDROID_RUNTIME_ADB_TIMEOUT_SEC:-30}"
+
+[[ "$adb_timeout_seconds" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "ANDROID_RUNTIME_ADB_TIMEOUT_SEC must be a positive integer" >&2; exit 2; }
+command -v timeout >/dev/null 2>&1 \
+  || { echo "bounded Android lifecycle requires the host timeout command" >&2; exit 2; }
+
+adb_exec() {
+  local status
+  if timeout --foreground --signal=TERM --kill-after=5s \
+      "${adb_timeout_seconds}s" "$adb" "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  case "$status" in
+    124|137|143)
+      echo "adb command timed out after ${adb_timeout_seconds}s: $*" >&2
+      ;;
+  esac
+  return "$status"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,21 +46,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$target_serial" ]]; then
-  mapfile -t devices < <("$adb" devices | tr -d '\r' | awk '$2 == "device" {print $1}')
+  mapfile -t devices < <(adb_exec devices | tr -d '\r' | awk '$2 == "device" {print $1}')
   if [[ "${#devices[@]}" != 1 ]]; then
     echo "BLOCKED: specify --serial when ./dev/adb sees multiple/no devices" >&2
     exit 77
   fi
   target_serial="${devices[0]}"
 else
-  target_state="$("$adb" -s "$target_serial" get-state 2>/dev/null | tr -d '\r\n' || true)"
+  target_state="$(adb_exec -s "$target_serial" get-state 2>/dev/null | tr -d '\r\n' || true)"
   if [[ "$target_state" != "device" ]]; then
     echo "BLOCKED: Android device is unavailable: $target_serial" >&2
     exit 77
   fi
 fi
 
-adb_cmd() { "$adb" -s "$target_serial" "$@"; }
+adb_cmd() { adb_exec -s "$target_serial" "$@"; }
 
 "$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
 apk_sha256="$(sha256sum "$apk" | awk '{print $1}')"

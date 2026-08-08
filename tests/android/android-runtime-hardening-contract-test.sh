@@ -30,6 +30,18 @@ fi
 grep -q 'trap .*cleanup_remote_temp' "$harness"
 grep -q 'sakamoto-67-vpp-owner-ps.\*' "$harness"
 
+# The Windows adb bridge can hang independently of the device. Every
+# lifecycle command, including force-stop, must therefore run through one
+# bounded timeout wrapper rather than invoking the bridge directly.
+grep -q 'adb_timeout_seconds=' "$harness"
+grep -q 'timeout --foreground --signal=TERM --kill-after=5s' "$harness"
+grep -q 'adb_cmd() { adb_exec -s' "$harness"
+grep -q 'adb_cmd shell am force-stop' "$harness"
+if grep -Eq '"\$adb" -s' "$harness"; then
+  echo "lifecycle harness invokes adb directly outside the bounded wrapper" >&2
+  exit 1
+fi
+
 # A retained marker is not provenance. The stage boundary must rebuild from a
 # pinned git archive, record the archive digest, then bind the final overlay
 # tree digest.
