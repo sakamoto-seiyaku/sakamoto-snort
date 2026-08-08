@@ -946,16 +946,22 @@ public final class RuntimeService extends VpnService {
         CleanupResult cleanup = terminateAndClean(profileRoot, pid, vppProcess);
         boolean cleanStopFinalized = false;
         if (!cleanup.ok) {
-            CleanupResult finalized = finalizeTransientStopIfGloballyClean(
-                    cleanup, pid, vppProcess);
-            if (finalized.ok) {
-                cleanup = finalized;
+            if (canFinalizeTransientStopIfGloballyClean(
+                    cleanup, current, pid, vppProcess, false)) {
+                cleanup = CleanupResult.success();
                 cleanStopFinalized = true;
             } else {
                 publishCleanupFailure("", cleanup, true);
                 stopRequested = false;
                 return false;
             }
+        } else if (canFinalizeTransientStopIfGloballyClean(
+                cleanup, current, pid, vppProcess, true)) {
+            // A concurrent durable audit can publish a transient ownership
+            // error immediately before STOP. Successful bounded cleanup is
+            // already the strong identity witness; clear only that stale
+            // error after a fresh global no-owner/no-residue proof.
+            cleanStopFinalized = true;
         }
         vppProcess = null;
         clearProfileHandles();
@@ -985,25 +991,40 @@ public final class RuntimeService extends VpnService {
      * required to clear the transient error. All other cleanup failures stay
      * fail-closed.
      */
-    private CleanupResult finalizeTransientStopIfGloballyClean(
-            CleanupResult cleanup, long pid, Process process) {
-        if (cleanup == null || cleanup.ok) {
-            return cleanup == null ? CleanupResult.failure(pid, "cleanup result is unavailable")
-                    : cleanup;
+    private boolean canFinalizeTransientStopIfGloballyClean(
+            CleanupResult cleanup, RuntimeSnapshot current, long pid, Process process,
+            boolean cleanupCompleted) {
+        if (cleanup == null) {
+            return false;
         }
-        RuntimeOwnershipReconciliation.PidIdentity identity = validatePid(pid);
+        String errorCode = cleanupCompleted
+                ? current == null ? "" : current.errorCode : cleanup.errorCode;
+        String detail = cleanupCompleted
+                ? current == null ? "" : current.errorMessage : cleanup.detail;
+        if (!RuntimeOwnershipReconciliation.isTransientOwnershipAuditFailure(
+                errorCode, detail)) {
+            return false;
+        }
+        // A failed cleanup retry needs a fresh MISSING PID witness. A
+        // successful terminateAndClean already proved the owner identity and
+        // removed the token, so post-cleanup validation may legitimately be
+        // UNKNOWN without weakening the proof.
+        RuntimeOwnershipReconciliation.PidIdentity identity = cleanupCompleted
+                ? RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN : validatePid(pid);
         boolean processHandleAlive = processAlive(process);
         RuntimeOwnershipReconciliation.GlobalDecision ownership =
                 auditGlobalOwnership(false);
         boolean profileResiduePresent = profileDirectory(RuntimeProfile.ROOT).exists()
                 || profileDirectory(RuntimeProfile.VPN).exists();
-        if (!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+        boolean finalized = RuntimeOwnershipReconciliation.canFinalizeCleanStop(
                 identity, processHandleAlive, ownership, profileResiduePresent,
-                cleanup.errorCode, cleanup.detail)) {
-            return cleanup;
+                cleanupCompleted, errorCode, detail);
+        if (finalized) {
+            appendLog(cleanupCompleted
+                    ? "cleanup_audit_error=cleared_after_successful_stop"
+                    : "cleanup_audit_race=finalized_clean_stop");
         }
-        appendLog("cleanup_audit_race=finalized_clean_stop");
-        return CleanupResult.success();
+        return finalized;
     }
 
     private CleanupResult terminateAndClean(File profile, long pid, Process process) {

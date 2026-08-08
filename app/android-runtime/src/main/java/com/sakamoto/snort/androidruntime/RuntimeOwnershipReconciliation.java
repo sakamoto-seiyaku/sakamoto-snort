@@ -479,16 +479,23 @@ public final class RuntimeOwnershipReconciliation {
     /**
      * Decide whether a transient post-stop ownership scan failure may be
      * finalized as a clean terminal stop. The strong PID witness must already
-     * be MISSING, the in-process handle must be gone, and a fresh global audit
-     * must prove both profiles are NONE with no residue. Ordinary cleanup
-     * failures, live owners, and unreadable identities remain fail-closed.
+     * be MISSING when cleanup is being retried, the in-process handle must be
+     * gone, and a fresh global audit must prove both profiles are NONE with no
+     * residue. A successful terminateAndClean already carries that strong
+     * identity witness; after it removes the profile token, the post-cleanup
+     * identity may be UNKNOWN. Ordinary cleanup failures, live owners, and
+     * unreadable global audits remain fail-closed.
      */
     public static boolean canFinalizeCleanStop(
             PidIdentity identity, boolean processHandleAlive,
             GlobalDecision globalOwnership, boolean profileResiduePresent,
+            boolean cleanupCompleted,
             String errorCode, String detail) {
         if (!isTransientOwnershipAuditFailure(errorCode, detail)
-                || identity != PidIdentity.MISSING || processHandleAlive
+                || (!cleanupCompleted && identity != PidIdentity.MISSING)
+                || (cleanupCompleted && identity != PidIdentity.UNKNOWN
+                        && identity != PidIdentity.MISSING)
+                || processHandleAlive
                 || profileResiduePresent || globalOwnership == null
                 || globalOwnership.action != Action.CLEAN
                 || globalOwnership.cleanupProfile != null
@@ -499,7 +506,8 @@ public final class RuntimeOwnershipReconciliation {
         return true;
     }
 
-    private static boolean isTransientOwnershipAuditFailure(String errorCode, String detail) {
+    /** Public predicate for callers that must avoid auditing ordinary stops. */
+    public static boolean isTransientOwnershipAuditFailure(String errorCode, String detail) {
         if (!"cleanup_failed".equals(value(errorCode))) {
             return false;
         }

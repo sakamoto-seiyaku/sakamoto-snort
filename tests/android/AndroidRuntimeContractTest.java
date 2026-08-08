@@ -413,19 +413,27 @@ public final class AndroidRuntimeContractTest {
                 + "root /proc ownership scan returned status 120";
         check(RuntimeOwnershipReconciliation.canFinalizeCleanStop(
                         RuntimeOwnershipReconciliation.PidIdentity.MISSING,
-                        false, clean, false, "cleanup_failed", transientAudit),
+                        false, clean, false, false, "cleanup_failed", transientAudit),
                 "status-120 audit race is clean only after global no-owner proof");
         check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
                         RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
-                        false, clean, false, "cleanup_failed", transientAudit),
+                        false, clean, false, false, "cleanup_failed", transientAudit),
                 "unverifiable PID never qualifies for clean stop");
+        check(RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
+                        false, clean, false, true, "cleanup_failed", transientAudit),
+                "successful strong-identity cleanup may clear a stale transient audit");
+        check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISMATCH,
+                        false, clean, false, true, "cleanup_failed", transientAudit),
+                "successful cleanup cannot bless a mismatched identity witness");
         check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
                         RuntimeOwnershipReconciliation.PidIdentity.MISSING,
-                        false, clean, true, "cleanup_failed", transientAudit),
+                        false, clean, true, true, "cleanup_failed", transientAudit),
                 "residual profile blocks clean stop finalization");
         check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
                         RuntimeOwnershipReconciliation.PidIdentity.MISSING,
-                        false, clean, false, "cleanup_failed", "socket residue remains"),
+                        false, clean, false, true, "cleanup_failed", "socket residue remains"),
                 "ordinary cleanup failures remain fail-closed");
         RuntimeOwnershipReconciliation.GlobalDecision live =
                 RuntimeOwnershipReconciliation.decide(
@@ -435,8 +443,18 @@ public final class AndroidRuntimeContractTest {
                         RuntimeOwnershipReconciliation.Projection.unknown());
         check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
                         RuntimeOwnershipReconciliation.PidIdentity.MISSING,
-                        false, live, false, "cleanup_failed", transientAudit),
+                        false, live, false, true, "cleanup_failed", transientAudit),
                 "global live ownership blocks clean stop finalization");
+        RuntimeOwnershipReconciliation.GlobalDecision unknown =
+                RuntimeOwnershipReconciliation.decide(
+                        RuntimeOwnershipReconciliation.ProfileAudit.unknown(RuntimeProfile.ROOT,
+                                "scanner unavailable"),
+                        RuntimeOwnershipReconciliation.ProfileAudit.none(RuntimeProfile.VPN),
+                        RuntimeOwnershipReconciliation.Projection.unknown());
+        check(!RuntimeOwnershipReconciliation.canFinalizeCleanStop(
+                        RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
+                        false, unknown, false, true, "cleanup_failed", transientAudit),
+                "global ownership uncertainty blocks stale error clearing");
     }
 
     private static void ownershipInspectionKeepsIdentityInThePublicSeam() {
