@@ -159,17 +159,17 @@ cleanup_verified_vpp_owners() {
 }
 
 assert_no_runtime_residue() {
-  local residue
-  residue="$(adb_cmd shell su 0 sh -c "
-    app_data=/data/user/0/$package
-    for p in root vpn; do
-      test ! -e \"\$app_data/files/profiles/\$p/vpp\" || exit 1
-      test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/cli.sock\" || exit 1
-      test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/api.sock\" || exit 1
-      test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/statseg.sock\" || exit 1
-      test ! -e \"\$app_data/files/profiles/\$p/vpp/shm\" || exit 1
-    done
-  " 2>&1 | tr -d '\r' || true)"
+  local residue residue_script
+  # KernelSU's su parser drops an argument that begins with a newline, so the
+  # privileged shell script must start with its first command byte.
+  residue_script="app_data=/data/user/0/$package; for p in root vpn; do \
+test ! -e \"\$app_data/files/profiles/\$p/vpp\" || exit 1; \
+test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/cli.sock\" || exit 1; \
+test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/api.sock\" || exit 1; \
+test ! -e \"\$app_data/files/profiles/\$p/vpp/runtime/statseg.sock\" || exit 1; \
+test ! -e \"\$app_data/files/profiles/\$p/vpp/shm\" || exit 1; \
+done"
+  residue="$(adb_cmd shell su 0 sh -c "$residue_script" 2>&1 | tr -d '\r' || true)"
   [[ -z "$residue" ]] || {
     echo "VPP/profile/socket/shm residue remains: $residue" >&2
     return 1
