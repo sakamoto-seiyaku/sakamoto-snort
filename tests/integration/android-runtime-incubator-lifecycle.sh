@@ -76,7 +76,7 @@ rtk unzip -p "$apk" assets/vpp-runtime-provenance.properties \
 } >>"$evidence_file"
 
 verified_owner_snapshot() {
-  local remote_script
+  local remote_script remote_script_host remote_script_path owner_output
   remote_script="$(cat <<EOF
 app_data=/data/user/0/$package
 expected_app_uid=$app_uid
@@ -118,7 +118,18 @@ ps -A -o PID,UID,args | while read -r pid ps_uid args; do
 done
 EOF
   )"
-  adb_cmd shell su 0 sh -c "$remote_script" | tr -d '\r' | awk 'NF'
+  # Passing this multiline program as an adb shell argument is lossy on the
+  # Windows adb bridge (notably around pipes and backslashes). Push the exact
+  # script, execute it as a file in the privileged shell, then remove it.
+  remote_script_host="${evidence_file}.owner-script"
+  remote_script_path="/data/local/tmp/sakamoto-67-vpp-owner-${target_serial}.sh"
+  printf '%s\n' "$remote_script" >"$remote_script_host"
+  adb_cmd push "$remote_script_host" "$remote_script_path" >/dev/null \
+    || { echo "unable to push owner verifier" >&2; return 1; }
+  owner_output="$(adb_cmd shell su 0 sh -c "sh $remote_script_path" 2>/dev/null \
+    | tr -d '\r' | awk 'NF' || true)"
+  adb_cmd shell su 0 sh -c "rm -f $remote_script_path" >/dev/null 2>&1 || true
+  printf '%s\n' "$owner_output"
 }
 
 all_vpp_process_snapshot() {
