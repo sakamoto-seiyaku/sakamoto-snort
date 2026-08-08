@@ -12,6 +12,8 @@ package com.sakamoto.snort.androidruntime;
  */
 public final class RuntimeOwnershipReconciliation {
     private static final int OWNER_MATCH_STATUS = 10;
+    private static final int OWNER_AMBIGUOUS_STATUS = 11;
+    private static final int OWNER_UNCERTAIN_STATUS = 127;
 
     public enum Evidence {
         NONE,
@@ -90,7 +92,7 @@ public final class RuntimeOwnershipReconciliation {
         }
     }
 
-    /** Result of matching one profile's owner token and process identity. */
+    /** Result of matching a profile's owner token and process identities. */
     public static final class OwnershipAudit {
         public enum Kind {
             NONE,
@@ -306,7 +308,11 @@ public final class RuntimeOwnershipReconciliation {
         return CleanupDecision.remove();
     }
 
-    /** Run the complete token/profile/executable/hash ownership inspection. */
+    /**
+     * Run the complete token/profile/executable/hash ownership inspection.
+     * The shell seam reports LIVE only for exactly one verified process;
+     * duplicate matches and candidate identity races remain UNKNOWN.
+     */
     public static OwnershipAudit inspect(ProfileSpec spec, CommandRunner runner) {
         if (spec == null || runner == null) {
             return OwnershipAudit.unknown("ownership inspection is unavailable");
@@ -320,6 +326,17 @@ public final class RuntimeOwnershipReconciliation {
         }
         if (result.status == OWNER_MATCH_STATUS) {
             return OwnershipAudit.live(parseOwnerPid(result.output));
+        }
+        if (result.status == OWNER_AMBIGUOUS_STATUS) {
+            return OwnershipAudit.unknown(
+                    "runtime_ownership_ambiguous",
+                    "ownership scan found multiple matching live owners"
+                            + parseOwnerCountDetail(result.output));
+        }
+        if (result.status == OWNER_UNCERTAIN_STATUS) {
+            return OwnershipAudit.unknown(
+                    "runtime_ownership_unverified",
+                    "ownership scan observed a candidate identity race or unreadable identity");
         }
         if (result.status == spec.unavailableStatus) {
             return OwnershipAudit.unknown(spec.unavailableErrorCode, spec.unavailableDetail);
@@ -361,43 +378,67 @@ public final class RuntimeOwnershipReconciliation {
         String runtime = shellQuote(spec.runtimePath);
         String profileName = shellQuote(spec.profile.wireName);
         return "ps_output=$(ps -A -o PID,UID,args 2>/dev/null) || exit 120; "
-                + "for pid in $(printf '%s\\n' \"$ps_output\" | awk -v startup="
-                + startup + " '$2 == " + spec.expectedUid
-                + " && index($0, startup) {print $1}'); do "
-                + "proc=/proc/$pid; test -d \"$proc\" || continue; "
+                + "match_count=0; first_pid=; uncertain=0; "
+                + "candidate_pids=$(printf '%s\\n' \"$ps_output\" | awk -v startup="
+                + startup + " -v expected_uid=" + expectedUid
+                + " '$1 ~ /^[0-9]+$/ && $2 == expected_uid"
+                + " && index($0, startup) {print $1}') || exit 120; "
+                + "for pid in $candidate_pids; do "
+                + "proc=/proc/$pid; "
+                + "if ! test -d \"$proc\"; then uncertain=1; continue; fi; "
                 + "if ! test -r \"$proc/status\"; then "
-                + "[ -e \"$proc/status\" ] && exit 121; continue; fi; "
+                + "uncertain=1; continue; fi; "
                 + "uid=$(awk '$1 == \"Uid:\" {print $2; exit}' \"$proc/status\") "
-                + "|| { [ -e \"$proc/status\" ] && exit 122; continue; }; "
+                + "|| { uncertain=1; continue; }; "
+                + "if test -z \"$uid\"; then uncertain=1; continue; fi; "
                 + "[ \"$uid\" = " + expectedUid + " ] || continue; "
                 + "if ! test -r \"$proc/exe\"; then "
-                + "[ -e \"$proc/exe\" ] && exit 123; continue; fi; "
+                + "uncertain=1; continue; fi; "
                 + "exe=$(readlink \"$proc/exe\" 2>/dev/null) "
-                + "|| { [ -e \"$proc/exe\" ] && exit 123; continue; }; "
+                + "|| { uncertain=1; continue; }; "
+                + "test -n \"$exe\" || { uncertain=1; continue; }; "
                 + "[ \"$exe\" = " + executable + " ] || continue; "
                 + "if ! test -r \"$proc/cmdline\"; then "
-                + "[ -e \"$proc/cmdline\" ] && exit 124; continue; fi; "
+                + "uncertain=1; continue; fi; "
                 + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null) "
-                + "|| { [ -e \"$proc/cmdline\" ] && exit 124; continue; }; "
+                + "|| { uncertain=1; continue; }; "
                 + "case \"$cmd\" in *" + startup + "*) ;; *) continue ;; esac; "
                 + "if ! test -r \"$proc/environ\"; then "
-                + "[ -e \"$proc/environ\" ] && exit 125; continue; fi; "
+                + "uncertain=1; continue; fi; "
                 + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null) "
-                + "|| { [ -e \"$proc\" ] && exit 125; continue; }; "
+                + "|| { uncertain=1; continue; }; "
                 + "printf '%s\\n' \"$env\" | grep -F -- "
                 + shellQuote("SAKAMOTO_VPP_OWNER_TOKEN=" + spec.ownerToken)
-                + " >/dev/null || continue; "
+                + " >/dev/null; grep_status=$?; "
+                + "if [ \"$grep_status\" -ne 0 ]; then "
+                + "[ \"$grep_status\" -eq 1 ] || uncertain=1; continue; fi; "
                 + "printf '%s\\n' \"$env\" | grep -F -- "
                 + shellQuote("SAKAMOTO_VPP_RUNTIME_DIR=" + spec.runtimePath)
-                + " >/dev/null || continue; "
+                + " >/dev/null; grep_status=$?; "
+                + "if [ \"$grep_status\" -ne 0 ]; then "
+                + "[ \"$grep_status\" -eq 1 ] || uncertain=1; continue; fi; "
                 + "printf '%s\\n' \"$env\" | grep -F -- "
                 + shellQuote("SAKAMOTO_RUNTIME_PROFILE=" + spec.profile.wireName)
-                + " >/dev/null || continue; "
-                + "hash=$(sha256sum \"$proc/exe\" 2>/dev/null | awk '{print $1}') "
-                + "|| { [ -e \"$proc\" ] && exit 126; continue; }; "
+                + " >/dev/null; grep_status=$?; "
+                + "if [ \"$grep_status\" -ne 0 ]; then "
+                + "[ \"$grep_status\" -eq 1 ] || uncertain=1; continue; fi; "
+                + "hash_line=$(sha256sum \"$proc/exe\" 2>/dev/null) "
+                + "|| { uncertain=1; continue; }; "
+                + "hash=$(printf '%s\\n' \"$hash_line\" | awk '{print $1}') "
+                + "|| { uncertain=1; continue; }; "
+                + "test -n \"$hash\" || { uncertain=1; continue; }; "
                 + "[ \"$hash\" = " + shellQuote(spec.executableHash)
                 + " ] || continue; "
-                + "printf 'VPP_OWNER_PID=%s\\n' \"$pid\"; exit 10; done; exit 0";
+                + "match_count=$((match_count + 1)); "
+                + "[ -n \"$first_pid\" ] || first_pid=\"$pid\"; "
+                + "done; "
+                + "if [ \"$uncertain\" -ne 0 ]; then "
+                + "printf 'VPP_OWNER_COUNT=%s\\n' \"$match_count\"; exit 127; fi; "
+                + "if [ \"$match_count\" -eq 0 ]; then exit 0; fi; "
+                + "if [ \"$match_count\" -gt 1 ]; then "
+                + "printf 'VPP_OWNER_COUNT=%s\\n' \"$match_count\"; "
+                + "printf 'VPP_OWNER_PID=%s\\n' \"$first_pid\"; exit 11; fi; "
+                + "printf 'VPP_OWNER_COUNT=1\\nVPP_OWNER_PID=%s\\n' \"$first_pid\"; exit 10";
     }
 
     private static String buildPidIdentityCommand(ProfileSpec spec, long pid) {
@@ -444,6 +485,28 @@ public final class RuntimeOwnershipReconciliation {
             }
         }
         return -1L;
+    }
+
+    private static String parseOwnerCountDetail(String output) {
+        if (output == null) {
+            return "";
+        }
+        for (String line : output.split("\\r?\\n")) {
+            if (!line.startsWith("VPP_OWNER_COUNT=")) {
+                continue;
+            }
+            String count = line.substring("VPP_OWNER_COUNT=".length()).trim();
+            try {
+                long parsed = Long.parseLong(count);
+                if (parsed > 1L) {
+                    return " (" + parsed + " matches)";
+                }
+            } catch (NumberFormatException ignored) {
+                // Keep the bounded generic ambiguity detail.
+            }
+            break;
+        }
+        return "";
     }
 
     private static String value(String value) {

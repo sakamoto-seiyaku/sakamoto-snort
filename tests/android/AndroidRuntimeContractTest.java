@@ -21,6 +21,7 @@ public final class AndroidRuntimeContractTest {
         pidlessLiveOwnerIsAdoptable();
         ownershipCleanupDecisionFailsClosed();
         ownershipInspectionKeepsIdentityInThePublicSeam();
+        ownershipInspectionRejectsSameProfileMultiplicity();
         stoppedSnapshotRetainsRecentFailure();
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
@@ -199,6 +200,58 @@ public final class AndroidRuntimeContractTest {
                                 : new RuntimeOwnershipReconciliation.CommandResult(0, ""));
         check(identity == RuntimeOwnershipReconciliation.PidIdentity.MATCH,
                 "public PID validation seam accepts a complete identity match");
+    }
+
+    private static void ownershipInspectionRejectsSameProfileMultiplicity() {
+        RuntimeOwnershipReconciliation.ProfileSpec spec =
+                new RuntimeOwnershipReconciliation.ProfileSpec(
+                        RuntimeProfile.ROOT,
+                        "/data/user/0/example/files/profiles/root/vpp/startup.conf",
+                        "/data/user/0/example/files/profiles/root/vpp/runtime",
+                        "/data/app/example/lib/arm64/libvpp_runtime.so",
+                        "0123456789abcdef", "01234567-0123-0123-0123-0123456789ab",
+                        "0", 120, "root_authorization_required", "runner unavailable");
+        RuntimeOwnershipReconciliation.OwnershipAudit audit =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) -> {
+                    check(profile == RuntimeProfile.ROOT,
+                            "multiplicity inspection preserves the selected profile");
+                    check(timeout == 3L,
+                            "multiplicity inspection remains bounded");
+                    check(command.contains("match_count=0"),
+                            "ownership scan counts every verified match");
+                    check(command.contains("VPP_OWNER_COUNT="),
+                            "ownership scan reports an explicit owner count");
+                    check(command.indexOf("done;") < command.lastIndexOf("exit 10"),
+                            "ownership scan decides exact-one only after the full loop");
+                    return new RuntimeOwnershipReconciliation.CommandResult(
+                            11, "VPP_OWNER_COUNT=2\nVPP_OWNER_PID=4242\n");
+                });
+        check(audit.isUnknown(),
+                "same-profile duplicate owners are unknown rather than adoptable");
+        check("runtime_ownership_ambiguous".equals(audit.errorCode),
+                "same-profile duplicate owners have an explicit ambiguity error");
+        check(audit.detail.contains("2 matches"),
+                "same-profile ambiguity retains the bounded verified-match count");
+        check(audit.pid < 0L,
+                "ambiguous ownership never exposes one PID as safe to adopt");
+        RuntimeOwnershipReconciliation.ProfileAudit root =
+                RuntimeOwnershipReconciliation.classifyDurableProfile(
+                        RuntimeProfile.ROOT, true, -1L,
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING, audit);
+        check(root.evidence == RuntimeOwnershipReconciliation.Evidence.UNKNOWN,
+                "ambiguous same-profile ownership blocks durable reconciliation");
+        check(RuntimeOwnershipReconciliation.Action.BLOCK
+                        == RuntimeOwnershipReconciliation.decide(
+                                root.evidence, RuntimeOwnershipReconciliation.Evidence.NONE),
+                "ambiguous same-profile ownership cannot be adopted or cleaned");
+
+        RuntimeOwnershipReconciliation.OwnershipAudit uncertain =
+                RuntimeOwnershipReconciliation.inspect(spec, (profile, command, timeout) ->
+                        new RuntimeOwnershipReconciliation.CommandResult(127, ""));
+        check(uncertain.isUnknown(),
+                "candidate identity races remain unknown rather than residue");
+        check("runtime_ownership_unverified".equals(uncertain.errorCode),
+                "candidate identity races have an explicit unverifiable error");
     }
 
     private static void stoppedSnapshotRetainsRecentFailure() throws Exception {

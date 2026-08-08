@@ -1090,7 +1090,7 @@ public final class RuntimeService extends VpnService {
                 runProfileCommandResult(profile, command, timeoutSeconds);
     }
 
-    /** Run a bounded ownership scan and retain its single-line PID evidence. */
+    /** Run a bounded ownership scan and retain its exact-match evidence. */
     private RuntimeOwnershipReconciliation.CommandResult runProfileCommandResult(
             RuntimeProfile selected, String command, long timeoutSeconds) {
         RuntimeProfile profileType = selected == null ? RuntimeProfile.ROOT : selected;
