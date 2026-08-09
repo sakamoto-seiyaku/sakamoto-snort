@@ -14,6 +14,19 @@ typedef struct
   unsigned int residue;
 } ledger_t;
 
+typedef struct
+{
+  unsigned int obligations;
+  unsigned int buffers;
+  unsigned int frames;
+  unsigned int credits;
+  unsigned int debt;
+  unsigned int sockets;
+  unsigned int queues;
+  unsigned int hooks;
+  unsigned int logs;
+} residue_ledger_t;
+
 static int
 expect (int condition, const char *message)
 {
@@ -162,11 +175,64 @@ process_case (void)
   return ok;
 }
 
+static int
+residue_case (void)
+{
+  residue_ledger_t ledger = { 0 };
+  int ok = 1;
+  ok &= expect (ledger.obligations == 0, "clean obligations residue");
+  ok &= expect (ledger.buffers == 0, "clean buffers residue");
+  ok &= expect (ledger.frames == 0, "clean completion-frame residue");
+  ok &= expect (ledger.credits == 0, "clean credit residue");
+  ok &= expect (ledger.debt == 0, "clean debt residue");
+  ok &= expect (ledger.sockets == 0, "clean socket residue");
+  ok &= expect (ledger.queues == 0, "clean queue residue");
+  ok &= expect (ledger.hooks == 0, "clean hook residue");
+  ok &= expect (ledger.logs == 0, "clean log residue");
+  return ok;
+}
+
+static int
+process_residue_case (void)
+{
+  /* A process death has no in-process close transition.  Every resource is
+   * still named in the ledger so the supervisor cannot silently discard it. */
+  const unsigned int process_failure = 1;
+  residue_ledger_t ledger = {
+    .obligations = process_failure,
+    .buffers = process_failure,
+    .frames = process_failure,
+    .credits = process_failure,
+    .debt = process_failure,
+    .sockets = process_failure,
+    .queues = process_failure,
+    .hooks = process_failure,
+    .logs = process_failure,
+  };
+  int ok = 1;
+  ok &= expect (ledger.obligations == process_failure,
+                "process obligations classified");
+  ok &= expect (ledger.buffers == process_failure,
+                "process buffers classified");
+  ok &= expect (ledger.frames == process_failure,
+                "process frames classified");
+  ok &= expect (ledger.credits == process_failure,
+                "process credits classified");
+  ok &= expect (ledger.debt == process_failure, "process debt classified");
+  ok &= expect (ledger.sockets == process_failure,
+                "process sockets classified");
+  ok &= expect (ledger.queues == process_failure,
+                "process queues classified");
+  ok &= expect (ledger.hooks == process_failure, "process hooks classified");
+  ok &= expect (ledger.logs == process_failure, "process logs captured");
+  return ok;
+}
+
 int
 main (void)
 {
   int ok = order_case (0) && order_case (1) && generation_case () &&
-           process_case ();
+           process_case () && residue_case () && process_residue_case ();
   if (!ok)
     return 1;
   puts ("queue-disable: quiesce=1 drain=1 completion-open=1 close-order=PASS");
@@ -174,6 +240,8 @@ main (void)
   puts ("drain-deadline: ordinary-accept=1 completion-open-until-settle=1 PASS");
   puts ("process-termination: classified=1 replay=0 PASS");
   puts ("fresh-generation: old-work-rejected=1 duplicate-attempts=1 residue=0");
+  puts ("residue-ledger: obligations=0 buffers=0 frames=0 credits=0 debt=0 sockets=0 queues=0 hooks=0 logs=0");
+  puts ("process-residue-ledger: obligations=PROCESS_FAILURE buffers=PROCESS_FAILURE frames=PROCESS_FAILURE credits=PROCESS_FAILURE debt=PROCESS_FAILURE sockets=PROCESS_FAILURE queues=PROCESS_FAILURE hooks=PROCESS_FAILURE logs=CAPTURED");
   puts ("S79 deterministic teardown state machine: PASS");
   return 0;
 }

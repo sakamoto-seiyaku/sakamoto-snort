@@ -3203,6 +3203,9 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   const char *last_direction =
     nm->last_device_direction == NFQUEUE_LIVE_DIRECTION_OUTPUT ? "OUTPUT" :
       "INPUT";
+  u32 enabled_lanes = 0;
+  for (u32 i = 0; i < nm->lane_count; i++)
+    enabled_lanes += nm->lanes[i].enabled != 0;
   (void) input;
   (void) cmd;
   vlib_cli_output (vm, "enabled %u family ip%u queue %u generation %llu",
@@ -3237,6 +3240,11 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
      nm->origin_return.head) % NFQUEUE_LIVE_RING_CAPACITY,
     nfqueue_live_teardown_completion_open (nm),
     (unsigned long long) nm->teardown_completion_frames_at_close);
+  vlib_cli_output (
+    vm,
+    "teardown-resources netlink-fd %d completion-fd %d queue-open %u handle-open %u enabled-lanes %u",
+    nm->netlink_fd, nm->completion_fd, nm->queue != 0, nm->handle != 0,
+    enabled_lanes);
   for (u32 i = 0; i < nm->teardown_event_count; i++)
     vlib_cli_output (vm, "teardown-transition %u %s", i,
                      nfqueue_live_teardown_event_name (
