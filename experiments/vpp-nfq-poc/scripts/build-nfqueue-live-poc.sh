@@ -32,6 +32,16 @@ if ! "$PYTHON_BIN" -c 'import ply' >/dev/null 2>&1; then
   fi
   PYTHON_BIN="$PLY_VENV/bin/python3"
 fi
+# vppapigen is launched through its `/usr/bin/env python3` shebang by the
+# generated Ninja rules, so CMake's interpreter selection alone does not make
+# the fallback venv visible.  Export its site-packages explicitly for every
+# generated API step as well as the configure-time probe.
+PYTHON_SITE_PACKAGES="$($PYTHON_BIN -c 'import site; print(site.getsitepackages()[0])')"
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$PYTHON_SITE_PACKAGES:$PYTHONPATH"
+else
+  export PYTHONPATH="$PYTHON_SITE_PACKAGES"
+fi
 
 if [ ! -d "$VPP_DIR/.git" ]; then
   git clone --filter=blob:none "$VPP_REPO" "$VPP_DIR"

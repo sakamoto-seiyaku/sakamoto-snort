@@ -64,7 +64,15 @@ typedef struct
   u8 ip_version;
   u8 flags;
   u8 completion_refs;
+  /* The low seven bits carry the origin lane.  S76 uses the high bit as the
+   * bounded completion-credit marker so the complete identity still fits in
+   * VPP's fixed opaque area. */
   u8 origin_lane;
+  /* S76 keeps execution placement and canonical-owner identity in the same
+   * fixed opaque metadata as the completion identity. */
+  u8 initial_worker;
+  u8 canonical_worker;
+  u8 handoff_stage;
 } nfqueue_live_meta_t;
 
 _Static_assert (sizeof (nfqueue_live_meta_t) == sizeof (((vlib_buffer_t *) 0)->opaque),
@@ -109,6 +117,9 @@ struct nfqueue_live_main_s
   u16 queue_num;
   u64 generation;
   u32 worker_thread;
+  u32 worker_count;
+  u32 first_worker_thread;
+  u32 second_worker_thread;
   u32 frame_queue_index;
   u32 next_obligation_nonce;
   u32 netlink_file_index;
@@ -124,6 +135,9 @@ struct nfqueue_live_main_s
   u8 inject_missing_packet_id;
   u8 inject_missing_generation;
   u8 inject_uid_unknown;
+  u8 inject_owner_queue_full;
+  u8 inject_completion_credit_exhaustion;
+  u8 owner_mode;
   vlib_main_t *vm;
   void *active_datagram;
   nfqueue_live_index_ring_t ingress;
@@ -205,6 +219,35 @@ struct nfqueue_live_main_s
   u64 verdict_send_failures;
   u64 completion_outcome_unknown;
   u64 native_buffer_returns;
+  /* S76 independent worker/credit/residue ledgers. */
+  u64 owner_local_obligations;
+  u64 owner_remote_obligations;
+  u64 owner_remote_handoffs;
+  u64 owner_queue_full;
+  u64 owner_terminal_intents;
+  u64 ingress_queue_full;
+  u64 completion_credit_acquired;
+  u64 completion_credit_released;
+  u64 completion_credit_exhausted;
+  u32 completion_credits_held;
+  u32 completion_credit_capacity;
+  u64 identity_proof_checks;
+  u64 identity_proof_matches;
+  u64 identity_proof_failures;
+  u32 handoff_before_buffer_index;
+  u32 handoff_after_buffer_index;
+  uword handoff_before_buffer_base;
+  uword handoff_after_buffer_base;
+  u32 handoff_before_packet_id;
+  u32 handoff_after_packet_id;
+  u32 handoff_before_payload_offset;
+  u32 handoff_after_payload_offset;
+  u32 handoff_before_payload_length;
+  u32 handoff_after_payload_length;
+  u64 handoff_before_generation;
+  u64 handoff_after_generation;
+  u32 handoff_before_origin_lane;
+  u32 handoff_after_origin_lane;
   u32 last_verdict_errno;
 };
 
