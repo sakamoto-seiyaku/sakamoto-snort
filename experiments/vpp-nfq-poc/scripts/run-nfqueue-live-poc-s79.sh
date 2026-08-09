@@ -34,7 +34,6 @@ ROUND_COUNT="${S79_ROUNDS:-3}"
 
 vpp_pid=""
 netns_up=0
-expected_process_kill=0
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -340,7 +339,6 @@ case_process_termination() {
   fi
   wait "$vpp_pid" >/dev/null 2>&1 || true
   vpp_pid=""
-  expected_process_kill=1
   if ! queue_rule_present; then
     echo "S79 process termination: expected hook residue before cleanup" >&2
     exit 1
@@ -427,12 +425,12 @@ need_root
 require_binary
 mkdir -p "$EVIDENCE_DIR"
 trap cleanup EXIT
+netns_up=1
 
 QUEUE_BASE="$QUEUE_BASE" S76_NETNS_STATE="$NETNS_STATE" \
   S76_HOST_IF="$HOST_IF" S76_PEER_IF="$PEER_IF" \
   S76_HOST4="$HOST4" S76_PEER4="$PEER4" S76_HOST6="$HOST6" S76_PEER6="$PEER6" \
   "$SCRIPT_DIR/setup-netns-s76.sh" up >"$EVIDENCE_DIR/setup-netns.log" 2>&1
-netns_up=1
 start_vpp
 
 {
