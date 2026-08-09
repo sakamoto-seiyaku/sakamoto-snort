@@ -435,6 +435,38 @@ nfqueue_live_record_reserve_loss_outcome (
     }
 }
 
+static_always_inline void
+nfqueue_live_record_reserve_loss_materialization (nfqueue_live_main_t *nm,
+                                                   nfqueue_live_lane_t *lane)
+{
+  nm->reserve_loss_materializations++;
+  if (lane)
+    lane->reserve_loss_materializations++;
+}
+
+static_always_inline void
+nfqueue_live_record_reserve_loss_unmaterialized (nfqueue_live_main_t *nm,
+                                                 nfqueue_live_lane_t *lane)
+{
+  nm->reserve_loss_unmaterialized++;
+  nm->reserve_loss_identity_misses++;
+  if (lane)
+    {
+      lane->reserve_loss_unmaterialized++;
+      lane->reserve_loss_identity_misses++;
+    }
+}
+
+static_always_inline void
+nfqueue_live_record_reserve_loss (nfqueue_live_main_t *nm,
+                                  nfqueue_live_lane_t *lane)
+{
+  nm->reserve_losses++;
+  nm->reserve_degraded_health++;
+  if (lane)
+    lane->reserve_losses++;
+}
+
 static u8
 nfqueue_live_netlink_data_ready (int netlink_fd)
 {
@@ -498,10 +530,8 @@ nfqueue_live_discard_bounded_loss (nfqueue_live_main_t *nm,
                             MSG_DONTWAIT | MSG_TRUNC);
   if (discarded >= 0)
     {
-      nm->reserve_losses++;
-      nm->reserve_degraded_health++;
-      nm->reserve_loss_unmaterialized++;
-      nm->reserve_loss_identity_misses++;
+      nfqueue_live_record_reserve_loss_unmaterialized (nm, lane);
+      nfqueue_live_record_reserve_loss (nm, lane);
       return NFQUEUE_LIVE_DISCARD_LOSS;
     }
   if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
@@ -510,6 +540,36 @@ nfqueue_live_discard_bounded_loss (nfqueue_live_main_t *nm,
   lane->reserve_receive_faults++;
   nm->reserve_degraded_health++;
   return NFQUEUE_LIVE_DISCARD_FAULT;
+}
+
+static void
+nfqueue_live_disable_faulted_lane (nfqueue_live_main_t *nm,
+                                   nfqueue_live_lane_t *lane)
+{
+  u32 file_index = lane->netlink_file_index;
+  int netlink_fd = lane->netlink_fd;
+
+  /* The callback owns this lane's file registration.  Mark the registration
+   * non-owning before removing it: nfq_close remains the sole owner of the
+   * netlink descriptor, and the normal close path can release the handle
+   * exactly once.  Removing the registration also prevents a persistent
+   * EPOLLIN/ERR event from re-entering a faulted callback. */
+  if (file_index != ~0)
+    {
+      clib_file_t *file = clib_file_get (&file_main, file_index);
+      if (file)
+        {
+          file->dont_close = 1;
+          clib_file_del (&file_main, file);
+        }
+      lane->netlink_file_index = ~0;
+      if (nm->netlink_file_index == file_index)
+        nm->netlink_file_index = ~0;
+    }
+  lane->netlink_fd = -1;
+  if (nm->netlink_fd == netlink_fd)
+    nm->netlink_fd = -1;
+  lane->enabled = 0;
 }
 
 static_always_inline u8
@@ -956,10 +1016,8 @@ nfqueue_live_reserve_complete (nfqueue_live_main_t *nm,
   if (!nfqueue_live_recover_packet_id (base, inspect_length, &packet_id))
     {
       /* No completion identity means no Adapter operation can be claimed. */
-      nm->reserve_losses++;
-      nm->reserve_degraded_health++;
-      nm->reserve_loss_unmaterialized++;
-      nm->reserve_loss_identity_misses++;
+      nfqueue_live_record_reserve_loss_unmaterialized (nm, lane);
+      nfqueue_live_record_reserve_loss (nm, lane);
       nfqueue_live_reserve_return (nm, lane, buffer_index, 0);
       return;
     }
@@ -1010,15 +1068,11 @@ nfqueue_live_reserve_loss_complete (nfqueue_live_main_t *nm,
         nm, lane, lane->generation, packet_id, lane->origin_lane,
         NFQUEUE_LIVE_LOSS);
       nfqueue_live_record_reserve_loss_outcome (nm, lane, outcome);
+      nfqueue_live_record_reserve_loss_materialization (nm, lane);
     }
   else
-    {
-      nm->reserve_loss_unmaterialized++;
-      nm->reserve_loss_identity_misses++;
-    }
-  nm->reserve_loss_materializations++;
-  nm->reserve_losses++;
-  nm->reserve_degraded_health++;
+    nfqueue_live_record_reserve_loss_unmaterialized (nm, lane);
+  nfqueue_live_record_reserve_loss (nm, lane);
   nm->native_buffer_returns++;
   lane->native_buffer_returns++;
   vlib_buffer_free_one (nm->vm, buffer_index);
@@ -1504,7 +1558,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
   int handled;
   nfqueue_live_ingress_result_t ingress_result;
 
-  if (nm->quiescing)
+  if (nm->quiescing || !lane->enabled)
     return 0;
 
   while (1)
@@ -1520,13 +1574,22 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
             continue;
           /* EAGAIN/EINTR and non-transient receive faults both leave the
            * callback without a buffer and must not spin in this loop. */
+          if (discard == NFQUEUE_LIVE_DISCARD_FAULT)
+            nfqueue_live_disable_faulted_lane (nm, lane);
           return 0;
         }
       buffer = vlib_get_buffer (nm->vm, buffer_index);
       base = vlib_buffer_get_current (buffer);
       capacity = vlib_buffer_get_default_data_size (nm->vm);
-      received = recv (lane->netlink_fd, base, capacity,
-                       MSG_DONTWAIT | MSG_TRUNC);
+      if (__atomic_exchange_n (&nm->inject_receive_fault, 0,
+                               __ATOMIC_ACQ_REL))
+        {
+          errno = EIO;
+          received = -1;
+        }
+      else
+        received = recv (lane->netlink_fd, base, capacity,
+                         MSG_DONTWAIT | MSG_TRUNC);
       if (received < 0)
         {
           if (ingress_result == NFQUEUE_LIVE_INGRESS_RESERVE)
@@ -1535,7 +1598,15 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
             vlib_buffer_free_one (nm->vm, buffer_index);
           if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
             return 0;
-          return clib_error_return_unix (0, "nfqueue-live recv");
+          /* The buffer was returned exactly once above.  A non-transient
+           * receive fault is bounded health evidence: remove this lane's
+           * reader and yield, rather than returning an error while leaving
+           * an always-ready callback registered. */
+          nm->reserve_receive_faults++;
+          lane->reserve_receive_faults++;
+          nm->reserve_degraded_health++;
+          nfqueue_live_disable_faulted_lane (nm, lane);
+          return 0;
         }
       if (received == 0)
         {
@@ -2160,6 +2231,7 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   nm->reserve_loss_outcome_unknown = 0;
   nm->reserve_loss_identity_misses = 0;
   nm->reserve_receive_faults = 0;
+  nm->inject_receive_fault = 0;
   nm->reserve_dynamic_growth_attempts = 0;
   nm->reserve_cross_lane_borrows = 0;
   nm->reserve_blocking_waits = 0;
@@ -2565,6 +2637,7 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 credit_exhaustion = 0;
   u8 verdict_failed_definite = 0;
   u8 verdict_outcome_unknown = 0;
+  u8 inject_receive_fault = 0;
   u8 inject_normal_capacity_exhaustion = 0;
   u8 arm_normal_capacity_exhaustion = 0;
   u32 normal_capacity = NFQUEUE_LIVE_DEFAULT_NORMAL_CAPACITY;
@@ -2607,6 +2680,8 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
         verdict_failed_definite = 1;
       else if (unformat (input, "inject-verdict-outcome-unknown"))
         verdict_outcome_unknown = 1;
+      else if (unformat (input, "inject-receive-fault"))
+        inject_receive_fault = 1;
       else if (unformat (input, "normal-capacity %u", &normal_capacity))
         ;
       else if (unformat (input, "reserve-capacity %u", &reserve_capacity))
@@ -2639,6 +2714,8 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
                         verdict_failed_definite, __ATOMIC_RELEASE);
       __atomic_store_n (&nfqueue_live_main.inject_verdict_outcome_unknown,
                         verdict_outcome_unknown, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.inject_receive_fault,
+                        inject_receive_fault, __ATOMIC_RELEASE);
     }
   return error;
 }
@@ -2652,6 +2729,7 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_command, static) = {
                 "[owner-local|owner-remote|owner-mixed] "
                 "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
                 "[inject-verdict-failed-definite|inject-verdict-outcome-unknown] "
+                "[inject-receive-fault] "
                 "[normal-capacity <n>] [reserve-capacity <n>] "
                 "[inject-normal-capacity-exhaustion] "
                 "[arm-normal-capacity-exhaustion-after-fill]",
@@ -2675,6 +2753,7 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
   u8 credit_exhaustion = 0;
   u8 verdict_failed_definite = 0;
   u8 verdict_outcome_unknown = 0;
+  u8 inject_receive_fault = 0;
   u8 require_two_workers = 0;
   u8 inject_normal_capacity_exhaustion = 0;
   u8 arm_normal_capacity_exhaustion = 0;
@@ -2714,6 +2793,8 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
         verdict_failed_definite = 1;
       else if (unformat (input, "inject-verdict-outcome-unknown"))
         verdict_outcome_unknown = 1;
+      else if (unformat (input, "inject-receive-fault"))
+        inject_receive_fault = 1;
       else if (unformat (input, "two-workers"))
         require_two_workers = 1;
       else if (unformat (input, "normal-capacity %u", &normal_capacity))
@@ -2749,6 +2830,8 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
                         verdict_failed_definite, __ATOMIC_RELEASE);
       __atomic_store_n (&nfqueue_live_main.inject_verdict_outcome_unknown,
                         verdict_outcome_unknown, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.inject_receive_fault,
+                        inject_receive_fault, __ATOMIC_RELEASE);
     }
   return error;
 }
@@ -2762,6 +2845,7 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_dual_command, static) = {
                 "[owner-local|owner-remote|owner-mixed] "
                 "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
                 "[inject-verdict-failed-definite|inject-verdict-outcome-unknown] "
+                "[inject-receive-fault] "
                 "[two-workers] [normal-capacity <n>] [reserve-capacity <n>] "
                 "[inject-normal-capacity-exhaustion] "
                 "[arm-normal-capacity-exhaustion-after-fill]",
@@ -2870,6 +2954,9 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->reserve_dynamic_growth_attempts,
                    (unsigned long long) nm->reserve_cross_lane_borrows,
                    (unsigned long long) nm->reserve_blocking_waits);
+  vlib_cli_output (vm, "reserve-receive-fault-inject %u",
+                   __atomic_load_n (&nm->inject_receive_fault,
+                                    __ATOMIC_ACQUIRE));
   vlib_cli_output (vm, "reserve-parser-attempts 0 reserve-flow-enters 0 reserve-policy-verdicts 0 reserve-delivery-success-claims 0 reserve-copy-count %u",
                    (unsigned int) NFQUEUE_LIVE_PACKET_COPY_PATHS);
   vlib_cli_output (vm, "last-buffer-index %u last-buffer-base 0x%llx datagram-length %u",
@@ -3032,7 +3119,7 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
       const char *lane_direction =
         nfqueue_live_device_direction (lane->hook) ==
             NFQUEUE_LIVE_DIRECTION_OUTPUT ? "OUTPUT" : "INPUT";
-      vlib_cli_output (vm, "lane %u family ip%u hook %s queue %u generation %llu enabled %u datagrams %llu callbacks %llu obligations %llu verdict-attempts %llu native-returns %llu reserve-capacity %u reserve-available %u reserve-peak-occupancy %u reserve-direct-obligations %llu reserve-direct-completions %llu reserve-direct-native-returns %llu reserve-native-returns %llu reserve-exhaustions %llu reserve-losses %llu reserve-loss-drops %llu reserve-loss-failed-definite %llu reserve-loss-unknown %llu reserve-receive-faults %llu",
+      vlib_cli_output (vm, "lane %u family ip%u hook %s queue %u generation %llu enabled %u datagrams %llu callbacks %llu obligations %llu verdict-attempts %llu native-returns %llu reserve-capacity %u reserve-available %u reserve-peak-occupancy %u reserve-direct-obligations %llu reserve-direct-completions %llu reserve-direct-native-returns %llu reserve-native-returns %llu reserve-exhaustions %llu reserve-losses %llu reserve-loss-materializations %llu reserve-loss-unmaterialized %llu reserve-loss-drops %llu reserve-loss-failed-definite %llu reserve-loss-unknown %llu reserve-loss-identity-misses %llu reserve-receive-faults %llu",
                        i, lane->family, lane_direction, lane->queue_num,
                        (unsigned long long) lane->generation, lane->enabled,
                        (unsigned long long) lane->datagrams,
@@ -3048,9 +3135,12 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                        (unsigned long long) lane->reserve_native_returns,
                        (unsigned long long) lane->reserve_exhaustions,
                        (unsigned long long) lane->reserve_losses,
+                       (unsigned long long) lane->reserve_loss_materializations,
+                       (unsigned long long) lane->reserve_loss_unmaterialized,
                        (unsigned long long) lane->reserve_loss_native_drops,
                        (unsigned long long) lane->reserve_loss_outcome_failed_definite,
                        (unsigned long long) lane->reserve_loss_outcome_unknown,
+                       (unsigned long long) lane->reserve_loss_identity_misses,
                        (unsigned long long) lane->reserve_receive_faults);
     }
   return 0;

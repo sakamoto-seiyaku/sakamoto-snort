@@ -30,6 +30,9 @@ STRESS="${S78_STRESS:-0}"
 FORCE_NORMAL_EXHAUSTION=0
 EXPECT_POSITIVE_NORMAL=0
 ARM_NORMAL_CAPACITY_AFTER_FILL=0
+EXPECT_DIRECT=1
+EXPECT_RECEIVE_FAULT=0
+INJECT_RECEIVE_FAULT=0
 
 case "$FAULT" in
   reserve-exhaustion)
@@ -58,8 +61,19 @@ case "$FAULT" in
     EXPECT_LOSS=1
     FORCE_NORMAL_EXHAUSTION=1
     ;;
+  reserve-receive-fault)
+    : "${S78_NORMAL_CAPACITY:=0}"
+    : "${S78_RESERVE_CAPACITY:=2}"
+    : "${S78_PING_COUNT:=1}"
+    : "${S78_STRESS:=0}"
+    EXPECT_LOSS=0
+    EXPECT_DIRECT=0
+    EXPECT_RECEIVE_FAULT=1
+    INJECT_RECEIVE_FAULT=1
+    FORCE_NORMAL_EXHAUSTION=1
+    ;;
   *)
-    echo "S78_FAULT must be reserve-exhaustion, reserve-direct, or reserve-stress" >&2
+    echo "S78_FAULT must be reserve-exhaustion, reserve-direct, reserve-stress, or reserve-receive-fault" >&2
     exit 2
     ;;
 esac
@@ -84,11 +98,22 @@ done
   echo "missing pinned VPP provenance: $VPP_INSTALL_DIR/s73-provenance.properties" >&2
   exit 1
 }
+PROVENANCE_PLUGIN_SHA="$(awk -F= '$1 == "pluginSha256" { print $2; exit }' \
+  "$VPP_INSTALL_DIR/s73-provenance.properties")"
+if [[ ! "$PROVENANCE_PLUGIN_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid pinned pluginSha256 in $VPP_INSTALL_DIR/s73-provenance.properties" >&2
+  exit 1
+fi
 
 mkdir -p "$RUNTIME_ROOT/plugins" "$EVIDENCE_DIR"
 sed "s#__S78_RUNTIME_ROOT__#$RUNTIME_ROOT#g" "$CONFIG_TEMPLATE" >"$EVIDENCE_DIR/startup.conf"
 cp "$VPP_INSTALL_DIR/lib/vpp_plugins/nfqueue_live_poc_plugin.so" \
   "$RUNTIME_ROOT/plugins/nfqueue_live_poc_plugin.so"
+COPIED_PLUGIN_SHA="$(sha256sum "$RUNTIME_ROOT/plugins/nfqueue_live_poc_plugin.so" | awk '{print $1}')"
+if [ "$COPIED_PLUGIN_SHA" != "$PROVENANCE_PLUGIN_SHA" ]; then
+  echo "plugin/provenance hash mismatch: copied=$COPIED_PLUGIN_SHA provenance=$PROVENANCE_PLUGIN_SHA" >&2
+  exit 1
+fi
 rm -f "$RUNTIME_ROOT/cli.sock" "$RUNTIME_ROOT/vpp.log" \
   "$RUNTIME_ROOT/vpp.stdout.log" "$EVIDENCE_DIR/run.log" \
   "$EVIDENCE_DIR/show-before-disable.txt" "$EVIDENCE_DIR/show-after-disable.txt"
@@ -149,6 +174,9 @@ fi
 if [ "$ARM_NORMAL_CAPACITY_AFTER_FILL" -eq 1 ]; then
   enable_args+=(arm-normal-capacity-exhaustion-after-fill)
 fi
+if [ "$INJECT_RECEIVE_FAULT" -eq 1 ]; then
+  enable_args+=(inject-receive-fault)
+fi
 if [ "$STRESS" = 1 ]; then
   PING_COUNT="${S78_STRESS_COUNT:-64}"
 fi
@@ -158,7 +186,8 @@ fi
   echo "command=$0"
   echo "vpp=$VPP_BIN"
   echo "provenance=$VPP_INSTALL_DIR/s73-provenance.properties"
-  echo "pluginSha256=$(sha256sum "$RUNTIME_ROOT/plugins/nfqueue_live_poc_plugin.so" | awk '{print $1}')"
+  echo "pluginSha256=$COPIED_PLUGIN_SHA"
+  echo "provenancePluginSha256=$PROVENANCE_PLUGIN_SHA"
   echo "workers=2 (origin main thread 0; worker threads 1 and 2)"
   echo "enable=nfqueue-live-poc enable-dual ${enable_args[*]}"
   "$VPPCTL_BIN" -s "$RUNTIME_ROOT/cli.sock" nfqueue-live-poc enable-dual \
@@ -217,9 +246,11 @@ if [ "$EXPECT_POSITIVE_NORMAL" -eq 1 ]; then
   require_at_least normal-peak-occupancy 1
   require_exact normal-capacity-arm-after-fill 1
 fi
-require_at_least reserve-direct-obligations 1
-require_at_least reserve-direct-completions 1
-require_at_least reserve-direct-native-returns 1
+if [ "$EXPECT_DIRECT" -eq 1 ]; then
+  require_at_least reserve-direct-obligations 1
+  require_at_least reserve-direct-completions 1
+  require_at_least reserve-direct-native-returns 1
+fi
 if [ "$EXPECT_LOSS" -eq 1 ]; then
   require_at_least reserve-exhaustions 1
   require_at_least reserve-losses 1
@@ -229,7 +260,18 @@ else
   require_exact reserve-loss-materializations 0
 fi
 require_exact reserve-startup-failures 0
-require_exact reserve-receive-faults 0
+if [ "$EXPECT_RECEIVE_FAULT" -eq 1 ]; then
+  require_at_least reserve-receive-faults 1
+  require_at_least reserve-native-returns 1
+  require_at_least native-buffer-returns 1
+  disabled_lanes="$(awk '/^lane / { for (i = 1; i <= NF; i++) if ($i == "enabled" && $(i + 1) == 0) count++ } END { print count + 0 }' "$show")"
+  if [ "$disabled_lanes" -lt 1 ]; then
+    echo "S78 acceptance failure: no lane reader disabled after receive fault" >&2
+    exit 1
+  fi
+else
+  require_exact reserve-receive-faults 0
+fi
 require_exact reserve-envelope-bytes 9000
 require_exact reserve-parser-attempts 0
 require_exact reserve-flow-enters 0
@@ -249,7 +291,8 @@ require_exact per-packet-heap-objects 0
 direct="$(value_for reserve-direct-obligations)"
 completions="$(value_for reserve-direct-completions)"
 returns="$(value_for reserve-direct-native-returns)"
-if [ "$direct" != "$completions" ] || [ "$direct" != "$returns" ]; then
+if [ "$EXPECT_DIRECT" -eq 1 ] &&
+   { [ "$direct" != "$completions" ] || [ "$direct" != "$returns" ]; }; then
   echo "S78 acceptance failure: direct=$direct completions=$completions returns=$returns" >&2
   exit 1
 fi
@@ -262,6 +305,14 @@ loss_unknown="$(value_for reserve-loss-unknown)"
 if [ $((loss_drops + loss_failed + loss_unknown)) -gt "$loss_materializations" ] || \
    [ $((loss_materializations + loss_unmaterialized)) -ne "$losses" ]; then
   echo "S78 acceptance failure: loss outcomes do not partition materialized/unmaterialized losses" >&2
+  exit 1
+fi
+lane_loss_sum="$(awk '/^lane / { for (i = 1; i <= NF; i++) if ($i == "reserve-losses") sum += $(i + 1) } END { print sum + 0 }' "$show")"
+lane_materializations="$(awk '/^lane / { for (i = 1; i <= NF; i++) if ($i == "reserve-loss-materializations") sum += $(i + 1) } END { print sum + 0 }' "$show")"
+lane_unmaterialized="$(awk '/^lane / { for (i = 1; i <= NF; i++) if ($i == "reserve-loss-unmaterialized") sum += $(i + 1) } END { print sum + 0 }' "$show")"
+if [ "$lane_loss_sum" -ne "$losses" ] || \
+   [ $((lane_materializations + lane_unmaterialized)) -ne "$lane_loss_sum" ]; then
+  echo "S78 acceptance failure: lane loss counters do not match aggregate partition" >&2
   exit 1
 fi
 if [ "$FAULT" = reserve-stress ]; then

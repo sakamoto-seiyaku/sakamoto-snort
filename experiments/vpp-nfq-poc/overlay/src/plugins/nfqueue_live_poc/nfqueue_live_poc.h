@@ -209,6 +209,7 @@ struct nfqueue_live_main_s
   u8 inject_completion_credit_exhaustion;
   u8 inject_verdict_failed_definite;
   u8 inject_verdict_outcome_unknown;
+  u8 inject_receive_fault;
   u8 inject_normal_capacity_exhaustion;
   u8 arm_normal_capacity_exhaustion;
   u8 reserve_enabled;

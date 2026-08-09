@@ -30,6 +30,9 @@ typedef struct
   uint64_t reserve_peak_inflight;
   uint64_t reserve_exhaustions;
   uint64_t reserve_losses;
+  uint64_t reserve_loss_materializations;
+  uint64_t reserve_loss_unmaterialized;
+  uint64_t reserve_loss_identity_misses;
   uint64_t reserve_loss_native_drops;
   uint64_t reserve_loss_failed_definite;
   uint64_t reserve_loss_unknown;
@@ -38,6 +41,8 @@ typedef struct
   uint64_t degraded_health;
   uint64_t receive_faults;
   uint64_t receive_fault_yields;
+  uint64_t receive_fault_disables;
+  uint64_t receive_fault_buffer_returns;
   uint64_t native_returns;
   uint64_t policy_verdicts;
   uint64_t delivery_claims;
@@ -135,6 +140,8 @@ record_reserve_loss (model_t *model, uint32_t lane, uint32_t packet_id)
   model->reserve_exhaustions++;
   model->reserve_losses++;
   model->degraded_health++;
+  model->reserve_loss_unmaterialized++;
+  model->reserve_loss_identity_misses++;
   /* No reserve identity exists here: no Policy Verdict, native ACCEPT, or
    * delivery-success claim is manufactured for an explicitly lost packet. */
   expect (model->reserve_direct_attempts == model->reserve_admitted,
@@ -171,6 +178,38 @@ record_receive_fault (model_t *model)
 }
 
 static void
+record_identity_missing_loss (model_t *model)
+{
+  /* A reserved buffer was acquired and returned, but its NFQUEUE identity was
+   * not recoverable.  It is a loss with no materialized Adapter operation. */
+  expect (model->outstanding == 0,
+          "identity-missing fault started with outstanding residue");
+  model->outstanding++;
+  model->reserve_losses++;
+  model->reserve_loss_unmaterialized++;
+  model->reserve_loss_identity_misses++;
+  model->degraded_health++;
+  model->native_returns++;
+  model->outstanding--;
+}
+
+static void
+record_receive_fault_after_acquire (model_t *model)
+{
+  /* The callback has already acquired one VPP buffer.  A non-transient recv
+   * fault returns it exactly once, disables the reader, and yields without an
+   * error-driven re-entry or a fabricated packet outcome. */
+  expect (model->outstanding == 0,
+          "receive fault started with outstanding residue");
+  model->outstanding++;
+  record_receive_fault (model);
+  model->receive_fault_disables++;
+  model->native_returns++;
+  model->receive_fault_buffer_returns++;
+  model->outstanding--;
+}
+
+static void
 run_startup_partial_release (void)
 {
   enum { MAX_ENTRIES = 8 };
@@ -202,23 +241,47 @@ run_fault_accounting (void)
   record_reserve_loss_outcome (&model, OUTCOME_SUCCEEDED);
   record_reserve_loss_outcome (&model, OUTCOME_FAILED_DEFINITE);
   record_reserve_loss_outcome (&model, OUTCOME_UNKNOWN);
-  record_receive_fault (&model);
+  model.reserve_losses = 3;
+  model.reserve_loss_materializations = 3;
+  record_identity_missing_loss (&model);
+  record_receive_fault_after_acquire (&model);
+  expect (model.reserve_loss_materializations +
+              model.reserve_loss_unmaterialized == model.reserve_losses,
+          "identity-missing loss broke materialized/unmaterialized partition");
+  expect (model.reserve_loss_identity_misses == 1,
+          "identity-missing loss was not counted once");
   expect (model.reserve_loss_native_drops == 1,
           "only successful NF_DROP counted as native loss");
   expect (model.reserve_loss_failed_definite == 1 &&
               model.reserve_loss_unknown == 1,
           "reserve loss outcomes were not partitioned");
-  expect (model.receive_faults == 1 && model.receive_fault_yields == 1,
-          "receive fault did not yield callback");
+  expect (model.reserve_loss_native_drops +
+              model.reserve_loss_failed_definite +
+              model.reserve_loss_unknown ==
+              model.reserve_loss_materializations,
+          "loss outcomes exceeded materialized loss identities");
+  expect (model.receive_faults == 1 && model.receive_fault_yields == 1 &&
+              model.receive_fault_disables == 1 &&
+              model.receive_fault_buffer_returns == 1,
+          "acquired-buffer receive fault did not disable/yield/return once");
+  expect (model.outstanding == 0,
+          "fault accounting left an outstanding buffer residue");
   expect (model.policy_verdicts == 0 && model.delivery_claims == 0,
           "fault accounting fabricated policy/delivery evidence");
-  printf ("fault accounting: loss-drops=%llu failed=%llu unknown=%llu "
-          "receive-faults=%llu callback-yields=%llu degraded=%llu\n",
+  printf ("fault accounting: loss-materialized=%llu loss-unmaterialized=%llu "
+          "identity-misses=%llu loss-drops=%llu failed=%llu unknown=%llu "
+          "receive-faults=%llu callback-yields=%llu disables=%llu "
+          "buffer-returns=%llu degraded=%llu\n",
+          (unsigned long long) model.reserve_loss_materializations,
+          (unsigned long long) model.reserve_loss_unmaterialized,
+          (unsigned long long) model.reserve_loss_identity_misses,
           (unsigned long long) model.reserve_loss_native_drops,
           (unsigned long long) model.reserve_loss_failed_definite,
           (unsigned long long) model.reserve_loss_unknown,
           (unsigned long long) model.receive_faults,
           (unsigned long long) model.receive_fault_yields,
+          (unsigned long long) model.receive_fault_disables,
+          (unsigned long long) model.receive_fault_buffer_returns,
           (unsigned long long) model.degraded_health);
 }
 
@@ -265,6 +328,9 @@ run_capacity_and_reserve (void)
           "reserve exhaustion count");
   expect (model.reserve_losses == LANES,
           "reserve loss count");
+  expect (model.reserve_loss_materializations +
+              model.reserve_loss_unmaterialized == model.reserve_losses,
+          "capacity loss partition");
   expect (model.reserve_peak_occupancy == RESERVE_CAPACITY,
           "reserve occupancy watermark");
   expect (model.reserve_peak_inflight == 1,
