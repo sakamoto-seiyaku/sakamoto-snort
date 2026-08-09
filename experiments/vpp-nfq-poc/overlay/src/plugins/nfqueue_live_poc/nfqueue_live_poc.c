@@ -661,17 +661,17 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
                            nfqueue_live_lane_t *lane, u64 generation,
                            u32 packet_id, u32 origin_lane, u32 verdict)
 {
-  int result;
+  int result = 0;
   u8 force_failed = __atomic_exchange_n (&nm->inject_verdict_failed_definite,
                                          0, __ATOMIC_ACQ_REL);
   u8 force_unknown = __atomic_exchange_n (&nm->inject_verdict_outcome_unknown,
                                           0, __ATOMIC_ACQ_REL);
   nfqueue_live_completion_outcome_t outcome;
 
-  /* This is the one physical operation for the completion identity.  The
-   * injected modes below alter only the deterministic classification after
-   * this call; they never replace it with a retry, alternate queue, or
-   * replacement payload. */
+  /* This is the one physical operation for the completion identity.  A
+   * definite rejection is an operation-level fault before the backend call;
+   * it therefore cannot have been accepted by the receiver.  Unknown and
+   * normal outcomes call the native backend exactly once. */
   nm->last_verdict_generation = generation;
   nm->last_verdict_packet_id = packet_id;
   nm->last_verdict_origin_lane = origin_lane;
@@ -684,30 +684,35 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
     }
   lane->verdict_attempts++;
   nm->verdict_attempts++;
-  result = nfq_set_verdict (lane->queue, packet_id, verdict, 0, 0);
   if (force_failed)
     {
       nm->verdict_fault_injections++;
       nm->verdict_send_failures++;
+      nm->verdict_definite_rejections++;
       nm->last_verdict_errno = EIO;
       outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
     }
-  else if (result < 0)
-    {
-      nm->verdict_send_failures++;
-      nm->last_verdict_errno = errno;
-      outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
-    }
-  else if (force_unknown)
-    {
-      nm->verdict_fault_injections++;
-      nm->verdict_send_success++;
-      outcome = NFQUEUE_LIVE_OUTCOME_UNKNOWN;
-    }
   else
     {
-      nm->verdict_send_success++;
-      outcome = NFQUEUE_LIVE_OUTCOME_SUCCEEDED;
+      nm->native_verdict_calls++;
+      result = nfq_set_verdict (lane->queue, packet_id, verdict, 0, 0);
+      if (result < 0)
+        {
+          nm->verdict_send_failures++;
+          nm->last_verdict_errno = errno;
+          outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
+        }
+      else if (force_unknown)
+        {
+          nm->verdict_fault_injections++;
+          nm->verdict_send_success++;
+          outcome = NFQUEUE_LIVE_OUTCOME_UNKNOWN;
+        }
+      else
+        {
+          nm->verdict_send_success++;
+          outcome = NFQUEUE_LIVE_OUTCOME_SUCCEEDED;
+        }
     }
   switch (outcome)
     {
@@ -1702,10 +1707,13 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   __atomic_store_n (&nm->completion_debt, 0, __ATOMIC_RELEASE);
   nm->verdict_identity_mismatches = 0;
   nm->verdict_fault_injections = 0;
+  nm->native_verdict_calls = 0;
+  nm->verdict_definite_rejections = 0;
   nm->last_verdict_generation = 0;
   nm->last_verdict_packet_id = 0;
   nm->last_verdict_origin_lane = 0;
   nm->last_verdict_outcome = NFQUEUE_LIVE_OUTCOME_NONE;
+  nm->last_verdict_errno = 0;
   nm->completion_outcome_succeeded = 0;
   nm->completion_outcome_failed_definite = 0;
   nm->completion_outcome_unknown = 0;
@@ -2421,6 +2429,9 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->completion_outcome_succeeded,
                    (unsigned long long) nm->completion_outcome_failed_definite,
                    (unsigned long long) nm->completion_outcome_unknown);
+  vlib_cli_output (vm, "native-verdict-calls %llu verdict-definite-rejections %llu",
+                   (unsigned long long) nm->native_verdict_calls,
+                   (unsigned long long) nm->verdict_definite_rejections);
   vlib_cli_output (vm, "last-verdict-generation %llu last-verdict-packet-id %u last-verdict-origin-lane %u last-verdict-outcome %s verdict-identity-mismatches %llu verdict-fault-injections %llu",
                    (unsigned long long) nm->last_verdict_generation,
                    nm->last_verdict_packet_id, nm->last_verdict_origin_lane,

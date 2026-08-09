@@ -9,6 +9,7 @@ POC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 EVIDENCE_DIR="${S77_EVIDENCE_DIR:-/tmp/sakamoto-s77-evidence}"
 RUNTIME_ROOT="${S77_RUNTIME_ROOT:-/tmp/sakamoto-vpp-nfqueue-s77}"
 NETNS_STATE="${S77_NETNS_STATE:-/tmp/sakamoto-nfqueue-s77-state}"
+CONFIG_TEMPLATE="${S77_CONFIG_TEMPLATE:-$POC_DIR/configs/nfqueue-live-poc-s77-startup.conf}"
 FAULT="${S77_FAULT:-normal}"
 OWNER_MODE="${S77_OWNER_MODE:-remote}"
 
@@ -33,6 +34,8 @@ case "$FAULT" in
 esac
 
 mkdir -p "$EVIDENCE_DIR"
+GENERATED_CONFIG="$EVIDENCE_DIR/startup.conf"
+sed "s#__S77_RUNTIME_ROOT__#$RUNTIME_ROOT#g" "$CONFIG_TEMPLATE" >"$GENERATED_CONFIG"
 set +e
 S76_EVIDENCE_DIR="$EVIDENCE_DIR" \
 S76_RUNTIME_ROOT="$RUNTIME_ROOT" \
@@ -46,7 +49,7 @@ S76_PEER6="${S77_PEER6:-fd00:201:77::2}" \
 S76_OWNER_MODE="$OWNER_MODE" \
 S76_REGULAR_MEMFD="${S77_REGULAR_MEMFD:-0}" \
 S76_PING_COUNT="${S77_PING_COUNT:-$([ "$FAULT" = normal ] && echo 8 || echo 1)}" \
-VPP_CONFIG="${VPP_CONFIG:-$POC_DIR/configs/nfqueue-live-poc-s77-startup.conf}" \
+VPP_CONFIG="${VPP_CONFIG:-$GENERATED_CONFIG}" \
 "$SCRIPT_DIR/run-nfqueue-live-poc-s76.sh"
 runner_rc="$?"
 set -e

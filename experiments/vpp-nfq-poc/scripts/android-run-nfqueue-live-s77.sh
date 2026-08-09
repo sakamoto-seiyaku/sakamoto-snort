@@ -32,7 +32,7 @@ remove_rules() {
 
 stop_vpp() {
   vppctl_cmd 'nfqueue-live-poc disable' >/dev/null 2>&1 || true
-  adb_su "if [ -f '$REMOTE_ROOT/runtime/vpp.pid' ]; then kill -TERM \$(cat '$REMOTE_ROOT/runtime/vpp.pid') 2>/dev/null || true; sleep 1; kill -KILL \$(cat '$REMOTE_ROOT/runtime/vpp.pid') 2>/dev/null || true; fi; for p in \$(pidof vpp 2>/dev/null || true); do kill -TERM \$p 2>/dev/null || true; done; sleep 1; rm -f '$REMOTE_ROOT/runtime/vpp.pid' '$REMOTE_ROOT/runtime/cli.sock' '$REMOTE_ROOT/runtime/statseg.sock'"
+  adb_su "if [ -f '$REMOTE_ROOT/runtime/vpp.pid' ]; then kill -TERM \$(cat '$REMOTE_ROOT/runtime/vpp.pid') 2>/dev/null || true; sleep 1; kill -KILL \$(cat '$REMOTE_ROOT/runtime/vpp.pid') 2>/dev/null || true; fi; for p in \$(pidof vpp 2>/dev/null || true); do kill -TERM \$p 2>/dev/null || true; done; sleep 1; rm -f '$REMOTE_ROOT/runtime/vpp.pid' '$REMOTE_ROOT/runtime/cli.sock' '$REMOTE_ROOT/runtime/api.sock' '$REMOTE_ROOT/runtime/statseg.sock'"
 }
 
 capture_residue() {
@@ -62,7 +62,7 @@ trap cleanup EXIT
 device_preflight
 remove_rules
 stop_vpp
-adb_su "chown -R shell:shell '$REMOTE_ROOT' 2>/dev/null || true; chmod -R 777 '$REMOTE_ROOT' 2>/dev/null || true; rm -rf '$REMOTE_ROOT/runtime/cli.sock' '$REMOTE_ROOT/runtime/statseg.sock' '$REMOTE_ROOT/logs/vpp.log' '$REMOTE_ROOT/logs/vpp-stdout.log'; mkdir -p '$REMOTE_ROOT/runtime' '$REMOTE_ROOT/logs' '$REMOTE_ROOT/shm'; chmod 777 '$REMOTE_ROOT/shm'; cd '$REMOTE_ROOT' && export LD_LIBRARY_PATH='$REMOTE_ROOT/lib' SAKAMOTO_ANDROID_SHM_DIR='$REMOTE_ROOT/shm'; nohup '$REMOTE_ROOT/bin/vpp' plugin_path '$REMOTE_ROOT/plugins' -c '$REMOTE_ROOT/runtime/startup.conf' >'$REMOTE_ROOT/logs/vpp-stdout.log' 2>&1 < /dev/null & echo \$! > '$REMOTE_ROOT/runtime/vpp.pid'"
+adb_su "chown -R shell:shell '$REMOTE_ROOT' 2>/dev/null || true; chmod -R 777 '$REMOTE_ROOT' 2>/dev/null || true; rm -rf '$REMOTE_ROOT/runtime/cli.sock' '$REMOTE_ROOT/runtime/api.sock' '$REMOTE_ROOT/runtime/statseg.sock' '$REMOTE_ROOT/shm' '$REMOTE_ROOT/logs/vpp.log' '$REMOTE_ROOT/logs/vpp-stdout.log'; mkdir -p '$REMOTE_ROOT/runtime' '$REMOTE_ROOT/logs' '$REMOTE_ROOT/shm'; chmod 777 '$REMOTE_ROOT/shm'; cd '$REMOTE_ROOT' && export LD_LIBRARY_PATH='$REMOTE_ROOT/lib' SAKAMOTO_ANDROID_SHM_DIR='$REMOTE_ROOT/shm'; nohup '$REMOTE_ROOT/bin/vpp' plugin_path '$REMOTE_ROOT/plugins' -c '$REMOTE_ROOT/runtime/startup.conf' >'$REMOTE_ROOT/logs/vpp-stdout.log' 2>&1 < /dev/null & echo \$! > '$REMOTE_ROOT/runtime/vpp.pid'"
 sleep 3
 vppctl_cmd 'show version' | tr -d '\r' | tee "$RESULT_DIR/version.txt"
 
