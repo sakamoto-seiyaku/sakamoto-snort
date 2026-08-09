@@ -1,0 +1,49 @@
+diff --git a/src/vppinfra/linux/mem.c b/src/vppinfra/linux/mem.c
+--- a/src/vppinfra/linux/mem.c
++++ b/src/vppinfra/linux/mem.c
+@@ -215,6 +215,8 @@
+ {
+   clib_mem_main_t *mm = &clib_mem_main;
+   int fd;
++  int s73_regular_memfd = 0;
++  char *s73_regular_memfd_env;
+   unsigned int memfd_flags;
+   va_list va;
+   u8 *s = 0;
+@@ -234,11 +235,27 @@
+       break;
+     case CLIB_MEM_PAGE_SZ_DEFAULT_HUGE:
+       memfd_flags = MFD_HUGETLB;
++      s73_regular_memfd = 1;
+       break;
+     default:
+       memfd_flags = MFD_HUGETLB | log2_page_size << MFD_HUGE_SHIFT;
++      s73_regular_memfd = 1;
++      break;
+     }
+
++  /*
++   * SAKAMOTO-73 throwaway fallback only.  A host with no hugepage pool
++   * cannot map the 9000-byte single-buffer probe.  Keep the VPP logical
++   * arena/page geometry, but back it with a sealed regular memfd when the
++   * caller explicitly opts in; product/runtime memory policy is unchanged.
++   */
++  s73_regular_memfd_env = getenv ("SAKAMOTO_S73_REGULAR_MEMFD");
++  if (s73_regular_memfd &&
++      (!s73_regular_memfd_env || s73_regular_memfd_env[0] != '1'))
++    s73_regular_memfd = 0;
++  if (s73_regular_memfd)
++    memfd_flags = MFD_ALLOW_SEALING;
++
+   /* Set FD_CLOEXEC flag on memory file descriptor, such that mapped memory
+    * doesn't leak through child processes if VPP crashes. */
+   memfd_flags |= MFD_CLOEXEC;
+diff --git a/src/vppinfra/pmalloc.c b/src/vppinfra/pmalloc.c
+--- a/src/vppinfra/pmalloc.c
++++ b/src/vppinfra/pmalloc.c
+@@ -334,3 +334,5 @@
+   if (a->log2_subpage_sz != clib_mem_get_log2_page_size () &&
++      (getenv ("SAKAMOTO_S73_REGULAR_MEMFD") == 0 ||
++       getenv ("SAKAMOTO_S73_REGULAR_MEMFD")[0] != '1') &&
+       mlock (va, size) != 0)
+     {
