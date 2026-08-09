@@ -21,6 +21,15 @@ PEER4="${S76_PEER4:-10.201.76.2}"
 HOST6="${S76_HOST6:-fd00:201:76::1}"
 PEER6="${S76_PEER6:-fd00:201:76::2}"
 OWNER_MODE="${S76_OWNER_MODE:-mixed}"
+STRESS_MODE="${S76_STRESS:-0}"
+STRESS_COUNT="${S76_STRESS_COUNT:-64}"
+if [ "$STRESS_MODE" = 1 ]; then
+  PING_COUNT="$STRESS_COUNT"
+  PING_INTERVAL="${S76_STRESS_INTERVAL:-0.001}"
+else
+  PING_COUNT=8
+  PING_INTERVAL=0.2
+fi
 
 case "$OWNER_MODE" in
   local) OWNER_ARG=owner-local ;;
@@ -117,11 +126,11 @@ peer_pid="$(QUEUE_BASE="$QUEUE_BASE" S76_NETNS_STATE="$S76_NETNS_STATE" \
   "$VPPCTL_BIN" -s "$RUNTIME_ROOT/cli.sock" nfqueue-live-poc enable-dual \
     queue-base "$QUEUE_BASE" two-workers "$OWNER_ARG" "${FAULT_ARGS[@]}"
   "$VPPCTL_BIN" -s "$RUNTIME_ROOT/cli.sock" show nfqueue-live-poc
-  echo "inject=concurrent IPv4/IPv6 peer pings for INPUT and OUTPUT"
+  echo "inject=concurrent IPv4/IPv6 peer pings for INPUT and OUTPUT count=$PING_COUNT interval=$PING_INTERVAL stress=$STRESS_MODE"
   set +e
-  nsenter -t "$peer_pid" -n ping -c 8 -W 1 "$HOST4" >"$EVIDENCE_DIR/ping-ip4.log" 2>&1 &
+  nsenter -t "$peer_pid" -n ping -c "$PING_COUNT" -i "$PING_INTERVAL" -W 1 "$HOST4" >"$EVIDENCE_DIR/ping-ip4.log" 2>&1 &
   p4="$!"
-  nsenter -t "$peer_pid" -n ping -6 -c 8 -W 1 "$HOST6" >"$EVIDENCE_DIR/ping-ip6.log" 2>&1 &
+  nsenter -t "$peer_pid" -n ping -6 -c "$PING_COUNT" -i "$PING_INTERVAL" -W 1 "$HOST6" >"$EVIDENCE_DIR/ping-ip6.log" 2>&1 &
   p6="$!"
   wait "$p4"; ping4_rc="$?"
   wait "$p6"; ping6_rc="$?"
@@ -222,6 +231,27 @@ if [ "${INJECT_MISSING_PACKET_ID:-0}" = 1 ]; then
 fi
 if [ "${INJECT_MISSING_GENERATION:-0}" = 1 ]; then
   require_at_least missing-queue-generation 1
+fi
+if [ "$STRESS_MODE" = 1 ]; then
+  obligations="$(value_for ledger-message-obligations)"
+  verdicts="$(value_for verdict-attempts)"
+  returns="$(value_for native-buffer-returns)"
+  proof_checks="$(value_for identity-proof-checks)"
+  proof_matches="$(value_for identity-proof-matches)"
+  remote_obligations="$(value_for owner-remote-obligations)"
+  remote_handoffs="$(value_for owner-remote-handoffs)"
+  if [ -z "$obligations" ] || [ "$obligations" -le 0 ] ||
+     [ "$obligations" != "$verdicts" ] || [ "$obligations" != "$returns" ]; then
+    echo "S76 stress acceptance failure: obligations=$obligations verdicts=$verdicts returns=$returns" >&2
+    exit 1
+  fi
+  if [ "$proof_checks" != "$proof_matches" ] ||
+     [ "$(value_for identity-proof-failures)" != 0 ] ||
+     [ "$remote_obligations" != "$remote_handoffs" ]; then
+    echo "S76 stress acceptance failure: proof=$proof_checks/$proof_matches failures=$(value_for identity-proof-failures) remote=$remote_obligations/$remote_handoffs" >&2
+    exit 1
+  fi
+  echo "S76 stress ledger: obligations=$obligations verdicts=$verdicts native-returns=$returns credits=$(value_for completion-credit-acquired)/$(value_for completion-credit-released) proof=$proof_checks/$proof_matches remote=$remote_obligations/$remote_handoffs residues=$(value_for residue-obligations)/$(value_for residue-completion-credits)"
 fi
 echo "S76 runtime acceptance: PASS"
 echo "raw evidence: $EVIDENCE_DIR/run.log $EVIDENCE_DIR/show-before-disable.txt $EVIDENCE_DIR/show-after-disable.txt"

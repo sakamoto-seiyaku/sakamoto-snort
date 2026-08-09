@@ -23,7 +23,7 @@ buffers, and produced:
 
 ```text
 bufferDataSize=9000
-pluginSha256=9a63b69bdb447a8ac974769a33788be4bc4d505e1deaba29c4fe60e1991aaa00
+pluginSha256=4ca36d7fa5a4715ddbdc0829d2182c070283346a02111807eda65490fa8ca5bc
 ```
 
 The complete provenance is in
@@ -57,6 +57,12 @@ rtk unshare -Urn env S76_REGULAR_MEMFD=1 S76_OWNER_MODE=local \
   ./scripts/run-nfqueue-live-poc-s76.sh
 rtk unshare -Urn env S76_REGULAR_MEMFD=1 S76_OWNER_MODE=remote \
   S76_EVIDENCE_DIR=/tmp/sakamoto-s76-evidence-remote \
+  ./scripts/run-nfqueue-live-poc-s76.sh
+
+# Concurrent remote-owner stress: 64 IPv4 and 64 IPv6 pings at 1 ms.
+rtk unshare -Urn env S76_REGULAR_MEMFD=1 S76_OWNER_MODE=remote \
+  S76_STRESS=1 S76_STRESS_COUNT=64 \
+  S76_EVIDENCE_DIR=/tmp/sakamoto-s76-evidence-stress \
   ./scripts/run-nfqueue-live-poc-s76.sh
 ```
 
@@ -108,43 +114,65 @@ inline completion reference; only the origin can perform the final native
 `vlib_buffer_free_one()` return. Completion credits and live obligations are
 tracked independently and both must reach zero at teardown.
 
+Evidence does not use a shared mixed-packet snapshot. Each real worker owns one
+fixed, lock-protected sample slot; the origin CLI takes each slot under the
+same lock. `handoff-before` is written by the source worker and
+`handoff-after` by the destination worker, with worker, buffer identity, nonce,
+and stage shown explicitly. The two latest role samples can therefore appear
+in opposite slots under concurrency; they are observational records only and
+are correlated by their inline identity/obligation nonce. The proof decision
+itself uses only local scalars read from the received live buffer and its
+inline handoff tag. All S76 ledgers (owner, credit, proof, and transport fault
+counters) aggregate with atomic operations.
+
 ## Runtime evidence
 
 The mixed run (`/tmp/sakamoto-s76-evidence`) reports:
 
 ```text
 workers 2 worker-ids 1,2 owner-mode mixed
-owner-local-obligations 17 owner-remote-obligations 17 owner-remote-handoffs 17 owner-queue-full 0
-completion-credit-acquired 34 completion-credit-released 34 completion-credits-held 0 residue-completion-credits 0
+owner-local-obligations 16 owner-remote-obligations 17 owner-remote-handoffs 17 owner-queue-full 0
+completion-credit-acquired 33 completion-credit-released 33 completion-credits-held 0 residue-completion-credits 0
 identity-proof-checks 17 identity-proof-matches 17 identity-proof-failures 0
-handoff-before buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 8 generation 1 origin-lane 1 payload-offset 88 payload-length 84
-handoff-after buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 8 generation 1 origin-lane 1 payload-offset 88 payload-length 84
-verdict-attempts 34 send-success 34 send-failures 0
-native-buffer-returns 34 outstanding-obligations 0 residue-obligations 0 packet-copies 0
+handoff-before slot 0 valid 1 owner-worker 1 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 9 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 33 stage 0
+handoff-after slot 1 valid 1 owner-worker 2 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 9 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 33 stage 195
+verdict-attempts 33 send-success 33 send-failures 0
+native-buffer-returns 33 outstanding-obligations 0 residue-obligations 0 packet-copies 0
 ```
 
-The local-only run reports `owner-local-obligations 34`, no remote handoffs,
+The local-only run reports `owner-local-obligations 33`, no remote handoffs,
 and zero proof failures. The remote-only run reports
-`owner-remote-obligations 34`, `owner-remote-handoffs 34`, and
-`identity-proof-checks 34 identity-proof-matches 34 identity-proof-failures 0`.
+`owner-remote-obligations 33`, `owner-remote-handoffs 33`, and
+`identity-proof-checks 33 identity-proof-matches 33 identity-proof-failures 0`.
+
+The concurrent remote stress run reports:
+
+```text
+datagrams 257 callbacks 257
+owner-remote-obligations 257 owner-remote-handoffs 257 owner-queue-full 0
+completion-credit-acquired 257 completion-credit-released 257 completion-credits-held 0 residue-completion-credits 0
+identity-proof-checks 257 identity-proof-matches 257 identity-proof-failures 0
+verdict-attempts 257 native-buffer-returns 257 outstanding-obligations 0 residue-obligations 0
+S76 stress ledger: obligations=257 verdicts=257 native-returns=257 credits=257/257 proof=257/257 remote=257/257 residues=0/0
+```
 
 The owner queue-full fault reports:
 
 ```text
-owner-remote-obligations 34 owner-remote-handoffs 33 owner-queue-full 1 owner-terminal-intents 1
-completion-credit-acquired 34 completion-credit-released 34 completion-credits-held 0 residue-completion-credits 0
-identity-proof-checks 33 identity-proof-matches 33 identity-proof-failures 0
-verdict-attempts 34 native-buffer-returns 34 outstanding-obligations 0 residue-obligations 0
+owner-remote-obligations 33 owner-remote-handoffs 32 owner-queue-full 1 owner-terminal-intents 1
+completion-credit-acquired 33 completion-credit-released 33 completion-credits-held 0 residue-completion-credits 0
+identity-proof-checks 32 identity-proof-matches 32 identity-proof-failures 0
+verdict-attempts 33 native-buffer-returns 33 outstanding-obligations 0 residue-obligations 0
 ```
 
 The completion-credit fault reports one bounded admission rejection while all
 admitted obligations close:
 
 ```text
-owner-local-obligations 17 owner-remote-obligations 16 owner-remote-handoffs 16
-completion-credit-acquired 33 completion-credit-released 33 completion-credit-exhausted 1 completion-credits-held 0 residue-completion-credits 0
+owner-local-obligations 16 owner-remote-obligations 16 owner-remote-handoffs 16
+completion-credit-acquired 32 completion-credit-released 32 completion-credit-exhausted 1 completion-credits-held 0 residue-completion-credits 0
 identity-proof-checks 16 identity-proof-matches 16 identity-proof-failures 0
-verdict-attempts 34 native-buffer-returns 34 outstanding-obligations 0 residue-obligations 0
+verdict-attempts 33 native-buffer-returns 33 outstanding-obligations 0 residue-obligations 0
 ```
 
 All five runtime modes returned zero for IPv4 and IPv6 peer pings, native

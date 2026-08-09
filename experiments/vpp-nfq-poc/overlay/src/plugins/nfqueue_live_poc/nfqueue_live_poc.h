@@ -6,6 +6,7 @@
 #include <vlib/vlib.h>
 
 #define NFQUEUE_LIVE_MAX_LANES 4u
+#define NFQUEUE_LIVE_MAX_WORKER_SLOTS 2u
 
 struct nfq_handle;
 struct nfq_q_handle;
@@ -104,6 +105,39 @@ typedef struct
   u32 tail;
   nfqueue_live_completion_t entries[128];
 } nfqueue_live_completion_ring_t;
+
+/* Evidence is bounded and owned by the worker slot that records it.  The
+ * lock protects every field so the origin CLI can take a coherent sample
+ * while workers are still processing packets.  These fields never participate
+ * in ownership or completion; packet proof uses the receiving buffer's inline
+ * metadata/tag directly. */
+typedef struct
+{
+  u32 lock;
+  u8 before_valid;
+  u8 after_valid;
+  u16 reserved;
+  u32 before_worker;
+  u32 after_worker;
+  u32 before_buffer_index;
+  u32 after_buffer_index;
+  uword before_buffer_base;
+  uword after_buffer_base;
+  u32 before_packet_id;
+  u32 after_packet_id;
+  u32 before_payload_offset;
+  u32 after_payload_offset;
+  u32 before_payload_length;
+  u32 after_payload_length;
+  u64 before_generation;
+  u64 after_generation;
+  u32 before_origin_lane;
+  u32 after_origin_lane;
+  u32 before_obligation_nonce;
+  u32 after_obligation_nonce;
+  u8 before_stage;
+  u8 after_stage;
+} nfqueue_live_handoff_sample_t;
 
 struct nfqueue_live_main_s
 {
@@ -234,20 +268,8 @@ struct nfqueue_live_main_s
   u64 identity_proof_checks;
   u64 identity_proof_matches;
   u64 identity_proof_failures;
-  u32 handoff_before_buffer_index;
-  u32 handoff_after_buffer_index;
-  uword handoff_before_buffer_base;
-  uword handoff_after_buffer_base;
-  u32 handoff_before_packet_id;
-  u32 handoff_after_packet_id;
-  u32 handoff_before_payload_offset;
-  u32 handoff_after_payload_offset;
-  u32 handoff_before_payload_length;
-  u32 handoff_after_payload_length;
-  u64 handoff_before_generation;
-  u64 handoff_after_generation;
-  u32 handoff_before_origin_lane;
-  u32 handoff_after_origin_lane;
+  nfqueue_live_handoff_sample_t
+    handoff_samples[NFQUEUE_LIVE_MAX_WORKER_SLOTS];
   u32 last_verdict_errno;
 };
 
