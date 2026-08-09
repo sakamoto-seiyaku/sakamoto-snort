@@ -38,6 +38,9 @@ esac
 FAULT_ARGS=()
 if [ "${INJECT_STALE:-0}" = "1" ]; then FAULT_ARGS+=(inject-stale); fi
 if [ "${INJECT_DUPLICATE:-0}" = "1" ]; then FAULT_ARGS+=(inject-duplicate); fi
+if [ "${INJECT_COMPLETION_OVERFLOW:-0}" = "1" ]; then
+  FAULT_ARGS+=(inject-completion-overflow)
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "S73 netns smoke needs root/CAP_NET_ADMIN" >&2
@@ -176,6 +179,11 @@ require_zero full-packet-memcpy
 require_zero per-packet-heap-objects
 require_zero outstanding-obligations
 require_zero payload-span-failures
-require_zero ring-overflow
+if [ "${INJECT_COMPLETION_OVERFLOW:-0}" = "1" ]; then
+  require_stat ring-overflow 1
+else
+  require_zero ring-overflow
+fi
+require_zero origin-return-overflow
 echo "S73 runtime acceptance: PASS"
 echo "raw evidence: $EVIDENCE_DIR/run.log $EVIDENCE_DIR/show-before-disable.txt $EVIDENCE_DIR/show-after-disable.txt"

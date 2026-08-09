@@ -6,8 +6,9 @@ S74--S77). The plugin receives one NFQUEUE netlink datagram directly into a VPP
 buffer's current data span, keeps the packet obligation in the fixed
 `vlib_buffer_t.opaque` area, hands the buffer index to worker 1, and sends one
 verdict plus one native `vlib_buffer_free_one()` return on the origin lane in
-the proven path. A bounded transport-fault fail-open may settle directly on
-the producer when publishing a completion is impossible.
+the proven path. Producers never issue a verdict or free: a bounded transport
+fault publishes a terminal token through a reserved origin-return ring, and
+the origin lane settles it.
 The inline identity is `(generation, original NFQUEUE packet_id,
 obligation_nonce)`; completion rings transport that identity and inline
 reference tokens only. They are fixed transport rings, not a side lease table.
@@ -18,7 +19,7 @@ Build a clean pinned VPP tree and install only this plugin:
 
 ```sh
 cd experiments/vpp-nfq-poc
-PYTHONPATH=/tmp/s73-venv/lib/python3.13/site-packages JOBS=12 \
+PYTHONPATH="$PWD/work/s73-python-venv/lib/python3.13/site-packages" JOBS=12 \
   ./scripts/build-nfqueue-live-poc.sh
 ```
 
@@ -44,7 +45,17 @@ IPv4 with stale/duplicate completion probes (the acceptance run):
 ```sh
 rtk unshare -Urn env S73_LOCAL_DUMMY=1 S73_REGULAR_MEMFD=1 \
   INJECT_STALE=1 INJECT_DUPLICATE=1 \
-  S73_EVIDENCE_DIR=/tmp/sakamoto-s73-evidence-ipv4-final3 \
+  S73_EVIDENCE_DIR=/tmp/sakamoto-s73-evidence-ipv4-third \
+  ./scripts/run-nfqueue-live-poc.sh
+```
+
+Forced normal-completion-ring overflow (the terminal token must use the
+reserved origin-return ring):
+
+```sh
+rtk unshare -Urn env S73_LOCAL_DUMMY=1 S73_REGULAR_MEMFD=1 \
+  INJECT_COMPLETION_OVERFLOW=1 \
+  S73_EVIDENCE_DIR=/tmp/sakamoto-s73-evidence-overflow \
   ./scripts/run-nfqueue-live-poc.sh
 ```
 
@@ -52,32 +63,35 @@ Optional IPv6 smoke (same S73 probe, not a later-ticket claim):
 
 ```sh
 rtk unshare -Urn env S73_LOCAL_DUMMY=1 S73_REGULAR_MEMFD=1 \
-  IP_FAMILY=inet6 S73_EVIDENCE_DIR=/tmp/sakamoto-s73-evidence-ipv6-final \
+  IP_FAMILY=inet6 S73_EVIDENCE_DIR=/tmp/sakamoto-s73-evidence-ipv6-third \
   ./scripts/run-nfqueue-live-poc.sh
 ```
 
-Both commands finish with `S73 runtime acceptance: PASS`. The raw logs and
-before/after-disable CLI snapshots are in the two evidence directories above.
+All three runtime commands finish with `S73 runtime acceptance: PASS`. The raw
+logs and before/after-disable CLI snapshots are in the evidence directories
+above.
 
 ## Acceptance evidence
 
 | S73 requirement | Evidence |
 | --- | --- |
-| Clean pinned source build and auditable 9000-byte data span | `s73-provenance.properties`: pinned revision, `bufferDataSize=9000`, both patch hashes, and final plugin hash `7fcbaa8565f10575b1df23aff29215085bfc0beaed41838132b2cc0a3add3bbe`. |
+| Clean pinned source build and auditable 9000-byte data span | `s73-provenance.properties`: pinned revision, `bufferDataSize=9000`, both patch hashes, and final plugin hash `8a2dc0ad0eeb5cf9ec58ff0df74896d1117a358d30fe295a84242f76b1c2918a`. |
 | One command starts VPP and injects a real packet | The run commands set up a kernel OUTPUT NFQUEUE rule, start the dedicated VPP install, and invoke `ping`; no plugin packet shortcut is used. |
-| IPv4 direct live-buffer parse | `/tmp/sakamoto-s73-evidence-ipv4-final3/show-before-disable.txt`: `buffer-data-size 9000`, `datagrams 1`, `callbacks 1`, `live-buffer-receives 1`, `inline-metadata-writes 1`, `payload-pointer-projections 1`, `last-buffer-index 2391916`, `last-buffer-base 0x10091fdc00`, `datagram-length 144`, `nfqa-payload-offset 60`, `nfqa-payload-length 84`, `original-length 84`, `captured-length 84`, `hook 3`, `ip-version 4`, `uid-known 1 uid 1000`. |
-| IPv6 smoke | `/tmp/sakamoto-s73-evidence-ipv6-final/show-before-disable.txt`: datagram 164, payload offset 60/length 104, original/captured 104, `hook 3`, `ip-version 6`, `uid-known 1 uid 1000`; this is additional smoke evidence only, not a later-ticket claim. |
+| IPv4 direct live-buffer parse | `/tmp/sakamoto-s73-evidence-ipv4-third/show-before-disable.txt`: `buffer-data-size 9000`, `datagrams 1`, `callbacks 1`, `live-buffer-receives 1`, `inline-metadata-writes 1`, `payload-pointer-projections 1`, `last-buffer-index 2391916`, `last-buffer-base 0x10091fdc00`, `datagram-length 144`, `nfqa-payload-offset 60`, `nfqa-payload-length 84`, `original-length 84`, `captured-length 84`, `hook 3`, `ip-version 4`, `uid-known 1 uid 1000`. |
+| IPv6 smoke | `/tmp/sakamoto-s73-evidence-ipv6-third/show-before-disable.txt`: datagram 164, payload offset 60/length 104, original/captured 104, `hook 3`, `ip-version 6`, `uid-known 1 uid 1000`; this is additional smoke evidence only, not a later-ticket claim. |
 | No scratch/side copy path | IPv4 snapshot reports `packet-copies 0`, `scratch-rx-buffers 0`, `full-packet-memcpy 0`, `per-packet-heap-objects 0`, and `payload-span-failures 0`. Positive counters prove the live receive, inline metadata write, and payload pointer projection; compile-time zero-path assertions and the static seam reject scratch allocation/copy/logging patterns. |
 | Original length source | `original-length` is populated by the vendored `nfq_get_cap_len()` NFQA_CAP_LEN adapter. When this local kernel omits NFQA_CAP_LEN, the bounded probe fallback uses libnetfilter_queue's captured payload length (`cap-len-missing 1`); it never parses an L3 header to invent the value. |
 | One verdict, unknown kernel outcome, native return | IPv4 snapshot reports `verdict-attempts 1`, `send-success 1`, `send-failures 0`, `outcome-unknown 1`, `native-buffer-returns 1`, `outstanding-obligations 0`. |
-| Origin/owner and stale/duplicate guards | IPv4 fault run reports `handoffs 1`, `owner-mismatches 1`, `completion-frames 3`, `stale 1`, `duplicate 1`, `ring-overflow 0`; full completion identity is checked before verdict. Completion refs stay inline until every published completion token is consumed. |
+| Origin/owner and stale/duplicate guards | IPv4 fault run reports `handoffs 1`, `owner-mismatches 1`, `completion-frames 3`, `stale 1`, `duplicate 1`, `ring-overflow 0`; full completion identity is checked before verdict. Stale tokens carry no reference, so a delayed reused-index token cannot decrement current metadata. Completion refs stay inline until every published completion token is consumed. |
+| Origin-only transport-fault settlement | `/tmp/sakamoto-s73-evidence-overflow/show-before-disable.txt` reports `completion-frames 128`, `duplicate 127`, `ring-overflow 1`, `origin-return-overflow 0`, `fail-open-settlements 1`, `verdict-attempts 1`, `native-buffer-returns 1`, and `outstanding-obligations 0`; the producer published the terminal token and the origin lane performed the only verdict/free. Admission is capped at 127 live obligations, matching the reserved ring capacity. |
 | Missing identity / malformed / truncation guards | Missing packet header, payload failure, span failure, parser failure, and MSG_TRUNC/oversize branches always free the allocated VPP buffer; when the packet id is recoverable from NFQA_PACKET_HDR they issue one bounded direct ACCEPT first. The static seam covers these candidate=0 branches. |
-| Teardown and residue | Disable sets quiescing, removes the netlink read channel, drains ingress and completion transports for a bounded interval while the completion channel remains live, and refuses close on residual obligations. The final snapshot reports `enabled 0`, `outstanding-obligations 0`, no ring overflow, verdict failure, or span failure; cleanup records and propagates disable/netns teardown failures. |
+| Teardown and residue | Disable sets quiescing, removes the netlink read channel, drains ingress and completion transports for a bounded interval while the completion channel remains live, and refuses close on residual obligations. The normal and overflow snapshots report `enabled 0`, `outstanding-obligations 0`, `origin-return-overflow 0`, no verdict failure, and no span failure; cleanup records and propagates disable/netns teardown failures. |
 
-Run the source-only seam check with:
+Run the source-only seam and focused multi-message settlement harness with:
 
 ```sh
 ./scripts/test-nfqueue-live-poc-static.sh
+./scripts/test-nfqueue-live-poc-multimessage.sh
 ```
 
 It prints `S73 static ownership seam: PASS` and verifies inline metadata,

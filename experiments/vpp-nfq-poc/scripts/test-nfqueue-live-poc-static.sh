@@ -22,10 +22,33 @@ grep -q 'nfq_get_cap_len' "$SOURCE"
 grep -q 'live_buffer_receives++' "$SOURCE"
 grep -q 'inline_metadata_writes++' "$SOURCE"
 grep -q 'payload_pointer_projections++' "$SOURCE"
-grep -q 'nfqueue_live_settle_fail_open' "$SOURCE"
+grep -q 'nfqueue_live_publish_terminal' "$SOURCE"
+grep -q 'nfqueue_live_settle_on_origin' "$SOURCE"
 grep -q 'nfqueue_live_drain_bounded' "$SOURCE"
+grep -q 'origin_return' "$SOURCE"
+grep -q 'callback_identities' "$SOURCE"
+grep -q 'callback_verdicts' "$SOURCE"
+grep -q 'callback_count > 1' "$SOURCE"
+grep -q 'stale.reference_held = 0' "$SOURCE"
+grep -q '__atomic_load_n (&nm->outstanding' "$SOURCE"
+grep -q '__atomic_fetch_add (&nm->outstanding' "$SOURCE"
+grep -q '__atomic_fetch_sub (&nm->outstanding' "$SOURCE"
 grep -q 'NFQUEUE_LIVE_PACKET_COPY_PATHS 0u' "$SOURCE"
 grep -q 'NFQUEUE_LIVE_FULL_PACKET_MEMCPY_PATHS 0u' "$SOURCE"
+
+if rg -n 'verdict_settled' "$PLUGIN_DIR"; then
+  echo "datagram-global verdict settlement flag remains in S73 plugin" >&2
+  exit 1
+fi
+
+for producer in nfqueue_live_owner_node nfqueue_live_ingress_process_node; do
+  producer_body="$(awk "/VLIB_NODE_FN \\(${producer}\\)/,/VLIB_REGISTER_NODE/" "$SOURCE")"
+  if printf '%s\n' "$producer_body" | rg -n \
+      'nfq_set_verdict|vlib_buffer_free_one|nfqueue_live_direct_accept'; then
+    echo "producer $producer contains a direct verdict/free operation" >&2
+    exit 1
+  fi
+done
 if rg -n 'nfqueue_live_ipv[46]_original_length|meta->(captured_length|origin_lane)' \
   "$PLUGIN_DIR"; then
   echo "original length or lane identity derived from forbidden adapter-local state" >&2

@@ -37,6 +37,7 @@ typedef struct
   u32 packet_id;
   u32 obligation_nonce;
   u32 verdict;
+  u8 terminal;
   u8 reference_held;
 } nfqueue_live_completion_t;
 
@@ -60,6 +61,7 @@ typedef struct
   u8 quiescing;
   u8 inject_stale;
   u8 inject_duplicate;
+  u8 inject_completion_overflow;
   u8 family;
   u8 origin_lane;
   u16 queue_num;
@@ -77,7 +79,9 @@ typedef struct
   void *active_datagram;
   nfqueue_live_index_ring_t ingress;
   nfqueue_live_completion_ring_t completion;
+  nfqueue_live_completion_ring_t origin_return;
   u32 completion_push_lock;
+  u32 origin_return_push_lock;
   u32 outstanding;
   u32 last_buffer_index;
   uword last_buffer_base;
@@ -115,6 +119,7 @@ typedef struct
   u64 completion_stale;
   u64 completion_duplicate;
   u64 completion_ring_overflow;
+  u64 origin_return_overflow;
   u64 completion_wake_writes;
   u64 completion_wake_errors;
   u64 verdict_attempts;
