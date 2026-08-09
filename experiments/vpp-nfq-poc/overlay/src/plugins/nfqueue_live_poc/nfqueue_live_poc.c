@@ -41,6 +41,31 @@
 #define NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED (1u << 5)
 #define NFQUEUE_LIVE_FLAG_OUTCOME_UNKNOWN (1u << 6)
 #define NFQUEUE_LIVE_FLAG_OUTCOME_FAILED (1u << 7)
+/* Linux NF_INET_LOCAL_IN/LOCAL_OUT are the two device directions exercised
+ * by the S75 runtime.  PRE_ROUTING/POST_ROUTING are normalized to the same
+ * INPUT/OUTPUT vocabulary for completeness; the hook value remains the
+ * platform hint and is never inferred from packet bytes. */
+#define NFQUEUE_LIVE_DIRECTION_INPUT 1u
+#define NFQUEUE_LIVE_DIRECTION_OUTPUT 2u
+
+static_always_inline u8
+nfqueue_live_device_direction (u8 hook)
+{
+  return (hook == NF_INET_LOCAL_OUT || hook == NF_INET_POST_ROUTING) ?
+           NFQUEUE_LIVE_DIRECTION_OUTPUT : NFQUEUE_LIVE_DIRECTION_INPUT;
+}
+
+static_always_inline u8
+nfqueue_live_meta_hook (const nfqueue_live_meta_t *meta)
+{
+  return meta->hook;
+}
+
+static_always_inline u8
+nfqueue_live_meta_origin_lane (const nfqueue_live_meta_t *meta)
+{
+  return meta->origin_lane;
+}
 
 /* These are compile-time proof obligations, not mutable per-packet state:
  * this probe has no packet-copy, scratch-buffer, or heap-obligation path. */
@@ -69,6 +94,7 @@ typedef enum
 typedef struct
 {
   nfqueue_live_main_t *nm;
+  nfqueue_live_lane_t *lane;
   u32 buffer_index;
   u8 *base;
   u32 parse_length;
@@ -79,6 +105,7 @@ typedef struct
   u8 truncated;
   u8 candidate;
   u8 metadata_initialized;
+  u8 ingress_identity_missing;
 } nfqueue_live_datagram_t;
 
 nfqueue_live_main_t nfqueue_live_main = {
@@ -263,8 +290,14 @@ nfqueue_live_record_last (nfqueue_live_main_t *nm,
   nm->last_payload_offset = meta->payload_offset;
   nm->last_payload_length = meta->payload_length;
   nm->last_original_length = meta->original_length;
-  nm->last_captured_length = meta->payload_length;
-  nm->last_hook = meta->hook;
+  nm->last_captured_length = meta->captured_length;
+  nm->last_packet_id = meta->packet_id;
+  nm->last_queue_generation =
+    ((u64) meta->generation_hi << 32) | meta->generation_lo;
+  nm->last_origin_lane = nfqueue_live_meta_origin_lane (meta);
+  nm->last_hook = nfqueue_live_meta_hook (meta);
+  nm->last_device_direction =
+    nfqueue_live_device_direction ((u8) nm->last_hook);
   nm->last_uid = meta->uid;
   nm->last_uid_known = (meta->flags & NFQUEUE_LIVE_FLAG_UID_KNOWN) != 0;
   nm->last_ip_version = meta->ip_version;
@@ -275,6 +308,12 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
                            struct nfq_q_handle *queue, u32 packet_id,
                            u32 verdict)
 {
+  for (u32 i = 0; i < nm->lane_count; i++)
+    if (nm->lanes[i].queue == queue)
+      {
+        nm->lanes[i].verdict_attempts++;
+        break;
+      }
   if (nfq_set_verdict (queue, packet_id, verdict, 0, 0) < 0)
     {
       nm->verdict_send_failures++;
@@ -290,6 +329,16 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
   nm->verdict_attempts++;
 }
 
+static nfqueue_live_lane_t *
+nfqueue_live_lane_for_meta (nfqueue_live_main_t *nm,
+                            const nfqueue_live_meta_t *meta)
+{
+  u8 lane_index = nfqueue_live_meta_origin_lane (meta);
+  if (lane_index >= nm->lane_count)
+    return 0;
+  return &nm->lanes[lane_index];
+}
+
 static void
 nfqueue_live_return_buffer (nfqueue_live_main_t *nm, u32 buffer_index,
                             nfqueue_live_meta_t *meta)
@@ -300,6 +349,12 @@ nfqueue_live_return_buffer (nfqueue_live_main_t *nm, u32 buffer_index,
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_RETURNED);
   nfqueue_live_outstanding_dec (nm);
   nm->native_buffer_returns++;
+  for (u32 i = 0; i < nm->lane_count; i++)
+    if (nm->lanes[i].origin_lane == meta->origin_lane)
+      {
+        nm->lanes[i].native_buffer_returns++;
+        break;
+      }
   vlib_buffer_free_one (nm->vm, buffer_index);
 }
 
@@ -337,6 +392,7 @@ nfqueue_live_publish_terminal (nfqueue_live_main_t *nm, u32 buffer_index,
     .generation_hi = meta->generation_hi,
     .packet_id = meta->packet_id,
     .obligation_nonce = meta->obligation_nonce,
+    .origin_lane = nfqueue_live_meta_origin_lane (meta),
     .verdict = NFQUEUE_LIVE_ACCEPT,
     .terminal = 1,
     .reference_held = 1,
@@ -359,14 +415,16 @@ static void
 nfqueue_live_settle_on_origin (nfqueue_live_main_t *nm, u32 buffer_index,
                                nfqueue_live_meta_t *meta)
 {
+  nfqueue_live_lane_t *lane = nfqueue_live_lane_for_meta (nm, meta);
   if (nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED)
     return;
   if ((meta->flags & NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED) == 0)
     {
       meta->flags |= NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED;
       nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_ATTEMPTED);
-      nfqueue_live_send_verdict (nm, nm->queue, meta->packet_id,
-                                 NFQUEUE_LIVE_ACCEPT);
+      if (lane && lane->queue)
+        nfqueue_live_send_verdict (nm, lane->queue, meta->packet_id,
+                                   NFQUEUE_LIVE_ACCEPT);
       nm->fail_open_settlements++;
     }
   meta->completion_refs = 0;
@@ -380,7 +438,8 @@ nfqueue_live_completion_identity_matches (const nfqueue_live_meta_t *meta,
   return entry->generation_lo == meta->generation_lo &&
          entry->generation_hi == meta->generation_hi &&
          entry->packet_id == meta->packet_id &&
-         entry->obligation_nonce == meta->obligation_nonce;
+         entry->obligation_nonce == meta->obligation_nonce &&
+         entry->origin_lane == nfqueue_live_meta_origin_lane (meta);
 }
 
 static void
@@ -425,7 +484,15 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_ATTEMPTED);
   if (entry->terminal)
     nm->fail_open_settlements++;
-  nfqueue_live_send_verdict (nm, nm->queue, meta->packet_id, entry->verdict);
+  nfqueue_live_lane_t *lane = nfqueue_live_lane_for_meta (nm, meta);
+  if (!lane || !lane->queue)
+    {
+      nm->missing_ingress_identity++;
+      nm->missing_queue_generation++;
+      nfqueue_live_drop_completion_ref (nm, entry->buffer_index, meta, entry);
+      return;
+    }
+  nfqueue_live_send_verdict (nm, lane->queue, meta->packet_id, entry->verdict);
 
   nfqueue_live_drop_completion_ref (nm, entry->buffer_index, meta, entry);
 }
@@ -551,7 +618,8 @@ static int
 nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
                         struct nfq_data *data, void *opaque)
 {
-  nfqueue_live_main_t *nm = (nfqueue_live_main_t *) opaque;
+  nfqueue_live_lane_t *lane = (nfqueue_live_lane_t *) opaque;
+  nfqueue_live_main_t *nm = lane->nm;
   nfqueue_live_datagram_t *datagram = nm->active_datagram;
   struct nfqnl_msg_packet_hdr *header;
   nfqueue_live_meta_t *meta;
@@ -568,26 +636,44 @@ nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
   if (!datagram)
     return 0;
   datagram->callback_count++;
+  lane->callbacks++;
   nm->callbacks++;
   header = nfq_get_msg_packet_hdr (data);
   if (!header)
     {
+      datagram->ingress_identity_missing = 1;
       nm->missing_ingress_identity++;
       return 0;
     }
-  datagram->callback_identities++;
+  if (nm->inject_missing_packet_id)
+    {
+      nm->inject_missing_packet_id = 0;
+      nm->missing_packet_id++;
+      nm->missing_ingress_identity++;
+      datagram->ingress_identity_missing = 1;
+      return 0;
+    }
   packet_id = ntohl (header->packet_id);
+  if (nm->inject_missing_generation || lane->generation == 0)
+    {
+      nm->inject_missing_generation = 0;
+      nm->missing_queue_generation++;
+      nm->missing_ingress_identity++;
+      datagram->ingress_identity_missing = 1;
+      return 0;
+    }
+  datagram->callback_identities++;
   if (datagram->callback_count != 1)
     {
       nm->multiple_message_rejects++;
-      nfqueue_live_direct_accept (nm, queue, packet_id);
+      nfqueue_live_direct_accept (nm, lane->queue, packet_id);
       datagram->callback_verdicts++;
       return 0;
     }
 
   if (datagram->truncated)
     {
-      nfqueue_live_direct_accept (nm, queue, packet_id);
+      nfqueue_live_direct_accept (nm, lane->queue, packet_id);
       datagram->callback_verdicts++;
       return 0;
     }
@@ -596,7 +682,7 @@ nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
   if (payload_length <= 0 || !payload)
     {
       nm->malformed_payloads++;
-      nfqueue_live_direct_accept (nm, queue, packet_id);
+      nfqueue_live_direct_accept (nm, lane->queue, packet_id);
       datagram->callback_verdicts++;
       return 0;
     }
@@ -615,7 +701,7 @@ nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
       (uword) payload_length > end - payload_address)
     {
       nm->malformed_payloads++;
-      nfqueue_live_direct_accept (nm, queue, packet_id);
+      nfqueue_live_direct_accept (nm, lane->queue, packet_id);
       datagram->callback_verdicts++;
       return 0;
     }
@@ -624,19 +710,34 @@ nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
   meta = nfqueue_live_meta (buffer);
   clib_memset (meta, 0, sizeof (*meta));
   datagram->metadata_initialized = 1;
-  nfqueue_live_set_generation (meta, nm->generation);
+  nfqueue_live_set_generation (meta, lane->generation);
   meta->packet_id = packet_id;
   meta->obligation_nonce = nfqueue_live_next_obligation_nonce (nm);
-  meta->datagram_length = datagram->datagram_length;
-  meta->payload_offset = (u32) (payload_address - begin);
-  meta->payload_length = (u32) payload_length;
+  meta->datagram_length = (u16) datagram->datagram_length;
+  meta->payload_offset = (u16) (payload_address - begin);
+  meta->payload_length = (u16) payload_length;
+  meta->captured_length = (u16) payload_length;
   meta->original_length = cap_len;
   meta->hook = header->hook;
+  meta->origin_lane = lane->origin_lane;
   meta->completion_refs = 1;
-  if (nfq_get_uid (data, &meta->uid))
-    meta->flags |= NFQUEUE_LIVE_FLAG_UID_KNOWN;
+  if (nm->inject_uid_unknown)
+    {
+      nm->inject_uid_unknown = 0;
+      meta->uid = 0;
+      nm->uid_unknown_fast_path++;
+    }
+  else if (nfq_get_uid (data, &meta->uid))
+    {
+      meta->flags |= NFQUEUE_LIVE_FLAG_UID_KNOWN;
+      nm->uid_known_packets++;
+    }
+  else
+    nm->uid_unknown_fast_path++;
   meta->flags |= NFQUEUE_LIVE_FLAG_PAYLOAD_IN_SPAN;
-  meta->ip_version = payload[0] >> 4;
+  /* The Adapter normalizes the NFQUEUE family hint; it deliberately does not
+   * inspect an L3 header or execute packet-policy parsing. */
+  meta->ip_version = lane->family;
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_LIVE);
   nm->inline_metadata_writes++;
   nm->payload_span_checks++;
@@ -644,7 +745,7 @@ nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
       meta->payload_length > meta->datagram_length - meta->payload_offset)
     {
       nm->payload_span_failures++;
-      nfqueue_live_direct_accept (nm, queue, packet_id);
+      nfqueue_live_direct_accept (nm, lane->queue, packet_id);
       datagram->callback_verdicts++;
       return 0;
     }
@@ -656,7 +757,10 @@ nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
 static clib_error_t *
 nfqueue_live_netlink_read_ready (clib_file_t *file)
 {
-  nfqueue_live_main_t *nm = (nfqueue_live_main_t *) file->private_data;
+  nfqueue_live_reader_t *reader =
+    (nfqueue_live_reader_t *) file->private_data;
+  nfqueue_live_main_t *nm = reader->nm;
+  nfqueue_live_lane_t *lane = &nm->lanes[reader->lane_index];
   u32 buffer_index;
   vlib_buffer_t *buffer;
   u8 *base;
@@ -681,7 +785,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
       buffer = vlib_get_buffer (nm->vm, buffer_index);
       base = vlib_buffer_get_current (buffer);
       capacity = vlib_buffer_get_default_data_size (nm->vm);
-      received = recv (nm->netlink_fd, base, capacity,
+      received = recv (lane->netlink_fd, base, capacity,
                        MSG_DONTWAIT | MSG_TRUNC);
       if (received < 0)
         {
@@ -696,6 +800,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
           continue;
         }
       nm->live_buffer_receives++;
+      lane->datagrams++;
       nm->datagrams++;
       if (received > (int) capacity)
         nm->truncated_datagrams++;
@@ -713,7 +818,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
             nm->envelope_malformed_rejects++;
           nm->envelope_recovery_attempts++;
           rejected_messages = nfqueue_live_reject_envelope_messages (
-            nm, nm->queue, base, clib_min ((u32) received, capacity));
+            nm, lane->queue, base, clib_min ((u32) received, capacity));
           nm->envelope_recoveries += rejected_messages;
           if (rejected_messages == 0)
             nm->identity_unrecoverable++;
@@ -721,6 +826,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
           continue;
         }
       datagram.nm = nm;
+      datagram.lane = lane;
       datagram.buffer_index = buffer_index;
       datagram.base = base;
       datagram.datagram_length = (u32) received;
@@ -731,8 +837,9 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
       datagram.truncated = received > (int) capacity;
       datagram.candidate = 0;
       datagram.metadata_initialized = 0;
+      datagram.ingress_identity_missing = 0;
       nm->active_datagram = &datagram;
-      handled = nfq_handle_packet (nm->handle, (char *) base,
+      handled = nfq_handle_packet (lane->handle, (char *) base,
                                    (int) datagram.parse_length);
       nm->active_datagram = 0;
       if (datagram.callback_count > 1)
@@ -745,7 +852,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
               nfqueue_live_meta_t *meta = nfqueue_live_meta (buffer);
               /* Callback #1 remains a live candidate even when callback #2
                * already received a direct reject. Settle that identity too. */
-              nfqueue_live_direct_accept (nm, nm->queue, meta->packet_id);
+              nfqueue_live_direct_accept (nm, lane->queue, meta->packet_id);
               datagram.callback_verdicts++;
               nfqueue_live_release_unqueued (nm, buffer_index, meta);
             }
@@ -766,14 +873,14 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
                * admitted obligation; reject additional candidates on the
                * origin lane before they acquire a worker obligation. */
               nm->ingress_overload++;
-              nfqueue_live_direct_accept (nm, nm->queue, meta->packet_id);
+              nfqueue_live_direct_accept (nm, lane->queue, meta->packet_id);
               datagram.callback_verdicts++;
               nfqueue_live_release_unqueued (nm, buffer_index, meta);
             }
           else if (!nfqueue_live_index_push (&nm->ingress, buffer_index))
             {
               nm->ingress_overload++;
-              nfqueue_live_direct_accept (nm, nm->queue, meta->packet_id);
+              nfqueue_live_direct_accept (nm, lane->queue, meta->packet_id);
               datagram.callback_verdicts++;
               nfqueue_live_release_unqueued (nm, buffer_index, meta);
             }
@@ -781,6 +888,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
             {
               nfqueue_live_outstanding_inc (nm);
               nm->message_obligations++;
+              lane->message_obligations++;
               nfqueue_live_record_last (nm, meta, buffer_index, base);
               vlib_process_signal_event (
                 nm->vm, nfqueue_live_ingress_process_node.index, 0, 0);
@@ -791,7 +899,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
           /* nfq_handle_packet reported a parser failure after callback #1
            * projected the payload. The candidate is still an owed identity. */
           nfqueue_live_meta_t *meta = nfqueue_live_meta (buffer);
-          nfqueue_live_direct_accept (nm, nm->queue, meta->packet_id);
+          nfqueue_live_direct_accept (nm, lane->queue, meta->packet_id);
           datagram.callback_verdicts++;
           nfqueue_live_release_unqueued (nm, buffer_index, meta);
         }
@@ -803,7 +911,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
             {
               /* MSG_TRUNC and parser failures still owe the kernel a verdict
                * whenever the packet id can be recovered from NFQA_PACKET_HDR. */
-              nfqueue_live_direct_accept (nm, nm->queue, recovered_packet_id);
+              nfqueue_live_direct_accept (nm, lane->queue, recovered_packet_id);
               datagram.callback_verdicts++;
             }
           else
@@ -819,12 +927,13 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
            * payload, or span failure). If libnetfilter_queue omitted the
            * callback identity, recover one from the raw netlink span when
            * possible; otherwise account the unrecoverable obligation. */
-          if (datagram.callback_verdicts == 0 &&
+          if (!datagram.ingress_identity_missing &&
+              datagram.callback_verdicts == 0 &&
               datagram.callback_identities == 0 &&
               nfqueue_live_recover_packet_id (base, datagram.parse_length,
                                                &recovered_packet_id))
             {
-              nfqueue_live_direct_accept (nm, nm->queue, recovered_packet_id);
+              nfqueue_live_direct_accept (nm, lane->queue, recovered_packet_id);
               datagram.callback_verdicts++;
             }
           nm->identity_unrecoverable += unknown_callbacks;
@@ -876,6 +985,7 @@ VLIB_NODE_FN (nfqueue_live_owner_node) (vlib_main_t *vm,
       completion.generation_hi = meta->generation_hi;
       completion.packet_id = meta->packet_id;
       completion.obligation_nonce = meta->obligation_nonce;
+      completion.origin_lane = nfqueue_live_meta_origin_lane (meta);
       completion.verdict = NFQUEUE_LIVE_ACCEPT;
       completion.reference_held = 1;
       if (nm->inject_completion_overflow)
@@ -1006,6 +1116,7 @@ VLIB_NODE_FN (nfqueue_live_ingress_process_node) (vlib_main_t *vm,
             .generation_hi = meta->generation_hi,
             .packet_id = meta->packet_id,
             .obligation_nonce = meta->obligation_nonce,
+            .origin_lane = nfqueue_live_meta_origin_lane (meta),
             .verdict = NFQUEUE_LIVE_ACCEPT,
             .reference_held = 1,
           };
@@ -1035,6 +1146,23 @@ VLIB_REGISTER_NODE (nfqueue_live_ingress_process_node) = {
 static void
 nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
 {
+  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_LANES; i++)
+    {
+      nm->lanes[i].nm = nm;
+      nm->lanes[i].lane_index = (u8) i;
+      nm->lanes[i].netlink_fd = -1;
+      nm->lanes[i].netlink_file_index = ~0;
+      nm->lanes[i].handle = 0;
+      nm->lanes[i].queue = 0;
+      nm->lanes[i].enabled = 0;
+      nm->lanes[i].datagrams = 0;
+      nm->lanes[i].callbacks = 0;
+      nm->lanes[i].message_obligations = 0;
+      nm->lanes[i].verdict_attempts = 0;
+      nm->lanes[i].native_buffer_returns = 0;
+      nm->readers[i].nm = nm;
+      nm->readers[i].lane_index = (u8) i;
+    }
   nm->ingress.head = 0;
   nm->ingress.tail = 0;
   nm->completion.head = 0;
@@ -1088,29 +1216,42 @@ nfqueue_live_drain_bounded (nfqueue_live_main_t *nm)
 }
 
 static void
+nfqueue_live_close_lane (nfqueue_live_lane_t *lane)
+{
+  if (lane->netlink_file_index != ~0)
+    {
+      clib_file_del_by_index (&file_main, lane->netlink_file_index);
+      lane->netlink_file_index = ~0;
+    }
+  if (lane->queue)
+    {
+      nfq_destroy_queue (lane->queue);
+      lane->queue = 0;
+    }
+  if (lane->handle)
+    {
+      nfq_unbind_pf (lane->handle,
+                     lane->family == 6 ? AF_INET6 : AF_INET);
+      nfq_close (lane->handle);
+      lane->handle = 0;
+    }
+  lane->netlink_fd = -1;
+  lane->enabled = 0;
+}
+
+static void
 nfqueue_live_close (nfqueue_live_main_t *nm)
 {
-  if (nm->netlink_file_index != ~0)
-    {
-      clib_file_del_by_index (&file_main, nm->netlink_file_index);
-      nm->netlink_file_index = ~0;
-    }
+  for (u32 i = 0; i < nm->lane_count; i++)
+    nfqueue_live_close_lane (&nm->lanes[i]);
+  nm->netlink_file_index = ~0;
   if (nm->completion_file_index != ~0)
     {
       clib_file_del_by_index (&file_main, nm->completion_file_index);
       nm->completion_file_index = ~0;
     }
-  if (nm->queue)
-    {
-      nfq_destroy_queue (nm->queue);
-      nm->queue = 0;
-    }
-  if (nm->handle)
-    {
-      nfq_unbind_pf (nm->handle, nm->family == 6 ? AF_INET6 : AF_INET);
-      nfq_close (nm->handle);
-      nm->handle = 0;
-    }
+  nm->queue = 0;
+  nm->handle = 0;
   if (nm->completion_fd >= 0)
     {
       close (nm->completion_fd);
@@ -1122,13 +1263,94 @@ nfqueue_live_close (nfqueue_live_main_t *nm)
 }
 
 static clib_error_t *
+nfqueue_live_open_lane (nfqueue_live_main_t *nm, u32 lane_index,
+                        u16 queue_num, u8 family, u8 hook)
+{
+  nfqueue_live_lane_t *lane = &nm->lanes[lane_index];
+  clib_file_t file = { 0 };
+  int af = family == 6 ? AF_INET6 : AF_INET;
+
+  lane->nm = nm;
+  lane->lane_index = (u8) lane_index;
+  lane->family = family;
+  lane->hook = hook;
+  lane->queue_num = queue_num;
+  lane->origin_lane = lane_index;
+  lane->generation = nm->generation;
+  lane->handle = nfq_open ();
+  if (!lane->handle)
+    return clib_error_return_unix (0, "nfq_open");
+  if (nfq_bind_pf (lane->handle, af) < 0)
+    {
+      nfqueue_live_close_lane (lane);
+      return clib_error_return_unix (0, "nfq_bind_pf");
+    }
+  lane->queue = nfq_create_queue (lane->handle, queue_num,
+                                  nfqueue_live_packet_cb, lane);
+  if (!lane->queue)
+    {
+      nfqueue_live_close_lane (lane);
+      return clib_error_return_unix (0, "nfq_create_queue");
+    }
+  if (nfq_set_mode (lane->queue, NFQNL_COPY_PACKET, 0xffff) < 0)
+    {
+      nfqueue_live_close_lane (lane);
+      return clib_error_return_unix (0, "nfq_set_mode");
+    }
+  if (nfq_set_queue_flags (lane->queue, NFQA_CFG_F_UID_GID,
+                           NFQA_CFG_F_UID_GID) < 0)
+    {
+      nfqueue_live_close_lane (lane);
+      return clib_error_return (0, "nfq_set_queue_flags uid/gid");
+    }
+  lane->netlink_fd = nfq_fd (lane->handle);
+  if (lane->netlink_fd < 0)
+    {
+      nfqueue_live_close_lane (lane);
+      return clib_error_return_unix (0, "nfq_fd");
+    }
+  (void) fcntl (lane->netlink_fd, F_SETFL,
+                fcntl (lane->netlink_fd, F_GETFL, 0) | O_NONBLOCK);
+  nm->readers[lane_index].nm = nm;
+  nm->readers[lane_index].lane_index = (u8) lane_index;
+  file.read_function = nfqueue_live_netlink_read_ready;
+  file.file_descriptor = lane->netlink_fd;
+  file.private_data = (uword) &nm->readers[lane_index];
+  file.description = format (0, "nfqueue-live-poc lane %u", lane_index);
+  lane->netlink_file_index = clib_file_add (&file_main, &file);
+  if (lane->netlink_file_index == ~0)
+    {
+      nfqueue_live_close_lane (lane);
+      return clib_error_return (0, "clib_file_add nfqueue lane");
+    }
+  lane->enabled = 1;
+  return 0;
+}
+
+static clib_error_t *
+nfqueue_live_open_completion (nfqueue_live_main_t *nm)
+{
+  clib_file_t file = { 0 };
+  nm->completion_fd = eventfd (0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (nm->completion_fd < 0)
+    return clib_error_return_unix (0, "eventfd");
+  file.read_function = nfqueue_live_completion_read_ready;
+  file.file_descriptor = nm->completion_fd;
+  file.private_data = (uword) nm;
+  file.description = format (0, "nfqueue-live-poc completion frame");
+  nm->completion_file_index = clib_file_add (&file_main, &file);
+  if (nm->completion_file_index == ~0)
+    return clib_error_return (0, "clib_file_add completion frame");
+  return 0;
+}
+
+static clib_error_t *
 nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
                     u8 inject_stale, u8 inject_duplicate,
                     u8 inject_completion_overflow)
 {
   nfqueue_live_main_t *nm = &nfqueue_live_main;
-  clib_file_t file = { 0 };
-  int af = family == 6 ? AF_INET6 : AF_INET;
+  clib_error_t *error;
 
   if (nm->enabled)
     return clib_error_return (0, "nfqueue-live-poc already enabled");
@@ -1143,59 +1365,80 @@ nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
   nm->inject_stale = inject_stale;
   nm->inject_duplicate = inject_duplicate;
   nm->inject_completion_overflow = inject_completion_overflow;
+  nm->lane_count = 1;
+  nm->dual_mode = 0;
   nm->generation++;
   if (nm->generation == 0)
     nm->generation = 1;
-  nm->handle = nfq_open ();
-  if (!nm->handle)
-    return clib_error_return_unix (0, "nfq_open");
-  if (nfq_bind_pf (nm->handle, af) < 0)
-    {
-      nfq_close (nm->handle);
-      nm->handle = 0;
-      return clib_error_return_unix (0, "nfq_bind_pf");
-    }
-  nm->queue = nfq_create_queue (nm->handle, queue_num,
-                                 nfqueue_live_packet_cb, nm);
-  if (!nm->queue)
-    {
-      nfq_unbind_pf (nm->handle, af);
-      nfq_close (nm->handle);
-      nm->handle = 0;
-      return clib_error_return_unix (0, "nfq_create_queue");
-    }
-  if (nfq_set_mode (nm->queue, NFQNL_COPY_PACKET, 0xffff) < 0)
+  error = nfqueue_live_open_lane (nm, 0, queue_num, family, 0);
+  if (error)
     {
       nfqueue_live_close (nm);
-      return clib_error_return_unix (0, "nfq_set_mode");
+      return error;
     }
-  if (nfq_set_queue_flags (nm->queue, NFQA_CFG_F_UID_GID,
-                           NFQA_CFG_F_UID_GID) < 0)
+  nm->handle = nm->lanes[0].handle;
+  nm->queue = nm->lanes[0].queue;
+  nm->netlink_fd = nm->lanes[0].netlink_fd;
+  nm->netlink_file_index = nm->lanes[0].netlink_file_index;
+  error = nfqueue_live_open_completion (nm);
+  if (error)
     {
       nfqueue_live_close (nm);
-      return clib_error_return_unix (0, "nfq_set_queue_flags uid/gid");
+      return error;
     }
-  nm->netlink_fd = nfq_fd (nm->handle);
-  (void) fcntl (nm->netlink_fd, F_SETFL,
-                fcntl (nm->netlink_fd, F_GETFL, 0) | O_NONBLOCK);
-  nm->completion_fd = eventfd (0, EFD_NONBLOCK | EFD_CLOEXEC);
-  if (nm->completion_fd < 0)
-    {
-      nfqueue_live_close (nm);
-      return clib_error_return_unix (0, "eventfd");
-    }
+  nm->enabled = 1;
+  return 0;
+}
 
-  file.read_function = nfqueue_live_netlink_read_ready;
-  file.file_descriptor = nm->netlink_fd;
-  file.private_data = (uword) nm;
-  file.description = format (0, "nfqueue-live-poc origin lane");
-  nm->netlink_file_index = clib_file_add (&file_main, &file);
-  file = (clib_file_t) { 0 };
-  file.read_function = nfqueue_live_completion_read_ready;
-  file.file_descriptor = nm->completion_fd;
-  file.private_data = (uword) nm;
-  file.description = format (0, "nfqueue-live-poc completion frame");
-  nm->completion_file_index = clib_file_add (&file_main, &file);
+static clib_error_t *
+nfqueue_live_enable_dual (vlib_main_t *vm, u16 queue_base,
+                          u8 inject_stale, u8 inject_duplicate,
+                          u8 inject_completion_overflow,
+                          u8 inject_uid_unknown)
+{
+  nfqueue_live_main_t *nm = &nfqueue_live_main;
+  clib_error_t *error;
+  static const u8 families[NFQUEUE_LIVE_MAX_LANES] = { 4, 4, 6, 6 };
+  static const u8 hooks[NFQUEUE_LIVE_MAX_LANES] = {
+    NF_INET_LOCAL_OUT, NF_INET_LOCAL_IN, NF_INET_LOCAL_OUT,
+    NF_INET_LOCAL_IN,
+  };
+
+  if (nm->enabled)
+    return clib_error_return (0, "nfqueue-live-poc already enabled");
+  if (vlib_get_n_threads () < 2)
+    return clib_error_return (0, "start VPP with at least one worker");
+  nfqueue_live_reset_runtime (nm);
+  nm->vm = vm;
+  nm->queue_num = queue_base;
+  nm->family = 0;
+  nm->origin_lane = 0;
+  nm->worker_thread = 1;
+  nm->inject_stale = inject_stale;
+  nm->inject_duplicate = inject_duplicate;
+  nm->inject_completion_overflow = inject_completion_overflow;
+  nm->inject_uid_unknown = inject_uid_unknown;
+  nm->lane_count = NFQUEUE_LIVE_MAX_LANES;
+  nm->dual_mode = 1;
+  nm->generation++;
+  if (nm->generation == 0)
+    nm->generation = 1;
+  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_LANES; i++)
+    {
+      error = nfqueue_live_open_lane (nm, i, (u16) (queue_base + i),
+                                      families[i], hooks[i]);
+      if (error)
+        {
+          nfqueue_live_close (nm);
+          return error;
+        }
+    }
+  error = nfqueue_live_open_completion (nm);
+  if (error)
+    {
+      nfqueue_live_close (nm);
+      return error;
+    }
   nm->enabled = 1;
   return 0;
 }
@@ -1208,11 +1451,13 @@ nfqueue_live_disable (void)
   if (!nm->enabled)
     return 0;
   nm->quiescing = 1;
-  if (nm->netlink_file_index != ~0)
-    {
-      clib_file_del_by_index (&file_main, nm->netlink_file_index);
-      nm->netlink_file_index = ~0;
-    }
+  for (u32 i = 0; i < nm->lane_count; i++)
+    if (nm->lanes[i].netlink_file_index != ~0)
+      {
+        clib_file_del_by_index (&file_main, nm->lanes[i].netlink_file_index);
+        nm->lanes[i].netlink_file_index = ~0;
+      }
+  nm->netlink_file_index = ~0;
   error = nfqueue_live_drain_bounded (nm);
   if (error)
     return error;
@@ -1229,6 +1474,9 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 stale = 0;
   u8 duplicate = 0;
   u8 completion_overflow = 0;
+  u8 missing_packet_id = 0;
+  u8 missing_generation = 0;
+  u8 uid_unknown = 0;
   clib_error_t *error;
   (void) cmd;
 
@@ -1247,11 +1495,23 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
         duplicate = 1;
       else if (unformat (input, "inject-completion-overflow"))
         completion_overflow = 1;
+      else if (unformat (input, "inject-missing-packet-id"))
+        missing_packet_id = 1;
+      else if (unformat (input, "inject-missing-generation"))
+        missing_generation = 1;
+      else if (unformat (input, "inject-uid-unknown"))
+        uid_unknown = 1;
       else
         return clib_error_return (0, "unknown nfqueue-live-poc option");
     }
   error = nfqueue_live_enable (vm, (u16) queue_num, family, stale, duplicate,
                                completion_overflow);
+  if (!error)
+    {
+      nfqueue_live_main.inject_missing_packet_id = missing_packet_id;
+      nfqueue_live_main.inject_missing_generation = missing_generation;
+      nfqueue_live_main.inject_uid_unknown = uid_unknown;
+    }
   return error;
 }
 
@@ -1259,8 +1519,63 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_command, static) = {
   .path = "nfqueue-live-poc enable",
   .short_help = "nfqueue-live-poc enable queue <n> [family ip4|ip6] "
                 "[inject-stale] [inject-duplicate] "
-                "[inject-completion-overflow]",
+                "[inject-completion-overflow] [inject-missing-packet-id] "
+                "[inject-missing-generation] [inject-uid-unknown]",
   .function = nfqueue_live_enable_command_fn,
+};
+
+static clib_error_t *
+nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
+                                     unformat_input_t *input,
+                                     vlib_cli_command_t *cmd)
+{
+  u32 queue_base = 42;
+  u8 stale = 0;
+  u8 duplicate = 0;
+  u8 completion_overflow = 0;
+  u8 missing_packet_id = 0;
+  u8 missing_generation = 0;
+  u8 uid_unknown = 0;
+  clib_error_t *error;
+  (void) cmd;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "queue-base %u", &queue_base) ||
+          unformat (input, "queue %u", &queue_base))
+        ;
+      else if (unformat (input, "inject-stale"))
+        stale = 1;
+      else if (unformat (input, "inject-duplicate"))
+        duplicate = 1;
+      else if (unformat (input, "inject-completion-overflow"))
+        completion_overflow = 1;
+      else if (unformat (input, "inject-missing-packet-id"))
+        missing_packet_id = 1;
+      else if (unformat (input, "inject-missing-generation"))
+        missing_generation = 1;
+      else if (unformat (input, "inject-uid-unknown"))
+        uid_unknown = 1;
+      else
+        return clib_error_return (0, "unknown nfqueue-live-poc dual option");
+    }
+  error = nfqueue_live_enable_dual (vm, (u16) queue_base, stale, duplicate,
+                                    completion_overflow, uid_unknown);
+  if (!error)
+    {
+      nfqueue_live_main.inject_missing_packet_id = missing_packet_id;
+      nfqueue_live_main.inject_missing_generation = missing_generation;
+    }
+  return error;
+}
+
+VLIB_CLI_COMMAND (nfqueue_live_enable_dual_command, static) = {
+  .path = "nfqueue-live-poc enable-dual",
+  .short_help = "nfqueue-live-poc enable-dual queue-base <n> "
+                "[inject-stale] [inject-duplicate] "
+                "[inject-completion-overflow] [inject-missing-packet-id] "
+                "[inject-missing-generation] [inject-uid-unknown]",
+  .function = nfqueue_live_enable_dual_command_fn,
 };
 
 static clib_error_t *
@@ -1285,6 +1600,9 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
 {
   nfqueue_live_main_t *nm = &nfqueue_live_main;
   u32 data_size = vlib_buffer_get_default_data_size (vm);
+  const char *last_direction =
+    nm->last_device_direction == NFQUEUE_LIVE_DIRECTION_OUTPUT ? "OUTPUT" :
+      "INPUT";
   (void) input;
   (void) cmd;
   vlib_cli_output (vm, "enabled %u family ip%u queue %u generation %llu",
@@ -1328,9 +1646,23 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "nfqa-payload-offset %u nfqa-payload-length %u original-length %u captured-length %u",
                    nm->last_payload_offset, nm->last_payload_length,
                    nm->last_original_length, nm->last_captured_length);
+  vlib_cli_output (vm, "packet-id %u queue-generation %llu origin-lane %u hook %u device-packet-direction %s",
+                   nm->last_packet_id,
+                   (unsigned long long) nm->last_queue_generation,
+                   nm->last_origin_lane, nm->last_hook, last_direction);
   vlib_cli_output (vm, "hook %u ip-version %u uid-known %u uid %u",
                    nm->last_hook, nm->last_ip_version,
                    nm->last_uid_known, nm->last_uid);
+  vlib_cli_output (vm, "uid-known-packets %llu uid-unknown-fast-path %llu uid-waits %llu uid-cache-reads %llu uid-replays %llu",
+                   (unsigned long long) nm->uid_known_packets,
+                   (unsigned long long) nm->uid_unknown_fast_path,
+                   (unsigned long long) nm->uid_waits,
+                   (unsigned long long) nm->uid_cache_reads,
+                   (unsigned long long) nm->uid_replays);
+  vlib_cli_output (vm, "ingress-identity-missing %llu missing-packet-id %llu missing-queue-generation %llu",
+                   (unsigned long long) nm->missing_ingress_identity,
+                   (unsigned long long) nm->missing_packet_id,
+                   (unsigned long long) nm->missing_queue_generation);
   vlib_cli_output (vm, "payload-span-checks %llu payload-span-failures %llu packet-copies %llu",
                    (unsigned long long) nm->payload_span_checks,
                    (unsigned long long) nm->payload_span_failures,
@@ -1368,6 +1700,23 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->message_rejections,
                    NFQUEUE_LIVE_PACKET_COPY_PATHS,
                    nfqueue_live_outstanding_load (nm));
+  vlib_cli_output (vm, "packet-leases %llu policy-verdicts %u adapter-policy-parser-attempts %u",
+                   (unsigned long long) nm->message_obligations, 0u, 0u);
+  for (u32 i = 0; i < nm->lane_count; i++)
+    {
+      nfqueue_live_lane_t *lane = &nm->lanes[i];
+      const char *lane_direction =
+        nfqueue_live_device_direction (lane->hook) ==
+            NFQUEUE_LIVE_DIRECTION_OUTPUT ? "OUTPUT" : "INPUT";
+      vlib_cli_output (vm, "lane %u family ip%u hook %s queue %u generation %llu enabled %u datagrams %llu callbacks %llu obligations %llu verdict-attempts %llu native-returns %llu",
+                       i, lane->family, lane_direction, lane->queue_num,
+                       (unsigned long long) lane->generation, lane->enabled,
+                       (unsigned long long) lane->datagrams,
+                       (unsigned long long) lane->callbacks,
+                       (unsigned long long) lane->message_obligations,
+                       (unsigned long long) lane->verdict_attempts,
+                       (unsigned long long) lane->native_buffer_returns);
+    }
   return 0;
 }
 

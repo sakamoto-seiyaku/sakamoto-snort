@@ -5,6 +5,42 @@
 
 #include <vlib/vlib.h>
 
+#define NFQUEUE_LIVE_MAX_LANES 4u
+
+struct nfq_handle;
+struct nfq_q_handle;
+
+typedef struct nfqueue_live_main_s nfqueue_live_main_t;
+
+/* One native NFQUEUE I/O lane.  S75 uses four independent lanes (IPv4/IPv6
+ * x INPUT/OUTPUT) in one runtime; S73/S74 continue to use one lane. */
+typedef struct
+{
+  nfqueue_live_main_t *nm;
+  u8 lane_index;
+  u8 family;
+  u8 hook;
+  u8 enabled;
+  u16 queue_num;
+  u32 origin_lane;
+  u64 generation;
+  int netlink_fd;
+  u32 netlink_file_index;
+  struct nfq_handle *handle;
+  struct nfq_q_handle *queue;
+  u64 datagrams;
+  u64 callbacks;
+  u64 message_obligations;
+  u64 verdict_attempts;
+  u64 native_buffer_returns;
+} nfqueue_live_lane_t;
+
+typedef struct
+{
+  nfqueue_live_main_t *nm;
+  u8 lane_index;
+} nfqueue_live_reader_t;
+
 /* This is deliberately the only packet-obligation carrier in the probe.
  * It fits exactly in VPP's fixed opaque area; no side lease table exists.
  * The fixed rings below transport indices and completion identities only;
@@ -15,15 +51,20 @@ typedef struct
   u32 generation_hi;
   u32 packet_id;
   u32 obligation_nonce;
-  u32 datagram_length;
-  u32 payload_offset;
-  u32 payload_length;
+  /* The accepted contiguous envelope is bounded by the patched 9000-byte
+   * VPP data span, so these byte offsets/lengths fit without sacrificing the
+   * full u32 original NFQA length below. */
+  u16 datagram_length;
+  u16 payload_offset;
+  u16 payload_length;
+  u16 captured_length;
   u32 original_length;
   u32 uid;
   u8 hook;
   u8 ip_version;
   u8 flags;
   u8 completion_refs;
+  u8 origin_lane;
 } nfqueue_live_meta_t;
 
 _Static_assert (sizeof (nfqueue_live_meta_t) == sizeof (((vlib_buffer_t *) 0)->opaque),
@@ -36,6 +77,7 @@ typedef struct
   u32 generation_hi;
   u32 packet_id;
   u32 obligation_nonce;
+  u8 origin_lane;
   u32 verdict;
   u8 terminal;
   u8 reference_held;
@@ -55,7 +97,7 @@ typedef struct
   nfqueue_live_completion_t entries[128];
 } nfqueue_live_completion_ring_t;
 
-typedef struct
+struct nfqueue_live_main_s
 {
   u8 enabled;
   u8 quiescing;
@@ -75,6 +117,13 @@ typedef struct
   int completion_fd;
   struct nfq_handle *handle;
   struct nfq_q_handle *queue;
+  nfqueue_live_lane_t lanes[NFQUEUE_LIVE_MAX_LANES];
+  nfqueue_live_reader_t readers[NFQUEUE_LIVE_MAX_LANES];
+  u8 lane_count;
+  u8 dual_mode;
+  u8 inject_missing_packet_id;
+  u8 inject_missing_generation;
+  u8 inject_uid_unknown;
   vlib_main_t *vm;
   void *active_datagram;
   nfqueue_live_index_ring_t ingress;
@@ -90,6 +139,10 @@ typedef struct
   u32 last_payload_length;
   u32 last_original_length;
   u32 last_captured_length;
+  u32 last_packet_id;
+  u64 last_queue_generation;
+  u32 last_origin_lane;
+  u8 last_device_direction;
   u32 last_worker_thread;
   u32 last_hook;
   u32 last_uid;
@@ -123,6 +176,13 @@ typedef struct
   u64 multiple_message_datagrams;
   u64 multiple_message_rejects;
   u64 missing_ingress_identity;
+  u64 missing_packet_id;
+  u64 missing_queue_generation;
+  u64 uid_known_packets;
+  u64 uid_unknown_fast_path;
+  u64 uid_waits;
+  u64 uid_cache_reads;
+  u64 uid_replays;
   u64 malformed_payloads;
   u64 cap_len_missing;
   u64 truncated_datagrams;
@@ -146,7 +206,7 @@ typedef struct
   u64 completion_outcome_unknown;
   u64 native_buffer_returns;
   u32 last_verdict_errno;
-} nfqueue_live_main_t;
+};
 
 extern nfqueue_live_main_t nfqueue_live_main;
 

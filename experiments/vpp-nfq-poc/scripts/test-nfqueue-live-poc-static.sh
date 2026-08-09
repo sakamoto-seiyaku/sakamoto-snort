@@ -19,6 +19,12 @@ grep -q 'completion_refs' "$SOURCE"
 grep -q 'obligation_nonce' "$SOURCE"
 grep -q 'nfqueue_live_completion_identity_matches' "$SOURCE"
 grep -q 'nfq_get_cap_len' "$SOURCE"
+grep -q 'captured_length' "$HEADER"
+grep -q 'origin_lane' "$HEADER"
+grep -q 'nfqueue_live_enable_dual' "$SOURCE"
+grep -q 'NFQUEUE_LIVE_MAX_LANES 4u' "$HEADER"
+grep -q 'NF_INET_LOCAL_IN' "$SOURCE"
+grep -q 'NF_INET_LOCAL_OUT' "$SOURCE"
 grep -q 'live_buffer_receives++' "$SOURCE"
 grep -q 'inline_metadata_writes++' "$SOURCE"
 grep -q 'payload_pointer_projections++' "$SOURCE"
@@ -29,6 +35,8 @@ grep -q 'origin_return' "$SOURCE"
 grep -q 'callback_identities' "$SOURCE"
 grep -q 'callback_verdicts' "$SOURCE"
 grep -q 'callback_count > 1' "$SOURCE"
+grep -q 'ingress_identity_missing' "$SOURCE"
+grep -q '!datagram.ingress_identity_missing' "$SOURCE"
 grep -q 'stale.reference_held = 0' "$SOURCE"
 grep -q '__atomic_load_n (&nm->outstanding' "$SOURCE"
 grep -q '__atomic_fetch_add (&nm->outstanding' "$SOURCE"
@@ -64,9 +72,8 @@ for producer in nfqueue_live_owner_node nfqueue_live_ingress_process_node; do
     exit 1
   fi
 done
-if rg -n 'nfqueue_live_ipv[46]_original_length|meta->(captured_length|origin_lane)' \
-  "$PLUGIN_DIR"; then
-  echo "original length or lane identity derived from forbidden adapter-local state" >&2
+if rg -n 'nfqueue_live_ipv[46]_original_length' "$PLUGIN_DIR"; then
+  echo "original length derived from forbidden adapter-local state" >&2
   exit 1
 fi
 
