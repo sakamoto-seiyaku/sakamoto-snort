@@ -26,9 +26,21 @@ typedef struct
   uint32_t payload_length;
   uint64_t generation;
   uint32_t origin_lane;
+  uint32_t obligation_nonce;
   uint32_t references;
   uint32_t verdict_attempted;
 } identity_t;
+
+typedef struct
+{
+  identity_t before;
+  identity_t after;
+  uint32_t source_worker;
+  uint32_t destination_worker;
+  uint32_t slot;
+  uint8_t before_stage;
+  uint8_t after_stage;
+} handoff_pair_t;
 
 typedef struct
 {
@@ -91,7 +103,20 @@ same_identity (const identity_t *before, const identity_t *after)
          before->payload_offset == after->payload_offset &&
          before->payload_length == after->payload_length &&
          before->generation == after->generation &&
-         before->origin_lane == after->origin_lane;
+         before->origin_lane == after->origin_lane &&
+         before->obligation_nonce == after->obligation_nonce;
+}
+
+static int
+same_handoff_pair (const handoff_pair_t *pair, uint32_t expected_source,
+                   uint32_t expected_destination)
+{
+  return pair->source_worker == expected_source &&
+         pair->destination_worker == expected_destination &&
+         pair->slot < 127u && pair->before_stage == 0u &&
+         (pair->after_stage & 0x80u) != 0 &&
+         (pair->after_stage & 0x7fu) == pair->slot &&
+         same_identity (&pair->before, &pair->after);
 }
 
 static int
@@ -156,6 +181,7 @@ admit_and_complete (ledger_t *ledger, uint32_t mode, uint32_t lane,
     .payload_length = 96u,
     .generation = 7u,
     .origin_lane = lane,
+    .obligation_nonce = packet_id + 1000u,
     .references = 1,
   };
   identity_t before = current;
@@ -176,13 +202,52 @@ admit_and_complete (ledger_t *ledger, uint32_t mode, uint32_t lane,
           return;
         }
       identity_t after = current;
+      handoff_pair_t pair = {
+        .before = before,
+        .after = after,
+        .source_worker = initial,
+        .destination_worker = canonical,
+        .slot = (packet_id + lane) % 127u,
+        .before_stage = 0u,
+        .after_stage = (uint8_t) (0x80u | ((packet_id + lane) % 127u)),
+      };
       ledger->proof_checks++;
-      if (same_identity (&before, &after))
+      if (same_handoff_pair (&pair, initial, canonical))
         ledger->proof_matches++;
       else
         ledger->proof_failures++;
     }
   settle (ledger, &current, &before, 0);
+}
+
+static void
+run_identity_pair (void)
+{
+  identity_t before = {
+    .buffer_index = 41,
+    .buffer_base = 0x1000,
+    .packet_id = 501,
+    .payload_offset = 44,
+    .payload_length = 104,
+    .generation = 9,
+    .origin_lane = 2,
+    .obligation_nonce = 1501,
+  };
+  handoff_pair_t pair = {
+    .before = before,
+    .after = before,
+    .source_worker = 1,
+    .destination_worker = 2,
+    .slot = 11,
+    .before_stage = 0,
+    .after_stage = 0x80u | 11u,
+  };
+  expect (same_handoff_pair (&pair, 1, 2),
+          "full identity handoff pair");
+  pair.after.obligation_nonce++;
+  expect (!same_handoff_pair (&pair, 1, 2),
+          "handoff obligation mismatch detection");
+  printf ("identity pair: full-fields=1 mismatch-detected=1\n");
 }
 
 static void
@@ -283,6 +348,7 @@ run_stale_duplicate (void)
 int
 main (void)
 {
+  run_identity_pair ();
   run_normal_mixed ();
   run_queue_full ();
   run_credit_exhaustion ();

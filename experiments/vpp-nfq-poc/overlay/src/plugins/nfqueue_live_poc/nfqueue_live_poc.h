@@ -6,7 +6,7 @@
 #include <vlib/vlib.h>
 
 #define NFQUEUE_LIVE_MAX_LANES 4u
-#define NFQUEUE_LIVE_MAX_WORKER_SLOTS 2u
+#define NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES 127u
 
 struct nfq_handle;
 struct nfq_q_handle;
@@ -106,14 +106,14 @@ typedef struct
   nfqueue_live_completion_t entries[128];
 } nfqueue_live_completion_ring_t;
 
-/* Evidence is bounded and owned by the worker slot that records it.  The
- * lock protects every field so the origin CLI can take a coherent sample
- * while workers are still processing packets.  These fields never participate
- * in ownership or completion; packet proof uses the receiving buffer's inline
- * metadata/tag directly. */
+/* A bounded identity-proof slot is reserved by the source worker and named by
+ * the inline handoff_stage slot token.  The lock protects every field so the
+ * destination worker and origin CLI can take coherent samples.  The slot is
+ * evidence/identity state only; it never owns a packet or completion credit. */
 typedef struct
 {
   u32 lock;
+  u32 state;
   u8 before_valid;
   u8 after_valid;
   u16 reserved;
@@ -269,7 +269,7 @@ struct nfqueue_live_main_s
   u64 identity_proof_matches;
   u64 identity_proof_failures;
   nfqueue_live_handoff_sample_t
-    handoff_samples[NFQUEUE_LIVE_MAX_WORKER_SLOTS];
+    handoff_samples[NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES];
   u32 last_verdict_errno;
 };
 

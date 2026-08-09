@@ -52,7 +52,7 @@
 #define NFQUEUE_LIVE_OWNER_MODE_REMOTE 2u
 #define NFQUEUE_LIVE_HANDOFF_INITIAL 0u
 #define NFQUEUE_LIVE_HANDOFF_CANONICAL (1u << 7)
-#define NFQUEUE_LIVE_HANDOFF_TAG_MASK 0x7fu
+#define NFQUEUE_LIVE_HANDOFF_SLOT_MASK 0x7fu
 #define NFQUEUE_LIVE_META_CREDIT_BIT (1u << 7)
 
 static_always_inline u8
@@ -377,35 +377,6 @@ nfqueue_live_meta_generation (const nfqueue_live_meta_t *meta)
   return ((u64) meta->generation_hi << 32) | meta->generation_lo;
 }
 
-/* A compact inline handoff tag makes the source snapshot part of the buffer
- * itself.  The complete fields are still recorded and checked at the
- * destination; this tag prevents concurrent source-worker vectors from
- * confusing one global evidence snapshot with another packet. */
-static_always_inline u8
-nfqueue_live_handoff_identity_tag (u32 buffer_index, uword buffer_base,
-                                   const nfqueue_live_meta_t *meta)
-{
-  u64 mix = (u64) buffer_index * 0x9e3779b1u;
-  mix ^= (u64) buffer_base;
-  mix ^= (u64) meta->packet_id << 17;
-  mix ^= (u64) meta->payload_offset << 29;
-  mix ^= (u64) meta->payload_length << 41;
-  mix ^= nfqueue_live_meta_generation (meta);
-  mix ^= (u64) nfqueue_live_meta_origin_lane (meta) << 53;
-  mix ^= mix >> 33;
-  mix *= 0xff51afd7ed558ccdu;
-  mix ^= mix >> 29;
-  u8 tag = (u8) (mix & NFQUEUE_LIVE_HANDOFF_TAG_MASK);
-  return tag == 0 ? 1 : tag;
-}
-
-static_always_inline u32
-nfqueue_live_handoff_slot (const nfqueue_live_main_t *nm,
-                           u32 worker_thread)
-{
-  return worker_thread == nm->second_worker_thread ? 1u : 0u;
-}
-
 static_always_inline void
 nfqueue_live_handoff_sample_lock (nfqueue_live_handoff_sample_t *sample)
 {
@@ -418,13 +389,74 @@ nfqueue_live_handoff_sample_unlock (nfqueue_live_handoff_sample_t *sample)
   nfqueue_live_ring_unlock (&sample->lock);
 }
 
+static u8
+nfqueue_live_handoff_sample_reserve (nfqueue_live_main_t *nm,
+                                     u32 *slot_index)
+{
+  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES; i++)
+    {
+      nfqueue_live_handoff_sample_t *sample = &nm->handoff_samples[i];
+      u32 expected = 0;
+      if (!__atomic_compare_exchange_n (&sample->state, &expected, 1, 0,
+                                        __ATOMIC_ACQ_REL,
+                                        __ATOMIC_RELAXED))
+        continue;
+      nfqueue_live_handoff_sample_lock (sample);
+      sample->before_valid = 0;
+      sample->after_valid = 0;
+      sample->before_buffer_index = ~0;
+      sample->after_buffer_index = ~0;
+      nfqueue_live_handoff_sample_unlock (sample);
+      *slot_index = i;
+      return 1;
+    }
+  return 0;
+}
+
+static_always_inline u8
+nfqueue_live_handoff_stage_slot (const nfqueue_live_meta_t *meta,
+                                 u32 *slot_index)
+{
+  if ((meta->handoff_stage & NFQUEUE_LIVE_HANDOFF_CANONICAL) == 0)
+    return 0;
+  u32 slot = meta->handoff_stage & NFQUEUE_LIVE_HANDOFF_SLOT_MASK;
+  if (slot >= NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES)
+    return 0;
+  *slot_index = slot;
+  return 1;
+}
+
+static void
+nfqueue_live_handoff_sample_release (nfqueue_live_main_t *nm, u32 slot_index)
+{
+  if (slot_index >= NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES)
+    return;
+  __atomic_store_n (&nm->handoff_samples[slot_index].state, 0,
+                    __ATOMIC_RELEASE);
+}
+
+static_always_inline void
+nfqueue_live_handoff_sample_release_for_meta (nfqueue_live_main_t *nm,
+                                              nfqueue_live_meta_t *meta)
+{
+  u32 slot_index;
+  if (nfqueue_live_handoff_stage_slot (meta, &slot_index))
+    {
+      nfqueue_live_handoff_sample_release (nm, slot_index);
+      /* Make release idempotent for this obligation.  A terminal fallback
+       * may run after a proof failure; it must not clear a newly reserved
+       * sample slot that reused the same index. */
+      meta->handoff_stage = NFQUEUE_LIVE_HANDOFF_INITIAL;
+    }
+}
+
 static void
 nfqueue_live_record_handoff_before (nfqueue_live_main_t *nm,
-                                    u32 worker_thread, u32 buffer_index,
+                                    u32 slot_index, u32 worker_thread,
+                                    u32 buffer_index,
                                     vlib_buffer_t *buffer,
                                     const nfqueue_live_meta_t *meta)
 {
-  u32 slot_index = nfqueue_live_handoff_slot (nm, worker_thread);
   nfqueue_live_handoff_sample_t *sample = &nm->handoff_samples[slot_index];
   nfqueue_live_handoff_sample_lock (sample);
   sample->before_valid = 1;
@@ -441,56 +473,57 @@ nfqueue_live_record_handoff_before (nfqueue_live_main_t *nm,
   nfqueue_live_handoff_sample_unlock (sample);
 }
 
-static void
-nfqueue_live_record_handoff_after_sample (nfqueue_live_main_t *nm,
-                                          u32 worker_thread, u32 buffer_index,
-                                          uword buffer_base,
-                                          const nfqueue_live_meta_t *meta)
-{
-  u32 slot_index = nfqueue_live_handoff_slot (nm, worker_thread);
-  nfqueue_live_handoff_sample_t *sample = &nm->handoff_samples[slot_index];
-  nfqueue_live_handoff_sample_lock (sample);
-  sample->after_valid = 1;
-  sample->after_worker = worker_thread;
-  sample->after_buffer_index = buffer_index;
-  sample->after_buffer_base = buffer_base;
-  sample->after_packet_id = meta->packet_id;
-  sample->after_payload_offset = meta->payload_offset;
-  sample->after_payload_length = meta->payload_length;
-  sample->after_generation = nfqueue_live_meta_generation (meta);
-  sample->after_origin_lane = nfqueue_live_meta_origin_lane (meta);
-  sample->after_obligation_nonce = meta->obligation_nonce;
-  sample->after_stage = meta->handoff_stage;
-  nfqueue_live_handoff_sample_unlock (sample);
-}
-
 static u8
 nfqueue_live_record_handoff_after (nfqueue_live_main_t *nm, u32 worker_thread,
                                    u32 buffer_index, vlib_buffer_t *buffer,
-                                   const nfqueue_live_meta_t *meta)
+                                   nfqueue_live_meta_t *meta)
 {
-  /* Proof is deliberately formed from locals read from this live buffer.  No
-   * mutable evidence slot participates in the verdict or identity decision. */
+  /* Pair the source-owned full identity with locals read from this same live
+   * buffer. The slot is lock-protected and named by inline handoff_stage; it
+   * is released only after this comparison, never used as packet ownership. */
   uword buffer_base = (uword) vlib_buffer_get_current (buffer);
   u32 packet_id = meta->packet_id;
   u32 payload_offset = meta->payload_offset;
   u32 payload_length = meta->payload_length;
   u64 generation = nfqueue_live_meta_generation (meta);
   u32 origin_lane = nfqueue_live_meta_origin_lane (meta);
+  u32 obligation_nonce = meta->obligation_nonce;
   u8 handoff_stage = meta->handoff_stage;
-  u8 expected_tag = nfqueue_live_handoff_identity_tag (
-    buffer_index, buffer_base, meta);
-  u8 proof = buffer_base == (uword) vlib_buffer_get_current (buffer) &&
-             packet_id == meta->packet_id &&
-             payload_offset == meta->payload_offset &&
-             payload_length == meta->payload_length &&
-             generation == nfqueue_live_meta_generation (meta) &&
-             origin_lane == nfqueue_live_meta_origin_lane (meta) &&
-             (handoff_stage & NFQUEUE_LIVE_HANDOFF_CANONICAL) != 0 &&
-             (handoff_stage & NFQUEUE_LIVE_HANDOFF_TAG_MASK) == expected_tag;
-
-  nfqueue_live_record_handoff_after_sample (nm, worker_thread, buffer_index,
-                                            buffer_base, meta);
+  u32 slot_index;
+  u8 proof = 0;
+  if (nfqueue_live_handoff_stage_slot (meta, &slot_index))
+    {
+      nfqueue_live_handoff_sample_t *sample = &nm->handoff_samples[slot_index];
+      nfqueue_live_handoff_sample_lock (sample);
+      proof = __atomic_load_n (&sample->state, __ATOMIC_ACQUIRE) == 1 &&
+              sample->before_valid &&
+              sample->before_worker == meta->initial_worker &&
+              sample->before_buffer_index == buffer_index &&
+              sample->before_buffer_base == buffer_base &&
+              sample->before_packet_id == packet_id &&
+              sample->before_payload_offset == payload_offset &&
+              sample->before_payload_length == payload_length &&
+              sample->before_generation == generation &&
+              sample->before_origin_lane == origin_lane &&
+              sample->before_obligation_nonce == obligation_nonce &&
+              sample->before_stage == NFQUEUE_LIVE_HANDOFF_INITIAL &&
+              worker_thread == meta->canonical_worker &&
+              (handoff_stage & NFQUEUE_LIVE_HANDOFF_CANONICAL) != 0 &&
+              (handoff_stage & NFQUEUE_LIVE_HANDOFF_SLOT_MASK) == slot_index;
+      sample->after_valid = 1;
+      sample->after_worker = worker_thread;
+      sample->after_buffer_index = buffer_index;
+      sample->after_buffer_base = buffer_base;
+      sample->after_packet_id = packet_id;
+      sample->after_payload_offset = payload_offset;
+      sample->after_payload_length = payload_length;
+      sample->after_generation = generation;
+      sample->after_origin_lane = origin_lane;
+      sample->after_obligation_nonce = obligation_nonce;
+      sample->after_stage = handoff_stage;
+      nfqueue_live_handoff_sample_unlock (sample);
+      nfqueue_live_handoff_sample_release_for_meta (nm, meta);
+    }
   nfqueue_live_counter_inc (&nm->identity_proof_checks);
   if (proof)
     {
@@ -636,6 +669,9 @@ nfqueue_live_publish_terminal (nfqueue_live_main_t *nm, u32 buffer_index,
     return;
   if (meta->completion_refs == 0)
     return;
+  /* A source-side queue fault or a destination-side invalid-state terminal
+   * must release any reserved before/after evidence slot. */
+  nfqueue_live_handoff_sample_release_for_meta (nm, meta);
   /* A terminal token is the only worker-side intent counted here.  Normal
    * completion frames do not imply a terminal/fail-open path. */
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_COMPLETION);
@@ -1360,17 +1396,29 @@ VLIB_NODE_FN (nfqueue_live_owner_node) (vlib_main_t *vm,
             }
           if (meta->canonical_worker != meta->initial_worker)
             {
+              u32 sample_index;
               nfqueue_live_counter_inc (&nm->owner_mismatch_count);
               nfqueue_live_counter_inc (&nm->owner_remote_obligations);
-              nfqueue_live_record_handoff_before (nm, worker_thread,
-                                                  buffer_index, buffer, meta);
+              if (!nfqueue_live_handoff_sample_reserve (nm, &sample_index))
+                {
+                  /* The bounded proof evidence transport is itself a
+                   * producer-side capacity fault; settle on origin without
+                   * moving a buffer whose source identity was not recorded. */
+                  nfqueue_live_counter_inc (&nm->owner_queue_full);
+                  nfqueue_live_publish_terminal (nm, buffer_index, meta);
+                  from++;
+                  n_left--;
+                  continue;
+                }
+              nfqueue_live_record_handoff_before (nm, sample_index,
+                                                  worker_thread, buffer_index,
+                                                  buffer, meta);
               target_thread = (u16) meta->canonical_worker;
               /* Publish the destination-stage marker before enqueue so the
                * receiving worker cannot observe a stale initial-stage value. */
               meta->handoff_stage =
                 NFQUEUE_LIVE_HANDOFF_CANONICAL |
-                nfqueue_live_handoff_identity_tag (
-                  buffer_index, (uword) vlib_buffer_get_current (buffer), meta);
+                sample_index;
               if (__atomic_exchange_n (&nm->inject_owner_queue_full, 0,
                                        __ATOMIC_ACQ_REL))
                 {
@@ -1396,8 +1444,7 @@ VLIB_NODE_FN (nfqueue_live_owner_node) (vlib_main_t *vm,
           nfqueue_live_counter_inc (&nm->owner_local_obligations);
           meta->handoff_stage =
             NFQUEUE_LIVE_HANDOFF_CANONICAL |
-            nfqueue_live_handoff_identity_tag (
-              buffer_index, (uword) vlib_buffer_get_current (buffer), meta);
+            NFQUEUE_LIVE_HANDOFF_SLOT_MASK;
           (void) nfqueue_live_publish_completion (nm, buffer_index, meta);
           from++;
           n_left--;
@@ -1528,9 +1575,10 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   nm->last_buffer_index = ~0;
   nm->last_buffer_base = 0;
   __atomic_store_n (&nm->last_worker_thread, ~0u, __ATOMIC_RELEASE);
-  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_WORKER_SLOTS; i++)
+  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES; i++)
     {
       nm->handoff_samples[i].lock = 0;
+      __atomic_store_n (&nm->handoff_samples[i].state, 0, __ATOMIC_RELEASE);
       nm->handoff_samples[i].before_valid = 0;
       nm->handoff_samples[i].after_valid = 0;
       nm->handoff_samples[i].before_buffer_index = ~0;
@@ -2029,10 +2077,6 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   const char *last_direction =
     nm->last_device_direction == NFQUEUE_LIVE_DIRECTION_OUTPUT ? "OUTPUT" :
       "INPUT";
-  nfqueue_live_handoff_sample_t handoff_samples[
-    NFQUEUE_LIVE_MAX_WORKER_SLOTS];
-  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_WORKER_SLOTS; i++)
-    nfqueue_live_handoff_sample_snapshot (nm, i, &handoff_samples[i]);
   (void) input;
   (void) cmd;
   vlib_cli_output (vm, "enabled %u family ip%u queue %u generation %llu",
@@ -2143,29 +2187,32 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                      &nm->identity_proof_matches),
                    (unsigned long long) nfqueue_live_counter_load (
                      &nm->identity_proof_failures));
-  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_WORKER_SLOTS; i++)
+  for (u32 i = 0; i < NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES; i++)
     {
-      nfqueue_live_handoff_sample_t *sample = &handoff_samples[i];
+      nfqueue_live_handoff_sample_t sample;
+      nfqueue_live_handoff_sample_snapshot (nm, i, &sample);
+      if (!sample.before_valid && !sample.after_valid)
+        continue;
       vlib_cli_output (vm, "handoff-before slot %u valid %u owner-worker %u buffer-index %u buffer-base 0x%llx packet-id %u generation %llu origin-lane %u payload-offset %u payload-length %u obligation-nonce %u stage %u",
-                       i, sample->before_valid, sample->before_worker,
-                       sample->before_buffer_index,
-                       (unsigned long long) sample->before_buffer_base,
-                       sample->before_packet_id,
-                       (unsigned long long) sample->before_generation,
-                       sample->before_origin_lane,
-                       sample->before_payload_offset,
-                       sample->before_payload_length,
-                       sample->before_obligation_nonce, sample->before_stage);
+                       i, sample.before_valid, sample.before_worker,
+                       sample.before_buffer_index,
+                       (unsigned long long) sample.before_buffer_base,
+                       sample.before_packet_id,
+                       (unsigned long long) sample.before_generation,
+                       sample.before_origin_lane,
+                       sample.before_payload_offset,
+                       sample.before_payload_length,
+                       sample.before_obligation_nonce, sample.before_stage);
       vlib_cli_output (vm, "handoff-after slot %u valid %u owner-worker %u buffer-index %u buffer-base 0x%llx packet-id %u generation %llu origin-lane %u payload-offset %u payload-length %u obligation-nonce %u stage %u",
-                       i, sample->after_valid, sample->after_worker,
-                       sample->after_buffer_index,
-                       (unsigned long long) sample->after_buffer_base,
-                       sample->after_packet_id,
-                       (unsigned long long) sample->after_generation,
-                       sample->after_origin_lane,
-                       sample->after_payload_offset,
-                       sample->after_payload_length,
-                       sample->after_obligation_nonce, sample->after_stage);
+                       i, sample.after_valid, sample.after_worker,
+                       sample.after_buffer_index,
+                       (unsigned long long) sample.after_buffer_base,
+                       sample.after_packet_id,
+                       (unsigned long long) sample.after_generation,
+                       sample.after_origin_lane,
+                       sample.after_payload_offset,
+                       sample.after_payload_length,
+                       sample.after_obligation_nonce, sample.after_stage);
     }
   vlib_cli_output (vm, "completion-frames %llu stale %llu duplicate %llu ring-overflow %llu origin-return-overflow %llu",
                    (unsigned long long) nm->completion_frames,

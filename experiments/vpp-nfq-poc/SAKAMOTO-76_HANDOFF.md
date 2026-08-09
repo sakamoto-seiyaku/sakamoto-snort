@@ -5,7 +5,10 @@ path with two real VPP worker contexts and a reproducible owner-local/owner-
 remote route. A worker transports a VPP buffer index and fixed inline identity;
 it never copies packet bytes, issues a verdict, or frees the native buffer.
 The origin NFQUEUE lane validates the bounded Completion Frame and performs the
-single verdict plus the native return.
+single verdict plus the native return. Remote handoffs also reserve one slot
+from a fixed 127-entry identity-evidence pool; the slot proves that the source
+and destination observed the same live obligation, but never owns a packet or a
+completion credit.
 
 ## Reproduce
 
@@ -23,7 +26,7 @@ buffers, and produced:
 
 ```text
 bufferDataSize=9000
-pluginSha256=4ca36d7fa5a4715ddbdc0829d2182c070283346a02111807eda65490fa8ca5bc
+pluginSha256=f4830ffeb4bbc9296fbcc13b09c88e06be28e32328b7f1d5e36900ce7c40939b
 ```
 
 The complete provenance is in
@@ -114,16 +117,18 @@ inline completion reference; only the origin can perform the final native
 `vlib_buffer_free_one()` return. Completion credits and live obligations are
 tracked independently and both must reach zero at teardown.
 
-Evidence does not use a shared mixed-packet snapshot. Each real worker owns one
-fixed, lock-protected sample slot; the origin CLI takes each slot under the
-same lock. `handoff-before` is written by the source worker and
-`handoff-after` by the destination worker, with worker, buffer identity, nonce,
-and stage shown explicitly. The two latest role samples can therefore appear
-in opposite slots under concurrency; they are observational records only and
-are correlated by their inline identity/obligation nonce. The proof decision
-itself uses only local scalars read from the received live buffer and its
-inline handoff tag. All S76 ledgers (owner, credit, proof, and transport fault
-counters) aggregate with atomic operations.
+Evidence uses a fixed 127-entry, lock-protected identity-evidence pool. The
+source reserves a slot, records the complete before identity, and publishes
+the slot number in the inline `handoff_stage` field. Its high bit marks the
+canonical stage and its low seven bits carry a slot number from 0 through 126;
+127 is the local-completion sentinel. The destination takes that exact slot
+under the same lock, compares its live-buffer locals against every before field
+(buffer index/base, packet id, payload offset/length, generation, origin lane,
+and obligation nonce), records the after identity, then releases the slot.
+Queue-full or proof-failure terminal paths release a reserved slot as well.
+`handoff-before` and `handoff-after` are coherent observational records; they
+are not packet storage, ownership, or credit state. All S76 ledgers (owner,
+credit, proof, and transport-fault counters) aggregate with atomic operations.
 
 ## Runtime evidence
 
@@ -135,7 +140,7 @@ owner-local-obligations 16 owner-remote-obligations 17 owner-remote-handoffs 17 
 completion-credit-acquired 33 completion-credit-released 33 completion-credits-held 0 residue-completion-credits 0
 identity-proof-checks 17 identity-proof-matches 17 identity-proof-failures 0
 handoff-before slot 0 valid 1 owner-worker 1 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 9 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 33 stage 0
-handoff-after slot 1 valid 1 owner-worker 2 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 9 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 33 stage 195
+handoff-after slot 0 valid 1 owner-worker 2 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 9 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 33 stage 128
 verdict-attempts 33 send-success 33 send-failures 0
 native-buffer-returns 33 outstanding-obligations 0 residue-obligations 0 packet-copies 0
 ```
@@ -152,6 +157,8 @@ datagrams 257 callbacks 257
 owner-remote-obligations 257 owner-remote-handoffs 257 owner-queue-full 0
 completion-credit-acquired 257 completion-credit-released 257 completion-credits-held 0 residue-completion-credits 0
 identity-proof-checks 257 identity-proof-matches 257 identity-proof-failures 0
+handoff-before slot 0 valid 1 owner-worker 1 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 65 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 257 stage 0
+handoff-after slot 0 valid 1 owner-worker 2 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 65 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 257 stage 128
 verdict-attempts 257 native-buffer-returns 257 outstanding-obligations 0 residue-obligations 0
 S76 stress ledger: obligations=257 verdicts=257 native-returns=257 credits=257/257 proof=257/257 remote=257/257 residues=0/0
 ```
@@ -175,16 +182,18 @@ identity-proof-checks 16 identity-proof-matches 16 identity-proof-failures 0
 verdict-attempts 33 native-buffer-returns 33 outstanding-obligations 0 residue-obligations 0
 ```
 
-All five runtime modes returned zero for IPv4 and IPv6 peer pings, native
+All five bounded placement/fault modes returned zero for IPv4 and IPv6 peer pings, native
 buffer residue, completion-credit residue, origin-ring overflow, packet-copy
 paths, scratch buffers, full-packet memcpy, and per-packet heap objects.
 
 ## Deterministic evidence
 
 `test-nfqueue-live-poc-s76-ledger.sh` compiles and runs
-`tests/nfqueue_live_s76_ledger_test.c`, which prints:
+`tests/nfqueue_live_s76_ledger_test.c`, which first checks a full before/after
+identity pair (including the obligation nonce and stage slot), then prints:
 
 ```text
+identity pair: full-fields=1 mismatch-detected=1
 normal mixed: local=4 remote=4 handoffs=4 proof=4/4 verdicts=8 native-returns=8 credits=8/8 residue=0
 queue-full fault: queue-full=1 terminal-intents=1 verdicts=1 native-returns=1 residue=0
 credit exhaustion fault: exhausted=1 acquired=1 released=1 residue=0
