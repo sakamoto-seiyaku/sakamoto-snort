@@ -154,6 +154,8 @@ nfqueue_live_main_t nfqueue_live_main = {
   .netlink_file_index = ~0,
   .completion_file_index = ~0,
   .worker_thread = 1,
+  .teardown_state = NFQUEUE_LIVE_TEARDOWN_STOPPED,
+  .teardown_drain_limit = 200,
 };
 
 extern vlib_node_registration_t nfqueue_live_ingress_process_node;
@@ -162,6 +164,97 @@ extern vlib_node_registration_t nfqueue_live_owner_node;
 static u8 nfqueue_live_recover_packet_id (const u8 *base, u32 length,
                                           u32 *packet_id);
 static u32 nfqueue_live_next_obligation_nonce (nfqueue_live_main_t *nm);
+static void nfqueue_live_drain_ingress_queue (nfqueue_live_main_t *nm);
+
+static const char *
+nfqueue_live_teardown_state_name (nfqueue_live_teardown_state_t state)
+{
+  switch (state)
+    {
+    case NFQUEUE_LIVE_TEARDOWN_STOPPED:
+      return "STOPPED";
+    case NFQUEUE_LIVE_TEARDOWN_ACTIVE:
+      return "ACTIVE";
+    case NFQUEUE_LIVE_TEARDOWN_QUIESCING:
+      return "QUIESCING";
+    case NFQUEUE_LIVE_TEARDOWN_DRAINING:
+      return "DRAINING";
+    case NFQUEUE_LIVE_TEARDOWN_DEADLINE:
+      return "DEADLINE";
+    case NFQUEUE_LIVE_TEARDOWN_COMPLETION_CLOSED:
+      return "COMPLETION_CLOSED";
+    case NFQUEUE_LIVE_TEARDOWN_CHANNELS_CLOSED:
+      return "CHANNELS_CLOSED";
+    case NFQUEUE_LIVE_TEARDOWN_COMPLETE:
+      return "COMPLETE";
+    case NFQUEUE_LIVE_TEARDOWN_PROCESS_TERMINATED:
+      return "PROCESS_TERMINATED";
+    default:
+      return "UNKNOWN";
+    }
+}
+
+static const char *
+nfqueue_live_teardown_event_name (nfqueue_live_teardown_event_t event)
+{
+  switch (event)
+    {
+    case NFQUEUE_LIVE_TEARDOWN_ENABLE:
+      return "ENABLE";
+    case NFQUEUE_LIVE_TEARDOWN_QUIESCE:
+      return "QUIESCE";
+    case NFQUEUE_LIVE_TEARDOWN_DRAIN:
+      return "DRAIN";
+    case NFQUEUE_LIVE_TEARDOWN_DRAIN_DEADLINE:
+      return "DRAIN_DEADLINE";
+    case NFQUEUE_LIVE_TEARDOWN_CLOSE_COMPLETION:
+      return "CLOSE_COMPLETION";
+    case NFQUEUE_LIVE_TEARDOWN_CLOSE_CHANNELS:
+      return "CLOSE_CHANNELS";
+    case NFQUEUE_LIVE_TEARDOWN_FINISH:
+      return "FINISH";
+    case NFQUEUE_LIVE_TEARDOWN_PROCESS_DEATH:
+      return "PROCESS_DEATH";
+    default:
+      return "UNKNOWN";
+    }
+}
+
+static nfqueue_live_teardown_state_t
+nfqueue_live_teardown_state_load (const nfqueue_live_main_t *nm)
+{
+  return __atomic_load_n (&nm->teardown_state, __ATOMIC_ACQUIRE);
+}
+
+static u8
+nfqueue_live_record_teardown_transition (
+  nfqueue_live_main_t *nm, nfqueue_live_teardown_event_t event)
+{
+  nfqueue_live_teardown_state_t state = nfqueue_live_teardown_state_load (nm);
+  if (!nfqueue_live_teardown_transition (&state, event))
+    {
+      nm->teardown_transition_rejections++;
+      return 0;
+    }
+  __atomic_store_n (&nm->teardown_state, state, __ATOMIC_RELEASE);
+  if (nm->teardown_event_count < NFQUEUE_LIVE_TEARDOWN_MAX_TRANSITIONS)
+    nm->teardown_events[nm->teardown_event_count++] = event;
+  return 1;
+}
+
+static u8
+nfqueue_live_teardown_ingress_allowed (const nfqueue_live_main_t *nm)
+{
+  return nfqueue_live_teardown_ingress_admission_allowed (
+    nfqueue_live_teardown_state_load (nm));
+}
+
+static u8
+nfqueue_live_teardown_completion_open (const nfqueue_live_main_t *nm)
+{
+  return nfqueue_live_teardown_completion_channel_open (
+    nfqueue_live_teardown_state_load (nm));
+}
 
 static_always_inline nfqueue_live_meta_t *
 nfqueue_live_meta (vlib_buffer_t *b)
@@ -1134,6 +1227,14 @@ static void
 nfqueue_live_publish_terminal (nfqueue_live_main_t *nm, u32 buffer_index,
                                nfqueue_live_meta_t *meta)
 {
+  if (!nfqueue_live_teardown_completion_open (nm))
+    {
+      /* Teardown must never silently free a worker-owned buffer after the
+       * completion channel has closed.  Keep the obligation visible so the
+       * caller can classify the failed stop instead of claiming closure. */
+      nm->teardown_late_completion++;
+      return;
+    }
   if (nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED)
     return;
   if (meta->completion_refs == 0)
@@ -1176,21 +1277,53 @@ nfqueue_live_settle_on_origin (nfqueue_live_main_t *nm, u32 buffer_index,
                                nfqueue_live_meta_t *meta)
 {
   nfqueue_live_lane_t *lane = nfqueue_live_lane_for_meta (nm, meta);
+  nfqueue_live_teardown_state_t teardown_state =
+    nfqueue_live_teardown_state_load (nm);
+  u64 generation = nfqueue_live_meta_generation (meta);
+  u8 deadline = teardown_state == NFQUEUE_LIVE_TEARDOWN_DEADLINE;
+  u8 identity_completable =
+    lane && lane->queue && meta->packet_id != 0 && generation != 0 &&
+    lane->generation == generation && nm->generation == generation;
   if (nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED)
     return;
   if ((meta->flags & NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED) == 0)
     {
       meta->flags |= NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED;
       nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_ATTEMPTED);
-      if (lane && lane->queue)
+      if (identity_completable)
         {
           nfqueue_live_completion_outcome_t outcome =
             nfqueue_live_send_verdict (
-              nm, lane, nfqueue_live_meta_generation (meta), meta->packet_id,
+              nm, lane, generation, meta->packet_id,
               nfqueue_live_meta_origin_lane (meta), NFQUEUE_LIVE_ACCEPT);
           nfqueue_live_record_outcome (nm, meta, outcome);
+          if (outcome == NFQUEUE_LIVE_OUTCOME_SUCCEEDED)
+            {
+              nm->fail_open_settlements++;
+              if (deadline)
+                nm->teardown_deadline_accepts++;
+              else
+                nm->teardown_drain_accepts++;
+            }
+          else if (outcome == NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE)
+            nm->teardown_deadline_failed_definite += deadline;
+          else if (outcome == NFQUEUE_LIVE_OUTCOME_UNKNOWN)
+            nm->teardown_deadline_outcome_unknown += deadline;
         }
-      nm->fail_open_settlements++;
+      else
+        {
+          /* A buffer that reached teardown without a usable queue generation
+           * or packet id cannot be honestly called ACCEPTed.  It is settled
+           * exactly once as an explicitly classified unknown obligation; no
+           * stale-generation or guessed verdict is attempted. */
+          nm->teardown_identity_unrecoverable++;
+          nm->teardown_deadline_outcome_unknown += deadline;
+          if (generation != nm->generation)
+            nm->completion_stale_generation++;
+          nfqueue_live_record_outcome (nm, meta,
+                                       NFQUEUE_LIVE_OUTCOME_UNKNOWN);
+          nm->completion_outcome_unknown++;
+        }
     }
   meta->completion_refs = 0;
   nfqueue_live_return_buffer (nm, buffer_index, meta);
@@ -1225,9 +1358,27 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
 {
   vlib_buffer_t *buffer;
   nfqueue_live_meta_t *meta;
+  nfqueue_live_teardown_state_t teardown_state;
+  u64 entry_generation;
 
   buffer = vlib_get_buffer (nm->vm, entry->buffer_index);
   meta = nfqueue_live_meta (buffer);
+  teardown_state = nfqueue_live_teardown_state_load (nm);
+  entry_generation = ((u64) entry->generation_hi << 32) |
+                     entry->generation_lo;
+
+  /* A completion arriving after CLOSE_COMPLETION is a lifecycle fault, not
+   * permission to touch a fresh generation's buffer.  The old generation is
+   * retained in the bounded stale ledger and never replayed. */
+  if (!nfqueue_live_teardown_completion_generation_allowed (
+        teardown_state, nm->generation, entry_generation))
+    {
+      nm->completion_stale++;
+      if (entry_generation != nm->generation)
+        nm->completion_stale_generation++;
+      nm->teardown_late_completion++;
+      return;
+    }
 
   /* Check the full completion identity before touching verdict or reference
    * state. Generation alone is insufficient when a packet id is reused. */
@@ -1294,6 +1445,11 @@ static clib_error_t *
 nfqueue_live_completion_read_ready (clib_file_t *file)
 {
   nfqueue_live_main_t *nm = (nfqueue_live_main_t *) file->private_data;
+  if (!nfqueue_live_teardown_completion_open (nm))
+    {
+      nm->teardown_late_completion++;
+      return 0;
+    }
   nfqueue_live_drain_completion_queue (nm);
   return 0;
 }
@@ -1558,7 +1714,10 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
   int handled;
   nfqueue_live_ingress_result_t ingress_result;
 
-  if (nm->quiescing || !lane->enabled)
+  /* Queue readers are admission gates, not lifecycle owners.  Once the
+   * quiesce edge is observed no new NFQUEUE obligation may be created, even
+   * if a readiness callback was already queued by clib_file. */
+  if (!nfqueue_live_teardown_ingress_allowed (nm) || !lane->enabled)
     return 0;
 
   while (1)
@@ -1802,6 +1961,11 @@ static u8
 nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
                                  nfqueue_live_meta_t *meta)
 {
+  if (!nfqueue_live_teardown_completion_open (nm))
+    {
+      nm->teardown_late_completion++;
+      return 0;
+    }
   nfqueue_live_completion_t completion = {
     .buffer_index = buffer_index,
     .generation_lo = meta->generation_lo,
@@ -2041,6 +2205,14 @@ VLIB_NODE_FN (nfqueue_live_ingress_process_node) (vlib_main_t *vm,
     {
       (void) vlib_process_wait_for_event (vm);
       (void) vlib_process_get_events (vm, 0);
+      if (!nfqueue_live_teardown_ingress_allowed (nm))
+        {
+          /* No new obligations may enter the worker frame queue after the
+           * quiesce edge.  Existing ingress tokens are completed by the
+           * origin lane while the completion channel is still open. */
+          nfqueue_live_drain_ingress_queue (nm);
+          continue;
+        }
       count = 0;
         while (count < VLIB_FRAME_SIZE &&
                nfqueue_live_index_pop (&nm->ingress, &from[count]))
@@ -2154,6 +2326,24 @@ nfqueue_live_reserve_startup (nfqueue_live_main_t *nm)
 static void
 nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
 {
+  __atomic_store_n (&nm->teardown_state, NFQUEUE_LIVE_TEARDOWN_STOPPED,
+                    __ATOMIC_RELEASE);
+  nm->teardown_event_count = 0;
+  nm->teardown_deadline_forced = 0;
+  nm->teardown_deadline_reached = 0;
+  nm->teardown_drain_attempts = 0;
+  nm->teardown_drain_limit = 200;
+  nm->teardown_transition_rejections = 0;
+  nm->teardown_drain_accepts = 0;
+  nm->teardown_deadline_accepts = 0;
+  nm->teardown_deadline_failed_definite = 0;
+  nm->teardown_deadline_outcome_unknown = 0;
+  nm->teardown_identity_unrecoverable = 0;
+  nm->teardown_obligation_residue = 0;
+  nm->teardown_late_completion = 0;
+  nm->teardown_completion_frames_at_close = 0;
+  for (u32 i = 0; i < NFQUEUE_LIVE_TEARDOWN_MAX_TRANSITIONS; i++)
+    nm->teardown_events[i] = 0;
   for (u32 i = 0; i < NFQUEUE_LIVE_MAX_LANES; i++)
     {
       nm->lanes[i].nm = nm;
@@ -2305,23 +2495,53 @@ static clib_error_t *
 nfqueue_live_drain_bounded (nfqueue_live_main_t *nm)
 {
   u32 attempt;
-  for (attempt = 0; attempt < 200; attempt++)
+  u32 limit = nm->teardown_drain_limit == 0 ? 1 : nm->teardown_drain_limit;
+  for (attempt = 0; attempt < limit; attempt++)
     {
+      nm->teardown_drain_attempts = attempt + 1;
+      if (nm->teardown_deadline_forced &&
+          nfqueue_live_teardown_state_load (nm) ==
+            NFQUEUE_LIVE_TEARDOWN_DRAINING)
+        {
+          if (!nfqueue_live_record_teardown_transition (
+                nm, NFQUEUE_LIVE_TEARDOWN_DRAIN_DEADLINE))
+            return clib_error_return (0,
+                                      "nfqueue-live deadline transition");
+          nm->teardown_deadline_reached = 1;
+        }
       nfqueue_live_drain_ingress_queue (nm);
       nfqueue_live_drain_completion_queue (nm);
       if (nfqueue_live_outstanding_load (nm) == 0)
         return 0;
+      if (attempt + 1 == limit)
+        {
+          if (nfqueue_live_teardown_state_load (nm) ==
+              NFQUEUE_LIVE_TEARDOWN_DRAINING)
+            {
+              if (!nfqueue_live_record_teardown_transition (
+                    nm, NFQUEUE_LIVE_TEARDOWN_DRAIN_DEADLINE))
+                return clib_error_return (0,
+                                          "nfqueue-live deadline transition");
+              nm->teardown_deadline_reached = 1;
+            }
+          /* The completion channel is still open in DEADLINE.  Give the
+           * origin lane one final chance to classify every ring-backed
+           * identity before refusing to close with live debt. */
+          nfqueue_live_drain_ingress_queue (nm);
+          nfqueue_live_drain_completion_queue (nm);
+          if (nfqueue_live_outstanding_load (nm) == 0)
+            return 0;
+          nm->teardown_obligation_residue =
+            nfqueue_live_outstanding_load (nm);
+          return clib_error_return (
+            0, "nfqueue-live bounded drain deadline left %u obligations",
+            (u32) nm->teardown_obligation_residue);
+        }
       /* Workers continue to run while the origin lane polls the completion
        * transport. The bound makes teardown failure explicit. */
       usleep (1000);
     }
-  nfqueue_live_drain_ingress_queue (nm);
-  nfqueue_live_drain_completion_queue (nm);
-  if (nfqueue_live_outstanding_load (nm) != 0)
-    return clib_error_return (0,
-                              "nfqueue-live bounded drain left %u obligations",
-                              nfqueue_live_outstanding_load (nm));
-  return 0;
+  return clib_error_return (0, "nfqueue-live bounded drain did not run");
 }
 
 static void
@@ -2374,6 +2594,45 @@ nfqueue_live_close (nfqueue_live_main_t *nm)
   nm->netlink_fd = -1;
   nm->enabled = 0;
   nm->quiescing = 0;
+}
+
+/* Completion closure is a distinct lifecycle edge.  It is intentionally
+ * separated from queue/socket teardown so a bounded drain can continue to
+ * consume worker frames and terminal intents until this function is called. */
+static void
+nfqueue_live_close_completion_channel (nfqueue_live_main_t *nm)
+{
+  if (nm->completion_file_index != ~0)
+    {
+      clib_file_del_by_index (&file_main, nm->completion_file_index);
+      nm->completion_file_index = ~0;
+    }
+  if (nm->completion_fd >= 0)
+    {
+      close (nm->completion_fd);
+      nm->completion_fd = -1;
+    }
+  nm->teardown_completion_frames_at_close = nm->completion_frames;
+}
+
+/* Called only after completion closure has been recorded and all obligations
+ * have reached a terminal outcome.  Reserve buffers, queue handles, and
+ * netlink sockets therefore have no live completion dependency. */
+static void
+nfqueue_live_close_channels (nfqueue_live_main_t *nm)
+{
+  if (nm->reserve_enabled)
+    {
+      nfqueue_live_reserve_release_startup (nm);
+      nm->reserve_enabled = 0;
+    }
+  for (u32 i = 0; i < nm->lane_count; i++)
+    nfqueue_live_close_lane (&nm->lanes[i]);
+  nm->netlink_file_index = ~0;
+  nm->queue = 0;
+  nm->handle = 0;
+  nm->netlink_fd = -1;
+  nm->enabled = 0;
 }
 
 static clib_error_t *
@@ -2521,6 +2780,13 @@ nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
       return error;
     }
   nm->enabled = 1;
+  if (!nfqueue_live_record_teardown_transition (
+        nm, NFQUEUE_LIVE_TEARDOWN_ENABLE))
+    {
+      nm->enabled = 0;
+      nfqueue_live_close (nm);
+      return clib_error_return (0, "nfqueue-live enable transition");
+    }
   return 0;
 }
 
@@ -2595,6 +2861,13 @@ nfqueue_live_enable_dual (vlib_main_t *vm, u16 queue_base,
       return error;
     }
   nm->enabled = 1;
+  if (!nfqueue_live_record_teardown_transition (
+        nm, NFQUEUE_LIVE_TEARDOWN_ENABLE))
+    {
+      nm->enabled = 0;
+      nfqueue_live_close (nm);
+      return clib_error_return (0, "nfqueue-live enable transition");
+    }
   return 0;
 }
 
@@ -2603,20 +2876,60 @@ nfqueue_live_disable (void)
 {
   nfqueue_live_main_t *nm = &nfqueue_live_main;
   clib_error_t *error;
-  if (!nm->enabled)
+  nfqueue_live_teardown_state_t state =
+    nfqueue_live_teardown_state_load (nm);
+  if (!nm->enabled &&
+      (state == NFQUEUE_LIVE_TEARDOWN_STOPPED ||
+       state == NFQUEUE_LIVE_TEARDOWN_COMPLETE))
     return 0;
-  nm->quiescing = 1;
-  for (u32 i = 0; i < nm->lane_count; i++)
-    if (nm->lanes[i].netlink_file_index != ~0)
-      {
-        clib_file_del_by_index (&file_main, nm->lanes[i].netlink_file_index);
-        nm->lanes[i].netlink_file_index = ~0;
-      }
-  nm->netlink_file_index = ~0;
+
+  if (state == NFQUEUE_LIVE_TEARDOWN_ACTIVE)
+    {
+      if (!nfqueue_live_record_teardown_transition (
+            nm, NFQUEUE_LIVE_TEARDOWN_QUIESCE))
+        return clib_error_return (0, "nfqueue-live quiesce transition");
+      nm->quiescing = 1;
+      for (u32 i = 0; i < nm->lane_count; i++)
+        if (nm->lanes[i].netlink_file_index != ~0)
+          {
+            clib_file_del_by_index (&file_main,
+                                    nm->lanes[i].netlink_file_index);
+            nm->lanes[i].netlink_file_index = ~0;
+          }
+      nm->netlink_file_index = ~0;
+      state = NFQUEUE_LIVE_TEARDOWN_QUIESCING;
+    }
+  if (state == NFQUEUE_LIVE_TEARDOWN_QUIESCING)
+    {
+      if (!nfqueue_live_record_teardown_transition (
+            nm, NFQUEUE_LIVE_TEARDOWN_DRAIN))
+        return clib_error_return (0, "nfqueue-live drain transition");
+    }
+  state = nfqueue_live_teardown_state_load (nm);
+  if (state != NFQUEUE_LIVE_TEARDOWN_DRAINING &&
+      state != NFQUEUE_LIVE_TEARDOWN_DEADLINE)
+    return clib_error_return (0, "nfqueue-live invalid teardown state %s",
+                              nfqueue_live_teardown_state_name (state));
   error = nfqueue_live_drain_bounded (nm);
   if (error)
     return error;
-  nfqueue_live_close (nm);
+
+  state = nfqueue_live_teardown_state_load (nm);
+  if (state != NFQUEUE_LIVE_TEARDOWN_DRAINING &&
+      state != NFQUEUE_LIVE_TEARDOWN_DEADLINE)
+    return clib_error_return (0, "nfqueue-live drain closed unexpectedly");
+  if (!nfqueue_live_record_teardown_transition (
+        nm, NFQUEUE_LIVE_TEARDOWN_CLOSE_COMPLETION))
+    return clib_error_return (0, "nfqueue-live completion close transition");
+  nfqueue_live_close_completion_channel (nm);
+  if (!nfqueue_live_record_teardown_transition (
+        nm, NFQUEUE_LIVE_TEARDOWN_CLOSE_CHANNELS))
+    return clib_error_return (0, "nfqueue-live channel close transition");
+  nfqueue_live_close_channels (nm);
+  if (!nfqueue_live_record_teardown_transition (
+        nm, NFQUEUE_LIVE_TEARDOWN_FINISH))
+    return clib_error_return (0, "nfqueue-live finish transition");
+  nm->quiescing = 0;
   return 0;
 }
 
@@ -2856,15 +3169,23 @@ static clib_error_t *
 nfqueue_live_disable_command_fn (vlib_main_t *vm, unformat_input_t *input,
                                  vlib_cli_command_t *cmd)
 {
+  u8 force_deadline = 0;
   (void) vm;
-  (void) input;
   (void) cmd;
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "deadline"))
+        force_deadline = 1;
+      else
+        return clib_error_return (0, "nfqueue-live disable: unknown option");
+    }
+  nfqueue_live_main.teardown_deadline_forced = force_deadline;
   return nfqueue_live_disable ();
 }
 
 VLIB_CLI_COMMAND (nfqueue_live_disable_command, static) = {
   .path = "nfqueue-live-poc disable",
-  .short_help = "nfqueue-live-poc disable",
+  .short_help = "nfqueue-live-poc disable [deadline]",
   .function = nfqueue_live_disable_command_fn,
 };
 
@@ -2887,6 +3208,39 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "enabled %u family ip%u queue %u generation %llu",
                    nm->enabled, nm->family, nm->queue_num,
                    (unsigned long long) nm->generation);
+  vlib_cli_output (
+    vm,
+    "teardown-state %s teardown-event-count %u teardown-drain-attempts %u teardown-drain-limit %u teardown-deadline-forced %u teardown-deadline-reached %u",
+    nfqueue_live_teardown_state_name (nfqueue_live_teardown_state_load (nm)),
+    nm->teardown_event_count, nm->teardown_drain_attempts,
+    nm->teardown_drain_limit, nm->teardown_deadline_forced,
+    nm->teardown_deadline_reached);
+  vlib_cli_output (
+    vm,
+    "teardown-transition-rejections %llu teardown-drain-accepts %llu teardown-deadline-accepts %llu teardown-deadline-failed-definite %llu teardown-deadline-unknown %llu teardown-identity-unrecoverable %llu teardown-obligation-residue %llu teardown-late-completion %llu",
+    (unsigned long long) nm->teardown_transition_rejections,
+    (unsigned long long) nm->teardown_drain_accepts,
+    (unsigned long long) nm->teardown_deadline_accepts,
+    (unsigned long long) nm->teardown_deadline_failed_definite,
+    (unsigned long long) nm->teardown_deadline_outcome_unknown,
+    (unsigned long long) nm->teardown_identity_unrecoverable,
+    (unsigned long long) nm->teardown_obligation_residue,
+    (unsigned long long) nm->teardown_late_completion);
+  vlib_cli_output (
+    vm,
+    "teardown-rings ingress-depth %u completion-depth %u origin-return-depth %u completion-channel-open %u completion-frames-at-close %llu",
+    (nm->ingress.tail + NFQUEUE_LIVE_RING_CAPACITY - nm->ingress.head) %
+      NFQUEUE_LIVE_RING_CAPACITY,
+    (nm->completion.tail + NFQUEUE_LIVE_RING_CAPACITY - nm->completion.head) %
+      NFQUEUE_LIVE_RING_CAPACITY,
+    (nm->origin_return.tail + NFQUEUE_LIVE_RING_CAPACITY -
+     nm->origin_return.head) % NFQUEUE_LIVE_RING_CAPACITY,
+    nfqueue_live_teardown_completion_open (nm),
+    (unsigned long long) nm->teardown_completion_frames_at_close);
+  for (u32 i = 0; i < nm->teardown_event_count; i++)
+    vlib_cli_output (vm, "teardown-transition %u %s", i,
+                     nfqueue_live_teardown_event_name (
+                       nm->teardown_events[i]));
   vlib_cli_output (vm, "buffer-data-size %u worker-thread %u origin-lane %u workers %u worker-ids %u,%u owner-mode %s",
                    data_size, nfqueue_live_counter32_load (&nm->last_worker_thread),
                    nm->origin_lane,

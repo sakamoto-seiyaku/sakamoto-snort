@@ -5,6 +5,8 @@
 
 #include <vlib/vlib.h>
 
+#include <nfqueue_live_poc/nfqueue_live_teardown.h>
+
 #define NFQUEUE_LIVE_MAX_LANES 4u
 #define NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES 127u
 /* S78 is a measured POC seam.  The startup command may choose any value up
@@ -179,6 +181,25 @@ struct nfqueue_live_main_s
 {
   u8 enabled;
   u8 quiescing;
+  /* Lifecycle state is the admission/close authority.  quiescing remains a
+   * compatibility diagnostic bit for existing S73-S78 show output. */
+  nfqueue_live_teardown_state_t teardown_state;
+  u8 teardown_event_count;
+  u8 teardown_deadline_forced;
+  u8 teardown_deadline_reached;
+  nfqueue_live_teardown_event_t
+    teardown_events[NFQUEUE_LIVE_TEARDOWN_MAX_TRANSITIONS];
+  u32 teardown_drain_attempts;
+  u32 teardown_drain_limit;
+  u64 teardown_transition_rejections;
+  u64 teardown_drain_accepts;
+  u64 teardown_deadline_accepts;
+  u64 teardown_deadline_failed_definite;
+  u64 teardown_deadline_outcome_unknown;
+  u64 teardown_identity_unrecoverable;
+  u64 teardown_obligation_residue;
+  u64 teardown_late_completion;
+  u64 teardown_completion_frames_at_close;
   u8 inject_stale;
   u8 inject_duplicate;
   u8 inject_completion_overflow;

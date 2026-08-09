@@ -13,6 +13,10 @@
 
 typedef unsigned char nfqueue_live_teardown_state_t;
 
+/* The transition log is deliberately fixed-size.  It is diagnostic evidence
+ * only; lifecycle correctness never depends on allocating a log record. */
+#define NFQUEUE_LIVE_TEARDOWN_MAX_TRANSITIONS 16u
+
 enum
 {
   NFQUEUE_LIVE_TEARDOWN_STOPPED = 0,
@@ -49,6 +53,19 @@ nfqueue_live_teardown_completion_available (nfqueue_live_teardown_state_t state)
          state == NFQUEUE_LIVE_TEARDOWN_DEADLINE;
 }
 
+/* A worker may publish a terminal intent while quiescing.  The completion
+ * channel must remain usable from the first quiesce edge through the bounded
+ * drain and deadline settlement; only CLOSE_COMPLETION removes this right. */
+static inline unsigned char
+nfqueue_live_teardown_completion_channel_open (
+  nfqueue_live_teardown_state_t state)
+{
+  return state == NFQUEUE_LIVE_TEARDOWN_ACTIVE ||
+         state == NFQUEUE_LIVE_TEARDOWN_QUIESCING ||
+         state == NFQUEUE_LIVE_TEARDOWN_DRAINING ||
+         state == NFQUEUE_LIVE_TEARDOWN_DEADLINE;
+}
+
 static inline unsigned char
 nfqueue_live_teardown_ingress_admission_allowed (
   nfqueue_live_teardown_state_t state)
@@ -66,6 +83,17 @@ nfqueue_live_teardown_generation_allowed (
 {
   return state == NFQUEUE_LIVE_TEARDOWN_ACTIVE && active_generation != 0 &&
          active_generation == work_generation;
+}
+
+/* Completion is allowed to finish current-generation work during teardown,
+ * but never admits a delayed token from an older generation. */
+static inline unsigned char
+nfqueue_live_teardown_completion_generation_allowed (
+  nfqueue_live_teardown_state_t state, unsigned long long active_generation,
+  unsigned long long work_generation)
+{
+  return nfqueue_live_teardown_completion_channel_open (state) &&
+         active_generation != 0 && active_generation == work_generation;
 }
 
 static inline unsigned char

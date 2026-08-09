@@ -37,6 +37,11 @@ order_case (int deadline)
                 "quiesce transition");
   ok &= expect (!nfqueue_live_teardown_ingress_admission_allowed (state),
                 "quiesce rejects ingress");
+  ok &= expect (nfqueue_live_teardown_completion_channel_open (state),
+                "completion channel stays open while quiescing");
+  ok &= expect (!nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_CLOSE_COMPLETION),
+                "completion cannot close before drain");
   ok &= expect (nfqueue_live_teardown_transition (
                   &state, NFQUEUE_LIVE_TEARDOWN_DRAIN),
                 "drain transition");
@@ -49,6 +54,12 @@ order_case (int deadline)
                     "deadline transition");
       ok &= expect (nfqueue_live_teardown_completion_available (state),
                     "completion remains open at deadline settlement");
+      ok &= expect (nfqueue_live_teardown_completion_generation_allowed (
+                      state, 11, 11),
+                    "current generation remains completable at deadline");
+      ok &= expect (!nfqueue_live_teardown_completion_generation_allowed (
+                      state, 11, 10),
+                    "old generation is stale at deadline");
     }
   ok &= expect (nfqueue_live_teardown_transition (
                   &state, NFQUEUE_LIVE_TEARDOWN_CLOSE_COMPLETION),
@@ -120,6 +131,12 @@ generation_case (void)
                 "duplicate request is classified without replay");
   ok &= expect (ledger.accepts_on_deadline == 1,
                 "ordinary deadline obligation accepts");
+  ok &= expect (nfqueue_live_teardown_completion_generation_allowed (
+                  state, 2, 2),
+                "fresh generation completion is admitted while active");
+  ok &= expect (!nfqueue_live_teardown_completion_generation_allowed (
+                  state, 2, 1),
+                "old generation completion is isolated");
   ok &= expect (ledger.residue == 0, "generation ledger has no residue");
   return ok;
 }
