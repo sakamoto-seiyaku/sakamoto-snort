@@ -30,8 +30,14 @@ typedef struct
   uint64_t reserve_peak_inflight;
   uint64_t reserve_exhaustions;
   uint64_t reserve_losses;
+  uint64_t reserve_loss_native_drops;
+  uint64_t reserve_loss_failed_definite;
+  uint64_t reserve_loss_unknown;
   uint64_t reserve_direct_attempts;
   uint64_t reserve_outcomes_succeeded;
+  uint64_t degraded_health;
+  uint64_t receive_faults;
+  uint64_t receive_fault_yields;
   uint64_t native_returns;
   uint64_t policy_verdicts;
   uint64_t delivery_claims;
@@ -42,6 +48,13 @@ typedef struct
   uint32_t reserve_reserved[LANES];
   uint32_t reserve_inflight[LANES];
 } model_t;
+
+enum
+{
+  OUTCOME_SUCCEEDED = 1,
+  OUTCOME_FAILED_DEFINITE = 2,
+  OUTCOME_UNKNOWN = 3,
+};
 
 static void
 fail (const char *what)
@@ -121,10 +134,92 @@ record_reserve_loss (model_t *model, uint32_t lane, uint32_t packet_id)
   model->normal_exhaustions++;
   model->reserve_exhaustions++;
   model->reserve_losses++;
+  model->degraded_health++;
   /* No reserve identity exists here: no Policy Verdict, native ACCEPT, or
    * delivery-success claim is manufactured for an explicitly lost packet. */
   expect (model->reserve_direct_attempts == model->reserve_admitted,
           "reserve loss changed direct-attempt cardinality");
+}
+
+static void
+record_reserve_loss_outcome (model_t *model, uint32_t outcome)
+{
+  switch (outcome)
+    {
+    case OUTCOME_SUCCEEDED:
+      model->reserve_loss_native_drops++;
+      break;
+    case OUTCOME_FAILED_DEFINITE:
+      model->reserve_loss_failed_definite++;
+      break;
+    case OUTCOME_UNKNOWN:
+      model->reserve_loss_unknown++;
+      break;
+    default:
+      fail ("unknown reserve loss outcome");
+    }
+}
+
+static void
+record_receive_fault (model_t *model)
+{
+  /* A non-transient nonblocking receive fault yields the callback.  It is
+   * health evidence, not a consumed packet or a fabricated verdict. */
+  model->receive_faults++;
+  model->degraded_health++;
+  model->receive_fault_yields++;
+}
+
+static void
+run_startup_partial_release (void)
+{
+  enum { MAX_ENTRIES = 8 };
+  uint32_t indices[MAX_ENTRIES];
+  uint32_t frees = 0;
+  for (uint32_t i = 0; i < MAX_ENTRIES; i++)
+    indices[i] = UINT32_MAX;
+  for (uint32_t i = 0; i < 3; i++)
+    indices[i] = 100u + i;
+
+  /* Model the source ownership transfer: release marks each entry before
+   * returning it, so a partial-startup cleanup called twice frees once. */
+  for (uint32_t pass = 0; pass < 2; pass++)
+    for (uint32_t i = 0; i < MAX_ENTRIES; i++)
+      if (indices[i] != UINT32_MAX)
+        {
+          indices[i] = UINT32_MAX;
+          frees++;
+        }
+  expect (frees == 3, "partial startup cleanup double-freed an entry");
+  printf ("startup partial allocation: owned=3 frees=%u repeated-release=1\n",
+          frees);
+}
+
+static void
+run_fault_accounting (void)
+{
+  model_t model = { 0 };
+  record_reserve_loss_outcome (&model, OUTCOME_SUCCEEDED);
+  record_reserve_loss_outcome (&model, OUTCOME_FAILED_DEFINITE);
+  record_reserve_loss_outcome (&model, OUTCOME_UNKNOWN);
+  record_receive_fault (&model);
+  expect (model.reserve_loss_native_drops == 1,
+          "only successful NF_DROP counted as native loss");
+  expect (model.reserve_loss_failed_definite == 1 &&
+              model.reserve_loss_unknown == 1,
+          "reserve loss outcomes were not partitioned");
+  expect (model.receive_faults == 1 && model.receive_fault_yields == 1,
+          "receive fault did not yield callback");
+  expect (model.policy_verdicts == 0 && model.delivery_claims == 0,
+          "fault accounting fabricated policy/delivery evidence");
+  printf ("fault accounting: loss-drops=%llu failed=%llu unknown=%llu "
+          "receive-faults=%llu callback-yields=%llu degraded=%llu\n",
+          (unsigned long long) model.reserve_loss_native_drops,
+          (unsigned long long) model.reserve_loss_failed_definite,
+          (unsigned long long) model.reserve_loss_unknown,
+          (unsigned long long) model.receive_faults,
+          (unsigned long long) model.receive_fault_yields,
+          (unsigned long long) model.degraded_health);
 }
 
 static void
@@ -214,6 +309,8 @@ run_capacity_and_reserve (void)
 int
 main (void)
 {
+  run_startup_partial_release ();
+  run_fault_accounting ();
   run_capacity_and_reserve ();
   puts ("S78 deterministic reserve ledger: PASS");
   return 0;

@@ -57,7 +57,10 @@ typedef struct
   u64 reserve_loss_materializations;
   u64 reserve_loss_unmaterialized;
   u64 reserve_loss_native_drops;
+  u64 reserve_loss_outcome_failed_definite;
+  u64 reserve_loss_outcome_unknown;
   u64 reserve_loss_identity_misses;
+  u64 reserve_receive_faults;
 } nfqueue_live_lane_t;
 
 typedef struct
@@ -207,6 +210,7 @@ struct nfqueue_live_main_s
   u8 inject_verdict_failed_definite;
   u8 inject_verdict_outcome_unknown;
   u8 inject_normal_capacity_exhaustion;
+  u8 arm_normal_capacity_exhaustion;
   u8 reserve_enabled;
   u8 owner_mode;
   u32 reserve_capacity;
@@ -296,7 +300,10 @@ struct nfqueue_live_main_s
   u64 reserve_loss_materializations;
   u64 reserve_loss_unmaterialized;
   u64 reserve_loss_native_drops;
+  u64 reserve_loss_outcome_failed_definite;
+  u64 reserve_loss_outcome_unknown;
   u64 reserve_loss_identity_misses;
+  u64 reserve_receive_faults;
   u64 reserve_dynamic_growth_attempts;
   u64 reserve_cross_lane_borrows;
   u64 reserve_blocking_waits;

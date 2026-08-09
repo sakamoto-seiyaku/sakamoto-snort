@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # SAKAMOTO-78 live reserve path.  One VPP process owns four native NFQUEUE
-# lanes.  The runtime-selected normal capacity is deliberately set to zero by
-# default so every received packet exercises the measured capacity-fault seam;
-# each lane has a startup-fixed reserve and a bounded one-shot loss envelope.
+# lanes.  The positive-capacity scenarios fill a startup-fixed normal ledger,
+# observe its live VPP-buffer peak, and then exercise the lane-local reserve;
+# the direct scenario remains a zero-capacity fault control.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FAULT="${S78_FAULT:-reserve-exhaustion}"
@@ -27,14 +27,19 @@ NORMAL_CAPACITY="${S78_NORMAL_CAPACITY:-0}"
 RESERVE_CAPACITY="${S78_RESERVE_CAPACITY:-2}"
 PING_COUNT="${S78_PING_COUNT:-4}"
 STRESS="${S78_STRESS:-0}"
+FORCE_NORMAL_EXHAUSTION=0
+EXPECT_POSITIVE_NORMAL=0
+ARM_NORMAL_CAPACITY_AFTER_FILL=0
 
 case "$FAULT" in
   reserve-exhaustion)
-    : "${S78_NORMAL_CAPACITY:=0}"
+    : "${S78_NORMAL_CAPACITY:=1}"
     : "${S78_RESERVE_CAPACITY:=2}"
-    : "${S78_PING_COUNT:=4}"
+    : "${S78_PING_COUNT:=16}"
     : "${S78_STRESS:=0}"
     EXPECT_LOSS=1
+    EXPECT_POSITIVE_NORMAL=1
+    ARM_NORMAL_CAPACITY_AFTER_FILL=1
     ;;
   reserve-direct)
     : "${S78_NORMAL_CAPACITY:=0}"
@@ -42,6 +47,7 @@ case "$FAULT" in
     : "${S78_PING_COUNT:=1}"
     : "${S78_STRESS:=0}"
     EXPECT_LOSS=0
+    FORCE_NORMAL_EXHAUSTION=1
     ;;
   reserve-stress)
     : "${S78_NORMAL_CAPACITY:=0}"
@@ -50,6 +56,7 @@ case "$FAULT" in
     : "${S78_STRESS_COUNT:=64}"
     : "${S78_PING_COUNT:=64}"
     EXPECT_LOSS=1
+    FORCE_NORMAL_EXHAUSTION=1
     ;;
   *)
     echo "S78_FAULT must be reserve-exhaustion, reserve-direct, or reserve-stress" >&2
@@ -135,8 +142,13 @@ peer_pid="$(QUEUE_BASE="$QUEUE_BASE" S76_NETNS_STATE="$NETNS_STATE" \
   "$SCRIPT_DIR/setup-netns-s76.sh" peer-pid)"
 
 enable_args=(queue-base "$QUEUE_BASE" two-workers owner-mixed \
-  normal-capacity "$NORMAL_CAPACITY" reserve-capacity "$RESERVE_CAPACITY" \
-  inject-normal-capacity-exhaustion)
+  normal-capacity "$NORMAL_CAPACITY" reserve-capacity "$RESERVE_CAPACITY")
+if [ "$FORCE_NORMAL_EXHAUSTION" -eq 1 ]; then
+  enable_args+=(inject-normal-capacity-exhaustion)
+fi
+if [ "$ARM_NORMAL_CAPACITY_AFTER_FILL" -eq 1 ]; then
+  enable_args+=(arm-normal-capacity-exhaustion-after-fill)
+fi
 if [ "$STRESS" = 1 ]; then
   PING_COUNT="${S78_STRESS_COUNT:-64}"
 fi
@@ -198,8 +210,13 @@ require_exact() {
 
 require_exact reserve-enabled 1
 require_exact reserve-capacity "$RESERVE_CAPACITY"
+require_exact normal-capacity "$NORMAL_CAPACITY"
 require_at_least reserve-startup-reservations $((4 * RESERVE_CAPACITY))
 require_at_least normal-capacity-exhaustions 1
+if [ "$EXPECT_POSITIVE_NORMAL" -eq 1 ]; then
+  require_at_least normal-peak-occupancy 1
+  require_exact normal-capacity-arm-after-fill 1
+fi
 require_at_least reserve-direct-obligations 1
 require_at_least reserve-direct-completions 1
 require_at_least reserve-direct-native-returns 1
@@ -212,6 +229,7 @@ else
   require_exact reserve-loss-materializations 0
 fi
 require_exact reserve-startup-failures 0
+require_exact reserve-receive-faults 0
 require_exact reserve-envelope-bytes 9000
 require_exact reserve-parser-attempts 0
 require_exact reserve-flow-enters 0
@@ -233,6 +251,17 @@ completions="$(value_for reserve-direct-completions)"
 returns="$(value_for reserve-direct-native-returns)"
 if [ "$direct" != "$completions" ] || [ "$direct" != "$returns" ]; then
   echo "S78 acceptance failure: direct=$direct completions=$completions returns=$returns" >&2
+  exit 1
+fi
+loss_materializations="$(value_for reserve-loss-materializations)"
+losses="$(value_for reserve-losses)"
+loss_unmaterialized="$(value_for reserve-loss-unmaterialized)"
+loss_drops="$(value_for reserve-loss-native-drops)"
+loss_failed="$(value_for reserve-loss-failed-definite)"
+loss_unknown="$(value_for reserve-loss-unknown)"
+if [ $((loss_drops + loss_failed + loss_unknown)) -gt "$loss_materializations" ] || \
+   [ $((loss_materializations + loss_unmaterialized)) -ne "$losses" ]; then
+  echo "S78 acceptance failure: loss outcomes do not partition materialized/unmaterialized losses" >&2
   exit 1
 fi
 if [ "$FAULT" = reserve-stress ]; then

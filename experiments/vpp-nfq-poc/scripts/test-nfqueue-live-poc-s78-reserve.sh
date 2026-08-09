@@ -15,23 +15,50 @@ mkdir -p "$BUILD_DIR"
 for symbol in \
   NFQUEUE_LIVE_MAX_RESERVE_CAPACITY reserve_indices reserve_startup_reservations \
   reserve_direct_obligations reserve_direct_completions reserve_direct_native_returns \
-  reserve_native_returns reserve_exhaustions reserve_degraded_health; do
+  reserve_native_returns reserve_exhaustions reserve_degraded_health \
+  reserve_loss_outcome_failed_definite reserve_loss_outcome_unknown \
+  reserve_receive_faults arm_normal_capacity_exhaustion; do
   rg -q "$symbol" "$HEADER" "$SOURCE"
 done
+
+if rg -q 'nfqueue_live_reserve_datagram_t' "$SOURCE"; then
+  echo "S78 reserve path retained an unused datagram type" >&2
+  exit 1
+fi
 
 # The reserve path is deliberately an identity-only direct completion seam. It
 # may recover NFQA_PACKET_HDR identity, but cannot call the normal envelope or
 # callback parser, enqueue to a worker, allocate a replacement, or issue a
 # second Adapter-side verdict.
 reserve_body="$(sed -n '/^nfqueue_live_reserve_complete /,/^static void$/p' "$SOURCE")"
-if printf '%s\n' "$reserve_body" | rg -n \
+if rg -n \
   'nfqueue_live_measure_envelope|nfq_handle_packet|vlib_buffer_enqueue_to_thread|nfqueue_live_direct_accept|vlib_buffer_alloc|memcpy|malloc|calloc|realloc'; then
   echo "S78 reserve path crossed a normal parser/worker/allocation seam" >&2
   exit 1
+fi <<<"$reserve_body"
+rg -q 'nfqueue_live_recover_packet_id' <<<"$reserve_body"
+rg -q 'NFQUEUE_LIVE_ACCEPT' <<<"$reserve_body"
+rg -q 'nfqueue_live_reserve_return \(nm, lane, buffer_index, 1\)' <<<"$reserve_body"
+
+startup_body="$(sed -n '/^nfqueue_live_reserve_startup /,/^static void$/p' "$SOURCE")"
+rg -q 'nfqueue_live_reserve_release_startup' <<<"$startup_body"
+if rg -q 'vlib_buffer_free_one' <<<"$startup_body"; then
+  echo "S78 startup path has a second partial-allocation free owner" >&2
+  exit 1
 fi
-printf '%s\n' "$reserve_body" | rg -q 'nfqueue_live_recover_packet_id'
-printf '%s\n' "$reserve_body" | rg -q 'NFQUEUE_LIVE_ACCEPT'
-printf '%s\n' "$reserve_body" | rg -q 'nfqueue_live_reserve_return \(nm, lane, buffer_index, 1\)'
+
+loss_body="$(sed -n '/^nfqueue_live_reserve_loss_complete /,/^static nfqueue_live_lane_t /p' "$SOURCE")"
+rg -q 'nfqueue_live_record_reserve_loss_outcome' <<<"$loss_body"
+outcome_body="$(sed -n '/^nfqueue_live_record_reserve_loss_outcome /,/^static nfqueue_live_ingress_result_t$/p' "$SOURCE")"
+rg -q 'NFQUEUE_LIVE_OUTCOME_SUCCEEDED' <<<"$outcome_body"
+rg -q 'NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE' <<<"$outcome_body"
+rg -q 'NFQUEUE_LIVE_OUTCOME_UNKNOWN' <<<"$outcome_body"
+
+receive_body="$(sed -n '/^nfqueue_live_discard_bounded_loss /,/^static_always_inline u8$/p' "$SOURCE")"
+rg -q 'reserve_receive_faults' <<<"$receive_body"
+rg -q 'NFQUEUE_LIVE_DISCARD_FAULT' <<<"$receive_body"
+rg -q 'EAGAIN.*EWOULDBLOCK.*EINTR' <<<"$receive_body"
+rg -q 'arm-normal-capacity-exhaustion-after-fill' "$SOURCE"
 
 # Keep the checked-in host runners parseable alongside the source seam.  This
 # catches matrix/scenario edits before a namespace is needed.
