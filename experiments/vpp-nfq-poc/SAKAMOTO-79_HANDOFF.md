@@ -1,8 +1,9 @@
 # SAKAMOTO-79 handoff — ordered NFQUEUE generation teardown
 
 Status: implementation, deterministic checks, pinned host build, and the
-six-case host/netns matrix pass. Plane remains **In Progress** until the
-integration owner accepts the POC boundary.
+six-case host/netns matrix pass. The follow-up source checkpoint is
+`457a39c`; Plane remains **In Progress** until the integration owner accepts
+the POC boundary.
 
 S79 makes teardown an observable state machine in the existing native
 `nfqueue_live_poc` plugin. Enable records `ENABLE`; disable first records
@@ -38,7 +39,7 @@ The host runner uses the source-owned S73 build lineage:
 * Regular-memfd fallback patch SHA-256
   `1ddd591c271860887c8d7576dec1a2d6d1b649dbe1038172fffcf7b76f432afe`.
 * Installed `nfqueue_live_poc_plugin.so` SHA-256
-  `870e862feeedcf3343805fe220a6a7a0453e86c75793dddafb47aa3b6ac1fcaa`.
+  `0cf3bd929d56901574c44df5cd6855ede5fd5d40eaea1d2bac5ed35cb04ca235`.
 
 The complete generated record is retained at
 `work/vpp-s73-install-9258530f3804a152578ce11cc7c8a1e9eab88ed0/s73-provenance.properties`.
@@ -54,6 +55,7 @@ SAKAMOTO_POC_TICKET=SAKAMOTO-79 JOBS=12 \
   ./scripts/build-nfqueue-live-poc.sh
 ./scripts/test-nfqueue-live-poc-s79-runner.sh
 rtk unshare -Urn env S79_MATRIX_DIR=/tmp/sakamoto-s79-matrix \
+  S79_ROUNDS=3 \
   ./scripts/run-nfqueue-live-poc-s79-matrix.sh
 ```
 
@@ -75,7 +77,7 @@ and evidence directory per case. Its cases are:
 | `multiple-generations` | `multiple-generations/` | three in-process rounds, generations 1/2/3 |
 
 The accepted matrix evidence from the final host run is under
-`/tmp/sakamoto-s79-matrix-final/`. Every clean round reported the exact
+`/tmp/sakamoto-s79-final-matrix3/`. Every clean round reported the exact
 transition sequence (with `DRAIN_DEADLINE` in the deadline case), zero
 outstanding obligations/ring depth/debt/held credits, matched raised/settled
 debt and acquired/released credits, `netlink-fd=-1`, `completion-fd=-1`,
@@ -84,18 +86,36 @@ completion frames into physical attempts, stale frames, and duplicate frames;
 physical attempts partition into succeeded/failed-definite/unknown outcomes,
 so duplicate or stale input cannot create a second verdict.
 
-The process-death ledger intentionally records:
+The deadline case first captured a real current-generation hold in
+`drain-deadline/show-before-disable.txt`: `held-obligation=1`, concrete
+`held-buffer-index=2391916`, `outstanding-obligations=3`,
+`completion-debt=3`, `completion-credits-held=3`, `netlink-fd=17`,
+`completion-fd=21`, and four open queues/handles.  The corresponding
+after-disable evidence records `DRAIN_DEADLINE`,
+`teardown-deadline-accepts=1`, and zero outstanding/debt/credit/ring/resource
+residue, including `residue-completion-credits=0`.
+
+The process-death ledger at
+`process-termination/process-termination-ledger.txt` is captured from that
+same show output rather than a zero-valued model:
 
 ```text
-obligations=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE
-buffers=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE
-completion-frames=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE
-credits=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE
-debt=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE
-socket=EXPLICITLY_CLOSED_BY_PROCESS_DEATH
-queue=EXPLICITLY_CLOSED_BY_PROCESS_DEATH
-hooks=PRESENT_BEFORE_SUPERVISOR_CLEANUP
+failure-category=PROCESS_TERMINATED_WITH_LIVE_CURRENT_GENERATION_OBLIGATION
+generation-before=1
+obligations-before=1
+completion-debt-before=1
+completion-credits-held-before=1
+buffers-before=1
+held-buffer-index-before=2391916
+completion-frames-before=8
+netlink-fd-before=17
+completion-fd-before=21
+queue-count-before=4
+handle-count-before=4
+enabled-lanes-before=4
+hooks-before=PRESENT
 logs=CAPTURED
+fresh-generation-after-death=1 old-obligation-replay=0 second-verdict=0
 ```
 
 The supervisor then removes the topology and verifies no NFQUEUE firewall
@@ -107,7 +127,7 @@ zero.
 The required repository wrapper was used for the device preflight:
 `./dev/adb devices -l`, `./dev/adb shell id`, and
 `./dev/adb shell getprop ro.product.model` resolved Pixel 6a serial
-`28201JEGR0XPAJ` (Android 16). No S79 Android VPP/NFQUEUE PASS is claimed:
+`28201JEGR0XPAJ` (Android 16, SDK 36). No S79 Android VPP/NFQUEUE PASS is claimed:
 the device has no active VPP/NFQUEUE process, and the existing Android VPP
 SVM backing-path permission failure remains the blocker recorded by S77/S78.
 The host/netns matrix is therefore the authoritative S79 live acceptance.
@@ -115,7 +135,11 @@ The host/netns matrix is therefore the authoritative S79 live acceptance.
 ## Scope and preservation
 
 S79 changes only the teardown seam, its state-model/static gate, and the
-runner/config/handoff above. S73-S78 identity, envelope, worker ownership,
-exactly-once outcome, reserve, handoff, and provenance contracts remain
-unchanged. Generated VPP build trees and raw `/tmp` evidence are not committed;
-the pinned provenance record and this handoff identify the exact artifact used.
+runner/config/handoff above. Dynamic teardown counters are atomically updated
+or read, matching late references settle through the origin-only return ring,
+and the displayed credit residue is the acquired-minus-released ledger rather
+than a copy of the held counter. S73-S78 identity, envelope, worker
+ownership, exactly-once outcome, reserve, handoff, and provenance contracts
+remain unchanged. Generated VPP build trees and raw `/tmp` evidence are not
+committed; the pinned provenance record and this handoff identify the exact
+artifact used.
