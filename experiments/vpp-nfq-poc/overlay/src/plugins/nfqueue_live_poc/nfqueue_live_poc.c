@@ -1092,7 +1092,7 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
     {
       nm->verdict_identity_mismatches++;
       nm->last_verdict_outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
-      nm->completion_outcome_failed_definite++;
+      nfqueue_live_counter_inc (&nm->completion_outcome_failed_definite);
       return NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
     }
   lane->verdict_attempts++;
@@ -1130,10 +1130,10 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
   switch (outcome)
     {
     case NFQUEUE_LIVE_OUTCOME_SUCCEEDED:
-      nm->completion_outcome_succeeded++;
+      nfqueue_live_counter_inc (&nm->completion_outcome_succeeded);
       break;
     case NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE:
-      nm->completion_outcome_failed_definite++;
+      nfqueue_live_counter_inc (&nm->completion_outcome_failed_definite);
       break;
     case NFQUEUE_LIVE_OUTCOME_UNKNOWN:
       nfqueue_live_counter_inc (&nm->completion_outcome_unknown);
@@ -1308,7 +1308,7 @@ nfqueue_live_publish_late_return (nfqueue_live_main_t *nm, u32 buffer_index,
                      NFQUEUE_LIVE_FLAG_OUTCOME_UNKNOWN;
       nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_ATTEMPTED);
       nfqueue_live_record_outcome (nm, meta, NFQUEUE_LIVE_OUTCOME_UNKNOWN);
-      nm->completion_outcome_unknown++;
+      nfqueue_live_counter_inc (&nm->completion_outcome_unknown);
     }
   meta->completion_refs |= NFQUEUE_LIVE_LATE_RETURN_QUEUED;
   late = (nfqueue_live_completion_t){
@@ -1438,7 +1438,7 @@ nfqueue_live_settle_on_origin (nfqueue_live_main_t *nm, u32 buffer_index,
           nfqueue_live_counter_add (&nm->teardown_deadline_outcome_unknown,
                                     deadline);
           if (generation != nm->generation)
-            nm->completion_stale_generation++;
+            nfqueue_live_counter_inc (&nm->completion_stale_generation);
           nfqueue_live_record_outcome (nm, meta,
                                        NFQUEUE_LIVE_OUTCOME_UNKNOWN);
           nfqueue_live_counter_inc (&nm->completion_outcome_unknown);
@@ -1526,7 +1526,7 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
     {
       nm->completion_stale++;
       if (entry_generation != nm->generation)
-        nm->completion_stale_generation++;
+        nfqueue_live_counter_inc (&nm->completion_stale_generation);
       if (nfqueue_live_completion_identity_matches (meta, entry) &&
           nfqueue_live_completion_ref_count (meta) != 0 &&
           nfqueue_live_state (meta) != NFQUEUE_LIVE_STATE_RETURNED)
@@ -1544,14 +1544,14 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
       nm->completion_stale++;
       if (entry->generation_lo != meta->generation_lo ||
           entry->generation_hi != meta->generation_hi)
-        nm->completion_stale_generation++;
+        nfqueue_live_counter_inc (&nm->completion_stale_generation);
       return;
     }
 
   if ((meta->flags & NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED) != 0)
     {
       nm->completion_duplicate++;
-      nm->completion_duplicate_attempts++;
+      nfqueue_live_counter_inc (&nm->completion_duplicate_attempts);
       nfqueue_live_drop_completion_ref (nm, entry->buffer_index, meta, entry);
       return;
     }
@@ -3439,6 +3439,20 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u64 completion_credit_residue =
     completion_credit_acquired >= completion_credit_released ?
       completion_credit_acquired - completion_credit_released : 0;
+  u64 completion_outcome_succeeded =
+    nfqueue_live_counter_load (&nm->completion_outcome_succeeded);
+  u64 completion_outcome_failed_definite =
+    nfqueue_live_counter_load (&nm->completion_outcome_failed_definite);
+  u64 completion_outcome_unknown =
+    nfqueue_live_counter_load (&nm->completion_outcome_unknown);
+  u64 completion_duplicate_attempts =
+    nfqueue_live_counter_load (&nm->completion_duplicate_attempts);
+  u64 completion_stale_generation =
+    nfqueue_live_counter_load (&nm->completion_stale_generation);
+  u64 completion_debt_raised =
+    nfqueue_live_counter_load (&nm->completion_debt_raised);
+  u64 completion_debt_settled =
+    nfqueue_live_counter_load (&nm->completion_debt_settled);
   for (u32 i = 0; i < nm->lane_count; i++)
     {
       enabled_lanes += nm->lanes[i].enabled != 0;
@@ -3691,12 +3705,12 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->verdict_attempts,
                    (unsigned long long) nm->verdict_send_success,
                    (unsigned long long) nm->verdict_send_failures,
-                   (unsigned long long) nm->completion_outcome_unknown);
+                   (unsigned long long) completion_outcome_unknown);
   vlib_cli_output (vm, "physical-verdict-attempts %llu completion-outcome-succeeded %llu completion-outcome-failed-definite %llu completion-outcome-unknown %llu",
                    (unsigned long long) nm->verdict_attempts,
-                   (unsigned long long) nm->completion_outcome_succeeded,
-                   (unsigned long long) nm->completion_outcome_failed_definite,
-                   (unsigned long long) nm->completion_outcome_unknown);
+                   (unsigned long long) completion_outcome_succeeded,
+                   (unsigned long long) completion_outcome_failed_definite,
+                   (unsigned long long) completion_outcome_unknown);
   vlib_cli_output (vm, "native-verdict-calls %llu verdict-definite-rejections %llu verdict-ambiguous-results %llu",
                    (unsigned long long) nm->native_verdict_calls,
                    (unsigned long long) nm->verdict_definite_rejections,
@@ -3710,10 +3724,10 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "last-verdict-errno %u", nm->last_verdict_errno);
   vlib_cli_output (vm, "completion-debt %u completion-debt-raised %llu completion-debt-settled %llu duplicate-attempts %llu stale-generation-completions %llu",
                    __atomic_load_n (&nm->completion_debt, __ATOMIC_ACQUIRE),
-                   (unsigned long long) nm->completion_debt_raised,
-                   (unsigned long long) nm->completion_debt_settled,
-                   (unsigned long long) nm->completion_duplicate_attempts,
-                   (unsigned long long) nm->completion_stale_generation);
+                   (unsigned long long) completion_debt_raised,
+                   (unsigned long long) completion_debt_settled,
+                   (unsigned long long) completion_duplicate_attempts,
+                   (unsigned long long) completion_stale_generation);
   vlib_cli_output (vm, "retry-attempts %llu worker-reentries %llu policy-re-evaluations %llu replacement-payloads %llu terminal-intent-rewrites %llu policy-verdict-rewrites %llu",
                    (unsigned long long) nm->retry_attempts,
                    (unsigned long long) nm->worker_reentries,
