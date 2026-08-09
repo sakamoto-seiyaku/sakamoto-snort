@@ -35,6 +35,21 @@ grep -q '__atomic_fetch_add (&nm->outstanding' "$SOURCE"
 grep -q '__atomic_fetch_sub (&nm->outstanding' "$SOURCE"
 grep -q 'NFQUEUE_LIVE_PACKET_COPY_PATHS 0u' "$SOURCE"
 grep -q 'NFQUEUE_LIVE_FULL_PACKET_MEMCPY_PATHS 0u' "$SOURCE"
+grep -q 'nfqueue_live_measure_envelope' "$SOURCE"
+grep -q 'nfqueue_live_envelope_recover_packet_ids' "$PLUGIN_DIR/nfqueue_live_envelope.h"
+grep -q 'nfqueue_live_reject_envelope_messages' "$SOURCE"
+grep -q 'NFQUEUE_LIVE_ENVELOPE_MULTI' "$PLUGIN_DIR/nfqueue_live_envelope.h"
+grep -q 'envelope_rejected_messages' "$SOURCE"
+grep -q 'envelope_recovery_attempts' "$SOURCE"
+grep -q 'envelope_recoveries' "$SOURCE"
+
+preflight_line="$(rg -n 'envelope_status = nfqueue_live_measure_envelope' "$SOURCE" | cut -d: -f1)"
+handle_line="$(rg -n 'handled = nfq_handle_packet' "$SOURCE" | cut -d: -f1)"
+if [ -z "$preflight_line" ] || [ -z "$handle_line" ] ||
+   [ "$preflight_line" -ge "$handle_line" ]; then
+  echo "netlink envelope preflight must precede nfq_handle_packet" >&2
+  exit 1
+fi
 
 if rg -n 'verdict_settled' "$PLUGIN_DIR"; then
   echo "datagram-global verdict settlement flag remains in S73 plugin" >&2

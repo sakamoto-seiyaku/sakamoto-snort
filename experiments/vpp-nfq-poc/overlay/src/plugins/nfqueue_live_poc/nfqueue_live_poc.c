@@ -29,6 +29,7 @@
 #include <unistd.h>
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
+#include <nfqueue_live_poc/nfqueue_live_envelope.h>
 
 #define NFQUEUE_LIVE_RING_CAPACITY 128u
 #define NFQUEUE_LIVE_MAX_OUTSTANDING (NFQUEUE_LIVE_RING_CAPACITY - 1u)
@@ -247,40 +248,8 @@ nfqueue_live_wake_completion (nfqueue_live_main_t *nm)
 static u8
 nfqueue_live_recover_packet_id (const u8 *base, u32 length, u32 *packet_id)
 {
-  const struct nlmsghdr *nlh;
-  u32 message_length;
-  u32 offset;
-
-  if (!base || !packet_id || length < NLMSG_HDRLEN + sizeof (struct nfgenmsg))
-    return 0;
-  nlh = (const struct nlmsghdr *) base;
-  if (nlh->nlmsg_len < NLMSG_HDRLEN + sizeof (struct nfgenmsg))
-    return 0;
-  message_length = clib_min ((u32) nlh->nlmsg_len, length);
-  offset = NLMSG_HDRLEN + NLMSG_ALIGN (sizeof (struct nfgenmsg));
-  while (offset + NLA_HDRLEN <= message_length)
-    {
-      const struct nlattr *attr = (const struct nlattr *) (base + offset);
-      u32 attr_length = attr->nla_len;
-      u32 aligned_length;
-
-      if (attr_length < NLA_HDRLEN ||
-          offset + attr_length > message_length)
-        break;
-      aligned_length = NLA_ALIGN (attr_length);
-      if ((attr->nla_type & NLA_TYPE_MASK) == NFQA_PACKET_HDR &&
-          attr_length >= NLA_HDRLEN + sizeof (struct nfqnl_msg_packet_hdr))
-        {
-          const struct nfqnl_msg_packet_hdr *header =
-            (const struct nfqnl_msg_packet_hdr *) (base + offset + NLA_HDRLEN);
-          *packet_id = ntohl (header->packet_id);
-          return 1;
-        }
-      if (aligned_length == 0 || offset + aligned_length > message_length)
-        break;
-      offset += aligned_length;
-    }
-  return 0;
+  return nfqueue_live_envelope_recover_first_packet_id (
+    base, length, packet_id);
 }
 
 static void
@@ -494,7 +463,74 @@ static void
 nfqueue_live_direct_accept (nfqueue_live_main_t *nm,
                             struct nfq_q_handle *queue, u32 packet_id)
 {
+  nm->message_rejections++;
   nfqueue_live_send_verdict (nm, queue, packet_id, NFQUEUE_LIVE_ACCEPT);
+}
+
+static void
+nfqueue_live_record_envelope (nfqueue_live_main_t *nm,
+                              const nfqueue_live_envelope_t *envelope)
+{
+  nm->envelope_message_count += envelope->message_count;
+  nm->envelope_valid_message_count += envelope->valid_message_count;
+  nm->envelope_recoverable_message_count +=
+    envelope->recoverable_message_count;
+  nm->envelope_netlink_header_bytes += envelope->netlink_header_bytes;
+  nm->envelope_attribute_bytes += envelope->attribute_bytes;
+  nm->envelope_attribute_aligned_bytes +=
+    envelope->attribute_aligned_bytes;
+  nm->envelope_payload_offset = envelope->first_payload_offset;
+  nm->envelope_usable_l3_bytes = envelope->usable_l3_bytes;
+  nm->envelope_parsed_bytes = envelope->parsed_bytes;
+  if (envelope->complete)
+    {
+      nm->envelope_boundary_passes++;
+      if (envelope->parsed_bytes == envelope->data_capacity)
+        nm->envelope_exact_boundary_passes++;
+    }
+}
+
+/* Reject every recoverable identity in a datagram without calling
+ * nfq_handle_packet. This is the only safe operation for a multi-message,
+ * oversize, or malformed datagram: one received VPP buffer cannot carry
+ * independent payload obligations without copying bytes. */
+typedef struct
+{
+  nfqueue_live_main_t *nm;
+  struct nfq_q_handle *queue;
+  u32 recovered;
+  u32 seen_count;
+  u32 seen_packet_ids[512];
+} nfqueue_live_envelope_reject_context_t;
+
+static void
+nfqueue_live_reject_envelope_packet_id (void *opaque, uint32_t packet_id)
+{
+  nfqueue_live_envelope_reject_context_t *context =
+    (nfqueue_live_envelope_reject_context_t *) opaque;
+  for (u32 i = 0; i < context->seen_count; i++)
+    if (context->seen_packet_ids[i] == packet_id)
+      return;
+  if (context->seen_count <
+      sizeof (context->seen_packet_ids) / sizeof (context->seen_packet_ids[0]))
+    context->seen_packet_ids[context->seen_count++] = packet_id;
+  nfqueue_live_direct_accept (context->nm, context->queue, packet_id);
+  context->nm->envelope_rejected_messages++;
+  context->recovered++;
+}
+
+static u32
+nfqueue_live_reject_envelope_messages (nfqueue_live_main_t *nm,
+                                       struct nfq_q_handle *queue,
+                                       const u8 *base, u32 captured_bytes)
+{
+  nfqueue_live_envelope_reject_context_t context = {
+    .nm = nm,
+    .queue = queue,
+  };
+  (void) nfqueue_live_envelope_recover_packet_ids (
+    base, captured_bytes, nfqueue_live_reject_envelope_packet_id, &context);
+  return context.recovered;
 }
 
 static u32
@@ -627,6 +663,9 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
   u32 capacity;
   int received;
   nfqueue_live_datagram_t datagram;
+  nfqueue_live_envelope_t envelope;
+  int envelope_status;
+  u32 rejected_messages;
   int handled;
 
   if (nm->quiescing)
@@ -657,6 +696,30 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
           continue;
         }
       nm->live_buffer_receives++;
+      nm->datagrams++;
+      if (received > (int) capacity)
+        nm->truncated_datagrams++;
+      envelope_status = nfqueue_live_measure_envelope (
+        base, (u32) received, capacity, &envelope);
+      nfqueue_live_record_envelope (nm, &envelope);
+      if (envelope.multi_message)
+        nm->multiple_message_datagrams++;
+      buffer->current_length = clib_min ((u32) received, capacity);
+      if (envelope_status != NFQUEUE_LIVE_ENVELOPE_COMPLETE)
+        {
+          if (envelope_status == NFQUEUE_LIVE_ENVELOPE_OVERSIZE)
+            nm->envelope_oversize_rejects++;
+          else
+            nm->envelope_malformed_rejects++;
+          nm->envelope_recovery_attempts++;
+          rejected_messages = nfqueue_live_reject_envelope_messages (
+            nm, nm->queue, base, clib_min ((u32) received, capacity));
+          nm->envelope_recoveries += rejected_messages;
+          if (rejected_messages == 0)
+            nm->identity_unrecoverable++;
+          nfqueue_live_free_unowned (nm, buffer_index);
+          continue;
+        }
       datagram.nm = nm;
       datagram.buffer_index = buffer_index;
       datagram.base = base;
@@ -668,11 +731,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
       datagram.truncated = received > (int) capacity;
       datagram.candidate = 0;
       datagram.metadata_initialized = 0;
-      if (datagram.truncated)
-        nm->truncated_datagrams++;
       nm->active_datagram = &datagram;
-      buffer->current_length = datagram.parse_length;
-      nm->datagrams++;
       handled = nfq_handle_packet (nm->handle, (char *) base,
                                    (int) datagram.parse_length);
       nm->active_datagram = 0;
@@ -721,6 +780,7 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
           else
             {
               nfqueue_live_outstanding_inc (nm);
+              nm->message_obligations++;
               nfqueue_live_record_last (nm, meta, buffer_index, base);
               vlib_process_signal_event (
                 nm->vm, nfqueue_live_ingress_process_node.index, 0, 0);
@@ -1237,6 +1297,27 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->callbacks,
                    (unsigned long long) nm->multiple_message_datagrams,
                    (unsigned long long) nm->multiple_message_rejects);
+  vlib_cli_output (vm, "envelope-messages %llu valid-messages %llu recoverable-messages %llu rejected-messages %llu",
+                   (unsigned long long) nm->envelope_message_count,
+                   (unsigned long long) nm->envelope_valid_message_count,
+                   (unsigned long long) nm->envelope_recoverable_message_count,
+                   (unsigned long long) nm->envelope_rejected_messages);
+  vlib_cli_output (vm, "envelope-recovery-attempts %llu recoveries %llu",
+                   (unsigned long long) nm->envelope_recovery_attempts,
+                   (unsigned long long) nm->envelope_recoveries);
+  vlib_cli_output (vm, "envelope-netlink-header-bytes %llu attribute-bytes %llu attribute-aligned-bytes %llu",
+                   (unsigned long long) nm->envelope_netlink_header_bytes,
+                   (unsigned long long) nm->envelope_attribute_bytes,
+                   (unsigned long long) nm->envelope_attribute_aligned_bytes);
+  vlib_cli_output (vm, "envelope-payload-offset %llu usable-l3-envelope %llu parsed-bytes %llu",
+                   (unsigned long long) nm->envelope_payload_offset,
+                   (unsigned long long) nm->envelope_usable_l3_bytes,
+                   (unsigned long long) nm->envelope_parsed_bytes);
+  vlib_cli_output (vm, "envelope-boundary-passes %llu exact-boundary-passes %llu oversize-rejects %llu malformed-rejects %llu",
+                   (unsigned long long) nm->envelope_boundary_passes,
+                   (unsigned long long) nm->envelope_exact_boundary_passes,
+                   (unsigned long long) nm->envelope_oversize_rejects,
+                   (unsigned long long) nm->envelope_malformed_rejects);
   vlib_cli_output (vm, "live-buffer-receives %llu inline-metadata-writes %llu payload-pointer-projections %llu",
                    (unsigned long long) nm->live_buffer_receives,
                    (unsigned long long) nm->inline_metadata_writes,
@@ -1282,6 +1363,11 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->native_buffer_returns,
                    nfqueue_live_outstanding_load (nm),
                    (unsigned long long) nm->ingress_alloc_failures);
+  vlib_cli_output (vm, "ledger-message-obligations %llu message-rejections %llu copy-count %u residue-obligations %u",
+                   (unsigned long long) nm->message_obligations,
+                   (unsigned long long) nm->message_rejections,
+                   NFQUEUE_LIVE_PACKET_COPY_PATHS,
+                   nfqueue_live_outstanding_load (nm));
   return 0;
 }
 
