@@ -133,7 +133,17 @@ generation_case (void)
     ledger.verdict_attempts++;
   if (nfqueue_live_teardown_generation_allowed (state, 2, 2))
     ledger.duplicate_requests++;
-  ledger.accepts_on_deadline++;
+  ok &= expect (nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_QUIESCE),
+                "fresh generation quiesce");
+  ok &= expect (nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_DRAIN),
+                "fresh generation drain");
+  ok &= expect (nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_DRAIN_DEADLINE),
+                "fresh generation deadline");
+  if (nfqueue_live_teardown_completion_generation_allowed (state, 2, 2))
+    ledger.accepts_on_deadline++;
   ok &= expect (ledger.verdict_attempts == 1,
                 "fresh generation has one physical attempt");
   ok &= expect (ledger.old_generation_requests == 1,
@@ -146,7 +156,7 @@ generation_case (void)
                 "ordinary deadline obligation accepts");
   ok &= expect (nfqueue_live_teardown_completion_generation_allowed (
                   state, 2, 2),
-                "fresh generation completion is admitted while active");
+                "fresh generation completion is admitted at deadline");
   ok &= expect (!nfqueue_live_teardown_completion_generation_allowed (
                   state, 2, 1),
                 "old generation completion is isolated");
