@@ -33,6 +33,11 @@ printf '%s\n' "$reserve_body" | rg -q 'nfqueue_live_recover_packet_id'
 printf '%s\n' "$reserve_body" | rg -q 'NFQUEUE_LIVE_ACCEPT'
 printf '%s\n' "$reserve_body" | rg -q 'nfqueue_live_reserve_return \(nm, lane, buffer_index, 1\)'
 
+# Keep the checked-in host runners parseable alongside the source seam.  This
+# catches matrix/scenario edits before a namespace is needed.
+bash -n "$SCRIPT_DIR/run-nfqueue-live-poc-s78.sh" \
+  "$SCRIPT_DIR/run-nfqueue-live-poc-s78-matrix.sh"
+
 cc -std=c11 -Wall -Wextra -Werror -O2 "$TEST_SOURCE" \
   -o "$BUILD_DIR/nfqueue_live_s78_reserve_test"
 "$BUILD_DIR/nfqueue_live_s78_reserve_test"
