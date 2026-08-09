@@ -1529,7 +1529,7 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
         nm->completion_stale_generation++;
       if (nfqueue_live_completion_identity_matches (meta, entry) &&
           nfqueue_live_completion_ref_count (meta) != 0 &&
-          nfqueue_live_state (meta) >= NFQUEUE_LIVE_STATE_COMPLETION)
+          nfqueue_live_state (meta) != NFQUEUE_LIVE_STATE_RETURNED)
         (void) nfqueue_live_publish_late_return (nm, entry->buffer_index, meta);
       else
         nfqueue_live_counter_inc (&nm->teardown_late_completion);
