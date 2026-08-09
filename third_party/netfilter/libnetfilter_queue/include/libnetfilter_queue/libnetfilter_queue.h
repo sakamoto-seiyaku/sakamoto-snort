@@ -122,6 +122,12 @@ extern struct nfqnl_msg_packet_hw *nfq_get_packet_hw(struct nfq_data *nfad);
 /* return -1 if problem, length otherwise */
 extern int nfq_get_payload(struct nfq_data *nfad, unsigned char **data);
 
+/* Return the original packet length carried by NFQA_CAP_LEN.  Unlike the
+ * payload length, this is the length reported by the kernel before any
+ * userspace capture truncation.  Return 0 on success and -1 when the
+ * attribute is absent or malformed. */
+extern int nfq_get_cap_len(struct nfq_data *nfad, uint32_t *cap_len);
+
 enum {
 	NFQ_XML_HW	= (1 << 0),
 	NFQ_XML_MARK	= (1 << 1),

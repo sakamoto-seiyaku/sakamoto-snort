@@ -1331,6 +1331,20 @@ int nfq_get_payload(struct nfq_data *nfad, unsigned char **data)
 	return -1;
 }
 
+EXPORT_SYMBOL
+int nfq_get_cap_len(struct nfq_data *nfad, uint32_t *cap_len)
+{
+	uint32_t value;
+
+	if (!cap_len || !nfnl_attr_present(nfad->data, NFQA_CAP_LEN) ||
+	    NFA_PAYLOAD(nfad->data[NFQA_CAP_LEN - 1]) < sizeof(value))
+		return -1;
+
+	value = nfnl_get_data(nfad->data, NFQA_CAP_LEN, uint32_t);
+	*cap_len = ntohl(value);
+	return 0;
+}
+
 /**
  * @}
  */

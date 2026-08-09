@@ -63,18 +63,32 @@ rm -f "$RUNTIME_ROOT/cli.sock" "$RUNTIME_ROOT/vpp.log" \
 
 vpp_pid=""
 cleanup() {
-  if [ -S "$RUNTIME_ROOT/cli.sock" ]; then
-    "$VPPCTL_BIN" -s "$RUNTIME_ROOT/cli.sock" nfqueue-live-poc disable \
-      >/dev/null 2>&1 || true
+  local status="$?"
+  local cleanup_error=0
+  if [ -S "$RUNTIME_ROOT/cli.sock" ] &&
+     ! "$VPPCTL_BIN" -s "$RUNTIME_ROOT/cli.sock" nfqueue-live-poc disable \
+       >"$EVIDENCE_DIR/cleanup-disable.log" 2>&1; then
+    echo "S73 cleanup: nfqueue-live-poc disable failed; see $EVIDENCE_DIR/cleanup-disable.log" >&2
+    cleanup_error=1
   fi
   if [ -n "$vpp_pid" ] && kill -0 "$vpp_pid" >/dev/null 2>&1; then
-    kill -TERM "$vpp_pid" >/dev/null 2>&1 || true
+    if ! kill -TERM "$vpp_pid" >/dev/null 2>&1; then
+      echo "S73 cleanup: failed to terminate VPP pid $vpp_pid" >&2
+      cleanup_error=1
+    fi
     wait "$vpp_pid" >/dev/null 2>&1 || true
   fi
-  S73_LOCAL_DUMMY="$S73_LOCAL_DUMMY" IP_FAMILY="$IP_FAMILY" \
-    PEER_IP="$PEER_IP" QUEUE_NUM="$QUEUE_NUM" \
-    "$SCRIPT_DIR/setup-netns.sh" down \
-    >/dev/null 2>&1 || true
+  if ! S73_LOCAL_DUMMY="$S73_LOCAL_DUMMY" IP_FAMILY="$IP_FAMILY" \
+      PEER_IP="$PEER_IP" QUEUE_NUM="$QUEUE_NUM" \
+      "$SCRIPT_DIR/setup-netns.sh" down \
+      >"$EVIDENCE_DIR/cleanup-netns.log" 2>&1; then
+    echo "S73 cleanup: network teardown failed; see $EVIDENCE_DIR/cleanup-netns.log" >&2
+    cleanup_error=1
+  fi
+  if [ "$cleanup_error" -ne 0 ] && [ "$status" -eq 0 ]; then
+    status=1
+  fi
+  return "$status"
 }
 trap cleanup EXIT
 
@@ -145,6 +159,10 @@ require_zero() {
 }
 require_stat datagrams 1
 require_stat callbacks 1
+require_stat live-buffer-receives 1
+require_stat inline-metadata-writes 1
+require_stat payload-pointer-projections 1
+require_stat original-length 1
 require_stat handoffs 1
 require_stat owner-mismatches 1
 require_stat verdict-attempts 1
@@ -158,5 +176,6 @@ require_zero full-packet-memcpy
 require_zero per-packet-heap-objects
 require_zero outstanding-obligations
 require_zero payload-span-failures
+require_zero ring-overflow
 echo "S73 runtime acceptance: PASS"
 echo "raw evidence: $EVIDENCE_DIR/run.log $EVIDENCE_DIR/show-before-disable.txt $EVIDENCE_DIR/show-after-disable.txt"

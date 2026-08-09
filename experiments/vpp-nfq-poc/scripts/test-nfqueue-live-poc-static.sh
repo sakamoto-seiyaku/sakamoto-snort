@@ -16,6 +16,21 @@ grep -q 'nfq_set_verdict' "$SOURCE"
 grep -q 'vlib_buffer_free_one' "$SOURCE"
 grep -q 'NFQUEUE_LIVE_FLAG_PAYLOAD_IN_SPAN' "$SOURCE"
 grep -q 'completion_refs' "$SOURCE"
+grep -q 'obligation_nonce' "$SOURCE"
+grep -q 'nfqueue_live_completion_identity_matches' "$SOURCE"
+grep -q 'nfq_get_cap_len' "$SOURCE"
+grep -q 'live_buffer_receives++' "$SOURCE"
+grep -q 'inline_metadata_writes++' "$SOURCE"
+grep -q 'payload_pointer_projections++' "$SOURCE"
+grep -q 'nfqueue_live_settle_fail_open' "$SOURCE"
+grep -q 'nfqueue_live_drain_bounded' "$SOURCE"
+grep -q 'NFQUEUE_LIVE_PACKET_COPY_PATHS 0u' "$SOURCE"
+grep -q 'NFQUEUE_LIVE_FULL_PACKET_MEMCPY_PATHS 0u' "$SOURCE"
+if rg -n 'nfqueue_live_ipv[46]_original_length|meta->(captured_length|origin_lane)' \
+  "$PLUGIN_DIR"; then
+  echo "original length or lane identity derived from forbidden adapter-local state" >&2
+  exit 1
+fi
 
 if rg -n '\b(rx_buf|std::vector|malloc|calloc|realloc|memcpy|clib_memcpy)\s*\(' \
   "$PLUGIN_DIR"; then
