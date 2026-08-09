@@ -2389,7 +2389,6 @@ VLIB_NODE_FN (nfqueue_live_ingress_process_node) (vlib_main_t *vm,
            * quiesce edge.  Existing ingress tokens are completed by the
            * origin lane while the completion channel is still open. */
           nfqueue_live_drain_ingress_queue (nm);
-          nfqueue_live_drain_held_obligation (nm);
           continue;
         }
       count = 0;
@@ -3099,6 +3098,15 @@ nfqueue_live_disable (void)
       for (u32 i = 0; i < nm->lane_count; i++)
         if (nm->lanes[i].netlink_file_index != ~0)
           {
+            /* Removing readiness is the quiesce edge, not socket teardown.
+             * clib_file_del closes descriptors unless the registration is
+             * explicitly made non-owning; keep each NFQUEUE handle alive so
+             * the bounded drain can still issue identity-completable ACCEPTs.
+             */
+            clib_file_t *file = clib_file_get (
+              &file_main, nm->lanes[i].netlink_file_index);
+            if (file)
+              file->dont_close = 1;
             clib_file_del_by_index (&file_main,
                                     nm->lanes[i].netlink_file_index);
             nm->lanes[i].netlink_file_index = ~0;
@@ -3421,8 +3429,28 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     nm->last_device_direction == NFQUEUE_LIVE_DIRECTION_OUTPUT ? "OUTPUT" :
       "INPUT";
   u32 enabled_lanes = 0;
+  u32 open_queues = 0;
+  u32 open_handles = 0;
+  int resource_netlink_fd = nm->netlink_fd;
+  u64 completion_credit_acquired =
+    nfqueue_live_counter_load (&nm->completion_credit_acquired);
+  u64 completion_credit_released =
+    nfqueue_live_counter_load (&nm->completion_credit_released);
+  u64 completion_credit_residue =
+    completion_credit_acquired >= completion_credit_released ?
+      completion_credit_acquired - completion_credit_released : 0;
   for (u32 i = 0; i < nm->lane_count; i++)
-    enabled_lanes += nm->lanes[i].enabled != 0;
+    {
+      enabled_lanes += nm->lanes[i].enabled != 0;
+      open_queues += nm->lanes[i].queue != 0;
+      open_handles += nm->lanes[i].handle != 0;
+      if (resource_netlink_fd < 0 && nm->lanes[i].netlink_fd >= 0)
+        resource_netlink_fd = nm->lanes[i].netlink_fd;
+    }
+  if (open_queues == 0 && nm->queue != 0)
+    open_queues = 1;
+  if (open_handles == 0 && nm->handle != 0)
+    open_handles = 1;
   (void) input;
   (void) cmd;
   vlib_cli_output (vm, "enabled %u family ip%u queue %u generation %llu",
@@ -3470,7 +3498,7 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (
     vm,
     "teardown-resources netlink-fd %d completion-fd %d queue-open %u handle-open %u enabled-lanes %u",
-    nm->netlink_fd, nm->completion_fd, nm->queue != 0, nm->handle != 0,
+    resource_netlink_fd, nm->completion_fd, open_queues, open_handles,
     enabled_lanes);
   vlib_cli_output (vm, "held-obligation %u held-buffer-index %u",
                    __atomic_load_n (&nm->held_obligation, __ATOMIC_ACQUIRE),
@@ -3604,16 +3632,14 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                      &nm->owner_terminal_intents),
                    (unsigned long long) nfqueue_live_counter_load (
                      &nm->ingress_queue_full));
-  vlib_cli_output (vm, "completion-credit-capacity %u completion-credit-acquired %llu completion-credit-released %llu completion-credit-exhausted %llu completion-credits-held %u residue-completion-credits %u",
+  vlib_cli_output (vm, "completion-credit-capacity %u completion-credit-acquired %llu completion-credit-released %llu completion-credit-exhausted %llu completion-credits-held %u residue-completion-credits %llu",
                    nm->completion_credit_capacity,
-                   (unsigned long long) nfqueue_live_counter_load (
-                     &nm->completion_credit_acquired),
-                   (unsigned long long) nfqueue_live_counter_load (
-                     &nm->completion_credit_released),
+                   (unsigned long long) completion_credit_acquired,
+                   (unsigned long long) completion_credit_released,
                    (unsigned long long) nfqueue_live_counter_load (
                      &nm->completion_credit_exhausted),
                    __atomic_load_n (&nm->completion_credits_held, __ATOMIC_ACQUIRE),
-                   __atomic_load_n (&nm->completion_credits_held, __ATOMIC_ACQUIRE));
+                   (unsigned long long) completion_credit_residue);
   vlib_cli_output (vm, "identity-proof-checks %llu identity-proof-matches %llu identity-proof-failures %llu",
                    (unsigned long long) nfqueue_live_counter_load (
                      &nm->identity_proof_checks),
@@ -3681,6 +3707,7 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    nfqueue_live_outcome_name ((nfqueue_live_completion_outcome_t) nm->last_verdict_outcome),
                    (unsigned long long) nm->verdict_identity_mismatches,
                    (unsigned long long) nm->verdict_fault_injections);
+  vlib_cli_output (vm, "last-verdict-errno %u", nm->last_verdict_errno);
   vlib_cli_output (vm, "completion-debt %u completion-debt-raised %llu completion-debt-settled %llu duplicate-attempts %llu stale-generation-completions %llu",
                    __atomic_load_n (&nm->completion_debt, __ATOMIC_ACQUIRE),
                    (unsigned long long) nm->completion_debt_raised,

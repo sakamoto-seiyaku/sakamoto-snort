@@ -241,8 +241,13 @@ assert_closed_ledger() {
   frames="$(counter_value completion-frames)"
   stale="$(counter_value stale)"
   duplicate="$(counter_value duplicate)"
-  [ "$((stale + duplicate + physical))" -eq "${frames:-0}" ] || {
-    echo "S79 completion partition mismatch: frames=$frames physical=$physical stale=$stale duplicate=$duplicate" >&2
+  origin_settlements="$(( $(value_for "$file" teardown-drain-accepts) +
+    $(value_for "$file" teardown-deadline-accepts) +
+    $(value_for "$file" teardown-deadline-failed-definite) +
+    $(value_for "$file" teardown-deadline-unknown) +
+    $(value_for "$file" teardown-identity-unrecoverable) ))"
+  [ "$((stale + duplicate + physical - origin_settlements))" -eq "${frames:-0}" ] || {
+    echo "S79 completion partition mismatch: frames=$frames physical=$physical origin-settlements=$origin_settlements stale=$stale duplicate=$duplicate" >&2
     exit 1
   }
 }
@@ -399,13 +404,14 @@ case_process_termination() {
     echo "obligations-before=$obligations_before"
     echo "completion-debt-before=$debt_before"
     echo "completion-credits-held-before=$credits_before"
+    echo "buffers-before=$held_before"
     echo "held-obligation-before=$held_before"
     echo "held-buffer-index-before=$held_index_before"
     echo "completion-frames-before=$frames_before"
     echo "netlink-fd-before=$netlink_fd_before"
     echo "completion-fd-before=$completion_fd_before"
-    echo "queue-open-before=$queue_open_before"
-    echo "handle-open-before=$handle_open_before"
+    echo "queue-count-before=$queue_open_before"
+    echo "handle-count-before=$handle_open_before"
     echo "enabled-lanes-before=$enabled_lanes_before"
     echo "hooks-before=PRESENT"
     echo "log=$RUNTIME_ROOT/vpp.stdout.log"
