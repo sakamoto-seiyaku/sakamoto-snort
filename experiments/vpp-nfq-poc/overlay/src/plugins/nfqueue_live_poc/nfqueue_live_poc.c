@@ -6,9 +6,11 @@
  * The netlink datagram is received straight into the VPP buffer's current
  * data span. libnetfilter_queue only projects pointers into that datagram;
  * the payload is never copied by this plugin. A worker frame queue moves the
- * buffer index. A fixed completion frame moves the index and generation back
- * to the origin lane, which alone calls nfq_set_verdict and then returns the
- * same buffer through vlib_buffer_free_one().
+ * buffer index. A fixed completion frame moves the index and full identity back
+ * to the origin lane, which calls nfq_set_verdict and then returns the same
+ * buffer through vlib_buffer_free_one(). Only bounded transport-fault paths
+ * use the producer's direct fail-open settlement when no completion frame can
+ * be published.
  */
 
 #include <nfqueue_live_poc/nfqueue_live_poc.h>

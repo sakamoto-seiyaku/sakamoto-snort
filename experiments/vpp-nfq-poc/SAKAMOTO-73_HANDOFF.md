@@ -5,7 +5,9 @@ does not claim completion of S74--S81 (in particular, it is not evidence for
 S74--S77). The plugin receives one NFQUEUE netlink datagram directly into a VPP
 buffer's current data span, keeps the packet obligation in the fixed
 `vlib_buffer_t.opaque` area, hands the buffer index to worker 1, and sends one
-verdict plus one native `vlib_buffer_free_one()` return on the origin lane.
+verdict plus one native `vlib_buffer_free_one()` return on the origin lane in
+the proven path. A bounded transport-fault fail-open may settle directly on
+the producer when publishing a completion is impossible.
 The inline identity is `(generation, original NFQUEUE packet_id,
 obligation_nonce)`; completion rings transport that identity and inline
 reference tokens only. They are fixed transport rings, not a side lease table.
