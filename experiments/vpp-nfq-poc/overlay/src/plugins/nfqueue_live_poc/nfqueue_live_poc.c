@@ -33,7 +33,9 @@
 
 #define NFQUEUE_LIVE_RING_CAPACITY 128u
 #define NFQUEUE_LIVE_MAX_OUTSTANDING (NFQUEUE_LIVE_RING_CAPACITY - 1u)
+#define NFQUEUE_LIVE_DEFAULT_NORMAL_CAPACITY NFQUEUE_LIVE_MAX_OUTSTANDING
 #define NFQUEUE_LIVE_ACCEPT NF_ACCEPT
+#define NFQUEUE_LIVE_LOSS NF_DROP
 #define NFQUEUE_LIVE_FLAG_UID_KNOWN (1u << 0)
 #define NFQUEUE_LIVE_FLAG_PAYLOAD_IN_SPAN (1u << 1)
 #define NFQUEUE_LIVE_FLAG_STATE_SHIFT 2
@@ -130,6 +132,21 @@ typedef struct
   u8 ingress_identity_missing;
 } nfqueue_live_datagram_t;
 
+/* Reserve materialization is deliberately a separate ingress seam.  It reads
+ * one already-admitted VPP buffer directly and only recovers NFQUEUE envelope
+ * identity; it never calls nfq_handle_packet or enters the worker graph. */
+typedef struct
+{
+  nfqueue_live_main_t *nm;
+  nfqueue_live_lane_t *lane;
+  u32 buffer_index;
+  u8 *base;
+  u32 datagram_length;
+  u32 parse_length;
+  u32 received;
+  nfqueue_live_envelope_t envelope;
+} nfqueue_live_reserve_datagram_t;
+
 nfqueue_live_main_t nfqueue_live_main = {
   .netlink_fd = -1,
   .completion_fd = -1,
@@ -140,6 +157,10 @@ nfqueue_live_main_t nfqueue_live_main = {
 
 extern vlib_node_registration_t nfqueue_live_ingress_process_node;
 extern vlib_node_registration_t nfqueue_live_owner_node;
+
+static u8 nfqueue_live_recover_packet_id (const u8 *base, u32 length,
+                                          u32 *packet_id);
+static u32 nfqueue_live_next_obligation_nonce (nfqueue_live_main_t *nm);
 
 static_always_inline nfqueue_live_meta_t *
 nfqueue_live_meta (vlib_buffer_t *b)
@@ -305,6 +326,81 @@ nfqueue_live_outstanding_dec (nfqueue_live_main_t *nm)
   previous = __atomic_fetch_sub (&nm->completion_debt, 1, __ATOMIC_ACQ_REL);
   ASSERT (previous != 0);
   nfqueue_live_counter_inc (&nm->completion_debt_settled);
+}
+
+static_always_inline u8
+nfqueue_live_normal_capacity_exhausted (const nfqueue_live_main_t *nm)
+{
+  return nm->inject_normal_capacity_exhaustion ||
+         nm->normal_capacity == 0 ||
+         nm->normal_outstanding >= nm->normal_capacity;
+}
+
+static u8
+nfqueue_live_reserve_take (nfqueue_live_main_t *nm,
+                           nfqueue_live_lane_t *lane, u32 *buffer_index)
+{
+  if (!lane || lane->reserve_available == 0)
+    return 0;
+  /* The reader for a lane is its sole owner.  No lock or wait is permitted;
+   * a missing entry is an explicit capacity loss. */
+  lane->reserve_available--;
+  *buffer_index = lane->reserve_indices[lane->reserve_available];
+  lane->reserve_indices[lane->reserve_available] = ~0u;
+  lane->reserve_inflight++;
+  u32 used = lane->reserve_capacity - lane->reserve_available;
+  if (used > lane->reserve_peak_occupancy)
+    lane->reserve_peak_occupancy = used;
+  if (lane->reserve_inflight > lane->reserve_peak_inflight)
+    lane->reserve_peak_inflight = lane->reserve_inflight;
+  if (used > nm->reserve_peak_occupancy)
+    nm->reserve_peak_occupancy = used;
+  if (lane->reserve_inflight > nm->reserve_peak_inflight)
+    nm->reserve_peak_inflight = lane->reserve_inflight;
+  nm->reserve_outstanding++;
+  if (nm->reserve_outstanding > nm->reserve_peak_occupancy)
+    nm->reserve_peak_occupancy = nm->reserve_outstanding;
+  return 1;
+}
+
+static void
+nfqueue_live_reserve_return (nfqueue_live_main_t *nm,
+                             nfqueue_live_lane_t *lane, u32 buffer_index,
+                             u8 direct_completion)
+{
+  if (lane && lane->reserve_inflight != 0)
+    lane->reserve_inflight--;
+  if (nm->reserve_outstanding != 0)
+    nm->reserve_outstanding--;
+  nm->reserve_native_returns++;
+  nm->native_buffer_returns++;
+  if (lane)
+    {
+      lane->reserve_native_returns++;
+      lane->native_buffer_returns++;
+    }
+  if (direct_completion)
+    {
+      nm->reserve_direct_native_returns++;
+      if (lane)
+        lane->reserve_direct_native_returns++;
+    }
+  /* This is the native VPP return required by the Root Adapter contract.  The
+   * one-shot POC reserve is intentionally not replenished after return: doing
+   * so would be dynamic reserve growth and would hide exhaustion evidence. */
+  vlib_buffer_free_one (nm->vm, buffer_index);
+}
+
+static u8
+nfqueue_live_reserve_loss_slot_take (nfqueue_live_lane_t *lane,
+                                     u32 *buffer_index)
+{
+  if (!lane || !lane->reserve_loss_index_valid)
+    return 0;
+  *buffer_index = lane->reserve_loss_index;
+  lane->reserve_loss_index = ~0u;
+  lane->reserve_loss_index_valid = 0;
+  return 1;
 }
 
 static_always_inline u8
@@ -733,6 +829,93 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
   return outcome;
 }
 
+static void
+nfqueue_live_reserve_complete (nfqueue_live_main_t *nm,
+                               nfqueue_live_lane_t *lane, u32 buffer_index,
+                               u8 *base, u32 received)
+{
+  vlib_buffer_t *buffer = vlib_get_buffer (nm->vm, buffer_index);
+  nfqueue_live_meta_t *meta = nfqueue_live_meta (buffer);
+  u32 packet_id = 0;
+  u32 inspect_length = clib_min (
+    received, vlib_buffer_get_default_data_size (nm->vm));
+
+  /* Reserve materialization is intentionally narrower than normal ingress:
+   * recover only the original NFQUEUE identity from the already-received
+   * contiguous VPP span.  Do not call the shared envelope parser, NFQUEUE
+   * callback parser, or any worker/policy graph on this bounded fault path. */
+  if (!nfqueue_live_recover_packet_id (base, inspect_length, &packet_id))
+    {
+      /* No completion identity means no Adapter operation can be claimed. */
+      nm->reserve_losses++;
+      nm->reserve_degraded_health++;
+      nm->reserve_loss_unmaterialized++;
+      nm->reserve_loss_identity_misses++;
+      nfqueue_live_reserve_return (nm, lane, buffer_index, 0);
+      return;
+    }
+
+  clib_memset (meta, 0, sizeof (*meta));
+  nfqueue_live_set_generation (meta, lane->generation);
+  meta->packet_id = packet_id;
+  meta->obligation_nonce = nfqueue_live_next_obligation_nonce (nm);
+  meta->datagram_length = (u16) clib_min (received, (u32) 0xffff);
+  meta->hook = lane->hook;
+  meta->origin_lane = lane->origin_lane;
+  meta->ip_version = lane->family;
+  /* Reserve ACCEPT carries identity only.  Payload facts remain unset because
+   * this path deliberately bypasses parser/flow/policy materialization. */
+  meta->payload_offset = 0;
+  meta->payload_length = 0;
+  meta->captured_length = 0;
+  meta->original_length = 0;
+  buffer->current_length = clib_min (
+    received, vlib_buffer_get_default_data_size (nm->vm));
+
+  nm->reserve_direct_obligations++;
+  lane->reserve_direct_obligations++;
+  nfqueue_live_completion_outcome_t outcome = nfqueue_live_send_verdict (
+    nm, lane, lane->generation, packet_id, lane->origin_lane,
+    NFQUEUE_LIVE_ACCEPT);
+  nfqueue_live_record_outcome (nm, meta, outcome);
+  nm->reserve_direct_completions++;
+  lane->reserve_direct_completions++;
+  nfqueue_live_reserve_return (nm, lane, buffer_index, 1);
+}
+
+static void
+nfqueue_live_reserve_loss_complete (nfqueue_live_main_t *nm,
+                                    nfqueue_live_lane_t *lane,
+                                    u32 buffer_index, u8 *base, u32 received)
+{
+  u32 packet_id;
+  u32 inspect_length = clib_min (
+    received, vlib_buffer_get_default_data_size (nm->vm));
+  if (nfqueue_live_recover_packet_id (base, inspect_length, &packet_id))
+    {
+      /* Reserve exhaustion is an infrastructure loss, not a policy DROP and
+       * never a delivery-success claim.  The pre-reserved loss envelope lets
+       * the bounded POC consume one packet and issue an explicit native DROP
+       * without allocating or waiting. */
+      nfqueue_live_completion_outcome_t outcome = nfqueue_live_send_verdict (
+        nm, lane, lane->generation, packet_id, lane->origin_lane,
+        NFQUEUE_LIVE_LOSS);
+      (void) outcome;
+      nm->reserve_loss_native_drops++;
+    }
+  else
+    {
+      nm->reserve_loss_unmaterialized++;
+      nm->reserve_loss_identity_misses++;
+    }
+  nm->reserve_loss_materializations++;
+  nm->reserve_losses++;
+  nm->reserve_degraded_health++;
+  nm->native_buffer_returns++;
+  lane->native_buffer_returns++;
+  vlib_buffer_free_one (nm->vm, buffer_index);
+}
+
 static nfqueue_live_lane_t *
 nfqueue_live_lane_for_meta (nfqueue_live_main_t *nm,
                             const nfqueue_live_meta_t *meta)
@@ -752,6 +935,8 @@ nfqueue_live_return_buffer (nfqueue_live_main_t *nm, u32 buffer_index,
     return;
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_RETURNED);
   nfqueue_live_outstanding_dec (nm);
+  if (nm->normal_outstanding != 0)
+    nm->normal_outstanding--;
   nfqueue_live_completion_credit_release (nm, meta);
   nm->native_buffer_returns++;
   for (u32 i = 0; i < nm->lane_count; i++)
@@ -1209,16 +1394,86 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
   int envelope_status;
   u32 rejected_messages;
   int handled;
+  u8 reserve_path;
+  u8 loss_path;
+  u8 no_buffer_loss;
 
   if (nm->quiescing)
     return 0;
 
   while (1)
     {
-      if (vlib_buffer_alloc (nm->vm, &buffer_index, 1) != 1)
+      reserve_path = 0;
+      loss_path = 0;
+      no_buffer_loss = 0;
+      buffer_index = ~0u;
+      if (nfqueue_live_normal_capacity_exhausted (nm))
+        {
+          nm->normal_capacity_exhaustions++;
+          nm->ingress_overload++;
+          if (nm->reserve_enabled &&
+              nfqueue_live_reserve_take (nm, lane, &buffer_index))
+            reserve_path = 1;
+          else if (nm->reserve_enabled &&
+                   nfqueue_live_reserve_loss_slot_take (lane,
+                                                        &buffer_index))
+            loss_path = 1;
+          else
+            {
+              no_buffer_loss = 1;
+              if (nm->reserve_enabled)
+                {
+                  nm->reserve_exhaustions++;
+                  lane->reserve_exhaustions++;
+                }
+            }
+        }
+      else if (vlib_buffer_alloc (nm->vm, &buffer_index, 1) != 1)
         {
           nm->ingress_alloc_failures++;
-          return 0;
+          nm->normal_capacity_exhaustions++;
+          nm->ingress_overload++;
+          if (nm->reserve_enabled &&
+              nfqueue_live_reserve_take (nm, lane, &buffer_index))
+            reserve_path = 1;
+          else if (nm->reserve_enabled &&
+                   nfqueue_live_reserve_loss_slot_take (lane,
+                                                        &buffer_index))
+            loss_path = 1;
+          else
+            {
+              no_buffer_loss = 1;
+              if (nm->reserve_enabled)
+                {
+                  nm->reserve_exhaustions++;
+                  lane->reserve_exhaustions++;
+                }
+            }
+        }
+      if (loss_path)
+        {
+          nm->reserve_exhaustions++;
+          lane->reserve_exhaustions++;
+        }
+      if (no_buffer_loss)
+        {
+          /* No buffer is available and no identity can be recovered without
+           * materializing bytes.  Consume the nonblocking datagram as an
+           * explicit bounded loss; do not block, allocate scratch storage, or
+           * fabricate ACCEPT/delivery evidence. */
+          ssize_t discarded = recv (lane->netlink_fd, 0, 0,
+                                    MSG_DONTWAIT | MSG_TRUNC);
+          if (discarded < 0 &&
+              (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+            return 0;
+          if (discarded >= 0)
+            {
+              nm->reserve_losses++;
+              nm->reserve_degraded_health++;
+              nm->reserve_loss_unmaterialized++;
+              nm->reserve_loss_identity_misses++;
+            }
+          continue;
         }
       buffer = vlib_get_buffer (nm->vm, buffer_index);
       base = vlib_buffer_get_current (buffer);
@@ -1227,19 +1482,37 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
                        MSG_DONTWAIT | MSG_TRUNC);
       if (received < 0)
         {
-          vlib_buffer_free_one (nm->vm, buffer_index);
+          if (reserve_path)
+            nfqueue_live_reserve_return (nm, lane, buffer_index, 0);
+          else
+            vlib_buffer_free_one (nm->vm, buffer_index);
           if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
             return 0;
           return clib_error_return_unix (0, "nfqueue-live recv");
         }
       if (received == 0)
         {
-          vlib_buffer_free_one (nm->vm, buffer_index);
+          if (reserve_path)
+            nfqueue_live_reserve_return (nm, lane, buffer_index, 0);
+          else
+            vlib_buffer_free_one (nm->vm, buffer_index);
           continue;
         }
       nm->live_buffer_receives++;
       lane->datagrams++;
       nm->datagrams++;
+      if (reserve_path)
+        {
+          nfqueue_live_reserve_complete (nm, lane, buffer_index, base,
+                                         (u32) received);
+          continue;
+        }
+      if (loss_path)
+        {
+          nfqueue_live_reserve_loss_complete (nm, lane, buffer_index, base,
+                                              (u32) received);
+          continue;
+        }
       if (received > (int) capacity)
         nm->truncated_datagrams++;
       envelope_status = nfqueue_live_measure_envelope (
@@ -1344,6 +1617,9 @@ nfqueue_live_netlink_read_ready (clib_file_t *file)
               else
                 {
                   nfqueue_live_outstanding_inc (nm);
+                  nm->normal_outstanding++;
+                  if (nm->normal_outstanding > nm->normal_peak_occupancy)
+                    nm->normal_peak_occupancy = nm->normal_outstanding;
                   nm->message_obligations++;
                   lane->message_obligations++;
                   nfqueue_live_record_last (nm, meta, buffer_index, base);
@@ -1678,6 +1954,85 @@ VLIB_REGISTER_NODE (nfqueue_live_ingress_process_node) = {
 };
 
 static void
+nfqueue_live_reserve_release_startup (nfqueue_live_main_t *nm)
+{
+  for (u32 i = 0; i < nm->lane_count; i++)
+    {
+      nfqueue_live_lane_t *lane = &nm->lanes[i];
+      for (u32 j = 0; j < NFQUEUE_LIVE_MAX_RESERVE_CAPACITY; j++)
+        if (lane->reserve_indices[j] != ~0u)
+          {
+            vlib_buffer_free_one (nm->vm, lane->reserve_indices[j]);
+            lane->reserve_indices[j] = ~0u;
+          }
+      if (lane->reserve_loss_index_valid)
+        {
+          vlib_buffer_free_one (nm->vm, lane->reserve_loss_index);
+          lane->reserve_loss_index = ~0u;
+          lane->reserve_loss_index_valid = 0;
+        }
+      lane->reserve_available = 0;
+      lane->reserve_inflight = 0;
+    }
+}
+
+static clib_error_t *
+nfqueue_live_reserve_startup (nfqueue_live_main_t *nm)
+{
+  if (nm->reserve_capacity == 0)
+    {
+      nm->reserve_enabled = 0;
+      return 0;
+    }
+  if (nm->reserve_capacity > NFQUEUE_LIVE_MAX_RESERVE_CAPACITY)
+    {
+      nm->reserve_startup_failures++;
+      return clib_error_return (
+        0, "reserve capacity %u exceeds POC bound %u", nm->reserve_capacity,
+        NFQUEUE_LIVE_MAX_RESERVE_CAPACITY);
+    }
+
+  nm->reserve_enabled = 1;
+  nm->reserve_buffer_data_size =
+    vlib_buffer_get_default_data_size (nm->vm);
+  for (u32 i = 0; i < nm->lane_count; i++)
+    {
+      nfqueue_live_lane_t *lane = &nm->lanes[i];
+      lane->reserve_capacity = nm->reserve_capacity;
+      lane->reserve_available = nm->reserve_capacity;
+      lane->reserve_loss_index = ~0u;
+      lane->reserve_loss_index_valid = 0;
+      for (u32 j = 0; j < NFQUEUE_LIVE_MAX_RESERVE_CAPACITY; j++)
+        lane->reserve_indices[j] = ~0u;
+      u32 reserved = vlib_buffer_alloc (
+        nm->vm, lane->reserve_indices, nm->reserve_capacity);
+      if (reserved != nm->reserve_capacity)
+        {
+          nm->reserve_startup_failures++;
+          for (u32 j = 0; j < reserved; j++)
+            vlib_buffer_free_one (nm->vm, lane->reserve_indices[j]);
+          nfqueue_live_reserve_release_startup (nm);
+          return clib_error_return (
+            0, "lane %u reserve startup allocation short: %u/%u", i,
+            reserved, nm->reserve_capacity);
+        }
+      lane->reserve_startup_reservations = reserved;
+      nm->reserve_startup_reservations += reserved;
+      /* One fixed loss envelope bounds the exhaustion demonstration.  It is
+       * not an ordinary reserve entry and is never borrowed by another lane. */
+      if (vlib_buffer_alloc (nm->vm, &lane->reserve_loss_index, 1) != 1)
+        {
+          nm->reserve_startup_failures++;
+          nfqueue_live_reserve_release_startup (nm);
+          return clib_error_return (0,
+                                    "lane %u reserve loss slot allocation", i);
+        }
+      lane->reserve_loss_index_valid = 1;
+    }
+  return 0;
+}
+
+static void
 nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
 {
   for (u32 i = 0; i < NFQUEUE_LIVE_MAX_LANES; i++)
@@ -1694,6 +2049,26 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
       nm->lanes[i].message_obligations = 0;
       nm->lanes[i].verdict_attempts = 0;
       nm->lanes[i].native_buffer_returns = 0;
+      for (u32 j = 0; j < NFQUEUE_LIVE_MAX_RESERVE_CAPACITY; j++)
+        nm->lanes[i].reserve_indices[j] = ~0u;
+      nm->lanes[i].reserve_capacity = 0;
+      nm->lanes[i].reserve_available = 0;
+      nm->lanes[i].reserve_inflight = 0;
+      nm->lanes[i].reserve_peak_occupancy = 0;
+      nm->lanes[i].reserve_peak_inflight = 0;
+      nm->lanes[i].reserve_loss_index = ~0u;
+      nm->lanes[i].reserve_loss_index_valid = 0;
+      nm->lanes[i].reserve_startup_reservations = 0;
+      nm->lanes[i].reserve_direct_obligations = 0;
+      nm->lanes[i].reserve_direct_completions = 0;
+      nm->lanes[i].reserve_direct_native_returns = 0;
+      nm->lanes[i].reserve_native_returns = 0;
+      nm->lanes[i].reserve_exhaustions = 0;
+      nm->lanes[i].reserve_losses = 0;
+      nm->lanes[i].reserve_loss_materializations = 0;
+      nm->lanes[i].reserve_loss_unmaterialized = 0;
+      nm->lanes[i].reserve_loss_native_drops = 0;
+      nm->lanes[i].reserve_loss_identity_misses = 0;
       nm->readers[i].nm = nm;
       nm->readers[i].lane_index = (u8) i;
     }
@@ -1707,6 +2082,32 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   nm->origin_return_push_lock = 0;
   __atomic_store_n (&nm->outstanding, 0, __ATOMIC_RELEASE);
   __atomic_store_n (&nm->completion_debt, 0, __ATOMIC_RELEASE);
+  nm->reserve_enabled = 0;
+  nm->reserve_capacity = 0;
+  nm->reserve_buffer_data_size = 0;
+  nm->normal_capacity = NFQUEUE_LIVE_DEFAULT_NORMAL_CAPACITY;
+  nm->normal_outstanding = 0;
+  nm->reserve_outstanding = 0;
+  nm->normal_peak_occupancy = 0;
+  nm->reserve_peak_occupancy = 0;
+  nm->reserve_peak_inflight = 0;
+  nm->normal_capacity_exhaustions = 0;
+  nm->reserve_startup_reservations = 0;
+  nm->reserve_startup_failures = 0;
+  nm->reserve_direct_obligations = 0;
+  nm->reserve_direct_completions = 0;
+  nm->reserve_direct_native_returns = 0;
+  nm->reserve_native_returns = 0;
+  nm->reserve_exhaustions = 0;
+  nm->reserve_losses = 0;
+  nm->reserve_degraded_health = 0;
+  nm->reserve_loss_materializations = 0;
+  nm->reserve_loss_unmaterialized = 0;
+  nm->reserve_loss_native_drops = 0;
+  nm->reserve_loss_identity_misses = 0;
+  nm->reserve_dynamic_growth_attempts = 0;
+  nm->reserve_cross_lane_borrows = 0;
+  nm->reserve_blocking_waits = 0;
   nm->verdict_identity_mismatches = 0;
   nm->verdict_fault_injections = 0;
   nm->native_verdict_calls = 0;
@@ -1823,6 +2224,11 @@ nfqueue_live_close_lane (nfqueue_live_lane_t *lane)
 static void
 nfqueue_live_close (nfqueue_live_main_t *nm)
 {
+  if (nm->reserve_enabled)
+    {
+      nfqueue_live_reserve_release_startup (nm);
+      nm->reserve_enabled = 0;
+    }
   for (u32 i = 0; i < nm->lane_count; i++)
     nfqueue_live_close_lane (&nm->lanes[i]);
   nm->netlink_file_index = ~0;
@@ -1928,7 +2334,9 @@ nfqueue_live_open_completion (nfqueue_live_main_t *nm)
 static clib_error_t *
 nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
                     u8 inject_stale, u8 inject_duplicate,
-                    u8 inject_completion_overflow)
+                    u8 inject_completion_overflow, u32 normal_capacity,
+                    u32 reserve_capacity,
+                    u8 inject_normal_capacity_exhaustion)
 {
   nfqueue_live_main_t *nm = &nfqueue_live_main;
   clib_error_t *error;
@@ -1954,6 +2362,10 @@ nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
                     __ATOMIC_RELEASE);
   nm->lane_count = 1;
   nm->dual_mode = 0;
+  nm->normal_capacity = normal_capacity;
+  nm->reserve_capacity = reserve_capacity;
+  nm->inject_normal_capacity_exhaustion =
+    inject_normal_capacity_exhaustion;
   nm->generation++;
   if (nm->generation == 0)
     nm->generation = 1;
@@ -1967,6 +2379,12 @@ nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
   nm->queue = nm->lanes[0].queue;
   nm->netlink_fd = nm->lanes[0].netlink_fd;
   nm->netlink_file_index = nm->lanes[0].netlink_file_index;
+  error = nfqueue_live_reserve_startup (nm);
+  if (error)
+    {
+      nfqueue_live_close (nm);
+      return error;
+    }
   error = nfqueue_live_open_completion (nm);
   if (error)
     {
@@ -1981,7 +2399,9 @@ static clib_error_t *
 nfqueue_live_enable_dual (vlib_main_t *vm, u16 queue_base,
                           u8 inject_stale, u8 inject_duplicate,
                           u8 inject_completion_overflow,
-                          u8 inject_uid_unknown, u8 require_two_workers)
+                          u8 inject_uid_unknown, u8 require_two_workers,
+                          u32 normal_capacity, u32 reserve_capacity,
+                          u8 inject_normal_capacity_exhaustion)
 {
   nfqueue_live_main_t *nm = &nfqueue_live_main;
   clib_error_t *error;
@@ -2014,6 +2434,10 @@ nfqueue_live_enable_dual (vlib_main_t *vm, u16 queue_base,
   nm->inject_uid_unknown = inject_uid_unknown;
   nm->lane_count = NFQUEUE_LIVE_MAX_LANES;
   nm->dual_mode = 1;
+  nm->normal_capacity = normal_capacity;
+  nm->reserve_capacity = reserve_capacity;
+  nm->inject_normal_capacity_exhaustion =
+    inject_normal_capacity_exhaustion;
   nm->generation++;
   if (nm->generation == 0)
     nm->generation = 1;
@@ -2025,7 +2449,13 @@ nfqueue_live_enable_dual (vlib_main_t *vm, u16 queue_base,
         {
           nfqueue_live_close (nm);
           return error;
-        }
+      }
+    }
+  error = nfqueue_live_reserve_startup (nm);
+  if (error)
+    {
+      nfqueue_live_close (nm);
+      return error;
     }
   error = nfqueue_live_open_completion (nm);
   if (error)
@@ -2076,6 +2506,9 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 credit_exhaustion = 0;
   u8 verdict_failed_definite = 0;
   u8 verdict_outcome_unknown = 0;
+  u8 inject_normal_capacity_exhaustion = 0;
+  u32 normal_capacity = NFQUEUE_LIVE_DEFAULT_NORMAL_CAPACITY;
+  u32 reserve_capacity = 0;
   clib_error_t *error;
   (void) cmd;
 
@@ -2114,11 +2547,19 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
         verdict_failed_definite = 1;
       else if (unformat (input, "inject-verdict-outcome-unknown"))
         verdict_outcome_unknown = 1;
+      else if (unformat (input, "normal-capacity %u", &normal_capacity))
+        ;
+      else if (unformat (input, "reserve-capacity %u", &reserve_capacity))
+        ;
+      else if (unformat (input, "inject-normal-capacity-exhaustion"))
+        inject_normal_capacity_exhaustion = 1;
       else
         return clib_error_return (0, "unknown nfqueue-live-poc option");
     }
   error = nfqueue_live_enable (vm, (u16) queue_num, family, stale, duplicate,
-                               completion_overflow);
+                               completion_overflow, normal_capacity,
+                               reserve_capacity,
+                               inject_normal_capacity_exhaustion);
   if (!error)
     {
       nfqueue_live_main.inject_missing_packet_id = missing_packet_id;
@@ -2146,7 +2587,9 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_command, static) = {
                 "[inject-missing-generation] [inject-uid-unknown] "
                 "[owner-local|owner-remote|owner-mixed] "
                 "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
-                "[inject-verdict-failed-definite|inject-verdict-outcome-unknown]",
+                "[inject-verdict-failed-definite|inject-verdict-outcome-unknown] "
+                "[normal-capacity <n>] [reserve-capacity <n>] "
+                "[inject-normal-capacity-exhaustion]",
   .function = nfqueue_live_enable_command_fn,
 };
 
@@ -2168,6 +2611,9 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
   u8 verdict_failed_definite = 0;
   u8 verdict_outcome_unknown = 0;
   u8 require_two_workers = 0;
+  u8 inject_normal_capacity_exhaustion = 0;
+  u32 normal_capacity = NFQUEUE_LIVE_DEFAULT_NORMAL_CAPACITY;
+  u32 reserve_capacity = 0;
   clib_error_t *error;
   (void) cmd;
 
@@ -2204,12 +2650,20 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
         verdict_outcome_unknown = 1;
       else if (unformat (input, "two-workers"))
         require_two_workers = 1;
+      else if (unformat (input, "normal-capacity %u", &normal_capacity))
+        ;
+      else if (unformat (input, "reserve-capacity %u", &reserve_capacity))
+        ;
+      else if (unformat (input, "inject-normal-capacity-exhaustion"))
+        inject_normal_capacity_exhaustion = 1;
       else
         return clib_error_return (0, "unknown nfqueue-live-poc dual option");
     }
   error = nfqueue_live_enable_dual (vm, (u16) queue_base, stale, duplicate,
                                     completion_overflow, uid_unknown,
-                                    require_two_workers);
+                                    require_two_workers, normal_capacity,
+                                    reserve_capacity,
+                                    inject_normal_capacity_exhaustion);
   if (!error)
     {
       nfqueue_live_main.inject_missing_packet_id = missing_packet_id;
@@ -2238,7 +2692,8 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_dual_command, static) = {
                 "[owner-local|owner-remote|owner-mixed] "
                 "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
                 "[inject-verdict-failed-definite|inject-verdict-outcome-unknown] "
-                "[two-workers]",
+                "[two-workers] [normal-capacity <n>] [reserve-capacity <n>] "
+                "[inject-normal-capacity-exhaustion]",
   .function = nfqueue_live_enable_dual_command_fn,
 };
 
@@ -2312,6 +2767,35 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->live_buffer_receives,
                    (unsigned long long) nm->inline_metadata_writes,
                    (unsigned long long) nm->payload_pointer_projections);
+  vlib_cli_output (vm, "normal-capacity %u normal-outstanding %u normal-peak-occupancy %u normal-capacity-exhaustions %llu",
+                   nm->normal_capacity, nm->normal_outstanding,
+                   nm->normal_peak_occupancy,
+                   (unsigned long long) nm->normal_capacity_exhaustions);
+  vlib_cli_output (vm, "reserve-enabled %u reserve-capacity %u reserve-envelope-bytes %u reserve-startup-reservations %llu reserve-startup-failures %llu reserve-outstanding %u reserve-peak-occupancy %u reserve-inflight-peak %u",
+                   nm->reserve_enabled, nm->reserve_capacity,
+                   nm->reserve_buffer_data_size,
+                   (unsigned long long) nm->reserve_startup_reservations,
+                   (unsigned long long) nm->reserve_startup_failures,
+                   nm->reserve_outstanding, nm->reserve_peak_occupancy,
+                   nm->reserve_peak_inflight);
+  vlib_cli_output (vm, "reserve-direct-obligations %llu reserve-direct-completions %llu reserve-direct-native-returns %llu reserve-native-returns %llu reserve-exhaustions %llu reserve-losses %llu reserve-degraded-health %llu",
+                   (unsigned long long) nm->reserve_direct_obligations,
+                   (unsigned long long) nm->reserve_direct_completions,
+                   (unsigned long long) nm->reserve_direct_native_returns,
+                   (unsigned long long) nm->reserve_native_returns,
+                   (unsigned long long) nm->reserve_exhaustions,
+                   (unsigned long long) nm->reserve_losses,
+                   (unsigned long long) nm->reserve_degraded_health);
+  vlib_cli_output (vm, "reserve-loss-materializations %llu reserve-loss-unmaterialized %llu reserve-loss-native-drops %llu reserve-loss-identity-misses %llu dynamic-reserve-growth %llu cross-lane-reserve-borrows %llu reserve-blocking-waits %llu",
+                   (unsigned long long) nm->reserve_loss_materializations,
+                   (unsigned long long) nm->reserve_loss_unmaterialized,
+                   (unsigned long long) nm->reserve_loss_native_drops,
+                   (unsigned long long) nm->reserve_loss_identity_misses,
+                   (unsigned long long) nm->reserve_dynamic_growth_attempts,
+                   (unsigned long long) nm->reserve_cross_lane_borrows,
+                   (unsigned long long) nm->reserve_blocking_waits);
+  vlib_cli_output (vm, "reserve-parser-attempts 0 reserve-flow-enters 0 reserve-policy-verdicts 0 reserve-delivery-success-claims 0 reserve-copy-count %u",
+                   (unsigned int) NFQUEUE_LIVE_PACKET_COPY_PATHS);
   vlib_cli_output (vm, "last-buffer-index %u last-buffer-base 0x%llx datagram-length %u",
                    nm->last_buffer_index, (unsigned long long) nm->last_buffer_base,
                    nm->last_datagram_length);
@@ -2472,14 +2956,22 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
       const char *lane_direction =
         nfqueue_live_device_direction (lane->hook) ==
             NFQUEUE_LIVE_DIRECTION_OUTPUT ? "OUTPUT" : "INPUT";
-      vlib_cli_output (vm, "lane %u family ip%u hook %s queue %u generation %llu enabled %u datagrams %llu callbacks %llu obligations %llu verdict-attempts %llu native-returns %llu",
+      vlib_cli_output (vm, "lane %u family ip%u hook %s queue %u generation %llu enabled %u datagrams %llu callbacks %llu obligations %llu verdict-attempts %llu native-returns %llu reserve-capacity %u reserve-available %u reserve-peak-occupancy %u reserve-direct-obligations %llu reserve-direct-completions %llu reserve-direct-native-returns %llu reserve-native-returns %llu reserve-exhaustions %llu reserve-losses %llu",
                        i, lane->family, lane_direction, lane->queue_num,
                        (unsigned long long) lane->generation, lane->enabled,
                        (unsigned long long) lane->datagrams,
                        (unsigned long long) lane->callbacks,
                        (unsigned long long) lane->message_obligations,
                        (unsigned long long) lane->verdict_attempts,
-                       (unsigned long long) lane->native_buffer_returns);
+                       (unsigned long long) lane->native_buffer_returns,
+                       lane->reserve_capacity, lane->reserve_available,
+                       lane->reserve_peak_occupancy,
+                       (unsigned long long) lane->reserve_direct_obligations,
+                       (unsigned long long) lane->reserve_direct_completions,
+                       (unsigned long long) lane->reserve_direct_native_returns,
+                       (unsigned long long) lane->reserve_native_returns,
+                       (unsigned long long) lane->reserve_exhaustions,
+                       (unsigned long long) lane->reserve_losses);
     }
   return 0;
 }

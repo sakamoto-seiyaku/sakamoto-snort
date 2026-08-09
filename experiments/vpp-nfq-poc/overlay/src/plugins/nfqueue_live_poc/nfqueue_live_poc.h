@@ -7,6 +7,9 @@
 
 #define NFQUEUE_LIVE_MAX_LANES 4u
 #define NFQUEUE_LIVE_MAX_HANDOFF_SAMPLES 127u
+/* S78 is a measured POC seam.  The startup command may choose any value up
+ * to this bound; it never grows the reserve after the lanes are opened. */
+#define NFQUEUE_LIVE_MAX_RESERVE_CAPACITY 8u
 
 struct nfq_handle;
 struct nfq_q_handle;
@@ -34,6 +37,27 @@ typedef struct
   u64 message_obligations;
   u64 verdict_attempts;
   u64 native_buffer_returns;
+  /* Startup-fixed, lane-local Fail-Open Reserve.  Indices are checked out of
+   * the existing VPP pool once; no lane may borrow another lane's entries. */
+  u32 reserve_indices[NFQUEUE_LIVE_MAX_RESERVE_CAPACITY];
+  u32 reserve_capacity;
+  u32 reserve_available;
+  u32 reserve_inflight;
+  u32 reserve_peak_occupancy;
+  u32 reserve_peak_inflight;
+  u32 reserve_loss_index;
+  u8 reserve_loss_index_valid;
+  u64 reserve_startup_reservations;
+  u64 reserve_direct_obligations;
+  u64 reserve_direct_completions;
+  u64 reserve_direct_native_returns;
+  u64 reserve_native_returns;
+  u64 reserve_exhaustions;
+  u64 reserve_losses;
+  u64 reserve_loss_materializations;
+  u64 reserve_loss_unmaterialized;
+  u64 reserve_loss_native_drops;
+  u64 reserve_loss_identity_misses;
 } nfqueue_live_lane_t;
 
 typedef struct
@@ -182,7 +206,12 @@ struct nfqueue_live_main_s
   u8 inject_completion_credit_exhaustion;
   u8 inject_verdict_failed_definite;
   u8 inject_verdict_outcome_unknown;
+  u8 inject_normal_capacity_exhaustion;
+  u8 reserve_enabled;
   u8 owner_mode;
+  u32 reserve_capacity;
+  u32 reserve_buffer_data_size;
+  u32 normal_capacity;
   vlib_main_t *vm;
   void *active_datagram;
   nfqueue_live_index_ring_t ingress;
@@ -191,6 +220,11 @@ struct nfqueue_live_main_s
   u32 completion_push_lock;
   u32 origin_return_push_lock;
   u32 outstanding;
+  u32 normal_outstanding;
+  u32 reserve_outstanding;
+  u32 normal_peak_occupancy;
+  u32 reserve_peak_occupancy;
+  u32 reserve_peak_inflight;
   u32 last_buffer_index;
   uword last_buffer_base;
   u32 last_datagram_length;
@@ -249,6 +283,23 @@ struct nfqueue_live_main_s
   u64 identity_unrecoverable;
   u64 ingress_alloc_failures;
   u64 ingress_overload;
+  u64 normal_capacity_exhaustions;
+  u64 reserve_startup_reservations;
+  u64 reserve_startup_failures;
+  u64 reserve_direct_obligations;
+  u64 reserve_direct_completions;
+  u64 reserve_direct_native_returns;
+  u64 reserve_native_returns;
+  u64 reserve_exhaustions;
+  u64 reserve_losses;
+  u64 reserve_degraded_health;
+  u64 reserve_loss_materializations;
+  u64 reserve_loss_unmaterialized;
+  u64 reserve_loss_native_drops;
+  u64 reserve_loss_identity_misses;
+  u64 reserve_dynamic_growth_attempts;
+  u64 reserve_cross_lane_borrows;
+  u64 reserve_blocking_waits;
   u64 handoff_count;
   u64 owner_mismatch_count;
   u64 owner_invalid_state;
