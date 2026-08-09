@@ -264,6 +264,7 @@ struct nfqueue_live_main_s
   u64 verdict_send_failures;
   u64 native_verdict_calls;
   u64 verdict_definite_rejections;
+  u64 verdict_ambiguous_results;
   u64 verdict_identity_mismatches;
   u64 verdict_fault_injections;
   u64 last_verdict_generation;

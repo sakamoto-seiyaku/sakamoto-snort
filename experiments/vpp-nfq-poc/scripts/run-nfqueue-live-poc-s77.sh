@@ -97,19 +97,35 @@ require_exact scratch-rx-buffers 0
 require_exact full-packet-memcpy 0
 require_exact per-packet-heap-objects 0
 
+attempts="$(value_for physical-verdict-attempts)"
+native_calls="$(value_for native-verdict-calls)"
+definite_rejections="$(value_for verdict-definite-rejections)"
+ambiguous_results="$(value_for verdict-ambiguous-results)"
+if [ -z "$attempts" ] || [ -z "$native_calls" ] || \
+   [ -z "$definite_rejections" ] || [ -z "$ambiguous_results" ] || \
+   [ "$attempts" -ne $((native_calls + definite_rejections + ambiguous_results)) ]; then
+  echo "S77 acceptance failure: operation evidence does not partition physical attempts (attempts=$attempts native=$native_calls definite=$definite_rejections ambiguous=$ambiguous_results)" >&2
+  exit 1
+fi
+
 if [ "$FAULT" = normal ]; then
   require_at_least completion-outcome-succeeded 1
   require_exact completion-outcome-failed-definite 0
   require_exact completion-outcome-unknown 0
+  require_exact verdict-ambiguous-results 0
   require_at_least duplicate-attempts 1
   require_at_least stale-generation-completions 1
 elif [ "$FAULT" = failed-definite ]; then
   require_at_least completion-outcome-failed-definite 1
   require_exact completion-outcome-unknown 0
+  require_exact verdict-ambiguous-results 0
   require_at_least verdict-fault-injections 1
 else
   require_at_least completion-outcome-unknown 1
   require_exact completion-outcome-failed-definite 0
+  require_at_least verdict-ambiguous-results 1
+  require_exact verdict-definite-rejections 0
+  require_exact send-failures 0
   require_at_least verdict-fault-injections 1
 fi
 

@@ -670,8 +670,10 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
 
   /* This is the one physical operation for the completion identity.  A
    * definite rejection is an operation-level fault before the backend call;
-   * it therefore cannot have been accepted by the receiver.  Unknown and
-   * normal outcomes call the native backend exactly once. */
+   * it therefore cannot have been accepted by the receiver.  The ambiguity
+   * seam deliberately withholds both the native operation and its result:
+   * it models a completion boundary with no trustworthy terminal observation
+   * and must not call nfq_set_verdict and then relabel its return. */
   nm->last_verdict_generation = generation;
   nm->last_verdict_packet_id = packet_id;
   nm->last_verdict_origin_lane = origin_lane;
@@ -692,6 +694,12 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
       nm->last_verdict_errno = EIO;
       outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
     }
+  else if (force_unknown)
+    {
+      nm->verdict_fault_injections++;
+      nm->verdict_ambiguous_results++;
+      outcome = NFQUEUE_LIVE_OUTCOME_UNKNOWN;
+    }
   else
     {
       nm->native_verdict_calls++;
@@ -701,12 +709,6 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
           nm->verdict_send_failures++;
           nm->last_verdict_errno = errno;
           outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
-        }
-      else if (force_unknown)
-        {
-          nm->verdict_fault_injections++;
-          nm->verdict_send_success++;
-          outcome = NFQUEUE_LIVE_OUTCOME_UNKNOWN;
         }
       else
         {
@@ -1709,6 +1711,7 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   nm->verdict_fault_injections = 0;
   nm->native_verdict_calls = 0;
   nm->verdict_definite_rejections = 0;
+  nm->verdict_ambiguous_results = 0;
   nm->last_verdict_generation = 0;
   nm->last_verdict_packet_id = 0;
   nm->last_verdict_origin_lane = 0;
@@ -2429,9 +2432,10 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->completion_outcome_succeeded,
                    (unsigned long long) nm->completion_outcome_failed_definite,
                    (unsigned long long) nm->completion_outcome_unknown);
-  vlib_cli_output (vm, "native-verdict-calls %llu verdict-definite-rejections %llu",
+  vlib_cli_output (vm, "native-verdict-calls %llu verdict-definite-rejections %llu verdict-ambiguous-results %llu",
                    (unsigned long long) nm->native_verdict_calls,
-                   (unsigned long long) nm->verdict_definite_rejections);
+                   (unsigned long long) nm->verdict_definite_rejections,
+                   (unsigned long long) nm->verdict_ambiguous_results);
   vlib_cli_output (vm, "last-verdict-generation %llu last-verdict-packet-id %u last-verdict-origin-lane %u last-verdict-outcome %s verdict-identity-mismatches %llu verdict-fault-injections %llu",
                    (unsigned long long) nm->last_verdict_generation,
                    nm->last_verdict_packet_id, nm->last_verdict_origin_lane,

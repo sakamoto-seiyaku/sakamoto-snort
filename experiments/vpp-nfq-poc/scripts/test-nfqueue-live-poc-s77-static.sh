@@ -20,6 +20,7 @@ grep -q 'completion_stale_generation' "$HEADER"
 grep -q 'verdict_identity_mismatches' "$HEADER"
 grep -q 'native_verdict_calls' "$HEADER"
 grep -q 'verdict_definite_rejections' "$HEADER"
+grep -q 'verdict_ambiguous_results' "$HEADER"
 grep -q 'inject_verdict_failed_definite' "$HEADER"
 grep -q 'inject_verdict_outcome_unknown' "$HEADER"
 grep -q 'nfqueue_live_outcome_name' "$SOURCE"
@@ -32,12 +33,15 @@ grep -q 'inject-verdict-failed-definite' "$SOURCE"
 grep -q 'inject-verdict-outcome-unknown' "$SOURCE"
 grep -q 'physical-verdict-attempts' "$SOURCE"
 grep -q 'completion-outcome-failed-definite' "$SOURCE"
+grep -q 'verdict-ambiguous-results' "$SOURCE"
 grep -q 'OUTCOME_UNKNOWN' "$SOURCE"
 grep -q 'nfq_set_verdict (lane->queue' "$SOURCE"
 force_line="$(rg -n 'if \(force_failed\)' "$SOURCE" | head -1 | cut -d: -f1)"
+unknown_line="$(rg -n 'else if \(force_unknown\)' "$SOURCE" | head -1 | cut -d: -f1)"
 native_line="$(rg -n 'result = nfq_set_verdict' "$SOURCE" | head -1 | cut -d: -f1)"
-if [ -z "$force_line" ] || [ -z "$native_line" ] || [ "$force_line" -ge "$native_line" ]; then
-  echo "S77 definite-failure seam calls native backend before injected rejection" >&2
+if [ -z "$force_line" ] || [ -z "$unknown_line" ] || [ -z "$native_line" ] || \
+   [ "$force_line" -ge "$native_line" ] || [ "$unknown_line" -ge "$native_line" ]; then
+  echo "S77 injected rejection/ambiguity seam calls native backend before classification" >&2
   exit 1
 fi
 grep -q 'completion_debt_raised' "$SOURCE"

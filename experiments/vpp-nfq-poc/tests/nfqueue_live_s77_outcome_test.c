@@ -17,6 +17,17 @@ enum
   POLICY_ACCEPT = 1,
 };
 
+/* The ledger records what the adapter knows about the native operation
+ * separately from the resulting Adapter Completion outcome.  In particular,
+ * the ambiguity seam has no trustworthy native-call/result observation; it
+ * must not be represented as a native call followed by an UNKNOWN label. */
+enum
+{
+  OPERATION_NATIVE_CALL = 1,
+  OPERATION_DEFINITE_REJECTION = 2,
+  OPERATION_AMBIGUOUS_RESULT = 3,
+};
+
 typedef struct
 {
   uint32_t buffer_index;
@@ -43,6 +54,7 @@ typedef struct
   uint64_t duplicate_attempts;
   uint64_t native_calls;
   uint64_t definite_rejections;
+  uint64_t ambiguous_results;
   uint64_t native_returns;
   uint64_t debt_raised;
   uint64_t debt_settled;
@@ -103,7 +115,7 @@ return_buffer (ledger_t *ledger, identity_t *identity)
 
 static void
 physical_attempt (ledger_t *ledger, identity_t *identity,
-                  uint32_t outcome, uint32_t native_call)
+                  uint32_t outcome, uint32_t operation_evidence)
 {
   expect (!identity->attempted, "second physical verdict attempt");
   identity->attempted = 1;
@@ -112,14 +124,22 @@ physical_attempt (ledger_t *ledger, identity_t *identity,
   ledger->attempted_generation = (uint32_t) identity->generation;
   ledger->attempted_packet_id = identity->packet_id;
   ledger->attempted_lane = identity->origin_lane;
-  if (native_call)
+  if (operation_evidence == OPERATION_NATIVE_CALL)
     ledger->native_calls++;
-  else
+  else if (operation_evidence == OPERATION_DEFINITE_REJECTION)
     {
       expect (outcome == OUTCOME_FAILED_DEFINITE,
-              "only definite failure may reject before native backend");
+              "definite rejection must be FAILED_DEFINITE");
       ledger->definite_rejections++;
     }
+  else if (operation_evidence == OPERATION_AMBIGUOUS_RESULT)
+    {
+      expect (outcome == OUTCOME_UNKNOWN,
+              "ambiguous operation evidence must be OUTCOME_UNKNOWN");
+      ledger->ambiguous_results++;
+    }
+  else
+    fail ("invalid operation evidence");
   if (outcome == OUTCOME_SUCCEEDED)
     ledger->succeeded++;
   else if (outcome == OUTCOME_FAILED_DEFINITE)
@@ -132,7 +152,7 @@ physical_attempt (ledger_t *ledger, identity_t *identity,
 
 static void
 settle (ledger_t *ledger, identity_t *current, const identity_t *entry,
-        uint32_t outcome, uint32_t native_call)
+        uint32_t outcome, uint32_t operation_evidence)
 {
   if (!same_identity (current, entry) || current->references == 0)
     {
@@ -149,7 +169,7 @@ settle (ledger_t *ledger, identity_t *current, const identity_t *entry,
     }
   else
     {
-      physical_attempt (ledger, current, outcome, native_call);
+      physical_attempt (ledger, current, outcome, operation_evidence);
       current->references--;
     }
   if (current->references == 0)
@@ -197,9 +217,12 @@ run_normal_duplicate_stale (void)
   stale.generation++;
   admit (&ledger, &current);
   current.references++; /* exact duplicate owns one inline reference */
-  settle (&ledger, &current, &stale, OUTCOME_SUCCEEDED, 1u);
-  settle (&ledger, &current, &primary, OUTCOME_SUCCEEDED, 1u);
-  settle (&ledger, &current, &duplicate, OUTCOME_SUCCEEDED, 1u);
+  settle (&ledger, &current, &stale, OUTCOME_SUCCEEDED,
+          OPERATION_NATIVE_CALL);
+  settle (&ledger, &current, &primary, OUTCOME_SUCCEEDED,
+          OPERATION_NATIVE_CALL);
+  settle (&ledger, &current, &duplicate, OUTCOME_SUCCEEDED,
+          OPERATION_NATIVE_CALL);
   expect (ledger.physical_attempts == 1 && ledger.succeeded == 1,
           "normal exactly-once success");
   expect (ledger.stale == 1 && ledger.stale_generation == 1 &&
@@ -210,6 +233,8 @@ run_normal_duplicate_stale (void)
           "normal ownership closure");
   expect (ledger.native_calls == 1 && ledger.definite_rejections == 0,
           "normal native backend call ledger");
+  expect (ledger.ambiguous_results == 0,
+          "normal ambiguity ledger");
   expect (ledger.attempted_generation == 19u &&
             ledger.attempted_packet_id == 71u && ledger.attempted_lane == 2u,
           "normal original completion identity");
@@ -241,7 +266,8 @@ run_failed_definite (void)
   const uint32_t terminal_before = current.terminal_intent;
   identity_t completion = current;
   admit (&ledger, &current);
-  settle (&ledger, &current, &completion, OUTCOME_FAILED_DEFINITE, 0u);
+  settle (&ledger, &current, &completion, OUTCOME_FAILED_DEFINITE,
+          OPERATION_DEFINITE_REJECTION);
   expect (ledger.physical_attempts == 1 && ledger.failed_definite == 1 &&
             ledger.succeeded == 0 && ledger.unknown == 0,
           "definite failure classification");
@@ -249,6 +275,8 @@ run_failed_definite (void)
           "definite failure ownership closure");
   expect (ledger.native_calls == 0 && ledger.definite_rejections == 1,
           "definite failure rejected before native backend");
+  expect (ledger.ambiguous_results == 0,
+          "definite failure ambiguity ledger");
   expect (current.policy_verdict == policy_before &&
             current.terminal_intent == terminal_before,
           "definite failure rewrote terminal intent");
@@ -271,21 +299,25 @@ run_outcome_unknown (void)
   identity_t current = new_identity (73u, 21u, 3u, 1073u, 0u);
   identity_t completion = current;
   admit (&ledger, &current);
-  settle (&ledger, &current, &completion, OUTCOME_UNKNOWN, 1u);
+  settle (&ledger, &current, &completion, OUTCOME_UNKNOWN,
+          OPERATION_AMBIGUOUS_RESULT);
   expect (ledger.physical_attempts == 1 && ledger.unknown == 1 &&
             ledger.succeeded == 0 && ledger.failed_definite == 0,
           "unknown outcome classification");
   expect (ledger.native_returns == 1 && ledger.debt == 0,
           "unknown outcome ownership closure");
-  expect (ledger.native_calls == 1 && ledger.definite_rejections == 0,
-          "unknown native backend call ledger");
+  expect (ledger.native_calls == 0 && ledger.definite_rejections == 0 &&
+            ledger.ambiguous_results == 1,
+          "unknown operation evidence ledger");
   expect_quiet (&ledger);
   printf ("outcome-unknown: attempts=%llu unknown=%llu native-calls=%llu "
-          "definite-rejections=%llu native-returns=%llu debt=%u\n",
+          "definite-rejections=%llu ambiguous-results=%llu "
+          "native-returns=%llu debt=%u\n",
           (unsigned long long) ledger.physical_attempts,
           (unsigned long long) ledger.unknown,
           (unsigned long long) ledger.native_calls,
           (unsigned long long) ledger.definite_rejections,
+          (unsigned long long) ledger.ambiguous_results,
           (unsigned long long) ledger.native_returns, ledger.debt);
 }
 
