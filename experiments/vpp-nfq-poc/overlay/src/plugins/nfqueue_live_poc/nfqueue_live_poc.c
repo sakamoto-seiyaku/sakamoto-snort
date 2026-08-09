@@ -293,6 +293,8 @@ static_always_inline void
 nfqueue_live_outstanding_inc (nfqueue_live_main_t *nm)
 {
   (void) __atomic_fetch_add (&nm->outstanding, 1, __ATOMIC_RELEASE);
+  (void) __atomic_fetch_add (&nm->completion_debt, 1, __ATOMIC_RELEASE);
+  nfqueue_live_counter_inc (&nm->completion_debt_raised);
 }
 
 static_always_inline void
@@ -300,6 +302,9 @@ nfqueue_live_outstanding_dec (nfqueue_live_main_t *nm)
 {
   u32 previous = __atomic_fetch_sub (&nm->outstanding, 1, __ATOMIC_ACQ_REL);
   ASSERT (previous != 0);
+  previous = __atomic_fetch_sub (&nm->completion_debt, 1, __ATOMIC_ACQ_REL);
+  ASSERT (previous != 0);
+  nfqueue_live_counter_inc (&nm->completion_debt_settled);
 }
 
 static_always_inline u8
@@ -612,30 +617,113 @@ nfqueue_live_record_last (nfqueue_live_main_t *nm,
   nm->last_ip_version = meta->ip_version;
 }
 
-static void
-nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
-                           struct nfq_q_handle *queue, u32 packet_id,
-                           u32 verdict)
+static const char *
+nfqueue_live_outcome_name (nfqueue_live_completion_outcome_t outcome)
 {
-  for (u32 i = 0; i < nm->lane_count; i++)
-    if (nm->lanes[i].queue == queue)
-      {
-        nm->lanes[i].verdict_attempts++;
-        break;
-      }
-  if (nfq_set_verdict (queue, packet_id, verdict, 0, 0) < 0)
+  switch (outcome)
+    {
+    case NFQUEUE_LIVE_OUTCOME_SUCCEEDED:
+      return "SUCCEEDED";
+    case NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE:
+      return "FAILED_DEFINITE";
+    case NFQUEUE_LIVE_OUTCOME_UNKNOWN:
+      return "OUTCOME_UNKNOWN";
+    default:
+      return "NONE";
+    }
+}
+
+static_always_inline void
+nfqueue_live_record_outcome (nfqueue_live_main_t *nm,
+                             nfqueue_live_meta_t *meta,
+                             nfqueue_live_completion_outcome_t outcome)
+{
+  meta->flags &= ~(NFQUEUE_LIVE_FLAG_OUTCOME_UNKNOWN |
+                   NFQUEUE_LIVE_FLAG_OUTCOME_FAILED);
+  switch (outcome)
+    {
+    case NFQUEUE_LIVE_OUTCOME_SUCCEEDED:
+      break;
+    case NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE:
+      meta->flags |= NFQUEUE_LIVE_FLAG_OUTCOME_FAILED;
+      break;
+    case NFQUEUE_LIVE_OUTCOME_UNKNOWN:
+      meta->flags |= NFQUEUE_LIVE_FLAG_OUTCOME_UNKNOWN;
+      break;
+    default:
+      break;
+    }
+  nm->last_verdict_outcome = (u8) outcome;
+}
+
+static nfqueue_live_completion_outcome_t
+nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
+                           nfqueue_live_lane_t *lane, u64 generation,
+                           u32 packet_id, u32 origin_lane, u32 verdict)
+{
+  int result;
+  u8 force_failed = __atomic_exchange_n (&nm->inject_verdict_failed_definite,
+                                         0, __ATOMIC_ACQ_REL);
+  u8 force_unknown = __atomic_exchange_n (&nm->inject_verdict_outcome_unknown,
+                                          0, __ATOMIC_ACQ_REL);
+  nfqueue_live_completion_outcome_t outcome;
+
+  /* This is the one physical operation for the completion identity.  The
+   * injected modes below alter only the deterministic classification after
+   * this call; they never replace it with a retry, alternate queue, or
+   * replacement payload. */
+  nm->last_verdict_generation = generation;
+  nm->last_verdict_packet_id = packet_id;
+  nm->last_verdict_origin_lane = origin_lane;
+  if (!lane || lane->generation != generation)
+    {
+      nm->verdict_identity_mismatches++;
+      nm->last_verdict_outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
+      nm->completion_outcome_failed_definite++;
+      return NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
+    }
+  lane->verdict_attempts++;
+  nm->verdict_attempts++;
+  result = nfq_set_verdict (lane->queue, packet_id, verdict, 0, 0);
+  if (force_failed)
+    {
+      nm->verdict_fault_injections++;
+      nm->verdict_send_failures++;
+      nm->last_verdict_errno = EIO;
+      outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
+    }
+  else if (result < 0)
     {
       nm->verdict_send_failures++;
       nm->last_verdict_errno = errno;
+      outcome = NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE;
+    }
+  else if (force_unknown)
+    {
+      nm->verdict_fault_injections++;
+      nm->verdict_send_success++;
+      outcome = NFQUEUE_LIVE_OUTCOME_UNKNOWN;
     }
   else
     {
-      /* A successful send proves only that the local netlink socket accepted
-       * the datagram. Kernel verdict acceptance remains OUTCOME_UNKNOWN. */
       nm->verdict_send_success++;
-      nm->completion_outcome_unknown++;
+      outcome = NFQUEUE_LIVE_OUTCOME_SUCCEEDED;
     }
-  nm->verdict_attempts++;
+  switch (outcome)
+    {
+    case NFQUEUE_LIVE_OUTCOME_SUCCEEDED:
+      nm->completion_outcome_succeeded++;
+      break;
+    case NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE:
+      nm->completion_outcome_failed_definite++;
+      break;
+    case NFQUEUE_LIVE_OUTCOME_UNKNOWN:
+      nm->completion_outcome_unknown++;
+      break;
+    default:
+      break;
+    }
+  return outcome;
 }
 
 static nfqueue_live_lane_t *
@@ -710,8 +798,9 @@ nfqueue_live_publish_terminal (nfqueue_live_main_t *nm, u32 buffer_index,
     .packet_id = meta->packet_id,
     .obligation_nonce = meta->obligation_nonce,
     .origin_lane = nfqueue_live_meta_origin_lane (meta),
-    .verdict = NFQUEUE_LIVE_ACCEPT,
-    .terminal = 1,
+    .policy_verdict = NFQUEUE_LIVE_ACCEPT,
+    .terminal_intent = 1,
+    .outcome_hint = NFQUEUE_LIVE_OUTCOME_NONE,
     .reference_held = 1,
   };
   nfqueue_live_origin_return_lock (nm);
@@ -740,8 +829,13 @@ nfqueue_live_settle_on_origin (nfqueue_live_main_t *nm, u32 buffer_index,
       meta->flags |= NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED;
       nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_ATTEMPTED);
       if (lane && lane->queue)
-        nfqueue_live_send_verdict (nm, lane->queue, meta->packet_id,
-                                   NFQUEUE_LIVE_ACCEPT);
+        {
+          nfqueue_live_completion_outcome_t outcome =
+            nfqueue_live_send_verdict (
+              nm, lane, nfqueue_live_meta_generation (meta), meta->packet_id,
+              nfqueue_live_meta_origin_lane (meta), NFQUEUE_LIVE_ACCEPT);
+          nfqueue_live_record_outcome (nm, meta, outcome);
+        }
       nm->fail_open_settlements++;
     }
   meta->completion_refs = 0;
@@ -787,19 +881,23 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
       nfqueue_live_state (meta) < NFQUEUE_LIVE_STATE_COMPLETION)
     {
       nm->completion_stale++;
+      if (entry->generation_lo != meta->generation_lo ||
+          entry->generation_hi != meta->generation_hi)
+        nm->completion_stale_generation++;
       return;
     }
 
   if ((meta->flags & NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED) != 0)
     {
       nm->completion_duplicate++;
+      nm->completion_duplicate_attempts++;
       nfqueue_live_drop_completion_ref (nm, entry->buffer_index, meta, entry);
       return;
     }
 
   meta->flags |= NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED;
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_ATTEMPTED);
-  if (entry->terminal)
+  if (entry->terminal_intent)
     nm->fail_open_settlements++;
   nfqueue_live_lane_t *lane = nfqueue_live_lane_for_meta (nm, meta);
   if (!lane || !lane->queue)
@@ -809,7 +907,10 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
       nfqueue_live_drop_completion_ref (nm, entry->buffer_index, meta, entry);
       return;
     }
-  nfqueue_live_send_verdict (nm, lane->queue, meta->packet_id, entry->verdict);
+  nfqueue_live_completion_outcome_t outcome = nfqueue_live_send_verdict (
+    nm, lane, nfqueue_live_meta_generation (meta), meta->packet_id,
+    nfqueue_live_meta_origin_lane (meta), entry->policy_verdict);
+  nfqueue_live_record_outcome (nm, meta, outcome);
 
   nfqueue_live_drop_completion_ref (nm, entry->buffer_index, meta, entry);
 }
@@ -847,8 +948,17 @@ static void
 nfqueue_live_direct_accept (nfqueue_live_main_t *nm,
                             struct nfq_q_handle *queue, u32 packet_id)
 {
+  nfqueue_live_lane_t *lane = 0;
+  for (u32 i = 0; i < nm->lane_count; i++)
+    if (nm->lanes[i].queue == queue)
+      {
+        lane = &nm->lanes[i];
+        break;
+      }
   nm->message_rejections++;
-  nfqueue_live_send_verdict (nm, queue, packet_id, NFQUEUE_LIVE_ACCEPT);
+  (void) nfqueue_live_send_verdict (
+    nm, lane, lane ? lane->generation : 0, packet_id,
+    lane ? lane->origin_lane : 0, NFQUEUE_LIVE_ACCEPT);
 }
 
 static void
@@ -1298,7 +1408,9 @@ nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
     .packet_id = meta->packet_id,
     .obligation_nonce = meta->obligation_nonce,
     .origin_lane = nfqueue_live_meta_origin_lane (meta),
-    .verdict = NFQUEUE_LIVE_ACCEPT,
+    .policy_verdict = NFQUEUE_LIVE_ACCEPT,
+    .terminal_intent = 0,
+    .outcome_hint = NFQUEUE_LIVE_OUTCOME_NONE,
     .reference_held = 1,
   };
   u8 stale_requested = __atomic_exchange_n (&nm->inject_stale, 0,
@@ -1355,9 +1467,12 @@ nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
     {
       nfqueue_live_completion_t stale = completion;
       stale.reference_held = 0;
-      stale.obligation_nonce++;
-      if (stale.obligation_nonce == 0)
-        stale.packet_id++;
+      /* S77's stale fault is specifically an old queue generation.  Keep
+       * packet id and nonce unchanged so the generation guard is the only
+       * reason this delayed token is rejected. */
+      stale.generation_lo++;
+      if (stale.generation_lo == 0)
+        stale.generation_hi++;
       stale_pushed = nfqueue_live_completion_push (&nm->completion, &stale);
     }
   if (duplicate_requested)
@@ -1584,6 +1699,26 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   nm->completion_push_lock = 0;
   nm->origin_return_push_lock = 0;
   __atomic_store_n (&nm->outstanding, 0, __ATOMIC_RELEASE);
+  __atomic_store_n (&nm->completion_debt, 0, __ATOMIC_RELEASE);
+  nm->verdict_identity_mismatches = 0;
+  nm->verdict_fault_injections = 0;
+  nm->last_verdict_generation = 0;
+  nm->last_verdict_packet_id = 0;
+  nm->last_verdict_origin_lane = 0;
+  nm->last_verdict_outcome = NFQUEUE_LIVE_OUTCOME_NONE;
+  nm->completion_outcome_succeeded = 0;
+  nm->completion_outcome_failed_definite = 0;
+  nm->completion_outcome_unknown = 0;
+  nm->completion_duplicate_attempts = 0;
+  nm->completion_stale_generation = 0;
+  nm->completion_debt_raised = 0;
+  nm->completion_debt_settled = 0;
+  nm->retry_attempts = 0;
+  nm->worker_reentries = 0;
+  nm->policy_re_evaluations = 0;
+  nm->replacement_payloads = 0;
+  nm->terminal_intent_rewrites = 0;
+  nm->policy_verdict_rewrites = 0;
   __atomic_store_n (&nm->completion_credits_held, 0, __ATOMIC_RELEASE);
   nm->completion_credit_capacity = NFQUEUE_LIVE_MAX_OUTSTANDING;
   __atomic_store_n (&nm->owner_local_obligations, 0, __ATOMIC_RELEASE);
@@ -1928,6 +2063,8 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 owner_mode = NFQUEUE_LIVE_OWNER_MODE_MIXED;
   u8 owner_queue_full = 0;
   u8 credit_exhaustion = 0;
+  u8 verdict_failed_definite = 0;
+  u8 verdict_outcome_unknown = 0;
   clib_error_t *error;
   (void) cmd;
 
@@ -1962,6 +2099,10 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
         owner_queue_full = 1;
       else if (unformat (input, "inject-completion-credit-exhaustion"))
         credit_exhaustion = 1;
+      else if (unformat (input, "inject-verdict-failed-definite"))
+        verdict_failed_definite = 1;
+      else if (unformat (input, "inject-verdict-outcome-unknown"))
+        verdict_outcome_unknown = 1;
       else
         return clib_error_return (0, "unknown nfqueue-live-poc option");
     }
@@ -1978,6 +2119,10 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
                         owner_queue_full, __ATOMIC_RELEASE);
       __atomic_store_n (&nfqueue_live_main.inject_completion_credit_exhaustion,
                         credit_exhaustion, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.inject_verdict_failed_definite,
+                        verdict_failed_definite, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.inject_verdict_outcome_unknown,
+                        verdict_outcome_unknown, __ATOMIC_RELEASE);
     }
   return error;
 }
@@ -1989,7 +2134,8 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_command, static) = {
                 "[inject-completion-overflow] [inject-missing-packet-id] "
                 "[inject-missing-generation] [inject-uid-unknown] "
                 "[owner-local|owner-remote|owner-mixed] "
-                "[inject-owner-queue-full] [inject-completion-credit-exhaustion]",
+                "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
+                "[inject-verdict-failed-definite|inject-verdict-outcome-unknown]",
   .function = nfqueue_live_enable_command_fn,
 };
 
@@ -2008,6 +2154,8 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
   u8 owner_mode = NFQUEUE_LIVE_OWNER_MODE_MIXED;
   u8 owner_queue_full = 0;
   u8 credit_exhaustion = 0;
+  u8 verdict_failed_definite = 0;
+  u8 verdict_outcome_unknown = 0;
   u8 require_two_workers = 0;
   clib_error_t *error;
   (void) cmd;
@@ -2039,6 +2187,10 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
         owner_queue_full = 1;
       else if (unformat (input, "inject-completion-credit-exhaustion"))
         credit_exhaustion = 1;
+      else if (unformat (input, "inject-verdict-failed-definite"))
+        verdict_failed_definite = 1;
+      else if (unformat (input, "inject-verdict-outcome-unknown"))
+        verdict_outcome_unknown = 1;
       else if (unformat (input, "two-workers"))
         require_two_workers = 1;
       else
@@ -2058,6 +2210,10 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
                         owner_queue_full, __ATOMIC_RELEASE);
       __atomic_store_n (&nfqueue_live_main.inject_completion_credit_exhaustion,
                         credit_exhaustion, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.inject_verdict_failed_definite,
+                        verdict_failed_definite, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.inject_verdict_outcome_unknown,
+                        verdict_outcome_unknown, __ATOMIC_RELEASE);
     }
   return error;
 }
@@ -2070,6 +2226,7 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_dual_command, static) = {
                 "[inject-missing-generation] [inject-uid-unknown] "
                 "[owner-local|owner-remote|owner-mixed] "
                 "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
+                "[inject-verdict-failed-definite|inject-verdict-outcome-unknown] "
                 "[two-workers]",
   .function = nfqueue_live_enable_dual_command_fn,
 };
@@ -2259,6 +2416,30 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->verdict_send_success,
                    (unsigned long long) nm->verdict_send_failures,
                    (unsigned long long) nm->completion_outcome_unknown);
+  vlib_cli_output (vm, "physical-verdict-attempts %llu completion-outcome-succeeded %llu completion-outcome-failed-definite %llu completion-outcome-unknown %llu",
+                   (unsigned long long) nm->verdict_attempts,
+                   (unsigned long long) nm->completion_outcome_succeeded,
+                   (unsigned long long) nm->completion_outcome_failed_definite,
+                   (unsigned long long) nm->completion_outcome_unknown);
+  vlib_cli_output (vm, "last-verdict-generation %llu last-verdict-packet-id %u last-verdict-origin-lane %u last-verdict-outcome %s verdict-identity-mismatches %llu verdict-fault-injections %llu",
+                   (unsigned long long) nm->last_verdict_generation,
+                   nm->last_verdict_packet_id, nm->last_verdict_origin_lane,
+                   nfqueue_live_outcome_name ((nfqueue_live_completion_outcome_t) nm->last_verdict_outcome),
+                   (unsigned long long) nm->verdict_identity_mismatches,
+                   (unsigned long long) nm->verdict_fault_injections);
+  vlib_cli_output (vm, "completion-debt %u completion-debt-raised %llu completion-debt-settled %llu duplicate-attempts %llu stale-generation-completions %llu",
+                   __atomic_load_n (&nm->completion_debt, __ATOMIC_ACQUIRE),
+                   (unsigned long long) nm->completion_debt_raised,
+                   (unsigned long long) nm->completion_debt_settled,
+                   (unsigned long long) nm->completion_duplicate_attempts,
+                   (unsigned long long) nm->completion_stale_generation);
+  vlib_cli_output (vm, "retry-attempts %llu worker-reentries %llu policy-re-evaluations %llu replacement-payloads %llu terminal-intent-rewrites %llu policy-verdict-rewrites %llu",
+                   (unsigned long long) nm->retry_attempts,
+                   (unsigned long long) nm->worker_reentries,
+                   (unsigned long long) nm->policy_re_evaluations,
+                   (unsigned long long) nm->replacement_payloads,
+                   (unsigned long long) nm->terminal_intent_rewrites,
+                   (unsigned long long) nm->policy_verdict_rewrites);
   vlib_cli_output (vm, "native-buffer-returns %llu outstanding-obligations %u ingress-alloc-failures %llu",
                    (unsigned long long) nm->native_buffer_returns,
                    nfqueue_live_outstanding_load (nm),

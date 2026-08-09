@@ -87,10 +87,19 @@ typedef struct
   u32 packet_id;
   u32 obligation_nonce;
   u8 origin_lane;
-  u32 verdict;
-  u8 terminal;
+  u32 policy_verdict;
+  u8 terminal_intent;
+  u8 outcome_hint;
   u8 reference_held;
 } nfqueue_live_completion_t;
+
+typedef enum
+{
+  NFQUEUE_LIVE_OUTCOME_NONE = 0,
+  NFQUEUE_LIVE_OUTCOME_SUCCEEDED = 1,
+  NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE = 2,
+  NFQUEUE_LIVE_OUTCOME_UNKNOWN = 3,
+} nfqueue_live_completion_outcome_t;
 
 typedef struct
 {
@@ -171,6 +180,8 @@ struct nfqueue_live_main_s
   u8 inject_uid_unknown;
   u8 inject_owner_queue_full;
   u8 inject_completion_credit_exhaustion;
+  u8 inject_verdict_failed_definite;
+  u8 inject_verdict_outcome_unknown;
   u8 owner_mode;
   vlib_main_t *vm;
   void *active_datagram;
@@ -251,7 +262,26 @@ struct nfqueue_live_main_s
   u64 verdict_attempts;
   u64 verdict_send_success;
   u64 verdict_send_failures;
+  u64 verdict_identity_mismatches;
+  u64 verdict_fault_injections;
+  u64 last_verdict_generation;
+  u32 last_verdict_packet_id;
+  u32 last_verdict_origin_lane;
+  u8 last_verdict_outcome;
+  u64 completion_outcome_succeeded;
+  u64 completion_outcome_failed_definite;
   u64 completion_outcome_unknown;
+  u64 completion_duplicate_attempts;
+  u64 completion_stale_generation;
+  u64 completion_debt_raised;
+  u64 completion_debt_settled;
+  u32 completion_debt;
+  u64 retry_attempts;
+  u64 worker_reentries;
+  u64 policy_re_evaluations;
+  u64 replacement_payloads;
+  u64 terminal_intent_rewrites;
+  u64 policy_verdict_rewrites;
   u64 native_buffer_returns;
   /* S76 independent worker/credit/residue ledgers. */
   u64 owner_local_obligations;

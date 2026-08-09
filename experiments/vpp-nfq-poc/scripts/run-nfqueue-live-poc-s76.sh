@@ -47,6 +47,10 @@ FAULT_ARGS=()
 [ "${INJECT_OWNER_QUEUE_FULL:-0}" = 1 ] && FAULT_ARGS+=(inject-owner-queue-full)
 [ "${INJECT_COMPLETION_CREDIT_EXHAUSTION:-0}" = 1 ] && \
   FAULT_ARGS+=(inject-completion-credit-exhaustion)
+[ "${INJECT_VERDICT_FAILED_DEFINITE:-0}" = 1 ] && \
+  FAULT_ARGS+=(inject-verdict-failed-definite)
+[ "${INJECT_VERDICT_OUTCOME_UNKNOWN:-0}" = 1 ] && \
+  FAULT_ARGS+=(inject-verdict-outcome-unknown)
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "S76 netns smoke needs root/CAP_NET_ADMIN (run with rtk unshare -Urn)" >&2
@@ -179,7 +183,9 @@ require_at_least verdict-attempts 1
 require_at_least native-buffer-returns 1
 require_exact policy-verdicts 0
 require_exact adapter-policy-parser-attempts 0
-require_exact send-failures 0
+if [ "${INJECT_VERDICT_FAILED_DEFINITE:-0}" != 1 ]; then
+  require_exact send-failures 0
+fi
 require_exact packet-copies 0
 require_exact scratch-rx-buffers 0
 require_exact full-packet-memcpy 0
