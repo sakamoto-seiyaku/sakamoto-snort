@@ -11,6 +11,15 @@ JOBS="${JOBS:-4}"
 LOG_DIR="$POC_DIR/results"
 LOG="$LOG_DIR/android-vpp-build-${TARGET}.log"
 
+# VPP's API generators run with the host Python interpreter even while the
+# target objects are Android arm64.  Keep the build reproducible when the
+# repository's fallback PLY environment is present; callers may still supply
+# an explicit PYTHONPATH for a different pinned environment.
+if [ -z "${PYTHONPATH:-}" ] \
+  && [ -d "$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages" ]; then
+  export PYTHONPATH="$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages"
+fi
+
 if [ ! -f "$BUILD_DIR/build.ninja" ]; then
   echo "Android VPP build dir is not configured: $BUILD_DIR" >&2
   echo "Run: make android-vpp-configure-probe" >&2
@@ -24,6 +33,7 @@ mkdir -p "$LOG_DIR"
   echo "build_dir=$BUILD_DIR"
   echo "target=$TARGET"
   echo "jobs=$JOBS"
+  echo "pythonpath=${PYTHONPATH:-}"
   echo
 
   export GIT_CONFIG_COUNT=1

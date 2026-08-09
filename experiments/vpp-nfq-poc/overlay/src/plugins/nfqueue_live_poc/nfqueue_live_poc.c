@@ -155,6 +155,7 @@ nfqueue_live_main_t nfqueue_live_main = {
   .completion_fd = -1,
   .netlink_file_index = ~0,
   .completion_file_index = ~0,
+  .frame_queue_index = ~0,
   .worker_thread = 1,
   .teardown_state = NFQUEUE_LIVE_TEARDOWN_STOPPED,
   .teardown_drain_limit = 200,
@@ -2940,6 +2941,14 @@ nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
     return clib_error_return (0, "start VPP with at least one worker");
   nfqueue_live_reset_runtime (nm);
   nm->vm = vm;
+  /* Android brings up worker VLIB mains after plugin init.  Initializing the
+   * frame queue from VLIB_INIT_FUNCTION therefore leaves only the main-thread
+   * queue in some Android starts; the first worker handoff would index a
+   * missing queue and fault.  Build this fixed queue once, after workers are
+   * live and before admitting any packet obligation. */
+  if (nm->frame_queue_index == ~0u)
+    nm->frame_queue_index = vlib_frame_queue_main_init (
+      nfqueue_live_owner_node.index, 0);
   nm->queue_num = queue_num;
   nm->family = family;
   nm->origin_lane = 0;
@@ -3019,6 +3028,11 @@ nfqueue_live_enable_dual (vlib_main_t *vm, u16 queue_base,
     return clib_error_return (0, "start VPP with at least two workers");
   nfqueue_live_reset_runtime (nm);
   nm->vm = vm;
+  /* See the single-lane enable path: defer queue-main construction until the
+   * worker layout is available on Android. */
+  if (nm->frame_queue_index == ~0u)
+    nm->frame_queue_index = vlib_frame_queue_main_init (
+      nfqueue_live_owner_node.index, 0);
   nm->queue_num = queue_base;
   nm->family = 0;
   nm->origin_lane = 0;
@@ -3790,8 +3804,10 @@ nfqueue_live_init (vlib_main_t *vm)
 {
   nfqueue_live_main_t *nm = &nfqueue_live_main;
   nm->vm = vm;
-  nm->frame_queue_index = vlib_frame_queue_main_init (
-    nfqueue_live_owner_node.index, 0);
+  /* Worker VLIB mains may not be fully populated when plugin init runs (this
+   * is observable on Android).  Keep the queue uninitialized until enable,
+   * when the runtime has verified its worker requirement. */
+  nm->frame_queue_index = ~0u;
   nfqueue_live_reset_runtime (nm);
   return 0;
 }

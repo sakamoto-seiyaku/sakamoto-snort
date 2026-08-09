@@ -17,6 +17,14 @@ VPP_EXTRA_CMAKE_ARGS="${VPP_EXTRA_CMAKE_ARGS:-}"
 LOG_DIR="$POC_DIR/results"
 LOG="$LOG_DIR/android-vpp-configure-probe.log"
 
+# CMake probes and VPP API generation use the host Python interpreter.  Use
+# the repository-pinned fallback PLY environment unless the caller supplies a
+# deliberate override.
+if [ -z "${PYTHONPATH:-}" ] \
+  && [ -d "$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages" ]; then
+  export PYTHONPATH="$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages"
+fi
+
 source "$REPO_ROOT/dev/dev-ndk-env.sh"
 
 if [ ! -f "$VPP_SRC_DIR/CMakeLists.txt" ]; then
@@ -45,6 +53,7 @@ rm -rf "$BUILD_DIR"
   echo "vpp_cmake_build_type=$VPP_CMAKE_BUILD_TYPE"
   echo "vpp_use_lto=$VPP_USE_LTO"
   echo "vpp_extra_cmake_args=$VPP_EXTRA_CMAKE_ARGS"
+  echo "pythonpath=${PYTHONPATH:-}"
   echo
 
   export GIT_CONFIG_COUNT=1
