@@ -44,6 +44,8 @@
 #define NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED (1u << 5)
 #define NFQUEUE_LIVE_FLAG_OUTCOME_UNKNOWN (1u << 6)
 #define NFQUEUE_LIVE_FLAG_OUTCOME_FAILED (1u << 7)
+#define NFQUEUE_LIVE_COMPLETION_REF_MASK 0x7fu
+#define NFQUEUE_LIVE_LATE_RETURN_QUEUED 0x80u
 /* Linux NF_INET_LOCAL_IN/LOCAL_OUT are the two device directions exercised
  * by the S75 runtime.  PRE_ROUTING/POST_ROUTING are normalized to the same
  * INPUT/OUTPUT vocabulary for completeness; the hook value remains the
@@ -165,6 +167,7 @@ static u8 nfqueue_live_recover_packet_id (const u8 *base, u32 length,
                                           u32 *packet_id);
 static u32 nfqueue_live_next_obligation_nonce (nfqueue_live_main_t *nm);
 static void nfqueue_live_drain_ingress_queue (nfqueue_live_main_t *nm);
+static void nfqueue_live_drain_held_obligation (nfqueue_live_main_t *nm);
 
 static const char *
 nfqueue_live_teardown_state_name (nfqueue_live_teardown_state_t state)
@@ -233,7 +236,8 @@ nfqueue_live_record_teardown_transition (
   nfqueue_live_teardown_state_t state = nfqueue_live_teardown_state_load (nm);
   if (!nfqueue_live_teardown_transition (&state, event))
     {
-      nm->teardown_transition_rejections++;
+      (void) __atomic_fetch_add (&nm->teardown_transition_rejections, 1,
+                                  __ATOMIC_RELAXED);
       return 0;
     }
   __atomic_store_n (&nm->teardown_state, state, __ATOMIC_RELEASE);
@@ -281,6 +285,43 @@ nfqueue_live_set_state (nfqueue_live_meta_t *meta, nfqueue_live_state_t state)
 {
   meta->flags = (meta->flags & ~NFQUEUE_LIVE_FLAG_STATE_MASK) |
                 ((u8) state << NFQUEUE_LIVE_FLAG_STATE_SHIFT);
+}
+
+static_always_inline u8
+nfqueue_live_completion_ref_count (const nfqueue_live_meta_t *meta)
+{
+  return meta->completion_refs & NFQUEUE_LIVE_COMPLETION_REF_MASK;
+}
+
+static_always_inline u8
+nfqueue_live_late_return_queued (const nfqueue_live_meta_t *meta)
+{
+  return (meta->completion_refs & NFQUEUE_LIVE_LATE_RETURN_QUEUED) != 0;
+}
+
+static_always_inline void
+nfqueue_live_completion_ref_set (nfqueue_live_meta_t *meta, u8 count)
+{
+  meta->completion_refs = (meta->completion_refs & NFQUEUE_LIVE_LATE_RETURN_QUEUED) |
+                          (count & NFQUEUE_LIVE_COMPLETION_REF_MASK);
+}
+
+static_always_inline void
+nfqueue_live_completion_ref_inc (nfqueue_live_meta_t *meta)
+{
+  u8 count = nfqueue_live_completion_ref_count (meta);
+  ASSERT (count < NFQUEUE_LIVE_COMPLETION_REF_MASK);
+  nfqueue_live_completion_ref_set (meta, count + 1);
+}
+
+static_always_inline u8
+nfqueue_live_completion_ref_dec (nfqueue_live_meta_t *meta)
+{
+  u8 count = nfqueue_live_completion_ref_count (meta);
+  if (count == 0)
+    return 0;
+  nfqueue_live_completion_ref_set (meta, count - 1);
+  return 1;
 }
 
 static_always_inline u8
@@ -390,6 +431,18 @@ static_always_inline void
 nfqueue_live_counter_inc (u64 *counter)
 {
   (void) __atomic_fetch_add (counter, 1, __ATOMIC_RELAXED);
+}
+
+static_always_inline void
+nfqueue_live_counter_add (u64 *counter, u64 value)
+{
+  (void) __atomic_fetch_add (counter, value, __ATOMIC_RELAXED);
+}
+
+static_always_inline void
+nfqueue_live_counter_store (u64 *counter, u64 value)
+{
+  __atomic_store_n (counter, value, __ATOMIC_RELEASE);
 }
 
 static_always_inline u64
@@ -1083,7 +1136,7 @@ nfqueue_live_send_verdict (nfqueue_live_main_t *nm,
       nm->completion_outcome_failed_definite++;
       break;
     case NFQUEUE_LIVE_OUTCOME_UNKNOWN:
-      nm->completion_outcome_unknown++;
+      nfqueue_live_counter_inc (&nm->completion_outcome_unknown);
       break;
     default:
       break;
@@ -1185,7 +1238,7 @@ static void
 nfqueue_live_return_buffer (nfqueue_live_main_t *nm, u32 buffer_index,
                             nfqueue_live_meta_t *meta)
 {
-  if (meta->completion_refs != 0 ||
+  if (nfqueue_live_completion_ref_count (meta) != 0 ||
       nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED)
     return;
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_RETURNED);
@@ -1224,20 +1277,83 @@ nfqueue_live_free_unowned (nfqueue_live_main_t *nm, u32 buffer_index)
 }
 
 static void
+nfqueue_live_wake_late_return (nfqueue_live_main_t *nm)
+{
+  /* The completion eventfd is deliberately closed at the completion-close
+   * edge.  Late worker ownership therefore wakes the always-live origin
+   * process directly; no closed descriptor is touched. */
+  vlib_process_signal_event (nm->vm, nfqueue_live_ingress_process_node.index,
+                             0, 0);
+}
+
+static u8
+nfqueue_live_publish_late_return (nfqueue_live_main_t *nm, u32 buffer_index,
+                                  nfqueue_live_meta_t *meta)
+{
+  nfqueue_live_completion_t late;
+
+  if (nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED ||
+      nfqueue_live_completion_ref_count (meta) == 0)
+    return 0;
+  if (nfqueue_live_late_return_queued (meta))
+    return 1;
+
+  nfqueue_live_handoff_sample_release_for_meta (nm, meta);
+  if ((meta->flags & NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED) == 0)
+    {
+      /* There is no open completion channel on this path.  Record the
+       * identity-preserving outcome as unknown exactly once; the origin lane
+       * still owns the one native buffer return and completion debt settle. */
+      meta->flags |= NFQUEUE_LIVE_FLAG_VERDICT_ATTEMPTED |
+                     NFQUEUE_LIVE_FLAG_OUTCOME_UNKNOWN;
+      nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_ATTEMPTED);
+      nfqueue_live_record_outcome (nm, meta, NFQUEUE_LIVE_OUTCOME_UNKNOWN);
+      nm->completion_outcome_unknown++;
+    }
+  meta->completion_refs |= NFQUEUE_LIVE_LATE_RETURN_QUEUED;
+  late = (nfqueue_live_completion_t){
+    .buffer_index = buffer_index,
+    .generation_lo = meta->generation_lo,
+    .generation_hi = meta->generation_hi,
+    .packet_id = meta->packet_id,
+    .obligation_nonce = meta->obligation_nonce,
+    .origin_lane = nfqueue_live_meta_origin_lane (meta),
+    .policy_verdict = NFQUEUE_LIVE_ACCEPT,
+    .terminal_intent = 1,
+    .outcome_hint = NFQUEUE_LIVE_OUTCOME_UNKNOWN,
+    .reference_held = 1,
+  };
+  nfqueue_live_ring_lock (&nm->late_return_push_lock);
+  u8 pushed = nfqueue_live_completion_push (&nm->late_return, &late);
+  nfqueue_live_ring_unlock (&nm->late_return_push_lock);
+  if (!pushed)
+    {
+      /* The late ring is bounded by the same 127-obligation admission cap.
+       * A full ring is an internal bound violation, never a reason to hide
+       * the still-live obligation. */
+      meta->completion_refs &= ~NFQUEUE_LIVE_LATE_RETURN_QUEUED;
+      nfqueue_live_counter_inc (&nm->teardown_obligation_residue);
+      return 0;
+    }
+  nfqueue_live_counter_inc (&nm->teardown_late_completion);
+  nfqueue_live_wake_late_return (nm);
+  return 1;
+}
+
+static void
 nfqueue_live_publish_terminal (nfqueue_live_main_t *nm, u32 buffer_index,
                                nfqueue_live_meta_t *meta)
 {
   if (!nfqueue_live_teardown_completion_open (nm))
     {
-      /* Teardown must never silently free a worker-owned buffer after the
-       * completion channel has closed.  Keep the obligation visible so the
-       * caller can classify the failed stop instead of claiming closure. */
-      nm->teardown_late_completion++;
+      /* The worker cannot settle a native buffer.  Transfer its one live
+       * reference to the origin lane's late-return ring instead. */
+      (void) nfqueue_live_publish_late_return (nm, buffer_index, meta);
       return;
     }
   if (nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED)
     return;
-  if (meta->completion_refs == 0)
+  if (nfqueue_live_completion_ref_count (meta) == 0)
     return;
   /* A source-side queue fault or a destination-side invalid-state terminal
    * must release any reserved before/after evidence slot. */
@@ -1301,14 +1417,16 @@ nfqueue_live_settle_on_origin (nfqueue_live_main_t *nm, u32 buffer_index,
             {
               nm->fail_open_settlements++;
               if (deadline)
-                nm->teardown_deadline_accepts++;
+                nfqueue_live_counter_inc (&nm->teardown_deadline_accepts);
               else
-                nm->teardown_drain_accepts++;
+                nfqueue_live_counter_inc (&nm->teardown_drain_accepts);
             }
           else if (outcome == NFQUEUE_LIVE_OUTCOME_FAILED_DEFINITE)
-            nm->teardown_deadline_failed_definite += deadline;
+            nfqueue_live_counter_add (&nm->teardown_deadline_failed_definite,
+                                       deadline);
           else if (outcome == NFQUEUE_LIVE_OUTCOME_UNKNOWN)
-            nm->teardown_deadline_outcome_unknown += deadline;
+            nfqueue_live_counter_add (&nm->teardown_deadline_outcome_unknown,
+                                       deadline);
         }
       else
         {
@@ -1316,16 +1434,17 @@ nfqueue_live_settle_on_origin (nfqueue_live_main_t *nm, u32 buffer_index,
            * or packet id cannot be honestly called ACCEPTed.  It is settled
            * exactly once as an explicitly classified unknown obligation; no
            * stale-generation or guessed verdict is attempted. */
-          nm->teardown_identity_unrecoverable++;
-          nm->teardown_deadline_outcome_unknown += deadline;
+          nfqueue_live_counter_inc (&nm->teardown_identity_unrecoverable);
+          nfqueue_live_counter_add (&nm->teardown_deadline_outcome_unknown,
+                                    deadline);
           if (generation != nm->generation)
             nm->completion_stale_generation++;
           nfqueue_live_record_outcome (nm, meta,
                                        NFQUEUE_LIVE_OUTCOME_UNKNOWN);
-          nm->completion_outcome_unknown++;
+          nfqueue_live_counter_inc (&nm->completion_outcome_unknown);
         }
     }
-  meta->completion_refs = 0;
+  nfqueue_live_completion_ref_set (meta, 0);
   nfqueue_live_return_buffer (nm, buffer_index, meta);
 }
 
@@ -1341,14 +1460,46 @@ nfqueue_live_completion_identity_matches (const nfqueue_live_meta_t *meta,
 }
 
 static void
+nfqueue_live_drain_late_return_queue (nfqueue_live_main_t *nm)
+{
+  nfqueue_live_completion_t entry;
+  while (nfqueue_live_completion_pop (&nm->late_return, &entry))
+    {
+      vlib_buffer_t *buffer = vlib_get_buffer (nm->vm, entry.buffer_index);
+      nfqueue_live_meta_t *meta = nfqueue_live_meta (buffer);
+      /* Never free a buffer that no longer proves the late entry's complete
+       * identity.  A reused index is stale evidence, not permission to issue
+       * a second verdict or native return; leave the obligation classified as
+       * residue for the caller. */
+      if (!nfqueue_live_completion_identity_matches (meta, &entry) ||
+          !nfqueue_live_late_return_queued (meta) ||
+          nfqueue_live_completion_ref_count (meta) == 0 ||
+          nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED)
+        {
+          nfqueue_live_counter_inc (&nm->completion_stale);
+          nfqueue_live_counter_inc (&nm->teardown_obligation_residue);
+          continue;
+        }
+      /* The late token represents the still-live obligation, including any
+       * duplicate worker references.  Clear the marker and settle once on
+       * the origin lane; no verdict is retried because the outcome was
+       * already attempted/recorded by the worker handoff above. */
+      nfqueue_live_counter_inc (&nm->teardown_late_settlements);
+      meta->completion_refs = 0;
+      nfqueue_live_return_buffer (nm, entry.buffer_index, meta);
+    }
+}
+
+static void
 nfqueue_live_drop_completion_ref (nfqueue_live_main_t *nm, u32 buffer_index,
                                   nfqueue_live_meta_t *meta,
                                   const nfqueue_live_completion_t *entry)
 {
-  if (!entry->reference_held || meta->completion_refs == 0)
+  if (!entry->reference_held ||
+      nfqueue_live_completion_ref_count (meta) == 0)
     return;
-  meta->completion_refs--;
-  if (meta->completion_refs == 0)
+  nfqueue_live_completion_ref_dec (meta);
+  if (nfqueue_live_completion_ref_count (meta) == 0)
     nfqueue_live_return_buffer (nm, buffer_index, meta);
 }
 
@@ -1376,7 +1527,12 @@ nfqueue_live_complete_one (nfqueue_live_main_t *nm,
       nm->completion_stale++;
       if (entry_generation != nm->generation)
         nm->completion_stale_generation++;
-      nm->teardown_late_completion++;
+      if (nfqueue_live_completion_identity_matches (meta, entry) &&
+          nfqueue_live_completion_ref_count (meta) != 0 &&
+          nfqueue_live_state (meta) >= NFQUEUE_LIVE_STATE_COMPLETION)
+        (void) nfqueue_live_publish_late_return (nm, entry->buffer_index, meta);
+      else
+        nfqueue_live_counter_inc (&nm->teardown_late_completion);
       return;
     }
 
@@ -1447,7 +1603,7 @@ nfqueue_live_completion_read_ready (clib_file_t *file)
   nfqueue_live_main_t *nm = (nfqueue_live_main_t *) file->private_data;
   if (!nfqueue_live_teardown_completion_open (nm))
     {
-      nm->teardown_late_completion++;
+      nfqueue_live_counter_inc (&nm->teardown_late_completion);
       return 0;
     }
   nfqueue_live_drain_completion_queue (nm);
@@ -1661,7 +1817,7 @@ nfqueue_live_packet_cb (struct nfq_q_handle *queue, struct nfgenmsg *message,
     (u8) nfqueue_live_initial_worker (nm, meta->origin_lane);
   meta->canonical_worker =
     (u8) nfqueue_live_canonical_worker (nm, meta);
-  meta->completion_refs = 1;
+  nfqueue_live_completion_ref_set (meta, 1);
   if (nm->inject_uid_unknown)
     {
       nm->inject_uid_unknown = 0;
@@ -1963,7 +2119,7 @@ nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
 {
   if (!nfqueue_live_teardown_completion_open (nm))
     {
-      nm->teardown_late_completion++;
+      (void) nfqueue_live_publish_late_return (nm, buffer_index, meta);
       return 0;
     }
   nfqueue_live_completion_t completion = {
@@ -1988,7 +2144,7 @@ nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
   u8 duplicate_pushed = 1;
 
   if (nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_RETURNED ||
-      meta->completion_refs == 0)
+      nfqueue_live_completion_ref_count (meta) == 0)
     return 0;
   nfqueue_live_set_state (meta, NFQUEUE_LIVE_STATE_COMPLETION);
   if (__atomic_exchange_n (&nm->inject_completion_overflow, 0,
@@ -1997,12 +2153,13 @@ nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
       /* Reserve every free normal-ring slot with an exact duplicate. The
        * original reference stays reserved for the emergency origin token. */
       nfqueue_live_completion_lock (nm);
-      while (nfqueue_live_completion_free_slots (&nm->completion) != 0)
+      while (nfqueue_live_completion_free_slots (&nm->completion) >
+             required_slots)
         {
           nfqueue_live_completion_t filler = completion;
           if (!nfqueue_live_completion_push (&nm->completion, &filler))
             break;
-          meta->completion_refs++;
+          nfqueue_live_completion_ref_inc (meta);
         }
       nfqueue_live_completion_unlock (nm);
     }
@@ -2017,12 +2174,12 @@ nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
       return 0;
     }
   if (duplicate_requested)
-    meta->completion_refs++;
+      nfqueue_live_completion_ref_inc (meta);
   primary_pushed = nfqueue_live_completion_push (&nm->completion, &completion);
   if (!primary_pushed)
     {
       if (duplicate_requested)
-        meta->completion_refs--;
+        nfqueue_live_completion_ref_dec (meta);
       nfqueue_live_completion_unlock (nm);
       nfqueue_live_counter_inc (&nm->completion_ring_overflow);
       nfqueue_live_publish_terminal (nm, buffer_index, meta);
@@ -2046,7 +2203,7 @@ nfqueue_live_publish_completion (nfqueue_live_main_t *nm, u32 buffer_index,
       duplicate_pushed =
         nfqueue_live_completion_push (&nm->completion, &duplicate);
       if (!duplicate_pushed)
-        meta->completion_refs--;
+        nfqueue_live_completion_ref_dec (meta);
     }
   nfqueue_live_completion_unlock (nm);
   if (!stale_pushed)
@@ -2073,6 +2230,26 @@ VLIB_NODE_FN (nfqueue_live_owner_node) (vlib_main_t *vm,
       u32 worker_thread = vlib_get_thread_index ();
       u16 target_thread;
       u32 enqueued;
+
+      /* Test-only hold gate: admit one genuine current-generation packet,
+       * retain its live VPP buffer/reference/debt, and stop before publishing
+       * a completion.  The origin lane owns release at teardown. */
+      if (__atomic_load_n (&nm->hold_obligation, __ATOMIC_ACQUIRE) &&
+          nfqueue_live_state (meta) == NFQUEUE_LIVE_STATE_LIVE &&
+          nfqueue_live_meta_generation (meta) == nm->generation)
+        {
+          u32 expected = ~0u;
+          if (__atomic_compare_exchange_n (&nm->held_buffer_index, &expected,
+                                           buffer_index, 0, __ATOMIC_ACQ_REL,
+                                           __ATOMIC_ACQUIRE))
+            {
+              __atomic_store_n (&nm->hold_obligation, 0, __ATOMIC_RELEASE);
+              __atomic_store_n (&nm->held_obligation, 1, __ATOMIC_RELEASE);
+              from++;
+              n_left--;
+              continue;
+            }
+        }
 
       nfqueue_live_counter_inc (&nm->handoff_count);
       __atomic_store_n (&nm->last_worker_thread, worker_thread,
@@ -2205,12 +2382,14 @@ VLIB_NODE_FN (nfqueue_live_ingress_process_node) (vlib_main_t *vm,
     {
       (void) vlib_process_wait_for_event (vm);
       (void) vlib_process_get_events (vm, 0);
+      nfqueue_live_drain_late_return_queue (nm);
       if (!nfqueue_live_teardown_ingress_allowed (nm))
         {
           /* No new obligations may enter the worker frame queue after the
            * quiesce edge.  Existing ingress tokens are completed by the
            * origin lane while the completion channel is still open. */
           nfqueue_live_drain_ingress_queue (nm);
+          nfqueue_live_drain_held_obligation (nm);
           continue;
         }
       count = 0;
@@ -2333,15 +2512,19 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   nm->teardown_deadline_reached = 0;
   nm->teardown_drain_attempts = 0;
   nm->teardown_drain_limit = 200;
-  nm->teardown_transition_rejections = 0;
-  nm->teardown_drain_accepts = 0;
-  nm->teardown_deadline_accepts = 0;
-  nm->teardown_deadline_failed_definite = 0;
-  nm->teardown_deadline_outcome_unknown = 0;
-  nm->teardown_identity_unrecoverable = 0;
-  nm->teardown_obligation_residue = 0;
-  nm->teardown_late_completion = 0;
-  nm->teardown_completion_frames_at_close = 0;
+  nfqueue_live_counter_store (&nm->teardown_transition_rejections, 0);
+  nfqueue_live_counter_store (&nm->teardown_drain_accepts, 0);
+  nfqueue_live_counter_store (&nm->teardown_deadline_accepts, 0);
+  nfqueue_live_counter_store (&nm->teardown_deadline_failed_definite, 0);
+  nfqueue_live_counter_store (&nm->teardown_deadline_outcome_unknown, 0);
+  nfqueue_live_counter_store (&nm->teardown_identity_unrecoverable, 0);
+  nfqueue_live_counter_store (&nm->teardown_obligation_residue, 0);
+  nfqueue_live_counter_store (&nm->teardown_late_completion, 0);
+  nfqueue_live_counter_store (&nm->teardown_late_settlements, 0);
+  nfqueue_live_counter_store (&nm->teardown_completion_frames_at_close, 0);
+  __atomic_store_n (&nm->held_buffer_index, ~0u, __ATOMIC_RELEASE);
+  __atomic_store_n (&nm->hold_obligation, 0, __ATOMIC_RELEASE);
+  __atomic_store_n (&nm->held_obligation, 0, __ATOMIC_RELEASE);
   for (u32 i = 0; i < NFQUEUE_LIVE_TEARDOWN_MAX_TRANSITIONS; i++)
     nm->teardown_events[i] = 0;
   for (u32 i = 0; i < NFQUEUE_LIVE_MAX_LANES; i++)
@@ -2390,8 +2573,11 @@ nfqueue_live_reset_runtime (nfqueue_live_main_t *nm)
   nm->completion.tail = 0;
   nm->origin_return.head = 0;
   nm->origin_return.tail = 0;
+  nm->late_return.head = 0;
+  nm->late_return.tail = 0;
   nm->completion_push_lock = 0;
   nm->origin_return_push_lock = 0;
+  nm->late_return_push_lock = 0;
   __atomic_store_n (&nm->outstanding, 0, __ATOMIC_RELEASE);
   __atomic_store_n (&nm->completion_debt, 0, __ATOMIC_RELEASE);
   nm->reserve_enabled = 0;
@@ -2491,6 +2677,22 @@ nfqueue_live_drain_ingress_queue (nfqueue_live_main_t *nm)
     }
 }
 
+static void
+nfqueue_live_drain_held_obligation (nfqueue_live_main_t *nm)
+{
+  u32 buffer_index = __atomic_exchange_n (&nm->held_buffer_index, ~0u,
+                                          __ATOMIC_ACQ_REL);
+  if (buffer_index == ~0u)
+    return;
+  __atomic_store_n (&nm->held_obligation, 0, __ATOMIC_RELEASE);
+  vlib_buffer_t *buffer = vlib_get_buffer (nm->vm, buffer_index);
+  nfqueue_live_meta_t *meta = nfqueue_live_meta (buffer);
+  /* A held slot is admitted only for the current generation.  If an injected
+   * fault has corrupted that proof, settle_on_origin records the explicit
+   * unknown outcome and still performs the origin-only native return. */
+  nfqueue_live_settle_on_origin (nm, buffer_index, meta);
+}
+
 static clib_error_t *
 nfqueue_live_drain_bounded (nfqueue_live_main_t *nm)
 {
@@ -2510,7 +2712,9 @@ nfqueue_live_drain_bounded (nfqueue_live_main_t *nm)
           nm->teardown_deadline_reached = 1;
         }
       nfqueue_live_drain_ingress_queue (nm);
+      nfqueue_live_drain_held_obligation (nm);
       nfqueue_live_drain_completion_queue (nm);
+      nfqueue_live_drain_late_return_queue (nm);
       if (nfqueue_live_outstanding_load (nm) == 0)
         return 0;
       if (attempt + 1 == limit)
@@ -2528,14 +2732,16 @@ nfqueue_live_drain_bounded (nfqueue_live_main_t *nm)
            * origin lane one final chance to classify every ring-backed
            * identity before refusing to close with live debt. */
           nfqueue_live_drain_ingress_queue (nm);
+          nfqueue_live_drain_held_obligation (nm);
           nfqueue_live_drain_completion_queue (nm);
+          nfqueue_live_drain_late_return_queue (nm);
           if (nfqueue_live_outstanding_load (nm) == 0)
             return 0;
-          nm->teardown_obligation_residue =
-            nfqueue_live_outstanding_load (nm);
+          nfqueue_live_counter_store (&nm->teardown_obligation_residue,
+                                      nfqueue_live_outstanding_load (nm));
           return clib_error_return (
             0, "nfqueue-live bounded drain deadline left %u obligations",
-            (u32) nm->teardown_obligation_residue);
+            (u32) nfqueue_live_counter_load (&nm->teardown_obligation_residue));
         }
       /* Workers continue to run while the origin lane polls the completion
        * transport. The bound makes teardown failure explicit. */
@@ -2612,7 +2818,8 @@ nfqueue_live_close_completion_channel (nfqueue_live_main_t *nm)
       close (nm->completion_fd);
       nm->completion_fd = -1;
     }
-  nm->teardown_completion_frames_at_close = nm->completion_frames;
+  nfqueue_live_counter_store (&nm->teardown_completion_frames_at_close,
+                              nm->completion_frames);
 }
 
 /* Called only after completion closure has been recorded and all obligations
@@ -2951,6 +3158,7 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 verdict_failed_definite = 0;
   u8 verdict_outcome_unknown = 0;
   u8 inject_receive_fault = 0;
+  u8 hold_obligation = 0;
   u8 inject_normal_capacity_exhaustion = 0;
   u8 arm_normal_capacity_exhaustion = 0;
   u32 normal_capacity = NFQUEUE_LIVE_DEFAULT_NORMAL_CAPACITY;
@@ -2995,6 +3203,8 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
         verdict_outcome_unknown = 1;
       else if (unformat (input, "inject-receive-fault"))
         inject_receive_fault = 1;
+      else if (unformat (input, "hold-obligation"))
+        hold_obligation = 1;
       else if (unformat (input, "normal-capacity %u", &normal_capacity))
         ;
       else if (unformat (input, "reserve-capacity %u", &reserve_capacity))
@@ -3029,6 +3239,8 @@ nfqueue_live_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
                         verdict_outcome_unknown, __ATOMIC_RELEASE);
       __atomic_store_n (&nfqueue_live_main.inject_receive_fault,
                         inject_receive_fault, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.hold_obligation, hold_obligation,
+                        __ATOMIC_RELEASE);
     }
   return error;
 }
@@ -3042,7 +3254,7 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_command, static) = {
                 "[owner-local|owner-remote|owner-mixed] "
                 "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
                 "[inject-verdict-failed-definite|inject-verdict-outcome-unknown] "
-                "[inject-receive-fault] "
+                "[inject-receive-fault] [hold-obligation] "
                 "[normal-capacity <n>] [reserve-capacity <n>] "
                 "[inject-normal-capacity-exhaustion] "
                 "[arm-normal-capacity-exhaustion-after-fill]",
@@ -3067,6 +3279,7 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
   u8 verdict_failed_definite = 0;
   u8 verdict_outcome_unknown = 0;
   u8 inject_receive_fault = 0;
+  u8 hold_obligation = 0;
   u8 require_two_workers = 0;
   u8 inject_normal_capacity_exhaustion = 0;
   u8 arm_normal_capacity_exhaustion = 0;
@@ -3108,6 +3321,8 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
         verdict_outcome_unknown = 1;
       else if (unformat (input, "inject-receive-fault"))
         inject_receive_fault = 1;
+      else if (unformat (input, "hold-obligation"))
+        hold_obligation = 1;
       else if (unformat (input, "two-workers"))
         require_two_workers = 1;
       else if (unformat (input, "normal-capacity %u", &normal_capacity))
@@ -3145,6 +3360,8 @@ nfqueue_live_enable_dual_command_fn (vlib_main_t *vm,
                         verdict_outcome_unknown, __ATOMIC_RELEASE);
       __atomic_store_n (&nfqueue_live_main.inject_receive_fault,
                         inject_receive_fault, __ATOMIC_RELEASE);
+      __atomic_store_n (&nfqueue_live_main.hold_obligation, hold_obligation,
+                        __ATOMIC_RELEASE);
     }
   return error;
 }
@@ -3158,7 +3375,7 @@ VLIB_CLI_COMMAND (nfqueue_live_enable_dual_command, static) = {
                 "[owner-local|owner-remote|owner-mixed] "
                 "[inject-owner-queue-full] [inject-completion-credit-exhaustion] "
                 "[inject-verdict-failed-definite|inject-verdict-outcome-unknown] "
-                "[inject-receive-fault] "
+                "[inject-receive-fault] [hold-obligation] "
                 "[two-workers] [normal-capacity <n>] [reserve-capacity <n>] "
                 "[inject-normal-capacity-exhaustion] "
                 "[arm-normal-capacity-exhaustion-after-fill]",
@@ -3220,31 +3437,44 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     nm->teardown_deadline_reached);
   vlib_cli_output (
     vm,
-    "teardown-transition-rejections %llu teardown-drain-accepts %llu teardown-deadline-accepts %llu teardown-deadline-failed-definite %llu teardown-deadline-unknown %llu teardown-identity-unrecoverable %llu teardown-obligation-residue %llu teardown-late-completion %llu",
-    (unsigned long long) nm->teardown_transition_rejections,
-    (unsigned long long) nm->teardown_drain_accepts,
-    (unsigned long long) nm->teardown_deadline_accepts,
-    (unsigned long long) nm->teardown_deadline_failed_definite,
-    (unsigned long long) nm->teardown_deadline_outcome_unknown,
-    (unsigned long long) nm->teardown_identity_unrecoverable,
-    (unsigned long long) nm->teardown_obligation_residue,
-    (unsigned long long) nm->teardown_late_completion);
+    "teardown-transition-rejections %llu teardown-drain-accepts %llu teardown-deadline-accepts %llu teardown-deadline-failed-definite %llu teardown-deadline-unknown %llu teardown-identity-unrecoverable %llu teardown-obligation-residue %llu teardown-late-completion %llu teardown-late-settlements %llu",
+    (unsigned long long) nfqueue_live_counter_load (
+      &nm->teardown_transition_rejections),
+    (unsigned long long) nfqueue_live_counter_load (&nm->teardown_drain_accepts),
+    (unsigned long long) nfqueue_live_counter_load (
+      &nm->teardown_deadline_accepts),
+    (unsigned long long) nfqueue_live_counter_load (
+      &nm->teardown_deadline_failed_definite),
+    (unsigned long long) nfqueue_live_counter_load (
+      &nm->teardown_deadline_outcome_unknown),
+    (unsigned long long) nfqueue_live_counter_load (
+      &nm->teardown_identity_unrecoverable),
+    (unsigned long long) nfqueue_live_counter_load (
+      &nm->teardown_obligation_residue),
+    (unsigned long long) nfqueue_live_counter_load (&nm->teardown_late_completion),
+    (unsigned long long) nfqueue_live_counter_load (&nm->teardown_late_settlements));
   vlib_cli_output (
     vm,
-    "teardown-rings ingress-depth %u completion-depth %u origin-return-depth %u completion-channel-open %u completion-frames-at-close %llu",
+    "teardown-rings ingress-depth %u completion-depth %u origin-return-depth %u late-return-depth %u completion-channel-open %u completion-frames-at-close %llu",
     (nm->ingress.tail + NFQUEUE_LIVE_RING_CAPACITY - nm->ingress.head) %
       NFQUEUE_LIVE_RING_CAPACITY,
     (nm->completion.tail + NFQUEUE_LIVE_RING_CAPACITY - nm->completion.head) %
       NFQUEUE_LIVE_RING_CAPACITY,
     (nm->origin_return.tail + NFQUEUE_LIVE_RING_CAPACITY -
      nm->origin_return.head) % NFQUEUE_LIVE_RING_CAPACITY,
+    (nm->late_return.tail + NFQUEUE_LIVE_RING_CAPACITY -
+     nm->late_return.head) % NFQUEUE_LIVE_RING_CAPACITY,
     nfqueue_live_teardown_completion_open (nm),
-    (unsigned long long) nm->teardown_completion_frames_at_close);
+    (unsigned long long) nfqueue_live_counter_load (
+      &nm->teardown_completion_frames_at_close));
   vlib_cli_output (
     vm,
     "teardown-resources netlink-fd %d completion-fd %d queue-open %u handle-open %u enabled-lanes %u",
     nm->netlink_fd, nm->completion_fd, nm->queue != 0, nm->handle != 0,
     enabled_lanes);
+  vlib_cli_output (vm, "held-obligation %u held-buffer-index %u",
+                   __atomic_load_n (&nm->held_obligation, __ATOMIC_ACQUIRE),
+                   __atomic_load_n (&nm->held_buffer_index, __ATOMIC_ACQUIRE));
   for (u32 i = 0; i < nm->teardown_event_count; i++)
     vlib_cli_output (vm, "teardown-transition %u %s", i,
                      nfqueue_live_teardown_event_name (

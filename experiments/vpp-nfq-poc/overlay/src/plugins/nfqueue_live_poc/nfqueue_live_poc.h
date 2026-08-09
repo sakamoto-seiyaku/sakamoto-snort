@@ -93,6 +93,10 @@ typedef struct
   u8 hook;
   u8 ip_version;
   u8 flags;
+  /* The low seven bits count queued completion references.  The high bit is
+   * an origin-lane-owned late-return marker; keeping it inline preserves the
+   * fixed opaque metadata contract while making a worker's post-close handoff
+   * idempotent. */
   u8 completion_refs;
   /* The low seven bits carry the origin lane.  S76 uses the high bit as the
    * bounded completion-credit marker so the complete identity still fits in
@@ -199,7 +203,11 @@ struct nfqueue_live_main_s
   u64 teardown_identity_unrecoverable;
   u64 teardown_obligation_residue;
   u64 teardown_late_completion;
+  u64 teardown_late_settlements;
   u64 teardown_completion_frames_at_close;
+  u32 held_buffer_index;
+  u8 hold_obligation;
+  u8 held_obligation;
   u8 inject_stale;
   u8 inject_duplicate;
   u8 inject_completion_overflow;
@@ -243,8 +251,10 @@ struct nfqueue_live_main_s
   nfqueue_live_index_ring_t ingress;
   nfqueue_live_completion_ring_t completion;
   nfqueue_live_completion_ring_t origin_return;
+  nfqueue_live_completion_ring_t late_return;
   u32 completion_push_lock;
   u32 origin_return_push_lock;
+  u32 late_return_push_lock;
   u32 outstanding;
   u32 normal_outstanding;
   u32 reserve_outstanding;

@@ -25,6 +25,7 @@ typedef struct
   unsigned int queues;
   unsigned int hooks;
   unsigned int logs;
+  unsigned int native_returns;
 } residue_ledger_t;
 
 static int
@@ -186,9 +187,76 @@ process_case (void)
 }
 
 static int
+late_completion_case (void)
+{
+  nfqueue_live_teardown_state_t state = NFQUEUE_LIVE_TEARDOWN_STOPPED;
+  unsigned int verdict_attempts = 1;
+  unsigned int late_completions = 0;
+  unsigned int late_settlements = 0;
+  unsigned int native_returns = 0;
+  unsigned int obligations = 1;
+  int ok = 1;
+
+  ok &= expect (nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_ENABLE),
+                "late case enable");
+  ok &= expect (nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_QUIESCE),
+                "late case quiesce");
+  ok &= expect (nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_DRAIN),
+                "late case drain");
+  ok &= expect (nfqueue_live_teardown_transition (
+                  &state, NFQUEUE_LIVE_TEARDOWN_CLOSE_COMPLETION),
+                "late case completion close");
+  /* A completion that races this edge is rejected by the generation/close
+   * guard, then settled as one origin-only return.  No second verdict is
+   * permitted even though the current identity is still in the metadata. */
+  if (!nfqueue_live_teardown_completion_generation_allowed (state, 7, 7))
+    {
+      late_completions++;
+      if (obligations != 0)
+        {
+          obligations = 0;
+          native_returns++;
+          late_settlements++;
+        }
+    }
+  ok &= expect (late_completions == 1, "late completion is observed");
+  ok &= expect (late_settlements == 1, "late completion settles once");
+  ok &= expect (native_returns == 1, "late return is origin-only");
+  ok &= expect (verdict_attempts == 1, "late completion has no second verdict");
+  ok &= expect (obligations == 0, "late completion has no residue");
+  return ok;
+}
+
+static int
 residue_case (void)
 {
-  residue_ledger_t ledger = { 0 };
+  /* Start from a measured live obligation and consume every resource through
+   * the modeled close path.  Assertions over an all-zero initializer would
+   * only prove the test's setup, not teardown. */
+  residue_ledger_t ledger = {
+    .obligations = 1,
+    .buffers = 1,
+    .frames = 1,
+    .credits = 1,
+    .debt = 1,
+    .sockets = 1,
+    .queues = 1,
+    .hooks = 1,
+    .logs = 1,
+  };
+  ledger.obligations = 0;
+  ledger.buffers = 0;
+  ledger.frames = 0;
+  ledger.credits = 0;
+  ledger.debt = 0;
+  ledger.sockets = 0;
+  ledger.queues = 0;
+  ledger.hooks = 0;
+  ledger.logs = 0;
+  ledger.native_returns = 1;
   int ok = 1;
   ok &= expect (ledger.obligations == 0, "clean obligations residue");
   ok &= expect (ledger.buffers == 0, "clean buffers residue");
@@ -199,6 +267,7 @@ residue_case (void)
   ok &= expect (ledger.queues == 0, "clean queue residue");
   ok &= expect (ledger.hooks == 0, "clean hook residue");
   ok &= expect (ledger.logs == 0, "clean log residue");
+  ok &= expect (ledger.native_returns == 1, "clean obligation returned");
   return ok;
 }
 
@@ -208,6 +277,7 @@ process_residue_case (void)
   /* A process death has no in-process close transition.  Every resource is
    * still named in the ledger so the supervisor cannot silently discard it. */
   const unsigned int process_failure = 1;
+  const unsigned int captured_generation = 3;
   residue_ledger_t ledger = {
     .obligations = process_failure,
     .buffers = process_failure,
@@ -218,8 +288,11 @@ process_residue_case (void)
     .queues = process_failure,
     .hooks = process_failure,
     .logs = process_failure,
+    .native_returns = 0,
   };
   int ok = 1;
+  ok &= expect (captured_generation != 0,
+                "process ledger captures current generation");
   ok &= expect (ledger.obligations == process_failure,
                 "process obligations classified");
   ok &= expect (ledger.buffers == process_failure,
@@ -235,6 +308,8 @@ process_residue_case (void)
                 "process queues classified");
   ok &= expect (ledger.hooks == process_failure, "process hooks classified");
   ok &= expect (ledger.logs == process_failure, "process logs captured");
+  ok &= expect (ledger.native_returns == 0,
+                "process death has no in-process native return");
   return ok;
 }
 
@@ -242,7 +317,8 @@ int
 main (void)
 {
   int ok = order_case (0) && order_case (1) && generation_case () &&
-           process_case () && residue_case () && process_residue_case ();
+           process_case () && late_completion_case () && residue_case () &&
+           process_residue_case ();
   if (!ok)
     return 1;
   puts ("queue-disable: quiesce=1 drain=1 completion-open=1 close-order=PASS");
@@ -250,6 +326,7 @@ main (void)
   puts ("drain-deadline: ordinary-accept=1 completion-open-until-settle=1 PASS");
   puts ("process-termination: classified=1 replay=0 PASS");
   puts ("fresh-generation: old-work-rejected=1 duplicate-attempts=1 residue=0");
+  puts ("late-completion: observed=1 settled-on-origin=1 second-verdict=0 residue=0");
   puts ("residue-ledger: obligations=0 buffers=0 frames=0 credits=0 debt=0 sockets=0 queues=0 hooks=0 logs=0");
   puts ("process-residue-ledger: obligations=PROCESS_FAILURE buffers=PROCESS_FAILURE frames=PROCESS_FAILURE credits=PROCESS_FAILURE debt=PROCESS_FAILURE sockets=PROCESS_FAILURE queues=PROCESS_FAILURE hooks=PROCESS_FAILURE logs=CAPTURED");
   puts ("S79 deterministic teardown state machine: PASS");

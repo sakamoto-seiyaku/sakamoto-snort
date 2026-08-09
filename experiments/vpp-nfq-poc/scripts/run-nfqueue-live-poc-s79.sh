@@ -184,6 +184,9 @@ assert_closed_ledger() {
   require_exact "$file" ingress-depth 0
   require_exact "$file" completion-depth 0
   require_exact "$file" origin-return-depth 0
+  require_exact "$file" late-return-depth 0
+  require_exact "$file" held-obligation 0
+  require_exact "$file" held-buffer-index 4294967295
   require_exact "$file" outstanding-obligations 0
   require_exact "$file" residue-obligations 0
   require_exact "$file" completion-debt 0
@@ -244,6 +247,38 @@ assert_closed_ledger() {
   }
 }
 
+wait_for_real_hold() {
+  local destination="$1" held outstanding debt credits
+  for _ in $(seq 1 100); do
+    show_runtime "$destination"
+    held="$(value_for "$destination" held-obligation)"
+    outstanding="$(value_for "$destination" outstanding-obligations)"
+    debt="$(value_for "$destination" completion-debt)"
+    credits="$(value_for "$destination" completion-credits-held)"
+    if [ "${held:-0}" -eq 1 ] && [ "${outstanding:-0}" -ge 1 ] &&
+       [ "${debt:-0}" -ge 1 ] && [ "${credits:-0}" -ge 1 ]; then
+      return 0
+    fi
+    sleep 0.01
+  done
+  echo "S79 hold gate did not expose a real outstanding obligation" >&2
+  cat "$destination" >&2
+  exit 1
+}
+
+assert_real_hold() {
+  local file="$1"
+  require_at_least "$file" outstanding-obligations 1
+  require_at_least "$file" completion-debt 1
+  require_at_least "$file" completion-credits-held 1
+  require_exact "$file" held-obligation 1
+  held_index="$(value_for "$file" held-buffer-index)"
+  [ -n "$held_index" ] && [ "$held_index" -ne 4294967295 ] || {
+    echo "S79 hold gate did not expose a concrete buffer index" >&2
+    exit 1
+  }
+}
+
 run_traffic() {
   local peer_pid p4 p6 r4 r6
   peer_pid="$(QUEUE_BASE="$QUEUE_BASE" S76_NETNS_STATE="$NETNS_STATE" \
@@ -267,6 +302,9 @@ enable_runtime() {
   if [ "${S79_INJECT_DUPLICATE:-0}" = 1 ]; then args+=(inject-duplicate); fi
   if [ "${S79_INJECT_COMPLETION_OVERFLOW:-0}" = 1 ]; then
     args+=(inject-completion-overflow)
+  fi
+  if [ "${S79_HOLD_OBLIGATION:-0}" = 1 ]; then
+    args+=(hold-obligation)
   fi
   "$VPPCTL_BIN" -s "$RUNTIME_ROOT/cli.sock" nfqueue-live-poc enable-dual \
     "${args[@]}"
@@ -292,6 +330,7 @@ case_queue_disable() {
   assert_closed_ledger "$EVIDENCE_DIR/show-after-disable.txt"
   require_at_least "$EVIDENCE_DIR/show-after-disable.txt" stale 1
   require_at_least "$EVIDENCE_DIR/show-after-disable.txt" duplicate 1
+  require_at_least "$EVIDENCE_DIR/show-after-disable.txt" teardown-late-completion 1
   echo "queue-disable: ordered-close=1 stale-duplicate-isolated=1 no-replay=1 residue=0 PASS" \
     | tee -a "$EVIDENCE_DIR/run.log"
 }
@@ -310,13 +349,15 @@ case_clean_stop() {
 }
 
 case_drain_deadline() {
-  S79_INJECT_COMPLETION_OVERFLOW=1 S79_INJECT_DUPLICATE=1 enable_runtime
-  show_runtime "$EVIDENCE_DIR/show-before-disable.txt"
+  S79_HOLD_OBLIGATION=1 S79_INJECT_COMPLETION_OVERFLOW=1 \
+    S79_INJECT_DUPLICATE=1 enable_runtime
   run_traffic &
   traffic_pid="$!"
+  wait_for_real_hold "$EVIDENCE_DIR/show-before-disable.txt"
+  assert_real_hold "$EVIDENCE_DIR/show-before-disable.txt"
   # The explicit deadline edge is a test-only bounded-drain arm.  It leaves
-  # completion frames open while the origin lane classifies any ingress token.
-  sleep 0.05
+  # completion frames open while the origin lane identity-completes the held
+  # current-generation obligation.
   disable_runtime deadline
   wait "$traffic_pid" || true
   show_runtime "$EVIDENCE_DIR/show-after-disable.txt"
@@ -325,37 +366,81 @@ case_drain_deadline() {
   assert_closed_ledger "$EVIDENCE_DIR/show-after-disable.txt"
   require_exact "$EVIDENCE_DIR/show-after-disable.txt" teardown-deadline-reached 1
   require_exact "$EVIDENCE_DIR/show-after-disable.txt" teardown-deadline-forced 1
+  require_at_least "$EVIDENCE_DIR/show-after-disable.txt" teardown-deadline-accepts 1
   echo "drain-deadline: deadline-classified=1 completion-open-until-close=1 residue=0 PASS" \
     | tee -a "$EVIDENCE_DIR/run.log"
 }
 
 case_process_termination() {
-  enable_runtime
-  run_traffic
+  S79_HOLD_OBLIGATION=1 enable_runtime
+  run_traffic &
+  traffic_pid="$!"
+  wait_for_real_hold "$EVIDENCE_DIR/show-before-process-death.txt"
   show_runtime "$EVIDENCE_DIR/show-before-process-death.txt"
+  assert_real_hold "$EVIDENCE_DIR/show-before-process-death.txt"
+  if ! queue_rule_present; then
+    echo "S79 process termination: expected hook before SIGKILL" >&2
+    exit 1
+  fi
+  obligations_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" outstanding-obligations)"
+  debt_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" completion-debt)"
+  credits_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" completion-credits-held)"
+  held_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" held-obligation)"
+  held_index_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" held-buffer-index)"
+  frames_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" completion-frames)"
+  netlink_fd_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" netlink-fd)"
+  completion_fd_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" completion-fd)"
+  queue_open_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" queue-open)"
+  handle_open_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" handle-open)"
+  enabled_lanes_before="$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" enabled-lanes)"
+  {
+    echo "failure-category=PROCESS_TERMINATED_WITH_LIVE_CURRENT_GENERATION_OBLIGATION"
+    echo "generation-before=$(value_for "$EVIDENCE_DIR/show-before-process-death.txt" generation)"
+    echo "obligations-before=$obligations_before"
+    echo "completion-debt-before=$debt_before"
+    echo "completion-credits-held-before=$credits_before"
+    echo "held-obligation-before=$held_before"
+    echo "held-buffer-index-before=$held_index_before"
+    echo "completion-frames-before=$frames_before"
+    echo "netlink-fd-before=$netlink_fd_before"
+    echo "completion-fd-before=$completion_fd_before"
+    echo "queue-open-before=$queue_open_before"
+    echo "handle-open-before=$handle_open_before"
+    echo "enabled-lanes-before=$enabled_lanes_before"
+    echo "hooks-before=PRESENT"
+    echo "log=$RUNTIME_ROOT/vpp.stdout.log"
+  } | tee "$EVIDENCE_DIR/process-termination-ledger.txt" >>"$EVIDENCE_DIR/run.log"
   if ! kill -KILL "$vpp_pid" >/dev/null 2>&1; then
     echo "S79 process termination: failed to SIGKILL VPP" >&2
     exit 1
   fi
   wait "$vpp_pid" >/dev/null 2>&1 || true
   vpp_pid=""
+  wait "$traffic_pid" >/dev/null 2>&1 || true
+  [ "$obligations_before" -ge 1 ] && [ "$debt_before" -ge 1 ] &&
+    [ "$credits_before" -ge 1 ] || {
+      echo "S79 process termination: captured ledger was not nonzero" >&2
+      exit 1
+    }
   if ! queue_rule_present; then
     echo "S79 process termination: expected hook residue before cleanup" >&2
     exit 1
   fi
-  {
-    echo "process=TERMINATED"
-    echo "obligations=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE"
-    echo "buffers=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE"
-    echo "completion-frames=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE"
-    echo "credits=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE"
-    echo "debt=EXPLICITLY_CLASSIFIED_PROCESS_FAILURE"
-    echo "socket=EXPLICITLY_CLOSED_BY_PROCESS_DEATH"
-    echo "queue=EXPLICITLY_CLOSED_BY_PROCESS_DEATH"
-    echo "hooks=PRESENT_BEFORE_SUPERVISOR_CLEANUP"
-    echo "logs=CAPTURED"
-  } | tee "$EVIDENCE_DIR/process-termination-ledger.txt" >>"$EVIDENCE_DIR/run.log"
-  echo "process-termination: classified=1 pre-cleanup-hook-residue=1 post-cleanup-residue=0 PASS" \
+  start_vpp
+  enable_runtime
+  run_traffic
+  show_runtime "$EVIDENCE_DIR/process-termination-fresh-before-disable.txt"
+  disable_runtime
+  show_runtime "$EVIDENCE_DIR/process-termination-fresh-after-disable.txt"
+  assert_closed_ledger "$EVIDENCE_DIR/process-termination-fresh-after-disable.txt"
+  require_exact "$EVIDENCE_DIR/process-termination-fresh-after-disable.txt" generation 1
+  require_exact "$EVIDENCE_DIR/process-termination-fresh-after-disable.txt" stale 0
+  require_exact "$EVIDENCE_DIR/process-termination-fresh-after-disable.txt" duplicate 0
+  require_exact "$EVIDENCE_DIR/process-termination-fresh-after-disable.txt" teardown-late-completion 0
+  stop_vpp
+  echo "fresh-generation-after-death=1 old-obligation-replay=0 second-verdict=0" \
+    | tee -a "$EVIDENCE_DIR/process-termination-ledger.txt" >>"$EVIDENCE_DIR/run.log"
+  echo "process-termination: captured-live-ledger=1 classified=1 fresh-generation=1 pre-cleanup-hook-residue=1 post-cleanup-residue=0 PASS" \
     | tee -a "$EVIDENCE_DIR/run.log"
 }
 
