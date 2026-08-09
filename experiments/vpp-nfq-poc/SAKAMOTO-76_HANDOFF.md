@@ -26,7 +26,7 @@ buffers, and produced:
 
 ```text
 bufferDataSize=9000
-pluginSha256=f4830ffeb4bbc9296fbcc13b09c88e06be28e32328b7f1d5e36900ce7c40939b
+pluginSha256=30ef27badda79ed8b0162c11118e30992e931364bfbc772c6c329f128b723273
 ```
 
 The complete provenance is in
@@ -157,8 +157,8 @@ datagrams 257 callbacks 257
 owner-remote-obligations 257 owner-remote-handoffs 257 owner-queue-full 0
 completion-credit-acquired 257 completion-credit-released 257 completion-credits-held 0 residue-completion-credits 0
 identity-proof-checks 257 identity-proof-matches 257 identity-proof-failures 0
-handoff-before slot 0 valid 1 owner-worker 1 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 65 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 257 stage 0
-handoff-after slot 0 valid 1 owner-worker 2 buffer-index 2391771 buffer-base 0x10091fb7c0 packet-id 65 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 257 stage 128
+handoff-before slot 0 valid 1 owner-worker 1 buffer-index 2391916 buffer-base 0x10091fdc00 packet-id 65 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 257 stage 0
+handoff-after slot 0 valid 1 owner-worker 2 buffer-index 2391916 buffer-base 0x10091fdc00 packet-id 65 generation 1 origin-lane 2 payload-offset 44 payload-length 104 obligation-nonce 257 stage 128
 verdict-attempts 257 native-buffer-returns 257 outstanding-obligations 0 residue-obligations 0
 S76 stress ledger: obligations=257 verdicts=257 native-returns=257 credits=257/257 proof=257/257 remote=257/257 residues=0/0
 ```

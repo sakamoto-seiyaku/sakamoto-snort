@@ -33,6 +33,11 @@ grep -q 'nfqueue_live_handoff_sample_reserve' "$SOURCE"
 grep -q 'nfqueue_live_handoff_sample_release' "$SOURCE"
 grep -q 'NFQUEUE_LIVE_HANDOFF_SLOT_MASK' "$SOURCE"
 grep -q '__atomic_compare_exchange_n' "$SOURCE"
+grep -q 'snapshot->state = __atomic_load_n' "$SOURCE"
+if rg -n '\*snapshot = \*sample' "$SOURCE"; then
+  echo "S76 handoff snapshot copies atomic state non-atomically" >&2
+  exit 1
+fi
 grep -q 'nfqueue_live_counter_inc' "$SOURCE"
 grep -q 'NFQUEUE_LIVE_META_CREDIT_BIT' "$SOURCE"
 grep -q 'inject-owner-queue-full' "$SOURCE"

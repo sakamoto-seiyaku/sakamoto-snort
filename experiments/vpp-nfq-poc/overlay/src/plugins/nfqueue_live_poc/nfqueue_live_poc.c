@@ -540,7 +540,34 @@ nfqueue_live_handoff_sample_snapshot (nfqueue_live_main_t *nm, u32 slot_index,
 {
   nfqueue_live_handoff_sample_t *sample = &nm->handoff_samples[slot_index];
   nfqueue_live_handoff_sample_lock (sample);
-  *snapshot = *sample;
+  /* state is reserved by CAS/store operations outside this evidence lock.
+   * Do not copy the struct wholesale: an ordinary read of that field would
+   * race those atomic accesses.  Every other field is protected by lock. */
+  snapshot->lock = 0;
+  snapshot->state = __atomic_load_n (&sample->state, __ATOMIC_ACQUIRE);
+  snapshot->before_valid = sample->before_valid;
+  snapshot->after_valid = sample->after_valid;
+  snapshot->reserved = sample->reserved;
+  snapshot->before_worker = sample->before_worker;
+  snapshot->after_worker = sample->after_worker;
+  snapshot->before_buffer_index = sample->before_buffer_index;
+  snapshot->after_buffer_index = sample->after_buffer_index;
+  snapshot->before_buffer_base = sample->before_buffer_base;
+  snapshot->after_buffer_base = sample->after_buffer_base;
+  snapshot->before_packet_id = sample->before_packet_id;
+  snapshot->after_packet_id = sample->after_packet_id;
+  snapshot->before_payload_offset = sample->before_payload_offset;
+  snapshot->after_payload_offset = sample->after_payload_offset;
+  snapshot->before_payload_length = sample->before_payload_length;
+  snapshot->after_payload_length = sample->after_payload_length;
+  snapshot->before_generation = sample->before_generation;
+  snapshot->after_generation = sample->after_generation;
+  snapshot->before_origin_lane = sample->before_origin_lane;
+  snapshot->after_origin_lane = sample->after_origin_lane;
+  snapshot->before_obligation_nonce = sample->before_obligation_nonce;
+  snapshot->after_obligation_nonce = sample->after_obligation_nonce;
+  snapshot->before_stage = sample->before_stage;
+  snapshot->after_stage = sample->after_stage;
   nfqueue_live_handoff_sample_unlock (sample);
 }
 
