@@ -20,6 +20,9 @@ per-lane loss slot when available; it records bounded degraded health and an
 explicit infrastructure loss. If the packet identity cannot be recovered,
 the loss is recorded as unmaterialized and no Policy Verdict or delivery
 success is claimed.
+The positive-capacity host case arms exhaustion only after a real normal VPP
+allocation has reached the configured peak, proving the transition without
+pre-exhausting the pool.
 
 ## Pinned artifact
 
@@ -33,7 +36,7 @@ The host runtime uses the source-owned S73 build lineage:
 * Regular-memfd fallback patch SHA-256
   `1ddd591c271860887c8d7576dec1a2d6d1b649dbe1038172fffcf7b76f432afe`.
 * Installed `nfqueue_live_poc_plugin.so` SHA-256
-  `3aba6098f37fb2dfccdfa37a06c4295f274b594e1fd2cc213495f72de54142d6`.
+  `0097583abd3315b029dcde5f56f83d0c56bede5206032a974d80f3e4b2006613`.
 
 Full build provenance is in
 `work/vpp-s73-install-9258530f3804a152578ce11cc7c8a1e9eab88ed0/s73-provenance.properties`.
@@ -48,19 +51,22 @@ SAKAMOTO_POC_TICKET=SAKAMOTO-78 JOBS=12 \
   PYTHONPATH="$PWD/work/s73-python-venv/lib/python3.13/site-packages" \
   ./scripts/build-nfqueue-live-poc.sh
 ./scripts/test-nfqueue-live-poc-s78-reserve.sh
-rtk unshare -Urn env S78_REGULAR_MEMFD=1 S78_STRESS_COUNT=16 \
-  S78_MATRIX_DIR=/tmp/sakamoto-s78-matrix-final \
+rtk unshare -Urn env S78_REGULAR_MEMFD=1 S78_STRESS_COUNT=64 \
+  S78_MATRIX_DIR=/tmp/sakamoto-s78-matrix-fix5-final \
   ./scripts/run-nfqueue-live-poc-s78-matrix.sh
 ```
 
 The matrix starts a fresh VPP process and separate netlink topology for each
-case. The evidence directory is `/tmp/sakamoto-s78-matrix-final`.
+case. The positive exhaustion case uses `normal-capacity=1` with
+`arm-normal-capacity-exhaustion-after-fill`; the direct and stress cases are
+zero-capacity controls. The evidence directory is
+`/tmp/sakamoto-s78-matrix-fix5-final`.
 
-| Case | Datagrams | Normal capacity/exhaustions | Reserve cap/startup/peak | Direct obligations/completions/direct returns | Reserve exhaustion/loss/degraded | Native returns | Outcomes | Outstanding/residue |
+| Case | Datagrams | Normal capacity/peak/exhaustions | Reserve cap/startup/peak | Direct obligations/completions/direct returns | Reserve exhaustion/loss/degraded | Native returns | Outcomes | Outstanding/residue |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `reserve_direct` | 5 | 0 / 10 | 8 / 32 / 4 | 5 / 5 / 5 | 0 / 0 / 0 | 10 | 5 succeeded | 0 / 0 |
-| `reserve_exhaustion` | 7 | 0 / 22 | 2 / 8 / 2 | 4 / 4 / 4 | 14 / 7 / 7 | 11 | 7 succeeded | 0 / 0 |
-| `reserve_stress` (`S78_STRESS_COUNT=16`) | 7 | 0 / 70 | 2 / 8 / 2 | 4 / 4 / 4 | 62 / 31 / 31 | 11 | 7 succeeded | 0 / 0 |
+| `reserve_direct` | 5 | 0 / 0 / 5 | 8 / 32 / 2 | 5 / 5 / 5 | 0 / 0 / 0 | 5 | 5 succeeded | 0 / 0 |
+| `reserve_exhaustion` | 13 | 1 / 1 / 37 | 2 / 8 / 2 | 8 / 8 / 8 | 29 / 29 / 29 | 13 | 13 succeeded | 0 / 0 |
+| `reserve_stress` (`S78_STRESS_COUNT=64`) | 11 | 0 / 0 / 133 | 2 / 8 / 2 | 8 / 8 / 8 | 125 / 125 / 125 | 11 | 11 succeeded | 0 / 0 |
 
 The reserve-native-return total includes reserve entries returned after a
 nonblocking receive found no datagram; `reserve-direct-native-returns` counts
@@ -72,23 +78,32 @@ from ordinary reserve checkout/return accounting. All cases reported
 copies `0`, scratch buffers `0`, full-packet memcpy `0`, and per-packet heap
 objects `0`.
 
-The exhaustion case recorded three identity-recoverable loss materializations
-and four unmaterialized losses. The stress case recorded three and twenty-eight
-respectively. Only recoverable loss identities issue the explicit native
-infrastructure `NF_DROP`; neither case fabricates policy or delivery evidence.
+The positive exhaustion case recorded four identity-recoverable loss
+materializations and 25 unmaterialized losses. The stress case recorded three
+and 122 respectively. Only successful native `NF_DROP` outcomes are counted
+in `reserve-loss-native-drops` (four and three); failed-definite and unknown
+outcomes have separate bounded counters and do not fabricate delivery or
+policy evidence. A zero-time netlink readiness check prevents an EAGAIN
+callback from consuming a reserve entry speculatively.
+
+The correction slice also makes startup partial-allocation release idempotent
+by transferring each index to a sentinel before freeing it, and records
+non-transient receive faults as degraded health before yielding the callback.
 
 The deterministic/static check prints:
 
 ```text
+startup partial allocation: owned=3 frees=3 repeated-release=1
+fault accounting: loss-drops=1 failed=1 unknown=1 receive-faults=1 callback-yields=1 degraded=1
 capacity: normal-peak=3/3 normal-exhaustions=4 reserve-startup=8 reserve-peak=2/2 reserve-inflight-peak=1 reserve-exhaustions=4 losses=4 direct-attempts=8 outcomes=8 native-returns=11 outstanding=0 residue=0 copies=0
 S78 deterministic reserve ledger: PASS
 ```
 
 Raw host evidence is retained at:
 
-* `/tmp/sakamoto-s78-matrix-final/reserve_direct/`
-* `/tmp/sakamoto-s78-matrix-final/reserve_exhaustion/`
-* `/tmp/sakamoto-s78-matrix-final/reserve_stress/`
+* `/tmp/sakamoto-s78-matrix-fix5-final/reserve_direct/`
+* `/tmp/sakamoto-s78-matrix-fix5-final/reserve_exhaustion/`
+* `/tmp/sakamoto-s78-matrix-fix5-final/reserve_stress/`
 
 Each directory contains `run.log`, `show-before-disable.txt`,
 `show-after-disable.txt`, generated startup configuration, and cleanup logs.
@@ -97,27 +112,33 @@ obligation residue.
 
 ## Android proportional check
 
-`./dev/adb devices -l` resolves Pixel 6a serial `28201JEGR0XPAJ` and the
-repository wrapper remains the only Android transport used. A proportional
-device preflight reaches the device, but the existing VPP Android startup
-blocker occurs before NFQUEUE reserve exercise:
+`./dev/adb devices -l`, `./dev/adb shell id`, and
+`./dev/adb shell getprop ro.product.model` resolve Pixel 6a serial
+`28201JEGR0XPAJ` through the repository wrapper. The shell preflight succeeds;
+no S78 Android live PASS is claimed because the existing rooted Android VPP
+artifact/SVM startup path has not been rerun for this correction slice. The
+prior S77 attempt stopped before NFQUEUE reserve exercise with:
 
 ```text
 svm_region_map(mmap open): Permission denied
 SIGSEGV while creating /data/local/tmp/vpp-nfq-s77/shm
 ```
 
-No Android S78 PASS is claimed. This is the same writable-SVM backing-path /
-permission failure recorded by S77; host/netns acceptance above is the
-authoritative result until an Android SVM path is made writable.
+This is the same writable-SVM backing-path / permission failure recorded by
+S77; host/netns acceptance above is the authoritative result until an Android
+SVM path is made writable.
 
 ## Scope boundary and accounting
 
 This is a bounded POC reserve seam, not a production allocator or a promise
 that reserve loss implies downstream delivery behavior. Normal S73-S77
 ownership, handoff, provenance, and exactly-once completion accounting remain
-unchanged. Reserve counters expose startup reservations, normal/reserve peak
+unchanged; the S73/S74 live wrapper still has its historical single-worker
+`owner-mismatches` acceptance mismatch, while S75, S76, and all S77 live modes
+pass. Reserve counters expose startup reservations, normal/reserve peak
 occupancy, reserve in-flight peak, direct obligations/completions/native
 returns, reserve exhaustion/loss/degraded-health outcomes, native returns,
 outstanding obligations, and final residue so a reserve loss cannot be hidden
 inside a policy verdict or delivery-success metric.
+
+The correction commit is `1690e43` on top of `5f7197d` and `4f5a53b`.
