@@ -56,11 +56,17 @@ FlowOwner，terminal intent 再通过预留 completion credit 返回 Origin Adap
 `nfq_q_handle`，也不通过 shared-TX/trylock 绕过 return。
 
 NFQUEUE completion 与 VPP buffer return 是两个动作：origin lane 向 kernel 提交 verdict，但不把
-VPP storage 交给 NFQUEUE；物理尝试产生 `SUCCEEDED`、`FAILED_DEFINITE` 或 `OUTCOME_UNKNOWN` 后，
-同一 native lane 才走 VPP 原生 buffer return 生命周期。每个 decided buffer 在此之前保持 live；
-Completion Frame 只移动 buffer indexes、completion identity 与 terminal metadata，不复制 packet
-bytes，不建立第二个 packet buffer、LeaseSlot table、return object 或热路径动态内存。真实 verdict
-syscall failure 后的 FAILED debt 结算和 clean teardown 仍是 release gate。
+VPP storage 交给 NFQUEUE；`nfq_set_verdict(..., NF_ACCEPT/NF_DROP, ...)` 是 NFQ-defined
+terminal operation，非负函数返回表示该 Adapter operation 成功完成，因此产生
+`SUCCEEDED`；负/native error 或 deterministic pre-backend rejection 产生 `FAILED_DEFINITE`。
+`OUTCOME_UNKNOWN` 只用于未取得可信 terminal result 的 genuinely ambiguous operation path，
+不用于已观察到的普通非负返回。NFQUEUE
+不提供独立 ACK，`SUCCEEDED` 只表示 terminal operation 完成，不证明后续 network delivery
+或 downstream traffic success。物理尝试产生上述 outcome 后，同一 native lane 才走 VPP 原生
+buffer return 生命周期。每个 decided buffer 在此之前保持 live；Completion Frame 只移动 buffer
+indexes、completion identity 与 terminal metadata，不复制 packet bytes，不建立第二个 packet
+buffer、LeaseSlot table、return object 或热路径动态内存。真实 verdict syscall failure 后的 FAILED
+debt 结算和 clean teardown 仍是 release gate。
 
 VPN completion 首版采用一个 native VPN Platform I/O Lane。Android 仍负责创建 VpnService TUN、
 执行 `protect()` 并把所需 descriptors 交给受监督的 VPP runtime；运行中的 TUN/HEV packet I/O、

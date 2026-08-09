@@ -40,7 +40,9 @@ Rust ABI 和 Rust buffer-return wrapper 的段落已由 ADR-0006 取代，不再
   反例，elephant/mice 则证明 flow balance 不等于 packet/work balance。
 - P3：W2/Q2 bounded canonical-owner processing + origin-lane verdict return 的 zero-error correctness
   **GO（scoped）**。正常、overload、stale/duplicate 与 lifecycle ledger 均闭合；真实
-  `nfq_set_verdict()` failure 后的 FAILED debt settlement 仍未证明。
+  `nfq_set_verdict()` failure 后的 FAILED debt settlement 在当时仍未证明。后续 SAKAMOTO-77
+  已补齐 exactly-once 三态 outcome、definite rejection、UNKNOWN、no-retry 与 debt/buffer
+  settlement 的 host POC 证据；该证据不改写本节对 2026-08-02 P3 当时结论的历史记录。
 - P4：选择 hybrid：owner-local packet 留在 origin fast path，mismatch 才进入 bounded canonical
   processing 与 Canonical Return。shared-TX/trylock direct-hit median 仅约 `52.6%` mixed、`60.9%`
   all-remote，且 CPU/context 更差，正式拒绝。pool128 只证明 credit depth 需要定容，不是产品常量。
@@ -458,9 +460,14 @@ executable/library packaging、socket、writable directory 和 HEV placement 在
 
 定义 NFQUEUE/TUN ingress metadata、`originalLength`、`capturedLength`、完整 received L3 span、parser status、
 exactly-one completion ownership、missing-ID、queue offline、fail-open/fail-closed 和 Adapter
-health。一次 completion operation 在第一版只执行一次物理投递，并以 `SUCCEEDED`、
-`FAILED_DEFINITE` 或 `OUTCOME_UNKNOWN` 三态结束；无法证明 receiver 是否接收时必须使用
-`OUTCOME_UNKNOWN`，不得伪报成功或确定失败，三态均不触发自动 retry。后两类按低基数
+health。NFQUEUE 不提供独立 ACK；`nfq_set_verdict(..., NF_ACCEPT/NF_DROP, ...)` 是 NFQ-defined
+terminal operation。一次 completion operation 在第一版只执行一次物理操作，并以
+`SUCCEEDED`、`FAILED_DEFINITE` 或 `OUTCOME_UNKNOWN` 三态结束：非负函数返回表示该 NFQUEUE
+Adapter operation 已成功完成，因此是 `SUCCEEDED`，但不证明后续 network delivery、下游
+traffic success 或 receiver ACK；负/native error 或 deterministic pre-backend rejection 是
+`FAILED_DEFINITE`。`OUTCOME_UNKNOWN` 只保留给未取得可信 terminal result 的 genuinely
+ambiguous operation path；已观察到普通非负返回后不得再将其降级为 UNKNOWN。三态均不
+触发自动 retry。后两类按低基数
 outcome、Adapter/channel 与稳定 reason 累计 bounded counter、保留有界 first/last
 diagnostics，并向 Runtime health 暴露 failure reason；Functional Closure 暂不规定 health
 锁存/自动恢复时序或详细 UI 展示。不得
@@ -474,8 +481,9 @@ fail-open/bypass 可以独立释放 packet，但产品不得宣称自己提交�
 VPN outbound 在 HEV 接受 packet ownership 时记 Adapter Completion `SUCCEEDED`，HEV
 拒绝时记 `FAILED_DEFINITE`；接管后的 connect/socket/network-send 失败只属于 Transport
 Outcome，不能回写 completion。返回 App 的 packet 以最终 TUN write 作为 Adapter
-Completion。Root/NFQUEUE completion 只证明 kernel 是否接收 terminal verdict，不证明后续
-host/network delivery。
+Completion。Root/NFQUEUE completion 按 `nfq_set_verdict` 返回值记录 NFQ terminal operation
+本身的结果；非负返回是 `SUCCEEDED`，不证明后续 host/network delivery、下游 traffic success
+或另一个 ACK。
 
 Adapter teardown 先 quiesce 新 ingress，再在 completion/transport 尚可用时对已有 PacketLease
 做固定短期限 drain，最后才拆 channel。已有 Policy Verdict 照常完成；deadline 时普通、尚未求值

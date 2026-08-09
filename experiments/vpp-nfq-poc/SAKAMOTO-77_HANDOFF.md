@@ -4,13 +4,13 @@ Status: implementation and host acceptance complete; Plane remains **In Progress
 
 S77 closes each live-buffer obligation with one physical verdict operation. The completion frame preserves the original queue generation, packet ID, origin lane, immutable policy verdict, and terminal intent. Duplicate frames are counted and ignored; stale-generation frames are counted and ignored. There is no retry, alternate-lane re-entry, policy re-evaluation, replacement payload, or verdict rewrite. Completion debt is raised at handoff and settled exactly once with native buffer return.
 
-The evidence separates operation attempts from native backend calls: `physical-verdict-attempts` counts one attempt for each completion identity, `native-verdict-calls` counts calls that reached `nfq_set_verdict`, and `verdict-definite-rejections` counts an operation rejected before that native call. A forced definite-failure injection is therefore one operation attempt and one pre-backend rejection; it is not a native call and is never retried as another operation.
+The evidence separates operation attempts from native backend calls: `physical-verdict-attempts` counts one attempt for each completion identity, `native-verdict-calls` counts calls that reached `nfq_set_verdict`, and `verdict-definite-rejections` counts an operation rejected before that native call. A forced definite-failure injection is therefore one operation attempt and one pre-backend rejection; it is not a native call and is never retried as another operation. NFQUEUE has no separate ACK: the `nfq_set_verdict(..., NF_ACCEPT/NF_DROP, ...)` call is the NFQ-defined terminal operation, and its return classifies Adapter Completion without making an end-to-end delivery claim.
 
 Outcome classification is explicit:
 
-* `SUCCEEDED`: the one native call returned success.
-* `FAILED_DEFINITE`: the operation was rejected before the native backend call, or the one native call returned an error. Both are terminal definite failures; neither is retried.
-* `OUTCOME_UNKNOWN`: the one native call was issued, but local code cannot prove receiver acceptance; it is never reported as success and is never retried.
+* `SUCCEEDED`: the one NFQ terminal operation returned a nonnegative result. This records successful completion of the Adapter operation only; it does not prove later network delivery, downstream traffic success, or a separate receiver ACK.
+* `FAILED_DEFINITE`: the operation was rejected before the native backend call, or the one native call returned a negative/native error. Both are terminal definite failures; neither is retried.
+* `OUTCOME_UNKNOWN`: an explicitly injected genuinely ambiguous operation path produced no trustworthy terminal result. It is not assigned after observing an ordinary nonnegative return and is never reported as success or definite failure; it is never retried.
 
 ## Pinned artifact
 
@@ -57,7 +57,7 @@ Observed host/netns results:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
 | normal | 33 | 33 | 0 | 33 | 0 | 0 | 1 | 1 | 0 / 0 | PASS |
 | failed-definite | 34 | 33 | 1 | 33 | 1 | 0 | 0 | 0 | 0 / 0 | PASS |
-| outcome-unknown | 33 | 33 | 0 | 32 | 0 | 1 | 0 | 0 | 0 / 0 | PASS |
+| outcome-unknown (explicit ambiguity injection) | 33 | 33 | 0 | 32 | 0 | 1 | 0 | 0 | 0 / 0 | PASS |
 
 All three runs reported zero verdict-identity mismatches, packet copies, completion debt, and outstanding obligations, with zero retry/re-entry/policy-reevaluation/replacement/rewrite counters. Native buffer returns matched the physical attempts (33 normal, 34 failed-definite, 33 unknown). The normal run's final verdict identity matched `queue-generation=1`, `packet-id=9`; the fault runs preserved their original terminal/policy intent in the deterministic ledger.
 
