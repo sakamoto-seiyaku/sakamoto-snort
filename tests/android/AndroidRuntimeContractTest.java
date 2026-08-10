@@ -35,6 +35,7 @@ public final class AndroidRuntimeContractTest {
         productMutationRequestsAreVersionedServiceRequests();
         lifecycleRequestOrderingRejectsDelayedStarts();
         profileDoesNotExposeAdapterArtifacts();
+        profilePacketAdapterReadinessIsExplicit();
         snapshotRoundTripPreservesBoundedHealthAndError();
         runtimeStateWriterCanInjectPersistenceFailure();
         persistenceFailureGateIsFailClosedUntilSafeRecovery();
@@ -1011,6 +1012,17 @@ public final class AndroidRuntimeContractTest {
     private static void profileDoesNotExposeAdapterArtifacts() {
         check("root".equals(RuntimeProfile.ROOT.wireName), "root profile wire name is stable");
         check("vpn".equals(RuntimeProfile.VPN.wireName), "VPN profile wire name is stable");
+    }
+
+    private static void profilePacketAdapterReadinessIsExplicit() {
+        check(RuntimeProfile.ROOT.hasProductPacketAdapter(),
+                "ROOT product Packet Adapter is currently available");
+        check(!RuntimeProfile.VPN.hasProductPacketAdapter(),
+                "VPN product Packet Adapter must not be inferred from VpnService inheritance");
+        check("vpn_adapter_unavailable".equals(RuntimeProfile.VPN.adapterUnavailableErrorCode()),
+                "VPN adapter unavailable has a stable error code");
+        check(RuntimeProfile.ROOT.adapterUnavailableErrorCode().isEmpty(),
+                "ROOT does not expose a spurious adapter-unavailable code");
     }
 
     private static void coreHealthDoesNotClaimAdapterReadiness() {

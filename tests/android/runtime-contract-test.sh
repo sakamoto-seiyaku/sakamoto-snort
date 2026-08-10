@@ -68,6 +68,9 @@ grep -q 'kill -TERM' "$production_service_source"
 grep -q 'kill -KILL' "$production_service_source"
 grep -q 'root_authorization_required' "$production_service_source"
 grep -q 'SAKAMOTO_VPP_RUNTIME_DIR' "$production_service_source"
+grep -q 'hasProductPacketAdapter()' "$production_service_source"
+grep -q 'failSelectedProfileWithoutRuntime(activeProfile.adapterUnavailableErrorCode()' "$production_service_source"
+grep -q 'vpn_adapter_unavailable' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeProfile.java"
 if grep -q 'vppctl.*quit' "$production_service_source"; then
   echo "product stop must not use vppctl quit" >&2
   exit 1

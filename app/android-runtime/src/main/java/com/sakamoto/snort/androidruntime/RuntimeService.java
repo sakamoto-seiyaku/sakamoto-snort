@@ -444,6 +444,11 @@ public final class RuntimeService extends VpnService {
             stopIfInactive();
             return;
         }
+        if (!activeProfile.hasProductPacketAdapter()) {
+            failSelectedProfileWithoutRuntime(activeProfile.adapterUnavailableErrorCode(),
+                    activeProfile.adapterUnavailableMessage());
+            return;
+        }
 
         Properties manifest;
         try {
@@ -1452,6 +1457,13 @@ public final class RuntimeService extends VpnService {
 
     private void failWithoutRuntime(String code, String message) {
         publishError(code, message, false, -1L);
+        stopIfInactive();
+    }
+
+    private void failSelectedProfileWithoutRuntime(String code, String message) {
+        RuntimeProfile selected = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
+        publish(RuntimeSnapshot.error(selected, VppHealthHandshake.PROTOCOL, "", "", "",
+                code, message, false, -1L, generation));
         stopIfInactive();
     }
 

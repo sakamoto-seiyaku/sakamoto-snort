@@ -24,6 +24,20 @@ public enum RuntimeProfile {
         throw new IllegalArgumentException("unknown runtime profile: " + value);
     }
 
+    public boolean hasProductPacketAdapter() {
+        return this == ROOT;
+    }
+
+    public String adapterUnavailableErrorCode() {
+        return this == VPN ? "vpn_adapter_unavailable" : "";
+    }
+
+    public String adapterUnavailableMessage() {
+        return this == VPN
+                ? "VPN/TUN product packet adapter is not integrated yet"
+                : "";
+    }
+
     @Override
     public String toString() {
         return wireName;
