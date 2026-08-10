@@ -10,12 +10,15 @@ serial_arg="${ADB_SERIAL:-${ANDROID_SERIAL:-}}"
 install_apk=0
 refresh_projection=0
 exercise_binding=0
+create_test_profile=0
 binding_exercise_failed=0
 projection_activity_launched=0
+binding_exercise_bound_subject=""
+created_user_id=""
 
 usage() {
   cat <<EOF
-Usage: $0 [--serial <serial>] [--install-apk] [--refresh-projection] [--exercise-binding]
+Usage: $0 [--serial <serial>] [--install-apk] [--refresh-projection] [--exercise-binding] [--create-test-profile]
 
 Records bounded SAKAMOTO-50 Android device evidence:
   - git/device/user-profile metadata
@@ -26,6 +29,8 @@ Default behavior is read-only. Opt-in flags:
   --install-apk          adb install -r the debug APK artifact; never clears data
   --refresh-projection   launch DebugControlActivity and poll the projection file
   --exercise-binding     bind then unbind one projected current-user app via RuntimeService
+  --create-test-profile  create a temporary managed profile for multi-user evidence;
+                         removed during cleanup; implies --refresh-projection
 
 Environment overrides:
   PACKAGE, APK, ADB_SERIAL, ANDROID_SERIAL
@@ -48,6 +53,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --exercise-binding)
       exercise_binding=1
+      refresh_projection=1
+      shift
+      ;;
+    --create-test-profile)
+      create_test_profile=1
       refresh_projection=1
       shift
       ;;
@@ -87,6 +97,13 @@ adb_cmd() {
   else
     "$adb_bin" "$@"
   fi
+}
+
+start_debug_control_activity_for_user() {
+  local user_id="$1"
+  shift
+  adb_cmd shell am start --user "$user_id" \
+    -n "${package_name}/.DebugControlActivity" "$@"
 }
 
 resolve_serial() {
@@ -182,13 +199,24 @@ projection_present_for_user() {
     | awk -F= '$1 == "present" && $2 == "1" { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
+projection_includes_profile_user_for_user() {
+  local user_id="$1"
+  local profile_user_id="$2"
+  projection_properties_for_user "$user_id" \
+    | awk -F= -v profile_user_id="$profile_user_id" '
+      $1 ~ /^selectableRows\.[0-9]+\.userId$/ && $2 == profile_user_id {
+        found = 1
+      }
+      END { exit(found ? 0 : 1) }'
+}
+
 refresh_projection_for_user() {
   local user_id="$1"
   local timeout_seconds="${PROJECTION_REFRESH_TIMEOUT_SECONDS:-45}"
   local deadline
   deadline=$((SECONDS + timeout_seconds))
 
-  if ! adb_cmd shell am start -n "${package_name}/.DebugControlActivity" >/dev/null 2>&1; then
+  if ! start_debug_control_activity_for_user "$user_id" >/dev/null 2>&1; then
     kv projection_refresh.result "FAIL"
     kv projection_refresh.reason "debug_control_activity_launch_failed"
     return 1
@@ -200,6 +228,11 @@ refresh_projection_for_user() {
 
   while (( SECONDS <= deadline )); do
     if projection_present_for_user "$user_id"; then
+      if [[ -n "$created_user_id" ]] \
+          && ! projection_includes_profile_user_for_user "$user_id" "$created_user_id"; then
+        sleep 1
+        continue
+      fi
       kv projection_refresh.result "PASS"
       return 0
     fi
@@ -207,8 +240,50 @@ refresh_projection_for_user() {
   done
 
   kv projection_refresh.result "FAIL"
-  kv projection_refresh.reason "projection_file_absent_after_debug_control_activity_query_service"
+  if [[ -n "$created_user_id" ]]; then
+    kv projection_refresh.reason "projection_missing_created_profile_after_debug_control_activity_query_service"
+  else
+    kv projection_refresh.reason "projection_file_absent_after_debug_control_activity_query_service"
+  fi
   return 1
+}
+
+create_test_profile_for_user() {
+  local parent_user_id="$1"
+  local profile_name="sakamoto-s50-test-$$"
+  local output
+  output="$(adb_cmd shell pm create-user --profileOf "$parent_user_id" --managed \
+      --ephemeral --for-testing "$profile_name" 2>&1 | tr -d '\r' || true)"
+  local profile_user_id
+  profile_user_id="$(printf '%s\n' "$output" \
+    | sed -n 's/.*created user id \([0-9][0-9]*\).*/\1/p' \
+    | sed -n '1p')"
+  if [[ -z "$profile_user_id" ]]; then
+    kv test_profile.create "FAIL"
+    kv test_profile.create.output "$output"
+    return 1
+  fi
+  created_user_id="$profile_user_id"
+  kv test_profile.create "PASS"
+  kv test_profile.user "$created_user_id"
+
+  if adb_cmd shell am start-user -w "$created_user_id" >/dev/null 2>&1; then
+    kv test_profile.start_user "PASS"
+  else
+    kv test_profile.start_user "UNAVAILABLE"
+  fi
+  if adb_cmd shell am unlock-user "$created_user_id" >/dev/null 2>&1; then
+    kv test_profile.unlock_user "PASS"
+  else
+    kv test_profile.unlock_user "UNAVAILABLE"
+  fi
+  if adb_cmd shell pm install-existing --user "$created_user_id" "$package_name" \
+      >/dev/null 2>&1; then
+    kv test_profile.install_existing "PASS"
+  else
+    kv test_profile.install_existing "FAIL"
+    return 1
+  fi
 }
 
 first_bindable_subject_for_user() {
@@ -247,6 +322,54 @@ first_bindable_subject_for_user() {
           if (app_id >= 10000 && availability[i] == "available" && bound[i] == "false" && valid[i] == "true") {
             print subject[i]
             exit
+          }
+        }
+      }'
+}
+
+projection_multi_user_identity_for_user() {
+  local user_id="$1"
+  projection_properties_for_user "$user_id" \
+    | awk -F= '
+      {
+        if (match($1, /^selectableRows\.([0-9]+)\./)) {
+          idx = substr($1, RSTART + 15, RLENGTH - 16)
+          field = substr($1, RSTART + RLENGTH)
+          seen[idx] = 1
+          if (field == "subjectId") {
+            value = $2
+            gsub(/\\:/, ":", value)
+            subject[idx] = value
+          } else if (field == "packageName") {
+            packageName[idx] = $2
+          } else if (field == "userId") {
+            profileUser[idx] = $2
+          }
+        }
+      }
+      END {
+        for (i = 0; i < 1024; i++) {
+          if (!seen[i] || packageName[i] == "" || subject[i] == "") {
+            continue
+          }
+          for (j = i + 1; j < 1024; j++) {
+            if (!seen[j] || packageName[j] == "" || subject[j] == "") {
+              continue
+            }
+            uid_i = subject[i]
+            uid_j = subject[j]
+            if (uid_i !~ /^android[.]uid:[0-9]+$/ || uid_j !~ /^android[.]uid:[0-9]+$/) {
+              continue
+            }
+            sub(/^android[.]uid:/, "", uid_i)
+            sub(/^android[.]uid:/, "", uid_j)
+            app_id_i = uid_i % 100000
+            app_id_j = uid_j % 100000
+            if (app_id_i >= 10000 && app_id_j >= 10000 && packageName[i] == packageName[j] && subject[i] != subject[j] && profileUser[i] != profileUser[j]) {
+              print packageName[i] " user_" profileUser[i] ":" subject[i] \
+                    " user_" profileUser[j] ":" subject[j]
+              exit
+            }
           }
         }
       }'
@@ -320,7 +443,7 @@ exercise_binding_for_user() {
   fi
 
   kv binding_exercise.subject "$subject_id"
-  if ! adb_cmd shell am start -n "${package_name}/.DebugControlActivity" \
+  if ! start_debug_control_activity_for_user "$user_id" \
       --es debugBindApplicationSubject "$subject_id" >/dev/null 2>&1; then
     kv binding_exercise.bind "FAIL"
     kv binding_exercise.reason "debug_bind_activity_launch_failed"
@@ -329,13 +452,21 @@ exercise_binding_for_user() {
   projection_activity_launched=1
   if wait_subject_bound_state "$user_id" "$subject_id" "true"; then
     kv binding_exercise.bind "PASS"
+    binding_exercise_bound_subject="$subject_id"
   else
-    kv binding_exercise.bind "FAIL"
-    kv binding_exercise.reason "subject_not_bound_after_debug_bind"
-    binding_exercise_failed=1
+    if start_debug_control_activity_for_user "$user_id" \
+        --es debugBindApplicationSubject "$subject_id" >/dev/null 2>&1 \
+        && wait_subject_bound_state "$user_id" "$subject_id" "true"; then
+      kv binding_exercise.bind "PASS_AFTER_RETRY"
+      binding_exercise_bound_subject="$subject_id"
+    else
+      kv binding_exercise.bind "FAIL"
+      kv binding_exercise.reason "subject_not_bound_after_debug_bind"
+      binding_exercise_failed=1
+    fi
   fi
 
-  if ! adb_cmd shell am start -n "${package_name}/.DebugControlActivity" \
+  if ! start_debug_control_activity_for_user "$user_id" \
       --es debugUnbindApplicationSubject "$subject_id" >/dev/null 2>&1; then
     kv binding_exercise.unbind "FAIL"
     kv binding_exercise.reason "debug_unbind_activity_launch_failed"
@@ -344,16 +475,37 @@ exercise_binding_for_user() {
   fi
   if wait_subject_bound_state "$user_id" "$subject_id" "false"; then
     kv binding_exercise.unbind "PASS"
+    binding_exercise_bound_subject=""
   else
-    kv binding_exercise.unbind "FAIL"
-    kv binding_exercise.reason "subject_not_unbound_after_debug_unbind"
-    binding_exercise_failed=1
+    if start_debug_control_activity_for_user "$user_id" \
+        --es debugUnbindApplicationSubject "$subject_id" >/dev/null 2>&1 \
+        && wait_subject_bound_state "$user_id" "$subject_id" "false"; then
+      kv binding_exercise.unbind "PASS_AFTER_RETRY"
+      binding_exercise_bound_subject=""
+    else
+      kv binding_exercise.unbind "FAIL"
+      kv binding_exercise.reason "subject_not_unbound_after_debug_unbind"
+      binding_exercise_failed=1
+    fi
   fi
 }
 
 cleanup() {
   if [[ "${resolved_serial:-}" == "UNAVAILABLE" ]]; then
     return 0
+  fi
+  if [[ -n "$binding_exercise_bound_subject" ]]; then
+    if start_debug_control_activity_for_user "${current_user_id:-0}" \
+        --es debugUnbindApplicationSubject "$binding_exercise_bound_subject" \
+        >/dev/null 2>&1 \
+        && wait_subject_bound_state "${current_user_id:-0}" \
+          "$binding_exercise_bound_subject" "false"; then
+      kv binding_exercise.cleanup_unbind "PASS"
+      binding_exercise_bound_subject=""
+    else
+      kv binding_exercise.cleanup_unbind "FAILED"
+      kv binding_exercise.cleanup_unbind.subject "$binding_exercise_bound_subject"
+    fi
   fi
   if [[ "$projection_activity_launched" -eq 1 ]]; then
     if adb_cmd shell am force-stop "$package_name" >/dev/null 2>&1; then
@@ -363,6 +515,15 @@ cleanup() {
     fi
   else
     kv cleanup.force_stop "SKIPPED_NOT_LAUNCHED"
+  fi
+  if [[ -n "$created_user_id" ]]; then
+    if adb_cmd shell pm remove-user --wait "$created_user_id" >/dev/null 2>&1; then
+      kv test_profile.cleanup "REMOVED"
+      created_user_id=""
+    else
+      kv test_profile.cleanup "FAILED"
+      kv test_profile.cleanup.user "$created_user_id"
+    fi
   fi
   local forwards
   forwards="$(adb_cmd forward --list 2>/dev/null | tr -d '\r' || true)"
@@ -398,6 +559,11 @@ if [[ "$exercise_binding" -eq 1 ]]; then
   kv binding_exercise "REQUESTED"
 else
   kv binding_exercise "SKIPPED"
+fi
+if [[ "$create_test_profile" -eq 1 ]]; then
+  kv test_profile "REQUESTED"
+else
+  kv test_profile "SKIPPED"
 fi
 
 if [[ -f "$apk_path" ]]; then
@@ -448,6 +614,24 @@ kv device.model "$(adb_cmd shell getprop ro.product.model 2>/dev/null | tr -d '\
 kv device.sdk "$(adb_cmd shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' || printf UNKNOWN)"
 kv device.release "$(adb_cmd shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' || printf UNKNOWN)"
 
+current_user_id="$(adb_cmd shell am get-current-user 2>/dev/null | tr -d '\r' | awk '/^[0-9]+$/ { print; exit }' || true)"
+if [[ -n "$current_user_id" ]]; then
+  kv current_user.id "$current_user_id"
+else
+  current_user_id="0"
+  kv current_user.id "UNAVAILABLE"
+  kv current_user.reason "am_get_current_user_unavailable_defaulting_to_user_0_for_projection_refresh"
+fi
+
+if [[ "$create_test_profile" -eq 1 && "$exercise_binding" -eq 1 ]]; then
+  refresh_projection_for_user "$current_user_id" || true
+  exercise_binding_for_user "$current_user_id" || true
+fi
+
+if [[ "$create_test_profile" -eq 1 ]]; then
+  create_test_profile_for_user "$current_user_id" || true
+fi
+
 users_raw="$(adb_cmd shell pm list users 2>/dev/null | tr -d '\r' || true)"
 kv users.raw "$(printf '%s\n' "$users_raw" | sed 's/[[:space:]][[:space:]]*/ /g' | sed '/^$/d' | paste -sd '|' -)"
 mapfile -t user_ids < <(printf '%s\n' "$users_raw" | parse_users)
@@ -458,19 +642,10 @@ else
   kv users.ids "UNAVAILABLE"
 fi
 
-current_user_id="$(adb_cmd shell am get-current-user 2>/dev/null | tr -d '\r' | awk '/^[0-9]+$/ { print; exit }' || true)"
-if [[ -n "$current_user_id" ]]; then
-  kv current_user.id "$current_user_id"
-else
-  current_user_id="0"
-  kv current_user.id "UNAVAILABLE"
-  kv current_user.reason "am_get_current_user_unavailable_defaulting_to_user_0_for_projection_refresh"
-fi
-
 if [[ "$refresh_projection" -eq 1 ]]; then
   refresh_projection_for_user "$current_user_id" || true
 fi
-if [[ "$exercise_binding" -eq 1 ]]; then
+if [[ "$exercise_binding" -eq 1 && "$create_test_profile" -eq 0 ]]; then
   exercise_binding_for_user "$current_user_id" || true
 fi
 
@@ -526,6 +701,16 @@ else
         [[ -n "$key" && "$key" != "present" ]] || continue
         kv "product_projection.user_${user_id}.${key}" "$value"
       done <<<"$projection_output"
+      projection_multi_user_evidence="$(projection_multi_user_identity_for_user "$user_id" || true)"
+      if [[ -n "$projection_multi_user_evidence" ]]; then
+        kv "product_projection.user_${user_id}.multi_user_identity" "PASS"
+        kv "product_projection.user_${user_id}.multi_user_identity.evidence" \
+          "$projection_multi_user_evidence"
+      else
+        kv "product_projection.user_${user_id}.multi_user_identity" "PARTIAL"
+        kv "product_projection.user_${user_id}.multi_user_identity.reason" \
+          "no_same_package_distinct_profile_subjects_in_projection"
+      fi
     else
       kv "product_projection.user_${user_id}" "ABSENT"
     fi
