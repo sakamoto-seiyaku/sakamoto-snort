@@ -135,6 +135,7 @@ public final class RuntimeService extends VpnService {
         generation = snapshot.generation;
         activeProfile = snapshot.profile;
         initializeProfilePaths(activeProfile);
+        enqueueLifecycle(() -> refreshProductCatalogProjection("service_create"));
         enqueueLifecycle(this::reconcileDurableRuntime);
     }
 
@@ -297,6 +298,7 @@ public final class RuntimeService extends VpnService {
         if (!enqueueLifecycle(() -> {
             try {
                 reconcileDurableRuntime(true, revision);
+                refreshProductCatalogProjection("query");
                 appendLog("health_query=result revision=" + revision);
                 stopIfInactive(requestStartId);
             } finally {
@@ -1543,6 +1545,7 @@ public final class RuntimeService extends VpnService {
         if (persistSelectedProductProfile(profile)) {
             appendLog("product_control=profile_select profile=" + profile.wireName);
         }
+        refreshProductCatalogProjection("profile_select");
         stopIfInactive();
     }
 
@@ -1558,6 +1561,7 @@ public final class RuntimeService extends VpnService {
             publishProductMutationFailure("product_bind_failed", result,
                     "application binding could not be persisted");
         }
+        refreshProductCatalogProjection("bind_app");
         stopIfInactive();
     }
 
@@ -1573,7 +1577,24 @@ public final class RuntimeService extends VpnService {
             publishProductMutationFailure("product_unbind_failed", result,
                     "application unbinding could not be persisted");
         }
+        refreshProductCatalogProjection("unbind_app");
         stopIfInactive();
+    }
+
+    private void refreshProductCatalogProjection(String reason) {
+        if (productBackend == null) {
+            return;
+        }
+        ProductCatalogFormatter.Projection projection =
+                productBackend.refreshProductCatalogProjection();
+        appendLog("product_catalog_projection=" + projection.catalogStatus
+                + " reason=" + reason
+                + " entries=" + projection.catalogEntryCount
+                + (projection.errorCode.isEmpty() ? "" : " error=" + projection.errorCode)
+                + ("valid".equals(projection.productStateStatus)
+                        || "missing".equals(projection.productStateStatus) ? ""
+                        : " product_state=" + projection.productStateStatus
+                                + " product_error=" + projection.productStateErrorCode));
     }
 
     private void publishProductMutationFailure(String fallbackCode,

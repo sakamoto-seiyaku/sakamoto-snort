@@ -17,6 +17,7 @@ import com.sakamoto.snort.androidruntime.ProductStore;
 import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
+import com.sakamoto.snort.androidruntime.ProductCatalogProjectionStore;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -64,6 +65,10 @@ public final class AndroidRuntimeContractTest {
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
         localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
+        productCatalogProjectionStoreRoundTripsSamePackageTwoProfileRows();
+        localProductBackendPublishesDurableProductCatalogProjection();
+        backendProjectionInvalidProductStateDisablesBind();
+        backendProjectionCatalogErrorRendersActionableStatus();
         corruptProductStateReadResultProjectsVisibleActionableError();
         invalidProductStateProjectionDisablesBindCandidate();
         productStateReloadPreservesLastValidSnapshotUntilValidRead();
@@ -1244,6 +1249,140 @@ public final class AndroidRuntimeContractTest {
                 "Local Product Backend writes selected app binding");
         check(backend.productState().boundApplications.contains(work),
                 "backend product state uses ApplicationSubjectId, not package metadata");
+    }
+
+    private static void productCatalogProjectionStoreRoundTripsSamePackageTwoProfileRows()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-product-projection");
+        ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
+        ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
+        ProductCatalogFormatter.Projection projection = ProductCatalogFormatter.result(
+                new ProductStateSnapshot(RuntimeProfile.VPN,
+                        new java.util.TreeSet<>(Arrays.asList(work)),
+                        AuthoringPolicyBundle.empty()),
+                Arrays.asList(
+                        new ApplicationCatalogEntry(primary, "com.example.mail", "Mail",
+                                "icon:mail/u0", 0, "Owner", true),
+                        new ApplicationCatalogEntry(work, "com.example.mail", "Mail",
+                                "icon:mail/u10", 10, "Work", true)));
+
+        ProductCatalogProjectionStore.write(files.toFile(), projection);
+        ProductCatalogProjectionStore.ReadResult restored =
+                ProductCatalogProjectionStore.readResult(files.toFile());
+
+        check(restored.present && restored.valid,
+                "product catalog projection store exposes a valid durable read result");
+        check(restored.projection.selectedProfile == RuntimeProfile.VPN,
+                "projection store round-trips the selected profile display state");
+        check(restored.projection.selectableRows.size() == 2,
+                "projection store round-trips same-package two-profile selector rows");
+        check(restored.projection.selectableRows.get(0).packageName
+                        .equals(restored.projection.selectableRows.get(1).packageName),
+                "projection rows may share package metadata after durable handoff");
+        check(!restored.projection.selectableRows.get(0).subjectId.equals(
+                        restored.projection.selectableRows.get(1).subjectId),
+                "projection handoff preserves distinct complete-UID identities");
+        check("icon:mail/u0".equals(restored.projection.selectableRows.get(0).iconToken)
+                        && "icon:mail/u10".equals(
+                                restored.projection.selectableRows.get(1).iconToken),
+                "projection handoff preserves per-profile icon tokens");
+        check(restored.projection.selectableRows.get(0).canBind(),
+                "projection handoff preserves bind-enabled selected row");
+        check(restored.projection.selectableRows.get(1).canUnbind(),
+                "projection handoff preserves unbind-enabled selected row");
+        check(ProductCatalogProjectionStore.projectionFile(files.toFile()).getPath()
+                        .contains("product-catalog-projection"),
+                "product catalog projection uses its own UI/evidence repository path");
+        check(!ProductCatalogProjectionStore.projectionFile(files.toFile()).getPath()
+                        .contains("product-state"),
+                "product catalog projection store is separate from policy/config state");
+    }
+
+    private static void localProductBackendPublishesDurableProductCatalogProjection()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-backend-projection");
+        ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
+        ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(
+                        new ApplicationCatalogEntry(primary, "com.example.mail", "Mail",
+                                "icon:mail/u0", 0, "Owner", true),
+                        new ApplicationCatalogEntry(work, "com.example.mail", "Mail",
+                                "icon:mail/u10", 10, "Work", true)));
+
+        check(backend.selectRuntimeProfile(RuntimeProfile.VPN).persisted,
+                "backend writes selected profile before publishing projection");
+        check(backend.bindApplication(work).persisted,
+                "backend writes selected binding before publishing projection");
+        ProductCatalogFormatter.Projection projection =
+                ProductCatalogProjectionStore.read(files.toFile());
+
+        check(projection.selectedProfile == RuntimeProfile.VPN,
+                "backend-published projection reflects ProductStore selected profile");
+        check(projection.boundApplicationCount == 1,
+                "backend-published projection reflects ProductStore bound count");
+        check(projection.firstAvailableSubjectId.equals(primary),
+                "backend-published projection computes bind candidate");
+        check(projection.firstBoundSubjectId.equals(work),
+                "backend-published projection computes unbind candidate");
+        check(projection.displayText.contains("Catalog: result: 2 application instances"),
+                "backend-published projection renders catalog result text");
+    }
+
+    private static void backendProjectionInvalidProductStateDisablesBind()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-invalid-backend-projection");
+        Files.createDirectories(files.resolve("product-state"));
+        Files.write(files.resolve("product-state/product.properties"),
+                "schemaVersion=not-a-number\nselectedProfile=vpn\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+        ApplicationSubjectId available = ApplicationSubjectId.fromUid(10001);
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(available,
+                        "com.example.mail", "Mail", "icon:mail/u0",
+                        0, "Owner", true)));
+
+        ProductCatalogFormatter.Projection projection =
+                backend.refreshProductCatalogProjection();
+        ProductCatalogFormatter.Projection restored =
+                ProductCatalogProjectionStore.read(files.toFile());
+
+        check("invalid".equals(projection.productStateStatus),
+                "backend projection reports invalid ProductStore state");
+        check("product_state_corrupt".equals(restored.productStateErrorCode),
+                "durable backend projection preserves actionable product-state error");
+        check(restored.selectableRows.size() == 1,
+                "invalid product-state projection still shows catalog evidence rows");
+        check(!restored.selectableRows.get(0).canBind(),
+                "invalid product-state disables bind in the durable projection");
+        check(restored.firstAvailableSubjectId == null,
+                "invalid product-state removes the durable bind candidate");
+        check(restored.displayText.contains("Product Store state: invalid product_state_corrupt"),
+                "durable projection renders invalid product-state status");
+    }
+
+    private static void backendProjectionCatalogErrorRendersActionableStatus()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-catalog-error-projection");
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(), () -> {
+            throw new RuntimeException("PackageManager unavailable");
+        });
+
+        ProductCatalogFormatter.Projection projection =
+                backend.refreshProductCatalogProjection();
+        ProductCatalogFormatter.Projection restored =
+                ProductCatalogProjectionStore.read(files.toFile());
+
+        check("error".equals(projection.catalogStatus),
+                "backend projection reports catalog provider errors");
+        check("catalog_load_failed".equals(restored.errorCode),
+                "durable projection preserves actionable catalog error code");
+        check(restored.selectableRows.isEmpty(),
+                "catalog error projection has no bindable selector rows");
+        check(restored.firstAvailableSubjectId == null,
+                "catalog error projection disables bind candidate");
+        check(restored.displayText.contains("Catalog: error catalog_load_failed"),
+                "durable projection renders actionable catalog error status");
     }
 
     private static void selectableCatalogRowsKeepBindingIdentityOutOfMetadata() {

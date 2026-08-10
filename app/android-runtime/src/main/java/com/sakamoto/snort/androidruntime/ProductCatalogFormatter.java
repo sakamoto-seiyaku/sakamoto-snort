@@ -129,13 +129,13 @@ public final class ProductCatalogFormatter {
         public final String productStateErrorMessage;
         public final String displayText;
 
-        private Projection(RuntimeProfile selectedProfile, int boundApplicationCount,
-                           int catalogEntryCount, String catalogStatus, String errorCode,
-                           String errorMessage, List<EntryRow> rows, List<EntryRow> selectableRows,
-                           ApplicationSubjectId firstAvailableSubjectId,
-                           ApplicationSubjectId firstBoundSubjectId,
-                           String productStateStatus, String productStateErrorCode,
-                           String productStateErrorMessage) {
+        Projection(RuntimeProfile selectedProfile, int boundApplicationCount,
+                   int catalogEntryCount, String catalogStatus, String errorCode,
+                   String errorMessage, List<EntryRow> rows, List<EntryRow> selectableRows,
+                   ApplicationSubjectId firstAvailableSubjectId,
+                   ApplicationSubjectId firstBoundSubjectId,
+                   String productStateStatus, String productStateErrorCode,
+                   String productStateErrorMessage) {
             this.selectedProfile = selectedProfile == null ? RuntimeProfile.ROOT
                     : selectedProfile;
             this.boundApplicationCount = boundApplicationCount;
@@ -239,18 +239,34 @@ public final class ProductCatalogFormatter {
         private final boolean canUnbind;
 
         private EntryRow(ApplicationCatalogEntry entry, boolean bound, boolean productStateValid) {
-            this.subjectId = entry.subjectId;
-            this.packageName = entry.packageName;
-            this.label = entry.label;
-            this.profileLabel = entry.profileLabel.isEmpty()
-                    ? "user " + entry.userId : entry.profileLabel;
-            this.iconToken = entry.iconToken;
-            this.userId = entry.userId;
-            this.fullUid = entry.subjectId.uid;
-            this.availability = entry.available ? "available" : "unavailable";
+            this(entry.subjectId, entry.packageName, entry.label,
+                    entry.profileLabel.isEmpty() ? "user " + entry.userId : entry.profileLabel,
+                    entry.iconToken, entry.userId, entry.subjectId.uid,
+                    entry.available ? "available" : "unavailable", bound, productStateValid);
+        }
+
+        EntryRow(ApplicationSubjectId subjectId, String packageName, String label,
+                 String profileLabel, String iconToken, int userId, int fullUid,
+                 String availability, boolean bound, boolean productStateValid) {
+            if (subjectId == null) {
+                throw new IllegalArgumentException("subjectId is required");
+            }
+            this.subjectId = subjectId;
+            this.packageName = BoundedText.value(packageName == null || packageName.trim().isEmpty()
+                    ? "(unknown package)" : packageName, RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.label = BoundedText.value(label == null || label.trim().isEmpty()
+                    ? this.packageName : label, RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.profileLabel = BoundedText.value(profileLabel == null
+                    || profileLabel.trim().isEmpty() ? "user " + userId : profileLabel,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.iconToken = BoundedText.value(iconToken == null ? "" : iconToken,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.userId = userId;
+            this.fullUid = fullUid;
+            this.availability = "available".equals(availability) ? "available" : "unavailable";
             this.bound = bound;
             this.productStateValid = productStateValid;
-            this.canBind = productStateValid && entry.available && !bound;
+            this.canBind = productStateValid && "available".equals(this.availability) && !bound;
             this.canUnbind = productStateValid && bound;
         }
 

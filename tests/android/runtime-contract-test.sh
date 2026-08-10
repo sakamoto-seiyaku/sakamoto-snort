@@ -64,9 +64,9 @@ grep -q 'RuntimeControlBackend' "$production_activity_source"
 grep -q 'backend.query' "$production_activity_source"
 grep -q 'current.profile == RuntimeProfile.VPN' "$production_activity_source"
 grep -q 'requestedProfile' "$production_activity_source"
-grep -q 'PackageManagerApplicationCatalogProvider' "$production_activity_source"
 grep -q 'ProductCatalogFormatter' "$production_activity_source"
-grep -q 'ProductStateStore.readResult' "$production_activity_source"
+grep -q 'ProductCatalogProjectionStore.read' "$production_activity_source"
+grep -q 'backend.queryService' "$production_activity_source"
 grep -q 'backend.selectProductProfile' "$production_activity_source"
 grep -q 'backend.bindProductApplication' "$production_activity_source"
 grep -q 'backend.unbindProductApplication' "$production_activity_source"
@@ -107,6 +107,14 @@ if timeout < connect:
 PY
 if grep -q 'LocalProductBackend' "$production_activity_source"; then
   echo "Activity must not instantiate the service-side Local Product Backend writer" >&2
+  exit 1
+fi
+if grep -q 'PackageManagerApplicationCatalogProvider' "$production_activity_source"; then
+  echo "Activity must not own the PackageManager-backed product catalog provider" >&2
+  exit 1
+fi
+if grep -q 'ProductStateStore' "$production_activity_source"; then
+  echo "Activity must not read ProductStateStore for the product catalog projection" >&2
   exit 1
 fi
 if grep -q 'ProductStore' "$production_activity_source"; then

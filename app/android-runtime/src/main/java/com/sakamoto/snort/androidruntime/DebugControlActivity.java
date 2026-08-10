@@ -70,7 +70,6 @@ public class DebugControlActivity extends Activity {
 
     private final RuntimeControlBackend backend = new RuntimeControlBackend();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private ApplicationCatalogProvider catalogProvider;
     private Spinner profileSpinner;
     private TextView statusView;
     private TextView actionView;
@@ -92,7 +91,6 @@ public class DebugControlActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        catalogProvider = new PackageManagerApplicationCatalogProvider(this);
         setContentView(buildUi());
         refreshProductCatalog();
         refreshStatus();
@@ -172,7 +170,7 @@ public class DebugControlActivity extends Activity {
         profileSpinner.setAdapter(new ArrayAdapter<String>(this,
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[]{RuntimeProfile.ROOT.displayName, RuntimeProfile.VPN.displayName}));
-        setProfileSpinnerSelection(ProductStateStore.read(getFilesDir()).selectedProfile);
+        setProfileSpinnerSelection(ProductCatalogProjectionStore.read(getFilesDir()).selectedProfile);
         profileSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -377,6 +375,9 @@ public class DebugControlActivity extends Activity {
             }
             statusView.setText(current.displayText());
         }
+        if (productView != null) {
+            renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()));
+        }
     }
 
     private RuntimeProfile profileFromSpinner() {
@@ -400,37 +401,17 @@ public class DebugControlActivity extends Activity {
     }
 
     private void refreshProductCatalog() {
-        if (catalogProvider == null || productView == null) {
+        if (productView == null) {
             return;
         }
         final int generation = ++productCatalogGeneration;
-        ProductStateStore.ReadResult initialState = ProductStateStore.readResult(getFilesDir());
-        renderProductProjection(ProductCatalogFormatter.loading(initialState));
-        Thread loader = new Thread(() -> {
-            try {
-                List<ApplicationCatalogEntry> catalog = catalogProvider.listApplications();
-                ProductStateStore.ReadResult productState =
-                        ProductStateStore.readResult(getFilesDir());
-                ProductCatalogFormatter.Projection projection =
-                        ProductCatalogFormatter.result(productState, catalog);
-                main.post(() -> {
-                    if (generation == productCatalogGeneration) {
-                        renderProductProjection(projection);
-                    }
-                });
-            } catch (RuntimeException error) {
-                ProductCatalogFormatter.Projection projection = ProductCatalogFormatter.error(
-                        ProductStateStore.readResult(getFilesDir()), "catalog_load_failed",
-                        error.getMessage() == null ? "catalog could not be loaded"
-                                : error.getMessage());
-                main.post(() -> {
-                    if (generation == productCatalogGeneration) {
-                        renderProductProjection(projection);
-                    }
-                });
+        backend.queryService(this);
+        renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()));
+        main.postDelayed(() -> {
+            if (generation == productCatalogGeneration) {
+                renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()));
             }
-        }, "sakamoto-product-catalog");
-        loader.start();
+        }, STATUS_POLL_MILLIS);
     }
 
     private void renderProductProjection(ProductCatalogFormatter.Projection projection) {
