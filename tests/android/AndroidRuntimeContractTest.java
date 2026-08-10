@@ -61,6 +61,7 @@ public final class AndroidRuntimeContractTest {
         productStorePersistsProfileBindingsAndEmptyBundle();
         boundedActivityStoreIsSeparateFromProductState();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
+        selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
         localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
         corruptProductStateReadResultProjectsVisibleActionableError();
         invalidProductStateProjectionDisablesBindCandidate();
@@ -1210,6 +1211,51 @@ public final class AndroidRuntimeContractTest {
                 "backend product state uses ApplicationSubjectId, not package metadata");
     }
 
+    private static void selectableCatalogRowsKeepBindingIdentityOutOfMetadata() {
+        ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
+        ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
+        List<ApplicationCatalogEntry> catalog = Arrays.asList(
+                new ApplicationCatalogEntry(primary, "com.example.mail", "Mail",
+                        "icon:shared-mail", 0, "Owner", true),
+                new ApplicationCatalogEntry(work, "com.example.mail", "Mail",
+                        "icon:shared-mail", 10, "Work", true));
+        ProductCatalogFormatter.Projection projection = ProductCatalogFormatter.project(
+                new ProductStateSnapshot(RuntimeProfile.ROOT,
+                        new java.util.TreeSet<>(Arrays.asList(work)),
+                        AuthoringPolicyBundle.empty()),
+                catalog, "result", "", "", 1);
+
+        check(projection.rows.size() == 1,
+                "text preview may stay capped for debug readability");
+        check(projection.selectableRows.size() == 2,
+                "selector exposes every projected catalog app instance");
+        check(projection.selectableRows.get(0).subjectId.equals(primary)
+                        && projection.selectableRows.get(1).subjectId.equals(work),
+                "selector preserves distinct complete-Linux-UID subjects");
+        check(projection.selectableRows.get(0).packageName
+                        .equals(projection.selectableRows.get(1).packageName),
+                "selector rows can share package metadata without merging identity");
+        check(projection.selectableRows.get(0).iconToken
+                        .equals(projection.selectableRows.get(1).iconToken),
+                "selector rows can share icon metadata without merging identity");
+        check(projection.selectableRows.get(0).canBind(),
+                "unbound selected available row is bindable");
+        check(projection.selectableRows.get(1).canUnbind(),
+                "bound selected row is unbindable");
+        check(RuntimeControlRequest.bindProductApplication(
+                        projection.selectableRows.get(0).subjectId)
+                        .applicationSubjectId.equals(primary),
+                "bind request carries the selected row ApplicationSubjectId");
+        check(RuntimeControlRequest.unbindProductApplication(
+                        projection.selectableRows.get(1).subjectId)
+                        .applicationSubjectId.equals(work),
+                "unbind request carries the selected row ApplicationSubjectId");
+        check(!RuntimeControlRequest.bindProductApplication(
+                        projection.selectableRows.get(0).subjectId)
+                        .applicationSubjectId.encode().contains("icon:"),
+                "selected bind identity excludes icon metadata");
+    }
+
     private static void corruptProductStateReadResultProjectsVisibleActionableError()
             throws Exception {
         Path files = Files.createTempDirectory("sakamoto-50-corrupt-projection");
@@ -1255,6 +1301,10 @@ public final class AndroidRuntimeContractTest {
                 "invalid product-state disables the bind candidate");
         check(projection.firstBoundSubjectId == null,
                 "invalid product-state disables the unbind candidate");
+        check(!projection.selectableRows.get(0).canBind(),
+                "invalid product-state disables selected-row bind action");
+        check(!projection.selectableRows.get(0).canUnbind(),
+                "invalid product-state disables selected-row unbind action");
         check(projection.displayText.contains("product_state_unsupported_schema"),
                 "invalid product-state keeps the actionable schema error visible");
     }
@@ -1316,6 +1366,8 @@ public final class AndroidRuntimeContractTest {
                 "missing product-state remains a normal empty Product Store state");
         check(projection.firstAvailableSubjectId.equals(available),
                 "missing product-state still allows binding an available app");
+        check(projection.selectableRows.get(0).canBind(),
+                "missing product-state still allows selected-row bind action");
         check(projection.displayText.contains("Catalog: result: 1 application instance"),
                 "missing product-state still renders the catalog result normally");
     }

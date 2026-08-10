@@ -63,6 +63,7 @@ public final class ProductCatalogFormatter {
                 ? Collections.emptyList() : catalog;
         int limit = Math.max(0, previewLimit);
         ArrayList<EntryRow> rows = new ArrayList<>();
+        ArrayList<EntryRow> selectableRows = new ArrayList<>();
         ApplicationSubjectId firstAvailable = null;
         boolean productStateValid = productState.valid;
         for (ApplicationCatalogEntry entry : entries) {
@@ -70,12 +71,14 @@ public final class ProductCatalogFormatter {
                 continue;
             }
             boolean bound = product.boundApplications.contains(entry.subjectId);
+            EntryRow row = new EntryRow(entry, bound, productStateValid);
             if (productStateValid && entry.available && !bound && firstAvailable == null) {
                 firstAvailable = entry.subjectId;
             }
             if (rows.size() < limit) {
-                rows.add(new EntryRow(entry, bound));
+                rows.add(row);
             }
+            selectableRows.add(row);
         }
         ApplicationSubjectId firstBound = !productStateValid || product.boundApplications.isEmpty()
                 ? null : product.boundApplications.iterator().next();
@@ -89,7 +92,7 @@ public final class ProductCatalogFormatter {
                 ? "" : bounded(productState.errorMessage);
         return new Projection(product.selectedProfile, product.boundApplications.size(),
                 entries.size(), status, boundedErrorCode, boundedErrorMessage,
-                rows, firstAvailable, firstBound, productStateStatus,
+                rows, selectableRows, firstAvailable, firstBound, productStateStatus,
                 productStateErrorCode, productStateErrorMessage);
     }
 
@@ -118,6 +121,7 @@ public final class ProductCatalogFormatter {
         public final String errorCode;
         public final String errorMessage;
         public final List<EntryRow> rows;
+        public final List<EntryRow> selectableRows;
         public final ApplicationSubjectId firstAvailableSubjectId;
         public final ApplicationSubjectId firstBoundSubjectId;
         public final String productStateStatus;
@@ -127,7 +131,7 @@ public final class ProductCatalogFormatter {
 
         private Projection(RuntimeProfile selectedProfile, int boundApplicationCount,
                            int catalogEntryCount, String catalogStatus, String errorCode,
-                           String errorMessage, List<EntryRow> rows,
+                           String errorMessage, List<EntryRow> rows, List<EntryRow> selectableRows,
                            ApplicationSubjectId firstAvailableSubjectId,
                            ApplicationSubjectId firstBoundSubjectId,
                            String productStateStatus, String productStateErrorCode,
@@ -140,6 +144,7 @@ public final class ProductCatalogFormatter {
             this.errorCode = errorCode;
             this.errorMessage = errorMessage;
             this.rows = Collections.unmodifiableList(new ArrayList<>(rows));
+            this.selectableRows = Collections.unmodifiableList(new ArrayList<>(selectableRows));
             this.firstAvailableSubjectId = firstAvailableSubjectId;
             this.firstBoundSubjectId = firstBoundSubjectId;
             this.productStateStatus = productStateStatus == null
@@ -229,8 +234,11 @@ public final class ProductCatalogFormatter {
         public final int fullUid;
         public final String availability;
         public final boolean bound;
+        public final boolean productStateValid;
+        private final boolean canBind;
+        private final boolean canUnbind;
 
-        private EntryRow(ApplicationCatalogEntry entry, boolean bound) {
+        private EntryRow(ApplicationCatalogEntry entry, boolean bound, boolean productStateValid) {
             this.subjectId = entry.subjectId;
             this.packageName = entry.packageName;
             this.label = entry.label;
@@ -241,6 +249,23 @@ public final class ProductCatalogFormatter {
             this.fullUid = entry.subjectId.uid;
             this.availability = entry.available ? "available" : "unavailable";
             this.bound = bound;
+            this.productStateValid = productStateValid;
+            this.canBind = productStateValid && entry.available && !bound;
+            this.canUnbind = productStateValid && bound;
+        }
+
+        public boolean canBind() {
+            return canBind;
+        }
+
+        public boolean canUnbind() {
+            return canUnbind;
+        }
+
+        @Override
+        public String toString() {
+            return label + " | " + profileLabel + " | uid " + fullUid
+                    + (bound ? " | bound" : " | unbound");
         }
     }
 }

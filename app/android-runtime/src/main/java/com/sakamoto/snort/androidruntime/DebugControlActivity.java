@@ -3,10 +3,14 @@ package com.sakamoto.snort.androidruntime;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.LauncherActivityInfo;
+import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.UserHandle;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.Button;
@@ -14,8 +18,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.ArrayAdapter;
+import android.widget.ImageView;
 import android.widget.TextView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Minimal debug shell. It only issues versioned requests and renders snapshots. */
@@ -34,8 +40,12 @@ public class DebugControlActivity extends Activity {
     private TextView statusView;
     private TextView actionView;
     private TextView productView;
-    private Button bindFirstButton;
-    private Button unbindFirstButton;
+    private Spinner appSpinner;
+    private ImageView selectedAppIcon;
+    private Button bindSelectedButton;
+    private Button unbindSelectedButton;
+    private boolean suppressAppSelection;
+    private ApplicationSubjectId selectedApplicationSubjectId;
     private boolean pendingStart;
     private boolean suppressProfileSelectionPersist;
     private int productCatalogGeneration;
@@ -137,17 +147,45 @@ public class DebugControlActivity extends Activity {
         buttons.addView(query, weighted());
         root.addView(buttons, fillWrap());
 
+        LinearLayout appSelector = new LinearLayout(this);
+        appSelector.setOrientation(LinearLayout.HORIZONTAL);
+        selectedAppIcon = new ImageView(this);
+        int iconSize = dp(48);
+        appSelector.addView(selectedAppIcon, new LinearLayout.LayoutParams(iconSize, iconSize));
+        appSpinner = new Spinner(this);
+        appSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressAppSelection) {
+                    return;
+                }
+                ProductCatalogFormatter.EntryRow row = selectedApplicationRow();
+                selectedApplicationSubjectId = row == null ? null : row.subjectId;
+                renderSelectedApplicationIcon(row);
+                updateSelectedApplicationButtons(row);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                selectedApplicationSubjectId = null;
+                renderSelectedApplicationIcon(null);
+                updateSelectedApplicationButtons(null);
+            }
+        });
+        appSelector.addView(appSpinner, weighted());
+        root.addView(appSelector, fillWrap());
+
         LinearLayout productButtons = new LinearLayout(this);
-        bindFirstButton = new Button(this);
-        bindFirstButton.setText("Bind first app");
-        bindFirstButton.setAllCaps(false);
-        bindFirstButton.setOnClickListener(view -> bindFirstAvailableApplication());
-        productButtons.addView(bindFirstButton, weighted());
-        unbindFirstButton = new Button(this);
-        unbindFirstButton.setText("Unbind first");
-        unbindFirstButton.setAllCaps(false);
-        unbindFirstButton.setOnClickListener(view -> unbindFirstApplication());
-        productButtons.addView(unbindFirstButton, weighted());
+        bindSelectedButton = new Button(this);
+        bindSelectedButton.setText("Bind selected");
+        bindSelectedButton.setAllCaps(false);
+        bindSelectedButton.setOnClickListener(view -> bindSelectedApplication());
+        productButtons.addView(bindSelectedButton, weighted());
+        unbindSelectedButton = new Button(this);
+        unbindSelectedButton.setText("Unbind selected");
+        unbindSelectedButton.setAllCaps(false);
+        unbindSelectedButton.setOnClickListener(view -> unbindSelectedApplication());
+        productButtons.addView(unbindSelectedButton, weighted());
         root.addView(productButtons, fillWrap());
 
         statusView = new TextView(this);
@@ -328,18 +366,109 @@ public class DebugControlActivity extends Activity {
         if (productView != null) {
             productView.setText(projection.displayText);
         }
-        if (bindFirstButton != null) {
-            bindFirstButton.setEnabled(projection.firstAvailableSubjectId != null);
+        renderApplicationSelector(projection);
+    }
+
+    private void renderApplicationSelector(ProductCatalogFormatter.Projection projection) {
+        if (appSpinner == null) {
+            return;
         }
-        if (unbindFirstButton != null) {
-            unbindFirstButton.setEnabled(projection.firstBoundSubjectId != null);
+        ArrayList<ProductCatalogFormatter.EntryRow> rows =
+                new ArrayList<>(projection.selectableRows);
+        ArrayAdapter<ProductCatalogFormatter.EntryRow> adapter =
+                new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, rows);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+
+        ApplicationSubjectId previousSubject = selectedApplicationSubjectId;
+        int selectedPosition = -1;
+        for (int i = 0; i < rows.size(); i++) {
+            if (previousSubject != null && previousSubject.equals(rows.get(i).subjectId)) {
+                selectedPosition = i;
+                break;
+            }
+        }
+        if (selectedPosition < 0 && !rows.isEmpty()) {
+            selectedPosition = 0;
+        }
+
+        suppressAppSelection = true;
+        appSpinner.setAdapter(adapter);
+        if (selectedPosition >= 0) {
+            appSpinner.setSelection(selectedPosition);
+        }
+        suppressAppSelection = false;
+
+        ProductCatalogFormatter.EntryRow row = selectedPosition < 0 ? null : rows.get(selectedPosition);
+        selectedApplicationSubjectId = row == null ? null : row.subjectId;
+        renderSelectedApplicationIcon(row);
+        updateSelectedApplicationButtons(row);
+    }
+
+    private ProductCatalogFormatter.EntryRow selectedApplicationRow() {
+        if (appSpinner == null) {
+            return null;
+        }
+        Object selected = appSpinner.getSelectedItem();
+        if (selected instanceof ProductCatalogFormatter.EntryRow) {
+            return (ProductCatalogFormatter.EntryRow) selected;
+        }
+        return null;
+    }
+
+    private void updateSelectedApplicationButtons(ProductCatalogFormatter.EntryRow row) {
+        if (bindSelectedButton != null) {
+            bindSelectedButton.setEnabled(row != null && row.canBind());
+        }
+        if (unbindSelectedButton != null) {
+            unbindSelectedButton.setEnabled(row != null && row.canUnbind());
         }
     }
 
-    private void bindFirstAvailableApplication() {
-        ApplicationSubjectId subjectId = productProjection.firstAvailableSubjectId;
-        if (subjectId == null) {
-            action("No available catalog app to bind.");
+    private void renderSelectedApplicationIcon(ProductCatalogFormatter.EntryRow row) {
+        if (selectedAppIcon == null) {
+            return;
+        }
+        Drawable icon = row == null ? null : loadApplicationIcon(row);
+        if (icon == null) {
+            selectedAppIcon.setImageDrawable(null);
+            selectedAppIcon.setContentDescription("No selected application icon");
+        } else {
+            selectedAppIcon.setImageDrawable(icon);
+            selectedAppIcon.setContentDescription("Icon for " + row.label
+                    + " subject " + row.subjectId.encode());
+        }
+    }
+
+    private Drawable loadApplicationIcon(ProductCatalogFormatter.EntryRow row) {
+        LauncherApps launcherApps = getSystemService(LauncherApps.class);
+        UserHandle user = UserHandle.getUserHandleForUid(row.fullUid);
+        if (launcherApps != null && user != null) {
+            try {
+                List<LauncherActivityInfo> activities =
+                        launcherApps.getActivityList(row.packageName, user);
+                if (activities != null && !activities.isEmpty()) {
+                    Drawable icon = activities.get(0).getBadgedIcon(0);
+                    if (icon != null) {
+                        return icon;
+                    }
+                    return activities.get(0).getIcon(0);
+                }
+            } catch (RuntimeException ignored) {
+                // Fall through to the current-user PackageManager fallback below.
+            }
+        }
+        try {
+            return getPackageManager().getApplicationIcon(row.packageName);
+        } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private void bindSelectedApplication() {
+        ProductCatalogFormatter.EntryRow row = selectedApplicationRow();
+        ApplicationSubjectId subjectId = row == null ? selectedApplicationSubjectId : row.subjectId;
+        if (subjectId == null || row == null || !row.canBind()) {
+            action("No selected available catalog app to bind.");
             return;
         }
         backend.bindProductApplication(this, subjectId);
@@ -347,10 +476,11 @@ public class DebugControlActivity extends Activity {
         refreshProductCatalog();
     }
 
-    private void unbindFirstApplication() {
-        ApplicationSubjectId subjectId = productProjection.firstBoundSubjectId;
-        if (subjectId == null) {
-            action("No bound application subject to unbind.");
+    private void unbindSelectedApplication() {
+        ProductCatalogFormatter.EntryRow row = selectedApplicationRow();
+        ApplicationSubjectId subjectId = row == null ? selectedApplicationSubjectId : row.subjectId;
+        if (subjectId == null || row == null || !row.canUnbind()) {
+            action("No selected bound application subject to unbind.");
             return;
         }
         backend.unbindProductApplication(this, subjectId);

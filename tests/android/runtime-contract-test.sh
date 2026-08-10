@@ -70,6 +70,13 @@ grep -q 'ProductStateStore.readResult' "$production_activity_source"
 grep -q 'backend.selectProductProfile' "$production_activity_source"
 grep -q 'backend.bindProductApplication' "$production_activity_source"
 grep -q 'backend.unbindProductApplication' "$production_activity_source"
+grep -q 'appSpinner' "$production_activity_source"
+grep -q 'selectedApplicationSubjectId' "$production_activity_source"
+grep -q 'selectedApplicationRow' "$production_activity_source"
+grep -q 'LauncherApps' "$production_activity_source"
+grep -q 'getBadgedIcon' "$production_activity_source"
+grep -q 'getApplicationIcon' "$production_activity_source"
+grep -q 'setImageDrawable' "$production_activity_source"
 if grep -q 'LocalProductBackend' "$production_activity_source"; then
   echo "Activity must not instantiate the service-side Local Product Backend writer" >&2
   exit 1
