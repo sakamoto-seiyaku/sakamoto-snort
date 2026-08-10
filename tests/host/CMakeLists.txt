@@ -89,6 +89,12 @@ add_sucre_snort_host_test(reason_metrics_tests reason_metrics_tests.cpp)
 add_sucre_snort_host_test(ipv6_l4_walker_tests ipv6_l4_walker_tests.cpp)
 add_sucre_snort_host_test(nfqueue_topology_tests nfqueue_topology_tests.cpp)
 add_sucre_snort_host_test(
+  packet_policy_tests
+  packet_policy_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
+)
+add_sucre_snort_host_test(
   flow_steering_tests
   flow_steering_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
