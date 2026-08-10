@@ -604,16 +604,20 @@ public class DebugControlActivity extends Activity {
             String result;
             try (ControlVNextDebugClient client = new ControlVNextDebugClient()) {
                 int uid = android.os.Process.myUid();
+                RuntimeSnapshot current = backend.query(this);
+                RuntimeProfile profile = current.isActive()
+                        ? current.profile : profileFromSpinner();
+                String statusCommand = debugPacketStatusCommand(profile);
                 client.call(1, "POLICY.APPLY", debugPolicyApplyArgs(uid));
                 JSONObject decision = client.call(2, "POLICY.EVALUATE",
                         debugPolicyEvaluateArgs(uid));
-                JSONObject nfqueueBefore = client.call(3, "NFQUEUE.STATUS", new JSONObject());
+                JSONObject countersBefore = client.call(3, statusCommand, new JSONObject());
                 String probeResult = runDebugTrafficProbeBlocking(
                         DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
                         DEBUG_TRAFFIC_TIMEOUT_MILLIS, false);
-                JSONObject nfqueueAfter = client.call(4, "NFQUEUE.STATUS", new JSONObject());
+                JSONObject countersAfter = client.call(4, statusCommand, new JSONObject());
                 result = formatDebugPolicyProbeResult(
-                        uid, decision, nfqueueBefore, nfqueueAfter, probeResult);
+                        uid, profile, decision, countersBefore, countersAfter, probeResult);
             } catch (IOException | JSONException | RuntimeException error) {
                 result = "Debug policy gate/probe failed: " + boundedError(error);
             }
@@ -647,6 +651,18 @@ public class DebugControlActivity extends Activity {
                 .put("sourcePort", 40000)
                 .put("destinationPort", DEBUG_TRAFFIC_PORT)
                 .put("portsAvailable", true);
+    }
+
+    private String debugPacketStatusCommand(RuntimeProfile profile) {
+        return profile == RuntimeProfile.VPN ? "VPN_TUN.STATUS" : "NFQUEUE.STATUS";
+    }
+
+    private String debugPacketAdapterLabel(RuntimeProfile profile) {
+        return profile == RuntimeProfile.VPN ? "VPN_TUN" : "NFQUEUE";
+    }
+
+    private String debugForwardedCounterName(RuntimeProfile profile) {
+        return profile == RuntimeProfile.VPN ? "forwardedPackets" : "acceptedPackets";
     }
 
     private String runDebugTrafficProbeBlocking(
@@ -708,27 +724,29 @@ public class DebugControlActivity extends Activity {
     }
 
     private String formatDebugPolicyProbeResult(
-            int uid, JSONObject decision, JSONObject nfqueueBefore,
-            JSONObject nfqueueAfter, String probeResult) {
-        long packetDelta = nfqueueAfter.optLong("packetsSeen", 0L)
-                - nfqueueBefore.optLong("packetsSeen", 0L);
-        long acceptDelta = nfqueueAfter.optLong("acceptedPackets", 0L)
-                - nfqueueBefore.optLong("acceptedPackets", 0L);
-        long dropDelta = nfqueueAfter.optLong("droppedPackets", 0L)
-                - nfqueueBefore.optLong("droppedPackets", 0L);
+            int uid, RuntimeProfile profile, JSONObject decision, JSONObject countersBefore,
+            JSONObject countersAfter, String probeResult) {
+        String adapterLabel = debugPacketAdapterLabel(profile);
+        String forwardedCounter = debugForwardedCounterName(profile);
+        long packetDelta = countersAfter.optLong("packetsSeen", 0L)
+                - countersBefore.optLong("packetsSeen", 0L);
+        long forwardDelta = countersAfter.optLong(forwardedCounter, 0L)
+                - countersBefore.optLong(forwardedCounter, 0L);
+        long dropDelta = countersAfter.optLong("droppedPackets", 0L)
+                - countersBefore.optLong("droppedPackets", 0L);
         return "Policy: verdict=" + decision.optString("verdict", "unknown")
                 + " stage=" + decision.optString("stage", "unknown")
                 + " revision=" + decision.optLong("revision", -1L)
                 + " reason=" + decision.optLong("reasonId", -1L)
                 + " rule=" + decision.optLong("ruleId", -1L)
-                + "\nNFQUEUE: targetUid=" + uid
+                + "\n" + adapterLabel + ": targetUid=" + uid
                 + " packetDelta=" + packetDelta
-                + " acceptDelta=" + acceptDelta
+                + " forwardDelta=" + forwardDelta
                 + " dropDelta=" + dropDelta
                 + " lastObservedLinuxUid="
-                + nfqueueAfter.optLong("lastObservedLinuxUid", -1L)
+                + countersAfter.optLong("lastObservedLinuxUid", -1L)
                 + " lastObservedResult="
-                + nfqueueAfter.optString("lastObservedResult", "unknown")
+                + countersAfter.optString("lastObservedResult", "unknown")
                 + "\nProbe: " + probeResult;
     }
 
