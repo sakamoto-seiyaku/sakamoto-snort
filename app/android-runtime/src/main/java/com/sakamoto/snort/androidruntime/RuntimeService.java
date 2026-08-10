@@ -108,6 +108,7 @@ public final class RuntimeService extends VpnService {
     private volatile int latestStartId;
     private volatile long monitoredPid = -1L;
     private RuntimeSnapshot snapshot;
+    private LocalProductBackend productBackend;
     private Process vppProcess;
     private RuntimeProfile activeProfile;
     private File profileRoot;
@@ -120,6 +121,8 @@ public final class RuntimeService extends VpnService {
         super.onCreate();
         createNotificationChannel();
         RuntimeStateStore.ReadResult durable = RuntimeStateStore.readResult(getFilesDir());
+        productBackend = new LocalProductBackend(getFilesDir(),
+                new PackageManagerApplicationCatalogProvider(this));
         snapshot = durable.snapshot;
         persistenceGate.setSnapshot(snapshot);
         durableProjectionRequiresAudit = !durable.present || !durable.valid;
@@ -376,6 +379,10 @@ public final class RuntimeService extends VpnService {
         initializeProfilePaths(activeProfile);
         stopRequested = false;
         generation++;
+        if (!persistSelectedProductProfile(activeProfile)) {
+            stopIfInactive();
+            return;
+        }
 
         Properties manifest;
         try {
@@ -1440,6 +1447,24 @@ public final class RuntimeService extends VpnService {
                 + " health=" + next.health + (next.errorCode.isEmpty() ? ""
                 : " error=" + next.errorCode));
         return true;
+    }
+
+    private boolean persistSelectedProductProfile(RuntimeProfile profile) {
+        if (productBackend == null) {
+            return true;
+        }
+        ProductStore.MutationResult result = productBackend.selectRuntimeProfile(profile);
+        if (result.persisted) {
+            appendLog("product_state=profile_selected profile=" + profile.wireName);
+            return true;
+        }
+        publishError(result.errorCode.isEmpty() ? "product_state_persistence_failed"
+                        : result.errorCode,
+                result.errorMessage.isEmpty()
+                        ? "selected runtime profile could not be persisted"
+                        : result.errorMessage,
+                false, -1L);
+        return false;
     }
 
     /**

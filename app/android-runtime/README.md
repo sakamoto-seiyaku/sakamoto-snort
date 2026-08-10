@@ -28,3 +28,10 @@ app/android-runtime/scripts/build-debug-apk.sh
 ```
 
 Host contract coverage is in `tests/android/android-runtime-contract-test.sh`.
+
+SAKAMOTO-50 begins the Local Product Backend boundary in this active app:
+`RuntimeService` owns the backend-side Product Store writer, selected
+Runtime Profile persistence, complete-Linux-UID `ApplicationSubjectId`, and
+the PackageManager-backed Application Catalog provider seam. `ProductStateStore`
+persists policy/config state under `product-state/`; bounded Activity uses a
+separate lossy repository seam and must not become policy/config authority.

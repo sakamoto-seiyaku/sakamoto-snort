@@ -7,11 +7,22 @@ import com.sakamoto.snort.androidruntime.RuntimeOwnershipReconciliation;
 import com.sakamoto.snort.androidruntime.RuntimeSnapshot;
 import com.sakamoto.snort.androidruntime.RuntimeStateStore;
 import com.sakamoto.snort.androidruntime.VppHealthHandshake;
+import com.sakamoto.snort.androidruntime.ApplicationSubjectId;
+import com.sakamoto.snort.androidruntime.ApplicationCatalogEntry;
+import com.sakamoto.snort.androidruntime.ApplicationCatalogProvider;
+import com.sakamoto.snort.androidruntime.AuthoringPolicyBundle;
+import com.sakamoto.snort.androidruntime.ProductStateSnapshot;
+import com.sakamoto.snort.androidruntime.ProductStateStore;
+import com.sakamoto.snort.androidruntime.ProductStore;
+import com.sakamoto.snort.androidruntime.BoundedActivityStore;
+import com.sakamoto.snort.androidruntime.LocalProductBackend;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 
 /** Public-seam tests for the production Android runtime incubator. */
 public final class AndroidRuntimeContractTest {
@@ -42,6 +53,10 @@ public final class AndroidRuntimeContractTest {
         stoppedSnapshotRetainsRecentFailure();
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
+        applicationSubjectIdentityIsCompleteUidOnly();
+        productStorePersistsProfileBindingsAndEmptyBundle();
+        boundedActivityStoreIsSeparateFromProductState();
+        localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
         System.out.println("android runtime contract: PASS");
     }
 
@@ -942,6 +957,122 @@ public final class AndroidRuntimeContractTest {
         check(!VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
                 "v26.02-release", "arm64-v8a", "sha256:core", "wrong-api", status).isReady(),
                 "generated API identity mismatch fails closed");
+    }
+
+    private static void applicationSubjectIdentityIsCompleteUidOnly() {
+        ApplicationSubjectId owner = ApplicationSubjectId.fromUid(10001);
+        ApplicationSubjectId workProfileOwner = ApplicationSubjectId.fromUid(1010001);
+        check(owner.userId == 0, "primary user is derived from complete Linux UID");
+        check(workProfileOwner.userId == 10, "work profile user is derived from UID");
+        check(owner.appId == workProfileOwner.appId,
+                "same package appId can exist under different users");
+        check(!owner.equals(workProfileOwner),
+                "same package across users has distinct ApplicationSubjectId");
+        check("android.uid:10001".equals(owner.encode()),
+                "subject identity encodes only the Android UID variant");
+        check(!owner.encode().contains("com.example"),
+                "package metadata is not part of hot-path policy identity");
+    }
+
+    private static void productStorePersistsProfileBindingsAndEmptyBundle() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-product-store");
+        ProductStore store = new ProductStore(files.toFile());
+        check(store.snapshot().selectedProfile == RuntimeProfile.ROOT,
+                "missing product state defaults to root profile");
+        check(store.snapshot().authoringPolicyBundle.isEmpty(),
+                "missing product state exposes an empty authoring bundle");
+
+        ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
+        ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
+        check(store.selectRuntimeProfile(RuntimeProfile.VPN).persisted,
+                "selected runtime profile is persisted by backend writer");
+        check(store.bindApplication(work).persisted,
+                "work-profile application binding is persisted");
+        check(store.bindApplication(primary).persisted,
+                "primary-user application binding is persisted");
+
+        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
+        check(restored.selectedProfile == RuntimeProfile.VPN,
+                "selected profile restores after process recreation");
+        check(restored.boundApplications.contains(primary)
+                        && restored.boundApplications.contains(work),
+                "application bindings restore with complete UIDs");
+        check(restored.boundApplications.size() == 2,
+                "same appId across users remains two bindings");
+        check(restored.authoringPolicyBundle.schemaVersion
+                        == AuthoringPolicyBundle.SCHEMA_VERSION,
+                "authoring bundle schema is persisted");
+        check(restored.authoringPolicyBundle.revision == 0L
+                        && "".equals(restored.authoringPolicyBundle.source),
+                "S50 persists an empty authoring policy revision and source");
+        check(restored.authoringPolicyBundle.isEmpty(),
+                "S50 persists an empty authoring policy bundle shell");
+
+        Files.write(files.resolve("product-state/product.properties"),
+                "schemaVersion=not-a-number\nselectedProfile=vpn\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+        ProductStateStore.ReadResult corrupt = ProductStateStore.readResult(files.toFile());
+        check(corrupt.present && !corrupt.valid,
+                "corrupt product state is reported explicitly");
+        check("product_state_corrupt".equals(corrupt.errorCode),
+                "corrupt product state returns an actionable product error code");
+
+        Files.write(files.resolve("product-state/product.properties"),
+                "schemaVersion=999\nselectedProfile=vpn\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+        ProductStateStore.ReadResult unsupported =
+                ProductStateStore.readResult(files.toFile());
+        check(unsupported.present && !unsupported.valid,
+                "unsupported product state schema is reported explicitly");
+        check("product_state_unsupported_schema".equals(unsupported.errorCode),
+                "unsupported product state schema has a distinct actionable error");
+    }
+
+    private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-activity-store");
+        ProductStore product = new ProductStore(files.toFile());
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(10001);
+        product.bindApplication(app);
+
+        BoundedActivityStore activity = new BoundedActivityStore(2);
+        activity.append(new BoundedActivityStore.Record(1L, app, "allow", "default"));
+        activity.append(new BoundedActivityStore.Record(2L, app, "drop", "gate"));
+        activity.append(new BoundedActivityStore.Record(3L, app, "drop", "l4"));
+        check(activity.records().size() == 2, "activity store is bounded");
+        check(activity.evictedRecords() == 1L,
+                "activity detail eviction is observable and lossy");
+
+        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
+        check(restored.boundApplications.contains(app),
+                "bounded Activity eviction cannot change policy/config state");
+        check(ProductStateStore.stateFile(files.toFile()).getPath().contains("product-state"),
+                "policy/config state has its own repository path");
+        check(!ProductStateStore.stateFile(files.toFile()).getPath()
+                        .contains(BoundedActivityStore.REPOSITORY_DIRECTORY),
+                "bounded Activity repository path is not policy/config state");
+    }
+
+    private static void localProductBackendProjectsCatalogWithoutOwningMetadataIdentity()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-local-backend");
+        ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
+        ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
+        ApplicationCatalogProvider provider = () -> Arrays.asList(
+                new ApplicationCatalogEntry(primary, "com.example.mail", "Mail",
+                        "icon:mail/u0", 0, "Owner", true),
+                new ApplicationCatalogEntry(work, "com.example.mail", "Mail",
+                        "icon:mail/u10", 10, "Work", true));
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(), provider);
+        List<ApplicationCatalogEntry> apps = backend.applicationCatalog();
+        check(apps.size() == 2, "catalog projects same package in two profiles");
+        check(apps.get(0).subjectId.uid != apps.get(1).subjectId.uid,
+                "catalog entries carry distinct complete Linux UIDs");
+        check(apps.get(0).packageName.equals(apps.get(1).packageName),
+                "catalog metadata may share package name");
+        check(backend.bindApplication(apps.get(1).subjectId).persisted,
+                "Local Product Backend writes selected app binding");
+        check(backend.productState().boundApplications.contains(work),
+                "backend product state uses ApplicationSubjectId, not package metadata");
     }
 
     private static void check(boolean condition, String message) {
