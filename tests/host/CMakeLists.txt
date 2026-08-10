@@ -172,6 +172,11 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlVNextCodec.cpp"
 )
 add_sucre_snort_host_test(
+  runtime_profile_tests
+  runtime_profile_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/main/RuntimeProfile.cpp"
+)
+add_sucre_snort_host_test(
   control_server_contract_tests
   control_server_contract_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlServer.cpp"

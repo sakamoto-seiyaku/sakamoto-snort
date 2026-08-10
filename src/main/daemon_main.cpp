@@ -6,11 +6,26 @@
 #include <ControlServer.hpp>
 #include <DaemonRuntime.hpp>
 #include <NfqueuePassThroughRuntime.hpp>
+#include <RuntimeProfile.hpp>
+
+#include <cstdlib>
+#include <iostream>
 
 int main() {
     SnortRuntime::installSignalHandlers();
     if (!SnortRuntime::installParentDeathGuard()) {
         return 1;
+    }
+
+    const auto profile =
+        SnortRuntime::runtimeProfileFromEnv(std::getenv("SAKAMOTO_RUNTIME_PROFILE"));
+    if (!profile.ok) {
+        std::cerr << "runtime profile rejected: " << profile.errorCode << '\n';
+        return 2;
+    }
+    if (profile.profile == SnortRuntime::RuntimeProfile::Vpn) {
+        std::cerr << "runtime profile vpn rejected: vpn_adapter_unavailable\n";
+        return 3;
     }
 
     SnortDatapath::Nfqueue::DualStackPassThroughRuntime datapath;
