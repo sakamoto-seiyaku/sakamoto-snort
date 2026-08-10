@@ -173,6 +173,17 @@ Functional Closure 不因首次发版策略尚未最终确定而延后当前可�
 
 首次发版阶段仍需重新决定自动 restart/backoff、长期后台/soak 承诺、OEM/OS matrix、release signing/upgrade/rollback 和持久化 Activity Store；这些未来决策不取消当前 lifecycle correctness evidence。
 
+### 7.1 SAKAMOTO-68 live Root evidence decisions pending
+
+记录日期：2026-08-11。来源：SAKAMOTO-68 真机矩阵与诊断评论，commit `35ec952`、`e583f7e`。
+
+当前 Root/NFQUEUE S68 evidence 对本文第 5.3 与第 7 节暴露两个待决点。它们是 closure gate 输入，不是通过条件的降级：
+
+1. **INPUT app UID attribution seam 未决。** 在 Pixel 6a / Android 16 上，Debug Activity listener 的 socket 已由真实 app UID `12546` 拥有，但 host-to-device traffic 到达 NFQUEUE `INPUT` hook 时 `NFQA_UID` 缺失，`lastObservedLinuxUid=0`。同一 INPUT L4 policy 绑定 UID `0` 时可产生 DROP，证明 policy matcher 和 listener ownership 不是根因。当前 pre-delivery `INPUT` hook 方法不能证明“真实安装包 UID 的 INPUT verdict”。S68/S71 关闭前必须二选一：找到可复查的替代 INPUT UID proof path，或显式修订 Root INPUT identity contract，把该 hook 的 `uidKnown=false`/Unknown Application 语义与 app-bound INPUT policy seam 分开。
+2. **abrupt daemon death residue 未闭合。** Direct daemon SIGKILL 后立即残留 IPv4/IPv6 `sucre-snort_*` hook；后续 recovery redeploy + QUIT + stage-only cleanup 可以清干净。该结果不能作为“fault 后无残留”通过证据。S68/S70/S71 关闭前必须决定 fault recovery ownership：由 supervised RuntimeService/cleanup owner 在 crash 后清理并证明 no residue，或调整 direct-daemon harness scope，只把它作为 unmanaged adapter fault evidence，并另设正式 supervised fault gate。
+
+在以上两个点解决前，S68 可以继续收集不冲突的 OUTPUT、restart、control disconnect、capacity/timeout 和 host fault evidence，但不得移动到 Done，也不得让 S69/S70/S71 继承未说明的 Root INPUT 或 abrupt-fault PASS。
+
 ## 8. 现有证据的使用方式
 
 以下资产是迁移输入或 harness 基线，不自动满足 production VPP closure：
