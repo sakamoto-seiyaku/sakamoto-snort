@@ -5,8 +5,6 @@
 
 #include <NfqueuePassThroughRuntime.hpp>
 
-#include <PacketCaptureAdapter.hpp>
-
 #include <array>
 #include <limits>
 #include <mutex>
@@ -38,6 +36,7 @@ NfqueueFlowAdapter::NfqueueFlowAdapter(NfqueueFlowAdapterConfig config)
       graphGate_(steering_, config_.packetPolicy == nullptr
           ? Policy::emptyPacketPolicySnapshot()
           : *config_.packetPolicy),
+      ingressParser_(Flow::FlowGraphIngressConfig{.maxL3Bytes = config_.copyPrefixBytes}),
       fragmentSteering_(steering_.distribution().selector(), config_.fragmentSteering),
       fragmentLeaseBook_(config_.fragmentSteering.maxDatagrams,
                          config_.fragmentLeaseCapacityPerDatagram) {}
@@ -73,10 +72,13 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const auto originalLength = originalLengthHint == 0
         ? static_cast<std::uint32_t>(payload.size())
         : originalLengthHint;
-    const Flow::PacketCaptureAdapter captureAdapter(
-        Flow::AdapterKind::RootNfqueue,
-        Flow::PacketCaptureAdapterConfig{.maxPrefixLength = config_.copyPrefixBytes});
-    auto facts = captureAdapter.normalize(std::as_bytes(payload), originalLength, direction, domain);
+    auto facts = ingressParser_.parseL3Packet(
+        std::as_bytes(payload),
+        Flow::FlowGraphIngressMetadata{
+            .direction = direction,
+            .originalLength = originalLength,
+            .domain = domain,
+        });
     if (!hookDirection.has_value()) {
         facts.parseStatus = Flow::ParseStatus::Malformed;
     }
@@ -210,9 +212,13 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
                 ++counters_.fragmentOwnerMetadataPackets;
             }
 
-            auto reassembledFacts = captureAdapter.normalize(
+            auto reassembledFacts = ingressParser_.parseL3Packet(
                 std::span<const std::byte>{fragment.packet},
-                static_cast<std::uint32_t>(fragment.packet.size()), direction, domain);
+                Flow::FlowGraphIngressMetadata{
+                    .direction = direction,
+                    .originalLength = static_cast<std::uint32_t>(fragment.packet.size()),
+                    .domain = domain,
+                });
             const auto key = Flow::CanonicalFlowKey::from(reassembledFacts);
             if (!key.has_value()) {
                 if (fragment.datagramKey.has_value()) {

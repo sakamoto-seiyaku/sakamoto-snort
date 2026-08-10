@@ -12,6 +12,7 @@
 #include <RuntimeControl.hpp>
 #include <FragmentSteering.hpp>
 #include <FlowGraphInjection.hpp>
+#include <FlowGraphIngress.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -235,6 +236,7 @@ private:
     NfqueueFlowAdapterConfig config_;
     Flow::FlowSteeringRuntime steering_;
     Flow::FlowGraphInjectionGate graphGate_;
+    Flow::FlowGraphIngressParser ingressParser_;
     Flow::FragmentSteering fragmentSteering_;
     NfqueueFragmentLeaseBook fragmentLeaseBook_;
     std::chrono::steady_clock::time_point fragmentEpoch_ =

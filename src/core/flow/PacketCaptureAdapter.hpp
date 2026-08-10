@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include <FlowSteering.hpp>
+#include <FlowGraphIngress.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -20,12 +20,11 @@ struct PacketCaptureAdapterConfig final {
 };
 
 /**
- * Converts an IPv4/IPv6 L3 prefix from one capture adapter into shared facts.
+ * Compatibility wrapper for the graph-owned ingress parser.
  *
- * The adapter never owns the packet bytes. It only retains the configured
- * adapter identity and reads the supplied bounded span during normalization.
- * Fragment reassembly and IPv6 extension-header traversal are deliberately
- * outside this slice.
+ * New datapath code should call FlowGraphIngressParser directly with complete
+ * L3 bytes and normalized platform metadata. This wrapper exists for older
+ * host vectors that still exercise the historical PacketCaptureAdapter name.
  */
 class PacketCaptureAdapter final {
 public:
@@ -44,6 +43,7 @@ public:
 private:
     AdapterKind adapter_;
     std::uint32_t maxPrefixLength_;
+    FlowGraphIngressParser parser_;
 };
 
 } // namespace SnortDatapath::Flow

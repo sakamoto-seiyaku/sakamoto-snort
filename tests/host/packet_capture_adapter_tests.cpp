@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <FlowGraphIngress.hpp>
 #include <PacketCaptureAdapter.hpp>
 
 #include <gtest/gtest.h>
@@ -94,6 +95,123 @@ FlowDomain domain(const AdapterKind adapter) {
     };
 }
 
+FlowGraphIngressMetadata metadata(
+    const AdapterKind adapter,
+    const DevicePacketDirection direction = DevicePacketDirection::Input,
+    const std::uint32_t originalLength = 1500) {
+    return FlowGraphIngressMetadata{
+        .direction = direction,
+        .originalLength = originalLength,
+        .domain = domain(adapter),
+    };
+}
+
+TEST(FlowGraphIngressParserTest, RootAndVpnParseIntoOneRuntimeOwner) {
+    FlowGraphIngressParser parser;
+    const auto forwardPacket = ipv4TcpPacket();
+    const auto reversePacket = ipv4TcpPacket(true);
+
+    const auto forward = parser.parseL3Packet(
+        packetSpan(forwardPacket),
+        metadata(AdapterKind::RootNfqueue, DevicePacketDirection::Input));
+    const auto reverse = parser.parseL3Packet(
+        packetSpan(reversePacket),
+        metadata(AdapterKind::VpnTun, DevicePacketDirection::Output));
+
+    EXPECT_EQ(forward.domain.adapter, AdapterKind::RootNfqueue);
+    EXPECT_EQ(reverse.domain.adapter, AdapterKind::VpnTun);
+    EXPECT_EQ(forward.deviceDirection, DevicePacketDirection::Input);
+    EXPECT_EQ(reverse.deviceDirection, DevicePacketDirection::Output);
+    EXPECT_EQ(forward.parseStatus, ParseStatus::Ready);
+    EXPECT_EQ(reverse.parseStatus, ParseStatus::Ready);
+    EXPECT_TRUE(forward.portsAvailable);
+    EXPECT_TRUE(reverse.portsAvailable);
+    EXPECT_EQ(forward.boundedPrefixLength, 40U);
+    EXPECT_EQ(reverse.boundedPrefixLength, 40U);
+
+    const auto forwardKey = CanonicalFlowKey::from(forward);
+    const auto reverseKey = CanonicalFlowKey::from(reverse);
+    ASSERT_TRUE(forwardKey.has_value());
+    ASSERT_TRUE(reverseKey.has_value());
+    EXPECT_EQ(*forwardKey, *reverseKey);
+
+    FlowSteeringRuntime runtime(WorkerLayout{4, 0x1234}, 4);
+    const auto expectedWorker = runtime.distribution().selector().ownerFor(*forwardKey);
+    EXPECT_EQ(runtime.distribution().selector().ownerFor(*reverseKey), expectedWorker);
+}
+
+TEST(FlowGraphIngressParserTest, PreservesCompleteLinuxUidNetworkAndInterfaceMetadata) {
+    FlowGraphIngressParser parser;
+    const auto packet = ipv4TcpPacket();
+    const auto facts = parser.parseL3Packet(
+        packetSpan(packet),
+        FlowGraphIngressMetadata{
+            .direction = DevicePacketDirection::Output,
+            .originalLength = static_cast<std::uint32_t>(packet.size()),
+            .domain = FlowDomain{
+                .adapter = AdapterKind::RootNfqueue,
+                .linuxUid = 112233,
+                .captureQueue = 42,
+                .networkContext = 9,
+                .runtimeProfile = 4,
+                .interfaceIndex = 77,
+            },
+        });
+
+    EXPECT_EQ(facts.parseStatus, ParseStatus::Ready);
+    EXPECT_EQ(facts.deviceDirection, DevicePacketDirection::Output);
+    EXPECT_EQ(facts.domain.adapter, AdapterKind::RootNfqueue);
+    EXPECT_EQ(facts.domain.linuxUid, 112233U);
+    EXPECT_EQ(facts.domain.captureQueue, 42U);
+    EXPECT_EQ(facts.domain.networkContext, 9U);
+    EXPECT_EQ(facts.domain.runtimeProfile, 4U);
+    EXPECT_EQ(facts.domain.interfaceIndex, 77U);
+}
+
+TEST(FlowGraphIngressParserTest, ParsesIpv6UdpWithPlatformMetadata) {
+    FlowGraphIngressParser parser;
+    const auto packet = ipv6UdpPacket();
+    const auto facts = parser.parseL3Packet(
+        packetSpan(packet),
+        FlowGraphIngressMetadata{
+            .direction = DevicePacketDirection::Output,
+            .originalLength = static_cast<std::uint32_t>(packet.size()),
+            .domain = FlowDomain{
+                .adapter = AdapterKind::VpnTun,
+                .linuxUid = 20002,
+                .captureQueue = 0,
+                .networkContext = 6,
+                .runtimeProfile = 1,
+                .interfaceIndex = 12,
+            },
+        });
+
+    EXPECT_EQ(facts.source.family, AddressFamily::Ipv6);
+    EXPECT_EQ(facts.destination.family, AddressFamily::Ipv6);
+    EXPECT_EQ(facts.ipProtocol, 17U);
+    EXPECT_EQ(facts.sourcePort, 5353U);
+    EXPECT_EQ(facts.destinationPort, 53U);
+    EXPECT_TRUE(facts.portsAvailable);
+    EXPECT_EQ(facts.parseStatus, ParseStatus::Ready);
+    EXPECT_EQ(facts.domain.adapter, AdapterKind::VpnTun);
+    EXPECT_EQ(facts.domain.linuxUid, 20002U);
+    EXPECT_EQ(facts.domain.networkContext, 6U);
+    EXPECT_EQ(facts.domain.interfaceIndex, 12U);
+}
+
+TEST(FlowGraphIngressParserTest, ConfigurableZeroBytesNeverReadsInput) {
+    FlowGraphIngressParser parser(FlowGraphIngressConfig{.maxL3Bytes = 0});
+    const auto packet = ipv4TcpPacket();
+    const auto facts = parser.parseL3Packet(
+        packetSpan(packet),
+        metadata(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                 static_cast<std::uint32_t>(packet.size())));
+
+    EXPECT_EQ(facts.boundedPrefixLength, 0U);
+    EXPECT_EQ(facts.parseStatus, ParseStatus::Malformed);
+}
+
+// Compatibility coverage only. Parser ownership lives in FlowGraphIngressParser.
 TEST(PacketCaptureAdapterTest, RootAndVpnNormalizeIntoOneRuntimeOwner) {
     PacketCaptureAdapter root(AdapterKind::RootNfqueue);
     PacketCaptureAdapter vpn(AdapterKind::VpnTun);

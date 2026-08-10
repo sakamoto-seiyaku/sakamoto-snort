@@ -12,8 +12,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <stdexcept>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -116,6 +119,25 @@ public:
 private:
     std::uint32_t linuxUid_ = 0;
 };
+
+std::string readRepoFile(const std::filesystem::path &relativePath) {
+    std::ifstream input(
+        std::filesystem::path(SUCRE_SNORT_SOURCE_ROOT) / relativePath,
+        std::ios::in | std::ios::binary);
+    if (!input.is_open()) {
+        return {};
+    }
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    return contents.str();
+}
+
+TEST(NfqueueFlowAdapterTest, SourceUsesGraphIngressParserNotPacketCaptureAdapter) {
+    const auto source = readRepoFile("src/datapath/nfqueue/NfqueueFlowAdapter.cpp");
+    ASSERT_FALSE(source.empty());
+    EXPECT_NE(source.find("FlowGraphIngress"), std::string::npos);
+    EXPECT_EQ(source.find("PacketCaptureAdapter"), std::string::npos);
+}
 
 TEST(NfqueueFlowAdapterTest, NormalizesAndRunsSharedOwnerGate) {
     NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
