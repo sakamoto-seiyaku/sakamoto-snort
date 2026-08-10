@@ -277,6 +277,14 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     runtime.nfqueueCounters.verdictSendFailures = 5;
     runtime.nfqueueCounters.fragmentBufferedPackets = 6;
     runtime.nfqueueCounters.fragmentReassembledPackets = 8;
+    runtime.nfqueueCounters.uidMetadataPresentPackets = 9;
+    runtime.nfqueueCounters.uidMetadataMissingPackets = 10;
+    runtime.nfqueueCounters.lastObservedLinuxUid = 12546;
+    runtime.nfqueueCounters.lastObservedNetworkContext = 7;
+    runtime.nfqueueCounters.lastObservedHook = 3;
+    runtime.nfqueueCounters.lastObservedInputInterfaceIndex = 11;
+    runtime.nfqueueCounters.lastObservedOutputInterfaceIndex = 22;
+    runtime.nfqueueCounters.lastObservedResult = "FlowAccepted";
     ControlServerHarness harness(runtime);
 
     const rapidjson::Document hello = harness.call(8, "HELLO");
@@ -298,6 +306,14 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["verdictSendFailures"].GetUint64(), 5U);
     EXPECT_EQ(result["fragmentBufferedPackets"].GetUint64(), 6U);
     EXPECT_EQ(result["fragmentReassembledPackets"].GetUint64(), 8U);
+    EXPECT_EQ(result["uidMetadataPresentPackets"].GetUint64(), 9U);
+    EXPECT_EQ(result["uidMetadataMissingPackets"].GetUint64(), 10U);
+    EXPECT_EQ(result["lastObservedLinuxUid"].GetUint(), 12546U);
+    EXPECT_EQ(result["lastObservedNetworkContext"].GetUint(), 7U);
+    EXPECT_EQ(result["lastObservedHook"].GetUint(), 3U);
+    EXPECT_EQ(result["lastObservedInputInterfaceIndex"].GetUint(), 11U);
+    EXPECT_EQ(result["lastObservedOutputInterfaceIndex"].GetUint(), 22U);
+    EXPECT_STREQ(result["lastObservedResult"].GetString(), "FlowAccepted");
 }
 
 TEST(ControlServerContract, PolicyStatusStartsEmptyAtRevisionZero) {

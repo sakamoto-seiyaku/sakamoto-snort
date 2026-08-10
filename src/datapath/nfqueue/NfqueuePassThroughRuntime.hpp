@@ -83,6 +83,7 @@ struct NfqueuePacketMetadata final {
     std::uint32_t inputInterfaceIndex = 0;
     std::uint32_t outputInterfaceIndex = 0;
     std::uint32_t networkContext = 0;
+    bool uidMetadataPresent = false;
 };
 
 struct DualStackPassThroughRuntimeConfig {
@@ -107,6 +108,35 @@ enum class NfqueueFlowAdapterResult : std::uint8_t {
     FragmentConflict,
     FragmentCapacity,
 };
+
+[[nodiscard]] inline const char *nfqueueFlowAdapterResultName(
+    const NfqueueFlowAdapterResult result) noexcept {
+    switch (result) {
+    case NfqueueFlowAdapterResult::FlowAccepted:
+        return "FlowAccepted";
+    case NfqueueFlowAdapterResult::FlowDropped:
+        return "FlowDropped";
+    case NfqueueFlowAdapterResult::FailOpenParse:
+        return "FailOpenParse";
+    case NfqueueFlowAdapterResult::FailOpenCapacity:
+        return "FailOpenCapacity";
+    case NfqueueFlowAdapterResult::FailOpenOwnerFault:
+        return "FailOpenOwnerFault";
+    case NfqueueFlowAdapterResult::FragmentBuffered:
+        return "FragmentBuffered";
+    case NfqueueFlowAdapterResult::FragmentDuplicate:
+        return "FragmentDuplicate";
+    case NfqueueFlowAdapterResult::FragmentTimeout:
+        return "FragmentTimeout";
+    case NfqueueFlowAdapterResult::FragmentMalformed:
+        return "FragmentMalformed";
+    case NfqueueFlowAdapterResult::FragmentConflict:
+        return "FragmentConflict";
+    case NfqueueFlowAdapterResult::FragmentCapacity:
+        return "FragmentCapacity";
+    }
+    return "Unknown";
+}
 
 struct NfqueueFlowAdapterCounters {
     std::uint64_t packetsSeen = 0;
@@ -134,6 +164,14 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t fragmentTimeoutPackets = 0;
     std::uint64_t fragmentCapacityPackets = 0;
     std::uint64_t fragmentOwnerMetadataPackets = 0;
+    std::uint64_t uidMetadataPresentPackets = 0;
+    std::uint64_t uidMetadataMissingPackets = 0;
+    std::uint32_t lastObservedLinuxUid = 0;
+    std::uint32_t lastObservedNetworkContext = 0;
+    std::uint32_t lastObservedHook = 0;
+    std::uint32_t lastObservedInputInterfaceIndex = 0;
+    std::uint32_t lastObservedOutputInterfaceIndex = 0;
+    std::string lastObservedResult = "none";
 };
 
 [[nodiscard]] inline NfqueuePacketLeaseTerminalReason terminalReasonFor(
@@ -350,6 +388,14 @@ public:
             .verdictSendFailures = counters.verdictSendFailures,
             .fragmentBufferedPackets = counters.fragmentBufferedPackets,
             .fragmentReassembledPackets = counters.fragmentReassembledPackets,
+            .uidMetadataPresentPackets = counters.uidMetadataPresentPackets,
+            .uidMetadataMissingPackets = counters.uidMetadataMissingPackets,
+            .lastObservedLinuxUid = counters.lastObservedLinuxUid,
+            .lastObservedNetworkContext = counters.lastObservedNetworkContext,
+            .lastObservedHook = counters.lastObservedHook,
+            .lastObservedInputInterfaceIndex = counters.lastObservedInputInterfaceIndex,
+            .lastObservedOutputInterfaceIndex = counters.lastObservedOutputInterfaceIndex,
+            .lastObservedResult = counters.lastObservedResult,
         };
     }
     [[nodiscard]] NfqueueFlowAdapterCounters flowAdapterCounters() const noexcept {

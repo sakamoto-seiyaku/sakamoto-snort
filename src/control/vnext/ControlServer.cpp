@@ -153,6 +153,24 @@ rapidjson::Document makeNfqueueStatusResult(
                      counters.fragmentBufferedPackets, alloc);
     result.AddMember("fragmentReassembledPackets",
                      counters.fragmentReassembledPackets, alloc);
+    result.AddMember("uidMetadataPresentPackets",
+                     counters.uidMetadataPresentPackets, alloc);
+    result.AddMember("uidMetadataMissingPackets",
+                     counters.uidMetadataMissingPackets, alloc);
+    result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
+    result.AddMember("lastObservedNetworkContext",
+                     counters.lastObservedNetworkContext, alloc);
+    result.AddMember("lastObservedHook", counters.lastObservedHook, alloc);
+    result.AddMember("lastObservedInputInterfaceIndex",
+                     counters.lastObservedInputInterfaceIndex, alloc);
+    result.AddMember("lastObservedOutputInterfaceIndex",
+                     counters.lastObservedOutputInterfaceIndex, alloc);
+    rapidjson::Value lastObservedResult;
+    lastObservedResult.SetString(counters.lastObservedResult.c_str(),
+                                 static_cast<rapidjson::SizeType>(
+                                     counters.lastObservedResult.size()),
+                                 alloc);
+    result.AddMember("lastObservedResult", lastObservedResult, alloc);
     return result;
 }
 

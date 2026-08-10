@@ -228,6 +228,52 @@ TEST(NfqueueFlowAdapterTest, RuntimeAppliedPolicyControlsExistingAdapterPacketPa
     EXPECT_EQ(adapter.counters().acceptedPackets, 0U);
 }
 
+TEST(NfqueueFlowAdapterTest, RecordsBoundedLiveMetadataObservation) {
+    NfqueueFlowAdapter adapter;
+
+    const auto accepted = adapter.process(
+        2, kNfqueueHookLocalOut, std::span<const std::uint8_t>{tcpPacket()}, 40,
+        NfqueuePacketMetadata{
+            .linuxUid = 12546,
+            .inputInterfaceIndex = 11,
+            .outputInterfaceIndex = 22,
+            .networkContext = 0,
+            .uidMetadataPresent = true,
+        });
+    EXPECT_EQ(accepted, NfqueueFlowAdapterResult::FlowAccepted);
+
+    auto counters = adapter.counters();
+    EXPECT_EQ(counters.uidMetadataPresentPackets, 1U);
+    EXPECT_EQ(counters.uidMetadataMissingPackets, 0U);
+    EXPECT_EQ(counters.lastObservedLinuxUid, 12546U);
+    EXPECT_EQ(counters.lastObservedNetworkContext, 0U);
+    EXPECT_EQ(counters.lastObservedHook, kNfqueueHookLocalOut);
+    EXPECT_EQ(counters.lastObservedInputInterfaceIndex, 11U);
+    EXPECT_EQ(counters.lastObservedOutputInterfaceIndex, 22U);
+    EXPECT_EQ(counters.lastObservedResult, "FlowAccepted");
+
+    const auto missing = adapter.process(
+        2, 0xff, std::span<const std::uint8_t>{tcpPacket()}, 40,
+        NfqueuePacketMetadata{
+            .linuxUid = 0,
+            .inputInterfaceIndex = 33,
+            .outputInterfaceIndex = 44,
+            .networkContext = 7,
+            .uidMetadataPresent = false,
+        });
+    EXPECT_EQ(missing, NfqueueFlowAdapterResult::FailOpenParse);
+
+    counters = adapter.counters();
+    EXPECT_EQ(counters.uidMetadataPresentPackets, 1U);
+    EXPECT_EQ(counters.uidMetadataMissingPackets, 1U);
+    EXPECT_EQ(counters.lastObservedLinuxUid, 0U);
+    EXPECT_EQ(counters.lastObservedNetworkContext, 7U);
+    EXPECT_EQ(counters.lastObservedHook, 0xffU);
+    EXPECT_EQ(counters.lastObservedInputInterfaceIndex, 33U);
+    EXPECT_EQ(counters.lastObservedOutputInterfaceIndex, 44U);
+    EXPECT_EQ(counters.lastObservedResult, "FailOpenParse");
+}
+
 TEST(NfqueueFlowAdapterTest, FragmentsAndBadHooksFailOpenWithoutPorts) {
     NfqueueFlowAdapter adapter;
     auto fragment = tcpPacket();

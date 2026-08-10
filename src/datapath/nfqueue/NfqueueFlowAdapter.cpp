@@ -80,6 +80,16 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     NfqueueFragmentLeaseContext leaseContext) noexcept {
     std::lock_guard lock(mutex_);
     ++counters_.packetsSeen;
+    if (metadata.uidMetadataPresent) {
+        ++counters_.uidMetadataPresentPackets;
+    } else {
+        ++counters_.uidMetadataMissingPackets;
+    }
+    counters_.lastObservedLinuxUid = metadata.linuxUid;
+    counters_.lastObservedNetworkContext = metadata.networkContext;
+    counters_.lastObservedHook = hook;
+    counters_.lastObservedInputInterfaceIndex = metadata.inputInterfaceIndex;
+    counters_.lastObservedOutputInterfaceIndex = metadata.outputInterfaceIndex;
 
     const auto fragmentTick = monotonicFragmentNow();
     static_cast<void>(fragmentLeaseBook_.expire(
@@ -108,6 +118,8 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     if (!hookDirection.has_value()) {
         static_cast<void>(graphIngress_.expireFragments(fragmentTick));
         ++counters_.parsePassThroughPackets;
+        counters_.lastObservedResult = nfqueueFlowAdapterResultName(
+            NfqueueFlowAdapterResult::FailOpenParse);
         return NfqueueFlowAdapterResult::FailOpenParse;
     }
 
@@ -226,6 +238,7 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     if (graphResult.fragmentOwnerMetadata) {
         ++counters_.fragmentOwnerMetadataPackets;
     }
+    counters_.lastObservedResult = nfqueueFlowAdapterResultName(adapterResult);
     return adapterResult;
 }
 

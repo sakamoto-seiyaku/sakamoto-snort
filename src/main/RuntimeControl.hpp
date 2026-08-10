@@ -9,6 +9,7 @@
 #include <FlowSteering.hpp>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace SnortRuntime {
@@ -23,6 +24,14 @@ struct NfqueueRuntimeCounters {
     std::uint64_t verdictSendFailures = 0;
     std::uint64_t fragmentBufferedPackets = 0;
     std::uint64_t fragmentReassembledPackets = 0;
+    std::uint64_t uidMetadataPresentPackets = 0;
+    std::uint64_t uidMetadataMissingPackets = 0;
+    std::uint32_t lastObservedLinuxUid = 0;
+    std::uint32_t lastObservedNetworkContext = 0;
+    std::uint32_t lastObservedHook = 0;
+    std::uint32_t lastObservedInputInterfaceIndex = 0;
+    std::uint32_t lastObservedOutputInterfaceIndex = 0;
+    std::string lastObservedResult = "none";
 };
 
 class BaseRuntimeControl {

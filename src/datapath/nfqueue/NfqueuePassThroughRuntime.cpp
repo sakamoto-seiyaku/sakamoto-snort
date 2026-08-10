@@ -192,6 +192,7 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     }
     SnortDatapath::Nfqueue::NfqueuePacketMetadata metadata{};
     if (attrs[NFQA_UID] != nullptr) {
+        metadata.uidMetadataPresent = true;
         metadata.linuxUid = ntohl(mnl_attr_get_u32(attrs[NFQA_UID]));
     }
     if (attrs[NFQA_IFINDEX_INDEV] != nullptr) {
