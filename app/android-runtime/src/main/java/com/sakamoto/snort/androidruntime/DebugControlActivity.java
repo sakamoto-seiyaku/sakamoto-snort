@@ -23,6 +23,9 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.io.IOException;
 
 /** Minimal debug shell. It only issues versioned requests and renders snapshots. */
 public class DebugControlActivity extends Activity {
@@ -32,6 +35,10 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_RUNTIME_STOP = "runtimeStop";
     private static final String EXTRA_RUNTIME_PROFILE = "runtimeProfile";
     private static final String EXTRA_RUNTIME_CLEANUP_FAULT = "runtimeCleanupFault";
+    private static final String EXTRA_DEBUG_TRAFFIC = "debugTraffic";
+    private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
+    private static final int DEBUG_TRAFFIC_PORT = 80;
+    private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
 
     private final RuntimeControlBackend backend = new RuntimeControlBackend();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -91,6 +98,9 @@ public class DebugControlActivity extends Activity {
             }
             main.post(this::startSelected);
         }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_TRAFFIC, false)) {
+            main.post(this::runDebugTrafficProbe);
+        }
     }
 
     private View buildUi() {
@@ -145,6 +155,11 @@ public class DebugControlActivity extends Activity {
             refreshProductCatalog();
         });
         buttons.addView(query, weighted());
+        Button traffic = new Button(this);
+        traffic.setText("Debug traffic");
+        traffic.setAllCaps(false);
+        traffic.setOnClickListener(view -> runDebugTrafficProbe());
+        buttons.addView(traffic, weighted());
         root.addView(buttons, fillWrap());
 
         LinearLayout appSelector = new LinearLayout(this);
@@ -486,6 +501,31 @@ public class DebugControlActivity extends Activity {
         backend.unbindProductApplication(this, subjectId);
         action("Unbind requested for application subject " + subjectId.encode() + ".");
         refreshProductCatalog();
+    }
+
+    private void runDebugTrafficProbe() {
+        action("Debug traffic probe requested.");
+        Thread probe = new Thread(() -> {
+            String result;
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress(
+                        DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT),
+                        DEBUG_TRAFFIC_TIMEOUT_MILLIS);
+                result = "Debug traffic probe connected to "
+                        + DEBUG_TRAFFIC_HOST + ":" + DEBUG_TRAFFIC_PORT + ".";
+            } catch (IOException error) {
+                result = "Debug traffic probe failed: "
+                        + (error.getMessage() == null
+                        ? error.getClass().getSimpleName()
+                        : error.getMessage());
+            } catch (RuntimeException error) {
+                result = "Debug traffic probe failed: "
+                        + error.getClass().getSimpleName();
+            }
+            final String display = result;
+            main.post(() -> action(display));
+        }, "sakamoto-debug-traffic");
+        probe.start();
     }
 
     private void action(String text) {
