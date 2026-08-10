@@ -11,6 +11,28 @@ namespace {
 
 using namespace SnortDatapath::Flow;
 
+namespace Policy = SnortDatapath::Policy;
+
+class DropUidPolicy final : public SnortDatapath::Policy::PacketPolicySnapshot {
+public:
+    explicit DropUidPolicy(
+        const std::uint32_t uid,
+        const Policy::PacketPolicyStage stage = Policy::PacketPolicyStage::L4) noexcept
+        : uid_(uid), stage_(stage) {}
+
+    [[nodiscard]] Policy::PacketPolicyDecision evaluate(
+        const PacketFacts &packetFacts) const noexcept override {
+        if (packetFacts.domain.linuxUid == uid_) {
+            return Policy::PacketPolicyDecision::drop(17, 42, 7, stage_);
+        }
+        return Policy::PacketPolicyDecision::passNext();
+    }
+
+private:
+    std::uint32_t uid_;
+    Policy::PacketPolicyStage stage_;
+};
+
 PacketFacts facts(const AdapterKind adapter, const bool reverse = false) {
     return PacketFacts{
         .source = IpAddress::v4(reverse
@@ -39,6 +61,27 @@ PacketFacts facts(const AdapterKind adapter, const bool reverse = false) {
     };
 }
 
+TEST(VppGraphInjectionTest, PacketPolicyDecisionCarriesStageAndAttribution) {
+    const auto pass = Policy::PacketPolicyDecision::passNext();
+    EXPECT_EQ(pass.verdict, Policy::PacketPolicyVerdict::PASS_NEXT);
+    EXPECT_EQ(pass.stage, Policy::PacketPolicyStage::None);
+
+    const auto l4Drop = Policy::PacketPolicyDecision::drop(17, 42, 7);
+    EXPECT_EQ(l4Drop.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(l4Drop.stage, Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(l4Drop.reasonId, 17U);
+    EXPECT_EQ(l4Drop.ruleId, 42U);
+    EXPECT_EQ(l4Drop.revision, 7U);
+
+    const auto networkGateDrop = Policy::PacketPolicyDecision::drop(
+        23, 99, 11, Policy::PacketPolicyStage::NetworkGate);
+    EXPECT_EQ(networkGateDrop.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(networkGateDrop.stage, Policy::PacketPolicyStage::NetworkGate);
+    EXPECT_EQ(networkGateDrop.reasonId, 23U);
+    EXPECT_EQ(networkGateDrop.ruleId, 99U);
+    EXPECT_EQ(networkGateDrop.revision, 11U);
+}
+
 TEST(VppGraphInjectionTest, RootAndVpnUseOneDirectOwnerGraphGate) {
     FlowSteeringRuntime runtime(WorkerLayout{2, 0x1234}, 4);
     FlowGraphInjectionGate gate(runtime);
@@ -55,7 +98,68 @@ TEST(VppGraphInjectionTest, RootAndVpnUseOneDirectOwnerGraphGate) {
     EXPECT_EQ(gate.counters().injectedPackets, 2U);
     EXPECT_EQ(gate.counters().acceptedPackets, 2U);
     EXPECT_EQ(gate.counters().correctiveHandoffs, 0U);
+    EXPECT_EQ(gate.counters().policyDrops, 0U);
     EXPECT_EQ(runtime.distribution().counters().normalWorkerHandoffs, 0U);
+}
+
+TEST(VppGraphInjectionTest, DefaultEmptyPolicySnapshotPreservesAcceptedGraphPath) {
+    FlowSteeringRuntime runtime(WorkerLayout{2, 0x7777}, 4);
+    FlowGraphInjectionGate gate(runtime);
+    const auto packetFacts = facts(AdapterKind::RootNfqueue);
+    const auto emptyDecision =
+        Policy::emptyPacketPolicySnapshot().evaluate(packetFacts);
+    EXPECT_EQ(emptyDecision.verdict, Policy::PacketPolicyVerdict::PASS_NEXT);
+    EXPECT_EQ(emptyDecision.stage, Policy::PacketPolicyStage::None);
+    const auto key = CanonicalFlowKey::from(packetFacts);
+    ASSERT_TRUE(key.has_value());
+    const auto owner = runtime.distribution().selector().ownerFor(*key);
+    PacketSubmission submission{.facts = packetFacts};
+
+    EXPECT_EQ(gate.inject(submission, owner), GraphInjectionResult::Accepted);
+    EXPECT_EQ(gate.counters().acceptedPackets, 1U);
+    EXPECT_EQ(gate.counters().policyDrops, 0U);
+}
+
+TEST(VppGraphInjectionTest, PolicyDropShortCircuitsBeforeAcceptedTerminalPath) {
+    FlowSteeringRuntime runtime(WorkerLayout{2, 0x7777}, 4);
+    DropUidPolicy policy(10001, Policy::PacketPolicyStage::NetworkGate);
+    FlowGraphInjectionGate gate(runtime, policy);
+    const auto packetFacts = facts(AdapterKind::RootNfqueue);
+    const auto dropDecision = policy.evaluate(packetFacts);
+    EXPECT_EQ(dropDecision.stage, Policy::PacketPolicyStage::NetworkGate);
+    const auto key = CanonicalFlowKey::from(packetFacts);
+    ASSERT_TRUE(key.has_value());
+    const auto owner = runtime.distribution().selector().ownerFor(*key);
+    PacketSubmission submission{.facts = packetFacts};
+
+    EXPECT_EQ(gate.inject(submission, owner), GraphInjectionResult::PolicyDrop);
+    EXPECT_EQ(gate.counters().acceptedPackets, 0U);
+    EXPECT_EQ(gate.counters().policyDrops, 1U);
+    EXPECT_EQ(gate.counters().ownerFaultDrops, 0U);
+}
+
+TEST(VppGraphInjectionTest, OwnerSelectionIgnoresUidWhilePolicyCanDropByUid) {
+    FlowSteeringRuntime runtime(WorkerLayout{4, 0x2468}, 4);
+    DropUidPolicy policy(10002);
+    FlowGraphInjectionGate gate(runtime, policy);
+    auto firstFacts = facts(AdapterKind::RootNfqueue);
+    auto secondFacts = firstFacts;
+    secondFacts.domain.linuxUid = 10002;
+
+    const auto firstKey = CanonicalFlowKey::from(firstFacts);
+    const auto secondKey = CanonicalFlowKey::from(secondFacts);
+    ASSERT_TRUE(firstKey.has_value());
+    ASSERT_TRUE(secondKey.has_value());
+    EXPECT_EQ(*firstKey, *secondKey);
+    const auto owner = runtime.distribution().selector().ownerFor(*firstKey);
+    EXPECT_EQ(runtime.distribution().selector().ownerFor(*secondKey), owner);
+
+    PacketSubmission first{.facts = firstFacts};
+    PacketSubmission second{.facts = secondFacts};
+    EXPECT_EQ(gate.inject(first, owner), GraphInjectionResult::Accepted);
+    EXPECT_EQ(gate.inject(second, owner), GraphInjectionResult::PolicyDrop);
+    EXPECT_EQ(gate.counters().acceptedPackets, 1U);
+    EXPECT_EQ(gate.counters().policyDrops, 1U);
 }
 
 TEST(VppGraphInjectionTest, GraphGateBoundsOneCorrectiveHandoff) {

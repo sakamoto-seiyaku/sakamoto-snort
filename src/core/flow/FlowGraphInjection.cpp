@@ -6,6 +6,13 @@
 #include <FlowGraphInjection.hpp>
 
 namespace SnortDatapath::Flow {
+namespace {
+
+bool isPolicyDrop(const Policy::PacketPolicyDecision &decision) noexcept {
+    return decision.verdict == Policy::PacketPolicyVerdict::DROP;
+}
+
+} // namespace
 
 GraphInjectionResult FlowGraphInjectionGate::inject(
     PacketSubmission &submission,
@@ -43,10 +50,16 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
 
     const auto decision = distribution.checkOwner(
         *descriptorId, currentWorker, runtime_.ownerGuard());
-    if (decision == OwnerGuardDecision::Local
-        && distribution.complete(*descriptorId, PacketLeaseOutcome::Accepted)) {
-        ++counters_.acceptedPackets;
-        return GraphInjectionResult::Accepted;
+    if (decision == OwnerGuardDecision::Local) {
+        if (isPolicyDrop(policy_.evaluate(descriptor->facts))) {
+            if (distribution.complete(*descriptorId, PacketLeaseOutcome::Dropped)) {
+                ++counters_.policyDrops;
+                return GraphInjectionResult::PolicyDrop;
+            }
+        } else if (distribution.complete(*descriptorId, PacketLeaseOutcome::Accepted)) {
+            ++counters_.acceptedPackets;
+            return GraphInjectionResult::Accepted;
+        }
     }
 
     if (decision == OwnerGuardDecision::CorrectiveHandoff) {
@@ -54,10 +67,19 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
         if (distribution.requeueCorrective(*descriptorId, owner)) {
             const auto retryId = distribution.dequeue(owner);
             if (retryId.has_value() && distribution.checkOwner(
-                    *retryId, owner, runtime_.ownerGuard()) == OwnerGuardDecision::Local
-                && distribution.complete(*retryId, PacketLeaseOutcome::Accepted)) {
-                ++counters_.acceptedPackets;
-                return GraphInjectionResult::Accepted;
+                    *retryId, owner, runtime_.ownerGuard()) == OwnerGuardDecision::Local) {
+                const auto *retryDescriptor = distribution.descriptor(*retryId);
+                if (retryDescriptor != nullptr
+                    && isPolicyDrop(policy_.evaluate(retryDescriptor->facts))) {
+                    if (distribution.complete(*retryId, PacketLeaseOutcome::Dropped)) {
+                        ++counters_.policyDrops;
+                        return GraphInjectionResult::PolicyDrop;
+                    }
+                } else if (retryDescriptor != nullptr
+                    && distribution.complete(*retryId, PacketLeaseOutcome::Accepted)) {
+                    ++counters_.acceptedPackets;
+                    return GraphInjectionResult::Accepted;
+                }
             }
             if (retryId.has_value() && distribution.descriptor(*retryId) != nullptr) {
                 (void)distribution.complete(*retryId, PacketLeaseOutcome::Dropped);

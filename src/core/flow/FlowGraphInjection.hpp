@@ -6,6 +6,7 @@
 #pragma once
 
 #include <FlowSteering.hpp>
+#include <PacketPolicy.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,7 @@ enum class GraphInjectionResult : std::uint8_t {
     Accepted,
     ParseDrop,
     CapacityDrop,
+    PolicyDrop,
     OwnerFaultDrop,
 };
 
@@ -24,6 +26,7 @@ struct GraphInjectionCounters {
     std::uint64_t acceptedPackets = 0;
     std::uint64_t parseDrops = 0;
     std::uint64_t capacityDrops = 0;
+    std::uint64_t policyDrops = 0;
     std::uint64_t correctiveHandoffs = 0;
     std::uint64_t ownerFaultDrops = 0;
 };
@@ -40,8 +43,11 @@ struct GraphInjectionCounters {
  */
 class FlowGraphInjectionGate final {
 public:
-    explicit FlowGraphInjectionGate(FlowSteeringRuntime &runtime) noexcept
-        : runtime_(runtime) {}
+    explicit FlowGraphInjectionGate(
+        FlowSteeringRuntime &runtime,
+        const Policy::PacketPolicySnapshot &policy =
+            Policy::emptyPacketPolicySnapshot()) noexcept
+        : runtime_(runtime), policy_(policy) {}
 
     [[nodiscard]] GraphInjectionResult inject(
         PacketSubmission &submission, std::uint32_t currentWorker) noexcept;
@@ -52,6 +58,7 @@ public:
 
 private:
     FlowSteeringRuntime &runtime_;
+    const Policy::PacketPolicySnapshot &policy_;
     GraphInjectionCounters counters_;
 };
 
