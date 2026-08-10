@@ -39,12 +39,18 @@ public:
         if (attachedTunFd >= 0) {
             ::close(attachedTunFd);
         }
+        if (attachedTransportFd >= 0) {
+            ::close(attachedTransportFd);
+        }
     }
 
     bool nfqueuePassThroughReady() const noexcept override { return ready; }
     bool packetAdapterReady() const noexcept override { return adapterReady; }
     std::string_view packetAdapterName() const noexcept override { return adapterName; }
     bool vpnTunFdHandoffReady() const noexcept override { return vpnTunHandoffReady; }
+    bool vpnTunTransportFdHandoffReady() const noexcept override {
+        return vpnTransportHandoffReady;
+    }
     bool resetBaseRuntime() noexcept override {
         ++resetCount;
         return resetResult;
@@ -82,6 +88,20 @@ public:
         attachedTunFd = tunFd;
         return SnortRuntime::VpnTunFdAttachResult::accepted();
     }
+    SnortRuntime::VpnTunFdAttachResult attachVpnTransportFd(
+        const int transportFd) noexcept override {
+        ++vpnTransportAttachCount;
+        if (!vpnTransportAttachResult) {
+            ::close(transportFd);
+            return SnortRuntime::VpnTunFdAttachResult::error(
+                "VPN_TRANSPORT_ATTACH_FAILED", "fake transport attach failed");
+        }
+        if (attachedTransportFd >= 0) {
+            ::close(attachedTransportFd);
+        }
+        attachedTransportFd = transportFd;
+        return SnortRuntime::VpnTunFdAttachResult::accepted();
+    }
 
     bool ready = true;
     bool resetResult = true;
@@ -90,13 +110,17 @@ public:
     bool vpnTunCountersReady = false;
     bool adapterReady = false;
     bool vpnTunHandoffReady = false;
+    bool vpnTransportHandoffReady = false;
     bool vpnTunAttachResult = true;
+    bool vpnTransportAttachResult = true;
     bool vpnTunAttachIpv6 = false;
     bool policyApplyResult = true;
     int resetCount = 0;
     int policyApplyCount = 0;
     int vpnTunAttachCount = 0;
+    int vpnTransportAttachCount = 0;
     int attachedTunFd = -1;
+    int attachedTransportFd = -1;
     Policy::RuntimePacketPolicySnapshot policy;
     SnortRuntime::NfqueueRuntimeCounters nfqueueCounters;
     SnortRuntime::VpnTunRuntimeCounters vpnTunCounters;
@@ -319,6 +343,20 @@ TEST(ControlServerContract, HelloAdvertisesVpnTunFdHandoffOnlyWhenRuntimeSupport
               capabilities.end());
 }
 
+TEST(ControlServerContract, HelloAdvertisesVpnTransportFdHandoffOnlyWhenRuntimeSupportsIt) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTransportHandoffReady = true;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(46, "HELLO");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto capabilities = capabilityStrings(response["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
+                        "vpn-tun-transport-fd-handoff"),
+              capabilities.end());
+}
+
 TEST(ControlServerContract, VpnTunAttachRejectsMissingScmRightsFd) {
     FakeRuntimeControl runtime;
     runtime.vpnTunHandoffReady = true;
@@ -330,6 +368,62 @@ TEST(ControlServerContract, VpnTunAttachRejectsMissingScmRightsFd) {
     ASSERT_FALSE(response["ok"].GetBool());
     EXPECT_STREQ(response["error"]["code"].GetString(), "INVALID_ARGUMENT");
     EXPECT_EQ(runtime.vpnTunAttachCount, 0);
+}
+
+TEST(ControlServerContract, VpnTransportAttachRejectsMissingScmRightsFd) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTransportHandoffReady = true;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response =
+        harness.call(47, "VPN_TRANSPORT.ATTACH");
+
+    ASSERT_FALSE(response["ok"].GetBool());
+    EXPECT_STREQ(response["error"]["code"].GetString(), "INVALID_ARGUMENT");
+    EXPECT_EQ(runtime.vpnTransportAttachCount, 0);
+}
+
+TEST(ControlServerContract, VpnTransportAttachTransfersOneScmRightsFdToRuntime) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTransportHandoffReady = true;
+    ControlServerHarness harness(runtime);
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0) << std::strerror(errno);
+
+    const rapidjson::Document response =
+        harness.callWithFd(48, "VPN_TRANSPORT.ATTACH", "{}", pipeFds[0]);
+    ::close(pipeFds[0]);
+    pipeFds[0] = -1;
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    ASSERT_TRUE(response.HasMember("result"));
+    EXPECT_TRUE(response["result"]["transportFdAttached"].GetBool());
+    EXPECT_EQ(runtime.vpnTransportAttachCount, 1);
+    ASSERT_GE(runtime.attachedTransportFd, 0);
+
+    const char expected = 't';
+    ASSERT_EQ(::write(pipeFds[1], &expected, 1), 1);
+    ::close(pipeFds[1]);
+    pipeFds[1] = -1;
+    char actual = '\0';
+    EXPECT_EQ(::read(runtime.attachedTransportFd, &actual, 1), 1);
+    EXPECT_EQ(actual, expected);
+}
+
+TEST(ControlServerContract, VpnTransportAttachIsUnsupportedWithoutRuntimeCapability) {
+    FakeRuntimeControl runtime;
+    ControlServerHarness harness(runtime);
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0) << std::strerror(errno);
+
+    const rapidjson::Document response =
+        harness.callWithFd(49, "VPN_TRANSPORT.ATTACH", "{}", pipeFds[0]);
+    ::close(pipeFds[0]);
+    ::close(pipeFds[1]);
+
+    ASSERT_FALSE(response["ok"].GetBool());
+    EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
+    EXPECT_EQ(runtime.vpnTransportAttachCount, 0);
 }
 
 TEST(ControlServerContract, VpnTunAttachTransfersOneScmRightsFdToRuntime) {

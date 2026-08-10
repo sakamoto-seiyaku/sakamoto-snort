@@ -93,6 +93,10 @@ public:
         return tunFd_ >= 0;
     }
 
+    [[nodiscard]] bool vpnTunTransportFdHandoffReady() const noexcept override {
+        return tunFd_ >= 0;
+    }
+
     [[nodiscard]] bool packetPolicyControlReady() const noexcept override {
         return true;
     }
@@ -162,15 +166,17 @@ public:
         return tunFd_ >= 0;
     }
 
-    [[nodiscard]] bool attachVpnTransportFd(const int transportFd) noexcept {
+    [[nodiscard]] SnortRuntime::VpnTunFdAttachResult attachVpnTransportFd(
+        const int transportFd) noexcept override {
         if (transportFd < 0) {
-            return false;
+            return SnortRuntime::VpnTunFdAttachResult::error(
+                "VPN_TRANSPORT_ATTACH_INVALID_FD", "VPN transport fd is invalid");
         }
         if (transportFd_ >= 0) {
             ::close(transportFd_);
         }
         transportFd_ = transportFd;
-        return true;
+        return SnortRuntime::VpnTunFdAttachResult::accepted();
     }
 
     /**

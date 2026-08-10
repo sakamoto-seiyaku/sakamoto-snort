@@ -97,6 +97,9 @@ public:
     [[nodiscard]] virtual bool vpnTunFdHandoffReady() const noexcept {
         return false;
     }
+    [[nodiscard]] virtual bool vpnTunTransportFdHandoffReady() const noexcept {
+        return false;
+    }
     [[nodiscard]] virtual bool resetBaseRuntime() noexcept = 0;
     [[nodiscard]] virtual bool packetPolicyControlReady() const noexcept {
         return false;
@@ -135,6 +138,13 @@ public:
         static_cast<void>(enableIpv6);
         return VpnTunFdAttachResult::error("VPN_TUN_ATTACH_UNSUPPORTED",
                                            "VPN TUN fd handoff is unavailable");
+    }
+    [[nodiscard]] virtual VpnTunFdAttachResult attachVpnTransportFd(
+        int transportFd) noexcept {
+        static_cast<void>(transportFd);
+        return VpnTunFdAttachResult::error(
+            "VPN_TRANSPORT_ATTACH_UNSUPPORTED",
+            "VPN transport fd handoff is unavailable");
     }
 };
 

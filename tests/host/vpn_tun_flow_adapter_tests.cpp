@@ -444,7 +444,7 @@ TEST(VpnTunFdRuntimeTest, BoundedDrainWritesAllowedOutboundPacketToTransportFd) 
 
     VpnTunFdRuntime runtime{tunFds[0]};
     tunFds[0] = -1;
-    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]));
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]).ok);
     transportFds[0] = -1;
 
     const auto drain = runtime.drainTunPackets(
@@ -479,7 +479,7 @@ TEST(VpnTunFdRuntimeTest, TransportReturnDrainWritesAcceptedPacketBackToTunFd) {
 
     VpnTunFdRuntime runtime{tunFds[0]};
     tunFds[0] = -1;
-    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]));
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]).ok);
     transportFds[0] = -1;
     ASSERT_EQ(::write(transportFds[1], packet.data(), packet.size()),
               static_cast<ssize_t>(packet.size()));

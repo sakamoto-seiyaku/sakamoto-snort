@@ -180,6 +180,9 @@ rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runt
     if (runtime.vpnTunFdHandoffReady()) {
         capabilities.PushBack("vpn-tun-fd-handoff", alloc);
     }
+    if (runtime.vpnTunTransportFdHandoffReady()) {
+        capabilities.PushBack("vpn-tun-transport-fd-handoff", alloc);
+    }
     if (runtime.nfqueueRuntimeCountersReady()) {
         capabilities.PushBack("nfqueue-runtime-counters", alloc);
     }
@@ -793,6 +796,14 @@ rapidjson::Document makeVpnTunAttachResult(const bool enableIpv6) {
     return result;
 }
 
+rapidjson::Document makeVpnTransportAttachResult() {
+    rapidjson::Document result(rapidjson::kObjectType);
+    auto &alloc = result.GetAllocator();
+    result.AddMember("adapter", "vpn-tun-hev", alloc);
+    result.AddMember("transportFdAttached", true, alloc);
+    return result;
+}
+
 rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
                                     SnortRuntime::BaseRuntimeControl &runtime,
                                     int &receivedFd) {
@@ -878,6 +889,35 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
                                             : attach.errorMessage);
         }
         rapidjson::Document result = makeVpnTunAttachResult(enableIpv6);
+        return ControlVNext::makeOkResponse(request.id, &result);
+    }
+
+    if (request.cmd == "VPN_TRANSPORT.ATTACH") {
+        if (!runtime.vpnTunTransportFdHandoffReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND",
+                "VPN transport fd handoff unavailable");
+        }
+        if (const auto err = rejectUnknown(*request.args, {}); err.has_value()) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
+        }
+        if (receivedFd < 0) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "INVALID_ARGUMENT",
+                "VPN_TRANSPORT.ATTACH requires one SCM_RIGHTS fd");
+        }
+        const int transportFd = receivedFd;
+        receivedFd = -1;
+        const auto attach = runtime.attachVpnTransportFd(transportFd);
+        if (!attach.ok) {
+            return ControlVNext::makeErrorResponse(
+                request.id,
+                attach.errorCode.empty() ? "VPN_TRANSPORT_ATTACH_FAILED"
+                                         : attach.errorCode,
+                attach.errorMessage.empty() ? "VPN transport fd attach failed"
+                                            : attach.errorMessage);
+        }
+        rapidjson::Document result = makeVpnTransportAttachResult();
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 
