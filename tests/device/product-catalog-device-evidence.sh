@@ -7,15 +7,22 @@ adb_bin="$repo_root/dev/adb"
 package_name="${PACKAGE:-com.sakamoto.snort.androidruntime}"
 apk_path="${APK:-$repo_root/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk}"
 serial_arg="${ADB_SERIAL:-${ANDROID_SERIAL:-}}"
+install_apk=0
+refresh_projection=0
+projection_activity_launched=0
 
 usage() {
   cat <<EOF
-Usage: $0 [--serial <serial>]
+Usage: $0 [--serial <serial>] [--install-apk] [--refresh-projection]
 
 Records bounded SAKAMOTO-50 Android device evidence:
   - git/device/user-profile metadata
   - per-user package UID samples from cmd package list packages --user <id> -U
   - current S50 package/projection availability, without STOP or data clearing
+
+Default behavior is read-only. Opt-in flags:
+  --install-apk          adb install -r the debug APK artifact; never clears data
+  --refresh-projection   launch DebugControlActivity and poll the projection file
 
 Environment overrides:
   PACKAGE, APK, ADB_SERIAL, ANDROID_SERIAL
@@ -27,6 +34,14 @@ while [[ $# -gt 0 ]]; do
     --serial)
       serial_arg="$2"
       shift 2
+      ;;
+    --install-apk)
+      install_apk=1
+      shift
+      ;;
+    --refresh-projection)
+      refresh_projection=1
+      shift
       ;;
     -h|--help)
       usage
@@ -104,33 +119,76 @@ package_uid_lines() {
     | sed -n 's/^package:\([^ ]*\).*uid:\([0-9][0-9]*\).*$/\1=\2/p'
 }
 
-projection_probe_script() {
-  local user_id="$1"
-  local path="/data/user/${user_id}/${package_name}/files/product-catalog-projection/projection.properties"
-  printf '%s\n' \
-    "path='$path'" \
-    'if [ -f "$path" ]; then' \
-    '  echo present=1' \
-    '  awk -F= '"'"'/^(schemaVersion|selectedProfile|boundApplicationCount|catalogEntryCount|catalogStatus|productStateStatus|rows\.count|selectableRows\.count)=/ { print $1"="$2 }'"'"' "$path" 2>/dev/null | head -n 16' \
-    'else' \
-    '  echo present=0' \
-    'fi'
+emit_projection_properties() {
+  local properties="$1"
+  if [[ -z "$properties" ]]; then
+    printf 'present=0\n'
+    return 0
+  fi
+  printf 'present=1\n'
+  printf '%s\n' "$properties" \
+    | awk -F= '/^(schemaVersion|selectedProfile|boundApplicationCount|catalogEntryCount|catalogStatus|productStateStatus|rows\.count|selectableRows\.count)=/ { print $1"="$2 }' \
+    | head -n 16
 }
 
 probe_projection_for_user() {
   local user_id="$1"
-  local script
-  script="$(projection_probe_script "$user_id")"
+  local absolute_path="/data/user/${user_id}/${package_name}/files/product-catalog-projection/projection.properties"
+  local relative_path="files/product-catalog-projection/projection.properties"
+  local root_output
 
-  if adb_cmd shell su 0 sh -c "$script" 2>/dev/null | tr -d '\r'; then
+  root_output="$(adb_cmd shell su -c "cat '$absolute_path'" 2>/dev/null | tr -d '\r' || true)"
+  if [[ -n "$root_output" ]]; then
+    emit_projection_properties "$root_output"
     return 0
   fi
 
   if [[ "$user_id" == "0" ]]; then
-    adb_cmd shell run-as "$package_name" sh -c "$script" 2>/dev/null | tr -d '\r' \
-      && return 0
+    local run_as_output
+    run_as_output="$(adb_cmd shell run-as "$package_name" cat "$relative_path" 2>/dev/null \
+      | tr -d '\r' || true)"
+    emit_projection_properties "$run_as_output"
+    return 0
   fi
 
+  printf 'present=0\n'
+  return 0
+}
+
+projection_present_for_user() {
+  local user_id="$1"
+  local projection_output
+  projection_output="$(probe_projection_for_user "$user_id" || true)"
+  printf '%s\n' "$projection_output" \
+    | awk -F= '$1 == "present" && $2 == "1" { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
+refresh_projection_for_user() {
+  local user_id="$1"
+  local timeout_seconds="${PROJECTION_REFRESH_TIMEOUT_SECONDS:-45}"
+  local deadline
+  deadline=$((SECONDS + timeout_seconds))
+
+  if ! adb_cmd shell am start -n "${package_name}/.DebugControlActivity" >/dev/null 2>&1; then
+    kv projection_refresh.result "FAIL"
+    kv projection_refresh.reason "debug_control_activity_launch_failed"
+    return 1
+  fi
+
+  projection_activity_launched=1
+  kv projection_refresh.launch "DebugControlActivity"
+  kv projection_refresh.user "$user_id"
+
+  while (( SECONDS <= deadline )); do
+    if projection_present_for_user "$user_id"; then
+      kv projection_refresh.result "PASS"
+      return 0
+    fi
+    sleep 1
+  done
+
+  kv projection_refresh.result "FAIL"
+  kv projection_refresh.reason "projection_file_absent_after_debug_control_activity_query_service"
   return 1
 }
 
@@ -138,7 +196,15 @@ cleanup() {
   if [[ "${resolved_serial:-}" == "UNAVAILABLE" ]]; then
     return 0
   fi
-  kv cleanup.force_stop "SKIPPED_NOT_LAUNCHED"
+  if [[ "$projection_activity_launched" -eq 1 ]]; then
+    if adb_cmd shell am force-stop "$package_name" >/dev/null 2>&1; then
+      kv cleanup.force_stop "ISSUED"
+    else
+      kv cleanup.force_stop "FAILED"
+    fi
+  else
+    kv cleanup.force_stop "SKIPPED_NOT_LAUNCHED"
+  fi
   local forwards
   forwards="$(adb_cmd forward --list 2>/dev/null | tr -d '\r' || true)"
   if [[ -z "$forwards" ]]; then
@@ -158,6 +224,17 @@ cleanup() {
 kv harness "s50_product_catalog_device_evidence"
 kv git_head "$(git -C "$repo_root" rev-parse --verify HEAD 2>/dev/null || printf UNKNOWN)"
 kv package "$package_name"
+
+if [[ "$install_apk" -eq 1 ]]; then
+  kv apk_install "REQUESTED"
+else
+  kv apk_install "SKIPPED"
+fi
+if [[ "$refresh_projection" -eq 1 ]]; then
+  kv projection_refresh "REQUESTED"
+else
+  kv projection_refresh "SKIPPED"
+fi
 
 if [[ -f "$apk_path" ]]; then
   kv apk_artifact "FOUND"
@@ -189,6 +266,20 @@ kv device.serial "$resolved_serial"
 
 trap cleanup EXIT
 
+if [[ "$install_apk" -eq 1 ]]; then
+  if [[ ! -f "$apk_path" ]]; then
+    kv apk_install "FAIL"
+    kv apk_install.reason "debug_apk_artifact_absent"
+    exit 1
+  elif adb_cmd install -r "$apk_path" >/dev/null 2>&1; then
+    kv apk_install "PASS"
+  else
+    kv apk_install "FAIL"
+    kv apk_install.reason "adb_install_r_failed"
+    exit 1
+  fi
+fi
+
 kv device.model "$(adb_cmd shell getprop ro.product.model 2>/dev/null | tr -d '\r' || printf UNKNOWN)"
 kv device.sdk "$(adb_cmd shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' || printf UNKNOWN)"
 kv device.release "$(adb_cmd shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' || printf UNKNOWN)"
@@ -201,6 +292,19 @@ if [[ "${#user_ids[@]}" -gt 0 ]]; then
   kv users.ids "$(join_by_comma "${user_ids[@]}")"
 else
   kv users.ids "UNAVAILABLE"
+fi
+
+current_user_id="$(adb_cmd shell am get-current-user 2>/dev/null | tr -d '\r' | awk '/^[0-9]+$/ { print; exit }' || true)"
+if [[ -n "$current_user_id" ]]; then
+  kv current_user.id "$current_user_id"
+else
+  current_user_id="0"
+  kv current_user.id "UNAVAILABLE"
+  kv current_user.reason "am_get_current_user_unavailable_defaulting_to_user_0_for_projection_refresh"
+fi
+
+if [[ "$refresh_projection" -eq 1 ]]; then
+  refresh_projection_for_user "$current_user_id" || true
 fi
 
 all_uid_samples="$(mktemp)"
@@ -265,7 +369,11 @@ else
   elif [[ "$projection_probe_any" -eq 1 ]]; then
     kv product_projection "ABSENT"
     kv product_catalog "UNAVAILABLE"
-    kv product_catalog.reason "projection_file_absent_query_service_not_launched"
+    if [[ "$projection_activity_launched" -eq 1 ]]; then
+      kv product_catalog.reason "projection_file_absent_after_debug_control_activity_query_service"
+    else
+      kv product_catalog.reason "projection_file_absent_query_service_not_launched"
+    fi
   else
     kv product_projection "UNAVAILABLE"
     kv product_catalog "UNAVAILABLE"
