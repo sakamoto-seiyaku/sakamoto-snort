@@ -8,8 +8,10 @@
 
 #include <gtest/gtest.h>
 
+#include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +24,27 @@ namespace {
 using namespace SnortDatapath::Tun;
 namespace Flow = SnortDatapath::Flow;
 namespace Policy = SnortDatapath::Policy;
+
+void closeIfOpen(int &fd) noexcept {
+    if (fd >= 0) {
+        ::close(fd);
+        fd = -1;
+    }
+}
+
+void makePacketSocketPair(int (&fds)[2]) {
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds), 0);
+}
+
+std::vector<std::uint8_t> readPacketFromFd(const int fd) {
+    std::array<std::uint8_t, 2048> buffer{};
+    const ssize_t bytes = ::read(fd, buffer.data(), buffer.size());
+    if (bytes <= 0) {
+        return {};
+    }
+    return std::vector<std::uint8_t>(
+        buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(bytes));
+}
 
 void putU16(std::span<std::uint8_t> bytes, const std::size_t offset,
             const std::uint16_t value) noexcept {
@@ -354,7 +377,7 @@ TEST(VpnTunFdRuntimeTest, BoundedDrainReadsTunPacketIntoSharedAdapter) {
     EXPECT_EQ(counters.lastObservedResult, "FlowForwarded");
     EXPECT_FALSE(runtime.packetAdapterReady());
 
-    ::close(pipeFds[1]);
+    closeIfOpen(pipeFds[1]);
 }
 
 TEST(VpnTunFdRuntimeTest, BoundedDrainPolicyDropDoesNotRecordTransportOutcome) {
@@ -391,7 +414,7 @@ TEST(VpnTunFdRuntimeTest, BoundedDrainPolicyDropDoesNotRecordTransportOutcome) {
     EXPECT_EQ(counters.lastObservedInterfaceIndex, 12U);
     EXPECT_EQ(counters.lastObservedResult, "FlowDropped");
 
-    ::close(pipeFds[1]);
+    closeIfOpen(pipeFds[1]);
 }
 
 TEST(VpnTunFdRuntimeTest, BoundedDrainReturnsImmediatelyWhenNoPacketIsReady) {
@@ -407,5 +430,78 @@ TEST(VpnTunFdRuntimeTest, BoundedDrainReturnsImmediatelyWhenNoPacketIsReady) {
     EXPECT_FALSE(drain.eof);
     EXPECT_EQ(runtime.vpnTunRuntimeCounters().packetsSeen, 0U);
 
-    ::close(pipeFds[1]);
+    closeIfOpen(pipeFds[1]);
+}
+
+TEST(VpnTunFdRuntimeTest, BoundedDrainWritesAllowedOutboundPacketToTransportFd) {
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+    const auto packet = ipv4TcpPacket();
+    ASSERT_EQ(::write(tunFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    VpnTunFdRuntime runtime{tunFds[0]};
+    tunFds[0] = -1;
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]));
+    transportFds[0] = -1;
+
+    const auto drain = runtime.drainTunPackets(
+        1,
+        VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true});
+    EXPECT_EQ(drain.packetsRead, 1U);
+    EXPECT_EQ(drain.forwardedToTransport, 1U);
+    EXPECT_EQ(drain.forwardedWithoutTransport, 0U);
+    EXPECT_EQ(drain.policyDropped, 0U);
+    EXPECT_EQ(drain.writeFailures, 0U);
+
+    const auto transported = readPacketFromFd(transportFds[1]);
+    ASSERT_EQ(transported.size(), packet.size());
+    EXPECT_TRUE(std::equal(packet.begin(), packet.end(), transported.begin()));
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.forwardedPackets, 1U);
+    EXPECT_EQ(counters.transportSucceededPackets, 1U);
+    EXPECT_EQ(counters.transportUnsupportedPackets, 0U);
+    EXPECT_EQ(counters.uidAttributionHitPackets, 1U);
+
+    closeIfOpen(tunFds[1]);
+    closeIfOpen(transportFds[1]);
+}
+
+TEST(VpnTunFdRuntimeTest, TransportReturnDrainWritesAcceptedPacketBackToTunFd) {
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+    const auto packet = ipv4TcpPacket(true);
+
+    VpnTunFdRuntime runtime{tunFds[0]};
+    tunFds[0] = -1;
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]));
+    transportFds[0] = -1;
+    ASSERT_EQ(::write(transportFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    const auto drain = runtime.drainTransportReturnPackets(
+        1,
+        VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true});
+    EXPECT_EQ(drain.packetsRead, 1U);
+    EXPECT_EQ(drain.returnedToTun, 1U);
+    EXPECT_EQ(drain.policyDropped, 0U);
+    EXPECT_EQ(drain.writeFailures, 0U);
+
+    const auto returned = readPacketFromFd(tunFds[1]);
+    ASSERT_EQ(returned.size(), packet.size());
+    EXPECT_TRUE(std::equal(packet.begin(), packet.end(), returned.begin()));
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.transportReturnPackets, 1U);
+    EXPECT_EQ(counters.transportSucceededPackets, 1U);
+    EXPECT_EQ(counters.lastObservedDirection, "transport-return");
+    EXPECT_EQ(counters.lastObservedResult, "FlowForwarded");
+
+    closeIfOpen(tunFds[1]);
+    closeIfOpen(transportFds[1]);
 }

@@ -26,10 +26,13 @@ namespace SnortDatapath::Tun {
 
 struct VpnTunDrainResult final {
     std::uint64_t packetsRead = 0;
+    std::uint64_t forwardedToTransport = 0;
     std::uint64_t forwardedWithoutTransport = 0;
+    std::uint64_t returnedToTun = 0;
     std::uint64_t policyDropped = 0;
     std::uint64_t policyBypassedWithoutTransport = 0;
     std::uint64_t runtimeDropped = 0;
+    std::uint64_t writeFailures = 0;
     std::uint64_t readErrors = 0;
     int lastErrno = 0;
     bool eof = false;
@@ -59,6 +62,9 @@ public:
     ~VpnTunFdRuntime() override {
         if (tunFd_ >= 0) {
             ::close(tunFd_);
+        }
+        if (transportFd_ >= 0) {
+            ::close(transportFd_);
         }
     }
 
@@ -156,6 +162,17 @@ public:
         return tunFd_ >= 0;
     }
 
+    [[nodiscard]] bool attachVpnTransportFd(const int transportFd) noexcept {
+        if (transportFd < 0) {
+            return false;
+        }
+        if (transportFd_ >= 0) {
+            ::close(transportFd_);
+        }
+        transportFd_ = transportFd;
+        return true;
+    }
+
     /**
      * Bounded single-lane TUN ingress drain.
      *
@@ -233,8 +250,21 @@ public:
                 metadata);
             switch (adapterResult) {
             case VpnTunFlowAdapterResult::FlowForwarded:
-                ++result.forwardedWithoutTransport;
-                flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Unsupported);
+                if (writePacketToTransport(
+                        std::span<const std::uint8_t>{
+                            packet.data(), static_cast<std::size_t>(bytes)})) {
+                    ++result.forwardedToTransport;
+                    flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Succeeded);
+                } else {
+                    if (transportFd_ < 0) {
+                        ++result.forwardedWithoutTransport;
+                        flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Unsupported);
+                    } else {
+                        ++result.writeFailures;
+                        result.lastErrno = result.lastErrno == 0 ? EIO : result.lastErrno;
+                        flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Failed);
+                    }
+                }
                 break;
             case VpnTunFlowAdapterResult::FlowDropped:
                 ++result.policyDropped;
@@ -253,6 +283,95 @@ public:
                 ++result.policyBypassedWithoutTransport;
                 flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Unsupported);
                 break;
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] VpnTunDrainResult drainTransportReturnPackets(
+        std::size_t maxPackets,
+        VpnTunPacketMetadata metadata = {}) noexcept {
+        VpnTunDrainResult result;
+        if (transportFd_ < 0 || tunFd_ < 0) {
+            result.readErrors = 1;
+            result.lastErrno = transportFd_ < 0 ? ENOTCONN : EBADF;
+            return result;
+        }
+
+        std::array<std::uint8_t, kMaxTunPacketBytes> packet{};
+        for (std::size_t packetIndex = 0; packetIndex < maxPackets; ++packetIndex) {
+            pollfd fd{
+                .fd = transportFd_,
+                .events = POLLIN | POLLERR | POLLHUP,
+                .revents = 0,
+            };
+            const int pollResult = ::poll(&fd, 1, 0);
+            if (pollResult < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                ++result.readErrors;
+                result.lastErrno = errno;
+                break;
+            }
+            if (pollResult == 0) {
+                break;
+            }
+            if ((fd.revents & POLLERR) != 0) {
+                ++result.readErrors;
+                result.lastErrno = EIO;
+                break;
+            }
+            if ((fd.revents & POLLIN) == 0) {
+                if ((fd.revents & POLLHUP) != 0) {
+                    result.eof = true;
+                }
+                break;
+            }
+
+            const ssize_t bytes = ::read(transportFd_, packet.data(), packet.size());
+            if (bytes < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                }
+                ++result.readErrors;
+                result.lastErrno = errno;
+                break;
+            }
+            if (bytes == 0) {
+                result.eof = true;
+                break;
+            }
+
+            ++result.packetsRead;
+            const auto adapterResult = flowAdapter_.process(
+                VpnTunPacketDirection::TransportReturn,
+                std::span<const std::uint8_t>{
+                    packet.data(), static_cast<std::size_t>(bytes)},
+                static_cast<std::uint32_t>(bytes),
+                metadata);
+            if (adapterResult == VpnTunFlowAdapterResult::FlowDropped) {
+                ++result.policyDropped;
+                continue;
+            }
+            if (adapterResult == VpnTunFlowAdapterResult::RuntimeDroppedOwnerFault) {
+                ++result.runtimeDropped;
+                continue;
+            }
+            if (adapterResult != VpnTunFlowAdapterResult::FlowForwarded) {
+                ++result.policyBypassedWithoutTransport;
+            }
+            if (writePacketToTun(std::span<const std::uint8_t>{
+                    packet.data(), static_cast<std::size_t>(bytes)})) {
+                ++result.returnedToTun;
+                flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Succeeded);
+            } else {
+                ++result.writeFailures;
+                result.lastErrno = result.lastErrno == 0 ? EIO : result.lastErrno;
+                flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Failed);
             }
         }
         return result;
@@ -279,7 +398,37 @@ public:
 private:
     static constexpr std::size_t kMaxTunPacketBytes = 65536;
 
+    [[nodiscard]] bool writePacketToTransport(
+        const std::span<const std::uint8_t> packet) noexcept {
+        return transportFd_ >= 0 && writePacket(transportFd_, packet);
+    }
+
+    [[nodiscard]] bool writePacketToTun(
+        const std::span<const std::uint8_t> packet) noexcept {
+        return tunFd_ >= 0 && writePacket(tunFd_, packet);
+    }
+
+    [[nodiscard]] static bool writePacket(
+        const int fd, const std::span<const std::uint8_t> packet) noexcept {
+        if (fd < 0 || packet.empty()) {
+            return false;
+        }
+        pollfd pollTarget{
+            .fd = fd,
+            .events = POLLOUT | POLLERR | POLLHUP,
+            .revents = 0,
+        };
+        const int pollResult = ::poll(&pollTarget, 1, 0);
+        if (pollResult <= 0 || (pollTarget.revents & POLLOUT) == 0
+            || (pollTarget.revents & (POLLERR | POLLHUP)) != 0) {
+            return false;
+        }
+        const ssize_t written = ::write(fd, packet.data(), packet.size());
+        return written == static_cast<ssize_t>(packet.size());
+    }
+
     int tunFd_ = -1;
+    int transportFd_ = -1;
     bool ipv6Enabled_ = false;
     Policy::RuntimePacketPolicySnapshot packetPolicy_;
     VpnTunFlowAdapter flowAdapter_;
