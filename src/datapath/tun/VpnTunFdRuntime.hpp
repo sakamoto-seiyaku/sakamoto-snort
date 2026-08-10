@@ -19,6 +19,13 @@
 
 namespace SnortDatapath::Tun {
 
+[[nodiscard]] inline std::string_view vpnTunPacketDirectionName(
+    const VpnTunPacketDirection direction) noexcept {
+    return direction == VpnTunPacketDirection::TransportReturn
+        ? std::string_view{"transport-return"}
+        : std::string_view{"outbound"};
+}
+
 [[nodiscard]] inline int openVpnTunFdSource(const std::string_view source) noexcept {
     if (source.empty()) {
         return -1;
@@ -66,6 +73,43 @@ public:
 
     [[nodiscard]] bool packetPolicyControlReady() const noexcept override {
         return true;
+    }
+
+    [[nodiscard]] bool vpnTunRuntimeCountersReady() const noexcept override {
+        return true;
+    }
+
+    [[nodiscard]] SnortRuntime::VpnTunRuntimeCounters
+    vpnTunRuntimeCounters() const noexcept override {
+        const auto counters = flowAdapterCounters();
+        return {
+            .packetsSeen = counters.packetsSeen,
+            .normalizedPackets = counters.normalizedPackets,
+            .forwardedPackets = counters.forwardedPackets,
+            .droppedPackets = counters.droppedPackets,
+            .parsePolicyBypassPackets = counters.parsePolicyBypassPackets,
+            .capacityPolicyBypassPackets = counters.capacityPolicyBypassPackets,
+            .ownerFaultRuntimeDrops = counters.ownerFaultRuntimeDrops,
+            .fragmentBufferedPackets = counters.fragmentBufferedPackets,
+            .fragmentReassembledPackets = counters.fragmentReassembledPackets,
+            .uidAttributionHitPackets = counters.uidAttributionHitPackets,
+            .uidUnknownFallbackPackets = counters.uidUnknownFallbackPackets,
+            .outboundPackets = counters.outboundPackets,
+            .transportReturnPackets = counters.transportReturnPackets,
+            .transportSucceededPackets = counters.transportSucceededPackets,
+            .transportFailedPackets = counters.transportFailedPackets,
+            .transportUnsupportedPackets = counters.transportUnsupportedPackets,
+            .directPackets = counters.directPackets,
+            .ownerGuardPasses = counters.ownerGuardPasses,
+            .ownerGuardMismatches = counters.ownerGuardMismatches,
+            .lastObservedLinuxUid = counters.lastObservedLinuxUid,
+            .lastObservedUidKnown = counters.lastObservedUidKnown,
+            .lastObservedNetworkContext = counters.lastObservedNetworkContext,
+            .lastObservedInterfaceIndex = counters.lastObservedInterfaceIndex,
+            .lastObservedDirection = std::string{
+                vpnTunPacketDirectionName(counters.lastObservedDirection)},
+            .lastObservedResult = counters.lastObservedResult,
+        };
     }
 
     [[nodiscard]] Policy::PacketPolicySnapshotStatus

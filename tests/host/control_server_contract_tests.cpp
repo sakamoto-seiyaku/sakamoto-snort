@@ -87,6 +87,7 @@ public:
     bool resetResult = true;
     bool policyReady = false;
     bool nfqueueCountersReady = false;
+    bool vpnTunCountersReady = false;
     bool adapterReady = false;
     bool vpnTunHandoffReady = false;
     bool vpnTunAttachResult = true;
@@ -98,6 +99,7 @@ public:
     int attachedTunFd = -1;
     Policy::RuntimePacketPolicySnapshot policy;
     SnortRuntime::NfqueueRuntimeCounters nfqueueCounters;
+    SnortRuntime::VpnTunRuntimeCounters vpnTunCounters;
     std::string adapterName;
 
     bool nfqueueRuntimeCountersReady() const noexcept override {
@@ -105,6 +107,12 @@ public:
     }
     SnortRuntime::NfqueueRuntimeCounters nfqueueRuntimeCounters() const noexcept override {
         return nfqueueCounters;
+    }
+    bool vpnTunRuntimeCountersReady() const noexcept override {
+        return vpnTunCountersReady;
+    }
+    SnortRuntime::VpnTunRuntimeCounters vpnTunRuntimeCounters() const noexcept override {
+        return vpnTunCounters;
     }
 };
 
@@ -480,6 +488,99 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["lastObservedInputInterfaceIndex"].GetUint(), 11U);
     EXPECT_EQ(result["lastObservedOutputInterfaceIndex"].GetUint(), 22U);
     EXPECT_STREQ(result["lastObservedResult"].GetString(), "FlowAccepted");
+}
+
+TEST(ControlServerContract, HelloOmitsVpnTunCountersCapabilityWhenUnsupported) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunCountersReady = false;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(46, "HELLO");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto capabilities = capabilityStrings(response["result"]["capabilities"]);
+    EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(),
+                        "vpn-tun-runtime-counters"),
+              capabilities.end());
+}
+
+TEST(ControlServerContract, VpnTunStatusIsUnsupportedWithoutRuntimeCapability) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunCountersReady = false;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(47, "VPN_TUN.STATUS");
+
+    ASSERT_FALSE(response["ok"].GetBool());
+    EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
+}
+
+TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunCountersReady = true;
+    runtime.vpnTunCounters.packetsSeen = 201;
+    runtime.vpnTunCounters.normalizedPackets = 202;
+    runtime.vpnTunCounters.forwardedPackets = 191;
+    runtime.vpnTunCounters.droppedPackets = 7;
+    runtime.vpnTunCounters.parsePolicyBypassPackets = 2;
+    runtime.vpnTunCounters.capacityPolicyBypassPackets = 3;
+    runtime.vpnTunCounters.ownerFaultRuntimeDrops = 4;
+    runtime.vpnTunCounters.fragmentBufferedPackets = 5;
+    runtime.vpnTunCounters.fragmentReassembledPackets = 6;
+    runtime.vpnTunCounters.uidAttributionHitPackets = 197;
+    runtime.vpnTunCounters.uidUnknownFallbackPackets = 4;
+    runtime.vpnTunCounters.outboundPackets = 111;
+    runtime.vpnTunCounters.transportReturnPackets = 90;
+    runtime.vpnTunCounters.transportSucceededPackets = 81;
+    runtime.vpnTunCounters.transportFailedPackets = 8;
+    runtime.vpnTunCounters.transportUnsupportedPackets = 1;
+    runtime.vpnTunCounters.directPackets = 198;
+    runtime.vpnTunCounters.ownerGuardPasses = 198;
+    runtime.vpnTunCounters.ownerGuardMismatches = 0;
+    runtime.vpnTunCounters.lastObservedLinuxUid = 12546;
+    runtime.vpnTunCounters.lastObservedUidKnown = true;
+    runtime.vpnTunCounters.lastObservedNetworkContext = 7;
+    runtime.vpnTunCounters.lastObservedInterfaceIndex = 9;
+    runtime.vpnTunCounters.lastObservedDirection = "transport-return";
+    runtime.vpnTunCounters.lastObservedResult = "FlowForwarded";
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document hello = harness.call(48, "HELLO");
+    ASSERT_TRUE(hello["ok"].GetBool());
+    const auto capabilities = capabilityStrings(hello["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
+                        "vpn-tun-runtime-counters"),
+              capabilities.end());
+
+    const rapidjson::Document response = harness.call(49, "VPN_TUN.STATUS");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto &result = response["result"];
+    EXPECT_EQ(result["packetsSeen"].GetUint64(), 201U);
+    EXPECT_EQ(result["normalizedPackets"].GetUint64(), 202U);
+    EXPECT_EQ(result["forwardedPackets"].GetUint64(), 191U);
+    EXPECT_EQ(result["droppedPackets"].GetUint64(), 7U);
+    EXPECT_EQ(result["parsePolicyBypassPackets"].GetUint64(), 2U);
+    EXPECT_EQ(result["capacityPolicyBypassPackets"].GetUint64(), 3U);
+    EXPECT_EQ(result["ownerFaultRuntimeDrops"].GetUint64(), 4U);
+    EXPECT_EQ(result["fragmentBufferedPackets"].GetUint64(), 5U);
+    EXPECT_EQ(result["fragmentReassembledPackets"].GetUint64(), 6U);
+    EXPECT_EQ(result["uidAttributionHitPackets"].GetUint64(), 197U);
+    EXPECT_EQ(result["uidUnknownFallbackPackets"].GetUint64(), 4U);
+    EXPECT_EQ(result["outboundPackets"].GetUint64(), 111U);
+    EXPECT_EQ(result["transportReturnPackets"].GetUint64(), 90U);
+    EXPECT_EQ(result["transportSucceededPackets"].GetUint64(), 81U);
+    EXPECT_EQ(result["transportFailedPackets"].GetUint64(), 8U);
+    EXPECT_EQ(result["transportUnsupportedPackets"].GetUint64(), 1U);
+    EXPECT_EQ(result["directPackets"].GetUint64(), 198U);
+    EXPECT_EQ(result["ownerGuardPasses"].GetUint64(), 198U);
+    EXPECT_EQ(result["ownerGuardMismatches"].GetUint64(), 0U);
+    EXPECT_EQ(result["lastObservedLinuxUid"].GetUint(), 12546U);
+    EXPECT_TRUE(result["lastObservedUidKnown"].GetBool());
+    EXPECT_EQ(result["lastObservedNetworkContext"].GetUint(), 7U);
+    EXPECT_EQ(result["lastObservedInterfaceIndex"].GetUint(), 9U);
+    EXPECT_STREQ(result["lastObservedDirection"].GetString(), "transport-return");
+    EXPECT_STREQ(result["lastObservedResult"].GetString(), "FlowForwarded");
 }
 
 TEST(ControlServerContract, PolicyUnknownApplicationSubjectMatchesUidUnknownFacts) {

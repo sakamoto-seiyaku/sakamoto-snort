@@ -183,6 +183,9 @@ rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runt
     if (runtime.nfqueueRuntimeCountersReady()) {
         capabilities.PushBack("nfqueue-runtime-counters", alloc);
     }
+    if (runtime.vpnTunRuntimeCountersReady()) {
+        capabilities.PushBack("vpn-tun-runtime-counters", alloc);
+    }
     if (runtime.packetPolicyControlReady()) {
         capabilities.PushBack("packet-policy-control", alloc);
     }
@@ -233,6 +236,61 @@ rapidjson::Document makeNfqueueStatusResult(
                      counters.lastObservedInputInterfaceIndex, alloc);
     result.AddMember("lastObservedOutputInterfaceIndex",
                      counters.lastObservedOutputInterfaceIndex, alloc);
+    rapidjson::Value lastObservedResult;
+    lastObservedResult.SetString(counters.lastObservedResult.c_str(),
+                                 static_cast<rapidjson::SizeType>(
+                                     counters.lastObservedResult.size()),
+                                 alloc);
+    result.AddMember("lastObservedResult", lastObservedResult, alloc);
+    return result;
+}
+
+rapidjson::Document makeVpnTunStatusResult(
+    const SnortRuntime::VpnTunRuntimeCounters counters) {
+    rapidjson::Document result(rapidjson::kObjectType);
+    auto &alloc = result.GetAllocator();
+    result.AddMember("packetsSeen", counters.packetsSeen, alloc);
+    result.AddMember("normalizedPackets", counters.normalizedPackets, alloc);
+    result.AddMember("forwardedPackets", counters.forwardedPackets, alloc);
+    result.AddMember("droppedPackets", counters.droppedPackets, alloc);
+    result.AddMember("parsePolicyBypassPackets",
+                     counters.parsePolicyBypassPackets, alloc);
+    result.AddMember("capacityPolicyBypassPackets",
+                     counters.capacityPolicyBypassPackets, alloc);
+    result.AddMember("ownerFaultRuntimeDrops",
+                     counters.ownerFaultRuntimeDrops, alloc);
+    result.AddMember("fragmentBufferedPackets",
+                     counters.fragmentBufferedPackets, alloc);
+    result.AddMember("fragmentReassembledPackets",
+                     counters.fragmentReassembledPackets, alloc);
+    result.AddMember("uidAttributionHitPackets",
+                     counters.uidAttributionHitPackets, alloc);
+    result.AddMember("uidUnknownFallbackPackets",
+                     counters.uidUnknownFallbackPackets, alloc);
+    result.AddMember("outboundPackets", counters.outboundPackets, alloc);
+    result.AddMember("transportReturnPackets",
+                     counters.transportReturnPackets, alloc);
+    result.AddMember("transportSucceededPackets",
+                     counters.transportSucceededPackets, alloc);
+    result.AddMember("transportFailedPackets",
+                     counters.transportFailedPackets, alloc);
+    result.AddMember("transportUnsupportedPackets",
+                     counters.transportUnsupportedPackets, alloc);
+    result.AddMember("directPackets", counters.directPackets, alloc);
+    result.AddMember("ownerGuardPasses", counters.ownerGuardPasses, alloc);
+    result.AddMember("ownerGuardMismatches", counters.ownerGuardMismatches, alloc);
+    result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
+    result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);
+    result.AddMember("lastObservedNetworkContext",
+                     counters.lastObservedNetworkContext, alloc);
+    result.AddMember("lastObservedInterfaceIndex",
+                     counters.lastObservedInterfaceIndex, alloc);
+    rapidjson::Value lastObservedDirection;
+    lastObservedDirection.SetString(counters.lastObservedDirection.c_str(),
+                                    static_cast<rapidjson::SizeType>(
+                                        counters.lastObservedDirection.size()),
+                                    alloc);
+    result.AddMember("lastObservedDirection", lastObservedDirection, alloc);
     rapidjson::Value lastObservedResult;
     lastObservedResult.SetString(counters.lastObservedResult.c_str(),
                                  static_cast<rapidjson::SizeType>(
@@ -777,6 +835,18 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
             return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
         }
         rapidjson::Document result = makeNfqueueStatusResult(runtime.nfqueueRuntimeCounters());
+        return ControlVNext::makeOkResponse(request.id, &result);
+    }
+
+    if (request.cmd == "VPN_TUN.STATUS") {
+        if (!runtime.vpnTunRuntimeCountersReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND", "VPN/TUN runtime counters unavailable");
+        }
+        if (const auto err = rejectUnknown(*request.args, {}); err.has_value()) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
+        }
+        rapidjson::Document result = makeVpnTunStatusResult(runtime.vpnTunRuntimeCounters());
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 

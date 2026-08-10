@@ -37,6 +37,34 @@ struct NfqueueRuntimeCounters {
     std::string lastObservedResult = "none";
 };
 
+struct VpnTunRuntimeCounters {
+    std::uint64_t packetsSeen = 0;
+    std::uint64_t normalizedPackets = 0;
+    std::uint64_t forwardedPackets = 0;
+    std::uint64_t droppedPackets = 0;
+    std::uint64_t parsePolicyBypassPackets = 0;
+    std::uint64_t capacityPolicyBypassPackets = 0;
+    std::uint64_t ownerFaultRuntimeDrops = 0;
+    std::uint64_t fragmentBufferedPackets = 0;
+    std::uint64_t fragmentReassembledPackets = 0;
+    std::uint64_t uidAttributionHitPackets = 0;
+    std::uint64_t uidUnknownFallbackPackets = 0;
+    std::uint64_t outboundPackets = 0;
+    std::uint64_t transportReturnPackets = 0;
+    std::uint64_t transportSucceededPackets = 0;
+    std::uint64_t transportFailedPackets = 0;
+    std::uint64_t transportUnsupportedPackets = 0;
+    std::uint64_t directPackets = 0;
+    std::uint64_t ownerGuardPasses = 0;
+    std::uint64_t ownerGuardMismatches = 0;
+    std::uint32_t lastObservedLinuxUid = 0;
+    bool lastObservedUidKnown = false;
+    std::uint32_t lastObservedNetworkContext = 0;
+    std::uint32_t lastObservedInterfaceIndex = 0;
+    std::string lastObservedDirection = "outbound";
+    std::string lastObservedResult = "none";
+};
+
 struct VpnTunFdAttachResult {
     bool ok = false;
     std::string errorCode;
@@ -77,6 +105,12 @@ public:
         return false;
     }
     [[nodiscard]] virtual NfqueueRuntimeCounters nfqueueRuntimeCounters() const noexcept {
+        return {};
+    }
+    [[nodiscard]] virtual bool vpnTunRuntimeCountersReady() const noexcept {
+        return false;
+    }
+    [[nodiscard]] virtual VpnTunRuntimeCounters vpnTunRuntimeCounters() const noexcept {
         return {};
     }
     [[nodiscard]] virtual SnortDatapath::Policy::PacketPolicySnapshotStatus
