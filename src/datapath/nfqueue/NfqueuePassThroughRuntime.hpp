@@ -9,6 +9,7 @@
 #include <NfqueueFragmentLeaseBook.hpp>
 #include <NfqueuePacketLeaseAdapter.hpp>
 #include <NfqueueTopology.hpp>
+#include <PacketPolicy.hpp>
 #include <RuntimeControl.hpp>
 #include <FlowGraphFragmentIngress.hpp>
 
@@ -314,6 +315,14 @@ public:
     [[nodiscard]] bool start();
     [[nodiscard]] bool nfqueuePassThroughReady() const noexcept override;
     [[nodiscard]] bool resetBaseRuntime() noexcept override;
+    [[nodiscard]] bool packetPolicyControlReady() const noexcept override;
+    [[nodiscard]] Policy::PacketPolicySnapshotStatus
+    packetPolicyStatus() const noexcept override;
+    [[nodiscard]] Policy::PacketPolicyDecision evaluatePacketPolicy(
+        const Flow::PacketFacts &facts) const noexcept override;
+    [[nodiscard]] bool applyPacketPolicy(
+        std::vector<Policy::PacketPolicySubjectView> subjects,
+        std::uint64_t revision) noexcept override;
     [[nodiscard]] NfqueueFlowAdapterCounters flowAdapterCounters() const noexcept {
         return flowAdapter_.counters();
     }
@@ -323,6 +332,7 @@ public:
 
 private:
     DualStackPassThroughRuntimeConfig config_;
+    Policy::RuntimePacketPolicySnapshot packetPolicy_;
     NfqueueFlowAdapter flowAdapter_;
     PassThroughWorkerGroup workers_;
     NfqueueRuntimeFaultCounters runtimeFaults_;

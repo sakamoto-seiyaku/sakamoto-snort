@@ -9,6 +9,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -90,6 +92,17 @@ struct PacketPolicySubjectView {
     std::vector<L4Rule> l4Rules;
 };
 
+struct PacketPolicySnapshotStatus {
+    std::uint64_t revision = 0;
+    std::size_t subjectCount = 0;
+    std::size_t networkGateRuleCount = 0;
+    std::size_t l4RuleCount = 0;
+
+    [[nodiscard]] std::size_t ruleCount() const noexcept {
+        return networkGateRuleCount + l4RuleCount;
+    }
+};
+
 class PacketPolicySnapshot {
 public:
     PacketPolicySnapshot() = default;
@@ -119,10 +132,28 @@ public:
     [[nodiscard]] std::size_t subjectCount() const noexcept {
         return subjects_.size();
     }
+    [[nodiscard]] PacketPolicySnapshotStatus status() const noexcept;
 
 private:
     std::vector<PacketPolicySubjectView> subjects_;
     std::uint64_t revision_ = 0;
+    std::size_t networkGateRuleCount_ = 0;
+    std::size_t l4RuleCount_ = 0;
+};
+
+class RuntimePacketPolicySnapshot final : public PacketPolicySnapshot {
+public:
+    RuntimePacketPolicySnapshot();
+
+    [[nodiscard]] PacketPolicyDecision evaluate(
+        const Flow::PacketFacts &facts) const noexcept override;
+    void apply(std::vector<PacketPolicySubjectView> subjects,
+               std::uint64_t revision);
+    [[nodiscard]] PacketPolicySnapshotStatus status() const noexcept;
+
+private:
+    mutable std::mutex mutex_;
+    std::shared_ptr<const StatelessPacketPolicySnapshot> active_;
 };
 
 [[nodiscard]] const PacketPolicySnapshot &emptyPacketPolicySnapshot() noexcept;

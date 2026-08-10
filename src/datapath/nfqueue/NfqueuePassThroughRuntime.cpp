@@ -361,8 +361,21 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
 
 namespace SnortDatapath::Nfqueue {
 
+namespace {
+
+NfqueueFlowAdapterConfig withRuntimePacketPolicy(
+    NfqueueFlowAdapterConfig config,
+    const Policy::PacketPolicySnapshot &packetPolicy) {
+    config.packetPolicy = &packetPolicy;
+    return config;
+}
+
+} // namespace
+
 DualStackPassThroughRuntime::DualStackPassThroughRuntime(DualStackPassThroughRuntimeConfig config)
-    : config_(std::move(config)), flowAdapter_(config_.flowAdapter) {}
+    : config_(std::move(config)),
+      packetPolicy_(),
+      flowAdapter_(withRuntimePacketPolicy(config_.flowAdapter, packetPolicy_)) {}
 
 DualStackPassThroughRuntime::~DualStackPassThroughRuntime() {
     SnortRuntime::requestShutdown();
@@ -442,6 +455,34 @@ bool DualStackPassThroughRuntime::resetBaseRuntime() noexcept {
         std::cerr << "Dual-stack NFQUEUE pass-through reset failed: " << e.what() << "\n";
     } catch (...) {
         std::cerr << "Dual-stack NFQUEUE pass-through reset failed: unknown exception\n";
+    }
+    return false;
+}
+
+bool DualStackPassThroughRuntime::packetPolicyControlReady() const noexcept {
+    return true;
+}
+
+Policy::PacketPolicySnapshotStatus
+DualStackPassThroughRuntime::packetPolicyStatus() const noexcept {
+    return packetPolicy_.status();
+}
+
+Policy::PacketPolicyDecision DualStackPassThroughRuntime::evaluatePacketPolicy(
+    const Flow::PacketFacts &facts) const noexcept {
+    return packetPolicy_.evaluate(facts);
+}
+
+bool DualStackPassThroughRuntime::applyPacketPolicy(
+    std::vector<Policy::PacketPolicySubjectView> subjects,
+    const std::uint64_t revision) noexcept {
+    try {
+        packetPolicy_.apply(std::move(subjects), revision);
+        return true;
+    } catch (const std::exception &e) {
+        std::cerr << "packet policy apply failed: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "packet policy apply failed: unknown exception\n";
     }
     return false;
 }

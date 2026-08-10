@@ -177,6 +177,8 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlServer.cpp"
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlVNextCodec.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/DaemonRuntime.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(
   control_server_init_socket_tests
@@ -184,4 +186,6 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlServer.cpp"
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlVNextCodec.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/DaemonRuntime.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )

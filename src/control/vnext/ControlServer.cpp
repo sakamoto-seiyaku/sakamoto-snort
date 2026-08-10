@@ -12,6 +12,7 @@
 
 #include <rapidjson/document.h>
 
+#include <array>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -24,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -39,6 +41,8 @@ constexpr int kSendFlags =
 #endif
 
 constexpr int kControlPollTimeoutMs = 250;
+constexpr std::uint8_t kTcpProtocol = 6;
+constexpr std::uint8_t kUdpProtocol = 17;
 
 bool writeAll(const int fd, const std::string_view bytes) {
     const char *data = bytes.data();
@@ -109,8 +113,478 @@ rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runt
     if (runtime.nfqueuePassThroughReady()) {
         capabilities.PushBack("nfqueue-pass-through", alloc);
     }
+    if (runtime.packetPolicyControlReady()) {
+        capabilities.PushBack("packet-policy-control", alloc);
+    }
     result.AddMember("capabilities", capabilities, alloc);
 
+    return result;
+}
+
+rapidjson::Document makeStatusResult(
+    const SnortDatapath::Policy::PacketPolicySnapshotStatus status) {
+    rapidjson::Document result(rapidjson::kObjectType);
+    auto &alloc = result.GetAllocator();
+    result.AddMember("revision", status.revision, alloc);
+    result.AddMember("subjectCount", static_cast<std::uint64_t>(status.subjectCount), alloc);
+    result.AddMember("networkGateRuleCount",
+                     static_cast<std::uint64_t>(status.networkGateRuleCount), alloc);
+    result.AddMember("l4RuleCount", static_cast<std::uint64_t>(status.l4RuleCount), alloc);
+    result.AddMember("ruleCount", static_cast<std::uint64_t>(status.ruleCount()), alloc);
+    return result;
+}
+
+const rapidjson::Value *member(const rapidjson::Value &object,
+                               const std::string_view key) noexcept {
+    for (auto it = object.MemberBegin(); it != object.MemberEnd(); ++it) {
+        const std::string_view candidate(it->name.GetString(), it->name.GetStringLength());
+        if (candidate == key) {
+            return &it->value;
+        }
+    }
+    return nullptr;
+}
+
+std::optional<std::string> rejectUnknown(
+    const rapidjson::Value &object,
+    const std::initializer_list<std::string_view> allowedKeys) {
+    if (const auto unknown = ControlVNext::findUnknownKey(object, allowedKeys);
+        unknown.has_value()) {
+        return "unknown argument: " + std::string(*unknown);
+    }
+    return std::nullopt;
+}
+
+bool readUint32(const rapidjson::Value &object, const std::string_view key,
+                std::uint32_t &out, std::string &error, const bool required = true) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        if (!required) {
+            return true;
+        }
+        error = "missing " + std::string(key);
+        return false;
+    }
+    if (!value->IsUint()) {
+        error = std::string(key) + " must be u32";
+        return false;
+    }
+    out = value->GetUint();
+    return true;
+}
+
+bool readUint64(const rapidjson::Value &object, const std::string_view key,
+                std::uint64_t &out, std::string &error, const bool required = true) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        if (!required) {
+            return true;
+        }
+        error = "missing " + std::string(key);
+        return false;
+    }
+    if (!value->IsUint64()) {
+        error = std::string(key) + " must be u64";
+        return false;
+    }
+    out = value->GetUint64();
+    return true;
+}
+
+bool readUint8(const rapidjson::Value &object, const std::string_view key,
+               std::uint8_t &out, std::string &error, const bool required = true) {
+    std::uint32_t value = 0;
+    if (!readUint32(object, key, value, error, required)) {
+        return false;
+    }
+    if (value > UINT8_MAX) {
+        error = std::string(key) + " must be u8";
+        return false;
+    }
+    out = static_cast<std::uint8_t>(value);
+    return true;
+}
+
+bool readUint16(const rapidjson::Value &object, const std::string_view key,
+                std::uint16_t &out, std::string &error, const bool required = true) {
+    std::uint32_t value = 0;
+    if (!readUint32(object, key, value, error, required)) {
+        return false;
+    }
+    if (value > UINT16_MAX) {
+        error = std::string(key) + " must be u16";
+        return false;
+    }
+    out = static_cast<std::uint16_t>(value);
+    return true;
+}
+
+bool readContextArray(const rapidjson::Value &object, const std::string_view key,
+                      std::vector<std::uint32_t> &out, std::string &error,
+                      const bool required = false) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        if (!required) {
+            return true;
+        }
+        error = "missing " + std::string(key);
+        return false;
+    }
+    if (!value->IsArray()) {
+        error = std::string(key) + " must be array";
+        return false;
+    }
+    out.clear();
+    out.reserve(value->Size());
+    for (const auto &entry : value->GetArray()) {
+        if (!entry.IsUint()) {
+            error = std::string(key) + " entries must be u32";
+            return false;
+        }
+        out.push_back(entry.GetUint());
+    }
+    return true;
+}
+
+std::optional<SnortDatapath::Flow::AddressFamily> parseFamily(
+    const rapidjson::Value &object, const std::string_view key, std::string &error,
+    const bool required) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        if (!required) {
+            return std::nullopt;
+        }
+        error = "missing " + std::string(key);
+        return std::nullopt;
+    }
+    if (!value->IsString()) {
+        error = std::string(key) + " must be string";
+        return std::nullopt;
+    }
+    const std::string_view text(value->GetString(), value->GetStringLength());
+    if (text == "ipv4") {
+        return SnortDatapath::Flow::AddressFamily::Ipv4;
+    }
+    if (text == "ipv6") {
+        return SnortDatapath::Flow::AddressFamily::Ipv6;
+    }
+    error = std::string(key) + " must be ipv4 or ipv6";
+    return std::nullopt;
+}
+
+std::optional<SnortDatapath::Flow::DevicePacketDirection> parseDirection(
+    const rapidjson::Value &object, const std::string_view key, std::string &error,
+    const bool required) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        if (!required) {
+            return std::nullopt;
+        }
+        error = "missing " + std::string(key);
+        return std::nullopt;
+    }
+    if (!value->IsString()) {
+        error = std::string(key) + " must be string";
+        return std::nullopt;
+    }
+    const std::string_view text(value->GetString(), value->GetStringLength());
+    if (text == "input") {
+        return SnortDatapath::Flow::DevicePacketDirection::Input;
+    }
+    if (text == "output") {
+        return SnortDatapath::Flow::DevicePacketDirection::Output;
+    }
+    error = std::string(key) + " must be input or output";
+    return std::nullopt;
+}
+
+bool parsePortRange(const rapidjson::Value &object, const std::string_view key,
+                    std::optional<SnortDatapath::Policy::PortRange> &out,
+                    std::string &error) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        out.reset();
+        return true;
+    }
+    if (!value->IsObject()) {
+        error = std::string(key) + " must be object";
+        return false;
+    }
+    if (const auto err = rejectUnknown(*value, {"first", "last"}); err.has_value()) {
+        error = *err;
+        return false;
+    }
+    std::uint16_t first = 0;
+    std::uint16_t last = 0;
+    if (!readUint16(*value, "first", first, error)
+        || !readUint16(*value, "last", last, error)) {
+        return false;
+    }
+    if (first > last) {
+        error = std::string(key) + ".first must be <= last";
+        return false;
+    }
+    out = SnortDatapath::Policy::PortRange::inclusive(first, last);
+    return true;
+}
+
+bool parseL4RuleMatch(const rapidjson::Value &object,
+                      SnortDatapath::Policy::L4RuleMatch &out,
+                      std::string &error) {
+    if (!object.IsObject()) {
+        error = "match must be object";
+        return false;
+    }
+    if (const auto err = rejectUnknown(
+            object, {"family", "direction", "ipProtocol", "networkContextBits",
+                     "networkContexts", "sourcePorts", "destinationPorts"});
+        err.has_value()) {
+        error = *err;
+        return false;
+    }
+    out.family = parseFamily(object, "family", error, false);
+    if (!error.empty()) {
+        return false;
+    }
+    out.direction = parseDirection(object, "direction", error, false);
+    if (!error.empty()) {
+        return false;
+    }
+    if (!readUint8(object, "ipProtocol", out.ipProtocol.emplace(), error, false)) {
+        return false;
+    }
+    if (member(object, "ipProtocol") == nullptr) {
+        out.ipProtocol.reset();
+    }
+    if (!readUint64(object, "networkContextBits", out.networkContextBits, error, false)
+        || !readContextArray(object, "networkContexts", out.networkContexts, error)
+        || !parsePortRange(object, "sourcePorts", out.sourcePorts, error)
+        || !parsePortRange(object, "destinationPorts", out.destinationPorts, error)) {
+        return false;
+    }
+    return true;
+}
+
+bool parseL4Rule(const rapidjson::Value &object,
+                 SnortDatapath::Policy::L4Rule &out,
+                 std::string &error) {
+    if (!object.IsObject()) {
+        error = "l4Rules entries must be object";
+        return false;
+    }
+    if (const auto err = rejectUnknown(
+            object, {"ruleId", "reasonId", "priority", "order", "action", "match"});
+        err.has_value()) {
+        error = *err;
+        return false;
+    }
+    if (!readUint64(object, "ruleId", out.ruleId, error)
+        || !readUint32(object, "reasonId", out.reasonId, error)
+        || !readUint32(object, "order", out.order, error)) {
+        return false;
+    }
+    const rapidjson::Value *priority = member(object, "priority");
+    if (priority == nullptr || !priority->IsInt()) {
+        error = "priority must be i32";
+        return false;
+    }
+    out.priority = priority->GetInt();
+
+    const rapidjson::Value *action = member(object, "action");
+    if (action == nullptr || !action->IsString()) {
+        error = "action must be string";
+        return false;
+    }
+    const std::string_view actionText(action->GetString(), action->GetStringLength());
+    if (actionText == "drop") {
+        out.action = SnortDatapath::Policy::L4RuleAction::Drop;
+    } else if (actionText == "allow") {
+        out.action = SnortDatapath::Policy::L4RuleAction::Allow;
+    } else {
+        error = "action must be allow or drop";
+        return false;
+    }
+
+    const rapidjson::Value *match = member(object, "match");
+    if (match == nullptr) {
+        error = "missing match";
+        return false;
+    }
+    return parseL4RuleMatch(*match, out.match, error);
+}
+
+bool parseNetworkGate(const rapidjson::Value &object,
+                      SnortDatapath::Policy::NetworkGateView &out,
+                      std::string &error) {
+    if (!object.IsObject()) {
+        error = "networkGate must be object";
+        return false;
+    }
+    if (const auto err = rejectUnknown(
+            object, {"blockedNetworkContextBits", "blockedNetworkContexts",
+                     "reasonId", "ruleId"});
+        err.has_value()) {
+        error = *err;
+        return false;
+    }
+    return readUint64(object, "blockedNetworkContextBits",
+                      out.blockedNetworkContextBits, error, false)
+        && readContextArray(object, "blockedNetworkContexts",
+                            out.blockedNetworkContexts, error)
+        && readUint32(object, "reasonId", out.reasonId, error, false)
+        && readUint64(object, "ruleId", out.ruleId, error, false);
+}
+
+bool parsePolicySubject(const rapidjson::Value &object,
+                        SnortDatapath::Policy::PacketPolicySubjectView &out,
+                        std::string &error) {
+    if (!object.IsObject()) {
+        error = "subjects entries must be object";
+        return false;
+    }
+    if (const auto err = rejectUnknown(object, {"linuxUid", "networkGate", "l4Rules"});
+        err.has_value()) {
+        error = *err;
+        return false;
+    }
+    if (!readUint32(object, "linuxUid", out.linuxUid, error)) {
+        return false;
+    }
+    if (const rapidjson::Value *gate = member(object, "networkGate");
+        gate != nullptr && !parseNetworkGate(*gate, out.networkGate, error)) {
+        return false;
+    }
+    const rapidjson::Value *rules = member(object, "l4Rules");
+    if (rules == nullptr) {
+        return true;
+    }
+    if (!rules->IsArray()) {
+        error = "l4Rules must be array";
+        return false;
+    }
+    out.l4Rules.clear();
+    out.l4Rules.reserve(rules->Size());
+    for (const auto &ruleValue : rules->GetArray()) {
+        SnortDatapath::Policy::L4Rule rule;
+        if (!parseL4Rule(ruleValue, rule, error)) {
+            return false;
+        }
+        out.l4Rules.push_back(std::move(rule));
+    }
+    return true;
+}
+
+bool parsePolicyApplyArgs(
+    const rapidjson::Value &args,
+    std::vector<SnortDatapath::Policy::PacketPolicySubjectView> &subjects,
+    std::uint64_t &revision,
+    std::string &error) {
+    if (const auto err = rejectUnknown(args, {"revision", "subjects"}); err.has_value()) {
+        error = *err;
+        return false;
+    }
+    if (!readUint64(args, "revision", revision, error)) {
+        return false;
+    }
+    const rapidjson::Value *subjectsValue = member(args, "subjects");
+    if (subjectsValue == nullptr || !subjectsValue->IsArray()) {
+        error = "subjects must be array";
+        return false;
+    }
+    subjects.clear();
+    subjects.reserve(subjectsValue->Size());
+    for (const auto &subjectValue : subjectsValue->GetArray()) {
+        SnortDatapath::Policy::PacketPolicySubjectView subject;
+        if (!parsePolicySubject(subjectValue, subject, error)) {
+            return false;
+        }
+        subjects.push_back(std::move(subject));
+    }
+    return true;
+}
+
+bool parsePacketFacts(const rapidjson::Value &args,
+                      SnortDatapath::Flow::PacketFacts &facts,
+                      std::string &error) {
+    if (const auto err = rejectUnknown(
+            args, {"linuxUid", "networkContext", "family", "direction",
+                   "ipProtocol", "sourcePort", "destinationPort", "portsAvailable"});
+        err.has_value()) {
+        error = *err;
+        return false;
+    }
+
+    const auto family = parseFamily(args, "family", error, true);
+    if (!family.has_value()) {
+        return false;
+    }
+    facts.source = *family == SnortDatapath::Flow::AddressFamily::Ipv4
+        ? SnortDatapath::Flow::IpAddress::v4({10, 0, 0, 1})
+        : SnortDatapath::Flow::IpAddress::v6({0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                              0, 0, 0, 0, 0, 0, 0, 1});
+    facts.destination = *family == SnortDatapath::Flow::AddressFamily::Ipv4
+        ? SnortDatapath::Flow::IpAddress::v4({192, 0, 2, 1})
+        : SnortDatapath::Flow::IpAddress::v6({0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                              0, 0, 0, 0, 0, 0, 0, 2});
+
+    const auto direction = parseDirection(args, "direction", error, true);
+    if (!direction.has_value()) {
+        return false;
+    }
+    facts.deviceDirection = *direction;
+
+    const rapidjson::Value *portsAvailable = member(args, "portsAvailable");
+    if (portsAvailable == nullptr || !portsAvailable->IsBool()) {
+        error = "portsAvailable must be bool";
+        return false;
+    }
+    facts.portsAvailable = portsAvailable->GetBool();
+    facts.parseStatus = SnortDatapath::Flow::ParseStatus::Ready;
+    facts.fragmented = false;
+    facts.originalLength = 128;
+    facts.boundedPrefixLength = 128;
+
+    return readUint32(args, "linuxUid", facts.domain.linuxUid, error)
+        && readUint32(args, "networkContext", facts.domain.networkContext, error)
+        && readUint8(args, "ipProtocol", facts.ipProtocol, error)
+        && readUint16(args, "sourcePort", facts.sourcePort, error, facts.portsAvailable)
+        && readUint16(args, "destinationPort", facts.destinationPort, error,
+                      facts.portsAvailable)
+        && (facts.ipProtocol == kTcpProtocol || facts.ipProtocol == kUdpProtocol
+            || !facts.portsAvailable);
+}
+
+const char *verdictName(const SnortDatapath::Policy::PacketPolicyVerdict verdict) noexcept {
+    switch (verdict) {
+    case SnortDatapath::Policy::PacketPolicyVerdict::PASS_NEXT:
+        return "PASS_NEXT";
+    case SnortDatapath::Policy::PacketPolicyVerdict::DROP:
+        return "DROP";
+    }
+    return "PASS_NEXT";
+}
+
+const char *stageName(const SnortDatapath::Policy::PacketPolicyStage stage) noexcept {
+    switch (stage) {
+    case SnortDatapath::Policy::PacketPolicyStage::None:
+        return "None";
+    case SnortDatapath::Policy::PacketPolicyStage::NetworkGate:
+        return "NetworkGate";
+    case SnortDatapath::Policy::PacketPolicyStage::L4:
+        return "L4";
+    }
+    return "None";
+}
+
+rapidjson::Document makeDecisionResult(
+    const SnortDatapath::Policy::PacketPolicyDecision decision) {
+    rapidjson::Document result(rapidjson::kObjectType);
+    auto &alloc = result.GetAllocator();
+    result.AddMember("verdict", rapidjson::Value(verdictName(decision.verdict), alloc), alloc);
+    result.AddMember("stage", rapidjson::Value(stageName(decision.stage), alloc), alloc);
+    result.AddMember("reasonId", decision.reasonId, alloc);
+    result.AddMember("ruleId", decision.ruleId, alloc);
+    result.AddMember("revision", decision.revision, alloc);
     return result;
 }
 
@@ -132,6 +606,54 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
     if (request.cmd == "QUIT") {
         SnortRuntime::requestShutdown();
         return ControlVNext::makeOkResponse(request.id, nullptr);
+    }
+
+    if (request.cmd == "POLICY.STATUS") {
+        if (!runtime.packetPolicyControlReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND", "packet policy control unavailable");
+        }
+        if (const auto err = rejectUnknown(*request.args, {}); err.has_value()) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
+        }
+        rapidjson::Document result = makeStatusResult(runtime.packetPolicyStatus());
+        return ControlVNext::makeOkResponse(request.id, &result);
+    }
+
+    if (request.cmd == "POLICY.APPLY") {
+        if (!runtime.packetPolicyControlReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND", "packet policy control unavailable");
+        }
+        std::vector<SnortDatapath::Policy::PacketPolicySubjectView> subjects;
+        std::uint64_t revision = 0;
+        std::string error;
+        if (!parsePolicyApplyArgs(*request.args, subjects, revision, error)) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", error);
+        }
+        if (!runtime.applyPacketPolicy(std::move(subjects), revision)) {
+            return ControlVNext::makeErrorResponse(request.id, "POLICY_APPLY_FAILED",
+                                                   "packet policy apply failed");
+        }
+        rapidjson::Document result = makeStatusResult(runtime.packetPolicyStatus());
+        return ControlVNext::makeOkResponse(request.id, &result);
+    }
+
+    if (request.cmd == "POLICY.EVALUATE") {
+        if (!runtime.packetPolicyControlReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND", "packet policy control unavailable");
+        }
+        SnortDatapath::Flow::PacketFacts facts;
+        std::string error;
+        if (!parsePacketFacts(*request.args, facts, error)) {
+            if (error.empty()) {
+                error = "invalid packet facts";
+            }
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", error);
+        }
+        rapidjson::Document result = makeDecisionResult(runtime.evaluatePacketPolicy(facts));
+        return ControlVNext::makeOkResponse(request.id, &result);
     }
 
     return ControlVNext::makeErrorResponse(request.id, "UNSUPPORTED_COMMAND",

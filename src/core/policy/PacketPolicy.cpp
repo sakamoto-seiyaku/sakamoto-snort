@@ -6,6 +6,7 @@
 #include <PacketPolicy.hpp>
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 namespace SnortDatapath::Policy {
@@ -28,6 +29,10 @@ bool ruleRankLess(const L4Rule &left, const L4Rule &right) noexcept {
         return left.order < right.order;
     }
     return left.ruleId < right.ruleId;
+}
+
+bool networkGateConfigured(const NetworkGateView &gate) noexcept {
+    return gate.blockedNetworkContextBits != 0 || !gate.blockedNetworkContexts.empty();
 }
 
 } // namespace
@@ -108,6 +113,10 @@ StatelessPacketPolicySnapshot::StatelessPacketPolicySnapshot(
     const std::uint64_t revision)
     : subjects_(std::move(subjects)), revision_(revision) {
     for (auto &subject : subjects_) {
+        if (networkGateConfigured(subject.networkGate)) {
+            ++networkGateRuleCount_;
+        }
+        l4RuleCount_ += subject.l4Rules.size();
         std::stable_sort(
             subject.l4Rules.begin(), subject.l4Rules.end(), ruleRankLess);
     }
@@ -142,6 +151,47 @@ PacketPolicyDecision StatelessPacketPolicySnapshot::evaluate(
     }
 
     return PacketPolicyDecision::passNext();
+}
+
+PacketPolicySnapshotStatus StatelessPacketPolicySnapshot::status() const noexcept {
+    return PacketPolicySnapshotStatus{
+        .revision = revision_,
+        .subjectCount = subjects_.size(),
+        .networkGateRuleCount = networkGateRuleCount_,
+        .l4RuleCount = l4RuleCount_,
+    };
+}
+
+RuntimePacketPolicySnapshot::RuntimePacketPolicySnapshot()
+    : active_(std::make_shared<StatelessPacketPolicySnapshot>(
+          std::vector<PacketPolicySubjectView>{}, 0)) {}
+
+PacketPolicyDecision RuntimePacketPolicySnapshot::evaluate(
+    const Flow::PacketFacts &facts) const noexcept {
+    std::shared_ptr<const StatelessPacketPolicySnapshot> active;
+    {
+        std::lock_guard lock(mutex_);
+        active = active_;
+    }
+    return active->evaluate(facts);
+}
+
+void RuntimePacketPolicySnapshot::apply(
+    std::vector<PacketPolicySubjectView> subjects,
+    const std::uint64_t revision) {
+    auto next = std::make_shared<StatelessPacketPolicySnapshot>(
+        std::move(subjects), revision);
+    std::lock_guard lock(mutex_);
+    active_ = std::move(next);
+}
+
+PacketPolicySnapshotStatus RuntimePacketPolicySnapshot::status() const noexcept {
+    std::shared_ptr<const StatelessPacketPolicySnapshot> active;
+    {
+        std::lock_guard lock(mutex_);
+        active = active_;
+    }
+    return active->status();
 }
 
 const PacketPolicySnapshot &emptyPacketPolicySnapshot() noexcept {
