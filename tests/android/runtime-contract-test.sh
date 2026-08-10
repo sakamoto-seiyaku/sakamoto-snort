@@ -82,8 +82,22 @@ grep -q 'LocalSocketAddress.Namespace.ABSTRACT' "$production_activity_source"
 grep -q 'POLICY.APPLY' "$production_activity_source"
 grep -q 'POLICY.EVALUATE' "$production_activity_source"
 grep -q 'NFQUEUE.STATUS' "$production_activity_source"
+grep -q 'targetUid=' "$production_activity_source"
+grep -q 'packetDelta=' "$production_activity_source"
+grep -q 'acceptDelta=' "$production_activity_source"
+grep -q 'dropDelta=' "$production_activity_source"
 grep -q 'lastObservedResult' "$production_activity_source"
 grep -q 'runDebugApplyGateAndProbe' "$production_activity_source"
+python3 - "$production_activity_source" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+connect = source.index("socket.connect(new LocalSocketAddress(")
+timeout = source.index("socket.setSoTimeout(CONTROL_SOCKET_TIMEOUT_MILLIS);")
+if timeout < connect:
+    raise SystemExit("Control socket timeout must be set after connect")
+PY
 if grep -q 'LocalProductBackend' "$production_activity_source"; then
   echo "Activity must not instantiate the service-side Local Product Backend writer" >&2
   exit 1

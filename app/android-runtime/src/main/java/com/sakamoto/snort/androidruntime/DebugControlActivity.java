@@ -547,9 +547,11 @@ public class DebugControlActivity extends Activity {
                 client.call(1, "POLICY.APPLY", debugPolicyApplyArgs(uid));
                 JSONObject decision = client.call(2, "POLICY.EVALUATE",
                         debugPolicyEvaluateArgs(uid));
+                JSONObject nfqueueBefore = client.call(3, "NFQUEUE.STATUS", new JSONObject());
                 String probeResult = runDebugTrafficProbeBlocking(false);
-                JSONObject nfqueue = client.call(3, "NFQUEUE.STATUS", new JSONObject());
-                result = formatDebugPolicyProbeResult(decision, nfqueue, probeResult);
+                JSONObject nfqueueAfter = client.call(4, "NFQUEUE.STATUS", new JSONObject());
+                result = formatDebugPolicyProbeResult(
+                        uid, decision, nfqueueBefore, nfqueueAfter, probeResult);
             } catch (IOException | JSONException | RuntimeException error) {
                 result = "Debug policy gate/probe failed: " + boundedError(error);
             }
@@ -613,19 +615,27 @@ public class DebugControlActivity extends Activity {
     }
 
     private String formatDebugPolicyProbeResult(
-            JSONObject decision, JSONObject nfqueue, String probeResult) {
+            int uid, JSONObject decision, JSONObject nfqueueBefore,
+            JSONObject nfqueueAfter, String probeResult) {
+        long packetDelta = nfqueueAfter.optLong("packetsSeen", 0L)
+                - nfqueueBefore.optLong("packetsSeen", 0L);
+        long acceptDelta = nfqueueAfter.optLong("acceptedPackets", 0L)
+                - nfqueueBefore.optLong("acceptedPackets", 0L);
+        long dropDelta = nfqueueAfter.optLong("droppedPackets", 0L)
+                - nfqueueBefore.optLong("droppedPackets", 0L);
         return "Policy: verdict=" + decision.optString("verdict", "unknown")
                 + " stage=" + decision.optString("stage", "unknown")
                 + " revision=" + decision.optLong("revision", -1L)
                 + " reason=" + decision.optLong("reasonId", -1L)
                 + " rule=" + decision.optLong("ruleId", -1L)
-                + "\nNFQUEUE: lastObservedLinuxUid="
-                + nfqueue.optLong("lastObservedLinuxUid", -1L)
+                + "\nNFQUEUE: targetUid=" + uid
+                + " packetDelta=" + packetDelta
+                + " acceptDelta=" + acceptDelta
+                + " dropDelta=" + dropDelta
+                + " lastObservedLinuxUid="
+                + nfqueueAfter.optLong("lastObservedLinuxUid", -1L)
                 + " lastObservedResult="
-                + nfqueue.optString("lastObservedResult", "unknown")
-                + " dropped=" + nfqueue.optLong("droppedPackets", -1L)
-                + " accepted=" + nfqueue.optLong("acceptedPackets", -1L)
-                + " packetsSeen=" + nfqueue.optLong("packetsSeen", -1L)
+                + nfqueueAfter.optString("lastObservedResult", "unknown")
                 + "\nProbe: " + probeResult;
     }
 
@@ -644,9 +654,9 @@ public class DebugControlActivity extends Activity {
 
         ControlVNextDebugClient() throws IOException {
             socket = new LocalSocket();
-            socket.setSoTimeout(CONTROL_SOCKET_TIMEOUT_MILLIS);
             socket.connect(new LocalSocketAddress(
                     CONTROL_SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT));
+            socket.setSoTimeout(CONTROL_SOCKET_TIMEOUT_MILLIS);
             input = socket.getInputStream();
             output = socket.getOutputStream();
         }
