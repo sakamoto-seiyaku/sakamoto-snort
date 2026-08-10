@@ -222,12 +222,9 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
             .routed = &leaseRouted,
         });
     if (!leaseRouted) {
-        const auto terminalReason = gateResult
-            == SnortDatapath::Nfqueue::NfqueueFlowAdapterResult::FlowAccepted
-            ? SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::Accepted
-            : SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::FailOpen;
         const auto completion = context->leaseAdapter->complete(
-            *admission.identity, terminalReason);
+            *admission.identity,
+            SnortDatapath::Nfqueue::terminalReasonFor(gateResult));
         if (completion
             != SnortDatapath::Nfqueue::NfqueuePacketLeaseCompletionStatus::Completed) {
             std::cerr << "NFQUEUE lease completion rejected on queue " << context->queue << "\n";
@@ -237,7 +234,8 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
         context->flowAdapter->recordVerdictSendFailure();
         std::cerr << "NFQUEUE verdict send failed on queue " << context->queue << "\n";
     }
-    if (gateResult != SnortDatapath::Nfqueue::NfqueueFlowAdapterResult::FlowAccepted) {
+    if (SnortDatapath::Nfqueue::terminalReasonFor(gateResult)
+        == SnortDatapath::Nfqueue::NfqueuePacketLeaseTerminalReason::FailOpen) {
         std::cerr << "NFQUEUE flow gate fail-open on queue " << context->queue << "\n";
     }
     return MNL_CB_OK;

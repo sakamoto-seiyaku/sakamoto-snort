@@ -21,6 +21,7 @@ namespace {
 
 using namespace SnortDatapath::Nfqueue;
 namespace Flow = SnortDatapath::Flow;
+namespace Policy = SnortDatapath::Policy;
 
 constexpr std::byte byte(const std::uint8_t value) noexcept {
     return static_cast<std::byte>(value);
@@ -98,6 +99,24 @@ NfqueuePacketLeaseAdapter makeLeaseAdapter(
         });
 }
 
+class DropUidPolicy final : public Policy::PacketPolicySnapshot {
+public:
+    explicit DropUidPolicy(const std::uint32_t linuxUid) noexcept
+        : linuxUid_(linuxUid) {}
+
+    [[nodiscard]] Policy::PacketPolicyDecision evaluate(
+        const Flow::PacketFacts &facts) const noexcept override {
+        if (facts.domain.linuxUid == linuxUid_) {
+            return Policy::PacketPolicyDecision::drop(
+                17, 42, 7, Policy::PacketPolicyStage::NetworkGate);
+        }
+        return Policy::PacketPolicyDecision::passNext();
+    }
+
+private:
+    std::uint32_t linuxUid_ = 0;
+};
+
 TEST(NfqueueFlowAdapterTest, NormalizesAndRunsSharedOwnerGate) {
     NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
         .workerCount = 4,
@@ -125,6 +144,44 @@ TEST(NfqueueFlowAdapterTest, NormalizesAndRunsSharedOwnerGate) {
     EXPECT_EQ(counters.ownerGuardPasses, 2U);
     EXPECT_EQ(counters.ownerGuardMismatches, 0U);
     EXPECT_EQ(counters.normalWorkerHandoffs, 0U);
+}
+
+TEST(NfqueueFlowAdapterTest, PolicyDropCompletesRetainedLeaseWithDropVerdict) {
+    DropUidPolicy policy(10001);
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .packetPolicy = &policy,
+    });
+    std::vector<VerdictIntent> intents;
+    auto lane = makeLeaseAdapter(intents, 21);
+    const auto admission = lane.admit(3001);
+    ASSERT_TRUE(admission.identity.has_value());
+    const auto packet = tcpPacket();
+
+    const auto result = adapter.process(
+        21, kNfqueueHookLocalIn,
+        std::span<const std::uint8_t>{packet}, packet.size(),
+        NfqueuePacketMetadata{.linuxUid = 10001});
+
+    EXPECT_EQ(result, NfqueueFlowAdapterResult::FlowDropped);
+    EXPECT_EQ(lane.complete(*admission.identity, terminalReasonFor(result)),
+              NfqueuePacketLeaseCompletionStatus::Completed);
+    ASSERT_EQ(intents.size(), 1U);
+    EXPECT_EQ(intents[0].packetId, 3001U);
+    EXPECT_EQ(intents[0].verdict, NfqueuePacketLeaseVerdict::Drop);
+    EXPECT_EQ(lane.counters().dropped, 1U);
+    EXPECT_EQ(lane.counters().failOpen, 0U);
+    EXPECT_EQ(lane.counters().accepted, 0U);
+
+    const auto counters = adapter.counters();
+    EXPECT_EQ(counters.acceptedPackets, 0U);
+    EXPECT_EQ(counters.droppedPackets, 1U);
+    EXPECT_EQ(counters.parsePassThroughPackets, 0U);
+    EXPECT_EQ(counters.capacityPassThroughPackets, 0U);
+    EXPECT_EQ(counters.ownerFaultPassThroughPackets, 0U);
 }
 
 TEST(NfqueueFlowAdapterTest, FragmentsAndBadHooksFailOpenWithoutPorts) {
@@ -257,6 +314,77 @@ TEST(NfqueueFlowAdapterTest, FragmentLeaseVerdictsReturnToOriginalLanes) {
     ASSERT_EQ(finalIntents.size(), 1U);
     EXPECT_EQ(firstIntents[0].verdict, NfqueuePacketLeaseVerdict::Accept);
     EXPECT_EQ(finalIntents[0].verdict, NfqueuePacketLeaseVerdict::Accept);
+}
+
+TEST(NfqueueFlowAdapterTest, ReassembledPolicyDropCompletesHeldLeasesWithDrop) {
+    DropUidPolicy policy(10001);
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .packetPolicy = &policy,
+        .fragmentSteering = Flow::FragmentSteeringConfig{
+            .maxDatagrams = 4,
+            .maxFragmentsPerDatagram = 4,
+            .maxPacketBytes = 128,
+            .timeoutTicks = 10,
+        },
+        .fragmentLeaseCapacityPerDatagram = 4,
+    });
+    std::vector<VerdictIntent> firstIntents;
+    std::vector<VerdictIntent> finalIntents;
+    auto firstLane = makeLeaseAdapter(firstIntents, 22);
+    auto finalLane = makeLeaseAdapter(finalIntents, 23);
+    NfqueueFragmentLeaseCompletionMailbox firstMailbox(8);
+    NfqueueFragmentLeaseCompletionMailbox finalMailbox(8);
+    const auto [first, final] = tcpFragments(0x7676);
+    const auto firstAdmission = firstLane.admit(3002);
+    const auto finalAdmission = finalLane.admit(3003);
+    ASSERT_TRUE(firstAdmission.identity.has_value());
+    ASSERT_TRUE(finalAdmission.identity.has_value());
+
+    bool firstRouted = false;
+    EXPECT_EQ(adapter.process(
+                  22, kNfqueueHookLocalIn,
+                  std::span<const std::uint8_t>{first}, first.size(),
+                  NfqueuePacketMetadata{.linuxUid = 10001},
+                  NfqueueFragmentLeaseContext{
+                      .identity = firstAdmission.identity,
+                      .mailbox = &firstMailbox,
+                      .routed = &firstRouted}),
+              NfqueueFlowAdapterResult::FragmentBuffered);
+    EXPECT_TRUE(firstRouted);
+
+    bool finalRouted = false;
+    const auto result = adapter.process(
+        23, kNfqueueHookLocalIn,
+        std::span<const std::uint8_t>{final}, final.size(),
+        NfqueuePacketMetadata{.linuxUid = 10001},
+        NfqueueFragmentLeaseContext{
+            .identity = finalAdmission.identity,
+            .mailbox = &finalMailbox,
+            .routed = &finalRouted});
+    EXPECT_EQ(result, NfqueueFlowAdapterResult::FlowDropped);
+    EXPECT_FALSE(finalRouted);
+
+    EXPECT_EQ(finalLane.complete(*finalAdmission.identity, terminalReasonFor(result)),
+              NfqueuePacketLeaseCompletionStatus::Completed);
+    EXPECT_EQ(firstMailbox.drain(firstLane), 1U);
+    EXPECT_EQ(firstLane.pending(), 0U);
+    ASSERT_EQ(firstIntents.size(), 1U);
+    ASSERT_EQ(finalIntents.size(), 1U);
+    EXPECT_EQ(firstIntents[0].verdict, NfqueuePacketLeaseVerdict::Drop);
+    EXPECT_EQ(finalIntents[0].verdict, NfqueuePacketLeaseVerdict::Drop);
+    EXPECT_EQ(firstLane.counters().dropped, 1U);
+    EXPECT_EQ(finalLane.counters().dropped, 1U);
+
+    const auto counters = adapter.counters();
+    EXPECT_EQ(counters.fragmentReassembledPackets, 1U);
+    EXPECT_EQ(counters.droppedPackets, 1U);
+    EXPECT_EQ(counters.parsePassThroughPackets, 1U);
+    EXPECT_EQ(counters.capacityPassThroughPackets, 0U);
+    EXPECT_EQ(counters.ownerFaultPassThroughPackets, 0U);
 }
 
 TEST(NfqueueFlowAdapterTest, FragmentLeaseBookExpiresBeforeLeaseWatchdog) {

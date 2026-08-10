@@ -45,6 +45,7 @@ struct NfqueueFlowAdapterConfig {
     std::uint64_t hashSeed = 0;
     std::size_t queueCapacity = 64;
     std::uint32_t copyPrefixBytes = 512;
+    const Policy::PacketPolicySnapshot *packetPolicy = nullptr;
     Flow::FragmentSteeringConfig fragmentSteering;
     std::size_t fragmentLeaseCapacityPerDatagram = 64;
 };
@@ -84,6 +85,7 @@ struct DualStackPassThroughRuntimeConfig {
 
 enum class NfqueueFlowAdapterResult : std::uint8_t {
     FlowAccepted,
+    FlowDropped,
     FailOpenParse,
     FailOpenCapacity,
     FailOpenOwnerFault,
@@ -99,6 +101,7 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t packetsSeen = 0;
     std::uint64_t normalizedPackets = 0;
     std::uint64_t acceptedPackets = 0;
+    std::uint64_t droppedPackets = 0;
     std::uint64_t parsePassThroughPackets = 0;
     std::uint64_t fragmentPassThroughPackets = 0;
     std::uint64_t capacityPassThroughPackets = 0;
@@ -121,6 +124,27 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t fragmentCapacityPackets = 0;
     std::uint64_t fragmentOwnerMetadataPackets = 0;
 };
+
+[[nodiscard]] inline NfqueuePacketLeaseTerminalReason terminalReasonFor(
+    const NfqueueFlowAdapterResult result) noexcept {
+    switch (result) {
+    case NfqueueFlowAdapterResult::FlowAccepted:
+        return NfqueuePacketLeaseTerminalReason::Accepted;
+    case NfqueueFlowAdapterResult::FlowDropped:
+        return NfqueuePacketLeaseTerminalReason::Dropped;
+    case NfqueueFlowAdapterResult::FailOpenParse:
+    case NfqueueFlowAdapterResult::FailOpenCapacity:
+    case NfqueueFlowAdapterResult::FailOpenOwnerFault:
+    case NfqueueFlowAdapterResult::FragmentBuffered:
+    case NfqueueFlowAdapterResult::FragmentDuplicate:
+    case NfqueueFlowAdapterResult::FragmentTimeout:
+    case NfqueueFlowAdapterResult::FragmentMalformed:
+    case NfqueueFlowAdapterResult::FragmentConflict:
+    case NfqueueFlowAdapterResult::FragmentCapacity:
+        return NfqueuePacketLeaseTerminalReason::FailOpen;
+    }
+    return NfqueuePacketLeaseTerminalReason::FailOpen;
+}
 
 struct NfqueueRuntimeFaultSnapshot final {
     std::uint64_t listenerOpenFailures = 0;

@@ -35,7 +35,9 @@ namespace SnortDatapath::Nfqueue {
 NfqueueFlowAdapter::NfqueueFlowAdapter(NfqueueFlowAdapterConfig config)
     : config_(validateConfig(std::move(config))),
       steering_(Flow::WorkerLayout(config_.workerCount, config_.hashSeed), config_.queueCapacity),
-      graphGate_(steering_),
+      graphGate_(steering_, config_.packetPolicy == nullptr
+          ? Policy::emptyPacketPolicySnapshot()
+          : *config_.packetPolicy),
       fragmentSteering_(steering_.distribution().selector(), config_.fragmentSteering),
       fragmentLeaseBook_(config_.fragmentSteering.maxDatagrams,
                          config_.fragmentLeaseCapacityPerDatagram) {}
@@ -91,13 +93,22 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
         std::array<Flow::PacketSubmission, 1> submissions{
             Flow::PacketSubmission{.facts = std::move(graphFacts)}};
         const auto graphResult = graphGate_.inject(submissions[0], owner);
-        if (graphResult == Flow::GraphInjectionResult::CapacityDrop) {
-            ++counters_.capacityPassThroughPackets;
-            return NfqueueFlowAdapterResult::FailOpenCapacity;
-        }
-        if (graphResult == Flow::GraphInjectionResult::Accepted) {
+        switch (graphResult) {
+        case Flow::GraphInjectionResult::Accepted:
             ++counters_.acceptedPackets;
             return NfqueueFlowAdapterResult::FlowAccepted;
+        case Flow::GraphInjectionResult::PolicyDrop:
+            ++counters_.droppedPackets;
+            return NfqueueFlowAdapterResult::FlowDropped;
+        case Flow::GraphInjectionResult::ParseDrop:
+            ++counters_.parsePassThroughPackets;
+            return NfqueueFlowAdapterResult::FailOpenParse;
+        case Flow::GraphInjectionResult::CapacityDrop:
+            ++counters_.capacityPassThroughPackets;
+            return NfqueueFlowAdapterResult::FailOpenCapacity;
+        case Flow::GraphInjectionResult::OwnerFaultDrop:
+            ++counters_.ownerFaultPassThroughPackets;
+            return NfqueueFlowAdapterResult::FailOpenOwnerFault;
         }
         ++counters_.ownerFaultPassThroughPackets;
         return NfqueueFlowAdapterResult::FailOpenOwnerFault;
@@ -232,13 +243,9 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
                 owner = fragment.owner->finalOwner;
             }
             const auto graphResult = injectFacts(std::move(reassembledFacts), owner);
-            const auto terminalReason = graphResult
-                == NfqueueFlowAdapterResult::FlowAccepted
-                ? NfqueuePacketLeaseTerminalReason::Accepted
-                : NfqueuePacketLeaseTerminalReason::FailOpen;
             if (fragment.datagramKey.has_value()) {
                 static_cast<void>(fragmentLeaseBook_.complete(
-                    *fragment.datagramKey, terminalReason));
+                    *fragment.datagramKey, terminalReasonFor(graphResult)));
             }
             return graphResult;
         }
