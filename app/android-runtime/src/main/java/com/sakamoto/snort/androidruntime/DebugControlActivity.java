@@ -167,8 +167,21 @@ public class DebugControlActivity extends Activity {
     private void startSelected() {
         RuntimeProfile profile = profileFromSpinner();
         requestedProfile = profile;
-        persistSelectedProductProfile(profile, "Product profile selected for start");
-        RuntimeControlBackend.StartResult result = backend.start(this, profile);
+        if (!persistSelectedProductProfile(profile, "Product profile selected for start")) {
+            requestedProfile = null;
+            refreshStatus();
+            return;
+        }
+        RuntimeControlBackend.StartResult result;
+        try {
+            result = backend.start(this, profile);
+        } catch (RuntimeException error) {
+            requestedProfile = null;
+            action("Start failed: runtime_start_failed"
+                    + (error.getMessage() == null ? "" : ": " + error.getMessage()));
+            refreshStatus();
+            return;
+        }
         if (result == RuntimeControlBackend.StartResult.NOTIFICATION_REQUIRED) {
             pendingStart = true;
             if (android.os.Build.VERSION.SDK_INT >= 33
@@ -276,19 +289,21 @@ public class DebugControlActivity extends Activity {
         suppressProfileSelectionPersist = false;
     }
 
-    private void persistSelectedProductProfile(RuntimeProfile profile, String successPrefix) {
+    private boolean persistSelectedProductProfile(RuntimeProfile profile, String successPrefix) {
         ProductStore.MutationResult result = productBackend.selectRuntimeProfile(profile);
         if (result.persisted) {
             action(successPrefix + ": " + profile.wireName + ".");
-            renderProductProjection(ProductCatalogFormatter.loading(result.snapshot));
+            renderProductProjection(ProductCatalogFormatter.loading(
+                    productBackend.productStateReadResult()));
             refreshProductCatalog();
-            return;
+            return true;
         }
         action("Product profile write failed: "
                 + (result.errorCode.isEmpty() ? "product_state_persistence_failed"
                 : result.errorCode)
                 + (result.errorMessage.isEmpty() ? "" : ": " + result.errorMessage));
         refreshProductCatalog();
+        return false;
     }
 
     private void refreshProductCatalog() {
@@ -296,11 +311,12 @@ public class DebugControlActivity extends Activity {
             return;
         }
         final int generation = ++productCatalogGeneration;
-        renderProductProjection(ProductCatalogFormatter.loading(productBackend.productState()));
+        ProductStateStore.ReadResult initialState = productBackend.reloadProductState();
+        renderProductProjection(ProductCatalogFormatter.loading(initialState));
         Thread loader = new Thread(() -> {
             try {
                 List<ApplicationCatalogEntry> catalog = productBackend.applicationCatalog();
-                ProductStateSnapshot productState = productBackend.productState();
+                ProductStateStore.ReadResult productState = productBackend.reloadProductState();
                 ProductCatalogFormatter.Projection projection =
                         ProductCatalogFormatter.result(productState, catalog);
                 main.post(() -> {
@@ -310,7 +326,7 @@ public class DebugControlActivity extends Activity {
                 });
             } catch (RuntimeException error) {
                 ProductCatalogFormatter.Projection projection = ProductCatalogFormatter.error(
-                        productBackend.productState(), "catalog_load_failed",
+                        productBackend.productStateReadResult(), "catalog_load_failed",
                         error.getMessage() == null ? "catalog could not be loaded"
                                 : error.getMessage());
                 main.post(() -> {

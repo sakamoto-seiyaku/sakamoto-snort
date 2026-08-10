@@ -20,6 +20,14 @@ public final class LocalProductBackend {
         return productStore.snapshot();
     }
 
+    public ProductStateStore.ReadResult productStateReadResult() {
+        return productStore.readResult();
+    }
+
+    public ProductStateStore.ReadResult reloadProductState() {
+        return productStore.reload();
+    }
+
     public List<ApplicationCatalogEntry> applicationCatalog() {
         return catalogProvider.listApplications();
     }

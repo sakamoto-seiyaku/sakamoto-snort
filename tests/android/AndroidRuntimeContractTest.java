@@ -59,6 +59,10 @@ public final class AndroidRuntimeContractTest {
         boundedActivityStoreIsSeparateFromProductState();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
+        corruptProductStateReadResultProjectsVisibleActionableError();
+        invalidProductStateProjectionDisablesBindCandidate();
+        productStateReloadPreservesLastValidSnapshotUntilValidRead();
+        missingProductStateProjectionRemainsNormalEmpty();
         System.out.println("android runtime contract: PASS");
     }
 
@@ -1135,6 +1139,116 @@ public final class AndroidRuntimeContractTest {
                 "Local Product Backend writes selected app binding");
         check(backend.productState().boundApplications.contains(work),
                 "backend product state uses ApplicationSubjectId, not package metadata");
+    }
+
+    private static void corruptProductStateReadResultProjectsVisibleActionableError()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-corrupt-projection");
+        Files.createDirectories(files.resolve("product-state"));
+        Files.write(files.resolve("product-state/product.properties"),
+                "schemaVersion=not-a-number\nselectedProfile=vpn\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+
+        ProductStateStore.ReadResult corrupt = ProductStateStore.readResult(files.toFile());
+        ProductCatalogFormatter.Projection projection =
+                ProductCatalogFormatter.result(corrupt, Arrays.asList(
+                        new ApplicationCatalogEntry(ApplicationSubjectId.fromUid(10001),
+                                "com.example.mail", "Mail", "icon:mail/u0",
+                                0, "Owner", true)));
+
+        check("invalid".equals(projection.productStateStatus),
+                "corrupt product-state projects as invalid instead of empty valid state");
+        check("product_state_corrupt".equals(projection.productStateErrorCode),
+                "corrupt product-state projection exposes an actionable error code");
+        check(projection.displayText.contains("Product Store state: invalid product_state_corrupt"),
+                "corrupt product-state projection renders a visible invalid status");
+        check(projection.displayText.contains("product state could not be read"),
+                "corrupt product-state projection renders an actionable error message");
+    }
+
+    private static void invalidProductStateProjectionDisablesBindCandidate()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-invalid-candidate");
+        Files.createDirectories(files.resolve("product-state"));
+        Files.write(files.resolve("product-state/product.properties"),
+                "schemaVersion=999\nselectedProfile=vpn\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+        ApplicationSubjectId available = ApplicationSubjectId.fromUid(10001);
+        ProductCatalogFormatter.Projection projection =
+                ProductCatalogFormatter.result(ProductStateStore.readResult(files.toFile()),
+                        Arrays.asList(new ApplicationCatalogEntry(available,
+                                "com.example.mail", "Mail", "icon:mail/u0",
+                                0, "Owner", true)));
+
+        check("invalid".equals(projection.productStateStatus),
+                "unsupported product-state projects as invalid");
+        check(projection.firstAvailableSubjectId == null,
+                "invalid product-state disables the bind candidate");
+        check(projection.firstBoundSubjectId == null,
+                "invalid product-state disables the unbind candidate");
+        check(projection.displayText.contains("product_state_unsupported_schema"),
+                "invalid product-state keeps the actionable schema error visible");
+    }
+
+    private static void productStateReloadPreservesLastValidSnapshotUntilValidRead()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-reload");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app, "com.example.mail",
+                        "Mail", "icon:mail/u10", 10, "Work", true)));
+        check(backend.selectRuntimeProfile(RuntimeProfile.VPN).persisted,
+                "backend persists an initial valid profile");
+        check(backend.bindApplication(app).persisted,
+                "backend persists an initial valid binding");
+
+        Files.write(files.resolve("product-state/product.properties"),
+                "schemaVersion=not-a-number\nselectedProfile=root\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+        ProductStateStore.ReadResult corrupt = backend.reloadProductState();
+        check(!corrupt.valid, "reload reports an invalid product-state read");
+        check(corrupt.snapshot.selectedProfile == RuntimeProfile.VPN,
+                "invalid reload read result carries the last valid profile snapshot");
+        check(corrupt.snapshot.boundApplications.contains(app),
+                "invalid reload read result carries the last valid binding snapshot");
+        check(backend.productState().selectedProfile == RuntimeProfile.VPN,
+                "reload preserves the last valid profile snapshot after an invalid read");
+        check(backend.productState().boundApplications.contains(app),
+                "reload preserves the last valid binding snapshot after an invalid read");
+        check(!backend.selectRuntimeProfile(RuntimeProfile.ROOT).persisted,
+                "invalid reload gates mutations until a valid read recovers");
+
+        ProductStateStore.write(files.toFile(), ProductStateSnapshot.empty());
+        ProductStateStore.ReadResult recovered = backend.reloadProductState();
+        check(recovered.valid && recovered.present,
+                "reload accepts a later valid product-state read");
+        check(backend.productState().selectedProfile == RuntimeProfile.ROOT
+                        && backend.productState().boundApplications.isEmpty(),
+                "valid reload replaces the preserved snapshot");
+    }
+
+    private static void missingProductStateProjectionRemainsNormalEmpty() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-50-missing-projection");
+        ApplicationSubjectId available = ApplicationSubjectId.fromUid(10001);
+        ProductStateStore.ReadResult missing = ProductStateStore.readResult(files.toFile());
+        ProductCatalogFormatter.Projection projection =
+                ProductCatalogFormatter.result(missing, Arrays.asList(
+                        new ApplicationCatalogEntry(available, "com.example.mail",
+                                "Mail", "icon:mail/u0", 0, "Owner", true)));
+
+        check(!missing.present && missing.valid,
+                "missing product-state is a valid empty read result");
+        check("missing".equals(projection.productStateStatus),
+                "missing product-state projects a distinct missing status");
+        check(projection.productStateErrorCode.isEmpty()
+                        && projection.productStateErrorMessage.isEmpty(),
+                "missing product-state does not project an error");
+        check(projection.boundApplicationCount == 0,
+                "missing product-state remains a normal empty Product Store state");
+        check(projection.firstAvailableSubjectId.equals(available),
+                "missing product-state still allows binding an available app");
+        check(projection.displayText.contains("Catalog: result: 1 application instance"),
+                "missing product-state still renders the catalog result normally");
     }
 
     private static void check(boolean condition, String message) {

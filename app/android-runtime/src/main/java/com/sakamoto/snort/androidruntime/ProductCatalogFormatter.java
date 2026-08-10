@@ -11,16 +11,33 @@ public final class ProductCatalogFormatter {
     private ProductCatalogFormatter() {}
 
     public static Projection loading(ProductStateSnapshot state) {
+        return project(readResultFromSnapshot(state), Collections.emptyList(), "loading", "", "",
+                DEFAULT_PREVIEW_LIMIT);
+    }
+
+    public static Projection loading(ProductStateStore.ReadResult state) {
         return project(state, Collections.emptyList(), "loading", "", "",
                 DEFAULT_PREVIEW_LIMIT);
     }
 
     public static Projection result(ProductStateSnapshot state,
                                     List<ApplicationCatalogEntry> catalog) {
+        return project(readResultFromSnapshot(state), catalog, "result", "", "",
+                DEFAULT_PREVIEW_LIMIT);
+    }
+
+    public static Projection result(ProductStateStore.ReadResult state,
+                                    List<ApplicationCatalogEntry> catalog) {
         return project(state, catalog, "result", "", "", DEFAULT_PREVIEW_LIMIT);
     }
 
     public static Projection error(ProductStateSnapshot state, String errorCode,
+                                   String errorMessage) {
+        return project(readResultFromSnapshot(state), Collections.emptyList(), "error", errorCode,
+                errorMessage, DEFAULT_PREVIEW_LIMIT);
+    }
+
+    public static Projection error(ProductStateStore.ReadResult state, String errorCode,
                                    String errorMessage) {
         return project(state, Collections.emptyList(), "error", errorCode,
                 errorMessage, DEFAULT_PREVIEW_LIMIT);
@@ -30,33 +47,62 @@ public final class ProductCatalogFormatter {
                                      List<ApplicationCatalogEntry> catalog,
                                      String catalogStatus, String errorCode,
                                      String errorMessage, int previewLimit) {
-        ProductStateSnapshot product = state == null ? ProductStateSnapshot.empty() : state;
+        return project(readResultFromSnapshot(state), catalog, catalogStatus, errorCode,
+                errorMessage, previewLimit);
+    }
+
+    public static Projection project(ProductStateStore.ReadResult state,
+                                     List<ApplicationCatalogEntry> catalog,
+                                     String catalogStatus, String errorCode,
+                                     String errorMessage, int previewLimit) {
+        ProductStateStore.ReadResult productState = state == null
+                ? readResultFromSnapshot(null) : state;
+        ProductStateSnapshot product = productState.snapshot == null
+                ? ProductStateSnapshot.empty() : productState.snapshot;
         List<ApplicationCatalogEntry> entries = catalog == null
                 ? Collections.emptyList() : catalog;
         int limit = Math.max(0, previewLimit);
         ArrayList<EntryRow> rows = new ArrayList<>();
         ApplicationSubjectId firstAvailable = null;
+        boolean productStateValid = productState.valid;
         for (ApplicationCatalogEntry entry : entries) {
             if (entry == null) {
                 continue;
             }
             boolean bound = product.boundApplications.contains(entry.subjectId);
-            if (entry.available && !bound && firstAvailable == null) {
+            if (productStateValid && entry.available && !bound && firstAvailable == null) {
                 firstAvailable = entry.subjectId;
             }
             if (rows.size() < limit) {
                 rows.add(new EntryRow(entry, bound));
             }
         }
-        ApplicationSubjectId firstBound = product.boundApplications.isEmpty()
+        ApplicationSubjectId firstBound = !productStateValid || product.boundApplications.isEmpty()
                 ? null : product.boundApplications.iterator().next();
         String status = catalogStatus == null || catalogStatus.trim().isEmpty()
                 ? "result" : catalogStatus.trim();
         String boundedErrorCode = bounded(errorCode);
         String boundedErrorMessage = bounded(errorMessage);
+        String productStateStatus = productStateStatus(productState);
+        String productStateErrorCode = productState.valid ? "" : bounded(productState.errorCode);
+        String productStateErrorMessage = productState.valid
+                ? "" : bounded(productState.errorMessage);
         return new Projection(product.selectedProfile, product.boundApplications.size(),
                 entries.size(), status, boundedErrorCode, boundedErrorMessage,
-                rows, firstAvailable, firstBound);
+                rows, firstAvailable, firstBound, productStateStatus,
+                productStateErrorCode, productStateErrorMessage);
+    }
+
+    private static ProductStateStore.ReadResult readResultFromSnapshot(ProductStateSnapshot state) {
+        ProductStateSnapshot snapshot = state == null ? ProductStateSnapshot.empty() : state;
+        return ProductStateStore.ReadResult.validSnapshot(snapshot);
+    }
+
+    private static String productStateStatus(ProductStateStore.ReadResult state) {
+        if (!state.valid) {
+            return "invalid";
+        }
+        return state.present ? "valid" : "missing";
     }
 
     private static String bounded(String value) {
@@ -74,13 +120,18 @@ public final class ProductCatalogFormatter {
         public final List<EntryRow> rows;
         public final ApplicationSubjectId firstAvailableSubjectId;
         public final ApplicationSubjectId firstBoundSubjectId;
+        public final String productStateStatus;
+        public final String productStateErrorCode;
+        public final String productStateErrorMessage;
         public final String displayText;
 
         private Projection(RuntimeProfile selectedProfile, int boundApplicationCount,
                            int catalogEntryCount, String catalogStatus, String errorCode,
                            String errorMessage, List<EntryRow> rows,
                            ApplicationSubjectId firstAvailableSubjectId,
-                           ApplicationSubjectId firstBoundSubjectId) {
+                           ApplicationSubjectId firstBoundSubjectId,
+                           String productStateStatus, String productStateErrorCode,
+                           String productStateErrorMessage) {
             this.selectedProfile = selectedProfile == null ? RuntimeProfile.ROOT
                     : selectedProfile;
             this.boundApplicationCount = boundApplicationCount;
@@ -91,11 +142,27 @@ public final class ProductCatalogFormatter {
             this.rows = Collections.unmodifiableList(new ArrayList<>(rows));
             this.firstAvailableSubjectId = firstAvailableSubjectId;
             this.firstBoundSubjectId = firstBoundSubjectId;
+            this.productStateStatus = productStateStatus == null
+                    || productStateStatus.trim().isEmpty() ? "valid" : productStateStatus;
+            this.productStateErrorCode = productStateErrorCode == null
+                    ? "" : productStateErrorCode;
+            this.productStateErrorMessage = productStateErrorMessage == null
+                    ? "" : productStateErrorMessage;
             this.displayText = buildDisplayText();
         }
 
         private String buildDisplayText() {
             StringBuilder out = new StringBuilder();
+            out.append("Product Store state: ").append(productStateStatus);
+            if ("invalid".equals(productStateStatus)) {
+                if (!productStateErrorCode.isEmpty()) {
+                    out.append(" ").append(productStateErrorCode);
+                }
+                if (!productStateErrorMessage.isEmpty()) {
+                    out.append(": ").append(productStateErrorMessage);
+                }
+            }
+            out.append('\n');
             out.append("Product Store selected profile: ")
                     .append(selectedProfile.displayName)
                     .append(" (")

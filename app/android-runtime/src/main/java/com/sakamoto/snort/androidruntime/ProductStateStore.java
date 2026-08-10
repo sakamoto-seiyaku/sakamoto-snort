@@ -170,6 +170,15 @@ public final class ProductStateStore {
             return new ReadResult(snapshot, true, true, "", "");
         }
 
+        public static ReadResult validSnapshot(ProductStateSnapshot snapshot) {
+            return valid(snapshot == null ? ProductStateSnapshot.empty() : snapshot);
+        }
+
+        public ReadResult withSnapshot(ProductStateSnapshot snapshot) {
+            return new ReadResult(snapshot == null ? ProductStateSnapshot.empty() : snapshot,
+                    present, valid, errorCode, errorMessage);
+        }
+
         private static ReadResult invalid(ProductStateSnapshot snapshot, String code,
                                           String message) {
             return invalid(snapshot, true, code, message);

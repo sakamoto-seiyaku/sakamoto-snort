@@ -58,11 +58,13 @@ public final class ProductStore {
 
     public synchronized ProductStateStore.ReadResult reload() {
         ProductStateStore.ReadResult result = ProductStateStore.readResult(filesDir);
-        lastReadResult = result;
         if (result.valid) {
             snapshot = result.snapshot;
+            lastReadResult = result;
+        } else {
+            lastReadResult = result.withSnapshot(snapshot);
         }
-        return result;
+        return lastReadResult;
     }
 
     private MutationResult publish(ProductStateSnapshot next) {
@@ -74,6 +76,7 @@ public final class ProductStore {
             writer.write(filesDir, next);
             lastReadResult = ProductStateStore.readResult(filesDir);
             if (!lastReadResult.valid) {
+                lastReadResult = lastReadResult.withSnapshot(snapshot);
                 return new MutationResult(false, snapshot, lastReadResult.errorCode,
                         lastReadResult.errorMessage);
             }
