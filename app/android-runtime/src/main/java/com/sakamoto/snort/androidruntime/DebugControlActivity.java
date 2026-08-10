@@ -7,6 +7,8 @@ import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -26,6 +28,13 @@ import java.util.List;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /** Minimal debug shell. It only issues versioned requests and renders snapshots. */
 public class DebugControlActivity extends Activity {
@@ -36,9 +45,17 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_RUNTIME_PROFILE = "runtimeProfile";
     private static final String EXTRA_RUNTIME_CLEANUP_FAULT = "runtimeCleanupFault";
     private static final String EXTRA_DEBUG_TRAFFIC = "debugTraffic";
+    private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
     private static final int DEBUG_TRAFFIC_PORT = 80;
     private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
+    private static final String CONTROL_SOCKET_NAME = "sucre-snort-control-vnext";
+    private static final int CONTROL_SOCKET_TIMEOUT_MILLIS = 2000;
+    private static final int CONTROL_MAX_PAYLOAD_BYTES = 65536;
+    private static final long DEBUG_POLICY_REVISION = 68L;
+    private static final long DEBUG_POLICY_RULE_ID = 6801L;
+    private static final int DEBUG_POLICY_REASON_ID = 6801;
+    private static final int DEBUG_POLICY_NETWORK_CONTEXT = 0;
 
     private final RuntimeControlBackend backend = new RuntimeControlBackend();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -101,6 +118,9 @@ public class DebugControlActivity extends Activity {
         if (intent.getBooleanExtra(EXTRA_DEBUG_TRAFFIC, false)) {
             main.post(this::runDebugTrafficProbe);
         }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
+            main.post(this::runDebugApplyGateAndProbe);
+        }
     }
 
     private View buildUi() {
@@ -160,6 +180,11 @@ public class DebugControlActivity extends Activity {
         traffic.setAllCaps(false);
         traffic.setOnClickListener(view -> runDebugTrafficProbe());
         buttons.addView(traffic, weighted());
+        Button gateProbe = new Button(this);
+        gateProbe.setText("Gate+probe");
+        gateProbe.setAllCaps(false);
+        gateProbe.setOnClickListener(view -> runDebugApplyGateAndProbe());
+        buttons.addView(gateProbe, weighted());
         root.addView(buttons, fillWrap());
 
         LinearLayout appSelector = new LinearLayout(this);
@@ -506,26 +531,207 @@ public class DebugControlActivity extends Activity {
     private void runDebugTrafficProbe() {
         action("Debug traffic probe requested.");
         Thread probe = new Thread(() -> {
-            String result;
-            try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(
-                        DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT),
-                        DEBUG_TRAFFIC_TIMEOUT_MILLIS);
-                result = "Debug traffic probe connected to "
-                        + DEBUG_TRAFFIC_HOST + ":" + DEBUG_TRAFFIC_PORT + ".";
-            } catch (IOException error) {
-                result = "Debug traffic probe failed: "
-                        + (error.getMessage() == null
-                        ? error.getClass().getSimpleName()
-                        : error.getMessage());
-            } catch (RuntimeException error) {
-                result = "Debug traffic probe failed: "
-                        + error.getClass().getSimpleName();
-            }
+            String result = runDebugTrafficProbeBlocking(true);
             final String display = result;
             main.post(() -> action(display));
         }, "sakamoto-debug-traffic");
         probe.start();
+    }
+
+    private void runDebugApplyGateAndProbe() {
+        action("Debug policy gate/probe requested.");
+        Thread probe = new Thread(() -> {
+            String result;
+            try (ControlVNextDebugClient client = new ControlVNextDebugClient()) {
+                int uid = android.os.Process.myUid();
+                client.call(1, "POLICY.APPLY", debugPolicyApplyArgs(uid));
+                JSONObject decision = client.call(2, "POLICY.EVALUATE",
+                        debugPolicyEvaluateArgs(uid));
+                String probeResult = runDebugTrafficProbeBlocking(false);
+                JSONObject nfqueue = client.call(3, "NFQUEUE.STATUS", new JSONObject());
+                result = formatDebugPolicyProbeResult(decision, nfqueue, probeResult);
+            } catch (IOException | JSONException | RuntimeException error) {
+                result = "Debug policy gate/probe failed: " + boundedError(error);
+            }
+            final String display = result;
+            main.post(() -> action(display));
+        }, "sakamoto-debug-policy-probe");
+        probe.start();
+    }
+
+    private JSONObject debugPolicyApplyArgs(int uid) throws JSONException {
+        JSONObject gate = new JSONObject()
+                .put("blockedNetworkContexts", new JSONArray().put(DEBUG_POLICY_NETWORK_CONTEXT))
+                .put("reasonId", DEBUG_POLICY_REASON_ID)
+                .put("ruleId", DEBUG_POLICY_RULE_ID);
+        JSONObject subject = new JSONObject()
+                .put("linuxUid", uid)
+                .put("networkGate", gate)
+                .put("l4Rules", new JSONArray());
+        return new JSONObject()
+                .put("revision", DEBUG_POLICY_REVISION)
+                .put("subjects", new JSONArray().put(subject));
+    }
+
+    private JSONObject debugPolicyEvaluateArgs(int uid) throws JSONException {
+        return new JSONObject()
+                .put("linuxUid", uid)
+                .put("networkContext", DEBUG_POLICY_NETWORK_CONTEXT)
+                .put("family", "ipv4")
+                .put("direction", "output")
+                .put("ipProtocol", 6)
+                .put("sourcePort", 40000)
+                .put("destinationPort", DEBUG_TRAFFIC_PORT)
+                .put("portsAvailable", true);
+    }
+
+    private String runDebugTrafficProbeBlocking(boolean includeEndpoint) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(
+                    DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT),
+                    DEBUG_TRAFFIC_TIMEOUT_MILLIS);
+            if (includeEndpoint) {
+                return "Debug traffic probe connected to "
+                        + DEBUG_TRAFFIC_HOST + ":" + DEBUG_TRAFFIC_PORT + ".";
+            }
+            return "tcp_connect_succeeded";
+        } catch (IOException error) {
+            if (includeEndpoint) {
+                return "Debug traffic probe failed: "
+                        + (error.getMessage() == null
+                        ? error.getClass().getSimpleName()
+                        : error.getMessage());
+            }
+            return "tcp_connect_failed";
+        } catch (RuntimeException error) {
+            if (includeEndpoint) {
+                return "Debug traffic probe failed: "
+                        + error.getClass().getSimpleName();
+            }
+            return "tcp_connect_failed";
+        }
+    }
+
+    private String formatDebugPolicyProbeResult(
+            JSONObject decision, JSONObject nfqueue, String probeResult) {
+        return "Policy: verdict=" + decision.optString("verdict", "unknown")
+                + " stage=" + decision.optString("stage", "unknown")
+                + " revision=" + decision.optLong("revision", -1L)
+                + " reason=" + decision.optLong("reasonId", -1L)
+                + " rule=" + decision.optLong("ruleId", -1L)
+                + "\nNFQUEUE: lastObservedLinuxUid="
+                + nfqueue.optLong("lastObservedLinuxUid", -1L)
+                + " lastObservedResult="
+                + nfqueue.optString("lastObservedResult", "unknown")
+                + " dropped=" + nfqueue.optLong("droppedPackets", -1L)
+                + " accepted=" + nfqueue.optLong("acceptedPackets", -1L)
+                + " packetsSeen=" + nfqueue.optLong("packetsSeen", -1L)
+                + "\nProbe: " + probeResult;
+    }
+
+    private String boundedError(Throwable error) {
+        String message = error.getMessage();
+        if (message == null || message.isEmpty()) {
+            message = error.getClass().getSimpleName();
+        }
+        return BoundedText.value(message, 160);
+    }
+
+    private static final class ControlVNextDebugClient implements AutoCloseable {
+        private final LocalSocket socket;
+        private final InputStream input;
+        private final OutputStream output;
+
+        ControlVNextDebugClient() throws IOException {
+            socket = new LocalSocket();
+            socket.setSoTimeout(CONTROL_SOCKET_TIMEOUT_MILLIS);
+            socket.connect(new LocalSocketAddress(
+                    CONTROL_SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT));
+            input = socket.getInputStream();
+            output = socket.getOutputStream();
+        }
+
+        JSONObject call(int id, String cmd, JSONObject args) throws IOException, JSONException {
+            JSONObject request = new JSONObject()
+                    .put("id", id)
+                    .put("cmd", cmd)
+                    .put("args", args);
+            writeNetstring(request.toString().getBytes(StandardCharsets.UTF_8));
+            JSONObject response = new JSONObject(
+                    new String(readNetstring(), StandardCharsets.UTF_8));
+            if (!response.optBoolean("ok", false)) {
+                JSONObject error = response.optJSONObject("error");
+                String code = error == null ? "RPC_FAILED" : error.optString("code", "RPC_FAILED");
+                String message = error == null ? "" : error.optString("message", "");
+                throw new IOException(cmd + " failed: " + code
+                        + (message.isEmpty() ? "" : ": " + message));
+            }
+            JSONObject result = response.optJSONObject("result");
+            return result == null ? new JSONObject() : result;
+        }
+
+        private void writeNetstring(byte[] payload) throws IOException {
+            output.write(Integer.toString(payload.length).getBytes(StandardCharsets.US_ASCII));
+            output.write(':');
+            output.write(payload);
+            output.write(',');
+            output.flush();
+        }
+
+        private byte[] readNetstring() throws IOException {
+            int length = readLength();
+            byte[] payload = new byte[length];
+            int offset = 0;
+            while (offset < length) {
+                int n = input.read(payload, offset, length - offset);
+                if (n < 0) {
+                    throw new IOException("control socket closed while reading payload");
+                }
+                offset += n;
+            }
+            int comma = input.read();
+            if (comma != ',') {
+                throw new IOException("invalid netstring terminator");
+            }
+            return payload;
+        }
+
+        private int readLength() throws IOException {
+            int value = 0;
+            int digits = 0;
+            while (true) {
+                int ch = input.read();
+                if (ch < 0) {
+                    throw new IOException("control socket closed while reading length");
+                }
+                if (ch == ':') {
+                    if (digits == 0) {
+                        throw new IOException("empty netstring length");
+                    }
+                    return value;
+                }
+                if (ch < '0' || ch > '9') {
+                    throw new IOException("invalid netstring length");
+                }
+                if (digits == 0 && ch == '0') {
+                    int next = input.read();
+                    if (next != ':') {
+                        throw new IOException("invalid leading zero netstring length");
+                    }
+                    return 0;
+                }
+                value = value * 10 + (ch - '0');
+                digits++;
+                if (value > CONTROL_MAX_PAYLOAD_BYTES || digits > 8) {
+                    throw new IOException("netstring payload too large");
+                }
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            socket.close();
+        }
     }
 
     private void action(String text) {

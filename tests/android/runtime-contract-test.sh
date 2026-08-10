@@ -77,6 +77,13 @@ grep -q 'LauncherApps' "$production_activity_source"
 grep -q 'getBadgedIcon' "$production_activity_source"
 grep -q 'getApplicationIcon' "$production_activity_source"
 grep -q 'setImageDrawable' "$production_activity_source"
+grep -q 'EXTRA_DEBUG_APPLY_GATE_AND_PROBE' "$production_activity_source"
+grep -q 'LocalSocketAddress.Namespace.ABSTRACT' "$production_activity_source"
+grep -q 'POLICY.APPLY' "$production_activity_source"
+grep -q 'POLICY.EVALUATE' "$production_activity_source"
+grep -q 'NFQUEUE.STATUS' "$production_activity_source"
+grep -q 'lastObservedResult' "$production_activity_source"
+grep -q 'runDebugApplyGateAndProbe' "$production_activity_source"
 if grep -q 'LocalProductBackend' "$production_activity_source"; then
   echo "Activity must not instantiate the service-side Local Product Backend writer" >&2
   exit 1
