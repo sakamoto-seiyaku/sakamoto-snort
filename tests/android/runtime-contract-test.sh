@@ -22,10 +22,26 @@ bash "$repo_root/tests/android/android-runtime-hardening-contract-test.sh"
 production_service_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 production_ownership_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
+production_control_protocol_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlProtocol.java"
+production_control_request_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlRequest.java"
+production_control_backend_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlBackend.java"
 grep -q 'ACTION_START' "$production_service_source"
 grep -q 'RuntimeControlOrdering' "$production_service_source"
 grep -q 'ignored stale ' "$production_service_source"
 grep -q 'RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION' "$production_service_source"
+grep -q 'ACTION_PRODUCT_PROFILE_SELECT' "$production_service_source"
+grep -q 'ACTION_PRODUCT_BIND_APP' "$production_service_source"
+grep -q 'ACTION_PRODUCT_UNBIND_APP' "$production_service_source"
+grep -q 'productBackend.selectRuntimeProfile(profile)' "$production_service_source"
+grep -q 'productBackend.bindApplication(subjectId)' "$production_service_source"
+grep -q 'productBackend.unbindApplication(subjectId)' "$production_service_source"
+grep -q 'ACTION_PRODUCT_PROFILE_SELECT' "$production_control_protocol_source"
+grep -q 'EXTRA_APPLICATION_SUBJECT' "$production_control_protocol_source"
+grep -q 'PRODUCT_PROFILE_SELECT' "$production_control_request_source"
+grep -q 'bindProductApplication' "$production_control_request_source"
+grep -q 'unbindProductApplication' "$production_control_request_source"
+grep -q 'RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION' "$production_control_backend_source"
+grep -q 'RuntimeControlProtocol.EXTRA_APPLICATION_SUBJECT' "$production_control_backend_source"
 grep -q 'RuntimeControlNative' "$production_service_source"
 grep -q 'apiIdentity' "$production_service_source"
 grep -q 'kill -TERM' "$production_service_source"
@@ -48,10 +64,26 @@ grep -q 'RuntimeControlBackend' "$production_activity_source"
 grep -q 'backend.query' "$production_activity_source"
 grep -q 'current.profile == RuntimeProfile.VPN' "$production_activity_source"
 grep -q 'requestedProfile' "$production_activity_source"
-grep -q 'LocalProductBackend' "$production_activity_source"
 grep -q 'PackageManagerApplicationCatalogProvider' "$production_activity_source"
 grep -q 'ProductCatalogFormatter' "$production_activity_source"
-grep -q 'bindApplication(subjectId)' "$production_activity_source"
+grep -q 'ProductStateStore.readResult' "$production_activity_source"
+grep -q 'backend.selectProductProfile' "$production_activity_source"
+grep -q 'backend.bindProductApplication' "$production_activity_source"
+grep -q 'backend.unbindProductApplication' "$production_activity_source"
+if grep -q 'LocalProductBackend' "$production_activity_source"; then
+  echo "Activity must not instantiate the service-side Local Product Backend writer" >&2
+  exit 1
+fi
+if grep -q 'ProductStore' "$production_activity_source"; then
+  echo "Activity must not mutate ProductStore directly" >&2
+  exit 1
+fi
+if grep -q 'bindApplication(subjectId)' "$production_activity_source" \
+  || grep -q 'unbindApplication(subjectId)' "$production_activity_source" \
+  || grep -q 'selectRuntimeProfile(profile)' "$production_activity_source"; then
+  echo "Activity product mutations must be versioned RuntimeService requests" >&2
+  exit 1
+fi
 
 service_source="$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/src/main/java/com/sakamoto/snort/vpnlite/SnortRuntimeService.java"
 grep -q 'SAKAMOTO_VPP_OWNER_TOKEN' "$service_source"

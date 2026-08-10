@@ -44,6 +44,12 @@ public final class RuntimeService extends VpnService {
     public static final String ACTION_START = RuntimeControlProtocol.ACTION_START;
     public static final String ACTION_QUERY = RuntimeControlProtocol.ACTION_QUERY;
     public static final String ACTION_STOP = RuntimeControlProtocol.ACTION_STOP;
+    public static final String ACTION_PRODUCT_PROFILE_SELECT =
+            RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT;
+    public static final String ACTION_PRODUCT_BIND_APP =
+            RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP;
+    public static final String ACTION_PRODUCT_UNBIND_APP =
+            RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP;
 
     private static final String TAG = "SakamotoRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
@@ -139,8 +145,7 @@ public final class RuntimeService extends VpnService {
         if (action == null) {
             action = ACTION_QUERY;
         }
-        if (!ACTION_START.equals(action) && !ACTION_QUERY.equals(action)
-                && !ACTION_STOP.equals(action)) {
+        if (!isSupportedAction(action)) {
             final String rejectedAction = action;
             enqueueLifecycle(() -> publishError("unsupported_runtime_action",
                     "unknown runtime action: " + rejectedAction,
@@ -184,6 +189,18 @@ public final class RuntimeService extends VpnService {
                 return START_NOT_STICKY;
             }
         }
+        ApplicationSubjectId requestedSubject = null;
+        if (intent != null
+                && intent.hasExtra(RuntimeControlProtocol.EXTRA_APPLICATION_SUBJECT)) {
+            try {
+                requestedSubject = ApplicationSubjectId.parse(intent.getStringExtra(
+                        RuntimeControlProtocol.EXTRA_APPLICATION_SUBJECT));
+            } catch (IllegalArgumentException error) {
+                enqueueLifecycle(() -> publishError("invalid_application_subject",
+                        error.getMessage(), currentMayBeActive(), currentPid()));
+                return START_NOT_STICKY;
+            }
+        }
 
         if (ACTION_START.equals(action)) {
             // A user retry is an explicit new lifecycle transaction. Clear a
@@ -209,6 +226,39 @@ public final class RuntimeService extends VpnService {
             enqueueLifecycle(this::stopRuntime);
             return START_NOT_STICKY;
         }
+        if (ACTION_PRODUCT_PROFILE_SELECT.equals(action)) {
+            if (requested == null) {
+                enqueueLifecycle(() -> publishError("invalid_product_profile_request",
+                        "product profile selection requires a runtime profile",
+                        currentMayBeActive(), currentPid()));
+                return START_NOT_STICKY;
+            }
+            final RuntimeProfile profile = requested;
+            enqueueLifecycle(() -> selectProductProfile(profile));
+            return START_STICKY;
+        }
+        if (ACTION_PRODUCT_BIND_APP.equals(action)) {
+            if (requestedSubject == null) {
+                enqueueLifecycle(() -> publishError("invalid_product_bind_request",
+                        "product app bind requires an application subject",
+                        currentMayBeActive(), currentPid()));
+                return START_NOT_STICKY;
+            }
+            final ApplicationSubjectId subject = requestedSubject;
+            enqueueLifecycle(() -> bindProductApplication(subject));
+            return START_STICKY;
+        }
+        if (ACTION_PRODUCT_UNBIND_APP.equals(action)) {
+            if (requestedSubject == null) {
+                enqueueLifecycle(() -> publishError("invalid_product_unbind_request",
+                        "product app unbind requires an application subject",
+                        currentMayBeActive(), currentPid()));
+                return START_NOT_STICKY;
+            }
+            final ApplicationSubjectId subject = requestedSubject;
+            enqueueLifecycle(() -> unbindProductApplication(subject));
+            return START_STICKY;
+        }
         if (ACTION_START.equals(action)) {
             final RuntimeProfile profile = requested == null ? activeProfile : requested;
             if (!ensureForeground(profile)) {
@@ -226,6 +276,15 @@ public final class RuntimeService extends VpnService {
         }
         queueHealthQuery(startId);
         return START_STICKY;
+    }
+
+    private static boolean isSupportedAction(String action) {
+        return ACTION_START.equals(action)
+                || ACTION_QUERY.equals(action)
+                || ACTION_STOP.equals(action)
+                || ACTION_PRODUCT_PROFILE_SELECT.equals(action)
+                || ACTION_PRODUCT_BIND_APP.equals(action)
+                || ACTION_PRODUCT_UNBIND_APP.equals(action);
     }
 
     private void queueHealthQuery(int requestStartId) {
@@ -1463,8 +1522,55 @@ public final class RuntimeService extends VpnService {
                 result.errorMessage.isEmpty()
                         ? "selected runtime profile could not be persisted"
                         : result.errorMessage,
-                false, -1L);
+                currentMayBeActive(), currentPid());
         return false;
+    }
+
+    private void selectProductProfile(RuntimeProfile profile) {
+        if (persistSelectedProductProfile(profile)) {
+            appendLog("product_control=profile_select profile=" + profile.wireName);
+        }
+        stopIfInactive();
+    }
+
+    private void bindProductApplication(ApplicationSubjectId subjectId) {
+        if (productBackend == null) {
+            stopIfInactive();
+            return;
+        }
+        ProductStore.MutationResult result = productBackend.bindApplication(subjectId);
+        if (result.persisted) {
+            appendLog("product_control=bind_app subject=" + subjectId.encode());
+        } else {
+            publishProductMutationFailure("product_bind_failed", result,
+                    "application binding could not be persisted");
+        }
+        stopIfInactive();
+    }
+
+    private void unbindProductApplication(ApplicationSubjectId subjectId) {
+        if (productBackend == null) {
+            stopIfInactive();
+            return;
+        }
+        ProductStore.MutationResult result = productBackend.unbindApplication(subjectId);
+        if (result.persisted) {
+            appendLog("product_control=unbind_app subject=" + subjectId.encode());
+        } else {
+            publishProductMutationFailure("product_unbind_failed", result,
+                    "application unbinding could not be persisted");
+        }
+        stopIfInactive();
+    }
+
+    private void publishProductMutationFailure(String fallbackCode,
+                                               ProductStore.MutationResult result,
+                                               String fallbackMessage) {
+        publishError(result == null || result.errorCode.isEmpty()
+                        ? fallbackCode : result.errorCode,
+                result == null || result.errorMessage.isEmpty()
+                        ? fallbackMessage : result.errorMessage,
+                currentMayBeActive(), currentPid());
     }
 
     /**

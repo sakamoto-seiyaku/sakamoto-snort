@@ -38,6 +38,21 @@ public final class RuntimeControlBackend {
         context.startService(requestIntent(context, RuntimeControlRequest.query()));
     }
 
+    public void selectProductProfile(Context context, RuntimeProfile profile) {
+        context.startService(requestIntent(context,
+                RuntimeControlRequest.selectProductProfile(profile)));
+    }
+
+    public void bindProductApplication(Context context, ApplicationSubjectId subjectId) {
+        context.startService(requestIntent(context,
+                RuntimeControlRequest.bindProductApplication(subjectId)));
+    }
+
+    public void unbindProductApplication(Context context, ApplicationSubjectId subjectId) {
+        context.startService(requestIntent(context,
+                RuntimeControlRequest.unbindProductApplication(subjectId)));
+    }
+
     /** Debug-only seam used to prove replacement remains blocked on cleanup failure. */
     public void setCleanupFault(Context context, boolean enabled) {
         Intent intent = requestIntent(context, RuntimeControlRequest.query());
@@ -47,10 +62,7 @@ public final class RuntimeControlBackend {
 
     private static Intent requestIntent(Context context, RuntimeControlRequest request) {
         Intent intent = new Intent(context, RuntimeService.class)
-                .setAction(request.action == RuntimeControlRequest.Action.START
-                        ? RuntimeControlProtocol.ACTION_START
-                        : request.action == RuntimeControlRequest.Action.STOP
-                        ? RuntimeControlProtocol.ACTION_STOP : RuntimeControlProtocol.ACTION_QUERY)
+                .setAction(request.action.wireName)
                 .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, request.protocolVersion)
                 .putExtra(RuntimeControlProtocol.EXTRA_ACTION, request.action.wireName)
                 .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_ID, request.requestId)
@@ -58,6 +70,10 @@ public final class RuntimeControlBackend {
                         SystemClock.elapsedRealtime());
         if (request.profile != null) {
             intent.putExtra(RuntimeControlProtocol.EXTRA_PROFILE, request.profile.wireName);
+        }
+        if (request.applicationSubjectId != null) {
+            intent.putExtra(RuntimeControlProtocol.EXTRA_APPLICATION_SUBJECT,
+                    request.applicationSubjectId.encode());
         }
         return intent;
     }

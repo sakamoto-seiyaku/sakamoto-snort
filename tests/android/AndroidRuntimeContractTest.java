@@ -23,12 +23,15 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /** Public-seam tests for the production Android runtime incubator. */
 public final class AndroidRuntimeContractTest {
     public static void main(String[] args) throws Exception {
         requestRoundTripIsVersionedAndProfileAware();
+        productMutationRequestsAreVersionedServiceRequests();
         lifecycleRequestOrderingRejectsDelayedStarts();
         profileDoesNotExposeAdapterArtifacts();
         snapshotRoundTripPreservesBoundedHealthAndError();
@@ -84,6 +87,57 @@ public final class AndroidRuntimeContractTest {
         check(RuntimeControlRequest.STOP.equals(
                 RuntimeControlRequest.stop().encode().get("action")),
                 "stop action has a stable wire name");
+    }
+
+    private static void productMutationRequestsAreVersionedServiceRequests() {
+        RuntimeControlRequest profile = RuntimeControlRequest.decode(
+                RuntimeControlRequest.selectProductProfile(RuntimeProfile.VPN,
+                        "product-profile-request").encode());
+        check(profile.protocolVersion == RuntimeControlProtocol.VERSION,
+                "product profile mutation carries the current protocol version");
+        check(profile.action == RuntimeControlRequest.Action.PRODUCT_PROFILE_SELECT,
+                "product profile mutation has a stable service action");
+        check(profile.profile == RuntimeProfile.VPN,
+                "product profile mutation preserves the selected profile");
+        check(profile.applicationSubjectId == null,
+                "product profile mutation does not carry an app binding subject");
+
+        ApplicationSubjectId subject = ApplicationSubjectId.fromUid(1010001);
+        RuntimeControlRequest bind = RuntimeControlRequest.decode(
+                RuntimeControlRequest.bindProductApplication(subject, "bind-request").encode());
+        check(bind.action == RuntimeControlRequest.Action.PRODUCT_BIND_APP,
+                "product app bind is a first-class service request");
+        check(subject.equals(bind.applicationSubjectId),
+                "product app bind preserves the complete UID subject");
+        check(bind.profile == null, "product app bind does not carry a runtime profile");
+
+        RuntimeControlRequest unbind = RuntimeControlRequest.decode(
+                RuntimeControlRequest.unbindProductApplication(subject,
+                        "unbind-request").encode());
+        check(unbind.action == RuntimeControlRequest.Action.PRODUCT_UNBIND_APP,
+                "product app unbind is a first-class service request");
+        check(subject.equals(unbind.applicationSubjectId),
+                "product app unbind preserves the complete UID subject");
+        check(RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP.equals(
+                        RuntimeControlRequest.PRODUCT_BIND_APP),
+                "product bind action has a stable protocol name");
+        expectIllegalArgument("bind without subject is rejected",
+                () -> RuntimeControlRequest.decode(map("protocolVersion",
+                        Integer.toString(RuntimeControlProtocol.VERSION),
+                        "requestId", "bad-bind",
+                        "action", RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP)));
+        expectIllegalArgument("bind cannot smuggle a runtime profile",
+                () -> RuntimeControlRequest.decode(map("protocolVersion",
+                        Integer.toString(RuntimeControlProtocol.VERSION),
+                        "requestId", "bad-bind-profile",
+                        "action", RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP,
+                        "profile", RuntimeProfile.ROOT.wireName,
+                        "applicationSubjectId", subject.encode())));
+        expectIllegalArgument("product profile select requires profile",
+                () -> RuntimeControlRequest.decode(map("protocolVersion",
+                        Integer.toString(RuntimeControlProtocol.VERSION),
+                        "requestId", "bad-profile",
+                        "action", RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT)));
     }
 
     private static void lifecycleRequestOrderingRejectsDelayedStarts() {
@@ -1270,5 +1324,31 @@ public final class AndroidRuntimeContractTest {
         if (!condition) {
             throw new AssertionError(message);
         }
+    }
+
+    private static void expectIllegalArgument(String message, ThrowingRunnable action) {
+        try {
+            action.run();
+            throw new AssertionError(message);
+        } catch (IllegalArgumentException expected) {
+            // Expected fail-closed validation.
+        } catch (Exception error) {
+            throw new AssertionError(message + ": " + error);
+        }
+    }
+
+    private static Map<String, String> map(String... values) {
+        if (values.length % 2 != 0) {
+            throw new IllegalArgumentException("map helper requires key/value pairs");
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        for (int i = 0; i < values.length; i += 2) {
+            out.put(values[i], values[i + 1]);
+        }
+        return out;
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }

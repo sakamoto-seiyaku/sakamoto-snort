@@ -29,7 +29,7 @@ public class DebugControlActivity extends Activity {
 
     private final RuntimeControlBackend backend = new RuntimeControlBackend();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private LocalProductBackend productBackend;
+    private ApplicationCatalogProvider catalogProvider;
     private Spinner profileSpinner;
     private TextView statusView;
     private TextView actionView;
@@ -47,8 +47,7 @@ public class DebugControlActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        productBackend = new LocalProductBackend(getFilesDir(),
-                new PackageManagerApplicationCatalogProvider(this));
+        catalogProvider = new PackageManagerApplicationCatalogProvider(this);
         setContentView(buildUi());
         refreshProductCatalog();
         refreshStatus();
@@ -101,14 +100,14 @@ public class DebugControlActivity extends Activity {
         profileSpinner.setAdapter(new ArrayAdapter<String>(this,
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[]{RuntimeProfile.ROOT.displayName, RuntimeProfile.VPN.displayName}));
-        setProfileSpinnerSelection(productBackend.productState().selectedProfile);
+        setProfileSpinnerSelection(ProductStateStore.read(getFilesDir()).selectedProfile);
         profileSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (suppressProfileSelectionPersist) {
                     return;
                 }
-                persistSelectedProductProfile(profileFromSpinner(), "Product profile selected");
+                requestSelectedProductProfile(profileFromSpinner(), "Product profile selected");
             }
 
             @Override
@@ -167,11 +166,6 @@ public class DebugControlActivity extends Activity {
     private void startSelected() {
         RuntimeProfile profile = profileFromSpinner();
         requestedProfile = profile;
-        if (!persistSelectedProductProfile(profile, "Product profile selected for start")) {
-            requestedProfile = null;
-            refreshStatus();
-            return;
-        }
         RuntimeControlBackend.StartResult result;
         try {
             result = backend.start(this, profile);
@@ -289,34 +283,24 @@ public class DebugControlActivity extends Activity {
         suppressProfileSelectionPersist = false;
     }
 
-    private boolean persistSelectedProductProfile(RuntimeProfile profile, String successPrefix) {
-        ProductStore.MutationResult result = productBackend.selectRuntimeProfile(profile);
-        if (result.persisted) {
-            action(successPrefix + ": " + profile.wireName + ".");
-            renderProductProjection(ProductCatalogFormatter.loading(
-                    productBackend.productStateReadResult()));
-            refreshProductCatalog();
-            return true;
-        }
-        action("Product profile write failed: "
-                + (result.errorCode.isEmpty() ? "product_state_persistence_failed"
-                : result.errorCode)
-                + (result.errorMessage.isEmpty() ? "" : ": " + result.errorMessage));
+    private void requestSelectedProductProfile(RuntimeProfile profile, String successPrefix) {
+        backend.selectProductProfile(this, profile);
+        action(successPrefix + " requested: " + profile.wireName + ".");
         refreshProductCatalog();
-        return false;
     }
 
     private void refreshProductCatalog() {
-        if (productBackend == null || productView == null) {
+        if (catalogProvider == null || productView == null) {
             return;
         }
         final int generation = ++productCatalogGeneration;
-        ProductStateStore.ReadResult initialState = productBackend.reloadProductState();
+        ProductStateStore.ReadResult initialState = ProductStateStore.readResult(getFilesDir());
         renderProductProjection(ProductCatalogFormatter.loading(initialState));
         Thread loader = new Thread(() -> {
             try {
-                List<ApplicationCatalogEntry> catalog = productBackend.applicationCatalog();
-                ProductStateStore.ReadResult productState = productBackend.reloadProductState();
+                List<ApplicationCatalogEntry> catalog = catalogProvider.listApplications();
+                ProductStateStore.ReadResult productState =
+                        ProductStateStore.readResult(getFilesDir());
                 ProductCatalogFormatter.Projection projection =
                         ProductCatalogFormatter.result(productState, catalog);
                 main.post(() -> {
@@ -326,7 +310,7 @@ public class DebugControlActivity extends Activity {
                 });
             } catch (RuntimeException error) {
                 ProductCatalogFormatter.Projection projection = ProductCatalogFormatter.error(
-                        productBackend.productStateReadResult(), "catalog_load_failed",
+                        ProductStateStore.readResult(getFilesDir()), "catalog_load_failed",
                         error.getMessage() == null ? "catalog could not be loaded"
                                 : error.getMessage());
                 main.post(() -> {
@@ -358,14 +342,8 @@ public class DebugControlActivity extends Activity {
             action("No available catalog app to bind.");
             return;
         }
-        ProductStore.MutationResult result = productBackend.bindApplication(subjectId);
-        if (result.persisted) {
-            action("Bound application subject " + subjectId.encode() + ".");
-        } else {
-            action("Bind failed: " + (result.errorCode.isEmpty()
-                    ? "product_state_persistence_failed" : result.errorCode)
-                    + (result.errorMessage.isEmpty() ? "" : ": " + result.errorMessage));
-        }
+        backend.bindProductApplication(this, subjectId);
+        action("Bind requested for application subject " + subjectId.encode() + ".");
         refreshProductCatalog();
     }
 
@@ -375,14 +353,8 @@ public class DebugControlActivity extends Activity {
             action("No bound application subject to unbind.");
             return;
         }
-        ProductStore.MutationResult result = productBackend.unbindApplication(subjectId);
-        if (result.persisted) {
-            action("Unbound application subject " + subjectId.encode() + ".");
-        } else {
-            action("Unbind failed: " + (result.errorCode.isEmpty()
-                    ? "product_state_persistence_failed" : result.errorCode)
-                    + (result.errorMessage.isEmpty() ? "" : ": " + result.errorMessage));
-        }
+        backend.unbindProductApplication(this, subjectId);
+        action("Unbind requested for application subject " + subjectId.encode() + ".");
         refreshProductCatalog();
     }
 
