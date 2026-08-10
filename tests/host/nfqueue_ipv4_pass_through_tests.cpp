@@ -10,6 +10,8 @@
 
 #include <NfqueueTopology.hpp>
 
+#include <linux/netfilter/nfnetlink_queue.h>
+
 #include <atomic>
 #include <optional>
 #include <vector>
@@ -382,6 +384,7 @@ TEST(NfqueueDualStackPassThroughTest, RuntimePlanStartsEveryIpv4AndIpv6ListenerQ
             .topology = NfqueueTopology::SplitInOut,
             .firstQueue = 10,
             .queuesPerFamily = 4,
+            .flowAdapter = {},
         });
 
     EXPECT_EQ(plan.hookPlan.ipv4FirstQueue, 10U);
@@ -398,6 +401,12 @@ TEST(NfqueueDualStackPassThroughTest, RuntimePlanStartsEveryIpv4AndIpv6ListenerQ
                   {SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv6, 16},
                   {SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv6, 17},
               }));
+}
+
+TEST(NfqueueDualStackPassThroughTest, QueueConfigurationRequestsUidGidMetadata) {
+    EXPECT_NE(
+        SnortDatapath::Nfqueue::nfqueueRequestedConfigFlags() & NFQA_CFG_F_UID_GID,
+        0U);
 }
 
 TEST(NfqueuePassThroughLifecycleTest, WorkerGroupJoinsAndReleasesWorkers) {

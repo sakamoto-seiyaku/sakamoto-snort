@@ -208,6 +208,26 @@ TEST(NfqueueFlowAdapterTest, PolicyDropCompletesRetainedLeaseWithDropVerdict) {
     EXPECT_EQ(counters.ownerFaultPassThroughPackets, 0U);
 }
 
+TEST(NfqueueFlowAdapterTest, RuntimeAppliedPolicyControlsExistingAdapterPacketPath) {
+    Policy::RuntimePacketPolicySnapshot policy;
+    NfqueueFlowAdapterConfig config{};
+    config.packetPolicy = &policy;
+    NfqueueFlowAdapter adapter(config);
+
+    Policy::PacketPolicySubjectView subject;
+    subject.linuxUid = 12546;
+    subject.networkGate.blockedNetworkContexts = {0};
+    policy.apply(std::vector<Policy::PacketPolicySubjectView>{std::move(subject)}, 68);
+
+    const auto result = adapter.process(
+        2, kNfqueueHookLocalOut, std::span<const std::uint8_t>{tcpPacket()}, 40,
+        NfqueuePacketMetadata{.linuxUid = 12546, .networkContext = 0});
+
+    EXPECT_EQ(result, NfqueueFlowAdapterResult::FlowDropped);
+    EXPECT_EQ(adapter.counters().droppedPackets, 1U);
+    EXPECT_EQ(adapter.counters().acceptedPackets, 0U);
+}
+
 TEST(NfqueueFlowAdapterTest, FragmentsAndBadHooksFailOpenWithoutPorts) {
     NfqueueFlowAdapter adapter;
     auto fragment = tcpPacket();

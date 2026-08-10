@@ -13,6 +13,8 @@
 #include <RuntimeControl.hpp>
 #include <FlowGraphFragmentIngress.hpp>
 
+#include <linux/netfilter/nfnetlink_queue.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -26,6 +28,15 @@
 #include <vector>
 
 namespace SnortDatapath::Nfqueue {
+
+/** Queue attributes needed for Root policy subjects and fail-open behavior. */
+[[nodiscard]] constexpr std::uint32_t nfqueueRequestedConfigFlags() noexcept {
+    std::uint32_t flags = NFQA_CFG_F_FAIL_OPEN;
+#ifdef NFQA_CFG_F_UID_GID
+    flags |= NFQA_CFG_F_UID_GID;
+#endif
+    return flags;
+}
 
 enum class NfqueueAddressFamily : std::uint8_t {
     Ipv4 = 0,

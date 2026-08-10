@@ -155,8 +155,9 @@ bool configureQueue(mnl_socket *socket,
     }
 
     nlh = nfq_nlmsg_put(buffer.data(), NFQNL_MSG_CONFIG, plan.queue);
-    mnl_attr_put_u32(nlh, NFQA_CFG_FLAGS, htonl(NFQA_CFG_F_FAIL_OPEN));
-    mnl_attr_put_u32(nlh, NFQA_CFG_MASK, htonl(NFQA_CFG_F_FAIL_OPEN));
+    const auto configFlags = SnortDatapath::Nfqueue::nfqueueRequestedConfigFlags();
+    mnl_attr_put_u32(nlh, NFQA_CFG_FLAGS, htonl(configFlags));
+    mnl_attr_put_u32(nlh, NFQA_CFG_MASK, htonl(configFlags));
     return sendConfigMessage(socket, nlh);
 }
 
