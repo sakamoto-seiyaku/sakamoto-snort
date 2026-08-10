@@ -173,16 +173,16 @@ Functional Closure 不因首次发版策略尚未最终确定而延后当前可�
 
 首次发版阶段仍需重新决定自动 restart/backoff、长期后台/soak 承诺、OEM/OS matrix、release signing/upgrade/rollback 和持久化 Activity Store；这些未来决策不取消当前 lifecycle correctness evidence。
 
-### 7.1 SAKAMOTO-68 live Root evidence decisions pending
+### 7.1 SAKAMOTO-68 live Root evidence decisions
 
-记录日期：2026-08-11。来源：SAKAMOTO-68 真机矩阵与诊断评论，commit `35ec952`、`e583f7e`。
+记录日期：2026-08-11。来源：SAKAMOTO-68 真机矩阵与诊断评论，commit `35ec952`、`e583f7e`，以及后续 contract audit。
 
-当前 Root/NFQUEUE S68 evidence 对本文第 5.3 与第 7 节暴露两个待决点。它们是 closure gate 输入，不是通过条件的降级：
+当前 Root/NFQUEUE S68 evidence 对本文第 5.3 与第 7 节暴露两个平台边界。以下决策修订 closure gate 的可执行证据口径，不降低共享 policy、completion、teardown 或 residue 断言：
 
-1. **INPUT app UID attribution seam 未决。** 在 Pixel 6a / Android 16 上，Debug Activity listener 的 socket 已由真实 app UID `12546` 拥有，但 host-to-device traffic 到达 NFQUEUE `INPUT` hook 时 `NFQA_UID` 缺失，`lastObservedLinuxUid=0`。同一 INPUT L4 policy 绑定 UID `0` 时可产生 DROP，证明 policy matcher 和 listener ownership 不是根因。当前 pre-delivery `INPUT` hook 方法不能证明“真实安装包 UID 的 INPUT verdict”。S68/S71 关闭前必须二选一：找到可复查的替代 INPUT UID proof path，或显式修订 Root INPUT identity contract，把该 hook 的 `uidKnown=false`/Unknown Application 语义与 app-bound INPUT policy seam 分开。
-2. **abrupt daemon death residue 未闭合。** Direct daemon SIGKILL 后立即残留 IPv4/IPv6 `sucre-snort_*` hook；后续 recovery redeploy + QUIT + stage-only cleanup 可以清干净。该结果不能作为“fault 后无残留”通过证据。S68/S70/S71 关闭前必须决定 fault recovery ownership：由 supervised RuntimeService/cleanup owner 在 crash 后清理并证明 no residue，或调整 direct-daemon harness scope，只把它作为 unmanaged adapter fault evidence，并另设正式 supervised fault gate。
+1. **Root INPUT pre-delivery UID seam。** 在 Pixel 6a / Android 16 上，Debug Activity listener 的 socket 已由真实 app UID 拥有，但 host-to-device traffic 到达当前 NFQUEUE `INPUT` hook 时 `NFQA_UID` 缺失，`lastObservedLinuxUid=0`。因此这个 hook 不再宣称可证明 app-bound INPUT policy。该 seam 的正式合同是 `uidKnown=false` / Unknown Application：packet 不等待、不缓存、不 replay；policy 可绑定 Unknown Application subject 并产生可归因 verdict。S68/S71 的 Root INPUT evidence 必须同时记录 app-UID INPUT case 的 UID-unavailable结果，以及 Unknown Application INPUT policy 的 DROP/PASS 正向证据。Root OUTPUT 仍必须证明真实 installed app complete UID。
+2. **Fault recovery ownership。** Direct daemon SIGKILL 是 unmanaged adapter fault injection；SIGKILL 绕过 daemon-owned hook cleanup 后出现 immediate IPv4/IPv6 `sucre-snort_*` hook residue 是有效故障证据，不再作为正式 no-residue gate 本身。正式 no-residue gate 属于 RuntimeService/supervised lifecycle 或 recovery cleanup owner：必须证明 recovery 后 daemon process、control socket/forward、NFQUEUE hooks/queues、runtime profile residue 均清干净。S68 可用 direct SIGKILL 记录 unmanaged residue + recovery cleanup；S70/S71 仍需要 supervised failure-recovery gate 覆盖产品语义。
 
-在以上两个点解决前，S68 可以继续收集不冲突的 OUTPUT、restart、control disconnect、capacity/timeout 和 host fault evidence，但不得移动到 Done，也不得让 S69/S70/S71 继承未说明的 Root INPUT 或 abrupt-fault PASS。
+在以上合同下，S68 可以关闭 Root/NFQUEUE 最小 Gate+L4 slice，前提是 harness 产出：真实 app UID OUTPUT verdict、Root INPUT Unknown Application verdict、policy apply/evaluate/winner/revision、Debug Activity verdict evidence、restart/final cleanup no-residue，以及 direct SIGKILL unmanaged fault + recovery cleanup evidence。S70/S71 仍负责产品级 supervised failure recovery 和双 Profile closure。
 
 ## 8. 现有证据的使用方式
 

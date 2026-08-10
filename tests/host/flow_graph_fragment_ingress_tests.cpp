@@ -95,6 +95,7 @@ FlowGraphIngressMetadata metadata(const std::uint32_t uid = 10001) {
         .domain = FlowDomain{
             .adapter = AdapterKind::RootNfqueue,
             .linuxUid = uid,
+            .uidKnown = true,
             .captureQueue = 7,
             .networkContext = 2,
         },

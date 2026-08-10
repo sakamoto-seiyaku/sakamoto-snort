@@ -27,6 +27,7 @@ struct NfqueueRuntimeCounters {
     std::uint64_t uidMetadataPresentPackets = 0;
     std::uint64_t uidMetadataMissingPackets = 0;
     std::uint32_t lastObservedLinuxUid = 0;
+    bool lastObservedUidKnown = false;
     std::uint32_t lastObservedNetworkContext = 0;
     std::uint32_t lastObservedHook = 0;
     std::uint32_t lastObservedInputInterfaceIndex = 0;

@@ -109,7 +109,7 @@ public:
 
     [[nodiscard]] Policy::PacketPolicyDecision evaluate(
         const Flow::PacketFacts &facts) const noexcept override {
-        if (facts.domain.linuxUid == linuxUid_) {
+        if (facts.domain.uidKnown && facts.domain.linuxUid == linuxUid_) {
             return Policy::PacketPolicyDecision::drop(
                 17, 42, 7, Policy::PacketPolicyStage::NetworkGate);
         }
@@ -188,7 +188,7 @@ TEST(NfqueueFlowAdapterTest, PolicyDropCompletesRetainedLeaseWithDropVerdict) {
     const auto result = adapter.process(
         21, kNfqueueHookLocalIn,
         std::span<const std::uint8_t>{packet}, packet.size(),
-        NfqueuePacketMetadata{.linuxUid = 10001});
+        NfqueuePacketMetadata{.linuxUid = 10001, .uidMetadataPresent = true});
 
     EXPECT_EQ(result, NfqueueFlowAdapterResult::FlowDropped);
     EXPECT_EQ(lane.complete(*admission.identity, terminalReasonFor(result)),
@@ -221,7 +221,11 @@ TEST(NfqueueFlowAdapterTest, RuntimeAppliedPolicyControlsExistingAdapterPacketPa
 
     const auto result = adapter.process(
         2, kNfqueueHookLocalOut, std::span<const std::uint8_t>{tcpPacket()}, 40,
-        NfqueuePacketMetadata{.linuxUid = 12546, .networkContext = 0});
+        NfqueuePacketMetadata{
+            .linuxUid = 12546,
+            .networkContext = 0,
+            .uidMetadataPresent = true,
+        });
 
     EXPECT_EQ(result, NfqueueFlowAdapterResult::FlowDropped);
     EXPECT_EQ(adapter.counters().droppedPackets, 1U);
@@ -246,6 +250,7 @@ TEST(NfqueueFlowAdapterTest, RecordsBoundedLiveMetadataObservation) {
     EXPECT_EQ(counters.uidMetadataPresentPackets, 1U);
     EXPECT_EQ(counters.uidMetadataMissingPackets, 0U);
     EXPECT_EQ(counters.lastObservedLinuxUid, 12546U);
+    EXPECT_TRUE(counters.lastObservedUidKnown);
     EXPECT_EQ(counters.lastObservedNetworkContext, 0U);
     EXPECT_EQ(counters.lastObservedHook, kNfqueueHookLocalOut);
     EXPECT_EQ(counters.lastObservedInputInterfaceIndex, 11U);
@@ -267,6 +272,7 @@ TEST(NfqueueFlowAdapterTest, RecordsBoundedLiveMetadataObservation) {
     EXPECT_EQ(counters.uidMetadataPresentPackets, 1U);
     EXPECT_EQ(counters.uidMetadataMissingPackets, 1U);
     EXPECT_EQ(counters.lastObservedLinuxUid, 0U);
+    EXPECT_FALSE(counters.lastObservedUidKnown);
     EXPECT_EQ(counters.lastObservedNetworkContext, 7U);
     EXPECT_EQ(counters.lastObservedHook, 0xffU);
     EXPECT_EQ(counters.lastObservedInputInterfaceIndex, 33U);
@@ -438,7 +444,7 @@ TEST(NfqueueFlowAdapterTest, ReassembledPolicyDropCompletesHeldLeasesWithDrop) {
     EXPECT_EQ(adapter.process(
                   22, kNfqueueHookLocalIn,
                   std::span<const std::uint8_t>{first}, first.size(),
-                  NfqueuePacketMetadata{.linuxUid = 10001},
+                  NfqueuePacketMetadata{.linuxUid = 10001, .uidMetadataPresent = true},
                   NfqueueFragmentLeaseContext{
                       .identity = firstAdmission.identity,
                       .mailbox = &firstMailbox,
@@ -450,7 +456,7 @@ TEST(NfqueueFlowAdapterTest, ReassembledPolicyDropCompletesHeldLeasesWithDrop) {
     const auto result = adapter.process(
         23, kNfqueueHookLocalIn,
         std::span<const std::uint8_t>{final}, final.size(),
-        NfqueuePacketMetadata{.linuxUid = 10001},
+        NfqueuePacketMetadata{.linuxUid = 10001, .uidMetadataPresent = true},
         NfqueueFragmentLeaseContext{
             .identity = finalAdmission.identity,
             .mailbox = &finalMailbox,

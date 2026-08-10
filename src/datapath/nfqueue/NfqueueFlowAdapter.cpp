@@ -86,6 +86,7 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
         ++counters_.uidMetadataMissingPackets;
     }
     counters_.lastObservedLinuxUid = metadata.linuxUid;
+    counters_.lastObservedUidKnown = metadata.uidMetadataPresent;
     counters_.lastObservedNetworkContext = metadata.networkContext;
     counters_.lastObservedHook = hook;
     counters_.lastObservedInputInterfaceIndex = metadata.inputInterfaceIndex;
@@ -102,6 +103,7 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
     const Flow::FlowDomain domain{
         .adapter = Flow::AdapterKind::RootNfqueue,
         .linuxUid = metadata.linuxUid,
+        .uidKnown = metadata.uidMetadataPresent,
         .captureQueue = captureQueue,
         .networkContext = metadata.networkContext,
         .runtimeProfile = 0,

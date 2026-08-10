@@ -89,6 +89,7 @@ FlowDomain domain(const AdapterKind adapter) {
     return FlowDomain{
         .adapter = adapter,
         .linuxUid = 10001,
+        .uidKnown = true,
         .captureQueue = 7,
         .networkContext = 2,
         .runtimeProfile = 3,
@@ -151,6 +152,7 @@ TEST(FlowGraphIngressParserTest, PreservesCompleteLinuxUidNetworkAndInterfaceMet
             .domain = FlowDomain{
                 .adapter = AdapterKind::RootNfqueue,
                 .linuxUid = 112233,
+                .uidKnown = true,
                 .captureQueue = 42,
                 .networkContext = 9,
                 .runtimeProfile = 4,
@@ -162,6 +164,7 @@ TEST(FlowGraphIngressParserTest, PreservesCompleteLinuxUidNetworkAndInterfaceMet
     EXPECT_EQ(facts.deviceDirection, DevicePacketDirection::Output);
     EXPECT_EQ(facts.domain.adapter, AdapterKind::RootNfqueue);
     EXPECT_EQ(facts.domain.linuxUid, 112233U);
+    EXPECT_TRUE(facts.domain.uidKnown);
     EXPECT_EQ(facts.domain.captureQueue, 42U);
     EXPECT_EQ(facts.domain.networkContext, 9U);
     EXPECT_EQ(facts.domain.runtimeProfile, 4U);
@@ -179,6 +182,7 @@ TEST(FlowGraphIngressParserTest, ParsesIpv6UdpWithPlatformMetadata) {
             .domain = FlowDomain{
                 .adapter = AdapterKind::VpnTun,
                 .linuxUid = 20002,
+                .uidKnown = true,
                 .captureQueue = 0,
                 .networkContext = 6,
                 .runtimeProfile = 1,
@@ -195,6 +199,7 @@ TEST(FlowGraphIngressParserTest, ParsesIpv6UdpWithPlatformMetadata) {
     EXPECT_EQ(facts.parseStatus, ParseStatus::Ready);
     EXPECT_EQ(facts.domain.adapter, AdapterKind::VpnTun);
     EXPECT_EQ(facts.domain.linuxUid, 20002U);
+    EXPECT_TRUE(facts.domain.uidKnown);
     EXPECT_EQ(facts.domain.networkContext, 6U);
     EXPECT_EQ(facts.domain.interfaceIndex, 12U);
 }

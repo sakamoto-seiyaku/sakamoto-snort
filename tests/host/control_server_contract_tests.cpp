@@ -280,6 +280,7 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     runtime.nfqueueCounters.uidMetadataPresentPackets = 9;
     runtime.nfqueueCounters.uidMetadataMissingPackets = 10;
     runtime.nfqueueCounters.lastObservedLinuxUid = 12546;
+    runtime.nfqueueCounters.lastObservedUidKnown = true;
     runtime.nfqueueCounters.lastObservedNetworkContext = 7;
     runtime.nfqueueCounters.lastObservedHook = 3;
     runtime.nfqueueCounters.lastObservedInputInterfaceIndex = 11;
@@ -309,11 +310,34 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["uidMetadataPresentPackets"].GetUint64(), 9U);
     EXPECT_EQ(result["uidMetadataMissingPackets"].GetUint64(), 10U);
     EXPECT_EQ(result["lastObservedLinuxUid"].GetUint(), 12546U);
+    EXPECT_TRUE(result["lastObservedUidKnown"].GetBool());
     EXPECT_EQ(result["lastObservedNetworkContext"].GetUint(), 7U);
     EXPECT_EQ(result["lastObservedHook"].GetUint(), 3U);
     EXPECT_EQ(result["lastObservedInputInterfaceIndex"].GetUint(), 11U);
     EXPECT_EQ(result["lastObservedOutputInterfaceIndex"].GetUint(), 22U);
     EXPECT_STREQ(result["lastObservedResult"].GetString(), "FlowAccepted");
+}
+
+TEST(ControlServerContract, PolicyUnknownApplicationSubjectMatchesUidUnknownFacts) {
+    FakeRuntimeControl runtime;
+    runtime.policyReady = true;
+    ControlServerHarness harness(runtime);
+
+    const auto apply = harness.call(
+        21, "POLICY.APPLY",
+        R"({"revision":68,"subjects":[{"uidKnown":false,"networkGate":{},"l4Rules":[{"ruleId":500,"reasonId":50,"priority":0,"order":0,"action":"drop","match":{"family":"ipv4","direction":"input","ipProtocol":6,"destinationPorts":{"first":443,"last":443}}}]}]})");
+    ASSERT_TRUE(apply["ok"].GetBool());
+
+    const auto eval = harness.call(
+        22, "POLICY.EVALUATE",
+        R"({"uidKnown":false,"networkContext":2,"family":"ipv4","direction":"input","ipProtocol":6,"sourcePort":40000,"destinationPort":443,"portsAvailable":true})");
+
+    ASSERT_TRUE(eval["ok"].GetBool());
+    EXPECT_STREQ(eval["result"]["verdict"].GetString(), "DROP");
+    EXPECT_STREQ(eval["result"]["stage"].GetString(), "L4");
+    EXPECT_EQ(eval["result"]["reasonId"].GetUint(), 50U);
+    EXPECT_EQ(eval["result"]["ruleId"].GetUint64(), 500U);
+    EXPECT_EQ(eval["result"]["revision"].GetUint64(), 68U);
 }
 
 TEST(ControlServerContract, PolicyStatusStartsEmptyAtRevisionZero) {

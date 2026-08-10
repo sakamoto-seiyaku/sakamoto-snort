@@ -22,7 +22,7 @@ public:
 
     [[nodiscard]] Policy::PacketPolicyDecision evaluate(
         const PacketFacts &packetFacts) const noexcept override {
-        if (packetFacts.domain.linuxUid == uid_) {
+        if (packetFacts.domain.uidKnown && packetFacts.domain.linuxUid == uid_) {
             return Policy::PacketPolicyDecision::drop(17, 42, 7, stage_);
         }
         return Policy::PacketPolicyDecision::passNext();
@@ -54,6 +54,7 @@ PacketFacts facts(const AdapterKind adapter, const bool reverse = false) {
         .domain = FlowDomain{
             .adapter = adapter,
             .linuxUid = 10001,
+            .uidKnown = true,
             .captureQueue = 7,
             .networkContext = 2,
             .runtimeProfile = 3,

@@ -158,6 +158,7 @@ rapidjson::Document makeNfqueueStatusResult(
     result.AddMember("uidMetadataMissingPackets",
                      counters.uidMetadataMissingPackets, alloc);
     result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
+    result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);
     result.AddMember("lastObservedNetworkContext",
                      counters.lastObservedNetworkContext, alloc);
     result.AddMember("lastObservedHook", counters.lastObservedHook, alloc);
@@ -228,6 +229,24 @@ bool readUint64(const rapidjson::Value &object, const std::string_view key,
         return false;
     }
     out = value->GetUint64();
+    return true;
+}
+
+bool readBool(const rapidjson::Value &object, const std::string_view key,
+              bool &out, std::string &error, const bool required = true) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        if (!required) {
+            return true;
+        }
+        error = "missing " + std::string(key);
+        return false;
+    }
+    if (!value->IsBool()) {
+        error = std::string(key) + " must be bool";
+        return false;
+    }
+    out = value->GetBool();
     return true;
 }
 
@@ -482,12 +501,20 @@ bool parsePolicySubject(const rapidjson::Value &object,
         error = "subjects entries must be object";
         return false;
     }
-    if (const auto err = rejectUnknown(object, {"linuxUid", "networkGate", "l4Rules"});
+    if (const auto err = rejectUnknown(object, {"linuxUid", "uidKnown", "networkGate", "l4Rules"});
         err.has_value()) {
         error = *err;
         return false;
     }
-    if (!readUint32(object, "linuxUid", out.linuxUid, error)) {
+    out.uidKnown = true;
+    if (!readBool(object, "uidKnown", out.uidKnown, error, false)) {
+        return false;
+    }
+    if (out.uidKnown && !readUint32(object, "linuxUid", out.linuxUid, error)) {
+        return false;
+    }
+    if (!out.uidKnown && member(object, "linuxUid") != nullptr
+        && !readUint32(object, "linuxUid", out.linuxUid, error, false)) {
         return false;
     }
     if (const rapidjson::Value *gate = member(object, "networkGate");
@@ -547,7 +574,7 @@ bool parsePacketFacts(const rapidjson::Value &args,
                       SnortDatapath::Flow::PacketFacts &facts,
                       std::string &error) {
     if (const auto err = rejectUnknown(
-            args, {"linuxUid", "networkContext", "family", "direction",
+            args, {"linuxUid", "uidKnown", "networkContext", "family", "direction",
                    "ipProtocol", "sourcePort", "destinationPort", "portsAvailable"});
         err.has_value()) {
         error = *err;
@@ -583,8 +610,12 @@ bool parsePacketFacts(const rapidjson::Value &args,
     facts.fragmented = false;
     facts.originalLength = 128;
     facts.boundedPrefixLength = 128;
+    facts.domain.uidKnown = true;
 
-    return readUint32(args, "linuxUid", facts.domain.linuxUid, error)
+    return readBool(args, "uidKnown", facts.domain.uidKnown, error, false)
+        && (!facts.domain.uidKnown || readUint32(args, "linuxUid", facts.domain.linuxUid, error))
+        && (facts.domain.uidKnown || member(args, "linuxUid") == nullptr
+            || readUint32(args, "linuxUid", facts.domain.linuxUid, error, false))
         && readUint32(args, "networkContext", facts.domain.networkContext, error)
         && readUint8(args, "ipProtocol", facts.ipProtocol, error)
         && readUint16(args, "sourcePort", facts.sourcePort, error, facts.portsAvailable)

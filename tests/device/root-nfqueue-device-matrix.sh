@@ -17,7 +17,7 @@ KEEP_FORWARD=0
 RUN_RESTART=1
 RUN_FAULT=1
 RUN_CONTROL_TIMEOUT=1
-S68_FAIL_ON_EXPECTED_GAP="${S68_FAIL_ON_EXPECTED_GAP:-0}"
+S68_FAIL_ON_UNMANAGED_RESIDUE="${S68_FAIL_ON_UNMANAGED_RESIDUE:-0}"
 MATRIX_RC=0
 
 usage() {
@@ -35,7 +35,7 @@ Runs a minimal SAKAMOTO-68 Root/NFQUEUE device matrix slice:
 
 Environment overrides:
   PACKAGE, VNEXT_PORT, SNORT_CTL, IPV6_OUTPUT_HOST, IPV6_OUTPUT_PORT,
-  INPUT_LISTEN_PORT, INPUT_TIMEOUT_MILLIS, S68_FAIL_ON_EXPECTED_GAP
+  INPUT_LISTEN_PORT, INPUT_TIMEOUT_MILLIS, S68_FAIL_ON_UNMANAGED_RESIDUE
 EOF
 }
 
@@ -177,6 +177,7 @@ for key in keys:
     print(f"{label}.{key}Delta={int(after.get(key, 0)) - int(before.get(key, 0))}")
 for key in [
     "lastObservedLinuxUid",
+    "lastObservedUidKnown",
     "lastObservedNetworkContext",
     "lastObservedHook",
     "lastObservedInputInterfaceIndex",
@@ -249,6 +250,45 @@ print(json.dumps(payload, separators=(",", ":")))
 PY
 }
 
+policy_apply_unknown_l4_drop() {
+  local revision="$1"
+  local family="$2"
+  local direction="$3"
+  local port="$4"
+  local rule_id="$5"
+  local reason_id="$6"
+  python3 - "$revision" "$family" "$direction" "$port" "$rule_id" "$reason_id" <<'PY'
+import json
+import sys
+
+revision, family, direction, port, rule_id, reason_id = sys.argv[1:]
+payload = {
+    "revision": int(revision),
+    "subjects": [{
+        "uidKnown": False,
+        "networkGate": {},
+        "l4Rules": [{
+            "ruleId": int(rule_id),
+            "reasonId": int(reason_id),
+            "priority": 10,
+            "order": 0,
+            "action": "drop",
+            "match": {
+                "family": family,
+                "direction": direction,
+                "ipProtocol": 6,
+                "destinationPorts": {
+                    "first": int(port),
+                    "last": int(port),
+                },
+            },
+        }],
+    }],
+}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
 policy_evaluate() {
   local uid="$1"
   local family="$2"
@@ -262,6 +302,29 @@ import sys
 uid, family, direction, source_port, destination_port = sys.argv[1:]
 print(json.dumps({
     "linuxUid": int(uid),
+    "networkContext": 0,
+    "family": family,
+    "direction": direction,
+    "ipProtocol": 6,
+    "sourcePort": int(source_port),
+    "destinationPort": int(destination_port),
+    "portsAvailable": True,
+}, separators=(",", ":")))
+PY
+}
+
+policy_evaluate_unknown() {
+  local family="$1"
+  local direction="$2"
+  local source_port="$3"
+  local destination_port="$4"
+  python3 - "$family" "$direction" "$source_port" "$destination_port" <<'PY'
+import json
+import sys
+
+family, direction, source_port, destination_port = sys.argv[1:]
+print(json.dumps({
+    "uidKnown": False,
     "networkContext": 0,
     "family": family,
     "direction": direction,
@@ -352,6 +415,31 @@ check_no_residue() {
     [[ -n "$ip6t" ]] && kv "$label.ip6tablesResidue" "$ip6t"
     return 1
   fi
+}
+
+record_unmanaged_fault_residue() {
+  local label="$1"
+  local forwards procs ipt ip6t
+  forwards="$(adb_cmd forward --list 2>/dev/null | tr -d '\r' | grep -F "localabstract:sucre-snort" || true)"
+  procs="$(adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r')"
+  ipt="$(adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+  ip6t="$(adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+
+  kv "$label.forwardCheck.command" "./dev/adb forward --list | grep localabstract:sucre-snort"
+  kv "$label.processCheck.command" "./dev/adb shell su 0 sh -c 'pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
+  kv "$label.iptablesCheck.command" "./dev/adb shell su 0 sh -c 'iptables -S | grep sucre-snort'"
+  kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
+  if [[ -z "$forwards" && -z "$procs" && -z "$ipt" && -z "$ip6t" ]]; then
+    kv "$label.result" "NO_RESIDUE_OBSERVED"
+    return 0
+  fi
+
+  kv "$label.result" "RESIDUE_OBSERVED"
+  [[ -n "$forwards" ]] && kv "$label.forwardResidue" "$forwards"
+  [[ -n "$procs" ]] && kv "$label.processResidue" "$procs"
+  [[ -n "$ipt" ]] && kv "$label.iptablesResidue" "$ipt"
+  [[ -n "$ip6t" ]] && kv "$label.ip6tablesResidue" "$ip6t"
+  return 1
 }
 
 daemon_pids() {
@@ -521,12 +609,13 @@ else
   status_delta "$before" "$after" "ipv6_output"
   drop_delta="$(delta_value "$before" "$after" droppedPackets)"
   last_uid="$(field_value "$after" lastObservedLinuxUid)"
+  last_uid_known="$(field_value "$after" lastObservedUidKnown)"
   last_result="$(field_value "$after" lastObservedResult)"
   eval_verdict="$(json_result result.verdict "$eval_resp")"
   eval_stage="$(json_result result.stage "$eval_resp")"
   eval_revision="$(json_result result.revision "$eval_resp")"
   kv "ipv6_output.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
-  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid" == "$uid" && "$last_result" == "FlowDropped" ]]; then
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid" == "$uid" && "$last_uid_known" == "True" && "$last_result" == "FlowDropped" ]]; then
     kv "ipv6_output.result" "PASS"
   else
     kv "ipv6_output.result" "FAIL"
@@ -564,22 +653,69 @@ else
   drop_delta="$(delta_value "$before" "$after" droppedPackets)"
   packet_delta="$(delta_value "$before" "$after" packetsSeen)"
   last_uid="$(field_value "$after" lastObservedLinuxUid)"
+  last_uid_known="$(field_value "$after" lastObservedUidKnown)"
   last_result="$(field_value "$after" lastObservedResult)"
   last_hook="$(field_value "$after" lastObservedHook)"
   eval_verdict="$(json_result result.verdict "$eval_resp")"
   eval_stage="$(json_result result.stage "$eval_resp")"
   eval_revision="$(json_result result.revision "$eval_resp")"
   kv "input_ipv4.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
-  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid" == "$uid" && "$last_result" == "FlowDropped" ]]; then
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid" == "$uid" && "$last_uid_known" == "True" && "$last_result" == "FlowDropped" ]]; then
     kv "input_ipv4.result" "PASS"
+    kv "input_ipv4.hookObserved" "$last_hook"
+  elif [[ "$packet_delta" -gt 0 && "$last_uid_known" == "False" ]]; then
+    kv "input_ipv4.result" "UID_UNAVAILABLE"
+    kv "input_ipv4.reason" "NFQUEUE observed INPUT packets without NFQA_UID; contract maps them to Unknown Application, not package uid=$uid or Linux uid 0"
     kv "input_ipv4.hookObserved" "$last_hook"
   elif [[ "$packet_delta" -gt 0 && "$last_uid" != "$uid" ]]; then
     kv "input_ipv4.result" "INVALID"
-    kv "input_ipv4.reason" "NFQUEUE observed packets but NFQA_UID/route did not attribute INPUT to package uid=$uid"
+    kv "input_ipv4.reason" "NFQUEUE observed packets with unexpected known UID attribution for INPUT; expected uid=$uid or uidKnown=false"
     kv "input_ipv4.hookObserved" "$last_hook"
   else
     kv "input_ipv4.result" "FAIL"
     kv "input_ipv4.reason" "expected INPUT packet and dropped NFQUEUE delta for uid=$uid"
+  fi
+
+  section "input_ipv4_unknown_application"
+  revision=680302
+  apply_args="$(policy_apply_unknown_l4_drop "$revision" ipv4 input "$INPUT_LISTEN_PORT" 680302 680302)"
+  eval_args="$(policy_evaluate_unknown ipv4 input 40001 "$INPUT_LISTEN_PORT")"
+  kv "input_ipv4_unknown.POLICY.APPLY.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.APPLY '$apply_args'"
+  apply_resp="$(ctl POLICY.APPLY "$apply_args")"
+  printf 'input_ipv4_unknown.POLICY.APPLY=%s\n' "$apply_resp"
+  kv "input_ipv4_unknown.POLICY.EVALUATE.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.EVALUATE '$eval_args'"
+  eval_resp="$(ctl POLICY.EVALUATE "$eval_args")"
+  printf 'input_ipv4_unknown.POLICY.EVALUATE=%s\n' "$eval_resp"
+  before="$(ctl NFQUEUE.STATUS)"
+  kv "input_ipv4_unknown.listener.command" "./dev/adb shell am start -n $ACTIVITY --ez debugListen true --ei debugListenPort $INPUT_LISTEN_PORT --ei debugListenTimeoutMillis $INPUT_TIMEOUT_MILLIS"
+  am_start_listener "$INPUT_LISTEN_PORT" "$INPUT_TIMEOUT_MILLIS" || true
+  sleep 1
+  kv "input_ipv4_unknown.peer.command" "python3 socket.create_connection(($device_ip,$INPUT_LISTEN_PORT), timeout=3)"
+  peer_output="$(host_connect "$device_ip" "$INPUT_LISTEN_PORT" 3 2>&1 || true)"
+  [[ -n "$peer_output" ]] && kv "input_ipv4_unknown.peer.output" "$peer_output"
+  sleep 1
+  after="$(ctl NFQUEUE.STATUS)"
+  status_delta "$before" "$after" "input_ipv4_unknown"
+  drop_delta="$(delta_value "$before" "$after" droppedPackets)"
+  packet_delta="$(delta_value "$before" "$after" packetsSeen)"
+  last_uid="$(field_value "$after" lastObservedLinuxUid)"
+  last_uid_known="$(field_value "$after" lastObservedUidKnown)"
+  last_result="$(field_value "$after" lastObservedResult)"
+  last_hook="$(field_value "$after" lastObservedHook)"
+  eval_verdict="$(json_result result.verdict "$eval_resp")"
+  eval_stage="$(json_result result.stage "$eval_resp")"
+  eval_revision="$(json_result result.revision "$eval_resp")"
+  kv "input_ipv4_unknown.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid_known" == "False" ]]; then
+    kv "input_ipv4_unknown.result" "PASS"
+    kv "input_ipv4_unknown.hookObserved" "$last_hook"
+  elif [[ "$packet_delta" -gt 0 && "$last_uid_known" != "False" ]]; then
+    kv "input_ipv4_unknown.result" "INVALID"
+    kv "input_ipv4_unknown.reason" "expected Unknown Application INPUT evidence but observed uidKnown=$last_uid_known uid=$last_uid"
+    kv "input_ipv4_unknown.hookObserved" "$last_hook"
+  else
+    kv "input_ipv4_unknown.result" "FAIL"
+    kv "input_ipv4_unknown.reason" "expected explicit Unknown Application INPUT policy drop evidence"
   fi
 fi
 
@@ -631,7 +767,7 @@ if [[ $RUN_RESTART -eq 1 ]]; then
   after="$(ctl NFQUEUE.STATUS)"
   status_delta "$before" "$after" "restart.probe"
   stop_root_daemon_for_cleanup "restart.finalStop"
-  check_no_residue "restart.finalCleanup" || true
+  check_no_residue "restart.finalCleanup" || MATRIX_RC=1
 fi
 
 if [[ $RUN_FAULT -eq 1 ]]; then
@@ -649,17 +785,16 @@ if [[ $RUN_FAULT -eq 1 ]]; then
   else
     if kill_daemon_hard "sigkill_fault.kill"; then
       remove_control_vnext_forward "$VNEXT_PORT"
-      if check_no_residue "sigkill_fault.immediateResidue"; then
-        kv "sigkill_fault.immediateResult" "PASS"
+      if record_unmanaged_fault_residue "sigkill_fault.unmanagedResidue"; then
+        kv "sigkill_fault.unmanagedFaultEvidence" "NO_RESIDUE_OBSERVED"
       else
-        if [[ "$S68_FAIL_ON_EXPECTED_GAP" == "1" ]]; then
-          kv "sigkill_fault.immediateResult" "FAIL"
+        kv "sigkill_fault.unmanagedFaultEvidence" "RESIDUE_OBSERVED"
+        if [[ "$S68_FAIL_ON_UNMANAGED_RESIDUE" == "1" ]]; then
+          kv "sigkill_fault.unmanagedResidue.legacyHardFail" "FAIL"
           MATRIX_RC=1
-        else
-          kv "sigkill_fault.immediateResult" "EXPECTED_GAP"
         fi
-        kv "sigkill_fault.immediateReason" "SIGKILL bypasses daemon-owned NFQUEUE hook cleanup; retained as S68 gap evidence"
       fi
+      kv "sigkill_fault.unmanagedFaultReason" "direct SIGKILL bypasses daemon-owned NFQUEUE hook cleanup; recovery/final cleanup is the formal no-residue gate"
 
       redeploy_root_daemon "sigkill_fault.recovery"
       setup_control_vnext_forward "$VNEXT_PORT"
@@ -672,13 +807,13 @@ if [[ $RUN_FAULT -eq 1 ]]; then
       fi
       stop_root_daemon_for_cleanup "sigkill_fault.recoveryStop"
       stage_only_root_daemon "sigkill_fault.recoveryStageOnly"
-      check_no_residue "sigkill_fault.finalCleanup" || true
+      check_no_residue "sigkill_fault.finalCleanup" || MATRIX_RC=1
     fi
   fi
 fi
 
 section "final_cleanup"
 stop_root_daemon_for_cleanup "final.stop"
-check_no_residue "final.noResidue" || true
+check_no_residue "final.noResidue" || MATRIX_RC=1
 
 exit "$MATRIX_RC"

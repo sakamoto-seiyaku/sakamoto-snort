@@ -35,6 +35,14 @@ bool networkGateConfigured(const NetworkGateView &gate) noexcept {
     return gate.blockedNetworkContextBits != 0 || !gate.blockedNetworkContexts.empty();
 }
 
+bool subjectMatches(const PacketPolicySubjectView &candidate,
+                    const Flow::FlowDomain &domain) noexcept {
+    if (candidate.uidKnown != domain.uidKnown) {
+        return false;
+    }
+    return !candidate.uidKnown || candidate.linuxUid == domain.linuxUid;
+}
+
 } // namespace
 
 PacketPolicyDecision PacketPolicyDecision::passNext() noexcept {
@@ -127,7 +135,7 @@ PacketPolicyDecision StatelessPacketPolicySnapshot::evaluate(
     const auto subject = std::find_if(
         subjects_.begin(), subjects_.end(),
         [&facts](const PacketPolicySubjectView &candidate) noexcept {
-            return candidate.linuxUid == facts.domain.linuxUid;
+            return subjectMatches(candidate, facts.domain);
         });
     if (subject == subjects_.end()) {
         return PacketPolicyDecision::passNext();

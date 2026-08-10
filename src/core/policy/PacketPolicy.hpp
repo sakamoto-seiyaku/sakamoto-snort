@@ -88,6 +88,7 @@ struct L4Rule {
 
 struct PacketPolicySubjectView {
     std::uint32_t linuxUid = 0;
+    bool uidKnown = true;
     NetworkGateView networkGate;
     std::vector<L4Rule> l4Rules;
 };

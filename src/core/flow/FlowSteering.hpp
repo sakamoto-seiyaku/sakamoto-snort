@@ -52,6 +52,7 @@ struct IpAddress {
 struct FlowDomain {
     AdapterKind adapter = AdapterKind::RootNfqueue;
     std::uint32_t linuxUid = 0;
+    bool uidKnown = false;
     std::uint32_t captureQueue = 0;
     std::uint32_t networkContext = 0;
     std::uint32_t runtimeProfile = 0;

@@ -37,6 +37,7 @@ PacketFacts ipv4TcpFacts() {
         .domain = FlowDomain{
             .adapter = AdapterKind::RootNfqueue,
             .linuxUid = kUid,
+            .uidKnown = true,
             .captureQueue = 7,
             .networkContext = 2,
             .runtimeProfile = 3,
@@ -62,6 +63,7 @@ PacketFacts ipv6UdpFacts() {
         .domain = FlowDomain{
             .adapter = AdapterKind::VpnTun,
             .linuxUid = kUid,
+            .uidKnown = true,
             .captureQueue = 11,
             .networkContext = 65,
             .runtimeProfile = 4,
@@ -117,6 +119,49 @@ TEST(PacketPolicyTest, MissingSubjectViewPassesNext) {
         kRevision);
 
     expectPass(snapshot.evaluate(ipv4TcpFacts()));
+}
+
+TEST(PacketPolicyTest, MissingUidMetadataDoesNotMatchLinuxUidZeroSubject) {
+    const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
+        .linuxUid = 0,
+        .l4Rules = {dropTcpDst443()},
+    });
+    auto facts = ipv4TcpFacts();
+    facts.domain.linuxUid = 0;
+    facts.domain.uidKnown = false;
+
+    expectPass(snapshot.evaluate(facts));
+}
+
+TEST(PacketPolicyTest, MissingUidMetadataMatchesUnknownApplicationSubject) {
+    const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
+        .uidKnown = false,
+        .l4Rules = {dropTcpDst443()},
+    });
+    auto facts = ipv4TcpFacts();
+    facts.domain.linuxUid = 0;
+    facts.domain.uidKnown = false;
+
+    const auto decision = snapshot.evaluate(facts);
+    EXPECT_EQ(decision.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(decision.stage, Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(decision.ruleId, 443U);
+    EXPECT_EQ(decision.revision, kRevision);
+}
+
+TEST(PacketPolicyTest, KnownLinuxUidZeroSubjectStillMatchesOnlyWhenUidKnown) {
+    const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
+        .linuxUid = 0,
+        .l4Rules = {dropTcpDst443()},
+    });
+    auto facts = ipv4TcpFacts();
+    facts.domain.linuxUid = 0;
+    facts.domain.uidKnown = true;
+
+    const auto decision = snapshot.evaluate(facts);
+    EXPECT_EQ(decision.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(decision.stage, Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(decision.ruleId, 443U);
 }
 
 TEST(PacketPolicyTest, NetworkGateDropShortCircuitsBeforeL4Drop) {
