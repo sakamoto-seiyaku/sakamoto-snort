@@ -15,20 +15,27 @@ INPUT_LISTEN_PORT="${INPUT_LISTEN_PORT:-18080}"
 INPUT_TIMEOUT_MILLIS="${INPUT_TIMEOUT_MILLIS:-5000}"
 KEEP_FORWARD=0
 RUN_RESTART=1
+RUN_FAULT=1
+RUN_CONTROL_TIMEOUT=1
+S68_FAIL_ON_EXPECTED_GAP="${S68_FAIL_ON_EXPECTED_GAP:-0}"
+MATRIX_RC=0
 
 usage() {
   cat <<EOF
-Usage: $0 [--serial <serial>] [--ctl <path>] [--keep-forward] [--skip-restart]
+Usage: $0 [--serial <serial>] [--ctl <path>] [--keep-forward] [--skip-restart] [--skip-fault] [--skip-control-timeout]
 
 Runs a minimal SAKAMOTO-68 Root/NFQUEUE device matrix slice:
   - real installed package UID evidence
   - IPv6 OUTPUT representative via APK debug traffic
   - IPv4 INPUT representative via APK one-shot listener + host peer connect
   - restart/no-residue checks
+  - bounded QUIT cleanup/no-residue checks
+  - SIGKILL fault immediate residue + recovery cleanup evidence
+  - control socket half-frame/disconnect smoke
 
 Environment overrides:
   PACKAGE, VNEXT_PORT, SNORT_CTL, IPV6_OUTPUT_HOST, IPV6_OUTPUT_PORT,
-  INPUT_LISTEN_PORT, INPUT_TIMEOUT_MILLIS
+  INPUT_LISTEN_PORT, INPUT_TIMEOUT_MILLIS, S68_FAIL_ON_EXPECTED_GAP
 EOF
 }
 
@@ -49,6 +56,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-restart)
       RUN_RESTART=0
+      shift
+      ;;
+    --skip-fault)
+      RUN_FAULT=0
+      shift
+      ;;
+    --skip-control-timeout)
+      RUN_CONTROL_TIMEOUT=0
       shift
       ;;
     -h|--help)
@@ -328,24 +343,48 @@ check_no_residue() {
   kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
   if [[ -z "$forwards" && -z "$procs" && -z "$ipt" && -z "$ip6t" ]]; then
     kv "$label.result" "PASS"
+    return 0
   else
     kv "$label.result" "FAIL"
     [[ -n "$forwards" ]] && kv "$label.forwardResidue" "$forwards"
     [[ -n "$procs" ]] && kv "$label.processResidue" "$procs"
     [[ -n "$ipt" ]] && kv "$label.iptablesResidue" "$ipt"
     [[ -n "$ip6t" ]] && kv "$label.ip6tablesResidue" "$ip6t"
+    return 1
   fi
+}
+
+daemon_pids() {
+  adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r'
 }
 
 wait_no_daemon_process() {
   local pids=""
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    pids="$(adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r')"
+    pids="$(daemon_pids)"
     if [[ -z "$pids" ]]; then
       return 0
     fi
     sleep 1
   done
+  return 1
+}
+
+check_hooks_present() {
+  local label="$1"
+  local ipt ip6t
+  ipt="$(adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+  ip6t="$(adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+  kv "$label.iptablesCheck.command" "./dev/adb shell su 0 sh -c 'iptables -S | grep sucre-snort'"
+  kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
+  if [[ -n "$ipt" || -n "$ip6t" ]]; then
+    kv "$label.result" "PASS"
+    [[ -n "$ipt" ]] && kv "$label.iptablesHooks" "$ipt"
+    [[ -n "$ip6t" ]] && kv "$label.ip6tablesHooks" "$ip6t"
+    return 0
+  fi
+  kv "$label.result" "FAIL"
+  kv "$label.reason" "expected sucre-snort NFQUEUE hooks before fault injection"
   return 1
 }
 
@@ -364,9 +403,67 @@ stop_root_daemon_for_cleanup() {
 redeploy_root_daemon() {
   local serial
   serial="$(adb_target_desc)"
-  kv "restart.redeploy.command" "CONTROL_FORWARD_PORT=$VNEXT_PORT bash dev/dev-deploy.sh --serial $serial --no-clear-log"
+  kv "${1:-restart}.redeploy.command" "CONTROL_FORWARD_PORT=$VNEXT_PORT bash dev/dev-deploy.sh --serial $serial --no-clear-log"
   CONTROL_FORWARD_PORT="$VNEXT_PORT" bash "$SNORT_ROOT/dev/dev-deploy.sh" \
     --serial "$serial" --no-clear-log >/dev/null
+}
+
+stage_only_root_daemon() {
+  local label="$1"
+  local serial
+  serial="$(adb_target_desc)"
+  kv "$label.stageOnly.command" "CONTROL_FORWARD_PORT=$VNEXT_PORT bash dev/dev-deploy.sh --serial $serial --no-clear-log --stage-only"
+  CONTROL_FORWARD_PORT="$VNEXT_PORT" bash "$SNORT_ROOT/dev/dev-deploy.sh" \
+    --serial "$serial" --no-clear-log --stage-only >/dev/null
+  remove_control_vnext_forward "$VNEXT_PORT"
+}
+
+kill_daemon_hard() {
+  local label="$1"
+  local pids
+  pids="$(daemon_pids)"
+  kv "$label.pidof.command" "./dev/adb shell su 0 sh -c 'pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
+  kv "$label.pids" "${pids:-}"
+  if [[ -z "$pids" ]]; then
+    kv "$label.result" "BLOCKED"
+    kv "$label.reason" "daemon process not found before SIGKILL"
+    return 77
+  fi
+  kv "$label.kill.command" "./dev/adb shell su 0 sh -c 'kill -KILL $pids'"
+  adb_su "kill -KILL $pids 2>/dev/null || true" >/dev/null
+  wait_no_daemon_process || true
+  return 0
+}
+
+control_half_frame_disconnect() {
+  local port="$1"
+  python3 - "$port" <<'PY'
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+sock.settimeout(1)
+sock.sendall(b'128:{"id":680501,"cmd":"HELLO","args":{}')
+time.sleep(0.25)
+sock.close()
+PY
+}
+
+control_idle_disconnect() {
+  local port="$1"
+  python3 - "$port" <<'PY'
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+sock.settimeout(1)
+time.sleep(0.5)
+sock.close()
+PY
 }
 
 section "preflight"
@@ -486,11 +583,34 @@ else
   fi
 fi
 
+if [[ $RUN_CONTROL_TIMEOUT -eq 1 ]]; then
+  section "control_socket_timeout_disconnect"
+  kv "control_socket_timeout.scope" "control socket half-frame/idle disconnect smoke; not packet lease timeout evidence"
+  kv "control_socket_timeout.halfFrame.command" "python3 open tcp 127.0.0.1:$VNEXT_PORT, send incomplete netstring, close"
+  half_output="$(control_half_frame_disconnect "$VNEXT_PORT" 2>&1 || true)"
+  [[ -n "$half_output" ]] && kv "control_socket_timeout.halfFrame.output" "$half_output"
+  kv "control_socket_timeout.idleDisconnect.command" "python3 open tcp 127.0.0.1:$VNEXT_PORT, send no request, close"
+  idle_output="$(control_idle_disconnect "$VNEXT_PORT" 2>&1 || true)"
+  [[ -n "$idle_output" ]] && kv "control_socket_timeout.idleDisconnect.output" "$idle_output"
+  hello_timeout="$(ctl HELLO || true)"
+  status_timeout="$(ctl NFQUEUE.STATUS || true)"
+  printf 'control_socket_timeout.HELLO=%s\n' "$hello_timeout"
+  printf 'control_socket_timeout.NFQUEUE.STATUS=%s\n' "$status_timeout"
+  if [[ -z "$half_output" && -z "$idle_output" ]] \
+    && printf '%s\n' "$hello_timeout" | json_ok \
+    && printf '%s\n' "$status_timeout" | json_ok; then
+    kv "control_socket_timeout.result" "PASS"
+  else
+    kv "control_socket_timeout.result" "FAIL"
+    kv "control_socket_timeout.reason" "daemon should survive incomplete/idle control socket disconnects and continue serving HELLO/NFQUEUE.STATUS"
+  fi
+fi
+
 if [[ $RUN_RESTART -eq 1 ]]; then
   section "restart_no_residue"
   stop_root_daemon_for_cleanup "restart.stop"
-  check_no_residue "restart.afterStop"
-  redeploy_root_daemon
+  check_no_residue "restart.afterStop" || true
+  redeploy_root_daemon "restart"
   setup_control_vnext_forward "$VNEXT_PORT"
   hello2="$(ctl HELLO || true)"
   printf 'restart.HELLO=%s\n' "$hello2"
@@ -511,5 +631,54 @@ if [[ $RUN_RESTART -eq 1 ]]; then
   after="$(ctl NFQUEUE.STATUS)"
   status_delta "$before" "$after" "restart.probe"
   stop_root_daemon_for_cleanup "restart.finalStop"
-  check_no_residue "restart.finalCleanup"
+  check_no_residue "restart.finalCleanup" || true
 fi
+
+if [[ $RUN_FAULT -eq 1 ]]; then
+  section "sigkill_fault_no_residue"
+  redeploy_root_daemon "sigkill_fault"
+  setup_control_vnext_forward "$VNEXT_PORT"
+  fault_hello="$(ctl HELLO || true)"
+  printf 'sigkill_fault.HELLO=%s\n' "$fault_hello"
+  if ! printf '%s\n' "$fault_hello" | json_ok; then
+    kv "sigkill_fault.result" "BLOCKED"
+    kv "sigkill_fault.reason" "daemon did not answer HELLO after redeploy"
+  elif ! check_hooks_present "sigkill_fault.hooksBefore"; then
+    kv "sigkill_fault.result" "BLOCKED"
+    kv "sigkill_fault.reason" "cannot inject fault without confirmed NFQUEUE hook residue target"
+  else
+    if kill_daemon_hard "sigkill_fault.kill"; then
+      remove_control_vnext_forward "$VNEXT_PORT"
+      if check_no_residue "sigkill_fault.immediateResidue"; then
+        kv "sigkill_fault.immediateResult" "PASS"
+      else
+        if [[ "$S68_FAIL_ON_EXPECTED_GAP" == "1" ]]; then
+          kv "sigkill_fault.immediateResult" "FAIL"
+          MATRIX_RC=1
+        else
+          kv "sigkill_fault.immediateResult" "EXPECTED_GAP"
+        fi
+        kv "sigkill_fault.immediateReason" "SIGKILL bypasses daemon-owned NFQUEUE hook cleanup; retained as S68 gap evidence"
+      fi
+
+      redeploy_root_daemon "sigkill_fault.recovery"
+      setup_control_vnext_forward "$VNEXT_PORT"
+      recovery_hello="$(ctl HELLO || true)"
+      printf 'sigkill_fault.recovery.HELLO=%s\n' "$recovery_hello"
+      if printf '%s\n' "$recovery_hello" | json_ok; then
+        kv "sigkill_fault.recovery.result" "PASS"
+      else
+        kv "sigkill_fault.recovery.result" "FAIL"
+      fi
+      stop_root_daemon_for_cleanup "sigkill_fault.recoveryStop"
+      stage_only_root_daemon "sigkill_fault.recoveryStageOnly"
+      check_no_residue "sigkill_fault.finalCleanup" || true
+    fi
+  fi
+fi
+
+section "final_cleanup"
+stop_root_daemon_for_cleanup "final.stop"
+check_no_residue "final.noResidue" || true
+
+exit "$MATRIX_RC"
