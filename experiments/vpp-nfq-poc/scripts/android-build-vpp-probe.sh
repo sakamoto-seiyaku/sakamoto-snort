@@ -15,10 +15,8 @@ LOG="$LOG_DIR/android-vpp-build-${TARGET}.log"
 # target objects are Android arm64.  Keep the build reproducible when the
 # repository's fallback PLY environment is present; callers may still supply
 # an explicit PYTHONPATH for a different pinned environment.
-if [ -z "${PYTHONPATH:-}" ] \
-  && [ -d "$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages" ]; then
-  export PYTHONPATH="$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages"
-fi
+source "$SCRIPT_DIR/android-vpp-pythonpath-lib.sh"
+vpp_android_use_fallback_pythonpath
 
 if [ ! -f "$BUILD_DIR/build.ninja" ]; then
   echo "Android VPP build dir is not configured: $BUILD_DIR" >&2

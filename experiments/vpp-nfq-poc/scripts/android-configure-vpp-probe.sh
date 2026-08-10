@@ -20,10 +20,8 @@ LOG="$LOG_DIR/android-vpp-configure-probe.log"
 # CMake probes and VPP API generation use the host Python interpreter.  Use
 # the repository-pinned fallback PLY environment unless the caller supplies a
 # deliberate override.
-if [ -z "${PYTHONPATH:-}" ] \
-  && [ -d "$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages" ]; then
-  export PYTHONPATH="$VPP_WORK_ROOT/s73-python-venv/lib/python3.13/site-packages"
-fi
+source "$SCRIPT_DIR/android-vpp-pythonpath-lib.sh"
+vpp_android_use_fallback_pythonpath
 
 source "$REPO_ROOT/dev/dev-ndk-env.sh"
 

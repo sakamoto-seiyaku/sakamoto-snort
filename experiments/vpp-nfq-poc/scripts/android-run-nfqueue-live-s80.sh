@@ -118,11 +118,20 @@ run_maybe() {
   return 0
 }
 
+s80_nfqueue_lanes() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    iptables OUTPUT icmp -d "$IP4_TARGET" 0 \
+    iptables INPUT icmp -s "$IP4_TARGET" 1 \
+    ip6tables OUTPUT ipv6-icmp -d "$IP6_TARGET" 2 \
+    ip6tables INPUT ipv6-icmp -s "$IP6_TARGET" 3
+}
+
 remove_hooks() {
-  while adb_su "/system/bin/iptables -w -D OUTPUT -p icmp -d '$IP4_TARGET' -j NFQUEUE --queue-num '$QUEUE_BASE' --queue-bypass 2>/dev/null" >/dev/null 2>&1; do :; done
-  while adb_su "/system/bin/iptables -w -D INPUT -p icmp -s '$IP4_TARGET' -j NFQUEUE --queue-num '$((QUEUE_BASE + 1))' --queue-bypass 2>/dev/null" >/dev/null 2>&1; do :; done
-  while adb_su "/system/bin/ip6tables -w -D OUTPUT -p ipv6-icmp -d '$IP6_TARGET' -j NFQUEUE --queue-num '$((QUEUE_BASE + 2))' --queue-bypass 2>/dev/null" >/dev/null 2>&1; do :; done
-  while adb_su "/system/bin/ip6tables -w -D INPUT -p ipv6-icmp -s '$IP6_TARGET' -j NFQUEUE --queue-num '$((QUEUE_BASE + 3))' --queue-bypass 2>/dev/null" >/dev/null 2>&1; do :; done
+  local table chain protocol target_match target offset queue
+  while IFS=$'\t' read -r table chain protocol target_match target offset; do
+    queue=$((QUEUE_BASE + offset))
+    while adb_su "/system/bin/$table -w -D $chain -p $protocol $target_match '$target' -j NFQUEUE --queue-num '$queue' --queue-bypass 2>/dev/null" >/dev/null 2>&1; do :; done
+  done < <(s80_nfqueue_lanes)
 }
 
 capture_residue() {
@@ -214,10 +223,11 @@ start_vpp() {
 }
 
 install_hooks() {
-  adb_su "/system/bin/iptables -w -I OUTPUT 1 -p icmp -d '$IP4_TARGET' -j NFQUEUE --queue-num '$QUEUE_BASE' --queue-bypass"
-  adb_su "/system/bin/iptables -w -I INPUT 1 -p icmp -s '$IP4_TARGET' -j NFQUEUE --queue-num '$((QUEUE_BASE + 1))' --queue-bypass"
-  adb_su "/system/bin/ip6tables -w -I OUTPUT 1 -p ipv6-icmp -d '$IP6_TARGET' -j NFQUEUE --queue-num '$((QUEUE_BASE + 2))' --queue-bypass"
-  adb_su "/system/bin/ip6tables -w -I INPUT 1 -p ipv6-icmp -s '$IP6_TARGET' -j NFQUEUE --queue-num '$((QUEUE_BASE + 3))' --queue-bypass"
+  local table chain protocol target_match target offset queue
+  while IFS=$'\t' read -r table chain protocol target_match target offset; do
+    queue=$((QUEUE_BASE + offset))
+    adb_su "/system/bin/$table -w -I $chain 1 -p $protocol $target_match '$target' -j NFQUEUE --queue-num '$queue' --queue-bypass"
+  done < <(s80_nfqueue_lanes)
   device_capture hooks-installed '/system/bin/iptables -S OUTPUT 2>/dev/null || true; /system/bin/iptables -S INPUT 2>/dev/null || true; /system/bin/ip6tables -S OUTPUT 2>/dev/null || true; /system/bin/ip6tables -S INPUT 2>/dev/null || true'
 }
 
