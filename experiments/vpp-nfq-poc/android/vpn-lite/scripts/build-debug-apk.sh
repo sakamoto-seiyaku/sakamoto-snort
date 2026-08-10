@@ -12,7 +12,8 @@ aapt2="${AAPT2:-${sdk_prebuilts}/tools/linux/bin/aapt2}"
 d8_jar="${D8_JAR:-${sdk_prebuilts}/tools/linux/lib/d8.jar}"
 apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
-stage_dir="${VPP_RUNTIME_STAGE_DIR:-${repo_root}/build-output/android-vpp-runtime/stage}"
+stage_dir="${VPP_RUNTIME_STAGE_DIR:-${VPP_STAGE_DIR:-${repo_root}/build-output/android-vpp-runtime/stage}}"
+hev_stage_dir="${HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
 if [[ ! -x "$stage_dir/bin/vpp" || ! -x "$stage_dir/bin/vppctl" ]]; then
   VPP_RUNTIME_STAGE_DIR="$stage_dir" \
     bash "$script_dir/stage-vpp-runtime.sh" >/dev/null
@@ -39,14 +40,40 @@ rm -rf "$classes_dir" "$dex_dir" "$build_dir/jni" "$assets_dir" "$intermediates"
 mkdir -p "$classes_dir" "$dex_dir" "$jni_dir" "$assets_dir" "$intermediates" "$outputs"
 
 cp "$stage_dir/bin/vpp" "$jni_dir/libvpp_runtime.so"
+cp "$stage_dir/bin/vpp" "$jni_dir/libvpppoc.so"
 cp "$stage_dir/bin/vppctl" "$jni_dir/libvppctl.so"
-chmod 755 "$jni_dir/libvpp_runtime.so" "$jni_dir/libvppctl.so"
+chmod 755 "$jni_dir/libvpp_runtime.so" "$jni_dir/libvpppoc.so" "$jni_dir/libvppctl.so"
 for so in "$stage_dir"/lib/*.so "$stage_dir"/plugins/*.so; do
   [[ -f "$so" ]] || continue
-  cp "$so" "$jni_dir/$(basename "$so")"
-  chmod 755 "$jni_dir/$(basename "$so")"
+  so_name="$(basename "$so")"
+  cp "$so" "$jni_dir/$so_name"
+  chmod 755 "$jni_dir/$so_name"
+  if [[ "$so_name" != lib*.so ]]; then
+    cp "$so" "$jni_dir/lib$so_name"
+    chmod 755 "$jni_dir/lib$so_name"
+  fi
 done
-version="${VPP_RUNTIME_VERSION:-$(strings "$stage_dir/bin/vpp" | awk '/vpp v[0-9]/{print $2; exit}')}"
+if [[ -f "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" ]]; then
+  cp "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" "$jni_dir/libhev-socks5-tunnel.so"
+  chmod 755 "$jni_dir/libhev-socks5-tunnel.so"
+fi
+
+native_dir="$app_dir/native"
+ndk_root="${NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
+android_clang="${ANDROID_CLANG:-$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang}"
+[[ -x "$android_clang" ]] || die "Android clang is missing: $android_clang"
+[[ -f "$native_dir/vpn_fd_probe.c" ]] || die "missing native VPN/TUN POC JNI source"
+"$android_clang" -shared -fPIC -std=c11 -Wall -Wextra -Wno-unused-parameter \
+  "$native_dir/vpn_fd_probe.c" \
+  -llog -ldl -Wl,-soname,libvpnfdprobe.so \
+  -o "$jni_dir/libvpnfdprobe.so"
+chmod 755 "$jni_dir/libvpnfdprobe.so"
+
+version="${VPP_RUNTIME_VERSION:-}"
+if [[ -z "$version" ]]; then
+  strings "$stage_dir/bin/vpp" >"$intermediates/vpp.strings"
+  version="$(awk '/vpp v[0-9]/{print $2; exit}' "$intermediates/vpp.strings")"
+fi
 [[ "$version" =~ ^v[0-9]+\.[0-9]+ ]] || die "unable to determine VPP version"
 printf 'version=%s\nabi=arm64-v8a\nprotocol=vpp-runtime-health/v1\n' "$version" >"$assets_dir/vpp-runtime.properties"
 sha256sum "$jni_dir/libvpp_runtime.so" | awk '{print $1}' >"$assets_dir/vpp-runtime.sha256"
@@ -60,6 +87,7 @@ base_apk="$intermediates/base.apk"
 unsigned_apk="$intermediates/unsigned.apk"
 aligned_apk="$intermediates/aligned.apk"
 apk="$outputs/sakamoto-runtime-debug.apk"
+legacy_apk="$outputs/snort-vpn-lite-debug.apk"
 "$aapt2" link -o "$base_apk" -I "$android_jar" --manifest "$app_dir/src/main/AndroidManifest.xml" \
   --min-sdk-version 31 --target-sdk-version 36 --version-code "${APK_VERSION_CODE:-1}" \
   --version-name "${APK_VERSION_NAME:-0.1-runtime-debug}" --debug-mode
@@ -76,4 +104,6 @@ fi
 java -jar "$apksigner_jar" sign --ks "$build_dir/debug.keystore" --ks-pass pass:android \
   --key-pass pass:android --ks-key-alias androiddebugkey --out "$apk" "$aligned_apk"
 java -jar "$apksigner_jar" verify --print-certs "$apk" >/dev/null
+cp "$apk" "$legacy_apk"
 echo "ok: $apk"
+echo "ok: $legacy_apk"

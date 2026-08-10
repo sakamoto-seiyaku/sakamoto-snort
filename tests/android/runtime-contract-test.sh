@@ -19,6 +19,7 @@ bash "$repo_root/tests/android/android-runtime-contract-test.sh"
 # adapter artifacts and carries a generated-VAPI identity.
 bash "$repo_root/tests/android/android-runtime-artifact-contract-test.sh"
 bash "$repo_root/tests/android/android-runtime-hardening-contract-test.sh"
+bash "$repo_root/tests/android/s69-vpn-tun-matrix-contract-test.sh"
 production_service_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 production_ownership_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"

@@ -15,14 +15,24 @@ import android.widget.TextView;
  * Temporary SAKAMOTO-46 acceptance shell.
  *
  * <p>The active surface deliberately crosses only {@link LocalProductBackend}.
- * Historical VPN/HEV probes remain separate experiments and are not lifecycle
- * entry points from this exported Activity.</p>
+ * Historical VPN/HEV probes remain separate experiments.  They are still
+ * accepted as a compatibility control plane for source-owned POC harnesses, and
+ * are bridged directly to {@link SnortVpnService} rather than to product
+ * runtime lifecycle.</p>
  */
 public final class MainActivity extends Activity {
     private static final int NOTIFICATION_REQUEST_CODE = 1002;
     private static final long STATUS_POLL_MILLIS = 500L;
     private static final String EXTRA_RUNTIME_START = "runtimeStart";
     private static final String EXTRA_RUNTIME_STOP = "runtimeStop";
+    private static final String EXTRA_LEGACY_START = "start";
+    private static final String EXTRA_LEGACY_STOP = "stop";
+    private static final String EXTRA_LEGACY_HTTP_PROBE = "appHttpProbe";
+    private static final String EXTRA_LEGACY_UDP_PROBE = "appUdpProbe";
+    private static final String EXTRA_LEGACY_PING_PROBE = "appPingProbe";
+    private static final String EXTRA_LEGACY_CONTROL_PROBE = "controlProbe";
+    private static final String EXTRA_LEGACY_RUST_CONTROL_PROBE = "rustControlProbe";
+    private static final String EXTRA_LEGACY_RUST_RECONNECT_PROBE = "rustReconnectProbe";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final LocalProductBackend productBackend = new LocalProductBackend();
@@ -91,6 +101,93 @@ public final class MainActivity extends Activity {
             main.post(this::requestStop);
         } else if (intent.getBooleanExtra(EXTRA_RUNTIME_START, false)) {
             main.post(this::requestStart);
+        } else if (applyLegacyPocIntent(intent)) {
+            refreshRuntimeStatus();
+        }
+    }
+
+    private boolean applyLegacyPocIntent(Intent intent) {
+        if (intent.getBooleanExtra(EXTRA_LEGACY_STOP, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_STOP, intent);
+            showAction("Legacy VPN/TUN POC stop requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_HTTP_PROBE, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_HTTP_PROBE, intent);
+            showAction("Legacy HTTP probe requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_UDP_PROBE, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_UDP_PROBE, intent);
+            showAction("Legacy UDP probe requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_PING_PROBE, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_PING_PROBE, intent);
+            showAction("Legacy ping probe requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_CONTROL_PROBE, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_CONTROL_PROBE, intent);
+            showAction("Legacy VPP control probe requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_RUST_CONTROL_PROBE, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_RUST_CONTROL_PROBE, intent);
+            showAction("Legacy Rust control probe requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_RUST_RECONNECT_PROBE, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_RUST_RECONNECT_PROBE, intent);
+            showAction("Legacy Rust reconnect probe requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_START, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_START, intent);
+            showAction("Legacy VPN/TUN POC start requested.");
+            return true;
+        }
+        return false;
+    }
+
+    private void startLegacyVpnService(String action, Intent source) {
+        Intent serviceIntent = new Intent(this, SnortVpnService.class);
+        serviceIntent.setAction(action);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_MODE);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_HOST);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_PATH);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_ALLOWED_PACKAGE);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_DISALLOWED_PACKAGE);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_BLOCK_IP4_DST);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_BLOCK_IP6_DST);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_PORT);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_COUNT);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_PAYLOAD_BYTES);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_SIZE);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_DURATION_SECONDS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_BLOCK_OWNER_UID);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_REDIRECT_THREAD);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_ROUNDS);
+        copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_OWNER_CACHE);
+        copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_ENABLE_IPV6);
+        startService(serviceIntent);
+    }
+
+    private static void copyStringExtra(Intent source, Intent target, String name) {
+        if (source.hasExtra(name)) {
+            target.putExtra(name, source.getStringExtra(name));
+        }
+    }
+
+    private static void copyIntExtra(Intent source, Intent target, String name) {
+        if (source.hasExtra(name)) {
+            target.putExtra(name, source.getIntExtra(name, 0));
+        }
+    }
+
+    private static void copyBooleanExtra(Intent source, Intent target, String name) {
+        if (source.hasExtra(name)) {
+            target.putExtra(name, source.getBooleanExtra(name, false));
         }
     }
 
