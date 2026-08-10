@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace SnortRuntime {
@@ -40,6 +41,12 @@ public:
     virtual ~BaseRuntimeControl() = default;
 
     [[nodiscard]] virtual bool nfqueuePassThroughReady() const noexcept = 0;
+    [[nodiscard]] virtual bool packetAdapterReady() const noexcept {
+        return false;
+    }
+    [[nodiscard]] virtual std::string_view packetAdapterName() const noexcept {
+        return {};
+    }
     [[nodiscard]] virtual bool resetBaseRuntime() noexcept = 0;
     [[nodiscard]] virtual bool packetPolicyControlReady() const noexcept {
         return false;

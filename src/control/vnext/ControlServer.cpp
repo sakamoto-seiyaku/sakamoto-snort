@@ -113,6 +113,14 @@ rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runt
     if (runtime.nfqueuePassThroughReady()) {
         capabilities.PushBack("nfqueue-pass-through", alloc);
     }
+    if (runtime.packetAdapterReady() && !runtime.packetAdapterName().empty()) {
+        const std::string capability =
+            "packet-adapter-" + std::string(runtime.packetAdapterName());
+        rapidjson::Value value;
+        value.SetString(capability.c_str(),
+                        static_cast<rapidjson::SizeType>(capability.size()), alloc);
+        capabilities.PushBack(value, alloc);
+    }
     if (runtime.nfqueueRuntimeCountersReady()) {
         capabilities.PushBack("nfqueue-runtime-counters", alloc);
     }

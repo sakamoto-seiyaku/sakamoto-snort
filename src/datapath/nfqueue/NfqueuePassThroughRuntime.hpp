@@ -364,6 +364,12 @@ public:
 
     [[nodiscard]] bool start();
     [[nodiscard]] bool nfqueuePassThroughReady() const noexcept override;
+    [[nodiscard]] bool packetAdapterReady() const noexcept override {
+        return nfqueuePassThroughReady();
+    }
+    [[nodiscard]] std::string_view packetAdapterName() const noexcept override {
+        return "root-nfqueue";
+    }
     [[nodiscard]] bool resetBaseRuntime() noexcept override;
     [[nodiscard]] bool packetPolicyControlReady() const noexcept override;
     [[nodiscard]] Policy::PacketPolicySnapshotStatus

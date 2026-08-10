@@ -36,6 +36,8 @@ namespace Policy = SnortDatapath::Policy;
 class FakeRuntimeControl final : public SnortRuntime::BaseRuntimeControl {
 public:
     bool nfqueuePassThroughReady() const noexcept override { return ready; }
+    bool packetAdapterReady() const noexcept override { return adapterReady; }
+    std::string_view packetAdapterName() const noexcept override { return adapterName; }
     bool resetBaseRuntime() noexcept override {
         ++resetCount;
         return resetResult;
@@ -63,11 +65,13 @@ public:
     bool resetResult = true;
     bool policyReady = false;
     bool nfqueueCountersReady = false;
+    bool adapterReady = false;
     bool policyApplyResult = true;
     int resetCount = 0;
     int policyApplyCount = 0;
     Policy::RuntimePacketPolicySnapshot policy;
     SnortRuntime::NfqueueRuntimeCounters nfqueueCounters;
+    std::string adapterName;
 
     bool nfqueueRuntimeCountersReady() const noexcept override {
         return nfqueueCountersReady;
@@ -202,6 +206,20 @@ TEST(ControlServerContract, HelloOmitsPassThroughCapabilityBeforeRuntimeReady) {
     EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "snort10-base"),
               capabilities.end());
     EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(), "nfqueue-pass-through"),
+              capabilities.end());
+}
+
+TEST(ControlServerContract, HelloAdvertisesGenericPacketAdapterCapabilityWhenReady) {
+    FakeRuntimeControl runtime;
+    runtime.adapterReady = true;
+    runtime.adapterName = "root-nfqueue";
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(41, "HELLO");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto capabilities = capabilityStrings(response["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "packet-adapter-root-nfqueue"),
               capabilities.end());
 }
 
