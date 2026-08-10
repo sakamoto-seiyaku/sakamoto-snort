@@ -64,20 +64,26 @@ command -v javac >/dev/null || die "missing javac"
 command -v java >/dev/null || die "missing java"
 command -v keytool >/dev/null || die "missing keytool"
 command -v zip >/dev/null || die "missing zip"
+command -v flock >/dev/null || die "missing flock"
 command -v "$zipalign_bin" >/dev/null || die "missing zipalign: $zipalign_bin"
 
 build_dir="$app_dir/build"
+lock_dir="$repo_root/build-output/android-runtime-locks"
+mkdir -p "$lock_dir"
+exec 9>"$lock_dir/build-debug-apk.lock"
+flock 9
 signing_dir="${ANDROID_RUNTIME_SIGNING_DIR:-$repo_root/build-output/android-runtime-signing}"
 signing_keystore="$signing_dir/debug.keystore"
 classes_dir="$build_dir/classes"
 dex_dir="$build_dir/dex"
+dex_work_dir="$build_dir/dex.$$"
 jni_dir="$build_dir/jni/lib/arm64-v8a"
 assets_dir="$build_dir/assets"
 intermediates="$build_dir/intermediates"
 outputs="$build_dir/outputs"
-rm -rf "$classes_dir" "$dex_dir" "$build_dir/jni" "$assets_dir" \
+rm -rf "$classes_dir" "$dex_dir" "$dex_work_dir" "$build_dir/jni" "$assets_dir" \
     "$intermediates" "$outputs"
-mkdir -p "$classes_dir" "$dex_dir" "$jni_dir" "$assets_dir" "$intermediates" "$outputs"
+mkdir -p "$classes_dir" "$jni_dir" "$assets_dir" "$intermediates" "$outputs"
 mkdir -p "$signing_dir"
 
 cp "$stage_dir/bin/vpp" "$jni_dir/libvpp_runtime.so"
@@ -161,7 +167,7 @@ actual_base_archive_digest="$(git -C "$source_origin_repo" archive --format=tar 
   "$source_revision" | sha256sum | awk '{print $1}')"
 [[ "$actual_base_archive_digest" == "$recorded_base_archive_digest" ]] \
   || die "runtime stage pinned base archive changed after provenance was recorded"
-base_probe_dir="$(mktemp -d "$build_dir/base-archive.XXXXXX")"
+base_probe_dir="$(mktemp -d /tmp/sakamoto-vpp-base-archive.XXXXXX)"
 git -C "$source_origin_repo" archive --format=tar --prefix=./ "$source_revision" \
   | tar -x -C "$base_probe_dir"
 printf '%s\n' "$source_revision" >"$base_probe_dir/.sakamoto-source-revision"
@@ -230,8 +236,11 @@ printf '%s\n' "${artifact#sha256:}" >"$assets_dir/vpp-runtime.sha256"
 mapfile -t sources < <(find "$app_dir/src/main/java" -name '*.java' | sort)
 javac -Xlint:-options -source 8 -target 8 -classpath "$android_jar" -d "$classes_dir" "${sources[@]}"
 mapfile -t class_files < <(find "$classes_dir" -name '*.class' | sort)
+mkdir -p "$dex_work_dir"
 java -cp "$d8_jar" com.android.tools.r8.D8 --min-api 31 --lib "$android_jar" \
-  --output "$dex_dir" "${class_files[@]}"
+  --output "$dex_work_dir" "${class_files[@]}"
+rm -rf "$dex_dir"
+mv "$dex_work_dir" "$dex_dir"
 
 base_apk="$intermediates/base.apk"
 unsigned_apk="$intermediates/unsigned.apk"
