@@ -169,6 +169,8 @@ static u8 nfqueue_live_recover_packet_id (const u8 *base, u32 length,
 static u32 nfqueue_live_next_obligation_nonce (nfqueue_live_main_t *nm);
 static void nfqueue_live_drain_ingress_queue (nfqueue_live_main_t *nm);
 static void nfqueue_live_drain_held_obligation (nfqueue_live_main_t *nm);
+static clib_error_t *nfqueue_live_ensure_frame_queue (
+  nfqueue_live_main_t *nm, u32 max_worker_thread);
 
 static const char *
 nfqueue_live_teardown_state_name (nfqueue_live_teardown_state_t state)
@@ -792,6 +794,42 @@ static_always_inline u64
 nfqueue_live_meta_generation (const nfqueue_live_meta_t *meta)
 {
   return ((u64) meta->generation_hi << 32) | meta->generation_lo;
+}
+
+static u8
+nfqueue_live_frame_queue_ready (u32 frame_queue_index, u32 max_worker_thread)
+{
+  vlib_thread_main_t *tm = vlib_get_thread_main ();
+  vlib_frame_queue_main_t *fqm;
+
+  if (frame_queue_index == ~0u ||
+      frame_queue_index >= vec_len (tm->frame_queue_mains))
+    return 0;
+  fqm = vec_elt_at_index (tm->frame_queue_mains, frame_queue_index);
+  if (fqm->node_index != nfqueue_live_owner_node.index ||
+      max_worker_thread >= vec_len (fqm->vlib_frame_queues))
+    return 0;
+  for (u32 i = 1; i <= max_worker_thread; i++)
+    if (fqm->vlib_frame_queues[i] == 0)
+      return 0;
+  return 1;
+}
+
+static clib_error_t *
+nfqueue_live_ensure_frame_queue (nfqueue_live_main_t *nm,
+                                 u32 max_worker_thread)
+{
+  if (!nfqueue_live_frame_queue_ready (nm->frame_queue_index,
+                                       max_worker_thread))
+    nm->frame_queue_index =
+      vlib_frame_queue_main_init (nfqueue_live_owner_node.index, 0);
+
+  if (!nfqueue_live_frame_queue_ready (nm->frame_queue_index,
+                                       max_worker_thread))
+    return clib_error_return (
+      0, "nfqueue-live frame queue unavailable for worker thread %u",
+      max_worker_thread);
+  return 0;
 }
 
 static_always_inline void
@@ -2941,21 +2979,24 @@ nfqueue_live_enable (vlib_main_t *vm, u16 queue_num, u8 family,
     return clib_error_return (0, "start VPP with at least one worker");
   nfqueue_live_reset_runtime (nm);
   nm->vm = vm;
-  /* Android brings up worker VLIB mains after plugin init.  Initializing the
-   * frame queue from VLIB_INIT_FUNCTION therefore leaves only the main-thread
-   * queue in some Android starts; the first worker handoff would index a
-   * missing queue and fault.  Build this fixed queue once, after workers are
-   * live and before admitting any packet obligation. */
-  if (nm->frame_queue_index == ~0u)
-    nm->frame_queue_index = vlib_frame_queue_main_init (
-      nfqueue_live_owner_node.index, 0);
-  nm->queue_num = queue_num;
-  nm->family = family;
-  nm->origin_lane = 0;
   nm->worker_thread = 1;
   nm->worker_count = clib_min (vlib_num_workers (), 2u);
   nm->first_worker_thread = 1;
   nm->second_worker_thread = 2;
+  /* Android brings up worker VLIB mains after plugin init.  Initializing the
+   * frame queue from VLIB_INIT_FUNCTION therefore leaves only the main-thread
+   * queue in some Android starts; the first worker handoff would index a
+   * missing queue and fault.  Verify the current queue can address every
+   * worker we will publish to, rebuilding stale/incomplete queue mains before
+   * admitting any packet obligation. */
+  error = nfqueue_live_ensure_frame_queue (nm, nm->worker_count < 2 ?
+                                                 nm->first_worker_thread :
+                                                 nm->second_worker_thread);
+  if (error)
+    return error;
+  nm->queue_num = queue_num;
+  nm->family = family;
+  nm->origin_lane = 0;
   __atomic_store_n (&nm->owner_mode, NFQUEUE_LIVE_OWNER_MODE_MIXED,
                     __ATOMIC_RELEASE);
   __atomic_store_n (&nm->inject_stale, inject_stale, __ATOMIC_RELEASE);
@@ -3028,18 +3069,21 @@ nfqueue_live_enable_dual (vlib_main_t *vm, u16 queue_base,
     return clib_error_return (0, "start VPP with at least two workers");
   nfqueue_live_reset_runtime (nm);
   nm->vm = vm;
-  /* See the single-lane enable path: defer queue-main construction until the
-   * worker layout is available on Android. */
-  if (nm->frame_queue_index == ~0u)
-    nm->frame_queue_index = vlib_frame_queue_main_init (
-      nfqueue_live_owner_node.index, 0);
-  nm->queue_num = queue_base;
-  nm->family = 0;
-  nm->origin_lane = 0;
   nm->worker_thread = 1;
   nm->worker_count = clib_min (vlib_num_workers (), 2u);
   nm->first_worker_thread = 1;
   nm->second_worker_thread = 2;
+  /* See the single-lane enable path: defer queue-main construction until the
+   * worker layout is available on Android, and reject an incomplete queue
+   * rather than entering the remote-owner path with a null per-worker slot. */
+  error = nfqueue_live_ensure_frame_queue (nm, require_two_workers ?
+                                                 nm->second_worker_thread :
+                                                 nm->first_worker_thread);
+  if (error)
+    return error;
+  nm->queue_num = queue_base;
+  nm->family = 0;
+  nm->origin_lane = 0;
   __atomic_store_n (&nm->owner_mode, NFQUEUE_LIVE_OWNER_MODE_MIXED,
                     __ATOMIC_RELEASE);
   __atomic_store_n (&nm->inject_stale, inject_stale, __ATOMIC_RELEASE);
@@ -3753,7 +3797,8 @@ nfqueue_live_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
                    (unsigned long long) nm->native_buffer_returns,
                    nfqueue_live_outstanding_load (nm),
                    (unsigned long long) nm->ingress_alloc_failures);
-  vlib_cli_output (vm, "ledger-message-obligations %llu message-rejections %llu copy-count %u residue-obligations %u",
+  vlib_cli_output (vm, "message-obligations %llu ledger-message-obligations %llu message-rejections %llu copy-count %u residue-obligations %u",
+                   (unsigned long long) nm->message_obligations,
                    (unsigned long long) nm->message_obligations,
                    (unsigned long long) nm->message_rejections,
                    NFQUEUE_LIVE_PACKET_COPY_PATHS,
