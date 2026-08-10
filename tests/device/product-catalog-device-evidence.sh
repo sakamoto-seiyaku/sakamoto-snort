@@ -9,11 +9,13 @@ apk_path="${APK:-$repo_root/app/android-runtime/build/outputs/sakamoto-runtime-d
 serial_arg="${ADB_SERIAL:-${ANDROID_SERIAL:-}}"
 install_apk=0
 refresh_projection=0
+exercise_binding=0
+binding_exercise_failed=0
 projection_activity_launched=0
 
 usage() {
   cat <<EOF
-Usage: $0 [--serial <serial>] [--install-apk] [--refresh-projection]
+Usage: $0 [--serial <serial>] [--install-apk] [--refresh-projection] [--exercise-binding]
 
 Records bounded SAKAMOTO-50 Android device evidence:
   - git/device/user-profile metadata
@@ -23,6 +25,7 @@ Records bounded SAKAMOTO-50 Android device evidence:
 Default behavior is read-only. Opt-in flags:
   --install-apk          adb install -r the debug APK artifact; never clears data
   --refresh-projection   launch DebugControlActivity and poll the projection file
+  --exercise-binding     bind then unbind one projected current-user app via RuntimeService
 
 Environment overrides:
   PACKAGE, APK, ADB_SERIAL, ANDROID_SERIAL
@@ -40,6 +43,11 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --refresh-projection)
+      refresh_projection=1
+      shift
+      ;;
+    --exercise-binding)
+      exercise_binding=1
       refresh_projection=1
       shift
       ;;
@@ -131,7 +139,7 @@ emit_projection_properties() {
     | head -n 16
 }
 
-probe_projection_for_user() {
+projection_properties_for_user() {
   local user_id="$1"
   local absolute_path="/data/user/${user_id}/${package_name}/files/product-catalog-projection/projection.properties"
   local relative_path="files/product-catalog-projection/projection.properties"
@@ -139,7 +147,7 @@ probe_projection_for_user() {
 
   root_output="$(adb_cmd shell su -c "cat '$absolute_path'" 2>/dev/null | tr -d '\r' || true)"
   if [[ -n "$root_output" ]]; then
-    emit_projection_properties "$root_output"
+    printf '%s\n' "$root_output"
     return 0
   fi
 
@@ -147,10 +155,21 @@ probe_projection_for_user() {
     local run_as_output
     run_as_output="$(adb_cmd shell run-as "$package_name" cat "$relative_path" 2>/dev/null \
       | tr -d '\r' || true)"
-    emit_projection_properties "$run_as_output"
+    printf '%s\n' "$run_as_output"
     return 0
   fi
 
+  return 0
+}
+
+probe_projection_for_user() {
+  local user_id="$1"
+  local properties
+  properties="$(projection_properties_for_user "$user_id" || true)"
+  if [[ -n "$properties" ]]; then
+    emit_projection_properties "$properties"
+    return 0
+  fi
   printf 'present=0\n'
   return 0
 }
@@ -190,6 +209,146 @@ refresh_projection_for_user() {
   kv projection_refresh.result "FAIL"
   kv projection_refresh.reason "projection_file_absent_after_debug_control_activity_query_service"
   return 1
+}
+
+first_bindable_subject_for_user() {
+  local user_id="$1"
+  projection_properties_for_user "$user_id" \
+    | awk -F= '
+      {
+        if (match($1, /^selectableRows\.([0-9]+)\./)) {
+          idx = substr($1, RSTART + 15, RLENGTH - 16)
+          field = substr($1, RSTART + RLENGTH)
+          seen[idx] = 1
+          if (field == "subjectId") {
+            value = $2
+            gsub(/\\:/, ":", value)
+            subject[idx] = value
+          } else if (field == "availability") {
+            availability[idx] = $2
+          } else if (field == "bound") {
+            bound[idx] = $2
+          } else if (field == "productStateValid") {
+            valid[idx] = $2
+          }
+        }
+      }
+      END {
+        for (i = 0; i < 1024; i++) {
+          if (!seen[i]) {
+            continue
+          }
+          uid_value = subject[i]
+          if (uid_value !~ /^android[.]uid:[0-9]+$/) {
+            continue
+          }
+          sub(/^android[.]uid:/, "", uid_value)
+          app_id = uid_value % 100000
+          if (app_id >= 10000 && availability[i] == "available" && bound[i] == "false" && valid[i] == "true") {
+            print subject[i]
+            exit
+          }
+        }
+      }'
+}
+
+subject_bound_for_user() {
+  local user_id="$1"
+  local subject_id="$2"
+  projection_properties_for_user "$user_id" \
+    | awk -F= -v subject_id="$subject_id" '
+      {
+        if (match($1, /^selectableRows\.([0-9]+)\./)) {
+          idx = substr($1, RSTART + 15, RLENGTH - 16)
+          field = substr($1, RSTART + RLENGTH)
+          seen[idx] = 1
+          if (field == "subjectId") {
+            value = $2
+            gsub(/\\:/, ":", value)
+            subject[idx] = value
+          } else if (field == "bound") {
+            bound[idx] = $2
+          }
+        }
+      }
+      END {
+        matched = 0
+        any_bound = 0
+        for (i = 0; i < 1024; i++) {
+          if (seen[i] && subject[i] == subject_id) {
+            matched = 1
+            if (bound[i] == "true") {
+              any_bound = 1
+            }
+          }
+        }
+        if (any_bound) {
+          print "true"
+        } else if (matched) {
+          print "false"
+        } else {
+          print "UNKNOWN"
+        }
+      }'
+}
+
+wait_subject_bound_state() {
+  local user_id="$1"
+  local subject_id="$2"
+  local expected="$3"
+  local timeout_seconds="${BINDING_EXERCISE_TIMEOUT_SECONDS:-45}"
+  local deadline
+  deadline=$((SECONDS + timeout_seconds))
+
+  while (( SECONDS <= deadline )); do
+    if [[ "$(subject_bound_for_user "$user_id" "$subject_id")" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+exercise_binding_for_user() {
+  local user_id="$1"
+  local subject_id
+  subject_id="$(first_bindable_subject_for_user "$user_id" || true)"
+  if [[ -z "$subject_id" ]]; then
+    kv binding_exercise.result "UNAVAILABLE"
+    kv binding_exercise.reason "no_bindable_projected_application_subject"
+    return 0
+  fi
+
+  kv binding_exercise.subject "$subject_id"
+  if ! adb_cmd shell am start -n "${package_name}/.DebugControlActivity" \
+      --es debugBindApplicationSubject "$subject_id" >/dev/null 2>&1; then
+    kv binding_exercise.bind "FAIL"
+    kv binding_exercise.reason "debug_bind_activity_launch_failed"
+    return 1
+  fi
+  projection_activity_launched=1
+  if wait_subject_bound_state "$user_id" "$subject_id" "true"; then
+    kv binding_exercise.bind "PASS"
+  else
+    kv binding_exercise.bind "FAIL"
+    kv binding_exercise.reason "subject_not_bound_after_debug_bind"
+    binding_exercise_failed=1
+  fi
+
+  if ! adb_cmd shell am start -n "${package_name}/.DebugControlActivity" \
+      --es debugUnbindApplicationSubject "$subject_id" >/dev/null 2>&1; then
+    kv binding_exercise.unbind "FAIL"
+    kv binding_exercise.reason "debug_unbind_activity_launch_failed"
+    binding_exercise_failed=1
+    return 1
+  fi
+  if wait_subject_bound_state "$user_id" "$subject_id" "false"; then
+    kv binding_exercise.unbind "PASS"
+  else
+    kv binding_exercise.unbind "FAIL"
+    kv binding_exercise.reason "subject_not_unbound_after_debug_unbind"
+    binding_exercise_failed=1
+  fi
 }
 
 cleanup() {
@@ -234,6 +393,11 @@ if [[ "$refresh_projection" -eq 1 ]]; then
   kv projection_refresh "REQUESTED"
 else
   kv projection_refresh "SKIPPED"
+fi
+if [[ "$exercise_binding" -eq 1 ]]; then
+  kv binding_exercise "REQUESTED"
+else
+  kv binding_exercise "SKIPPED"
 fi
 
 if [[ -f "$apk_path" ]]; then
@@ -305,6 +469,9 @@ fi
 
 if [[ "$refresh_projection" -eq 1 ]]; then
   refresh_projection_for_user "$current_user_id" || true
+fi
+if [[ "$exercise_binding" -eq 1 ]]; then
+  exercise_binding_for_user "$current_user_id" || true
 fi
 
 all_uid_samples="$(mktemp)"
@@ -384,6 +551,9 @@ fi
 if [[ "${#user_ids[@]}" -lt 2 ]]; then
   kv multi_user_identity "UNAVAILABLE"
   kv multi_user_identity.reason "only_${#user_ids[@]}_android_user_or_profile_visible_cannot_prove_same_package_multi_user_uid_differentiation"
+  if [[ "$binding_exercise_failed" -eq 1 ]]; then
+    exit 1
+  fi
   exit 0
 fi
 
@@ -419,4 +589,8 @@ if [[ -n "$comparison" ]]; then
 else
   kv multi_user_identity "PARTIAL"
   kv multi_user_identity.reason "no_same_package_with_different_uids_seen_across_visible_users"
+fi
+
+if [[ "$binding_exercise_failed" -eq 1 ]]; then
+  exit 1
 fi

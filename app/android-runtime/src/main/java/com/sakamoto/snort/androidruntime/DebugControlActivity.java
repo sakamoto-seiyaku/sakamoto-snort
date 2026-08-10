@@ -55,6 +55,10 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_DEBUG_LISTEN_PORT = "debugListenPort";
     private static final String EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS =
             "debugListenTimeoutMillis";
+    private static final String EXTRA_DEBUG_BIND_APPLICATION_SUBJECT =
+            "debugBindApplicationSubject";
+    private static final String EXTRA_DEBUG_UNBIND_APPLICATION_SUBJECT =
+            "debugUnbindApplicationSubject";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
     private static final int DEBUG_TRAFFIC_PORT = 80;
     private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
@@ -147,6 +151,14 @@ public class DebugControlActivity extends Activity {
                     EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS, DEBUG_LISTEN_TIMEOUT_MILLIS),
                     DEBUG_LISTEN_TIMEOUT_MILLIS);
             main.post(() -> runDebugTrafficListener(port, timeoutMillis));
+        }
+        String bindSubject = intent.getStringExtra(EXTRA_DEBUG_BIND_APPLICATION_SUBJECT);
+        if (bindSubject != null && !bindSubject.trim().isEmpty()) {
+            main.post(() -> requestDebugProductBinding(bindSubject, true));
+        }
+        String unbindSubject = intent.getStringExtra(EXTRA_DEBUG_UNBIND_APPLICATION_SUBJECT);
+        if (unbindSubject != null && !unbindSubject.trim().isEmpty()) {
+            main.post(() -> requestDebugProductBinding(unbindSubject, false));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
             main.post(this::runDebugApplyGateAndProbe);
@@ -538,6 +550,25 @@ public class DebugControlActivity extends Activity {
         }
         backend.unbindProductApplication(this, subjectId);
         action("Unbind requested for application subject " + subjectId.encode() + ".");
+        refreshProductCatalog();
+    }
+
+    private void requestDebugProductBinding(String encodedSubject, boolean bind) {
+        final ApplicationSubjectId subjectId;
+        try {
+            subjectId = ApplicationSubjectId.parse(encodedSubject);
+        } catch (IllegalArgumentException error) {
+            action("Invalid debug application subject: " + encodedSubject);
+            return;
+        }
+        if (bind) {
+            backend.bindProductApplication(this, subjectId);
+            action("Debug bind requested for application subject " + subjectId.encode() + ".");
+        } else {
+            backend.unbindProductApplication(this, subjectId);
+            action("Debug unbind requested for application subject " + subjectId.encode() + ".");
+        }
+        selectedApplicationSubjectId = subjectId;
         refreshProductCatalog();
     }
 
