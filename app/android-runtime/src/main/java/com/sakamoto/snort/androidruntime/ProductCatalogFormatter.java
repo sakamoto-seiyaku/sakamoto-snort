@@ -206,6 +206,8 @@ public final class ProductCatalogFormatter {
                         .append(row.profileLabel)
                         .append(" | full uid ")
                         .append(row.fullUid)
+                        .append(" | icon ")
+                        .append(row.iconToken.isEmpty() ? "(none)" : row.iconToken)
                         .append(" | subject ")
                         .append(row.subjectId.encode())
                         .append(" | availability ")
@@ -222,6 +224,7 @@ public final class ProductCatalogFormatter {
         public final String packageName;
         public final String label;
         public final String profileLabel;
+        public final String iconToken;
         public final int userId;
         public final int fullUid;
         public final String availability;
@@ -233,6 +236,7 @@ public final class ProductCatalogFormatter {
             this.label = entry.label;
             this.profileLabel = entry.profileLabel.isEmpty()
                     ? "user " + entry.userId : entry.profileLabel;
+            this.iconToken = entry.iconToken;
             this.userId = entry.userId;
             this.fullUid = entry.subjectId.uid;
             this.availability = entry.available ? "available" : "unavailable";

@@ -1090,6 +1090,11 @@ public final class AndroidRuntimeContractTest {
                 "catalog rows may share package metadata");
         check(!projection.rows.get(0).subjectId.equals(projection.rows.get(1).subjectId),
                 "catalog rows keep distinct ApplicationSubjectId identities");
+        check("icon:mail/u0".equals(projection.rows.get(0).iconToken)
+                        && "icon:mail/u10".equals(projection.rows.get(1).iconToken),
+                "catalog rows preserve distinct provider icon tokens per profile instance");
+        check(!projection.rows.get(0).iconToken.equals(projection.rows.get(1).iconToken),
+                "same-package profile rows may carry distinct icon metadata");
         check(projection.rows.get(1).fullUid == 1010001,
                 "catalog row renders full Linux UID identity");
         check(projection.boundApplicationCount == 1,
@@ -1110,6 +1115,12 @@ public final class AndroidRuntimeContractTest {
                 "Product UI projection has an explicit catalog result state");
         check(projection.displayText.contains("full uid 1010001"),
                 "Product UI projection displays full UID for profile-specific app rows");
+        check(projection.displayText.contains("icon icon:mail/u0")
+                        && projection.displayText.contains("icon icon:mail/u10"),
+                "Product UI projection displays provider icon identity per catalog row");
+        check(!projection.rows.get(0).subjectId.encode().contains("icon:")
+                        && !projection.rows.get(1).subjectId.encode().contains("icon:"),
+                "ApplicationSubjectId encoding excludes icon metadata");
 
         ProductCatalogFormatter.Projection error =
                 ProductCatalogFormatter.error(state, "catalog_load_failed",
@@ -1135,6 +1146,10 @@ public final class AndroidRuntimeContractTest {
                 "catalog entries carry distinct complete Linux UIDs");
         check(apps.get(0).packageName.equals(apps.get(1).packageName),
                 "catalog metadata may share package name");
+        check(!apps.get(0).iconToken.equals(apps.get(1).iconToken),
+                "catalog metadata may carry distinct icon tokens for each profile instance");
+        check(!apps.get(1).subjectId.encode().contains(apps.get(1).iconToken),
+                "catalog icon token is not part of binding identity");
         check(backend.bindApplication(apps.get(1).subjectId).persisted,
                 "Local Product Backend writes selected app binding");
         check(backend.productState().boundApplications.contains(work),
