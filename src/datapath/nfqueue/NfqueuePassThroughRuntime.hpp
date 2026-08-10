@@ -323,6 +323,24 @@ public:
     [[nodiscard]] bool applyPacketPolicy(
         std::vector<Policy::PacketPolicySubjectView> subjects,
         std::uint64_t revision) noexcept override;
+    [[nodiscard]] bool nfqueueRuntimeCountersReady() const noexcept override {
+        return true;
+    }
+    [[nodiscard]] SnortRuntime::NfqueueRuntimeCounters
+    nfqueueRuntimeCounters() const noexcept override {
+        const auto counters = flowAdapterCounters();
+        return {
+            .packetsSeen = counters.packetsSeen,
+            .acceptedPackets = counters.acceptedPackets,
+            .droppedPackets = counters.droppedPackets,
+            .parsePassThroughPackets = counters.parsePassThroughPackets,
+            .capacityPassThroughPackets = counters.capacityPassThroughPackets,
+            .ownerFaultPassThroughPackets = counters.ownerFaultPassThroughPackets,
+            .verdictSendFailures = counters.verdictSendFailures,
+            .fragmentBufferedPackets = counters.fragmentBufferedPackets,
+            .fragmentReassembledPackets = counters.fragmentReassembledPackets,
+        };
+    }
     [[nodiscard]] NfqueueFlowAdapterCounters flowAdapterCounters() const noexcept {
         return flowAdapter_.counters();
     }

@@ -13,6 +13,18 @@
 
 namespace SnortRuntime {
 
+struct NfqueueRuntimeCounters {
+    std::uint64_t packetsSeen = 0;
+    std::uint64_t acceptedPackets = 0;
+    std::uint64_t droppedPackets = 0;
+    std::uint64_t parsePassThroughPackets = 0;
+    std::uint64_t capacityPassThroughPackets = 0;
+    std::uint64_t ownerFaultPassThroughPackets = 0;
+    std::uint64_t verdictSendFailures = 0;
+    std::uint64_t fragmentBufferedPackets = 0;
+    std::uint64_t fragmentReassembledPackets = 0;
+};
+
 class BaseRuntimeControl {
 public:
     virtual ~BaseRuntimeControl() = default;
@@ -21,6 +33,12 @@ public:
     [[nodiscard]] virtual bool resetBaseRuntime() noexcept = 0;
     [[nodiscard]] virtual bool packetPolicyControlReady() const noexcept {
         return false;
+    }
+    [[nodiscard]] virtual bool nfqueueRuntimeCountersReady() const noexcept {
+        return false;
+    }
+    [[nodiscard]] virtual NfqueueRuntimeCounters nfqueueRuntimeCounters() const noexcept {
+        return {};
     }
     [[nodiscard]] virtual SnortDatapath::Policy::PacketPolicySnapshotStatus
     packetPolicyStatus() const noexcept {

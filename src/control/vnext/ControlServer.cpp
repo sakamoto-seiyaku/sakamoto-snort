@@ -113,6 +113,9 @@ rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runt
     if (runtime.nfqueuePassThroughReady()) {
         capabilities.PushBack("nfqueue-pass-through", alloc);
     }
+    if (runtime.nfqueueRuntimeCountersReady()) {
+        capabilities.PushBack("nfqueue-runtime-counters", alloc);
+    }
     if (runtime.packetPolicyControlReady()) {
         capabilities.PushBack("packet-policy-control", alloc);
     }
@@ -131,6 +134,25 @@ rapidjson::Document makeStatusResult(
                      static_cast<std::uint64_t>(status.networkGateRuleCount), alloc);
     result.AddMember("l4RuleCount", static_cast<std::uint64_t>(status.l4RuleCount), alloc);
     result.AddMember("ruleCount", static_cast<std::uint64_t>(status.ruleCount()), alloc);
+    return result;
+}
+
+rapidjson::Document makeNfqueueStatusResult(
+    const SnortRuntime::NfqueueRuntimeCounters counters) {
+    rapidjson::Document result(rapidjson::kObjectType);
+    auto &alloc = result.GetAllocator();
+    result.AddMember("packetsSeen", counters.packetsSeen, alloc);
+    result.AddMember("acceptedPackets", counters.acceptedPackets, alloc);
+    result.AddMember("droppedPackets", counters.droppedPackets, alloc);
+    result.AddMember("parsePassThroughPackets", counters.parsePassThroughPackets, alloc);
+    result.AddMember("capacityPassThroughPackets", counters.capacityPassThroughPackets, alloc);
+    result.AddMember("ownerFaultPassThroughPackets",
+                     counters.ownerFaultPassThroughPackets, alloc);
+    result.AddMember("verdictSendFailures", counters.verdictSendFailures, alloc);
+    result.AddMember("fragmentBufferedPackets",
+                     counters.fragmentBufferedPackets, alloc);
+    result.AddMember("fragmentReassembledPackets",
+                     counters.fragmentReassembledPackets, alloc);
     return result;
 }
 
@@ -617,6 +639,18 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
             return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
         }
         rapidjson::Document result = makeStatusResult(runtime.packetPolicyStatus());
+        return ControlVNext::makeOkResponse(request.id, &result);
+    }
+
+    if (request.cmd == "NFQUEUE.STATUS") {
+        if (!runtime.nfqueueRuntimeCountersReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND", "nfqueue runtime counters unavailable");
+        }
+        if (const auto err = rejectUnknown(*request.args, {}); err.has_value()) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
+        }
+        rapidjson::Document result = makeNfqueueStatusResult(runtime.nfqueueRuntimeCounters());
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 

@@ -62,10 +62,19 @@ public:
     bool ready = true;
     bool resetResult = true;
     bool policyReady = false;
+    bool nfqueueCountersReady = false;
     bool policyApplyResult = true;
     int resetCount = 0;
     int policyApplyCount = 0;
     Policy::RuntimePacketPolicySnapshot policy;
+    SnortRuntime::NfqueueRuntimeCounters nfqueueCounters;
+
+    bool nfqueueRuntimeCountersReady() const noexcept override {
+        return nfqueueCountersReady;
+    }
+    SnortRuntime::NfqueueRuntimeCounters nfqueueRuntimeCounters() const noexcept override {
+        return nfqueueCounters;
+    }
 };
 
 bool writeAll(const int fd, const std::string_view data) {
@@ -232,6 +241,65 @@ TEST(ControlServerContract, HelloAdvertisesPolicyCapabilityOnlyWhenRuntimeSuppor
               capabilities.end());
 }
 
+TEST(ControlServerContract, HelloOmitsNfqueueCountersCapabilityWhenUnsupported) {
+    FakeRuntimeControl runtime;
+    runtime.nfqueueCountersReady = false;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(6, "HELLO");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto capabilities = capabilityStrings(response["result"]["capabilities"]);
+    EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(), "nfqueue-runtime-counters"),
+              capabilities.end());
+}
+
+TEST(ControlServerContract, NfqueueStatusIsUnsupportedWithoutRuntimeCapability) {
+    FakeRuntimeControl runtime;
+    runtime.nfqueueCountersReady = false;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(7, "NFQUEUE.STATUS");
+
+    ASSERT_FALSE(response["ok"].GetBool());
+    EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
+}
+
+TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
+    FakeRuntimeControl runtime;
+    runtime.nfqueueCountersReady = true;
+    runtime.nfqueueCounters.packetsSeen = 101;
+    runtime.nfqueueCounters.acceptedPackets = 91;
+    runtime.nfqueueCounters.droppedPackets = 7;
+    runtime.nfqueueCounters.parsePassThroughPackets = 2;
+    runtime.nfqueueCounters.capacityPassThroughPackets = 3;
+    runtime.nfqueueCounters.ownerFaultPassThroughPackets = 4;
+    runtime.nfqueueCounters.verdictSendFailures = 5;
+    runtime.nfqueueCounters.fragmentBufferedPackets = 6;
+    runtime.nfqueueCounters.fragmentReassembledPackets = 8;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document hello = harness.call(8, "HELLO");
+    ASSERT_TRUE(hello["ok"].GetBool());
+    const auto capabilities = capabilityStrings(hello["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "nfqueue-runtime-counters"),
+              capabilities.end());
+
+    const rapidjson::Document response = harness.call(9, "NFQUEUE.STATUS");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto &result = response["result"];
+    EXPECT_EQ(result["packetsSeen"].GetUint64(), 101U);
+    EXPECT_EQ(result["acceptedPackets"].GetUint64(), 91U);
+    EXPECT_EQ(result["droppedPackets"].GetUint64(), 7U);
+    EXPECT_EQ(result["parsePassThroughPackets"].GetUint64(), 2U);
+    EXPECT_EQ(result["capacityPassThroughPackets"].GetUint64(), 3U);
+    EXPECT_EQ(result["ownerFaultPassThroughPackets"].GetUint64(), 4U);
+    EXPECT_EQ(result["verdictSendFailures"].GetUint64(), 5U);
+    EXPECT_EQ(result["fragmentBufferedPackets"].GetUint64(), 6U);
+    EXPECT_EQ(result["fragmentReassembledPackets"].GetUint64(), 8U);
+}
+
 TEST(ControlServerContract, PolicyStatusStartsEmptyAtRevisionZero) {
     FakeRuntimeControl runtime;
     runtime.policyReady = true;
@@ -246,6 +314,8 @@ TEST(ControlServerContract, PolicyStatusStartsEmptyAtRevisionZero) {
     EXPECT_EQ(result["ruleCount"].GetUint64(), 0U);
     EXPECT_EQ(result["networkGateRuleCount"].GetUint64(), 0U);
     EXPECT_EQ(result["l4RuleCount"].GetUint64(), 0U);
+    EXPECT_FALSE(result.HasMember("runtimeCounters"));
+    EXPECT_FALSE(result.HasMember("packetsSeen"));
 }
 
 TEST(ControlServerContract, PolicyApplyGateBlockAndEvaluateWinner) {
