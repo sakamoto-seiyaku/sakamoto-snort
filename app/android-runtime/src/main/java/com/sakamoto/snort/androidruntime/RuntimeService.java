@@ -444,9 +444,11 @@ public final class RuntimeService extends VpnService {
             stopIfInactive();
             return;
         }
-        if (!activeProfile.hasProductPacketAdapter()) {
-            failSelectedProfileWithoutRuntime(activeProfile.adapterUnavailableErrorCode(),
-                    activeProfile.adapterUnavailableMessage());
+        ProductPacketAdapterContract adapter =
+                ProductPacketAdapterContract.forProfile(activeProfile);
+        if (!adapter.productLaunchAllowed) {
+            failSelectedProfileWithoutRuntime(adapter.unavailableErrorCode,
+                    adapter.unavailableMessage);
             return;
         }
 

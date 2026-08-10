@@ -14,6 +14,7 @@ import com.sakamoto.snort.androidruntime.AuthoringPolicyBundle;
 import com.sakamoto.snort.androidruntime.ProductStateSnapshot;
 import com.sakamoto.snort.androidruntime.ProductStateStore;
 import com.sakamoto.snort.androidruntime.ProductStore;
+import com.sakamoto.snort.androidruntime.ProductPacketAdapterContract;
 import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
@@ -35,7 +36,7 @@ public final class AndroidRuntimeContractTest {
         productMutationRequestsAreVersionedServiceRequests();
         lifecycleRequestOrderingRejectsDelayedStarts();
         profileDoesNotExposeAdapterArtifacts();
-        profilePacketAdapterReadinessIsExplicit();
+        productPacketAdapterContractIsExplicit();
         snapshotRoundTripPreservesBoundedHealthAndError();
         runtimeStateWriterCanInjectPersistenceFailure();
         persistenceFailureGateIsFailClosedUntilSafeRecovery();
@@ -1014,15 +1015,32 @@ public final class AndroidRuntimeContractTest {
         check("vpn".equals(RuntimeProfile.VPN.wireName), "VPN profile wire name is stable");
     }
 
-    private static void profilePacketAdapterReadinessIsExplicit() {
-        check(RuntimeProfile.ROOT.hasProductPacketAdapter(),
-                "ROOT product Packet Adapter is currently available");
-        check(!RuntimeProfile.VPN.hasProductPacketAdapter(),
-                "VPN product Packet Adapter must not be inferred from VpnService inheritance");
-        check("vpn_adapter_unavailable".equals(RuntimeProfile.VPN.adapterUnavailableErrorCode()),
+    private static void productPacketAdapterContractIsExplicit() {
+        ProductPacketAdapterContract root =
+                ProductPacketAdapterContract.forProfile(RuntimeProfile.ROOT);
+        check(root.productLaunchAllowed,
+                "ROOT product Adapter launch is allowed by the Adapter contract");
+        check(ProductPacketAdapterContract.ROOT_ADAPTER.equals(root.adapterName),
+                "ROOT Adapter name is stable");
+        check(ProductPacketAdapterContract.UID_MISS_UNKNOWN_APPLICATION_NO_HOLD
+                        .equals(root.uidMissHandling),
+                "ROOT UID miss uses Unknown Application without hold/cache/replay");
+
+        ProductPacketAdapterContract vpn =
+                ProductPacketAdapterContract.forProfile(RuntimeProfile.VPN);
+        check(!vpn.productLaunchAllowed,
+                "VPN product Adapter must not be inferred from VpnService inheritance");
+        check(ProductPacketAdapterContract.VPN_ADAPTER.equals(vpn.adapterName),
+                "VPN Adapter name is stable");
+        check(vpn.platformInterface.contains("VpnService TUN fd"),
+                "VPN contract names the platform TUN fd seam");
+        check(vpn.separatesTransportOutcome(),
+                "VPN contract separates transport outcome from policy verdict");
+        check(ProductPacketAdapterContract.UID_MISS_UNKNOWN_APPLICATION_NO_HOLD
+                        .equals(vpn.uidMissHandling),
+                "VPN UID miss uses Unknown Application without hold/cache/replay");
+        check("vpn_adapter_unavailable".equals(vpn.unavailableErrorCode),
                 "VPN adapter unavailable has a stable error code");
-        check(RuntimeProfile.ROOT.adapterUnavailableErrorCode().isEmpty(),
-                "ROOT does not expose a spurious adapter-unavailable code");
     }
 
     private static void coreHealthDoesNotClaimAdapterReadiness() {
