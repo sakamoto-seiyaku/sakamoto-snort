@@ -1025,6 +1025,8 @@ public final class AndroidRuntimeContractTest {
         check(ProductPacketAdapterContract.UID_MISS_UNKNOWN_APPLICATION_NO_HOLD
                         .equals(root.uidMissHandling),
                 "ROOT UID miss uses Unknown Application without hold/cache/replay");
+        check(!root.requiresVpnPlatformSession,
+                "ROOT does not require Android VPN platform establishment");
 
         ProductPacketAdapterContract vpn =
                 ProductPacketAdapterContract.forProfile(RuntimeProfile.VPN);
@@ -1036,6 +1038,8 @@ public final class AndroidRuntimeContractTest {
                 "VPN contract names the platform TUN fd seam");
         check(vpn.separatesTransportOutcome(),
                 "VPN contract separates transport outcome from policy verdict");
+        check(vpn.requiresVpnPlatformSession && vpn.enableIpv6,
+                "VPN contract preflights Android TUN with dual-stack enabled");
         check(ProductPacketAdapterContract.UID_MISS_UNKNOWN_APPLICATION_NO_HOLD
                         .equals(vpn.uidMissHandling),
                 "VPN UID miss uses Unknown Application without hold/cache/replay");

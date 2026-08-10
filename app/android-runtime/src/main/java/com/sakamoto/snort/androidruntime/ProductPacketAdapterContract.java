@@ -22,6 +22,8 @@ public final class ProductPacketAdapterContract {
     public final String completionModel;
     public final String transportOutcomeModel;
     public final String uidMissHandling;
+    public final boolean requiresVpnPlatformSession;
+    public final boolean enableIpv6;
     public final boolean productLaunchAllowed;
     public final String unavailableErrorCode;
     public final String unavailableMessage;
@@ -29,6 +31,7 @@ public final class ProductPacketAdapterContract {
     private ProductPacketAdapterContract(RuntimeProfile profile, String adapterName,
                                          String platformInterface, String completionModel,
                                          String transportOutcomeModel, String uidMissHandling,
+                                         boolean requiresVpnPlatformSession, boolean enableIpv6,
                                          boolean productLaunchAllowed,
                                          String unavailableErrorCode,
                                          String unavailableMessage) {
@@ -38,6 +41,8 @@ public final class ProductPacketAdapterContract {
         this.completionModel = text(completionModel);
         this.transportOutcomeModel = text(transportOutcomeModel);
         this.uidMissHandling = text(uidMissHandling);
+        this.requiresVpnPlatformSession = requiresVpnPlatformSession;
+        this.enableIpv6 = enableIpv6;
         this.productLaunchAllowed = productLaunchAllowed;
         this.unavailableErrorCode = text(unavailableErrorCode);
         this.unavailableMessage = text(unavailableMessage);
@@ -51,6 +56,8 @@ public final class ProductPacketAdapterContract {
                     "single-writer TUN completion",
                     TRANSPORT_OUTCOME_SEPARATE,
                     UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,
+                    true,
+                    true,
                     false,
                     "vpn_adapter_unavailable",
                     "VPN/TUN product packet adapter is not integrated yet");
@@ -60,6 +67,8 @@ public final class ProductPacketAdapterContract {
                 "origin-lane NFQUEUE verdict completion",
                 "kernel verdict outcome",
                 UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,
+                false,
+                false,
                 true,
                 "",
                 "");

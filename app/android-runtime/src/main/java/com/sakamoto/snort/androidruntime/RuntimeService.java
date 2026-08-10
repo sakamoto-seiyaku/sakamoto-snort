@@ -447,6 +447,9 @@ public final class RuntimeService extends VpnService {
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(activeProfile);
         if (!adapter.productLaunchAllowed) {
+            if (!preflightUnavailableAdapter(adapter)) {
+                return;
+            }
             failSelectedProfileWithoutRuntime(adapter.unavailableErrorCode,
                     adapter.unavailableMessage);
             return;
@@ -1467,6 +1470,25 @@ public final class RuntimeService extends VpnService {
         publish(RuntimeSnapshot.error(selected, VppHealthHandshake.PROTOCOL, "", "", "",
                 code, message, false, -1L, generation));
         stopIfInactive();
+    }
+
+    private boolean preflightUnavailableAdapter(ProductPacketAdapterContract adapter) {
+        if (adapter == null || !adapter.requiresVpnPlatformSession) {
+            return true;
+        }
+        VpnTunPlatformSession.EstablishResult result =
+                VpnTunPlatformSession.establish(this, adapter.enableIpv6);
+        if (!result.ok) {
+            failSelectedProfileWithoutRuntime(result.errorCode, result.errorMessage);
+            return false;
+        }
+        try {
+            result.session.close();
+            return true;
+        } catch (IOException error) {
+            failSelectedProfileWithoutRuntime("vpn_tun_cleanup_failed", messageOf(error));
+            return false;
+        }
     }
 
     private void failWithCleanup(String code, String message) {
