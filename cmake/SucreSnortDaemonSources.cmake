@@ -30,6 +30,7 @@ set(
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueueFlowAdapter.cpp"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueuePacketLeaseAdapter.cpp"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue/NfqueueFragmentLeaseBook.cpp"
+  "${CMAKE_SOURCE_DIR}/src/datapath/tun/VpnTunFlowAdapter.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/FlowSteering.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/FlowGraphIngress.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/FlowGraphFragmentIngress.cpp"

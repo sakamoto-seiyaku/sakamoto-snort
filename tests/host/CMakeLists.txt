@@ -119,6 +119,17 @@ target_compile_definitions(
     "SUCRE_SNORT_SOURCE_ROOT=\"${SUCRE_SNORT_ROOT}\""
 )
 add_sucre_snort_host_test(
+  vpn_tun_flow_adapter_tests
+  vpn_tun_flow_adapter_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnTunFlowAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphIngress.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
+)
+add_sucre_snort_host_test(
   vpp_graph_injection_tests
   vpp_graph_injection_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
@@ -175,8 +186,14 @@ add_sucre_snort_host_test(
 add_sucre_snort_host_test(
   runtime_profile_tests
   runtime_profile_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnTunFlowAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/RuntimeFactoryPlan.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/RuntimeProfile.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphIngress.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(

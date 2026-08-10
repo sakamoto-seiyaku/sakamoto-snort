@@ -5,14 +5,17 @@
 
 #pragma once
 
+#include <VpnTunFlowAdapter.hpp>
 #include <RuntimeControl.hpp>
 
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace SnortDatapath::Tun {
 
@@ -26,7 +29,9 @@ namespace SnortDatapath::Tun {
 
 class VpnTunFdRuntime final : public SnortRuntime::BaseRuntimeControl {
 public:
-    explicit VpnTunFdRuntime(const int tunFd) noexcept : tunFd_(tunFd) {}
+    explicit VpnTunFdRuntime(const int tunFd)
+        : tunFd_(tunFd),
+          flowAdapter_(VpnTunFlowAdapterConfig{.packetPolicy = &packetPolicy_}) {}
 
     ~VpnTunFdRuntime() override {
         if (tunFd_ >= 0) {
@@ -36,19 +41,8 @@ public:
 
     VpnTunFdRuntime(const VpnTunFdRuntime &) = delete;
     VpnTunFdRuntime &operator=(const VpnTunFdRuntime &) = delete;
-
-    VpnTunFdRuntime(VpnTunFdRuntime &&other) noexcept
-        : tunFd_(std::exchange(other.tunFd_, -1)) {}
-
-    VpnTunFdRuntime &operator=(VpnTunFdRuntime &&other) noexcept {
-        if (this != &other) {
-            if (tunFd_ >= 0) {
-                ::close(tunFd_);
-            }
-            tunFd_ = std::exchange(other.tunFd_, -1);
-        }
-        return *this;
-    }
+    VpnTunFdRuntime(VpnTunFdRuntime &&) = delete;
+    VpnTunFdRuntime &operator=(VpnTunFdRuntime &&) = delete;
 
     [[nodiscard]] bool start() const noexcept {
         return tunFd_ >= 0;
@@ -70,6 +64,34 @@ public:
         return tunFd_ >= 0;
     }
 
+    [[nodiscard]] bool packetPolicyControlReady() const noexcept override {
+        return true;
+    }
+
+    [[nodiscard]] Policy::PacketPolicySnapshotStatus
+    packetPolicyStatus() const noexcept override {
+        return packetPolicy_.status();
+    }
+
+    [[nodiscard]] Policy::PacketPolicyDecision evaluatePacketPolicy(
+        const Flow::PacketFacts &facts) const noexcept override {
+        return packetPolicy_.evaluate(facts);
+    }
+
+    [[nodiscard]] bool applyPacketPolicy(
+        std::vector<Policy::PacketPolicySubjectView> subjects,
+        const std::uint64_t revision) noexcept override {
+        try {
+            packetPolicy_.apply(std::move(subjects), revision);
+            return true;
+        } catch (const std::exception &e) {
+            std::cerr << "VPN/TUN packet policy apply failed: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "VPN/TUN packet policy apply failed: unknown exception\n";
+        }
+        return false;
+    }
+
     [[nodiscard]] bool resetBaseRuntime() noexcept override {
         return tunFd_ >= 0;
     }
@@ -88,9 +110,15 @@ public:
         return SnortRuntime::VpnTunFdAttachResult::accepted();
     }
 
+    [[nodiscard]] VpnTunFlowAdapterCounters flowAdapterCounters() const noexcept {
+        return flowAdapter_.counters();
+    }
+
 private:
     int tunFd_ = -1;
     bool ipv6Enabled_ = false;
+    Policy::RuntimePacketPolicySnapshot packetPolicy_;
+    VpnTunFlowAdapter flowAdapter_;
 };
 
 } // namespace SnortDatapath::Tun
