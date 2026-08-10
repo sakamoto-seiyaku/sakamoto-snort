@@ -42,6 +42,7 @@ public final class AndroidRuntimeContractTest {
         globalOwnershipDecisionRequiresOneProjectionConsistentOwner();
         pidlessLiveOwnerIsAdoptable();
         ownershipCleanupDecisionFailsClosed();
+        residueOwnershipAuditRetryIsNarrow();
         cleanStopDecisionRequiresGlobalProof();
         ownershipInspectionKeepsIdentityInThePublicSeam();
         pidIdentityUsesPrivilegedProcContext();
@@ -477,6 +478,40 @@ public final class AndroidRuntimeContractTest {
                                 "ownership inspection unavailable"),
                         true);
         check(!unknown.canRemove(), "unknown ownership blocks profile cleanup");
+    }
+
+    private static void residueOwnershipAuditRetryIsNarrow() {
+        RuntimeOwnershipReconciliation.OwnershipAudit transientAudit =
+                RuntimeOwnershipReconciliation.OwnershipAudit.unknown(
+                        "cleanup_failed",
+                        "app-UID /proc ownership scan returned status 120");
+        check(RuntimeOwnershipReconciliation.shouldRetryResidueOwnershipAudit(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, transientAudit),
+                "post-exit residue cleanup retries a bounded transient ownership scan race");
+        check(!RuntimeOwnershipReconciliation.shouldRetryResidueOwnershipAudit(
+                        RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN,
+                        false, transientAudit),
+                "unverifiable recorded PID cannot use the transient residue retry");
+        check(!RuntimeOwnershipReconciliation.shouldRetryResidueOwnershipAudit(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        true, transientAudit),
+                "live process handle blocks the transient residue retry");
+        check(!RuntimeOwnershipReconciliation.shouldRetryResidueOwnershipAudit(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, RuntimeOwnershipReconciliation.OwnershipAudit.live(4242L)),
+                "live audited owner is never retried as transient residue");
+        check(!RuntimeOwnershipReconciliation.shouldRetryResidueOwnershipAudit(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, RuntimeOwnershipReconciliation.OwnershipAudit.unknown(
+                                "cleanup_failed", "socket residue remains")),
+                "ordinary cleanup failures do not enter the transient residue retry");
+        check(!RuntimeOwnershipReconciliation.shouldRetryResidueOwnershipAudit(
+                        RuntimeOwnershipReconciliation.PidIdentity.MISSING,
+                        false, RuntimeOwnershipReconciliation.OwnershipAudit.unknown(
+                                "root_authorization_required",
+                                "privileged audit unavailable")),
+                "authorization failures remain fail-closed");
     }
 
     private static void cleanStopDecisionRequiresGlobalProof() {

@@ -1179,6 +1179,19 @@ public final class RuntimeService extends VpnService {
         if (identity == RuntimeOwnershipReconciliation.PidIdentity.MISSING
                 && !processAlive(process) && profile != null && profile.exists()) {
             audit = auditOwnedProcess(profile);
+            for (int attempt = 0;
+                    attempt < OWNERSHIP_RETRY_ATTEMPTS
+                            && RuntimeOwnershipReconciliation.shouldRetryResidueOwnershipAudit(
+                                    identity, processAlive(process), audit);
+                    attempt++) {
+                try {
+                    Thread.sleep(OWNERSHIP_RETRY_MILLIS);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                audit = auditOwnedProcess(profile);
+            }
         }
         RuntimeOwnershipReconciliation.CleanupDecision decision =
                 RuntimeOwnershipReconciliation.decideCleanup(

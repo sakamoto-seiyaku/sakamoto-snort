@@ -512,6 +512,23 @@ public final class RuntimeOwnershipReconciliation {
         return true;
     }
 
+    /**
+     * A residue cleanup audit may race the just-terminated owner disappearing
+     * from /proc. Retry only that narrow transient scanner result: the
+     * recorded PID must already be gone, the in-process handle must be gone,
+     * and the audit must be the bounded status-120/124 ownership scan failure.
+     * Live owners, ambiguous identity, root authorization failures, and
+     * ordinary cleanup errors remain fail-closed.
+     */
+    public static boolean shouldRetryResidueOwnershipAudit(
+            PidIdentity identity, boolean processHandleAlive, OwnershipAudit audit) {
+        return identity == PidIdentity.MISSING
+                && !processHandleAlive
+                && audit != null
+                && audit.isUnknown()
+                && isTransientOwnershipAuditFailure(audit.errorCode, audit.detail);
+    }
+
     /** Public predicate for callers that must avoid auditing ordinary stops. */
     public static boolean isTransientOwnershipAuditFailure(String errorCode, String detail) {
         if (!"cleanup_failed".equals(value(errorCode))) {
