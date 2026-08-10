@@ -542,6 +542,11 @@ public final class RuntimeService extends VpnService {
                         : health.errorCode, "VPP health did not prove profile readiness");
                 return;
             }
+            if (!attachVpnTunSessionAfterHealth(activeProfile, vpnTunSession)) {
+                failWithCleanup("vpn_tun_control_attach_failed",
+                        "VPN TUN fd handoff over vNext control failed");
+                return;
+            }
             closeVpnTunSessionAfterNativeHandoff();
             long pid = readPid(pidFile);
             if (pid <= 0L || !isPidAlive(pid)) {
@@ -1506,6 +1511,35 @@ public final class RuntimeService extends VpnService {
             return null;
         }
         return result.session;
+    }
+
+    private boolean attachVpnTunSessionAfterHealth(RuntimeProfile profile,
+                                                   VpnTunPlatformSession session) {
+        if (profile != RuntimeProfile.VPN) {
+            return true;
+        }
+        if (session == null || !session.isOpen()) {
+            appendLog("vpn_tun_control_attach=missing_session");
+            return false;
+        }
+        int rawFd = session.releaseFd();
+        RuntimeControlFdClient.AttachResult result =
+                RuntimeControlFdClient.attachVpnTun(rawFd, session.ipv6Enabled);
+        if (!result.ok) {
+            appendLog("vpn_tun_control_attach=failed code=" + result.errorCode
+                    + " message=" + result.errorMessage);
+            return false;
+        }
+        if (!ProductPacketAdapterContract.VPN_ADAPTER.equals(result.adapter)
+                || !result.fdAttached || result.ipv6Enabled != session.ipv6Enabled) {
+            appendLog("vpn_tun_control_attach=invalid_result adapter=" + result.adapter
+                    + " fdAttached=" + result.fdAttached
+                    + " ipv6Enabled=" + result.ipv6Enabled);
+            return false;
+        }
+        appendLog("vpn_tun_control_attach=ok adapter=" + result.adapter
+                + " ipv6Enabled=" + result.ipv6Enabled);
+        return true;
     }
 
     private void closeVpnTunSessionAfterNativeHandoff() {
