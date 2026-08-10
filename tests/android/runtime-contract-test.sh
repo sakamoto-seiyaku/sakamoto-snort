@@ -48,10 +48,10 @@ grep -q 'RuntimeControlBackend' "$production_activity_source"
 grep -q 'backend.query' "$production_activity_source"
 grep -q 'current.profile == RuntimeProfile.VPN' "$production_activity_source"
 grep -q 'requestedProfile' "$production_activity_source"
-if grep -q 'LocalProductBackend' "$production_activity_source"; then
-  echo "Activity control adapter retained the misleading LocalProductBackend name" >&2
-  exit 1
-fi
+grep -q 'LocalProductBackend' "$production_activity_source"
+grep -q 'PackageManagerApplicationCatalogProvider' "$production_activity_source"
+grep -q 'ProductCatalogFormatter' "$production_activity_source"
+grep -q 'bindApplication(subjectId)' "$production_activity_source"
 
 service_source="$repo_root/experiments/vpp-nfq-poc/android/vpn-lite/src/main/java/com/sakamoto/snort/vpnlite/SnortRuntimeService.java"
 grep -q 'SAKAMOTO_VPP_OWNER_TOKEN' "$service_source"

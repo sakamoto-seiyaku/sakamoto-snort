@@ -16,6 +16,7 @@ import com.sakamoto.snort.androidruntime.ProductStateStore;
 import com.sakamoto.snort.androidruntime.ProductStore;
 import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
+import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -56,6 +57,7 @@ public final class AndroidRuntimeContractTest {
         applicationSubjectIdentityIsCompleteUidOnly();
         productStorePersistsProfileBindingsAndEmptyBundle();
         boundedActivityStoreIsSeparateFromProductState();
+        productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
         System.out.println("android runtime contract: PASS");
     }
@@ -1057,6 +1059,59 @@ public final class AndroidRuntimeContractTest {
         check(!ProductStateStore.stateFile(files.toFile()).getPath()
                         .contains(BoundedActivityStore.REPOSITORY_DIRECTORY),
                 "bounded Activity repository path is not policy/config state");
+    }
+
+    private static void productCatalogFormatterKeepsUidIdentitySeparateFromMetadata() {
+        ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
+        ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
+        java.util.TreeSet<ApplicationSubjectId> bound = new java.util.TreeSet<>();
+        bound.add(work);
+        ProductStateSnapshot state = new ProductStateSnapshot(RuntimeProfile.VPN, bound,
+                AuthoringPolicyBundle.empty());
+        List<ApplicationCatalogEntry> catalog = Arrays.asList(
+                new ApplicationCatalogEntry(primary, "com.example.mail", "Mail",
+                        "icon:mail/u0", 0, "Owner", true),
+                new ApplicationCatalogEntry(work, "com.example.mail", "Mail",
+                        "icon:mail/u10", 10, "Work", false));
+
+        ProductCatalogFormatter.Projection loading = ProductCatalogFormatter.loading(state);
+        check(loading.displayText.contains("Catalog: loading"),
+                "Product UI projection has an explicit catalog loading state");
+
+        ProductCatalogFormatter.Projection projection =
+                ProductCatalogFormatter.result(state, catalog);
+        check(projection.rows.size() == 2,
+                "same package in two Android profiles renders as two product catalog rows");
+        check(projection.rows.get(0).packageName.equals(projection.rows.get(1).packageName),
+                "catalog rows may share package metadata");
+        check(!projection.rows.get(0).subjectId.equals(projection.rows.get(1).subjectId),
+                "catalog rows keep distinct ApplicationSubjectId identities");
+        check(projection.rows.get(1).fullUid == 1010001,
+                "catalog row renders full Linux UID identity");
+        check(projection.boundApplicationCount == 1,
+                "Product UI projection renders bound application count");
+        check(projection.firstBoundSubjectId.equals(work),
+                "unbind candidate is the bound ApplicationSubjectId");
+        check(projection.firstAvailableSubjectId.equals(primary),
+                "bind candidate is the first available ApplicationSubjectId, not packageName");
+        ProductCatalogFormatter.Projection nextCandidate =
+                ProductCatalogFormatter.result(new ProductStateSnapshot(RuntimeProfile.VPN,
+                        new java.util.TreeSet<>(Arrays.asList(primary)),
+                        AuthoringPolicyBundle.empty()), catalog);
+        check(nextCandidate.firstAvailableSubjectId == null,
+                "bind candidate skips already-bound available ApplicationSubjectId");
+        check(projection.displayText.contains("Product Store selected profile: VPN (vpn)"),
+                "Product UI projection renders selected profile from ProductStore state");
+        check(projection.displayText.contains("Catalog: result: 2 application instances"),
+                "Product UI projection has an explicit catalog result state");
+        check(projection.displayText.contains("full uid 1010001"),
+                "Product UI projection displays full UID for profile-specific app rows");
+
+        ProductCatalogFormatter.Projection error =
+                ProductCatalogFormatter.error(state, "catalog_load_failed",
+                        "PackageManager unavailable");
+        check(error.displayText.contains("Catalog: error catalog_load_failed"),
+                "Product UI projection has an explicit catalog error state");
     }
 
     private static void localProductBackendProjectsCatalogWithoutOwningMetadataIdentity()
