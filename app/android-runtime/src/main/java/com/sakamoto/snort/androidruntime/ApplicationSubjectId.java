@@ -5,7 +5,6 @@ import java.util.Objects;
 /** Hot-path-safe Android application identity: the complete Linux UID only. */
 public final class ApplicationSubjectId implements Comparable<ApplicationSubjectId> {
     public static final int ANDROID_USER_OFFSET = 100000;
-    public static final int ANDROID_APP_ID_START = 10000;
     public static final String ANDROID_VARIANT = "android";
 
     public final int uid;
@@ -19,9 +18,6 @@ public final class ApplicationSubjectId implements Comparable<ApplicationSubject
         this.uid = uid;
         this.userId = uid / ANDROID_USER_OFFSET;
         this.appId = uid % ANDROID_USER_OFFSET;
-        if (appId < ANDROID_APP_ID_START) {
-            throw new IllegalArgumentException("UID is not an Android application UID: " + uid);
-        }
     }
 
     public static ApplicationSubjectId fromUid(int uid) {

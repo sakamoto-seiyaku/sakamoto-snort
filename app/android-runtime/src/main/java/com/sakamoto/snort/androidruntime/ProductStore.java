@@ -23,6 +23,7 @@ public final class ProductStore {
     private final File filesDir;
     private final ProductStateStore.Writer writer;
     private ProductStateSnapshot snapshot;
+    private ProductStateStore.ReadResult lastReadResult;
 
     public ProductStore(File filesDir) {
         this(filesDir, ProductStateStore.defaultWriter());
@@ -31,11 +32,16 @@ public final class ProductStore {
     public ProductStore(File filesDir, ProductStateStore.Writer writer) {
         this.filesDir = filesDir;
         this.writer = writer == null ? ProductStateStore.defaultWriter() : writer;
-        this.snapshot = ProductStateStore.read(filesDir);
+        this.lastReadResult = ProductStateStore.readResult(filesDir);
+        this.snapshot = lastReadResult.snapshot;
     }
 
     public synchronized ProductStateSnapshot snapshot() {
         return snapshot;
+    }
+
+    public synchronized ProductStateStore.ReadResult readResult() {
+        return lastReadResult;
     }
 
     public synchronized MutationResult selectRuntimeProfile(RuntimeProfile profile) {
@@ -52,6 +58,7 @@ public final class ProductStore {
 
     public synchronized ProductStateStore.ReadResult reload() {
         ProductStateStore.ReadResult result = ProductStateStore.readResult(filesDir);
+        lastReadResult = result;
         if (result.valid) {
             snapshot = result.snapshot;
         }
@@ -59,8 +66,17 @@ public final class ProductStore {
     }
 
     private MutationResult publish(ProductStateSnapshot next) {
+        if (lastReadResult != null && !lastReadResult.valid) {
+            return new MutationResult(false, snapshot, lastReadResult.errorCode,
+                    lastReadResult.errorMessage);
+        }
         try {
             writer.write(filesDir, next);
+            lastReadResult = ProductStateStore.readResult(filesDir);
+            if (!lastReadResult.valid) {
+                return new MutationResult(false, snapshot, lastReadResult.errorCode,
+                        lastReadResult.errorMessage);
+            }
             snapshot = next;
             return new MutationResult(true, snapshot, "", "");
         } catch (IOException error) {

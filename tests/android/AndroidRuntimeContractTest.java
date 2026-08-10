@@ -972,6 +972,8 @@ public final class AndroidRuntimeContractTest {
                 "subject identity encodes only the Android UID variant");
         check(!owner.encode().contains("com.example"),
                 "package metadata is not part of hot-path policy identity");
+        check(ApplicationSubjectId.fromUid(1000).appId == 1000,
+                "complete Linux UID identity does not discard system package UIDs");
     }
 
     private static void productStorePersistsProfileBindingsAndEmptyBundle() throws Exception {
@@ -1026,6 +1028,11 @@ public final class AndroidRuntimeContractTest {
                 "unsupported product state schema is reported explicitly");
         check("product_state_unsupported_schema".equals(unsupported.errorCode),
                 "unsupported product state schema has a distinct actionable error");
+        ProductStore blockedStore = new ProductStore(files.toFile());
+        check(!blockedStore.readResult().valid,
+                "ProductStore exposes unsupported initial read instead of hiding it");
+        check(!blockedStore.selectRuntimeProfile(RuntimeProfile.ROOT).persisted,
+                "ProductStore does not overwrite unsupported state as if it were empty");
     }
 
     private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {
