@@ -10,9 +10,7 @@
 #include <NfqueuePacketLeaseAdapter.hpp>
 #include <NfqueueTopology.hpp>
 #include <RuntimeControl.hpp>
-#include <FragmentSteering.hpp>
-#include <FlowGraphInjection.hpp>
-#include <FlowGraphIngress.hpp>
+#include <FlowGraphFragmentIngress.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -235,9 +233,7 @@ public:
 private:
     NfqueueFlowAdapterConfig config_;
     Flow::FlowSteeringRuntime steering_;
-    Flow::FlowGraphInjectionGate graphGate_;
-    Flow::FlowGraphIngressParser ingressParser_;
-    Flow::FragmentSteering fragmentSteering_;
+    Flow::FlowGraphFragmentIngress graphIngress_;
     NfqueueFragmentLeaseBook fragmentLeaseBook_;
     std::chrono::steady_clock::time_point fragmentEpoch_ =
         std::chrono::steady_clock::now();

@@ -137,6 +137,8 @@ TEST(NfqueueFlowAdapterTest, SourceUsesGraphIngressParserNotPacketCaptureAdapter
     ASSERT_FALSE(source.empty());
     EXPECT_NE(source.find("FlowGraphIngress"), std::string::npos);
     EXPECT_EQ(source.find("PacketCaptureAdapter"), std::string::npos);
+    EXPECT_EQ(source.find("FragmentSteering"), std::string::npos);
+    EXPECT_EQ(source.find("FragmentSubmitStatus"), std::string::npos);
 }
 
 TEST(NfqueueFlowAdapterTest, NormalizesAndRunsSharedOwnerGate) {

@@ -105,6 +105,7 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueFlowAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphIngress.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
@@ -120,6 +121,16 @@ add_sucre_snort_host_test(
   vpp_graph_injection_tests
   vpp_graph_injection_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
+)
+add_sucre_snort_host_test(
+  flow_graph_fragment_ingress_tests
+  flow_graph_fragment_ingress_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphIngress.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
