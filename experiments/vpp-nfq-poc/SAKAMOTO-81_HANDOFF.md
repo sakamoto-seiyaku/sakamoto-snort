@@ -12,6 +12,13 @@ Plane:
 - SAKAMOTO-81 — this audit: POC: ownership closure audit 与 return handoff.
 - Inputs: SAKAMOTO-73 through SAKAMOTO-80 handoffs and raw evidence.
 
+Evidence-retention note: Plane remains the tracker source of truth. This file
+is a point-in-time evidence handoff, not a tracker. Some early host raw
+directories were intentionally written under `/tmp`; S81 therefore
+distinguishes repo-retained handoff/counter evidence, current raw paths still
+present on this filesystem, and historical raw paths that are cited by earlier
+handoffs but are no longer retained locally.
+
 Current audit revision:
 
 - Repo/branch at audit time: `poc/p6-conditional-wake-redesign`.
@@ -209,10 +216,10 @@ kernel `6.1.134-android14-11-g66e758f7d0c0-ab13748739`, root context
 
 | Result | Source revision | Artifact identity | Environment | One command | Raw evidence | Validity | Residue check |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| S73 initial live-buffer probe | VPP `9258530f3804a152578ce11cc7c8a1e9eab88ed0`; repo handoff records plugin hash `8a2dc0...` | `nfqueue_live_poc_plugin.so`, 9000-byte patch `439ac1...`; regular-memfd fallback `1ddd59...` | Host disposable user/netns | `rtk unshare -Urn env S73_LOCAL_DUMMY=1 S73_REGULAR_MEMFD=1 INJECT_STALE=1 INJECT_DUPLICATE=1 S73_EVIDENCE_DIR=/tmp/sakamoto-s73-evidence-ipv4-third ./scripts/run-nfqueue-live-poc.sh` | `/tmp/sakamoto-s73-evidence-ipv4-third/`, `/tmp/sakamoto-s73-evidence-overflow/`, S73 handoff | Valid for initial direct receive, inline metadata, remote handoff, stale/duplicate, reserve overflow | `outstanding-obligations 0`, native return and disable snapshots recorded |
-| S74 envelope/multi-message | VPP `9258530...`; plugin hash `63e7d41...` | Envelope harness plus live plugin | Host user/netns and deterministic C harness | `rtk bash experiments/vpp-nfq-poc/scripts/test-nfqueue-live-poc-envelope.sh` | `/tmp/sakamoto-s74-envelope-test/`, `/tmp/sakamoto-s74-evidence-ipv4-mixed-final/`, S74 handoff | Valid for netlink envelope sizing and multi-message rejection; PARTIAL for one-buffer-per-obligation | Harness reports `native-returns=1 obligations=0 copies=0 residue=0` for multi-message rejection |
-| S75 dual-stack ingress metadata | VPP `9258530...`; plugin hash `45cc181...` | Four NFQUEUE lanes ip4/ip6 INPUT/OUTPUT | Host user/netns, concurrent IPv4/IPv6 pings | `rtk unshare -Urn env S75_REGULAR_MEMFD=1 S75_EVIDENCE_DIR=/tmp/sakamoto-s75-evidence-normal-final ./scripts/run-nfqueue-live-poc-s75.sh` | `/tmp/sakamoto-s75-evidence-normal-final/`, `/tmp/sakamoto-s75-evidence-fault-final/`, S75 handoff | Valid for family/hook/direction/UID metadata and missing identity behavior | After-disable snapshots record zero outstanding/residue |
-| S76 worker ownership | VPP `9258530...` | Host live plugin plus deterministic ledger | Host user/netns with local/remote/stress/fault modes | `rtk unshare -Urn env S76_REGULAR_MEMFD=1 S76_OWNER_MODE=remote S76_STRESS=1 S76_EVIDENCE_DIR=/tmp/sakamoto-s76-evidence-stress ./scripts/run-nfqueue-live-poc-s76.sh` | `/tmp/sakamoto-s76-evidence*`, S76 handoff | Valid for owner-local, owner-remote, queue-full and credit-exhaustion closure | Stress reports `257` obligations/verdicts/native returns and zero residue |
+| S73 initial live-buffer probe | VPP `9258530f3804a152578ce11cc7c8a1e9eab88ed0`; repo handoff records plugin hash `8a2dc0...` | `nfqueue_live_poc_plugin.so`, 9000-byte patch `439ac1...`; regular-memfd fallback `1ddd59...` | Host disposable user/netns | `rtk unshare -Urn env S73_LOCAL_DUMMY=1 S73_REGULAR_MEMFD=1 INJECT_STALE=1 INJECT_DUPLICATE=1 S73_EVIDENCE_DIR=/tmp/sakamoto-s73-evidence-ipv4-third ./scripts/run-nfqueue-live-poc.sh` | Repo-retained: `experiments/vpp-nfq-poc/SAKAMOTO-73_HANDOFF.md`. Current raw: `/tmp/sakamoto-s73-evidence-s77-align-default/` has `run.log`, `show-before-disable.txt`, `show-after-disable.txt` for a later aligned S73 path. Historical raw cited by S73 but currently missing: `/tmp/sakamoto-s73-evidence-ipv4-third/`, `/tmp/sakamoto-s73-evidence-overflow/`. | Technical claim remains supported by repo-retained S73 counters and current aligned raw for the normal path; evidence retention is PARTIAL for the original IPv4/overflow raw directories. | Repo handoff records zero outstanding/native-return closure; current aligned raw also reports `outstanding-obligations 0`, `residue-obligations 0`. Original overflow residue is repo-retained only. |
+| S74 envelope/multi-message | VPP `9258530...`; plugin hash `63e7d41...` | Envelope harness plus live plugin | Host user/netns and deterministic C harness | `rtk bash experiments/vpp-nfq-poc/scripts/test-nfqueue-live-poc-envelope.sh` | Repo-retained: `experiments/vpp-nfq-poc/SAKAMOTO-74_HANDOFF.md` and `experiments/vpp-nfq-poc/tests/nfqueue_live_envelope_test.c`. Current raw: `/tmp/sakamoto-s74-envelope-test/` and `/tmp/sakamoto-s74-s78reg/`. Historical raw currently missing: `/tmp/sakamoto-s74-evidence-ipv4-mixed-final/`. | Envelope/multi-message rejection is currently reproducible via the deterministic harness; live mixed-final raw retention is PARTIAL. One-buffer-per-obligation remains PARTIAL by design. | Current harness reports `native-returns=1 obligations=0 copies=0 residue=0` for multi-message rejection; `/tmp/sakamoto-s74-s78reg/show-before-disable.txt` reports zero outstanding/residue for a later live single-message path. |
+| S75 dual-stack ingress metadata | VPP `9258530...`; plugin hash `45cc181...` | Four NFQUEUE lanes ip4/ip6 INPUT/OUTPUT | Host user/netns, concurrent IPv4/IPv6 pings | `rtk unshare -Urn env S75_REGULAR_MEMFD=1 S75_EVIDENCE_DIR=/tmp/sakamoto-s75-evidence-normal-final ./scripts/run-nfqueue-live-poc-s75.sh` | Repo-retained: `experiments/vpp-nfq-poc/SAKAMOTO-75_HANDOFF.md`. Current raw: `/tmp/sakamoto-s75-s78reg/` has a later dual-stack live path. Historical raw currently missing: `/tmp/sakamoto-s75-evidence-normal-final/`, `/tmp/sakamoto-s75-evidence-fault-final/`. | Dual-stack metadata claim remains supported by repo-retained S75 counters and current later dual-stack raw; original normal/fault raw retention is PARTIAL, especially for missing-identity fault raw. | Repo handoff records after-disable zero outstanding/residue; current `/tmp/sakamoto-s75-s78reg/show-before-disable.txt` reports `native-buffer-returns 17`, `outstanding-obligations 0`, `residue-obligations 0`. |
+| S76 worker ownership | VPP `9258530...` | Host live plugin plus deterministic ledger | Host user/netns with local/remote/stress/fault modes | `rtk unshare -Urn env S76_REGULAR_MEMFD=1 S76_OWNER_MODE=remote S76_STRESS=1 S76_EVIDENCE_DIR=/tmp/sakamoto-s76-evidence-stress ./scripts/run-nfqueue-live-poc-s76.sh` | Repo-retained: `experiments/vpp-nfq-poc/SAKAMOTO-76_HANDOFF.md`. Current raw: `/tmp/sakamoto-s76-evidence-s77-resume-stress/`, `/tmp/sakamoto-s76-s78reg/`. Historical raw currently missing: `/tmp/sakamoto-s76-evidence/`, `/tmp/sakamoto-s76-evidence-local/`, `/tmp/sakamoto-s76-evidence-remote/`, `/tmp/sakamoto-s76-evidence-stress/`, `/tmp/sakamoto-s76-evidence-queue-full/`. | Remote stress is currently raw-retained via the S77 resume stress rerun. Local/mixed/queue-full/credit-exhaustion original raw retention is PARTIAL and relies on repo-retained S76 handoff plus deterministic source seams. | Current S77 resume stress raw reports `257` obligations/verdicts/native returns, `completion-credit-acquired 257`, released `257`, and `residue-obligations 0`; other S76 fault residues are repo-retained only. |
 | S77 completion outcomes | VPP `9258530...` | Completion outcome matrix | Host user/netns | `rtk unshare -Urn env S77_FAULT=normal S77_OWNER_MODE=remote S77_REGULAR_MEMFD=1 S77_EVIDENCE_DIR=/tmp/sakamoto-s77-evidence-matrix-normal-resume ./scripts/run-nfqueue-live-poc-s77.sh` | `/tmp/sakamoto-s77-evidence-matrix-*`, S77 handoff | Valid for normal, failed-definite, explicit unknown outcome classification | All rows report zero retry/re-entry/debt/outstanding |
 | S78 reserve/capacity | VPP `9258530...` | Lane-local reserve matrix | Host user/netns and deterministic reserve ledger | `rtk unshare -Urn env S78_MATRIX_DIR=/tmp/sakamoto-s78-matrix-faultfix2 ./scripts/run-nfqueue-live-poc-s78-matrix.sh` | `/tmp/sakamoto-s78-*`, S78 handoff | Valid for reserve, loss, degradation and no dynamic growth/cross-lane borrowing | Matrix reports zero outstanding/residue after disable |
 | S79 teardown/process lifecycle | VPP `9258530...`; plugin hash `0cf3bd...` | Teardown runner/matrix | Host user/netns | `rtk unshare -Urn env S79_MATRIX_DIR=/tmp/sakamoto-s79-final-matrix3 S79_ROUNDS=3 ./scripts/run-nfqueue-live-poc-s79-matrix.sh` | `/tmp/sakamoto-s79-final-matrix3/`, S79 handoff | Valid for queue-disable, clean stop, drain deadline, process termination, fresh restart, multiple generations | Clean rounds report zero obligations/ring/debt/credit/resource residue; process death explicitly classified |
@@ -288,15 +295,17 @@ The return must carry three explicit limits:
 3. Process death is explicit fault evidence plus fresh restart, not clean
    in-process teardown.
 
-Recommended next tickets/decisions:
+Return-design inputs for Plane SAKAMOTO-72 / SAKAMOTO-81:
 
-- Product design/HITL decision: accept S74 multi-message rejection as production
-  Root behavior or design a no-copy chain/multi-buffer admission strategy.
-- Capacity ticket: choose Android buffer size, queue/worker count, credit depth,
-  reserve sizing, and payload envelope coverage under throughput/latency/power
-  measurements.
-- Product Gate/L4 implementation tickets: reuse the proven ownership seam but do
-  not promote this throwaway plugin shape directly into release code.
-- Supervisor/lifecycle decision: define process-death cleanup/restart/backoff
-  policy separately from adapter-owned exactly-once completion.
-
+- Multi-message behavior: S74's safe rejection is a confirmed POC boundary.
+  Carry it back as design evidence when Plane-owned product work decides whether
+  production Root behavior accepts rejection or adds a no-copy chain/multi-buffer
+  admission design.
+- Capacity: S80's Android proof is bounded to 2048-byte VPP buffers and the
+  measured ICMP envelopes. Capacity constants and broader payload coverage must
+  be chosen in Plane-owned release/capacity work, not inferred from this doc.
+- Product promotion: the ownership seam is reusable evidence, but this
+  throwaway plugin shape is not itself the SAKAMOTO-68 Gate/L4 implementation.
+- Lifecycle: S79/S80 process-death evidence is a fault classification plus
+  fresh-generation recovery input. Product supervisor restart/backoff behavior
+  remains a Plane-owned design concern outside this handoff.
