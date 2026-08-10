@@ -26,6 +26,7 @@ import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.List;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.io.IOException;
 import java.io.InputStream;
@@ -45,10 +46,20 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_RUNTIME_PROFILE = "runtimeProfile";
     private static final String EXTRA_RUNTIME_CLEANUP_FAULT = "runtimeCleanupFault";
     private static final String EXTRA_DEBUG_TRAFFIC = "debugTraffic";
+    private static final String EXTRA_DEBUG_TRAFFIC_HOST = "debugTrafficHost";
+    private static final String EXTRA_DEBUG_TRAFFIC_PORT = "debugTrafficPort";
+    private static final String EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS =
+            "debugTrafficTimeoutMillis";
     private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
+    private static final String EXTRA_DEBUG_LISTEN = "debugListen";
+    private static final String EXTRA_DEBUG_LISTEN_PORT = "debugListenPort";
+    private static final String EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS =
+            "debugListenTimeoutMillis";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
     private static final int DEBUG_TRAFFIC_PORT = 80;
     private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
+    private static final int DEBUG_LISTEN_PORT = 18080;
+    private static final int DEBUG_LISTEN_TIMEOUT_MILLIS = 5000;
     private static final String CONTROL_SOCKET_NAME = "sucre-snort-control-vnext";
     private static final int CONTROL_SOCKET_TIMEOUT_MILLIS = 2000;
     private static final int CONTROL_MAX_PAYLOAD_BYTES = 65536;
@@ -116,7 +127,28 @@ public class DebugControlActivity extends Activity {
             main.post(this::startSelected);
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_TRAFFIC, false)) {
-            main.post(this::runDebugTrafficProbe);
+            String host = intent.getStringExtra(EXTRA_DEBUG_TRAFFIC_HOST);
+            if (host == null || host.isEmpty()) {
+                host = DEBUG_TRAFFIC_HOST;
+            }
+            int port = boundedPort(intent.getIntExtra(
+                    EXTRA_DEBUG_TRAFFIC_PORT, DEBUG_TRAFFIC_PORT), DEBUG_TRAFFIC_PORT);
+            int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
+                    EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS, DEBUG_TRAFFIC_TIMEOUT_MILLIS),
+                    DEBUG_TRAFFIC_TIMEOUT_MILLIS);
+            final String probeHost = host;
+            final int probePort = port;
+            final int probeTimeoutMillis = timeoutMillis;
+            main.post(() -> runDebugTrafficProbe(
+                    probeHost, probePort, probeTimeoutMillis));
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_LISTEN, false)) {
+            int port = boundedPort(intent.getIntExtra(
+                    EXTRA_DEBUG_LISTEN_PORT, DEBUG_LISTEN_PORT), DEBUG_LISTEN_PORT);
+            int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
+                    EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS, DEBUG_LISTEN_TIMEOUT_MILLIS),
+                    DEBUG_LISTEN_TIMEOUT_MILLIS);
+            main.post(() -> runDebugTrafficListener(port, timeoutMillis));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
             main.post(this::runDebugApplyGateAndProbe);
@@ -529,13 +561,29 @@ public class DebugControlActivity extends Activity {
     }
 
     private void runDebugTrafficProbe() {
+        runDebugTrafficProbe(DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
+                DEBUG_TRAFFIC_TIMEOUT_MILLIS);
+    }
+
+    private void runDebugTrafficProbe(String host, int port, int timeoutMillis) {
         action("Debug traffic probe requested.");
         Thread probe = new Thread(() -> {
-            String result = runDebugTrafficProbeBlocking(true);
+            String result = runDebugTrafficProbeBlocking(
+                    host, port, timeoutMillis, true);
             final String display = result;
             main.post(() -> action(display));
         }, "sakamoto-debug-traffic");
         probe.start();
+    }
+
+    private void runDebugTrafficListener(int port, int timeoutMillis) {
+        action("Debug traffic listener requested on 0.0.0.0:" + port + ".");
+        Thread listener = new Thread(() -> {
+            String result = runDebugTrafficListenerBlocking(port, timeoutMillis);
+            final String display = result;
+            main.post(() -> action(display));
+        }, "sakamoto-debug-listener");
+        listener.start();
     }
 
     private void runDebugApplyGateAndProbe() {
@@ -548,7 +596,9 @@ public class DebugControlActivity extends Activity {
                 JSONObject decision = client.call(2, "POLICY.EVALUATE",
                         debugPolicyEvaluateArgs(uid));
                 JSONObject nfqueueBefore = client.call(3, "NFQUEUE.STATUS", new JSONObject());
-                String probeResult = runDebugTrafficProbeBlocking(false);
+                String probeResult = runDebugTrafficProbeBlocking(
+                        DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
+                        DEBUG_TRAFFIC_TIMEOUT_MILLIS, false);
                 JSONObject nfqueueAfter = client.call(4, "NFQUEUE.STATUS", new JSONObject());
                 result = formatDebugPolicyProbeResult(
                         uid, decision, nfqueueBefore, nfqueueAfter, probeResult);
@@ -587,14 +637,13 @@ public class DebugControlActivity extends Activity {
                 .put("portsAvailable", true);
     }
 
-    private String runDebugTrafficProbeBlocking(boolean includeEndpoint) {
+    private String runDebugTrafficProbeBlocking(
+            String host, int port, int timeoutMillis, boolean includeEndpoint) {
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(
-                    DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT),
-                    DEBUG_TRAFFIC_TIMEOUT_MILLIS);
+            socket.connect(new InetSocketAddress(host, port), timeoutMillis);
             if (includeEndpoint) {
                 return "Debug traffic probe connected to "
-                        + DEBUG_TRAFFIC_HOST + ":" + DEBUG_TRAFFIC_PORT + ".";
+                        + host + ":" + port + ".";
             }
             return "tcp_connect_succeeded";
         } catch (IOException error) {
@@ -612,6 +661,38 @@ public class DebugControlActivity extends Activity {
             }
             return "tcp_connect_failed";
         }
+    }
+
+    private String runDebugTrafficListenerBlocking(int port, int timeoutMillis) {
+        try (ServerSocket server = new ServerSocket(port)) {
+            server.setSoTimeout(timeoutMillis);
+            try (Socket socket = server.accept()) {
+                return "Debug traffic listener accepted from "
+                        + socket.getRemoteSocketAddress() + " on port " + port + ".";
+            }
+        } catch (IOException error) {
+            return "Debug traffic listener failed: "
+                    + (error.getMessage() == null
+                    ? error.getClass().getSimpleName()
+                    : error.getMessage());
+        } catch (RuntimeException error) {
+            return "Debug traffic listener failed: "
+                    + error.getClass().getSimpleName();
+        }
+    }
+
+    private int boundedPort(int candidate, int fallback) {
+        if (candidate <= 0 || candidate > 65535) {
+            return fallback;
+        }
+        return candidate;
+    }
+
+    private int boundedTimeoutMillis(int candidate, int fallback) {
+        if (candidate < 100 || candidate > 30000) {
+            return fallback;
+        }
+        return candidate;
     }
 
     private String formatDebugPolicyProbeResult(
