@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <unistd.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -323,4 +325,87 @@ TEST(VpnTunFdRuntimeTest, ExposesPolicyControlWithoutClaimingAdapterReady) {
     EXPECT_EQ(decision.verdict, Policy::PacketPolicyVerdict::DROP);
     EXPECT_EQ(decision.stage, Policy::PacketPolicyStage::L4);
     EXPECT_EQ(decision.revision, 73U);
+}
+
+TEST(VpnTunFdRuntimeTest, BoundedDrainReadsTunPacketIntoSharedAdapter) {
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0);
+    const auto packet = ipv4TcpPacket();
+    ASSERT_EQ(::write(pipeFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    VpnTunFdRuntime runtime{pipeFds[0]};
+    pipeFds[0] = -1;
+
+    const auto drain = runtime.drainTunPackets(1);
+    EXPECT_EQ(drain.packetsRead, 1U);
+    EXPECT_EQ(drain.forwardedWithoutTransport, 1U);
+    EXPECT_EQ(drain.policyDropped, 0U);
+    EXPECT_EQ(drain.readErrors, 0U);
+    EXPECT_FALSE(drain.eof);
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.packetsSeen, 1U);
+    EXPECT_EQ(counters.forwardedPackets, 1U);
+    EXPECT_EQ(counters.droppedPackets, 0U);
+    EXPECT_EQ(counters.uidUnknownFallbackPackets, 1U);
+    EXPECT_EQ(counters.transportUnsupportedPackets, 1U);
+    EXPECT_EQ(counters.lastObservedDirection, "outbound");
+    EXPECT_EQ(counters.lastObservedResult, "FlowForwarded");
+    EXPECT_FALSE(runtime.packetAdapterReady());
+
+    ::close(pipeFds[1]);
+}
+
+TEST(VpnTunFdRuntimeTest, BoundedDrainPolicyDropDoesNotRecordTransportOutcome) {
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0);
+    const auto packet = ipv4UdpPacket();
+    ASSERT_EQ(::write(pipeFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    VpnTunFdRuntime runtime{pipeFds[0]};
+    pipeFds[0] = -1;
+    ASSERT_TRUE(runtime.applyPacketPolicy(
+        {networkGateDropSubject(0, false, 4, 92, 7002)},
+        74));
+
+    const auto drain = runtime.drainTunPackets(
+        1,
+        VpnTunPacketMetadata{
+            .linuxUid = 0,
+            .networkContext = 4,
+            .interfaceIndex = 12,
+            .uidKnown = false,
+        });
+    EXPECT_EQ(drain.packetsRead, 1U);
+    EXPECT_EQ(drain.forwardedWithoutTransport, 0U);
+    EXPECT_EQ(drain.policyDropped, 1U);
+    EXPECT_EQ(drain.readErrors, 0U);
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.droppedPackets, 1U);
+    EXPECT_EQ(counters.forwardedPackets, 0U);
+    EXPECT_EQ(counters.transportUnsupportedPackets, 0U);
+    EXPECT_EQ(counters.uidUnknownFallbackPackets, 1U);
+    EXPECT_EQ(counters.lastObservedInterfaceIndex, 12U);
+    EXPECT_EQ(counters.lastObservedResult, "FlowDropped");
+
+    ::close(pipeFds[1]);
+}
+
+TEST(VpnTunFdRuntimeTest, BoundedDrainReturnsImmediatelyWhenNoPacketIsReady) {
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0);
+
+    VpnTunFdRuntime runtime{pipeFds[0]};
+    pipeFds[0] = -1;
+
+    const auto drain = runtime.drainTunPackets(4);
+    EXPECT_EQ(drain.packetsRead, 0U);
+    EXPECT_EQ(drain.readErrors, 0U);
+    EXPECT_FALSE(drain.eof);
+    EXPECT_EQ(runtime.vpnTunRuntimeCounters().packetsSeen, 0U);
+
+    ::close(pipeFds[1]);
 }
