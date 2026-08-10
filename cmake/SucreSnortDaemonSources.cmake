@@ -5,6 +5,7 @@ set(
   "${CMAKE_SOURCE_DIR}/src/control/vnext"
   "${CMAKE_SOURCE_DIR}/src/platform/android"
   "${CMAKE_SOURCE_DIR}/src/datapath/nfqueue"
+  "${CMAKE_SOURCE_DIR}/src/datapath/tun"
   "${CMAKE_SOURCE_DIR}/src/core/flow"
   "${CMAKE_SOURCE_DIR}/src/core/packet"
   "${CMAKE_SOURCE_DIR}/src/core/policy"

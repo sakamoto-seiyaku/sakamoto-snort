@@ -35,9 +35,16 @@ namespace Policy = SnortDatapath::Policy;
 
 class FakeRuntimeControl final : public SnortRuntime::BaseRuntimeControl {
 public:
+    ~FakeRuntimeControl() override {
+        if (attachedTunFd >= 0) {
+            ::close(attachedTunFd);
+        }
+    }
+
     bool nfqueuePassThroughReady() const noexcept override { return ready; }
     bool packetAdapterReady() const noexcept override { return adapterReady; }
     std::string_view packetAdapterName() const noexcept override { return adapterName; }
+    bool vpnTunFdHandoffReady() const noexcept override { return vpnTunHandoffReady; }
     bool resetBaseRuntime() noexcept override {
         ++resetCount;
         return resetResult;
@@ -60,15 +67,35 @@ public:
         }
         return policyApplyResult;
     }
+    SnortRuntime::VpnTunFdAttachResult attachVpnTunFd(
+        const int tunFd, const bool enableIpv6) noexcept override {
+        ++vpnTunAttachCount;
+        vpnTunAttachIpv6 = enableIpv6;
+        if (!vpnTunAttachResult) {
+            ::close(tunFd);
+            return SnortRuntime::VpnTunFdAttachResult::error(
+                "VPN_TUN_ATTACH_FAILED", "fake attach failed");
+        }
+        if (attachedTunFd >= 0) {
+            ::close(attachedTunFd);
+        }
+        attachedTunFd = tunFd;
+        return SnortRuntime::VpnTunFdAttachResult::accepted();
+    }
 
     bool ready = true;
     bool resetResult = true;
     bool policyReady = false;
     bool nfqueueCountersReady = false;
     bool adapterReady = false;
+    bool vpnTunHandoffReady = false;
+    bool vpnTunAttachResult = true;
+    bool vpnTunAttachIpv6 = false;
     bool policyApplyResult = true;
     int resetCount = 0;
     int policyApplyCount = 0;
+    int vpnTunAttachCount = 0;
+    int attachedTunFd = -1;
     Policy::RuntimePacketPolicySnapshot policy;
     SnortRuntime::NfqueueRuntimeCounters nfqueueCounters;
     std::string adapterName;
@@ -95,6 +122,43 @@ bool writeAll(const int fd, const std::string_view data) {
         return false;
     }
     return true;
+}
+
+bool writeAllWithFd(const int fd, const std::string_view data, const int fdToSend) {
+    if (data.empty()) {
+        return true;
+    }
+
+    std::array<char, CMSG_SPACE(sizeof(int))> control{};
+    iovec iov{
+        .iov_base = const_cast<char *>(data.data()),
+        .iov_len = data.size(),
+    };
+    msghdr msg{};
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.data();
+    msg.msg_controllen = control.size();
+
+    cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    std::memcpy(CMSG_DATA(cmsg), &fdToSend, sizeof(int));
+    msg.msg_controllen = CMSG_SPACE(sizeof(int));
+
+    const ssize_t n = ::sendmsg(fd, &msg, 0);
+    if (n < 0) {
+        return false;
+    }
+    const auto sent = static_cast<std::size_t>(n);
+    if (sent > data.size()) {
+        return false;
+    }
+    if (sent == data.size()) {
+        return true;
+    }
+    return writeAll(fd, data.substr(sent));
 }
 
 class ControlServerHarness {
@@ -129,6 +193,17 @@ public:
             "\",\"args\":" + std::string(args) + "}");
         if (!writeAll(clientFd_, frame)) {
             throw std::runtime_error("write failed");
+        }
+        return readOneResponse();
+    }
+
+    rapidjson::Document callWithFd(const std::uint32_t id, const std::string_view cmd,
+                                   const std::string_view args, const int fdToSend) {
+        const std::string frame = ControlVNext::encodeNetstring(
+            std::string("{\"id\":") + std::to_string(id) + ",\"cmd\":\"" + std::string(cmd) +
+            "\",\"args\":" + std::string(args) + "}");
+        if (!writeAllWithFd(clientFd_, frame, fdToSend)) {
+            throw std::runtime_error("write-with-fd failed");
         }
         return readOneResponse();
     }
@@ -221,6 +296,77 @@ TEST(ControlServerContract, HelloAdvertisesGenericPacketAdapterCapabilityWhenRea
     const auto capabilities = capabilityStrings(response["result"]["capabilities"]);
     EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "packet-adapter-root-nfqueue"),
               capabilities.end());
+}
+
+TEST(ControlServerContract, HelloAdvertisesVpnTunFdHandoffOnlyWhenRuntimeSupportsIt) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunHandoffReady = true;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(42, "HELLO");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto capabilities = capabilityStrings(response["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "vpn-tun-fd-handoff"),
+              capabilities.end());
+}
+
+TEST(ControlServerContract, VpnTunAttachRejectsMissingScmRightsFd) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunHandoffReady = true;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response =
+        harness.call(43, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}");
+
+    ASSERT_FALSE(response["ok"].GetBool());
+    EXPECT_STREQ(response["error"]["code"].GetString(), "INVALID_ARGUMENT");
+    EXPECT_EQ(runtime.vpnTunAttachCount, 0);
+}
+
+TEST(ControlServerContract, VpnTunAttachTransfersOneScmRightsFdToRuntime) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunHandoffReady = true;
+    ControlServerHarness harness(runtime);
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0) << std::strerror(errno);
+
+    const rapidjson::Document response =
+        harness.callWithFd(44, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", pipeFds[0]);
+    ::close(pipeFds[0]);
+    pipeFds[0] = -1;
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    ASSERT_TRUE(response.HasMember("result"));
+    EXPECT_TRUE(response["result"]["fdAttached"].GetBool());
+    EXPECT_TRUE(response["result"]["ipv6Enabled"].GetBool());
+    EXPECT_EQ(runtime.vpnTunAttachCount, 1);
+    EXPECT_TRUE(runtime.vpnTunAttachIpv6);
+    ASSERT_GE(runtime.attachedTunFd, 0);
+
+    const char expected = 'x';
+    ASSERT_EQ(::write(pipeFds[1], &expected, 1), 1);
+    ::close(pipeFds[1]);
+    pipeFds[1] = -1;
+    char actual = '\0';
+    EXPECT_EQ(::read(runtime.attachedTunFd, &actual, 1), 1);
+    EXPECT_EQ(actual, expected);
+}
+
+TEST(ControlServerContract, VpnTunAttachIsUnsupportedWithoutRuntimeCapability) {
+    FakeRuntimeControl runtime;
+    ControlServerHarness harness(runtime);
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0) << std::strerror(errno);
+
+    const rapidjson::Document response =
+        harness.callWithFd(45, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", pipeFds[0]);
+    ::close(pipeFds[0]);
+    ::close(pipeFds[1]);
+
+    ASSERT_FALSE(response["ok"].GetBool());
+    EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
+    EXPECT_EQ(runtime.vpnTunAttachCount, 0);
 }
 
 TEST(ControlServerContract, ResetAllReinstallsOnlyBaseRuntimeState) {

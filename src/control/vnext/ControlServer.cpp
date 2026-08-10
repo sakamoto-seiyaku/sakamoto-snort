@@ -44,6 +44,13 @@ constexpr int kControlPollTimeoutMs = 250;
 constexpr std::uint8_t kTcpProtocol = 6;
 constexpr std::uint8_t kUdpProtocol = 17;
 
+void closeFd(int &fd) noexcept {
+    if (fd >= 0) {
+        ::close(fd);
+        fd = -1;
+    }
+}
+
 bool writeAll(const int fd, const std::string_view bytes) {
     const char *data = bytes.data();
     std::size_t remaining = bytes.size();
@@ -62,6 +69,55 @@ bool writeAll(const int fd, const std::string_view bytes) {
         remaining -= static_cast<std::size_t>(n);
     }
     return true;
+}
+
+struct RecvChunk {
+    ssize_t bytes = -1;
+    int receivedFd = -1;
+    bool ancillaryTruncated = false;
+};
+
+RecvChunk recvChunkWithOptionalFd(const int fd, char *buffer, const std::size_t bufferSize) {
+    std::array<char, CMSG_SPACE(sizeof(int) * 4)> control{};
+    iovec iov{
+        .iov_base = buffer,
+        .iov_len = bufferSize,
+    };
+    msghdr msg{};
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.data();
+    msg.msg_controllen = control.size();
+
+    RecvChunk chunk;
+    chunk.bytes = ::recvmsg(fd, &msg, 0);
+    if (chunk.bytes <= 0) {
+        return chunk;
+    }
+    chunk.ancillaryTruncated = (msg.msg_flags & MSG_CTRUNC) != 0;
+
+    for (cmsghdr *cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr;
+         cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+        if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+            continue;
+        }
+        const auto dataBytes = static_cast<std::size_t>(
+            cmsg->cmsg_len - CMSG_LEN(0));
+        const auto fdCount = dataBytes / sizeof(int);
+        const int *fds = reinterpret_cast<const int *>(CMSG_DATA(cmsg));
+        for (std::size_t i = 0; i < fdCount; ++i) {
+            int received = fds[i];
+            if (received < 0) {
+                continue;
+            }
+            if (chunk.receivedFd < 0) {
+                chunk.receivedFd = received;
+            } else {
+                ::close(received);
+            }
+        }
+    }
+    return chunk;
 }
 
 int androidInitSocketFd(const char *const name) noexcept {
@@ -120,6 +176,9 @@ rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runt
         value.SetString(capability.c_str(),
                         static_cast<rapidjson::SizeType>(capability.size()), alloc);
         capabilities.PushBack(value, alloc);
+    }
+    if (runtime.vpnTunFdHandoffReady()) {
+        capabilities.PushBack("vpn-tun-fd-handoff", alloc);
     }
     if (runtime.nfqueueRuntimeCountersReady()) {
         capabilities.PushBack("nfqueue-runtime-counters", alloc);
@@ -667,8 +726,18 @@ rapidjson::Document makeDecisionResult(
     return result;
 }
 
+rapidjson::Document makeVpnTunAttachResult(const bool enableIpv6) {
+    rapidjson::Document result(rapidjson::kObjectType);
+    auto &alloc = result.GetAllocator();
+    result.AddMember("adapter", "vpn-tun-hev", alloc);
+    result.AddMember("fdAttached", true, alloc);
+    result.AddMember("ipv6Enabled", enableIpv6, alloc);
+    return result;
+}
+
 rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
-                                    SnortRuntime::BaseRuntimeControl &runtime) {
+                                    SnortRuntime::BaseRuntimeControl &runtime,
+                                    int &receivedFd) {
     if (request.cmd == "HELLO") {
         rapidjson::Document result = makeHelloResult(runtime);
         return ControlVNext::makeOkResponse(request.id, &result);
@@ -708,6 +777,37 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
             return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
         }
         rapidjson::Document result = makeNfqueueStatusResult(runtime.nfqueueRuntimeCounters());
+        return ControlVNext::makeOkResponse(request.id, &result);
+    }
+
+    if (request.cmd == "VPN_TUN.ATTACH") {
+        if (!runtime.vpnTunFdHandoffReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND", "VPN TUN fd handoff unavailable");
+        }
+        bool enableIpv6 = false;
+        std::string error;
+        if (const auto err = rejectUnknown(*request.args, {"enableIpv6"}); err.has_value()) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
+        }
+        if (!readBool(*request.args, "enableIpv6", enableIpv6, error)) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", error);
+        }
+        if (receivedFd < 0) {
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT",
+                                                   "VPN_TUN.ATTACH requires one SCM_RIGHTS fd");
+        }
+        const int tunFd = receivedFd;
+        receivedFd = -1;
+        const auto attach = runtime.attachVpnTunFd(tunFd, enableIpv6);
+        if (!attach.ok) {
+            return ControlVNext::makeErrorResponse(
+                request.id,
+                attach.errorCode.empty() ? "VPN_TUN_ATTACH_FAILED" : attach.errorCode,
+                attach.errorMessage.empty() ? "VPN TUN fd attach failed"
+                                            : attach.errorMessage);
+        }
+        rapidjson::Document result = makeVpnTunAttachResult(enableIpv6);
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 
@@ -806,7 +906,8 @@ void ControlServer::serveClient(const int clientFd) {
     char buffer[4096];
 
     while (!SnortRuntime::shutdownRequested()) {
-        const ssize_t n = ::recv(clientFd, buffer, sizeof(buffer), 0);
+        RecvChunk chunk = recvChunkWithOptionalFd(clientFd, buffer, sizeof(buffer));
+        const ssize_t n = chunk.bytes;
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
@@ -816,10 +917,18 @@ void ControlServer::serveClient(const int clientFd) {
         if (n == 0) {
             return;
         }
+        if (chunk.ancillaryTruncated) {
+            closeFd(chunk.receivedFd);
+            const auto response = ControlVNext::makeErrorResponse(
+                0, "INVALID_ARGUMENT", "ancillary fd data truncated");
+            (void)sendDocument(clientFd, response);
+            return;
+        }
 
         const auto bytes = std::span<const std::byte>(
             reinterpret_cast<const std::byte *>(buffer), static_cast<std::size_t>(n));
         if (const auto netErr = decoder.feed(bytes); netErr.has_value()) {
+            closeFd(chunk.receivedFd);
             const auto response = ControlVNext::makeErrorResponse(
                 0, "SYNTAX_ERROR", netErr->message);
             (void)sendDocument(clientFd, response);
@@ -830,6 +939,7 @@ void ControlServer::serveClient(const int clientFd) {
             rapidjson::Document requestDoc;
             ControlVNext::JsonError jsonError;
             if (!ControlVNext::parseStrictJsonObject(*payload, requestDoc, jsonError)) {
+                closeFd(chunk.receivedFd);
                 const auto response =
                     ControlVNext::makeErrorResponse(0, "SYNTAX_ERROR", jsonError.message);
                 (void)sendDocument(clientFd, response);
@@ -839,13 +949,15 @@ void ControlServer::serveClient(const int clientFd) {
             ControlVNext::RequestView request;
             if (const auto envErr = ControlVNext::parseRequestEnvelope(requestDoc, request);
                 envErr.has_value()) {
+                closeFd(chunk.receivedFd);
                 const auto response =
                     ControlVNext::makeErrorResponse(0, envErr->code, envErr->message);
                 (void)sendDocument(clientFd, response);
                 return;
             }
 
-            const auto response = dispatchRequest(request, runtime_);
+            const auto response = dispatchRequest(request, runtime_, chunk.receivedFd);
+            closeFd(chunk.receivedFd);
             if (!sendDocument(clientFd, response)) {
                 return;
             }

@@ -33,6 +33,7 @@ set(
   "${SUCRE_SNORT_ROOT}/src/control/vnext"
   "${SUCRE_SNORT_ROOT}/src/platform/android"
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue"
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun"
   "${SUCRE_SNORT_ROOT}/src/core/flow"
   "${SUCRE_SNORT_ROOT}/src/core/packet"
   "${SUCRE_SNORT_ROOT}/src/core/policy"
@@ -176,6 +177,7 @@ add_sucre_snort_host_test(
   runtime_profile_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/main/RuntimeFactoryPlan.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/RuntimeProfile.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(
   control_server_contract_tests

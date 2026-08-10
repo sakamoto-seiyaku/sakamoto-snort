@@ -116,6 +116,7 @@ public final class RuntimeService extends VpnService {
     private RuntimeSnapshot snapshot;
     private LocalProductBackend productBackend;
     private Process vppProcess;
+    private VpnTunPlatformSession vpnTunSession;
     private RuntimeProfile activeProfile;
     private File profileRoot;
     private File pidFile;
@@ -446,10 +447,12 @@ public final class RuntimeService extends VpnService {
         }
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(activeProfile);
+        VpnTunPlatformSession pendingVpnTunSession = establishPacketAdapterSession(adapter);
+        if (adapter.requiresVpnPlatformSession && pendingVpnTunSession == null) {
+            return;
+        }
         if (!adapter.productLaunchAllowed) {
-            if (!preflightUnavailableAdapter(adapter)) {
-                return;
-            }
+            closeVpnTunSessionQuietly(pendingVpnTunSession);
             failSelectedProfileWithoutRuntime(adapter.unavailableErrorCode,
                     adapter.unavailableMessage);
             return;
@@ -520,8 +523,11 @@ public final class RuntimeService extends VpnService {
                 throw new IOException("VPP artifact is not executable");
             }
             prepareProfile(profileRoot, activeProfile);
-            Process process = launchVpp(vpp, nativeDir, profileRoot, activeProfile);
+            Process process = launchVpp(vpp, nativeDir, profileRoot, activeProfile,
+                    pendingVpnTunSession);
             vppProcess = process;
+            vpnTunSession = pendingVpnTunSession;
+            pendingVpnTunSession = null;
             appendLog("vpp_process=started profile=" + activeProfile.wireName
                     + " artifact=" + expectedArtifact);
             VppHealthHandshake.Result health = waitForHealth(nativeDir, profileRoot, protocol,
@@ -536,6 +542,7 @@ public final class RuntimeService extends VpnService {
                         : health.errorCode, "VPP health did not prove profile readiness");
                 return;
             }
+            closeVpnTunSessionAfterNativeHandoff();
             long pid = readPid(pidFile);
             if (pid <= 0L || !isPidAlive(pid)) {
                 failWithCleanup("runtime_pid_unverified",
@@ -557,6 +564,8 @@ public final class RuntimeService extends VpnService {
             monitorExit(process);
         } catch (Exception error) {
             Log.e(TAG, "VPP runtime startup failed", error);
+            closeVpnTunSessionQuietly(pendingVpnTunSession);
+            closeVpnTunSessionAfterNativeHandoff();
             failWithCleanup("runtime_start_failed", messageOf(error));
         }
     }
@@ -862,7 +871,8 @@ public final class RuntimeService extends VpnService {
     }
 
     private Process launchVpp(File vpp, File nativeDir, File currentProfile,
-                              RuntimeProfile profile) throws IOException {
+                              RuntimeProfile profile,
+                              VpnTunPlatformSession pendingTunSession) throws IOException {
         File runtime = new File(currentProfile, "runtime");
         File logs = new File(currentProfile, "logs");
         File shm = new File(currentProfile, "shm");
@@ -870,12 +880,24 @@ public final class RuntimeService extends VpnService {
         if (token.isEmpty()) {
             throw new IOException("VPP owner token is absent from profile");
         }
+        String vpnTunEnv = "";
+        if (profile == RuntimeProfile.VPN) {
+            if (pendingTunSession == null || !pendingTunSession.isOpen()) {
+                throw new IOException("VPN TUN fd is absent before native launch");
+            }
+            String source = pendingTunSession.procFdPathForCurrentProcess();
+            if (source.isEmpty()) {
+                throw new IOException("VPN TUN fd source is unavailable");
+            }
+            vpnTunEnv = " SAKAMOTO_VPN_TUN_FD_SOURCE=" + shellQuote(source);
+        }
         String command = "umask 022; echo $$ > " + shellQuote(pidFile.getPath())
                 + "; export LD_LIBRARY_PATH=" + shellQuote(nativeDir.getPath())
                 + " SAKAMOTO_ANDROID_SHM_DIR=" + shellQuote(shm.getPath())
                 + " SAKAMOTO_VPP_RUNTIME_DIR=" + shellQuote(runtime.getPath())
                 + " SAKAMOTO_VPP_OWNER_TOKEN=" + shellQuote(token)
                 + " SAKAMOTO_RUNTIME_PROFILE=" + shellQuote(profile.wireName)
+                + vpnTunEnv
                 + "; exec " + shellQuote(vpp.getPath()) + " plugin_path "
                 + shellQuote(nativeDir.getPath()) + " -c "
                 + shellQuote(new File(currentProfile, "startup.conf").getPath())
@@ -1472,22 +1494,34 @@ public final class RuntimeService extends VpnService {
         stopIfInactive();
     }
 
-    private boolean preflightUnavailableAdapter(ProductPacketAdapterContract adapter) {
+    private VpnTunPlatformSession establishPacketAdapterSession(
+            ProductPacketAdapterContract adapter) {
         if (adapter == null || !adapter.requiresVpnPlatformSession) {
-            return true;
+            return null;
         }
         VpnTunPlatformSession.EstablishResult result =
                 VpnTunPlatformSession.establish(this, adapter.enableIpv6);
         if (!result.ok) {
             failSelectedProfileWithoutRuntime(result.errorCode, result.errorMessage);
-            return false;
+            return null;
+        }
+        return result.session;
+    }
+
+    private void closeVpnTunSessionAfterNativeHandoff() {
+        VpnTunPlatformSession session = vpnTunSession;
+        vpnTunSession = null;
+        closeVpnTunSessionQuietly(session);
+    }
+
+    private void closeVpnTunSessionQuietly(VpnTunPlatformSession session) {
+        if (session == null) {
+            return;
         }
         try {
-            result.session.close();
-            return true;
+            session.close();
         } catch (IOException error) {
-            failSelectedProfileWithoutRuntime("vpn_tun_cleanup_failed", messageOf(error));
-            return false;
+            appendLog("vpn_tun_cleanup_failed=" + messageOf(error));
         }
     }
 
@@ -1819,6 +1853,7 @@ public final class RuntimeService extends VpnService {
     }
 
     private void clearProfileHandles() {
+        closeVpnTunSessionAfterNativeHandoff();
         profileRoot = null;
         pidFile = null;
     }

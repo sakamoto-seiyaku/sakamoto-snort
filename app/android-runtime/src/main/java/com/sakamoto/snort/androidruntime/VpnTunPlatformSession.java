@@ -70,6 +70,17 @@ public final class VpnTunPlatformSession implements AutoCloseable {
         return fd;
     }
 
+    public synchronized int fdNumber() {
+        return rawFd;
+    }
+
+    public synchronized String procFdPathForCurrentProcess() {
+        if (rawFd < 0) {
+            return "";
+        }
+        return "/proc/" + android.os.Process.myPid() + "/fd/" + rawFd;
+    }
+
     public synchronized boolean isOpen() {
         return rawFd >= 0;
     }

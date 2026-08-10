@@ -5,6 +5,7 @@
 
 #include <RuntimeProfile.hpp>
 #include <RuntimeFactoryPlan.hpp>
+#include <VpnTunFdRuntime.hpp>
 
 #include <gtest/gtest.h>
 
@@ -42,15 +43,38 @@ TEST(RuntimeFactoryPlan, SelectsRootNfqueueRuntimeForRootProfile) {
     EXPECT_EQ(plan.adapterName, "root-nfqueue");
 }
 
-TEST(RuntimeFactoryPlan, RejectsVpnUntilProductTunHevRuntimeExists) {
+TEST(RuntimeFactoryPlan, RejectsVpnWithoutTunFdSource) {
     const auto plan =
         SnortRuntime::planRuntimeFactory(SnortRuntime::parseRuntimeProfile("vpn"));
 
     EXPECT_FALSE(plan.launchable);
-    EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::RejectVpnUnavailable);
+    EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::RejectVpnTunFdMissing);
     EXPECT_EQ(plan.exitCode, 3);
-    EXPECT_EQ(plan.errorCode, "vpn_adapter_unavailable");
+    EXPECT_EQ(plan.errorCode, "vpn_tun_fd_source_missing");
     EXPECT_EQ(plan.adapterName, "vpn-tun-hev");
+}
+
+TEST(RuntimeFactoryPlan, SelectsVpnTunFdHandoffWhenTunSourceExists) {
+    const auto plan =
+        SnortRuntime::planRuntimeFactory(SnortRuntime::parseRuntimeProfile("vpn"), "/dev/null");
+
+    EXPECT_TRUE(plan.launchable);
+    EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::CreateVpnTunFdHandoff);
+    EXPECT_EQ(plan.exitCode, 0);
+    EXPECT_TRUE(plan.errorCode.empty());
+    EXPECT_EQ(plan.adapterName, "vpn-tun-hev");
+}
+
+TEST(VpnTunFdRuntime, HoldsDuplicatedTunFdWithoutClaimingAdapterReady) {
+    const int tunFd = SnortDatapath::Tun::openVpnTunFdSource("/dev/null");
+    ASSERT_GE(tunFd, 0);
+
+    SnortDatapath::Tun::VpnTunFdRuntime runtime{tunFd};
+    EXPECT_TRUE(runtime.start());
+    EXPECT_FALSE(runtime.nfqueuePassThroughReady());
+    EXPECT_FALSE(runtime.packetAdapterReady());
+    EXPECT_TRUE(runtime.vpnTunFdHandoffReady());
+    EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-hev");
 }
 
 TEST(RuntimeFactoryPlan, PropagatesInvalidProfileWithoutSelectingAnAdapter) {

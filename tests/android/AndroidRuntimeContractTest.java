@@ -1030,8 +1030,8 @@ public final class AndroidRuntimeContractTest {
 
         ProductPacketAdapterContract vpn =
                 ProductPacketAdapterContract.forProfile(RuntimeProfile.VPN);
-        check(!vpn.productLaunchAllowed,
-                "VPN product Adapter must not be inferred from VpnService inheritance");
+        check(vpn.productLaunchAllowed,
+                "VPN product Adapter launch requires explicit TUN fd handoff");
         check(ProductPacketAdapterContract.VPN_ADAPTER.equals(vpn.adapterName),
                 "VPN Adapter name is stable");
         check(vpn.platformInterface.contains("VpnService TUN fd"),

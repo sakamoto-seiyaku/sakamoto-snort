@@ -19,5 +19,8 @@ struct RuntimeFactoryResult {
 
 [[nodiscard]] RuntimeFactoryResult createStartedRuntime(
     RuntimeProfileSelection selection);
+[[nodiscard]] RuntimeFactoryResult createStartedRuntime(
+    RuntimeProfileSelection selection,
+    const char *vpnTunFdSource);
 
 } // namespace SnortRuntime

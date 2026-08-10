@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace SnortRuntime {
@@ -36,6 +37,24 @@ struct NfqueueRuntimeCounters {
     std::string lastObservedResult = "none";
 };
 
+struct VpnTunFdAttachResult {
+    bool ok = false;
+    std::string errorCode;
+    std::string errorMessage;
+
+    [[nodiscard]] static VpnTunFdAttachResult accepted() {
+        return VpnTunFdAttachResult{.ok = true, .errorCode = {}, .errorMessage = {}};
+    }
+
+    [[nodiscard]] static VpnTunFdAttachResult error(std::string code, std::string message) {
+        return VpnTunFdAttachResult{
+            .ok = false,
+            .errorCode = std::move(code),
+            .errorMessage = std::move(message),
+        };
+    }
+};
+
 class BaseRuntimeControl {
 public:
     virtual ~BaseRuntimeControl() = default;
@@ -46,6 +65,9 @@ public:
     }
     [[nodiscard]] virtual std::string_view packetAdapterName() const noexcept {
         return {};
+    }
+    [[nodiscard]] virtual bool vpnTunFdHandoffReady() const noexcept {
+        return false;
     }
     [[nodiscard]] virtual bool resetBaseRuntime() noexcept = 0;
     [[nodiscard]] virtual bool packetPolicyControlReady() const noexcept {
@@ -72,6 +94,13 @@ public:
         static_cast<void>(subjects);
         static_cast<void>(revision);
         return false;
+    }
+    [[nodiscard]] virtual VpnTunFdAttachResult attachVpnTunFd(
+        int tunFd, bool enableIpv6) noexcept {
+        static_cast<void>(tunFd);
+        static_cast<void>(enableIpv6);
+        return VpnTunFdAttachResult::error("VPN_TUN_ATTACH_UNSUPPORTED",
+                                           "VPN TUN fd handoff is unavailable");
     }
 };
 

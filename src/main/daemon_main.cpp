@@ -19,7 +19,8 @@ int main() {
 
     const auto selectedProfile =
         SnortRuntime::runtimeProfileFromEnv(std::getenv("SAKAMOTO_RUNTIME_PROFILE"));
-    auto runtime = SnortRuntime::createStartedRuntime(selectedProfile);
+    auto runtime = SnortRuntime::createStartedRuntime(
+        selectedProfile, std::getenv("SAKAMOTO_VPN_TUN_FD_SOURCE"));
     if (!runtime.plan.launchable) {
         std::cerr << "runtime profile rejected: " << runtime.plan.errorCode << '\n';
         return runtime.plan.exitCode;

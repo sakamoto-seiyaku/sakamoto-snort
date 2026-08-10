@@ -8,6 +8,11 @@
 namespace SnortRuntime {
 
 RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection) noexcept {
+    return planRuntimeFactory(selection, {});
+}
+
+RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection,
+                                      const std::string_view vpnTunFdSource) noexcept {
     if (!selection.ok) {
         return RuntimeFactoryPlan{
             .action = RuntimeFactoryAction::RejectProfile,
@@ -19,11 +24,20 @@ RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection) n
     }
 
     if (selection.profile == RuntimeProfile::Vpn) {
+        if (vpnTunFdSource.empty()) {
+            return RuntimeFactoryPlan{
+                .action = RuntimeFactoryAction::RejectVpnTunFdMissing,
+                .launchable = false,
+                .exitCode = 3,
+                .errorCode = "vpn_tun_fd_source_missing",
+                .adapterName = "vpn-tun-hev",
+            };
+        }
         return RuntimeFactoryPlan{
-            .action = RuntimeFactoryAction::RejectVpnUnavailable,
-            .launchable = false,
-            .exitCode = 3,
-            .errorCode = "vpn_adapter_unavailable",
+            .action = RuntimeFactoryAction::CreateVpnTunFdHandoff,
+            .launchable = true,
+            .exitCode = 0,
+            .errorCode = {},
             .adapterName = "vpn-tun-hev",
         };
     }

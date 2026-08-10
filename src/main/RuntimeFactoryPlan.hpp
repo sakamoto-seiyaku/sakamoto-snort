@@ -13,8 +13,9 @@ namespace SnortRuntime {
 
 enum class RuntimeFactoryAction {
     CreateRootNfqueue,
+    CreateVpnTunFdHandoff,
     RejectProfile,
-    RejectVpnUnavailable,
+    RejectVpnTunFdMissing,
 };
 
 struct RuntimeFactoryPlan {
@@ -27,5 +28,8 @@ struct RuntimeFactoryPlan {
 
 [[nodiscard]] RuntimeFactoryPlan planRuntimeFactory(
     RuntimeProfileSelection selection) noexcept;
+[[nodiscard]] RuntimeFactoryPlan planRuntimeFactory(
+    RuntimeProfileSelection selection,
+    std::string_view vpnTunFdSource) noexcept;
 
 } // namespace SnortRuntime

@@ -58,7 +58,7 @@ public final class ProductPacketAdapterContract {
                     UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,
                     true,
                     true,
-                    false,
+                    true,
                     "vpn_adapter_unavailable",
                     "VPN/TUN product packet adapter is not integrated yet");
         }
