@@ -26,6 +26,7 @@ production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sak
 production_control_protocol_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlProtocol.java"
 production_control_request_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlRequest.java"
 production_control_backend_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlBackend.java"
+production_vpn_tun_session_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/VpnTunPlatformSession.java"
 product_catalog_device_evidence="$repo_root/tests/device/product-catalog-device-evidence.sh"
 grep -q 'ACTION_START' "$production_service_source"
 grep -q 'RuntimeControlOrdering' "$production_service_source"
@@ -73,6 +74,15 @@ grep -q 'failSelectedProfileWithoutRuntime(adapter.unavailableErrorCode' "$produ
 grep -q 'vpn_adapter_unavailable' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPacketAdapterContract.java"
 grep -q 'TRANSPORT_OUTCOME_SEPARATE' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPacketAdapterContract.java"
 grep -q 'UID_MISS_UNKNOWN_APPLICATION_NO_HOLD' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPacketAdapterContract.java"
+grep -q 'ProductPacketAdapterContract.VPN_ADAPTER' "$production_vpn_tun_session_source"
+grep -q 'VpnService.Builder' "$production_vpn_tun_session_source"
+grep -q 'builder.establish()' "$production_vpn_tun_session_source"
+grep -q 'descriptor.detachFd()' "$production_vpn_tun_session_source"
+grep -q 'ParcelFileDescriptor.adoptFd(rawFd)' "$production_vpn_tun_session_source"
+if grep -q 'tun-poc\\|MODE_VPP\\|SnortVpnService\\|vpnlite' "$production_vpn_tun_session_source"; then
+  echo "product VPN/TUN platform session must not depend on the vpn-lite POC harness" >&2
+  exit 1
+fi
 if grep -q 'vppctl.*quit' "$production_service_source"; then
   echo "product stop must not use vppctl quit" >&2
   exit 1
