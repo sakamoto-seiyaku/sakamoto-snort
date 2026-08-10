@@ -17,6 +17,8 @@ set(
   SUCRE_SNORT_DAEMON_SOURCES
   "${CMAKE_SOURCE_DIR}/src/main/daemon_main.cpp"
   "${CMAKE_SOURCE_DIR}/src/main/DaemonRuntime.cpp"
+  "${CMAKE_SOURCE_DIR}/src/main/RuntimeFactory.cpp"
+  "${CMAKE_SOURCE_DIR}/src/main/RuntimeFactoryPlan.cpp"
   "${CMAKE_SOURCE_DIR}/src/main/RuntimeProfile.cpp"
   "${CMAKE_SOURCE_DIR}/src/control/vnext/ControlServer.cpp"
   "${CMAKE_SOURCE_DIR}/src/control/vnext/ControlVNextCodec.cpp"

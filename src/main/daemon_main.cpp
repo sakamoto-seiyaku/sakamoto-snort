@@ -5,7 +5,7 @@
 
 #include <ControlServer.hpp>
 #include <DaemonRuntime.hpp>
-#include <NfqueuePassThroughRuntime.hpp>
+#include <RuntimeFactory.hpp>
 #include <RuntimeProfile.hpp>
 
 #include <cstdlib>
@@ -17,21 +17,19 @@ int main() {
         return 1;
     }
 
-    const auto profile =
+    const auto selectedProfile =
         SnortRuntime::runtimeProfileFromEnv(std::getenv("SAKAMOTO_RUNTIME_PROFILE"));
-    if (!profile.ok) {
-        std::cerr << "runtime profile rejected: " << profile.errorCode << '\n';
-        return 2;
+    auto runtime = SnortRuntime::createStartedRuntime(selectedProfile);
+    if (!runtime.plan.launchable) {
+        std::cerr << "runtime profile rejected: " << runtime.plan.errorCode << '\n';
+        return runtime.plan.exitCode;
     }
-    if (profile.profile == SnortRuntime::RuntimeProfile::Vpn) {
-        std::cerr << "runtime profile vpn rejected: vpn_adapter_unavailable\n";
-        return 3;
+    if (!runtime.runtime) {
+        std::cerr << "runtime profile rejected: runtime_factory_empty\n";
+        return 4;
     }
 
-    SnortDatapath::Nfqueue::DualStackPassThroughRuntime datapath;
-    (void)datapath.start();
-
-    SnortControlVNext::ControlServer server(datapath);
+    SnortControlVNext::ControlServer server(*runtime.runtime);
     const int result = server.run();
     SnortRuntime::joinParentDeathMonitor();
     return result;
