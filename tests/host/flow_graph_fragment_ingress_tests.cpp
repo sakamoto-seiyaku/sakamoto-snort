@@ -4,6 +4,7 @@
  */
 
 #include <FlowGraphFragmentIngress.hpp>
+#include <core/protocol/ApplicationProtocolCatalog.hpp>
 
 #include <gtest/gtest.h>
 
@@ -11,13 +12,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace {
 
 using namespace SnortDatapath::Flow;
 namespace Policy = SnortDatapath::Policy;
+namespace Protocol = SnortDatapath::Protocol;
+namespace Catalog = sucre::protocol;
 
 constexpr std::byte byte(const std::uint8_t value) noexcept {
     return static_cast<std::byte>(value);
@@ -137,6 +142,33 @@ private:
     mutable PacketFacts lastFacts_;
 };
 
+class FixedLpiProvider final : public Protocol::LpiRecognitionProvider {
+public:
+    explicit FixedLpiProvider(std::string_view alias) noexcept : alias_(alias) {}
+
+    [[nodiscard]] bool available() const noexcept override { return true; }
+    [[nodiscard]] std::string_view providerName() const noexcept override {
+        return "fake-lpi";
+    }
+    [[nodiscard]] std::optional<Protocol::LpiProviderFact> recognize(
+        const Protocol::LpiPacketSubmission &submission) noexcept override {
+        ++calls;
+        lastPayloadLength = submission.transportPayload.size();
+        return Protocol::LpiProviderFact{
+            .providerAlias = alias_,
+            .detectorDone = false,
+            .budgetExhausted = false,
+            .producedBeforeAdapterCompletion = true,
+        };
+    }
+
+    std::uint32_t calls = 0;
+    std::size_t lastPayloadLength = 0;
+
+private:
+    std::string_view alias_;
+};
+
 TEST(FlowGraphFragmentIngressTest,
      NonInitialFragmentBuffersWithoutPortFactsOrPolicyVerdict) {
     FlowSteeringRuntime runtime(WorkerLayout{2, 0x1234}, 4);
@@ -182,6 +214,50 @@ TEST(FlowGraphFragmentIngressTest,
     EXPECT_EQ(runtime.ownerGuard().counters().correctiveHandoffs, 0U);
 }
 
+TEST(FlowGraphFragmentIngressTest,
+     ReassembledFragmentAcceptedSubmitsLpiAndUpdatesObservation) {
+    FlowSteeringRuntime runtime(WorkerLayout{4, 0x1234}, 4);
+    CountingPolicy policy;
+    FixedLpiProvider provider("lpi:http");
+    FlowGraphFragmentIngress ingress(
+        runtime, policy, FlowGraphIngressConfig{}, fragmentConfig(), &provider);
+    const auto first = ipv4Fragment(0x5555, 0, true, firstPayload());
+    const auto final = ipv4Fragment(0x5555, 24, false, secondPayload());
+
+    EXPECT_EQ(ingress.processL3Packet(first, metadataFor(first), 1).status,
+              FlowGraphIngressStatus::FragmentBuffered);
+    EXPECT_EQ(provider.calls, 0U);
+    const auto result = ingress.processL3Packet(final, metadataFor(final), 2);
+
+    EXPECT_EQ(result.status, FlowGraphIngressStatus::Accepted);
+    EXPECT_TRUE(result.fragmentReassembled);
+    EXPECT_EQ(provider.calls, 1U);
+    EXPECT_EQ(provider.lastPayloadLength, 12U);
+    ASSERT_TRUE(result.lpiRecognition.has_value());
+    EXPECT_TRUE(result.lpiRecognition->observed);
+    EXPECT_TRUE(result.lpiRecognition->payloadEligible);
+    EXPECT_TRUE(result.lpiRecognition->providerAvailable);
+    EXPECT_TRUE(result.lpiRecognition->submittedToProvider);
+    EXPECT_TRUE(result.lpiRecognition->providerProducedFact);
+    ASSERT_TRUE(result.lpiRecognition->stateAfterSubmit.has_value());
+    EXPECT_EQ(result.lpiRecognition->stateAfterSubmit->payloadPacketsSubmitted, 1U);
+    ASSERT_TRUE(result.lpiRecognition->stateAfterSubmit->latestExactResult()
+                    .has_value());
+    EXPECT_EQ(*result.lpiRecognition->stateAfterSubmit->latestExactResult(),
+              Catalog::ApplicationProtocolId::HTTP);
+    const auto mappedResults =
+        result.lpiRecognition->stateAfterSubmit->mappedResults();
+    ASSERT_EQ(mappedResults.size(), 1U);
+    EXPECT_EQ(mappedResults[0].firstPayloadPacketSequence, 1U);
+    EXPECT_EQ(mappedResults[0].direction, FlowRelativeDirection::Orig);
+    ASSERT_TRUE(result.flowEntryObservation.has_value());
+    EXPECT_EQ(result.flowEntryObservation->lpiRecognition.payloadPacketsSubmitted, 1U);
+    ASSERT_TRUE(result.flowEntryObservation->lpiRecognition.latestExactResult()
+                    .has_value());
+    EXPECT_EQ(*result.flowEntryObservation->lpiRecognition.latestExactResult(),
+              Catalog::ApplicationProtocolId::HTTP);
+}
+
 TEST(FlowGraphFragmentIngressTest, ReassembledPolicyDropIsGraphPolicyDrop) {
     FlowSteeringRuntime runtime(WorkerLayout{4, 0x1234}, 4);
     CountingPolicy policy(/*drop=*/true);
@@ -197,6 +273,50 @@ TEST(FlowGraphFragmentIngressTest, ReassembledPolicyDropIsGraphPolicyDrop) {
     EXPECT_EQ(result.status, FlowGraphIngressStatus::PolicyDrop);
     EXPECT_TRUE(result.fragmentReassembled);
     EXPECT_EQ(policy.evaluations(), 1U);
+}
+
+TEST(FlowGraphFragmentIngressTest,
+     ReassembledFragmentPolicyDropDoesNotSubmitLpi) {
+    FlowSteeringRuntime runtime(WorkerLayout{4, 0x1234}, 4);
+    CountingPolicy policy(/*drop=*/true);
+    FixedLpiProvider provider("lpi:http");
+    FlowGraphFragmentIngress ingress(
+        runtime, policy, FlowGraphIngressConfig{}, fragmentConfig(), &provider);
+    const auto first = ipv4Fragment(0x6565, 0, true, firstPayload());
+    const auto final = ipv4Fragment(0x6565, 24, false, secondPayload());
+
+    EXPECT_EQ(ingress.processL3Packet(first, metadataFor(first), 1).status,
+              FlowGraphIngressStatus::FragmentBuffered);
+    const auto result = ingress.processL3Packet(final, metadataFor(final), 2);
+
+    EXPECT_EQ(result.status, FlowGraphIngressStatus::PolicyDrop);
+    EXPECT_TRUE(result.fragmentReassembled);
+    EXPECT_EQ(provider.calls, 0U);
+    EXPECT_FALSE(result.lpiRecognition.has_value());
+    EXPECT_FALSE(result.flowEntryObservation.has_value());
+    EXPECT_EQ(ingress.lpiProviderStatus().counters.packetsObserved, 0U);
+}
+
+TEST(FlowGraphFragmentIngressTest, BufferedFragmentsDoNotSubmitLpi) {
+    FlowSteeringRuntime runtime(WorkerLayout{4, 0x1234}, 4);
+    CountingPolicy policy;
+    FixedLpiProvider provider("lpi:http");
+    FlowGraphFragmentIngress ingress(
+        runtime, policy, FlowGraphIngressConfig{}, fragmentConfig(), &provider);
+    const auto initial = ipv4Fragment(0x8585, 0, true, firstPayload());
+    const auto nonInitial = ipv4Fragment(0x8686, 24, false, secondPayload());
+
+    const auto initialResult = ingress.processL3Packet(
+        initial, metadataFor(initial), 1);
+    const auto nonInitialResult = ingress.processL3Packet(
+        nonInitial, metadataFor(nonInitial), 2);
+
+    EXPECT_EQ(initialResult.status, FlowGraphIngressStatus::FragmentBuffered);
+    EXPECT_FALSE(initialResult.lpiRecognition.has_value());
+    EXPECT_EQ(nonInitialResult.status, FlowGraphIngressStatus::FragmentBuffered);
+    EXPECT_FALSE(nonInitialResult.lpiRecognition.has_value());
+    EXPECT_EQ(provider.calls, 0U);
+    EXPECT_EQ(ingress.lpiProviderStatus().counters.packetsObserved, 0U);
 }
 
 TEST(FlowGraphFragmentIngressTest,
