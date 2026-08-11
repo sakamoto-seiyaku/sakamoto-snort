@@ -162,8 +162,26 @@ Current measurement entry:
   release-candidate Root/VPN measurements for workflow latency p50/p95/p99,
   nominal download throughput, adapter drop/capacity/corrective-handoff
   counters, CPU/RSS, screen-off power-supply proxy, thermal status, and
-  shutdown drain timing. The script is a release-budget evidence collector; it
-  does not turn release-candidate measurements into final release approval.
+  shutdown drain timing. The script also emits `budget_thresholds` and
+  `budget_result` sections and fails the matrix when an enforced budget row
+  fails. It remains a release-budget evidence collector; it does not turn
+  release-candidate measurements into final release approval.
+
+Current S59 budget threshold defaults:
+
+| Threshold | Default | Override |
+| --- | --- | --- |
+| Workflow latency p99 | `1500 ms` | `S59_BUDGET_MAX_WORKFLOW_P99_MS` |
+| Download throughput | `>= 1.00 Mbps` | `S59_BUDGET_MIN_DOWNLOAD_MBPS` |
+| TCP-connect transaction rate fallback | `>= 1.00 tps`, `<= 1` failure per 10 attempts | `S59_BUDGET_MIN_TXN_TPS`, `S59_BUDGET_MAX_TXN_FAILURES` |
+| Idle CPU | `<= 10.00%` | `S59_BUDGET_MAX_IDLE_CPU_PCT` |
+| Active CPU | `<= 25.00%` | `S59_BUDGET_MAX_ACTIVE_CPU_PCT` |
+| RSS | `<= 65536 KiB` | `S59_BUDGET_MAX_RSS_KB` |
+| Shutdown drain | `<= 10000 ms` | `S59_BUDGET_MAX_SHUTDOWN_DRAIN_MS` |
+| Flow capacity misses | `0` | `S59_BUDGET_MAX_FLOW_CAPACITY_MISSES` |
+| Corrective handoff / owner faults | `0` | `S59_BUDGET_MAX_OWNER_FAULTS` |
+| Thermal status | `<= 2` | `S59_BUDGET_MAX_THERMAL_STATUS` |
+| Screen-off proxy duration | `>= 10 s` | `S59_BUDGET_MIN_SCREEN_OFF_SEC` |
 
 Latest debug budget probe:
 

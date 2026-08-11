@@ -4,9 +4,10 @@ set -euo pipefail
 # SAKAMOTO-59 Android L4 release budget probe.
 #
 # This is a record-first budget collector for the current Android product path.
-# It does not approve a release. It records debug-APK Root/VPN measurements for
-# workflow latency, nominal download throughput, drop/capacity/corrective-handoff
-# counters, CPU/RSS, thermal status, and shutdown drain timing.
+# It does not approve a release. It records debug or release-candidate Root/VPN
+# measurements for workflow latency, nominal download throughput,
+# drop/capacity/corrective-handoff counters, CPU/RSS, thermal status, shutdown
+# drain timing, and script-enforced budget threshold pass/fail decisions.
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -47,6 +48,30 @@ S59_DOWNLOAD_TIMEOUT_SEC="${S59_DOWNLOAD_TIMEOUT_SEC:-20}"
 S59_DOWNLOAD_URL="${S59_DOWNLOAD_URL:-https://speed.cloudflare.com/__down?bytes=${S59_DOWNLOAD_BYTES}}"
 S59_THROUGHPUT_TXN_COUNT="${S59_THROUGHPUT_TXN_COUNT:-10}"
 S59_SCREEN_OFF_SEC="${S59_SCREEN_OFF_SEC:-10}"
+S59_BUDGET_MAX_WORKFLOW_P99_MS="${S59_BUDGET_MAX_WORKFLOW_P99_MS:-1500}"
+S59_BUDGET_MIN_DOWNLOAD_MBPS="${S59_BUDGET_MIN_DOWNLOAD_MBPS:-1.00}"
+S59_BUDGET_MIN_TXN_TPS="${S59_BUDGET_MIN_TXN_TPS:-1.00}"
+S59_BUDGET_MAX_TXN_FAILURES="${S59_BUDGET_MAX_TXN_FAILURES:-1}"
+S59_BUDGET_MAX_IDLE_CPU_PCT="${S59_BUDGET_MAX_IDLE_CPU_PCT:-10.00}"
+S59_BUDGET_MAX_ACTIVE_CPU_PCT="${S59_BUDGET_MAX_ACTIVE_CPU_PCT:-25.00}"
+S59_BUDGET_MAX_RSS_KB="${S59_BUDGET_MAX_RSS_KB:-65536}"
+S59_BUDGET_MAX_SHUTDOWN_DRAIN_MS="${S59_BUDGET_MAX_SHUTDOWN_DRAIN_MS:-10000}"
+S59_BUDGET_MAX_FLOW_CAPACITY_MISSES="${S59_BUDGET_MAX_FLOW_CAPACITY_MISSES:-0}"
+S59_BUDGET_MAX_OWNER_FAULTS="${S59_BUDGET_MAX_OWNER_FAULTS:-0}"
+S59_BUDGET_MAX_THERMAL_STATUS="${S59_BUDGET_MAX_THERMAL_STATUS:-2}"
+S59_BUDGET_MIN_SCREEN_OFF_SEC="${S59_BUDGET_MIN_SCREEN_OFF_SEC:-10}"
+export S59_BUDGET_MAX_WORKFLOW_P99_MS
+export S59_BUDGET_MIN_DOWNLOAD_MBPS
+export S59_BUDGET_MIN_TXN_TPS
+export S59_BUDGET_MAX_TXN_FAILURES
+export S59_BUDGET_MAX_IDLE_CPU_PCT
+export S59_BUDGET_MAX_ACTIVE_CPU_PCT
+export S59_BUDGET_MAX_RSS_KB
+export S59_BUDGET_MAX_SHUTDOWN_DRAIN_MS
+export S59_BUDGET_MAX_FLOW_CAPACITY_MISSES
+export S59_BUDGET_MAX_OWNER_FAULTS
+export S59_BUDGET_MAX_THERMAL_STATUS
+export S59_BUDGET_MIN_SCREEN_OFF_SEC
 S59_FORWARD_PORT="${S59_FORWARD_PORT:-60659}"
 S59_CLEANUP_ON_EXIT="${S59_CLEANUP_ON_EXIT:-1}"
 STATE_PATH="files/runtime-state/snapshot.properties"
@@ -54,13 +79,19 @@ PROBE_RESULT_PATH="files/debug/traffic-probe.properties"
 DOWNLOAD_RESULT_PATH="files/debug/download-probe.properties"
 
 mkdir -p "$RESULT_DIR"
+BUDGET_SUMMARY="${RESULT_DIR}/budget-summary.properties"
+: >"$BUDGET_SUMMARY"
 if [[ "${S59_BUDGET_LOGGING:-0}" != "1" ]]; then
   export S59_BUDGET_LOGGING=1
   exec > >(tee "${RESULT_DIR}/matrix.log") 2>&1
 fi
 
 kv() {
-  printf '%s=%s\n' "$1" "$2"
+  local line="$1=$2"
+  printf '%s\n' "$line"
+  if [[ -n "${BUDGET_SUMMARY:-}" ]]; then
+    printf '%s\n' "$line" >>"$BUDGET_SUMMARY"
+  fi
 }
 
 section() {
@@ -562,6 +593,169 @@ PY
   kv "${profile}.active.rssKb" "${rss:-0}"
 }
 
+evaluate_budget_thresholds() {
+  # Emits budget.result=PASS or budget.result=FAIL for the matrix gate.
+  python3 - "$BUDGET_SUMMARY" "$S59_PROFILE_LIST" <<'PY'
+import os
+import sys
+
+summary_path = sys.argv[1]
+profiles = sys.argv[2].split()
+
+props = {}
+with open(summary_path, encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        props[key] = value
+
+def env_float(name, default):
+    return float(os.environ.get(name, default))
+
+def env_int(name, default):
+    return int(os.environ.get(name, default))
+
+thresholds = {
+    "workflow_p99_ms": env_float("S59_BUDGET_MAX_WORKFLOW_P99_MS", "1500"),
+    "download_mbps": env_float("S59_BUDGET_MIN_DOWNLOAD_MBPS", "1.00"),
+    "txn_tps": env_float("S59_BUDGET_MIN_TXN_TPS", "1.00"),
+    "txn_failures": env_int("S59_BUDGET_MAX_TXN_FAILURES", "0"),
+    "idle_cpu_pct": env_float("S59_BUDGET_MAX_IDLE_CPU_PCT", "10.00"),
+    "active_cpu_pct": env_float("S59_BUDGET_MAX_ACTIVE_CPU_PCT", "25.00"),
+    "rss_kb": env_float("S59_BUDGET_MAX_RSS_KB", "65536"),
+    "shutdown_drain_ms": env_float("S59_BUDGET_MAX_SHUTDOWN_DRAIN_MS", "10000"),
+    "flow_capacity_misses": env_float("S59_BUDGET_MAX_FLOW_CAPACITY_MISSES", "0"),
+    "owner_faults": env_float("S59_BUDGET_MAX_OWNER_FAULTS", "0"),
+    "thermal_status": env_float("S59_BUDGET_MAX_THERMAL_STATUS", "2"),
+    "screen_off_sec": env_float("S59_BUDGET_MIN_SCREEN_OFF_SEC", "10"),
+}
+
+def get(profile, suffix, default=""):
+    return props.get(f"{profile}.{suffix}", default)
+
+def as_float(value, default=0.0):
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return default
+
+def as_int(value, default=0):
+    try:
+        return int(float(str(value).strip()))
+    except ValueError:
+        return default
+
+def emit(key, value):
+    print(f"{key}={value}")
+
+failures = []
+
+for profile in profiles:
+    p99 = as_float(get(profile, "workflowLatency.p99Ms", "0"))
+    workflow_ok = p99 > 0 and p99 <= thresholds["workflow_p99_ms"]
+    emit(f"{profile}.budget.workflowLatency.maxP99Ms", int(thresholds["workflow_p99_ms"]))
+    emit(f"{profile}.budget.workflowLatency.result", "PASS" if workflow_ok else "FAIL")
+    if not workflow_ok:
+        failures.append(f"{profile}.workflowLatency")
+
+    throughput_result = get(profile, "throughput.result")
+    throughput_ok = False
+    throughput_basis = "unavailable"
+    if throughput_result == "RECORDED_APP_DOWNLOAD":
+        mbps = as_float(get(profile, "throughput.mbps", "0"))
+        throughput_ok = mbps >= thresholds["download_mbps"]
+        throughput_basis = f"download_mbps>={thresholds['download_mbps']:.2f}"
+    elif throughput_result == "RECORDED_APP_TCP_CONNECT_TXN_RATE":
+        tps = as_float(get(profile, "throughput.tps", "0"))
+        failures_count = as_int(get(profile, "throughput.txnFailures", "999"))
+        throughput_ok = (
+            tps >= thresholds["txn_tps"]
+            and failures_count <= thresholds["txn_failures"]
+        )
+        throughput_basis = (
+            f"txn_tps>={thresholds['txn_tps']:.2f},"
+            f"txn_failures<={thresholds['txn_failures']}"
+        )
+    emit(f"{profile}.budget.throughput.basis", throughput_basis)
+    emit(f"{profile}.budget.throughput.result", "PASS" if throughput_ok else "FAIL")
+    if not throughput_ok:
+        failures.append(f"{profile}.throughput")
+
+    idle_cpu = as_float(get(profile, "idle.cpuPct", "999"))
+    active_cpu = as_float(get(profile, "active.cpuPct", "999"))
+    idle_rss = as_float(get(profile, "idle.rssKb", "999999"))
+    active_rss = as_float(get(profile, "active.rssKb", "999999"))
+    cpu_rss_ok = (
+        idle_cpu <= thresholds["idle_cpu_pct"]
+        and active_cpu <= thresholds["active_cpu_pct"]
+        and idle_rss <= thresholds["rss_kb"]
+        and active_rss <= thresholds["rss_kb"]
+    )
+    emit(f"{profile}.budget.cpuRss.result", "PASS" if cpu_rss_ok else "FAIL")
+    if not cpu_rss_ok:
+        failures.append(f"{profile}.cpuRss")
+
+    flow_misses = as_float(get(profile, "adapter.flowTableCapacityMisses", "0"))
+    queue_capacity = as_float(get(profile, "adapter.queueCapacity", "0"))
+    queue_hwm = as_float(get(profile, "adapter.queueHighWatermark", "0"))
+    queue_ok = queue_capacity <= 0 or queue_hwm <= queue_capacity
+    capacity_ok = (
+        flow_misses <= thresholds["flow_capacity_misses"]
+        and queue_ok
+    )
+    emit(f"{profile}.budget.capacity.result", "PASS" if capacity_ok else "FAIL")
+    if not capacity_ok:
+        failures.append(f"{profile}.capacity")
+
+    owner_faults = (
+        as_float(get(profile, "adapter.ownerFaultPassThroughPackets", "0"))
+        + as_float(get(profile, "adapter.ownerFaultRuntimeDrops", "0"))
+        + as_float(get(profile, "adapter.ownerGuardMismatches", "0"))
+        + as_float(get(profile, "adapter.transportFailedPackets", "0"))
+    )
+    corrective_ok = owner_faults <= thresholds["owner_faults"]
+    emit(f"{profile}.budget.correctiveHandoff.result", "PASS" if corrective_ok else "FAIL")
+    if not corrective_ok:
+        failures.append(f"{profile}.correctiveHandoff")
+
+    power_ok = (
+        get(profile, "screenOffPower.result") == "RECORDED_PROXY"
+        and as_float(get(profile, "screenOffPower.durationSec", "0"))
+        >= thresholds["screen_off_sec"]
+    )
+    emit(f"{profile}.budget.screenOffPowerProxy.result", "PASS" if power_ok else "FAIL")
+    if not power_ok:
+        failures.append(f"{profile}.screenOffPowerProxy")
+
+    thermal_before = get(profile, "thermal.before", "unknown")
+    thermal_after = get(profile, "thermal.after", "unknown")
+    thermal_ok = (
+        thermal_before != "unknown"
+        and thermal_after != "unknown"
+        and as_float(thermal_before, 999) <= thresholds["thermal_status"]
+        and as_float(thermal_after, 999) <= thresholds["thermal_status"]
+    )
+    emit(f"{profile}.budget.thermal.result", "PASS" if thermal_ok else "FAIL")
+    if not thermal_ok:
+        failures.append(f"{profile}.thermal")
+
+    drain_ms = as_float(get(profile, "shutdownDrain.ms", "999999"))
+    drain_ok = drain_ms <= thresholds["shutdown_drain_ms"]
+    emit(f"{profile}.budget.shutdownDrain.result", "PASS" if drain_ok else "FAIL")
+    if not drain_ok:
+        failures.append(f"{profile}.shutdownDrain")
+
+if failures:
+    emit("budget.failures", ",".join(failures))
+    emit("budget.result", "FAIL")
+else:
+    emit("budget.failures", "none")
+    emit("budget.result", "PASS")
+PY
+}
+
 cleanup() {
   if [[ "$S59_CLEANUP_ON_EXIT" != "1" ]]; then
     return
@@ -604,10 +798,13 @@ measure_profile() {
   query_control_json "${profile}/status.before" "$status_cmd" "{}" >/dev/null
 
   run_workflow_latency_probes "$profile" "$out_dir" | tee "${out_dir}/workflow-latency.properties"
+  cat "${out_dir}/workflow-latency.properties" >>"$BUDGET_SUMMARY"
   run_nominal_throughput "$profile" "$pid" "$out_dir" | tee "${out_dir}/throughput.properties"
+  cat "${out_dir}/throughput.properties" >>"$BUDGET_SUMMARY"
 
   query_control_json "${profile}/status.after" "$status_cmd" "{}" >/dev/null
   summarize_adapter_status "$profile" "${out_dir}/status.after.json" | tee "${out_dir}/adapter-summary.properties"
+  cat "${out_dir}/adapter-summary.properties" >>"$BUDGET_SUMMARY"
   measure_screen_off_power_proxy "$profile" "$out_dir"
   collect_thermal "${profile}.thermal.after" "${out_dir}/thermal.after.txt"
   stop_profile "$profile" "$out_dir"
@@ -635,6 +832,20 @@ kv "thermal" "dumpsys_thermalservice_before_after"
 kv "shutdownDrain" "runtimeStop_to_stopped_snapshot_ms"
 kv "capacityHighWatermark" "adapter_queue_flow_table_and_activity_capacity_evictions"
 kv "correctiveHandoff" "owner_fault_or_owner_guard_counters"
+
+section "budget_thresholds"
+kv "budget.threshold.workflowP99MaxMs" "$S59_BUDGET_MAX_WORKFLOW_P99_MS"
+kv "budget.threshold.downloadMinMbps" "$S59_BUDGET_MIN_DOWNLOAD_MBPS"
+kv "budget.threshold.txnMinTps" "$S59_BUDGET_MIN_TXN_TPS"
+kv "budget.threshold.txnMaxFailures" "$S59_BUDGET_MAX_TXN_FAILURES"
+kv "budget.threshold.idleCpuMaxPct" "$S59_BUDGET_MAX_IDLE_CPU_PCT"
+kv "budget.threshold.activeCpuMaxPct" "$S59_BUDGET_MAX_ACTIVE_CPU_PCT"
+kv "budget.threshold.rssMaxKb" "$S59_BUDGET_MAX_RSS_KB"
+kv "budget.threshold.shutdownDrainMaxMs" "$S59_BUDGET_MAX_SHUTDOWN_DRAIN_MS"
+kv "budget.threshold.flowCapacityMissesMax" "$S59_BUDGET_MAX_FLOW_CAPACITY_MISSES"
+kv "budget.threshold.ownerFaultsMax" "$S59_BUDGET_MAX_OWNER_FAULTS"
+kv "budget.threshold.thermalStatusMax" "$S59_BUDGET_MAX_THERMAL_STATUS"
+kv "budget.threshold.screenOffMinSec" "$S59_BUDGET_MIN_SCREEN_OFF_SEC"
 
 section "device"
 kv "device.model" "$(adb_cmd shell getprop ro.product.model | tr -d '\r')"
@@ -664,6 +875,14 @@ adb_cmd shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
 for profile in $S59_PROFILE_LIST; do
   measure_profile "$profile"
 done
+
+section "budget_result"
+budget_eval="$(evaluate_budget_thresholds)"
+printf '%s\n' "$budget_eval"
+printf '%s\n' "$budget_eval" >>"$BUDGET_SUMMARY"
+if grep -Fxq "budget.result=FAIL" <<<"$budget_eval"; then
+  exit 1
+fi
 
 section "matrix_result"
 kv "matrix.result" "PASS"
