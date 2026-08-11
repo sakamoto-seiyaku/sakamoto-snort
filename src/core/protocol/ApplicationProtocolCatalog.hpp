@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace sucre::protocol {
@@ -22,6 +23,11 @@ struct ApplicationProtocolEntry {
     std::string_view category;
 };
 
+struct ApplicationProtocolProviderAlias {
+    std::string_view alias;
+    ApplicationProtocolId id;
+};
+
 inline constexpr std::uint32_t kApplicationProtocolCatalogVersion = 1;
 inline constexpr std::array<ApplicationProtocolEntry, 6> kApplicationProtocolCatalog = {{
     {ApplicationProtocolId::RESERVED_1000, "reserved-1000", "reserved", ""},
@@ -32,6 +38,15 @@ inline constexpr std::array<ApplicationProtocolEntry, 6> kApplicationProtocolCat
     {ApplicationProtocolId::SSH, "ssh", "active", "remote-access"},
 }};
 
+inline constexpr std::array<ApplicationProtocolProviderAlias, 6> kApplicationProtocolProviderAliases = {{
+    {"lpi:dns", ApplicationProtocolId::DNS},
+    {"lpi:http", ApplicationProtocolId::HTTP},
+    {"lpi:ssl", ApplicationProtocolId::TLS},
+    {"lpi:tls", ApplicationProtocolId::TLS},
+    {"lpi:quic", ApplicationProtocolId::QUIC},
+    {"lpi:ssh", ApplicationProtocolId::SSH},
+}};
+
 inline constexpr std::string_view applicationProtocolKey(ApplicationProtocolId id) {
     for (const auto& entry : kApplicationProtocolCatalog) {
         if (entry.id == id) {
@@ -39,6 +54,24 @@ inline constexpr std::string_view applicationProtocolKey(ApplicationProtocolId i
         }
     }
     return {};
+}
+
+inline constexpr std::string_view applicationProtocolCategory(ApplicationProtocolId id) {
+    for (const auto& entry : kApplicationProtocolCatalog) {
+        if (entry.id == id) {
+            return entry.category;
+        }
+    }
+    return {};
+}
+
+inline constexpr std::optional<ApplicationProtocolId> applicationProtocolIdForProviderAlias(std::string_view alias) {
+    for (const auto& entry : kApplicationProtocolProviderAliases) {
+        if (entry.alias == alias) {
+            return entry.id;
+        }
+    }
+    return std::nullopt;
 }
 
 inline constexpr bool applicationProtocolIsActive(ApplicationProtocolId id) {
