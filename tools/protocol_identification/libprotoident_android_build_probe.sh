@@ -79,11 +79,6 @@ command -v cmake >/dev/null 2>&1 || {
 
 ndk_root="$(snort_ndk_require)"
 
-count_sources() {
-    local pattern="$1"
-    protocol_identification_probe_count_matching_sources "$libprotoident_root" "$pattern"
-}
-
 mkdir -p "$generated_source_dir" "$cmake_build_dir"
 
 cat >"$generated_source_dir/CMakeLists.txt" <<'CMAKE'
@@ -166,8 +161,8 @@ echo "androidAbi=$android_abi"
 echo "androidPlatform=$android_platform"
 echo "sourceTreeSha256=$(protocol_identification_probe_source_tree_sha256 "$libprotoident_root")"
 echo "source.topLevelCc=$(find "$libprotoident_root" -maxdepth 1 -type f -name '*.cc' | wc -l | tr -d ' ')"
-echo "source.tcpCc=$(count_sources "$libprotoident_root/tcp/*.cc")"
-echo "source.udpCc=$(count_sources "$libprotoident_root/udp/*.cc")"
+echo "source.tcpCc=$(protocol_identification_probe_count_matching_sources "$libprotoident_root" "$libprotoident_root/tcp/*.cc")"
+echo "source.udpCc=$(protocol_identification_probe_count_matching_sources "$libprotoident_root" "$libprotoident_root/udp/*.cc")"
 echo "policy.copiesSourceIntoRepo=false"
 echo "policy.providerVendoringDecision=false"
 echo "probe.scope=compile-link-only"

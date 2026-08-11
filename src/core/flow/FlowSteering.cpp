@@ -618,6 +618,7 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
         ++counters_.lpiFlowMisses;
         return LpiRecognitionUpdate{
             .found = false,
+            .latestExactResult = std::nullopt,
         };
     }
 
@@ -779,6 +780,7 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         .decisionStateClears = 0,
         .packets = 1U,
         .bytes = facts.originalLength,
+        .lpiRecognition = {},
     });
     ++counters_.creates;
     counters_.highWatermark = std::max(counters_.highWatermark, entries_.size());

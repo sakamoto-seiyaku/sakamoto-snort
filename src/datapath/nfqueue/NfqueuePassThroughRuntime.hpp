@@ -58,7 +58,7 @@ struct NfqueueFlowAdapterConfig {
     std::uint32_t copyPrefixBytes = 512;
     const Policy::PacketPolicySnapshot *packetPolicy = nullptr;
     Protocol::LpiRecognitionProvider *lpiProvider = nullptr;
-    Flow::FragmentSteeringConfig fragmentSteering;
+    Flow::FragmentSteeringConfig fragmentSteering{};
     std::size_t fragmentLeaseCapacityPerDatagram = 64;
 };
 

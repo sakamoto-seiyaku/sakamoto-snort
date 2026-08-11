@@ -4,17 +4,17 @@
 # write generated throwaway probe files under the caller-provided build root.
 
 protocol_identification_probe_source_tree_sha256() {
-    local tree="$1"
+    local search_root="$1"
     (
-        cd -- "$tree"
+        cd -- "$search_root"
         find . -type f -print0 | sort -z | xargs -0 -r sha256sum
     ) | sha256sum | awk '{print $1}'
 }
 
 protocol_identification_probe_count_matching_sources() {
-    local tree="$1"
+    local search_root="$1"
     local pattern="$2"
-    find "$tree" -type f -path "$pattern" | wc -l | tr -d ' '
+    find "$search_root" -type f -path "$pattern" | wc -l | tr -d ' '
 }
 
 protocol_identification_probe_write_vpp_utils_shim() {

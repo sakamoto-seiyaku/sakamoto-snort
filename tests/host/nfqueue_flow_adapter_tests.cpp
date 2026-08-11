@@ -163,6 +163,28 @@ private:
     std::string_view alias_;
 };
 
+class TerminalDoneLpiProvider final : public Protocol::LpiRecognitionProvider {
+public:
+    [[nodiscard]] bool available() const noexcept override { return true; }
+    [[nodiscard]] std::string_view providerName() const noexcept override {
+        return "fake-lpi-terminal-done";
+    }
+    [[nodiscard]] std::optional<Protocol::LpiProviderFact> recognize(
+        const Protocol::LpiPacketSubmission &submission) noexcept override {
+        ++calls;
+        lastPayloadLength = submission.transportPayload.size();
+        return Protocol::LpiProviderFact{
+            .providerAlias = "lpi:http",
+            .detectorDone = true,
+            .budgetExhausted = false,
+            .producedBeforeAdapterCompletion = true,
+        };
+    }
+
+    std::uint32_t calls = 0;
+    std::size_t lastPayloadLength = 0;
+};
+
 std::string readRepoFile(const std::filesystem::path &relativePath) {
     std::ifstream input(
         std::filesystem::path(SUCRE_SNORT_SOURCE_ROOT) / relativePath,
@@ -263,6 +285,46 @@ TEST(NfqueueFlowAdapterTest, LpiProviderFactUpdatesActivityBeforeAdapterCompleti
         1U);
     EXPECT_EQ(mappedResults[0].direction,
               Flow::FlowRelativeDirection::Orig);
+}
+
+TEST(NfqueueFlowAdapterTest, TerminalDoneLpiFlowSkipsLaterProviderCalls) {
+    TerminalDoneLpiProvider provider;
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .lpiProvider = &provider,
+    });
+    const auto packet = tcpPacketWithPayload();
+
+    EXPECT_EQ(adapter.process(2, kNfqueueHookLocalIn,
+                              std::span<const std::uint8_t>{packet}, packet.size()),
+              NfqueueFlowAdapterResult::FlowAccepted);
+    EXPECT_EQ(adapter.process(3, kNfqueueHookLocalIn,
+                              std::span<const std::uint8_t>{packet}, packet.size()),
+              NfqueueFlowAdapterResult::FlowAccepted);
+
+    const auto counters = adapter.counters();
+    EXPECT_EQ(provider.calls, 1U);
+    EXPECT_EQ(provider.lastPayloadLength, 20U);
+    EXPECT_TRUE(counters.lpiProvider.available);
+    EXPECT_EQ(counters.lpiProvider.providerName, "fake-lpi-terminal-done");
+    EXPECT_EQ(counters.lpiProvider.counters.packetsObserved, 2U);
+    EXPECT_EQ(counters.lpiProvider.counters.payloadEligiblePackets, 2U);
+    EXPECT_EQ(counters.lpiProvider.counters.terminalSkippedPackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.packetsSubmittedToProvider, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerFactPackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerNoResultPackets, 0U);
+    EXPECT_EQ(counters.allowedFlowActivity.records, 2U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.payloadPacketsSubmitted, 1U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.terminalState,
+              Flow::LpiRecognitionTerminalState::Done);
+    const auto mappedResults =
+        counters.allowedFlowActivity.lastLpiRecognition.mappedResults();
+    ASSERT_EQ(mappedResults.size(), 1U);
+    EXPECT_EQ(mappedResults[0].protocolId, Catalog::ApplicationProtocolId::HTTP);
+    EXPECT_EQ(mappedResults[0].firstPayloadPacketSequence, 1U);
 }
 
 TEST(NfqueueFlowAdapterTest, DefaultLpiProviderStaysDisabledAfterEligiblePayloadTraffic) {
