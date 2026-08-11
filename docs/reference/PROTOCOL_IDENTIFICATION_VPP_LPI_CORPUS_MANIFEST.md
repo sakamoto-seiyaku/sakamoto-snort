@@ -12,8 +12,12 @@ Source corpus:
 - `/home/js/backup/backup/Git/vpp/test/decoders/stellar_lpi/test_pcap`
 - repeatable local inventory command:
   `bash tools/protocol_identification/vpp_lpi_corpus_inventory.sh`
+- repeatable APP_NAME/provider-alias coverage command:
+  `tools/protocol_identification/vpp_lpi_expected_alias_inventory.py`
 - policy: do not copy PCAPs into this repository without an explicit license
   and privacy review.
+- policy: do not copy expected-result JSON into this repository for the alias
+  inventory; read the backup corpus in place.
 
 ## Current Inventory
 
@@ -22,6 +26,8 @@ The observed corpus contains:
 - `85` `.pcap` files.
 - `7` expected-result `.json` files.
 - `7` corpus groups.
+- `267` expected-result rows.
+- `23` unique normalized `APP_NAME` values.
 
 | Group | PCAPs | Expected JSON | Expected sessions | Expected app names | S61/S63 use |
 | --- | ---: | --- | ---: | --- | --- |
@@ -32,6 +38,39 @@ The observed corpus contains:
 | `ppp_pcap` | 6 | `ppp_pcap.json` | 115 | DNS, HTTP, ISAKMP, NETBIOS, PPTP | PPP/L2TP/PPTP and unknown-result behavior |
 | `smtps_pcap` | 1 | `smtps_pcap.json` | 1 | SMTPS | SMTPS catalog candidate after first S61 proof |
 | `socks_pcap` | 16 | `socks_pcap.json` | 37 | DHCP, DNS, FTP, HTTP, NETBIOS, POP3, RDP, SMTP, SOCKS, SSL | SOCKS plus nested application results |
+
+## Current Catalog Alias Coverage
+
+Observed by
+`tools/protocol_identification/vpp_lpi_expected_alias_inventory.py` on
+2026-08-12 against
+`resources/application-protocol-catalog/catalog.tsv`.
+
+The current Sakamoto provider aliases are the authority for mapping; VPP
+fork-local numeric `APP_ID` values are not imported or asserted as Sakamoto
+catalog identity.
+
+- mapped unique `APP_NAME` values: `4`.
+- mapped `APP_NAME` occurrences: `206`.
+- unmapped unique `APP_NAME` values: `19`.
+- unmapped `APP_NAME` occurrences: `81`.
+- rows without `APP_NAME` / expected `UNKNOWN`: `6`.
+- multi-result rows: `25`.
+
+Mapped evidence:
+
+| Expected APP_NAME | Occurrences | Expected alias evidence | Current catalog key | Canonical catalog provider alias |
+| --- | ---: | --- | --- | --- |
+| DNS | 145 | `lpi:dns` | `dns` | `lpi:dns` |
+| HTTP | 36 | `lpi:http` | `http` | `lpi:http` |
+| QUIC | 21 | `lpi:quic` | `quic` | `lpi:quic` |
+| SSL | 4 | `lpi:ssl` | `tls` | `lpi:tls` |
+
+Unmapped expected `APP_NAME` values:
+
+`DHCP`, `DTLS`, `FTP`, `IMAP`, `ISAKMP`, `NETBIOS`, `OPENVPN`, `POP3`,
+`PPTP`, `QQ`, `RDP`, `RTCP`, `RTP`, `SMTP`, `SMTPS`, `SOCKS`, `STUN`,
+`WECHAT`, `WIREGUARD`.
 
 ## Expected JSON Shape
 

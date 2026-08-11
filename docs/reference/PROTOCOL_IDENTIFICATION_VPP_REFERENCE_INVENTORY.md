@@ -122,6 +122,26 @@ build a repo-local host runner that feeds packet bytes through the pinned
 provider boundary and verifies `lpi:<name>` provider aliases before any Android
 or ProtocolRule gate.
 
+Repo-local expected-result alias inventory:
+
+- command:
+  `tools/protocol_identification/vpp_lpi_expected_alias_inventory.py`
+- source:
+  `/home/js/backup/backup/Git/vpp/test/decoders/stellar_lpi/test_pcap`
+- policy: `policy.copiesExpectedJsonIntoRepo=false`
+- current baseline: `7` expected JSON files, `267` expected sessions, `23`
+  unique normalized `APP_NAME` values.
+- current mapped evidence against the Sakamoto Application Protocol Catalog:
+  DNS `145` -> `lpi:dns`, HTTP `36` -> `lpi:http`, QUIC `21` -> `lpi:quic`,
+  SSL `4` -> catalog key `tls` / canonical alias `lpi:tls`.
+- current unmapped expected `APP_NAME` values:
+  DHCP, DTLS, FTP, IMAP, ISAKMP, NETBIOS, OPENVPN, POP3, PPTP, QQ, RDP, RTCP,
+  RTP, SMTP, SMTPS, SOCKS, STUN, WECHAT, WIREGUARD.
+
+This inventory is a contract over reference evidence and current catalog alias
+coverage. It does not connect a real libprotoident provider and does not start
+ProtocolRule enforcement work.
+
 License/privacy status:
 
 - The reference repo root and copied `test/` tree contain Apache-2.0 `LICENSE`
