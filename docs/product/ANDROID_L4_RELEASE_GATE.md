@@ -52,8 +52,16 @@ Supported matrix entries must record:
 - matrix result directory.
 
 Current gap: the evidence exists in device matrix result directories, but the
-supported-device compatibility table still needs to be promoted into a stable
-release artifact.
+final release APK still needs to rerun the table below before S59 can close.
+
+### Current supported-device compatibility rollup
+
+This table records the current debug-APK evidence only. It is useful for
+compatibility tracking, but it is not final release evidence.
+
+| Device | Android | ABI | Root | VPN | IPv4/IPv6 | Evidence | Release status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log` | Debug APK only; release APK rerun required |
 
 ## 3. Functional release evidence ledger
 
@@ -69,6 +77,28 @@ release artifact.
 | VPN IPv4/IPv6 TCP and UDP production proof | `tests/device/s55-product-vpn-transport-matrix.sh` | Present |
 | Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Needs release-level rollup |
 | Root no-residue release proof | S70/S71 evidence lineage | Needs release-level rollup |
+
+Current debug-evidence rollup:
+
+- Root L4 workflow: `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`
+  records `matrix.result=PASS`, real IPv4 TCP drop/restore, IPv6 TCP policy vector,
+  source CIDR, UDP, ICMP, other-protocol vector, L4 prefill, and allowed FlowEntry.
+- VPN L4 workflow: `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`
+  records `matrix.result=PASS`, debug APK SHA-256
+  `d95146cd3ddbfad9d111b89c1c110b8889002fa711480d5ccf210db5d069635c`,
+  no-recognition-hold first packet, late attribution L4 drop, Activity L4 prefill,
+  and restore allowed FlowEntry.
+- VPN transport: `build-output/s55-product-vpn-transport-matrix/20260811-160345`
+  records `packet-adapter-vpn-tun-hev`, `vpn-tun-fd-handoff`,
+  `vpn-tun-transport-fd-handoff`, TCP IPv4/IPv6 probes, UDP DNS bytes, no policy
+  drops, and stopped projection after cleanup. This directory lacks a
+  `matrix.log`, so it remains an evidence directory rather than a complete
+  release rollup.
+- Profile lifecycle: `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`
+  records `matrix.result=PASS`, Root start, Root→VPN, VPN→Root, Activity
+  recreation, app process death, Protection Pause, binding/policy preservation,
+  cleanup fault visibility, runtime crash recovery, Doze baseline, and final
+  cleanup.
 
 S58 latest evidence:
 
