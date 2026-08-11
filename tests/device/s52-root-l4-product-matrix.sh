@@ -147,6 +147,15 @@ for key in [
     "lastRuleId", "lastRevision",
 ]:
     print(f"{label}.policyDropActivity.{key}={activity.get(key)}")
+allowed = after.get("allowedFlowActivity", {})
+for key in [
+    "records", "capacity", "totalRecords", "evictedRecords", "lastLinuxUid",
+    "lastUidKnown", "lastNetworkContext", "lastSourceAddress",
+    "lastDestinationAddress", "lastIpProtocol", "lastSourcePort",
+    "lastDestinationPort", "lastDeviceDirection", "lastFlowDirection",
+    "lastPackets", "lastBytes", "lastPolicyRevision",
+]:
+    print(f"{label}.allowedFlowActivity.{key}={allowed.get(key)}")
 PY
 }
 
@@ -168,6 +177,16 @@ import sys
 
 doc = json.loads(sys.argv[1])["result"]
 print(doc.get("policyDropActivity", {}).get(sys.argv[2], ""))
+PY
+}
+
+allowed_activity_value() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+doc = json.loads(sys.argv[1])["result"]
+print(doc.get("allowedFlowActivity", {}).get(sys.argv[2], ""))
 PY
 }
 
@@ -537,6 +556,7 @@ request_product_l4_rule "$uid" ipv4 "$ipv4_cidr" 6 allow 10 0 "$TRAFFIC_PORT" ||
 eval_resp="$(wait_eval "$uid" ipv4 "$TRAFFIC_HOST" 6 true "$TRAFFIC_PORT" PASS_NEXT None 0)"
 printf 'open.POLICY.EVALUATE=%s\n' "$eval_resp"
 assert_eval "open" "$eval_resp" PASS_NEXT None 0
+open_revision="$(json_path result.revision "$eval_resp")"
 before="$(ctl NFQUEUE.STATUS)"
 am_start_debug_traffic "$TRAFFIC_HOST" "$TRAFFIC_PORT" || true
 wait_debug_traffic_probe_result "$TRAFFIC_HOST" || true
@@ -547,12 +567,27 @@ accepted_delta="$(delta_value "$before" "$after" acceptedPackets)"
 drop_delta="$(delta_value "$before" "$after" droppedPackets)"
 probe_uid="$(debug_traffic_probe_value uid || true)"
 probe_result="$(debug_traffic_probe_value result || true)"
+allowed_uid="$(allowed_activity_value "$after" lastLinuxUid)"
+allowed_remote="$(allowed_activity_value "$after" lastDestinationAddress)"
+allowed_protocol="$(allowed_activity_value "$after" lastIpProtocol)"
+allowed_port="$(allowed_activity_value "$after" lastDestinationPort)"
+allowed_device_dir="$(allowed_activity_value "$after" lastDeviceDirection)"
+allowed_flow_dir="$(allowed_activity_value "$after" lastFlowDirection)"
+allowed_revision="$(allowed_activity_value "$after" lastPolicyRevision)"
+allowed_packets="$(allowed_activity_value "$after" lastPackets)"
+allowed_bytes="$(allowed_activity_value "$after" lastBytes)"
 if [[ "$accepted_delta" -gt 0 && "$drop_delta" -eq 0 && "$probe_uid" == "$uid" \
-  && "$probe_result" == "tcp_connect_succeeded" ]]; then
+  && "$probe_result" == "tcp_connect_succeeded" \
+  && "$allowed_uid" == "$uid" && "$allowed_remote" == "$TRAFFIC_HOST" \
+  && "$allowed_protocol" == "6" && "$allowed_port" == "$TRAFFIC_PORT" \
+  && "$allowed_device_dir" == "output" && "$allowed_flow_dir" == "orig" \
+  && "$allowed_revision" == "$open_revision" \
+  && "$allowed_packets" =~ ^[0-9]+$ && "$allowed_packets" -gt 0 \
+  && "$allowed_bytes" =~ ^[0-9]+$ && "$allowed_bytes" -gt 0 ]]; then
   kv "open.result" "PASS"
 else
   kv "open.result" "FAIL"
-  kv "open.reason" "expected product L4 allow to restore APK TCP connect without new policy drops"
+  kv "open.reason" "expected product L4 allow to restore APK TCP connect with native allowed FlowEntry attribution and without new policy drops"
   MATRIX_RC=1
 fi
 
