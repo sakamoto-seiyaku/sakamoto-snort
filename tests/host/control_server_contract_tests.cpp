@@ -437,6 +437,51 @@ TEST(ControlServerContract, RealVpnTunRuntimeAdvertisesAttachLaterBeforeFdAndAcc
     EXPECT_EQ(status["result"]["packetsSeen"].GetUint64(), 0U);
 }
 
+TEST(ControlServerContract, RealVpnTunRuntimeAdvertisesPacketAdapterAfterBothFdHandoffs) {
+    Tun::VpnTunFdRuntime runtime{-1, true};
+    ASSERT_TRUE(runtime.start());
+    ControlServerHarness harness(runtime);
+
+    int tunPipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(tunPipeFds), 0) << std::strerror(errno);
+    UniqueFd tunRead{tunPipeFds[0]};
+    UniqueFd tunWrite{tunPipeFds[1]};
+    ASSERT_TRUE(tunRead.valid());
+    ASSERT_TRUE(tunWrite.valid());
+
+    const rapidjson::Document tunAttach =
+        harness.callWithFd(53, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", tunRead.get());
+    tunRead.reset();
+    ASSERT_TRUE(tunAttach["ok"].GetBool());
+
+    int transportPipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(transportPipeFds), 0) << std::strerror(errno);
+    UniqueFd transportRead{transportPipeFds[0]};
+    UniqueFd transportWrite{transportPipeFds[1]};
+    ASSERT_TRUE(transportRead.valid());
+    ASSERT_TRUE(transportWrite.valid());
+
+    const rapidjson::Document transportAttach =
+        harness.callWithFd(54, "VPN_TRANSPORT.ATTACH", "{}", transportRead.get());
+    transportRead.reset();
+    ASSERT_TRUE(transportAttach["ok"].GetBool());
+    ASSERT_TRUE(transportAttach.HasMember("result"));
+    EXPECT_TRUE(transportAttach["result"]["transportFdAttached"].GetBool());
+
+    for (int attempt = 0; attempt < 50 && !runtime.packetAdapterReady(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    ASSERT_TRUE(runtime.packetAdapterReady());
+
+    const rapidjson::Document hello = harness.call(55, "HELLO");
+
+    ASSERT_TRUE(hello["ok"].GetBool());
+    const auto capabilities = capabilityStrings(hello["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
+                        "packet-adapter-vpn-tun-hev"),
+              capabilities.end());
+}
+
 TEST(ControlServerContract, VpnTunAttachRejectsMissingScmRightsFd) {
     FakeRuntimeControl runtime;
     runtime.vpnTunHandoffReady = true;
