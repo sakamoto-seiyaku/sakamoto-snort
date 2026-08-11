@@ -4,8 +4,8 @@ set -euo pipefail
 # SAKAMOTO-59 Android L4 release budget probe.
 #
 # This is a record-first budget collector for the current Android product path.
-# It does not approve a release. It records debug or release-candidate Root/VPN
-# measurements for workflow latency, nominal download throughput,
+# It does not approve a release. It records debug, release-candidate, or
+# final-release Root/VPN measurements for workflow latency, nominal download throughput,
 # drop/capacity/corrective-handoff counters, CPU/RSS, thermal status, shutdown
 # drain timing, and script-enforced budget threshold pass/fail decisions.
 
@@ -29,6 +29,10 @@ case "$S59_APK_VARIANT" in
   release-candidate)
     APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release-candidate.apk}"
     S59_BUILD_SCRIPT="${S59_BUILD_SCRIPT:-app/android-runtime/scripts/build-release-candidate-apk.sh}"
+    ;;
+  final-release)
+    APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release.apk}"
+    S59_BUILD_SCRIPT="${S59_BUILD_SCRIPT:-app/android-runtime/scripts/build-final-release-apk.sh}"
     ;;
   *)
     echo "unsupported S59_APK_VARIANT: $S59_APK_VARIANT" >&2
@@ -819,11 +823,17 @@ kv "device" "$(adb_target_desc)"
 kv "package" "$PACKAGE"
 kv "activity" "$ACTIVITY"
 kv "apkVariant" "$S59_APK_VARIANT"
-if [[ "$S59_APK_VARIANT" == "release-candidate" ]]; then
-  kv "releaseStatus" "release_candidate_non_debug_not_final_signing"
-else
-  kv "releaseStatus" "debug_apk_budget_probe_only"
-fi
+case "$S59_APK_VARIANT" in
+  release-candidate)
+    kv "releaseStatus" "release_candidate_non_debug_not_final_signing"
+    ;;
+  final-release)
+    kv "releaseStatus" "final_signed_release_apk_evidence"
+    ;;
+  *)
+    kv "releaseStatus" "debug_apk_budget_probe_only"
+    ;;
+esac
 kv "workflowLatency" "p50/p95/p99_ms"
 kv "nominalThroughput" "app_debug_download_mbps"
 kv "cpuRss" "idle_and_download_active_proc_ticks_rss"
@@ -886,8 +896,14 @@ fi
 
 section "matrix_result"
 kv "matrix.result" "PASS"
-if [[ "$S59_APK_VARIANT" == "release-candidate" ]]; then
-  kv "matrix.s59ReleaseBudgetProbe" "claimed_release_candidate_non_debug_not_final_signing"
-else
-  kv "matrix.s59ReleaseBudgetProbe" "claimed_debug_only"
-fi
+case "$S59_APK_VARIANT" in
+  release-candidate)
+    kv "matrix.s59ReleaseBudgetProbe" "claimed_release_candidate_non_debug_not_final_signing"
+    ;;
+  final-release)
+    kv "matrix.s59ReleaseBudgetProbe" "claimed_final_signed_release_budget"
+    ;;
+  *)
+    kv "matrix.s59ReleaseBudgetProbe" "claimed_debug_only"
+    ;;
+esac

@@ -161,6 +161,9 @@ grep -q 'debuggable(0x0101000f)=false' <<<"$release_candidate_manifest" \
 [[ -f "$final_release_build_script" ]] \
   || { echo "final release APK build wrapper is missing" >&2; exit 1; }
 grep -q 'ANDROID_RUNTIME_BUILD_VARIANT=final-release' "$final_release_build_script"
+grep -q 'ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE' "$final_release_build_script"
+grep -q 'ANDROID_RUNTIME_RELEASE_SIGNING_ALIAS' "$final_release_build_script"
+grep -q 'ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE' "$final_release_build_script"
 set +e
 VPP_RUNTIME_STAGE_DIR="$valid_stage" "$final_release_build_script" \
   >"$tmp_dir/final-release-missing-signing.log" 2>&1

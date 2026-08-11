@@ -36,6 +36,7 @@ bash "$repo_root/tests/android/s58-vpn-l4-product-workflow-matrix-contract-test.
 bash "$repo_root/tests/android/s59-product-release-gate-contract-test.sh"
 bash "$repo_root/tests/android/s59-release-budget-probe-contract-test.sh"
 bash "$repo_root/tests/android/s60-application-protocol-catalog-contract-test.sh"
+bash "$repo_root/tests/android/s61-vpp-reference-inventory-contract-test.sh"
 production_service_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 production_ownership_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"

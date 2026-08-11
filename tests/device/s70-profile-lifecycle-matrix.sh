@@ -29,6 +29,10 @@ case "$S70_APK_VARIANT" in
     APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release-candidate.apk}"
     S70_BUILD_SCRIPT="${S70_BUILD_SCRIPT:-app/android-runtime/scripts/build-release-candidate-apk.sh}"
     ;;
+  final-release)
+    APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release.apk}"
+    S70_BUILD_SCRIPT="${S70_BUILD_SCRIPT:-app/android-runtime/scripts/build-final-release-apk.sh}"
+    ;;
   *)
     echo "unsupported S70_APK_VARIANT: $S70_APK_VARIANT" >&2
     exit 1
@@ -519,20 +523,26 @@ else
 fi
 
 section "cleanup_fault_reason"
-if [[ "$S70_APK_VARIANT" == "release-candidate" ]]; then
-  # runtimeCleanupFault is a debug fault-injection seam. Release-candidate APKs
+if [[ "$S70_APK_VARIANT" != "debug" ]]; then
+  # runtimeCleanupFault is a debug fault-injection seam. Non-debug APKs
   # still prove the user-facing lifecycle path here, but must not depend on
   # debug-only injected cleanup failures.
   fault_state="$(start_profile root "${RESULT_DIR}/fault-start")"
   fault_pid="$(printf '%s\n' "$fault_state" | snapshot_value_from pid)"
-  stop_runtime "${RESULT_DIR}/cleanup-fault/release-candidate-stop" >/dev/null
+  stop_runtime "${RESULT_DIR}/cleanup-fault/non-debug-stop" >/dev/null
   mkdir -p "${RESULT_DIR}/cleanup-fault"
-  assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-release-candidate-stop"
-  assert_no_tun0_residue "${RESULT_DIR}/cleanup-fault/tun0.after-release-candidate-stop"
-  assert_no_native_residue "${RESULT_DIR}/cleanup-fault/native-residue.after-release-candidate-stop"
-  kv "reason.cleanupFault" "debug_fault_injection_skipped_release_candidate"
-  kv "cleanupFault.releaseCandidateNormalStop" "PASS"
-  kv "cleanupFault.result" "SKIPPED_RELEASE_CANDIDATE"
+  assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-non-debug-stop"
+  assert_no_tun0_residue "${RESULT_DIR}/cleanup-fault/tun0.after-non-debug-stop"
+  assert_no_native_residue "${RESULT_DIR}/cleanup-fault/native-residue.after-non-debug-stop"
+  if [[ "$S70_APK_VARIANT" == "final-release" ]]; then
+    kv "reason.cleanupFault" "debug_fault_injection_skipped_final_release"
+    kv "cleanupFault.finalReleaseNormalStop" "PASS"
+    kv "cleanupFault.result" "SKIPPED_FINAL_RELEASE"
+  else
+    kv "reason.cleanupFault" "debug_fault_injection_skipped_release_candidate"
+    kv "cleanupFault.releaseCandidateNormalStop" "PASS"
+    kv "cleanupFault.result" "SKIPPED_RELEASE_CANDIDATE"
+  fi
 else
   fault_state="$(start_profile root "${RESULT_DIR}/fault-start")"
   fault_pid="$(printf '%s\n' "$fault_state" | snapshot_value_from pid)"

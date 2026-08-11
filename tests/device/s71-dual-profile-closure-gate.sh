@@ -18,13 +18,15 @@ RESULT_DIR="${RESULT_DIR:-${RESULTS_ROOT}/${RUN_ID}}"
 VNEXT_PORT="${VNEXT_PORT:-60607}"
 SNORT_CTL="${SNORT_CTL:-${repo_root}/build-output/cmake/dev-debug/tests/host/sucre-snort-ctl}"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.androidruntime}"
+APK="${APK:-}"
+S71_EXPECTED_APK_SHA256="${S71_EXPECTED_APK_SHA256:-}"
 S71_RUN_HOST="${S71_RUN_HOST:-1}"
 S71_RUN_ROOT="${S71_RUN_ROOT:-1}"
 S71_RUN_VPN="${S71_RUN_VPN:-1}"
 S71_RUN_LIFECYCLE="${S71_RUN_LIFECYCLE:-1}"
 S71_APK_VARIANT="${S71_APK_VARIANT:-${ANDROID_RUNTIME_APK_VARIANT:-debug}}"
 case "$S71_APK_VARIANT" in
-  debug|release-candidate)
+  debug|release-candidate|final-release)
     ;;
   *)
     echo "unsupported S71_APK_VARIANT: $S71_APK_VARIANT" >&2
@@ -84,6 +86,16 @@ assert_log_lacks_result_failures() {
   fi
 }
 
+assert_log_has_literal() {
+  local name="$1"
+  local text="$2"
+  local log="${RESULT_DIR}/${name}.log"
+  grep -Fxq "$text" "$log" || {
+    echo "S71 missing expected evidence in ${log#${repo_root}/}: $text" >&2
+    exit 1
+  }
+}
+
 assert_root_gate() {
   local name="root_nfqueue_matrix"
   assert_log_has "$name" '^ipv6_output[.]result=PASS$'
@@ -102,6 +114,9 @@ assert_root_gate() {
 
 assert_vpn_gate() {
   local name="product_vpn_matrix"
+  if [[ -n "$S71_EXPECTED_APK_SHA256" ]]; then
+    assert_log_has_literal "$name" "apk.sha256=$S71_EXPECTED_APK_SHA256"
+  fi
   assert_log_has "$name" '^productRuntimeServiceVpnAdapter=claimed$'
   assert_log_has "$name" '^POC_ONLY=false$'
   assert_log_has "$name" '^start[.]result=PASS$'
@@ -119,6 +134,9 @@ assert_vpn_gate() {
 
 assert_lifecycle_gate() {
   local name="profile_lifecycle_matrix"
+  if [[ -n "$S71_EXPECTED_APK_SHA256" ]]; then
+    assert_log_has_literal "$name" "apk.sha256=$S71_EXPECTED_APK_SHA256"
+  fi
   assert_log_has "$name" '^productState[.]binding=PASS$'
   assert_log_has "$name" '^productState[.]policyBundleBaseline=RECORDED$'
   assert_log_has "$name" '^switch[.]rootToVpn=PASS$'
@@ -128,12 +146,19 @@ assert_lifecycle_gate() {
   assert_log_has "$name" '^pause[.]bindingPreserved=PASS$'
   assert_log_has "$name" '^pause[.]policyPreserved=PASS$'
   assert_log_has "$name" '^pause[.]lastSuccessfulPolicyPreserved=PASS$'
-  if [[ "$S71_APK_VARIANT" == "release-candidate" ]]; then
+  case "$S71_APK_VARIANT" in
+  release-candidate)
     assert_log_has "$name" '^cleanupFault[.]releaseCandidateNormalStop=PASS$'
     assert_log_has "$name" '^cleanupFault[.]result=SKIPPED_RELEASE_CANDIDATE$'
-  else
+    ;;
+  final-release)
+    assert_log_has "$name" '^cleanupFault[.]finalReleaseNormalStop=PASS$'
+    assert_log_has "$name" '^cleanupFault[.]result=SKIPPED_FINAL_RELEASE$'
+    ;;
+  *)
     assert_log_has "$name" '^cleanupFault[.]result=PASS$'
-  fi
+    ;;
+  esac
   assert_log_has "$name" '^crash[.]result=PASS$'
   assert_log_has "$name" '^restartAfterCrash[.]result=PASS$'
   assert_log_has "$name" '^doze[.]result=PASS$'
@@ -150,6 +175,10 @@ kv "resultDir" "${RESULT_DIR#${repo_root}/}"
 kv "adbWrapper" "./dev/adb"
 kv "device" "$(adb_target_desc)"
 kv "apkVariant" "$S71_APK_VARIANT"
+if [[ -n "$APK" && -f "$APK" ]]; then
+  kv "apk" "${APK#${repo_root}/}"
+  kv "apk.sha256" "$(sha256sum "$APK" | awk '{print $1}')"
+fi
 kv "s71Done" "not_claimed"
 
 if [[ "$S71_RUN_HOST" == "1" ]]; then

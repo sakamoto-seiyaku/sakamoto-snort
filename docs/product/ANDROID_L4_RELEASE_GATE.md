@@ -67,6 +67,25 @@ Final signed APK build preflight:
   the store password.
 - The final-release path does not generate a signing key and does not use the
   debug keystore. Missing signing inputs fail before producing an APK.
+- Final signed evidence runners use the same `final-release` APK variant:
+  `bash tests/device/s59-final-release-evidence-suite.sh` is the ordered suite for
+  the full final signed evidence rerun;
+  `S55_APK_VARIANT=final-release bash tests/device/s55-product-vpn-transport-matrix.sh`,
+  `S58_APK_VARIANT=final-release bash tests/device/s58-vpn-l4-product-workflow-matrix.sh`,
+  `S59_APK_VARIANT=final-release bash tests/device/s59-release-budget-probe.sh`,
+  and `S71_APK_VARIANT=final-release bash tests/device/s71-dual-profile-closure-gate.sh`.
+  S71 forwards `ANDROID_RUNTIME_APK_VARIANT=final-release` to its product VPN
+  and lifecycle child matrices. The suite only emits
+  `matrix.s59FinalReleaseEvidence=claimed_final_signed_release_apk_evidence`
+  when all required final signed evidence segments run; env-skipped segment
+  reruns are partial evidence and cannot close S59.
+- The ordered suite builds the final signed APK once, records its SHA-256, and
+  asserts that every APK-consuming child matrix reports the same `apk.sha256`.
+  This prevents final evidence from accidentally mixing artifacts across
+  matrix steps.
+- The ordered suite forces the S71 host, Root, VPN, and lifecycle child gates to
+  run. A caller may run an intentionally partial rerun by skipping top-level
+  suite segments, but partial evidence cannot close S59.
 
 ### Current supported-device compatibility rollup
 
@@ -406,6 +425,14 @@ Compatibility report, Feature request, and Help request guidance. Final release
 notes still need to publish the same routes for non-debug distribution.
 
 ## 11. Release-notes template
+
+Repository-staged release notes draft:
+
+- `docs/product/ANDROID_L4_RELEASE_NOTES_DRAFT.md`.
+- Status: not a public release announcement and not a release approval.
+- The draft includes Android-only scope, Root/VPN profile summary, evidence
+  rollup, budget summary, installation and quick start, privacy, known
+  limitations, and feedback routes.
 
 Release notes for Android L4 Product Release must include:
 

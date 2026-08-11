@@ -15,6 +15,8 @@
   信息架构、内容建设和发布完成标准。
 - `ANDROID_L4_RELEASE_GATE.md`：SAKAMOTO-59 Android L4 Product Release Gate 的证据、
   预算、双语用户材料、隐私、已知限制、反馈入口和关单 checklist。
+- `ANDROID_L4_RELEASE_NOTES_DRAFT.md`：SAKAMOTO-59 的仓库内 release notes 草案；
+  final signed APK evidence 完成前不代表公开发布。
 
 ## UI 资料与实现归属
 

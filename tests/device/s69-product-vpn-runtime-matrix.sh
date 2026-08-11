@@ -29,6 +29,10 @@ case "$S69_APK_VARIANT" in
     APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release-candidate.apk}"
     S69_BUILD_SCRIPT="${S69_BUILD_SCRIPT:-app/android-runtime/scripts/build-release-candidate-apk.sh}"
     ;;
+  final-release)
+    APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release.apk}"
+    S69_BUILD_SCRIPT="${S69_BUILD_SCRIPT:-app/android-runtime/scripts/build-final-release-apk.sh}"
+    ;;
   *)
     echo "unsupported S69_APK_VARIANT: $S69_APK_VARIANT" >&2
     exit 1
