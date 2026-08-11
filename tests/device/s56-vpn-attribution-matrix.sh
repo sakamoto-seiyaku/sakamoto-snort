@@ -156,6 +156,12 @@ print(obj)
 PY
 }
 
+probe_value() {
+  local file="$1"
+  local key="$2"
+  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); found=1 } END { if (!found) exit 1 }' "$file"
+}
+
 delta_value() {
   python3 - "$1" "$2" "$3" <<'PY'
 import json
@@ -281,6 +287,8 @@ kv "device" "$(adb_target_desc)"
 kv "package" "$PACKAGE"
 kv "activity" "$ACTIVITY"
 kv "lateAttributionEvidence" "claimed"
+kv "noRecognitionHoldEvidence" "claimed"
+kv "completedVerdictRetroactiveModification" "not_claimed"
 kv "multiUserIdentity" "not_claimed"
 
 section "build_install"
@@ -349,10 +357,17 @@ run_debug_probe "first"
 wait_for_status_delta "${RESULT_DIR}/status.before.json" "status.after_first" "packetsSeen" 1
 first_forward_delta="$(delta_value "${RESULT_DIR}/status.before.json" "${RESULT_DIR}/status.after_first.json" forwardedPackets)"
 first_unknown_delta="$(delta_value "${RESULT_DIR}/status.before.json" "${RESULT_DIR}/status.after_first.json" uidUnknownFallbackPackets)"
+first_drop_delta="$(delta_value "${RESULT_DIR}/status.before.json" "${RESULT_DIR}/status.after_first.json" droppedPackets)"
+first_probe_result="$(probe_value "${RESULT_DIR}/first.probe.properties" result)"
 kv "first.forwardedPacketsDelta" "$first_forward_delta"
 kv "first.uidUnknownFallbackPacketsDelta" "$first_unknown_delta"
+kv "first.droppedPacketsDelta" "$first_drop_delta"
+kv "first.probe.result" "$first_probe_result"
 [[ "$first_forward_delta" -ge 1 ]]
 [[ "$first_unknown_delta" -ge 1 ]]
+[[ "$first_drop_delta" -eq 0 ]]
+[[ "$first_probe_result" == "tcp_connect_succeeded" ]]
+kv "first.noRecognitionHold" "claimed"
 
 section "late_attribution"
 attribution_args="$(attribution_apply_args "$uid" | tail -n 1 | compact_json)"
@@ -362,12 +377,20 @@ query_control_json "attribution_apply" "VPN_TUN.ATTRIBUTION.APPLY" "$attribution
 [[ "$(json_field "${RESULT_DIR}/attribution_apply.json" result.updated)" == "True" ]]
 kv "attribution.apply" "PASS"
 kv "attribution.resolvedUid" "$uid"
+query_control_json "status.after_attribution" "VPN_TUN.STATUS"
+attribution_update_delta="$(delta_value "${RESULT_DIR}/status.after_first.json" "${RESULT_DIR}/status.after_attribution.json" attributionUpdates)"
+retroactive_drop_delta="$(delta_value "${RESULT_DIR}/status.after_first.json" "${RESULT_DIR}/status.after_attribution.json" droppedPackets)"
+kv "attribution.attributionUpdatesDelta" "$attribution_update_delta"
+kv "attribution.retroactiveDroppedPacketsDelta" "$retroactive_drop_delta"
+[[ "$attribution_update_delta" -ge 1 ]]
+[[ "$retroactive_drop_delta" -eq 0 ]]
+kv "attribution.completedVerdictNotRetroactive" "claimed"
 
 section "second_unknown_packet_reevaluated"
 run_debug_probe "second"
-wait_for_status_delta "${RESULT_DIR}/status.after_first.json" "status.after_second" "droppedPackets" 1
-second_drop_delta="$(delta_value "${RESULT_DIR}/status.after_first.json" "${RESULT_DIR}/status.after_second.json" droppedPackets)"
-resolution_delta="$(delta_value "${RESULT_DIR}/status.after_first.json" "${RESULT_DIR}/status.after_second.json" attributionResolutions)"
+wait_for_status_delta "${RESULT_DIR}/status.after_attribution.json" "status.after_second" "droppedPackets" 1
+second_drop_delta="$(delta_value "${RESULT_DIR}/status.after_attribution.json" "${RESULT_DIR}/status.after_second.json" droppedPackets)"
+resolution_delta="$(delta_value "${RESULT_DIR}/status.after_attribution.json" "${RESULT_DIR}/status.after_second.json" attributionResolutions)"
 kv "second.droppedPacketsDelta" "$second_drop_delta"
 kv "second.attributionResolutionsDelta" "$resolution_delta"
 [[ "$second_drop_delta" -ge 1 ]]
