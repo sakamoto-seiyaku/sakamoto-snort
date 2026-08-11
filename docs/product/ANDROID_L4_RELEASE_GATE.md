@@ -64,7 +64,7 @@ compatibility tracking, but it is not final release evidence.
 
 | Device | Android | ABI | Root | VPN | IPv4/IPv6 | Evidence | Release status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-183645`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 debug `build-output/s71-dual-profile-closure-gate/20260811-164754`; S71 release-candidate `build-output/s71-dual-profile-closure-gate/20260811-182004` | Debug functional matrices plus release-candidate budget and closure reruns; final signed release APK rerun required |
+| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-184230`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 debug `build-output/s71-dual-profile-closure-gate/20260811-164754`; S71 release-candidate `build-output/s71-dual-profile-closure-gate/20260811-182004` | Debug functional matrices plus release-candidate budget and closure reruns; final signed release APK rerun required |
 
 ## 3. Functional release evidence ledger
 
@@ -152,7 +152,7 @@ must not treat `TBD` as pass.
 | Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | Current S59 release-candidate Root queue, FlowEntry table, and Activity capacity/eviction probe present; VPN queue N/A because VPN/TUN has no NFQUEUE lease queue |
 | Corrective handoff | owner mismatch / corrective handoff counters | S59 release-candidate owner-fault / owner-guard counters present and thresholded at `0`; final signed release APK rerun required |
 | CPU/RSS | idle and active CPU/RSS per profile | S59 release-candidate idle and active CPU/RSS present; final signed release APK rerun required |
-| Screen-off power | screen-off idle power or proxy budget | Current S59 release-candidate 10-second screen-off power-supply proxy present; release-duration rerun required |
+| Screen-off power | screen-off idle power or proxy budget | Current S59 release-candidate 60-second screen-off power-supply proxy present; final signed release APK rerun required |
 | Thermal | thermal status before/after release workload | S59 release-candidate thermal before/after status present; release workload rerun required |
 | Shutdown drain release | bounded drain and resource release timing | S59 release-candidate stop-to-stopped timing present and thresholded at `<=10000 ms`; final signed release APK rerun required |
 
@@ -221,50 +221,51 @@ Latest debug budget probe:
 
 Latest release-candidate budget probe:
 
-- Result directory: `build-output/s59-release-budget-probe/20260811-183645`.
+- Result directory: `build-output/s59-release-budget-probe/20260811-184230`.
 - Device: Google Pixel 6a (`28201JEGR0XPAJ`), Android 16 / SDK 36,
   arm64-v8a.
 - APK: `app/android-runtime/build/outputs/sakamoto-runtime-release-candidate.apk`,
-  SHA-256 `b2f4f4dc65de65cb79780f6697c1ea71455908910602aeda4885436ddb0ae634`.
+  SHA-256 `3ad1ff0c9769b8ca3a1cd10b047452739aa8f44cb304fb47b6888fc0bdf35623`.
 - Build status: `release_candidate_non_debug_not_final_signing`; APK manifest
   records `android:debuggable=false`, and the artifact contract verifies it.
 - Budget thresholds: p99 workflow `<=1500 ms`, Root app download
   `>=1.00 Mbps`, VPN fallback `>=1.00 tps` with `<=1` failed TCP-connect
   transaction, idle CPU `<=10%`, active CPU `<=25%`, RSS `<=65536 KiB`,
   shutdown drain `<=10000 ms`, flow capacity misses `0`, owner faults `0`,
-  thermal status `<=2`, and screen-off proxy duration `>=10 s`.
+  thermal status `<=2`, and screen-off proxy duration `>=60 s` for this
+  extended power run.
 - Budget result: `budget.result=PASS`, `budget.failures=none`.
-- Root workflow latency: samples `3`, p50 `420 ms`, p95 `431 ms`,
-  p99 `431 ms`.
-- VPN workflow latency: samples `3`, p50 `437 ms`, p95 `454 ms`,
-  p99 `454 ms`.
+- Root workflow latency: samples `3`, p50 `451 ms`, p95 `462 ms`,
+  p99 `462 ms`.
+- VPN workflow latency: samples `3`, p50 `406 ms`, p95 `427 ms`,
+  p99 `427 ms`.
 - Throughput / transaction rate: Root `RECORDED_APP_DOWNLOAD`,
-  `500000` bytes in `767 ms`, `4.00 Mbps`; VPN
+  `500000` bytes in `908 ms`, `4.00 Mbps`; VPN
   `RECORDED_APP_TCP_CONNECT_TXN_RATE`, `10/10` successful TCP-connect
-  transactions over `6804 ms`, `1.47 tps`, with app download fallback
+  transactions over `6846 ms`, `1.46 tps`, with app download fallback
   reason `Connection reset`.
-- CPU/RSS idle sample: Root `0.50% / 37492 KiB`, VPN `4.00% / 36984 KiB`.
-- CPU/RSS active sample: Root `4.34% / 37496 KiB`, VPN `1.47% / 36996 KiB`.
+- CPU/RSS idle sample: Root `0.50% / 37576 KiB`, VPN `4.50% / 37600 KiB`.
+- CPU/RSS active sample: Root `4.90% / 37580 KiB`, VPN `1.73% / 37540 KiB`.
 - Adapter counters: Root `droppedPackets=0`, `ownerFaultPassThroughPackets=0`;
   VPN `droppedPackets=0`, `ownerGuardMismatches=0`,
   `transportFailedPackets=0`.
 - Queue high-watermark: Root NFQUEUE pending lease queue `1/64`; Root
   terminal completion history `64/64`. VPN queue is N/A because VPN/TUN does
   not use the NFQUEUE lease queue.
-- Flow table high-watermark: Root `6/64` with `0` capacity misses; VPN `17/64`
+- Flow table high-watermark: Root `7/64` with `0` capacity misses; VPN `17/64`
   with `0` capacity misses.
-- Activity capacity: Root allowed activity `8/8` with `597` evictions; VPN
-  allowed activity `8/8` with `88` evictions; drop activity `0/8` for both.
-- Screen-off power proxy: both profiles recorded `RECORDED_PROXY` over `10 s`.
+- Activity capacity: Root allowed activity `8/8` with `607` evictions; VPN
+  allowed activity `8/8` with `94` evictions; drop activity `0/8` for both.
+- Screen-off power proxy: both profiles recorded `RECORDED_PROXY` over `60 s`.
   Root wakefulness `Awake -> Dozing -> Awake`, current_now before/start/end/after
-  `312/-10312/-2500/-41250 uA`; VPN wakefulness `Awake -> Dozing -> Awake`,
-  current_now before/start/end/after `-1562/-7500/-625/-5625 uA`.
+  `1562/3437/312/-9375 uA`; VPN wakefulness `Awake -> Dozing -> Awake`,
+  current_now before/start/end/after `-3437/-7500/-625/-7500 uA`.
 - Thermal status: Root `0 -> 0`; VPN `0 -> 0`.
-- Shutdown drain: Root `5470 ms`; VPN `4283 ms`.
+- Shutdown drain: Root `5482 ms`; VPN `2949 ms`.
 - Throughput note: VPN app download still returned `Connection reset`, so this
   run records transaction-rate fallback rather than nominal download Mbps for
-  VPN. Final release approval still needs final signed release APK evidence and
-  release-duration power evidence.
+  VPN. Final release approval still needs final signed release APK evidence,
+  including the final signed APK budget and power rerun.
 
 Minimum release rule: every budget row must have a measurement source, result
 directory, date, device, and pass/fail decision before S59 can close.
@@ -373,8 +374,8 @@ Privacy principles:
 - Protocol Identification / application protocol rules are not part of Android L4 Product Release.
 - No stateful conntrack or TCP stream reassembly.
 - No zero-leak promise for short flows before attribution or later protocol recognition.
-- Final signed release APK evidence and release-duration power evidence block
-  final S59 closure.
+- Final signed release APK evidence, including final signed budget and power
+  reruns, blocks final S59 closure.
 
 ## 10. Feedback entry points
 
