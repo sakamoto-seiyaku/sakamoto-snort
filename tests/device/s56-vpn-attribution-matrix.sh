@@ -94,7 +94,10 @@ package_uid() {
 query_control_json() {
   local name="$1"
   local command="$2"
-  local args="${3:-{}}"
+  local args="{}"
+  if [[ $# -ge 3 ]]; then
+    args="$3"
+  fi
   python3 - "$S56_FORWARD_PORT" "$RESULT_DIR" "$name" "$command" "$args" <<'PY'
 import json
 import pathlib
@@ -105,7 +108,9 @@ port = int(sys.argv[1])
 result_dir = pathlib.Path(sys.argv[2])
 name = sys.argv[3]
 command = sys.argv[4]
-args = json.loads(sys.argv[5])
+raw_args = sys.argv[5]
+(result_dir / f"{name}.args.json").write_text(raw_args + "\n")
+args = json.loads(raw_args)
 
 payload = json.dumps({"id": 1, "cmd": command, "args": args},
                      separators=(",", ":")).encode()
@@ -160,6 +165,10 @@ before = json.load(open(sys.argv[1]))["result"]
 after = json.load(open(sys.argv[2]))["result"]
 print(int(after.get(sys.argv[3], 0)) - int(before.get(sys.argv[3], 0)))
 PY
+}
+
+compact_json() {
+  python3 -c 'import json,sys; print(json.dumps(json.loads(sys.stdin.read()), separators=(",", ":")))'
 }
 
 policy_apply_l4_drop() {
@@ -232,7 +241,7 @@ run_debug_probe() {
     >"${RESULT_DIR}/${label}.intent.log" 2>&1
   for _ in $(seq 1 30); do
     adb_cmd shell run-as "$PACKAGE" cat "$PROBE_RESULT_PATH" \
-      >"${RESULT_DIR}/${label}.probe.properties" 2>/dev/null || true
+      2>/dev/null | tr -d '\r' >"${RESULT_DIR}/${label}.probe.properties" || true
     if grep -Fxq "sourcePort=${S56_SOURCE_PORT}" "${RESULT_DIR}/${label}.probe.properties"; then
       kv "${label}.probeResult" "${RESULT_DIR#${repo_root}/}/${label}.probe.properties"
       return 0
@@ -250,7 +259,11 @@ wait_for_status_delta() {
   local attempts="${5:-30}"
   local after="${RESULT_DIR}/${out_name}.json"
   for _ in $(seq 1 "$attempts"); do
-    query_control_json "$out_name" "VPN_TUN.STATUS"
+    if ! query_control_json "$out_name" "VPN_TUN.STATUS" \
+        >"${RESULT_DIR}/${out_name}.query.log" 2>&1; then
+      kv "${out_name}.queryLog" "${RESULT_DIR#${repo_root}/}/${out_name}.query.log"
+      return 1
+    fi
     if [[ "$(delta_value "$before" "$after" "$key")" -ge "$min_delta" ]]; then
       return 0
     fi
@@ -324,7 +337,8 @@ for required in ["packet-adapter-vpn-tun-hev", "packet-policy-control",
 PY
 kv "control.HELLO" "PASS"
 
-policy_args="$(policy_apply_l4_drop "$uid")"
+policy_args="$(policy_apply_l4_drop "$uid" | tail -n 1 | compact_json)"
+printf '%s\n' "$policy_args" >"${RESULT_DIR}/policy_apply.shell_args.json"
 query_control_json "policy_apply" "POLICY.APPLY" "$policy_args"
 kv "policy.apply" "PASS"
 
@@ -341,7 +355,8 @@ kv "first.uidUnknownFallbackPacketsDelta" "$first_unknown_delta"
 [[ "$first_unknown_delta" -ge 1 ]]
 
 section "late_attribution"
-attribution_args="$(attribution_apply_args "$uid")"
+attribution_args="$(attribution_apply_args "$uid" | tail -n 1 | compact_json)"
+printf '%s\n' "$attribution_args" >"${RESULT_DIR}/attribution_apply.shell_args.json"
 query_control_json "attribution_apply" "VPN_TUN.ATTRIBUTION.APPLY" "$attribution_args"
 [[ "$(json_field "${RESULT_DIR}/attribution_apply.json" result.found)" == "True" ]]
 [[ "$(json_field "${RESULT_DIR}/attribution_apply.json" result.updated)" == "True" ]]
