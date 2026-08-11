@@ -231,7 +231,7 @@ while IFS= read -r corpus_path; do
   echo "pre-decision source evidence must not include corpus or expected-result files: $corpus_path" >&2
   exit 1
 done < <(
-  find "$evidence_root" -type f \( \
+  find "$evidence_root" \( -type f -o -type l \) \( \
     -name '*.pcap' -o -name '*.pcapng' -o -name '*expected*.json' \
   \) -print
 )
