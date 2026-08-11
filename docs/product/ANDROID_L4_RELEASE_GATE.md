@@ -64,7 +64,7 @@ compatibility tracking, but it is not final release evidence.
 
 | Device | Android | ABI | Root | VPN | IPv4/IPv6 | Evidence | Release status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-175129`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 debug `build-output/s71-dual-profile-closure-gate/20260811-164754`; S71 release-candidate `build-output/s71-dual-profile-closure-gate/20260811-182004` | Debug functional matrices plus release-candidate budget and closure reruns; final signed release APK rerun required |
+| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-183645`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 debug `build-output/s71-dual-profile-closure-gate/20260811-164754`; S71 release-candidate `build-output/s71-dual-profile-closure-gate/20260811-182004` | Debug functional matrices plus release-candidate budget and closure reruns; final signed release APK rerun required |
 
 ## 3. Functional release evidence ledger
 
@@ -221,24 +221,30 @@ Latest debug budget probe:
 
 Latest release-candidate budget probe:
 
-- Result directory: `build-output/s59-release-budget-probe/20260811-175129`.
+- Result directory: `build-output/s59-release-budget-probe/20260811-183645`.
 - Device: Google Pixel 6a (`28201JEGR0XPAJ`), Android 16 / SDK 36,
   arm64-v8a.
 - APK: `app/android-runtime/build/outputs/sakamoto-runtime-release-candidate.apk`,
-  SHA-256 `e78b81aea5c7180bc6e22d4e9424c1decd8d09d248caf6eee9df9f7789da48fe`.
+  SHA-256 `b2f4f4dc65de65cb79780f6697c1ea71455908910602aeda4885436ddb0ae634`.
 - Build status: `release_candidate_non_debug_not_final_signing`; APK manifest
   records `android:debuggable=false`, and the artifact contract verifies it.
-- Root workflow latency: samples `3`, p50 `416 ms`, p95 `450 ms`,
-  p99 `450 ms`.
-- VPN workflow latency: samples `3`, p50 `436 ms`, p95 `450 ms`,
-  p99 `450 ms`.
+- Budget thresholds: p99 workflow `<=1500 ms`, Root app download
+  `>=1.00 Mbps`, VPN fallback `>=1.00 tps` with `<=1` failed TCP-connect
+  transaction, idle CPU `<=10%`, active CPU `<=25%`, RSS `<=65536 KiB`,
+  shutdown drain `<=10000 ms`, flow capacity misses `0`, owner faults `0`,
+  thermal status `<=2`, and screen-off proxy duration `>=10 s`.
+- Budget result: `budget.result=PASS`, `budget.failures=none`.
+- Root workflow latency: samples `3`, p50 `420 ms`, p95 `431 ms`,
+  p99 `431 ms`.
+- VPN workflow latency: samples `3`, p50 `437 ms`, p95 `454 ms`,
+  p99 `454 ms`.
 - Throughput / transaction rate: Root `RECORDED_APP_DOWNLOAD`,
-  `500000` bytes in `980 ms`, `4.00 Mbps`; VPN
+  `500000` bytes in `767 ms`, `4.00 Mbps`; VPN
   `RECORDED_APP_TCP_CONNECT_TXN_RATE`, `10/10` successful TCP-connect
-  transactions over `6829 ms`, `1.46 tps`, with app download fallback
+  transactions over `6804 ms`, `1.47 tps`, with app download fallback
   reason `Connection reset`.
-- CPU/RSS idle sample: Root `0.50% / 37248 KiB`, VPN `3.50% / 37400 KiB`.
-- CPU/RSS active sample: Root `5.53% / 37256 KiB`, VPN `1.60% / 37424 KiB`.
+- CPU/RSS idle sample: Root `0.50% / 37492 KiB`, VPN `4.00% / 36984 KiB`.
+- CPU/RSS active sample: Root `4.34% / 37496 KiB`, VPN `1.47% / 36996 KiB`.
 - Adapter counters: Root `droppedPackets=0`, `ownerFaultPassThroughPackets=0`;
   VPN `droppedPackets=0`, `ownerGuardMismatches=0`,
   `transportFailedPackets=0`.
@@ -247,14 +253,14 @@ Latest release-candidate budget probe:
   not use the NFQUEUE lease queue.
 - Flow table high-watermark: Root `6/64` with `0` capacity misses; VPN `17/64`
   with `0` capacity misses.
-- Activity capacity: Root allowed activity `8/8` with `756` evictions; VPN
-  allowed activity `8/8` with `94` evictions; drop activity `0/8` for both.
+- Activity capacity: Root allowed activity `8/8` with `597` evictions; VPN
+  allowed activity `8/8` with `88` evictions; drop activity `0/8` for both.
 - Screen-off power proxy: both profiles recorded `RECORDED_PROXY` over `10 s`.
   Root wakefulness `Awake -> Dozing -> Awake`, current_now before/start/end/after
-  `-6562/-6562/-4687/-3437 uA`; VPN wakefulness `Awake -> Dozing -> Awake`,
-  current_now before/start/end/after `-9375/-7500/312/-10312 uA`.
+  `312/-10312/-2500/-41250 uA`; VPN wakefulness `Awake -> Dozing -> Awake`,
+  current_now before/start/end/after `-1562/-7500/-625/-5625 uA`.
 - Thermal status: Root `0 -> 0`; VPN `0 -> 0`.
-- Shutdown drain: Root `5574 ms`; VPN `4268 ms`.
+- Shutdown drain: Root `5470 ms`; VPN `4283 ms`.
 - Throughput note: VPN app download still returned `Connection reset`, so this
   run records transaction-rate fallback rather than nominal download Mbps for
   VPN. Final release approval still needs final signed release APK evidence,
