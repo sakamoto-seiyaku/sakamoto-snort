@@ -203,18 +203,28 @@ public final class AuthoringPolicyBundle {
 
         private static long stableRuleId(ApplicationSubjectId subjectId, IpFamily family,
                                          int ipProtocol, int priority, int order) {
-            return 0x5200000000000000L
-                    | (((long) subjectId.uid & 0xffffffffL) << 16)
-                    | (((long) family.ordinal() & 0x1L) << 15)
-                    | (((long) ipProtocol & 0xffL) << 7)
-                    | ((long) (priority + 32768) & 0x7fL)
-                    | ((long) order & 0x7fL);
+            long hash = 0xcbf29ce484222325L;
+            hash = mixStableRuleHash(hash, subjectId.uid);
+            hash = mixStableRuleHash(hash, family.ordinal());
+            hash = mixStableRuleHash(hash, ipProtocol);
+            hash = mixStableRuleHash(hash, priority);
+            hash = mixStableRuleHash(hash, order);
+            return 0x5200000000000000L | (hash & 0x00ffffffffffffffL);
         }
 
         private static int stableReasonId(ApplicationSubjectId subjectId, int ipProtocol,
                                           int order) {
             return 0x52000000 | ((subjectId.uid & 0x00ffff) << 8)
                     | ((ipProtocol & 0xff) ^ (order & 0xff));
+        }
+
+        private static long mixStableRuleHash(long hash, int value) {
+            long next = hash;
+            for (int shift = 0; shift < 32; shift += 8) {
+                next ^= (value >>> shift) & 0xffL;
+                next *= 0x100000001b3L;
+            }
+            return next;
         }
     }
 

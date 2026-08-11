@@ -1371,6 +1371,16 @@ public final class AndroidRuntimeContractTest {
         check(restored.authoringPolicyBundle.l4Rules.get(1).family
                         == AuthoringPolicyBundle.IpFamily.IPV6,
                 "L4RuleList preserves explicit IPv6 family");
+        AuthoringPolicyBundle.L4Rule samePriorityDifferentOrder =
+                AuthoringPolicyBundle.L4Rule.create(app,
+                        AuthoringPolicyBundle.IpFamily.IPV4, "10.0.0.0/8",
+                        "198.51.100.0/24", null,
+                        AuthoringPolicyBundle.PortRange.exact(443), 6,
+                        AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                        AuthoringPolicyBundle.NetworkContextId.WIFI,
+                        AuthoringPolicyBundle.L4Action.DROP, 10, 3);
+        check(dropHttps.ruleId != samePriorityDifferentOrder.ruleId,
+                "L4 stable rule IDs distinguish explicit order values");
     }
 
     private static void l4RuleListCompilesToPacketPolicyApplyPayload() {

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+matrix="$repo_root/tests/device/s52-root-l4-product-matrix.sh"
+
+test -x "$matrix"
+grep -q './dev/adb' "$matrix"
+grep -q 'SAKAMOTO-52-root-l4-product-matrix' "$matrix"
+grep -q 'debugSetL4RuleSubject' "$matrix"
+grep -q 'debugSetL4RuleFamily' "$matrix"
+grep -q 'debugSetL4RuleDestinationCidr' "$matrix"
+grep -q 'debugSetL4RuleDestinationPortFirst' "$matrix"
+grep -q 'debugSetL4RuleAction' "$matrix"
+grep -q 'debugSetL4RuleSourceCidr' "$matrix"
+grep -q 'debugSetL4RuleDestinationCidr' "$matrix"
+grep -q 'priority/order/ruleId' "$matrix"
+grep -q 'block_real_tcp_traffic' "$matrix"
+grep -q 'open_restore_tcp' "$matrix"
+grep -q 'ipv6_tcp_vector' "$matrix"
+grep -q 'source_cidr_vector' "$matrix"
+grep -q 'udp_vector' "$matrix"
+grep -q 'icmp_vector' "$matrix"
+grep -q 'other_protocol_vector' "$matrix"
+grep -q 'POLICY.EVALUATE' "$matrix"
+grep -q 'NFQUEUE.STATUS' "$matrix"
+grep -q 'policyDropActivity' "$matrix"
+grep -q 'matrix.s52Done.*not_claimed' "$matrix"
+
+echo "s52 root l4 product matrix static contract: PASS"
