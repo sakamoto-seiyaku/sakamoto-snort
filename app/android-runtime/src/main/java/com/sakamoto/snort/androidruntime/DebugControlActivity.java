@@ -520,11 +520,46 @@ public class DebugControlActivity extends Activity {
                     setProfileSpinnerSelection(RuntimeProfile.ROOT);
                 }
             }
-            statusView.setText(current.displayText());
+            statusView.setText(current.displayText() + "\n\n"
+                    + initializationPlanText(current));
         }
         if (productView != null) {
             renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()));
         }
+    }
+
+    private String initializationPlanText(RuntimeSnapshot current) {
+        RuntimeProfile selected = current != null && current.isActive()
+                ? current.profile : profileFromSpinner();
+        boolean notificationReady = RuntimeService.notificationsReady(this);
+        boolean rootAuthorized = current == null
+                || !"root_authorization_required".equals(current.errorCode);
+        boolean vpnAuthorized = selected != RuntimeProfile.VPN
+                || VpnService.prepare(this) == null;
+        boolean runtimeReady = current != null && current.isActive()
+                && current.profile == selected
+                && "ok".equals(current.coreHealth)
+                && !RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(current.adapterReadiness);
+        RuntimeProfileInitializationPlan plan = RuntimeProfileInitializationPlan.from(
+                new RuntimeProfileInitializationPlan.Inputs(
+                        ProductPacketAdapterContract.forProfile(RuntimeProfile.ROOT)
+                                .productLaunchAllowed,
+                        rootAuthorized,
+                        ProductPacketAdapterContract.forProfile(RuntimeProfile.VPN)
+                                .productLaunchAllowed,
+                        vpnAuthorized,
+                        notificationReady,
+                        runtimeReady,
+                        selected));
+        return "Initialization: " + plan.currentStep
+                + "\nRecommended: " + profileName(plan.recommendedProfile)
+                + "\nAction: " + plan.currentAction
+                + "\nImpact: " + plan.impact
+                + "\nRecovery: " + plan.recoveryAction;
+    }
+
+    private static String profileName(RuntimeProfile profile) {
+        return profile == null ? "none" : profile.displayName;
     }
 
     private RuntimeProfile profileFromSpinner() {
