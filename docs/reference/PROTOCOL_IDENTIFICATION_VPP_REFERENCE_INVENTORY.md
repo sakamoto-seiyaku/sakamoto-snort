@@ -100,6 +100,43 @@ LPI corpus groups observed:
 - `smtps_pcap`: SMTPS
 - `socks_pcap`: SOCKS4/SOCKS5 with HTTP/HTTPS/FTP/mail/RDP cases
 
+Group-level shape observed on 2026-08-12:
+
+| Group | PCAPs | Expected JSON | Expected sessions | Observed expected app names | Notes |
+| --- | ---: | ---: | ---: | --- | --- |
+| `app_pcap` | 7 | 1 | 7 | QQ, WeChat, WIREGUARD | app-style protocol names only; none are in the current Sakamoto catalog |
+| `dns_pcap` | 2 | 1 | 53 | DNS | useful for current `lpi:dns` catalog evidence |
+| `mixed_pcap` | 41 | 1 | 41 | DNS, DTLS, FTP, HTTP, IMAP, POP3, QUIC, RTCP, RTP, SMTP, STUN | useful for `lpi:http`, `lpi:quic`, mapped/unmapped, and multi-protocol behavior |
+| `openvpn_pcap` | 12 | 1 | 13 | OPENVPN, QUIC | useful as long-tail/tunnel evidence; OpenVPN is not in the current catalog |
+| `ppp_pcap` | 6 | 1 | 115 | DNS, HTTP, ISAKMP, NETBIOS, PPTP | includes expected `UNKNOWN` rows; useful for no-result and unmapped handling |
+| `smtps_pcap` | 1 | 1 | 1 | SMTPS | not currently in the Sakamoto catalog |
+| `socks_pcap` | 16 | 1 | 37 | DHCP, DNS, FTP, HTTP, NETBIOS, POP3, RDP, SMTP, SOCKS, SSL | useful for ordered multi-result behavior such as SOCKS plus inner protocol |
+
+The fork runner for this corpus is
+`/home/js/backup/backup/Git/vpp/test/test_stellar_lpi.py::test_lpi_batch`.
+It discovers the `test_pcap` subdirectories, replays every `.pcap` through
+`stellar-flow-dissector` and `stellar-lpi`, extracts event-logger
+`LPI TRACE SESSION` JSON, and compares the ordered actual results with each
+group's expected JSON. This is a runner shape reference only; Sakamoto should
+build a repo-local host runner that feeds packet bytes through the pinned
+provider boundary and verifies `lpi:<name>` provider aliases before any Android
+or ProtocolRule gate.
+
+License/privacy status:
+
+- The reference repo root and copied `test/` tree contain Apache-2.0 `LICENSE`
+  files, but there is no corpus-local README, NOTICE, source-attribution, or
+  privacy file under `test/decoders/stellar_lpi/test_pcap`.
+- Several capture names and expected JSON rows include real-looking public and
+  private IP addresses, service names, and application names. Treat the corpus
+  as sensitive test evidence until license, provenance, and privacy suitability
+  are explicitly reviewed.
+- Do not copy the full corpus, publish it, or claim redistributed fixture
+  rights from this inventory. A later implementation may import only a small
+  pinned subset after license/privacy review, preferably reduced or synthetic
+  enough to prove the current Sakamoto catalog entries plus unmapped/unknown
+  behavior.
+
 These are the strongest immediate source for S61/S63 fixture planning. Before
 copying any corpus into this repo, confirm licensing and privacy suitability,
 then import only a small pinned subset that proves the first Sakamoto catalog
