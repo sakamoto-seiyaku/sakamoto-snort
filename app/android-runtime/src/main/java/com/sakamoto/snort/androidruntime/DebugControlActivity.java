@@ -1140,6 +1140,8 @@ public class DebugControlActivity extends Activity {
                 + countersAfter.optString("lastObservedResult", "unknown")
                 + "\nPolicy drop activity: "
                 + formatPolicyDropActivity(countersAfter.optJSONObject("policyDropActivity"))
+                + "\nAllowed flow activity: "
+                + formatAllowedFlowActivity(countersAfter.optJSONObject("allowedFlowActivity"))
                 + "\n" + formatActivityL4Prefill(host, port,
                 countersAfter.optJSONObject("policyDropActivity"))
                 + "\nProbe: " + probeResult;
@@ -1160,6 +1162,35 @@ public class DebugControlActivity extends Activity {
                 + " reason=" + activity.optLong("lastReasonId", -1L)
                 + " rule=" + activity.optLong("lastRuleId", -1L)
                 + " revision=" + activity.optLong("lastRevision", -1L);
+    }
+
+    private String formatAllowedFlowActivity(JSONObject activity) {
+        if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
+            return "none";
+        }
+        return "records=" + activity.optLong("records", 0L)
+                + "/" + activity.optLong("capacity", 0L)
+                + " total=" + activity.optLong("totalRecords", 0L)
+                + " evicted=" + activity.optLong("evictedRecords", 0L)
+                + " uid=" + activity.optLong("lastLinuxUid", -1L)
+                + " uidKnown=" + activity.optBoolean("lastUidKnown", false)
+                + " context=" + activity.optLong("lastNetworkContext", -1L)
+                + " remote=" + remoteEndpoint(activity)
+                + " protocol=" + activity.optLong("lastIpProtocol", -1L)
+                + " deviceDir=" + activity.optString("lastDeviceDirection", "unknown")
+                + " flowDir=" + activity.optString("lastFlowDirection", "unknown")
+                + " packets=" + activity.optLong("lastPackets", 0L)
+                + " bytes=" + activity.optLong("lastBytes", 0L)
+                + " revision=" + activity.optLong("lastPolicyRevision", -1L);
+    }
+
+    private String remoteEndpoint(JSONObject activity) {
+        boolean input = "input".equals(activity.optString("lastDeviceDirection", ""));
+        String address = input ? activity.optString("lastSourceAddress", "")
+                : activity.optString("lastDestinationAddress", "");
+        long port = input ? activity.optLong("lastSourcePort", 0L)
+                : activity.optLong("lastDestinationPort", 0L);
+        return address + ":" + port;
     }
 
     private String formatActivityL4Prefill(String host, int port, JSONObject activity) {
