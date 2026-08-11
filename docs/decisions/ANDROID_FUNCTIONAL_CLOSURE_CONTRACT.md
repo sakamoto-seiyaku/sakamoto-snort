@@ -41,6 +41,26 @@
 
 这些变量可以调整，但调整不得绕过固定不变量或改变已经产生的 packet outcome attribution。
 
+### 2.3 Evidence revision note：SAKAMOTO-72..81
+
+记录日期：2026-08-12。来源：`experiments/vpp-nfq-poc/SAKAMOTO-81_HANDOFF.md`、
+Plane `SAKAMOTO-72..81`。
+
+SAKAMOTO-72..81 已在 throwaway VPP-native NFQUEUE live-buffer POC 层确认若干
+Root Adapter ownership 不变量：single-message direct materialization、canonical worker
+handoff by buffer index、origin-only verdict、exactly-once completion outcome partitioning 与
+native return。该证据不关闭 SAKAMOTO-68/69/71 产品 gates，也不替代 Root/VPN e2e、
+Debug Control Activity、Product UI、release packaging 或 soak/capacity evidence。
+
+同步边界：
+
+- multi-message netlink datagram 的已验证行为是 admission 前安全拒绝；除非后续显式决定
+  chain/multi-buffer admission，否则不得把它写成多 obligation no-copy 支持。
+- Android S80 final evidence 观察到 `buffer-data-size 2048`，只覆盖 small ICMP envelopes；
+  Android production buffer sizing 仍是证据驱动变量。
+- process death 是 explicit live-obligation fault 加 fresh restart evidence，不是 clean
+  in-process teardown。
+
 ## 3. Functional Closure 范围
 
 ### 3.1 本闭环包含

@@ -30,7 +30,10 @@ than a fixed architectural constant.
 
 P3 proved route, ownership, and ledger correctness with throwaway copied-prefix descriptors; it did not prove
 the production no-copy/live-buffer integration. Its prefix length, pool depth, queue count, and worker count
-are scoped experimental parameters, not normative implementation constants.
+are scoped experimental parameters, not normative implementation constants. SAKAMOTO-72..81 later added
+throwaway live-buffer ownership evidence: single-message direct materialization, worker handoff, origin
+completion, and native return passed on host and Android, while multi-message datagrams were safely rejected
+before admission rather than materialized as independent no-copy obligations.
 
 Conditional worker wake is not accepted as part of this ADR. An early P5 diagnostic observed about 44%
 sleeping-worker publish-to-terminal p99 improvement, but that result was not a product acceptance result.
@@ -51,5 +54,8 @@ sleep-confirmed latency gates.
   to bypass completion return.
 - Root and VPN remain interchangeable Packet capture Adapters over one VPP graph and policy runtime rather
   than separate dataplanes.
-- Real verdict-send failure settlement, production credit sizing, IPv4/IPv6 live-buffer integration, soak,
-  and an optimized conditional-wake artifact remain release gates rather than accepted POC claims.
+- Production capacity sizing, broader Android payload envelope, product supervisor/restart policy, soak,
+  release integration, and any optimized conditional-wake artifact remain release gates rather than accepted
+  POC claims. SAKAMOTO-77/S80 provide POC evidence for exactly-once outcome partitioning and IPv4/IPv6
+  live-buffer parity, but do not freeze production buffer size, queue/worker counts, credit depth, reserve
+  depth, or downstream delivery guarantees.

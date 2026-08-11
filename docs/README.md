@@ -13,7 +13,7 @@
 - `docs/product/README.md`：当前产品定义、UI/UX、内容与发布口径入口
 - `docs/IMPLEMENTATION_ROADMAP.md`：当前实现主线、阶段状态与优先级
 - `docs/INTERFACE_SPECIFICATION.md`：对外控制面 / stream 接口汇总
-- `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`：Android/VPP POC 事实、当前实现边界与下一轮架构讨论入口
+- `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`：Android/VPP POC 事实、S72-S81 ownership handoff、S61 protocol-identification pre-decision 状态、当前实现边界与下一轮架构讨论入口
 - `docs/testing/HOST_TEST_SURVEY.md`：当前 Host 端测试现状、sanitizer lane 与覆盖缺口
 
 ## Subdirectories

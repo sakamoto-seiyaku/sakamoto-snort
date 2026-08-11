@@ -1,6 +1,6 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-08-08
+更新时间：2026-08-12
 状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `Sakamoto` / `SAKAMOTO` 为准；OpenSpec 仅作历史归档）
 
 ## 0. 阅读指南
@@ -185,15 +185,26 @@ archived runtime 或创建孤立的数据面实现任务。
 - [DONE 2026-07-19] SAKAMOTO-29 RuntimeService reboot recovery：RuntimeService 活跃时 reboot，启动后无 root daemon、app process、control socket、双栈 hook 且无自动拉起，fresh start/stop recovery 通过；OEM boot policy 与 reboot 中断安装未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-30 APK signature/key rotation boundary：不同签名 key 的同 package APK 被 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` 拒绝，原 package 保持存在，原签名 APK RuntimeService recovery 通过；正式 release key rotation、签名 lineage 与 staged migration 未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-31 RuntimeService notification permission denial：撤销 `POST_NOTIFICATIONS` 后 `startForeground`、root daemon 与 RuntimeService 启动仍通过，受控停止无 daemon/socket/NFQUEUE 残留；恢复授权后 fresh recovery 通过。该结论仅覆盖 Android 16 Pixel 6a debug APK，不等同于 release notification UX 验收。
-- [HOLD 2026-08-04] SAKAMOTO-32 VPP experimental NFQUEUE plugin audit and hardening（Android-only）：
+- [DONE 2026-08-04] SAKAMOTO-32 VPP experimental NFQUEUE plugin audit and hardening（Android-only）：
   Pixel 6a P0-P5 已收口 multi-queue Initial Placement、约 50% scoped canonical mismatch、bounded
   canonical-return/origin verdict correctness、shared-TX rejection、credit-depth sensitivity 与
-  conditional-wake latency/idle split decision。架构采用 ADR-0006 的 VPP-native Adapter hot path，
-  但生产准入继续 HOLD：真实 verdict failure debt/teardown、完整 L3 direct materialization、IPv4/IPv6/
-  fragment/Q=W、production capacity/credit 和长期 soak 仍未验收。P6d final campaign-21 已完成 32/32
+  conditional-wake latency/idle split decision。架构采用 ADR-0006 的 VPP-native Adapter hot path。
+  S32 是历史 audit closure，不再独立阻塞当前工作；后续 SAKAMOTO-72..81 live-buffer POC 已
+  继续补齐 ownership seam 证据，但正式产品准入仍由 S68/S69/S71 和 release/capacity gates 负责。
+  P6d final campaign-21 已完成 32/32
   有效 arms，但 idle C-A 单侧 95% 上界 `+0.091950 pp` 超过 `+0.05 pp`，sleep-confirmed p99 下界
   `-3.110%` 低于 `20%` 目标；p50 回归上界 `+0.054%` 通过。当前 wake patch 因有效正式实验
   non-GO 不得进入 release；功耗无外部功率仪，仍为 INCONCLUSIVE。
+- [DONE 2026-08-10] SAKAMOTO-72..81 VPP-native NFQUEUE live-buffer ownership closure POC：
+  `experiments/vpp-nfq-poc/SAKAMOTO-81_HANDOFF.md` 返回主设计流。single-message NFQUEUE
+  obligation 的 direct materialization、worker handoff、origin completion 与 native return 均
+  PASS；one-buffer-per-obligation 为 PARTIAL，因为 multi-message datagram 采用 admission 前安全
+  拒绝，不证明一个 buffer 内多 obligation 的 no-copy materialization。Android S80 证明 Pixel 6a
+  上真实 IPv4/IPv6 ICMP NFQUEUE obligation、remote mismatch、duplicate/stale、clean drain、
+  process-death/fresh restart 与 clean/fresh zero residue；但 Android final evidence 使用
+  `buffer-data-size 2048`，不证明 Android 9000-byte capacity。该 POC 不完成 S68 Gate/L4 产品
+  切片、VPN parity、Debug Activity、release packaging、production capacity 常量或 supervisor
+  restart/backoff policy。
 - [NOW 2026-07-19] Android L4 Product Release definition：按 `docs/product/ANDROID_L4_PRODUCT_PLAN.md`
   收口 Android-only、Root/VPN Runtime Profile、Basic L4、Product UI、content、help、release 和
   community feedback；当前先稳定核心产品接口并推进 Root/NFQUEUE 数据面 vertical slice，详细
@@ -211,7 +222,8 @@ archived runtime 或创建孤立的数据面实现任务。
   更新前执行；只允许一次 Corrective Handoff，第二次 mismatch 丢弃。IP 分片参考 fork 的两阶段
   handoff，在 bounded reassembly worker co-locate/reassemble，再把 policy-ready packet 交给首片
   五元组选择的最终 owner；验证双向首次同 owner、corrective-handoff fault path、fragment
-  disorder/duplicate/overlap/timeout、queue congestion 和 worker skew。
+  disorder/duplicate/overlap/timeout、queue congestion 和 worker skew。该切片消费 S72-S81 handoff
+  作为 ownership seam 证据，不重新把 throwaway live-buffer POC 当成产品代码。
 - [NOTE] Conditional wake 当前只保留为研究方向：P5 早期诊断的约 44% sleep-confirmed p99 改善未被最终
   正式协议复现；P6d campaign-21 的 32 个 arms 全部有效，但 idle CPU 与 p99 gates 均 non-GO，p50
   gate 通过，功耗 inconclusive。当前 patch 和 mode3 persistent wake 不产品化；若未来重新开启，必须
@@ -236,7 +248,11 @@ archived runtime 或创建孤立的数据面实现任务。
 - [NEXT] Protocol Identification Release：Android L4 Product Release 稳定后，在同一个
   worker-private FlowEntry 上增加 libprotoident，使用 Recognize-then-enforce；不引入 early hold、
   full CT、stream reassembly 或复杂 QUIC 适配。当前 graph 在 Adapter completion 前产生的同步
-  识别事实可立即作用于当前 packet；异步结果只影响后续 packet。
+  识别事实可立即作用于当前 packet；异步结果只影响后续 packet。SAKAMOTO-61 已完成
+  provider-neutral pre-decision work：ApplicationProtocolCatalog、disabled provider seam、FlowEntry
+  recognition state、Activity projection、VPP reference inventory、libprotoident/stellar_lpi probes、
+  selected PCAP smoke 和 provider-source decision inputs。仍未开始/未能声明完成的是 provider
+  source/license/corpus/runtime enablement、real Android provider evidence 与 ProtocolRule enforcement。
 - [NEXT] VPN transport release evidence：对 pinned HEV build 完成真实外网 IPv4/IPv6 TCP 与
   UDP relay 端到端验收；ICMP Echo 只有通过 capability/device tests 后才发布，其它 protocol
   不属于 VPN 第一版 forwarding promise。Transport failure 必须与 policy DROP 分开归因。
@@ -262,8 +278,10 @@ archived runtime 或创建孤立的数据面实现任务。
 - [CANDIDATE] “真实系统 resolver hook” 的平台闭环：仅当仍要把它作为真机 DNS 验收链路时推进。
 - [CANDIDATE] 更强的 L4 stateful semantics：在 Protocol Identification Release 之后重新排序；
   不进入前两个产品版本。
-- [NEXT] libprotoident application protocol identification：第二阶段已承诺，但只实现
-  Recognize-then-enforce；L7 HTTP/TLS/QUIC metadata 仍不属于近期承诺。
+- [NEXT] libprotoident application protocol identification：第二阶段已承诺；SAKAMOTO-61 已完成
+  reference/probe/pre-decision seam，下一步取决于 provider source、license/provenance、corpus
+  privacy/import 和 runtime enablement 决策。产品形态仍只实现 Recognize-then-enforce；L7
+  HTTP/TLS/QUIC metadata 仍不属于近期承诺。
 
 ### 3.5 文档收尾（降低误读）
 

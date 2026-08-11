@@ -1,6 +1,7 @@
 # Android / VPP 当前现状与架构交接
 
-状态：当前权威交接文档；Android/VPP 基线 2026-07-19，handoff POC 决策更新于 2026-08-04。
+状态：当前权威交接文档；Android/VPP 基线 2026-07-19，handoff POC 决策更新于
+2026-08-10，protocol-identification pre-decision 证据更新于 2026-08-12。
 
 范围：Android 优先的产品基础、VPP 引入、root/NFQUEUE 与
 VpnService/TUN 两种运行路径。Linux 的实现和功能验证暂缓，除非后续设计决策明确恢复。
@@ -63,13 +64,16 @@ Rust ABI 和 Rust buffer-return wrapper 的段落已由 ADR-0006 取代，不再
 1. `docs/decisions/` 中已接受的设计决策。
 2. `docs/INTERFACE_SPECIFICATION.md` 中的当前契约，以及 `CONTEXT.md` 中的术语。
 3. 本文与 `docs/IMPLEMENTATION_ROADMAP.md` 中的当前状态。
-4. Plane 中的开放工作状态。当前相关项是 `SAKAMOTO-1`、`SAKAMOTO-32`。
+4. Plane 中的开放工作状态。当前相关项包括 Android L4/Protocol 主线
+   `SAKAMOTO-59`、`SAKAMOTO-61`，以及已 Done 的 POC 证据链
+   `SAKAMOTO-72..81`。
 5. `experiments/vpp-nfq-poc/` 中的实验过程和证据。
 6. `archive/current-head/`、`archive/openspec/` 中的历史材料。
 
 Plane `SAKAMOTO-1` 是最初的高影响 POC 计划。它仍包含“继续大量 POC”和“部分问题先在
-Linux 验证”的旧顺序，已不再代表下一阶段执行方式。当前要求是停止扩展 POC 队列，先完成
-架构对齐和实现计划。未完成的 NFQUEUE 插件准入问题仍由 `SAKAMOTO-32` 跟踪。
+Linux 验证”的旧顺序，已不再代表下一阶段执行方式。`SAKAMOTO-32` 是历史 VPP
+experimental NFQUEUE plugin audit；后续 `SAKAMOTO-72..81` 已把 live-buffer ownership
+POC 收口并返回主设计流，但仍不等同于完成 `SAKAMOTO-68` Gate/L4 产品切片。
 
 ## 2. 一页结论
 
@@ -135,9 +139,10 @@ Linux 验证”的旧顺序，已不再代表下一阶段执行方式。当前�
 | `experiments/vpp-nfq-poc/overlay/` | Android VPP platform overlay、`tun_poc`、`nfqueue_poc`。 | throwaway POC code。 |
 | `experiments/vpp-nfq-poc/android/vpn-lite/` | 包含 VpnService、VPP/HEV child lifecycle、fd broker、JNI/Rust/VAPI probe 和 root RuntimeService 实验的 debug APK。 | 测试 harness；不是产品 app。 |
 | `experiments/vpp-nfq-poc/scripts/` | 可重复的 Android build、stage、deploy、lifecycle、traffic 和 audit harness。 | 证据工具；后续只能选择性迁移。 |
-| `experiments/vpp-nfq-poc/results/` | 真机原始结果，包括 `SAKAMOTO-32` 正式 run。 | 证据，不是契约。 |
+| `experiments/vpp-nfq-poc/results/` | 真机原始结果，包括 `SAKAMOTO-32` 正式 run 与 `SAKAMOTO-80` Android live-buffer parity run。 | 证据，不是契约。 |
 | Plane `SAKAMOTO-2..31` | 已完成的 Android POC。 | Done。 |
-| Plane `SAKAMOTO-32` | VPP experimental NFQUEUE plugin audit/hardening。 | Backlog；继续 POC 暂停，生产准入 HOLD。 |
+| Plane `SAKAMOTO-32` | VPP experimental NFQUEUE plugin audit/hardening。 | Done；历史 audit 证据。 |
+| Plane `SAKAMOTO-72..81` | VPP-native NFQUEUE live-buffer ownership closure POC。 | Done；返回主设计流的 POC 证据，不是产品实现。 |
 
 active daemon 明确停在 SNORT-12 之前。当前 executable 不包含 bounded packet copy、
 `PacketFacts`、policy cache、Conntrack、Traffic Windows、Packet Diagnostics、IPRULES
@@ -346,6 +351,34 @@ stage，并在同一 Pixel 6a 上模拟 USB 断电。
 No-Go/HOLD。原始证据位于
 `experiments/vpp-nfq-poc/results/sakamoto-32-nfqueue-plugin-audit-20260719-141956/`。
 
+### 5.7 SAKAMOTO-72..81 live-buffer ownership POC 收口
+
+`SAKAMOTO-72` 是 parent closure ticket；`SAKAMOTO-73..81` 已全部 Done。权威
+return handoff 是 `experiments/vpp-nfq-poc/SAKAMOTO-81_HANDOFF.md`，并引用
+`SAKAMOTO-73..79` handoff、`SAKAMOTO-80` Android result directory 与 LLDB repair
+evidence。该 POC 验证的是 `SAKAMOTO-68` 的前置 ownership 机制，不实现正式
+Network Gate/L4、Debug Activity、VPN parity、release packaging 或产品容量 gate。
+
+五项 closure 结论：
+
+| Obligation | Result | 当前含义 |
+| --- | --- | --- |
+| Direct materialization | PASS | Host 与 Android 均证明 NFQUEUE datagram 可直接进入 VPP-owned buffer storage，并原地投影 L3 payload。 |
+| One-buffer-per-obligation | PARTIAL | 单 message datagram 是一个 live VPP buffer 对一个 admitted obligation；multi-message datagram 采用 admission 前安全拒绝，不支持一个 buffer 内多 obligation 的 no-copy materialization。 |
+| Worker handoff | PASS | host 证明 owner-local/remote，Android 证明真实 remote mismatch；handoff 只传 buffer index 与 inline metadata。 |
+| Origin completion | PASS | origin lane 使用原 generation/packet id 执行唯一 verdict attempt；duplicate/stale token 只记 ledger，不产生第二次 physical attempt。 |
+| Native return | PASS | buffer 保持 live 直到 completion classification，并通过 VPP native lifecycle 归还；clean/fresh restart path 最终 residue 为零。 |
+
+必须随设计返回的限制：
+
+- Android `SAKAMOTO-80` final evidence 使用 `buffer-data-size 2048`，只证明 measured
+  ICMP envelopes 适配 Android 实测 buffer，不证明 Android 9000-byte capacity。
+- host pinned-VPP POC 证明了 9000-byte patch/envelope path；production Android buffer
+  size、pool count、credit depth 与 Fail-Open Reserve 数量仍必须由 release/capacity
+  matrix 决定。
+- process death 是 explicit live-obligation fault evidence 加 external cleanup/fresh
+  restart，不是 clean in-process teardown。
+
 ## 6. VPP 迁移后仍应保留的 datapath 决策
 
 以下契约约束 VPP 设计，不能随着当前 raw NFQUEUE 实现一起丢弃：
@@ -376,12 +409,14 @@ No-Go/HOLD。原始证据位于
   临时 mutate-then-restore 也禁止。
 - 第一版沿用魔改 `flow_dissector` 的 contiguous-buffer envelope，不提前实现 chain-aware
   parser，也禁止 full-packet linearization。已核实 fork 在 commit `2634598b3a` 将
-  `VLIB_BUFFER_DEFAULT_DATA_SIZE` 从 2048 改为 9000；Android POC 的 `buffers { page-size default }`
-  没有覆盖 data size。Functional Closure 首版继承该 9000-byte data size 与 fork 的初始默认
-  pool sizing，先建立可运行基线；VPP pool buffer 按并发 occupancy 循环复用，不随累计流量增长。
-  data size 或 buffer count 仅在获得 RSS、occupancy 与 overload 实测后调整，不预先缩到 2048。
-  Android Functional Closure 通过目标 Root/VPN 设备
-  验证该 envelope；VPN 首版将 Android TUN 与 HEV-facing MTU 统一固定为 1500。1280 仅作为
+  `VLIB_BUFFER_DEFAULT_DATA_SIZE` 从 2048 改为 9000；host pinned-VPP POC 已证明
+  9000-byte patch/envelope path。Android `SAKAMOTO-80` final evidence 则观察到
+  `buffer-data-size 2048`，并只证明 measured ICMP envelopes 适配该 Android buffer。
+  Functional Closure 首版不得把 Android 9000-byte capacity 当成已证明事实；VPP
+  data size、pool buffer count、RSS、occupancy 与 overload policy 需由目标 Root/VPN
+  device release/capacity matrix 决定。VPP pool buffer 按并发 occupancy 循环复用，不随累计流量增长。
+  Android Functional Closure 通过目标 Root/VPN 设备验证最终选择的 envelope；VPN 首版将 Android
+  TUN 与 HEV-facing MTU 统一固定为 1500。1280 仅作为
   未来由具体 device/path 实测问题触发的 IPv6-compatible fallback，dual-stack profile 不支持
   低于 1280 的 1250/1200。当前不动态跟随 underlay MTU。本轮不选择 `NFQA_CFG_F_GSO` policy，也不修改系统
   或网卡 offload。若仍出现超限，长度检查禁止 partial parse，不产生 Policy Verdict；Root 以
@@ -494,9 +529,10 @@ fault 仍 runtime drop。不得跨 Adapter generation 排队、重放或重新�
 为使普通 pre-policy capacity fail-open 在 single-materialization 约束下可执行，每条 active
 ingress lane 从既有 VPP pool 中保留一组 startup-fixed、worker-local、bounded buffer，作为
 Fail-Open Reserve；不另建 pool，也不跨 worker 共享。首版 buffer data size 独立继承
-Contiguous Parser Envelope 的 9000 bytes，但每 lane reserve 数量必须由 production capacity
-matrix 的 peak concurrent occupancy、burst、exhaustion、RSS、latency 与目标 profile 实测确定，
-任何 POC 数量都不是 contract。normal ingress buffer 耗尽时，
+Contiguous Parser Envelope 的最终产品选择；host POC 已证明 9000-byte patch path，Android
+S80 只证明 2048-byte small-ICMP envelope。每 lane reserve 数量与 data size 必须由
+production capacity matrix 的 peak concurrent occupancy、burst、exhaustion、RSS、latency
+与目标 profile 实测确定，任何 POC 数量都不是 contract。normal ingress buffer 耗尽时，
 packet 直接物化到 reserve 且不进入 parser/flow/policy graph：Root 仅凭 completion identity
 提交 `ACCEPT`，VPN 将 unchanged packet 直接交给 HEV。reserve 不动态增长、不等待容量；它也
 耗尽时允许明确丢包，累计 bounded capacity-fault evidence 并降低 Adapter/runtime health。
@@ -563,10 +599,10 @@ clone packet bytes；任何 fragment/recognition content-retention exception 需
 graph review 还必须列出全部 Packet Byte Mutation Authority node；未列出的 node 视为 read-only，
 并验证 Root 无 replacement payload、VPN policy-to-HEV bytes unchanged。
 
-Android acceptance 要证明目标 Root/VPN device path 与固定 1500-byte TUN/HEV MTU 位于 contiguous
-parser envelope，并验证通用长度检查不会 silent partial parse；测试至少覆盖 IPv4/IPv6、Wi-Fi、
-移动网络与大包 TCP/UDP，同时记录 9000-byte buffer/default-pool baseline 的 RSS、峰值 occupancy
-和 exhaustion evidence。Linux GSO/jumbo acceptance 延后到真实
+Android acceptance 要证明目标 Root/VPN device path 与固定 1500-byte TUN/HEV MTU 位于最终选择的
+contiguous parser envelope，并验证通用长度检查不会 silent partial parse；测试至少覆盖
+IPv4/IPv6、Wi-Fi、移动网络与大包 TCP/UDP，同时记录所选 buffer/default-pool baseline 的
+RSS、峰值 occupancy 和 exhaustion evidence。Linux GSO/jumbo acceptance 延后到真实
 部署证明需要时定义。
 
 输出：node graph、ownership table、queue capacity、overload policy 和 counters。
@@ -636,8 +672,10 @@ exactly-one verdict 和 profile-owned cleanup 作为切片内的产品化约束�
 5. docs/INTERFACE_SPECIFICATION.md
 
 Plane 是 tracker，使用 plane-ops，不使用 Plane MCP。SAKAMOTO-2..31 是已完成的 Android
-POC；SAKAMOTO-32 是未完成的 production-admission audit，不能据此把 nfqueue_poc 当成
-产品代码。Linux 暂缓，Android 是近期发版优先平台。
+POC；SAKAMOTO-32 是已完成的历史 VPP experimental NFQUEUE audit；SAKAMOTO-72..81
+已完成 throwaway live-buffer ownership closure POC，读
+experiments/vpp-nfq-poc/SAKAMOTO-81_HANDOFF.md 后再讨论 Root Adapter。不能据此把
+nfqueue_poc/live-buffer prototype 当成产品代码。Linux 暂缓，Android 是近期发版优先平台。
 
 不要重新比较 Option A/B/C；Option A、Root/VPN 互斥、单 VPP runtime、共享 dataplane 和
 per-worker single-owner 已接受。下一步从 Android L4 Product Release 的第一条端到端
