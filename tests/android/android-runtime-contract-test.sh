@@ -19,6 +19,7 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCatalogFormatter.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCatalogProjectionStore.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPolicyTransactions.java" \
+  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPolicyTransactionStore.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/AuthoringPolicyBundle.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/AuthoringPolicyCompiler.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductStateSnapshot.java" \

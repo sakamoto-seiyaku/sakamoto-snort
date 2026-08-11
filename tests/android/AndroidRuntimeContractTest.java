@@ -22,6 +22,7 @@ import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
 import com.sakamoto.snort.androidruntime.ProductCatalogProjectionStore;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactions;
+import com.sakamoto.snort.androidruntime.ProductPolicyTransactionStore;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -88,6 +89,7 @@ public final class AndroidRuntimeContractTest {
         missingProductStateProjectionRemainsNormalEmpty();
         productPolicyTransactionsSeparateDraftCommitApplyAndCheckpoint();
         productPolicyTransactionRestoreAndImportExportAreAtomic();
+        productPolicyTransactionStorePersistsDraftCommitRuntimeAndCheckpoints();
         System.out.println("android runtime contract: PASS");
     }
 
@@ -2183,6 +2185,76 @@ public final class AndroidRuntimeContractTest {
                         && "duplicate_match_warning".equals(
                         duplicateCommit.issues.get(0).code),
                 "duplicate match validation is a non-blocking warning with source attribution");
+    }
+
+    private static void productPolicyTransactionStorePersistsDraftCommitRuntimeAndCheckpoints()
+            throws IOException {
+        Path files = Files.createTempDirectory("sakamoto-53-policy-transactions");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        ProductPolicyTransactionStore.ReadResult absent =
+                ProductPolicyTransactionStore.readResult(files.toFile());
+        check(!absent.present && absent.valid
+                        && absent.transactions.status().runtimeRevision == 0L,
+                "missing policy transaction store is a valid empty transaction state");
+
+        ProductPolicyTransactions tx =
+                new ProductPolicyTransactions(AuthoringPolicyBundle.empty());
+        AuthoringPolicyBundle first = AuthoringPolicyBundle.empty()
+                .withL4Rule(l4Rule(app, "1.1.1.1/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        tx.replaceDraft(first);
+        tx.commitDraft();
+        check(tx.applyCommitted(payload -> LocalProductBackend.PolicyApplyResult.ok()).ok,
+                "first persisted transaction checkpoint can apply");
+        AuthoringPolicyBundle second = tx.committed().withL4Rule(
+                l4Rule(app, "8.8.8.8/32", 6, 20, 1,
+                        AuthoringPolicyBundle.L4Action.ALLOW));
+        tx.replaceDraft(second);
+        tx.commitDraft();
+        check(tx.applyCommitted(payload -> LocalProductBackend.PolicyApplyResult.ok()).ok,
+                "second persisted transaction checkpoint can apply");
+        AuthoringPolicyBundle dirtyDraft = tx.committed().withL4Rule(
+                l4Rule(app, "203.0.113.8/32", 17, 30, 2,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        tx.replaceDraft(dirtyDraft);
+
+        ProductPolicyTransactionStore.write(files.toFile(), tx);
+        ProductPolicyTransactionStore.ReadResult read =
+                ProductPolicyTransactionStore.readResult(files.toFile());
+        check(read.present && read.valid, "policy transaction store reads persisted state");
+        ProductPolicyTransactions restored = read.transactions;
+        check(restored.status().draftDirty
+                        && restored.status().draftRevision == dirtyDraft.revision
+                        && restored.status().committedRevision == second.revision
+                        && restored.status().runtimeRevision == second.revision
+                        && restored.status().selectedCheckpointRevision == second.revision
+                        && "applied".equals(restored.status().runtimeSnapshotState),
+                "policy transaction store preserves Draft, committed, runtime and snapshot status");
+        check(restored.checkpoints().size() == 2
+                        && restored.checkpoints().get(1).revision == second.revision
+                        && restored.checkpoints().get(1).applyPayload.contains("\"revision\":2"),
+                "policy transaction store preserves full checkpoint bundles and apply payloads");
+        check(restored.committed().l4RuleCount == 2
+                        && restored.committed().l4Rules.get(0).ruleId
+                        == second.l4Rules.get(0).ruleId
+                        && restored.draft().l4RuleCount == 3,
+                "policy transaction store preserves stable L4 rule IDs and dirty Draft intent");
+
+        Files.write(ProductPolicyTransactionStore.stateFile(files.toFile()).toPath(),
+                "schemaVersion=99\n".getBytes(StandardCharsets.US_ASCII));
+        ProductPolicyTransactionStore.ReadResult unsupported =
+                ProductPolicyTransactionStore.readResult(files.toFile());
+        check(!unsupported.valid && unsupported.present
+                        && "policy_transactions_unsupported_schema".equals(
+                        unsupported.errorCode),
+                "unsupported policy transaction schema returns actionable failure");
+
+        Files.write(ProductPolicyTransactionStore.stateFile(files.toFile()).toPath(),
+                "schemaVersion=1\ncheckpointCount=9\n".getBytes(StandardCharsets.US_ASCII));
+        ProductPolicyTransactionStore.ReadResult corrupt =
+                ProductPolicyTransactionStore.readResult(files.toFile());
+        check(!corrupt.valid && "policy_transactions_corrupt".equals(corrupt.errorCode),
+                "corrupt policy transaction store returns actionable failure");
     }
 
     private static AuthoringPolicyBundle.L4Rule l4Rule(

@@ -78,7 +78,7 @@ public final class ProductPolicyTransactions {
         public final AuthoringPolicyBundle bundle;
         public final String applyPayload;
 
-        private Checkpoint(long revision, AuthoringPolicyBundle bundle, String applyPayload) {
+        public Checkpoint(long revision, AuthoringPolicyBundle bundle, String applyPayload) {
             this.revision = revision;
             this.bundle = bundle;
             this.applyPayload = applyPayload;
@@ -119,6 +119,27 @@ public final class ProductPolicyTransactions {
         AuthoringPolicyBundle bundle = initial == null ? AuthoringPolicyBundle.empty() : initial;
         this.draft = bundle;
         this.committed = bundle;
+    }
+
+    public static ProductPolicyTransactions restore(
+            AuthoringPolicyBundle draft, AuthoringPolicyBundle committed,
+            boolean draftDirty, long runtimeRevision, long selectedCheckpointRevision,
+            String runtimeSnapshotState, List<Checkpoint> checkpoints) {
+        ProductPolicyTransactions restored = new ProductPolicyTransactions(committed);
+        restored.draft = draft == null ? AuthoringPolicyBundle.empty() : draft;
+        restored.committed = committed == null ? AuthoringPolicyBundle.empty() : committed;
+        restored.draftDirty = draftDirty;
+        restored.runtimeRevision = Math.max(0L, runtimeRevision);
+        restored.selectedCheckpointRevision = Math.max(0L, selectedCheckpointRevision);
+        restored.runtimeSnapshotState = runtimeSnapshotState == null
+                || runtimeSnapshotState.trim().isEmpty() ? "empty" : runtimeSnapshotState;
+        if (checkpoints != null) {
+            restored.checkpoints.addAll(checkpoints);
+            while (restored.checkpoints.size() > MAX_CHECKPOINTS) {
+                restored.checkpoints.remove(0);
+            }
+        }
+        return restored;
     }
 
     public synchronized Status status() {
