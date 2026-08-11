@@ -74,7 +74,9 @@ Contract guardrails:
   VPN/TUN can inject the same provider-neutral `LpiRecognitionProvider`
   implementation, submit equivalent payload-bearing TCP facts through that
   interface, and project the same catalog-mapped result into allowed-flow
-  Activity without wiring a real provider.
+  Activity without wiring a real provider. The same parity contract also covers
+  no-result and unmapped-alias provider outcomes so both profiles consume
+  payload budget without inventing temporary Sakamoto catalog IDs.
 - The provider-neutral status shape exposes terminal recognition counters:
   `detectorDonePackets` and `budgetExhaustedPackets`. These are driven by
   FlowEntry terminal state transitions and do not require a real provider to be

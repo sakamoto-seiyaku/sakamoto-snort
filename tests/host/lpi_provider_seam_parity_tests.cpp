@@ -74,6 +74,16 @@ struct ProviderSubmission final {
 
 class RecordingLpiProvider final : public Protocol::LpiRecognitionProvider {
 public:
+    explicit RecordingLpiProvider(
+        std::optional<Protocol::LpiProviderFact> fact =
+            Protocol::LpiProviderFact{
+                .providerAlias = "lpi:http",
+                .detectorDone = false,
+                .budgetExhausted = false,
+                .producedBeforeAdapterCompletion = true,
+            }) noexcept
+        : fact_(fact) {}
+
     [[nodiscard]] bool available() const noexcept override { return true; }
 
     [[nodiscard]] std::string_view providerName() const noexcept override {
@@ -94,33 +104,18 @@ public:
             .payloadBytes = submission.transportPayload.size(),
             .uidKnown = submission.facts.domain.uidKnown,
         });
-        return Protocol::LpiProviderFact{
-            .providerAlias = "lpi:http",
-            .detectorDone = false,
-            .budgetExhausted = false,
-            .producedBeforeAdapterCompletion = true,
-        };
+        return fact_;
     }
 
     std::vector<ProviderSubmission> submissions;
+
+private:
+    std::optional<Protocol::LpiProviderFact> fact_;
 };
 
-TEST(LpiProviderSeamParityTest,
-     RootNfqueueAndVpnTunSubmitThroughTheSameProviderInterface) {
-    RecordingLpiProvider provider;
-    Nfqueue::NfqueueFlowAdapter rootAdapter(Nfqueue::NfqueueFlowAdapterConfig{
-        .workerCount = 4,
-        .hashSeed = 0x1234,
-        .queueCapacity = 4,
-        .copyPrefixBytes = 512,
-        .lpiProvider = &provider,
-    });
-    Tun::VpnTunFlowAdapter vpnAdapter(Tun::VpnTunFlowAdapterConfig{
-        .workerCount = 4,
-        .hashSeed = 0x1234,
-        .queueCapacity = 4,
-        .lpiProvider = &provider,
-    });
+void submitRootAndVpnPayload(RecordingLpiProvider &provider,
+                             Nfqueue::NfqueueFlowAdapter &rootAdapter,
+                             Tun::VpnTunFlowAdapter &vpnAdapter) {
     const auto packet = ipv4TcpPacketWithPayload();
 
     EXPECT_EQ(rootAdapter.process(
@@ -159,6 +154,25 @@ TEST(LpiProviderSeamParityTest,
         EXPECT_EQ(submission.l3Bytes, packet.size());
         EXPECT_EQ(submission.payloadBytes, 20U);
     }
+}
+
+TEST(LpiProviderSeamParityTest,
+     RootNfqueueAndVpnTunSubmitThroughTheSameProviderInterface) {
+    RecordingLpiProvider provider;
+    Nfqueue::NfqueueFlowAdapter rootAdapter(Nfqueue::NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .lpiProvider = &provider,
+    });
+    Tun::VpnTunFlowAdapter vpnAdapter(Tun::VpnTunFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .lpiProvider = &provider,
+    });
+    submitRootAndVpnPayload(provider, rootAdapter, vpnAdapter);
 
     const auto rootCounters = rootAdapter.counters();
     EXPECT_TRUE(rootCounters.lpiProvider.available);
@@ -185,6 +199,107 @@ TEST(LpiProviderSeamParityTest,
     EXPECT_EQ(*vpnCounters.allowedFlowActivity.lastLpiRecognition
                    .latestExactResult(),
               Catalog::ApplicationProtocolId::HTTP);
+}
+
+TEST(LpiProviderSeamParityTest,
+     RootNfqueueAndVpnTunNoResultConsumesBudgetWithoutUnmappedResult) {
+    RecordingLpiProvider provider(std::nullopt);
+    Nfqueue::NfqueueFlowAdapter rootAdapter(Nfqueue::NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .lpiProvider = &provider,
+    });
+    Tun::VpnTunFlowAdapter vpnAdapter(Tun::VpnTunFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .lpiProvider = &provider,
+    });
+
+    submitRootAndVpnPayload(provider, rootAdapter, vpnAdapter);
+
+    const auto rootCounters = rootAdapter.counters();
+    EXPECT_EQ(rootCounters.lpiProvider.counters.packetsSubmittedToProvider, 1U);
+    EXPECT_EQ(rootCounters.lpiProvider.counters.providerNoResultPackets, 1U);
+    EXPECT_EQ(rootCounters.lpiProvider.counters.providerFactPackets, 0U);
+    EXPECT_EQ(rootCounters.allowedFlowActivity.lastLpiRecognition
+                  .payloadPacketsSubmitted,
+              1U);
+    EXPECT_TRUE(rootCounters.allowedFlowActivity.lastLpiRecognition
+                    .mappedResultsEmpty());
+    EXPECT_FALSE(rootCounters.allowedFlowActivity.lastLpiRecognition
+                     .latestExactResult()
+                     .has_value());
+
+    const auto vpnCounters = vpnAdapter.counters();
+    EXPECT_EQ(vpnCounters.lpiProvider.counters.packetsSubmittedToProvider, 1U);
+    EXPECT_EQ(vpnCounters.lpiProvider.counters.providerNoResultPackets, 1U);
+    EXPECT_EQ(vpnCounters.lpiProvider.counters.providerFactPackets, 0U);
+    EXPECT_EQ(vpnCounters.allowedFlowActivity.lastLpiRecognition
+                  .payloadPacketsSubmitted,
+              1U);
+    EXPECT_TRUE(vpnCounters.allowedFlowActivity.lastLpiRecognition
+                    .mappedResultsEmpty());
+    EXPECT_FALSE(vpnCounters.allowedFlowActivity.lastLpiRecognition
+                     .latestExactResult()
+                     .has_value());
+}
+
+TEST(LpiProviderSeamParityTest,
+     RootNfqueueAndVpnTunUnmappedAliasDoesNotCreateTemporaryProtocolId) {
+    RecordingLpiProvider provider(Protocol::LpiProviderFact{
+        .providerAlias = "lpi:not-in-sakamoto-catalog",
+        .detectorDone = false,
+        .budgetExhausted = true,
+        .producedBeforeAdapterCompletion = true,
+    });
+    Nfqueue::NfqueueFlowAdapter rootAdapter(Nfqueue::NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .lpiProvider = &provider,
+    });
+    Tun::VpnTunFlowAdapter vpnAdapter(Tun::VpnTunFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .lpiProvider = &provider,
+    });
+
+    submitRootAndVpnPayload(provider, rootAdapter, vpnAdapter);
+
+    const auto rootCounters = rootAdapter.counters();
+    EXPECT_EQ(rootCounters.lpiProvider.counters.providerNoResultPackets, 0U);
+    EXPECT_EQ(rootCounters.lpiProvider.counters.providerFactPackets, 1U);
+    EXPECT_EQ(rootCounters.lpiProvider.counters.budgetExhaustedPackets, 1U);
+    EXPECT_EQ(rootCounters.allowedFlowActivity.lastLpiRecognition
+                  .payloadPacketsSubmitted,
+              1U);
+    EXPECT_TRUE(rootCounters.allowedFlowActivity.lastLpiRecognition
+                    .mappedResultsEmpty());
+    EXPECT_FALSE(rootCounters.allowedFlowActivity.lastLpiRecognition
+                     .latestExactResult()
+                     .has_value());
+    EXPECT_EQ(rootCounters.allowedFlowActivity.lastLpiRecognition.terminalState,
+              Flow::LpiRecognitionTerminalState::Exhausted);
+
+    const auto vpnCounters = vpnAdapter.counters();
+    EXPECT_EQ(vpnCounters.lpiProvider.counters.providerNoResultPackets, 0U);
+    EXPECT_EQ(vpnCounters.lpiProvider.counters.providerFactPackets, 1U);
+    EXPECT_EQ(vpnCounters.lpiProvider.counters.budgetExhaustedPackets, 1U);
+    EXPECT_EQ(vpnCounters.allowedFlowActivity.lastLpiRecognition
+                  .payloadPacketsSubmitted,
+              1U);
+    EXPECT_TRUE(vpnCounters.allowedFlowActivity.lastLpiRecognition
+                    .mappedResultsEmpty());
+    EXPECT_FALSE(vpnCounters.allowedFlowActivity.lastLpiRecognition
+                     .latestExactResult()
+                     .has_value());
+    EXPECT_EQ(vpnCounters.allowedFlowActivity.lastLpiRecognition.terminalState,
+              Flow::LpiRecognitionTerminalState::Exhausted);
 }
 
 } // namespace
