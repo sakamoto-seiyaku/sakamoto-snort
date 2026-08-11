@@ -195,6 +195,21 @@ S54 的 Root permission acceptance 分成两个不同边界，不得混淆：
 
 这个边界不放宽 Root runtime cleanup、Protection Pause、bounded recovery、通知/产品状态可见性、upgrade/rollback 或 final residue 断言。若未来 KernelSU 或 Android 提供可观察、非破坏性、可恢复的 live authorization revoked signal，必须新增独立 device gate，再更新本文和 S54/S57 的 onboarding/recovery 文案。
 
+### 7.3 SAKAMOTO-57 Runtime Profile Initialization closure evidence
+
+记录日期：2026-08-11。来源：SAKAMOTO-57 commits `a7ac99e`、`5e50f65`、`8b81e82`，S54 permission boundary，S70/S71 device evidence，以及当前 RuntimeService contract audit。
+
+S57 的产品合同是 Runtime Profile Initialization 与后续互斥 Profile switch；它不新增 policy，不复制、不迁移也不删除 Authoring Policy Bundle。当前 closure evidence 分层如下：
+
+1. **Capability detection、推荐与用户确认。** `RuntimeProfileInitializationPlan` 是产品层 seam：Root supported 时推荐 Root，Root unavailable 时推荐 VPN；推荐只进入 `PROFILE_CONFIRMATION`，`shouldAutoAuthorize`、`shouldAutoStart` 与 `shouldAutoSwitchProfile` 永远为 false。DebugControlActivity 只渲染当前 step/action/impact/recovery，不因推荐直接请求权限、授权、启动或切换。
+2. **Visible Runtime Notification gate。** `RuntimeControlBackend.start/resumeProtection` 在 `RuntimeService.notificationsReady(context)` 失败时只返回 `NOTIFICATION_REQUIRED`，不发送 lifecycle `START` intent。`RuntimeService.ensureForeground` 在 foreground service 成功但通知权限/开关仍不可用时发布 `notification_permission_required` 并 stopForeground；这不是 runtime readiness，也不得被当作底层可启动证明。
+3. **Profile authorization 与 permission boundary。** Root permission 使用本文 7.2 的 S54 boundary：start/recovery authorization unavailable 进入 `root_authorization_required`，不自动重启。VPN authorization 由 `VpnService.prepare` gate；未授权时 DebugControlActivity 停在授权 action，不启动 VPN profile。
+4. **Adapter、双栈 runtime readiness 与 startup failure。** RuntimeService 只有在 manifest/artifact identity、profile cleanup、launch、health handshake、VPN TUN fd handoff、HEV transport、PID verification 和 final state persistence 都通过后才发布 `running`。`failWithoutRuntime` 表示尚未启动 runtime 的 fail-closed error；`failWithCleanup` 先执行 profile cleanup，再按 bounded recovery policy 或 terminal error 收口，不保留 partial runtime residue 作为 successful readiness。
+5. **互斥 switch 与 rollback。** Start 前做全局 Root/VPN ownership audit。若已有 Root/VPN owner 且目标不同，RuntimeService 必须先 `stopRuntime(false)`；stop 失败时直接返回，不启动第二个 VPP。S70 current-run device evidence `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log` 证明 Root start、Root→VPN、VPN→Root、Activity recreate、app process death、Protection Pause、policy/binding preservation、cleanup fault visibility、runtime crash recovery、Doze 和 final cleanup 均 PASS。
+6. **Root-only、VPN-only 与 both-available coverage。** Product plan 与 `RuntimeProfileInitializationPlan` contract 覆盖 Root-only/VPN-only/both-supported recommendation semantics；current controlled device evidence covers both-supported Root/VPN switching. Platform-specific unavailability is represented as capability/profile authorization steps, not as silent fallback or auto-switch.
+
+在以上 evidence 下，S57 可以关闭 Runtime Profile 初始化、切换与持久化产品记录；后续 S58/S59 仍负责完整 App-first UI、Activity、release 文案、兼容性和发布级矩阵。
+
 ## 8. 现有证据的使用方式
 
 以下资产是迁移输入或 harness 基线，不自动满足 production VPP closure：
