@@ -353,10 +353,29 @@ package_uid() {
   return 1
 }
 
+app_file_path() {
+  printf '/data/user/0/%s/%s\n' "$PACKAGE" "$1"
+}
+
+app_file_cat() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$relative_path" 2>/dev/null \
+    || adb_su "cat $(shell_single_quote "$(app_file_path "$relative_path")") 2>/dev/null" \
+    || true
+}
+
+app_file_rm() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" rm -f "$relative_path" >/dev/null 2>&1 \
+    || adb_su "rm -f $(shell_single_quote "$(app_file_path "$relative_path")")" \
+      >/dev/null 2>&1 \
+    || true
+}
+
 am_start_debug_traffic() {
   local host="$1"
   local port="$2"
-  adb_cmd shell run-as "$PACKAGE" rm -f "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null || true
+  app_file_rm "$DEBUG_TRAFFIC_PROBE_RESULT_PATH"
   adb_cmd shell am start -n "$ACTIVITY" \
     --ez debugTraffic true \
     --es debugTrafficHost "$host" \
@@ -367,8 +386,9 @@ am_start_debug_traffic() {
 wait_debug_traffic_probe_result() {
   local expected_host="$1"
   for _ in $(seq 1 20); do
-    if adb_cmd shell run-as "$PACKAGE" grep -Fxq "host=${expected_host}" \
-        "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null; then
+    if app_file_cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" \
+        | tr -d '\r' \
+        | grep -Fxq "host=${expected_host}"; then
       return 0
     fi
     sleep 1
@@ -378,14 +398,14 @@ wait_debug_traffic_probe_result() {
 
 record_debug_traffic_probe_result() {
   local label="$1"
-  adb_cmd shell run-as "$PACKAGE" cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null \
+  app_file_cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" \
     | tr -d '\r' \
     | sed "s/^/${label}.debugTraffic./" || true
 }
 
 debug_traffic_probe_value() {
   local key="$1"
-  adb_cmd shell run-as "$PACKAGE" cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null \
+  app_file_cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" \
     | tr -d '\r' \
     | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); found=1 } END { if (!found) exit 1 }'
 }
@@ -744,16 +764,22 @@ else
   last_uid_known="$(field_value "$after" lastObservedUidKnown)"
   last_result="$(field_value "$after" lastObservedResult)"
   last_hook="$(field_value "$after" lastObservedHook)"
+  drop_last_uid="$(json_result result.policyDropActivity.lastLinuxUid "$after")"
+  drop_last_uid_known="$(json_result result.policyDropActivity.lastUidKnown "$after")"
+  drop_last_stage="$(json_result result.policyDropActivity.lastStage "$after")"
   eval_verdict="$(json_result result.verdict "$eval_resp")"
   eval_stage="$(json_result result.stage "$eval_resp")"
   eval_revision="$(json_result result.revision "$eval_resp")"
   kv "input_ipv4_unknown.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
-  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid_known" == "False" ]]; then
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 \
+      && "$drop_last_uid_known" == "False" && "$drop_last_stage" == "L4" ]]; then
     kv "input_ipv4_unknown.result" "PASS"
     kv "input_ipv4_unknown.hookObserved" "$last_hook"
-  elif [[ "$packet_delta" -gt 0 && "$last_uid_known" != "False" ]]; then
+    kv "input_ipv4_unknown.dropActivityUidKnown" "$drop_last_uid_known"
+    kv "input_ipv4_unknown.dropActivityUid" "$drop_last_uid"
+  elif [[ "$packet_delta" -gt 0 && "$drop_last_uid_known" != "False" ]]; then
     kv "input_ipv4_unknown.result" "INVALID"
-    kv "input_ipv4_unknown.reason" "expected Unknown Application INPUT evidence but observed uidKnown=$last_uid_known uid=$last_uid"
+    kv "input_ipv4_unknown.reason" "expected Unknown Application INPUT drop activity evidence but observed uidKnown=$drop_last_uid_known uid=$drop_last_uid"
     kv "input_ipv4_unknown.hookObserved" "$last_hook"
     MATRIX_RC=1
   else
