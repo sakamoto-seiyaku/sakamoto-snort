@@ -24,6 +24,7 @@ import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
 import com.sakamoto.snort.androidruntime.ProductCatalogProjectionStore;
 import com.sakamoto.snort.androidruntime.ProductActivityProjectionStore;
+import com.sakamoto.snort.androidruntime.ProductNativeActivityIngestor;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactions;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactionStore;
 import com.sakamoto.snort.androidruntime.CapabilitySet;
@@ -91,6 +92,7 @@ public final class AndroidRuntimeContractTest {
         boundedActivityStoreIsSeparateFromProductState();
         localProductBackendOwnsBoundedActivityStoreWriter();
         productActivityProjectionStoreRoundTripsAppDetail();
+        productNativeActivityIngestorMapsRuntimeDropEvidence();
         activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
@@ -1950,6 +1952,42 @@ public final class AndroidRuntimeContractTest {
         check(!ProductActivityProjectionStore.projectionFile(files.toFile()).getPath()
                         .contains("product-state"),
                 "Activity projection is separate from policy/config state");
+    }
+
+    private static void productNativeActivityIngestorMapsRuntimeDropEvidence() {
+        ProductNativeActivityIngestor.NativePolicyDropRecord rootDrop =
+                new ProductNativeActivityIngestor.NativePolicyDropRecord(
+                        3L, true, 1010001, true, 7, "NetworkGate",
+                        91, 7001L, 69L);
+        check(ProductNativeActivityIngestor.shouldIngest(rootDrop, RuntimeProfile.ROOT,
+                        null, -1L, 4L, 0L),
+                "first native policy drop activity is ingested");
+        check(!ProductNativeActivityIngestor.shouldIngest(rootDrop, RuntimeProfile.ROOT,
+                        RuntimeProfile.ROOT, 4L, 4L, 3L),
+                "same native policy drop total is not duplicated");
+        check(ProductNativeActivityIngestor.shouldIngest(rootDrop, RuntimeProfile.VPN,
+                        RuntimeProfile.ROOT, 4L, 4L, 3L),
+                "profile switch resets native activity de-duplication");
+        ActivityItem item = ProductNativeActivityIngestor.toActivityItem(rootDrop,
+                RuntimeProfile.ROOT, 1234L);
+        check(item.subjectId.equals(ApplicationSubjectId.fromUid(1010001))
+                        && "drop".equals(item.verdict)
+                        && "NetworkGate".equals(item.winner)
+                        && item.policyRevision == 69L
+                        && item.ruleId == 7001L
+                        && "native_policy_drop_activity".equals(item.evidenceSource)
+                        && item.detailLossy,
+                "native policyDropActivity maps to a product ActivityItem");
+
+        ProductNativeActivityIngestor.NativePolicyDropRecord unknown =
+                new ProductNativeActivityIngestor.NativePolicyDropRecord(
+                        1L, true, 0, false, 0, "L4", 17, 42L, 7L);
+        ActivityItem unknownItem = ProductNativeActivityIngestor.toActivityItem(unknown,
+                RuntimeProfile.VPN, 1235L);
+        check("Unknown Application".equals(unknownItem.appLabel)
+                        && "vpn_outbound_or_return".equals(
+                        unknownItem.devicePacketDirection),
+                "unknown native attribution remains explicit in ActivityItem");
     }
 
     private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {

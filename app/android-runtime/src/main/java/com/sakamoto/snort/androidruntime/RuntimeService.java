@@ -138,6 +138,9 @@ public final class RuntimeService extends VpnService {
     private File pidFile;
     private File runtimeLog;
     private long generation;
+    private RuntimeProfile lastNativeActivityProfile;
+    private long lastNativeActivityGeneration = -1L;
+    private long lastNativeActivityTotalRecords;
 
     @Override
     public void onCreate() {
@@ -431,6 +434,7 @@ public final class RuntimeService extends VpnService {
             try {
                 reconcileDurableRuntime(true, revision);
                 refreshProductCatalogProjection("query");
+                refreshProductActivityProjection("query", null);
                 appendLog("health_query=result revision=" + revision);
                 stopIfInactive(requestStartId);
             } finally {
@@ -1997,6 +2001,7 @@ public final class RuntimeService extends VpnService {
                     "Network Gate mutation could not be applied");
         }
         refreshProductCatalogProjection("network_gate");
+        refreshProductActivityProjection("network_gate", subjectId);
         stopIfInactive();
     }
 
@@ -2018,6 +2023,7 @@ public final class RuntimeService extends VpnService {
                     "L4 rule mutation could not be applied");
         }
         refreshProductCatalogProjection("l4_rule");
+        refreshProductActivityProjection("l4_rule", rule.subjectId);
         stopIfInactive();
     }
 
@@ -2035,6 +2041,86 @@ public final class RuntimeService extends VpnService {
                         || "missing".equals(projection.productStateStatus) ? ""
                         : " product_state=" + projection.productStateStatus
                                 + " product_error=" + projection.productStateErrorCode));
+    }
+
+    private void refreshProductActivityProjection(String reason,
+                                                  ApplicationSubjectId preferredSubject) {
+        if (productBackend == null) {
+            return;
+        }
+        ingestLatestNativePolicyDropActivity(reason);
+        ApplicationSubjectId subject = preferredSubject;
+        if (subject == null) {
+            ProductStateSnapshot state = productBackend.productState();
+            subject = state.boundApplications.isEmpty()
+                    ? null : state.boundApplications.iterator().next();
+        }
+        RuntimeSummary runtime = RuntimeSummary.fromSnapshot(
+                snapshot == null ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot,
+                CapabilitySet.androidL4(true, true));
+        AppDetail detail = productBackend.refreshProductActivityProjection(subject, runtime, 32);
+        appendLog("product_activity_projection=published reason=" + reason
+                + " subject=" + (subject == null ? "(none)" : subject.encode())
+                + " activity=" + detail.activity.size()
+                + " rules=" + detail.rules.size()
+                + " state=" + detail.state);
+    }
+
+    private void ingestLatestNativePolicyDropActivity(String reason) {
+        RuntimeSnapshot current = snapshot;
+        if (current == null || !current.isActive()) {
+            return;
+        }
+        RuntimeProfile profile = current.profile == null ? RuntimeProfile.ROOT : current.profile;
+        RuntimeControlFdClient.AttachResult status = RuntimeControlFdClient.callJson(58,
+                profile == RuntimeProfile.VPN ? "VPN_TUN.STATUS" : "NFQUEUE.STATUS",
+                new JSONObject());
+        if (!status.ok) {
+            appendLog("product_activity_native_status=unavailable reason=" + reason
+                    + " profile=" + profile.wireName
+                    + " code=" + status.errorCode);
+            return;
+        }
+        JSONObject activity = status.result.optJSONObject("policyDropActivity");
+        ProductNativeActivityIngestor.NativePolicyDropRecord record =
+                nativePolicyDropRecord(activity);
+        if (!ProductNativeActivityIngestor.shouldIngest(record, profile,
+                lastNativeActivityProfile, lastNativeActivityGeneration, current.generation,
+                lastNativeActivityTotalRecords)) {
+            return;
+        }
+        ActivityItem item = ProductNativeActivityIngestor.toActivityItem(record, profile,
+                System.currentTimeMillis());
+        if (item == null) {
+            return;
+        }
+        productBackend.ingestActivity(item);
+        lastNativeActivityProfile = profile;
+        lastNativeActivityGeneration = current.generation;
+        lastNativeActivityTotalRecords = record.totalRecords;
+        appendLog("product_activity_native_ingest=ok reason=" + reason
+                + " profile=" + profile.wireName
+                + " totalRecords=" + record.totalRecords
+                + " subject=" + item.subjectId.encode()
+                + " winner=" + item.winner
+                + " revision=" + item.policyRevision);
+    }
+
+    private static ProductNativeActivityIngestor.NativePolicyDropRecord nativePolicyDropRecord(
+            JSONObject activity) {
+        if (activity == null) {
+            return null;
+        }
+        return new ProductNativeActivityIngestor.NativePolicyDropRecord(
+                activity.optLong("totalRecords", 0L),
+                activity.optBoolean("hasLastRecord", false),
+                (int) activity.optLong("lastLinuxUid", 0L),
+                activity.optBoolean("lastUidKnown", false),
+                (int) activity.optLong("lastNetworkContext", 0L),
+                activity.optString("lastStage", ""),
+                (int) activity.optLong("lastReasonId", 0L),
+                activity.optLong("lastRuleId", 0L),
+                activity.optLong("lastRevision", 0L));
     }
 
     private void publishProductMutationFailure(String fallbackCode,

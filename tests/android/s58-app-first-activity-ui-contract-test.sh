@@ -41,6 +41,15 @@ grep -q 'output.getFD().sync()' "$product_dir/ProductActivityProjectionStore.jav
 grep -q 'ProductActivityProjectionStore.java' "$runtime_contract"
 grep -q 'activityItemsFor' "$product_dir/BoundedActivityStore.java"
 grep -q 'LocalProductBackend' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+grep -q 'ProductNativeActivityIngestor.java' "$runtime_contract"
+grep -q 'native_policy_drop_activity' "$product_dir/ProductNativeActivityIngestor.java"
+grep -q 'NFQUEUE.STATUS' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+grep -q 'VPN_TUN.STATUS' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+grep -q 'ingestLatestNativePolicyDropActivity' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+grep -q 'productBackend.ingestActivity(item)' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+grep -q 'refreshProductActivityProjection("query"' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+grep -q 'refreshProductActivityProjection("network_gate"' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+grep -q 'refreshProductActivityProjection("l4_rule"' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 ! grep -q 'LocalProductBackend' "$debug_activity"
 
 for source_file in \

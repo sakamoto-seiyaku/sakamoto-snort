@@ -314,10 +314,11 @@ public final class RuntimeControlFdClient {
         public final boolean fdAttached;
         public final boolean transportFdAttached;
         public final boolean ipv6Enabled;
+        public final JSONObject result;
 
         private AttachResult(boolean ok, String errorCode, String errorMessage, String adapter,
                              boolean fdAttached, boolean transportFdAttached,
-                             boolean ipv6Enabled) {
+                             boolean ipv6Enabled, JSONObject result) {
             this.ok = ok;
             this.errorCode = BoundedText.value(errorCode, RuntimeSnapshot.MAX_TEXT_LENGTH);
             this.errorMessage = BoundedText.value(errorMessage, RuntimeSnapshot.MAX_TEXT_LENGTH);
@@ -325,17 +326,19 @@ public final class RuntimeControlFdClient {
             this.fdAttached = fdAttached;
             this.transportFdAttached = transportFdAttached;
             this.ipv6Enabled = ipv6Enabled;
+            this.result = result == null ? new JSONObject() : result;
         }
 
         static AttachResult accepted(JSONObject result) {
             return new AttachResult(true, "", "", result.optString("adapter", ""),
                     result.optBoolean("fdAttached", false),
                     result.optBoolean("transportFdAttached", false),
-                    result.optBoolean("ipv6Enabled", false));
+                    result.optBoolean("ipv6Enabled", false), result);
         }
 
         static AttachResult error(String code, String message) {
-            return new AttachResult(false, code, message, "", false, false, false);
+            return new AttachResult(false, code, message, "", false, false, false,
+                    new JSONObject());
         }
     }
 }
