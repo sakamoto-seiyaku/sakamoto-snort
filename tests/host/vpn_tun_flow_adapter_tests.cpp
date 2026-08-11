@@ -360,6 +360,67 @@ TEST(VpnTunFlowAdapterTest, KnownUidUsesSharedRuntimePolicyDrop) {
     EXPECT_EQ(counters.policyDropActivity.lastDecision.revision, 69U);
 }
 
+TEST(VpnTunFlowAdapterTest, LateAttributionPolicyDropActivityUsesResolvedUid) {
+    Policy::RuntimePacketPolicySnapshot policy;
+    policy.apply({tcpDestinationDropSubject(12546, 443)}, 72);
+    VpnTunFlowAdapter adapter(VpnTunFlowAdapterConfig{.packetPolicy = &policy});
+    const auto packet = ipv4TcpPacket();
+    const auto packetBytes = std::as_bytes(std::span<const std::uint8_t>{packet});
+    auto attributionFacts = Flow::parseIngressPacketFacts(
+        packetBytes,
+        Flow::FlowGraphIngressMetadata{
+            .direction = Flow::DevicePacketDirection::Output,
+            .originalLength = static_cast<std::uint32_t>(packet.size()),
+            .domain = Flow::FlowDomain{
+                .adapter = Flow::AdapterKind::VpnTun,
+                .linuxUid = 0,
+                .uidKnown = false,
+                .networkContext = 4,
+                .runtimeProfile = 1,
+                .interfaceIndex = 10,
+            },
+        });
+
+    EXPECT_EQ(adapter.process(
+                  VpnTunPacketDirection::Outbound,
+                  std::span<const std::uint8_t>{packet}, packet.size(),
+                  VpnTunPacketMetadata{
+                      .linuxUid = 0,
+                      .networkContext = 4,
+                      .interfaceIndex = 10,
+                      .uidKnown = false,
+                  }),
+              VpnTunFlowAdapterResult::FlowForwarded);
+    const auto attribution = adapter.applyResolvedAttribution(
+        attributionFacts, 12546, true);
+    ASSERT_TRUE(attribution.has_value());
+    EXPECT_TRUE(attribution->found);
+    EXPECT_TRUE(attribution->updated);
+
+    EXPECT_EQ(adapter.process(
+                  VpnTunPacketDirection::Outbound,
+                  std::span<const std::uint8_t>{packet}, packet.size(),
+                  VpnTunPacketMetadata{
+                      .linuxUid = 0,
+                      .networkContext = 4,
+                      .interfaceIndex = 10,
+                      .uidKnown = false,
+                  }),
+              VpnTunFlowAdapterResult::FlowDropped);
+
+    const auto counters = adapter.counters();
+    EXPECT_EQ(counters.attributionResolutions, 1U);
+    EXPECT_EQ(counters.policyDropActivity.records, 1U);
+    EXPECT_TRUE(counters.policyDropActivity.hasLastRecord);
+    EXPECT_EQ(counters.policyDropActivity.lastLinuxUid, 12546U);
+    EXPECT_TRUE(counters.policyDropActivity.lastUidKnown);
+    EXPECT_EQ(counters.policyDropActivity.lastNetworkContext, 4U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.stage,
+              Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.ruleId, 9001U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.revision, 72U);
+}
+
 TEST(VpnTunFlowAdapterTest, PolicyDropActivityIsBoundedAndEvictsOldDetail) {
     Policy::RuntimePacketPolicySnapshot policy;
     policy.apply(

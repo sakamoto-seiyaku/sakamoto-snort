@@ -164,11 +164,23 @@ VpnTunFlowAdapterResult VpnTunFlowAdapter::process(
     case Flow::FlowGraphIngressStatus::PolicyDrop:
         ++counters_.droppedPackets;
         if (graphResult.policyDecision.has_value()) {
+            const auto &dropFacts = graphResult.policyDropFacts.has_value()
+                ? *graphResult.policyDropFacts
+                : Flow::PacketFacts{};
+            const auto linuxUid = graphResult.policyDropFacts.has_value()
+                ? dropFacts.domain.linuxUid
+                : metadata.linuxUid;
+            const auto uidKnown = graphResult.policyDropFacts.has_value()
+                ? dropFacts.domain.uidKnown
+                : metadata.uidKnown;
+            const auto networkContext = graphResult.policyDropFacts.has_value()
+                ? dropFacts.domain.networkContext
+                : metadata.networkContext;
             counters_.policyDropActivity.record(
                 *graphResult.policyDecision,
-                metadata.linuxUid,
-                metadata.uidKnown,
-                metadata.networkContext);
+                linuxUid,
+                uidKnown,
+                networkContext);
         }
         break;
     case Flow::FlowGraphIngressStatus::ParseFailOpen:

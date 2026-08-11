@@ -61,6 +61,10 @@ public:
     lastPolicyDropDecision() const noexcept {
         return lastPolicyDropDecision_;
     }
+    [[nodiscard]] const std::optional<PacketFacts> &
+    lastPolicyDropFacts() const noexcept {
+        return lastPolicyDropFacts_;
+    }
     [[nodiscard]] const std::optional<FlowEntryObservation> &
     lastFlowEntryObservation() const noexcept {
         return lastFlowEntryObservation_;
@@ -75,6 +79,7 @@ private:
     const Policy::PacketPolicySnapshot &policy_;
     GraphInjectionCounters counters_;
     std::optional<Policy::PacketPolicyDecision> lastPolicyDropDecision_;
+    std::optional<PacketFacts> lastPolicyDropFacts_;
     std::optional<FlowEntryObservation> lastFlowEntryObservation_;
     std::optional<PacketFacts> lastAcceptedFacts_;
 };

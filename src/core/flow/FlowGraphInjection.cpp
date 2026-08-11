@@ -19,6 +19,7 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
     const std::uint32_t currentWorker) noexcept {
     ++counters_.injectedPackets;
     lastPolicyDropDecision_.reset();
+    lastPolicyDropFacts_.reset();
     lastFlowEntryObservation_.reset();
     lastAcceptedFacts_.reset();
     const auto key = CanonicalFlowKey::from(submission.facts);
@@ -62,6 +63,7 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
         if (isPolicyDrop(policyDecision)) {
             if (distribution.complete(*descriptorId, PacketLeaseOutcome::Dropped)) {
                 lastPolicyDropDecision_ = policyDecision;
+                lastPolicyDropFacts_ = policyFacts;
                 ++counters_.policyDrops;
                 return GraphInjectionResult::PolicyDrop;
             }
@@ -100,6 +102,7 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
                 if (retryDescriptor != nullptr && isPolicyDrop(policyDecision)) {
                     if (distribution.complete(*retryId, PacketLeaseOutcome::Dropped)) {
                         lastPolicyDropDecision_ = policyDecision;
+                        lastPolicyDropFacts_ = retryFacts;
                         ++counters_.policyDrops;
                         return GraphInjectionResult::PolicyDrop;
                     }
