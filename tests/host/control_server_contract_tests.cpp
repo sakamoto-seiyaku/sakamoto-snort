@@ -1384,6 +1384,58 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 4U);
 }
 
+TEST(ControlServerContract, NfqueueStatusReportsDetectingRecognitionWithoutProtocol) {
+    FakeRuntimeControl runtime;
+    runtime.nfqueueCountersReady = true;
+    runtime.nfqueueCounters.allowedFlowActivity.record(
+        Flow::PacketFacts{
+            .source = Flow::IpAddress::v4({10, 0, 0, 2}),
+            .destination = Flow::IpAddress::v4({198, 51, 100, 10}),
+            .ipProtocol = 6,
+            .sourcePort = 41000,
+            .destinationPort = 443,
+            .portsAvailable = true,
+            .parseStatus = Flow::ParseStatus::Ready,
+            .deviceDirection = Flow::DevicePacketDirection::Output,
+            .originalLength = 1500,
+            .boundedPrefixLength = 128,
+            .domain = Flow::FlowDomain{
+                .adapter = Flow::AdapterKind::RootNfqueue,
+                .linuxUid = 12546,
+                .uidKnown = true,
+                .captureQueue = 7,
+                .networkContext = 3,
+            },
+        },
+        Flow::FlowEntryObservation{
+            .relativeDirection = Flow::FlowRelativeDirection::Orig,
+            .flowOriginDir = Flow::DevicePacketDirection::Output,
+            .linuxUid = 12546,
+            .uidKnown = true,
+            .decisionStateValid = true,
+            .policyRevision = 12,
+            .packets = 2,
+            .bytes = 3000,
+            .lpiRecognition = Flow::LpiRecognitionState{
+                .payloadPacketsSubmitted = 2,
+                .terminalState = Flow::LpiRecognitionTerminalState::Detecting,
+            },
+        });
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(72, "NFQUEUE.STATUS");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto &allowed = response["result"]["allowedFlowActivity"];
+    ASSERT_TRUE(allowed.IsObject());
+    EXPECT_TRUE(allowed["hasLastRecord"].GetBool());
+    EXPECT_STREQ(allowed["lastProtocolRecognitionState"].GetString(), "detecting");
+    EXPECT_STREQ(allowed["lastApplicationProtocolKey"].GetString(), "");
+    EXPECT_STREQ(allowed["lastApplicationProtocolCategory"].GetString(), "");
+    EXPECT_STREQ(allowed["lastProtocolRecognitionSequence"].GetString(), "");
+    EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 2U);
+}
+
 TEST(ControlServerContract, HelloOmitsVpnTunCountersCapabilityWhenUnsupported) {
     FakeRuntimeControl runtime;
     runtime.vpnTunCountersReady = false;
@@ -1640,6 +1692,59 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_STREQ(allowed["lastApplicationProtocolCategory"].GetString(), "web");
     EXPECT_STREQ(allowed["lastProtocolRecognitionSequence"].GetString(),
                  "1:dns:orig,3:http:reply");
+    EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 3U);
+}
+
+TEST(ControlServerContract, VpnTunStatusReportsUnidentifiedRecognitionWithoutProtocol) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunCountersReady = true;
+    runtime.vpnTunCounters.allowedFlowActivity.record(
+        Flow::PacketFacts{
+            .source = Flow::IpAddress::v4({203, 0, 113, 10}),
+            .destination = Flow::IpAddress::v4({10, 0, 0, 2}),
+            .ipProtocol = 17,
+            .sourcePort = 443,
+            .destinationPort = 53000,
+            .portsAvailable = true,
+            .parseStatus = Flow::ParseStatus::Ready,
+            .deviceDirection = Flow::DevicePacketDirection::Input,
+            .originalLength = 1200,
+            .boundedPrefixLength = 96,
+            .domain = Flow::FlowDomain{
+                .adapter = Flow::AdapterKind::VpnTun,
+                .linuxUid = 12546,
+                .uidKnown = true,
+                .networkContext = 7,
+                .runtimeProfile = 1,
+                .interfaceIndex = 9,
+            },
+        },
+        Flow::FlowEntryObservation{
+            .relativeDirection = Flow::FlowRelativeDirection::Reply,
+            .flowOriginDir = Flow::DevicePacketDirection::Output,
+            .linuxUid = 12546,
+            .uidKnown = true,
+            .decisionStateValid = true,
+            .policyRevision = 71,
+            .packets = 3,
+            .bytes = 3600,
+            .lpiRecognition = Flow::LpiRecognitionState{
+                .payloadPacketsSubmitted = 3,
+                .terminalState = Flow::LpiRecognitionTerminalState::Done,
+            },
+        });
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(73, "VPN_TUN.STATUS");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    const auto &allowed = response["result"]["allowedFlowActivity"];
+    ASSERT_TRUE(allowed.IsObject());
+    EXPECT_TRUE(allowed["hasLastRecord"].GetBool());
+    EXPECT_STREQ(allowed["lastProtocolRecognitionState"].GetString(), "unidentified");
+    EXPECT_STREQ(allowed["lastApplicationProtocolKey"].GetString(), "");
+    EXPECT_STREQ(allowed["lastApplicationProtocolCategory"].GetString(), "");
+    EXPECT_STREQ(allowed["lastProtocolRecognitionSequence"].GetString(), "");
     EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 3U);
 }
 

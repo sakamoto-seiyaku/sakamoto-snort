@@ -230,6 +230,28 @@ public:
     std::size_t lastPayloadLength = 0;
 };
 
+class MappedDoneProvider final : public Protocol::LpiRecognitionProvider {
+public:
+    [[nodiscard]] bool available() const noexcept override { return true; }
+    [[nodiscard]] std::string_view providerName() const noexcept override {
+        return "fake-mapped-done";
+    }
+    [[nodiscard]] std::optional<Protocol::LpiProviderFact> recognize(
+        const Protocol::LpiPacketSubmission &submission) noexcept override {
+        ++calls;
+        lastPayloadLength = submission.transportPayload.size();
+        return Protocol::LpiProviderFact{
+            .providerAlias = "lpi:http",
+            .detectorDone = true,
+            .budgetExhausted = false,
+            .producedBeforeAdapterCompletion = true,
+        };
+    }
+
+    std::uint32_t calls = 0;
+    std::size_t lastPayloadLength = 0;
+};
+
 TEST(LpiRecognitionProviderTest, DisabledProviderIsObservableWithoutMutatingFlowState) {
     EXPECT_FALSE(Protocol::kRealLpiProviderEnabledByDefault);
     EXPECT_EQ(Protocol::kDisabledLpiProviderName, "disabled");
@@ -285,6 +307,55 @@ TEST(LpiRecognitionProviderTest, ProviderNoResultConsumesBudgetWithoutUnmappedRe
     ASSERT_TRUE(state.has_value());
     EXPECT_EQ(state->payloadPacketsSubmitted, 1U);
     EXPECT_TRUE(state->mappedResultsEmpty());
+}
+
+TEST(LpiRecognitionProviderTest, TerminalDoneFlowSkipsLaterPayloadsWithoutProviderCall) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    MappedDoneProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 512> l3Packet{};
+
+    const auto first = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(first.providerAvailable);
+    EXPECT_TRUE(first.submittedToProvider);
+    EXPECT_TRUE(first.providerProducedFact);
+    ASSERT_TRUE(first.adapterOutcome.has_value());
+    ASSERT_TRUE(first.adapterOutcome->flowUpdate.has_value());
+    EXPECT_TRUE(first.adapterOutcome->mappedProviderResult);
+    EXPECT_EQ(first.adapterOutcome->flowUpdate->terminalState,
+              Flow::LpiRecognitionTerminalState::Done);
+    ASSERT_TRUE(first.adapterOutcome->flowUpdate->latestExactResult.has_value());
+    EXPECT_EQ(*first.adapterOutcome->flowUpdate->latestExactResult,
+              Catalog::ApplicationProtocolId::HTTP);
+    EXPECT_EQ(provider.calls, 1U);
+    EXPECT_EQ(provider.lastPayloadLength, 472U);
+    ASSERT_TRUE(first.stateAfterSubmit.has_value());
+    EXPECT_EQ(first.stateAfterSubmit->terminalState,
+              Flow::LpiRecognitionTerminalState::Done);
+
+    const auto second = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(second.observed);
+    EXPECT_TRUE(second.payloadEligible);
+    EXPECT_TRUE(second.providerAvailable);
+    EXPECT_TRUE(second.terminalSkipped);
+    EXPECT_FALSE(second.submittedToProvider);
+    EXPECT_FALSE(second.providerProducedFact);
+    EXPECT_FALSE(second.adapterOutcome.has_value());
+    EXPECT_EQ(provider.calls, 1U);
+    ASSERT_TRUE(second.stateAfterSubmit.has_value());
+    EXPECT_EQ(second.stateAfterSubmit->terminalState,
+              Flow::LpiRecognitionTerminalState::Done);
+    EXPECT_EQ(second.stateAfterSubmit->payloadPacketsSubmitted, 1U);
+    ASSERT_TRUE(second.stateAfterSubmit->latestExactResult().has_value());
+    EXPECT_EQ(*second.stateAfterSubmit->latestExactResult(),
+              Catalog::ApplicationProtocolId::HTTP);
+    EXPECT_EQ(pipeline.status().counters.terminalSkippedPackets, 1U);
 }
 
 TEST(LpiRecognitionProviderTest, NoResultProviderStopsAtInternalPayloadBudget) {
