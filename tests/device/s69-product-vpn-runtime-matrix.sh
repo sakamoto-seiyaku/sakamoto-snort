@@ -87,10 +87,18 @@ assert_no_native_residue() {
 
 assert_no_tun0_residue() {
   local out_file="$1"
-  if adb_cmd shell ip link show tun0 >"$out_file" 2>&1; then
+  adb_cmd shell su 0 ip link show tun0 >"$out_file" 2>&1 || true
+  if grep -Eq '^[0-9]+: tun0[:@]' "$out_file"; then
     return 1
   fi
   return 0
+}
+
+assert_tun0_present() {
+  local out_file="$1"
+  adb_cmd shell dumpsys connectivity >"$out_file" 2>&1
+  grep -Eq "VPN:${PACKAGE}" "$out_file"
+  grep -Eq "InterfaceName: tun0" "$out_file"
 }
 
 assert_no_connectivity_residue() {
@@ -150,7 +158,7 @@ kv "snapshot.adapterReadiness" "vpn-tun-hev"
 kv "snapshot.pid" "$(printf '%s\n' "$state" | snapshot_value pid)"
 
 section "android_vpn_network"
-adb_cmd shell ip link show tun0 >"${RESULT_DIR}/tun0.running" 2>&1
+assert_tun0_present "${RESULT_DIR}/tun0.running"
 kv "tun0.running" "PASS"
 adb_cmd shell dumpsys connectivity >"${RESULT_DIR}/connectivity.running" 2>&1
 grep -q "VPN:${PACKAGE}" "${RESULT_DIR}/connectivity.running"
@@ -293,7 +301,7 @@ for cycle in $(seq 1 "$S69_PRODUCT_RESTART_CYCLES"); do
   printf '%s\n' "$cycle_running" | grep -Fxq "profile=vpn"
   printf '%s\n' "$cycle_running" | grep -Fxq "health=ok"
   printf '%s\n' "$cycle_running" | grep -Fxq "adapterReadiness=vpn-tun-hev"
-  adb_cmd shell ip link show tun0 >"${cycle_dir}/tun0.running" 2>&1
+  assert_tun0_present "${cycle_dir}/tun0.running"
   adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
     >"${cycle_dir}/stop.intent.log" 2>&1
   cycle_stopped="$(wait_for_snapshot_field state stopped "${cycle_dir}/snapshot.stopped" 30)" || {

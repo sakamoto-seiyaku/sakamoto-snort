@@ -29,6 +29,8 @@ import java.util.List;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -61,6 +63,8 @@ public class DebugControlActivity extends Activity {
             "debugBindApplicationSubject";
     private static final String EXTRA_DEBUG_UNBIND_APPLICATION_SUBJECT =
             "debugUnbindApplicationSubject";
+    private static final String DEBUG_TRAFFIC_PROBE_RESULT_PATH =
+            "debug/traffic-probe.properties";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
     private static final int DEBUG_TRAFFIC_PORT = 80;
     private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
@@ -612,6 +616,7 @@ public class DebugControlActivity extends Activity {
         Thread probe = new Thread(() -> {
             String result = runDebugTrafficProbeBlocking(
                     host, port, timeoutMillis, true);
+            writeDebugTrafficProbeResult(host, port, timeoutMillis, result);
             final String display = result;
             main.post(() -> action(display));
         }, "sakamoto-debug-traffic");
@@ -645,6 +650,8 @@ public class DebugControlActivity extends Activity {
                 String probeResult = runDebugTrafficProbeBlocking(
                         DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
                         DEBUG_TRAFFIC_TIMEOUT_MILLIS, false);
+                writeDebugTrafficProbeResult(DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
+                        DEBUG_TRAFFIC_TIMEOUT_MILLIS, probeResult);
                 JSONObject countersAfter = client.call(4, statusCommand, new JSONObject());
                 result = formatDebugPolicyProbeResult(
                         uid, profile, decision, countersBefore, countersAfter, probeResult);
@@ -719,6 +726,29 @@ public class DebugControlActivity extends Activity {
             }
             return "tcp_connect_failed";
         }
+    }
+
+    private void writeDebugTrafficProbeResult(
+            String host, int port, int timeoutMillis, String result) {
+        File file = new File(getFilesDir(), DEBUG_TRAFFIC_PROBE_RESULT_PATH);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            return;
+        }
+        String text = "host=" + propertyValue(host) + "\n"
+                + "port=" + port + "\n"
+                + "timeoutMillis=" + timeoutMillis + "\n"
+                + "uid=" + android.os.Process.myUid() + "\n"
+                + "result=" + propertyValue(result) + "\n";
+        try (FileOutputStream out = new FileOutputStream(file, false)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            // Debug evidence must never change product control behavior.
+        }
+    }
+
+    private static String propertyValue(String value) {
+        return value == null ? "" : value.replace("\r", "\\r").replace("\n", "\\n");
     }
 
     private String runDebugTrafficListenerBlocking(int port, int timeoutMillis) {

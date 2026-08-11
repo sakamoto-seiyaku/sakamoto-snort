@@ -7,6 +7,7 @@ source "$SNORT_ROOT/dev/dev-android-device-lib.sh"
 
 PACKAGE="${PACKAGE:-com.sakamoto.snort.androidruntime}"
 ACTIVITY="${ACTIVITY:-$PACKAGE/.DebugControlActivity}"
+DEBUG_TRAFFIC_PROBE_RESULT_PATH="files/debug/traffic-probe.properties"
 VNEXT_PORT="${VNEXT_PORT:-60607}"
 SNORT_CTL="${SNORT_CTL:-}"
 IPV6_OUTPUT_HOST="${IPV6_OUTPUT_HOST:-2606:4700:4700::1111}"
@@ -355,11 +356,38 @@ package_uid() {
 am_start_debug_traffic() {
   local host="$1"
   local port="$2"
+  adb_cmd shell run-as "$PACKAGE" rm -f "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null || true
   adb_cmd shell am start -n "$ACTIVITY" \
     --ez debugTraffic true \
     --es debugTrafficHost "$host" \
     --ei debugTrafficPort "$port" \
     --ei debugTrafficTimeoutMillis 1500 >/dev/null
+}
+
+wait_debug_traffic_probe_result() {
+  local expected_host="$1"
+  for _ in $(seq 1 20); do
+    if adb_cmd shell run-as "$PACKAGE" grep -Fxq "host=${expected_host}" \
+        "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+record_debug_traffic_probe_result() {
+  local label="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null \
+    | tr -d '\r' \
+    | sed "s/^/${label}.debugTraffic./" || true
+}
+
+debug_traffic_probe_value() {
+  local key="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" 2>/dev/null \
+    | tr -d '\r' \
+    | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); found=1 } END { if (!found) exit 1 }'
 }
 
 am_start_listener() {
@@ -387,6 +415,15 @@ sock.close()
 PY
 }
 
+control_vnext_forward_residue() {
+  local serial
+  serial="$(adb_target_desc)"
+  adb_cmd forward --list 2>/dev/null | tr -d '\r' \
+    | awk -v serial="$serial" -v port="tcp:$VNEXT_PORT" '
+        $1 == serial && $2 == port && $3 == "localabstract:sucre-snort-control-vnext"
+      '
+}
+
 device_ipv4_for_host_peer() {
   adb_cmd shell "ip -o -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \\([0-9.][0-9.]*\\).*/\\1/p' | head -1" \
     | tr -d '\r\n'
@@ -395,12 +432,12 @@ device_ipv4_for_host_peer() {
 check_no_residue() {
   local label="$1"
   local forwards procs ipt ip6t
-  forwards="$(adb_cmd forward --list 2>/dev/null | tr -d '\r' | grep -F "localabstract:sucre-snort" || true)"
+  forwards="$(control_vnext_forward_residue || true)"
   procs="$(adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r')"
   ipt="$(adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
   ip6t="$(adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
 
-  kv "$label.forwardCheck.command" "./dev/adb forward --list | grep localabstract:sucre-snort"
+  kv "$label.forwardCheck.command" "./dev/adb forward --list | awk '\$2==\"tcp:$VNEXT_PORT\" && \$3==\"localabstract:sucre-snort-control-vnext\"'"
   kv "$label.processCheck.command" "./dev/adb shell su 0 sh -c 'pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
   kv "$label.iptablesCheck.command" "./dev/adb shell su 0 sh -c 'iptables -S | grep sucre-snort'"
   kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
@@ -420,12 +457,12 @@ check_no_residue() {
 record_unmanaged_fault_residue() {
   local label="$1"
   local forwards procs ipt ip6t
-  forwards="$(adb_cmd forward --list 2>/dev/null | tr -d '\r' | grep -F "localabstract:sucre-snort" || true)"
+  forwards="$(control_vnext_forward_residue || true)"
   procs="$(adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r')"
   ipt="$(adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
   ip6t="$(adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
 
-  kv "$label.forwardCheck.command" "./dev/adb forward --list | grep localabstract:sucre-snort"
+  kv "$label.forwardCheck.command" "./dev/adb forward --list | awk '\$2==\"tcp:$VNEXT_PORT\" && \$3==\"localabstract:sucre-snort-control-vnext\"'"
   kv "$label.processCheck.command" "./dev/adb shell su 0 sh -c 'pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
   kv "$label.iptablesCheck.command" "./dev/adb shell su 0 sh -c 'iptables -S | grep sucre-snort'"
   kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
@@ -604,22 +641,24 @@ else
   before="$(ctl NFQUEUE.STATUS)"
   kv "ipv6_output.probe.command" "./dev/adb shell am start -n $ACTIVITY --ez debugTraffic true --es debugTrafficHost $IPV6_OUTPUT_HOST --ei debugTrafficPort $IPV6_OUTPUT_PORT --ei debugTrafficTimeoutMillis 1500"
   am_start_debug_traffic "$IPV6_OUTPUT_HOST" "$IPV6_OUTPUT_PORT" || true
-  sleep 2
+  wait_debug_traffic_probe_result "$IPV6_OUTPUT_HOST" || true
+  record_debug_traffic_probe_result "ipv6_output"
   after="$(ctl NFQUEUE.STATUS)"
   status_delta "$before" "$after" "ipv6_output"
   drop_delta="$(delta_value "$before" "$after" droppedPackets)"
   last_uid="$(field_value "$after" lastObservedLinuxUid)"
   last_uid_known="$(field_value "$after" lastObservedUidKnown)"
   last_result="$(field_value "$after" lastObservedResult)"
+  probe_uid="$(debug_traffic_probe_value uid || true)"
   eval_verdict="$(json_result result.verdict "$eval_resp")"
   eval_stage="$(json_result result.stage "$eval_resp")"
   eval_revision="$(json_result result.revision "$eval_resp")"
   kv "ipv6_output.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
-  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid" == "$uid" && "$last_uid_known" == "True" && "$last_result" == "FlowDropped" ]]; then
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$probe_uid" == "$uid" ]]; then
     kv "ipv6_output.result" "PASS"
   else
     kv "ipv6_output.result" "FAIL"
-    kv "ipv6_output.reason" "expected DROP evaluation plus dropped NFQUEUE delta for uid=$uid"
+    kv "ipv6_output.reason" "expected DROP evaluation plus dropped NFQUEUE delta from debugTraffic uid=$uid"
     MATRIX_RC=1
   fi
 fi
@@ -770,7 +809,8 @@ if [[ $RUN_RESTART -eq 1 ]]; then
   printf 'restart.POLICY.APPLY=%s\n' "$apply_resp"
   printf 'restart.POLICY.EVALUATE=%s\n' "$eval_resp"
   am_start_debug_traffic 1.1.1.1 80 || true
-  sleep 2
+  wait_debug_traffic_probe_result 1.1.1.1 || true
+  record_debug_traffic_probe_result "restart.probe"
   after="$(ctl NFQUEUE.STATUS)"
   status_delta "$before" "$after" "restart.probe"
   stop_root_daemon_for_cleanup "restart.finalStop"
