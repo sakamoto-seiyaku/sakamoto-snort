@@ -52,8 +52,9 @@ bool packetMatchesOrigin(const FlowEntry &entry, const PacketFacts &facts) noexc
 
 bool hasMappedResult(const LpiRecognitionState &state,
                      const sucre::protocol::ApplicationProtocolId protocolId) noexcept {
+    const auto results = state.mappedResults();
     return std::any_of(
-        state.mappedResults.begin(), state.mappedResults.end(),
+        results.begin(), results.end(),
         [protocolId](const LpiRecognitionResult &result) noexcept {
             return result.protocolId == protocolId;
         });
@@ -637,7 +638,7 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
             .terminalState = state.terminalState,
             .direction = direction,
             .payloadPacketSequence = state.payloadPacketsSubmitted,
-            .mappedResultCount = state.mappedResults.size(),
+            .mappedResultCount = state.mappedResultCount,
             .latestExactResult = state.latestExactResult(),
         };
     }
@@ -655,12 +656,11 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
             if (hasMappedResult(state, *mappedResult)) {
                 duplicate = true;
                 ++counters_.lpiDuplicateMappedResults;
-            } else if (state.mappedResults.size() < LpiRecognitionState::kMaxMappedResults) {
-                state.mappedResults.push_back(LpiRecognitionResult{
+            } else if (state.appendMappedResult(LpiRecognitionResult{
                     .protocolId = *mappedResult,
                     .firstPayloadPacketSequence = state.payloadPacketsSubmitted,
                     .direction = direction,
-                });
+                })) {
                 appended = true;
                 ++counters_.lpiMappedResults;
             } else {
@@ -692,7 +692,7 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
         .terminalState = state.terminalState,
         .direction = direction,
         .payloadPacketSequence = state.payloadPacketsSubmitted,
-        .mappedResultCount = state.mappedResults.size(),
+        .mappedResultCount = state.mappedResultCount,
         .latestExactResult = state.latestExactResult(),
     };
 }

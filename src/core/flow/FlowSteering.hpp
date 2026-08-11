@@ -281,8 +281,31 @@ struct LpiRecognitionState {
 
     std::uint32_t payloadPacketsSubmitted = 0;
     LpiRecognitionTerminalState terminalState = LpiRecognitionTerminalState::Detecting;
-    std::vector<LpiRecognitionResult> mappedResults;
+    std::array<LpiRecognitionResult, kMaxMappedResults> mappedResultStorage{};
+    std::uint32_t mappedResultCount = 0;
     std::optional<sucre::protocol::ApplicationProtocolId> latestExactProtocolId;
+
+    [[nodiscard]] std::span<const LpiRecognitionResult> mappedResults() const noexcept {
+        return std::span<const LpiRecognitionResult>(
+            mappedResultStorage.data(), mappedResultCount);
+    }
+
+    [[nodiscard]] bool mappedResultsEmpty() const noexcept {
+        return mappedResultCount == 0;
+    }
+
+    [[nodiscard]] bool mappedResultsFull() const noexcept {
+        return mappedResultCount >= kMaxMappedResults;
+    }
+
+    [[nodiscard]] bool appendMappedResult(const LpiRecognitionResult &result) noexcept {
+        if (mappedResultsFull()) {
+            return false;
+        }
+        mappedResultStorage[mappedResultCount] = result;
+        ++mappedResultCount;
+        return true;
+    }
 
     [[nodiscard]] bool terminal() const noexcept {
         return terminalState != LpiRecognitionTerminalState::Detecting;
@@ -293,10 +316,10 @@ struct LpiRecognitionState {
         if (latestExactProtocolId.has_value()) {
             return latestExactProtocolId;
         }
-        if (mappedResults.empty()) {
+        if (mappedResultsEmpty()) {
             return std::nullopt;
         }
-        return mappedResults.back().protocolId;
+        return mappedResultStorage[mappedResultCount - 1U].protocolId;
     }
 };
 

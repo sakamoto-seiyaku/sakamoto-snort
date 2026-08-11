@@ -84,6 +84,9 @@ private:
     [[nodiscard]] FlowGraphIngressResult processReassembled(
         const FragmentReassemblyResult &fragment,
         FlowGraphIngressMetadata metadata) noexcept;
+    void submitLpiRecognition(
+        std::span<const std::byte> l3Packet,
+        FlowGraphIngressResult &ingressResult) noexcept;
 };
 
 } // namespace SnortDatapath::Flow

@@ -1233,7 +1233,7 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
             .lpiRecognition = Flow::LpiRecognitionState{
                 .payloadPacketsSubmitted = 4,
                 .terminalState = Flow::LpiRecognitionTerminalState::Done,
-                .mappedResults = {
+                .mappedResultStorage = {
                     Flow::LpiRecognitionResult{
                         .protocolId = Catalog::ApplicationProtocolId::HTTP,
                         .firstPayloadPacketSequence = 1,
@@ -1245,6 +1245,7 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
                         .direction = Flow::FlowRelativeDirection::Reply,
                     },
                 },
+                .mappedResultCount = 2,
             },
         });
     ControlServerHarness harness(runtime);

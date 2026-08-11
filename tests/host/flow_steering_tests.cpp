@@ -245,16 +245,17 @@ TEST(FlowSteeringTest, LpiRecognitionAttachesToExistingFlowEntryWithOrderedDedup
     ASSERT_NE(entry, nullptr);
     EXPECT_EQ(table.size(), 1U);
     EXPECT_EQ(entry->lpiRecognition.payloadPacketsSubmitted, 3U);
-    ASSERT_EQ(entry->lpiRecognition.mappedResults.size(), 2U);
-    EXPECT_EQ(entry->lpiRecognition.mappedResults[0].protocolId,
+    const auto mappedResults = entry->lpiRecognition.mappedResults();
+    ASSERT_EQ(mappedResults.size(), 2U);
+    EXPECT_EQ(mappedResults[0].protocolId,
               Protocol::ApplicationProtocolId::HTTP);
-    EXPECT_EQ(entry->lpiRecognition.mappedResults[0].firstPayloadPacketSequence, 1U);
-    EXPECT_EQ(entry->lpiRecognition.mappedResults[0].direction,
+    EXPECT_EQ(mappedResults[0].firstPayloadPacketSequence, 1U);
+    EXPECT_EQ(mappedResults[0].direction,
               FlowRelativeDirection::Orig);
-    EXPECT_EQ(entry->lpiRecognition.mappedResults[1].protocolId,
+    EXPECT_EQ(mappedResults[1].protocolId,
               Protocol::ApplicationProtocolId::QUIC);
-    EXPECT_EQ(entry->lpiRecognition.mappedResults[1].firstPayloadPacketSequence, 3U);
-    EXPECT_EQ(entry->lpiRecognition.mappedResults[1].direction,
+    EXPECT_EQ(mappedResults[1].firstPayloadPacketSequence, 3U);
+    EXPECT_EQ(mappedResults[1].direction,
               FlowRelativeDirection::Reply);
     EXPECT_EQ(table.counters().lpiPayloadPackets, 3U);
     EXPECT_EQ(table.counters().lpiMappedResults, 2U);

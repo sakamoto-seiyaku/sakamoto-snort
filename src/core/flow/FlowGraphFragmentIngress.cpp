@@ -68,13 +68,7 @@ FlowGraphIngressResult FlowGraphFragmentIngress::injectFacts(
     };
     if (result == GraphInjectionResult::Accepted
         && ingressResult.acceptedFacts.has_value()) {
-        ingressResult.lpiRecognition = lpiPipeline_.submitBeforeAdapterCompletion(
-            l3Packet, *ingressResult.acceptedFacts);
-        if (ingressResult.flowEntryObservation.has_value()
-            && ingressResult.lpiRecognition->stateAfterSubmit.has_value()) {
-            ingressResult.flowEntryObservation->lpiRecognition =
-                *ingressResult.lpiRecognition->stateAfterSubmit;
-        }
+        submitLpiRecognition(l3Packet, ingressResult);
     }
     return ingressResult;
 }
@@ -135,16 +129,26 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
     };
     if (result == GraphInjectionResult::Accepted
         && ingressResult.acceptedFacts.has_value()) {
-        ingressResult.lpiRecognition = lpiPipeline_.submitBeforeAdapterCompletion(
-            std::span<const std::byte>{fragment.packet},
-            *ingressResult.acceptedFacts);
-        if (ingressResult.flowEntryObservation.has_value()
-            && ingressResult.lpiRecognition->stateAfterSubmit.has_value()) {
-            ingressResult.flowEntryObservation->lpiRecognition =
-                *ingressResult.lpiRecognition->stateAfterSubmit;
-        }
+        submitLpiRecognition(
+            std::span<const std::byte>{fragment.packet}, ingressResult);
     }
     return ingressResult;
+}
+
+void FlowGraphFragmentIngress::submitLpiRecognition(
+    const std::span<const std::byte> l3Packet,
+    FlowGraphIngressResult &ingressResult) noexcept {
+    if (!ingressResult.acceptedFacts.has_value()) {
+        return;
+    }
+
+    ingressResult.lpiRecognition = lpiPipeline_.submitBeforeAdapterCompletion(
+        l3Packet, *ingressResult.acceptedFacts);
+    if (ingressResult.flowEntryObservation.has_value()
+        && ingressResult.lpiRecognition->stateAfterSubmit.has_value()) {
+        ingressResult.flowEntryObservation->lpiRecognition =
+            *ingressResult.lpiRecognition->stateAfterSubmit;
+    }
 }
 
 FlowGraphIngressResult FlowGraphFragmentIngress::processL3Packet(

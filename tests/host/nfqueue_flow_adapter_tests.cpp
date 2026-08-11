@@ -255,12 +255,13 @@ TEST(NfqueueFlowAdapterTest, LpiProviderFactUpdatesActivityBeforeAdapterCompleti
                     .has_value());
     EXPECT_EQ(*counters.allowedFlowActivity.lastLpiRecognition.latestExactResult(),
               Catalog::ApplicationProtocolId::HTTP);
-    ASSERT_EQ(counters.allowedFlowActivity.lastLpiRecognition.mappedResults.size(), 1U);
+    const auto mappedResults =
+        counters.allowedFlowActivity.lastLpiRecognition.mappedResults();
+    ASSERT_EQ(mappedResults.size(), 1U);
     EXPECT_EQ(
-        counters.allowedFlowActivity.lastLpiRecognition.mappedResults[0]
-            .firstPayloadPacketSequence,
+        mappedResults[0].firstPayloadPacketSequence,
         1U);
-    EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.mappedResults[0].direction,
+    EXPECT_EQ(mappedResults[0].direction,
               Flow::FlowRelativeDirection::Orig);
 }
 

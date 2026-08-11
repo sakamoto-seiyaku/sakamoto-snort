@@ -276,7 +276,7 @@ const char *flowRelativeDirectionName(
 
 const char *protocolRecognitionStateName(
     const SnortDatapath::Flow::LpiRecognitionState &state) noexcept {
-    if (state.payloadPacketsSubmitted == 0 && state.mappedResults.empty()
+    if (state.payloadPacketsSubmitted == 0 && state.mappedResultsEmpty()
         && state.terminalState
             == SnortDatapath::Flow::LpiRecognitionTerminalState::Detecting) {
         return "";
@@ -302,7 +302,7 @@ std::string applicationProtocolKeyString(
 std::string protocolRecognitionSequence(
     const SnortDatapath::Flow::LpiRecognitionState &state) {
     std::string out;
-    for (const auto &result : state.mappedResults) {
+    for (const auto &result : state.mappedResults()) {
         if (!out.empty()) {
             out += ",";
         }

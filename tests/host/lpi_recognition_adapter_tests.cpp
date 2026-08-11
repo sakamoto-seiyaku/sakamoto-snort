@@ -210,7 +210,7 @@ TEST(LpiRecognitionAdapterTest, LatestExactResultUpdatesAfterBoundedSequenceFull
     ASSERT_TRUE(state.has_value());
     ASSERT_TRUE(state->latestExactResult().has_value());
     EXPECT_EQ(*state->latestExactResult(), latestOnlyProtocol);
-    EXPECT_EQ(state->mappedResults.size(), Flow::LpiRecognitionState::kMaxMappedResults);
+    EXPECT_EQ(state->mappedResultCount, Flow::LpiRecognitionState::kMaxMappedResults);
 }
 
 class NoResultProvider final : public Protocol::LpiRecognitionProvider {
@@ -281,7 +281,7 @@ TEST(LpiRecognitionProviderTest, ProviderNoResultConsumesBudgetWithoutUnmappedRe
     const auto state = table.lpiRecognitionStateFor(packet);
     ASSERT_TRUE(state.has_value());
     EXPECT_EQ(state->payloadPacketsSubmitted, 1U);
-    EXPECT_TRUE(state->mappedResults.empty());
+    EXPECT_TRUE(state->mappedResultsEmpty());
 }
 
 TEST(LpiRecognitionProviderTest, NoResultProviderStopsAtInternalPayloadBudget) {
