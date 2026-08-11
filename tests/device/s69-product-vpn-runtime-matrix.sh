@@ -27,6 +27,8 @@ S69_PRODUCT_RESTART_CYCLES="${S69_PRODUCT_RESTART_CYCLES:-2}"
 S69_PRODUCT_CLEANUP_ON_EXIT="${S69_PRODUCT_CLEANUP_ON_EXIT:-1}"
 STATE_PATH="files/runtime-state/snapshot.properties"
 LOG_PATH="files/logs/runtime-service.log"
+VPN_HEV_LOG_PATH="files/profiles/vpn/vpp/logs/vpn-hev.log"
+VPN_HEV_PROTECT_LOG_PATH="files/profiles/vpn/vpp/logs/vpn-hev-protect.log"
 CONTROL_SOCKET="sucre-snort-control-vnext"
 
 mkdir -p "$RESULT_DIR"
@@ -238,6 +240,29 @@ PY
 kv "control.HELLO" "PASS"
 kv "control.VPN_TUN.STATUS" "PASS"
 kv "control.POLICY.STATUS" "PASS"
+
+section "protect_anti_loop"
+protect_ok=0
+for _ in $(seq 1 20); do
+  adb_cmd shell run-as "$PACKAGE" cat "$VPN_HEV_PROTECT_LOG_PATH" \
+    >"${RESULT_DIR}/vpn-hev-protect.log" 2>/dev/null || true
+  adb_cmd shell run-as "$PACKAGE" cat "$VPN_HEV_LOG_PATH" \
+    >"${RESULT_DIR}/vpn-hev.log" 2>/dev/null || true
+  if grep -Eq 'protect fd=[0-9]+ result=1' "${RESULT_DIR}/vpn-hev-protect.log" \
+      && grep -q 'protect callback enabled' "${RESULT_DIR}/vpn-hev.log"; then
+    protect_ok=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$protect_ok" != "1" ]]; then
+  kv "protect.result" "FAIL"
+  echo "missing product HEV VpnService.protect success evidence" >&2
+  exit 1
+fi
+kv "protect.callback" "PASS"
+kv "protect.fdResult" "PASS"
+kv "protect.result" "PASS"
 
 section "cleanup"
 adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true >"${RESULT_DIR}/stop.intent.log" 2>&1
