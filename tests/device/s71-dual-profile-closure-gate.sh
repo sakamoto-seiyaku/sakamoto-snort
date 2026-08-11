@@ -22,6 +22,16 @@ S71_RUN_HOST="${S71_RUN_HOST:-1}"
 S71_RUN_ROOT="${S71_RUN_ROOT:-1}"
 S71_RUN_VPN="${S71_RUN_VPN:-1}"
 S71_RUN_LIFECYCLE="${S71_RUN_LIFECYCLE:-1}"
+S71_APK_VARIANT="${S71_APK_VARIANT:-${ANDROID_RUNTIME_APK_VARIANT:-debug}}"
+case "$S71_APK_VARIANT" in
+  debug|release-candidate)
+    ;;
+  *)
+    echo "unsupported S71_APK_VARIANT: $S71_APK_VARIANT" >&2
+    exit 1
+    ;;
+esac
+export ANDROID_RUNTIME_APK_VARIANT="$S71_APK_VARIANT"
 
 mkdir -p "$RESULT_DIR"
 
@@ -134,6 +144,7 @@ kv "matrix" "SAKAMOTO-71-dual-profile-closure-gate"
 kv "resultDir" "${RESULT_DIR#${repo_root}/}"
 kv "adbWrapper" "./dev/adb"
 kv "device" "$(adb_target_desc)"
+kv "apkVariant" "$S71_APK_VARIANT"
 kv "s71Done" "not_claimed"
 
 if [[ "$S71_RUN_HOST" == "1" ]]; then

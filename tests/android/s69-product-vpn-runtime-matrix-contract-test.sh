@@ -17,6 +17,10 @@ if grep -Eq '(^|[[:space:]])adb([[:space:]]|$)|adb\.exe' "$matrix"; then
 fi
 
 grep -q 'com.sakamoto.snort.androidruntime' "$matrix"
+grep -q 'S69_APK_VARIANT' "$matrix"
+grep -q 'ANDROID_RUNTIME_APK_VARIANT' "$matrix"
+grep -q 'build-release-candidate-apk.sh' "$matrix"
+grep -q 'sakamoto-runtime-release-candidate.apk' "$matrix"
 grep -q 'runtimeStart true --es runtimeProfile vpn' "$matrix"
 grep -q 'adapterReadiness=vpn-tun-hev' "$matrix"
 grep -q 'localabstract:${CONTROL_SOCKET}' "$matrix"

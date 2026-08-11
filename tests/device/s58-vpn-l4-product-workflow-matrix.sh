@@ -18,7 +18,21 @@ ACTIVITY="${ACTIVITY:-${PACKAGE}/.DebugControlActivity}"
 RESULTS_ROOT="${RESULTS_ROOT:-${repo_root}/build-output/s58-vpn-l4-product-workflow-matrix}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 RESULT_DIR="${RESULT_DIR:-${RESULTS_ROOT}/${RUN_ID}}"
-APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk}"
+S58_APK_VARIANT="${S58_APK_VARIANT:-${ANDROID_RUNTIME_APK_VARIANT:-debug}}"
+case "$S58_APK_VARIANT" in
+  debug)
+    APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk}"
+    S58_BUILD_SCRIPT="${S58_BUILD_SCRIPT:-app/android-runtime/scripts/build-debug-apk.sh}"
+    ;;
+  release-candidate)
+    APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release-candidate.apk}"
+    S58_BUILD_SCRIPT="${S58_BUILD_SCRIPT:-app/android-runtime/scripts/build-release-candidate-apk.sh}"
+    ;;
+  *)
+    echo "unsupported S58_APK_VARIANT: $S58_APK_VARIANT" >&2
+    exit 1
+    ;;
+esac
 S58_BUILD_APK="${S58_BUILD_APK:-1}"
 S58_INSTALL_APK="${S58_INSTALL_APK:-1}"
 S58_FORWARD_PORT="${S58_FORWARD_PORT:-60658}"
@@ -391,14 +405,15 @@ kv "adbWrapper" "./dev/adb"
 kv "device" "$(adb_target_desc)"
 kv "package" "$PACKAGE"
 kv "activity" "$ACTIVITY"
+kv "apkVariant" "$S58_APK_VARIANT"
 kv "productActivityPrefillVpnEvidence" "claimed"
 kv "restoreAllowedFlowEntryEvidence" "claimed"
 
 section "build_install"
 if [[ "$S58_BUILD_APK" == "1" ]]; then
-  kv "build.command" "bash app/android-runtime/scripts/build-debug-apk.sh"
-  (cd "$repo_root" && bash app/android-runtime/scripts/build-debug-apk.sh) \
-    >"${RESULT_DIR}/build-debug-apk.log" 2>&1
+  kv "build.command" "bash $S58_BUILD_SCRIPT"
+  (cd "$repo_root" && bash "$S58_BUILD_SCRIPT") \
+    >"${RESULT_DIR}/build-apk.log" 2>&1
   kv "build.result" "PASS"
 fi
 [[ -f "$APK" ]] || {

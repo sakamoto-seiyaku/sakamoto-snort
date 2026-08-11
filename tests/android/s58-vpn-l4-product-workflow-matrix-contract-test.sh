@@ -17,6 +17,10 @@ fi
 
 grep -q 'export ADB="${repo_root}/dev/adb"' "$matrix"
 grep -q 'SAKAMOTO-58-vpn-l4-product-workflow' "$matrix"
+grep -q 'S58_APK_VARIANT' "$matrix"
+grep -q 'ANDROID_RUNTIME_APK_VARIANT' "$matrix"
+grep -q 'build-release-candidate-apk.sh' "$matrix"
+grep -q 'sakamoto-runtime-release-candidate.apk' "$matrix"
 grep -q 'debugSetL4RuleSubject' "$matrix"
 grep -q 'debugSetL4RuleDestinationCidr' "$matrix"
 grep -q 'debugSetL4RuleAction' "$matrix"
