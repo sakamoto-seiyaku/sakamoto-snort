@@ -30,10 +30,13 @@ S59_TRAFFIC_PORT="${S59_TRAFFIC_PORT:-80}"
 S59_TRAFFIC_TIMEOUT_MILLIS="${S59_TRAFFIC_TIMEOUT_MILLIS:-1500}"
 S59_DOWNLOAD_BYTES="${S59_DOWNLOAD_BYTES:-500000}"
 S59_DOWNLOAD_TIMEOUT_SEC="${S59_DOWNLOAD_TIMEOUT_SEC:-20}"
+S59_DOWNLOAD_URL="${S59_DOWNLOAD_URL:-https://speed.cloudflare.com/__down?bytes=${S59_DOWNLOAD_BYTES}}"
+S59_THROUGHPUT_TXN_COUNT="${S59_THROUGHPUT_TXN_COUNT:-10}"
 S59_FORWARD_PORT="${S59_FORWARD_PORT:-60659}"
 S59_CLEANUP_ON_EXIT="${S59_CLEANUP_ON_EXIT:-1}"
 STATE_PATH="files/runtime-state/snapshot.properties"
 PROBE_RESULT_PATH="files/debug/traffic-probe.properties"
+DOWNLOAD_RESULT_PATH="files/debug/download-probe.properties"
 
 mkdir -p "$RESULT_DIR"
 if [[ "${S59_BUDGET_LOGGING:-0}" != "1" ]]; then
@@ -51,13 +54,6 @@ section() {
 
 now_ms() {
   date +%s%3N
-}
-
-adb_shell() {
-  local command="$1"
-  local quoted
-  quoted="$(shell_single_quote "$command")"
-  adb_cmd shell "sh -c $quoted"
 }
 
 read_snapshot() {
@@ -278,6 +274,10 @@ read_probe_result() {
   adb_cmd shell run-as "$PACKAGE" cat "$PROBE_RESULT_PATH" 2>/dev/null | tr -d '\r' || true
 }
 
+read_download_result() {
+  adb_cmd shell run-as "$PACKAGE" cat "$DOWNLOAD_RESULT_PATH" 2>/dev/null | tr -d '\r' || true
+}
+
 run_workflow_latency_probes() {
   local profile="$1"
   local out_dir="$2"
@@ -330,51 +330,84 @@ print(f"{profile}.workflowLatency.p99Ms={pct(99)}")
 PY
 }
 
-detect_downloader() {
-  if adb_shell "command -v curl >/dev/null 2>&1"; then
-    printf '%s\n' "curl"
-    return 0
+run_tcp_transaction_rate() {
+  local profile="$1"
+  local out_dir="$2"
+  local result_file="${out_dir}/throughput-txn-probe-results.properties"
+  local i start_ms end_ms elapsed_ms result code successes=0 failures=0
+  : >"$result_file"
+  start_ms="$(now_ms)"
+  for i in $(seq 1 "$S59_THROUGHPUT_TXN_COUNT"); do
+    adb_cmd shell run-as "$PACKAGE" rm -f "$PROBE_RESULT_PATH" >/dev/null 2>&1 || true
+    adb_cmd shell am start -n "$ACTIVITY" \
+      --ez debugTraffic true \
+      --es debugTrafficHost "$S59_TRAFFIC_HOST" \
+      --ei debugTrafficPort "$S59_TRAFFIC_PORT" \
+      --ei debugTrafficTimeoutMillis "$S59_TRAFFIC_TIMEOUT_MILLIS" \
+      >"${out_dir}/throughput-txn-${i}.intent.log" 2>&1
+    result=""
+    for _ in $(seq 1 20); do
+      result="$(read_probe_result)"
+      if grep -q '^result=' <<<"$result"; then
+        break
+      fi
+      sleep 0.2
+    done
+    code="$(printf '%s\n' "$result" | snapshot_value_from result || true)"
+    if [[ "$code" == "tcp_connect_succeeded" ]]; then
+      successes=$((successes + 1))
+    else
+      failures=$((failures + 1))
+    fi
+    {
+      printf 'probe.%s.result=%s\n' "$i" "${code:-missing}"
+      printf '%s\n' "$result" | sed "s/^/probe.${i}./"
+    } >>"$result_file"
+  done
+  end_ms="$(now_ms)"
+  elapsed_ms=$((end_ms - start_ms))
+  if [[ "$elapsed_ms" -le 0 ]]; then
+    elapsed_ms=1
   fi
-  if adb_shell "command -v wget >/dev/null 2>&1"; then
-    printf '%s\n' "wget"
-    return 0
-  fi
-  return 1
-}
-
-run_download() {
-  local tool="$1"
-  local url="$2"
-  local command=""
-  case "$tool" in
-    curl)
-      command="timeout $S59_DOWNLOAD_TIMEOUT_SEC curl -L -o /dev/null -sS \"$url\""
-      ;;
-    wget)
-      command="timeout $S59_DOWNLOAD_TIMEOUT_SEC wget -O /dev/null -q \"$url\""
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-  adb_shell "$command" >/dev/null 2>&1
+  python3 - "$successes" "$failures" "$elapsed_ms" <<'PY'
+import sys
+successes, failures, elapsed_ms = map(int, sys.argv[1:])
+tps = successes / max(0.001, elapsed_ms / 1000.0)
+print("result=txn_rate_recorded")
+print(f"attempts={successes + failures}")
+print(f"successes={successes}")
+print(f"failures={failures}")
+print(f"elapsedMs={elapsed_ms}")
+print(f"tps={tps:.2f}")
+PY
 }
 
 run_nominal_throughput() {
   local profile="$1"
   local pid="$2"
   local out_dir="$3"
-  local tool url start_ms end_ms elapsed_ms ticks0 ticks1 rss
-  if ! tool="$(detect_downloader)"; then
-    kv "${profile}.throughput.result" "UNAVAILABLE_NO_DOWNLOADER"
-    return 0
-  fi
-  url="https://speed.cloudflare.com/__down?bytes=${S59_DOWNLOAD_BYTES}"
+  local start_ms end_ms elapsed_ms ticks0 ticks1 rss result txn_result
   ticks0="$(proc_ticks "$pid")"
   start_ms="$(now_ms)"
-  if ! run_download "$tool" "$url"; then
-    kv "${profile}.throughput.result" "UNAVAILABLE_DOWNLOAD_FAILED"
-    return 0
+  adb_cmd shell run-as "$PACKAGE" rm -f "$DOWNLOAD_RESULT_PATH" >/dev/null 2>&1 || true
+  adb_cmd shell am start -n "$ACTIVITY" \
+    --ez debugDownload true \
+    --es debugDownloadUrl "$S59_DOWNLOAD_URL" \
+    --ei debugDownloadTimeoutMillis "$((S59_DOWNLOAD_TIMEOUT_SEC * 1000))" \
+    --ei debugDownloadMaxBytes "$S59_DOWNLOAD_BYTES" \
+    >"${out_dir}/download-probe.intent.log" 2>&1
+  result=""
+  for _ in $(seq 1 "$((S59_DOWNLOAD_TIMEOUT_SEC * 5 + 10))"); do
+    result="$(read_download_result)"
+    if grep -q '^result=' <<<"$result"; then
+      break
+    fi
+    sleep 0.2
+  done
+  txn_result=""
+  if ! grep -q '^result=download_succeeded$' <<<"$result"; then
+    txn_result="$(run_tcp_transaction_rate "$profile" "$out_dir")"
+    printf '%s\n' "$txn_result" >"${out_dir}/throughput-txn.properties"
   fi
   end_ms="$(now_ms)"
   ticks1="$(proc_ticks "$pid")"
@@ -383,20 +416,44 @@ run_nominal_throughput() {
     elapsed_ms=1
   fi
   rss="$(proc_rss_kb "$pid")"
-  python3 - "$profile" "$S59_DOWNLOAD_BYTES" "$elapsed_ms" "$ticks0" "$ticks1" "$(clk_tck)" <<'PY'
+  printf '%s\n' "$result" >"${out_dir}/download-probe.properties"
+  python3 - "$profile" "$elapsed_ms" "$ticks0" "$ticks1" "$(clk_tck)" "$result" "$txn_result" <<'PY'
 import sys
-profile, b, ms, t0, t1, hz = sys.argv[1:]
-b = int(b)
+profile, ms, t0, t1, hz, raw, raw_txn = sys.argv[1:]
 ms = max(1, int(ms))
 t0 = float(t0 or 0)
 t1 = float(t1 or 0)
 hz = float(hz or 100)
-mbps = (b * 8.0) / (ms / 1000.0) / 1_000_000.0
+props = {}
+for line in raw.splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        props[key] = value
+txn = {}
+for line in raw_txn.splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        txn[key] = value
 cpu_pct = max(0.0, (t1 - t0) * 100.0 / max(1.0, hz * (ms / 1000.0)))
-print(f"{profile}.throughput.result=RECORDED")
-print(f"{profile}.throughput.bytes={b}")
-print(f"{profile}.throughput.elapsedMs={ms}")
-print(f"{profile}.throughput.mbps={mbps:.2f}")
+result = props.get("result", "")
+if result == "download_succeeded":
+    print(f"{profile}.throughput.result=RECORDED_APP_DOWNLOAD")
+    print(f"{profile}.throughput.bytes={props.get('bytes', '0')}")
+    print(f"{profile}.throughput.elapsedMs={props.get('elapsedMs', str(ms))}")
+    print(f"{profile}.throughput.mbps={props.get('mbps', '0.00')}")
+elif txn.get("result") == "txn_rate_recorded":
+    print(f"{profile}.throughput.result=RECORDED_APP_TCP_CONNECT_TXN_RATE")
+    print(f"{profile}.throughput.txnAttempts={txn.get('attempts', '0')}")
+    print(f"{profile}.throughput.txnSuccesses={txn.get('successes', '0')}")
+    print(f"{profile}.throughput.txnFailures={txn.get('failures', '0')}")
+    print(f"{profile}.throughput.elapsedMs={txn.get('elapsedMs', str(ms))}")
+    print(f"{profile}.throughput.tps={txn.get('tps', '0.00')}")
+    print(f"{profile}.throughput.downloadFallback={props.get('message', 'download_failed')}")
+else:
+    print(f"{profile}.throughput.result=UNAVAILABLE_APP_DOWNLOAD_FAILED")
+    print(f"{profile}.throughput.bytes={props.get('bytes', '0')}")
+    print(f"{profile}.throughput.elapsedMs={props.get('elapsedMs', str(ms))}")
+    print(f"{profile}.throughput.message={props.get('message', 'missing_download_result')}")
 print(f"{profile}.active.cpuPct={cpu_pct:.2f}")
 PY
   kv "${profile}.active.rssKb" "${rss:-0}"
@@ -461,7 +518,7 @@ kv "package" "$PACKAGE"
 kv "activity" "$ACTIVITY"
 kv "releaseStatus" "debug_apk_budget_probe_only"
 kv "workflowLatency" "p50/p95/p99_ms"
-kv "nominalThroughput" "cloudflare_download_mbps"
+kv "nominalThroughput" "app_debug_download_mbps"
 kv "cpuRss" "idle_and_download_active_proc_ticks_rss"
 kv "thermal" "dumpsys_thermalservice_before_after"
 kv "shutdownDrain" "runtimeStop_to_stopped_snapshot_ms"

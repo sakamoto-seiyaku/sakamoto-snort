@@ -127,11 +127,11 @@ must not treat `TBD` as pass.
 | Budget | Required record | Current status |
 | --- | --- | --- |
 | Latency | p50/p95/p99 verdict or workflow latency per profile | Current S59 debug workflow probe present; release APK rerun required |
-| Throughput | Root and VPN nominal throughput / transaction rate | Probe attempted; device downloader unavailable; release measurement TBD |
+| Throughput | Root and VPN nominal throughput / transaction rate | Current S59 debug app download / transaction-rate probe present; release APK rerun required |
 | Drop | policy drop counters and unintended drop counters | S52/S55/S58 plus S59 debug probe counters present |
 | Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | S59 debug Activity capacity/eviction probe present; queue/flow high-watermark TBD |
 | Corrective handoff | owner mismatch / corrective handoff counters | S59 debug owner-fault / owner-guard counters present; release rollup TBD |
-| CPU/RSS | idle and active CPU/RSS per profile | S59 debug idle CPU/RSS present; active throughput CPU blocked by downloader |
+| CPU/RSS | idle and active CPU/RSS per profile | S59 debug idle and active CPU/RSS present; release APK rerun required |
 | Screen-off power | screen-off idle power or proxy budget | TBD |
 | Thermal | thermal status before/after release workload | S59 debug thermal before/after status present; release workload rerun required |
 | Shutdown drain release | bounded drain and resource release timing | S59 debug stop-to-stopped timing present; release threshold TBD |
@@ -146,26 +146,33 @@ Current measurement entry:
 
 Latest debug budget probe:
 
-- Result directory: `build-output/s59-release-budget-probe/20260811-170138`.
+- Result directory: `build-output/s59-release-budget-probe/20260811-171433`.
 - Device: Google Pixel 6a (`28201JEGR0XPAJ`), Android 16 / SDK 36,
   arm64-v8a.
 - APK: `app/android-runtime/build/outputs/sakamoto-runtime-debug.apk`,
-  SHA-256 `4c131c5f15e4ee8935e16cdd2d97e6e2831887d3193de8b9c7e58231dd4b017d`.
-- Root workflow latency: samples `3`, p50 `632 ms`, p95 `659 ms`,
-  p99 `659 ms`.
-- VPN workflow latency: samples `3`, p50 `597 ms`, p95 `627 ms`,
-  p99 `627 ms`.
-- CPU/RSS idle sample: Root `1.00% / 37528 KiB`, VPN `4.00% / 37044 KiB`.
+  SHA-256 `a4b91f199c0b0f16f053f767fead959935117fee6b0e9cba6a0ea91b855c6317`.
+- Root workflow latency: samples `3`, p50 `353 ms`, p95 `609 ms`,
+  p99 `609 ms`.
+- VPN workflow latency: samples `3`, p50 `289 ms`, p95 `616 ms`,
+  p99 `616 ms`.
+- Throughput / transaction rate: Root `RECORDED_APP_DOWNLOAD`,
+  `500000` bytes in `875 ms`, `4.00 Mbps`; VPN
+  `RECORDED_APP_TCP_CONNECT_TXN_RATE`, `9/10` successful TCP-connect
+  transactions over `7359 ms`, `1.22 tps`, with app download fallback
+  reason `Connection reset`.
+- CPU/RSS idle sample: Root `1.00% / 37432 KiB`, VPN `4.00% / 37376 KiB`.
+- CPU/RSS active sample: Root `7.63% / 37440 KiB`, VPN `1.85% / 37380 KiB`.
 - Adapter counters: Root `droppedPackets=0`, `ownerFaultPassThroughPackets=0`;
   VPN `droppedPackets=0`, `ownerGuardMismatches=0`,
   `transportFailedPackets=0`.
-- Activity capacity: Root allowed activity `8/8` with `14` evictions; VPN
-  allowed activity `8/8` with `10` evictions; drop activity `0/8` for both.
+- Activity capacity: Root allowed activity `8/8` with `729` evictions; VPN
+  allowed activity `8/8` with `92` evictions; drop activity `0/8` for both.
 - Thermal status: Root `0 -> 0`; VPN `0 -> 0`.
-- Shutdown drain: Root `4748 ms`; VPN `3730 ms`.
-- Throughput: `UNAVAILABLE_NO_DOWNLOADER` for both profiles because the device
-  image did not expose `curl` or `wget`; this keeps throughput as a blocking
-  release-budget gap.
+- Shutdown drain: Root `4860 ms`; VPN `2539 ms`.
+- Throughput note: VPN app download still returned `Connection reset`, so this
+  run records transaction-rate fallback rather than nominal download Mbps for
+  VPN. Final release approval still needs a release-APK rerun and explicit
+  pass/fail thresholds.
 
 Minimum release rule: every budget row must have a measurement source, result
 directory, date, device, and pass/fail decision before S59 can close.

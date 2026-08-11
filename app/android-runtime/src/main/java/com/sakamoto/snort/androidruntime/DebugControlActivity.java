@@ -27,8 +27,10 @@ import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.List;
 import java.net.InetSocketAddress;
+import java.net.HttpURLConnection;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URL;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -57,6 +59,11 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_DEBUG_TRAFFIC_SOURCE_PORT = "debugTrafficSourcePort";
     private static final String EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS =
             "debugTrafficTimeoutMillis";
+    private static final String EXTRA_DEBUG_DOWNLOAD = "debugDownload";
+    private static final String EXTRA_DEBUG_DOWNLOAD_URL = "debugDownloadUrl";
+    private static final String EXTRA_DEBUG_DOWNLOAD_TIMEOUT_MILLIS =
+            "debugDownloadTimeoutMillis";
+    private static final String EXTRA_DEBUG_DOWNLOAD_MAX_BYTES = "debugDownloadMaxBytes";
     private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
     private static final String EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY =
             "debugL4PrefillFromActivity";
@@ -106,6 +113,8 @@ public class DebugControlActivity extends Activity {
             "debugSetL4RuleOrder";
     private static final String DEBUG_TRAFFIC_PROBE_RESULT_PATH =
             "debug/traffic-probe.properties";
+    private static final String DEBUG_DOWNLOAD_PROBE_RESULT_PATH =
+            "debug/download-probe.properties";
     private static final String DEBUG_L4_PREFILL_RESULT_PATH =
             "debug/l4-prefill.properties";
     private static final String DEBUG_RELEASE_DIAGNOSTICS_RESULT_PATH =
@@ -113,6 +122,10 @@ public class DebugControlActivity extends Activity {
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
     private static final int DEBUG_TRAFFIC_PORT = 80;
     private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
+    private static final String DEBUG_DOWNLOAD_URL =
+            "https://speed.cloudflare.com/__down?bytes=500000";
+    private static final int DEBUG_DOWNLOAD_TIMEOUT_MILLIS = 20000;
+    private static final int DEBUG_DOWNLOAD_MAX_BYTES = 500000;
     private static final int DEBUG_LISTEN_PORT = 18080;
     private static final int DEBUG_LISTEN_TIMEOUT_MILLIS = 5000;
     private static final String CONTROL_SOCKET_NAME = "sucre-snort-control-vnext";
@@ -205,6 +218,22 @@ public class DebugControlActivity extends Activity {
             final int probeTimeoutMillis = timeoutMillis;
             main.post(() -> runDebugTrafficProbe(
                     probeHost, probePort, probeSourcePort, probeTimeoutMillis));
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_DOWNLOAD, false)) {
+            String url = intent.getStringExtra(EXTRA_DEBUG_DOWNLOAD_URL);
+            if (url == null || url.isEmpty()) {
+                url = DEBUG_DOWNLOAD_URL;
+            }
+            int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
+                    EXTRA_DEBUG_DOWNLOAD_TIMEOUT_MILLIS, DEBUG_DOWNLOAD_TIMEOUT_MILLIS),
+                    DEBUG_DOWNLOAD_TIMEOUT_MILLIS);
+            int maxBytes = boundedDownloadBytes(intent.getIntExtra(
+                    EXTRA_DEBUG_DOWNLOAD_MAX_BYTES, DEBUG_DOWNLOAD_MAX_BYTES));
+            final String downloadUrl = url;
+            final int downloadTimeoutMillis = timeoutMillis;
+            final int downloadMaxBytes = maxBytes;
+            main.post(() -> runDebugDownloadProbe(
+                    downloadUrl, downloadTimeoutMillis, downloadMaxBytes));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_LISTEN, false)) {
             int port = boundedPort(intent.getIntExtra(
@@ -900,6 +929,21 @@ public class DebugControlActivity extends Activity {
         probe.start();
     }
 
+    private void runDebugDownloadProbe(String url, int timeoutMillis, int maxBytes) {
+        action("Debug download probe requested.");
+        Thread probe = new Thread(() -> {
+            DebugDownloadProbeResult result =
+                    runDebugDownloadProbeBlocking(url, timeoutMillis, maxBytes);
+            writeDebugDownloadProbeResult(url, timeoutMillis, maxBytes, result);
+            final String display = result.result.equals("download_succeeded")
+                    ? "Debug download probe read " + result.bytes + " bytes in "
+                    + result.elapsedMillis + " ms."
+                    : "Debug download probe failed: " + result.message;
+            main.post(() -> action(display));
+        }, "sakamoto-debug-download");
+        probe.start();
+    }
+
     private void runDebugTrafficListener(int port, int timeoutMillis) {
         action("Debug traffic listener requested on 0.0.0.0:" + port + ".");
         Thread listener = new Thread(() -> {
@@ -1034,6 +1078,52 @@ public class DebugControlActivity extends Activity {
         }
     }
 
+    private DebugDownloadProbeResult runDebugDownloadProbeBlocking(
+            String urlText, int timeoutMillis, int maxBytes) {
+        long startNanos = System.nanoTime();
+        int bytes = 0;
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(urlText);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(true);
+            connection.setConnectTimeout(timeoutMillis);
+            connection.setReadTimeout(timeoutMillis);
+            connection.setRequestProperty("User-Agent", "sakamoto-debug-download-probe");
+            connection.connect();
+            byte[] buffer = new byte[8192];
+            try (InputStream in = connection.getInputStream()) {
+                while (bytes < maxBytes) {
+                    int limit = Math.min(buffer.length, maxBytes - bytes);
+                    int read = in.read(buffer, 0, limit);
+                    if (read < 0) {
+                        break;
+                    }
+                    bytes += read;
+                }
+            }
+            long elapsedMillis = Math.max(1L, (System.nanoTime() - startNanos) / 1_000_000L);
+            if (bytes <= 0) {
+                return new DebugDownloadProbeResult(
+                        "download_failed", bytes, elapsedMillis, "no_bytes_read");
+            }
+            return new DebugDownloadProbeResult(
+                    "download_succeeded", bytes, elapsedMillis, "ok");
+        } catch (IOException error) {
+            long elapsedMillis = Math.max(1L, (System.nanoTime() - startNanos) / 1_000_000L);
+            return new DebugDownloadProbeResult(
+                    "download_failed", bytes, elapsedMillis, boundedError(error));
+        } catch (RuntimeException error) {
+            long elapsedMillis = Math.max(1L, (System.nanoTime() - startNanos) / 1_000_000L);
+            return new DebugDownloadProbeResult(
+                    "download_failed", bytes, elapsedMillis, error.getClass().getSimpleName());
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
     private void writeDebugTrafficProbeResult(
             String host, int port, int sourcePort, int timeoutMillis, String result) {
         File file = new File(getFilesDir(), DEBUG_TRAFFIC_PROBE_RESULT_PATH);
@@ -1049,6 +1139,31 @@ public class DebugControlActivity extends Activity {
                 + "uid=" + android.os.Process.myUid() + "\n"
                 + "result=" + propertyValue(resultCode) + "\n"
                 + "message=" + propertyValue(result) + "\n";
+        try (FileOutputStream out = new FileOutputStream(file, false)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            // Debug evidence must never change product control behavior.
+        }
+    }
+
+    private void writeDebugDownloadProbeResult(
+            String url, int timeoutMillis, int maxBytes, DebugDownloadProbeResult result) {
+        File file = new File(getFilesDir(), DEBUG_DOWNLOAD_PROBE_RESULT_PATH);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            return;
+        }
+        double mbps = (result.bytes * 8.0)
+                / Math.max(1.0, result.elapsedMillis / 1000.0) / 1_000_000.0;
+        String text = "url=" + propertyValue(url) + "\n"
+                + "timeoutMillis=" + timeoutMillis + "\n"
+                + "maxBytes=" + maxBytes + "\n"
+                + "uid=" + android.os.Process.myUid() + "\n"
+                + "result=" + propertyValue(result.result) + "\n"
+                + "bytes=" + result.bytes + "\n"
+                + "elapsedMs=" + result.elapsedMillis + "\n"
+                + "mbps=" + String.format(java.util.Locale.US, "%.2f", mbps) + "\n"
+                + "message=" + propertyValue(result.message) + "\n";
         try (FileOutputStream out = new FileOutputStream(file, false)) {
             out.write(text.getBytes(StandardCharsets.UTF_8));
         } catch (IOException ignored) {
@@ -1113,6 +1228,13 @@ public class DebugControlActivity extends Activity {
 
     private static String propertyValue(String value) {
         return value == null ? "" : value.replace("\r", "\\r").replace("\n", "\\n");
+    }
+
+    private int boundedDownloadBytes(int candidate) {
+        if (candidate < 1024 || candidate > 20_000_000) {
+            return DEBUG_DOWNLOAD_MAX_BYTES;
+        }
+        return candidate;
     }
 
     private String runDebugTrafficListenerBlocking(int port, int timeoutMillis) {
@@ -1367,5 +1489,19 @@ public class DebugControlActivity extends Activity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private static final class DebugDownloadProbeResult {
+        final String result;
+        final int bytes;
+        final long elapsedMillis;
+        final String message;
+
+        DebugDownloadProbeResult(String result, int bytes, long elapsedMillis, String message) {
+            this.result = result;
+            this.bytes = bytes;
+            this.elapsedMillis = elapsedMillis;
+            this.message = message;
+        }
     }
 }
