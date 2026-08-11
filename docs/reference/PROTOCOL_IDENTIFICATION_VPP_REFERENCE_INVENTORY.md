@@ -336,12 +336,17 @@ Repo-local host synthetic payload probe evidence:
 - scope:
   compiles, links, and runs `stellar_lpi_core.c + stellar_lpi_extend.c` with
   the vendored base libprotoident host source set, then submits synthetic
-  application payload bytes through the wrapper lifecycle.
+  application payload bytes through the wrapper lifecycle and the current
+  Sakamoto `LpiRecognitionPipeline -> LpiRecognitionAdapter -> BoundedFlowTable`
+  seam.
 - observed cases:
   HTTP -> fork-local `appid=67` / `HTTP` / `lpi:http` / `stopDetect=1`;
   DNS -> fork-local `appid=32` / `DNS` / `lpi:dns` / `stopDetect=1`;
   SOCKS5 -> fork-local `appid=8005` / `SOCKS` / `lpi:socks` /
   `stopDetect=0`.
+- observed Sakamoto seam results:
+  `lpi:http` maps to HTTP, `lpi:dns` maps to DNS, and `lpi:socks` remains an
+  unmapped provider result while still consuming one bounded payload packet.
 - policy:
   `policy.copiesSourceIntoRepo=false`,
   `policy.copiesPcapIntoRepo=false`,
@@ -351,8 +356,9 @@ Repo-local host synthetic payload probe evidence:
   `policy.protocolRuleDecision=false`.
 
 This closes a runtime-smoke unknown for the extractable wrapper candidate on
-synthetic payload bytes. It still does not prove PCAP corpus replay accuracy,
-Android Root/VPN provider behavior, provider-source acceptability, or
+synthetic payload bytes and proves the current seam can consume the wrapper's
+provider aliases. It still does not prove PCAP corpus replay accuracy, Android
+Root/VPN provider behavior, provider-source acceptability, corpus rights, or
 ProtocolRule enforcement readiness.
 
 Therefore the next S61 implementation step should not start from protocol rule

@@ -143,8 +143,9 @@ project(stellar_lpi_wrapper_host_payload_probe LANGUAGES C CXX)
 set(VPP_REFERENCE_ROOT "" CACHE PATH "Path to the modified VPP reference root")
 set(VPP_STELLAR_LPI_ROOT "" CACHE PATH "Path to the reference stellar_lpi wrapper root")
 set(LIBPROTOIDENT_SOURCE_ROOT "" CACHE PATH "Path to the reference libprotoident source root")
+set(REPO_ROOT "" CACHE PATH "Path to the Sakamoto repo root")
 
-foreach(required_dir IN ITEMS VPP_REFERENCE_ROOT VPP_STELLAR_LPI_ROOT LIBPROTOIDENT_SOURCE_ROOT)
+foreach(required_dir IN ITEMS VPP_REFERENCE_ROOT VPP_STELLAR_LPI_ROOT LIBPROTOIDENT_SOURCE_ROOT REPO_ROOT)
   if(NOT IS_DIRECTORY "${${required_dir}}")
     message(FATAL_ERROR "${required_dir} is not a directory: ${${required_dir}}")
   endif()
@@ -204,29 +205,68 @@ set_target_properties(stellar_lpi_wrapper_probe PROPERTIES
 )
 target_link_libraries(stellar_lpi_wrapper_probe PUBLIC libprotoident_probe)
 
+add_library(sakamoto_lpi_pipeline_probe STATIC
+  "${REPO_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${REPO_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${REPO_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
+)
+target_include_directories(sakamoto_lpi_pipeline_probe PUBLIC
+  "${REPO_ROOT}/src"
+  "${REPO_ROOT}/src/core/flow"
+  "${REPO_ROOT}/src/core/protocol"
+)
+target_compile_features(sakamoto_lpi_pipeline_probe PUBLIC cxx_std_20)
+target_compile_options(sakamoto_lpi_pipeline_probe PRIVATE
+  -Wall
+  -Wextra
+  -Wpedantic
+  -Werror
+  -Wno-missing-field-initializers
+)
+
 add_executable(stellar_lpi_wrapper_host_payload_probe main.cpp)
-target_compile_features(stellar_lpi_wrapper_host_payload_probe PRIVATE cxx_std_17)
-target_link_libraries(stellar_lpi_wrapper_host_payload_probe PRIVATE stellar_lpi_wrapper_probe)
+target_compile_features(stellar_lpi_wrapper_host_payload_probe PRIVATE cxx_std_20)
+target_link_libraries(
+  stellar_lpi_wrapper_host_payload_probe
+  PRIVATE
+    stellar_lpi_wrapper_probe
+    sakamoto_lpi_pipeline_probe
+)
 CMAKE
 
 cat >"$generated_source_dir/main.cpp" <<'CPP'
+#include <core/flow/FlowSteering.hpp>
+#include <core/protocol/ApplicationProtocolCatalog.hpp>
+#include <core/protocol/LpiRecognitionProvider.hpp>
+
 #include "stellar_lpi_core.h"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
+
+namespace Catalog = sucre::protocol;
+namespace Flow = SnortDatapath::Flow;
+namespace Protocol = SnortDatapath::Protocol;
 
 struct DetectionCase {
     std::string key;
     std::string expected_name;
     int expected_appid;
+    std::optional<Catalog::ApplicationProtocolId> expected_sakamoto_protocol;
     bool current_is_s2c_flow;
     std::uint16_t client_port;
     std::uint16_t server_port;
@@ -297,6 +337,57 @@ private:
     return "lpi:" + app_name;
 }
 
+[[nodiscard]] std::uint32_t transportHeaderBytesFor(
+    const DetectionCase &test_case) noexcept {
+    return test_case.trans_proto == 17 ? 8U : 20U;
+}
+
+[[nodiscard]] Flow::PacketFacts packetFactsFor(
+    const DetectionCase &test_case) noexcept {
+    const auto transport_header_bytes = transportHeaderBytesFor(test_case);
+    const auto payload_offset = 20U + transport_header_bytes;
+    const auto total_length =
+        payload_offset + static_cast<std::uint32_t>(test_case.payload.size());
+
+    return Flow::PacketFacts{
+        .source = Flow::IpAddress::v4({10, 61, 0, 1}),
+        .destination = Flow::IpAddress::v4({198, 51, 100, 61}),
+        .ipProtocol = test_case.trans_proto,
+        .sourcePort = test_case.client_port,
+        .destinationPort = test_case.server_port,
+        .portsAvailable = true,
+        .fragmented = false,
+        .parseStatus = Flow::ParseStatus::Ready,
+        .deviceDirection = Flow::DevicePacketDirection::Output,
+        .originalLength = total_length,
+        .boundedPrefixLength = total_length,
+        .transportPayloadOffset = payload_offset,
+        .transportPayloadLength =
+            static_cast<std::uint32_t>(test_case.payload.size()),
+        .domain = Flow::FlowDomain{
+            .adapter = Flow::AdapterKind::RootNfqueue,
+            .linuxUid = 10061,
+            .uidKnown = true,
+            .captureQueue = 7,
+            .networkContext = 61,
+            .runtimeProfile = 1,
+            .interfaceIndex = 3,
+        },
+    };
+}
+
+[[nodiscard]] std::vector<std::byte> l3PacketFor(
+    const DetectionCase &test_case) {
+    const auto facts = packetFactsFor(test_case);
+    std::vector<std::byte> packet(
+        facts.transportPayloadOffset + test_case.payload.size());
+    for (std::size_t index = 0; index < test_case.payload.size(); ++index) {
+        packet[facts.transportPayloadOffset + index] =
+            static_cast<std::byte>(test_case.payload[index]);
+    }
+    return packet;
+}
+
 [[nodiscard]] bool runCase(Detector &detector, const DetectionCase &test_case) {
     Context context(test_case);
     if (context.get() == nullptr) {
@@ -329,20 +420,150 @@ private:
     return passed;
 }
 
+class WrapperProvider final : public Protocol::LpiRecognitionProvider {
+public:
+    [[nodiscard]] bool available() const noexcept override {
+        return detector_.get() != nullptr;
+    }
+
+    [[nodiscard]] std::string_view providerName() const noexcept override {
+        return "backup-vpp-stellar-lpi-wrapper";
+    }
+
+    [[nodiscard]] std::optional<Protocol::LpiProviderFact> recognize(
+        const Protocol::LpiPacketSubmission &submission) noexcept override {
+        if (detector_.get() == nullptr || submission.transportPayload.empty()) {
+            return std::nullopt;
+        }
+
+        const DetectionCase request{
+            .key = "pipeline",
+            .expected_name = {},
+            .expected_appid = 0,
+            .expected_sakamoto_protocol = std::nullopt,
+            .current_is_s2c_flow = false,
+            .client_port = submission.facts.sourcePort,
+            .server_port = submission.facts.destinationPort,
+            .trans_proto = submission.facts.ipProtocol,
+            .payload = {},
+        };
+        Context context(request);
+        if (context.get() == nullptr) {
+            return std::nullopt;
+        }
+
+        const auto *payload = reinterpret_cast<const char *>(
+            submission.transportPayload.data());
+        const auto payload_size = submission.transportPayload.size();
+        if (payload_size > static_cast<std::size_t>(
+                std::numeric_limits<unsigned int>::max())) {
+            return std::nullopt;
+        }
+
+        lpi_detect_context_update(
+            context.get(),
+            payload,
+            static_cast<unsigned int>(payload_size),
+            false);
+
+        unsigned int stop_detect = 0;
+        const int appid = lpi_detect(
+            detector_.get(), context.get(), payload, payload_size, &stop_detect);
+        const char *raw_name =
+            appid > 0 ? lpi_appid2name(detector_.get(), appid) : nullptr;
+        if (raw_name == nullptr || raw_name[0] == '\0') {
+            return std::nullopt;
+        }
+
+        latest_alias_ = aliasFor(raw_name);
+        return Protocol::LpiProviderFact{
+            .providerAlias = latest_alias_,
+            .detectorDone = stop_detect != 0,
+            .budgetExhausted = false,
+            .producedBeforeAdapterCompletion = true,
+        };
+    }
+
+private:
+    Detector detector_;
+    std::string latest_alias_;
+};
+
+[[nodiscard]] bool runPipelineCase(const DetectionCase &test_case) {
+    Flow::BoundedFlowTable table(1);
+    const auto facts = packetFactsFor(test_case);
+    if (!table.observeAccepted(facts, 61).has_value()) {
+        std::cerr << "pipeline." << test_case.key << ".error=flow-not-created\n";
+        return false;
+    }
+
+    WrapperProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const auto packet = l3PacketFor(test_case);
+    const auto outcome = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{packet.data(), packet.size()},
+        facts);
+
+    const bool expected_mapped = test_case.expected_sakamoto_protocol.has_value();
+    const auto latest = outcome.adapterOutcome.has_value()
+        && outcome.adapterOutcome->flowUpdate.has_value()
+        ? outcome.adapterOutcome->flowUpdate->latestExactResult
+        : std::optional<Catalog::ApplicationProtocolId>{};
+    const auto state = table.lpiRecognitionStateFor(facts);
+
+    std::cout << "pipeline." << test_case.key << ".providerAvailable="
+              << (outcome.providerAvailable ? "true" : "false") << "\n";
+    std::cout << "pipeline." << test_case.key << ".providerProducedFact="
+              << (outcome.providerProducedFact ? "true" : "false") << "\n";
+    std::cout << "pipeline." << test_case.key << ".mapped="
+              << (outcome.adapterOutcome.has_value()
+                      && outcome.adapterOutcome->mappedProviderResult
+                  ? "true"
+                  : "false")
+              << "\n";
+    std::cout << "pipeline." << test_case.key << ".unmapped="
+              << (outcome.adapterOutcome.has_value()
+                      && outcome.adapterOutcome->unmappedProviderResult
+                  ? "true"
+                  : "false")
+              << "\n";
+    std::cout << "pipeline." << test_case.key << ".payloadPackets="
+              << (state.has_value() ? state->payloadPacketsSubmitted : 0U) << "\n";
+
+    const bool common_pass =
+        outcome.observed
+        && outcome.payloadEligible
+        && outcome.providerAvailable
+        && outcome.submittedToProvider
+        && outcome.providerProducedFact
+        && outcome.adapterOutcome.has_value()
+        && outcome.adapterOutcome->flowUpdate.has_value()
+        && outcome.adapterOutcome->flowUpdate->payloadSubmitted
+        && state.has_value()
+        && state->payloadPacketsSubmitted == 1U;
+
+    const bool mapping_pass = expected_mapped
+        ? outcome.adapterOutcome->mappedProviderResult
+            && !outcome.adapterOutcome->unmappedProviderResult
+            && latest == test_case.expected_sakamoto_protocol
+        : !outcome.adapterOutcome->mappedProviderResult
+            && outcome.adapterOutcome->unmappedProviderResult
+            && !latest.has_value();
+    const bool passed = common_pass && mapping_pass;
+    std::cout << "pipeline." << test_case.key << ".result="
+              << (passed ? "PASS" : "FAIL") << "\n";
+    return passed;
+}
+
 } // namespace
 
 int main() {
-    Detector detector;
-    if (detector.get() == nullptr) {
-        std::cerr << "probe.error=detector-null\n";
-        return 2;
-    }
-
     const std::vector<DetectionCase> cases = {
         {
             "http",
             "HTTP",
             67,
+            Catalog::ApplicationProtocolId::HTTP,
             false,
             49152,
             80,
@@ -353,6 +574,7 @@ int main() {
             "dns",
             "DNS",
             32,
+            Catalog::ApplicationProtocolId::DNS,
             false,
             49152,
             53,
@@ -363,6 +585,7 @@ int main() {
             "socks5",
             "SOCKS",
             8005,
+            std::nullopt,
             false,
             49152,
             1080,
@@ -373,11 +596,19 @@ int main() {
 
     std::cout << "probe.syntheticCases=HTTP,DNS,SOCKS5\n";
     std::cout << "probe.realWrapperCalls=lpi_detector_new,lpi_detect_context_new,lpi_detect_context_update,lpi_detect,lpi_appid2name,lpi_detect_context_free,lpi_detector_free\n";
+    std::cout << "probe.sakamotoPipeline=LpiRecognitionPipeline,LpiRecognitionAdapter,BoundedFlowTable\n";
 
     int passed_count = 0;
-    for (const auto &test_case : cases) {
-        if (runCase(detector, test_case)) {
-            ++passed_count;
+    {
+        Detector detector;
+        if (detector.get() == nullptr) {
+            std::cerr << "probe.error=detector-null\n";
+            return 2;
+        }
+        for (const auto &test_case : cases) {
+            if (runCase(detector, test_case)) {
+                ++passed_count;
+            }
         }
     }
 
@@ -385,6 +616,19 @@ int main() {
     if (passed_count != static_cast<int>(cases.size())) {
         std::cout << "probe.result=FAIL\n";
         return 3;
+    }
+
+    int pipeline_passed_count = 0;
+    for (const auto &test_case : cases) {
+        if (runPipelineCase(test_case)) {
+            ++pipeline_passed_count;
+        }
+    }
+
+    std::cout << "probe.pipelineCases=" << pipeline_passed_count << "\n";
+    if (pipeline_passed_count != static_cast<int>(cases.size())) {
+        std::cout << "probe.result=FAIL\n";
+        return 4;
     }
 
     std::cout << "probe.result=PASS\n";
@@ -411,6 +655,7 @@ echo "policy.providerVendoringDecision=false"
 echo "policy.providerRuntimeWiring=false"
 echo "policy.protocolRuleDecision=false"
 echo "probe.scope=host-compile-link-run-synthetic-payload-recognition"
+echo "probe.sakamotoPipeline=LpiRecognitionPipeline,LpiRecognitionAdapter,BoundedFlowTable"
 echo "probe.wrapper=stellar_lpi_core-plus-extend-with-generated-compat-shim"
 echo "probe.generatedUtilsShim=true"
 echo "probe.referenceUthashInPlace=true"
@@ -421,6 +666,7 @@ cmake \
     -B "$cmake_build_dir" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DREPO_ROOT="$repo_root" \
     -DVPP_REFERENCE_ROOT="$reference_root" \
     -DVPP_STELLAR_LPI_ROOT="$wrapper_root" \
     -DLIBPROTOIDENT_SOURCE_ROOT="$libprotoident_root"

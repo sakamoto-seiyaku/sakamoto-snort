@@ -226,14 +226,22 @@ Current local result observed on 2026-08-12:
   `policy.protocolRuleDecision=false`.
 - probe shape:
   `probe.scope=host-compile-link-run-synthetic-payload-recognition`,
+  `probe.sakamotoPipeline=LpiRecognitionPipeline,LpiRecognitionAdapter,BoundedFlowTable`,
   `probe.payloadBoundary=application-payload-bytes-only`,
   `probe.generatedUtilsShim=true`, and
   `probe.referenceUthashInPlace=true`.
+- Sakamoto seam path:
+  the generated executable adapts the real wrapper behind a generated
+  `LpiRecognitionProvider` and drives
+  `LpiRecognitionPipeline -> LpiRecognitionAdapter -> BoundedFlowTable`.
+  It verifies that `lpi:http` maps to the project-owned HTTP catalog ID,
+  `lpi:dns` maps to DNS, and `lpi:socks` remains an unmapped provider result.
 
 This proves the extractable wrapper candidate can execute its lifecycle and
 return expected fork-local names for a minimal synthetic payload set on the
-host. It still does not prove PCAP corpus accuracy, Android Root/VPN runtime
-behavior, provider-source acceptability, default provider wiring, or
+host, then pass those names through the current Sakamoto recognition seam. It
+still does not prove PCAP corpus accuracy, Android Root/VPN runtime behavior,
+provider-source acceptability, default provider wiring, corpus rights, or
 ProtocolRule enforcement readiness.
 
 ## Next Evidence Step
