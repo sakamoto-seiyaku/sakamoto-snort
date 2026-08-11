@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Covers the product DebugControlActivity/RuntimeService path for clean
 # Root↔VPN profile switch, user pause cleanup, Activity recreation survival,
-# and a bounded cleanup-fault reason. Crash/reboot/Doze evidence is recorded
-# separately before S70 is closed.
+# bounded cleanup-fault reason, runtime crash/restart, short Doze baseline,
+# and reboot baseline inventory. A forced reboot is not run by default.
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -23,6 +23,8 @@ APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-debu
 S70_BUILD_APK="${S70_BUILD_APK:-1}"
 S70_INSTALL_APK="${S70_INSTALL_APK:-1}"
 S70_CLEANUP_ON_EXIT="${S70_CLEANUP_ON_EXIT:-1}"
+S70_DOZE_FORCE_IDLE="${S70_DOZE_FORCE_IDLE:-1}"
+S70_RUN_REBOOT="${S70_RUN_REBOOT:-0}"
 STATE_PATH="files/runtime-state/snapshot.properties"
 
 mkdir -p "$RESULT_DIR"
@@ -262,6 +264,116 @@ assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-recover
 kv "reason.cleanupFault" "cleanup_failed"
 kv "reason.userPause" "stopped"
 kv "cleanupFault.result" "PASS"
+
+section "runtime_crash_restart"
+crash_state="$(start_profile root "${RESULT_DIR}/crash-start")"
+crash_pid="$(printf '%s\n' "$crash_state" | snapshot_value_from pid)"
+adb_cmd shell su 0 sh -c "kill -KILL $crash_pid" \
+  >"${RESULT_DIR}/runtime-crash.kill.log" 2>&1
+crash_recovered=0
+crash_mode=""
+crash_recovered_pid=""
+mkdir -p "${RESULT_DIR}/runtime-crash"
+for _ in $(seq 1 30); do
+  state="$(read_snapshot)"
+  process_alive=0
+  if pid_alive "$crash_pid"; then
+    process_alive=1
+  fi
+  {
+    echo "crashedPid=$crash_pid"
+    echo "processAlive=$process_alive"
+    printf '%s\n' "$state"
+  } >"${RESULT_DIR}/runtime-crash/snapshot"
+  if [[ "$process_alive" == "0" ]]; then
+    if grep -Fxq "state=stopped" <<<"$state" \
+        && grep -Fxq "errorCode=unexpected_exit" <<<"$state" \
+        && grep -Fxq "mayBeActive=false" <<<"$state"; then
+      crash_recovered=1
+      crash_mode="durable-unexpected-exit"
+      break
+    fi
+    if grep -Fxq "state=running" <<<"$state" \
+        && grep -Fxq "profile=root" <<<"$state" \
+        && grep -Fxq "health=ok" <<<"$state" \
+        && grep -Fxq "coreHealth=ok" <<<"$state"; then
+      candidate_pid="$(printf '%s\n' "$state" | snapshot_value_from pid)"
+      if [[ "$candidate_pid" =~ ^[0-9]+$ && "$candidate_pid" != "$crash_pid" ]]; then
+        crash_recovered=1
+        crash_mode="automatic-new-owner"
+        crash_recovered_pid="$candidate_pid"
+        break
+      fi
+    fi
+  fi
+  sleep 1
+done
+if [[ "$crash_recovered" != "1" ]]; then
+  kv "crash.result" "FAIL"
+  cat "${RESULT_DIR}/runtime-crash/snapshot" >&2
+  exit 1
+fi
+printf 'crashRecoveryMode=%s\ncrashRecoveredPid=%s\n' \
+  "$crash_mode" "$crash_recovered_pid" >>"${RESULT_DIR}/runtime-crash/snapshot"
+if [[ "$crash_mode" == "automatic-new-owner" ]]; then
+  stop_runtime "${RESULT_DIR}/runtime-crash/auto-owner-stop" >/dev/null
+fi
+assert_no_native_residue "${RESULT_DIR}/runtime-crash/native-residue.after-recovery"
+restart_state="$(start_profile root "${RESULT_DIR}/restart-after-crash")"
+restart_pid="$(printf '%s\n' "$restart_state" | snapshot_value_from pid)"
+pid_alive "$restart_pid"
+stop_runtime "${RESULT_DIR}/restart-after-crash-stop" >/dev/null
+assert_pid_gone "$restart_pid" "${RESULT_DIR}/restart-after-crash/root-pid.after-stop"
+assert_no_native_residue "${RESULT_DIR}/restart-after-crash/native-residue.after-stop"
+kv "crash.mode" "$crash_mode"
+kv "crash.result" "PASS"
+kv "restartAfterCrash.result" "PASS"
+
+section "doze_baseline"
+mkdir -p "${RESULT_DIR}/doze"
+doze_state="$(start_profile root "${RESULT_DIR}/doze-start")"
+doze_pid="$(printf '%s\n' "$doze_state" | snapshot_value_from pid)"
+adb_cmd shell dumpsys deviceidle >"${RESULT_DIR}/doze.before" 2>&1 || true
+kv "doze.forceIdleRequested" "$S70_DOZE_FORCE_IDLE"
+if [[ "$S70_DOZE_FORCE_IDLE" == "1" ]]; then
+  set +e
+  adb_cmd shell cmd deviceidle force-idle >"${RESULT_DIR}/doze.force-idle.log" 2>&1
+  doze_force_rc=$?
+  set -e
+  kv "doze.forceIdleRc" "$doze_force_rc"
+  sleep 3
+  adb_cmd shell dumpsys deviceidle >"${RESULT_DIR}/doze.during" 2>&1 || true
+  adb_cmd shell cmd deviceidle unforce >"${RESULT_DIR}/doze.unforce.log" 2>&1 || true
+  adb_cmd shell dumpsys deviceidle >"${RESULT_DIR}/doze.after" 2>&1 || true
+  if [[ "$doze_force_rc" == "0" ]]; then
+    after_doze_state="$(read_snapshot)"
+    printf '%s\n' "$after_doze_state" >"${RESULT_DIR}/doze.snapshot.after"
+    grep -Fxq "state=running" <<<"$after_doze_state"
+    grep -Fxq "profile=root" <<<"$after_doze_state"
+    [[ "$(printf '%s\n' "$after_doze_state" | snapshot_value_from pid)" == "$doze_pid" ]]
+    pid_alive "$doze_pid"
+    kv "doze.result" "PASS"
+  else
+    kv "doze.result" "UNAVAILABLE"
+  fi
+else
+  kv "doze.result" "SKIPPED"
+fi
+stop_runtime "${RESULT_DIR}/doze-stop" >/dev/null
+assert_no_native_residue "${RESULT_DIR}/doze/native-residue.after-stop"
+
+section "reboot_baseline"
+adb_cmd shell getprop sys.boot_completed >"${RESULT_DIR}/reboot.sys_boot_completed" 2>&1 || true
+adb_cmd shell getprop ro.boot.bootreason >"${RESULT_DIR}/reboot.bootreason" 2>&1 || true
+adb_cmd shell cat /proc/uptime >"${RESULT_DIR}/reboot.uptime" 2>&1 || true
+kv "reboot.defaultForced" "$S70_RUN_REBOOT"
+if [[ "$S70_RUN_REBOOT" == "1" ]]; then
+  kv "reboot.result" "REQUESTED_BUT_NOT_IMPLEMENTED_IN_DEFAULT_MATRIX"
+  echo "S70_RUN_REBOOT=1 is intentionally not implemented in this bounded matrix yet" >&2
+  exit 1
+else
+  kv "reboot.result" "BASELINE_RECORDED"
+fi
 
 section "final_cleanup"
 final_state="$(stop_runtime "${RESULT_DIR}/final-cleanup")"
