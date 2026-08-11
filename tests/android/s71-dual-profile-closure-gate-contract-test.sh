@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+matrix="$repo_root/tests/device/s71-dual-profile-closure-gate.sh"
+
+[[ -f "$matrix" ]]
+grep -q 'SAKAMOTO-71-dual-profile-closure-gate' "$matrix"
+grep -q './dev/adb' "$matrix"
+grep -q 'snort-host-tests' "$matrix"
+grep -q 'snort-build-ndk' "$matrix"
+grep -q 'dev/dev-deploy.sh' "$matrix"
+grep -q 'product_app_force_stop' "$matrix"
+grep -q 'root-nfqueue-device-matrix.sh' "$matrix"
+grep -q 's69-product-vpn-runtime-matrix.sh' "$matrix"
+grep -q 's70-profile-lifecycle-matrix.sh' "$matrix"
+grep -Fq 'ipv6_output[.]result=PASS' "$matrix"
+grep -Fq 'input_ipv4[.]result=UID_UNAVAILABLE' "$matrix"
+grep -Fq 'input_ipv4_unknown[.]result=PASS' "$matrix"
+grep -q 'productRuntimeServiceVpnAdapter=claimed' "$matrix"
+grep -q 'POC_ONLY=false' "$matrix"
+grep -Fq 'control[.]VPN_TUN[.]STATUS=PASS' "$matrix"
+grep -Fq 'productState[.]binding=PASS' "$matrix"
+grep -Fq 'appProcessDeath[.]result=PASS' "$matrix"
+grep -Fq 'pause[.]lastSuccessfulPolicyPreserved=PASS' "$matrix"
+grep -q 'deferred.completeAppCatalog' "$matrix"
+grep -q 'deferred.protocolIdentification' "$matrix"
+grep -q 'matrix.s71Done' "$matrix"
+
+echo "s71 dual-profile closure gate static contract: PASS"

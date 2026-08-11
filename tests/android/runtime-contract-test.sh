@@ -269,4 +269,5 @@ if grep -q 'cleanup.get' "$service_source" || grep -q 'shutdownNow' "$service_so
   echo "runtime service cleanup must not block or cancel from onDestroy" >&2
   exit 1
 fi
+bash "$repo_root/tests/android/s71-dual-profile-closure-gate-contract-test.sh"
 echo "runtime service lifecycle contract: PASS"

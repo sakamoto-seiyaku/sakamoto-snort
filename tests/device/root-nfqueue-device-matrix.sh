@@ -620,6 +620,7 @@ else
   else
     kv "ipv6_output.result" "FAIL"
     kv "ipv6_output.reason" "expected DROP evaluation plus dropped NFQUEUE delta for uid=$uid"
+    MATRIX_RC=1
   fi
 fi
 
@@ -671,9 +672,11 @@ else
     kv "input_ipv4.result" "INVALID"
     kv "input_ipv4.reason" "NFQUEUE observed packets with unexpected known UID attribution for INPUT; expected uid=$uid or uidKnown=false"
     kv "input_ipv4.hookObserved" "$last_hook"
+    MATRIX_RC=1
   else
     kv "input_ipv4.result" "FAIL"
     kv "input_ipv4.reason" "expected INPUT packet and dropped NFQUEUE delta for uid=$uid"
+    MATRIX_RC=1
   fi
 
   section "input_ipv4_unknown_application"
@@ -713,9 +716,11 @@ else
     kv "input_ipv4_unknown.result" "INVALID"
     kv "input_ipv4_unknown.reason" "expected Unknown Application INPUT evidence but observed uidKnown=$last_uid_known uid=$last_uid"
     kv "input_ipv4_unknown.hookObserved" "$last_hook"
+    MATRIX_RC=1
   else
     kv "input_ipv4_unknown.result" "FAIL"
     kv "input_ipv4_unknown.reason" "expected explicit Unknown Application INPUT policy drop evidence"
+    MATRIX_RC=1
   fi
 fi
 
@@ -739,6 +744,7 @@ if [[ $RUN_CONTROL_TIMEOUT -eq 1 ]]; then
   else
     kv "control_socket_timeout.result" "FAIL"
     kv "control_socket_timeout.reason" "daemon should survive incomplete/idle control socket disconnects and continue serving HELLO/NFQUEUE.STATUS"
+    MATRIX_RC=1
   fi
 fi
 
@@ -754,6 +760,7 @@ if [[ $RUN_RESTART -eq 1 ]]; then
     kv "restart.helloResult" "PASS"
   else
     kv "restart.helloResult" "FAIL"
+    MATRIX_RC=1
   fi
   before="$(ctl NFQUEUE.STATUS)"
   apply_args="$(policy_apply_l4_drop "$uid" 680401 ipv4 output 80 680401 680401)"
@@ -804,6 +811,7 @@ if [[ $RUN_FAULT -eq 1 ]]; then
         kv "sigkill_fault.recovery.result" "PASS"
       else
         kv "sigkill_fault.recovery.result" "FAIL"
+        MATRIX_RC=1
       fi
       stop_root_daemon_for_cleanup "sigkill_fault.recoveryStop"
       stage_only_root_daemon "sigkill_fault.recoveryStageOnly"
