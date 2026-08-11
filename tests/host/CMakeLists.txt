@@ -87,6 +87,7 @@ add_sucre_snort_host_tool(
 
 add_sucre_snort_host_test(package_state_tests package_state_tests.cpp)
 add_sucre_snort_host_test(reason_metrics_tests reason_metrics_tests.cpp)
+add_sucre_snort_host_test(application_protocol_catalog_tests application_protocol_catalog_tests.cpp)
 add_sucre_snort_host_test(ipv6_l4_walker_tests ipv6_l4_walker_tests.cpp)
 add_sucre_snort_host_test(nfqueue_topology_tests nfqueue_topology_tests.cpp)
 add_sucre_snort_host_test(

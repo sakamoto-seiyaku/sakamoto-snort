@@ -1,0 +1,12 @@
+# SAKAMOTO Application Protocol Catalog v1
+# Columns:
+# id	key	status	category	migration_aliases	provider_aliases	display_name
+# status: active | reserved
+# Use "-" for empty fields. Categories are authoring/presentation groups only.
+# Provider aliases are recognition evidence mapping hints; they are not policy identity.
+1000	reserved-1000	reserved	-	-	-	Reserved tombstone for removed prerelease placeholder
+1001	dns	active	infrastructure	domain-name-system	lpi:dns	DNS
+1002	http	active	web	www	lpi:http	HTTP
+1003	tls	active	web	ssl	lpi:ssl,lpi:tls	TLS
+1004	quic	active	web	http3	lpi:quic	QUIC
+1005	ssh	active	remote-access	secure-shell	lpi:ssh	SSH

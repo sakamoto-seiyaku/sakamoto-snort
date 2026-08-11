@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sakamoto.local/schema/application-protocol-catalog.v1.json",
+  "title": "Sakamoto Application Protocol Catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "protocolKey": {
+      "type": "string",
+      "enum": [
+        "dns",
+        "http",
+        "tls",
+        "quic",
+        "ssh"
+      ],
+      "description": "Stable ApplicationProtocolKey used by authoring/import/export/API."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "infrastructure",
+        "remote-access",
+        "web"
+      ],
+      "description": "Authoring/presentation selector expanded to exact protocol IDs at Apply."
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "protocolKey"
+      ]
+    },
+    {
+      "required": [
+        "category"
+      ]
+    }
+  ]
+}

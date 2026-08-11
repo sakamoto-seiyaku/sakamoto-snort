@@ -1,0 +1,8 @@
+# Released mapping compatibility baseline.
+# id	key	status
+1000	reserved-1000	reserved
+1001	dns	active
+1002	http	active
+1003	tls	active
+1004	quic	active
+1005	ssh	active

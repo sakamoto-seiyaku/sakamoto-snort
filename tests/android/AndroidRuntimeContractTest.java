@@ -10,6 +10,7 @@ import com.sakamoto.snort.androidruntime.RuntimeSnapshot;
 import com.sakamoto.snort.androidruntime.RuntimeStateStore;
 import com.sakamoto.snort.androidruntime.VppHealthHandshake;
 import com.sakamoto.snort.androidruntime.ApplicationSubjectId;
+import com.sakamoto.snort.androidruntime.ApplicationProtocolCatalog;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogEntry;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogProvider;
 import com.sakamoto.snort.androidruntime.ActivityL4RuleDraft;
@@ -82,6 +83,7 @@ public final class AndroidRuntimeContractTest {
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
         applicationSubjectIdentityIsCompleteUidOnly();
+        applicationProtocolCatalogOwnsStablePolicyIdentity();
         productStorePersistsProfileBindingsAndEmptyBundle();
         productStorePersistsNetworkGateMatrixAsTypedRuleFamily();
         productStorePersistsL4RuleListAsTypedRuleFamily();
@@ -1279,6 +1281,37 @@ public final class AndroidRuntimeContractTest {
                 "package metadata is not part of hot-path policy identity");
         check(ApplicationSubjectId.fromUid(1000).appId == 1000,
                 "complete Linux UID identity does not discard system package UIDs");
+    }
+
+    private static void applicationProtocolCatalogOwnsStablePolicyIdentity() {
+        check(ApplicationProtocolCatalog.CATALOG_VERSION == 1,
+                "catalog version is a build-time diagnostic version");
+        check(ApplicationProtocolCatalog.ID_DNS == 1001
+                        && ApplicationProtocolCatalog.ID_HTTP == 1002
+                        && ApplicationProtocolCatalog.ID_TLS == 1003
+                        && ApplicationProtocolCatalog.ID_QUIC == 1004,
+                "catalog ids are project-owned and not qDPI/libprotoident ordinals");
+        check(ApplicationProtocolCatalog.byKey("http").id == ApplicationProtocolCatalog.ID_HTTP,
+                "lowercase ApplicationProtocolKey resolves to stable id");
+        check(ApplicationProtocolCatalog.byMigrationAlias("ssl").id
+                        == ApplicationProtocolCatalog.ID_TLS,
+                "rename/migration alias resolves explicitly without changing the key mapping");
+        check(ApplicationProtocolCatalog.byProviderAlias("lpi:http").id
+                        == ApplicationProtocolCatalog.ID_HTTP,
+                "provider alias maps recognition evidence without becoming policy identity");
+        check(ApplicationProtocolCatalog.byKey("lpi:http") == null,
+                "provider-prefixed names are not ApplicationProtocolKey values");
+        check(ApplicationProtocolCatalog.byKey("reserved-1000") != null
+                        && !ApplicationProtocolCatalog.byKey("reserved-1000").active(),
+                "deleted ids stay as reserved/tombstone entries");
+        List<Integer> web = ApplicationProtocolCatalog.expandCategory("web");
+        check(web.size() == 3
+                        && web.contains(Integer.valueOf(ApplicationProtocolCatalog.ID_HTTP))
+                        && web.contains(Integer.valueOf(ApplicationProtocolCatalog.ID_TLS))
+                        && web.contains(Integer.valueOf(ApplicationProtocolCatalog.ID_QUIC)),
+                "category selector expands to exact active protocol ids at Apply");
+        check(ApplicationProtocolCatalog.expandCategory("reserved-1000").isEmpty(),
+                "category is not a protocol result or hierarchy");
     }
 
     private static void productStorePersistsProfileBindingsAndEmptyBundle() throws Exception {
