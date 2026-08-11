@@ -159,6 +159,7 @@ public final class ProductStateStore {
 
     private static List<AuthoringPolicyBundle.NetworkGateRule> parseGateMatrix(String encoded) {
         ArrayList<AuthoringPolicyBundle.NetworkGateRule> out = new ArrayList<>();
+        TreeSet<String> seen = new TreeSet<>();
         if (encoded == null || encoded.trim().isEmpty()) {
             return out;
         }
@@ -186,6 +187,10 @@ public final class ProductStateStore {
             }
             long ruleId = Long.parseUnsignedLong(fields[3]);
             int reasonId = Integer.parseInt(fields[4]);
+            String key = subjectId.uid + ":" + context.wireName;
+            if (!seen.add(key)) {
+                throw new IllegalArgumentException("duplicate GateMatrix entry");
+            }
             out.add(new AuthoringPolicyBundle.NetworkGateRule(subjectId, context, blocked,
                     ruleId, reasonId));
         }

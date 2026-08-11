@@ -11,6 +11,7 @@ import com.sakamoto.snort.androidruntime.ApplicationSubjectId;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogEntry;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogProvider;
 import com.sakamoto.snort.androidruntime.AuthoringPolicyBundle;
+import com.sakamoto.snort.androidruntime.AuthoringPolicyCompiler;
 import com.sakamoto.snort.androidruntime.ProductStateSnapshot;
 import com.sakamoto.snort.androidruntime.ProductStateStore;
 import com.sakamoto.snort.androidruntime.ProductStore;
@@ -64,6 +65,7 @@ public final class AndroidRuntimeContractTest {
         applicationSubjectIdentityIsCompleteUidOnly();
         productStorePersistsProfileBindingsAndEmptyBundle();
         productStorePersistsNetworkGateMatrixAsTypedRuleFamily();
+        gateMatrixCompilesToPacketPolicyApplyPayload();
         boundedActivityStoreIsSeparateFromProductState();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
@@ -1247,6 +1249,46 @@ public final class AndroidRuntimeContractTest {
         check(reloaded.snapshot().authoringPolicyBundle.revision
                         == allContexts.authoringPolicyBundle.revision,
                 "invalid GateMatrix reload preserves the last valid ProductStore snapshot");
+    }
+
+    private static void gateMatrixCompilesToPacketPolicyApplyPayload() {
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        AuthoringPolicyBundle blocked = AuthoringPolicyBundle.empty()
+                .withNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.WIFI, true);
+        AuthoringPolicyCompiler.CompileResult result =
+                AuthoringPolicyCompiler.compilePacketPolicyApply(blocked);
+        check(result.ok, "GateMatrix compiles to a packet policy apply payload");
+        check(result.revision == blocked.revision, "compiled payload carries bundle revision");
+        check(result.applyPayload.contains("\"revision\":1"),
+                "compiled payload encodes revision");
+        check(result.applyPayload.contains("\"linuxUid\":1010001"),
+                "compiled payload encodes complete Linux UID");
+        check(result.applyPayload.contains("\"uidKnown\":true"),
+                "compiled payload encodes explicit known UID");
+        check(result.applyPayload.contains("\"blockedNetworkContexts\":[1]"),
+                "compiled payload maps Wi-Fi NetworkContextId");
+        check(result.applyPayload.contains("\"reasonId\":"),
+                "compiled payload carries stable reason attribution");
+        check(result.applyPayload.contains("\"ruleId\":"),
+                "compiled payload carries stable rule attribution");
+
+        AuthoringPolicyBundle opened = blocked.withNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.WIFI, false);
+        AuthoringPolicyCompiler.CompileResult openResult =
+                AuthoringPolicyCompiler.compilePacketPolicyApply(opened);
+        check(openResult.ok, "open GateMatrix compiles");
+        check(openResult.applyPayload.contains("\"revision\":2"),
+                "open GateMatrix compiles as a new revision");
+        check(!openResult.applyPayload.contains("blockedNetworkContexts"),
+                "open Gate does not compile a blocking GateTable entry");
+
+        AuthoringPolicyBundle unsupported = AuthoringPolicyBundle.restore(9L, "test",
+                blocked.gateMatrix, 1, 0);
+        AuthoringPolicyCompiler.CompileResult failure =
+                AuthoringPolicyCompiler.compilePacketPolicyApply(unsupported);
+        check(!failure.ok, "unsupported rule families fail compile before runtime apply");
+        check("authoring_policy_bundle_unsupported".equals(failure.errorCode),
+                "compile failure reports actionable unsupported bundle code");
     }
 
     private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {
