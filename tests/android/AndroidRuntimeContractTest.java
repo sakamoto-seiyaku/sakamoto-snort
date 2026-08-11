@@ -90,6 +90,7 @@ public final class AndroidRuntimeContractTest {
         productPolicyTransactionsSeparateDraftCommitApplyAndCheckpoint();
         productPolicyTransactionRestoreAndImportExportAreAtomic();
         productPolicyTransactionStorePersistsDraftCommitRuntimeAndCheckpoints();
+        productPolicyCommitValidationRejectsConflictsAndStaleBindings();
         System.out.println("android runtime contract: PASS");
     }
 
@@ -2255,6 +2256,78 @@ public final class AndroidRuntimeContractTest {
                 ProductPolicyTransactionStore.readResult(files.toFile());
         check(!corrupt.valid && "policy_transactions_corrupt".equals(corrupt.errorCode),
                 "corrupt policy transaction store returns actionable failure");
+    }
+
+    private static void productPolicyCommitValidationRejectsConflictsAndStaleBindings() {
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        ApplicationSubjectId stale = ApplicationSubjectId.fromUid(1010002);
+        AuthoringPolicyBundle localCommitted = AuthoringPolicyBundle.empty()
+                .withL4Rule(l4Rule(app, "1.1.1.1/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        ProductPolicyTransactions tx = new ProductPolicyTransactions(localCommitted);
+        tx.replaceDraft(AuthoringPolicyBundle.restore(localCommitted.revision,
+                "imported-policy-file", localCommitted.gateMatrix, localCommitted.l4Rules, 0));
+        ProductPolicyTransactions.Result sourceConflict = tx.commitDraft(
+                ProductPolicyTransactions.CommitValidationContext.of(
+                        new ProductStateSnapshot(RuntimeProfile.ROOT,
+                                new java.util.TreeSet<>(Arrays.asList(app)),
+                                localCommitted),
+                        Arrays.asList(new ApplicationCatalogEntry(app,
+                                "com.example.mail", "Mail", "icon:mail/u10",
+                                app.userId, "Work", true))));
+        check(!sourceConflict.ok
+                        && "source_conflict".equals(sourceConflict.errorCode)
+                        && sourceConflict.errorMessage.contains("source=imported-policy-file"),
+                "commit validation rejects source conflicts with stable attribution");
+
+        ProductPolicyTransactions unboundTx =
+                new ProductPolicyTransactions(AuthoringPolicyBundle.empty());
+        unboundTx.replaceDraft(localCommitted);
+        ProductPolicyTransactions.Result bindingConflict = unboundTx.commitDraft(
+                ProductPolicyTransactions.CommitValidationContext.of(
+                        ProductStateSnapshot.empty(),
+                        Arrays.asList(new ApplicationCatalogEntry(app,
+                                "com.example.mail", "Mail", "icon:mail/u10",
+                                app.userId, "Work", true))));
+        check(!bindingConflict.ok
+                        && "binding_mode_conflict".equals(bindingConflict.errorCode)
+                        && bindingConflict.errorMessage.contains("android.uid:1010001"),
+                "commit validation rejects policy subjects that are not explicitly bound");
+
+        ProductPolicyTransactions staleTx =
+                new ProductPolicyTransactions(AuthoringPolicyBundle.empty());
+        staleTx.replaceDraft(localCommitted);
+        java.util.TreeSet<ApplicationSubjectId> bound = new java.util.TreeSet<>();
+        bound.add(app);
+        bound.add(stale);
+        ProductPolicyTransactions.Result staleBinding = staleTx.commitDraft(
+                ProductPolicyTransactions.CommitValidationContext.of(
+                        new ProductStateSnapshot(RuntimeProfile.ROOT, bound, localCommitted),
+                        Arrays.asList(
+                                new ApplicationCatalogEntry(app,
+                                        "com.example.mail", "Mail", "icon:mail/u10",
+                                        app.userId, "Work", true),
+                                new ApplicationCatalogEntry(stale,
+                                        "com.example.old", "Old", "icon:old/u10",
+                                        stale.userId, "Work", false))));
+        check(!staleBinding.ok
+                        && "stale_binding".equals(staleBinding.errorCode)
+                        && staleBinding.errorMessage.contains("android.uid:1010002"),
+                "commit validation rejects stale bound applications before publishing");
+
+        ProductPolicyTransactions validTx =
+                new ProductPolicyTransactions(AuthoringPolicyBundle.empty());
+        validTx.replaceDraft(localCommitted);
+        ProductPolicyTransactions.Result valid = validTx.commitDraft(
+                ProductPolicyTransactions.CommitValidationContext.of(
+                        new ProductStateSnapshot(RuntimeProfile.ROOT,
+                                new java.util.TreeSet<>(Arrays.asList(app)),
+                                localCommitted),
+                        Arrays.asList(new ApplicationCatalogEntry(app,
+                                "com.example.mail", "Mail", "icon:mail/u10",
+                                app.userId, "Work", true))));
+        check(valid.ok && validTx.status().committedRevision == localCommitted.revision,
+                "commit validation accepts bound current catalog subjects");
     }
 
     private static AuthoringPolicyBundle.L4Rule l4Rule(

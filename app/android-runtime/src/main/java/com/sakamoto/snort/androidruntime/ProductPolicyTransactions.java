@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 /** Draft/commit/apply/checkpoint transaction state for one Authoring Policy Bundle. */
 public final class ProductPolicyTransactions {
@@ -55,6 +57,24 @@ public final class ProductPolicyTransactions {
 
         public static Result error(String code, String message) {
             return new Result(false, code, message, Collections.emptyList());
+        }
+    }
+
+    public static final class CommitValidationContext {
+        public final ProductStateSnapshot productState;
+        public final List<ApplicationCatalogEntry> catalog;
+
+        private CommitValidationContext(ProductStateSnapshot productState,
+                                        List<ApplicationCatalogEntry> catalog) {
+            this.productState = productState == null ? ProductStateSnapshot.empty()
+                    : productState;
+            this.catalog = Collections.unmodifiableList(new ArrayList<>(
+                    catalog == null ? Collections.emptyList() : catalog));
+        }
+
+        public static CommitValidationContext of(ProductStateSnapshot productState,
+                                                 List<ApplicationCatalogEntry> catalog) {
+            return new CommitValidationContext(productState, catalog);
         }
     }
 
@@ -169,7 +189,11 @@ public final class ProductPolicyTransactions {
     }
 
     public synchronized Result commitDraft() {
-        List<Issue> issues = validateDraft(draft);
+        return commitDraft(null);
+    }
+
+    public synchronized Result commitDraft(CommitValidationContext context) {
+        List<Issue> issues = validateDraft(draft, committed, context);
         for (Issue issue : issues) {
             if ("error".equals(issue.severity)) {
                 return new Result(false, issue.code, issue.message, issues);
@@ -333,8 +357,23 @@ public final class ProductPolicyTransactions {
         }
     }
 
-    private static List<Issue> validateDraft(AuthoringPolicyBundle bundle) {
+    private static List<Issue> validateDraft(AuthoringPolicyBundle bundle,
+                                             AuthoringPolicyBundle committed,
+                                             CommitValidationContext context) {
         ArrayList<Issue> issues = new ArrayList<>();
+        if (bundle == null) {
+            issues.add(Issue.error("draft_missing", "draft bundle is required"));
+            return issues;
+        }
+        if (committed != null && !bundle.source.isEmpty() && !committed.source.isEmpty()
+                && !bundle.source.equals(committed.source)) {
+            issues.add(Issue.error("source_conflict",
+                    "draft source=" + bundle.source + " conflicts with committed source="
+                            + committed.source));
+        }
+        if (context != null) {
+            validateBindings(bundle, context, issues);
+        }
         for (int i = 0; i < bundle.l4Rules.size(); i++) {
             AuthoringPolicyBundle.L4Rule left = bundle.l4Rules.get(i);
             for (int j = i + 1; j < bundle.l4Rules.size(); j++) {
@@ -348,6 +387,48 @@ public final class ProductPolicyTransactions {
             }
         }
         return issues;
+    }
+
+    private static void validateBindings(AuthoringPolicyBundle bundle,
+                                         CommitValidationContext context,
+                                         ArrayList<Issue> issues) {
+        TreeSet<ApplicationSubjectId> catalogSubjects = new TreeSet<>();
+        TreeSet<ApplicationSubjectId> unavailableSubjects = new TreeSet<>();
+        for (ApplicationCatalogEntry entry : context.catalog) {
+            if (entry.available) {
+                catalogSubjects.add(entry.subjectId);
+            } else {
+                unavailableSubjects.add(entry.subjectId);
+            }
+        }
+        for (ApplicationSubjectId bound : context.productState.boundApplications) {
+            if (!catalogSubjects.contains(bound)) {
+                String reason = unavailableSubjects.contains(bound) ? "unavailable" : "missing";
+                issues.add(Issue.error("stale_binding",
+                        "subject=" + bound.encode() + " binding is " + reason
+                                + " in the current application catalog"));
+            }
+        }
+        Set<ApplicationSubjectId> boundSubjects =
+                new TreeSet<>(context.productState.boundApplications);
+        for (ApplicationSubjectId subject : policySubjects(bundle)) {
+            if (!boundSubjects.contains(subject)) {
+                issues.add(Issue.error("binding_mode_conflict",
+                        "subject=" + subject.encode()
+                                + " has policy rules but is not explicitly bound"));
+            }
+        }
+    }
+
+    private static Set<ApplicationSubjectId> policySubjects(AuthoringPolicyBundle bundle) {
+        TreeSet<ApplicationSubjectId> subjects = new TreeSet<>();
+        for (AuthoringPolicyBundle.NetworkGateRule rule : bundle.gateMatrix) {
+            subjects.add(rule.subjectId);
+        }
+        for (AuthoringPolicyBundle.L4Rule rule : bundle.l4Rules) {
+            subjects.add(rule.subjectId);
+        }
+        return subjects;
     }
 
     private static boolean sameMatch(AuthoringPolicyBundle.L4Rule left,
