@@ -101,6 +101,12 @@ public final class ProductNativeActivityIngestor {
                     RuntimeSnapshot.MAX_TEXT_LENGTH);
             this.protocolPayloadPackets = Math.max(0, protocolPayloadPackets);
         }
+
+        public ProtocolRecognitionProjection protocolRecognition() {
+            return ProtocolRecognitionProjection.of(protocolRecognitionState,
+                    applicationProtocolKey, applicationProtocolCategory,
+                    protocolRecognitionSequence, protocolPayloadPackets);
+        }
     }
 
     public static boolean shouldIngest(NativePolicyDropRecord record, RuntimeProfile profile,
@@ -150,13 +156,12 @@ public final class ProductNativeActivityIngestor {
         String label = record.uidKnown ? subject.encode() : "Unknown Application";
         String packageName = record.uidKnown ? "(native attributed app)" : "(unknown package)";
         if (!record.protocolRecognitionState.isEmpty()) {
+            ProtocolRecognitionProjection recognition = record.protocolRecognition();
             return ActivityItem.protocolRecognition(subject, label, packageName,
                     timestampMillis, remoteAddress(record), protocolName(record.ipProtocol),
                     remotePort(record), devicePacketDirection(profile, record.deviceDirection),
                     record.flowDirection, record.packets, record.bytes,
-                    record.policyRevision, record.protocolRecognitionState,
-                    record.applicationProtocolKey, record.applicationProtocolCategory,
-                    record.protocolRecognitionSequence, record.protocolPayloadPackets);
+                    record.policyRevision, recognition);
         }
         return ActivityItem.allowedFlow(subject, label, packageName, timestampMillis,
                 remoteAddress(record), protocolName(record.ipProtocol),

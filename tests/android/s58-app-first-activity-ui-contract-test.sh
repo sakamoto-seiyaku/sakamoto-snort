@@ -6,7 +6,7 @@ product_dir="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/and
 runtime_contract="$repo_root/tests/android/android-runtime-contract-test.sh"
 debug_activity="$product_dir/DebugControlActivity.java"
 
-for model in RuntimeSummary AppSummary AppDetail RuleDraft RuleView ActivityItem HealthIssue CapabilitySet; do
+for model in RuntimeSummary AppSummary AppDetail RuleDraft RuleView ActivityItem ProtocolRecognitionProjection HealthIssue CapabilitySet; do
   source_file="$product_dir/${model}.java"
   test -f "$source_file"
   grep -q "public final class ${model}" "$source_file"
@@ -66,6 +66,7 @@ for source_file in \
   "$product_dir/RuleDraft.java" \
   "$product_dir/RuleView.java" \
   "$product_dir/ActivityItem.java" \
+  "$product_dir/ProtocolRecognitionProjection.java" \
   "$product_dir/HealthIssue.java" \
   "$product_dir/CapabilitySet.java"; do
   ! grep -Eq 'PacketLease|VAPI|vapi|NFQUEUE|nfqueue|buffer index|worker lane|daemon artifact|generated_vapi' "$source_file"

@@ -155,12 +155,13 @@ public final class AppDetail {
                     .append(" winner=").append(item.winner)
                     .append(" revision=").append(item.policyRevision)
                     .append(" source=").append(item.evidenceSource);
-            if (!item.protocolRecognitionState.isEmpty()) {
-                out.append(" recognition=").append(item.protocolRecognitionState)
-                        .append(" appProtocol=").append(item.applicationProtocolKey)
-                        .append(" category=").append(item.applicationProtocolCategory)
-                        .append(" lpiSequence=").append(item.protocolRecognitionSequence)
-                        .append(" payloadPackets=").append(item.protocolPayloadPackets);
+            ProtocolRecognitionProjection recognition = item.protocolRecognition;
+            if (recognition.present()) {
+                out.append(" recognition=").append(recognition.state)
+                        .append(" appProtocol=").append(recognition.key)
+                        .append(" category=").append(recognition.category)
+                        .append(" lpiSequence=").append(recognition.sequence)
+                        .append(" payloadPackets=").append(recognition.payloadPackets);
             }
         }
         if (prefillDraft != null) {

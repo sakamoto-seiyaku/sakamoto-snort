@@ -236,15 +236,15 @@ public final class ProductActivityProjectionStore {
             values.setProperty(key + "reasonId", Integer.toString(item.reasonId));
             values.setProperty(key + "evidenceSource", item.evidenceSource);
             values.setProperty(key + "detailLossy", Boolean.toString(item.detailLossy));
-            values.setProperty(key + "protocolRecognitionState",
-                    item.protocolRecognitionState);
-            values.setProperty(key + "applicationProtocolKey", item.applicationProtocolKey);
+            ProtocolRecognitionProjection recognition = item.protocolRecognition;
+            values.setProperty(key + "protocolRecognitionState", recognition.state);
+            values.setProperty(key + "applicationProtocolKey", recognition.key);
             values.setProperty(key + "applicationProtocolCategory",
-                    item.applicationProtocolCategory);
+                    recognition.category);
             values.setProperty(key + "protocolRecognitionSequence",
-                    item.protocolRecognitionSequence);
+                    recognition.sequence);
             values.setProperty(key + "protocolPayloadPackets",
-                    Integer.toString(item.protocolPayloadPackets));
+                    Integer.toString(recognition.payloadPackets));
         }
     }
 
@@ -272,12 +272,13 @@ public final class ProductActivityProjectionStore {
                     parseInt(values, key + "reasonId", 0),
                     values.getProperty(key + "evidenceSource", ""),
                     Boolean.parseBoolean(values.getProperty(key + "detailLossy", "false")),
-                    values.getProperty(key + "protocolRecognitionState",
-                            ActivityItem.PROTOCOL_RECOGNITION_NONE),
-                    values.getProperty(key + "applicationProtocolKey", ""),
-                    values.getProperty(key + "applicationProtocolCategory", ""),
-                    values.getProperty(key + "protocolRecognitionSequence", ""),
-                    parseInt(values, key + "protocolPayloadPackets", 0)));
+                    ProtocolRecognitionProjection.of(values.getProperty(
+                                    key + "protocolRecognitionState",
+                                    ProtocolRecognitionProjection.STATE_NONE),
+                            values.getProperty(key + "applicationProtocolKey", ""),
+                            values.getProperty(key + "applicationProtocolCategory", ""),
+                            values.getProperty(key + "protocolRecognitionSequence", ""),
+                            parseInt(values, key + "protocolPayloadPackets", 0))));
         }
         return activity;
     }
