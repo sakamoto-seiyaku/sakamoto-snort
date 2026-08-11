@@ -1294,6 +1294,55 @@ TEST(ControlServerContract, PolicyApplyGateBlockAndEvaluateWinner) {
     EXPECT_EQ(decision["revision"].GetUint64(), 7U);
 }
 
+TEST(ControlServerContract, PolicyApplyNetworkGateContextRulesKeepRuleAttribution) {
+    FakeRuntimeControl runtime;
+    runtime.policyReady = true;
+    ControlServerHarness harness(runtime);
+
+    const auto apply = harness.call(
+        101, "POLICY.APPLY",
+        R"({"revision":51,"subjects":[{"linuxUid":10001,"networkGate":{"rules":[{"networkContext":1,"reasonId":5101,"ruleId":51001},{"networkContext":3,"reasonId":5103,"ruleId":51003}]},"l4Rules":[{"ruleId":443,"reasonId":44,"priority":10,"order":0,"action":"drop","match":{"family":"ipv4","direction":"input","ipProtocol":6,"destinationPorts":{"first":443,"last":443}}}]}]})");
+    ASSERT_TRUE(apply["ok"].GetBool());
+    EXPECT_EQ(apply["result"]["networkGateRuleCount"].GetUint64(), 2U);
+
+    const auto mobile = harness.call(
+        102, "POLICY.EVALUATE",
+        R"({"linuxUid":10001,"networkContext":1,"family":"ipv4","direction":"input","ipProtocol":6,"sourcePort":40000,"destinationPort":443,"portsAvailable":true})");
+    ASSERT_TRUE(mobile["ok"].GetBool());
+    EXPECT_STREQ(mobile["result"]["verdict"].GetString(), "DROP");
+    EXPECT_STREQ(mobile["result"]["stage"].GetString(), "NetworkGate");
+    EXPECT_EQ(mobile["result"]["reasonId"].GetUint(), 5101U);
+    EXPECT_EQ(mobile["result"]["ruleId"].GetUint64(), 51001U);
+
+    const auto vpn = harness.call(
+        103, "POLICY.EVALUATE",
+        R"({"linuxUid":10001,"networkContext":3,"family":"ipv4","direction":"input","ipProtocol":6,"sourcePort":40000,"destinationPort":443,"portsAvailable":true})");
+    ASSERT_TRUE(vpn["ok"].GetBool());
+    EXPECT_STREQ(vpn["result"]["stage"].GetString(), "NetworkGate");
+    EXPECT_EQ(vpn["result"]["reasonId"].GetUint(), 5103U);
+    EXPECT_EQ(vpn["result"]["ruleId"].GetUint64(), 51003U);
+
+    const auto wifi = harness.call(
+        104, "POLICY.EVALUATE",
+        R"({"linuxUid":10001,"networkContext":2,"family":"ipv4","direction":"input","ipProtocol":6,"sourcePort":40000,"destinationPort":443,"portsAvailable":true})");
+    ASSERT_TRUE(wifi["ok"].GetBool());
+    EXPECT_STREQ(wifi["result"]["stage"].GetString(), "L4");
+    EXPECT_EQ(wifi["result"]["ruleId"].GetUint64(), 443U);
+}
+
+TEST(ControlServerContract, PolicyApplyRejectsDuplicateNetworkGateContextRules) {
+    FakeRuntimeControl runtime;
+    runtime.policyReady = true;
+    ControlServerHarness harness(runtime);
+
+    const auto apply = harness.call(
+        105, "POLICY.APPLY",
+        R"({"revision":52,"subjects":[{"linuxUid":10001,"networkGate":{"rules":[{"networkContext":1,"reasonId":5101,"ruleId":51001},{"networkContext":1,"reasonId":5102,"ruleId":51002}]},"l4Rules":[]}]} )");
+    ASSERT_FALSE(apply["ok"].GetBool());
+    ASSERT_TRUE(apply.HasMember("error"));
+    EXPECT_STREQ(apply["error"]["code"].GetString(), "INVALID_ARGUMENT");
+}
+
 TEST(ControlServerContract, PolicyApplyL4OrderingAndRevisionSurviveControl) {
     FakeRuntimeControl runtime;
     runtime.policyReady = true;

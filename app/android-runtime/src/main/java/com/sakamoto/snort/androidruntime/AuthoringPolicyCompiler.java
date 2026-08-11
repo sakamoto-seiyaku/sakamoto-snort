@@ -31,11 +31,7 @@ public final class AuthoringPolicyCompiler {
                 subjects.put(rule.subjectId, subject);
             }
             if (rule.blocked) {
-                subject.blockedContexts.add(rule.networkContext.wireId);
-                if (subject.reasonId == 0) {
-                    subject.reasonId = rule.reasonId;
-                    subject.ruleId = rule.ruleId;
-                }
+                subject.blockedRules.add(rule);
             }
         }
 
@@ -49,17 +45,19 @@ public final class AuthoringPolicyCompiler {
             }
             out.append("{\"linuxUid\":").append(subject.subjectId.uid)
                     .append(",\"uidKnown\":true");
-            if (!subject.blockedContexts.isEmpty()) {
-                out.append(",\"networkGate\":{\"blockedNetworkContexts\":[");
-                for (int i = 0; i < subject.blockedContexts.size(); ++i) {
+            if (!subject.blockedRules.isEmpty()) {
+                out.append(",\"networkGate\":{\"rules\":[");
+                for (int i = 0; i < subject.blockedRules.size(); ++i) {
                     if (i > 0) {
                         out.append(',');
                     }
-                    out.append(subject.blockedContexts.get(i));
+                    AuthoringPolicyBundle.NetworkGateRule rule = subject.blockedRules.get(i);
+                    out.append("{\"networkContext\":").append(rule.networkContext.wireId)
+                            .append(",\"reasonId\":").append(rule.reasonId)
+                            .append(",\"ruleId\":").append(Long.toUnsignedString(rule.ruleId))
+                            .append('}');
                 }
-                out.append("],\"reasonId\":").append(subject.reasonId)
-                        .append(",\"ruleId\":").append(Long.toUnsignedString(subject.ruleId))
-                        .append('}');
+                out.append("]}");
             }
             out.append('}');
             firstSubject = false;
@@ -70,9 +68,8 @@ public final class AuthoringPolicyCompiler {
 
     private static final class SubjectGate {
         final ApplicationSubjectId subjectId;
-        final ArrayList<Integer> blockedContexts = new ArrayList<>();
-        int reasonId = 0;
-        long ruleId = 0L;
+        final ArrayList<AuthoringPolicyBundle.NetworkGateRule> blockedRules =
+                new ArrayList<>();
 
         SubjectGate(ApplicationSubjectId subjectId) {
             this.subjectId = subjectId;

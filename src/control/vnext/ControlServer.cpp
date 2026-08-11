@@ -12,6 +12,7 @@
 
 #include <rapidjson/document.h>
 
+#include <algorithm>
 #include <array>
 #include <poll.h>
 #include <sys/socket.h>
@@ -609,17 +610,57 @@ bool parseNetworkGate(const rapidjson::Value &object,
     }
     if (const auto err = rejectUnknown(
             object, {"blockedNetworkContextBits", "blockedNetworkContexts",
-                     "reasonId", "ruleId"});
+                     "reasonId", "ruleId", "rules"});
         err.has_value()) {
         error = *err;
         return false;
     }
-    return readUint64(object, "blockedNetworkContextBits",
-                      out.blockedNetworkContextBits, error, false)
-        && readContextArray(object, "blockedNetworkContexts",
-                            out.blockedNetworkContexts, error)
-        && readUint32(object, "reasonId", out.reasonId, error, false)
-        && readUint64(object, "ruleId", out.ruleId, error, false);
+    if (!readUint64(object, "blockedNetworkContextBits",
+                    out.blockedNetworkContextBits, error, false)
+        || !readContextArray(object, "blockedNetworkContexts",
+                             out.blockedNetworkContexts, error)
+        || !readUint32(object, "reasonId", out.reasonId, error, false)
+        || !readUint64(object, "ruleId", out.ruleId, error, false)) {
+        return false;
+    }
+    const rapidjson::Value *rules = member(object, "rules");
+    if (rules == nullptr) {
+        return true;
+    }
+    if (!rules->IsArray()) {
+        error = "rules must be array";
+        return false;
+    }
+    out.contextRules.clear();
+    out.contextRules.reserve(rules->Size());
+    for (const auto &ruleValue : rules->GetArray()) {
+        if (!ruleValue.IsObject()) {
+            error = "rules entries must be object";
+            return false;
+        }
+        if (const auto err = rejectUnknown(
+                ruleValue, {"networkContext", "reasonId", "ruleId"});
+            err.has_value()) {
+            error = *err;
+            return false;
+        }
+        SnortDatapath::Policy::NetworkGateView::ContextRule rule;
+        if (!readUint32(ruleValue, "networkContext", rule.networkContext, error)
+            || !readUint32(ruleValue, "reasonId", rule.reasonId, error)
+            || !readUint64(ruleValue, "ruleId", rule.ruleId, error)) {
+            return false;
+        }
+        if (std::find_if(
+                out.contextRules.begin(), out.contextRules.end(),
+                [&rule](const auto &candidate) noexcept {
+                    return candidate.networkContext == rule.networkContext;
+                }) != out.contextRules.end()) {
+            error = "duplicate networkGate context rule";
+            return false;
+        }
+        out.contextRules.push_back(rule);
+    }
+    return true;
 }
 
 bool parsePolicySubject(const rapidjson::Value &object,

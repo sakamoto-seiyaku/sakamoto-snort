@@ -47,12 +47,21 @@ struct PacketPolicyDecision {
 };
 
 struct NetworkGateView {
+    struct ContextRule {
+        std::uint32_t networkContext = 0;
+        std::uint32_t reasonId = 0;
+        std::uint64_t ruleId = 0;
+    };
+
     std::uint64_t blockedNetworkContextBits = 0;
     std::vector<std::uint32_t> blockedNetworkContexts;
+    std::vector<ContextRule> contextRules;
     std::uint32_t reasonId = 0;
     std::uint64_t ruleId = 0;
 
     [[nodiscard]] bool blocks(std::uint32_t networkContext) const noexcept;
+    [[nodiscard]] std::optional<ContextRule> ruleFor(
+        std::uint32_t networkContext) const noexcept;
 };
 
 struct PortRange {

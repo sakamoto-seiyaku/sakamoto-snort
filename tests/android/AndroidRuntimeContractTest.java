@@ -1254,32 +1254,42 @@ public final class AndroidRuntimeContractTest {
     private static void gateMatrixCompilesToPacketPolicyApplyPayload() {
         ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
         AuthoringPolicyBundle blocked = AuthoringPolicyBundle.empty()
-                .withNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.WIFI, true);
+                .withNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.WIFI, false)
+                .withNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.MOBILE, true)
+                .withNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.VPN, true);
         AuthoringPolicyCompiler.CompileResult result =
                 AuthoringPolicyCompiler.compilePacketPolicyApply(blocked);
         check(result.ok, "GateMatrix compiles to a packet policy apply payload");
         check(result.revision == blocked.revision, "compiled payload carries bundle revision");
-        check(result.applyPayload.contains("\"revision\":1"),
+        check(result.applyPayload.contains("\"revision\":3"),
                 "compiled payload encodes revision");
         check(result.applyPayload.contains("\"linuxUid\":1010001"),
                 "compiled payload encodes complete Linux UID");
         check(result.applyPayload.contains("\"uidKnown\":true"),
                 "compiled payload encodes explicit known UID");
-        check(result.applyPayload.contains("\"blockedNetworkContexts\":[1]"),
-                "compiled payload maps Wi-Fi NetworkContextId");
+        check(result.applyPayload.contains("\"networkGate\":{\"rules\":["),
+                "compiled payload uses per-context GateTable rules");
+        check(!result.applyPayload.contains("\"networkContext\":1"),
+                "open Wi-Fi Gate compiles as PASS_NEXT by omitting a drop rule");
+        check(result.applyPayload.contains("\"networkContext\":2")
+                        && result.applyPayload.contains("\"networkContext\":3"),
+                "compiled payload maps Mobile and VPN NetworkContextId values");
+        check(!result.applyPayload.contains("blockedNetworkContexts"),
+                "compiled payload does not collapse GateMatrix into lossy legacy context list");
         check(result.applyPayload.contains("\"reasonId\":"),
                 "compiled payload carries stable reason attribution");
         check(result.applyPayload.contains("\"ruleId\":"),
                 "compiled payload carries stable rule attribution");
 
         AuthoringPolicyBundle opened = blocked.withNetworkGate(app,
-                AuthoringPolicyBundle.NetworkContextId.WIFI, false);
+                AuthoringPolicyBundle.NetworkContextId.MOBILE, false)
+                .withNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.VPN, false);
         AuthoringPolicyCompiler.CompileResult openResult =
                 AuthoringPolicyCompiler.compilePacketPolicyApply(opened);
         check(openResult.ok, "open GateMatrix compiles");
-        check(openResult.applyPayload.contains("\"revision\":2"),
+        check(openResult.applyPayload.contains("\"revision\":5"),
                 "open GateMatrix compiles as a new revision");
-        check(!openResult.applyPayload.contains("blockedNetworkContexts"),
+        check(!openResult.applyPayload.contains("\"rules\""),
                 "open Gate does not compile a blocking GateTable entry");
 
         AuthoringPolicyBundle unsupported = AuthoringPolicyBundle.restore(9L, "test",

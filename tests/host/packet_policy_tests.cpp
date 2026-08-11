@@ -183,6 +183,50 @@ TEST(PacketPolicyTest, NetworkGateDropShortCircuitsBeforeL4Drop) {
     EXPECT_EQ(decision.revision, kRevision);
 }
 
+TEST(PacketPolicyTest, NetworkGateContextRuleUsesPerContextAttribution) {
+    const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
+        .linuxUid = kUid,
+        .networkGate = Policy::NetworkGateView{
+            .contextRules = {
+                Policy::NetworkGateView::ContextRule{
+                    .networkContext = 1,
+                    .reasonId = 11,
+                    .ruleId = 101,
+                },
+                Policy::NetworkGateView::ContextRule{
+                    .networkContext = 3,
+                    .reasonId = 13,
+                    .ruleId = 103,
+                },
+            },
+        },
+        .l4Rules = {dropTcpDst443(0, 0, 200)},
+    });
+
+    auto mobile = ipv4TcpFacts();
+    mobile.domain.networkContext = 1;
+    const auto mobileDecision = snapshot.evaluate(mobile);
+    EXPECT_EQ(mobileDecision.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(mobileDecision.stage, Policy::PacketPolicyStage::NetworkGate);
+    EXPECT_EQ(mobileDecision.reasonId, 11U);
+    EXPECT_EQ(mobileDecision.ruleId, 101U);
+
+    auto vpn = ipv4TcpFacts();
+    vpn.domain.networkContext = 3;
+    const auto vpnDecision = snapshot.evaluate(vpn);
+    EXPECT_EQ(vpnDecision.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(vpnDecision.stage, Policy::PacketPolicyStage::NetworkGate);
+    EXPECT_EQ(vpnDecision.reasonId, 13U);
+    EXPECT_EQ(vpnDecision.ruleId, 103U);
+
+    auto wifiOpen = ipv4TcpFacts();
+    wifiOpen.domain.networkContext = 2;
+    const auto openDecision = snapshot.evaluate(wifiOpen);
+    EXPECT_EQ(openDecision.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(openDecision.stage, Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(openDecision.ruleId, 200U);
+}
+
 TEST(PacketPolicyTest, OpenGateAndNoL4MatchPassesNext) {
     const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
         .linuxUid = kUid,

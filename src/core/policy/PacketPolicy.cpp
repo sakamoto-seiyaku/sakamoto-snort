@@ -32,7 +32,15 @@ bool ruleRankLess(const L4Rule &left, const L4Rule &right) noexcept {
 }
 
 bool networkGateConfigured(const NetworkGateView &gate) noexcept {
-    return gate.blockedNetworkContextBits != 0 || !gate.blockedNetworkContexts.empty();
+    return gate.blockedNetworkContextBits != 0 || !gate.blockedNetworkContexts.empty()
+        || !gate.contextRules.empty();
+}
+
+std::size_t networkGateRuleCount(const NetworkGateView &gate) noexcept {
+    if (!gate.contextRules.empty()) {
+        return gate.contextRules.size();
+    }
+    return networkGateConfigured(gate) ? 1U : 0U;
 }
 
 bool subjectMatches(const PacketPolicySubjectView &candidate,
@@ -62,8 +70,24 @@ PacketPolicyDecision PacketPolicyDecision::drop(
 }
 
 bool NetworkGateView::blocks(const std::uint32_t networkContext) const noexcept {
+    if (ruleFor(networkContext).has_value()) {
+        return true;
+    }
     return contextMatches(
         blockedNetworkContextBits, blockedNetworkContexts, networkContext);
+}
+
+std::optional<NetworkGateView::ContextRule> NetworkGateView::ruleFor(
+    const std::uint32_t networkContext) const noexcept {
+    const auto found = std::find_if(
+        contextRules.begin(), contextRules.end(),
+        [networkContext](const ContextRule &rule) noexcept {
+            return rule.networkContext == networkContext;
+        });
+    if (found == contextRules.end()) {
+        return std::nullopt;
+    }
+    return *found;
 }
 
 PortRange PortRange::exact(const std::uint16_t port) noexcept {
@@ -121,9 +145,7 @@ StatelessPacketPolicySnapshot::StatelessPacketPolicySnapshot(
     const std::uint64_t revision)
     : subjects_(std::move(subjects)), revision_(revision) {
     for (auto &subject : subjects_) {
-        if (networkGateConfigured(subject.networkGate)) {
-            ++networkGateRuleCount_;
-        }
+        networkGateRuleCount_ += networkGateRuleCount(subject.networkGate);
         l4RuleCount_ += subject.l4Rules.size();
         std::stable_sort(
             subject.l4Rules.begin(), subject.l4Rules.end(), ruleRankLess);
@@ -139,6 +161,13 @@ PacketPolicyDecision StatelessPacketPolicySnapshot::evaluate(
         });
     if (subject == subjects_.end()) {
         return PacketPolicyDecision::passNext();
+    }
+
+    if (const auto gateRule = subject->networkGate.ruleFor(facts.domain.networkContext);
+        gateRule.has_value()) {
+        return PacketPolicyDecision::drop(
+            gateRule->reasonId, gateRule->ruleId, revision_,
+            PacketPolicyStage::NetworkGate);
     }
 
     if (subject->networkGate.blocks(facts.domain.networkContext)) {
