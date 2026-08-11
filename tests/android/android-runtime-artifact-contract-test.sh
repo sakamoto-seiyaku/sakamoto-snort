@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_script="$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
 release_candidate_build_script="$repo_root/app/android-runtime/scripts/build-release-candidate-apk.sh"
+final_release_build_script="$repo_root/app/android-runtime/scripts/build-final-release-apk.sh"
 default_stage="$repo_root/build-output/android-vpp-runtime/stage"
 valid_stage="${VPP_RUNTIME_VALID_STAGE_DIR:-$default_stage}"
 if [[ ! -f "$valid_stage/bin/vpp" || ! -f "$valid_stage/bin/vppctl" ]]; then
@@ -156,5 +157,25 @@ grep -q 'debuggable(0x0101000f)=false' <<<"$release_candidate_manifest" \
   || { echo "release-candidate APK remains debuggable" >&2; exit 1; }
 ! grep -q 'debuggable(0x0101000f)=true' <<<"$release_candidate_manifest" \
   || { echo "release-candidate APK manifest contains debuggable=true" >&2; exit 1; }
+
+[[ -f "$final_release_build_script" ]] \
+  || { echo "final release APK build wrapper is missing" >&2; exit 1; }
+grep -q 'ANDROID_RUNTIME_BUILD_VARIANT=final-release' "$final_release_build_script"
+set +e
+VPP_RUNTIME_STAGE_DIR="$valid_stage" "$final_release_build_script" \
+  >"$tmp_dir/final-release-missing-signing.log" 2>&1
+final_release_missing_signing_rc=$?
+set -e
+if [[ "$final_release_missing_signing_rc" == 0 ]]; then
+  cat "$tmp_dir/final-release-missing-signing.log" >&2
+  echo "final release build unexpectedly succeeded without release signing input" >&2
+  exit 1
+fi
+grep -q 'ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE' \
+  "$tmp_dir/final-release-missing-signing.log"
+grep -q 'final release signing input' "$build_script"
+grep -q 'sakamoto-runtime-release.apk' "$build_script"
+grep -q 'ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE' "$build_script"
+grep -q 'ANDROID_RUNTIME_RELEASE_KEY_PASS_FILE' "$build_script"
 
 echo "android runtime core artifact contract seam: PASS"

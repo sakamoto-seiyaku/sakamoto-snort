@@ -86,7 +86,7 @@ lock_dir="$repo_root/build-output/android-runtime-locks"
 mkdir -p "$lock_dir"
 build_variant="${ANDROID_RUNTIME_BUILD_VARIANT:-debug}"
 case "$build_variant" in
-  debug|release-candidate)
+  debug|release-candidate|final-release)
     ;;
   *)
     die "unsupported Android runtime build variant: $build_variant"
@@ -98,11 +98,31 @@ signing_dir="${ANDROID_RUNTIME_SIGNING_DIR:-$repo_root/build-output/android-runt
 signing_keystore="${ANDROID_RUNTIME_SIGNING_KEYSTORE:-$signing_dir/debug.keystore}"
 signing_alias="${ANDROID_RUNTIME_SIGNING_ALIAS:-androiddebugkey}"
 signing_dname="${ANDROID_RUNTIME_SIGNING_DNAME:-CN=Android Debug,O=sakamoto,C=US}"
+signing_ks_pass_arg="pass:android"
+signing_key_pass_arg="pass:android"
 apk_version_name_default="0.1-runtime-debug"
 apk_output_name="sakamoto-runtime-debug.apk"
 if [[ "$build_variant" == "release-candidate" ]]; then
   apk_version_name_default="0.1-runtime-release-candidate"
   apk_output_name="sakamoto-runtime-release-candidate.apk"
+elif [[ "$build_variant" == "final-release" ]]; then
+  apk_version_name_default="0.1-runtime-release"
+  apk_output_name="sakamoto-runtime-release.apk"
+  : "${ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE:?missing final release signing input: ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE}"
+  : "${ANDROID_RUNTIME_RELEASE_SIGNING_ALIAS:?missing final release signing input: ANDROID_RUNTIME_RELEASE_SIGNING_ALIAS}"
+  : "${ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE:?missing final release signing input: ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE}"
+  signing_keystore="$ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE"
+  signing_alias="$ANDROID_RUNTIME_RELEASE_SIGNING_ALIAS"
+  signing_store_pass_file="$ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE"
+  signing_key_pass_file="${ANDROID_RUNTIME_RELEASE_KEY_PASS_FILE:-$ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE}"
+  [[ -f "$signing_keystore" ]] \
+    || die "missing final release signing keystore: $signing_keystore"
+  [[ -f "$signing_store_pass_file" ]] \
+    || die "missing final release signing store password file: $signing_store_pass_file"
+  [[ -f "$signing_key_pass_file" ]] \
+    || die "missing final release signing key password file: $signing_key_pass_file"
+  signing_ks_pass_arg="file:$signing_store_pass_file"
+  signing_key_pass_arg="file:$signing_key_pass_file"
 fi
 classes_dir="$build_dir/classes"
 dex_dir="$build_dir/dex"
@@ -290,7 +310,7 @@ unsigned_apk="$intermediates/unsigned.apk"
 aligned_apk="$intermediates/aligned.apk"
 apk="$outputs/$apk_output_name"
 manifest_for_build="$intermediates/AndroidManifest.xml"
-if [[ "$build_variant" == "release-candidate" ]]; then
+if [[ "$build_variant" != "debug" ]]; then
   sed 's/android:debuggable="true"/android:debuggable="false"/' \
     "$app_dir/src/main/AndroidManifest.xml" >"$manifest_for_build"
 else
@@ -310,14 +330,15 @@ cp "$base_apk" "$unsigned_apk"
 (cd "$dex_dir" && zip -q -r "$unsigned_apk" classes.dex)
 (cd "$build_dir/jni" && zip -q -r "$unsigned_apk" lib)
 (cd "$build_dir" && zip -q -r "$unsigned_apk" assets)
-if [[ ! -f "$signing_keystore" ]]; then
+if [[ "$build_variant" != "final-release" && ! -f "$signing_keystore" ]]; then
   keytool -genkeypair -keystore "$signing_keystore" -storepass android \
     -keypass android -alias "$signing_alias" -keyalg RSA -keysize 2048 \
     -validity 10000 -dname "$signing_dname" >/dev/null
 fi
 "$zipalign_bin" -f -p 4 "$unsigned_apk" "$aligned_apk"
 java -jar "$apksigner_jar" sign --ks "$signing_keystore" \
-  --ks-pass pass:android --key-pass pass:android --ks-key-alias "$signing_alias" \
+  --ks-pass "$signing_ks_pass_arg" --key-pass "$signing_key_pass_arg" \
+  --ks-key-alias "$signing_alias" \
   --out "$apk" "$aligned_apk"
 java -jar "$apksigner_jar" verify --print-certs "$apk" >/dev/null
 echo "ok: $apk"

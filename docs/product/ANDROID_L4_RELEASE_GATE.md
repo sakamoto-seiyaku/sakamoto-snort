@@ -56,6 +56,18 @@ directories, and S59 now has non-debug release-candidate budget and closure
 gate reruns. The final signed release APK still needs to rerun the table below
 before S59 can close.
 
+Final signed APK build preflight:
+
+- Script: `app/android-runtime/scripts/build-final-release-apk.sh`.
+- Output artifact: `app/android-runtime/build/outputs/sakamoto-runtime-release.apk`.
+- Required signing inputs: `ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE`,
+  `ANDROID_RUNTIME_RELEASE_SIGNING_ALIAS`,
+  `ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE`, and optional
+  `ANDROID_RUNTIME_RELEASE_KEY_PASS_FILE` when the key password differs from
+  the store password.
+- The final-release path does not generate a signing key and does not use the
+  debug keystore. Missing signing inputs fail before producing an APK.
+
 ### Current supported-device compatibility rollup
 
 This table records current debug-APK functional evidence plus the latest
