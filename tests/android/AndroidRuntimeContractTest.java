@@ -32,6 +32,7 @@ import com.sakamoto.snort.androidruntime.HealthIssue;
 import com.sakamoto.snort.androidruntime.RuntimeSummary;
 import com.sakamoto.snort.androidruntime.AppSummary;
 import com.sakamoto.snort.androidruntime.AppDetail;
+import com.sakamoto.snort.androidruntime.ReleaseDiagnosticsExport;
 import com.sakamoto.snort.androidruntime.RuleDraft;
 import com.sakamoto.snort.androidruntime.RuleView;
 import com.sakamoto.snort.androidruntime.ActivityItem;
@@ -111,6 +112,7 @@ public final class AndroidRuntimeContractTest {
         productPolicyTransactionRestoreAndImportExportAreAtomic();
         productPolicyTransactionStorePersistsDraftCommitRuntimeAndCheckpoints();
         productPolicyCommitValidationRejectsConflictsAndStaleBindings();
+        releaseDiagnosticsExportIsDesensitizedAndFeedbackReady();
         appFirstProductUiModelsExposeStableUserFacingSeams();
         System.out.println("android runtime contract: PASS");
     }
@@ -2941,6 +2943,59 @@ public final class AndroidRuntimeContractTest {
                         && applyFailureDetail.displayText.contains(
                         HealthIssue.CATEGORY_APPLY_FAILURE),
                 "AppDetail renders apply failure with old snapshot guidance");
+    }
+
+    private static void releaseDiagnosticsExportIsDesensitizedAndFeedbackReady() {
+        ApplicationSubjectId subject = ApplicationSubjectId.fromUid(1010001);
+        AuthoringPolicyBundle bundle = AuthoringPolicyBundle.empty()
+                .withNetworkGate(subject, AuthoringPolicyBundle.NetworkContextId.WIFI, true)
+                .withL4Rule(l4Rule(subject, "1.1.1.1/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        ProductCatalogFormatter.Projection projection = ProductCatalogFormatter.project(
+                new ProductStateSnapshot(RuntimeProfile.VPN,
+                        new java.util.TreeSet<>(Arrays.asList(subject)), bundle),
+                Arrays.asList(new ApplicationCatalogEntry(subject,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        subject.userId, "Work", true)),
+                "result", "", "", 5);
+        ProductCatalogFormatter.EntryRow row = projection.selectableRows.get(0);
+        RuntimeSnapshot runtime = RuntimeSnapshot.running(RuntimeProfile.VPN,
+                "control-vnext", "1", "runtime-arm64", "arm64", "ok", 4242L, 9L);
+        RuntimeSummary summary = RuntimeSummary.fromSnapshot(runtime,
+                CapabilitySet.androidL4(true, true));
+        AppDetail detail = AppDetail.normal(AppSummary.fromCatalogRow(row), summary,
+                Arrays.asList(RuleView.l4(bundle.l4Rules.get(0), bundle.revision)),
+                Arrays.asList(ActivityItem.policyDrop(subject, "Mail",
+                        "com.example.mail", 1234L, "1.1.1.1", "tcp", 443,
+                        "output", bundle.revision, "L4",
+                        bundle.l4Rules.get(0).ruleId, 42)));
+
+        String export = ReleaseDiagnosticsExport.format(runtime, projection, detail, row,
+                123456789L);
+        check(export.contains("schema=sakamoto.android_l4.release_diagnostics.v1"),
+                "release diagnostics schema is stable");
+        check(export.contains("privacy=desensitized_no_payload_no_keys")
+                        && export.contains("payload=not_exported")
+                        && export.contains("keys=not_exported"),
+                "release diagnostics declares desensitized no-payload/no-key policy");
+        check(export.contains("runtime.profile=vpn")
+                        && export.contains("runtime.coreHealth=ok")
+                        && export.contains("runtime.abi=arm64")
+                        && export.contains("selected.subject=" + subject.encode())
+                        && export.contains("appDetail.activity=1"),
+                "release diagnostics includes bounded troubleshooting facts");
+        check(export.contains("feedback.bug=Bug report")
+                        && export.contains("feedback.compatibility=Compatibility report")
+                        && export.contains("feedback.feature=Feature request")
+                        && export.contains("feedback.help=Help request"),
+                "release diagnostics exposes all S59 feedback routes");
+        check(!export.contains("payload bytes") && !export.contains("apiKey")
+                        && !export.contains("signingKey"),
+                "release diagnostics does not expose raw payloads or secret labels");
+        check(ReleaseDiagnosticsExport.feedbackSummary().contains("Bug report")
+                        && ReleaseDiagnosticsExport.feedbackSummary().contains(
+                        "Compatibility report"),
+                "feedback summary is user-findable from the UI action");
     }
 
     private static AuthoringPolicyBundle.L4Rule l4Rule(

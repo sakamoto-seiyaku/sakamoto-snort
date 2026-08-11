@@ -29,6 +29,7 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeSummary.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/AppSummary.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/AppDetail.java" \
+  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ReleaseDiagnosticsExport.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuleDraft.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuleView.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ActivityItem.java" \

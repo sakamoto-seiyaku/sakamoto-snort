@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 release_gate="$repo_root/docs/product/ANDROID_L4_RELEASE_GATE.md"
 product_readme="$repo_root/docs/product/README.md"
+debug_activity="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
+release_diagnostics="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ReleaseDiagnosticsExport.java"
 
 if [[ ! -f "$release_gate" ]]; then
   echo "missing S59 Android L4 release gate dossier: $release_gate" >&2
@@ -46,5 +48,17 @@ grep -q 'tests/device/s70-profile-lifecycle-matrix.sh' "$release_gate"
 grep -q 'tests/device/s71-dual-profile-closure-gate.sh' "$release_gate"
 grep -q 'cmake --build --preset dev-debug --target snort-host-tests' "$release_gate"
 grep -q 'ANDROID_L4_RELEASE_GATE.md' "$product_readme"
+
+grep -q 'debugExportReleaseDiagnostics' "$debug_activity"
+grep -q 'release-diagnostics.properties' "$debug_activity"
+grep -q 'Export diagnostics / feedback' "$debug_activity"
+grep -q 'sakamoto.android_l4.release_diagnostics.v1' "$release_diagnostics"
+grep -q 'desensitized_no_payload_no_keys' "$release_diagnostics"
+grep -q 'payload=not_exported' "$release_diagnostics"
+grep -q 'keys=not_exported' "$release_diagnostics"
+grep -q 'Bug report' "$release_diagnostics"
+grep -q 'Compatibility report' "$release_diagnostics"
+grep -q 'Feature request' "$release_diagnostics"
+grep -q 'Help request' "$release_diagnostics"
 
 echo "s59 product release gate static contract: PASS"

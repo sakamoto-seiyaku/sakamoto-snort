@@ -60,6 +60,8 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
     private static final String EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY =
             "debugL4PrefillFromActivity";
+    private static final String EXTRA_DEBUG_EXPORT_RELEASE_DIAGNOSTICS =
+            "debugExportReleaseDiagnostics";
     private static final String EXTRA_DEBUG_LISTEN = "debugListen";
     private static final String EXTRA_DEBUG_LISTEN_PORT = "debugListenPort";
     private static final String EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS =
@@ -106,6 +108,8 @@ public class DebugControlActivity extends Activity {
             "debug/traffic-probe.properties";
     private static final String DEBUG_L4_PREFILL_RESULT_PATH =
             "debug/l4-prefill.properties";
+    private static final String DEBUG_RELEASE_DIAGNOSTICS_RESULT_PATH =
+            "debug/release-diagnostics.properties";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
     private static final int DEBUG_TRAFFIC_PORT = 80;
     private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
@@ -243,6 +247,9 @@ public class DebugControlActivity extends Activity {
             final int prefillPort = port;
             main.post(() -> runDebugL4PrefillFromActivity(prefillHost, prefillPort));
         }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_EXPORT_RELEASE_DIAGNOSTICS, false)) {
+            main.post(this::exportReleaseDiagnostics);
+        }
     }
 
     private View buildUi() {
@@ -367,6 +374,14 @@ public class DebugControlActivity extends Activity {
                 AuthoringPolicyBundle.NetworkContextId.VPN));
         productButtons.addView(vpnGateButton, weighted());
         root.addView(productButtons, fillWrap());
+
+        LinearLayout feedbackButtons = new LinearLayout(this);
+        Button diagnostics = new Button(this);
+        diagnostics.setText("Export diagnostics / feedback");
+        diagnostics.setAllCaps(false);
+        diagnostics.setOnClickListener(view -> exportReleaseDiagnostics());
+        feedbackButtons.addView(diagnostics, fillWrap());
+        root.addView(feedbackButtons, fillWrap());
 
         statusView = new TextView(this);
         statusView.setTextSize(15);
@@ -1056,6 +1071,31 @@ public class DebugControlActivity extends Activity {
             out.write(text.getBytes(StandardCharsets.UTF_8));
         } catch (IOException ignored) {
             // Debug evidence must never change product control behavior.
+        }
+    }
+
+    private void exportReleaseDiagnostics() {
+        RuntimeSnapshot runtime = backend.query(this);
+        ProductCatalogFormatter.Projection projection = ProductCatalogProjectionStore.read(
+                getFilesDir());
+        AppDetail detail = ProductActivityProjectionStore.read(getFilesDir());
+        ProductCatalogFormatter.EntryRow row = selectedApplicationRow();
+        String text = ReleaseDiagnosticsExport.format(runtime, projection, detail, row,
+                System.currentTimeMillis());
+        File file = new File(getFilesDir(), DEBUG_RELEASE_DIAGNOSTICS_RESULT_PATH);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            action("Release diagnostics export failed: cannot create debug directory.");
+            return;
+        }
+        try (FileOutputStream out = new FileOutputStream(file, false)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+            action("Release diagnostics exported to "
+                    + DEBUG_RELEASE_DIAGNOSTICS_RESULT_PATH + ".\n"
+                    + "Privacy: " + ReleaseDiagnosticsExport.PRIVACY + ".\n"
+                    + ReleaseDiagnosticsExport.feedbackSummary());
+        } catch (IOException error) {
+            action("Release diagnostics export failed: " + boundedError(error));
         }
     }
 

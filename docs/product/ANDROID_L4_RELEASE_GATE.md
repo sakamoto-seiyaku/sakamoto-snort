@@ -216,7 +216,12 @@ The product must expose or document four user-findable feedback routes before re
 3. Feature request: describe the user task, profile, app, rule type, and why existing Gate/L4 controls are insufficient.
 4. Help request: include the current onboarding/recovery step and any visible health issue action.
 
-Current implementation gap: these routes are documented here but still need a user-visible in-app or release-notes entry point.
+Current implementation slice: the Android debug/product control surface exposes
+`Export diagnostics / feedback`, which writes
+`debug/release-diagnostics.properties` using schema
+`sakamoto.android_l4.release_diagnostics.v1` and shows Bug report,
+Compatibility report, Feature request, and Help request guidance. Final release
+notes still need to publish the same routes for non-debug distribution.
 
 ## 11. Release-notes template
 
@@ -243,4 +248,4 @@ S59 can move to Done only when all rows are true:
 - [ ] Root fail-open fault envelope and no-residue evidence are green.
 - [ ] Release budget ledger is fully populated, with no `TBD` rows treated as pass.
 - [ ] English and Chinese install/quick-start/help/privacy/limitations/release-notes content is published.
-- [ ] Desensitized diagnostic export and user feedback entry points are visible to users.
+- [x] Desensitized diagnostic export and user feedback entry points are visible to users.
