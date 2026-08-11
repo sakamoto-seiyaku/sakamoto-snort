@@ -29,6 +29,7 @@ bash "$repo_root/tests/android/s51-root-network-gate-product-matrix-contract-tes
 bash "$repo_root/tests/android/s52-root-l4-product-matrix-contract-test.sh"
 bash "$repo_root/tests/android/s70-profile-lifecycle-matrix-contract-test.sh"
 bash "$repo_root/tests/android/s54-upgrade-rollback-matrix-contract-test.sh"
+bash "$repo_root/tests/android/s54-root-permission-boundary-contract-test.sh"
 production_service_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 production_ownership_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java"
 production_activity_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"

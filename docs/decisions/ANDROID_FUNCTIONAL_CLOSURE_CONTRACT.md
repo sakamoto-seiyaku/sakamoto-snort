@@ -184,6 +184,17 @@ Functional Closure 不因首次发版策略尚未最终确定而延后当前可�
 
 在以上合同下，S68 可以关闭 Root/NFQUEUE 最小 Gate+L4 slice，前提是 harness 产出：真实 app UID OUTPUT verdict、Root INPUT Unknown Application verdict、policy apply/evaluate/winner/revision、Debug Activity verdict evidence、restart/final cleanup no-residue，以及 direct SIGKILL unmanaged fault + recovery cleanup evidence。S70/S71 仍负责产品级 supervised failure recovery 和双 Profile closure。
 
+### 7.2 SAKAMOTO-54 Root permission revocation boundary
+
+记录日期：2026-08-11。来源：SAKAMOTO-54 recovery/Protection Pause device evidence、既有 SAKAMOTO-24/S27 KernelSU evidence、以及当前 RuntimeService contract audit。
+
+S54 的 Root permission acceptance 分成两个不同边界，不得混淆：
+
+1. **Start/recovery authorization unavailable。** 当 Root 启动、ownership audit、profile cleanup 或 recovery path 无法取得 privileged runner 时，产品合同是 fail closed 到可见状态 `root_authorization_required`，不自动重启、不把权限缺失归类成 ordinary adapter crash，也不删除未能证明归属的 live profile。现有代码和 contract 要求 `RuntimeRecoveryPolicy.recoverable("root_authorization_required") == false`；manual start/resume 在用户恢复授权后重新进入 fresh recovery path。S54/S70/S71 的 lifecycle evidence 继续要求 crash、app process death、Protection Pause、cleanup fault、Doze、reboot、upgrade/rollback 后无 process/socket/NFQUEUE/VPN/TUN/profile-owned residue。
+2. **KernelSU live revocation。** 在当前 Pixel 6a / Android 16 / KernelSU 证据中，不重启修改 app allow byte 后，后续 `su` 请求仍可成功；KernelSU 缓存/启动态加载授权状态。这不是 RuntimeService 可以可靠观察的 current-run input，也不是可以安全放入 release gate 的常规自动化动作。因此当前 S54 不再要求破坏性 live allowlist mutation 真机脚本；它把 running-time revocation 记录为 KernelSU platform boundary，并以 start/recovery 授权缺失、可见 intervention、bounded cleanup 和 fresh manual recovery 作为可执行产品合同。
+
+这个边界不放宽 Root runtime cleanup、Protection Pause、bounded recovery、通知/产品状态可见性、upgrade/rollback 或 final residue 断言。若未来 KernelSU 或 Android 提供可观察、非破坏性、可恢复的 live authorization revoked signal，必须新增独立 device gate，再更新本文和 S54/S57 的 onboarding/recovery 文案。
+
 ## 8. 现有证据的使用方式
 
 以下资产是迁移输入或 harness 基线，不自动满足 production VPP closure：
