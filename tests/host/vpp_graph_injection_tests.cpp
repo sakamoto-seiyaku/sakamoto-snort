@@ -33,6 +33,27 @@ private:
     Policy::PacketPolicyStage stage_;
 };
 
+class PassRevisionPolicy final : public SnortDatapath::Policy::PacketPolicySnapshot {
+public:
+    explicit PassRevisionPolicy(const std::uint64_t revision) noexcept
+        : revision_(revision) {}
+
+    [[nodiscard]] Policy::PacketPolicyDecision evaluate(
+        const PacketFacts &packetFacts) const noexcept override {
+        static_cast<void>(packetFacts);
+        auto decision = Policy::PacketPolicyDecision::passNext();
+        decision.revision = revision_;
+        return decision;
+    }
+
+    [[nodiscard]] std::uint64_t revision() const noexcept override {
+        return revision_;
+    }
+
+private:
+    std::uint64_t revision_ = 0;
+};
+
 PacketFacts facts(const AdapterKind adapter, const bool reverse = false) {
     return PacketFacts{
         .source = IpAddress::v4(reverse
@@ -149,6 +170,38 @@ TEST(VppGraphInjectionTest, PolicyDropShortCircuitsBeforeAcceptedTerminalPath) {
     EXPECT_EQ(gate.counters().ownerFaultDrops, 0U);
     EXPECT_EQ(runtime.flowTable().size(), 0U);
     EXPECT_FALSE(gate.lastFlowEntryObservation().has_value());
+}
+
+TEST(VppGraphInjectionTest, ExistingFlowEntryRevisionMismatchLazyReevaluatesNextPacket) {
+    FlowSteeringRuntime runtime(WorkerLayout{2, 0x7777}, 4);
+    PassRevisionPolicy revisionSeven(7);
+    FlowGraphInjectionGate firstGate(runtime, revisionSeven);
+    auto firstFacts = facts(AdapterKind::RootNfqueue);
+    const auto key = CanonicalFlowKey::from(firstFacts);
+    ASSERT_TRUE(key.has_value());
+    const auto owner = runtime.distribution().selector().ownerFor(*key);
+    PacketSubmission first{.facts = firstFacts};
+    ASSERT_EQ(firstGate.inject(first, owner), GraphInjectionResult::Accepted);
+    const auto *created = runtime.flowTable().find(*key);
+    ASSERT_NE(created, nullptr);
+    EXPECT_TRUE(created->decisionStateValid);
+    EXPECT_EQ(created->policyRevision, 7U);
+
+    PassRevisionPolicy revisionEight(8);
+    FlowGraphInjectionGate secondGate(runtime, revisionEight);
+    PacketSubmission second{.facts = facts(AdapterKind::RootNfqueue, true)};
+    EXPECT_EQ(secondGate.inject(second, owner), GraphInjectionResult::Accepted);
+    const auto *reevaluated = runtime.flowTable().find(*key);
+    ASSERT_NE(reevaluated, nullptr);
+    EXPECT_TRUE(reevaluated->decisionStateValid);
+    EXPECT_EQ(reevaluated->policyRevision, 8U);
+    EXPECT_EQ(reevaluated->decisionStateClears, 1U);
+    EXPECT_EQ(reevaluated->packets, 2U);
+    EXPECT_EQ(runtime.flowTable().counters().decisionStateClears, 1U);
+    ASSERT_TRUE(secondGate.lastFlowEntryObservation().has_value());
+    EXPECT_TRUE(secondGate.lastFlowEntryObservation()->decisionStateCleared);
+    EXPECT_EQ(secondGate.lastFlowEntryObservation()->relativeDirection,
+              FlowRelativeDirection::Reply);
 }
 
 TEST(VppGraphInjectionTest, OwnerSelectionIgnoresUidWhilePolicyCanDropByUid) {

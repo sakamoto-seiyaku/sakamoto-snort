@@ -473,8 +473,45 @@ const FlowEntry *BoundedFlowTable::find(const CanonicalFlowKey &key) const noexc
     return found == entries_.end() ? nullptr : &*found;
 }
 
+std::optional<FlowEntryRevisionObservation> BoundedFlowTable::reconcilePolicyRevision(
+    const PacketFacts &facts, const std::uint64_t policyRevision) noexcept {
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        ++counters_.nonCanonicalPackets;
+        return std::nullopt;
+    }
+
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
+    if (found == entries_.end()) {
+        return FlowEntryRevisionObservation{
+            .found = false,
+            .decisionStateCleared = false,
+            .previousPolicyRevision = 0,
+            .currentPolicyRevision = policyRevision,
+        };
+    }
+
+    const auto previousPolicyRevision = found->policyRevision;
+    auto cleared = false;
+    if (found->decisionStateValid && previousPolicyRevision != policyRevision) {
+        found->decisionStateValid = false;
+        found->policyRevision = policyRevision;
+        ++found->decisionStateClears;
+        ++counters_.decisionStateClears;
+        cleared = true;
+    }
+    return FlowEntryRevisionObservation{
+        .found = true,
+        .decisionStateCleared = cleared,
+        .previousPolicyRevision = previousPolicyRevision,
+        .currentPolicyRevision = policyRevision,
+    };
+}
+
 std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
-    const PacketFacts &facts) noexcept {
+    const PacketFacts &facts, const std::uint64_t policyRevision) noexcept {
     const auto key = CanonicalFlowKey::from(facts);
     if (!key.has_value()) {
         ++counters_.nonCanonicalPackets;
@@ -485,6 +522,11 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         entries_.begin(), entries_.end(),
         [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
     if (found != entries_.end()) {
+        const auto decisionStateCleared =
+            !found->decisionStateValid && found->policyRevision == policyRevision
+            && found->decisionStateClears > 0;
+        found->decisionStateValid = true;
+        found->policyRevision = policyRevision;
         found->packets += 1U;
         found->bytes += facts.originalLength;
         ++counters_.updates;
@@ -494,6 +536,9 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
                 : FlowRelativeDirection::Reply,
             .flowOriginDir = found->flowOriginDir,
             .created = false,
+            .decisionStateValid = found->decisionStateValid,
+            .decisionStateCleared = decisionStateCleared,
+            .policyRevision = found->policyRevision,
             .packets = found->packets,
             .bytes = found->bytes,
         };
@@ -511,6 +556,9 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         .originSourcePort = facts.sourcePort,
         .originDestinationPort = facts.destinationPort,
         .flowOriginDir = facts.deviceDirection,
+        .decisionStateValid = true,
+        .policyRevision = policyRevision,
+        .decisionStateClears = 0,
         .packets = 1U,
         .bytes = facts.originalLength,
     });
@@ -519,6 +567,9 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         .relativeDirection = FlowRelativeDirection::Orig,
         .flowOriginDir = entry.flowOriginDir,
         .created = true,
+        .decisionStateValid = entry.decisionStateValid,
+        .decisionStateCleared = false,
+        .policyRevision = entry.policyRevision,
         .packets = entry.packets,
         .bytes = entry.bytes,
     };

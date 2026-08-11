@@ -73,11 +73,13 @@ TEST(FlowSteeringTest, FlowEntryCreationPacketDefinesOrigIndependentOfCanonicalE
     ASSERT_EQ(key->endpointA, IpAddress::v4({10, 0, 0, 9}));
     ASSERT_EQ(key->portA, 40000);
 
-    const auto created = table.observeAccepted(first);
+    const auto created = table.observeAccepted(first, 7);
     ASSERT_TRUE(created.has_value());
     EXPECT_TRUE(created->created);
     EXPECT_EQ(created->relativeDirection, FlowRelativeDirection::Orig);
     EXPECT_EQ(created->flowOriginDir, DevicePacketDirection::Output);
+    EXPECT_TRUE(created->decisionStateValid);
+    EXPECT_EQ(created->policyRevision, 7U);
     EXPECT_EQ(table.size(), 1U);
 
     const auto *entry = table.find(*key);
@@ -87,11 +89,13 @@ TEST(FlowSteeringTest, FlowEntryCreationPacketDefinesOrigIndependentOfCanonicalE
     EXPECT_EQ(entry->originSourcePort, 443U);
     EXPECT_EQ(entry->originDestinationPort, 40000U);
     EXPECT_EQ(entry->flowOriginDir, DevicePacketDirection::Output);
+    EXPECT_TRUE(entry->decisionStateValid);
+    EXPECT_EQ(entry->policyRevision, 7U);
 
     const auto reverse = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
                                    {10, 0, 0, 9}, {192, 0, 2, 10}, 40000, 443);
     ASSERT_EQ(*CanonicalFlowKey::from(reverse), *key);
-    const auto updated = table.observeAccepted(reverse);
+    const auto updated = table.observeAccepted(reverse, 7);
     ASSERT_TRUE(updated.has_value());
     EXPECT_FALSE(updated->created);
     EXPECT_EQ(updated->relativeDirection, FlowRelativeDirection::Reply);
@@ -99,6 +103,44 @@ TEST(FlowSteeringTest, FlowEntryCreationPacketDefinesOrigIndependentOfCanonicalE
     EXPECT_EQ(updated->packets, 2U);
     EXPECT_EQ(table.counters().creates, 1U);
     EXPECT_EQ(table.counters().updates, 1U);
+}
+
+TEST(FlowSteeringTest, PolicyRevisionMismatchClearsDecisionStateWithoutLosingFlowFacts) {
+    BoundedFlowTable table(4);
+    const auto first = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Output,
+                                 {192, 0, 2, 10}, {10, 0, 0, 9}, 443, 40000);
+    const auto key = CanonicalFlowKey::from(first);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(table.observeAccepted(first, 7).has_value());
+
+    auto reverse = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                             {10, 0, 0, 9}, {192, 0, 2, 10}, 40000, 443);
+    const auto reconciled = table.reconcilePolicyRevision(reverse, 8);
+    ASSERT_TRUE(reconciled.has_value());
+    EXPECT_TRUE(reconciled->found);
+    EXPECT_TRUE(reconciled->decisionStateCleared);
+    EXPECT_EQ(reconciled->previousPolicyRevision, 7U);
+    EXPECT_EQ(reconciled->currentPolicyRevision, 8U);
+
+    const auto *entryAfterClear = table.find(*key);
+    ASSERT_NE(entryAfterClear, nullptr);
+    EXPECT_EQ(entryAfterClear->originSource, IpAddress::v4({192, 0, 2, 10}));
+    EXPECT_EQ(entryAfterClear->originDestination, IpAddress::v4({10, 0, 0, 9}));
+    EXPECT_EQ(entryAfterClear->packets, 1U);
+    EXPECT_EQ(entryAfterClear->bytes, 128U);
+    EXPECT_FALSE(entryAfterClear->decisionStateValid);
+    EXPECT_EQ(entryAfterClear->policyRevision, 8U);
+    EXPECT_EQ(entryAfterClear->decisionStateClears, 1U);
+    EXPECT_EQ(table.counters().decisionStateClears, 1U);
+
+    const auto updated = table.observeAccepted(reverse, 8);
+    ASSERT_TRUE(updated.has_value());
+    EXPECT_FALSE(updated->created);
+    EXPECT_TRUE(updated->decisionStateValid);
+    EXPECT_TRUE(updated->decisionStateCleared);
+    EXPECT_EQ(updated->policyRevision, 8U);
+    EXPECT_EQ(updated->relativeDirection, FlowRelativeDirection::Reply);
+    EXPECT_EQ(updated->packets, 2U);
 }
 
 TEST(FlowSteeringTest, BoundedFlowEntryCapacityMissDoesNotCreateUnboundedState) {

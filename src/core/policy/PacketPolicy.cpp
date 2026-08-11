@@ -190,7 +190,9 @@ PacketPolicyDecision StatelessPacketPolicySnapshot::evaluate(
             return subjectMatches(candidate, facts.domain);
         });
     if (subject == subjects_.end()) {
-        return PacketPolicyDecision::passNext();
+        auto decision = PacketPolicyDecision::passNext();
+        decision.revision = revision_;
+        return decision;
     }
 
     if (const auto gateRule = subject->networkGate.ruleFor(facts.domain.networkContext);
@@ -214,10 +216,14 @@ PacketPolicyDecision StatelessPacketPolicySnapshot::evaluate(
             return PacketPolicyDecision::drop(
                 rule.reasonId, rule.ruleId, revision_, PacketPolicyStage::L4);
         }
-        return PacketPolicyDecision::passNext();
+        auto decision = PacketPolicyDecision::passNext();
+        decision.revision = revision_;
+        return decision;
     }
 
-    return PacketPolicyDecision::passNext();
+    auto decision = PacketPolicyDecision::passNext();
+    decision.revision = revision_;
+    return decision;
 }
 
 PacketPolicySnapshotStatus StatelessPacketPolicySnapshot::status() const noexcept {
@@ -250,6 +256,15 @@ void RuntimePacketPolicySnapshot::apply(
         std::move(subjects), revision);
     std::lock_guard lock(mutex_);
     active_ = std::move(next);
+}
+
+std::uint64_t RuntimePacketPolicySnapshot::revision() const noexcept {
+    std::shared_ptr<const StatelessPacketPolicySnapshot> active;
+    {
+        std::lock_guard lock(mutex_);
+        active = active_;
+    }
+    return active->revision();
 }
 
 PacketPolicySnapshotStatus RuntimePacketPolicySnapshot::status() const noexcept {

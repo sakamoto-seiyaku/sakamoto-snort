@@ -162,6 +162,7 @@ public:
 
     [[nodiscard]] virtual PacketPolicyDecision evaluate(
         const Flow::PacketFacts &facts) const noexcept = 0;
+    [[nodiscard]] virtual std::uint64_t revision() const noexcept { return 0; }
 };
 
 class EmptyPacketPolicySnapshot final : public PacketPolicySnapshot {
@@ -178,7 +179,7 @@ public:
 
     [[nodiscard]] PacketPolicyDecision evaluate(
         const Flow::PacketFacts &facts) const noexcept override;
-    [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
+    [[nodiscard]] std::uint64_t revision() const noexcept override { return revision_; }
     [[nodiscard]] std::size_t subjectCount() const noexcept {
         return subjects_.size();
     }
@@ -199,6 +200,7 @@ public:
         const Flow::PacketFacts &facts) const noexcept override;
     void apply(std::vector<PacketPolicySubjectView> subjects,
                std::uint64_t revision);
+    [[nodiscard]] std::uint64_t revision() const noexcept override;
     [[nodiscard]] PacketPolicySnapshotStatus status() const noexcept;
 
 private:

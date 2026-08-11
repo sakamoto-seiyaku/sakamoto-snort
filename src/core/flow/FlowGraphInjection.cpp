@@ -54,6 +54,8 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
         *descriptorId, currentWorker, runtime_.ownerGuard());
     if (decision == OwnerGuardDecision::Local) {
         const auto policyDecision = policy_.evaluate(descriptor->facts);
+        (void)runtime_.flowTable().reconcilePolicyRevision(
+            descriptor->facts, policyDecision.revision);
         if (isPolicyDrop(policyDecision)) {
             if (distribution.complete(*descriptorId, PacketLeaseOutcome::Dropped)) {
                 lastPolicyDropDecision_ = policyDecision;
@@ -63,7 +65,8 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
         } else {
             const auto acceptedFacts = descriptor->facts;
             if (distribution.complete(*descriptorId, PacketLeaseOutcome::Accepted)) {
-                lastFlowEntryObservation_ = runtime_.flowTable().observeAccepted(acceptedFacts);
+                lastFlowEntryObservation_ = runtime_.flowTable().observeAccepted(
+                    acceptedFacts, policyDecision.revision);
                 ++counters_.acceptedPackets;
                 return GraphInjectionResult::Accepted;
             }
@@ -80,6 +83,10 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
                 const auto policyDecision = retryDescriptor == nullptr
                     ? Policy::PacketPolicyDecision::passNext()
                     : policy_.evaluate(retryDescriptor->facts);
+                if (retryDescriptor != nullptr) {
+                    (void)runtime_.flowTable().reconcilePolicyRevision(
+                        retryDescriptor->facts, policyDecision.revision);
+                }
                 if (retryDescriptor != nullptr && isPolicyDrop(policyDecision)) {
                     if (distribution.complete(*retryId, PacketLeaseOutcome::Dropped)) {
                         lastPolicyDropDecision_ = policyDecision;
@@ -90,7 +97,8 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
                     const auto acceptedFacts = retryDescriptor->facts;
                     if (distribution.complete(*retryId, PacketLeaseOutcome::Accepted)) {
                         lastFlowEntryObservation_ =
-                            runtime_.flowTable().observeAccepted(acceptedFacts);
+                            runtime_.flowTable().observeAccepted(
+                                acceptedFacts, policyDecision.revision);
                         ++counters_.acceptedPackets;
                         return GraphInjectionResult::Accepted;
                     }
