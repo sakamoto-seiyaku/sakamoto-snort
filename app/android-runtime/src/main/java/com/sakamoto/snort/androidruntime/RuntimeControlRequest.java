@@ -16,6 +16,10 @@ public final class RuntimeControlRequest {
     public static final String START = RuntimeControlProtocol.ACTION_START;
     public static final String QUERY = RuntimeControlProtocol.ACTION_QUERY;
     public static final String STOP = RuntimeControlProtocol.ACTION_STOP;
+    public static final String PROTECTION_PAUSE =
+            RuntimeControlProtocol.ACTION_PROTECTION_PAUSE;
+    public static final String PROTECTION_RESUME =
+            RuntimeControlProtocol.ACTION_PROTECTION_RESUME;
     public static final String PRODUCT_PROFILE_SELECT =
             RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT;
     public static final String PRODUCT_BIND_APP = RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP;
@@ -28,6 +32,8 @@ public final class RuntimeControlRequest {
         START(RuntimeControlProtocol.ACTION_START),
         QUERY(RuntimeControlProtocol.ACTION_QUERY),
         STOP(RuntimeControlProtocol.ACTION_STOP),
+        PROTECTION_PAUSE(RuntimeControlProtocol.ACTION_PROTECTION_PAUSE),
+        PROTECTION_RESUME(RuntimeControlProtocol.ACTION_PROTECTION_RESUME),
         PRODUCT_PROFILE_SELECT(RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT),
         PRODUCT_BIND_APP(RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP),
         PRODUCT_UNBIND_APP(RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP),
@@ -135,6 +141,24 @@ public final class RuntimeControlRequest {
     public static RuntimeControlRequest stop(String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
                 Action.STOP, null, null, null, false);
+    }
+
+    public static RuntimeControlRequest pauseProtection() {
+        return pauseProtection(UUID.randomUUID().toString());
+    }
+
+    public static RuntimeControlRequest pauseProtection(String requestId) {
+        return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
+                Action.PROTECTION_PAUSE, null, null, null, false);
+    }
+
+    public static RuntimeControlRequest resumeProtection() {
+        return resumeProtection(UUID.randomUUID().toString());
+    }
+
+    public static RuntimeControlRequest resumeProtection(String requestId) {
+        return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
+                Action.PROTECTION_RESUME, null, null, null, false);
     }
 
     public static RuntimeControlRequest selectProductProfile(RuntimeProfile profile) {

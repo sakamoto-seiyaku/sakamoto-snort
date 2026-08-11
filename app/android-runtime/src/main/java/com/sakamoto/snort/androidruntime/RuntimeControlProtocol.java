@@ -8,6 +8,8 @@ public final class RuntimeControlProtocol {
     public static final String ACTION_START = "start";
     public static final String ACTION_QUERY = "query";
     public static final String ACTION_STOP = "stop";
+    public static final String ACTION_PROTECTION_PAUSE = "protection_pause";
+    public static final String ACTION_PROTECTION_RESUME = "protection_resume";
     public static final String ACTION_PRODUCT_PROFILE_SELECT = "product_profile_select";
     public static final String ACTION_PRODUCT_BIND_APP = "product_bind_app";
     public static final String ACTION_PRODUCT_UNBIND_APP = "product_unbind_app";

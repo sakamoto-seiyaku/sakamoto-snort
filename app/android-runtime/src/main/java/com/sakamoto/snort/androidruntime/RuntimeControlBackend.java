@@ -33,6 +33,23 @@ public final class RuntimeControlBackend {
         context.startService(requestIntent(context, RuntimeControlRequest.stop()));
     }
 
+    public void pauseProtection(Context context) {
+        context.startService(requestIntent(context, RuntimeControlRequest.pauseProtection()));
+    }
+
+    public StartResult resumeProtection(Context context) {
+        if (!RuntimeService.notificationsReady(context)) {
+            return StartResult.NOTIFICATION_REQUIRED;
+        }
+        Intent intent = requestIntent(context, RuntimeControlRequest.resumeProtection());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        return StartResult.ACCEPTED;
+    }
+
     public boolean queryService(Context context) {
         try {
             context.startService(requestIntent(context, RuntimeControlRequest.query()));

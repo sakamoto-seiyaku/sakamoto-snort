@@ -13,6 +13,7 @@ public final class RuntimeSnapshot {
     public static final String STATE_STOPPING = "stopping";
     public static final String STATE_STOPPED = "stopped";
     public static final String STATE_ERROR = "error";
+    public static final String ERROR_USER_PAUSE = "user_pause";
     public static final String PROFILE_ROOT = "root";
     public static final String PROFILE_VPN = "vpn";
 
@@ -90,6 +91,12 @@ public final class RuntimeSnapshot {
     public static RuntimeSnapshot stopped(RuntimeProfile profile, long generation) {
         return new RuntimeSnapshot(STATE_STOPPED, profile, "", "", "", "",
                 "unknown", "", "", false, -1L, generation, System.currentTimeMillis());
+    }
+
+    public static RuntimeSnapshot paused(RuntimeProfile profile, long generation) {
+        return new RuntimeSnapshot(STATE_STOPPED, profile, "", "", "", "",
+                "paused", ERROR_USER_PAUSE, "Protection paused by user", false, -1L,
+                generation, System.currentTimeMillis());
     }
 
     /** Terminal projection after cleanup, retaining the most recent failure. */
@@ -205,9 +212,13 @@ public final class RuntimeSnapshot {
                 .append("\nABI: ").append(abi.isEmpty() ? "unknown" : abi)
                 .append("\nArtifact: ").append(artifact.isEmpty() ? "unknown" : artifact);
         if (!errorCode.isEmpty()) {
-            result.append("\nError: ").append(errorCode);
-            if (!errorMessage.isEmpty()) {
-                result.append(" — ").append(errorMessage);
+            if (ERROR_USER_PAUSE.equals(errorCode)) {
+                result.append("\nProtection: paused by user");
+            } else {
+                result.append("\nError: ").append(errorCode);
+                if (!errorMessage.isEmpty()) {
+                    result.append(" — ").append(errorMessage);
+                }
             }
         }
         if (mayBeActive && STATE_ERROR.equals(state)) {

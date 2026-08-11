@@ -3,6 +3,7 @@ import com.sakamoto.snort.androidruntime.RuntimeControlRequest;
 import com.sakamoto.snort.androidruntime.RuntimeControlOrdering;
 import com.sakamoto.snort.androidruntime.RuntimeControlNative;
 import com.sakamoto.snort.androidruntime.RuntimeProfile;
+import com.sakamoto.snort.androidruntime.RuntimeRecoveryPolicy;
 import com.sakamoto.snort.androidruntime.RuntimeOwnershipReconciliation;
 import com.sakamoto.snort.androidruntime.RuntimeSnapshot;
 import com.sakamoto.snort.androidruntime.RuntimeStateStore;
@@ -42,6 +43,7 @@ public final class AndroidRuntimeContractTest {
         profileDoesNotExposeAdapterArtifacts();
         productPacketAdapterContractIsExplicit();
         snapshotRoundTripPreservesBoundedHealthAndError();
+        runtimeRecoveryPolicyIsBoundedAndActionable();
         runtimeStateWriterCanInjectPersistenceFailure();
         persistenceFailureGateIsFailClosedUntilSafeRecovery();
         durableProjectionReadResultIsExplicit();
@@ -114,6 +116,17 @@ public final class AndroidRuntimeContractTest {
         check(RuntimeControlRequest.STOP.equals(
                 RuntimeControlRequest.stop().encode().get("action")),
                 "stop action has a stable wire name");
+        RuntimeControlRequest pause = RuntimeControlRequest.decode(
+                RuntimeControlRequest.pauseProtection("pause-request").encode());
+        check(pause.action == RuntimeControlRequest.Action.PROTECTION_PAUSE
+                        && RuntimeControlRequest.PROTECTION_PAUSE.equals(
+                        pause.encode().get("action")),
+                "Protection Pause is a stable explicit user action");
+        RuntimeControlRequest resume = RuntimeControlRequest.decode(
+                RuntimeControlRequest.resumeProtection("resume-request").encode());
+        check(resume.action == RuntimeControlRequest.Action.PROTECTION_RESUME
+                        && resume.profile == null,
+                "Protection Resume restarts the retained selected profile");
     }
 
     private static void productMutationRequestsAreVersionedServiceRequests() {
@@ -240,6 +253,36 @@ public final class AndroidRuntimeContractTest {
         check(restoredFailure.errorCode.equals("cleanup_failed"), "error code round-trips");
         check(restoredFailure.errorMessage.length() <= RuntimeSnapshot.MAX_TEXT_LENGTH,
                 "error message is bounded");
+
+        RuntimeSnapshot paused = RuntimeSnapshot.paused(RuntimeProfile.ROOT, 7L);
+        RuntimeStateStore.write(files.toFile(), paused);
+        RuntimeSnapshot restoredPaused = RuntimeStateStore.read(files.toFile());
+        check(RuntimeSnapshot.STATE_STOPPED.equals(restoredPaused.state)
+                        && RuntimeSnapshot.ERROR_USER_PAUSE.equals(restoredPaused.errorCode)
+                        && !restoredPaused.mayBeActive,
+                "user pause is distinguishable from ordinary runtime down");
+        check(restoredPaused.displayText().contains("paused by user"),
+                "user pause renders as product status instead of runtime failure");
+    }
+
+    private static void runtimeRecoveryPolicyIsBoundedAndActionable() {
+        RuntimeRecoveryPolicy policy = new RuntimeRecoveryPolicy();
+        RuntimeRecoveryPolicy.Decision first =
+                policy.afterFailure(0, "unexpected_exit");
+        check(first.shouldRestart && first.attempt == 1 && first.backoffMillis == 1000L,
+                "automatic recovery first retry uses fixed bounded backoff");
+        RuntimeRecoveryPolicy.Decision third =
+                policy.afterFailure(2, "health_handshake_failed");
+        check(third.shouldRestart && third.attempt == 3 && third.backoffMillis == 15000L,
+                "automatic recovery caps retry attempts with fixed final backoff");
+        RuntimeRecoveryPolicy.Decision exhausted =
+                policy.afterFailure(3, "runtime_start_failed");
+        check(!exhausted.shouldRestart && exhausted.requiresUserIntervention
+                        && "runtime_recovery_intervention_required".equals(
+                        exhausted.statusCode),
+                "repeated runtime failures stop automatic restart and request intervention");
+        check(!policy.recoverable("root_authorization_required"),
+                "permission failures are surfaced to the user instead of auto-restarted");
     }
 
     private static void runtimeStateWriterCanInjectPersistenceFailure() throws Exception {

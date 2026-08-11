@@ -46,6 +46,10 @@ public final class RuntimeService extends VpnService {
     public static final String ACTION_START = RuntimeControlProtocol.ACTION_START;
     public static final String ACTION_QUERY = RuntimeControlProtocol.ACTION_QUERY;
     public static final String ACTION_STOP = RuntimeControlProtocol.ACTION_STOP;
+    public static final String ACTION_PROTECTION_PAUSE =
+            RuntimeControlProtocol.ACTION_PROTECTION_PAUSE;
+    public static final String ACTION_PROTECTION_RESUME =
+            RuntimeControlProtocol.ACTION_PROTECTION_RESUME;
     public static final String ACTION_PRODUCT_PROFILE_SELECT =
             RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT;
     public static final String ACTION_PRODUCT_BIND_APP =
@@ -111,6 +115,7 @@ public final class RuntimeService extends VpnService {
     /** Reject delayed START/STOP intents before they can mutate lifecycle state. */
     private final RuntimeControlOrdering controlOrdering = new RuntimeControlOrdering();
     private final RuntimeStateStore.PersistenceGate persistenceGate;
+    private final RuntimeRecoveryPolicy recoveryPolicy = new RuntimeRecoveryPolicy();
 
     private volatile boolean stopRequested;
     private volatile boolean foregroundStarted;
@@ -122,6 +127,7 @@ public final class RuntimeService extends VpnService {
     private volatile boolean durableRecoveryBlocked;
     private volatile int latestStartId;
     private volatile long monitoredPid = -1L;
+    private volatile int recoveryFailureCount;
     private RuntimeSnapshot snapshot;
     private LocalProductBackend productBackend;
     private Process vppProcess;
@@ -181,7 +187,9 @@ public final class RuntimeService extends VpnService {
 
         long requestTimeMillis = intent == null ? 0L
                 : intent.getLongExtra(RuntimeControlProtocol.EXTRA_REQUEST_TIME_MILLIS, 0L);
-        if (ACTION_START.equals(action) || ACTION_STOP.equals(action)) {
+        if (ACTION_START.equals(action) || ACTION_STOP.equals(action)
+                || ACTION_PROTECTION_PAUSE.equals(action)
+                || ACTION_PROTECTION_RESUME.equals(action)) {
             RuntimeControlOrdering.Decision ordering = controlOrdering.observe(
                     requestTimeMillis, startId);
             if (ordering == RuntimeControlOrdering.Decision.STALE) {
@@ -229,7 +237,7 @@ public final class RuntimeService extends VpnService {
                 && intent.getBooleanExtra(RuntimeControlProtocol.EXTRA_NETWORK_GATE_BLOCKED,
                         false);
 
-        if (ACTION_START.equals(action)) {
+        if (ACTION_START.equals(action) || ACTION_PROTECTION_RESUME.equals(action)) {
             // A user retry is an explicit new lifecycle transaction. Clear a
             // stale active error synchronously so queued health polls cannot
             // make a still-pending retry look permanently failed. The
@@ -240,6 +248,7 @@ public final class RuntimeService extends VpnService {
             // A valid start request is authoritative over any delayed stop
             // from an Activity instance that has already been replaced.
             stopRequested = false;
+            recoveryFailureCount = recoveryPolicy.reset();
         }
 
         if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_CLEANUP_FAULT)) {
@@ -251,6 +260,11 @@ public final class RuntimeService extends VpnService {
         if (ACTION_STOP.equals(action)) {
             stopRequested = true;
             enqueueLifecycle(this::stopRuntime);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_PROTECTION_PAUSE.equals(action)) {
+            stopRequested = true;
+            enqueueLifecycle(this::pauseProtection);
             return START_NOT_STICKY;
         }
         if (ACTION_PRODUCT_PROFILE_SELECT.equals(action)) {
@@ -320,6 +334,16 @@ public final class RuntimeService extends VpnService {
             enqueueLifecycle(() -> startRuntime(profile));
             return START_STICKY;
         }
+        if (ACTION_PROTECTION_RESUME.equals(action)) {
+            final RuntimeProfile profile = activeProfile == null ? RuntimeProfile.ROOT
+                    : activeProfile;
+            if (!ensureForeground(profile)) {
+                stopSelf(startId);
+                return START_NOT_STICKY;
+            }
+            enqueueLifecycle(() -> startRuntime(profile));
+            return START_STICKY;
+        }
         // QUERY is a public health request. It must reconcile the durable
         // owner and issue a bounded generated-VAPI show_version call even
         // when this service already monitors the same PID.
@@ -334,6 +358,8 @@ public final class RuntimeService extends VpnService {
         return ACTION_START.equals(action)
                 || ACTION_QUERY.equals(action)
                 || ACTION_STOP.equals(action)
+                || ACTION_PROTECTION_PAUSE.equals(action)
+                || ACTION_PROTECTION_RESUME.equals(action)
                 || ACTION_PRODUCT_PROFILE_SELECT.equals(action)
                 || ACTION_PRODUCT_BIND_APP.equals(action)
                 || ACTION_PRODUCT_UNBIND_APP.equals(action)
@@ -1179,8 +1205,7 @@ public final class RuntimeService extends VpnService {
             return;
         }
         clearProfileHandles();
-        publishError("unexpected_exit", "VPP owner exited unexpectedly", false, -1L);
-        stopIfInactive();
+        recoverAfterRuntimeFailure("unexpected_exit", "VPP owner exited unexpectedly");
     }
 
     private void handleProcessExit(Process process, int exitCode) {
@@ -1198,8 +1223,7 @@ public final class RuntimeService extends VpnService {
             return;
         }
         clearProfileHandles();
-        publishError("unexpected_exit", "VPP exited with status " + exitCode, false, -1L);
-        stopIfInactive();
+        recoverAfterRuntimeFailure("unexpected_exit", "VPP exited with status " + exitCode);
     }
 
     private boolean stopRuntime() {
@@ -1264,6 +1288,23 @@ public final class RuntimeService extends VpnService {
         // latch and run the explicit recovery probe first.
         return stoppingPublished && stoppedPublished
                 && !persistenceGate.isPersistenceUnavailable();
+    }
+
+    private void pauseProtection() {
+        RuntimeProfile pausedProfile = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
+        boolean stopped = stopRuntime(false);
+        if (!stopped && persistenceGate.isPersistenceUnavailable()) {
+            return;
+        }
+        stopRequested = true;
+        publish(RuntimeSnapshot.paused(pausedProfile, generation));
+        if (foregroundStarted && !persistenceGate.isPersistenceUnavailable()) {
+            stopForeground(true);
+            foregroundStarted = false;
+        }
+        if (!destroying && !persistenceGate.isPersistenceUnavailable()) {
+            stopSelf();
+        }
     }
 
     /**
@@ -1786,8 +1827,42 @@ public final class RuntimeService extends VpnService {
         }
         vppProcess = null;
         clearProfileHandles();
+        if (!stopRequested && recoveryPolicy.recoverable(code)) {
+            recoverAfterRuntimeFailure(code, message);
+            return;
+        }
         publishError(code, message, false, -1L);
         stopIfInactive();
+    }
+
+    private void recoverAfterRuntimeFailure(String code, String message) {
+        if (destroying || stopRequested || !recoveryPolicy.recoverable(code)) {
+            publishError(code, message, false, -1L);
+            stopIfInactive();
+            return;
+        }
+        RuntimeProfile recoverProfile = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
+        RuntimeRecoveryPolicy.Decision decision = recoveryPolicy.afterFailure(
+                recoveryFailureCount, code + ": " + message);
+        recoveryFailureCount = decision.nextFailureCount;
+        if (decision.requiresUserIntervention) {
+            publishError(decision.statusCode, decision.message, false, -1L);
+            stopIfInactive();
+            return;
+        }
+        publishError(decision.statusCode, decision.message, false, -1L);
+        try {
+            Thread.sleep(decision.backoffMillis);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            publishError("runtime_recovery_interrupted",
+                    "automatic recovery was interrupted", false, -1L);
+            stopIfInactive();
+            return;
+        }
+        if (!destroying && !stopRequested) {
+            startRuntime(recoverProfile);
+        }
     }
 
     private void publishError(String code, String message, boolean mayBeActive, long pid) {
