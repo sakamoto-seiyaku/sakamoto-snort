@@ -2172,7 +2172,12 @@ public final class RuntimeService extends VpnService {
                 activity.optString("lastFlowDirection", ""),
                 activity.optLong("lastPolicyRevision", 0L),
                 activity.optLong("lastPackets", 0L),
-                activity.optLong("lastBytes", 0L));
+                activity.optLong("lastBytes", 0L),
+                activity.optString("lastProtocolRecognitionState", ""),
+                activity.optString("lastApplicationProtocolKey", ""),
+                activity.optString("lastApplicationProtocolCategory", ""),
+                activity.optString("lastProtocolRecognitionSequence", ""),
+                (int) activity.optLong("lastProtocolPayloadPackets", 0L));
     }
 
     private void publishProductMutationFailure(String fallbackCode,

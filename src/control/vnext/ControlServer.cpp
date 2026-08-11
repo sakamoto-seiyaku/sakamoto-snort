@@ -9,6 +9,7 @@
 #include <DaemonRuntime.hpp>
 #include <RuntimeConfig.hpp>
 #include <RuntimeControl.hpp>
+#include <core/protocol/ApplicationProtocolCatalog.hpp>
 
 #include <rapidjson/document.h>
 
@@ -273,6 +274,47 @@ const char *flowRelativeDirectionName(
     return "unknown";
 }
 
+const char *protocolRecognitionStateName(
+    const SnortDatapath::Flow::LpiRecognitionState &state) noexcept {
+    if (state.payloadPacketsSubmitted == 0 && state.mappedResults.empty()
+        && state.terminalState
+            == SnortDatapath::Flow::LpiRecognitionTerminalState::Detecting) {
+        return "";
+    }
+    if (state.latestExactResult().has_value()) {
+        return "identified";
+    }
+    if (state.terminal()) {
+        return "unidentified";
+    }
+    return "detecting";
+}
+
+std::string applicationProtocolKeyString(
+    const sucre::protocol::ApplicationProtocolId id) {
+    const auto key = sucre::protocol::applicationProtocolKey(id);
+    if (!key.empty()) {
+        return std::string{key};
+    }
+    return std::to_string(static_cast<std::uint32_t>(id));
+}
+
+std::string protocolRecognitionSequence(
+    const SnortDatapath::Flow::LpiRecognitionState &state) {
+    std::string out;
+    for (const auto &result : state.mappedResults) {
+        if (!out.empty()) {
+            out += ",";
+        }
+        out += std::to_string(result.firstPayloadPacketSequence);
+        out += ":";
+        out += applicationProtocolKeyString(result.protocolId);
+        out += ":";
+        out += flowRelativeDirectionName(result.direction);
+    }
+    return out;
+}
+
 rapidjson::Value makeAllowedFlowActivityResult(
     const SnortDatapath::Flow::FlowEntryActivityCounters &activity,
     rapidjson::Document::AllocatorType &alloc) {
@@ -313,6 +355,32 @@ rapidjson::Value makeAllowedFlowActivityResult(
     result.AddMember("lastPolicyRevision", activity.lastPolicyRevision, alloc);
     result.AddMember("lastPackets", activity.lastPackets, alloc);
     result.AddMember("lastBytes", activity.lastBytes, alloc);
+    rapidjson::Value recognitionState;
+    recognitionState.SetString(
+        protocolRecognitionStateName(activity.lastLpiRecognition), alloc);
+    result.AddMember("lastProtocolRecognitionState", recognitionState, alloc);
+    const auto latestProtocol = activity.lastLpiRecognition.latestExactResult();
+    const auto protocolKey = latestProtocol.has_value()
+        ? applicationProtocolKeyString(*latestProtocol)
+        : std::string{};
+    rapidjson::Value latestProtocolKey;
+    latestProtocolKey.SetString(
+        protocolKey.c_str(), static_cast<rapidjson::SizeType>(protocolKey.size()), alloc);
+    result.AddMember("lastApplicationProtocolKey", latestProtocolKey, alloc);
+    const auto category = latestProtocol.has_value()
+        ? std::string{sucre::protocol::applicationProtocolCategory(*latestProtocol)}
+        : std::string{};
+    rapidjson::Value latestProtocolCategory;
+    latestProtocolCategory.SetString(
+        category.c_str(), static_cast<rapidjson::SizeType>(category.size()), alloc);
+    result.AddMember("lastApplicationProtocolCategory", latestProtocolCategory, alloc);
+    const auto sequence = protocolRecognitionSequence(activity.lastLpiRecognition);
+    rapidjson::Value recognitionSequence;
+    recognitionSequence.SetString(
+        sequence.c_str(), static_cast<rapidjson::SizeType>(sequence.size()), alloc);
+    result.AddMember("lastProtocolRecognitionSequence", recognitionSequence, alloc);
+    result.AddMember("lastProtocolPayloadPackets",
+                     activity.lastLpiRecognition.payloadPacketsSubmitted, alloc);
     return result;
 }
 

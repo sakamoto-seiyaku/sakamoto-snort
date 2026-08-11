@@ -2084,7 +2084,7 @@ public final class AndroidRuntimeContractTest {
                         4L, true, 1010001, true, 7,
                         "10.0.0.1", "192.0.2.1", 6,
                         40000, 443, true, "output", "orig",
-                        70L, 3L, 4500L);
+                        70L, 3L, 4500L, "", "", "", "", 0);
         check(ProductNativeActivityIngestor.shouldIngest(allowed, RuntimeProfile.ROOT,
                         RuntimeProfile.ROOT, 4L, 4L, 3L),
                 "new native allowed FlowEntry total is ingested");
@@ -2103,6 +2103,32 @@ public final class AndroidRuntimeContractTest {
                         && allowedItem.packets == 3L
                         && allowedItem.bytes == 4500L,
                 "native allowed FlowEntry maps to a product ActivityItem");
+
+        ProductNativeActivityIngestor.NativeAllowedFlowRecord recognized =
+                new ProductNativeActivityIngestor.NativeAllowedFlowRecord(
+                        5L, true, 1010001, true, 7,
+                        "10.0.0.1", "192.0.2.1", 17,
+                        53000, 443, true, "output", "reply",
+                        71L, 4L, 5200L,
+                        ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED,
+                        "quic", "web", "1:http:orig,4:quic:reply", 4);
+        ActivityItem recognizedItem = ProductNativeActivityIngestor.toActivityItem(
+                recognized, RuntimeProfile.VPN, 1237L);
+        check(recognizedItem.subjectId.equals(ApplicationSubjectId.fromUid(1010001))
+                        && "pass_next".equals(recognizedItem.verdict)
+                        && "flow_entry_lpi_recognition".equals(
+                        recognizedItem.evidenceSource)
+                        && ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED.equals(
+                        recognizedItem.protocolRecognitionState)
+                        && "quic".equals(recognizedItem.applicationProtocolKey)
+                        && "web".equals(recognizedItem.applicationProtocolCategory)
+                        && "1:http:orig,4:quic:reply".equals(
+                        recognizedItem.protocolRecognitionSequence)
+                        && recognizedItem.protocolPayloadPackets == 4
+                        && "udp".equals(recognizedItem.protocol)
+                        && "vpn_output".equals(recognizedItem.devicePacketDirection)
+                        && "reply".equals(recognizedItem.flowDirection),
+                "native allowed FlowEntry recognition state maps to protocol ActivityItem");
     }
 
     private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {

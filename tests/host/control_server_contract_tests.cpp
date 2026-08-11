@@ -36,6 +36,7 @@ namespace {
 namespace Flow = SnortDatapath::Flow;
 namespace Policy = SnortDatapath::Policy;
 namespace Tun = SnortDatapath::Tun;
+namespace Catalog = sucre::protocol;
 
 class UniqueFd final {
 public:
@@ -1215,6 +1216,22 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
             .policyRevision = 11,
             .packets = 3,
             .bytes = 4500,
+            .lpiRecognition = Flow::LpiRecognitionState{
+                .payloadPacketsSubmitted = 4,
+                .terminalState = Flow::LpiRecognitionTerminalState::Done,
+                .mappedResults = {
+                    Flow::LpiRecognitionResult{
+                        .protocolId = Catalog::ApplicationProtocolId::HTTP,
+                        .firstPayloadPacketSequence = 1,
+                        .direction = Flow::FlowRelativeDirection::Orig,
+                    },
+                    Flow::LpiRecognitionResult{
+                        .protocolId = Catalog::ApplicationProtocolId::QUIC,
+                        .firstPayloadPacketSequence = 4,
+                        .direction = Flow::FlowRelativeDirection::Reply,
+                    },
+                },
+            },
         });
     ControlServerHarness harness(runtime);
 
@@ -1289,6 +1306,12 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(allowed["lastPolicyRevision"].GetUint64(), 11U);
     EXPECT_EQ(allowed["lastPackets"].GetUint64(), 3U);
     EXPECT_EQ(allowed["lastBytes"].GetUint64(), 4500U);
+    EXPECT_STREQ(allowed["lastProtocolRecognitionState"].GetString(), "identified");
+    EXPECT_STREQ(allowed["lastApplicationProtocolKey"].GetString(), "quic");
+    EXPECT_STREQ(allowed["lastApplicationProtocolCategory"].GetString(), "web");
+    EXPECT_STREQ(allowed["lastProtocolRecognitionSequence"].GetString(),
+                 "1:http:orig,4:quic:reply");
+    EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 4U);
 }
 
 TEST(ControlServerContract, HelloOmitsVpnTunCountersCapabilityWhenUnsupported) {
@@ -1478,6 +1501,11 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(allowed["lastPolicyRevision"].GetUint64(), 70U);
     EXPECT_EQ(allowed["lastPackets"].GetUint64(), 2U);
     EXPECT_EQ(allowed["lastBytes"].GetUint64(), 2400U);
+    EXPECT_STREQ(allowed["lastProtocolRecognitionState"].GetString(), "");
+    EXPECT_STREQ(allowed["lastApplicationProtocolKey"].GetString(), "");
+    EXPECT_STREQ(allowed["lastApplicationProtocolCategory"].GetString(), "");
+    EXPECT_STREQ(allowed["lastProtocolRecognitionSequence"].GetString(), "");
+    EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 0U);
 }
 
 TEST(ControlServerContract, PolicyUnknownApplicationSubjectMatchesUidUnknownFacts) {

@@ -48,6 +48,11 @@ public final class ProductNativeActivityIngestor {
         public final long policyRevision;
         public final long packets;
         public final long bytes;
+        public final String protocolRecognitionState;
+        public final String applicationProtocolKey;
+        public final String applicationProtocolCategory;
+        public final String protocolRecognitionSequence;
+        public final int protocolPayloadPackets;
 
         public NativeAllowedFlowRecord(long totalRecords, boolean hasLastRecord,
                                        int linuxUid, boolean uidKnown, int networkContext,
@@ -55,7 +60,12 @@ public final class ProductNativeActivityIngestor {
                                        int ipProtocol, int sourcePort, int destinationPort,
                                        boolean portsAvailable, String deviceDirection,
                                        String flowDirection, long policyRevision,
-                                       long packets, long bytes) {
+                                       long packets, long bytes,
+                                       String protocolRecognitionState,
+                                       String applicationProtocolKey,
+                                       String applicationProtocolCategory,
+                                       String protocolRecognitionSequence,
+                                       int protocolPayloadPackets) {
             this.totalRecords = Math.max(0L, totalRecords);
             this.hasLastRecord = hasLastRecord;
             this.linuxUid = Math.max(0, linuxUid);
@@ -77,6 +87,19 @@ public final class ProductNativeActivityIngestor {
             this.policyRevision = Math.max(0L, policyRevision);
             this.packets = Math.max(0L, packets);
             this.bytes = Math.max(0L, bytes);
+            this.protocolRecognitionState = BoundedText.value(
+                    protocolRecognitionState == null ? "" : protocolRecognitionState,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.applicationProtocolKey = BoundedText.value(
+                    applicationProtocolKey == null ? "" : applicationProtocolKey,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.applicationProtocolCategory = BoundedText.value(
+                    applicationProtocolCategory == null ? "" : applicationProtocolCategory,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.protocolRecognitionSequence = BoundedText.value(
+                    protocolRecognitionSequence == null ? "" : protocolRecognitionSequence,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.protocolPayloadPackets = Math.max(0, protocolPayloadPackets);
         }
     }
 
@@ -126,6 +149,15 @@ public final class ProductNativeActivityIngestor {
         ApplicationSubjectId subject = ApplicationSubjectId.fromUid(record.linuxUid);
         String label = record.uidKnown ? subject.encode() : "Unknown Application";
         String packageName = record.uidKnown ? "(native attributed app)" : "(unknown package)";
+        if (!record.protocolRecognitionState.isEmpty()) {
+            return ActivityItem.protocolRecognition(subject, label, packageName,
+                    timestampMillis, remoteAddress(record), protocolName(record.ipProtocol),
+                    remotePort(record), devicePacketDirection(profile, record.deviceDirection),
+                    record.flowDirection, record.packets, record.bytes,
+                    record.policyRevision, record.protocolRecognitionState,
+                    record.applicationProtocolKey, record.applicationProtocolCategory,
+                    record.protocolRecognitionSequence, record.protocolPayloadPackets);
+        }
         return ActivityItem.allowedFlow(subject, label, packageName, timestampMillis,
                 remoteAddress(record), protocolName(record.ipProtocol),
                 remotePort(record), devicePacketDirection(profile, record.deviceDirection),

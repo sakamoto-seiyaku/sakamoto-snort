@@ -733,6 +733,7 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
             .policyRevision = found->policyRevision,
             .packets = found->packets,
             .bytes = found->bytes,
+            .lpiRecognition = found->lpiRecognition,
         };
     }
 
@@ -771,6 +772,7 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         .policyRevision = entry.policyRevision,
         .packets = entry.packets,
         .bytes = entry.bytes,
+        .lpiRecognition = entry.lpiRecognition,
     };
 }
 

@@ -325,6 +325,7 @@ struct FlowEntryObservation {
     std::uint64_t policyRevision = 0;
     std::uint64_t packets = 0;
     std::uint64_t bytes = 0;
+    LpiRecognitionState lpiRecognition;
 };
 
 struct FlowEntryActivityCounters {
@@ -349,6 +350,7 @@ struct FlowEntryActivityCounters {
     std::uint64_t lastPolicyRevision = 0;
     std::uint64_t lastPackets = 0;
     std::uint64_t lastBytes = 0;
+    LpiRecognitionState lastLpiRecognition;
 
     void record(const PacketFacts &facts,
                 const FlowEntryObservation &observation) noexcept {
@@ -373,6 +375,7 @@ struct FlowEntryActivityCounters {
         lastPolicyRevision = observation.policyRevision;
         lastPackets = observation.packets;
         lastBytes = observation.bytes;
+        lastLpiRecognition = observation.lpiRecognition;
     }
 };
 
