@@ -110,12 +110,13 @@ assert_vpn_gate() {
 assert_lifecycle_gate() {
   local name="profile_lifecycle_matrix"
   assert_log_has "$name" '^productState[.]binding=PASS$'
-  assert_log_has "$name" '^productState[.]policyBundle=PASS$'
+  assert_log_has "$name" '^productState[.]policyBundleBaseline=RECORDED$'
   assert_log_has "$name" '^switch[.]rootToVpn=PASS$'
   assert_log_has "$name" '^activity[.]recreateKeepsRuntime=PASS$'
   assert_log_has "$name" '^appProcessDeath[.]result=PASS$'
   assert_log_has "$name" '^switch[.]vpnToRoot=PASS$'
   assert_log_has "$name" '^pause[.]bindingPreserved=PASS$'
+  assert_log_has "$name" '^pause[.]policyPreserved=PASS$'
   assert_log_has "$name" '^pause[.]lastSuccessfulPolicyPreserved=PASS$'
   assert_log_has "$name" '^cleanupFault[.]result=PASS$'
   assert_log_has "$name" '^crash[.]result=PASS$'

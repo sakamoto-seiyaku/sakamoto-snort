@@ -61,7 +61,7 @@ compatibility tracking, but it is not final release evidence.
 
 | Device | Android | ABI | Root | VPN | IPv4/IPv6 | Evidence | Release status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log` | Debug APK only; release APK rerun required |
+| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 `build-output/s71-dual-profile-closure-gate/20260811-164754` | Debug APK only; release APK rerun required |
 
 ## 3. Functional release evidence ledger
 
@@ -75,8 +75,8 @@ compatibility tracking, but it is not final release evidence.
 | Lifecycle, fault, recovery, profile switch | S54/S57/S70/S71 contracts and device evidence | Present |
 | Policy persistence / old snapshot on failure | `tests/android/AndroidRuntimeContractTest.java` product transaction and apply-failure cases | Present |
 | VPN IPv4/IPv6 TCP and UDP production proof | `tests/device/s55-product-vpn-transport-matrix.sh` | Present |
-| Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Needs release-level rollup |
-| Root no-residue release proof | S70/S71 evidence lineage | Needs release-level rollup |
+| Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Current S71 debug rollup present; release APK rerun required |
+| Root no-residue release proof | S70/S71 evidence lineage | Current S71 debug rollup present; release APK rerun required |
 
 Current debug-evidence rollup:
 
@@ -99,6 +99,14 @@ Current debug-evidence rollup:
   recreation, app process death, Protection Pause, binding/policy preservation,
   cleanup fault visibility, runtime crash recovery, Doze baseline, and final
   cleanup.
+- Dual-profile closure: `build-output/s71-dual-profile-closure-gate/20260811-164754`
+  records `matrix.result=PASS`, host runtime contract, host/VPP graph
+  conformance, NDK daemon build, Root NFQUEUE matrix, product VPN matrix, and
+  profile lifecycle matrix. Root evidence includes `root.gate=PASS`,
+  `root.inputUidSeam=UID_UNAVAILABLE_WITH_UNKNOWN_APPLICATION_PASS`,
+  `restart.finalCleanup.result=PASS`, `sigkill_fault.recovery.result=PASS`,
+  `sigkill_fault.finalCleanup.result=PASS`, and `final.noResidue.result=PASS`
+  through the nested Root matrix log.
 
 S58 latest evidence:
 
