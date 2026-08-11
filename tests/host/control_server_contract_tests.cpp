@@ -7,6 +7,7 @@
 #include <ControlVNextCodec.hpp>
 #include <PacketPolicy.hpp>
 #include <RuntimeControl.hpp>
+#include <VpnTunFdRuntime.hpp>
 
 #include <gtest/gtest.h>
 
@@ -32,6 +33,40 @@ namespace {
 
 namespace Flow = SnortDatapath::Flow;
 namespace Policy = SnortDatapath::Policy;
+namespace Tun = SnortDatapath::Tun;
+
+class UniqueFd final {
+public:
+    UniqueFd() = default;
+    explicit UniqueFd(const int fd) noexcept : fd_(fd) {}
+    ~UniqueFd() {
+        reset();
+    }
+
+    UniqueFd(const UniqueFd &) = delete;
+    UniqueFd &operator=(const UniqueFd &) = delete;
+
+    UniqueFd(UniqueFd &&other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
+    UniqueFd &operator=(UniqueFd &&other) noexcept {
+        if (this != &other) {
+            reset(std::exchange(other.fd_, -1));
+        }
+        return *this;
+    }
+
+    [[nodiscard]] int get() const noexcept { return fd_; }
+    [[nodiscard]] bool valid() const noexcept { return fd_ >= 0; }
+
+    void reset(const int fd = -1) noexcept {
+        if (fd_ >= 0) {
+            ::close(fd_);
+        }
+        fd_ = fd;
+    }
+
+private:
+    int fd_ = -1;
+};
 
 class FakeRuntimeControl final : public SnortRuntime::BaseRuntimeControl {
 public:
@@ -195,7 +230,7 @@ bool writeAllWithFd(const int fd, const std::string_view data, const int fdToSen
 
 class ControlServerHarness {
 public:
-    explicit ControlServerHarness(FakeRuntimeControl &runtime) {
+    explicit ControlServerHarness(SnortRuntime::BaseRuntimeControl &runtime) {
         int fds[2]{-1, -1};
         if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, fds) != 0) {
             throw std::runtime_error(std::string("socketpair failed: ") + std::strerror(errno));
@@ -355,6 +390,51 @@ TEST(ControlServerContract, HelloAdvertisesVpnTransportFdHandoffOnlyWhenRuntimeS
     EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
                         "vpn-tun-transport-fd-handoff"),
               capabilities.end());
+}
+
+TEST(ControlServerContract, RealVpnTunRuntimeAdvertisesAttachLaterBeforeFdAndAcceptsTunFd) {
+    Tun::VpnTunFdRuntime runtime{-1, true};
+    ASSERT_TRUE(runtime.start());
+    ASSERT_FALSE(runtime.packetAdapterReady());
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document hello = harness.call(50, "HELLO");
+
+    ASSERT_TRUE(hello["ok"].GetBool());
+    const auto capabilities = capabilityStrings(hello["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "vpn-tun-fd-handoff"),
+              capabilities.end());
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
+                        "vpn-tun-transport-fd-handoff"),
+              capabilities.end());
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "vpn-tun-runtime-counters"),
+              capabilities.end());
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "packet-policy-control"),
+              capabilities.end());
+    EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(),
+                        "packet-adapter-vpn-tun-hev"),
+              capabilities.end());
+
+    int pipeFds[2]{-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0) << std::strerror(errno);
+    UniqueFd tunRead{pipeFds[0]};
+    UniqueFd tunWrite{pipeFds[1]};
+
+    const rapidjson::Document attach =
+        harness.callWithFd(51, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", tunRead.get());
+    tunRead.reset();
+
+    ASSERT_TRUE(attach["ok"].GetBool());
+    ASSERT_TRUE(attach.HasMember("result"));
+    EXPECT_TRUE(attach["result"]["fdAttached"].GetBool());
+    EXPECT_TRUE(attach["result"]["ipv6Enabled"].GetBool());
+    EXPECT_STREQ(attach["result"]["adapter"].GetString(), "vpn-tun-hev");
+    EXPECT_FALSE(runtime.packetAdapterReady());
+
+    const rapidjson::Document status = harness.call(52, "VPN_TUN.STATUS");
+
+    ASSERT_TRUE(status["ok"].GetBool());
+    EXPECT_EQ(status["result"]["packetsSeen"].GetUint64(), 0U);
 }
 
 TEST(ControlServerContract, VpnTunAttachRejectsMissingScmRightsFd) {
