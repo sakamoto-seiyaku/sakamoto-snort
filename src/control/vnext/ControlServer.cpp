@@ -398,6 +398,8 @@ rapidjson::Value makeLpiProviderStatusResult(
         static_cast<rapidjson::SizeType>(status.providerName.size()),
         alloc);
     result.AddMember("name", name, alloc);
+    result.AddMember("payloadBudgetPackets", status.payloadBudgetPackets, alloc);
+    result.AddMember("mappedResultCapacity", status.mappedResultCapacity, alloc);
     result.AddMember("packetsObserved", status.counters.packetsObserved, alloc);
     result.AddMember("payloadEligiblePackets",
                      status.counters.payloadEligiblePackets, alloc);

@@ -405,6 +405,10 @@ void expectDisabledLpiProviderStatus(
     EXPECT_EQ(std::string_view(lpiProvider["name"].GetString(),
                                lpiProvider["name"].GetStringLength()),
               Protocol::kDisabledLpiProviderName);
+    EXPECT_EQ(lpiProvider["payloadBudgetPackets"].GetUint(),
+              Flow::LpiRecognitionState::kMaxPayloadPackets);
+    EXPECT_EQ(lpiProvider["mappedResultCapacity"].GetUint(),
+              Flow::LpiRecognitionState::kMaxMappedResults);
     EXPECT_EQ(lpiProvider["packetsObserved"].GetUint64(), packetsObserved);
     EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(),
               payloadEligiblePackets);
@@ -1333,6 +1337,10 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     const auto &lpiProvider = result["lpiProvider"];
     EXPECT_TRUE(lpiProvider["available"].GetBool());
     EXPECT_STREQ(lpiProvider["name"].GetString(), "fake-lpi");
+    EXPECT_EQ(lpiProvider["payloadBudgetPackets"].GetUint(),
+              Flow::LpiRecognitionState::kMaxPayloadPackets);
+    EXPECT_EQ(lpiProvider["mappedResultCapacity"].GetUint(),
+              Flow::LpiRecognitionState::kMaxMappedResults);
     EXPECT_EQ(lpiProvider["packetsObserved"].GetUint64(), 14U);
     EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(), 11U);
     EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 1U);
@@ -1642,6 +1650,10 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     const auto &lpiProvider = result["lpiProvider"];
     EXPECT_TRUE(lpiProvider["available"].GetBool());
     EXPECT_STREQ(lpiProvider["name"].GetString(), "fake-lpi");
+    EXPECT_EQ(lpiProvider["payloadBudgetPackets"].GetUint(),
+              Flow::LpiRecognitionState::kMaxPayloadPackets);
+    EXPECT_EQ(lpiProvider["mappedResultCapacity"].GetUint(),
+              Flow::LpiRecognitionState::kMaxMappedResults);
     EXPECT_EQ(lpiProvider["packetsObserved"].GetUint64(), 9U);
     EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(), 7U);
     EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 2U);

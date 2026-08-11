@@ -740,6 +740,10 @@ TEST(LpiRecognitionProviderTest, TerminalDoneFlowSkipsLaterPayloadsWithoutProvid
     EXPECT_EQ(*second.stateAfterSubmit->latestExactResult(),
               Catalog::ApplicationProtocolId::HTTP);
     const auto status = pipeline.status();
+    EXPECT_EQ(status.payloadBudgetPackets,
+              Flow::LpiRecognitionState::kMaxPayloadPackets);
+    EXPECT_EQ(status.mappedResultCapacity,
+              Flow::LpiRecognitionState::kMaxMappedResults);
     EXPECT_EQ(status.counters.terminalSkippedPackets, 1U);
     EXPECT_EQ(status.counters.detectorDonePackets, 1U);
     EXPECT_EQ(status.counters.budgetExhaustedPackets, 0U);
@@ -777,6 +781,10 @@ TEST(LpiRecognitionProviderTest, NoResultProviderStopsAtInternalPayloadBudget) {
     EXPECT_FALSE(afterExhaustion.submittedToProvider);
     EXPECT_EQ(provider.calls, Flow::LpiRecognitionState::kMaxPayloadPackets);
     const auto status = pipeline.status();
+    EXPECT_EQ(status.payloadBudgetPackets,
+              Flow::LpiRecognitionState::kMaxPayloadPackets);
+    EXPECT_EQ(status.mappedResultCapacity,
+              Flow::LpiRecognitionState::kMaxMappedResults);
     EXPECT_EQ(status.counters.terminalSkippedPackets, 1U);
     EXPECT_EQ(status.counters.detectorDonePackets, 0U);
     EXPECT_EQ(status.counters.budgetExhaustedPackets, 1U);

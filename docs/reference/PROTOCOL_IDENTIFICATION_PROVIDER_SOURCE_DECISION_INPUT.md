@@ -96,6 +96,14 @@ Contract guardrails:
   `detectorDonePackets` and `budgetExhaustedPackets`. These are driven by
   FlowEntry terminal state transitions and do not require a real provider to be
   enabled by default.
+- The same provider-neutral `lpiProvider` status shape self-describes the fixed
+  seam facts that explain terminal/exhausted behavior: `payloadBudgetPackets`
+  is the current internal payload-bearing submission budget
+  (`Flow::LpiRecognitionState::kMaxPayloadPackets`, currently `20`), and
+  `mappedResultCapacity` is the current per-flow mapped result capacity
+  (`Flow::LpiRecognitionState::kMaxMappedResults`, currently `8`). These are
+  fixed runtime facts, not provider-selection knobs, and apply equally when the
+  provider is disabled, Root/NFQUEUE is active, or VPN/TUN is active.
 - No real provider is wired by default. No provider source has been copied into
   this repository. No PCAP corpus or expected JSON has been imported. No Android
   Root/VPN device evidence proves a real provider. No ProtocolRule enforcement

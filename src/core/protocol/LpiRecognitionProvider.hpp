@@ -53,6 +53,10 @@ struct LpiProviderCounters {
 struct LpiProviderStatus {
     bool available = false;
     std::string_view providerName;
+    std::uint32_t payloadBudgetPackets =
+        Flow::LpiRecognitionState::kMaxPayloadPackets;
+    std::uint32_t mappedResultCapacity =
+        Flow::LpiRecognitionState::kMaxMappedResults;
     LpiProviderCounters counters;
 };
 
