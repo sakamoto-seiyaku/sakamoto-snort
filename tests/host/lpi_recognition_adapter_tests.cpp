@@ -37,6 +37,8 @@ Flow::PacketFacts tcpPacket(const bool reverse = false) {
                                    : Flow::DevicePacketDirection::Input,
         .originalLength = 1500,
         .boundedPrefixLength = 512,
+        .transportPayloadOffset = 40,
+        .transportPayloadLength = 472,
         .domain = Flow::FlowDomain{
             .adapter = Flow::AdapterKind::RootNfqueue,
             .linuxUid = 10001,
@@ -57,7 +59,6 @@ TEST(LpiRecognitionAdapterTest, ProviderAliasMapsIntoExistingFlowEntryForCurrent
     const auto outcome = adapter.submitProviderFact(
         packet,
         Protocol::LpiProviderFact{
-            .payloadBearing = true,
             .providerAlias = "lpi:http",
             .detectorDone = false,
             .budgetExhausted = false,
@@ -84,7 +85,6 @@ TEST(LpiRecognitionAdapterTest, AsyncProviderFactOnlyAffectsFuturePackets) {
     const auto outcome = adapter.submitProviderFact(
         reply,
         Protocol::LpiProviderFact{
-            .payloadBearing = true,
             .providerAlias = "lpi:quic",
             .detectorDone = true,
             .budgetExhausted = false,
@@ -109,7 +109,6 @@ TEST(LpiRecognitionAdapterTest, UnmappedProviderResultCreatesNoTemporaryProtocol
     const auto outcome = adapter.submitProviderFact(
         packet,
         Protocol::LpiProviderFact{
-            .payloadBearing = true,
             .providerAlias = "lpi:unknown-long-tail",
             .detectorDone = false,
             .budgetExhausted = true,
@@ -134,7 +133,6 @@ TEST(LpiRecognitionAdapterTest, MissingFlowDoesNotCreateParallelRecognitionTable
     const auto outcome = adapter.submitProviderFact(
         tcpPacket(),
         Protocol::LpiProviderFact{
-            .payloadBearing = true,
             .providerAlias = "lpi:dns",
             .detectorDone = false,
             .budgetExhausted = false,
@@ -145,6 +143,34 @@ TEST(LpiRecognitionAdapterTest, MissingFlowDoesNotCreateParallelRecognitionTable
     EXPECT_FALSE(outcome.flowUpdate->found);
     EXPECT_EQ(table.size(), 0U);
     EXPECT_EQ(table.counters().lpiFlowMisses, 1U);
+}
+
+TEST(LpiRecognitionAdapterTest, EmptyTransportPayloadDoesNotConsumeRecognitionBudget) {
+    Flow::BoundedFlowTable table(4);
+    auto packet = tcpPacket();
+    packet.boundedPrefixLength = 40;
+    packet.transportPayloadOffset = 40;
+    packet.transportPayloadLength = 0;
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    Protocol::LpiRecognitionAdapter adapter(table);
+
+    const auto outcome = adapter.submitProviderFact(
+        packet,
+        Protocol::LpiProviderFact{
+            .providerAlias = "lpi:http",
+            .detectorDone = false,
+            .budgetExhausted = false,
+            .producedBeforeAdapterCompletion = true,
+        });
+
+    ASSERT_TRUE(outcome.flowUpdate.has_value());
+    EXPECT_TRUE(outcome.mappedProviderResult);
+    EXPECT_FALSE(outcome.unmappedProviderResult);
+    EXPECT_FALSE(outcome.flowUpdate->payloadSubmitted);
+    EXPECT_FALSE(outcome.flowUpdate->mappedResultAppended);
+    EXPECT_EQ(outcome.flowUpdate->payloadPacketSequence, 0U);
+    EXPECT_EQ(table.counters().lpiPayloadPackets, 0U);
+    EXPECT_EQ(table.counters().lpiMappedResults, 0U);
 }
 
 } // namespace

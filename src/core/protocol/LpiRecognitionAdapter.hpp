@@ -19,7 +19,6 @@ enum class RecognitionDecisionCutoff : std::uint8_t {
 };
 
 struct LpiProviderFact {
-    bool payloadBearing = false;
     std::string_view providerAlias;
     bool detectorDone = false;
     bool budgetExhausted = false;

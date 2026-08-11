@@ -85,6 +85,11 @@ void parseTransport(PacketFacts &facts, const std::span<const std::byte> bytes,
         facts.sourcePort = readNetworkU16(bytes, transportOffset);
         facts.destinationPort = readNetworkU16(bytes, transportOffset + 2);
         facts.portsAvailable = true;
+        facts.transportPayloadOffset = static_cast<std::uint32_t>(
+            transportOffset + tcpHeaderLength);
+        facts.transportPayloadLength = static_cast<std::uint32_t>(
+            std::min(ipPayloadLength - tcpHeaderLength,
+                     available - tcpHeaderLength));
         facts.parseStatus = ParseStatus::Ready;
         return;
     }
@@ -105,6 +110,11 @@ void parseTransport(PacketFacts &facts, const std::span<const std::byte> bytes,
         facts.sourcePort = readNetworkU16(bytes, transportOffset);
         facts.destinationPort = readNetworkU16(bytes, transportOffset + 2);
         facts.portsAvailable = true;
+        facts.transportPayloadOffset = static_cast<std::uint32_t>(
+            transportOffset + kUdpHeaderLength);
+        facts.transportPayloadLength = static_cast<std::uint32_t>(
+            std::min(udpLength - kUdpHeaderLength,
+                     available - kUdpHeaderLength));
         facts.parseStatus = ParseStatus::Ready;
         return;
     }

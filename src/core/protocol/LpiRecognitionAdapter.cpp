@@ -15,9 +15,10 @@ LpiAdapterOutcome LpiRecognitionAdapter::submitProviderFact(
     const auto mapped = fact.providerAlias.empty()
         ? std::optional<sucre::protocol::ApplicationProtocolId>{}
         : sucre::protocol::applicationProtocolIdForProviderAlias(fact.providerAlias);
+    const auto payloadBearing = facts.hasTransportPayload();
     const auto update = flowTable_.recordLpiRecognition(
         facts,
-        fact.payloadBearing,
+        payloadBearing,
         mapped,
         fact.detectorDone,
         fact.budgetExhausted);
@@ -27,7 +28,7 @@ LpiAdapterOutcome LpiRecognitionAdapter::submitProviderFact(
             ? RecognitionDecisionCutoff::CurrentPacket
             : RecognitionDecisionCutoff::FuturePacketsOnly,
         .mappedProviderResult = mapped.has_value(),
-        .unmappedProviderResult = fact.payloadBearing
+        .unmappedProviderResult = payloadBearing
             && !fact.providerAlias.empty()
             && !mapped.has_value(),
     };

@@ -73,9 +73,12 @@ struct PacketFacts {
     DevicePacketDirection deviceDirection = DevicePacketDirection::Input;
     std::uint32_t originalLength = 0;
     std::uint32_t boundedPrefixLength = 0;
+    std::uint32_t transportPayloadOffset = 0;
+    std::uint32_t transportPayloadLength = 0;
     FlowDomain domain;
 
     [[nodiscard]] bool isCanonicalizable() const noexcept;
+    [[nodiscard]] bool hasTransportPayload() const noexcept;
 };
 
 /** Direction-independent key for a non-fragmented TCP/UDP flow. */

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace {
 
@@ -50,6 +51,17 @@ std::array<std::byte, 40> ipv4TcpPacket(const bool reverse = false) {
     return packet;
 }
 
+std::vector<std::byte> ipv4TcpPacketWithPayload(const std::size_t payloadLength) {
+    auto header = ipv4TcpPacket();
+    std::vector<std::byte> packet(header.begin(), header.end());
+    packet.resize(header.size() + payloadLength);
+    putU16(packet, 2, static_cast<std::uint16_t>(packet.size()));
+    for (std::size_t index = 0; index < payloadLength; ++index) {
+        packet[header.size() + index] = byte(static_cast<std::uint8_t>(index + 1U));
+    }
+    return packet;
+}
+
 std::array<std::byte, 48> ipv6UdpPacket() {
     std::array<std::byte, 48> packet{};
     packet[0] = byte(0x60);
@@ -69,6 +81,18 @@ std::array<std::byte, 48> ipv6UdpPacket() {
     putU16(packet, 40, 5353);
     putU16(packet, 42, 53);
     putU16(packet, 44, 8);
+    return packet;
+}
+
+std::vector<std::byte> ipv6UdpPacketWithPayload(const std::size_t payloadLength) {
+    auto header = ipv6UdpPacket();
+    std::vector<std::byte> packet(header.begin(), header.end());
+    packet.resize(header.size() + payloadLength);
+    putU16(packet, 4, static_cast<std::uint16_t>(8U + payloadLength));
+    putU16(packet, 44, static_cast<std::uint16_t>(8U + payloadLength));
+    for (std::size_t index = 0; index < payloadLength; ++index) {
+        packet[header.size() + index] = byte(static_cast<std::uint8_t>(0xa0U + index));
+    }
     return packet;
 }
 
@@ -129,6 +153,9 @@ TEST(FlowGraphIngressParserTest, RootAndVpnParseIntoOneRuntimeOwner) {
     EXPECT_TRUE(reverse.portsAvailable);
     EXPECT_EQ(forward.boundedPrefixLength, 40U);
     EXPECT_EQ(reverse.boundedPrefixLength, 40U);
+    EXPECT_EQ(forward.transportPayloadOffset, 40U);
+    EXPECT_EQ(forward.transportPayloadLength, 0U);
+    EXPECT_FALSE(forward.hasTransportPayload());
 
     const auto forwardKey = CanonicalFlowKey::from(forward);
     const auto reverseKey = CanonicalFlowKey::from(reverse);
@@ -202,6 +229,51 @@ TEST(FlowGraphIngressParserTest, ParsesIpv6UdpWithPlatformMetadata) {
     EXPECT_TRUE(facts.domain.uidKnown);
     EXPECT_EQ(facts.domain.networkContext, 6U);
     EXPECT_EQ(facts.domain.interfaceIndex, 12U);
+    EXPECT_EQ(facts.transportPayloadOffset, 48U);
+    EXPECT_EQ(facts.transportPayloadLength, 0U);
+    EXPECT_FALSE(facts.hasTransportPayload());
+}
+
+TEST(FlowGraphIngressParserTest, RecordsOnlyBoundedTcpPayloadBytesForRecognition) {
+    FlowGraphIngressParser parser(FlowGraphIngressConfig{.maxL3Bytes = 44});
+    const auto packet = ipv4TcpPacketWithPayload(12);
+    const auto facts = parser.parseL3Packet(
+        packetSpan(packet),
+        metadata(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                 static_cast<std::uint32_t>(packet.size())));
+
+    EXPECT_EQ(facts.parseStatus, ParseStatus::Ready);
+    EXPECT_TRUE(facts.portsAvailable);
+    EXPECT_EQ(facts.boundedPrefixLength, 44U);
+    EXPECT_EQ(facts.transportPayloadOffset, 40U);
+    EXPECT_EQ(facts.transportPayloadLength, 4U);
+    EXPECT_TRUE(facts.hasTransportPayload());
+}
+
+TEST(FlowGraphIngressParserTest, RecordsUdpPayloadBytesButZeroPayloadIsNotBearing) {
+    FlowGraphIngressParser parser;
+    const auto payloadPacket = ipv6UdpPacketWithPayload(5);
+    const auto payloadFacts = parser.parseL3Packet(
+        packetSpan(payloadPacket),
+        metadata(AdapterKind::VpnTun, DevicePacketDirection::Output,
+                 static_cast<std::uint32_t>(payloadPacket.size())));
+
+    EXPECT_EQ(payloadFacts.parseStatus, ParseStatus::Ready);
+    EXPECT_TRUE(payloadFacts.portsAvailable);
+    EXPECT_EQ(payloadFacts.transportPayloadOffset, 48U);
+    EXPECT_EQ(payloadFacts.transportPayloadLength, 5U);
+    EXPECT_TRUE(payloadFacts.hasTransportPayload());
+
+    const auto zeroPayloadPacket = ipv6UdpPacket();
+    const auto zeroPayloadFacts = parser.parseL3Packet(
+        packetSpan(zeroPayloadPacket),
+        metadata(AdapterKind::VpnTun, DevicePacketDirection::Output,
+                 static_cast<std::uint32_t>(zeroPayloadPacket.size())));
+
+    EXPECT_EQ(zeroPayloadFacts.parseStatus, ParseStatus::Ready);
+    EXPECT_EQ(zeroPayloadFacts.transportPayloadOffset, 48U);
+    EXPECT_EQ(zeroPayloadFacts.transportPayloadLength, 0U);
+    EXPECT_FALSE(zeroPayloadFacts.hasTransportPayload());
 }
 
 TEST(FlowGraphIngressParserTest, ConfigurableZeroBytesNeverReadsInput) {

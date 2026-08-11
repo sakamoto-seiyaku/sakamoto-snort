@@ -111,6 +111,13 @@ bool PacketFacts::isCanonicalizable() const noexcept {
         && boundedPrefixLength <= originalLength;
 }
 
+bool PacketFacts::hasTransportPayload() const noexcept {
+    return isCanonicalizable()
+        && transportPayloadLength > 0
+        && transportPayloadOffset < boundedPrefixLength
+        && transportPayloadLength <= boundedPrefixLength - transportPayloadOffset;
+}
+
 std::optional<CanonicalFlowKey> CanonicalFlowKey::from(const PacketFacts &facts) noexcept {
     if (!facts.isCanonicalizable()) {
         return std::nullopt;
