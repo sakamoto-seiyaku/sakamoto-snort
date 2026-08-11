@@ -21,6 +21,8 @@ public final class RuntimeControlRequest {
     public static final String PRODUCT_BIND_APP = RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP;
     public static final String PRODUCT_UNBIND_APP =
             RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP;
+    public static final String PRODUCT_SET_NETWORK_GATE =
+            RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE;
 
     public enum Action {
         START(RuntimeControlProtocol.ACTION_START),
@@ -28,7 +30,8 @@ public final class RuntimeControlRequest {
         STOP(RuntimeControlProtocol.ACTION_STOP),
         PRODUCT_PROFILE_SELECT(RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT),
         PRODUCT_BIND_APP(RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP),
-        PRODUCT_UNBIND_APP(RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP);
+        PRODUCT_UNBIND_APP(RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP),
+        PRODUCT_SET_NETWORK_GATE(RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE);
 
         final String wireName;
 
@@ -51,10 +54,14 @@ public final class RuntimeControlRequest {
     public final Action action;
     public final RuntimeProfile profile;
     public final ApplicationSubjectId applicationSubjectId;
+    public final AuthoringPolicyBundle.NetworkContextId networkContext;
+    public final boolean networkGateBlocked;
 
     private RuntimeControlRequest(int protocolVersion, String requestId, Action action,
                                   RuntimeProfile profile,
-                                  ApplicationSubjectId applicationSubjectId) {
+                                  ApplicationSubjectId applicationSubjectId,
+                                  AuthoringPolicyBundle.NetworkContextId networkContext,
+                                  boolean networkGateBlocked) {
         if (protocolVersion != RuntimeControlProtocol.VERSION) {
             throw new IllegalArgumentException("unsupported runtime control version: "
                     + protocolVersion);
@@ -74,21 +81,33 @@ public final class RuntimeControlRequest {
             throw new IllegalArgumentException(
                     "only start and product profile select may carry a runtime profile");
         }
-        if ((action == Action.PRODUCT_BIND_APP || action == Action.PRODUCT_UNBIND_APP)
+        if ((action == Action.PRODUCT_BIND_APP || action == Action.PRODUCT_UNBIND_APP
+                || action == Action.PRODUCT_SET_NETWORK_GATE)
                 && applicationSubjectId == null) {
             throw new IllegalArgumentException(action.wireName
                     + " requires an application subject");
         }
         if (action != Action.PRODUCT_BIND_APP && action != Action.PRODUCT_UNBIND_APP
+                && action != Action.PRODUCT_SET_NETWORK_GATE
                 && applicationSubjectId != null) {
             throw new IllegalArgumentException(
-                    "only product app bind/unbind may carry an application subject");
+                    "only product app bind/unbind or Network Gate may carry an application subject");
+        }
+        if (action == Action.PRODUCT_SET_NETWORK_GATE && networkContext == null) {
+            throw new IllegalArgumentException(action.wireName
+                    + " requires a network context");
+        }
+        if (action != Action.PRODUCT_SET_NETWORK_GATE && networkContext != null) {
+            throw new IllegalArgumentException(
+                    "only Network Gate mutation may carry a network context");
         }
         this.protocolVersion = protocolVersion;
         this.requestId = BoundedText.value(requestId, 80);
         this.action = action;
         this.profile = profile;
         this.applicationSubjectId = applicationSubjectId;
+        this.networkContext = networkContext;
+        this.networkGateBlocked = networkGateBlocked;
     }
 
     public static RuntimeControlRequest start(RuntimeProfile profile) {
@@ -97,7 +116,7 @@ public final class RuntimeControlRequest {
 
     public static RuntimeControlRequest start(RuntimeProfile profile, String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
-                Action.START, profile, null);
+                Action.START, profile, null, null, false);
     }
 
     public static RuntimeControlRequest query() {
@@ -106,7 +125,7 @@ public final class RuntimeControlRequest {
 
     public static RuntimeControlRequest query(String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
-                Action.QUERY, null, null);
+                Action.QUERY, null, null, null, false);
     }
 
     public static RuntimeControlRequest stop() {
@@ -115,7 +134,7 @@ public final class RuntimeControlRequest {
 
     public static RuntimeControlRequest stop(String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
-                Action.STOP, null, null);
+                Action.STOP, null, null, null, false);
     }
 
     public static RuntimeControlRequest selectProductProfile(RuntimeProfile profile) {
@@ -125,7 +144,7 @@ public final class RuntimeControlRequest {
     public static RuntimeControlRequest selectProductProfile(RuntimeProfile profile,
                                                             String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
-                Action.PRODUCT_PROFILE_SELECT, profile, null);
+                Action.PRODUCT_PROFILE_SELECT, profile, null, null, false);
     }
 
     public static RuntimeControlRequest bindProductApplication(ApplicationSubjectId subjectId) {
@@ -135,7 +154,7 @@ public final class RuntimeControlRequest {
     public static RuntimeControlRequest bindProductApplication(ApplicationSubjectId subjectId,
                                                               String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
-                Action.PRODUCT_BIND_APP, null, subjectId);
+                Action.PRODUCT_BIND_APP, null, subjectId, null, false);
     }
 
     public static RuntimeControlRequest unbindProductApplication(ApplicationSubjectId subjectId) {
@@ -145,7 +164,18 @@ public final class RuntimeControlRequest {
     public static RuntimeControlRequest unbindProductApplication(ApplicationSubjectId subjectId,
                                                                 String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
-                Action.PRODUCT_UNBIND_APP, null, subjectId);
+                Action.PRODUCT_UNBIND_APP, null, subjectId, null, false);
+    }
+
+    public static RuntimeControlRequest setNetworkGate(ApplicationSubjectId subjectId,
+            AuthoringPolicyBundle.NetworkContextId context, boolean blocked) {
+        return setNetworkGate(subjectId, context, blocked, UUID.randomUUID().toString());
+    }
+
+    public static RuntimeControlRequest setNetworkGate(ApplicationSubjectId subjectId,
+            AuthoringPolicyBundle.NetworkContextId context, boolean blocked, String requestId) {
+        return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
+                Action.PRODUCT_SET_NETWORK_GATE, null, subjectId, context, blocked);
     }
 
     public Map<String, String> encode() {
@@ -158,6 +188,10 @@ public final class RuntimeControlRequest {
         }
         if (applicationSubjectId != null) {
             values.put("applicationSubjectId", applicationSubjectId.encode());
+        }
+        if (networkContext != null) {
+            values.put("networkContext", networkContext.wireName);
+            values.put("networkGateBlocked", Boolean.toString(networkGateBlocked));
         }
         return values;
     }
@@ -179,8 +213,13 @@ public final class RuntimeControlRequest {
         String subjectValue = values.get("applicationSubjectId");
         ApplicationSubjectId subjectId = subjectValue == null || subjectValue.trim().isEmpty()
                 ? null : ApplicationSubjectId.parse(subjectValue);
+        String contextValue = values.get("networkContext");
+        AuthoringPolicyBundle.NetworkContextId context =
+                contextValue == null || contextValue.trim().isEmpty()
+                        ? null : AuthoringPolicyBundle.NetworkContextId.parse(contextValue);
+        boolean blocked = Boolean.parseBoolean(values.get("networkGateBlocked"));
         return new RuntimeControlRequest(version, required(values, "requestId"), action, profile,
-                subjectId);
+                subjectId, context, blocked);
     }
 
     @Override
@@ -193,12 +232,15 @@ public final class RuntimeControlRequest {
                 && action == value.action
                 && profile == value.profile
                 && Objects.equals(applicationSubjectId, value.applicationSubjectId)
+                && networkContext == value.networkContext
+                && networkGateBlocked == value.networkGateBlocked
                 && requestId.equals(value.requestId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(protocolVersion, requestId, action, profile, applicationSubjectId);
+        return Objects.hash(protocolVersion, requestId, action, profile, applicationSubjectId,
+                networkContext, networkGateBlocked);
     }
 
     private static String required(Map<String, String> values, String name) {

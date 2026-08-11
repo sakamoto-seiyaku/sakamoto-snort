@@ -71,7 +71,8 @@ public final class ProductCatalogFormatter {
                 continue;
             }
             boolean bound = product.boundApplications.contains(entry.subjectId);
-            EntryRow row = new EntryRow(entry, bound, productStateValid);
+            EntryRow row = new EntryRow(entry, bound, productStateValid,
+                    product.authoringPolicyBundle);
             if (productStateValid && entry.available && !bound && firstAvailable == null) {
                 firstAvailable = entry.subjectId;
             }
@@ -218,7 +219,13 @@ public final class ProductCatalogFormatter {
                         .append(" | availability ")
                         .append(row.availability)
                         .append(" | bound ")
-                        .append(row.bound ? "yes" : "no");
+                        .append(row.bound ? "yes" : "no")
+                        .append(" | gate wifi=")
+                        .append(row.wifiGateBlocked ? "blocked" : "open")
+                        .append(" mobile=")
+                        .append(row.mobileGateBlocked ? "blocked" : "open")
+                        .append(" vpn=")
+                        .append(row.vpnGateBlocked ? "blocked" : "open");
             }
             return out.toString();
         }
@@ -234,20 +241,31 @@ public final class ProductCatalogFormatter {
         public final int fullUid;
         public final String availability;
         public final boolean bound;
+        public final boolean wifiGateBlocked;
+        public final boolean mobileGateBlocked;
+        public final boolean vpnGateBlocked;
         public final boolean productStateValid;
         private final boolean canBind;
         private final boolean canUnbind;
+        private final boolean canToggleGate;
 
-        private EntryRow(ApplicationCatalogEntry entry, boolean bound, boolean productStateValid) {
+        private EntryRow(ApplicationCatalogEntry entry, boolean bound, boolean productStateValid,
+                         AuthoringPolicyBundle bundle) {
             this(entry.subjectId, entry.packageName, entry.label,
                     entry.profileLabel.isEmpty() ? "user " + entry.userId : entry.profileLabel,
                     entry.iconToken, entry.userId, entry.subjectId.uid,
-                    entry.available ? "available" : "unavailable", bound, productStateValid);
+                    entry.available ? "available" : "unavailable", bound,
+                    gateBlocked(bundle, entry.subjectId, AuthoringPolicyBundle.NetworkContextId.WIFI),
+                    gateBlocked(bundle, entry.subjectId, AuthoringPolicyBundle.NetworkContextId.MOBILE),
+                    gateBlocked(bundle, entry.subjectId, AuthoringPolicyBundle.NetworkContextId.VPN),
+                    productStateValid);
         }
 
         EntryRow(ApplicationSubjectId subjectId, String packageName, String label,
                  String profileLabel, String iconToken, int userId, int fullUid,
-                 String availability, boolean bound, boolean productStateValid) {
+                 String availability, boolean bound, boolean wifiGateBlocked,
+                 boolean mobileGateBlocked, boolean vpnGateBlocked,
+                 boolean productStateValid) {
             if (subjectId == null) {
                 throw new IllegalArgumentException("subjectId is required");
             }
@@ -265,9 +283,13 @@ public final class ProductCatalogFormatter {
             this.fullUid = fullUid;
             this.availability = "available".equals(availability) ? "available" : "unavailable";
             this.bound = bound;
+            this.wifiGateBlocked = wifiGateBlocked;
+            this.mobileGateBlocked = mobileGateBlocked;
+            this.vpnGateBlocked = vpnGateBlocked;
             this.productStateValid = productStateValid;
             this.canBind = productStateValid && "available".equals(this.availability) && !bound;
             this.canUnbind = productStateValid && bound;
+            this.canToggleGate = productStateValid && "available".equals(this.availability);
         }
 
         public boolean canBind() {
@@ -278,10 +300,44 @@ public final class ProductCatalogFormatter {
             return canUnbind;
         }
 
+        public boolean canToggleGate() {
+            return canToggleGate;
+        }
+
+        public boolean isNetworkGateBlocked(AuthoringPolicyBundle.NetworkContextId context) {
+            if (context == AuthoringPolicyBundle.NetworkContextId.WIFI) {
+                return wifiGateBlocked;
+            }
+            if (context == AuthoringPolicyBundle.NetworkContextId.MOBILE) {
+                return mobileGateBlocked;
+            }
+            return vpnGateBlocked;
+        }
+
+        public String networkGateButtonLabel(AuthoringPolicyBundle.NetworkContextId context) {
+            return (isNetworkGateBlocked(context) ? "Open " : "Block ")
+                    + context.wireName;
+        }
+
         @Override
         public String toString() {
             return label + " | " + profileLabel + " | uid " + fullUid
-                    + (bound ? " | bound" : " | unbound");
+                    + (bound ? " | bound" : " | unbound")
+                    + " | gate wifi=" + (wifiGateBlocked ? "blocked" : "open")
+                    + " mobile=" + (mobileGateBlocked ? "blocked" : "open")
+                    + " vpn=" + (vpnGateBlocked ? "blocked" : "open");
         }
+    }
+
+    private static boolean gateBlocked(AuthoringPolicyBundle bundle,
+                                       ApplicationSubjectId subjectId,
+                                       AuthoringPolicyBundle.NetworkContextId context) {
+        AuthoringPolicyBundle value = bundle == null ? AuthoringPolicyBundle.empty() : bundle;
+        for (AuthoringPolicyBundle.NetworkGateRule rule : value.gateMatrix) {
+            if (rule.subjectId.equals(subjectId) && rule.networkContext == context) {
+                return rule.blocked;
+            }
+        }
+        return false;
     }
 }

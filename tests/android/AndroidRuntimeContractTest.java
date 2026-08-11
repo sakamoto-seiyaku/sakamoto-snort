@@ -132,9 +132,26 @@ public final class AndroidRuntimeContractTest {
                 "product app unbind is a first-class service request");
         check(subject.equals(unbind.applicationSubjectId),
                 "product app unbind preserves the complete UID subject");
+        RuntimeControlRequest gate = RuntimeControlRequest.decode(
+                RuntimeControlRequest.setNetworkGate(subject,
+                        AuthoringPolicyBundle.NetworkContextId.MOBILE,
+                        true, "gate-request").encode());
+        check(gate.action == RuntimeControlRequest.Action.PRODUCT_SET_NETWORK_GATE,
+                "product Network Gate mutation is a first-class service request");
+        check(subject.equals(gate.applicationSubjectId),
+                "product Network Gate mutation preserves the complete UID subject");
+        check(gate.networkContext == AuthoringPolicyBundle.NetworkContextId.MOBILE,
+                "product Network Gate mutation preserves typed NetworkContextId");
+        check(gate.networkGateBlocked,
+                "product Network Gate mutation preserves blocked/open action");
+        check(gate.profile == null,
+                "product Network Gate mutation does not carry a runtime profile");
         check(RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP.equals(
                         RuntimeControlRequest.PRODUCT_BIND_APP),
                 "product bind action has a stable protocol name");
+        check(RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE.equals(
+                        RuntimeControlRequest.PRODUCT_SET_NETWORK_GATE),
+                "product Network Gate action has a stable protocol name");
         expectIllegalArgument("bind without subject is rejected",
                 () -> RuntimeControlRequest.decode(map("protocolVersion",
                         Integer.toString(RuntimeControlProtocol.VERSION),
@@ -152,6 +169,12 @@ public final class AndroidRuntimeContractTest {
                         Integer.toString(RuntimeControlProtocol.VERSION),
                         "requestId", "bad-profile",
                         "action", RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT)));
+        expectIllegalArgument("Network Gate without context is rejected",
+                () -> RuntimeControlRequest.decode(map("protocolVersion",
+                        Integer.toString(RuntimeControlProtocol.VERSION),
+                        "requestId", "bad-gate",
+                        "action", RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE,
+                        "applicationSubjectId", subject.encode())));
     }
 
     private static void lifecycleRequestOrderingRejectsDelayedStarts() {
@@ -1372,8 +1395,12 @@ public final class AndroidRuntimeContractTest {
         ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
         java.util.TreeSet<ApplicationSubjectId> bound = new java.util.TreeSet<>();
         bound.add(work);
+        AuthoringPolicyBundle gates = AuthoringPolicyBundle.empty()
+                .withNetworkGate(primary, AuthoringPolicyBundle.NetworkContextId.WIFI, true)
+                .withNetworkGate(primary, AuthoringPolicyBundle.NetworkContextId.MOBILE, false)
+                .withNetworkGate(work, AuthoringPolicyBundle.NetworkContextId.VPN, true);
         ProductStateSnapshot state = new ProductStateSnapshot(RuntimeProfile.VPN, bound,
-                AuthoringPolicyBundle.empty());
+                gates);
         List<ApplicationCatalogEntry> catalog = Arrays.asList(
                 new ApplicationCatalogEntry(primary, "com.example.mail", "Mail",
                         "icon:mail/u0", 0, "Owner", true),
@@ -1401,6 +1428,17 @@ public final class AndroidRuntimeContractTest {
                 "catalog row renders full Linux UID identity");
         check(projection.boundApplicationCount == 1,
                 "Product UI projection renders bound application count");
+        check(projection.rows.get(0).wifiGateBlocked
+                        && !projection.rows.get(0).mobileGateBlocked
+                        && !projection.rows.get(0).vpnGateBlocked,
+                "Product UI projection renders per-row Wi-Fi/Mobile/VPN Gate state");
+        check("Open wifi".equals(projection.rows.get(0).networkGateButtonLabel(
+                        AuthoringPolicyBundle.NetworkContextId.WIFI))
+                        && "Block mobile".equals(projection.rows.get(0).networkGateButtonLabel(
+                        AuthoringPolicyBundle.NetworkContextId.MOBILE)),
+                "Product UI projection exposes app-row Gate toggle labels");
+        check(projection.displayText.contains("gate wifi=blocked mobile=open vpn=open"),
+                "Product UI projection display text includes app-row Gate state");
         check(projection.firstBoundSubjectId.equals(work),
                 "unbind candidate is the bound ApplicationSubjectId");
         check(projection.firstAvailableSubjectId.equals(primary),
@@ -1408,7 +1446,7 @@ public final class AndroidRuntimeContractTest {
         ProductCatalogFormatter.Projection nextCandidate =
                 ProductCatalogFormatter.result(new ProductStateSnapshot(RuntimeProfile.VPN,
                         new java.util.TreeSet<>(Arrays.asList(primary)),
-                        AuthoringPolicyBundle.empty()), catalog);
+                        gates), catalog);
         check(nextCandidate.firstAvailableSubjectId == null,
                 "bind candidate skips already-bound available ApplicationSubjectId");
         check(projection.displayText.contains("Product Store selected profile: VPN (vpn)"),
@@ -1514,10 +1552,13 @@ public final class AndroidRuntimeContractTest {
         Path files = Files.createTempDirectory("sakamoto-50-product-projection");
         ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
         ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
+        AuthoringPolicyBundle gates = AuthoringPolicyBundle.empty()
+                .withNetworkGate(primary, AuthoringPolicyBundle.NetworkContextId.WIFI, true)
+                .withNetworkGate(work, AuthoringPolicyBundle.NetworkContextId.VPN, true);
         ProductCatalogFormatter.Projection projection = ProductCatalogFormatter.result(
                 new ProductStateSnapshot(RuntimeProfile.VPN,
                         new java.util.TreeSet<>(Arrays.asList(work)),
-                        AuthoringPolicyBundle.empty()),
+                        gates),
                 Arrays.asList(
                         new ApplicationCatalogEntry(primary, "com.example.mail", "Mail",
                                 "icon:mail/u0", 0, "Owner", true),
@@ -1548,6 +1589,9 @@ public final class AndroidRuntimeContractTest {
                 "projection handoff preserves bind-enabled selected row");
         check(restored.projection.selectableRows.get(1).canUnbind(),
                 "projection handoff preserves unbind-enabled selected row");
+        check(restored.projection.selectableRows.get(0).wifiGateBlocked
+                        && restored.projection.selectableRows.get(1).vpnGateBlocked,
+                "projection store round-trips per-row Network Gate state");
         check(ProductCatalogProjectionStore.projectionFile(files.toFile()).getPath()
                         .contains("product-catalog-projection"),
                 "product catalog projection uses its own UI/evidence repository path");

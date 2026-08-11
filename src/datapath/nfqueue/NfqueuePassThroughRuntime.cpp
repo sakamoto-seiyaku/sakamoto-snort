@@ -14,11 +14,13 @@
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
 #include <arpa/inet.h>
+#include <net/if.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -26,12 +28,64 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace {
 
 constexpr int kQueuePollTimeoutMs = 250;
+constexpr std::uint32_t kNetworkContextUnknown = 0;
+constexpr std::uint32_t kNetworkContextWifi = 1;
+constexpr std::uint32_t kNetworkContextMobile = 2;
+constexpr std::uint32_t kNetworkContextVpn = 3;
+
+[[nodiscard]] bool startsWith(const std::string_view value,
+                              const std::string_view prefix) noexcept {
+    return value.size() >= prefix.size()
+        && value.substr(0, prefix.size()) == prefix;
+}
+
+[[nodiscard]] std::uint32_t networkContextForInterfaceName(
+    const std::string_view name) noexcept {
+    if (startsWith(name, "wlan") || startsWith(name, "wifi")) {
+        return kNetworkContextWifi;
+    }
+    if (startsWith(name, "rmnet") || startsWith(name, "ccmni")
+        || startsWith(name, "pdp")) {
+        return kNetworkContextMobile;
+    }
+    if (startsWith(name, "tun") || startsWith(name, "ppp")
+        || startsWith(name, "wg")) {
+        return kNetworkContextVpn;
+    }
+    return kNetworkContextUnknown;
+}
+
+[[nodiscard]] std::uint32_t networkContextForInterfaceIndex(
+    const std::uint32_t ifindex) noexcept {
+    if (ifindex == 0) {
+        return kNetworkContextUnknown;
+    }
+    std::array<char, IF_NAMESIZE> name{};
+    if (::if_indextoname(ifindex, name.data()) == nullptr) {
+        return kNetworkContextUnknown;
+    }
+    return networkContextForInterfaceName(name.data());
+}
+
+[[nodiscard]] std::uint32_t networkContextForPacket(
+    const std::uint8_t hook,
+    const SnortDatapath::Nfqueue::NfqueuePacketMetadata &metadata) noexcept {
+    const auto direction = nfqueueHookToDirection(hook);
+    if (!direction.has_value()) {
+        return kNetworkContextUnknown;
+    }
+    const std::uint32_t ifindex = nfqueueDirectionIsInput(*direction)
+        ? metadata.inputInterfaceIndex
+        : metadata.outputInterfaceIndex;
+    return networkContextForInterfaceIndex(ifindex);
+}
 
 class SystemHookCommandExecutor final : public SnortDatapath::Nfqueue::HookCommandExecutor {
 public:
@@ -201,6 +255,7 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
     if (attrs[NFQA_IFINDEX_OUTDEV] != nullptr) {
         metadata.outputInterfaceIndex = ntohl(mnl_attr_get_u32(attrs[NFQA_IFINDEX_OUTDEV]));
     }
+    metadata.networkContext = networkContextForPacket(header->hook, metadata);
 
     const auto packetId = ntohl(header->packet_id);
     const auto admission = context->leaseAdapter->admit(packetId);

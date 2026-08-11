@@ -13,6 +13,7 @@ SNORT_CTL="${SNORT_CTL:-}"
 TRAFFIC_HOST="${TRAFFIC_HOST:-1.1.1.1}"
 TRAFFIC_PORT="${TRAFFIC_PORT:-80}"
 TRAFFIC_TIMEOUT_MILLIS="${TRAFFIC_TIMEOUT_MILLIS:-1500}"
+REAL_TRAFFIC_NETWORK_CONTEXT="${REAL_TRAFFIC_NETWORK_CONTEXT:-1}"
 MATRIX_RC=0
 
 usage() {
@@ -217,6 +218,17 @@ print(json.dumps(payload, separators=(",", ":")))
 PY
 }
 
+stable_gate_rule_id() {
+  local uid="$1"
+  local context="$2"
+  python3 - "$uid" "$context" <<'PY'
+import sys
+
+uid, context = map(int, sys.argv[1:])
+print((0x5100000000000000 | ((uid & 0xffffffff) << 8) | context))
+PY
+}
+
 policy_apply_unknown_gate() {
   local revision="$1"
   local context="$2"
@@ -366,6 +378,16 @@ debug_traffic_probe_value() {
     | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); found=1 } END { if (!found) exit 1 }'
 }
 
+request_product_network_gate() {
+  local uid="$1"
+  local context_name="$2"
+  local blocked="$3"
+  adb_cmd shell am start -n "$ACTIVITY" \
+    --es debugSetNetworkGateSubject "android.uid:${uid}" \
+    --es debugSetNetworkGateContext "$context_name" \
+    --ez debugSetNetworkGateBlocked "$blocked" >/dev/null
+}
+
 assert_eval() {
   local label="$1"
   local response="$2"
@@ -386,6 +408,29 @@ assert_eval() {
     kv "$label.evaluateResult" "FAIL"
     MATRIX_RC=1
   fi
+}
+
+wait_eval_verdict() {
+  local uid="$1"
+  local context="$2"
+  local expected_verdict="$3"
+  local expected_stage="$4"
+  local expected_rule="$5"
+  local response verdict stage rule
+  for _ in $(seq 1 20); do
+    response="$(ctl POLICY.EVALUATE "$(policy_evaluate "$uid" "$context")")"
+    verdict="$(json_path result.verdict "$response")"
+    stage="$(json_path result.stage "$response")"
+    rule="$(json_path result.ruleId "$response")"
+    if [[ "$verdict" == "$expected_verdict" && "$stage" == "$expected_stage" \
+      && "$rule" == "$expected_rule" ]]; then
+      printf '%s\n' "$response"
+      return 0
+    fi
+    sleep 1
+  done
+  printf '%s\n' "$response"
+  return 1
 }
 
 section "preflight"
@@ -413,6 +458,7 @@ kv "package" "$PACKAGE"
 kv "uid.command" "./dev/adb shell cmd package list packages -U $PACKAGE"
 kv "uid" "$uid"
 kv "traffic" "$TRAFFIC_HOST:$TRAFFIC_PORT"
+kv "realTrafficNetworkContext" "$REAL_TRAFFIC_NETWORK_CONTEXT"
 kv "controlPort" "$VNEXT_PORT"
 kv "snortCtl" "$SNORT_CTL"
 
@@ -438,13 +484,12 @@ printf 'unknown_subject.POLICY.EVALUATE=%s\n' "$eval_resp"
 assert_eval "unknown_subject" "$eval_resp" "DROP" "NetworkGate" "510200" "510200"
 
 section "block_real_traffic"
-block_revision=510300
-block_rule=510300
-apply_args="$(policy_apply_gate "$uid" "$block_revision" 0 "$block_rule" "$block_rule")"
-eval_args="$(policy_evaluate "$uid" 0)"
-apply_resp="$(ctl POLICY.APPLY "$apply_args")"
-eval_resp="$(ctl POLICY.EVALUATE "$eval_args")"
-printf 'block.POLICY.APPLY=%s\n' "$apply_resp"
+block_rule="$(stable_gate_rule_id "$uid" "$REAL_TRAFFIC_NETWORK_CONTEXT")"
+eval_args="$(policy_evaluate "$uid" "$REAL_TRAFFIC_NETWORK_CONTEXT")"
+kv "block.product.command" "./dev/adb shell am start -n $ACTIVITY --es debugSetNetworkGateSubject android.uid:$uid --es debugSetNetworkGateContext wifi --ez debugSetNetworkGateBlocked true"
+request_product_network_gate "$uid" wifi true || true
+eval_resp="$(wait_eval_verdict "$uid" "$REAL_TRAFFIC_NETWORK_CONTEXT" "DROP" "NetworkGate" "$block_rule")"
+block_revision="$(json_path result.revision "$eval_resp")"
 printf 'block.POLICY.EVALUATE=%s\n' "$eval_resp"
 assert_eval "block" "$eval_resp" "DROP" "NetworkGate" "$block_revision" "$block_rule"
 before="$(ctl NFQUEUE.STATUS)"
@@ -489,12 +534,10 @@ else
 fi
 
 section "open_restore"
-open_revision=510400
-apply_args="$(policy_apply_open "$uid" "$open_revision")"
-eval_args="$(policy_evaluate "$uid" 0)"
-apply_resp="$(ctl POLICY.APPLY "$apply_args")"
-eval_resp="$(ctl POLICY.EVALUATE "$eval_args")"
-printf 'open.POLICY.APPLY=%s\n' "$apply_resp"
+kv "open.product.command" "./dev/adb shell am start -n $ACTIVITY --es debugSetNetworkGateSubject android.uid:$uid --es debugSetNetworkGateContext wifi --ez debugSetNetworkGateBlocked false"
+request_product_network_gate "$uid" wifi false || true
+eval_args="$(policy_evaluate "$uid" "$REAL_TRAFFIC_NETWORK_CONTEXT")"
+eval_resp="$(wait_eval_verdict "$uid" "$REAL_TRAFFIC_NETWORK_CONTEXT" "PASS_NEXT" "None" "0")"
 printf 'open.POLICY.EVALUATE=%s\n' "$eval_resp"
 assert_eval "open" "$eval_resp" "PASS_NEXT" "None" "0" "0"
 before="$(ctl NFQUEUE.STATUS)"

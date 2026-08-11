@@ -63,6 +63,12 @@ public class DebugControlActivity extends Activity {
             "debugBindApplicationSubject";
     private static final String EXTRA_DEBUG_UNBIND_APPLICATION_SUBJECT =
             "debugUnbindApplicationSubject";
+    private static final String EXTRA_DEBUG_SET_NETWORK_GATE_SUBJECT =
+            "debugSetNetworkGateSubject";
+    private static final String EXTRA_DEBUG_SET_NETWORK_GATE_CONTEXT =
+            "debugSetNetworkGateContext";
+    private static final String EXTRA_DEBUG_SET_NETWORK_GATE_BLOCKED =
+            "debugSetNetworkGateBlocked";
     private static final String DEBUG_TRAFFIC_PROBE_RESULT_PATH =
             "debug/traffic-probe.properties";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
@@ -88,6 +94,9 @@ public class DebugControlActivity extends Activity {
     private ImageView selectedAppIcon;
     private Button bindSelectedButton;
     private Button unbindSelectedButton;
+    private Button wifiGateButton;
+    private Button mobileGateButton;
+    private Button vpnGateButton;
     private boolean suppressAppSelection;
     private ApplicationSubjectId selectedApplicationSubjectId;
     private boolean pendingStart;
@@ -166,6 +175,13 @@ public class DebugControlActivity extends Activity {
         String unbindSubject = intent.getStringExtra(EXTRA_DEBUG_UNBIND_APPLICATION_SUBJECT);
         if (unbindSubject != null && !unbindSubject.trim().isEmpty()) {
             main.post(() -> requestDebugProductBinding(unbindSubject, false));
+        }
+        String gateSubject = intent.getStringExtra(EXTRA_DEBUG_SET_NETWORK_GATE_SUBJECT);
+        if (gateSubject != null && !gateSubject.trim().isEmpty()) {
+            String context = intent.getStringExtra(EXTRA_DEBUG_SET_NETWORK_GATE_CONTEXT);
+            boolean blocked = intent.getBooleanExtra(
+                    EXTRA_DEBUG_SET_NETWORK_GATE_BLOCKED, true);
+            main.post(() -> requestDebugNetworkGate(gateSubject, context, blocked));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
             main.post(this::runDebugApplyGateAndProbe);
@@ -275,6 +291,24 @@ public class DebugControlActivity extends Activity {
         unbindSelectedButton.setAllCaps(false);
         unbindSelectedButton.setOnClickListener(view -> unbindSelectedApplication());
         productButtons.addView(unbindSelectedButton, weighted());
+        wifiGateButton = new Button(this);
+        wifiGateButton.setText("Block wifi");
+        wifiGateButton.setAllCaps(false);
+        wifiGateButton.setOnClickListener(view -> toggleSelectedNetworkGate(
+                AuthoringPolicyBundle.NetworkContextId.WIFI));
+        productButtons.addView(wifiGateButton, weighted());
+        mobileGateButton = new Button(this);
+        mobileGateButton.setText("Block mobile");
+        mobileGateButton.setAllCaps(false);
+        mobileGateButton.setOnClickListener(view -> toggleSelectedNetworkGate(
+                AuthoringPolicyBundle.NetworkContextId.MOBILE));
+        productButtons.addView(mobileGateButton, weighted());
+        vpnGateButton = new Button(this);
+        vpnGateButton.setText("Block vpn");
+        vpnGateButton.setAllCaps(false);
+        vpnGateButton.setOnClickListener(view -> toggleSelectedNetworkGate(
+                AuthoringPolicyBundle.NetworkContextId.VPN));
+        productButtons.addView(vpnGateButton, weighted());
         root.addView(productButtons, fillWrap());
 
         statusView = new TextView(this);
@@ -521,6 +555,22 @@ public class DebugControlActivity extends Activity {
         if (unbindSelectedButton != null) {
             unbindSelectedButton.setEnabled(row != null && row.canUnbind());
         }
+        updateNetworkGateButton(wifiGateButton, row,
+                AuthoringPolicyBundle.NetworkContextId.WIFI);
+        updateNetworkGateButton(mobileGateButton, row,
+                AuthoringPolicyBundle.NetworkContextId.MOBILE);
+        updateNetworkGateButton(vpnGateButton, row,
+                AuthoringPolicyBundle.NetworkContextId.VPN);
+    }
+
+    private void updateNetworkGateButton(Button button, ProductCatalogFormatter.EntryRow row,
+                                         AuthoringPolicyBundle.NetworkContextId context) {
+        if (button == null) {
+            return;
+        }
+        button.setEnabled(row != null && row.canToggleGate());
+        button.setText(row == null ? "Block " + context.wireName
+                : row.networkGateButtonLabel(context));
     }
 
     private void renderSelectedApplicationIcon(ProductCatalogFormatter.EntryRow row) {
@@ -587,6 +637,21 @@ public class DebugControlActivity extends Activity {
         refreshProductCatalog();
     }
 
+    private void toggleSelectedNetworkGate(AuthoringPolicyBundle.NetworkContextId context) {
+        ProductCatalogFormatter.EntryRow row = selectedApplicationRow();
+        ApplicationSubjectId subjectId = row == null ? selectedApplicationSubjectId : row.subjectId;
+        if (subjectId == null || row == null || !row.canToggleGate()) {
+            action("No selected available catalog app for Network Gate.");
+            return;
+        }
+        boolean blocked = !row.isNetworkGateBlocked(context);
+        backend.setNetworkGate(this, subjectId, context, blocked);
+        action("Network Gate " + (blocked ? "block" : "open")
+                + " requested for " + context.wireName
+                + " subject " + subjectId.encode() + ".");
+        refreshProductCatalog();
+    }
+
     private void requestDebugProductBinding(String encodedSubject, boolean bind) {
         final ApplicationSubjectId subjectId;
         try {
@@ -602,6 +667,25 @@ public class DebugControlActivity extends Activity {
             backend.unbindProductApplication(this, subjectId);
             action("Debug unbind requested for application subject " + subjectId.encode() + ".");
         }
+        selectedApplicationSubjectId = subjectId;
+        refreshProductCatalog();
+    }
+
+    private void requestDebugNetworkGate(String encodedSubject, String contextName,
+                                         boolean blocked) {
+        final ApplicationSubjectId subjectId;
+        final AuthoringPolicyBundle.NetworkContextId context;
+        try {
+            subjectId = ApplicationSubjectId.parse(encodedSubject);
+            context = AuthoringPolicyBundle.NetworkContextId.parse(contextName);
+        } catch (IllegalArgumentException error) {
+            action("Invalid debug Network Gate request: " + boundedError(error));
+            return;
+        }
+        backend.setNetworkGate(this, subjectId, context, blocked);
+        action("Debug Network Gate " + (blocked ? "block" : "open")
+                + " requested for " + context.wireName
+                + " subject " + subjectId.encode() + ".");
         selectedApplicationSubjectId = subjectId;
         refreshProductCatalog();
     }

@@ -127,6 +127,12 @@ public final class ProductCatalogProjectionStore {
             values.setProperty(key + "fullUid", Integer.toString(row.fullUid));
             values.setProperty(key + "availability", row.availability);
             values.setProperty(key + "bound", Boolean.toString(row.bound));
+            values.setProperty(key + "wifiGateBlocked",
+                    Boolean.toString(row.wifiGateBlocked));
+            values.setProperty(key + "mobileGateBlocked",
+                    Boolean.toString(row.mobileGateBlocked));
+            values.setProperty(key + "vpnGateBlocked",
+                    Boolean.toString(row.vpnGateBlocked));
             values.setProperty(key + "productStateValid",
                     Boolean.toString(row.productStateValid));
         }
@@ -150,6 +156,9 @@ public final class ProductCatalogProjectionStore {
                     parseInt(values, key + "fullUid", subjectId.uid),
                     values.getProperty(key + "availability", "unavailable"),
                     Boolean.parseBoolean(values.getProperty(key + "bound", "false")),
+                    Boolean.parseBoolean(values.getProperty(key + "wifiGateBlocked", "false")),
+                    Boolean.parseBoolean(values.getProperty(key + "mobileGateBlocked", "false")),
+                    Boolean.parseBoolean(values.getProperty(key + "vpnGateBlocked", "false")),
                     Boolean.parseBoolean(values.getProperty(key + "productStateValid", "true"))));
         }
         return rows;

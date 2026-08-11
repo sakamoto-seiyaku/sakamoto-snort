@@ -60,6 +60,13 @@ public final class RuntimeControlBackend {
                 RuntimeControlRequest.unbindProductApplication(subjectId)));
     }
 
+    public void setNetworkGate(Context context, ApplicationSubjectId subjectId,
+                               AuthoringPolicyBundle.NetworkContextId networkContext,
+                               boolean blocked) {
+        context.startService(requestIntent(context,
+                RuntimeControlRequest.setNetworkGate(subjectId, networkContext, blocked)));
+    }
+
     /** Debug-only seam used to prove replacement remains blocked on cleanup failure. */
     public void setCleanupFault(Context context, boolean enabled) {
         Intent intent = requestIntent(context, RuntimeControlRequest.query());
@@ -81,6 +88,12 @@ public final class RuntimeControlBackend {
         if (request.applicationSubjectId != null) {
             intent.putExtra(RuntimeControlProtocol.EXTRA_APPLICATION_SUBJECT,
                     request.applicationSubjectId.encode());
+        }
+        if (request.networkContext != null) {
+            intent.putExtra(RuntimeControlProtocol.EXTRA_NETWORK_CONTEXT,
+                    request.networkContext.wireName);
+            intent.putExtra(RuntimeControlProtocol.EXTRA_NETWORK_GATE_BLOCKED,
+                    request.networkGateBlocked);
         }
         return intent;
     }

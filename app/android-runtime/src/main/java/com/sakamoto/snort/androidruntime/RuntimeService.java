@@ -52,6 +52,8 @@ public final class RuntimeService extends VpnService {
             RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP;
     public static final String ACTION_PRODUCT_UNBIND_APP =
             RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP;
+    public static final String ACTION_PRODUCT_SET_NETWORK_GATE =
+            RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE;
 
     private static final String TAG = "SakamotoRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
@@ -210,6 +212,20 @@ public final class RuntimeService extends VpnService {
                 return START_NOT_STICKY;
             }
         }
+        AuthoringPolicyBundle.NetworkContextId requestedNetworkContext = null;
+        if (intent != null && intent.hasExtra(RuntimeControlProtocol.EXTRA_NETWORK_CONTEXT)) {
+            try {
+                requestedNetworkContext = AuthoringPolicyBundle.NetworkContextId.parse(
+                        intent.getStringExtra(RuntimeControlProtocol.EXTRA_NETWORK_CONTEXT));
+            } catch (IllegalArgumentException error) {
+                enqueueLifecycle(() -> publishError("invalid_network_context",
+                        error.getMessage(), currentMayBeActive(), currentPid()));
+                return START_NOT_STICKY;
+            }
+        }
+        final boolean requestedNetworkGateBlocked = intent != null
+                && intent.getBooleanExtra(RuntimeControlProtocol.EXTRA_NETWORK_GATE_BLOCKED,
+                        false);
 
         if (ACTION_START.equals(action)) {
             // A user retry is an explicit new lifecycle transaction. Clear a
@@ -268,6 +284,19 @@ public final class RuntimeService extends VpnService {
             enqueueLifecycle(() -> unbindProductApplication(subject));
             return START_STICKY;
         }
+        if (ACTION_PRODUCT_SET_NETWORK_GATE.equals(action)) {
+            if (requestedSubject == null || requestedNetworkContext == null) {
+                enqueueLifecycle(() -> publishError("invalid_product_network_gate_request",
+                        "Network Gate mutation requires an application subject and network context",
+                        currentMayBeActive(), currentPid()));
+                return START_NOT_STICKY;
+            }
+            final ApplicationSubjectId subject = requestedSubject;
+            final AuthoringPolicyBundle.NetworkContextId context = requestedNetworkContext;
+            enqueueLifecycle(() -> setProductNetworkGate(
+                    subject, context, requestedNetworkGateBlocked));
+            return START_STICKY;
+        }
         if (ACTION_START.equals(action)) {
             final RuntimeProfile profile = requested == null ? activeProfile : requested;
             if (!ensureForeground(profile)) {
@@ -293,7 +322,8 @@ public final class RuntimeService extends VpnService {
                 || ACTION_STOP.equals(action)
                 || ACTION_PRODUCT_PROFILE_SELECT.equals(action)
                 || ACTION_PRODUCT_BIND_APP.equals(action)
-                || ACTION_PRODUCT_UNBIND_APP.equals(action);
+                || ACTION_PRODUCT_UNBIND_APP.equals(action)
+                || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action);
     }
 
     private void queueHealthQuery(int requestStartId) {
@@ -1803,6 +1833,27 @@ public final class RuntimeService extends VpnService {
                     "application unbinding could not be persisted");
         }
         refreshProductCatalogProjection("unbind_app");
+        stopIfInactive();
+    }
+
+    private void setProductNetworkGate(ApplicationSubjectId subjectId,
+                                       AuthoringPolicyBundle.NetworkContextId context,
+                                       boolean blocked) {
+        if (productBackend == null) {
+            stopIfInactive();
+            return;
+        }
+        ProductStore.MutationResult result =
+                productBackend.setNetworkGate(subjectId, context, blocked);
+        if (result.persisted) {
+            appendLog("product_control=network_gate subject=" + subjectId.encode()
+                    + " context=" + context.wireName
+                    + " blocked=" + blocked);
+        } else {
+            publishProductMutationFailure("product_network_gate_failed", result,
+                    "Network Gate mutation could not be applied");
+        }
+        refreshProductCatalogProjection("network_gate");
         stopIfInactive();
     }
 
