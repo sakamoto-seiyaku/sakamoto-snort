@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -38,6 +39,23 @@ void closeIfOpen(int &fd) noexcept {
 
 void makePacketSocketPair(int (&fds)[2]) {
     ASSERT_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds), 0);
+}
+
+void fillPipeUntilBackpressured(const int fd) {
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    ASSERT_GE(flags, 0);
+    ASSERT_EQ(::fcntl(fd, F_SETFL, flags | O_NONBLOCK), 0);
+
+    const std::array<std::uint8_t, 4096> filler{};
+    for (;;) {
+        const ssize_t bytes = ::write(fd, filler.data(), filler.size());
+        if (bytes > 0) {
+            continue;
+        }
+        ASSERT_EQ(bytes, -1);
+        ASSERT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK) << errno;
+        return;
+    }
 }
 
 std::vector<std::uint8_t> readPacketFromFd(const int fd) {
@@ -112,6 +130,32 @@ std::array<std::uint8_t, 40> ipv4TcpPacket(const bool reverse = false) {
     return packet;
 }
 
+std::array<std::uint8_t, 60> ipv6TcpPacket(const bool reverse = false) {
+    std::array<std::uint8_t, 60> packet{};
+    packet[0] = 0x60;
+    putU16(packet, 4, 20);
+    packet[6] = 6;
+    packet[7] = 64;
+    const std::array<std::uint8_t, 16> source = reverse
+        ? std::array<std::uint8_t, 16>{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                       0, 0, 0, 0, 0, 0, 0, 2}
+        : std::array<std::uint8_t, 16>{0xfd, 0, 0, 0, 0, 0, 0, 0,
+                                       0, 0, 0, 0, 0, 0, 0, 1};
+    const std::array<std::uint8_t, 16> destination = reverse
+        ? std::array<std::uint8_t, 16>{0xfd, 0, 0, 0, 0, 0, 0, 0,
+                                       0, 0, 0, 0, 0, 0, 0, 1}
+        : std::array<std::uint8_t, 16>{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                       0, 0, 0, 0, 0, 0, 0, 2};
+    for (std::size_t index = 0; index < source.size(); ++index) {
+        packet[8 + index] = source[index];
+        packet[24 + index] = destination[index];
+    }
+    putU16(packet, 40, reverse ? 443 : 40000);
+    putU16(packet, 42, reverse ? 40000 : 443);
+    packet[52] = 0x50;
+    return packet;
+}
+
 std::array<std::uint8_t, 28> ipv4UdpPacket() {
     std::array<std::uint8_t, 28> packet{};
     packet[0] = 0x45;
@@ -150,6 +194,78 @@ std::array<std::uint8_t, 48> ipv6UdpPacket() {
     putU16(packet, 42, 853);
     putU16(packet, 44, 8);
     return packet;
+}
+
+template <std::size_t N>
+void expectOutboundRelayPacket(const std::array<std::uint8_t, N> &packet) {
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+    ASSERT_EQ(::write(tunFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    VpnTunFdRuntime runtime{tunFds[0]};
+    tunFds[0] = -1;
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]).ok);
+    transportFds[0] = -1;
+
+    const auto drain = runtime.drainTunPackets(
+        1,
+        VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true});
+    EXPECT_EQ(drain.packetsRead, 1U);
+    EXPECT_EQ(drain.forwardedToTransport, 1U);
+    EXPECT_EQ(drain.policyDropped, 0U);
+    EXPECT_EQ(drain.writeFailures, 0U);
+
+    const auto transported = readPacketFromFd(transportFds[1]);
+    ASSERT_EQ(transported.size(), packet.size());
+    EXPECT_TRUE(std::equal(packet.begin(), packet.end(), transported.begin()));
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.forwardedPackets, 1U);
+    EXPECT_EQ(counters.transportSucceededPackets, 1U);
+    EXPECT_EQ(counters.lastObservedDirection, "outbound");
+    EXPECT_EQ(counters.lastObservedResult, "FlowForwarded");
+
+    closeIfOpen(tunFds[1]);
+    closeIfOpen(transportFds[1]);
+}
+
+template <std::size_t N>
+void expectTransportReturnRelayPacket(const std::array<std::uint8_t, N> &packet) {
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+
+    VpnTunFdRuntime runtime{tunFds[0]};
+    tunFds[0] = -1;
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]).ok);
+    transportFds[0] = -1;
+    ASSERT_EQ(::write(transportFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    const auto drain = runtime.drainTransportReturnPackets(
+        1,
+        VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true});
+    EXPECT_EQ(drain.packetsRead, 1U);
+    EXPECT_EQ(drain.returnedToTun, 1U);
+    EXPECT_EQ(drain.policyDropped, 0U);
+    EXPECT_EQ(drain.writeFailures, 0U);
+
+    const auto returned = readPacketFromFd(tunFds[1]);
+    ASSERT_EQ(returned.size(), packet.size());
+    EXPECT_TRUE(std::equal(packet.begin(), packet.end(), returned.begin()));
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.transportReturnPackets, 1U);
+    EXPECT_EQ(counters.transportSucceededPackets, 1U);
+    EXPECT_EQ(counters.lastObservedDirection, "transport-return");
+    EXPECT_EQ(counters.lastObservedResult, "FlowForwarded");
+
+    closeIfOpen(tunFds[1]);
+    closeIfOpen(transportFds[1]);
 }
 
 Policy::PacketPolicySubjectView networkGateDropSubject(
@@ -508,6 +624,50 @@ TEST(VpnTunFdRuntimeTest, BoundedDrainWritesAllowedOutboundPacketToTransportFd) 
     closeIfOpen(transportFds[1]);
 }
 
+TEST(VpnTunFdRuntimeTest, BoundedDrainRelaysIpv4UdpAndIpv6TcpUdpOutboundToTransportFd) {
+    expectOutboundRelayPacket(ipv4UdpPacket());
+    expectOutboundRelayPacket(ipv6TcpPacket());
+    expectOutboundRelayPacket(ipv6UdpPacket());
+}
+
+TEST(VpnTunFdRuntimeTest, BoundedDrainRecordsTransportBackpressureSeparatelyFromPolicyDrop) {
+    int tunFds[2]{-1, -1};
+    int transportPipe[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    ASSERT_EQ(::pipe(transportPipe), 0);
+    fillPipeUntilBackpressured(transportPipe[1]);
+
+    const auto packet = ipv4TcpPacket();
+    ASSERT_EQ(::write(tunFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    VpnTunFdRuntime runtime{tunFds[0]};
+    tunFds[0] = -1;
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportPipe[1]).ok);
+    transportPipe[1] = -1;
+
+    const auto drain = runtime.drainTunPackets(
+        1,
+        VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true});
+    EXPECT_EQ(drain.packetsRead, 1U);
+    EXPECT_EQ(drain.forwardedToTransport, 0U);
+    EXPECT_EQ(drain.forwardedWithoutTransport, 0U);
+    EXPECT_EQ(drain.policyDropped, 0U);
+    EXPECT_EQ(drain.writeFailures, 1U);
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.forwardedPackets, 1U);
+    EXPECT_EQ(counters.droppedPackets, 0U);
+    EXPECT_EQ(counters.transportSucceededPackets, 0U);
+    EXPECT_EQ(counters.transportFailedPackets, 1U);
+    EXPECT_EQ(counters.transportUnsupportedPackets, 0U);
+    EXPECT_EQ(counters.uidAttributionHitPackets, 1U);
+    EXPECT_EQ(counters.lastObservedResult, "FlowForwarded");
+
+    closeIfOpen(tunFds[1]);
+    closeIfOpen(transportPipe[0]);
+}
+
 TEST(VpnTunFdRuntimeTest, TransportReturnDrainWritesAcceptedPacketBackToTunFd) {
     int tunFds[2]{-1, -1};
     int transportFds[2]{-1, -1};
@@ -542,6 +702,12 @@ TEST(VpnTunFdRuntimeTest, TransportReturnDrainWritesAcceptedPacketBackToTunFd) {
 
     closeIfOpen(tunFds[1]);
     closeIfOpen(transportFds[1]);
+}
+
+TEST(VpnTunFdRuntimeTest, TransportReturnDrainRelaysIpv4UdpAndIpv6TcpUdpBackToTunFd) {
+    expectTransportReturnRelayPacket(ipv4UdpPacket());
+    expectTransportReturnRelayPacket(ipv6TcpPacket(true));
+    expectTransportReturnRelayPacket(ipv6UdpPacket());
 }
 
 TEST(VpnTunFdRuntimeTest, AutomaticDrainStartsAfterTransportAttachAndForwardsBothDirections) {
