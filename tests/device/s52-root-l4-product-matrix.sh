@@ -8,6 +8,7 @@ source "$SNORT_ROOT/dev/dev-android-device-lib.sh"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.androidruntime}"
 ACTIVITY="${ACTIVITY:-$PACKAGE/.DebugControlActivity}"
 DEBUG_TRAFFIC_PROBE_RESULT_PATH="files/debug/traffic-probe.properties"
+DEBUG_L4_PREFILL_RESULT_PATH="files/debug/l4-prefill.properties"
 VNEXT_PORT="${VNEXT_PORT:-60607}"
 SNORT_CTL="${SNORT_CTL:-}"
 TRAFFIC_HOST="${TRAFFIC_HOST:-1.1.1.1}"
@@ -27,6 +28,7 @@ Runs a focused SAKAMOTO-52 Root L4 product matrix:
   - vNext L4PolicyMatcher evaluates explicit family/CIDR/ports/protocol/direction/context/action
   - fixed ordering is priority/order/ruleId
   - real Root TCP traffic is dropped and restored through product-authored L4 rules
+  - Activity policy-drop evidence can prefill an app-scoped L4 rule draft
   - IPv6 TCP, source CIDR, UDP, ICMP and other protocol vectors prove winner/default semantics
 
 Requires an installed APK and an already running Root runtime exposing
@@ -382,6 +384,42 @@ debug_traffic_probe_value() {
     | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); found=1 } END { if (!found) exit 1 }'
 }
 
+am_start_debug_l4_prefill() {
+  local host="$1"
+  local port="$2"
+  adb_cmd shell run-as "$PACKAGE" rm -f "$DEBUG_L4_PREFILL_RESULT_PATH" 2>/dev/null || true
+  adb_cmd shell am start -n "$ACTIVITY" \
+    --ez debugL4PrefillFromActivity true \
+    --es debugTrafficHost "$host" \
+    --ei debugTrafficPort "$port" >/dev/null
+}
+
+wait_debug_l4_prefill_result() {
+  local expected_host="$1"
+  for _ in $(seq 1 20); do
+    if adb_cmd shell run-as "$PACKAGE" grep -Fxq "host=${expected_host}" \
+        "$DEBUG_L4_PREFILL_RESULT_PATH" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+record_debug_l4_prefill_result() {
+  local label="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$DEBUG_L4_PREFILL_RESULT_PATH" 2>/dev/null \
+    | tr -d '\r' \
+    | sed "s/^/${label}.l4Prefill./" || true
+}
+
+debug_l4_prefill_value() {
+  local key="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$DEBUG_L4_PREFILL_RESULT_PATH" 2>/dev/null \
+    | tr -d '\r' \
+    | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); found=1 } END { if (!found) exit 1 }'
+}
+
 section "preflight"
 device_preflight || {
   echo "BLOCKED: device_preflight failed; need one rooted Android target"
@@ -432,21 +470,30 @@ wait_debug_traffic_probe_result "$TRAFFIC_HOST" || true
 record_debug_traffic_probe_result "block"
 after="$(ctl NFQUEUE.STATUS)"
 status_delta "$before" "$after" "block"
+am_start_debug_l4_prefill "$TRAFFIC_HOST" "$TRAFFIC_PORT" || true
+wait_debug_l4_prefill_result "$TRAFFIC_HOST" || true
+record_debug_l4_prefill_result "block"
 drop_delta="$(delta_value "$before" "$after" droppedPackets)"
 probe_uid="$(debug_traffic_probe_value uid || true)"
 probe_result="$(debug_traffic_probe_value result || true)"
+prefill_result="$(debug_l4_prefill_value result || true)"
+prefill_summary="$(debug_l4_prefill_value summary || true)"
 activity_uid="$(activity_value "$after" lastLinuxUid)"
 activity_stage="$(activity_value "$after" lastStage)"
 activity_rule="$(activity_value "$after" lastRuleId)"
 activity_revision="$(activity_value "$after" lastRevision)"
 if [[ "$drop_delta" -gt 0 && "$probe_uid" == "$uid" \
   && "$probe_result" == "tcp_connect_failed" \
+  && "$prefill_result" == "available" \
+  && "$prefill_summary" == *"subject=android.uid:$uid"* \
+  && "$prefill_summary" == *"destinationCidr=$ipv4_cidr"* \
+  && "$prefill_summary" == *"destinationPort=$TRAFFIC_PORT"* \
   && "$activity_uid" == "$uid" && "$activity_stage" == "L4" \
   && "$activity_rule" == "$tcp_rule" && "$activity_revision" == "$block_revision" ]]; then
   kv "block.result" "PASS"
 else
   kv "block.result" "FAIL"
-  kv "block.reason" "expected failed APK TCP traffic, NFQUEUE drop delta, and L4 policyDropActivity attribution"
+  kv "block.reason" "expected failed APK TCP traffic, NFQUEUE drop delta, L4 policyDropActivity attribution, and Activity-derived L4 prefill"
   MATRIX_RC=1
 fi
 

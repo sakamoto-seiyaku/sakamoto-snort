@@ -10,6 +10,7 @@ import com.sakamoto.snort.androidruntime.VppHealthHandshake;
 import com.sakamoto.snort.androidruntime.ApplicationSubjectId;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogEntry;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogProvider;
+import com.sakamoto.snort.androidruntime.ActivityL4RuleDraft;
 import com.sakamoto.snort.androidruntime.AuthoringPolicyBundle;
 import com.sakamoto.snort.androidruntime.AuthoringPolicyCompiler;
 import com.sakamoto.snort.androidruntime.ProductStateSnapshot;
@@ -71,6 +72,7 @@ public final class AndroidRuntimeContractTest {
         localProductBackendAppliesGatePolicyBeforePersistingBundle();
         localProductBackendAppliesL4PolicyBeforePersistingBundle();
         boundedActivityStoreIsSeparateFromProductState();
+        activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
         localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
@@ -1537,6 +1539,49 @@ public final class AndroidRuntimeContractTest {
                 "bounded Activity repository path is not policy/config state");
     }
 
+    private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {
+        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
+                "1.1.1.1", 443, 1010001, true,
+                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
+        check(draft != null, "L4 policy drop Activity can create an L4 prefill draft");
+        check(draft.subjectId.equals(ApplicationSubjectId.fromUid(1010001)),
+                "L4 prefill draft preserves complete UID subject");
+        check(draft.family == AuthoringPolicyBundle.IpFamily.IPV4
+                        && "1.1.1.1/32".equals(draft.destinationCidr),
+                "L4 prefill draft derives IPv4 destination CIDR from probe host");
+        check(draft.destinationPorts.first == 443 && draft.destinationPorts.last == 443,
+                "L4 prefill draft derives exact destination port from probe");
+        check(draft.ipProtocol == ActivityL4RuleDraft.TCP_PROTOCOL
+                        && draft.direction == AuthoringPolicyBundle.PacketDirection.OUTPUT
+                        && draft.action == AuthoringPolicyBundle.L4Action.DROP,
+                "L4 prefill draft sets TCP/output/drop defaults from the probe context");
+        check(draft.networkContext == AuthoringPolicyBundle.NetworkContextId.WIFI,
+                "L4 prefill draft maps Activity network context to Product context");
+        AuthoringPolicyBundle.L4Rule rule = draft.toRule();
+        check(rule.subjectId.equals(draft.subjectId)
+                        && "1.1.1.1/32".equals(rule.destinationCidr)
+                        && rule.destinationPorts.first == 443,
+                "L4 prefill draft materializes as a Product L4Rule");
+        check(draft.summary().contains("L4 prefill: subject=android.uid:1010001")
+                        && draft.summary().contains("destinationPort=443"),
+                "L4 prefill draft renders an actionable UI summary");
+
+        ActivityL4RuleDraft v6 = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
+                "2606:4700:4700::1111", 80, 1010001, true,
+                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
+        check(v6 != null && v6.family == AuthoringPolicyBundle.IpFamily.IPV6
+                        && "2606:4700:4700::1111/128".equals(v6.destinationCidr),
+                "L4 prefill draft derives IPv6 destination CIDR from probe host");
+        check(ActivityL4RuleDraft.fromTcpPolicyDropActivity(
+                "1.1.1.1", 443, 1010001, true,
+                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "NetworkGate") == null,
+                "NetworkGate Activity does not masquerade as an L4 prefill");
+        check(ActivityL4RuleDraft.fromTcpPolicyDropActivity(
+                "1.1.1.1", 443, 1010001, false,
+                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4") == null,
+                "unknown UID Activity cannot create an application-scoped L4 prefill");
+    }
+
     private static void productCatalogFormatterKeepsUidIdentitySeparateFromMetadata() {
         ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
         ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
@@ -1545,7 +1590,13 @@ public final class AndroidRuntimeContractTest {
         AuthoringPolicyBundle gates = AuthoringPolicyBundle.empty()
                 .withNetworkGate(primary, AuthoringPolicyBundle.NetworkContextId.WIFI, true)
                 .withNetworkGate(primary, AuthoringPolicyBundle.NetworkContextId.MOBILE, false)
-                .withNetworkGate(work, AuthoringPolicyBundle.NetworkContextId.VPN, true);
+                .withNetworkGate(work, AuthoringPolicyBundle.NetworkContextId.VPN, true)
+                .withL4Rule(AuthoringPolicyBundle.L4Rule.create(work,
+                        AuthoringPolicyBundle.IpFamily.IPV4, "", "1.1.1.1/32",
+                        null, AuthoringPolicyBundle.PortRange.exact(443), 6,
+                        AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                        AuthoringPolicyBundle.NetworkContextId.WIFI,
+                        AuthoringPolicyBundle.L4Action.DROP, 10, 0));
         ProductStateSnapshot state = new ProductStateSnapshot(RuntimeProfile.VPN, bound,
                 gates);
         List<ApplicationCatalogEntry> catalog = Arrays.asList(
@@ -1573,6 +1624,9 @@ public final class AndroidRuntimeContractTest {
                 "same-package profile rows may carry distinct icon metadata");
         check(projection.rows.get(1).fullUid == 1010001,
                 "catalog row renders full Linux UID identity");
+        check(projection.rows.get(0).l4RuleCount == 0
+                        && projection.rows.get(1).l4RuleCount == 1,
+                "Product UI projection renders per-row L4 rule count");
         check(projection.boundApplicationCount == 1,
                 "Product UI projection renders bound application count");
         check(projection.rows.get(0).wifiGateBlocked
@@ -1586,6 +1640,8 @@ public final class AndroidRuntimeContractTest {
                 "Product UI projection exposes app-row Gate toggle labels");
         check(projection.displayText.contains("gate wifi=blocked mobile=open vpn=open"),
                 "Product UI projection display text includes app-row Gate state");
+        check(projection.displayText.contains("l4Rules=1"),
+                "Product UI projection display text includes app-row L4 rule state");
         check(projection.firstBoundSubjectId.equals(work),
                 "unbind candidate is the bound ApplicationSubjectId");
         check(projection.firstAvailableSubjectId.equals(primary),

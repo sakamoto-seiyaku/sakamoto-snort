@@ -133,6 +133,7 @@ public final class ProductCatalogProjectionStore {
                     Boolean.toString(row.mobileGateBlocked));
             values.setProperty(key + "vpnGateBlocked",
                     Boolean.toString(row.vpnGateBlocked));
+            values.setProperty(key + "l4RuleCount", Integer.toString(row.l4RuleCount));
             values.setProperty(key + "productStateValid",
                     Boolean.toString(row.productStateValid));
         }
@@ -159,6 +160,7 @@ public final class ProductCatalogProjectionStore {
                     Boolean.parseBoolean(values.getProperty(key + "wifiGateBlocked", "false")),
                     Boolean.parseBoolean(values.getProperty(key + "mobileGateBlocked", "false")),
                     Boolean.parseBoolean(values.getProperty(key + "vpnGateBlocked", "false")),
+                    parseInt(values, key + "l4RuleCount", 0),
                     Boolean.parseBoolean(values.getProperty(key + "productStateValid", "true"))));
         }
         return rows;

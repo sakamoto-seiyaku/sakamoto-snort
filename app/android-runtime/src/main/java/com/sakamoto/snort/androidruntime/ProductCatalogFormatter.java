@@ -226,6 +226,8 @@ public final class ProductCatalogFormatter {
                         .append(row.mobileGateBlocked ? "blocked" : "open")
                         .append(" vpn=")
                         .append(row.vpnGateBlocked ? "blocked" : "open");
+                out.append(" | l4Rules=")
+                        .append(row.l4RuleCount);
             }
             return out.toString();
         }
@@ -244,6 +246,7 @@ public final class ProductCatalogFormatter {
         public final boolean wifiGateBlocked;
         public final boolean mobileGateBlocked;
         public final boolean vpnGateBlocked;
+        public final int l4RuleCount;
         public final boolean productStateValid;
         private final boolean canBind;
         private final boolean canUnbind;
@@ -258,13 +261,14 @@ public final class ProductCatalogFormatter {
                     gateBlocked(bundle, entry.subjectId, AuthoringPolicyBundle.NetworkContextId.WIFI),
                     gateBlocked(bundle, entry.subjectId, AuthoringPolicyBundle.NetworkContextId.MOBILE),
                     gateBlocked(bundle, entry.subjectId, AuthoringPolicyBundle.NetworkContextId.VPN),
+                    l4RuleCount(bundle, entry.subjectId),
                     productStateValid);
         }
 
         EntryRow(ApplicationSubjectId subjectId, String packageName, String label,
                  String profileLabel, String iconToken, int userId, int fullUid,
                  String availability, boolean bound, boolean wifiGateBlocked,
-                 boolean mobileGateBlocked, boolean vpnGateBlocked,
+                 boolean mobileGateBlocked, boolean vpnGateBlocked, int l4RuleCount,
                  boolean productStateValid) {
             if (subjectId == null) {
                 throw new IllegalArgumentException("subjectId is required");
@@ -286,6 +290,7 @@ public final class ProductCatalogFormatter {
             this.wifiGateBlocked = wifiGateBlocked;
             this.mobileGateBlocked = mobileGateBlocked;
             this.vpnGateBlocked = vpnGateBlocked;
+            this.l4RuleCount = Math.max(0, l4RuleCount);
             this.productStateValid = productStateValid;
             this.canBind = productStateValid && "available".equals(this.availability) && !bound;
             this.canUnbind = productStateValid && bound;
@@ -325,7 +330,8 @@ public final class ProductCatalogFormatter {
                     + (bound ? " | bound" : " | unbound")
                     + " | gate wifi=" + (wifiGateBlocked ? "blocked" : "open")
                     + " mobile=" + (mobileGateBlocked ? "blocked" : "open")
-                    + " vpn=" + (vpnGateBlocked ? "blocked" : "open");
+                    + " vpn=" + (vpnGateBlocked ? "blocked" : "open")
+                    + " | l4Rules=" + l4RuleCount;
         }
     }
 
@@ -339,5 +345,17 @@ public final class ProductCatalogFormatter {
             }
         }
         return false;
+    }
+
+    private static int l4RuleCount(AuthoringPolicyBundle bundle,
+                                   ApplicationSubjectId subjectId) {
+        AuthoringPolicyBundle value = bundle == null ? AuthoringPolicyBundle.empty() : bundle;
+        int count = 0;
+        for (AuthoringPolicyBundle.L4Rule rule : value.l4Rules) {
+            if (rule.subjectId.equals(subjectId)) {
+                count++;
+            }
+        }
+        return count;
     }
 }

@@ -55,6 +55,8 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS =
             "debugTrafficTimeoutMillis";
     private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
+    private static final String EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY =
+            "debugL4PrefillFromActivity";
     private static final String EXTRA_DEBUG_LISTEN = "debugListen";
     private static final String EXTRA_DEBUG_LISTEN_PORT = "debugListenPort";
     private static final String EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS =
@@ -99,6 +101,8 @@ public class DebugControlActivity extends Activity {
             "debugSetL4RuleOrder";
     private static final String DEBUG_TRAFFIC_PROBE_RESULT_PATH =
             "debug/traffic-probe.properties";
+    private static final String DEBUG_L4_PREFILL_RESULT_PATH =
+            "debug/l4-prefill.properties";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
     private static final int DEBUG_TRAFFIC_PORT = 80;
     private static final int DEBUG_TRAFFIC_TIMEOUT_MILLIS = 1000;
@@ -217,6 +221,17 @@ public class DebugControlActivity extends Activity {
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
             main.post(this::runDebugApplyGateAndProbe);
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY, false)) {
+            String host = intent.getStringExtra(EXTRA_DEBUG_TRAFFIC_HOST);
+            if (host == null || host.isEmpty()) {
+                host = DEBUG_TRAFFIC_HOST;
+            }
+            int port = boundedPort(intent.getIntExtra(
+                    EXTRA_DEBUG_TRAFFIC_PORT, DEBUG_TRAFFIC_PORT), DEBUG_TRAFFIC_PORT);
+            final String prefillHost = host;
+            final int prefillPort = port;
+            main.post(() -> runDebugL4PrefillFromActivity(prefillHost, prefillPort));
         }
     }
 
@@ -833,7 +848,8 @@ public class DebugControlActivity extends Activity {
                         DEBUG_TRAFFIC_TIMEOUT_MILLIS, probeResult);
                 JSONObject countersAfter = client.call(4, statusCommand, new JSONObject());
                 result = formatDebugPolicyProbeResult(
-                        uid, profile, decision, countersBefore, countersAfter, probeResult);
+                        uid, profile, DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT, decision,
+                        countersBefore, countersAfter, probeResult);
             } catch (IOException | JSONException | RuntimeException error) {
                 result = "Debug policy gate/probe failed: " + boundedError(error);
             }
@@ -841,6 +857,28 @@ public class DebugControlActivity extends Activity {
             main.post(() -> action(display));
         }, "sakamoto-debug-policy-probe");
         probe.start();
+    }
+
+    private void runDebugL4PrefillFromActivity(String host, int port) {
+        action("Debug L4 prefill requested.");
+        Thread prefill = new Thread(() -> {
+            String result;
+            try (ControlVNextDebugClient client = new ControlVNextDebugClient()) {
+                RuntimeSnapshot current = backend.query(this);
+                RuntimeProfile profile = current.isActive()
+                        ? current.profile : profileFromSpinner();
+                JSONObject status = client.call(1, debugPacketStatusCommand(profile),
+                        new JSONObject());
+                result = formatActivityL4Prefill(
+                        host, port, status.optJSONObject("policyDropActivity"));
+            } catch (IOException | JSONException | RuntimeException error) {
+                result = "L4 prefill: failed " + boundedError(error);
+            }
+            writeDebugL4PrefillResult(host, port, result);
+            final String display = result;
+            main.post(() -> action(display));
+        }, "sakamoto-debug-l4-prefill");
+        prefill.start();
     }
 
     private JSONObject debugPolicyApplyArgs(int uid) throws JSONException {
@@ -928,6 +966,24 @@ public class DebugControlActivity extends Activity {
         }
     }
 
+    private void writeDebugL4PrefillResult(String host, int port, String result) {
+        File file = new File(getFilesDir(), DEBUG_L4_PREFILL_RESULT_PATH);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            return;
+        }
+        String text = "host=" + propertyValue(host) + "\n"
+                + "port=" + port + "\n"
+                + "result=" + (result != null && result.startsWith("L4 prefill: subject=")
+                ? "available" : "unavailable") + "\n"
+                + "summary=" + propertyValue(result) + "\n";
+        try (FileOutputStream out = new FileOutputStream(file, false)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            // Debug evidence must never change product control behavior.
+        }
+    }
+
     private static String debugTrafficProbeResultCode(String result) {
         if ("tcp_connect_succeeded".equals(result)
                 || (result != null && result.startsWith("Debug traffic probe connected"))) {
@@ -977,8 +1033,8 @@ public class DebugControlActivity extends Activity {
     }
 
     private String formatDebugPolicyProbeResult(
-            int uid, RuntimeProfile profile, JSONObject decision, JSONObject countersBefore,
-            JSONObject countersAfter, String probeResult) {
+            int uid, RuntimeProfile profile, String host, int port, JSONObject decision,
+            JSONObject countersBefore, JSONObject countersAfter, String probeResult) {
         String adapterLabel = debugPacketAdapterLabel(profile);
         String forwardedCounter = debugForwardedCounterName(profile);
         long packetDelta = countersAfter.optLong("packetsSeen", 0L)
@@ -1002,6 +1058,8 @@ public class DebugControlActivity extends Activity {
                 + countersAfter.optString("lastObservedResult", "unknown")
                 + "\nPolicy drop activity: "
                 + formatPolicyDropActivity(countersAfter.optJSONObject("policyDropActivity"))
+                + "\n" + formatActivityL4Prefill(host, port,
+                countersAfter.optJSONObject("policyDropActivity"))
                 + "\nProbe: " + probeResult;
     }
 
@@ -1020,6 +1078,18 @@ public class DebugControlActivity extends Activity {
                 + " reason=" + activity.optLong("lastReasonId", -1L)
                 + " rule=" + activity.optLong("lastRuleId", -1L)
                 + " revision=" + activity.optLong("lastRevision", -1L);
+    }
+
+    private String formatActivityL4Prefill(String host, int port, JSONObject activity) {
+        if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
+            return "L4 prefill: unavailable";
+        }
+        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
+                host, port, (int) activity.optLong("lastLinuxUid", -1L),
+                activity.optBoolean("lastUidKnown", false),
+                (int) activity.optLong("lastNetworkContext", -1L),
+                activity.optString("lastStage", ""));
+        return draft == null ? "L4 prefill: unavailable" : draft.summary();
     }
 
     private String boundedError(Throwable error) {
