@@ -155,6 +155,13 @@ public final class AppDetail {
                     .append(" winner=").append(item.winner)
                     .append(" revision=").append(item.policyRevision)
                     .append(" source=").append(item.evidenceSource);
+            if (!item.protocolRecognitionState.isEmpty()) {
+                out.append(" recognition=").append(item.protocolRecognitionState)
+                        .append(" appProtocol=").append(item.applicationProtocolKey)
+                        .append(" category=").append(item.applicationProtocolCategory)
+                        .append(" lpiSequence=").append(item.protocolRecognitionSequence)
+                        .append(" payloadPackets=").append(item.protocolPayloadPackets);
+            }
         }
         if (prefillDraft != null) {
             out.append('\n').append("L4 prefill: available from ")

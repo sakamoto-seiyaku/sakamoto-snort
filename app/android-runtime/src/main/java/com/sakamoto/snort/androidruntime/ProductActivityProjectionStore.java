@@ -236,6 +236,15 @@ public final class ProductActivityProjectionStore {
             values.setProperty(key + "reasonId", Integer.toString(item.reasonId));
             values.setProperty(key + "evidenceSource", item.evidenceSource);
             values.setProperty(key + "detailLossy", Boolean.toString(item.detailLossy));
+            values.setProperty(key + "protocolRecognitionState",
+                    item.protocolRecognitionState);
+            values.setProperty(key + "applicationProtocolKey", item.applicationProtocolKey);
+            values.setProperty(key + "applicationProtocolCategory",
+                    item.applicationProtocolCategory);
+            values.setProperty(key + "protocolRecognitionSequence",
+                    item.protocolRecognitionSequence);
+            values.setProperty(key + "protocolPayloadPackets",
+                    Integer.toString(item.protocolPayloadPackets));
         }
     }
 
@@ -262,7 +271,13 @@ public final class ProductActivityProjectionStore {
                     Long.parseUnsignedLong(values.getProperty(key + "ruleId", "0")),
                     parseInt(values, key + "reasonId", 0),
                     values.getProperty(key + "evidenceSource", ""),
-                    Boolean.parseBoolean(values.getProperty(key + "detailLossy", "false"))));
+                    Boolean.parseBoolean(values.getProperty(key + "detailLossy", "false")),
+                    values.getProperty(key + "protocolRecognitionState",
+                            ActivityItem.PROTOCOL_RECOGNITION_NONE),
+                    values.getProperty(key + "applicationProtocolKey", ""),
+                    values.getProperty(key + "applicationProtocolCategory", ""),
+                    values.getProperty(key + "protocolRecognitionSequence", ""),
+                    parseInt(values, key + "protocolPayloadPackets", 0)));
         }
         return activity;
     }

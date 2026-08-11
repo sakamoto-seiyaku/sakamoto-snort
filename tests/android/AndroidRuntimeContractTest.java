@@ -96,6 +96,7 @@ public final class AndroidRuntimeContractTest {
         boundedActivityStoreIsSeparateFromProductState();
         localProductBackendOwnsBoundedActivityStoreWriter();
         productActivityProjectionStoreRoundTripsAppDetail();
+        productActivityProjectionStoresProtocolRecognitionState();
         productNativeActivityIngestorMapsRuntimeDropEvidence();
         activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
@@ -1988,6 +1989,59 @@ public final class AndroidRuntimeContractTest {
         check(!ProductActivityProjectionStore.projectionFile(files.toFile()).getPath()
                         .contains("product-state"),
                 "Activity projection is separate from policy/config state");
+    }
+
+    private static void productActivityProjectionStoresProtocolRecognitionState()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-61-protocol-activity");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        ActivityItem detecting = ActivityItem.protocolRecognition(app, "Mail",
+                "com.example.mail", 2000L, "93.184.216.34", "tcp", 443,
+                "output", "orig", 2L, 256L, 7L,
+                ActivityItem.PROTOCOL_RECOGNITION_DETECTING, "", "",
+                "", 2);
+        ActivityItem identified = ActivityItem.protocolRecognition(app, "Mail",
+                "com.example.mail", 2500L, "93.184.216.34", "tcp", 443,
+                "output", "reply", 4L, 1024L, 7L,
+                ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED, "quic", "web",
+                "1:http:orig,3:quic:reply", 3);
+        ActivityItem unidentified = ActivityItem.protocolRecognition(app, "Mail",
+                "com.example.mail", 3000L, "192.0.2.44", "udp", 5353,
+                "output", "orig", 1L, 80L, 7L,
+                ActivityItem.PROTOCOL_RECOGNITION_UNIDENTIFIED, "", "",
+                "", 20);
+        RuntimeSummary runtime = RuntimeSummary.fromSnapshot(RuntimeSnapshot.running(
+                RuntimeProfile.VPN, "control-vnext", "1", "runtime", "arm64",
+                "ok", 9L), CapabilitySet.androidL4(true, true));
+        AppDetail detail = AppDetail.normal(new AppSummary(app, "com.example.mail",
+                "Mail", "Work", app.userId, app.uid, true, true,
+                false, false, false, 0), runtime,
+                Collections.emptyList(), Arrays.asList(detecting, identified, unidentified));
+        ProductActivityProjectionStore.write(files.toFile(), detail);
+        AppDetail restored = ProductActivityProjectionStore.read(files.toFile());
+
+        check(restored.activity.size() == 3,
+                "Activity projection preserves protocol recognition rows");
+        ActivityItem restoredIdentified = restored.activity.get(1);
+        check(ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED.equals(
+                        restoredIdentified.protocolRecognitionState)
+                        && "quic".equals(restoredIdentified.applicationProtocolKey)
+                        && "web".equals(restoredIdentified.applicationProtocolCategory)
+                        && "1:http:orig,3:quic:reply".equals(
+                        restoredIdentified.protocolRecognitionSequence)
+                        && restoredIdentified.protocolPayloadPackets == 3,
+                "identified Activity row round-trips latest exact result and full sequence");
+        check(ActivityItem.PROTOCOL_RECOGNITION_DETECTING.equals(
+                        restored.activity.get(0).protocolRecognitionState)
+                        && ActivityItem.PROTOCOL_RECOGNITION_UNIDENTIFIED.equals(
+                        restored.activity.get(2).protocolRecognitionState),
+                "Activity rows can represent detecting and unidentified states");
+        check(restored.displayText.contains("recognition=identified")
+                        && restored.displayText.contains("appProtocol=quic")
+                        && restored.displayText.contains("category=web")
+                        && restored.displayText.contains("lpiSequence=1:http:orig,3:quic:reply")
+                        && restored.displayText.contains("payloadPackets=3"),
+                "AppDetail renders protocol recognition state, latest protocol, category and sequence");
     }
 
     private static void productNativeActivityIngestorMapsRuntimeDropEvidence() {
