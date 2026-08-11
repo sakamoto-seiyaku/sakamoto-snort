@@ -2,11 +2,12 @@
 
 Status: draft release-gate dossier for SAKAMOTO-59. This document is not a
 release approval. It records the shared Root/VPN release contract, evidence
-already gathered, and the remaining gaps that must be closed before the Android
-L4 Product Release can be declared complete.
+already gathered, and the current evidence classification for the Android L4
+Product Release. It is an evidence dossier and release-contract index; Plane
+SAKAMOTO-59 remains the source of truth for open closure state.
 
 中文状态：这是 SAKAMOTO-59 的发布门禁档案草案，不是发布批准。它把 Root/VPN 共同发布合同、
-已有证据和剩余缺口固定到仓库中，避免后续只凭记忆关单。
+已有证据和当前证据分级固定到仓库中；开放收口状态以 Plane SAKAMOTO-59 为准。
 
 ## 1. Release scope
 
@@ -51,10 +52,10 @@ Supported matrix entries must record:
 - APK build id and native daemon build id;
 - matrix result directory.
 
-Current gap: functional evidence exists in debug-APK device matrix result
-directories, and S59 now has non-debug release-candidate budget and closure
-gate reruns. The final signed release APK still needs to rerun the table below
-before S59 can close.
+Evidence classification: functional evidence exists in debug-APK device matrix
+result directories, and S59 now has non-debug release-candidate budget and
+closure gate reruns. Those artifacts are not final signed release APK evidence;
+Plane SAKAMOTO-59 owns the closure state for final signed release evidence.
 
 Final signed APK build preflight:
 
@@ -95,9 +96,9 @@ compatibility tracking, but it is not final release evidence.
 
 | Device | Android | ABI | Root | VPN | IPv4/IPv6 | Evidence | Release status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-184230`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 debug `build-output/s71-dual-profile-closure-gate/20260811-164754`; S71 release-candidate `build-output/s71-dual-profile-closure-gate/20260811-182004` | Debug functional matrices plus release-candidate budget and closure reruns; final signed release APK rerun required |
+| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-184230`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 debug `build-output/s71-dual-profile-closure-gate/20260811-164754`; S71 release-candidate `build-output/s71-dual-profile-closure-gate/20260811-182004` | Debug functional matrices plus release-candidate budget and closure reruns; not final signed release evidence |
 
-## 3. Functional release evidence ledger
+## 3. Functional release evidence table
 
 | Requirement | Evidence | Status |
 | --- | --- | --- |
@@ -109,8 +110,8 @@ compatibility tracking, but it is not final release evidence.
 | Lifecycle, fault, recovery, profile switch | S54/S57/S70/S71 contracts and device evidence | Present |
 | Policy persistence / old snapshot on failure | `tests/android/AndroidRuntimeContractTest.java` product transaction and apply-failure cases | Present |
 | VPN IPv4/IPv6 TCP and UDP production proof | `tests/device/s55-product-vpn-transport-matrix.sh` | Present |
-| Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Current S71 release-candidate rollup present; final signed release APK rerun required |
-| Root no-residue release proof | S70/S71 evidence lineage | Current S71 release-candidate rollup present; final signed release APK rerun required |
+| Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Current S71 release-candidate rollup present; not final signed release evidence |
+| Root no-residue release proof | S70/S71 evidence lineage | Current S71 release-candidate rollup present; not final signed release evidence |
 
 Current debug-evidence rollup:
 
@@ -169,7 +170,7 @@ S58 latest evidence:
 - Activity prefill: available for `android.uid:12546`, `198.51.100.58/32:443`.
 - Restore: product allow returns `PASS_NEXT`; traffic recovers; allowed FlowEntry records uid, remote endpoint, packets, bytes, and revision.
 
-## 4. Release budget ledger
+## 4. Release budget evidence table
 
 The following budget table is required before release approval. The initial gate
 records evidence even when a final threshold is still pending; release approval
@@ -177,15 +178,15 @@ must not treat `TBD` as pass.
 
 | Budget | Required record | Current status |
 | --- | --- | --- |
-| Latency | p50/p95/p99 verdict or workflow latency per profile | Current S59 release-candidate workflow probe present; final signed release APK rerun required |
-| Throughput | Root and VPN nominal throughput / transaction rate | Current S59 release-candidate app download / transaction-rate probe present; final signed release APK rerun required |
+| Latency | p50/p95/p99 verdict or workflow latency per profile | Current S59 release-candidate workflow probe present; not final signed release evidence |
+| Throughput | Root and VPN nominal throughput / transaction rate | Current S59 release-candidate app download / transaction-rate probe present; not final signed release evidence |
 | Drop | policy drop counters and unintended drop counters | S52/S55/S58 plus S59 release-candidate probe counters present |
 | Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | Current S59 release-candidate Root queue, FlowEntry table, and Activity capacity/eviction probe present; VPN queue N/A because VPN/TUN has no NFQUEUE lease queue |
-| Corrective handoff | owner mismatch / corrective handoff counters | S59 release-candidate owner-fault / owner-guard counters present and thresholded at `0`; final signed release APK rerun required |
-| CPU/RSS | idle and active CPU/RSS per profile | S59 release-candidate idle and active CPU/RSS present; final signed release APK rerun required |
-| Screen-off power | screen-off idle power or proxy budget | Current S59 release-candidate 60-second screen-off power-supply proxy present; final signed release APK rerun required |
-| Thermal | thermal status before/after release workload | S59 release-candidate thermal before/after status present; release workload rerun required |
-| Shutdown drain release | bounded drain and resource release timing | S59 release-candidate stop-to-stopped timing present and thresholded at `<=10000 ms`; final signed release APK rerun required |
+| Corrective handoff | owner mismatch / corrective handoff counters | S59 release-candidate owner-fault / owner-guard counters present and thresholded at `0`; not final signed release evidence |
+| CPU/RSS | idle and active CPU/RSS per profile | S59 release-candidate idle and active CPU/RSS present; not final signed release evidence |
+| Screen-off power | screen-off idle power or proxy budget | Current S59 release-candidate 60-second screen-off power-supply proxy present; not final signed release evidence |
+| Thermal | thermal status before/after release workload | S59 release-candidate thermal before/after status present; not final signed release evidence |
+| Shutdown drain release | bounded drain and resource release timing | S59 release-candidate stop-to-stopped timing present and thresholded at `<=10000 ms`; not final signed release evidence |
 
 Current measurement entry:
 
@@ -247,8 +248,7 @@ Latest debug budget probe:
 - Shutdown drain: Root `4813 ms`; VPN `4853 ms`.
 - Throughput note: VPN app download still returned `Connection reset`, so this
   run records transaction-rate fallback rather than nominal download Mbps for
-  VPN. Final release approval still needs a release-APK rerun and explicit
-  pass/fail thresholds.
+  VPN. This debug budget probe is not final signed release evidence.
 
 Latest release-candidate budget probe:
 
@@ -295,8 +295,7 @@ Latest release-candidate budget probe:
 - Shutdown drain: Root `5482 ms`; VPN `2949 ms`.
 - Throughput note: VPN app download still returned `Connection reset`, so this
   run records transaction-rate fallback rather than nominal download Mbps for
-  VPN. Final release approval still needs final signed release APK evidence,
-  including the final signed APK budget and power rerun.
+  VPN. This release-candidate budget probe is not final signed release evidence.
 
 Minimum release rule: every budget row must have a measurement source, result
 directory, date, device, and pass/fail decision before S59 can close.
@@ -406,7 +405,7 @@ Privacy principles:
 - No stateful conntrack or TCP stream reassembly.
 - No zero-leak promise for short flows before attribution or later protocol recognition.
 - Final signed release APK evidence, including final signed budget and power
-  reruns, blocks final S59 closure.
+  evidence, is not present in this dossier.
 
 ## 10. Feedback entry points
 
@@ -446,15 +445,17 @@ Release notes for Android L4 Product Release must include:
 - Known limitations.
 - Feedback routes.
 
-## 12. S59 closure checklist
+## 12. Plane-owned S59 closure criteria
 
-S59 can move to Done only when all rows are true:
+S59 can move to Done only when Plane SAKAMOTO-59 has closure evidence for all
+criteria below. This section is not a checklist and does not track completion
+state inside this document:
 
-- [ ] Release APK evidence uses the final release artifact, not only debug APK.
-- [ ] Root and VPN complete the same first end-to-end user scenario on supported matrix devices.
-- [ ] Shared Adapter conformance and profile lifecycle/fault/recovery/persistence gates are green.
-- [ ] VPN IPv4/IPv6 TCP/UDP evidence is green.
-- [ ] Root fail-open fault envelope and no-residue evidence are green.
-- [ ] Release budget ledger is fully populated, with no `TBD` rows treated as pass.
-- [ ] English and Chinese install/quick-start/help/privacy/limitations/release-notes content is published.
-- [x] Desensitized diagnostic export and user feedback entry points are visible to users.
+- Release APK evidence uses the final release artifact, not only debug APK.
+- Root and VPN complete the same first end-to-end user scenario on supported matrix devices.
+- Shared Adapter conformance and profile lifecycle/fault/recovery/persistence gates are green.
+- VPN IPv4/IPv6 TCP/UDP evidence is green.
+- Root fail-open fault envelope and no-residue evidence are green.
+- Release budget evidence is fully populated, with no `TBD` rows treated as pass.
+- English and Chinese install/quick-start/help/privacy/limitations/release-notes content is published.
+- Desensitized diagnostic export and user feedback entry points are visible to users.
