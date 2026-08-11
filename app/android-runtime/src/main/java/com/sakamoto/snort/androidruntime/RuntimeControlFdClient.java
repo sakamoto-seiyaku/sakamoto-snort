@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 public final class RuntimeControlFdClient {
     public static final String CONTROL_SOCKET_NAME = "sucre-snort-control-vnext";
     public static final String HELLO = "HELLO";
+    public static final String POLICY_APPLY = "POLICY.APPLY";
     public static final String VPN_TUN_ATTACH = "VPN_TUN.ATTACH";
     public static final String VPN_TRANSPORT_ATTACH = "VPN_TRANSPORT.ATTACH";
     private static final int CONTROL_SOCKET_TIMEOUT_MILLIS = 2500;
@@ -94,6 +95,42 @@ public final class RuntimeControlFdClient {
      */
     public static AttachResult attachVpnTransport(int rawFd) {
         return callWithFd(2, VPN_TRANSPORT_ATTACH, new JSONObject(), rawFd);
+    }
+
+    public static AttachResult applyPacketPolicy(JSONObject args) {
+        return callJson(3, POLICY_APPLY, args == null ? new JSONObject() : args);
+    }
+
+    public static AttachResult callJson(int id, String command, JSONObject args) {
+        LocalSocket socket = null;
+        try {
+            socket = connectControlSocket();
+            OutputStream output = socket.getOutputStream();
+            byte[] frame = frameNetstring(requestPayload(
+                    id, command, args == null ? new JSONObject() : args));
+            output.write(frame);
+            output.flush();
+            JSONObject response = new JSONObject(
+                    new String(readNetstring(socket.getInputStream()), StandardCharsets.UTF_8));
+            if (!response.optBoolean("ok", false)) {
+                JSONObject error = response.optJSONObject("error");
+                return AttachResult.error(
+                        error == null ? "RPC_FAILED" : error.optString("code", "RPC_FAILED"),
+                        error == null ? "" : error.optString("message", ""));
+            }
+            JSONObject result = response.optJSONObject("result");
+            return AttachResult.accepted(result == null ? new JSONObject() : result);
+        } catch (Exception error) {
+            return AttachResult.error(command + "_FAILED", messageOf(error));
+        } finally {
+            if (socket != null) {
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                    // The call result above is the actionable failure.
+                }
+            }
+        }
     }
 
     private static AttachResult callWithFd(int id, String command, JSONObject args, int rawFd) {

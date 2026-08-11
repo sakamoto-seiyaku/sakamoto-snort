@@ -11,11 +11,48 @@ public final class LocalProductBackend {
     private final File filesDir;
     private final ProductStore productStore;
     private final ApplicationCatalogProvider catalogProvider;
+    private final PolicyApplyTransport policyApplyTransport;
+
+    @FunctionalInterface
+    public interface PolicyApplyTransport {
+        PolicyApplyResult apply(String applyArgsJson);
+    }
+
+    public static final class PolicyApplyResult {
+        public final boolean ok;
+        public final String errorCode;
+        public final String errorMessage;
+
+        private PolicyApplyResult(boolean ok, String errorCode, String errorMessage) {
+            this.ok = ok;
+            this.errorCode = errorCode == null ? "" : errorCode;
+            this.errorMessage = errorMessage == null ? "" : errorMessage;
+        }
+
+        public static PolicyApplyResult ok() {
+            return new PolicyApplyResult(true, "", "");
+        }
+
+        public static PolicyApplyResult error(String errorCode, String errorMessage) {
+            return new PolicyApplyResult(false, errorCode, errorMessage);
+        }
+    }
 
     public LocalProductBackend(File filesDir, ApplicationCatalogProvider catalogProvider) {
+        this(filesDir, catalogProvider,
+                json -> PolicyApplyResult.error("product_policy_runtime_unavailable",
+                        "runtime policy apply transport is not configured"));
+    }
+
+    public LocalProductBackend(File filesDir, ApplicationCatalogProvider catalogProvider,
+                               PolicyApplyTransport policyApplyTransport) {
         this.filesDir = filesDir;
         this.productStore = new ProductStore(filesDir);
         this.catalogProvider = catalogProvider;
+        this.policyApplyTransport = policyApplyTransport == null
+                ? json -> PolicyApplyResult.error("product_policy_runtime_unavailable",
+                        "runtime policy apply transport is not configured")
+                : policyApplyTransport;
     }
 
     public ProductStateSnapshot productState() {
@@ -79,9 +116,38 @@ public final class LocalProductBackend {
     public ProductStore.MutationResult setNetworkGate(ApplicationSubjectId subjectId,
                                                      AuthoringPolicyBundle.NetworkContextId context,
                                                      boolean blocked) {
-        ProductStore.MutationResult result = productStore.setNetworkGate(
-                subjectId, context, blocked);
+        ProductStateStore.ReadResult readResult = productStore.readResult();
+        if (readResult != null && !readResult.valid) {
+            ProductStore.MutationResult result = ProductStore.MutationResult.rejected(
+                    productStore.snapshot(), readResult.errorCode, readResult.errorMessage);
+            refreshProductCatalogProjection();
+            return result;
+        }
+        AuthoringPolicyBundle nextBundle = productStore.snapshot().authoringPolicyBundle
+                .withNetworkGate(subjectId, context, blocked);
+        AuthoringPolicyCompiler.CompileResult compiled =
+                AuthoringPolicyCompiler.compilePacketPolicyApply(nextBundle);
+        if (!compiled.ok) {
+            ProductStore.MutationResult result = ProductStore.MutationResult.rejected(
+                    productStore.snapshot(), compiled.errorCode, compiled.errorMessage);
+            refreshProductCatalogProjection();
+            return result;
+        }
+        PolicyApplyResult applied = policyApplyTransport.apply(compiled.applyPayload);
+        if (applied == null || !applied.ok) {
+            ProductStore.MutationResult result = ProductStore.MutationResult.rejected(
+                    productStore.snapshot(),
+                    applied == null || applied.errorCode.isEmpty()
+                            ? "product_policy_apply_failed" : applied.errorCode,
+                    applied == null || applied.errorMessage.isEmpty()
+                            ? "runtime policy apply failed" : applied.errorMessage);
+            refreshProductCatalogProjection();
+            return result;
+        }
+        ProductStore.MutationResult result =
+                productStore.replaceAuthoringPolicyBundle(nextBundle);
         refreshProductCatalogProjection();
         return result;
     }
+
 }

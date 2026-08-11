@@ -18,6 +18,13 @@ public final class ProductStore {
             this.errorCode = errorCode == null ? "" : errorCode;
             this.errorMessage = errorMessage == null ? "" : errorMessage;
         }
+
+        public static MutationResult rejected(ProductStateSnapshot snapshot,
+                                              String errorCode, String errorMessage) {
+            return new MutationResult(false,
+                    snapshot == null ? ProductStateSnapshot.empty() : snapshot,
+                    errorCode, errorMessage);
+        }
     }
 
     private final File filesDir;
@@ -62,6 +69,11 @@ public final class ProductStore {
         AuthoringPolicyBundle nextBundle = snapshot.authoringPolicyBundle.withNetworkGate(
                 subjectId, context, blocked);
         return publish(snapshot.withAuthoringPolicyBundle(nextBundle));
+    }
+
+    public synchronized MutationResult replaceAuthoringPolicyBundle(
+            AuthoringPolicyBundle bundle) {
+        return publish(snapshot.withAuthoringPolicyBundle(bundle));
     }
 
     public synchronized ProductStateStore.ReadResult reload() {

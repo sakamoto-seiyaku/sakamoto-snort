@@ -131,7 +131,8 @@ public final class RuntimeService extends VpnService {
         createNotificationChannel();
         RuntimeStateStore.ReadResult durable = RuntimeStateStore.readResult(getFilesDir());
         productBackend = new LocalProductBackend(getFilesDir(),
-                new PackageManagerApplicationCatalogProvider(this));
+                new PackageManagerApplicationCatalogProvider(this),
+                new RuntimePolicyApplyTransport());
         snapshot = durable.snapshot;
         persistenceGate.setSnapshot(snapshot);
         durableProjectionRequiresAudit = !durable.present || !durable.valid;

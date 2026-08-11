@@ -66,10 +66,12 @@ public final class AndroidRuntimeContractTest {
         productStorePersistsProfileBindingsAndEmptyBundle();
         productStorePersistsNetworkGateMatrixAsTypedRuleFamily();
         gateMatrixCompilesToPacketPolicyApplyPayload();
+        localProductBackendAppliesGatePolicyBeforePersistingBundle();
         boundedActivityStoreIsSeparateFromProductState();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
         localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
+        localProductBackendAppliesGateMatrixBeforePersistingProductState();
         productCatalogProjectionStoreRoundTripsSamePackageTwoProfileRows();
         localProductBackendPublishesDurableProductCatalogProjection();
         backendProjectionInvalidProductStateDisablesBind();
@@ -1301,6 +1303,46 @@ public final class AndroidRuntimeContractTest {
                 "compile failure reports actionable unsupported bundle code");
     }
 
+    private static void localProductBackendAppliesGatePolicyBeforePersistingBundle()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-51-backend-apply");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        final String[] appliedPayload = {""};
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app, "com.example.mail",
+                        "Mail", "icon:mail/u10", 10, "Work", true)),
+                payload -> {
+                    appliedPayload[0] = payload;
+                    return LocalProductBackend.PolicyApplyResult.ok();
+                });
+
+        ProductStore.MutationResult blocked = backend.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.WIFI, true);
+        check(blocked.persisted, "backend persists GateMatrix after runtime apply success");
+        check(appliedPayload[0].contains("\"cmd\"") == false,
+                "backend transport receives POLICY.APPLY args, not a wrapped RPC frame");
+        check(appliedPayload[0].contains("\"revision\":1"),
+                "backend applies the same revision it persists");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.revision == 1L,
+                "successful backend apply publishes durable authoring revision");
+
+        LocalProductBackend failingBackend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app, "com.example.mail",
+                        "Mail", "icon:mail/u10", 10, "Work", true)),
+                payload -> LocalProductBackend.PolicyApplyResult.error(
+                        "injected_runtime_apply_failure", "runtime rejected policy"));
+        ProductStore.MutationResult failed = failingBackend.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.WIFI, false);
+        check(!failed.persisted, "backend rejects GateMatrix mutation on runtime apply failure");
+        check("injected_runtime_apply_failure".equals(failed.errorCode),
+                "backend returns the runtime apply failure code");
+        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
+        check(restored.authoringPolicyBundle.revision == 1L,
+                "failed runtime apply does not publish a new durable revision");
+        check(restored.authoringPolicyBundle.gateMatrix.get(0).blocked,
+                "failed runtime apply keeps old GateMatrix action");
+    }
+
     private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {
         Path files = Files.createTempDirectory("sakamoto-50-activity-store");
         ProductStore product = new ProductStore(files.toFile());
@@ -1414,6 +1456,57 @@ public final class AndroidRuntimeContractTest {
                 "Local Product Backend writes selected app binding");
         check(backend.productState().boundApplications.contains(work),
                 "backend product state uses ApplicationSubjectId, not package metadata");
+    }
+
+    private static void localProductBackendAppliesGateMatrixBeforePersistingProductState()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-51-backend-apply");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(10001);
+        final StringBuilder appliedPayload = new StringBuilder();
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u0",
+                        0, "Owner", true)),
+                payload -> {
+                    appliedPayload.append(payload);
+                    return LocalProductBackend.PolicyApplyResult.ok();
+                });
+
+        ProductStore.MutationResult blocked = backend.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.MOBILE, true);
+        check(blocked.persisted,
+                "Local Product Backend persists Network Gate only after runtime apply succeeds");
+        check(appliedPayload.toString().contains("\"cmd\"") == false,
+                "policy transport receives POLICY.APPLY args, not a framed request");
+        check(appliedPayload.toString().contains("\"networkContext\":2"),
+                "runtime apply payload carries the blocked Mobile NetworkContextId");
+        ProductStateSnapshot persisted = ProductStateStore.read(files.toFile());
+        check(persisted.authoringPolicyBundle.gateEntryCount == 1,
+                "successful runtime apply publishes Product GateMatrix state");
+
+        Path failedFiles = Files.createTempDirectory("sakamoto-51-backend-apply-fail");
+        final StringBuilder failedPayload = new StringBuilder();
+        LocalProductBackend failingBackend = new LocalProductBackend(failedFiles.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u0",
+                        0, "Owner", true)),
+                payload -> {
+                    failedPayload.append(payload);
+                    return LocalProductBackend.PolicyApplyResult.error(
+                            "POLICY_APPLY_REJECTED", "synthetic apply failure");
+                });
+        ProductStore.MutationResult rejected = failingBackend.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.VPN, true);
+        check(!rejected.persisted,
+                "Local Product Backend does not persist Network Gate after runtime apply failure");
+        check("POLICY_APPLY_REJECTED".equals(rejected.errorCode),
+                "runtime apply failure is surfaced as the product mutation error");
+        ProductStateStore.ReadResult absent =
+                ProductStateStore.readResult(failedFiles.toFile());
+        check(!absent.present && absent.snapshot.authoringPolicyBundle.isEmpty(),
+                "failed runtime apply leaves durable product state unchanged");
+        check(failedPayload.toString().contains("\"networkContext\":3"),
+                "failed runtime apply still used the candidate VPN GateMatrix payload");
     }
 
     private static void productCatalogProjectionStoreRoundTripsSamePackageTwoProfileRows()
