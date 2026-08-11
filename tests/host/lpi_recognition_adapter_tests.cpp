@@ -269,7 +269,7 @@ public:
 
 class TrackingContextProvider final : public Protocol::LpiRecognitionProvider {
 public:
-    [[nodiscard]] bool available() const noexcept override { return true; }
+    [[nodiscard]] bool available() const noexcept override { return availableFlag; }
     [[nodiscard]] std::string_view providerName() const noexcept override {
         return "fake-tracking-context";
     }
@@ -297,6 +297,7 @@ public:
 
     std::uint32_t createCalls = 0;
     std::uint32_t calls = 0;
+    bool availableFlag = true;
     std::vector<Flow::FlowRelativeDirection> initDirections;
     std::vector<std::uint8_t> initIpProtocols;
     std::vector<std::uint16_t> initOriginSourcePorts;
@@ -462,6 +463,109 @@ TEST(LpiRecognitionProviderTest, AvailableProviderReusesFlowContextAndSeesOrigin
     EXPECT_EQ(state->payloadPacketsSubmitted, 2U);
 }
 
+TEST(LpiRecognitionProviderTest, ProviderUnavailableClearsExistingFlowContext) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    const auto key = Flow::CanonicalFlowKey::from(packet);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    TrackingContextProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 512> l3Packet{};
+
+    const auto first = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(first.submittedToProvider);
+    EXPECT_EQ(provider.createCalls, 1U);
+    EXPECT_EQ(provider.calls, 1U);
+    const auto *entryAfterCreate = table.find(*key);
+    ASSERT_NE(entryAfterCreate, nullptr);
+    ASSERT_NE(entryAfterCreate->lpiProviderContext, nullptr);
+
+    provider.availableFlag = false;
+    const auto unavailable = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(unavailable.observed);
+    EXPECT_TRUE(unavailable.payloadEligible);
+    EXPECT_FALSE(unavailable.providerAvailable);
+    EXPECT_FALSE(unavailable.submittedToProvider);
+    EXPECT_FALSE(unavailable.adapterOutcome.has_value());
+    EXPECT_EQ(provider.createCalls, 1U);
+    EXPECT_EQ(provider.calls, 1U);
+    const auto *entryAfterUnavailable = table.find(*key);
+    ASSERT_NE(entryAfterUnavailable, nullptr);
+    EXPECT_EQ(entryAfterUnavailable->lpiProviderContext, nullptr);
+    const auto status = pipeline.status();
+    EXPECT_EQ(status.counters.providerUnavailablePackets, 1U);
+    EXPECT_EQ(status.counters.packetsSubmittedToProvider, 1U);
+}
+
+TEST(LpiRecognitionProviderTest, TerminalSkipClearsExternallyTerminalFlowContext) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    const auto key = Flow::CanonicalFlowKey::from(packet);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    TrackingContextProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 512> l3Packet{};
+
+    const auto first = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(first.submittedToProvider);
+    const auto *entryAfterCreate = table.find(*key);
+    ASSERT_NE(entryAfterCreate, nullptr);
+    ASSERT_NE(entryAfterCreate->lpiProviderContext, nullptr);
+
+    const auto externalDone = table.recordLpiRecognition(
+        packet,
+        true,
+        Catalog::ApplicationProtocolId::HTTP,
+        true,
+        true,
+        false);
+    ASSERT_TRUE(externalDone.has_value());
+    EXPECT_EQ(externalDone->terminalState, Flow::LpiRecognitionTerminalState::Done);
+
+    const auto terminalSkip = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(terminalSkip.terminalSkipped);
+    EXPECT_FALSE(terminalSkip.submittedToProvider);
+    EXPECT_EQ(provider.createCalls, 1U);
+    EXPECT_EQ(provider.calls, 1U);
+    const auto *entryAfterSkip = table.find(*key);
+    ASSERT_NE(entryAfterSkip, nullptr);
+    EXPECT_EQ(entryAfterSkip->lpiProviderContext, nullptr);
+}
+
+TEST(LpiRecognitionProviderTest, MissingFlowDoesNotCreateProviderContextOrTableState) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    TrackingContextProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 512> l3Packet{};
+
+    const auto outcome = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(outcome.observed);
+    EXPECT_TRUE(outcome.payloadEligible);
+    EXPECT_TRUE(outcome.providerAvailable);
+    EXPECT_FALSE(outcome.submittedToProvider);
+    EXPECT_FALSE(outcome.adapterOutcome.has_value());
+    EXPECT_FALSE(outcome.stateAfterSubmit.has_value());
+    EXPECT_EQ(provider.createCalls, 0U);
+    EXPECT_EQ(provider.calls, 0U);
+    EXPECT_EQ(table.size(), 0U);
+    const auto status = pipeline.status();
+    EXPECT_EQ(status.counters.providerUnavailablePackets, 0U);
+    EXPECT_EQ(status.counters.packetsSubmittedToProvider, 0U);
+}
+
 TEST(LpiRecognitionProviderTest, ProviderNoResultConsumesBudgetWithoutUnmappedResult) {
     Flow::BoundedFlowTable table(4);
     const auto packet = tcpPacket();
@@ -515,6 +619,41 @@ TEST(LpiRecognitionProviderTest, TruncatedL3PacketDoesNotSubmitPartialPayload) {
     const auto state = table.lpiRecognitionStateFor(packet);
     ASSERT_TRUE(state.has_value());
     EXPECT_EQ(state->payloadPacketsSubmitted, 0U);
+}
+
+TEST(LpiRecognitionProviderTest, TruncatedL3PacketPreservesExistingFlowContext) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    const auto key = Flow::CanonicalFlowKey::from(packet);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    TrackingContextProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 512> l3Packet{};
+
+    const auto first = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(first.submittedToProvider);
+    const auto *entryAfterCreate = table.find(*key);
+    ASSERT_NE(entryAfterCreate, nullptr);
+    ASSERT_NE(entryAfterCreate->lpiProviderContext, nullptr);
+
+    const std::array<std::byte, 48> truncatedL3Packet{};
+    const auto truncated = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{truncatedL3Packet}, packet);
+
+    EXPECT_TRUE(truncated.observed);
+    EXPECT_FALSE(truncated.payloadEligible);
+    EXPECT_FALSE(truncated.submittedToProvider);
+    EXPECT_EQ(provider.createCalls, 1U);
+    EXPECT_EQ(provider.calls, 1U);
+    const auto *entryAfterTruncated = table.find(*key);
+    ASSERT_NE(entryAfterTruncated, nullptr);
+    EXPECT_NE(entryAfterTruncated->lpiProviderContext, nullptr);
+    const auto status = pipeline.status();
+    EXPECT_EQ(status.counters.payloadEligiblePackets, 1U);
+    EXPECT_EQ(status.counters.packetsSubmittedToProvider, 1U);
 }
 
 TEST(LpiRecognitionProviderTest, TerminalDoneFlowSkipsLaterPayloadsWithoutProviderCall) {

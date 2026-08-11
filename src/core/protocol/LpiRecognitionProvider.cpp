@@ -51,6 +51,9 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
     auto slot = flowTable_.lpiRecognitionFlowSlotFor(facts);
     if (slot.has_value() && slot->recognition != nullptr
         && slot->recognition->terminal()) {
+        if (slot->providerContext != nullptr) {
+            slot->providerContext->reset();
+        }
         ++counters_.terminalSkippedPackets;
         return LpiPipelineOutcome{
             .observed = true,
@@ -62,6 +65,9 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
     }
 
     if (!provider_->available()) {
+        if (slot.has_value() && slot->providerContext != nullptr) {
+            slot->providerContext->reset();
+        }
         ++counters_.providerUnavailablePackets;
         return LpiPipelineOutcome{
             .observed = true,
