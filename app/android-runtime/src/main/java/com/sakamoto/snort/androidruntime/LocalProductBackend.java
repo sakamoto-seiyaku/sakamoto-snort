@@ -141,6 +141,22 @@ public final class LocalProductBackend {
         return AppDetail.normal(app, runtime, rules, recent);
     }
 
+    public AppDetail refreshProductActivityProjection(ApplicationSubjectId subjectId,
+                                                      RuntimeSummary runtime,
+                                                      int activityLimit) {
+        AppDetail detail = appDetail(subjectId, runtime, activityLimit);
+        try {
+            ProductActivityProjectionStore.write(filesDir, detail);
+        } catch (java.io.IOException ignored) {
+            // Activity projection is bounded UI evidence, not policy/config authority.
+        }
+        return detail;
+    }
+
+    public AppDetail productActivityProjection() {
+        return ProductActivityProjectionStore.read(filesDir);
+    }
+
     public PolicyTextResult exportCommittedPolicy() {
         if (policyTransactionReadResult != null && !policyTransactionReadResult.valid) {
             return PolicyTextResult.error(policyTransactionReadResult.errorCode,

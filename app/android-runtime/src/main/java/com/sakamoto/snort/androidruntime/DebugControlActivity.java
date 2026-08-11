@@ -610,7 +610,8 @@ public class DebugControlActivity extends Activity {
     private void renderProductProjection(ProductCatalogFormatter.Projection projection) {
         productProjection = projection;
         if (productView != null) {
-            productView.setText(projection.displayText);
+            AppDetail detail = ProductActivityProjectionStore.read(getFilesDir());
+            productView.setText(projection.displayText + "\n\n" + detail.displayText);
         }
         renderApplicationSelector(projection);
     }

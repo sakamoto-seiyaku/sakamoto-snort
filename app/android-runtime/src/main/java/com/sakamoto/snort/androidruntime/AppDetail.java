@@ -18,6 +18,7 @@ public final class AppDetail {
     public final List<ActivityItem> activity;
     public final HealthIssue healthIssue;
     public final RuleDraft prefillDraft;
+    public final String displayText;
 
     public AppDetail(AppSummary app, String state, RuntimeSummary runtime,
                      List<RuleView> rules, List<ActivityItem> activity,
@@ -30,6 +31,7 @@ public final class AppDetail {
         this.activity = immutableActivity(activity);
         this.healthIssue = healthIssue == null ? HealthIssue.none() : healthIssue;
         this.prefillDraft = prefillDraft;
+        this.displayText = buildDisplayText();
     }
 
     public static AppDetail normal(AppSummary app, RuntimeSummary runtime,
@@ -94,5 +96,60 @@ public final class AppDetail {
     private static String bounded(String value) {
         return BoundedText.value(value == null ? "" : value,
                 RuntimeSnapshot.MAX_TEXT_LENGTH);
+    }
+
+    private String buildDisplayText() {
+        StringBuilder out = new StringBuilder();
+        out.append("App detail: ").append(state);
+        if (app != null) {
+            out.append('\n').append("App: ").append(app.label)
+                    .append(" | package ").append(app.packageName)
+                    .append(" | subject ").append(app.subjectId.encode())
+                    .append(" | full uid ").append(app.fullUid)
+                    .append(" | bound ").append(app.bound ? "yes" : "no")
+                    .append(" | gate wifi=").append(app.wifiGateBlocked ? "blocked" : "open")
+                    .append(" mobile=").append(app.mobileGateBlocked ? "blocked" : "open")
+                    .append(" vpn=").append(app.vpnGateBlocked ? "blocked" : "open");
+        }
+        if (runtime != null) {
+            out.append('\n').append("Runtime: ").append(runtime.state)
+                    .append(" | profile ").append(runtime.selectedProfile.wireName)
+                    .append(" | health ").append(runtime.coreHealth)
+                    .append(" | adapter ").append(runtime.adapterReadiness);
+        }
+        if (healthIssue.present()) {
+            out.append('\n').append("Health: ").append(healthIssue.category)
+                    .append(" ").append(healthIssue.code)
+                    .append(" | action ").append(healthIssue.action);
+        }
+        out.append('\n').append("Rules: ").append(rules.size());
+        for (RuleView rule : rules) {
+            out.append('\n').append("- ")
+                    .append(rule.family).append(" ")
+                    .append(rule.action).append(" ")
+                    .append(rule.label)
+                    .append(" revision=").append(rule.policyRevision);
+        }
+        out.append('\n').append("Activity: ").append(activity.size());
+        for (ActivityItem item : activity) {
+            out.append('\n').append("- ")
+                    .append(item.appLabel.isEmpty() ? item.subjectId.encode() : item.appLabel)
+                    .append(" ").append(item.protocol)
+                    .append("/").append(item.remotePort)
+                    .append(" remote=").append(item.remoteIp)
+                    .append(" deviceDir=").append(item.devicePacketDirection)
+                    .append(" flowDir=").append(item.flowDirection)
+                    .append(" packets=").append(item.packets)
+                    .append(" bytes=").append(item.bytes)
+                    .append(" verdict=").append(item.verdict)
+                    .append(" winner=").append(item.winner)
+                    .append(" revision=").append(item.policyRevision)
+                    .append(" source=").append(item.evidenceSource);
+        }
+        if (prefillDraft != null) {
+            out.append('\n').append("L4 prefill: available from ")
+                    .append(prefillDraft.source);
+        }
+        return out.toString();
     }
 }

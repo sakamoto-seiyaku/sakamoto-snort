@@ -23,6 +23,7 @@ import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
 import com.sakamoto.snort.androidruntime.ProductCatalogProjectionStore;
+import com.sakamoto.snort.androidruntime.ProductActivityProjectionStore;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactions;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactionStore;
 import com.sakamoto.snort.androidruntime.CapabilitySet;
@@ -89,6 +90,7 @@ public final class AndroidRuntimeContractTest {
         localProductBackendExposesPolicyImportExportAndRestore();
         boundedActivityStoreIsSeparateFromProductState();
         localProductBackendOwnsBoundedActivityStoreWriter();
+        productActivityProjectionStoreRoundTripsAppDetail();
         activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
@@ -1909,6 +1911,45 @@ public final class AndroidRuntimeContractTest {
                 "Activity ingestion cannot mutate product binding state");
         check(restored.authoringPolicyBundle.gateEntryCount == 1,
                 "Activity ingestion cannot mutate authoring policy state");
+    }
+
+    private static void productActivityProjectionStoreRoundTripsAppDetail() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-58-activity-projection");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        app.userId, "Work", true)),
+                json -> LocalProductBackend.PolicyApplyResult.ok());
+        backend.bindApplication(app);
+        backend.setL4Rule(l4Rule(app, "1.1.1.1/32", 6, 10, 0,
+                AuthoringPolicyBundle.L4Action.DROP));
+        backend.ingestActivity(ActivityItem.policyDrop(app, "Mail", "com.example.mail",
+                1000L, "1.1.1.1", "tcp", 443, "output", 7L,
+                "L4", 0x5200000000000001L, 0x52000001));
+        RuntimeSummary runtime = RuntimeSummary.fromSnapshot(RuntimeSnapshot.running(
+                RuntimeProfile.ROOT, "control-vnext", "1", "runtime", "arm64",
+                "ok", 9L), CapabilitySet.androidL4(true, true));
+        AppDetail published = backend.refreshProductActivityProjection(app, runtime, 10);
+        AppDetail restored = ProductActivityProjectionStore.read(files.toFile());
+
+        check(ProductActivityProjectionStore.projectionFile(files.toFile()).getPath()
+                        .contains("product-activity-projection"),
+                "Activity projection uses its own UI/evidence repository");
+        check(published.activity.size() == 1 && restored.activity.size() == 1,
+                "Activity projection round-trips recent ActivityItem rows");
+        check(restored.rules.size() == 1
+                        && restored.rules.get(0).policyRevision
+                        == published.rules.get(0).policyRevision,
+                "Activity projection round-trips RuleView revision");
+        check(restored.displayText.contains("Activity: 1")
+                        && restored.displayText.contains("L4 prefill: available"),
+                "Activity projection is directly renderable by the UI");
+        check(backend.productActivityProjection().activity.size() == 1,
+                "LocalProductBackend exposes the durable Activity projection read seam");
+        check(!ProductActivityProjectionStore.projectionFile(files.toFile()).getPath()
+                        .contains("product-state"),
+                "Activity projection is separate from policy/config state");
     }
 
     private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {
