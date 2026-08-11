@@ -10,7 +10,9 @@ source "$repo_root/dev/dev-ndk-env.sh"
 
 reference_root="${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}"
 libprotoident_root="${LIBPROTOIDENT_SOURCE_ROOT:-${reference_root}/src/plugins/stellar_lpi/libprotoident}"
-build_root="${LIBPROTOIDENT_ANDROID_PROBE_BUILD_ROOT:-${repo_root}/build-output/protocol-identification/libprotoident-android-probe}"
+repo_build_output_root="${repo_root}/build-output"
+build_root_input="${LIBPROTOIDENT_ANDROID_PROBE_BUILD_ROOT:-${repo_build_output_root}/protocol-identification/libprotoident-android-probe}"
+build_root="$build_root_input"
 generated_source_dir="$build_root/generated-source"
 cmake_build_dir="$build_root/cmake"
 android_abi="${ANDROID_ABI:-arm64-v8a}"
@@ -37,14 +39,11 @@ EOF
 }
 
 path_is_inside_repo_build_output() {
-    case "$1" in
-        "$repo_root"/build-output/*)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+    [[ "$1" == "$2" || "$1" == "$2"/* ]]
+}
+
+canonicalize_path() {
+    python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve(strict=False))' "$1"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -65,12 +64,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -d "$libprotoident_root" ]] || {
-    echo "missing libprotoident source root: $libprotoident_root" >&2
+command -v python3 >/dev/null 2>&1 || {
+    echo "python3 was not found on PATH" >&2
     exit 1
 }
-path_is_inside_repo_build_output "$build_root" || {
-    echo "unsafe probe build root outside repo build-output: $build_root" >&2
+
+canonical_repo_build_output_root="$(canonicalize_path "$repo_build_output_root")"
+build_root="$(canonicalize_path "$build_root_input")"
+path_is_inside_repo_build_output "$build_root" "$canonical_repo_build_output_root" || {
+    echo "unsafe probe build root outside repo build-output: $build_root_input (resolved to $build_root)" >&2
+    exit 1
+}
+generated_source_dir="$build_root/generated-source"
+cmake_build_dir="$build_root/cmake"
+
+[[ -d "$libprotoident_root" ]] || {
+    echo "missing libprotoident source root: $libprotoident_root" >&2
     exit 1
 }
 

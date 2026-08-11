@@ -13,7 +13,9 @@ source "$repo_root/dev/dev-ndk-env.sh"
 reference_root="${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}"
 wrapper_root="${VPP_STELLAR_LPI_ROOT:-${reference_root}/src/plugins/stellar_lpi}"
 libprotoident_root="${LIBPROTOIDENT_SOURCE_ROOT:-${wrapper_root}/libprotoident}"
-build_root="${STELLAR_LPI_WRAPPER_ANDROID_PROBE_BUILD_ROOT:-${repo_root}/build-output/protocol-identification/stellar-lpi-wrapper-android-probe}"
+repo_build_output_root="${repo_root}/build-output"
+build_root_input="${STELLAR_LPI_WRAPPER_ANDROID_PROBE_BUILD_ROOT:-${repo_build_output_root}/protocol-identification/stellar-lpi-wrapper-android-probe}"
+build_root="$build_root_input"
 generated_source_dir="$build_root/generated-source"
 generated_include_dir="$generated_source_dir/include"
 cmake_build_dir="$build_root/cmake"
@@ -43,14 +45,11 @@ EOF
 }
 
 path_is_inside_repo_build_output() {
-    case "$1" in
-        "$repo_root"/build-output/*)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+    [[ "$1" == "$2" || "$1" == "$2"/* ]]
+}
+
+canonicalize_path() {
+    python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve(strict=False))' "$1"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -70,6 +69,21 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+command -v python3 >/dev/null 2>&1 || {
+    echo "python3 was not found on PATH" >&2
+    exit 1
+}
+
+canonical_repo_build_output_root="$(canonicalize_path "$repo_build_output_root")"
+build_root="$(canonicalize_path "$build_root_input")"
+path_is_inside_repo_build_output "$build_root" "$canonical_repo_build_output_root" || {
+    echo "unsafe probe build root outside repo build-output: $build_root_input (resolved to $build_root)" >&2
+    exit 1
+}
+generated_source_dir="$build_root/generated-source"
+generated_include_dir="$generated_source_dir/include"
+cmake_build_dir="$build_root/cmake"
 
 [[ -d "$reference_root" ]] || {
     echo "missing VPP reference root: $reference_root" >&2
@@ -93,10 +107,6 @@ done
 }
 [[ -f "$reference_root/src/vlib/uthash/uthash.h" ]] || {
     echo "missing reference uthash header under: $reference_root/src/vlib/uthash" >&2
-    exit 1
-}
-path_is_inside_repo_build_output "$build_root" || {
-    echo "unsafe probe build root outside repo build-output: $build_root" >&2
     exit 1
 }
 

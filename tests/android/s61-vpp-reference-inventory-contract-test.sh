@@ -21,6 +21,36 @@ wrapper_host_pcap_probe="$repo_root/tools/protocol_identification/stellar_lpi_wr
 host_cmake="$repo_root/tests/host/CMakeLists.txt"
 expected_alias_replay_test="$repo_root/tests/host/lpi_expected_alias_replay_tests.cpp"
 
+assert_unsafe_probe_build_root_rejected() {
+  local script="$1"
+  local build_root_env="$2"
+  local unsafe_leaf="$3"
+  local unsafe_build_root_input="${repo_root}/build-output/../${unsafe_leaf}"
+  local unsafe_build_root_resolved="${repo_root}/${unsafe_leaf}"
+  local unsafe_output=""
+  local unsafe_status=0
+
+  [[ ! -e "$unsafe_build_root_resolved" ]] || {
+    echo "unsafe build-root contract target already exists before test: $unsafe_build_root_resolved" >&2
+    exit 1
+  }
+
+  set +e
+  unsafe_output="$(env "$build_root_env=$unsafe_build_root_input" "$script" --configure-only 2>&1 >/dev/null)"
+  unsafe_status=$?
+  set -e
+
+  [[ "$unsafe_status" -ne 0 ]] || {
+    echo "unsafe build-root contract unexpectedly passed for: $script" >&2
+    exit 1
+  }
+  grep -q 'unsafe probe build root outside repo build-output' <<<"$unsafe_output"
+  [[ ! -e "$unsafe_build_root_resolved" ]] || {
+    echo "unsafe build-root contract created target before rejecting it: $unsafe_build_root_resolved" >&2
+    exit 1
+  }
+}
+
 [[ -f "$inventory" ]]
 grep -q 'SAKAMOTO-61 and later Protocol Identification' "$inventory"
 grep -q 'not an implementation decision' "$inventory"
@@ -438,6 +468,8 @@ grep -q 'policy.providerVendoringDecision=false' "$android_build_probe"
 grep -q 'probe.scope=compile-link-only' "$android_build_probe"
 grep -q 'probe.wrapper=generated-cmake-with-external-source' "$android_build_probe"
 grep -q 'path_is_inside_repo_build_output' "$android_build_probe"
+grep -q 'canonicalize_path' "$android_build_probe"
+grep -q 'build_root_input' "$android_build_probe"
 grep -Fq 'source_tree_sha256' "$android_build_probe"
 grep -Fq 'sourceTreeSha256' "$android_build_probe"
 grep -Fq 'source.topLevelCc' "$android_build_probe"
@@ -453,6 +485,10 @@ grep -q 'lpi_init_library' "$android_build_probe"
 grep -q 'lpi_guess_protocol' "$android_build_probe"
 grep -q 'PASS_CONFIGURE_ONLY' "$android_build_probe"
 grep -q 'probe.result=PASS' "$android_build_probe"
+assert_unsafe_probe_build_root_rejected \
+  "$android_build_probe" \
+  "LIBPROTOIDENT_ANDROID_PROBE_BUILD_ROOT" \
+  "s61-unsafe-libprotoident-android-probe"
 
 [[ -x "$wrapper_android_build_probe" ]]
 grep -q 'stellar-lpi-wrapper-android-build' "$wrapper_android_build_probe"
@@ -469,6 +505,8 @@ grep -q 'probe.wrapper=stellar_lpi_core-plus-extend-with-generated-compat-shim' 
 grep -q 'probe.generatedUtilsShim=true' "$wrapper_android_build_probe"
 grep -q 'probe.referenceUthashInPlace=true' "$wrapper_android_build_probe"
 grep -q 'path_is_inside_repo_build_output' "$wrapper_android_build_probe"
+grep -q 'canonicalize_path' "$wrapper_android_build_probe"
+grep -q 'build_root_input' "$wrapper_android_build_probe"
 grep -Fq 'source_tree_sha256' "$wrapper_android_build_probe"
 grep -Fq 'wrapperSourceTreeSha256' "$wrapper_android_build_probe"
 grep -Fq 'libprotoidentSourceTreeSha256' "$wrapper_android_build_probe"
@@ -495,6 +533,10 @@ grep -q 'lpi_detect' "$wrapper_android_build_probe"
 grep -q 'lpi_appid2name' "$wrapper_android_build_probe"
 grep -q 'PASS_CONFIGURE_ONLY' "$wrapper_android_build_probe"
 grep -q 'probe.result=PASS' "$wrapper_android_build_probe"
+assert_unsafe_probe_build_root_rejected \
+  "$wrapper_android_build_probe" \
+  "STELLAR_LPI_WRAPPER_ANDROID_PROBE_BUILD_ROOT" \
+  "s61-unsafe-stellar-lpi-wrapper-android-probe"
 
 [[ -x "$wrapper_inventory_script" ]]
 grep -q 'stellar_lpi wrapper' "$wrapper_inventory_script"
@@ -610,6 +652,9 @@ grep -q 'policy.usesSyntheticPayloads=true' "$wrapper_host_payload_probe"
 grep -q 'policy.providerVendoringDecision=false' "$wrapper_host_payload_probe"
 grep -q 'policy.providerRuntimeWiring=false' "$wrapper_host_payload_probe"
 grep -q 'policy.protocolRuleDecision=false' "$wrapper_host_payload_probe"
+grep -q 'path_is_inside_repo_build_output' "$wrapper_host_payload_probe"
+grep -q 'canonicalize_path' "$wrapper_host_payload_probe"
+grep -q 'build_root_input' "$wrapper_host_payload_probe"
 grep -q 'probe.scope=host-compile-link-run-synthetic-payload-recognition' "$wrapper_host_payload_probe"
 grep -q 'REPO_ROOT' "$wrapper_host_payload_probe"
 grep -q 'sakamoto_lpi_pipeline_probe' "$wrapper_host_payload_probe"
@@ -633,6 +678,10 @@ grep -q '"dns"' "$wrapper_host_payload_probe"
 grep -q '32,' "$wrapper_host_payload_probe"
 grep -q '"socks5"' "$wrapper_host_payload_probe"
 grep -q '8005,' "$wrapper_host_payload_probe"
+assert_unsafe_probe_build_root_rejected \
+  "$wrapper_host_payload_probe" \
+  "STELLAR_LPI_WRAPPER_HOST_PROBE_BUILD_ROOT" \
+  "s61-unsafe-stellar-lpi-wrapper-host-payload-probe"
 
 [[ -x "$wrapper_host_pcap_probe" ]]
 grep -q 'stellar-lpi-wrapper-host-pcap' "$wrapper_host_pcap_probe"
