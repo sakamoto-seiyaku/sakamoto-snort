@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SAKAMOTO-69 product VPN RuntimeService evidence matrix.
+#
+# This matrix verifies the product app path, not the historical vpn-lite POC:
+# APK build/install, VPN profile start, native control surface, adapter
+# counters, Android VPN/tun0 presence, and final no-residue cleanup.
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/../.." && pwd)"
+
+# Force device operations through the repo-local wrapper.
+export ADB="${repo_root}/dev/adb"
+source "${repo_root}/dev/dev-android-device-lib.sh"
+
+PACKAGE="${PACKAGE:-com.sakamoto.snort.androidruntime}"
+ACTIVITY="${ACTIVITY:-${PACKAGE}/.DebugControlActivity}"
+RESULTS_ROOT="${RESULTS_ROOT:-${repo_root}/build-output/s69-product-vpn-runtime-matrix}"
+RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+RESULT_DIR="${RESULT_DIR:-${RESULTS_ROOT}/${RUN_ID}}"
+APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk}"
+S69_PRODUCT_BUILD_APK="${S69_PRODUCT_BUILD_APK:-1}"
+S69_PRODUCT_INSTALL_APK="${S69_PRODUCT_INSTALL_APK:-1}"
+S69_PRODUCT_FORWARD_PORT="${S69_PRODUCT_FORWARD_PORT:-60619}"
+S69_PRODUCT_CLEANUP_ON_EXIT="${S69_PRODUCT_CLEANUP_ON_EXIT:-1}"
+STATE_PATH="files/runtime-state/snapshot.properties"
+LOG_PATH="files/logs/runtime-service.log"
+CONTROL_SOCKET="sucre-snort-control-vnext"
+
+mkdir -p "$RESULT_DIR"
+
+kv() {
+  printf '%s=%s\n' "$1" "$2"
+}
+
+section() {
+  printf '\n## %s\n' "$1"
+}
+
+cleanup() {
+  if [[ "$S69_PRODUCT_CLEANUP_ON_EXIT" != "1" ]]; then
+    return
+  fi
+  adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+read_snapshot() {
+  adb_cmd shell run-as "$PACKAGE" cat "$STATE_PATH" 2>/dev/null | tr -d '\r' || true
+}
+
+snapshot_value() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }'
+}
+
+wait_for_snapshot_field() {
+  local key="$1"
+  local expected="$2"
+  local out_file="$3"
+  local attempts="${4:-30}"
+  local state=""
+  for _ in $(seq 1 "$attempts"); do
+    state="$(read_snapshot)"
+    printf '%s\n' "$state" >"$out_file"
+    if grep -Fxq "${key}=${expected}" <<<"$state"; then
+      printf '%s\n' "$state"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+assert_no_native_residue() {
+  local out_file="$1"
+  local native=""
+  native="$(adb_cmd shell pidof sucre-snortd libsucre_snortd.so vpp hev-socks5-tunnel 2>/dev/null \
+    | tr -d '\r' || true)"
+  printf '%s\n' "$native" >"$out_file"
+  [[ -z "$native" ]]
+}
+
+section "matrix_contract"
+require_adb_device
+kv "matrix" "SAKAMOTO-69-product-vpn-runtime"
+kv "resultDir" "${RESULT_DIR#${repo_root}/}"
+kv "adbWrapper" "./dev/adb"
+kv "device" "$(adb_target_desc)"
+kv "package" "$PACKAGE"
+kv "activity" "$ACTIVITY"
+kv "productRuntimeServiceVpnAdapter" "claimed"
+kv "POC_ONLY" "false"
+kv "s69Done" "not_claimed"
+
+section "build_install"
+if [[ "$S69_PRODUCT_BUILD_APK" == "1" ]]; then
+  kv "build.command" "bash app/android-runtime/scripts/build-debug-apk.sh"
+  (cd "$repo_root" && bash app/android-runtime/scripts/build-debug-apk.sh) \
+    >"${RESULT_DIR}/build-debug-apk.log" 2>&1
+  kv "build.result" "PASS"
+fi
+[[ -f "$APK" ]] || {
+  kv "apk.exists" "false"
+  echo "missing APK: $APK" >&2
+  exit 1
+}
+kv "apk" "${APK#${repo_root}/}"
+kv "apk.sha256" "$(sha256sum "$APK" | awk '{print $1}')"
+if [[ "$S69_PRODUCT_INSTALL_APK" == "1" ]]; then
+  adb_cmd install -r "$APK" >"${RESULT_DIR}/install.log" 2>&1
+  kv "install.result" "PASS"
+fi
+
+section "start_vpn"
+adb_cmd shell am force-stop "$PACKAGE" >/dev/null
+adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStart true --es runtimeProfile vpn \
+  >"${RESULT_DIR}/start.intent.log" 2>&1
+state="$(wait_for_snapshot_field state running "${RESULT_DIR}/snapshot.running" 45)" || {
+  kv "start.result" "FAIL"
+  cat "${RESULT_DIR}/snapshot.running" >&2
+  exit 1
+}
+printf '%s\n' "$state" | grep -Fxq "profile=vpn"
+printf '%s\n' "$state" | grep -Fxq "health=ok"
+printf '%s\n' "$state" | grep -Fxq "coreHealth=ok"
+printf '%s\n' "$state" | grep -Fxq "adapterReadiness=vpn-tun-hev"
+kv "start.result" "PASS"
+kv "snapshot.state" "running"
+kv "snapshot.profile" "vpn"
+kv "snapshot.adapterReadiness" "vpn-tun-hev"
+kv "snapshot.pid" "$(printf '%s\n' "$state" | snapshot_value pid)"
+
+section "android_vpn_network"
+adb_cmd shell ip link show tun0 >"${RESULT_DIR}/tun0.running" 2>&1
+kv "tun0.running" "PASS"
+adb_cmd shell dumpsys connectivity >"${RESULT_DIR}/connectivity.running" 2>&1
+grep -q "VPN:${PACKAGE}" "${RESULT_DIR}/connectivity.running"
+grep -q "InterfaceName: tun0" "${RESULT_DIR}/connectivity.running"
+kv "connectivity.vpnNetwork" "PASS"
+
+section "runtime_log"
+adb_cmd shell run-as "$PACKAGE" cat "$LOG_PATH" >"${RESULT_DIR}/runtime-service.log" 2>/dev/null
+grep -q "vpn_tun_control_ready=ok" "${RESULT_DIR}/runtime-service.log"
+grep -q "vpn_tun_control_attach=ok adapter=vpn-tun-hev" "${RESULT_DIR}/runtime-service.log"
+grep -q "vpn_hev_transport=ok" "${RESULT_DIR}/runtime-service.log"
+grep -q "runtime_state=running profile=vpn health=ok" "${RESULT_DIR}/runtime-service.log"
+kv "runtimeLog.vpnStartup" "PASS"
+
+section "control_socket"
+adb_cmd forward "tcp:${S69_PRODUCT_FORWARD_PORT}" "localabstract:${CONTROL_SOCKET}" \
+  >"${RESULT_DIR}/adb-forward.log" 2>&1
+python3 - "$S69_PRODUCT_FORWARD_PORT" "$RESULT_DIR" <<'PY'
+import json
+import pathlib
+import socket
+import sys
+
+port = int(sys.argv[1])
+result_dir = pathlib.Path(sys.argv[2])
+
+def frame(obj):
+    payload = json.dumps(obj, separators=(",", ":")).encode()
+    return str(len(payload)).encode() + b":" + payload + b","
+
+def read_netstring(sock):
+    digits = bytearray()
+    while True:
+        byte = sock.recv(1)
+        if not byte:
+            raise RuntimeError("eof before length")
+        if byte == b":":
+            break
+        digits += byte
+    length = int(digits)
+    payload = bytearray()
+    while len(payload) < length:
+        chunk = sock.recv(length - len(payload))
+        if not chunk:
+            raise RuntimeError("eof in payload")
+        payload += chunk
+    if sock.recv(1) != b",":
+        raise RuntimeError("missing netstring comma")
+    return json.loads(payload.decode())
+
+with socket.create_connection(("127.0.0.1", port), timeout=2.5) as sock:
+    responses = {}
+    for name, request in {
+        "hello": {"id": 1, "cmd": "HELLO", "args": {}},
+        "vpn_tun_status": {"id": 2, "cmd": "VPN_TUN.STATUS", "args": {}},
+        "policy_status": {"id": 3, "cmd": "POLICY.STATUS", "args": {}},
+    }.items():
+        sock.sendall(frame(request))
+        response = read_netstring(sock)
+        responses[name] = response
+        (result_dir / f"{name}.json").write_text(
+            json.dumps(response, indent=2, sort_keys=True) + "\n")
+
+hello = responses["hello"]
+assert hello["ok"] is True
+capabilities = set(hello["result"]["capabilities"])
+for capability in [
+    "snort10-base",
+    "packet-adapter-vpn-tun-hev",
+    "vpn-tun-fd-handoff",
+    "vpn-tun-transport-fd-handoff",
+    "vpn-tun-runtime-counters",
+    "packet-policy-control",
+]:
+    assert capability in capabilities, capability
+
+status = responses["vpn_tun_status"]
+assert status["ok"] is True
+counters = status["result"]
+assert counters["packetsSeen"] > 0
+assert counters["forwardedPackets"] > 0
+assert counters["uidUnknownFallbackPackets"] > 0
+
+policy = responses["policy_status"]
+assert policy["ok"] is True
+PY
+kv "control.HELLO" "PASS"
+kv "control.VPN_TUN.STATUS" "PASS"
+kv "control.POLICY.STATUS" "PASS"
+
+section "cleanup"
+adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true >"${RESULT_DIR}/stop.intent.log" 2>&1
+stopped="$(wait_for_snapshot_field state stopped "${RESULT_DIR}/snapshot.stopped" 30)" || {
+  kv "cleanup.result" "FAIL"
+  cat "${RESULT_DIR}/snapshot.stopped" >&2
+  exit 1
+}
+printf '%s\n' "$stopped" | grep -Fxq "mayBeActive=false"
+printf '%s\n' "$stopped" | grep -Fxq "adapterReadiness=unavailable"
+assert_no_native_residue "${RESULT_DIR}/native-residue.after-stop"
+if adb_cmd shell ip link show tun0 >"${RESULT_DIR}/tun0.after-stop" 2>&1; then
+  echo "tun0 remained after stop" >&2
+  exit 1
+fi
+adb_cmd shell dumpsys connectivity >"${RESULT_DIR}/connectivity.after-stop" 2>&1
+if grep -Eq "VPN:${PACKAGE}|InterfaceName: tun0" "${RESULT_DIR}/connectivity.after-stop"; then
+  echo "VPN/tun0 connectivity residue remained after stop" >&2
+  exit 1
+fi
+kv "cleanup.result" "PASS"
+
+section "matrix_result"
+kv "matrix.result" "PASS"
+kv "matrix.s69Done" "not_claimed"
