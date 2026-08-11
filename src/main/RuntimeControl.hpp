@@ -9,6 +9,7 @@
 #include <FlowSteering.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -58,6 +59,9 @@ struct VpnTunRuntimeCounters {
     std::uint64_t directPackets = 0;
     std::uint64_t ownerGuardPasses = 0;
     std::uint64_t ownerGuardMismatches = 0;
+    std::uint64_t attributionUpdates = 0;
+    std::uint64_t attributionMisses = 0;
+    std::uint64_t attributionResolutions = 0;
     SnortDatapath::Policy::PacketPolicyDropActivityCounters policyDropActivity;
     std::uint32_t lastObservedLinuxUid = 0;
     bool lastObservedUidKnown = false;
@@ -115,8 +119,20 @@ public:
     [[nodiscard]] virtual bool vpnTunRuntimeCountersReady() const noexcept {
         return false;
     }
+    [[nodiscard]] virtual bool vpnTunAttributionControlReady() const noexcept {
+        return false;
+    }
     [[nodiscard]] virtual VpnTunRuntimeCounters vpnTunRuntimeCounters() const noexcept {
         return {};
+    }
+    [[nodiscard]] virtual std::optional<SnortDatapath::Flow::FlowAttributionObservation>
+    applyResolvedVpnTunAttribution(const SnortDatapath::Flow::PacketFacts &facts,
+                                   std::uint32_t linuxUid,
+                                   bool uidKnown) noexcept {
+        static_cast<void>(facts);
+        static_cast<void>(linuxUid);
+        static_cast<void>(uidKnown);
+        return std::nullopt;
     }
     [[nodiscard]] virtual SnortDatapath::Policy::PacketPolicySnapshotStatus
     packetPolicyStatus() const noexcept {

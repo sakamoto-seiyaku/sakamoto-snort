@@ -617,6 +617,78 @@ TEST(ControlServerContract, RealVpnTunRuntimeControlRelayForwardsAllowedOutbound
     EXPECT_STREQ(status["result"]["lastObservedResult"].GetString(), "FlowForwarded");
 }
 
+TEST(ControlServerContract, RealVpnTunRuntimeLateAttributionReevaluatesNextUnknownPacket) {
+    Tun::VpnTunFdRuntime runtime{-1, true};
+    ASSERT_TRUE(runtime.start());
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document hello = harness.call(58, "HELLO");
+    ASSERT_TRUE(hello["ok"].GetBool());
+    const auto capabilities = capabilityStrings(hello["result"]["capabilities"]);
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
+                        "vpn-tun-attribution-control"),
+              capabilities.end());
+
+    const rapidjson::Document policy = harness.call(
+        59, "POLICY.APPLY",
+        R"({"revision":5600,"subjects":[{"linuxUid":20002,"networkGate":{},"l4Rules":[{"ruleId":5601,"reasonId":56,"priority":0,"order":0,"action":"drop","match":{"family":"ipv4","direction":"output","ipProtocol":6,"destinationPorts":{"first":443,"last":443}}}]}]})");
+    ASSERT_TRUE(policy["ok"].GetBool());
+
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+    UniqueFd tunRuntime{tunFds[0]};
+    UniqueFd tunPeer{tunFds[1]};
+    UniqueFd transportRuntime{transportFds[0]};
+    UniqueFd transportPeer{transportFds[1]};
+
+    ASSERT_TRUE(harness.callWithFd(
+                    60, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", tunRuntime.get())["ok"]
+                    .GetBool());
+    tunRuntime.reset();
+    ASSERT_TRUE(harness.callWithFd(
+                    61, "VPN_TRANSPORT.ATTACH", "{}", transportRuntime.get())["ok"]
+                    .GetBool());
+    transportRuntime.reset();
+
+    for (int attempt = 0; attempt < 50 && !runtime.packetAdapterReady(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    ASSERT_TRUE(runtime.packetAdapterReady());
+
+    const auto packet = ipv4TcpPacket();
+    ASSERT_TRUE(writePacket(tunPeer.get(), std::span<const std::uint8_t>{packet}));
+    const auto firstTransported = readPacketFromFdWithDeadline(transportPeer.get());
+    ASSERT_EQ(firstTransported.size(), packet.size());
+
+    const rapidjson::Document attribution = harness.call(
+        62, "VPN_TUN.ATTRIBUTION.APPLY",
+        R"({"uidKnown":false,"networkContext":0,"family":"ipv4","direction":"output","ipProtocol":6,"sourceIp":"10.0.0.1","destinationIp":"192.0.2.1","sourcePort":40000,"destinationPort":443,"portsAvailable":true,"resolvedLinuxUid":20002})");
+    ASSERT_TRUE(attribution["ok"].GetBool());
+    EXPECT_TRUE(attribution["result"]["found"].GetBool());
+    EXPECT_TRUE(attribution["result"]["updated"].GetBool());
+    EXPECT_FALSE(attribution["result"]["previousUidKnown"].GetBool());
+    EXPECT_EQ(attribution["result"]["currentLinuxUid"].GetUint(), 20002U);
+    EXPECT_TRUE(attribution["result"]["currentUidKnown"].GetBool());
+
+    ASSERT_TRUE(writePacket(tunPeer.get(), std::span<const std::uint8_t>{packet}));
+    std::uint32_t statusId = 63;
+    const rapidjson::Document status = waitForVpnTunPacketsSeen(harness, 2, statusId);
+
+    ASSERT_TRUE(status["ok"].GetBool());
+    EXPECT_EQ(status["result"]["forwardedPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["droppedPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["uidUnknownFallbackPackets"].GetUint64(), 2U);
+    EXPECT_EQ(status["result"]["attributionUpdates"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["attributionMisses"].GetUint64(), 0U);
+    EXPECT_EQ(status["result"]["attributionResolutions"].GetUint64(), 1U);
+    EXPECT_STREQ(status["result"]["lastObservedResult"].GetString(), "FlowDropped");
+    EXPECT_TRUE(readPacketFromFdWithDeadline(
+                    transportPeer.get(), std::chrono::milliseconds{100})
+                    .empty());
+}
+
 TEST(ControlServerContract, RealVpnTunRuntimeControlGateDropBlocksOutboundRelay) {
     Tun::VpnTunFdRuntime runtime{-1, true};
     ASSERT_TRUE(runtime.start());
@@ -1178,6 +1250,18 @@ TEST(ControlServerContract, VpnTunStatusIsUnsupportedWithoutRuntimeCapability) {
     EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
 }
 
+TEST(ControlServerContract, VpnTunAttributionApplyIsUnsupportedWithoutRuntimeCapability) {
+    FakeRuntimeControl runtime;
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(
+        50, "VPN_TUN.ATTRIBUTION.APPLY",
+        R"({"uidKnown":false,"networkContext":0,"family":"ipv4","direction":"output","ipProtocol":6,"sourcePort":40000,"destinationPort":443,"portsAvailable":true,"resolvedLinuxUid":20002})");
+
+    ASSERT_FALSE(response["ok"].GetBool());
+    EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
+}
+
 TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     FakeRuntimeControl runtime;
     runtime.vpnTunCountersReady = true;
@@ -1200,6 +1284,9 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     runtime.vpnTunCounters.directPackets = 198;
     runtime.vpnTunCounters.ownerGuardPasses = 198;
     runtime.vpnTunCounters.ownerGuardMismatches = 0;
+    runtime.vpnTunCounters.attributionUpdates = 11;
+    runtime.vpnTunCounters.attributionMisses = 12;
+    runtime.vpnTunCounters.attributionResolutions = 13;
     runtime.vpnTunCounters.lastObservedLinuxUid = 12546;
     runtime.vpnTunCounters.lastObservedUidKnown = true;
     runtime.vpnTunCounters.lastObservedNetworkContext = 7;
@@ -1242,6 +1329,9 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["directPackets"].GetUint64(), 198U);
     EXPECT_EQ(result["ownerGuardPasses"].GetUint64(), 198U);
     EXPECT_EQ(result["ownerGuardMismatches"].GetUint64(), 0U);
+    EXPECT_EQ(result["attributionUpdates"].GetUint64(), 11U);
+    EXPECT_EQ(result["attributionMisses"].GetUint64(), 12U);
+    EXPECT_EQ(result["attributionResolutions"].GetUint64(), 13U);
     EXPECT_EQ(result["lastObservedLinuxUid"].GetUint(), 12546U);
     EXPECT_TRUE(result["lastObservedUidKnown"].GetBool());
     EXPECT_EQ(result["lastObservedNetworkContext"].GetUint(), 7U);

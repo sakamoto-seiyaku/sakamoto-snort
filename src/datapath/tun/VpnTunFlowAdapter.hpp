@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -89,6 +90,9 @@ struct VpnTunFlowAdapterCounters final {
     std::uint64_t ownerGuardMismatches = 0;
     std::uint64_t correctiveHandoffs = 0;
     std::uint64_t secondMismatchDrops = 0;
+    std::uint64_t attributionUpdates = 0;
+    std::uint64_t attributionMisses = 0;
+    std::uint64_t attributionResolutions = 0;
     Policy::PacketPolicyDropActivityCounters policyDropActivity;
     std::uint32_t lastObservedLinuxUid = 0;
     std::uint32_t lastObservedNetworkContext = 0;
@@ -123,6 +127,10 @@ public:
         VpnTunPacketMetadata metadata = {}) noexcept;
     void expireFragments(std::uint64_t testAdvanceMilliseconds = 0) noexcept;
     void recordTransportOutcome(VpnTunTransportOutcome outcome) noexcept;
+    [[nodiscard]] std::optional<Flow::FlowAttributionObservation>
+    applyResolvedAttribution(const Flow::PacketFacts &facts,
+                             std::uint32_t linuxUid,
+                             bool uidKnown = true) noexcept;
 
     [[nodiscard]] VpnTunFlowAdapterCounters counters() const noexcept;
     [[nodiscard]] std::uint32_t maxL3Bytes() const noexcept {

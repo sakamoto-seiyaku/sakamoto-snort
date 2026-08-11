@@ -225,6 +225,15 @@ void VpnTunFlowAdapter::recordTransportOutcome(
     }
 }
 
+std::optional<Flow::FlowAttributionObservation>
+VpnTunFlowAdapter::applyResolvedAttribution(
+    const Flow::PacketFacts &facts,
+    const std::uint32_t linuxUid,
+    const bool uidKnown) noexcept {
+    std::lock_guard lock(mutex_);
+    return steering_.flowTable().applyResolvedAttribution(facts, linuxUid, uidKnown);
+}
+
 std::uint64_t VpnTunFlowAdapter::monotonicFragmentNow() noexcept {
     const auto elapsed = std::chrono::steady_clock::now() - fragmentEpoch_;
     const auto wallMilliseconds = static_cast<std::uint64_t>(
@@ -258,6 +267,10 @@ VpnTunFlowAdapterCounters VpnTunFlowAdapter::counters() const noexcept {
     result.ownerGuardMismatches = guardCounters.mismatches;
     result.correctiveHandoffs = guardCounters.correctiveHandoffs;
     result.secondMismatchDrops = guardCounters.secondMismatchDrops;
+    const auto &flowCounters = steering_.flowTable().counters();
+    result.attributionUpdates = flowCounters.attributionUpdates;
+    result.attributionMisses = flowCounters.attributionMisses;
+    result.attributionResolutions = flowCounters.attributionResolutions;
     return result;
 }
 

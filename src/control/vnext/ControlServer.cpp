@@ -195,6 +195,9 @@ rapidjson::Document makeHelloResult(const SnortRuntime::BaseRuntimeControl &runt
     if (runtime.packetPolicyControlReady()) {
         capabilities.PushBack("packet-policy-control", alloc);
     }
+    if (runtime.vpnTunAttributionControlReady()) {
+        capabilities.PushBack("vpn-tun-attribution-control", alloc);
+    }
     result.AddMember("capabilities", capabilities, alloc);
 
     return result;
@@ -311,6 +314,9 @@ rapidjson::Document makeVpnTunStatusResult(
     result.AddMember("directPackets", counters.directPackets, alloc);
     result.AddMember("ownerGuardPasses", counters.ownerGuardPasses, alloc);
     result.AddMember("ownerGuardMismatches", counters.ownerGuardMismatches, alloc);
+    result.AddMember("attributionUpdates", counters.attributionUpdates, alloc);
+    result.AddMember("attributionMisses", counters.attributionMisses, alloc);
+    result.AddMember("attributionResolutions", counters.attributionResolutions, alloc);
     result.AddMember("policyDropActivity",
                      makePolicyDropActivityResult(counters.policyDropActivity, alloc),
                      alloc);
@@ -930,6 +936,43 @@ bool parsePacketFacts(const rapidjson::Value &args,
             || !facts.portsAvailable);
 }
 
+bool parseVpnTunAttributionApplyArgs(
+    const rapidjson::Value &args,
+    SnortDatapath::Flow::PacketFacts &facts,
+    std::uint32_t &resolvedLinuxUid,
+    bool &resolvedUidKnown,
+    std::string &error) {
+    if (const auto err = rejectUnknown(
+            args, {"linuxUid", "uidKnown", "networkContext", "family", "direction",
+                   "ipProtocol", "sourceIp", "destinationIp", "sourcePort",
+                   "destinationPort", "portsAvailable", "resolvedLinuxUid",
+                   "resolvedUidKnown"});
+        err.has_value()) {
+        error = *err;
+        return false;
+    }
+
+    if (!readUint32(args, "resolvedLinuxUid", resolvedLinuxUid, error)
+        || !readBool(args, "resolvedUidKnown", resolvedUidKnown, error, false)) {
+        return false;
+    }
+
+    rapidjson::Document packetArgs(rapidjson::kObjectType);
+    auto &alloc = packetArgs.GetAllocator();
+    for (auto it = args.MemberBegin(); it != args.MemberEnd(); ++it) {
+        const std::string_view key(it->name.GetString(), it->name.GetStringLength());
+        if (key == "resolvedLinuxUid" || key == "resolvedUidKnown") {
+            continue;
+        }
+        rapidjson::Value name;
+        name.SetString(it->name.GetString(), it->name.GetStringLength(), alloc);
+        rapidjson::Value value;
+        value.CopyFrom(it->value, alloc);
+        packetArgs.AddMember(name, value, alloc);
+    }
+    return parsePacketFacts(packetArgs, facts, error);
+}
+
 const char *verdictName(const SnortDatapath::Policy::PacketPolicyVerdict verdict) noexcept {
     switch (verdict) {
     case SnortDatapath::Policy::PacketPolicyVerdict::PASS_NEXT:
@@ -978,6 +1021,20 @@ rapidjson::Document makeVpnTransportAttachResult() {
     auto &alloc = result.GetAllocator();
     result.AddMember("adapter", "vpn-tun-hev", alloc);
     result.AddMember("transportFdAttached", true, alloc);
+    return result;
+}
+
+rapidjson::Document makeFlowAttributionResult(
+    const SnortDatapath::Flow::FlowAttributionObservation &observation) {
+    rapidjson::Document result(rapidjson::kObjectType);
+    auto &alloc = result.GetAllocator();
+    result.AddMember("found", observation.found, alloc);
+    result.AddMember("updated", observation.updated, alloc);
+    result.AddMember("previousLinuxUid", observation.previousLinuxUid, alloc);
+    result.AddMember("previousUidKnown", observation.previousUidKnown, alloc);
+    result.AddMember("currentLinuxUid", observation.currentLinuxUid, alloc);
+    result.AddMember("currentUidKnown", observation.currentUidKnown, alloc);
+    result.AddMember("attributionUpdates", observation.attributionUpdates, alloc);
     return result;
 }
 
@@ -1035,6 +1092,34 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
             return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", *err);
         }
         rapidjson::Document result = makeVpnTunStatusResult(runtime.vpnTunRuntimeCounters());
+        return ControlVNext::makeOkResponse(request.id, &result);
+    }
+
+    if (request.cmd == "VPN_TUN.ATTRIBUTION.APPLY") {
+        if (!runtime.vpnTunAttributionControlReady()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "UNSUPPORTED_COMMAND",
+                "VPN/TUN attribution control unavailable");
+        }
+        SnortDatapath::Flow::PacketFacts facts;
+        std::uint32_t resolvedLinuxUid = 0;
+        bool resolvedUidKnown = true;
+        std::string error;
+        if (!parseVpnTunAttributionApplyArgs(
+                *request.args, facts, resolvedLinuxUid, resolvedUidKnown, error)) {
+            if (error.empty()) {
+                error = "invalid VPN/TUN attribution apply facts";
+            }
+            return ControlVNext::makeErrorResponse(request.id, "INVALID_ARGUMENT", error);
+        }
+        const auto observation = runtime.applyResolvedVpnTunAttribution(
+            facts, resolvedLinuxUid, resolvedUidKnown);
+        if (!observation.has_value()) {
+            return ControlVNext::makeErrorResponse(
+                request.id, "INVALID_ARGUMENT",
+                "VPN_TUN.ATTRIBUTION.APPLY requires canonical packet facts");
+        }
+        rapidjson::Document result = makeFlowAttributionResult(*observation);
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 

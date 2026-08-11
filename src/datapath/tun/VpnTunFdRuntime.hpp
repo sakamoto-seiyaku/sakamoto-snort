@@ -115,6 +115,10 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool vpnTunAttributionControlReady() const noexcept override {
+        return true;
+    }
+
     [[nodiscard]] SnortRuntime::VpnTunRuntimeCounters
     vpnTunRuntimeCounters() const noexcept override {
         std::lock_guard<std::mutex> lock(ioMutex_);
@@ -139,6 +143,9 @@ public:
             .directPackets = counters.directPackets,
             .ownerGuardPasses = counters.ownerGuardPasses,
             .ownerGuardMismatches = counters.ownerGuardMismatches,
+            .attributionUpdates = counters.attributionUpdates,
+            .attributionMisses = counters.attributionMisses,
+            .attributionResolutions = counters.attributionResolutions,
             .policyDropActivity = counters.policyDropActivity,
             .lastObservedLinuxUid = counters.lastObservedLinuxUid,
             .lastObservedUidKnown = counters.lastObservedUidKnown,
@@ -148,6 +155,14 @@ public:
                 vpnTunPacketDirectionName(counters.lastObservedDirection)},
             .lastObservedResult = counters.lastObservedResult,
         };
+    }
+
+    [[nodiscard]] std::optional<Flow::FlowAttributionObservation>
+    applyResolvedVpnTunAttribution(const Flow::PacketFacts &facts,
+                                   const std::uint32_t linuxUid,
+                                   const bool uidKnown) noexcept override {
+        std::lock_guard<std::mutex> lock(ioMutex_);
+        return flowAdapter_.applyResolvedAttribution(facts, linuxUid, uidKnown);
     }
 
     [[nodiscard]] Policy::PacketPolicySnapshotStatus
