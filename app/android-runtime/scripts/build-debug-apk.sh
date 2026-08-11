@@ -84,10 +84,26 @@ command -v "$zipalign_bin" >/dev/null || die "missing zipalign: $zipalign_bin"
 build_dir="$app_dir/build"
 lock_dir="$repo_root/build-output/android-runtime-locks"
 mkdir -p "$lock_dir"
-exec 9>"$lock_dir/build-debug-apk.lock"
+build_variant="${ANDROID_RUNTIME_BUILD_VARIANT:-debug}"
+case "$build_variant" in
+  debug|release-candidate)
+    ;;
+  *)
+    die "unsupported Android runtime build variant: $build_variant"
+    ;;
+esac
+exec 9>"$lock_dir/build-${build_variant}-apk.lock"
 flock 9
 signing_dir="${ANDROID_RUNTIME_SIGNING_DIR:-$repo_root/build-output/android-runtime-signing}"
-signing_keystore="$signing_dir/debug.keystore"
+signing_keystore="${ANDROID_RUNTIME_SIGNING_KEYSTORE:-$signing_dir/debug.keystore}"
+signing_alias="${ANDROID_RUNTIME_SIGNING_ALIAS:-androiddebugkey}"
+signing_dname="${ANDROID_RUNTIME_SIGNING_DNAME:-CN=Android Debug,O=sakamoto,C=US}"
+apk_version_name_default="0.1-runtime-debug"
+apk_output_name="sakamoto-runtime-debug.apk"
+if [[ "$build_variant" == "release-candidate" ]]; then
+  apk_version_name_default="0.1-runtime-release-candidate"
+  apk_output_name="sakamoto-runtime-release-candidate.apk"
+fi
 classes_dir="$build_dir/classes"
 dex_dir="$build_dir/dex"
 dex_work_dir="$build_dir/dex.$$"
@@ -272,23 +288,36 @@ mv "$dex_work_dir" "$dex_dir"
 base_apk="$intermediates/base.apk"
 unsigned_apk="$intermediates/unsigned.apk"
 aligned_apk="$intermediates/aligned.apk"
-apk="$outputs/sakamoto-runtime-debug.apk"
-"$aapt2" link -o "$base_apk" -I "$android_jar" \
-  --manifest "$app_dir/src/main/AndroidManifest.xml" --min-sdk-version 31 \
+apk="$outputs/$apk_output_name"
+manifest_for_build="$intermediates/AndroidManifest.xml"
+if [[ "$build_variant" == "release-candidate" ]]; then
+  sed 's/android:debuggable="true"/android:debuggable="false"/' \
+    "$app_dir/src/main/AndroidManifest.xml" >"$manifest_for_build"
+else
+  cp "$app_dir/src/main/AndroidManifest.xml" "$manifest_for_build"
+fi
+aapt_args=(
+  link -o "$base_apk" -I "$android_jar"
+  --manifest "$manifest_for_build" --min-sdk-version 31
   --target-sdk-version 36 --version-code "${APK_VERSION_CODE:-1}" \
-  --version-name "${APK_VERSION_NAME:-0.1-runtime-debug}" --debug-mode
+  --version-name "${APK_VERSION_NAME:-$apk_version_name_default}"
+)
+if [[ "$build_variant" == "debug" ]]; then
+  aapt_args+=(--debug-mode)
+fi
+"$aapt2" "${aapt_args[@]}"
 cp "$base_apk" "$unsigned_apk"
 (cd "$dex_dir" && zip -q -r "$unsigned_apk" classes.dex)
 (cd "$build_dir/jni" && zip -q -r "$unsigned_apk" lib)
 (cd "$build_dir" && zip -q -r "$unsigned_apk" assets)
 if [[ ! -f "$signing_keystore" ]]; then
   keytool -genkeypair -keystore "$signing_keystore" -storepass android \
-    -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 \
-    -validity 10000 -dname "CN=Android Debug,O=sakamoto,C=US" >/dev/null
+    -keypass android -alias "$signing_alias" -keyalg RSA -keysize 2048 \
+    -validity 10000 -dname "$signing_dname" >/dev/null
 fi
 "$zipalign_bin" -f -p 4 "$unsigned_apk" "$aligned_apk"
 java -jar "$apksigner_jar" sign --ks "$signing_keystore" \
-  --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey \
+  --ks-pass pass:android --key-pass pass:android --ks-key-alias "$signing_alias" \
   --out "$apk" "$aligned_apk"
 java -jar "$apksigner_jar" verify --print-certs "$apk" >/dev/null
 echo "ok: $apk"

@@ -19,7 +19,21 @@ ACTIVITY="${ACTIVITY:-${PACKAGE}/.DebugControlActivity}"
 RESULTS_ROOT="${RESULTS_ROOT:-${repo_root}/build-output/s59-release-budget-probe}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 RESULT_DIR="${RESULT_DIR:-${RESULTS_ROOT}/${RUN_ID}}"
-APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk}"
+S59_APK_VARIANT="${S59_APK_VARIANT:-debug}"
+case "$S59_APK_VARIANT" in
+  debug)
+    APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk}"
+    S59_BUILD_SCRIPT="${S59_BUILD_SCRIPT:-app/android-runtime/scripts/build-debug-apk.sh}"
+    ;;
+  release-candidate)
+    APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-release-candidate.apk}"
+    S59_BUILD_SCRIPT="${S59_BUILD_SCRIPT:-app/android-runtime/scripts/build-release-candidate-apk.sh}"
+    ;;
+  *)
+    echo "unsupported S59_APK_VARIANT: $S59_APK_VARIANT" >&2
+    exit 1
+    ;;
+esac
 S59_BUILD_APK="${S59_BUILD_APK:-1}"
 S59_INSTALL_APK="${S59_INSTALL_APK:-1}"
 S59_PROFILE_LIST="${S59_PROFILE_LIST:-root vpn}"
@@ -57,8 +71,27 @@ now_ms() {
   date +%s%3N
 }
 
+app_file_path() {
+  printf '/data/user/0/%s/%s\n' "$PACKAGE" "$1"
+}
+
+app_file_cat() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$relative_path" 2>/dev/null \
+    || adb_su "cat $(shell_single_quote "$(app_file_path "$relative_path")") 2>/dev/null" \
+    || true
+}
+
+app_file_rm() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" rm -f "$relative_path" >/dev/null 2>&1 \
+    || adb_su "rm -f $(shell_single_quote "$(app_file_path "$relative_path")")" \
+      >/dev/null 2>&1 \
+    || true
+}
+
 read_snapshot() {
-  adb_cmd shell run-as "$PACKAGE" cat "$STATE_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$STATE_PATH" | tr -d '\r' || true
 }
 
 snapshot_value_from() {
@@ -339,11 +372,11 @@ PY
 }
 
 read_probe_result() {
-  adb_cmd shell run-as "$PACKAGE" cat "$PROBE_RESULT_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$PROBE_RESULT_PATH" | tr -d '\r' || true
 }
 
 read_download_result() {
-  adb_cmd shell run-as "$PACKAGE" cat "$DOWNLOAD_RESULT_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$DOWNLOAD_RESULT_PATH" | tr -d '\r' || true
 }
 
 run_workflow_latency_probes() {
@@ -355,7 +388,7 @@ run_workflow_latency_probes() {
   : >"$result_file"
   local i start_ms end_ms elapsed result
   for i in $(seq 1 "$S59_PROBE_COUNT"); do
-    adb_cmd shell run-as "$PACKAGE" rm -f "$PROBE_RESULT_PATH" >/dev/null 2>&1 || true
+    app_file_rm "$PROBE_RESULT_PATH"
     start_ms="$(now_ms)"
     adb_cmd shell am start -n "$ACTIVITY" \
       --ez debugTraffic true \
@@ -406,7 +439,7 @@ run_tcp_transaction_rate() {
   : >"$result_file"
   start_ms="$(now_ms)"
   for i in $(seq 1 "$S59_THROUGHPUT_TXN_COUNT"); do
-    adb_cmd shell run-as "$PACKAGE" rm -f "$PROBE_RESULT_PATH" >/dev/null 2>&1 || true
+    app_file_rm "$PROBE_RESULT_PATH"
     adb_cmd shell am start -n "$ACTIVITY" \
       --ez debugTraffic true \
       --es debugTrafficHost "$S59_TRAFFIC_HOST" \
@@ -457,7 +490,7 @@ run_nominal_throughput() {
   local start_ms end_ms elapsed_ms ticks0 ticks1 rss result txn_result
   ticks0="$(proc_ticks "$pid")"
   start_ms="$(now_ms)"
-  adb_cmd shell run-as "$PACKAGE" rm -f "$DOWNLOAD_RESULT_PATH" >/dev/null 2>&1 || true
+  app_file_rm "$DOWNLOAD_RESULT_PATH"
   adb_cmd shell am start -n "$ACTIVITY" \
     --ez debugDownload true \
     --es debugDownloadUrl "$S59_DOWNLOAD_URL" \
@@ -586,7 +619,12 @@ kv "adbWrapper" "./dev/adb"
 kv "device" "$(adb_target_desc)"
 kv "package" "$PACKAGE"
 kv "activity" "$ACTIVITY"
-kv "releaseStatus" "debug_apk_budget_probe_only"
+kv "apkVariant" "$S59_APK_VARIANT"
+if [[ "$S59_APK_VARIANT" == "release-candidate" ]]; then
+  kv "releaseStatus" "release_candidate_non_debug_not_final_signing"
+else
+  kv "releaseStatus" "debug_apk_budget_probe_only"
+fi
 kv "workflowLatency" "p50/p95/p99_ms"
 kv "nominalThroughput" "app_debug_download_mbps"
 kv "cpuRss" "idle_and_download_active_proc_ticks_rss"
@@ -604,9 +642,9 @@ kv "device.abi" "$(adb_cmd shell getprop ro.product.cpu.abi | tr -d '\r')"
 
 section "build_install"
 if [[ "$S59_BUILD_APK" == "1" ]]; then
-  kv "build.command" "bash app/android-runtime/scripts/build-debug-apk.sh"
-  (cd "$repo_root" && bash app/android-runtime/scripts/build-debug-apk.sh) \
-    >"${RESULT_DIR}/build-debug-apk.log" 2>&1
+  kv "build.command" "bash $S59_BUILD_SCRIPT"
+  (cd "$repo_root" && bash "$S59_BUILD_SCRIPT") \
+    >"${RESULT_DIR}/build-apk.log" 2>&1
   kv "build.result" "PASS"
 fi
 [[ -f "$APK" ]] || {
@@ -627,4 +665,8 @@ done
 
 section "matrix_result"
 kv "matrix.result" "PASS"
-kv "matrix.s59ReleaseBudgetProbe" "claimed_debug_only"
+if [[ "$S59_APK_VARIANT" == "release-candidate" ]]; then
+  kv "matrix.s59ReleaseBudgetProbe" "claimed_release_candidate_non_debug_not_final_signing"
+else
+  kv "matrix.s59ReleaseBudgetProbe" "claimed_debug_only"
+fi

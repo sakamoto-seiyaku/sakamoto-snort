@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_script="$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
+release_candidate_build_script="$repo_root/app/android-runtime/scripts/build-release-candidate-apk.sh"
 default_stage="$repo_root/build-output/android-vpp-runtime/stage"
 valid_stage="${VPP_RUNTIME_VALID_STAGE_DIR:-$default_stage}"
 if [[ ! -f "$valid_stage/bin/vpp" || ! -f "$valid_stage/bin/vppctl" ]]; then
@@ -51,9 +52,13 @@ VPP_RUNTIME_STAGE_DIR="$valid_stage" "$build_script"
 
 apk="$repo_root/app/android-runtime/build/outputs/sakamoto-runtime-debug.apk"
 apksigner_jar="${APKSIGNER_JAR:-/home/js/android/lineage/prebuilts/sdk/tools/linux/lib/apksigner.jar}"
+aapt2="${AAPT2:-/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/aapt2}"
 apk_cert_digest() {
   java -jar "$apksigner_jar" verify --print-certs "$1" \
     | awk -F': ' '/certificate SHA-256 digest/{gsub(":", "", $2); print tolower($2); exit}'
+}
+apk_manifest_xmltree() {
+  "$aapt2" dump xmltree --file AndroidManifest.xml "$1"
 }
 cert_before="$(apk_cert_digest "$apk")"
 [[ "$cert_before" =~ ^[0-9a-f]{64}$ ]] \
@@ -134,5 +139,22 @@ fi
 cert_after="$(apk_cert_digest "$build_dir/outputs/sakamoto-runtime-debug.apk")"
 [[ "$cert_after" == "$cert_before" ]] \
   || { echo "clean-build APK signing certificate changed" >&2; exit 1; }
+
+[[ -f "$release_candidate_build_script" ]] \
+  || { echo "release-candidate APK build wrapper is missing" >&2; exit 1; }
+grep -q 'ANDROID_RUNTIME_BUILD_VARIANT=release-candidate' "$release_candidate_build_script"
+VPP_RUNTIME_STAGE_DIR="$valid_stage" "$release_candidate_build_script" \
+  >"$tmp_dir/release-candidate-build.log" 2>&1
+release_candidate_apk="$build_dir/outputs/sakamoto-runtime-release-candidate.apk"
+[[ -f "$release_candidate_apk" ]] \
+  || { echo "release-candidate build did not produce an APK" >&2; exit 1; }
+release_candidate_cert="$(apk_cert_digest "$release_candidate_apk")"
+[[ "$release_candidate_cert" == "$cert_before" ]] \
+  || { echo "release-candidate APK signing certificate changed unexpectedly" >&2; exit 1; }
+release_candidate_manifest="$(apk_manifest_xmltree "$release_candidate_apk")"
+grep -q 'debuggable(0x0101000f)=false' <<<"$release_candidate_manifest" \
+  || { echo "release-candidate APK remains debuggable" >&2; exit 1; }
+! grep -q 'debuggable(0x0101000f)=true' <<<"$release_candidate_manifest" \
+  || { echo "release-candidate APK manifest contains debuggable=true" >&2; exit 1; }
 
 echo "android runtime core artifact contract seam: PASS"
