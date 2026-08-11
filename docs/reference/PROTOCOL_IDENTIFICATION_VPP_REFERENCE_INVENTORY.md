@@ -361,6 +361,42 @@ provider aliases. It still does not prove PCAP corpus replay accuracy, Android
 Root/VPN provider behavior, provider-source acceptability, corpus rights, or
 ProtocolRule enforcement readiness.
 
+Repo-local host reference PCAP probe evidence:
+
+- command:
+  `tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh`
+- current result:
+  `probe.result=PASS`
+- selected backup fixtures read in place:
+  `mixed_pcap/01-http-not-ftp.pcap`,
+  `mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap`,
+  `mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap`, and
+  `mixed_pcap/mixed_pcap.json`.
+- expected JSON validation:
+  `selectedExpectedJsonValidation=PASS` confirms row-level matches for the
+  selected HTTP/DNS/QUIC session address, `APP_NAME`, `APP_ID`, and PCAP
+  filename.
+- parser scope:
+  classic PCAP, Ethernet `DLT_EN10MB`, IPv4, TCP/UDP payload bytes.
+- observed cases:
+  HTTP -> fork-local `appid=67` / `HTTP` / `lpi:http` / Sakamoto `http`;
+  DNS -> fork-local `appid=32` / `DNS` / `lpi:dns` / Sakamoto `dns`;
+  QUIC -> fork-local `appid=2521` / `QUIC` / `lpi:quic` / Sakamoto `quic`.
+- policy:
+  `policy.copiesSourceIntoRepo=false`,
+  `policy.copiesPcapIntoRepo=false`,
+  `policy.copiesExpectedJsonIntoRepo=false`,
+  `policy.usesReferencePcapInPlace=true`,
+  `policy.providerVendoringDecision=false`,
+  `policy.providerRuntimeWiring=false`, and
+  `policy.protocolRuleDecision=false`.
+
+This proves a selected mapped subset of real backup PCAP payloads can pass
+through the wrapper candidate and current Sakamoto recognition seam. It still
+does not prove full corpus accuracy, corpus import rights, Android Root/VPN
+runtime behavior, unmapped real-PCAP behavior, or ProtocolRule enforcement
+readiness.
+
 Therefore the next S61 implementation step should not start from protocol rule
 enforcement. It should first add a real, pinned recognizer provider behind the
 existing `LpiRecognitionProvider` boundary and prove it against a small licensed

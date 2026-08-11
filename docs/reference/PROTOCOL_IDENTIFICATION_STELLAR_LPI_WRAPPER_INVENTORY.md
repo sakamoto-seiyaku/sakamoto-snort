@@ -244,6 +244,60 @@ still does not prove PCAP corpus accuracy, Android Root/VPN runtime behavior,
 provider-source acceptability, default provider wiring, corpus rights, or
 ProtocolRule enforcement readiness.
 
+## Host Reference PCAP Probe
+
+Probe command:
+
+```bash
+bash tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh
+```
+
+Current local result observed on 2026-08-12:
+
+- result: `probe.result=PASS`
+- output executable: `stellar_lpi_wrapper_host_pcap_probe`
+- output root:
+  `build-output/protocol-identification/stellar-lpi-wrapper-host-pcap-probe/`
+- selected reference fixtures, read in place:
+  - `mixed_pcap/01-http-not-ftp.pcap`
+  - `mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap`
+  - `mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap`
+  - expected rows checked from `mixed_pcap/mixed_pcap.json`
+- expected JSON validation:
+  `selectedExpectedJsonValidation=PASS` confirms row-level matches for the
+  selected HTTP/DNS/QUIC session address, `APP_NAME`, `APP_ID`, and PCAP
+  filename.
+- parser scope:
+  classic PCAP, Ethernet link type `DLT_EN10MB`, IPv4, TCP/UDP payload bytes.
+- observed cases:
+  - HTTP PCAP -> fork-local `appid=67`, app name `HTTP`, provider alias
+    `lpi:http`, Sakamoto catalog key `http`
+  - DNS PCAP -> fork-local `appid=32`, app name `DNS`, provider alias
+    `lpi:dns`, Sakamoto catalog key `dns`
+  - QUIC PCAP -> fork-local `appid=2521`, app name `QUIC`, provider alias
+    `lpi:quic`, Sakamoto catalog key `quic`
+- policy:
+  `policy.copiesSourceIntoRepo=false`,
+  `policy.copiesPcapIntoRepo=false`,
+  `policy.copiesExpectedJsonIntoRepo=false`,
+  `policy.usesReferencePcapInPlace=true`,
+  `policy.providerVendoringDecision=false`,
+  `policy.providerRuntimeWiring=false`, and
+  `policy.protocolRuleDecision=false`.
+- probe shape:
+  `probe.scope=host-compile-link-run-selected-reference-pcap-recognition`,
+  `probe.packetParser=classic-pcap-ethernet-ipv4-tcp-udp`,
+  `probe.corpusAccuracyClaim=false`, and
+  `probe.sakamotoPipeline=LpiRecognitionPipeline,LpiRecognitionAdapter,BoundedFlowTable`.
+
+This proves selected backup VPP PCAP payloads for three currently mapped
+Sakamoto catalog entries can pass through the extractable wrapper candidate and
+the current recognition seam. It still does not prove full corpus replay accuracy,
+non-Ethernet link parsing, TCP stream reassembly, Android Root/VPN runtime
+behavior, provider-source acceptability, corpus redistribution rights, default
+provider wiring, unmapped real-PCAP behavior, or ProtocolRule enforcement
+readiness.
+
 ## Next Evidence Step
 
 Before a real provider implementation, pin the provider source/license strategy
