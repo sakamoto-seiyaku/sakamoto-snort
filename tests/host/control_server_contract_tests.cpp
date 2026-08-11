@@ -1394,16 +1394,16 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     runtime.vpnTunCounters.flowTableHighWatermark = 21;
     runtime.vpnTunCounters.flowTableCapacityMisses = 3;
     runtime.vpnTunCounters.lpiProvider = Protocol::LpiProviderStatus{
-        .available = false,
-        .providerName = "disabled",
+        .available = true,
+        .providerName = "fake-lpi",
         .counters = Protocol::LpiProviderCounters{
             .packetsObserved = 9,
             .payloadEligiblePackets = 7,
             .terminalSkippedPackets = 2,
-            .providerUnavailablePackets = 5,
-            .packetsSubmittedToProvider = 0,
-            .providerNoResultPackets = 0,
-            .providerFactPackets = 0,
+            .providerUnavailablePackets = 0,
+            .packetsSubmittedToProvider = 5,
+            .providerNoResultPackets = 3,
+            .providerFactPackets = 2,
         },
     };
     runtime.vpnTunCounters.uidAttributionHitPackets = 197;
@@ -1459,6 +1459,23 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
             .policyRevision = 70,
             .packets = 2,
             .bytes = 2400,
+            .lpiRecognition = Flow::LpiRecognitionState{
+                .payloadPacketsSubmitted = 3,
+                .terminalState = Flow::LpiRecognitionTerminalState::Done,
+                .mappedResultStorage = {
+                    Flow::LpiRecognitionResult{
+                        .protocolId = Catalog::ApplicationProtocolId::DNS,
+                        .firstPayloadPacketSequence = 1,
+                        .direction = Flow::FlowRelativeDirection::Orig,
+                    },
+                    Flow::LpiRecognitionResult{
+                        .protocolId = Catalog::ApplicationProtocolId::HTTP,
+                        .firstPayloadPacketSequence = 3,
+                        .direction = Flow::FlowRelativeDirection::Reply,
+                    },
+                },
+                .mappedResultCount = 2,
+            },
         });
     ControlServerHarness harness(runtime);
 
@@ -1488,15 +1505,15 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["flowTableCapacityMisses"].GetUint64(), 3U);
     ASSERT_TRUE(result["lpiProvider"].IsObject());
     const auto &lpiProvider = result["lpiProvider"];
-    EXPECT_FALSE(lpiProvider["available"].GetBool());
-    EXPECT_STREQ(lpiProvider["name"].GetString(), "disabled");
+    EXPECT_TRUE(lpiProvider["available"].GetBool());
+    EXPECT_STREQ(lpiProvider["name"].GetString(), "fake-lpi");
     EXPECT_EQ(lpiProvider["packetsObserved"].GetUint64(), 9U);
     EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(), 7U);
     EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 2U);
-    EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(), 5U);
-    EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 0U);
-    EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 0U);
-    EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 5U);
+    EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 3U);
+    EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 2U);
     EXPECT_EQ(result["uidAttributionHitPackets"].GetUint64(), 197U);
     EXPECT_EQ(result["uidUnknownFallbackPackets"].GetUint64(), 4U);
     EXPECT_EQ(result["outboundPackets"].GetUint64(), 111U);
@@ -1551,11 +1568,12 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(allowed["lastPolicyRevision"].GetUint64(), 70U);
     EXPECT_EQ(allowed["lastPackets"].GetUint64(), 2U);
     EXPECT_EQ(allowed["lastBytes"].GetUint64(), 2400U);
-    EXPECT_STREQ(allowed["lastProtocolRecognitionState"].GetString(), "");
-    EXPECT_STREQ(allowed["lastApplicationProtocolKey"].GetString(), "");
-    EXPECT_STREQ(allowed["lastApplicationProtocolCategory"].GetString(), "");
-    EXPECT_STREQ(allowed["lastProtocolRecognitionSequence"].GetString(), "");
-    EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 0U);
+    EXPECT_STREQ(allowed["lastProtocolRecognitionState"].GetString(), "identified");
+    EXPECT_STREQ(allowed["lastApplicationProtocolKey"].GetString(), "http");
+    EXPECT_STREQ(allowed["lastApplicationProtocolCategory"].GetString(), "web");
+    EXPECT_STREQ(allowed["lastProtocolRecognitionSequence"].GetString(),
+                 "1:dns:orig,3:http:reply");
+    EXPECT_EQ(allowed["lastProtocolPayloadPackets"].GetUint(), 3U);
 }
 
 TEST(ControlServerContract, PolicyUnknownApplicationSubjectMatchesUidUnknownFacts) {
