@@ -21,6 +21,7 @@ import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
 import com.sakamoto.snort.androidruntime.ProductCatalogProjectionStore;
+import com.sakamoto.snort.androidruntime.ProductPolicyTransactions;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -85,6 +86,8 @@ public final class AndroidRuntimeContractTest {
         invalidProductStateProjectionDisablesBindCandidate();
         productStateReloadPreservesLastValidSnapshotUntilValidRead();
         missingProductStateProjectionRemainsNormalEmpty();
+        productPolicyTransactionsSeparateDraftCommitApplyAndCheckpoint();
+        productPolicyTransactionRestoreAndImportExportAreAtomic();
         System.out.println("android runtime contract: PASS");
     }
 
@@ -2049,6 +2052,148 @@ public final class AndroidRuntimeContractTest {
                 "missing product-state still allows selected-row bind action");
         check(projection.displayText.contains("Catalog: result: 1 application instance"),
                 "missing product-state still renders the catalog result normally");
+    }
+
+    private static void productPolicyTransactionsSeparateDraftCommitApplyAndCheckpoint() {
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        ProductPolicyTransactions tx = new ProductPolicyTransactions(AuthoringPolicyBundle.empty());
+        check(!tx.status().draftDirty && tx.status().runtimeRevision == 0L
+                        && "empty".equals(tx.status().runtimeSnapshotState),
+                "S53 transaction status exposes clean Draft, committed head and empty runtime");
+
+        AuthoringPolicyBundle first = AuthoringPolicyBundle.empty()
+                .withL4Rule(l4Rule(app, "1.1.1.1/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        check(tx.replaceDraft(first).ok, "S53 can edit Draft without applying runtime");
+        check(tx.status().draftDirty && tx.status().draftRevision == 1L
+                        && tx.status().committedRevision == 0L,
+                "Draft edit does not move committed policy revision");
+        check(!tx.applyCommitted(payload -> LocalProductBackend.PolicyApplyResult.ok()).ok,
+                "Apply refuses uncommitted Draft changes");
+
+        ProductPolicyTransactions.Result committed = tx.commitDraft();
+        check(committed.ok && !tx.status().draftDirty
+                        && tx.status().committedRevision == 1L,
+                "Commit publishes committed revision and makes Draft clean");
+        final String[] appliedPayload = {""};
+        check(tx.applyCommitted(payload -> {
+            appliedPayload[0] = payload;
+            return LocalProductBackend.PolicyApplyResult.ok();
+        }).ok, "Apply compiles committed bundle before publishing runtime");
+        check(appliedPayload[0].contains("\"revision\":1")
+                        && tx.status().runtimeRevision == 1L
+                        && tx.status().checkpointCount == 1,
+                "successful Apply publishes runtime revision and creates one checkpoint");
+
+        AuthoringPolicyBundle second = first.withL4Rule(l4Rule(app, "8.8.8.8/32", 6, 20, 1,
+                AuthoringPolicyBundle.L4Action.DROP));
+        tx.replaceDraft(second);
+        tx.commitDraft();
+        ProductPolicyTransactions.Result failedApply = tx.applyCommitted(
+                payload -> LocalProductBackend.PolicyApplyResult.error(
+                        "injected_apply_failure", "runtime rejected policy"));
+        check(!failedApply.ok && "injected_apply_failure".equals(failedApply.errorCode),
+                "failed Apply returns actionable runtime failure");
+        check(tx.status().committedRevision == 2L
+                        && tx.status().runtimeRevision == 1L
+                        && tx.status().checkpointCount == 1,
+                "failed Apply does not create checkpoint or replace old runtime snapshot");
+
+        for (int order = 2; order < 8; order++) {
+            AuthoringPolicyBundle next = tx.committed().withL4Rule(
+                    l4Rule(app, "198.51.100." + order + "/32", 6, 30 + order, order,
+                            AuthoringPolicyBundle.L4Action.DROP));
+            tx.replaceDraft(next);
+            tx.commitDraft();
+            check(tx.applyCommitted(payload -> LocalProductBackend.PolicyApplyResult.ok()).ok,
+                    "successful Apply keeps advancing checkpoint ring");
+        }
+        check(tx.status().checkpointCount == ProductPolicyTransactions.MAX_CHECKPOINTS,
+                "S53 retains only the latest five full checkpoints");
+        check(tx.checkpoints().get(0).revision == 4L,
+                "checkpoint retention evicts the oldest full snapshot after capacity");
+    }
+
+    private static void productPolicyTransactionRestoreAndImportExportAreAtomic() {
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        ProductPolicyTransactions tx = new ProductPolicyTransactions(AuthoringPolicyBundle.empty());
+        AuthoringPolicyBundle first = AuthoringPolicyBundle.empty()
+                .withL4Rule(l4Rule(app, "1.1.1.1/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        tx.replaceDraft(first);
+        tx.commitDraft();
+        check(tx.applyCommitted(payload -> LocalProductBackend.PolicyApplyResult.ok()).ok,
+                "first committed bundle can be applied");
+        long firstRuntime = tx.status().runtimeRevision;
+
+        AuthoringPolicyBundle dirty = tx.committed().withL4Rule(
+                l4Rule(app, "8.8.8.8/32", 6, 20, 1,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        tx.replaceDraft(dirty);
+        check(!tx.restoreCheckpoint(firstRuntime,
+                        payload -> LocalProductBackend.PolicyApplyResult.ok()).ok,
+                "Checkpoint Restore requires a clean Draft");
+        check(tx.status().draftDirty && tx.status().runtimeRevision == firstRuntime,
+                "failed dirty restore preserves Draft and runtime state");
+        tx.commitDraft();
+        ProductPolicyTransactions.Result failedRestore = tx.restoreCheckpoint(firstRuntime,
+                payload -> LocalProductBackend.PolicyApplyResult.error(
+                        "restore_runtime_failed", "runtime rejected checkpoint"));
+        check(!failedRestore.ok && tx.status().committedRevision == dirty.revision
+                        && tx.status().runtimeRevision == firstRuntime,
+                "failed Checkpoint Restore keeps committed head and runtime unchanged");
+        check(tx.restoreCheckpoint(firstRuntime,
+                        payload -> LocalProductBackend.PolicyApplyResult.ok()).ok,
+                "clean Checkpoint Restore can atomically restore bundle and runtime");
+        check(tx.status().committedRevision == firstRuntime
+                        && tx.status().runtimeRevision == firstRuntime
+                        && tx.status().selectedCheckpointRevision == firstRuntime
+                        && !tx.status().draftDirty,
+                "successful Checkpoint Restore restores clean Draft, committed head and runtime");
+
+        String exported = tx.exportCommitted();
+        check(exported.startsWith(ProductPolicyTransactions.EXPORT_HEADER)
+                        && exported.contains("l4=android.uid:1010001|"),
+                "policy export preserves tagged ApplicationSubjectId and typed L4 family");
+        ProductPolicyTransactions.ImportResult imported =
+                ProductPolicyTransactions.importBundle(exported);
+        check(imported.ok && imported.bundle.l4RuleCount == 1
+                        && imported.bundle.l4Rules.get(0).ruleId
+                        == tx.committed().l4Rules.get(0).ruleId
+                        && "1.1.1.1/32".equals(imported.bundle.l4Rules.get(0).destinationCidr),
+                "policy import preserves stable IDs and user-authored CIDR intent");
+        check(!ProductPolicyTransactions.importBundle("bad").ok,
+                "illegal policy import returns actionable failure instead of partial state");
+        ProductPolicyTransactions.Result importedDraft = tx.importDraft(exported);
+        check(importedDraft.ok && !tx.status().draftDirty,
+                "importing current committed export keeps Draft clean");
+        ProductPolicyTransactions.Result badImport = tx.importDraft("bad");
+        check(!badImport.ok && !tx.status().draftDirty
+                        && tx.status().committedRevision == firstRuntime,
+                "failed import keeps Draft and committed head unchanged");
+
+        AuthoringPolicyBundle duplicate = AuthoringPolicyBundle.empty()
+                .withL4Rule(l4Rule(app, "203.0.113.7/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP))
+                .withL4Rule(l4Rule(app, "203.0.113.7/32", 6, 10, 1,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        tx.replaceDraft(duplicate);
+        ProductPolicyTransactions.Result duplicateCommit = tx.commitDraft();
+        check(duplicateCommit.ok && !duplicateCommit.issues.isEmpty()
+                        && "duplicate_match_warning".equals(
+                        duplicateCommit.issues.get(0).code),
+                "duplicate match validation is a non-blocking warning with source attribution");
+    }
+
+    private static AuthoringPolicyBundle.L4Rule l4Rule(
+            ApplicationSubjectId app, String destinationCidr, int ipProtocol,
+            int priority, int order, AuthoringPolicyBundle.L4Action action) {
+        return AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV4, "", destinationCidr,
+                null, AuthoringPolicyBundle.PortRange.exact(443),
+                ipProtocol, AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                AuthoringPolicyBundle.NetworkContextId.WIFI,
+                action, priority, order);
     }
 
     private static void check(boolean condition, String message) {
