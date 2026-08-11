@@ -54,9 +54,9 @@ public final class AppDetail {
                 }
             }
         }
-        return new AppDetail(app, app == null ? STATE_EMPTY : STATE_NORMAL,
-                runtime, rules, activity, runtime == null ? HealthIssue.none()
-                : runtime.healthIssue, prefill);
+        HealthIssue issue = runtime == null ? HealthIssue.none() : runtime.healthIssue;
+        return new AppDetail(app, stateFor(app, runtime, issue),
+                runtime, rules, activity, issue, prefill);
     }
 
     public static AppDetail loading(RuntimeSummary runtime) {
@@ -96,6 +96,16 @@ public final class AppDetail {
     private static String bounded(String value) {
         return BoundedText.value(value == null ? "" : value,
                 RuntimeSnapshot.MAX_TEXT_LENGTH);
+    }
+
+    private static String stateFor(AppSummary app, RuntimeSummary runtime, HealthIssue issue) {
+        if (runtime != null && runtime.loading) {
+            return STATE_LOADING;
+        }
+        if (issue != null && issue.present()) {
+            return STATE_ERROR;
+        }
+        return app == null ? STATE_EMPTY : STATE_NORMAL;
     }
 
     private String buildDisplayText() {

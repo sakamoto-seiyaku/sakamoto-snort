@@ -41,6 +41,7 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -2916,6 +2917,30 @@ public final class AndroidRuntimeContractTest {
         check(AppDetail.loading(summary).rules.isEmpty()
                         && AppDetail.error(summary, applyFailure).healthIssue.blocking,
                 "AppDetail covers loading and actionable error states");
+        RuntimeSummary loadingSummary = new RuntimeSummary(RuntimeProfile.ROOT,
+                RuntimeSnapshot.STATE_STARTING, "starting", "unavailable",
+                false, true, false, false, capabilities, HealthIssue.none());
+        check(AppDetail.STATE_EMPTY.equals(AppDetail.normal(null, summary,
+                        Collections.emptyList(), Collections.emptyList()).state)
+                        && AppDetail.STATE_LOADING.equals(AppDetail.normal(app,
+                        loadingSummary, Collections.emptyList(),
+                        Collections.emptyList()).state),
+                "AppDetail distinguishes empty and loading product states");
+        for (RuntimeSummary issueSummary : Arrays.asList(permission, transport,
+                runtimeFault, recovery, paused)) {
+            AppDetail issueDetail = AppDetail.normal(app, issueSummary,
+                    Collections.emptyList(), Collections.emptyList());
+            check(AppDetail.STATE_ERROR.equals(issueDetail.state)
+                            && issueDetail.healthIssue.present()
+                            && issueDetail.displayText.contains(
+                            issueDetail.healthIssue.category),
+                    "AppDetail renders permission/fault/transport/pause/recovery states");
+        }
+        AppDetail applyFailureDetail = AppDetail.error(summary, applyFailure);
+        check(AppDetail.STATE_ERROR.equals(applyFailureDetail.state)
+                        && applyFailureDetail.displayText.contains(
+                        HealthIssue.CATEGORY_APPLY_FAILURE),
+                "AppDetail renders apply failure with old snapshot guidance");
     }
 
     private static AuthoringPolicyBundle.L4Rule l4Rule(
