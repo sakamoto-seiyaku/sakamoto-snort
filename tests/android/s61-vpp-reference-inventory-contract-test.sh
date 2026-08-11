@@ -70,6 +70,37 @@ assert_probe_uses_generation_helper() {
   grep -Fq 'protocol_identification_probe_count_matching_sources' "$script"
 }
 
+assert_lpi_provider_enable_configure_gate() {
+  local configure_build_dir="$repo_root/build-output/s61-lpi-provider-enable-gate"
+  local configure_output=""
+  local configure_status=0
+
+  rm -rf "$configure_build_dir"
+
+  set +e
+  configure_output="$(
+    cmake \
+      -S "$repo_root" \
+      -B "$configure_build_dir" \
+      -DSAKAMOTO_ENABLE_LPI_PROVIDER=ON \
+      -DSNORT_ENABLE_HOST_TESTS=OFF \
+      -DSNORT_ENABLE_DELEGATED_BUILD_TARGETS=OFF \
+      -DSNORT_ENABLE_DEVICE_TESTS=OFF \
+      2>&1
+  )"
+  configure_status=$?
+  set -e
+
+  [[ "$configure_status" -ne 0 ]] || {
+    echo "SAKAMOTO_ENABLE_LPI_PROVIDER=ON unexpectedly configured successfully" >&2
+    exit 1
+  }
+  grep -q 'SAKAMOTO_ENABLE_LPI_PROVIDER=ON requested' <<<"$configure_output"
+  grep -q 'no real LPI provider source' <<<"$configure_output"
+  grep -q 'is selected' <<<"$configure_output"
+  grep -q 'source/provenance approval' <<<"$configure_output"
+}
+
 [[ -f "$probe_build_root_helper" ]]
 grep -q 'protocol_identification_probe_canonical_build_root' "$probe_build_root_helper"
 grep -q 'resolve(strict=False)' "$probe_build_root_helper"
@@ -244,6 +275,7 @@ grep -q 'SAKAMOTO_ENABLE_LPI_PROVIDER' "$root_cmake"
 grep -q 'OFF' "$root_cmake"
 grep -q 'no real LPI provider source is selected' "$root_cmake"
 grep -q 'SAKAMOTO_LPI_PROVIDER_DISABLED_BY_DEFAULT=1' "$root_cmake"
+assert_lpi_provider_enable_configure_gate
 
 grep -q 'kDisabledLpiProviderName' "$repo_root/src/core/protocol/LpiRecognitionProvider.hpp"
 grep -q 'kRealLpiProviderEnabledByDefault = false' "$repo_root/src/core/protocol/LpiRecognitionProvider.hpp"
