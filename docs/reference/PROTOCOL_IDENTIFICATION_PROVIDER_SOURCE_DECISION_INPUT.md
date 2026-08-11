@@ -14,6 +14,8 @@ Primary reference inputs:
 - `docs/reference/PROTOCOL_IDENTIFICATION_STELLAR_LPI_WRAPPER_INVENTORY.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md`
+- `tools/protocol_identification/vpp_lpi_source_shape_inventory.sh`
+  (`sourceShapeEvidence=reference_only`)
 
 Contract guardrails:
 
@@ -32,6 +34,16 @@ Contract guardrails:
 - The relevant recognizer lineage is `src/plugins/stellar_lpi/`, with
   `stellar_lpi_core.{c,h}`, `stellar_lpi_extend.{c,h}`, and vendored
   `libprotoident/`.
+- The safe source-shape inventory tool
+  `tools/protocol_identification/vpp_lpi_source_shape_inventory.sh` records
+  reference root availability, git branch/HEAD when available, key wrapper file
+  presence, wrapper/libprotoident source counts, subtree hashes,
+  license/provenance gaps, and excluded corpus/expected JSON counts as
+  `sourceShapeEvidence=reference_only`. It writes only under `build-output` by
+  default or an explicit `--output-root`; it does not import source, PCAP,
+  expected JSON, or license files, and it emits
+  `realProviderEnabled=not_claimed`, `sourceImported=not_claimed`,
+  `corpusImported=not_claimed`, and `protocolRule=out_of_scope`.
 - The wrapper exposes a small C boundary:
   `lpi_detector_new`, `lpi_detector_free`, `lpi_detect_context_new`,
   `lpi_detect_context_free`, `lpi_detect_context_update`, `lpi_detect`, and

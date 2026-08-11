@@ -16,6 +16,7 @@ root_cmake="$repo_root/CMakeLists.txt"
 corpus_inventory_script="$repo_root/tools/protocol_identification/vpp_lpi_corpus_inventory.sh"
 expected_alias_inventory_script="$repo_root/tools/protocol_identification/vpp_lpi_expected_alias_inventory.py"
 wrapper_inventory_script="$repo_root/tools/protocol_identification/vpp_stellar_lpi_wrapper_inventory.sh"
+source_shape_inventory_script="$repo_root/tools/protocol_identification/vpp_lpi_source_shape_inventory.sh"
 android_build_probe="$repo_root/tools/protocol_identification/libprotoident_android_build_probe.sh"
 wrapper_android_build_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_android_build_probe.sh"
 wrapper_host_payload_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh"
@@ -504,6 +505,9 @@ grep -q '作为 SAKAMOTO-61/S63 的参考输入' "$reference_readme"
 grep -q 'vpp_stellar_lpi_wrapper_inventory.sh' "$reference_readme"
 grep -q 'C boundary、调用顺序、source/build/license' "$reference_readme"
 grep -q '不复制源码、不决定 provider source strategy' "$reference_readme"
+grep -q 'vpp_lpi_source_shape_inventory.sh' "$reference_readme"
+grep -q 'sourceShapeEvidence=reference_only' "$reference_readme"
+grep -q 'availability/git/key-file/count/hash/license/corpus-excluded markers' "$reference_readme"
 grep -q 'Protocol Identification VPP LPI Corpus Manifest' "$reference_readme"
 grep -q 'expected `APP_NAME` 对当前 Sakamoto provider alias catalog 的覆盖' "$reference_readme"
 grep -q 'Protocol Identification libprotoident Reference Audit' "$reference_readme"
@@ -709,6 +713,73 @@ grep -q 'license.pluginHeaderApachePlaceholder' "$wrapper_inventory_script"
 grep -q 'license.libprotoidentLgpl3OrLater' "$wrapper_inventory_script"
 grep -q 'license.libprotoidentAdjacentCopying' "$wrapper_inventory_script"
 
+[[ -x "$source_shape_inventory_script" ]]
+grep -q 'inventory=vpp-lpi-source-shape' "$source_shape_inventory_script"
+grep -q 'sourceShapeEvidence=reference_only' "$source_shape_inventory_script"
+grep -q 'realProviderEnabled=not_claimed' "$source_shape_inventory_script"
+grep -q 'sourceImported=not_claimed' "$source_shape_inventory_script"
+grep -q 'corpusImported=not_claimed' "$source_shape_inventory_script"
+grep -q 'protocolRule=out_of_scope' "$source_shape_inventory_script"
+grep -q 'policy.copiesSourceIntoRepo=false' "$source_shape_inventory_script"
+grep -q 'policy.copiesPcapIntoRepo=false' "$source_shape_inventory_script"
+grep -q 'policy.copiesExpectedJsonIntoRepo=false' "$source_shape_inventory_script"
+grep -q 'policy.copiesLicenseFilesIntoRepo=false' "$source_shape_inventory_script"
+grep -q 'VPP_LPI_SOURCE_SHAPE_INVENTORY_OUTPUT_ROOT' "$source_shape_inventory_script"
+grep -q -- '--vpp-root' "$source_shape_inventory_script"
+grep -q -- '--output-root' "$source_shape_inventory_script"
+grep -q -- '--strict' "$source_shape_inventory_script"
+grep -q 'protocol_identification_probe_source_tree_sha256' "$source_shape_inventory_script"
+grep -q 'protocol_identification_probe_count_matching_sources' "$source_shape_inventory_script"
+grep -q 'source.wrapperTopLevelC' "$source_shape_inventory_script"
+grep -q 'source.wrapperCoreTopLevelC' "$source_shape_inventory_script"
+grep -q 'source.wrapperExtendTopLevelC' "$source_shape_inventory_script"
+grep -q 'source.wrapperPluginTopLevelC' "$source_shape_inventory_script"
+grep -q 'source.wrapperTestTopLevelC' "$source_shape_inventory_script"
+grep -q 'source.libprotoidentTotalCc' "$source_shape_inventory_script"
+grep -q 'hash.wrapperSourceTreeSha256' "$source_shape_inventory_script"
+grep -q 'hash.libprotoidentSourceTreeSha256' "$source_shape_inventory_script"
+grep -q 'license.libprotoidentHeaderLgplTextPresent' "$source_shape_inventory_script"
+grep -q 'license.libprotoidentAdjacentLicenseOrNoticePresent' "$source_shape_inventory_script"
+grep -q 'license.pluginApachePlaceholderTextPresent' "$source_shape_inventory_script"
+grep -q 'corpus.excludedCaptureFiles' "$source_shape_inventory_script"
+grep -q 'expectedJson.excluded' "$source_shape_inventory_script"
+
+source_shape_missing_output="$repo_root/build-output/protocol-identification/source-shape-contract-missing.stdout"
+"$source_shape_inventory_script" \
+  --vpp-root /definitely/missing/vpp \
+  --output-root "$repo_root/build-output/protocol-identification/source-shape-contract-missing" \
+  > "$source_shape_missing_output"
+grep -q '^inventory=vpp-lpi-source-shape$' "$source_shape_missing_output"
+grep -q '^sourceShapeEvidence=reference_only$' "$source_shape_missing_output"
+grep -q '^sourceShapeStatus=SKIP_UNAVAILABLE$' "$source_shape_missing_output"
+grep -q '^referenceRoot.available=false$' "$source_shape_missing_output"
+grep -q '^wrapperRoot.available=false$' "$source_shape_missing_output"
+grep -q '^libprotoidentRoot.available=false$' "$source_shape_missing_output"
+grep -q '^source.wrapperTopLevelC=0$' "$source_shape_missing_output"
+grep -q '^source.libprotoidentTotalCc=0$' "$source_shape_missing_output"
+grep -q '^hash.wrapperSourceTreeSha256=-$' "$source_shape_missing_output"
+grep -q '^expectedJson.excluded=0$' "$source_shape_missing_output"
+grep -q '^realProviderEnabled=not_claimed$' "$source_shape_missing_output"
+grep -q '^sourceImported=not_claimed$' "$source_shape_missing_output"
+grep -q '^corpusImported=not_claimed$' "$source_shape_missing_output"
+grep -q '^protocolRule=out_of_scope$' "$source_shape_missing_output"
+grep -q '^sourceShapeStatus=SKIP_UNAVAILABLE$' \
+  "$repo_root/build-output/protocol-identification/source-shape-contract-missing/source-shape-inventory.properties"
+
+source_shape_strict_status=0
+set +e
+"$source_shape_inventory_script" \
+  --vpp-root /definitely/missing/vpp \
+  --output-root "$repo_root/build-output/protocol-identification/source-shape-contract-missing-strict" \
+  --strict \
+  >/dev/null 2>&1
+source_shape_strict_status=$?
+set -e
+[[ "$source_shape_strict_status" -ne 0 ]] || {
+  echo "source-shape inventory strict mode unexpectedly passed with missing reference root" >&2
+  exit 1
+}
+
 if [[ -d "/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi" ]]; then
   wrapper_inventory_output="$(mktemp)"
   trap 'rm -f "${alias_inventory_output:-}" "${wrapper_inventory_output:-}"' EXIT
@@ -749,6 +820,66 @@ if [[ -d "/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi" ]]; then
   grep -q '^license.pluginHeaderApachePlaceholder=true$' "$wrapper_inventory_output"
   grep -q '^license.libprotoidentLgpl3OrLater=true$' "$wrapper_inventory_output"
   grep -q '^license.libprotoidentAdjacentCopying=false$' "$wrapper_inventory_output"
+fi
+
+if [[ -d "/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi" ]]; then
+  source_shape_inventory_output="$repo_root/build-output/protocol-identification/source-shape-contract.stdout"
+  "$source_shape_inventory_script" \
+    --vpp-root /home/js/backup/backup/Git/vpp \
+    --output-root "$repo_root/build-output/protocol-identification/source-shape-contract" \
+    > "$source_shape_inventory_output"
+
+  grep -q '^inventory=vpp-lpi-source-shape$' "$source_shape_inventory_output"
+  grep -q '^sourceShapeEvidence=reference_only$' "$source_shape_inventory_output"
+  grep -q '^sourceShapeStatus=AVAILABLE$' "$source_shape_inventory_output"
+  grep -q '^realProviderEnabled=not_claimed$' "$source_shape_inventory_output"
+  grep -q '^sourceImported=not_claimed$' "$source_shape_inventory_output"
+  grep -q '^corpusImported=not_claimed$' "$source_shape_inventory_output"
+  grep -q '^protocolRule=out_of_scope$' "$source_shape_inventory_output"
+  grep -q '^referenceRoot=/home/js/backup/backup/Git/vpp$' "$source_shape_inventory_output"
+  grep -q '^referenceRoot.available=true$' "$source_shape_inventory_output"
+  grep -q '^git.available=true$' "$source_shape_inventory_output"
+  grep -q '^git.branch=dev-26.03$' "$source_shape_inventory_output"
+  grep -Eq '^git.head=[0-9a-f]{40}$' "$source_shape_inventory_output"
+  grep -q '^git.upstream=origin/dev-26.03$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi.api=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi_core.c=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi_core.h=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi_extend.c=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi_extend.h=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi_plugin.c=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi_plugin.h=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.stellar_lpi_test.c=true$' "$source_shape_inventory_output"
+  grep -q '^keyFile.libprotoident.libprotoident.h=true$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperTopLevelC=4$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperTopLevelH=3$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperC=4$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperH=8$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperCoreTopLevelC=1$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperCoreTopLevelH=1$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperExtendTopLevelC=1$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperExtendTopLevelH=1$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperPluginTopLevelC=1$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperPluginTopLevelH=1$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperTestTopLevelC=1$' "$source_shape_inventory_output"
+  grep -q '^source.wrapperTestTopLevelH=0$' "$source_shape_inventory_output"
+  grep -q '^source.libprotoidentTopLevelCc=3$' "$source_shape_inventory_output"
+  grep -q '^source.libprotoidentTcpCc=284$' "$source_shape_inventory_output"
+  grep -q '^source.libprotoidentUdpCc=244$' "$source_shape_inventory_output"
+  grep -q '^source.libprotoidentTotalCc=531$' "$source_shape_inventory_output"
+  grep -Eq '^hash.wrapperSourceTreeSha256=[0-9a-f]{64}$' "$source_shape_inventory_output"
+  grep -Eq '^hash.libprotoidentSourceTreeSha256=[0-9a-f]{64}$' "$source_shape_inventory_output"
+  grep -q '^license.libprotoidentHeaderLgplTextPresent=true$' "$source_shape_inventory_output"
+  grep -q '^license.libprotoidentAdjacentLICENSE=false$' "$source_shape_inventory_output"
+  grep -q '^license.libprotoidentAdjacentCOPYING=false$' "$source_shape_inventory_output"
+  grep -q '^license.libprotoidentAdjacentNOTICE=false$' "$source_shape_inventory_output"
+  grep -q '^license.libprotoidentAdjacentLicenseOrNoticePresent=false$' "$source_shape_inventory_output"
+  grep -q '^license.pluginApachePlaceholderTextPresent=true$' "$source_shape_inventory_output"
+  grep -q '^corpus.excludedCaptureFiles=85$' "$source_shape_inventory_output"
+  grep -q '^corpus.excludedPcap=85$' "$source_shape_inventory_output"
+  grep -q '^expectedJson.excluded=7$' "$source_shape_inventory_output"
+  grep -q '^sourceShapeStatus=AVAILABLE$' \
+    "$repo_root/build-output/protocol-identification/source-shape-contract/source-shape-inventory.properties"
 fi
 
 [[ -x "$android_build_probe" ]]
@@ -1121,6 +1252,14 @@ grep -q 'Current Proven Evidence' "$provider_source_decision_input"
 grep -q '/home/js/backup/backup/Git/vpp' "$provider_source_decision_input"
 grep -q 'deeply modified VPP gateway tree' "$provider_source_decision_input"
 grep -q 'not plain upstream VPP' "$provider_source_decision_input"
+grep -q 'vpp_lpi_source_shape_inventory.sh' "$provider_source_decision_input"
+grep -q 'sourceShapeEvidence=reference_only' "$provider_source_decision_input"
+grep -q 'key wrapper file' "$provider_source_decision_input"
+grep -q 'license/provenance gaps' "$provider_source_decision_input"
+grep -q 'realProviderEnabled=not_claimed' "$provider_source_decision_input"
+grep -q 'sourceImported=not_claimed' "$provider_source_decision_input"
+grep -q 'corpusImported=not_claimed' "$provider_source_decision_input"
+grep -q 'protocolRule=out_of_scope' "$provider_source_decision_input"
 grep -q 'lpi_detector_new' "$provider_source_decision_input"
 grep -q 'lpi_detect_context_update' "$provider_source_decision_input"
 grep -q 'lpi_detect' "$provider_source_decision_input"
