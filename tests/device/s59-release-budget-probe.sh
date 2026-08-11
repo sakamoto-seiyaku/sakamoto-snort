@@ -32,6 +32,7 @@ S59_DOWNLOAD_BYTES="${S59_DOWNLOAD_BYTES:-500000}"
 S59_DOWNLOAD_TIMEOUT_SEC="${S59_DOWNLOAD_TIMEOUT_SEC:-20}"
 S59_DOWNLOAD_URL="${S59_DOWNLOAD_URL:-https://speed.cloudflare.com/__down?bytes=${S59_DOWNLOAD_BYTES}}"
 S59_THROUGHPUT_TXN_COUNT="${S59_THROUGHPUT_TXN_COUNT:-10}"
+S59_SCREEN_OFF_SEC="${S59_SCREEN_OFF_SEC:-10}"
 S59_FORWARD_PORT="${S59_FORWARD_PORT:-60659}"
 S59_CLEANUP_ON_EXIT="${S59_CLEANUP_ON_EXIT:-1}"
 STATE_PATH="files/runtime-state/snapshot.properties"
@@ -186,6 +187,71 @@ collect_thermal() {
   local out_file="$2"
   adb_cmd shell dumpsys thermalservice >"$out_file" 2>&1 || true
   kv "$label" "$(thermal_status)"
+}
+
+battery_node() {
+  local node="$1"
+  local value
+  value="$(adb_cmd shell cat "/sys/class/power_supply/battery/${node}" 2>/dev/null \
+    | tr -d '\r\n' || true)"
+  if [[ -z "$value" ]]; then
+    value="unavailable"
+  fi
+  printf '%s\n' "$value"
+}
+
+power_file_value() {
+  local file="$1"
+  local pattern="$2"
+  awk -F= -v pattern="$pattern" '
+    index($1, pattern) > 0 {
+      gsub(/\r/, "", $2)
+      gsub(/^ +| +$/, "", $2)
+      print $2
+      found=1
+      exit
+    }
+    END { if (!found) print "unknown" }
+  ' "$file"
+}
+
+collect_power_snapshot() {
+  local label="$1"
+  local out_dir="$2"
+  mkdir -p "$out_dir"
+  adb_cmd shell dumpsys power >"${out_dir}/power.txt" 2>&1 || true
+  adb_cmd shell dumpsys deviceidle >"${out_dir}/deviceidle.txt" 2>&1 || true
+  adb_cmd shell dumpsys battery >"${out_dir}/battery.txt" 2>&1 || true
+  {
+    kv "currentNowUa" "$(battery_node current_now)"
+    kv "voltageNowUv" "$(battery_node voltage_now)"
+    kv "capacityPct" "$(battery_node capacity)"
+    kv "temperatureTenthsC" "$(battery_node temp)"
+    kv "wakefulness" "$(power_file_value "${out_dir}/power.txt" "mWakefulness")"
+    kv "interactive" "$(power_file_value "${out_dir}/power.txt" "mInteractive")"
+  } >"${out_dir}/power-proxy.properties"
+  while IFS= read -r line; do
+    kv "${label}.${line%%=*}" "${line#*=}"
+  done <"${out_dir}/power-proxy.properties"
+}
+
+measure_screen_off_power_proxy() {
+  local profile="$1"
+  local out_dir="$2"
+  local screen_dir="${out_dir}/screen-off-power"
+  mkdir -p "$screen_dir"
+  collect_power_snapshot "${profile}.screenOff.before" "${screen_dir}/before"
+  adb_cmd shell input keyevent 223 >"${screen_dir}/screen-off.intent.log" 2>&1 || true
+  sleep 2
+  collect_power_snapshot "${profile}.screenOff.start" "${screen_dir}/start"
+  sleep "$S59_SCREEN_OFF_SEC"
+  collect_power_snapshot "${profile}.screenOff.end" "${screen_dir}/end"
+  adb_cmd shell input keyevent 224 >"${screen_dir}/screen-on.intent.log" 2>&1 || true
+  sleep 1
+  collect_power_snapshot "${profile}.screenOff.after" "${screen_dir}/after"
+  kv "${profile}.screenOffPower.result" "RECORDED_PROXY"
+  kv "${profile}.screenOffPower.durationSec" "$S59_SCREEN_OFF_SEC"
+  kv "${profile}.screenOffPower.proxy" "power_supply_current_now_dumpsys_power_deviceidle"
 }
 
 query_control_json() {
@@ -465,6 +531,7 @@ cleanup() {
   if [[ "$S59_CLEANUP_ON_EXIT" != "1" ]]; then
     return
   fi
+  adb_cmd shell input keyevent 224 >/dev/null 2>&1 || true
   adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true >/dev/null 2>&1 || true
   adb_cmd forward --remove "tcp:${S59_FORWARD_PORT}" >/dev/null 2>&1 || true
 }
@@ -506,6 +573,7 @@ measure_profile() {
 
   query_control_json "${profile}/status.after" "$status_cmd" "{}" >/dev/null
   summarize_adapter_status "$profile" "${out_dir}/status.after.json" | tee "${out_dir}/adapter-summary.properties"
+  measure_screen_off_power_proxy "$profile" "$out_dir"
   collect_thermal "${profile}.thermal.after" "${out_dir}/thermal.after.txt"
   stop_profile "$profile" "$out_dir"
 }
@@ -522,6 +590,7 @@ kv "releaseStatus" "debug_apk_budget_probe_only"
 kv "workflowLatency" "p50/p95/p99_ms"
 kv "nominalThroughput" "app_debug_download_mbps"
 kv "cpuRss" "idle_and_download_active_proc_ticks_rss"
+kv "screenOffPower" "short_screen_off_power_supply_current_now_proxy"
 kv "thermal" "dumpsys_thermalservice_before_after"
 kv "shutdownDrain" "runtimeStop_to_stopped_snapshot_ms"
 kv "capacityHighWatermark" "adapter_flow_table_and_activity_capacity_evictions"
