@@ -72,6 +72,12 @@ Unmapped expected `APP_NAME` values:
 `PPTP`, `QQ`, `RDP`, `RTCP`, `RTP`, `SMTP`, `SMTPS`, `SOCKS`, `STUN`,
 `WECHAT`, `WIREGUARD`.
 
+The repo-local host target `lpi_expected_alias_replay_tests` uses this
+aggregate coverage as a scripted provider fixture against the real
+`LpiRecognitionPipeline` and `BoundedFlowTable`. It verifies mapped,
+unmapped, no-result, and compound unmapped-then-mapped replay behavior without
+copying corpus files or enabling a real provider.
+
 ## Expected JSON Shape
 
 The expected-result files use VPP fork output fields:

@@ -95,6 +95,13 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
 )
+add_sucre_snort_host_test(
+  lpi_expected_alias_replay_tests
+  lpi_expected_alias_replay_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+)
 add_sucre_snort_host_test(ipv6_l4_walker_tests ipv6_l4_walker_tests.cpp)
 add_sucre_snort_host_test(nfqueue_topology_tests nfqueue_topology_tests.cpp)
 add_sucre_snort_host_test(

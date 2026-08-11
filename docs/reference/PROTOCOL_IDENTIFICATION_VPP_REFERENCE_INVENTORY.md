@@ -142,6 +142,24 @@ This inventory is a contract over reference evidence and current catalog alias
 coverage. It does not connect a real libprotoident provider and does not start
 ProtocolRule enforcement work.
 
+Repo-local host replay evidence:
+
+- test target: `lpi_expected_alias_replay_tests`
+- source: `tests/host/lpi_expected_alias_replay_tests.cpp`
+- scope: replays the current expected-alias coverage baseline through the real
+  `LpiRecognitionPipeline`, `LpiRecognitionAdapter`, and worker-owned
+  `BoundedFlowTable` using a scripted provider.
+- mapped baseline: DNS `145`, HTTP `36`, QUIC `21`, SSL `4`.
+- unmapped baseline: the `19` long-tail `APP_NAME` values above, `81`
+  occurrences total.
+- no-result baseline: `6` expected `UNKNOWN` / no-`APP_NAME` rows.
+- compound readiness: `SOCKS` followed by `HTTP` on the same synthetic flow
+  keeps `SOCKS` unmapped, maps `HTTP`, and leaves latest exact result as HTTP.
+
+This host replay test still does not read PCAP bytes and does not prove a real
+recognizer. It proves that the current Sakamoto seam can consume the reference
+result shape once a provider and licensed corpus subset exist.
+
 License/privacy status:
 
 - The reference repo root and copied `test/` tree contain Apache-2.0 `LICENSE`
