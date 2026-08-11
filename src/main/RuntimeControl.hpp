@@ -27,6 +27,10 @@ struct NfqueueRuntimeCounters {
     std::uint64_t verdictSendFailures = 0;
     std::uint64_t fragmentBufferedPackets = 0;
     std::uint64_t fragmentReassembledPackets = 0;
+    std::uint64_t queueCapacity = 0;
+    std::uint64_t queueHighWatermark = 0;
+    std::uint64_t queueCompletionCapacity = 0;
+    std::uint64_t queueCompletionHighWatermark = 0;
     std::uint64_t flowTableEntries = 0;
     std::uint64_t flowTableCapacity = 0;
     std::uint64_t flowTableHighWatermark = 0;

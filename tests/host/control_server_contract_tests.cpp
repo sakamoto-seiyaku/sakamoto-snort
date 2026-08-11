@@ -1166,6 +1166,10 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     runtime.nfqueueCounters.verdictSendFailures = 5;
     runtime.nfqueueCounters.fragmentBufferedPackets = 6;
     runtime.nfqueueCounters.fragmentReassembledPackets = 8;
+    runtime.nfqueueCounters.queueCapacity = 64;
+    runtime.nfqueueCounters.queueHighWatermark = 4;
+    runtime.nfqueueCounters.queueCompletionCapacity = 64;
+    runtime.nfqueueCounters.queueCompletionHighWatermark = 7;
     runtime.nfqueueCounters.flowTableEntries = 9;
     runtime.nfqueueCounters.flowTableCapacity = 64;
     runtime.nfqueueCounters.flowTableHighWatermark = 12;
@@ -1233,6 +1237,10 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["verdictSendFailures"].GetUint64(), 5U);
     EXPECT_EQ(result["fragmentBufferedPackets"].GetUint64(), 6U);
     EXPECT_EQ(result["fragmentReassembledPackets"].GetUint64(), 8U);
+    EXPECT_EQ(result["queueCapacity"].GetUint64(), 64U);
+    EXPECT_EQ(result["queueHighWatermark"].GetUint64(), 4U);
+    EXPECT_EQ(result["queueCompletionCapacity"].GetUint64(), 64U);
+    EXPECT_EQ(result["queueCompletionHighWatermark"].GetUint64(), 7U);
     EXPECT_EQ(result["flowTableEntries"].GetUint64(), 9U);
     EXPECT_EQ(result["flowTableCapacity"].GetUint64(), 64U);
     EXPECT_EQ(result["flowTableHighWatermark"].GetUint64(), 12U);

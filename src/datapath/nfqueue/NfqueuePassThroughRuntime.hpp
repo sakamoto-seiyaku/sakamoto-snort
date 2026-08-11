@@ -210,6 +210,10 @@ struct NfqueueRuntimeFaultSnapshot final {
     std::uint64_t missingPacketHeaders = 0;
     std::uint64_t receiveFailures = 0;
     std::uint64_t callbackFailures = 0;
+    std::uint64_t queueCapacity = 0;
+    std::uint64_t queueHighWatermark = 0;
+    std::uint64_t queueCompletionCapacity = 0;
+    std::uint64_t queueCompletionHighWatermark = 0;
 };
 
 /** Runtime I/O faults are kept separate from policy and flow-gate counters. */
@@ -222,6 +226,16 @@ public:
     void recordMissingPacketHeader() noexcept { ++missingPacketHeaders_; }
     void recordReceiveFailure() noexcept { ++receiveFailures_; }
     void recordCallbackFailure() noexcept { ++callbackFailures_; }
+    void recordQueueWatermarks(
+        const std::size_t queueCapacity,
+        const std::size_t queueHighWatermark,
+        const std::size_t queueCompletionCapacity,
+        const std::size_t queueCompletionHighWatermark) noexcept {
+        recordMax(queueCapacity_, queueCapacity);
+        recordMax(queueHighWatermark_, queueHighWatermark);
+        recordMax(queueCompletionCapacity_, queueCompletionCapacity);
+        recordMax(queueCompletionHighWatermark_, queueCompletionHighWatermark);
+    }
 
     [[nodiscard]] NfqueueRuntimeFaultSnapshot snapshot() const noexcept {
         return {
@@ -232,10 +246,26 @@ public:
             .missingPacketHeaders = missingPacketHeaders_.load(std::memory_order_relaxed),
             .receiveFailures = receiveFailures_.load(std::memory_order_relaxed),
             .callbackFailures = callbackFailures_.load(std::memory_order_relaxed),
+            .queueCapacity = queueCapacity_.load(std::memory_order_relaxed),
+            .queueHighWatermark = queueHighWatermark_.load(std::memory_order_relaxed),
+            .queueCompletionCapacity =
+                queueCompletionCapacity_.load(std::memory_order_relaxed),
+            .queueCompletionHighWatermark =
+                queueCompletionHighWatermark_.load(std::memory_order_relaxed),
         };
     }
 
 private:
+    static void recordMax(
+        std::atomic<std::uint64_t> &target, const std::uint64_t value) noexcept {
+        auto observed = target.load(std::memory_order_relaxed);
+        while (observed < value
+               && !target.compare_exchange_weak(
+                   observed, value, std::memory_order_relaxed,
+                   std::memory_order_relaxed)) {
+        }
+    }
+
     std::atomic<std::uint64_t> listenerOpenFailures_{0};
     std::atomic<std::uint64_t> listenerBindFailures_{0};
     std::atomic<std::uint64_t> queueConfigFailures_{0};
@@ -243,6 +273,10 @@ private:
     std::atomic<std::uint64_t> missingPacketHeaders_{0};
     std::atomic<std::uint64_t> receiveFailures_{0};
     std::atomic<std::uint64_t> callbackFailures_{0};
+    std::atomic<std::uint64_t> queueCapacity_{0};
+    std::atomic<std::uint64_t> queueHighWatermark_{0};
+    std::atomic<std::uint64_t> queueCompletionCapacity_{0};
+    std::atomic<std::uint64_t> queueCompletionHighWatermark_{0};
 };
 
 /**
@@ -391,6 +425,7 @@ public:
     [[nodiscard]] SnortRuntime::NfqueueRuntimeCounters
     nfqueueRuntimeCounters() const noexcept override {
         const auto counters = flowAdapterCounters();
+        const auto runtimeFaults = runtimeFaultCounters();
         return {
             .packetsSeen = counters.packetsSeen,
             .acceptedPackets = counters.acceptedPackets,
@@ -401,6 +436,10 @@ public:
             .verdictSendFailures = counters.verdictSendFailures,
             .fragmentBufferedPackets = counters.fragmentBufferedPackets,
             .fragmentReassembledPackets = counters.fragmentReassembledPackets,
+            .queueCapacity = runtimeFaults.queueCapacity,
+            .queueHighWatermark = runtimeFaults.queueHighWatermark,
+            .queueCompletionCapacity = runtimeFaults.queueCompletionCapacity,
+            .queueCompletionHighWatermark = runtimeFaults.queueCompletionHighWatermark,
             .flowTableEntries = counters.flowTableEntries,
             .flowTableCapacity = counters.flowTableCapacity,
             .flowTableHighWatermark = counters.flowTableHighWatermark,

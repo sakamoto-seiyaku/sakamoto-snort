@@ -332,6 +332,11 @@ rapidjson::Document makeNfqueueStatusResult(
                      counters.fragmentBufferedPackets, alloc);
     result.AddMember("fragmentReassembledPackets",
                      counters.fragmentReassembledPackets, alloc);
+    result.AddMember("queueCapacity", counters.queueCapacity, alloc);
+    result.AddMember("queueHighWatermark", counters.queueHighWatermark, alloc);
+    result.AddMember("queueCompletionCapacity", counters.queueCompletionCapacity, alloc);
+    result.AddMember("queueCompletionHighWatermark",
+                     counters.queueCompletionHighWatermark, alloc);
     result.AddMember("flowTableEntries", counters.flowTableEntries, alloc);
     result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
     result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);

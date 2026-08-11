@@ -160,6 +160,14 @@ struct QueueContext {
     SnortDatapath::Nfqueue::NfqueueRuntimeFaultCounters *runtimeFaults = nullptr;
 };
 
+void recordQueueWatermarks(const QueueContext &context) noexcept {
+    context.runtimeFaults->recordQueueWatermarks(
+        context.leaseAdapter->bufferCapacity(),
+        context.leaseAdapter->bufferHighWatermark(),
+        context.leaseAdapter->completionCapacity(),
+        context.leaseAdapter->completionHighWatermark());
+}
+
 int socketFamily(const SnortDatapath::Nfqueue::NfqueueAddressFamily family) {
     switch (family) {
     case SnortDatapath::Nfqueue::NfqueueAddressFamily::Ipv4:
@@ -259,6 +267,7 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
 
     const auto packetId = ntohl(header->packet_id);
     const auto admission = context->leaseAdapter->admit(packetId);
+    recordQueueWatermarks(*context);
     if (admission.status
         != SnortDatapath::Nfqueue::NfqueuePacketLeaseAdmissionStatus::Retained) {
         if (admission.status
@@ -286,6 +295,7 @@ int passThroughCallback(const nlmsghdr *nlh, void *data) {
             != SnortDatapath::Nfqueue::NfqueuePacketLeaseCompletionStatus::Completed) {
             std::cerr << "NFQUEUE lease completion rejected on queue " << context->queue << "\n";
         }
+        recordQueueWatermarks(*context);
     }
     if (context->leaseAdapter->counters().verdictSendFailures > verdictFailuresBefore) {
         context->flowAdapter->recordVerdictSendFailure();
@@ -363,6 +373,11 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
             static_cast<void>(completionMailbox.drain(leaseAdapter));
             (void)leaseAdapter.expire(
                 SnortDatapath::Nfqueue::NfqueuePacketLeaseAdapter::Clock::now());
+            runtimeFaults.recordQueueWatermarks(
+                leaseAdapter.bufferCapacity(),
+                leaseAdapter.bufferHighWatermark(),
+                leaseAdapter.completionCapacity(),
+                leaseAdapter.completionHighWatermark());
             pollFd.revents = 0;
             const int ready = ::poll(&pollFd, 1, kQueuePollTimeoutMs);
             if (ready < 0) {
@@ -407,6 +422,11 @@ void listenQueue(const SnortDatapath::Nfqueue::PassThroughListenerPlan listener,
         static_cast<void>(completionMailbox.drain(leaseAdapter));
         (void)leaseAdapter.shutdown();
         static_cast<void>(completionMailbox.drain(leaseAdapter));
+        runtimeFaults.recordQueueWatermarks(
+            leaseAdapter.bufferCapacity(),
+            leaseAdapter.bufferHighWatermark(),
+            leaseAdapter.completionCapacity(),
+            leaseAdapter.completionHighWatermark());
         mnl_socket_close(socket);
         laneGeneration = laneGeneration == std::numeric_limits<std::uint32_t>::max()
             ? 1U

@@ -357,6 +357,8 @@ for key in [
     "capacityPassThroughPackets", "capacityPolicyBypassPackets",
     "ownerFaultPassThroughPackets", "ownerFaultRuntimeDrops",
     "ownerGuardMismatches", "transportFailedPackets",
+    "queueCapacity", "queueHighWatermark", "queueCompletionCapacity",
+    "queueCompletionHighWatermark",
     "flowTableEntries", "flowTableCapacity", "flowTableHighWatermark",
     "flowTableCapacityMisses",
 ]:
@@ -631,7 +633,7 @@ kv "cpuRss" "idle_and_download_active_proc_ticks_rss"
 kv "screenOffPower" "short_screen_off_power_supply_current_now_proxy"
 kv "thermal" "dumpsys_thermalservice_before_after"
 kv "shutdownDrain" "runtimeStop_to_stopped_snapshot_ms"
-kv "capacityHighWatermark" "adapter_flow_table_and_activity_capacity_evictions"
+kv "capacityHighWatermark" "adapter_queue_flow_table_and_activity_capacity_evictions"
 kv "correctiveHandoff" "owner_fault_or_owner_guard_counters"
 
 section "device"
