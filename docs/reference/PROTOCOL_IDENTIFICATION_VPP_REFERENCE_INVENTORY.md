@@ -79,6 +79,61 @@ application catalog. Sakamoto must not inherit those numeric IDs. Current
 Sakamoto catalog IDs remain project-owned and provider aliases stay in
 `lpi:<name>` form.
 
+Repo-local wrapper inventory evidence:
+
+- command:
+  `tools/protocol_identification/vpp_stellar_lpi_wrapper_inventory.sh`
+- policy:
+  `policy.copiesSourceIntoRepo=false`,
+  `policy.providerSourceDecision=false`, and
+  `policy.protocolRuleDecision=false`.
+- observed wrapper files:
+  `stellar_lpi_core.{c,h}`, `stellar_lpi_extend.{c,h}`,
+  `stellar_lpi_plugin.c`, `stellar_lpi.api`, `CMakeLists.txt`, and
+  `libprotoident/CMakeLists.txt`.
+- exported C boundary:
+  `lpi_detector_new`, `lpi_detector_free`,
+  `lpi_detect_context_new`, `lpi_detect_context_free`,
+  `lpi_detect_context_update`, `lpi_detect`, and `lpi_appid2name`.
+- lifecycle call order observed in the wrapper:
+  `lpi_detector_new` at plugin init, `lpi_detect_context_new` on first
+  payload-bearing packet for a session, `lpi_detect_context_update` then
+  `lpi_detect` per submitted payload packet, `lpi_appid2name` only for
+  trace/status name projection, `lpi_detect_context_free` when session exdata
+  is released, and `lpi_detector_free` at plugin exit.
+- per-packet provider call order:
+  `lpi_detect_context_update` then `lpi_detect`; the provider reports a
+  `stop_detect` signal, which the fork uses to stop further bounded scanning
+  for that session.
+- wrapper dependency shape:
+  The VPP plugin source includes VPP/VNET/VLIB/session/buffer feature headers,
+  uses session exdata, buffer exdata, buffer tags, feature arcs, and optional
+  TCP reassembly continuation. It is not a pure library as-is.
+- extractable pure-provider candidate shape:
+  `stellar_lpi_core` plus `stellar_lpi_extend` and vendored `libprotoident`
+  form the smallest observed recognizer wrapper candidate, but even this
+  wrapper still uses fork-local `vlib/uthash/uthash.h`, `vlib/utils/utils.h`,
+  `ALLOC/FREE` macros, OpenVPN helper state, and payload heuristics.
+- source counts:
+  wrapper `4` `.c` files and `8` `.h` files; vendored libprotoident
+  `3` top-level `.cc`, `284` `tcp/*.cc`, and `244` `udp/*.cc` files.
+- build/link evidence:
+  the VPP plugin uses `add_vpp_plugin(stellar_lpi ...)` and links
+  `libprotoident`; vendored libprotoident builds as a static C++11 PIC library
+  with definitions `__FAVOR_BSD`, `HAVE_NET_ETHERNET_H`, `HAVE_ICMPHDR=1`,
+  `HAVE_TCP_STATES=1`, `HAVE_BSD_UDPHDR=1`, and `HAVE_BSD_TCPHDR=1`, and the
+  fork CMake lists `stdc++` and `gcc_s`.
+- provenance risk evidence:
+  the plugin headers contain placeholder Apache-2.0 text with
+  `<current-year> <your-organization>`, while vendored libprotoident headers
+  state GNU LGPL v3-or-later. The local libprotoident directory does not provide an adjacent `COPYING` or `LICENSE` file.
+- Sakamoto seam risk:
+  the current `LpiRecognitionProvider` seam already matches the high-level
+  lifecycle shape, but a real adapter must translate Sakamoto
+  `ORIG`/`REPLY`, host-order ports, payload budgets, stop-detect behavior,
+  provider aliases, memory ownership, and unavailable VPP session/tag concepts
+  without introducing a parallel FlowEntry table.
+
 ## Test Corpus
 
 The reference repo has real packet-capture material that this repository
@@ -149,6 +204,11 @@ Repo-local host replay evidence:
 - scope: replays the current expected-alias coverage baseline through the real
   `LpiRecognitionPipeline`, `LpiRecognitionAdapter`, and worker-owned
   `BoundedFlowTable` using a scripted provider.
+- expected JSON readiness: when `VPP_LPI_CORPUS_ROOT` or the default backup
+  path exists, the same target parses the `7` reference expected JSON files in
+  place, validates row shape and APP_NAME normalization, derives replay events,
+  and runs them through the same pipeline. It skips this optional evidence path
+  when the backup corpus is absent.
 - mapped baseline: DNS `145`, HTTP `36`, QUIC `21`, SSL `4`.
 - unmapped baseline: the `19` long-tail `APP_NAME` values above, `81`
   occurrences total.

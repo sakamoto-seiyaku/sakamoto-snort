@@ -10,10 +10,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,11 +27,15 @@
 #include <string_view>
 #include <vector>
 
+#include <rapidjson/document.h>
+#include <rapidjson/error/en.h>
+
 namespace {
 
 namespace Flow = SnortDatapath::Flow;
 namespace Protocol = SnortDatapath::Protocol;
 namespace Catalog = sucre::protocol;
+namespace fs = std::filesystem;
 
 enum class ReplayKind : std::uint8_t {
     Mapped,
@@ -97,11 +107,45 @@ constexpr std::array<UnmappedExpectedAppCount, 19> kUnmappedExpectedApps{{
     const std::string_view appName) {
     std::string alias{"lpi:"};
     alias.reserve(alias.size() + appName.size());
+    auto previousSeparator = false;
     for (const auto ch : appName) {
-        alias.push_back(static_cast<char>(
-            std::tolower(static_cast<unsigned char>(ch))));
+        const auto byte = static_cast<unsigned char>(ch);
+        if (std::isalnum(byte)) {
+            alias.push_back(static_cast<char>(std::tolower(byte)));
+            previousSeparator = false;
+            continue;
+        }
+        if (!previousSeparator && alias.back() != ':') {
+            alias.push_back('-');
+            previousSeparator = true;
+        }
+    }
+    if (alias.back() == '-') {
+        alias.pop_back();
     }
     return alias;
+}
+
+[[nodiscard]] std::string trimCopy(const std::string_view input) {
+    auto begin = std::size_t{0};
+    while (begin < input.size() &&
+           std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
+        ++begin;
+    }
+    auto end = input.size();
+    while (end > begin &&
+           std::isspace(static_cast<unsigned char>(input[end - 1U])) != 0) {
+        --end;
+    }
+    return std::string{input.substr(begin, end - begin)};
+}
+
+[[nodiscard]] std::string normalizeAppName(const std::string_view value) {
+    auto normalized = trimCopy(value);
+    for (auto &ch : normalized) {
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    }
+    return normalized;
 }
 
 void appendRepeated(std::vector<ReplayEvent> &events,
@@ -162,6 +206,181 @@ void appendRepeated(std::vector<ReplayEvent> &events,
     }
 
     return events;
+}
+
+struct ReferenceJsonStats {
+    AggregateCounts counts;
+    std::uint32_t expectedRows = 0;
+    std::uint32_t rowsWithoutAppName = 0;
+    std::uint32_t unknownRows = 0;
+    std::uint32_t multiResultRows = 0;
+    std::uint32_t appNameOccurrences = 0;
+    std::map<std::string, std::uint32_t> unmappedAppCounts;
+};
+
+struct ReferenceJsonFixture {
+    std::vector<ReplayEvent> events;
+    ReferenceJsonStats stats;
+};
+
+[[nodiscard]] std::string readTextFile(const fs::path &path) {
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        throw std::runtime_error{"failed to open " + path.string()};
+    }
+    return std::string{std::istreambuf_iterator<char>{input},
+                       std::istreambuf_iterator<char>{}};
+}
+
+[[nodiscard]] bool appIdIsUnknown(const rapidjson::Value &row) {
+    const auto member = row.FindMember("APP_ID");
+    return member != row.MemberEnd() && member->value.IsString() &&
+           std::string_view{member->value.GetString(),
+                            member->value.GetStringLength()} == "UNKNOWN";
+}
+
+[[nodiscard]] std::vector<std::string> appNamesFromRow(
+    const rapidjson::Value &row,
+    const fs::path &sourcePath) {
+    const auto member = row.FindMember("APP_NAME");
+    if (member == row.MemberEnd()) {
+        return {};
+    }
+
+    std::vector<std::string> names;
+    if (member->value.IsString()) {
+        const auto normalized = normalizeAppName(std::string_view{
+            member->value.GetString(), member->value.GetStringLength()});
+        if (!normalized.empty()) {
+            names.push_back(normalized);
+        }
+        return names;
+    }
+
+    if (!member->value.IsArray()) {
+        throw std::runtime_error{"APP_NAME must be string or array in " +
+                                 sourcePath.string()};
+    }
+    for (const auto &name : member->value.GetArray()) {
+        if (!name.IsString()) {
+            throw std::runtime_error{"APP_NAME array contains non-string in " +
+                                     sourcePath.string()};
+        }
+        const auto normalized = normalizeAppName(
+            std::string_view{name.GetString(), name.GetStringLength()});
+        if (!normalized.empty()) {
+            names.push_back(normalized);
+        }
+    }
+    return names;
+}
+
+void appendReferenceExpectedJsonRows(
+    const fs::path &path,
+    ReferenceJsonFixture &fixture) {
+    rapidjson::Document document;
+    const auto content = readTextFile(path);
+    document.Parse(content.data(), content.size());
+    if (document.HasParseError()) {
+        throw std::runtime_error{
+            "invalid JSON in " + path.string() + ": " +
+            rapidjson::GetParseError_En(document.GetParseError())};
+    }
+    if (!document.IsArray()) {
+        throw std::runtime_error{"expected top-level array in " +
+                                 path.string()};
+    }
+
+    for (const auto &row : document.GetArray()) {
+        if (!row.IsObject()) {
+            throw std::runtime_error{"expected object row in " + path.string()};
+        }
+        ++fixture.stats.expectedRows;
+        const auto names = appNamesFromRow(row, path);
+        if (names.empty()) {
+            ++fixture.stats.rowsWithoutAppName;
+            if (!appIdIsUnknown(row)) {
+                throw std::runtime_error{
+                    "row without APP_NAME must use APP_ID UNKNOWN in " +
+                    path.string()};
+            }
+            ++fixture.stats.unknownRows;
+            fixture.events.push_back(ReplayEvent{
+                .kind = ReplayKind::NoResult,
+                .expectedAppName = "UNKNOWN",
+                .providerAlias = std::nullopt,
+                .expectedProtocol = std::nullopt,
+            });
+            continue;
+        }
+
+        if (names.size() > 1U) {
+            ++fixture.stats.multiResultRows;
+        }
+        for (const auto &name : names) {
+            ++fixture.stats.appNameOccurrences;
+            const auto alias = providerAliasForExpectedApp(name);
+            const auto mapped =
+                Catalog::applicationProtocolIdForProviderAlias(alias);
+            if (!mapped.has_value()) {
+                ++fixture.stats.counts.unmapped;
+                ++fixture.stats.unmappedAppCounts[name];
+                fixture.events.push_back(ReplayEvent{
+                    .kind = ReplayKind::Unmapped,
+                    .expectedAppName = name,
+                    .providerAlias = alias,
+                    .expectedProtocol = std::nullopt,
+                });
+                continue;
+            }
+            if (*mapped == Catalog::ApplicationProtocolId::DNS) {
+                ++fixture.stats.counts.dns;
+            } else if (*mapped == Catalog::ApplicationProtocolId::HTTP) {
+                ++fixture.stats.counts.http;
+            } else if (*mapped == Catalog::ApplicationProtocolId::QUIC) {
+                ++fixture.stats.counts.quic;
+            } else if (*mapped == Catalog::ApplicationProtocolId::TLS) {
+                ++fixture.stats.counts.ssl;
+            }
+            fixture.events.push_back(ReplayEvent{
+                .kind = ReplayKind::Mapped,
+                .expectedAppName = name,
+                .providerAlias = alias,
+                .expectedProtocol = mapped,
+            });
+        }
+    }
+}
+
+[[nodiscard]] ReferenceJsonFixture loadReferenceExpectedJsonFixture(
+    const fs::path &corpusRoot) {
+    std::vector<fs::path> jsonPaths;
+    for (const auto &entry : fs::recursive_directory_iterator(corpusRoot)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".json") {
+            jsonPaths.push_back(entry.path());
+        }
+    }
+    std::sort(jsonPaths.begin(), jsonPaths.end());
+    if (jsonPaths.empty()) {
+        throw std::runtime_error{"no expected JSON files under " +
+                                 corpusRoot.string()};
+    }
+
+    ReferenceJsonFixture fixture;
+    for (const auto &path : jsonPaths) {
+        appendReferenceExpectedJsonRows(path, fixture);
+    }
+    fixture.stats.counts.noResult = fixture.stats.unknownRows;
+    return fixture;
+}
+
+[[nodiscard]] fs::path referenceCorpusRoot() {
+    if (const auto *overridePath = std::getenv("VPP_LPI_CORPUS_ROOT");
+        overridePath != nullptr && std::string_view{overridePath}.size() > 0U) {
+        return fs::path{overridePath};
+    }
+    return fs::path{
+        "/home/js/backup/backup/Git/vpp/test/decoders/stellar_lpi/test_pcap"};
 }
 
 [[nodiscard]] Flow::PacketFacts syntheticTcpPacket(
@@ -308,11 +527,8 @@ void expectNoResultOutcome(const Protocol::LpiPipelineOutcome &outcome) {
     EXPECT_TRUE(outcome.stateAfterSubmit->mappedResultsEmpty());
 }
 
-TEST(LpiExpectedAliasReplayTest,
-     AggregateBaselineShapesReplayThroughPipelineAdapterAndFlowTable) {
-    const auto events = buildExpectedAliasReplayFixture();
-    ASSERT_EQ(events.size(), kExpectedBaseline.total());
-
+void expectReplayFixtureMatchesPipelineBaseline(
+    const std::vector<ReplayEvent> &events) {
     Flow::BoundedFlowTable table(events.size());
     ScriptedProvider provider(std::span<const ReplayEvent>{events});
     Protocol::LpiRecognitionPipeline pipeline(table, &provider);
@@ -396,6 +612,46 @@ TEST(LpiExpectedAliasReplayTest,
               kExpectedBaseline.mapped() + kExpectedBaseline.unmapped);
     EXPECT_EQ(status.counters.providerNoResultPackets,
               kExpectedBaseline.noResult);
+}
+
+TEST(LpiExpectedAliasReplayTest,
+     AggregateBaselineShapesReplayThroughPipelineAdapterAndFlowTable) {
+    const auto events = buildExpectedAliasReplayFixture();
+    ASSERT_EQ(events.size(), kExpectedBaseline.total());
+    expectReplayFixtureMatchesPipelineBaseline(events);
+}
+
+TEST(LpiExpectedAliasReplayTest,
+     ReferenceExpectedJsonRowsReplayThroughPipelineWhenAvailable) {
+    const auto corpusRoot = referenceCorpusRoot();
+    if (!fs::is_directory(corpusRoot)) {
+        GTEST_SKIP() << "VPP LPI reference corpus is not present: "
+                     << corpusRoot;
+    }
+
+    const auto fixture = loadReferenceExpectedJsonFixture(corpusRoot);
+    EXPECT_EQ(fixture.stats.expectedRows, 267U);
+    EXPECT_EQ(fixture.stats.rowsWithoutAppName, 6U);
+    EXPECT_EQ(fixture.stats.unknownRows, 6U);
+    EXPECT_EQ(fixture.stats.multiResultRows, 25U);
+    EXPECT_EQ(fixture.stats.appNameOccurrences, 287U);
+    EXPECT_EQ(fixture.stats.counts.dns, kExpectedBaseline.dns);
+    EXPECT_EQ(fixture.stats.counts.http, kExpectedBaseline.http);
+    EXPECT_EQ(fixture.stats.counts.quic, kExpectedBaseline.quic);
+    EXPECT_EQ(fixture.stats.counts.ssl, kExpectedBaseline.ssl);
+    EXPECT_EQ(fixture.stats.counts.unmapped, kExpectedBaseline.unmapped);
+    EXPECT_EQ(fixture.stats.counts.noResult, kExpectedBaseline.noResult);
+    EXPECT_EQ(fixture.stats.unmappedAppCounts.size(),
+              kUnmappedExpectedApps.size());
+    for (const auto &app : kUnmappedExpectedApps) {
+        const auto observed =
+            fixture.stats.unmappedAppCounts.find(std::string{app.appName});
+        ASSERT_NE(observed, fixture.stats.unmappedAppCounts.end())
+            << app.appName;
+        EXPECT_EQ(observed->second, app.count) << app.appName;
+    }
+    ASSERT_EQ(fixture.events.size(), kExpectedBaseline.total());
+    expectReplayFixtureMatchesPipelineBaseline(fixture.events);
 }
 
 TEST(LpiExpectedAliasReplayTest,

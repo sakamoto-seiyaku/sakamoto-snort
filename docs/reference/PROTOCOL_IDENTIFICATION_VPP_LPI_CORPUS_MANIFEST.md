@@ -73,10 +73,19 @@ Unmapped expected `APP_NAME` values:
 `WECHAT`, `WIREGUARD`.
 
 The repo-local host target `lpi_expected_alias_replay_tests` uses this
-aggregate coverage as a scripted provider fixture against the real
-`LpiRecognitionPipeline` and `BoundedFlowTable`. It verifies mapped,
-unmapped, no-result, and compound unmapped-then-mapped replay behavior without
-copying corpus files or enabling a real provider.
+coverage as a scripted provider fixture against the real
+`LpiRecognitionPipeline` and `BoundedFlowTable`. It has two evidence modes:
+
+- a committed aggregate baseline for environments without the backup VPP
+  checkout;
+- an optional in-place expected JSON reader, enabled when
+  `VPP_LPI_CORPUS_ROOT` or the default backup path exists, that parses the
+  `7` reference JSON files, validates `267` rows / `287` APP_NAME occurrences /
+  `6` UNKNOWN rows / `25` multi-result rows, normalizes provider aliases, and
+  replays the derived events through the same pipeline.
+
+It verifies mapped, unmapped, no-result, and compound unmapped-then-mapped
+replay behavior without copying corpus files or enabling a real provider.
 
 ## Expected JSON Shape
 
