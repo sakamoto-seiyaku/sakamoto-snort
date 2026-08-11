@@ -8,14 +8,18 @@
 
 #include <gtest/gtest.h>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -44,6 +48,40 @@ std::vector<std::uint8_t> readPacketFromFd(const int fd) {
     }
     return std::vector<std::uint8_t>(
         buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(bytes));
+}
+
+std::vector<std::uint8_t> readPacketFromFdWithDeadline(const int fd) {
+    constexpr auto deadline = std::chrono::milliseconds{1000};
+    const auto stopAt = std::chrono::steady_clock::now() + deadline;
+    while (std::chrono::steady_clock::now() < stopAt) {
+        pollfd target{
+            .fd = fd,
+            .events = POLLIN | POLLERR | POLLHUP,
+            .revents = 0,
+        };
+        const int pollResult = ::poll(&target, 1, 10);
+        if (pollResult < 0 && errno == EINTR) {
+            continue;
+        }
+        if (pollResult <= 0) {
+            continue;
+        }
+        if ((target.revents & POLLIN) != 0) {
+            return readPacketFromFd(fd);
+        }
+        return {};
+    }
+    return {};
+}
+
+bool waitForAdapterReady(VpnTunFdRuntime &runtime) {
+    for (std::size_t attempt = 0; attempt < 100; ++attempt) {
+        if (runtime.packetAdapterReady()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    }
+    return false;
 }
 
 void putU16(std::span<std::uint8_t> bytes, const std::size_t offset,
@@ -501,6 +539,42 @@ TEST(VpnTunFdRuntimeTest, TransportReturnDrainWritesAcceptedPacketBackToTunFd) {
     EXPECT_EQ(counters.transportSucceededPackets, 1U);
     EXPECT_EQ(counters.lastObservedDirection, "transport-return");
     EXPECT_EQ(counters.lastObservedResult, "FlowForwarded");
+
+    closeIfOpen(tunFds[1]);
+    closeIfOpen(transportFds[1]);
+}
+
+TEST(VpnTunFdRuntimeTest, AutomaticDrainStartsAfterTransportAttachAndForwardsBothDirections) {
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+
+    VpnTunFdRuntime runtime{tunFds[0], true};
+    tunFds[0] = -1;
+    EXPECT_FALSE(runtime.packetAdapterReady());
+    ASSERT_TRUE(runtime.attachVpnTransportFd(transportFds[0]).ok);
+    transportFds[0] = -1;
+    ASSERT_TRUE(waitForAdapterReady(runtime));
+
+    const auto outbound = ipv4TcpPacket();
+    ASSERT_EQ(::write(tunFds[1], outbound.data(), outbound.size()),
+              static_cast<ssize_t>(outbound.size()));
+    const auto transported = readPacketFromFdWithDeadline(transportFds[1]);
+    ASSERT_EQ(transported.size(), outbound.size());
+    EXPECT_TRUE(std::equal(outbound.begin(), outbound.end(), transported.begin()));
+
+    const auto inbound = ipv4TcpPacket(true);
+    ASSERT_EQ(::write(transportFds[1], inbound.data(), inbound.size()),
+              static_cast<ssize_t>(inbound.size()));
+    const auto returned = readPacketFromFdWithDeadline(tunFds[1]);
+    ASSERT_EQ(returned.size(), inbound.size());
+    EXPECT_TRUE(std::equal(inbound.begin(), inbound.end(), returned.begin()));
+
+    const auto counters = runtime.vpnTunRuntimeCounters();
+    EXPECT_EQ(counters.outboundPackets, 1U);
+    EXPECT_EQ(counters.transportReturnPackets, 1U);
+    EXPECT_EQ(counters.transportSucceededPackets, 2U);
 
     closeIfOpen(tunFds[1]);
     closeIfOpen(transportFds[1]);

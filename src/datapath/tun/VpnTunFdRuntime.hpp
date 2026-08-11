@@ -13,12 +13,17 @@
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -55,11 +60,14 @@ struct VpnTunDrainResult final {
 
 class VpnTunFdRuntime final : public SnortRuntime::BaseRuntimeControl {
 public:
-    explicit VpnTunFdRuntime(const int tunFd)
+    explicit VpnTunFdRuntime(const int tunFd, const bool automaticDrain = false)
         : tunFd_(tunFd),
+          automaticDrain_(automaticDrain),
           flowAdapter_(VpnTunFlowAdapterConfig{.packetPolicy = &packetPolicy_}) {}
 
     ~VpnTunFdRuntime() override {
+        stopDrainLoop();
+        std::lock_guard<std::mutex> lock(ioMutex_);
         if (tunFd_ >= 0) {
             ::close(tunFd_);
         }
@@ -74,6 +82,7 @@ public:
     VpnTunFdRuntime &operator=(VpnTunFdRuntime &&) = delete;
 
     [[nodiscard]] bool start() const noexcept {
+        std::lock_guard<std::mutex> lock(ioMutex_);
         return tunFd_ >= 0;
     }
 
@@ -82,7 +91,9 @@ public:
     }
 
     [[nodiscard]] bool packetAdapterReady() const noexcept override {
-        return false;
+        std::lock_guard<std::mutex> lock(ioMutex_);
+        return automaticDrain_ && drainRunning_.load(std::memory_order_acquire)
+            && tunFd_ >= 0 && transportFd_ >= 0;
     }
 
     [[nodiscard]] std::string_view packetAdapterName() const noexcept override {
@@ -90,11 +101,13 @@ public:
     }
 
     [[nodiscard]] bool vpnTunFdHandoffReady() const noexcept override {
+        std::lock_guard<std::mutex> lock(ioMutex_);
         return tunFd_ >= 0;
     }
 
     [[nodiscard]] bool vpnTunTransportFdHandoffReady() const noexcept override {
-        return tunFd_ >= 0;
+        std::lock_guard<std::mutex> lock(ioMutex_);
+        return transportFd_ >= 0;
     }
 
     [[nodiscard]] bool packetPolicyControlReady() const noexcept override {
@@ -107,7 +120,8 @@ public:
 
     [[nodiscard]] SnortRuntime::VpnTunRuntimeCounters
     vpnTunRuntimeCounters() const noexcept override {
-        const auto counters = flowAdapterCounters();
+        std::lock_guard<std::mutex> lock(ioMutex_);
+        const auto counters = flowAdapter_.counters();
         return {
             .packetsSeen = counters.packetsSeen,
             .normalizedPackets = counters.normalizedPackets,
@@ -140,11 +154,13 @@ public:
 
     [[nodiscard]] Policy::PacketPolicySnapshotStatus
     packetPolicyStatus() const noexcept override {
+        std::lock_guard<std::mutex> lock(ioMutex_);
         return packetPolicy_.status();
     }
 
     [[nodiscard]] Policy::PacketPolicyDecision evaluatePacketPolicy(
         const Flow::PacketFacts &facts) const noexcept override {
+        std::lock_guard<std::mutex> lock(ioMutex_);
         return packetPolicy_.evaluate(facts);
     }
 
@@ -152,6 +168,7 @@ public:
         std::vector<Policy::PacketPolicySubjectView> subjects,
         const std::uint64_t revision) noexcept override {
         try {
+            std::lock_guard<std::mutex> lock(ioMutex_);
             packetPolicy_.apply(std::move(subjects), revision);
             return true;
         } catch (const std::exception &e) {
@@ -163,6 +180,7 @@ public:
     }
 
     [[nodiscard]] bool resetBaseRuntime() noexcept override {
+        std::lock_guard<std::mutex> lock(ioMutex_);
         return tunFd_ >= 0;
     }
 
@@ -172,26 +190,86 @@ public:
             return SnortRuntime::VpnTunFdAttachResult::error(
                 "VPN_TRANSPORT_ATTACH_INVALID_FD", "VPN transport fd is invalid");
         }
-        if (transportFd_ >= 0) {
-            ::close(transportFd_);
+        bool shouldStartDrain = false;
+        {
+            std::lock_guard<std::mutex> lock(ioMutex_);
+            if (transportFd_ >= 0) {
+                ::close(transportFd_);
+            }
+            transportFd_ = transportFd;
+            shouldStartDrain = drainLoopShouldRunLocked();
         }
-        transportFd_ = transportFd;
+        if (shouldStartDrain) {
+            if (!startDrainLoop()) {
+                return SnortRuntime::VpnTunFdAttachResult::error(
+                    "VPN_TRANSPORT_ATTACH_DRAIN_START_FAILED",
+                    "VPN/TUN drain loop did not start");
+            }
+        }
         return SnortRuntime::VpnTunFdAttachResult::accepted();
     }
 
     /**
      * Bounded single-lane TUN ingress drain.
      *
-     * The product runtime does not call this from start() yet because the HEV
-     * transport owner is not integrated. This method is the native seam that
-     * later loop code will use: one readable TUN packet is read as complete L3
-     * bytes, normalized through the shared VPN/TUN flow adapter, and then
-     * classified as policy drop or not-yet-transported.
+     * Manual tests use this as a bounded single step. Product VPN runtimes use
+     * the same path from the automatic drain loop once both the TUN fd and HEV
+     * transport fd have been handed off.
      */
     [[nodiscard]] VpnTunDrainResult drainTunPackets(
         std::size_t maxPackets,
         VpnTunPacketMetadata metadata = {},
         VpnTunPacketDirection direction = VpnTunPacketDirection::Outbound) noexcept {
+        std::lock_guard<std::mutex> lock(ioMutex_);
+        return drainTunPacketsLocked(maxPackets, metadata, direction);
+    }
+
+    [[nodiscard]] VpnTunDrainResult drainTransportReturnPackets(
+        std::size_t maxPackets,
+        VpnTunPacketMetadata metadata = {}) noexcept {
+        std::lock_guard<std::mutex> lock(ioMutex_);
+        return drainTransportReturnPacketsLocked(maxPackets, metadata);
+    }
+
+    [[nodiscard]] SnortRuntime::VpnTunFdAttachResult attachVpnTunFd(
+        const int tunFd, const bool enableIpv6) noexcept override {
+        if (tunFd < 0) {
+            return SnortRuntime::VpnTunFdAttachResult::error(
+                "VPN_TUN_ATTACH_INVALID_FD", "VPN TUN fd is invalid");
+        }
+        bool shouldStartDrain = false;
+        {
+            std::lock_guard<std::mutex> lock(ioMutex_);
+            if (tunFd_ >= 0) {
+                ::close(tunFd_);
+            }
+            tunFd_ = tunFd;
+            ipv6Enabled_ = enableIpv6;
+            shouldStartDrain = drainLoopShouldRunLocked();
+        }
+        if (shouldStartDrain) {
+            if (!startDrainLoop()) {
+                return SnortRuntime::VpnTunFdAttachResult::error(
+                    "VPN_TUN_ATTACH_DRAIN_START_FAILED",
+                    "VPN/TUN drain loop did not start");
+            }
+        }
+        return SnortRuntime::VpnTunFdAttachResult::accepted();
+    }
+
+    [[nodiscard]] VpnTunFlowAdapterCounters flowAdapterCounters() const noexcept {
+        std::lock_guard<std::mutex> lock(ioMutex_);
+        return flowAdapter_.counters();
+    }
+
+private:
+    static constexpr std::size_t kMaxTunPacketBytes = 65536;
+    static constexpr std::size_t kDrainBatchPackets = 32;
+
+    [[nodiscard]] VpnTunDrainResult drainTunPacketsLocked(
+        std::size_t maxPackets,
+        VpnTunPacketMetadata metadata,
+        VpnTunPacketDirection direction) noexcept {
         VpnTunDrainResult result;
         if (tunFd_ < 0) {
             result.readErrors = 1;
@@ -294,9 +372,9 @@ public:
         return result;
     }
 
-    [[nodiscard]] VpnTunDrainResult drainTransportReturnPackets(
+    [[nodiscard]] VpnTunDrainResult drainTransportReturnPacketsLocked(
         std::size_t maxPackets,
-        VpnTunPacketMetadata metadata = {}) noexcept {
+        VpnTunPacketMetadata metadata) noexcept {
         VpnTunDrainResult result;
         if (transportFd_ < 0 || tunFd_ < 0) {
             result.readErrors = 1;
@@ -383,27 +461,6 @@ public:
         return result;
     }
 
-    [[nodiscard]] SnortRuntime::VpnTunFdAttachResult attachVpnTunFd(
-        const int tunFd, const bool enableIpv6) noexcept override {
-        if (tunFd < 0) {
-            return SnortRuntime::VpnTunFdAttachResult::error(
-                "VPN_TUN_ATTACH_INVALID_FD", "VPN TUN fd is invalid");
-        }
-        if (tunFd_ >= 0) {
-            ::close(tunFd_);
-        }
-        tunFd_ = tunFd;
-        ipv6Enabled_ = enableIpv6;
-        return SnortRuntime::VpnTunFdAttachResult::accepted();
-    }
-
-    [[nodiscard]] VpnTunFlowAdapterCounters flowAdapterCounters() const noexcept {
-        return flowAdapter_.counters();
-    }
-
-private:
-    static constexpr std::size_t kMaxTunPacketBytes = 65536;
-
     [[nodiscard]] bool writePacketToTransport(
         const std::span<const std::uint8_t> packet) noexcept {
         return transportFd_ >= 0 && writePacket(transportFd_, packet);
@@ -433,9 +490,73 @@ private:
         return written == static_cast<ssize_t>(packet.size());
     }
 
+    [[nodiscard]] bool drainLoopShouldRunLocked() const noexcept {
+        return automaticDrain_ && tunFd_ >= 0 && transportFd_ >= 0;
+    }
+
+    [[nodiscard]] bool startDrainLoop() noexcept {
+        try {
+            std::lock_guard<std::mutex> lock(drainThreadMutex_);
+            if (drainThread_.joinable()) {
+                return true;
+            }
+            drainStop_.store(false, std::memory_order_release);
+            drainThread_ = std::thread([this] { runDrainLoop(); });
+            return true;
+        } catch (const std::exception &e) {
+            std::cerr << "VPN/TUN drain loop start failed: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "VPN/TUN drain loop start failed: unknown exception\n";
+        }
+        return false;
+    }
+
+    void stopDrainLoop() noexcept {
+        drainStop_.store(true, std::memory_order_release);
+        std::thread threadToJoin;
+        {
+            std::lock_guard<std::mutex> lock(drainThreadMutex_);
+            if (drainThread_.joinable()) {
+                threadToJoin = std::move(drainThread_);
+            }
+        }
+        if (threadToJoin.joinable()) {
+            threadToJoin.join();
+        }
+    }
+
+    void runDrainLoop() noexcept {
+        drainRunning_.store(true, std::memory_order_release);
+        while (!drainStop_.load(std::memory_order_acquire)) {
+            bool madeProgress = false;
+            {
+                std::lock_guard<std::mutex> lock(ioMutex_);
+                if (!drainLoopShouldRunLocked()) {
+                    drainStop_.store(true, std::memory_order_release);
+                    break;
+                }
+                const auto tunDrain = drainTunPacketsLocked(
+                    kDrainBatchPackets, {}, VpnTunPacketDirection::Outbound);
+                const auto returnDrain =
+                    drainTransportReturnPacketsLocked(kDrainBatchPackets, {});
+                madeProgress = tunDrain.packetsRead > 0 || returnDrain.packetsRead > 0;
+            }
+            if (!madeProgress) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            }
+        }
+        drainRunning_.store(false, std::memory_order_release);
+    }
+
     int tunFd_ = -1;
     int transportFd_ = -1;
     bool ipv6Enabled_ = false;
+    bool automaticDrain_ = false;
+    mutable std::mutex ioMutex_;
+    std::mutex drainThreadMutex_;
+    std::atomic<bool> drainStop_{false};
+    std::atomic<bool> drainRunning_{false};
+    std::thread drainThread_;
     Policy::RuntimePacketPolicySnapshot packetPolicy_;
     VpnTunFlowAdapter flowAdapter_;
 };

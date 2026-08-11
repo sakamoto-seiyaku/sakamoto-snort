@@ -42,7 +42,8 @@ RuntimeFactoryResult createStartedRuntime(const RuntimeProfileSelection selectio
             result.plan.errorCode = "vpn_tun_fd_open_failed";
             return result;
         }
-        auto runtime = std::make_unique<SnortDatapath::Tun::VpnTunFdRuntime>(tunFd);
+        auto runtime =
+            std::make_unique<SnortDatapath::Tun::VpnTunFdRuntime>(tunFd, true);
         (void)runtime->start();
         result.runtime = std::move(runtime);
     }
