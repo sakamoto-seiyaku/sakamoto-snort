@@ -21,6 +21,7 @@ android_build_probe="$repo_root/tools/protocol_identification/libprotoident_andr
 wrapper_android_build_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_android_build_probe.sh"
 wrapper_host_payload_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh"
 wrapper_host_pcap_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh"
+reference_probes_runner="$repo_root/tools/protocol_identification/run_s61_reference_probes.sh"
 provider_source_intake_gate="$repo_root/tools/protocol_identification/lpi_provider_source_intake_gate.sh"
 probe_build_root_helper="$repo_root/tools/protocol_identification/probe_build_root.sh"
 probe_generation_helper="$repo_root/tools/protocol_identification/probe_generation.sh"
@@ -558,6 +559,10 @@ grep -q '不复制源码、不决定 provider source strategy' "$reference_readm
 grep -q 'vpp_lpi_source_shape_inventory.sh' "$reference_readme"
 grep -q 'sourceShapeEvidence=reference_only' "$reference_readme"
 grep -q 'availability/git/key-file/count/hash/license/corpus-excluded markers' "$reference_readme"
+grep -q 'run_s61_reference_probes.sh' "$reference_readme"
+grep -q '非默认、显式运行的 S61 reference probe 聚合入口' "$reference_readme"
+grep -q 's61-reference-probes.properties' "$reference_readme"
+grep -q 'PASS/FAIL/UNAVAILABLE' "$reference_readme"
 grep -q 'Protocol Identification VPP LPI Corpus Manifest' "$reference_readme"
 grep -q 'expected `APP_NAME` 对当前 Sakamoto provider alias catalog 的覆盖' "$reference_readme"
 grep -q 'Protocol Identification libprotoident Reference Audit' "$reference_readme"
@@ -930,6 +935,120 @@ if [[ -d "/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi" ]]; then
   grep -q '^expectedJson.excluded=7$' "$source_shape_inventory_output"
   grep -q '^sourceShapeStatus=AVAILABLE$' \
     "$repo_root/build-output/protocol-identification/source-shape-contract/source-shape-inventory.properties"
+fi
+
+[[ -x "$reference_probes_runner" ]]
+grep -q 'suite=s61-reference-probes' "$reference_probes_runner"
+grep -q 'suiteEvidence=reference_only' "$reference_probes_runner"
+grep -q 'defaultBuildTestGate=false' "$reference_probes_runner"
+grep -q 's61-reference-probes.properties' "$reference_probes_runner"
+grep -q 's61ReferenceProbes' "$reference_probes_runner"
+grep -q -- '--vpp-root' "$reference_probes_runner"
+grep -q -- '--output-root' "$reference_probes_runner"
+grep -q -- '--continue-on-fail' "$reference_probes_runner"
+grep -q 'sourceImported=not_claimed' "$reference_probes_runner"
+grep -q 'corpusImported=not_claimed' "$reference_probes_runner"
+grep -q 'realProviderEnabled=not_claimed' "$reference_probes_runner"
+grep -q 'protocolRule=out_of_scope' "$reference_probes_runner"
+grep -q 'policy.copiesSourceIntoRepo=false' "$reference_probes_runner"
+grep -q 'policy.copiesPcapIntoRepo=false' "$reference_probes_runner"
+grep -q 'policy.copiesExpectedJsonIntoRepo=false' "$reference_probes_runner"
+grep -q 'policy.copiesLicenseFilesIntoRepo=false' "$reference_probes_runner"
+grep -q 'probe.%s.status' "$reference_probes_runner"
+grep -q 'probe.%s.outputPath' "$reference_probes_runner"
+grep -q 'UNAVAILABLE' "$reference_probes_runner"
+grep -q 'NOT_RUN' "$reference_probes_runner"
+grep -q 'exit_nonzero' "$reference_probes_runner"
+grep -q 'vpp_lpi_source_shape_inventory.sh' "$reference_probes_runner"
+grep -q 'vpp_lpi_corpus_inventory.sh' "$reference_probes_runner"
+grep -q 'vpp_lpi_expected_alias_inventory.py' "$reference_probes_runner"
+grep -q 'vpp_stellar_lpi_wrapper_inventory.sh' "$reference_probes_runner"
+grep -q 'libprotoident_android_build_probe.sh' "$reference_probes_runner"
+grep -q 'stellar_lpi_wrapper_android_build_probe.sh' "$reference_probes_runner"
+grep -q 'stellar_lpi_wrapper_host_payload_probe.sh' "$reference_probes_runner"
+grep -q 'stellar_lpi_wrapper_host_pcap_probe.sh' "$reference_probes_runner"
+grep -q 'VPP_REFERENCE_ROOT' "$reference_probes_runner"
+grep -q 'VPP_LPI_CORPUS_ROOT' "$reference_probes_runner"
+grep -q 'LIBPROTOIDENT_ANDROID_PROBE_BUILD_ROOT' "$reference_probes_runner"
+grep -q 'STELLAR_LPI_WRAPPER_ANDROID_PROBE_BUILD_ROOT' "$reference_probes_runner"
+grep -q 'STELLAR_LPI_WRAPPER_HOST_PROBE_BUILD_ROOT' "$reference_probes_runner"
+grep -q 'STELLAR_LPI_WRAPPER_HOST_PCAP_PROBE_BUILD_ROOT' "$reference_probes_runner"
+! grep -q 'run_s61_reference_probes.sh' "$root_cmake"
+
+s61_reference_missing_output_root="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-missing"
+s61_reference_missing_stdout="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-missing.stdout"
+s61_reference_missing_properties="$s61_reference_missing_output_root/s61-reference-probes.properties"
+s61_reference_missing_status=0
+set +e
+"$reference_probes_runner" \
+  --vpp-root /definitely/missing/vpp \
+  --output-root "$s61_reference_missing_output_root" \
+  --continue-on-fail \
+  >"$s61_reference_missing_stdout"
+s61_reference_missing_status=$?
+set -e
+[[ "$s61_reference_missing_status" -ne 0 ]] || {
+  echo "S61 reference probe runner unexpectedly passed with missing reference root" >&2
+  exit 1
+}
+[[ -f "$s61_reference_missing_properties" ]]
+grep -q '^suite=s61-reference-probes$' "$s61_reference_missing_properties"
+grep -q '^suiteEvidence=reference_only$' "$s61_reference_missing_properties"
+grep -q '^defaultBuildTestGate=false$' "$s61_reference_missing_properties"
+grep -q '^continueOnFail=true$' "$s61_reference_missing_properties"
+grep -q '^sourceImported=not_claimed$' "$s61_reference_missing_properties"
+grep -q '^corpusImported=not_claimed$' "$s61_reference_missing_properties"
+grep -q '^realProviderEnabled=not_claimed$' "$s61_reference_missing_properties"
+grep -q '^protocolRule=out_of_scope$' "$s61_reference_missing_properties"
+grep -q '^policy.copiesSourceIntoRepo=false$' "$s61_reference_missing_properties"
+grep -q '^policy.copiesPcapIntoRepo=false$' "$s61_reference_missing_properties"
+grep -q '^policy.copiesExpectedJsonIntoRepo=false$' "$s61_reference_missing_properties"
+grep -q '^policy.copiesLicenseFilesIntoRepo=false$' "$s61_reference_missing_properties"
+grep -q '^referenceRoot=/definitely/missing/vpp$' "$s61_reference_missing_properties"
+grep -q '^referenceRoot.available=false$' "$s61_reference_missing_properties"
+grep -q '^probe.vppLpiSourceShapeInventory.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^probe.vppLpiSourceShapeInventory.reason=source_shape_not_available$' "$s61_reference_missing_properties"
+grep -q '^probe.vppLpiCorpusInventory.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^probe.vppLpiExpectedAliasInventory.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^probe.vppStellarLpiWrapperInventory.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^probe.libprotoidentAndroidBuildProbe.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^probe.stellarLpiWrapperAndroidBuildProbe.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^probe.stellarLpiWrapperHostPayloadProbe.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^probe.stellarLpiWrapperHostPcapProbe.status=UNAVAILABLE$' "$s61_reference_missing_properties"
+grep -q '^s61ReferenceProbes=FAIL$' "$s61_reference_missing_properties"
+grep -q '^sourceShapeStatus=SKIP_UNAVAILABLE$' \
+  "$s61_reference_missing_output_root/vpp-lpi-source-shape-inventory/source-shape-inventory.properties"
+
+if [[ -d "/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi" ]]; then
+  s61_reference_real_output_root="$repo_root/build-output/protocol-identification/s61-reference-probes-contract"
+  s61_reference_real_stdout="$repo_root/build-output/protocol-identification/s61-reference-probes-contract.stdout"
+  s61_reference_real_properties="$s61_reference_real_output_root/s61-reference-probes.properties"
+  s61_reference_real_status=0
+  set +e
+  "$reference_probes_runner" \
+    --vpp-root /home/js/backup/backup/Git/vpp \
+    --output-root "$s61_reference_real_output_root" \
+    --continue-on-fail \
+    >"$s61_reference_real_stdout"
+  s61_reference_real_status=$?
+  set -e
+  [[ "$s61_reference_real_status" -eq 0 || "$s61_reference_real_status" -eq 1 ]]
+  [[ -f "$s61_reference_real_properties" ]]
+  grep -q '^suite=s61-reference-probes$' "$s61_reference_real_properties"
+  grep -q '^continueOnFail=true$' "$s61_reference_real_properties"
+  grep -q '^sourceImported=not_claimed$' "$s61_reference_real_properties"
+  grep -q '^corpusImported=not_claimed$' "$s61_reference_real_properties"
+  grep -q '^realProviderEnabled=not_claimed$' "$s61_reference_real_properties"
+  grep -q '^protocolRule=out_of_scope$' "$s61_reference_real_properties"
+  grep -Eq '^s61ReferenceProbes=(PASS|FAIL)$' "$s61_reference_real_properties"
+  grep -q '^probe.vppLpiSourceShapeInventory.status=PASS$' "$s61_reference_real_properties"
+  grep -q '^probe.vppLpiCorpusInventory.status=' "$s61_reference_real_properties"
+  grep -q '^probe.vppLpiExpectedAliasInventory.status=' "$s61_reference_real_properties"
+  grep -q '^probe.vppStellarLpiWrapperInventory.status=' "$s61_reference_real_properties"
+  grep -q '^probe.libprotoidentAndroidBuildProbe.status=' "$s61_reference_real_properties"
+  grep -q '^probe.stellarLpiWrapperAndroidBuildProbe.status=' "$s61_reference_real_properties"
+  grep -q '^probe.stellarLpiWrapperHostPayloadProbe.status=' "$s61_reference_real_properties"
+  grep -q '^probe.stellarLpiWrapperHostPcapProbe.status=' "$s61_reference_real_properties"
 fi
 
 [[ -x "$android_build_probe" ]]
