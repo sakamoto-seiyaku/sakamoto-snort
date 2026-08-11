@@ -412,21 +412,23 @@ still does not prove full corpus accuracy, corpus import rights, Android
 Root/VPN runtime behavior, provider runtime wiring, provider-source
 acceptability, or ProtocolRule enforcement readiness.
 
-Therefore the next S61 implementation step should not start from protocol rule
-enforcement. It should first add a real, pinned recognizer provider behind the
-existing `LpiRecognitionProvider` boundary and prove it against a small licensed
-PCAP subset derived from the reference repo.
+Evidence implication: ProtocolRule readiness is outside this evidence boundary.
+The preserved sequencing fact is that provider source, corpus rights, corpus
+selection, runtime wiring, and license decisions need real pinned evidence
+before any ProtocolRule readiness claim. The reference evidence points to a
+real recognizer provider behind the existing `LpiRecognitionProvider` boundary,
+fed by a small licensed PCAP subset derived from the reference repo, as the
+decision input that precedes ProtocolRule enforcement.
 
-## Recommended Next Slice
+## Decision / Use as Input
 
-1. Pin a source strategy for the recognizer:
-   vendored fork subset, upstream libprotoident, or a separate local provider
-   package.
-2. Import a minimal corpus subset for the current catalog:
-   DNS, HTTP, TLS/SSL, QUIC, SSH, plus at least one unmapped result and one
-   no-result flow.
-3. Add a host corpus runner that feeds packet bytes through the provider and
-   verifies provider aliases before touching ProtocolRule enforcement.
-4. Wire the provider into Root and VPN only after host corpus evidence is green.
-5. Add Android device evidence for provider availability, payload budget,
-   mapped/unmapped counters, Activity projection, and Root/VPN parity.
+Preconditions before claiming ProtocolRule readiness from this reference line:
+
+- provider source strategy pinned to one of the evaluated shapes: vendored fork
+  subset, upstream libprotoident, or a separate local provider package;
+- minimal licensed corpus subset identified for the current catalog: DNS, HTTP,
+  TLS/SSL, QUIC, SSH, plus at least one unmapped result and one no-result flow;
+- host corpus evidence that packet bytes cross the provider boundary and produce
+  expected provider aliases;
+- Root and VPN runtime evidence for provider availability, payload budget,
+  mapped/unmapped counters, Activity projection, and parity across seams.

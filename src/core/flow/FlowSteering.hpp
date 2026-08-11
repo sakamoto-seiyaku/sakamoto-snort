@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -323,6 +324,10 @@ struct LpiRecognitionState {
     }
 };
 
+struct LpiProviderFlowContext {
+    virtual ~LpiProviderFlowContext() = default;
+};
+
 struct FlowEntry {
     CanonicalFlowKey key;
     IpAddress originSource;
@@ -339,6 +344,7 @@ struct FlowEntry {
     std::uint64_t packets = 0;
     std::uint64_t bytes = 0;
     LpiRecognitionState lpiRecognition;
+    std::unique_ptr<LpiProviderFlowContext> lpiProviderContext;
 };
 
 struct FlowEntryObservation {
@@ -438,6 +444,15 @@ struct LpiRecognitionUpdate {
     std::optional<sucre::protocol::ApplicationProtocolId> latestExactResult;
 };
 
+struct LpiRecognitionFlowSlot {
+    LpiRecognitionState *recognition = nullptr;
+    std::unique_ptr<LpiProviderFlowContext> *providerContext = nullptr;
+    FlowRelativeDirection packetDirection = FlowRelativeDirection::Orig;
+    std::uint8_t ipProtocol = 0;
+    std::uint16_t originSourcePort = 0;
+    std::uint16_t originDestinationPort = 0;
+};
+
 struct BoundedFlowTableCounters {
     std::uint64_t creates = 0;
     std::uint64_t updates = 0;
@@ -481,6 +496,8 @@ public:
         bool budgetExhausted) noexcept;
     [[nodiscard]] std::optional<LpiRecognitionState> lpiRecognitionStateFor(
         const PacketFacts &facts) const noexcept;
+    [[nodiscard]] std::optional<LpiRecognitionFlowSlot> lpiRecognitionFlowSlotFor(
+        const PacketFacts &facts) noexcept;
     [[nodiscard]] std::optional<FlowEntryObservation> observeAccepted(
         const PacketFacts &facts, std::uint64_t policyRevision = 0) noexcept;
     [[nodiscard]] const FlowEntry *find(const CanonicalFlowKey &key) const noexcept;

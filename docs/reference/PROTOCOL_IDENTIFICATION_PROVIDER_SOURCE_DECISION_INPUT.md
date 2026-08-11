@@ -197,6 +197,9 @@ Wiring constraints:
   recognition path.
 - Recognition state belongs on the existing worker-owned `FlowEntry`; do not
   introduce a second flow/session table.
+- Any real-provider per-flow recognizer context must also be owned by the
+  existing `FlowEntry` as an opaque provider context; a provider-side flow map is
+  not allowed as the default integration shape.
 - Packet submission stays bounded and payload-bearing only.
 - Provider aliases are the boundary currency, for example `lpi:http` and
   `lpi:dns`; fork-local Qosmos/qDPI-style AppIDs remain provider-local evidence.

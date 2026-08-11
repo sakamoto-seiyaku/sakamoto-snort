@@ -10,6 +10,8 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -19,10 +21,19 @@ namespace SnortDatapath::Protocol {
 inline constexpr std::string_view kDisabledLpiProviderName = "disabled";
 inline constexpr bool kRealLpiProviderEnabledByDefault = false;
 
+struct LpiProviderFlowInit {
+    Flow::FlowRelativeDirection packetDirection = Flow::FlowRelativeDirection::Orig;
+    std::uint8_t ipProtocol = 0;
+    std::uint16_t originSourcePort = 0;
+    std::uint16_t originDestinationPort = 0;
+};
+
 struct LpiPacketSubmission {
     const Flow::PacketFacts &facts;
     std::span<const std::byte> l3Packet;
     std::span<const std::byte> transportPayload;
+    Flow::FlowRelativeDirection packetDirection = Flow::FlowRelativeDirection::Orig;
+    Flow::LpiProviderFlowContext &flowContext;
 };
 
 struct LpiProviderCounters {
@@ -49,6 +60,11 @@ public:
 
     [[nodiscard]] virtual bool available() const noexcept = 0;
     [[nodiscard]] virtual std::string_view providerName() const noexcept = 0;
+    [[nodiscard]] virtual std::unique_ptr<Flow::LpiProviderFlowContext> createFlowContext(
+        const LpiProviderFlowInit &) noexcept {
+        return std::unique_ptr<Flow::LpiProviderFlowContext>{
+            new (std::nothrow) Flow::LpiProviderFlowContext()};
+    }
     [[nodiscard]] virtual std::optional<LpiProviderFact> recognize(
         const LpiPacketSubmission &submission) noexcept = 0;
 };

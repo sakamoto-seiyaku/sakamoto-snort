@@ -714,6 +714,32 @@ std::optional<LpiRecognitionState> BoundedFlowTable::lpiRecognitionStateFor(
     return found->lpiRecognition;
 }
 
+std::optional<LpiRecognitionFlowSlot> BoundedFlowTable::lpiRecognitionFlowSlotFor(
+    const PacketFacts &facts) noexcept {
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
+    if (found == entries_.end()) {
+        return std::nullopt;
+    }
+
+    return LpiRecognitionFlowSlot{
+        .recognition = &found->lpiRecognition,
+        .providerContext = &found->lpiProviderContext,
+        .packetDirection = packetMatchesOrigin(*found, facts)
+            ? FlowRelativeDirection::Orig
+            : FlowRelativeDirection::Reply,
+        .ipProtocol = facts.ipProtocol,
+        .originSourcePort = found->originSourcePort,
+        .originDestinationPort = found->originDestinationPort,
+    };
+}
+
 std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
     const PacketFacts &facts, const std::uint64_t policyRevision) noexcept {
     const auto key = CanonicalFlowKey::from(facts);

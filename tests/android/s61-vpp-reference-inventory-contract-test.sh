@@ -230,10 +230,14 @@ grep -q 'selected mapped, no-result, and unmapped/compound real-PCAP smoke' "$in
 grep -q 'does not prove full corpus accuracy' "$inventory"
 grep -q 'provider runtime wiring' "$inventory"
 grep -q 'provider-source acceptability' "$inventory"
-grep -q 'should not start from protocol rule' "$inventory"
-grep -q 'enforcement. It should first add a real, pinned recognizer provider' "$inventory"
-grep -q 'Pin a source strategy for the recognizer' "$inventory"
-grep -q 'before touching ProtocolRule enforcement' "$inventory"
+grep -q 'Evidence implication: ProtocolRule readiness is outside this evidence boundary' "$inventory"
+grep -q 'real recognizer provider behind the existing `LpiRecognitionProvider` boundary' "$inventory"
+grep -q 'decision input that precedes ProtocolRule enforcement' "$inventory"
+grep -q '## Decision / Use as Input' "$inventory"
+grep -q 'Preconditions before claiming ProtocolRule readiness' "$inventory"
+grep -q 'provider source strategy pinned' "$inventory"
+grep -q 'minimal licensed corpus subset identified' "$inventory"
+grep -q 'host corpus evidence that packet bytes cross the provider boundary' "$inventory"
 
 [[ -f "$root_cmake" ]]
 grep -q 'SAKAMOTO_ENABLE_LPI_PROVIDER' "$root_cmake"
@@ -689,7 +693,27 @@ grep -q 'selected mapped, no-result, and unmapped/compound real-PCAP smoke' "$st
 grep -q 'corpus replay accuracy' "$stellar_lpi_wrapper_inventory"
 grep -q 'provider-source acceptability' "$stellar_lpi_wrapper_inventory"
 grep -q 'default provider' "$stellar_lpi_wrapper_inventory"
-grep -q 'Before a real provider implementation' "$stellar_lpi_wrapper_inventory"
+grep -q '## Decision / Use as Input' "$stellar_lpi_wrapper_inventory"
+grep -q 'selected-PCAP probes are source, corpus' "$stellar_lpi_wrapper_inventory"
+grep -q 'runtime decision inputs, not an implementation queue' "$stellar_lpi_wrapper_inventory"
+grep -q 'pinned provider source/license strategy' "$stellar_lpi_wrapper_inventory"
+grep -q 'ProtocolRule remains outside this evidence' "$stellar_lpi_wrapper_inventory"
+grep -q 'provider/corpus/runtime evidence available before' "$stellar_lpi_wrapper_inventory" ||
+  grep -q 'provider/corpus/runtime evidence available' "$stellar_lpi_wrapper_inventory"
+
+assert_no_reference_open_work_ledger_wording() {
+  local doc="$1"
+  local recommended_next_slice='Recommended Next '"Slice"
+  local next_evidence_step='Next Evidence '"Step"
+  local next_s61_implementation_step='next S61 implementation '"step"
+  local next_implementation_proof='next implementation '"proof"
+  local should_first_add='should first '"add"
+
+  ! grep -Eq "${recommended_next_slice}|${next_evidence_step}|${next_s61_implementation_step}|${next_implementation_proof}|${should_first_add}|^## Next|^- \\[ \\]" "$doc"
+}
+
+assert_no_reference_open_work_ledger_wording "$inventory"
+assert_no_reference_open_work_ledger_wording "$stellar_lpi_wrapper_inventory"
 
 [[ -x "$wrapper_host_payload_probe" ]]
 grep -q 'policy.copiesSourceIntoRepo=false' "$wrapper_host_payload_probe"
@@ -884,6 +908,9 @@ grep -q 'Root/NFQUEUE or VPN/TUN Adapter' "$provider_source_decision_input"
 grep -q 'Application Protocol Catalog via provider alias' "$provider_source_decision_input"
 grep -q 'Root and VPN must share the same recognition seam' "$provider_source_decision_input"
 grep -q 'do not introduce a second flow/session table' "$provider_source_decision_input"
+grep -q 'per-flow recognizer context must also be owned by the' "$provider_source_decision_input"
+grep -q 'opaque provider context' "$provider_source_decision_input"
+grep -q 'provider-side flow map is' "$provider_source_decision_input"
 grep -q 'Provider aliases are the boundary currency' "$provider_source_decision_input"
 grep -q 'Safe Work Before the Source Decision' "$provider_source_decision_input"
 grep -q 'DisabledLpiRecognitionProvider' "$provider_source_decision_input"

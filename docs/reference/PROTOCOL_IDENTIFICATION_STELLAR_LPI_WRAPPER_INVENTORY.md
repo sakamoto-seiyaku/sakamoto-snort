@@ -324,10 +324,12 @@ Android Root/VPN runtime behavior, provider-source acceptability, corpus
 redistribution rights, default provider wiring, or ProtocolRule enforcement
 readiness.
 
-## Next Evidence Step
+## Decision / Use as Input
 
-Before a real provider implementation, pin the provider source/license strategy
-and define the smallest licensed corpus subset. The next implementation proof
-should then wire a real provider behind `LpiRecognitionProvider` and replay
-packet bytes through the provider boundary before any ProtocolRule enforcement
-work starts.
+Evidence implication: the wrapper and selected-PCAP probes are source, corpus,
+and runtime decision inputs, not an implementation queue. A real provider
+implementation depends on a pinned provider source/license strategy and the
+smallest licensed corpus subset. ProtocolRule remains outside this evidence
+boundary until packet bytes replay through a real provider behind
+`LpiRecognitionProvider`, with provider/corpus/runtime evidence available before
+any ProtocolRule readiness claim.

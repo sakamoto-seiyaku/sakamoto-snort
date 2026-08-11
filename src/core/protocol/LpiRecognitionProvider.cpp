@@ -48,15 +48,16 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
     }
     ++counters_.payloadEligiblePackets;
 
-    const auto currentState = flowTable_.lpiRecognitionStateFor(facts);
-    if (currentState.has_value() && currentState->terminal()) {
+    auto slot = flowTable_.lpiRecognitionFlowSlotFor(facts);
+    if (slot.has_value() && slot->recognition != nullptr
+        && slot->recognition->terminal()) {
         ++counters_.terminalSkippedPackets;
         return LpiPipelineOutcome{
             .observed = true,
             .payloadEligible = true,
             .providerAvailable = provider_->available(),
             .terminalSkipped = true,
-            .stateAfterSubmit = currentState,
+            .stateAfterSubmit = *slot->recognition,
         };
     }
 
@@ -66,7 +67,36 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
             .observed = true,
             .payloadEligible = true,
             .providerAvailable = false,
-            .stateAfterSubmit = currentState,
+            .stateAfterSubmit = slot.has_value() && slot->recognition != nullptr
+                ? std::optional<Flow::LpiRecognitionState>{*slot->recognition}
+                : std::nullopt,
+        };
+    }
+
+    if (!slot.has_value() || slot->recognition == nullptr
+        || slot->providerContext == nullptr) {
+        return LpiPipelineOutcome{
+            .observed = true,
+            .payloadEligible = true,
+            .providerAvailable = true,
+        };
+    }
+
+    if (!slot->providerContext->get()) {
+        *slot->providerContext = provider_->createFlowContext(LpiProviderFlowInit{
+            .packetDirection = slot->packetDirection,
+            .ipProtocol = slot->ipProtocol,
+            .originSourcePort = slot->originSourcePort,
+            .originDestinationPort = slot->originDestinationPort,
+        });
+    }
+    if (!slot->providerContext->get()) {
+        ++counters_.providerUnavailablePackets;
+        return LpiPipelineOutcome{
+            .observed = true,
+            .payloadEligible = true,
+            .providerAvailable = true,
+            .stateAfterSubmit = *slot->recognition,
         };
     }
 
@@ -75,6 +105,8 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
         .facts = facts,
         .l3Packet = l3Packet,
         .transportPayload = payload,
+        .packetDirection = slot->packetDirection,
+        .flowContext = **slot->providerContext,
     });
     if (!providerFact.has_value()) {
         ++counters_.providerNoResultPackets;
@@ -94,9 +126,11 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
         if (adapterOutcome.flowUpdate->terminalState
             == Flow::LpiRecognitionTerminalState::Done) {
             ++counters_.detectorDonePackets;
+            slot->providerContext->reset();
         } else if (adapterOutcome.flowUpdate->terminalState
                    == Flow::LpiRecognitionTerminalState::Exhausted) {
             ++counters_.budgetExhaustedPackets;
+            slot->providerContext->reset();
         }
     }
     return LpiPipelineOutcome{
@@ -106,7 +140,7 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
         .submittedToProvider = true,
         .providerProducedFact = !providerFact->providerAlias.empty(),
         .adapterOutcome = adapterOutcome,
-        .stateAfterSubmit = flowTable_.lpiRecognitionStateFor(facts),
+        .stateAfterSubmit = *slot->recognition,
     };
 }
 
