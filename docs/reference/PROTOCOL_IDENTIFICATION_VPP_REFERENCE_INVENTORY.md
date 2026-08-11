@@ -371,17 +371,23 @@ Repo-local host reference PCAP probe evidence:
   `mixed_pcap/01-http-not-ftp.pcap`,
   `mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap`,
   `mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap`, and
-  `mixed_pcap/mixed_pcap.json`.
+  `socks_pcap/1-socks45-http-example.pcap`; expected rows come from
+  `mixed_pcap/mixed_pcap.json` and `socks_pcap/socks_pcap.json`.
 - expected JSON validation:
   `selectedExpectedJsonValidation=PASS` confirms row-level matches for the
-  selected HTTP/DNS/QUIC session address, `APP_NAME`, `APP_ID`, and PCAP
-  filename.
+  selected HTTP/DNS/QUIC session address, plus SOCKS
+  `SESSION_ADDRESS=10.180.156.185:53535-10.180.156.249:1080-6-0`,
+  `FLOW_DIRECTION=SYMMETRIC`, `SESSION_TYPE=TCP`, `LABEL=LPI_RESULT_6`,
+  `APP_NAME=["SOCKS","HTTP"]`, `APP_ID=[8005,67]`, and PCAP filename.
 - parser scope:
   classic PCAP, Ethernet `DLT_EN10MB`, IPv4, TCP/UDP payload bytes.
 - observed cases:
   HTTP -> fork-local `appid=67` / `HTTP` / `lpi:http` / Sakamoto `http`;
   DNS -> fork-local `appid=32` / `DNS` / `lpi:dns` / Sakamoto `dns`;
-  QUIC -> fork-local `appid=2521` / `QUIC` / `lpi:quic` / Sakamoto `quic`.
+  QUIC -> fork-local `appid=2521` / `QUIC` / `lpi:quic` / Sakamoto `quic`;
+  SOCKS compound -> ordered wrapper emissions `SOCKS`/`8005` before
+  `HTTP`/`67`, with `lpi:socks` recorded as an unmapped provider result before
+  later `lpi:http` maps to Sakamoto `http` / latest exact result.
 - policy:
   `policy.copiesSourceIntoRepo=false`,
   `policy.copiesPcapIntoRepo=false`,
@@ -391,11 +397,11 @@ Repo-local host reference PCAP probe evidence:
   `policy.providerRuntimeWiring=false`, and
   `policy.protocolRuleDecision=false`.
 
-This proves a selected mapped subset of real backup PCAP payloads can pass
+This proves a selected mapped plus unmapped/compound real-PCAP smoke can pass
 through the wrapper candidate and current Sakamoto recognition seam. It still
 does not prove full corpus accuracy, corpus import rights, Android Root/VPN
-runtime behavior, unmapped real-PCAP behavior, or ProtocolRule enforcement
-readiness.
+runtime behavior, provider runtime wiring, provider-source acceptability, or
+ProtocolRule enforcement readiness.
 
 Therefore the next S61 implementation step should not start from protocol rule
 enforcement. It should first add a real, pinned recognizer provider behind the

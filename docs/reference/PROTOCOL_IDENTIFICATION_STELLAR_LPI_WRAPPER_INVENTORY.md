@@ -262,11 +262,15 @@ Current local result observed on 2026-08-12:
   - `mixed_pcap/01-http-not-ftp.pcap`
   - `mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap`
   - `mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap`
-  - expected rows checked from `mixed_pcap/mixed_pcap.json`
+  - `socks_pcap/1-socks45-http-example.pcap`
+  - expected rows checked from `mixed_pcap/mixed_pcap.json` and
+    `socks_pcap/socks_pcap.json`
 - expected JSON validation:
   `selectedExpectedJsonValidation=PASS` confirms row-level matches for the
-  selected HTTP/DNS/QUIC session address, `APP_NAME`, `APP_ID`, and PCAP
-  filename.
+  selected HTTP/DNS/QUIC session address, plus SOCKS flow
+  `10.180.156.185:53535-10.180.156.249:1080-6-0`,
+  `FLOW_DIRECTION=SYMMETRIC`, `SESSION_TYPE=TCP`, `LABEL=LPI_RESULT_6`,
+  `APP_NAME=["SOCKS","HTTP"]`, `APP_ID=[8005,67]`, and PCAP filename.
 - parser scope:
   classic PCAP, Ethernet link type `DLT_EN10MB`, IPv4, TCP/UDP payload bytes.
 - observed cases:
@@ -276,6 +280,10 @@ Current local result observed on 2026-08-12:
     `lpi:dns`, Sakamoto catalog key `dns`
   - QUIC PCAP -> fork-local `appid=2521`, app name `QUIC`, provider alias
     `lpi:quic`, Sakamoto catalog key `quic`
+  - SOCKS PCAP -> ordered wrapper emissions `appid=8005` / `SOCKS` /
+    `lpi:socks` before `appid=67` / `HTTP` / `lpi:http`; the Sakamoto seam
+    first records `lpi:socks` as an unmapped provider result, then maps the
+    later `lpi:http` fact to catalog key `http` as the latest exact result.
 - policy:
   `policy.copiesSourceIntoRepo=false`,
   `policy.copiesPcapIntoRepo=false`,
@@ -290,13 +298,14 @@ Current local result observed on 2026-08-12:
   `probe.corpusAccuracyClaim=false`, and
   `probe.sakamotoPipeline=LpiRecognitionPipeline,LpiRecognitionAdapter,BoundedFlowTable`.
 
-This proves selected backup VPP PCAP payloads for three currently mapped
-Sakamoto catalog entries can pass through the extractable wrapper candidate and
-the current recognition seam. It still does not prove full corpus replay accuracy,
-non-Ethernet link parsing, TCP stream reassembly, Android Root/VPN runtime
-behavior, provider-source acceptability, corpus redistribution rights, default
-provider wiring, unmapped real-PCAP behavior, or ProtocolRule enforcement
-readiness.
+This proves a selected mapped plus unmapped/compound real-PCAP smoke can pass
+through the extractable wrapper candidate and the current recognition seam:
+HTTP/DNS/QUIC map to current Sakamoto catalog entries, and the selected SOCKS
+flow reaches the current unmapped provider-alias path before a later HTTP
+mapping. It still does not prove full corpus replay accuracy, non-Ethernet link
+parsing, TCP stream reassembly, Android Root/VPN runtime behavior,
+provider-source acceptability, corpus redistribution rights, default provider
+wiring, or ProtocolRule enforcement readiness.
 
 ## Next Evidence Step
 
