@@ -34,6 +34,7 @@ PacketFacts tcpPacket(const AdapterKind adapter, const DevicePacketDirection dir
         .domain = FlowDomain{
             .adapter = adapter,
             .linuxUid = 10001,
+            .uidKnown = true,
             .captureQueue = 7,
             .networkContext = 2,
             .runtimeProfile = 3,
@@ -89,6 +90,8 @@ TEST(FlowSteeringTest, FlowEntryCreationPacketDefinesOrigIndependentOfCanonicalE
     EXPECT_EQ(entry->originSourcePort, 443U);
     EXPECT_EQ(entry->originDestinationPort, 40000U);
     EXPECT_EQ(entry->flowOriginDir, DevicePacketDirection::Output);
+    EXPECT_EQ(entry->linuxUid, 10001U);
+    EXPECT_TRUE(entry->uidKnown);
     EXPECT_TRUE(entry->decisionStateValid);
     EXPECT_EQ(entry->policyRevision, 7U);
 
@@ -103,6 +106,52 @@ TEST(FlowSteeringTest, FlowEntryCreationPacketDefinesOrigIndependentOfCanonicalE
     EXPECT_EQ(updated->packets, 2U);
     EXPECT_EQ(table.counters().creates, 1U);
     EXPECT_EQ(table.counters().updates, 1U);
+}
+
+TEST(FlowSteeringTest, LateAttributionOnlyUpdatesExistingFlowEntry) {
+    BoundedFlowTable table(4);
+    auto first = tcpPacket(AdapterKind::VpnTun, DevicePacketDirection::Output,
+                           {10, 0, 0, 1}, {192, 0, 2, 1}, 40000, 443);
+    first.domain.linuxUid = 0;
+    first.domain.uidKnown = false;
+    const auto key = CanonicalFlowKey::from(first);
+    ASSERT_TRUE(key.has_value());
+
+    const auto created = table.observeAccepted(first, 7);
+    ASSERT_TRUE(created.has_value());
+    EXPECT_TRUE(created->created);
+    EXPECT_FALSE(created->uidKnown);
+
+    auto miss = tcpPacket(AdapterKind::VpnTun, DevicePacketDirection::Output,
+                          {10, 0, 0, 2}, {192, 0, 2, 2}, 40001, 443);
+    miss.domain.linuxUid = 0;
+    miss.domain.uidKnown = false;
+    const auto missingAttribution = table.applyResolvedAttribution(miss, 20002);
+    ASSERT_TRUE(missingAttribution.has_value());
+    EXPECT_FALSE(missingAttribution->found);
+    EXPECT_EQ(table.size(), 1U);
+    EXPECT_EQ(table.counters().attributionMisses, 1U);
+
+    const auto attribution = table.applyResolvedAttribution(first, 20002);
+    ASSERT_TRUE(attribution.has_value());
+    EXPECT_TRUE(attribution->found);
+    EXPECT_TRUE(attribution->updated);
+    EXPECT_FALSE(attribution->previousUidKnown);
+    EXPECT_EQ(attribution->currentLinuxUid, 20002U);
+    EXPECT_TRUE(attribution->currentUidKnown);
+    EXPECT_EQ(attribution->attributionUpdates, 1U);
+
+    const auto resolved = table.factsWithResolvedAttribution(first);
+    EXPECT_EQ(resolved.domain.linuxUid, 20002U);
+    EXPECT_TRUE(resolved.domain.uidKnown);
+    EXPECT_EQ(table.counters().attributionUpdates, 1U);
+    EXPECT_EQ(table.counters().attributionResolutions, 1U);
+
+    const auto *entry = table.find(*key);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->linuxUid, 20002U);
+    EXPECT_TRUE(entry->uidKnown);
+    EXPECT_EQ(entry->packets, 1U);
 }
 
 TEST(FlowSteeringTest, PolicyRevisionMismatchClearsDecisionStateWithoutLosingFlowFacts) {

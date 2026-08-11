@@ -172,6 +172,49 @@ TEST(VppGraphInjectionTest, PolicyDropShortCircuitsBeforeAcceptedTerminalPath) {
     EXPECT_FALSE(gate.lastFlowEntryObservation().has_value());
 }
 
+TEST(VppGraphInjectionTest, LateResolvedAttributionReevaluatesSubsequentUnknownPacket) {
+    FlowSteeringRuntime runtime(WorkerLayout{2, 0x5600}, 8);
+    DropUidPolicy policy(20002);
+    FlowGraphInjectionGate gate(runtime, policy);
+    auto firstFacts = facts(AdapterKind::VpnTun);
+    firstFacts.domain.linuxUid = 0;
+    firstFacts.domain.uidKnown = false;
+    const auto key = CanonicalFlowKey::from(firstFacts);
+    ASSERT_TRUE(key.has_value());
+    const auto owner = runtime.distribution().selector().ownerFor(*key);
+    PacketSubmission first{.facts = firstFacts};
+
+    EXPECT_EQ(gate.inject(first, owner), GraphInjectionResult::Accepted);
+    ASSERT_TRUE(gate.lastFlowEntryObservation().has_value());
+    EXPECT_TRUE(gate.lastFlowEntryObservation()->created);
+    EXPECT_FALSE(gate.lastFlowEntryObservation()->uidKnown);
+    EXPECT_EQ(runtime.flowTable().counters().creates, 1U);
+
+    const auto attribution = runtime.flowTable().applyResolvedAttribution(firstFacts, 20002);
+    ASSERT_TRUE(attribution.has_value());
+    EXPECT_TRUE(attribution->found);
+    EXPECT_TRUE(attribution->updated);
+    EXPECT_EQ(attribution->currentLinuxUid, 20002U);
+    EXPECT_TRUE(attribution->currentUidKnown);
+
+    auto laterFacts = facts(AdapterKind::VpnTun, true);
+    laterFacts.domain.linuxUid = 0;
+    laterFacts.domain.uidKnown = false;
+    PacketSubmission later{.facts = laterFacts};
+
+    EXPECT_EQ(gate.inject(later, owner), GraphInjectionResult::PolicyDrop);
+    ASSERT_TRUE(gate.lastPolicyDropDecision().has_value());
+    EXPECT_EQ(gate.lastPolicyDropDecision()->stage, Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(runtime.flowTable().counters().attributionResolutions, 1U);
+    EXPECT_EQ(runtime.flowTable().counters().updates, 0U);
+    EXPECT_EQ(runtime.flowTable().counters().creates, 1U);
+    const auto *entry = runtime.flowTable().find(*key);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->packets, 1U);
+    EXPECT_EQ(entry->linuxUid, 20002U);
+    EXPECT_TRUE(entry->uidKnown);
+}
+
 TEST(VppGraphInjectionTest, ExistingFlowEntryRevisionMismatchLazyReevaluatesNextPacket) {
     FlowSteeringRuntime runtime(WorkerLayout{2, 0x7777}, 4);
     PassRevisionPolicy revisionSeven(7);

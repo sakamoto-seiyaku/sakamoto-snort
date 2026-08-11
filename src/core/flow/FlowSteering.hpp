@@ -264,6 +264,9 @@ struct FlowEntry {
     std::uint16_t originSourcePort = 0;
     std::uint16_t originDestinationPort = 0;
     DevicePacketDirection flowOriginDir = DevicePacketDirection::Input;
+    std::uint32_t linuxUid = 0;
+    bool uidKnown = false;
+    std::uint64_t attributionUpdates = 0;
     bool decisionStateValid = false;
     std::uint64_t policyRevision = 0;
     std::uint64_t decisionStateClears = 0;
@@ -275,11 +278,24 @@ struct FlowEntryObservation {
     FlowRelativeDirection relativeDirection = FlowRelativeDirection::Orig;
     DevicePacketDirection flowOriginDir = DevicePacketDirection::Input;
     bool created = false;
+    std::uint32_t linuxUid = 0;
+    bool uidKnown = false;
+    bool attributionUpdated = false;
     bool decisionStateValid = false;
     bool decisionStateCleared = false;
     std::uint64_t policyRevision = 0;
     std::uint64_t packets = 0;
     std::uint64_t bytes = 0;
+};
+
+struct FlowAttributionObservation {
+    bool found = false;
+    bool updated = false;
+    std::uint32_t previousLinuxUid = 0;
+    bool previousUidKnown = false;
+    std::uint32_t currentLinuxUid = 0;
+    bool currentUidKnown = false;
+    std::uint64_t attributionUpdates = 0;
 };
 
 struct FlowEntryRevisionObservation {
@@ -292,6 +308,9 @@ struct FlowEntryRevisionObservation {
 struct BoundedFlowTableCounters {
     std::uint64_t creates = 0;
     std::uint64_t updates = 0;
+    std::uint64_t attributionUpdates = 0;
+    std::uint64_t attributionMisses = 0;
+    std::uint64_t attributionResolutions = 0;
     std::uint64_t capacityMisses = 0;
     std::uint64_t nonCanonicalPackets = 0;
     std::uint64_t decisionStateClears = 0;
@@ -308,6 +327,10 @@ public:
     }
     [[nodiscard]] std::optional<FlowEntryRevisionObservation> reconcilePolicyRevision(
         const PacketFacts &facts, std::uint64_t policyRevision) noexcept;
+    [[nodiscard]] std::optional<FlowAttributionObservation> applyResolvedAttribution(
+        const PacketFacts &facts, std::uint32_t linuxUid, bool uidKnown = true) noexcept;
+    [[nodiscard]] PacketFacts factsWithResolvedAttribution(
+        const PacketFacts &facts) noexcept;
     [[nodiscard]] std::optional<FlowEntryObservation> observeAccepted(
         const PacketFacts &facts, std::uint64_t policyRevision = 0) noexcept;
     [[nodiscard]] const FlowEntry *find(const CanonicalFlowKey &key) const noexcept;

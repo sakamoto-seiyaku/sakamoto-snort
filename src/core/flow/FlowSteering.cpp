@@ -510,6 +510,77 @@ std::optional<FlowEntryRevisionObservation> BoundedFlowTable::reconcilePolicyRev
     };
 }
 
+std::optional<FlowAttributionObservation> BoundedFlowTable::applyResolvedAttribution(
+    const PacketFacts &facts, const std::uint32_t linuxUid,
+    const bool uidKnown) noexcept {
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        ++counters_.nonCanonicalPackets;
+        return std::nullopt;
+    }
+
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
+    if (found == entries_.end()) {
+        ++counters_.attributionMisses;
+        return FlowAttributionObservation{
+            .found = false,
+            .updated = false,
+            .previousLinuxUid = 0,
+            .previousUidKnown = false,
+            .currentLinuxUid = linuxUid,
+            .currentUidKnown = uidKnown,
+            .attributionUpdates = 0,
+        };
+    }
+
+    const auto previousLinuxUid = found->linuxUid;
+    const auto previousUidKnown = found->uidKnown;
+    const auto updated = previousLinuxUid != linuxUid || previousUidKnown != uidKnown;
+    if (updated) {
+        found->linuxUid = linuxUid;
+        found->uidKnown = uidKnown;
+        ++found->attributionUpdates;
+        ++counters_.attributionUpdates;
+    }
+    return FlowAttributionObservation{
+        .found = true,
+        .updated = updated,
+        .previousLinuxUid = previousLinuxUid,
+        .previousUidKnown = previousUidKnown,
+        .currentLinuxUid = found->linuxUid,
+        .currentUidKnown = found->uidKnown,
+        .attributionUpdates = found->attributionUpdates,
+    };
+}
+
+PacketFacts BoundedFlowTable::factsWithResolvedAttribution(
+    const PacketFacts &facts) noexcept {
+    if (facts.domain.uidKnown) {
+        return facts;
+    }
+
+    auto resolved = facts;
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        ++counters_.nonCanonicalPackets;
+        return resolved;
+    }
+
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
+    if (found == entries_.end() || !found->uidKnown) {
+        return resolved;
+    }
+
+    resolved.domain.linuxUid = found->linuxUid;
+    resolved.domain.uidKnown = true;
+    ++counters_.attributionResolutions;
+    return resolved;
+}
+
 std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
     const PacketFacts &facts, const std::uint64_t policyRevision) noexcept {
     const auto key = CanonicalFlowKey::from(facts);
@@ -525,6 +596,14 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         const auto decisionStateCleared =
             !found->decisionStateValid && found->policyRevision == policyRevision
             && found->decisionStateClears > 0;
+        const auto attributionUpdated = facts.domain.uidKnown
+            && (found->linuxUid != facts.domain.linuxUid || !found->uidKnown);
+        if (attributionUpdated) {
+            found->linuxUid = facts.domain.linuxUid;
+            found->uidKnown = true;
+            ++found->attributionUpdates;
+            ++counters_.attributionUpdates;
+        }
         found->decisionStateValid = true;
         found->policyRevision = policyRevision;
         found->packets += 1U;
@@ -536,6 +615,9 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
                 : FlowRelativeDirection::Reply,
             .flowOriginDir = found->flowOriginDir,
             .created = false,
+            .linuxUid = found->linuxUid,
+            .uidKnown = found->uidKnown,
+            .attributionUpdated = attributionUpdated,
             .decisionStateValid = found->decisionStateValid,
             .decisionStateCleared = decisionStateCleared,
             .policyRevision = found->policyRevision,
@@ -556,6 +638,9 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         .originSourcePort = facts.sourcePort,
         .originDestinationPort = facts.destinationPort,
         .flowOriginDir = facts.deviceDirection,
+        .linuxUid = facts.domain.linuxUid,
+        .uidKnown = facts.domain.uidKnown,
+        .attributionUpdates = 0,
         .decisionStateValid = true,
         .policyRevision = policyRevision,
         .decisionStateClears = 0,
@@ -567,6 +652,9 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         .relativeDirection = FlowRelativeDirection::Orig,
         .flowOriginDir = entry.flowOriginDir,
         .created = true,
+        .linuxUid = entry.linuxUid,
+        .uidKnown = entry.uidKnown,
+        .attributionUpdated = false,
         .decisionStateValid = entry.decisionStateValid,
         .decisionStateCleared = false,
         .policyRevision = entry.policyRevision,
