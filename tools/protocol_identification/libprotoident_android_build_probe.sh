@@ -81,6 +81,19 @@ command -v cmake >/dev/null 2>&1 || {
 
 ndk_root="$(snort_ndk_require)"
 
+source_tree_sha256() {
+    local tree="$1"
+    (
+        cd -- "$tree"
+        find . -type f -print0 | sort -z | xargs -0 -r sha256sum
+    ) | sha256sum | awk '{print $1}'
+}
+
+count_sources() {
+    local pattern="$1"
+    find "$libprotoident_root" -type f -path "$pattern" | wc -l | tr -d ' '
+}
+
 mkdir -p "$generated_source_dir" "$cmake_build_dir"
 
 cat >"$generated_source_dir/CMakeLists.txt" <<'CMAKE'
@@ -161,6 +174,10 @@ echo "buildRoot=$build_root"
 echo "ndkRoot=$ndk_root"
 echo "androidAbi=$android_abi"
 echo "androidPlatform=$android_platform"
+echo "sourceTreeSha256=$(source_tree_sha256 "$libprotoident_root")"
+echo "source.topLevelCc=$(find "$libprotoident_root" -maxdepth 1 -type f -name '*.cc' | wc -l | tr -d ' ')"
+echo "source.tcpCc=$(count_sources "$libprotoident_root/tcp/*.cc")"
+echo "source.udpCc=$(count_sources "$libprotoident_root/udp/*.cc")"
 echo "policy.copiesSourceIntoRepo=false"
 echo "policy.providerVendoringDecision=false"
 echo "probe.scope=compile-link-only"

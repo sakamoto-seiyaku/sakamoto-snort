@@ -23,6 +23,10 @@ Default inputs:
 - STL: `c++_static`
 - output:
   `build-output/protocol-identification/libprotoident-android-probe/`
+- source tree SHA-256:
+  `eaa5eed00c006920f12baa0273513796905c19e27b6cf68cf67b25e8701b5d80`
+- compile-probed source count: `3` top-level `.cc`, `284` `tcp/*.cc`,
+  and `244` `udp/*.cc` files
 
 The probe creates a throwaway CMake project under `build-output`, points it at
 the reference source tree, builds a static C++11 library with the same broad
@@ -40,6 +44,9 @@ Observed on 2026-08-12:
 - output executable: `libprotoident_android_probe`
 - output executable type: Android ARM aarch64 PIE executable
 - output static archive: `liblibprotoident_probe.a`
+- source tree SHA-256:
+  `eaa5eed00c006920f12baa0273513796905c19e27b6cf68cf67b25e8701b5d80`
+- compile-probed source count: `3 + 284 + 244 = 531` `.cc` files
 - ABI/platform: `arm64-v8a` / `android-31`
 - NDK: `/home/js/.local/share/android-sdk/ndk/29.0.14206865`
 
