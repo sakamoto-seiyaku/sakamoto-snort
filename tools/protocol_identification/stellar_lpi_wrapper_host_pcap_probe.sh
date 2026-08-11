@@ -9,6 +9,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$repo_root/tools/protocol_identification/probe_build_root.sh"
+source "$repo_root/tools/protocol_identification/probe_generation.sh"
 
 repo_build_output_root="${repo_root}/build-output"
 reference_root="${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}"
@@ -191,42 +192,13 @@ done
 
 validate_selected_expected_json
 
-source_tree_sha256() {
-    local tree="$1"
-    (
-        cd -- "$tree"
-        find . -type f -print0 | sort -z | xargs -0 -r sha256sum
-    ) | sha256sum | awk '{print $1}'
-}
-
 count_sources() {
     local pattern="$1"
-    find "$libprotoident_root" -type f -path "$pattern" | wc -l | tr -d ' '
+    protocol_identification_probe_count_matching_sources "$libprotoident_root" "$pattern"
 }
 
-mkdir -p "$generated_include_dir/vlib/utils" "$generated_source_dir" "$cmake_build_dir"
-
-cat >"$generated_include_dir/vlib/utils/utils.h" <<'H'
-#pragma once
-
-#include <stdlib.h>
-
-#ifndef ALLOC
-#define ALLOC(type, number) ((type *) calloc((number), sizeof(type)))
-#endif
-
-#ifndef FREE
-#define FREE(p)                                                               \
-    do                                                                        \
-    {                                                                         \
-        if ((p) != NULL)                                                       \
-        {                                                                     \
-            free((void *)(p));                                                 \
-            (p) = NULL;                                                        \
-        }                                                                     \
-    } while (0)
-#endif
-H
+mkdir -p "$generated_source_dir" "$cmake_build_dir"
+protocol_identification_probe_write_vpp_utils_shim "$generated_include_dir"
 
 cat >"$generated_source_dir/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.18)
@@ -1284,8 +1256,8 @@ echo "corpusRoot=$corpus_root"
 echo "wrapperRoot=$wrapper_root"
 echo "libprotoidentRoot=$libprotoident_root"
 echo "buildRoot=$build_root"
-echo "wrapperSourceTreeSha256=$(source_tree_sha256 "$wrapper_root")"
-echo "libprotoidentSourceTreeSha256=$(source_tree_sha256 "$libprotoident_root")"
+echo "wrapperSourceTreeSha256=$(protocol_identification_probe_source_tree_sha256 "$wrapper_root")"
+echo "libprotoidentSourceTreeSha256=$(protocol_identification_probe_source_tree_sha256 "$libprotoident_root")"
 echo "selectedPcap.http=mixed_pcap/01-http-not-ftp.pcap"
 echo "selectedPcap.dns=mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap"
 echo "selectedPcap.quic=mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap"

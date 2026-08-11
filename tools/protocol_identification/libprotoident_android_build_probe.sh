@@ -7,6 +7,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$repo_root/tools/protocol_identification/probe_build_root.sh"
+source "$repo_root/tools/protocol_identification/probe_generation.sh"
 source "$repo_root/dev/dev-ndk-env.sh"
 
 reference_root="${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}"
@@ -78,17 +79,9 @@ command -v cmake >/dev/null 2>&1 || {
 
 ndk_root="$(snort_ndk_require)"
 
-source_tree_sha256() {
-    local tree="$1"
-    (
-        cd -- "$tree"
-        find . -type f -print0 | sort -z | xargs -0 -r sha256sum
-    ) | sha256sum | awk '{print $1}'
-}
-
 count_sources() {
     local pattern="$1"
-    find "$libprotoident_root" -type f -path "$pattern" | wc -l | tr -d ' '
+    protocol_identification_probe_count_matching_sources "$libprotoident_root" "$pattern"
 }
 
 mkdir -p "$generated_source_dir" "$cmake_build_dir"
@@ -171,7 +164,7 @@ echo "buildRoot=$build_root"
 echo "ndkRoot=$ndk_root"
 echo "androidAbi=$android_abi"
 echo "androidPlatform=$android_platform"
-echo "sourceTreeSha256=$(source_tree_sha256 "$libprotoident_root")"
+echo "sourceTreeSha256=$(protocol_identification_probe_source_tree_sha256 "$libprotoident_root")"
 echo "source.topLevelCc=$(find "$libprotoident_root" -maxdepth 1 -type f -name '*.cc' | wc -l | tr -d ' ')"
 echo "source.tcpCc=$(count_sources "$libprotoident_root/tcp/*.cc")"
 echo "source.udpCc=$(count_sources "$libprotoident_root/udp/*.cc")"
