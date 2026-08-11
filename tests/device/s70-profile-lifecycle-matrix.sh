@@ -289,6 +289,20 @@ stop_runtime() {
     }
 }
 
+pause_runtime() {
+  local out_dir="$1"
+  mkdir -p "$out_dir"
+  adb_cmd shell am start -n "$ACTIVITY" --ez runtimePause true \
+    >"${out_dir}/pause.intent.log" 2>&1
+  wait_for_snapshot "${out_dir}/snapshot.paused" 30 \
+    "state=stopped" "mayBeActive=false" "adapterReadiness=unavailable" \
+    "errorCode=user_pause" \
+    || {
+      cat "${out_dir}/snapshot.paused" >&2
+      return 1
+    }
+}
+
 section "matrix_contract"
 require_adb_device
 kv "matrix" "SAKAMOTO-70-profile-lifecycle"
@@ -440,15 +454,17 @@ kv "root2.pid" "$root2_pid"
 kv "root2.generation" "$root2_generation"
 
 section "pause_cleanup"
-paused_state="$(stop_runtime "${RESULT_DIR}/pause")"
+paused_state="$(pause_runtime "${RESULT_DIR}/pause")"
 grep -Fxq "profile=root" <<<"$paused_state"
 grep -Fxq "pid=-1" <<<"$paused_state"
+grep -Fxq "errorCode=user_pause" <<<"$paused_state"
 assert_pid_gone "$root2_pid" "${RESULT_DIR}/pause/root-pid.after-stop"
 assert_no_tun0_residue "${RESULT_DIR}/pause/tun0.after-stop"
 assert_no_connectivity_residue "${RESULT_DIR}/pause/connectivity.after-stop"
 assert_no_native_residue "${RESULT_DIR}/pause/native-residue.after-stop"
 kv "pause.result" "PASS"
 kv "pause.profilePreserved" "root"
+kv "reason.userPause" "user_pause"
 if [[ -n "$S70_BOUND_SUBJECT" ]]; then
   product_state_properties >"${RESULT_DIR}/pause/product-state.after-stop"
   grep -Fxq "selectedProfile=root" "${RESULT_DIR}/pause/product-state.after-stop"
@@ -483,7 +499,6 @@ adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
 mkdir -p "${RESULT_DIR}/cleanup-fault"
 assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-recover-stop"
 kv "reason.cleanupFault" "cleanup_failed"
-kv "reason.userPause" "stopped"
 kv "cleanupFault.result" "PASS"
 
 section "runtime_crash_restart"
@@ -507,13 +522,6 @@ for _ in $(seq 1 30); do
     printf '%s\n' "$state"
   } >"${RESULT_DIR}/runtime-crash/snapshot"
   if [[ "$process_alive" == "0" ]]; then
-    if grep -Fxq "state=stopped" <<<"$state" \
-        && grep -Fxq "errorCode=unexpected_exit" <<<"$state" \
-        && grep -Fxq "mayBeActive=false" <<<"$state"; then
-      crash_recovered=1
-      crash_mode="durable-unexpected-exit"
-      break
-    fi
     if grep -Fxq "state=running" <<<"$state" \
         && grep -Fxq "profile=root" <<<"$state" \
         && grep -Fxq "health=ok" <<<"$state" \
@@ -536,9 +544,7 @@ if [[ "$crash_recovered" != "1" ]]; then
 fi
 printf 'crashRecoveryMode=%s\ncrashRecoveredPid=%s\n' \
   "$crash_mode" "$crash_recovered_pid" >>"${RESULT_DIR}/runtime-crash/snapshot"
-if [[ "$crash_mode" == "automatic-new-owner" ]]; then
-  stop_runtime "${RESULT_DIR}/runtime-crash/auto-owner-stop" >/dev/null
-fi
+stop_runtime "${RESULT_DIR}/runtime-crash/auto-owner-stop" >/dev/null
 assert_no_native_residue "${RESULT_DIR}/runtime-crash/native-residue.after-recovery"
 restart_state="$(start_profile root "${RESULT_DIR}/restart-after-crash")"
 restart_pid="$(printf '%s\n' "$restart_state" | snapshot_value_from pid)"

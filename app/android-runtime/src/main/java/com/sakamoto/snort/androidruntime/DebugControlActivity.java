@@ -47,6 +47,8 @@ public class DebugControlActivity extends Activity {
     private static final long STATUS_POLL_MILLIS = 500L;
     private static final String EXTRA_RUNTIME_START = "runtimeStart";
     private static final String EXTRA_RUNTIME_STOP = "runtimeStop";
+    private static final String EXTRA_RUNTIME_PAUSE = "runtimePause";
+    private static final String EXTRA_RUNTIME_RESUME = "runtimeResume";
     private static final String EXTRA_RUNTIME_PROFILE = "runtimeProfile";
     private static final String EXTRA_RUNTIME_CLEANUP_FAULT = "runtimeCleanupFault";
     private static final String EXTRA_DEBUG_TRAFFIC = "debugTraffic";
@@ -164,7 +166,11 @@ public class DebugControlActivity extends Activity {
             backend.setCleanupFault(this,
                     intent.getBooleanExtra(EXTRA_RUNTIME_CLEANUP_FAULT, false));
         }
-        if (intent.getBooleanExtra(EXTRA_RUNTIME_STOP, false)) {
+        if (intent.getBooleanExtra(EXTRA_RUNTIME_PAUSE, false)) {
+            main.post(this::pauseProtection);
+        } else if (intent.getBooleanExtra(EXTRA_RUNTIME_RESUME, false)) {
+            main.post(this::resumeProtection);
+        } else if (intent.getBooleanExtra(EXTRA_RUNTIME_STOP, false)) {
             main.post(this::stopRuntime);
         } else if (intent.getBooleanExtra(EXTRA_RUNTIME_START, false)) {
             String profile = intent.getStringExtra(EXTRA_RUNTIME_PROFILE);
@@ -407,6 +413,27 @@ public class DebugControlActivity extends Activity {
         pendingVpnStart = false;
         backend.stop(this);
         action("Stop requested.");
+        refreshStatus();
+    }
+
+    private void pauseProtection() {
+        pendingStart = false;
+        pendingVpnStart = false;
+        backend.pauseProtection(this);
+        action("Protection Pause requested.");
+        refreshStatus();
+    }
+
+    private void resumeProtection() {
+        pendingStart = false;
+        pendingVpnStart = false;
+        RuntimeControlBackend.StartResult result = backend.resumeProtection(this);
+        if (result == RuntimeControlBackend.StartResult.NOTIFICATION_REQUIRED) {
+            pendingStart = true;
+            action("Visible protection notification permission is required.");
+        } else {
+            action("Protection Resume requested.");
+        }
         refreshStatus();
     }
 
