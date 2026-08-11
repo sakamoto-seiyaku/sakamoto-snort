@@ -167,6 +167,7 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t uidMetadataPresentPackets = 0;
     std::uint64_t uidMetadataMissingPackets = 0;
     Policy::PacketPolicyDropActivityCounters policyDropActivity;
+    Flow::FlowEntryActivityCounters allowedFlowActivity;
     std::uint32_t lastObservedLinuxUid = 0;
     bool lastObservedUidKnown = false;
     std::uint32_t lastObservedNetworkContext = 0;
@@ -399,6 +400,7 @@ public:
             .uidMetadataPresentPackets = counters.uidMetadataPresentPackets,
             .uidMetadataMissingPackets = counters.uidMetadataMissingPackets,
             .policyDropActivity = counters.policyDropActivity,
+            .allowedFlowActivity = counters.allowedFlowActivity,
             .lastObservedLinuxUid = counters.lastObservedLinuxUid,
             .lastObservedUidKnown = counters.lastObservedUidKnown,
             .lastObservedNetworkContext = counters.lastObservedNetworkContext,

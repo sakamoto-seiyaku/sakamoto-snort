@@ -147,6 +147,7 @@ public:
             .attributionMisses = counters.attributionMisses,
             .attributionResolutions = counters.attributionResolutions,
             .policyDropActivity = counters.policyDropActivity,
+            .allowedFlowActivity = counters.allowedFlowActivity,
             .lastObservedLinuxUid = counters.lastObservedLinuxUid,
             .lastObservedUidKnown = counters.lastObservedUidKnown,
             .lastObservedNetworkContext = counters.lastObservedNetworkContext,

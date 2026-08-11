@@ -475,6 +475,20 @@ TEST(VpnTunFlowAdapterTest, OutboundAndTransportReturnShareCanonicalOwner) {
     EXPECT_EQ(counters.directPackets, 2U);
     EXPECT_EQ(counters.ownerGuardPasses, 2U);
     EXPECT_EQ(counters.ownerGuardMismatches, 0U);
+    EXPECT_EQ(counters.allowedFlowActivity.records, 2U);
+    EXPECT_EQ(counters.allowedFlowActivity.totalRecords, 2U);
+    EXPECT_TRUE(counters.allowedFlowActivity.hasLastRecord);
+    EXPECT_EQ(counters.allowedFlowActivity.lastLinuxUid, 12546U);
+    EXPECT_TRUE(counters.allowedFlowActivity.lastUidKnown);
+    EXPECT_EQ(counters.allowedFlowActivity.lastDeviceDirection,
+              Flow::DevicePacketDirection::Input);
+    EXPECT_EQ(counters.allowedFlowActivity.lastFlowDirection,
+              Flow::FlowRelativeDirection::Reply);
+    EXPECT_EQ(counters.allowedFlowActivity.lastIpProtocol, 6U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastSourcePort, 443U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastDestinationPort, 40000U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastPackets, 2U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastBytes, 80U);
 }
 
 TEST(VpnTunFlowAdapterTest, SupportsIpv6UdpThroughSharedParser) {

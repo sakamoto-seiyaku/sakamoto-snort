@@ -1988,6 +1988,31 @@ public final class AndroidRuntimeContractTest {
                         && "vpn_outbound_or_return".equals(
                         unknownItem.devicePacketDirection),
                 "unknown native attribution remains explicit in ActivityItem");
+
+        ProductNativeActivityIngestor.NativeAllowedFlowRecord allowed =
+                new ProductNativeActivityIngestor.NativeAllowedFlowRecord(
+                        4L, true, 1010001, true, 7,
+                        "10.0.0.1", "192.0.2.1", 6,
+                        40000, 443, true, "output", "orig",
+                        70L, 3L, 4500L);
+        check(ProductNativeActivityIngestor.shouldIngest(allowed, RuntimeProfile.ROOT,
+                        RuntimeProfile.ROOT, 4L, 4L, 3L),
+                "new native allowed FlowEntry total is ingested");
+        ActivityItem allowedItem = ProductNativeActivityIngestor.toActivityItem(
+                allowed, RuntimeProfile.ROOT, 1236L);
+        check(allowedItem.subjectId.equals(ApplicationSubjectId.fromUid(1010001))
+                        && "pass_next".equals(allowedItem.verdict)
+                        && "flow_entry".equals(allowedItem.evidenceSource)
+                        && !allowedItem.detailLossy
+                        && "192.0.2.1".equals(allowedItem.remoteIp)
+                        && allowedItem.remotePort == 443
+                        && "tcp".equals(allowedItem.protocol)
+                        && "output".equals(allowedItem.devicePacketDirection)
+                        && "orig".equals(allowedItem.flowDirection)
+                        && allowedItem.policyRevision == 70L
+                        && allowedItem.packets == 3L
+                        && allowedItem.bytes == 4500L,
+                "native allowed FlowEntry maps to a product ActivityItem");
     }
 
     private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {

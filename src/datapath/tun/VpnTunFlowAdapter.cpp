@@ -154,6 +154,12 @@ VpnTunFlowAdapterResult VpnTunFlowAdapter::process(
     switch (graphResult.status) {
     case Flow::FlowGraphIngressStatus::Accepted:
         ++counters_.forwardedPackets;
+        if (graphResult.acceptedFacts.has_value()
+            && graphResult.flowEntryObservation.has_value()) {
+            counters_.allowedFlowActivity.record(
+                *graphResult.acceptedFacts,
+                *graphResult.flowEntryObservation);
+        }
         break;
     case Flow::FlowGraphIngressStatus::PolicyDrop:
         ++counters_.droppedPackets;

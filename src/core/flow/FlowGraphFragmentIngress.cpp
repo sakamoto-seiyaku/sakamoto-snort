@@ -53,6 +53,12 @@ FlowGraphIngressResult FlowGraphFragmentIngress::injectFacts(
         .policyDecision = result == GraphInjectionResult::PolicyDrop
             ? injectionGate_.lastPolicyDropDecision()
             : std::optional<Policy::PacketPolicyDecision>{},
+        .acceptedFacts = result == GraphInjectionResult::Accepted
+            ? injectionGate_.lastAcceptedFacts()
+            : std::optional<PacketFacts>{},
+        .flowEntryObservation = result == GraphInjectionResult::Accepted
+            ? injectionGate_.lastFlowEntryObservation()
+            : std::optional<FlowEntryObservation>{},
     };
 }
 
@@ -100,6 +106,12 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
         .policyDecision = result == GraphInjectionResult::PolicyDrop
             ? injectionGate_.lastPolicyDropDecision()
             : std::optional<Policy::PacketPolicyDecision>{},
+        .acceptedFacts = result == GraphInjectionResult::Accepted
+            ? injectionGate_.lastAcceptedFacts()
+            : std::optional<PacketFacts>{},
+        .flowEntryObservation = result == GraphInjectionResult::Accepted
+            ? injectionGate_.lastFlowEntryObservation()
+            : std::optional<FlowEntryObservation>{},
     };
 }
 

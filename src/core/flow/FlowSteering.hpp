@@ -288,6 +288,55 @@ struct FlowEntryObservation {
     std::uint64_t bytes = 0;
 };
 
+struct FlowEntryActivityCounters {
+    static constexpr std::uint32_t kDefaultCapacity = 8;
+
+    std::uint32_t capacity = kDefaultCapacity;
+    std::uint64_t records = 0;
+    std::uint64_t totalRecords = 0;
+    std::uint64_t evictedRecords = 0;
+    bool hasLastRecord = false;
+    IpAddress lastSource;
+    IpAddress lastDestination;
+    std::uint8_t lastIpProtocol = 0;
+    std::uint16_t lastSourcePort = 0;
+    std::uint16_t lastDestinationPort = 0;
+    bool lastPortsAvailable = false;
+    DevicePacketDirection lastDeviceDirection = DevicePacketDirection::Input;
+    FlowRelativeDirection lastFlowDirection = FlowRelativeDirection::Orig;
+    std::uint32_t lastLinuxUid = 0;
+    bool lastUidKnown = false;
+    std::uint32_t lastNetworkContext = 0;
+    std::uint64_t lastPolicyRevision = 0;
+    std::uint64_t lastPackets = 0;
+    std::uint64_t lastBytes = 0;
+
+    void record(const PacketFacts &facts,
+                const FlowEntryObservation &observation) noexcept {
+        ++totalRecords;
+        if (records < capacity) {
+            ++records;
+        } else {
+            ++evictedRecords;
+        }
+        hasLastRecord = true;
+        lastSource = facts.source;
+        lastDestination = facts.destination;
+        lastIpProtocol = facts.ipProtocol;
+        lastSourcePort = facts.sourcePort;
+        lastDestinationPort = facts.destinationPort;
+        lastPortsAvailable = facts.portsAvailable;
+        lastDeviceDirection = facts.deviceDirection;
+        lastFlowDirection = observation.relativeDirection;
+        lastLinuxUid = observation.linuxUid;
+        lastUidKnown = observation.uidKnown;
+        lastNetworkContext = facts.domain.networkContext;
+        lastPolicyRevision = observation.policyRevision;
+        lastPackets = observation.packets;
+        lastBytes = observation.bytes;
+    }
+};
+
 struct FlowAttributionObservation {
     bool found = false;
     bool updated = false;

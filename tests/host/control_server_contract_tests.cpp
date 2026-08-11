@@ -1179,6 +1179,35 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
         Policy::PacketPolicyDecision::drop(
             17, 42, 7, Policy::PacketPolicyStage::NetworkGate),
         12546, true, 7);
+    runtime.nfqueueCounters.allowedFlowActivity.record(
+        Flow::PacketFacts{
+            .source = Flow::IpAddress::v4({10, 0, 0, 1}),
+            .destination = Flow::IpAddress::v4({192, 0, 2, 1}),
+            .ipProtocol = 6,
+            .sourcePort = 40000,
+            .destinationPort = 443,
+            .portsAvailable = true,
+            .parseStatus = Flow::ParseStatus::Ready,
+            .deviceDirection = Flow::DevicePacketDirection::Output,
+            .originalLength = 1500,
+            .boundedPrefixLength = 40,
+            .domain = Flow::FlowDomain{
+                .linuxUid = 12546,
+                .uidKnown = true,
+                .networkContext = 7,
+            },
+        },
+        Flow::FlowEntryObservation{
+            .relativeDirection = Flow::FlowRelativeDirection::Orig,
+            .flowOriginDir = Flow::DevicePacketDirection::Output,
+            .created = true,
+            .linuxUid = 12546,
+            .uidKnown = true,
+            .decisionStateValid = true,
+            .policyRevision = 11,
+            .packets = 3,
+            .bytes = 4500,
+        });
     ControlServerHarness harness(runtime);
 
     const rapidjson::Document hello = harness.call(8, "HELLO");
@@ -1223,6 +1252,27 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(activity["lastReasonId"].GetUint(), 17U);
     EXPECT_EQ(activity["lastRuleId"].GetUint64(), 42U);
     EXPECT_EQ(activity["lastRevision"].GetUint64(), 7U);
+    ASSERT_TRUE(result["allowedFlowActivity"].IsObject());
+    const auto &allowed = result["allowedFlowActivity"];
+    EXPECT_EQ(allowed["capacity"].GetUint(), 8U);
+    EXPECT_EQ(allowed["records"].GetUint64(), 1U);
+    EXPECT_EQ(allowed["totalRecords"].GetUint64(), 1U);
+    EXPECT_EQ(allowed["evictedRecords"].GetUint64(), 0U);
+    EXPECT_TRUE(allowed["hasLastRecord"].GetBool());
+    EXPECT_STREQ(allowed["lastSourceAddress"].GetString(), "10.0.0.1");
+    EXPECT_STREQ(allowed["lastDestinationAddress"].GetString(), "192.0.2.1");
+    EXPECT_EQ(allowed["lastIpProtocol"].GetUint(), 6U);
+    EXPECT_EQ(allowed["lastSourcePort"].GetUint(), 40000U);
+    EXPECT_EQ(allowed["lastDestinationPort"].GetUint(), 443U);
+    EXPECT_TRUE(allowed["lastPortsAvailable"].GetBool());
+    EXPECT_STREQ(allowed["lastDeviceDirection"].GetString(), "output");
+    EXPECT_STREQ(allowed["lastFlowDirection"].GetString(), "orig");
+    EXPECT_EQ(allowed["lastLinuxUid"].GetUint(), 12546U);
+    EXPECT_TRUE(allowed["lastUidKnown"].GetBool());
+    EXPECT_EQ(allowed["lastNetworkContext"].GetUint(), 7U);
+    EXPECT_EQ(allowed["lastPolicyRevision"].GetUint64(), 11U);
+    EXPECT_EQ(allowed["lastPackets"].GetUint64(), 3U);
+    EXPECT_EQ(allowed["lastBytes"].GetUint64(), 4500U);
 }
 
 TEST(ControlServerContract, HelloOmitsVpnTunCountersCapabilityWhenUnsupported) {
@@ -1297,6 +1347,37 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
         Policy::PacketPolicyDecision::drop(
             91, 7001, 69, Policy::PacketPolicyStage::NetworkGate),
         12546, true, 7);
+    runtime.vpnTunCounters.allowedFlowActivity.record(
+        Flow::PacketFacts{
+            .source = Flow::IpAddress::v4({192, 0, 2, 1}),
+            .destination = Flow::IpAddress::v4({10, 0, 0, 1}),
+            .ipProtocol = 17,
+            .sourcePort = 53,
+            .destinationPort = 53000,
+            .portsAvailable = true,
+            .parseStatus = Flow::ParseStatus::Ready,
+            .deviceDirection = Flow::DevicePacketDirection::Input,
+            .originalLength = 1200,
+            .boundedPrefixLength = 28,
+            .domain = Flow::FlowDomain{
+                .adapter = Flow::AdapterKind::VpnTun,
+                .linuxUid = 12546,
+                .uidKnown = true,
+                .networkContext = 7,
+                .runtimeProfile = 1,
+                .interfaceIndex = 9,
+            },
+        },
+        Flow::FlowEntryObservation{
+            .relativeDirection = Flow::FlowRelativeDirection::Reply,
+            .flowOriginDir = Flow::DevicePacketDirection::Output,
+            .linuxUid = 12546,
+            .uidKnown = true,
+            .decisionStateValid = true,
+            .policyRevision = 70,
+            .packets = 2,
+            .bytes = 2400,
+        });
     ControlServerHarness harness(runtime);
 
     const rapidjson::Document hello = harness.call(48, "HELLO");
@@ -1352,6 +1433,27 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(activity["lastReasonId"].GetUint(), 91U);
     EXPECT_EQ(activity["lastRuleId"].GetUint64(), 7001U);
     EXPECT_EQ(activity["lastRevision"].GetUint64(), 69U);
+    ASSERT_TRUE(result["allowedFlowActivity"].IsObject());
+    const auto &allowed = result["allowedFlowActivity"];
+    EXPECT_EQ(allowed["capacity"].GetUint(), 8U);
+    EXPECT_EQ(allowed["records"].GetUint64(), 1U);
+    EXPECT_EQ(allowed["totalRecords"].GetUint64(), 1U);
+    EXPECT_EQ(allowed["evictedRecords"].GetUint64(), 0U);
+    EXPECT_TRUE(allowed["hasLastRecord"].GetBool());
+    EXPECT_STREQ(allowed["lastSourceAddress"].GetString(), "192.0.2.1");
+    EXPECT_STREQ(allowed["lastDestinationAddress"].GetString(), "10.0.0.1");
+    EXPECT_EQ(allowed["lastIpProtocol"].GetUint(), 17U);
+    EXPECT_EQ(allowed["lastSourcePort"].GetUint(), 53U);
+    EXPECT_EQ(allowed["lastDestinationPort"].GetUint(), 53000U);
+    EXPECT_TRUE(allowed["lastPortsAvailable"].GetBool());
+    EXPECT_STREQ(allowed["lastDeviceDirection"].GetString(), "input");
+    EXPECT_STREQ(allowed["lastFlowDirection"].GetString(), "reply");
+    EXPECT_EQ(allowed["lastLinuxUid"].GetUint(), 12546U);
+    EXPECT_TRUE(allowed["lastUidKnown"].GetBool());
+    EXPECT_EQ(allowed["lastNetworkContext"].GetUint(), 7U);
+    EXPECT_EQ(allowed["lastPolicyRevision"].GetUint64(), 70U);
+    EXPECT_EQ(allowed["lastPackets"].GetUint64(), 2U);
+    EXPECT_EQ(allowed["lastBytes"].GetUint64(), 2400U);
 }
 
 TEST(ControlServerContract, PolicyUnknownApplicationSubjectMatchesUidUnknownFacts) {

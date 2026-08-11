@@ -239,6 +239,83 @@ rapidjson::Value makePolicyDropActivityResult(
     return result;
 }
 
+std::string ipAddressToString(const SnortDatapath::Flow::IpAddress &address) {
+    char buffer[INET6_ADDRSTRLEN] = {};
+    const int family = address.family == SnortDatapath::Flow::AddressFamily::Ipv6
+        ? AF_INET6
+        : AF_INET;
+    const void *source = address.bytes.data();
+    if (::inet_ntop(family, source, buffer, sizeof(buffer)) == nullptr) {
+        return {};
+    }
+    return buffer;
+}
+
+const char *devicePacketDirectionName(
+    const SnortDatapath::Flow::DevicePacketDirection direction) noexcept {
+    switch (direction) {
+    case SnortDatapath::Flow::DevicePacketDirection::Input:
+        return "input";
+    case SnortDatapath::Flow::DevicePacketDirection::Output:
+        return "output";
+    }
+    return "unknown";
+}
+
+const char *flowRelativeDirectionName(
+    const SnortDatapath::Flow::FlowRelativeDirection direction) noexcept {
+    switch (direction) {
+    case SnortDatapath::Flow::FlowRelativeDirection::Orig:
+        return "orig";
+    case SnortDatapath::Flow::FlowRelativeDirection::Reply:
+        return "reply";
+    }
+    return "unknown";
+}
+
+rapidjson::Value makeAllowedFlowActivityResult(
+    const SnortDatapath::Flow::FlowEntryActivityCounters &activity,
+    rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value result(rapidjson::kObjectType);
+    result.AddMember("capacity", activity.capacity, alloc);
+    result.AddMember("records", activity.records, alloc);
+    result.AddMember("totalRecords", activity.totalRecords, alloc);
+    result.AddMember("evictedRecords", activity.evictedRecords, alloc);
+    result.AddMember("hasLastRecord", activity.hasLastRecord, alloc);
+    const auto source = ipAddressToString(activity.lastSource);
+    rapidjson::Value lastSourceAddress;
+    lastSourceAddress.SetString(source.c_str(),
+                                static_cast<rapidjson::SizeType>(source.size()),
+                                alloc);
+    result.AddMember("lastSourceAddress", lastSourceAddress, alloc);
+    const auto destination = ipAddressToString(activity.lastDestination);
+    rapidjson::Value lastDestinationAddress;
+    lastDestinationAddress.SetString(
+        destination.c_str(),
+        static_cast<rapidjson::SizeType>(destination.size()),
+        alloc);
+    result.AddMember("lastDestinationAddress", lastDestinationAddress, alloc);
+    result.AddMember("lastIpProtocol", activity.lastIpProtocol, alloc);
+    result.AddMember("lastSourcePort", activity.lastSourcePort, alloc);
+    result.AddMember("lastDestinationPort", activity.lastDestinationPort, alloc);
+    result.AddMember("lastPortsAvailable", activity.lastPortsAvailable, alloc);
+    rapidjson::Value lastDeviceDirection;
+    lastDeviceDirection.SetString(
+        devicePacketDirectionName(activity.lastDeviceDirection), alloc);
+    result.AddMember("lastDeviceDirection", lastDeviceDirection, alloc);
+    rapidjson::Value lastFlowDirection;
+    lastFlowDirection.SetString(
+        flowRelativeDirectionName(activity.lastFlowDirection), alloc);
+    result.AddMember("lastFlowDirection", lastFlowDirection, alloc);
+    result.AddMember("lastLinuxUid", activity.lastLinuxUid, alloc);
+    result.AddMember("lastUidKnown", activity.lastUidKnown, alloc);
+    result.AddMember("lastNetworkContext", activity.lastNetworkContext, alloc);
+    result.AddMember("lastPolicyRevision", activity.lastPolicyRevision, alloc);
+    result.AddMember("lastPackets", activity.lastPackets, alloc);
+    result.AddMember("lastBytes", activity.lastBytes, alloc);
+    return result;
+}
+
 rapidjson::Document makeNfqueueStatusResult(
     const SnortRuntime::NfqueueRuntimeCounters counters) {
     rapidjson::Document result(rapidjson::kObjectType);
@@ -261,6 +338,9 @@ rapidjson::Document makeNfqueueStatusResult(
                      counters.uidMetadataMissingPackets, alloc);
     result.AddMember("policyDropActivity",
                      makePolicyDropActivityResult(counters.policyDropActivity, alloc),
+                     alloc);
+    result.AddMember("allowedFlowActivity",
+                     makeAllowedFlowActivityResult(counters.allowedFlowActivity, alloc),
                      alloc);
     result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
     result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);
@@ -319,6 +399,9 @@ rapidjson::Document makeVpnTunStatusResult(
     result.AddMember("attributionResolutions", counters.attributionResolutions, alloc);
     result.AddMember("policyDropActivity",
                      makePolicyDropActivityResult(counters.policyDropActivity, alloc),
+                     alloc);
+    result.AddMember("allowedFlowActivity",
+                     makeAllowedFlowActivityResult(counters.allowedFlowActivity, alloc),
                      alloc);
     result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
     result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);

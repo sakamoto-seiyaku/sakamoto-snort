@@ -35,6 +35,8 @@ struct FlowGraphIngressResult final {
     bool fragmentReassembled = false;
     bool fragmentOwnerMetadata = false;
     std::optional<Policy::PacketPolicyDecision> policyDecision;
+    std::optional<PacketFacts> acceptedFacts;
+    std::optional<FlowEntryObservation> flowEntryObservation;
 };
 
 /**

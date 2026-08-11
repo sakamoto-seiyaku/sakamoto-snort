@@ -20,6 +20,7 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
     ++counters_.injectedPackets;
     lastPolicyDropDecision_.reset();
     lastFlowEntryObservation_.reset();
+    lastAcceptedFacts_.reset();
     const auto key = CanonicalFlowKey::from(submission.facts);
     if (!key.has_value()) {
         (void)submission.lease.drop();
@@ -69,6 +70,9 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
             if (distribution.complete(*descriptorId, PacketLeaseOutcome::Accepted)) {
                 lastFlowEntryObservation_ = runtime_.flowTable().observeAccepted(
                     acceptedFacts, policyDecision.revision);
+                if (lastFlowEntryObservation_.has_value()) {
+                    lastAcceptedFacts_ = acceptedFacts;
+                }
                 ++counters_.acceptedPackets;
                 return GraphInjectionResult::Accepted;
             }
@@ -105,6 +109,9 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
                         lastFlowEntryObservation_ =
                             runtime_.flowTable().observeAccepted(
                                 acceptedFacts, policyDecision.revision);
+                        if (lastFlowEntryObservation_.has_value()) {
+                            lastAcceptedFacts_ = acceptedFacts;
+                        }
                         ++counters_.acceptedPackets;
                         return GraphInjectionResult::Accepted;
                     }

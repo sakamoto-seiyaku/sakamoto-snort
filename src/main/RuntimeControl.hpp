@@ -30,6 +30,7 @@ struct NfqueueRuntimeCounters {
     std::uint64_t uidMetadataPresentPackets = 0;
     std::uint64_t uidMetadataMissingPackets = 0;
     SnortDatapath::Policy::PacketPolicyDropActivityCounters policyDropActivity;
+    SnortDatapath::Flow::FlowEntryActivityCounters allowedFlowActivity;
     std::uint32_t lastObservedLinuxUid = 0;
     bool lastObservedUidKnown = false;
     std::uint32_t lastObservedNetworkContext = 0;
@@ -63,6 +64,7 @@ struct VpnTunRuntimeCounters {
     std::uint64_t attributionMisses = 0;
     std::uint64_t attributionResolutions = 0;
     SnortDatapath::Policy::PacketPolicyDropActivityCounters policyDropActivity;
+    SnortDatapath::Flow::FlowEntryActivityCounters allowedFlowActivity;
     std::uint32_t lastObservedLinuxUid = 0;
     bool lastObservedUidKnown = false;
     std::uint32_t lastObservedNetworkContext = 0;

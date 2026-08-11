@@ -94,6 +94,7 @@ struct VpnTunFlowAdapterCounters final {
     std::uint64_t attributionMisses = 0;
     std::uint64_t attributionResolutions = 0;
     Policy::PacketPolicyDropActivityCounters policyDropActivity;
+    Flow::FlowEntryActivityCounters allowedFlowActivity;
     std::uint32_t lastObservedLinuxUid = 0;
     std::uint32_t lastObservedNetworkContext = 0;
     std::uint32_t lastObservedInterfaceIndex = 0;
