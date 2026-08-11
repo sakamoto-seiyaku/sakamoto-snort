@@ -63,6 +63,7 @@ public final class AndroidRuntimeContractTest {
         nativeCoreHandshakeRequiresGeneratedIdentity();
         applicationSubjectIdentityIsCompleteUidOnly();
         productStorePersistsProfileBindingsAndEmptyBundle();
+        productStorePersistsNetworkGateMatrixAsTypedRuleFamily();
         boundedActivityStoreIsSeparateFromProductState();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
@@ -1168,6 +1169,84 @@ public final class AndroidRuntimeContractTest {
                 "ProductStore exposes unsupported initial read instead of hiding it");
         check(!blockedStore.selectRuntimeProfile(RuntimeProfile.ROOT).persisted,
                 "ProductStore does not overwrite unsupported state as if it were empty");
+    }
+
+    private static void productStorePersistsNetworkGateMatrixAsTypedRuleFamily()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-51-gate-matrix");
+        ProductStore store = new ProductStore(files.toFile());
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+
+        ProductStore.MutationResult blocked = store.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.WIFI, true);
+        check(blocked.persisted, "Network Gate mutation persists through ProductStore");
+        check(blocked.snapshot.authoringPolicyBundle.revision == 1L,
+                "Network Gate mutation publishes a new authoring bundle revision");
+        check(blocked.snapshot.authoringPolicyBundle.gateEntryCount == 1,
+                "GateMatrix is an independent typed rule family entry count");
+        check(blocked.snapshot.authoringPolicyBundle.l4RuleCount == 0
+                        && blocked.snapshot.authoringPolicyBundle.protocolRuleCount == 0,
+                "GateMatrix mutation does not smuggle L4 or Protocol rules");
+
+        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
+        check(restored.authoringPolicyBundle.gateMatrix.size() == 1,
+                "GateMatrix entries restore after process recreation");
+        AuthoringPolicyBundle.NetworkGateRule rule =
+                restored.authoringPolicyBundle.gateMatrix.get(0);
+        check(rule.subjectId.equals(app), "GateMatrix stores complete UID subject identity");
+        check(rule.networkContext == AuthoringPolicyBundle.NetworkContextId.WIFI,
+                "GateMatrix stores typed Wi-Fi network context");
+        check(rule.blocked, "GateMatrix stores blocked gate action");
+        long stableRuleId = rule.ruleId;
+        int stableReasonId = rule.reasonId;
+
+        ProductStore reloaded = new ProductStore(files.toFile());
+        ProductStore.MutationResult opened = reloaded.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.WIFI, false);
+        check(opened.persisted, "Network Gate open mutation persists");
+        check(opened.snapshot.authoringPolicyBundle.revision == 2L,
+                "Network Gate open publishes the next revision");
+        check(opened.snapshot.authoringPolicyBundle.gateMatrix.size() == 1,
+                "same subject/context updates the stable GateMatrix rule instead of duplicating");
+        AuthoringPolicyBundle.NetworkGateRule openedRule =
+                opened.snapshot.authoringPolicyBundle.gateMatrix.get(0);
+        check(!openedRule.blocked, "Network Gate open state restores access intent");
+        check(openedRule.ruleId == stableRuleId && openedRule.reasonId == stableReasonId,
+                "GateMatrix ruleId and reasonId stay stable across block/open edits");
+
+        ProductStore.MutationResult mobile = reloaded.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.MOBILE, true);
+        ProductStore.MutationResult vpn = reloaded.setNetworkGate(app,
+                AuthoringPolicyBundle.NetworkContextId.VPN, true);
+        check(mobile.persisted && vpn.persisted,
+                "GateMatrix persists Mobile and VPN network contexts");
+        ProductStateSnapshot allContexts = ProductStateStore.read(files.toFile());
+        check(allContexts.authoringPolicyBundle.gateMatrix.size() == 3,
+                "GateMatrix keeps Wi-Fi, Mobile, and VPN as separate typed contexts");
+        check(allContexts.authoringPolicyBundle.gateMatrix.get(0).networkContext
+                        == AuthoringPolicyBundle.NetworkContextId.WIFI,
+                "GateMatrix stores Wi-Fi context in stable order");
+        check(allContexts.authoringPolicyBundle.gateMatrix.get(1).networkContext
+                        == AuthoringPolicyBundle.NetworkContextId.MOBILE,
+                "GateMatrix stores Mobile context in stable order");
+        check(allContexts.authoringPolicyBundle.gateMatrix.get(2).networkContext
+                        == AuthoringPolicyBundle.NetworkContextId.VPN,
+                "GateMatrix stores VPN context in stable order");
+
+        Files.write(files.resolve("product-state/product.properties"),
+                ("schemaVersion=1\nselectedProfile=root\nboundApplications=\n"
+                        + "bundle.schemaVersion=1\nbundle.revision=99\n"
+                        + "bundle.source=local-product-backend\nbundle.gateEntryCount=2\n"
+                        + "bundle.l4RuleCount=0\nbundle.protocolRuleCount=0\n"
+                        + "bundle.gateMatrix=1010001:wifi:blocked:1:1;"
+                        + "1010001:wifi:open:2:2\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+        ProductStateStore.ReadResult duplicate = reloaded.reload();
+        check(!duplicate.valid,
+                "duplicate subject/context GateMatrix entries fail closed on reload");
+        check(reloaded.snapshot().authoringPolicyBundle.revision
+                        == allContexts.authoringPolicyBundle.revision,
+                "invalid GateMatrix reload preserves the last valid ProductStore snapshot");
     }
 
     private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {

@@ -56,6 +56,14 @@ public final class ProductStore {
         return publish(snapshot.withoutBoundApplication(subjectId));
     }
 
+    public synchronized MutationResult setNetworkGate(ApplicationSubjectId subjectId,
+                                                     AuthoringPolicyBundle.NetworkContextId context,
+                                                     boolean blocked) {
+        AuthoringPolicyBundle nextBundle = snapshot.authoringPolicyBundle.withNetworkGate(
+                subjectId, context, blocked);
+        return publish(snapshot.withAuthoringPolicyBundle(nextBundle));
+    }
+
     public synchronized ProductStateStore.ReadResult reload() {
         ProductStateStore.ReadResult result = ProductStateStore.readResult(filesDir);
         if (result.valid) {

@@ -4,6 +4,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
@@ -57,14 +59,21 @@ public final class ProductStateStore {
                         "authoring policy bundle schema " + bundleSchema
                                 + " is unsupported; upgrade the app or reset product state");
             }
-            if (bundleRevision != 0L || !bundleSource.isEmpty() || gateCount != 0
-                    || l4Count != 0 || protocolCount != 0) {
+            List<AuthoringPolicyBundle.NetworkGateRule> gateMatrix = parseGateMatrix(
+                    values.getProperty("bundle.gateMatrix", ""));
+            if (gateMatrix.size() != gateCount) {
+                return ReadResult.invalid(ProductStateSnapshot.empty(), true,
+                        "authoring_policy_bundle_gate_matrix_mismatch",
+                        "authoring policy bundle GateMatrix count does not match its entries");
+            }
+            if (l4Count != 0 || protocolCount != 0) {
                 return ReadResult.invalid(ProductStateSnapshot.empty(), true,
                         "authoring_policy_bundle_unsupported",
-                        "non-empty authoring policy bundle is unsupported by this runtime slice");
+                        "L4 and Protocol authoring rule families are unsupported by this slice");
             }
             return ReadResult.valid(new ProductStateSnapshot(profile, bound,
-                    AuthoringPolicyBundle.empty()));
+                    AuthoringPolicyBundle.restore(bundleRevision, bundleSource, gateMatrix,
+                            l4Count, protocolCount)));
         } catch (Exception error) {
             return ReadResult.invalid(ProductStateSnapshot.empty(), true,
                     "product_state_corrupt",
@@ -97,6 +106,8 @@ public final class ProductStateStore {
                 Integer.toString(value.authoringPolicyBundle.l4RuleCount));
         values.setProperty("bundle.protocolRuleCount",
                 Integer.toString(value.authoringPolicyBundle.protocolRuleCount));
+        values.setProperty("bundle.gateMatrix",
+                encodeGateMatrix(value.authoringPolicyBundle.gateMatrix));
 
         File temporary = new File(directory, TEMP_FILE);
         File target = new File(directory, FILE);
@@ -141,6 +152,59 @@ public final class ProductStateStore {
                 out.append(',');
             }
             out.append(value.encode());
+            first = false;
+        }
+        return out.toString();
+    }
+
+    private static List<AuthoringPolicyBundle.NetworkGateRule> parseGateMatrix(String encoded) {
+        ArrayList<AuthoringPolicyBundle.NetworkGateRule> out = new ArrayList<>();
+        if (encoded == null || encoded.trim().isEmpty()) {
+            return out;
+        }
+        String[] pieces = encoded.split(";");
+        for (String piece : pieces) {
+            String token = piece.trim();
+            if (token.isEmpty()) {
+                continue;
+            }
+            String[] fields = token.split(":");
+            if (fields.length != 5) {
+                throw new IllegalArgumentException("invalid GateMatrix entry");
+            }
+            ApplicationSubjectId subjectId = ApplicationSubjectId.fromUid(
+                    Integer.parseInt(fields[0]));
+            AuthoringPolicyBundle.NetworkContextId context =
+                    AuthoringPolicyBundle.NetworkContextId.parse(fields[1]);
+            boolean blocked;
+            if ("blocked".equals(fields[2])) {
+                blocked = true;
+            } else if ("open".equals(fields[2])) {
+                blocked = false;
+            } else {
+                throw new IllegalArgumentException("invalid GateMatrix action");
+            }
+            long ruleId = Long.parseUnsignedLong(fields[3]);
+            int reasonId = Integer.parseInt(fields[4]);
+            out.add(new AuthoringPolicyBundle.NetworkGateRule(subjectId, context, blocked,
+                    ruleId, reasonId));
+        }
+        return out;
+    }
+
+    private static String encodeGateMatrix(
+            List<AuthoringPolicyBundle.NetworkGateRule> gateMatrix) {
+        StringBuilder out = new StringBuilder();
+        boolean first = true;
+        for (AuthoringPolicyBundle.NetworkGateRule rule : gateMatrix) {
+            if (!first) {
+                out.append(';');
+            }
+            out.append(rule.subjectId.uid).append(':')
+                    .append(rule.networkContext.wireName).append(':')
+                    .append(rule.blocked ? "blocked" : "open").append(':')
+                    .append(Long.toUnsignedString(rule.ruleId)).append(':')
+                    .append(rule.reasonId);
             first = false;
         }
         return out.toString();

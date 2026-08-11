@@ -75,4 +75,13 @@ public final class LocalProductBackend {
         refreshProductCatalogProjection();
         return result;
     }
+
+    public ProductStore.MutationResult setNetworkGate(ApplicationSubjectId subjectId,
+                                                     AuthoringPolicyBundle.NetworkContextId context,
+                                                     boolean blocked) {
+        ProductStore.MutationResult result = productStore.setNetworkGate(
+                subjectId, context, blocked);
+        refreshProductCatalogProjection();
+        return result;
+    }
 }

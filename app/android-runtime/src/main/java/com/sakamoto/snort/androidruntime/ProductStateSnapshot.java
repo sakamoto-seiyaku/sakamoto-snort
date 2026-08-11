@@ -47,4 +47,8 @@ public final class ProductStateSnapshot {
         next.remove(subjectId);
         return new ProductStateSnapshot(selectedProfile, next, authoringPolicyBundle);
     }
+
+    public ProductStateSnapshot withAuthoringPolicyBundle(AuthoringPolicyBundle bundle) {
+        return new ProductStateSnapshot(selectedProfile, boundApplications, bundle);
+    }
 }
