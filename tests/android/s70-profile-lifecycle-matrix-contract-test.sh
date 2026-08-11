@@ -7,6 +7,8 @@ matrix="$repo_root/tests/device/s70-profile-lifecycle-matrix.sh"
 [[ -f "$matrix" ]]
 grep -q 'SAKAMOTO-70-profile-lifecycle' "$matrix"
 grep -q './dev/adb' "$matrix"
+grep -q 'S70_MATRIX_LOGGING' "$matrix"
+grep -q 'matrix.log' "$matrix"
 grep -q 'runtimeStart true --es runtimeProfile "$profile"' "$matrix"
 grep -q 'start_profile root' "$matrix"
 grep -q 'start_profile vpn' "$matrix"

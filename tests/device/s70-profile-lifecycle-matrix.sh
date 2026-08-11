@@ -32,6 +32,10 @@ PROJECTION_PATH="files/product-catalog-projection/projection.properties"
 S70_BOUND_SUBJECT=""
 
 mkdir -p "$RESULT_DIR"
+if [[ "${S70_MATRIX_LOGGING:-0}" != "1" ]]; then
+  export S70_MATRIX_LOGGING=1
+  exec > >(tee "${RESULT_DIR}/matrix.log") 2>&1
+fi
 
 kv() {
   printf '%s=%s\n' "$1" "$2"
