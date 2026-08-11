@@ -88,6 +88,7 @@ public final class AndroidRuntimeContractTest {
         localProductBackendPersistsPolicyTransactionsAroundProductState();
         localProductBackendExposesPolicyImportExportAndRestore();
         boundedActivityStoreIsSeparateFromProductState();
+        localProductBackendOwnsBoundedActivityStoreWriter();
         activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
@@ -1853,6 +1854,8 @@ public final class AndroidRuntimeContractTest {
         activity.append(new BoundedActivityStore.Record(2L, app, "drop", "gate"));
         activity.append(new BoundedActivityStore.Record(3L, app, "drop", "l4"));
         check(activity.records().size() == 2, "activity store is bounded");
+        check(activity.activityItems().size() == 2,
+                "activity store keeps ActivityItem projections bounded");
         check(activity.evictedRecords() == 1L,
                 "activity detail eviction is observable and lossy");
 
@@ -1864,6 +1867,48 @@ public final class AndroidRuntimeContractTest {
         check(!ProductStateStore.stateFile(files.toFile()).getPath()
                         .contains(BoundedActivityStore.REPOSITORY_DIRECTORY),
                 "bounded Activity repository path is not policy/config state");
+    }
+
+    private static void localProductBackendOwnsBoundedActivityStoreWriter() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-58-activity-writer");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        app.userId, "Work", true)),
+                json -> LocalProductBackend.PolicyApplyResult.ok());
+        backend.bindApplication(app);
+        backend.setNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.WIFI, true);
+
+        ActivityItem drop = ActivityItem.policyDrop(app, "Mail", "com.example.mail",
+                1000L, "1.1.1.1", "tcp", 443, "output", 7L,
+                "NetworkGate", 0x5100000000000001L, 0x51000001);
+        ActivityItem allowed = ActivityItem.allowedFlow(app, "Mail", "com.example.mail",
+                1001L, "1.1.1.1", "tcp", 443, "output", "orig",
+                5L, 2048L, 8L, "None");
+        backend.ingestActivity(drop);
+        backend.ingestActivity(allowed);
+
+        check(backend.activityStore().capacity() == BoundedActivityStore.DEFAULT_CAPACITY,
+                "LocalProductBackend owns the bounded Activity Store capacity");
+        check(backend.recentActivity(app, 10).size() == 2,
+                "LocalProductBackend is the Activity Store append/query seam");
+        AppDetail detail = backend.appDetail(app,
+                RuntimeSummary.fromSnapshot(RuntimeSnapshot.running(RuntimeProfile.ROOT,
+                        "control-vnext", "1", "runtime", "arm64", "ok", 9L),
+                        CapabilitySet.androidL4(true, true)), 10);
+        check(detail.app != null && detail.app.subjectId.equals(app),
+                "AppDetail reads app identity from backend catalog projection");
+        check(detail.activity.size() == 2 && detail.rules.size() >= 1,
+                "AppDetail combines backend-owned activity and rules");
+        check(detail.prefillDraft != null,
+                "backend app detail keeps Activity-derived L4 prefill available");
+
+        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
+        check(restored.boundApplications.contains(app),
+                "Activity ingestion cannot mutate product binding state");
+        check(restored.authoringPolicyBundle.gateEntryCount == 1,
+                "Activity ingestion cannot mutate authoring policy state");
     }
 
     private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {

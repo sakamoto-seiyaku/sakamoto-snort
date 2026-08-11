@@ -1,6 +1,8 @@
 package com.sakamoto.snort.androidruntime;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -10,6 +12,7 @@ import java.util.List;
 public final class LocalProductBackend {
     private final File filesDir;
     private final ProductStore productStore;
+    private final BoundedActivityStore activityStore;
     private final ApplicationCatalogProvider catalogProvider;
     private final PolicyApplyTransport policyApplyTransport;
     private final ProductPolicyTransactionStore.Writer policyTransactionWriter;
@@ -81,6 +84,7 @@ public final class LocalProductBackend {
                                ProductPolicyTransactionStore.Writer policyTransactionWriter) {
         this.filesDir = filesDir;
         this.productStore = new ProductStore(filesDir);
+        this.activityStore = new BoundedActivityStore(BoundedActivityStore.DEFAULT_CAPACITY);
         this.catalogProvider = catalogProvider;
         this.policyApplyTransport = policyApplyTransport == null
                 ? json -> PolicyApplyResult.error("product_policy_runtime_unavailable",
@@ -107,6 +111,34 @@ public final class LocalProductBackend {
 
     public ProductPolicyTransactions.Status policyTransactionStatus() {
         return policyTransactions.status();
+    }
+
+    public BoundedActivityStore activityStore() {
+        return activityStore;
+    }
+
+    public void ingestActivity(ActivityItem item) {
+        activityStore.append(item);
+    }
+
+    public List<ActivityItem> recentActivity(ApplicationSubjectId subjectId, int limit) {
+        if (subjectId == null) {
+            return activityStore.activityItems();
+        }
+        return activityStore.activityItemsFor(subjectId, limit);
+    }
+
+    public AppDetail appDetail(ApplicationSubjectId subjectId, RuntimeSummary runtime,
+                               int activityLimit) {
+        if (subjectId == null) {
+            return AppDetail.normal(null, runtime, Collections.emptyList(),
+                    Collections.emptyList());
+        }
+        ProductStateSnapshot state = productStore.snapshot();
+        AppSummary app = appSummary(subjectId);
+        List<RuleView> rules = ruleViewsFor(state.authoringPolicyBundle, subjectId);
+        List<ActivityItem> recent = activityStore.activityItemsFor(subjectId, activityLimit);
+        return AppDetail.normal(app, runtime, rules, recent);
     }
 
     public PolicyTextResult exportCommittedPolicy() {
@@ -383,6 +415,42 @@ public final class LocalProductBackend {
             return;
         }
         policyApplyTransport.apply(compiled.applyPayload);
+    }
+
+    private AppSummary appSummary(ApplicationSubjectId subjectId) {
+        ProductCatalogFormatter.Projection projection;
+        try {
+            projection = ProductCatalogFormatter.result(productStore.readResult(),
+                    catalogProvider.listApplications());
+        } catch (RuntimeException error) {
+            projection = ProductCatalogFormatter.result(productStore.readResult(),
+                    Collections.emptyList());
+        }
+        for (ProductCatalogFormatter.EntryRow row : projection.selectableRows) {
+            if (row.subjectId.equals(subjectId)) {
+                return AppSummary.fromCatalogRow(row);
+            }
+        }
+        boolean bound = productStore.snapshot().boundApplications.contains(subjectId);
+        return new AppSummary(subjectId, "(unknown package)", subjectId.encode(), "",
+                subjectId.userId, subjectId.uid, false, bound, false, false, false, 0);
+    }
+
+    private static List<RuleView> ruleViewsFor(AuthoringPolicyBundle bundle,
+                                               ApplicationSubjectId subjectId) {
+        AuthoringPolicyBundle value = bundle == null ? AuthoringPolicyBundle.empty() : bundle;
+        ArrayList<RuleView> rules = new ArrayList<>();
+        for (AuthoringPolicyBundle.NetworkGateRule rule : value.gateMatrix) {
+            if (rule.subjectId.equals(subjectId)) {
+                rules.add(RuleView.networkGate(rule, value.revision));
+            }
+        }
+        for (AuthoringPolicyBundle.L4Rule rule : value.l4Rules) {
+            if (rule.subjectId.equals(subjectId)) {
+                rules.add(RuleView.l4(rule, value.revision));
+            }
+        }
+        return Collections.unmodifiableList(rules);
     }
 
     private static ProductPolicyTransactions initialTransactions(

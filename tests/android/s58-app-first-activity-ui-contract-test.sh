@@ -28,6 +28,13 @@ grep -q 'winner' "$product_dir/ActivityItem.java"
 grep -q 'RuleDraft.fromActivityL4RuleDraft' "$product_dir/RuleDraft.java"
 grep -q 'ActivityL4RuleDraft.fromTcpPolicyDropActivity' "$debug_activity"
 grep -q 'formatPolicyDropActivity' "$debug_activity"
+grep -q 'private final BoundedActivityStore activityStore' "$product_dir/LocalProductBackend.java"
+grep -q 'new BoundedActivityStore(BoundedActivityStore.DEFAULT_CAPACITY)' "$product_dir/LocalProductBackend.java"
+grep -q 'void ingestActivity(ActivityItem item)' "$product_dir/LocalProductBackend.java"
+grep -q 'AppDetail appDetail' "$product_dir/LocalProductBackend.java"
+grep -q 'activityItemsFor' "$product_dir/BoundedActivityStore.java"
+grep -q 'LocalProductBackend' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+! grep -q 'LocalProductBackend' "$debug_activity"
 
 for source_file in \
   "$product_dir/RuntimeSummary.java" \
