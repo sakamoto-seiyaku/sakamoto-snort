@@ -735,16 +735,30 @@ public class DebugControlActivity extends Activity {
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             return;
         }
+        String resultCode = debugTrafficProbeResultCode(result);
         String text = "host=" + propertyValue(host) + "\n"
                 + "port=" + port + "\n"
                 + "timeoutMillis=" + timeoutMillis + "\n"
                 + "uid=" + android.os.Process.myUid() + "\n"
-                + "result=" + propertyValue(result) + "\n";
+                + "result=" + propertyValue(resultCode) + "\n"
+                + "message=" + propertyValue(result) + "\n";
         try (FileOutputStream out = new FileOutputStream(file, false)) {
             out.write(text.getBytes(StandardCharsets.UTF_8));
         } catch (IOException ignored) {
             // Debug evidence must never change product control behavior.
         }
+    }
+
+    private static String debugTrafficProbeResultCode(String result) {
+        if ("tcp_connect_succeeded".equals(result)
+                || (result != null && result.startsWith("Debug traffic probe connected"))) {
+            return "tcp_connect_succeeded";
+        }
+        if ("tcp_connect_failed".equals(result)
+                || (result != null && result.startsWith("Debug traffic probe failed"))) {
+            return "tcp_connect_failed";
+        }
+        return "tcp_connect_unknown";
     }
 
     private static String propertyValue(String value) {

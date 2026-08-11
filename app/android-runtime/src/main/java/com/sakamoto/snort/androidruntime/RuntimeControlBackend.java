@@ -13,7 +13,6 @@ public final class RuntimeControlBackend {
     }
 
     public RuntimeSnapshot query(Context context) {
-        queryService(context);
         return RuntimeStateStore.read(context.getFilesDir());
     }
 
@@ -34,8 +33,16 @@ public final class RuntimeControlBackend {
         context.startService(requestIntent(context, RuntimeControlRequest.stop()));
     }
 
-    public void queryService(Context context) {
-        context.startService(requestIntent(context, RuntimeControlRequest.query()));
+    public boolean queryService(Context context) {
+        try {
+            context.startService(requestIntent(context, RuntimeControlRequest.query()));
+            return true;
+        } catch (RuntimeException ignored) {
+            // Query is a best-effort projection refresh. Android may reject a
+            // background service start while the Activity is being resumed from
+            // shell/device automation; the durable projection remains readable.
+            return false;
+        }
     }
 
     public void selectProductProfile(Context context, RuntimeProfile profile) {

@@ -13,6 +13,8 @@ import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
+import org.json.JSONObject;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -54,9 +56,11 @@ public final class RuntimeService extends VpnService {
     private static final String TAG = "SakamotoRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
     private static final String VPP_BINARY = "libvpp_runtime.so";
+    private static final String ROOT_BINARY = "libsucre_snortd.so";
     private static final String VPN_BINARY = "libsucre_snortd.so";
     private static final String MANIFEST_ASSET = "vpp-runtime.properties";
     private static final String HASH_ASSET = "vpp-runtime.sha256";
+    private static final String DAEMON_HASH_ASSET = "sucre-snortd.sha256";
     private static final String CHANNEL_ID = "sakamoto-runtime";
     private static final int NOTIFICATION_ID = 6701;
     private static final int HEALTH_ATTEMPTS = 24;
@@ -480,6 +484,15 @@ public final class RuntimeService extends VpnService {
             failWithoutRuntime(identityError, identity.validationMessage(deviceAbi));
             return;
         }
+        if (activeProfile == RuntimeProfile.ROOT) {
+            try {
+                expectedArtifact = "sha256:"
+                        + readExpectedHash(DAEMON_HASH_ASSET, "sucre-snortd");
+            } catch (IOException error) {
+                failWithoutRuntime("runtime_manifest_unreadable", messageOf(error));
+                return;
+            }
+        }
 
         if (activeProfile == RuntimeProfile.ROOT && !rootCommandAvailable()) {
             publishError("root_authorization_required",
@@ -513,7 +526,7 @@ public final class RuntimeService extends VpnService {
             }
             String actualArtifact = "sha256:" + sha256(vpp);
             if (activeProfile == RuntimeProfile.ROOT) {
-                String expectedHash = readExpectedHash();
+                String expectedHash = readExpectedHash(DAEMON_HASH_ASSET, "sucre-snortd");
                 if (!expectedArtifact.equalsIgnoreCase("sha256:" + expectedHash)) {
                     failWithoutRuntime("runtime_manifest_hash_mismatch",
                             "artifact and SHA-256 assets disagree");
@@ -521,7 +534,7 @@ public final class RuntimeService extends VpnService {
                 }
                 if (!expectedArtifact.equalsIgnoreCase(actualArtifact)) {
                     failWithoutRuntime("runtime_artifact_hash_mismatch",
-                            "manifest artifact does not match packaged VPP");
+                            "daemon artifact does not match packaged runtime");
                     return;
                 }
             } else {
@@ -541,8 +554,8 @@ public final class RuntimeService extends VpnService {
             VppHealthHandshake.Result health = activeProfile == RuntimeProfile.VPN
                     ? vpnNativeOwnerHealth(protocol, version, deviceAbi, expectedArtifact,
                             process)
-                    : waitForHealth(nativeDir, profileRoot, protocol, version, deviceAbi,
-                            expectedArtifact, expectedApiIdentity, activeProfile, process);
+                    : waitForRootDaemonHealth(protocol, version, deviceAbi, expectedArtifact,
+                            process);
             if (stopRequested) {
                 stopRuntime();
                 return;
@@ -844,7 +857,8 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             if (activeProfile == RuntimeProfile.ROOT) {
-                String expectedHash = readExpectedHash();
+                String expectedHash = readExpectedHash(DAEMON_HASH_ASSET, "sucre-snortd");
+                artifact = "sha256:" + expectedHash;
                 if (!artifact.equalsIgnoreCase("sha256:" + expectedHash)) {
                     publishError("runtime_manifest_hash_mismatch",
                             "artifact and SHA-256 assets disagree", true, pid);
@@ -853,7 +867,7 @@ public final class RuntimeService extends VpnService {
                 }
                 if (!artifact.equalsIgnoreCase("sha256:" + sha256(vpp))) {
                     publishError("runtime_artifact_hash_mismatch",
-                            "manifest artifact does not match packaged VPP", true, pid);
+                            "daemon artifact does not match packaged runtime", true, pid);
                     monitorPid(pid);
                     return;
                 }
@@ -885,8 +899,7 @@ public final class RuntimeService extends VpnService {
             }
             VppHealthHandshake.Result health = activeProfile == RuntimeProfile.VPN
                     ? vpnNativeOwnerHealth(protocol, version, abi, artifact, null)
-                    : VppHealthHandshake.evaluate(activeProfile,
-                            protocol, version, abi, artifact, apiIdentity, nativeStatus);
+                    : rootDaemonHealth(protocol, version, abi, artifact, null);
             if (!health.isReady()) {
                 publishHealthError(health, "adopted runtime health failed", true, pid);
             } else {
@@ -931,7 +944,7 @@ public final class RuntimeService extends VpnService {
     }
 
     private static String runtimeBinaryName(RuntimeProfile profile) {
-        return profile == RuntimeProfile.VPN ? VPN_BINARY : VPP_BINARY;
+        return profile == RuntimeProfile.ROOT ? ROOT_BINARY : VPN_BINARY;
     }
 
     private File runtimeExecutable(File nativeDir, RuntimeProfile profile) {
@@ -945,6 +958,38 @@ public final class RuntimeService extends VpnService {
                     "error", "health_process_exited");
         }
         return new VppHealthHandshake.Result(protocol, version, artifact, abi, "ok", "");
+    }
+
+    private VppHealthHandshake.Result rootDaemonHealth(
+            String protocol, String version, String abi, String artifact, Process process) {
+        if (process != null && !process.isAlive()) {
+            return new VppHealthHandshake.Result(protocol, version, artifact, abi,
+                    "error", "health_process_exited");
+        }
+        RuntimeControlFdClient.AttachResult hello =
+                RuntimeControlFdClient.callJson(0, RuntimeControlFdClient.HELLO,
+                        new JSONObject());
+        if (hello.ok) {
+            return new VppHealthHandshake.Result(protocol, version, artifact, abi, "ok", "");
+        }
+        return new VppHealthHandshake.Result(protocol, version, artifact, abi,
+                hello.errorCode.isEmpty() ? "HELLO_FAILED" : hello.errorCode,
+                hello.errorMessage);
+    }
+
+    private VppHealthHandshake.Result waitForRootDaemonHealth(
+            String protocol, String version, String abi, String artifact, Process process)
+            throws InterruptedException {
+        VppHealthHandshake.Result last = rootDaemonHealth(
+                protocol, version, abi, artifact, process);
+        for (int attempt = 0; attempt < HEALTH_ATTEMPTS; attempt++) {
+            if (stopRequested || !process.isAlive() || last.isReady()) {
+                return last;
+            }
+            Thread.sleep(HEALTH_RETRY_MILLIS);
+            last = rootDaemonHealth(protocol, version, abi, artifact, process);
+        }
+        return last;
     }
 
     private VppHealthHandshake.Result waitForHealth(File nativeDir, File profile,
@@ -1872,8 +1917,8 @@ public final class RuntimeService extends VpnService {
         return properties;
     }
 
-    private String readExpectedHash() throws IOException {
-        try (InputStream input = getAssets().open(HASH_ASSET)) {
+    private String readExpectedHash(String asset, String label) throws IOException {
+        try (InputStream input = getAssets().open(asset)) {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             byte[] buffer = new byte[128];
             int count;
@@ -1884,7 +1929,7 @@ public final class RuntimeService extends VpnService {
             }
             String hash = bytes.toString(StandardCharsets.US_ASCII.name()).trim();
             if (!hash.matches("[0-9a-fA-F]{64}")) {
-                throw new IOException("invalid VPP runtime SHA-256 asset");
+                throw new IOException("invalid " + label + " SHA-256 asset");
             }
             return hash;
         }
