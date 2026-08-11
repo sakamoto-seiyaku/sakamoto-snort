@@ -218,7 +218,9 @@ keep the provider disabled by default:
   provider no-result, provider fact, detector done, and budget exhausted;
 - keep reference probes read-only and writing only under `build-output`;
 - prepare source-package checklist templates for license files, checksums,
-  NOTICE/source/relink posture, warning policy, and Android ABI settings.
+  NOTICE/source/relink posture, warning policy, and Android ABI settings; see
+  `docs/reference/PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_PACKAGE_CHECKLIST.md`
+  as an unchecked pre-decision template only.
 
 ## Work That Must Wait
 
