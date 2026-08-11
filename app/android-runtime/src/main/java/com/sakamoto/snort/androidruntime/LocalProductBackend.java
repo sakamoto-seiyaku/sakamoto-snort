@@ -41,6 +41,29 @@ public final class LocalProductBackend {
         }
     }
 
+    public static final class PolicyTextResult {
+        public final boolean ok;
+        public final String payload;
+        public final String errorCode;
+        public final String errorMessage;
+
+        private PolicyTextResult(boolean ok, String payload,
+                                 String errorCode, String errorMessage) {
+            this.ok = ok;
+            this.payload = payload == null ? "" : payload;
+            this.errorCode = errorCode == null ? "" : errorCode;
+            this.errorMessage = errorMessage == null ? "" : errorMessage;
+        }
+
+        public static PolicyTextResult ok(String payload) {
+            return new PolicyTextResult(true, payload, "", "");
+        }
+
+        public static PolicyTextResult error(String errorCode, String errorMessage) {
+            return new PolicyTextResult(false, "", errorCode, errorMessage);
+        }
+    }
+
     public LocalProductBackend(File filesDir, ApplicationCatalogProvider catalogProvider) {
         this(filesDir, catalogProvider,
                 json -> PolicyApplyResult.error("product_policy_runtime_unavailable",
@@ -84,6 +107,113 @@ public final class LocalProductBackend {
 
     public ProductPolicyTransactions.Status policyTransactionStatus() {
         return policyTransactions.status();
+    }
+
+    public PolicyTextResult exportCommittedPolicy() {
+        if (policyTransactionReadResult != null && !policyTransactionReadResult.valid) {
+            return PolicyTextResult.error(policyTransactionReadResult.errorCode,
+                    policyTransactionReadResult.errorMessage);
+        }
+        return PolicyTextResult.ok(policyTransactions.exportCommitted());
+    }
+
+    public ProductStore.MutationResult importPolicyDraft(String encoded) {
+        if (policyTransactionReadResult != null && !policyTransactionReadResult.valid) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    policyTransactionReadResult.errorCode,
+                    policyTransactionReadResult.errorMessage);
+        }
+        ProductPolicyTransactions working = copyTransactions(policyTransactions);
+        ProductPolicyTransactions.Result imported = working.importDraft(encoded);
+        if (!imported.ok) {
+            return rejected(imported);
+        }
+        return persistPolicyTransactions(working, null, null);
+    }
+
+    public ProductStore.MutationResult commitPolicyDraft() {
+        ProductStateStore.ReadResult readResult = productStore.readResult();
+        if (readResult != null && !readResult.valid) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    readResult.errorCode, readResult.errorMessage);
+        }
+        if (policyTransactionReadResult != null && !policyTransactionReadResult.valid) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    policyTransactionReadResult.errorCode,
+                    policyTransactionReadResult.errorMessage);
+        }
+        ProductPolicyTransactions working = copyTransactions(policyTransactions);
+        ProductStateSnapshot nextState = productStore.snapshot()
+                .withAuthoringPolicyBundle(working.draft());
+        List<ApplicationCatalogEntry> catalog;
+        try {
+            catalog = catalogProvider.listApplications();
+        } catch (RuntimeException error) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    "catalog_load_failed",
+                    error.getMessage() == null ? "catalog could not be loaded"
+                            : error.getMessage());
+        }
+        ProductPolicyTransactions.Result committed = working.commitDraft(
+                ProductPolicyTransactions.CommitValidationContext.of(nextState, catalog));
+        if (!committed.ok) {
+            return rejected(committed);
+        }
+        ProductStore.MutationResult result = persistPolicyTransactions(working, nextState, null);
+        refreshProductCatalogProjection();
+        return result;
+    }
+
+    public ProductStore.MutationResult applyCommittedPolicy() {
+        ProductStateStore.ReadResult readResult = productStore.readResult();
+        if (readResult != null && !readResult.valid) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    readResult.errorCode, readResult.errorMessage);
+        }
+        if (policyTransactionReadResult != null && !policyTransactionReadResult.valid) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    policyTransactionReadResult.errorCode,
+                    policyTransactionReadResult.errorMessage);
+        }
+        ProductPolicyTransactions working = copyTransactions(policyTransactions);
+        AuthoringPolicyBundle rollbackBundle = currentRuntimeBundle(policyTransactions);
+        ProductPolicyTransactions.Result applied = working.applyCommitted(
+                payload -> policyApplyTransport.apply(payload));
+        if (!applied.ok) {
+            return rejected(applied);
+        }
+        ProductStateSnapshot nextState = productStore.snapshot()
+                .withAuthoringPolicyBundle(working.committed());
+        ProductStore.MutationResult result = persistPolicyTransactions(working, nextState,
+                rollbackBundle);
+        refreshProductCatalogProjection();
+        return result;
+    }
+
+    public ProductStore.MutationResult restorePolicyCheckpoint(long revision) {
+        ProductStateStore.ReadResult readResult = productStore.readResult();
+        if (readResult != null && !readResult.valid) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    readResult.errorCode, readResult.errorMessage);
+        }
+        if (policyTransactionReadResult != null && !policyTransactionReadResult.valid) {
+            return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                    policyTransactionReadResult.errorCode,
+                    policyTransactionReadResult.errorMessage);
+        }
+        ProductPolicyTransactions working = copyTransactions(policyTransactions);
+        AuthoringPolicyBundle rollbackBundle = currentRuntimeBundle(policyTransactions);
+        ProductPolicyTransactions.Result restored = working.restoreCheckpoint(revision,
+                payload -> policyApplyTransport.apply(payload));
+        if (!restored.ok) {
+            return rejected(restored);
+        }
+        ProductStateSnapshot nextState = productStore.snapshot()
+                .withAuthoringPolicyBundle(working.committed());
+        ProductStore.MutationResult result = persistPolicyTransactions(working, nextState,
+                rollbackBundle);
+        refreshProductCatalogProjection();
+        return result;
     }
 
     public ProductStateStore.ReadResult reloadProductState() {
@@ -179,6 +309,7 @@ public final class LocalProductBackend {
                 .withBoundApplication(subjectId)
                 .withAuthoringPolicyBundle(nextBundle);
         ProductPolicyTransactions working = copyTransactions(policyTransactions);
+        AuthoringPolicyBundle rollbackBundle = currentRuntimeBundle(policyTransactions);
         ProductPolicyTransactions.Result replaced = working.replaceDraft(nextBundle);
         if (!replaced.ok) {
             return rejected(replaced);
@@ -202,6 +333,17 @@ public final class LocalProductBackend {
         if (!applied.ok) {
             return rejected(applied);
         }
+        return persistPolicyTransactions(working, nextState, rollbackBundle);
+    }
+
+    private ProductStore.MutationResult rejected(ProductPolicyTransactions.Result result) {
+        return ProductStore.MutationResult.rejected(productStore.snapshot(),
+                result.errorCode, result.errorMessage);
+    }
+
+    private ProductStore.MutationResult persistPolicyTransactions(
+            ProductPolicyTransactions working, ProductStateSnapshot nextState,
+            AuthoringPolicyBundle rollbackRuntimeBundle) {
         try {
             policyTransactionWriter.write(filesDir, working);
             ProductPolicyTransactionStore.ReadResult persistedTransactions =
@@ -211,6 +353,11 @@ public final class LocalProductBackend {
                         persistedTransactions.errorCode,
                         persistedTransactions.errorMessage);
             }
+            if (nextState == null) {
+                policyTransactionReadResult = persistedTransactions;
+                policyTransactions = persistedTransactions.transactions;
+                return ProductStore.MutationResult.persisted(productStore.snapshot());
+            }
             ProductStore.MutationResult published = productStore.replaceSnapshot(nextState);
             if (published.persisted) {
                 policyTransactionReadResult = persistedTransactions;
@@ -218,6 +365,7 @@ public final class LocalProductBackend {
             }
             return published;
         } catch (java.io.IOException error) {
+            rollbackRuntime(rollbackRuntimeBundle);
             return ProductStore.MutationResult.rejected(productStore.snapshot(),
                     "policy_transactions_persistence_failed",
                     error.getMessage() == null ? "policy transaction state could not be persisted"
@@ -225,9 +373,16 @@ public final class LocalProductBackend {
         }
     }
 
-    private ProductStore.MutationResult rejected(ProductPolicyTransactions.Result result) {
-        return ProductStore.MutationResult.rejected(productStore.snapshot(),
-                result.errorCode, result.errorMessage);
+    private void rollbackRuntime(AuthoringPolicyBundle rollbackRuntimeBundle) {
+        if (rollbackRuntimeBundle == null) {
+            return;
+        }
+        AuthoringPolicyCompiler.CompileResult compiled =
+                AuthoringPolicyCompiler.compilePacketPolicyApply(rollbackRuntimeBundle);
+        if (!compiled.ok) {
+            return;
+        }
+        policyApplyTransport.apply(compiled.applyPayload);
     }
 
     private static ProductPolicyTransactions initialTransactions(
@@ -247,5 +402,22 @@ public final class LocalProductBackend {
                 status.draftDirty, status.runtimeRevision,
                 status.selectedCheckpointRevision, status.runtimeSnapshotState,
                 value.checkpoints());
+    }
+
+    private static AuthoringPolicyBundle currentRuntimeBundle(
+            ProductPolicyTransactions source) {
+        if (source == null) {
+            return AuthoringPolicyBundle.empty();
+        }
+        ProductPolicyTransactions.Status status = source.status();
+        if (status.runtimeRevision == 0L) {
+            return AuthoringPolicyBundle.empty();
+        }
+        for (ProductPolicyTransactions.Checkpoint checkpoint : source.checkpoints()) {
+            if (checkpoint.revision == status.runtimeRevision) {
+                return checkpoint.bundle;
+            }
+        }
+        return source.committed();
     }
 }

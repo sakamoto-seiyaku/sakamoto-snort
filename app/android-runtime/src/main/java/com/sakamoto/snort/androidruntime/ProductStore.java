@@ -25,6 +25,11 @@ public final class ProductStore {
                     snapshot == null ? ProductStateSnapshot.empty() : snapshot,
                     errorCode, errorMessage);
         }
+
+        public static MutationResult persisted(ProductStateSnapshot snapshot) {
+            return new MutationResult(true,
+                    snapshot == null ? ProductStateSnapshot.empty() : snapshot, "", "");
+        }
     }
 
     private final File filesDir;

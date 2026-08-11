@@ -74,6 +74,7 @@ public final class AndroidRuntimeContractTest {
         localProductBackendAppliesGatePolicyBeforePersistingBundle();
         localProductBackendAppliesL4PolicyBeforePersistingBundle();
         localProductBackendPersistsPolicyTransactionsAroundProductState();
+        localProductBackendExposesPolicyImportExportAndRestore();
         boundedActivityStoreIsSeparateFromProductState();
         activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
@@ -1580,12 +1581,16 @@ public final class AndroidRuntimeContractTest {
 
         Path writerFailureFiles = Files.createTempDirectory(
                 "sakamoto-53-backend-transaction-writer-fail");
+        final StringBuilder writerFailurePayloads = new StringBuilder();
         LocalProductBackend writerFailingBackend = new LocalProductBackend(
                 writerFailureFiles.toFile(),
                 () -> Arrays.asList(new ApplicationCatalogEntry(app,
                         "com.example.mail", "Mail", "icon:mail/u10",
                         app.userId, "Work", true)),
-                payload -> LocalProductBackend.PolicyApplyResult.ok(),
+                payload -> {
+                    writerFailurePayloads.append(payload).append('\n');
+                    return LocalProductBackend.PolicyApplyResult.ok();
+                },
                 (dir, transactions) -> {
                     throw new IOException("injected transaction persistence failure");
                 });
@@ -1600,6 +1605,124 @@ public final class AndroidRuntimeContractTest {
                 "transaction persistence failure leaves ProductState unpublished");
         check(!ProductPolicyTransactionStore.readResult(writerFailureFiles.toFile()).present,
                 "transaction persistence failure leaves no durable checkpoint");
+        check(writerFailurePayloads.toString().contains("\"revision\":1")
+                        && writerFailurePayloads.toString().contains("\"revision\":0"),
+                "transaction persistence failure rolls runtime back to previous snapshot");
+    }
+
+    private static void localProductBackendExposesPolicyImportExportAndRestore()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-53-backend-import-restore");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        final StringBuilder appliedPayloads = new StringBuilder();
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        app.userId, "Work", true)),
+                payload -> {
+                    appliedPayloads.append(payload).append('\n');
+                    return LocalProductBackend.PolicyApplyResult.ok();
+                });
+        check(backend.bindApplication(app).persisted,
+                "backend policy commit validation can use explicit Product binding");
+
+        AuthoringPolicyBundle first = AuthoringPolicyBundle.empty()
+                .withL4Rule(l4Rule(app, "1.1.1.1/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        ProductStore.MutationResult imported =
+                backend.importPolicyDraft(ProductPolicyTransactions.exportBundle(first));
+        check(imported.persisted && backend.policyTransactionStatus().draftDirty,
+                "backend import stores a dirty Draft without applying runtime");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.isEmpty(),
+                "backend import Draft does not publish ProductState before commit");
+        ProductStore.MutationResult badImport = backend.importPolicyDraft("bad");
+        check(!badImport.persisted
+                        && "policy_import_unsupported_format".equals(badImport.errorCode),
+                "backend bad import returns actionable failure");
+        check(backend.policyTransactionStatus().draftRevision == first.revision,
+                "backend bad import leaves previous Draft intact");
+
+        ProductStore.MutationResult committed = backend.commitPolicyDraft();
+        check(committed.persisted
+                        && backend.policyTransactionStatus().committedRevision == first.revision
+                        && backend.policyTransactionStatus().runtimeRevision == 0L,
+                "backend commit advances committed head without applying runtime");
+        LocalProductBackend.PolicyTextResult exported = backend.exportCommittedPolicy();
+        check(exported.ok && exported.payload.startsWith(
+                        ProductPolicyTransactions.EXPORT_HEADER)
+                        && exported.payload.contains("l4=android.uid:1010001|"),
+                "backend export exposes committed policy with tagged subjects");
+        ProductStore.MutationResult applied = backend.applyCommittedPolicy();
+        check(applied.persisted
+                        && backend.policyTransactionStatus().runtimeRevision == first.revision
+                        && backend.policyTransactionStatus().checkpointCount == 1,
+                "backend apply creates runtime snapshot and checkpoint");
+        check(appliedPayloads.toString().contains("\"revision\":1"),
+                "backend explicit apply sends the committed revision to runtime");
+
+        AuthoringPolicyBundle second = first.withL4Rule(
+                l4Rule(app, "8.8.8.8/32", 6, 20, 1,
+                        AuthoringPolicyBundle.L4Action.ALLOW));
+        check(backend.importPolicyDraft(ProductPolicyTransactions.exportBundle(second))
+                        .persisted,
+                "backend can import a second Draft");
+        check(backend.commitPolicyDraft().persisted
+                        && backend.applyCommittedPolicy().persisted,
+                "backend can commit and apply second imported policy");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.l4RuleCount == 2
+                        && backend.policyTransactionStatus().checkpointCount == 2,
+                "backend second apply publishes ProductState and retains checkpoints");
+
+        AuthoringPolicyBundle dirty = second.withL4Rule(
+                l4Rule(app, "203.0.113.8/32", 17, 30, 2,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        check(backend.importPolicyDraft(ProductPolicyTransactions.exportBundle(dirty))
+                        .persisted,
+                "backend can stage dirty Draft before restore");
+        ProductStore.MutationResult dirtyRestore =
+                backend.restorePolicyCheckpoint(first.revision);
+        check(!dirtyRestore.persisted
+                        && "restore_requires_clean_draft".equals(dirtyRestore.errorCode),
+                "backend restore requires clean Draft");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.l4RuleCount == 2
+                        && backend.policyTransactionStatus().runtimeRevision == second.revision,
+                "failed dirty backend restore leaves ProductState and runtime head unchanged");
+
+        check(backend.importPolicyDraft(backend.exportCommittedPolicy().payload).persisted,
+                "backend can clean Draft by importing current committed export");
+        ProductStore.MutationResult restored =
+                backend.restorePolicyCheckpoint(first.revision);
+        check(restored.persisted
+                        && backend.policyTransactionStatus().committedRevision == first.revision
+                        && backend.policyTransactionStatus().runtimeRevision == first.revision
+                        && backend.policyTransactionStatus().selectedCheckpointRevision
+                        == first.revision,
+                "backend restore atomically restores committed head and runtime status");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.l4RuleCount == 1,
+                "backend restore publishes restored bundle to ProductState");
+
+        LocalProductBackend failingRestoreBackend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        app.userId, "Work", true)),
+                payload -> LocalProductBackend.PolicyApplyResult.error(
+                        "injected_checkpoint_restore_failure",
+                        "runtime rejected checkpoint restore"));
+        ProductStore.MutationResult failedRestore =
+                failingRestoreBackend.restorePolicyCheckpoint(second.revision);
+        check(!failedRestore.persisted
+                        && "injected_checkpoint_restore_failure".equals(
+                        failedRestore.errorCode),
+                "backend restore surfaces runtime restore failure");
+        ProductPolicyTransactions.Status failedRestoreStatus =
+                ProductPolicyTransactionStore.readResult(files.toFile())
+                        .transactions.status();
+        check(failedRestoreStatus.committedRevision == first.revision
+                        && failedRestoreStatus.runtimeRevision == first.revision
+                        && failedRestoreStatus.selectedCheckpointRevision == first.revision,
+                "failed backend restore leaves durable transaction head unchanged");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.l4RuleCount == 1,
+                "failed backend restore leaves durable ProductState unchanged");
     }
 
     private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {
