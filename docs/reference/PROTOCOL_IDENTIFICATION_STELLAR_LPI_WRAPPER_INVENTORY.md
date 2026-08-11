@@ -190,6 +190,52 @@ candidate without the full VPP plugin. It still does not prove detection accurac
 provider-source acceptability, Android runtime wiring, Root/VPN device behavior,
 corpus rights, or ProtocolRule enforcement readiness.
 
+## Host Synthetic Payload Probe
+
+Probe command:
+
+```bash
+bash tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh
+```
+
+Current local result observed on 2026-08-12:
+
+- result: `probe.result=PASS`
+- output executable: `stellar_lpi_wrapper_host_payload_probe`
+- output root:
+  `build-output/protocol-identification/stellar-lpi-wrapper-host-payload-probe/`
+- source scope:
+  `stellar_lpi_core.c + stellar_lpi_extend.c` plus the same vendored
+  libprotoident source shape as the base probe.
+- payload scope:
+  synthetic application payload bytes only, not PCAP replay and not packet
+  parsing.
+- cases:
+  - HTTP request payload -> fork-local `appid=67`, app name `HTTP`,
+    provider alias `lpi:http`, `stopDetect=1`
+  - DNS query payload -> fork-local `appid=32`, app name `DNS`, provider alias
+    `lpi:dns`, `stopDetect=1`
+  - SOCKS5 greeting payload -> fork-local `appid=8005`, app name `SOCKS`,
+    provider alias `lpi:socks`, `stopDetect=0`
+- policy:
+  `policy.copiesSourceIntoRepo=false`,
+  `policy.copiesPcapIntoRepo=false`,
+  `policy.usesSyntheticPayloads=true`,
+  `policy.providerVendoringDecision=false`,
+  `policy.providerRuntimeWiring=false`, and
+  `policy.protocolRuleDecision=false`.
+- probe shape:
+  `probe.scope=host-compile-link-run-synthetic-payload-recognition`,
+  `probe.payloadBoundary=application-payload-bytes-only`,
+  `probe.generatedUtilsShim=true`, and
+  `probe.referenceUthashInPlace=true`.
+
+This proves the extractable wrapper candidate can execute its lifecycle and
+return expected fork-local names for a minimal synthetic payload set on the
+host. It still does not prove PCAP corpus accuracy, Android Root/VPN runtime
+behavior, provider-source acceptability, default provider wiring, or
+ProtocolRule enforcement readiness.
+
 ## Next Evidence Step
 
 Before a real provider implementation, pin the provider source/license strategy

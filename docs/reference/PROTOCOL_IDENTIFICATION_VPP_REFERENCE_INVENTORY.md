@@ -327,6 +327,34 @@ This closes the immediate compile/link unknown for the extractable wrapper
 candidate. It still does not create a real Sakamoto provider, prove packet
 detection accuracy, import corpus fixtures, or answer source/license strategy.
 
+Repo-local host synthetic payload probe evidence:
+
+- command:
+  `tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh`
+- current result:
+  `probe.result=PASS`
+- scope:
+  compiles, links, and runs `stellar_lpi_core.c + stellar_lpi_extend.c` with
+  the vendored base libprotoident host source set, then submits synthetic
+  application payload bytes through the wrapper lifecycle.
+- observed cases:
+  HTTP -> fork-local `appid=67` / `HTTP` / `lpi:http` / `stopDetect=1`;
+  DNS -> fork-local `appid=32` / `DNS` / `lpi:dns` / `stopDetect=1`;
+  SOCKS5 -> fork-local `appid=8005` / `SOCKS` / `lpi:socks` /
+  `stopDetect=0`.
+- policy:
+  `policy.copiesSourceIntoRepo=false`,
+  `policy.copiesPcapIntoRepo=false`,
+  `policy.usesSyntheticPayloads=true`,
+  `policy.providerVendoringDecision=false`,
+  `policy.providerRuntimeWiring=false`, and
+  `policy.protocolRuleDecision=false`.
+
+This closes a runtime-smoke unknown for the extractable wrapper candidate on
+synthetic payload bytes. It still does not prove PCAP corpus replay accuracy,
+Android Root/VPN provider behavior, provider-source acceptability, or
+ProtocolRule enforcement readiness.
+
 Therefore the next S61 implementation step should not start from protocol rule
 enforcement. It should first add a real, pinned recognizer provider behind the
 existing `LpiRecognitionProvider` boundary and prove it against a small licensed
