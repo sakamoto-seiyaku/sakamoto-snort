@@ -81,6 +81,11 @@ pid_alive() {
   adb_cmd shell su 0 sh -c "kill -0 $pid" >/dev/null 2>&1
 }
 
+process_pid() {
+  local process_name="$1"
+  adb_cmd shell pidof "$process_name" 2>/dev/null | tr -d '\r' | awk '{ print $1 }'
+}
+
 assert_pid_gone() {
   local pid="$1"
   local out_file="$2"
@@ -390,6 +395,37 @@ recreated_generation="$(printf '%s\n' "$recreated_state" | snapshot_value_from g
 [[ "$recreated_pid" == "$vpn_pid" && "$recreated_generation" == "$vpn_generation" ]]
 pid_alive "$vpn_pid"
 kv "activity.recreateKeepsRuntime" "PASS"
+
+section "app_process_death_keeps_runtime"
+mkdir -p "${RESULT_DIR}/app-process-death"
+app_pid="$(process_pid "$PACKAGE" || true)"
+[[ "$app_pid" =~ ^[0-9]+$ ]] || {
+  kv "appProcessDeath.result" "UNAVAILABLE"
+  kv "appProcessDeath.reason" "main_app_process_not_found"
+  exit 1
+}
+service_pid_before="$(process_pid "${PACKAGE}:runtime" || true)"
+kv "appProcessDeath.appPid" "$app_pid"
+kv "appProcessDeath.runtimeServicePidBefore" "${service_pid_before:-UNKNOWN}"
+adb_cmd shell su 0 sh -c "kill -KILL $app_pid" \
+  >"${RESULT_DIR}/app-process-death.kill.log" 2>&1
+assert_pid_gone "$app_pid" "${RESULT_DIR}/app-process-death/app-pid.after-kill"
+pid_alive "$vpn_pid"
+service_pid_after="$(process_pid "${PACKAGE}:runtime" || true)"
+kv "appProcessDeath.runtimeServicePidAfter" "${service_pid_after:-UNKNOWN}"
+if [[ -n "$service_pid_before" ]]; then
+  [[ "$service_pid_after" == "$service_pid_before" ]]
+fi
+assert_tun0_present "${RESULT_DIR}/app-process-death/tun0.after-app-kill"
+adb_cmd shell am start -n "$ACTIVITY" >"${RESULT_DIR}/app-process-death/query.intent.log" 2>&1
+sleep 2
+app_death_state="$(read_snapshot)"
+printf '%s\n' "$app_death_state" >"${RESULT_DIR}/app-process-death/snapshot.after-query"
+grep -Fxq "state=running" <<<"$app_death_state"
+grep -Fxq "profile=vpn" <<<"$app_death_state"
+[[ "$(printf '%s\n' "$app_death_state" | snapshot_value_from pid)" == "$vpn_pid" ]]
+[[ "$(printf '%s\n' "$app_death_state" | snapshot_value_from generation)" == "$vpn_generation" ]]
+kv "appProcessDeath.result" "PASS"
 
 section "switch_vpn_to_root"
 root2_state="$(start_profile root "${RESULT_DIR}/switch-vpn-to-root")"
