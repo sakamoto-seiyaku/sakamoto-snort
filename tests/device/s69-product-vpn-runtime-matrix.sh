@@ -64,7 +64,18 @@ cleanup() {
 trap cleanup EXIT
 
 read_snapshot() {
-  adb_cmd shell run-as "$PACKAGE" cat "$STATE_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$STATE_PATH" | tr -d '\r' || true
+}
+
+app_file_path() {
+  printf '/data/user/0/%s/%s\n' "$PACKAGE" "$1"
+}
+
+app_file_cat() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$relative_path" 2>/dev/null \
+    || adb_su "cat $(shell_single_quote "$(app_file_path "$relative_path")") 2>/dev/null" \
+    || true
 }
 
 snapshot_value() {
@@ -181,7 +192,7 @@ grep -q "InterfaceName: tun0" "${RESULT_DIR}/connectivity.running"
 kv "connectivity.vpnNetwork" "PASS"
 
 section "runtime_log"
-adb_cmd shell run-as "$PACKAGE" cat "$LOG_PATH" >"${RESULT_DIR}/runtime-service.log" 2>/dev/null
+app_file_cat "$LOG_PATH" >"${RESULT_DIR}/runtime-service.log"
 grep -q "vpn_tun_control_ready=ok" "${RESULT_DIR}/runtime-service.log"
 grep -q "vpn_tun_control_attach=ok adapter=vpn-tun-hev" "${RESULT_DIR}/runtime-service.log"
 grep -q "vpn_hev_transport=ok" "${RESULT_DIR}/runtime-service.log"
@@ -267,10 +278,8 @@ kv "control.POLICY.STATUS" "PASS"
 section "protect_anti_loop"
 protect_ok=0
 for _ in $(seq 1 20); do
-  adb_cmd shell run-as "$PACKAGE" cat "$VPN_HEV_PROTECT_LOG_PATH" \
-    >"${RESULT_DIR}/vpn-hev-protect.log" 2>/dev/null || true
-  adb_cmd shell run-as "$PACKAGE" cat "$VPN_HEV_LOG_PATH" \
-    >"${RESULT_DIR}/vpn-hev.log" 2>/dev/null || true
+  app_file_cat "$VPN_HEV_PROTECT_LOG_PATH" >"${RESULT_DIR}/vpn-hev-protect.log"
+  app_file_cat "$VPN_HEV_LOG_PATH" >"${RESULT_DIR}/vpn-hev.log"
   if grep -Eq 'protect fd=[0-9]+ result=1' "${RESULT_DIR}/vpn-hev-protect.log" \
       && grep -q 'protect callback enabled' "${RESULT_DIR}/vpn-hev.log"; then
     protect_ok=1

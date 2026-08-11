@@ -70,7 +70,26 @@ cleanup() {
 trap cleanup EXIT
 
 read_snapshot() {
-  adb_cmd shell run-as "$PACKAGE" cat "$STATE_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$STATE_PATH" | tr -d '\r' || true
+}
+
+app_file_path() {
+  printf '/data/user/0/%s/%s\n' "$PACKAGE" "$1"
+}
+
+app_file_cat() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$relative_path" 2>/dev/null \
+    || adb_su "cat $(shell_single_quote "$(app_file_path "$relative_path")") 2>/dev/null" \
+    || true
+}
+
+app_file_rm() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" rm -f "$relative_path" >/dev/null 2>&1 \
+    || adb_su "rm -f $(shell_single_quote "$(app_file_path "$relative_path")")" \
+      >/dev/null 2>&1 \
+    || true
 }
 
 snapshot_value() {
@@ -326,7 +345,7 @@ PY
 
 run_debug_probe() {
   local label="$1"
-  adb_cmd shell run-as "$PACKAGE" rm -f "$PROBE_RESULT_PATH" 2>/dev/null || true
+  app_file_rm "$PROBE_RESULT_PATH"
   adb_cmd shell am start -n "$ACTIVITY" \
     --ez debugTraffic true \
     --es debugTrafficHost "$S58_TRAFFIC_HOST" \
@@ -335,8 +354,8 @@ run_debug_probe() {
     --ei debugTrafficTimeoutMillis "$S58_TRAFFIC_TIMEOUT_MILLIS" \
     >"${RESULT_DIR}/${label}.intent.log" 2>&1
   for _ in $(seq 1 30); do
-    adb_cmd shell run-as "$PACKAGE" cat "$PROBE_RESULT_PATH" \
-      2>/dev/null | tr -d '\r' >"${RESULT_DIR}/${label}.probe.properties" || true
+    app_file_cat "$PROBE_RESULT_PATH" \
+      | tr -d '\r' >"${RESULT_DIR}/${label}.probe.properties" || true
     if grep -Fxq "sourcePort=${S58_SOURCE_PORT}" "${RESULT_DIR}/${label}.probe.properties"; then
       kv "${label}.probeResult" "${RESULT_DIR#${repo_root}/}/${label}.probe.properties"
       return 0
@@ -354,15 +373,15 @@ probe_value() {
 
 run_debug_l4_prefill() {
   local label="$1"
-  adb_cmd shell run-as "$PACKAGE" rm -f "$L4_PREFILL_RESULT_PATH" 2>/dev/null || true
+  app_file_rm "$L4_PREFILL_RESULT_PATH"
   adb_cmd shell am start -n "$ACTIVITY" \
     --ez debugL4PrefillFromActivity true \
     --es debugTrafficHost "$S58_TRAFFIC_HOST" \
     --ei debugTrafficPort "$S58_TRAFFIC_PORT" \
     >"${RESULT_DIR}/${label}.l4_prefill.intent.log" 2>&1
   for _ in $(seq 1 30); do
-    adb_cmd shell run-as "$PACKAGE" cat "$L4_PREFILL_RESULT_PATH" \
-      2>/dev/null | tr -d '\r' >"${RESULT_DIR}/${label}.l4_prefill.properties" || true
+    app_file_cat "$L4_PREFILL_RESULT_PATH" \
+      | tr -d '\r' >"${RESULT_DIR}/${label}.l4_prefill.properties" || true
     if grep -Fxq "host=${S58_TRAFFIC_HOST}" "${RESULT_DIR}/${label}.l4_prefill.properties"; then
       kv "${label}.l4PrefillResult" "${RESULT_DIR#${repo_root}/}/${label}.l4_prefill.properties"
       return 0

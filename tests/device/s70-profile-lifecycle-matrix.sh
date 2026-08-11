@@ -60,7 +60,18 @@ section() {
 }
 
 read_snapshot() {
-  adb_cmd shell run-as "$PACKAGE" cat "$STATE_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$STATE_PATH" | tr -d '\r' || true
+}
+
+app_file_path() {
+  printf '/data/user/0/%s/%s\n' "$PACKAGE" "$1"
+}
+
+app_file_cat() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$relative_path" 2>/dev/null \
+    || adb_su "cat $(shell_single_quote "$(app_file_path "$relative_path")") 2>/dev/null" \
+    || true
 }
 
 snapshot_value_from() {
@@ -150,11 +161,11 @@ assert_no_native_residue() {
 }
 
 projection_properties() {
-  adb_cmd shell run-as "$PACKAGE" cat "$PROJECTION_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$PROJECTION_PATH" | tr -d '\r' || true
 }
 
 product_state_properties() {
-  adb_cmd shell run-as "$PACKAGE" cat "$PRODUCT_STATE_PATH" 2>/dev/null | tr -d '\r' || true
+  app_file_cat "$PRODUCT_STATE_PATH" | tr -d '\r' || true
 }
 
 assert_product_state_bound_subject() {
