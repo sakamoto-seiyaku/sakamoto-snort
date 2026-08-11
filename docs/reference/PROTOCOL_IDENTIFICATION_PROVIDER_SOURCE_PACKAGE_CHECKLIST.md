@@ -77,6 +77,9 @@ Contract guardrails:
 - NOTICE, attribution, copyright, and provenance files required for the
       chosen source are present or explicitly documented as not provided by the
       upstream package.
+- License, NOTICE, and provenance evidence files are regular files under the
+      evidence root; symlinks and paths that resolve outside the evidence root
+      are rejected by the intake gate.
 - Placeholder wrapper headers, including any placeholder Apache-2.0 text,
       are resolved by replacement, upstream clarification, or legal review.
 - `libprotoident` LGPL-3.0-or-later facts are reviewed for the Android

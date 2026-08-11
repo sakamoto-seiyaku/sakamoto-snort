@@ -146,6 +146,16 @@ require_existing_relative_source_file() {
   }
 }
 
+require_existing_relative_evidence_file() {
+  local key="$1"
+  local path="$2"
+  require_existing_relative_file "$key" "$path"
+  [[ ! -L "$evidence_root/$path" ]] || {
+    echo "$key evidence file must not be a symlink: $path" >&2
+    exit 1
+  }
+}
+
 source_strategy="$(property_value "source.strategy")"
 source_origin="$(property_value "source.origin")"
 source_pin="$(property_value "source.pin")"
@@ -199,13 +209,13 @@ IFS=',' read -r -a license_file_array <<<"$license_files"
 IFS=',' read -r -a notice_file_array <<<"$notice_files"
 IFS=',' read -r -a provenance_file_array <<<"$provenance_files"
 for file in "${license_file_array[@]}"; do
-  require_existing_relative_file "license.files" "$file"
+  require_existing_relative_evidence_file "license.files" "$file"
 done
 for file in "${notice_file_array[@]}"; do
-  require_existing_relative_file "notice.files" "$file"
+  require_existing_relative_evidence_file "notice.files" "$file"
 done
 for file in "${provenance_file_array[@]}"; do
-  require_existing_relative_file "provenance.files" "$file"
+  require_existing_relative_evidence_file "provenance.files" "$file"
 done
 
 manifest_entries=0

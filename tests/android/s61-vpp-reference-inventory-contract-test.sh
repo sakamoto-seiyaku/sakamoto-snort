@@ -155,14 +155,18 @@ assert_lpi_provider_source_intake_gate() {
   local traversal_output=""
   local symlink_inside_output=""
   local symlink_output=""
+  local license_symlink_output=""
+  local notice_escape_output=""
   local corpus_output=""
   local corpus_symlink_output=""
   local outside_file=""
+  local outside_evidence=""
   local outside_corpus=""
   local status=0
 
   intake_dir="$(mktemp -d)"
   outside_file="${intake_dir}.outside-provider.cc"
+  outside_evidence="${intake_dir}.outside-NOTICE"
   outside_corpus="${intake_dir}.outside-reference.pcap"
   mkdir -p "$intake_dir/src"
   printf 'void candidate_provider(void) {}\n' >"$intake_dir/src/provider.cc"
@@ -258,6 +262,41 @@ EOF
   grep -q 'license.files file is missing' <<<"$missing_license_output"
 
   printf 'candidate license evidence\n' >"$intake_dir/LICENSE"
+  ln -s "LICENSE" "$intake_dir/LICENSE-LINK"
+  sed -i 's/^license.files=LICENSE$/license.files=LICENSE-LINK/' \
+    "$intake_dir/source-package.properties"
+  set +e
+  license_symlink_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || {
+    echo "provider source intake gate unexpectedly passed with license evidence symlink" >&2
+    exit 1
+  }
+  grep -q 'license.files evidence file must not be a symlink' \
+    <<<"$license_symlink_output"
+  sed -i 's/^license.files=LICENSE-LINK$/license.files=LICENSE/' \
+    "$intake_dir/source-package.properties"
+  rm "$intake_dir/LICENSE-LINK"
+
+  printf 'outside notice evidence\n' >"$outside_evidence"
+  ln -s "$outside_evidence" "$intake_dir/NOTICE-LINK"
+  sed -i 's/^notice.files=NOTICE$/notice.files=NOTICE-LINK/' \
+    "$intake_dir/source-package.properties"
+  set +e
+  notice_escape_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || {
+    echo "provider source intake gate unexpectedly passed with notice evidence symlink escape" >&2
+    exit 1
+  }
+  grep -q 'notice.files resolves outside evidence root' \
+    <<<"$notice_escape_output"
+  sed -i 's/^notice.files=NOTICE-LINK$/notice.files=NOTICE/' \
+    "$intake_dir/source-package.properties"
+  rm "$intake_dir/NOTICE-LINK" "$outside_evidence"
+
   printf 'not a real pcap\n' >"$intake_dir/src/reference.pcap"
   set +e
   corpus_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
@@ -283,7 +322,7 @@ EOF
   grep -q 'pre-decision source evidence must not include corpus' \
     <<<"$corpus_symlink_output"
 
-  rm -rf "$intake_dir" "$outside_file" "$outside_corpus"
+  rm -rf "$intake_dir" "$outside_file" "$outside_evidence" "$outside_corpus"
 }
 
 [[ -f "$probe_build_root_helper" ]]
@@ -317,6 +356,11 @@ grep -Fq -- '-type l' "$provider_source_intake_gate"
 grep -q 'must not contain parent traversal path segments' "$provider_source_intake_gate"
 grep -q 'resolves outside evidence root' "$provider_source_intake_gate"
 grep -q 'must not be a symlink' "$provider_source_intake_gate"
+grep -q 'require_existing_relative_evidence_file' "$provider_source_intake_gate"
+grep -q 'evidence file must not be a symlink' "$provider_source_intake_gate"
+grep -q 'require_existing_relative_evidence_file "license.files"' "$provider_source_intake_gate"
+grep -q 'require_existing_relative_evidence_file "notice.files"' "$provider_source_intake_gate"
+grep -q 'require_existing_relative_evidence_file "provenance.files"' "$provider_source_intake_gate"
 grep -q 'realProviderEnabled=not_claimed' "$provider_source_intake_gate"
 assert_lpi_provider_source_intake_gate
 
