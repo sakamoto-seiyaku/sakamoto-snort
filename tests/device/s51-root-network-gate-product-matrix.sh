@@ -12,6 +12,8 @@ VNEXT_PORT="${VNEXT_PORT:-60607}"
 SNORT_CTL="${SNORT_CTL:-}"
 TRAFFIC_HOST="${TRAFFIC_HOST:-1.1.1.1}"
 TRAFFIC_PORT="${TRAFFIC_PORT:-80}"
+TRAFFIC_V6_HOST="${TRAFFIC_V6_HOST:-2606:4700:4700::1111}"
+TRAFFIC_V6_PORT="${TRAFFIC_V6_PORT:-80}"
 TRAFFIC_TIMEOUT_MILLIS="${TRAFFIC_TIMEOUT_MILLIS:-1500}"
 REAL_TRAFFIC_NETWORK_CONTEXT="${REAL_TRAFFIC_NETWORK_CONTEXT:-1}"
 MATRIX_RC=0
@@ -22,7 +24,7 @@ Usage: $0 [--serial <serial>] [--ctl <path>]
 
 Runs a focused SAKAMOTO-51 Root Network Gate product matrix:
   - package UID discovery through repo-local ./dev/adb
-  - vNext Network Gate block -> real APK traffic fails/drops
+  - vNext Network Gate block -> real dual-stack APK traffic fails/drops
   - NFQUEUE.STATUS policyDropActivity attribution evidence
   - Network Gate open -> POLICY.EVALUATE PASS_NEXT and real traffic restores
   - Wi-Fi/Mobile/VPN context compile/evaluate matrix
@@ -458,6 +460,7 @@ kv "package" "$PACKAGE"
 kv "uid.command" "./dev/adb shell cmd package list packages -U $PACKAGE"
 kv "uid" "$uid"
 kv "traffic" "$TRAFFIC_HOST:$TRAFFIC_PORT"
+kv "trafficV6" "$TRAFFIC_V6_HOST:$TRAFFIC_V6_PORT"
 kv "realTrafficNetworkContext" "$REAL_TRAFFIC_NETWORK_CONTEXT"
 kv "controlPort" "$VNEXT_PORT"
 kv "snortCtl" "$SNORT_CTL"
@@ -517,6 +520,34 @@ else
   MATRIX_RC=1
 fi
 
+section "block_real_ipv6_traffic"
+before="$(ctl NFQUEUE.STATUS)"
+kv "block_ipv6.probe.command" "./dev/adb shell am start -n $ACTIVITY --ez debugTraffic true --es debugTrafficHost $TRAFFIC_V6_HOST --ei debugTrafficPort $TRAFFIC_V6_PORT"
+am_start_debug_traffic "$TRAFFIC_V6_HOST" "$TRAFFIC_V6_PORT" || true
+wait_debug_traffic_probe_result "$TRAFFIC_V6_HOST" || true
+record_debug_traffic_probe_result "block_ipv6"
+after="$(ctl NFQUEUE.STATUS)"
+status_delta "$before" "$after" "block_ipv6"
+drop_delta="$(delta_value "$before" "$after" droppedPackets)"
+probe_uid="$(debug_traffic_probe_value uid || true)"
+probe_result="$(debug_traffic_probe_value result || true)"
+activity_uid="$(activity_value "$after" lastLinuxUid)"
+activity_context="$(activity_value "$after" lastNetworkContext)"
+activity_stage="$(activity_value "$after" lastStage)"
+activity_rule="$(activity_value "$after" lastRuleId)"
+activity_revision="$(activity_value "$after" lastRevision)"
+if [[ "$drop_delta" -gt 0 && "$probe_uid" == "$uid" \
+  && "$probe_result" == "tcp_connect_failed" \
+  && "$activity_uid" == "$uid" && "$activity_context" == "$REAL_TRAFFIC_NETWORK_CONTEXT" \
+  && "$activity_stage" == "NetworkGate" \
+  && "$activity_rule" == "$block_rule" && "$activity_revision" == "$block_revision" ]]; then
+  kv "block_ipv6.result" "PASS"
+else
+  kv "block_ipv6.result" "FAIL"
+  kv "block_ipv6.reason" "expected failed IPv6 APK traffic, NFQUEUE drop delta, and policyDropActivity attribution"
+  MATRIX_RC=1
+fi
+
 section "apply_failure_preserves_snapshot"
 bad_args="$(policy_apply_duplicate_context "$uid" 510301)"
 bad_resp="$(ctl POLICY.APPLY "$bad_args" || true)"
@@ -557,6 +588,27 @@ if [[ "$accepted_delta" -gt 0 && "$drop_delta" -eq 0 && "$probe_uid" == "$uid" \
 else
   kv "open.result" "FAIL"
   kv "open.reason" "expected open gate to restore APK TCP connect without new policy drops"
+  MATRIX_RC=1
+fi
+
+section "open_restore_ipv6"
+before="$(ctl NFQUEUE.STATUS)"
+kv "open_ipv6.probe.command" "./dev/adb shell am start -n $ACTIVITY --ez debugTraffic true --es debugTrafficHost $TRAFFIC_V6_HOST --ei debugTrafficPort $TRAFFIC_V6_PORT"
+am_start_debug_traffic "$TRAFFIC_V6_HOST" "$TRAFFIC_V6_PORT" || true
+wait_debug_traffic_probe_result "$TRAFFIC_V6_HOST" || true
+record_debug_traffic_probe_result "open_ipv6"
+after="$(ctl NFQUEUE.STATUS)"
+status_delta "$before" "$after" "open_ipv6"
+accepted_delta="$(delta_value "$before" "$after" acceptedPackets)"
+drop_delta="$(delta_value "$before" "$after" droppedPackets)"
+probe_uid="$(debug_traffic_probe_value uid || true)"
+probe_result="$(debug_traffic_probe_value result || true)"
+if [[ "$accepted_delta" -gt 0 && "$drop_delta" -eq 0 && "$probe_uid" == "$uid" \
+  && "$probe_result" == "tcp_connect_succeeded" ]]; then
+  kv "open_ipv6.result" "PASS"
+else
+  kv "open_ipv6.result" "FAIL"
+  kv "open_ipv6.reason" "expected open gate to restore APK IPv6 TCP connect without new policy drops"
   MATRIX_RC=1
 fi
 
