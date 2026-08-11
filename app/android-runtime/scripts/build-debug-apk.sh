@@ -12,6 +12,12 @@ stage_dir_explicit=0
 if [[ -n "${VPP_RUNTIME_STAGE_DIR+x}" ]]; then
   stage_dir_explicit=1
 fi
+default_hev_stage_dir="${repo_root}/experiments/vpp-nfq-poc/work/android-hev-stage"
+hev_stage_dir="${HEV_STAGE_DIR:-$default_hev_stage_dir}"
+hev_stage_explicit=0
+if [[ -n "${HEV_STAGE_DIR+x}" ]]; then
+  hev_stage_explicit=1
+fi
 sdk_prebuilts="${ANDROID_LINEAGE_SDK_PREBUILTS:-/home/js/android/lineage/prebuilts/sdk}"
 android_jar="${ANDROID_JAR:-${sdk_prebuilts}/36/public/android.jar}"
 aapt2="${AAPT2:-${sdk_prebuilts}/tools/linux/bin/aapt2}"
@@ -45,9 +51,15 @@ if [[ "$stage_dir_explicit" == 0 ]]; then
 fi
 stage_has_required_artifacts \
   || die "runtime stage is missing VPP core diagnostics: $stage_dir"
+hev_lib="$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so"
+if [[ "$hev_stage_explicit" == 0 && ! -f "$hev_lib" ]]; then
+  hev_build_script="$repo_root/experiments/vpp-nfq-poc/scripts/android-build-hev.sh"
+  [[ -f "$hev_build_script" ]] || die "default HEV stage is incomplete and builder is absent: $hev_build_script"
+  STAGE_DIR="$hev_stage_dir" bash "$hev_build_script"
+fi
 
 for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" \
-    "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
+    "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl" "$hev_lib"; do
   [[ -f "$file" ]] || die "missing required build input: $file"
 done
 [[ -f "$provenance_file" ]] || die "runtime stage provenance is missing: $provenance_file"
@@ -97,6 +109,8 @@ for so in "$stage_dir"/lib/*.so; do
   cp "$so" "$jni_dir/$(basename "$so")"
   chmod 755 "$jni_dir/$(basename "$so")"
 done
+cp "$hev_lib" "$jni_dir/libhev-socks5-tunnel.so"
+chmod 755 "$jni_dir/libhev-socks5-tunnel.so"
 
 # Build the committed core control boundary against the generated VPE VAPI.
 # The generated headers and libvapiclient are build inputs, never runtime

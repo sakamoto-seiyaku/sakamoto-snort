@@ -98,8 +98,13 @@ if unzip -p "$apk" lib/arm64-v8a/libvpp_runtime.so \
   exit 1
 fi
 grep -Fxq 'lib/arm64-v8a/libsakamoto_runtime_control.so' <<<"$entries"
+grep -Fxq 'lib/arm64-v8a/libhev-socks5-tunnel.so' <<<"$entries"
 if grep -Eq 'nfqueue_poc|tun_poc' <<<"$entries"; then
   echo "APK promoted an experiment Adapter artifact" >&2
+  exit 1
+fi
+if grep -Eq 'vpnfdprobe|vpppoc' <<<"$entries"; then
+  echo "APK promoted a VPN/TUN POC harness artifact" >&2
   exit 1
 fi
 
