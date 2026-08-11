@@ -421,6 +421,30 @@ rapidjson::Value makeLpiProviderStatusResult(
     return result;
 }
 
+template <typename Counters>
+void addFlowStatusMembers(rapidjson::Document &result, const Counters &counters,
+                          rapidjson::Document::AllocatorType &alloc) {
+    result.AddMember("flowTableEntries", counters.flowTableEntries, alloc);
+    result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
+    result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);
+    result.AddMember("flowTableCapacityMisses", counters.flowTableCapacityMisses, alloc);
+    result.AddMember("lpiProvider",
+                     makeLpiProviderStatusResult(counters.lpiProvider, alloc),
+                     alloc);
+}
+
+template <typename Counters>
+void addFlowActivityStatusMembers(rapidjson::Document &result,
+                                  const Counters &counters,
+                                  rapidjson::Document::AllocatorType &alloc) {
+    result.AddMember("policyDropActivity",
+                     makePolicyDropActivityResult(counters.policyDropActivity, alloc),
+                     alloc);
+    result.AddMember("allowedFlowActivity",
+                     makeAllowedFlowActivityResult(counters.allowedFlowActivity, alloc),
+                     alloc);
+}
+
 rapidjson::Document makeNfqueueStatusResult(
     const SnortRuntime::NfqueueRuntimeCounters counters) {
     rapidjson::Document result(rapidjson::kObjectType);
@@ -442,23 +466,12 @@ rapidjson::Document makeNfqueueStatusResult(
     result.AddMember("queueCompletionCapacity", counters.queueCompletionCapacity, alloc);
     result.AddMember("queueCompletionHighWatermark",
                      counters.queueCompletionHighWatermark, alloc);
-    result.AddMember("flowTableEntries", counters.flowTableEntries, alloc);
-    result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
-    result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);
-    result.AddMember("flowTableCapacityMisses", counters.flowTableCapacityMisses, alloc);
-    result.AddMember("lpiProvider",
-                     makeLpiProviderStatusResult(counters.lpiProvider, alloc),
-                     alloc);
+    addFlowStatusMembers(result, counters, alloc);
     result.AddMember("uidMetadataPresentPackets",
                      counters.uidMetadataPresentPackets, alloc);
     result.AddMember("uidMetadataMissingPackets",
                      counters.uidMetadataMissingPackets, alloc);
-    result.AddMember("policyDropActivity",
-                     makePolicyDropActivityResult(counters.policyDropActivity, alloc),
-                     alloc);
-    result.AddMember("allowedFlowActivity",
-                     makeAllowedFlowActivityResult(counters.allowedFlowActivity, alloc),
-                     alloc);
+    addFlowActivityStatusMembers(result, counters, alloc);
     result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
     result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);
     result.AddMember("lastObservedNetworkContext",
@@ -509,24 +522,13 @@ rapidjson::Document makeVpnTunStatusResult(
     result.AddMember("transportUnsupportedPackets",
                      counters.transportUnsupportedPackets, alloc);
     result.AddMember("directPackets", counters.directPackets, alloc);
-    result.AddMember("flowTableEntries", counters.flowTableEntries, alloc);
-    result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
-    result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);
-    result.AddMember("flowTableCapacityMisses", counters.flowTableCapacityMisses, alloc);
-    result.AddMember("lpiProvider",
-                     makeLpiProviderStatusResult(counters.lpiProvider, alloc),
-                     alloc);
+    addFlowStatusMembers(result, counters, alloc);
     result.AddMember("ownerGuardPasses", counters.ownerGuardPasses, alloc);
     result.AddMember("ownerGuardMismatches", counters.ownerGuardMismatches, alloc);
     result.AddMember("attributionUpdates", counters.attributionUpdates, alloc);
     result.AddMember("attributionMisses", counters.attributionMisses, alloc);
     result.AddMember("attributionResolutions", counters.attributionResolutions, alloc);
-    result.AddMember("policyDropActivity",
-                     makePolicyDropActivityResult(counters.policyDropActivity, alloc),
-                     alloc);
-    result.AddMember("allowedFlowActivity",
-                     makeAllowedFlowActivityResult(counters.allowedFlowActivity, alloc),
-                     alloc);
+    addFlowActivityStatusMembers(result, counters, alloc);
     result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
     result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);
     result.AddMember("lastObservedNetworkContext",
