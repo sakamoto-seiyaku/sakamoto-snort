@@ -368,9 +368,56 @@ adb_cmd shell getprop ro.boot.bootreason >"${RESULT_DIR}/reboot.bootreason" 2>&1
 adb_cmd shell cat /proc/uptime >"${RESULT_DIR}/reboot.uptime" 2>&1 || true
 kv "reboot.defaultForced" "$S70_RUN_REBOOT"
 if [[ "$S70_RUN_REBOOT" == "1" ]]; then
-  kv "reboot.result" "REQUESTED_BUT_NOT_IMPLEMENTED_IN_DEFAULT_MATRIX"
-  echo "S70_RUN_REBOOT=1 is intentionally not implemented in this bounded matrix yet" >&2
-  exit 1
+  mkdir -p "${RESULT_DIR}/reboot"
+  reboot_state="$(start_profile root "${RESULT_DIR}/reboot-start")"
+  reboot_pid="$(printf '%s\n' "$reboot_state" | snapshot_value_from pid)"
+  kv "reboot.prePid" "$reboot_pid"
+  adb_cmd reboot >"${RESULT_DIR}/reboot.command.log" 2>&1 || true
+  sleep 5
+  adb_cmd wait-for-device >"${RESULT_DIR}/reboot.wait-for-device.log" 2>&1
+  boot_completed=0
+  for _ in $(seq 1 90); do
+    if [[ "$(adb_cmd shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')" == "1" ]]; then
+      boot_completed=1
+      break
+    fi
+    sleep 2
+  done
+  [[ "$boot_completed" == "1" ]] || {
+    kv "reboot.result" "FAIL_BOOT_TIMEOUT"
+    exit 1
+  }
+  adb_cmd shell getprop sys.boot_completed >"${RESULT_DIR}/reboot.after.sys_boot_completed" 2>&1 || true
+  adb_cmd shell getprop ro.boot.bootreason >"${RESULT_DIR}/reboot.after.bootreason" 2>&1 || true
+  adb_cmd shell cat /proc/uptime >"${RESULT_DIR}/reboot.after.uptime" 2>&1 || true
+  assert_no_native_residue "${RESULT_DIR}/reboot/native-residue.after-boot"
+  adb_cmd shell am start -n "$ACTIVITY" >"${RESULT_DIR}/reboot.query.intent.log" 2>&1
+  recovered_inactive=0
+  for _ in $(seq 1 45); do
+    state="$(read_snapshot)"
+    printf '%s\n' "$state" >"${RESULT_DIR}/reboot/snapshot.after-query"
+    if grep -Fxq "mayBeActive=false" <<<"$state" \
+        && grep -Fxq "pid=-1" <<<"$state"; then
+      recovered_inactive=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$recovered_inactive" == "1" ]] || {
+    kv "reboot.result" "FAIL_RECOVERY"
+    cat "${RESULT_DIR}/reboot/snapshot.after-query" >&2
+    exit 1
+  }
+  reboot_restart_state="$(start_profile root "${RESULT_DIR}/reboot-manual-restart")"
+  reboot_restart_pid="$(printf '%s\n' "$reboot_restart_state" | snapshot_value_from pid)"
+  pid_alive "$reboot_restart_pid"
+  stop_runtime "${RESULT_DIR}/reboot-manual-restart-stop" >/dev/null
+  assert_pid_gone "$reboot_restart_pid" "${RESULT_DIR}/reboot/root-pid.after-manual-stop"
+  assert_no_native_residue "${RESULT_DIR}/reboot/native-residue.after-manual-stop"
+  kv "reboot.bootCompleted" "PASS"
+  kv "reboot.recoveredInactive" "PASS"
+  kv "reboot.manualRestart" "PASS"
+  kv "reboot.result" "PASS"
 else
   kv "reboot.result" "BASELINE_RECORDED"
 fi
