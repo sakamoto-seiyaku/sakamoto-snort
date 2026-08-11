@@ -332,6 +332,10 @@ rapidjson::Document makeNfqueueStatusResult(
                      counters.fragmentBufferedPackets, alloc);
     result.AddMember("fragmentReassembledPackets",
                      counters.fragmentReassembledPackets, alloc);
+    result.AddMember("flowTableEntries", counters.flowTableEntries, alloc);
+    result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
+    result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);
+    result.AddMember("flowTableCapacityMisses", counters.flowTableCapacityMisses, alloc);
     result.AddMember("uidMetadataPresentPackets",
                      counters.uidMetadataPresentPackets, alloc);
     result.AddMember("uidMetadataMissingPackets",
@@ -392,6 +396,10 @@ rapidjson::Document makeVpnTunStatusResult(
     result.AddMember("transportUnsupportedPackets",
                      counters.transportUnsupportedPackets, alloc);
     result.AddMember("directPackets", counters.directPackets, alloc);
+    result.AddMember("flowTableEntries", counters.flowTableEntries, alloc);
+    result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
+    result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);
+    result.AddMember("flowTableCapacityMisses", counters.flowTableCapacityMisses, alloc);
     result.AddMember("ownerGuardPasses", counters.ownerGuardPasses, alloc);
     result.AddMember("ownerGuardMismatches", counters.ownerGuardMismatches, alloc);
     result.AddMember("attributionUpdates", counters.attributionUpdates, alloc);

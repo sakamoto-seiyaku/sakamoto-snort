@@ -310,6 +310,8 @@ NfqueueFlowAdapterCounters NfqueueFlowAdapter::counters() const noexcept {
     auto result = counters_;
     const auto &distributionCounters = steering_.distribution().counters();
     const auto &guardCounters = steering_.ownerGuard().counters();
+    const auto &flowTable = steering_.flowTable();
+    const auto &flowCounters = flowTable.counters();
     result.directPackets = distributionCounters.directPackets;
     result.parseDrops = distributionCounters.parseDrops;
     result.capacityDrops = distributionCounters.capacityDrops;
@@ -318,6 +320,10 @@ NfqueueFlowAdapterCounters NfqueueFlowAdapter::counters() const noexcept {
     result.ownerGuardMismatches = guardCounters.mismatches;
     result.correctiveHandoffs = guardCounters.correctiveHandoffs;
     result.secondMismatchDrops = guardCounters.secondMismatchDrops;
+    result.flowTableEntries = flowTable.size();
+    result.flowTableCapacity = flowTable.capacity();
+    result.flowTableHighWatermark = flowCounters.highWatermark;
+    result.flowTableCapacityMisses = flowCounters.capacityMisses;
     return result;
 }
 

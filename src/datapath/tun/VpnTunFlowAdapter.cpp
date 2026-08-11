@@ -280,15 +280,20 @@ VpnTunFlowAdapterCounters VpnTunFlowAdapter::counters() const noexcept {
     auto result = counters_;
     const auto &distributionCounters = steering_.distribution().counters();
     const auto &guardCounters = steering_.ownerGuard().counters();
+    const auto &flowTable = steering_.flowTable();
     result.directPackets = distributionCounters.directPackets;
     result.ownerGuardPasses = guardCounters.localPass;
     result.ownerGuardMismatches = guardCounters.mismatches;
     result.correctiveHandoffs = guardCounters.correctiveHandoffs;
     result.secondMismatchDrops = guardCounters.secondMismatchDrops;
-    const auto &flowCounters = steering_.flowTable().counters();
+    const auto &flowCounters = flowTable.counters();
     result.attributionUpdates = flowCounters.attributionUpdates;
     result.attributionMisses = flowCounters.attributionMisses;
     result.attributionResolutions = flowCounters.attributionResolutions;
+    result.flowTableEntries = flowTable.size();
+    result.flowTableCapacity = flowTable.capacity();
+    result.flowTableHighWatermark = flowCounters.highWatermark;
+    result.flowTableCapacityMisses = flowCounters.capacityMisses;
     return result;
 }
 

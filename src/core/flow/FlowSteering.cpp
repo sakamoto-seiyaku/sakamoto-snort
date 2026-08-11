@@ -648,6 +648,7 @@ std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
         .bytes = facts.originalLength,
     });
     ++counters_.creates;
+    counters_.highWatermark = std::max(counters_.highWatermark, entries_.size());
     return FlowEntryObservation{
         .relativeDirection = FlowRelativeDirection::Orig,
         .flowOriginDir = entry.flowOriginDir,

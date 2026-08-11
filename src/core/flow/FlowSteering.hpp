@@ -363,6 +363,7 @@ struct BoundedFlowTableCounters {
     std::uint64_t capacityMisses = 0;
     std::uint64_t nonCanonicalPackets = 0;
     std::uint64_t decisionStateClears = 0;
+    std::size_t highWatermark = 0;
 };
 
 class BoundedFlowTable final {

@@ -27,6 +27,10 @@ struct NfqueueRuntimeCounters {
     std::uint64_t verdictSendFailures = 0;
     std::uint64_t fragmentBufferedPackets = 0;
     std::uint64_t fragmentReassembledPackets = 0;
+    std::uint64_t flowTableEntries = 0;
+    std::uint64_t flowTableCapacity = 0;
+    std::uint64_t flowTableHighWatermark = 0;
+    std::uint64_t flowTableCapacityMisses = 0;
     std::uint64_t uidMetadataPresentPackets = 0;
     std::uint64_t uidMetadataMissingPackets = 0;
     SnortDatapath::Policy::PacketPolicyDropActivityCounters policyDropActivity;
@@ -58,6 +62,10 @@ struct VpnTunRuntimeCounters {
     std::uint64_t transportFailedPackets = 0;
     std::uint64_t transportUnsupportedPackets = 0;
     std::uint64_t directPackets = 0;
+    std::uint64_t flowTableEntries = 0;
+    std::uint64_t flowTableCapacity = 0;
+    std::uint64_t flowTableHighWatermark = 0;
+    std::uint64_t flowTableCapacityMisses = 0;
     std::uint64_t ownerGuardPasses = 0;
     std::uint64_t ownerGuardMismatches = 0;
     std::uint64_t attributionUpdates = 0;

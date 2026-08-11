@@ -258,6 +258,8 @@ for key in [
     "capacityPassThroughPackets", "capacityPolicyBypassPackets",
     "ownerFaultPassThroughPackets", "ownerFaultRuntimeDrops",
     "ownerGuardMismatches", "transportFailedPackets",
+    "flowTableEntries", "flowTableCapacity", "flowTableHighWatermark",
+    "flowTableCapacityMisses",
 ]:
     if key in result:
         emit(f"adapter.{key}", result.get(key, 0))
@@ -522,7 +524,7 @@ kv "nominalThroughput" "app_debug_download_mbps"
 kv "cpuRss" "idle_and_download_active_proc_ticks_rss"
 kv "thermal" "dumpsys_thermalservice_before_after"
 kv "shutdownDrain" "runtimeStop_to_stopped_snapshot_ms"
-kv "capacityHighWatermark" "adapter_activity_records_capacity_evictions"
+kv "capacityHighWatermark" "adapter_flow_table_and_activity_capacity_evictions"
 kv "correctiveHandoff" "owner_fault_or_owner_guard_counters"
 
 section "device"

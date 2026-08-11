@@ -129,7 +129,7 @@ must not treat `TBD` as pass.
 | Latency | p50/p95/p99 verdict or workflow latency per profile | Current S59 debug workflow probe present; release APK rerun required |
 | Throughput | Root and VPN nominal throughput / transaction rate | Current S59 debug app download / transaction-rate probe present; release APK rerun required |
 | Drop | policy drop counters and unintended drop counters | S52/S55/S58 plus S59 debug probe counters present |
-| Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | S59 debug Activity capacity/eviction probe present; queue/flow high-watermark TBD |
+| Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | Current S59 debug FlowEntry table high-watermark plus Activity capacity/eviction probe present; queue high-watermark TBD |
 | Corrective handoff | owner mismatch / corrective handoff counters | S59 debug owner-fault / owner-guard counters present; release rollup TBD |
 | CPU/RSS | idle and active CPU/RSS per profile | S59 debug idle and active CPU/RSS present; release APK rerun required |
 | Screen-off power | screen-off idle power or proxy budget | TBD |
@@ -146,29 +146,31 @@ Current measurement entry:
 
 Latest debug budget probe:
 
-- Result directory: `build-output/s59-release-budget-probe/20260811-171433`.
+- Result directory: `build-output/s59-release-budget-probe/20260811-172157`.
 - Device: Google Pixel 6a (`28201JEGR0XPAJ`), Android 16 / SDK 36,
   arm64-v8a.
 - APK: `app/android-runtime/build/outputs/sakamoto-runtime-debug.apk`,
-  SHA-256 `a4b91f199c0b0f16f053f767fead959935117fee6b0e9cba6a0ea91b855c6317`.
-- Root workflow latency: samples `3`, p50 `353 ms`, p95 `609 ms`,
-  p99 `609 ms`.
-- VPN workflow latency: samples `3`, p50 `289 ms`, p95 `616 ms`,
-  p99 `616 ms`.
+  SHA-256 `83186d05f67612274e125a3ff098bf40e48611aa79ffa8f9b2170362ecfc6c81`.
+- Root workflow latency: samples `3`, p50 `620 ms`, p95 `627 ms`,
+  p99 `627 ms`.
+- VPN workflow latency: samples `3`, p50 `309 ms`, p95 `592 ms`,
+  p99 `592 ms`.
 - Throughput / transaction rate: Root `RECORDED_APP_DOWNLOAD`,
-  `500000` bytes in `875 ms`, `4.00 Mbps`; VPN
-  `RECORDED_APP_TCP_CONNECT_TXN_RATE`, `9/10` successful TCP-connect
-  transactions over `7359 ms`, `1.22 tps`, with app download fallback
+  `500000` bytes in `1033 ms`, `3.87 Mbps`; VPN
+  `RECORDED_APP_TCP_CONNECT_TXN_RATE`, `10/10` successful TCP-connect
+  transactions over `6852 ms`, `1.46 tps`, with app download fallback
   reason `Connection reset`.
-- CPU/RSS idle sample: Root `1.00% / 37432 KiB`, VPN `4.00% / 37376 KiB`.
-- CPU/RSS active sample: Root `7.63% / 37440 KiB`, VPN `1.85% / 37380 KiB`.
+- CPU/RSS idle sample: Root `0.50% / 37692 KiB`, VPN `4.00% / 37396 KiB`.
+- CPU/RSS active sample: Root `5.25% / 37696 KiB`, VPN `1.98% / 37404 KiB`.
 - Adapter counters: Root `droppedPackets=0`, `ownerFaultPassThroughPackets=0`;
   VPN `droppedPackets=0`, `ownerGuardMismatches=0`,
   `transportFailedPackets=0`.
-- Activity capacity: Root allowed activity `8/8` with `729` evictions; VPN
-  allowed activity `8/8` with `92` evictions; drop activity `0/8` for both.
+- Flow table high-watermark: Root `6/64` with `0` capacity misses; VPN `17/64`
+  with `0` capacity misses.
+- Activity capacity: Root allowed activity `8/8` with `727` evictions; VPN
+  allowed activity `8/8` with `94` evictions; drop activity `0/8` for both.
 - Thermal status: Root `0 -> 0`; VPN `0 -> 0`.
-- Shutdown drain: Root `4860 ms`; VPN `2539 ms`.
+- Shutdown drain: Root `4789 ms`; VPN `3666 ms`.
 - Throughput note: VPN app download still returned `Connection reset`, so this
   run records transaction-rate fallback rather than nominal download Mbps for
   VPN. Final release approval still needs a release-APK rerun and explicit

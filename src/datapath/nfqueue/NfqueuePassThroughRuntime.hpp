@@ -164,6 +164,10 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t fragmentTimeoutPackets = 0;
     std::uint64_t fragmentCapacityPackets = 0;
     std::uint64_t fragmentOwnerMetadataPackets = 0;
+    std::uint64_t flowTableEntries = 0;
+    std::uint64_t flowTableCapacity = 0;
+    std::uint64_t flowTableHighWatermark = 0;
+    std::uint64_t flowTableCapacityMisses = 0;
     std::uint64_t uidMetadataPresentPackets = 0;
     std::uint64_t uidMetadataMissingPackets = 0;
     Policy::PacketPolicyDropActivityCounters policyDropActivity;
@@ -397,6 +401,10 @@ public:
             .verdictSendFailures = counters.verdictSendFailures,
             .fragmentBufferedPackets = counters.fragmentBufferedPackets,
             .fragmentReassembledPackets = counters.fragmentReassembledPackets,
+            .flowTableEntries = counters.flowTableEntries,
+            .flowTableCapacity = counters.flowTableCapacity,
+            .flowTableHighWatermark = counters.flowTableHighWatermark,
+            .flowTableCapacityMisses = counters.flowTableCapacityMisses,
             .uidMetadataPresentPackets = counters.uidMetadataPresentPackets,
             .uidMetadataMissingPackets = counters.uidMetadataMissingPackets,
             .policyDropActivity = counters.policyDropActivity,

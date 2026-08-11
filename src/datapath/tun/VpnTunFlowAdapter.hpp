@@ -78,6 +78,10 @@ struct VpnTunFlowAdapterCounters final {
     std::uint64_t fragmentCapacityPackets = 0;
     std::uint64_t fragmentReassembledPackets = 0;
     std::uint64_t fragmentOwnerMetadataPackets = 0;
+    std::uint64_t flowTableEntries = 0;
+    std::uint64_t flowTableCapacity = 0;
+    std::uint64_t flowTableHighWatermark = 0;
+    std::uint64_t flowTableCapacityMisses = 0;
     std::uint64_t uidAttributionHitPackets = 0;
     std::uint64_t uidUnknownFallbackPackets = 0;
     std::uint64_t outboundPackets = 0;

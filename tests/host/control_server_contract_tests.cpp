@@ -1166,6 +1166,10 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     runtime.nfqueueCounters.verdictSendFailures = 5;
     runtime.nfqueueCounters.fragmentBufferedPackets = 6;
     runtime.nfqueueCounters.fragmentReassembledPackets = 8;
+    runtime.nfqueueCounters.flowTableEntries = 9;
+    runtime.nfqueueCounters.flowTableCapacity = 64;
+    runtime.nfqueueCounters.flowTableHighWatermark = 12;
+    runtime.nfqueueCounters.flowTableCapacityMisses = 2;
     runtime.nfqueueCounters.uidMetadataPresentPackets = 9;
     runtime.nfqueueCounters.uidMetadataMissingPackets = 10;
     runtime.nfqueueCounters.lastObservedLinuxUid = 12546;
@@ -1229,6 +1233,10 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["verdictSendFailures"].GetUint64(), 5U);
     EXPECT_EQ(result["fragmentBufferedPackets"].GetUint64(), 6U);
     EXPECT_EQ(result["fragmentReassembledPackets"].GetUint64(), 8U);
+    EXPECT_EQ(result["flowTableEntries"].GetUint64(), 9U);
+    EXPECT_EQ(result["flowTableCapacity"].GetUint64(), 64U);
+    EXPECT_EQ(result["flowTableHighWatermark"].GetUint64(), 12U);
+    EXPECT_EQ(result["flowTableCapacityMisses"].GetUint64(), 2U);
     EXPECT_EQ(result["uidMetadataPresentPackets"].GetUint64(), 9U);
     EXPECT_EQ(result["uidMetadataMissingPackets"].GetUint64(), 10U);
     EXPECT_EQ(result["lastObservedLinuxUid"].GetUint(), 12546U);
@@ -1324,6 +1332,10 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     runtime.vpnTunCounters.ownerFaultRuntimeDrops = 4;
     runtime.vpnTunCounters.fragmentBufferedPackets = 5;
     runtime.vpnTunCounters.fragmentReassembledPackets = 6;
+    runtime.vpnTunCounters.flowTableEntries = 13;
+    runtime.vpnTunCounters.flowTableCapacity = 64;
+    runtime.vpnTunCounters.flowTableHighWatermark = 21;
+    runtime.vpnTunCounters.flowTableCapacityMisses = 3;
     runtime.vpnTunCounters.uidAttributionHitPackets = 197;
     runtime.vpnTunCounters.uidUnknownFallbackPackets = 4;
     runtime.vpnTunCounters.outboundPackets = 111;
@@ -1400,6 +1412,10 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["ownerFaultRuntimeDrops"].GetUint64(), 4U);
     EXPECT_EQ(result["fragmentBufferedPackets"].GetUint64(), 5U);
     EXPECT_EQ(result["fragmentReassembledPackets"].GetUint64(), 6U);
+    EXPECT_EQ(result["flowTableEntries"].GetUint64(), 13U);
+    EXPECT_EQ(result["flowTableCapacity"].GetUint64(), 64U);
+    EXPECT_EQ(result["flowTableHighWatermark"].GetUint64(), 21U);
+    EXPECT_EQ(result["flowTableCapacityMisses"].GetUint64(), 3U);
     EXPECT_EQ(result["uidAttributionHitPackets"].GetUint64(), 197U);
     EXPECT_EQ(result["uidUnknownFallbackPackets"].GetUint64(), 4U);
     EXPECT_EQ(result["outboundPackets"].GetUint64(), 111U);
