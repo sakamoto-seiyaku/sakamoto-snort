@@ -37,6 +37,7 @@ import com.sakamoto.snort.androidruntime.ReleaseDiagnosticsExport;
 import com.sakamoto.snort.androidruntime.RuleDraft;
 import com.sakamoto.snort.androidruntime.RuleView;
 import com.sakamoto.snort.androidruntime.ActivityItem;
+import com.sakamoto.snort.androidruntime.ProtocolRecognitionSequence;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -2010,19 +2011,27 @@ public final class AndroidRuntimeContractTest {
                 "output", "orig", 1L, 80L, 7L,
                 ActivityItem.PROTOCOL_RECOGNITION_UNIDENTIFIED, "", "",
                 "", 20);
+        ActivityItem malformedSequence = ActivityItem.protocolRecognition(app, "Mail",
+                "com.example.mail", 3500L, "192.0.2.55", "tcp", 443,
+                "output", "orig", 3L, 384L, 7L,
+                ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED, "tls", "web",
+                "bad-token,5:tls:orig,nope:quic:reply", 5);
         RuntimeSummary runtime = RuntimeSummary.fromSnapshot(RuntimeSnapshot.running(
                 RuntimeProfile.VPN, "control-vnext", "1", "runtime", "arm64",
                 "ok", 9L), CapabilitySet.androidL4(true, true));
         AppDetail detail = AppDetail.normal(new AppSummary(app, "com.example.mail",
                 "Mail", "Work", app.userId, app.uid, true, true,
                 false, false, false, 0), runtime,
-                Collections.emptyList(), Arrays.asList(detecting, identified, unidentified));
+                Collections.emptyList(), Arrays.asList(detecting, identified, unidentified,
+                        malformedSequence));
         ProductActivityProjectionStore.write(files.toFile(), detail);
         AppDetail restored = ProductActivityProjectionStore.read(files.toFile());
 
-        check(restored.activity.size() == 3,
+        check(restored.activity.size() == 4,
                 "Activity projection preserves protocol recognition rows");
         ActivityItem restoredIdentified = restored.activity.get(1);
+        ProtocolRecognitionSequence identifiedSequence =
+                restoredIdentified.protocolRecognition.recognitionSequence;
         check(ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED.equals(
                         restoredIdentified.protocolRecognitionState)
                         && "quic".equals(restoredIdentified.applicationProtocolKey)
@@ -2031,11 +2040,40 @@ public final class AndroidRuntimeContractTest {
                         restoredIdentified.protocolRecognitionSequence)
                         && restoredIdentified.protocolPayloadPackets == 3,
                 "identified Activity row round-trips latest exact result and full sequence");
+        check(identifiedSequence.entries.size() == 2,
+                "identified Activity row exposes typed protocol recognition sequence entries");
+        ProtocolRecognitionSequence.Entry firstIdentifiedEntry =
+                identifiedSequence.entries.get(0);
+        ProtocolRecognitionSequence.Entry secondIdentifiedEntry =
+                identifiedSequence.entries.get(1);
+        check(firstIdentifiedEntry.payloadPacketSequence == 1L
+                        && "http".equals(firstIdentifiedEntry.protocolKey)
+                        && "orig".equals(firstIdentifiedEntry.flowDirection)
+                        && secondIdentifiedEntry.payloadPacketSequence == 3L
+                        && "quic".equals(secondIdentifiedEntry.protocolKey)
+                        && "reply".equals(secondIdentifiedEntry.flowDirection),
+                "identified Activity row exposes typed protocol recognition sequence fields");
+        ActivityItem restoredDetecting = restored.activity.get(0);
         check(ActivityItem.PROTOCOL_RECOGNITION_DETECTING.equals(
-                        restored.activity.get(0).protocolRecognitionState)
+                        restoredDetecting.protocolRecognitionState)
+                        && restoredDetecting.protocolRecognition.recognitionSequence
+                        .entries.isEmpty()
                         && ActivityItem.PROTOCOL_RECOGNITION_UNIDENTIFIED.equals(
                         restored.activity.get(2).protocolRecognitionState),
-                "Activity rows can represent detecting and unidentified states");
+                "Activity rows can represent detecting, empty sequence and unidentified states");
+        ActivityItem restoredMalformed = restored.activity.get(3);
+        ProtocolRecognitionSequence malformedTypedSequence =
+                restoredMalformed.protocolRecognition.recognitionSequence;
+        check("bad-token,5:tls:orig,nope:quic:reply".equals(
+                        restoredMalformed.protocolRecognitionSequence)
+                        && malformedTypedSequence.entries.size() == 1,
+                "malformed protocol recognition sequence preserves wire and skips bad entries");
+        ProtocolRecognitionSequence.Entry malformedEntry =
+                malformedTypedSequence.entries.get(0);
+        check(malformedEntry.payloadPacketSequence == 5L
+                        && "tls".equals(malformedEntry.protocolKey)
+                        && "orig".equals(malformedEntry.flowDirection),
+                "malformed protocol recognition sequence keeps parseable typed fields");
         check(restored.displayText.contains("recognition=identified")
                         && restored.displayText.contains("appProtocol=quic")
                         && restored.displayText.contains("category=web")

@@ -10,15 +10,25 @@ public final class ProtocolRecognitionProjection {
     public final String state;
     public final String key;
     public final String category;
+    public final ProtocolRecognitionSequence recognitionSequence;
     public final String sequence;
     public final int payloadPackets;
 
     private ProtocolRecognitionProjection(String state, String key, String category,
                                           String sequence, int payloadPackets) {
+        this(state, key, category, ProtocolRecognitionSequence.parse(sequence),
+                payloadPackets);
+    }
+
+    private ProtocolRecognitionProjection(String state, String key, String category,
+                                          ProtocolRecognitionSequence recognitionSequence,
+                                          int payloadPackets) {
         this.state = normalizeState(state);
         this.key = bounded(key);
         this.category = bounded(category);
-        this.sequence = bounded(sequence);
+        this.recognitionSequence = recognitionSequence == null
+                ? ProtocolRecognitionSequence.empty() : recognitionSequence;
+        this.sequence = this.recognitionSequence.wire();
         this.payloadPackets = Math.max(0, payloadPackets);
     }
 
@@ -28,6 +38,13 @@ public final class ProtocolRecognitionProjection {
 
     public static ProtocolRecognitionProjection of(String state, String key, String category,
                                                    String sequence, int payloadPackets) {
+        return new ProtocolRecognitionProjection(state, key, category, sequence,
+                payloadPackets);
+    }
+
+    public static ProtocolRecognitionProjection of(String state, String key, String category,
+                                                   ProtocolRecognitionSequence sequence,
+                                                   int payloadPackets) {
         return new ProtocolRecognitionProjection(state, key, category, sequence,
                 payloadPackets);
     }

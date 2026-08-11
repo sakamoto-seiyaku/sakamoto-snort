@@ -242,7 +242,7 @@ public final class ProductActivityProjectionStore {
             values.setProperty(key + "applicationProtocolCategory",
                     recognition.category);
             values.setProperty(key + "protocolRecognitionSequence",
-                    recognition.sequence);
+                    recognition.recognitionSequence.wire());
             values.setProperty(key + "protocolPayloadPackets",
                     Integer.toString(recognition.payloadPackets));
         }

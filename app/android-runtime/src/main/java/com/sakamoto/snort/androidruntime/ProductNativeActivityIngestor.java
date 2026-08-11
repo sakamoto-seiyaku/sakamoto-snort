@@ -51,6 +51,7 @@ public final class ProductNativeActivityIngestor {
         public final String protocolRecognitionState;
         public final String applicationProtocolKey;
         public final String applicationProtocolCategory;
+        public final ProtocolRecognitionSequence recognitionSequence;
         public final String protocolRecognitionSequence;
         public final int protocolPayloadPackets;
 
@@ -96,16 +97,16 @@ public final class ProductNativeActivityIngestor {
             this.applicationProtocolCategory = BoundedText.value(
                     applicationProtocolCategory == null ? "" : applicationProtocolCategory,
                     RuntimeSnapshot.MAX_TEXT_LENGTH);
-            this.protocolRecognitionSequence = BoundedText.value(
-                    protocolRecognitionSequence == null ? "" : protocolRecognitionSequence,
-                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.recognitionSequence =
+                    ProtocolRecognitionSequence.parse(protocolRecognitionSequence);
+            this.protocolRecognitionSequence = this.recognitionSequence.wire();
             this.protocolPayloadPackets = Math.max(0, protocolPayloadPackets);
         }
 
         public ProtocolRecognitionProjection protocolRecognition() {
             return ProtocolRecognitionProjection.of(protocolRecognitionState,
                     applicationProtocolKey, applicationProtocolCategory,
-                    protocolRecognitionSequence, protocolPayloadPackets);
+                    recognitionSequence, protocolPayloadPackets);
         }
     }
 

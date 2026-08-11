@@ -98,7 +98,8 @@ public final class ActivityItem {
         this.protocolRecognitionState = this.protocolRecognition.state;
         this.applicationProtocolKey = this.protocolRecognition.key;
         this.applicationProtocolCategory = this.protocolRecognition.category;
-        this.protocolRecognitionSequence = this.protocolRecognition.sequence;
+        this.protocolRecognitionSequence =
+                this.protocolRecognition.recognitionSequence.wire();
         this.protocolPayloadPackets = this.protocolRecognition.payloadPackets;
     }
 

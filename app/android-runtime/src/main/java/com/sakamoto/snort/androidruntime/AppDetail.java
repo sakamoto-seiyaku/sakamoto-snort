@@ -160,7 +160,8 @@ public final class AppDetail {
                 out.append(" recognition=").append(recognition.state)
                         .append(" appProtocol=").append(recognition.key)
                         .append(" category=").append(recognition.category)
-                        .append(" lpiSequence=").append(recognition.sequence)
+                        .append(" lpiSequence=")
+                        .append(recognition.recognitionSequence.wire())
                         .append(" payloadPackets=").append(recognition.payloadPackets);
             }
         }
