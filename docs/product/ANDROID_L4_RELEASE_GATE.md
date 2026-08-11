@@ -150,11 +150,11 @@ must not treat `TBD` as pass.
 | Throughput | Root and VPN nominal throughput / transaction rate | Current S59 release-candidate app download / transaction-rate probe present; final signed release APK rerun required |
 | Drop | policy drop counters and unintended drop counters | S52/S55/S58 plus S59 release-candidate probe counters present |
 | Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | Current S59 release-candidate Root queue, FlowEntry table, and Activity capacity/eviction probe present; VPN queue N/A because VPN/TUN has no NFQUEUE lease queue |
-| Corrective handoff | owner mismatch / corrective handoff counters | S59 release-candidate owner-fault / owner-guard counters present; release rollup TBD |
+| Corrective handoff | owner mismatch / corrective handoff counters | S59 release-candidate owner-fault / owner-guard counters present and thresholded at `0`; final signed release APK rerun required |
 | CPU/RSS | idle and active CPU/RSS per profile | S59 release-candidate idle and active CPU/RSS present; final signed release APK rerun required |
 | Screen-off power | screen-off idle power or proxy budget | Current S59 release-candidate 10-second screen-off power-supply proxy present; release-duration rerun required |
 | Thermal | thermal status before/after release workload | S59 release-candidate thermal before/after status present; release workload rerun required |
-| Shutdown drain release | bounded drain and resource release timing | S59 release-candidate stop-to-stopped timing present; release threshold TBD |
+| Shutdown drain release | bounded drain and resource release timing | S59 release-candidate stop-to-stopped timing present and thresholded at `<=10000 ms`; final signed release APK rerun required |
 
 Current measurement entry:
 
@@ -263,8 +263,8 @@ Latest release-candidate budget probe:
 - Shutdown drain: Root `5470 ms`; VPN `4283 ms`.
 - Throughput note: VPN app download still returned `Connection reset`, so this
   run records transaction-rate fallback rather than nominal download Mbps for
-  VPN. Final release approval still needs final signed release APK evidence,
-  release-duration power evidence and explicit pass/fail thresholds.
+  VPN. Final release approval still needs final signed release APK evidence and
+  release-duration power evidence.
 
 Minimum release rule: every budget row must have a measurement source, result
 directory, date, device, and pass/fail decision before S59 can close.
@@ -373,7 +373,8 @@ Privacy principles:
 - Protocol Identification / application protocol rules are not part of Android L4 Product Release.
 - No stateful conntrack or TCP stream reassembly.
 - No zero-leak promise for short flows before attribution or later protocol recognition.
-- Release budget rows marked `TBD` block final S59 closure.
+- Final signed release APK evidence and release-duration power evidence block
+  final S59 closure.
 
 ## 10. Feedback entry points
 
