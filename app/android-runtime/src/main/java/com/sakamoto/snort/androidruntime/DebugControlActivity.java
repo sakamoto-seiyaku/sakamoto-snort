@@ -69,6 +69,34 @@ public class DebugControlActivity extends Activity {
             "debugSetNetworkGateContext";
     private static final String EXTRA_DEBUG_SET_NETWORK_GATE_BLOCKED =
             "debugSetNetworkGateBlocked";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_SUBJECT =
+            "debugSetL4RuleSubject";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_FAMILY =
+            "debugSetL4RuleFamily";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_SOURCE_CIDR =
+            "debugSetL4RuleSourceCidr";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_DESTINATION_CIDR =
+            "debugSetL4RuleDestinationCidr";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_SOURCE_PORT_FIRST =
+            "debugSetL4RuleSourcePortFirst";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_SOURCE_PORT_LAST =
+            "debugSetL4RuleSourcePortLast";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_DESTINATION_PORT_FIRST =
+            "debugSetL4RuleDestinationPortFirst";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_DESTINATION_PORT_LAST =
+            "debugSetL4RuleDestinationPortLast";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_IP_PROTOCOL =
+            "debugSetL4RuleIpProtocol";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_DIRECTION =
+            "debugSetL4RuleDirection";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_NETWORK_CONTEXT =
+            "debugSetL4RuleNetworkContext";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_ACTION =
+            "debugSetL4RuleAction";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_PRIORITY =
+            "debugSetL4RulePriority";
+    private static final String EXTRA_DEBUG_SET_L4_RULE_ORDER =
+            "debugSetL4RuleOrder";
     private static final String DEBUG_TRAFFIC_PROBE_RESULT_PATH =
             "debug/traffic-probe.properties";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
@@ -182,6 +210,10 @@ public class DebugControlActivity extends Activity {
             boolean blocked = intent.getBooleanExtra(
                     EXTRA_DEBUG_SET_NETWORK_GATE_BLOCKED, true);
             main.post(() -> requestDebugNetworkGate(gateSubject, context, blocked));
+        }
+        String l4Subject = intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_SUBJECT);
+        if (l4Subject != null && !l4Subject.trim().isEmpty()) {
+            main.post(() -> requestDebugL4Rule(intent, l4Subject));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
             main.post(this::runDebugApplyGateAndProbe);
@@ -688,6 +720,69 @@ public class DebugControlActivity extends Activity {
                 + " subject " + subjectId.encode() + ".");
         selectedApplicationSubjectId = subjectId;
         refreshProductCatalog();
+    }
+
+    private void requestDebugL4Rule(Intent intent, String encodedSubject) {
+        final AuthoringPolicyBundle.L4Rule rule;
+        try {
+            ApplicationSubjectId subjectId = ApplicationSubjectId.parse(encodedSubject);
+            AuthoringPolicyBundle.IpFamily family = AuthoringPolicyBundle.IpFamily.parse(
+                    stringExtra(intent, EXTRA_DEBUG_SET_L4_RULE_FAMILY, "ipv4"));
+            AuthoringPolicyBundle.PacketDirection direction =
+                    AuthoringPolicyBundle.PacketDirection.parse(
+                            stringExtra(intent, EXTRA_DEBUG_SET_L4_RULE_DIRECTION, "output"));
+            AuthoringPolicyBundle.L4Action action = AuthoringPolicyBundle.L4Action.parse(
+                    stringExtra(intent, EXTRA_DEBUG_SET_L4_RULE_ACTION, "drop"));
+            AuthoringPolicyBundle.NetworkContextId context = optionalNetworkContext(
+                    intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_NETWORK_CONTEXT));
+            int ipProtocol = intent.getIntExtra(EXTRA_DEBUG_SET_L4_RULE_IP_PROTOCOL, 6);
+            int priority = intent.getIntExtra(EXTRA_DEBUG_SET_L4_RULE_PRIORITY, 0);
+            int order = intent.getIntExtra(EXTRA_DEBUG_SET_L4_RULE_ORDER, 0);
+            rule = AuthoringPolicyBundle.L4Rule.create(subjectId, family,
+                    intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_SOURCE_CIDR),
+                    intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_DESTINATION_CIDR),
+                    optionalDebugPortRange(intent,
+                            EXTRA_DEBUG_SET_L4_RULE_SOURCE_PORT_FIRST,
+                            EXTRA_DEBUG_SET_L4_RULE_SOURCE_PORT_LAST),
+                    optionalDebugPortRange(intent,
+                            EXTRA_DEBUG_SET_L4_RULE_DESTINATION_PORT_FIRST,
+                            EXTRA_DEBUG_SET_L4_RULE_DESTINATION_PORT_LAST),
+                    ipProtocol, direction, context, action, priority, order);
+        } catch (IllegalArgumentException error) {
+            action("Invalid debug L4 rule request: " + boundedError(error));
+            return;
+        }
+        backend.setL4Rule(this, rule);
+        action("Debug L4 rule " + rule.action.wireName
+                + " requested for subject " + rule.subjectId.encode()
+                + " ruleId " + Long.toUnsignedString(rule.ruleId) + ".");
+        selectedApplicationSubjectId = rule.subjectId;
+        refreshProductCatalog();
+    }
+
+    private static String stringExtra(Intent intent, String name, String defaultValue) {
+        String value = intent.getStringExtra(name);
+        return value == null || value.trim().isEmpty() ? defaultValue : value;
+    }
+
+    private static AuthoringPolicyBundle.NetworkContextId optionalNetworkContext(String value) {
+        return value == null || value.trim().isEmpty()
+                ? null : AuthoringPolicyBundle.NetworkContextId.parse(value);
+    }
+
+    private static AuthoringPolicyBundle.PortRange optionalDebugPortRange(
+            Intent intent, String firstName, String lastName) {
+        boolean hasFirst = intent.hasExtra(firstName);
+        boolean hasLast = intent.hasExtra(lastName);
+        if (!hasFirst && !hasLast) {
+            return null;
+        }
+        if (!hasFirst || !hasLast) {
+            throw new IllegalArgumentException(firstName + "/" + lastName
+                    + " must be supplied together");
+        }
+        return AuthoringPolicyBundle.PortRange.inclusive(
+                intent.getIntExtra(firstName, -1), intent.getIntExtra(lastName, -1));
     }
 
     private void runDebugTrafficProbe() {

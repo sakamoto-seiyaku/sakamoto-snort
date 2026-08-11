@@ -54,6 +54,8 @@ public final class RuntimeService extends VpnService {
             RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP;
     public static final String ACTION_PRODUCT_SET_NETWORK_GATE =
             RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE;
+    public static final String ACTION_PRODUCT_SET_L4_RULE =
+            RuntimeControlProtocol.ACTION_PRODUCT_SET_L4_RULE;
 
     private static final String TAG = "SakamotoRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
@@ -297,6 +299,18 @@ public final class RuntimeService extends VpnService {
                     subject, context, requestedNetworkGateBlocked));
             return START_STICKY;
         }
+        if (ACTION_PRODUCT_SET_L4_RULE.equals(action)) {
+            final AuthoringPolicyBundle.L4Rule rule;
+            try {
+                rule = parseL4RuleIntent(intent, requestedSubject, requestedNetworkContext);
+            } catch (IllegalArgumentException error) {
+                enqueueLifecycle(() -> publishError("invalid_product_l4_rule_request",
+                        error.getMessage(), currentMayBeActive(), currentPid()));
+                return START_NOT_STICKY;
+            }
+            enqueueLifecycle(() -> setProductL4Rule(rule));
+            return START_STICKY;
+        }
         if (ACTION_START.equals(action)) {
             final RuntimeProfile profile = requested == null ? activeProfile : requested;
             if (!ensureForeground(profile)) {
@@ -323,7 +337,61 @@ public final class RuntimeService extends VpnService {
                 || ACTION_PRODUCT_PROFILE_SELECT.equals(action)
                 || ACTION_PRODUCT_BIND_APP.equals(action)
                 || ACTION_PRODUCT_UNBIND_APP.equals(action)
-                || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action);
+                || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action)
+                || ACTION_PRODUCT_SET_L4_RULE.equals(action);
+    }
+
+    private static AuthoringPolicyBundle.L4Rule parseL4RuleIntent(
+            Intent intent, ApplicationSubjectId subjectId,
+            AuthoringPolicyBundle.NetworkContextId context) {
+        if (intent == null || subjectId == null) {
+            throw new IllegalArgumentException("L4 rule mutation requires an application subject");
+        }
+        AuthoringPolicyBundle.IpFamily family = AuthoringPolicyBundle.IpFamily.parse(
+                requiredStringExtra(intent, RuntimeControlProtocol.EXTRA_L4_FAMILY));
+        String sourceCidr = intent.getStringExtra(RuntimeControlProtocol.EXTRA_L4_SOURCE_CIDR);
+        String destinationCidr = intent.getStringExtra(
+                RuntimeControlProtocol.EXTRA_L4_DESTINATION_CIDR);
+        int ipProtocol = intent.getIntExtra(
+                RuntimeControlProtocol.EXTRA_L4_IP_PROTOCOL, -1);
+        AuthoringPolicyBundle.PacketDirection direction =
+                AuthoringPolicyBundle.PacketDirection.parse(requiredStringExtra(
+                        intent, RuntimeControlProtocol.EXTRA_L4_PACKET_DIRECTION));
+        AuthoringPolicyBundle.L4Action action = AuthoringPolicyBundle.L4Action.parse(
+                requiredStringExtra(intent, RuntimeControlProtocol.EXTRA_L4_ACTION));
+        int priority = intent.getIntExtra(RuntimeControlProtocol.EXTRA_L4_PRIORITY, 0);
+        int order = intent.getIntExtra(RuntimeControlProtocol.EXTRA_L4_ORDER, 0);
+        return AuthoringPolicyBundle.L4Rule.create(subjectId, family, sourceCidr,
+                destinationCidr, portRangeExtra(intent,
+                        RuntimeControlProtocol.EXTRA_L4_SOURCE_PORT_FIRST,
+                        RuntimeControlProtocol.EXTRA_L4_SOURCE_PORT_LAST),
+                portRangeExtra(intent,
+                        RuntimeControlProtocol.EXTRA_L4_DESTINATION_PORT_FIRST,
+                        RuntimeControlProtocol.EXTRA_L4_DESTINATION_PORT_LAST),
+                ipProtocol, direction, context, action, priority, order);
+    }
+
+    private static String requiredStringExtra(Intent intent, String name) {
+        String value = intent.getStringExtra(name);
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException("missing " + name);
+        }
+        return value;
+    }
+
+    private static AuthoringPolicyBundle.PortRange portRangeExtra(
+            Intent intent, String firstName, String lastName) {
+        boolean hasFirst = intent.hasExtra(firstName);
+        boolean hasLast = intent.hasExtra(lastName);
+        if (!hasFirst && !hasLast) {
+            return null;
+        }
+        if (!hasFirst || !hasLast) {
+            throw new IllegalArgumentException(firstName + "/" + lastName
+                    + " must be supplied together");
+        }
+        return AuthoringPolicyBundle.PortRange.inclusive(
+                intent.getIntExtra(firstName, -1), intent.getIntExtra(lastName, -1));
     }
 
     private void queueHealthQuery(int requestStartId) {
@@ -1854,6 +1922,27 @@ public final class RuntimeService extends VpnService {
                     "Network Gate mutation could not be applied");
         }
         refreshProductCatalogProjection("network_gate");
+        stopIfInactive();
+    }
+
+    private void setProductL4Rule(AuthoringPolicyBundle.L4Rule rule) {
+        if (productBackend == null) {
+            stopIfInactive();
+            return;
+        }
+        ProductStore.MutationResult result = productBackend.setL4Rule(rule);
+        if (result.persisted) {
+            appendLog("product_control=l4_rule subject=" + rule.subjectId.encode()
+                    + " family=" + rule.family.wireName
+                    + " direction=" + rule.direction.wireName
+                    + " ipProtocol=" + rule.ipProtocol
+                    + " action=" + rule.action.wireName
+                    + " ruleId=" + Long.toUnsignedString(rule.ruleId));
+        } else {
+            publishProductMutationFailure("product_l4_rule_failed", result,
+                    "L4 rule mutation could not be applied");
+        }
+        refreshProductCatalogProjection("l4_rule");
         stopIfInactive();
     }
 

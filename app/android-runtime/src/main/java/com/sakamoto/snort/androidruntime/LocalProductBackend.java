@@ -150,4 +150,39 @@ public final class LocalProductBackend {
         return result;
     }
 
+    public ProductStore.MutationResult setL4Rule(AuthoringPolicyBundle.L4Rule rule) {
+        ProductStateStore.ReadResult readResult = productStore.readResult();
+        if (readResult != null && !readResult.valid) {
+            ProductStore.MutationResult result = ProductStore.MutationResult.rejected(
+                    productStore.snapshot(), readResult.errorCode, readResult.errorMessage);
+            refreshProductCatalogProjection();
+            return result;
+        }
+        AuthoringPolicyBundle nextBundle = productStore.snapshot().authoringPolicyBundle
+                .withL4Rule(rule);
+        AuthoringPolicyCompiler.CompileResult compiled =
+                AuthoringPolicyCompiler.compilePacketPolicyApply(nextBundle);
+        if (!compiled.ok) {
+            ProductStore.MutationResult result = ProductStore.MutationResult.rejected(
+                    productStore.snapshot(), compiled.errorCode, compiled.errorMessage);
+            refreshProductCatalogProjection();
+            return result;
+        }
+        PolicyApplyResult applied = policyApplyTransport.apply(compiled.applyPayload);
+        if (applied == null || !applied.ok) {
+            ProductStore.MutationResult result = ProductStore.MutationResult.rejected(
+                    productStore.snapshot(),
+                    applied == null || applied.errorCode.isEmpty()
+                            ? "product_policy_apply_failed" : applied.errorCode,
+                    applied == null || applied.errorMessage.isEmpty()
+                            ? "runtime policy apply failed" : applied.errorMessage);
+            refreshProductCatalogProjection();
+            return result;
+        }
+        ProductStore.MutationResult result =
+                productStore.replaceAuthoringPolicyBundle(nextBundle);
+        refreshProductCatalogProjection();
+        return result;
+    }
+
 }

@@ -69,6 +69,7 @@ public final class AndroidRuntimeContractTest {
         gateMatrixCompilesToPacketPolicyApplyPayload();
         l4RuleListCompilesToPacketPolicyApplyPayload();
         localProductBackendAppliesGatePolicyBeforePersistingBundle();
+        localProductBackendAppliesL4PolicyBeforePersistingBundle();
         boundedActivityStoreIsSeparateFromProductState();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
@@ -154,6 +155,10 @@ public final class AndroidRuntimeContractTest {
         check(RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE.equals(
                         RuntimeControlRequest.PRODUCT_SET_NETWORK_GATE),
                 "product Network Gate action has a stable protocol name");
+        check("product_set_l4_rule".equals(RuntimeControlProtocol.ACTION_PRODUCT_SET_L4_RULE),
+                "product L4 rule action has a stable protocol name");
+        check("l4DestinationCidr".equals(RuntimeControlProtocol.EXTRA_L4_DESTINATION_CIDR),
+                "product L4 rule destination CIDR extra has a stable protocol name");
         expectIllegalArgument("bind without subject is rejected",
                 () -> RuntimeControlRequest.decode(map("protocolVersion",
                         Integer.toString(RuntimeControlProtocol.VERSION),
@@ -1445,6 +1450,57 @@ public final class AndroidRuntimeContractTest {
                 "failed runtime apply does not publish a new durable revision");
         check(restored.authoringPolicyBundle.gateMatrix.get(0).blocked,
                 "failed runtime apply keeps old GateMatrix action");
+    }
+
+    private static void localProductBackendAppliesL4PolicyBeforePersistingBundle()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-52-backend-apply");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        final String[] appliedPayload = {""};
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app, "com.example.mail",
+                        "Mail", "icon:mail/u10", 10, "Work", true)),
+                payload -> {
+                    appliedPayload[0] = payload;
+                    return LocalProductBackend.PolicyApplyResult.ok();
+                });
+        AuthoringPolicyBundle.L4Rule rule = AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV4, "10.0.0.0/8", "192.0.2.0/24",
+                null, AuthoringPolicyBundle.PortRange.exact(443), 6,
+                AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                AuthoringPolicyBundle.NetworkContextId.WIFI,
+                AuthoringPolicyBundle.L4Action.DROP, 10, 0);
+
+        ProductStore.MutationResult persisted = backend.setL4Rule(rule);
+        check(persisted.persisted, "backend persists L4RuleList after runtime apply success");
+        check(appliedPayload[0].contains("\"l4Rules\":["),
+                "backend applies L4RuleList through POLICY.APPLY args");
+        check(appliedPayload[0].contains("\"sourceCidr\":\"10.0.0.0/8\"")
+                        && appliedPayload[0].contains("\"destinationCidr\":\"192.0.2.0/24\""),
+                "backend runtime apply payload carries L4 CIDR predicates");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.l4RuleCount == 1,
+                "successful backend L4 apply publishes durable authoring revision");
+
+        LocalProductBackend failingBackend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app, "com.example.mail",
+                        "Mail", "icon:mail/u10", 10, "Work", true)),
+                payload -> LocalProductBackend.PolicyApplyResult.error(
+                        "injected_l4_apply_failure", "runtime rejected L4 policy"));
+        AuthoringPolicyBundle.L4Rule allow = AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV4, "10.0.0.0/8", "192.0.2.0/24",
+                null, AuthoringPolicyBundle.PortRange.exact(443), 6,
+                AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                AuthoringPolicyBundle.NetworkContextId.WIFI,
+                AuthoringPolicyBundle.L4Action.ALLOW, 5, 0);
+        ProductStore.MutationResult failed = failingBackend.setL4Rule(allow);
+        check(!failed.persisted, "backend rejects L4 mutation on runtime apply failure");
+        check("injected_l4_apply_failure".equals(failed.errorCode),
+                "backend returns the L4 runtime apply failure code");
+        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
+        check(restored.authoringPolicyBundle.l4RuleCount == 1
+                        && restored.authoringPolicyBundle.l4Rules.get(0).action
+                        == AuthoringPolicyBundle.L4Action.DROP,
+                "failed runtime L4 apply keeps old durable L4 rule");
     }
 
     private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {

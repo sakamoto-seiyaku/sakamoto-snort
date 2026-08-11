@@ -67,6 +67,48 @@ public final class RuntimeControlBackend {
                 RuntimeControlRequest.setNetworkGate(subjectId, networkContext, blocked)));
     }
 
+    public void setL4Rule(Context context, AuthoringPolicyBundle.L4Rule rule) {
+        Intent intent = new Intent(context, RuntimeService.class)
+                .setAction(RuntimeControlProtocol.ACTION_PRODUCT_SET_L4_RULE)
+                .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION,
+                        RuntimeControlProtocol.VERSION)
+                .putExtra(RuntimeControlProtocol.EXTRA_ACTION,
+                        RuntimeControlProtocol.ACTION_PRODUCT_SET_L4_RULE)
+                .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_ID,
+                        java.util.UUID.randomUUID().toString())
+                .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_TIME_MILLIS,
+                        SystemClock.elapsedRealtime())
+                .putExtra(RuntimeControlProtocol.EXTRA_APPLICATION_SUBJECT,
+                        rule.subjectId.encode())
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_FAMILY, rule.family.wireName)
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_SOURCE_CIDR, rule.sourceCidr)
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_DESTINATION_CIDR,
+                        rule.destinationCidr)
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_IP_PROTOCOL, rule.ipProtocol)
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_PACKET_DIRECTION,
+                        rule.direction.wireName)
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_ACTION, rule.action.wireName)
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_PRIORITY, rule.priority)
+                .putExtra(RuntimeControlProtocol.EXTRA_L4_ORDER, rule.order);
+        if (rule.networkContext != null) {
+            intent.putExtra(RuntimeControlProtocol.EXTRA_NETWORK_CONTEXT,
+                    rule.networkContext.wireName);
+        }
+        if (rule.sourcePorts != null) {
+            intent.putExtra(RuntimeControlProtocol.EXTRA_L4_SOURCE_PORT_FIRST,
+                    rule.sourcePorts.first);
+            intent.putExtra(RuntimeControlProtocol.EXTRA_L4_SOURCE_PORT_LAST,
+                    rule.sourcePorts.last);
+        }
+        if (rule.destinationPorts != null) {
+            intent.putExtra(RuntimeControlProtocol.EXTRA_L4_DESTINATION_PORT_FIRST,
+                    rule.destinationPorts.first);
+            intent.putExtra(RuntimeControlProtocol.EXTRA_L4_DESTINATION_PORT_LAST,
+                    rule.destinationPorts.last);
+        }
+        context.startService(intent);
+    }
+
     /** Debug-only seam used to prove replacement remains blocked on cleanup failure. */
     public void setCleanupFault(Context context, boolean enabled) {
         Intent intent = requestIntent(context, RuntimeControlRequest.query());

@@ -13,6 +13,8 @@ public final class RuntimeControlProtocol {
     public static final String ACTION_PRODUCT_UNBIND_APP = "product_unbind_app";
     public static final String ACTION_PRODUCT_SET_NETWORK_GATE =
             "product_set_network_gate";
+    public static final String ACTION_PRODUCT_SET_L4_RULE =
+            "product_set_l4_rule";
 
     public static final String EXTRA_PROTOCOL_VERSION = "runtimeControlProtocolVersion";
     public static final String EXTRA_ACTION = "runtimeControlAction";
@@ -20,6 +22,18 @@ public final class RuntimeControlProtocol {
     public static final String EXTRA_APPLICATION_SUBJECT = "applicationSubjectId";
     public static final String EXTRA_NETWORK_CONTEXT = "networkContext";
     public static final String EXTRA_NETWORK_GATE_BLOCKED = "networkGateBlocked";
+    public static final String EXTRA_L4_FAMILY = "l4Family";
+    public static final String EXTRA_L4_SOURCE_CIDR = "l4SourceCidr";
+    public static final String EXTRA_L4_DESTINATION_CIDR = "l4DestinationCidr";
+    public static final String EXTRA_L4_SOURCE_PORT_FIRST = "l4SourcePortFirst";
+    public static final String EXTRA_L4_SOURCE_PORT_LAST = "l4SourcePortLast";
+    public static final String EXTRA_L4_DESTINATION_PORT_FIRST = "l4DestinationPortFirst";
+    public static final String EXTRA_L4_DESTINATION_PORT_LAST = "l4DestinationPortLast";
+    public static final String EXTRA_L4_IP_PROTOCOL = "l4IpProtocol";
+    public static final String EXTRA_L4_PACKET_DIRECTION = "l4PacketDirection";
+    public static final String EXTRA_L4_ACTION = "l4Action";
+    public static final String EXTRA_L4_PRIORITY = "l4Priority";
+    public static final String EXTRA_L4_ORDER = "l4Order";
     public static final String EXTRA_REQUEST_ID = "runtimeRequestId";
     /** Monotonic elapsed ordering lets the service discard delayed stale stop intents. */
     public static final String EXTRA_REQUEST_TIME_MILLIS = "runtimeRequestTimeMillis";
