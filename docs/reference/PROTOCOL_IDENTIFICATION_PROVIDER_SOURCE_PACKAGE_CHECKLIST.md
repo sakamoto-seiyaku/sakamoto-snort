@@ -41,6 +41,16 @@ Contract guardrails:
 - ProtocolRule work must wait for a real pinned provider, licensing/provenance
   approval, minimized/approved corpus evidence, and explicit enforcement
   evidence requirements.
+- `tools/protocol_identification/lpi_provider_source_intake_gate.sh` is the
+  executable pre-decision intake gate for candidate source-package evidence. It
+  validates `source-package.properties`, source manifest entries,
+  license/NOTICE/provenance files, Android ABI/API/NDK fields, warning policy,
+  `runtime.enablement=disabled_by_default`, `corpus.import=not_included`, and
+  `protocolRule=out_of_scope`; it emits
+  `providerSourceEvidence=predecision_intake_only` and
+  `realProviderEnabled=not_claimed`. Passing that gate is not source approval,
+  legal approval, corpus import approval, runtime enablement, or ProtocolRule
+  authorization.
 
 ## Source Identity, Pin, Checksum, and File Manifest
 
@@ -157,6 +167,16 @@ Contract guardrails:
 ## Runtime Enablement Gate
 
 - Build flag name and default-off behavior recorded.
+- CMake evidence cache variables are recorded as diagnostic inputs only:
+  `SAKAMOTO_LPI_PROVIDER_SOURCE_MANIFEST`,
+  `SAKAMOTO_LPI_PROVIDER_SOURCE_DECISION_RECORD`,
+  `SAKAMOTO_LPI_PROVIDER_LICENSE_DECISION_RECORD`,
+  `SAKAMOTO_LPI_PROVIDER_CORPUS_DECISION_RECORD`,
+  `SAKAMOTO_LPI_PROVIDER_ANDROID_MATRIX_DECISION_RECORD`,
+  `SAKAMOTO_LPI_PROVIDER_PACKAGING_DECISION_RECORD`, and
+  `SAKAMOTO_LPI_PROVIDER_RUNTIME_ENABLEMENT_DECISION_RECORD`.
+- Supplying all evidence cache variables does not bypass the real-provider
+  source selection and wiring gate.
 - Configure/build fails when real-provider enablement is requested without
       the selected source package evidence.
 - Host tests prove disabled/unavailable/no-result/mapped/unmapped behavior

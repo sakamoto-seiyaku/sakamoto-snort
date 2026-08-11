@@ -20,6 +20,7 @@ android_build_probe="$repo_root/tools/protocol_identification/libprotoident_andr
 wrapper_android_build_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_android_build_probe.sh"
 wrapper_host_payload_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh"
 wrapper_host_pcap_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh"
+provider_source_intake_gate="$repo_root/tools/protocol_identification/lpi_provider_source_intake_gate.sh"
 probe_build_root_helper="$repo_root/tools/protocol_identification/probe_build_root.sh"
 probe_generation_helper="$repo_root/tools/protocol_identification/probe_generation.sh"
 host_cmake="$repo_root/tests/host/CMakeLists.txt"
@@ -99,6 +100,121 @@ assert_lpi_provider_enable_configure_gate() {
   grep -q 'no real LPI provider source' <<<"$configure_output"
   grep -q 'is selected' <<<"$configure_output"
   grep -q 'source/provenance approval' <<<"$configure_output"
+  grep -q 'Evidence cache variables are diagnostic inputs only' <<<"$configure_output"
+  grep -q 'SAKAMOTO_LPI_PROVIDER_SOURCE_MANIFEST' <<<"$configure_output"
+  grep -q 'SAKAMOTO_LPI_PROVIDER_SOURCE_DECISION_RECORD' <<<"$configure_output"
+  grep -q 'SAKAMOTO_LPI_PROVIDER_LICENSE_DECISION_RECORD' <<<"$configure_output"
+  grep -q 'SAKAMOTO_LPI_PROVIDER_CORPUS_DECISION_RECORD' <<<"$configure_output"
+  grep -q 'SAKAMOTO_LPI_PROVIDER_ANDROID_MATRIX_DECISION_RECORD' <<<"$configure_output"
+  grep -q 'SAKAMOTO_LPI_PROVIDER_PACKAGING_DECISION_RECORD' <<<"$configure_output"
+  grep -q 'SAKAMOTO_LPI_PROVIDER_RUNTIME_ENABLEMENT_DECISION_RECORD' <<<"$configure_output"
+}
+
+assert_lpi_provider_evidence_inputs_do_not_bypass_configure_gate() {
+  local configure_build_dir="$repo_root/build-output/s61-lpi-provider-evidence-bypass-gate"
+  local configure_output=""
+  local configure_status=0
+
+  rm -rf "$configure_build_dir"
+
+  set +e
+  configure_output="$(
+    cmake \
+      -S "$repo_root" \
+      -B "$configure_build_dir" \
+      -DSAKAMOTO_ENABLE_LPI_PROVIDER=ON \
+      -DSAKAMOTO_LPI_PROVIDER_SOURCE_MANIFEST="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_PACKAGE_CHECKLIST.md" \
+      -DSAKAMOTO_LPI_PROVIDER_SOURCE_DECISION_RECORD="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_DECISION_INPUT.md" \
+      -DSAKAMOTO_LPI_PROVIDER_LICENSE_DECISION_RECORD="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_REFERENCE_AUDIT.md" \
+      -DSAKAMOTO_LPI_PROVIDER_CORPUS_DECISION_RECORD="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md" \
+      -DSAKAMOTO_LPI_PROVIDER_ANDROID_MATRIX_DECISION_RECORD="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md" \
+      -DSAKAMOTO_LPI_PROVIDER_PACKAGING_DECISION_RECORD="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_STELLAR_LPI_WRAPPER_INVENTORY.md" \
+      -DSAKAMOTO_LPI_PROVIDER_RUNTIME_ENABLEMENT_DECISION_RECORD="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_VPP_REFERENCE_INVENTORY.md" \
+      -DSNORT_ENABLE_HOST_TESTS=OFF \
+      -DSNORT_ENABLE_DELEGATED_BUILD_TARGETS=OFF \
+      -DSNORT_ENABLE_DEVICE_TESTS=OFF \
+      2>&1
+  )"
+  configure_status=$?
+  set -e
+
+  [[ "$configure_status" -ne 0 ]] || {
+    echo "S61 evidence inputs unexpectedly bypassed the real-provider source gate" >&2
+    exit 1
+  }
+  grep -q 'no real LPI provider source' <<<"$configure_output"
+  grep -q 'is selected or wired' <<<"$configure_output"
+  grep -q 'Evidence cache variables are diagnostic inputs only' <<<"$configure_output"
+}
+
+assert_lpi_provider_source_intake_gate() {
+  local intake_dir=""
+  local intake_output=""
+  local missing_license_output=""
+  local corpus_output=""
+  local status=0
+
+  intake_dir="$(mktemp -d)"
+  mkdir -p "$intake_dir/src"
+  printf 'void candidate_provider(void) {}\n' >"$intake_dir/src/provider.cc"
+  printf 'candidate license evidence\n' >"$intake_dir/LICENSE"
+  printf 'candidate notice evidence\n' >"$intake_dir/NOTICE"
+  printf 'candidate provenance evidence\n' >"$intake_dir/PROVENANCE"
+  printf 'src/provider.cc\n' >"$intake_dir/source-manifest.txt"
+  cat >"$intake_dir/source-package.properties" <<'EOF'
+source.strategy=backup_vpp_wrapper
+source.origin=/home/js/backup/backup/Git/vpp reference snapshot
+source.pin=dev-26.03-reference
+source.archiveSha256=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+source.manifest=source-manifest.txt
+license.files=LICENSE
+notice.files=NOTICE
+provenance.files=PROVENANCE
+linking.choice=dynamic
+android.abis=arm64-v8a
+android.minApi=29
+android.ndk=r29
+warning.policy=third_party_warnings_recorded
+runtime.enablement=disabled_by_default
+corpus.import=not_included
+protocolRule=out_of_scope
+decision.record=docs/decisions/S61_PROVIDER_SOURCE_DECISION.md
+license.decision.record=docs/decisions/S61_PROVIDER_LICENSE_DECISION.md
+corpus.decision.record=docs/decisions/S61_PROVIDER_CORPUS_DECISION.md
+EOF
+
+  intake_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir")"
+  grep -q '^providerSourceIntake=PASS$' <<<"$intake_output"
+  grep -q '^providerSourceEvidence=predecision_intake_only$' <<<"$intake_output"
+  grep -q '^runtime.enablement=disabled_by_default$' <<<"$intake_output"
+  grep -q '^corpus.import=not_included$' <<<"$intake_output"
+  grep -q '^protocolRule=out_of_scope$' <<<"$intake_output"
+  grep -q '^realProviderEnabled=not_claimed$' <<<"$intake_output"
+
+  rm "$intake_dir/LICENSE"
+  set +e
+  missing_license_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || {
+    echo "provider source intake gate unexpectedly passed without license evidence" >&2
+    exit 1
+  }
+  grep -q 'license.files file is missing' <<<"$missing_license_output"
+
+  printf 'candidate license evidence\n' >"$intake_dir/LICENSE"
+  printf 'not a real pcap\n' >"$intake_dir/src/reference.pcap"
+  set +e
+  corpus_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || {
+    echo "provider source intake gate unexpectedly passed with corpus evidence" >&2
+    exit 1
+  }
+  grep -q 'pre-decision source evidence must not include corpus' <<<"$corpus_output"
+
+  rm -rf "$intake_dir"
 }
 
 [[ -f "$probe_build_root_helper" ]]
@@ -116,6 +232,20 @@ grep -q 'vlib/utils/utils.h' "$probe_generation_helper"
 grep -q 'ALLOC' "$probe_generation_helper"
 grep -q 'FREE' "$probe_generation_helper"
 ! grep -q 'local tree=' "$probe_generation_helper"
+
+[[ -x "$provider_source_intake_gate" ]]
+grep -q 'source-package.properties' "$provider_source_intake_gate"
+grep -q 'source.archiveSha256 must have sha256:<64 hex chars> form' "$provider_source_intake_gate"
+grep -q 'runtime.enablement' "$provider_source_intake_gate"
+grep -q 'disabled_by_default' "$provider_source_intake_gate"
+grep -q 'corpus.import' "$provider_source_intake_gate"
+grep -q 'not_included' "$provider_source_intake_gate"
+grep -q 'protocolRule' "$provider_source_intake_gate"
+grep -q 'out_of_scope' "$provider_source_intake_gate"
+grep -q 'source manifest must not include corpus or expected-result files' "$provider_source_intake_gate"
+grep -q 'pre-decision source evidence must not include corpus or expected-result files' "$provider_source_intake_gate"
+grep -q 'realProviderEnabled=not_claimed' "$provider_source_intake_gate"
+assert_lpi_provider_source_intake_gate
 
 [[ -f "$inventory" ]]
 grep -q 'SAKAMOTO-61 and later Protocol Identification' "$inventory"
@@ -274,8 +404,17 @@ grep -q 'host corpus evidence that packet bytes cross the provider boundary' "$i
 grep -q 'SAKAMOTO_ENABLE_LPI_PROVIDER' "$root_cmake"
 grep -q 'OFF' "$root_cmake"
 grep -q 'no real LPI provider source is selected' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_SOURCE_MANIFEST' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_SOURCE_DECISION_RECORD' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_LICENSE_DECISION_RECORD' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_CORPUS_DECISION_RECORD' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_ANDROID_MATRIX_DECISION_RECORD' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_PACKAGING_DECISION_RECORD' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_RUNTIME_ENABLEMENT_DECISION_RECORD' "$root_cmake"
+grep -q 'diagnostic inputs only' "$root_cmake"
 grep -q 'SAKAMOTO_LPI_PROVIDER_DISABLED_BY_DEFAULT=1' "$root_cmake"
 assert_lpi_provider_enable_configure_gate
+assert_lpi_provider_evidence_inputs_do_not_bypass_configure_gate
 
 grep -q 'kDisabledLpiProviderName' "$repo_root/src/core/protocol/LpiRecognitionProvider.hpp"
 grep -q 'kRealLpiProviderEnabledByDefault = false' "$repo_root/src/core/protocol/LpiRecognitionProvider.hpp"
@@ -918,6 +1057,7 @@ grep -q 'stop_detect' "$provider_source_decision_input"
 grep -q 'probe.result=PASS' "$provider_source_decision_input"
 grep -q 'selectedExpectedJsonValidation=PASS' "$provider_source_decision_input"
 grep -q 'LpiRecognitionPipeline -> LpiRecognitionAdapter -> BoundedFlowTable' "$provider_source_decision_input"
+grep -q 'providerContextUnavailablePackets' "$provider_source_decision_input"
 grep -q 'detectorDonePackets' "$provider_source_decision_input"
 grep -q 'budgetExhaustedPackets' "$provider_source_decision_input"
 grep -q 'No real provider is wired by default' "$provider_source_decision_input"
@@ -942,6 +1082,8 @@ grep -q 'Root and VPN must share the same recognition seam' "$provider_source_de
 grep -q 'do not introduce a second flow/session table' "$provider_source_decision_input"
 grep -q 'per-flow recognizer context must also be owned by the' "$provider_source_decision_input"
 grep -q 'opaque provider context' "$provider_source_decision_input"
+grep -q 'providerContextUnavailablePackets' "$repo_root/src/core/protocol/LpiRecognitionProvider.hpp"
+grep -q 'providerContextUnavailablePackets' "$repo_root/src/control/vnext/ControlServer.cpp"
 grep -q 'provider-side flow map is' "$provider_source_decision_input"
 grep -q 'Provider aliases are the boundary currency' "$provider_source_decision_input"
 grep -q 'Safe Work Before the Source Decision' "$provider_source_decision_input"
@@ -989,6 +1131,14 @@ grep -q 'PCAP files, or expected JSON' "$provider_source_package_checklist"
 grep -q 'DisabledLpiRecognitionProvider' "$provider_source_package_checklist"
 grep -q 'SAKAMOTO_ENABLE_LPI_PROVIDER' "$provider_source_package_checklist"
 grep -q 'off by default' "$provider_source_package_checklist"
+grep -q 'SAKAMOTO_LPI_PROVIDER_SOURCE_MANIFEST' "$provider_source_package_checklist"
+grep -q 'SAKAMOTO_LPI_PROVIDER_SOURCE_DECISION_RECORD' "$provider_source_package_checklist"
+grep -q 'SAKAMOTO_LPI_PROVIDER_LICENSE_DECISION_RECORD' "$provider_source_package_checklist"
+grep -q 'SAKAMOTO_LPI_PROVIDER_CORPUS_DECISION_RECORD' "$provider_source_package_checklist"
+grep -q 'SAKAMOTO_LPI_PROVIDER_ANDROID_MATRIX_DECISION_RECORD' "$provider_source_package_checklist"
+grep -q 'SAKAMOTO_LPI_PROVIDER_PACKAGING_DECISION_RECORD' "$provider_source_package_checklist"
+grep -q 'SAKAMOTO_LPI_PROVIDER_RUNTIME_ENABLEMENT_DECISION_RECORD' "$provider_source_package_checklist"
+grep -q 'Supplying all evidence cache variables does not bypass' "$provider_source_package_checklist"
 grep -q 'fork-local numeric AppIDs' "$provider_source_package_checklist"
 grep -q 'provider aliases remain the boundary currency' "$provider_source_package_checklist"
 grep -q 'Root and VPN must share the same provider-neutral recognition seam' "$provider_source_package_checklist"
@@ -1014,6 +1164,14 @@ grep -q 'never-rooted device claims' "$provider_source_package_checklist"
 grep -q '## Release Artifact Evidence' "$provider_source_package_checklist"
 grep -q '## Decision Record Requirements' "$provider_source_package_checklist"
 grep -q 'ProtocolRule remains out of scope' "$provider_source_package_checklist"
+grep -q 'lpi_provider_source_intake_gate.sh' "$provider_source_package_checklist"
+grep -q 'pre-decision intake gate' "$provider_source_package_checklist"
+grep -q 'source-package.properties' "$provider_source_package_checklist"
+grep -q 'providerSourceEvidence=predecision_intake_only' "$provider_source_package_checklist"
+grep -q 'realProviderEnabled=not_claimed' "$provider_source_package_checklist"
+
+grep -q 'lpi_provider_source_intake_gate.sh' "$reference_readme"
+grep -q 'pre-decision intake gate' "$reference_readme"
 
 [[ -f "$implementation_roadmap" ]]
 grep -q 'SAKAMOTO-61 记录了 current-packet cutoff' "$implementation_roadmap"

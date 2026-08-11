@@ -41,6 +41,7 @@ struct LpiProviderCounters {
     std::uint64_t payloadEligiblePackets = 0;
     std::uint64_t terminalSkippedPackets = 0;
     std::uint64_t providerUnavailablePackets = 0;
+    std::uint64_t providerContextUnavailablePackets = 0;
     std::uint64_t packetsSubmittedToProvider = 0;
     std::uint64_t providerNoResultPackets = 0;
     std::uint64_t providerFactPackets = 0;

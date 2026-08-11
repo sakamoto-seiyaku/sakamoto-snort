@@ -97,7 +97,7 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
         });
     }
     if (!slot->providerContext->get()) {
-        ++counters_.providerUnavailablePackets;
+        ++counters_.providerContextUnavailablePackets;
         return LpiPipelineOutcome{
             .observed = true,
             .payloadEligible = true,

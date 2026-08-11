@@ -54,7 +54,11 @@ Contract guardrails:
   `LpiRecognitionProvider` submits bounded payload-bearing packets before
   adapter completion; `LpiRecognitionAdapter` maps provider aliases through the
   project-owned Application Protocol Catalog; recognition state is recorded on
-  the worker-owned `BoundedFlowTable` / `FlowEntry`.
+  the worker-owned `BoundedFlowTable` / `FlowEntry`. Per-flow real-provider
+  recognizer context is owned by `FlowEntry` as opaque provider state; a wired
+  provider that cannot create that context increments
+  `providerContextUnavailablePackets` without submitting the packet to the
+  provider.
 - The build contract now pins real-provider compilation behind
   `SAKAMOTO_ENABLE_LPI_PROVIDER`, which defaults `OFF` and fails configure if
   enabled before an explicit source/provenance decision selects provider source.

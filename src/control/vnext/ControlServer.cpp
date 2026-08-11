@@ -405,6 +405,8 @@ rapidjson::Value makeLpiProviderStatusResult(
                      status.counters.terminalSkippedPackets, alloc);
     result.AddMember("providerUnavailablePackets",
                      status.counters.providerUnavailablePackets, alloc);
+    result.AddMember("providerContextUnavailablePackets",
+                     status.counters.providerContextUnavailablePackets, alloc);
     result.AddMember("packetsSubmittedToProvider",
                      status.counters.packetsSubmittedToProvider, alloc);
     result.AddMember("providerNoResultPackets",

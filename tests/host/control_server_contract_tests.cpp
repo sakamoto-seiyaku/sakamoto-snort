@@ -411,6 +411,7 @@ void expectDisabledLpiProviderStatus(
     EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 0U);
     EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(),
               providerUnavailablePackets);
+    EXPECT_EQ(lpiProvider["providerContextUnavailablePackets"].GetUint64(), 0U);
     EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 0U);
     EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 0U);
     EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 0U);
@@ -1230,6 +1231,7 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
             .payloadEligiblePackets = 11,
             .terminalSkippedPackets = 1,
             .providerUnavailablePackets = 0,
+            .providerContextUnavailablePackets = 2,
             .packetsSubmittedToProvider = 10,
             .providerNoResultPackets = 6,
             .providerFactPackets = 4,
@@ -1333,6 +1335,7 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(), 11U);
     EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 1U);
     EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerContextUnavailablePackets"].GetUint64(), 2U);
     EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 10U);
     EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 6U);
     EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 4U);
@@ -1526,6 +1529,7 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
             .payloadEligiblePackets = 7,
             .terminalSkippedPackets = 2,
             .providerUnavailablePackets = 0,
+            .providerContextUnavailablePackets = 4,
             .packetsSubmittedToProvider = 5,
             .providerNoResultPackets = 3,
             .providerFactPackets = 2,
@@ -1638,6 +1642,7 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(), 7U);
     EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 2U);
     EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerContextUnavailablePackets"].GetUint64(), 4U);
     EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 5U);
     EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 3U);
     EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 2U);

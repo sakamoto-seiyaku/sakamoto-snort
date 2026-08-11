@@ -30,11 +30,68 @@ option(
   "Build a real LPI/libprotoident recognition provider; requires an explicit source decision"
   OFF
 )
+set(
+  SAKAMOTO_LPI_PROVIDER_SOURCE_MANIFEST
+  ""
+  CACHE FILEPATH
+  "Pre-decision S61 LPI provider source file manifest evidence; does not enable a provider"
+)
+set(
+  SAKAMOTO_LPI_PROVIDER_SOURCE_DECISION_RECORD
+  ""
+  CACHE FILEPATH
+  "S61 provider source decision record evidence; does not enable a provider by itself"
+)
+set(
+  SAKAMOTO_LPI_PROVIDER_LICENSE_DECISION_RECORD
+  ""
+  CACHE FILEPATH
+  "S61 provider license/provenance decision record evidence; does not enable a provider by itself"
+)
+set(
+  SAKAMOTO_LPI_PROVIDER_CORPUS_DECISION_RECORD
+  ""
+  CACHE FILEPATH
+  "S61 provider corpus/privacy decision record evidence; does not import fixtures by itself"
+)
+set(
+  SAKAMOTO_LPI_PROVIDER_ANDROID_MATRIX_DECISION_RECORD
+  ""
+  CACHE FILEPATH
+  "S61 Android ABI/API/NDK provider matrix decision evidence; does not enable a provider by itself"
+)
+set(
+  SAKAMOTO_LPI_PROVIDER_PACKAGING_DECISION_RECORD
+  ""
+  CACHE FILEPATH
+  "S61 provider static/dynamic/separate packaging decision evidence; does not enable a provider by itself"
+)
+set(
+  SAKAMOTO_LPI_PROVIDER_RUNTIME_ENABLEMENT_DECISION_RECORD
+  ""
+  CACHE FILEPATH
+  "S61 Root/VPN runtime provider enablement decision evidence; does not enable a provider by itself"
+)
 
 if(SAKAMOTO_ENABLE_LPI_PROVIDER)
+  set(_SAKAMOTO_LPI_PROVIDER_REQUIRED_EVIDENCE
+    SAKAMOTO_LPI_PROVIDER_SOURCE_MANIFEST
+    SAKAMOTO_LPI_PROVIDER_SOURCE_DECISION_RECORD
+    SAKAMOTO_LPI_PROVIDER_LICENSE_DECISION_RECORD
+    SAKAMOTO_LPI_PROVIDER_CORPUS_DECISION_RECORD
+    SAKAMOTO_LPI_PROVIDER_ANDROID_MATRIX_DECISION_RECORD
+    SAKAMOTO_LPI_PROVIDER_PACKAGING_DECISION_RECORD
+    SAKAMOTO_LPI_PROVIDER_RUNTIME_ENABLEMENT_DECISION_RECORD
+  )
+  set(_SAKAMOTO_LPI_PROVIDER_MISSING_EVIDENCE "")
+  foreach(_SAKAMOTO_LPI_PROVIDER_EVIDENCE_VAR IN LISTS _SAKAMOTO_LPI_PROVIDER_REQUIRED_EVIDENCE)
+    if("${${_SAKAMOTO_LPI_PROVIDER_EVIDENCE_VAR}}" STREQUAL "")
+      list(APPEND _SAKAMOTO_LPI_PROVIDER_MISSING_EVIDENCE "${_SAKAMOTO_LPI_PROVIDER_EVIDENCE_VAR}")
+    endif()
+  endforeach()
   message(
     FATAL_ERROR
-    "SAKAMOTO_ENABLE_LPI_PROVIDER=ON requested, but no real LPI provider source is selected; keep this OFF until S61 source/provenance approval lands"
+    "SAKAMOTO_ENABLE_LPI_PROVIDER=ON requested, but no real LPI provider source is selected or wired. Keep this OFF until S61 source/provenance approval lands. Evidence cache variables are diagnostic inputs only and do not approve provider enablement. Required source-package evidence before this gate can be relaxed: ${_SAKAMOTO_LPI_PROVIDER_REQUIRED_EVIDENCE}. Missing evidence now: ${_SAKAMOTO_LPI_PROVIDER_MISSING_EVIDENCE}"
   )
 endif()
 

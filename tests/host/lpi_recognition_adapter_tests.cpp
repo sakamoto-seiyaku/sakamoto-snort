@@ -445,7 +445,8 @@ TEST(LpiRecognitionProviderTest, AvailableProviderWithoutContextDoesNotRecognize
     EXPECT_EQ(provider.createCalls, 1U);
     EXPECT_EQ(provider.calls, 0U);
     const auto status = pipeline.status();
-    EXPECT_EQ(status.counters.providerUnavailablePackets, 1U);
+    EXPECT_EQ(status.counters.providerUnavailablePackets, 0U);
+    EXPECT_EQ(status.counters.providerContextUnavailablePackets, 1U);
     EXPECT_EQ(status.counters.packetsSubmittedToProvider, 0U);
 }
 
