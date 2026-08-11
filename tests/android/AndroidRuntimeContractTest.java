@@ -3,6 +3,7 @@ import com.sakamoto.snort.androidruntime.RuntimeControlRequest;
 import com.sakamoto.snort.androidruntime.RuntimeControlOrdering;
 import com.sakamoto.snort.androidruntime.RuntimeControlNative;
 import com.sakamoto.snort.androidruntime.RuntimeProfile;
+import com.sakamoto.snort.androidruntime.RuntimeProfileInitializationPlan;
 import com.sakamoto.snort.androidruntime.RuntimeRecoveryPolicy;
 import com.sakamoto.snort.androidruntime.RuntimeOwnershipReconciliation;
 import com.sakamoto.snort.androidruntime.RuntimeSnapshot;
@@ -40,6 +41,7 @@ public final class AndroidRuntimeContractTest {
         requestRoundTripIsVersionedAndProfileAware();
         productMutationRequestsAreVersionedServiceRequests();
         lifecycleRequestOrderingRejectsDelayedStarts();
+        runtimeProfileInitializationPlanIsExplicitAndRecoverable();
         profileDoesNotExposeAdapterArtifacts();
         productPacketAdapterContractIsExplicit();
         snapshotRoundTripPreservesBoundedHealthAndError();
@@ -227,6 +229,69 @@ public final class AndroidRuntimeContractTest {
                 "older start ID breaks same-millisecond ties as stale");
         check(sameMillisecond.observe(500L, 9) == RuntimeControlOrdering.Decision.ACCEPT,
                 "newer start ID wins same-millisecond tie");
+    }
+
+    private static void runtimeProfileInitializationPlanIsExplicitAndRecoverable() {
+        RuntimeProfileInitializationPlan.Inputs initial =
+                new RuntimeProfileInitializationPlan.Inputs(
+                        true, false, true, false, false, false, null);
+        RuntimeProfileInitializationPlan first =
+                RuntimeProfileInitializationPlan.from(initial);
+        check(first.recommendedProfile == RuntimeProfile.ROOT,
+                "Root capability is recommended when present");
+        check(first.currentStep
+                        == RuntimeProfileInitializationPlan.Step.PROFILE_CONFIRMATION,
+                "recommendation still requires explicit profile confirmation");
+        check(first.requiresUserConfirmation,
+                "recommended profile is not silently selected");
+        check(!first.shouldAutoAuthorize && !first.shouldAutoStart
+                        && !first.shouldAutoSwitchProfile,
+                "initialization plan never grants permissions, starts, or switches runtime");
+        check(first.impact.contains("Authoring Policy Bundle"),
+                "profile confirmation explains policy preservation");
+
+        RuntimeProfileInitializationPlan notification =
+                RuntimeProfileInitializationPlan.from(initial.withSelectedProfile(
+                        RuntimeProfile.ROOT));
+        check(notification.currentStep
+                        == RuntimeProfileInitializationPlan.Step.VISIBLE_NOTIFICATION,
+                "visible notification is a gate before profile authorization and launch");
+
+        RuntimeProfileInitializationPlan authorization =
+                RuntimeProfileInitializationPlan.from(initial
+                        .withSelectedProfile(RuntimeProfile.ROOT)
+                        .withNotificationReady(true));
+        check(authorization.currentStep
+                        == RuntimeProfileInitializationPlan.Step.PROFILE_AUTHORIZATION,
+                "Root authorization is a distinct current step");
+        check(authorization.currentAction.contains("KernelSU"),
+                "Root authorization action is concrete");
+
+        RuntimeProfileInitializationPlan readiness =
+                RuntimeProfileInitializationPlan.from(initial
+                        .withSelectedProfile(RuntimeProfile.ROOT)
+                        .withNotificationReady(true)
+                        .withAuthorization(true, false));
+        check(readiness.currentStep
+                        == RuntimeProfileInitializationPlan.Step.RUNTIME_READINESS,
+                "runtime readiness is verified after notification and authorization");
+        check(readiness.impact.contains("IPv4/IPv6"),
+                "readiness step covers dual-stack packet runtime");
+
+        RuntimeProfileInitializationPlan ready =
+                RuntimeProfileInitializationPlan.from(initial
+                        .withSelectedProfile(RuntimeProfile.ROOT)
+                        .withNotificationReady(true)
+                        .withAuthorization(true, false)
+                        .withRuntimeReady(true));
+        check(ready.currentStep == RuntimeProfileInitializationPlan.Step.READY,
+                "successful readiness completes initialization");
+
+        RuntimeProfileInitializationPlan vpnFallback =
+                RuntimeProfileInitializationPlan.from(new RuntimeProfileInitializationPlan.Inputs(
+                        false, false, true, false, false, false, null));
+        check(vpnFallback.recommendedProfile == RuntimeProfile.VPN,
+                "VPN is recommended when Root capability is unavailable");
     }
 
     private static void snapshotRoundTripPreservesBoundedHealthAndError() throws Exception {
