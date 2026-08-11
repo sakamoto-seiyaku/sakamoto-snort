@@ -176,6 +176,43 @@ TEST(LpiRecognitionAdapterTest, EmptyTransportPayloadDoesNotConsumeRecognitionBu
     EXPECT_EQ(table.counters().lpiMappedResults, 0U);
 }
 
+TEST(LpiRecognitionAdapterTest, LatestExactResultUpdatesAfterBoundedSequenceFull) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+
+    for (std::uint32_t index = 0;
+         index < Flow::LpiRecognitionState::kMaxMappedResults;
+         ++index) {
+        const auto update = table.recordLpiRecognition(
+            packet,
+            true,
+            static_cast<Catalog::ApplicationProtocolId>(2000 + index),
+            true,
+            false,
+            false);
+        ASSERT_TRUE(update.has_value());
+        EXPECT_TRUE(update->mappedResultAppended);
+    }
+
+    const auto latestOnlyProtocol =
+        static_cast<Catalog::ApplicationProtocolId>(3000);
+    const auto update = table.recordLpiRecognition(
+        packet, true, latestOnlyProtocol, true, false, false);
+
+    ASSERT_TRUE(update.has_value());
+    EXPECT_FALSE(update->mappedResultAppended);
+    EXPECT_EQ(update->mappedResultCount, Flow::LpiRecognitionState::kMaxMappedResults);
+    ASSERT_TRUE(update->latestExactResult.has_value());
+    EXPECT_EQ(*update->latestExactResult, latestOnlyProtocol);
+    EXPECT_EQ(table.counters().lpiResultCapacityMisses, 1U);
+    const auto state = table.lpiRecognitionStateFor(packet);
+    ASSERT_TRUE(state.has_value());
+    ASSERT_TRUE(state->latestExactResult().has_value());
+    EXPECT_EQ(*state->latestExactResult(), latestOnlyProtocol);
+    EXPECT_EQ(state->mappedResults.size(), Flow::LpiRecognitionState::kMaxMappedResults);
+}
+
 class NoResultProvider final : public Protocol::LpiRecognitionProvider {
 public:
     [[nodiscard]] bool available() const noexcept override { return true; }
@@ -245,6 +282,40 @@ TEST(LpiRecognitionProviderTest, ProviderNoResultConsumesBudgetWithoutUnmappedRe
     ASSERT_TRUE(state.has_value());
     EXPECT_EQ(state->payloadPacketsSubmitted, 1U);
     EXPECT_TRUE(state->mappedResults.empty());
+}
+
+TEST(LpiRecognitionProviderTest, NoResultProviderStopsAtInternalPayloadBudget) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    NoResultProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 512> l3Packet{};
+
+    for (std::uint32_t index = 1;
+         index <= Flow::LpiRecognitionState::kMaxPayloadPackets;
+         ++index) {
+        const auto outcome = pipeline.submitBeforeAdapterCompletion(
+            std::span<const std::byte>{l3Packet}, packet);
+        EXPECT_TRUE(outcome.submittedToProvider);
+        ASSERT_TRUE(outcome.adapterOutcome.has_value());
+        ASSERT_TRUE(outcome.adapterOutcome->flowUpdate.has_value());
+        EXPECT_EQ(outcome.adapterOutcome->flowUpdate->payloadPacketSequence, index);
+    }
+
+    EXPECT_EQ(provider.calls, Flow::LpiRecognitionState::kMaxPayloadPackets);
+    auto state = table.lpiRecognitionStateFor(packet);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->payloadPacketsSubmitted,
+              Flow::LpiRecognitionState::kMaxPayloadPackets);
+    EXPECT_EQ(state->terminalState, Flow::LpiRecognitionTerminalState::Exhausted);
+
+    const auto afterExhaustion = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+    EXPECT_TRUE(afterExhaustion.terminalSkipped);
+    EXPECT_FALSE(afterExhaustion.submittedToProvider);
+    EXPECT_EQ(provider.calls, Flow::LpiRecognitionState::kMaxPayloadPackets);
+    EXPECT_EQ(pipeline.status().counters.terminalSkippedPackets, 1U);
 }
 
 } // namespace

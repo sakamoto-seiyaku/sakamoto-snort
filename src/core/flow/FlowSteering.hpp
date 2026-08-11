@@ -277,10 +277,12 @@ struct LpiRecognitionResult {
 
 struct LpiRecognitionState {
     static constexpr std::uint32_t kMaxMappedResults = 8;
+    static constexpr std::uint32_t kMaxPayloadPackets = 20;
 
     std::uint32_t payloadPacketsSubmitted = 0;
     LpiRecognitionTerminalState terminalState = LpiRecognitionTerminalState::Detecting;
     std::vector<LpiRecognitionResult> mappedResults;
+    std::optional<sucre::protocol::ApplicationProtocolId> latestExactProtocolId;
 
     [[nodiscard]] bool terminal() const noexcept {
         return terminalState != LpiRecognitionTerminalState::Detecting;
@@ -288,6 +290,9 @@ struct LpiRecognitionState {
 
     [[nodiscard]] std::optional<sucre::protocol::ApplicationProtocolId>
     latestExactResult() const noexcept {
+        if (latestExactProtocolId.has_value()) {
+            return latestExactProtocolId;
+        }
         if (mappedResults.empty()) {
             return std::nullopt;
         }

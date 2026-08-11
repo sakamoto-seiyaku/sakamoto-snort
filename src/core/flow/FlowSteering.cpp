@@ -651,6 +651,7 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
         ++counters_.lpiPayloadPackets;
         payloadSubmitted = true;
         if (mappedResult.has_value()) {
+            state.latestExactProtocolId = *mappedResult;
             if (hasMappedResult(state, *mappedResult)) {
                 duplicate = true;
                 ++counters_.lpiDuplicateMappedResults;
@@ -671,7 +672,11 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
         }
     }
 
-    if (budgetExhausted) {
+    const auto internalBudgetExhausted =
+        payloadSubmitted
+        && state.payloadPacketsSubmitted >= LpiRecognitionState::kMaxPayloadPackets
+        && !detectorDone;
+    if (budgetExhausted || internalBudgetExhausted) {
         state.terminalState = LpiRecognitionTerminalState::Exhausted;
     } else if (detectorDone) {
         state.terminalState = LpiRecognitionTerminalState::Done;
