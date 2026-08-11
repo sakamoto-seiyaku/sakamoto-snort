@@ -52,19 +52,19 @@ Supported matrix entries must record:
 - matrix result directory.
 
 Current gap: functional evidence exists in debug-APK device matrix result
-directories, and S59 now has a non-debug release-candidate budget probe. The
-final signed release APK still needs to rerun the table below before S59 can
-close.
+directories, and S59 now has non-debug release-candidate budget and closure
+gate reruns. The final signed release APK still needs to rerun the table below
+before S59 can close.
 
 ### Current supported-device compatibility rollup
 
 This table records current debug-APK functional evidence plus the latest
-non-debug release-candidate budget probe. It is useful for compatibility
-tracking, but it is not final release evidence.
+non-debug release-candidate budget and closure reruns. It is useful for
+compatibility tracking, but it is not final release evidence.
 
 | Device | Android | ABI | Root | VPN | IPv4/IPv6 | Evidence | Release status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-175129`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 `build-output/s71-dual-profile-closure-gate/20260811-164754` | Debug functional matrices plus release-candidate budget probe; final signed release APK rerun required |
+| Google Pixel 6a (`28201JEGR0XPAJ`) | Android 16 / SDK 36 | arm64-v8a | Authorized in Root/NFQUEUE matrices | VpnService authorized in VPN/TUN/HEV matrices | IPv4 and IPv6 covered across S52/S55/S58/S71 | S52 `build-output/s58-root-l4-workflow-evidence/s52-root-l4-product-matrix-20260811-160107.log`; S55 `build-output/s55-product-vpn-transport-matrix/20260811-160345`; S58 `build-output/s58-vpn-l4-product-workflow-matrix/20260811-162540/matrix.log`; S59 release-candidate budget `build-output/s59-release-budget-probe/20260811-175129`; S70 `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`; S71 debug `build-output/s71-dual-profile-closure-gate/20260811-164754`; S71 release-candidate `build-output/s71-dual-profile-closure-gate/20260811-182004` | Debug functional matrices plus release-candidate budget and closure reruns; final signed release APK rerun required |
 
 ## 3. Functional release evidence ledger
 
@@ -78,8 +78,8 @@ tracking, but it is not final release evidence.
 | Lifecycle, fault, recovery, profile switch | S54/S57/S70/S71 contracts and device evidence | Present |
 | Policy persistence / old snapshot on failure | `tests/android/AndroidRuntimeContractTest.java` product transaction and apply-failure cases | Present |
 | VPN IPv4/IPv6 TCP and UDP production proof | `tests/device/s55-product-vpn-transport-matrix.sh` | Present |
-| Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Current S71 debug rollup present; release APK rerun required |
-| Root no-residue release proof | S70/S71 evidence lineage | Current S71 debug rollup present; release APK rerun required |
+| Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Current S71 release-candidate rollup present; final signed release APK rerun required |
+| Root no-residue release proof | S70/S71 evidence lineage | Current S71 release-candidate rollup present; final signed release APK rerun required |
 
 Current debug-evidence rollup:
 
@@ -110,6 +110,23 @@ Current debug-evidence rollup:
   `restart.finalCleanup.result=PASS`, `sigkill_fault.recovery.result=PASS`,
   `sigkill_fault.finalCleanup.result=PASS`, and `final.noResidue.result=PASS`
   through the nested Root matrix log.
+
+Latest release-candidate closure rollup:
+
+- Result directory: `build-output/s71-dual-profile-closure-gate/20260811-182004`.
+- APK variant: `release-candidate`.
+- Result: `matrix.result=PASS`.
+- Host runtime contract, host/VPP graph conformance, NDK daemon build, Root
+  NFQUEUE matrix, product VPN matrix, and profile lifecycle matrix all recorded
+  `PASS`.
+- Root evidence records `root.gate=PASS`,
+  `root.inputUidSeam=UID_UNAVAILABLE_WITH_UNKNOWN_APPLICATION_PASS`,
+  `restart.finalCleanup.result=PASS`, `sigkill_fault.recovery.result=PASS`,
+  `sigkill_fault.finalCleanup.result=PASS`, and `final.noResidue.result=PASS`.
+- Lifecycle evidence records `lifecycle.gate=PASS`; debug-only cleanup fault
+  injection is explicitly skipped under release-candidate while
+  `cleanupFault.releaseCandidateNormalStop=PASS` proves the release-candidate
+  normal stop/no-residue path.
 
 S58 latest evidence:
 

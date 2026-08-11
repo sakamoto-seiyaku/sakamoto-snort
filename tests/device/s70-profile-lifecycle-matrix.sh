@@ -519,25 +519,41 @@ else
 fi
 
 section "cleanup_fault_reason"
-fault_state="$(start_profile root "${RESULT_DIR}/fault-start")"
-fault_pid="$(printf '%s\n' "$fault_state" | snapshot_value_from pid)"
-adb_cmd shell am start -n "$ACTIVITY" --ez runtimeCleanupFault true \
-  >"${RESULT_DIR}/cleanup-fault.enable.intent.log" 2>&1
-adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
-  >"${RESULT_DIR}/cleanup-fault.stop.intent.log" 2>&1
-wait_for_snapshot "${RESULT_DIR}/cleanup-fault.snapshot.error" 20 \
-  "state=error" "errorCode=cleanup_failed" "mayBeActive=true" \
-  || {
-    cat "${RESULT_DIR}/cleanup-fault.snapshot.error" >&2
-    exit 1
-  }
-disable_cleanup_fault
-adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
-  >"${RESULT_DIR}/cleanup-fault.recover-stop.intent.log" 2>&1 || true
-mkdir -p "${RESULT_DIR}/cleanup-fault"
-assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-recover-stop"
-kv "reason.cleanupFault" "cleanup_failed"
-kv "cleanupFault.result" "PASS"
+if [[ "$S70_APK_VARIANT" == "release-candidate" ]]; then
+  # runtimeCleanupFault is a debug fault-injection seam. Release-candidate APKs
+  # still prove the user-facing lifecycle path here, but must not depend on
+  # debug-only injected cleanup failures.
+  fault_state="$(start_profile root "${RESULT_DIR}/fault-start")"
+  fault_pid="$(printf '%s\n' "$fault_state" | snapshot_value_from pid)"
+  stop_runtime "${RESULT_DIR}/cleanup-fault/release-candidate-stop" >/dev/null
+  mkdir -p "${RESULT_DIR}/cleanup-fault"
+  assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-release-candidate-stop"
+  assert_no_tun0_residue "${RESULT_DIR}/cleanup-fault/tun0.after-release-candidate-stop"
+  assert_no_native_residue "${RESULT_DIR}/cleanup-fault/native-residue.after-release-candidate-stop"
+  kv "reason.cleanupFault" "debug_fault_injection_skipped_release_candidate"
+  kv "cleanupFault.releaseCandidateNormalStop" "PASS"
+  kv "cleanupFault.result" "SKIPPED_RELEASE_CANDIDATE"
+else
+  fault_state="$(start_profile root "${RESULT_DIR}/fault-start")"
+  fault_pid="$(printf '%s\n' "$fault_state" | snapshot_value_from pid)"
+  adb_cmd shell am start -n "$ACTIVITY" --ez runtimeCleanupFault true \
+    >"${RESULT_DIR}/cleanup-fault.enable.intent.log" 2>&1
+  adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
+    >"${RESULT_DIR}/cleanup-fault.stop.intent.log" 2>&1
+  wait_for_snapshot "${RESULT_DIR}/cleanup-fault.snapshot.error" 20 \
+    "state=error" "errorCode=cleanup_failed" "mayBeActive=true" \
+    || {
+      cat "${RESULT_DIR}/cleanup-fault.snapshot.error" >&2
+      exit 1
+    }
+  disable_cleanup_fault
+  adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
+    >"${RESULT_DIR}/cleanup-fault.recover-stop.intent.log" 2>&1 || true
+  mkdir -p "${RESULT_DIR}/cleanup-fault"
+  assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-recover-stop"
+  kv "reason.cleanupFault" "cleanup_failed"
+  kv "cleanupFault.result" "PASS"
+fi
 # The cleanup-fault section intentionally exercises an erroring stop through
 # the visible Activity. Start the crash/restart section from a fresh Activity
 # launch so a delivered top-instance intent cannot hide the lifecycle request.

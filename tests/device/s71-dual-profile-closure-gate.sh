@@ -128,7 +128,12 @@ assert_lifecycle_gate() {
   assert_log_has "$name" '^pause[.]bindingPreserved=PASS$'
   assert_log_has "$name" '^pause[.]policyPreserved=PASS$'
   assert_log_has "$name" '^pause[.]lastSuccessfulPolicyPreserved=PASS$'
-  assert_log_has "$name" '^cleanupFault[.]result=PASS$'
+  if [[ "$S71_APK_VARIANT" == "release-candidate" ]]; then
+    assert_log_has "$name" '^cleanupFault[.]releaseCandidateNormalStop=PASS$'
+    assert_log_has "$name" '^cleanupFault[.]result=SKIPPED_RELEASE_CANDIDATE$'
+  else
+    assert_log_has "$name" '^cleanupFault[.]result=PASS$'
+  fi
   assert_log_has "$name" '^crash[.]result=PASS$'
   assert_log_has "$name" '^restartAfterCrash[.]result=PASS$'
   assert_log_has "$name" '^doze[.]result=PASS$'
