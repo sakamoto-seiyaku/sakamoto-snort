@@ -105,8 +105,17 @@ struct PortRange {
     [[nodiscard]] bool contains(std::uint16_t port) const noexcept;
 };
 
+struct CidrMatch {
+    Flow::IpAddress network;
+    std::uint8_t prefixLength = 0;
+
+    [[nodiscard]] bool contains(const Flow::IpAddress &address) const noexcept;
+};
+
 struct L4RuleMatch {
     std::optional<Flow::AddressFamily> family;
+    std::optional<CidrMatch> sourceCidr;
+    std::optional<CidrMatch> destinationCidr;
     std::optional<Flow::DevicePacketDirection> direction;
     std::optional<std::uint8_t> ipProtocol;
     std::uint64_t networkContextBits = 0;

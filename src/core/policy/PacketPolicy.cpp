@@ -103,9 +103,39 @@ bool PortRange::contains(const std::uint16_t port) const noexcept {
     return first <= last && first <= port && port <= last;
 }
 
+bool CidrMatch::contains(const Flow::IpAddress &address) const noexcept {
+    if (network.family != address.family) {
+        return false;
+    }
+
+    const auto maxBits = network.family == Flow::AddressFamily::Ipv4 ? 32U : 128U;
+    if (prefixLength > maxBits) {
+        return false;
+    }
+
+    const auto fullBytes = static_cast<std::size_t>(prefixLength / 8U);
+    const auto remainingBits = static_cast<std::uint8_t>(prefixLength % 8U);
+    for (std::size_t index = 0; index < fullBytes; ++index) {
+        if (network.bytes[index] != address.bytes[index]) {
+            return false;
+        }
+    }
+    if (remainingBits == 0) {
+        return true;
+    }
+    const auto mask = static_cast<std::uint8_t>(0xffU << (8U - remainingBits));
+    return (network.bytes[fullBytes] & mask) == (address.bytes[fullBytes] & mask);
+}
+
 bool L4RuleMatch::matches(const Flow::PacketFacts &facts) const noexcept {
     if (family.has_value()
         && (facts.source.family != *family || facts.destination.family != *family)) {
+        return false;
+    }
+    if (sourceCidr.has_value() && !sourceCidr->contains(facts.source)) {
+        return false;
+    }
+    if (destinationCidr.has_value() && !destinationCidr->contains(facts.destination)) {
         return false;
     }
     if (direction.has_value() && facts.deviceDirection != *direction) {

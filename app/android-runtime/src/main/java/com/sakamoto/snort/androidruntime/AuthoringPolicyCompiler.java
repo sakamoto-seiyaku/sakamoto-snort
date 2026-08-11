@@ -14,32 +14,48 @@ public final class AuthoringPolicyCompiler {
             return CompileResult.failure("authoring_policy_bundle_unsupported_schema",
                     "authoring policy bundle schema is unsupported");
         }
-        if (value.l4RuleCount != 0 || value.protocolRuleCount != 0) {
+        if (value.protocolRuleCount != 0) {
             return CompileResult.failure("authoring_policy_bundle_unsupported",
-                    "L4 and Protocol authoring rule families are not compiled by this slice");
+                    "Protocol authoring rule families are not compiled by this slice");
+        }
+        if (value.l4RuleCount != value.l4Rules.size()) {
+            return CompileResult.failure("authoring_policy_bundle_invalid_l4_rules",
+                    "L4RuleList count does not match its typed entries");
         }
 
-        TreeMap<ApplicationSubjectId, SubjectGate> subjects = new TreeMap<>();
+        TreeMap<ApplicationSubjectId, SubjectPolicy> subjects = new TreeMap<>();
         for (AuthoringPolicyBundle.NetworkGateRule rule : value.gateMatrix) {
             if (rule == null) {
                 return CompileResult.failure("authoring_policy_bundle_invalid_gate_matrix",
                         "GateMatrix contains an empty rule");
             }
-            SubjectGate subject = subjects.get(rule.subjectId);
+            SubjectPolicy subject = subjects.get(rule.subjectId);
             if (subject == null) {
-                subject = new SubjectGate(rule.subjectId);
+                subject = new SubjectPolicy(rule.subjectId);
                 subjects.put(rule.subjectId, subject);
             }
             if (rule.blocked) {
                 subject.blockedRules.add(rule);
             }
         }
+        for (AuthoringPolicyBundle.L4Rule rule : value.l4Rules) {
+            if (rule == null) {
+                return CompileResult.failure("authoring_policy_bundle_invalid_l4_rules",
+                        "L4RuleList contains an empty rule");
+            }
+            SubjectPolicy subject = subjects.get(rule.subjectId);
+            if (subject == null) {
+                subject = new SubjectPolicy(rule.subjectId);
+                subjects.put(rule.subjectId, subject);
+            }
+            subject.l4Rules.add(rule);
+        }
 
         StringBuilder out = new StringBuilder();
         out.append("{\"revision\":").append(value.revision).append(",\"subjects\":[");
         boolean firstSubject = true;
-        for (Map.Entry<ApplicationSubjectId, SubjectGate> entry : subjects.entrySet()) {
-            SubjectGate subject = entry.getValue();
+        for (Map.Entry<ApplicationSubjectId, SubjectPolicy> entry : subjects.entrySet()) {
+            SubjectPolicy subject = entry.getValue();
             if (!firstSubject) {
                 out.append(',');
             }
@@ -59,6 +75,14 @@ public final class AuthoringPolicyCompiler {
                 }
                 out.append("]}");
             }
+            out.append(",\"l4Rules\":[");
+            for (int i = 0; i < subject.l4Rules.size(); ++i) {
+                if (i > 0) {
+                    out.append(',');
+                }
+                appendL4Rule(out, subject.l4Rules.get(i));
+            }
+            out.append(']');
             out.append('}');
             firstSubject = false;
         }
@@ -66,12 +90,51 @@ public final class AuthoringPolicyCompiler {
         return CompileResult.success(out.toString(), value.revision);
     }
 
-    private static final class SubjectGate {
+    private static void appendL4Rule(StringBuilder out, AuthoringPolicyBundle.L4Rule rule) {
+        out.append("{\"ruleId\":").append(Long.toUnsignedString(rule.ruleId))
+                .append(",\"reasonId\":").append(rule.reasonId)
+                .append(",\"priority\":").append(rule.priority)
+                .append(",\"order\":").append(rule.order)
+                .append(",\"action\":\"").append(rule.action.wireName)
+                .append("\",\"match\":{\"family\":\"").append(rule.family.wireName)
+                .append("\",\"direction\":\"").append(rule.direction.wireName)
+                .append("\",\"ipProtocol\":").append(rule.ipProtocol);
+        if (!rule.sourceCidr.isEmpty()) {
+            out.append(",\"sourceCidr\":\"").append(escape(rule.sourceCidr)).append('"');
+        }
+        if (!rule.destinationCidr.isEmpty()) {
+            out.append(",\"destinationCidr\":\"").append(escape(rule.destinationCidr))
+                    .append('"');
+        }
+        if (rule.networkContext != null) {
+            out.append(",\"networkContexts\":[").append(rule.networkContext.wireId).append(']');
+        }
+        if (rule.sourcePorts != null) {
+            appendPortRange(out, "sourcePorts", rule.sourcePorts);
+        }
+        if (rule.destinationPorts != null) {
+            appendPortRange(out, "destinationPorts", rule.destinationPorts);
+        }
+        out.append("}}");
+    }
+
+    private static void appendPortRange(StringBuilder out, String key,
+                                        AuthoringPolicyBundle.PortRange range) {
+        out.append(",\"").append(key).append("\":{\"first\":").append(range.first)
+                .append(",\"last\":").append(range.last).append('}');
+    }
+
+    private static String escape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static final class SubjectPolicy {
         final ApplicationSubjectId subjectId;
         final ArrayList<AuthoringPolicyBundle.NetworkGateRule> blockedRules =
                 new ArrayList<>();
+        final ArrayList<AuthoringPolicyBundle.L4Rule> l4Rules = new ArrayList<>();
 
-        SubjectGate(ApplicationSubjectId subjectId) {
+        SubjectPolicy(ApplicationSubjectId subjectId) {
             this.subjectId = subjectId;
         }
     }

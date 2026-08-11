@@ -4,7 +4,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
@@ -66,14 +68,21 @@ public final class ProductStateStore {
                         "authoring_policy_bundle_gate_matrix_mismatch",
                         "authoring policy bundle GateMatrix count does not match its entries");
             }
-            if (l4Count != 0 || protocolCount != 0) {
+            List<AuthoringPolicyBundle.L4Rule> l4Rules = parseL4Rules(
+                    values.getProperty("bundle.l4Rules", ""));
+            if (l4Rules.size() != l4Count) {
+                return ReadResult.invalid(ProductStateSnapshot.empty(), true,
+                        "authoring_policy_bundle_l4_rules_mismatch",
+                        "authoring policy bundle L4RuleList count does not match its entries");
+            }
+            if (protocolCount != 0) {
                 return ReadResult.invalid(ProductStateSnapshot.empty(), true,
                         "authoring_policy_bundle_unsupported",
-                        "L4 and Protocol authoring rule families are unsupported by this slice");
+                        "Protocol authoring rule families are unsupported by this slice");
             }
             return ReadResult.valid(new ProductStateSnapshot(profile, bound,
                     AuthoringPolicyBundle.restore(bundleRevision, bundleSource, gateMatrix,
-                            l4Count, protocolCount)));
+                            l4Rules, protocolCount)));
         } catch (Exception error) {
             return ReadResult.invalid(ProductStateSnapshot.empty(), true,
                     "product_state_corrupt",
@@ -108,6 +117,8 @@ public final class ProductStateStore {
                 Integer.toString(value.authoringPolicyBundle.protocolRuleCount));
         values.setProperty("bundle.gateMatrix",
                 encodeGateMatrix(value.authoringPolicyBundle.gateMatrix));
+        values.setProperty("bundle.l4Rules",
+                encodeL4Rules(value.authoringPolicyBundle.l4Rules));
 
         File temporary = new File(directory, TEMP_FILE);
         File target = new File(directory, FILE);
@@ -213,6 +224,110 @@ public final class ProductStateStore {
             first = false;
         }
         return out.toString();
+    }
+
+    private static List<AuthoringPolicyBundle.L4Rule> parseL4Rules(String encoded) {
+        ArrayList<AuthoringPolicyBundle.L4Rule> out = new ArrayList<>();
+        TreeSet<String> seen = new TreeSet<>();
+        if (encoded == null || encoded.trim().isEmpty()) {
+            return out;
+        }
+        String[] pieces = encoded.split(";");
+        for (String piece : pieces) {
+            String token = piece.trim();
+            if (token.isEmpty()) {
+                continue;
+            }
+            String[] fields = token.split("\\|", -1);
+            if (fields.length != 14) {
+                throw new IllegalArgumentException("invalid L4RuleList entry");
+            }
+            ApplicationSubjectId subjectId = ApplicationSubjectId.fromUid(
+                    Integer.parseInt(fields[0]));
+            long ruleId = Long.parseUnsignedLong(fields[1]);
+            int reasonId = Integer.parseInt(fields[2]);
+            int priority = Integer.parseInt(fields[3]);
+            int order = Integer.parseInt(fields[4]);
+            AuthoringPolicyBundle.L4Action action =
+                    AuthoringPolicyBundle.L4Action.parse(fields[5]);
+            AuthoringPolicyBundle.IpFamily family =
+                    AuthoringPolicyBundle.IpFamily.parse(fields[6]);
+            AuthoringPolicyBundle.PacketDirection direction =
+                    AuthoringPolicyBundle.PacketDirection.parse(fields[7]);
+            int ipProtocol = Integer.parseInt(fields[8]);
+            AuthoringPolicyBundle.NetworkContextId context = "-".equals(fields[9])
+                    ? null : AuthoringPolicyBundle.NetworkContextId.parse(fields[9]);
+            String sourceCidr = decodeString(fields[10]);
+            String destinationCidr = decodeString(fields[11]);
+            AuthoringPolicyBundle.PortRange sourcePorts = parsePortRange(fields[12]);
+            AuthoringPolicyBundle.PortRange destinationPorts = parsePortRange(fields[13]);
+            String key = subjectId.uid + ":" + Long.toUnsignedString(ruleId);
+            if (!seen.add(key)) {
+                throw new IllegalArgumentException("duplicate L4RuleList entry");
+            }
+            out.add(new AuthoringPolicyBundle.L4Rule(subjectId, family, sourceCidr,
+                    destinationCidr, sourcePorts, destinationPorts, ipProtocol, direction,
+                    context, action, priority, order, ruleId, reasonId));
+        }
+        return out;
+    }
+
+    private static String encodeL4Rules(List<AuthoringPolicyBundle.L4Rule> l4Rules) {
+        StringBuilder out = new StringBuilder();
+        boolean first = true;
+        for (AuthoringPolicyBundle.L4Rule rule : l4Rules) {
+            if (!first) {
+                out.append(';');
+            }
+            out.append(rule.subjectId.uid).append('|')
+                    .append(Long.toUnsignedString(rule.ruleId)).append('|')
+                    .append(rule.reasonId).append('|')
+                    .append(rule.priority).append('|')
+                    .append(rule.order).append('|')
+                    .append(rule.action.wireName).append('|')
+                    .append(rule.family.wireName).append('|')
+                    .append(rule.direction.wireName).append('|')
+                    .append(rule.ipProtocol).append('|')
+                    .append(rule.networkContext == null ? "-" : rule.networkContext.wireName)
+                    .append('|')
+                    .append(encodeString(rule.sourceCidr)).append('|')
+                    .append(encodeString(rule.destinationCidr)).append('|')
+                    .append(encodePortRange(rule.sourcePorts)).append('|')
+                    .append(encodePortRange(rule.destinationPorts));
+            first = false;
+        }
+        return out.toString();
+    }
+
+    private static AuthoringPolicyBundle.PortRange parsePortRange(String encoded) {
+        if ("*".equals(encoded)) {
+            return null;
+        }
+        String[] fields = encoded.split("-", -1);
+        if (fields.length != 2) {
+            throw new IllegalArgumentException("invalid L4 port range");
+        }
+        return AuthoringPolicyBundle.PortRange.inclusive(
+                Integer.parseInt(fields[0]), Integer.parseInt(fields[1]));
+    }
+
+    private static String encodePortRange(AuthoringPolicyBundle.PortRange range) {
+        if (range == null) {
+            return "*";
+        }
+        return range.first + "-" + range.last;
+    }
+
+    private static String encodeString(String value) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(
+                (value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String decodeString(String encoded) {
+        if (encoded == null || encoded.isEmpty()) {
+            return "";
+        }
+        return new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8);
     }
 
     public static final class ReadResult {

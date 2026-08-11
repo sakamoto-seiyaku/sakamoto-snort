@@ -65,7 +65,9 @@ public final class AndroidRuntimeContractTest {
         applicationSubjectIdentityIsCompleteUidOnly();
         productStorePersistsProfileBindingsAndEmptyBundle();
         productStorePersistsNetworkGateMatrixAsTypedRuleFamily();
+        productStorePersistsL4RuleListAsTypedRuleFamily();
         gateMatrixCompilesToPacketPolicyApplyPayload();
+        l4RuleListCompilesToPacketPolicyApplyPayload();
         localProductBackendAppliesGatePolicyBeforePersistingBundle();
         boundedActivityStoreIsSeparateFromProductState();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
@@ -1318,12 +1320,91 @@ public final class AndroidRuntimeContractTest {
                 "open Gate does not compile a blocking GateTable entry");
 
         AuthoringPolicyBundle unsupported = AuthoringPolicyBundle.restore(9L, "test",
-                blocked.gateMatrix, 1, 0);
+                blocked.gateMatrix, blocked.l4Rules, 1);
         AuthoringPolicyCompiler.CompileResult failure =
                 AuthoringPolicyCompiler.compilePacketPolicyApply(unsupported);
         check(!failure.ok, "unsupported rule families fail compile before runtime apply");
         check("authoring_policy_bundle_unsupported".equals(failure.errorCode),
                 "compile failure reports actionable unsupported bundle code");
+    }
+
+    private static void productStorePersistsL4RuleListAsTypedRuleFamily() throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-52-l4-store");
+        ProductStore product = new ProductStore(files.toFile());
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        AuthoringPolicyBundle.L4Rule dropHttps = AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV4, "10.0.0.0/8", "192.0.2.0/24",
+                null, AuthoringPolicyBundle.PortRange.exact(443), 6,
+                AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                AuthoringPolicyBundle.NetworkContextId.WIFI,
+                AuthoringPolicyBundle.L4Action.DROP, 10, 2);
+        AuthoringPolicyBundle.L4Rule allowDns = AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV6, "2001:db8::/32", "2001:4860::/32",
+                AuthoringPolicyBundle.PortRange.inclusive(49152, 65535),
+                AuthoringPolicyBundle.PortRange.exact(53), 17,
+                AuthoringPolicyBundle.PacketDirection.INPUT, null,
+                AuthoringPolicyBundle.L4Action.ALLOW, 20, 1);
+        ProductStore.MutationResult published = product.replaceAuthoringPolicyBundle(
+                AuthoringPolicyBundle.empty().withL4Rule(dropHttps).withL4Rule(allowDns));
+        check(published.persisted, "ProductStore persists typed L4RuleList");
+
+        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
+        check(restored.authoringPolicyBundle.l4RuleCount == 2,
+                "ProductStateStore restores L4RuleList count");
+        check(restored.authoringPolicyBundle.l4Rules.get(0).subjectId.equals(app),
+                "L4RuleList preserves complete ApplicationSubjectId");
+        check("10.0.0.0/8".equals(restored.authoringPolicyBundle.l4Rules.get(0).sourceCidr)
+                        && "192.0.2.0/24".equals(
+                        restored.authoringPolicyBundle.l4Rules.get(0).destinationCidr),
+                "L4RuleList preserves source/destination CIDR");
+        check(restored.authoringPolicyBundle.l4Rules.get(0).destinationPorts.first == 443
+                        && restored.authoringPolicyBundle.l4Rules.get(0).destinationPorts.last == 443,
+                "L4RuleList preserves destination port range");
+        check(restored.authoringPolicyBundle.l4Rules.get(0).networkContext
+                        == AuthoringPolicyBundle.NetworkContextId.WIFI,
+                "L4RuleList preserves optional interface context");
+        check(restored.authoringPolicyBundle.l4Rules.get(1).family
+                        == AuthoringPolicyBundle.IpFamily.IPV6,
+                "L4RuleList preserves explicit IPv6 family");
+    }
+
+    private static void l4RuleListCompilesToPacketPolicyApplyPayload() {
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        AuthoringPolicyBundle.L4Rule lateAllow = AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV4, "10.0.0.0/8", "192.0.2.0/24",
+                null, AuthoringPolicyBundle.PortRange.exact(443), 6,
+                AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                AuthoringPolicyBundle.NetworkContextId.WIFI,
+                AuthoringPolicyBundle.L4Action.ALLOW, 20, 0);
+        AuthoringPolicyBundle.L4Rule earlyDrop = AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV4, "10.0.0.0/8", "192.0.2.0/24",
+                null, AuthoringPolicyBundle.PortRange.exact(443), 6,
+                AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                AuthoringPolicyBundle.NetworkContextId.WIFI,
+                AuthoringPolicyBundle.L4Action.DROP, 10, 0);
+        AuthoringPolicyBundle bundle = AuthoringPolicyBundle.empty()
+                .withL4Rule(lateAllow)
+                .withL4Rule(earlyDrop);
+
+        AuthoringPolicyCompiler.CompileResult result =
+                AuthoringPolicyCompiler.compilePacketPolicyApply(bundle);
+        check(result.ok, "L4RuleList compiles to packet policy apply payload");
+        check(result.applyPayload.contains("\"l4Rules\":["),
+                "compiled payload emits L4RuleList");
+        check(result.applyPayload.contains("\"family\":\"ipv4\"")
+                        && result.applyPayload.contains("\"sourceCidr\":\"10.0.0.0/8\"")
+                        && result.applyPayload.contains("\"destinationCidr\":\"192.0.2.0/24\""),
+                "compiled L4 payload carries explicit family and CIDR predicates");
+        check(result.applyPayload.contains("\"direction\":\"output\"")
+                        && result.applyPayload.contains("\"ipProtocol\":6")
+                        && result.applyPayload.contains("\"destinationPorts\":{\"first\":443,\"last\":443}"),
+                "compiled L4 payload carries direction/protocol/port predicates");
+        check(result.applyPayload.contains("\"networkContexts\":[1]"),
+                "compiled L4 payload carries optional NetworkContextId");
+        int dropIndex = result.applyPayload.indexOf("\"action\":\"drop\"");
+        int allowIndex = result.applyPayload.indexOf("\"action\":\"allow\"");
+        check(dropIndex >= 0 && allowIndex > dropIndex,
+                "compiled L4 payload is ordered by priority before later allow");
     }
 
     private static void localProductBackendAppliesGatePolicyBeforePersistingBundle()

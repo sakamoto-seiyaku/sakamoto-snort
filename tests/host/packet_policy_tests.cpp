@@ -264,6 +264,44 @@ TEST(PacketPolicyTest, Ipv4TcpExactDestinationPortDropsAtL4) {
     EXPECT_EQ(decision.revision, kRevision);
 }
 
+TEST(PacketPolicyTest, Ipv4SourceAndDestinationCidrMustBothMatch) {
+    const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
+        .linuxUid = kUid,
+        .l4Rules = {
+            Policy::L4Rule{
+                .ruleId = 2401,
+                .reasonId = 24,
+                .priority = 0,
+                .order = 0,
+                .action = Policy::L4RuleAction::Drop,
+                .match = Policy::L4RuleMatch{
+                    .family = AddressFamily::Ipv4,
+                    .sourceCidr = Policy::CidrMatch{
+                        .network = IpAddress::v4({10, 0, 0, 0}),
+                        .prefixLength = 8,
+                    },
+                    .destinationCidr = Policy::CidrMatch{
+                        .network = IpAddress::v4({192, 0, 2, 0}),
+                        .prefixLength = 24,
+                    },
+                    .direction = DevicePacketDirection::Input,
+                    .ipProtocol = kTcp,
+                    .destinationPorts = Policy::PortRange::exact(443),
+                },
+            },
+        },
+    });
+
+    const auto decision = snapshot.evaluate(ipv4TcpFacts());
+    EXPECT_EQ(decision.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(decision.stage, Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(decision.ruleId, 2401U);
+
+    auto wrongDestination = ipv4TcpFacts();
+    wrongDestination.destination = IpAddress::v4({198, 51, 100, 1});
+    expectPass(snapshot.evaluate(wrongDestination));
+}
+
 TEST(PacketPolicyTest, Ipv6UdpDestinationPortRangeDropsAtL4) {
     const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
         .linuxUid = kUid,
@@ -290,6 +328,42 @@ TEST(PacketPolicyTest, Ipv6UdpDestinationPortRangeDropsAtL4) {
     EXPECT_EQ(decision.stage, Policy::PacketPolicyStage::L4);
     EXPECT_EQ(decision.reasonId, 53U);
     EXPECT_EQ(decision.ruleId, 5353U);
+}
+
+TEST(PacketPolicyTest, Ipv6CidrMatchesAcrossFullPrefixWidth) {
+    const auto snapshot = snapshotWith(Policy::PacketPolicySubjectView{
+        .linuxUid = kUid,
+        .l4Rules = {
+            Policy::L4Rule{
+                .ruleId = 6001,
+                .reasonId = 60,
+                .priority = 0,
+                .order = 0,
+                .action = Policy::L4RuleAction::Drop,
+                .match = Policy::L4RuleMatch{
+                    .family = AddressFamily::Ipv6,
+                    .sourceCidr = Policy::CidrMatch{
+                        .network = IpAddress::v6({0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                                  0, 0, 0, 0, 0, 0, 0, 0}),
+                        .prefixLength = 32,
+                    },
+                    .destinationCidr = Policy::CidrMatch{
+                        .network = IpAddress::v6({0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                                  0, 0, 0, 0, 0, 0, 0, 2}),
+                        .prefixLength = 128,
+                    },
+                    .direction = DevicePacketDirection::Output,
+                    .ipProtocol = kUdp,
+                    .destinationPorts = Policy::PortRange::inclusive(5300, 5400),
+                },
+            },
+        },
+    });
+
+    const auto decision = snapshot.evaluate(ipv6UdpFacts());
+    EXPECT_EQ(decision.verdict, Policy::PacketPolicyVerdict::DROP);
+    EXPECT_EQ(decision.stage, Policy::PacketPolicyStage::L4);
+    EXPECT_EQ(decision.ruleId, 6001U);
 }
 
 TEST(PacketPolicyTest, PortsUnavailableDoesNotMatchPortPredicates) {

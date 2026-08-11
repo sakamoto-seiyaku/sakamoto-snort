@@ -1403,6 +1403,33 @@ TEST(ControlServerContract, PolicyApplyL4OrderingAndRevisionSurviveControl) {
     EXPECT_EQ(decision["revision"].GetUint64(), 9U);
 }
 
+TEST(ControlServerContract, PolicyApplyL4CidrMatchAndDefaultPassNext) {
+    FakeRuntimeControl runtime;
+    runtime.policyReady = true;
+    ControlServerHarness harness(runtime);
+
+    const auto apply = harness.call(
+        113, "POLICY.APPLY",
+        R"({"revision":52,"subjects":[{"linuxUid":10001,"networkGate":{},"l4Rules":[{"ruleId":5201,"reasonId":52,"priority":0,"order":0,"action":"drop","match":{"family":"ipv4","sourceCidr":"10.0.0.0/8","destinationCidr":"192.0.2.0/24","direction":"input","ipProtocol":6,"destinationPorts":{"first":443,"last":443}}}]}]})");
+    ASSERT_TRUE(apply["ok"].GetBool());
+    EXPECT_EQ(apply["result"]["l4RuleCount"].GetUint64(), 1U);
+
+    const auto matched = harness.call(
+        114, "POLICY.EVALUATE",
+        R"({"linuxUid":10001,"networkContext":2,"family":"ipv4","sourceIp":"10.12.0.4","destinationIp":"192.0.2.44","direction":"input","ipProtocol":6,"sourcePort":40000,"destinationPort":443,"portsAvailable":true})");
+    ASSERT_TRUE(matched["ok"].GetBool());
+    EXPECT_STREQ(matched["result"]["verdict"].GetString(), "DROP");
+    EXPECT_STREQ(matched["result"]["stage"].GetString(), "L4");
+    EXPECT_EQ(matched["result"]["ruleId"].GetUint64(), 5201U);
+
+    const auto defaultPass = harness.call(
+        115, "POLICY.EVALUATE",
+        R"({"linuxUid":10001,"networkContext":2,"family":"ipv4","sourceIp":"10.12.0.4","destinationIp":"198.51.100.44","direction":"input","ipProtocol":6,"sourcePort":40000,"destinationPort":443,"portsAvailable":true})");
+    ASSERT_TRUE(defaultPass["ok"].GetBool());
+    EXPECT_STREQ(defaultPass["result"]["verdict"].GetString(), "PASS_NEXT");
+    EXPECT_STREQ(defaultPass["result"]["stage"].GetString(), "None");
+}
+
 TEST(ControlServerContract, PolicyGateDropWinsOverL4Allow) {
     FakeRuntimeControl runtime;
     runtime.policyReady = true;

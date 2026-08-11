@@ -12,6 +12,8 @@
 
 #include <rapidjson/document.h>
 
+#include <arpa/inet.h>
+
 #include <algorithm>
 #include <array>
 #include <poll.h>
@@ -515,6 +517,103 @@ std::optional<SnortDatapath::Flow::DevicePacketDirection> parseDirection(
     return std::nullopt;
 }
 
+std::optional<SnortDatapath::Flow::IpAddress> parseIpAddressText(
+    const std::string_view text, std::string &error) {
+    std::array<std::uint8_t, 16> bytes{};
+    const std::string value(text);
+    if (value.find(':') != std::string::npos) {
+        if (::inet_pton(AF_INET6, value.c_str(), bytes.data()) != 1) {
+            error = "invalid ipv6 address";
+            return std::nullopt;
+        }
+        return SnortDatapath::Flow::IpAddress::v6(bytes);
+    }
+
+    std::array<std::uint8_t, 4> v4{};
+    if (::inet_pton(AF_INET, value.c_str(), v4.data()) != 1) {
+        error = "invalid ipv4 address";
+        return std::nullopt;
+    }
+    return SnortDatapath::Flow::IpAddress::v4(v4);
+}
+
+bool parseOptionalIpAddress(const rapidjson::Value &object,
+                            const std::string_view key,
+                            const SnortDatapath::Flow::AddressFamily family,
+                            SnortDatapath::Flow::IpAddress &out,
+                            std::string &error) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        return true;
+    }
+    if (!value->IsString()) {
+        error = std::string(key) + " must be string";
+        return false;
+    }
+    const auto parsed = parseIpAddressText(
+        std::string_view(value->GetString(), value->GetStringLength()), error);
+    if (!parsed.has_value()) {
+        error = std::string(key) + ": " + error;
+        return false;
+    }
+    if (parsed->family != family) {
+        error = std::string(key) + " family must match family";
+        return false;
+    }
+    out = *parsed;
+    return true;
+}
+
+bool parseCidr(const rapidjson::Value &object, const std::string_view key,
+               std::optional<SnortDatapath::Policy::CidrMatch> &out,
+               std::string &error) {
+    const rapidjson::Value *value = member(object, key);
+    if (value == nullptr) {
+        out.reset();
+        return true;
+    }
+    if (!value->IsString()) {
+        error = std::string(key) + " must be CIDR string";
+        return false;
+    }
+
+    const std::string text(value->GetString(), value->GetStringLength());
+    const auto slash = text.find('/');
+    if (slash == std::string::npos || slash == 0 || slash + 1 >= text.size()) {
+        error = std::string(key) + " must be address/prefix";
+        return false;
+    }
+
+    std::string parseError;
+    const auto address = parseIpAddressText(
+        std::string_view(text).substr(0, slash), parseError);
+    if (!address.has_value()) {
+        error = std::string(key) + ": " + parseError;
+        return false;
+    }
+
+    char *end = nullptr;
+    errno = 0;
+    const unsigned long prefix = std::strtoul(text.c_str() + slash + 1, &end, 10);
+    if (errno != 0 || end == nullptr || *end != '\0' || prefix > 128UL) {
+        error = std::string(key) + " prefix must be 0..128";
+        return false;
+    }
+    const auto maxPrefix = address->family == SnortDatapath::Flow::AddressFamily::Ipv4
+        ? 32UL
+        : 128UL;
+    if (prefix > maxPrefix) {
+        error = std::string(key) + " prefix exceeds address family width";
+        return false;
+    }
+
+    out = SnortDatapath::Policy::CidrMatch{
+        .network = *address,
+        .prefixLength = static_cast<std::uint8_t>(prefix),
+    };
+    return true;
+}
+
 bool parsePortRange(const rapidjson::Value &object, const std::string_view key,
                     std::optional<SnortDatapath::Policy::PortRange> &out,
                     std::string &error) {
@@ -554,7 +653,8 @@ bool parseL4RuleMatch(const rapidjson::Value &object,
     }
     if (const auto err = rejectUnknown(
             object, {"family", "direction", "ipProtocol", "networkContextBits",
-                     "networkContexts", "sourcePorts", "destinationPorts"});
+                     "networkContexts", "sourceCidr", "destinationCidr",
+                     "sourcePorts", "destinationPorts"});
         err.has_value()) {
         error = *err;
         return false;
@@ -575,6 +675,8 @@ bool parseL4RuleMatch(const rapidjson::Value &object,
     }
     if (!readUint64(object, "networkContextBits", out.networkContextBits, error, false)
         || !readContextArray(object, "networkContexts", out.networkContexts, error)
+        || !parseCidr(object, "sourceCidr", out.sourceCidr, error)
+        || !parseCidr(object, "destinationCidr", out.destinationCidr, error)
         || !parsePortRange(object, "sourcePorts", out.sourcePorts, error)
         || !parsePortRange(object, "destinationPorts", out.destinationPorts, error)) {
         return false;
@@ -773,7 +875,8 @@ bool parsePacketFacts(const rapidjson::Value &args,
                       std::string &error) {
     if (const auto err = rejectUnknown(
             args, {"linuxUid", "uidKnown", "networkContext", "family", "direction",
-                   "ipProtocol", "sourcePort", "destinationPort", "portsAvailable"});
+                   "ipProtocol", "sourceIp", "destinationIp", "sourcePort",
+                   "destinationPort", "portsAvailable"});
         err.has_value()) {
         error = *err;
         return false;
@@ -791,6 +894,10 @@ bool parsePacketFacts(const rapidjson::Value &args,
         ? SnortDatapath::Flow::IpAddress::v4({192, 0, 2, 1})
         : SnortDatapath::Flow::IpAddress::v6({0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
                                               0, 0, 0, 0, 0, 0, 0, 2});
+    if (!parseOptionalIpAddress(args, "sourceIp", *family, facts.source, error)
+        || !parseOptionalIpAddress(args, "destinationIp", *family, facts.destination, error)) {
+        return false;
+    }
 
     const auto direction = parseDirection(args, "direction", error, true);
     if (!direction.has_value()) {
