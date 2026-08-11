@@ -737,6 +737,177 @@ TEST(ControlServerContract, RealVpnTunRuntimeControlL4DropBlocksOutboundRelay) {
                     .empty());
 }
 
+TEST(ControlServerContract, RealVpnTunRuntimeControlRelayReturnsAllowedTransportPacket) {
+    Tun::VpnTunFdRuntime runtime{-1, true};
+    ASSERT_TRUE(runtime.start());
+    ControlServerHarness harness(runtime);
+
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+    UniqueFd tunRuntime{tunFds[0]};
+    UniqueFd tunPeer{tunFds[1]};
+    UniqueFd transportRuntime{transportFds[0]};
+    UniqueFd transportPeer{transportFds[1]};
+
+    ASSERT_TRUE(harness.callWithFd(
+                    90, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", tunRuntime.get())["ok"]
+                    .GetBool());
+    tunRuntime.reset();
+    ASSERT_TRUE(harness.callWithFd(
+                    91, "VPN_TRANSPORT.ATTACH", "{}", transportRuntime.get())["ok"]
+                    .GetBool());
+    transportRuntime.reset();
+
+    for (int attempt = 0; attempt < 50 && !runtime.packetAdapterReady(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    ASSERT_TRUE(runtime.packetAdapterReady());
+
+    const auto packet = ipv4TcpPacket(true);
+    ASSERT_TRUE(writePacket(transportPeer.get(), std::span<const std::uint8_t>{packet}));
+    const auto returned = readPacketFromFdWithDeadline(tunPeer.get());
+
+    ASSERT_EQ(returned.size(), packet.size());
+    EXPECT_TRUE(std::equal(packet.begin(), packet.end(), returned.begin()));
+
+    std::uint32_t statusId = 92;
+    const rapidjson::Document status = waitForVpnTunPacketsSeen(harness, 1, statusId);
+    ASSERT_TRUE(status["ok"].GetBool());
+    EXPECT_EQ(status["result"]["forwardedPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["droppedPackets"].GetUint64(), 0U);
+    EXPECT_EQ(status["result"]["transportReturnPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["transportSucceededPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["uidUnknownFallbackPackets"].GetUint64(), 1U);
+    EXPECT_STREQ(status["result"]["lastObservedDirection"].GetString(), "transport-return");
+    EXPECT_STREQ(status["result"]["lastObservedResult"].GetString(), "FlowForwarded");
+}
+
+TEST(ControlServerContract, RealVpnTunRuntimeControlGateDropBlocksTransportReturnRelay) {
+    Tun::VpnTunFdRuntime runtime{-1, true};
+    ASSERT_TRUE(runtime.start());
+    ControlServerHarness harness(runtime);
+
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+    UniqueFd tunRuntime{tunFds[0]};
+    UniqueFd tunPeer{tunFds[1]};
+    UniqueFd transportRuntime{transportFds[0]};
+    UniqueFd transportPeer{transportFds[1]};
+
+    const rapidjson::Document policy = harness.call(
+        100, "POLICY.APPLY",
+        R"({"revision":6902,"subjects":[{"uidKnown":false,"networkGate":{"blockedNetworkContexts":[0],"reasonId":6902,"ruleId":6902},"l4Rules":[]}]})");
+    ASSERT_TRUE(policy["ok"].GetBool());
+    EXPECT_EQ(policy["result"]["revision"].GetUint64(), 6902U);
+    EXPECT_EQ(policy["result"]["networkGateRuleCount"].GetUint64(), 1U);
+
+    const rapidjson::Document gateEval = harness.call(
+        101, "POLICY.EVALUATE",
+        R"({"uidKnown":false,"networkContext":0,"family":"ipv4","direction":"input","ipProtocol":6,"sourcePort":443,"destinationPort":40000,"portsAvailable":true})");
+    ASSERT_TRUE(gateEval["ok"].GetBool());
+    EXPECT_STREQ(gateEval["result"]["verdict"].GetString(), "DROP");
+    EXPECT_STREQ(gateEval["result"]["stage"].GetString(), "NetworkGate");
+    EXPECT_EQ(gateEval["result"]["reasonId"].GetUint(), 6902U);
+    EXPECT_EQ(gateEval["result"]["ruleId"].GetUint64(), 6902U);
+
+    ASSERT_TRUE(harness.callWithFd(
+                    102, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", tunRuntime.get())["ok"]
+                    .GetBool());
+    tunRuntime.reset();
+    ASSERT_TRUE(harness.callWithFd(
+                    103, "VPN_TRANSPORT.ATTACH", "{}", transportRuntime.get())["ok"]
+                    .GetBool());
+    transportRuntime.reset();
+
+    for (int attempt = 0; attempt < 50 && !runtime.packetAdapterReady(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    ASSERT_TRUE(runtime.packetAdapterReady());
+
+    const auto packet = ipv4TcpPacket(true);
+    ASSERT_TRUE(writePacket(transportPeer.get(), std::span<const std::uint8_t>{packet}));
+    std::uint32_t statusId = 104;
+    const rapidjson::Document status = waitForVpnTunPacketsSeen(harness, 1, statusId);
+
+    ASSERT_TRUE(status["ok"].GetBool());
+    EXPECT_EQ(status["result"]["forwardedPackets"].GetUint64(), 0U);
+    EXPECT_EQ(status["result"]["droppedPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["transportReturnPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["transportSucceededPackets"].GetUint64(), 0U);
+    EXPECT_EQ(status["result"]["uidUnknownFallbackPackets"].GetUint64(), 1U);
+    EXPECT_STREQ(status["result"]["lastObservedDirection"].GetString(), "transport-return");
+    EXPECT_STREQ(status["result"]["lastObservedResult"].GetString(), "FlowDropped");
+    EXPECT_TRUE(readPacketFromFdWithDeadline(
+                    tunPeer.get(), std::chrono::milliseconds{100})
+                    .empty());
+}
+
+TEST(ControlServerContract, RealVpnTunRuntimeControlL4DropBlocksTransportReturnRelay) {
+    Tun::VpnTunFdRuntime runtime{-1, true};
+    ASSERT_TRUE(runtime.start());
+    ControlServerHarness harness(runtime);
+
+    int tunFds[2]{-1, -1};
+    int transportFds[2]{-1, -1};
+    makePacketSocketPair(tunFds);
+    makePacketSocketPair(transportFds);
+    UniqueFd tunRuntime{tunFds[0]};
+    UniqueFd tunPeer{tunFds[1]};
+    UniqueFd transportRuntime{transportFds[0]};
+    UniqueFd transportPeer{transportFds[1]};
+
+    const rapidjson::Document policy = harness.call(
+        110, "POLICY.APPLY",
+        R"({"revision":6903,"subjects":[{"uidKnown":false,"networkGate":{},"l4Rules":[{"ruleId":6903,"reasonId":6903,"priority":0,"order":0,"action":"drop","match":{"family":"ipv4","direction":"input","ipProtocol":6,"destinationPorts":{"first":40000,"last":40000}}}]}]})");
+    ASSERT_TRUE(policy["ok"].GetBool());
+    EXPECT_EQ(policy["result"]["revision"].GetUint64(), 6903U);
+    EXPECT_EQ(policy["result"]["l4RuleCount"].GetUint64(), 1U);
+
+    const rapidjson::Document l4Eval = harness.call(
+        111, "POLICY.EVALUATE",
+        R"({"uidKnown":false,"networkContext":0,"family":"ipv4","direction":"input","ipProtocol":6,"sourcePort":443,"destinationPort":40000,"portsAvailable":true})");
+    ASSERT_TRUE(l4Eval["ok"].GetBool());
+    EXPECT_STREQ(l4Eval["result"]["verdict"].GetString(), "DROP");
+    EXPECT_STREQ(l4Eval["result"]["stage"].GetString(), "L4");
+    EXPECT_EQ(l4Eval["result"]["reasonId"].GetUint(), 6903U);
+    EXPECT_EQ(l4Eval["result"]["ruleId"].GetUint64(), 6903U);
+
+    ASSERT_TRUE(harness.callWithFd(
+                    112, "VPN_TUN.ATTACH", "{\"enableIpv6\":true}", tunRuntime.get())["ok"]
+                    .GetBool());
+    tunRuntime.reset();
+    ASSERT_TRUE(harness.callWithFd(
+                    113, "VPN_TRANSPORT.ATTACH", "{}", transportRuntime.get())["ok"]
+                    .GetBool());
+    transportRuntime.reset();
+
+    for (int attempt = 0; attempt < 50 && !runtime.packetAdapterReady(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    ASSERT_TRUE(runtime.packetAdapterReady());
+
+    const auto packet = ipv4TcpPacket(true);
+    ASSERT_TRUE(writePacket(transportPeer.get(), std::span<const std::uint8_t>{packet}));
+    std::uint32_t statusId = 114;
+    const rapidjson::Document status = waitForVpnTunPacketsSeen(harness, 1, statusId);
+
+    ASSERT_TRUE(status["ok"].GetBool());
+    EXPECT_EQ(status["result"]["forwardedPackets"].GetUint64(), 0U);
+    EXPECT_EQ(status["result"]["droppedPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["transportReturnPackets"].GetUint64(), 1U);
+    EXPECT_EQ(status["result"]["transportSucceededPackets"].GetUint64(), 0U);
+    EXPECT_EQ(status["result"]["uidUnknownFallbackPackets"].GetUint64(), 1U);
+    EXPECT_STREQ(status["result"]["lastObservedDirection"].GetString(), "transport-return");
+    EXPECT_STREQ(status["result"]["lastObservedResult"].GetString(), "FlowDropped");
+    EXPECT_TRUE(readPacketFromFdWithDeadline(
+                    tunPeer.get(), std::chrono::milliseconds{100})
+                    .empty());
+}
+
 TEST(ControlServerContract, VpnTunAttachRejectsMissingScmRightsFd) {
     FakeRuntimeControl runtime;
     runtime.vpnTunHandoffReady = true;
