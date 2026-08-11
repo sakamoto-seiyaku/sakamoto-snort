@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <core/protocol/ApplicationProtocolCatalog.hpp>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -257,6 +259,39 @@ enum class FlowRelativeDirection : std::uint8_t {
     Reply,
 };
 
+enum class LpiRecognitionTerminalState : std::uint8_t {
+    Detecting,
+    Done,
+    Exhausted,
+};
+
+struct LpiRecognitionResult {
+    sucre::protocol::ApplicationProtocolId protocolId =
+        sucre::protocol::ApplicationProtocolId::RESERVED_1000;
+    std::uint32_t firstPayloadPacketSequence = 0;
+    FlowRelativeDirection direction = FlowRelativeDirection::Orig;
+};
+
+struct LpiRecognitionState {
+    static constexpr std::uint32_t kMaxMappedResults = 8;
+
+    std::uint32_t payloadPacketsSubmitted = 0;
+    LpiRecognitionTerminalState terminalState = LpiRecognitionTerminalState::Detecting;
+    std::vector<LpiRecognitionResult> mappedResults;
+
+    [[nodiscard]] bool terminal() const noexcept {
+        return terminalState != LpiRecognitionTerminalState::Detecting;
+    }
+
+    [[nodiscard]] std::optional<sucre::protocol::ApplicationProtocolId>
+    latestExactResult() const noexcept {
+        if (mappedResults.empty()) {
+            return std::nullopt;
+        }
+        return mappedResults.back().protocolId;
+    }
+};
+
 struct FlowEntry {
     CanonicalFlowKey key;
     IpAddress originSource;
@@ -272,6 +307,7 @@ struct FlowEntry {
     std::uint64_t decisionStateClears = 0;
     std::uint64_t packets = 0;
     std::uint64_t bytes = 0;
+    LpiRecognitionState lpiRecognition;
 };
 
 struct FlowEntryObservation {
@@ -354,6 +390,20 @@ struct FlowEntryRevisionObservation {
     std::uint64_t currentPolicyRevision = 0;
 };
 
+struct LpiRecognitionUpdate {
+    bool found = false;
+    bool payloadSubmitted = false;
+    bool mappedResultAppended = false;
+    bool duplicateMappedResult = false;
+    bool unmappedResult = false;
+    bool terminalSkip = false;
+    LpiRecognitionTerminalState terminalState = LpiRecognitionTerminalState::Detecting;
+    FlowRelativeDirection direction = FlowRelativeDirection::Orig;
+    std::uint32_t payloadPacketSequence = 0;
+    std::size_t mappedResultCount = 0;
+    std::optional<sucre::protocol::ApplicationProtocolId> latestExactResult;
+};
+
 struct BoundedFlowTableCounters {
     std::uint64_t creates = 0;
     std::uint64_t updates = 0;
@@ -363,6 +413,13 @@ struct BoundedFlowTableCounters {
     std::uint64_t capacityMisses = 0;
     std::uint64_t nonCanonicalPackets = 0;
     std::uint64_t decisionStateClears = 0;
+    std::uint64_t lpiFlowMisses = 0;
+    std::uint64_t lpiPayloadPackets = 0;
+    std::uint64_t lpiMappedResults = 0;
+    std::uint64_t lpiDuplicateMappedResults = 0;
+    std::uint64_t lpiUnmappedResults = 0;
+    std::uint64_t lpiResultCapacityMisses = 0;
+    std::uint64_t lpiTerminalSkips = 0;
     std::size_t highWatermark = 0;
 };
 
@@ -381,6 +438,12 @@ public:
         const PacketFacts &facts, std::uint32_t linuxUid, bool uidKnown = true) noexcept;
     [[nodiscard]] PacketFacts factsWithResolvedAttribution(
         const PacketFacts &facts) noexcept;
+    [[nodiscard]] std::optional<LpiRecognitionUpdate> recordLpiRecognition(
+        const PacketFacts &facts,
+        bool payloadBearing,
+        std::optional<sucre::protocol::ApplicationProtocolId> mappedResult,
+        bool detectorDone,
+        bool budgetExhausted) noexcept;
     [[nodiscard]] std::optional<FlowEntryObservation> observeAccepted(
         const PacketFacts &facts, std::uint64_t policyRevision = 0) noexcept;
     [[nodiscard]] const FlowEntry *find(const CanonicalFlowKey &key) const noexcept;

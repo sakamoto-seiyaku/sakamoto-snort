@@ -9,11 +9,13 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace {
 
 using namespace SnortDatapath::Flow;
+namespace Protocol = sucre::protocol;
 
 PacketFacts tcpPacket(const AdapterKind adapter, const DevicePacketDirection direction,
                      const std::array<std::uint8_t, 4> source,
@@ -203,6 +205,96 @@ TEST(FlowSteeringTest, BoundedFlowEntryCapacityMissDoesNotCreateUnboundedState) 
     EXPECT_FALSE(table.observeAccepted(second).has_value());
     EXPECT_EQ(table.size(), 1U);
     EXPECT_EQ(table.counters().capacityMisses, 1U);
+}
+
+TEST(FlowSteeringTest, LpiRecognitionAttachesToExistingFlowEntryWithOrderedDedupedIds) {
+    BoundedFlowTable table(4);
+    const auto first = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                                 {10, 0, 0, 1}, {192, 0, 2, 1}, 40000, 443);
+    auto reply = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Output,
+                           {192, 0, 2, 1}, {10, 0, 0, 1}, 443, 40000);
+    const auto key = CanonicalFlowKey::from(first);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(table.observeAccepted(first, 7).has_value());
+
+    const auto http = table.recordLpiRecognition(
+        first, true, Protocol::ApplicationProtocolId::HTTP, false, false);
+    ASSERT_TRUE(http.has_value());
+    EXPECT_TRUE(http->found);
+    EXPECT_TRUE(http->payloadSubmitted);
+    EXPECT_TRUE(http->mappedResultAppended);
+    EXPECT_EQ(http->direction, FlowRelativeDirection::Orig);
+    EXPECT_EQ(http->payloadPacketSequence, 1U);
+
+    const auto duplicateHttp = table.recordLpiRecognition(
+        reply, true, Protocol::ApplicationProtocolId::HTTP, false, false);
+    ASSERT_TRUE(duplicateHttp.has_value());
+    EXPECT_TRUE(duplicateHttp->duplicateMappedResult);
+    EXPECT_EQ(duplicateHttp->direction, FlowRelativeDirection::Reply);
+    EXPECT_EQ(duplicateHttp->payloadPacketSequence, 2U);
+
+    const auto quic = table.recordLpiRecognition(
+        reply, true, Protocol::ApplicationProtocolId::QUIC, false, false);
+    ASSERT_TRUE(quic.has_value());
+    EXPECT_TRUE(quic->mappedResultAppended);
+    EXPECT_EQ(quic->mappedResultCount, 2U);
+    ASSERT_TRUE(quic->latestExactResult.has_value());
+    EXPECT_EQ(*quic->latestExactResult, Protocol::ApplicationProtocolId::QUIC);
+
+    const auto *entry = table.find(*key);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(table.size(), 1U);
+    EXPECT_EQ(entry->lpiRecognition.payloadPacketsSubmitted, 3U);
+    ASSERT_EQ(entry->lpiRecognition.mappedResults.size(), 2U);
+    EXPECT_EQ(entry->lpiRecognition.mappedResults[0].protocolId,
+              Protocol::ApplicationProtocolId::HTTP);
+    EXPECT_EQ(entry->lpiRecognition.mappedResults[0].firstPayloadPacketSequence, 1U);
+    EXPECT_EQ(entry->lpiRecognition.mappedResults[0].direction,
+              FlowRelativeDirection::Orig);
+    EXPECT_EQ(entry->lpiRecognition.mappedResults[1].protocolId,
+              Protocol::ApplicationProtocolId::QUIC);
+    EXPECT_EQ(entry->lpiRecognition.mappedResults[1].firstPayloadPacketSequence, 3U);
+    EXPECT_EQ(entry->lpiRecognition.mappedResults[1].direction,
+              FlowRelativeDirection::Reply);
+    EXPECT_EQ(table.counters().lpiPayloadPackets, 3U);
+    EXPECT_EQ(table.counters().lpiMappedResults, 2U);
+    EXPECT_EQ(table.counters().lpiDuplicateMappedResults, 1U);
+}
+
+TEST(FlowSteeringTest, LpiRecognitionUnmappedAndTerminalStatesDoNotCreateTempIdsOrRetry) {
+    BoundedFlowTable table(4);
+    const auto first = tcpPacket(AdapterKind::VpnTun, DevicePacketDirection::Output,
+                                 {10, 0, 0, 1}, {192, 0, 2, 1}, 40000, 443);
+    const auto other = tcpPacket(AdapterKind::VpnTun, DevicePacketDirection::Output,
+                                 {10, 0, 0, 2}, {192, 0, 2, 2}, 40001, 443);
+    ASSERT_TRUE(table.observeAccepted(first, 7).has_value());
+
+    const auto miss = table.recordLpiRecognition(
+        other, true, Protocol::ApplicationProtocolId::DNS, false, false);
+    ASSERT_TRUE(miss.has_value());
+    EXPECT_FALSE(miss->found);
+    EXPECT_EQ(table.counters().lpiFlowMisses, 1U);
+    EXPECT_EQ(table.size(), 1U);
+
+    const auto exhausted = table.recordLpiRecognition(
+        first, true, std::nullopt, false, true);
+    ASSERT_TRUE(exhausted.has_value());
+    EXPECT_TRUE(exhausted->found);
+    EXPECT_TRUE(exhausted->payloadSubmitted);
+    EXPECT_TRUE(exhausted->unmappedResult);
+    EXPECT_EQ(exhausted->terminalState, LpiRecognitionTerminalState::Exhausted);
+    EXPECT_FALSE(exhausted->latestExactResult.has_value());
+
+    const auto afterTerminal = table.recordLpiRecognition(
+        first, true, Protocol::ApplicationProtocolId::DNS, true, false);
+    ASSERT_TRUE(afterTerminal.has_value());
+    EXPECT_TRUE(afterTerminal->terminalSkip);
+    EXPECT_FALSE(afterTerminal->payloadSubmitted);
+    EXPECT_EQ(afterTerminal->terminalState, LpiRecognitionTerminalState::Exhausted);
+    EXPECT_EQ(afterTerminal->mappedResultCount, 0U);
+    EXPECT_EQ(table.counters().lpiPayloadPackets, 1U);
+    EXPECT_EQ(table.counters().lpiUnmappedResults, 1U);
+    EXPECT_EQ(table.counters().lpiTerminalSkips, 1U);
 }
 
 TEST(FlowSteeringTest, IPv4UsesCanonicalLeadingBytes) {

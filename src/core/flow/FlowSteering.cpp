@@ -50,6 +50,15 @@ bool packetMatchesOrigin(const FlowEntry &entry, const PacketFacts &facts) noexc
         && facts.destinationPort == entry.originDestinationPort;
 }
 
+bool hasMappedResult(const LpiRecognitionState &state,
+                     const sucre::protocol::ApplicationProtocolId protocolId) noexcept {
+    return std::any_of(
+        state.mappedResults.begin(), state.mappedResults.end(),
+        [protocolId](const LpiRecognitionResult &result) noexcept {
+            return result.protocolId == protocolId;
+        });
+}
+
 PacketDescriptorSlot descriptorSlot(const PacketDescriptorId id) noexcept {
     return static_cast<PacketDescriptorSlot>(id & kDescriptorSlotMask);
 }
@@ -579,6 +588,100 @@ PacketFacts BoundedFlowTable::factsWithResolvedAttribution(
     resolved.domain.uidKnown = true;
     ++counters_.attributionResolutions;
     return resolved;
+}
+
+std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
+    const PacketFacts &facts,
+    const bool payloadBearing,
+    const std::optional<sucre::protocol::ApplicationProtocolId> mappedResult,
+    const bool detectorDone,
+    const bool budgetExhausted) noexcept {
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        ++counters_.nonCanonicalPackets;
+        return std::nullopt;
+    }
+
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
+    if (found == entries_.end()) {
+        ++counters_.lpiFlowMisses;
+        return LpiRecognitionUpdate{
+            .found = false,
+        };
+    }
+
+    auto &state = found->lpiRecognition;
+    const auto direction = packetMatchesOrigin(*found, facts)
+        ? FlowRelativeDirection::Orig
+        : FlowRelativeDirection::Reply;
+
+    if (state.terminal()) {
+        ++counters_.lpiTerminalSkips;
+        return LpiRecognitionUpdate{
+            .found = true,
+            .payloadSubmitted = false,
+            .mappedResultAppended = false,
+            .duplicateMappedResult = false,
+            .unmappedResult = false,
+            .terminalSkip = true,
+            .terminalState = state.terminalState,
+            .direction = direction,
+            .payloadPacketSequence = state.payloadPacketsSubmitted,
+            .mappedResultCount = state.mappedResults.size(),
+            .latestExactResult = state.latestExactResult(),
+        };
+    }
+
+    auto payloadSubmitted = false;
+    auto appended = false;
+    auto duplicate = false;
+    auto unmapped = false;
+    if (payloadBearing) {
+        ++state.payloadPacketsSubmitted;
+        ++counters_.lpiPayloadPackets;
+        payloadSubmitted = true;
+        if (mappedResult.has_value()) {
+            if (hasMappedResult(state, *mappedResult)) {
+                duplicate = true;
+                ++counters_.lpiDuplicateMappedResults;
+            } else if (state.mappedResults.size() < LpiRecognitionState::kMaxMappedResults) {
+                state.mappedResults.push_back(LpiRecognitionResult{
+                    .protocolId = *mappedResult,
+                    .firstPayloadPacketSequence = state.payloadPacketsSubmitted,
+                    .direction = direction,
+                });
+                appended = true;
+                ++counters_.lpiMappedResults;
+            } else {
+                ++counters_.lpiResultCapacityMisses;
+            }
+        } else {
+            unmapped = true;
+            ++counters_.lpiUnmappedResults;
+        }
+    }
+
+    if (budgetExhausted) {
+        state.terminalState = LpiRecognitionTerminalState::Exhausted;
+    } else if (detectorDone) {
+        state.terminalState = LpiRecognitionTerminalState::Done;
+    }
+
+    return LpiRecognitionUpdate{
+        .found = true,
+        .payloadSubmitted = payloadSubmitted,
+        .mappedResultAppended = appended,
+        .duplicateMappedResult = duplicate,
+        .unmappedResult = unmapped,
+        .terminalSkip = false,
+        .terminalState = state.terminalState,
+        .direction = direction,
+        .payloadPacketSequence = state.payloadPacketsSubmitted,
+        .mappedResultCount = state.mappedResults.size(),
+        .latestExactResult = state.latestExactResult(),
+    };
 }
 
 std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
