@@ -25,6 +25,14 @@ import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
 import com.sakamoto.snort.androidruntime.ProductCatalogProjectionStore;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactions;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactionStore;
+import com.sakamoto.snort.androidruntime.CapabilitySet;
+import com.sakamoto.snort.androidruntime.HealthIssue;
+import com.sakamoto.snort.androidruntime.RuntimeSummary;
+import com.sakamoto.snort.androidruntime.AppSummary;
+import com.sakamoto.snort.androidruntime.AppDetail;
+import com.sakamoto.snort.androidruntime.RuleDraft;
+import com.sakamoto.snort.androidruntime.RuleView;
+import com.sakamoto.snort.androidruntime.ActivityItem;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -97,6 +105,7 @@ public final class AndroidRuntimeContractTest {
         productPolicyTransactionRestoreAndImportExportAreAtomic();
         productPolicyTransactionStorePersistsDraftCommitRuntimeAndCheckpoints();
         productPolicyCommitValidationRejectsConflictsAndStaleBindings();
+        appFirstProductUiModelsExposeStableUserFacingSeams();
         System.out.println("android runtime contract: PASS");
     }
 
@@ -2644,6 +2653,120 @@ public final class AndroidRuntimeContractTest {
                                 app.userId, "Work", true))));
         check(valid.ok && validTx.status().committedRevision == localCommitted.revision,
                 "commit validation accepts bound current catalog subjects");
+    }
+
+    private static void appFirstProductUiModelsExposeStableUserFacingSeams() {
+        CapabilitySet capabilities = CapabilitySet.androidL4(true, true);
+        check(capabilities.rootProfile && capabilities.vpnProfile
+                        && capabilities.profileSwitching && capabilities.networkGate
+                        && capabilities.l4Rules && capabilities.activity
+                        && !capabilities.protocolRules,
+                "Android L4 capability set is explicit and protocol rules remain future work");
+
+        RuntimeSnapshot running = RuntimeSnapshot.running(RuntimeProfile.VPN,
+                "control-vnext", "1", "runtime", "arm64", "ok", 4242L, 9L);
+        RuntimeSummary summary = RuntimeSummary.fromSnapshot(running, capabilities);
+        check(summary.selectedProfile == RuntimeProfile.VPN
+                        && RuntimeSnapshot.STATE_RUNNING.equals(summary.state)
+                        && summary.healthyForPolicyApply()
+                        && !summary.healthIssue.present(),
+                "RuntimeSummary projects running profile without exposing runtime internals");
+
+        RuntimeSummary paused = RuntimeSummary.fromSnapshot(
+                RuntimeSnapshot.paused(RuntimeProfile.ROOT, 10L), capabilities);
+        check(paused.paused
+                        && HealthIssue.CATEGORY_PAUSED.equals(paused.healthIssue.category)
+                        && paused.healthIssue.action.contains("Resume protection"),
+                "HealthIssue maps user pause to an actionable product state");
+        RuntimeSummary permission = RuntimeSummary.fromSnapshot(
+                RuntimeSnapshot.error(RuntimeProfile.ROOT, "", "", "", "",
+                        "root_authorization_required", "Root permission missing",
+                        false, -1L), capabilities);
+        check(HealthIssue.CATEGORY_PERMISSION.equals(permission.healthIssue.category),
+                "HealthIssue maps permission failure without calling it a runtime crash");
+        RuntimeSummary transport = RuntimeSummary.fromSnapshot(
+                RuntimeSnapshot.error(RuntimeProfile.VPN, "", "", "", "",
+                        "vpn_hev_transport_start_failed", "HEV failed",
+                        false, -1L), capabilities);
+        check(HealthIssue.CATEGORY_TRANSPORT_FAILURE.equals(transport.healthIssue.category),
+                "HealthIssue keeps VPN transport failures separate from policy verdicts");
+        RuntimeSummary runtimeFault = RuntimeSummary.fromSnapshot(
+                RuntimeSnapshot.error(RuntimeProfile.ROOT, "", "", "", "",
+                        "cleanup_failed", "profile residue remains",
+                        true, 4242L), capabilities);
+        check(HealthIssue.CATEGORY_RUNTIME_FAULT.equals(runtimeFault.healthIssue.category),
+                "HealthIssue maps cleanup failures to runtime fault state");
+        RuntimeSummary recovery = RuntimeSummary.fromSnapshot(
+                RuntimeSnapshot.error(RuntimeProfile.ROOT, "", "", "", "",
+                        "runtime_auto_recovery_pending", "recovering",
+                        true, 4242L), capabilities);
+        check(recovery.recovering
+                        && HealthIssue.CATEGORY_RECOVERY.equals(recovery.healthIssue.category),
+                "HealthIssue maps recovery into a distinct recovery state");
+        HealthIssue applyFailure = HealthIssue.applyFailure(
+                "product_policy_runtime_unavailable", "runtime is unavailable");
+        check(HealthIssue.CATEGORY_APPLY_FAILURE.equals(applyFailure.category)
+                        && applyFailure.action.contains("previous snapshot"),
+                "apply failure keeps the previous snapshot visible");
+
+        ApplicationSubjectId subject = ApplicationSubjectId.fromUid(1010001);
+        AuthoringPolicyBundle bundle = AuthoringPolicyBundle.empty()
+                .withNetworkGate(subject, AuthoringPolicyBundle.NetworkContextId.WIFI, true)
+                .withL4Rule(l4Rule(subject, "1.1.1.1/32", 6, 10, 0,
+                        AuthoringPolicyBundle.L4Action.DROP));
+        ProductCatalogFormatter.EntryRow row = ProductCatalogFormatter.project(
+                new ProductStateSnapshot(RuntimeProfile.ROOT,
+                        new java.util.TreeSet<>(Arrays.asList(subject)), bundle),
+                Arrays.asList(new ApplicationCatalogEntry(subject,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        subject.userId, "Work", true)),
+                "result", "", "", 5).selectableRows.get(0);
+        AppSummary app = AppSummary.fromCatalogRow(row);
+        check(app.subjectId.equals(subject) && app.bound && app.wifiGateBlocked
+                        && app.l4RuleCount == 1,
+                "AppSummary preserves complete UID identity and product controls");
+
+        AuthoringPolicyBundle.NetworkGateRule gateRule = bundle.gateMatrix.get(0);
+        RuleView gate = RuleView.networkGate(gateRule, bundle.revision);
+        RuleView l4 = RuleView.l4(bundle.l4Rules.get(0), bundle.revision);
+        check("network_gate".equals(gate.family) && "drop".equals(gate.action)
+                        && gate.policyRevision == bundle.revision
+                        && "l4".equals(l4.family),
+                "RuleView exposes stable family/action/revision instead of compiler details");
+
+        ActivityItem drop = ActivityItem.policyDrop(subject, "Mail",
+                "com.example.mail", 1234L, "1.1.1.1", "tcp", 443,
+                "output", bundle.revision, "L4", l4.ruleId, 42);
+        ActivityItem allowed = ActivityItem.allowedFlow(subject, "Mail",
+                "com.example.mail", 1235L, "1.1.1.1", "tcp", 443,
+                "output", "orig", 7L, 4096L, bundle.revision, "None");
+        check(drop.detailLossy
+                        && "bounded_activity_accumulator".equals(drop.evidenceSource)
+                        && drop.canPrefillL4Rule()
+                        && !allowed.detailLossy
+                        && "flow_entry".equals(allowed.evidenceSource)
+                        && allowed.packets == 7L && allowed.bytes == 4096L,
+                "ActivityItem separates bounded DROP detail from allowed FlowEntry evidence");
+
+        ActivityL4RuleDraft activityDraft = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
+                "1.1.1.1", 443, subject.uid, true,
+                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
+        RuleDraft draft = RuleDraft.fromActivityL4RuleDraft(activityDraft);
+        check(draft != null && draft.subjectId.equals(subject)
+                        && "activity".equals(draft.source)
+                        && draft.toL4Rule().subjectId.equals(subject),
+                "RuleDraft can prefill an L4 rule from Activity evidence");
+
+        AppDetail detail = AppDetail.normal(app, summary,
+                Arrays.asList(gate, l4), Arrays.asList(drop, allowed));
+        check(AppDetail.STATE_NORMAL.equals(detail.state)
+                        && detail.rules.size() == 2
+                        && detail.activity.size() == 2
+                        && detail.prefillDraft != null,
+                "AppDetail combines app, rules, activity, health, and prefill state");
+        check(AppDetail.loading(summary).rules.isEmpty()
+                        && AppDetail.error(summary, applyFailure).healthIssue.blocking,
+                "AppDetail covers loading and actionable error states");
     }
 
     private static AuthoringPolicyBundle.L4Rule l4Rule(
