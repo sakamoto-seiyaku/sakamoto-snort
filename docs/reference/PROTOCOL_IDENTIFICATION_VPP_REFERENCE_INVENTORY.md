@@ -160,6 +160,30 @@ This host replay test still does not read PCAP bytes and does not prove a real
 recognizer. It proves that the current Sakamoto seam can consume the reference
 result shape once a provider and licensed corpus subset exist.
 
+Repo-local Recognize-to-Activity projection evidence:
+
+- `nfqueue_flow_adapter_tests` proves a fake `LpiRecognitionProvider` fact
+  produced before adapter completion updates Root/NFQUEUE `allowedFlowActivity`
+  through the shared graph ingress and worker-owned `FlowEntry`.
+- `vpn_tun_flow_adapter_tests` proves the same fake-provider path updates
+  VPN/TUN `allowedFlowActivity`; VPN does not need a parallel recognition
+  path.
+- `control_server_contract_tests` proves both `NFQUEUE.STATUS` and
+  `VPN_TUN.STATUS` expose non-empty `allowedFlowActivity` protocol recognition
+  fields, including `lastProtocolRecognitionState`,
+  `lastApplicationProtocolKey`, `lastApplicationProtocolCategory`,
+  `lastProtocolRecognitionSequence`, and `lastProtocolPayloadPackets`.
+- `AndroidRuntimeContractTest` proves product-side native activity ingestion
+  turns a recognized allowed-flow record into an `ActivityItem` with
+  `flow_entry_lpi_recognition` evidence and round-trips the protocol state,
+  latest exact result, category, full sequence, and payload packet count through
+  `ProductActivityProjectionStore`.
+
+This projection evidence uses fake/scripted recognition facts only. It proves
+that a future real provider can reach Activity without changing the current
+Root/VPN adapter, ControlServer JSON, RuntimeService ingestion, or product
+Activity model. It does not prove libprotoident detection accuracy.
+
 License/privacy status:
 
 - The reference repo root and copied `test/` tree contain Apache-2.0 `LICENSE`
@@ -212,8 +236,12 @@ Current Sakamoto S61 work has already implemented the local product boundary:
   project-owned Application Protocol Catalog.
 - `resources/application-protocol-catalog/catalog.tsv` currently contains DNS,
   HTTP, TLS, QUIC, and SSH with `lpi:*` provider aliases.
-- Root/VPN adapters count provider availability and payload submission, but no
-  real libprotoident provider is wired by default.
+- Root/VPN adapters count provider availability and payload submission, and
+  fake/scripted provider facts have host evidence through Activity projection.
+- No real libprotoident provider is wired by default.
+- No repo-local PCAP corpus has been imported.
+- No Android device evidence proves a real provider on Root or VPN.
+- No ProtocolRule enforcement has started.
 
 Therefore the next S61 implementation step should not start from protocol rule
 enforcement. It should first add a real, pinned recognizer provider behind the
