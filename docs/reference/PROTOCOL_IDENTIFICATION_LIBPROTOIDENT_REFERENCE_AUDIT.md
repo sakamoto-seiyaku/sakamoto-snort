@@ -155,7 +155,7 @@ Sakamoto should keep the existing `LpiRecognitionProvider` boundary and only
 reuse a pinned recognizer source after the source, license, and Android build
 strategy are decided.
 
-## Open Questions Before Real Provider Work
+## Decision Questions Before Real Provider Work
 
 1. Which source is authoritative: backup VPP vendored copy, upstream
    libprotoident, or a separate provider package?

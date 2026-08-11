@@ -97,7 +97,7 @@ Known shape:
   to Sakamoto catalog IDs. Fork-local numeric AppIDs must not cross the
   Sakamoto provider seam.
 
-Open risks:
+Decision and risk inputs:
 
 - source provenance and license posture for Android distribution;
 - whether `stellar_lpi_extend` should be included, trimmed, or replaced;
@@ -117,7 +117,7 @@ Known shape:
 - Sakamoto still uses `lpi:<name>` aliases and the project-owned Application
   Protocol Catalog.
 
-Open risks:
+Decision and risk inputs:
 
 - a replacement provider must independently prove equivalent source,
   licensing, build, corpus, and runtime behavior;
@@ -137,7 +137,7 @@ Known shape:
   aliases, not provider-native numeric IDs;
 - package updates would need their own reproducible probe and corpus baseline.
 
-Open risks:
+Decision and risk inputs:
 
 - API and recognition behavior may differ from the backup wrapper;
 - expected alias coverage and selected PCAP behavior must be re-established;
@@ -221,10 +221,11 @@ keep the provider disabled by default:
 - extend status/counter tests for payload eligibility, provider unavailable,
   provider no-result, provider fact, detector done, and budget exhausted;
 - keep reference probes read-only and writing only under `build-output`;
-- prepare source-package checklist templates for license files, checksums,
+- prepare source-package evidence requirements for license files, checksums,
   NOTICE/source/relink posture, warning policy, and Android ABI settings; see
   `docs/reference/PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_PACKAGE_CHECKLIST.md`
-  as an unchecked pre-decision template only.
+  as a pre-decision evidence catalog only. It is not the source of truth for
+  open work.
 
 ## Work That Must Wait
 

@@ -247,12 +247,15 @@ archived runtime 或创建孤立的数据面实现任务。
   FlowEntry；Accumulator eviction 只影响 UI detail，必须有明确 lost/evicted observability metrics。
 - [NEXT] Protocol Identification Release：Android L4 Product Release 稳定后，在同一个
   worker-private FlowEntry 上增加 libprotoident，使用 Recognize-then-enforce；不引入 early hold、
-  full CT、stream reassembly 或复杂 QUIC 适配。当前 graph 在 Adapter completion 前产生的同步
-  识别事实可立即作用于当前 packet；异步结果只影响后续 packet。SAKAMOTO-61 已完成
-  provider-neutral pre-decision work：ApplicationProtocolCatalog、disabled provider seam、FlowEntry
-  recognition state、Activity projection、VPP reference inventory、libprotoident/stellar_lpi probes、
-  selected PCAP smoke 和 provider-source decision inputs。仍未开始/未能声明完成的是 provider
-  source/license/corpus/runtime enablement、real Android provider evidence 与 ProtocolRule enforcement。
+  full CT、stream reassembly 或复杂 QUIC 适配。SAKAMOTO-61 记录了 current-packet cutoff
+  metadata：Adapter completion 前产生的同步识别事实只进入当前 FlowEntry recognition state、
+  Activity projection 和 provider-neutral 状态证据；ProtocolRule、real provider、以及由 current
+  graph facts 影响当前 packet verdict 的消费路径尚未实现。异步结果仍只能影响后续 packet。
+  SAKAMOTO-61 已完成 provider-neutral pre-decision work：ApplicationProtocolCatalog、disabled
+  provider seam、FlowEntry recognition state、Activity projection、VPP reference inventory、
+  libprotoident/stellar_lpi probes、selected PCAP smoke 和 provider-source decision inputs。仍未
+  开始/未能声明完成的是 provider source/license/corpus/runtime enablement、real Android provider
+  evidence、ProtocolRule enforcement 与 product verdict consumption。
 - [NEXT] VPN transport release evidence：对 pinned HEV build 完成真实外网 IPv4/IPv6 TCP 与
   UDP relay 端到端验收；ICMP Echo 只有通过 capability/device tests 后才发布，其它 protocol
   不属于 VPN 第一版 forwarding promise。Transport failure 必须与 policy DROP 分开归因。
