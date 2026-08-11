@@ -73,6 +73,7 @@ public final class AndroidRuntimeContractTest {
         l4RuleListCompilesToPacketPolicyApplyPayload();
         localProductBackendAppliesGatePolicyBeforePersistingBundle();
         localProductBackendAppliesL4PolicyBeforePersistingBundle();
+        localProductBackendPersistsPolicyTransactionsAroundProductState();
         boundedActivityStoreIsSeparateFromProductState();
         activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
@@ -1521,6 +1522,86 @@ public final class AndroidRuntimeContractTest {
                 "failed runtime L4 apply keeps old durable L4 rule");
     }
 
+    private static void localProductBackendPersistsPolicyTransactionsAroundProductState()
+            throws Exception {
+        Path files = Files.createTempDirectory("sakamoto-53-backend-transactions");
+        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
+        final StringBuilder appliedPayloads = new StringBuilder();
+        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        app.userId, "Work", true)),
+                payload -> {
+                    appliedPayloads.append(payload).append('\n');
+                    return LocalProductBackend.PolicyApplyResult.ok();
+                });
+        AuthoringPolicyBundle.L4Rule drop = l4Rule(app, "1.1.1.1/32", 6, 10, 0,
+                AuthoringPolicyBundle.L4Action.DROP);
+
+        ProductStore.MutationResult persisted = backend.setL4Rule(drop);
+        check(persisted.persisted, "backend L4 mutation persists through transaction path");
+        ProductPolicyTransactionStore.ReadResult transactionRead =
+                ProductPolicyTransactionStore.readResult(files.toFile());
+        check(transactionRead.present && transactionRead.valid,
+                "backend publishes durable policy transaction state");
+        check(transactionRead.transactions.status().committedRevision == 1L
+                        && transactionRead.transactions.status().runtimeRevision == 1L
+                        && transactionRead.transactions.status().checkpointCount == 1
+                        && "applied".equals(
+                        transactionRead.transactions.status().runtimeSnapshotState),
+                "backend transaction state records committed runtime snapshot and checkpoint");
+        ProductStateSnapshot productState = ProductStateStore.read(files.toFile());
+        check(productState.boundApplications.contains(app)
+                        && productState.authoringPolicyBundle.l4RuleCount == 1,
+                "backend binds the policy subject and publishes ProductState after transaction");
+        check(appliedPayloads.toString().contains("\"revision\":1"),
+                "backend transaction applies the same revision it checkpoints");
+
+        LocalProductBackend failingBackend = new LocalProductBackend(files.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        app.userId, "Work", true)),
+                payload -> LocalProductBackend.PolicyApplyResult.error(
+                        "injected_transaction_apply_failure", "runtime rejected transaction"));
+        ProductStore.MutationResult failed = failingBackend.setL4Rule(
+                l4Rule(app, "8.8.8.8/32", 6, 20, 1,
+                        AuthoringPolicyBundle.L4Action.ALLOW));
+        check(!failed.persisted
+                        && "injected_transaction_apply_failure".equals(failed.errorCode),
+                "backend transaction surfaces runtime apply failure");
+        ProductPolicyTransactionStore.ReadResult afterFailure =
+                ProductPolicyTransactionStore.readResult(files.toFile());
+        check(afterFailure.transactions.status().committedRevision == 1L
+                        && afterFailure.transactions.status().runtimeRevision == 1L
+                        && afterFailure.transactions.status().checkpointCount == 1,
+                "failed backend transaction leaves durable transaction head unchanged");
+        check(ProductStateStore.read(files.toFile()).authoringPolicyBundle.l4RuleCount == 1,
+                "failed backend transaction leaves durable ProductState unchanged");
+
+        Path writerFailureFiles = Files.createTempDirectory(
+                "sakamoto-53-backend-transaction-writer-fail");
+        LocalProductBackend writerFailingBackend = new LocalProductBackend(
+                writerFailureFiles.toFile(),
+                () -> Arrays.asList(new ApplicationCatalogEntry(app,
+                        "com.example.mail", "Mail", "icon:mail/u10",
+                        app.userId, "Work", true)),
+                payload -> LocalProductBackend.PolicyApplyResult.ok(),
+                (dir, transactions) -> {
+                    throw new IOException("injected transaction persistence failure");
+                });
+        ProductStore.MutationResult writerFailed =
+                writerFailingBackend.setNetworkGate(app,
+                        AuthoringPolicyBundle.NetworkContextId.WIFI, true);
+        check(!writerFailed.persisted
+                        && "policy_transactions_persistence_failed".equals(
+                        writerFailed.errorCode),
+                "backend does not publish ProductState when transaction persistence fails");
+        check(!ProductStateStore.readResult(writerFailureFiles.toFile()).present,
+                "transaction persistence failure leaves ProductState unpublished");
+        check(!ProductPolicyTransactionStore.readResult(writerFailureFiles.toFile()).present,
+                "transaction persistence failure leaves no durable checkpoint");
+    }
+
     private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {
         Path files = Files.createTempDirectory("sakamoto-50-activity-store");
         ProductStore product = new ProductStore(files.toFile());
@@ -1644,6 +1725,8 @@ public final class AndroidRuntimeContractTest {
                         && "Block mobile".equals(projection.rows.get(0).networkGateButtonLabel(
                         AuthoringPolicyBundle.NetworkContextId.MOBILE)),
                 "Product UI projection exposes app-row Gate toggle labels");
+        check(!projection.rows.get(0).canToggleGate(),
+                "Product UI disables Gate toggle for available but unbound application rows");
         check(projection.displayText.contains("gate wifi=blocked mobile=open vpn=open"),
                 "Product UI projection display text includes app-row Gate state");
         check(projection.displayText.contains("l4Rules=1"),
@@ -1658,6 +1741,8 @@ public final class AndroidRuntimeContractTest {
                         gates), catalog);
         check(nextCandidate.firstAvailableSubjectId == null,
                 "bind candidate skips already-bound available ApplicationSubjectId");
+        check(nextCandidate.rows.get(0).canToggleGate(),
+                "Product UI enables Gate toggle for bound available application rows");
         check(projection.displayText.contains("Product Store selected profile: VPN (vpn)"),
                 "Product UI projection renders selected profile from ProductStore state");
         check(projection.displayText.contains("Catalog: result: 2 application instances"),

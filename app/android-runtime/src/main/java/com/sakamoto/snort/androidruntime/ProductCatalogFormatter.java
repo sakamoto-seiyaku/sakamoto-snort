@@ -294,7 +294,8 @@ public final class ProductCatalogFormatter {
             this.productStateValid = productStateValid;
             this.canBind = productStateValid && "available".equals(this.availability) && !bound;
             this.canUnbind = productStateValid && bound;
-            this.canToggleGate = productStateValid && "available".equals(this.availability);
+            this.canToggleGate = productStateValid && "available".equals(this.availability)
+                    && bound;
         }
 
         public boolean canBind() {

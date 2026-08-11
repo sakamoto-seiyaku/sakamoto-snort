@@ -76,6 +76,10 @@ public final class ProductStore {
         return publish(snapshot.withAuthoringPolicyBundle(bundle));
     }
 
+    public synchronized MutationResult replaceSnapshot(ProductStateSnapshot next) {
+        return publish(next == null ? ProductStateSnapshot.empty() : next);
+    }
+
     public synchronized ProductStateStore.ReadResult reload() {
         ProductStateStore.ReadResult result = ProductStateStore.readResult(filesDir);
         if (result.valid) {
