@@ -126,15 +126,46 @@ must not treat `TBD` as pass.
 
 | Budget | Required record | Current status |
 | --- | --- | --- |
-| Latency | p50/p95/p99 verdict or workflow latency per profile | TBD |
-| Throughput | Root and VPN nominal throughput / transaction rate | TBD |
-| Drop | policy drop counters and unintended drop counters | Partially present in S52/S55/S58 |
-| Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | TBD |
-| Corrective handoff | owner mismatch / corrective handoff counters | Host conformance present; release rollup TBD |
-| CPU/RSS | idle and active CPU/RSS per profile | Historical trim evidence exists; release measurement TBD |
+| Latency | p50/p95/p99 verdict or workflow latency per profile | Current S59 debug workflow probe present; release APK rerun required |
+| Throughput | Root and VPN nominal throughput / transaction rate | Probe attempted; device downloader unavailable; release measurement TBD |
+| Drop | policy drop counters and unintended drop counters | S52/S55/S58 plus S59 debug probe counters present |
+| Capacity high-watermark | queue/flow/activity high-watermark and overflow behavior | S59 debug Activity capacity/eviction probe present; queue/flow high-watermark TBD |
+| Corrective handoff | owner mismatch / corrective handoff counters | S59 debug owner-fault / owner-guard counters present; release rollup TBD |
+| CPU/RSS | idle and active CPU/RSS per profile | S59 debug idle CPU/RSS present; active throughput CPU blocked by downloader |
 | Screen-off power | screen-off idle power or proxy budget | TBD |
-| Thermal | thermal status before/after release workload | TBD |
-| Shutdown drain release | bounded drain and resource release timing | Lifecycle evidence present; timing budget TBD |
+| Thermal | thermal status before/after release workload | S59 debug thermal before/after status present; release workload rerun required |
+| Shutdown drain release | bounded drain and resource release timing | S59 debug stop-to-stopped timing present; release threshold TBD |
+
+Current measurement entry:
+
+- `tests/device/s59-release-budget-probe.sh` records debug-APK Root/VPN
+  measurements for workflow latency p50/p95/p99, nominal download throughput,
+  adapter drop/capacity/corrective-handoff counters, CPU/RSS, thermal status,
+  and shutdown drain timing. The script is a release-budget evidence collector;
+  it does not turn debug APK measurements into final release approval.
+
+Latest debug budget probe:
+
+- Result directory: `build-output/s59-release-budget-probe/20260811-170138`.
+- Device: Google Pixel 6a (`28201JEGR0XPAJ`), Android 16 / SDK 36,
+  arm64-v8a.
+- APK: `app/android-runtime/build/outputs/sakamoto-runtime-debug.apk`,
+  SHA-256 `4c131c5f15e4ee8935e16cdd2d97e6e2831887d3193de8b9c7e58231dd4b017d`.
+- Root workflow latency: samples `3`, p50 `632 ms`, p95 `659 ms`,
+  p99 `659 ms`.
+- VPN workflow latency: samples `3`, p50 `597 ms`, p95 `627 ms`,
+  p99 `627 ms`.
+- CPU/RSS idle sample: Root `1.00% / 37528 KiB`, VPN `4.00% / 37044 KiB`.
+- Adapter counters: Root `droppedPackets=0`, `ownerFaultPassThroughPackets=0`;
+  VPN `droppedPackets=0`, `ownerGuardMismatches=0`,
+  `transportFailedPackets=0`.
+- Activity capacity: Root allowed activity `8/8` with `14` evictions; VPN
+  allowed activity `8/8` with `10` evictions; drop activity `0/8` for both.
+- Thermal status: Root `0 -> 0`; VPN `0 -> 0`.
+- Shutdown drain: Root `4748 ms`; VPN `3730 ms`.
+- Throughput: `UNAVAILABLE_NO_DOWNLOADER` for both profiles because the device
+  image did not expose `curl` or `wget`; this keeps throughput as a blocking
+  release-budget gap.
 
 Minimum release rule: every budget row must have a measurement source, result
 directory, date, device, and pass/fail decision before S59 can close.
