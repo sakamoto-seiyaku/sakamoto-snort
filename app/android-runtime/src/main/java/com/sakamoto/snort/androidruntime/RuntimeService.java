@@ -54,6 +54,7 @@ public final class RuntimeService extends VpnService {
     private static final String TAG = "SakamotoRuntimeService";
     private static final String SU_PATH = "/system/bin/su";
     private static final String VPP_BINARY = "libvpp_runtime.so";
+    private static final String VPN_BINARY = "libsucre_snortd.so";
     private static final String MANIFEST_ASSET = "vpp-runtime.properties";
     private static final String HASH_ASSET = "vpp-runtime.sha256";
     private static final String CHANNEL_ID = "sakamoto-runtime";
@@ -503,25 +504,30 @@ public final class RuntimeService extends VpnService {
         }
 
         File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
-        File vpp = new File(nativeDir, VPP_BINARY);
+        File vpp = runtimeExecutable(nativeDir, activeProfile);
         try {
             if (!vpp.isFile()) {
-                throw new IOException("VPP artifact is not packaged: " + VPP_BINARY);
-            }
-            String expectedHash = readExpectedHash();
-            if (!expectedArtifact.equalsIgnoreCase("sha256:" + expectedHash)) {
-                failWithoutRuntime("runtime_manifest_hash_mismatch",
-                        "artifact and SHA-256 assets disagree");
-                return;
+                throw new IOException("runtime artifact is not packaged: "
+                        + runtimeBinaryName(activeProfile));
             }
             String actualArtifact = "sha256:" + sha256(vpp);
-            if (!expectedArtifact.equalsIgnoreCase(actualArtifact)) {
-                failWithoutRuntime("runtime_artifact_hash_mismatch",
-                        "manifest artifact does not match packaged VPP");
-                return;
+            if (activeProfile == RuntimeProfile.ROOT) {
+                String expectedHash = readExpectedHash();
+                if (!expectedArtifact.equalsIgnoreCase("sha256:" + expectedHash)) {
+                    failWithoutRuntime("runtime_manifest_hash_mismatch",
+                            "artifact and SHA-256 assets disagree");
+                    return;
+                }
+                if (!expectedArtifact.equalsIgnoreCase(actualArtifact)) {
+                    failWithoutRuntime("runtime_artifact_hash_mismatch",
+                            "manifest artifact does not match packaged VPP");
+                    return;
+                }
+            } else {
+                expectedArtifact = actualArtifact;
             }
             if (!vpp.canExecute() && !vpp.setExecutable(true, false)) {
-                throw new IOException("VPP artifact is not executable");
+                throw new IOException("runtime artifact is not executable");
             }
             prepareProfile(profileRoot, activeProfile);
             Process process = launchVpp(vpp, nativeDir, profileRoot, activeProfile,
@@ -531,9 +537,11 @@ public final class RuntimeService extends VpnService {
             pendingVpnTunSession = null;
             appendLog("vpp_process=started profile=" + activeProfile.wireName
                     + " artifact=" + expectedArtifact);
-            VppHealthHandshake.Result health = waitForHealth(nativeDir, profileRoot, protocol,
-                    version, deviceAbi, expectedArtifact, expectedApiIdentity, activeProfile,
-                    process);
+            VppHealthHandshake.Result health = activeProfile == RuntimeProfile.VPN
+                    ? vpnNativeOwnerHealth(protocol, version, deviceAbi, expectedArtifact,
+                            process)
+                    : waitForHealth(nativeDir, profileRoot, protocol, version, deviceAbi,
+                            expectedArtifact, expectedApiIdentity, activeProfile, process);
             if (stopRequested) {
                 stopRuntime();
                 return;
@@ -571,7 +579,9 @@ public final class RuntimeService extends VpnService {
             }
             appendLog("runtime_state=running profile=" + activeProfile.wireName
                     + " version=" + version + " core_health=" + health.health
-                    + " adapter=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE);
+                    + " adapter=" + (activeProfile == RuntimeProfile.VPN
+                    ? RuntimeSnapshot.ADAPTER_VPN_TUN_HEV
+                    : RuntimeSnapshot.ADAPTER_ROOT_NFQUEUE));
             monitorExit(process);
         } catch (Exception error) {
             Log.e(TAG, "VPP runtime startup failed", error);
@@ -824,25 +834,30 @@ public final class RuntimeService extends VpnService {
                 monitorPid(pid);
                 return;
             }
-            File vpp = new File(nativeDir, VPP_BINARY);
+            File vpp = runtimeExecutable(nativeDir, activeProfile);
             if (!vpp.isFile()) {
                 publishError("runtime_artifact_missing",
-                        "VPP artifact is not packaged: " + VPP_BINARY, true, pid);
+                        "runtime artifact is not packaged: "
+                                + runtimeBinaryName(activeProfile), true, pid);
                 monitorPid(pid);
                 return;
             }
-            String expectedHash = readExpectedHash();
-            if (!artifact.equalsIgnoreCase("sha256:" + expectedHash)) {
-                publishError("runtime_manifest_hash_mismatch",
-                        "artifact and SHA-256 assets disagree", true, pid);
-                monitorPid(pid);
-                return;
-            }
-            if (!artifact.equalsIgnoreCase("sha256:" + sha256(vpp))) {
-                publishError("runtime_artifact_hash_mismatch",
-                        "manifest artifact does not match packaged VPP", true, pid);
-                monitorPid(pid);
-                return;
+            if (activeProfile == RuntimeProfile.ROOT) {
+                String expectedHash = readExpectedHash();
+                if (!artifact.equalsIgnoreCase("sha256:" + expectedHash)) {
+                    publishError("runtime_manifest_hash_mismatch",
+                            "artifact and SHA-256 assets disagree", true, pid);
+                    monitorPid(pid);
+                    return;
+                }
+                if (!artifact.equalsIgnoreCase("sha256:" + sha256(vpp))) {
+                    publishError("runtime_artifact_hash_mismatch",
+                            "manifest artifact does not match packaged VPP", true, pid);
+                    monitorPid(pid);
+                    return;
+                }
+            } else {
+                artifact = "sha256:" + sha256(vpp);
             }
             File socket = new File(profileRoot, "runtime/api.sock");
             if (activeProfile == RuntimeProfile.ROOT && socket.exists()) {
@@ -867,8 +882,10 @@ public final class RuntimeService extends VpnService {
                             + " generated_vapi=false rc=" + nativeStatus.transportCode);
                 }
             }
-            VppHealthHandshake.Result health = VppHealthHandshake.evaluate(activeProfile,
-                    protocol, version, abi, artifact, apiIdentity, nativeStatus);
+            VppHealthHandshake.Result health = activeProfile == RuntimeProfile.VPN
+                    ? vpnNativeOwnerHealth(protocol, version, abi, artifact, null)
+                    : VppHealthHandshake.evaluate(activeProfile,
+                            protocol, version, abi, artifact, apiIdentity, nativeStatus);
             if (!health.isReady()) {
                 publishHealthError(health, "adopted runtime health failed", true, pid);
             } else {
@@ -891,16 +908,10 @@ public final class RuntimeService extends VpnService {
         if (token.isEmpty()) {
             throw new IOException("VPP owner token is absent from profile");
         }
-        String vpnTunEnv = "";
         if (profile == RuntimeProfile.VPN) {
             if (pendingTunSession == null || !pendingTunSession.isOpen()) {
                 throw new IOException("VPN TUN fd is absent before native launch");
             }
-            String source = pendingTunSession.procFdPathForCurrentProcess();
-            if (source.isEmpty()) {
-                throw new IOException("VPN TUN fd source is unavailable");
-            }
-            vpnTunEnv = " SAKAMOTO_VPN_TUN_FD_SOURCE=" + shellQuote(source);
         }
         String command = "umask 022; echo $$ > " + shellQuote(pidFile.getPath())
                 + "; export LD_LIBRARY_PATH=" + shellQuote(nativeDir.getPath())
@@ -908,7 +919,6 @@ public final class RuntimeService extends VpnService {
                 + " SAKAMOTO_VPP_RUNTIME_DIR=" + shellQuote(runtime.getPath())
                 + " SAKAMOTO_VPP_OWNER_TOKEN=" + shellQuote(token)
                 + " SAKAMOTO_RUNTIME_PROFILE=" + shellQuote(profile.wireName)
-                + vpnTunEnv
                 + "; exec " + shellQuote(vpp.getPath()) + " plugin_path "
                 + shellQuote(nativeDir.getPath()) + " -c "
                 + shellQuote(new File(currentProfile, "startup.conf").getPath())
@@ -917,6 +927,23 @@ public final class RuntimeService extends VpnService {
             return new ProcessBuilder(SU_PATH, "0", "sh", "-c", command).start();
         }
         return new ProcessBuilder("/system/bin/sh", "-c", command).start();
+    }
+
+    private static String runtimeBinaryName(RuntimeProfile profile) {
+        return profile == RuntimeProfile.VPN ? VPN_BINARY : VPP_BINARY;
+    }
+
+    private File runtimeExecutable(File nativeDir, RuntimeProfile profile) {
+        return new File(nativeDir, runtimeBinaryName(profile));
+    }
+
+    private VppHealthHandshake.Result vpnNativeOwnerHealth(
+            String protocol, String version, String abi, String artifact, Process process) {
+        if (process != null && !process.isAlive()) {
+            return new VppHealthHandshake.Result(protocol, version, artifact, abi,
+                    "error", "health_process_exited");
+        }
+        return new VppHealthHandshake.Result(protocol, version, artifact, abi, "ok", "");
     }
 
     private VppHealthHandshake.Result waitForHealth(File nativeDir, File profile,
@@ -1295,7 +1322,8 @@ public final class RuntimeService extends VpnService {
             return RuntimeOwnershipReconciliation.OwnershipAudit.unknown(
                     "profile owner token is absent or invalid");
         }
-        File executableFile = new File(getApplicationInfo().nativeLibraryDir, VPP_BINARY);
+        File executableFile = runtimeExecutable(
+                new File(getApplicationInfo().nativeLibraryDir), profileType);
         String executable = executableFile.getPath();
         final String executableHash;
         try {
@@ -1403,7 +1431,8 @@ public final class RuntimeService extends VpnService {
         if (token.isEmpty()) {
             return RuntimeOwnershipReconciliation.PidIdentity.UNKNOWN;
         }
-        File executableFile = new File(getApplicationInfo().nativeLibraryDir, VPP_BINARY);
+        File executableFile = runtimeExecutable(
+                new File(getApplicationInfo().nativeLibraryDir), profileType);
         String executable = executableFile.getPath();
         final String executableHash;
         try {
@@ -1528,6 +1557,14 @@ public final class RuntimeService extends VpnService {
             appendLog("vpn_tun_control_attach=missing_session");
             return false;
         }
+        RuntimeControlFdClient.AttachResult readiness =
+                RuntimeControlFdClient.waitForVpnTunHandoffReady();
+        if (!readiness.ok) {
+            appendLog("vpn_tun_control_ready=failed code=" + readiness.errorCode
+                    + " message=" + readiness.errorMessage);
+            return false;
+        }
+        appendLog("vpn_tun_control_ready=ok");
         int rawFd = session.releaseFd();
         RuntimeControlFdClient.AttachResult result =
                 RuntimeControlFdClient.attachVpnTun(rawFd, session.ipv6Enabled);

@@ -15,7 +15,6 @@ enum class RuntimeFactoryAction {
     CreateRootNfqueue,
     CreateVpnTunFdHandoff,
     RejectProfile,
-    RejectVpnTunFdMissing,
 };
 
 struct RuntimeFactoryPlan {

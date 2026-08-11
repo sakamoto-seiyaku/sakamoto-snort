@@ -2,9 +2,11 @@ package com.sakamoto.snort.androidruntime;
 
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.os.SystemClock;
 import android.os.ParcelFileDescriptor;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -17,12 +19,60 @@ import java.nio.charset.StandardCharsets;
 /** vNext control client for product-owned SCM_RIGHTS packet-adapter fd handoff. */
 public final class RuntimeControlFdClient {
     public static final String CONTROL_SOCKET_NAME = "sucre-snort-control-vnext";
+    public static final String HELLO = "HELLO";
     public static final String VPN_TUN_ATTACH = "VPN_TUN.ATTACH";
     public static final String VPN_TRANSPORT_ATTACH = "VPN_TRANSPORT.ATTACH";
     private static final int CONTROL_SOCKET_TIMEOUT_MILLIS = 2500;
     private static final int CONTROL_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
     private RuntimeControlFdClient() {}
+
+    public static AttachResult waitForVpnTunHandoffReady() {
+        LocalSocket socket = null;
+        try {
+            socket = connectControlSocket();
+            OutputStream output = socket.getOutputStream();
+            byte[] frame = frameNetstring(requestPayload(0, HELLO, new JSONObject()));
+            output.write(frame);
+            output.flush();
+            JSONObject response = new JSONObject(
+                    new String(readNetstring(socket.getInputStream()), StandardCharsets.UTF_8));
+            if (!response.optBoolean("ok", false)) {
+                JSONObject error = response.optJSONObject("error");
+                return AttachResult.error(
+                        error == null ? "VPN_TUN_CONTROL_READY_FAILED"
+                                : error.optString("code", "VPN_TUN_CONTROL_READY_FAILED"),
+                        error == null ? "" : error.optString("message", ""));
+            }
+            JSONObject result = response.optJSONObject("result");
+            JSONArray capabilities = result == null
+                    ? new JSONArray()
+                    : result.optJSONArray("capabilities");
+            if (!hasCapability(capabilities, "vpn-tun-fd-handoff")) {
+                return AttachResult.error("VPN_TUN_HANDOFF_UNAVAILABLE",
+                        "native runtime did not advertise VPN TUN fd handoff");
+            }
+            if (!hasCapability(capabilities, "vpn-tun-transport-fd-handoff")) {
+                return AttachResult.error("VPN_TRANSPORT_HANDOFF_UNAVAILABLE",
+                        "native runtime did not advertise VPN transport fd handoff");
+            }
+            return AttachResult.accepted(new JSONObject()
+                    .put("adapter", ProductPacketAdapterContract.VPN_ADAPTER)
+                    .put("fdAttached", false)
+                    .put("transportFdAttached", false)
+                    .put("ipv6Enabled", false));
+        } catch (Exception error) {
+            return AttachResult.error("VPN_TUN_CONTROL_READY_FAILED", messageOf(error));
+        } finally {
+            if (socket != null) {
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                    // The readiness result above is the actionable failure.
+                }
+            }
+        }
+    }
 
     /**
      * Consumes {@code rawFd}: the local descriptor is closed after the complete netstring frame is
@@ -54,10 +104,7 @@ public final class RuntimeControlFdClient {
         LocalSocket socket = null;
         try {
             descriptor = ParcelFileDescriptor.adoptFd(rawFd);
-            socket = new LocalSocket();
-            socket.connect(new LocalSocketAddress(
-                    CONTROL_SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT));
-            socket.setSoTimeout(CONTROL_SOCKET_TIMEOUT_MILLIS);
+            socket = connectControlSocket();
             FileDescriptor fd = descriptor.getFileDescriptor();
             socket.setFileDescriptorsForSend(new FileDescriptor[]{fd});
             OutputStream output = socket.getOutputStream();
@@ -98,6 +145,41 @@ public final class RuntimeControlFdClient {
         }
     }
 
+    private static LocalSocket connectControlSocket() throws IOException {
+        IOException lastError = null;
+        long deadline = SystemClock.elapsedRealtime() + CONTROL_SOCKET_TIMEOUT_MILLIS;
+        while (true) {
+            LocalSocket socket = new LocalSocket();
+            try {
+                socket.connect(new LocalSocketAddress(
+                        CONTROL_SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT));
+                socket.setSoTimeout(CONTROL_SOCKET_TIMEOUT_MILLIS);
+                return socket;
+            } catch (IOException error) {
+                lastError = error;
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                    // The connect failure is the actionable error.
+                }
+            }
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                throw lastError == null
+                        ? new IOException("control socket connect timed out")
+                        : lastError;
+            }
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                IOException interrupted =
+                        new IOException("interrupted while connecting control socket");
+                interrupted.initCause(error);
+                throw interrupted;
+            }
+        }
+    }
+
     private static byte[] requestPayload(int id, String command, JSONObject args)
             throws JSONException {
         return new JSONObject()
@@ -133,6 +215,18 @@ public final class RuntimeControlFdClient {
             throw new IOException("invalid netstring terminator");
         }
         return payload;
+    }
+
+    private static boolean hasCapability(JSONArray capabilities, String expected) {
+        if (capabilities == null) {
+            return false;
+        }
+        for (int index = 0; index < capabilities.length(); ++index) {
+            if (expected.equals(capabilities.optString(index))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int readLength(InputStream input) throws IOException {

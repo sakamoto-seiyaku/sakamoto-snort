@@ -52,14 +52,18 @@ fi
 stage_has_required_artifacts \
   || die "runtime stage is missing VPP core diagnostics: $stage_dir"
 hev_lib="$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so"
+ndk_daemon="$repo_root/build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so"
 if [[ "$hev_stage_explicit" == 0 && ! -f "$hev_lib" ]]; then
   hev_build_script="$repo_root/experiments/vpp-nfq-poc/scripts/android-build-hev.sh"
   [[ -f "$hev_build_script" ]] || die "default HEV stage is incomplete and builder is absent: $hev_build_script"
   STAGE_DIR="$hev_stage_dir" bash "$hev_build_script"
 fi
+if [[ ! -f "$ndk_daemon" ]]; then
+  cmake --build --preset dev-debug --target snort-build-ndk
+fi
 
 for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" \
-    "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl" "$hev_lib"; do
+    "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl" "$hev_lib" "$ndk_daemon"; do
   [[ -f "$file" ]] || die "missing required build input: $file"
 done
 [[ -f "$provenance_file" ]] || die "runtime stage provenance is missing: $provenance_file"
@@ -111,6 +115,8 @@ for so in "$stage_dir"/lib/*.so; do
 done
 cp "$hev_lib" "$jni_dir/libhev-socks5-tunnel.so"
 chmod 755 "$jni_dir/libhev-socks5-tunnel.so"
+cp "$ndk_daemon" "$jni_dir/libsucre_snortd.so"
+chmod 755 "$jni_dir/libsucre_snortd.so"
 
 # Build the committed core control boundary against the generated VPE VAPI.
 # The generated headers and libvapiclient are build inputs, never runtime
@@ -253,6 +259,8 @@ for key in sourceRevision sourceOrigin sourceTree sourceStatus baseArchiveSha256
 done
 cp "$provenance_file" "$assets_dir/vpp-runtime-provenance.properties"
 printf '%s\n' "${artifact#sha256:}" >"$assets_dir/vpp-runtime.sha256"
+sha256sum "$jni_dir/libsucre_snortd.so" | awk '{print $1}' \
+  >"$assets_dir/sucre-snortd.sha256"
 
 mapfile -t sources < <(find "$app_dir/src/main/java" -name '*.java' | sort)
 javac -Xlint:-options -source 8 -target 8 -classpath "$android_jar" -d "$classes_dir" "${sources[@]}"

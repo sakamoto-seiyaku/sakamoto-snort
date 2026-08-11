@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.net.VpnService;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -40,6 +41,7 @@ import org.json.JSONObject;
 /** Minimal debug shell. It only issues versioned requests and renders snapshots. */
 public class DebugControlActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION = 1001;
+    private static final int VPN_PREPARE_REQUEST = 1002;
     private static final long STATUS_POLL_MILLIS = 500L;
     private static final String EXTRA_RUNTIME_START = "runtimeStart";
     private static final String EXTRA_RUNTIME_STOP = "runtimeStop";
@@ -85,6 +87,7 @@ public class DebugControlActivity extends Activity {
     private boolean suppressAppSelection;
     private ApplicationSubjectId selectedApplicationSubjectId;
     private boolean pendingStart;
+    private boolean pendingVpnStart;
     private boolean suppressProfileSelectionPersist;
     private int productCatalogGeneration;
     private ProductCatalogFormatter.Projection productProjection =
@@ -286,6 +289,9 @@ public class DebugControlActivity extends Activity {
     private void startSelected() {
         RuntimeProfile profile = profileFromSpinner();
         requestedProfile = profile;
+        if (profile == RuntimeProfile.VPN && !ensureVpnPreparedForStart()) {
+            return;
+        }
         RuntimeControlBackend.StartResult result;
         try {
             result = backend.start(this, profile);
@@ -313,6 +319,7 @@ public class DebugControlActivity extends Activity {
 
     private void stopRuntime() {
         pendingStart = false;
+        pendingVpnStart = false;
         backend.stop(this);
         action("Stop requested.");
         refreshStatus();
@@ -321,8 +328,20 @@ public class DebugControlActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        // SAKAMOTO-67 VPN is an app-UID core profile; TUN authorization is a
-        // later adapter seam and is intentionally not requested here.
+        if (requestCode != VPN_PREPARE_REQUEST) {
+            return;
+        }
+        if (resultCode == RESULT_OK && pendingVpnStart) {
+            pendingVpnStart = false;
+            requestedProfile = RuntimeProfile.VPN;
+            setProfileSpinnerSelection(RuntimeProfile.VPN);
+            startSelected();
+            return;
+        }
+        pendingVpnStart = false;
+        requestedProfile = null;
+        action("VPN authorization denied.");
+        refreshStatus();
     }
 
     @Override
@@ -410,6 +429,17 @@ public class DebugControlActivity extends Activity {
         backend.selectProductProfile(this, profile);
         action(successPrefix + " requested: " + profile.wireName + ".");
         refreshProductCatalog();
+    }
+
+    private boolean ensureVpnPreparedForStart() {
+        Intent prepare = VpnService.prepare(this);
+        if (prepare == null) {
+            return true;
+        }
+        pendingVpnStart = true;
+        action("VPN authorization required before starting vpn profile.");
+        startActivityForResult(prepare, VPN_PREPARE_REQUEST);
+        return false;
     }
 
     private void refreshProductCatalog() {

@@ -180,8 +180,8 @@ public final class AndroidRuntimeContractTest {
         RuntimeSnapshot restored = RuntimeStateStore.read(files.toFile());
         check(restored.state.equals(RuntimeSnapshot.STATE_RUNNING), "running state round-trips");
         check(restored.profile == RuntimeProfile.ROOT, "root profile round-trips");
-        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(restored.adapterReadiness),
-                "adapter readiness remains explicitly unavailable");
+        check(RuntimeSnapshot.ADAPTER_ROOT_NFQUEUE.equals(restored.adapterReadiness),
+                "running root adapter readiness round-trips");
         check("ok".equals(restored.coreHealth), "core health round-trips separately");
         check(restored.pid == 42L, "owner pid round-trips");
 
@@ -1087,8 +1087,8 @@ public final class AndroidRuntimeContractTest {
         RuntimeSnapshot vpn = RuntimeSnapshot.running(RuntimeProfile.VPN,
                 "vpp-runtime-health/v1", "v26.02-release", "sha256:core", "arm64-v8a",
                 "ok", 43L);
-        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(vpn.adapterReadiness),
-                "native core handshake leaves VPN Adapter unavailable");
+        check(RuntimeSnapshot.ADAPTER_VPN_TUN_HEV.equals(vpn.adapterReadiness),
+                "running VPN snapshot exposes VPN/TUN Adapter readiness");
         check(!VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
                 "v26.02-release", "arm64-v8a", "sha256:core", "wrong-api", status).isReady(),
                 "generated API identity mismatch fails closed");

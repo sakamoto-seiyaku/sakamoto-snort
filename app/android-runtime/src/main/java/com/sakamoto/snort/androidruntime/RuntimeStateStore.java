@@ -54,6 +54,8 @@ public final class RuntimeStateStore {
                             values.getProperty("abiEvidence", "")),
                     values.getProperty("abi", ""),
                     values.getProperty("coreHealth", values.getProperty("health", "unknown")),
+                    values.getProperty("adapterReadiness",
+                            values.getProperty("adapter", RuntimeSnapshot.ADAPTER_UNAVAILABLE)),
                     values.getProperty("errorCode", ""), values.getProperty("errorMessage", ""),
                     Boolean.parseBoolean(values.getProperty("mayBeActive", "false")),
                     parseLong(values, "pid", -1L),

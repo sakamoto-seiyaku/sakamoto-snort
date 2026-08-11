@@ -35,8 +35,11 @@ RuntimeFactoryResult createStartedRuntime(const RuntimeProfileSelection selectio
         result.runtime = std::move(runtime);
     }
     if (result.plan.action == RuntimeFactoryAction::CreateVpnTunFdHandoff) {
-        const int tunFd = SnortDatapath::Tun::openVpnTunFdSource(source);
-        if (tunFd < 0) {
+        int tunFd = -1;
+        if (!source.empty()) {
+            tunFd = SnortDatapath::Tun::openVpnTunFdSource(source);
+        }
+        if (!source.empty() && tunFd < 0) {
             result.plan.launchable = false;
             result.plan.exitCode = 3;
             result.plan.errorCode = "vpn_tun_fd_open_failed";

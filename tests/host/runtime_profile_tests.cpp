@@ -43,14 +43,14 @@ TEST(RuntimeFactoryPlan, SelectsRootNfqueueRuntimeForRootProfile) {
     EXPECT_EQ(plan.adapterName, "root-nfqueue");
 }
 
-TEST(RuntimeFactoryPlan, RejectsVpnWithoutTunFdSource) {
+TEST(RuntimeFactoryPlan, LaunchesVpnWithoutTunFdSourceForControlAttach) {
     const auto plan =
         SnortRuntime::planRuntimeFactory(SnortRuntime::parseRuntimeProfile("vpn"));
 
-    EXPECT_FALSE(plan.launchable);
-    EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::RejectVpnTunFdMissing);
-    EXPECT_EQ(plan.exitCode, 3);
-    EXPECT_EQ(plan.errorCode, "vpn_tun_fd_source_missing");
+    EXPECT_TRUE(plan.launchable);
+    EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::CreateVpnTunFdHandoff);
+    EXPECT_EQ(plan.exitCode, 0);
+    EXPECT_TRUE(plan.errorCode.empty());
     EXPECT_EQ(plan.adapterName, "vpn-tun-hev");
 }
 
@@ -74,6 +74,17 @@ TEST(VpnTunFdRuntime, HoldsDuplicatedTunFdWithoutClaimingAdapterReady) {
     EXPECT_FALSE(runtime.nfqueuePassThroughReady());
     EXPECT_FALSE(runtime.packetAdapterReady());
     EXPECT_TRUE(runtime.vpnTunFdHandoffReady());
+    EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-hev");
+}
+
+TEST(VpnTunFdRuntime, SupportsAttachLaterBeforeTunFdIsPresent) {
+    SnortDatapath::Tun::VpnTunFdRuntime runtime{-1, true};
+
+    EXPECT_TRUE(runtime.start());
+    EXPECT_FALSE(runtime.nfqueuePassThroughReady());
+    EXPECT_FALSE(runtime.packetAdapterReady());
+    EXPECT_TRUE(runtime.vpnTunFdHandoffReady());
+    EXPECT_TRUE(runtime.vpnTunTransportFdHandoffReady());
     EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-hev");
 }
 

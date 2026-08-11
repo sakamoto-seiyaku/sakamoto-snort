@@ -16,8 +16,9 @@ public final class RuntimeSnapshot {
     public static final String PROFILE_ROOT = "root";
     public static final String PROFILE_VPN = "vpn";
 
-    /** SAKAMOTO-67 does not own a packet Adapter yet. */
     public static final String ADAPTER_UNAVAILABLE = "unavailable";
+    public static final String ADAPTER_ROOT_NFQUEUE = "root-nfqueue";
+    public static final String ADAPTER_VPN_TUN_HEV = "vpn-tun-hev";
 
     public final String state;
     public final RuntimeProfile profile;
@@ -45,6 +46,15 @@ public final class RuntimeSnapshot {
                            String artifact, String abi, String health,
                            String errorCode, String errorMessage, boolean mayBeActive, long pid,
                            long generation, long updatedAtMillis) {
+        this(state, profile, protocol, version, artifact, abi, health,
+                adapterForRunningProfile(state, profile), errorCode, errorMessage, mayBeActive,
+                pid, generation, updatedAtMillis);
+    }
+
+    public RuntimeSnapshot(String state, RuntimeProfile profile, String protocol, String version,
+                           String artifact, String abi, String health, String adapterReadiness,
+                           String errorCode, String errorMessage, boolean mayBeActive, long pid,
+                           long generation, long updatedAtMillis) {
         this.state = requireState(state);
         this.profile = profile == null ? RuntimeProfile.ROOT : profile;
         this.protocol = text(protocol);
@@ -53,7 +63,8 @@ public final class RuntimeSnapshot {
         this.abiEvidence = this.artifact;
         this.abi = text(abi);
         this.coreHealth = text(health);
-        this.adapterReadiness = ADAPTER_UNAVAILABLE;
+        String adapterValue = text(adapterReadiness);
+        this.adapterReadiness = adapterValue.isEmpty() ? ADAPTER_UNAVAILABLE : adapterValue;
         this.adapter = this.adapterReadiness;
         this.health = this.coreHealth;
         this.errorCode = text(errorCode);
@@ -218,9 +229,17 @@ public final class RuntimeSnapshot {
         return BoundedText.value(value, BoundedText.MAX_LENGTH);
     }
 
+    private static String adapterForRunningProfile(String state, RuntimeProfile profile) {
+        if (!STATE_RUNNING.equals(state)) {
+            return ADAPTER_UNAVAILABLE;
+        }
+        RuntimeProfile selected = profile == null ? RuntimeProfile.ROOT : profile;
+        return selected == RuntimeProfile.VPN ? ADAPTER_VPN_TUN_HEV : ADAPTER_ROOT_NFQUEUE;
+    }
+
     private RuntimeSnapshot withAbi(String value) {
         return new RuntimeSnapshot(state, profile, protocol, version, artifact, value,
-                coreHealth, errorCode, errorMessage, mayBeActive, pid, generation,
-                updatedAtMillis);
+                coreHealth, adapterReadiness, errorCode, errorMessage, mayBeActive, pid,
+                generation, updatedAtMillis);
     }
 }

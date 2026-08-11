@@ -24,15 +24,7 @@ RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection,
     }
 
     if (selection.profile == RuntimeProfile::Vpn) {
-        if (vpnTunFdSource.empty()) {
-            return RuntimeFactoryPlan{
-                .action = RuntimeFactoryAction::RejectVpnTunFdMissing,
-                .launchable = false,
-                .exitCode = 3,
-                .errorCode = "vpn_tun_fd_source_missing",
-                .adapterName = "vpn-tun-hev",
-            };
-        }
+        (void)vpnTunFdSource;
         return RuntimeFactoryPlan{
             .action = RuntimeFactoryAction::CreateVpnTunFdHandoff,
             .launchable = true,

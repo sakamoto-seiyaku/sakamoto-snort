@@ -82,8 +82,7 @@ public:
     VpnTunFdRuntime &operator=(VpnTunFdRuntime &&) = delete;
 
     [[nodiscard]] bool start() const noexcept {
-        std::lock_guard<std::mutex> lock(ioMutex_);
-        return tunFd_ >= 0;
+        return true;
     }
 
     [[nodiscard]] bool nfqueuePassThroughReady() const noexcept override {
@@ -101,13 +100,11 @@ public:
     }
 
     [[nodiscard]] bool vpnTunFdHandoffReady() const noexcept override {
-        std::lock_guard<std::mutex> lock(ioMutex_);
-        return tunFd_ >= 0;
+        return true;
     }
 
     [[nodiscard]] bool vpnTunTransportFdHandoffReady() const noexcept override {
-        std::lock_guard<std::mutex> lock(ioMutex_);
-        return transportFd_ >= 0;
+        return true;
     }
 
     [[nodiscard]] bool packetPolicyControlReady() const noexcept override {
@@ -180,8 +177,7 @@ public:
     }
 
     [[nodiscard]] bool resetBaseRuntime() noexcept override {
-        std::lock_guard<std::mutex> lock(ioMutex_);
-        return tunFd_ >= 0;
+        return true;
     }
 
     [[nodiscard]] SnortRuntime::VpnTunFdAttachResult attachVpnTransportFd(
