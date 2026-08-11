@@ -152,13 +152,48 @@ Not ready to copy as-is:
 - `stellar_lpi_extend` inclusion must be a source-strategy decision;
 - fork-local app IDs must not cross the Sakamoto provider seam;
 - license/source/relink obligations are not solved by this inventory;
-- no Android wrapper build probe has compiled the wrapper yet;
-  `stellar_lpi_core.c` and `stellar_lpi_extend.c` still need a separate probe.
+- the Android wrapper build probe below proves compile/link shape only; it does
+  not make the wrapper product-owned source or a runtime provider.
+
+## Android Wrapper Build Probe
+
+Probe command:
+
+```bash
+bash tools/protocol_identification/stellar_lpi_wrapper_android_build_probe.sh
+```
+
+Current local result observed on 2026-08-12:
+
+- result: `probe.result=PASS`
+- output executable: `stellar_lpi_wrapper_android_probe`
+- output root:
+  `build-output/protocol-identification/stellar-lpi-wrapper-android-probe/`
+- source scope:
+  `stellar_lpi_core.c + stellar_lpi_extend.c` plus the same vendored
+  libprotoident source shape as the base NDK probe.
+- compatibility scope:
+  generated `vlib/utils/utils.h` compatibility shim for `ALLOC` / `FREE`, and
+  reference `vlib/uthash/uthash.h` in place from the backup VPP tree.
+- policy:
+  `policy.copiesSourceIntoRepo=false`,
+  `policy.providerVendoringDecision=false`,
+  `policy.providerRuntimeWiring=false`, and
+  `policy.protocolRuleDecision=false`.
+- probe shape:
+  `probe.wrapper=stellar_lpi_core-plus-extend-with-generated-compat-shim`,
+  `probe.generatedUtilsShim=true`, and
+  `probe.referenceUthashInPlace=true`.
+
+This proves the current NDK can compile and link the extractable wrapper
+candidate without the full VPP plugin. It still does not prove detection accuracy,
+provider-source acceptability, Android runtime wiring, Root/VPN device behavior,
+corpus rights, or ProtocolRule enforcement readiness.
 
 ## Next Evidence Step
 
-Before a real provider implementation, add a separate wrapper build probe that
-compiles `stellar_lpi_core.c` and `stellar_lpi_extend.c` against the existing
-base-libprotoident Android probe source set using compatibility shims for
-`ALLOC`, `FREE`, and `uthash` as needed. That probe should still read the
-backup source in place and must not copy provider source into this repository.
+Before a real provider implementation, pin the provider source/license strategy
+and define the smallest licensed corpus subset. The next implementation proof
+should then wire a real provider behind `LpiRecognitionProvider` and replay
+packet bytes through the provider boundary before any ProtocolRule enforcement
+work starts.

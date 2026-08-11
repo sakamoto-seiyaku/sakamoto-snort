@@ -303,6 +303,30 @@ Current Sakamoto S61 work has already implemented the local product boundary:
 - No Android device evidence proves a real provider on Root or VPN.
 - No ProtocolRule enforcement has started.
 
+Repo-local Android wrapper build probe evidence:
+
+- command:
+  `tools/protocol_identification/stellar_lpi_wrapper_android_build_probe.sh`
+- current result:
+  `probe.result=PASS`
+- scope:
+  compiles and links `stellar_lpi_core.c + stellar_lpi_extend.c` with the
+  vendored base libprotoident Android source set into the throwaway
+  `stellar_lpi_wrapper_android_probe` executable.
+- generated compatibility:
+  `probe.generatedUtilsShim=true` for `ALLOC` / `FREE`; the probe uses
+  `probe.referenceUthashInPlace=true` for the backup tree's
+  `vlib/uthash/uthash.h`.
+- policy:
+  `policy.copiesSourceIntoRepo=false`,
+  `policy.providerVendoringDecision=false`,
+  `policy.providerRuntimeWiring=false`, and
+  `policy.protocolRuleDecision=false`.
+
+This closes the immediate compile/link unknown for the extractable wrapper
+candidate. It still does not create a real Sakamoto provider, prove packet
+detection accuracy, import corpus fixtures, or answer source/license strategy.
+
 Therefore the next S61 implementation step should not start from protocol rule
 enforcement. It should first add a real, pinned recognizer provider behind the
 existing `LpiRecognitionProvider` boundary and prove it against a small licensed
