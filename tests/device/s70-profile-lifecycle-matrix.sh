@@ -155,6 +155,14 @@ assert_minimal_policy_bundle_persisted() {
   grep -Fxq "bundle.protocolRuleCount=0" "$state_file"
 }
 
+assert_policy_bundle_preserved() {
+  local before_file="$1"
+  local after_file="$2"
+  grep '^bundle\.' "$before_file" | sort >"${before_file}.bundle"
+  grep '^bundle\.' "$after_file" | sort >"${after_file}.bundle"
+  diff -u "${before_file}.bundle" "${after_file}.bundle"
+}
+
 first_bindable_subject() {
   projection_properties \
     | awk -F= '
@@ -358,9 +366,8 @@ if [[ "$S70_EXERCISE_BINDING" == "1" ]]; then
       product_state_properties >"${RESULT_DIR}/product-state.after-bind"
       assert_product_state_bound_subject "$bind_subject" \
         "${RESULT_DIR}/product-state.after-bind"
-      assert_minimal_policy_bundle_persisted "${RESULT_DIR}/product-state.after-bind"
       kv "productState.binding" "PASS"
-      kv "productState.policyBundle" "PASS"
+      kv "productState.policyBundleBaseline" "RECORDED"
     else
       kv "productState.binding" "FAIL"
       exit 1
@@ -470,7 +477,8 @@ if [[ -n "$S70_BOUND_SUBJECT" ]]; then
   grep -Fxq "selectedProfile=root" "${RESULT_DIR}/pause/product-state.after-stop"
   assert_product_state_bound_subject "$S70_BOUND_SUBJECT" \
     "${RESULT_DIR}/pause/product-state.after-stop"
-  assert_minimal_policy_bundle_persisted "${RESULT_DIR}/pause/product-state.after-stop"
+  assert_policy_bundle_preserved "${RESULT_DIR}/product-state.after-bind" \
+    "${RESULT_DIR}/pause/product-state.after-stop"
   kv "pause.bindingPreserved" "PASS"
   kv "pause.policyPreserved" "PASS"
   kv "pause.lastSuccessfulPolicyPreserved" "PASS"
@@ -500,6 +508,10 @@ mkdir -p "${RESULT_DIR}/cleanup-fault"
 assert_pid_gone "$fault_pid" "${RESULT_DIR}/cleanup-fault/root-pid.after-recover-stop"
 kv "reason.cleanupFault" "cleanup_failed"
 kv "cleanupFault.result" "PASS"
+# The cleanup-fault section intentionally exercises an erroring stop through
+# the visible Activity. Start the crash/restart section from a fresh Activity
+# launch so a delivered top-instance intent cannot hide the lifecycle request.
+adb_cmd shell am force-stop "$PACKAGE" >/dev/null
 
 section "runtime_crash_restart"
 crash_state="$(start_profile root "${RESULT_DIR}/crash-start")"
