@@ -55,6 +55,7 @@ validate_selected_expected_json() {
         "$selected_mixed_expected_json" "$selected_http_pcap" "01-http-not-ftp.pcap" "117.146.23.226:63007-211.95.50.57:80-6-0" "HTTP" "67" "-" "-" "-" \
         "$selected_mixed_expected_json" "$selected_dns_pcap" "37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap" "115.24.235.11:4029-8.210.152.150:53-17-0" "DNS" "32" "-" "-" "-" \
         "$selected_mixed_expected_json" "$selected_quic_pcap" "21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap" "192.168.50.29:61891-31.13.77.35:443-17-0" "QUIC" "2521" "-" "-" "-" \
+        "$selected_mixed_expected_json" "$selected_unknown_pcap" "39-pop3-mistake-redis.pcap" "192.168.40.82:41450-192.168.44.230:7002-6-0" "__ABSENT__" "UNKNOWN" "SYMMETRIC" "TCP" "LPI_RESULT_18" \
         "$selected_socks_expected_json" "$selected_socks_pcap" "1-socks45-http-example.pcap" "10.180.156.185:53535-10.180.156.249:1080-6-0" "SOCKS,HTTP" "8005,67" "SYMMETRIC" "TCP" "LPI_RESULT_6" <<'PY'
 import json
 import pathlib
@@ -88,8 +89,11 @@ for offset in range(0, len(raw_cases), 9):
             raise SystemExit(f"selected expected JSON must contain a top-level array: {json_path}")
         rows_by_json_path[json_path] = rows
 
-    expected_app_names = raw_expected_app_names.split(",")
-    expected_appids = [int(raw) for raw in raw_expected_appids.split(",")]
+    expected_app_names = None if raw_expected_app_names == "__ABSENT__" else raw_expected_app_names.split(",")
+    expected_appids = raw_expected_appids if raw_expected_appids == "UNKNOWN" else [
+        int(raw) for raw in raw_expected_appids.split(",")
+    ]
+    expected_app_names_desc = "absent" if expected_app_names is None else expected_app_names
     actual_filename = pathlib.Path(pcap_path).name
     if actual_filename != expected_filename:
         raise SystemExit(
@@ -100,7 +104,7 @@ for offset in range(0, len(raw_cases), 9):
         row for row in rows_by_json_path[json_path]
         if isinstance(row, dict)
         and row.get("SESSION_ADDRESS") == expected_session
-        and row.get("APP_NAME") == expected_app_names
+        and (("APP_NAME" not in row) if expected_app_names is None else row.get("APP_NAME") == expected_app_names)
         and row.get("APP_ID") == expected_appids
         and (expected_flow_direction == "-" or row.get("FLOW_DIRECTION") == expected_flow_direction)
         and (expected_session_type == "-" or row.get("SESSION_TYPE") == expected_session_type)
@@ -109,7 +113,7 @@ for offset in range(0, len(raw_cases), 9):
     if not matches:
         raise SystemExit(
             f"missing selected expected JSON row for {raw_expected_app_names}: "
-            f"SESSION_ADDRESS={expected_session}, APP_NAME={expected_app_names}, APP_ID={expected_appids}")
+            f"SESSION_ADDRESS={expected_session}, APP_NAME={expected_app_names_desc}, APP_ID={expected_appids}")
 
 print("selectedExpectedJsonValidation=PASS")
 PY
@@ -179,15 +183,17 @@ path_is_inside_repo_build_output "$build_root" "$canonical_repo_build_output_roo
 generated_source_dir="$build_root/generated-source"
 generated_include_dir="$generated_source_dir/include"
 cmake_build_dir="$build_root/cmake"
+probe_executable_stderr_log="$build_root/stellar_lpi_wrapper_host_pcap_probe.stderr.log"
 
 selected_http_pcap="$corpus_root/mixed_pcap/01-http-not-ftp.pcap"
 selected_dns_pcap="$corpus_root/mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap"
 selected_quic_pcap="$corpus_root/mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap"
+selected_unknown_pcap="$corpus_root/mixed_pcap/39-pop3-mistake-redis.pcap"
 selected_socks_pcap="$corpus_root/socks_pcap/1-socks45-http-example.pcap"
 selected_mixed_expected_json="$corpus_root/mixed_pcap/mixed_pcap.json"
 selected_socks_expected_json="$corpus_root/socks_pcap/socks_pcap.json"
 
-for selected in "$selected_http_pcap" "$selected_dns_pcap" "$selected_quic_pcap" "$selected_socks_pcap" "$selected_mixed_expected_json" "$selected_socks_expected_json"; do
+for selected in "$selected_http_pcap" "$selected_dns_pcap" "$selected_quic_pcap" "$selected_unknown_pcap" "$selected_socks_pcap" "$selected_mixed_expected_json" "$selected_socks_expected_json"; do
     [[ -f "$selected" ]] || {
         echo "missing selected reference fixture: $selected" >&2
         exit 1
@@ -384,6 +390,8 @@ struct DetectionCase {
     std::optional<std::string> expected_followup_name;
     int expected_followup_appid = 0;
     std::optional<Catalog::ApplicationProtocolId> expected_followup_sakamoto_protocol;
+    bool expected_no_result = false;
+    std::size_t expected_matched_payload_packets = 0;
     Ipv4 client_ip;
     std::uint16_t client_port;
     Ipv4 server_ip;
@@ -497,6 +505,9 @@ private:
 }
 
 [[nodiscard]] std::string aliasFor(std::string app_name) {
+    if (app_name.empty()) {
+        return {};
+    }
     std::transform(app_name.begin(), app_name.end(), app_name.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
     });
@@ -831,6 +842,17 @@ void appendUnique(std::vector<int> &values, const int value) {
         }
     }
 
+    if (test_case.expected_no_result) {
+        result.pass = !result.appids.empty() ? false
+            : !result.app_names.empty() ? false
+            : result.appid != 0 ? false
+            : !result.app_name.empty() ? false
+            : test_case.expected_matched_payload_packets == 0U
+                ? result.matched_payload_packets > 0U
+                : result.matched_payload_packets == test_case.expected_matched_payload_packets;
+        return result;
+    }
+
     if (test_case.expected_followup_name.has_value()) {
         result.pass = result.pass && containsOrderedDetection(
             result.app_names,
@@ -960,9 +982,13 @@ private:
     std::vector<std::string> provider_aliases;
     bool saw_expected_mapped = false;
     bool saw_expected_unmapped = false;
+    bool saw_mapped = false;
     bool saw_unmapped = false;
     bool saw_mapped_after_unmapped = false;
     bool saw_expected_followup_mapped_after_unmapped = false;
+    bool saw_payload_eligible = false;
+    bool saw_submitted_to_provider = false;
+    bool saw_provider_produced_fact = false;
     for (const auto &packet : packets) {
         if (!matchesCase(packet, test_case)) {
             continue;
@@ -979,6 +1005,10 @@ private:
             std::span<const std::byte>{packet.l3_packet.data(), packet.l3_packet.size()},
             facts);
         latest_outcome = outcome;
+        saw_payload_eligible = saw_payload_eligible || outcome.payloadEligible;
+        saw_submitted_to_provider = saw_submitted_to_provider || outcome.submittedToProvider;
+        saw_provider_produced_fact =
+            saw_provider_produced_fact || outcome.providerProducedFact;
         if (outcome.payloadEligible && outcome.submittedToProvider) {
             ++submitted_payload_packets;
         }
@@ -993,6 +1023,10 @@ private:
             && outcome.adapterOutcome->mappedProviderResult
             && latest == test_case.expected_sakamoto_protocol) {
             saw_expected_mapped = true;
+        }
+        if (outcome.adapterOutcome.has_value()
+            && outcome.adapterOutcome->mappedProviderResult) {
+            saw_mapped = true;
         }
         if (outcome.adapterOutcome.has_value()
             && outcome.adapterOutcome->unmappedProviderResult) {
@@ -1023,21 +1057,44 @@ private:
     const bool expected_mapped = test_case.expected_sakamoto_protocol.has_value();
     const bool expected_followup_mapped =
         test_case.expected_followup_sakamoto_protocol.has_value();
-    const bool mapping_pass = expected_mapped
-        ? saw_expected_mapped
-        : expected_followup_mapped
-            ? saw_expected_unmapped
-                && saw_expected_followup_mapped_after_unmapped
-                && state.has_value()
-                && state->latestExactResult() == test_case.expected_followup_sakamoto_protocol
-            : saw_expected_unmapped;
+    const auto status = pipeline.status();
+    const bool expected_payload_count_pass =
+        test_case.expected_matched_payload_packets == 0U
+            ? submitted_payload_packets > 0U
+            : submitted_payload_packets == test_case.expected_matched_payload_packets;
+    const bool mapping_pass = test_case.expected_no_result
+        ? latest_outcome.has_value()
+            && state.has_value()
+            && expected_payload_count_pass
+            && saw_payload_eligible
+            && saw_submitted_to_provider
+            && !saw_provider_produced_fact
+            && !saw_mapped
+            && !saw_unmapped
+            && !latest.has_value()
+            && !state->latestExactResult().has_value()
+            && status.counters.providerNoResultPackets == submitted_payload_packets
+        : expected_mapped
+            ? saw_expected_mapped
+            : expected_followup_mapped
+                ? saw_expected_unmapped
+                    && saw_expected_followup_mapped_after_unmapped
+                    && state.has_value()
+                    && state->latestExactResult() == test_case.expected_followup_sakamoto_protocol
+                : saw_expected_unmapped;
     const bool passed = latest_outcome.has_value()
         && state.has_value()
-        && submitted_payload_packets > 0U
+        && expected_payload_count_pass
         && mapping_pass;
 
     std::cout << "pipeline." << test_case.key << ".submittedPayloadPackets="
               << submitted_payload_packets << "\n";
+    std::cout << "pipeline." << test_case.key << ".payloadEligible="
+              << (saw_payload_eligible ? "true" : "false") << "\n";
+    std::cout << "pipeline." << test_case.key << ".submittedToProvider="
+              << (saw_submitted_to_provider ? "true" : "false") << "\n";
+    std::cout << "pipeline." << test_case.key << ".providerProducedFact="
+              << (saw_provider_produced_fact ? "true" : "false") << "\n";
     std::cout << "pipeline." << test_case.key << ".mapped="
               << ((saw_expected_mapped || saw_expected_followup_mapped_after_unmapped)
                       ? "true"
@@ -1055,6 +1112,8 @@ private:
     std::cout << "pipeline." << test_case.key << ".latestProtocol="
               << (latest.has_value() ? Catalog::applicationProtocolKey(*latest) : "none")
               << "\n";
+    std::cout << "pipeline." << test_case.key << ".providerNoResultPackets="
+              << status.counters.providerNoResultPackets << "\n";
     std::cout << "pipeline." << test_case.key << ".result="
               << (passed ? "PASS" : "FAIL") << "\n";
     return passed;
@@ -1091,9 +1150,15 @@ private:
     std::cout << "case." << test_case.key << ".firstMatchingPcapPacket="
               << wrapper.first_matching_packet << "\n";
     std::cout << "case." << test_case.key << ".expectedName="
-              << test_case.expected_name << "\n";
+              << (test_case.expected_no_result ? "absent" : test_case.expected_name)
+              << "\n";
     std::cout << "case." << test_case.key << ".expectedAppId="
-              << test_case.expected_appid << "\n";
+              << (test_case.expected_no_result
+                      ? std::string{"UNKNOWN"}
+                      : std::to_string(test_case.expected_appid))
+              << "\n";
+    std::cout << "case." << test_case.key << ".expectedNoResult="
+              << (test_case.expected_no_result ? "true" : "false") << "\n";
     if (test_case.expected_followup_name.has_value()) {
         std::cout << "case." << test_case.key << ".expectedFollowupName="
                   << *test_case.expected_followup_name << "\n";
@@ -1168,6 +1233,22 @@ int main(int argc, char **argv) {
             .trans_proto = kUdpProtocol,
         },
         {
+            .key = "unknown",
+            .pcap_path = corpus_root + "/mixed_pcap/39-pop3-mistake-redis.pcap",
+            .expected_json_path = mixed_json,
+            .expected_session_address = "192.168.40.82:41450-192.168.44.230:7002-6-0",
+            .expected_name = "",
+            .expected_appid = 0,
+            .expected_sakamoto_protocol = std::nullopt,
+            .expected_no_result = true,
+            .expected_matched_payload_packets = 4,
+            .client_ip = ip(192, 168, 40, 82),
+            .client_port = 41450,
+            .server_ip = ip(192, 168, 44, 230),
+            .server_port = 7002,
+            .trans_proto = kTcpProtocol,
+        },
+        {
             .key = "socks",
             .pcap_path = corpus_root + "/socks_pcap/1-socks45-http-example.pcap",
             .expected_json_path = socks_json,
@@ -1186,7 +1267,7 @@ int main(int argc, char **argv) {
         },
     };
 
-    std::cout << "probe.realPcapCases=HTTP,DNS,QUIC,SOCKS\n";
+    std::cout << "probe.realPcapCases=HTTP,DNS,QUIC,UNKNOWN,SOCKS\n";
     std::cout << "probe.realWrapperCalls=lpi_detector_new,lpi_detect_context_new,lpi_detect_context_update,lpi_detect,lpi_appid2name,lpi_detect_context_free,lpi_detector_free\n";
     std::cout << "probe.sakamotoPipeline=LpiRecognitionPipeline,LpiRecognitionAdapter,BoundedFlowTable\n";
 
@@ -1219,9 +1300,10 @@ echo "libprotoidentSourceTreeSha256=$(source_tree_sha256 "$libprotoident_root")"
 echo "selectedPcap.http=mixed_pcap/01-http-not-ftp.pcap"
 echo "selectedPcap.dns=mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap"
 echo "selectedPcap.quic=mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap"
+echo "selectedPcap.unknown=mixed_pcap/39-pop3-mistake-redis.pcap"
 echo "selectedPcap.socks=socks_pcap/1-socks45-http-example.pcap"
 echo "selectedExpectedJson=mixed_pcap/mixed_pcap.json,socks_pcap/socks_pcap.json"
-echo "selectedExpectedRows=HTTP,DNS,QUIC,SOCKS+HTTP"
+echo "selectedExpectedRows=HTTP,DNS,QUIC,UNKNOWN,SOCKS+HTTP"
 echo "source.wrapperCoreC=stellar_lpi_core.c"
 echo "source.wrapperExtendC=stellar_lpi_extend.c"
 echo "source.libprotoidentTopLevelCc=$(find "$libprotoident_root" -maxdepth 1 -type f -name '*.cc' | wc -l | tr -d ' ')"
@@ -1258,4 +1340,24 @@ if [[ "$configure_only" -ne 0 ]]; then
 fi
 
 cmake --build "$cmake_build_dir" --target stellar_lpi_wrapper_host_pcap_probe
-"$cmake_build_dir/stellar_lpi_wrapper_host_pcap_probe" "$corpus_root"
+
+probe_executable="$cmake_build_dir/stellar_lpi_wrapper_host_pcap_probe"
+set +e
+"$probe_executable" "$corpus_root" 2>"$probe_executable_stderr_log"
+probe_executable_status=$?
+set -e
+
+probe_executable_stderr_line_count="$(wc -l <"$probe_executable_stderr_log" | tr -d ' ')"
+echo "probe.executableStderrLog=$probe_executable_stderr_log"
+echo "probe.executableStderrLineCount=$probe_executable_stderr_line_count"
+
+if [[ "$probe_executable_status" -ne 0 ]]; then
+    if [[ -s "$probe_executable_stderr_log" ]]; then
+        echo "generated executable stderr follows: $probe_executable_stderr_log" >&2
+        sed 's/^/[stellar_lpi_wrapper_host_pcap_probe stderr] /' \
+            "$probe_executable_stderr_log" >&2
+    else
+        echo "generated executable produced no stderr: $probe_executable_stderr_log" >&2
+    fi
+    exit "$probe_executable_status"
+fi

@@ -115,7 +115,11 @@ prefer:
 1. one DNS-over-TCP capture from `dns_pcap`;
 2. one HTTP capture from `mixed_pcap`;
 3. one QUIC capture from `mixed_pcap`;
-4. one unknown or unmapped case from `ppp_pcap` or `openvpn_pcap`;
+4. one no-result case from `mixed_pcap/39-pop3-mistake-redis.pcap`,
+   `SESSION_ADDRESS=192.168.40.82:41450-192.168.44.230:7002-6-0`,
+   where `mixed_pcap.json` row 18 records `FLOW_DIRECTION=SYMMETRIC`,
+   `SESSION_TYPE=TCP`, `LABEL=LPI_RESULT_18`, `APP_ID="UNKNOWN"`, and no
+   `APP_NAME`;
 5. one nested/compound result such as
    `socks_pcap/1-socks45-http-example.pcap`,
    `SESSION_ADDRESS=10.180.156.185:53535-10.180.156.249:1080-6-0`,
@@ -124,7 +128,8 @@ prefer:
 
 Do not use the corpus to expand S61 into ProtocolRule enforcement. The first
 runner should prove provider aliases, bounded payload submission, mapped vs.
-unmapped results, and Activity projection readiness. A selected SOCKS+HTTP
-smoke may prove ordered unmapped-then-mapped behavior for that one flow; it is
-not a full corpus accuracy result, a provider runtime wiring decision, a
+unmapped/no-result results, and Activity projection readiness. A selected
+UNKNOWN smoke may prove no-result handling for one flow; a selected SOCKS+HTTP
+smoke may prove ordered unmapped-then-mapped behavior for that one flow. These
+are not a full corpus accuracy result, a provider runtime wiring decision, a
 provider-source decision, or a ProtocolRule/source-acceptance decision.

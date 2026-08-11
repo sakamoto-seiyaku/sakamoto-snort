@@ -258,16 +258,25 @@ Current local result observed on 2026-08-12:
 - output executable: `stellar_lpi_wrapper_host_pcap_probe`
 - output root:
   `build-output/protocol-identification/stellar-lpi-wrapper-host-pcap-probe/`
+- executable stderr isolation:
+  the generated probe executable redirects reference wrapper warnings to
+  `probe.executableStderrLog` under the build-output probe root and reports
+  `probe.executableStderrLineCount` on stdout, keeping the stdout
+  `key=value` evidence stable while preserving stderr diagnostics.
 - selected reference fixtures, read in place:
   - `mixed_pcap/01-http-not-ftp.pcap`
   - `mixed_pcap/37-dns-response-4029-53-115.24.235.11-8.210.152.150.pcap`
   - `mixed_pcap/21-iquic-29-192.168.50.29.61891-31.13.77.35.443.pcap`
+  - `mixed_pcap/39-pop3-mistake-redis.pcap`
   - `socks_pcap/1-socks45-http-example.pcap`
   - expected rows checked from `mixed_pcap/mixed_pcap.json` and
     `socks_pcap/socks_pcap.json`
 - expected JSON validation:
   `selectedExpectedJsonValidation=PASS` confirms row-level matches for the
-  selected HTTP/DNS/QUIC session address, plus SOCKS flow
+  selected HTTP/DNS/QUIC session address, UNKNOWN/no-result flow
+  `192.168.40.82:41450-192.168.44.230:7002-6-0`,
+  `FLOW_DIRECTION=SYMMETRIC`, `SESSION_TYPE=TCP`, `LABEL=LPI_RESULT_18`,
+  `APP_ID="UNKNOWN"`, no `APP_NAME`, plus SOCKS flow
   `10.180.156.185:53535-10.180.156.249:1080-6-0`,
   `FLOW_DIRECTION=SYMMETRIC`, `SESSION_TYPE=TCP`, `LABEL=LPI_RESULT_6`,
   `APP_NAME=["SOCKS","HTTP"]`, `APP_ID=[8005,67]`, and PCAP filename.
@@ -280,6 +289,12 @@ Current local result observed on 2026-08-12:
     `lpi:dns`, Sakamoto catalog key `dns`
   - QUIC PCAP -> fork-local `appid=2521`, app name `QUIC`, provider alias
     `lpi:quic`, Sakamoto catalog key `quic`
+  - UNKNOWN PCAP -> four payload-bearing target TCP packets submitted to the
+    wrapper/provider seam; the wrapper emits no positive app id/name and no
+    provider alias, the pipeline records `payloadEligible=true`,
+    `submittedToProvider=true`, `providerProducedFact=false`, `mapped=false`,
+    `unmapped=false`, `latestProtocol=none`, and increments
+    `providerNoResultPackets`.
   - SOCKS PCAP -> ordered wrapper emissions `appid=8005` / `SOCKS` /
     `lpi:socks` before `appid=67` / `HTTP` / `lpi:http`; the Sakamoto seam
     first records `lpi:socks` as an unmapped provider result, then maps the
@@ -298,14 +313,16 @@ Current local result observed on 2026-08-12:
   `probe.corpusAccuracyClaim=false`, and
   `probe.sakamotoPipeline=LpiRecognitionPipeline,LpiRecognitionAdapter,BoundedFlowTable`.
 
-This proves a selected mapped plus unmapped/compound real-PCAP smoke can pass
-through the extractable wrapper candidate and the current recognition seam:
-HTTP/DNS/QUIC map to current Sakamoto catalog entries, and the selected SOCKS
-flow reaches the current unmapped provider-alias path before a later HTTP
-mapping. It still does not prove full corpus replay accuracy, non-Ethernet link
-parsing, TCP stream reassembly, Android Root/VPN runtime behavior,
-provider-source acceptability, corpus redistribution rights, default provider
-wiring, or ProtocolRule enforcement readiness.
+This proves selected mapped, no-result, and unmapped/compound real-PCAP smoke
+can pass through the extractable wrapper candidate and the current recognition
+seam: HTTP/DNS/QUIC map to current Sakamoto catalog entries; the selected
+UNKNOWN flow reaches the provider no-result path without inventing
+`lpi:unknown`; and the selected SOCKS flow reaches the current unmapped
+provider-alias path before a later HTTP mapping. It still does not prove full
+corpus replay accuracy, non-Ethernet link parsing, TCP stream reassembly,
+Android Root/VPN runtime behavior, provider-source acceptability, corpus
+redistribution rights, default provider wiring, or ProtocolRule enforcement
+readiness.
 
 ## Next Evidence Step
 
