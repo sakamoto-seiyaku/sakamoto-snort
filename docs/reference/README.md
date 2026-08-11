@@ -10,3 +10,4 @@ Reference docs are not default agent context. They can help compare `sucre-snort
 - [Protocol Identification VPP Reference Inventory](PROTOCOL_IDENTIFICATION_VPP_REFERENCE_INVENTORY.md)：盘点 `/home/js/backup/backup/Git/vpp` 中的 `stellar_lpi`、libprotoident、decoder/enforcer 和 PCAP 语料，作为 SAKAMOTO-61/S63 的参考输入。
 - [Protocol Identification VPP LPI Corpus Manifest](PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md)：记录 modified VPP `stellar_lpi` PCAP corpus 的 group/count/expected JSON 形态；不复制样本，不替代 license/privacy review。
 - [Protocol Identification libprotoident Reference Audit](PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_REFERENCE_AUDIT.md)：记录 backup VPP vendored `libprotoident` 的 license/build/API/Android 风险事实；不作为法律结论或 vendoring 决策。
+- [Protocol Identification libprotoident NDK Probe](PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md)：提供只读 Android/NDK build probe，验证 backup VPP vendored `libprotoident` 当前能否在本地 NDK toolchain 下编译。

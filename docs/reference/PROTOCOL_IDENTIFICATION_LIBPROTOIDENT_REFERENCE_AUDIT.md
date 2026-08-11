@@ -65,6 +65,45 @@ flag, and explicit `gcc_s` linkage are the highest-risk Android/NDK build
 facts observed in the reference copy. Validate them with a separate Android
 compile probe before any provider source is copied into the active tree.
 
+## Android / NDK Build Probe
+
+Repo-local probe:
+
+- `tools/protocol_identification/libprotoident_android_build_probe.sh`
+
+Observed result on 2026-08-12:
+
+- source:
+  `/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/libprotoident`
+- NDK: `/home/js/.local/share/android-sdk/ndk/29.0.14206865`
+- ABI/platform: `arm64-v8a` / `android-31`
+- generated build root:
+  `build-output/protocol-identification/libprotoident-android-probe`
+- result: `probe.result=PASS`
+- scope: `probe.scope=compile-link-only`
+- output executable:
+  `libprotoident_android_probe`, reported by `file` as an Android ARM aarch64
+  PIE executable
+- output static archive: `liblibprotoident_probe.a`
+
+The probe compiles the reference `libprotoident` top-level, TCP, and UDP C++
+sources and links a minimal executable that calls `lpi_init_library`,
+`lpi_init_data`, and `lpi_guess_protocol`. It does not include the VPP
+`stellar_lpi` C wrapper, does not include `stellar_lpi_extend`, does not copy
+source into this repo, and does not approve LGPL/vendoring/product integration.
+
+Probe interpretation:
+
+- Android NDK r29 can compile and link the current vendored base
+  `libprotoident` source for arm64 with a minimal executable.
+- The earlier `endian.h`, `glob.h`, `dlfcn.h`, and byte-order observations are
+  not immediate compile blockers for this local NDK r29 probe.
+- The reference CMake's explicit `gcc_s` link is not needed by this minimal
+  probe; do not copy that link line into Sakamoto without a separate reason.
+- Many compiler warnings remain, including tautological comparisons in legacy
+  byte-mask macros. Treat the provider source as third-party code requiring a
+  warning policy if it is later vendored.
+
 ## Minimal API Shape
 
 The fork wrapper exposes a small C boundary through `stellar_lpi_core.h`:
@@ -119,7 +158,7 @@ strategy are decided.
 2. Is LGPL-3.0-or-later acceptable for the Android artifact distribution model?
 3. If static linking is used, what relink/source/notice obligations must the
    release process satisfy?
-4. Will the provider patch or shim `sys/endian.h` and Linux-specific macros for
-   Android/NDK?
+4. Should the provider keep a Sakamoto-owned CMake wrapper and warning policy
+   for this third-party source, or normalize it into a smaller pinned package?
 5. Should `stellar_lpi_extend` be included, trimmed, or replaced by
    Sakamoto-owned normalization after base libprotoident output?
