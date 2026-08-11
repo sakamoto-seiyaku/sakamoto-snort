@@ -218,7 +218,7 @@ TEST(FlowSteeringTest, LpiRecognitionAttachesToExistingFlowEntryWithOrderedDedup
     ASSERT_TRUE(table.observeAccepted(first, 7).has_value());
 
     const auto http = table.recordLpiRecognition(
-        first, true, Protocol::ApplicationProtocolId::HTTP, false, false);
+        first, true, Protocol::ApplicationProtocolId::HTTP, true, false, false);
     ASSERT_TRUE(http.has_value());
     EXPECT_TRUE(http->found);
     EXPECT_TRUE(http->payloadSubmitted);
@@ -227,14 +227,14 @@ TEST(FlowSteeringTest, LpiRecognitionAttachesToExistingFlowEntryWithOrderedDedup
     EXPECT_EQ(http->payloadPacketSequence, 1U);
 
     const auto duplicateHttp = table.recordLpiRecognition(
-        reply, true, Protocol::ApplicationProtocolId::HTTP, false, false);
+        reply, true, Protocol::ApplicationProtocolId::HTTP, true, false, false);
     ASSERT_TRUE(duplicateHttp.has_value());
     EXPECT_TRUE(duplicateHttp->duplicateMappedResult);
     EXPECT_EQ(duplicateHttp->direction, FlowRelativeDirection::Reply);
     EXPECT_EQ(duplicateHttp->payloadPacketSequence, 2U);
 
     const auto quic = table.recordLpiRecognition(
-        reply, true, Protocol::ApplicationProtocolId::QUIC, false, false);
+        reply, true, Protocol::ApplicationProtocolId::QUIC, true, false, false);
     ASSERT_TRUE(quic.has_value());
     EXPECT_TRUE(quic->mappedResultAppended);
     EXPECT_EQ(quic->mappedResultCount, 2U);
@@ -270,14 +270,14 @@ TEST(FlowSteeringTest, LpiRecognitionUnmappedAndTerminalStatesDoNotCreateTempIds
     ASSERT_TRUE(table.observeAccepted(first, 7).has_value());
 
     const auto miss = table.recordLpiRecognition(
-        other, true, Protocol::ApplicationProtocolId::DNS, false, false);
+        other, true, Protocol::ApplicationProtocolId::DNS, true, false, false);
     ASSERT_TRUE(miss.has_value());
     EXPECT_FALSE(miss->found);
     EXPECT_EQ(table.counters().lpiFlowMisses, 1U);
     EXPECT_EQ(table.size(), 1U);
 
     const auto exhausted = table.recordLpiRecognition(
-        first, true, std::nullopt, false, true);
+        first, true, std::nullopt, true, false, true);
     ASSERT_TRUE(exhausted.has_value());
     EXPECT_TRUE(exhausted->found);
     EXPECT_TRUE(exhausted->payloadSubmitted);
@@ -286,7 +286,7 @@ TEST(FlowSteeringTest, LpiRecognitionUnmappedAndTerminalStatesDoNotCreateTempIds
     EXPECT_FALSE(exhausted->latestExactResult.has_value());
 
     const auto afterTerminal = table.recordLpiRecognition(
-        first, true, Protocol::ApplicationProtocolId::DNS, true, false);
+        first, true, Protocol::ApplicationProtocolId::DNS, true, true, false);
     ASSERT_TRUE(afterTerminal.has_value());
     EXPECT_TRUE(afterTerminal->terminalSkip);
     EXPECT_FALSE(afterTerminal->payloadSubmitted);

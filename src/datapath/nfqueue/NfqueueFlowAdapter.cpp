@@ -68,7 +68,8 @@ NfqueueFlowAdapter::NfqueueFlowAdapter(NfqueueFlowAdapterConfig config)
                         ? Policy::emptyPacketPolicySnapshot()
                         : *config_.packetPolicy,
                     Flow::FlowGraphIngressConfig{.maxL3Bytes = config_.copyPrefixBytes},
-                    config_.fragmentSteering),
+                    config_.fragmentSteering,
+                    config_.lpiProvider),
       fragmentLeaseBook_(config_.fragmentSteering.maxDatagrams,
                          config_.fragmentLeaseCapacityPerDatagram) {}
 
@@ -324,6 +325,7 @@ NfqueueFlowAdapterCounters NfqueueFlowAdapter::counters() const noexcept {
     result.flowTableCapacity = flowTable.capacity();
     result.flowTableHighWatermark = flowCounters.highWatermark;
     result.flowTableCapacityMisses = flowCounters.capacityMisses;
+    result.lpiProvider = graphIngress_.lpiProviderStatus();
     return result;
 }
 

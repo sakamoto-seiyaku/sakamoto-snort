@@ -36,6 +36,7 @@ namespace {
 namespace Flow = SnortDatapath::Flow;
 namespace Policy = SnortDatapath::Policy;
 namespace Tun = SnortDatapath::Tun;
+namespace Protocol = SnortDatapath::Protocol;
 namespace Catalog = sucre::protocol;
 
 class UniqueFd final {
@@ -1175,6 +1176,19 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     runtime.nfqueueCounters.flowTableCapacity = 64;
     runtime.nfqueueCounters.flowTableHighWatermark = 12;
     runtime.nfqueueCounters.flowTableCapacityMisses = 2;
+    runtime.nfqueueCounters.lpiProvider = Protocol::LpiProviderStatus{
+        .available = true,
+        .providerName = "fake-lpi",
+        .counters = Protocol::LpiProviderCounters{
+            .packetsObserved = 14,
+            .payloadEligiblePackets = 11,
+            .terminalSkippedPackets = 1,
+            .providerUnavailablePackets = 0,
+            .packetsSubmittedToProvider = 10,
+            .providerNoResultPackets = 6,
+            .providerFactPackets = 4,
+        },
+    };
     runtime.nfqueueCounters.uidMetadataPresentPackets = 9;
     runtime.nfqueueCounters.uidMetadataMissingPackets = 10;
     runtime.nfqueueCounters.lastObservedLinuxUid = 12546;
@@ -1262,6 +1276,17 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["flowTableCapacity"].GetUint64(), 64U);
     EXPECT_EQ(result["flowTableHighWatermark"].GetUint64(), 12U);
     EXPECT_EQ(result["flowTableCapacityMisses"].GetUint64(), 2U);
+    ASSERT_TRUE(result["lpiProvider"].IsObject());
+    const auto &lpiProvider = result["lpiProvider"];
+    EXPECT_TRUE(lpiProvider["available"].GetBool());
+    EXPECT_STREQ(lpiProvider["name"].GetString(), "fake-lpi");
+    EXPECT_EQ(lpiProvider["packetsObserved"].GetUint64(), 14U);
+    EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(), 11U);
+    EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 1U);
+    EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 10U);
+    EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 6U);
+    EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 4U);
     EXPECT_EQ(result["uidMetadataPresentPackets"].GetUint64(), 9U);
     EXPECT_EQ(result["uidMetadataMissingPackets"].GetUint64(), 10U);
     EXPECT_EQ(result["lastObservedLinuxUid"].GetUint(), 12546U);
@@ -1367,6 +1392,19 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     runtime.vpnTunCounters.flowTableCapacity = 64;
     runtime.vpnTunCounters.flowTableHighWatermark = 21;
     runtime.vpnTunCounters.flowTableCapacityMisses = 3;
+    runtime.vpnTunCounters.lpiProvider = Protocol::LpiProviderStatus{
+        .available = false,
+        .providerName = "disabled",
+        .counters = Protocol::LpiProviderCounters{
+            .packetsObserved = 9,
+            .payloadEligiblePackets = 7,
+            .terminalSkippedPackets = 2,
+            .providerUnavailablePackets = 5,
+            .packetsSubmittedToProvider = 0,
+            .providerNoResultPackets = 0,
+            .providerFactPackets = 0,
+        },
+    };
     runtime.vpnTunCounters.uidAttributionHitPackets = 197;
     runtime.vpnTunCounters.uidUnknownFallbackPackets = 4;
     runtime.vpnTunCounters.outboundPackets = 111;
@@ -1447,6 +1485,17 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["flowTableCapacity"].GetUint64(), 64U);
     EXPECT_EQ(result["flowTableHighWatermark"].GetUint64(), 21U);
     EXPECT_EQ(result["flowTableCapacityMisses"].GetUint64(), 3U);
+    ASSERT_TRUE(result["lpiProvider"].IsObject());
+    const auto &lpiProvider = result["lpiProvider"];
+    EXPECT_FALSE(lpiProvider["available"].GetBool());
+    EXPECT_STREQ(lpiProvider["name"].GetString(), "disabled");
+    EXPECT_EQ(lpiProvider["packetsObserved"].GetUint64(), 9U);
+    EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(), 7U);
+    EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 2U);
+    EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(), 5U);
+    EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 0U);
     EXPECT_EQ(result["uidAttributionHitPackets"].GetUint64(), 197U);
     EXPECT_EQ(result["uidUnknownFallbackPackets"].GetUint64(), 4U);
     EXPECT_EQ(result["outboundPackets"].GetUint64(), 111U);

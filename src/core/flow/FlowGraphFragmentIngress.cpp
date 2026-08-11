@@ -33,12 +33,15 @@ FlowGraphFragmentIngress::FlowGraphFragmentIngress(
     FlowSteeringRuntime &runtime,
     const Policy::PacketPolicySnapshot &policy,
     const FlowGraphIngressConfig ingressConfig,
-    const FragmentSteeringConfig fragmentConfig)
+    const FragmentSteeringConfig fragmentConfig,
+    Protocol::LpiRecognitionProvider *lpiProvider)
     : parser_(ingressConfig),
       fragments_(runtime.distribution().selector(), fragmentConfig),
-      injectionGate_(runtime, policy) {}
+      injectionGate_(runtime, policy),
+      lpiPipeline_(runtime.flowTable(), lpiProvider) {}
 
 FlowGraphIngressResult FlowGraphFragmentIngress::injectFacts(
+    const std::span<const std::byte> l3Packet,
     PacketFacts facts) noexcept {
     const auto key = CanonicalFlowKey::from(facts);
     if (!key.has_value()) {
@@ -48,7 +51,7 @@ FlowGraphIngressResult FlowGraphFragmentIngress::injectFacts(
     const auto owner = fragments_.selector().ownerFor(*key);
     PacketSubmission submission{.facts = std::move(facts)};
     const auto result = injectionGate_.inject(submission, owner);
-    return {
+    auto ingressResult = FlowGraphIngressResult{
         .status = statusFor(result),
         .policyDecision = result == GraphInjectionResult::PolicyDrop
             ? injectionGate_.lastPolicyDropDecision()
@@ -63,6 +66,17 @@ FlowGraphIngressResult FlowGraphFragmentIngress::injectFacts(
             ? injectionGate_.lastFlowEntryObservation()
             : std::optional<FlowEntryObservation>{},
     };
+    if (result == GraphInjectionResult::Accepted
+        && ingressResult.acceptedFacts.has_value()) {
+        ingressResult.lpiRecognition = lpiPipeline_.submitBeforeAdapterCompletion(
+            l3Packet, *ingressResult.acceptedFacts);
+        if (ingressResult.flowEntryObservation.has_value()
+            && ingressResult.lpiRecognition->stateAfterSubmit.has_value()) {
+            ingressResult.flowEntryObservation->lpiRecognition =
+                *ingressResult.lpiRecognition->stateAfterSubmit;
+        }
+    }
+    return ingressResult;
 }
 
 FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
@@ -101,7 +115,7 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
 
     PacketSubmission submission{.facts = std::move(reassembledFacts)};
     const auto result = injectionGate_.inject(submission, owner);
-    return {
+    auto ingressResult = FlowGraphIngressResult{
         .status = statusFor(result),
         .datagramKey = fragment.datagramKey,
         .fragmentReassembled = true,
@@ -119,6 +133,18 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
             ? injectionGate_.lastFlowEntryObservation()
             : std::optional<FlowEntryObservation>{},
     };
+    if (result == GraphInjectionResult::Accepted
+        && ingressResult.acceptedFacts.has_value()) {
+        ingressResult.lpiRecognition = lpiPipeline_.submitBeforeAdapterCompletion(
+            std::span<const std::byte>{fragment.packet},
+            *ingressResult.acceptedFacts);
+        if (ingressResult.flowEntryObservation.has_value()
+            && ingressResult.lpiRecognition->stateAfterSubmit.has_value()) {
+            ingressResult.flowEntryObservation->lpiRecognition =
+                *ingressResult.lpiRecognition->stateAfterSubmit;
+        }
+    }
+    return ingressResult;
 }
 
 FlowGraphIngressResult FlowGraphFragmentIngress::processL3Packet(
@@ -128,7 +154,7 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processL3Packet(
     const auto facts = parser_.parseL3Packet(l3Packet, metadata);
     if (!facts.fragmented) {
         static_cast<void>(fragments_.expire(fragmentNow));
-        return injectFacts(facts);
+        return injectFacts(l3Packet, facts);
     }
 
     FragmentReassemblyResult fragment{};
@@ -181,7 +207,7 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processL3Packet(
         break;
     }
 
-    return injectFacts(facts);
+    return injectFacts(l3Packet, facts);
 }
 
 std::size_t FlowGraphFragmentIngress::expireFragments(

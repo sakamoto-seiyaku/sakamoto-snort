@@ -101,7 +101,8 @@ VpnTunFlowAdapter::VpnTunFlowAdapter(VpnTunFlowAdapterConfig config)
                         ? Policy::emptyPacketPolicySnapshot()
                         : *config_.packetPolicy,
                     Flow::FlowGraphIngressConfig{.maxL3Bytes = config_.maxL3Bytes},
-                    config_.fragmentSteering) {}
+                    config_.fragmentSteering,
+                    config_.lpiProvider) {}
 
 VpnTunFlowAdapterResult VpnTunFlowAdapter::process(
     const VpnTunPacketDirection direction,
@@ -294,6 +295,7 @@ VpnTunFlowAdapterCounters VpnTunFlowAdapter::counters() const noexcept {
     result.flowTableCapacity = flowTable.capacity();
     result.flowTableHighWatermark = flowCounters.highWatermark;
     result.flowTableCapacityMisses = flowCounters.capacityMisses;
+    result.lpiProvider = graphIngress_.lpiProviderStatus();
     return result;
 }
 

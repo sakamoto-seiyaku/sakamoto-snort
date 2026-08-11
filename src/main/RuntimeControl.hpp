@@ -7,6 +7,7 @@
 
 #include <PacketPolicy.hpp>
 #include <FlowSteering.hpp>
+#include <core/protocol/LpiRecognitionProvider.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -35,6 +36,7 @@ struct NfqueueRuntimeCounters {
     std::uint64_t flowTableCapacity = 0;
     std::uint64_t flowTableHighWatermark = 0;
     std::uint64_t flowTableCapacityMisses = 0;
+    SnortDatapath::Protocol::LpiProviderStatus lpiProvider;
     std::uint64_t uidMetadataPresentPackets = 0;
     std::uint64_t uidMetadataMissingPackets = 0;
     SnortDatapath::Policy::PacketPolicyDropActivityCounters policyDropActivity;
@@ -75,6 +77,7 @@ struct VpnTunRuntimeCounters {
     std::uint64_t attributionUpdates = 0;
     std::uint64_t attributionMisses = 0;
     std::uint64_t attributionResolutions = 0;
+    SnortDatapath::Protocol::LpiProviderStatus lpiProvider;
     SnortDatapath::Policy::PacketPolicyDropActivityCounters policyDropActivity;
     SnortDatapath::Flow::FlowEntryActivityCounters allowedFlowActivity;
     std::uint32_t lastObservedLinuxUid = 0;

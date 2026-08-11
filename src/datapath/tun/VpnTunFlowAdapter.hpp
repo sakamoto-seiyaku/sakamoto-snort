@@ -59,6 +59,7 @@ struct VpnTunFlowAdapterConfig final {
     std::size_t queueCapacity = 64;
     std::uint32_t maxL3Bytes = Flow::FlowGraphIngressConfig::kDefaultMaxL3Bytes;
     const Policy::PacketPolicySnapshot *packetPolicy = nullptr;
+    Protocol::LpiRecognitionProvider *lpiProvider = nullptr;
     Flow::FragmentSteeringConfig fragmentSteering;
 };
 
@@ -97,6 +98,7 @@ struct VpnTunFlowAdapterCounters final {
     std::uint64_t attributionUpdates = 0;
     std::uint64_t attributionMisses = 0;
     std::uint64_t attributionResolutions = 0;
+    Protocol::LpiProviderStatus lpiProvider;
     Policy::PacketPolicyDropActivityCounters policyDropActivity;
     Flow::FlowEntryActivityCounters allowedFlowActivity;
     std::uint32_t lastObservedLinuxUid = 0;

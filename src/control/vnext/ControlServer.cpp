@@ -384,6 +384,35 @@ rapidjson::Value makeAllowedFlowActivityResult(
     return result;
 }
 
+rapidjson::Value makeLpiProviderStatusResult(
+    const SnortDatapath::Protocol::LpiProviderStatus &status,
+    rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value result(rapidjson::kObjectType);
+    result.AddMember("available", status.available, alloc);
+    rapidjson::Value name;
+    const auto *providerName = status.providerName.empty()
+        ? ""
+        : status.providerName.data();
+    name.SetString(
+        providerName,
+        static_cast<rapidjson::SizeType>(status.providerName.size()),
+        alloc);
+    result.AddMember("name", name, alloc);
+    result.AddMember("packetsObserved", status.counters.packetsObserved, alloc);
+    result.AddMember("payloadEligiblePackets",
+                     status.counters.payloadEligiblePackets, alloc);
+    result.AddMember("terminalSkippedPackets",
+                     status.counters.terminalSkippedPackets, alloc);
+    result.AddMember("providerUnavailablePackets",
+                     status.counters.providerUnavailablePackets, alloc);
+    result.AddMember("packetsSubmittedToProvider",
+                     status.counters.packetsSubmittedToProvider, alloc);
+    result.AddMember("providerNoResultPackets",
+                     status.counters.providerNoResultPackets, alloc);
+    result.AddMember("providerFactPackets", status.counters.providerFactPackets, alloc);
+    return result;
+}
+
 rapidjson::Document makeNfqueueStatusResult(
     const SnortRuntime::NfqueueRuntimeCounters counters) {
     rapidjson::Document result(rapidjson::kObjectType);
@@ -409,6 +438,9 @@ rapidjson::Document makeNfqueueStatusResult(
     result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
     result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);
     result.AddMember("flowTableCapacityMisses", counters.flowTableCapacityMisses, alloc);
+    result.AddMember("lpiProvider",
+                     makeLpiProviderStatusResult(counters.lpiProvider, alloc),
+                     alloc);
     result.AddMember("uidMetadataPresentPackets",
                      counters.uidMetadataPresentPackets, alloc);
     result.AddMember("uidMetadataMissingPackets",
@@ -473,6 +505,9 @@ rapidjson::Document makeVpnTunStatusResult(
     result.AddMember("flowTableCapacity", counters.flowTableCapacity, alloc);
     result.AddMember("flowTableHighWatermark", counters.flowTableHighWatermark, alloc);
     result.AddMember("flowTableCapacityMisses", counters.flowTableCapacityMisses, alloc);
+    result.AddMember("lpiProvider",
+                     makeLpiProviderStatusResult(counters.lpiProvider, alloc),
+                     alloc);
     result.AddMember("ownerGuardPasses", counters.ownerGuardPasses, alloc);
     result.AddMember("ownerGuardMismatches", counters.ownerGuardMismatches, alloc);
     result.AddMember("attributionUpdates", counters.attributionUpdates, alloc);

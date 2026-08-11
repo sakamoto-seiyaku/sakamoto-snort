@@ -601,6 +601,7 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
     const PacketFacts &facts,
     const bool payloadBearing,
     const std::optional<sucre::protocol::ApplicationProtocolId> mappedResult,
+    const bool providerResultPresent,
     const bool detectorDone,
     const bool budgetExhausted) noexcept {
     const auto key = CanonicalFlowKey::from(facts);
@@ -664,7 +665,7 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
             } else {
                 ++counters_.lpiResultCapacityMisses;
             }
-        } else {
+        } else if (providerResultPresent) {
             unmapped = true;
             ++counters_.lpiUnmappedResults;
         }
@@ -689,6 +690,22 @@ std::optional<LpiRecognitionUpdate> BoundedFlowTable::recordLpiRecognition(
         .mappedResultCount = state.mappedResults.size(),
         .latestExactResult = state.latestExactResult(),
     };
+}
+
+std::optional<LpiRecognitionState> BoundedFlowTable::lpiRecognitionStateFor(
+    const PacketFacts &facts) const noexcept {
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
+    if (found == entries_.end()) {
+        return std::nullopt;
+    }
+    return found->lpiRecognition;
 }
 
 std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(

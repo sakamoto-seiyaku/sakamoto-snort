@@ -150,6 +150,7 @@ public:
             .attributionUpdates = counters.attributionUpdates,
             .attributionMisses = counters.attributionMisses,
             .attributionResolutions = counters.attributionResolutions,
+            .lpiProvider = counters.lpiProvider,
             .policyDropActivity = counters.policyDropActivity,
             .allowedFlowActivity = counters.allowedFlowActivity,
             .lastObservedLinuxUid = counters.lastObservedLinuxUid,

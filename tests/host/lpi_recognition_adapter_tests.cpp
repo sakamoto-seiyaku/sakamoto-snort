@@ -4,12 +4,15 @@
  */
 
 #include <core/protocol/LpiRecognitionAdapter.hpp>
+#include <core/protocol/LpiRecognitionProvider.hpp>
 
 #include <core/protocol/ApplicationProtocolCatalog.hpp>
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
+#include <span>
 
 namespace {
 
@@ -171,6 +174,77 @@ TEST(LpiRecognitionAdapterTest, EmptyTransportPayloadDoesNotConsumeRecognitionBu
     EXPECT_EQ(outcome.flowUpdate->payloadPacketSequence, 0U);
     EXPECT_EQ(table.counters().lpiPayloadPackets, 0U);
     EXPECT_EQ(table.counters().lpiMappedResults, 0U);
+}
+
+class NoResultProvider final : public Protocol::LpiRecognitionProvider {
+public:
+    [[nodiscard]] bool available() const noexcept override { return true; }
+    [[nodiscard]] std::string_view providerName() const noexcept override {
+        return "fake-no-result";
+    }
+    [[nodiscard]] std::optional<Protocol::LpiProviderFact> recognize(
+        const Protocol::LpiPacketSubmission &submission) noexcept override {
+        ++calls;
+        lastPayloadLength = submission.transportPayload.size();
+        return std::nullopt;
+    }
+
+    std::uint32_t calls = 0;
+    std::size_t lastPayloadLength = 0;
+};
+
+TEST(LpiRecognitionProviderTest, DisabledProviderIsObservableWithoutMutatingFlowState) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    Protocol::LpiRecognitionPipeline pipeline(table);
+    const std::array<std::byte, 512> l3Packet{};
+
+    const auto outcome = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(outcome.observed);
+    EXPECT_TRUE(outcome.payloadEligible);
+    EXPECT_FALSE(outcome.providerAvailable);
+    EXPECT_FALSE(outcome.submittedToProvider);
+    EXPECT_FALSE(outcome.adapterOutcome.has_value());
+    const auto status = pipeline.status();
+    EXPECT_FALSE(status.available);
+    EXPECT_EQ(status.providerName, "disabled");
+    EXPECT_EQ(status.counters.payloadEligiblePackets, 1U);
+    EXPECT_EQ(status.counters.providerUnavailablePackets, 1U);
+    EXPECT_EQ(table.counters().lpiPayloadPackets, 0U);
+    const auto state = table.lpiRecognitionStateFor(packet);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->payloadPacketsSubmitted, 0U);
+}
+
+TEST(LpiRecognitionProviderTest, ProviderNoResultConsumesBudgetWithoutUnmappedResult) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    NoResultProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 512> l3Packet{};
+
+    const auto outcome = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{l3Packet}, packet);
+
+    EXPECT_TRUE(outcome.providerAvailable);
+    EXPECT_TRUE(outcome.submittedToProvider);
+    EXPECT_FALSE(outcome.providerProducedFact);
+    ASSERT_TRUE(outcome.adapterOutcome.has_value());
+    ASSERT_TRUE(outcome.adapterOutcome->flowUpdate.has_value());
+    EXPECT_TRUE(outcome.adapterOutcome->flowUpdate->payloadSubmitted);
+    EXPECT_FALSE(outcome.adapterOutcome->flowUpdate->unmappedResult);
+    EXPECT_EQ(provider.calls, 1U);
+    EXPECT_EQ(provider.lastPayloadLength, 472U);
+    EXPECT_EQ(table.counters().lpiPayloadPackets, 1U);
+    EXPECT_EQ(table.counters().lpiUnmappedResults, 0U);
+    const auto state = table.lpiRecognitionStateFor(packet);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->payloadPacketsSubmitted, 1U);
+    EXPECT_TRUE(state->mappedResults.empty());
 }
 
 } // namespace

@@ -20,6 +20,7 @@ LpiAdapterOutcome LpiRecognitionAdapter::submitProviderFact(
         facts,
         payloadBearing,
         mapped,
+        !fact.providerAlias.empty(),
         fact.detectorDone,
         fact.budgetExhausted);
     return LpiAdapterOutcome{

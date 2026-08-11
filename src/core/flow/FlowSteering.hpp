@@ -448,8 +448,11 @@ public:
         const PacketFacts &facts,
         bool payloadBearing,
         std::optional<sucre::protocol::ApplicationProtocolId> mappedResult,
+        bool providerResultPresent,
         bool detectorDone,
         bool budgetExhausted) noexcept;
+    [[nodiscard]] std::optional<LpiRecognitionState> lpiRecognitionStateFor(
+        const PacketFacts &facts) const noexcept;
     [[nodiscard]] std::optional<FlowEntryObservation> observeAccepted(
         const PacketFacts &facts, std::uint64_t policyRevision = 0) noexcept;
     [[nodiscard]] const FlowEntry *find(const CanonicalFlowKey &key) const noexcept;

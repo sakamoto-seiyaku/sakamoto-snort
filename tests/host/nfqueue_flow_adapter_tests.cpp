@@ -4,6 +4,7 @@
  */
 
 #include <NfqueuePassThroughRuntime.hpp>
+#include <core/protocol/ApplicationProtocolCatalog.hpp>
 
 #include <gtest/gtest.h>
 
@@ -14,9 +15,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -25,6 +28,8 @@ namespace {
 using namespace SnortDatapath::Nfqueue;
 namespace Flow = SnortDatapath::Flow;
 namespace Policy = SnortDatapath::Policy;
+namespace Protocol = SnortDatapath::Protocol;
+namespace Catalog = sucre::protocol;
 
 constexpr std::byte byte(const std::uint8_t value) noexcept {
     return static_cast<std::byte>(value);
@@ -57,6 +62,17 @@ std::array<std::uint8_t, 40> tcpPacket(const bool reverse = false) {
     packet[22] = static_cast<std::uint8_t>((reverse ? 40000 : 443) >> 8U);
     packet[23] = static_cast<std::uint8_t>(reverse ? 40000 : 443);
     packet[32] = 0x50;
+    return packet;
+}
+
+std::array<std::uint8_t, 60> tcpPacketWithPayload() {
+    std::array<std::uint8_t, 60> packet{};
+    const auto header = tcpPacket();
+    std::copy(header.begin(), header.end(), packet.begin());
+    putU16(std::as_writable_bytes(std::span<std::uint8_t>{packet}), 2, 60);
+    for (std::size_t index = 40; index < packet.size(); ++index) {
+        packet[index] = static_cast<std::uint8_t>(index);
+    }
     return packet;
 }
 
@@ -118,6 +134,33 @@ public:
 
 private:
     std::uint32_t linuxUid_ = 0;
+};
+
+class FixedLpiProvider final : public Protocol::LpiRecognitionProvider {
+public:
+    explicit FixedLpiProvider(std::string_view alias) noexcept : alias_(alias) {}
+
+    [[nodiscard]] bool available() const noexcept override { return true; }
+    [[nodiscard]] std::string_view providerName() const noexcept override {
+        return "fake-lpi";
+    }
+    [[nodiscard]] std::optional<Protocol::LpiProviderFact> recognize(
+        const Protocol::LpiPacketSubmission &submission) noexcept override {
+        ++calls;
+        lastPayloadLength = submission.transportPayload.size();
+        return Protocol::LpiProviderFact{
+            .providerAlias = alias_,
+            .detectorDone = false,
+            .budgetExhausted = false,
+            .producedBeforeAdapterCompletion = true,
+        };
+    }
+
+    std::uint32_t calls = 0;
+    std::size_t lastPayloadLength = 0;
+
+private:
+    std::string_view alias_;
 };
 
 std::string readRepoFile(const std::filesystem::path &relativePath) {
@@ -182,6 +225,43 @@ TEST(NfqueueFlowAdapterTest, NormalizesAndRunsSharedOwnerGate) {
     EXPECT_EQ(counters.allowedFlowActivity.lastDestinationPort, 40000U);
     EXPECT_EQ(counters.allowedFlowActivity.lastPackets, 2U);
     EXPECT_EQ(counters.allowedFlowActivity.lastBytes, 3000U);
+}
+
+TEST(NfqueueFlowAdapterTest, LpiProviderFactUpdatesActivityBeforeAdapterCompletion) {
+    FixedLpiProvider provider("lpi:http");
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+        .lpiProvider = &provider,
+    });
+    const auto packet = tcpPacketWithPayload();
+
+    EXPECT_EQ(adapter.process(2, kNfqueueHookLocalIn,
+                               std::span<const std::uint8_t>{packet}, packet.size()),
+              NfqueueFlowAdapterResult::FlowAccepted);
+
+    const auto counters = adapter.counters();
+    EXPECT_EQ(provider.calls, 1U);
+    EXPECT_EQ(provider.lastPayloadLength, 20U);
+    EXPECT_TRUE(counters.lpiProvider.available);
+    EXPECT_EQ(counters.lpiProvider.providerName, "fake-lpi");
+    EXPECT_EQ(counters.lpiProvider.counters.payloadEligiblePackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.packetsSubmittedToProvider, 1U);
+    EXPECT_EQ(counters.allowedFlowActivity.records, 1U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.payloadPacketsSubmitted, 1U);
+    ASSERT_TRUE(counters.allowedFlowActivity.lastLpiRecognition.latestExactResult()
+                    .has_value());
+    EXPECT_EQ(*counters.allowedFlowActivity.lastLpiRecognition.latestExactResult(),
+              Catalog::ApplicationProtocolId::HTTP);
+    ASSERT_EQ(counters.allowedFlowActivity.lastLpiRecognition.mappedResults.size(), 1U);
+    EXPECT_EQ(
+        counters.allowedFlowActivity.lastLpiRecognition.mappedResults[0]
+            .firstPayloadPacketSequence,
+        1U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.mappedResults[0].direction,
+              Flow::FlowRelativeDirection::Orig);
 }
 
 TEST(NfqueueFlowAdapterTest, PolicyDropCompletesRetainedLeaseWithDropVerdict) {

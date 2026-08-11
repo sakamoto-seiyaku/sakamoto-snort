@@ -92,6 +92,7 @@ add_sucre_snort_host_test(
   lpi_recognition_adapter_tests
   lpi_recognition_adapter_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
 )
 add_sucre_snort_host_test(ipv6_l4_walker_tests ipv6_l4_walker_tests.cpp)
@@ -116,6 +117,8 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueFragmentLeaseBook.cpp"
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueuePacketLeaseAdapter.cpp"
@@ -134,6 +137,8 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(
@@ -151,6 +156,8 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(
@@ -201,6 +208,8 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(
@@ -215,6 +224,8 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphFragmentIngress.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphInjection.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FragmentSteering.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(

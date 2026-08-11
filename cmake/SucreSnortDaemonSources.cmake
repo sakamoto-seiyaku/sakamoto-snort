@@ -37,5 +37,7 @@ set(
   "${CMAKE_SOURCE_DIR}/src/core/flow/PacketCaptureAdapter.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/FlowGraphInjection.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/flow/FragmentSteering.cpp"
+  "${CMAKE_SOURCE_DIR}/src/core/protocol/LpiRecognitionAdapter.cpp"
+  "${CMAKE_SOURCE_DIR}/src/core/protocol/LpiRecognitionProvider.cpp"
   "${CMAKE_SOURCE_DIR}/src/core/policy/PacketPolicy.cpp"
 )

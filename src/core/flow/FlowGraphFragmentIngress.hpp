@@ -8,6 +8,7 @@
 #include <FlowGraphIngress.hpp>
 #include <FlowGraphInjection.hpp>
 #include <FragmentSteering.hpp>
+#include <core/protocol/LpiRecognitionProvider.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -38,6 +39,7 @@ struct FlowGraphIngressResult final {
     std::optional<PacketFacts> policyDropFacts;
     std::optional<PacketFacts> acceptedFacts;
     std::optional<FlowEntryObservation> flowEntryObservation;
+    std::optional<Protocol::LpiPipelineOutcome> lpiRecognition;
 };
 
 /**
@@ -56,7 +58,8 @@ public:
         const Policy::PacketPolicySnapshot &policy =
             Policy::emptyPacketPolicySnapshot(),
         FlowGraphIngressConfig ingressConfig = {},
-        FragmentSteeringConfig fragmentConfig = {});
+        FragmentSteeringConfig fragmentConfig = {},
+        Protocol::LpiRecognitionProvider *lpiProvider = nullptr);
 
     [[nodiscard]] FlowGraphIngressResult processL3Packet(
         std::span<const std::byte> l3Packet,
@@ -65,13 +68,19 @@ public:
 
     /** Expire graph-owned fragment state using the caller's lane clock. */
     [[nodiscard]] std::size_t expireFragments(std::uint64_t fragmentNow) noexcept;
+    [[nodiscard]] Protocol::LpiProviderStatus lpiProviderStatus() const noexcept {
+        return lpiPipeline_.status();
+    }
 
 private:
     FlowGraphIngressParser parser_;
     FragmentSteering fragments_;
     FlowGraphInjectionGate injectionGate_;
+    Protocol::LpiRecognitionPipeline lpiPipeline_;
 
-    [[nodiscard]] FlowGraphIngressResult injectFacts(PacketFacts facts) noexcept;
+    [[nodiscard]] FlowGraphIngressResult injectFacts(
+        std::span<const std::byte> l3Packet,
+        PacketFacts facts) noexcept;
     [[nodiscard]] FlowGraphIngressResult processReassembled(
         const FragmentReassemblyResult &fragment,
         FlowGraphIngressMetadata metadata) noexcept;

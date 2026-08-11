@@ -57,6 +57,7 @@ struct NfqueueFlowAdapterConfig {
     std::size_t queueCapacity = 64;
     std::uint32_t copyPrefixBytes = 512;
     const Policy::PacketPolicySnapshot *packetPolicy = nullptr;
+    Protocol::LpiRecognitionProvider *lpiProvider = nullptr;
     Flow::FragmentSteeringConfig fragmentSteering;
     std::size_t fragmentLeaseCapacityPerDatagram = 64;
 };
@@ -168,6 +169,7 @@ struct NfqueueFlowAdapterCounters {
     std::uint64_t flowTableCapacity = 0;
     std::uint64_t flowTableHighWatermark = 0;
     std::uint64_t flowTableCapacityMisses = 0;
+    Protocol::LpiProviderStatus lpiProvider;
     std::uint64_t uidMetadataPresentPackets = 0;
     std::uint64_t uidMetadataMissingPackets = 0;
     Policy::PacketPolicyDropActivityCounters policyDropActivity;
@@ -444,6 +446,7 @@ public:
             .flowTableCapacity = counters.flowTableCapacity,
             .flowTableHighWatermark = counters.flowTableHighWatermark,
             .flowTableCapacityMisses = counters.flowTableCapacityMisses,
+            .lpiProvider = counters.lpiProvider,
             .uidMetadataPresentPackets = counters.uidMetadataPresentPackets,
             .uidMetadataMissingPackets = counters.uidMetadataMissingPackets,
             .policyDropActivity = counters.policyDropActivity,
