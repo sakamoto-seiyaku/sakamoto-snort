@@ -10,10 +10,12 @@ set -euo pipefail
 # copies backup VPP source, PCAP, expected JSON, or license files into this repo.
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$repo_root/tools/protocol_identification/probe_build_root.sh"
 
 reference_root="${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}"
 repo_build_output_root="${repo_root}/build-output"
-output_root="${S61_REFERENCE_PROBES_OUTPUT_ROOT:-${repo_build_output_root}/protocol-identification/s61-reference-probes}"
+output_root_input="${S61_REFERENCE_PROBES_OUTPUT_ROOT:-${repo_build_output_root}/protocol-identification/s61-reference-probes}"
+output_root="$output_root_input"
 continue_on_fail=0
 
 properties_file=""
@@ -66,7 +68,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output-root)
       require_arg "$1" "${2:-}"
-      output_root="$2"
+      output_root_input="$2"
       shift 2
       ;;
     --continue-on-fail)
@@ -84,6 +86,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+output_root="$(protocol_identification_probe_canonical_build_root "$repo_root" "$output_root_input")"
 
 mkdir -p "$output_root"
 properties_file="${output_root}/s61-reference-probes.properties"

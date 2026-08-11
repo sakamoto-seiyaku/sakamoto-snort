@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 inventory="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_VPP_REFERENCE_INVENTORY.md"
+control_runner_contract="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_VPP_LPI_CONTROL_AND_RUNNER_CONTRACT.md"
 corpus_manifest="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md"
 libprotoident_audit="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_REFERENCE_AUDIT.md"
 libprotoident_ndk_probe_doc="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md"
@@ -27,6 +28,12 @@ probe_build_root_helper="$repo_root/tools/protocol_identification/probe_build_ro
 probe_generation_helper="$repo_root/tools/protocol_identification/probe_generation.sh"
 host_cmake="$repo_root/tests/host/CMakeLists.txt"
 expected_alias_replay_test="$repo_root/tests/host/lpi_expected_alias_replay_tests.cpp"
+reference_vpp_root="/home/js/backup/backup/Git/vpp"
+reference_lpi_root="$reference_vpp_root/src/plugins/stellar_lpi"
+reference_lpi_api="$reference_lpi_root/stellar_lpi.api"
+reference_lpi_vat="$reference_lpi_root/stellar_lpi_test.c"
+reference_lpi_plugin="$reference_lpi_root/stellar_lpi_plugin.c"
+reference_lpi_runner="$reference_vpp_root/test/test_stellar_lpi.py"
 
 assert_unsafe_probe_build_root_rejected() {
   local script="$1"
@@ -56,6 +63,73 @@ assert_unsafe_probe_build_root_rejected() {
     echo "unsafe build-root contract created target before rejecting it: $unsafe_build_root_resolved" >&2
     exit 1
   }
+}
+
+assert_reference_probe_runner_output_root_rejected() {
+  local unsafe_leaf="$1"
+  local unsafe_output_root_input="${repo_root}/build-output/../${unsafe_leaf}"
+  local unsafe_output_root_resolved="${repo_root}/${unsafe_leaf}"
+  local unsafe_output=""
+  local unsafe_status=0
+
+  [[ ! -e "$unsafe_output_root_resolved" ]] || {
+    echo "unsafe runner output-root contract target already exists before test: $unsafe_output_root_resolved" >&2
+    exit 1
+  }
+
+  set +e
+  unsafe_output="$("$reference_probes_runner" \
+    --vpp-root /definitely/missing/vpp \
+    --output-root "$unsafe_output_root_input" \
+    2>&1 >/dev/null)"
+  unsafe_status=$?
+  set -e
+
+  [[ "$unsafe_status" -ne 0 ]] || {
+    echo "unsafe runner output-root contract unexpectedly passed" >&2
+    exit 1
+  }
+  grep -q 'unsafe probe build root outside repo build-output' <<<"$unsafe_output"
+  [[ ! -e "$unsafe_output_root_resolved" ]] || {
+    echo "unsafe runner output-root contract created target before rejecting it: $unsafe_output_root_resolved" >&2
+    exit 1
+  }
+}
+
+assert_reference_probe_runner_symlink_output_root_rejected() {
+  local outside_root=""
+  local symlink_output_root="${repo_root}/build-output/s61-reference-probes-contract-symlink-$$"
+  local unsafe_output=""
+  local unsafe_status=0
+
+  outside_root="$(mktemp -d)"
+  rm -rf "$symlink_output_root"
+  ln -s "$outside_root" "$symlink_output_root"
+
+  set +e
+  unsafe_output="$("$reference_probes_runner" \
+    --vpp-root /definitely/missing/vpp \
+    --output-root "$symlink_output_root" \
+    2>&1 >/dev/null)"
+  unsafe_status=$?
+  set -e
+
+  [[ "$unsafe_status" -ne 0 ]] || {
+    echo "symlinked runner output-root contract unexpectedly passed" >&2
+    rm -f "$symlink_output_root"
+    rm -rf "$outside_root"
+    exit 1
+  }
+  grep -q 'unsafe probe build root outside repo build-output' <<<"$unsafe_output"
+  [[ -z "$(find "$outside_root" -mindepth 1 -print -quit)" ]] || {
+    echo "symlinked runner output-root contract wrote outside repo build-output" >&2
+    rm -f "$symlink_output_root"
+    rm -rf "$outside_root"
+    exit 1
+  }
+
+  rm -f "$symlink_output_root"
+  rm -rf "$outside_root"
 }
 
 assert_probe_uses_build_root_helper() {
@@ -518,6 +592,78 @@ grep -q 'provider source strategy pinned' "$inventory"
 grep -q 'minimal licensed corpus subset identified' "$inventory"
 grep -q 'host corpus evidence that packet bytes cross the provider boundary' "$inventory"
 
+[[ -f "$control_runner_contract" ]]
+grep -q 'Status: `reference_only` contract' "$control_runner_contract"
+grep -q 'reference_only=true' "$control_runner_contract"
+grep -q 'sourceImported=not_claimed' "$control_runner_contract"
+grep -q 'corpusImported=not_claimed' "$control_runner_contract"
+grep -q 'realProviderEnabled=not_claimed' "$control_runner_contract"
+grep -q 'protocolRule=out_of_scope' "$control_runner_contract"
+grep -q '/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/stellar_lpi.api' "$control_runner_contract"
+grep -q '/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/stellar_lpi_test.c' "$control_runner_contract"
+grep -q '/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/stellar_lpi_plugin.c' "$control_runner_contract"
+grep -q '/home/js/backup/backup/Git/vpp/test/test_stellar_lpi.py' "$control_runner_contract"
+grep -q 'referenceRoot=\${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}' "$control_runner_contract"
+grep -q 'wrapperRoot=\${VPP_STELLAR_LPI_ROOT:-\${referenceRoot}/src/plugins/stellar_lpi}' "$control_runner_contract"
+grep -q 'corpusRoot=\${VPP_LPI_CORPUS_ROOT:-\${referenceRoot}/test/decoders/stellar_lpi/test_pcap}' "$control_runner_contract"
+grep -q 'VPP_REFERENCE_ROOT' "$control_runner_contract"
+grep -q 'VPP_STELLAR_LPI_ROOT' "$control_runner_contract"
+grep -q 'VPP_LPI_CORPUS_ROOT' "$control_runner_contract"
+grep -q -- '--vpp-root PATH' "$control_runner_contract"
+grep -q -- '--output-root PATH' "$control_runner_contract"
+grep -q 'autoreply define stellar_lpi_enable_disable' "$control_runner_contract"
+grep -q 'enable_disable.*bool' "$control_runner_contract"
+grep -q 'sw_if_index.*vl_api_interface_index_t' "$control_runner_contract"
+grep -q 'stellar_lpi_test.c.*disable' "$control_runner_contract"
+grep -q 'defaults to enable' "$control_runner_contract"
+grep -q 'explicit control-plane path' "$control_runner_contract"
+grep -q 'set stellar-lpi interface <interface> \[enable|disable\]' "$control_runner_contract"
+grep -q 'stellar-lpi debug \[on|off\]' "$control_runner_contract"
+grep -q 'MAX_DETECT_PKTS 20' "$control_runner_contract"
+grep -q 'set stellar-lpi max-detect-pkts <max>' "$control_runner_contract"
+grep -q 'show stellar-lpi max-detect-pkts' "$control_runner_contract"
+grep -q 'stellar-tcp-session-feat-arc-end' "$control_runner_contract"
+grep -q 'stellar-udp-session-feat-arc-end' "$control_runner_contract"
+grep -Fq 'does **not** contain `LABEL`' "$control_runner_contract"
+grep -q 'result\["LABEL"\] = "LPI_RESULT_<i>"' "$control_runner_contract"
+grep -q 'runner-generated ordering metadata' "$control_runner_contract"
+grep -q 'extra_vpp_plugin_config' "$control_runner_contract"
+grep -q 'session timeout' "$control_runner_contract"
+grep -q 'test_base_dir' "$control_runner_contract"
+grep -q 'LPI TRACE SESSION' "$control_runner_contract"
+grep -q 'source, PCAP, expected JSON' "$control_runner_contract"
+
+if [[ -d "$reference_lpi_root" ]]; then
+  [[ -f "$reference_lpi_api" ]]
+  [[ -f "$reference_lpi_vat" ]]
+  [[ -f "$reference_lpi_plugin" ]]
+  [[ -f "$reference_lpi_runner" ]]
+  grep -q 'autoreply define stellar_lpi_enable_disable' "$reference_lpi_api"
+  grep -q 'bool enable_disable' "$reference_lpi_api"
+  grep -q 'vl_api_interface_index_t sw_if_index' "$reference_lpi_api"
+  grep -q 'api_stellar_lpi_enable_disable' "$reference_lpi_vat"
+  grep -q 'int enable_disable = 1' "$reference_lpi_vat"
+  grep -q 'unformat (i, "disable")' "$reference_lpi_vat"
+  grep -q 'sw_if_index %d' "$reference_lpi_vat"
+  grep -q 'mp->enable_disable = enable_disable' "$reference_lpi_vat"
+  grep -q '#define MAX_DETECT_PKTS 20' "$reference_lpi_plugin"
+  grep -q 'set stellar-lpi interface' "$reference_lpi_plugin"
+  grep -q 'stellar-lpi debug' "$reference_lpi_plugin"
+  grep -q 'set stellar-lpi max-detect-pkts' "$reference_lpi_plugin"
+  grep -q 'show stellar-lpi max-detect-pkts' "$reference_lpi_plugin"
+  grep -q '.arc_name = "stellar-tcp-session"' "$reference_lpi_plugin"
+  grep -q '.arc_name = "stellar-udp-session"' "$reference_lpi_plugin"
+  grep -q 'stellar-tcp-session-feat-arc-end' "$reference_lpi_plugin"
+  grep -q 'stellar-udp-session-feat-arc-end' "$reference_lpi_plugin"
+  grep -q 'stellar_lpi_trace_json_export' "$reference_lpi_plugin"
+  ! grep -q 'LABEL' "$reference_lpi_plugin"
+  grep -q 'extra_vpp_plugin_config' "$reference_lpi_runner"
+  grep -q 'session_timeout_ms=60000' "$reference_lpi_runner"
+  grep -q 'test_base_dir' "$reference_lpi_runner"
+  grep -q 'LPI TRACE SESSION' "$reference_lpi_runner"
+  grep -q 'result\["LABEL"\] = f"LPI_RESULT_{i}"' "$reference_lpi_runner"
+fi
+
 [[ -f "$root_cmake" ]]
 grep -q 'SAKAMOTO_ENABLE_LPI_PROVIDER' "$root_cmake"
 grep -q 'OFF' "$root_cmake"
@@ -973,7 +1119,65 @@ grep -q 'LIBPROTOIDENT_ANDROID_PROBE_BUILD_ROOT' "$reference_probes_runner"
 grep -q 'STELLAR_LPI_WRAPPER_ANDROID_PROBE_BUILD_ROOT' "$reference_probes_runner"
 grep -q 'STELLAR_LPI_WRAPPER_HOST_PROBE_BUILD_ROOT' "$reference_probes_runner"
 grep -q 'STELLAR_LPI_WRAPPER_HOST_PCAP_PROBE_BUILD_ROOT' "$reference_probes_runner"
+grep -Fq 'source "$repo_root/tools/protocol_identification/probe_build_root.sh"' "$reference_probes_runner"
+grep -Fq 'output_root_input' "$reference_probes_runner"
+grep -Fq 'protocol_identification_probe_canonical_build_root "$repo_root" "$output_root_input"' \
+  "$reference_probes_runner"
 ! grep -q 'run_s61_reference_probes.sh' "$root_cmake"
+
+assert_reference_probe_runner_output_root_rejected "s61-unsafe-reference-probes-runner"
+assert_reference_probe_runner_symlink_output_root_rejected
+
+s61_reference_custom_output_root="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-custom"
+s61_reference_custom_stdout="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-custom.stdout"
+s61_reference_custom_properties="$s61_reference_custom_output_root/s61-reference-probes.properties"
+rm -rf "$s61_reference_custom_output_root"
+s61_reference_custom_status=0
+set +e
+"$reference_probes_runner" \
+  --vpp-root /definitely/missing/vpp \
+  --output-root "$s61_reference_custom_output_root" \
+  >"$s61_reference_custom_stdout"
+s61_reference_custom_status=$?
+set -e
+[[ "$s61_reference_custom_status" -ne 0 ]]
+[[ -f "$s61_reference_custom_properties" ]]
+grep -q "^outputRoot=$s61_reference_custom_output_root$" "$s61_reference_custom_properties"
+grep -q '^probe.vppLpiCorpusInventory.status=NOT_RUN$' "$s61_reference_custom_properties"
+
+s61_reference_missing_fail_fast_output_root="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-missing-fail-fast"
+s61_reference_missing_fail_fast_stdout="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-missing-fail-fast.stdout"
+s61_reference_missing_fail_fast_properties="$s61_reference_missing_fail_fast_output_root/s61-reference-probes.properties"
+rm -rf "$s61_reference_missing_fail_fast_output_root"
+s61_reference_missing_fail_fast_status=0
+set +e
+"$reference_probes_runner" \
+  --vpp-root /definitely/missing/vpp \
+  --output-root "$s61_reference_missing_fail_fast_output_root" \
+  >"$s61_reference_missing_fail_fast_stdout"
+s61_reference_missing_fail_fast_status=$?
+set -e
+[[ "$s61_reference_missing_fail_fast_status" -ne 0 ]] || {
+  echo "S61 reference probe runner unexpectedly passed fail-fast missing-root contract" >&2
+  exit 1
+}
+[[ -f "$s61_reference_missing_fail_fast_properties" ]]
+grep -q '^continueOnFail=false$' "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.vppLpiSourceShapeInventory.status=UNAVAILABLE$' \
+  "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.vppLpiSourceShapeInventory.reason=source_shape_not_available$' \
+  "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.vppLpiCorpusInventory.status=NOT_RUN$' "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.vppLpiExpectedAliasInventory.status=NOT_RUN$' "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.vppStellarLpiWrapperInventory.status=NOT_RUN$' "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.libprotoidentAndroidBuildProbe.status=NOT_RUN$' "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.stellarLpiWrapperAndroidBuildProbe.status=NOT_RUN$' \
+  "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.stellarLpiWrapperHostPayloadProbe.status=NOT_RUN$' \
+  "$s61_reference_missing_fail_fast_properties"
+grep -q '^probe.stellarLpiWrapperHostPcapProbe.status=NOT_RUN$' \
+  "$s61_reference_missing_fail_fast_properties"
+grep -q '^s61ReferenceProbes=FAIL$' "$s61_reference_missing_fail_fast_properties"
 
 s61_reference_missing_output_root="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-missing"
 s61_reference_missing_stdout="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-missing.stdout"
@@ -1018,6 +1222,41 @@ grep -q '^probe.stellarLpiWrapperHostPcapProbe.status=UNAVAILABLE$' "$s61_refere
 grep -q '^s61ReferenceProbes=FAIL$' "$s61_reference_missing_properties"
 grep -q '^sourceShapeStatus=SKIP_UNAVAILABLE$' \
   "$s61_reference_missing_output_root/vpp-lpi-source-shape-inventory/source-shape-inventory.properties"
+
+s61_reference_failure_root="$(mktemp -d)"
+s61_reference_failure_corpus_root="$s61_reference_failure_root/test/decoders/stellar_lpi/test_pcap"
+mkdir -p "$s61_reference_failure_corpus_root"
+s61_reference_failure_output_root="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-child-failure"
+s61_reference_failure_stdout="$repo_root/build-output/protocol-identification/s61-reference-probes-contract-child-failure.stdout"
+s61_reference_failure_properties="$s61_reference_failure_output_root/s61-reference-probes.properties"
+rm -rf "$s61_reference_failure_output_root"
+s61_reference_failure_status=0
+set +e
+"$reference_probes_runner" \
+  --vpp-root "$s61_reference_failure_root" \
+  --output-root "$s61_reference_failure_output_root" \
+  --continue-on-fail \
+  >"$s61_reference_failure_stdout"
+s61_reference_failure_status=$?
+set -e
+[[ "$s61_reference_failure_status" -ne 0 ]] || {
+  echo "S61 reference probe runner unexpectedly passed controlled child-failure contract" >&2
+  rm -rf "$s61_reference_failure_root"
+  exit 1
+}
+[[ -f "$s61_reference_failure_properties" ]]
+grep -q '^continueOnFail=true$' "$s61_reference_failure_properties"
+grep -q '^probe.vppLpiCorpusInventory.status=PASS$' "$s61_reference_failure_properties"
+grep -q '^probe.vppLpiExpectedAliasInventory.status=FAIL$' "$s61_reference_failure_properties"
+grep -q '^probe.vppLpiExpectedAliasInventory.reason=exit_nonzero$' \
+  "$s61_reference_failure_properties"
+grep -q '^probe.vppLpiExpectedAliasInventory.exitCode=1$' "$s61_reference_failure_properties"
+grep -q '^probe.vppStellarLpiWrapperInventory.status=UNAVAILABLE$' \
+  "$s61_reference_failure_properties"
+grep -q '^probe.stellarLpiWrapperHostPcapProbe.status=UNAVAILABLE$' \
+  "$s61_reference_failure_properties"
+grep -q '^s61ReferenceProbes=FAIL$' "$s61_reference_failure_properties"
+rm -rf "$s61_reference_failure_root"
 
 if [[ -d "/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi" ]]; then
   s61_reference_real_output_root="$repo_root/build-output/protocol-identification/s61-reference-probes-contract"
