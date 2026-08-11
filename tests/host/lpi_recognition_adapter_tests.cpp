@@ -588,6 +588,8 @@ TEST(LpiRecognitionProviderTest, MissingFlowDoesNotCreateProviderContextOrTableS
     EXPECT_EQ(table.size(), 0U);
     const auto status = pipeline.status();
     EXPECT_EQ(status.counters.providerUnavailablePackets, 0U);
+    EXPECT_EQ(status.counters.flowSlotUnavailablePackets, 1U);
+    EXPECT_EQ(status.counters.providerContextUnavailablePackets, 0U);
     EXPECT_EQ(status.counters.packetsSubmittedToProvider, 0U);
 }
 

@@ -55,8 +55,11 @@ Contract guardrails:
   adapter completion; `LpiRecognitionAdapter` maps provider aliases through the
   project-owned Application Protocol Catalog; recognition state is recorded on
   the worker-owned `BoundedFlowTable` / `FlowEntry`. Per-flow real-provider
-  recognizer context is owned by `FlowEntry` as opaque provider state; a wired
-  provider that cannot create that context increments
+  recognizer context is owned by `FlowEntry` as opaque provider state. When a
+  payload-bearing eligible packet reaches the pipeline but the worker-owned flow
+  table cannot supply the existing recognition slot, the pipeline increments
+  `flowSlotUnavailablePackets` and does not create a provider-side flow map or
+  parallel table. A wired provider that cannot create its opaque context increments
   `providerContextUnavailablePackets` without submitting the packet to the
   provider.
 - The build contract now pins real-provider compilation behind

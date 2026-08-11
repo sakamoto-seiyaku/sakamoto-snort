@@ -81,6 +81,7 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
 
     if (!slot.has_value() || slot->recognition == nullptr
         || slot->providerContext == nullptr) {
+        ++counters_.flowSlotUnavailablePackets;
         return LpiPipelineOutcome{
             .observed = true,
             .payloadEligible = true,
