@@ -5,8 +5,6 @@
 
 #include <core/protocol/LpiRecognitionProvider.hpp>
 
-#include <algorithm>
-
 namespace SnortDatapath::Protocol {
 namespace {
 
@@ -20,9 +18,10 @@ namespace {
     if (offset >= l3Packet.size()) {
         return {};
     }
-    const auto available = l3Packet.size() - offset;
-    const auto length = std::min<std::size_t>(
-        available, static_cast<std::size_t>(facts.transportPayloadLength));
+    const auto length = static_cast<std::size_t>(facts.transportPayloadLength);
+    if (length > l3Packet.size() - offset) {
+        return {};
+    }
     return l3Packet.subspan(offset, length);
 }
 
@@ -91,6 +90,15 @@ LpiPipelineOutcome LpiRecognitionPipeline::submitBeforeAdapterCompletion(
     }
 
     auto adapterOutcome = adapter_.submitProviderFact(facts, *providerFact);
+    if (adapterOutcome.flowUpdate.has_value()) {
+        if (adapterOutcome.flowUpdate->terminalState
+            == Flow::LpiRecognitionTerminalState::Done) {
+            ++counters_.detectorDonePackets;
+        } else if (adapterOutcome.flowUpdate->terminalState
+                   == Flow::LpiRecognitionTerminalState::Exhausted) {
+            ++counters_.budgetExhaustedPackets;
+        }
+    }
     return LpiPipelineOutcome{
         .observed = true,
         .payloadEligible = true,

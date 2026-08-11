@@ -686,6 +686,8 @@ TEST(VpnTunFlowAdapterTest, TerminalDoneLpiFlowSkipsLaterProviderCalls) {
     EXPECT_EQ(counters.lpiProvider.counters.packetsSubmittedToProvider, 1U);
     EXPECT_EQ(counters.lpiProvider.counters.providerFactPackets, 1U);
     EXPECT_EQ(counters.lpiProvider.counters.providerNoResultPackets, 0U);
+    EXPECT_EQ(counters.lpiProvider.counters.detectorDonePackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.budgetExhaustedPackets, 0U);
     EXPECT_EQ(counters.allowedFlowActivity.records, 2U);
     EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.payloadPacketsSubmitted, 1U);
     EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.terminalState,
@@ -720,6 +722,8 @@ TEST(VpnTunFlowAdapterTest, DefaultLpiProviderStaysDisabledAfterEligiblePayloadT
     EXPECT_EQ(counters.lpiProvider.counters.packetsSubmittedToProvider, 0U);
     EXPECT_EQ(counters.lpiProvider.counters.providerNoResultPackets, 0U);
     EXPECT_EQ(counters.lpiProvider.counters.providerFactPackets, 0U);
+    EXPECT_EQ(counters.lpiProvider.counters.detectorDonePackets, 0U);
+    EXPECT_EQ(counters.lpiProvider.counters.budgetExhaustedPackets, 0U);
     EXPECT_EQ(counters.allowedFlowActivity.records, 1U);
     EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.payloadPacketsSubmitted, 0U);
     EXPECT_TRUE(counters.allowedFlowActivity.lastLpiRecognition.mappedResultsEmpty());

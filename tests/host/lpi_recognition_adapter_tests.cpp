@@ -309,6 +309,33 @@ TEST(LpiRecognitionProviderTest, ProviderNoResultConsumesBudgetWithoutUnmappedRe
     EXPECT_TRUE(state->mappedResultsEmpty());
 }
 
+TEST(LpiRecognitionProviderTest, TruncatedL3PacketDoesNotSubmitPartialPayload) {
+    Flow::BoundedFlowTable table(4);
+    const auto packet = tcpPacket();
+    ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());
+    NoResultProvider provider;
+    Protocol::LpiRecognitionPipeline pipeline(table, &provider);
+    const std::array<std::byte, 48> truncatedL3Packet{};
+
+    const auto outcome = pipeline.submitBeforeAdapterCompletion(
+        std::span<const std::byte>{truncatedL3Packet}, packet);
+
+    EXPECT_TRUE(outcome.observed);
+    EXPECT_FALSE(outcome.payloadEligible);
+    EXPECT_TRUE(outcome.providerAvailable);
+    EXPECT_FALSE(outcome.submittedToProvider);
+    EXPECT_FALSE(outcome.adapterOutcome.has_value());
+    EXPECT_EQ(provider.calls, 0U);
+    const auto status = pipeline.status();
+    EXPECT_EQ(status.counters.packetsObserved, 1U);
+    EXPECT_EQ(status.counters.payloadEligiblePackets, 0U);
+    EXPECT_EQ(status.counters.packetsSubmittedToProvider, 0U);
+    EXPECT_EQ(table.counters().lpiPayloadPackets, 0U);
+    const auto state = table.lpiRecognitionStateFor(packet);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->payloadPacketsSubmitted, 0U);
+}
+
 TEST(LpiRecognitionProviderTest, TerminalDoneFlowSkipsLaterPayloadsWithoutProviderCall) {
     Flow::BoundedFlowTable table(4);
     const auto packet = tcpPacket();
@@ -355,7 +382,10 @@ TEST(LpiRecognitionProviderTest, TerminalDoneFlowSkipsLaterPayloadsWithoutProvid
     ASSERT_TRUE(second.stateAfterSubmit->latestExactResult().has_value());
     EXPECT_EQ(*second.stateAfterSubmit->latestExactResult(),
               Catalog::ApplicationProtocolId::HTTP);
-    EXPECT_EQ(pipeline.status().counters.terminalSkippedPackets, 1U);
+    const auto status = pipeline.status();
+    EXPECT_EQ(status.counters.terminalSkippedPackets, 1U);
+    EXPECT_EQ(status.counters.detectorDonePackets, 1U);
+    EXPECT_EQ(status.counters.budgetExhaustedPackets, 0U);
 }
 
 TEST(LpiRecognitionProviderTest, NoResultProviderStopsAtInternalPayloadBudget) {
@@ -389,7 +419,10 @@ TEST(LpiRecognitionProviderTest, NoResultProviderStopsAtInternalPayloadBudget) {
     EXPECT_TRUE(afterExhaustion.terminalSkipped);
     EXPECT_FALSE(afterExhaustion.submittedToProvider);
     EXPECT_EQ(provider.calls, Flow::LpiRecognitionState::kMaxPayloadPackets);
-    EXPECT_EQ(pipeline.status().counters.terminalSkippedPackets, 1U);
+    const auto status = pipeline.status();
+    EXPECT_EQ(status.counters.terminalSkippedPackets, 1U);
+    EXPECT_EQ(status.counters.detectorDonePackets, 0U);
+    EXPECT_EQ(status.counters.budgetExhaustedPackets, 1U);
 }
 
 } // namespace

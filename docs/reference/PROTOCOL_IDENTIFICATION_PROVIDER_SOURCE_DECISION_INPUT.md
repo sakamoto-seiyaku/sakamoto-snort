@@ -65,6 +65,10 @@ Contract guardrails:
   `packetsSubmittedToProvider` remains `0`; control-plane JSON contract tests
   pin the same disabled `lpiProvider` status shape for `NFQUEUE.STATUS` and
   `VPN_TUN.STATUS`.
+- The provider-neutral status shape exposes terminal recognition counters:
+  `detectorDonePackets` and `budgetExhaustedPackets`. These are driven by
+  FlowEntry terminal state transitions and do not require a real provider to be
+  enabled by default.
 - No real provider is wired by default. No provider source has been copied into
   this repository. No PCAP corpus or expected JSON has been imported. No Android
   Root/VPN device evidence proves a real provider. No ProtocolRule enforcement

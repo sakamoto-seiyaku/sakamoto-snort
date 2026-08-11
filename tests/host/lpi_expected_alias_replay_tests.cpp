@@ -612,6 +612,8 @@ void expectReplayFixtureMatchesPipelineBaseline(
               kExpectedBaseline.mapped() + kExpectedBaseline.unmapped);
     EXPECT_EQ(status.counters.providerNoResultPackets,
               kExpectedBaseline.noResult);
+    EXPECT_EQ(status.counters.detectorDonePackets, 0U);
+    EXPECT_EQ(status.counters.budgetExhaustedPackets, 0U);
 }
 
 TEST(LpiExpectedAliasReplayTest,

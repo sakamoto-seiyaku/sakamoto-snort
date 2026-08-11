@@ -414,6 +414,8 @@ void expectDisabledLpiProviderStatus(
     EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 0U);
     EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 0U);
     EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["detectorDonePackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["budgetExhaustedPackets"].GetUint64(), 0U);
 }
 
 rapidjson::Document waitForVpnTunPacketsSeen(ControlServerHarness &harness,
@@ -1231,6 +1233,8 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
             .packetsSubmittedToProvider = 10,
             .providerNoResultPackets = 6,
             .providerFactPackets = 4,
+            .detectorDonePackets = 3,
+            .budgetExhaustedPackets = 1,
         },
     };
     runtime.nfqueueCounters.uidMetadataPresentPackets = 9;
@@ -1332,6 +1336,8 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 10U);
     EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 6U);
     EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 4U);
+    EXPECT_EQ(lpiProvider["detectorDonePackets"].GetUint64(), 3U);
+    EXPECT_EQ(lpiProvider["budgetExhaustedPackets"].GetUint64(), 1U);
     EXPECT_EQ(result["uidMetadataPresentPackets"].GetUint64(), 9U);
     EXPECT_EQ(result["uidMetadataMissingPackets"].GetUint64(), 10U);
     EXPECT_EQ(result["lastObservedLinuxUid"].GetUint(), 12546U);
@@ -1523,6 +1529,8 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
             .packetsSubmittedToProvider = 5,
             .providerNoResultPackets = 3,
             .providerFactPackets = 2,
+            .detectorDonePackets = 1,
+            .budgetExhaustedPackets = 1,
         },
     };
     runtime.vpnTunCounters.uidAttributionHitPackets = 197;
@@ -1633,6 +1641,8 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 5U);
     EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 3U);
     EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 2U);
+    EXPECT_EQ(lpiProvider["detectorDonePackets"].GetUint64(), 1U);
+    EXPECT_EQ(lpiProvider["budgetExhaustedPackets"].GetUint64(), 1U);
     EXPECT_EQ(result["uidAttributionHitPackets"].GetUint64(), 197U);
     EXPECT_EQ(result["uidUnknownFallbackPackets"].GetUint64(), 4U);
     EXPECT_EQ(result["outboundPackets"].GetUint64(), 111U);

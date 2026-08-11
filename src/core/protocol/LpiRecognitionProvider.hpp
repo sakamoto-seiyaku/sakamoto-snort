@@ -33,6 +33,8 @@ struct LpiProviderCounters {
     std::uint64_t packetsSubmittedToProvider = 0;
     std::uint64_t providerNoResultPackets = 0;
     std::uint64_t providerFactPackets = 0;
+    std::uint64_t detectorDonePackets = 0;
+    std::uint64_t budgetExhaustedPackets = 0;
 };
 
 struct LpiProviderStatus {

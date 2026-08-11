@@ -410,6 +410,10 @@ rapidjson::Value makeLpiProviderStatusResult(
     result.AddMember("providerNoResultPackets",
                      status.counters.providerNoResultPackets, alloc);
     result.AddMember("providerFactPackets", status.counters.providerFactPackets, alloc);
+    result.AddMember("detectorDonePackets",
+                     status.counters.detectorDonePackets, alloc);
+    result.AddMember("budgetExhaustedPackets",
+                     status.counters.budgetExhaustedPackets, alloc);
     return result;
 }
 
