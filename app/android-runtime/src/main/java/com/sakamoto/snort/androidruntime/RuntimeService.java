@@ -117,6 +117,7 @@ public final class RuntimeService extends VpnService {
     private LocalProductBackend productBackend;
     private Process vppProcess;
     private VpnTunPlatformSession vpnTunSession;
+    private VpnHevTransportSession vpnHevSession;
     private RuntimeProfile activeProfile;
     private File profileRoot;
     private File pidFile;
@@ -545,6 +546,11 @@ public final class RuntimeService extends VpnService {
             if (!attachVpnTunSessionAfterHealth(activeProfile, vpnTunSession)) {
                 failWithCleanup("vpn_tun_control_attach_failed",
                         "VPN TUN fd handoff over vNext control failed");
+                return;
+            }
+            if (!startVpnHevTransportAfterTun(activeProfile, nativeDir, profileRoot)) {
+                failWithCleanup("vpn_hev_transport_start_failed",
+                        "VPN HEV transport did not reach the native Adapter");
                 return;
             }
             closeVpnTunSessionAfterNativeHandoff();
@@ -1542,6 +1548,25 @@ public final class RuntimeService extends VpnService {
         return true;
     }
 
+    private boolean startVpnHevTransportAfterTun(RuntimeProfile profile, File nativeDir,
+                                                 File currentProfile) {
+        if (profile != RuntimeProfile.VPN) {
+            return true;
+        }
+        VpnHevTransportSession.StartResult result =
+                VpnHevTransportSession.start(this, nativeDir.getPath(),
+                        new File(currentProfile, "logs"));
+        if (!result.ok) {
+            appendLog("vpn_hev_transport=failed code=" + result.errorCode
+                    + " message=" + result.errorMessage);
+            return false;
+        }
+        vpnHevSession = result.session;
+        appendLog("vpn_hev_transport=ok name=" + VpnHevTransportSession.TRANSPORT_NAME
+                + " socksPort=" + VpnHevTransportSession.DEFAULT_SOCKS_PORT);
+        return true;
+    }
+
     private void closeVpnTunSessionAfterNativeHandoff() {
         VpnTunPlatformSession session = vpnTunSession;
         vpnTunSession = null;
@@ -1556,6 +1581,19 @@ public final class RuntimeService extends VpnService {
             session.close();
         } catch (IOException error) {
             appendLog("vpn_tun_cleanup_failed=" + messageOf(error));
+        }
+    }
+
+    private void closeVpnHevSessionQuietly() {
+        VpnHevTransportSession session = vpnHevSession;
+        vpnHevSession = null;
+        if (session == null) {
+            return;
+        }
+        try {
+            session.close();
+        } catch (RuntimeException error) {
+            appendLog("vpn_hev_cleanup_failed=" + messageOf(error));
         }
     }
 
@@ -1887,6 +1925,7 @@ public final class RuntimeService extends VpnService {
     }
 
     private void clearProfileHandles() {
+        closeVpnHevSessionQuietly();
         closeVpnTunSessionAfterNativeHandoff();
         profileRoot = null;
         pidFile = null;

@@ -204,6 +204,8 @@ vapi_header="$vapi_build_dir/CMakeFiles/vpp-api/vapi/vpe.api.vapi.h"
 vapi_lib_dir="$vapi_build_dir/lib/aarch64-linux-android"
 [[ -f "$native_dir/sakamoto_vpp_control.c" && -f "$native_dir/sakamoto_vpp_control_jni.c" ]] \
   || die "missing committed native core control source"
+[[ -f "$native_dir/sakamoto_vpn_transport_jni.c" ]] \
+  || die "missing committed native VPN transport source"
 [[ -f "$vapi_header" ]] || die "generated VPE VAPI header is missing: $vapi_header"
 for vapi_lib in libvapiclient.so libvlibmemoryclient.so; do
   [[ -f "$vapi_lib_dir/$vapi_lib" ]] \
@@ -227,6 +229,11 @@ control_clang="${ANDROID_CLANG:-$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/
   -L"$jni_dir" -Wl,-rpath,'$ORIGIN' -Wl,-soname,libsakamoto_runtime_control.so \
   -lvapiclient -ldl -lm -o "$jni_dir/libsakamoto_runtime_control.so"
 chmod 755 "$jni_dir/libsakamoto_runtime_control.so"
+"$control_clang" -shared -fPIC -std=c11 -Wall -Wextra -pthread \
+  -I"$native_dir" \
+  "$native_dir/sakamoto_vpn_transport_jni.c" \
+  -llog -ldl -o "$jni_dir/libsakamoto_vpn_transport.so"
+chmod 755 "$jni_dir/libsakamoto_vpn_transport.so"
 
 version="${VPP_RUNTIME_VERSION:-$(strings "$stage_dir/bin/vpp" \
     | awk '/vpp v[0-9]/{if (!found) {print $2; found=1}}') }"
