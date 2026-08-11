@@ -206,6 +206,18 @@ TEST(NfqueueFlowAdapterTest, PolicyDropCompletesRetainedLeaseWithDropVerdict) {
     EXPECT_EQ(counters.parsePassThroughPackets, 0U);
     EXPECT_EQ(counters.capacityPassThroughPackets, 0U);
     EXPECT_EQ(counters.ownerFaultPassThroughPackets, 0U);
+    EXPECT_EQ(counters.policyDropActivity.records, 1U);
+    EXPECT_EQ(counters.policyDropActivity.totalRecords, 1U);
+    EXPECT_EQ(counters.policyDropActivity.evictedRecords, 0U);
+    EXPECT_TRUE(counters.policyDropActivity.hasLastRecord);
+    EXPECT_EQ(counters.policyDropActivity.lastLinuxUid, 10001U);
+    EXPECT_TRUE(counters.policyDropActivity.lastUidKnown);
+    EXPECT_EQ(counters.policyDropActivity.lastNetworkContext, 0U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.stage,
+              Policy::PacketPolicyStage::NetworkGate);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.reasonId, 17U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.ruleId, 42U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.revision, 7U);
 }
 
 TEST(NfqueueFlowAdapterTest, RuntimeAppliedPolicyControlsExistingAdapterPacketPath) {

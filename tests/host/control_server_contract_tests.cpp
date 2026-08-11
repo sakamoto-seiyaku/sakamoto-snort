@@ -1103,6 +1103,10 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     runtime.nfqueueCounters.lastObservedInputInterfaceIndex = 11;
     runtime.nfqueueCounters.lastObservedOutputInterfaceIndex = 22;
     runtime.nfqueueCounters.lastObservedResult = "FlowAccepted";
+    runtime.nfqueueCounters.policyDropActivity.record(
+        Policy::PacketPolicyDecision::drop(
+            17, 42, 7, Policy::PacketPolicyStage::NetworkGate),
+        12546, true, 7);
     ControlServerHarness harness(runtime);
 
     const rapidjson::Document hello = harness.call(8, "HELLO");
@@ -1133,6 +1137,20 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["lastObservedInputInterfaceIndex"].GetUint(), 11U);
     EXPECT_EQ(result["lastObservedOutputInterfaceIndex"].GetUint(), 22U);
     EXPECT_STREQ(result["lastObservedResult"].GetString(), "FlowAccepted");
+    ASSERT_TRUE(result["policyDropActivity"].IsObject());
+    const auto &activity = result["policyDropActivity"];
+    EXPECT_EQ(activity["capacity"].GetUint(), 8U);
+    EXPECT_EQ(activity["records"].GetUint64(), 1U);
+    EXPECT_EQ(activity["totalRecords"].GetUint64(), 1U);
+    EXPECT_EQ(activity["evictedRecords"].GetUint64(), 0U);
+    EXPECT_TRUE(activity["hasLastRecord"].GetBool());
+    EXPECT_EQ(activity["lastLinuxUid"].GetUint(), 12546U);
+    EXPECT_TRUE(activity["lastUidKnown"].GetBool());
+    EXPECT_EQ(activity["lastNetworkContext"].GetUint(), 7U);
+    EXPECT_STREQ(activity["lastStage"].GetString(), "NetworkGate");
+    EXPECT_EQ(activity["lastReasonId"].GetUint(), 17U);
+    EXPECT_EQ(activity["lastRuleId"].GetUint64(), 42U);
+    EXPECT_EQ(activity["lastRevision"].GetUint64(), 7U);
 }
 
 TEST(ControlServerContract, HelloOmitsVpnTunCountersCapabilityWhenUnsupported) {
@@ -1188,6 +1206,10 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     runtime.vpnTunCounters.lastObservedInterfaceIndex = 9;
     runtime.vpnTunCounters.lastObservedDirection = "transport-return";
     runtime.vpnTunCounters.lastObservedResult = "FlowForwarded";
+    runtime.vpnTunCounters.policyDropActivity.record(
+        Policy::PacketPolicyDecision::drop(
+            91, 7001, 69, Policy::PacketPolicyStage::NetworkGate),
+        12546, true, 7);
     ControlServerHarness harness(runtime);
 
     const rapidjson::Document hello = harness.call(48, "HELLO");
@@ -1226,6 +1248,20 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(result["lastObservedInterfaceIndex"].GetUint(), 9U);
     EXPECT_STREQ(result["lastObservedDirection"].GetString(), "transport-return");
     EXPECT_STREQ(result["lastObservedResult"].GetString(), "FlowForwarded");
+    ASSERT_TRUE(result["policyDropActivity"].IsObject());
+    const auto &activity = result["policyDropActivity"];
+    EXPECT_EQ(activity["capacity"].GetUint(), 8U);
+    EXPECT_EQ(activity["records"].GetUint64(), 1U);
+    EXPECT_EQ(activity["totalRecords"].GetUint64(), 1U);
+    EXPECT_EQ(activity["evictedRecords"].GetUint64(), 0U);
+    EXPECT_TRUE(activity["hasLastRecord"].GetBool());
+    EXPECT_EQ(activity["lastLinuxUid"].GetUint(), 12546U);
+    EXPECT_TRUE(activity["lastUidKnown"].GetBool());
+    EXPECT_EQ(activity["lastNetworkContext"].GetUint(), 7U);
+    EXPECT_STREQ(activity["lastStage"].GetString(), "NetworkGate");
+    EXPECT_EQ(activity["lastReasonId"].GetUint(), 91U);
+    EXPECT_EQ(activity["lastRuleId"].GetUint64(), 7001U);
+    EXPECT_EQ(activity["lastRevision"].GetUint64(), 69U);
 }
 
 TEST(ControlServerContract, PolicyUnknownApplicationSubjectMatchesUidUnknownFacts) {

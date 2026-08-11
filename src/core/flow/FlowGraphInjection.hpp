@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace SnortDatapath::Flow {
 
@@ -56,10 +57,16 @@ public:
         return counters_;
     }
 
+    [[nodiscard]] const std::optional<Policy::PacketPolicyDecision> &
+    lastPolicyDropDecision() const noexcept {
+        return lastPolicyDropDecision_;
+    }
+
 private:
     FlowSteeringRuntime &runtime_;
     const Policy::PacketPolicySnapshot &policy_;
     GraphInjectionCounters counters_;
+    std::optional<Policy::PacketPolicyDecision> lastPolicyDropDecision_;
 };
 
 } // namespace SnortDatapath::Flow

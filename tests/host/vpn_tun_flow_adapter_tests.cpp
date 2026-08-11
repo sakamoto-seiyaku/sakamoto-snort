@@ -346,6 +346,52 @@ TEST(VpnTunFlowAdapterTest, KnownUidUsesSharedRuntimePolicyDrop) {
     EXPECT_EQ(counters.lastObservedNetworkContext, 7U);
     EXPECT_EQ(counters.lastObservedInterfaceIndex, 9U);
     EXPECT_EQ(counters.lastObservedResult, "FlowDropped");
+    EXPECT_EQ(counters.policyDropActivity.records, 1U);
+    EXPECT_EQ(counters.policyDropActivity.totalRecords, 1U);
+    EXPECT_EQ(counters.policyDropActivity.evictedRecords, 0U);
+    EXPECT_TRUE(counters.policyDropActivity.hasLastRecord);
+    EXPECT_EQ(counters.policyDropActivity.lastLinuxUid, 12546U);
+    EXPECT_TRUE(counters.policyDropActivity.lastUidKnown);
+    EXPECT_EQ(counters.policyDropActivity.lastNetworkContext, 7U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.stage,
+              Policy::PacketPolicyStage::NetworkGate);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.reasonId, 91U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.ruleId, 7001U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.revision, 69U);
+}
+
+TEST(VpnTunFlowAdapterTest, PolicyDropActivityIsBoundedAndEvictsOldDetail) {
+    Policy::RuntimePacketPolicySnapshot policy;
+    policy.apply(
+        {networkGateDropSubject(12546, true, 7, 91, 7001)},
+        69);
+    VpnTunFlowAdapter adapter(VpnTunFlowAdapterConfig{.packetPolicy = &policy});
+    const auto packet = ipv4TcpPacket();
+
+    for (std::size_t index = 0;
+         index < Policy::PacketPolicyDropActivityCounters::kDefaultCapacity + 1;
+         ++index) {
+        EXPECT_EQ(adapter.process(
+                      VpnTunPacketDirection::Outbound,
+                      std::span<const std::uint8_t>{packet}, packet.size(),
+                      VpnTunPacketMetadata{
+                          .linuxUid = 12546,
+                          .networkContext = 7,
+                          .interfaceIndex = 9,
+                          .uidKnown = true,
+                      }),
+                  VpnTunFlowAdapterResult::FlowDropped);
+    }
+
+    const auto counters = adapter.counters();
+    EXPECT_EQ(counters.droppedPackets, 9U);
+    EXPECT_EQ(counters.policyDropActivity.capacity, 8U);
+    EXPECT_EQ(counters.policyDropActivity.records, 8U);
+    EXPECT_EQ(counters.policyDropActivity.totalRecords, 9U);
+    EXPECT_EQ(counters.policyDropActivity.evictedRecords, 1U);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.stage,
+              Policy::PacketPolicyStage::NetworkGate);
+    EXPECT_EQ(counters.policyDropActivity.lastDecision.ruleId, 7001U);
 }
 
 TEST(VpnTunFlowAdapterTest, UnknownApplicationFallbackIsImmediateAndPolicyAddressable) {

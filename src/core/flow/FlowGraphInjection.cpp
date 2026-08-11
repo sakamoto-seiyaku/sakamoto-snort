@@ -51,8 +51,10 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
     const auto decision = distribution.checkOwner(
         *descriptorId, currentWorker, runtime_.ownerGuard());
     if (decision == OwnerGuardDecision::Local) {
-        if (isPolicyDrop(policy_.evaluate(descriptor->facts))) {
+        const auto policyDecision = policy_.evaluate(descriptor->facts);
+        if (isPolicyDrop(policyDecision)) {
             if (distribution.complete(*descriptorId, PacketLeaseOutcome::Dropped)) {
+                lastPolicyDropDecision_ = policyDecision;
                 ++counters_.policyDrops;
                 return GraphInjectionResult::PolicyDrop;
             }
@@ -69,9 +71,12 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
             if (retryId.has_value() && distribution.checkOwner(
                     *retryId, owner, runtime_.ownerGuard()) == OwnerGuardDecision::Local) {
                 const auto *retryDescriptor = distribution.descriptor(*retryId);
-                if (retryDescriptor != nullptr
-                    && isPolicyDrop(policy_.evaluate(retryDescriptor->facts))) {
+                const auto policyDecision = retryDescriptor == nullptr
+                    ? Policy::PacketPolicyDecision::passNext()
+                    : policy_.evaluate(retryDescriptor->facts);
+                if (retryDescriptor != nullptr && isPolicyDrop(policyDecision)) {
                     if (distribution.complete(*retryId, PacketLeaseOutcome::Dropped)) {
+                        lastPolicyDropDecision_ = policyDecision;
                         ++counters_.policyDrops;
                         return GraphInjectionResult::PolicyDrop;
                     }

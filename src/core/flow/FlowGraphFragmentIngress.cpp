@@ -47,7 +47,13 @@ FlowGraphIngressResult FlowGraphFragmentIngress::injectFacts(
 
     const auto owner = fragments_.selector().ownerFor(*key);
     PacketSubmission submission{.facts = std::move(facts)};
-    return {.status = statusFor(injectionGate_.inject(submission, owner))};
+    const auto result = injectionGate_.inject(submission, owner);
+    return {
+        .status = statusFor(result),
+        .policyDecision = result == GraphInjectionResult::PolicyDrop
+            ? injectionGate_.lastPolicyDropDecision()
+            : std::optional<Policy::PacketPolicyDecision>{},
+    };
 }
 
 FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
@@ -85,11 +91,15 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
     }
 
     PacketSubmission submission{.facts = std::move(reassembledFacts)};
+    const auto result = injectionGate_.inject(submission, owner);
     return {
-        .status = statusFor(injectionGate_.inject(submission, owner)),
+        .status = statusFor(result),
         .datagramKey = fragment.datagramKey,
         .fragmentReassembled = true,
         .fragmentOwnerMetadata = fragment.owner.has_value(),
+        .policyDecision = result == GraphInjectionResult::PolicyDrop
+            ? injectionGate_.lastPolicyDropDecision()
+            : std::optional<Policy::PacketPolicyDecision>{},
     };
 }
 

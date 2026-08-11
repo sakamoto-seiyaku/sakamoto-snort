@@ -807,7 +807,26 @@ public class DebugControlActivity extends Activity {
                 + countersAfter.optLong("lastObservedLinuxUid", -1L)
                 + " lastObservedResult="
                 + countersAfter.optString("lastObservedResult", "unknown")
+                + "\nPolicy drop activity: "
+                + formatPolicyDropActivity(countersAfter.optJSONObject("policyDropActivity"))
                 + "\nProbe: " + probeResult;
+    }
+
+    private String formatPolicyDropActivity(JSONObject activity) {
+        if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
+            return "none";
+        }
+        return "records=" + activity.optLong("records", 0L)
+                + "/" + activity.optLong("capacity", 0L)
+                + " total=" + activity.optLong("totalRecords", 0L)
+                + " evicted=" + activity.optLong("evictedRecords", 0L)
+                + " uid=" + activity.optLong("lastLinuxUid", -1L)
+                + " uidKnown=" + activity.optBoolean("lastUidKnown", false)
+                + " context=" + activity.optLong("lastNetworkContext", -1L)
+                + " stage=" + activity.optString("lastStage", "unknown")
+                + " reason=" + activity.optLong("lastReasonId", -1L)
+                + " rule=" + activity.optLong("lastRuleId", -1L)
+                + " revision=" + activity.optLong("lastRevision", -1L);
     }
 
     private String boundedError(Throwable error) {

@@ -141,6 +141,13 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
         break;
     case Flow::FlowGraphIngressStatus::PolicyDrop:
         ++counters_.droppedPackets;
+        if (graphResult.policyDecision.has_value()) {
+            counters_.policyDropActivity.record(
+                *graphResult.policyDecision,
+                metadata.linuxUid,
+                metadata.uidMetadataPresent,
+                metadata.networkContext);
+        }
         break;
     case Flow::FlowGraphIngressStatus::ParseFailOpen:
         ++counters_.parsePassThroughPackets;

@@ -139,6 +139,7 @@ public:
             .directPackets = counters.directPackets,
             .ownerGuardPasses = counters.ownerGuardPasses,
             .ownerGuardMismatches = counters.ownerGuardMismatches,
+            .policyDropActivity = counters.policyDropActivity,
             .lastObservedLinuxUid = counters.lastObservedLinuxUid,
             .lastObservedUidKnown = counters.lastObservedUidKnown,
             .lastObservedNetworkContext = counters.lastObservedNetworkContext,

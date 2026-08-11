@@ -34,6 +34,7 @@ struct FlowGraphIngressResult final {
     std::optional<FragmentKey> datagramKey;
     bool fragmentReassembled = false;
     bool fragmentOwnerMetadata = false;
+    std::optional<Policy::PacketPolicyDecision> policyDecision;
 };
 
 /**

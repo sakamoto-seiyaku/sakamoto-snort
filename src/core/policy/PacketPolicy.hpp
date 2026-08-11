@@ -46,6 +46,37 @@ struct PacketPolicyDecision {
         PacketPolicyStage stage = PacketPolicyStage::L4) noexcept;
 };
 
+struct PacketPolicyDropActivityCounters {
+    static constexpr std::uint32_t kDefaultCapacity = 8;
+
+    std::uint32_t capacity = kDefaultCapacity;
+    std::uint64_t records = 0;
+    std::uint64_t totalRecords = 0;
+    std::uint64_t evictedRecords = 0;
+    bool hasLastRecord = false;
+    std::uint32_t lastLinuxUid = 0;
+    bool lastUidKnown = false;
+    std::uint32_t lastNetworkContext = 0;
+    PacketPolicyDecision lastDecision{};
+
+    void record(PacketPolicyDecision decision,
+                std::uint32_t linuxUid,
+                bool uidKnown,
+                std::uint32_t networkContext) noexcept {
+        ++totalRecords;
+        if (records < capacity) {
+            ++records;
+        } else {
+            ++evictedRecords;
+        }
+        hasLastRecord = true;
+        lastLinuxUid = linuxUid;
+        lastUidKnown = uidKnown;
+        lastNetworkContext = networkContext;
+        lastDecision = decision;
+    }
+};
+
 struct NetworkGateView {
     struct ContextRule {
         std::uint32_t networkContext = 0;

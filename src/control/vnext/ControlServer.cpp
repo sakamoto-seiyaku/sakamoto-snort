@@ -211,6 +211,29 @@ rapidjson::Document makeStatusResult(
     return result;
 }
 
+const char *stageName(SnortDatapath::Policy::PacketPolicyStage stage) noexcept;
+
+rapidjson::Value makePolicyDropActivityResult(
+    const SnortDatapath::Policy::PacketPolicyDropActivityCounters &activity,
+    rapidjson::Document::AllocatorType &alloc) {
+    rapidjson::Value result(rapidjson::kObjectType);
+    result.AddMember("capacity", activity.capacity, alloc);
+    result.AddMember("records", activity.records, alloc);
+    result.AddMember("totalRecords", activity.totalRecords, alloc);
+    result.AddMember("evictedRecords", activity.evictedRecords, alloc);
+    result.AddMember("hasLastRecord", activity.hasLastRecord, alloc);
+    result.AddMember("lastLinuxUid", activity.lastLinuxUid, alloc);
+    result.AddMember("lastUidKnown", activity.lastUidKnown, alloc);
+    result.AddMember("lastNetworkContext", activity.lastNetworkContext, alloc);
+    rapidjson::Value lastStage;
+    lastStage.SetString(stageName(activity.lastDecision.stage), alloc);
+    result.AddMember("lastStage", lastStage, alloc);
+    result.AddMember("lastReasonId", activity.lastDecision.reasonId, alloc);
+    result.AddMember("lastRuleId", activity.lastDecision.ruleId, alloc);
+    result.AddMember("lastRevision", activity.lastDecision.revision, alloc);
+    return result;
+}
+
 rapidjson::Document makeNfqueueStatusResult(
     const SnortRuntime::NfqueueRuntimeCounters counters) {
     rapidjson::Document result(rapidjson::kObjectType);
@@ -231,6 +254,9 @@ rapidjson::Document makeNfqueueStatusResult(
                      counters.uidMetadataPresentPackets, alloc);
     result.AddMember("uidMetadataMissingPackets",
                      counters.uidMetadataMissingPackets, alloc);
+    result.AddMember("policyDropActivity",
+                     makePolicyDropActivityResult(counters.policyDropActivity, alloc),
+                     alloc);
     result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
     result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);
     result.AddMember("lastObservedNetworkContext",
@@ -283,6 +309,9 @@ rapidjson::Document makeVpnTunStatusResult(
     result.AddMember("directPackets", counters.directPackets, alloc);
     result.AddMember("ownerGuardPasses", counters.ownerGuardPasses, alloc);
     result.AddMember("ownerGuardMismatches", counters.ownerGuardMismatches, alloc);
+    result.AddMember("policyDropActivity",
+                     makePolicyDropActivityResult(counters.policyDropActivity, alloc),
+                     alloc);
     result.AddMember("lastObservedLinuxUid", counters.lastObservedLinuxUid, alloc);
     result.AddMember("lastObservedUidKnown", counters.lastObservedUidKnown, alloc);
     result.AddMember("lastObservedNetworkContext",
