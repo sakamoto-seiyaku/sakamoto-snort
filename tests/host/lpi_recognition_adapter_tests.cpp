@@ -231,6 +231,9 @@ public:
 };
 
 TEST(LpiRecognitionProviderTest, DisabledProviderIsObservableWithoutMutatingFlowState) {
+    EXPECT_FALSE(Protocol::kRealLpiProviderEnabledByDefault);
+    EXPECT_EQ(Protocol::kDisabledLpiProviderName, "disabled");
+
     Flow::BoundedFlowTable table(4);
     const auto packet = tcpPacket();
     ASSERT_TRUE(table.observeAccepted(packet, 7).has_value());

@@ -25,6 +25,20 @@ option(
   "Configure the Android NDK arm64 root daemon target"
   OFF
 )
+option(
+  SAKAMOTO_ENABLE_LPI_PROVIDER
+  "Build a real LPI/libprotoident recognition provider; requires an explicit source decision"
+  OFF
+)
+
+if(SAKAMOTO_ENABLE_LPI_PROVIDER)
+  message(
+    FATAL_ERROR
+    "SAKAMOTO_ENABLE_LPI_PROVIDER=ON requested, but no real LPI provider source is selected; keep this OFF until S61 source/provenance approval lands"
+  )
+endif()
+
+add_compile_definitions(SAKAMOTO_LPI_PROVIDER_DISABLED_BY_DEFAULT=1)
 
 if(SNORT_ENABLE_DELEGATED_BUILD_TARGETS)
   add_custom_target(

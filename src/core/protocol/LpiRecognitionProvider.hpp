@@ -16,6 +16,9 @@
 
 namespace SnortDatapath::Protocol {
 
+inline constexpr std::string_view kDisabledLpiProviderName = "disabled";
+inline constexpr bool kRealLpiProviderEnabledByDefault = false;
+
 struct LpiPacketSubmission {
     const Flow::PacketFacts &facts;
     std::span<const std::byte> l3Packet;
@@ -52,7 +55,7 @@ class DisabledLpiRecognitionProvider final : public LpiRecognitionProvider {
 public:
     [[nodiscard]] bool available() const noexcept override { return false; }
     [[nodiscard]] std::string_view providerName() const noexcept override {
-        return "disabled";
+        return kDisabledLpiProviderName;
     }
     [[nodiscard]] std::optional<LpiProviderFact> recognize(
         const LpiPacketSubmission &) noexcept override {

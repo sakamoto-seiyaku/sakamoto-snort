@@ -55,6 +55,16 @@ Contract guardrails:
   adapter completion; `LpiRecognitionAdapter` maps provider aliases through the
   project-owned Application Protocol Catalog; recognition state is recorded on
   the worker-owned `BoundedFlowTable` / `FlowEntry`.
+- The build contract now pins real-provider compilation behind
+  `SAKAMOTO_ENABLE_LPI_PROVIDER`, which defaults `OFF` and fails configure if
+  enabled before an explicit source/provenance decision selects provider source.
+- The runtime contract now has host coverage for both Root/NFQUEUE and VPN/TUN:
+  after payload-bearing eligible traffic with no injected provider,
+  `lpiProvider.available=false`, `lpiProvider.name=disabled`,
+  `providerUnavailablePackets` increments, and
+  `packetsSubmittedToProvider` remains `0`; control-plane JSON contract tests
+  pin the same disabled `lpiProvider` status shape for `NFQUEUE.STATUS` and
+  `VPN_TUN.STATUS`.
 - No real provider is wired by default. No provider source has been copied into
   this repository. No PCAP corpus or expected JSON has been imported. No Android
   Root/VPN device evidence proves a real provider. No ProtocolRule enforcement

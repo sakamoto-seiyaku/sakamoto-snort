@@ -632,6 +632,36 @@ TEST(VpnTunFlowAdapterTest, LpiProviderFactUpdatesActivityBeforeAdapterCompletio
               Flow::FlowRelativeDirection::Orig);
 }
 
+TEST(VpnTunFlowAdapterTest, DefaultLpiProviderStaysDisabledAfterEligiblePayloadTraffic) {
+    VpnTunFlowAdapter adapter(VpnTunFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+    });
+    const auto packet = ipv4TcpPacketWithPayload();
+
+    EXPECT_EQ(adapter.process(
+                  VpnTunPacketDirection::Outbound,
+                  std::span<const std::uint8_t>{packet}, packet.size(),
+                  VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true}),
+              VpnTunFlowAdapterResult::FlowForwarded);
+
+    const auto counters = adapter.counters();
+    EXPECT_FALSE(counters.lpiProvider.available);
+    EXPECT_EQ(counters.lpiProvider.providerName, Protocol::kDisabledLpiProviderName);
+    EXPECT_EQ(counters.lpiProvider.counters.packetsObserved, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.payloadEligiblePackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerUnavailablePackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.packetsSubmittedToProvider, 0U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerNoResultPackets, 0U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerFactPackets, 0U);
+    EXPECT_EQ(counters.allowedFlowActivity.records, 1U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.payloadPacketsSubmitted, 0U);
+    EXPECT_TRUE(counters.allowedFlowActivity.lastLpiRecognition.mappedResultsEmpty());
+    EXPECT_FALSE(counters.allowedFlowActivity.lastLpiRecognition.latestExactResult()
+                     .has_value());
+}
+
 TEST(VpnTunFlowAdapterTest, SupportsIpv6UdpThroughSharedParser) {
     VpnTunFlowAdapter adapter;
     const auto packet = ipv6UdpPacket();

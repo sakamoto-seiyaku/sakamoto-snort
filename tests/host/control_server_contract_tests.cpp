@@ -395,6 +395,27 @@ std::vector<std::string_view> capabilityStrings(const rapidjson::Value &capabili
     return out;
 }
 
+void expectDisabledLpiProviderStatus(
+    const rapidjson::Value &lpiProvider,
+    const std::uint64_t packetsObserved,
+    const std::uint64_t payloadEligiblePackets,
+    const std::uint64_t providerUnavailablePackets) {
+    ASSERT_TRUE(lpiProvider.IsObject());
+    EXPECT_FALSE(lpiProvider["available"].GetBool());
+    EXPECT_EQ(std::string_view(lpiProvider["name"].GetString(),
+                               lpiProvider["name"].GetStringLength()),
+              Protocol::kDisabledLpiProviderName);
+    EXPECT_EQ(lpiProvider["packetsObserved"].GetUint64(), packetsObserved);
+    EXPECT_EQ(lpiProvider["payloadEligiblePackets"].GetUint64(),
+              payloadEligiblePackets);
+    EXPECT_EQ(lpiProvider["terminalSkippedPackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerUnavailablePackets"].GetUint64(),
+              providerUnavailablePackets);
+    EXPECT_EQ(lpiProvider["packetsSubmittedToProvider"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerNoResultPackets"].GetUint64(), 0U);
+    EXPECT_EQ(lpiProvider["providerFactPackets"].GetUint64(), 0U);
+}
+
 rapidjson::Document waitForVpnTunPacketsSeen(ControlServerHarness &harness,
                                              const std::uint64_t packetsSeen,
                                              std::uint32_t &id) {
@@ -1156,6 +1177,29 @@ TEST(ControlServerContract, NfqueueStatusIsUnsupportedWithoutRuntimeCapability) 
     EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
 }
 
+TEST(ControlServerContract, NfqueueStatusExposesDisabledLpiProvider) {
+    FakeRuntimeControl runtime;
+    runtime.nfqueueCountersReady = true;
+    runtime.nfqueueCounters.packetsSeen = 2;
+    runtime.nfqueueCounters.acceptedPackets = 2;
+    runtime.nfqueueCounters.lpiProvider = Protocol::LpiProviderStatus{
+        .available = false,
+        .providerName = Protocol::kDisabledLpiProviderName,
+        .counters = Protocol::LpiProviderCounters{
+            .packetsObserved = 2,
+            .payloadEligiblePackets = 1,
+            .providerUnavailablePackets = 1,
+        },
+    };
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(70, "NFQUEUE.STATUS");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    expectDisabledLpiProviderStatus(
+        response["result"]["lpiProvider"], 2U, 1U, 1U);
+}
+
 TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     FakeRuntimeControl runtime;
     runtime.nfqueueCountersReady = true;
@@ -1375,6 +1419,29 @@ TEST(ControlServerContract, VpnTunAttributionApplyIsUnsupportedWithoutRuntimeCap
 
     ASSERT_FALSE(response["ok"].GetBool());
     EXPECT_STREQ(response["error"]["code"].GetString(), "UNSUPPORTED_COMMAND");
+}
+
+TEST(ControlServerContract, VpnTunStatusExposesDisabledLpiProvider) {
+    FakeRuntimeControl runtime;
+    runtime.vpnTunCountersReady = true;
+    runtime.vpnTunCounters.packetsSeen = 3;
+    runtime.vpnTunCounters.forwardedPackets = 3;
+    runtime.vpnTunCounters.lpiProvider = Protocol::LpiProviderStatus{
+        .available = false,
+        .providerName = Protocol::kDisabledLpiProviderName,
+        .counters = Protocol::LpiProviderCounters{
+            .packetsObserved = 3,
+            .payloadEligiblePackets = 2,
+            .providerUnavailablePackets = 2,
+        },
+    };
+    ControlServerHarness harness(runtime);
+
+    const rapidjson::Document response = harness.call(71, "VPN_TUN.STATUS");
+
+    ASSERT_TRUE(response["ok"].GetBool());
+    expectDisabledLpiProviderStatus(
+        response["result"]["lpiProvider"], 3U, 2U, 2U);
 }
 
 TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {

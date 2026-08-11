@@ -265,6 +265,35 @@ TEST(NfqueueFlowAdapterTest, LpiProviderFactUpdatesActivityBeforeAdapterCompleti
               Flow::FlowRelativeDirection::Orig);
 }
 
+TEST(NfqueueFlowAdapterTest, DefaultLpiProviderStaysDisabledAfterEligiblePayloadTraffic) {
+    NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{
+        .workerCount = 4,
+        .hashSeed = 0x1234,
+        .queueCapacity = 4,
+        .copyPrefixBytes = 512,
+    });
+    const auto packet = tcpPacketWithPayload();
+
+    EXPECT_EQ(adapter.process(2, kNfqueueHookLocalIn,
+                               std::span<const std::uint8_t>{packet}, packet.size()),
+              NfqueueFlowAdapterResult::FlowAccepted);
+
+    const auto counters = adapter.counters();
+    EXPECT_FALSE(counters.lpiProvider.available);
+    EXPECT_EQ(counters.lpiProvider.providerName, Protocol::kDisabledLpiProviderName);
+    EXPECT_EQ(counters.lpiProvider.counters.packetsObserved, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.payloadEligiblePackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerUnavailablePackets, 1U);
+    EXPECT_EQ(counters.lpiProvider.counters.packetsSubmittedToProvider, 0U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerNoResultPackets, 0U);
+    EXPECT_EQ(counters.lpiProvider.counters.providerFactPackets, 0U);
+    EXPECT_EQ(counters.allowedFlowActivity.records, 1U);
+    EXPECT_EQ(counters.allowedFlowActivity.lastLpiRecognition.payloadPacketsSubmitted, 0U);
+    EXPECT_TRUE(counters.allowedFlowActivity.lastLpiRecognition.mappedResultsEmpty());
+    EXPECT_FALSE(counters.allowedFlowActivity.lastLpiRecognition.latestExactResult()
+                     .has_value());
+}
+
 TEST(NfqueueFlowAdapterTest, PolicyDropCompletesRetainedLeaseWithDropVerdict) {
     DropUidPolicy policy(10001);
     NfqueueFlowAdapter adapter(NfqueueFlowAdapterConfig{

@@ -10,6 +10,7 @@ stellar_lpi_wrapper_inventory="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION
 provider_source_decision_input="$repo_root/docs/reference/PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_DECISION_INPUT.md"
 reference_readme="$repo_root/docs/reference/README.md"
 release_gate="$repo_root/docs/product/ANDROID_L4_RELEASE_GATE.md"
+root_cmake="$repo_root/CMakeLists.txt"
 corpus_inventory_script="$repo_root/tools/protocol_identification/vpp_lpi_corpus_inventory.sh"
 expected_alias_inventory_script="$repo_root/tools/protocol_identification/vpp_lpi_expected_alias_inventory.py"
 wrapper_inventory_script="$repo_root/tools/protocol_identification/vpp_stellar_lpi_wrapper_inventory.sh"
@@ -168,6 +169,19 @@ grep -q 'should not start from protocol rule' "$inventory"
 grep -q 'enforcement. It should first add a real, pinned recognizer provider' "$inventory"
 grep -q 'Pin a source strategy for the recognizer' "$inventory"
 grep -q 'before touching ProtocolRule enforcement' "$inventory"
+
+[[ -f "$root_cmake" ]]
+grep -q 'SAKAMOTO_ENABLE_LPI_PROVIDER' "$root_cmake"
+grep -q 'OFF' "$root_cmake"
+grep -q 'no real LPI provider source is selected' "$root_cmake"
+grep -q 'SAKAMOTO_LPI_PROVIDER_DISABLED_BY_DEFAULT=1' "$root_cmake"
+
+grep -q 'kDisabledLpiProviderName' "$repo_root/src/core/protocol/LpiRecognitionProvider.hpp"
+grep -q 'kRealLpiProviderEnabledByDefault = false' "$repo_root/src/core/protocol/LpiRecognitionProvider.hpp"
+grep -q 'DefaultLpiProviderStaysDisabledAfterEligiblePayloadTraffic' "$repo_root/tests/host/nfqueue_flow_adapter_tests.cpp"
+grep -q 'DefaultLpiProviderStaysDisabledAfterEligiblePayloadTraffic' "$repo_root/tests/host/vpn_tun_flow_adapter_tests.cpp"
+grep -q 'NfqueueStatusExposesDisabledLpiProvider' "$repo_root/tests/host/control_server_contract_tests.cpp"
+grep -q 'VpnTunStatusExposesDisabledLpiProvider' "$repo_root/tests/host/control_server_contract_tests.cpp"
 
 grep -q 'Protocol Identification VPP Reference Inventory' "$reference_readme"
 grep -q '作为 SAKAMOTO-61/S63 的参考输入' "$reference_readme"
