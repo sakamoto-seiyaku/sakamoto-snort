@@ -38,9 +38,9 @@ TEST(ApplicationProtocolCatalogTest, TombstonesStayReservedAndCategoriesAreExact
     EXPECT_TRUE(applicationProtocolIsActive(ApplicationProtocolId::HTTP));
 
     std::vector<ApplicationProtocolId> webIds;
-    for (const auto& entry : kApplicationProtocolCatalog) {
-        if (entry.status == std::string_view{"active"}
-            && entry.category == std::string_view{"web"}) {
+    for (const auto &entry : kApplicationProtocolCatalog) {
+        if (entry.status == std::string_view{"active"} &&
+            entry.category == std::string_view{"web"}) {
             webIds.push_back(entry.id);
         }
     }

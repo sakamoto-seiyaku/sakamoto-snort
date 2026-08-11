@@ -266,7 +266,8 @@ def write_cpp(entries: list[Entry], out_root: Path) -> None:
         "};",
         "",
         "inline constexpr std::uint32_t kApplicationProtocolCatalogVersion = 1;",
-        "inline constexpr std::array<ApplicationProtocolEntry, %d> kApplicationProtocolCatalog = {{" % len(entries),
+        "inline constexpr std::array<ApplicationProtocolEntry, %d> kApplicationProtocolCatalog = {{"
+        % len(entries),
     ])
     for entry in entries:
         category = "" if entry.category == "-" else entry.category
@@ -277,18 +278,20 @@ def write_cpp(entries: list[Entry], out_root: Path) -> None:
     lines.extend([
         "}};",
         "",
-        "inline constexpr std::array<ApplicationProtocolProviderAlias, %d> kApplicationProtocolProviderAliases = {{" % sum(len(entry.provider_aliases) for entry in entries),
+        "inline constexpr std::array<ApplicationProtocolProviderAlias, %d>"
+        % sum(len(entry.provider_aliases) for entry in entries),
+        "    kApplicationProtocolProviderAliases = {{",
     ])
     for entry in entries:
         for alias in entry.provider_aliases:
             lines.append(
-                f"    {{\"{alias}\", ApplicationProtocolId::{entry.const_name}}},"
+                f"        {{\"{alias}\", ApplicationProtocolId::{entry.const_name}}},"
             )
     lines.extend([
-        "}};",
+        "    }};",
         "",
         "inline constexpr std::string_view applicationProtocolKey(ApplicationProtocolId id) {",
-        "    for (const auto& entry : kApplicationProtocolCatalog) {",
+        "    for (const auto &entry : kApplicationProtocolCatalog) {",
         "        if (entry.id == id) {",
         "            return entry.key;",
         "        }",
@@ -297,7 +300,7 @@ def write_cpp(entries: list[Entry], out_root: Path) -> None:
         "}",
         "",
         "inline constexpr std::string_view applicationProtocolCategory(ApplicationProtocolId id) {",
-        "    for (const auto& entry : kApplicationProtocolCatalog) {",
+        "    for (const auto &entry : kApplicationProtocolCatalog) {",
         "        if (entry.id == id) {",
         "            return entry.category;",
         "        }",
@@ -305,8 +308,9 @@ def write_cpp(entries: list[Entry], out_root: Path) -> None:
         "    return {};",
         "}",
         "",
-        "inline constexpr std::optional<ApplicationProtocolId> applicationProtocolIdForProviderAlias(std::string_view alias) {",
-        "    for (const auto& entry : kApplicationProtocolProviderAliases) {",
+        "inline constexpr std::optional<ApplicationProtocolId>",
+        "applicationProtocolIdForProviderAlias(std::string_view alias) {",
+        "    for (const auto &entry : kApplicationProtocolProviderAliases) {",
         "        if (entry.alias == alias) {",
         "            return entry.id;",
         "        }",
@@ -315,7 +319,7 @@ def write_cpp(entries: list[Entry], out_root: Path) -> None:
         "}",
         "",
         "inline constexpr bool applicationProtocolIsActive(ApplicationProtocolId id) {",
-        "    for (const auto& entry : kApplicationProtocolCatalog) {",
+        "    for (const auto &entry : kApplicationProtocolCatalog) {",
         "        if (entry.id == id) {",
         "            return entry.status == std::string_view{\"active\"};",
         "        }",

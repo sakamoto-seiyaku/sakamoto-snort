@@ -38,17 +38,18 @@ inline constexpr std::array<ApplicationProtocolEntry, 6> kApplicationProtocolCat
     {ApplicationProtocolId::SSH, "ssh", "active", "remote-access"},
 }};
 
-inline constexpr std::array<ApplicationProtocolProviderAlias, 6> kApplicationProtocolProviderAliases = {{
-    {"lpi:dns", ApplicationProtocolId::DNS},
-    {"lpi:http", ApplicationProtocolId::HTTP},
-    {"lpi:ssl", ApplicationProtocolId::TLS},
-    {"lpi:tls", ApplicationProtocolId::TLS},
-    {"lpi:quic", ApplicationProtocolId::QUIC},
-    {"lpi:ssh", ApplicationProtocolId::SSH},
-}};
+inline constexpr std::array<ApplicationProtocolProviderAlias, 6>
+    kApplicationProtocolProviderAliases = {{
+        {"lpi:dns", ApplicationProtocolId::DNS},
+        {"lpi:http", ApplicationProtocolId::HTTP},
+        {"lpi:ssl", ApplicationProtocolId::TLS},
+        {"lpi:tls", ApplicationProtocolId::TLS},
+        {"lpi:quic", ApplicationProtocolId::QUIC},
+        {"lpi:ssh", ApplicationProtocolId::SSH},
+    }};
 
 inline constexpr std::string_view applicationProtocolKey(ApplicationProtocolId id) {
-    for (const auto& entry : kApplicationProtocolCatalog) {
+    for (const auto &entry : kApplicationProtocolCatalog) {
         if (entry.id == id) {
             return entry.key;
         }
@@ -57,7 +58,7 @@ inline constexpr std::string_view applicationProtocolKey(ApplicationProtocolId i
 }
 
 inline constexpr std::string_view applicationProtocolCategory(ApplicationProtocolId id) {
-    for (const auto& entry : kApplicationProtocolCatalog) {
+    for (const auto &entry : kApplicationProtocolCatalog) {
         if (entry.id == id) {
             return entry.category;
         }
@@ -65,8 +66,9 @@ inline constexpr std::string_view applicationProtocolCategory(ApplicationProtoco
     return {};
 }
 
-inline constexpr std::optional<ApplicationProtocolId> applicationProtocolIdForProviderAlias(std::string_view alias) {
-    for (const auto& entry : kApplicationProtocolProviderAliases) {
+inline constexpr std::optional<ApplicationProtocolId>
+applicationProtocolIdForProviderAlias(std::string_view alias) {
+    for (const auto &entry : kApplicationProtocolProviderAliases) {
         if (entry.alias == alias) {
             return entry.id;
         }
@@ -75,7 +77,7 @@ inline constexpr std::optional<ApplicationProtocolId> applicationProtocolIdForPr
 }
 
 inline constexpr bool applicationProtocolIsActive(ApplicationProtocolId id) {
-    for (const auto& entry : kApplicationProtocolCatalog) {
+    for (const auto &entry : kApplicationProtocolCatalog) {
         if (entry.id == id) {
             return entry.status == std::string_view{"active"};
         }
