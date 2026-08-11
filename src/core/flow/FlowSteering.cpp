@@ -43,6 +43,13 @@ void hashU16(std::uint64_t &hash, const std::uint16_t value) noexcept {
     hashByte(hash, static_cast<std::uint8_t>(value & 0xffU));
 }
 
+bool packetMatchesOrigin(const FlowEntry &entry, const PacketFacts &facts) noexcept {
+    return facts.source == entry.originSource
+        && facts.destination == entry.originDestination
+        && facts.sourcePort == entry.originSourcePort
+        && facts.destinationPort == entry.originDestinationPort;
+}
+
 PacketDescriptorSlot descriptorSlot(const PacketDescriptorId id) noexcept {
     return static_cast<PacketDescriptorSlot>(id & kDescriptorSlotMask);
 }
@@ -453,5 +460,74 @@ OwnerGuardDecision PrimarySoftwareDistribution::checkOwner(
     }
     return guard.check(currentWorker, entry->facts, descriptors_[slot].lease);
 }
+
+BoundedFlowTable::BoundedFlowTable(const std::size_t capacity)
+    : capacity_(capacity) {
+    entries_.reserve(capacity_);
+}
+
+const FlowEntry *BoundedFlowTable::find(const CanonicalFlowKey &key) const noexcept {
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == key; });
+    return found == entries_.end() ? nullptr : &*found;
+}
+
+std::optional<FlowEntryObservation> BoundedFlowTable::observeAccepted(
+    const PacketFacts &facts) noexcept {
+    const auto key = CanonicalFlowKey::from(facts);
+    if (!key.has_value()) {
+        ++counters_.nonCanonicalPackets;
+        return std::nullopt;
+    }
+
+    const auto found = std::find_if(
+        entries_.begin(), entries_.end(),
+        [&key](const FlowEntry &entry) noexcept { return entry.key == *key; });
+    if (found != entries_.end()) {
+        found->packets += 1U;
+        found->bytes += facts.originalLength;
+        ++counters_.updates;
+        return FlowEntryObservation{
+            .relativeDirection = packetMatchesOrigin(*found, facts)
+                ? FlowRelativeDirection::Orig
+                : FlowRelativeDirection::Reply,
+            .flowOriginDir = found->flowOriginDir,
+            .created = false,
+            .packets = found->packets,
+            .bytes = found->bytes,
+        };
+    }
+
+    if (entries_.size() >= capacity_) {
+        ++counters_.capacityMisses;
+        return std::nullopt;
+    }
+
+    auto &entry = entries_.emplace_back(FlowEntry{
+        .key = *key,
+        .originSource = facts.source,
+        .originDestination = facts.destination,
+        .originSourcePort = facts.sourcePort,
+        .originDestinationPort = facts.destinationPort,
+        .flowOriginDir = facts.deviceDirection,
+        .packets = 1U,
+        .bytes = facts.originalLength,
+    });
+    ++counters_.creates;
+    return FlowEntryObservation{
+        .relativeDirection = FlowRelativeDirection::Orig,
+        .flowOriginDir = entry.flowOriginDir,
+        .created = true,
+        .packets = entry.packets,
+        .bytes = entry.bytes,
+    };
+}
+
+FlowSteeringRuntime::FlowSteeringRuntime(
+    WorkerLayout layout, const std::size_t queueCapacity,
+    const std::size_t flowCapacity)
+    : distribution_(layout, queueCapacity), guard_(distribution_.selector()),
+      flowTable_(flowCapacity == 0 ? queueCapacity : flowCapacity) {}
 
 } // namespace SnortDatapath::Flow

@@ -61,12 +61,17 @@ public:
     lastPolicyDropDecision() const noexcept {
         return lastPolicyDropDecision_;
     }
+    [[nodiscard]] const std::optional<FlowEntryObservation> &
+    lastFlowEntryObservation() const noexcept {
+        return lastFlowEntryObservation_;
+    }
 
 private:
     FlowSteeringRuntime &runtime_;
     const Policy::PacketPolicySnapshot &policy_;
     GraphInjectionCounters counters_;
     std::optional<Policy::PacketPolicyDecision> lastPolicyDropDecision_;
+    std::optional<FlowEntryObservation> lastFlowEntryObservation_;
 };
 
 } // namespace SnortDatapath::Flow

@@ -252,11 +252,61 @@ private:
     OwnerGuardCounters counters_;
 };
 
+enum class FlowRelativeDirection : std::uint8_t {
+    Orig,
+    Reply,
+};
+
+struct FlowEntry {
+    CanonicalFlowKey key;
+    IpAddress originSource;
+    IpAddress originDestination;
+    std::uint16_t originSourcePort = 0;
+    std::uint16_t originDestinationPort = 0;
+    DevicePacketDirection flowOriginDir = DevicePacketDirection::Input;
+    std::uint64_t packets = 0;
+    std::uint64_t bytes = 0;
+};
+
+struct FlowEntryObservation {
+    FlowRelativeDirection relativeDirection = FlowRelativeDirection::Orig;
+    DevicePacketDirection flowOriginDir = DevicePacketDirection::Input;
+    bool created = false;
+    std::uint64_t packets = 0;
+    std::uint64_t bytes = 0;
+};
+
+struct BoundedFlowTableCounters {
+    std::uint64_t creates = 0;
+    std::uint64_t updates = 0;
+    std::uint64_t capacityMisses = 0;
+    std::uint64_t nonCanonicalPackets = 0;
+};
+
+class BoundedFlowTable final {
+public:
+    explicit BoundedFlowTable(std::size_t capacity);
+
+    [[nodiscard]] std::size_t capacity() const noexcept { return capacity_; }
+    [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
+    [[nodiscard]] const BoundedFlowTableCounters &counters() const noexcept {
+        return counters_;
+    }
+    [[nodiscard]] std::optional<FlowEntryObservation> observeAccepted(
+        const PacketFacts &facts) noexcept;
+    [[nodiscard]] const FlowEntry *find(const CanonicalFlowKey &key) const noexcept;
+
+private:
+    std::size_t capacity_ = 0;
+    std::vector<FlowEntry> entries_;
+    BoundedFlowTableCounters counters_;
+};
+
 /** Pragmatic shared seam used by both normalized packet-capture adapters. */
 class FlowSteeringRuntime final {
 public:
-    FlowSteeringRuntime(WorkerLayout layout, std::size_t queueCapacity)
-        : distribution_(layout, queueCapacity), guard_(distribution_.selector()) {}
+    FlowSteeringRuntime(WorkerLayout layout, std::size_t queueCapacity,
+                        std::size_t flowCapacity = 0);
 
     [[nodiscard]] PrimarySoftwareDistribution &distribution() noexcept { return distribution_; }
     [[nodiscard]] const PrimarySoftwareDistribution &distribution() const noexcept {
@@ -264,10 +314,13 @@ public:
     }
     [[nodiscard]] OwnerGuard &ownerGuard() noexcept { return guard_; }
     [[nodiscard]] const OwnerGuard &ownerGuard() const noexcept { return guard_; }
+    [[nodiscard]] BoundedFlowTable &flowTable() noexcept { return flowTable_; }
+    [[nodiscard]] const BoundedFlowTable &flowTable() const noexcept { return flowTable_; }
 
 private:
     PrimarySoftwareDistribution distribution_;
     OwnerGuard guard_;
+    BoundedFlowTable flowTable_;
 };
 
 } // namespace SnortDatapath::Flow

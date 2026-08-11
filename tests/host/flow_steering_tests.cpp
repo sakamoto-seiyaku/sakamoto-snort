@@ -64,6 +64,56 @@ TEST(FlowSteeringTest, CanonicalReverseDirectionsShareOwnerAcrossAdapters) {
               selector.ownerFor(*forwardKey));
 }
 
+TEST(FlowSteeringTest, FlowEntryCreationPacketDefinesOrigIndependentOfCanonicalEndpoint) {
+    BoundedFlowTable table(4);
+    const auto first = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Output,
+                                 {192, 0, 2, 10}, {10, 0, 0, 9}, 443, 40000);
+    const auto key = CanonicalFlowKey::from(first);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_EQ(key->endpointA, IpAddress::v4({10, 0, 0, 9}));
+    ASSERT_EQ(key->portA, 40000);
+
+    const auto created = table.observeAccepted(first);
+    ASSERT_TRUE(created.has_value());
+    EXPECT_TRUE(created->created);
+    EXPECT_EQ(created->relativeDirection, FlowRelativeDirection::Orig);
+    EXPECT_EQ(created->flowOriginDir, DevicePacketDirection::Output);
+    EXPECT_EQ(table.size(), 1U);
+
+    const auto *entry = table.find(*key);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->originSource, IpAddress::v4({192, 0, 2, 10}));
+    EXPECT_EQ(entry->originDestination, IpAddress::v4({10, 0, 0, 9}));
+    EXPECT_EQ(entry->originSourcePort, 443U);
+    EXPECT_EQ(entry->originDestinationPort, 40000U);
+    EXPECT_EQ(entry->flowOriginDir, DevicePacketDirection::Output);
+
+    const auto reverse = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                                   {10, 0, 0, 9}, {192, 0, 2, 10}, 40000, 443);
+    ASSERT_EQ(*CanonicalFlowKey::from(reverse), *key);
+    const auto updated = table.observeAccepted(reverse);
+    ASSERT_TRUE(updated.has_value());
+    EXPECT_FALSE(updated->created);
+    EXPECT_EQ(updated->relativeDirection, FlowRelativeDirection::Reply);
+    EXPECT_EQ(updated->flowOriginDir, DevicePacketDirection::Output);
+    EXPECT_EQ(updated->packets, 2U);
+    EXPECT_EQ(table.counters().creates, 1U);
+    EXPECT_EQ(table.counters().updates, 1U);
+}
+
+TEST(FlowSteeringTest, BoundedFlowEntryCapacityMissDoesNotCreateUnboundedState) {
+    BoundedFlowTable table(1);
+    const auto first = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                                 {10, 0, 0, 1}, {192, 0, 2, 1}, 40000, 443);
+    const auto second = tcpPacket(AdapterKind::RootNfqueue, DevicePacketDirection::Input,
+                                  {10, 0, 0, 2}, {192, 0, 2, 2}, 40001, 443);
+
+    ASSERT_TRUE(table.observeAccepted(first).has_value());
+    EXPECT_FALSE(table.observeAccepted(second).has_value());
+    EXPECT_EQ(table.size(), 1U);
+    EXPECT_EQ(table.counters().capacityMisses, 1U);
+}
+
 TEST(FlowSteeringTest, IPv4UsesCanonicalLeadingBytes) {
     const auto address = IpAddress::v4({1, 2, 3, 4});
     const std::array<std::uint8_t, 16> expected{1, 2, 3, 4};

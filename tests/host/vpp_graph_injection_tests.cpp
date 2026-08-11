@@ -101,6 +101,12 @@ TEST(VppGraphInjectionTest, RootAndVpnUseOneDirectOwnerGraphGate) {
     EXPECT_EQ(gate.counters().correctiveHandoffs, 0U);
     EXPECT_EQ(gate.counters().policyDrops, 0U);
     EXPECT_EQ(runtime.distribution().counters().normalWorkerHandoffs, 0U);
+    EXPECT_EQ(runtime.flowTable().size(), 1U);
+    ASSERT_TRUE(gate.lastFlowEntryObservation().has_value());
+    EXPECT_EQ(gate.lastFlowEntryObservation()->relativeDirection, FlowRelativeDirection::Reply);
+    EXPECT_EQ(gate.lastFlowEntryObservation()->flowOriginDir,
+              DevicePacketDirection::Input);
+    EXPECT_EQ(gate.lastFlowEntryObservation()->packets, 2U);
 }
 
 TEST(VppGraphInjectionTest, DefaultEmptyPolicySnapshotPreservesAcceptedGraphPath) {
@@ -119,6 +125,10 @@ TEST(VppGraphInjectionTest, DefaultEmptyPolicySnapshotPreservesAcceptedGraphPath
     EXPECT_EQ(gate.inject(submission, owner), GraphInjectionResult::Accepted);
     EXPECT_EQ(gate.counters().acceptedPackets, 1U);
     EXPECT_EQ(gate.counters().policyDrops, 0U);
+    ASSERT_TRUE(gate.lastFlowEntryObservation().has_value());
+    EXPECT_TRUE(gate.lastFlowEntryObservation()->created);
+    EXPECT_EQ(gate.lastFlowEntryObservation()->relativeDirection, FlowRelativeDirection::Orig);
+    EXPECT_EQ(runtime.flowTable().size(), 1U);
 }
 
 TEST(VppGraphInjectionTest, PolicyDropShortCircuitsBeforeAcceptedTerminalPath) {
@@ -137,6 +147,8 @@ TEST(VppGraphInjectionTest, PolicyDropShortCircuitsBeforeAcceptedTerminalPath) {
     EXPECT_EQ(gate.counters().acceptedPackets, 0U);
     EXPECT_EQ(gate.counters().policyDrops, 1U);
     EXPECT_EQ(gate.counters().ownerFaultDrops, 0U);
+    EXPECT_EQ(runtime.flowTable().size(), 0U);
+    EXPECT_FALSE(gate.lastFlowEntryObservation().has_value());
 }
 
 TEST(VppGraphInjectionTest, OwnerSelectionIgnoresUidWhilePolicyCanDropByUid) {
@@ -161,6 +173,9 @@ TEST(VppGraphInjectionTest, OwnerSelectionIgnoresUidWhilePolicyCanDropByUid) {
     EXPECT_EQ(gate.inject(second, owner), GraphInjectionResult::PolicyDrop);
     EXPECT_EQ(gate.counters().acceptedPackets, 1U);
     EXPECT_EQ(gate.counters().policyDrops, 1U);
+    EXPECT_FALSE(gate.lastFlowEntryObservation().has_value());
+    ASSERT_TRUE(gate.lastPolicyDropDecision().has_value());
+    EXPECT_EQ(runtime.flowTable().size(), 1U);
 }
 
 TEST(VppGraphInjectionTest, GraphGateBoundsOneCorrectiveHandoff) {

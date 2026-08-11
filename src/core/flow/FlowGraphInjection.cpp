@@ -18,6 +18,8 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
     PacketSubmission &submission,
     const std::uint32_t currentWorker) noexcept {
     ++counters_.injectedPackets;
+    lastPolicyDropDecision_.reset();
+    lastFlowEntryObservation_.reset();
     const auto key = CanonicalFlowKey::from(submission.facts);
     if (!key.has_value()) {
         (void)submission.lease.drop();
@@ -58,9 +60,13 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
                 ++counters_.policyDrops;
                 return GraphInjectionResult::PolicyDrop;
             }
-        } else if (distribution.complete(*descriptorId, PacketLeaseOutcome::Accepted)) {
-            ++counters_.acceptedPackets;
-            return GraphInjectionResult::Accepted;
+        } else {
+            const auto acceptedFacts = descriptor->facts;
+            if (distribution.complete(*descriptorId, PacketLeaseOutcome::Accepted)) {
+                lastFlowEntryObservation_ = runtime_.flowTable().observeAccepted(acceptedFacts);
+                ++counters_.acceptedPackets;
+                return GraphInjectionResult::Accepted;
+            }
         }
     }
 
@@ -80,10 +86,14 @@ GraphInjectionResult FlowGraphInjectionGate::inject(
                         ++counters_.policyDrops;
                         return GraphInjectionResult::PolicyDrop;
                     }
-                } else if (retryDescriptor != nullptr
-                    && distribution.complete(*retryId, PacketLeaseOutcome::Accepted)) {
-                    ++counters_.acceptedPackets;
-                    return GraphInjectionResult::Accepted;
+                } else if (retryDescriptor != nullptr) {
+                    const auto acceptedFacts = retryDescriptor->facts;
+                    if (distribution.complete(*retryId, PacketLeaseOutcome::Accepted)) {
+                        lastFlowEntryObservation_ =
+                            runtime_.flowTable().observeAccepted(acceptedFacts);
+                        ++counters_.acceptedPackets;
+                        return GraphInjectionResult::Accepted;
+                    }
                 }
             }
             if (retryId.has_value() && distribution.descriptor(*retryId) != nullptr) {
