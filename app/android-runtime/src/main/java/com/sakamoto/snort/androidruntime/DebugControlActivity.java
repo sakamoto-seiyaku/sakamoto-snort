@@ -54,6 +54,7 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_DEBUG_TRAFFIC = "debugTraffic";
     private static final String EXTRA_DEBUG_TRAFFIC_HOST = "debugTrafficHost";
     private static final String EXTRA_DEBUG_TRAFFIC_PORT = "debugTrafficPort";
+    private static final String EXTRA_DEBUG_TRAFFIC_SOURCE_PORT = "debugTrafficSourcePort";
     private static final String EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS =
             "debugTrafficTimeoutMillis";
     private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
@@ -189,14 +190,17 @@ public class DebugControlActivity extends Activity {
             }
             int port = boundedPort(intent.getIntExtra(
                     EXTRA_DEBUG_TRAFFIC_PORT, DEBUG_TRAFFIC_PORT), DEBUG_TRAFFIC_PORT);
+            int sourcePort = boundedOptionalPort(intent.getIntExtra(
+                    EXTRA_DEBUG_TRAFFIC_SOURCE_PORT, 0));
             int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
                     EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS, DEBUG_TRAFFIC_TIMEOUT_MILLIS),
                     DEBUG_TRAFFIC_TIMEOUT_MILLIS);
             final String probeHost = host;
             final int probePort = port;
+            final int probeSourcePort = sourcePort;
             final int probeTimeoutMillis = timeoutMillis;
             main.post(() -> runDebugTrafficProbe(
-                    probeHost, probePort, probeTimeoutMillis));
+                    probeHost, probePort, probeSourcePort, probeTimeoutMillis));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_LISTEN, false)) {
             int port = boundedPort(intent.getIntExtra(
@@ -829,15 +833,16 @@ public class DebugControlActivity extends Activity {
 
     private void runDebugTrafficProbe() {
         runDebugTrafficProbe(DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
-                DEBUG_TRAFFIC_TIMEOUT_MILLIS);
+                0, DEBUG_TRAFFIC_TIMEOUT_MILLIS);
     }
 
-    private void runDebugTrafficProbe(String host, int port, int timeoutMillis) {
+    private void runDebugTrafficProbe(
+            String host, int port, int sourcePort, int timeoutMillis) {
         action("Debug traffic probe requested.");
         Thread probe = new Thread(() -> {
             String result = runDebugTrafficProbeBlocking(
-                    host, port, timeoutMillis, true);
-            writeDebugTrafficProbeResult(host, port, timeoutMillis, result);
+                    host, port, sourcePort, timeoutMillis, true);
+            writeDebugTrafficProbeResult(host, port, sourcePort, timeoutMillis, result);
             final String display = result;
             main.post(() -> action(display));
         }, "sakamoto-debug-traffic");
@@ -870,9 +875,9 @@ public class DebugControlActivity extends Activity {
                 JSONObject countersBefore = client.call(3, statusCommand, new JSONObject());
                 String probeResult = runDebugTrafficProbeBlocking(
                         DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
-                        DEBUG_TRAFFIC_TIMEOUT_MILLIS, false);
+                        0, DEBUG_TRAFFIC_TIMEOUT_MILLIS, false);
                 writeDebugTrafficProbeResult(DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT,
-                        DEBUG_TRAFFIC_TIMEOUT_MILLIS, probeResult);
+                        0, DEBUG_TRAFFIC_TIMEOUT_MILLIS, probeResult);
                 JSONObject countersAfter = client.call(4, statusCommand, new JSONObject());
                 result = formatDebugPolicyProbeResult(
                         uid, profile, DEBUG_TRAFFIC_HOST, DEBUG_TRAFFIC_PORT, decision,
@@ -947,12 +952,18 @@ public class DebugControlActivity extends Activity {
     }
 
     private String runDebugTrafficProbeBlocking(
-            String host, int port, int timeoutMillis, boolean includeEndpoint) {
+            String host, int port, int sourcePort, int timeoutMillis, boolean includeEndpoint) {
         try (Socket socket = new Socket()) {
+            if (sourcePort > 0) {
+                socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(sourcePort));
+            }
             socket.connect(new InetSocketAddress(host, port), timeoutMillis);
             if (includeEndpoint) {
                 return "Debug traffic probe connected to "
-                        + host + ":" + port + ".";
+                        + host + ":" + port
+                        + (sourcePort > 0 ? " from source port " + sourcePort : "")
+                        + ".";
             }
             return "tcp_connect_succeeded";
         } catch (IOException error) {
@@ -973,7 +984,7 @@ public class DebugControlActivity extends Activity {
     }
 
     private void writeDebugTrafficProbeResult(
-            String host, int port, int timeoutMillis, String result) {
+            String host, int port, int sourcePort, int timeoutMillis, String result) {
         File file = new File(getFilesDir(), DEBUG_TRAFFIC_PROBE_RESULT_PATH);
         File parent = file.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
@@ -982,6 +993,7 @@ public class DebugControlActivity extends Activity {
         String resultCode = debugTrafficProbeResultCode(result);
         String text = "host=" + propertyValue(host) + "\n"
                 + "port=" + port + "\n"
+                + "sourcePort=" + sourcePort + "\n"
                 + "timeoutMillis=" + timeoutMillis + "\n"
                 + "uid=" + android.os.Process.myUid() + "\n"
                 + "result=" + propertyValue(resultCode) + "\n"
@@ -1048,6 +1060,13 @@ public class DebugControlActivity extends Activity {
     private int boundedPort(int candidate, int fallback) {
         if (candidate <= 0 || candidate > 65535) {
             return fallback;
+        }
+        return candidate;
+    }
+
+    private int boundedOptionalPort(int candidate) {
+        if (candidate < 0 || candidate > 65535) {
+            return 0;
         }
         return candidate;
     }
