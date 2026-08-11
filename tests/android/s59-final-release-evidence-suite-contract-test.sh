@@ -8,6 +8,13 @@ release_gate="$repo_root/docs/product/ANDROID_L4_RELEASE_GATE.md"
 [[ -f "$suite" ]]
 [[ -x "$suite" ]]
 grep -q 'SAKAMOTO-59-final-release-evidence-suite' "$suite"
+grep -q -- '--preflight' "$suite"
+grep -q 'S59_FINAL_PREFLIGHT_ONLY' "$suite"
+grep -q 'kv "preflightOnly" "1"' "$suite"
+grep -q 'final_signed_release_apk_evidence_preflight_only' "$suite"
+grep -q 'not_claimed_preflight_only' "$suite"
+grep -q 'kv "deviceAccess" "not_attempted_in_preflight"' "$suite"
+grep -q 'kv "apkBuild" "not_attempted_in_preflight"' "$suite"
 grep -q 'export ADB="${repo_root}/dev/adb"' "$suite"
 grep -q 'device_contract' "$suite"
 grep -q 'source "${repo_root}/dev/dev-android-device-lib.sh"' "$suite"
@@ -59,10 +66,34 @@ grep -q 'claimed_final_signed_release_apk_evidence' "$suite"
 grep -q 'partial_final_signed_release_apk_evidence' "$suite"
 grep -q 's59Done" "not_claimed' "$suite"
 
+preflight_dir="$(mktemp -d)"
+trap 'rm -rf "$preflight_dir"' EXIT
+preflight_output="$preflight_dir/preflight.log"
+preflight_results_root="$preflight_dir/results"
+
+RESULTS_ROOT="$preflight_results_root" \
+RUN_ID=contract-preflight \
+"$suite" --preflight >"$preflight_output"
+
+grep -q '^preflightOnly=1$' "$preflight_output"
+grep -q '^releaseStatus=final_signed_release_apk_evidence_preflight_only$' "$preflight_output"
+grep -q '^finalEvidenceClaim=not_claimed$' "$preflight_output"
+grep -q '^matrix.s59FinalReleaseEvidence=not_claimed_preflight_only$' "$preflight_output"
+grep -q '^s59Done=not_claimed$' "$preflight_output"
+grep -q '^deviceAccess=not_attempted_in_preflight$' "$preflight_output"
+grep -q '^apkBuild=not_attempted_in_preflight$' "$preflight_output"
+grep -q 'sameShaContract=every APK-consuming child matrix must report' "$preflight_output"
+grep -q 'S55_APK_VARIANT=final-release S55_BUILD_APK=0' "$preflight_output"
+grep -Fq 'S71_EXPECTED_APK_SHA256=$FINAL_APK_SHA256' "$preflight_output"
+[[ ! -e "$preflight_results_root" ]]
+
 build_line="$(grep -n 'run_logged build_final_release_apk' "$suite" | cut -d: -f1)"
 device_lib_line="$(grep -n 'source "${repo_root}/dev/dev-android-device-lib.sh"' "$suite" | cut -d: -f1)"
 [[ "$build_line" -lt "$device_lib_line" ]]
 
 grep -q 'bash tests/device/s59-final-release-evidence-suite.sh' "$release_gate"
+grep -q 'bash tests/device/s59-final-release-evidence-suite.sh --preflight' "$release_gate"
+grep -q 'without building/signing an APK, touching a device, or claiming final' "$release_gate"
+grep -q 'matrix.s59FinalReleaseEvidence=not_claimed_preflight_only' "$release_gate"
 
 echo "s59 final release evidence suite static contract: PASS"

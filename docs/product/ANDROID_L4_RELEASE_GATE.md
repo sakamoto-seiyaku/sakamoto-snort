@@ -68,6 +68,11 @@ Final signed APK build preflight:
   the store password.
 - The final-release path does not generate a signing key and does not use the
   debug keystore. Missing signing inputs fail before producing an APK.
+- `bash tests/device/s59-final-release-evidence-suite.sh --preflight` prints the
+  required signing-input names, planned child matrix commands, and same-SHA
+  contract without building/signing an APK, touching a device, or claiming final
+  evidence; it emits
+  `matrix.s59FinalReleaseEvidence=not_claimed_preflight_only`.
 - Final signed evidence runners use the same `final-release` APK variant:
   `bash tests/device/s59-final-release-evidence-suite.sh` is the ordered suite for
   the full final signed evidence rerun;

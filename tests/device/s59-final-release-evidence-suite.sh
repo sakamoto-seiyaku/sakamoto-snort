@@ -13,6 +13,19 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 
 export ADB="${repo_root}/dev/adb"
 
+S59_FINAL_PREFLIGHT_ONLY="${S59_FINAL_PREFLIGHT_ONLY:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --preflight)
+      S59_FINAL_PREFLIGHT_ONLY=1
+      ;;
+    *)
+      echo "unknown argument: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
 RESULTS_ROOT="${RESULTS_ROOT:-${repo_root}/build-output/s59-final-release-evidence-suite}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 RESULT_DIR="${RESULT_DIR:-${RESULTS_ROOT}/${RUN_ID}}"
@@ -25,12 +38,6 @@ S59_FINAL_RUN_BUDGET="${S59_FINAL_RUN_BUDGET:-1}"
 S59_FINAL_RUN_S71="${S59_FINAL_RUN_S71:-1}"
 S59_FINAL_EVIDENCE_COMPLETE=1
 
-mkdir -p "$RESULT_DIR"
-if [[ "${S59_FINAL_EVIDENCE_LOGGING:-0}" != "1" ]]; then
-  export S59_FINAL_EVIDENCE_LOGGING=1
-  exec > >(tee "${RESULT_DIR}/matrix.log") 2>&1
-fi
-
 kv() {
   printf '%s=%s\n' "$1" "$2"
 }
@@ -38,6 +45,45 @@ kv() {
 section() {
   printf '\n## %s\n' "$1"
 }
+
+if [[ "$S59_FINAL_PREFLIGHT_ONLY" == "1" ]]; then
+  section "matrix_contract"
+  kv "matrix" "SAKAMOTO-59-final-release-evidence-suite"
+  kv "preflightOnly" "1"
+  kv "resultDir" "${RESULT_DIR#${repo_root}/}"
+  kv "adbWrapper" "./dev/adb"
+  kv "apkVariant" "final-release"
+  kv "releaseStatus" "final_signed_release_apk_evidence_preflight_only"
+  kv "s59Done" "not_claimed"
+  kv "finalEvidenceClaim" "not_claimed"
+  kv "finalBuildScript" "$FINAL_BUILD_SCRIPT"
+  kv "finalApk" "${FINAL_APK#${repo_root}/}"
+  kv "requiredSigningInput.ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE" "${ANDROID_RUNTIME_RELEASE_SIGNING_KEYSTORE:+set}"
+  kv "requiredSigningInput.ANDROID_RUNTIME_RELEASE_SIGNING_ALIAS" "${ANDROID_RUNTIME_RELEASE_SIGNING_ALIAS:+set}"
+  kv "requiredSigningInput.ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE" "${ANDROID_RUNTIME_RELEASE_STORE_PASS_FILE:+set}"
+  kv "optionalSigningInput.ANDROID_RUNTIME_RELEASE_KEY_PASS_FILE" "${ANDROID_RUNTIME_RELEASE_KEY_PASS_FILE:+set}"
+
+  section "planned_child_matrices"
+  kv "s55ProductVpnTransport.command" "S55_APK_VARIANT=final-release S55_BUILD_APK=0 APK=\$FINAL_APK bash tests/device/s55-product-vpn-transport-matrix.sh"
+  kv "s58VpnL4ProductWorkflow.command" "S58_APK_VARIANT=final-release S58_BUILD_APK=0 APK=\$FINAL_APK bash tests/device/s58-vpn-l4-product-workflow-matrix.sh"
+  kv "s59ReleaseBudgetProbe.command" "S59_APK_VARIANT=final-release S59_BUILD_APK=0 APK=\$FINAL_APK bash tests/device/s59-release-budget-probe.sh"
+  kv "s71DualProfileClosureGate.command" "S71_APK_VARIANT=final-release ANDROID_RUNTIME_APK_VARIANT=final-release S71_EXPECTED_APK_SHA256=\$FINAL_APK_SHA256 APK=\$FINAL_APK bash tests/device/s71-dual-profile-closure-gate.sh"
+  kv "sameShaContract" "every APK-consuming child matrix must report apk.sha256=\$FINAL_APK_SHA256"
+  kv "deviceAccess" "not_attempted_in_preflight"
+  kv "apkBuild" "not_attempted_in_preflight"
+
+  section "matrix_result"
+  kv "matrix.result" "PASS"
+  kv "matrix.s59FinalReleaseEvidence" "not_claimed_preflight_only"
+  kv "s59Done" "not_claimed"
+  exit 0
+fi
+
+mkdir -p "$RESULT_DIR"
+if [[ "${S59_FINAL_EVIDENCE_LOGGING:-0}" != "1" ]]; then
+  export S59_FINAL_EVIDENCE_LOGGING=1
+  exec > >(tee "${RESULT_DIR}/matrix.log") 2>&1
+fi
 
 run_logged() {
   local name="$1"
