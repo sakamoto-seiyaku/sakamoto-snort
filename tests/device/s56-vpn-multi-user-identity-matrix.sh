@@ -21,6 +21,10 @@ PACKAGE="${PACKAGE:-com.sakamoto.snort.androidruntime}"
 CATALOG_EVIDENCE="${repo_root}/tests/device/product-catalog-device-evidence.sh"
 
 mkdir -p "$RESULT_DIR"
+if [[ "${S56_MULTI_USER_MATRIX_LOGGING:-0}" != "1" ]]; then
+  export S56_MULTI_USER_MATRIX_LOGGING=1
+  exec > >(tee "${RESULT_DIR}/matrix.log") 2>&1
+fi
 
 kv() {
   printf '%s=%s\n' "$1" "$2"

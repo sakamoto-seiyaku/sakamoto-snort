@@ -58,7 +58,7 @@ if [[ "$hev_stage_explicit" == 0 && ! -f "$hev_lib" ]]; then
   [[ -f "$hev_build_script" ]] || die "default HEV stage is incomplete and builder is absent: $hev_build_script"
   STAGE_DIR="$hev_stage_dir" bash "$hev_build_script"
 fi
-cmake --build --preset dev-debug --target snort-build-ndk
+(cd "$repo_root" && cmake --build --preset dev-debug --target snort-build-ndk)
 
 for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" \
     "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl" "$hev_lib" "$ndk_daemon"; do
