@@ -19,6 +19,7 @@ android_build_probe="$repo_root/tools/protocol_identification/libprotoident_andr
 wrapper_android_build_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_android_build_probe.sh"
 wrapper_host_payload_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh"
 wrapper_host_pcap_probe="$repo_root/tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh"
+probe_build_root_helper="$repo_root/tools/protocol_identification/probe_build_root.sh"
 host_cmake="$repo_root/tests/host/CMakeLists.txt"
 expected_alias_replay_test="$repo_root/tests/host/lpi_expected_alias_replay_tests.cpp"
 
@@ -51,6 +52,19 @@ assert_unsafe_probe_build_root_rejected() {
     exit 1
   }
 }
+
+assert_probe_uses_build_root_helper() {
+  local script="$1"
+
+  grep -Fq 'source "$repo_root/tools/protocol_identification/probe_build_root.sh"' "$script"
+  grep -Fq 'protocol_identification_probe_canonical_build_root "$repo_root" "$build_root_input"' "$script"
+}
+
+[[ -f "$probe_build_root_helper" ]]
+grep -q 'protocol_identification_probe_canonical_build_root' "$probe_build_root_helper"
+grep -q 'resolve(strict=False)' "$probe_build_root_helper"
+grep -q 'repo_root / "build-output"' "$probe_build_root_helper"
+grep -q 'unsafe probe build root outside repo build-output' "$probe_build_root_helper"
 
 [[ -f "$inventory" ]]
 grep -q 'SAKAMOTO-61 and later Protocol Identification' "$inventory"
@@ -474,8 +488,7 @@ grep -q 'policy.copiesSourceIntoRepo=false' "$android_build_probe"
 grep -q 'policy.providerVendoringDecision=false' "$android_build_probe"
 grep -q 'probe.scope=compile-link-only' "$android_build_probe"
 grep -q 'probe.wrapper=generated-cmake-with-external-source' "$android_build_probe"
-grep -q 'path_is_inside_repo_build_output' "$android_build_probe"
-grep -q 'canonicalize_path' "$android_build_probe"
+assert_probe_uses_build_root_helper "$android_build_probe"
 grep -q 'build_root_input' "$android_build_probe"
 grep -Fq 'source_tree_sha256' "$android_build_probe"
 grep -Fq 'sourceTreeSha256' "$android_build_probe"
@@ -511,8 +524,7 @@ grep -q 'probe.scope=compile-link-only' "$wrapper_android_build_probe"
 grep -q 'probe.wrapper=stellar_lpi_core-plus-extend-with-generated-compat-shim' "$wrapper_android_build_probe"
 grep -q 'probe.generatedUtilsShim=true' "$wrapper_android_build_probe"
 grep -q 'probe.referenceUthashInPlace=true' "$wrapper_android_build_probe"
-grep -q 'path_is_inside_repo_build_output' "$wrapper_android_build_probe"
-grep -q 'canonicalize_path' "$wrapper_android_build_probe"
+assert_probe_uses_build_root_helper "$wrapper_android_build_probe"
 grep -q 'build_root_input' "$wrapper_android_build_probe"
 grep -Fq 'source_tree_sha256' "$wrapper_android_build_probe"
 grep -Fq 'wrapperSourceTreeSha256' "$wrapper_android_build_probe"
@@ -659,8 +671,7 @@ grep -q 'policy.usesSyntheticPayloads=true' "$wrapper_host_payload_probe"
 grep -q 'policy.providerVendoringDecision=false' "$wrapper_host_payload_probe"
 grep -q 'policy.providerRuntimeWiring=false' "$wrapper_host_payload_probe"
 grep -q 'policy.protocolRuleDecision=false' "$wrapper_host_payload_probe"
-grep -q 'path_is_inside_repo_build_output' "$wrapper_host_payload_probe"
-grep -q 'canonicalize_path' "$wrapper_host_payload_probe"
+assert_probe_uses_build_root_helper "$wrapper_host_payload_probe"
 grep -q 'build_root_input' "$wrapper_host_payload_probe"
 grep -q 'probe.scope=host-compile-link-run-synthetic-payload-recognition' "$wrapper_host_payload_probe"
 grep -q 'REPO_ROOT' "$wrapper_host_payload_probe"
@@ -691,6 +702,7 @@ assert_unsafe_probe_build_root_rejected \
   "s61-unsafe-stellar-lpi-wrapper-host-payload-probe"
 
 [[ -x "$wrapper_host_pcap_probe" ]]
+assert_probe_uses_build_root_helper "$wrapper_host_pcap_probe"
 grep -q 'stellar-lpi-wrapper-host-pcap' "$wrapper_host_pcap_probe"
 grep -q 'policy.copiesSourceIntoRepo=false' "$wrapper_host_pcap_probe"
 grep -q 'policy.copiesPcapIntoRepo=false' "$wrapper_host_pcap_probe"
@@ -755,6 +767,10 @@ grep -q 'expected_followup_appid = 67' "$wrapper_host_pcap_probe"
 grep -q 'expected_followup_sakamoto_protocol = Catalog::ApplicationProtocolId::HTTP' "$wrapper_host_pcap_probe"
 grep -q 'containsOrderedDetection' "$wrapper_host_pcap_probe"
 grep -q 'saw_expected_followup_mapped_after_unmapped' "$wrapper_host_pcap_probe"
+assert_unsafe_probe_build_root_rejected \
+  "$wrapper_host_pcap_probe" \
+  "STELLAR_LPI_WRAPPER_HOST_PCAP_PROBE_BUILD_ROOT" \
+  "s61-unsafe-stellar-lpi-wrapper-host-pcap-probe"
 
 [[ -f "$libprotoident_audit" ]]
 grep -q 'local fact audit for SAKAMOTO-61' "$libprotoident_audit"

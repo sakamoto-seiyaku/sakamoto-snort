@@ -7,6 +7,7 @@ set -euo pipefail
 # build-output, and does not wire a Sakamoto product runtime provider.
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$repo_root/tools/protocol_identification/probe_build_root.sh"
 
 reference_root="${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}"
 wrapper_root="${VPP_STELLAR_LPI_ROOT:-${reference_root}/src/plugins/stellar_lpi}"
@@ -38,14 +39,6 @@ Environment overrides:
 EOF
 }
 
-path_is_inside_repo_build_output() {
-    [[ "$1" == "$2" || "$1" == "$2"/* ]]
-}
-
-canonicalize_path() {
-    python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve(strict=False))' "$1"
-}
-
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --configure-only)
@@ -69,12 +62,7 @@ command -v python3 >/dev/null 2>&1 || {
     exit 1
 }
 
-canonical_repo_build_output_root="$(canonicalize_path "$repo_build_output_root")"
-build_root="$(canonicalize_path "$build_root_input")"
-path_is_inside_repo_build_output "$build_root" "$canonical_repo_build_output_root" || {
-    echo "unsafe probe build root outside repo build-output: $build_root_input (resolved to $build_root)" >&2
-    exit 1
-}
+build_root="$(protocol_identification_probe_canonical_build_root "$repo_root" "$build_root_input")"
 generated_source_dir="$build_root/generated-source"
 generated_include_dir="$generated_source_dir/include"
 cmake_build_dir="$build_root/cmake"
