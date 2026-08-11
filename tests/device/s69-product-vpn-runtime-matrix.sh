@@ -23,6 +23,7 @@ APK="${APK:-${repo_root}/app/android-runtime/build/outputs/sakamoto-runtime-debu
 S69_PRODUCT_BUILD_APK="${S69_PRODUCT_BUILD_APK:-1}"
 S69_PRODUCT_INSTALL_APK="${S69_PRODUCT_INSTALL_APK:-1}"
 S69_PRODUCT_FORWARD_PORT="${S69_PRODUCT_FORWARD_PORT:-60619}"
+S69_PRODUCT_RESTART_CYCLES="${S69_PRODUCT_RESTART_CYCLES:-2}"
 S69_PRODUCT_CLEANUP_ON_EXIT="${S69_PRODUCT_CLEANUP_ON_EXIT:-1}"
 STATE_PATH="files/runtime-state/snapshot.properties"
 LOG_PATH="files/logs/runtime-service.log"
@@ -80,6 +81,20 @@ assert_no_native_residue() {
     | tr -d '\r' || true)"
   printf '%s\n' "$native" >"$out_file"
   [[ -z "$native" ]]
+}
+
+assert_no_tun0_residue() {
+  local out_file="$1"
+  if adb_cmd shell ip link show tun0 >"$out_file" 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+assert_no_connectivity_residue() {
+  local out_file="$1"
+  adb_cmd shell dumpsys connectivity >"$out_file" 2>&1
+  ! grep -Eq "VPN:${PACKAGE}|InterfaceName: tun0" "$out_file"
 }
 
 section "matrix_contract"
@@ -234,16 +249,41 @@ stopped="$(wait_for_snapshot_field state stopped "${RESULT_DIR}/snapshot.stopped
 printf '%s\n' "$stopped" | grep -Fxq "mayBeActive=false"
 printf '%s\n' "$stopped" | grep -Fxq "adapterReadiness=unavailable"
 assert_no_native_residue "${RESULT_DIR}/native-residue.after-stop"
-if adb_cmd shell ip link show tun0 >"${RESULT_DIR}/tun0.after-stop" 2>&1; then
-  echo "tun0 remained after stop" >&2
-  exit 1
-fi
-adb_cmd shell dumpsys connectivity >"${RESULT_DIR}/connectivity.after-stop" 2>&1
-if grep -Eq "VPN:${PACKAGE}|InterfaceName: tun0" "${RESULT_DIR}/connectivity.after-stop"; then
-  echo "VPN/tun0 connectivity residue remained after stop" >&2
-  exit 1
-fi
+assert_no_tun0_residue "${RESULT_DIR}/tun0.after-stop"
+assert_no_connectivity_residue "${RESULT_DIR}/connectivity.after-stop"
 kv "cleanup.result" "PASS"
+
+section "restart_cleanup_loop"
+kv "restart.cycles" "$S69_PRODUCT_RESTART_CYCLES"
+for cycle in $(seq 1 "$S69_PRODUCT_RESTART_CYCLES"); do
+  cycle_dir="${RESULT_DIR}/restart-cycle-${cycle}"
+  mkdir -p "$cycle_dir"
+  adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStart true --es runtimeProfile vpn \
+    >"${cycle_dir}/start.intent.log" 2>&1
+  cycle_running="$(wait_for_snapshot_field state running "${cycle_dir}/snapshot.running" 45)" || {
+    kv "restart.${cycle}.start" "FAIL"
+    cat "${cycle_dir}/snapshot.running" >&2
+    exit 1
+  }
+  printf '%s\n' "$cycle_running" | grep -Fxq "profile=vpn"
+  printf '%s\n' "$cycle_running" | grep -Fxq "health=ok"
+  printf '%s\n' "$cycle_running" | grep -Fxq "adapterReadiness=vpn-tun-hev"
+  adb_cmd shell ip link show tun0 >"${cycle_dir}/tun0.running" 2>&1
+  adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
+    >"${cycle_dir}/stop.intent.log" 2>&1
+  cycle_stopped="$(wait_for_snapshot_field state stopped "${cycle_dir}/snapshot.stopped" 30)" || {
+    kv "restart.${cycle}.stop" "FAIL"
+    cat "${cycle_dir}/snapshot.stopped" >&2
+    exit 1
+  }
+  printf '%s\n' "$cycle_stopped" | grep -Fxq "mayBeActive=false"
+  printf '%s\n' "$cycle_stopped" | grep -Fxq "adapterReadiness=unavailable"
+  assert_no_native_residue "${cycle_dir}/native-residue.after-stop"
+  assert_no_tun0_residue "${cycle_dir}/tun0.after-stop"
+  assert_no_connectivity_residue "${cycle_dir}/connectivity.after-stop"
+  kv "restart.${cycle}.result" "PASS"
+done
+kv "restart.result" "PASS"
 
 section "matrix_result"
 kv "matrix.result" "PASS"
