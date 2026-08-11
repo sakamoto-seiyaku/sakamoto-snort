@@ -151,12 +151,18 @@ assert_lpi_provider_source_intake_gate() {
   local intake_dir=""
   local intake_output=""
   local missing_license_output=""
+  local traversal_output=""
+  local symlink_inside_output=""
+  local symlink_output=""
   local corpus_output=""
+  local outside_file=""
   local status=0
 
   intake_dir="$(mktemp -d)"
+  outside_file="${intake_dir}.outside-provider.cc"
   mkdir -p "$intake_dir/src"
   printf 'void candidate_provider(void) {}\n' >"$intake_dir/src/provider.cc"
+  printf 'void dotted_candidate_provider(void) {}\n' >"$intake_dir/src/provider..backup.cc"
   printf 'candidate license evidence\n' >"$intake_dir/LICENSE"
   printf 'candidate notice evidence\n' >"$intake_dir/NOTICE"
   printf 'candidate provenance evidence\n' >"$intake_dir/PROVENANCE"
@@ -191,6 +197,51 @@ EOF
   grep -q '^protocolRule=out_of_scope$' <<<"$intake_output"
   grep -q '^realProviderEnabled=not_claimed$' <<<"$intake_output"
 
+  printf 'src/provider..backup.cc\n' >"$intake_dir/source-manifest.txt"
+  intake_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir")"
+  grep -q '^providerSourceIntake=PASS$' <<<"$intake_output"
+  grep -q '^source.manifest.entries=1$' <<<"$intake_output"
+
+  printf 'src/../PROVENANCE\n' >"$intake_dir/source-manifest.txt"
+  set +e
+  traversal_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || {
+    echo "provider source intake gate unexpectedly passed with parent traversal" >&2
+    exit 1
+  }
+  grep -q 'source manifest entry must not contain parent traversal path segments' \
+    <<<"$traversal_output"
+
+  ln -s "provider.cc" "$intake_dir/src/provider-link.cc"
+  printf 'src/provider-link.cc\n' >"$intake_dir/source-manifest.txt"
+  set +e
+  symlink_inside_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || {
+    echo "provider source intake gate unexpectedly passed with source symlink" >&2
+    exit 1
+  }
+  grep -q 'source manifest entry must not be a symlink' <<<"$symlink_inside_output"
+  rm "$intake_dir/src/provider-link.cc"
+
+  printf 'void escaped_provider(void) {}\n' >"$outside_file"
+  ln -s "$outside_file" "$intake_dir/src/escape.cc"
+  printf 'src/escape.cc\n' >"$intake_dir/source-manifest.txt"
+  set +e
+  symlink_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || {
+    echo "provider source intake gate unexpectedly passed with symlink escape" >&2
+    exit 1
+  }
+  grep -q 'source manifest entry resolves outside evidence root' <<<"$symlink_output"
+  rm "$intake_dir/src/escape.cc" "$outside_file"
+
+  printf 'src/provider.cc\n' >"$intake_dir/source-manifest.txt"
   rm "$intake_dir/LICENSE"
   set +e
   missing_license_output="$("$provider_source_intake_gate" --evidence-root "$intake_dir" 2>&1 >/dev/null)"
@@ -214,7 +265,7 @@ EOF
   }
   grep -q 'pre-decision source evidence must not include corpus' <<<"$corpus_output"
 
-  rm -rf "$intake_dir"
+  rm -rf "$intake_dir" "$outside_file"
 }
 
 [[ -f "$probe_build_root_helper" ]]
@@ -244,6 +295,9 @@ grep -q 'protocolRule' "$provider_source_intake_gate"
 grep -q 'out_of_scope' "$provider_source_intake_gate"
 grep -q 'source manifest must not include corpus or expected-result files' "$provider_source_intake_gate"
 grep -q 'pre-decision source evidence must not include corpus or expected-result files' "$provider_source_intake_gate"
+grep -q 'must not contain parent traversal path segments' "$provider_source_intake_gate"
+grep -q 'resolves outside evidence root' "$provider_source_intake_gate"
+grep -q 'must not be a symlink' "$provider_source_intake_gate"
 grep -q 'realProviderEnabled=not_claimed' "$provider_source_intake_gate"
 assert_lpi_provider_source_intake_gate
 

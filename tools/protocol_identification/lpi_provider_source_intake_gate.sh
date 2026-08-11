@@ -75,14 +75,54 @@ require_allowed_value() {
 require_relative_path() {
   local key="$1"
   local path="$2"
+  local -a path_components=()
+  local component=""
   [[ "$path" != /* ]] || {
     echo "$key must be relative to evidence root: $path" >&2
     exit 1
   }
-  [[ "$path" != *".."* ]] || {
-    echo "$key must not contain parent traversal: $path" >&2
+  [[ -n "$path" ]] || {
+    echo "$key must not be empty" >&2
     exit 1
   }
+  [[ ! "$path" =~ ^[[:space:]]|[[:space:]]$ ]] || {
+    echo "$key must not have leading or trailing whitespace: $path" >&2
+    exit 1
+  }
+  [[ "$path" != *,* ]] || {
+    echo "$key must not contain comma delimiters: $path" >&2
+    exit 1
+  }
+
+  IFS='/' read -r -a path_components <<<"$path"
+  for component in "${path_components[@]}"; do
+    [[ -n "$component" ]] || {
+      echo "$key must not contain empty path segments: $path" >&2
+      exit 1
+    }
+    [[ "$component" != "." && "$component" != ".." ]] || {
+      echo "$key must not contain parent traversal path segments: $path" >&2
+      exit 1
+    }
+  done
+}
+
+require_path_inside_evidence_root() {
+  local key="$1"
+  local path="$2"
+  local root_real=""
+  local file_real=""
+
+  root_real="$(realpath -e -- "$evidence_root")"
+  file_real="$(realpath -e -- "$evidence_root/$path")"
+  case "$file_real" in
+    "$root_real"/*)
+      ;;
+    *)
+      echo "$key resolves outside evidence root: $path" >&2
+      exit 1
+      ;;
+  esac
 }
 
 require_existing_relative_file() {
@@ -91,6 +131,17 @@ require_existing_relative_file() {
   require_relative_path "$key" "$path"
   [[ -f "$evidence_root/$path" ]] || {
     echo "$key file is missing: $path" >&2
+    exit 1
+  }
+  require_path_inside_evidence_root "$key" "$path"
+}
+
+require_existing_relative_source_file() {
+  local key="$1"
+  local path="$2"
+  require_existing_relative_file "$key" "$path"
+  [[ ! -L "$evidence_root/$path" ]] || {
+    echo "$key must not be a symlink: $path" >&2
     exit 1
   }
 }
@@ -160,7 +211,7 @@ done
 manifest_entries=0
 while IFS= read -r entry || [[ -n "$entry" ]]; do
   [[ "$entry" =~ ^[[:space:]]*(#|$) ]] && continue
-  require_existing_relative_file "source manifest entry" "$entry"
+  require_existing_relative_source_file "source manifest entry" "$entry"
   case "$entry" in
     *.pcap|*.pcapng|*.json)
       echo "source manifest must not include corpus or expected-result files: $entry" >&2
