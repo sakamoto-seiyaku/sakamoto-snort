@@ -231,15 +231,28 @@ section "start_vpn"
 adb_cmd shell am force-stop "$PACKAGE" >/dev/null
 adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStart true --es runtimeProfile vpn \
   >"${RESULT_DIR}/start.intent.log" 2>&1
-state="$(wait_for_snapshot_field state running "${RESULT_DIR}/snapshot.running" 45)" || {
+state=""
+for _ in $(seq 1 45); do
+  state="$(read_snapshot)"
+  printf '%s\n' "$state" >"${RESULT_DIR}/snapshot.running"
+  if grep -Fxq "state=running" <<<"$state" \
+      && grep -Fxq "profile=vpn" <<<"$state" \
+      && grep -Fxq "health=ok" <<<"$state" \
+      && grep -Fxq "coreHealth=ok" <<<"$state" \
+      && grep -Fxq "adapterReadiness=vpn-tun-hev" <<<"$state"; then
+    break
+  fi
+  sleep 1
+done
+if ! grep -Fxq "state=running" <<<"$state" \
+    || ! grep -Fxq "profile=vpn" <<<"$state" \
+    || ! grep -Fxq "health=ok" <<<"$state" \
+    || ! grep -Fxq "coreHealth=ok" <<<"$state" \
+    || ! grep -Fxq "adapterReadiness=vpn-tun-hev" <<<"$state"; then
   kv "start.result" "FAIL"
   cat "${RESULT_DIR}/snapshot.running" >&2
   exit 1
-}
-printf '%s\n' "$state" | grep -Fxq "profile=vpn"
-printf '%s\n' "$state" | grep -Fxq "health=ok"
-printf '%s\n' "$state" | grep -Fxq "coreHealth=ok"
-printf '%s\n' "$state" | grep -Fxq "adapterReadiness=vpn-tun-hev"
+fi
 kv "start.result" "PASS"
 kv "snapshot.pid" "$(printf '%s\n' "$state" | snapshot_value pid)"
 
@@ -365,6 +378,40 @@ kv "counters.packetsSeenDelta" "$packets_delta"
 kv "counters.forwardedPacketsDelta" "$forwarded_delta"
 kv "counters.transportSucceededPacketsDelta" "$transport_success_delta"
 kv "counters.transportReturnPacketsDelta" "$transport_return_delta"
+python3 - "${RESULT_DIR}/vpn_tun_status.before.json" "${RESULT_DIR}/vpn_tun_status.after.json" <<'PY'
+import json
+import sys
+
+before = json.load(open(sys.argv[1]))["result"].get("allowedFlowActivity", {})
+after = json.load(open(sys.argv[2]))["result"].get("allowedFlowActivity", {})
+
+before_total = int(before.get("totalRecords", 0))
+after_total = int(after.get("totalRecords", 0))
+if after_total - before_total < 3:
+    raise SystemExit("allowedFlowActivity did not record VPN FlowEntry traffic")
+if not after.get("hasLastRecord", False):
+    raise SystemExit("allowedFlowActivity missing last FlowEntry record")
+if int(after.get("lastPackets", 0)) <= 0:
+    raise SystemExit("allowedFlowActivity lastPackets did not grow")
+if int(after.get("lastBytes", 0)) <= 0:
+    raise SystemExit("allowedFlowActivity lastBytes did not grow")
+if str(after.get("lastDeviceDirection", "")) not in {"input", "output"}:
+    raise SystemExit("allowedFlowActivity missing device packet direction")
+if str(after.get("lastFlowDirection", "")) not in {"orig", "reply"}:
+    raise SystemExit("allowedFlowActivity missing flow direction")
+if int(after.get("lastIpProtocol", 0)) not in {6, 17}:
+    raise SystemExit("allowedFlowActivity missing TCP/UDP protocol evidence")
+print(f"allowed.totalRecordsDelta={after_total - before_total}")
+print(f"allowed.lastUid={after.get('lastLinuxUid')}")
+print(f"allowed.lastUidKnown={after.get('lastUidKnown')}")
+print(f"allowed.lastRemote={after.get('lastDestinationAddress')}:{after.get('lastDestinationPort')}")
+print(f"allowed.lastDeviceDirection={after.get('lastDeviceDirection')}")
+print(f"allowed.lastFlowDirection={after.get('lastFlowDirection')}")
+print(f"allowed.lastPackets={after.get('lastPackets')}")
+print(f"allowed.lastBytes={after.get('lastBytes')}")
+print(f"allowed.lastPolicyRevision={after.get('lastPolicyRevision')}")
+PY
+kv "allowedFlowActivity.vpnEvidence" "PASS"
 python3 - "${RESULT_DIR}/vpn_tun_status.before.json" "${RESULT_DIR}/vpn_tun_status.after.json" <<'PY'
 import json
 import sys
