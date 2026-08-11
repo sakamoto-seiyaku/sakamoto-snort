@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+release_gate="$repo_root/docs/product/ANDROID_L4_RELEASE_GATE.md"
+product_readme="$repo_root/docs/product/README.md"
+
+if [[ ! -f "$release_gate" ]]; then
+  echo "missing S59 Android L4 release gate dossier: $release_gate" >&2
+  exit 1
+fi
+
+grep -q 'SAKAMOTO-59' "$release_gate"
+grep -q 'Android only' "$release_gate"
+grep -q 'Linux, Windows, and macOS' "$release_gate"
+grep -q 'Root/NFQUEUE' "$release_gate"
+grep -q 'VPN/TUN/HEV' "$release_gate"
+grep -q 'Supported matrix policy' "$release_gate"
+grep -q 'Functional release evidence ledger' "$release_gate"
+grep -q 'Release budget ledger' "$release_gate"
+grep -q 'Latency' "$release_gate"
+grep -q 'Throughput' "$release_gate"
+grep -q 'Capacity high-watermark' "$release_gate"
+grep -q 'Corrective handoff' "$release_gate"
+grep -q 'CPU/RSS' "$release_gate"
+grep -q 'Screen-off power' "$release_gate"
+grep -q 'Thermal' "$release_gate"
+grep -q 'Shutdown drain release' "$release_gate"
+grep -q 'English quick start' "$release_gate"
+grep -q '中文快速开始' "$release_gate"
+grep -q 'Root and VPN user explanation' "$release_gate"
+grep -q 'Rules, Activity, and recovery guide' "$release_gate"
+grep -q 'Privacy and diagnostic policy' "$release_gate"
+grep -q 'Known limitations' "$release_gate"
+grep -q 'Feedback entry points' "$release_gate"
+grep -q 'Bug report' "$release_gate"
+grep -q 'Compatibility report' "$release_gate"
+grep -q 'Feature request' "$release_gate"
+grep -q 'Help request' "$release_gate"
+grep -q 'Release-notes template' "$release_gate"
+grep -q 'S59 closure checklist' "$release_gate"
+grep -q 'tests/device/s52-root-l4-product-matrix.sh' "$release_gate"
+grep -q 'tests/device/s55-product-vpn-transport-matrix.sh' "$release_gate"
+grep -q 'tests/device/s58-vpn-l4-product-workflow-matrix.sh' "$release_gate"
+grep -q 'tests/device/s70-profile-lifecycle-matrix.sh' "$release_gate"
+grep -q 'tests/device/s71-dual-profile-closure-gate.sh' "$release_gate"
+grep -q 'cmake --build --preset dev-debug --target snort-host-tests' "$release_gate"
+grep -q 'ANDROID_L4_RELEASE_GATE.md' "$product_readme"
+
+echo "s59 product release gate static contract: PASS"

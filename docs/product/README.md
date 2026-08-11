@@ -13,6 +13,8 @@
 
 - `ANDROID_L4_PRODUCT_PLAN.md`：Android L4 产品版、后续 libprotoident 阶段、UI 归属、
   信息架构、内容建设和发布完成标准。
+- `ANDROID_L4_RELEASE_GATE.md`：SAKAMOTO-59 Android L4 Product Release Gate 的证据、
+  预算、双语用户材料、隐私、已知限制、反馈入口和关单 checklist。
 
 ## UI 资料与实现归属
 
