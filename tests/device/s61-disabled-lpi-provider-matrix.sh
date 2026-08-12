@@ -53,6 +53,7 @@ S61_DOWNLOAD_RESULT_PATH="files/debug/download-probe.properties"
 STATE_PATH="files/runtime-state/snapshot.properties"
 SNORT_CTL="${SNORT_CTL:-}"
 CURRENT_PROFILE=""
+S61_TRANSPORT_WARNING=0
 
 mkdir -p "$RESULT_DIR"
 
@@ -358,13 +359,17 @@ for key in [
 
 lines = []
 if errors:
+    print("providerContract=FAIL")
     print("status.result=FAIL")
+    lines.append("providerContract=FAIL")
     lines.append("status.result=FAIL")
     for error in errors:
         print(f"status.error={error}")
         lines.append(f"status.error={error}")
 else:
+    print("providerContract=PASS")
     print("status.result=PASS")
+    lines.append("providerContract=PASS")
     lines.append("status.result=PASS")
 lines.extend(f"status.delta.{key}={value}" for key, value in delta.items())
 lines.extend([f"status.profile={profile}", f"status.command={command}"])
@@ -393,15 +398,26 @@ assert_download_success() {
   kv "$profile.download.bytes" "$bytes"
   kv "$profile.download.url" "$url"
   if [[ "$result" == "download_failed" ]]; then
+    # A failed HTTPS probe is a transport outcome only. The caller must still
+    # collect status-after and evaluate the provider contract independently.
+    kv "$profile.downloadOutcome" "FAIL"
+    kv "$profile.transportStatus" "BLOCKED"
+    kv "$profile.transportOutcome" "BLOCKED"
     kv "$profile.download.status" "BLOCKED"
     kv "$profile.download.reason" "external HTTP endpoint unavailable"
     return 77
   fi
   if [[ "$result" != "download_succeeded" || ! "$bytes" =~ ^[1-9][0-9]*$ ]]; then
+    kv "$profile.downloadOutcome" "BLOCKED"
+    kv "$profile.transportStatus" "BLOCKED"
+    kv "$profile.transportOutcome" "BLOCKED"
     kv "$profile.download.status" "BLOCKED"
     kv "$profile.download.reason" "debugDownload did not produce a positive payload byte count"
     return 77
   fi
+  kv "$profile.downloadOutcome" "PASS"
+  kv "$profile.transportStatus" "PASS"
+  kv "$profile.transportOutcome" "PASS"
   kv "$profile.download.status" "PASS"
   return 0
 }
@@ -564,37 +580,92 @@ run_profile() {
     --ei debugDownloadTimeoutMillis "$S61_DOWNLOAD_TIMEOUT_MILLIS" \
     --ei debugDownloadMaxBytes "$S61_DOWNLOAD_MAX_BYTES" \
     >"${profile_dir}/download.intent.log" 2>&1 || true
+  local download_rc=0
   if ! wait_for_download_result "${profile_dir}/download-probe.properties"; then
+    # Keep the transport result separate from provider-neutral status. A
+    # missing/failed download must not prevent status-after from being read.
+    download_rc=77
+    kv "$profile.downloadOutcome" "BLOCKED"
+    kv "$profile.transportStatus" "BLOCKED"
+    kv "$profile.transportOutcome" "BLOCKED"
     kv "$profile.download.status" "BLOCKED"
     kv "$profile.download.reason" "debugDownload did not publish a bounded result"
-    return 77
-  fi
-  if assert_download_success "$profile" "${profile_dir}/download-probe.properties"; then
-    :
   else
-    local download_rc=$?
-    return "$download_rc"
+    if assert_download_success "$profile" "${profile_dir}/download-probe.properties"; then
+      :
+    else
+      download_rc=$?
+    fi
   fi
 
+  # Even download_failed (for example, HTTPS connection reset) must reach this
+  # status-after query. The counter delta is the provider contract evidence;
+  # the debugDownload result remains a distinct transport outcome.
   sleep 1
   after="$(ctl "$status_command" || true)"
   printf '%s\n' "$after" >"${profile_dir}/status-after.json"
   if ! printf '%s\n' "$after" | json_ok; then
+    kv "$profile.providerContract" "BLOCKED"
     kv "$profile.status.after" "BLOCKED"
     kv "$profile.status.reason" "$status_command did not return ok after HTTP payload"
     return 77
   fi
+  local provider_rc=0
   if verify_status_contract "$profile" "$status_command" \
       "${profile_dir}/status-before.json" "${profile_dir}/status-after.json" \
       "${profile_dir}/status-delta.properties"; then
-    cat "${profile_dir}/status-delta.properties"
-    kv "$profile.status.after" "PASS"
-    kv "$profile.result" "PASS"
-    return 0
+    provider_rc=0
+  else
+    provider_rc=$?
   fi
-  kv "$profile.status.after" "FAIL"
-  kv "$profile.status.result" "FAIL"
-  return 1
+  cat "${profile_dir}/status-delta.properties"
+
+  local provider_contract profile_result
+  if [[ "$provider_rc" -eq 0 ]]; then
+    provider_contract="PASS"
+    kv "$profile.providerContract" "PASS"
+    kv "$profile.status.after" "PASS"
+    if [[ "$download_rc" -eq 0 ]]; then
+      profile_result="PASS"
+      kv "$profile.result" "PASS"
+    else
+      # S59's TCP-connect fallback can provide separate transport evidence,
+      # but it can never replace this payload-bearing provider contract.
+      S61_TRANSPORT_WARNING=1
+      profile_result="PASS_WITH_TRANSPORT_WARNING"
+      kv "$profile.result" "$profile_result"
+    fi
+  else
+    provider_contract="FAIL"
+    kv "$profile.providerContract" "FAIL"
+    kv "$profile.status.after" "FAIL"
+    kv "$profile.status.result" "FAIL"
+    profile_result="FAIL"
+  fi
+  local download_result download_outcome transport_status
+  download_result="$(download_value "${profile_dir}/download-probe.properties" result 2>/dev/null || true)"
+  if [[ "$download_rc" -eq 0 ]]; then
+    download_outcome="PASS"
+    transport_status="PASS"
+  elif [[ "$download_result" == "download_failed" ]]; then
+    download_outcome="FAIL"
+    transport_status="BLOCKED"
+  else
+    download_outcome="BLOCKED"
+    transport_status="BLOCKED"
+  fi
+  {
+    printf 'profile=%s\n' "$profile"
+    printf 'downloadOutcome=%s\n' "$download_outcome"
+    printf 'transportStatus=%s\n' "$transport_status"
+    printf 'transportOutcome=%s\n' "$transport_status"
+    printf 'providerContract=%s\n' "$provider_contract"
+    printf 'result=%s\n' "$profile_result"
+  } >"${profile_dir}/contract.properties"
+  if [[ "$provider_rc" -ne 0 ]]; then
+    return 1
+  fi
+  return 0
 }
 
 section "preflight"
@@ -736,14 +807,18 @@ for profile in "${profiles[@]}"; do
   CURRENT_PROFILE=""
 done
 
-write_boundary_properties "$RESULT_DIR/s61-disabled-lpi-provider.properties" "PASS"
+matrix_status="PASS"
+if [[ "$S61_TRANSPORT_WARNING" == "1" ]]; then
+  matrix_status="PASS_WITH_TRANSPORT_WARNING"
+fi
+write_boundary_properties "$RESULT_DIR/s61-disabled-lpi-provider.properties" "$matrix_status"
 {
   printf 'device=%s\n' "$device"
   printf 'apk.sha256=%s\n' "$apk_sha256"
   printf 'buildFingerprint=%s\n' "$fingerprint"
   printf 'abi=%s\n' "$abi"
   printf 'profiles=%s\n' "$S61_PROFILE_SET"
-  printf 'matrix.result=PASS\n'
+  printf 'matrix.result=%s\n' "$matrix_status"
 } >>"$RESULT_DIR/s61-disabled-lpi-provider.properties"
-kv "matrix.result" "PASS"
+kv "matrix.result" "$matrix_status"
 exit 0

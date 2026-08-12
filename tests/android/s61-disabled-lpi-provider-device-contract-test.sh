@@ -41,9 +41,15 @@ grep -q 'debugDownloadUrl' "$matrix"
 grep -q 'debugDownloadTimeoutMillis' "$matrix"
 grep -q 'debugDownloadMaxBytes' "$matrix"
 grep -q 'download_succeeded' "$matrix"
+grep -q 'download_failed' "$matrix"
 grep -q 'payload-bearing HTTP/TCP' "$matrix"
 grep -q 'download-probe.properties' "$matrix"
 grep -q 'payloadBoundary=transport-payload-only' "$matrix"
+grep -q 'downloadOutcome' "$matrix"
+grep -q 'providerContract' "$matrix"
+grep -q 'PASS_WITH_TRANSPORT_WARNING' "$matrix"
+grep -q 'transportStatus' "$matrix"
+grep -q 'TCP-connect fallback' "$matrix"
 
 for field in \
   available \
@@ -75,6 +81,28 @@ grep -q '"name": "disabled"' "$matrix"
 grep -q 'status-before.json' "$matrix"
 grep -q 'status-after.json' "$matrix"
 grep -q 'status-delta.properties' "$matrix"
+
+python3 - "$matrix" <<'PY'
+import sys
+
+source = open(sys.argv[1], encoding="utf-8").read()
+run_profile = source[source.index("run_profile()") :]
+failed = run_profile.index("download_failed")
+status_after = run_profile.index('status-after.json')
+if failed >= status_after:
+    raise SystemExit(
+        "S61 failed download evidence must still collect status-after"
+    )
+download_window = run_profile[run_profile.index("local download_rc") : status_after]
+if "return " in download_window:
+    raise SystemExit(
+        "S61 download outcome handling must not return before status-after"
+    )
+if "providerContract" not in run_profile:
+    raise SystemExit("S61 matrix must record an independent providerContract PASS")
+if "downloadOutcome" not in run_profile:
+    raise SystemExit("S61 matrix must record downloadOutcome separately")
+PY
 
 grep -q 'source=android-installed-apk-debugDownload' "$matrix"
 grep -q 'corpus=not_used' "$matrix"
