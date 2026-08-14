@@ -19,7 +19,7 @@
 ### 2.1 固定不变量
 
 - Android 任一时刻只有一个由 RuntimeService 监督的 VPP runtime；Root 与 VPN 是互斥 Runtime Profile。
-- Root/NFQUEUE 与 VPN/TUN packet I/O 位于 VPP-native C/C++ Adapter plugin；Rust 不接收、返回或拥有逐包数据和 live VPP buffer。
+- 当前 pinned VPP revision 的 Root/NFQUEUE 与 VPN/TUN packet I/O 位于 VPP-native C Packet I/O Adapter plugin；其 plugin build 未启用 C++，因此 C++ 不属于当前 target packet domain。未来只有在新 pinned VPP 原生支持 C++ plugin 且存在具体理由时才可显式重新决策；Rust 不接收、返回或拥有逐包数据和 live VPP buffer。
 - 两种 Profile 共享 VPP parser、PacketFacts、FlowOwner、policy stage、policy revision 和 verdict 语义；平台 Adapter 不能成为第二套 parser 或 policy engine。
 - PacketLease 由 live VPP buffer 与内联固定 metadata 承载；每个有效 obligation 只允许一次 Adapter Completion physical attempt。
 - Policy Verdict、Runtime Disposition、Adapter Completion、VPN Transport Outcome 与 Infrastructure Fault 是不同事实，任何一层不得改写另一层。
@@ -37,6 +37,8 @@
 - capacity、latency、CPU、power、thermal 与长期 soak 的最终发布阈值；
 - policy/control 的最小内部实现步骤、存储引擎、checkpoint 与迁移方式；
 - Runtime health 的锁存、自动清除、自动 restart/backoff 和最终 Product UI 呈现；
+- VPN Userspace Flow Stack 的真实 instance isolation 形状、VPP↔Flow Stack C Interface、pbuf/buffer adoption 与 copy points；
+- FlowOwner-local egress 的 internal state partition、shard/count 以及 owner-inline 或 paired native-thread execution topology；
 - release signing、升级/回滚、OEM/Android 版本矩阵和 Activity Store retention。
 
 这些变量可以调整，但调整不得绕过固定不变量或改变已经产生的 packet outcome attribution。
@@ -100,7 +102,7 @@ Out-of-scope 表示不作为本闭环交付承诺，不表示禁止复用现有�
 因此：
 
 - UI 显示正确 `ALLOW`/`DROP` 但 completion、transport 或真实流量错误，case 失败；
-- VPN policy allow 后 HEV/网络失败，Policy Verdict 仍为 allow，但 nominal e2e case 失败并记录独立 Transport Outcome；
+- VPN policy allow 后 Flow Stack 或网络传输失败，Policy Verdict 仍为 allow，但 nominal e2e case 失败并记录独立 Transport Outcome；
 - 一个有效真机失败不能由 Host/synthetic pass 豁免；
 - 实验室外部依赖不可用时该次 run 标记为 invalid 并重跑，而不是 pass 或 product fail；长期无法执行的必需场景必须显式修改合同。
 
@@ -126,14 +128,14 @@ Adapter-neutral Host/VPP graph vectors 穷举共享语义。至少覆盖：
 
 Root 与 VPN 分别证明各自的平台边界，同时消费 Layer A 的同一语义合同。
 
-| 维度 | Root/NFQUEUE | VPN/TUN/HEV |
+| 维度 | Root/NFQUEUE | VPN/TUN + Flow Stack |
 | --- | --- | --- |
 | ingress | dual-stack INPUT/OUTPUT、queue generation、packet ID、original/captured length、完整 L3 | TUN outbound/transport-return、descriptor generation、完整 L3 |
 | materialization | netlink receive into VPP-owned ingress storage，无 Adapter-to-VPP full-packet copy | direct read/readv into VPP buffer/chain，无 Adapter-to-VPP full-packet copy |
 | initial placement | 多独占 NFQUEUE lane；queue 只决定 Initial Execution Placement | 单一首版 Platform I/O Lane |
-| completion | terminal intent 回 Origin Adapter Lane；原 generation/packet ID 唯一 verdict | HEV ownership transfer 或 terminal TUN write |
-| fault | queue/listener/identity/verdict failure、fail-open 与 bounded evidence | fd/HEV/TUN/completion/transport failure 与 bounded evidence |
-| teardown | quiesce → bounded drain → close verdict channel → remove hook/queue | quiesce → bounded drain → close transport/TUN → release VPN slot |
+| completion | terminal intent 回 Origin Adapter Lane；原 generation/packet ID 唯一 verdict | VPP-native TUN contract 定义 Adapter terminal operation；Flow Stack admission 与 Transport Outcome 分离；return path 以 terminal TUN write 完成 |
+| fault | queue/listener/identity/verdict failure、fail-open 与 bounded evidence | TUN/Flow Stack/boundary/completion/transport failure 与 bounded evidence |
+| teardown | quiesce → bounded drain → close verdict channel → remove hook/queue | quiesce → bounded drain → settle Flow Stack ownership → close transport/TUN → release VPN slot |
 
 Adapter-specific performance 限制可以不同，但两者不得产生不同 parser、owner、policy verdict 或 revision 语义。
 
@@ -224,7 +226,7 @@ S57 的产品合同是 Runtime Profile Initialization 与后续互斥 Profile sw
 1. **Capability detection、推荐与用户确认。** `RuntimeProfileInitializationPlan` 是产品层 seam：Root supported 时推荐 Root，Root unavailable 时推荐 VPN；推荐只进入 `PROFILE_CONFIRMATION`，`shouldAutoAuthorize`、`shouldAutoStart` 与 `shouldAutoSwitchProfile` 永远为 false。DebugControlActivity 只渲染当前 step/action/impact/recovery，不因推荐直接请求权限、授权、启动或切换。
 2. **Visible Runtime Notification gate。** `RuntimeControlBackend.start/resumeProtection` 在 `RuntimeService.notificationsReady(context)` 失败时只返回 `NOTIFICATION_REQUIRED`，不发送 lifecycle `START` intent。`RuntimeService.ensureForeground` 在 foreground service 成功但通知权限/开关仍不可用时发布 `notification_permission_required` 并 stopForeground；这不是 runtime readiness，也不得被当作底层可启动证明。
 3. **Profile authorization 与 permission boundary。** Root permission 使用本文 7.2 的 S54 boundary：start/recovery authorization unavailable 进入 `root_authorization_required`，不自动重启。VPN authorization 由 `VpnService.prepare` gate；未授权时 DebugControlActivity 停在授权 action，不启动 VPN profile。
-4. **Adapter、双栈 runtime readiness 与 startup failure。** RuntimeService 只有在 manifest/artifact identity、profile cleanup、launch、health handshake、VPN TUN fd handoff、HEV transport、PID verification 和 final state persistence 都通过后才发布 `running`。`failWithoutRuntime` 表示尚未启动 runtime 的 fail-closed error；`failWithCleanup` 先执行 profile cleanup，再按 bounded recovery policy 或 terminal error 收口，不保留 partial runtime residue 作为 successful readiness。
+4. **Adapter、双栈 runtime readiness 与 startup failure。** RuntimeService 只有在 manifest/artifact identity、profile cleanup、launch、health handshake、VPN TUN fd handoff、VPP Runtime 与已选择的 VPN Userspace Flow Stack readiness、PID verification 和 final state persistence 都通过后才发布 `running`。`failWithoutRuntime` 表示尚未启动 runtime 的 fail-closed error；`failWithCleanup` 先执行 profile cleanup，再按 bounded recovery policy 或 terminal error 收口，不保留 partial runtime residue 作为 successful readiness。
 5. **互斥 switch 与 rollback。** Start 前做全局 Root/VPN ownership audit。若已有 Root/VPN owner 且目标不同，RuntimeService 必须先 `stopRuntime(false)`；stop 失败时直接返回，不启动第二个 VPP。S70 current-run device evidence `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log` 证明 Root start、Root→VPN、VPN→Root、Activity recreate、app process death、Protection Pause、policy/binding preservation、cleanup fault visibility、runtime crash recovery、Doze 和 final cleanup 均 PASS。
 6. **Root-only、VPN-only 与 both-available coverage。** Product plan 与 `RuntimeProfileInitializationPlan` contract 覆盖 Root-only/VPN-only/both-supported recommendation semantics；current controlled device evidence covers both-supported Root/VPN switching. Platform-specific unavailability is represented as capability/profile authorization steps, not as silent fallback or auto-switch.
 
@@ -242,6 +244,12 @@ S57 的产品合同是 Runtime Profile Initialization 与后续互斥 Profile sw
 implementation ticket 必须在评论中记录：source revision、artifact identity、设备/网络环境、命令、原始结果路径、有效/无效判定、失败归因和残留检查。摘要不能替代可复查原始证据。
 
 ## 9. Plane 执行顺序
+
+以下 SAKAMOTO-65..71 顺序记录的是原 Android Functional Closure campaign，不能作为当前 Direct
+Egress frontier。当前 VPN Flow Stack evidence 顺序由 SAKAMOTO-110/111 固定为
+SAKAMOTO-114 → 115 → 116 → 117 → 98 → 99 → 100 → 101 → 102；其中 instance isolation、真实
+VPP↔Flow Stack C boundary、buffer/copy envelope 和 inline/paired topology 都必须等待对应 POC，
+不能从旧 Host model 或 TUN/HEV child evidence 推导。
 
 - SAKAMOTO-65：本文固定的 Functional Closure Contract 与 Evidence Matrix。
 - SAKAMOTO-66：在本文不变量下收敛共享 Flow/Lease/Adapter 领域语义，并明确旧 SAKAMOTO-47..49 代码的迁移/证据地位。
@@ -283,8 +291,8 @@ The following vectors run once at the adapter-neutral Host/VPP graph layer. Root
 | B — Distribution and guard | Owner-local packet; remote initial placement; target queue congestion; first and second owner mismatches | Local path has no worker enqueue. Remote path performs exactly one Primary Handoff of buffer index/metadata. Congestion never redirects to another worker. One mismatch permits one Corrective Handoff; a repeated mismatch is a runtime `DROP`/owner fault with no redirect loop or fail-open. Worker Layout, selector, seed, and capacities are runtime-fixed. |
 | C — Parser, facts, and ingress identity | Complete valid L3; invalid version/header/declared length; valid L3 with unavailable or unsupported L4; oversize envelope; missing NFQUEUE completion identity | Shared VPP parser accepts valid complete L3 and preserves parser status/facts. Invalid L3 is a runtime drop with no Policy Verdict. Missing L4/ports no-match only predicates requiring them while other stages continue. Envelope overflow has no partial parse and follows the contract's bounded evidence. Missing queue generation/packet ID is `INGRESS_IDENTITY_MISSING`: no PacketLease, VPP entry, Policy Verdict, or fabricated completion. |
 | D — Fragment transition | Non-initial fragment; IPv4/IPv6 out-of-order fragments; identical duplicate; overlap/conflict; malformed/reserved/length error; timeout; datagram/fragment capacity; successful reassembly | Non-initial fragments never fabricate ports. All fragments co-locate under a temporary fragment key; the initial fragment's final owner is retained. Reassembly-to-final-owner transition does not consume Corrective Handoff. Duplicate is idempotent. Conflict, malformed, timeout, and capacity failure runtime-drop every retained obligation, produce no Policy Verdict, and never fail-open. |
-| E — Lease, completion, and teardown | Policy allow/drop; pre-policy capacity and reserve exhaustion; stale/duplicate completion; definite send rejection; genuinely ambiguous operation path; Root/VPN teardown; post-HEV transport failure | Each decided packet has one physical Adapter Completion attempt and then native buffer return. NFQUEUE `nfq_set_verdict` nonnegative return is `SUCCEEDED` for operation completion only; negative/native error or deterministic pre-backend rejection is `FAILED_DEFINITE`; `OUTCOME_UNKNOWN` is reserved for a genuinely ambiguous path with no trustworthy terminal result. There is no separate NFQUEUE ACK and no claim of later delivery; no retry, graph re-entry, or policy re-evaluation. Stale/duplicate requests do not issue a second attempt. Teardown is quiesce → bounded drain → channel close: existing verdicts complete, ordinary unevaluated Root leases accept when identity remains completable, VPN records completion/transport failure separately, and fragment/owner-fault drops do not become fail-open. HEV post-handoff failure leaves Policy allow and Adapter completion intact while recording Transport failure. |
-| F — Adapter parity and evidence (future S68/S69/S71 conformance gate) | Run A–E once through VPP graph injection; replay controlled vectors through Root NFQUEUE/netns and VPN TUN/HEV | Both Adapters supply equivalent normalized facts and consume the same owner/policy/revision semantics. Queue/fd/packet handles remain platform-private. Evidence proves direct materialization into VPP-owned storage, index/ownership handoff without packet-byte copies, origin-lane completion, bounded counters/health, and no generation or residue leak. |
+| E — Lease, completion, and teardown | Policy allow/drop; pre-policy capacity and reserve exhaustion; stale/duplicate completion; definite send rejection; genuinely ambiguous operation path; Root/VPN teardown; post-admission transport failure | Each decided packet has one physical Adapter Completion attempt and then native buffer return. NFQUEUE `nfq_set_verdict` nonnegative return is `SUCCEEDED` for operation completion only; negative/native error or deterministic pre-backend rejection is `FAILED_DEFINITE`; `OUTCOME_UNKNOWN` is reserved for a genuinely ambiguous path with no trustworthy terminal result. There is no separate NFQUEUE ACK and no claim of later delivery; no retry, graph re-entry, or policy re-evaluation. Stale/duplicate requests do not issue a second attempt. Teardown is quiesce → bounded drain → channel close: existing verdicts complete, ordinary unevaluated Root leases accept when identity remains completable, VPN records Adapter Completion, Flow Stack settlement, and Transport Outcome separately, and fragment/owner-fault drops do not become fail-open. A post-admission transport failure leaves Policy allow intact and cannot retroactively define or rewrite Adapter Completion. |
+| F — Adapter parity and evidence (future S68/S69/S71 conformance gate) | Run A–E once through VPP graph injection; replay controlled vectors through Root NFQUEUE/netns and VPN TUN/Flow Stack | Both Adapters supply equivalent normalized facts and consume the same owner/policy/revision semantics. Queue/fd/packet handles remain platform-private. Evidence proves direct materialization into VPP-owned storage, index/ownership handoff without packet-byte copies, origin-lane completion, bounded counters/health, and no generation or residue leak. |
 
 ### 10.3 Plane disposition
 

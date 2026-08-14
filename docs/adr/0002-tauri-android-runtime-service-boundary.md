@@ -25,15 +25,17 @@ Tauri Activity/WebView
   -> Tauri Rust commands / Kotlin mobile bridge
        -> versioned product-control IPC
             -> foreground RuntimeService or VpnService
-                 -> supervised VPP runtime
+                 -> supervised VPP Runtime
                       Root: root UID + NFQUEUE Adapter
-                      VPN: app UID + TUN Adapter + HEV transport
+                      VPN: app UID + TUN Adapter + VPN Userspace Flow Stack
 ```
 
 Root and VPN use the same VPP build, Sakamoto graph, worker ownership, compiled policy semantics, and
 control contract. Their process credentials, Android permission acquisition, Packet capture Adapter, and
-transport completion differ. Root may require a privileged child process; VPN retains Android ownership of
-the TUN and `protect()` responsibilities. These platform facts do not move policy verdict ownership into
+platform/transport outcomes differ. Root may require a privileged child process; VPN retains Android
+ownership of the TUN and `protect()` broker responsibilities while the VPN Userspace Flow Stack remains
+inside the supervised VPP Runtime. Its instance, state, buffer, and thread layout is selected by follow-on
+POC evidence rather than this lifecycle ADR. These platform facts do not move policy verdict ownership into
 Kotlin or the UI.
 
 The shared Local Product Backend remains separate from presentation state. Android service integration may

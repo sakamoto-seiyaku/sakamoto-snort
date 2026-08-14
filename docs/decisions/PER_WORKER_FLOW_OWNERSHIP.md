@@ -68,11 +68,13 @@ indexes、completion identity 与 terminal metadata，不复制 packet bytes，�
 buffer、LeaseSlot table、return object 或热路径动态内存。真实 verdict syscall failure 后的 FAILED
 debt 结算和 clean teardown 仍是 release gate。
 
-VPN completion 首版采用一个 native VPN Platform I/O Lane。Android 仍负责创建 VpnService TUN、
-执行 `protect()` 并把所需 descriptors 交给受监督的 VPP runtime；运行中的 TUN/HEV packet I/O、
-completion 和 native buffer return 留在 Adapter plugin。允许的 outbound packet 交给 HEV，return
-packet 写回 TUN，policy drop 在同一 native ownership domain 完成。HEV 接受 ownership 后的失败只
-属于 Transport Outcome。除非真机证据证明单 I/O owner 是瓶颈，首版不拆 TUN/HEV owners。
+VPN 首版从一个 native TUN Platform I/O Lane 接收并完成 Android TUN I/O。Android 仍负责创建
+VpnService TUN、执行 `protect()` 所需的受控 broker 操作，并把平台资源交给受监督的 VPP Runtime；
+运行中的 TUN packet I/O、Adapter Completion 和 native buffer return 留在 C-only Adapter plugin。
+允许的 TUN-origin packet 在 canonical FlowOwner 进入独立的 VPN Flow Stack Packet Boundary，
+flow-stack-origin return packet 回到同一 shared graph 后才由 TUN lane 完成。Flow Stack admission、
+Adapter Completion 与 Transport Outcome 是不同事实。本决策不固定 HEV/lwIP instance 数、state
+partition、shard count 或 owner-inline/paired topology；这些由后续真实依赖和 Android POC 选择。
 
 Root/VPN 的 PacketLease 继续由 live VPP buffer 与内联固定 metadata 承载。公共字段保存 Adapter
 type/generation、Origin Adapter Lane、terminal intent 与 obligation state；Adapter 私有字段保存

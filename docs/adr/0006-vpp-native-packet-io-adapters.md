@@ -5,8 +5,11 @@ date: 2026-08-02
 
 # VPP-native packet I/O adapters
 
-Root/NFQUEUE and VPN/TUN packet I/O execute inside VPP-native C/C++ Adapter plugins rather than crossing a
-Rust–VPP–Rust bridge for every packet. Rust remains the product control, lifecycle, configuration, policy
+For the pinned target VPP revision, Root/NFQUEUE and VPN/TUN packet I/O execute inside VPP-native C Adapter
+plugins rather than crossing a Rust–VPP–Rust bridge for every packet. Its plugin build enables C but not C++,
+so C++ is not a target plugin or packet-domain implementation language. A future pinned VPP revision may
+reopen that language boundary only if its native plugin build supports C++ and a concrete need justifies it.
+Rust remains the product control, lifecycle, configuration, policy
 snapshot, status, and compatibility layer behind a coarse-grained non-unwinding C ABI; it does not receive,
 complete, return, or own individual live VPP packet buffers. This supersedes ADR-0005 while preserving its
 underlying exactly-once Adapter Completion, generation, bounded-resource, and teardown obligations inside
@@ -17,9 +20,9 @@ Initial Execution Placement, not as flow ownership. Each native lane exclusively
 for receive and verdict. The shared Canonical Flow Key and fixed Worker Layout select the final FlowOwner:
 owner-local packets continue without enqueue, while mismatches use bounded canonical-owner processing and
 return their terminal intent to the origin lane, which performs the packet's single verdict operation with
-the original queue generation and packet ID. VPN begins with one native TUN/HEV I/O owner and uses the same
-FlowOwner and completion-routing model. Normal worker transfer moves VPP buffer indexes and metadata, never
-copies complete packet bytes.
+the original queue generation and packet ID. VPN begins with one native TUN Platform I/O Lane and uses the
+same FlowOwner and completion-routing model; ADR-0007 defines the separate post-policy VPN Flow Stack Packet
+Boundary. Normal worker transfer moves VPP buffer indexes and metadata, never copies complete packet bytes.
 
 This shape is chosen from the Pixel 6a W2/Q2 POC: address-diverse Q2/Q4 kernel placement mismatched the
 project's canonical owner for about half of packets, so queue identity cannot replace software distribution;

@@ -23,16 +23,60 @@ The runtime packet and DNS execution path that produces verdicts and maintains o
 _Avoid_: storage layer, reporting backend
 
 **RuntimeService**:
-The Android-side owner of daemon startup, shutdown, artifact handoff, configuration sync, and post-start health checks.
-_Avoid_: UI directly managing the native daemon
+The Android-side lifecycle owner of the active Runtime Profile's supervised VPP Runtime, including startup, shutdown, artifact handoff, configuration sync, and post-start health checks.
+_Avoid_: UI directly managing the native dataplane, generic runtime owner
+
+**VPP Runtime**:
+The sole RuntimeService-supervised native dataplane instance for the active Runtime Profile. It owns the shared VPP graph, Worker Layout, live VPP buffers, and active VPP-native Packet I/O Adapter.
+_Avoid_: bare Runtime, surrounding C++ daemon, HEV runtime, parallel Root/VPN dataplanes
 
 **Debug Control Activity**:
 The minimal Android UI used during Functional Closure to select a Runtime Profile, start or stop the supervised runtime, operate the smallest test policy, and inspect bounded current or recent status and verdict evidence. It is not the release Product UI, the durable Activity Store, or an authority for policy, lifecycle, or packet state.
 _Avoid_: Product Activity, Activity Store, release UI, runtime owner, policy database
 
 **Runtime Profile**:
-The mutually exclusive product choice of Android `root` or `vpn` packet capture and lifecycle behavior. Exactly one VPP runtime is active; changing Runtime Profile replaces its platform Adapter and privilege topology, not the shared dataplane, policy identity, or Product UI information architecture.
+The mutually exclusive product choice of Android `root` or `vpn` packet capture and lifecycle behavior. Exactly one VPP Runtime is active; changing Runtime Profile replaces its platform Adapter and privilege topology, not the shared dataplane, policy identity, or Product UI information architecture.
 _Avoid_: separate Root product, separate VPN policy database, parallel Root/VPN dataplanes, packet worker topology
+
+**VPP-native Packet I/O Adapter**:
+The target VPP plugin form of a Packet capture Adapter, owning platform ingress, Adapter Completion, and live-buffer lifecycle around the shared VPP graph. It is not the surrounding daemon or a generic glue layer; the pinned target language is fixed by ADR-0006.
+_Avoid_: hot-path glue, C glue, C++ daemon Adapter, Rust packet bridge, second policy engine
+
+**Direct Egress**:
+The sole first-release VPN forwarding mode, in which allowed IPv4/IPv6 TCP and UDP traffic is sent to its original destination without requiring an upstream proxy. All four IP-family/transport combinations are release requirements even when feasibility work starts with TCP only.
+_Avoid_: built-in relay, mandatory SOCKS5 dependency, proxy bypass fallback, treating the TCP prototype as release-complete
+
+**Direct DNS Handling**:
+The Direct Egress treatment of DNS as its original TCP or UDP traffic sent to the packet's original destination. It does not introduce a separate resolver, redirect DNS to a product-selected server, or bypass normal policy and transport accounting.
+_Avoid_: built-in DNS proxy, silent resolver replacement, treating DNS as outside Direct Egress
+
+**VPN Userspace Flow Stack**:
+The VPN-only packet-in/packet-out Module that reconstructs allowed L3 packets into TCP/UDP transport flows, operates Protected Egress Sockets, and synthesizes return L3 packets for reinjection into the same canonical FlowOwner and shared VPP graph. The selected implementation family is the Sakamoto HEV Fork/lwIP; it owns transport state and resources, not FlowEntry, Policy Verdict, shared packet policy, or direct TUN-write authority.
+_Avoid_: lightweight packet sender, Direct Connector alone, shared VPP policy engine, direct lwIP-to-TUN return, inbound policy bypass, Root Profile dependency, assuming Android can transmit post-policy L3 packets without flow reconstruction
+
+**FlowOwner-local Egress Shard**:
+The VPN egress ownership locality aligned with one canonical FlowOwner, with no second egress hash, cross-owner spill, or flow migration. It does not fix internal mutable-state partitioning, shard count, or OS-thread topology; those remain evidence-selected.
+_Avoid_: global HEV bottleneck, independent egress hash, live reshard, overload spillover, flow migration between shards, treating shard as an OS thread or settled instance layout
+
+**VPN Packet Provenance**:
+The immutable PacketLease metadata that distinguishes an Android TUN-origin packet from a VPN Userspace Flow Stack-origin packet without changing Canonical Flow Key or FlowOwner selection. After the normal shared graph permits forwarding, TUN-origin traffic terminates at its owner-local egress shard while flow-stack-origin traffic terminates at Android TUN completion. Endpoint routing never infers provenance from flow-relative `ORIG/REPLY`, preventing a VPP-to-lwIP return loop while preserving one bidirectional flow owner.
+_Avoid_: provenance in the flow hash, ORIG as TUN source, REPLY as lwIP source, return packet re-entering egress, direct lwIP-to-TUN bypass
+
+**Protected Egress Socket**:
+A VPN Userspace Flow Stack TCP or UDP socket bound to the selected Android underlay and successfully excluded by Android `VpnService` from the active VPN before `connect()` or the first send, preventing its outer traffic from re-entering the TUN. Its underlay epoch is fixed at creation: new flows use the latest Network Context Snapshot, while an invalidated TCP underlay ends the transport flow so the application can reconnect rather than transparently migrating or reconnecting its byte stream. Any future UDP mapping rebuild across underlays requires explicit, tested semantics and never silently reuses the old socket. Protection or underlay-binding failure closes the socket with no unprotected fallback and remains an Infrastructure Fault and failed Transport Outcome without rewriting the Policy Verdict.
+_Avoid_: protect after connect, per-packet protect, unprotected retry, VPN-loop fallback, policy drop
+
+**VPN Egress Overload**:
+The bounded failure behavior when an owner-local egress shard cannot admit more work. Exhausted flow capacity rejects creation of a new lwIP session, PCB, or protected socket without evicting an existing flow or spilling to another shard. Exhausted packet-handoff or buffer credit discards only the current packet without implicitly terminating an existing transport flow. Both remain explicit Transport or Runtime failures rather than Policy Verdicts: VPP workers never wait, TCP may recover through retransmission, UDP may lose the datagram, and sustained overload is surfaced through Runtime health without policy bypass.
+_Avoid_: blocking a VPP worker, cross-shard spill, implicit flow eviction, overload as policy DROP, Direct bypass, hiding sustained saturation
+
+**VPN Egress Recovery Policy**:
+The connectivity-first response when the VPN Userspace Flow Stack cannot start or crashes: attempt one bounded automatic restart, then tear down the unusable VPN runtime and visibly report that protection stopped so ordinary connectivity can resume. Android always-on lockdown remains authoritative and may keep connectivity blocked; Sakamoto never reports a stopped or dead egress stack as active protection.
+_Avoid_: permanent dead-TUN blackhole, silent policy bypass, unlimited restart loop, reporting protection as running, overriding Android lockdown
+
+**SOCKS5 Egress**:
+A possible future, explicitly selected VPN forwarding mode in which allowed traffic uses a configured SOCKS5 upstream. It is outside the current product, implementation, and acceptance scope; the internal connector seam may preserve the existing adapter without creating a current roadmap obligation. If later enabled, failure never falls back implicitly to Direct Egress and changing modes requires an explicit user choice.
+_Avoid_: current requirement, first-release feature, current implementation focus, default egress, transparent direct fallback, `socket5`
 
 **2026 Local Endpoint Deployment Scope**:
 The current planning boundary in which Sakamoto protects traffic on the user's own Android or Linux endpoint for an individual or very small team. It is not deployed as a network gateway, router, shared security appliance, or hostile multi-tenant enforcement point. Runtime behavior may preserve continuity with the modified VPP fork, but design choices within this release scope are justified by local correctness, bounded resources, and preservation of the user's connectivity rather than by an Internet-facing attacker model. Gateway and hostile multi-tenant requirements require a later explicit scope decision.
@@ -295,15 +339,15 @@ The first-release bounded evidence for `FAILED_DEFINITE` and `OUTCOME_UNKNOWN` A
 _Avoid_: retry mechanism, unbounded failure ledger, per-packet synchronous logging, packet payload retention, hiding a broken channel
 
 **Transport Outcome**:
-The post-policy forwarding result for traffic whose Runtime Disposition permits platform transport, notably VPN traffic handed to HEV. `UNSUPPORTED` or `FAILED` remains distinct from policy `DROP` and Adapter Completion.
+The post-policy forwarding result for traffic whose Runtime Disposition permits platform transport, notably VPN traffic handed to the VPN Userspace Flow Stack. `UNSUPPORTED` or `FAILED` remains distinct from policy `DROP` and Adapter Completion.
 _Avoid_: policy verdict, runtime disposition, treating allow as proof of delivery
 
-**VPN Completion Boundary**:
-The ownership boundary between the native VPN Packet capture Adapter and HEV transport. One initial VPN Platform I/O Lane exclusively operates the Android TUN fd and VPP-facing HEV channel after Android grants and transfers the required descriptors. For an outbound allowed packet, Adapter Completion succeeds when HEV accepts ownership; for a return packet it is the terminal TUN write. Later transport failure never rewrites completion, and an ambiguous ownership transfer remains `OUTCOME_UNKNOWN`.
-_Avoid_: treating HEV enqueue as end-to-end delivery, rewriting completion after a later transport failure, treating TUN write as policy verdict, retaining two owners for one packet
+**VPN Flow Stack Packet Boundary**:
+The packet-ownership seam between the shared VPP graph/canonical FlowOwner and the VPN Userspace Flow Stack: TUN-origin packets transfer outbound while flow-stack-origin packets return to the same owner graph. It does not define Adapter Completion, ABI, process/thread topology, buffer representation, or an external HEV descriptor channel.
+_Avoid_: VPN Completion Boundary, HEV descriptor seam, treating Flow Stack acceptance as end-to-end delivery, direct Flow Stack-to-TUN return
 
 **Platform I/O Lane**:
-A VPP-native, event-driven Packet capture Adapter execution lane that exclusively operates its assigned platform fd or queue set for receive and Adapter Completion. A Root lane owns one NFQUEUE queue/socket; the initial VPN lane owns the transferred TUN and VPP-facing HEV descriptors. It materializes ingress into VPP-owned storage, submits work to the shared graph, regains terminal buffers through bounded Completion Frames, performs platform completion, and returns buffers through the native VPP lifecycle.
+A VPP-native, event-driven Packet capture Adapter execution lane that exclusively operates its assigned platform fd or queue set for receive and Adapter Completion. A Root lane owns one NFQUEUE queue/socket; the initial VPN lane owns transferred TUN ingress and terminal TUN-completion authority. It materializes ingress into VPP-owned storage, submits work to the shared graph, regains terminal buffers through bounded Completion Frames, performs platform completion, and returns buffers through the native VPP lifecycle.
 _Avoid_: Rust-owned packet lane, shared fd across concurrent owners, central NFQUEUE gather thread, busy polling, packet-byte return copy
 
 **Root Completion Boundary**:
@@ -323,7 +367,7 @@ The cross-profile fail-open rule for bounded pre-policy processing exhaustion: n
 _Avoid_: policy allow, policy drop, unbounded buffering, claiming VPN delivery when transport failed
 
 **Fail-Open Reserve**:
-A startup-fixed, worker-local, bounded set of VPP-owned ingress buffers reserved for each active ingress lane so the Packet Processing Capacity Fault Policy remains executable during transient exhaustion of normal VPP ingress buffers without introducing an Adapter scratch-buffer copy or cross-worker contention. Its per-lane count is selected from the production capacity matrix using measured peak concurrent occupancy, burst duration, exhaustion, RSS, latency, and target-profile evidence; no POC count is part of this contract. Each reserve buffer follows the independently accepted Contiguous Parser Envelope, currently 9000-byte VPP buffer data in the first Android release. These buffers are withheld from the already allocated VPP pool rather than allocated as an additional pool. A reserve packet bypasses parser, flow, and policy work: Root uses its completion identity to submit `ACCEPT`, while VPN offers the unchanged packet directly to its normal HEV transport. A buffer returns immediately after Root completion or HEV ownership transfer. Reserve exhaustion never triggers dynamic growth or blocking; the packet is explicitly lost, bounded lane-level capacity-fault evidence is accumulated, and Adapter/runtime health is degraded. The reserve is a best-effort overload mechanism, not a guarantee of connectivity under memory exhaustion or transport failure.
+A startup-fixed, worker-local, bounded set of VPP-owned ingress buffers reserved for each active ingress lane so the Packet Processing Capacity Fault Policy remains executable during transient exhaustion of normal VPP ingress buffers without introducing an Adapter scratch-buffer copy or cross-worker contention. Its per-lane count is selected from the production capacity matrix using measured peak concurrent occupancy, burst duration, exhaustion, RSS, latency, and target-profile evidence; no POC count is part of this contract. Each reserve buffer follows the independently accepted Contiguous Parser Envelope, currently 9000-byte VPP buffer data in the first Android release. These buffers are withheld from the already allocated VPP pool rather than allocated as an additional pool. A reserve packet bypasses parser, flow, and policy work: Root uses its completion identity to submit `ACCEPT`, while VPN may continue only through the normal VPN Flow Stack Packet Boundary and its selected capacity-fault contract, never through a direct HEV bypass or alternate ownership channel. The reserve buffer is settled exactly once by the applicable platform or Flow Stack boundary. Reserve exhaustion never triggers dynamic growth or blocking; the packet is explicitly lost, bounded lane-level capacity-fault evidence is accumulated, and Adapter/runtime health is degraded. The reserve is a best-effort overload mechanism, not a guarantee of connectivity under memory exhaustion or transport failure.
 _Avoid_: one shared contended reserve, whole-frame reservation, general-purpose packet pool, policy evaluation on reserve packets, unbounded emergency allocation, blocking for reserve capacity, claiming guaranteed fail-open delivery
 
 **L4 Priority Level**:
@@ -374,16 +418,20 @@ _Avoid_: 512-byte correctness assumption, Adapter-side truncation baseline, trea
 The packet-ingress performance contract that, after the unavoidable kernel-to-user boundary, the complete L3 bytes are received directly into VPP-owned buffer data and processed in place rather than first landing in an Adapter scratch buffer and then being copied wholesale into VPP. TUN should read directly into a preallocated VPP buffer or chain, and NFQUEUE should receive the netlink datagram into VPP-owned ingress storage and project the contained L3 span without a second full-packet copy. Metadata normalization and small fixed-field copies are permitted. This is not a claim of absolute kernel zero-copy or of end-to-end transport zero-copy. A platform/API-specific full-copy fallback requires POC evidence that direct materialization is infeasible, measured cost, and a new explicit design decision; it must not appear silently as Adapter convenience code.
 _Avoid_: shared full-packet scratch buffer, Adapter-to-VPP `memcpy`, absolute zero-copy marketing claim, rejecting VPP buffer chains, unmeasured fallback copy
 
+**VPN Egress Copy Minimization**:
+The performance goal of minimizing payload copies between VPP, the VPN Userspace Flow Stack, Protected Egress Sockets, and the return path while preserving explicit bounded ownership and exactly-once return. Exact adoption and materialization points remain evidence-selected; every full-payload copy needs a named lifetime or protocol reason and measurement, while absolute zero-copy is not promised.
+_Avoid_: absolute zero-copy contract, copy-free marketing claim, unmeasured copying, async borrowed pointer, unbounded buffer loan, ownership complexity pursued without measured benefit, treating every copy as an architecture violation
+
 **VPP Packet Byte-Movement Contract**:
 The in-graph rule that normal parsing, policy, observation, Primary Software Distribution, owner handoff, and the single Corrective Handoff move only VPP buffer indexes/ownership and side metadata, never copy, clone, or reserialize complete packet bytes between workers or nodes. Explicit protocol-required consumers may perform bounded content movement only when their semantics require it, notably fragment or TCP stream reassembly. The inspected modified VPP `stellar_lpi` baseline is not such an exception: it inspects the current L4 payload in place and retains only small derived per-session features, identifiers, and counters rather than packet copies. Any later recognizer that demonstrably requires selected payload retention owns a named capacity/lifetime budget and measurement; recognition must retain only the minimum required content rather than treating this exception as permission to archive packets.
 _Avoid_: per-node packet clone, worker-to-worker payload copy, telemetry packet copy, implicit recognizer retention, unbounded payload history, using an exception to bypass User-Space Single Materialization
 
 **Contiguous Parser Envelope**:
-The first-release compatibility envelope inherited from the modified VPP `flow_dissector`: packet headers and the declared packet span presented to the parser must fit the contiguous current VPP buffer. Android Functional Closure inherits the fork's 9000-byte VPP buffer data size and initial default pool sizing rather than first shrinking buffers or adding chain-aware parsing; buffers are startup pool objects recycled according to concurrent occupancy, not allocated in proportion to cumulative traffic volume. The VPN Profile fixes both the Android TUN and HEV-facing MTU at 1500 bytes. The IPv6 minimum MTU of 1280 is only a future compatibility fallback triggered by device/path evidence, not the baseline; values below 1280 are outside the supported dual-stack profile. Buffer count or data-size tuning requires measured RSS, occupancy, and overload evidence after the functional path runs. The release does not pre-design Linux GSO/jumbo handling, choose `NFQA_CFG_F_GSO` policy, alter system/NIC offload configuration, add chain-aware parsing, or linearize full packets. If a packet nevertheless exceeds the envelope, existing length validation must prevent partial interpretation; it receives no Policy Verdict, Root completes `ACCEPT` under the local fail-open rule, and bounded generic `UNSUPPORTED_CONTIGUOUS_ENVELOPE` evidence is recorded. Linux GSO/jumbo support and possible operator mitigation such as disabling interface GSO require later real deployment evidence and a new decision.
+The first-release compatibility envelope inherited from the modified VPP `flow_dissector`: packet headers and the declared packet span presented to the parser must fit the contiguous current VPP buffer. Android Functional Closure inherits the fork's 9000-byte VPP buffer data size and initial default pool sizing rather than first shrinking buffers or adding chain-aware parsing; buffers are startup pool objects recycled according to concurrent occupancy, not allocated in proportion to cumulative traffic volume. The VPN Profile fixes the Android TUN MTU at 1500 bytes; the compatible packet envelope at the VPN Flow Stack Packet Boundary remains evidence-selected. The IPv6 minimum MTU of 1280 is only a future compatibility fallback triggered by device/path evidence, not the baseline; values below 1280 are outside the supported dual-stack profile. Buffer count or data-size tuning requires measured RSS, occupancy, and overload evidence after the functional path runs. The release does not pre-design Linux GSO/jumbo handling, choose `NFQA_CFG_F_GSO` policy, alter system/NIC offload configuration, add chain-aware parsing, or linearize full packets. If a packet nevertheless exceeds the envelope, existing length validation must prevent partial interpretation; it receives no Policy Verdict, Root completes `ACCEPT` under the local fail-open rule, and bounded generic `UNSUPPORTED_CONTIGUOUS_ENVELOPE` evidence is recorded. Linux GSO/jumbo support and possible operator mitigation such as disabling interface GSO require later real deployment evidence and a new decision.
 _Avoid_: claiming the modified dissector is chain-aware, silent partial parsing, current-release GSO architecture, automatic host `ethtool` mutation, full-packet linearization, premature chain-parser complexity
 
 **Packet Byte Mutation Authority**:
-The explicit graph permission required to alter or synthesize packet bytes. Normal parser, policy, session, protocol-identification, distribution, and observation nodes are read-only and must pass the same unmodified L3 bytes onward. Root `ACCEPT` submits only the NFQUEUE verdict and never a replacement payload; VPN policy passes the unmodified packet to HEV. Only a named node whose network semantics require byte changes, such as fragment/TCP reassembly, an explicitly enabled future NAT, or packet synthesis, may receive mutation authority and own the resulting checksum, length, capacity, and evidence contract. Temporary edit-and-restore by an ordinary node is still mutation and is forbidden.
+The explicit graph permission required to alter or synthesize packet bytes. Normal parser, policy, session, protocol-identification, distribution, and observation nodes are read-only and must pass the same unmodified L3 bytes onward. Root `ACCEPT` submits only the NFQUEUE verdict and never a replacement payload; VPN policy passes the unmodified packet to the VPN Flow Stack Packet Boundary. Only a named node whose network semantics require byte changes, such as fragment/TCP reassembly, an explicitly enabled future NAT, or packet synthesis, may receive mutation authority and own the resulting checksum, length, capacity, and evidence contract. Temporary edit-and-restore by an ordinary node is still mutation and is forbidden.
 _Avoid_: implicit header edit, NFQUEUE replacement payload, mutate-then-restore parsing, policy-owned NAT, observation-side packet rewrite, treating writable memory as permission
 
 **Packet capture Adapter Conformance Contract**:
@@ -395,8 +443,8 @@ The bounded stop, pause, crash-cleanup, or Runtime Profile switch sequence for a
 _Avoid_: closing completion before quiescing ingress, unbounded drain, new policy work after teardown, replay into a replacement runtime, changing an existing Policy Verdict, fail-opening fragment or repeated-owner faults
 
 **VPN Transport Contract**:
-The Android VPN Profile's post-policy forwarding capability. The first release requires production-proven IPv4/IPv6 TCP and UDP completion through the protected HEV transport. ICMP Echo is advertised only when the pinned HEV build and device acceptance tests prove it; other IP protocols may still be matched, blocked, and observed by VPP but are not promised to forward after an allow verdict. Policy verdict and transport outcome remain separate facts, so an unsupported or failed transport is never reported as a policy-rule drop. The product does not build a new userspace TCP/IP stack merely to erase this Adapter constraint.
-_Avoid_: claiming all-IP VPN forwarding, transport failure reported as firewall block, unverified upstream capability, replacing HEV with a speculative in-house stack
+The Android VPN Profile's post-policy forwarding capability. The first release requires production-proven IPv4/IPv6 TCP and UDP completion through the VPN Userspace Flow Stack. ICMP Echo is advertised only when the Sakamoto HEV Fork and device acceptance tests prove it; other IP protocols may still be matched, blocked, and observed by VPP but are not promised to forward after an allow verdict. Policy Verdict and Transport Outcome remain separate facts, so an unsupported or failed transport is never reported as a policy-rule drop. The product does not expand the stack merely to claim all-IP forwarding.
+_Avoid_: claiming all-IP VPN forwarding, transport failure reported as firewall block, unverified capability, expanding the stack for unsupported protocols
 
 **CtFacts**:
 Conntrack-derived facts for the current packet and flow/session, such as `ct.state` and `ct.direction`, available only after the packet path enters L4 Conntrack. CtFacts are policy inputs, not an accepted-flow ledger.
@@ -683,6 +731,22 @@ _Avoid_: making IPRULES enforcement depend on reverse DNS
 **Android L4 Product Release**:
 The first user-complete Android release: mutually exclusive Root/VPN Runtime Profiles, multi-user App-first Control, Wi-Fi/Mobile/VPN Network Gates, advanced per-app IPv4/IPv6 L4 Traffic Rules, bounded activity/statistics, health, recovery, Product UI, help, and release materials.
 _Avoid_: VPP POC milestone, backend-only L4 completion, Linux release
+
+**Direct Egress Performance Acceptance**:
+The two-level performance evidence required for HEV Direct Egress: a controlled prototype A/B against the existing HEV SOCKS5 path, followed by absolute Android release-budget evidence for the production artifact. The prototype requires Direct median throughput at least 90% of baseline, p95/p99 latency and CPU per byte or transaction at most 110% of baseline with a small absolute latency tolerance, steady-state RSS growth at most 8 MiB, and no increasing RSS, thread, or fd trend across repeated connections and restarts. Passing only the relative comparison or only the release budget is insufficient.
+_Avoid_: HTTPS-connectivity-only acceptance, unpaired benchmark, prototype benchmark as release approval, SOCKS5 comparison as the sole product gate
+
+**Direct Egress Feasibility Conclusion**:
+The decision produced by the throwaway HEV Direct Egress prototype, expressed as `可进入正式实现`, `需先重构`, or `路线不可行`. These phrases describe evidence and next action; they are not implementation languages or release approval.
+_Avoid_: `GO`, `NO-GO`, Go language implication, treating throwaway prototype code as production code
+
+**Sakamoto HEV Fork**:
+The project-maintained MIT-licensed fork of pinned HEV selected as the starting implementation of the VPN Userspace Flow Stack because it already integrates lwIP flow/session lifecycle and TCP/UDP socket bridging. It serves Sakamoto's requirements rather than preserving SOCKS5 as the subsystem's defining purpose. It does not routinely rebase or follow upstream; only a major bug fix or evidence-backed significant performance improvement may trigger review and selective migration into a new tested pinned commit. It has no plan or release obligation to contribute Sakamoto changes upstream.
+_Avoid_: temporary downstream patch, scheduled rebase, automatic upstream tracking, update for version freshness, upstream contribution roadmap, waiting for upstream acceptance
+
+**POC Evidence Harness**:
+A throwaway scaffold that builds, runs, and seals evidence for one runnable question without becoming a product Module or implementation source.
+_Avoid_: production seam, reference implementation, migration-ready code, treating PASS or Plane Done as higher-fidelity evidence
 
 **Closure Evidence Matrix**:
 The real-environment-first layered acceptance model for Android Functional Closure: exhaustive shared semantic vectors run at the Adapter-neutral VPP graph contract, each Root/VPN Adapter separately proves its platform ingress/completion/fault/teardown boundary, and both Runtime Profiles pass a representative Android end-to-end parity set. It preserves useful existing unit and integration fixtures, runs newly required device evidence on the available controlled target device with real installed applications and network paths whenever practical, and uses host or synthetic evidence only for boundaries that cannot be reproduced deterministically end to end without duplicating every shared combinatorial vector across both profiles.

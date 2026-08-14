@@ -1,13 +1,20 @@
 # Android / VPP 当前现状与架构交接
 
 状态：当前权威交接文档；Android/VPP 基线 2026-07-19，handoff POC 决策更新于
-2026-08-10，protocol-identification pre-decision 证据更新于 2026-08-12。
+2026-08-10，protocol-identification pre-decision 证据更新于 2026-08-12，VPN Direct Egress
+fixed-spec 与 evidence frontier 更新于 2026-08-14。
 
 范围：Android 优先的产品基础、VPP 引入、root/NFQUEUE 与
 VpnService/TUN 两种运行路径。Linux 的实现和功能验证暂缓，除非后续设计决策明确恢复。
 
 证据基线：分支 `dev/vpp-base`，提交 `c572874`。本文只总结事实和边界，不把 POC
 代码提升为产品代码。
+
+2026-08-14 权威说明：本文较早章节中的 VPP/TUN/HEV child、SOCK_SEQPACKET、SOCKS fixture、
+单一 HEV owner 和 HEV ownership-transfer completion 描述只保留为当时运行证据。当前目标由
+ADR-0006、ADR-0007、SAKAMOTO-103..113 与 SAKAMOTO-114..117 frontier 约束：一个
+RuntimeService-supervised VPP Runtime、C-only VPP Packet I/O Adapter、独立 VPN Flow Stack Packet
+Boundary，以及由真实 POC 选择的 instance isolation、state partition、buffer/copy 和执行拓扑。
 
 后续产品与架构决策（2026-07-19）：
 
@@ -17,9 +24,10 @@ VpnService/TUN 两种运行路径。Linux 的实现和功能验证暂缓，除�
 - production process topology 已确认采用 Option A：Android RuntimeService 监督当前
   Runtime Profile 唯一的 VPP runtime；root 加载 NFQUEUE Adapter，VPN 加载 TUN Adapter，
   两者共享同一 Sakamoto VPP graph、worker runtime 与 policy engine，不保留平行数据面；
-- ADR-0006 已用 P0-P5 证据取代逐包 Rust–VPP–Rust bridge：NFQUEUE/TUN/HEV packet I/O、
+- ADR-0006 已用 P0-P5 证据取代逐包 Rust–VPP–Rust bridge：NFQUEUE/TUN platform packet I/O、
   live-buffer ownership、canonical handoff、origin-lane completion 与 native buffer return 留在
-  VPP-native Adapter plugin；Rust 只保留 lifecycle、configuration、policy snapshot、status、
+  当前 pinned VPP 的 C-only Packet I/O Adapter plugin；VPN post-policy transport 经过独立的 VPN
+  Flow Stack Packet Boundary。Rust 只保留 lifecycle、configuration、policy snapshot、status、
   diagnostics 与版本化 compatibility ABI；
 - VPP flow runtime 采用 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 的 per-worker
   single-owner 模型；Worker Layout 与 per-worker pool/cache capacity 启动时固定。普通报文由
@@ -404,7 +412,7 @@ Network Gate/L4、Debug Activity、VPN parity、release packaging 或产品容�
   capacity/lifetime budget 并单独测量；不能借此保存无界 packet history。
 - normal parser/policy/session/recognition/distribution/observation node 对 packet bytes 只读。
   Root `ACCEPT` 不提交 NFQUEUE replacement payload；VPN policy 将同一份未修改 L3 bytes
-  交给 HEV。只有 named graph node（fragment/TCP reassembly、未来显式 NAT、packet
+  交给 VPN Flow Stack Packet Boundary。只有 named graph node（fragment/TCP reassembly、未来显式 NAT、packet
   synthesis）可获得 mutation authority，并负责 checksum/length/capacity/evidence；普通节点
   临时 mutate-then-restore 也禁止。
 - 第一版沿用魔改 `flow_dissector` 的 contiguous-buffer envelope，不提前实现 chain-aware
@@ -416,7 +424,7 @@ Network Gate/L4、Debug Activity、VPN parity、release packaging 或产品容�
   data size、pool buffer count、RSS、occupancy 与 overload policy 需由目标 Root/VPN
   device release/capacity matrix 决定。VPP pool buffer 按并发 occupancy 循环复用，不随累计流量增长。
   Android Functional Closure 通过目标 Root/VPN 设备验证最终选择的 envelope；VPN 首版将 Android
-  TUN 与 HEV-facing MTU 统一固定为 1500。1280 仅作为
+  TUN MTU 固定为 1500，Flow Stack boundary 的兼容 packet envelope 由真实依赖 POC 选择。1280 仅作为
   未来由具体 device/path 实测问题触发的 IPv6-compatible fallback，dual-stack profile 不支持
   低于 1280 的 1250/1200。当前不动态跟随 underlay MTU。本轮不选择 `NFQA_CFG_F_GSO` policy，也不修改系统
   或网卡 offload。若仍出现超限，长度检查禁止 partial parse，不产生 Policy Verdict；Root 以
@@ -455,7 +463,7 @@ VPN profile 加载 TUN Adapter。二者进入同一个 Sakamoto VPP graph 与 po
 Tauri/Rust 经版本化 shim/VAPI 控制。
 
 它最符合已经对齐的产品方向，也复用了最多 POC 证据。但仍需明确 privilege mode、
-VPP/HEV process ownership、Android socket/file、root 与 app-UID packaging，以及一个 APK
+VPP Runtime/Flow Stack native packaging、Android socket/file、root 与 app-UID packaging，以及一个 APK
 如何提供两种 deployment profile。
 
 ### Option B：当前 daemon 拥有 ingress，再把 packet 交给 VPP
@@ -486,8 +494,9 @@ runtime；Root/NFQUEUE 与 VPN/TUN 共享 dataplane、worker graph、policy 和 
 ### D0. Deployment 与 process topology（已完成）
 
 已确定 Option A 与唯一 lifecycle owner。Android root/VPN profile 的具体 process UID、
-executable/library packaging、socket、writable directory 和 HEV placement 在正式实现切片中
-收敛，不改变单 VPP runtime、互斥 profile 和共享 dataplane 的已接受语义。
+executable/library packaging、socket 与 writable directory 在正式实现切片中收敛；VPN Flow Stack
+位于受监督的 VPP Runtime 内，但其 instance/state/thread layout 必须先由 SAKAMOTO-114..117 选择。
+这些变量不改变单 VPP Runtime、互斥 profile 和共享 dataplane 的已接受语义。
 
 输出：一张 process/privilege 图，以及 startup/stop/crash state machine。
 
@@ -513,12 +522,12 @@ NFQUEUE ingress 缺少 queue instance/generation 或 packet ID 等 mandatory com
 不进入 VPP，也不产生 Policy Verdict 或伪造 Adapter Completion outcome。kernel queue
 fail-open/bypass 可以独立释放 packet，但产品不得宣称自己提交或证明了 `ACCEPT`。
 
-VPN outbound 在 HEV 接受 packet ownership 时记 Adapter Completion `SUCCEEDED`，HEV
-拒绝时记 `FAILED_DEFINITE`；接管后的 connect/socket/network-send 失败只属于 Transport
-Outcome，不能回写 completion。返回 App 的 packet 以最终 TUN write 作为 Adapter
-Completion。Root/NFQUEUE completion 按 `nfq_set_verdict` 返回值记录 NFQ terminal operation
-本身的结果；非负返回是 `SUCCEEDED`，不证明后续 host/network delivery、下游 traffic success
-或另一个 ACK。
+ADR-0007 已撤销“HEV admission 自身定义 outbound Adapter Completion”的旧推断。VPN Flow Stack
+admission、Adapter Completion 与后续 Transport Outcome 分别记录；selected VPP-native TUN
+Adapter contract 必须定义自己的 terminal operation，不能从尚待 POC 收敛的 Flow Stack ABI 倒推。
+返回 App 的 packet 仍以最终 TUN write 作为 Adapter Completion。Root/NFQUEUE completion 按
+`nfq_set_verdict` 返回值记录 NFQ terminal operation 本身的结果；非负返回是 `SUCCEEDED`，
+不证明后续 host/network delivery、下游 traffic success 或另一个 ACK。
 
 Adapter teardown 先 quiesce 新 ingress，再在 completion/transport 尚可用时对已有 PacketLease
 做固定短期限 drain，最后才拆 channel。已有 Policy Verdict 照常完成；deadline 时普通、尚未求值
@@ -534,12 +543,13 @@ S80 只证明 2048-byte small-ICMP envelope。每 lane reserve 数量与 data si
 production capacity matrix 的 peak concurrent occupancy、burst、exhaustion、RSS、latency
 与目标 profile 实测确定，任何 POC 数量都不是 contract。normal ingress buffer 耗尽时，
 packet 直接物化到 reserve 且不进入 parser/flow/policy graph：Root 仅凭 completion identity
-提交 `ACCEPT`，VPN 将 unchanged packet 直接交给 HEV。reserve 不动态增长、不等待容量；它也
-耗尽时允许明确丢包，累计 bounded capacity-fault evidence 并降低 Adapter/runtime health。
-buffer 在 Root completion 或 HEV ownership transfer 后立即归还。该机制只吸收瞬时压力，不承诺在内存耗尽或
+提交 `ACCEPT`，VPN 只能经过正常 VPN Flow Stack Packet Boundary 及其已选择的 capacity-fault
+contract，不能建立 direct HEV bypass。reserve 不动态增长、不等待容量；它也耗尽时允许明确丢包，
+累计 bounded capacity-fault evidence 并降低 Adapter/runtime health。buffer 由适用的平台或 Flow
+Stack boundary exactly once 结算。该机制只吸收瞬时压力，不承诺在内存耗尽或
 transport failure 下仍能保持联网。
 
-输出：不依赖 libnetfilter_queue 或 VPP callback 内部类型的 C/C++ contract，以及
+输出：当前 pinned VPP 使用不依赖 libnetfilter_queue 或 VPP callback 内部类型的 C contract，以及
 malformed/truncated 示例。
 
 ### D2. VPP graph 与 threading model
@@ -568,11 +578,12 @@ owner-local fast path + mismatch-only bounded canonical processing/return。queu
 completion credit 和 Fail-Open Reserve 均需由目标 throughput、burst、latency、drop、CPU、power 与
 thermal matrix 定容；POC 的 pool32/128 或 reserve32 都不是产品常量。
 
-VPN 首版使用一个 native TUN/HEV Platform I/O Lane。Android 仍负责 VpnService TUN 创建、权限与
-`protect()`，然后把所需 descriptors 交给受监督的 VPP runtime；运行中的 packet I/O、policy/runtime
-completion 与 native buffer return 位于 Adapter plugin。允许的 outbound packet 交给 HEV，return
-packet 写 TUN，policy drop 在同一 ownership domain 完成。HEV 接受 ownership 后的失败只属于
-Transport Outcome。只有真机证据证明单 I/O owner 是瓶颈后，才讨论拆分 TUN 与 HEV owners。
+VPN 首版使用一个 native TUN Platform I/O Lane。Android 仍负责 VpnService TUN 创建、权限与
+`protect()` 所需的受控 broker 操作，然后把平台资源交给受监督的 VPP Runtime；运行中的 TUN
+packet I/O、Adapter Completion 与 native buffer return 位于 C-only Adapter plugin。允许的
+TUN-origin packet 在 canonical FlowOwner 进入 VPN Flow Stack Packet Boundary；flow-stack-origin
+return packet 回到同一 shared graph 后才由 TUN lane 完成。本段不固定 HEV/lwIP instance 数、
+state partition、shard count 或 owner-inline/paired topology。
 
 Root/VPN PacketLease 仍由 live VPP buffer 与内联固定 metadata 承载；normal path 只有 VPP 原生
 buffer pool，所有 graph、handoff、completion 与 return 都在 C/VPP ownership domain。Rust 不接收
@@ -597,10 +608,10 @@ clone packet bytes；任何 fragment/recognition content-retention exception 需
 容量边界和压力结果。
 
 graph review 还必须列出全部 Packet Byte Mutation Authority node；未列出的 node 视为 read-only，
-并验证 Root 无 replacement payload、VPN policy-to-HEV bytes unchanged。
+并验证 Root 无 replacement payload、VPN policy-to-Flow-Stack-boundary bytes unchanged。
 
-Android acceptance 要证明目标 Root/VPN device path 与固定 1500-byte TUN/HEV MTU 位于最终选择的
-contiguous parser envelope，并验证通用长度检查不会 silent partial parse；测试至少覆盖
+Android acceptance 要证明目标 Root/VPN device path、固定 1500-byte TUN MTU 与实证选择的 Flow
+Stack packet envelope 位于最终 contiguous parser envelope，并验证通用长度检查不会 silent partial parse；测试至少覆盖
 IPv4/IPv6、Wi-Fi、移动网络与大包 TCP/UDP，同时记录所选 buffer/default-pool baseline 的
 RSS、峰值 occupancy 和 exhaustion evidence。Linux GSO/jumbo acceptance 延后到真实
 部署证明需要时定义。
@@ -618,7 +629,7 @@ recovery rule。
 
 ### D4. Android lifecycle 与 security
 
-把已证明的 RuntimeService pattern 映射到 VPP/HEV：artifact hash、signing trust、
+把已证明的 RuntimeService pattern 映射到 VPP Runtime 与 VPN Userspace Flow Stack：artifact hash、signing trust、
 KernelSU authorization、foreground service、parent death、supervisor cleanup、crash
 policy、reboot、upgrade/rollback、socket/SVM cleanup 和 notification。
 
@@ -648,7 +659,7 @@ loss、queue occupancy、power、thermal 和 recovery budget。Plane implementat
 - 基础 NFQUEUE ACCEPT/DROP 不代表 experimental plugin 可作为 production Adapter。
 - 通过重启 single-family queue instance 完成双栈 case，不等于 dual-stack/multi-queue
   runtime 成立。
-- RuntimeService 对当前 daemon 的 cleanup 结论，不会自动覆盖 VPP/HEV。
+- RuntimeService 对当前 daemon 的 cleanup 结论，不会自动覆盖 VPP Runtime 或 VPN Userspace Flow Stack。
 - POC direct owner-policy knob 不定义 compiled policy contract。
 - archived daemon 不是实现计划。
 - Linux/Docker 可以辅助 build 和源码诊断，但不能替代当前 Android 功能证据要求。
@@ -656,9 +667,11 @@ loss、queue occupancy、power、thermal 和 recovery budget。Plane implementat
 ## 10. 新对话的第一个目标
 
 不要重新讨论是否采用两个 dataplane，也不要把已经完成的 ingress/worker POC 当成待验证
-架构。以已接受的 Option A 和 per-worker single-owner 决策为起点，把正式实现按 Android L4
-Product Release 的端到端 vertical slice 收敛；privilege、packaging、control reconnect、
-exactly-one verdict 和 profile-owned cleanup 作为切片内的产品化约束。
+架构。以已接受的 Option A 和 per-worker single-owner 决策为起点，先执行
+SAKAMOTO-114 → 115 → 116 → 117，选择真实 HEV/lwIP isolation、VPP↔Flow Stack C boundary、
+buffer/copy envelope 与 Android execution topology；在这些证据闭合前，不启动或复用 S98
+production-shaped 实现。privilege、packaging、control reconnect、exactly-one settlement 和
+profile-owned cleanup 仍是后续产品切片约束。
 
 ## 11. 新对话启动提示词
 

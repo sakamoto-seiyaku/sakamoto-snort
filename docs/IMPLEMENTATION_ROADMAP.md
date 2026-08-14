@@ -256,9 +256,14 @@ archived runtime 或创建孤立的数据面实现任务。
   libprotoident/stellar_lpi probes、selected PCAP smoke 和 provider-source decision inputs。仍未
   开始/未能声明完成的是 provider source/license/corpus/runtime enablement、real Android provider
   evidence、ProtocolRule enforcement 与 product verdict consumption。
-- [NEXT] VPN transport release evidence：对 pinned HEV build 完成真实外网 IPv4/IPv6 TCP 与
-  UDP relay 端到端验收；ICMP Echo 只有通过 capability/device tests 后才发布，其它 protocol
-  不属于 VPN 第一版 forwarding promise。Transport failure 必须与 policy DROP 分开归因。
+- [NEXT] VPN Direct Egress evidence frontier：按 SAKAMOTO-114 → 115 → 116 → 117 依次证明真实
+  pinned HEV/lwIP instance isolation、真实 VPP↔Flow Stack C Packet Boundary、真实 buffer/copy /
+  overload/generation envelope，以及 Android owner-inline vs paired-native-thread topology；随后才恢复
+  SAKAMOTO-98 → 99 → 100 → 101 → 102 的 target TCP、UDP、recovery、performance 与 closure。
+  旧 external HEV child、SOCK_SEQPACKET、SOCKS fixture 和 Host model 只保留为 scoped evidence，
+  不能替代这一 frontier。SAKAMOTO-59 Product Release gate 必须等待 SAKAMOTO-102 的 Direct
+  Egress closure；ICMP Echo 只有通过 capability/device tests 后才发布，其它 protocol 不属于 VPN
+  第一版 forwarding promise。Transport Outcome 必须与 Policy Verdict 和 Adapter Completion 分开归因。
 - [NOTE] SNORT-10 Authoring / Restore UX 和 Flow Telemetry consumer 的历史目标只保留为
   可复用设计输入；其最终产品形态必须由 Android L4 UI 场景驱动。
 
