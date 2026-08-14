@@ -9,6 +9,12 @@ SAKAMOTO-59 remains the source of truth for open closure state.
 中文状态：这是 SAKAMOTO-59 的发布门禁档案草案，不是发布批准。它把 Root/VPN 共同发布合同、
 已有证据和当前证据分级固定到仓库中；开放收口状态以 Plane SAKAMOTO-59 为准。
 
+2026-08-14 correction: the existing VPN/TUN/HEV matrices are pre-SAKAMOTO-82 child/SOCKS-fixture
+evidence. They remain valid for their recorded TUN, protection, lifecycle, and scoped forwarding facts, but
+they are not Direct Egress or final VPN transport evidence. SAKAMOTO-59 cannot close until the
+SAKAMOTO-114 → 115 → 116 → 117 → 98 → 99 → 100 → 101 → 102 frontier closes, in addition to the final
+signed-release gates already recorded here.
+
 ## 1. Release scope
 
 In scope:
@@ -16,7 +22,7 @@ In scope:
 - Android only.
 - One installable APK containing the same Android L4 product for Root and VPN Runtime Profiles.
 - App-first Network Gate, L4 rule, Activity, health, recovery, import/export, and diagnostics flows.
-- Root/NFQUEUE and VPN/TUN/HEV as mutually exclusive Runtime Profiles under the same policy authority.
+- Root/NFQUEUE and VPN/TUN + VPN Userspace Flow Stack as mutually exclusive Runtime Profiles under the same policy authority.
 
 Out of scope for this release gate:
 
@@ -41,7 +47,7 @@ Current validation device class:
 
 - Android physical device with repo-local `./dev/adb` access.
 - Root-capable profile for Root/NFQUEUE validation.
-- VPN-capable profile for VpnService + TUN + HEV validation.
+- VPN-capable profile for VpnService + TUN + selected VPN Userspace Flow Stack validation.
 
 Supported matrix entries must record:
 
@@ -114,7 +120,7 @@ compatibility tracking, but it is not final release evidence.
 | Dual-stack verdict coverage | S52/S55/S71 device matrices and host packet-policy tests | Present |
 | Lifecycle, fault, recovery, profile switch | S54/S57/S70/S71 contracts and device evidence | Present |
 | Policy persistence / old snapshot on failure | `tests/android/AndroidRuntimeContractTest.java` product transaction and apply-failure cases | Present |
-| VPN IPv4/IPv6 TCP and UDP production proof | `tests/device/s55-product-vpn-transport-matrix.sh` | Present |
+| VPN IPv4/IPv6 TCP and UDP production proof | SAKAMOTO-114..117 and SAKAMOTO-98..102 Direct Egress frontier | Pending; S55 is pre-Direct child/SOCKS-fixture evidence only |
 | Root fail-open fault envelope | S51/S52/S68/S71 evidence lineage and host adapter tests | Current S71 release-candidate rollup present; not final signed release evidence |
 | Root no-residue release proof | S70/S71 evidence lineage | Current S71 release-candidate rollup present; not final signed release evidence |
 
@@ -133,7 +139,8 @@ Current debug-evidence rollup:
   `vpn-tun-transport-fd-handoff`, TCP IPv4/IPv6 probes, UDP DNS bytes, no policy
   drops, and stopped projection after cleanup. This directory lacks a
   `matrix.log`, so it remains an evidence directory rather than a complete
-  release rollup.
+  release rollup. It also uses the historical child/SOCKS fixture and therefore
+  does not prove Direct Egress or the target VPN Flow Stack Packet Boundary.
 - Profile lifecycle: `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`
   records `matrix.result=PASS`, Root start, Root→VPN, VPN→Root, Activity
   recreation, app process death, Protection Pause, binding/policy preservation,
@@ -352,7 +359,7 @@ Root Profile:
 
 VPN Profile:
 
-- Uses Android VpnService, TUN fd handoff, and HEV transport.
+- Uses Android VpnService, TUN fd handoff, and the VPN Userspace Flow Stack selected by the Direct Egress evidence frontier.
 - Does not require Root authorization.
 - Android VPN UID attribution is non-blocking: unknown first packets are not held or replayed.
 - Late attribution affects later packets and Activity evidence; completed verdicts are not retroactively changed.
@@ -360,7 +367,7 @@ VPN Profile:
 中文说明：
 
 - Root 模式依赖 Root/NFQUEUE，能力更接近内核路径，但必须严格清理 hook、进程、socket 和 profile residue。
-- VPN 模式依赖 Android VpnService/TUN/HEV，不需要 Root；首包 UID 未识别时不会等待，后续归因成功后才按应用重新匹配。
+- VPN 模式依赖 Android VpnService、TUN 与 VPN Userspace Flow Stack，不需要 Root；首包 UID 未识别时不会等待，后续归因成功后才按应用重新匹配。
 
 ## 7. Rules, Activity, and recovery guide
 
@@ -405,7 +412,8 @@ Privacy principles:
 
 - Android only; Linux/Windows/macOS are explicitly out of this release gate.
 - VPN first packet may be Unknown Application; no recognition hold and no retroactive verdict rewrite.
-- ICMP Echo over VPN is not a release capability unless a pinned HEV build and device matrix prove it.
+- Current VPN/TUN/HEV child/SOCKS evidence is not Direct Egress release evidence; SAKAMOTO-102 remains required.
+- ICMP Echo over VPN is not a release capability unless the Sakamoto HEV Fork and device matrix prove it.
 - Protocol Identification / application protocol rules are not part of Android L4 Product Release.
 - No stateful conntrack or TCP stream reassembly.
 - No zero-leak promise for short flows before attribution or later protocol recognition.

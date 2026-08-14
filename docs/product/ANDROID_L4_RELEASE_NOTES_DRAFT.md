@@ -7,13 +7,17 @@ Root/VPN matrix, budget, and power reruns still block final closure.
 中文状态：这是 SAKAMOTO-59 的仓库内发布说明草案，不是公开发布公告，也不是发布批准。
 最终签名 release APK 及其 Root/VPN matrix、budget、power 复跑仍然阻塞最终关单。
 
+2026-08-14 correction: existing VPN/TUN/HEV results predate the selected Direct Egress direction and do not
+prove the release VPN transport. This draft must not be published until SAKAMOTO-102 and the final signed
+release gates close.
+
 ## Release Summary
 
 Android L4 Product Release delivers one Android product with two mutually
 exclusive Runtime Profiles:
 
 - Root Profile uses Root/NFQUEUE packet capture.
-- VPN Profile uses Android VpnService, TUN fd handoff, and HEV transport.
+- VPN Profile uses Android VpnService, TUN fd handoff, and the evidence-selected VPN Userspace Flow Stack.
 
 Both profiles consume the same App-first policy authority, Activity model,
 diagnostics export, and recovery contract. The release scope is Android only.
@@ -122,7 +126,8 @@ health code when needed for troubleshooting.
   cache, replay, or retroactively rewrite completed verdicts.
 - VPN app download budget currently uses a TCP-connect transaction-rate fallback
   when the app download probe returns `Connection reset`.
-- ICMP Echo over VPN is not a release capability unless a pinned HEV build and
+- Direct Egress is not release-proven until SAKAMOTO-102 closes.
+- ICMP Echo over VPN is not a release capability unless the Sakamoto HEV Fork and
   device matrix prove it.
 - Protocol Identification, application-protocol rules, libprotoident
   enforcement, stateful conntrack, TCP stream reassembly, and HTTP/TLS/QUIC

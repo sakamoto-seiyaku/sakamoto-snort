@@ -1,12 +1,13 @@
 # Android L4 产品计划与 UI 基线
 
-状态：当前产品工作基线，2026-07-20。
+状态：当前产品工作基线，2026-07-20；VPN Direct Egress frontier 更新于 2026-08-14。
 
 范围：第一个 Android L4 产品版、第二阶段 libprotoident 阶段性发版，以及两阶段共同使用的
 产品 UI、内容、帮助、发布和社区反馈体系。
 
 架构事实和 POC 证据仍以 `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` 为准；per-worker
-flow ownership 以 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 为准；policy stage 边界以
+flow ownership 以 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 为准；VPN Direct Egress 以
+ADR-0007 及 SAKAMOTO-114..117 evidence frontier 为准；policy stage 边界以
 `docs/adr/0001-policy-bundle-staged-enforcement.md` 为准。本文不定义底层 VPP Interface
 字面量，也不是 Plane 工作清单。
 
@@ -44,10 +45,13 @@ flow ownership 以 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 为准；policy
 PacketLease completion、异常恢复或 Profile 切换语义。
 
 VPN Profile 的第一版 transport contract 强制覆盖 IPv4/IPv6 TCP 与 UDP，并要求通过真实外网
-TCP 连接和 UDP relay 的端到端验收。ICMP Echo 只有在 pinned HEV build 与真机测试证明后才作为
+TCP 连接和 UDP Direct Egress 的端到端验收。当前 external HEV child/SOCKS fixture 只属于旧
+correctness evidence；真实 product path 必须等待 SAKAMOTO-114..117 选择的 VPN Userspace Flow
+Stack boundary 和 SAKAMOTO-98..102 closure。ICMP Echo 只有在 Sakamoto HEV Fork 与真机测试证明后才作为
 capability 发布；其它 IP protocol 仍可由 VPP 匹配、阻止和记录，但不承诺 allow 后可转发。
 Policy verdict 与 transport completion 必须分别记录：`ALLOW` 后发生的 `UNSUPPORTED` 或
-`FAILED` 不能伪装成 policy `DROP`。第一版不为补齐任意 IP protocol 自建 userspace TCP/IP stack。
+`FAILED` 不能伪装成 policy `DROP`。第一版不扩张已选择的 VPN Userspace Flow Stack 来补齐任意
+IP protocol。
 
 用户可见能力：
 
@@ -425,7 +429,8 @@ UI 必须区分：
 这些状态不能统一收敛成没有行动建议的“启动失败”。
 
 用户主动暂停保护时执行当前 Runtime Profile 的 clean stop，而不是让 VPP 继续以 pass-through
-方式运行。Root Profile 停止 VPP 并移除其 NFQUEUE hooks；VPN Profile 停止 VPP/HEV、关闭 TUN
+方式运行。Root Profile 停止 VPP Runtime 并移除其 NFQUEUE hooks；VPN Profile 停止包含 VPN
+Userspace Flow Stack 的 VPP Runtime、关闭 TUN
 并释放系统 VPN slot。暂停保留用户选择的 Profile、Authoring Policy Bundle 和最后成功应用的策略
 状态，以便恢复时重新启动；暂停期间没有 packet Activity。“只观察、不阻止”由策略表达，不能
 复用暂停生命周期状态。异常 runtime down 也不能伪装为用户暂停。
