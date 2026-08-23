@@ -98,6 +98,13 @@ tun_poc_ledger_stage (void)
   return stage && stage[0] ? stage : "unknown";
 }
 
+static u8
+tun_poc_a25_stage (void)
+{
+  const char *stage = tun_poc_ledger_stage ();
+  return strncmp (stage, "A2-5", 4) == 0;
+}
+
 static void
 tun_poc_ledger_log (tun_poc_main_t *tm, const char *event,
 			    const char *decision, int uid)
@@ -1274,7 +1281,23 @@ tun_poc_process_worker_packet (tun_poc_main_t *tm, vlib_main_t *vm,
 	tun_poc_record_l4_tuple (tm, packet, packet_len);
 	if ((!fragment_marker && !owner_only_marker) ||
 	    (b->opaque[3] & TUN_POC_OPAQUE_FRAGMENT_FIRST))
-    tun_poc_query_owner_resolver (tm);
+	  {
+	    /* A fresh A2-5 tuple must not inherit a previous flow's owner while
+	     * Android's asynchronous owner lookup is still pending. */
+	    tm->last_owner_uid = -1;
+	    tun_poc_query_owner_resolver (tm);
+	  }
+
+  if (tun_poc_a25_stage () && tm->resolver_enabled &&
+      tm->last_owner_uid < 0)
+    {
+      /* The first packet only submits the Android lookup.  Conservatively
+       * hold it at the policy seam; a later packet with the same fresh tuple
+       * observes the completed UID and is the sole allow/drop decision. */
+      tm->blocked_packets++;
+      tm->blocked_bytes += packet_len;
+      return 0;
+    }
 
   if (tm->block_owner_uid_set && tm->last_owner_uid == tm->block_owner_uid)
     {

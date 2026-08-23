@@ -77,6 +77,7 @@ static char g_admission_stage[128] = "unknown";
 static char g_admission_flow_id[256] = "unknown";
 static char g_admission_key[256] = "unknown";
 static int g_admission_uid = -1;
+static bool g_admission_policy_logged;
 static bool g_oi5_mode;
 static char g_oi5_log[PATH_BUF_SIZE];
 static char g_oi5_hev_lib[PATH_BUF_SIZE];
@@ -203,12 +204,23 @@ static void admission_set_from_query(const owner_query_t *query, int uid,
              (unsigned int)query->local_port, query->remote_addr,
              (unsigned int)query->remote_port);
     g_admission_uid = uid;
+    bool log_policy = uid >= 0 && !g_admission_policy_logged;
+    if (log_policy) {
+        g_admission_policy_logged = true;
+    }
     pthread_mutex_unlock(&g_lock);
-    log_line(file,
-             "ledger event=POLICY_DECISION stage-id=%s flow-id=%s "
-             "canonical-key=%s uid=%d decision=%s resolver=uid",
-             stage_id, g_admission_flow_id, g_admission_key, uid,
-             allow ? "ALLOW" : "DROP");
+    if (uid < 0) {
+        log_line(file,
+                 "ledger event=POLICY_PENDING stage-id=%s flow-id=%s "
+                 "canonical-key=%s uid=%d decision=PENDING resolver=uid",
+                 stage_id, g_admission_flow_id, g_admission_key, uid);
+    } else if (log_policy) {
+        log_line(file,
+                 "ledger event=POLICY_DECISION stage-id=%s flow-id=%s "
+                 "canonical-key=%s uid=%d decision=%s resolver=uid",
+                 stage_id, g_admission_flow_id, g_admission_key, uid,
+                 allow ? "ALLOW" : "DROP");
+    }
     (void)stage_cell;
 }
 
@@ -3210,6 +3222,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         g_vpp_resolver_running = true;
         g_vpp_resolver_block_uid = block_owner_uid;
         g_admission_uid = -1;
+        g_admission_policy_logged = false;
         snprintf(g_admission_stage, sizeof(g_admission_stage), "%s", g_stage_id);
         snprintf(g_admission_flow_id, sizeof(g_admission_flow_id), "unknown");
         snprintf(g_admission_key, sizeof(g_admission_key), "unknown");
@@ -3392,6 +3405,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     g_vpp_resolver_fd = -1;
     g_vpp_resolver_block_uid = -1;
     g_admission_uid = -1;
+    g_admission_policy_logged = false;
     g_oi3_control_started = false;
     g_oi3_control_running = false;
     g_oi3_control_fd = -1;

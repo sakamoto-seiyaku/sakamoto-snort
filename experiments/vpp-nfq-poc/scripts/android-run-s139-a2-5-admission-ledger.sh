@@ -18,10 +18,11 @@ TRAFFIC_ACTIVITY="${TRAFFIC_ACTIVITY:-com.sakamoto.snort.a2traffic.TrafficAdapte
 MODE="${MODE:-vpp-hev-owner-resolver}"
 FAMILY="${FAMILY:-ip4}"
 PROTOCOL="${PROTOCOL:-udp}"
-DESTINATION_HOST="${DESTINATION_HOST:-10.200.0.1}"
-DESTINATION_PORT="${DESTINATION_PORT:-42081}"
+DESTINATION_HOST="${DESTINATION_HOST:-1.1.1.1}"
+DESTINATION_PORT="${DESTINATION_PORT:-53}"
 ALLOW_SOURCE_PORT="${ALLOW_SOURCE_PORT:-46001}"
 DROP_SOURCE_PORT="${DROP_SOURCE_PORT:-46002}"
+REPEAT="${REPEAT:-2}"
 START_WAIT="${START_WAIT:-12}"
 TRAFFIC_WAIT="${TRAFFIC_WAIT:-12}"
 CLEANUP_WAIT_SECONDS="${CLEANUP_WAIT_SECONDS:-12}"
@@ -36,6 +37,7 @@ done
 [[ "$START_WAIT" =~ ^[1-9][0-9]*$ && "$TRAFFIC_WAIT" =~ ^[1-9][0-9]*$ ]] || exit 2
 [[ "$CLEANUP_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || exit 2
 [[ "$POLL_INTERVAL" =~ ^[0-9]+([.][0-9]+)?$ ]] || exit 2
+[[ "$REPEAT" =~ ^[2-9][0-9]*$ && "$REPEAT" -le 16 ]] || exit 2
 
 VPP_ROOT="/data/user/0/$VPN_PACKAGE/files/vpp"
 VPP_STDOUT_PATH="$VPP_ROOT/logs/vpp-stdout.log"
@@ -119,7 +121,7 @@ run_stage() {
     --es a2MatrixProtocol "$PROTOCOL" --ei a2MatrixSourcePort "$source_port" \
     --es a2MatrixDestinationHost "$DESTINATION_HOST" \
     --ei a2MatrixDestinationPort "$DESTINATION_PORT" \
-    --ei a2MatrixTimeoutMillis 1000 --ei a2MatrixRepeat 1
+    --ei a2MatrixTimeoutMillis 1000 --ei a2MatrixRepeat "$REPEAT"
 
   local traffic_ok=false traffic_deadline=$((SECONDS + TRAFFIC_WAIT))
   while (( SECONDS <= traffic_deadline )); do
@@ -176,16 +178,16 @@ run_stage() {
     adb_su "ip link show tun0 2>/dev/null || true" | tr -d '\r'
   } >"$dir/cleanup.txt"
 
-  python3 - "$dir/stage.json" "$stage" "$policy" "$source_port" "$block_uid" "$start_ok" "$traffic_ok" <<'PY'
+  python3 - "$dir/stage.json" "$stage" "$policy" "$source_port" "$block_uid" "$start_ok" "$traffic_ok" "$DESTINATION_HOST" "$DESTINATION_PORT" <<'PY'
 import json, sys
-path, stage, policy, source, block, start, traffic = sys.argv[1:]
+path, stage, policy, source, block, start, traffic, destination_host, destination_port = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as stream:
     json.dump({"schema": "s139-a2-5-stage/v1", "stageId": stage,
                "policy": policy, "sourcePort": int(source),
                "blockOwnerUid": int(block), "startObserved": start == "true",
                "trafficObserved": traffic == "true", "family": "ip4",
-               "protocol": "udp", "destinationHost": "10.200.0.1",
-               "destinationPort": 42081, "appEvidenceFile": "app-runtime.jsonl",
+               "protocol": "udp", "destinationHost": destination_host,
+               "destinationPort": int(destination_port), "appEvidenceFile": "app-runtime.jsonl",
                "resolverFile": "vpp-owner-resolver.log",
                "protectFile": "vpp-protect.log", "cliFile": "vpp-cli.log",
                "stdoutFile": "vpp-stdout.log", "cleanupFile": "cleanup-wait.json",
