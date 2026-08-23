@@ -98,6 +98,7 @@ static const char *oi3_controlled_cell_for_mode(int vpp_mode) {
         case 21: return "refused";
         case 22: return "no-reply";
         case 23: return "policy-drop";
+        case 26: return "udp6";
         default: return "udp4";
     }
 }
@@ -2338,8 +2339,11 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     bool use_direct_single_writer = vpp_mode == 10;
     bool use_s124_tun = vpp_mode == 13 || vpp_mode == 14;
     bool use_oi5 = vpp_mode == 24;
-    bool use_oi3 = vpp_mode == 16 || (vpp_mode >= 17 && vpp_mode <= 23) || use_oi5;
-    bool use_oi3_controlled = vpp_mode >= 17 && vpp_mode <= 23;
+    bool use_oi3_a23_return = vpp_mode == 25 || vpp_mode == 26;
+    bool use_oi3 = vpp_mode == 16 || (vpp_mode >= 17 && vpp_mode <= 23)
+            || use_oi3_a23_return || use_oi5;
+    bool use_oi3_controlled = (vpp_mode >= 17 && vpp_mode <= 23)
+            || use_oi3_a23_return;
     if (use_oi3_controlled) {
         snprintf(g_oi3_control_cell, sizeof(g_oi3_control_cell), "%s",
                  oi3_controlled_cell_for_mode(vpp_mode));
@@ -2479,8 +2483,12 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         return -23;
     }
 
-    int oi3_control_fd = use_oi3_controlled ? dup(fd) : -1;
-    if (use_oi3_controlled && oi3_control_fd < 0) {
+    /* The historical controlled cells retain a duplicate TUN fd only for
+     * their sidecar lifetime witness.  A2-3 must have exactly one TUN
+     * consumer: the VPP OI3 owner path.  Its real AppA socket is the only
+     * traffic injector, so do not create the old observer duplicate. */
+    int oi3_control_fd = use_oi3_controlled && !use_oi3_a23_return ? dup(fd) : -1;
+    if (use_oi3_controlled && !use_oi3_a23_return && oi3_control_fd < 0) {
         close(oi2_request_fds[0]);
         close(oi2_request_fds[1]);
         close(oi2_completion_fds[0]);
@@ -2649,6 +2657,11 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             setenv("SAKAMOTO_OI3_CONTROLLED", "1", 1);
             setenv("SAKAMOTO_OI3_CONTROLLED_CELL", g_oi3_control_cell, 1);
         }
+        if (use_oi3_a23_return) {
+            setenv("SAKAMOTO_OI3_A2_3_RETURN", "1", 1);
+            setenv("SAKAMOTO_OI3_A2_3_STAGE_ID",
+                   vpp_mode == 26 ? "A2-3-udp6-return" : "A2-3-udp4-return", 1);
+        }
         char shm_dir[PATH_BUF_SIZE];
         snprintf(shm_dir, sizeof(shm_dir), "%s/vpp/shm", app_files);
         setenv("SAKAMOTO_ANDROID_SHM_DIR", shm_dir, 1);
@@ -2686,7 +2699,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         g_oi5_log[0] = '\0';
         g_oi5_hev_lib[0] = '\0';
     }
-    if (use_oi3_controlled) {
+    if (use_oi3_controlled && !use_oi3_a23_return) {
         snprintf(g_oi3_control_log, sizeof(g_oi3_control_log),
                  "%s/vpp/logs/vpp-oi3-controlled.log", app_files);
         unlink(g_oi3_control_log);
@@ -3188,7 +3201,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         return -11;
     }
 
-    if (use_oi3_controlled) {
+    if (use_oi3_controlled && !use_oi3_a23_return) {
         int injector_rc = pthread_create(&g_oi3_control_thread, NULL,
                                          oi3_controlled_injector_thread, NULL);
         if (injector_rc != 0) {

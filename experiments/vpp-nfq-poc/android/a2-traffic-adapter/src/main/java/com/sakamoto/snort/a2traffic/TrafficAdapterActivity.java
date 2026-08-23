@@ -44,6 +44,8 @@ public final class TrafficAdapterActivity extends Activity {
     private static final String TAG = "S139A2Traffic";
     private static final String ACTION_EMIT =
             "com.sakamoto.snort.a2traffic.EMIT";
+    private static final String ACTION_RETURN =
+            "com.sakamoto.snort.a2traffic.A2_3_RETURN";
     private static final String EXTRA_MATRIX = "a2Matrix";
     private static final String EXTRA_STAGE_ID = "a2MatrixStageId";
     private static final String EXTRA_FAMILY = "a2MatrixFamily";
@@ -58,6 +60,11 @@ public final class TrafficAdapterActivity extends Activity {
     private static final String EXTRA_REPEAT = "a2MatrixRepeat";
     private static final String EVIDENCE_PATH = "debug/a2-1-runtime.jsonl";
     private static final String SCHEMA = "s139-a2-1-runtime/v1";
+    private static final String RETURN_EVIDENCE_PATH =
+            "debug/a2-3-return-runtime.jsonl";
+    private static final String RETURN_SCHEMA = "s139-a2-3-return/v1";
+    private static final String RETURN_STAGE_ID = "A2-3-udp4-return";
+    private static final String RETURN_PAYLOAD_PREFIX = "s139-a2-3|";
     private static final int DEFAULT_TIMEOUT_MILLIS = 1200;
     private static final int MIN_TCP_TIMEOUT_MILLIS = 100;
     private static final int MAX_REPEAT = 16;
@@ -82,7 +89,17 @@ public final class TrafficAdapterActivity extends Activity {
     }
 
     private void handleIntent(Intent intent) {
-        if (intent == null || !isEmitCommand(intent)) {
+        if (intent == null) {
+            return;
+        }
+        if (isReturnCommand(intent)) {
+            final ReturnCommand command = ReturnCommand.from(intent);
+            Thread worker = new Thread(() -> runReturnOperation(command),
+                    "s139-a2-3-return");
+            worker.start();
+            return;
+        }
+        if (!isEmitCommand(intent)) {
             return;
         }
         final Command command = Command.from(intent);
@@ -97,6 +114,208 @@ public final class TrafficAdapterActivity extends Activity {
     private boolean isEmitCommand(Intent intent) {
         return ACTION_EMIT.equals(intent.getAction())
                 || intent.getBooleanExtra(EXTRA_MATRIX, false);
+    }
+
+    private boolean isReturnCommand(Intent intent) {
+        return ACTION_RETURN.equals(intent.getAction())
+                || intent.getBooleanExtra("a2Return", false);
+    }
+
+    /**
+     * A2-3 is deliberately a separate operation from the A2-1 cache probe.
+     * The same bound DatagramSocket stays open through send and receive, so a
+     * successful record proves the real App UID received the Flow Stack
+     * return packet rather than merely observing a native output counter.
+     */
+    private void runReturnOperation(ReturnCommand command) {
+        long sequence = SEQUENCE.incrementAndGet();
+        int uid = Process.myUid();
+        String packageName = getPackageName();
+        ReturnResult result = performReturn(command);
+        JSONObject record = returnRecord(command, result, sequence,
+                SystemClock.elapsedRealtimeNanos(), packageName, uid);
+        appendReturnRecord(record);
+        runOnUiThread(() -> {
+            TextView view = new TextView(this);
+            view.setText("A2-3 " + command.stageId + " " + result.outcome);
+            setContentView(view);
+        });
+    }
+
+    private ReturnResult performReturn(ReturnCommand command) {
+        if (!command.validationError.isEmpty()) {
+            return ReturnResult.failure(-1L, "not_attempted", "",
+                    command.destinationHost, "invalid_command", false,
+                    command.validationError, "", "", 0, 0, "", 0);
+        }
+        Network network = findVpnNetwork();
+        if (network == null) {
+            return ReturnResult.failure(-1L, "unavailable", "", "",
+                    "vpn_unavailable", false, "no_active_transport_vpn",
+                    "", "", 0, 0, "", 0);
+        }
+        InetAddress destination;
+        try {
+            destination = resolveDestination(command.destinationHost,
+                    command.family);
+        } catch (IOException error) {
+            return ReturnResult.failure(network.getNetworkHandle(),
+                    "not_attempted", "", command.destinationHost,
+                    "destination_resolution_failed", false,
+                    boundedError(error), "", "", 0, 0, "", 0);
+        }
+
+        DatagramSocket socket = null;
+        String bindResult = "not_attempted";
+        boolean tupleAttempted = false;
+        byte[] payload = (RETURN_PAYLOAD_PREFIX + command.stageId)
+                .getBytes(StandardCharsets.UTF_8);
+        try {
+            socket = new DatagramSocket(null);
+            socket.setReuseAddress(true);
+            socket.bind(new InetSocketAddress(wildcard(command.family),
+                    command.sourcePort));
+            try {
+                // The socket itself crosses the real App -> VPN admission
+                // seam.  Do not use process-wide bind or a native-only probe.
+                network.bindSocket(socket);
+                bindResult = "bound";
+            } catch (IOException | RuntimeException error) {
+                bindResult = "failed";
+                return ReturnResult.failure(network.getNetworkHandle(),
+                        bindResult, localAddress(socket, network, command.family),
+                        destination.getHostAddress(), "vpn_bind_failed", false,
+                        boundedError(error), toHex(payload), "", payload.length,
+                        0, "", 0);
+            }
+            tupleAttempted = true;
+            socket.connect(destination, command.destinationPort);
+            String local = localAddress(socket, network, command.family);
+            socket.setSoTimeout(command.timeoutMillis);
+            socket.send(new DatagramPacket(payload, payload.length));
+            byte[] received = new byte[payload.length + 128];
+            DatagramPacket response = new DatagramPacket(received,
+                    received.length);
+            try {
+                socket.receive(response);
+                byte[] actual = new byte[response.getLength()];
+                System.arraycopy(response.getData(), response.getOffset(),
+                        actual, 0, response.getLength());
+                boolean exact = java.util.Arrays.equals(payload, actual);
+                String outcome = exact ? "udp_roundtrip_received"
+                        : "udp_roundtrip_payload_mismatch";
+                return ReturnResult.failure(network.getNetworkHandle(),
+                        bindResult, local, destination.getHostAddress(), outcome,
+                        tupleAttempted, exact ? "" : "payload_mismatch",
+                        toHex(payload), toHex(actual), payload.length,
+                        actual.length, response.getAddress() == null ? ""
+                                : response.getAddress().getHostAddress(),
+                        response.getPort());
+            } catch (java.net.SocketTimeoutException timeout) {
+                return ReturnResult.failure(network.getNetworkHandle(),
+                        bindResult, local, destination.getHostAddress(),
+                        "udp_roundtrip_timeout", tupleAttempted,
+                        boundedError(timeout), toHex(payload), "",
+                        payload.length, 0, "", 0);
+            }
+        } catch (IOException | RuntimeException error) {
+            String local = socket == null ? ""
+                    : localAddress(socket, network, command.family);
+            return ReturnResult.failure(network.getNetworkHandle(), bindResult,
+                    local, destination.getHostAddress(),
+                    "udp_roundtrip_failed", tupleAttempted,
+                    boundedError(error), toHex(payload), "", payload.length,
+                    0, "", 0);
+        } finally {
+            if (socket != null) {
+                socket.close();
+            }
+        }
+    }
+
+    private JSONObject returnRecord(ReturnCommand command, ReturnResult result,
+                                    long sequence, long monotonicNs,
+                                    String packageName, int uid) {
+        SafeJson record = new SafeJson();
+        record.putSafe("schema", RETURN_SCHEMA);
+        record.putSafe("cell_id", "A2-3");
+        record.putSafe("stage_id", command.stageId);
+        record.putSafe("sequence", sequence);
+        record.putSafe("monotonic_ns", monotonicNs);
+        record.putSafe("generation", 1);
+        record.putSafe("network_epoch", 1);
+        record.putSafe("app_epoch", 1);
+        record.putSafe("event", "RETURN_ROUNDTRIP");
+        record.putSafe("app_package", packageName);
+        record.putSafe("package", packageName);
+        record.putSafe("uid", uid);
+        record.putSafe("process_uid", uid);
+        record.putSafe("family", command.family);
+        record.putSafe("protocol", "udp");
+        record.putSafe("source_address", result.localAddress);
+        record.putSafe("source_port", command.sourcePort);
+        record.putSafe("destination_address", result.destinationAddress);
+        record.putSafe("destination_host", command.destinationHost);
+        record.putSafe("destination_port", command.destinationPort);
+        record.putSafe("canonical_key", canonicalKey(command.family,
+                result.localAddress, command.sourcePort,
+                result.destinationAddress, command.destinationPort));
+        record.putSafe("bind_result", result.bindResult);
+        record.putSafe("vpn_network_handle", result.networkHandle);
+        record.putSafe("tuple_attempted", result.tupleAttempted);
+        record.putSafe("send_connect_outcome", result.outcome);
+        record.putSafe("error", result.error);
+        record.putSafe("payload_hex", result.payloadHex);
+        record.putSafe("payload_length", result.payloadLength);
+        record.putSafe("received_payload_hex", result.receivedPayloadHex);
+        record.putSafe("received_length", result.receivedLength);
+        record.putSafe("received_from_address", result.receivedFromAddress);
+        record.putSafe("received_from_port", result.receivedFromPort);
+        record.putSafe("return_received",
+                "udp_roundtrip_received".equals(result.outcome));
+        record.putSafe("android_lookup_count", 0);
+        record.putSafe("flow_id", command.stageId + "|udp|"
+                + command.sourcePort);
+        return record;
+    }
+
+    private void appendReturnRecord(JSONObject record) {
+        File file = new File(getFilesDir(), RETURN_EVIDENCE_PATH);
+        File parent = file.getParentFile();
+        synchronized (EVIDENCE_LOCK) {
+            try {
+                if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                    throw new IOException("unable to create " + parent);
+                }
+                try (FileOutputStream output = new FileOutputStream(file, true)) {
+                    output.write(record.toString().getBytes(StandardCharsets.UTF_8));
+                    output.write('\n');
+                    output.getFD().sync();
+                }
+            } catch (IOException error) {
+                Log.e(TAG, "unable to durably append A2-3 JSONL", error);
+            }
+        }
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder hex = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            hex.append(String.format("%02x", value & 0xff));
+        }
+        return hex.toString();
+    }
+
+    private static String canonicalKey(String family, String sourceAddress,
+                                       int sourcePort,
+                                       String destinationAddress,
+                                       int destinationPort) {
+        String source = formatEndpoint(sourceAddress, family) + ":" + sourcePort;
+        String destination = formatEndpoint(destinationAddress, family) + ":"
+                + destinationPort;
+        String first = source.compareTo(destination) <= 0 ? source : destination;
+        String second = source.compareTo(destination) <= 0 ? destination : source;
+        return family + "/UDP/" + first + "-" + second;
     }
 
     private void runOperation(Command command, int repeatIndex, int repeatCount) {
@@ -585,6 +804,117 @@ public final class TrafficAdapterActivity extends Activity {
         private static String defaultDestinationHost(String family) {
             return "ip6".equals(family)
                     ? "2606:4700:4700::1111" : "1.1.1.1";
+        }
+    }
+
+    private static final class ReturnCommand {
+        final String stageId;
+        final String family;
+        final int sourcePort;
+        final String destinationHost;
+        final int destinationPort;
+        final int timeoutMillis;
+        final String validationError;
+
+        private ReturnCommand(String stageId, String family, int sourcePort,
+                              String destinationHost, int destinationPort,
+                              int timeoutMillis, String validationError) {
+            this.stageId = stageId;
+            this.family = family;
+            this.sourcePort = sourcePort;
+            this.destinationHost = destinationHost;
+            this.destinationPort = destinationPort;
+            this.timeoutMillis = timeoutMillis;
+            this.validationError = validationError;
+        }
+
+        static ReturnCommand from(Intent intent) {
+            String stageId = stringExtra(intent, "a2ReturnStageId", null,
+                    RETURN_STAGE_ID);
+            String family = stringExtra(intent, "a2ReturnFamily", null, "ip4");
+            int sourcePort = intExtra(intent, "a2ReturnSourcePort", null,
+                    45841);
+            String defaultHost = "ip6".equalsIgnoreCase(family)
+                    ? "fd00:200::1" : "10.200.0.1";
+            String destinationHost = stringExtra(intent, "a2ReturnDestinationHost",
+                    null, defaultHost);
+            int destinationPort = intExtra(intent, "a2ReturnDestinationPort",
+                    null, 42081);
+            int timeout = intExtra(intent, "a2ReturnTimeoutMillis", null, 3500);
+            String error = "";
+            if (!"ip4".equalsIgnoreCase(family)
+                    && !"ip6".equalsIgnoreCase(family)) {
+                error = "family must be ip4 or ip6";
+            } else if (!validPort(sourcePort) || !validPort(destinationPort)) {
+                error = "source and destination ports must be 1..65535";
+            } else if (timeout < 100 || timeout > 10000) {
+                error = "timeoutMillis must be 100..10000";
+                timeout = Math.max(100, Math.min(timeout, 10000));
+            }
+            return new ReturnCommand(stageId,
+                    "ip6".equalsIgnoreCase(family) ? "ip6" : "ip4",
+                    sourcePort, stripIpv6Brackets(destinationHost),
+                    destinationPort, timeout, error);
+        }
+
+        private static boolean validPort(int port) {
+            return port >= 1 && port <= 65535;
+        }
+    }
+
+    private static final class ReturnResult {
+        final String bindResult;
+        final long networkHandle;
+        final String localAddress;
+        final String destinationAddress;
+        final String outcome;
+        final boolean tupleAttempted;
+        final String error;
+        final String payloadHex;
+        final String receivedPayloadHex;
+        final int payloadLength;
+        final int receivedLength;
+        final String receivedFromAddress;
+        final int receivedFromPort;
+
+        private ReturnResult(String bindResult, long networkHandle,
+                             String localAddress, String destinationAddress,
+                             String outcome, boolean tupleAttempted,
+                             String error, String payloadHex,
+                             String receivedPayloadHex, int payloadLength,
+                             int receivedLength, String receivedFromAddress,
+                             int receivedFromPort) {
+            this.bindResult = bindResult;
+            this.networkHandle = networkHandle;
+            this.localAddress = localAddress == null ? "" : localAddress;
+            this.destinationAddress = destinationAddress == null ? ""
+                    : destinationAddress;
+            this.outcome = outcome;
+            this.tupleAttempted = tupleAttempted;
+            this.error = error == null ? "" : error;
+            this.payloadHex = payloadHex == null ? "" : payloadHex;
+            this.receivedPayloadHex = receivedPayloadHex == null ? ""
+                    : receivedPayloadHex;
+            this.payloadLength = payloadLength;
+            this.receivedLength = receivedLength;
+            this.receivedFromAddress = receivedFromAddress == null ? ""
+                    : receivedFromAddress;
+            this.receivedFromPort = receivedFromPort;
+        }
+
+        static ReturnResult failure(long handle, String bindResult,
+                                    String localAddress,
+                                    String destinationAddress, String outcome,
+                                    boolean attempted, String error,
+                                    String payloadHex,
+                                    String receivedPayloadHex,
+                                    int payloadLength, int receivedLength,
+                                    String receivedFromAddress,
+                                    int receivedFromPort) {
+            return new ReturnResult(bindResult, handle, localAddress,
+                    destinationAddress, outcome, attempted, error, payloadHex,
+                    receivedPayloadHex, payloadLength, receivedLength,
+                    receivedFromAddress, receivedFromPort);
         }
     }
 

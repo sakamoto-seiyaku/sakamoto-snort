@@ -118,6 +118,11 @@ public final class SnortVpnService extends VpnService {
     public static final String MODE_VPP_OI3_CONTROLLED_NO_REPLY = "vpp-oi3-controlled-no-reply";
     public static final String MODE_VPP_OI3_CONTROLLED_POLICY_DROP =
             "vpp-oi3-controlled-policy-drop";
+    /** A2-3 uses the real AppA UDP socket; no native parent injector. */
+    public static final String MODE_VPP_OI3_A2_3_RETURN =
+            "vpp-oi3-a2-3-return";
+    public static final String MODE_VPP_OI3_A2_3_RETURN6 =
+            "vpp-oi3-a2-3-return6";
     /**
      * OI-5 test-only lifecycle mode.  It installs the same narrow controlled
      * route as OI-3 but lets the native VPP monitor drive the synthetic
@@ -365,7 +370,9 @@ public final class SnortVpnService extends VpnService {
                 || MODE_VPP_OI3_CONTROLLED_TCP6.equals(mode)
                 || MODE_VPP_OI3_CONTROLLED_REFUSED.equals(mode)
                 || MODE_VPP_OI3_CONTROLLED_NO_REPLY.equals(mode)
-                || MODE_VPP_OI3_CONTROLLED_POLICY_DROP.equals(mode);
+                || MODE_VPP_OI3_CONTROLLED_POLICY_DROP.equals(mode)
+                || MODE_VPP_OI3_A2_3_RETURN.equals(mode)
+                || MODE_VPP_OI3_A2_3_RETURN6.equals(mode);
     }
 
     private static boolean isControlledOi5Mode(String mode) {
@@ -374,7 +381,8 @@ public final class SnortVpnService extends VpnService {
 
     private static boolean isControlledOi3Ipv6Mode(String mode) {
         return MODE_VPP_OI3_CONTROLLED_UDP6.equals(mode)
-                || MODE_VPP_OI3_CONTROLLED_TCP6.equals(mode);
+                || MODE_VPP_OI3_CONTROLLED_TCP6.equals(mode)
+                || MODE_VPP_OI3_A2_3_RETURN6.equals(mode);
     }
 
     private static String controlledOi3Cell(String mode) {
@@ -384,6 +392,7 @@ public final class SnortVpnService extends VpnService {
         if (MODE_VPP_OI3_CONTROLLED_REFUSED.equals(mode)) return "refused";
         if (MODE_VPP_OI3_CONTROLLED_NO_REPLY.equals(mode)) return "no-reply";
         if (MODE_VPP_OI3_CONTROLLED_POLICY_DROP.equals(mode)) return "policy-drop";
+        if (MODE_VPP_OI3_A2_3_RETURN6.equals(mode)) return "udp6";
         return "udp4";
     }
 
@@ -468,6 +477,8 @@ public final class SnortVpnService extends VpnService {
             File logPath = new File(logsDir, "vpn-fd-probe.log");
 
             boolean controlledOi3 = isControlledOi3Mode(mode);
+            boolean controlledOi3A23 = MODE_VPP_OI3_A2_3_RETURN.equals(mode)
+                    || MODE_VPP_OI3_A2_3_RETURN6.equals(mode);
             boolean controlledOi5 = isControlledOi5Mode(mode);
             boolean controlledRoute = controlledOi3 || controlledOi5;
             boolean controlledOi3Ipv6 = isControlledOi3Ipv6Mode(mode);
@@ -639,6 +650,10 @@ public final class SnortVpnService extends VpnService {
                     vppMode = 22;
                 } else if (MODE_VPP_OI3_CONTROLLED_POLICY_DROP.equals(mode)) {
                     vppMode = 23;
+                } else if (MODE_VPP_OI3_A2_3_RETURN.equals(mode)) {
+                    vppMode = 25;
+                } else if (MODE_VPP_OI3_A2_3_RETURN6.equals(mode)) {
+                    vppMode = 26;
                 } else if (MODE_VPP_OI5_CONTROLLED.equals(mode)) {
                     vppMode = 24;
                 }
@@ -673,7 +688,7 @@ public final class SnortVpnService extends VpnService {
                     stopVpn();
                     return;
                 }
-                if (controlledOi3 && rc == 0) {
+                if (controlledOi3 && !controlledOi3A23 && rc == 0) {
                     startControlledOi3AppPacket(controlledOi3Cell(mode));
                 }
             } else {

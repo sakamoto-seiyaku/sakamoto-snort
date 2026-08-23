@@ -319,6 +319,14 @@ struct oi3_main {
   u32 tcp_server_ack;
   u32 tcp_data_seen;
   u32 task_quanta;
+  u32 a2_return_mode;
+  u32 a2_return_ingress;
+  u32 a2_return_output;
+  u32 a2_return_lookup_count;
+  u32 a2_return_payload_length;
+  u8 a2_return_payload[OI3_MAX_PACKET];
+  char a2_return_stage_id[64];
+  char a2_return_canonical_key[256];
   u64 start_ns;
   u64 finish_ns;
   char error[256];
@@ -374,6 +382,100 @@ oi3_log_packet_hex (const char *prefix, const u8 *packet, size_t length)
                                  "%02x", packet[i]);
   hex[offset] = 0;
   fprintf (stderr, "%s length=%zu hex=%s\n", prefix, length, hex);
+}
+
+static void
+oi3_a2_return_hex (const u8 *payload, size_t length, char *hex,
+                   size_t hex_length)
+{
+  size_t bounded = length;
+  if (bounded * 2U + 1U > hex_length)
+    bounded = (hex_length - 1U) / 2U;
+  for (size_t i = 0; i < bounded; i++)
+    (void) snprintf (hex + i * 2U, hex_length - i * 2U, "%02x", payload[i]);
+  hex[bounded * 2U] = 0;
+}
+
+static void
+oi3_a2_return_log_packet (oi3_main_t *tm, const char *event,
+                          const char *direction, const u8 *packet,
+                          size_t length)
+{
+  if (!tm->a2_return_mode || !packet)
+    return;
+  size_t ip_header = tm->family == 4 ? 20U : 40U;
+  size_t l4_header = 8U;
+  if (length < ip_header + l4_header)
+    return;
+  size_t payload_offset = ip_header + l4_header;
+  size_t payload_length = length - payload_offset;
+  char payload_hex[OI3_MAX_PACKET * 2U + 1U];
+  oi3_a2_return_hex (packet + payload_offset, payload_length, payload_hex,
+                     sizeof (payload_hex));
+  fprintf (stderr,
+           "oi3 a2-3 schema=s139-a2-3-oi3/v1 event=%s stage-id=%s "
+           "direction=%s family=%u protocol=UDP canonical-key=%s "
+           "payload-length=%zu payload-hex=%s android-lookup-count=%u "
+           "transport-reentry=0 uid-join=app-jsonl:canonical-key "
+           "package-join=app-jsonl:canonical-key owner=%u owner-pthread=%lu\n",
+           event, tm->a2_return_stage_id, direction, tm->family,
+           tm->a2_return_canonical_key[0] ? tm->a2_return_canonical_key : "?",
+           payload_length, payload_hex, tm->a2_return_lookup_count,
+           tm->target_thread, tm->owner_pthread);
+}
+
+static void
+oi3_a2_return_capture_ingress (oi3_main_t *tm, const u8 *packet, size_t length)
+{
+  if (!tm->a2_return_mode || !packet)
+    return;
+  size_t ip_header = tm->family == 4 ? 20U : 40U;
+  if (length < ip_header + 8U)
+    return;
+  char source[INET6_ADDRSTRLEN] = "?";
+  char destination[INET6_ADDRSTRLEN] = "?";
+  uint16_t source_port = 0;
+  if (tm->family == 4) {
+    (void) inet_ntop (AF_INET, packet + 12, source, sizeof (source));
+    (void) inet_ntop (AF_INET,
+                      &((const struct sockaddr_in *)&tm->target_address)->sin_addr,
+                      destination, sizeof (destination));
+  } else {
+    (void) inet_ntop (AF_INET6, packet + 8, source, sizeof (source));
+    (void) inet_ntop (AF_INET6,
+                      &((const struct sockaddr_in6 *)&tm->target_address)->sin6_addr,
+                      destination, sizeof (destination));
+  }
+  source_port = (uint16_t)(((uint16_t)packet[ip_header] << 8) |
+                           packet[ip_header + 1U]);
+  char source_endpoint[128];
+  char destination_endpoint[128];
+  if (tm->family == 4) {
+    (void) snprintf (source_endpoint, sizeof (source_endpoint), "%s:%u",
+                     source, source_port);
+    (void) snprintf (destination_endpoint, sizeof (destination_endpoint),
+                     "%s:%u", destination, tm->target_port);
+  } else {
+    (void) snprintf (source_endpoint, sizeof (source_endpoint), "[%s]:%u",
+                     source, source_port);
+    (void) snprintf (destination_endpoint, sizeof (destination_endpoint),
+                     "[%s]:%u", destination, tm->target_port);
+  }
+  const char *first = strcmp (source_endpoint, destination_endpoint) <= 0
+    ? source_endpoint : destination_endpoint;
+  const char *second = first == source_endpoint
+    ? destination_endpoint : source_endpoint;
+  (void) snprintf (tm->a2_return_canonical_key,
+                   sizeof (tm->a2_return_canonical_key), "ip%u/UDP/%s-%s",
+                   tm->family, first, second);
+  size_t payload_offset = ip_header + 8U;
+  tm->a2_return_payload_length = (u32)(length - payload_offset);
+  if (tm->a2_return_payload_length > sizeof (tm->a2_return_payload))
+    tm->a2_return_payload_length = sizeof (tm->a2_return_payload);
+  memcpy (tm->a2_return_payload, packet + payload_offset,
+          tm->a2_return_payload_length);
+  tm->a2_return_ingress++;
+  oi3_a2_return_log_packet (tm, "INGRESS", "ORIG", packet, length);
 }
 
 static void
@@ -1000,6 +1102,10 @@ oi3_output (void *data, const void *packet, size_t length)
              (unsigned long)pthread_self ());
     if (written == (ssize_t) length)
       oi3_log_packet_hex ("oi3 tun-output-raw", tun_packet, length);
+    if (written == (ssize_t) length && tm->a2_return_mode) {
+      tm->a2_return_output++;
+      oi3_a2_return_log_packet (tm, "OUTPUT", "REPLY", tun_packet, length);
+    }
   } else {
     oi3_rewrite_return (tm, packet, length);
   }
@@ -1091,6 +1197,7 @@ oi3_tun_read_ready (clib_file_t *file)
       fprintf (stderr, "oi3 tun-ingress parse-failure length=%zd\n", n);
       continue;
     }
+    oi3_a2_return_capture_ingress (tm, tm->tun_rx, (size_t)n);
     if (oi3_enqueue_tun_packet (vm, tm->tun_rx, (size_t)n) < 0) {
       tm->tun_output_errors++;
       fprintf (stderr, "oi3 tun-ingress enqueue-failure length=%zd\n", n);
@@ -1283,6 +1390,17 @@ oi3_finish (vlib_main_t *vm)
   if (tm->tun_fd >= 0) { close (tm->tun_fd); tm->tun_fd = -1; }
   if (!tm->tun_mode) oi3_classify_result (tm);
   tm->finished = 1; tm->active = 0; tm->phase = OI3_DONE; tm->finish_ns = oi3_now_ns ();
+  if (tm->a2_return_mode) {
+    fprintf (stderr,
+             "oi3 a2-3 schema=s139-a2-3-oi3/v1 event=CLEANUP "
+             "stage-id=%s canonical-key=%s ingress=%u output=%u "
+             "android-lookup-count=%u transport-reentry=0 "
+             "buffers=%u/%u residue=%u\n", tm->a2_return_stage_id,
+             tm->a2_return_canonical_key[0] ? tm->a2_return_canonical_key : "?",
+             tm->a2_return_ingress, tm->a2_return_output,
+             tm->a2_return_lookup_count, tm->vpp_buffers_allocated,
+             tm->vpp_buffers_freed, tm->vpp_buffer_residue);
+  }
   fprintf (stderr, "oi3_cleanup result=%s outcome=%s generation=%llu epoch=%llu fault-injected=%u output=%u handshake=%u direct=%u "
            "rewritten=%u endpoint=%u/%u accepted=%u broker=%u/%u duplicate-close=%u "
            "transport-failures=%u infrastructure-failures=%u buffers=%u/%u residue=%u\n",
@@ -1756,6 +1874,17 @@ oi3_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
   memset (&tm->target_address, 0, sizeof (tm->target_address));
   tm->tun_mode = 1; tm->tun_fd = fd; tm->target_thread = target;
   tm->controlled_tun = getenv ("SAKAMOTO_OI3_CONTROLLED") != NULL;
+  tm->a2_return_mode = getenv ("SAKAMOTO_OI3_A2_3_RETURN") != NULL;
+  tm->a2_return_ingress = 0;
+  tm->a2_return_output = 0;
+  tm->a2_return_lookup_count = 0;
+  tm->a2_return_payload_length = 0;
+  memset (tm->a2_return_payload, 0, sizeof (tm->a2_return_payload));
+  memset (tm->a2_return_canonical_key, 0,
+          sizeof (tm->a2_return_canonical_key));
+  const char *a2_stage_id = getenv ("SAKAMOTO_OI3_A2_3_STAGE_ID");
+  snprintf (tm->a2_return_stage_id, sizeof (tm->a2_return_stage_id), "%s",
+            a2_stage_id && a2_stage_id[0] ? a2_stage_id : "A2-3-udp4-return");
   const char *controlled_cell = getenv ("SAKAMOTO_OI3_CONTROLLED_CELL");
   tm->controlled_refused = controlled_cell && !strcmp (controlled_cell, "refused");
   tm->controlled_no_reply = controlled_cell && !strcmp (controlled_cell, "no-reply");
@@ -1778,6 +1907,12 @@ oi3_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
   fprintf (stderr, "oi3 tun enabled fd=%d target-thread=%u shared-graph=flow-stack-owner "
            "return=owner-output external-broker=%s\n", fd, target,
            getenv ("SAKAMOTO_OI3_EXTERNAL_BROKER") ? "1" : "0");
+  if (tm->a2_return_mode) {
+    fprintf (stderr,
+             "oi3 a2-3 schema=s139-a2-3-oi3/v1 event=START stage-id=%s "
+             "lookup-count=0 transport-reentry=0 owner=%u\n",
+             tm->a2_return_stage_id, target);
+  }
   vlib_cli_output (vm, "oi3 tun enabled fd=%d target-thread=%u", fd, target);
   return 0;
 }

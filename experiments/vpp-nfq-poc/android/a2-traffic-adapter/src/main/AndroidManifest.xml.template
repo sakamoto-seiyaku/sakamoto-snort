@@ -16,6 +16,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <action android:name="com.sakamoto.snort.a2traffic.EMIT" />
+                <action android:name="com.sakamoto.snort.a2traffic.A2_3_RETURN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
