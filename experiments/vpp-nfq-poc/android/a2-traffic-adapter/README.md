@@ -43,8 +43,12 @@ adb shell am start -a com.sakamoto.snort.a2traffic.EMIT \
 
 If omitted, the fixed matrix defaults are IPv4/TCP `45621 -> 443`,
 IPv6/TCP `45622 -> 443`, IPv6/UDP `45623 -> 53`, and IPv4/UDP
-`45624 -> 53`. Each repeat closes and recreates the same source-port tuple;
-no ephemeral source-port substitution is used.
+`45624 -> 53`. For the historical A2-1/A2-2 matrix each repeat closes and
+recreates the same source-port tuple; no ephemeral source-port substitution is
+used. A2-5 stages (`A2-5-*`) are intentionally different: all repeats share
+one bound UDP socket and its descriptor remains alive through the final
+bounded observation delay. This gives the asynchronous Android owner resolver
+a live, stable tuple to attribute before the admission ledger is evaluated.
 
 For every operation the app discovers an active `TRANSPORT_VPN` network,
 calls `Network.bindSocket` on the real TCP or UDP socket, attempts the fixed
@@ -56,6 +60,7 @@ tuple, and durably appends exactly one JSON object line to:
 
 The record includes the schema, cell/stage, package and process UID, family,
 protocol, source/destination tuple, explicit bind result, VPN network handle,
-local address, send/connect outcome, repeat index, and a monotonic timestamp.
+local address, send/connect outcome, repeat index, socket-reuse mode, and a
+monotonic timestamp.
 A failed TCP connect is retained as a tuple attempt and is not an external
 connect or reply claim.

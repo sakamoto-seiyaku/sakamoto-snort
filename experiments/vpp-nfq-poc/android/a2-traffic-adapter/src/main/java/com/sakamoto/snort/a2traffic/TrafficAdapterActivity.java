@@ -104,11 +104,19 @@ public final class TrafficAdapterActivity extends Activity {
         }
         final Command command = Command.from(intent);
         Thread worker = new Thread(() -> {
-            for (int index = 1; index <= command.repeat; index++) {
-                runOperation(command, index, command.repeat);
+            if (isA25Stage(command.stageId)) {
+                runA25Operation(command);
+            } else {
+                for (int index = 1; index <= command.repeat; index++) {
+                    runOperation(command, index, command.repeat);
+                }
             }
         }, "s139-a2-1-traffic");
         worker.start();
+    }
+
+    private static boolean isA25Stage(String stageId) {
+        return stageId != null && stageId.startsWith("A2-5-");
     }
 
     private boolean isEmitCommand(Intent intent) {
@@ -331,10 +339,124 @@ public final class TrafficAdapterActivity extends Activity {
         }
 
         long monotonicNs = SystemClock.elapsedRealtimeNanos();
-        JSONObject record = operationRecord(command, result, sequence,
-                monotonicNs, repeatIndex, repeatCount, packageName, uid);
-        appendRecord(record);
+        appendOperationRecord(command, result, sequence, monotonicNs,
+                repeatIndex, repeatCount, packageName, uid, false);
         setStatus(command.stageId, result.outcome);
+    }
+
+    /**
+     * A2-5 keeps one real AppA socket alive across the repeated sends.  The
+     * Android owner resolver is asynchronous and may not be able to attribute
+     * a short-lived UDP socket after the first send has already been closed.
+     * Keeping the exact bound socket alive makes the second resolver query a
+     * real observation of the same canonical tuple rather than a new socket
+     * with an ambiguous lifetime.  This branch is intentionally scoped to the
+     * A2-5 admission cell; the historical A2-1/A2-2 repeat semantics remain
+     * close-and-recreate.
+     */
+    private void runA25Operation(Command command) {
+        int uid = Process.myUid();
+        String packageName = getPackageName();
+        if (!command.validationError.isEmpty()) {
+            runOperation(command, 1, command.repeat);
+            return;
+        }
+
+        Network network = findVpnNetwork();
+        if (network == null) {
+            runOperation(command, 1, command.repeat);
+            return;
+        }
+        long networkHandle = network.getNetworkHandle();
+        InetAddress destination;
+        try {
+            destination = resolveDestination(command.destinationHost,
+                    command.family);
+        } catch (IOException error) {
+            ProbeResult result = ProbeResult.notAttempted(networkHandle,
+                    command.destinationHost, "destination_resolution_failed",
+                    boundedError(error));
+            appendOperationRecord(command, result, SEQUENCE.incrementAndGet(),
+                    SystemClock.elapsedRealtimeNanos(), 1, command.repeat,
+                    packageName, uid, true);
+            setStatus(command.stageId, result.outcome);
+            return;
+        }
+
+        DatagramSocket socket = null;
+        String bindResult = "not_attempted";
+        boolean tupleAttempted = false;
+        int nextRepeat = 1;
+        try {
+            socket = new DatagramSocket(null);
+            socket.setReuseAddress(true);
+            socket.bind(new InetSocketAddress(wildcard(command.family),
+                    command.sourcePort));
+            try {
+                // This is the real App -> VPN admission boundary.  The same
+                // bound descriptor is deliberately retained for all sends.
+                network.bindSocket(socket);
+                bindResult = "bound";
+            } catch (IOException | RuntimeException error) {
+                bindResult = "failed";
+                ProbeResult result = ProbeResult.failure(networkHandle,
+                        bindResult, localAddress(socket, network, command.family),
+                        destination.getHostAddress(), "vpn_bind_failed", false,
+                        boundedError(error));
+                appendOperationRecord(command, result,
+                        SEQUENCE.incrementAndGet(),
+                        SystemClock.elapsedRealtimeNanos(), nextRepeat,
+                        command.repeat, packageName, uid, true);
+                setStatus(command.stageId, result.outcome);
+                return;
+            }
+            tupleAttempted = true;
+            socket.connect(destination, command.destinationPort);
+            String local = localAddress(socket, network, command.family);
+            byte[] payload = ("s139-a2-5|" + command.stageId)
+                    .getBytes(StandardCharsets.UTF_8);
+            for (; nextRepeat <= command.repeat; nextRepeat++) {
+                socket.send(new DatagramPacket(payload, payload.length));
+                ProbeResult result = ProbeResult.success(networkHandle,
+                        bindResult, local, destination.getHostAddress(),
+                        "udp_datagram_sent", tupleAttempted, "");
+                appendOperationRecord(command, result,
+                        SEQUENCE.incrementAndGet(),
+                        SystemClock.elapsedRealtimeNanos(), nextRepeat,
+                        command.repeat, packageName, uid, true);
+                setStatus(command.stageId, result.outcome);
+                // Keep the descriptor live after the final send as well so
+                // the asynchronous owner lookup can settle before close().
+                if (command.timeoutMillis > 0) {
+                    SystemClock.sleep(Math.min(command.timeoutMillis, 3000));
+                }
+            }
+        } catch (IOException | RuntimeException error) {
+            String local = socket == null ? ""
+                    : localAddress(socket, network, command.family);
+            ProbeResult result = ProbeResult.failure(networkHandle, bindResult,
+                    local, destination.getHostAddress(), "udp_datagram_failed",
+                    tupleAttempted, boundedError(error));
+            appendOperationRecord(command, result, SEQUENCE.incrementAndGet(),
+                    SystemClock.elapsedRealtimeNanos(), nextRepeat,
+                    command.repeat, packageName, uid, true);
+            setStatus(command.stageId, result.outcome);
+        } finally {
+            if (socket != null) {
+                socket.close();
+            }
+        }
+    }
+
+    private void appendOperationRecord(Command command, ProbeResult result,
+                                       long sequence, long monotonicNs,
+                                       int repeatIndex, int repeatCount,
+                                       String packageName, int uid,
+                                       boolean socketReused) {
+        JSONObject record = operationRecord(command, result, sequence,
+                monotonicNs, repeatIndex, repeatCount, packageName, uid,
+                socketReused);
+        appendRecord(record);
     }
 
     private void setStatus(final String stageId, final String outcome) {
@@ -560,6 +682,15 @@ public final class TrafficAdapterActivity extends Activity {
                                        long sequence, long monotonicNs,
                                        int repeatIndex, int repeatCount,
                                        String packageName, int uid) {
+        return operationRecord(command, result, sequence, monotonicNs,
+                repeatIndex, repeatCount, packageName, uid, false);
+    }
+
+    private JSONObject operationRecord(Command command, ProbeResult result,
+                                       long sequence, long monotonicNs,
+                                       int repeatIndex, int repeatCount,
+                                       String packageName, int uid,
+                                       boolean socketReused) {
         SafeJson record = new SafeJson();
         record.putSafe("schema", SCHEMA);
         record.putSafe("cell_id", "A2-1");
@@ -589,6 +720,7 @@ public final class TrafficAdapterActivity extends Activity {
         record.putSafe("error", result.error);
         record.putSafe("repeat_index", repeatIndex);
         record.putSafe("repeat_count", repeatCount);
+        record.putSafe("socket_reused_for_repeat", socketReused);
         record.putSafe("flow_id", command.stageId + "|" + command.family
                 + "|" + command.protocol + "|" + command.sourcePort);
         record.putSafe("token", command.stageId + "-" + sequence);
