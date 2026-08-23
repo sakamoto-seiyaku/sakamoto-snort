@@ -165,7 +165,7 @@ invalidation, or downstream socket admission.
 ## A2-2 execution and fixture correction
 
 Cell: `A2-2 async cache/concurrency/bounds`  
-Current verdict: `INCONCLUSIVE`  
+Current verdict: `PASS`  
 Aggregate remains: `A2_INCOMPLETE`; `architecture_interruption=false`
 
 The first A2-2 attempt retained raw evidence at
@@ -264,14 +264,29 @@ The fixture now obtains both markers from Python `time.monotonic_ns()` and
 records the clock source in `launch-window.json`. This is evidence plumbing,
 not a data-plane, UID, or FlowOwner failure.
 
+The `fixed-10` rerun at clean HEAD `d9141ee` is the decisive A2-2 PASS. It
+observed all four first-wave correct-UID completions and all four second-wave
+correct-UID cache hits. Each App/family tuple has two successful VPN-bound
+runtime records with the expected UID (`12630`/`12631`) and one stable
+`MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT` identity. Native high-water
+was `maxPending=2/4` and `maxCache=4/4`; the monotonic launch window covered all
+eight launches with no failures. Durable cleanup was observed before any
+force-stop fallback, and the final ledger settled to
+`pending=0/cache=0/flow-ids=0` with no VPP process or `tun0` residue.
+
+This closes the A2-2 fixture/contract hotspot. The prior failures were all
+bounded evidence or Android intent/socket timing defects; none showed a wrong
+UID, cross-App cache hit, stale identity, FlowOwner bypass, or architecture
+interruption.
+
 ## Claim boundary and next cells
 
-A2-0 and A2-1 now prove durable session provenance plus the complete
-deterministic two-App dual-stack tuple/UID matrix. They do not prove
-concurrency bounds, controlled reverse traffic, lifecycle invalidation, or
-downstream allow/drop admission.
+A2-0, A2-1, and A2-2 now prove durable session provenance, the complete
+deterministic two-App dual-stack tuple/UID matrix, and bounded asynchronous
+cache/concurrency behavior. They do not prove controlled reverse traffic,
+lifecycle invalidation, or downstream allow/drop admission.
 
-The remaining order is A2-2 async cache/concurrency/bounds, A2-3 controlled
-return, A2-4 lifecycle native join, A2-5 allow/drop admission ledger, and A2-6
-replay/settlement aggregate. B1 remains blocked until every required A2 cell
-passes and the final aggregate audit is recorded.
+The remaining order is A2-3 controlled return, A2-4 lifecycle native join,
+A2-5 allow/drop admission ledger, and A2-6 replay/settlement aggregate. B1
+remains blocked until every required A2 cell passes and the final aggregate
+audit is recorded.
