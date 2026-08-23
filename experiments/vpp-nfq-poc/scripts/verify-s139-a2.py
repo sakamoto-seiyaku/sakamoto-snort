@@ -29,6 +29,7 @@ DEFAULT_REQUIRED_FILES = (
     "package-list-packages-U.txt",
     "apk-provenance.tsv",
     "vpn-session-provenance.json",
+    "vpp-start-provenance.json",
     "uid-attribution-contract.jsonl",
     "runtime-udp-traffic-probe.properties",
     "vpp-cli.log",
@@ -159,6 +160,53 @@ def resolver_verdict(text: str, host: str, source_port: int, port: int,
     return INCONCLUSIVE
 
 
+def verify_vpp_start(receipt: Any, expected_mode: str,
+                     expected_vpp_mode: int) -> Tuple[str, str]:
+    """Validate the native-start instrumentation gate for an A2 VPP cell."""
+    if not isinstance(receipt, dict):
+        return INVALID, "native-start receipt is not an object"
+    errors: List[str] = []
+    if receipt.get("schema") != "vpp-start-provenance/v1":
+        errors.append("schema")
+    if receipt.get("receiptType") != "native-start-outcome":
+        errors.append("receiptType")
+    if receipt.get("mode") != expected_mode:
+        errors.append("mode")
+    vpp_mode = receipt.get("vppMode")
+    if not isinstance(vpp_mode, int) or isinstance(vpp_mode, bool):
+        errors.append("vppMode")
+    elif vpp_mode != expected_vpp_mode:
+        errors.append("vppMode-mismatch")
+    rc = receipt.get("rc")
+    if not isinstance(rc, int) or isinstance(rc, bool):
+        errors.append("rc")
+    success = receipt.get("success")
+    if not isinstance(success, bool):
+        errors.append("success")
+    elif isinstance(rc, int) and not isinstance(rc, bool) and success != (rc == 0):
+        errors.append("success-rc-mismatch")
+    marker = receipt.get("monotonicNs")
+    if not isinstance(marker, int) or isinstance(marker, bool) or marker <= 0:
+        errors.append("monotonicNs")
+    required = receipt.get("requiredArtifact")
+    if expected_vpp_mode == 5 and required != "libtun_poc_plugin.so|tun_poc_plugin.so":
+        errors.append("requiredArtifact")
+    if receipt.get("artifactPresent") is not True:
+        errors.append("artifactPresent")
+    if receipt.get("artifactName") not in ("libtun_poc_plugin.so", "tun_poc_plugin.so"):
+        errors.append("artifactName")
+    digest = receipt.get("artifactSha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        errors.append("artifactSha256")
+    if isinstance(rc, int) and not isinstance(rc, bool) and rc != 0:
+        errors.append("nativeStartRc=" + str(rc))
+    if errors:
+        return INVALID, ",".join(errors)
+    return PASS, ("native start rc=0 vppMode=" + str(expected_vpp_mode)
+                  + " artifact=" + str(receipt.get("artifactName"))
+                  + " sha256=" + str(digest))
+
+
 def vpp_tuple_lines(text: str, family: str, protocol: int, source: str,
                     source_port: int, host: str, port: int) -> bool:
     escaped_source = re.escape(source)
@@ -189,7 +237,8 @@ def verify_a20(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         invalid.append("unsupported profile: " + str(manifest.get("profile")))
     if manifest.get("cellId") != "A2-0":
         invalid.append("manifest cellId is not A2-0")
-    for field in ("vpnPackage", "allowedPackage", "mode", "host", "port", "sourcePort"):
+    for field in ("vpnPackage", "allowedPackage", "mode", "vppMode", "host", "port",
+                  "sourcePort"):
         if field not in manifest:
             invalid.append("manifest field missing: " + field)
 
@@ -399,6 +448,31 @@ def verify_a20(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             reason = "malformed failure receipt: " + str(error)
         invalid.append("durable startup failure diagnostic is present")
         append_check(checks, "vpn-session-failure-diagnostic", INVALID, reason)
+
+    vpp_start_text = read_text(evidence / "vpp-start-provenance.json")
+    if vpp_start_text is None or not vpp_start_text.strip():
+        invalid.append("native VPP start receipt is missing")
+        append_check(checks, "native-vpp-start", INVALID,
+                     "vpp-start-provenance.json is empty or unreadable")
+    else:
+        try:
+            vpp_start_receipt = json.loads(vpp_start_text)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            invalid.append("native VPP start receipt is malformed")
+            append_check(checks, "native-vpp-start", INVALID, str(error))
+        else:
+            expected_vpp_mode = manifest.get("vppMode")
+            if not isinstance(expected_vpp_mode, int) or isinstance(expected_vpp_mode, bool):
+                invalid.append("manifest vppMode is invalid")
+                append_check(checks, "native-vpp-start", INVALID,
+                             "manifest vppMode is not an integer")
+            else:
+                start_status, start_detail = verify_vpp_start(
+                    vpp_start_receipt, str(manifest.get("mode", "")), expected_vpp_mode)
+                append_check(checks, "native-vpp-start", start_status, start_detail)
+                if start_status != PASS:
+                    invalid.append("native VPP start instrumentation invalid: "
+                                   + start_detail)
 
     contract_text = read_text(evidence / "uid-attribution-contract.jsonl")
     scope_uids: Optional[List[int]] = None

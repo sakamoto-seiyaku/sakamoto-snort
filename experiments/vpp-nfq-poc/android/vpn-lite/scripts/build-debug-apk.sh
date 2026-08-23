@@ -14,12 +14,19 @@ apksigner_jar="${APKSIGNER_JAR:-${sdk_prebuilts}/tools/linux/lib/apksigner.jar}"
 zipalign_bin="${ZIPALIGN:-zipalign}"
 stage_dir="${VPP_RUNTIME_STAGE_DIR:-${VPP_STAGE_DIR:-${repo_root}/build-output/android-vpp-runtime/stage}}"
 hev_stage_dir="${HEV_STAGE_DIR:-${poc_dir}/work/android-hev-stage}"
+tun_poc_plugin="${VPP_TUN_POC_PLUGIN:-}"
 if [[ ! -x "$stage_dir/bin/vpp" || ! -x "$stage_dir/bin/vppctl" ]]; then
   VPP_RUNTIME_STAGE_DIR="$stage_dir" \
     bash "$script_dir/stage-vpp-runtime.sh" >/dev/null
 fi
 
 die() { echo "error: $*" >&2; exit 1; }
+# Test-only owner-resolver plugin injection for A2-0.  Keep this input
+# separate from the shared runtime stage: the APK build owns the extracted
+# copy, while the existing VPP_POC_PLUGIN path below remains compatible.
+if [[ -n "$tun_poc_plugin" ]]; then
+  [[ -f "$tun_poc_plugin" ]] || die "missing VPP_TUN_POC_PLUGIN: $tun_poc_plugin"
+fi
 # Test-only plugin injection for POC-124.  The product runtime stage normally
 # contains no experimental plugin; passing this path makes the APK carry the
 # explicitly selected probe artifact without changing the product stage
@@ -69,6 +76,25 @@ done
 if [[ -f "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" ]]; then
   cp "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" "$jni_dir/libhev-socks5-tunnel.so"
   chmod 755 "$jni_dir/libhev-socks5-tunnel.so"
+fi
+if [[ -n "$tun_poc_plugin" ]]; then
+  # Android's extraction/linker spelling is the required runtime artifact.
+  # Retain the canonical VPP spelling as a sibling without touching the
+  # shared stage/plugins directory.
+  cp "$tun_poc_plugin" "$jni_dir/libtun_poc_plugin.so"
+  cp "$tun_poc_plugin" "$jni_dir/tun_poc_plugin.so"
+  chmod 755 "$jni_dir/libtun_poc_plugin.so" "$jni_dir/tun_poc_plugin.so"
+  tun_poc_sha256="$(sha256sum "$jni_dir/libtun_poc_plugin.so" | awk '{print $1}')"
+  printf '%s\n' "$tun_poc_sha256" >"$assets_dir/vpp-tun-poc-plugin.sha256"
+  {
+    printf 'schema=vpp-tun-poc-plugin-provenance/v1\n'
+    printf 'abi=arm64-v8a\n'
+    printf 'sourcePath=%s\n' "$tun_poc_plugin"
+    printf 'sourceSha256=%s\n' "$tun_poc_sha256"
+    printf 'artifactName=libtun_poc_plugin.so\n'
+    printf 'canonicalArtifactName=tun_poc_plugin.so\n'
+    printf 'artifactSha256=%s\n' "$tun_poc_sha256"
+  } >"$assets_dir/vpp-tun-poc-plugin.properties"
 fi
 
 native_dir="$app_dir/native"

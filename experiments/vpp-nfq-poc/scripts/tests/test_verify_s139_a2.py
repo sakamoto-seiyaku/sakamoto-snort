@@ -114,5 +114,39 @@ class ResolverVerdictTest(unittest.TestCase):
                 output.read_text(encoding="utf-8"))["status"])
 
 
+class NativeVppStartVerdictTest(unittest.TestCase):
+    def receipt(self, rc: int = 0, artifact_present: bool = True) -> dict:
+        return {
+            "schema": "vpp-start-provenance/v1",
+            "receiptType": "native-start-outcome",
+            "mode": "vpp-hev-owner-resolver",
+            "vppMode": 5,
+            "rc": rc,
+            "success": rc == 0,
+            "monotonicNs": 123456789,
+            "requiredArtifact": "libtun_poc_plugin.so|tun_poc_plugin.so",
+            "artifactPresent": artifact_present,
+            "artifactName": "libtun_poc_plugin.so" if artifact_present else "",
+            "artifactSha256": "a" * 64 if artifact_present else "",
+        }
+
+    def verdict(self, receipt: dict) -> str:
+        status, _ = VERIFIER.verify_vpp_start(
+            receipt, "vpp-hev-owner-resolver", 5)
+        return status
+
+    def test_native_start_success_with_hashed_artifact_is_pass(self) -> None:
+        self.assertEqual(VERIFIER.PASS, self.verdict(self.receipt()))
+
+    def test_native_start_nonzero_rc_is_invalid_fixture(self) -> None:
+        self.assertEqual(VERIFIER.INVALID, self.verdict(self.receipt(rc=-3)))
+
+    def test_native_start_missing_artifact_is_invalid_fixture(self) -> None:
+        self.assertEqual(
+            VERIFIER.INVALID,
+            self.verdict(self.receipt(artifact_present=False)),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 package com.sakamoto.snort.vpnlite;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -21,6 +22,7 @@ final class VpnSessionProvenance {
     static final String RECEIPT_NAME = "vpn-session-provenance.json";
     static final String RECEIPT_TEMP_NAME = "vpn-session-provenance.json.tmp";
     static final String FAILURE_RECEIPT_NAME = "vpn-session-provenance-failure.json";
+    static final String VPP_START_RECEIPT_NAME = "vpp-start-provenance.json";
 
     private static final String LOG_DIRECTORY = "logs";
 
@@ -28,6 +30,10 @@ final class VpnSessionProvenance {
 
     static File receiptFile(File filesDir) {
         return new File(new File(filesDir, LOG_DIRECTORY), RECEIPT_NAME);
+    }
+
+    static File vppStartReceiptFile(File filesDir) {
+        return new File(new File(filesDir, LOG_DIRECTORY), VPP_START_RECEIPT_NAME);
     }
 
     /**
@@ -43,6 +49,9 @@ final class VpnSessionProvenance {
         File failure = new File(receipt.getParentFile(), FAILURE_RECEIPT_NAME);
         File failureTemporary = new File(receipt.getParentFile(),
                 FAILURE_RECEIPT_NAME + ".tmp");
+        File vppStart = vppStartReceiptFile(filesDir);
+        File vppStartTemporary = new File(vppStart.getParentFile(),
+                VPP_START_RECEIPT_NAME + ".tmp");
         boolean cleared = true;
         if (receipt.exists() && !receipt.delete()) {
             cleared = false;
@@ -54,6 +63,12 @@ final class VpnSessionProvenance {
             cleared = false;
         }
         if (failureTemporary.exists() && !failureTemporary.delete()) {
+            cleared = false;
+        }
+        if (vppStart.exists() && !vppStart.delete()) {
+            cleared = false;
+        }
+        if (vppStartTemporary.exists() && !vppStartTemporary.delete()) {
             cleared = false;
         }
         return cleared;
@@ -167,6 +182,57 @@ final class VpnSessionProvenance {
                 .append(",\n  \"failureReason\":\"").append(escape(reason))
                 .append("\"\n}\n");
         return publish(failure, json.toString());
+    }
+
+    /** Publish the synchronous native VPP start result as an instrumentation gate. */
+    static boolean writeVppStartOutcome(File filesDir, String mode, int vppMode, int rc,
+                                        long monotonicNs, String requiredArtifact,
+                                        boolean artifactPresent, String artifactName,
+                                        String artifactSha256) {
+        if (mode == null || requiredArtifact == null || artifactName == null
+                || artifactSha256 == null || monotonicNs <= 0) {
+            return false;
+        }
+        StringBuilder json = new StringBuilder(768);
+        json.append("{\n")
+                .append("  \"schema\":\"vpp-start-provenance/v1\",\n")
+                .append("  \"receiptType\":\"native-start-outcome\",\n")
+                .append("  \"mode\":\"").append(escape(mode)).append("\",\n")
+                .append("  \"vppMode\":").append(vppMode).append(",\n")
+                .append("  \"rc\":").append(rc).append(",\n")
+                .append("  \"success\":").append(rc == 0).append(",\n")
+                .append("  \"monotonicNs\":").append(monotonicNs).append(",\n")
+                .append("  \"requiredArtifact\":\"")
+                .append(escape(requiredArtifact)).append("\",\n")
+                .append("  \"artifactPresent\":").append(artifactPresent).append(",\n")
+                .append("  \"artifactName\":\"").append(escape(artifactName))
+                .append("\",\n")
+                .append("  \"artifactSha256\":\"").append(escape(artifactSha256))
+                .append("\"\n")
+                .append("}\n");
+        return publish(vppStartReceiptFile(filesDir), json.toString());
+    }
+
+    static String fileSha256(File file) {
+        if (file == null || !file.isFile()) {
+            return "";
+        }
+        try (FileInputStream input = new FileInputStream(file)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count > 0) digest.update(buffer, 0, count);
+            }
+            byte[] bytes = digest.digest();
+            StringBuilder hex = new StringBuilder(bytes.length * 2);
+            for (byte value : bytes) {
+                hex.append(String.format(java.util.Locale.US, "%02x", value & 0xff));
+            }
+            return hex.toString();
+        } catch (Exception error) {
+            return "";
+        }
     }
 
     private static boolean publish(File target, String text) {

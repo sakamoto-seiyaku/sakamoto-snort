@@ -29,6 +29,7 @@ SHIM_PATH="$VPP_ROOT/logs/vpp-shim.log"
 HEV_PATH="$VPP_ROOT/logs/vpp-hev.log"
 RECEIPT_PATH="/data/user/0/$VPN_PACKAGE/files/logs/vpn-session-provenance.json"
 FAILURE_RECEIPT_PATH="/data/user/0/$VPN_PACKAGE/files/logs/vpn-session-provenance-failure.json"
+VPP_START_RECEIPT_PATH="/data/user/0/$VPN_PACKAGE/files/logs/vpp-start-provenance.json"
 CONTRACT_PATH="/data/user/0/$VPN_PACKAGE/files/logs/uid-attribution-contract.jsonl"
 RUNTIME_PROBE_PATH="/data/user/0/$ALLOWED_PACKAGE/files/debug/udp-traffic-probe.properties"
 
@@ -127,7 +128,8 @@ capture_apk_provenance
 adb_cmd shell am force-stop "$VPN_PACKAGE" >/dev/null 2>&1 || true
 adb_cmd shell am force-stop "$ALLOWED_PACKAGE" >/dev/null 2>&1 || true
 adb_su "rm -f '$VPP_CLI_PATH' '$RESOLVER_PATH' '$SHIM_PATH' '$HEV_PATH' \
-  '$RECEIPT_PATH' '$FAILURE_RECEIPT_PATH' '$CONTRACT_PATH' '$RUNTIME_PROBE_PATH'"
+  '$RECEIPT_PATH' '$FAILURE_RECEIPT_PATH' '$VPP_START_RECEIPT_PATH' \
+  '$CONTRACT_PATH' '$RUNTIME_PROBE_PATH'"
 
 echo "## start VpnService"
 adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" \
@@ -151,6 +153,7 @@ sleep "$PROBE_WAIT"
 
 capture_remote "vpn-session-provenance.json" "$RECEIPT_PATH"
 capture_remote "vpn-session-provenance-failure.json" "$FAILURE_RECEIPT_PATH"
+capture_remote "vpp-start-provenance.json" "$VPP_START_RECEIPT_PATH"
 capture_remote "uid-attribution-contract.jsonl" "$CONTRACT_PATH"
 capture_remote "runtime-udp-traffic-probe.properties" "$RUNTIME_PROBE_PATH"
 capture_remote "vpp-cli.log" "$VPP_CLI_PATH"
@@ -177,6 +180,7 @@ adb_cmd shell logcat -d -t 500 -s SnortVpnLite:I SnortVpnService:I '*:S' \
   printf '  "expectedVpnUid":%s,\n' "$vpn_uid"
   printf '  "expectedAllowedUid":%s,\n' "$allowed_uid"
   printf '  "mode":"%s",\n' "$MODE"
+  printf '  "vppMode":5,\n'
   printf '  "family":"ip4",\n'
   printf '  "protocol":17,\n'
   printf '  "host":"%s",\n' "$HOST"
@@ -189,6 +193,7 @@ adb_cmd shell logcat -d -t 500 -s SnortVpnLite:I SnortVpnService:I '*:S' \
   printf '    "package-list-packages-U.txt",\n'
   printf '    "apk-provenance.tsv",\n'
   printf '    "vpn-session-provenance.json",\n'
+  printf '    "vpp-start-provenance.json",\n'
   printf '    "uid-attribution-contract.jsonl",\n'
   printf '    "runtime-udp-traffic-probe.properties",\n'
   printf '    "vpp-cli.log",\n'

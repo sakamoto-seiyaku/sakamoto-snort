@@ -423,6 +423,15 @@ public final class SnortVpnService extends VpnService {
         return result.toString();
     }
 
+    private static File firstExistingFile(File directory, String... names) {
+        if (directory == null) return null;
+        for (String name : names) {
+            File candidate = new File(directory, name);
+            if (candidate.isFile()) return candidate;
+        }
+        return null;
+    }
+
     private synchronized void startVpn(String mode, String allowedPackage,
                                        String disallowedPackage, String blockIp4Dst,
                                        String blockIp6Dst, int blockOwnerUid,
@@ -640,10 +649,30 @@ public final class SnortVpnService extends VpnService {
                         blockIp4Dst == null ? "" : blockIp4Dst,
                         blockIp6Dst == null ? "" : blockIp6Dst,
                         blockOwnerUid, redirectThread, ownerCache, this);
+                File nativeDirectory = new File(getApplicationInfo().nativeLibraryDir);
+                String requiredArtifact = vppMode == 5
+                        ? "libtun_poc_plugin.so|tun_poc_plugin.so" : "";
+                File selectedArtifact = vppMode == 5
+                        ? firstExistingFile(nativeDirectory, "libtun_poc_plugin.so",
+                                "tun_poc_plugin.so") : null;
+                boolean artifactPresent = selectedArtifact != null;
+                String artifactName = artifactPresent ? selectedArtifact.getName() : "";
+                String artifactSha256 = VpnSessionProvenance.fileSha256(selectedArtifact);
+                boolean startOutcomeWritten = VpnSessionProvenance.writeVppStartOutcome(
+                        getFilesDir(), mode, vppMode, rc, System.nanoTime(), requiredArtifact,
+                        artifactPresent, artifactName, artifactSha256);
                 Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " vppMode=" + vppMode
                         + " blockOwnerUid=" + blockOwnerUid
                         + " redirectThread=" + redirectThread
                         + " ownerCache=" + ownerCache + " rc=" + rc);
+                if (!startOutcomeWritten || rc != 0
+                        || (vppMode == 5 && (!artifactPresent || artifactSha256.isEmpty()))) {
+                    Log.e(TAG, "native VPP start provenance invalid rc=" + rc
+                            + " outcomeWritten=" + startOutcomeWritten
+                            + " artifactPresent=" + artifactPresent);
+                    stopVpn();
+                    return;
+                }
                 if (controlledOi3 && rc == 0) {
                     startControlledOi3AppPacket(controlledOi3Cell(mode));
                 }
