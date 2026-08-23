@@ -54,6 +54,7 @@ static pthread_t g_vpp_gate_thread;
 static bool g_vpp_gate_running;
 static pthread_t g_vpp_resolver_thread;
 static bool g_vpp_resolver_running;
+static int g_vpp_resolver_block_uid = -1;
 static pid_t g_vpp_pid = -1;
 static int g_vpp_shim_fd = -1;
 static int g_vpp_gate_tun_fd = -1;
@@ -69,6 +70,13 @@ static char g_vpp_gate_log[PATH_BUF_SIZE];
 static char g_vpp_resolver_log[PATH_BUF_SIZE];
 static char g_vpp_hev_log[PATH_BUF_SIZE];
 static char g_vpp_protect_log[PATH_BUF_SIZE];
+/* A2-5 one-flow join between the UID resolver and the real HEV protect
+ * broker.  The runner uses a fresh session per key, so this state is bounded
+ * and is intentionally POC-only rather than a production flow table. */
+static char g_admission_stage[128] = "unknown";
+static char g_admission_flow_id[256] = "unknown";
+static char g_admission_key[256] = "unknown";
+static int g_admission_uid = -1;
 static bool g_oi5_mode;
 static char g_oi5_log[PATH_BUF_SIZE];
 static char g_oi5_hev_lib[PATH_BUF_SIZE];
@@ -170,6 +178,65 @@ static void copy_stage(char *cell, size_t cell_size, char *stage, size_t stage_s
     snprintf(cell, cell_size, "%s", g_stage_cell);
     snprintf(stage, stage_size, "%s", g_stage_id);
     pthread_mutex_unlock(&g_lock);
+}
+
+static void admission_set_from_query(const owner_query_t *query, int uid,
+                                      bool allow, FILE *file) {
+    char stage_cell[64];
+    char stage_id[128];
+    const char *family;
+    const char *protocol;
+    if (!query || !query->valid) {
+        return;
+    }
+    family = strchr(query->local_addr, ':') ? "ip6" : "ip4";
+    protocol = query->protocol == IPPROTO_TCP ? "tcp" :
+               query->protocol == IPPROTO_UDP ? "udp" : "other";
+    copy_stage(stage_cell, sizeof(stage_cell), stage_id, sizeof(stage_id));
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_admission_stage, sizeof(g_admission_stage), "%s", stage_id);
+    snprintf(g_admission_flow_id, sizeof(g_admission_flow_id),
+             "%s|%s|%s|%u", stage_id, family, protocol,
+             (unsigned int)query->local_port);
+    snprintf(g_admission_key, sizeof(g_admission_key),
+             "%s|%s|%u|%s:%u", family, protocol,
+             (unsigned int)query->local_port, query->remote_addr,
+             (unsigned int)query->remote_port);
+    g_admission_uid = uid;
+    pthread_mutex_unlock(&g_lock);
+    log_line(file,
+             "ledger event=POLICY_DECISION stage-id=%s flow-id=%s "
+             "canonical-key=%s uid=%d decision=%s resolver=uid",
+             stage_id, g_admission_flow_id, g_admission_key, uid,
+             allow ? "ALLOW" : "DROP");
+    (void)stage_cell;
+}
+
+static void admission_snapshot(char *stage, size_t stage_size,
+                               char *flow_id, size_t flow_id_size,
+                               char *key, size_t key_size, int *uid) {
+    pthread_mutex_lock(&g_lock);
+    snprintf(stage, stage_size, "%s", g_admission_stage);
+    snprintf(flow_id, flow_id_size, "%s", g_admission_flow_id);
+    snprintf(key, key_size, "%s", g_admission_key);
+    if (uid) {
+        *uid = g_admission_uid;
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
+static void admission_log(FILE *file, const char *event, int result,
+                          int socket_fd) {
+    char stage[128];
+    char flow_id[256];
+    char key[256];
+    int uid = -1;
+    admission_snapshot(stage, sizeof(stage), flow_id, sizeof(flow_id),
+                       key, sizeof(key), &uid);
+    log_line(file,
+             "ledger event=%s stage-id=%s flow-id=%s canonical-key=%s uid=%d "
+             "result=%d fd=%d",
+             event, stage, flow_id, key, uid, result, socket_fd);
 }
 
 static void *oi3_controlled_injector_thread(void *unused) {
@@ -349,6 +416,8 @@ static void *protect_broker_thread(void *unused) {
         pthread_mutex_lock(&g_lock);
         g_protect_requests++;
         pthread_mutex_unlock(&g_lock);
+        admission_log(file, "BROKER_REQUEST", 1, socket_fd);
+        admission_log(file, "SOCKET_CREATED", 1, socket_fd);
 
         jboolean protected_socket = (*env)->CallBooleanMethod(
             env, g_protect_service, g_protect_method, (jint)socket_fd);
@@ -371,6 +440,7 @@ static void *protect_broker_thread(void *unused) {
         pthread_mutex_unlock(&g_lock);
         log_line(file, "protect fd=%d result=%d", socket_fd, result);
         close(socket_fd);
+        admission_log(file, "SOCKET_SETTLED", result, socket_fd);
         if (send(broker_fd, &result, sizeof(result), 0) != sizeof(result)) {
             pthread_mutex_lock(&g_lock);
             g_protect_failures++;
@@ -383,6 +453,7 @@ static void *protect_broker_thread(void *unused) {
         pthread_mutex_lock(&g_lock);
         g_protect_completions++;
         pthread_mutex_unlock(&g_lock);
+        admission_log(file, "BROKER_COMPLETION", result, socket_fd);
     }
     pthread_mutex_lock(&g_lock);
     uint64_t requests = g_protect_requests;
@@ -1637,17 +1708,23 @@ static bool parse_resolver_query_line(const char *line, owner_query_t *query) {
 static void resolver_process_line(FILE *file, int fd, const char *line, int *queries) {
     owner_query_t query;
     int uid = -1;
+    int block_uid = -1;
     char stage_cell[64];
     char stage_id[128];
 
     (*queries)++;
     if (parse_resolver_query_line(line, &query)) {
         uid = query_owner_uid(&query);
+        pthread_mutex_lock(&g_lock);
+        block_uid = g_vpp_resolver_block_uid;
+        pthread_mutex_unlock(&g_lock);
         copy_stage(stage_cell, sizeof(stage_cell), stage_id, sizeof(stage_id));
         log_line(file, "resolver query=%d proto=%d %s:%u -> %s:%u uid=%d cell=%s stage=%s",
                  *queries, query.protocol, query.local_addr,
                  (unsigned int)query.local_port, query.remote_addr,
                  (unsigned int)query.remote_port, uid, stage_cell, stage_id);
+        admission_set_from_query(&query, uid, !(block_uid >= 0 && uid == block_uid),
+                                 file);
     } else {
         log_line(file, "resolver parse-fail query=%d line=%s", *queries, line);
     }
@@ -2672,6 +2749,11 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         }
 
         setenv("LD_LIBRARY_PATH", native_dir, 1);
+        char stage_cell[64];
+        char stage_id[128];
+        copy_stage(stage_cell, sizeof(stage_cell), stage_id, sizeof(stage_id));
+        setenv("SAKAMOTO_A2_STAGE_CELL", stage_cell, 1);
+        setenv("SAKAMOTO_A2_STAGE_ID", stage_id, 1);
         if (use_oi2) {
             if (use_oi3) {
                 setenv("SAKAMOTO_OI3_EXTERNAL_BROKER", "1", 1);
@@ -3126,6 +3208,11 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         pthread_mutex_lock(&g_lock);
         g_vpp_resolver_fd = resolver_fds[0];
         g_vpp_resolver_running = true;
+        g_vpp_resolver_block_uid = block_owner_uid;
+        g_admission_uid = -1;
+        snprintf(g_admission_stage, sizeof(g_admission_stage), "%s", g_stage_id);
+        snprintf(g_admission_flow_id, sizeof(g_admission_flow_id), "unknown");
+        snprintf(g_admission_key, sizeof(g_admission_key), "unknown");
         g_owner_lookup = owner_global;
         g_owner_lookup_method = owner_method;
         pthread_mutex_unlock(&g_lock);
@@ -3136,6 +3223,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             pthread_mutex_lock(&g_lock);
             g_vpp_resolver_running = false;
             g_vpp_resolver_fd = -1;
+            g_vpp_resolver_block_uid = -1;
             g_owner_lookup = NULL;
             g_owner_lookup_method = NULL;
             pthread_mutex_unlock(&g_lock);
@@ -3187,6 +3275,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         g_vpp_gate_block_uid = -1;
         g_vpp_resolver_running = false;
         g_vpp_resolver_fd = -1;
+        g_vpp_resolver_block_uid = -1;
         pthread_mutex_unlock(&g_lock);
         if (shim_fd >= 0) {
             close(shim_fd);
@@ -3301,6 +3390,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     g_vpp_gate_block_uid = -1;
     g_vpp_resolver_running = false;
     g_vpp_resolver_fd = -1;
+    g_vpp_resolver_block_uid = -1;
+    g_admission_uid = -1;
     g_oi3_control_started = false;
     g_oi3_control_running = false;
     g_oi3_control_fd = -1;

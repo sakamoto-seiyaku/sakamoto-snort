@@ -111,6 +111,15 @@ public final class MainActivity extends Activity {
     }
 
     private boolean applyLegacyPocIntent(Intent intent) {
+        // A POC start may carry a stage id so the native ledger can correlate the
+        // session.  Dispatch the lifecycle action before the contract-control
+        // shortcut; otherwise the stage extra hijacks a real start into a
+        // UID_CONTRACT_CONTROL request and VPP never gets launched.
+        if (intent.getBooleanExtra(EXTRA_LEGACY_START, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_START, intent);
+            showAction("Legacy VPN/TUN POC start requested.");
+            return true;
+        }
         if (intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_APP, false)
                 || intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_NETWORK,
                         false)
@@ -169,11 +178,6 @@ public final class MainActivity extends Activity {
             showAction("Legacy Rust reconnect probe requested.");
             return true;
         }
-        if (intent.getBooleanExtra(EXTRA_LEGACY_START, false)) {
-            startLegacyVpnService(SnortVpnService.ACTION_START, intent);
-            showAction("Legacy VPN/TUN POC start requested.");
-            return true;
-        }
         return false;
     }
 
@@ -208,6 +212,7 @@ public final class MainActivity extends Activity {
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_EXPECT_ECHO);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_OWNER_CACHE);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_ENABLE_IPV6);
+        copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_OI3_APP_INJECT);
         copyBooleanExtra(source, serviceIntent,
                 SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_APP);
         copyBooleanExtra(source, serviceIntent,

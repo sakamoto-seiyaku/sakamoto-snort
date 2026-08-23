@@ -75,6 +75,9 @@ public final class SnortVpnService extends VpnService {
             "uidContractRestartGeneration";
     public static final String EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS =
             "uidContractCompletionDelayMillis";
+    /** A2-5 test-only switch: use the runner's real AppA socket as the sole
+     * OI3 ingress instead of the historical VPN-process self-injector. */
+    public static final String EXTRA_OI3_APP_INJECT = "oi3AppInject";
     public static final String EXTRA_ROUNDS = "rounds";
     public static final String EXTRA_FLOWS = "flows";
     public static final String EXTRA_PROTOCOL = "protocol";
@@ -313,12 +316,14 @@ public final class SnortVpnService extends VpnService {
         int redirectThread = intent == null ? -1 : intent.getIntExtra(EXTRA_REDIRECT_THREAD, -1);
         boolean ownerCache = intent != null && intent.getBooleanExtra(EXTRA_OWNER_CACHE, false);
         boolean enableIpv6 = intent != null && intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
+        boolean oi3AppInject = intent == null
+                || intent.getBooleanExtra(EXTRA_OI3_APP_INJECT, true);
         String s124Path = intent == null ? null : intent.getStringExtra(EXTRA_S124_PATH);
         String s124Observe = intent == null ? null : intent.getStringExtra(EXTRA_S124_OBSERVE);
         applyUidContractControls(intent);
         startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage,
                 blockIp4Dst, blockIp6Dst, blockOwnerUid, redirectThread, ownerCache,
-                enableIpv6, s124Path, s124Observe);
+                enableIpv6, s124Path, s124Observe, oi3AppInject);
         return START_STICKY;
     }
 
@@ -453,7 +458,7 @@ public final class SnortVpnService extends VpnService {
                                        String blockIp6Dst, int blockOwnerUid,
                                        int redirectThread, boolean ownerCache,
                                        boolean enableIpv6, String s124Path,
-                                       String s124Observe) {
+                                       String s124Observe, boolean oi3AppInject) {
         if (MODE_HEV.equals(mode)) {
             int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
                     getFilesDir().getAbsolutePath());
@@ -695,7 +700,7 @@ public final class SnortVpnService extends VpnService {
                     stopVpn();
                     return;
                 }
-                if (controlledOi3 && !controlledOi3A23 && rc == 0) {
+                if (controlledOi3 && !controlledOi3A23 && oi3AppInject && rc == 0) {
                     startControlledOi3AppPacket(controlledOi3Cell(mode));
                 }
             } else {
@@ -1986,8 +1991,10 @@ public final class SnortVpnService extends VpnService {
         }
         if (intent.hasExtra(EXTRA_UID_CONTRACT_STAGE)) {
             String stage = intent.getStringExtra(EXTRA_UID_CONTRACT_STAGE);
-            uidAttribution().beginStage("A2-4", stage, "intent");
-            nativeSetVppStage("A2-4", stage == null ? "unknown" : stage);
+            String cell = stage != null && stage.startsWith("A2-5")
+                    ? "A2-5" : "A2-4";
+            uidAttribution().beginStage(cell, stage, "intent");
+            nativeSetVppStage(cell, stage == null ? "unknown" : stage);
         }
         if (intent.hasExtra(EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS)) {
             uidAttribution().setCompletionDelayMillis(

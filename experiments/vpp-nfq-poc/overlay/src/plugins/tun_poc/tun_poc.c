@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <vlib/buffer_node.h>
@@ -83,6 +84,50 @@ typedef struct
   u8 src[16];
   u8 dst[16];
 } tun_poc_fragment_info_t;
+
+/* A2-5 is deliberately a one-flow, fresh-session POC.  Keep the admission
+ * ledger at the actual UID policy and shim write seam rather than deriving it
+ * from aggregate `show tun-poc` counters.  The stage is passed by the Android
+ * launcher into the VPP child environment and the canonical key matches the
+ * AppA TrafficAdapter envelope (family|protocol|source-port|destination).
+ */
+static const char *
+tun_poc_ledger_stage (void)
+{
+  const char *stage = getenv ("SAKAMOTO_A2_STAGE_ID");
+  return stage && stage[0] ? stage : "unknown";
+}
+
+static void
+tun_poc_ledger_log (tun_poc_main_t *tm, const char *event,
+			    const char *decision, int uid)
+{
+  char dst[INET6_ADDRSTRLEN] = "?";
+  const char *family;
+  const char *protocol;
+
+  if (!tm->last_tuple_valid || !event)
+    return;
+  family = tm->last_tuple_ip_version == 6 ? "ip6" : "ip4";
+  protocol = tm->last_tuple_protocol == IPPROTO_TCP ? "tcp" :
+             tm->last_tuple_protocol == IPPROTO_UDP ? "udp" : "other";
+  if (tm->last_tuple_ip_version == 6)
+    {
+      (void) inet_ntop (AF_INET6, tm->last_tuple_ip6_dst, dst, sizeof (dst));
+    }
+  else
+    {
+      (void) inet_ntop (AF_INET, &tm->last_tuple_ip4_dst, dst, sizeof (dst));
+    }
+  fprintf (stderr,
+           "tun-poc ledger event=%s stage-id=%s flow-id=%s|%s|%s|%u "
+           "canonical-key=%s|%s|%u|%s:%u uid=%d decision=%s\n",
+           event, tun_poc_ledger_stage (), tun_poc_ledger_stage (), family,
+           protocol, (unsigned) tm->last_tuple_src_port, family, protocol,
+           (unsigned) tm->last_tuple_src_port, dst,
+           (unsigned) tm->last_tuple_dst_port, uid,
+           decision ? decision : "");
+}
 
 tun_poc_main_t tun_poc_main = {
   .fd = -1,
@@ -1276,10 +1321,17 @@ tun_poc_process_worker_packet (tun_poc_main_t *tm, vlib_main_t *vm,
 					   &tm->write_errors);
 	    }
 	  else
-	    (void) tun_poc_write_packet (tm->shim_fd, packet, packet_len,
-					 &tm->shim_tx_packets,
-					 &tm->shim_tx_bytes,
-					 &tm->shim_write_errors);
+	    {
+	      int write_result = tun_poc_write_packet (
+		tm->shim_fd, packet, packet_len, &tm->shim_tx_packets,
+		&tm->shim_tx_bytes, &tm->shim_write_errors);
+	      if (write_result == 0 && !tm->ledger_admitted_logged)
+		{
+		  tun_poc_ledger_log (tm, "TRANSPORT_ADMITTED", "ALLOW",
+				      tm->last_owner_uid);
+		  tm->ledger_admitted_logged = 1;
+		}
+	    }
     }
 
 	      return TUN_POC_PROCESS_CONSUMED;
@@ -2018,6 +2070,8 @@ tun_poc_enable (vlib_main_t *vm, int fd, tun_poc_mode_t mode, int shim_fd,
   tm->owner_cache_stores = 0;
   tm->uid_blocked_packets = 0;
   tm->uid_blocked_bytes = 0;
+  tm->ledger_policy_logged = 0;
+  tm->ledger_admitted_logged = 0;
   tm->overflow_thread_hits = 0;
   tm->last_main_fd_thread_index = ~0;
   tm->last_shim_fd_thread_index = ~0;

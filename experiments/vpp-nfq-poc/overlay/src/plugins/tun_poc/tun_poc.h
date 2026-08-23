@@ -200,6 +200,11 @@ typedef struct
   u64 owner_cache_stores;
   u64 uid_blocked_packets;
   u64 uid_blocked_bytes;
+  /* A2-5 POC-only per-session admission ledger.  These flags keep the
+   * durable stage/key events one-to-one with the fresh tuple used by the
+   * runner; they are not production counters. */
+  u8 ledger_policy_logged;
+  u8 ledger_admitted_logged;
   u8 pending_owner_policy_valid;
   u8 pending_owner_cache_enabled;
   u8 pending_block_owner_uid_set;
