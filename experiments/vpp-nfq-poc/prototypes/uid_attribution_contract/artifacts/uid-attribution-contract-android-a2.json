@@ -8,7 +8,7 @@
   "working_assumption": "FlowOwner remains selected from the direction-independent canonical tuple. UID is an asynchronous, scoped policy fact; owner turns remain nonblocking and UID never enters the canonical FlowOwner key.",
   "provenance": {
     "generated_at": "2026-08-23 Asia/Taipei",
-    "git_head_at_documentation": "4f01c62f416859dcb904e8452aeb32f381766f6c",
+    "git_head_at_documentation": "54c5b304ce4e9bacd98d8f6862c64515b935da63",
     "device": {
       "serial": "28201JEGR0XPAJ",
       "model": "Pixel 6a",

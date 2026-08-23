@@ -41,7 +41,7 @@ TCP connect or VPP shim counter is recorded only at the observed boundary.
   `com.sakamoto.snort.androidruntime=12620`
 - Compatibility stage: `experiments/vpp-nfq-poc/work/android-nfqb-stage/`
 - Loaded native plugin: `tun_poc_plugin.so`, verified by VPP `show plugins`
-- Documentation Git head: `4f01c62f416859dcb904e8452aeb32f381766f6c`
+- Documentation Git head: `54c5b304ce4e9bacd98d8f6862c64515b935da63`
 
 The artifact records the raw path inventory, package provenance, command
 families, correction history, claims, non-claims, and the evidence-integrity
