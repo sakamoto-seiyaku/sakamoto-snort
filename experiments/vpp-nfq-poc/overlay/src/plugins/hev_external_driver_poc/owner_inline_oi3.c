@@ -670,7 +670,12 @@ static int
 oi3_parse_tun_packet (oi3_main_t *tm, const u8 *packet, size_t length)
 {
   if (!packet || length < 20) return -1;
-  memset (&tm->target_address, 0, sizeof (tm->target_address));
+  /* Do not clear the committed flow target until a packet has passed all
+   * validation below.  Android may deliver unrelated/unsupported TUN frames
+   * (for example IPv6 control traffic) between the original packet and its
+   * controlled return.  Clearing the shared target before rejecting such a
+   * frame would make the owner-output rewrite use an unspecified source
+   * address, corrupting an otherwise valid flow. */
   tm->tun_tcp_flags = 0;
   if ((packet[0] >> 4) == 4) {
     size_t ihl = (size_t)(packet[0] & 0x0fU) * 4U;
