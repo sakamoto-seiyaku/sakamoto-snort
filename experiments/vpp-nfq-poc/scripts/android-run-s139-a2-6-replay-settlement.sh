@@ -285,7 +285,7 @@ run_a26() {
     sleep "$POLL_INTERVAL"
   done
 
-  adb_cmd shell am start -n "$APP_PACKAGE/$TRAFFIC_ACTIVITY" \
+  adb_cmd shell am start -n "$APP_PACKAGE_A/$TRAFFIC_ACTIVITY" \
     -a com.sakamoto.snort.a2traffic.EMIT --ez a2Matrix true \
     --es a2MatrixStageId "$TRANSPORT_STAGE" --es a2MatrixFamily "$FAMILY" \
     --es a2MatrixProtocol "$PROTOCOL" --ei a2MatrixSourcePort "$ALLOW_SOURCE_PORT" \
