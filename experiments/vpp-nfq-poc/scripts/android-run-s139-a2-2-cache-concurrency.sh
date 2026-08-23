@@ -305,14 +305,26 @@ launch_tuple() {
   launch_stages+=("$stage_id")
 }
 
-# Keep these four am start calls adjacent: they are intentionally backgrounded
-# first and joined only after all four fresh cohort members have been submitted.
+# Keep each AppA+AppB pair adjacent and backgrounded.  A second intent delivered
+# to the same singleTop Activity while its first worker is still starting can
+# be lost by Android's activity launch queue, so the two packages are
+# concurrent within each batch while each package receives one intent per
+# batch.  The first pair remains live while the second pair is submitted.
+launch_failures=0
 launch_tuple "$APP_PACKAGE_A" ip4 udp 45741 1.1.1.1 53 A2-2-appa-ip4-udp
-launch_tuple "$APP_PACKAGE_A" ip6 udp 45742 2606:4700:4700::1111 53 A2-2-appa-ip6-udp
 launch_tuple "$APP_PACKAGE_B" ip4 udp 45751 1.1.1.1 53 A2-2-appb-ip4-udp
+launch_pids_batch=()
+launch_pids_batch+=("${launch_pids[@]}")
+for launch_pid in "${launch_pids_batch[@]}"; do
+  if ! wait "$launch_pid"; then
+    launch_failures=$((launch_failures + 1))
+  fi
+done
+launch_pids=()
+sleep 0.25
+launch_tuple "$APP_PACKAGE_A" ip6 udp 45742 2606:4700:4700::1111 53 A2-2-appa-ip6-udp
 launch_tuple "$APP_PACKAGE_B" ip6 udp 45752 2606:4700:4700::1111 53 A2-2-appb-ip6-udp
 
-launch_failures=0
 for launch_pid in "${launch_pids[@]}"; do
   if ! wait "$launch_pid"; then
     launch_failures=$((launch_failures + 1))
