@@ -411,12 +411,18 @@ public final class TrafficAdapterActivity extends Activity {
                 return;
             }
             tupleAttempted = true;
-            socket.connect(destination, command.destinationPort);
             String local = localAddress(socket, network, command.family);
             byte[] payload = ("s139-a2-5|" + command.stageId)
                     .getBytes(StandardCharsets.UTF_8);
             for (; nextRepeat <= command.repeat; nextRepeat++) {
-                socket.send(new DatagramPacket(payload, payload.length));
+                // Keep the A2-5 UDP shape identical to the historical
+                // Androidruntime control fixture: an explicitly addressed
+                // datagram on a bound, but unconnected, socket.  The Android
+                // owner API has observed this shape reliably on the target
+                // device, whereas connected UDP can return -1 for the same
+                // tuple even while the descriptor is still live.
+                socket.send(new DatagramPacket(payload, payload.length,
+                        destination, command.destinationPort));
                 ProbeResult result = ProbeResult.success(networkHandle,
                         bindResult, local, destination.getHostAddress(),
                         "udp_datagram_sent", tupleAttempted, "");
