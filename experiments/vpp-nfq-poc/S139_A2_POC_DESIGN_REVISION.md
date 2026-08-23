@@ -124,6 +124,13 @@ canonical key and FlowOwner, reuse the attributed UID without another Android
 lookup, avoid transport re-entry, increment the actual Flow Stack return and
 TUN-TX observations, and be received by the originating traffic adapter.
 
+The durable verifier also decodes the native `tun-output-raw` packet. Its IP
+family, source/destination addresses, UDP ports, and payload must match the
+originating App record; a text `OUTPUT` ledger cannot mask a malformed packet
+header. The OI3 parser must reject unrelated or malformed TUN frames without
+clearing the committed target of an in-flight flow, because Android may
+deliver IPv6 control frames between ingress and return.
+
 This closes A2 controlled reverse traffic plus identity/provenance. It does not
 prove a protected external Direct socket, original-destination send/receive, or
 an Internet reply; B1 still owns those conclusions. A pure mock, a VPP-only

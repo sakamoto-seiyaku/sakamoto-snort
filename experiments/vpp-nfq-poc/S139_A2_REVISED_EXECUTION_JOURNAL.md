@@ -279,12 +279,69 @@ bounded evidence or Android intent/socket timing defects; none showed a wrong
 UID, cross-App cache hit, stale identity, FlowOwner bypass, or architecture
 interruption.
 
+## A2-3 controlled reverse-return execution
+
+Cell: `A2-3 controlled reverse traffic`
+
+Current verdict: `PASS` for the controlled IPv4 and IPv6 return cells
+Aggregate remains: `A2_INCOMPLETE`; `architecture_interruption=false`
+
+The first three A2-3 attempts did not enter the data plane. They used the
+mistyped historical serial `28201JEGR0XPA`; the connected Pixel serial is
+`28201JEGR0XPAJ`. Those bundles are retained as `INVALID/NOT RUN` and contain
+no native or App return evidence. `fixed-4` used the correct serial and
+proved the complete IPv4 data path, but the runner's contract cleanup poll
+looked only for `"event":"CLEANUP"` while the durable contract schema emits
+`"outcome":"CLEANUP"`. Its final verifier result is therefore correctly
+`INVALID`; commit `8768c2d` corrected the observation gate without weakening
+the cleanup requirement.
+
+The native and App evidence in `fixed-4` also exposed a real IPv6 fixture
+defect. A valid IPv6 ingress was followed by unrelated 48-byte TUN frames;
+`oi3_parse_tun_packet()` cleared the shared committed target before rejecting
+one of those frames. The later owner-output packet consequently had IPv6
+source `::` and UDP source port `0`, while the text ledger still reported the
+right canonical key. AppA timed out (`fixed-6`, `INCONCLUSIVE`). This was a
+native state-corruption bug, not a UID, FlowOwner, broker, or network
+architecture failure. Commit `ffe87d7` preserves the committed target across
+invalid TUN frames.
+
+Clean-head arm64 evidence uses plugin SHA-256
+`1176176517a95dd8ad7706a6713a2290997fb078e0970385e0112f834964c6cf`, VpnLite
+UID `12628`, and AppA UID `12630`. The current VpnLite/APK source receipt is
+`gitHead=ffe87d731414e20700bb3b606e0a922bf61a99b6`, `gitDirty=false`.
+
+| Bundle | Family / tuple | Result | Decisive evidence |
+| --- | --- | --- | --- |
+| `results/s139-a2-3-controlled-return-20260823-fixed-7/` | IPv6 `fd00:200::2:45843 -> fd00:200::1:42083` | `PASS` | AppA same-socket receipt, native ingress/output, raw TUN tuple, broker, cleanup |
+| `results/s139-a2-3-controlled-return-20260823-fixed-9/` | IPv4 `10.200.0.2:45845 -> 10.200.0.1:42085` | `PASS` | AppA same-socket receipt, native ingress/output, raw TUN tuple, broker, cleanup |
+
+Both current bundles independently pass the verifier, including the raw
+packet gate added after the IPv6 incident. The raw IPv6 output now has source
+`fd00:200::1`, destination `fd00:200::2`, source port `42083`, destination
+port `45843`, and the exact 26-byte marker. Both bundles join the same
+direction-independent canonical key between AppA JSONL and OI3 ingress/
+output; output owner-pthread matches durable owner identity; Android lookup
+count is zero; transport re-entry is zero; broker request/completion is
+`1/1`; native buffers have residue `0`; cleanup is observed before any
+force-stop fallback; and post-run snapshots show no VPP/VpnLite process or
+`tun0`.
+
+The raw bundles `fixed-5` (pre-IPv6 fix), `fixed-6` (the falsifying IPv6
+state-pollution run), and `fixed-8` (ADB vsock interruption after cleanup)
+remain retained and are not substituted for the two current PASS bundles.
+A2-3 proves controlled Flow Stack return/TUN delivery and UID/provenance
+reuse only. It does not claim protected external Direct Egress, Internet
+reachability, or an underlay reply.
+
 ## Claim boundary and next cells
 
 A2-0, A2-1, and A2-2 now prove durable session provenance, the complete
 deterministic two-App dual-stack tuple/UID matrix, and bounded asynchronous
-cache/concurrency behavior. They do not prove controlled reverse traffic,
-lifecycle invalidation, or downstream allow/drop admission.
+cache/concurrency behavior. A2-3 now proves controlled Flow Stack reverse
+delivery with same-socket App receipt, canonical owner/UID reuse, raw TUN
+tuple integrity, no lookup/re-entry, and bounded cleanup. These cells do not
+prove lifecycle invalidation or downstream allow/drop admission.
 
 The remaining order is A2-3 controlled return, A2-4 lifecycle native join,
 A2-5 allow/drop admission ledger, and A2-6 replay/settlement aggregate. B1

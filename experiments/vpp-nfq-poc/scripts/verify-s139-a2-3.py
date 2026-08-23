@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import sys
@@ -19,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 PASS = "PASS"
+FAIL = "FAIL"
 INVALID = "INVALID"
 INCONCLUSIVE = "INCONCLUSIVE"
 SCHEMA = "s139-a2-3-manifest/v1"
@@ -78,6 +80,112 @@ def parse_kv_lines(text: str, prefix: str) -> List[Dict[str, str]]:
             fields[key] = value
         result.append(fields)
     return result
+
+
+def parse_raw_output_packets(text: str) -> Tuple[List[bytes], int]:
+    """Decode durable OI3 TUN-output hex lines.
+
+    The text ledger proves the intended path, but only the raw packet can
+    prove that the returned IP/UDP tuple was not corrupted before TUN write.
+    Keep malformed-line count separate so a missing/invalid raw record is an
+    instrumentation verdict, not a behavioral pass.
+    """
+    packets: List[bytes] = []
+    malformed = 0
+    pattern = re.compile(
+        r"oi3 tun-output-raw length=(?P<length>[0-9]+) "
+        r"hex=(?P<hex>[0-9a-fA-F]+)"
+    )
+    for raw in text.splitlines():
+        match = pattern.search(raw)
+        if not match:
+            continue
+        try:
+            expected_length = int(match.group("length"))
+            packet = bytes.fromhex(match.group("hex"))
+        except (TypeError, ValueError):
+            malformed += 1
+            continue
+        if expected_length != len(packet):
+            malformed += 1
+            continue
+        packets.append(packet)
+    return packets, malformed
+
+
+def decode_udp_packet(packet: bytes) -> Optional[Tuple[str, str, str, int, int, bytes]]:
+    """Return family, source, destination, ports and payload for UDP packet."""
+    if not packet:
+        return None
+    version = packet[0] >> 4
+    if version == 4:
+        if len(packet) < 28:
+            return None
+        header_length = (packet[0] & 0x0F) * 4
+        if header_length < 20 or len(packet) < header_length + 8:
+            return None
+        if packet[9] != 17:
+            return None
+        total_length = int.from_bytes(packet[2:4], "big")
+        if total_length != len(packet) or total_length < header_length + 8:
+            return None
+        source = str(ipaddress.ip_address(packet[12:16]))
+        destination = str(ipaddress.ip_address(packet[16:20]))
+    elif version == 6:
+        if len(packet) < 48 or packet[6] != 17:
+            return None
+        header_length = 40
+        payload_length = int.from_bytes(packet[4:6], "big")
+        if payload_length != len(packet) - header_length:
+            return None
+        source = str(ipaddress.ip_address(packet[8:24]))
+        destination = str(ipaddress.ip_address(packet[24:40]))
+    else:
+        return None
+    udp = packet[header_length:]
+    udp_length = int.from_bytes(udp[4:6], "big")
+    if udp_length != len(udp) or udp_length < 8:
+        return None
+    source_port = int.from_bytes(udp[0:2], "big")
+    destination_port = int.from_bytes(udp[2:4], "big")
+    return ("ip6" if version == 6 else "ip4", source, destination,
+            source_port, destination_port, bytes(udp[8:]))
+
+
+def verify_raw_output(oi3_text: str, app: Dict[str, Any]) -> Tuple[str, str]:
+    """Join one raw TUN output packet to the AppA return record."""
+    if not app:
+        return INCONCLUSIVE, "raw TUN output awaits a decisive App return record"
+    packets, malformed = parse_raw_output_packets(oi3_text)
+    if malformed or not packets:
+        return INVALID, "OI3 raw TUN output is missing or malformed"
+    try:
+        expected_payload = bytes.fromhex(str(app.get("payload_hex", "")))
+        expected_family = str(app["family"])
+        expected_source = str(app["destination_address"])
+        expected_destination = str(app["source_address"])
+        expected_source_port = int(app["destination_port"])
+        expected_destination_port = int(app["source_port"])
+    except (KeyError, TypeError, ValueError):
+        return INVALID, "App return record lacks a decodable raw tuple"
+    mismatches: List[str] = []
+    for packet in packets:
+        decoded = decode_udp_packet(packet)
+        if decoded is None:
+            mismatches.append("malformed UDP/IP packet")
+            continue
+        (family, source, destination, source_port, destination_port,
+         payload) = decoded
+        if (family == expected_family and source == expected_source and
+                destination == expected_destination and
+                source_port == expected_source_port and
+                destination_port == expected_destination_port and
+                payload == expected_payload):
+            return PASS, "raw TUN output tuple and payload match AppA return"
+        mismatches.append(
+            f"{family} {source}:{source_port}->{destination}:{destination_port}"
+        )
+    return FAIL, "raw TUN output differs from AppA return (" + "; ".join(mismatches) + ")"
 
 
 def append_check(checks: List[Dict[str, str]], name: str, status: str,
@@ -296,6 +404,21 @@ def verify(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             invalid.append("OI3 cleanup stage mismatch")
         if cleanups and cleanups[-1].get("canonical-key") != canonical:
             failures.append("OI3 cleanup canonical key differs from App")
+
+    if joined:
+        raw_output_status, raw_output_detail = verify_raw_output(oi3_text, app)
+    else:
+        raw_output_status = INCONCLUSIVE
+        raw_output_detail = "raw TUN output awaits a joined AppA/OI3 return"
+    if raw_output_status == FAIL:
+        failures.append(raw_output_detail)
+    elif raw_output_status == INVALID:
+        invalid.append(raw_output_detail)
+    elif raw_output_status == INCONCLUSIVE:
+        inconclusive.append(raw_output_detail)
+    append_check(checks, "raw-output-packet", raw_output_status,
+                 raw_output_detail)
+
     append_check(checks, "canonical-payload-uid-stage-join",
                  INVALID if any("join" in item for item in invalid)
                  else PASS if joined and not failures else INCONCLUSIVE,
