@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the A2-0 resolver tri-state policy."""
+"""Regression tests for the revised A2 verifier profiles."""
 
 import importlib.util
 import json
@@ -146,6 +146,257 @@ class NativeVppStartVerdictTest(unittest.TestCase):
             VERIFIER.INVALID,
             self.verdict(self.receipt(artifact_present=False)),
         )
+
+
+class A21MatrixVerdictTest(unittest.TestCase):
+    VPN_PACKAGE = "com.example.vpn"
+    APP_A = "com.example.appa"
+    APP_B = "com.example.appb"
+    VPN_UID = 12000
+    UID_A = 12001
+    UID_B = 12002
+    VPN_HASH = "1" * 64
+    APP_A_HASH = "2" * 64
+    APP_B_HASH = "3" * 64
+    PLUGIN_HASH = "4" * 64
+
+    def tuples(self) -> list:
+        result = []
+        port = 46000
+        for package in (self.APP_A, self.APP_B):
+            for family, source, destination in (
+                    ("ip4", "10.111.0.2", "1.1.1.1"),
+                    ("ip6", "fd00:111:111::2", "2606:4700:4700::1111")):
+                for protocol_number, protocol_name, destination_port in (
+                        (6, "tcp", 443), (17, "udp", 53)):
+                    port += 1
+                    result.append({
+                        "stageId": "A2-1-{}-{}-{}".format(
+                            package.rsplit(".", 1)[-1], family, protocol_name),
+                        "package": package,
+                        "family": family,
+                        "protocol": protocol_number,
+                        "protocolName": protocol_name,
+                        "sourceAddress": source,
+                        "sourcePort": port,
+                        "destinationHost": destination,
+                        "destinationAddress": destination,
+                        "destinationPort": destination_port,
+                        "repeat": 2,
+                    })
+        return result
+
+    def manifest(self) -> dict:
+        required = [
+            "package-list-packages-U.txt",
+            "apk-provenance.tsv",
+            "vpn-session-provenance.json",
+            "vpp-start-provenance.json",
+            "uid-attribution-contract.jsonl",
+            "a2-1-runtime-appa.jsonl",
+            "a2-1-runtime-appb.jsonl",
+            "vpp-owner-resolver.log",
+            "source-provenance.properties",
+            "cleanup.txt",
+        ]
+        return {
+            "schema": VERIFIER.MANIFEST_SCHEMA_A21,
+            "profile": VERIFIER.PROFILE_A21,
+            "cellId": "A2-1",
+            "vpnPackage": self.VPN_PACKAGE,
+            "allowedPackages": [self.APP_A, self.APP_B],
+            "expectedVpnUid": self.VPN_UID,
+            "expectedAllowedUids": {
+                self.APP_A: self.UID_A,
+                self.APP_B: self.UID_B,
+            },
+            "expectedVpnApkSha256": self.VPN_HASH,
+            "expectedAppApkSha256": {
+                self.APP_A: self.APP_A_HASH,
+                self.APP_B: self.APP_B_HASH,
+            },
+            "expectedTunPocPluginSha256": self.PLUGIN_HASH,
+            "mode": "vpp-hev-owner-resolver",
+            "vppMode": 5,
+            "installOk": True,
+            "runtimeFiles": {
+                self.APP_A: "a2-1-runtime-appa.jsonl",
+                self.APP_B: "a2-1-runtime-appb.jsonl",
+            },
+            "tuples": self.tuples(),
+            "requiredFiles": required,
+        }
+
+    def write_fixture(self, root: Path, manifest: dict,
+                      only_miss_stage: str = "", wrong_stage: str = "") -> None:
+        (root / "package-list-packages-U.txt").write_text(
+            "package:{} uid:{}\npackage:{} uid:{}\npackage:{} uid:{}\n".format(
+                self.VPN_PACKAGE, self.VPN_UID,
+                self.APP_A, self.UID_A,
+                self.APP_B, self.UID_B),
+            encoding="utf-8",
+        )
+        (root / "apk-provenance.tsv").write_text(
+            "{}\t/data/app/vpn/base.apk\t{}\n"
+            "{}\t/data/app/appa/base.apk\t{}\n"
+            "{}\t/data/app/appb/base.apk\t{}\n".format(
+                self.VPN_PACKAGE, self.VPN_HASH,
+                self.APP_A, self.APP_A_HASH,
+                self.APP_B, self.APP_B_HASH),
+            encoding="utf-8",
+        )
+        (root / "source-provenance.properties").write_text(
+            "captureUtc=2026-08-23T08:00:00Z\n"
+            "captureEpoch=1787472000\n"
+            "deviceEpoch=1787472001\n"
+            "gitHead={}\n"
+            "gitDirty=false\n"
+            "vpnApkSha256={}\n"
+            "appAApkSha256={}\n"
+            "appBApkSha256={}\n"
+            "tunPocPluginSha256={}\n".format(
+                "a" * 40, self.VPN_HASH, self.APP_A_HASH,
+                self.APP_B_HASH, self.PLUGIN_HASH),
+            encoding="utf-8",
+        )
+        receipt = {
+            "schema": "vpn-session-provenance/v1",
+            "receiptType": "success",
+            "mode": "vpp-hev-owner-resolver",
+            "normalizedDisallowedPackage": "",
+            "normalizedAllowedPackages": [self.APP_A, self.APP_B],
+            "resolvedAllowedUids": [self.UID_A, self.UID_B],
+            "builderSuccess": True,
+            "addAllowedApplicationSuccess": True,
+            "establishSuccess": True,
+            "tunFdDetached": True,
+            "mtu": 1500,
+            "addressRouteProfile": {
+                "ipv4": {"addresses": ["10.111.0.2/32"], "routes": ["0.0.0.0/0"]},
+                "ipv6": {"addresses": ["fd00:111:111::2/128"], "routes": ["::/0"]},
+            },
+            "monotonicStartNs": 100,
+            "monotonicEstablishedNs": 150,
+            "elapsedMonotonicNs": 50,
+            "vpnLitePackage": self.VPN_PACKAGE,
+            "vpnLiteProcessUid": self.VPN_UID,
+            "vpnLitePid": 1234,
+        }
+        receipt["configDigest"] = VERIFIER.hashlib.sha256(
+            VERIFIER.canonical_config(receipt).encode("utf-8")).hexdigest()
+        (root / "vpn-session-provenance.json").write_text(
+            json.dumps(receipt), encoding="utf-8")
+        start = {
+            "schema": "vpp-start-provenance/v1",
+            "receiptType": "native-start-outcome",
+            "mode": "vpp-hev-owner-resolver",
+            "vppMode": 5,
+            "rc": 0,
+            "success": True,
+            "monotonicNs": 200,
+            "requiredArtifact": "libtun_poc_plugin.so|tun_poc_plugin.so",
+            "artifactPresent": True,
+            "artifactName": "libtun_poc_plugin.so",
+            "artifactSha256": self.PLUGIN_HASH,
+        }
+        (root / "vpp-start-provenance.json").write_text(
+            json.dumps(start), encoding="utf-8")
+        (root / "uid-attribution-contract.jsonl").write_text(
+            json.dumps({
+                "outcome": "ALLOWED_UID_SCOPE",
+                "reason": "uids=[{}, {}] enforced=true".format(
+                    self.UID_A, self.UID_B),
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        runtime = {self.APP_A: [], self.APP_B: []}
+        resolver = []
+        for item in manifest["tuples"]:
+            uid = manifest["expectedAllowedUids"][item["package"]]
+            runtime[item["package"]].append({
+                "schema": "s139-a2-1-runtime/v1",
+                "stage_id": item["stageId"],
+                "app_package": item["package"],
+                "process_uid": uid,
+                "family": item["family"],
+                "protocol": item["protocolName"],
+                "source_port": item["sourcePort"],
+                "destination_address": item["destinationAddress"],
+                "destination_port": item["destinationPort"],
+                "actual_local_address": item["sourceAddress"],
+                "bind_result": "bound",
+                "vpn_network_handle": 987654321,
+                "tuple_attempted": True,
+                "send_connect_outcome": "tcp_connect_timeout"
+                    if item["protocolName"] == "tcp" else "udp_datagram_sent",
+            })
+            resolver.append(
+                "resolver query=1 proto={} {}:{} -> {}:{} uid=-1".format(
+                    item["protocol"], item["sourceAddress"], item["sourcePort"],
+                    item["destinationAddress"], item["destinationPort"]))
+            if item["stageId"] == wrong_stage:
+                resolver.append(
+                    "resolver query=2 proto={} {}:{} -> {}:{} uid=19999".format(
+                        item["protocol"], item["sourceAddress"], item["sourcePort"],
+                        item["destinationAddress"], item["destinationPort"]))
+            if item["stageId"] != only_miss_stage:
+                resolver.append(
+                    "resolver query=3 proto={} {}:{} -> {}:{} uid={}".format(
+                        item["protocol"], item["sourceAddress"], item["sourcePort"],
+                        item["destinationAddress"], item["destinationPort"], uid))
+        for package, filename in manifest["runtimeFiles"].items():
+            (root / filename).write_text(
+                "".join(json.dumps(record) + "\n" for record in runtime[package]),
+                encoding="utf-8",
+            )
+        (root / "vpp-owner-resolver.log").write_text(
+            "\n".join(resolver) + "\n", encoding="utf-8")
+        (root / "cleanup.txt").write_text(
+            "processes:\ntun0:\nvpn:\n", encoding="utf-8")
+
+    def verdict(self, mutate=None, only_miss_stage: str = "",
+                wrong_stage: str = "") -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.manifest()
+            if mutate is not None:
+                mutate(manifest, root)
+            self.write_fixture(root, manifest, only_miss_stage, wrong_stage)
+            return VERIFIER.verify_a21(manifest, root)
+
+    def test_complete_eight_tuple_matrix_is_pass(self) -> None:
+        result = self.verdict()
+        self.assertEqual(VERIFIER.PASS, result["status"])
+        self.assertEqual(8, result["summary"]["passedTuples"])
+
+    def test_wrong_positive_uid_is_fail_even_with_later_expected_uid(self) -> None:
+        stage = self.tuples()[0]["stageId"]
+        self.assertEqual(VERIFIER.FAIL, self.verdict(wrong_stage=stage)["status"])
+
+    def test_only_initial_miss_for_one_tuple_is_inconclusive(self) -> None:
+        stage = self.tuples()[0]["stageId"]
+        self.assertEqual(
+            VERIFIER.INCONCLUSIVE,
+            self.verdict(only_miss_stage=stage)["status"],
+        )
+
+    def test_duplicate_app_uid_is_invalid(self) -> None:
+        def duplicate_uid(manifest, _root):
+            manifest["expectedAllowedUids"][self.APP_B] = self.UID_A
+
+        self.assertEqual(VERIFIER.INVALID, self.verdict(duplicate_uid)["status"])
+
+    def test_missing_native_start_provenance_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.manifest()
+            self.write_fixture(root, manifest)
+            (root / "vpp-start-provenance.json").unlink()
+            self.assertEqual(
+                VERIFIER.INVALID,
+                VERIFIER.verify_a21(manifest, root)["status"],
+            )
 
 
 if __name__ == "__main__":
