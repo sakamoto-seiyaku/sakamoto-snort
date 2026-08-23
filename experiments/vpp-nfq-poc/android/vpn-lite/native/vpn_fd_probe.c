@@ -109,6 +109,16 @@ static bool g_protect_running;
 static int g_protect_fd = -1;
 static jobject g_protect_service;
 static jmethodID g_protect_method;
+/* POC-only protect-broker ledger.  The counters are deliberately scoped to
+ * one VPP start and protected by g_lock; they are evidence for whether HEV
+ * reached Android's protect boundary, not production telemetry. */
+static uint64_t g_protect_requests;
+static uint64_t g_protect_completions;
+static uint64_t g_protect_failures;
+static uint64_t g_protect_denials;
+static uint64_t g_protect_receive_failures;
+static uint64_t g_protect_response_failures;
+static uint64_t g_protect_java_exceptions;
 
 static pid_t g_hev_pid = -1;
 static int g_hev_driver_fd = -1;
@@ -314,6 +324,10 @@ static void *protect_broker_thread(void *unused) {
         if (socket_fd < 0) {
             pthread_mutex_lock(&g_lock);
             running = g_protect_running;
+            if (running && errno != EBADF && errno != ECONNRESET) {
+                g_protect_failures++;
+                g_protect_receive_failures++;
+            }
             pthread_mutex_unlock(&g_lock);
             if (running && errno != EBADF && errno != ECONNRESET) {
                 log_line(file, "protect broker receive stop errno=%d %s", errno,
@@ -322,22 +336,62 @@ static void *protect_broker_thread(void *unused) {
             break;
         }
 
+        pthread_mutex_lock(&g_lock);
+        g_protect_requests++;
+        pthread_mutex_unlock(&g_lock);
+
         jboolean protected_socket = (*env)->CallBooleanMethod(
             env, g_protect_service, g_protect_method, (jint)socket_fd);
+        bool java_exception = false;
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionDescribe(env);
             (*env)->ExceptionClear(env);
             protected_socket = JNI_FALSE;
+            java_exception = true;
         }
         int result = protected_socket == JNI_TRUE ? 1 : 0;
+        pthread_mutex_lock(&g_lock);
+        if (result == 0) {
+            g_protect_failures++;
+            g_protect_denials++;
+            if (java_exception) {
+                g_protect_java_exceptions++;
+            }
+        }
+        pthread_mutex_unlock(&g_lock);
         log_line(file, "protect fd=%d result=%d", socket_fd, result);
         close(socket_fd);
         if (send(broker_fd, &result, sizeof(result), 0) != sizeof(result)) {
+            pthread_mutex_lock(&g_lock);
+            g_protect_failures++;
+            g_protect_response_failures++;
+            pthread_mutex_unlock(&g_lock);
             log_line(file, "protect result send failed errno=%d %s", errno,
                      strerror(errno));
             break;
         }
+        pthread_mutex_lock(&g_lock);
+        g_protect_completions++;
+        pthread_mutex_unlock(&g_lock);
     }
+    pthread_mutex_lock(&g_lock);
+    uint64_t requests = g_protect_requests;
+    uint64_t completions = g_protect_completions;
+    uint64_t failures = g_protect_failures;
+    uint64_t denials = g_protect_denials;
+    uint64_t receive_failures = g_protect_receive_failures;
+    uint64_t response_failures = g_protect_response_failures;
+    uint64_t java_exceptions = g_protect_java_exceptions;
+    pthread_mutex_unlock(&g_lock);
+    log_line(file,
+             "protect broker summary requests=%llu completions=%llu failures=%llu "
+             "denials=%llu receive-failures=%llu response-failures=%llu "
+             "java-exceptions=%llu",
+             (unsigned long long)requests, (unsigned long long)completions,
+             (unsigned long long)failures, (unsigned long long)denials,
+             (unsigned long long)receive_failures,
+             (unsigned long long)response_failures,
+             (unsigned long long)java_exceptions);
     log_line(file, "protect broker stop");
     if (file) {
         fclose(file);
@@ -2760,6 +2814,13 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         snprintf(g_vpp_protect_log, sizeof(g_vpp_protect_log),
                  "%s/vpp/logs/vpp-protect.log", app_files);
         pthread_mutex_lock(&g_lock);
+        g_protect_requests = 0;
+        g_protect_completions = 0;
+        g_protect_failures = 0;
+        g_protect_denials = 0;
+        g_protect_receive_failures = 0;
+        g_protect_response_failures = 0;
+        g_protect_java_exceptions = 0;
         g_protect_fd = protect_fds[0];
         g_protect_service = protect_service;
         g_protect_method = protect_method;

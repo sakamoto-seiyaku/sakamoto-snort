@@ -19,6 +19,7 @@ VPP_CLI_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-cli.log"
 RESOLVER_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-owner-resolver.log"
 HEV_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-hev.log"
 SHIM_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-shim.log"
+PROTECT_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-protect.log"
 
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 mkdir -p "$RESULT_DIR"
@@ -38,7 +39,12 @@ echo "vpn_package=$VPN_PACKAGE app_package=$APP_PACKAGE target=$TARGET_URL"
 
 adb_cmd shell am force-stop "$VPN_PACKAGE" >/dev/null 2>&1 || true
 adb_cmd shell am force-stop "$APP_PACKAGE" >/dev/null 2>&1 || true
-adb_su "rm -f '$VPP_CLI_PATH' '$RESOLVER_PATH' '$HEV_PATH' '$SHIM_PATH'"
+adb_su "rm -f '$VPP_CLI_PATH' '$RESOLVER_PATH' '$HEV_PATH' '$SHIM_PATH' '$PROTECT_PATH'"
+
+capture() {
+  local name="$1" path="$2"
+  adb_su "cat '$path' 2>/dev/null || true" | tr -d '\r' | tee "$RESULT_DIR/$name"
+}
 
 echo "## start IPv6 owner resolver"
 adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" \
@@ -50,14 +56,13 @@ adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" \
   --ez enableIpv6 true
 sleep "$START_WAIT"
 
+echo "## proc sockets before trigger"
+capture proc-net-tcp-before.txt /proc/net/tcp
+capture proc-net-tcp6-before.txt /proc/net/tcp6
+
 echo "## trigger Chrome URL"
 adb_cmd shell am start -a android.intent.action.VIEW -p "$APP_PACKAGE" -d "$TARGET_URL"
 sleep "$PROBE_WAIT"
-
-capture() {
-  local name="$1" path="$2"
-  adb_su "cat '$path' 2>/dev/null || true" | tr -d '\r' | tee "$RESULT_DIR/$name"
-}
 
 echo "## connectivity"
 adb_cmd shell dumpsys connectivity | tr -d '\r' | tee "$RESULT_DIR/dumpsys-connectivity.txt"
@@ -68,12 +73,15 @@ capture vpp-owner-resolver.log "$RESOLVER_PATH"
 echo "## hev/shim"
 capture vpp-hev.log "$HEV_PATH"
 capture vpp-shim.log "$SHIM_PATH"
-echo "## proc tcp6"
-adb_su "cat /proc/net/tcp6 2>/dev/null || true" | tr -d '\r' | tee "$RESULT_DIR/proc-net-tcp6.txt"
+echo "## proc sockets after trigger"
+capture proc-net-tcp.txt /proc/net/tcp
+capture proc-net-tcp6.txt /proc/net/tcp6
 
 echo "## cleanup"
 adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true >/dev/null 2>&1 || true
 sleep 2
+echo "## protect broker final (after VPN stop)"
+capture vpp-protect-final.log "$PROTECT_PATH"
 leftovers="$(adb_su "ps -A 2>/dev/null | grep '[v]pp' || true" | tr -d '\r')"
 if [[ -n "$leftovers" ]]; then
   echo "leftover-vpp=$leftovers"
