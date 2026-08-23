@@ -271,10 +271,11 @@ family barrier is evidence-based and prevents the Android `singleTop` Activity
 from intentionally racing two same-package workers, which previously made a
 second fixed-port UDP send return `EPERM` before entering VPP.
 
-The UDP adapter passes `timeoutMillis=0` for A2-2. Zero means that the
-successful runtime record is durably appended immediately after `send()`
-returns; it is not a transport or cache timeout. Runtime JSONL is captured
-after the native gates as final evidence, not polled as the launch barrier.
+The UDP adapter keeps its socket alive through the asynchronous Android owner
+lookup using the existing positive post-send observation delay (A2-2 uses
+`timeoutMillis=1200`). Runtime JSONL is captured after the native gates as
+final evidence, not polled as the launch barrier; the delay is socket
+retention, not a cache-readiness signal.
 Wave evidence uses `s139-a2-2-two-wave/v2` with separate `nativeGates` and
 diagnostic final `runtimeGates`. A missing native gate or same-identity runtime
 sequence is `INCONCLUSIVE`, not an architecture interruption, and the raw

@@ -480,8 +480,8 @@ launch_tuple() {
   local stage_id="$7"
   local wave_id="$8"
   local activity="$package_name/$TRAFFIC_ACTIVITY"
-  # UDP timeout=0 means the adapter durably records the result immediately
-  # after send(); it is not a transport or cache timeout.
+  # Keep the UDP socket alive while Android's owner API resolves the native
+  # packet asynchronously; runtime JSONL remains final evidence, not a gate.
   echo "## launch wave=$wave_id package=$package_name stage=$stage_id $family/$protocol $source_port -> $destination_host:$destination_port"
   adb_cmd shell am start -a com.sakamoto.snort.a2traffic.EMIT \
     -n "$activity" \
@@ -491,7 +491,7 @@ launch_tuple() {
     --ei a2MatrixSourcePort "$source_port" \
     --es a2MatrixDestinationHost "$destination_host" \
     --ei a2MatrixDestinationPort "$destination_port" \
-    --ei a2MatrixTimeoutMillis 0 \
+    --ei a2MatrixTimeoutMillis 1200 \
     --ei a2MatrixRepeat 1 \
     >"$RESULT_DIR/launch-$wave_id-$stage_id.log" 2>&1 &
   launch_pids+=("$!")

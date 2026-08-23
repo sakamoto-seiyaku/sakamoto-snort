@@ -229,13 +229,21 @@ The next fixture revision keeps the two-wave contract semantics but changes
 the pair barrier to native family events. Wave 1 gates IPv4 and IPv6 pairs on
 correct-UID `COMPLETION_ACCEPTED`; wave 2 gates each pair on a new
 correct-UID `CACHE_HIT`, using a pre-wave hit-count baseline so an earlier
-duplicate hit cannot satisfy the replay. A2-2 UDP launches use
-`timeoutMillis=0`, making the successful runtime record durable immediately
-after `send()`; runtime JSONL is captured as final evidence rather than a
-long-lived launch barrier. The evidence schema is now
-`s139-a2-2-two-wave/v2` with explicit `nativeGates`; the verifier treats the
-runtime snapshot as final evidence and no longer turns a diagnostic runtime
-poll timeout into a wave-gate failure.
+duplicate hit cannot satisfy the replay. A2-2 UDP launches retain the socket
+with the positive `timeoutMillis=1200` observation delay so the asynchronous
+Android owner API can resolve the tuple before the adapter closes it. Runtime
+JSONL is captured as final evidence rather than a long-lived launch barrier.
+The evidence schema is now `s139-a2-2-two-wave/v2` with explicit
+`nativeGates`; the verifier treats the runtime snapshot as final evidence and
+no longer turns a diagnostic runtime poll timeout into a wave-gate failure.
+
+The `fixed-6` device run falsified the zero-delay variant: both Apps recorded
+successful sends, but native owner resolution returned `uid=-1` with
+`LOOKUP_UNAVAILABLE` because the UDP sockets closed before the asynchronous
+Android owner query completed. This is a fixture socket-lifetime defect, not
+a UID or FlowOwner defect. The runner therefore restores the positive 1200 ms
+retention delay while keeping the native family barriers and final runtime
+capture.
 
 ## Claim boundary and next cells
 

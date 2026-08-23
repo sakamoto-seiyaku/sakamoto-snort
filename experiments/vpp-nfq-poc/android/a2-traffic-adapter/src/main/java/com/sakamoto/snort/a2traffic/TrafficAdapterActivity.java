@@ -177,10 +177,9 @@ public final class TrafficAdapterActivity extends Activity {
             byte[] payload = ("s139-a2-1|" + command.family + "|udp")
                     .getBytes(StandardCharsets.UTF_8);
             socket.send(new DatagramPacket(payload, payload.length));
-            // timeoutMillis is a post-send observation delay.  A zero value
-            // intentionally publishes the durable runtime record as soon as
-            // send() returns; the A2-2 runner uses that mode so evidence
-            // persistence cannot hold the next native family barrier open.
+            // timeoutMillis is a post-send observation delay.  Keep the socket
+            // alive when the native owner lookup is asynchronous; the runner
+            // captures the durable record after the native family gates.
             if (command.timeoutMillis > 0) {
                 SystemClock.sleep(Math.min(command.timeoutMillis, 3000));
             }
