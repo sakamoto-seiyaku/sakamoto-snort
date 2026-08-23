@@ -132,7 +132,7 @@ class NativeVppStartVerdictTest(unittest.TestCase):
 
     def verdict(self, receipt: dict) -> str:
         status, _ = VERIFIER.verify_vpp_start(
-            receipt, "vpp-hev-owner-resolver", 5)
+            receipt, "vpp-hev-owner-resolver", 5, "a" * 64)
         return status
 
     def test_native_start_success_with_hashed_artifact_is_pass(self) -> None:

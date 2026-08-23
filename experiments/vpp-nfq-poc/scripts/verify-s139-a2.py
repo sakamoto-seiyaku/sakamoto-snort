@@ -160,8 +160,8 @@ def resolver_verdict(text: str, host: str, source_port: int, port: int,
     return INCONCLUSIVE
 
 
-def verify_vpp_start(receipt: Any, expected_mode: str,
-                     expected_vpp_mode: int) -> Tuple[str, str]:
+def verify_vpp_start(receipt: Any, expected_mode: str, expected_vpp_mode: int,
+                     expected_artifact_sha256: str) -> Tuple[str, str]:
     """Validate the native-start instrumentation gate for an A2 VPP cell."""
     if not isinstance(receipt, dict):
         return INVALID, "native-start receipt is not an object"
@@ -198,6 +198,8 @@ def verify_vpp_start(receipt: Any, expected_mode: str,
     digest = receipt.get("artifactSha256")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         errors.append("artifactSha256")
+    elif digest != expected_artifact_sha256:
+        errors.append("artifactSha256-mismatch")
     if isinstance(rc, int) and not isinstance(rc, bool) and rc != 0:
         errors.append("nativeStartRc=" + str(rc))
     if errors:
@@ -237,7 +239,8 @@ def verify_a20(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         invalid.append("unsupported profile: " + str(manifest.get("profile")))
     if manifest.get("cellId") != "A2-0":
         invalid.append("manifest cellId is not A2-0")
-    for field in ("vpnPackage", "allowedPackage", "mode", "vppMode", "host", "port",
+    for field in ("vpnPackage", "allowedPackage", "mode", "vppMode",
+                  "expectedVpnApkSha256", "expectedTunPocPluginSha256", "host", "port",
                   "sourcePort"):
         if field not in manifest:
             invalid.append("manifest field missing: " + field)
@@ -283,7 +286,7 @@ def verify_a20(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                          + " vpn=" + str(packages.get(vpn_package)))
 
     apk_text = read_text(evidence / "apk-provenance.tsv")
-    apk_rows: Dict[str, int] = {}
+    apk_rows: Dict[str, List[str]] = {}
     apk_invalid = []
     if apk_text is None:
         apk_invalid.append("APK provenance is unreadable")
@@ -300,10 +303,16 @@ def verify_a20(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             if not path.startswith("/") or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
                 apk_invalid.append("invalid path/hash for " + package)
             else:
-                apk_rows[package] = apk_rows.get(package, 0) + 1
+                apk_rows.setdefault(package, []).append(digest.lower())
     for package in (vpn_package, *allowed_names):
-        if apk_rows.get(package, 0) == 0:
+        if not apk_rows.get(package):
             apk_invalid.append("no APK path/hash for " + package)
+    expected_vpn_apk = manifest.get("expectedVpnApkSha256")
+    if not isinstance(expected_vpn_apk, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", expected_vpn_apk):
+        apk_invalid.append("expectedVpnApkSha256 is invalid")
+    elif expected_vpn_apk not in apk_rows.get(vpn_package, []):
+        apk_invalid.append("installed VpnLite APK hash differs from local build")
     if apk_invalid:
         invalid.append("APK path/hash provenance invalid")
         append_check(checks, "apk-paths-and-hashes", INVALID, "; ".join(apk_invalid))
@@ -333,6 +342,14 @@ def verify_a20(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         source_errors.append("gitHead")
     if source_props.get("gitDirty") not in ("true", "false"):
         source_errors.append("gitDirty")
+    for key in ("vpnApkSha256", "tunPocPluginSha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", source_props.get(key, "")):
+            source_errors.append(key)
+    if source_props.get("vpnApkSha256") != manifest.get("expectedVpnApkSha256"):
+        source_errors.append("vpnApkSha256-mismatch")
+    if source_props.get("tunPocPluginSha256") != manifest.get(
+            "expectedTunPocPluginSha256"):
+        source_errors.append("tunPocPluginSha256-mismatch")
     if source_errors:
         invalid.append("source provenance invalid")
         append_check(checks, "source-provenance", INVALID, ",".join(source_errors))
@@ -468,7 +485,8 @@ def verify_a20(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                              "manifest vppMode is not an integer")
             else:
                 start_status, start_detail = verify_vpp_start(
-                    vpp_start_receipt, str(manifest.get("mode", "")), expected_vpp_mode)
+                    vpp_start_receipt, str(manifest.get("mode", "")), expected_vpp_mode,
+                    str(manifest.get("expectedTunPocPluginSha256", "")))
                 append_check(checks, "native-vpp-start", start_status, start_detail)
                 if start_status != PASS:
                     invalid.append("native VPP start instrumentation invalid: "

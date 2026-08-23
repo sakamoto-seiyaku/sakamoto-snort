@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$POC_DIR/../.." && pwd)"
 VERIFIER="$SCRIPT_DIR/verify-s139-a2.py"
+LOCAL_VPN_APK="${LOCAL_VPN_APK:-$POC_DIR/android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk}"
 
 VPN_PACKAGE="${VPN_PACKAGE:-com.sakamoto.snort.vpnlite}"
 ALLOWED_PACKAGE="${ALLOWED_PACKAGE:-com.sakamoto.snort.androidruntime}"
@@ -90,6 +91,18 @@ echo "vpn_package=$VPN_PACKAGE allowed_package=$ALLOWED_PACKAGE"
 echo "mode=$MODE tuple=$HOST:$PORT source_port=$SOURCE_PORT"
 echo "external-forwarding=NON-CLAIM; logcat=DIAGNOSTIC-ONLY"
 
+[[ -f "$LOCAL_VPN_APK" ]] || {
+  echo "missing local VpnLite APK: $LOCAL_VPN_APK" >&2
+  exit 2
+}
+local_vpn_apk_sha256="$(sha256sum "$LOCAL_VPN_APK" | awk '{print $1}')"
+expected_tun_plugin_sha256="$(unzip -p "$LOCAL_VPN_APK" \
+  assets/vpp-tun-poc-plugin.sha256 2>/dev/null | tr -d '\r\n')"
+[[ "$expected_tun_plugin_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "local VpnLite APK lacks valid tun plugin provenance" >&2
+  exit 2
+}
+
 packages="$(adb_cmd shell cmd package list packages -U | tr -d '\r')"
 printf '%s\n' "$packages" >"$RESULT_DIR/package-list-packages-U.txt"
 vpn_uid="$(awk -F'uid:' -v pkg="package:$VPN_PACKAGE" \
@@ -122,6 +135,8 @@ device_epoch="$(adb_cmd shell date +%s 2>/dev/null | tr -d '\r\n')"
   echo "deviceEpoch=$device_epoch"
   echo "gitHead=$source_git_head"
   echo "gitDirty=$source_git_dirty"
+  echo "vpnApkSha256=$local_vpn_apk_sha256"
+  echo "tunPocPluginSha256=$expected_tun_plugin_sha256"
   echo "runner=$SCRIPT_DIR/$(basename "$0")"
 } >"$RESULT_DIR/source-provenance.properties"
 capture_apk_provenance
@@ -192,6 +207,8 @@ adb_cmd shell logcat -d -t 500 -s SnortVpnLite:I SnortVpnService:I '*:S' \
   printf '  "vpnPackage":"%s",\n' "$VPN_PACKAGE"
   printf '  "allowedPackage":"%s",\n' "$ALLOWED_PACKAGE"
   printf '  "expectedVpnUid":%s,\n' "$vpn_uid"
+  printf '  "expectedVpnApkSha256":"%s",\n' "$local_vpn_apk_sha256"
+  printf '  "expectedTunPocPluginSha256":"%s",\n' "$expected_tun_plugin_sha256"
   printf '  "expectedAllowedUid":%s,\n' "$allowed_uid"
   printf '  "mode":"%s",\n' "$MODE"
   printf '  "vppMode":5,\n'

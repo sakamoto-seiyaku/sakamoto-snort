@@ -222,6 +222,8 @@ A2-0.
 The native VPP start outcome is an instrumentation gate in front of those six
 joins. For owner-resolver mode, a durable receipt must record `vppMode=5`,
 `rc=0`, and the name and SHA-256 of the extracted `tun_poc_plugin` artifact.
+A2-0 joins that runtime hash to the plugin hash embedded in the locally built
+APK and joins the local APK hash to the installed package snapshot.
 A missing plugin, a nonzero native start result, or a missing/malformed start
 receipt is `INVALID`; it is not a valid run with an inconclusive UID tuple.
 This rule was added after the 2026-08-23 A2-0 fixture established the VPN and
