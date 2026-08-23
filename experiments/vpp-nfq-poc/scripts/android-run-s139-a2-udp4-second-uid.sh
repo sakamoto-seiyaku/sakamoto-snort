@@ -20,6 +20,7 @@ BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-99999}"
 BIND_TO_VPN="${BIND_TO_VPN:-true}"
 ENABLE_IPV6=false
 EXPECTED_ALLOWED_UID="${EXPECTED_ALLOWED_UID:-}"
+EXPECT_OWNER_BLOCK="${EXPECT_OWNER_BLOCK:-false}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-5}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-udp4-second-uid}"
@@ -28,6 +29,7 @@ VPP_CLI_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-cli.log"
 RESOLVER_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-owner-resolver.log"
 HEV_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-hev.log"
 SHIM_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-shim.log"
+PROTECT_PATH="/data/user/0/$VPN_PACKAGE/files/vpp/logs/vpp-protect.log"
 CONTRACT_PATH="/data/user/0/$VPN_PACKAGE/files/logs/uid-attribution-contract.jsonl"
 RUNTIME_PROBE_PATH="/data/user/0/$ALLOWED_PACKAGE/files/debug/udp-traffic-probe.properties"
 
@@ -52,6 +54,7 @@ echo "target=$HOST:$PORT source_port=$SOURCE_PORT"
 echo "wrong_uid_drop_target=$BLOCK_OWNER_UID"
 echo "bind_to_vpn=$BIND_TO_VPN enable_ipv6=$ENABLE_IPV6"
 echo "expected_allowed_uid=$EXPECTED_ALLOWED_UID"
+echo "expect_owner_block=$EXPECT_OWNER_BLOCK"
 echo "correction=single-package allowedPackage; no comma/double-allow change required"
 echo "udp-egress=NON-CLAIM; successful result means datagram sent only"
 
@@ -66,7 +69,7 @@ echo "allowed_uid=$allowed_uid"
 
 adb_cmd shell am force-stop "$VPN_PACKAGE" >/dev/null || true
 adb_cmd shell am force-stop "$ALLOWED_PACKAGE" >/dev/null || true
-adb_su "rm -f '$VPP_CLI_PATH' '$RESOLVER_PATH' '$HEV_PATH' '$SHIM_PATH' '$CONTRACT_PATH' '$RUNTIME_PROBE_PATH'"
+adb_su "rm -f '$VPP_CLI_PATH' '$RESOLVER_PATH' '$HEV_PATH' '$SHIM_PATH' '$PROTECT_PATH' '$CONTRACT_PATH' '$RUNTIME_PROBE_PATH'"
 
 echo
 echo "## start owner resolver with allowedPackage=$ALLOWED_PACKAGE and IPv6 disabled"
@@ -115,6 +118,7 @@ echo
 echo "## HEV / shim"
 capture vpp-hev.log "$HEV_PATH"
 capture vpp-shim.log "$SHIM_PATH"
+capture vpp-protect.log "$PROTECT_PATH"
 echo
 echo "## service log (allowed-package provenance)"
 adb_cmd shell logcat -d -t 400 -s SnortVpnLite:I SnortVpnService:I '*:S' 2>/dev/null \
@@ -173,8 +177,13 @@ check "resolver-last-uid" \
 check "owner-cache-uid" \
   "owner-cache enabled 1 valid 1 .*hits [1-9].*stores [1-9].*uid $EXPECTED_ALLOWED_UID" \
   "$vpp_cli"
-check "wrong-uid-drop-zero" \
-  "uid-block enabled 1 uid $BLOCK_OWNER_UID packets 0" "$vpp_cli"
+if [[ "$EXPECT_OWNER_BLOCK" == true ]]; then
+  check "allowed-uid-drop-observed" \
+    "uid-block enabled 1 uid $BLOCK_OWNER_UID packets [1-9]" "$vpp_cli"
+else
+  check "wrong-uid-drop-zero" \
+    "uid-block enabled 1 uid $BLOCK_OWNER_UID packets 0" "$vpp_cli"
+fi
 check "post-policy-shim-tx" "shim-tx [1-9]" "$vpp_cli"
 check "contract-miss-retained" '"outcome":"MISS_SUBMITTED"' "$contract_log"
 check "contract-completion-retained" '"outcome":"COMPLETION_ACCEPTED"' "$contract_log"
@@ -203,8 +212,16 @@ else
 fi
 
 if (( pass == 1 )); then
-  echo "RESULT PASS_NARROW second-uid-udp4; external-forwarding=NON-CLAIM"
+  if [[ "$EXPECT_OWNER_BLOCK" == true ]]; then
+    echo "RESULT PASS_NARROW second-uid-udp4-owner-drop; external-forwarding=NON-CLAIM"
+  else
+    echo "RESULT PASS_NARROW second-uid-udp4; external-forwarding=NON-CLAIM"
+  fi
 else
-  echo "RESULT INSUFFICIENT second-uid-udp4; external-forwarding=NON-CLAIM"
+  if [[ "$EXPECT_OWNER_BLOCK" == true ]]; then
+    echo "RESULT INSUFFICIENT second-uid-udp4-owner-drop; external-forwarding=NON-CLAIM"
+  else
+    echo "RESULT INSUFFICIENT second-uid-udp4; external-forwarding=NON-CLAIM"
+  fi
 fi
 exit 0
