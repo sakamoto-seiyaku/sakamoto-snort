@@ -20,6 +20,7 @@ PORT="${PORT:-53}"
 SOURCE_PORT="${SOURCE_PORT:-45630}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-5}"
+REPEAT_WAIT="${REPEAT_WAIT:-2}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-0-session-provenance}"
 
 VPP_ROOT="/data/user/0/$VPN_PACKAGE/files/vpp"
@@ -142,6 +143,19 @@ adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" \
 sleep "$START_WAIT"
 
 echo "## trigger one real allowed-package UDP tuple"
+adb_cmd shell am start -n "$TRIGGER_ACTIVITY" \
+  --ez debugUdpTraffic true \
+  --es debugUdpHost "$HOST" \
+  --ei debugUdpPort "$PORT" \
+  --ei debugUdpSourcePort "$SOURCE_PORT" \
+  --ei debugUdpTimeoutMillis 1200 \
+  --ez debugTrafficBindToVpn true
+sleep "$REPEAT_WAIT"
+
+# Owner resolution is asynchronous: the first exact tuple may legitimately
+# produce uid=-1 while the completion is pending.  Reuse the same canonical
+# tuple once so A2-0 can join the accepted UID without claiming a new flow.
+echo "## repeat the same canonical UDP tuple after owner completion"
 adb_cmd shell am start -n "$TRIGGER_ACTIVITY" \
   --ez debugUdpTraffic true \
   --es debugUdpHost "$HOST" \
