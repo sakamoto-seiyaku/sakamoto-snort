@@ -23,6 +23,8 @@ MANIFEST_SCHEMA = "s139-a2-0-manifest/v1"
 PROFILE_A20 = "a2-0"
 MANIFEST_SCHEMA_A21 = "s139-a2-1-manifest/v1"
 PROFILE_A21 = "a2-1"
+MANIFEST_SCHEMA_A22 = "s139-a2-2-manifest/v1"
+PROFILE_A22 = "a2-2"
 PASS = "PASS"
 FAIL = "FAIL"
 INVALID = "INVALID"
@@ -575,8 +577,10 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         if start_status != PASS:
             invalid.append("native VPP start instrumentation is invalid")
 
-    contract_records, contract_json_errors = read_json_lines(
-        evidence / "uid-attribution-contract.jsonl")
+    contract_name = manifest.get("contractFile", "uid-attribution-contract.jsonl")
+    if not isinstance(contract_name, str) or not contract_name:
+        contract_name = "uid-attribution-contract.jsonl"
+    contract_records, contract_json_errors = read_json_lines(evidence / contract_name)
     scope: Optional[List[int]] = None
     scope_errors = list(contract_json_errors)
     for event in contract_records:
@@ -755,6 +759,480 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             "external TCP connect, UDP reply, Internet reachability, or protected Direct Egress",
             "concurrency, cache bounds, lifecycle invalidation, or controlled reverse traffic",
             "B1/B2 whole-device forwarding behavior",
+        ],
+    }
+
+
+def canonical_tuple_key(item: Dict[str, Any]) -> str:
+    """Build the UID-free, direction-independent key used by the POC bridge."""
+    family = str(item.get("family", ""))
+    protocol = str(item.get("protocolName", "")).upper()
+    source = str(item.get("sourceAddress", "")) + ":" + str(item.get("sourcePort", ""))
+    destination = str(item.get("destinationAddress", "")) + ":" + str(
+        item.get("destinationPort", ""))
+    first, second = sorted((source, destination))
+    return family + "/" + protocol + "/" + first + "-" + second
+
+
+def _capacity_from_reason(reason: Any, name: str) -> Optional[int]:
+    match = re.search(r"(?:^|;)\s*" + re.escape(name)
+                      + r"\s*=\s*(\d+)(?:;|$)",
+                      str(reason))
+    return int(match.group(1)) if match else None
+
+
+def _state_value(event: Dict[str, Any], field: str) -> Optional[int]:
+    value = event.get(field)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
+
+
+def _reason_count_with_presence(reason: Any, *names: str) -> Tuple[Optional[int], bool]:
+    """Read an optional integer from a semicolon-delimited contract reason.
+
+    The second return value distinguishes an omitted field from a malformed
+    field.  That distinction matters for the optional cleanup flow-id count:
+    when the producer emits the field, a malformed value must invalidate the
+    evidence rather than silently being treated as absent.
+    """
+    text = str(reason)
+    for name in names:
+        match = re.search(r"(?:^|;)\s*" + re.escape(name)
+                          + r"\s*=\s*([^;]*)(?:;|$)", text)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if not re.fullmatch(r"\d+", value):
+            return None, True
+        return int(value), True
+    return None, False
+
+
+def _optional_state_value(event: Dict[str, Any], *fields: str) -> Tuple[Optional[int], bool]:
+    """Read an optional non-negative integer state field, including aliases."""
+    for field in fields:
+        if field in event:
+            return _state_value(event, field), True
+    return None, False
+
+
+def _contract_events(path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
+    records, errors = read_json_lines(path)
+    for index, event in enumerate(records, 1):
+        if event.get("schema") != "uid-attribution-contract/v1":
+            errors.append("line " + str(index) + ": schema is not uid-attribution-contract/v1")
+        for field in ("outcome", "key", "uid", "pending", "cache"):
+            if field not in event:
+                errors.append("line " + str(index) + ": missing " + field)
+        if "outcome" in event and not isinstance(event.get("outcome"), str):
+            errors.append("line " + str(index) + ": invalid outcome")
+        if "key" in event and not isinstance(event.get("key"), str):
+            errors.append("line " + str(index) + ": invalid key")
+        if ("uid" in event and (not isinstance(event.get("uid"), int)
+                                 or isinstance(event.get("uid"), bool))):
+            errors.append("line " + str(index) + ": invalid uid")
+        for field in ("pending", "cache"):
+            if field in event and _state_value(event, field) is None:
+                errors.append("line " + str(index) + ": invalid " + field)
+    return records, errors
+
+
+def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
+    """Verify the POC-only async cache/concurrency/bounds cell.
+
+    A2-1 owns the common package/APK/VPN/runtime/resolver joins.  This profile
+    adapts that stable verifier to the new manifest and adds the contract
+    ledger, high-water, overlap, and post-cleanup settlement assertions.
+    """
+    # A2-2 retains the A2-1 provenance gate, but its manifest owns one extra
+    # durable artifact: a post-cleanup contract JSONL.  Validate the names and
+    # required-file declaration before delegating so a manifest cannot omit the
+    # final contract and still pass the A2-1 common gate.
+    manifest_errors: List[str] = []
+    contract_name = manifest.get("contractFile", "uid-attribution-contract.jsonl")
+    if not isinstance(contract_name, str) or not contract_name:
+        manifest_errors.append("contractFile is invalid")
+        contract_name = "uid-attribution-contract.jsonl"
+
+    final_name: Any = manifest.get("contractFinalFile")
+    legacy_final_name = manifest.get("finalContractFile")
+    if final_name is not None and legacy_final_name is not None \
+            and final_name != legacy_final_name:
+        manifest_errors.append("contractFinalFile and finalContractFile disagree")
+    if final_name is None:
+        final_name = legacy_final_name
+    if final_name is None:
+        manifest_errors.append("manifest field missing: contractFinalFile")
+        final_name = "uid-attribution-contract-final.jsonl"
+    elif not isinstance(final_name, str) or not final_name:
+        manifest_errors.append("contractFinalFile is invalid")
+        final_name = "uid-attribution-contract-final.jsonl"
+
+    required = manifest.get("requiredFiles")
+    required_errors: List[str] = []
+    if not isinstance(required, list) or not all(isinstance(name, str) and name
+                                                   for name in required):
+        required_errors.append("requiredFiles is not a non-empty string array")
+        required = []
+    else:
+        required_set = set(required)
+        for name in (contract_name, final_name):
+            if name not in required_set:
+                required_errors.append("requiredFiles omits " + name)
+        missing = [name for name in required if not (evidence / name).is_file()]
+        if missing:
+            required_errors.append("required raw evidence missing: " + ",".join(missing))
+
+    base_manifest = dict(manifest)
+    base_manifest.update({
+        "schema": MANIFEST_SCHEMA_A21,
+        "profile": PROFILE_A21,
+        "cellId": "A2-1",
+        "contractFile": contract_name,
+    })
+    base_result = verify_a21(base_manifest, evidence)
+    checks: List[Dict[str, str]] = list(base_result.get("checks", []))
+    invalid: List[str] = manifest_errors + required_errors
+    failures: List[str] = []
+    inconclusive: List[str] = []
+    base_status = base_result.get("status")
+    if base_status == INVALID:
+        invalid.append("A2-1 provenance/runtime/cleanup gate: "
+                       + str(base_result.get("reason", "invalid")))
+    elif base_status == FAIL:
+        failures.append("A2-1 common join: " + str(base_result.get("reason", "failure")))
+    elif base_status == INCONCLUSIVE:
+        inconclusive.append("A2-1 common tuple join: "
+                           + str(base_result.get("reason", "inconclusive")))
+
+    if manifest.get("schema") != MANIFEST_SCHEMA_A22:
+        invalid.append("manifest schema is not " + MANIFEST_SCHEMA_A22)
+    if manifest.get("profile") != PROFILE_A22:
+        invalid.append("manifest profile is not a2-2")
+    if manifest.get("cellId") != "A2-2":
+        invalid.append("manifest cellId is not A2-2")
+    if "blockOwnerUid" in manifest and manifest.get("blockOwnerUid") != 99999:
+        invalid.append("blockOwnerUid must be the 99999 sentinel")
+    append_check(checks, "a2-2-manifest", INVALID if invalid else PASS,
+                 "; ".join(invalid) if invalid else
+                 "A2-2 profile and optional 99999 owner sentinel are registered")
+    append_check(checks, "a2-2-required-raw",
+                 INVALID if required_errors else PASS,
+                 "; ".join(required_errors) if required_errors else
+                 "required pre- and post-cleanup contract files are declared and present")
+
+    tuples = manifest.get("tuples")
+    tuple_by_key: Dict[str, Dict[str, Any]] = {}
+    tuple_errors: List[str] = []
+    if not isinstance(tuples, list) or len(tuples) != 8:
+        tuple_errors.append("A2-2 must register exactly eight tuples")
+        tuples = []
+    allowed = manifest.get("allowedPackages")
+    uid_map = manifest.get("expectedAllowedUids")
+    if not isinstance(allowed, list):
+        allowed = []
+    if not isinstance(uid_map, dict):
+        uid_map = {}
+    for item in tuples:
+        if not isinstance(item, dict):
+            tuple_errors.append("tuple entry is not an object")
+            continue
+        key = canonical_tuple_key(item)
+        if key in tuple_by_key:
+            tuple_errors.append("duplicate registered canonical key=" + key)
+        tuple_by_key[key] = item
+        if item.get("package") not in allowed:
+            tuple_errors.append("tuple package is outside the two-App allow-list")
+        if item.get("repeat") != 2:
+            tuple_errors.append("tuple " + str(item.get("stageId"))
+                                + " must request repeat=2")
+    if tuple_errors:
+        invalid.append("registered A2-2 tuple matrix is invalid")
+        append_check(checks, "a2-2-registered-tuples", INVALID,
+                     "; ".join(sorted(set(tuple_errors))))
+    else:
+        append_check(checks, "a2-2-registered-tuples", PASS,
+                     "eight unique AppA/AppB canonical keys with repeat=2")
+
+    contract_path = evidence / contract_name
+    contract_records, contract_errors = _contract_events(contract_path)
+    if not contract_records:
+        contract_errors.append("contract has no records")
+    if contract_errors:
+        invalid.append("contract JSONL is malformed")
+        append_check(checks, "a2-2-contract-schema", INVALID,
+                     "; ".join(contract_errors))
+    else:
+        append_check(checks, "a2-2-contract-schema", PASS,
+                     str(len(contract_records)) + " contract records parsed")
+
+    capacities: Dict[str, int] = {}
+    starts = [event for event in contract_records
+              if event.get("outcome") == "CONTRACT_START"]
+    if len(starts) != 1:
+        invalid.append("contract must contain exactly one CONTRACT_START")
+        append_check(checks, "a2-2-declared-capacity", INVALID,
+                     "CONTRACT_START count=" + str(len(starts)))
+    else:
+        start = starts[0]
+        pending_capacity = _capacity_from_reason(start.get("reason"), "pending-capacity")
+        cache_capacity = _capacity_from_reason(start.get("reason"), "cache-capacity")
+        if pending_capacity is None or cache_capacity is None \
+                or pending_capacity <= 0 or cache_capacity <= 0:
+            invalid.append("CONTRACT_START capacity declaration is malformed")
+            append_check(checks, "a2-2-declared-capacity", INVALID,
+                         "reason=" + str(start.get("reason", "")))
+        else:
+            capacities = {"pending": pending_capacity, "cache": cache_capacity}
+            append_check(checks, "a2-2-declared-capacity", PASS,
+                         "pending-capacity=" + str(pending_capacity)
+                         + ";cache-capacity=" + str(cache_capacity))
+
+    max_pending = max((_state_value(event, "pending") or 0)
+                      for event in contract_records) if contract_records else 0
+    max_cache = max((_state_value(event, "cache") or 0)
+                    for event in contract_records) if contract_records else 0
+    capacity_violations: List[str] = []
+    if capacities:
+        if max_pending > capacities["pending"]:
+            capacity_violations.append("pending high-water=" + str(max_pending)
+                                       + ">" + str(capacities["pending"]))
+        if max_cache > capacities["cache"]:
+            capacity_violations.append("cache high-water=" + str(max_cache)
+                                       + ">" + str(capacities["cache"]))
+    if capacity_violations:
+        failures.append("declared bounded state capacity violated")
+        append_check(checks, "a2-2-bounded-high-water", FAIL,
+                     "; ".join(capacity_violations))
+    elif capacities:
+        append_check(checks, "a2-2-bounded-high-water", PASS,
+                     "max-pending=" + str(max_pending) + "/" + str(capacities["pending"])
+                     + ";max-cache=" + str(max_cache) + "/" + str(capacities["cache"]))
+    else:
+        append_check(checks, "a2-2-bounded-high-water", INVALID,
+                     "capacity declaration unavailable")
+
+    events_by_key: Dict[str, List[Dict[str, Any]]] = {}
+    for event in contract_records:
+        key = event.get("key")
+        if isinstance(key, str) and key in tuple_by_key:
+            events_by_key.setdefault(key, []).append(event)
+
+    sequence_missing: List[str] = []
+    sequence_passed = 0
+    wrong_uid_events: List[str] = []
+    sequence_errors: List[str] = []
+    for key, item in tuple_by_key.items():
+        package = item.get("package")
+        expected_uid = uid_map.get(package)
+        events = events_by_key.get(key, [])
+        for event in events:
+            outcome = event.get("outcome")
+            uid = event.get("uid")
+            if outcome in ("COMPLETION_ACCEPTED", "CACHE_HIT"):
+                if (not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0
+                        or not isinstance(expected_uid, int)
+                        or isinstance(expected_uid, bool) or uid != expected_uid):
+                    wrong_uid_events.append(key + " " + str(outcome)
+                                            + " uid=" + str(uid)
+                                            + " expected=" + str(expected_uid))
+                event_package = event.get("app_package", event.get(
+                    "appPackage", event.get("package")))
+                if event_package is not None and event_package != package:
+                    wrong_uid_events.append(key + " " + str(outcome)
+                                            + " app_package differs from registered App")
+            elif outcome in ("COMPLETION_WRONG_UID", "COMPLETION_WRONG_OWNER"):
+                if isinstance(uid, int) and not isinstance(uid, bool) and uid >= 0:
+                    wrong_uid_events.append(key + " " + str(outcome)
+                                            + " uid=" + str(uid))
+
+        miss_index = next((index for index, event in enumerate(events)
+                           if event.get("outcome") == "MISS_SUBMITTED"), None)
+        completion_index = next((index for index, event in enumerate(events)
+                                 if index > (miss_index if miss_index is not None else -1)
+                                 and event.get("outcome") == "COMPLETION_ACCEPTED"), None)
+        hit_index = next((index for index, event in enumerate(events)
+                          if index > (completion_index if completion_index is not None else -1)
+                          and event.get("outcome") == "CACHE_HIT"), None)
+        if miss_index is None or completion_index is None or hit_index is None:
+            sequence_missing.append(key)
+        else:
+            miss = events[miss_index]
+            completion = events[completion_index]
+            hit = events[hit_index]
+            if miss.get("token") != completion.get("token") \
+                    or miss.get("flow_id") != completion.get("flow_id") \
+                    or completion.get("token") != hit.get("token") \
+                    or completion.get("flow_id") != hit.get("flow_id"):
+                sequence_errors.append(key + " token/flow identity is not stable")
+            else:
+                sequence_passed += 1
+
+    if wrong_uid_events:
+        failures.append("wrong App UID or cross-App cache hit observed")
+        append_check(checks, "a2-2-uid-and-cache-isolation", FAIL,
+                     "; ".join(wrong_uid_events))
+    elif sequence_passed == len(tuple_by_key) and tuple_by_key:
+        append_check(checks, "a2-2-uid-and-cache-isolation", PASS,
+                     "completion and cache-hit UIDs match each registered App")
+    else:
+        append_check(checks, "a2-2-uid-and-cache-isolation", INCONCLUSIVE,
+                     "registered keys lacking a decisive miss/completion/hit sequence="
+                     + str(len(sequence_missing)))
+        inconclusive.append("one or more registered keys lack MISS_SUBMITTED -> "
+                           "COMPLETION_ACCEPTED -> CACHE_HIT")
+    if sequence_errors:
+        invalid.append("contract token/flow identity is malformed")
+        append_check(checks, "a2-2-sequence-identity", INVALID,
+                     "; ".join(sequence_errors))
+    elif sequence_passed:
+        append_check(checks, "a2-2-sequence-identity", PASS,
+                     str(sequence_passed) + " registered key sequences retain token/flow identity")
+
+    # A2-2's decisive concurrency claim is deliberately tied to the native
+    # pending ledger.  Monotonic timestamps alone do not prove that two
+    # lookups were live concurrently, so a valid run with max pending < 2 is
+    # INCONCLUSIVE rather than PASS.
+    overlap = max_pending >= 2
+    if overlap:
+        append_check(checks, "a2-2-concurrency", PASS,
+                     "pending high-water proves at least two distinct lookups were live")
+    else:
+        inconclusive.append("no pending>=2 concurrency overlap observed")
+        append_check(checks, "a2-2-concurrency", INCONCLUSIVE,
+                     "at least two distinct lookups were not proven live concurrently")
+
+    final_path = evidence / final_name
+    final_records, final_errors = _contract_events(final_path)
+    if not final_records:
+        final_errors.append("post-cleanup contract has no records")
+    final_pending: Optional[int] = None
+    final_cache: Optional[int] = None
+    final_flow_ids: Optional[int] = None
+    final_max_flow_ids: Optional[int] = None
+    final_max_pending: Optional[int] = None
+    final_max_cache: Optional[int] = None
+    if final_records:
+        final_event = final_records[-1]
+        final_pending = _state_value(final_event, "pending")
+        final_cache = _state_value(final_event, "cache")
+        final_flow_ids, flow_ids_field_present = _optional_state_value(
+            final_event, "flow_ids", "flowIds")
+        if flow_ids_field_present and final_flow_ids is None:
+            final_errors.append("final flow-ids field is invalid")
+        if not flow_ids_field_present:
+            final_flow_ids, flow_ids_reason_present = _reason_count_with_presence(
+                final_event.get("reason"), "flow-ids", "flowIds")
+            if flow_ids_reason_present and final_flow_ids is None:
+                final_errors.append("final flow-ids reason value is invalid")
+        final_max_flow_ids, max_flow_ids_present = _reason_count_with_presence(
+            final_event.get("reason"), "max-flow-ids", "maxFlowIds")
+        if max_flow_ids_present and final_max_flow_ids is None:
+            final_errors.append("final max-flow-ids reason value is invalid")
+        final_max_pending, max_pending_present = _reason_count_with_presence(
+            final_event.get("reason"), "max-pending", "maxPending")
+        if max_pending_present and final_max_pending is None:
+            final_errors.append("final max-pending reason value is invalid")
+        final_max_cache, max_cache_present = _reason_count_with_presence(
+            final_event.get("reason"), "max-cache", "maxCache")
+        if max_cache_present and final_max_cache is None:
+            final_errors.append("final max-cache reason value is invalid")
+        if final_max_pending is not None:
+            max_pending = max(max_pending, final_max_pending)
+        if final_max_cache is not None:
+            max_cache = max(max_cache, final_max_cache)
+        if capacities and final_max_pending is not None \
+                and final_max_pending > capacities["pending"]:
+            capacity_violations.append("pending high-water=" + str(final_max_pending)
+                                       + ">" + str(capacities["pending"]))
+        if capacities and final_max_cache is not None \
+                and final_max_cache > capacities["cache"]:
+            capacity_violations.append("cache high-water=" + str(final_max_cache)
+                                       + ">" + str(capacities["cache"]))
+        if final_event.get("outcome") != "CLEANUP":
+            final_errors.append("last post-cleanup contract event is not CLEANUP")
+        if final_pending != 0 or final_cache != 0:
+            final_errors.append("final pending/cache are not zero")
+        if final_flow_ids is not None and final_flow_ids != 0:
+            final_errors.append("final flow-ids are not zero")
+    if final_errors:
+        invalid.append("post-cleanup final contract is invalid")
+        append_check(checks, "a2-2-final-contract-settle", INVALID,
+                     "; ".join(final_errors))
+    else:
+        append_check(checks, "a2-2-final-contract-settle", PASS,
+                     "post-cleanup final contract has pending=0/cache=0"
+                     + ("/flow-ids=0" if final_flow_ids is not None else ""))
+
+    if capacity_violations:
+        if "declared bounded state capacity violated" not in failures:
+            failures.append("declared bounded state capacity violated")
+        for check in checks:
+            if check.get("name") == "a2-2-bounded-high-water":
+                check["status"] = FAIL
+                check["detail"] = "; ".join(capacity_violations)
+                break
+
+    bounded_summary = {
+        "declaredPendingCapacity": capacities.get("pending"),
+        "declaredCacheCapacity": capacities.get("cache"),
+        "maxPendingObserved": max_pending,
+        "maxCacheObserved": max_cache,
+        "finalPending": final_pending,
+        "finalCache": final_cache,
+        "finalFlowIds": final_flow_ids,
+        "maxFlowIds": final_max_flow_ids,
+        "finalMaxPending": final_max_pending,
+        "finalMaxCache": final_max_cache,
+    }
+    status = PASS
+    reasons: List[str] = []
+    if invalid:
+        status = INVALID
+        reasons.extend(invalid)
+    elif failures:
+        status = FAIL
+        reasons.extend(failures)
+    elif inconclusive:
+        status = INCONCLUSIVE
+        reasons.extend(inconclusive)
+    else:
+        reasons.append("all eight concurrent A2-2 keys completed miss/completion/cache-hit within bounds")
+
+    return {
+        "schema": VERIFIER_SCHEMA,
+        "profile": PROFILE_A22,
+        "cellId": "A2-2",
+        "status": status,
+        "reason": "; ".join(reasons),
+        "checks": checks,
+        "summary": {
+            "registeredTuples": len(tuple_by_key),
+            "passedSequences": sequence_passed,
+            "concurrent": overlap,
+            "boundedState": bounded_summary,
+        },
+        "rawEvidence": {
+            "evidenceDirectory": str(evidence),
+            "retained": True,
+            "files": sorted(path.name for path in evidence.iterdir() if path.is_file())
+                     if evidence.is_dir() else [],
+            "contractFile": contract_name,
+            "contractFinalFile": final_name,
+            "finalContractFile": final_name,
+            "logcatDiagnosticOnly": True,
+            "logcatCaptured": (evidence / "logcat-diagnostic.log").is_file(),
+        },
+        "claims": [
+            "two deterministic App UIDs preserve asynchronous miss/completion/cache-hit sequences",
+            "observed pending/cache state stays within the declared bounded capacities and settles",
+            "the launch window produces evidence of concurrent distinct canonical keys",
+        ],
+        "nonClaims": [
+            "production cache sizing or load capacity",
+            "external TCP connect, UDP reply, Internet reachability, or protected Direct Egress",
+            "controlled reverse traffic, lifecycle invalidation, or B1/B2 whole-device behavior",
         ],
     }
 
@@ -1239,6 +1717,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 result = verify_a20(manifest, args.evidence_dir)
             elif profile == PROFILE_A21:
                 result = verify_a21(manifest, args.evidence_dir)
+            elif profile == PROFILE_A22:
+                result = verify_a22(manifest, args.evidence_dir)
             else:
                 result = invalid_result("unsupported profile: " + str(profile), args.evidence_dir)
         except (TypeError, ValueError, json.JSONDecodeError) as error:
