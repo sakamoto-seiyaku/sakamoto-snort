@@ -255,6 +255,15 @@ configurable 250 ms stagger. The stagger only protects intent delivery; the
 1200 ms socket retention remains, so both family lookups can still overlap in
 the native pending ledger.
 
+The `fixed-9` run then completed the functional A2-2 evidence, but the verdict
+was `INVALID` solely because the launch-window start marker
+(`1787481955315537700`) exceeded its end marker
+(`1787481935977718300`). The runner had obtained those values from wall-clock
+`date +%s%N`; a host clock rollback made the monotonic-named fields reverse.
+The fixture now obtains both markers from Python `time.monotonic_ns()` and
+records the clock source in `launch-window.json`. This is evidence plumbing,
+not a data-plane, UID, or FlowOwner failure.
+
 ## Claim boundary and next cells
 
 A2-0 and A2-1 now prove durable session provenance plus the complete

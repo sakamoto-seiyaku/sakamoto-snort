@@ -477,7 +477,12 @@ sleep "$START_WAIT"
 
 launch_pids=()
 launch_stages=()
-launch_window_start_ns="$(date +%s%N)"
+
+monotonic_ns() {
+  python3 -c 'import time; print(time.monotonic_ns())'
+}
+
+launch_window_start_ns="$(monotonic_ns)"
 
 launch_tuple() {
   local package_name="$1"
@@ -630,7 +635,7 @@ if [[ "$first_wave_gate_observed" == true ]]; then
     echo "second-wave-cache-hit-gate=timeout attempts=$second_wave_poll_attempts" >&2
   fi
 fi
-launch_window_end_ns="$(date +%s%N)"
+launch_window_end_ns="$(monotonic_ns)"
 launch_count=$((first_wave_launch_count + second_wave_launch_count))
 echo "launch_count=$launch_count launch_failures=$launch_failures"
 
@@ -657,6 +662,7 @@ with open(output, "w", encoding="utf-8") as stream:
         "repeatPerLaunch": 1,
         "firstWaveCompletionGateObserved": gate == "true",
         "launchFailures": integer(failures),
+        "monotonicClock": "python.time.monotonic_ns",
         "windowStartMonotonicNs": integer(start_ns),
         "windowEndMonotonicNs": integer(end_ns),
     }, stream, indent=2, sort_keys=True)

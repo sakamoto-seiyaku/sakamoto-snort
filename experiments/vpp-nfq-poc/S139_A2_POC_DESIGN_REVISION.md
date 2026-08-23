@@ -286,6 +286,9 @@ Wave evidence uses `s139-a2-2-two-wave/v2` with separate `nativeGates` and
 diagnostic final `runtimeGates`. A missing native gate or same-identity runtime
 sequence is `INCONCLUSIVE`, not an architecture interruption, and the raw
 contract/runtime evidence is retained.
+The launch-window bounds use Python's process-monotonic
+`time.monotonic_ns()`, never wall-clock `date +%s%N`, so host clock rollback
+cannot invalidate an otherwise complete run.
 
 The A2-2 verifier therefore requires exactly four registered tuples and exact
 App × IP-family coverage. It groups sequence events by stable `(token,
