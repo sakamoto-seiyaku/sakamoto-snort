@@ -24,6 +24,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CyclicBarrier;
@@ -385,6 +387,42 @@ public final class SnortVpnService extends VpnService {
         return "udp4";
     }
 
+    private static ArrayList<String> normalizePackages(String packageCsv) {
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        if (packageCsv != null) {
+            for (String raw : packageCsv.split(",")) {
+                String normalized = raw.trim();
+                if (!normalized.isEmpty()) {
+                    unique.add(normalized);
+                }
+            }
+        }
+        ArrayList<String> result = new ArrayList<>(unique);
+        Collections.sort(result);
+        return result;
+    }
+
+    private ArrayList<Integer> resolvePackageUids(List<String> packages) throws Exception {
+        ArrayList<Integer> result = new ArrayList<>();
+        for (String packageName : packages) {
+            int uid = getPackageManager().getApplicationInfo(packageName, 0).uid;
+            if (!result.contains(uid)) {
+                result.add(uid);
+            }
+        }
+        Collections.sort(result);
+        return result;
+    }
+
+    private static String joinPackages(List<String> packages) {
+        StringBuilder result = new StringBuilder();
+        for (int index = 0; index < packages.size(); index++) {
+            if (index > 0) result.append(',');
+            result.append(packages.get(index));
+        }
+        return result.toString();
+    }
+
     private synchronized void startVpn(String mode, String allowedPackage,
                                        String disallowedPackage, String blockIp4Dst,
                                        String blockIp6Dst, int blockOwnerUid,
@@ -403,6 +441,14 @@ public final class SnortVpnService extends VpnService {
             return;
         }
 
+        final long provenanceStartNs = System.nanoTime();
+        if (!VpnSessionProvenance.clear(getFilesDir())) {
+            Log.e(TAG, "VPN session provenance cleanup failed; refusing new session");
+            VpnSessionProvenance.writeFailure(getFilesDir(), mode, false, false, false,
+                    "stale-provenance-clear-failed", provenanceStartNs,
+                    getPackageName(), Process.myUid(), Process.myPid());
+            return;
+        }
         uidAttribution().startRuntime("mode=" + mode);
 
         try {
@@ -416,9 +462,19 @@ public final class SnortVpnService extends VpnService {
             boolean controlledOi5 = isControlledOi5Mode(mode);
             boolean controlledRoute = controlledOi3 || controlledOi5;
             boolean controlledOi3Ipv6 = isControlledOi3Ipv6Mode(mode);
+            final int mtu = 1500;
+            ArrayList<String> normalizedAllowedPackages = normalizePackages(allowedPackage);
+            ArrayList<Integer> resolvedAllowedUids = resolvePackageUids(
+                    normalizedAllowedPackages);
+            ArrayList<String> ipv4Addresses = new ArrayList<>();
+            ArrayList<String> ipv4Routes = new ArrayList<>();
+            ArrayList<String> ipv6Addresses = new ArrayList<>();
+            ArrayList<String> ipv6Routes = new ArrayList<>();
+            String ipv4Address = (controlledRoute ? "10.200.0.2" : VPN_ADDRESS) + "/32";
+            ipv4Addresses.add(ipv4Address);
             Builder builder = new Builder()
                     .setSession("Snort VPN Lite")
-                    .setMtu(1500)
+                    .setMtu(mtu)
                     .addAddress(controlledRoute ? "10.200.0.2" : VPN_ADDRESS, 32);
             if (controlledRoute) {
                 // Safety boundary: only one narrow test prefix is routed; no
@@ -426,29 +482,39 @@ public final class SnortVpnService extends VpnService {
                 if (controlledOi3Ipv6) {
                     builder.addAddress("fd00:200::2", 128)
                             .addRoute("fd00:200::", 64);
+                    ipv6Addresses.add("fd00:200::2/128");
+                    ipv6Routes.add("fd00:200::/64");
                     Log.i(TAG, "OI3 controlled VPN route=fd00:200::/64 "
                             + "default-routes=none");
                 } else {
                     builder.addRoute("10.200.0.0", 24);
+                    ipv4Routes.add("10.200.0.0/24");
                     Log.i(TAG, "OI3 controlled VPN route=10.200.0.0/24 "
                             + "default-routes=none");
                 }
             } else {
                 builder.addRoute("0.0.0.0", 0);
+                ipv4Routes.add("0.0.0.0/0");
             }
             if (enableIpv6 && !controlledOi3) {
                 builder.addAddress(VPN_ADDRESS_V6, 128)
                         .addRoute("::", 0);
+                ipv6Addresses.add(VPN_ADDRESS_V6 + "/128");
+                ipv6Routes.add("::/0");
                 Log.i(TAG, "VPN IPv6 enabled address=" + VPN_ADDRESS_V6);
             }
-            if (allowedPackage != null && !allowedPackage.isEmpty()) {
+            boolean addAllowedApplicationSuccess = true;
+            if (!normalizedAllowedPackages.isEmpty()) {
                 Log.i(TAG, "VPN allowed packages raw=" + allowedPackage);
-                for (String packageName : allowedPackage.split(",")) {
-                    String normalizedPackage = packageName.trim();
-                    if (normalizedPackage.isEmpty()) {
-                        continue;
+                for (String normalizedPackage : normalizedAllowedPackages) {
+                    try {
+                        builder.addAllowedApplication(normalizedPackage);
+                    } catch (Exception error) {
+                        addAllowedApplicationSuccess = false;
+                        Log.e(TAG, "VPN addAllowedApplication failed package="
+                                + normalizedPackage, error);
+                        break;
                     }
-                    builder.addAllowedApplication(normalizedPackage);
                     Log.i(TAG, "VPN allowed package=" + normalizedPackage);
                 }
             }
@@ -456,16 +522,50 @@ public final class SnortVpnService extends VpnService {
                 builder.addDisallowedApplication(disallowedPackage);
                 Log.i(TAG, "VPN disallowed package=" + disallowedPackage);
             }
-            uidAttribution().setAllowedPackages(allowedPackage);
+            if (!addAllowedApplicationSuccess) {
+                VpnSessionProvenance.writeFailure(getFilesDir(), mode, true, false, false,
+                        "addAllowedApplication-failed", provenanceStartNs,
+                        getPackageName(), Process.myUid(), Process.myPid());
+                return;
+            }
+            uidAttribution().setAllowedPackages(joinPackages(normalizedAllowedPackages));
 
             vpnFd = builder.establish();
             if (vpnFd == null) {
                 Log.e(TAG, "VpnService establish returned null");
+                VpnSessionProvenance.writeFailure(getFilesDir(), mode, true, true, false,
+                        "establish-returned-null", provenanceStartNs,
+                        getPackageName(), Process.myUid(), Process.myPid());
                 return;
             }
 
             int rawFd = vpnFd.detachFd();
             vpnFd = null;
+            long provenanceEstablishedNs = System.nanoTime();
+            final String disallowedPackageValue = disallowedPackage == null
+                    ? "" : disallowedPackage.trim();
+            String configDigest = VpnSessionProvenance.configDigest(mode, mtu,
+                    normalizedAllowedPackages, disallowedPackageValue, ipv4Addresses,
+                    ipv4Routes, ipv6Addresses, ipv6Routes);
+            boolean receiptWritten = VpnSessionProvenance.writeSuccess(getFilesDir(), mode,
+                    normalizedAllowedPackages, resolvedAllowedUids, ipv4Addresses, ipv4Routes,
+                    ipv6Addresses, ipv6Routes, disallowedPackageValue, configDigest,
+                    provenanceStartNs,
+                    provenanceEstablishedNs, getPackageName(), Process.myUid(),
+                    Process.myPid(), mtu);
+            if (!receiptWritten) {
+                Log.e(TAG, "VPN session provenance receipt could not be published");
+                VpnSessionProvenance.writeFailure(getFilesDir(), mode, true, true, true,
+                        "receipt-publish-failed", provenanceStartNs,
+                        getPackageName(), Process.myUid(), Process.myPid());
+                try {
+                    ParcelFileDescriptor.adoptFd(rawFd).close();
+                } catch (Exception closeError) {
+                    Log.w(TAG, "close detached VPN fd after receipt failure failed", closeError);
+                }
+                stopVpn();
+                return;
+            }
             if (MODE_VPP.equals(mode) || MODE_VPP_FORWARD.equals(mode)
                     || MODE_VPP_HEV.equals(mode) || MODE_VPP_HEV_HANDOFF.equals(mode)
                     || MODE_VPP_HEV_DIRECT_OWNER.equals(mode)
