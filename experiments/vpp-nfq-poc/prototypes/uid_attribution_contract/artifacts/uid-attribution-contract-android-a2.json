@@ -1,0 +1,431 @@
+{
+  "schema": "uid-attribution-contract-evidence/v1",
+  "artifact_note": "SAKAMOTO-139 A2 Pixel evidence ledger. It follows the A1 contract artifact shape but records real Android/VpnService/TUN/VPP observations, fixture failures, and evidence-integrity caveats. It does not claim external forwarding.",
+  "prototype_name": "uid-attribution-contract-android-a2",
+  "campaign": "SAKAMOTO-139",
+  "phase": "A2",
+  "question": "Can a bounded asynchronous UID fact provider attribute real Android IPv4/IPv6 TCP/UDP tuples for controlled App UIDs without blocking FlowOwner, mutating the canonical key, cross-App cache contamination, or doing Android broker/socket/transport work for a dropped UID?",
+  "working_assumption": "FlowOwner remains selected from the direction-independent canonical tuple. UID is an asynchronous, scoped policy fact; owner turns remain nonblocking and UID never enters the canonical FlowOwner key.",
+  "provenance": {
+    "generated_at": "2026-08-23 Asia/Taipei",
+    "git_head_at_documentation": "4f01c62f416859dcb904e8452aeb32f381766f6c",
+    "device": {
+      "serial": "28201JEGR0XPAJ",
+      "model": "Pixel 6a",
+      "android_api": 36,
+      "selinux": "Enforcing",
+      "adb": "repo ./dev/adb; escalated device calls where required",
+      "underlying_network": "Wi-Fi network 113, SSID Openwrt_5G, local IPv4 192.168.4.151",
+      "vpn_network": "tun0 local 10.111.0.2/32; IPv6-enabled run also exposed fd00:111:111::2/128",
+      "package_uids": {
+        "com.android.chrome": 10180,
+        "com.google.android.apps.maps": 10176,
+        "com.sakamoto.snort.vpnlite": 12628,
+        "com.sakamoto.snort.androidruntime": 12620
+      }
+    },
+    "stage": "experiments/vpp-nfq-poc/work/android-nfqb-stage/",
+    "loaded_plugin": "tun_poc_plugin.so (VPP show plugins raw evidence)",
+    "raw_result_dirs": [
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-ula-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-gateway-reverse-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/",
+      "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-live-replay-final2/",
+      "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid/",
+      "experiments/vpp-nfq-poc/results/s139-a2-tcp4-diag-repro-delay6/",
+      "experiments/vpp-nfq-poc/results/s139-a2-tcp4-diag-repro-delay12/",
+      "experiments/vpp-nfq-poc/results/s139-a2-tcp4-dual-allow-delay12/",
+      "experiments/vpp-nfq-poc/results/s139-a2-runtime-service-diag-dual-delay12/",
+      "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/",
+      "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/",
+      "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-tun0-boundary-no-tcpdump/",
+      "experiments/vpp-nfq-poc/results/s139-a2-proc-tcp-testnet-45623/",
+      "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-tcp.log",
+      "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-udp-drop.log",
+      "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-udp-allow.log",
+      "experiments/vpp-nfq-poc/results/android-vpp-owner-resolver-udp-poc.log",
+      "experiments/vpp-nfq-poc/results/android-vpn-owner-gate-udp-inet4-poc.log"
+    ],
+    "raw_reuse_note": "android-vpp-owner-resolver-udp-poc.log was reused by a later IPv6 UDP run. The earlier handoff recorded a narrow UID 12628 IPv4 UDP observation at 198.51.100.58:5354, but that IPv4 raw bytes are no longer preserved at this path; the artifact marks this provenance caveat instead of treating the path as immutable.",
+    "commands": [
+      "./dev/adb shell am start -n com.sakamoto.snort.vpnlite/.MainActivity --ez start true --es mode vpp-hev-owner-resolver --es allowedPackage com.android.chrome --ei blockOwnerUid 99999 --ez ownerCache true",
+      "./dev/adb shell am start -a android.intent.action.VIEW -d http://1.1.1.1:80/",
+      "experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "TARGET_URL='http://[2606:4700:4700::1111]:80/' RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80 experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "TARGET_URL='http://[2606:4700:4700::1111]:80/' RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "TARGET_URL='http://[fd76:d462:c4e3::1]:80/' RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-ula-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "TARGET_URL='https://[2606:4700:4700::1111]/' RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "TARGET_URL='http://192.168.4.1:80/' RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-gateway-reverse-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "TARGET_URL='http://1.1.1.1:80/' BLOCK_OWNER_UID=10180 RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "experiments/vpp-nfq-poc/scripts/android-run-s139-a2-contract-controls.sh",
+      "experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
+      "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-contract-controls-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-contract-controls.sh",
+      "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-contract-controls-live-replay-final2 experiments/vpp-nfq-poc/scripts/android-run-s139-a2-contract-controls.sh",
+      "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long PROBE_WAIT=25 CHROME_URL='https://1.1.1.1/' experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
+      "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final PROBE_WAIT=18 CHROME_URL='https://1.1.1.1/' experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
+      "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final CONCURRENT=1 PROBE_WAIT=20 CHROME_URL='https://1.1.1.1/' experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
+      "./dev/adb shell dumpsys connectivity; ./dev/adb shell su 0 cat /proc/net/tcp; ./dev/adb shell su 0 cat /proc/net/tcp6"
+    ]
+  },
+  "summary": {
+    "architecture_interruption": false,
+    "interruption_reason": "none; no evidence required blocking owner-inline execution, changing FlowOwner identity, or violating the registered safety boundary",
+    "cell_result": "INSUFFICIENT",
+    "pass": 5,
+    "fail": 0,
+    "insufficient": 3,
+    "invalid": 0,
+    "scope": "narrow policy/TUN/VPP boundary only; B1 external forwarding is a non-claim"
+  },
+  "cells": [
+    {
+      "id": "A2-chrome-ipv4-tcp",
+      "status": "PASS_NARROW",
+      "facts": {
+        "app": "com.android.chrome",
+        "uid": 10180,
+        "target": "1.1.1.1:80",
+        "tun_tuple": "10.111.0.2:* -> 1.1.1.1:80",
+        "proc_evidence": "proc-net-tcp contains 02006F0A:* -> 01010101:0050 with UID 10180; 02006F0A decodes to 10.111.0.2",
+        "vpp_final_observation": "tuple parsed 94; resolver queries 85/hits 85; owner-cache valid=1 uid=10180; uid-block 99999 packets=0; shim-tx=102",
+        "cleanup": "Chrome/VpnLite force-stopped; no vpp process and no tun0 observed"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/proc-net-tcp",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/connectivity-after-chrome.txt"
+      ],
+      "decisive_falsifier": "Chrome UID 10180 socket is absent from tun0/VPP or is attributed to a different UID"
+    },
+    {
+      "id": "A2-chrome-ipv4-udp",
+      "status": "PASS_NARROW",
+      "facts": {
+        "app": "com.android.chrome",
+        "uid": 10180,
+        "observed": "real IPv4 UDP tuples from tun0 enter VPP owner resolver and receive UID 10180 completion/cache attribution",
+        "contract_counts": "MISS_SUBMITTED 59; COMPLETION_ACCEPTED 57; CACHE_HIT 6; MISS_COALESCED 1",
+        "scope": "policy attribution/post-policy boundary; no external response claim"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/uid-attribution-contract.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/vpp-owner-resolver.log"
+      ],
+        "decisive_falsifier": "A Chrome IPv4 UDP tuple cross-hits another App UID or mutates FlowOwner state; the captured marker is not by itself a live-state proof"
+    },
+    {
+      "id": "A2-vpnlite-uid12628-ipv4-udp",
+      "status": "PASS_NARROW_WITH_PROVENANCE_CAVEAT",
+      "facts": {
+        "app": "com.sakamoto.snort.vpnlite",
+        "uid": 12628,
+        "historical_observation": "handoff recorded a real IPv4 UDP tuple to 198.51.100.58:5354, resolver miss then completion uid=12628, cache hit/store, and shim-tx > 0",
+        "current_reused_path": "android-vpp-owner-resolver-udp-poc.log currently contains a later IPv6 UDP run to 2606:4700:4700::1111:53 with uid=12628 and uid-block packets=2; it is not the immutable IPv4 run",
+        "interpretation": "retain as a narrow prior observation, not as a newly replayable immutable artifact"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/android-vpp-owner-resolver-udp-poc.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-udp-drop.log"
+      ],
+      "decisive_falsifier": "the missing immutable IPv4 raw cannot be recovered or the prior tuple facts do not reproduce"
+    },
+    {
+      "id": "A2-two-ordinary-apps-ipv4-udp",
+      "status": "PASS_NARROW",
+      "facts": {
+        "apps": [
+          {
+            "package": "com.android.chrome",
+            "uid": 10180
+          },
+          {
+            "package": "com.google.android.apps.maps",
+            "uid": 10176
+          }
+        ],
+        "allow_list": "com.android.chrome,com.google.android.apps.maps",
+        "vpn": "tun0 10.111.0.2/32 with UIDs {10176,10180,20176,20180}; owner UID 12628",
+        "observed": "both ordinary Apps produced IPv4 UDP tuples from 10.111.0.2 into VPP; resolver completions include uid=10180 and uid=10176",
+        "examples": "Chrome 10.111.0.2:46300 -> 142.251.155.119:443 uid=10180; Maps 10.111.0.2:59093 -> 216.239.38.135:443 uid=10176",
+        "vpp_boundary": "VPP tuple parsed=116, resolver queries=111/hits=111 in final sample, shim-tx=120; uid-block sentinel 99999 packets=0",
+        "long_window": "a 25-second retry captured resolver uid=10180 for Chrome UDP, uid=10176 for Maps UDP, and uid=10176 for Maps TCP; proc-net/tcp-all retained both UIDs on real TUN/underlay sockets; final VPP tuple parsed=123, resolver=116/116, shim-tx=123, sentinel uid-block=0",
+        "final_guard_regression": "the final APK regression captured resolver uid=10180 Chrome UDP, uid=10176 Maps UDP and TCP, proc-net/tcp-all UIDs 10180/10176, VPP tuple parsed=119, resolver=108/108, shim-tx=126, uid-block sentinel 99999 packets=0, and no COMPLETION_WRONG_UID evidence",
+        "concurrent_window": "near-simultaneous Chrome/Maps launch retained both UIDs in proc-net/tcp-all; resolver included Chrome UDP uid=10180 and Maps TCP uid=10176, with final VPP tuple parsed=110, resolver=106/106, shim-tx=117, and uid-block sentinel packets=0",
+        "scope": "two-App IPv4 TCP/UDP policy/TUN/VPP boundary observations, including one narrow concurrent window; IPv6, reverse, and complete per-UID matrix remain open"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/package-uids.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/dumpsys-connectivity.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/proc-net-tcp-all.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/cell-summary.md",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/proc-net-tcp-all.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final/proc-net-tcp-all.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/proc-net-tcp-all.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/cell.log"
+      ],
+      "decisive_falsifier": "either ordinary UID is absent from tun0 or its resolver completion is attributed to the other UID"
+    },
+    {
+      "id": "A2-chrome-ipv6-target",
+      "status": "INSUFFICIENT",
+      "facts": {
+        "app": "com.android.chrome",
+        "uid": 10180,
+        "target": "[2606:4700:4700::1111]:443",
+        "vpn_ipv6": "tun0 fd00:111:111::2/128",
+        "target_resolver": "The historical 443 run had one late exact-target resolver line reporting uid=10180 for fd00:111:111::2:42590 -> 2606:4700:4700::1111:443; later 443 retries and the final HTTP/80 retry kept uid=-1 for every exact target query",
+        "forced_http80_retry": "proc-net-tcp6 recorded UID 10180 for [fd00:111:111::2]:45612 -> [2606:4700:4700::1111]:80; VPP recorded last-tuple ip6 proto 6, tuple parsed=35, shim-tx=42, uid-block 99999 packets=0",
+        "forced_http80_resolver": "all resolver queries for the IPv6 target remained uid=-1; final owner-cache uid=10180 was sourced by other IPv4 queries and cannot be joined to the target tuple",
+        "ula_retry": "final APK ULA target fd00:111:111::2 -> fd76:d462:c4e3::1:80 retained proc-net/tcp6 UID 10180 and VPP tuple parsed=51, but all exact-target resolver queries were uid=-1",
+        "long_443_retry": "final APK extended HTTPS/443 retry retained proc-net/tcp6 UID 10180 for fd00:111:111::2 -> 2606:4700:4700::1111:443; all exact-target resolver queries remained uid=-1; final VPP sample reached tuple parsed=77 and shim-tx=85, so it did not reproduce target UID completion",
+        "vpp_boundary": "the forced, ULA, and extended HTTPS retries prove IPv6 target tuple/post-policy observations; the historical one-off completion is not repeatable",
+        "strict_acceptance": "repeatable target UID completion at the VPP IPv6 post-policy boundary is absent/ambiguous, so the target cell is not PASS"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6/proc-net-tcp6.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80/proc-net-tcp6.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80-final/proc-net-tcp6.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-ula-final/proc-net-tcp6.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-ula-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-ula-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final/proc-net-tcp6.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-tcp.log"
+      ],
+      "decisive_falsifier": "a complete IPv6 target tuple plus unambiguous UID completion and post-policy boundary evidence"
+    },
+    {
+      "id": "A2-contract-controls-refresh-unavailable-replay",
+      "status": "PASS_NARROW",
+      "facts": {
+        "schema": "uid-attribution-contract/v1",
+        "bounds": "pending-capacity=4; cache-capacity=4; observed max pending=4, max cache=4, and max flow IDs=8",
+        "outcomes": {
+          "CONTRACT_START": 1,
+          "ALLOWED_UID_SCOPE": 1,
+          "SCOPE_REFRESH": 6,
+          "RUNTIME_REFRESH": 1,
+          "MISS_SUBMITTED": 50,
+          "MISS_COALESCED": 2,
+          "COMPLETION_ACCEPTED": 47,
+          "CACHE_HIT": 4,
+          "CACHE_EVICTED": 32,
+          "LOOKUP_UNAVAILABLE": 20,
+          "COMPLETION_WRONG_UID": 1,
+          "COMPLETION_WRONG_OWNER": 1,
+          "COMPLETION_WRONG_GENERATION": 1,
+          "COMPLETION_WRONG_SCOPE": 1,
+          "COMPLETION_DUPLICATE": 1,
+          "COMPLETION_STALE": 1,
+          "CROSS_APP_CACHE_HIT_REJECTED": 1,
+          "FLOW_OWNER_KEY_MUTATION_REJECTED": 1,
+          "LOOKUP_PROVIDER_AVAILABLE": 1,
+          "LOOKUP_QUEUE_FULL": 1,
+          "REPLAY_ASSERTION": 7,
+          "CLEANUP": 3
+        },
+        "refresh": "app epoch refresh and network epoch refresh were emitted; generation/network/app scope fields changed without owner mutation",
+        "unavailable": "provider-unavailable and invalid-UID outcomes remained explicit and nonblocking",
+        "replay": "the rebuilt Android control created bounded synthetic pending requests and invoked the live Java completion path: wrong-owner, wrong-UID, wrong-generation, wrong-scope, duplicate, stale-after-app-refresh, cross-App cache-hit, and UID-free-key assertions were recorded with pending/cache before-after state; rejected cases preserved live state, while wrong-UID rejection intentionally settled its request",
+        "cleanup": "the live-replay runner captured final runtime-stop/CLEANUP events with pending=0, cache=0, flow-ids=0, max-flow-ids=8; the raw pre-cleanup capture remains separate"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/uid-attribution-contract.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-final/uid-attribution-contract-final.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-live-replay-final2/uid-attribution-contract-final.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-dual-allow-delay12/cell.log"
+      ],
+      "decisive_falsifier": "a live injected replay mutates owner/key/UID/cache scope or pending work exceeds the declared bound; the current Android control does not execute this falsifier"
+    },
+    {
+      "id": "A2-second-uid-androidruntime",
+      "status": "INSUFFICIENT",
+      "facts": {
+        "app": "com.sakamoto.snort.androidruntime",
+        "uid": 12620,
+        "allow_list": "single and dual allow-list runs included UID 12620",
+        "probe": "DebugControlActivity plain Socket to 1.1.1.1:443 returned tcp_connect_succeeded",
+        "decisive_fixture": "proc-net/tcp6 local address decoded to Wi-Fi 192.168.4.151, not tun0 10.111.0.2; VPP tuple parsed=0/resolver queries=0",
+        "service_lifecycle": "services-before/after VPN/after DebugActivity were empty; RuntimeService was not active, while the manifest still declares a VpnService",
+        "interpretation": "decisive fixture/binding failure for the intended second-UID cell; not evidence requiring owner-inline or FlowOwner redesign"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid/",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-diag-repro-delay6/",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-diag-repro-delay12/",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-dual-allow-delay12/",
+        "experiments/vpp-nfq-poc/results/s139-a2-runtime-service-diag-dual-delay12/",
+        "experiments/vpp-nfq-poc/results/s139-a2-tun0-boundary-no-tcpdump/"
+      ],
+      "decisive_falsifier": "a normal non-VpnService controlled App socket with UID 12620 is proven on tun0 and reaches VPP"
+    },
+    {
+      "id": "A2-uid-drop-no-broker-work",
+      "status": "INSUFFICIENT",
+      "facts": {
+        "allow_sentinel": "Chrome/second-UID allow runs show uid-block 99999 packets=0",
+        "current_uid_drop": "the IPv6 UDP drop raw shows uid-block uid=12628 packets=2 bytes=120 and blocked=2; the dedicated final Chrome UID 10180 IPv4 drop shows uid-block packets=12 bytes=14106 and blocked=12",
+        "gap": "independent Android broker/socket/transport zero counters were not captured, so the no-broker-work acceptance remains open"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-udp-drop.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-udp-allow.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/proc-net-tcp6.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/vpp-cli.log"
+      ],
+      "decisive_falsifier": "a dropped UID causes broker/socket/transport work or nonzero post-policy transport output"
+    }
+  ],
+  "registered_falsifiers": [
+    "wrong UID attribution",
+    "cross-App cache hit",
+    "owner stall while lookup is pending",
+    "FlowOwner key mutation to include UID",
+    "stale identity revival after app/network/generation refresh",
+    "lookup unavailable blocking owner execution",
+    "dropped UID causing Android broker/socket/transport work"
+  ],
+  "poc_corrections": [
+    {
+      "id": "plugin-selection-owner-resolver",
+      "before": "owner-resolver startup selected the HEV external-driver plugin; tun-poc commands were unknown",
+      "after": "vpn_fd_probe.c prefers tun_poc_plugin.so and accepts the linker-prefixed fallback; HEV modes probe both spellings",
+      "verification": "VPP raw show plugins lists tun_poc_plugin.so and show tun-poc produces counters",
+      "architecture_impact": "none"
+    },
+    {
+      "id": "dual-allowed-package-harness",
+      "before": "allowedPackage was treated as one package string, preventing a minimal dual-UID fixture",
+      "after": "SnortVpnService splits comma-separated packages, addAllowedApplication per package, and logs each normalized package",
+      "verification": "dumpsys connectivity shows UIDs {12620,12628,22620,22628}; Android accepts the dual allow-list",
+      "architecture_impact": "none"
+    },
+    {
+      "id": "explicit-block-owner-sentinel",
+      "before": "blank BLOCK_OWNER_UID defaulted to the package UID and made an intended allow run self-drop",
+      "after": "runners pass explicit 99999 sentinel and record effective block UID",
+      "verification": "allow raw shows uid-block 99999 packets=0",
+      "architecture_impact": "none"
+    },
+    {
+      "id": "temporary-route-instrumentation-build",
+      "before": "temporary DebugControlActivity route instrumentation build stopped at retained VPP source mutation",
+      "after": "instrumentation was reverted; no APK/build result was used as evidence",
+      "verification": "build error retained in handoff; no production source claim",
+      "architecture_impact": "none"
+    },
+    {
+      "id": "packet-boundary-tool-fallback",
+      "before": "tcpdump and toybox tcpdump were unavailable on the Pixel",
+      "after": "raw /proc/net/tcp and /proc/net/tcp6 plus VPP show tun-poc were used",
+      "verification": "tun0-boundary-no-tcpdump raw directory",
+      "architecture_impact": "none"
+    },
+    {
+      "id": "package-scoped-uid-acceptance",
+      "before": "the Android bridge accepted any nonnegative ConnectivityManager UID while an allow-list was active",
+      "after": "APK package-visibility queries resolve the active allow-list to real App UIDs; a completion outside that scope emits COMPLETION_WRONG_UID and is not cached",
+      "verification": "live replay raw emits ALLOWED_UID_SCOPE enforced=true uids=[10180] and COMPLETION_WRONG_UID uid=12620",
+      "architecture_impact": "none"
+    },
+    {
+      "id": "live-android-replay-control",
+      "before": "replayFaultMatrix emitted marker-only events",
+      "after": "the control injects bounded synthetic pending requests into live Java state and records identity-fault outcomes with pending/cache before-after assertions",
+      "verification": "live replay raw contains seven REPLAY_ASSERTION records plus wrong-owner/UID/generation/scope/duplicate/stale/cross-App/key outcomes",
+      "architecture_impact": "none"
+    }
+  ],
+  "finding_ledger": [
+    {
+      "id": "VPN-F026",
+      "status": "OPEN_RISK",
+      "update": "A2 proves narrow Chrome UID 10180 IPv4 TCP/UDP attribution, long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations (Chrome 10180 plus Maps 10176), a historical one-off exact-target IPv6 UID completion plus final IPv6 tuple/proc observations with intermittent target uid=-1, and live Java contract replay rejection at the tun/VPP boundary. A1 proves the cross-implementation replay/cache/key baseline; the Android control does not prove native VPP owner/cache invariance. A2 does not prove the full IPv4/IPv6 TCP/UDP matrix, reverse closure, lifecycle closure, or repeatable IPv6 acceptance."
+    },
+    {
+      "id": "VPN-F026-A2-FIXTURE-01",
+      "status": "OPEN_RISK",
+      "name": "androidruntime direct socket bypassed tun0 despite VPN UID allow-list",
+      "update": "Decisive fixture failure: local socket was Wi-Fi 192.168.4.151; RuntimeService was not active. This is recorded as an A2 evidence gap, not an architecture interruption."
+    },
+    {
+      "id": "POC-CORRECTIONS-A2",
+      "status": "CLOSED_FOR_POC",
+      "update": "Plugin selection, explicit sentinel, and comma-separated dual allow-list corrections were applied and their post-correction raw evidence is retained."
+    }
+  ],
+  "supported_claim": [
+    "A controlled ordinary App UID (Chrome 10180) produced real IPv4 TCP and UDP tuples entering tun0/VPP owner resolution and reaching the post-policy shim boundary.",
+    "Chrome produced real IPv6 TCP target tuples at the VPP post-policy shim boundary and /proc/net/tcp6 carried UID 10180; one historical exact-target 443 resolver completion reported uid=10180, while final HTTP/80 and ULA retries remained uid=-1 for the exact target.",
+    "Narrow long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations saw Chrome UID 10180 and Maps UID 10176 on the same allowed tun0; resolver completions retained Chrome/Maps UIDs and VPP shim output remained nonzero.",
+    "The bounded Android contract emitted miss, coalescing, completion, cache hit/eviction, refresh, unavailable, package-scoped wrong-UID rejection, and live replay outcomes with pending/cache high-water bounded at four and flow-id high-water bounded at eight.",
+    "A1 Host/model and the rebuilt Android Java control reject wrong-owner, wrong-generation, duplicate, stale, wrong-scope, wrong-UID, cross-App cache-hit, and FlowOwner-key mutation replays; the Android control does not prove native VPP owner/cache invariance.",
+    "The corrected owner-resolver plugin selection and dual allow-list harness are ordinary POC corrections, not changes to owner-inline/nonblocking/FlowOwner invariants.",
+    "A historical narrow UID 12628 IPv4 UDP observation exists, but its original immutable raw was overwritten by a later run and must be treated with that provenance caveat."
+  ],
+  "non_claims": [
+    "No complete A2 acceptance across the required two-App IPv4/IPv6 TCP/UDP, reverse, concurrent, refresh, and drop matrix; the two-App IPv4 TCP/UDP and concurrent observations remain narrow PASS only.",
+    "The Android replay control exercises live Java pending/cache state, but it is not an independent proof that native VPP owner/cache state was unchanged; A1 Host/model remains the cross-implementation baseline.",
+    "No repeatable IPv6 target completion at the VPP post-policy boundary; one historical exact-target completion is intermittent and not reproduced by final retries.",
+    "No dedicated current-UID IPv4 drop proof with independent zero broker/socket/transport work counters.",
+    "No Android ConnectivityManager/OEM-general timing claim beyond the Pixel run.",
+    "No reverse-traffic acceptance claim; the concurrent-distinct-tuple observation is narrow and does not prove the full matrix.",
+    "Android live Java replay assertions are not an independent proof that native VPP live owner/cache state was unchanged; the Java seam must not be treated as a native invariance proof.",
+    "No external SOCKS/HTTP forwarding, reverse forwarding, lwIP external transport, or B1 full VPP claim.",
+    "No production readiness, queue/cache capacity, multi-user, persistence, or OEM compatibility claim."
+  ],
+  "evidence_refs": [
+    "prototypes/uid_attribution_contract/artifacts/uid-attribution-contract-host-model.json (A1 schema/model baseline)",
+    "experiments/vpp-nfq-poc/S135_A1_UID_ATTRIBUTION_EXECUTION_JOURNAL.md",
+    "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/cell-summary.md",
+    "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-http80/",
+    "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-ula-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-gateway-reverse-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/uid-attribution-contract.jsonl",
+    "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-live-replay-final2/uid-attribution-contract-final.jsonl",
+    "experiments/vpp-nfq-poc/results/s139-a2-tun0-boundary-no-tcpdump/",
+    "experiments/vpp-nfq-poc/results/s139-a2-runtime-service-diag-dual-delay12/",
+    "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid/",
+    "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/",
+    "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/",
+    "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/"
+  ]
+}

@@ -612,3 +612,58 @@ Map rather than encoded as TODOs here.
 | S134 | F134-10 | VPN-F022 |
 | S134 | F134-11 | VPN-F023 |
 | S134 | F134-12 | VPN-F024 |
+
+## SAKAMOTO-139 A2 addendum (2026-08-23)
+
+The detailed A2 raw evidence is recorded in
+[`S136_A2_UID_POLICY_EXECUTION_JOURNAL.md`](S136_A2_UID_POLICY_EXECUTION_JOURNAL.md)
+and the machine-readable artifact
+[`uid-attribution-contract-android-a2.json`](prototypes/uid_attribution_contract/artifacts/uid-attribution-contract-android-a2.json).
+This addendum preserves the existing consolidation and records the new
+fixture/correction facts:
+
+### VPN-F026 -- A2 status update
+
+- **A2 evidence:** Chrome UID 10180 produced narrow real IPv4 TCP and UDP
+  attribution through tun0/VPP. Long-window and near-simultaneous dual
+  ordinary-App IPv4/UDP/TCP cells observed Chrome UID 10180 and Maps UID 10176
+  on the same tun0/VPP path, including Maps TCP and `/proc` sockets for both
+  UIDs. The historical Chrome IPv6 443 run produced one exact-target
+  `uid=10180` completion, but final HTTP/80 and ULA retries were `uid=-1` for
+  every exact target query, so current target UID attribution is intermittent
+  rather than closed. The
+  bounded contract matrix recorded package-scoped wrong-UID rejection and live
+  pending/cache replay assertions in addition to
+  miss/completion/hit, refresh, unavailable, and bounded high-water outcomes.
+  Its replay control emitted live wrong-owner/generation/duplicate/stale/scope/
+  cross-App/key-mutation assertions with pending/cache before-after state; A1
+  Host/model remains the decisive cross-implementation baseline. A historical
+  narrow VpnLite UID 12628 IPv4 UDP observation is
+  retained with an explicit raw-overwrite caveat.
+- **A2 gap:** Repeatable Chrome IPv6 target UID completion at the VPP post-policy
+  boundary is absent/ambiguous despite the historical one-off completion and
+  forced tuple observations, and the two-App observation remains a narrow
+  IPv4/TCP/UDP plus concurrent boundary rather than a complete per-UID/reverse
+  matrix. The finding remains
+  `OPEN_RISK`.
+
+### VPN-F026-A2-FIXTURE-01 -- androidruntime direct socket bypassed tun0
+
+- **Observation:** UID 12620's DebugControlActivity socket connected using
+  local Wi-Fi address `192.168.4.151`, while VPP saw no tuple/resolver/cache
+  work. RuntimeService was absent before and after the VPN/activity probe.
+- **Interpretation:** This is a decisive fixture/binding failure for the
+  intended second-UID cell, not evidence against owner-inline/nonblocking
+  execution or the immutable FlowOwner key.
+- **Status:** `OPEN_RISK` (A2 evidence gap).
+
+### POC-CORRECTIONS-A2 -- ordinary harness corrections
+
+- **Status:** `CLOSED_FOR_POC`.
+- **Corrections:** owner-resolver plugin selection now chooses
+  `tun_poc_plugin.so`; comma-separated allowed packages are added one by one;
+  drop tests use explicit sentinel UID `99999`; unavailable `tcpdump` falls
+  back to `/proc/net/tcp*` and VPP counters.
+- **Integrity:** A temporary route-instrumentation build stopped on retained
+  VPP source mutation and was reverted; no failed build was used as evidence.
+- **Architecture impact:** none. Plane state and ticket state are unchanged.

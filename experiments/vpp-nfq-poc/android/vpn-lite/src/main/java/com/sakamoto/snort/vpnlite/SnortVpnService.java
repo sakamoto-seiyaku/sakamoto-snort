@@ -46,6 +46,8 @@ public final class SnortVpnService extends VpnService {
             "com.sakamoto.snort.vpnlite.RUST_CONTROL_PROBE";
     public static final String ACTION_RUST_RECONNECT_PROBE =
             "com.sakamoto.snort.vpnlite.RUST_RECONNECT_PROBE";
+    public static final String ACTION_UID_CONTRACT_CONTROL =
+            "com.sakamoto.snort.vpnlite.UID_CONTRACT_CONTROL";
     public static final String EXTRA_MODE = "mode";
     public static final String EXTRA_HOST = "host";
     public static final String EXTRA_PORT = "port";
@@ -62,6 +64,10 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_REDIRECT_THREAD = "redirectThread";
     public static final String EXTRA_OWNER_CACHE = "ownerCache";
     public static final String EXTRA_ENABLE_IPV6 = "enableIpv6";
+    public static final String EXTRA_UID_CONTRACT_REFRESH_APP = "uidContractRefreshApp";
+    public static final String EXTRA_UID_CONTRACT_REFRESH_NETWORK = "uidContractRefreshNetwork";
+    public static final String EXTRA_UID_CONTRACT_UNAVAILABLE = "uidContractUnavailable";
+    public static final String EXTRA_UID_CONTRACT_REPLAY = "uidContractReplay";
     public static final String EXTRA_ROUNDS = "rounds";
     public static final String EXTRA_FLOWS = "flows";
     public static final String EXTRA_PROTOCOL = "protocol";
@@ -141,6 +147,7 @@ public final class SnortVpnService extends VpnService {
     private volatile boolean l4StressStopRequested;
     private volatile ArrayList<L4StressFlow> activeL4Flows;
     private volatile ExecutorService activeL4Executor;
+    private UidAttributionContract uidAttributionContract;
 
     public boolean protectSocketForNative(int fd) {
         File forceFailure = new File(getFilesDir(), "force-protect-failure");
@@ -277,6 +284,10 @@ public final class SnortVpnService extends VpnService {
             startRustReconnectProbe(intent);
             return START_NOT_STICKY;
         }
+        if (ACTION_UID_CONTRACT_CONTROL.equals(action)) {
+            applyUidContractControls(intent);
+            return START_NOT_STICKY;
+        }
 
         String mode = intent == null ? MODE_NATIVE : intent.getStringExtra(EXTRA_MODE);
         String allowedPackage = intent == null ? null : intent.getStringExtra(EXTRA_ALLOWED_PACKAGE);
@@ -290,6 +301,7 @@ public final class SnortVpnService extends VpnService {
         boolean enableIpv6 = intent != null && intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
         String s124Path = intent == null ? null : intent.getStringExtra(EXTRA_S124_PATH);
         String s124Observe = intent == null ? null : intent.getStringExtra(EXTRA_S124_OBSERVE);
+        applyUidContractControls(intent);
         startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage,
                 blockIp4Dst, blockIp6Dst, blockOwnerUid, redirectThread, ownerCache,
                 enableIpv6, s124Path, s124Observe);
@@ -337,6 +349,10 @@ public final class SnortVpnService extends VpnService {
     @Override
     public void onDestroy() {
         stopVpn();
+        if (uidAttributionContract != null) {
+            uidAttributionContract.close();
+            uidAttributionContract = null;
+        }
         super.onDestroy();
     }
 
@@ -387,6 +403,8 @@ public final class SnortVpnService extends VpnService {
             return;
         }
 
+        uidAttribution().startRuntime("mode=" + mode);
+
         try {
             File logsDir = new File(getFilesDir(), "logs");
             if (!logsDir.isDirectory() && !logsDir.mkdirs()) {
@@ -424,13 +442,21 @@ public final class SnortVpnService extends VpnService {
                 Log.i(TAG, "VPN IPv6 enabled address=" + VPN_ADDRESS_V6);
             }
             if (allowedPackage != null && !allowedPackage.isEmpty()) {
-                builder.addAllowedApplication(allowedPackage);
-                Log.i(TAG, "VPN allowed package=" + allowedPackage);
+                Log.i(TAG, "VPN allowed packages raw=" + allowedPackage);
+                for (String packageName : allowedPackage.split(",")) {
+                    String normalizedPackage = packageName.trim();
+                    if (normalizedPackage.isEmpty()) {
+                        continue;
+                    }
+                    builder.addAllowedApplication(normalizedPackage);
+                    Log.i(TAG, "VPN allowed package=" + normalizedPackage);
+                }
             }
             if (disallowedPackage != null && !disallowedPackage.isEmpty()) {
                 builder.addDisallowedApplication(disallowedPackage);
                 Log.i(TAG, "VPN disallowed package=" + disallowedPackage);
             }
+            uidAttribution().setAllowedPackages(allowedPackage);
 
             vpnFd = builder.establish();
             if (vpnFd == null) {
@@ -1763,17 +1789,9 @@ public final class SnortVpnService extends VpnService {
     private int queryConnectionOwnerUidForPacket(int protocol, String localAddress, int localPort,
                                                  String remoteAddress, int remotePort) {
         try {
-            ConnectivityManager connectivityManager =
-                    (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
-            if (connectivityManager == null) {
-                return Process.INVALID_UID;
-            }
-            InetSocketAddress local = new InetSocketAddress(
-                    InetAddress.getByName(localAddress), localPort);
-            InetSocketAddress remote = new InetSocketAddress(
-                    InetAddress.getByName(remoteAddress), remotePort);
-            int uid = connectivityManager.getConnectionOwnerUid(protocol, local, remote);
-            Log.i(TAG, "owner uid query proto=" + protocol + " "
+            int uid = uidAttribution().lookup(protocol, localAddress, localPort,
+                    remoteAddress, remotePort);
+            Log.i(TAG, "owner uid lookup proto=" + protocol + " "
                     + localAddress + ":" + localPort + " -> "
                     + remoteAddress + ":" + remotePort + " uid=" + uid);
             return uid;
@@ -1798,6 +1816,36 @@ public final class SnortVpnService extends VpnService {
             }
             vpnFd = null;
         }
+        if (uidAttributionContract != null) {
+            uidAttributionContract.stopRuntime("vpn-stop");
+        }
         Log.i(TAG, "VPN stopped");
+    }
+
+    private synchronized UidAttributionContract uidAttribution() {
+        if (uidAttributionContract == null) {
+            uidAttributionContract = new UidAttributionContract(this);
+        }
+        return uidAttributionContract;
+    }
+
+    private void applyUidContractControls(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_REFRESH_APP, false)) {
+            uidAttribution().refreshApp("intent");
+        }
+        if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_REFRESH_NETWORK, false)) {
+            uidAttribution().refreshNetwork("intent");
+        }
+        if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_UNAVAILABLE, false)) {
+            uidAttribution().setProviderAvailable(false, "intent");
+        } else if (intent.hasExtra(EXTRA_UID_CONTRACT_UNAVAILABLE)) {
+            uidAttribution().setProviderAvailable(true, "intent");
+        }
+        if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_REPLAY, false)) {
+            uidAttribution().replayFaultMatrix();
+        }
     }
 }

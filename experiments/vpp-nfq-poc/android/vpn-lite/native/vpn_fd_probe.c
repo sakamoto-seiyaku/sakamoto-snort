@@ -2010,16 +2010,45 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     unlink(vpp_log);
 
     snprintf(plugin_path, sizeof(plugin_path), "%s/%s", native_dir, plugin_name);
-    if (s124_tun_mode || oi2_mode || oi3_mode || oi5_mode) {
-        snprintf(plugin_name, sizeof(plugin_name), "%s",
-                 "hev_external_driver_poc_plugin.so");
+    if (owner_resolver_mode) {
+        /* Owner-resolver is a tun_poc mode.  The HEV external-driver plugin
+         * is a different (s124/oi) contract and does not register tun-poc;
+         * selecting it here leaves VPP alive but makes every owner command
+         * an unknown CLI input.  Prefer the canonical unprefixed VPP plugin
+         * name, then accept the Android linker-prefixed extraction spelling. */
+        snprintf(plugin_name, sizeof(plugin_name), "%s", "tun_poc_plugin.so");
         snprintf(plugin_path, sizeof(plugin_path), "%s/%s", native_dir,
                  plugin_name);
-    }
-    if (!path_exists(plugin_path)) {
-        if (s124_tun_mode || oi2_mode || oi3_mode || oi5_mode) {
+        if (!path_exists(plugin_path)) {
+            snprintf(plugin_name, sizeof(plugin_name), "%s",
+                     "libtun_poc_plugin.so");
+            snprintf(plugin_path, sizeof(plugin_path), "%s/%s", native_dir,
+                     plugin_name);
+        }
+        if (!path_exists(plugin_path)) {
             return -1;
         }
+    } else if (s124_tun_mode || oi2_mode || oi3_mode || oi5_mode) {
+        /* Android extracts native libraries from the APK under their
+         * lib-prefixed names.  The build stage also retains the unprefixed
+         * source artifact, but that sibling is not guaranteed to exist in
+         * ApplicationInfo.nativeLibraryDir.  Probe both spellings before
+         * falling back; selecting libhev... here keeps the VPP plugin loader
+         * and the actual extracted artifact aligned. */
+        snprintf(plugin_name, sizeof(plugin_name), "%s",
+                 "libhev_external_driver_poc_plugin.so");
+        snprintf(plugin_path, sizeof(plugin_path), "%s/%s", native_dir,
+                 plugin_name);
+        if (!path_exists(plugin_path)) {
+            snprintf(plugin_name, sizeof(plugin_name), "%s",
+                     "hev_external_driver_poc_plugin.so");
+            snprintf(plugin_path, sizeof(plugin_path), "%s/%s", native_dir,
+                     plugin_name);
+        }
+        if (!path_exists(plugin_path)) {
+            return -1;
+        }
+    } else if (!path_exists(plugin_path)) {
         snprintf(plugin_name, sizeof(plugin_name), "%s", "libtun_poc_plugin.so");
     }
 

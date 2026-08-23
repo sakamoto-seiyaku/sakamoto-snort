@@ -137,3 +137,21 @@ overload/resource behavior, and the end-to-end engineering envelope.  No
 current gap by itself contradicts the baseline; ordinary findings remain POC
 correction/regression inputs unless new higher-fidelity evidence crosses a
 campaign interruption condition.
+
+## SAKAMOTO-139 A2 addendum (2026-08-23)
+
+The A2 Pixel artifact and journal are now recorded at
+[`uid-attribution-contract-android-a2.json`](prototypes/uid_attribution_contract/artifacts/uid-attribution-contract-android-a2.json)
+and [`S136_A2_UID_POLICY_EXECUTION_JOURNAL.md`](S136_A2_UID_POLICY_EXECUTION_JOURNAL.md).
+They refine, but do not replace, the claim rows above:
+
+| Claim family | A2 evidence update | Current A2 boundary |
+| --- | --- | --- |
+| EG-07 policy/transport separation | `PARTIAL` narrow support | Chrome allow reached the observed VPP post-policy shim; a UID-12628 IPv6 drop showed blocked packets, and a dedicated Chrome UID-10180 IPv4 drop showed `blocked=12`/`uid-block=12`. Independent broker/socket/transport-zero counters remain open. |
+| EG-08 distinct real App UID attribution | `PARTIAL` narrow support | Chrome UID 10180 produced real IPv4 TCP/UDP tuples; long-window and near-simultaneous dual ordinary-App cells observed Chrome UID 10180 and Maps UID 10176 in IPv4 UDP/TCP with both UIDs in `/proc`. Historical Chrome IPv6 443 had one exact-target UID completion, while final HTTP/80 and ULA retries captured real IPv6 tuples plus `/proc/net/tcp6` UID 10180 but exact-target resolver results stayed `uid=-1`; repeatable IPv6 UID attribution and the complete per-UID matrix remain open. |
+| EG-09 nonblocking UID lifecycle | `PARTIAL` contract support | Refresh, unavailable, miss/hit, pending/cache bounds, package-scoped wrong-UID rejection, and live Java replay assertions are observed in Android JSONL. The replay does not prove native VPP owner/cache invariance; A1 Host/model supplies the cross-implementation baseline, while Android timing, flow-ID reclamation, and target-specific IPv6 UID completion remain open. |
+
+The Androidruntime Wi-Fi source address (`192.168.4.151`) and inactive
+RuntimeService are recorded as `VPN-F026-A2-FIXTURE-01`, an evidence fixture
+gap rather than an architecture interruption. A2 leaves the wider campaign
+status `INSUFFICIENT_EVIDENCE` and does not update Plane state.

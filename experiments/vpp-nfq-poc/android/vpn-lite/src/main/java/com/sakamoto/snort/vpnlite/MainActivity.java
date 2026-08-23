@@ -111,6 +111,15 @@ public final class MainActivity extends Activity {
     }
 
     private boolean applyLegacyPocIntent(Intent intent) {
+        if (intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_APP, false)
+                || intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_NETWORK,
+                        false)
+                || intent.hasExtra(SnortVpnService.EXTRA_UID_CONTRACT_UNAVAILABLE)
+                || intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REPLAY, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_UID_CONTRACT_CONTROL, intent);
+            showAction("UID attribution contract control requested.");
+            return true;
+        }
         if (intent.getBooleanExtra(EXTRA_LEGACY_STOP, false)) {
             startLegacyVpnService(SnortVpnService.ACTION_STOP, intent);
             showAction("Legacy VPN/TUN POC stop requested.");
@@ -195,7 +204,15 @@ public final class MainActivity extends Activity {
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_EXPECT_ECHO);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_OWNER_CACHE);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_ENABLE_IPV6);
-        if (!SnortVpnService.ACTION_STOP.equals(action)) {
+        copyBooleanExtra(source, serviceIntent,
+                SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_APP);
+        copyBooleanExtra(source, serviceIntent,
+                SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_NETWORK);
+        copyBooleanExtra(source, serviceIntent,
+                SnortVpnService.EXTRA_UID_CONTRACT_UNAVAILABLE);
+        copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_UID_CONTRACT_REPLAY);
+        if (!SnortVpnService.ACTION_STOP.equals(action)
+                && !SnortVpnService.ACTION_UID_CONTRACT_CONTROL.equals(action)) {
             Intent prepare = VpnService.prepare(this);
             if (prepare != null) {
                 pendingLegacyVpnIntent = serviceIntent;

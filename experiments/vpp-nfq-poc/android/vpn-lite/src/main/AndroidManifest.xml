@@ -12,6 +12,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- POC-only package visibility for resolving the active VPN allow-list
+         into real App UIDs before accepting an Android owner completion. -->
+    <queries>
+        <package android:name="com.android.chrome" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.sakamoto.snort.androidruntime" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:debuggable="true"
