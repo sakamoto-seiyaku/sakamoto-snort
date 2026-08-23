@@ -4,7 +4,7 @@ Date: 2026-08-23 (Asia/Taipei)
 Plane: SAKAMOTO-139  
 Design: [S139_A2_POC_DESIGN_REVISION.md](S139_A2_POC_DESIGN_REVISION.md)  
 Device: Pixel 6a / arm64 / serial `28201JEGR0XPAJ`  
-Aggregate: `A2_INCOMPLETE`; `architecture_interruption=false`
+Aggregate: `PASS`; `architecture_interruption=false`
 
 ## Why the repeated UID verification was a POC problem
 
@@ -343,7 +343,82 @@ delivery with same-socket App receipt, canonical owner/UID reuse, raw TUN
 tuple integrity, no lookup/re-entry, and bounded cleanup. These cells do not
 prove lifecycle invalidation or downstream allow/drop admission.
 
-The remaining order is A2-3 controlled return, A2-4 lifecycle native join,
-A2-5 allow/drop admission ledger, and A2-6 replay/settlement aggregate. B1
-remains blocked until every required A2 cell passes and the final aggregate
-audit is recorded.
+At the time of this section, the remaining order was A2-3 controlled return,
+A2-4 lifecycle native join, A2-5 allow/drop admission ledger, and A2-6
+replay/settlement aggregate. The final audit below records their completion;
+B1 remains a separate gate until the aggregate is aligned in Plane.
+
+## Final A2 closure audit
+
+The seven registered cells are now joined by the machine-readable aggregate
+auditor:
+
+`results/s139-a2-aggregate-20260823-1338/a2-aggregate.json`
+
+Aggregate verdict: `PASS`; schema `s139-a2-aggregate/v1`; all required cell
+results are `PASS`, every input retains a cleanup/settlement check, and
+`architectureInterruption=false`. The aggregate is an audit of the registered
+bounded claims only; it does not unblock external-connect, production-capacity,
+long-lifecycle, or underlay-handover claims.
+
+### A2-4 lifecycle/native join
+
+Passing bundle:
+`results/s139-a2-4-lifecycle-native-join-20260823-201037/`
+
+The lifecycle cell passes its registered baseline, cache-hit, refresh,
+network-restart, provider-unavailable/restore, stale-generation, and cleanup
+joins. Its one `native-stale-join` check remains `INCONCLUSIVE` by design: the
+retained detail explicitly says native stale completion is outside the
+registered claim; Java late-completion rejection is the registered assertion.
+The aggregate auditor records this as an out-of-scope non-claim rather than
+promoting it to a cell failure.
+
+### A2-5 UID allow/drop admission ledger
+
+Passing bundle:
+`results/s139-a2-5-admission-ledger-20260823-133741/`
+
+The default runner now uses a bounded `REPEAT=4` burst to allow the normal
+asynchronous `uid=-1` miss to settle without sleep-based verdicts. On the
+Pixel 6a, VpnLite UID `12628` and AppA UID `12630` produced an allow decision
+for the fresh `46001` key, one native `TRANSPORT_ADMITTED`, broker request /
+completion, and socket create / settle. A fresh `46002` key with the same
+known UID was dropped at `tun_poc` and produced zero downstream admission,
+broker, or socket events. Both stages observed orderly cleanup.
+
+### A2-6 replay and settlement aggregate
+
+Passing bundle:
+`results/s139-a2-6-replay-settlement-20260823-133712/`
+
+The live AppA transport tuple crossed `A2-6-transport` and settled the real
+broker/socket seam. The replay stage joined all seven registered Java
+contract cases: wrong owner, wrong UID, wrong generation, wrong scope,
+accepted, duplicate, and stale-after-refresh, plus cross-App cache-hit and
+flow-owner-key mutation rejection. Pending/cache/flow-id high-water remained
+bounded and final cleanup reached zero residue; no VPP/VpnLite process or
+`tun0` remained.
+
+Two harness defects were corrected while retaining their raw bundles:
+
+- the replay fixture used historical hard-coded UIDs and therefore rejected
+  the installed AppA UID; `UidAttributionContract` now derives the accepted
+  UID from the registered allow scope;
+- stage admission evidence could be consumed by a startup packet or a shared
+  tuple snapshot. Native stage changes now reset only the stage admission
+  guard, and the logger parses the tuple from the packet at the write seam,
+  consuming the guard only after a durable event is emitted.
+
+Relevant clean checkpoints are `9dcfa30` (A2-6 cell and dynamic UID fixture),
+`5c0187a` (AppA runner package binding), `bf6e371` (stage guard reset), and
+`665623d` (packet-local admission logger). Host verifier coverage is 37 tests
+passing.
+
+## A2 disposition and next gate
+
+A2 is complete at the registered POC scope. B1 remains a separate Plane gate:
+the aggregate does not claim external Internet reachability, production
+capacity, or a long lifecycle. The next action is to publish this aggregate
+and the corrected hotspot disposition to Plane, then begin B1 only after that
+explicit gate is aligned.

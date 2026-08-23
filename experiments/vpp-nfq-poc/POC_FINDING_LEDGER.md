@@ -667,3 +667,24 @@ fixture/correction facts:
 - **Integrity:** A temporary route-instrumentation build stopped on retained
   VPP source mutation and was reverted; no failed build was used as evidence.
 - **Architecture impact:** none. Plane state and ticket state are unchanged.
+
+### POC-CORRECTIONS-A2-FINAL -- registered A2 closure
+
+- **Status:** `CLOSED_FOR_POC`.
+- **Evidence:** The final aggregate
+  `results/s139-a2-aggregate-20260823-1338/a2-aggregate.json` is `PASS` for
+  A2-0 through A2-6. The bounded Pixel 6a cells now include the deterministic
+  two-App UID matrix, async cache/concurrency, controlled return, lifecycle
+  joins, real allow/drop downstream admission, and replay/resource settlement.
+- **Hotspot disposition:** The repeated “verify UID” stop was a compound
+  fixture/verdict issue: asynchronous `uid=-1` was treated as terminal,
+  A2-6 replay fixtures used stale hard-coded UIDs, and native admission
+  evidence used a one-shot shared tuple snapshot. The runner now uses a
+  bounded repeat barrier, Java replay derives the accepted UID from the
+  registered allow scope, and native admission logs the packet-local tuple
+  after the stage-scoped write succeeds.
+- **Scope boundary:** This closes the registered A2 POC claims only. The
+  consolidated `VPN-F026` Pixel risk remains `OPEN_RISK` for unregistered
+  Chrome/IPv6 timing, production cache sizing, reverse-flow Android lookup,
+  and external-connect behavior; those are not silently converted to PASS.
+- **Architecture impact:** none; B1 remains a separate Plane gate.
