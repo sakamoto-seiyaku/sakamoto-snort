@@ -85,6 +85,9 @@ typedef struct
   u8 dst[16];
 } tun_poc_fragment_info_t;
 
+static u8 tun_poc_parse_direct_tuple (const u8 *packet, u32 packet_len,
+				      tun_poc_direct_tuple_t *tuple);
+
 /* A2-5 is deliberately a one-flow, fresh-session POC.  Keep the admission
  * ledger at the actual UID policy and shim write seam rather than deriving it
  * from aggregate `show tun-poc` counters.  The stage is passed by the Android
@@ -109,32 +112,32 @@ tun_poc_a25_stage (tun_poc_main_t *tm)
 
 static void
 tun_poc_ledger_log (tun_poc_main_t *tm, const char *event,
-			    const char *decision, int uid)
+			    const char *decision, int uid,
+			    const tun_poc_direct_tuple_t *tuple)
 {
   char dst[INET6_ADDRSTRLEN] = "?";
   const char *family;
   const char *protocol;
 
-  if (!tm->last_tuple_valid || !event)
+  if (!tm || !event || !tuple || !tuple->version)
     return;
-  family = tm->last_tuple_ip_version == 6 ? "ip6" : "ip4";
-  protocol = tm->last_tuple_protocol == IPPROTO_TCP ? "tcp" :
-             tm->last_tuple_protocol == IPPROTO_UDP ? "udp" : "other";
-  if (tm->last_tuple_ip_version == 6)
+  family = tuple->version == 6 ? "ip6" : "ip4";
+  protocol = tuple->protocol == IPPROTO_TCP ? "tcp" :
+             tuple->protocol == IPPROTO_UDP ? "udp" : "other";
+  if (tuple->version == 6)
     {
-      (void) inet_ntop (AF_INET6, tm->last_tuple_ip6_dst, dst, sizeof (dst));
+      (void) inet_ntop (AF_INET6, tuple->dst, dst, sizeof (dst));
     }
   else
     {
-      (void) inet_ntop (AF_INET, &tm->last_tuple_ip4_dst, dst, sizeof (dst));
+      (void) inet_ntop (AF_INET, tuple->dst, dst, sizeof (dst));
     }
   fprintf (stderr,
            "tun-poc ledger event=%s stage-id=%s flow-id=%s|%s|%s|%u "
            "canonical-key=%s|%s|%u|%s:%u uid=%d decision=%s\n",
            event, tun_poc_ledger_stage (tm), tun_poc_ledger_stage (tm), family,
-           protocol, (unsigned) tm->last_tuple_src_port, family, protocol,
-           (unsigned) tm->last_tuple_src_port, dst,
-           (unsigned) tm->last_tuple_dst_port, uid,
+           protocol, (unsigned) tuple->src_port, family, protocol,
+           (unsigned) tuple->src_port, dst, (unsigned) tuple->dst_port, uid,
            decision ? decision : "");
 }
 
@@ -1347,16 +1350,21 @@ tun_poc_process_worker_packet (tun_poc_main_t *tm, vlib_main_t *vm,
 					   &tm->direct_return_tx_bytes,
 					   &tm->write_errors);
 	    }
-	  else
+	      else
 	    {
+	      tun_poc_direct_tuple_t admitted_tuple;
 	      int write_result = tun_poc_write_packet (
 		tm->shim_fd, packet, packet_len, &tm->shim_tx_packets,
 		&tm->shim_tx_bytes, &tm->shim_write_errors);
 	      if (write_result == 0 && !tm->ledger_admitted_logged)
 		{
-		  tun_poc_ledger_log (tm, "TRANSPORT_ADMITTED", "ALLOW",
-				      tm->last_owner_uid);
-		  tm->ledger_admitted_logged = 1;
+		  if (tun_poc_parse_direct_tuple (packet, packet_len,
+					   &admitted_tuple))
+		    {
+		      tun_poc_ledger_log (tm, "TRANSPORT_ADMITTED", "ALLOW",
+					  tm->last_owner_uid, &admitted_tuple);
+		      tm->ledger_admitted_logged = 1;
+		    }
 		}
 	    }
     }
