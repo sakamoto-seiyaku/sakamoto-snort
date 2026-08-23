@@ -17,6 +17,7 @@ PORT="${PORT:-53}"
 FIRST_SOURCE_PORT="${FIRST_SOURCE_PORT:-45625}"
 UNAVAILABLE_SOURCE_PORT="${UNAVAILABLE_SOURCE_PORT:-45626}"
 RECOVERED_SOURCE_PORT="${RECOVERED_SOURCE_PORT:-45627}"
+RECOVERED_REPEAT="${RECOVERED_REPEAT:-false}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-99999}"
 BIND_TO_VPN="${BIND_TO_VPN:-true}"
 EXPECTED_ALLOWED_UID="${EXPECTED_ALLOWED_UID:-}"
@@ -47,6 +48,7 @@ echo "# SAKAMOTO-139 A2 second UID lifecycle/unavailable"
 echo "adb_serial=$(adb_target_desc)"
 echo "vpn_package=$VPN_PACKAGE allowed_package=$ALLOWED_PACKAGE"
 echo "target=$HOST:$PORT source_ports=$FIRST_SOURCE_PORT,$UNAVAILABLE_SOURCE_PORT,$RECOVERED_SOURCE_PORT"
+echo "recovered_repeat=$RECOVERED_REPEAT"
 echo "bind_to_vpn=$BIND_TO_VPN wrong_uid_drop_target=$BLOCK_OWNER_UID"
 echo "external-forwarding=NON-CLAIM; this cell observes only the VPN/VPP contract boundary"
 
@@ -119,6 +121,12 @@ adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" \
 sleep 1
 trigger_udp "$RECOVERED_SOURCE_PORT" recovered
 
+if [[ "$RECOVERED_REPEAT" == true ]]; then
+  echo
+  echo "## provider-restored completion-to-cache-hit retry with the same recovered tuple"
+  trigger_udp "$RECOVERED_SOURCE_PORT" recovered-repeat
+fi
+
 capture() {
   local name="$1"
   local path="$2"
@@ -165,6 +173,14 @@ check "runtime-unavailable-uid" "^uid=$EXPECTED_ALLOWED_UID$" "$runtime_probe"
 check "runtime-unavailable-vpn-bind" '^bindResult=bound$' "$runtime_probe"
 check "runtime-unavailable-udp-sent" '^result=udp_datagram_sent$' "$runtime_probe"
 
+if [[ "$RECOVERED_REPEAT" == true ]]; then
+  runtime_probe="$(<"$RESULT_DIR/runtime-recovered-repeat.properties")"
+  check "runtime-recovered-repeat-uid" "^uid=$EXPECTED_ALLOWED_UID$" "$runtime_probe"
+  check "runtime-recovered-repeat-vpn-bind" '^bindResult=bound$' "$runtime_probe"
+  check "runtime-recovered-repeat-network-handle" '^bindNetworkHandle=[1-9][0-9]*$' "$runtime_probe"
+  check "runtime-recovered-repeat-udp-sent" '^result=udp_datagram_sent$' "$runtime_probe"
+fi
+
 check "contract-app-refresh" '"outcome":"SCOPE_REFRESH".*app-refresh=intent' "$contract_log"
 check "contract-network-refresh" '"outcome":"SCOPE_REFRESH".*network-refresh=intent' "$contract_log"
 check "contract-unavailable" '"outcome":"LOOKUP_UNAVAILABLE"' "$contract_log"
@@ -186,6 +202,50 @@ check "post-policy-shim-tx" 'shim-tx [1-9]' "$vpp_cli"
 check "allow-sentinel-drop-zero" "uid-block enabled 1 uid $BLOCK_OWNER_UID packets 0" "$vpp_cli"
 check "allowed-package-provenance" "VPN allowed package=$ALLOWED_PACKAGE" \
   "$(<"$RESULT_DIR/snort-vpn-service.log")"
+
+if [[ "$RECOVERED_REPEAT" == true ]]; then
+  recovered_key="ip4/UDP/${HOST}:${PORT}-10.111.0.2:${RECOVERED_SOURCE_PORT}"
+  check_fixed() {
+    local label="$1"
+    local pattern="$2"
+    local text="$3"
+    if grep -Fq -- "$pattern" <<<"$text"; then
+      echo "PASS $label"
+    else
+      echo "INSUFFICIENT $label"
+      pass=0
+    fi
+  }
+
+  check_fixed "contract-recovered-miss" \
+    "\"outcome\":\"MISS_SUBMITTED\",\"key\":\"$recovered_key\"" \
+    "$contract_log"
+  check_fixed "contract-recovered-completion" \
+    "\"outcome\":\"COMPLETION_ACCEPTED\",\"key\":\"$recovered_key\"" \
+    "$contract_log"
+  check_fixed "contract-recovered-cache-hit" \
+    "\"outcome\":\"CACHE_HIT\",\"key\":\"$recovered_key\"" \
+    "$contract_log"
+
+  recovered_miss_line="$(grep -nF '"outcome":"MISS_SUBMITTED"' <<<"$contract_log" \
+    | grep -F "\"key\":\"$recovered_key\"" \
+    | head -n 1 | cut -d: -f1 || true)"
+  recovered_completion_line="$(grep -nF '"outcome":"COMPLETION_ACCEPTED"' <<<"$contract_log" \
+    | grep -F "\"key\":\"$recovered_key\"" \
+    | head -n 1 | cut -d: -f1 || true)"
+  recovered_hit_line="$(grep -nF '"outcome":"CACHE_HIT"' <<<"$contract_log" \
+    | grep -F "\"key\":\"$recovered_key\"" \
+    | head -n 1 | cut -d: -f1 || true)"
+  if [[ -n "$recovered_miss_line" && -n "$recovered_completion_line" \
+    && -n "$recovered_hit_line" \
+    && "$recovered_miss_line" -lt "$recovered_completion_line" \
+    && "$recovered_completion_line" -lt "$recovered_hit_line" ]]; then
+    echo "PASS contract-recovered-miss-completion-hit-order"
+  else
+    echo "INSUFFICIENT contract-recovered-miss-completion-hit-order"
+    pass=0
+  fi
+fi
 
 echo
 echo "## cleanup"
