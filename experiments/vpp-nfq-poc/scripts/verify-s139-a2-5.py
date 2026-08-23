@@ -145,9 +145,12 @@ def verify_stage(manifest: Dict[str, Any], evidence: Path,
         invalid.append(f"{stage_id}: missing/invalid stage document ({stage_error})")
         return
     start_observed = bool(stage_doc.get("startObserved"))
+    stage_control_observed = bool(stage_doc.get("stageControlObserved"))
     traffic_observed = bool(stage_doc.get("trafficObserved"))
     if not start_observed:
         invalid.append(f"{stage_id}: native VPP start was not observed")
+    if not stage_control_observed:
+        invalid.append(f"{stage_id}: stage-control barrier was not observed")
     if not traffic_observed:
         invalid.append(f"{stage_id}: traffic/resolver boundary was not observed")
     cleanup, cleanup_error = read_json(stage_dir / str(stage_doc.get("cleanupFile", "cleanup-wait.json")))
@@ -161,7 +164,7 @@ def verify_stage(manifest: Dict[str, Any], evidence: Path,
     # A stage that never reached the native/traffic boundary is a preflight
     # invalidation, not a policy FAIL.  Do not let missing downstream records
     # manufacture a false behavioral verdict.
-    if not start_observed or not traffic_observed:
+    if not start_observed or not stage_control_observed or not traffic_observed:
         return
 
     app, app_detail = app_record(stage_doc, stage_dir, manifest)

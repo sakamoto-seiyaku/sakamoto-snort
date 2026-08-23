@@ -102,7 +102,7 @@ run_stage() {
   adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" \
     --ez start true --es mode "$MODE" --es allowedPackage "$APP_PACKAGE_A" \
     --ei blockOwnerUid "$block_uid" --ez ownerCache false \
-    --ez enableIpv6 false --ez oi3AppInject false --es uidContractStage "$stage"
+    --ez enableIpv6 false --ez oi3AppInject false
 
   local start_ok=false deadline=$((SECONDS + START_WAIT))
   while (( SECONDS <= deadline )); do
@@ -113,6 +113,25 @@ run_stage() {
     sleep "$POLL_INTERVAL"
   done
   echo "start_observed=$start_ok"
+
+  # Stage control is deliberately a second lifecycle message.  Sending it
+  # together with start=true constructs the attribution contract before
+  # startRuntime() and was observed to leave Android's owner API returning
+  # -1 for every real AppA tuple.  A2-4's proven order is start -> establish ->
+  # stage control -> traffic, so make that ordering an explicit barrier here.
+  adb_cmd shell am start --activity-clear-top -n "$VPN_PACKAGE/.MainActivity" \
+    --es uidContractStage "$stage" >/dev/null 2>&1 || true
+  local stage_control_ok=false stage_deadline=$((SECONDS + START_WAIT))
+  while (( SECONDS <= stage_deadline )); do
+    capture_remote "$dir/uid-attribution-contract.stage-poll.jsonl" "$CONTRACT_PATH"
+    if grep -q '"outcome":"STAGE_BEGIN"' "$dir/uid-attribution-contract.stage-poll.jsonl" \
+        && grep -q "\"stage_id\":\"$stage\"" "$dir/uid-attribution-contract.stage-poll.jsonl"; then
+      stage_control_ok=true
+      break
+    fi
+    sleep "$POLL_INTERVAL"
+  done
+  echo "stage_control_observed=$stage_control_ok"
 
   echo "## real AppA TrafficAdapter EMIT"
   adb_cmd shell am start -n "$APP_PACKAGE_A/$TRAFFIC_ACTIVITY" \
@@ -178,13 +197,14 @@ run_stage() {
     adb_su "ip link show tun0 2>/dev/null || true" | tr -d '\r'
   } >"$dir/cleanup.txt"
 
-  python3 - "$dir/stage.json" "$stage" "$policy" "$source_port" "$block_uid" "$start_ok" "$traffic_ok" "$DESTINATION_HOST" "$DESTINATION_PORT" <<'PY'
+  python3 - "$dir/stage.json" "$stage" "$policy" "$source_port" "$block_uid" "$start_ok" "$stage_control_ok" "$traffic_ok" "$DESTINATION_HOST" "$DESTINATION_PORT" <<'PY'
 import json, sys
-path, stage, policy, source, block, start, traffic, destination_host, destination_port = sys.argv[1:]
+path, stage, policy, source, block, start, stage_control, traffic, destination_host, destination_port = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as stream:
     json.dump({"schema": "s139-a2-5-stage/v1", "stageId": stage,
                "policy": policy, "sourcePort": int(source),
                "blockOwnerUid": int(block), "startObserved": start == "true",
+               "stageControlObserved": stage_control == "true",
                "trafficObserved": traffic == "true", "family": "ip4",
                "protocol": "udp", "destinationHost": destination_host,
                "destinationPort": int(destination_port), "appEvidenceFile": "app-runtime.jsonl",
