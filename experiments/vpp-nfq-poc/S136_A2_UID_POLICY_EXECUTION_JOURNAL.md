@@ -421,3 +421,41 @@ refresh/unavailable behavior, wrong-UID drop, or per-dropped-packet
 socket/transport zero. The result remains
 `architecture_interruption=false`; no owner-inline, FlowOwner-key, or UID
 canonical-identity redesign is indicated.
+
+## Follow-up execution: second-UID lifecycle and unavailable provider (2026-08-23)
+
+The lifecycle runner used the corrected androidruntime fixture (UID `12629`)
+and four real VPN-bound IPv4 UDP probes. Its execution checkpoint is
+`da59521a445911a608ad70ac604f2bf617e1c47e`:
+
+```sh
+ADB_SERIAL=28201JEGR0XPAJ \
+  RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final \
+  experiments/vpp-nfq-poc/scripts/android-run-s139-a2-second-uid-lifecycle-unavailable.sh
+```
+
+The runner exited `0` but classified the cell `INSUFFICIENT`. Baseline and
+after-refresh reused source port `45625`; the unavailable tuple used `45626`;
+the provider-restore tuple used `45627`. All four runtime properties recorded
+`bindToVpn=true`, `bindResult=bound`, network handle `4070739726349`, UID
+`12629`, and `udp_datagram_sent`. External UDP reply/egress remains
+NON-CLAIM.
+
+The contract recorded app scope refresh at `app_epoch=2`, network scope refresh
+at `network_epoch=2`, both at generation `2`, and a
+`LOOKUP_UNAVAILABLE` intent plus tuple event for source port `45626`, followed
+by `LOOKUP_PROVIDER_AVAILABLE`. `MISS_SUBMITTED` and
+`COMPLETION_ACCEPTED` each occurred three times; `CACHE_HIT` occurred once.
+Resolver output was `45625: uid=-1, uid=-1, uid=12629`, `45626: uid=-1`, and
+`45627: uid=-1`; no recovered resolver completion was captured. The final
+native VPP snapshot recorded owner-cache `valid=1 hits=0 misses=5 stores=1
+uid=12629`, resolver `queries=5/hits=5/last-uid=-1`, `tuple parsed=4`,
+`shim-tx=11 bytes=632`, `tx=0`, and sentinel `uid-block 99999 packets=0`.
+
+`snort-vpn-service.log` was empty, so service-log provenance is insufficient.
+Cleanup recorded no remaining VPP process and no `tun0`. This cell provides
+narrow real-probe plus contract refresh/unavailable observations, but does not
+close recovered-provider attribution or joined native cache behavior. It also
+does not close the complete A2 matrix, reverse traffic, wrong-UID drop,
+per-dropped-packet socket/transport zero, or external egress. The architecture
+decision remains `architecture_interruption=false`.

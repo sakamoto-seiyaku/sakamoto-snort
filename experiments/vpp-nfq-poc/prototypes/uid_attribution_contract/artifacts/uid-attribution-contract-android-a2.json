@@ -8,14 +8,15 @@
   "working_assumption": "FlowOwner remains selected from the direction-independent canonical tuple. UID is an asynchronous, scoped policy fact; owner turns remain nonblocking and UID never enters the canonical FlowOwner key.",
   "provenance": {
     "generated_at": "2026-08-23 Asia/Taipei",
-    "git_head_at_documentation": "be74f449ac12915105078d1346bdbde5e970197b",
-    "git_head_at_execution": "af78a83bb420b90c39c39e2df95737e43c305526",
+    "git_head_at_documentation": "9fafa03b662286d7b24c8a657edcec7b5c91544e",
+    "git_head_at_execution": "da59521a445911a608ad70ac604f2bf617e1c47e",
     "execution_commits": [
       "65d70199d5ff4f4d2e136f5396a5bcc17b713c8f",
       "0c4c5ebee55028eb784d3999fd1f4fff78c243d2",
       "2179b806267a3d0f58b00361c993321f27810e04",
       "7824c914b0af2ab072868ec96a447141325380dc",
-      "af78a83bb420b90c39c39e2df95737e43c305526"
+      "af78a83bb420b90c39c39e2df95737e43c305526",
+      "da59521a445911a608ad70ac604f2bf617e1c47e"
     ],
     "device": {
       "serial": "28201JEGR0XPAJ",
@@ -57,6 +58,7 @@
       "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-udp4-second-uid-vpn-bind-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/",
       "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/",
       "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final/",
@@ -92,6 +94,7 @@
       "ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=true RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-tcp6-second-uid.sh",
       "ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=true RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-udp6-second-uid.sh",
       "ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=false RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-udp4-second-uid-vpn-bind-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-udp4-second-uid.sh",
+      "ADB_SERIAL=28201JEGR0XPAJ RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-second-uid-lifecycle-unavailable.sh",
       "./dev/adb shell dumpsys connectivity; ./dev/adb shell su 0 cat /proc/net/tcp; ./dev/adb shell su 0 cat /proc/net/tcp6"
     ]
   },
@@ -101,7 +104,7 @@
     "cell_result": "INSUFFICIENT",
     "pass": 9,
     "fail": 0,
-    "insufficient": 3,
+    "insufficient": 4,
     "invalid": 0,
     "scope": "narrow policy/TUN/VPP boundary only; B1 external forwarding is a non-claim"
   },
@@ -421,6 +424,36 @@
       "decisive_falsifier": "the corrected DatagramSocket bind is absent, the exact IPv4 UDP tuple is absent from VPP, or the completion UID differs from 12629"
     },
     {
+      "id": "A2-second-uid-lifecycle-refresh-unavailable",
+      "status": "INSUFFICIENT",
+      "facts": {
+        "app": "com.sakamoto.snort.androidruntime",
+        "uid": 12629,
+        "scope_refresh": "contract emitted app SCOPE_REFRESH with app_epoch=2, then network SCOPE_REFRESH with network_epoch=2; both retained generation=2",
+        "runtime_probes": "baseline source port 45625, after-refresh source port 45625, unavailable source port 45626, and recovered source port 45627 all recorded bindToVpn=true, bindResult=bound, bindNetworkHandle=4070739726349, uid=12629, result=udp_datagram_sent",
+        "contract": "MISS_SUBMITTED/COMPLETION_ACCEPTED occurred three times; LOOKUP_UNAVAILABLE intent and tuple records were emitted for source port 45626; LOOKUP_PROVIDER_AVAILABLE followed; CACHE_HIT occurred once",
+        "resolver": "source port 45625 queries returned uid=-1, uid=-1, uid=12629; source port 45626 returned uid=-1; recovered source port 45627 returned uid=-1 with no recovered resolver completion",
+        "native_vpp_final": "owner-cache valid=1 hits=0 misses=5 stores=1 uid=12629; resolver queries=5/hits=5/last-uid=-1; shim-tx=11 bytes=632; tx=0; tuple parsed=4; allow sentinel uid=99999 packets=0",
+        "service_log_provenance": "INSUFFICIENT: snort-vpn-service.log is empty",
+        "cleanup": "runner recorded no remaining VPP process and no tun0",
+        "interpretation": "bounded refresh/unavailable contract intents and real VPN-bound probes are observed, but restored-provider resolver completion for the recovered tuple and joined native cache behavior are absent"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/runtime-baseline.properties",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/runtime-after-refresh.properties",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/runtime-unavailable.properties",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/runtime-recovered.properties",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/uid-attribution-contract.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/vpp-hev.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/vpp-shim.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/snort-vpn-service.log"
+      ],
+      "decisive_falsifier": "a recovered source port 45627 receives an unambiguous UID 12629 resolver completion after provider restore and its native cache state is joined to the refreshed tuple"
+    },
+    {
       "id": "A2-uid-drop-no-broker-work",
       "status": "INSUFFICIENT",
       "facts": {
@@ -530,7 +563,7 @@
     {
       "id": "VPN-F026",
       "status": "OPEN_RISK",
-      "update": "A2 proves narrow Chrome UID 10180 IPv4 TCP/UDP attribution, long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations (Chrome 10180 plus Maps 10176), corrected second-UID 12629 IPv4/IPv6 TCP and UDP VPN-bound tuple/completion/cache observations, a historical one-off exact-target IPv6 UID completion plus final IPv6 tuple/proc observations with intermittent target uid=-1, live Java contract replay rejection at the tun/VPP boundary, and a fresh UID-drop protect-broker boundary with zero requests/completions/failures. The corrected second-UID cells retain an allowed-package service-log provenance gap and do not claim wrong-UID drop behavior. A1 proves the cross-implementation replay/cache/key baseline; the Android control does not prove native VPP owner/cache invariance. A2 does not prove the full IPv4/IPv6 TCP/UDP matrix, reverse closure, lifecycle closure, repeatable ordinary-App IPv6 acceptance, external egress, or per-dropped-packet socket/transport zero."
+      "update": "A2 proves narrow Chrome UID 10180 IPv4 TCP/UDP attribution, long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations (Chrome 10180 plus Maps 10176), corrected second-UID 12629 IPv4/IPv6 TCP and UDP VPN-bound tuple/completion/cache observations, and a lifecycle cell with bounded app/network refresh plus unavailable/available intents but no recovered resolver completion. It also retains a historical one-off exact-target IPv6 UID completion plus final IPv6 tuple/proc observations with intermittent target uid=-1, live Java contract replay rejection at the tun/VPP boundary, and a fresh UID-drop protect-broker boundary with zero requests/completions/failures. The corrected second-UID cells retain an allowed-package service-log provenance gap and do not claim wrong-UID drop behavior. A1 proves the cross-implementation replay/cache/key baseline; the Android control does not prove native VPP owner/cache invariance. A2 does not prove the full IPv4/IPv6 TCP/UDP matrix, reverse closure, lifecycle closure, repeatable ordinary-App IPv6 acceptance, external egress, or per-dropped-packet socket/transport zero."
     },
     {
       "id": "VPN-F026-A2-FIXTURE-01",
@@ -565,6 +598,7 @@
     "No complete current-UID IPv4 drop proof with independent per-dropped-packet zero socket/transport counters; the fresh run only proves a narrow zero protect-broker boundary.",
     "The corrected second-UID cells do not prove wrong-UID drop-zero behavior; uid-block=99999 packets=0 is only the allow-run sentinel observation.",
     "The corrected second-UID cells do not prove Android service-log allowed-package provenance, lifecycle refresh/unavailable behavior, reverse traffic, complete two-App IPv4/IPv6 TCP/UDP acceptance, or per-dropped-packet socket/transport zero.",
+    "The second-UID lifecycle cell records app/network scope refresh and provider unavailable/available intents, but does not prove a recovered source-port 45627 resolver completion or joined native cache behavior after restoration.",
     "No Android ConnectivityManager/OEM-general timing claim beyond the Pixel run.",
     "No reverse-traffic acceptance claim; the concurrent-distinct-tuple observation is narrow and does not prove the full matrix.",
     "Android live Java replay assertions are not an independent proof that native VPP live owner/cache state was unchanged; the Java seam must not be treated as a native invariance proof.",
@@ -590,6 +624,7 @@
     "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/",
     "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/",
     "experiments/vpp-nfq-poc/results/s139-a2-udp4-second-uid-vpn-bind-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-second-uid-lifecycle-unavailable-final/",
     "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/",
     "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/",
     "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/"
