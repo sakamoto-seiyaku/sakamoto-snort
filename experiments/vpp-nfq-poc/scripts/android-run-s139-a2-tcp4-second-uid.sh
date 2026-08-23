@@ -108,7 +108,11 @@ capture vpp-hev.log "$HEV_PATH"
 capture vpp-shim.log "$SHIM_PATH"
 echo
 echo "## service log (allowed-package provenance)"
-adb_cmd shell logcat -d -t 400 -s SnortVpnService:I 2>/dev/null | tr -d '\r' | tee "$RESULT_DIR/snort-vpn-service.log" || true
+# RuntimeService emits under the SnortVpnLite tag. Keep the legacy tag as a
+# compatibility capture so older builds remain diagnosable, but do not filter
+# out the current service tag.
+adb_cmd shell logcat -d -t 400 -s SnortVpnLite:I SnortVpnService:I '*:S' 2>/dev/null \
+  | tr -d '\r' | tee "$RESULT_DIR/snort-vpn-service.log" || true
 
 vpp_cli="$(<"$RESULT_DIR/vpp-cli.log")"
 resolver_log="$(<"$RESULT_DIR/vpp-owner-resolver.log")"
@@ -152,6 +156,14 @@ if [[ -z "$leftovers" ]]; then
 else
   echo "FAIL cleanup-no-vpp"
   printf '%s\n' "$leftovers"
+  pass=0
+fi
+tun0_leftover="$(adb_su "ip link show tun0 2>/dev/null || true" | tr -d '\r')"
+if [[ -z "$tun0_leftover" ]]; then
+  echo "PASS cleanup-no-tun0"
+else
+  echo "FAIL cleanup-no-tun0"
+  printf '%s\n' "$tun0_leftover"
   pass=0
 fi
 
