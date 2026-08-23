@@ -382,3 +382,42 @@ refresh/unavailable behavior, external egress, or per-dropped-packet
 socket/transport zero. The correction does not require blocking owner-inline
 execution, changing FlowOwner identity, or adding UID to the canonical key;
 `architecture_interruption=false` remains in force.
+
+## Follow-up execution: explicit VPN-bound second UID IPv4 UDP (2026-08-23)
+
+The fourth corrected second-UID cell used the freshly reinstalled
+`com.sakamoto.snort.androidruntime` UID `12629` and the explicit VPN Network
+bind fixture. It ran with IPv6 disabled and preserved the IPv4 UDP raw path:
+
+```sh
+ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=false \
+  RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-udp4-second-uid-vpn-bind-final \
+  experiments/vpp-nfq-poc/scripts/android-run-s139-a2-udp4-second-uid.sh
+```
+
+The runner exited `0` but classified the cell `INSUFFICIENT` because its sole
+runner gap was `allowed-package-provenance`. The raw probe recorded
+`bindToVpn=true`, `bindResult=bound`, network handle `4066444759053`, UID
+`12629`, and `udp_datagram_sent`. The exact VPP tuple was
+`10.111.0.2:45624 -> 1.1.1.1:53`, IPv4 UDP. Resolver output recorded the
+first query as `uid=-1`, then completion `uid=12629`; final counters were
+`queries=2/hits=2/last-uid=12629`. The owner cache finished
+`valid=1 hits=1 misses=2 stores=1 uid=12629`.
+
+The retained contract sequence was `MISS_SUBMITTED` with `pending=1/cache=0`
+-> `COMPLETION_ACCEPTED uid=12629` with `pending=0/cache=1` -> `CACHE_HIT`.
+The final VPP boundary recorded `tuple parsed=2`, `shim-tx=9 bytes=540`,
+`tx=0`, and allow sentinel `uid-block 99999 packets=0`. The
+`snort-vpn-service.log` capture was empty, so its
+`allowed-package-provenance` check was `INSUFFICIENT`; the package UID and VPN
+bind are independently recorded in the runtime probe and contract files. This
+is not wrong-UID drop evidence. Cleanup recorded no VPP process and no `tun0`.
+External UDP reply and egress remain NON-CLAIM.
+
+This adds narrow IPv4 UDP evidence to the corrected second-UID TCP/UDP set;
+it does not close the complete IPv4/IPv6 matrix, ordinary DNS request/response
+or TCP fallback/large-response behavior, reverse traffic, lifecycle
+refresh/unavailable behavior, wrong-UID drop, or per-dropped-packet
+socket/transport zero. The result remains
+`architecture_interruption=false`; no owner-inline, FlowOwner-key, or UID
+canonical-identity redesign is indicated.
