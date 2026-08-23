@@ -2340,6 +2340,15 @@ tun_poc_stage_command_fn (vlib_main_t *vm, unformat_input_t *input,
 
   snprintf (tun_poc_main.ledger_stage_id,
             sizeof (tun_poc_main.ledger_stage_id), "%s", (char *) stage);
+  /*
+   * Admission is a per-stage ledger fact.  The Android VPN can emit a
+   * startup/control packet before the runner installs its registered stage;
+   * if that packet consumes the one-shot guard, the first real transport
+   * packet in the stage has no durable TRANSPORT_ADMITTED evidence.  Reset
+   * only the stage-scoped admission guard here; packet counters and resolver
+   * state remain session-scoped.
+   */
+  tun_poc_main.ledger_admitted_logged = 0;
   tun_poc_main.strict_owner_pending =
     strncmp ((char *) stage, "A2-5", 4) == 0;
   vec_free (stage);

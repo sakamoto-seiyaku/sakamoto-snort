@@ -331,10 +331,18 @@ def verify(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                   and item.get("source_port") == source_port
                   and item.get("destination_port") == destination_port
                   and item.get("destination_address", destination_host) == destination_host]
-    if len(candidates) != 1:
-        invalid.append(f"AppA transport tuple candidates {len(candidates)} != 1")
+    if not candidates:
+        invalid.append("AppA transport tuple evidence is missing")
     else:
-        app = candidates[0]
+        # A2-6 deliberately sends a bounded repeat burst on one socket.  The
+        # runtime ledger may contain several records for that exact key; the
+        # verifier joins the final record while requiring every candidate to
+        # stay within the same package/UID/tuple identity.
+        app = candidates[-1]
+        candidate_keys = {str(item.get("canonical_key", "")) for item in candidates}
+        candidate_uids = {item.get("uid") for item in candidates}
+        if len(candidate_keys) != 1 or len(candidate_uids) != 1:
+            failures.append("AppA repeated transport records diverged in UID or canonical key")
         if app.get("bind_result") != "bound" or app.get("tuple_attempted") is not True:
             failures.append("AppA transport tuple was not VPN-bound and attempted")
         expected_key = str(app.get("canonical_key", ""))
