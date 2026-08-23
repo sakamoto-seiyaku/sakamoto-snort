@@ -156,7 +156,6 @@ run_stage() {
     fi
     sleep "$POLL_INTERVAL"
   done
-  echo "traffic_observed=$traffic_ok"
   sleep 1
 
   capture_remote "$dir/vpp-stdout.log" "$VPP_STDOUT_PATH"
@@ -169,6 +168,17 @@ run_stage() {
   capture_remote "$dir/uid-attribution-contract.jsonl" "$CONTRACT_PATH"
   capture_remote "$dir/vpn-session-provenance.json" "$VPN_RECEIPT_PATH"
   capture_remote "$dir/vpp-start-provenance.json" "$VPP_START_PATH"
+
+  # The poll loop is only a latency optimization.  A resolver response can
+  # land between the last poll and orderly stop, so the durable final files
+  # are authoritative for the traffic boundary.  Do not classify a real
+  # policy decision as INVALID merely because the allow-stage broker did not
+  # settle inside the poll window; the verifier must report that as FAIL.
+  if grep -q "stage_id.*$stage" "$dir/app-runtime.jsonl" && \
+     grep -q "ledger event=POLICY_DECISION.*stage-id=$stage" "$dir/vpp-owner-resolver.log"; then
+    traffic_ok=true
+  fi
+  echo "traffic_observed=$traffic_ok"
 
   echo "## orderly stop stage=$stage"
   adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true >/dev/null 2>&1 || true
