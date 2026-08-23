@@ -83,17 +83,19 @@ capture_apk_provenance() {
 
 poll_contract_for_outcome() {
   local desired_outcome="$1"
+  local family_filter="${2:-}"
+  local baseline_file="${3:-}"
   # Keep the poll snapshot durable as diagnostic raw evidence.  The gate is
   # decided from the native contract itself, not from elapsed time or
   # application logcat.
   adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" \
     | tr -d '\r' >"$RESULT_DIR/contract-poll.jsonl"
   python3 - "$RESULT_DIR/contract-poll.jsonl" "$app_a_uid" "$app_b_uid" \
-    "$desired_outcome" <<'PY'
+    "$desired_outcome" "$family_filter" "$baseline_file" <<'PY'
 import json
 import sys
 
-path, uid_a_text, uid_b_text, desired_outcome = sys.argv[1:]
+path, uid_a_text, uid_b_text, desired_outcome, family_filter, baseline_file = sys.argv[1:]
 try:
     uid_a = int(uid_a_text)
     uid_b = int(uid_b_text)
@@ -115,7 +117,25 @@ expected = {
     canonical_key("ip6", "udp", "fd00:111:111::2", 45752,
                   "2606:4700:4700::1111", 53): uid_b,
 }
-observed = set()
+if family_filter:
+    expected = {
+        key: uid for key, uid in expected.items()
+        if key.startswith(family_filter + "/")
+    }
+baseline = {}
+if baseline_file:
+    try:
+        with open(baseline_file, encoding="utf-8") as stream:
+            loaded = json.load(stream)
+        if isinstance(loaded, dict):
+            baseline = {
+                key: value for key, value in loaded.items()
+                if key in expected and isinstance(value, int)
+                and not isinstance(value, bool) and value >= 0
+            }
+    except (OSError, json.JSONDecodeError):
+        raise SystemExit(1)
+observed = {key: 0 for key in expected}
 try:
     with open(path, encoding="utf-8", errors="replace") as stream:
         for raw in stream:
@@ -126,82 +146,73 @@ try:
             key = event.get("key")
             if (event.get("outcome") == desired_outcome
                     and key in expected and event.get("uid") == expected[key]):
-                observed.add(key)
+                observed[key] += 1
 except OSError:
     raise SystemExit(1)
 
 label = "first-wave-correct-completions" if desired_outcome == "COMPLETION_ACCEPTED" \
     else "second-wave-correct-cache-hits"
-print(f"{label}={len(observed)}/{len(expected)}")
-raise SystemExit(0 if len(observed) == len(expected) else 1)
+if family_filter:
+    label += "-" + family_filter
+required = {key: baseline.get(key, 0) + 1 for key in expected}
+matched = sum(1 for key in expected if observed[key] >= required[key])
+print(f"{label}={matched}/{len(expected)} required={required} observed={observed}")
+raise SystemExit(0 if matched == len(expected) else 1)
 PY
 }
 
 poll_first_wave_contract() {
-  poll_contract_for_outcome COMPLETION_ACCEPTED
+  poll_contract_for_outcome COMPLETION_ACCEPTED "" ""
 }
 
 poll_second_wave_contract() {
-  poll_contract_for_outcome CACHE_HIT
+  poll_contract_for_outcome CACHE_HIT "" "${1:-}"
 }
 
-poll_runtime_pair() {
+poll_family_contract() {
   local family="$1"
-  local minimum_count="$2"
-  {
-    adb_su "cat '$RUNTIME_A_PATH' 2>/dev/null || true"
-    adb_su "cat '$RUNTIME_B_PATH' 2>/dev/null || true"
-  } | tr -d '\r' >"$RESULT_DIR/runtime-poll.jsonl"
-  python3 - "$RESULT_DIR/runtime-poll.jsonl" "$APP_PACKAGE_A" \
-    "$APP_PACKAGE_B" "$family" "$minimum_count" <<'PY'
+  local desired_outcome="$2"
+  local baseline_file="${3:-}"
+  poll_contract_for_outcome "$desired_outcome" "$family" "$baseline_file"
+}
+
+write_contract_outcome_baseline() {
+  local output="$1"
+  local desired_outcome="$2"
+  adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" \
+    | tr -d '\r' >"$RESULT_DIR/contract-poll.jsonl"
+  python3 - "$RESULT_DIR/contract-poll.jsonl" "$output" "$app_a_uid" \
+    "$app_b_uid" "$desired_outcome" <<'PY'
 import json
 import sys
 
-path, app_a, app_b, family, minimum_text = sys.argv[1:]
-try:
-    minimum = int(minimum_text)
-except ValueError:
-    raise SystemExit(1)
+path, output, uid_a_text, uid_b_text, desired_outcome = sys.argv[1:]
+uid_a = int(uid_a_text)
+uid_b = int(uid_b_text)
 expected = {
-    (app_a, "A2-2-appa-{}-udp".format(family)),
-    (app_b, "A2-2-appb-{}-udp".format(family)),
+    "ip4/UDP/1.1.1.1:53-10.111.0.2:45741": uid_a,
+    "ip6/UDP/2606:4700:4700::1111:53-fd00:111:111::2:45742": uid_a,
+    "ip4/UDP/1.1.1.1:53-10.111.0.2:45751": uid_b,
+    "ip6/UDP/2606:4700:4700::1111:53-fd00:111:111::2:45752": uid_b,
 }
 counts = {key: 0 for key in expected}
 try:
     with open(path, encoding="utf-8", errors="replace") as stream:
         for raw in stream:
             try:
-                record = json.loads(raw)
+                event = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            key = (record.get("app_package", record.get("appPackage")),
-                   record.get("stage_id", record.get("stageId")))
-            if (key in counts and record.get("family") == family
-                    and record.get("bind_result", record.get("vpnBindResult")) == "bound"
-                    and record.get("send_connect_outcome", record.get("result"))
-                    == "udp_datagram_sent"
-                    and record.get("tuple_attempted") is True):
+            key = event.get("key")
+            if (event.get("outcome") == desired_outcome
+                    and key in expected and event.get("uid") == expected[key]):
                 counts[key] += 1
 except OSError:
     raise SystemExit(1)
-print("runtime-pair {} min={} counts={}".format(family, minimum, counts))
-raise SystemExit(0 if all(count >= minimum for count in counts.values()) else 1)
+with open(output, "w", encoding="utf-8") as stream:
+    json.dump(counts, stream, indent=2, sort_keys=True)
+    stream.write("\n")
 PY
-}
-
-wait_for_runtime_pair() {
-  local family="$1"
-  local minimum_count="$2"
-  local deadline=$((SECONDS + FIRST_WAVE_WAIT_SECONDS))
-  runtime_poll_attempts=0
-  while (( SECONDS <= deadline )); do
-    runtime_poll_attempts=$((runtime_poll_attempts + 1))
-    if poll_runtime_pair "$family" "$minimum_count"; then
-      return 0
-    fi
-    sleep "$CONTRACT_POLL_INTERVAL"
-  done
-  return 1
 }
 
 wait_for_first_wave() {
@@ -218,14 +229,31 @@ wait_for_first_wave() {
 }
 
 wait_for_second_wave() {
+  local baseline_file="${1:-}"
   local deadline=$((SECONDS + FIRST_WAVE_WAIT_SECONDS))
   second_wave_poll_attempts=0
   while (( SECONDS <= deadline )); do
     second_wave_poll_attempts=$((second_wave_poll_attempts + 1))
-    if poll_second_wave_contract; then
+    if poll_second_wave_contract "$baseline_file"; then
       return 0
     fi
     sleep "$CONTRACT_POLL_INTERVAL"
+  done
+  return 1
+}
+
+wait_for_family_contract() {
+  local family="$1"
+  local desired_outcome="$2"
+  local baseline_file="${3:-}"
+  local deadline=$((SECONDS + FIRST_WAVE_WAIT_SECONDS))
+  family_gate_poll_attempts=0
+  while (( SECONDS <= deadline )); do
+    family_gate_poll_attempts=$((family_gate_poll_attempts + 1))
+    if poll_family_contract "$family" "$desired_outcome" "$baseline_file"; then
+      return 0
+    fi
+    sleep 0.25
   done
   return 1
 }
@@ -452,6 +480,8 @@ launch_tuple() {
   local stage_id="$7"
   local wave_id="$8"
   local activity="$package_name/$TRAFFIC_ACTIVITY"
+  # UDP timeout=0 means the adapter durably records the result immediately
+  # after send(); it is not a transport or cache timeout.
   echo "## launch wave=$wave_id package=$package_name stage=$stage_id $family/$protocol $source_port -> $destination_host:$destination_port"
   adb_cmd shell am start -a com.sakamoto.snort.a2traffic.EMIT \
     -n "$activity" \
@@ -461,7 +491,7 @@ launch_tuple() {
     --ei a2MatrixSourcePort "$source_port" \
     --es a2MatrixDestinationHost "$destination_host" \
     --ei a2MatrixDestinationPort "$destination_port" \
-    --ei a2MatrixTimeoutMillis 1200 \
+    --ei a2MatrixTimeoutMillis 0 \
     --ei a2MatrixRepeat 1 \
     >"$RESULT_DIR/launch-$wave_id-$stage_id.log" 2>&1 &
   launch_pids+=("$!")
@@ -471,7 +501,8 @@ launch_tuple() {
 launch_pair() {
   local wave_id="$1"
   local family="$2"
-  local minimum_count="$3"
+  local desired_outcome="$3"
+  local baseline_file="${4:-}"
   local destination_host="1.1.1.1"
   local app_a_port=45741
   local app_b_port=45751
@@ -493,34 +524,59 @@ launch_pair() {
       launch_failures=$((launch_failures + 1))
     fi
   done
-  if wait_for_runtime_pair "$family" "$minimum_count"; then
+  # The native contract is the semantic family barrier.  Runtime JSONL is
+  # captured as final evidence after both waves; it must not keep this barrier
+  # open long enough for the native cache TTL to expire.
+  if wait_for_family_contract "$family" "$desired_outcome" "$baseline_file"; then
+    last_family_gate_poll_attempts="$family_gate_poll_attempts"
+    echo "native-family-gate family=$family outcome=$desired_outcome observed attempts=$last_family_gate_poll_attempts"
     return 0
   fi
+  last_family_gate_poll_attempts="$family_gate_poll_attempts"
+  echo "native-family-gate family=$family outcome=$desired_outcome timeout attempts=$last_family_gate_poll_attempts" >&2
   return 1
 }
 
 # Wave 1: submit an AppA/AppB pair per family.  Each launch has repeat=1; the
-# pair's durable runtime records gate the next family so one singleTop
-# Activity never receives two overlapping same-package workers.
+# pair's native COMPLETION_ACCEPTED records gate the next family so one
+# singleTop Activity never receives two intentionally overlapping workers.
 launch_failures=0
 first_wave_launch_count=0
 second_wave_launch_count=0
 second_wave_gate_observed=false
 second_wave_poll_attempts=0
-first_wave_runtime_ip4=false
-first_wave_runtime_ip6=false
-second_wave_runtime_ip4=false
-second_wave_runtime_ip6=false
-if launch_pair first ip4 1; then first_wave_runtime_ip4=true; fi
+first_wave_native_ip4=false
+first_wave_native_ip6=false
+second_wave_native_ip4=false
+second_wave_native_ip6=false
+first_wave_native_ip4_attempts=0
+first_wave_native_ip6_attempts=0
+second_wave_native_ip4_attempts=0
+second_wave_native_ip6_attempts=0
+first_wave_pairs_ok=true
+if launch_pair first ip4 COMPLETION_ACCEPTED; then
+  first_wave_native_ip4=true
+else
+  first_wave_pairs_ok=false
+fi
+first_wave_native_ip4_attempts="$last_family_gate_poll_attempts"
 first_wave_launch_count=$((first_wave_launch_count + 2))
-if launch_pair first ip6 1; then first_wave_runtime_ip6=true; fi
-first_wave_launch_count=$((first_wave_launch_count + 2))
+if [[ "$first_wave_pairs_ok" == true ]]; then
+  if launch_pair first ip6 COMPLETION_ACCEPTED; then
+    first_wave_native_ip6=true
+  else
+    first_wave_pairs_ok=false
+  fi
+  first_wave_native_ip6_attempts="$last_family_gate_poll_attempts"
+  first_wave_launch_count=$((first_wave_launch_count + 2))
+fi
 echo "first-wave-launches=$first_wave_launch_count launch_failures=$launch_failures"
 
 # Evidence gate: do not submit wave 2 until all four wave-1 canonical keys
 # have a native COMPLETION_ACCEPTED carrying the registered App UID.
 first_wave_gate_observed=false
-if wait_for_first_wave; then
+first_wave_poll_attempts=0
+if [[ "$first_wave_pairs_ok" == true ]] && wait_for_first_wave; then
   first_wave_gate_observed=true
   echo "first-wave-completion-gate=observed attempts=$first_wave_poll_attempts"
 else
@@ -531,11 +587,28 @@ fi
 # these requests cache hits; a timed-out gate intentionally leaves wave 2
 # unlaunched so the verifier can classify the raw run as incomplete.
 if [[ "$first_wave_gate_observed" == true ]]; then
-  if launch_pair second ip4 2; then second_wave_runtime_ip4=true; fi
+  second_wave_cache_baseline="$RESULT_DIR/second-wave-cache-baseline.json"
+  write_contract_outcome_baseline "$second_wave_cache_baseline" CACHE_HIT
+  second_wave_pairs_ok=true
+  if launch_pair second ip4 CACHE_HIT "$second_wave_cache_baseline"; then
+    second_wave_native_ip4=true
+  else
+    second_wave_pairs_ok=false
+  fi
+  second_wave_native_ip4_attempts="$last_family_gate_poll_attempts"
   second_wave_launch_count=$((second_wave_launch_count + 2))
-  if launch_pair second ip6 2; then second_wave_runtime_ip6=true; fi
-  second_wave_launch_count=$((second_wave_launch_count + 2))
-  if wait_for_second_wave; then
+  if [[ "$second_wave_pairs_ok" == true ]]; then
+    if launch_pair second ip6 CACHE_HIT "$second_wave_cache_baseline"; then
+      second_wave_native_ip6=true
+    else
+      second_wave_pairs_ok=false
+    fi
+    second_wave_native_ip6_attempts="$last_family_gate_poll_attempts"
+    second_wave_launch_count=$((second_wave_launch_count + 2))
+  fi
+  second_wave_poll_attempts=0
+  if [[ "$second_wave_pairs_ok" == true ]] \
+      && wait_for_second_wave "$second_wave_cache_baseline"; then
     second_wave_gate_observed=true
     echo "second-wave-cache-hit-gate=observed attempts=$second_wave_poll_attempts"
   else
@@ -575,19 +648,44 @@ with open(output, "w", encoding="utf-8") as stream:
     stream.write("\n")
 PY
 
+echo "## capture durable pre-cleanup A2-2 evidence"
+capture_remote "vpn-session-provenance.json" "$RECEIPT_PATH"
+capture_remote "vpn-session-provenance-failure.json" "$FAILURE_RECEIPT_PATH"
+capture_remote "vpp-start-provenance.json" "$VPP_START_RECEIPT_PATH"
+capture_remote "uid-attribution-contract.jsonl" "$CONTRACT_PATH"
+capture_remote "a2-2-runtime-appa.jsonl" "$RUNTIME_A_PATH"
+capture_remote "a2-2-runtime-appb.jsonl" "$RUNTIME_B_PATH"
+cat "$RESULT_DIR/a2-2-runtime-appa.jsonl" \
+  "$RESULT_DIR/a2-2-runtime-appb.jsonl" >"$RESULT_DIR/runtime-poll.jsonl"
+capture_remote "vpp-cli.log" "$VPP_CLI_PATH"
+capture_remote "vpp-owner-resolver.log" "$RESOLVER_PATH"
+capture_remote "vpp-shim.log" "$SHIM_PATH"
+capture_remote "vpp-hev.log" "$HEV_PATH"
+capture_remote "vpp-protect.log" "$PROTECT_PATH"
+
+# Build wave evidence only after the final runtime files are captured.  Native
+# family gates control launch ordering; runtimeGates are a final durable-file
+# summary and are never used as a long-poll barrier.
 python3 - "$RESULT_DIR/wave-evidence.json" "$first_wave_gate_observed" \
   "$first_wave_poll_attempts" "$first_wave_launch_count" \
   "$second_wave_launch_count" "$second_wave_gate_observed" \
   "$second_wave_poll_attempts" "$launch_failures" "$app_a_uid" "$app_b_uid" \
-  "$first_wave_runtime_ip4" "$first_wave_runtime_ip6" \
-  "$second_wave_runtime_ip4" "$second_wave_runtime_ip6" <<'PY'
+  "$first_wave_native_ip4" "$first_wave_native_ip6" \
+  "$second_wave_native_ip4" "$second_wave_native_ip6" \
+  "$first_wave_native_ip4_attempts" "$first_wave_native_ip6_attempts" \
+  "$second_wave_native_ip4_attempts" "$second_wave_native_ip6_attempts" \
+  "$RESULT_DIR/a2-2-runtime-appa.jsonl" \
+  "$RESULT_DIR/a2-2-runtime-appb.jsonl" "$APP_PACKAGE_A" "$APP_PACKAGE_B" <<'PY'
 import json
 import sys
 
 (
     output, gate, attempts, first_launches, second_launches, second_gate,
     second_attempts, launch_failures, uid_a_text, uid_b_text,
-    first_runtime_ip4, first_runtime_ip6, second_runtime_ip4, second_runtime_ip6,
+    first_native_ip4, first_native_ip6, second_native_ip4, second_native_ip6,
+    first_native_ip4_attempts, first_native_ip6_attempts,
+    second_native_ip4_attempts, second_native_ip6_attempts,
+    runtime_a_path, runtime_b_path, app_a, app_b,
 ) = sys.argv[1:]
 
 def integer(value):
@@ -596,64 +694,128 @@ def integer(value):
     except ValueError:
         return -1
 
+def boolean(value):
+    return value == "true"
+
 uid_a = integer(uid_a_text)
 uid_b = integer(uid_b_text)
-first_gate = gate == "true"
-second_gate_observed = second_gate == "true"
-runtime_gates = lambda ip4, ip6: {
-    "ip4": ip4 == "true",
-    "ip6": ip6 == "true",
+first_gate = boolean(gate)
+second_gate_observed = boolean(second_gate)
+first_launch_count = integer(first_launches)
+second_launch_count = integer(second_launches)
+
+records_by_app = {app_a: [], app_b: []}
+for path in (runtime_a_path, runtime_b_path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as stream:
+            for raw in stream:
+                try:
+                    record = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                package = record.get("app_package", record.get("appPackage"))
+                if package in records_by_app:
+                    records_by_app[package].append(record)
+    except OSError:
+        pass
+
+stage_for = {
+    (app_a, "ip4"): "A2-2-appa-ip4-udp",
+    (app_a, "ip6"): "A2-2-appa-ip6-udp",
+    (app_b, "ip4"): "A2-2-appb-ip4-udp",
+    (app_b, "ip6"): "A2-2-appb-ip6-udp",
 }
+
+def count_success(package, family):
+    stage = stage_for[(package, family)]
+    return sum(
+        1 for record in records_by_app[package]
+        if record.get("stage_id", record.get("stageId")) == stage
+        and record.get("family") == family
+        and record.get("bind_result", record.get("vpnBindResult")) == "bound"
+        and record.get("send_connect_outcome", record.get("result"))
+        == "udp_datagram_sent"
+        and record.get("tuple_attempted") is True
+    )
+
+def runtime_counts():
+    return {
+        package: {
+            family: count_success(package, family)
+            for family in ("ip4", "ip6")
+        }
+        for package in (app_a, app_b)
+    }
+
+counts = runtime_counts()
+
+def runtime_gates(minimum):
+    if minimum <= 0:
+        return {"ip4": False, "ip6": False}
+    return {
+        family: all(counts[package][family] >= minimum
+                    for package in (app_a, app_b))
+        for family in ("ip4", "ip6")
+    }
+
 keys = [
     {"key": "ip4/UDP/1.1.1.1:53-10.111.0.2:45741", "uid": uid_a},
     {"key": "ip6/UDP/2606:4700:4700::1111:53-fd00:111:111::2:45742", "uid": uid_a},
     {"key": "ip4/UDP/1.1.1.1:53-10.111.0.2:45751", "uid": uid_b},
     {"key": "ip6/UDP/2606:4700:4700::1111:53-fd00:111:111::2:45752", "uid": uid_b},
 ]
+
 with open(output, "w", encoding="utf-8") as stream:
     json.dump({
-        "schema": "s139-a2-2-two-wave/v1",
+        "schema": "s139-a2-2-two-wave/v2",
         "runtimeRecordSchema": "s139-a2-1-runtime/v1",
         "contractRecordSchema": "uid-attribution-contract/v1",
+        "barrier": "native-contract-family",
         "firstWave": {
-            "launchCount": integer(first_launches),
+            "launchCount": first_launch_count,
             "repeat": 1,
             "gateObserved": first_gate,
             "gateOutcome": "COMPLETION_ACCEPTED",
             "pollAttempts": integer(attempts),
+            "nativeGates": {
+                "ip4": boolean(first_native_ip4),
+                "ip6": boolean(first_native_ip6),
+            },
+            "nativeGatePollAttempts": {
+                "ip4": integer(first_native_ip4_attempts),
+                "ip6": integer(first_native_ip6_attempts),
+            },
             "correctUidCompletionCount": 4 if first_gate else 0,
             "completionKeys": keys if first_gate else [],
-            "runtimeGates": runtime_gates(first_runtime_ip4, first_runtime_ip6),
+            "runtimeGates": runtime_gates(1),
+            "runtimeCounts": counts,
         },
         "secondWave": {
-            "launchCount": integer(second_launches),
+            "launchCount": second_launch_count,
             "repeat": 1,
-            "launched": integer(second_launches) == 4,
+            "launched": second_launch_count == 4,
             "cacheHitExpected": first_gate,
             "gateObserved": second_gate_observed,
             "gateOutcome": "CACHE_HIT",
             "pollAttempts": integer(second_attempts),
+            "nativeGates": {
+                "ip4": boolean(second_native_ip4),
+                "ip6": boolean(second_native_ip6),
+            },
+            "nativeGatePollAttempts": {
+                "ip4": integer(second_native_ip4_attempts),
+                "ip6": integer(second_native_ip6_attempts),
+            },
             "correctUidCacheHitCount": 4 if second_gate_observed else 0,
             "cacheHitKeys": keys if second_gate_observed else [],
-            "runtimeGates": runtime_gates(second_runtime_ip4, second_runtime_ip6),
+            "runtimeGates": runtime_gates(2 if second_launch_count == 4 else 0),
+            "runtimeCounts": counts,
         },
         "launchFailures": integer(launch_failures),
     }, stream, indent=2, sort_keys=True)
     stream.write("\n")
 PY
 
-echo "## capture durable pre-cleanup A2-2 evidence"
-capture_remote "vpn-session-provenance.json" "$RECEIPT_PATH"
-capture_remote "vpn-session-provenance-failure.json" "$FAILURE_RECEIPT_PATH"
-capture_remote "vpp-start-provenance.json" "$VPP_START_RECEIPT_PATH"
-capture_remote "uid-attribution-contract.jsonl" "$CONTRACT_PATH"
-capture_remote "a2-2-runtime-appa.jsonl" "$RUNTIME_A_PATH"
-capture_remote "a2-2-runtime-appb.jsonl" "$RUNTIME_B_PATH"
-capture_remote "vpp-cli.log" "$VPP_CLI_PATH"
-capture_remote "vpp-owner-resolver.log" "$RESOLVER_PATH"
-capture_remote "vpp-shim.log" "$SHIM_PATH"
-capture_remote "vpp-hev.log" "$HEV_PATH"
-capture_remote "vpp-protect.log" "$PROTECT_PATH"
 adb_cmd shell dumpsys connectivity 2>/dev/null | tr -d '\r' \
   >"$RESULT_DIR/connectivity.txt" || true
 

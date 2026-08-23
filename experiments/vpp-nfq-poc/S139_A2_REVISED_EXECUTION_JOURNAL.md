@@ -212,6 +212,31 @@ The raw bundle is retained. This is a control-plane settlement defect, not a
 UID/cache or FlowOwner architecture interruption. The next runner correction
 uses a waited, clear-top stop delivery before considering the bounded fallback.
 
+The clear-top cleanup correction was exercised by `fixed-4` and `fixed-5`.
+Both runs observed durable `CLEANUP` before force-stop and retained valid
+native/session provenance, UID joins, bounded state, and final settlement.
+`fixed-5` also retained four durable runtime records per App (the complete
+four-key, two-wave runtime set) and four correct-UID completion plus four
+correct-UID cache-hit events. It nevertheless remained `INCONCLUSIVE` because
+the runtime-pair polling window timed out while the final files were still
+complete; the contract also exposed a `CACHE_EXPIRED` for the delayed IPv4
+replay. This is a fixture sequencing defect: the adapter slept 1200 ms after
+`send()` before appending runtime evidence, and the runner incorrectly used
+that file poll as a pair barrier. It is not evidence of a UID or FlowOwner
+failure.
+
+The next fixture revision keeps the two-wave contract semantics but changes
+the pair barrier to native family events. Wave 1 gates IPv4 and IPv6 pairs on
+correct-UID `COMPLETION_ACCEPTED`; wave 2 gates each pair on a new
+correct-UID `CACHE_HIT`, using a pre-wave hit-count baseline so an earlier
+duplicate hit cannot satisfy the replay. A2-2 UDP launches use
+`timeoutMillis=0`, making the successful runtime record durable immediately
+after `send()`; runtime JSONL is captured as final evidence rather than a
+long-lived launch barrier. The evidence schema is now
+`s139-a2-2-two-wave/v2` with explicit `nativeGates`; the verifier treats the
+runtime snapshot as final evidence and no longer turns a diagnostic runtime
+poll timeout into a wave-gate failure.
+
 ## Claim boundary and next cells
 
 A2-0 and A2-1 now prove durable session provenance plus the complete

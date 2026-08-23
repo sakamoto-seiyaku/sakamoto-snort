@@ -261,16 +261,24 @@ be used to pair a hit with a different token, flow, generation, or scope.
 The traffic fixture uses two evidence-gated waves rather than an in-Activity
 `repeat=2` loop. Wave 1 submits the four fresh tuples concurrently with one
 operation per launch (`repeat=1`). Within each wave, IPv4 AppA/AppB and then
-IPv6 AppA/AppB are submitted as pairs; the durable runtime record for one pair
-gates the next pair. The runner polls the durable contract until all four
-registered keys have a `COMPLETION_ACCEPTED` carrying the expected App UID.
-Only then does wave 2 submit the same four exact tuples once each and poll for
-four correct-UID `CACHE_HIT` events. This barrier is evidence-based;
-it does not infer cache readiness from an elapsed sleep. It also prevents the
-Android `singleTop` Activity from racing two same-package workers, which
-previously made a second fixed-port UDP send return `EPERM` before entering
-VPP. A missing gate is `INCONCLUSIVE`, not an architecture interruption, and
-the raw contract/runtime evidence is retained.
+IPv6 AppA/AppB are submitted as pairs; the native contract gate for one pair
+gates the next pair. Wave 1 requires correct-UID `COMPLETION_ACCEPTED` for
+both keys in each family. Only then does wave 2 submit the same four exact
+tuples once each and require a new correct-UID `CACHE_HIT` for both keys in
+each family. The runner snapshots the pre-wave-2 hit counts so a duplicate
+hit emitted during wave 1 cannot satisfy the wave-2 barrier. This native
+family barrier is evidence-based and prevents the Android `singleTop` Activity
+from intentionally racing two same-package workers, which previously made a
+second fixed-port UDP send return `EPERM` before entering VPP.
+
+The UDP adapter passes `timeoutMillis=0` for A2-2. Zero means that the
+successful runtime record is durably appended immediately after `send()`
+returns; it is not a transport or cache timeout. Runtime JSONL is captured
+after the native gates as final evidence, not polled as the launch barrier.
+Wave evidence uses `s139-a2-2-two-wave/v2` with separate `nativeGates` and
+diagnostic final `runtimeGates`. A missing native gate or same-identity runtime
+sequence is `INCONCLUSIVE`, not an architecture interruption, and the raw
+contract/runtime evidence is retained.
 
 The A2-2 verifier therefore requires exactly four registered tuples and exact
 App × IP-family coverage. It groups sequence events by stable `(token,

@@ -133,7 +133,8 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
         (root / "contract-poll.jsonl").write_text(
             "", encoding="utf-8")
         (root / "wave-evidence.json").write_text(json.dumps({
-            "schema": "s139-a2-2-two-wave/v1",
+            "schema": "s139-a2-2-two-wave/v2",
+            "barrier": "native-contract-family",
             "runtimeRecordSchema": "s139-a2-1-runtime/v1",
             "contractRecordSchema": "uid-attribution-contract/v1",
             "firstWave": {
@@ -142,6 +143,8 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                 "gateObserved": True,
                 "gateOutcome": "COMPLETION_ACCEPTED",
                 "pollAttempts": 1,
+                "nativeGates": {"ip4": True, "ip6": True},
+                "nativeGatePollAttempts": {"ip4": 1, "ip6": 1},
                 "correctUidCompletionCount": 4,
                 "completionKeys": completion_keys,
                 "runtimeGates": {"ip4": True, "ip6": True},
@@ -154,6 +157,8 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                 "gateObserved": True,
                 "gateOutcome": "CACHE_HIT",
                 "pollAttempts": 1,
+                "nativeGates": {"ip4": True, "ip6": True},
+                "nativeGatePollAttempts": {"ip4": 1, "ip6": 1},
                 "correctUidCacheHitCount": 4,
                 "cacheHitKeys": completion_keys,
                 "runtimeGates": {"ip4": True, "ip6": True},
@@ -259,6 +264,19 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
         self.assertTrue(result["summary"]["concurrent"])
         self.assertEqual(4, result["summary"]["passedSequences"])
         self.assertEqual(2, result["summary"]["boundedState"]["maxPendingObserved"])
+
+    def test_runtime_poll_snapshot_does_not_gate_native_wave_verdict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.manifest()
+            self.write_fixture(root, manifest)
+            wave_path = root / "wave-evidence.json"
+            wave = json.loads(wave_path.read_text(encoding="utf-8"))
+            wave["firstWave"]["runtimeGates"] = {"ip4": False, "ip6": False}
+            wave["secondWave"]["runtimeGates"] = {"ip4": False, "ip6": False}
+            wave_path.write_text(json.dumps(wave) + "\n", encoding="utf-8")
+            result = VERIFIER.verify_a22(manifest, root)
+        self.assertEqual(VERIFIER.PASS, result["status"])
 
     def test_cross_app_cache_hit_is_fail(self) -> None:
         key = VERIFIER.canonical_tuple_key(self.manifest()["tuples"][1])

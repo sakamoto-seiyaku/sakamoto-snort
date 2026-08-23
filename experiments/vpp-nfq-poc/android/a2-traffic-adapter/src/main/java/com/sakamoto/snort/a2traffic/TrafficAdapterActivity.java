@@ -59,6 +59,7 @@ public final class TrafficAdapterActivity extends Activity {
     private static final String EVIDENCE_PATH = "debug/a2-1-runtime.jsonl";
     private static final String SCHEMA = "s139-a2-1-runtime/v1";
     private static final int DEFAULT_TIMEOUT_MILLIS = 1200;
+    private static final int MIN_TCP_TIMEOUT_MILLIS = 100;
     private static final int MAX_REPEAT = 16;
     private static final long VPN_WAIT_MILLIS = 10000L;
     private static final AtomicLong SEQUENCE = new AtomicLong(0L);
@@ -176,6 +177,10 @@ public final class TrafficAdapterActivity extends Activity {
             byte[] payload = ("s139-a2-1|" + command.family + "|udp")
                     .getBytes(StandardCharsets.UTF_8);
             socket.send(new DatagramPacket(payload, payload.length));
+            // timeoutMillis is a post-send observation delay.  A zero value
+            // intentionally publishes the durable runtime record as soon as
+            // send() returns; the A2-2 runner uses that mode so evidence
+            // persistence cannot hold the next native family barrier open.
             if (command.timeoutMillis > 0) {
                 SystemClock.sleep(Math.min(command.timeoutMillis, 3000));
             }
@@ -517,9 +522,15 @@ public final class TrafficAdapterActivity extends Activity {
             } else if (repeat < 1 || repeat > MAX_REPEAT) {
                 error = "repeat must be 1.." + MAX_REPEAT;
             }
-            if (timeout < 100 || timeout > 5000) {
-                error = "timeoutMillis must be 100..5000";
-                timeout = Math.max(100, Math.min(timeout, 5000));
+            if (timeout < 0 || timeout > 5000) {
+                error = "timeoutMillis must be 0..5000";
+                timeout = Math.max(0, Math.min(timeout, 5000));
+            } else if ("tcp".equals(protocol) && timeout < MIN_TCP_TIMEOUT_MILLIS) {
+                // java.net.Socket treats connect timeout=0 as unbounded.  Keep
+                // the zero-delay mode specific to UDP so a malformed TCP
+                // command cannot turn into an unbounded probe.
+                error = "TCP timeoutMillis must be 100..5000";
+                timeout = MIN_TCP_TIMEOUT_MILLIS;
             }
             return new Command(stageId, family == null ? "" : family,
                     protocol == null ? "" : protocol, sourcePort,

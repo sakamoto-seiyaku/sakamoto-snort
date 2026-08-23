@@ -25,7 +25,7 @@ MANIFEST_SCHEMA_A21 = "s139-a2-1-manifest/v1"
 PROFILE_A21 = "a2-1"
 MANIFEST_SCHEMA_A22 = "s139-a2-2-manifest/v1"
 PROFILE_A22 = "a2-2"
-WAVE_EVIDENCE_SCHEMA_A22 = "s139-a2-2-two-wave/v1"
+WAVE_EVIDENCE_SCHEMA_A22 = "s139-a2-2-two-wave/v2"
 PASS = "PASS"
 FAIL = "FAIL"
 INVALID = "INVALID"
@@ -1068,6 +1068,8 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
     else:
         if wave_evidence.get("schema") != WAVE_EVIDENCE_SCHEMA_A22:
             wave_evidence_errors.append("schema")
+        if wave_evidence.get("barrier") != "native-contract-family":
+            wave_evidence_errors.append("barrier")
         if wave_evidence.get("runtimeRecordSchema") != "s139-a2-1-runtime/v1":
             wave_evidence_errors.append("runtimeRecordSchema")
         if wave_evidence.get("contractRecordSchema") != "uid-attribution-contract/v1":
@@ -1102,15 +1104,27 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             wave_evidence_errors.append("firstWave.completionKeys")
         elif len(completion_keys) != completion_count:
             wave_evidence_errors.append("firstWave.completionKeys/count")
+        first_native_gates = first_wave.get("nativeGates")
+        if not isinstance(first_native_gates, dict) or any(
+                not isinstance(first_native_gates.get(family), bool)
+                for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("firstWave.nativeGates")
+            first_native_gates = {}
+        elif wave_gate_observed and not all(
+                first_native_gates.get(family) is True for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("firstWave native family barrier")
+        first_native_attempts = first_wave.get("nativeGatePollAttempts")
+        if not isinstance(first_native_attempts, dict) or any(
+                not isinstance(first_native_attempts.get(family), int)
+                or isinstance(first_native_attempts.get(family), bool)
+                or first_native_attempts.get(family) < 0
+                for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("firstWave.nativeGatePollAttempts")
         first_runtime_gates = first_wave.get("runtimeGates")
         if not isinstance(first_runtime_gates, dict) or any(
                 not isinstance(first_runtime_gates.get(family), bool)
                 for family in ("ip4", "ip6")):
             wave_evidence_errors.append("firstWave.runtimeGates")
-            first_runtime_gates = {}
-        elif wave_gate_observed and not all(
-                first_runtime_gates.get(family) is True for family in ("ip4", "ip6")):
-            inconclusive.append("first-wave runtime pair gate did not complete")
         if wave_gate_observed:
             if completion_count != 4 or not isinstance(completion_keys, list):
                 wave_evidence_errors.append("firstWave completion gate")
@@ -1148,15 +1162,27 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             wave_evidence_errors.append("secondWave.cacheHitKeys")
         elif len(second_hit_keys) != second_hit_count:
             wave_evidence_errors.append("secondWave.cacheHitKeys/count")
+        second_native_gates = second_wave.get("nativeGates")
+        if not isinstance(second_native_gates, dict) or any(
+                not isinstance(second_native_gates.get(family), bool)
+                for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("secondWave.nativeGates")
+            second_native_gates = {}
+        elif second_gate_observed and not all(
+                second_native_gates.get(family) is True for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("secondWave native family barrier")
+        second_native_attempts = second_wave.get("nativeGatePollAttempts")
+        if not isinstance(second_native_attempts, dict) or any(
+                not isinstance(second_native_attempts.get(family), int)
+                or isinstance(second_native_attempts.get(family), bool)
+                or second_native_attempts.get(family) < 0
+                for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("secondWave.nativeGatePollAttempts")
         second_runtime_gates = second_wave.get("runtimeGates")
         if not isinstance(second_runtime_gates, dict) or any(
                 not isinstance(second_runtime_gates.get(family), bool)
                 for family in ("ip4", "ip6")):
             wave_evidence_errors.append("secondWave.runtimeGates")
-            second_runtime_gates = {}
-        elif second_gate_observed and not all(
-                second_runtime_gates.get(family) is True for family in ("ip4", "ip6")):
-            inconclusive.append("second-wave runtime pair gate did not complete")
         if second_gate_observed:
             if not second_launched or second_hit_count != 4:
                 wave_evidence_errors.append("secondWave cache-hit gate")
