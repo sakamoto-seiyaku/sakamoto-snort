@@ -9,6 +9,7 @@
   "provenance": {
     "generated_at": "2026-08-23 Asia/Taipei",
     "git_head_at_documentation": "54c5b304ce4e9bacd98d8f6862c64515b935da63",
+    "git_head_at_execution": "5db2f5df2cca49cbdb326652730cab0e6c2acf38",
     "device": {
       "serial": "28201JEGR0XPAJ",
       "model": "Pixel 6a",
@@ -35,6 +36,7 @@
       "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-gateway-reverse-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/",
       "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-live-replay-final2/",
@@ -66,6 +68,7 @@
       "TARGET_URL='https://[2606:4700:4700::1111]/' RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
       "TARGET_URL='http://192.168.4.1:80/' RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-gateway-reverse-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
       "TARGET_URL='http://1.1.1.1:80/' BLOCK_OWNER_UID=10180 RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
+      "TARGET_URL='http://1.1.1.1:80/' BLOCK_OWNER_UID=10180 RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final ADB_SERIAL=28201JEGR0XPAJ experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh",
       "experiments/vpp-nfq-poc/scripts/android-run-s139-a2-contract-controls.sh",
       "experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
       "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-contract-controls-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-contract-controls.sh",
@@ -296,9 +299,13 @@
       "id": "A2-uid-drop-no-broker-work",
       "status": "INSUFFICIENT",
       "facts": {
+        "broker_boundary": "PASS_NARROW",
         "allow_sentinel": "Chrome/second-UID allow runs show uid-block 99999 packets=0",
-        "current_uid_drop": "the IPv6 UDP drop raw shows uid-block uid=12628 packets=2 bytes=120 and blocked=2; the dedicated final Chrome UID 10180 IPv4 drop shows uid-block packets=12 bytes=14106 and blocked=12",
-        "gap": "independent Android broker/socket/transport zero counters were not captured, so the no-broker-work acceptance remains open"
+        "current_uid_drop": "the IPv6 UDP drop raw shows uid-block uid=12628 packets=2 bytes=120 and blocked=2; the fresh dedicated Chrome UID 10180 IPv4 drop shows uid-block packets=6 bytes=6438 and blocked=6",
+        "protect_broker": "fresh vpp-protect-final.log reports requests=0 completions=0 failures=0 denials=0 receive-failures=0 response-failures=0 java-exceptions=0",
+        "hev_boundary": "fresh vpp-hev.log contains only protect callback startup and bounded s119 traces; no SOCKS/connect record was observed",
+        "transport_socket_gap": "aggregate shim-tx=56 is generation-wide, not per dropped UID; after-trigger /proc/net/tcp contains 9 Chrome UID 10180 tun0 sockets, so no general socket-zero claim is made",
+        "gap": "the fresh run closes only the protect-broker subclaim; independent per-dropped-packet socket/transport zero counters remain open"
       },
       "evidence": [
         "experiments/vpp-nfq-poc/results/s139-a2-vpnlite-ipv6-udp-drop.log",
@@ -306,6 +313,14 @@
         "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/vpp-cli.log",
         "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/vpp-owner-resolver.log",
         "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/proc-net-tcp6.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/vpp-hev.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/vpp-protect-final.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/proc-net-tcp-before.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/proc-net-tcp.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/proc-net-tcp6-before.txt",
+        "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/proc-net-tcp6.txt",
         "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid/vpp-cli.log",
         "experiments/vpp-nfq-poc/results/s139-a2-chrome-http80/vpp-cli.log"
       ],
@@ -344,6 +359,13 @@
       "architecture_impact": "none"
     },
     {
+      "id": "protect-broker-drop-ledger",
+      "before": "UID drop had only aggregate VPP blocked counters and no independent protect-broker ledger",
+      "after": "vpn_fd_probe.c records one-lifecycle protect requests/completions/failures; the drop runner captures before/after proc sockets and the final protect summary",
+      "verification": "fresh Chrome UID 10180 drop recorded uid-block=6/6438 and protect requests=0 completions=0 failures=0",
+      "architecture_impact": "none"
+    },
+    {
       "id": "temporary-route-instrumentation-build",
       "before": "temporary DebugControlActivity route instrumentation build stopped at retained VPP source mutation",
       "after": "instrumentation was reverted; no APK/build result was used as evidence",
@@ -376,7 +398,7 @@
     {
       "id": "VPN-F026",
       "status": "OPEN_RISK",
-      "update": "A2 proves narrow Chrome UID 10180 IPv4 TCP/UDP attribution, long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations (Chrome 10180 plus Maps 10176), a historical one-off exact-target IPv6 UID completion plus final IPv6 tuple/proc observations with intermittent target uid=-1, and live Java contract replay rejection at the tun/VPP boundary. A1 proves the cross-implementation replay/cache/key baseline; the Android control does not prove native VPP owner/cache invariance. A2 does not prove the full IPv4/IPv6 TCP/UDP matrix, reverse closure, lifecycle closure, or repeatable IPv6 acceptance."
+      "update": "A2 proves narrow Chrome UID 10180 IPv4 TCP/UDP attribution, long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations (Chrome 10180 plus Maps 10176), a historical one-off exact-target IPv6 UID completion plus final IPv6 tuple/proc observations with intermittent target uid=-1, live Java contract replay rejection at the tun/VPP boundary, and a fresh UID-drop protect-broker boundary with zero requests/completions/failures. A1 proves the cross-implementation replay/cache/key baseline; the Android control does not prove native VPP owner/cache invariance. A2 does not prove the full IPv4/IPv6 TCP/UDP matrix, reverse closure, lifecycle closure, repeatable IPv6 acceptance, or per-dropped-packet socket/transport zero."
     },
     {
       "id": "VPN-F026-A2-FIXTURE-01",
@@ -397,13 +419,14 @@
     "The bounded Android contract emitted miss, coalescing, completion, cache hit/eviction, refresh, unavailable, package-scoped wrong-UID rejection, and live replay outcomes with pending/cache high-water bounded at four and flow-id high-water bounded at eight.",
     "A1 Host/model and the rebuilt Android Java control reject wrong-owner, wrong-generation, duplicate, stale, wrong-scope, wrong-UID, cross-App cache-hit, and FlowOwner-key mutation replays; the Android control does not prove native VPP owner/cache invariance.",
     "The corrected owner-resolver plugin selection and dual allow-list harness are ordinary POC corrections, not changes to owner-inline/nonblocking/FlowOwner invariants.",
-    "A historical narrow UID 12628 IPv4 UDP observation exists, but its original immutable raw was overwritten by a later run and must be treated with that provenance caveat."
+    "A historical narrow UID 12628 IPv4 UDP observation exists, but its original immutable raw was overwritten by a later run and must be treated with that provenance caveat.",
+    "A fresh dedicated Chrome UID 10180 drop run observed uid-block=6/6438 and no protect-broker request/completion/failure; this is a broker-boundary observation only, not a general socket/transport-zero proof."
   ],
   "non_claims": [
     "No complete A2 acceptance across the required two-App IPv4/IPv6 TCP/UDP, reverse, concurrent, refresh, and drop matrix; the two-App IPv4 TCP/UDP and concurrent observations remain narrow PASS only.",
     "The Android replay control exercises live Java pending/cache state, but it is not an independent proof that native VPP owner/cache state was unchanged; A1 Host/model remains the cross-implementation baseline.",
     "No repeatable IPv6 target completion at the VPP post-policy boundary; one historical exact-target completion is intermittent and not reproduced by final retries.",
-    "No dedicated current-UID IPv4 drop proof with independent zero broker/socket/transport work counters.",
+    "No complete current-UID IPv4 drop proof with independent per-dropped-packet zero socket/transport counters; the fresh run only proves a narrow zero protect-broker boundary.",
     "No Android ConnectivityManager/OEM-general timing claim beyond the Pixel run.",
     "No reverse-traffic acceptance claim; the concurrent-distinct-tuple observation is narrow and does not prove the full matrix.",
     "Android live Java replay assertions are not an independent proof that native VPP live owner/cache state was unchanged; the Java seam must not be treated as a native invariance proof.",
@@ -419,6 +442,7 @@
     "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv6-443-long-final/",
     "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-gateway-reverse-final/",
     "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final/",
     "experiments/vpp-nfq-poc/results/s139-a2-contract-controls/uid-attribution-contract.jsonl",
     "experiments/vpp-nfq-poc/results/s139-a2-contract-controls-live-replay-final2/uid-attribution-contract-final.jsonl",
     "experiments/vpp-nfq-poc/results/s139-a2-tun0-boundary-no-tcpdump/",

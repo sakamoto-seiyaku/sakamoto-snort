@@ -41,6 +41,7 @@ TCP connect or VPP shim counter is recorded only at the observed boundary.
   `com.sakamoto.snort.androidruntime=12620`
 - Compatibility stage: `experiments/vpp-nfq-poc/work/android-nfqb-stage/`
 - Loaded native plugin: `tun_poc_plugin.so`, verified by VPP `show plugins`
+- Fresh broker-ledger execution commit: `5db2f5df2cca49cbdb326652730cab0e6c2acf38`
 - Documentation Git head: `54c5b304ce4e9bacd98d8f6862c64515b935da63`
 
 The artifact records the raw path inventory, package provenance, command
@@ -62,6 +63,10 @@ Representative commands used in the captured cells were:
 ./dev/adb shell dumpsys connectivity
 ./dev/adb shell su 0 cat /proc/net/tcp
 ./dev/adb shell su 0 cat /proc/net/tcp6
+TARGET_URL='http://1.1.1.1:80/' BLOCK_OWNER_UID=10180 \
+  RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-chrome-ipv4-drop-broker-final \
+  ADB_SERIAL=28201JEGR0XPAJ \
+  experiments/vpp-nfq-poc/scripts/android-run-s139-a2-chrome-ipv6.sh
 ```
 
 The scripted contract, IPv6, and two-ordinary-App runs were
@@ -80,9 +85,13 @@ cleaned up with no remaining VPP process or `tun0`.
 
 `tcpdump` and `toybox tcpdump` were unavailable. The boundary fallback used
 `/proc/net/tcp*`, VPP `show tun-poc`, resolver output, and cleanup process/link
-checks. The ULA IPv6, gateway reverse-attempt, current-UID drop, and
-near-simultaneous dual-App runs all cleaned up with no remaining VPP process or
-`tun0`.
+checks. The fresh broker-ledger drop run recorded the dropped UID at the VPP
+policy boundary and captured a separate protect ledger after stop. It also
+showed Chrome's own tun0 sockets in `/proc`; those are app-origin sockets, not
+evidence of HEV transport, so the run does not claim general socket-zero.
+The ULA IPv6, gateway reverse-attempt, current-UID drop, and near-simultaneous
+dual-App runs all cleaned up with no remaining VPP process or `tun0`; a direct
+post-run check for the fresh run was also empty.
 
 ## Cell evidence
 
@@ -95,7 +104,7 @@ near-simultaneous dual-App runs all cleaned up with no remaining VPP process or
 | Chrome UID 10180 IPv6 target | `INSUFFICIENT` | The historical `[2606:4700:4700::1111]:443` run recorded one late resolver completion `uid=10180` for the exact IPv6 tuple (`fd00:111:111::2:42590 -> 2606:4700:4700::1111:443`) while `/proc/net/tcp6` showed UID 10180 in `SYN_SENT`; later retries returned `uid=-1`. The final APK forced HTTP/80 retry likewise kept `uid=-1` for every target query while VPP parsed the IPv6 tuple (`tuple parsed=35`, `shim-tx=42`). A final ULA retry to `[fd76:d462:c4e3::1]:80` added `/proc/net/tcp6` UID 10180 and VPP `tuple parsed=51`, but all exact-target resolver queries were `uid=-1`; an extended final HTTPS/443 retry reached VPP `tuple parsed=77`/`shim-tx=85` with `/proc/net/tcp6` UID 10180 but still had `uid=-1` for every exact target query. The one historical completion is intermittent and not a repeatable current target-UID cell. |
 | Contract refresh/unavailable/replay | `PASS_NARROW` | Final JSONL used a package-scoped allow UID 10180 and exercised refresh, unavailable, miss→completion→hit, coalescing, bounds, and live Java pending/cache replay assertions for wrong-owner, wrong-UID, wrong-generation, wrong-scope, duplicate, stale, cross-App cache-hit, and UID-free-key cases. It does not prove native VPP owner/cache invariance. |
 | Androidruntime UID 12620 IPv4 TCP | `INSUFFICIENT` / decisive fixture failure | Plain DebugControlActivity socket connected to `1.1.1.1:443`, but `/proc/net/tcp6` decoded local address `192.168.4.151`, not `10.111.0.2`; VPP had `tuple parsed=0`, resolver `q=0`, cache `0`. RuntimeService was absent before/after VPN and activity start. |
-| UID drop / no broker work | `INSUFFICIENT` | IPv6 UDP drop raw recorded UID 12628, `blocked=2`, and `uid-block packets=2`; the dedicated Chrome UID 10180 IPv4 drop recorded `uid-block uid=10180 packets=12 bytes=14106` and `blocked=12`, while the allow sentinel remained zero. Independent broker/socket/transport-zero counters were not captured, so the acceptance cell remains open. |
+| UID drop / no broker work | `INSUFFICIENT` (`broker_boundary=PASS_NARROW`) | The fresh dedicated Chrome UID 10180 drop recorded `uid-block packets=6 bytes=6438` and `blocked=6`. Its `vpp-protect-final.log` reports `requests=0 completions=0 failures=0 denials=0 receive-failures=0 response-failures=0 java-exceptions=0`, and `vpp-hev.log` has no SOCKS/connect record. The same generation has aggregate `shim-tx=56`, and after-trigger `/proc/net/tcp` contains Chrome UID 10180 tun0 sockets; therefore only the protect-broker subclaim is closed narrowly, while independent per-dropped-packet socket/transport-zero acceptance remains open. |
 
 The Androidruntime result is a fixture/binding failure, not evidence that
 owner-inline execution must block or that FlowOwner must include UID. The dual
@@ -156,6 +165,7 @@ execution.
 | Owner-resolver plugin selection | Startup selected the HEV external-driver plugin; `tun-poc` commands were unknown. | `vpn_fd_probe.c` prefers `tun_poc_plugin.so` with linker-prefixed fallback; VPP `show plugins` and `show tun-poc` work. | None |
 | Dual allowed package fixture | Comma-separated `allowedPackage` was treated as one package. | `SnortVpnService` splits and calls `addAllowedApplication` for each package; connectivity showed UIDs 12620/12628 and their isolated IDs. | None |
 | Explicit drop sentinel | Blank `BLOCK_OWNER_UID` defaulted to the package UID and self-dropped an intended allow run. | Runners pass sentinel `99999` and log effective block UID; allow runs show zero sentinel blocks. | None |
+| Protect broker/drop ledger | UID drop had only VPP blocked counters; broker/socket work was not independently observable. | `vpn_fd_probe.c` records one-lifecycle protect requests/completions/failures and the drop runner captures before/after `/proc/net/tcp*` plus a final protect ledger. The fresh cell recorded all protect counters at zero. | None |
 | Route instrumentation attempt | Temporary route logging was considered for the androidruntime fixture. | Build stopped on retained VPP source mutation; instrumentation was reverted and its failed build was not used as evidence. | None |
 | Packet boundary tool | `tcpdump` and `toybox tcpdump` were unavailable. | `/proc/net/tcp*` plus VPP counters were retained as a lower-level fallback. | None |
 | Package-scoped UID acceptance | The Android bridge accepted any nonnegative `getConnectionOwnerUid` result when an allow-list was active. | APK package visibility queries resolve the active allow-list to UID 10180/10176; a completion outside that scope emits `COMPLETION_WRONG_UID` and is not cached. | None |
@@ -205,6 +215,10 @@ used or inspected for A2:
   and cleanup)
 - `results/s139-a2-chrome-ipv4-drop-final/` (final APK Chrome UID 10180
   current-UID drop; `uid-block packets=12`, `blocked=12`, and cleanup)
+- `results/s139-a2-chrome-ipv4-drop-broker-final/` (fresh APK Chrome UID
+  10180 drop; `uid-block packets=6 bytes=6438`, `blocked=6`, protect broker
+  summary all zero, HEV no connect record, before/after `/proc/net/tcp*`, and
+  post-stop process/tun cleanup)
 - `results/s139-a2-two-ordinary-apps-concurrent-final/` (near-simultaneous
   Chrome/Maps IPv4 TCP/UDP cell; both UIDs in `/proc`, resolver completions,
   VPP counters, and cleanup)
@@ -281,8 +295,9 @@ This A2 package does not claim:
   IPv4/IPv6 TCP/UDP, reverse, concurrent, refresh, and drop cell (the two-App
   IPv4 TCP/UDP and concurrent observations remain narrow PASS only);
 - repeatable IPv6 target UID completion at the VPP post-policy boundary;
-- a dedicated current-UID IPv4 drop proof with independent zero
-  broker/socket/transport counters;
+- complete per-dropped-packet zero socket/transport counters; the fresh run
+  only proves a narrow zero protect-broker boundary, while app-origin tun0
+  sockets and generation-wide shim counters remain visible;
 - reverse-traffic acceptance; the concurrent-distinct-tuple observation is
   narrow and does not prove the full matrix;
 - Android/OEM-general VPN routing behavior, production capacity, or release
@@ -292,8 +307,8 @@ This A2 package does not claim:
 
 Remaining acceptance work is therefore a replayable immutable IPv4/IPv6
 TCP/UDP matrix for both ordinary UIDs, explicit reverse/concurrent tuples, a
-dedicated allow/drop broker and socket-work ledger, and final zero-residue
-contract capture. The
+per-dropped-packet socket/transport ledger beyond the protect-broker boundary,
+and final zero-residue contract capture. The
 androidruntime Wi-Fi bypass must be corrected as a fixture before any of those
 cells can be interpreted as architecture evidence.
 
