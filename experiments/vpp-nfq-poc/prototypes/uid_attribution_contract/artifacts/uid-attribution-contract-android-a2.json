@@ -8,8 +8,14 @@
   "working_assumption": "FlowOwner remains selected from the direction-independent canonical tuple. UID is an asynchronous, scoped policy fact; owner turns remain nonblocking and UID never enters the canonical FlowOwner key.",
   "provenance": {
     "generated_at": "2026-08-23 Asia/Taipei",
-    "git_head_at_documentation": "54c5b304ce4e9bacd98d8f6862c64515b935da63",
-    "git_head_at_execution": "5db2f5df2cca49cbdb326652730cab0e6c2acf38",
+    "git_head_at_documentation": "05a6c9db46fa26aeab9e6bdc8a4e6a6c39cc931a",
+    "git_head_at_execution": "7824c914b0af2ab072868ec96a447141325380dc",
+    "execution_commits": [
+      "65d70199d5ff4f4d2e136f5396a5bcc17b713c8f",
+      "0c4c5ebee55028eb784d3999fd1f4fff78c243d2",
+      "2179b806267a3d0f58b00361c993321f27810e04",
+      "7824c914b0af2ab072868ec96a447141325380dc"
+    ],
     "device": {
       "serial": "28201JEGR0XPAJ",
       "model": "Pixel 6a",
@@ -22,9 +28,10 @@
         "com.android.chrome": 10180,
         "com.google.android.apps.maps": 10176,
         "com.sakamoto.snort.vpnlite": 12628,
-        "com.sakamoto.snort.androidruntime": 12620
+        "com.sakamoto.snort.androidruntime": 12629
       }
     },
+    "package_uid_note": "The corrected second-UID runs used a freshly reinstalled com.sakamoto.snort.androidruntime with UID 12629 after a signing mismatch prevented APK replacement. Historical plain-socket fixture failures used UID 12620 and remain documented as prior evidence; they are not merged with the corrected cells.",
     "stage": "experiments/vpp-nfq-poc/work/android-nfqb-stage/",
     "loaded_plugin": "tun_poc_plugin.so (VPP show plugins raw evidence)",
     "raw_result_dirs": [
@@ -45,6 +52,9 @@
       "experiments/vpp-nfq-poc/results/s139-a2-tcp4-diag-repro-delay12/",
       "experiments/vpp-nfq-poc/results/s139-a2-tcp4-dual-allow-delay12/",
       "experiments/vpp-nfq-poc/results/s139-a2-runtime-service-diag-dual-delay12/",
+      "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/",
+      "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/",
       "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/",
       "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/",
       "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final/",
@@ -76,6 +86,9 @@
       "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long PROBE_WAIT=25 CHROME_URL='https://1.1.1.1/' experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
       "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long-final PROBE_WAIT=18 CHROME_URL='https://1.1.1.1/' experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
       "RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final CONCURRENT=1 PROBE_WAIT=20 CHROME_URL='https://1.1.1.1/' experiments/vpp-nfq-poc/scripts/android-run-s139-a2-two-ordinary-apps.sh",
+      "ADB_SERIAL=28201JEGR0XPAJ RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-tcp4-second-uid.sh",
+      "ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=true RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-tcp6-second-uid.sh",
+      "ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=true RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final experiments/vpp-nfq-poc/scripts/android-run-s139-a2-udp6-second-uid.sh",
       "./dev/adb shell dumpsys connectivity; ./dev/adb shell su 0 cat /proc/net/tcp; ./dev/adb shell su 0 cat /proc/net/tcp6"
     ]
   },
@@ -83,7 +96,7 @@
     "architecture_interruption": false,
     "interruption_reason": "none; no evidence required blocking owner-inline execution, changing FlowOwner identity, or violating the registered safety boundary",
     "cell_result": "INSUFFICIENT",
-    "pass": 5,
+    "pass": 8,
     "fail": 0,
     "insufficient": 3,
     "invalid": 0,
@@ -296,6 +309,88 @@
       "decisive_falsifier": "a normal non-VpnService controlled App socket with UID 12620 is proven on tun0 and reaches VPP"
     },
     {
+      "id": "A2-second-uid-androidruntime-vpn-bound-ipv4-tcp",
+      "status": "PASS_NARROW_WITH_PROVENANCE_CAVEAT",
+      "facts": {
+        "app": "com.sakamoto.snort.androidruntime",
+        "uid": 12629,
+        "historical_uid_note": "This corrected run used the freshly reinstalled package UID 12629; the prior plain-socket bypass used UID 12620 and remains a separate fixture failure.",
+        "vpn_bind": "DebugControlActivity explicitly bound its Socket to the active VPN Network; bindResult=bound; bindNetworkHandle=4049264889869",
+        "tuple": "10.111.0.2:45621 -> 1.1.1.1:443, IPv4 TCP",
+        "resolver": "exact tuple miss uid=-1 followed by completion uid=12629; resolver queries=2/hits=2",
+        "cache": "owner-cache valid=1 uid=12629; contract MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT; pending 1 -> 0 and cache 0 -> 1",
+        "post_policy": "VPP tuple parsed=4, last-valid=1, shim-tx=11; allow sentinel uid=99999 packets=0",
+        "probe_result": "tcp_connect_failed after 1200ms from 10.111.0.2; external TCP egress is NON-CLAIM",
+        "service_log_provenance": "INSUFFICIENT: snort-vpn-service.log did not retain an allowed-package provenance line; package UID and VPN bind are independently recorded in the runtime properties and contract scope",
+        "cleanup": "runner recorded no remaining VPP process and no tun0"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/runtime-traffic-probe.properties",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/uid-attribution-contract.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/vpp-hev.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/vpp-shim.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/snort-vpn-service.log"
+      ],
+      "decisive_falsifier": "the corrected Socket bind is absent, the exact IPv4 tuple is absent from VPP, or the completion UID differs from 12629"
+    },
+    {
+      "id": "A2-second-uid-androidruntime-vpn-bound-ipv6-tcp",
+      "status": "PASS_NARROW_WITH_PROVENANCE_CAVEAT",
+      "facts": {
+        "app": "com.sakamoto.snort.androidruntime",
+        "uid": 12629,
+        "vpn_bind": "DebugControlActivity explicitly bound its Socket to the active IPv6-capable VPN Network; bindResult=bound; bindNetworkHandle=4057854824461",
+        "tuple": "[fd00:111:111::2]:45622 -> [2606:4700:4700::1111]:443, IPv6 TCP",
+        "resolver": "exact tuple miss uid=-1 followed by completion uid=12629; resolver queries=2/hits=2",
+        "cache": "owner-cache valid=1 uid=12629; contract MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT; pending 1 -> 0 and cache 0 -> 1",
+        "post_policy": "VPP tuple parsed=4, last-valid=1, shim-tx=11; allow sentinel uid=99999 packets=0",
+        "probe_result": "tcp_connect_failed after 1200ms from fd00:111:111::2; external IPv6 egress is NON-CLAIM",
+        "service_log_provenance": "INSUFFICIENT: snort-vpn-service.log did not retain an allowed-package provenance line; package UID and VPN bind are independently recorded in the runtime properties and contract scope",
+        "cleanup": "runner recorded no remaining VPP process and no tun0"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/runtime-traffic-probe.properties",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/uid-attribution-contract.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/vpp-hev.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/vpp-shim.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/snort-vpn-service.log"
+      ],
+      "decisive_falsifier": "the corrected Socket bind is absent, the exact IPv6 tuple is absent from VPP, or the completion UID differs from 12629"
+    },
+    {
+      "id": "A2-second-uid-androidruntime-vpn-bound-ipv6-udp",
+      "status": "PASS_NARROW_WITH_PROVENANCE_CAVEAT",
+      "facts": {
+        "app": "com.sakamoto.snort.androidruntime",
+        "uid": 12629,
+        "vpn_bind": "DebugControlActivity explicitly bound its DatagramSocket to the active IPv6-capable VPN Network; bindResult=bound; bindNetworkHandle=4062149791757",
+        "tuple": "[fd00:111:111::2]:45623 -> [2606:4700:4700::1111]:53, IPv6 UDP",
+        "resolver": "exact tuple miss uid=-1 followed by completion uid=12629; resolver queries=2/hits=2",
+        "cache": "owner-cache valid=1 uid=12629; contract MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT; pending 1 -> 0 and cache 0 -> 1",
+        "post_policy": "VPP tuple parsed=2, last-valid=1, shim-tx=9 bytes=640; allow sentinel uid=99999 packets=0",
+        "probe_result": "udp_datagram_sent; no external UDP reply is claimed",
+        "service_log_provenance": "INSUFFICIENT: snort-vpn-service.log did not retain an allowed-package provenance line; package UID and VPN bind are independently recorded in the runtime properties and contract scope",
+        "cleanup": "runner recorded no remaining VPP process and no tun0"
+      },
+      "evidence": [
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/cell.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/runtime-udp-traffic-probe.properties",
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/uid-attribution-contract.jsonl",
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/vpp-cli.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/vpp-owner-resolver.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/vpp-hev.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/vpp-shim.log",
+        "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/snort-vpn-service.log"
+      ],
+      "decisive_falsifier": "the corrected DatagramSocket bind is absent, the exact IPv6 UDP tuple is absent from VPP, or the completion UID differs from 12629"
+    },
+    {
       "id": "A2-uid-drop-no-broker-work",
       "status": "INSUFFICIENT",
       "facts": {
@@ -392,24 +487,31 @@
       "after": "the control injects bounded synthetic pending requests into live Java state and records identity-fault outcomes with pending/cache before-after assertions",
       "verification": "live replay raw contains seven REPLAY_ASSERTION records plus wrong-owner/UID/generation/scope/duplicate/stale/cross-App/key outcomes",
       "architecture_impact": "none"
+    },
+    {
+      "id": "explicit-vpn-network-bind-second-uid",
+      "before": "the androidruntime DebugControlActivity probe created a plain Socket and selected the Wi-Fi underlay despite the package being in the VPN allow-list",
+      "after": "debug-only TCP and UDP probes can explicitly bind their Socket/DatagramSocket to the active VPN Network before connect/send; the default production probe behavior remains unchanged",
+      "verification": "fresh package UID 12629 runs record bindResult=bound and nonzero VPN network handles, then produce real IPv4 TCP plus IPv6 TCP/UDP tuples at the VPP boundary; the historical UID 12620 Wi-Fi bypass remains separately recorded",
+      "architecture_impact": "none"
     }
   ],
   "finding_ledger": [
     {
       "id": "VPN-F026",
       "status": "OPEN_RISK",
-      "update": "A2 proves narrow Chrome UID 10180 IPv4 TCP/UDP attribution, long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations (Chrome 10180 plus Maps 10176), a historical one-off exact-target IPv6 UID completion plus final IPv6 tuple/proc observations with intermittent target uid=-1, live Java contract replay rejection at the tun/VPP boundary, and a fresh UID-drop protect-broker boundary with zero requests/completions/failures. A1 proves the cross-implementation replay/cache/key baseline; the Android control does not prove native VPP owner/cache invariance. A2 does not prove the full IPv4/IPv6 TCP/UDP matrix, reverse closure, lifecycle closure, repeatable IPv6 acceptance, or per-dropped-packet socket/transport zero."
+      "update": "A2 proves narrow Chrome UID 10180 IPv4 TCP/UDP attribution, long-window and near-simultaneous two-ordinary-App IPv4 TCP/UDP observations (Chrome 10180 plus Maps 10176), corrected second-UID 12629 IPv4 TCP plus IPv6 TCP/UDP VPN-bound tuple/completion/cache observations, a historical one-off exact-target IPv6 UID completion plus final IPv6 tuple/proc observations with intermittent target uid=-1, live Java contract replay rejection at the tun/VPP boundary, and a fresh UID-drop protect-broker boundary with zero requests/completions/failures. The corrected second-UID cells retain an allowed-package service-log provenance gap and do not claim wrong-UID drop behavior. A1 proves the cross-implementation replay/cache/key baseline; the Android control does not prove native VPP owner/cache invariance. A2 does not prove the full IPv4/IPv6 TCP/UDP matrix, reverse closure, lifecycle closure, repeatable ordinary-App IPv6 acceptance, external egress, or per-dropped-packet socket/transport zero."
     },
     {
       "id": "VPN-F026-A2-FIXTURE-01",
       "status": "OPEN_RISK",
       "name": "androidruntime direct socket bypassed tun0 despite VPN UID allow-list",
-      "update": "Decisive fixture failure: local socket was Wi-Fi 192.168.4.151; RuntimeService was not active. This is recorded as an A2 evidence gap, not an architecture interruption."
+      "update": "Historical decisive fixture failure: UID 12620 local socket was Wi-Fi 192.168.4.151; RuntimeService was not active. A freshly reinstalled UID 12629 debug fixture now binds explicitly to the active VPN Network and produces narrow IPv4 TCP plus IPv6 TCP/UDP boundary evidence, but the allowed-package service-log provenance remains insufficient. This is recorded as an evidence/fixture gap, not an architecture interruption."
     },
     {
       "id": "POC-CORRECTIONS-A2",
       "status": "CLOSED_FOR_POC",
-      "update": "Plugin selection, explicit sentinel, and comma-separated dual allow-list corrections were applied and their post-correction raw evidence is retained."
+      "update": "Plugin selection, explicit sentinel, comma-separated dual allow-list, and explicit second-UID VPN Network bind corrections were applied and their post-correction raw evidence is retained."
     }
   ],
   "supported_claim": [
@@ -420,13 +522,18 @@
     "A1 Host/model and the rebuilt Android Java control reject wrong-owner, wrong-generation, duplicate, stale, wrong-scope, wrong-UID, cross-App cache-hit, and FlowOwner-key mutation replays; the Android control does not prove native VPP owner/cache invariance.",
     "The corrected owner-resolver plugin selection and dual allow-list harness are ordinary POC corrections, not changes to owner-inline/nonblocking/FlowOwner invariants.",
     "A historical narrow UID 12628 IPv4 UDP observation exists, but its original immutable raw was overwritten by a later run and must be treated with that provenance caveat.",
-    "A fresh dedicated Chrome UID 10180 drop run observed uid-block=6/6438 and no protect-broker request/completion/failure; this is a broker-boundary observation only, not a general socket/transport-zero proof."
+    "A fresh dedicated Chrome UID 10180 drop run observed uid-block=6/6438 and no protect-broker request/completion/failure; this is a broker-boundary observation only, not a general socket/transport-zero proof.",
+    "The corrected second-UID Androidruntime fixture (fresh UID 12629) explicitly bound a TCP Socket to the active VPN Network and produced a real IPv4 tuple 10.111.0.2:45621 -> 1.1.1.1:443, exact-tuple UID completion 12629, owner-cache UID 12629, and MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT at the bounded VPP/contract boundary.",
+    "The same corrected fixture explicitly bound an IPv6 TCP Socket and produced fd00:111:111::2:45622 -> 2606:4700:4700::1111:443 with exact-tuple UID completion/cache attribution 12629 at the narrow VPP boundary.",
+    "The corrected fixture explicitly bound an IPv6 UDP DatagramSocket and produced fd00:111:111::2:45623 -> 2606:4700:4700::1111:53 with exact-tuple UID completion/cache attribution 12629 at the narrow VPP boundary; datagram submission is not an external reply or egress claim."
   ],
   "non_claims": [
     "No complete A2 acceptance across the required two-App IPv4/IPv6 TCP/UDP, reverse, concurrent, refresh, and drop matrix; the two-App IPv4 TCP/UDP and concurrent observations remain narrow PASS only.",
     "The Android replay control exercises live Java pending/cache state, but it is not an independent proof that native VPP owner/cache state was unchanged; A1 Host/model remains the cross-implementation baseline.",
     "No repeatable IPv6 target completion at the VPP post-policy boundary; one historical exact-target completion is intermittent and not reproduced by final retries.",
     "No complete current-UID IPv4 drop proof with independent per-dropped-packet zero socket/transport counters; the fresh run only proves a narrow zero protect-broker boundary.",
+    "The corrected second-UID cells do not prove wrong-UID drop-zero behavior; uid-block=99999 packets=0 is only the allow-run sentinel observation.",
+    "The corrected second-UID cells do not prove Android service-log allowed-package provenance, lifecycle refresh/unavailable behavior, reverse traffic, complete two-App IPv4/IPv6 TCP/UDP acceptance, or per-dropped-packet socket/transport zero.",
     "No Android ConnectivityManager/OEM-general timing claim beyond the Pixel run.",
     "No reverse-traffic acceptance claim; the concurrent-distinct-tuple observation is narrow and does not prove the full matrix.",
     "Android live Java replay assertions are not an independent proof that native VPP live owner/cache state was unchanged; the Java seam must not be treated as a native invariance proof.",
@@ -448,6 +555,9 @@
     "experiments/vpp-nfq-poc/results/s139-a2-tun0-boundary-no-tcpdump/",
     "experiments/vpp-nfq-poc/results/s139-a2-runtime-service-diag-dual-delay12/",
     "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid/",
+    "experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final/",
+    "experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final/",
     "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps/",
     "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-long/",
     "experiments/vpp-nfq-poc/results/s139-a2-two-ordinary-apps-concurrent-final/"

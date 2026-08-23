@@ -319,3 +319,66 @@ cells can be interpreted as architecture evidence.
 The raw evidence supports retaining the owner-inline/nonblocking/FlowOwner
 baseline. No evidence crossed the registered architecture-interruption
 condition. Plane was not updated and the ticket was not marked Done.
+
+## Follow-up execution: explicit VPN-bound second UID (2026-08-23)
+
+The historical androidruntime fixture used UID 12620 and created a plain
+Wi-Fi-underlay socket. After reinstalling the debug APK, the package resolved
+to fresh UID 12629. The debug-only probe was corrected to bind its
+`Socket`/`DatagramSocket` explicitly to the active VPN `Network`; production
+probe defaults were unchanged. The three bounded executions were:
+
+```sh
+ADB_SERIAL=28201JEGR0XPAJ \
+  RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-tcp4-second-uid-vpn-bind-provenance-final \
+  experiments/vpp-nfq-poc/scripts/android-run-s139-a2-tcp4-second-uid.sh
+ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=true \
+  RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-tcp6-second-uid-vpn-bind-final \
+  experiments/vpp-nfq-poc/scripts/android-run-s139-a2-tcp6-second-uid.sh
+ADB_SERIAL=28201JEGR0XPAJ ENABLE_IPV6=true \
+  RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-udp6-second-uid-vpn-bind-final \
+  experiments/vpp-nfq-poc/scripts/android-run-s139-a2-udp6-second-uid.sh
+```
+
+The corrected IPv4 TCP cell recorded `bindResult=bound` (network handle
+`4049264889869`), UID `12629`, and the exact tuple
+`10.111.0.2:45621 -> 1.1.1.1:443`. VPP finished with `tuple parsed=4`,
+`resolver queries=2/hits=2/last-uid=12629`, `owner-cache valid=1 hits=3
+misses=2 stores=1 uid=12629`, `shim-tx=11 bytes=688`, and sentinel
+`uid-block 99999 packets=0`. The retained contract sequence is
+`MISS_SUBMITTED` -> `COMPLETION_ACCEPTED uid=12629` -> `CACHE_HIT`, with
+pending `1 -> 0` and cache `0 -> 1`. The TCP connect timed out from the VPN
+address; external TCP egress is not claimed.
+
+The corrected IPv6 TCP cell recorded `bindResult=bound` (network handle
+`4057854824461`), UID `12629`, and
+`[fd00:111:111::2]:45622 -> [2606:4700:4700::1111]:443`. VPP finished with
+`tuple parsed=4`, resolver `2/2` and last UID `12629`, owner-cache
+`valid=1 hits=3 misses=2 stores=1 uid=12629`, `shim-tx=11 bytes=828`, and
+sentinel `uid-block 99999 packets=0`. It retained the same miss -> completion
+-> cache-hit sequence and pending/cache transition. The IPv6 TCP connect
+timed out; external IPv6 egress is not claimed.
+
+The corrected IPv6 UDP cell recorded `bindResult=bound` (network handle
+`4062149791757`), UID `12629`, and
+`[fd00:111:111::2]:45623 -> [2606:4700:4700::1111]:53`. VPP finished with
+`tuple parsed=2`, resolver `2/2` and last UID `12629`, owner-cache
+`valid=1 hits=1 misses=2 stores=1 uid=12629`, `shim-tx=9 bytes=640`, and
+sentinel `uid-block 99999 packets=0`. Its contract also retained
+`MISS_SUBMITTED` -> `COMPLETION_ACCEPTED uid=12629` -> `CACHE_HIT`; the probe
+result was `udp_datagram_sent`, which is only a datagram-submission
+observation and not an external reply claim.
+
+All three runners recorded no remaining VPP process and no `tun0`. The raw
+`snort-vpn-service.log` files did not retain an allowed-package provenance
+line, so service-log provenance remains `INSUFFICIENT`; the package UID,
+explicit VPN bind result, tuple, resolver completion, and cache transition are
+supported by their separate raw files. The `uid-block 99999 packets=0` value
+is an allow-run sentinel observation, not wrong-UID drop-zero evidence.
+
+These cells are narrow VPN/TUN/VPP boundary evidence only. They do not close
+the complete A2 two-App IPv4/IPv6 TCP/UDP matrix, reverse traffic, lifecycle
+refresh/unavailable behavior, external egress, or per-dropped-packet
+socket/transport zero. The correction does not require blocking owner-inline
+execution, changing FlowOwner identity, or adding UID to the canonical key;
+`architecture_interruption=false` remains in force.
