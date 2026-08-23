@@ -43,6 +43,7 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
             },
             "contractFile": "uid-attribution-contract.jsonl",
             "contractFinalFile": "uid-attribution-contract-final.jsonl",
+            "cleanupWaitFile": "cleanup-wait.json",
             "requiredFiles": [
                 "package-list-packages-U.txt",
                 "apk-provenance.tsv",
@@ -50,6 +51,7 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                 "vpp-start-provenance.json",
                 "uid-attribution-contract.jsonl",
                 "uid-attribution-contract-final.jsonl",
+                "cleanup-wait.json",
                 "a2-2-runtime-appa.jsonl",
                 "a2-2-runtime-appb.jsonl",
                 "vpp-owner-resolver.log",
@@ -58,10 +60,14 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                 "cleanup.txt",
             ],
         })
-        # Ports are intentionally in the A2-2 range, distinct from the
-        # checked-in A2-1 matrix.
-        for index, item in enumerate(manifest["tuples"]):
-            item["sourcePort"] = 45741 + (index if index < 4 else index + 4)
+        # A2-1 owns the eight-tuple matrix.  A2-2 is a four-tuple cohort with
+        # one fresh UDP tuple per App/family and unique ports.
+        manifest["tuples"] = [
+            item for item in manifest["tuples"] if item["protocolName"] == "udp"
+        ]
+        for item, port in zip(manifest["tuples"], (45741, 45742, 45751, 45752)):
+            item["stageId"] = item["stageId"].replace("A2-1", "A2-2")
+            item["sourcePort"] = port
         return manifest
 
     @staticmethod
@@ -90,13 +96,25 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                       omit_sequence_for: str = "",
                       wrong_cache_key: str = "",
                       capacity_violation: bool = False,
-                      concurrent: bool = True) -> None:
+                      concurrent: bool = True,
+                      eviction_split_for: str = "") -> None:
         self.base.write_fixture(root, manifest)
         (root / "launch-window.json").write_text(json.dumps({
             "schema": "s139-a2-2-launch-window/v1",
-            "launchCount": 8,
+            "launchCount": 4,
+            "launchFailures": 0,
             "windowStartMonotonicNs": 1000,
             "windowEndMonotonicNs": 2000,
+        }) + "\n", encoding="utf-8")
+        (root / "cleanup-wait.json").write_text(json.dumps({
+            "schema": "s139-a2-2-cleanup-wait/v1",
+            "stopRequested": True,
+            "stopRequestRc": 0,
+            "cleanupObservedBeforeForceStop": True,
+            "forceStopFallbackAfterTimeout": False,
+            "finalOutcome": "CLEANUP",
+            "pollAttempts": 4,
+            "timeoutSeconds": 10,
         }) + "\n", encoding="utf-8")
         records = [self.event(
             "CONTRACT_START", "-1", -1, 0, 0, reason="pending-capacity=4;cache-capacity=4")]
@@ -124,33 +142,47 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                     token, flow_id, 200 + index, "android-api-completion"))
                 cache = min(cache + 1, 4)
             else:
-                if cache == 4:
-                    records.append(self.event(
-                        "CACHE_EVICTED", key, uid, 0, 4, token, flow_id,
-                        200 + index, "cache-capacity"))
                 records.append(self.event(
                     "COMPLETION_ACCEPTED", key, uid, 0, min(cache + 1, 4),
                     token, flow_id, 200 + index, "android-api-completion"))
                 cache = min(cache + 1, 4)
-            if key != omit_sequence_for:
+            if key != omit_sequence_for and key != eviction_split_for:
                 cache_uid = self.base.UID_B if key == wrong_cache_key else uid
                 records.append(self.event(
                     "CACHE_HIT", key, cache_uid, 0, cache, token, flow_id,
                     300 + index, "cache-hit"))
+            elif key == eviction_split_for:
+                # Simulate a later generation after eviction.  There is no
+                # same-token hit for this tuple, so the verifier must remain
+                # INCONCLUSIVE instead of pairing across the generation.
+                records.append(self.event(
+                    "CACHE_EVICTED", key, uid, 0, cache, token, flow_id,
+                    300 + index, "cache-capacity"))
+                records.append(self.event(
+                    "CACHE_HIT", key, uid, 0, cache, token + 100, flow_id + 100,
+                    350 + index, "new-generation-cache-hit"))
             if index == 2:
                 # Complete the first live request after the second miss, so
                 # the two intervals overlap even though it was emitted first.
                 first = manifest["tuples"][0]
                 first_key = VERIFIER.canonical_tuple_key(first)
                 first_uid = manifest["expectedAllowedUids"][first["package"]]
+                cache = min(cache + 1, 4)
                 records.append(self.event(
                     "COMPLETION_ACCEPTED", first_key, first_uid, 0, cache,
                     1, 1, 250, "android-api-completion"))
-                if first_key != omit_sequence_for:
+                if first_key != omit_sequence_for and first_key != eviction_split_for:
                     cache_uid = self.base.UID_B if first_key == wrong_cache_key else first_uid
                     records.append(self.event(
                         "CACHE_HIT", first_key, cache_uid, 0, cache, 1, 1,
                         350, "cache-hit"))
+                elif first_key == eviction_split_for:
+                    records.append(self.event(
+                        "CACHE_EVICTED", first_key, first_uid, 0, cache,
+                        1, 1, 350, "cache-capacity"))
+                    records.append(self.event(
+                        "CACHE_HIT", first_key, first_uid, 0, cache,
+                        101, 101, 351, "new-generation-cache-hit"))
             if capacity_violation and index == 3:
                 records.append(self.event(
                     "STATE_SAMPLE", key, -1, 5, cache, token, flow_id,
@@ -166,12 +198,13 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
 
     def verdict(self, omit_sequence_for: str = "", wrong_cache_key: str = "",
                 capacity_violation: bool = False, remove_final: bool = False,
-                concurrent: bool = True) -> dict:
+                concurrent: bool = True, eviction_split_for: str = "") -> dict:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest = self.manifest()
             self.write_fixture(root, manifest, omit_sequence_for,
-                               wrong_cache_key, capacity_violation, concurrent)
+                               wrong_cache_key, capacity_violation, concurrent,
+                               eviction_split_for)
             if remove_final:
                 (root / "uid-attribution-contract-final.jsonl").unlink()
             return VERIFIER.verify_a22(manifest, root)
@@ -180,6 +213,7 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
         result = self.verdict()
         self.assertEqual(VERIFIER.PASS, result["status"])
         self.assertTrue(result["summary"]["concurrent"])
+        self.assertEqual(4, result["summary"]["passedSequences"])
         self.assertEqual(2, result["summary"]["boundedState"]["maxPendingObserved"])
 
     def test_cross_app_cache_hit_is_fail(self) -> None:
@@ -201,6 +235,21 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
             VERIFIER.INCONCLUSIVE,
             self.verdict(omit_sequence_for=key)["status"],
         )
+
+    def test_eviction_split_does_not_pair_across_token_or_flow(self) -> None:
+        key = VERIFIER.canonical_tuple_key(self.manifest()["tuples"][0])
+        result = self.verdict(eviction_split_for=key)
+        self.assertEqual(VERIFIER.INCONCLUSIVE, result["status"])
+        self.assertLess(result["summary"]["passedSequences"], 4)
+
+    def test_cleanup_wait_evidence_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.manifest()
+            self.write_fixture(root, manifest)
+            (root / "cleanup-wait.json").unlink()
+            result = VERIFIER.verify_a22(manifest, root)
+        self.assertEqual(VERIFIER.INVALID, result["status"])
 
     def test_missing_post_cleanup_final_contract_is_invalid(self) -> None:
         self.assertEqual(VERIFIER.INVALID, self.verdict(remove_final=True)["status"])

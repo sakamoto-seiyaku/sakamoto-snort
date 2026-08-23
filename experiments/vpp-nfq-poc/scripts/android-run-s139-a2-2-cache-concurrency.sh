@@ -4,10 +4,10 @@ set -euo pipefail
 # SAKAMOTO-139 A2-2: concurrent two-App async UID-cache matrix.
 #
 # This runner only orchestrates the device and preserves raw evidence.  The
-# manifest-driven verifier owns acceptance.  A2-2 deliberately uses fresh
-# source ports and launches all eight operations before waiting for any of
-# them, so the native pending ledger can prove overlap without changing the
-# A2-1 matrix or its result directory.
+# manifest-driven verifier owns acceptance.  A2-1 owns the full eight-tuple
+# matrix; A2-2 deliberately uses four fresh source ports (one per App/family)
+# so the native cache capacity of four can retain every cohort member while
+# the pending ledger proves overlap.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -26,6 +26,7 @@ MODE="${MODE:-vpp-hev-owner-resolver}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-99999}"
 START_WAIT="${START_WAIT:-6}"
 RESOLVER_WAIT="${RESOLVER_WAIT:-8}"
+CLEANUP_WAIT_SECONDS="${CLEANUP_WAIT_SECONDS:-10}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-2-cache-concurrency}"
 
 [[ "$BLOCK_OWNER_UID" == "99999" ]] || {
@@ -72,22 +73,38 @@ capture_apk_provenance() {
 }
 
 cleanup_done=0
-cleanup() {
-  if (( cleanup_done == 1 )); then
-    return 0
-  fi
-  cleanup_done=1
-  set +e
-  # Stop the service through its control Activity before force-stopping all
-  # three packages.  The post-cleanup contract is captured only after this
-  # function returns, so its last CLEANUP event cannot be mistaken for a
-  # pre-stop snapshot.
-  adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true \
-    >/dev/null 2>&1
-  sleep 1
-  adb_cmd shell am force-stop "$VPN_PACKAGE" >/dev/null 2>&1
-  adb_cmd shell am force-stop "$APP_PACKAGE_A" >/dev/null 2>&1
-  adb_cmd shell am force-stop "$APP_PACKAGE_B" >/dev/null 2>&1
+cleanup_observed=0
+cleanup_wait_attempts=0
+cleanup_force_stop_fallback=0
+
+write_cleanup_wait_evidence() {
+  local observed="$1"
+  local stop_rc="$2"
+  local final_outcome="$3"
+  local fallback="$4"
+  python3 - "$RESULT_DIR/cleanup-wait.json" "$observed" "$stop_rc" \
+    "$final_outcome" "$cleanup_wait_attempts" "$CLEANUP_WAIT_SECONDS" \
+    "$fallback" <<'PY'
+import json
+import sys
+
+output, observed, stop_rc, final_outcome, attempts, timeout, fallback = sys.argv[1:]
+with open(output, "w", encoding="utf-8") as stream:
+    json.dump({
+        "schema": "s139-a2-2-cleanup-wait/v1",
+        "stopRequested": True,
+        "stopRequestRc": int(stop_rc),
+        "cleanupObservedBeforeForceStop": observed == "true",
+        "forceStopFallbackAfterTimeout": fallback == "true",
+        "finalOutcome": final_outcome,
+        "pollAttempts": int(attempts),
+        "timeoutSeconds": int(timeout),
+    }, stream, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+}
+
+capture_cleanup_snapshot() {
   {
     echo "processes:"
     adb_su "ps -A 2>/dev/null | grep '[v]pp\\|[s]nort-vpn' || true" \
@@ -98,6 +115,59 @@ cleanup() {
     adb_cmd shell dumpsys connectivity 2>/dev/null | tr -d '\r' \
       | grep -E "Vpn|tun0|$VPN_PACKAGE" || true
   } >"$RESULT_DIR/cleanup.txt"
+}
+
+poll_for_cleanup() {
+  local deadline=$((SECONDS + CLEANUP_WAIT_SECONDS))
+  local last_line=""
+  cleanup_wait_attempts=0
+  cleanup_observed=0
+  cleanup_force_stop_fallback=0
+  while (( SECONDS <= deadline )); do
+    cleanup_wait_attempts=$((cleanup_wait_attempts + 1))
+    last_line="$(adb_su "tail -n 1 '$CONTRACT_PATH' 2>/dev/null || true" \
+      | tr -d '\r')"
+    if grep -Eq '"outcome"[[:space:]]*:[[:space:]]*"CLEANUP"' \
+      <<<"$last_line"; then
+      cleanup_observed=1
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+cleanup() {
+  if (( cleanup_done == 1 )); then
+    return 0
+  fi
+  cleanup_done=1
+  set +e
+  # Stop the service through its control Activity and wait for its durable
+  # CLEANUP event.  Force-stop is allowed only after that event; a timeout
+  # uses a separately marked emergency fallback and remains INVALID.
+  adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true \
+    >/dev/null 2>&1
+  stop_rc=$?
+  if ! poll_for_cleanup; then
+    echo "CLEANUP was not observed within ${CLEANUP_WAIT_SECONDS}s; retaining raw state"
+    cleanup_force_stop_fallback=1
+    write_cleanup_wait_evidence false "$stop_rc" "" true
+    # The bounded wait is exhausted, so perform emergency cleanup only after
+    # the wait.  The failed observation remains durable and the verifier must
+    # still classify this run INVALID.
+    adb_cmd shell am force-stop "$VPN_PACKAGE" >/dev/null 2>&1
+    adb_cmd shell am force-stop "$APP_PACKAGE_A" >/dev/null 2>&1
+    adb_cmd shell am force-stop "$APP_PACKAGE_B" >/dev/null 2>&1
+    capture_cleanup_snapshot
+    set -e
+    return 0
+  fi
+  write_cleanup_wait_evidence true "$stop_rc" "CLEANUP" false
+  adb_cmd shell am force-stop "$VPN_PACKAGE" >/dev/null 2>&1
+  adb_cmd shell am force-stop "$APP_PACKAGE_A" >/dev/null 2>&1
+  adb_cmd shell am force-stop "$APP_PACKAGE_B" >/dev/null 2>&1
+  capture_cleanup_snapshot
   set -e
 }
 trap cleanup EXIT
@@ -108,7 +178,7 @@ echo "vpn_package=$VPN_PACKAGE"
 echo "app_a=$APP_PACKAGE_A app_b=$APP_PACKAGE_B"
 echo "activity=$TRAFFIC_ACTIVITY"
 echo "mode=$MODE block_owner_uid=$BLOCK_OWNER_UID"
-echo "source-ports=AppA:45741-45744 AppB:45751-45754"
+echo "source-ports=AppA:45741-45742 AppB:45751-45752"
 echo "external-connect/reply=NON-CLAIM; logcat=DIAGNOSTIC-ONLY"
 
 for apk in "$LOCAL_VPN_APK" "$LOCAL_APP_A_APK" "$LOCAL_APP_B_APK"; do
@@ -188,13 +258,10 @@ device_epoch="$(adb_cmd shell date +%s 2>/dev/null | tr -d '\r\n')"
 } >"$RESULT_DIR/source-provenance.properties"
 capture_apk_provenance
 
-echo "## stop existing session, force-stop Apps, and clear remote evidence"
+echo "## request stop of any existing session and clear remote evidence"
 adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true \
   >/dev/null 2>&1 || true
 sleep 1
-adb_cmd shell am force-stop "$VPN_PACKAGE" >/dev/null 2>&1 || true
-adb_cmd shell am force-stop "$APP_PACKAGE_A" >/dev/null 2>&1 || true
-adb_cmd shell am force-stop "$APP_PACKAGE_B" >/dev/null 2>&1 || true
 adb_su "rm -f '$VPP_CLI_PATH' '$RESOLVER_PATH' '$SHIM_PATH' '$HEV_PATH' \
   '$PROTECT_PATH' '$RECEIPT_PATH' '$FAILURE_RECEIPT_PATH' \
   '$VPP_START_RECEIPT_PATH' '$CONTRACT_PATH' '$RUNTIME_A_PATH' '$RUNTIME_B_PATH'"
@@ -238,16 +305,12 @@ launch_tuple() {
   launch_stages+=("$stage_id")
 }
 
-# Keep these eight am start calls adjacent: they are intentionally backgrounded
-# first and joined only after all eight have been submitted to adb.
-launch_tuple "$APP_PACKAGE_A" ip4 tcp 45741 1.1.1.1 443 A2-2-appa-ip4-tcp
-launch_tuple "$APP_PACKAGE_A" ip4 udp 45742 1.1.1.1 53 A2-2-appa-ip4-udp
-launch_tuple "$APP_PACKAGE_A" ip6 tcp 45743 2606:4700:4700::1111 443 A2-2-appa-ip6-tcp
-launch_tuple "$APP_PACKAGE_A" ip6 udp 45744 2606:4700:4700::1111 53 A2-2-appa-ip6-udp
-launch_tuple "$APP_PACKAGE_B" ip4 tcp 45751 1.1.1.1 443 A2-2-appb-ip4-tcp
-launch_tuple "$APP_PACKAGE_B" ip4 udp 45752 1.1.1.1 53 A2-2-appb-ip4-udp
-launch_tuple "$APP_PACKAGE_B" ip6 tcp 45753 2606:4700:4700::1111 443 A2-2-appb-ip6-tcp
-launch_tuple "$APP_PACKAGE_B" ip6 udp 45754 2606:4700:4700::1111 53 A2-2-appb-ip6-udp
+# Keep these four am start calls adjacent: they are intentionally backgrounded
+# first and joined only after all four fresh cohort members have been submitted.
+launch_tuple "$APP_PACKAGE_A" ip4 udp 45741 1.1.1.1 53 A2-2-appa-ip4-udp
+launch_tuple "$APP_PACKAGE_A" ip6 udp 45742 2606:4700:4700::1111 53 A2-2-appa-ip6-udp
+launch_tuple "$APP_PACKAGE_B" ip4 udp 45751 1.1.1.1 53 A2-2-appb-ip4-udp
+launch_tuple "$APP_PACKAGE_B" ip6 udp 45752 2606:4700:4700::1111 53 A2-2-appb-ip6-udp
 
 launch_failures=0
 for launch_pid in "${launch_pids[@]}"; do
@@ -273,7 +336,7 @@ def integer(value):
 with open(output, "w", encoding="utf-8") as stream:
     json.dump({
         "schema": "s139-a2-2-launch-window/v1",
-        "launchCount": 8,
+        "launchCount": 4,
         "launchFailures": integer(failures),
         "windowStartMonotonicNs": integer(start_ns),
         "windowEndMonotonicNs": integer(end_ns),
@@ -326,36 +389,20 @@ def integer(value):
         return -1
 
 tuples = [
-    {"stageId": "A2-2-appa-ip4-tcp", "package": app_a, "family": "ip4", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45741,
-     "destinationHost": "1.1.1.1", "destinationAddress": "1.1.1.1", "destinationPort": 443,
-     "repeat": 2},
     {"stageId": "A2-2-appa-ip4-udp", "package": app_a, "family": "ip4", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45742,
+     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45741,
      "destinationHost": "1.1.1.1", "destinationAddress": "1.1.1.1", "destinationPort": 53,
      "repeat": 2},
-    {"stageId": "A2-2-appa-ip6-tcp", "package": app_a, "family": "ip6", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45743,
-     "destinationHost": "2606:4700:4700::1111", "destinationAddress": "2606:4700:4700::1111",
-     "destinationPort": 443, "repeat": 2},
     {"stageId": "A2-2-appa-ip6-udp", "package": app_a, "family": "ip6", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45744,
+     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45742,
      "destinationHost": "2606:4700:4700::1111", "destinationAddress": "2606:4700:4700::1111",
      "destinationPort": 53, "repeat": 2},
-    {"stageId": "A2-2-appb-ip4-tcp", "package": app_b, "family": "ip4", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45751,
-     "destinationHost": "1.1.1.1", "destinationAddress": "1.1.1.1", "destinationPort": 443,
-     "repeat": 2},
     {"stageId": "A2-2-appb-ip4-udp", "package": app_b, "family": "ip4", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45752,
+     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45751,
      "destinationHost": "1.1.1.1", "destinationAddress": "1.1.1.1", "destinationPort": 53,
      "repeat": 2},
-    {"stageId": "A2-2-appb-ip6-tcp", "package": app_b, "family": "ip6", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45753,
-     "destinationHost": "2606:4700:4700::1111", "destinationAddress": "2606:4700:4700::1111",
-     "destinationPort": 443, "repeat": 2},
     {"stageId": "A2-2-appb-ip6-udp", "package": app_b, "family": "ip6", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45754,
+     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45752,
      "destinationHost": "2606:4700:4700::1111", "destinationAddress": "2606:4700:4700::1111",
      "destinationPort": 53, "repeat": 2},
 ]
@@ -378,11 +425,13 @@ manifest = {
     "runtimeFiles": {app_a: "a2-2-runtime-appa.jsonl", app_b: "a2-2-runtime-appb.jsonl"},
     "contractFile": "uid-attribution-contract.jsonl",
     "contractFinalFile": "uid-attribution-contract-final.jsonl",
+    "cleanupWaitFile": "cleanup-wait.json",
     "tuples": tuples,
     "requiredFiles": [
         "package-list-packages-U.txt", "apk-provenance.tsv",
         "vpn-session-provenance.json", "vpp-start-provenance.json",
         "uid-attribution-contract.jsonl", "uid-attribution-contract-final.jsonl",
+        "cleanup-wait.json",
         "a2-2-runtime-appa.jsonl", "a2-2-runtime-appb.jsonl",
         "vpp-cli.log", "vpp-owner-resolver.log", "vpp-shim.log",
         "vpp-hev.log", "vpp-protect.log", "connectivity.txt",
@@ -401,7 +450,20 @@ trap - EXIT
 
 # This capture is intentionally after cleanup's stop + force-stop sequence.
 # Keep the pre-cleanup contract above untouched; the verifier compares this
-# separate final snapshot's last event and settlement counters.
+# separate final snapshot's last event and settlement counters.  If the
+# durable CLEANUP was not observed, cleanup() used only its post-timeout
+# fallback force-stop and the missing final capture leaves the raw run INVALID.
+if (( cleanup_observed != 1 )); then
+  echo "## cleanup wait failed; retain raw evidence and let verifier return INVALID"
+  set +e
+  python3 "$VERIFIER" \
+    --manifest "$RESULT_DIR/manifest.json" \
+    --evidence-dir "$RESULT_DIR" \
+    --output "$RESULT_DIR/result.json"
+  verifier_rc=$?
+  set -e
+  exit "$verifier_rc"
+fi
 echo "## capture post-cleanup final UID contract"
 capture_remote "uid-attribution-contract-final.jsonl" "$CONTRACT_PATH"
 

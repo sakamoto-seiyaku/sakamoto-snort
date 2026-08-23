@@ -235,7 +235,7 @@ then immediately lost `tun0` because the APK omitted the owner-resolver plugin.
 | --- | --- | --- | --- |
 | **A2-0 session provenance** | Do package, UID, APK, VPN builder configuration, VPN handle, allowed scope, and VPP tuple identify one exact run? | All six provenance joins above match and cleanup is clean | UID correctness beyond captured tuples |
 | **A2-1 two-App dual-stack matrix** | Can two deterministic App UIDs each create IPv4/IPv6 TCP/UDP tuples? | Eight exact tuples resolve to the correct App UID with no ambient ambiguity | External connect/reply |
-| **A2-2 async cache/concurrency/bounds** | Do concurrent distinct App tuples preserve miss/completion/hit and bounded state? | No cross-App hit; owner progresses; pending/cache high-water is within declared capacity and returns to zero/bounded steady state | Production cache sizing or load capacity |
+| **A2-2 async cache/concurrency/bounds** | Do four concurrent fresh App/family tuples preserve miss/completion/hit and bounded state? | Exactly four tuples cover both Apps and both IP families; no cross-App hit; each has a same-identity sequence; pending/cache high-water is within declared capacity and returns to zero/bounded steady state | Production cache sizing or load capacity |
 | **A2-3 controlled reverse traffic** | Does an actual Flow Stack return-seam reflection reuse canonical owner and UID without loopback contamination? | Same canonical key/owner/UID, no new Android lookup, actual return/TUN-TX counters advance, no transport re-entry, and the originating app receives the payload | Protected external Direct Egress or Internet reply |
 | **A2-4 lifecycle native join** | Do registered app, VPN/network, runtime, unavailable, and restore stages invalidate and recover coherently? | Stage-correlated Java/native miss, completion, hit, epoch and cache deltas agree; stale completions are rejected | Real underlay handover, which remains C1 |
 | **A2-5 UID allow/drop admission ledger** | Does allow cross the real downstream seam while a fresh dropped canonical key creates no downstream work? | Allow control creates, bind/protects, and settles a real socket; the dropped key has no prior PCB/socket/ledger and its stage has zero admission/broker/socket events | External connect and transport failures, which remain B2 |
@@ -244,6 +244,30 @@ then immediately lost `tun0` because the APK omitted the owner-resolver plugin.
 A2 is complete only when A2-0 through A2-6 all pass at their registered scope.
 Narrow historical cells may support diagnosis but cannot substitute for a
 missing required cell.
+
+#### A2-2 concurrency cohort rule
+
+A2-1 owns the complete eight-tuple matrix: two Apps × IPv4/IPv6 × TCP/UDP.
+A2-2 is a separate cache-capacity cohort and must register exactly four fresh
+tuples, one each for AppA/IPv4, AppA/IPv6, AppB/IPv4, and AppB/IPv6. The
+cohort may use UDP for all four members or a deterministic protocol mix, but
+source ports must be unique and must not reuse the A2-1 ports. This is
+intentional: the native contract declares pending capacity 4 and cache
+capacity 4, so all four fresh keys can remain resident and each can prove its
+own `MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT` sequence without
+normal eviction. Eviction is a valid bounded-state observation, but it cannot
+be used to pair a hit with a different token, flow, generation, or scope.
+
+The A2-2 verifier therefore requires exactly four registered tuples and exact
+App × IP-family coverage. It groups sequence events by stable `(token,
+flow_id)` identity, accepts any complete ordered chain within one identity,
+and treats a missing same-identity hit as `INCONCLUSIVE`; a wrong UID or
+cross-App hit is `FAIL`. A passing result reports `passedSequences == 4` and
+retains the durable cleanup wait showing that `CLEANUP` was observed before
+any normal force-stop. If the bounded cleanup wait times out, the runner may
+use a separately marked emergency force-stop after the wait to prevent residue,
+but it must retain the failed wait evidence and the verifier must return
+`INVALID` without a post-cleanup final contract.
 
 ## Lifecycle event definition
 

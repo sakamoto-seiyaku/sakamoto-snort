@@ -276,7 +276,8 @@ def addresses_equal(left: Any, right: Any) -> bool:
         return left == right
 
 
-def verify_a21(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
+def verify_a21(manifest: Dict[str, Any], evidence: Path,
+               require_full_matrix: bool = True) -> Dict[str, Any]:
     checks: List[Dict[str, str]] = []
     invalid: List[str] = []
     failures: List[str] = []
@@ -346,8 +347,10 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                     "destinationPort")
     tuples = manifest.get("tuples")
     matrix_errors: List[str] = []
-    if not isinstance(tuples, list) or len(tuples) != 8:
-        matrix_errors.append("matrix must contain exactly eight tuples")
+    expected_tuple_count = 8 if require_full_matrix else 4
+    if not isinstance(tuples, list) or len(tuples) != expected_tuple_count:
+        matrix_errors.append("matrix must contain exactly "
+                             + str(expected_tuple_count) + " tuples")
         tuples = []
     registered: set = set()
     stage_ids: set = set()
@@ -381,19 +384,27 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         stage_ids.add(stage_id)
         source_ports.add(source_port)
         registered.add((package, family, protocol_name))
-    expected_matrix = {(name, family, protocol)
-                       for name in allowed
-                       for family in ("ip4", "ip6")
-                       for protocol in ("tcp", "udp")}
-    if registered != expected_matrix:
-        matrix_errors.append("matrix does not cover two Apps x ip4/ip6 x tcp/udp exactly once")
+    if require_full_matrix:
+        expected_matrix = {(name, family, protocol)
+                           for name in allowed
+                           for family in ("ip4", "ip6")
+                           for protocol in ("tcp", "udp")}
+        if registered != expected_matrix:
+            matrix_errors.append(
+                "matrix does not cover two Apps x ip4/ip6 x tcp/udp exactly once")
+    elif not registered:
+        matrix_errors.append("matrix must contain at least one registered tuple")
     if matrix_errors:
         invalid.append("registered tuple matrix is invalid")
-        append_check(checks, "registered-eight-tuple-matrix", INVALID,
+        append_check(checks, "registered-eight-tuple-matrix" if require_full_matrix
+                     else "registered-cohort-tuples", INVALID,
                      "; ".join(sorted(set(matrix_errors))))
     else:
-        append_check(checks, "registered-eight-tuple-matrix", PASS,
-                     "two Apps x two families x two protocols with unique source ports")
+        append_check(checks, "registered-eight-tuple-matrix" if require_full_matrix
+                     else "registered-cohort-tuples", PASS,
+                     ("two Apps x two families x two protocols with unique source ports"
+                      if require_full_matrix else
+                      "registered tuples have valid fields and unique source ports"))
 
     package_text = read_text(evidence / "package-list-packages-U.txt")
     packages = package_snapshot(package_text or "")
@@ -733,7 +744,11 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         reasons = inconclusive
     else:
         status = PASS
-        reasons = ["all eight deterministic App/family/protocol tuples resolve to their registered UID"]
+        reasons = [
+            ("all eight deterministic App/family/protocol tuples resolve to their "
+             "registered UID") if require_full_matrix else
+            "all registered deterministic tuples resolve to their registered UID"
+        ]
 
     return {
         "schema": VERIFIER_SCHEMA,
@@ -817,12 +832,29 @@ def _optional_state_value(event: Dict[str, Any], *fields: str) -> Tuple[Optional
     return None, False
 
 
+def _stable_event_identity(event: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """Return the request identity used to pair one cache sequence.
+
+    A canonical key can be reused after eviction or a scope/generation
+    refresh.  Token and flow id are the durable request identity, so a hit
+    from a later generation must never complete an earlier sequence.
+    """
+    token = event.get("token")
+    flow_id = event.get("flow_id", event.get("flowId"))
+    if (not isinstance(token, int) or isinstance(token, bool) or token < 0
+            or not isinstance(flow_id, int) or isinstance(flow_id, bool)
+            or flow_id < 0):
+        return None
+    return token, flow_id
+
+
 def _contract_events(path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
     records, errors = read_json_lines(path)
     for index, event in enumerate(records, 1):
         if event.get("schema") != "uid-attribution-contract/v1":
             errors.append("line " + str(index) + ": schema is not uid-attribution-contract/v1")
-        for field in ("outcome", "key", "uid", "pending", "cache"):
+        for field in ("outcome", "key", "uid", "pending", "cache",
+                      "token", "flow_id"):
             if field not in event:
                 errors.append("line " + str(index) + ": missing " + field)
         if "outcome" in event and not isinstance(event.get("outcome"), str):
@@ -835,6 +867,11 @@ def _contract_events(path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
         for field in ("pending", "cache"):
             if field in event and _state_value(event, field) is None:
                 errors.append("line " + str(index) + ": invalid " + field)
+        for field in ("token", "flow_id"):
+            value = event.get(field)
+            if (field in event and (not isinstance(value, int)
+                                    or isinstance(value, bool) or value < -1)):
+                errors.append("line " + str(index) + ": invalid " + field)
     return records, errors
 
 
@@ -842,8 +879,9 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
     """Verify the POC-only async cache/concurrency/bounds cell.
 
     A2-1 owns the common package/APK/VPN/runtime/resolver joins.  This profile
-    adapts that stable verifier to the new manifest and adds the contract
-    ledger, high-water, overlap, and post-cleanup settlement assertions.
+    adapts that stable verifier to a four-tuple concurrency cohort and adds
+    the contract ledger, high-water, overlap, and post-cleanup settlement
+    assertions.
     """
     # A2-2 retains the A2-1 provenance gate, but its manifest owns one extra
     # durable artifact: a post-cleanup contract JSONL.  Validate the names and
@@ -869,6 +907,14 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         manifest_errors.append("contractFinalFile is invalid")
         final_name = "uid-attribution-contract-final.jsonl"
 
+    cleanup_wait_name: Any = manifest.get("cleanupWaitFile")
+    if cleanup_wait_name is None:
+        manifest_errors.append("manifest field missing: cleanupWaitFile")
+        cleanup_wait_name = "cleanup-wait.json"
+    elif not isinstance(cleanup_wait_name, str) or not cleanup_wait_name:
+        manifest_errors.append("cleanupWaitFile is invalid")
+        cleanup_wait_name = "cleanup-wait.json"
+
     required = manifest.get("requiredFiles")
     required_errors: List[str] = []
     if not isinstance(required, list) or not all(isinstance(name, str) and name
@@ -877,7 +923,7 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         required = []
     else:
         required_set = set(required)
-        for name in (contract_name, final_name):
+        for name in (contract_name, final_name, cleanup_wait_name):
             if name not in required_set:
                 required_errors.append("requiredFiles omits " + name)
         missing = [name for name in required if not (evidence / name).is_file()]
@@ -891,7 +937,9 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         "cellId": "A2-1",
         "contractFile": contract_name,
     })
-    base_result = verify_a21(base_manifest, evidence)
+    # A2-1 owns the eight-tuple matrix.  A2-2 reuses its provenance/runtime
+    # joins without asking that common gate to re-run the eight tuple claim.
+    base_result = verify_a21(base_manifest, evidence, require_full_matrix=False)
     checks: List[Dict[str, str]] = list(base_result.get("checks", []))
     invalid: List[str] = manifest_errors + required_errors
     failures: List[str] = []
@@ -920,13 +968,69 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
     append_check(checks, "a2-2-required-raw",
                  INVALID if required_errors else PASS,
                  "; ".join(required_errors) if required_errors else
-                 "required pre- and post-cleanup contract files are declared and present")
+                 "required pre-cleanup, cleanup-wait, and post-cleanup evidence is declared and present")
+
+    cleanup_wait, cleanup_wait_error = read_json_object(evidence / cleanup_wait_name)
+    cleanup_wait_errors: List[str] = []
+    if cleanup_wait is None:
+        cleanup_wait_errors.append(cleanup_wait_error)
+    else:
+        if cleanup_wait.get("schema") != "s139-a2-2-cleanup-wait/v1":
+            cleanup_wait_errors.append("schema")
+        if cleanup_wait.get("stopRequested") is not True:
+            cleanup_wait_errors.append("stopRequested")
+        stop_request_rc = cleanup_wait.get("stopRequestRc")
+        if not isinstance(stop_request_rc, int) or isinstance(stop_request_rc, bool) \
+                or stop_request_rc != 0:
+            cleanup_wait_errors.append("stopRequestRc")
+        if cleanup_wait.get("cleanupObservedBeforeForceStop") is not True:
+            cleanup_wait_errors.append("cleanupObservedBeforeForceStop")
+        fallback = cleanup_wait.get("forceStopFallbackAfterTimeout")
+        if not isinstance(fallback, bool):
+            cleanup_wait_errors.append("forceStopFallbackAfterTimeout")
+        elif fallback:
+            cleanup_wait_errors.append("forceStopFallbackAfterTimeout=true")
+        if cleanup_wait.get("finalOutcome") != "CLEANUP":
+            cleanup_wait_errors.append("finalOutcome")
+        timeout_seconds = cleanup_wait.get("timeoutSeconds")
+        if (not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool)
+                or timeout_seconds <= 0 or timeout_seconds > 10):
+            cleanup_wait_errors.append("timeoutSeconds")
+        attempts = cleanup_wait.get("pollAttempts")
+        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts <= 0:
+            cleanup_wait_errors.append("pollAttempts")
+    if cleanup_wait_errors:
+        invalid.append("cleanup wait evidence is invalid")
+        append_check(checks, "a2-2-cleanup-wait", INVALID,
+                     "; ".join(cleanup_wait_errors))
+    else:
+        append_check(checks, "a2-2-cleanup-wait", PASS,
+                     "durable CLEANUP was observed before any force-stop")
+
+    launch_window, launch_window_error = read_json_object(evidence / "launch-window.json")
+    launch_window_errors: List[str] = []
+    if launch_window is None:
+        launch_window_errors.append(launch_window_error)
+    else:
+        if launch_window.get("schema") != "s139-a2-2-launch-window/v1":
+            launch_window_errors.append("schema")
+        if launch_window.get("launchCount") != 4:
+            launch_window_errors.append("launchCount")
+        if launch_window.get("launchFailures") != 0:
+            launch_window_errors.append("launchFailures")
+    if launch_window_errors:
+        invalid.append("A2-2 launch window evidence is invalid")
+        append_check(checks, "a2-2-launch-window", INVALID,
+                     "; ".join(launch_window_errors))
+    else:
+        append_check(checks, "a2-2-launch-window", PASS,
+                     "four launches were submitted with no launch failures")
 
     tuples = manifest.get("tuples")
     tuple_by_key: Dict[str, Dict[str, Any]] = {}
     tuple_errors: List[str] = []
-    if not isinstance(tuples, list) or len(tuples) != 8:
-        tuple_errors.append("A2-2 must register exactly eight tuples")
+    if not isinstance(tuples, list) or len(tuples) != 4:
+        tuple_errors.append("A2-2 must register exactly four tuples")
         tuples = []
     allowed = manifest.get("allowedPackages")
     uid_map = manifest.get("expectedAllowedUids")
@@ -944,16 +1048,57 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         tuple_by_key[key] = item
         if item.get("package") not in allowed:
             tuple_errors.append("tuple package is outside the two-App allow-list")
+        if item.get("family") not in ("ip4", "ip6"):
+            tuple_errors.append("tuple " + str(item.get("stageId"))
+                                + " has an invalid family")
+        if (item.get("protocol"), item.get("protocolName")) not in (
+                (6, "tcp"), (17, "udp")):
+            tuple_errors.append("tuple " + str(item.get("stageId"))
+                                + " has an invalid protocol")
+        if not isinstance(item.get("stageId"), str) or not item.get("stageId"):
+            tuple_errors.append("tuple stageId is missing")
+        source_port = item.get("sourcePort")
+        if (not isinstance(source_port, int) or isinstance(source_port, bool)
+                or not 1 <= source_port <= 65535):
+            tuple_errors.append("tuple " + str(item.get("stageId"))
+                                + " has an invalid source port")
+        if not isinstance(item.get("destinationPort"), int) \
+                or isinstance(item.get("destinationPort"), bool) \
+                or not 1 <= item.get("destinationPort") <= 65535:
+            tuple_errors.append("tuple " + str(item.get("stageId"))
+                                + " has an invalid destination port")
+        if not isinstance(item.get("sourceAddress"), str) \
+                or not isinstance(item.get("destinationAddress"), str):
+            tuple_errors.append("tuple " + str(item.get("stageId"))
+                                + " has invalid addresses")
         if item.get("repeat") != 2:
             tuple_errors.append("tuple " + str(item.get("stageId"))
                                 + " must request repeat=2")
+    if isinstance(tuples, list):
+        stage_ids = [item.get("stageId") for item in tuples
+                     if isinstance(item, dict)]
+        source_ports = [item.get("sourcePort") for item in tuples
+                        if isinstance(item, dict)]
+        if len(stage_ids) != len(set(stage_ids)):
+            tuple_errors.append("tuple stageIds must be unique")
+        if len(source_ports) != len(set(source_ports)):
+            tuple_errors.append("tuple source ports must be unique")
+        registered_app_family = {
+            (item.get("package"), item.get("family")) for item in tuples
+            if isinstance(item, dict)
+        }
+        expected_app_family = {
+            (name, family) for name in allowed for family in ("ip4", "ip6")
+        }
+        if registered_app_family != expected_app_family:
+            tuple_errors.append("A2-2 must cover both Apps and both IP families exactly once")
     if tuple_errors:
         invalid.append("registered A2-2 tuple matrix is invalid")
         append_check(checks, "a2-2-registered-tuples", INVALID,
                      "; ".join(sorted(set(tuple_errors))))
     else:
         append_check(checks, "a2-2-registered-tuples", PASS,
-                     "eight unique AppA/AppB canonical keys with repeat=2")
+                     "four fresh unique AppA/AppB IPv4/IPv6 canonical keys with repeat=2")
 
     contract_path = evidence / contract_name
     contract_records, contract_errors = _contract_events(contract_path)
@@ -985,9 +1130,15 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                          "reason=" + str(start.get("reason", "")))
         else:
             capacities = {"pending": pending_capacity, "cache": cache_capacity}
-            append_check(checks, "a2-2-declared-capacity", PASS,
-                         "pending-capacity=" + str(pending_capacity)
-                         + ";cache-capacity=" + str(cache_capacity))
+            if pending_capacity != 4 or cache_capacity != 4:
+                invalid.append("A2-2 requires native pending/cache capacity=4")
+                append_check(checks, "a2-2-declared-capacity", INVALID,
+                             "pending-capacity=" + str(pending_capacity)
+                             + ";cache-capacity=" + str(cache_capacity)
+                             + ";expected=4")
+            else:
+                append_check(checks, "a2-2-declared-capacity", PASS,
+                             "pending-capacity=4;cache-capacity=4")
 
     max_pending = max((_state_value(event, "pending") or 0)
                       for event in contract_records) if contract_records else 0
@@ -1027,6 +1178,7 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         package = item.get("package")
         expected_uid = uid_map.get(package)
         events = events_by_key.get(key, [])
+        events_by_identity: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
         for event in events:
             outcome = event.get("outcome")
             uid = event.get("uid")
@@ -1042,40 +1194,52 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                 if event_package is not None and event_package != package:
                     wrong_uid_events.append(key + " " + str(outcome)
                                             + " app_package differs from registered App")
-            elif outcome in ("COMPLETION_WRONG_UID", "COMPLETION_WRONG_OWNER"):
+            elif outcome in ("COMPLETION_WRONG_UID",
+                             "CROSS_APP_CACHE_HIT_REJECTED"):
+                wrong_uid_events.append(key + " " + str(outcome)
+                                        + " uid=" + str(uid))
+            elif outcome == "COMPLETION_WRONG_OWNER":
                 if isinstance(uid, int) and not isinstance(uid, bool) and uid >= 0:
                     wrong_uid_events.append(key + " " + str(outcome)
                                             + " uid=" + str(uid))
 
-        miss_index = next((index for index, event in enumerate(events)
-                           if event.get("outcome") == "MISS_SUBMITTED"), None)
-        completion_index = next((index for index, event in enumerate(events)
-                                 if index > (miss_index if miss_index is not None else -1)
-                                 and event.get("outcome") == "COMPLETION_ACCEPTED"), None)
-        hit_index = next((index for index, event in enumerate(events)
-                          if index > (completion_index if completion_index is not None else -1)
-                          and event.get("outcome") == "CACHE_HIT"), None)
-        if miss_index is None or completion_index is None or hit_index is None:
+            if outcome in ("MISS_SUBMITTED", "COMPLETION_ACCEPTED", "CACHE_HIT"):
+                identity = _stable_event_identity(event)
+                if identity is None:
+                    sequence_errors.append(key + " has malformed token/flow identity")
+                else:
+                    events_by_identity.setdefault(identity, []).append(event)
+
+        # Pair only events carrying the same request identity.  A canonical
+        # key can be reused after eviction or a scope/generation refresh; a
+        # later token/flow hit is not evidence for an earlier miss.
+        key_has_sequence = False
+        for identity_events in events_by_identity.values():
+            miss_index = next((index for index, event in enumerate(identity_events)
+                               if event.get("outcome") == "MISS_SUBMITTED"), None)
+            completion_index = next((index for index, event in enumerate(identity_events)
+                                     if index > (miss_index
+                                                 if miss_index is not None else -1)
+                                     and event.get("outcome") == "COMPLETION_ACCEPTED"), None)
+            hit_index = next((index for index, event in enumerate(identity_events)
+                              if index > (completion_index
+                                          if completion_index is not None else -1)
+                              and event.get("outcome") == "CACHE_HIT"), None)
+            if miss_index is not None and completion_index is not None and hit_index is not None:
+                key_has_sequence = True
+                break
+        if not key_has_sequence:
             sequence_missing.append(key)
         else:
-            miss = events[miss_index]
-            completion = events[completion_index]
-            hit = events[hit_index]
-            if miss.get("token") != completion.get("token") \
-                    or miss.get("flow_id") != completion.get("flow_id") \
-                    or completion.get("token") != hit.get("token") \
-                    or completion.get("flow_id") != hit.get("flow_id"):
-                sequence_errors.append(key + " token/flow identity is not stable")
-            else:
-                sequence_passed += 1
+            sequence_passed += 1
 
     if wrong_uid_events:
         failures.append("wrong App UID or cross-App cache hit observed")
         append_check(checks, "a2-2-uid-and-cache-isolation", FAIL,
                      "; ".join(wrong_uid_events))
-    elif sequence_passed == len(tuple_by_key) and tuple_by_key:
+    elif sequence_passed == len(tuple_by_key) == 4:
         append_check(checks, "a2-2-uid-and-cache-isolation", PASS,
-                     "completion and cache-hit UIDs match each registered App")
+                     "completion and cache-hit UIDs match each registered App/family tuple")
     else:
         append_check(checks, "a2-2-uid-and-cache-isolation", INCONCLUSIVE,
                      "registered keys lacking a decisive miss/completion/hit sequence="
@@ -1198,7 +1362,7 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         status = INCONCLUSIVE
         reasons.extend(inconclusive)
     else:
-        reasons.append("all eight concurrent A2-2 keys completed miss/completion/cache-hit within bounds")
+        reasons.append("all four concurrent A2-2 keys completed miss/completion/cache-hit within bounds")
 
     return {
         "schema": VERIFIER_SCHEMA,
@@ -1221,13 +1385,14 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             "contractFile": contract_name,
             "contractFinalFile": final_name,
             "finalContractFile": final_name,
+            "cleanupWaitFile": cleanup_wait_name,
             "logcatDiagnosticOnly": True,
             "logcatCaptured": (evidence / "logcat-diagnostic.log").is_file(),
         },
         "claims": [
-            "two deterministic App UIDs preserve asynchronous miss/completion/cache-hit sequences",
+            "four fresh App/family tuples preserve asynchronous miss/completion/cache-hit sequences",
             "observed pending/cache state stays within the declared bounded capacities and settles",
-            "the launch window produces evidence of concurrent distinct canonical keys",
+            "the launch window produces evidence of concurrent distinct canonical keys within cache capacity",
         ],
         "nonClaims": [
             "production cache sizing or load capacity",
