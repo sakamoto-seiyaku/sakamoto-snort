@@ -278,6 +278,14 @@ provenance/instrumentation/fixture isolation failure, `INCONCLUSIVE` for a valid
 run without a decisive event by its bounded deadline, and `FAIL` for an
 observed behavioral falsifier.
 
+The throwaway
+[`a2_cell_verdict`](prototypes/a2_cell_verdict/README.md) logic prototype is the
+primary source for this status-priority decision. Its in-memory seven-cell
+model demonstrates `A2_INCOMPLETE -> PASS` aggregation, keeps an empty volatile
+logcat diagnostic from invalidating durable evidence, and separates provenance
+or instrumentation failure from a valid bounded run without a decisive event.
+It is not the production evidence verifier.
+
 ## Existing evidence disposition
 
 Reusable as historical/narrow support:
