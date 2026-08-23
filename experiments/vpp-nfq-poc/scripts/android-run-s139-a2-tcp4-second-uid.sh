@@ -16,6 +16,7 @@ HOST="${HOST:-1.1.1.1}"
 PORT="${PORT:-443}"
 SOURCE_PORT="${SOURCE_PORT:-45621}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-99999}"
+BIND_TO_VPN="${BIND_TO_VPN:-true}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT="${PROBE_WAIT:-5}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-tcp4-second-uid}"
@@ -46,6 +47,7 @@ echo "allowed_package=$ALLOWED_PACKAGE"
 echo "trigger_activity=$TRIGGER_ACTIVITY"
 echo "target=$HOST:$PORT source_port=$SOURCE_PORT"
 echo "wrong_uid_drop_target=$BLOCK_OWNER_UID"
+echo "bind_to_vpn=$BIND_TO_VPN"
 echo "correction=single-package allowedPackage; no comma/double-allow change required"
 
 packages="$(adb_cmd shell cmd package list packages -U | tr -d '\r')"
@@ -76,7 +78,8 @@ for attempt in 1 2; do
     --es debugTrafficHost "$HOST" \
     --ei debugTrafficPort "$PORT" \
     --ei debugTrafficSourcePort "$SOURCE_PORT" \
-    --ei debugTrafficTimeoutMillis 1200
+    --ei debugTrafficTimeoutMillis 1200 \
+    --ez debugTrafficBindToVpn "$BIND_TO_VPN"
   sleep "$PROBE_WAIT"
   echo "trigger_attempt=$attempt"
 done
@@ -124,6 +127,12 @@ check() {
 }
 
 check "runtime-real-uid" "^uid=$allowed_uid$" "$runtime_probe"
+if [[ "$BIND_TO_VPN" == true ]]; then
+  check "runtime-vpn-bind-requested" '^bindToVpn=true$' "$runtime_probe"
+  check "runtime-vpn-bind-succeeded" '^bindResult=bound$' "$runtime_probe"
+  check "runtime-vpn-bind-network-handle" '^bindNetworkHandle=[1-9][0-9]*$' "$runtime_probe"
+  check "runtime-vpn-bind-error-empty" '^bindError=$' "$runtime_probe"
+fi
 check "allowed-package-provenance" "VPN allowed package=$ALLOWED_PACKAGE" "$(<"$RESULT_DIR/snort-vpn-service.log")"
 check "ipv4-tcp-tuple" "last-tuple ip4 proto 6 .* -> $HOST:$PORT" "$vpp_cli"
 check "resolver-uid" "resolver query=.* proto=6 .* -> $HOST:$PORT uid=$allowed_uid" "$resolver_log"
