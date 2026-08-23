@@ -201,6 +201,17 @@ correct-UID `CACHE_HIT` events before pre-cleanup capture. The gates are
 durable contract observations, not fixed sleeps. A timeout remains
 `INCONCLUSIVE` with raw evidence retained; B1 remains blocked.
 
+The first two-wave device run,
+`results/s139-a2-2-cache-concurrency-20260823-fixed-3/`, reached all four
+first-wave completion events and all four second-wave cache hits. Its pending
+and cache bounds, UID joins, runtime pair gates, and native/session provenance
+were valid. The runner nevertheless returned `INVALID` because the stop
+control Activity did not produce a durable `CLEANUP` within the ten-second
+settlement window; the emergency force-stop was marked in `cleanup-wait.json`.
+The raw bundle is retained. This is a control-plane settlement defect, not a
+UID/cache or FlowOwner architecture interruption. The next runner correction
+uses a waited, clear-top stop delivery before considering the bounded fallback.
+
 ## Claim boundary and next cells
 
 A2-0 and A2-1 now prove durable session provenance plus the complete

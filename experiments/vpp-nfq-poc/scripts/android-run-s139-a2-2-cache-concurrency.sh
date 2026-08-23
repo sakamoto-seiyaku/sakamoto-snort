@@ -304,8 +304,10 @@ cleanup() {
   # Stop the service through its control Activity and wait for its durable
   # CLEANUP event.  Force-stop is allowed only after that event; a timeout
   # uses a separately marked emergency fallback and remains INVALID.
-  adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true \
-    >/dev/null 2>&1
+  # -W waits for MainActivity delivery; clear-top reuses the existing control
+  # Activity even when the traffic adapter was the foreground task.
+  adb_cmd shell am start -W --activity-clear-top -n "$VPN_PACKAGE/.MainActivity" \
+    --ez stop true >/dev/null 2>&1
   stop_rc=$?
   if ! poll_for_cleanup; then
     echo "CLEANUP was not observed within ${CLEANUP_WAIT_SECONDS}s; retaining raw state"
