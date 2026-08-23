@@ -271,6 +271,12 @@ family barrier is evidence-based and prevents the Android `singleTop` Activity
 from intentionally racing two same-package workers, which previously made a
 second fixed-port UDP send return `EPERM` before entering VPP.
 
+Within each AppA/AppB pair, the runner starts AppA and then waits a short,
+configurable 250 ms fixture stagger before starting AppB. This is an intent
+delivery guard against Android `singleTop`/ADB launch loss, not a native
+serialization barrier: both sockets remain alive for the positive owner-lookup
+retention interval, so native pending overlap is still required and measured.
+
 The UDP adapter keeps its socket alive through the asynchronous Android owner
 lookup using the existing positive post-send observation delay (A2-2 uses
 `timeoutMillis=1200`). Runtime JSONL is captured after the native gates as

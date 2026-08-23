@@ -28,6 +28,7 @@ START_WAIT="${START_WAIT:-6}"
 FIRST_WAVE_WAIT_SECONDS="${FIRST_WAVE_WAIT_SECONDS:-8}"
 CONTRACT_POLL_INTERVAL="${CONTRACT_POLL_INTERVAL:-0.25}"
 CLEANUP_WAIT_SECONDS="${CLEANUP_WAIT_SECONDS:-10}"
+PAIR_LAUNCH_STAGGER_MILLIS="${PAIR_LAUNCH_STAGGER_MILLIS:-250}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-2-cache-concurrency}"
 
 [[ "$BLOCK_OWNER_UID" == "99999" ]] || {
@@ -42,6 +43,13 @@ RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-2-cache-concurrency}"
   echo "CONTRACT_POLL_INTERVAL must be a non-negative decimal" >&2
   exit 2
 }
+[[ "$PAIR_LAUNCH_STAGGER_MILLIS" =~ ^[0-9]+$ ]] || {
+  echo "PAIR_LAUNCH_STAGGER_MILLIS must be a non-negative integer" >&2
+  exit 2
+}
+PAIR_LAUNCH_STAGGER_SECONDS="$(printf '%d.%03d' \
+  "$((PAIR_LAUNCH_STAGGER_MILLIS / 1000))" \
+  "$((PAIR_LAUNCH_STAGGER_MILLIS % 1000))")"
 
 VPP_ROOT="/data/user/0/$VPN_PACKAGE/files/vpp"
 VPP_CLI_PATH="$VPP_ROOT/logs/vpp-cli.log"
@@ -367,6 +375,7 @@ echo "app_a=$APP_PACKAGE_A app_b=$APP_PACKAGE_B"
 echo "activity=$TRAFFIC_ACTIVITY"
 echo "mode=$MODE block_owner_uid=$BLOCK_OWNER_UID"
 echo "source-ports=AppA:45741-45742 AppB:45751-45752"
+echo "pair-launch-stagger-ms=$PAIR_LAUNCH_STAGGER_MILLIS"
 echo "external-connect/reply=NON-CLAIM; logcat=DIAGNOSTIC-ONLY"
 
 for apk in "$LOCAL_VPN_APK" "$LOCAL_APP_A_APK" "$LOCAL_APP_B_APK"; do
@@ -515,6 +524,12 @@ launch_pair() {
   launch_pids=()
   launch_tuple "$APP_PACKAGE_A" "$family" udp "$app_a_port" "$destination_host" 53 \
     A2-2-appa-"$family"-udp "$wave_id"
+  if (( PAIR_LAUNCH_STAGGER_MILLIS > 0 )); then
+    # Android singleTop delivery can drop one of two simultaneous am-start
+    # intents.  This short fixture-only stagger serializes delivery while the
+    # 1200ms socket retention still leaves both native lookups overlapping.
+    sleep "$PAIR_LAUNCH_STAGGER_SECONDS"
+  fi
   launch_tuple "$APP_PACKAGE_B" "$family" udp "$app_b_port" "$destination_host" 53 \
     A2-2-appb-"$family"-udp "$wave_id"
   pair_pids=("${launch_pids[@]}")

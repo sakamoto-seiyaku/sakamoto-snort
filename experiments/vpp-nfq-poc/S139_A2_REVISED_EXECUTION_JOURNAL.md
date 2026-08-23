@@ -245,6 +245,16 @@ a UID or FlowOwner defect. The runner therefore restores the positive 1200 ms
 retention delay while keeping the native family barriers and final runtime
 capture.
 
+The `fixed-7` device run isolated one more delivery-only fixture race: when
+AppA and AppB `am start` calls were launched completely concurrently, AppA's
+IPv4 intent was lost (`runtime=0`, native contract `0`) while AppB completed
+one lookup and cache hit. The native family gate correctly timed out at 1/2;
+this is consistent with Android `singleTop`/ADB intent delivery drift, not a
+UID or resolver failure. The runner now starts AppA and AppB with a
+configurable 250 ms stagger. The stagger only protects intent delivery; the
+1200 ms socket retention remains, so both family lookups can still overlap in
+the native pending ledger.
+
 ## Claim boundary and next cells
 
 A2-0 and A2-1 now prove durable session provenance plus the complete
