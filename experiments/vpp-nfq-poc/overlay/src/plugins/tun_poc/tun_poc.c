@@ -92,17 +92,19 @@ typedef struct
  * AppA TrafficAdapter envelope (family|protocol|source-port|destination).
  */
 static const char *
-tun_poc_ledger_stage (void)
+tun_poc_ledger_stage (tun_poc_main_t *tm)
 {
+  if (tm && tm->ledger_stage_id[0])
+    return tm->ledger_stage_id;
   const char *stage = getenv ("SAKAMOTO_A2_STAGE_ID");
   return stage && stage[0] ? stage : "unknown";
 }
 
 static u8
-tun_poc_a25_stage (void)
+tun_poc_a25_stage (tun_poc_main_t *tm)
 {
-  const char *stage = tun_poc_ledger_stage ();
-  return strncmp (stage, "A2-5", 4) == 0;
+  const char *stage = tun_poc_ledger_stage (tm);
+  return (tm && tm->strict_owner_pending) || strncmp (stage, "A2-5", 4) == 0;
 }
 
 static void
@@ -129,7 +131,7 @@ tun_poc_ledger_log (tun_poc_main_t *tm, const char *event,
   fprintf (stderr,
            "tun-poc ledger event=%s stage-id=%s flow-id=%s|%s|%s|%u "
            "canonical-key=%s|%s|%u|%s:%u uid=%d decision=%s\n",
-           event, tun_poc_ledger_stage (), tun_poc_ledger_stage (), family,
+           event, tun_poc_ledger_stage (tm), tun_poc_ledger_stage (tm), family,
            protocol, (unsigned) tm->last_tuple_src_port, family, protocol,
            (unsigned) tm->last_tuple_src_port, dst,
            (unsigned) tm->last_tuple_dst_port, uid,
@@ -1086,7 +1088,7 @@ tun_poc_owner_cache_store (tun_poc_main_t *tm, i32 uid)
   tm->owner_cache_stores++;
 }
 
-static void
+static i32
 tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 {
   char src[INET6_ADDRSTRLEN] = { 0 };
@@ -1099,12 +1101,12 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
   ssize_t rv;
 
   if (!tm->resolver_enabled || tm->resolver_fd < 0 || !tm->last_tuple_valid)
-    return;
+    return -1;
 
   if (tm->owner_cache_enabled)
     {
       if (tun_poc_owner_cache_lookup (tm))
-	return;
+	return tm->last_owner_uid;
       tm->owner_cache_misses++;
     }
 
@@ -1114,7 +1116,7 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 	  !inet_ntop (AF_INET, &tm->last_tuple_ip4_dst, dst, sizeof (dst)))
 	{
 	  tm->resolver_errors++;
-	  return;
+	  return -1;
 	}
     }
   else if (tm->last_tuple_ip_version == 6)
@@ -1123,11 +1125,11 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 	  !inet_ntop (AF_INET6, tm->last_tuple_ip6_dst, dst, sizeof (dst)))
 	{
 	  tm->resolver_errors++;
-	  return;
+	  return -1;
 	}
     }
   else
-    return;
+    return -1;
 
   query_len = snprintf (query, sizeof (query),
 			"resolve ip%u proto %u %s %u %s %u\n",
@@ -1136,43 +1138,44 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 			tm->last_tuple_dst_port);
   if (query_len <= 0 || query_len >= (int) sizeof (query))
     {
-      tm->resolver_errors++;
-      return;
+	  tm->resolver_errors++;
+	  return -1;
     }
 
   tm->resolver_queries++;
   rv = write (tm->resolver_fd, query, query_len);
   if (rv != query_len)
     {
-      tm->resolver_errors++;
-      return;
+	  tm->resolver_errors++;
+	  return -1;
     }
 
   pfd.fd = tm->resolver_fd;
   pfd.events = POLLIN;
   if (poll (&pfd, 1, 500) <= 0 || !(pfd.revents & POLLIN))
     {
-      tm->resolver_errors++;
-      return;
+	  tm->resolver_errors++;
+	  return -1;
     }
 
   rv = read (tm->resolver_fd, response, sizeof (response) - 1);
   if (rv <= 0)
     {
       tm->resolver_errors++;
-      return;
+      return -1;
     }
   response[rv] = 0;
 
   if (sscanf (response, "uid %d", &uid) != 1)
     {
       tm->resolver_errors++;
-      return;
+      return -1;
     }
 
   tm->last_owner_uid = uid;
   tm->resolver_hits++;
   tun_poc_owner_cache_store (tm, uid);
+  return uid;
 }
 
 static u8
@@ -1185,8 +1188,9 @@ tun_poc_process_worker_packet (tun_poc_main_t *tm, vlib_main_t *vm,
   u8 fragment_marker = tm->mode == TUN_POC_MODE_FRAGMENT_OWNER &&
 			       (b->opaque[3] & TUN_POC_OPAQUE_FRAGMENT);
   u8 owner_only_marker = tm->mode == TUN_POC_MODE_FRAGMENT_OWNER &&
-				 (b->opaque[3] & TUN_POC_OPAQUE_OWNER_ONLY);
+					 (b->opaque[3] & TUN_POC_OPAQUE_OWNER_ONLY);
   u8 owner_metadata_marker = fragment_marker || owner_only_marker;
+  i32 packet_owner_uid = tm->last_owner_uid;
 
   if (tun_poc_is_direct_owner_mode (tm->mode))
     {
@@ -1285,11 +1289,11 @@ tun_poc_process_worker_packet (tun_poc_main_t *tm, vlib_main_t *vm,
 	    /* A fresh A2-5 tuple must not inherit a previous flow's owner while
 	     * Android's asynchronous owner lookup is still pending. */
 	    tm->last_owner_uid = -1;
-	    tun_poc_query_owner_resolver (tm);
-	  }
+	    packet_owner_uid = tun_poc_query_owner_resolver (tm);
+  }
 
-  if (tun_poc_a25_stage () && tm->resolver_enabled &&
-      tm->last_owner_uid < 0)
+  if (tun_poc_a25_stage (tm) && tm->resolver_enabled &&
+      packet_owner_uid < 0)
     {
       /* The first packet only submits the Android lookup.  Conservatively
        * hold it at the policy seam; a later packet with the same fresh tuple
@@ -1299,7 +1303,7 @@ tun_poc_process_worker_packet (tun_poc_main_t *tm, vlib_main_t *vm,
       return 0;
     }
 
-  if (tm->block_owner_uid_set && tm->last_owner_uid == tm->block_owner_uid)
+  if (tm->block_owner_uid_set && packet_owner_uid == tm->block_owner_uid)
     {
       tm->uid_blocked_packets++;
       tm->uid_blocked_bytes += packet_len;
@@ -2322,6 +2326,36 @@ VLIB_CLI_COMMAND (tun_poc_enable_command, static) = {
 };
 
 static clib_error_t *
+tun_poc_stage_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                          vlib_cli_command_t *cmd)
+{
+  u8 *stage = 0;
+
+  (void) cmd;
+  if (!unformat (input, "%s", &stage) || !stage || !stage[0])
+    {
+      vec_free (stage);
+      return clib_error_return (0, "stage is required");
+    }
+
+  snprintf (tun_poc_main.ledger_stage_id,
+            sizeof (tun_poc_main.ledger_stage_id), "%s", (char *) stage);
+  tun_poc_main.strict_owner_pending =
+    strncmp ((char *) stage, "A2-5", 4) == 0;
+  vec_free (stage);
+  vlib_cli_output (vm, "stage %s strict-owner-pending %u",
+                   tun_poc_main.ledger_stage_id,
+                   tun_poc_main.strict_owner_pending);
+  return 0;
+}
+
+VLIB_CLI_COMMAND (tun_poc_stage_command, static) = {
+  .path = "tun-poc stage",
+  .short_help = "tun-poc stage <stage-id>",
+  .function = tun_poc_stage_command_fn,
+};
+
+static clib_error_t *
 tun_poc_disable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			    vlib_cli_command_t *cmd)
 {
@@ -2509,6 +2543,9 @@ tun_poc_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
     "last-uid %d",
     tm->resolver_enabled, tm->resolver_fd, tm->resolver_queries,
     tm->resolver_hits, tm->resolver_errors, tm->last_owner_uid);
+  vlib_cli_output (vm, "a2-5 strict-owner-pending %u stage %s",
+                   tm->strict_owner_pending,
+                   tm->ledger_stage_id[0] ? tm->ledger_stage_id : "environment");
   vlib_cli_output (
     vm,
     "owner-cache enabled %u valid %u hits %llu misses %llu stores %llu uid %d",

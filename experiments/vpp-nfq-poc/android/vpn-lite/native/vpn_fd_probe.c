@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -1892,6 +1893,50 @@ static void *probe_thread(void *arg) {
     return NULL;
 }
 
+static int update_vpp_stage_cli(const char *stage) {
+    char command[256];
+    char sock_path[PATH_BUF_SIZE];
+    char log_path[PATH_BUF_SIZE];
+
+    if (!stage || !stage[0] || strlen(stage) >= 160U) {
+        return -1;
+    }
+    for (const char *cursor = stage; *cursor; cursor++) {
+        if (!(isalnum((unsigned char)*cursor) || *cursor == '-' || *cursor == '_')) {
+            return -1;
+        }
+    }
+    int command_len = snprintf(command, sizeof(command), "tun-poc stage %s", stage);
+    if (command_len <= 0 || (size_t)command_len >= sizeof(command)) {
+        return -1;
+    }
+
+    for (int attempt = 0; attempt < 30; attempt++) {
+        pthread_mutex_lock(&g_lock);
+        bool running = g_vpp_monitor_running;
+        snprintf(sock_path, sizeof(sock_path), "%s", g_vpp_cli_sock);
+        snprintf(log_path, sizeof(log_path), "%s", g_vpp_cli_log);
+        pthread_mutex_unlock(&g_lock);
+        if (!running) {
+            return -1;
+        }
+        if (access(sock_path, F_OK) != 0) {
+            usleep(100000);
+            continue;
+        }
+        FILE *file = fopen(log_path, "a");
+        int rc = run_cli_command(sock_path, command, file);
+        if (file) {
+            fclose(file);
+        }
+        if (rc == 0) {
+            return 0;
+        }
+        usleep(100000);
+    }
+    return -1;
+}
+
 JNIEXPORT void JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeSetVppStage(
         JNIEnv *env, jclass clazz, jstring cell_arg, jstring stage_arg) {
@@ -1902,6 +1947,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeSetVppStage(
     snprintf(g_stage_cell, sizeof(g_stage_cell), "%s", cell && *cell ? cell : "A2-4");
     snprintf(g_stage_id, sizeof(g_stage_id), "%s", stage && *stage ? stage : "unknown");
     pthread_mutex_unlock(&g_lock);
+    (void) update_vpp_stage_cli(stage && *stage ? stage : "unknown");
     if (cell) {
         (*env)->ReleaseStringUTFChars(env, cell_arg, cell);
     }

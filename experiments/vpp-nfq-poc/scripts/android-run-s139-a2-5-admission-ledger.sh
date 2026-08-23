@@ -50,6 +50,11 @@ VPP_START_PATH="/data/user/0/$VPN_PACKAGE/files/logs/vpp-start-provenance.json"
 VPN_RECEIPT_PATH="/data/user/0/$VPN_PACKAGE/files/logs/vpn-session-provenance.json"
 CONTRACT_PATH="/data/user/0/$VPN_PACKAGE/files/logs/uid-attribution-contract.jsonl"
 APP_EVIDENCE_PATH="/data/user/0/$APP_PACKAGE_A/files/debug/a2-1-runtime.jsonl"
+SOCKS_SERVER_BIN="$POC_DIR/build/android-socks5-smoke-server"
+REMOTE_ROOT="/data/local/tmp/vpp-nfq-poc"
+REMOTE_SOCKS_SERVER="$REMOTE_ROOT/android-socks5-smoke-server"
+REMOTE_SOCKS_LOG="$REMOTE_ROOT/logs/android-socks5-smoke-server-a2-5.log"
+REMOTE_SOCKS_PID="$REMOTE_ROOT/runtime/socks-a2-5.pid"
 
 mkdir -p "$RESULT_DIR"
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
@@ -59,6 +64,12 @@ capture_remote() {
   local out="$1" path="$2"
   adb_su "cat '$path' 2>/dev/null || true" | tr -d '\r' >"$out"
 }
+
+cleanup_socks_server() {
+  adb_su "if [ -f '$REMOTE_SOCKS_PID' ]; then kill -TERM \$(cat '$REMOTE_SOCKS_PID') 2>/dev/null || true; sleep 1; kill -9 \$(cat '$REMOTE_SOCKS_PID') 2>/dev/null || true; fi; rm -f '$REMOTE_SOCKS_PID' '$REMOTE_SOCKS_SERVER' '$REMOTE_SOCKS_LOG'" >/dev/null 2>&1 || true
+}
+
+trap cleanup_socks_server EXIT
 
 capture_apk_provenance() {
   : >"$1/apk-provenance.tsv"
@@ -164,6 +175,7 @@ run_stage() {
   capture_remote "$dir/vpp-protect.log" "$VPP_PROTECT_PATH"
   capture_remote "$dir/vpp-hev.log" "$VPP_HEV_PATH"
   capture_remote "$dir/vpp-shim.log" "$VPP_SHIM_PATH"
+  capture_remote "$dir/socks5.log" "$REMOTE_SOCKS_LOG"
   capture_remote "$dir/app-runtime.jsonl" "$APP_EVIDENCE_PATH"
   capture_remote "$dir/uid-attribution-contract.jsonl" "$CONTRACT_PATH"
   capture_remote "$dir/vpn-session-provenance.json" "$VPN_RECEIPT_PATH"
@@ -220,7 +232,8 @@ with open(path, "w", encoding="utf-8") as stream:
                "destinationPort": int(destination_port), "appEvidenceFile": "app-runtime.jsonl",
                "resolverFile": "vpp-owner-resolver.log",
                "protectFile": "vpp-protect.log", "cliFile": "vpp-cli.log",
-               "stdoutFile": "vpp-stdout.log", "cleanupFile": "cleanup-wait.json",
+               "stdoutFile": "vpp-stdout.log", "socksFile": "socks5.log",
+               "cleanupFile": "cleanup-wait.json",
                "contractFile": "uid-attribution-contract.jsonl"}, stream,
               indent=2, sort_keys=True)
     stream.write("\n")
@@ -234,6 +247,11 @@ echo "family=$FAMILY protocol=$PROTOCOL destination=$DESTINATION_HOST:$DESTINATI
 
 [[ -f "$LOCAL_VPN_APK" ]] || { echo "missing VpnLite APK: $LOCAL_VPN_APK" >&2; exit 2; }
 [[ -f "$LOCAL_APP_A_APK" ]] || { echo "missing AppA APK: $LOCAL_APP_A_APK" >&2; exit 2; }
+"$SCRIPT_DIR/android-build-socks5-smoke-server.sh" >/dev/null
+adb_su "mkdir -p '$REMOTE_ROOT/runtime' '$REMOTE_ROOT/logs'; chmod 777 '$REMOTE_ROOT' '$REMOTE_ROOT/runtime' '$REMOTE_ROOT/logs'; rm -f '$REMOTE_SOCKS_LOG' '$REMOTE_SOCKS_PID'"
+adb_cmd push "$SOCKS_SERVER_BIN" "$REMOTE_SOCKS_SERVER" >/dev/null
+adb_su "chmod 755 '$REMOTE_SOCKS_SERVER'; nohup '$REMOTE_SOCKS_SERVER' >'$REMOTE_SOCKS_LOG' 2>&1 < /dev/null & echo \$! > '$REMOTE_SOCKS_PID'"
+sleep 1
 vpn_apk_sha256="$(sha256sum "$LOCAL_VPN_APK" | awk '{print $1}')"
 app_a_apk_sha256="$(sha256sum "$LOCAL_APP_A_APK" | awk '{print $1}')"
 tun_asset="$(unzip -Z1 "$LOCAL_VPN_APK" | awk '/lib\/[^/]+\/libtun_poc_plugin\.so$/ {print; exit}')"
