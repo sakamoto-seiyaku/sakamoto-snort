@@ -197,7 +197,11 @@ cleanup() {
     if grep -Fq "event=CLEANUP" "$RESULT_DIR/vpp-stdout.cleanup-poll.log"; then
       native_cleanup_observed=true
     fi
-    if grep -Fq '"event":"CLEANUP"' \
+    # uid-attribution-contract uses `outcome` for lifecycle records (the
+    # native ledger uses `event`).  Accept both spellings so the orderly-stop
+    # gate observes the durable contract cleanup instead of forcing a stop
+    # after a cleanup that already settled.
+    if grep -Eq '"(event|outcome)":"CLEANUP"' \
         "$RESULT_DIR/contract.cleanup-poll.jsonl"; then
       contract_cleanup_observed=true
     fi
