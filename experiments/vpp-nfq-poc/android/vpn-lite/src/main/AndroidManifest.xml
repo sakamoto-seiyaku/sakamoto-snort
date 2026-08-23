@@ -18,6 +18,8 @@
         <package android:name="com.android.chrome" />
         <package android:name="com.google.android.apps.maps" />
         <package android:name="com.sakamoto.snort.androidruntime" />
+        <package android:name="com.sakamoto.snort.poc.appa" />
+        <package android:name="com.sakamoto.snort.poc.appb" />
     </queries>
 
     <application
