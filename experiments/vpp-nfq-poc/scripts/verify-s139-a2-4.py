@@ -843,7 +843,10 @@ def verify(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             "cleanupObservedBeforeForceStop": cleanup_ok,
         },
         "architecture_interruption": False,
-        "staleNativeJoinGap": not native_stale_join_ok,
+        # Native stale-generation state is deliberately outside A2-4's
+        # registered claim.  Report a gap only if a future manifest opts into
+        # that stronger native assertion and the resolver fails to provide it.
+        "staleNativeJoinGap": native_stale_required and not native_stale_join_ok,
         "failureReasons": failures,
         "invalidReasons": invalid,
         "inconclusiveReasons": inconclusive,
