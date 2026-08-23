@@ -258,16 +258,31 @@ own `MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT` sequence without
 normal eviction. Eviction is a valid bounded-state observation, but it cannot
 be used to pair a hit with a different token, flow, generation, or scope.
 
+The traffic fixture uses two evidence-gated waves rather than an in-Activity
+`repeat=2` loop. Wave 1 submits the four fresh tuples concurrently with one
+operation per launch (`repeat=1`). Within each wave, IPv4 AppA/AppB and then
+IPv6 AppA/AppB are submitted as pairs; the durable runtime record for one pair
+gates the next pair. The runner polls the durable contract until all four
+registered keys have a `COMPLETION_ACCEPTED` carrying the expected App UID.
+Only then does wave 2 submit the same four exact tuples once each and poll for
+four correct-UID `CACHE_HIT` events. This barrier is evidence-based;
+it does not infer cache readiness from an elapsed sleep. It also prevents the
+Android `singleTop` Activity from racing two same-package workers, which
+previously made a second fixed-port UDP send return `EPERM` before entering
+VPP. A missing gate is `INCONCLUSIVE`, not an architecture interruption, and
+the raw contract/runtime evidence is retained.
+
 The A2-2 verifier therefore requires exactly four registered tuples and exact
 App × IP-family coverage. It groups sequence events by stable `(token,
 flow_id)` identity, accepts any complete ordered chain within one identity,
-and treats a missing same-identity hit as `INCONCLUSIVE`; a wrong UID or
-cross-App hit is `FAIL`. A passing result reports `passedSequences == 4` and
-retains the durable cleanup wait showing that `CLEANUP` was observed before
-any normal force-stop. If the bounded cleanup wait times out, the runner may
-use a separately marked emergency force-stop after the wait to prevent residue,
-but it must retain the failed wait evidence and the verifier must return
-`INVALID` without a post-cleanup final contract.
+and treats a missing same-identity hit or incomplete wave gate as
+`INCONCLUSIVE`; a wrong UID or cross-App hit is `FAIL`. A passing result
+reports `passedSequences == 4`, verifies both wave key/UID maps, and retains
+the durable cleanup wait showing that `CLEANUP` was observed before any normal
+force-stop. If the bounded cleanup wait times out, the runner may use a
+separately marked emergency force-stop after the wait to prevent residue, but
+it must retain the failed wait evidence and the verifier must return `INVALID`
+without a post-cleanup final contract.
 
 ## Lifecycle event definition
 

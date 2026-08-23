@@ -25,6 +25,7 @@ MANIFEST_SCHEMA_A21 = "s139-a2-1-manifest/v1"
 PROFILE_A21 = "a2-1"
 MANIFEST_SCHEMA_A22 = "s139-a2-2-manifest/v1"
 PROFILE_A22 = "a2-2"
+WAVE_EVIDENCE_SCHEMA_A22 = "s139-a2-2-two-wave/v1"
 PASS = "PASS"
 FAIL = "FAIL"
 INVALID = "INVALID"
@@ -915,6 +916,14 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         manifest_errors.append("cleanupWaitFile is invalid")
         cleanup_wait_name = "cleanup-wait.json"
 
+    wave_evidence_name: Any = manifest.get("waveEvidenceFile")
+    if wave_evidence_name is None:
+        manifest_errors.append("manifest field missing: waveEvidenceFile")
+        wave_evidence_name = "wave-evidence.json"
+    elif not isinstance(wave_evidence_name, str) or not wave_evidence_name:
+        manifest_errors.append("waveEvidenceFile is invalid")
+        wave_evidence_name = "wave-evidence.json"
+
     required = manifest.get("requiredFiles")
     required_errors: List[str] = []
     if not isinstance(required, list) or not all(isinstance(name, str) and name
@@ -923,7 +932,7 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         required = []
     else:
         required_set = set(required)
-        for name in (contract_name, final_name, cleanup_wait_name):
+        for name in (contract_name, final_name, cleanup_wait_name, wave_evidence_name):
             if name not in required_set:
                 required_errors.append("requiredFiles omits " + name)
         missing = [name for name in required if not (evidence / name).is_file()]
@@ -1014,17 +1023,161 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
     else:
         if launch_window.get("schema") != "s139-a2-2-launch-window/v1":
             launch_window_errors.append("schema")
-        if launch_window.get("launchCount") != 4:
+        launch_count = launch_window.get("launchCount")
+        expected_launch_count = launch_window.get("expectedLaunchCount")
+        first_launch_count = launch_window.get("firstWaveLaunchCount")
+        second_launch_count = launch_window.get("secondWaveLaunchCount")
+        if expected_launch_count != 8:
+            launch_window_errors.append("expectedLaunchCount")
+        if first_launch_count != 4:
+            launch_window_errors.append("firstWaveLaunchCount")
+        if second_launch_count not in (0, 4):
+            launch_window_errors.append("secondWaveLaunchCount")
+        launch_counts_are_ints = all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in (launch_count, first_launch_count, second_launch_count))
+        if (not launch_counts_are_ints
+                or launch_count != first_launch_count + second_launch_count):
             launch_window_errors.append("launchCount")
+        elif launch_count not in (4, 8):
+            launch_window_errors.append("launchCount")
+        if launch_window.get("repeatPerLaunch") != 1:
+            launch_window_errors.append("repeatPerLaunch")
         if launch_window.get("launchFailures") != 0:
             launch_window_errors.append("launchFailures")
+        start_ns = launch_window.get("windowStartMonotonicNs")
+        end_ns = launch_window.get("windowEndMonotonicNs")
+        if (not isinstance(start_ns, int) or isinstance(start_ns, bool)
+                or not isinstance(end_ns, int) or isinstance(end_ns, bool)
+                or start_ns <= 0 or end_ns < start_ns):
+            launch_window_errors.append("monotonic window")
     if launch_window_errors:
         invalid.append("A2-2 launch window evidence is invalid")
         append_check(checks, "a2-2-launch-window", INVALID,
                      "; ".join(launch_window_errors))
     else:
         append_check(checks, "a2-2-launch-window", PASS,
-                     "four launches were submitted with no launch failures")
+                     "two waves submitted with repeat=1 and no launch failures")
+
+    wave_evidence, wave_evidence_error = read_json_object(
+        evidence / wave_evidence_name)
+    wave_evidence_errors: List[str] = []
+    wave_gate_observed = False
+    if wave_evidence is None:
+        wave_evidence_errors.append(wave_evidence_error)
+    else:
+        if wave_evidence.get("schema") != WAVE_EVIDENCE_SCHEMA_A22:
+            wave_evidence_errors.append("schema")
+        if wave_evidence.get("runtimeRecordSchema") != "s139-a2-1-runtime/v1":
+            wave_evidence_errors.append("runtimeRecordSchema")
+        if wave_evidence.get("contractRecordSchema") != "uid-attribution-contract/v1":
+            wave_evidence_errors.append("contractRecordSchema")
+        if wave_evidence.get("launchFailures") != 0:
+            wave_evidence_errors.append("launchFailures")
+        first_wave = wave_evidence.get("firstWave")
+        second_wave = wave_evidence.get("secondWave")
+        if not isinstance(first_wave, dict):
+            wave_evidence_errors.append("firstWave")
+            first_wave = {}
+        if not isinstance(second_wave, dict):
+            wave_evidence_errors.append("secondWave")
+            second_wave = {}
+        if first_wave.get("launchCount") != 4:
+            wave_evidence_errors.append("firstWave.launchCount")
+        if first_wave.get("repeat") != 1:
+            wave_evidence_errors.append("firstWave.repeat")
+        wave_gate_observed = first_wave.get("gateObserved") is True
+        if first_wave.get("gateOutcome") != "COMPLETION_ACCEPTED":
+            wave_evidence_errors.append("firstWave.gateOutcome")
+        attempts = first_wave.get("pollAttempts")
+        if (not isinstance(attempts, int) or isinstance(attempts, bool)
+                or attempts <= 0):
+            wave_evidence_errors.append("firstWave.pollAttempts")
+        completion_count = first_wave.get("correctUidCompletionCount")
+        completion_keys = first_wave.get("completionKeys")
+        if (not isinstance(completion_count, int) or isinstance(completion_count, bool)
+                or completion_count < 0):
+            wave_evidence_errors.append("firstWave.correctUidCompletionCount")
+        if not isinstance(completion_keys, list):
+            wave_evidence_errors.append("firstWave.completionKeys")
+        elif len(completion_keys) != completion_count:
+            wave_evidence_errors.append("firstWave.completionKeys/count")
+        first_runtime_gates = first_wave.get("runtimeGates")
+        if not isinstance(first_runtime_gates, dict) or any(
+                not isinstance(first_runtime_gates.get(family), bool)
+                for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("firstWave.runtimeGates")
+            first_runtime_gates = {}
+        elif wave_gate_observed and not all(
+                first_runtime_gates.get(family) is True for family in ("ip4", "ip6")):
+            inconclusive.append("first-wave runtime pair gate did not complete")
+        if wave_gate_observed:
+            if completion_count != 4 or not isinstance(completion_keys, list):
+                wave_evidence_errors.append("firstWave completion gate")
+        elif completion_count != 0 or completion_keys != []:
+            wave_evidence_errors.append("firstWave incomplete gate evidence")
+            inconclusive.append("first-wave completion gate evidence is inconsistent")
+        if second_wave.get("repeat") != 1:
+            wave_evidence_errors.append("secondWave.repeat")
+        second_launched = second_wave.get("launched") is True
+        second_count = second_wave.get("launchCount")
+        if second_count not in (0, 4):
+            wave_evidence_errors.append("secondWave.launchCount")
+        if second_launched != (second_count == 4):
+            wave_evidence_errors.append("secondWave.launched/count")
+        if second_wave.get("cacheHitExpected") is not wave_gate_observed:
+            wave_evidence_errors.append("secondWave.cacheHitExpected")
+        if wave_gate_observed and not second_launched:
+            wave_evidence_errors.append("secondWave missing after completion gate")
+        if not wave_gate_observed and second_launched:
+            wave_evidence_errors.append("secondWave launched before completion gate")
+        second_gate_observed = second_wave.get("gateObserved") is True
+        second_attempts = second_wave.get("pollAttempts")
+        if second_launched:
+            if (not isinstance(second_attempts, int)
+                    or isinstance(second_attempts, bool) or second_attempts <= 0):
+                wave_evidence_errors.append("secondWave.pollAttempts")
+        elif second_attempts != 0:
+            wave_evidence_errors.append("secondWave.pollAttempts without launch")
+        second_hit_count = second_wave.get("correctUidCacheHitCount")
+        second_hit_keys = second_wave.get("cacheHitKeys")
+        if (not isinstance(second_hit_count, int)
+                or isinstance(second_hit_count, bool) or second_hit_count < 0):
+            wave_evidence_errors.append("secondWave.correctUidCacheHitCount")
+        if not isinstance(second_hit_keys, list):
+            wave_evidence_errors.append("secondWave.cacheHitKeys")
+        elif len(second_hit_keys) != second_hit_count:
+            wave_evidence_errors.append("secondWave.cacheHitKeys/count")
+        second_runtime_gates = second_wave.get("runtimeGates")
+        if not isinstance(second_runtime_gates, dict) or any(
+                not isinstance(second_runtime_gates.get(family), bool)
+                for family in ("ip4", "ip6")):
+            wave_evidence_errors.append("secondWave.runtimeGates")
+            second_runtime_gates = {}
+        elif second_gate_observed and not all(
+                second_runtime_gates.get(family) is True for family in ("ip4", "ip6")):
+            inconclusive.append("second-wave runtime pair gate did not complete")
+        if second_gate_observed:
+            if not second_launched or second_hit_count != 4:
+                wave_evidence_errors.append("secondWave cache-hit gate")
+        elif second_hit_count != 0 or second_hit_keys != []:
+            wave_evidence_errors.append("secondWave incomplete cache-hit gate evidence")
+        if wave_gate_observed and not second_gate_observed:
+            inconclusive.append("second-wave cache-hit gate timed out")
+        if not wave_gate_observed:
+            inconclusive.append("first-wave completion gate timed out; second wave was not launched")
+    if wave_evidence_errors:
+        invalid.append("A2-2 two-wave evidence is invalid")
+        append_check(checks, "a2-2-two-wave-evidence", INVALID,
+                     "; ".join(sorted(set(wave_evidence_errors))))
+    else:
+        wave_check_status = PASS if wave_gate_observed and second_gate_observed \
+            else INCONCLUSIVE
+        append_check(
+            checks, "a2-2-two-wave-evidence", wave_check_status,
+            "wave 1 completion gate preceded wave 2 cache-hit launches"
+            if wave_check_status == PASS else
+            "one or more evidence-based wave gates did not complete")
 
     tuples = manifest.get("tuples")
     tuple_by_key: Dict[str, Dict[str, Any]] = {}
@@ -1071,9 +1224,9 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                 or not isinstance(item.get("destinationAddress"), str):
             tuple_errors.append("tuple " + str(item.get("stageId"))
                                 + " has invalid addresses")
-        if item.get("repeat") != 2:
+        if item.get("repeat") != 1:
             tuple_errors.append("tuple " + str(item.get("stageId"))
-                                + " must request repeat=2")
+                                + " must request repeat=1 per wave")
     if isinstance(tuples, list):
         stage_ids = [item.get("stageId") for item in tuples
                      if isinstance(item, dict)]
@@ -1098,7 +1251,47 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
                      "; ".join(sorted(set(tuple_errors))))
     else:
         append_check(checks, "a2-2-registered-tuples", PASS,
-                     "four fresh unique AppA/AppB IPv4/IPv6 canonical keys with repeat=2")
+                     "four fresh unique AppA/AppB IPv4/IPv6 canonical keys with repeat=1 per wave")
+
+    if isinstance(wave_evidence, dict) and not wave_evidence_errors:
+        first_wave = wave_evidence.get("firstWave", {})
+        second_wave = wave_evidence.get("secondWave", {})
+        completion_entries = first_wave.get("completionKeys", [])
+        completion_by_key = {
+            entry.get("key"): entry.get("uid") for entry in completion_entries
+            if isinstance(entry, dict)
+        }
+        expected_completion = {
+            key: uid_map.get(item.get("package"))
+            for key, item in tuple_by_key.items()
+        }
+        completion_gate_errors: List[str] = []
+        if wave_gate_observed:
+            if completion_by_key != expected_completion:
+                completion_gate_errors.append("firstWave completion key/UID map")
+            if first_wave.get("correctUidCompletionCount") != len(expected_completion):
+                completion_gate_errors.append("firstWave correctUidCompletionCount")
+            if second_wave.get("launchCount") != 4:
+                completion_gate_errors.append("secondWave launchCount")
+            cache_hit_entries = second_wave.get("cacheHitKeys", [])
+            cache_hit_by_key = {
+                entry.get("key"): entry.get("uid") for entry in cache_hit_entries
+                if isinstance(entry, dict)
+            }
+            if second_wave.get("gateObserved") is True:
+                if cache_hit_by_key != expected_completion:
+                    completion_gate_errors.append("secondWave cache-hit key/UID map")
+                if second_wave.get("correctUidCacheHitCount") != len(expected_completion):
+                    completion_gate_errors.append("secondWave correctUidCacheHitCount")
+            else:
+                inconclusive.append("second-wave cache-hit evidence lacks all four correct UIDs")
+        if completion_gate_errors:
+            invalid.append("A2-2 completion gate does not match registered keys")
+            append_check(checks, "a2-2-completion-gate-join", INVALID,
+                         "; ".join(completion_gate_errors))
+        elif wave_gate_observed:
+            append_check(checks, "a2-2-completion-gate-join", PASS,
+                         "all four registered keys had correct-UID COMPLETION_ACCEPTED before wave 2")
 
     contract_path = evidence / contract_name
     contract_records, contract_errors = _contract_events(contract_path)
@@ -1386,13 +1579,14 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
             "contractFinalFile": final_name,
             "finalContractFile": final_name,
             "cleanupWaitFile": cleanup_wait_name,
+            "waveEvidenceFile": wave_evidence_name,
             "logcatDiagnosticOnly": True,
             "logcatCaptured": (evidence / "logcat-diagnostic.log").is_file(),
         },
         "claims": [
-            "four fresh App/family tuples preserve asynchronous miss/completion/cache-hit sequences",
+            "four fresh App/family tuples preserve a gated miss/completion wave followed by cache-hit wave",
             "observed pending/cache state stays within the declared bounded capacities and settles",
-            "the launch window produces evidence of concurrent distinct canonical keys within cache capacity",
+            "the launch window records eight repeat=1 launches as two four-tuple waves",
         ],
         "nonClaims": [
             "production cache sizing or load capacity",

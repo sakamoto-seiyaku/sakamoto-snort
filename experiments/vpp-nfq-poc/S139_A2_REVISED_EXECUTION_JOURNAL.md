@@ -162,6 +162,45 @@ owner-resolver boundary. It does not prove external TCP completion, UDP reply,
 Internet reachability, concurrency/cache bounds, reverse traffic, lifecycle
 invalidation, or downstream socket admission.
 
+## A2-2 execution and fixture correction
+
+Cell: `A2-2 async cache/concurrency/bounds`  
+Current verdict: `INCONCLUSIVE`  
+Aggregate remains: `A2_INCOMPLETE`; `architecture_interruption=false`
+
+The first A2-2 attempt retained raw evidence at
+`results/s139-a2-2-cache-concurrency-20260823-1/` and was `INVALID`. It
+submitted eight fresh keys against a native pending/cache capacity of `4/4`,
+allowed normal eviction, and stopped before a durable `CLEANUP`. The original
+verifier also paired different `(token, flow_id)` generations across eviction.
+That was a cohort and settlement design defect, not a UID mismatch.
+
+The corrected four-tuple cohort (AppA/AppB × IPv4/IPv6) added a bounded cleanup
+wait and stable token/flow pairing. Its first device run,
+`results/s139-a2-2-cache-concurrency-20260823-fixed-1/`, was valid but
+`INCONCLUSIVE`: AppB completed both sequences while AppA lost one durable
+runtime join and its other repeat returned `EPERM`.
+
+The next run,
+`results/s139-a2-2-cache-concurrency-20260823-fixed-2/`, reproduced the
+fixture timing issue in the opposite App direction. All four first sends were
+VPN-bound, native start/session/plugin/APK/source/allowed-scope checks passed,
+`maxPending=2/4`, `maxCache=4/4`, and final cleanup settled to
+`pending=0/cache=0/flow-ids=0`. AppA's two repeats succeeded, but AppB's second
+IPv4 and IPv6 sends returned `EPERM` roughly 27 ms and 20 ms after their first
+records, before another native resolver query. Fixed-1 had the corresponding
+short-interval failure on AppA instead. This drift follows Android
+`singleTop`/worker scheduling rather than a UID: the adapter's failed send path
+returns before its success-path delay, so the result is not evidence of a
+resolver or FlowOwner architecture fault.
+
+The runner is therefore being revised to two evidence-gated waves. Each wave
+uses four `repeat=1` launches. Wave 1 must show four correct-UID
+`COMPLETION_ACCEPTED` events before wave 2 is submitted; wave 2 must show four
+correct-UID `CACHE_HIT` events before pre-cleanup capture. The gates are
+durable contract observations, not fixed sleeps. A timeout remains
+`INCONCLUSIVE` with raw evidence retained; B1 remains blocked.
+
 ## Claim boundary and next cells
 
 A2-0 and A2-1 now prove durable session provenance plus the complete

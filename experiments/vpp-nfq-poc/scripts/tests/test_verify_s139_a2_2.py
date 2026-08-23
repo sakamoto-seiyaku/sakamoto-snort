@@ -44,6 +44,7 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
             "contractFile": "uid-attribution-contract.jsonl",
             "contractFinalFile": "uid-attribution-contract-final.jsonl",
             "cleanupWaitFile": "cleanup-wait.json",
+            "waveEvidenceFile": "wave-evidence.json",
             "requiredFiles": [
                 "package-list-packages-U.txt",
                 "apk-provenance.tsv",
@@ -52,6 +53,8 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                 "uid-attribution-contract.jsonl",
                 "uid-attribution-contract-final.jsonl",
                 "cleanup-wait.json",
+                "contract-poll.jsonl",
+                "wave-evidence.json",
                 "a2-2-runtime-appa.jsonl",
                 "a2-2-runtime-appb.jsonl",
                 "vpp-owner-resolver.log",
@@ -68,6 +71,7 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
         for item, port in zip(manifest["tuples"], (45741, 45742, 45751, 45752)):
             item["stageId"] = item["stageId"].replace("A2-1", "A2-2")
             item["sourcePort"] = port
+            item["repeat"] = 1
         return manifest
 
     @staticmethod
@@ -101,7 +105,12 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
         self.base.write_fixture(root, manifest)
         (root / "launch-window.json").write_text(json.dumps({
             "schema": "s139-a2-2-launch-window/v1",
-            "launchCount": 4,
+            "launchCount": 8,
+            "expectedLaunchCount": 8,
+            "firstWaveLaunchCount": 4,
+            "secondWaveLaunchCount": 4,
+            "repeatPerLaunch": 1,
+            "firstWaveCompletionGateObserved": True,
             "launchFailures": 0,
             "windowStartMonotonicNs": 1000,
             "windowEndMonotonicNs": 2000,
@@ -115,6 +124,41 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
             "finalOutcome": "CLEANUP",
             "pollAttempts": 4,
             "timeoutSeconds": 10,
+        }) + "\n", encoding="utf-8")
+        completion_keys = []
+        for item in manifest["tuples"]:
+            key = VERIFIER.canonical_tuple_key(item)
+            uid = manifest["expectedAllowedUids"][item["package"]]
+            completion_keys.append({"key": key, "uid": uid})
+        (root / "contract-poll.jsonl").write_text(
+            "", encoding="utf-8")
+        (root / "wave-evidence.json").write_text(json.dumps({
+            "schema": "s139-a2-2-two-wave/v1",
+            "runtimeRecordSchema": "s139-a2-1-runtime/v1",
+            "contractRecordSchema": "uid-attribution-contract/v1",
+            "firstWave": {
+                "launchCount": 4,
+                "repeat": 1,
+                "gateObserved": True,
+                "gateOutcome": "COMPLETION_ACCEPTED",
+                "pollAttempts": 1,
+                "correctUidCompletionCount": 4,
+                "completionKeys": completion_keys,
+                "runtimeGates": {"ip4": True, "ip6": True},
+            },
+            "secondWave": {
+                "launchCount": 4,
+                "repeat": 1,
+                "launched": True,
+                "cacheHitExpected": True,
+                "gateObserved": True,
+                "gateOutcome": "CACHE_HIT",
+                "pollAttempts": 1,
+                "correctUidCacheHitCount": 4,
+                "cacheHitKeys": completion_keys,
+                "runtimeGates": {"ip4": True, "ip6": True},
+            },
+            "launchFailures": 0,
         }) + "\n", encoding="utf-8")
         records = [self.event(
             "CONTRACT_START", "-1", -1, 0, 0, reason="pending-capacity=4;cache-capacity=4")]
