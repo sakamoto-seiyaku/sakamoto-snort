@@ -2,7 +2,10 @@
 
 IMAGE ?= sakamoto-vpp-nfq-poc:dev
 
-.PHONY: owner-inline-oi1-model owner-inline-oi2-model owner-inline-oi2-socket-probe
+.PHONY: owner-inline-oi1-model owner-inline-oi2-model owner-inline-oi2-socket-probe uid-attribution-contract-poc
+
+uid-attribution-contract-poc:
+	rtk python3 prototypes/uid_attribution_contract/runner.py
 
 owner-inline-oi1-model:
 	rtk python3 prototypes/owner_inline_oi1/state_machine.py

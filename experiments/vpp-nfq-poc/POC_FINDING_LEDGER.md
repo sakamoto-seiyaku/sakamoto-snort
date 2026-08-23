@@ -541,11 +541,20 @@ Map rather than encoded as TODOs here.
 - **POC Correction:** Minimal one-active-tuple VPP cache; a short UDP burst then
   used one resolver query.
 - **Post-correction evidence:** Tested VPP-internal IPv4/IPv6 TCP/UDP UID
-  allow/drop and short cache cells passed.
+  allow/drop and short cache cells passed.  SAKAMOTO-138's deterministic
+  Host/model artifact (`S135_A1_UID_ATTRIBUTION_EXECUTION_JOURNAL.md` and
+  `prototypes/uid_attribution_contract/artifacts/uid-attribution-contract-host-model.json`)
+  then passed six cells covering miss/completion/hit, reverse lookup,
+  concurrent misses, expiry and app/network/generation refresh, completion
+  identity rejection, unavailable/queue-full, bounded accounting, and zero
+  residue.
 - **Supported claim:** Sticky cached UID attribution is feasible for bounded
-  flows.
-- **Non-claim:** Cache size, expiry, reverse-flow semantics, concurrency,
-  nonblocking miss, or epoch refresh.
+  flows, and a separate asynchronous request/cache/generation contract can
+  preserve owner progress and reject invalid completions in deterministic
+  Host/model evidence.
+- **Non-claim:** Real Android UID correctness or timing, distinct-App Pixel
+  behavior, production cache size, expiry policy, reverse-flow semantics under
+  Android lookup, or device/network epoch behavior.
 - **Formal invariant:** Attribution resolves outside the owner hot path, is
   cached by canonical tuple/provenance and cannot change an existing flow's
   owner/shard key.
@@ -567,6 +576,9 @@ Map rather than encoded as TODOs here.
 - Untested external/default-route, Pixel multi-owner, capacity, overload,
   lifecycle/engineering envelope and UID cells are claims for the Evidence Gap
   Map.  They are not silently converted into observed defects here.
+- SAKAMOTO-138 is follow-up evidence for VPN-F026 and EG-08/EG-09; its
+  Host/model PASS does not close the Pixel `OPEN_RISK` or the campaign's
+  nonblocking Android UID gap.
 
 | Source inventory | Source finding | Consolidated finding |
 | --- | --- | --- |

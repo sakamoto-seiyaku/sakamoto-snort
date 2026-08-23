@@ -1,0 +1,3254 @@
+{
+  "artifact_note": "Raw per-cell model histories and final state are embedded in this JSON artifact; request_archive is audit history, while live_resources is the bounded runtime accounting used by the cells.",
+  "cells": [
+    {
+      "decisive_falsifier": "blocking lookup, UID in owner key, reverse contamination",
+      "facts": {
+        "completion": {
+          "app_epoch": 1,
+          "flow_id": 1,
+          "generation": 1,
+          "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+          "network_epoch": 1,
+          "owner": 0,
+          "token": 1,
+          "uid": 10001
+        },
+        "directions": [
+          "ORIG",
+          "REPLY"
+        ],
+        "first_lookup": {
+          "flow_id": 1,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 0,
+          "reason": "nonblocking-submit",
+          "token": 1,
+          "uid": null
+        },
+        "forward_hit": {
+          "flow_id": 1,
+          "outcome": "CACHE_HIT",
+          "owner": 0,
+          "reason": "",
+          "token": null,
+          "uid": 10001
+        },
+        "owner": 0,
+        "reverse_hit": {
+          "flow_id": 1,
+          "outcome": "CACHE_HIT",
+          "owner": 0,
+          "reason": "",
+          "token": null,
+          "uid": 10001
+        },
+        "state": {
+          "app_epoch": 1,
+          "bounds": {
+            "cache_capacity": 4,
+            "cache_ttl": 4,
+            "pending_capacity": 4,
+            "worker_count": 2
+          },
+          "cache": {
+            "1": {
+              "app_epoch": 1,
+              "expires_at": 6,
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "uid": 10001
+            }
+          },
+          "clock": 2,
+          "counters": {
+            "app_refreshes": 0,
+            "cache_evicted": 0,
+            "cache_expired": 0,
+            "cache_hits": 2,
+            "cache_invalidated": 0,
+            "completion_duplicate": 0,
+            "completion_stale": 0,
+            "completion_wrong_generation": 0,
+            "completion_wrong_owner": 0,
+            "flow_closed": 0,
+            "flow_opened": 1,
+            "flow_reused_reverse": 1,
+            "generation_restarts": 0,
+            "lookup_coalesced": 0,
+            "lookup_completed": 1,
+            "lookup_misses": 1,
+            "lookup_queue_full": 0,
+            "lookup_submitted": 1,
+            "lookup_unavailable": 0,
+            "network_refreshes": 0,
+            "owner_blocking_waits": 0,
+            "owner_sentinel_progress": 6,
+            "owner_turns": 6,
+            "teardowns": 0
+          },
+          "flows": {
+            "1": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG",
+                "REPLY"
+              ],
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "pending_token": null,
+              "state": "ATTRIBUTED",
+              "uid": 10001
+            }
+          },
+          "generation": 1,
+          "history": [
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "token": 1,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 6,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "uid": 10001
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 10001
+              },
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "cache-hit",
+              "clock": 2,
+              "flow_id": 1,
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "outcome": "CACHE_HIT",
+              "owner": 0,
+              "reason": "",
+              "token": null,
+              "uid": 10001
+            },
+            {
+              "action": "open-flow-reuse",
+              "clock": 2,
+              "direction": "REPLY",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "cache-hit",
+              "clock": 2,
+              "flow_id": 1,
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "outcome": "CACHE_HIT",
+              "owner": 0,
+              "reason": "",
+              "token": null,
+              "uid": 10001
+            }
+          ],
+          "live_resources": {
+            "active_flows": 1,
+            "cache_entries": 1,
+            "pending_requests": 0,
+            "residue": 2
+          },
+          "network_epoch": 1,
+          "pending": {},
+          "provider_available": true,
+          "running": true,
+          "schema": "uid-attribution-contract/v1"
+        }
+      },
+      "id": "A1-miss-completion-hit-reverse",
+      "status": "PASS"
+    },
+    {
+      "decisive_falsifier": "owner stall or cross-flow cache contamination",
+      "facts": {
+        "coalesced": {
+          "flow_id": 1,
+          "outcome": "MISS_COALESCED",
+          "owner": 0,
+          "reason": "same-flow-pending",
+          "token": 1,
+          "uid": null
+        },
+        "first": {
+          "flow_id": 1,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 0,
+          "reason": "nonblocking-submit",
+          "token": 1,
+          "uid": null
+        },
+        "first_hit": {
+          "flow_id": 1,
+          "outcome": "CACHE_HIT",
+          "owner": 0,
+          "reason": "",
+          "token": null,
+          "uid": 10001
+        },
+        "pending_before_completion": {
+          "1": {
+            "app_epoch": 1,
+            "flow_id": 1,
+            "generation": 1,
+            "key": "ipv4/tcp/10.0.0.2:40001-203.0.113.10:443",
+            "network_epoch": 1,
+            "owner": 0,
+            "token": 1
+          },
+          "2": {
+            "app_epoch": 1,
+            "flow_id": 2,
+            "generation": 1,
+            "key": "ipv6/udp/2001:db8::2:41002-2001:db8::53:53",
+            "network_epoch": 1,
+            "owner": 1,
+            "token": 2
+          }
+        },
+        "second": {
+          "flow_id": 2,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 1,
+          "reason": "nonblocking-submit",
+          "token": 2,
+          "uid": null
+        },
+        "second_hit": {
+          "flow_id": 2,
+          "outcome": "CACHE_HIT",
+          "owner": 1,
+          "reason": "",
+          "token": null,
+          "uid": 20002
+        },
+        "state": {
+          "app_epoch": 1,
+          "bounds": {
+            "cache_capacity": 4,
+            "cache_ttl": 4,
+            "pending_capacity": 4,
+            "worker_count": 2
+          },
+          "cache": {
+            "1": {
+              "app_epoch": 1,
+              "expires_at": 7,
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40001-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "uid": 10001
+            },
+            "2": {
+              "app_epoch": 1,
+              "expires_at": 7,
+              "flow_id": 2,
+              "generation": 1,
+              "key": "ipv6/udp/2001:db8::2:41002-2001:db8::53:53",
+              "network_epoch": 1,
+              "owner": 1,
+              "uid": 20002
+            }
+          },
+          "clock": 3,
+          "counters": {
+            "app_refreshes": 0,
+            "cache_evicted": 0,
+            "cache_expired": 0,
+            "cache_hits": 2,
+            "cache_invalidated": 0,
+            "completion_duplicate": 0,
+            "completion_stale": 0,
+            "completion_wrong_generation": 0,
+            "completion_wrong_owner": 0,
+            "flow_closed": 0,
+            "flow_opened": 2,
+            "flow_reused_reverse": 0,
+            "generation_restarts": 0,
+            "lookup_coalesced": 1,
+            "lookup_completed": 2,
+            "lookup_misses": 2,
+            "lookup_queue_full": 0,
+            "lookup_submitted": 2,
+            "lookup_unavailable": 0,
+            "network_refreshes": 0,
+            "owner_blocking_waits": 0,
+            "owner_sentinel_progress": 10,
+            "owner_turns": 10,
+            "teardowns": 0
+          },
+          "flows": {
+            "1": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40001-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "pending_token": null,
+              "state": "ATTRIBUTED",
+              "uid": 10001
+            },
+            "2": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 2,
+              "generation": 1,
+              "key": "ipv6/udp/2001:db8::2:41002-2001:db8::53:53",
+              "network_epoch": 1,
+              "owner": 1,
+              "pending_token": null,
+              "state": "ATTRIBUTED",
+              "uid": 20002
+            }
+          },
+          "generation": 1,
+          "history": [
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40001-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 2,
+              "key": "ipv6/udp/2001:db8::2:41002-2001:db8::53:53",
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "owner": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40001-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "token": 1,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41002-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2
+              },
+              "token": 2,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-coalesced",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "outcome": "MISS_COALESCED",
+              "owner": 0,
+              "reason": "same-flow-pending",
+              "token": 1,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 1,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 1,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 3,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 3,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 3,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 2
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 7,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41002-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "uid": 20002
+              },
+              "clock": 3,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41002-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2,
+                "uid": 20002
+              },
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 1
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 3,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 7,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40001-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "uid": 10001
+              },
+              "clock": 3,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40001-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 10001
+              },
+              "live": {
+                "cache": 2,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 3,
+              "live": {
+                "cache": 2,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "cache-hit",
+              "clock": 3,
+              "flow_id": 1,
+              "live": {
+                "cache": 2,
+                "flows": 2,
+                "pending": 0
+              },
+              "outcome": "CACHE_HIT",
+              "owner": 0,
+              "reason": "",
+              "token": null,
+              "uid": 10001
+            },
+            {
+              "action": "owner-turn",
+              "clock": 3,
+              "live": {
+                "cache": 2,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "cache-hit",
+              "clock": 3,
+              "flow_id": 2,
+              "live": {
+                "cache": 2,
+                "flows": 2,
+                "pending": 0
+              },
+              "outcome": "CACHE_HIT",
+              "owner": 1,
+              "reason": "",
+              "token": null,
+              "uid": 20002
+            }
+          ],
+          "live_resources": {
+            "active_flows": 2,
+            "cache_entries": 2,
+            "pending_requests": 0,
+            "residue": 4
+          },
+          "network_epoch": 1,
+          "pending": {},
+          "provider_available": true,
+          "running": true,
+          "schema": "uid-attribution-contract/v1"
+        }
+      },
+      "id": "A1-concurrent-misses",
+      "status": "PASS"
+    },
+    {
+      "decisive_falsifier": "stale refresh revives identity or cache lacks scope",
+      "facts": {
+        "expired_miss": {
+          "flow_id": 1,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 0,
+          "reason": "nonblocking-submit",
+          "token": 2,
+          "uid": null
+        },
+        "initial": {
+          "flow_id": 1,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 0,
+          "reason": "nonblocking-submit",
+          "token": 1,
+          "uid": null
+        },
+        "post_app_refresh_miss": {
+          "flow_id": 2,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 1,
+          "reason": "nonblocking-submit",
+          "token": 4,
+          "uid": null
+        },
+        "post_generation_restart_miss": {
+          "flow_id": 3,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 0,
+          "reason": "nonblocking-submit",
+          "token": 7,
+          "uid": null
+        },
+        "post_network_refresh_miss": {
+          "flow_id": 2,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 1,
+          "reason": "nonblocking-submit",
+          "token": 5,
+          "uid": null
+        },
+        "stale_after_app_refresh": "COMPLETION_STALE",
+        "stale_after_generation_restart": "COMPLETION_STALE",
+        "state": {
+          "app_epoch": 2,
+          "bounds": {
+            "cache_capacity": 4,
+            "cache_ttl": 2,
+            "pending_capacity": 4,
+            "worker_count": 2
+          },
+          "cache": {
+            "3": {
+              "app_epoch": 2,
+              "expires_at": 4,
+              "flow_id": 3,
+              "generation": 2,
+              "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+              "network_epoch": 2,
+              "owner": 0,
+              "uid": 50010
+            }
+          },
+          "clock": 2,
+          "counters": {
+            "app_refreshes": 1,
+            "cache_evicted": 0,
+            "cache_expired": 1,
+            "cache_hits": 0,
+            "cache_invalidated": 3,
+            "completion_duplicate": 0,
+            "completion_stale": 4,
+            "completion_wrong_generation": 0,
+            "completion_wrong_owner": 0,
+            "flow_closed": 0,
+            "flow_opened": 3,
+            "flow_reused_reverse": 0,
+            "generation_restarts": 1,
+            "lookup_coalesced": 0,
+            "lookup_completed": 5,
+            "lookup_misses": 7,
+            "lookup_queue_full": 0,
+            "lookup_submitted": 7,
+            "lookup_unavailable": 0,
+            "network_refreshes": 1,
+            "owner_blocking_waits": 0,
+            "owner_sentinel_progress": 21,
+            "owner_turns": 21,
+            "teardowns": 0
+          },
+          "flows": {
+            "1": {
+              "app_epoch": 2,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 1,
+              "generation": 2,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "network_epoch": 2,
+              "owner": 0,
+              "pending_token": null,
+              "state": "UNRESOLVED",
+              "uid": null
+            },
+            "2": {
+              "app_epoch": 2,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 2,
+              "generation": 2,
+              "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+              "network_epoch": 2,
+              "owner": 1,
+              "pending_token": null,
+              "state": "UNRESOLVED",
+              "uid": null
+            },
+            "3": {
+              "app_epoch": 2,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 3,
+              "generation": 2,
+              "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+              "network_epoch": 2,
+              "owner": 0,
+              "pending_token": null,
+              "state": "ATTRIBUTED",
+              "uid": 50010
+            }
+          },
+          "generation": 2,
+          "history": [
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "token": 1,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 2,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "uid": 30003
+              },
+              "clock": 0,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 30003
+              },
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 1,
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 1,
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "cache-expired",
+              "clock": 2,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              }
+            },
+            {
+              "action": "tick",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 2
+              },
+              "token": 2,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 4,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "uid": 40004
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 2,
+                "uid": 40004
+              },
+              "live": {
+                "cache": 1,
+                "flows": 1,
+                "pending": 0
+              }
+            },
+            {
+              "action": "open-flow",
+              "clock": 2,
+              "direction": "ORIG",
+              "flow_id": 2,
+              "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              },
+              "owner": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 2,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 3
+              },
+              "token": 3,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "app-refresh"
+            },
+            {
+              "action": "scope-invalidated",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "reason": "app-epoch"
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-stale",
+              "clock": 2,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 3,
+                "uid": 50005
+              },
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 2,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 4
+              },
+              "token": 4,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 2,
+                "expires_at": 4,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "uid": 50006
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 2,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 4,
+                "uid": 50006
+              },
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "network-refresh"
+            },
+            {
+              "action": "scope-invalidated",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "reason": "network-epoch"
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 2,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 1,
+                "token": 5
+              },
+              "token": 5,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-stale-scope",
+              "clock": 2,
+              "expected": {
+                "app_epoch": 2,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 1,
+                "token": 5
+              },
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "received": {
+                "app_epoch": 2,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 5,
+                "uid": 50008
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-stale-scope",
+              "clock": 2,
+              "expected": {
+                "app_epoch": 2,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 1,
+                "token": 5
+              },
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "received": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 1,
+                "token": 5,
+                "uid": 50008
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 2,
+                "expires_at": 4,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 1,
+                "uid": 50007
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 2,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40009-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 1,
+                "token": 5,
+                "uid": 50007
+              },
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "open-flow",
+              "clock": 2,
+              "direction": "ORIG",
+              "flow_id": 3,
+              "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 3,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 2,
+                "flow_id": 3,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 0,
+                "token": 6
+              },
+              "token": 6,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 1
+              },
+              "operation": "generation-restart"
+            },
+            {
+              "action": "scope-invalidated",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              },
+              "reason": "generation"
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-stale",
+              "clock": 2,
+              "completion": {
+                "app_epoch": 2,
+                "flow_id": 3,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 0,
+                "token": 6,
+                "uid": 50009
+              },
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 3,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 2,
+                "flow_id": 3,
+                "generation": 2,
+                "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 0,
+                "token": 7
+              },
+              "token": 7,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 2,
+                "expires_at": 4,
+                "flow_id": 3,
+                "generation": 2,
+                "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 0,
+                "uid": 50010
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 2,
+                "flow_id": 3,
+                "generation": 2,
+                "key": "ipv4/tcp/10.0.0.2:40011-203.0.113.10:443",
+                "network_epoch": 2,
+                "owner": 0,
+                "token": 7,
+                "uid": 50010
+              },
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              }
+            }
+          ],
+          "live_resources": {
+            "active_flows": 3,
+            "cache_entries": 1,
+            "pending_requests": 0,
+            "residue": 4
+          },
+          "network_epoch": 2,
+          "pending": {},
+          "provider_available": true,
+          "running": true,
+          "schema": "uid-attribution-contract/v1"
+        },
+        "wrong_app_scope": "COMPLETION_STALE",
+        "wrong_network_scope": "COMPLETION_STALE"
+      },
+      "id": "A1-refresh-expiry",
+      "status": "PASS"
+    },
+    {
+      "decisive_falsifier": "wrong-owner/generation/stale completion mutates live flow",
+      "facts": {
+        "accepted": "COMPLETION_ACCEPTED",
+        "duplicate": "COMPLETION_DUPLICATE",
+        "stale": "COMPLETION_STALE",
+        "state": {
+          "app_epoch": 1,
+          "bounds": {
+            "cache_capacity": 4,
+            "cache_ttl": 4,
+            "pending_capacity": 4,
+            "worker_count": 2
+          },
+          "cache": {
+            "1": {
+              "app_epoch": 1,
+              "expires_at": 4,
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "uid": 61001
+            }
+          },
+          "clock": 0,
+          "counters": {
+            "app_refreshes": 0,
+            "cache_evicted": 0,
+            "cache_expired": 0,
+            "cache_hits": 0,
+            "cache_invalidated": 0,
+            "completion_duplicate": 1,
+            "completion_stale": 2,
+            "completion_wrong_generation": 1,
+            "completion_wrong_owner": 1,
+            "flow_closed": 1,
+            "flow_opened": 4,
+            "flow_reused_reverse": 0,
+            "generation_restarts": 0,
+            "lookup_coalesced": 0,
+            "lookup_completed": 1,
+            "lookup_misses": 2,
+            "lookup_queue_full": 0,
+            "lookup_submitted": 2,
+            "lookup_unavailable": 0,
+            "network_refreshes": 0,
+            "owner_blocking_waits": 0,
+            "owner_sentinel_progress": 9,
+            "owner_turns": 9,
+            "teardowns": 0
+          },
+          "flows": {
+            "1": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "pending_token": null,
+              "state": "ATTRIBUTED",
+              "uid": 61001
+            },
+            "2": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 2,
+              "generation": 1,
+              "key": "ipv6/udp/2001:db8::2:41012-2001:db8::53:53",
+              "network_epoch": 1,
+              "owner": 0,
+              "pending_token": null,
+              "state": "UNRESOLVED",
+              "uid": null
+            },
+            "4": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 4,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40010-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 1,
+              "pending_token": null,
+              "state": "UNRESOLVED",
+              "uid": null
+            }
+          },
+          "generation": 1,
+          "history": [
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "token": 1,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-wrong-owner",
+              "clock": 0,
+              "expected": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "received": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 1,
+                "uid": 61001
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-wrong-generation",
+              "clock": 0,
+              "expected": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 1
+              },
+              "received": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 0,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 61001
+              }
+            },
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 2,
+              "key": "ipv6/udp/2001:db8::2:41012-2001:db8::53:53",
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-stale-scope",
+              "clock": 0,
+              "expected": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "received": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41012-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 61003
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 4,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "uid": 61001
+              },
+              "clock": 0,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 61001
+              },
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-duplicate",
+              "clock": 0,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 61999
+              },
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 3,
+              "key": "ipv4/tcp/10.0.0.2:40010-203.0.113.10:443",
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              },
+              "owner": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 3,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 3,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40010-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2
+              },
+              "token": 2,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 1
+              },
+              "operation": "close-flow"
+            },
+            {
+              "action": "close-flow",
+              "clock": 0,
+              "flow_id": 3,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 4,
+              "key": "ipv4/tcp/10.0.0.2:40010-203.0.113.10:443",
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              },
+              "owner": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-stale",
+              "clock": 0,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 3,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40010-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2,
+                "uid": 61002
+              },
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 0
+              }
+            }
+          ],
+          "live_resources": {
+            "active_flows": 3,
+            "cache_entries": 1,
+            "pending_requests": 0,
+            "residue": 4
+          },
+          "network_epoch": 1,
+          "pending": {},
+          "provider_available": true,
+          "running": true,
+          "schema": "uid-attribution-contract/v1"
+        },
+        "wrong_flow_scope": "COMPLETION_STALE",
+        "wrong_generation": "COMPLETION_WRONG_GENERATION",
+        "wrong_owner": "COMPLETION_WRONG_OWNER"
+      },
+      "id": "A1-completion-identity-faults",
+      "status": "PASS"
+    },
+    {
+      "decisive_falsifier": "lookup failure blocks owner or grows pending queue",
+      "facts": {
+        "queue_full": {
+          "flow_id": 2,
+          "outcome": "LOOKUP_QUEUE_FULL",
+          "owner": 1,
+          "reason": "pending-capacity",
+          "token": null,
+          "uid": null
+        },
+        "queue_retry": {
+          "flow_id": 2,
+          "outcome": "MISS_SUBMITTED",
+          "owner": 1,
+          "reason": "nonblocking-submit",
+          "token": 2,
+          "uid": null
+        },
+        "queue_state": {
+          "app_epoch": 1,
+          "bounds": {
+            "cache_capacity": 2,
+            "cache_ttl": 4,
+            "pending_capacity": 1,
+            "worker_count": 2
+          },
+          "cache": {
+            "1": {
+              "app_epoch": 1,
+              "expires_at": 4,
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40020-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "uid": 62001
+            },
+            "2": {
+              "app_epoch": 1,
+              "expires_at": 4,
+              "flow_id": 2,
+              "generation": 1,
+              "key": "ipv6/udp/2001:db8::2:41021-2001:db8::53:53",
+              "network_epoch": 1,
+              "owner": 1,
+              "uid": 62002
+            }
+          },
+          "clock": 0,
+          "counters": {
+            "app_refreshes": 0,
+            "cache_evicted": 0,
+            "cache_expired": 0,
+            "cache_hits": 0,
+            "cache_invalidated": 0,
+            "completion_duplicate": 0,
+            "completion_stale": 0,
+            "completion_wrong_generation": 0,
+            "completion_wrong_owner": 0,
+            "flow_closed": 0,
+            "flow_opened": 2,
+            "flow_reused_reverse": 0,
+            "generation_restarts": 0,
+            "lookup_coalesced": 0,
+            "lookup_completed": 2,
+            "lookup_misses": 3,
+            "lookup_queue_full": 1,
+            "lookup_submitted": 2,
+            "lookup_unavailable": 0,
+            "network_refreshes": 0,
+            "owner_blocking_waits": 0,
+            "owner_sentinel_progress": 5,
+            "owner_turns": 5,
+            "teardowns": 0
+          },
+          "flows": {
+            "1": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40020-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "pending_token": null,
+              "state": "ATTRIBUTED",
+              "uid": 62001
+            },
+            "2": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 2,
+              "generation": 1,
+              "key": "ipv6/udp/2001:db8::2:41021-2001:db8::53:53",
+              "network_epoch": 1,
+              "owner": 1,
+              "pending_token": null,
+              "state": "ATTRIBUTED",
+              "uid": 62002
+            }
+          },
+          "generation": 1,
+          "history": [
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40020-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 2,
+              "key": "ipv6/udp/2001:db8::2:41021-2001:db8::53:53",
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "owner": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40020-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "token": 1,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-queue-full",
+              "clock": 0,
+              "flow_id": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "outcome": "LOOKUP_QUEUE_FULL",
+              "owner": 1,
+              "reason": "pending-capacity",
+              "token": null,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 4,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40020-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "uid": 62001
+              },
+              "clock": 0,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40020-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 62001
+              },
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 2,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41021-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2
+              },
+              "token": 2,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 1,
+                "flows": 2,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 4,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41021-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "uid": 62002
+              },
+              "clock": 0,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41021-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2,
+                "uid": 62002
+              },
+              "live": {
+                "cache": 2,
+                "flows": 2,
+                "pending": 0
+              }
+            }
+          ],
+          "live_resources": {
+            "active_flows": 2,
+            "cache_entries": 2,
+            "pending_requests": 0,
+            "residue": 4
+          },
+          "network_epoch": 1,
+          "pending": {},
+          "provider_available": true,
+          "running": true,
+          "schema": "uid-attribution-contract/v1"
+        },
+        "unavailable": {
+          "flow_id": 1,
+          "outcome": "LOOKUP_UNAVAILABLE",
+          "owner": 0,
+          "reason": "provider-unavailable",
+          "token": null,
+          "uid": null
+        },
+        "unavailable_state": {
+          "app_epoch": 1,
+          "bounds": {
+            "cache_capacity": 2,
+            "cache_ttl": 4,
+            "pending_capacity": 2,
+            "worker_count": 2
+          },
+          "cache": {},
+          "clock": 0,
+          "counters": {
+            "app_refreshes": 0,
+            "cache_evicted": 0,
+            "cache_expired": 0,
+            "cache_hits": 0,
+            "cache_invalidated": 0,
+            "completion_duplicate": 0,
+            "completion_stale": 0,
+            "completion_wrong_generation": 0,
+            "completion_wrong_owner": 0,
+            "flow_closed": 0,
+            "flow_opened": 1,
+            "flow_reused_reverse": 0,
+            "generation_restarts": 0,
+            "lookup_coalesced": 0,
+            "lookup_completed": 0,
+            "lookup_misses": 1,
+            "lookup_queue_full": 0,
+            "lookup_submitted": 0,
+            "lookup_unavailable": 1,
+            "network_refreshes": 0,
+            "owner_blocking_waits": 0,
+            "owner_sentinel_progress": 1,
+            "owner_turns": 1,
+            "teardowns": 0
+          },
+          "flows": {
+            "1": {
+              "app_epoch": 1,
+              "directions": [
+                "ORIG"
+              ],
+              "flow_id": 1,
+              "generation": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "network_epoch": 1,
+              "owner": 0,
+              "pending_token": null,
+              "state": "UNAVAILABLE",
+              "uid": null
+            }
+          },
+          "generation": 1,
+          "history": [
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40000-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-unavailable",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "outcome": "LOOKUP_UNAVAILABLE",
+              "owner": 0,
+              "reason": "provider-unavailable",
+              "token": null,
+              "uid": null
+            }
+          ],
+          "live_resources": {
+            "active_flows": 1,
+            "cache_entries": 0,
+            "pending_requests": 0,
+            "residue": 1
+          },
+          "network_epoch": 1,
+          "pending": {},
+          "provider_available": false,
+          "running": true,
+          "schema": "uid-attribution-contract/v1"
+        }
+      },
+      "id": "A1-unavailable-queue-full",
+      "status": "PASS"
+    },
+    {
+      "decisive_falsifier": "unbounded request/cache state or teardown residue",
+      "facts": {
+        "final_state": {
+          "app_epoch": 1,
+          "bounds": {
+            "cache_capacity": 2,
+            "cache_ttl": 20,
+            "pending_capacity": 2,
+            "worker_count": 2
+          },
+          "cache": {},
+          "clock": 2,
+          "counters": {
+            "app_refreshes": 0,
+            "cache_evicted": 1,
+            "cache_expired": 0,
+            "cache_hits": 0,
+            "cache_invalidated": 2,
+            "completion_duplicate": 0,
+            "completion_stale": 1,
+            "completion_wrong_generation": 0,
+            "completion_wrong_owner": 0,
+            "flow_closed": 4,
+            "flow_opened": 4,
+            "flow_reused_reverse": 0,
+            "generation_restarts": 0,
+            "lookup_coalesced": 0,
+            "lookup_completed": 3,
+            "lookup_misses": 5,
+            "lookup_queue_full": 1,
+            "lookup_submitted": 4,
+            "lookup_unavailable": 0,
+            "network_refreshes": 0,
+            "owner_blocking_waits": 0,
+            "owner_sentinel_progress": 17,
+            "owner_turns": 17,
+            "teardowns": 1
+          },
+          "flows": {},
+          "generation": 2,
+          "history": [
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 1,
+              "key": "ipv4/tcp/10.0.0.2:40030-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 2,
+              "key": "ipv6/udp/2001:db8::2:41031-2001:db8::53:53",
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "owner": 1
+            },
+            {
+              "action": "open-flow",
+              "clock": 0,
+              "direction": "ORIG",
+              "flow_id": 3,
+              "key": "ipv4/tcp/10.0.0.2:40032-203.0.113.10:443",
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              },
+              "owner": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40030-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1
+              },
+              "token": 1,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 1
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 0,
+              "flow_id": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41031-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2
+              },
+              "token": 2,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 0,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-queue-full",
+              "clock": 0,
+              "flow_id": 3,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "outcome": "LOOKUP_QUEUE_FULL",
+              "owner": 1,
+              "reason": "pending-capacity",
+              "token": null,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 1,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 1,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "operation": "tick"
+            },
+            {
+              "action": "tick",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "steps": 1
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 2
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 22,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40030-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "uid": 63001
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 1,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40030-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 1,
+                "uid": 63001
+              },
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 1
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 1,
+                "flows": 3,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 22,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41031-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "uid": 63002
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 2,
+                "generation": 1,
+                "key": "ipv6/udp/2001:db8::2:41031-2001:db8::53:53",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 2,
+                "uid": 63002
+              },
+              "live": {
+                "cache": 2,
+                "flows": 3,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 2,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 3,
+              "live": {
+                "cache": 2,
+                "flows": 3,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 1,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 3,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40032-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 3
+              },
+              "token": 3,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 2,
+                "flows": 3,
+                "pending": 1
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "cache-evicted",
+              "clock": 2,
+              "flow_id": 1,
+              "live": {
+                "cache": 2,
+                "flows": 3,
+                "pending": 0
+              }
+            },
+            {
+              "action": "completion-accepted",
+              "cache": {
+                "app_epoch": 1,
+                "expires_at": 22,
+                "flow_id": 3,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40032-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "uid": 63003
+              },
+              "clock": 2,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 3,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40032-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 1,
+                "token": 3,
+                "uid": 63003
+              },
+              "live": {
+                "cache": 2,
+                "flows": 3,
+                "pending": 0
+              }
+            },
+            {
+              "action": "open-flow",
+              "clock": 2,
+              "direction": "ORIG",
+              "flow_id": 4,
+              "key": "ipv4/tcp/10.0.0.2:40033-203.0.113.10:443",
+              "live": {
+                "cache": 2,
+                "flows": 4,
+                "pending": 0
+              },
+              "owner": 0
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 2,
+                "flows": 4,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-miss",
+              "clock": 2,
+              "flow_id": 4,
+              "live": {
+                "cache": 2,
+                "flows": 4,
+                "pending": 1
+              },
+              "outcome": "MISS_SUBMITTED",
+              "owner": 0,
+              "reason": "nonblocking-submit",
+              "request": {
+                "app_epoch": 1,
+                "flow_id": 4,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40033-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 4
+              },
+              "token": 4,
+              "uid": null
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 2,
+                "flows": 4,
+                "pending": 1
+              },
+              "operation": "teardown"
+            },
+            {
+              "action": "scope-invalidated",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 4,
+                "pending": 0
+              },
+              "reason": "teardown"
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 4,
+                "pending": 0
+              },
+              "operation": "close-flow"
+            },
+            {
+              "action": "close-flow",
+              "clock": 2,
+              "flow_id": 1,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 3,
+                "pending": 0
+              },
+              "operation": "close-flow"
+            },
+            {
+              "action": "close-flow",
+              "clock": 2,
+              "flow_id": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 2,
+                "pending": 0
+              },
+              "operation": "close-flow"
+            },
+            {
+              "action": "close-flow",
+              "clock": 2,
+              "flow_id": 3,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 1,
+                "pending": 0
+              },
+              "operation": "close-flow"
+            },
+            {
+              "action": "close-flow",
+              "clock": 2,
+              "flow_id": 4,
+              "live": {
+                "cache": 0,
+                "flows": 0,
+                "pending": 0
+              }
+            },
+            {
+              "action": "teardown-complete",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 0,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 0,
+                "pending": 0
+              },
+              "operation": "completion"
+            },
+            {
+              "action": "completion-stale",
+              "clock": 2,
+              "completion": {
+                "app_epoch": 1,
+                "flow_id": 4,
+                "generation": 1,
+                "key": "ipv4/tcp/10.0.0.2:40033-203.0.113.10:443",
+                "network_epoch": 1,
+                "owner": 0,
+                "token": 4,
+                "uid": 63004
+              },
+              "live": {
+                "cache": 0,
+                "flows": 0,
+                "pending": 0
+              }
+            },
+            {
+              "action": "owner-turn",
+              "clock": 2,
+              "live": {
+                "cache": 0,
+                "flows": 0,
+                "pending": 0
+              },
+              "operation": "lookup"
+            },
+            {
+              "action": "lookup-stopped",
+              "clock": 2,
+              "flow_id": 4,
+              "live": {
+                "cache": 0,
+                "flows": 0,
+                "pending": 0
+              }
+            }
+          ],
+          "live_resources": {
+            "active_flows": 0,
+            "cache_entries": 0,
+            "pending_requests": 0,
+            "residue": 0
+          },
+          "network_epoch": 1,
+          "pending": {},
+          "provider_available": true,
+          "running": false,
+          "schema": "uid-attribution-contract/v1"
+        },
+        "late_completion": "COMPLETION_STALE",
+        "max_cache": 2,
+        "max_pending": 2,
+        "submitted_before_teardown": 4
+      },
+      "id": "A1-bounds-zero-residue-teardown",
+      "status": "PASS"
+    }
+  ],
+  "evidence_refs": {
+    "campaign_spec": "ANDROID_VPN_POC_CAMPAIGN_SPEC.md#poc-a1--nonblocking-uid-attribution-contract",
+    "finding_ids": [
+      "VPN-F026"
+    ],
+    "finding_note": "VPN-F026 remains an OPEN_RISK Pixel finding; this Host/model artifact does not close Android UID correctness or timing.",
+    "gap_ids": [
+      "EG-08",
+      "EG-09"
+    ],
+    "plane_work_item": "SAKAMOTO-138"
+  },
+  "non_claims": [
+    "No Android ConnectivityManager timing or real App UID correctness.",
+    "No Pixel/arm64, VpnService, TUN, VPP, transport, or policy-path conclusion.",
+    "No production queue/cache capacities, TTLs, persistence, multi-user semantics, or OEM compatibility.",
+    "The prototype does not prove a particular Android API or wire schema is production-ready."
+  ],
+  "poc_corrections": [
+    {
+      "architecture_impact": "none",
+      "change": "Renamed the owner-turn fact field to operation; no model transition changed.",
+      "id": "runner-record-keyword-collision",
+      "status": "CORRECTED_AND_RERUN",
+      "symptom": "Initial harness run marked all cells INVALID because _record received action twice."
+    },
+    {
+      "architecture_impact": "none",
+      "change": "Snapshot live identity around wrong-owner, wrong-generation, duplicate, and stale completions; validate flow/key and network/app scope before accepting a pending completion; add wrong-network/app-scope and generation-restart cell assertions.",
+      "id": "completion-scope-and-rejection-invariance",
+      "status": "CORRECTED_AND_RERUN",
+      "symptom": "Identity-fault cells did not assert that rejected completions left live flow, UID, owner, pending request, and cache state unchanged; pending completions also accepted forged app/network scope."
+    }
+  ],
+  "prototype": true,
+  "prototype_name": "A1 nonblocking UID attribution contract",
+  "provenance": {
+    "generated_at_utc": "2026-08-23T03:05:04.354101+00:00",
+    "git_head_at_run": "44eb91ce81337315bd3f5030d6d594398ae5ea40",
+    "model_sha256": "f5a1ce249d79cbe42c0aa8276c2e840a708aa0c051e926f8767ae004fafeba82",
+    "platform": "Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.36",
+    "python": "3.13.11 (main, Jan 13 2026, 17:36:15) [Clang 21.1.4 ]",
+    "runner_sha256": "a13e1b35360f162cd3cb63332c78e5d3174eceb32b3d62dc342d18167aadf413",
+    "uname": {
+      "machine": "x86_64",
+      "node": "Main",
+      "processor": "",
+      "release": "6.6.114.1-microsoft-standard-WSL2",
+      "system": "Linux",
+      "version": "#1 SMP PREEMPT_DYNAMIC Mon Dec  1 20:46:23 UTC 2025"
+    }
+  },
+  "question": "Can an asynchronous UID fact provider represent miss, completion, cache hit, refresh, expiry, and failure without blocking FlowOwner or changing canonical flow ownership?",
+  "registered_falsifiers": [
+    "blocking lookup, UID in owner key, reverse contamination",
+    "owner stall or cross-flow cache contamination",
+    "stale refresh revives identity or cache lacks scope",
+    "wrong-owner/generation/stale completion mutates live flow",
+    "lookup failure blocks owner or grows pending queue",
+    "unbounded request/cache state or teardown residue"
+  ],
+  "schema": "uid-attribution-contract-evidence/v1",
+  "summary": {
+    "architecture_interruption": false,
+    "cell_result": "PASS",
+    "fail": 0,
+    "interruption_reason": "none; owner-inline/nonblocking/FlowOwner invariants held",
+    "invalid": 0,
+    "pass": 6
+  },
+  "supported_claim": [
+    "A bounded in-memory contract can represent miss\u2192completion\u2192hit and reverse lookup.",
+    "Concurrent misses are isolated and same-flow requests coalesce without owner wait.",
+    "Cache entries are scoped to generation/network/app epochs and expire deterministically.",
+    "Wrong-owner, wrong-generation, duplicate, and stale completions are rejected without mutation.",
+    "Provider unavailable and pending-queue-full are explicit nonblocking outcomes.",
+    "Owner sentinel progress continues while requests are pending; live request/cache bounds and teardown residue are observable.",
+    "Canonical FlowOwner selection is direction-independent and does not use UID."
+  ],
+  "working_assumption": "FlowOwner selects a stable canonical five-tuple owner first; UID attribution is a bounded asynchronous fact with generation, network-epoch, app-epoch, and owner identity in every completion."
+}
