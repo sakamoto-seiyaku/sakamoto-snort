@@ -20,6 +20,19 @@ if [[ ! -x "$stage_dir/bin/vpp" || ! -x "$stage_dir/bin/vppctl" ]]; then
 fi
 
 die() { echo "error: $*" >&2; exit 1; }
+# Test-only plugin injection for POC-124.  The product runtime stage normally
+# contains no experimental plugin; passing this path makes the APK carry the
+# explicitly selected probe artifact without changing the product stage
+# defaults.
+if [[ -n "${VPP_POC_PLUGIN:-}" ]]; then
+  [[ -f "$VPP_POC_PLUGIN" ]] || die "missing VPP_POC_PLUGIN: $VPP_POC_PLUGIN"
+  mkdir -p "$stage_dir/plugins"
+  # VPP startup selects this canonical plugin name.  Preserve the source
+  # artifact's hash in the manifest separately; never let a temporary stage
+  # filename silently leave the old canonical plugin in the APK.
+  cp "$VPP_POC_PLUGIN" "$stage_dir/plugins/hev_external_driver_poc_plugin.so"
+fi
+
 for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
   [[ -f "$file" ]] || die "missing file: $file"
 done

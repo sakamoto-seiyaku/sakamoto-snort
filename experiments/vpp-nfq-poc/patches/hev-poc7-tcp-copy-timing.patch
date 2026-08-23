@@ -1,0 +1,224 @@
+diff --git a/src/include/lwip/owner_context.h b/src/include/lwip/owner_context.h
+--- a/src/include/lwip/owner_context.h
++++ b/src/include/lwip/owner_context.h
+@@ -168,6 +168,17 @@
+ uint16_t *lwip_owner_context_ip4_id(lwip_owner_context_t *context);
+ void lwip_owner_context_note_udp_header_fallback(
+     lwip_owner_context_t *context);
++/* Test-only TCP_WRITE_FLAG_COPY attribution.  The counters are owner-local
++ * and must be sampled from the owner execution context. */
++void lwip_owner_context_tcp_copy_add(lwip_owner_context_t *context,
++                                     uint64_t elapsed_ns, size_t bytes);
++void lwip_owner_context_tcp_copy_enable(lwip_owner_context_t *context,
++                                         int enabled);
++int lwip_owner_context_tcp_copy_enabled(
++    const lwip_owner_context_t *context);
++void lwip_owner_context_tcp_copy_metrics(
++    const lwip_owner_context_t *context, uint64_t *copy_ns,
++    uint64_t *copy_bytes);
+ struct udp_pcb *udp_new_ip_type_ctx(lwip_owner_context_t *context,
+                                     uint8_t type);
+ err_t udp_bind_ctx(lwip_owner_context_t *context, struct udp_pcb *pcb,
+diff --git a/src/core/owner_context.c b/src/core/owner_context.c
+--- a/src/core/owner_context.c
++++ b/src/core/owner_context.c
+@@ -94,6 +94,9 @@
+   struct owner_memp_pool memp_pools[OWNER_MEMP_POOL_COUNT];
+   void *memp_storage;
+   size_t memp_storage_size;
++  unsigned int tcp_copy_timing_enabled;
++  uint64_t tcp_copy_ns;
++  uint64_t tcp_copy_bytes;
+   int initialized;
+ };
+ 
+@@ -661,6 +664,39 @@
+     context->udp_header_fallbacks++;
+ }
+ 
++void
++lwip_owner_context_tcp_copy_add(lwip_owner_context_t *context,
++                                uint64_t elapsed_ns, size_t bytes)
++{
++  if (!context)
++    return;
++  context->tcp_copy_ns += elapsed_ns;
++  context->tcp_copy_bytes += bytes;
++}
++
++void
++lwip_owner_context_tcp_copy_enable(lwip_owner_context_t *context, int enabled)
++{
++  if (context)
++    context->tcp_copy_timing_enabled = enabled != 0;
++}
++
++int
++lwip_owner_context_tcp_copy_enabled(const lwip_owner_context_t *context)
++{
++  return context && context->tcp_copy_timing_enabled;
++}
++
++void
++lwip_owner_context_tcp_copy_metrics(const lwip_owner_context_t *context,
++                                    uint64_t *copy_ns, uint64_t *copy_bytes)
++{
++  if (copy_ns)
++    *copy_ns = context ? context->tcp_copy_ns : 0;
++  if (copy_bytes)
++    *copy_bytes = context ? context->tcp_copy_bytes : 0;
++}
++
+ static void
+ owner_tcp_purge(lwip_owner_context_t *context, struct tcp_pcb *pcb)
+ {
+diff --git a/third-part/lwip/src/core/tcp_out.c b/third-part/lwip/src/core/tcp_out.c
+--- a/third-part/lwip/src/core/tcp_out.c
++++ b/third-part/lwip/src/core/tcp_out.c
+@@ -79,7 +79,9 @@
+ #include "lwip/sys.h"
+ #endif
+ 
++#include <stdint.h>
+ #include <string.h>
++#include <time.h>
+ 
+ #ifdef LWIP_HOOK_FILENAME
+ #include LWIP_HOOK_FILENAME
+@@ -106,6 +108,43 @@
+ #define TCP_DATA_COPY2(dst, src, len, chksum, chksum_swapped) MEMCPY(dst, src, len)
+ #endif /* TCP_CHECKSUM_ON_COPY*/
+ 
++/* Test-only attribution for the real TCP_WRITE_FLAG_COPY sites.  The HEV
++ * owner context keeps these counters local to the VPP worker; this is not a
++ * production lwIP metric.  The measured interval includes checksum-on-copy
++ * when TCP_CHECKSUM_ON_COPY is enabled because that work is part of the
++ * copy performed by the macro. */
++static uint64_t
++lwip_owner_tcp_copy_now_ns(void)
++{
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
++}
++
++#define TCP_DATA_COPY2_CTX(context, dst, src, len, chksum, chksum_swapped) \
++  do {                                                                    \
++    int _copy_enabled = (context) &&                                      \
++        lwip_owner_context_tcp_copy_enabled(context);                      \
++    uint64_t _copy_started = _copy_enabled ? lwip_owner_tcp_copy_now_ns() : 0; \
++    TCP_DATA_COPY2(dst, src, len, chksum, chksum_swapped);                \
++    if (_copy_enabled)                                                     \
++      lwip_owner_context_tcp_copy_add(                                    \
++          (context), lwip_owner_tcp_copy_now_ns() - _copy_started,        \
++          (size_t)(len));                                                  \
++  } while (0)
++
++#define TCP_DATA_COPY_CTX(context, dst, src, len, seg)                    \
++  do {                                                                    \
++    int _copy_enabled = (context) &&                                      \
++        lwip_owner_context_tcp_copy_enabled(context);                      \
++    uint64_t _copy_started = _copy_enabled ? lwip_owner_tcp_copy_now_ns() : 0; \
++    TCP_DATA_COPY(dst, src, len, seg);                                    \
++    if (_copy_enabled)                                                     \
++      lwip_owner_context_tcp_copy_add(                                    \
++          (context), lwip_owner_tcp_copy_now_ns() - _copy_started,        \
++          (size_t)(len));                                                  \
++  } while (0)
++
+ /** Define this to 1 for an extra check that the output checksum is valid
+  * (useful when the checksum is generated by the application, not the stack)
+  */
+@@ -643,7 +682,9 @@
+ #if TCP_OVERSIZE_DBGCHECK
+         oversize_add = oversize;
+ #endif /* TCP_OVERSIZE_DBGCHECK */
+-        TCP_DATA_COPY2(concat_p->payload, (const u8_t *)arg + pos, seglen, &concat_chksum, &concat_chksum_swapped);
++        TCP_DATA_COPY2_CTX(context, concat_p->payload,
++                           (const u8_t *)arg + pos, seglen, &concat_chksum,
++                           &concat_chksum_swapped);
+ #if TCP_CHECKSUM_ON_COPY
+         concat_chksummed += seglen;
+ #endif /* TCP_CHECKSUM_ON_COPY */
+@@ -710,7 +751,9 @@
+       }
+       LWIP_ASSERT("tcp_write: check that first pbuf can hold the complete seglen",
+                   (p->len >= seglen));
+-      TCP_DATA_COPY2((char *)p->payload + optlen, (const u8_t *)arg + pos, seglen, &chksum, &chksum_swapped);
++      TCP_DATA_COPY2_CTX(context, (char *)p->payload + optlen,
++                         (const u8_t *)arg + pos, seglen, &chksum,
++                         &chksum_swapped);
+     } else {
+       /* Copy is not set: First allocate a pbuf for holding the data.
+        * Since the referenced data is available at least until it is
+@@ -811,7 +854,8 @@
+     for (p = last_unsent->p; p; p = p->next) {
+       p->tot_len += oversize_used;
+       if (p->next == NULL) {
+-        TCP_DATA_COPY((char *)p->payload + p->len, arg, oversize_used, last_unsent);
++        TCP_DATA_COPY_CTX(context, (char *)p->payload + p->len, arg,
++                          oversize_used, last_unsent);
+         p->len += oversize_used;
+       }
+     }
+diff --git a/src/hev-flow-stack-owner-context.h b/src/hev-flow-stack-owner-context.h
+--- a/src/hev-flow-stack-owner-context.h
++++ b/src/hev-flow-stack-owner-context.h
+@@ -140,6 +140,14 @@
+ void flow_stack_owner_perf_metrics(
+     const FlowStackOwnerContext *context,
+     flow_stack_owner_perf_metrics_t *metrics);
++/* Test-only exact timing/byte attribution for the TCP_WRITE_FLAG_COPY sites
++ * inside the pinned owner-local lwIP context.  Snapshot only on the owner
++ * execution context, like flow_stack_owner_perf_metrics(). */
++void flow_stack_owner_tcp_copy_metrics(
++    const FlowStackOwnerContext *context, uint64_t *copy_ns,
++    uint64_t *copy_bytes);
++void flow_stack_owner_tcp_copy_timing_enable(FlowStackOwnerContext *context,
++                                             int enabled);
+ lwip_owner_context_t *flow_stack_owner_lwip_context(
+     FlowStackOwnerContext *context);
+ HevMappedDNS *flow_stack_owner_mapped_dns(FlowStackOwnerContext *context);
+diff --git a/src/hev-flow-stack-owner-context.c b/src/hev-flow-stack-owner-context.c
+--- a/src/hev-flow-stack-owner-context.c
++++ b/src/hev-flow-stack-owner-context.c
+@@ -513,8 +513,9 @@
+   err = tcp_write_ctx(context->lwip, session->tcp_pcb, payload,
+                       (uint16_t)length, TCP_WRITE_FLAG_COPY);
+   context->perf.tcp_write_ns += flow_stack_owner_now_ns() - started;
+-  context->perf.tcp_write_copy_bytes += length;
+   context->perf.tcp_write_calls++;
++  if (err == ERR_OK)
++    context->perf.tcp_write_copy_bytes += length;
+   if (err == ERR_OK)
+     err = tcp_output_ctx(context->lwip, session->tcp_pcb);
+   return err == ERR_OK ? FLOW_STACK_OWNER_OK : FLOW_STACK_OWNER_INVALID;
+@@ -621,6 +621,28 @@
+ }
+ 
+ void
++flow_stack_owner_tcp_copy_metrics(const FlowStackOwnerContext *context,
++                                  uint64_t *copy_ns, uint64_t *copy_bytes)
++{
++  if (!context) {
++    if (copy_ns)
++      *copy_ns = 0;
++    if (copy_bytes)
++      *copy_bytes = 0;
++    return;
++  }
++  lwip_owner_context_tcp_copy_metrics(context->lwip, copy_ns, copy_bytes);
++}
++
++void
++flow_stack_owner_tcp_copy_timing_enable(FlowStackOwnerContext *context,
++                                        int enabled)
++{
++  if (context)
++    lwip_owner_context_tcp_copy_enable(context->lwip, enabled);
++}
++
++void
+ flow_stack_owner_destroy(FlowStackOwnerContext *context)
+ {
+   if (!context)

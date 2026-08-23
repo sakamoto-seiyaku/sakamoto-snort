@@ -56,11 +56,32 @@ partition, shard count, and execution topology. Owner-inline nonblocking work an
 threads remain candidates until that evidence closes. A FlowOwner-local Egress Shard is therefore an
 ownership-locality term, not a promise of one HEV/lwIP instance or one OS thread per FlowOwner.
 
-VPP workers never wait for socket I/O, socket protection, timers, name resolution, or capacity. A paired
-thread uses bounded ownership handoff; inline work is nonblocking and budgeted. Exhausted flow capacity
-rejects new PCB/session/socket creation without evicting existing flows. Exhausted packet-handoff or buffer
-credit discards only the current packet without implicit flow termination. Neither case changes Policy
-Verdict or permits Direct bypass; sustained overload is explicit Runtime-health evidence.
+### 2026-08-23 POC evidence-selected topology
+
+The bounded OI1–OI5 evidence recorded in
+`experiments/vpp-nfq-poc/OI_REQUIREMENT_AUDIT.md` selects the owner-inline
+external-driver topology as the current Evidence-backed Architecture Baseline.
+Each canonical FlowOwner owns and drives its opaque Flow Stack shard; only that
+owner executes HEV/lwIP mutable callbacks.  A wait-only helper may publish
+opaque generation-tagged fd/timer wakes, and an Android broker may perform
+underlay bind and `VpnService.protect()`, but neither owns transport state or
+executes Flow Stack callbacks.  Shards remain fixed and owner-local, with no
+live migration, overload spill, process-global mutable transport authority, or
+global lwIP core lock.  Paired-thread execution is no longer the default
+candidate.
+
+This is a revisable POC evidence selection, not production completion.  An
+ordinary harness or implementation-seam correction does not reopen the
+topology decision; contradictory higher-fidelity evidence or a material new
+platform constraint may.  Worker/shard counts, capacity, timer budgets, copy
+and pbuf adoption points, performance tuning, and release lifecycle remain
+evidence-selected implementation questions.
+
+VPP workers never wait for socket I/O, socket protection, timers, name resolution, or capacity. Owner-inline
+work is nonblocking and budgeted. Exhausted flow capacity rejects new PCB/session/socket creation without
+evicting existing flows. Exhausted packet-handoff or buffer credit discards only the current packet without
+implicit flow termination. Neither case changes Policy Verdict or permits Direct bypass; sustained overload
+is explicit Runtime-health evidence.
 
 ## Buffer ownership and copying
 

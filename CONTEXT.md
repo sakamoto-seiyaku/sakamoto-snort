@@ -732,6 +732,10 @@ _Avoid_: making IPRULES enforcement depend on reverse DNS
 The first user-complete Android release: mutually exclusive Root/VPN Runtime Profiles, multi-user App-first Control, Wi-Fi/Mobile/VPN Network Gates, advanced per-app IPv4/IPv6 L4 Traffic Rules, bounded activity/statistics, health, recovery, Product UI, help, and release materials.
 _Avoid_: VPP POC milestone, backend-only L4 completion, Linux release
 
+**Android VPN Engineering Feasibility**:
+The pre-implementation feasibility threshold for the non-root VPN Runtime Profile: the accepted architecture is correct, bounded, and lifecycle-convergent on its target environment. It is not release readiness or final capacity sizing.
+_Avoid_: one-shot connectivity smoke, production readiness, release acceptance, final capacity sizing, product implementation completion
+
 **Direct Egress Performance Acceptance**:
 The two-level performance evidence required for HEV Direct Egress: a controlled prototype A/B against the existing HEV SOCKS5 path, followed by absolute Android release-budget evidence for the production artifact. The prototype requires Direct median throughput at least 90% of baseline, p95/p99 latency and CPU per byte or transaction at most 110% of baseline with a small absolute latency tolerance, steady-state RSS growth at most 8 MiB, and no increasing RSS, thread, or fd trend across repeated connections and restarts. Passing only the relative comparison or only the release budget is insufficient.
 _Avoid_: HTTPS-connectivity-only acceptance, unpaired benchmark, prototype benchmark as release approval, SOCKS5 comparison as the sole product gate
@@ -747,6 +751,50 @@ _Avoid_: temporary downstream patch, scheduled rebase, automatic upstream tracki
 **POC Evidence Harness**:
 A throwaway scaffold that builds, runs, and seals evidence for one runnable question without becoming a product Module or implementation source.
 _Avoid_: production seam, reference implementation, migration-ready code, treating PASS or Plane Done as higher-fidelity evidence
+
+**Implementation Feasibility POC Campaign**:
+A bounded pre-implementation research sequence used to decide whether an accepted architecture is viable on its target platform. It ends with an evidence-backed feasibility boundary, not a production or release decision.
+_Avoid_: implementation phase, release validation, production hardening, open-ended research, repeating already accepted architecture proofs
+
+**Evidence-Guided POC Roadmap**:
+A revisable ordering of feasibility questions shaped by current evidence and gaps. Its objective and evidence standards remain stable while individual POCs may change.
+_Avoid_: frozen experiment checklist, predetermined ticket sequence, silent scope drift, continuing an obsolete POC after its question is settled
+
+**POC Evidence Batch**:
+A group of complementary POCs interpreted together as one upper-level engineering question. It is a planning and execution unit, not a claim that any single cell proves the route.
+_Avoid_: one-POC-one-meeting workflow, batch approval gate, unbounded experiment chain, ignoring a campaign-invalidating discovery, interpreting each partial result as the campaign conclusion
+
+**Lightweight POC Protocol**:
+The minimum evidence discipline that preserves a POC's freedom to explore: state its question and decisive counter-evidence before execution, record meaningful additions during it, and seal evidence and claim boundaries afterward.
+_Avoid_: process as the POC outcome, freezing every test cell upfront, silent gate relaxation, discarding exploratory failures, documentation work that blocks useful investigation
+
+**POC Evidence Conclusion**:
+The vocabulary that separates an experiment cell result from its roadmap meaning. Each conclusion states in plain language what the evidence supports and what remains outside its claim.
+_Avoid_: bare `GO/NO-GO`, treating one passing cell as campaign completion, turning a benchmark number into an architecture verdict, omitting non-claims
+
+**Evidence-backed Architecture Baseline**:
+The architecture direction supported by the strongest current bounded evidence and used as the default premise for subsequent POCs. It is stable but revisable: contradictory higher-fidelity evidence or a material new constraint may reopen it, while ordinary harness or implementation-seam defects do not.
+_Avoid_: immutable frozen architecture, permanent decision, restarting architecture selection for every POC, treating every defect as an architecture reversal
+
+**POC Finding Ledger**:
+The evidence-linked record of both closed findings and open risks discovered during feasibility POCs, retained so formal implementation does not repeat known architecture, platform, ownership, lifecycle, or experiment-design failures. It is an engineering-knowledge source, not an open-work backlog or a transcript of incidental trial and error.
+_Avoid_: bug backlog, unresolved-items-only list, experiment diary, recording every typo or transient command failure
+
+**Evidence Gap Map**:
+The claim-oriented map that distinguishes what model, Host, and Pixel evidence currently support from what remains unproven, invalidated, or outside scope. It links feasibility-critical gaps into future POC Evidence Batches without mislabelling an untested claim as an observed defect.
+_Avoid_: POC Finding Ledger, speculative bug list, flat TODO backlog, treating Host and Pixel evidence as interchangeable, treating untested as false
+
+**POC Correction**:
+A throwaway change used to make a feasibility experiment faithfully exercise its registered question after a real defect is exposed. It is reference evidence for the invariant that formal implementation must preserve, not a production patch or implementation template.
+_Avoid_: production fix, migration-ready code, reference implementation, copying the POC patch as the design
+
+**Target-Device Anchored POC**:
+A feasibility POC whose highest-fidelity target-device evidence anchors claims about that platform, while deterministic subclaims may come from Host or model evidence. It does not imply universal device compatibility.
+_Avoid_: Host-only Android conclusion, requiring every deterministic vector to be duplicated on-device, Pixel evidence as universal OEM compatibility, emulator evidence as physical-device closure
+
+**Full-device VPN POC**:
+A VPN feasibility run in which normal device traffic exercises the target path. Narrower isolation is a diagnostic variant, not equivalent evidence.
+_Avoid_: production deployment, protecting a personal daily-use device, narrow-loopback-only external-network conclusion, requiring one synthetic traffic app for every device cell
 
 **Closure Evidence Matrix**:
 The real-environment-first layered acceptance model for Android Functional Closure: exhaustive shared semantic vectors run at the Adapter-neutral VPP graph contract, each Root/VPN Adapter separately proves its platform ingress/completion/fault/teardown boundary, and both Runtime Profiles pass a representative Android end-to-end parity set. It preserves useful existing unit and integration fixtures, runs newly required device evidence on the available controlled target device with real installed applications and network paths whenever practical, and uses host or synthetic evidence only for boundaries that cannot be reproduced deterministically end to end without duplicating every shared combinatorial vector across both profiles.

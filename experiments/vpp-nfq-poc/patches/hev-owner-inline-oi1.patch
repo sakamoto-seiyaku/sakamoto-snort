@@ -1,0 +1,859 @@
+--- a/src/hev-socks5-tunnel-owner.h	2026-08-21 08:41:57.116634152 +0800
++++ b/src/hev-socks5-tunnel-owner.h	2026-08-22 22:21:02.102675368 +0800
+@@ -191,6 +191,66 @@
+ typedef struct _HevSocks5TunnelExternalDriver
+     HevSocks5TunnelExternalDriver;
+ 
++/* OI-1 owner-inline scheduler seam.  All HEV/lwIP objects remain opaque to
++ * the caller.  The wait adapter accepts only an output fd for opaque wake
++ * tokens; it never exposes the owner's transport descriptors. */
++typedef struct _HevSakamotoOwnerInlineDriver
++    HevSakamotoOwnerInlineDriver;
++
++typedef enum _HevSakamotoOwnerInlineStatus
++{
++    HEV_SAKAMOTO_OI_ERROR = -1,
++    HEV_SAKAMOTO_OI_RUNNABLE = 1,
++    HEV_SAKAMOTO_OI_WAITING = 2,
++    HEV_SAKAMOTO_OI_STOPPED = 3,
++    HEV_SAKAMOTO_OI_FAULT = 4,
++} HevSakamotoOwnerInlineStatus;
++
++typedef enum _HevSakamotoOwnerInlineWakeCause
++{
++    HEV_SAKAMOTO_OI_WAKE_CONTROL = 1,
++    HEV_SAKAMOTO_OI_WAKE_PACKET = 2,
++    HEV_SAKAMOTO_OI_WAKE_FD = 3,
++    HEV_SAKAMOTO_OI_WAKE_TIMER = 4,
++    HEV_SAKAMOTO_OI_WAKE_MIXED = 5,
++} HevSakamotoOwnerInlineWakeCause;
++
++typedef struct _HevSakamotoOwnerInlineWakeToken
++{
++    uint64_t generation;
++    uint64_t sequence;
++    uint32_t cause;
++    uint32_t reserved;
++} HevSakamotoOwnerInlineWakeToken;
++
++typedef struct _HevSakamotoOwnerInlineResult
++{
++    HevSakamotoOwnerInlineStatus status;
++    uint32_t quanta;
++    uint32_t work_remaining;
++    uint32_t total_task_count;
++    uint32_t running_task_count;
++    int32_t next_timeout_ms;
++    uint64_t generation;
++    uint64_t wake_sequence;
++    uint64_t input_packets;
++    uint64_t output_packets;
++    uint64_t timer_callbacks;
++    uint64_t callback_count;
++    uint64_t foreign_callback_count;
++    uint64_t task_residue;
++    uint64_t fd_residue;
++    uint64_t bound_pthread;
++    uint64_t wait_pthread;
++    uint64_t wait_publishes;
++    uint64_t wait_callback_count;
++    uint64_t foreign_thread_attempts;
++    uint64_t foreign_thread_rejections;
++    int32_t fault_reason;
++    uint64_t timer_residue;
++    uint64_t credit_residue;
++} HevSakamotoOwnerInlineResult;
++
+ typedef enum _HevSocks5TunnelExternalDriverStatus
+ {
+     HEV_S120_EXTERNAL_DRIVER_ERROR = -1,
+@@ -282,6 +342,28 @@
+ int hev_s120_external_driver_free (
+     HevSocks5TunnelExternalDriver *driver,
+     HevSocks5TunnelExternalDriverResult *result);
++
++HevSakamotoOwnerInlineDriver *hev_sakamoto_owner_inline_new (
++    int timer_interval_ms, int always_runnable);
++int hev_sakamoto_owner_inline_submit (
++    HevSakamotoOwnerInlineDriver *driver, const void *packet, size_t length);
++int hev_sakamoto_owner_inline_drive (
++    HevSakamotoOwnerInlineDriver *driver, uint32_t wake_cause,
++    uint32_t quantum_budget, uint64_t wall_deadline_ns,
++    HevSakamotoOwnerInlineResult *result);
++int hev_sakamoto_owner_inline_arm_wait (
++    HevSakamotoOwnerInlineDriver *driver, int wake_sink_fd,
++    uint64_t generation, uint64_t sequence);
++int hev_sakamoto_owner_inline_schedule_fd (
++    HevSakamotoOwnerInlineDriver *driver, const void *packet, size_t length,
++    uint32_t delay_ms);
++int hev_sakamoto_owner_inline_foreign_probe (
++    HevSakamotoOwnerInlineDriver *driver);
++int hev_sakamoto_owner_inline_request_stop (
++    HevSakamotoOwnerInlineDriver *driver);
++int hev_sakamoto_owner_inline_quiesce (
++    HevSakamotoOwnerInlineDriver *driver, uint64_t generation,
++    HevSakamotoOwnerInlineResult *result);
+ int hev_socks5_tunnel_owner_start_tcp_session (
+     HevSocks5TunnelOwnerRuntime *owner, struct tcp_pcb *pcb);
+ int hev_socks5_tunnel_owner_start_udp_session (
+
+--- a/src/hev-socks5-tunnel.c	2026-08-21 08:47:52.623869550 +0800
++++ b/src/hev-socks5-tunnel.c	2026-08-22 22:21:02.507607190 +0800
+@@ -13,6 +13,9 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
++#include <poll.h>
++#include <fcntl.h>
++#include <unistd.h>
+ #include <pthread.h>
+ #include <time.h>
+ 
+@@ -83,6 +86,11 @@
+     size_t owner_stat_rx_bytes;
+     size_t owner_io_packets;
+     size_t owner_timer_steps;
++    /* OI-1 test-only execution guard and timer adapter state. */
++    void *owner_oi_driver;
++    int owner_oi_mode;
++    int owner_oi_timer_interval_ms;
++    int owner_oi_force_runnable;
+ };
+ 
+ static HevSocks5TunnelOwnerRuntime default_owner = {
+@@ -90,6 +98,75 @@
+     .owner_tun_fd = -1,
+ };
+ 
++struct _HevSakamotoOwnerInlineDriver
++{
++    HevSocks5TunnelOwnerRuntime *owner;
++    struct udp_pcb *udp_listener;
++    int tun_fds[2];
++    netif_output_fn original_output;
++    netif_output_ip6_fn original_output_ip6;
++    pthread_t bound_thread;
++    int thread_bound;
++    int timer_interval_ms;
++    int always_runnable;
++    int initialized;
++    int finished;
++    int stop_requested;
++    uint64_t generation;
++    uint64_t wake_sequence;
++    uint64_t input_packets;
++    uint64_t output_packets;
++    uint64_t timer_callbacks;
++    uint64_t callback_count;
++    uint64_t foreign_callback_count;
++    uint64_t wait_publishes;
++    uint64_t wait_callback_count;
++    uint64_t foreign_thread_attempts;
++    uint64_t foreign_thread_rejections;
++    int fault_reason;
++    pthread_mutex_t wait_lock;
++    int wait_cancel_fds[2];
++    pthread_t wait_thread;
++    int wait_thread_valid;
++    uint64_t wait_pthread;
++    int wait_sink_fd;
++    uint64_t wait_generation;
++    uint64_t wait_sequence;
++    int wait_timeout_ms;
++    pthread_t source_thread;
++    int source_thread_valid;
++    uint8_t *source_packet;
++    size_t source_length;
++    uint32_t source_delay_ms;
++};
++
++static uint64_t
++sakamoto_oi_now_ns (void)
++{
++    struct timespec ts;
++    if (clock_gettime (CLOCK_MONOTONIC, &ts) < 0)
++        return 0;
++    return (uint64_t) ts.tv_sec * 1000000000ULL + (uint64_t) ts.tv_nsec;
++}
++
++static void
++sakamoto_oi_note_callback (HevSocks5TunnelOwnerRuntime *owner,
++                           int timer_callback)
++{
++    HevSakamotoOwnerInlineDriver *driver;
++    pthread_t self;
++
++    if (!owner || !owner->owner_oi_mode || !owner->owner_oi_driver)
++        return;
++    driver = owner->owner_oi_driver;
++    self = pthread_self ();
++    driver->callback_count++;
++    if (!driver->thread_bound || !pthread_equal (driver->bound_thread, self))
++        driver->foreign_callback_count++;
++    if (timer_callback)
++        driver->timer_callbacks++;
++}
++
+ static void
+ s119_trace_task (const char *stage, HevSocks5TunnelOwnerRuntime *owner)
+ {
+@@ -736,6 +813,7 @@
+     HevSocks5TunnelOwnerRuntime *owner = data;
+     HevListNode *node;
+ 
++    sakamoto_oi_note_callback (owner, 0);
+     s119_trace_task ("event-enter", owner);
+     int val;
+ 
+@@ -780,6 +858,7 @@
+     size_t mtu = owner->config.tunnel_mtu;
+     size_t capacity = lwip_owner_context_pbuf_capacity (owner->lwip);
+ 
++    sakamoto_oi_note_callback (owner, 0);
+     s119_trace_task ("lwip-io-enter", owner);
+ 
+     if (!mtu || mtu > capacity)
+@@ -859,17 +938,21 @@
+ {
+     HevSocks5TunnelOwnerRuntime *owner = data;
+ 
++    sakamoto_oi_note_callback (owner, 1);
+     s119_trace_task ("lwip-timer-enter", owner);
+     LOG_D ("socks5 tunnel timer task run");
+ 
+     for (; owner->owner_run;) {
++        sakamoto_oi_note_callback (owner, 1);
+         owner->owner_timer_heartbeat++;
+         hev_task_mutex_lock (&owner->owner_mutex);
+         lwip_owner_context_tcp_tmr (owner->lwip);
+         owner->owner_timer_steps++;
+         hev_task_mutex_unlock (&owner->owner_mutex);
+ 
+-        if (owner->owner_local_task_mode)
++        if (owner->owner_oi_mode && owner->owner_oi_timer_interval_ms > 0)
++            hev_task_sleep (owner->owner_oi_timer_interval_ms);
++        else if (owner->owner_local_task_mode)
+             hev_task_yield (HEV_TASK_YIELD);
+         else if (hev_list_first (&owner->owner_session_set))
+             hev_task_sleep (TCP_TMR_INTERVAL);
+@@ -1701,6 +1784,619 @@
+     return residue ? -1 : 0;
+ }
+ 
++/* ------------------------------------------------------------------------- */
++/* OI-1 owner-inline scheduler/wakeup POC                                   */
++
++enum
++{
++    SAKAMOTO_OI_FAULT_FOREIGN_THREAD = 1,
++    SAKAMOTO_OI_FAULT_DRIVER = 2,
++    SAKAMOTO_OI_FAULT_WALL_DEADLINE = 3,
++    SAKAMOTO_OI_FAULT_WAIT = 4,
++    SAKAMOTO_OI_FAULT_QUIESCE = 5,
++};
++
++static err_t
++sakamoto_oi_netif_output_v4 (struct netif *netif, struct pbuf *p,
++                              const ip4_addr_t *destination)
++{
++    HevSakamotoOwnerInlineDriver *driver;
++    lwip_owner_context_t *lwip;
++    (void) destination;
++
++    lwip = lwip_owner_context_from_netif (netif);
++    driver = lwip ? lwip_owner_context_output_data (lwip) : NULL;
++    if (!driver || !p)
++        return ERR_ARG;
++    sakamoto_oi_note_callback (driver->owner, 0);
++    driver->output_packets++;
++    return ERR_OK;
++}
++
++static err_t
++sakamoto_oi_netif_output_v6 (struct netif *netif, struct pbuf *p,
++                             const ip6_addr_t *destination)
++{
++    return sakamoto_oi_netif_output_v4 (netif, p,
++                                        (const ip4_addr_t *) destination);
++}
++
++static void
++sakamoto_oi_udp_recv (void *arg, struct udp_pcb *pcb, struct pbuf *p,
++                      const ip_addr_t *address, u16_t port)
++{
++    HevSakamotoOwnerInlineDriver *driver = arg;
++    err_t result;
++
++    if (!driver || !driver->owner || !p)
++        return;
++    sakamoto_oi_note_callback (driver->owner, 0);
++    driver->input_packets++;
++    result = udp_sendto_ctx (driver->owner->lwip, pcb, p, address, port);
++    if (result != ERR_OK)
++        driver->fault_reason = SAKAMOTO_OI_FAULT_DRIVER;
++    lwip_owner_context_pbuf_free (driver->owner->lwip, p);
++}
++
++static void
++sakamoto_oi_fill_result (HevSakamotoOwnerInlineDriver *driver,
++                         const HevTaskSystemDriverResult *scheduler,
++                         HevSakamotoOwnerInlineResult *result)
++{
++    memset (result, 0, sizeof (*result));
++    result->status = HEV_SAKAMOTO_OI_ERROR;
++    result->quanta = scheduler ? scheduler->quanta : 0;
++    result->total_task_count = scheduler ? scheduler->total_task_count : 0;
++    result->running_task_count =
++        scheduler ? scheduler->running_task_count : 0;
++    result->next_timeout_ms = scheduler ? scheduler->next_timeout_ms : -1;
++    result->generation = driver->generation;
++    result->wake_sequence = driver->wake_sequence;
++    result->input_packets = driver->input_packets;
++    result->output_packets = driver->output_packets;
++    result->timer_callbacks = driver->timer_callbacks;
++    result->callback_count = driver->callback_count;
++    result->foreign_callback_count = driver->foreign_callback_count;
++    result->bound_pthread = driver->thread_bound
++                                ? (uint64_t) (uintptr_t) driver->bound_thread
++                                : 0;
++    result->wait_pthread = driver->wait_thread_valid
++                               ? (uint64_t) (uintptr_t) driver->wait_thread
++                               : 0;
++    result->wait_publishes = driver->wait_publishes;
++    result->wait_callback_count = driver->wait_callback_count;
++    result->foreign_thread_attempts = driver->foreign_thread_attempts;
++    result->foreign_thread_rejections = driver->foreign_thread_rejections;
++    result->fault_reason = driver->fault_reason;
++}
++
++static int
++sakamoto_oi_on_owner_thread (HevSakamotoOwnerInlineDriver *driver)
++{
++    if (!driver || !driver->thread_bound ||
++        !pthread_equal (driver->bound_thread, pthread_self ())) {
++        if (driver) {
++            driver->foreign_thread_attempts++;
++            driver->foreign_thread_rejections++;
++            driver->fault_reason = SAKAMOTO_OI_FAULT_FOREIGN_THREAD;
++        }
++        return 0;
++    }
++    return 1;
++}
++
++static void
++sakamoto_oi_wait_cancel (HevSakamotoOwnerInlineDriver *driver)
++{
++    int value = 1;
++    int join = 0;
++    pthread_t thread;
++
++    if (!driver)
++        return;
++    pthread_mutex_lock (&driver->wait_lock);
++    if (driver->wait_thread_valid) {
++        thread = driver->wait_thread;
++        join = 1;
++        if (driver->wait_cancel_fds[1] >= 0)
++            (void) write (driver->wait_cancel_fds[1], &value, sizeof (value));
++    }
++    pthread_mutex_unlock (&driver->wait_lock);
++    if (join) {
++        (void) pthread_join (thread, NULL);
++        pthread_mutex_lock (&driver->wait_lock);
++        driver->wait_thread_valid = 0;
++        pthread_mutex_unlock (&driver->wait_lock);
++        /* A canceled helper leaves its byte in the shared cancel pipe.  A
++         * subsequent arm must drain that byte or it will immediately treat
++         * the next wait as canceled and can miss a real FD readiness wake. */
++        if (driver->wait_cancel_fds[0] >= 0) {
++            int discarded;
++            while (read (driver->wait_cancel_fds[0], &discarded,
++                         sizeof (discarded)) == (ssize_t) sizeof (discarded))
++                ;
++        }
++    }
++}
++
++static void *
++sakamoto_oi_wait_thread (void *data)
++{
++    HevSakamotoOwnerInlineDriver *driver = data;
++    struct pollfd fds[2];
++    HevSakamotoOwnerInlineWakeToken token;
++    int timeout;
++    int result;
++    uint32_t cause;
++
++    memset (&token, 0, sizeof (token));
++    pthread_mutex_lock (&driver->wait_lock);
++    timeout = driver->wait_timeout_ms;
++    token.generation = driver->wait_generation;
++    token.sequence = driver->wait_sequence;
++    pthread_mutex_unlock (&driver->wait_lock);
++
++    fds[0].fd = driver->wait_cancel_fds[0];
++    fds[0].events = POLLIN;
++    fds[0].revents = 0;
++    fds[1].fd = driver->tun_fds[0];
++    fds[1].events = POLLIN;
++    fds[1].revents = 0;
++
++    do {
++        result = poll (fds, 2, timeout);
++    } while (result < 0 && errno == EINTR);
++    if (result < 0) {
++        driver->fault_reason = SAKAMOTO_OI_FAULT_WAIT;
++        return NULL;
++    }
++    if (fds[0].revents & POLLIN)
++        return NULL;
++
++    cause = result == 0 ? HEV_SAKAMOTO_OI_WAKE_TIMER : 0;
++    if (fds[1].revents & (POLLIN | POLLERR | POLLHUP))
++        cause = cause ? HEV_SAKAMOTO_OI_WAKE_MIXED
++                      : HEV_SAKAMOTO_OI_WAKE_FD;
++    if (!cause)
++        cause = HEV_SAKAMOTO_OI_WAKE_CONTROL;
++    fprintf (stderr,
++             "sakamoto_oi stage=wait-observed result=%d revents=%x/%x "
++             "cause=%u generation=%llu sequence=%llu\n",
++             result, fds[0].revents, fds[1].revents, cause,
++             (unsigned long long) token.generation,
++             (unsigned long long) token.sequence);
++    token.cause = cause;
++    token.reserved = 0;
++    driver->wait_pthread = (uint64_t) (uintptr_t) pthread_self ();
++    if (driver->wait_sink_fd < 0 ||
++        write (driver->wait_sink_fd, &token, sizeof (token)) !=
++            (ssize_t) sizeof (token)) {
++        driver->fault_reason = SAKAMOTO_OI_FAULT_WAIT;
++        return NULL;
++    }
++    driver->wait_publishes++;
++    /* This thread only observed readiness/deadline and published an opaque
++     * token.  It deliberately does not call a HEV or lwIP entry point. */
++    return NULL;
++}
++
++typedef struct
++{
++    HevSakamotoOwnerInlineDriver *driver;
++    uint8_t *packet;
++    size_t length;
++    uint32_t delay_ms;
++} SakamotoOISourceArgs;
++
++static void *
++sakamoto_oi_source_thread (void *data)
++{
++    SakamotoOISourceArgs *args = data;
++    struct timespec delay;
++
++    delay.tv_sec = args->delay_ms / 1000U;
++    delay.tv_nsec = (long) (args->delay_ms % 1000U) * 1000000L;
++    while (nanosleep (&delay, &delay) < 0 && errno == EINTR)
++        ;
++    if (!args->driver->stop_requested && !args->driver->finished) {
++        ssize_t sent = send (args->driver->tun_fds[1], args->packet,
++                             args->length, 0);
++        fprintf (stderr,
++                 "sakamoto_oi stage=fd-source sent=%zd length=%zu "
++                 "stop=%d finished=%d fd=%d\n",
++                 sent, args->length, args->driver->stop_requested,
++                 args->driver->finished, args->driver->tun_fds[1]);
++    } else {
++        fprintf (stderr,
++                 "sakamoto_oi stage=fd-source skipped stop=%d finished=%d\n",
++                 args->driver->stop_requested, args->driver->finished);
++    }
++    free (args->packet);
++    free (args);
++    return NULL;
++}
++
++HevSakamotoOwnerInlineDriver *
++hev_sakamoto_owner_inline_new (int timer_interval_ms, int always_runnable)
++{
++    HevSakamotoOwnerInlineDriver *driver;
++    HevSocks5OwnerConfig config;
++    ip_addr_t local_address;
++    int initialized = 0;
++
++    if (timer_interval_ms < 0 || timer_interval_ms > 1000)
++        return NULL;
++    driver = calloc (1, sizeof (*driver));
++    if (!driver)
++        return NULL;
++    driver->tun_fds[0] = driver->tun_fds[1] = -1;
++    driver->wait_cancel_fds[0] = driver->wait_cancel_fds[1] = -1;
++    driver->wait_sink_fd = -1;
++    driver->timer_interval_ms = timer_interval_ms;
++    driver->always_runnable = always_runnable != 0;
++    driver->generation = 1;
++    if (pthread_mutex_init (&driver->wait_lock, NULL) != 0)
++        goto failed;
++    if (pipe (driver->wait_cancel_fds) < 0 ||
++        socketpair (PF_LOCAL, SOCK_DGRAM, 0, driver->tun_fds) < 0)
++        goto failed;
++    {
++        int flags = fcntl (driver->wait_cancel_fds[0], F_GETFL, 0);
++        if (flags >= 0)
++            (void) fcntl (driver->wait_cancel_fds[0], F_SETFL,
++                          flags | O_NONBLOCK);
++    }
++    if (hev_task_system_init () < 0)
++        goto failed;
++    initialized = 1;
++
++    hev_socks5_owner_config_default (&config);
++    config.identity = 0x01f10001U;
++    config.packet_credit_limit = 4;
++    config.inflight_pbuf_credit_limit = 4;
++    config.max_session_count = 4;
++    driver->owner = hev_socks5_tunnel_owner_new (&config, NULL);
++    if (!driver->owner)
++        goto failed;
++    driver->owner->lwip = lwip_owner_context_create ();
++    if (!driver->owner->lwip)
++        goto failed;
++    driver->owner->owner_lwip_owned = 0;
++    hev_socks5_tunnel_owner_set_lwip (driver->owner, driver->owner->lwip);
++    if (hev_socks5_tunnel_owner_start (driver->owner) < 0)
++        goto failed;
++    if (local_io_owner_prepare (driver->owner, driver->tun_fds[0]) < 0)
++        goto failed;
++
++    driver->owner->owner_oi_driver = driver;
++    driver->owner->owner_oi_mode = 1;
++    driver->owner->owner_oi_timer_interval_ms = timer_interval_ms;
++    driver->owner->owner_oi_force_runnable = driver->always_runnable;
++    driver->owner->owner_local_task_mode = driver->always_runnable;
++    driver->original_output = driver->owner->owner_netif->output;
++    driver->original_output_ip6 = driver->owner->owner_netif->output_ip6;
++    driver->owner->owner_netif->output = sakamoto_oi_netif_output_v4;
++    driver->owner->owner_netif->output_ip6 = sakamoto_oi_netif_output_v6;
++    lwip_owner_context_set_output_data (driver->owner->lwip, driver);
++
++    local_address = driver->owner->owner_netif->ip_addr;
++    driver->udp_listener = udp_new_ip_type_ctx (
++        driver->owner->lwip, IPADDR_TYPE_V4);
++    if (!driver->udp_listener ||
++        udp_bind_ctx (driver->owner->lwip, driver->udp_listener,
++                      &local_address, 49153) != ERR_OK)
++        goto failed;
++    udp_recv_ctx (driver->owner->lwip, driver->udp_listener,
++                  sakamoto_oi_udp_recv, driver);
++
++    driver->bound_thread = pthread_self ();
++    driver->thread_bound = 1;
++    hev_task_run (hev_task_ref (driver->owner->owner_task_event),
++                  event_task_entry, driver->owner);
++    hev_task_run (hev_task_ref (driver->owner->owner_task_lwip_io),
++                  lwip_io_task_entry, driver->owner);
++    hev_task_run (hev_task_ref (driver->owner->owner_task_lwip_timer),
++                  lwip_timer_task_entry, driver->owner);
++    driver->initialized = 1;
++    fprintf (stderr,
++             "sakamoto_oi stage=setup generation=%llu timer_ms=%d "
++             "always_runnable=%d owner=%p pthread=%lu\n",
++             (unsigned long long) driver->generation,
++             driver->timer_interval_ms, driver->always_runnable,
++             (void *) driver->owner,
++             (unsigned long) (uintptr_t) driver->bound_thread);
++    return driver;
++
++failed:
++    if (driver->udp_listener && driver->owner && driver->owner->lwip)
++        udp_remove_ctx (driver->owner->lwip, driver->udp_listener);
++    if (driver->owner) {
++        driver->owner->owner_oi_mode = 0;
++        driver->owner->owner_oi_driver = NULL;
++        driver->owner->owner_oi_timer_interval_ms = 0;
++        driver->owner->owner_oi_force_runnable = 0;
++        local_io_owner_cleanup (driver->owner);
++        if (driver->owner->lwip)
++            lwip_owner_context_destroy (driver->owner->lwip);
++        hev_socks5_tunnel_owner_free (driver->owner);
++    }
++    if (driver->tun_fds[0] >= 0)
++        close (driver->tun_fds[0]);
++    if (driver->tun_fds[1] >= 0)
++        close (driver->tun_fds[1]);
++    if (driver->wait_cancel_fds[0] >= 0)
++        close (driver->wait_cancel_fds[0]);
++    if (driver->wait_cancel_fds[1] >= 0)
++        close (driver->wait_cancel_fds[1]);
++    if (initialized)
++        hev_task_system_fini ();
++    pthread_mutex_destroy (&driver->wait_lock);
++    free (driver);
++    return NULL;
++}
++
++int
++hev_sakamoto_owner_inline_submit (HevSakamotoOwnerInlineDriver *driver,
++                                  const void *packet, size_t length)
++{
++    if (!sakamoto_oi_on_owner_thread (driver) || !packet || !length ||
++        !driver->initialized || driver->finished || driver->stop_requested)
++        return -1;
++    return send (driver->tun_fds[1], packet, length, 0) == (ssize_t) length
++               ? 0
++               : -1;
++}
++
++int
++hev_sakamoto_owner_inline_drive (HevSakamotoOwnerInlineDriver *driver,
++                                 uint32_t wake_cause,
++                                 uint32_t quantum_budget,
++                                 uint64_t wall_deadline_ns,
++                                 HevSakamotoOwnerInlineResult *result)
++{
++    HevTaskSystemDriverBudget budget;
++    HevTaskSystemDriverResult scheduler;
++    uint64_t started;
++    int status;
++
++    if (result)
++        memset (result, 0, sizeof (*result));
++    if (!driver || !result || !driver->initialized || driver->finished ||
++        !quantum_budget || quantum_budget > 1024 ||
++        !sakamoto_oi_on_owner_thread (driver))
++        return -1;
++    started = sakamoto_oi_now_ns ();
++    if (wall_deadline_ns && started >= wall_deadline_ns) {
++        driver->fault_reason = SAKAMOTO_OI_FAULT_WALL_DEADLINE;
++        result->status = HEV_SAKAMOTO_OI_FAULT;
++        result->fault_reason = driver->fault_reason;
++        return -1;
++    }
++    /* The POC fixes one scheduler quantum per VPP invocation.  The caller's
++     * budget is still validated, but never permits an unbounded loop. */
++    budget.max_quanta = 1;
++    memset (&scheduler, 0, sizeof (scheduler));
++    status = hev_task_system_driver_step (&budget, &scheduler);
++    (void) wake_cause;
++    if (status < 0) {
++        driver->fault_reason = SAKAMOTO_OI_FAULT_DRIVER;
++        sakamoto_oi_fill_result (driver, &scheduler, result);
++        result->status = HEV_SAKAMOTO_OI_FAULT;
++        return -1;
++    }
++    sakamoto_oi_fill_result (driver, &scheduler, result);
++    if (wall_deadline_ns && sakamoto_oi_now_ns () > wall_deadline_ns) {
++        driver->fault_reason = SAKAMOTO_OI_FAULT_WALL_DEADLINE;
++        result->status = HEV_SAKAMOTO_OI_FAULT;
++        result->fault_reason = driver->fault_reason;
++        return -1;
++    }
++    if (!scheduler.total_task_count) {
++        result->status = HEV_SAKAMOTO_OI_STOPPED;
++        result->work_remaining = 0;
++    } else if (scheduler.running_task_count) {
++        result->status = HEV_SAKAMOTO_OI_RUNNABLE;
++        result->work_remaining = 1;
++    } else {
++        result->status = HEV_SAKAMOTO_OI_WAITING;
++        result->work_remaining = 0;
++    }
++    return 0;
++}
++
++int
++hev_sakamoto_owner_inline_arm_wait (HevSakamotoOwnerInlineDriver *driver,
++                                    int wake_sink_fd, uint64_t generation,
++                                    uint64_t sequence)
++{
++    if (!sakamoto_oi_on_owner_thread (driver) || wake_sink_fd < 0 ||
++        !driver->initialized || driver->finished)
++        return -1;
++    sakamoto_oi_wait_cancel (driver);
++    pthread_mutex_lock (&driver->wait_lock);
++    driver->wait_sink_fd = wake_sink_fd;
++    driver->wait_generation = generation;
++    driver->wait_sequence = sequence;
++    driver->wait_timeout_ms = driver->timer_interval_ms > 0
++                                  ? driver->timer_interval_ms
++                                  : -1;
++    if (pthread_create (&driver->wait_thread, NULL, sakamoto_oi_wait_thread,
++                        driver) != 0) {
++        pthread_mutex_unlock (&driver->wait_lock);
++        driver->fault_reason = SAKAMOTO_OI_FAULT_WAIT;
++        return -1;
++    }
++    driver->wait_thread_valid = 1;
++    pthread_mutex_unlock (&driver->wait_lock);
++    return 0;
++}
++
++int
++hev_sakamoto_owner_inline_schedule_fd (HevSakamotoOwnerInlineDriver *driver,
++                                       const void *packet, size_t length,
++                                       uint32_t delay_ms)
++{
++    SakamotoOISourceArgs *args;
++
++    if (!sakamoto_oi_on_owner_thread (driver) || !packet || !length ||
++        !driver->initialized || driver->finished ||
++        driver->source_thread_valid)
++        return -1;
++    args = calloc (1, sizeof (*args));
++    if (!args)
++        return -1;
++    args->packet = malloc (length);
++    if (!args->packet) {
++        free (args);
++        return -1;
++    }
++    memcpy (args->packet, packet, length);
++    args->driver = driver;
++    args->length = length;
++    args->delay_ms = delay_ms;
++    if (pthread_create (&driver->source_thread, NULL,
++                        sakamoto_oi_source_thread, args) != 0) {
++        free (args->packet);
++        free (args);
++        return -1;
++    }
++    driver->source_thread_valid = 1;
++    fprintf (stderr, "sakamoto_oi stage=fd-scheduled delay_ms=%u fd=%d\n",
++             delay_ms, driver->tun_fds[1]);
++    return 0;
++}
++
++typedef struct
++{
++    HevSakamotoOwnerInlineDriver *driver;
++} SakamotoOIForeignProbeArgs;
++
++static void *
++sakamoto_oi_foreign_probe_thread (void *data)
++{
++    SakamotoOIForeignProbeArgs *args = data;
++    HevSakamotoOwnerInlineResult result;
++    uint64_t deadline = sakamoto_oi_now_ns () + 1000000ULL;
++    (void) hev_sakamoto_owner_inline_drive (args->driver,
++                                            HEV_SAKAMOTO_OI_WAKE_CONTROL,
++                                            1, deadline, &result);
++    return NULL;
++}
++
++int
++hev_sakamoto_owner_inline_foreign_probe (
++    HevSakamotoOwnerInlineDriver *driver)
++{
++    SakamotoOIForeignProbeArgs args;
++    pthread_t thread;
++
++    if (!sakamoto_oi_on_owner_thread (driver))
++        return -1;
++    args.driver = driver;
++    if (pthread_create (&thread, NULL, sakamoto_oi_foreign_probe_thread,
++                        &args) != 0)
++        return -1;
++    (void) pthread_join (thread, NULL);
++    return driver->foreign_thread_rejections ? 0 : -1;
++}
++
++int
++hev_sakamoto_owner_inline_request_stop (
++    HevSakamotoOwnerInlineDriver *driver)
++{
++    if (!sakamoto_oi_on_owner_thread (driver) || !driver->initialized ||
++        driver->finished)
++        return -1;
++    driver->stop_requested = 1;
++    return local_task_signal (driver->owner);
++}
++
++int
++hev_sakamoto_owner_inline_quiesce (HevSakamotoOwnerInlineDriver *driver,
++                                   uint64_t generation,
++                                   HevSakamotoOwnerInlineResult *result)
++{
++    HevTaskSystemDriverBudget budget = { .max_quanta = 1 };
++    HevTaskSystemDriverResult scheduler;
++    uint32_t guard;
++    int stopped = 0;
++    int residue;
++    lwip_owner_context_t *lwip;
++
++    if (result)
++        memset (result, 0, sizeof (*result));
++    if (!sakamoto_oi_on_owner_thread (driver) || !driver->initialized ||
++        driver->finished)
++        return -1;
++    sakamoto_oi_wait_cancel (driver);
++    if (driver->source_thread_valid) {
++        (void) pthread_join (driver->source_thread, NULL);
++        driver->source_thread_valid = 0;
++    }
++    if (!driver->stop_requested)
++        driver->stop_requested = 1;
++    (void) local_task_signal (driver->owner);
++    memset (&scheduler, 0, sizeof (scheduler));
++    for (guard = 0; guard < 512; guard++) {
++        if (hev_task_system_driver_step (&budget, &scheduler) < 0)
++            break;
++        if (!scheduler.total_task_count) {
++            stopped = 1;
++            break;
++        }
++    }
++    residue = !stopped || scheduler.total_task_count != 0;
++    if (result) {
++        sakamoto_oi_fill_result (driver, &scheduler, result);
++        result->generation = generation;
++        result->status = stopped ? HEV_SAKAMOTO_OI_STOPPED
++                                 : HEV_SAKAMOTO_OI_FAULT;
++        result->task_residue = scheduler.total_task_count;
++        /* fd_residue is filled after local_io_owner_cleanup below so the
++         * result describes post-quiesce state, not the still-live adapter
++         * socket while the final tasks are being torn down. */
++        result->fd_residue = 0;
++        result->fault_reason = stopped ? 0 : SAKAMOTO_OI_FAULT_QUIESCE;
++    }
++
++    if (driver->udp_listener && driver->owner->lwip)
++        udp_remove_ctx (driver->owner->lwip, driver->udp_listener);
++    driver->udp_listener = NULL;
++    lwip = driver->owner->lwip;
++    driver->owner->owner_oi_mode = 0;
++    driver->owner->owner_oi_timer_interval_ms = 0;
++    driver->owner->owner_oi_force_runnable = 0;
++    driver->owner->owner_oi_driver = NULL;
++    lwip_owner_context_set_output_data (driver->owner->lwip, driver->owner);
++    if (driver->owner->owner_netif) {
++        driver->owner->owner_netif->output = driver->original_output;
++        driver->owner->owner_netif->output_ip6 = driver->original_output_ip6;
++    }
++    local_io_owner_cleanup (driver->owner);
++    if (result) {
++        result->fd_residue = driver->owner->owner_tun_fd >= 0 ? 1 : 0;
++        result->timer_residue =
++            driver->owner->owner_task_lwip_timer ? 1 : 0;
++        result->credit_residue = 0;
++        for (int i = 0; i < HEV_SOCKS5_OWNER_CREDIT_COUNT; i++)
++            result->credit_residue += driver->owner->credit_used[i];
++    }
++    driver->owner->owner_run = 0;
++    hev_socks5_tunnel_owner_free (driver->owner);
++    if (lwip)
++        lwip_owner_context_destroy (lwip);
++    driver->owner = NULL;
++    close (driver->tun_fds[0]);
++    close (driver->tun_fds[1]);
++    close (driver->wait_cancel_fds[0]);
++    close (driver->wait_cancel_fds[1]);
++    driver->finished = 1;
++    hev_task_system_fini ();
++    pthread_mutex_destroy (&driver->wait_lock);
++    free (driver);
++    return residue ? -1 : (stopped ? 0 : -1);
++}
++
+ int
+ hev_socks5_tunnel_owner_run_local_io_pair (
+     HevSocks5TunnelOwnerRuntime *a, HevSocks5TunnelOwnerRuntime *b,
+

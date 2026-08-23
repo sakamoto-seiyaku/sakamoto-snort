@@ -1,0 +1,14 @@
+diff --git a/src/hev-flow-stack-owner-context.c b/src/hev-flow-stack-owner-context.c
+--- a/src/hev-flow-stack-owner-context.c
++++ b/src/hev-flow-stack-owner-context.c
+@@ -69,7 +69,8 @@ flow_stack_owner_netif_output(struct netif *netif, struct pbuf *p,
+-  fprintf(stderr,
+-          "s119_trace stage=netif-output thread=%lu task=%p owner=%p lwip=%p len=%u\n",
+-          (unsigned long)pthread_self(), (void *)hev_task_self(),
+-          (void *)context->hev_runtime, (void *)lwip,
+-          p ? (unsigned int)p->tot_len : 0U);
++  /* netif output is synchronously re-entered by flow_stack_owner_submit()
++   * on the caller's VPP worker.  That thread is not a HEV task-system
++   * thread; calling hev_task_self() here dereferences a NULL task-system
++   * context on Android.  Keep the foreign-thread boundary free of HEV task
++   * lookups (and of per-packet tracing). */

@@ -1,0 +1,13 @@
+{
+  "schema": "s125-poc7/v1",
+  "label": "golden",
+  "arm": "full",
+  "workers": 1,
+  "protocol": "udp",
+  "flows": 1,
+  "payloadBytes": 33,
+  "burst": 1,
+  "load": "closed",
+  "expectEcho": true,
+  "observe": "full"
+}

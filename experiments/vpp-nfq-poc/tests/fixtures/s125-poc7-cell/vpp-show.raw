@@ -1,0 +1,10 @@
+# cli_monotonic_ns=250
+# show s124-vpn-tun
+s124-vpn-tun-stage mode 0 observe 1 tun-read-ns 100 tun-read-bytes 3300 buffer-alloc-ns 50 ingress-copy-ns 100 ingress-copy-bytes 3300 parse-ns 20 enqueue-ns 30 enqueue-packets 10
+s124-owner 0 started 1 packets 10 queue-wait-ns 30 submit-total-ns 40
+s124-owner-perf 0 submit-copy-ns 20 submit-copy-bytes 3300 udp-copy-ns 10 udp-copy-bytes 3300
+# cli_monotonic_ns=350
+# show s124-vpn-tun
+s124-vpn-tun-stage mode 0 observe 1 tun-read-ns 200 tun-read-bytes 6600 buffer-alloc-ns 100 ingress-copy-ns 200 ingress-copy-bytes 6600 parse-ns 40 enqueue-ns 60 enqueue-packets 20
+s124-owner 0 started 1 packets 20 queue-wait-ns 60 submit-total-ns 80
+s124-owner-perf 0 submit-copy-ns 40 submit-copy-bytes 6600 udp-copy-ns 20 udp-copy-bytes 6600

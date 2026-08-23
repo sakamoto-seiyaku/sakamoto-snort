@@ -12,12 +12,17 @@ STRIP="${STRIP:-1}"
 VPP_SOURCE_REVISION="${VPP_SOURCE_REVISION:-unknown}"
 VPP_SOURCE_ORIGIN="${VPP_SOURCE_ORIGIN:-$VPP_DIR}"
 VPP_SOURCE_STATUS="${VPP_SOURCE_STATUS:-unknown}"
+VPP_MAIN_CORE="${VPP_MAIN_CORE:-}"
+VPP_WORKER_CORES="${VPP_WORKER_CORES:-}"
 
 BIN_SRC="$BUILD_DIR/bin/vpp"
 VPPCTL_SRC="$BUILD_DIR/bin/vppctl"
 LIB_SRC="$BUILD_DIR/lib/aarch64-linux-android"
 REMOTE_ROOT="${REMOTE_ROOT:-/data/local/tmp/vpp-nfq-poc}"
 plugins=()
+if [ -n "${VPP_PLUGINS:-}" ]; then
+  IFS=';' read -r -a plugins <<<"$VPP_PLUGINS"
+fi
 
 libs=(
   libvnet.so
@@ -73,6 +78,20 @@ statseg {
 buffers {
   page-size default
 }
+
+EOF
+
+if [ -n "$VPP_WORKER_CORES" ]; then
+  cat >>"$STAGE_DIR/runtime/startup.conf" <<EOF
+cpu {
+  ${VPP_MAIN_CORE:+main-core $VPP_MAIN_CORE}
+  corelist-workers $VPP_WORKER_CORES
+}
+
+EOF
+fi
+
+cat >>"$STAGE_DIR/runtime/startup.conf" <<EOF
 
 plugins {
   path $REMOTE_ROOT/plugins

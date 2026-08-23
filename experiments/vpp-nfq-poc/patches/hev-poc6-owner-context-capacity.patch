@@ -1,0 +1,19 @@
+diff --git a/src/core/owner_context.c b/src/core/owner_context.c
+--- a/src/core/owner_context.c
++++ b/src/core/owner_context.c
+@@
+-#define OWNER_TCP_PCB_POOL_COUNT 2U
++#define OWNER_TCP_PCB_POOL_COUNT 64U
+ #define OWNER_TCP_PCB_LISTEN_POOL_COUNT 2U
+-#define OWNER_TCP_SEG_POOL_COUNT 4U
+-#define OWNER_PBUF_POOL_COUNT 4U
+-#define OWNER_PBUF_PAYLOAD_POOL_COUNT 4U
++#define OWNER_TCP_SEG_POOL_COUNT 128U
++#define OWNER_PBUF_POOL_COUNT 64U
++#define OWNER_PBUF_PAYLOAD_POOL_COUNT 64U
+diff --git a/src/hev-flow-stack-owner-context.c b/src/hev-flow-stack-owner-context.c
+--- a/src/hev-flow-stack-owner-context.c
++++ b/src/hev-flow-stack-owner-context.c
+@@
+-#define FLOW_STACK_OWNER_MAX_SESSIONS 8U
++#define FLOW_STACK_OWNER_MAX_SESSIONS 64U

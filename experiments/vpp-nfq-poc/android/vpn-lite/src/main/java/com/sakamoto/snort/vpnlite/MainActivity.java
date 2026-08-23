@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.VpnService;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -22,6 +23,7 @@ import android.widget.TextView;
  */
 public final class MainActivity extends Activity {
     private static final int NOTIFICATION_REQUEST_CODE = 1002;
+    private static final int VPN_REQUEST_CODE = 1003;
     private static final long STATUS_POLL_MILLIS = 500L;
     private static final String EXTRA_RUNTIME_START = "runtimeStart";
     private static final String EXTRA_RUNTIME_STOP = "runtimeStop";
@@ -29,6 +31,7 @@ public final class MainActivity extends Activity {
     private static final String EXTRA_LEGACY_STOP = "stop";
     private static final String EXTRA_LEGACY_HTTP_PROBE = "appHttpProbe";
     private static final String EXTRA_LEGACY_UDP_PROBE = "appUdpProbe";
+    private static final String EXTRA_LEGACY_L4_STRESS_PROBE = "appL4StressProbe";
     private static final String EXTRA_LEGACY_PING_PROBE = "appPingProbe";
     private static final String EXTRA_LEGACY_CONTROL_PROBE = "controlProbe";
     private static final String EXTRA_LEGACY_RUST_CONTROL_PROBE = "rustControlProbe";
@@ -39,6 +42,7 @@ public final class MainActivity extends Activity {
     private TextView runtimeStatusView;
     private TextView actionStatusView;
     private boolean pendingRuntimeStart;
+    private Intent pendingLegacyVpnIntent;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -122,6 +126,16 @@ public final class MainActivity extends Activity {
             showAction("Legacy UDP probe requested.");
             return true;
         }
+        if (intent.getBooleanExtra(EXTRA_LEGACY_L4_STRESS_PROBE, false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_L4_STRESS_PROBE, intent);
+            showAction("POC-7 L4 stress probe requested.");
+            return true;
+        }
+        if (intent.getBooleanExtra("appTcpProbe", false)) {
+            startLegacyVpnService(SnortVpnService.ACTION_TCP_PROBE, intent);
+            showAction("Legacy TCP probe requested.");
+            return true;
+        }
         if (intent.getBooleanExtra(EXTRA_LEGACY_PING_PROBE, false)) {
             startLegacyVpnService(SnortVpnService.ACTION_PING_PROBE, intent);
             showAction("Legacy ping probe requested.");
@@ -168,9 +182,44 @@ public final class MainActivity extends Activity {
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_BLOCK_OWNER_UID);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_REDIRECT_THREAD);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_ROUNDS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_FLOWS);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_PROTOCOL);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_LOAD);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_S124_PATH);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_S124_OBSERVE);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_BURST);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_WARMUP_SECONDS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_STEADY_SECONDS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_DRAIN_SECONDS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_RECONNECT_EVERY);
+        copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_EXPECT_ECHO);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_OWNER_CACHE);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_ENABLE_IPV6);
+        if (!SnortVpnService.ACTION_STOP.equals(action)) {
+            Intent prepare = VpnService.prepare(this);
+            if (prepare != null) {
+                pendingLegacyVpnIntent = serviceIntent;
+                startActivityForResult(prepare, VPN_REQUEST_CODE);
+                return;
+            }
+        }
         startService(serviceIntent);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != VPN_REQUEST_CODE) {
+            return;
+        }
+        Intent serviceIntent = pendingLegacyVpnIntent;
+        pendingLegacyVpnIntent = null;
+        if (resultCode == RESULT_OK && serviceIntent != null) {
+            startService(serviceIntent);
+            showAction("VPN permission granted; legacy POC starting.");
+        } else {
+            showAction("VPN permission denied; legacy POC not started.");
+        }
     }
 
     private static void copyStringExtra(Intent source, Intent target, String name) {
