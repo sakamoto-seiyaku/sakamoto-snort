@@ -115,7 +115,11 @@ public final class MainActivity extends Activity {
                 || intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_NETWORK,
                         false)
                 || intent.hasExtra(SnortVpnService.EXTRA_UID_CONTRACT_UNAVAILABLE)
-                || intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REPLAY, false)) {
+                || intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REPLAY, false)
+                || intent.hasExtra(SnortVpnService.EXTRA_UID_CONTRACT_STAGE)
+                || intent.hasExtra(SnortVpnService.EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS)
+                || intent.getBooleanExtra(
+                        SnortVpnService.EXTRA_UID_CONTRACT_RESTART_GENERATION, false)) {
             startLegacyVpnService(SnortVpnService.ACTION_UID_CONTRACT_CONTROL, intent);
             showAction("UID attribution contract control requested.");
             return true;
@@ -211,6 +215,11 @@ public final class MainActivity extends Activity {
         copyBooleanExtra(source, serviceIntent,
                 SnortVpnService.EXTRA_UID_CONTRACT_UNAVAILABLE);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_UID_CONTRACT_REPLAY);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_UID_CONTRACT_STAGE);
+        copyIntExtra(source, serviceIntent,
+                SnortVpnService.EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS);
+        copyBooleanExtra(source, serviceIntent,
+                SnortVpnService.EXTRA_UID_CONTRACT_RESTART_GENERATION);
         if (!SnortVpnService.ACTION_STOP.equals(action)
                 && !SnortVpnService.ACTION_UID_CONTRACT_CONTROL.equals(action)) {
             Intent prepare = VpnService.prepare(this);

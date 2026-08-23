@@ -43,6 +43,8 @@ static char g_log_path[PATH_BUF_SIZE];
 static JavaVM *g_jvm;
 static jobject g_owner_lookup;
 static jmethodID g_owner_lookup_method;
+static char g_stage_cell[64] = "A2-4";
+static char g_stage_id[128] = "startup";
 
 static pthread_t g_vpp_monitor_thread;
 static bool g_vpp_monitor_running;
@@ -161,6 +163,13 @@ static void log_line(FILE *file, const char *fmt, ...) {
         fprintf(file, "%s\n", line);
         fflush(file);
     }
+}
+
+static void copy_stage(char *cell, size_t cell_size, char *stage, size_t stage_size) {
+    pthread_mutex_lock(&g_lock);
+    snprintf(cell, cell_size, "%s", g_stage_cell);
+    snprintf(stage, stage_size, "%s", g_stage_id);
+    pthread_mutex_unlock(&g_lock);
 }
 
 static void *oi3_controlled_injector_thread(void *unused) {
@@ -1628,14 +1637,17 @@ static bool parse_resolver_query_line(const char *line, owner_query_t *query) {
 static void resolver_process_line(FILE *file, int fd, const char *line, int *queries) {
     owner_query_t query;
     int uid = -1;
+    char stage_cell[64];
+    char stage_id[128];
 
     (*queries)++;
     if (parse_resolver_query_line(line, &query)) {
         uid = query_owner_uid(&query);
-        log_line(file, "resolver query=%d proto=%d %s:%u -> %s:%u uid=%d",
+        copy_stage(stage_cell, sizeof(stage_cell), stage_id, sizeof(stage_id));
+        log_line(file, "resolver query=%d proto=%d %s:%u -> %s:%u uid=%d cell=%s stage=%s",
                  *queries, query.protocol, query.local_addr,
                  (unsigned int)query.local_port, query.remote_addr,
-                 (unsigned int)query.remote_port, uid);
+                 (unsigned int)query.remote_port, uid, stage_cell, stage_id);
     } else {
         log_line(file, "resolver parse-fail query=%d line=%s", *queries, line);
     }
@@ -1789,6 +1801,24 @@ static void *probe_thread(void *arg) {
         fclose(file);
     }
     return NULL;
+}
+
+JNIEXPORT void JNICALL
+Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeSetVppStage(
+        JNIEnv *env, jclass clazz, jstring cell_arg, jstring stage_arg) {
+    (void)clazz;
+    const char *cell = cell_arg ? (*env)->GetStringUTFChars(env, cell_arg, NULL) : NULL;
+    const char *stage = stage_arg ? (*env)->GetStringUTFChars(env, stage_arg, NULL) : NULL;
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_stage_cell, sizeof(g_stage_cell), "%s", cell && *cell ? cell : "A2-4");
+    snprintf(g_stage_id, sizeof(g_stage_id), "%s", stage && *stage ? stage : "unknown");
+    pthread_mutex_unlock(&g_lock);
+    if (cell) {
+        (*env)->ReleaseStringUTFChars(env, cell_arg, cell);
+    }
+    if (stage) {
+        (*env)->ReleaseStringUTFChars(env, stage_arg, stage);
+    }
 }
 
 JNIEXPORT jint JNICALL

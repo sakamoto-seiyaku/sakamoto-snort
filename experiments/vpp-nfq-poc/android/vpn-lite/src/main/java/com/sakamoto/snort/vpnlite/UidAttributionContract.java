@@ -49,6 +49,7 @@ final class UidAttributionContract {
     static final String CROSS_APP_CACHE_HIT_REJECTED = "CROSS_APP_CACHE_HIT_REJECTED";
     static final String FLOW_OWNER_KEY_MUTATION_REJECTED =
             "FLOW_OWNER_KEY_MUTATION_REJECTED";
+    static final String STAGE_BEGIN = "STAGE_BEGIN";
 
     private static final int PENDING_CAPACITY = 4;
     private static final int CACHE_CAPACITY = 4;
@@ -79,6 +80,11 @@ final class UidAttributionContract {
     private long maxCache;
     private long maxFlowIds;
     private Request lastRequest;
+    private String allowedPackageCsv = "";
+    private String stageCellId = "A2-4";
+    private String stageId = "startup";
+    private long stageSequence;
+    private long completionDelayMillis;
 
     UidAttributionContract(Context owner) {
         context = owner.getApplicationContext();
@@ -124,11 +130,43 @@ final class UidAttributionContract {
             }
         }
         synchronized (lock) {
+            allowedPackageCsv = packageCsv == null ? "" : packageCsv;
             allowedUids.clear();
             allowedUids.addAll(resolved);
             enforceAllowedUids = enforce && !allowedUids.isEmpty();
             appendEventLocked("ALLOWED_UID_SCOPE", null, Process.INVALID_UID, "-",
                     "enforced=" + enforceAllowedUids + ";uids=" + allowedUids);
+        }
+    }
+
+    /** Publish a bounded lifecycle marker used to join Java and native ledgers. */
+    void beginStage(String cellId, String nextStageId, String reason) {
+        String normalizedCell = cellId == null || cellId.trim().isEmpty()
+                ? "A2-4" : cellId.trim();
+        String normalizedStage = nextStageId == null || nextStageId.trim().isEmpty()
+                ? "unknown" : nextStageId.trim();
+        synchronized (lock) {
+            stageCellId = normalizedCell;
+            stageId = normalizedStage;
+            stageSequence++;
+            appendEventLocked(STAGE_BEGIN, null, Process.INVALID_UID, "-",
+                    "stage=" + normalizedStage + ";reason=" + reason);
+        }
+    }
+
+    /** Keep the attribution executor bounded while a late-completion cell is armed. */
+    void setCompletionDelayMillis(long delayMillis, String reason) {
+        long bounded = Math.max(0L, Math.min(3000L, delayMillis));
+        synchronized (lock) {
+            completionDelayMillis = bounded;
+            appendEventLocked("COMPLETION_DELAY", null, Process.INVALID_UID, "-",
+                    "delay-ms=" + bounded + ";reason=" + reason);
+        }
+    }
+
+    String allowedPackageCsv() {
+        synchronized (lock) {
+            return allowedPackageCsv;
         }
     }
 
@@ -152,7 +190,14 @@ final class UidAttributionContract {
                         && cached.request.networkEpoch == networkEpoch
                         && cached.request.appEpoch == appEpoch
                         && cached.expiresAt > now) {
-                    appendEventLocked(CACHE_HIT, cached.request, cached.uid, key,
+                    // The cached owner identity belongs to the original
+                    // request, but the observation belongs to the current
+                    // lifecycle stage.  Keep token/flow/scope immutable while
+                    // rebinding only the durable stage context so the native
+                    // and Java ledgers can join the hit stage explicitly.
+                    appendEventLocked(CACHE_HIT,
+                            cached.request.withStage(stageCellId, stageId),
+                            cached.uid, key,
                             "cache-hit");
                     return cached.uid;
                 }
@@ -189,7 +234,8 @@ final class UidAttributionContract {
             int owner = ownerForKey(key);
             Request request = new Request(nextToken++, flowId, key, owner,
                     generation, networkEpoch, appEpoch, protocol,
-                    localAddress, localPort, remoteAddress, remotePort);
+                    localAddress, localPort, remoteAddress, remotePort,
+                    stageCellId, stageId, completionDelayMillis);
             pending.put(key, request);
             lastRequest = request;
             maxPending = Math.max(maxPending, pending.size());
@@ -221,6 +267,14 @@ final class UidAttributionContract {
             }
         } catch (Exception error) {
             reason = "android-api-error=" + error.getClass().getSimpleName();
+        }
+        if (request.completionDelayMillis > 0L) {
+            try {
+                Thread.sleep(request.completionDelayMillis);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                reason = reason + ";completion-delay-interrupted";
+            }
         }
         complete(request, uid, reason);
     }
@@ -319,9 +373,16 @@ final class UidAttributionContract {
     }
 
     void refreshApp(String reason) {
+        String packageCsv;
         synchronized (lock) {
             appEpoch++;
             invalidateScopeLocked("app-refresh=" + reason);
+            packageCsv = allowedPackageCsv;
+        }
+        if (!packageCsv.isEmpty()) {
+            // Re-resolve the active allow-list after an app replace/reinstall;
+            // the epoch refresh must not retain a stale package->UID mapping.
+            setAllowedPackages(packageCsv);
         }
     }
 
@@ -412,7 +473,8 @@ final class UidAttributionContract {
         long flowId = nextFlowId++;
         Request request = new Request(nextToken++, flowId, key, ownerForKey(key),
                 generation, networkEpoch, appEpoch, 6,
-                "198.18.0.2", 40001, "198.18.0.3", 443);
+                "198.18.0.2", 40001, "198.18.0.3", 443,
+                stageCellId, stageId, completionDelayMillis);
         flowIds.put(key, flowId);
         pending.put(key, request);
         lastRequest = request;
@@ -510,8 +572,15 @@ final class UidAttributionContract {
         File parent = logFile.getParentFile();
         if (parent != null && !parent.isDirectory()) parent.mkdirs();
         StringBuilder line = new StringBuilder(512);
+        StageContext context = request == null
+                ? new StageContext(stageCellId, stageId)
+                : new StageContext(request.cellId, request.stageId);
         line.append("{\"schema\":\"").append(SCHEMA).append("\"")
                 .append(",\"outcome\":\"").append(escape(outcome)).append("\"")
+                .append(",\"cell_id\":\"").append(escape(context.cellId)).append("\"")
+                .append(",\"stage_id\":\"").append(escape(context.stageId)).append("\"")
+                .append(",\"sequence\":").append(++stageSequence)
+                .append(",\"monotonic_ns\":").append(System.nanoTime())
                 .append(",\"key\":\"").append(escape(key)).append("\"")
                 .append(",\"uid\":").append(uid)
                 .append(",\"owner\":").append(request == null ? -1 : request.owner)
@@ -527,6 +596,7 @@ final class UidAttributionContract {
                 .append(",\"reason\":\"").append(escape(reason)).append("\"}\n");
         try (FileOutputStream output = new FileOutputStream(logFile, true)) {
             output.write(line.toString().getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
         } catch (Exception ignored) {
             // Evidence logging is best effort; the bounded lookup contract is not.
         }
@@ -551,10 +621,14 @@ final class UidAttributionContract {
         final int localPort;
         final String remoteAddress;
         final int remotePort;
+        final String cellId;
+        final String stageId;
+        final long completionDelayMillis;
 
         Request(long token, long flowId, String key, int owner, long generation,
                 long networkEpoch, long appEpoch, int protocol, String localAddress,
-                int localPort, String remoteAddress, int remotePort) {
+                int localPort, String remoteAddress, int remotePort,
+                String cellId, String stageId, long completionDelayMillis) {
             this.token = token;
             this.flowId = flowId;
             this.key = key;
@@ -567,6 +641,9 @@ final class UidAttributionContract {
             this.localPort = localPort;
             this.remoteAddress = remoteAddress;
             this.remotePort = remotePort;
+            this.cellId = cellId;
+            this.stageId = stageId;
+            this.completionDelayMillis = completionDelayMillis;
         }
 
         int uid() {
@@ -576,13 +653,30 @@ final class UidAttributionContract {
         Request withOwner(int newOwner) {
             return new Request(token, flowId, key, newOwner, generation,
                     networkEpoch, appEpoch, protocol, localAddress, localPort,
-                    remoteAddress, remotePort);
+                    remoteAddress, remotePort, cellId, stageId, completionDelayMillis);
         }
 
         Request withScope(long newGeneration, long newNetworkEpoch, long newAppEpoch) {
             return new Request(token, flowId, key, owner, newGeneration,
                     newNetworkEpoch, newAppEpoch, protocol, localAddress, localPort,
-                    remoteAddress, remotePort);
+                    remoteAddress, remotePort, cellId, stageId, completionDelayMillis);
+        }
+
+        Request withStage(String newCellId, String newStageId) {
+            return new Request(token, flowId, key, owner, generation,
+                    networkEpoch, appEpoch, protocol, localAddress, localPort,
+                    remoteAddress, remotePort, newCellId, newStageId,
+                    completionDelayMillis);
+        }
+    }
+
+    private static final class StageContext {
+        final String cellId;
+        final String stageId;
+
+        StageContext(String cellId, String stageId) {
+            this.cellId = cellId == null ? "A2-4" : cellId;
+            this.stageId = stageId == null ? "unknown" : stageId;
         }
     }
 

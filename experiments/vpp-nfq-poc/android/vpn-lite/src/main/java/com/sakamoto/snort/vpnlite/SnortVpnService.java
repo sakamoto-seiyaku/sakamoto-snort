@@ -70,6 +70,11 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_UID_CONTRACT_REFRESH_NETWORK = "uidContractRefreshNetwork";
     public static final String EXTRA_UID_CONTRACT_UNAVAILABLE = "uidContractUnavailable";
     public static final String EXTRA_UID_CONTRACT_REPLAY = "uidContractReplay";
+    public static final String EXTRA_UID_CONTRACT_STAGE = "uidContractStage";
+    public static final String EXTRA_UID_CONTRACT_RESTART_GENERATION =
+            "uidContractRestartGeneration";
+    public static final String EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS =
+            "uidContractCompletionDelayMillis";
     public static final String EXTRA_ROUNDS = "rounds";
     public static final String EXTRA_FLOWS = "flows";
     public static final String EXTRA_PROTOCOL = "protocol";
@@ -235,6 +240,8 @@ public final class SnortVpnService extends VpnService {
                                                   int redirectThread,
                                                   boolean ownerCache,
                                                   SnortVpnService ownerLookup);
+
+    private static native void nativeSetVppStage(String cellId, String stageId);
 
     private static native void nativeStopVppProbe();
 
@@ -1977,6 +1984,17 @@ public final class SnortVpnService extends VpnService {
         if (intent == null) {
             return;
         }
+        if (intent.hasExtra(EXTRA_UID_CONTRACT_STAGE)) {
+            String stage = intent.getStringExtra(EXTRA_UID_CONTRACT_STAGE);
+            uidAttribution().beginStage("A2-4", stage, "intent");
+            nativeSetVppStage("A2-4", stage == null ? "unknown" : stage);
+        }
+        if (intent.hasExtra(EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS)) {
+            uidAttribution().setCompletionDelayMillis(
+                    intent.getLongExtra(EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS,
+                            intent.getIntExtra(EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS, 0)),
+                    "intent");
+        }
         if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_REFRESH_APP, false)) {
             uidAttribution().refreshApp("intent");
         }
@@ -1990,6 +2008,9 @@ public final class SnortVpnService extends VpnService {
         }
         if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_REPLAY, false)) {
             uidAttribution().replayFaultMatrix();
+        }
+        if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_RESTART_GENERATION, false)) {
+            uidAttribution().restartGeneration("intent");
         }
     }
 }
