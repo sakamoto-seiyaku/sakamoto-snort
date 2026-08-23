@@ -156,6 +156,26 @@ may determine execution order without changing the evidence DAG.
 - **Interruption condition:** a stable correct UID cannot be associated with a
   flow without violating canonical ownership or nonblocking execution.
 
+#### 2026-08-23 evidence-guided execution refinement
+
+Pixel execution exposed a harness-classification mismatch rather than an
+architecture contradiction: durable UID/cache events passed and lifecycle
+control events were observed, but lifecycle closure remains unproven. A
+volatile empty service-log capture remained a global gate, and the current
+outbound-only fixture could not produce reverse or per-flow downstream-zero
+evidence. The remaining A2 work therefore follows
+[`S139_A2_POC_DESIGN_REVISION.md`](S139_A2_POC_DESIGN_REVISION.md).
+
+The refinement preserves every A2 minimum claim. Controlled reverse traffic
+uses the actual Flow Stack return interface, normal VPP graph, TUN Adapter, and
+app receipt on Pixel. UID drop is proved at the real transport-admission,
+broker, and socket call sites, with a live allow control and a fresh dropped
+tuple. Neither cell claims B1 whole-device Direct Egress. B1/B2 later repeat
+those properties at full real-path fidelity. Volatile logcat is diagnostic
+only; a durable VpnService builder receipt, package-to-UID mapping, allowed
+scope, runtime VPN binding, exact tuple, and source provenance are joined as
+the session authority.
+
 ## 5. Batch B -- Whole-device real network
 
 ### POC B1 -- Full-device real dual-stack Direct Egress and DNS
