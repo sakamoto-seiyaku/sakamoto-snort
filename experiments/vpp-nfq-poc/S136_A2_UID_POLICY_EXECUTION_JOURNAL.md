@@ -459,3 +459,42 @@ close recovered-provider attribution or joined native cache behavior. It also
 does not close the complete A2 matrix, reverse traffic, wrong-UID drop,
 per-dropped-packet socket/transport zero, or external egress. The architecture
 decision remains `architecture_interruption=false`.
+
+## Follow-up execution: second-UID owner drop (2026-08-23)
+
+The owner-drop runner reused the corrected androidruntime fixture (UID
+`12629`) and deliberately set `BLOCK_OWNER_UID=12629`, equal to the expected
+allowed UID. Its runner checkpoint is
+`9ecdc1251839b692504dda69b277d5e3cb8887e1`:
+
+```sh
+ADB_SERIAL=28201JEGR0XPAJ BLOCK_OWNER_UID=12629 \
+  EXPECTED_ALLOWED_UID=12629 EXPECT_OWNER_BLOCK=true \
+  RESULT_DIR=experiments/vpp-nfq-poc/results/s139-a2-udp4-second-uid-owner-drop-final \
+  experiments/vpp-nfq-poc/scripts/android-run-s139-a2-udp4-second-uid.sh
+```
+
+The runner exited `0` and classified the cell `INSUFFICIENT` only because the
+allowed-package provenance check remained the sole gap; `snort-vpn-service.log`
+was empty. The VPN owner UID was `12628`, allowed/runtime UID `12629`, and the
+runtime probe recorded `bindToVpn=true`, `bindResult=bound`, network handle
+`4075034693645`, UID `12629`, `udp_datagram_sent`, and source port `45624`.
+The exact tuple was `10.111.0.2:45624 -> 1.1.1.1:53`, IPv4 UDP. Resolver output
+was `uid=-1 -> uid=12629`; owner-cache finished
+`valid=1 hits=1 misses=2 stores=1 uid=12629`, and the contract retained
+`MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT` with pending `1 -> 0`
+and cache `0 -> 1`.
+
+The deliberate owner policy drop recorded `uid-block uid=12629 packets=2
+bytes=94` and VPP `blocked=2 bytes=94`. The final VPP snapshot retained
+`tuple parsed=2`, `last-valid=1`, `shim-tx=7 bytes=446`, and `tx=0`. The
+`vpp-protect.log` file contained only `protect broker start fd=111`; no
+per-request/completion/failure summary was captured. `vpp-hev.log` contained
+the protect callback and bounded S119 traces, while `vpp-shim.log` was empty.
+Cleanup recorded no remaining VPP process and no `tun0`. External UDP reply
+and egress remain NON-CLAIM.
+
+This is narrow evidence that a real second UID can reach the configured owner
+policy-drop boundary. It is not evidence of per-dropped-packet broker/socket
+absence, transport-zero, or external forwarding. The complete drop matrix and
+architecture decision remain open/`architecture_interruption=false`.
