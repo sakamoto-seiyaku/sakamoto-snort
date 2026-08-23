@@ -101,16 +101,75 @@ All registered A2-0 checks passed. No failure receipt was present, the Git
 source provenance was clean at `6d776a3`, and the runner left no native or TUN
 residue.
 
+## A2-1 execution result
+
+Cell: `A2-1 two-App dual-stack matrix`  
+Final verdict: `PASS`  
+Invalid fixture bundle:
+`results/s139-a2-1-two-app-matrix-20260823-1/`  
+Passing bundle:
+`results/s139-a2-1-two-app-matrix-20260823-fixed-1/`  
+Machine verdict:
+`results/s139-a2-1-two-app-matrix-20260823-fixed-1/result.json`
+
+The final matrix no longer uses Chrome or Maps as ambient traffic sources.
+Two APKs built from one POC-only traffic-adapter implementation use distinct
+application IDs and therefore distinct Android UIDs. Each adapter records its
+package/process UID, exact fixed tuple, explicit VPN socket bind, VPN network
+handle, actual local address, attempt outcome, repeat index, and monotonic
+time. TCP connect and Internet reply are not acceptance criteria.
+
+The first deterministic run was `INVALID`, not a UID behavioral failure.
+AppA and AppB were installed as UIDs 12630 and 12631, but VpnLite's manifest
+package-visibility queries did not name the two new packages. PackageManager
+therefore raised `NameNotFoundException` before native start; the durable
+session/start receipts, allowed UID scope, and VPP logs were empty, and every
+adapter correctly recorded `bind_result=unavailable`, handle `-1`, and no
+tuple attempt. Cleanup was clean. The POC correction added only these two
+explicit package queries, rebuilt the same VpnLite fixture with the bound
+`tun_poc` plugin, and retained the invalid raw bundle.
+
+Clean implementation/correction checkpoints:
+
+- `2ffd402` -- shared deterministic adapter packaged as two application IDs;
+- `5373cd1` -- eight-tuple runner and A2-1 verifier profile;
+- `b829438` -- explicit VpnLite visibility for the two POC packages.
+
+The fixed run passed every registered check:
+
+| App/family/protocol | Exact tuple | Resolver result |
+| --- | --- | --- |
+| AppA / IPv4 / TCP | `10.111.0.2:45641 -> 1.1.1.1:443` | `uid=-1 -> uid=12630` |
+| AppA / IPv4 / UDP | `10.111.0.2:45642 -> 1.1.1.1:53` | `uid=-1 -> uid=12630` |
+| AppA / IPv6 / TCP | `fd00:111:111::2:45643 -> 2606:4700:4700::1111:443` | `uid=-1 -> uid=12630` |
+| AppA / IPv6 / UDP | `fd00:111:111::2:45644 -> 2606:4700:4700::1111:53` | `uid=-1 -> uid=12630` |
+| AppB / IPv4 / TCP | `10.111.0.2:45651 -> 1.1.1.1:443` | `uid=-1 -> uid=12631` |
+| AppB / IPv4 / UDP | `10.111.0.2:45652 -> 1.1.1.1:53` | `uid=-1 -> uid=12631` |
+| AppB / IPv6 / TCP | `fd00:111:111::2:45653 -> 2606:4700:4700::1111:443` | `uid=-1 -> uid=12631` |
+| AppB / IPv6 / UDP | `fd00:111:111::2:45654 -> 2606:4700:4700::1111:53` | `uid=-1 -> uid=12631` |
+
+All 16 adapter operation records used VPN handle `4100804497421`. The VpnLite
+builder/config receipt resolved and established both packages, the durable
+scope was `[12630, 12631]`, and native start recorded `vppMode=5`, `rc=0`, and
+plugin SHA-256
+`fd3ceb866678f8eddd3517563ca921142d4caf45658d40d047cecd8de3539ad4`.
+The local and installed VpnLite and traffic APK hashes matched. Post-run and
+independent root checks found no VPP/VpnLite process and no `tun0`; Git was
+clean at `b829438`.
+
+This proves the complete deterministic A2-1 tuple/UID matrix at the VPN/VPP
+owner-resolver boundary. It does not prove external TCP completion, UDP reply,
+Internet reachability, concurrency/cache bounds, reverse traffic, lifecycle
+invalidation, or downstream socket admission.
+
 ## Claim boundary and next cells
 
-A2-0 now proves that one exact device session can be joined durably from the
-configured allowed package through the running VPN and native VPP instance to
-one correctly attributed tuple. It does not by itself prove the full two-App
-matrix, concurrency bounds, controlled reverse traffic, lifecycle
-invalidation, or downstream allow/drop admission.
+A2-0 and A2-1 now prove durable session provenance plus the complete
+deterministic two-App dual-stack tuple/UID matrix. They do not prove
+concurrency bounds, controlled reverse traffic, lifecycle invalidation, or
+downstream allow/drop admission.
 
-The remaining order is A2-1 two-App dual-stack matrix, A2-2 async
-cache/concurrency/bounds, A2-3 controlled return, A2-4 lifecycle native join,
-A2-5 allow/drop admission ledger, and A2-6 replay/settlement aggregate. B1
-remains blocked until every required A2 cell passes and the final aggregate
-audit is recorded.
+The remaining order is A2-2 async cache/concurrency/bounds, A2-3 controlled
+return, A2-4 lifecycle native join, A2-5 allow/drop admission ledger, and A2-6
+replay/settlement aggregate. B1 remains blocked until every required A2 cell
+passes and the final aggregate audit is recorded.
