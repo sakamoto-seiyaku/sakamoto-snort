@@ -426,10 +426,22 @@ final class UidAttributionContract {
 
     void replayFaultMatrix() {
         synchronized (lock) {
-            int wrongUid = allowedUids.contains(12620) ? 12621 : 12620;
+            /* The replay must use an UID accepted by the active package scope
+             * for its valid-completion branch.  The old fixture hard-coded
+             * 10180, which made the same APK fail as soon as the deterministic
+             * AppA package received a different install UID. */
+            int acceptedUid = Process.myUid();
+            if (!allowedUids.isEmpty()) {
+                acceptedUid = allowedUids.iterator().next();
+            }
+            int wrongUid = acceptedUid == Integer.MAX_VALUE
+                    ? acceptedUid - 1 : acceptedUid + 1;
+            while (allowedUids.contains(wrongUid) && wrongUid < Integer.MAX_VALUE) {
+                wrongUid++;
+            }
             Request wrongOwner = createReplayRequestLocked();
             replayCompletionLocked("wrong-owner", wrongOwner.withOwner(wrongOwner.owner ^ 1),
-                    wrongUid, "replay-owner-mutation");
+                    acceptedUid, "replay-owner-mutation");
             Request wrongUidRequest = createReplayRequestLocked();
             replayCompletionLocked("wrong-uid", wrongUidRequest, wrongUid,
                     "replay-wrong-uid");
@@ -437,14 +449,15 @@ final class UidAttributionContract {
             replayCompletionLocked("wrong-generation",
                     wrongGeneration.withScope(wrongGeneration.generation + 1,
                             wrongGeneration.networkEpoch, wrongGeneration.appEpoch),
-                    10180, "replay-generation");
+                    acceptedUid, "replay-generation");
             Request wrongScope = createReplayRequestLocked();
             replayCompletionLocked("wrong-scope", wrongScope.withScope(wrongScope.generation,
-                    wrongScope.networkEpoch + 1, wrongScope.appEpoch), 10180,
+                    wrongScope.networkEpoch + 1, wrongScope.appEpoch), acceptedUid,
                     "replay-network-scope");
             Request request = createReplayRequestLocked();
-            replayCompletionLocked("accepted", request, 10180, "replay-valid-completion");
-            replayCompletionLocked("duplicate", request, 10180, "replay-duplicate");
+            replayCompletionLocked("accepted", request, acceptedUid,
+                    "replay-valid-completion");
+            replayCompletionLocked("duplicate", request, acceptedUid, "replay-duplicate");
 
             CacheEntry cached = cache.get(request.key);
             if (cached != null && cached.uid != wrongUid) {
@@ -452,14 +465,14 @@ final class UidAttributionContract {
                         "replay-live;cached-uid=" + cached.uid + ";requested-uid=" + wrongUid
                                 + ";pending=" + pending.size() + ";cache=" + cache.size());
             }
-            appendEventLocked(FLOW_OWNER_KEY_MUTATION_REJECTED, request, 10180, request.key,
+            appendEventLocked(FLOW_OWNER_KEY_MUTATION_REJECTED, request, acceptedUid, request.key,
                     "replay-live;uid-excluded-from-key;pending=" + pending.size()
                             + ";cache=" + cache.size());
 
             Request stale = createReplayRequestLocked();
             appEpoch++;
             invalidateScopeLocked("replay-app-refresh");
-            replayCompletionLocked("stale-after-refresh", stale, 10180,
+            replayCompletionLocked("stale-after-refresh", stale, acceptedUid,
                     "replay-stale-identity");
         }
     }

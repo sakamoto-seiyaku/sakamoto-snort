@@ -22,7 +22,11 @@ DESTINATION_HOST="${DESTINATION_HOST:-1.1.1.1}"
 DESTINATION_PORT="${DESTINATION_PORT:-53}"
 ALLOW_SOURCE_PORT="${ALLOW_SOURCE_PORT:-46001}"
 DROP_SOURCE_PORT="${DROP_SOURCE_PORT:-46002}"
-REPEAT="${REPEAT:-2}"
+# The owner resolver is intentionally asynchronous.  The first one or two
+# packets can legitimately observe the -1 sentinel while Android completes
+# the lookup; four bounded sends gives the same tuple a decision opportunity
+# without changing the claim or introducing a sleep-based verdict gate.
+REPEAT="${REPEAT:-4}"
 START_WAIT="${START_WAIT:-12}"
 TRAFFIC_WAIT="${TRAFFIC_WAIT:-12}"
 CLEANUP_WAIT_SECONDS="${CLEANUP_WAIT_SECONDS:-12}"
