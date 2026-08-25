@@ -1,7 +1,7 @@
 # S153 E1 residual device-state and lifecycle resource trend
 
 Date: 2026-08-26
-Status: `FOREGROUND_RESOURCE_PASS_CONTINUING`
+Status: `PASS_FOR_REGISTERED_SEQUENCE`
 
 ## Registered question
 
@@ -140,6 +140,32 @@ a separate correctness envelope owned by S169/F046 and is not re-litigated as
 an E1 resource trend gate.  The failed exact-echo attempts are retained as
 design-correction evidence and are not part of the accepted S153 result.
 
+## Epoch transition correction during execution
+
+The first state/lifecycle reruns also exposed a second POC design problem in
+`epoch-restart`.  The runner used a TCP exact transition probe as the active
+flow while immediately disabling and replacing Wi-Fi.  That over-bound the
+epoch lifecycle cell to a TCP connect/exact-reply timing property under a
+deliberate underlay loss window.  The same run also compared Android `ip rule`
+output byte-for-byte across Wi-Fi replacement; Android legitimately rewrites
+the wlan fwmark/netId, and the first normalization pass missed lines with
+trailing spaces.
+
+The invalid/superseded evidence is retained in
+`evidence/s153-e1-residual-20260826/state-lifecycle-run3/`: normal restart,
+screen-off, forced-Doze, and fault restart all passed, but `epoch-restart`
+reported `cleanup_pass=13`, `cleanup_fail=2`, `tun0_after=0`, and
+`rules_match=0`.  Its transition app log showed a TCP connect timeout before
+the Wi-Fi epoch settled, while the post-restart UDP fire-and-count recovery
+passed and fixture RX/TX remained symmetric.
+
+The corrected runner keeps the registered epoch question but narrows the driver
+to the right seam: a UDP fire-and-count active flow during Wi-Fi loss/recovery,
+explicit underlay lost/available epoch evidence, OI3 cleanup/residue checks,
+and fresh post-restart UDP recovery.  It also normalizes wlan fwmarks on
+`lookup wlan0` rules with trailing whitespace.  This is recorded as a POC
+runner/oracle correction, not as a target lifecycle cleanup defect.
+
 ## Results
 
 ### `resource-foreground` -- PASS
@@ -197,5 +223,88 @@ Resource range across the five pre-probe snapshots:
 | HEV child threads | 0 | 0 | 0 |
 
 This closes only the foreground E1 resource driver.  The remaining S153 cells
-are still pending: `dualstack-dns`, `state-screen-off`,
-`state-forced-doze`, `fault-restart`, and `epoch-restart`.
+were then completed as recorded below.
+
+### `dualstack-dns` -- PASS
+
+Accepted evidence:
+
+```text
+evidence/s153-e1-residual-20260826/dualstack-dns/
+```
+
+Run ID: `20260826-032723-391317`
+
+Manifest summary:
+
+- `schema=s178-b1-final-dualstack-dns/v1`
+- `status=PASS_DATAPLANE_WITH_CLEANUP_MARKER_GAPS`
+- `cellsRecorded=6`
+- `appValidCount=6`
+- `nativeValidCount=6`
+- `failureCount=0`
+- `cleanupMarkerGapCount=1`
+- VPN APK:
+  `3cafe5ee25e634347af790d2cf66bb2c1fa5cd64c595d4e9605a019f4f396964`
+
+Per-cell verdict:
+
+| Cell | Verdict | Cleanup PASS | Cleanup FAIL |
+| --- | --- | ---: | ---: |
+| `ip4-udp-dns` | `PASS` | 2 | 0 |
+| `ip4-tcp-dns-separate` | `PASS_DATAPLANE_CLEANUP_MARKER_MISSING` | 0 | 0 |
+| `ip4-tcp-dns-coalesced` | `PASS` | 2 | 0 |
+| `ip6-udp-dns` | `PASS` | 2 | 0 |
+| `ip6-tcp-dns-separate` | `PASS` | 1 | 0 |
+| `ip6-tcp-dns-coalesced` | `PASS` | 2 | 0 |
+
+The one cleanup-marker gap is the already classified S178 dataplane/lifecycle
+split: the DNS dataplane, native evidence, app response validity, TUN residue,
+and rule residue gates all passed.  It is not promoted as a DNS failure.
+
+### `state-lifecycle` -- PASS
+
+Accepted evidence:
+
+```text
+evidence/s153-e1-residual-20260826/state-lifecycle-run4/
+```
+
+Run ID: `20260826-034519-077696`
+
+Cell parameters:
+
+- `UDP_EXPECT_ECHO=false`
+- `UDP_PORT=42359`
+- `TCP_PORT=42360`
+- `SOURCE_PORT_BASE=46530`
+- `TCP_SOURCE_PORT_BASE=47530`
+
+Manifest hashes:
+
+- APK:
+  `3cafe5ee25e634347af790d2cf66bb2c1fa5cd64c595d4e9605a019f4f396964`
+- OI3 plugin:
+  `5012eeecb16828edca58f3dc98ddd52330a3b09b26394a3baa94b7c39604cc72`
+- HEV owner-context:
+  `37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d`
+
+Per-phase result:
+
+| Phase | Status | Cleanup PASS | Cleanup FAIL | residual `vpp` | `tun0_after` | Rules match |
+| --- | ---: | ---: | ---: | --- | ---: | ---: |
+| `normal-stop-start` | 0 | 16 | 0 | empty | 0 | 1 |
+| `screen-off` | 0 | 14 | 0 | empty | 0 | 1 |
+| `forced-doze` | 0 | 16 | 0 | empty | 0 | 1 |
+| `fault-restart` | 0 | 16 | 0 | empty | 0 | 1 |
+| `epoch-restart` | 0 | 16 | 0 | empty | 0 | 1 |
+
+Fixture summary: `fixtureRx=17567`, `fixtureTx=17567`,
+`phaseFailures=0`.
+
+The registered S153 sequence is therefore closed for the bounded Pixel 6a
+artifact and WSL2 LAN fixture.  The result supports E1 resource/lifecycle
+settlement across the registered foreground, dual-stack DNS, screen-off,
+forced-Doze, fault restart, and Wi-Fi epoch restart cells.  It does not claim
+release battery budgets, unbounded soak, seamless migration, arbitrary OEM
+behavior, or UDP/TCP exact losslessness beyond the dedicated correctness POCs.

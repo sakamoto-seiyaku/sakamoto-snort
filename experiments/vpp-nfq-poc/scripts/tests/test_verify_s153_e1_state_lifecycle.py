@@ -56,7 +56,7 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
             self.assertIn(token, self.runner)
 
     def test_journal_declares_tuple_correction(self):
-        self.assertIn("Status: `FOREGROUND_RESOURCE_PASS_CONTINUING`", self.doc)
+        self.assertIn("Status: `PASS_FOR_REGISTERED_SEQUENCE`", self.doc)
         self.assertIn("resource-foreground", self.doc)
         self.assertIn("dualstack-dns", self.doc)
         self.assertIn("state-screen-off", self.doc)
@@ -66,6 +66,8 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
         self.assertIn("cleanup-fix-smoke", self.doc)
         self.assertIn("UDP exact closed-echo", self.doc)
         self.assertIn("fire-and-count", self.doc)
+        self.assertIn("state-lifecycle-run4", self.doc)
+        self.assertIn("PASS_FOR_REGISTERED_SEQUENCE", self.doc)
 
     def test_udp_state_driver_defaults_to_fire_and_count(self):
         self.assertIn('UDP_EXPECT_ECHO="${UDP_EXPECT_ECHO:-false}"',

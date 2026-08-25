@@ -103,6 +103,7 @@ Map rather than encoded as TODOs here.
 | VPN-F065 | S188 A2-4 Android overlay dropped S156 resolver correlation from the product runtime | `CLOSED_FOR_S188_A2_4_OVERLAY_CORRELATION` | Android VPP runtime overlay + Pixel Android 16 |
 | VPN-F066 | S153/S170 resource runner waited for cleanup markers without driving OI3 cleanup control | `CLOSED_FOR_S153_CLEANUP_SMOKE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F067 | S153 foreground resource trend over-bound E1 resource settlement to UDP exact closed-echo losslessness | `CLOSED_FOR_S153_FIRE_AND_COUNT_RESOURCE_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F068 | S153 epoch lifecycle runner over-bound underlay replacement to TCP exact transition and byte-exact wlan rules | `CLOSED_FOR_S153_EPOCH_FIRE_AND_COUNT_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2372,6 +2373,43 @@ Map rather than encoded as TODOs here.
   driver; UDP exact closed-echo remains bounded to its dedicated correctness
   evidence.
 
+### VPN-F068 -- S153 epoch lifecycle runner over-bound underlay replacement to TCP exact transition and byte-exact wlan rules
+
+- **First observation:** After the foreground resource driver correction,
+  S153 `state-lifecycle-run3` passed `normal-stop-start`, `screen-off`,
+  `forced-doze`, and `fault-restart`, but failed `epoch-restart` with
+  `cleanup_pass=13`, `cleanup_fail=2`, `residual_vpp=` empty,
+  `tun0_after=0`, and `rules_match=0` in
+  `evidence/s153-e1-residual-20260826/state-lifecycle-run3/`.
+- **Root cause:** The epoch cell used a TCP exact transition probe as the
+  active flow while the runner deliberately disabled Wi-Fi, waited for underlay
+  loss, re-enabled Wi-Fi, and restarted the VPN.  That driver turned a
+  lifecycle/epoch-cleanup question into a TCP connect/exact-reply timing
+  question under a forced underlay transition.  The rule oracle also compared
+  Android `ip rule` output byte-for-byte across Wi-Fi replacement; Android
+  legitimately changed the wlan fwmark/netId, and the first normalization regex
+  missed `lookup wlan0` lines with trailing whitespace.
+- **Correction:** The S153 epoch transition now uses UDP fire-and-count as the
+  active-flow driver, preserving the intended "real traffic crosses the epoch"
+  seam without requiring TCP exact connect success during Wi-Fi replacement.
+  The oracle requires underlay lost/available epoch evidence, OI3 cleanup,
+  residue settlement, and fresh post-restart UDP recovery.  The wlan rule
+  normalization now matches `lookup wlan0[[:space:]]*$` and masks Android's
+  replacement fwmark value.
+- **Closure evidence:** The corrected run
+  `evidence/s153-e1-residual-20260826/state-lifecycle-run4/`
+  (`runId=20260826-034519-077696`, `UDP_EXPECT_ECHO=false`,
+  `UDP_PORT=42359`, `TCP_PORT=42360`, `SOURCE_PORT_BASE=46530`) passed all
+  five phases: `normal-stop-start` `16/0`, `screen-off` `14/0`,
+  `forced-doze` `16/0`, `fault-restart` `16/0`, and `epoch-restart` `16/0`,
+  with no residual `vpp`, `tun0_after=0`, matching rules, fixture
+  `17567/17567`, and `phaseFailures=0`.
+- **Status:** `CLOSED_FOR_S153_EPOCH_FIRE_AND_COUNT_DRIVER`.  This is a POC
+  runner/oracle correction, not evidence of a target lifecycle cleanup defect.
+  Future epoch/lifecycle POCs must not use exact TCP transition success as the
+  oracle for a deliberately broken/replaced physical underlay unless that exact
+  TCP property is itself the registered question.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2568,6 +2606,7 @@ Map rather than encoded as TODOs here.
 | S187/S191 | A2-3 current-artifact cleanup-control rerun | VPN-F064 |
 | S188 | A2-4 Android overlay/runtime resolver-correlation closure | VPN-F065 |
 | S153/S170 | Resource runner cleanup-control smoke correction | VPN-F066 |
+| S153 | Epoch lifecycle runner transition/oracle correction | VPN-F068 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
