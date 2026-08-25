@@ -304,16 +304,31 @@ sleep "$START_WAIT"
 
 arm_uid_stage() {
   local stage_id="$1"
+  local contract_text
   adb_cmd shell am start -W -n "$VPN_PACKAGE/.MainActivity" \
     --es uidContractStage "$stage_id" >/dev/null
-  for _ in $(seq 1 20); do
-    if adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" | tr -d '\r' \
-      | grep -q '"outcome":"STAGE_BEGIN"' \
-      && adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" | tr -d '\r' \
-      | grep -q "\"cell_id\":\"$UID_CONTRACT_CELL\".*\"stage_id\":\"$stage_id\""; then
+  for _ in $(seq 1 40); do
+    contract_text="$(adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" | tr -d '\r')"
+    if python3 -c '
+import json
+import sys
+
+cell = sys.argv[1]
+stage = sys.argv[2]
+for raw in sys.stdin:
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError:
+        continue
+    if (record.get("outcome") == "STAGE_BEGIN"
+            and record.get("cell_id") == cell
+            and record.get("stage_id") == stage):
+        raise SystemExit(0)
+raise SystemExit(1)
+' "$UID_CONTRACT_CELL" "$stage_id" <<<"$contract_text"; then
       return 0
     fi
-    sleep 0.2
+    sleep 0.25
   done
   echo "UID contract stage did not arm: cell=$UID_CONTRACT_CELL stage=$stage_id" >&2
   return 1
