@@ -96,7 +96,7 @@ Map rather than encoded as TODOs here.
 | VPN-F058 | S184 owner-observed real LAN TCP RST required a narrow downstream reset propagation seam | `CLOSED_FOR_BOUNDED_REAL_RST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F059 | S185 bind/protect/broker infrastructure failures require phase-specific broker accounting | `CLOSED_FOR_BOUNDED_INFRA_FAILURE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `CLOSED_AS_POC_DESIGN_FIX` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `CLOSED_FOR_S156_A2_1_BASE_MATRIX` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2086,14 +2086,20 @@ Map rather than encoded as TODOs here.
   resolver logging samples a process-global current stage via `copy_stage()`;
   delayed asynchronous resolver work can therefore be attributed to the next
   tuple stage rather than to the request's own flow identity.
-- **Required correction:** Decide and implement the production-valid TCP owner
-  lookup contract, then replace process-global stage sampling with per-flow or
-  per-request stage correlation before rerunning A2-1.  The verifier must keep
-  the new failure modes distinct: no query, terminal `uid=-1`, Java accepted
-  without native hit, wrong UID, and delayed query under another stage.
-- **Status:** `OPEN_RISK`.  Do not continue A2-2/A2-4/A2-5 dependent cells or
-  the residual S152 matrix until this seam is repaired or the A2-1 claim is
-  deliberately revised.  Full details:
+- **Correction:** S156 repaired the seam in three parts: VpnLite APK artifact
+  gates require resolver `cell/stage/request` strings, native resolver requests
+  carry immutable per-request cell/stage/request metadata, and the A2 traffic
+  adapter no longer reuses fixed TCP source ports.  TCP commands request
+  `sourcePort=0`, record the actual VPN-local source port, repeat four times,
+  and the manifest selects a repeat with a decisive positive resolver UID.
+- **Closure evidence:** `evidence/s156-a2-1-correlation-20260825-run5/`
+  passed with `registeredTuples=8`, `passedTuples=8`, clean source provenance
+  at `gitHead=a3e66a6c3fb34967ca98a39ed5a47c28b8f342be`, and
+  `resolverCorrelationSchema=a2-1-resolver-cell-stage-request/v1`.
+- **Status:** `CLOSED_FOR_S156_A2_1_BASE_MATRIX`.  A2-2/A2-4/A2-5 may proceed
+  only if they inherit the request-correlation and TCP dynamic-port guardrails.
+  This finding does not close lifecycle recovery, reverse attribution, cache
+  sizing/expiry, or production capacity.  Full details:
   `S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`.
 
 ## Consolidation audit

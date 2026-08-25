@@ -1,8 +1,8 @@
 # SAKAMOTO-139 A2 POC Design Revision
 
 Date: 2026-08-23  
-Updated: 2026-08-25 (S155 controlled A2-1 rerun exposed VPN-F061)
-Status: evidence-guided working design; A2-1 paused by `VPN-F061`
+Updated: 2026-08-25 (S156 closed VPN-F061 for A2-1 base matrix)
+Status: evidence-guided working design; A2-1 base matrix passed, dependent A2 cells continue
 Scope: Pixel multi-App UID attribution, policy, and transport-admission only
 
 ## Outcome
@@ -32,13 +32,14 @@ This revision does not change ADR-0007, the Plane dependency DAG, or the rule
 that B1 remains blocked until A2 closes.
 
 S155 later implemented the A2-1 fixture/stage correction and proved that the
-original public-endpoint/startup-stage oracle defect is closed.  The corrected
-rerun is still `INCONCLUSIVE`: only 3/8 registered A2-1 tuples produced
-decisive native resolver + UID contract joins.  The successor gap is
-`VPN-F061`, recorded in
+original public-endpoint/startup-stage oracle defect is closed.  S156 then
+closed successor gap `VPN-F061` for the A2-1 base matrix: run5 passed all eight
+registered two-App IPv4/IPv6 TCP/UDP tuples with exact runtime, native resolver,
+and UID-contract joins.  The closure is recorded in
 [`S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`](S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md).
-Do not continue dependent A2 cells until the TCP owner-lookup and per-flow
-stage-correlation seam is repaired or the A2-1 claim is explicitly revised.
+Dependent A2 cells must inherit the S156 guardrails: resolver request
+correlation, APK artifact gates, TCP dynamic source ports, and decisive TCP
+repeat selection.
 
 ## Facts that force the correction
 
@@ -418,9 +419,8 @@ not decisive substitutes.
    verifier; run Host/static validation and commit a clean checkpoint.
 2. Run A2-0. Stop only to correct an invalid fixture or if an architecture
    interruption is observed.
-3. Repair `VPN-F061`, rerun A2-1, and checkpoint.  Run A2-2 only after A2-1
-   can decisively join the base two-App matrix or the A2-1 claim is explicitly
-   revised.
+3. `VPN-F061` is repaired by S156/run5.  Checkpoint the passing A2-1 base
+   matrix and run A2-2 from that baseline.
 4. Run A2-3 controlled reverse, then A2-4 lifecycle native join.
 5. Run A2-5 admission ledger and A2-6 replay/settlement aggregate.
 6. Perform the final requirement-by-requirement A2 audit, update the evidence

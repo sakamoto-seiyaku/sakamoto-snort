@@ -45,13 +45,17 @@ adb shell am start -a com.sakamoto.snort.a2traffic.EMIT \
 ```
 
 If omitted, the adapter retains its historical defaults; those defaults are
-not accepted as controlled A2-1 evidence.  The S152 runner supplies fixture
-hosts and ports explicitly.  For the historical A2-1/A2-2 matrix each repeat
-closes and recreates the same source-port tuple; no ephemeral source-port
-substitution is used. A2-5 stages (`A2-5-*`) are intentionally different: all repeats share
-one bound UDP socket and its descriptor remains alive through the final
-bounded observation delay. This gives the asynchronous Android owner resolver
-a live, stable tuple to attribute before the admission ledger is evaluated.
+not accepted as controlled A2-1 evidence.  The S152/S156 runner supplies
+fixture hosts and ports explicitly.  UDP remains fixed-source-port evidence.
+TCP uses `sourcePort=0`: Android assigns a VPN-local ephemeral port, the app
+durably records the actual source port, and the runner writes that actual tuple
+into the manifest.  This avoids repeated fixed TCP source-port reuse producing
+local `EADDRNOTAVAIL` before the packet reaches the VPN/TUN resolver seam.
+
+A2-5 stages (`A2-5-*`) are intentionally different: all repeats share one bound
+UDP socket and its descriptor remains alive through the final bounded
+observation delay. This gives the asynchronous Android owner resolver a live,
+stable tuple to attribute before the admission ledger is evaluated.
 
 For every operation the app discovers an active `TRANSPORT_VPN` network,
 calls `Network.bindSocket` on the real TCP or UDP socket, attempts the fixed

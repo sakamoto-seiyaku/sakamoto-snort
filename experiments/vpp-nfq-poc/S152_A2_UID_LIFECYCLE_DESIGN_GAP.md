@@ -39,8 +39,8 @@ S155 performed the required POC correction:
   provenance.
 
 The original S152 public-endpoint/startup-stage defect is therefore closed as
-`VPN-F060`.  However, the corrected S155 rerun2 is still `INCONCLUSIVE` and is
-now tracked as successor finding `VPN-F061`.
+`VPN-F060`.  The corrected S155 rerun2 exposed successor finding `VPN-F061`,
+which S156 later closed for the A2-1 base matrix.
 
 S155 rerun2 evidence:
 
@@ -69,6 +69,31 @@ The remaining blockers are different from the original S152 design gap:
 
 Detailed diagnosis:
 [`S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`](S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md).
+
+## S156 disposition
+
+S156 repaired the successor hotspot and produced a passing A2-1 base matrix:
+
+```text
+experiments/vpp-nfq-poc/evidence/s156-a2-1-correlation-20260825-run5/
+status=PASS
+registeredTuples=8
+passedTuples=8
+```
+
+The repair keeps the S155 controlled fixture/stage model and adds:
+
+- packaged APK guards for resolver request-correlation strings;
+- immutable resolver `cell/stage/request` metadata instead of process-global
+  stage sampling;
+- TCP `sourcePort=0` with durable runtime actual-source-port capture;
+- TCP repeat `4` and manifest selection of a repeat that has a decisive
+  positive resolver UID.
+
+This closes `VPN-F061` for the registered two-App IPv4/IPv6 TCP/UDP base
+matrix.  S152 remains broader than A2-1: lifecycle recovery, stale rejection,
+reverse attribution, cache sizing/expiry, and production policy/admission
+variants still require their own cells.
 
 ## Evidence
 
@@ -166,5 +191,7 @@ multi-App UID lifecycle matrix, reverse attribution, refresh/unavailable/
 recovery, stale rejection, UID-drop zero-broker/socket behavior, production
 cache sizing, public Internet behavior, or arbitrary OEM behavior.
 
-Do not proceed from S152 to dependent A2 cells until `VPN-F061` is resolved or
-the A2-1 claim is explicitly revised.
+Dependent A2 cells may proceed from the S156/run5 checkpoint, but they must
+inherit the request-correlation and TCP dynamic-port guardrails.  S152 is not
+fully closed until the remaining lifecycle/reverse/cache/policy variants have
+their own decisive evidence.
