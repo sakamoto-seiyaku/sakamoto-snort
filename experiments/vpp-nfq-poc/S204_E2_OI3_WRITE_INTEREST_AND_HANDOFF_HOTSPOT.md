@@ -1,12 +1,14 @@
 # S204--S221 E2 OI3 write-interest, owner-handoff, and TCP lifecycle hotspot
 
 Date: 2026-08-26
-Status: `F072_FOREGROUND_MATCHED_E2_CLOSED_NEEDS_DEVICE_STATE_RERUN`
+Status: `F072_MATCHED_DEVICE_STATE_CLOSED_E2_BUDGET_REMAINS`
 
 ## Decision
 
 Do not import the current Android VPN/OI3 POC route directly into the
-product/main stack yet solely from foreground evidence.
+product/main stack yet as a completed product baseline.  The F072 lifecycle
+hotspot is closed for the matched foreground/screen-off/forced-Doze HTTP
+cells, but the broader ADR-0007 budget decision is still separate.
 
 The S199--S214 diagnosis split the previous E2 latency gap into three concrete
 parts:
@@ -24,7 +26,8 @@ parts:
    finish / rearm proceeds. S219/S220 introduced a focused candidate fix for
    this seam and passed narrow TCP correctness/reconnect cells. S221 reran the
    matched foreground Direct/HEV/OI3 8-request E2 comparison and closed this
-   foreground F072 gate.
+   foreground F072 gate. S222/S223 then reran the screen-off and forced-Doze
+   matched cells and closed the device-state F072 lifecycle gate.
 
 This is not a UID-drop failure, not an HTTP fixture failure, and not a
 correctness failure for the bounded matched HTTP cells.
@@ -55,6 +58,8 @@ correctness failure for the bounded matched HTTP cells.
 | S219 | `evidence/s219-e2-oi3-deferred-owner-fd-debug-20260826/`, run `20260826-064414-513752` | Owner-local finish/rearm plus deferred successor-SYN owner-fd candidate passed focused long TCP: Direct `876/876`, OI3 `480/480`, OI3 cleanup `5/0`, `valid=1`. |
 | S220 | `evidence/s220-e2-oi3-deferred-syn-reconnect-debug-20260826/`, run `20260826-064532-371054` | Same candidate passed focused reconnect TCP (`RECONNECT_EVERY=1`): Direct `623/623`, OI3 `337/337`, OI3 cleanup `6/0`, no app timeout/fatal/mismatch, `failures=0`. Logs show immediate owner-local finish/rearm avoided the observed deferred-SYN stall in this run; full matched E2 remains required. |
 | S221 | `evidence/s221-e2-matched-f072-candidate-8req-foreground-20260826/`, run `20260826-065247-722050` | Matched foreground Direct/HEV/OI3 8-request comparison passed with `failureCount=0`: Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, OI3 `8/8` p95 `24ms`, OI3 cleanup `12/0`. OI3 logs include `owner-busy-deferred`, `tcp-positive-fin-complete`, `tun-flow rearmed`, and `multi-deferred admit`; the previously hot lifecycle seam completed without timeout or cleanup failure. |
+| S222 | `evidence/s222-e2-matched-f072-candidate-8req-screen-off-20260826/`, run `20260826-065949-263369` | Matched screen-off Direct/HEV/OI3 8-request comparison passed with `failureCount=0`: Direct `8/8` p95 `15ms`, HEV `8/8` p95 `10ms`, OI3 `8/8` p95 `27ms`, OI3 cleanup `12/0`. No timeout, owner-stopped reject, submit/queue reject, or cleanup failure. |
+| S223 | `evidence/s223-e2-matched-f072-candidate-8req-forced-doze-20260826/`, run `20260826-070229-388301` | Matched forced-Doze Direct/HEV/OI3 8-request comparison passed with `failureCount=0`: Direct `8/8` p95 `18ms`, HEV `8/8` p95 `16ms`, OI3 `8/8` p95 `78ms`, OI3 cleanup `12/0`. This removes the prior S192 seconds-level Doze cliff, but leaves a separate ADR-0007 absolute/relative latency-budget decision. |
 
 ## Corrected root cause: connector write interest
 
@@ -201,10 +206,22 @@ S221 result:
   by tombstone as `reason=tcp-tail`; no `owner-stopped`, app timeout, submit
   reject, queue reject, or cleanup failure was observed.
 
-This closes the foreground F072 lifecycle/admission gate. It does not close the
-older screen-off/forced-Doze E2 performance risk; those S192 cells used an
-older artifact and must be rerun with the S221 candidate before main-stack
-import can be justified as a full E2 decision.
+This closed the foreground F072 lifecycle/admission gate. S222/S223 then reran
+the older screen-off/forced-Doze E2 shapes with the same S221 comparison APK:
+
+- S222 screen-off: Direct `8/8` p95 `15ms`, HEV `8/8` p95 `10ms`, OI3 `8/8`
+  p95 `27ms`, OI3 cleanup `12/0`, `failureCount=0`.
+- S223 forced-Doze: Direct `8/8` p95 `18ms`, HEV `8/8` p95 `16ms`, OI3 `8/8`
+  p95 `78ms`, OI3 cleanup `12/0`, `failureCount=0`.
+- Both OI3 runs showed owner-local finish/rearm and tail tombstoning markers
+  without `owner-stopped`, app timeout, submit reject, queue reject, or cleanup
+  failure.
+
+Therefore F072 is closed for the matched foreground and device-state HTTP
+cells. S223 still has a separate E2 budget question: OI3 forced-Doze p95 is
+`78ms` versus HEV `16ms` and Direct `18ms`. ADR-0007 allows only a small
+pre-registered absolute latency tolerance; this document does not reinterpret
+that budget after seeing the data.
 
 ## Implementation state
 
@@ -235,11 +252,12 @@ Current build pitfall:
 
 ## Next POC direction
 
-The next focused POC should rerun the S192 device-state matrix
-(screen-off and forced-Doze) with the S221 comparison APK and retained F072
-candidate. Do not return to UID drop, app HTTP logic, generic connector
-polling, or the already rejected wake patches unless the new evidence points
-there.
+The next focused POC should move from F072 debugging to the remaining E2
+budget decision: quantify whether the S223 forced-Doze p95 delta is acceptable
+under the pre-registered absolute tolerance, and gather the missing CPU/
+thermal/power/soak evidence required by ADR-0007. Do not return to UID drop,
+app HTTP logic, generic connector polling, or the already rejected wake patches
+unless new evidence points there.
 
 The lifecycle contract for the POC is now explicit: a completed response must
 not hold successor SYN admission hostage, but old tail packets must still be

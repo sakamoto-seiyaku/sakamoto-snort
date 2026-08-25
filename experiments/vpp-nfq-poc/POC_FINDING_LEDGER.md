@@ -107,7 +107,7 @@ Map rather than encoded as TODOs here.
 | VPN-F069 | E2 matched HTTP/device-state latency exceeds ADR-0007 comparative threshold | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F070 | OI3 connector poll missed protected write interest after TCP payload submit | `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F071 | OI3 multi dispatcher-to-owner handoff and post-send read wake path caused the first residual tail | `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `CLOSED_FOR_S221_FOREGROUND_MATCHED_E2` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `CLOSED_FOR_S221_S223_MATCHED_DEVICE_STATE_E2` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2465,13 +2465,24 @@ Map rather than encoded as TODOs here.
   Direct/HEV/OI3 8-request matrix with the F072 candidate retained.  It passed
   with `failureCount=0`: Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, OI3
   `8/8` p95 `24ms`, and OI3 cleanup `12/0`.  This closes the foreground
-  F072 latency shape but does not supersede the older S192 screen-off/forced-
-  Doze evidence, which must be rerun with the S221 artifact before F069 can be
-  closed as a full device-state E2 verdict.
+  F072 latency shape.
+- **S222/S223 device-state update:** S222
+  `evidence/s222-e2-matched-f072-candidate-8req-screen-off-20260826/`
+  (`runId=20260826-065949-263369`) and S223
+  `evidence/s223-e2-matched-f072-candidate-8req-forced-doze-20260826/`
+  (`runId=20260826-070229-388301`) reran the S192 device-state shape with the
+  S221 comparison APK and candidate retained.  Both passed with
+  `failureCount=0`, `stateValid=1`, and OI3 cleanup `12/0`.  Screen-off passed
+  Direct `8/8` p95 `15ms`, HEV `8/8` p95 `10ms`, and OI3 `8/8` p95 `27ms`.
+  Forced-Doze passed Direct `8/8` p95 `18ms`, HEV `8/8` p95 `16ms`, and OI3
+  `8/8` p95 `78ms`.  This removes the prior S192 seconds-level
+  device-state cliff.  F069 remains open because the S223 forced-Doze relative
+  delta and the broader CPU/thermal/power/soak budgets still require an
+  ADR-0007 decision.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
-  import must wait for a corrected screen-off/forced-Doze E2 rerun, broader E2
-  gate closure, or for an explicit architecture decision that narrows the route.
+  import must wait for a broader E2 budget closure or for an explicit
+  architecture decision that narrows the route.
 
 ### VPN-F070 -- OI3 connector poll missed protected write interest after TCP payload submit
 
@@ -2625,20 +2636,28 @@ Map rather than encoded as TODOs here.
   rearmed`, and `multi-deferred admit`; tail packets were tombstoned as
   `reason=tcp-tail`, with no owner-stopped reject, app timeout, submit reject,
   queue reject, or cleanup failure.
+- **Device-state E2 correction:** S222/S223 retained the same comparison APK
+  and reran the S192 screen-off/forced-Doze shape.  Screen-off passed Direct
+  `8/8` p95 `15ms`, HEV `8/8` p95 `10ms`, OI3 `8/8` p95 `27ms`, OI3 cleanup
+  `12/0`, `failureCount=0`.  Forced-Doze passed Direct `8/8` p95 `18ms`, HEV
+  `8/8` p95 `16ms`, OI3 `8/8` p95 `78ms`, OI3 cleanup `12/0`,
+  `failureCount=0`.  Both OI3 logs include the owner-local finish/rearm and
+  tail tombstone markers and no timeout or cleanup failure.
 - **Supported claim:** OI3 correctness, cleanup, fixture reachability, and
-  Direct/HEV controls are stable for the foreground matched baseline.  The
-  foreground E2 blocker was not a single socket option or UID/policy defect; it
+  Direct/HEV controls are stable for the matched foreground and device-state
+  HTTP baselines.  The F072 E2 blocker was not a single socket option or
+  UID/policy defect; it
   was the TCP owner lifecycle/admission seam between completed response, stale
   tail, deferred successor SYN, and first protected write drive.
-- **Non-claim:** S221 does not close screen-off, forced-Doze, long soak,
-  thermal, CPU, power, IPv6/DNS breadth, or production main-stack import.
-- **Next correction direction:** Keep the S219/S220/S221 bounded TCP generation
-  lifecycle candidate and rerun the S192 device-state matrix before declaring
-  full E2 import readiness.  Avoid reintroducing generic payload timer kicks,
-  stale-wake drains, or response-complete early rearm; all have negative
-  evidence.
-- **Status:** `CLOSED_FOR_S221_FOREGROUND_MATCHED_E2`.  F069 remains open for
-  device-state and broader E2 import gates.
+- **Non-claim:** S221--S223 do not close long soak, thermal, CPU, power,
+  IPv6/DNS breadth, production capacity, the S223 absolute/relative
+  forced-Doze latency-budget decision, or production main-stack import.
+- **Next correction direction:** Keep the S219--S223 bounded TCP generation
+  lifecycle candidate and move remaining work to F069/EG-17 budget evidence.
+  Avoid reintroducing generic payload timer kicks, stale-wake drains, or
+  response-complete early rearm; all have negative evidence.
+- **Status:** `CLOSED_FOR_S221_S223_MATCHED_DEVICE_STATE_E2`.  F069 remains
+  open for broader E2 import gates.
 
 ## Consolidation audit
 

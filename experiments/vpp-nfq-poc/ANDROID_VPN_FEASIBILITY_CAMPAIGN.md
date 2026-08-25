@@ -8,7 +8,7 @@ this campaign document records scope and evidence rather than a parallel
 backlog.
 
 Status: research contract, 2026-08-23
-Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S221 E2 write-interest, owner handoff, and TCP owner lifecycle correction)
+Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S223 E2 write-interest, owner handoff, TCP owner lifecycle, and device-state correction)
 Tracker: SAKAMOTO-131
 Scope: non-root Android VPN/TUN Runtime Profile
 
@@ -708,7 +708,7 @@ durable actual-source-port capture, TCP repeat `4`, and manifest selection of a
 repeat with a decisive positive resolver UID.  Dependent A2 cells may continue
 from this checkpoint only if they inherit those guardrails.
 
-S199--S221 refine the S193 E2 performance audit.  The diagnosis rejected the
+S199--S223 refine the S193 E2 performance audit.  The diagnosis rejected the
 TCP payload timer-kick candidate (`0/4` OI3 requests, four app
 `SocketTimeoutException`s), then validated `connector_write_pending` as the
 correct fix for the missing protected write-interest stall.  S205--S211 moved
@@ -721,11 +721,17 @@ candidate.  S221 then passed the matched foreground Direct/HEV/OI3 8-request
 comparison with `failureCount=0`: Direct p95 `59ms`, HEV p95 `11ms`, OI3 p95
 `24ms`, and OI3 cleanup `12/0`.
 
-The campaign remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because S192
-screen-off and forced-Doze used an older artifact and still need rerun with the
-S221 candidate.  Do not make a main-stack import claim until that device-state
-matrix, or an explicit narrowed architecture decision, closes the remaining
-E2 scope.
+S222/S223 reran the S192 device-state shape with the same candidate and
+comparison APK.  Screen-off passed Direct `8/8` p95 `15ms`, HEV `8/8` p95
+`10ms`, OI3 `8/8` p95 `27ms`, OI3 cleanup `12/0`.  Forced-Doze passed Direct
+`8/8` p95 `18ms`, HEV `8/8` p95 `16ms`, OI3 `8/8` p95 `78ms`, OI3 cleanup
+`12/0`.  Both manifests recorded `failureCount=0`.
+
+The campaign remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because full
+ADR-0007 closure still needs CPU/thermal/power/soak evidence and a
+pre-registered decision on the S223 forced-Doze absolute/relative latency
+delta.  Do not make a main-stack import claim until that remaining E2 scope is
+closed or an explicit narrowed architecture decision is made.
 
 ## 8. Conclusion vocabulary
 

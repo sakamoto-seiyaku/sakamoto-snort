@@ -10,22 +10,26 @@ directly into the product/main stack as the selected implementation baseline.
 
 The campaign evidence supports the owner-inline route for identity, bounded
 full-device correctness, lifecycle/resource settlement, and matched device-state
-operation on the selected Pixel 6a.  It fails the registered ADR-0007 E2
-comparative performance gate: OI3 remains materially slower than both Direct
-and HEV matched controls in the HTTP staircase/device-state slices.
+operation on the selected Pixel 6a.  S221--S223 corrected the prior
+seconds-level matched HTTP latency cliff, including screen-off and forced-Doze.
+It still does not yet prove the registered ADR-0007 E2 performance gate because
+CPU/thermal/power/soak evidence is missing and the S223 forced-Doze p95 delta
+requires a pre-registered absolute/relative tolerance decision.
 
-This is an `ADJUSTMENT_REQUIRED` result, not `SUPPORTS_BASELINE` and not an
-architecture reopening by itself.  The owner-inline invariants still hold; the
-next work is performance/cost diagnosis and correction before formal main-stack
+This remains an `ADJUSTMENT_REQUIRED` result, not `SUPPORTS_BASELINE` and not
+an architecture reopening by itself.  The owner-inline invariants still hold;
+the next work is budget evidence and tolerance closure before formal main-stack
 implementation planning.
 
-Post-audit update: S199--S221 narrowed and corrected the foreground E2 latency
-issue.  The connector write-interest defect, owner handoff/post-send read-wake
-tail, and TCP owner lifecycle/admission seam have focused corrections.  S221
-passed the matched foreground Direct/HEV/OI3 8-request comparison with OI3 p95
-`24ms`.  The audit still remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` until the
-screen-off and forced-Doze S192 device-state matrix is rerun with the S221
-artifact.
+Post-audit update: S199--S223 narrowed and corrected the main matched HTTP
+latency issue.  The connector write-interest defect, owner handoff/post-send
+read-wake tail, and TCP owner lifecycle/admission seam have focused
+corrections.  S221 passed the matched foreground Direct/HEV/OI3 8-request
+comparison with OI3 p95 `24ms`; S222 passed screen-off with OI3 p95 `27ms`;
+S223 passed forced-Doze with OI3 p95 `78ms`.  The audit still remains
+`ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because ADR-0007's full budget evidence
+also requires CPU/thermal/power/soak coverage and a pre-registered judgment on
+the S223 forced-Doze absolute/relative latency delta.
 
 ## Claim-family audit
 
@@ -35,13 +39,13 @@ artifact.
 | Application identity | S139/S190 current S156-era A2 aggregate binds A2-0 through A2-6, including distinct-App matrix, async cache/concurrency, controlled reverse, lifecycle/native join, known-UID allow/drop, replay and settlement. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Network and lifecycle | S151 closes real underlay epoch for the selected Pixel artifact; S153/S157 close real stop/fault/restart and same-session re-arm evidence; S153 full E1 residual sequence reruns normal stop/start, fault restart and Wi-Fi epoch restart with fresh traffic and zero residue. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Ownership and failure | S158/S168 close final multi-owner topology/teardown corrections; S160/S161 close D3 overload/recovery for tested envelope; S176 closes four-owner UDP route-pinning; S141 B2 closes policy/transport/infrastructure separation. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
-| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  Screen-off and forced-Doze still require rerun under the S221 artifact because S192 preserved OI3 p95 around `2.6s` on an older build. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
+| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  S222/S223 rerun the device-state shape under the corrected artifact: screen-off OI3 p95 `27ms`; forced-Doze OI3 p95 `78ms`; both with `failureCount=0` and cleanup `12/0`.  The remaining gap is full ADR-0007 budget evidence and tolerance decision, not F072 lifecycle correctness. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
 
 ## E2 performance decision
 
 ADR-0007 requires Direct median throughput at least 90% of baseline and p95/p99
 latency and CPU per byte/transaction at most 110%, subject to a small absolute
-latency tolerance registered before execution.  The current evidence does not
+latency tolerance registered before execution.  The older evidence did not
 meet that comparative latency gate:
 
 - S174 8-request matched foreground HTTP: OI3 p95 around 1.6s while Direct/HEV
@@ -55,13 +59,20 @@ meet that comparative latency gate:
 - S221 foreground matched HTTP with the F072 lifecycle candidate retained:
   Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, OI3 `8/8` p95 `24ms`,
   cleanup `12/0`, `failureCount=0`.
+- S222 screen-off matched HTTP with the same candidate retained:
+  Direct `8/8` p95 `15ms`, HEV `8/8` p95 `10ms`, OI3 `8/8` p95 `27ms`,
+  cleanup `12/0`, `failureCount=0`.
+- S223 forced-Doze matched HTTP with the same candidate retained:
+  Direct `8/8` p95 `18ms`, HEV `8/8` p95 `16ms`, OI3 `8/8` p95 `78ms`,
+  cleanup `12/0`, `failureCount=0`.
 
-The accepted S192 cells prove that this is not a device-state correctness
+The accepted S192 cells proved that this was not a device-state correctness
 failure: every arm completed `8/8`, `stateValid=1`, OI3 cleanup was `12/0` or
-`11/0`, and `failureCount=0`.  The issue is the comparative cost/latency
-envelope.
+`11/0`, and `failureCount=0`.  S222/S223 now prove the corrected artifact no
+longer has that seconds-level device-state cliff.  The remaining issue is the
+full comparative budget envelope.
 
-S199--S221 then split and corrected the foreground cost envelope:
+S199--S223 then split and corrected the main matched HTTP cost envelope:
 
 - S199 rejected a TCP payload timer-kick candidate: OI3 returned `0/4` and four
   app `SocketTimeoutException`s.
@@ -79,10 +90,12 @@ S199--S221 then split and corrected the foreground cost envelope:
 - S219/S220 introduced the owner-local finish/rearm and deferred successor-SYN
   owner-fd candidate; S221 validated it in the matched foreground 8-request
   Direct/HEV/OI3 comparison.
+- S222/S223 validated the same candidate under screen-off and forced-Doze,
+  removing the prior S192 seconds-level device-state cliff.
 
 Therefore the current result remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.
-The immediate next engineering question is whether the S221 correction also
-closes screen-off and forced-Doze E2, not main-stack import.
+The immediate next engineering question is the remaining ADR-0007 budget
+evidence and tolerance decision, not F072 debugging or main-stack import.
 
 ## Main-stack implication
 
@@ -91,10 +104,12 @@ implementation work.
 
 Allowed next work:
 
-- rerun the S192 screen-off and forced-Doze matched HTTP shape with the S221
-  comparison APK and retained F072 candidate;
+- quantify the S223 forced-Doze p95 delta against a pre-registered absolute
+  tolerance rather than changing the threshold after seeing the data;
+- gather the missing CPU/thermal/power/soak evidence for the corrected
+  artifact;
 - extend focused OI3 performance/cost diagnosis using the S172/S192 matched
-  HTTP shape and the S171 L4 runner if device-state outliers remain;
+  HTTP shape and the S171 L4 runner if budget outliers remain;
 - identify whether the latency is caused by timer policy, owner scheduling,
   app probe pacing, TUN/HEV re-arm strategy, copy/materialization cost, Android
   state effects, or fixture/measurement overhead;
