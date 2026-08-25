@@ -1,7 +1,7 @@
 # SAKAMOTO-139 A2 POC Design Revision
 
 Date: 2026-08-23  
-Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2; S187/S191 closed A2-3 current refresh; S188 closed A2-4 overlay/runtime rerun; S189/S190 remain split guardrail reruns)
+Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2; S187/S191 closed A2-3 current refresh; S188 closed A2-4 overlay/runtime rerun; S189 closed A2-5 admission rerun; S190 remains)
 Status: evidence-guided working design; A2-1 base matrix passed, dependent A2 cells continue
 Scope: Pixel multi-App UID attribution, policy, and transport-admission only
 
@@ -52,9 +52,9 @@ not carry `uidContractCellId`, controlled fixture metadata, or resolver
 final closure evidence.  S187 refreshed A2-3 on the current artifact and S191
 fixed the cleanup-control seam for that refresh. S188 then reran A2-4 and
 closed the lifecycle/native-join cell after fixing the Android VPP overlay so
-the product runtime source carries the S156 resolver correlation. S189 and
-S190 still rerun A2-5/A2-6 with the same functional claims but the stricter
-fixture/artifact/provenance gates.
+the product runtime source carries the S156 resolver correlation. S189 then
+closed A2-5 under the same guardrails. S190 still reruns A2-6 with the same
+functional claim but the stricter fixture/artifact/provenance gates.
 
 ## Facts that force the correction
 
@@ -442,7 +442,8 @@ Required fresh execution after the harness correction:
   correlation, closed by clean bundle
   `evidence/s188-a2-4-lifecycle-native-join-20260826-overlay-run1/`;
 - S189 A2-5 per-flow allow/drop admission ledger rerun with controlled fixture
-  and resolver correlation;
+  and resolver correlation, closed by
+  `evidence/s189-a2-5-admission-ledger-20260826-run1/`;
 - S190 A2-6 replay/settlement rerun with controlled fixture and resolver
   correlation;
 - the final S156-era A2 aggregate and cleanup audit.
@@ -464,8 +465,9 @@ not decisive substitutes.
 5. Run S188 A2-4 lifecycle native join. Closed after the Android overlay was
    fixed to build the S156-correlated tun plugin with the same runtime ABI as
    `libvlib.so`.
-6. Run S189 A2-5 admission ledger and S190 A2-6 replay/settlement aggregate.
-7. Perform the final requirement-by-requirement A2 audit, update the evidence
+6. Run S189 A2-5 admission ledger. Closed on clean guarded run1.
+7. Run S190 A2-6 replay/settlement aggregate.
+8. Perform the final requirement-by-requirement A2 audit, update the evidence
    artifact/journal/Finding Ledger, and only then unblock B1 in Plane.
 
 No ordinary POC correction requires a discussion stop. A contradictory

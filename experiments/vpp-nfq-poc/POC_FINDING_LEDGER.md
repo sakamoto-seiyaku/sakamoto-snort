@@ -98,7 +98,7 @@ Map rather than encoded as TODOs here.
 | VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `CLOSED_AS_POC_DESIGN_FIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `CLOSED_FOR_S156_A2_1_BASE_MATRIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F062 | S156-guarded A2-2 rerun needed explicit owner-completion delay to prove pending overlap | `CLOSED_FOR_S186_A2_2_CONCURRENCY` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F063 | Remaining A2 historical PASS bundles lack S156 guardrail provenance | `OPEN_UNTIL_S189_S190_RERUN` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F063 | Remaining A2 historical PASS bundles lack S156 guardrail provenance | `OPEN_UNTIL_S190_RERUN` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F064 | S187 A2-3 current refresh needed explicit OI3 cleanup control before product stop | `CLOSED_FOR_S191_A2_3_CLEANUP_CONTROL` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F065 | S188 A2-4 Android overlay dropped S156 resolver correlation from the product runtime | `CLOSED_FOR_S188_A2_4_OVERLAY_CORRELATION` | Android VPP runtime overlay + Pixel Android 16 |
 
@@ -2164,11 +2164,18 @@ Map rather than encoded as TODOs here.
   with no `failureReasons`, no `invalidReasons`, and no architecture
   interruption.  The S188 artifact seam correction is recorded separately as
   `VPN-F065`.
-- **Open closure condition:** S189 reruns A2-5 and S190 reruns A2-6 on the
-  current artifact with the upgraded guardrails.  A final A2 aggregate is
-  valid only after those S156-era reruns pass or produce a newly classified
-  finding.
-- **Status:** `OPEN_UNTIL_S189_S190_RERUN`.  This is an evidence-standard
+- **Further closure evidence:** S189 reran A2-5 on clean head
+  `9b7968662a3512e90a0a7b178ec75d5b79a39da6` with controlled WSL2/LAN fixture
+  metadata, `uidContractCellId=A2-5`, and the same resolver correlation
+  schema.  Bundle
+  `evidence/s189-a2-5-admission-ledger-20260826-run1/` passed the known-UID
+  allow/drop admission ledger: the allow key crossed the real downstream
+  transport/broker/socket seam, while the fresh dropped key produced zero
+  downstream transport, broker, or socket events.
+- **Open closure condition:** S190 reruns A2-6 on the current artifact with the
+  upgraded guardrails.  A final A2 aggregate is valid only after that S156-era
+  rerun passes or produces a newly classified finding.
+- **Status:** `OPEN_UNTIL_S190_RERUN`.  This is an evidence-standard
   correction, not a behavioral contradiction of the earlier UID/drop results.
   It does not require blocking FlowOwner, adding UID to the canonical flow key,
   reviving stale identity, or adding an alternate transport path.
@@ -2383,11 +2390,12 @@ Map rather than encoded as TODOs here.
   delay to the otherwise passing four-key cache/concurrency run. S188/S189/S190
   track F063: the remaining historical A2-4/A2-5/A2-6 PASS bundles must be
   rerun with the S156 guardrail provenance instead of being reused as final
-  closure. S187/S191 closes F064: A2-3's current-artifact refresh required an
-  explicit test-only OI3 cleanup stop before ordinary product stop, and now
-  passes IPv4/IPv6 on clean head. S188 closes F065: the product Android VPP
-  overlay must carry the S156 resolver correlation into the same runtime source
-  and ABI set used by the APK.
+  closure; S188 and S189 have now closed A2-4/A2-5, leaving S190. S187/S191
+  closes F064: A2-3's current-artifact refresh required an explicit test-only
+  OI3 cleanup stop before ordinary product stop, and now passes IPv4/IPv6 on
+  clean head. S188 closes F065: the product Android VPP overlay must carry the
+  S156 resolver correlation into the same runtime source and ABI set used by
+  the APK.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because

@@ -1,7 +1,7 @@
 # SAKAMOTO-139 A2 revised execution journal
 
 Date: 2026-08-23 (Asia/Taipei)  
-Updated: 2026-08-26 (S156-guarded A2-2 revalidation, S187/S191 A2-3 current refresh, S188 A2-4 overlay/runtime closure, and remaining-cell guardrail split)
+Updated: 2026-08-26 (S156-guarded A2-2 revalidation, S187/S191 A2-3 current refresh, S188 A2-4 overlay/runtime closure, S189 A2-5 admission closure, and remaining-cell guardrail split)
 Plane: SAKAMOTO-139  
 Design: [S139_A2_POC_DESIGN_REVISION.md](S139_A2_POC_DESIGN_REVISION.md)  
 Device: Pixel 6a / arm64 / serial `28201JEGR0XPAJ`  
@@ -480,6 +480,49 @@ future Android runtime/APK POCs must prove the selected tun plugin was built
 from the same product runtime source/stage as `libvlib.so`, not only that an
 APK member exists with the expected filename.
 
+## A2-5 S156-guarded allow/drop admission refresh
+
+Cell: `A2-5 known-UID allow/drop admission ledger`
+Current verdict: `PASS`
+Aggregate remains: `A2_INCOMPLETE`; `architecture_interruption=false`
+
+S189 reran the A2-5 known-UID allow/drop ledger on the S156 guardrail baseline.
+The run used the controlled WSL2/LAN fixture instead of a public resolver
+destination, recorded `uidContractCellId=A2-5`, required resolver
+`cell/stage/request` correlation, and joined local plus installed APK hashes.
+
+Clean-head bundle
+`evidence/s189-a2-5-admission-ledger-20260826-run1/` is the current S156-era
+A2-5 PASS:
+
+- `gitHead=9b7968662a3512e90a0a7b178ec75d5b79a39da6`;
+- `gitDirty=false`;
+- fixture destination `192.168.4.5:55553`;
+- `uidContractCellId=A2-5`;
+- `resolverCorrelationSchema=a2-1-resolver-cell-stage-request/v1`;
+- VpnLite APK SHA-256
+  `5aef6c5e20c02e82f4e2acdf882f8f1686fd19774040ea972507bf66b6b1be39`;
+- AppA APK SHA-256
+  `7b082e62109addc465d91e5df82e0fca47cf206158db2d6a2f929dcbca9b4809`;
+- `libtun_poc_plugin.so` SHA-256
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
+
+The allow stage used AppA UID `12630` and canonical key
+`ip4|udp|46001|192.168.4.5:55553`.  It recorded
+`POLICY_DECISION=ALLOW`, one `TRANSPORT_ADMITTED`, and joined broker request,
+broker completion, socket create, and socket settle evidence for the exact
+key.  The drop stage used a fresh key
+`ip4|udp|46002|192.168.4.5:55553`, recorded `POLICY_DECISION=DROP`, observed
+the known-UID block at `tun_poc`, and produced zero downstream transport,
+broker, or socket events.  Both stages observed durable native and contract
+cleanup before any force-stop fallback, and final residue checks found no VPP
+process or `tun0`.
+
+This closes A2-5 under the S156 guardrails.  It proves the registered
+known-UID allow/drop admission boundary only; it does not claim external
+connectivity, Internet reachability, B2 transport failure semantics, or
+production policy/catalog coverage.
+
 ## Claim boundary and next cells
 
 A2-0, A2-1, and A2-2 now prove durable session provenance, the complete
@@ -489,14 +532,16 @@ delivery with same-socket App receipt, canonical owner/UID reuse, raw TUN
 tuple integrity, no lookup/re-entry, and bounded cleanup. A2-4 now proves
 stage-correlated lifecycle invalidation/recovery, Java/native resolver joins,
 network-handle restart, generation refresh, and bounded cleanup on the current
-artifact. These cells do not prove downstream allow/drop admission.
+artifact. A2-5 now proves the known-UID allow/drop admission boundary with
+exact zero-downstream evidence for a fresh dropped key. These cells do not
+prove the A2-6 replay/settlement aggregate.
 
 At the S156-era evidence standard, S187/S191 now closes the A2-3 current
-artifact refresh and S188 closes A2-4 lifecycle native join.  The remaining
-order is S189 A2-5 allow/drop admission ledger and S190 A2-6
-replay/settlement aggregate. The historical final audit below records the
-2026-08-23 aggregate only; B1 remains a separate gate until the S156-era
-aggregate is aligned in Plane.
+artifact refresh, S188 closes A2-4 lifecycle native join, and S189 closes A2-5
+allow/drop admission.  The remaining order is S190 A2-6 replay/settlement
+aggregate. The historical final audit below records the 2026-08-23 aggregate
+only; B1 remains a separate gate until the S156-era aggregate is aligned in
+Plane.
 
 ## Historical 2026-08-23 A2 closure audit
 
@@ -570,8 +615,8 @@ passing.
 ## A2 disposition and next gate
 
 A2 was complete at the registered 2026-08-23 POC scope, but is not yet complete
-at the S156-era guardrail scope.  S188 has closed A2-4; the next action is to
-finish S189/S190, produce a new aggregate audit from those guarded bundles,
-and only then consider unblocking B1 in Plane.  The historical aggregate does
-not claim external Internet reachability, production capacity, or a long
-lifecycle.
+at the S156-era guardrail scope.  S188 has closed A2-4 and S189 has closed
+A2-5; the next action is to finish S190, produce a new aggregate audit from
+the guarded bundles, and only then consider unblocking B1 in Plane.  The
+historical aggregate does not claim external Internet reachability, production
+capacity, or a long lifecycle.
