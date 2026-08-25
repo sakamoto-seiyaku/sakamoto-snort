@@ -48,6 +48,20 @@ class VerifyS172E2HttpBaselineSampleTest(unittest.TestCase):
         self.assertIn("--es mode vpp-hev", self.runner)
         self.assertIn("--es mode vpp-oi3-multi", self.runner)
 
+    def test_runner_supports_device_state_cells(self):
+        self.assertIn('DEVICE_STATE="${DEVICE_STATE:-foreground}"', self.runner)
+        self.assertIn("capture_device_state()", self.runner)
+        self.assertIn("apply_device_state()", self.runner)
+        self.assertIn("recover_device_state()", self.runner)
+        self.assertIn("device_state_valid()", self.runner)
+        self.assertIn("state-screen-off.txt", self.runner)
+        self.assertIn("state-forced-doze.txt", self.runner)
+        self.assertIn("dumpsys deviceidle force-idle", self.runner)
+        self.assertIn("mScreenOn=false|mInteractive=false", self.runner)
+        self.assertIn("mState=IDLE|mState=IDLE_MAINTENANCE", self.runner)
+        self.assertIn("stateValid", self.runner)
+        self.assertIn('"deviceState":"$DEVICE_STATE"', self.runner)
+
     def test_runner_keeps_cell_evidence_per_run(self):
         self.assertIn('CELL_ROOT="$RESULT_DIR/cells/$RUN_ID"', self.runner)
         self.assertIn('local cell="$CELL_ROOT/$label"', self.runner)

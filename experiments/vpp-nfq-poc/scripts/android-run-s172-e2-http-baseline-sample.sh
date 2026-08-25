@@ -29,6 +29,9 @@ MAX_REQUESTS="${MAX_REQUESTS:-1}"
 REQUEST_INTERVAL_MS="${REQUEST_INTERVAL_MS:-0}"
 REPEATS="${REPEATS:-1}"
 ARMS="${ARMS:-direct hev oi3}"
+DEVICE_STATE="${DEVICE_STATE:-foreground}"
+STATE_APPLY_DELAY_SECONDS="${STATE_APPLY_DELAY_SECONDS:-1}"
+STATE_SETTLE_SECONDS="${STATE_SETTLE_SECONDS:-3}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/evidence/s172-e2-http-baseline-sample-20260825}"
 START_WAIT="${START_WAIT:-6}"
 PROBE_WAIT_EXTRA="${PROBE_WAIT_EXTRA:-5}"
@@ -203,6 +206,8 @@ stop_vpn() {
 
 cleanup() {
   if [[ "$ADB_LIB_READY" == 1 ]]; then
+    adb_cmd shell dumpsys deviceidle unforce >/dev/null 2>&1 || true
+    adb_cmd shell input keyevent 224 >/dev/null 2>&1 || true
     stop_vpn
     if has_arm hev; then
       stop_socks_server
@@ -268,6 +273,83 @@ capture_resource() {
     echo "--- deviceidle ---"
     adb_read 'dumpsys deviceidle 2>/dev/null || true'
   } >"$output"
+}
+
+capture_device_state() {
+  local label="$1" output="$2"
+  {
+    echo "state=$label"
+    echo "host_time=$(date -Ins)"
+    echo "device_time=$(adb_read 'date -Ins')"
+    echo "--- power ---"
+    adb_read 'dumpsys power 2>/dev/null || true'
+    echo "--- deviceidle ---"
+    adb_read 'dumpsys deviceidle 2>/dev/null || true'
+    echo "--- thermal ---"
+    adb_read 'dumpsys thermalservice 2>/dev/null || true'
+    echo "--- battery ---"
+    adb_read 'dumpsys battery 2>/dev/null || true'
+  } >"$output"
+}
+
+prepare_device_state() {
+  adb_cmd shell dumpsys deviceidle unforce >/dev/null 2>&1 || true
+  adb_cmd shell input keyevent 224 >/dev/null 2>&1 || true
+  sleep 1
+}
+
+apply_device_state() {
+  local cell="$1"
+  case "$DEVICE_STATE" in
+    foreground)
+      capture_device_state foreground "$cell/state-foreground.txt"
+      ;;
+    screen-off)
+      sleep "$STATE_APPLY_DELAY_SECONDS"
+      adb_cmd shell input keyevent 26 >/dev/null 2>&1 || true
+      sleep "$STATE_SETTLE_SECONDS"
+      capture_device_state screen-off "$cell/state-screen-off.txt"
+      ;;
+    forced-doze)
+      sleep "$STATE_APPLY_DELAY_SECONDS"
+      adb_cmd shell input keyevent 26 >/dev/null 2>&1 || true
+      sleep 1
+      adb_cmd shell dumpsys deviceidle force-idle >"$cell/force-idle-command.txt" 2>&1 || true
+      sleep "$STATE_SETTLE_SECONDS"
+      capture_device_state forced-doze "$cell/state-forced-doze.txt"
+      ;;
+    *)
+      echo "invalid DEVICE_STATE=$DEVICE_STATE" >&2
+      return 1
+      ;;
+  esac
+}
+
+recover_device_state() {
+  local cell="$1"
+  adb_cmd shell dumpsys deviceidle unforce >/dev/null 2>&1 || true
+  adb_cmd shell input keyevent 224 >/dev/null 2>&1 || true
+  sleep 2
+  capture_device_state wake "$cell/state-wake.txt"
+}
+
+device_state_valid() {
+  local cell="$1"
+  case "$DEVICE_STATE" in
+    foreground)
+      return 0
+      ;;
+    screen-off)
+      rg -q 'mScreenOn=false|mInteractive=false|mWakefulness=Asleep|mWakefulness=Dozing' \
+        "$cell/state-screen-off.txt"
+      ;;
+    forced-doze)
+      rg -q 'mState=IDLE|mState=IDLE_MAINTENANCE' "$cell/state-forced-doze.txt"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 metric_from_resource() {
@@ -409,6 +491,7 @@ write_validity() {
     echo "android_release=$(adb_read 'getprop ro.build.version.release')"
     echo "package=$PACKAGE package_uid=$uid"
     echo "arms=$ARMS repeats=$REPEATS durationSeconds=$DURATION_SECONDS maxRequests=$MAX_REQUESTS requestIntervalMs=$REQUEST_INTERVAL_MS"
+    echo "deviceState=$DEVICE_STATE stateApplyDelaySeconds=$STATE_APPLY_DELAY_SECONDS stateSettleSeconds=$STATE_SETTLE_SECONDS"
     echo "host=$HOST fixture_bind=$FIXTURE_BIND http_port=$HTTP_PORT"
     echo "apk_host=$APK"
     echo "apk_sha256=$(sha256sum "$APK" | awk '{print $1}')"
@@ -442,6 +525,7 @@ run_cell() {
   mkdir -p "$cell"
   echo "## cell=$label"
 
+  prepare_device_state
   stop_vpn
   adb_read "rm -f '$REMOTE_APP_HTTP_LOG' '$REMOTE_CLI_LOG' '$REMOTE_STDOUT_LOG' '$REMOTE_HEV_LOG' '$REMOTE_PROTECT_LOG'"
   baseline_rules="$(adb_read 'ip rule show')"
@@ -484,6 +568,7 @@ run_cell() {
     printf '%s\n' "$snapshot_before" >"$cell/processes-before.txt"
     capture_resource before "$snapshot_before" "$uid" "$cell/resource-before.raw"
     run_http_probe "$path"
+    apply_device_state "$cell"
     sleep "$DURATION_SECONDS"
     snapshot_steady="$(process_snapshot)"
     printf '%s\n' "$snapshot_steady" >"$cell/processes-steady.txt"
@@ -508,6 +593,7 @@ run_cell() {
     wait_oi3_cleanup "$cell/cleanup-pre-stop.log" || true
   fi
   stop_vpn
+  recover_device_state "$cell"
   snapshot_stop="$(process_snapshot)"
   printf '%s\n' "$snapshot_stop" >"$cell/processes-after-stop.txt"
   adb_read "cat '$REMOTE_STDOUT_LOG' '$REMOTE_CLI_LOG' 2>/dev/null || true" >"$cell/cleanup.log"
@@ -545,6 +631,8 @@ run_cell() {
   adb_cmd shell ip link show tun0 >/dev/null 2>&1 && tun0_after=1 || true
   rules_match=0
   [[ "$baseline_rules" == "$after_rules" ]] && rules_match=1
+  state_valid=1
+  device_state_valid "$cell" || state_valid=0
 
   valid=1
   [[ "$startup_valid" == 1 && "$probe_ok" == 1 ]] || valid=0
@@ -557,10 +645,10 @@ run_cell() {
   if [[ "$arm" == oi3 ]]; then
     [[ "$cleanup_fail" == 0 && "$cleanup_pass" -gt 0 ]] || valid=0
   fi
-  [[ -z "$residual_vpp" && "$tun0_after" == 0 && "$rules_match" == 1 ]] || valid=0
+  [[ -z "$residual_vpp" && "$tun0_after" == 0 && "$rules_match" == 1 && "$state_valid" == 1 ]] || valid=0
 
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-    "$label" "$arm" "$repeat" "$startup_valid" "${requests:-0}" "${successes:-0}" \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    "$label" "$arm" "$repeat" "$DEVICE_STATE" "$state_valid" "$startup_valid" "${requests:-0}" "${successes:-0}" \
     "${errors:-999}" "${request_bytes:-0}" "${response_bytes:-0}" "${elapsed_ms:-0}" \
     "${p50:-0}" "${p95:-0}" "${p99:-0}" "${read_timeout_after_bytes:-0}" \
     "${content_length_completions:-0}" "$socks_connect_count" \
@@ -569,13 +657,13 @@ run_cell() {
     "${app_threads:-0}" "${vpp_threads:-0}" "${hev_threads:-0}" "$cleanup_pass" \
     "$cleanup_fail" "$rules_match" "$valid" >>"$CSV"
 
-  echo "cell=$label valid=$valid startup=$startup_valid requests=${requests:-0} successes=${successes:-0} errors=${errors:-999} p50=${p50:-0} p95=${p95:-0} p99=${p99:-0} readTimeoutAfterBytes=${read_timeout_after_bytes:-0} contentLengthCompletions=${content_length_completions:-0} socksConnect=$socks_connect_count cleanup=$cleanup_pass/$cleanup_fail"
+  echo "cell=$label valid=$valid startup=$startup_valid state=$DEVICE_STATE stateValid=$state_valid requests=${requests:-0} successes=${successes:-0} errors=${errors:-999} p50=${p50:-0} p95=${p95:-0} p99=${p99:-0} readTimeoutAfterBytes=${read_timeout_after_bytes:-0} contentLengthCompletions=${content_length_completions:-0} socksConnect=$socks_connect_count cleanup=$cleanup_pass/$cleanup_fail"
   [[ "$valid" == 1 ]]
 }
 
 echo "# S172 E2 bounded matched HTTP baseline sample"
 echo "run_id=$RUN_ID"
-echo "package=$PACKAGE host=$HOST port=$HTTP_PORT arms=$ARMS repeats=$REPEATS durationSeconds=$DURATION_SECONDS maxRequests=$MAX_REQUESTS requestIntervalMs=$REQUEST_INTERVAL_MS"
+echo "package=$PACKAGE host=$HOST port=$HTTP_PORT arms=$ARMS repeats=$REPEATS durationSeconds=$DURATION_SECONDS maxRequests=$MAX_REQUESTS requestIntervalMs=$REQUEST_INTERVAL_MS deviceState=$DEVICE_STATE"
 echo "preflight=apk"
 preflight_apk
 export ADB
@@ -604,7 +692,7 @@ if has_arm hev; then
   echo "socks=ready"
 fi
 
-printf 'label,arm,repeat,startupValid,requests,successes,errors,requestBytes,responseBytes,elapsedMs,latencyMsP50,latencyMsP95,latencyMsP99,readTimeoutAfterBytes,contentLengthCompletions,socksConnectCount,appRssKb,vppRssKb,hevRssKb,appFd,vppFd,hevFd,appThreads,vppThreads,hevThreads,cleanupPass,cleanupFail,rulesMatch,valid\n' >"$CSV"
+printf 'label,arm,repeat,deviceState,stateValid,startupValid,requests,successes,errors,requestBytes,responseBytes,elapsedMs,latencyMsP50,latencyMsP95,latencyMsP99,readTimeoutAfterBytes,contentLengthCompletions,socksConnectCount,appRssKb,vppRssKb,hevRssKb,appFd,vppFd,hevFd,appThreads,vppThreads,hevThreads,cleanupPass,cleanupFail,rulesMatch,valid\n' >"$CSV"
 
 failures=0
 for repeat in $(seq 1 "$REPEATS"); do
@@ -630,6 +718,9 @@ cat >"$MANIFEST" <<EOF
   "durationSeconds":$DURATION_SECONDS,
   "maxRequests":$MAX_REQUESTS,
   "requestIntervalMs":$REQUEST_INTERVAL_MS,
+  "deviceState":"$DEVICE_STATE",
+  "stateApplyDelaySeconds":$STATE_APPLY_DELAY_SECONDS,
+  "stateSettleSeconds":$STATE_SETTLE_SECONDS,
   "cellRoot":"$CELL_ROOT",
   "apkSha256":"$(sha256sum "$APK" | awk '{print $1}')",
   "oi3PluginSha256":"$(sha256_apk_member 'lib/arm64-v8a/libhev_external_driver_poc_plugin.so')",
