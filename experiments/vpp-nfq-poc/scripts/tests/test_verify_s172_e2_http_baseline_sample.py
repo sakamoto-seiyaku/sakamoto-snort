@@ -88,6 +88,11 @@ class VerifyS172E2HttpBaselineSampleTest(unittest.TestCase):
         self.assertIn("cleanup_fail=\"$(count_matches 'oi3_cleanup result=FAIL'", self.runner)
         self.assertIn('socks_connect_count="$(count_matches "connect $HOST:$HTTP_PORT"', self.runner)
 
+    def test_runner_filters_validity_dumps_on_host_not_device_pipe(self):
+        self.assertIn("dumpsys connectivity 2>/dev/null || true", self.runner)
+        self.assertIn("NetworkAgentInfo|TRANSPORT_VPN|NOT_VPN", self.runner)
+        self.assertNotIn("dumpsys connectivity | grep", self.runner)
+
     def test_vpp_hev_start_provenance_requires_tun_poc(self):
         self.assertIn("boolean requiresTunPocPlugin = vppMode >= 1 && vppMode <= 12;",
                       self.service)

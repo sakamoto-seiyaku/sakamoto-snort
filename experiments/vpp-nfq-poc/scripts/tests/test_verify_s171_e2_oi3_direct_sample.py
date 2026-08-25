@@ -24,6 +24,11 @@ class VerifyS171E2Oi3DirectSampleTest(unittest.TestCase):
         self.assertIn('cleanupPass,cleanupFail,ownerBusy,tcpTailReject,multiRejectNonTail,valid',
                       self.runner)
 
+    def test_runner_filters_validity_dumps_on_host_not_device_pipe(self):
+        self.assertIn("dumpsys connectivity 2>/dev/null || true", self.runner)
+        self.assertIn("NetworkAgentInfo|TRANSPORT_VPN|NOT_VPN", self.runner)
+        self.assertNotIn("dumpsys connectivity | grep", self.runner)
+
     def test_runner_does_not_treat_tcp_tail_reject_as_owner_busy(self):
         self.assertIn("reason=owner-busy", self.runner)
         self.assertIn("reason=tcp-tail", self.runner)

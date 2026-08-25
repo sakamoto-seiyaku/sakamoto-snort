@@ -507,9 +507,14 @@ write_validity() {
     echo "device_tun_poc_sha256=$(adb_read "sha256sum '$native_dir/libtun_poc_plugin.so' '$native_dir/tun_poc_plugin.so' 2>/dev/null || true")"
     echo "fixture_log=$FIXTURE_LOG"
     echo "--- package state ---"
-    adb_read "dumpsys package '$PACKAGE' | grep -E 'userId=|requested permissions:|android.permission.(INTERNET|NEARBY_WIFI_DEVICES)|RESTRICT_LOCAL_NETWORK' || true"
+    adb_read "dumpsys package '$PACKAGE' 2>/dev/null || true" \
+      | rg 'userId=|requested permissions:|android.permission\.(INTERNET|NEARBY_WIFI_DEVICES)|RESTRICT_LOCAL_NETWORK' \
+      || true
     echo "--- networks ---"
-    adb_read 'dumpsys connectivity | grep -E "NetworkAgentInfo|TRANSPORT_VPN|NOT_VPN|WIFI|network\{netId" | head -n 120 || true'
+    adb_read 'dumpsys connectivity 2>/dev/null || true' \
+      | rg 'NetworkAgentInfo|TRANSPORT_VPN|NOT_VPN|WIFI|network\{netId' \
+      | head -n 120 \
+      || true
     echo "--- git ---"
     echo "git_revision=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
   } >"$VALIDITY"
