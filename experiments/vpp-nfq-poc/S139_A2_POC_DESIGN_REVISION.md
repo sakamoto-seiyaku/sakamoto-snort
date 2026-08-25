@@ -1,7 +1,7 @@
 # SAKAMOTO-139 A2 POC Design Revision
 
 Date: 2026-08-23  
-Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2; S187-S190 split remaining A2 guardrail reruns)
+Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2; S187/S191 closed A2-3 current refresh; S188-S190 remain split guardrail reruns)
 Status: evidence-guided working design; A2-1 base matrix passed, dependent A2 cells continue
 Scope: Pixel multi-App UID attribution, policy, and transport-admission only
 
@@ -49,9 +49,10 @@ A2-4, A2-5, and A2-6 PASS bundles remain useful historical functional evidence,
 but they used the old public `1.1.1.1:53` endpoint/provenance envelope and do
 not carry `uidContractCellId`, controlled fixture metadata, or resolver
 `cell/stage/request` correlation.  Under the S156-era verifier they are not
-final closure evidence.  S188, S189, and S190 rerun those cells with the same
-functional claims but the stricter fixture/artifact/provenance gates; S187
-refreshes A2-3 on the current artifact before the downstream cells rely on it.
+final closure evidence.  S187 refreshed A2-3 on the current artifact and S191
+fixed the cleanup-control seam for that refresh. S188, S189, and S190 rerun the
+remaining cells with the same functional claims but the stricter
+fixture/artifact/provenance gates.
 
 ## Facts that force the correction
 
@@ -433,7 +434,8 @@ Required fresh execution after the harness correction:
   `cell/stage/request` guardrails;
 - stage-correlated concurrent/cache/bounds, closed by S186 under the same
   guardrails;
-- S187 current-artifact A2-3 controlled Flow Stack return refresh;
+- S187/S191 current-artifact A2-3 controlled Flow Stack return refresh, closed
+  by clean IPv4/IPv6 PASS bundles with explicit OI3 cleanup control;
 - S188 A2-4 lifecycle/native join rerun with controlled fixture and resolver
   correlation;
 - S189 A2-5 per-flow allow/drop admission ledger rerun with controlled fixture
@@ -454,7 +456,8 @@ not decisive substitutes.
    interruption is observed.
 3. `VPN-F061` is repaired by S156/run5.  Checkpoint the passing A2-1 base
    matrix and run A2-2 from that baseline.
-4. Run S187 A2-3 controlled reverse on the current artifact.
+4. Run S187 A2-3 controlled reverse on the current artifact. Closed by S191
+   after adding explicit OI3 cleanup control before ordinary product stop.
 5. Run S188 A2-4 lifecycle native join.
 6. Run S189 A2-5 admission ledger and S190 A2-6 replay/settlement aggregate.
 7. Perform the final requirement-by-requirement A2 audit, update the evidence

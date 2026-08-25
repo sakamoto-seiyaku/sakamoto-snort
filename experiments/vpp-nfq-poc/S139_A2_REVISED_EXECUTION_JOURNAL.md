@@ -1,7 +1,7 @@
 # SAKAMOTO-139 A2 revised execution journal
 
 Date: 2026-08-23 (Asia/Taipei)  
-Updated: 2026-08-26 (S156-guarded A2-2 revalidation and remaining-cell guardrail split)
+Updated: 2026-08-26 (S156-guarded A2-2 revalidation, S187/S191 A2-3 current refresh, and remaining-cell guardrail split)
 Plane: SAKAMOTO-139  
 Design: [S139_A2_POC_DESIGN_REVISION.md](S139_A2_POC_DESIGN_REVISION.md)  
 Device: Pixel 6a / arm64 / serial `28201JEGR0XPAJ`  
@@ -387,6 +387,40 @@ A2-3 proves controlled Flow Stack return/TUN delivery and UID/provenance
 reuse only. It does not claim protected external Direct Egress, Internet
 reachability, or an underlay reply.
 
+### 2026-08-26 S187/S191 current-artifact A2-3 refresh
+
+S187 initially reproduced the A2-3 controlled reverse path on the current
+artifact but exposed a cleanup-control hotspot.  The first IPv4 bundle
+`evidence/s187-a2-3-controlled-return-20260826-ip4/` had PASS evidence for
+AppA same-socket return, OI3 ingress/output, raw TUN tuple/payload,
+canonical UID/package/stage join, owner-pthread identity, zero Android UID
+lookup, zero transport re-entry, and broker `1/1`; it was still `INVALID`
+because native A2-3 `event=CLEANUP` was absent before force-stop fallback.
+
+S191 classified that as a POC seam error.  Product stop via `--ez stop true`
+terminates the native child and records signal/process settlement; it does not
+drive the OI3 bounded cleanup emitter that the A2-3 verifier requires.
+Commit `c9eb3c5` adds a `MainActivity` bridge for the test-only
+`oi3Control=stop` intent and changes the runner to drive that control before
+ordinary VPN stop.
+
+Clean-head reruns close the current-artifact A2-3 refresh:
+
+| Bundle | Family / tuple | Result | Decisive evidence |
+| --- | --- | --- | --- |
+| `evidence/s187-a2-3-controlled-return-20260826-clean-ip4/` | IPv4 `10.200.0.2:45853 -> 10.200.0.1:42093` | `PASS` | Same-socket App return, OI3 ingress/output, raw TUN tuple, UID/stage join, no lookup/re-entry, broker, bounded cleanup |
+| `evidence/s187-a2-3-controlled-return-20260826-clean-ip6/` | IPv6 `fd00:200::2:45855 -> fd00:200::1:42095` | `PASS` | Same-socket App return, OI3 ingress/output, raw TUN tuple, UID/stage join, no lookup/re-entry, broker, bounded cleanup |
+
+Both bundles record `gitHead=c9eb3c587bd8d46a277e69b733db48ef263d1ab7`,
+`gitDirty=false`, VpnLite APK SHA-256
+`0a4adfe379577289ee608a22d6ebd4f5fc4dd7577b53b59943871d4147d69ccf`, AppA APK
+SHA-256 `29a4d0913cbf67fcdb33a6dd06381735fe657f16228f1088fff47917974b5a3c`,
+and OI3 plugin SHA-256
+`5012eeecb16828edca58f3dc98ddd52330a3b09b26394a3baa94b7c39604cc72`.  Their
+cleanup receipts report `cleanupObservedBeforeForceStop=true`,
+`nativeCleanupObserved=true`, `contractCleanupObserved=true`,
+`forceStopFallback=false`, and `pollAttempts=2`.
+
 ## Claim boundary and next cells
 
 A2-0, A2-1, and A2-2 now prove durable session provenance, the complete
@@ -396,11 +430,12 @@ delivery with same-socket App receipt, canonical owner/UID reuse, raw TUN
 tuple integrity, no lookup/re-entry, and bounded cleanup. These cells do not
 prove lifecycle invalidation or downstream allow/drop admission.
 
-At the S156-era evidence standard, the remaining order is S187 A2-3 current
-artifact refresh, S188 A2-4 lifecycle native join, S189 A2-5 allow/drop
-admission ledger, and S190 A2-6 replay/settlement aggregate. The historical
-final audit below records the 2026-08-23 aggregate only; B1 remains a separate
-gate until the S156-era aggregate is aligned in Plane.
+At the S156-era evidence standard, S187/S191 now closes the A2-3 current
+artifact refresh.  The remaining order is S188 A2-4 lifecycle native join,
+S189 A2-5 allow/drop admission ledger, and S190 A2-6 replay/settlement
+aggregate. The historical final audit below records the 2026-08-23 aggregate
+only; B1 remains a separate gate until the S156-era aggregate is aligned in
+Plane.
 
 ## Historical 2026-08-23 A2 closure audit
 
@@ -474,7 +509,7 @@ passing.
 ## A2 disposition and next gate
 
 A2 was complete at the registered 2026-08-23 POC scope, but is not yet complete
-at the S156-era guardrail scope.  The next action is to finish S187/S188/S189/
-S190, produce a new aggregate audit from those guarded bundles, and only then
+at the S156-era guardrail scope.  The next action is to finish S188/S189/S190,
+produce a new aggregate audit from those guarded bundles, and only then
 consider unblocking B1 in Plane.  The historical aggregate does not claim
 external Internet reachability, production capacity, or a long lifecycle.

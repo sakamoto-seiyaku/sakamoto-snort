@@ -99,6 +99,7 @@ Map rather than encoded as TODOs here.
 | VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `CLOSED_FOR_S156_A2_1_BASE_MATRIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F062 | S156-guarded A2-2 rerun needed explicit owner-completion delay to prove pending overlap | `CLOSED_FOR_S186_A2_2_CONCURRENCY` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F063 | Remaining A2 historical PASS bundles lack S156 guardrail provenance | `OPEN_UNTIL_S188_S189_S190_RERUN` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F064 | S187 A2-3 current refresh needed explicit OI3 cleanup control before product stop | `CLOSED_FOR_S191_A2_3_CLEANUP_CONTROL` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2163,6 +2164,50 @@ Map rather than encoded as TODOs here.
   It does not require blocking FlowOwner, adding UID to the canonical flow key,
   reviving stale identity, or adding an alternate transport path.
 
+### VPN-F064 -- S187 A2-3 current refresh needed explicit OI3 cleanup control before product stop
+
+- **First observation:** The first S187 current-artifact IPv4 bundle
+  `evidence/s187-a2-3-controlled-return-20260826-ip4/` functionally proved
+  the controlled reverse path but evaluated `INVALID` because native cleanup
+  was not observed before the force-stop fallback.  AppA same-socket return,
+  OI3 ingress/output, raw TUN tuple/payload, canonical UID/package/stage join,
+  owner-pthread identity, zero Android UID lookup, zero transport re-entry,
+  and broker `1/1` all passed.  Cleanup evidence was
+  `cleanupObservedBeforeForceStop=false`, `nativeCleanupObserved=false`,
+  `contractCleanupObserved=true`, `forceStopFallback=true`, and
+  `pollAttempts=26`.
+- **Root cause:** The A2-3 verifier correctly requires the native A2-3
+  `event=CLEANUP` marker.  The runner's ordinary `--ez stop true` path asked
+  the product VPN service to stop, and that path terminates the native child
+  with TERM/KILL rather than driving the OI3 bounded stop path.  Native stdout
+  therefore recorded signal/process settlement with `normal-stop-requested=0`
+  and bypassed the OI3 cleanup emitter.  `SnortVpnService` already exposed the
+  limited test-only `oi3Control` JNI control, but `MainActivity` had no
+  control-only bridge for shell-driven legacy POC intents, and the runner did
+  not send `oi3Control=stop`.
+- **Correction:** Commit `c9eb3c5` adds the `MainActivity` control-only bridge
+  and updates the A2-3 runner to send `oi3Control=stop` before the ordinary VPN
+  stop.  Static tests now require that ordering and require the bridge to copy
+  only `EXTRA_OI3_CONTROL` for this cleanup path.
+- **Closure evidence:** Clean-head S187 reruns
+  `evidence/s187-a2-3-controlled-return-20260826-clean-ip4/` and
+  `evidence/s187-a2-3-controlled-return-20260826-clean-ip6/` both pass with
+  `gitHead=c9eb3c587bd8d46a277e69b733db48ef263d1ab7`, `gitDirty=false`,
+  VpnLite APK SHA-256
+  `0a4adfe379577289ee608a22d6ebd4f5fc4dd7577b53b59943871d4147d69ccf`, AppA
+  APK SHA-256
+  `29a4d0913cbf67fcdb33a6dd06381735fe657f16228f1088fff47917974b5a3c`, and
+  OI3 plugin SHA-256
+  `5012eeecb16828edca58f3dc98ddd52330a3b09b26394a3baa94b7c39604cc72`.
+  Both cleanup receipts report `cleanupObservedBeforeForceStop=true`,
+  `nativeCleanupObserved=true`, `contractCleanupObserved=true`,
+  `forceStopFallback=false`, and `pollAttempts=2`.  Both result files retain
+  zero Android UID lookup, zero transport re-entry, same-socket App return,
+  raw TUN tuple/payload match, and broker settlement.
+- **Status:** `CLOSED_FOR_S191_A2_3_CLEANUP_CONTROL`.  This is a POC cleanup
+  control correction.  It does not weaken the A2-3 datapath claim, require UID
+  in the FlowOwner key, or add a product stop semantics claim.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2280,7 +2325,9 @@ Map rather than encoded as TODOs here.
   delay to the otherwise passing four-key cache/concurrency run. S188/S189/S190
   track F063: the remaining historical A2-4/A2-5/A2-6 PASS bundles must be
   rerun with the S156 guardrail provenance instead of being reused as final
-  closure.
+  closure. S187/S191 closes F064: A2-3's current-artifact refresh required an
+  explicit test-only OI3 cleanup stop before ordinary product stop, and now
+  passes IPv4/IPv6 on clean head.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2349,6 +2396,7 @@ Map rather than encoded as TODOs here.
 | S155 | Controlled A2-1 rerun2 resolver/correlation gap | VPN-F061 |
 | S186 | S156-guarded A2-2 pending-overlap revalidation | VPN-F062 |
 | S188/S189/S190 | Remaining A2 S156 guardrail reruns | VPN-F063 |
+| S187/S191 | A2-3 current-artifact cleanup-control rerun | VPN-F064 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
