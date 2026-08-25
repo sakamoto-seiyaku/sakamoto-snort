@@ -391,15 +391,17 @@ emit_tuple() {
   sleep "$TUPLE_WAIT"
 }
 
-# The source ports are unique across both Apps and all four family/protocol
-# combinations.  Tuple order is deterministic and strictly serial.
-emit_tuple "$APP_PACKAGE_A" ip4 tcp 45641 "$FIXTURE_HOST4" "$FIXTURE_TCP_PORT" A2-1-appa-ip4-tcp
+# UDP keeps fixed source ports.  TCP requests sourcePort=0 so Android can
+# allocate a VPN-network-local ephemeral port; the manifest below is generated
+# after capture and records the actual TCP source ports from durable runtime
+# JSONL.
+emit_tuple "$APP_PACKAGE_A" ip4 tcp 0 "$FIXTURE_HOST4" "$FIXTURE_TCP_PORT" A2-1-appa-ip4-tcp
 emit_tuple "$APP_PACKAGE_A" ip4 udp 45642 "$FIXTURE_HOST4" "$FIXTURE_UDP_PORT" A2-1-appa-ip4-udp
-emit_tuple "$APP_PACKAGE_A" ip6 tcp 45643 "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" A2-1-appa-ip6-tcp
+emit_tuple "$APP_PACKAGE_A" ip6 tcp 0 "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" A2-1-appa-ip6-tcp
 emit_tuple "$APP_PACKAGE_A" ip6 udp 45644 "$FIXTURE_HOST6" "$FIXTURE_UDP_PORT" A2-1-appa-ip6-udp
-emit_tuple "$APP_PACKAGE_B" ip4 tcp 45651 "$FIXTURE_HOST4" "$FIXTURE_TCP_PORT" A2-1-appb-ip4-tcp
+emit_tuple "$APP_PACKAGE_B" ip4 tcp 0 "$FIXTURE_HOST4" "$FIXTURE_TCP_PORT" A2-1-appb-ip4-tcp
 emit_tuple "$APP_PACKAGE_B" ip4 udp 45652 "$FIXTURE_HOST4" "$FIXTURE_UDP_PORT" A2-1-appb-ip4-udp
-emit_tuple "$APP_PACKAGE_B" ip6 tcp 45653 "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" A2-1-appb-ip6-tcp
+emit_tuple "$APP_PACKAGE_B" ip6 tcp 0 "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" A2-1-appb-ip6-tcp
 emit_tuple "$APP_PACKAGE_B" ip6 udp 45654 "$FIXTURE_HOST6" "$FIXTURE_UDP_PORT" A2-1-appb-ip6-udp
 sleep "$RESOLVER_WAIT"
 
@@ -435,6 +437,7 @@ python3 - "$RESULT_DIR/manifest.json" \
   "$MODE" "$install_ok" "$RESOLVER_CORRELATION_SCHEMA" <<'PY'
 import json
 import sys
+from pathlib import Path
 
 (
     output, vpn_package, app_a, app_b, vpn_uid, uid_a, uid_b,
@@ -449,30 +452,63 @@ def integer(value):
     except ValueError:
         return -1
 
+runtime_files = {app_a: "a2-1-runtime-appa.jsonl", app_b: "a2-1-runtime-appb.jsonl"}
+runtime_root = Path(output).parent
+
+def tcp_source_port(package, stage_id):
+    path = runtime_root / runtime_files[package]
+    fallback = 0
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return fallback
+    for raw in lines:
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if record.get("stage_id", record.get("stageId")) != stage_id:
+            continue
+        port = record.get("source_port", record.get("sourcePort"))
+        if not isinstance(port, int) or isinstance(port, bool) or port <= 0:
+            continue
+        if record.get("send_connect_outcome", record.get("result")) == "tcp_connect_failed":
+            continue
+        if record.get("bind_result", record.get("vpnBindResult")) != "bound":
+            continue
+        if record.get("tuple_attempted") is not True:
+            continue
+        return port
+    return fallback
+
 tuples = [
     {"stageId": "A2-1-appa-ip4-tcp", "package": app_a, "family": "ip4", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45641, "destinationHost": fixture_host4,
+     "protocolName": "tcp", "sourceAddress": "10.111.0.2",
+     "sourcePort": tcp_source_port(app_a, "A2-1-appa-ip4-tcp"), "requestedSourcePort": 0, "destinationHost": fixture_host4,
      "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appa-ip4-udp", "package": app_a, "family": "ip4", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45642, "destinationHost": fixture_host4,
+     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45642, "requestedSourcePort": 45642, "destinationHost": fixture_host4,
      "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": 2},
     {"stageId": "A2-1-appa-ip6-tcp", "package": app_a, "family": "ip6", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45643, "destinationHost": fixture_host6,
+     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2",
+     "sourcePort": tcp_source_port(app_a, "A2-1-appa-ip6-tcp"), "requestedSourcePort": 0, "destinationHost": fixture_host6,
      "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appa-ip6-udp", "package": app_a, "family": "ip6", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45644, "destinationHost": fixture_host6,
+     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45644, "requestedSourcePort": 45644, "destinationHost": fixture_host6,
      "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip4-tcp", "package": app_b, "family": "ip4", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45651, "destinationHost": fixture_host4,
+     "protocolName": "tcp", "sourceAddress": "10.111.0.2",
+     "sourcePort": tcp_source_port(app_b, "A2-1-appb-ip4-tcp"), "requestedSourcePort": 0, "destinationHost": fixture_host4,
      "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip4-udp", "package": app_b, "family": "ip4", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45652, "destinationHost": fixture_host4,
+     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45652, "requestedSourcePort": 45652, "destinationHost": fixture_host4,
      "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip6-tcp", "package": app_b, "family": "ip6", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45653, "destinationHost": fixture_host6,
+     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2",
+     "sourcePort": tcp_source_port(app_b, "A2-1-appb-ip6-tcp"), "requestedSourcePort": 0, "destinationHost": fixture_host6,
      "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip6-udp", "package": app_b, "family": "ip6", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45654, "destinationHost": fixture_host6,
+     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45654, "requestedSourcePort": 45654, "destinationHost": fixture_host6,
      "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": 2},
 ]
 for item in tuples:
@@ -503,7 +539,7 @@ manifest = {
     "mode": mode,
     "vppMode": 5,
     "installOk": install_ok == "true",
-    "runtimeFiles": {app_a: "a2-1-runtime-appa.jsonl", app_b: "a2-1-runtime-appb.jsonl"},
+    "runtimeFiles": runtime_files,
     "tuples": tuples,
     "requiredFiles": [
         "package-list-packages-U.txt", "apk-provenance.tsv",

@@ -920,6 +920,7 @@ public final class TrafficAdapterActivity extends Activity {
                 bindResult = "failed";
                 return ProbeResult.failure(networkHandle, bindResult,
                         localAddress(socket, network, command.family),
+                        localPort(socket),
                         destination.getHostAddress(), "vpn_bind_failed", false,
                         boundedError(error));
             }
@@ -936,12 +937,14 @@ public final class TrafficAdapterActivity extends Activity {
                 SystemClock.sleep(Math.min(command.timeoutMillis, 3000));
             }
             return ProbeResult.success(networkHandle, bindResult, local,
+                    localPort(socket),
                     destination.getHostAddress(), "udp_datagram_sent",
                     tupleAttempted, "");
         } catch (IOException | RuntimeException error) {
             String local = socket == null ? ""
                     : localAddress(socket, network, command.family);
             return ProbeResult.failure(networkHandle, bindResult, local,
+                    localPort(socket),
                     destination.getHostAddress(), "udp_datagram_failed",
                     tupleAttempted, boundedError(error));
         } finally {
@@ -970,6 +973,7 @@ public final class TrafficAdapterActivity extends Activity {
                 bindResult = "failed";
                 return ProbeResult.failure(networkHandle, bindResult,
                         localAddress(socket, network, command.family),
+                        localPort(socket),
                         destination.getHostAddress(), "vpn_bind_failed", false,
                         boundedError(error));
             }
@@ -978,18 +982,21 @@ public final class TrafficAdapterActivity extends Activity {
                     command.destinationPort), command.timeoutMillis);
             String local = localAddress(socket, network, command.family);
             return ProbeResult.success(networkHandle, bindResult, local,
+                    localPort(socket),
                     destination.getHostAddress(), "tcp_connect_succeeded",
                     tupleAttempted, "");
         } catch (SocketTimeoutException error) {
             String local = socket == null ? ""
                     : localAddress(socket, network, command.family);
             return ProbeResult.failure(networkHandle, bindResult, local,
+                    localPort(socket),
                     destination.getHostAddress(), "tcp_connect_timeout",
                     tupleAttempted, boundedError(error));
         } catch (IOException | RuntimeException error) {
             String local = socket == null ? ""
                     : localAddress(socket, network, command.family);
             return ProbeResult.failure(networkHandle, bindResult, local,
+                    localPort(socket),
                     destination.getHostAddress(), "tcp_connect_failed",
                     tupleAttempted, boundedError(error));
         } finally {
@@ -1080,6 +1087,16 @@ public final class TrafficAdapterActivity extends Activity {
         return address == null ? "" : address.getHostAddress();
     }
 
+    private int localPort(Object socket) {
+        if (socket instanceof Socket) {
+            return ((Socket) socket).getLocalPort();
+        }
+        if (socket instanceof DatagramSocket) {
+            return ((DatagramSocket) socket).getLocalPort();
+        }
+        return -1;
+    }
+
     private boolean usableAddress(InetAddress address, String family) {
         if (address == null || address.isAnyLocalAddress()
                 || address.isLoopbackAddress()) {
@@ -1102,6 +1119,8 @@ public final class TrafficAdapterActivity extends Activity {
                                        int repeatIndex, int repeatCount,
                                        String packageName, int uid,
                                        boolean socketReused) {
+        int effectiveSourcePort = result.localPort > 0
+                ? result.localPort : command.sourcePort;
         SafeJson record = new SafeJson();
         record.putSafe("schema", SCHEMA);
         record.putSafe("cell_id", "A2-1");
@@ -1119,13 +1138,15 @@ public final class TrafficAdapterActivity extends Activity {
         record.putSafe("family", command.family);
         record.putSafe("protocol", command.protocol);
         record.putSafe("source_address", result.localAddress);
-        record.putSafe("source_port", command.sourcePort);
+        record.putSafe("source_port", effectiveSourcePort);
+        record.putSafe("requested_source_port", command.sourcePort);
         record.putSafe("destination_address", result.destinationAddress);
         record.putSafe("destination_host", command.destinationHost);
         record.putSafe("destination_port", command.destinationPort);
         record.putSafe("bind_result", result.bindResult);
         record.putSafe("vpn_network_handle", result.networkHandle);
         record.putSafe("actual_local_address", result.localAddress);
+        record.putSafe("actual_local_port", result.localPort);
         record.putSafe("send_connect_outcome", result.outcome);
         record.putSafe("tuple_attempted", result.tupleAttempted);
         record.putSafe("error", result.error);
@@ -1133,16 +1154,16 @@ public final class TrafficAdapterActivity extends Activity {
         record.putSafe("repeat_count", repeatCount);
         record.putSafe("socket_reused_for_repeat", socketReused);
         record.putSafe("flow_id", command.stageId + "|" + command.family
-                + "|" + command.protocol + "|" + command.sourcePort);
+                + "|" + command.protocol + "|" + effectiveSourcePort);
         record.putSafe("token", command.stageId + "-" + sequence);
         record.putSafe("canonical_key", command.family + "|"
-                + command.protocol + "|" + command.sourcePort + "|"
+                + command.protocol + "|" + effectiveSourcePort + "|"
                 + formatEndpoint(result.destinationAddress, command.family)
                 + ":" + command.destinationPort);
 
         SafeJson source = new SafeJson();
         source.putSafe("address", result.localAddress);
-        source.putSafe("port", command.sourcePort);
+        source.putSafe("port", effectiveSourcePort);
         SafeJson destination = new SafeJson();
         destination.putSafe("address", result.destinationAddress);
         destination.putSafe("port", command.destinationPort);
@@ -1155,7 +1176,8 @@ public final class TrafficAdapterActivity extends Activity {
         record.putSafe("stageId", command.stageId);
         record.putSafe("monotonicNs", monotonicNs);
         record.putSafe("appPackage", packageName);
-        record.putSafe("sourcePort", command.sourcePort);
+        record.putSafe("sourcePort", effectiveSourcePort);
+        record.putSafe("requestedSourcePort", command.sourcePort);
         record.putSafe("destinationHost", command.destinationHost);
         record.putSafe("destinationPort", command.destinationPort);
         record.putSafe("vpnBindResult", result.bindResult);
@@ -1278,8 +1300,10 @@ public final class TrafficAdapterActivity extends Activity {
                 error = "family must be ip4 or ip6";
             } else if (protocol == null) {
                 error = "protocol must be tcp or udp";
-            } else if (!validPort(sourcePort) || !validPort(destinationPort)) {
-                error = "source and destination ports must be 1..65535";
+            } else if (!validSourcePort(protocol, sourcePort)
+                    || !validPort(destinationPort)) {
+                error = "source port must be 1..65535, or 0 for TCP ephemeral; "
+                        + "destination port must be 1..65535";
             } else if (repeat < 1 || repeat > MAX_REPEAT) {
                 error = "repeat must be 1.." + MAX_REPEAT;
             }
@@ -1301,6 +1325,13 @@ public final class TrafficAdapterActivity extends Activity {
 
         private static boolean validPort(int port) {
             return port >= 1 && port <= 65535;
+        }
+
+        private static boolean validSourcePort(String protocol, int port) {
+            if ("tcp".equals(protocol) && port == 0) {
+                return true;
+            }
+            return validPort(port);
         }
 
         private static String normalizeFamily(String value) {
@@ -1727,18 +1758,20 @@ public final class TrafficAdapterActivity extends Activity {
         final String bindResult;
         final long networkHandle;
         final String localAddress;
+        final int localPort;
         final String destinationAddress;
         final String outcome;
         final boolean tupleAttempted;
         final String error;
 
         private ProbeResult(String bindResult, long networkHandle,
-                            String localAddress, String destinationAddress,
-                            String outcome, boolean tupleAttempted,
-                            String error) {
+                            String localAddress, int localPort,
+                            String destinationAddress, String outcome,
+                            boolean tupleAttempted, String error) {
             this.bindResult = bindResult;
             this.networkHandle = networkHandle;
             this.localAddress = localAddress == null ? "" : localAddress;
+            this.localPort = localPort;
             this.destinationAddress = destinationAddress == null
                     ? "" : destinationAddress;
             this.outcome = outcome;
@@ -1749,30 +1782,46 @@ public final class TrafficAdapterActivity extends Activity {
         static ProbeResult success(long handle, String bindResult, String local,
                                    String destination, String outcome,
                                    boolean attempted, String error) {
-            return new ProbeResult(bindResult, handle, local, destination,
+            return success(handle, bindResult, local, -1, destination,
                     outcome, attempted, error);
+        }
+
+        static ProbeResult success(long handle, String bindResult, String local,
+                                   int localPort, String destination,
+                                   String outcome, boolean attempted,
+                                   String error) {
+            return new ProbeResult(bindResult, handle, local, localPort,
+                    destination, outcome, attempted, error);
         }
 
         static ProbeResult failure(long handle, String bindResult, String local,
                                    String destination, String outcome,
                                    boolean attempted, String error) {
-            return new ProbeResult(bindResult, handle, local, destination,
+            return failure(handle, bindResult, local, -1, destination,
                     outcome, attempted, error);
         }
 
+        static ProbeResult failure(long handle, String bindResult, String local,
+                                   int localPort, String destination,
+                                   String outcome, boolean attempted,
+                                   String error) {
+            return new ProbeResult(bindResult, handle, local, localPort,
+                    destination, outcome, attempted, error);
+        }
+
         static ProbeResult unavailable(String destination, String error) {
-            return new ProbeResult("unavailable", -1L, "", destination,
+            return new ProbeResult("unavailable", -1L, "", -1, destination,
                     "vpn_unavailable", false, error);
         }
 
         static ProbeResult notAttempted(long handle, String destination,
                                         String outcome, String error) {
-            return new ProbeResult("not_attempted", handle, "", destination,
+            return new ProbeResult("not_attempted", handle, "", -1, destination,
                     outcome, false, error);
         }
 
         static ProbeResult invalid(String error, String destination) {
-            return new ProbeResult("not_attempted", -1L, "", destination,
+            return new ProbeResult("not_attempted", -1L, "", -1, destination,
                     "invalid_command", false, error);
         }
     }
