@@ -131,8 +131,16 @@ def verify_cleanup(text: str) -> Tuple[bool, str]:
 
 
 def resolver_lines(text: str, host: str, source_port: int, port: int,
-                   uid: int, protocol: int, family: str) -> Tuple[bool, bool]:
-    """Return (matching UID line, wrong UID line) for the exact tuple."""
+                   uid: int, protocol: int, family: str,
+                   expected_cell: Optional[str] = None,
+                   expected_stage: Optional[str] = None) -> Tuple[bool, bool]:
+    """Return (matching UID line, wrong UID line) for the exact tuple.
+
+    A2-1 resolver evidence is only authoritative when the producer carries the
+    registered cell and stage.  Keep the optional arguments for the older
+    A2-0 readers, but callers verifying A2-1 must provide both so a tuple-only
+    row from ``startup`` or another cell cannot satisfy the join.
+    """
     escaped_host = re.escape(host)
     host_pattern = escaped_host
     if family == "ip6":
@@ -140,7 +148,9 @@ def resolver_lines(text: str, host: str, source_port: int, port: int,
     pattern = re.compile(
         r"resolver\s+query=\d+\s+proto=" + str(protocol)
         + r"\s+.*:" + str(source_port) + r"\s+->\s+"
-        + host_pattern + r":" + str(port) + r"\s+uid=(-?\d+)"
+        + host_pattern + r":" + str(port)
+        + r"\s+uid=(-?\d+)"
+        + r"(?:\s+cell=(\S+)\s+stage=(\S+))?"
     )
     matching = False
     wrong = False
@@ -148,6 +158,12 @@ def resolver_lines(text: str, host: str, source_port: int, port: int,
         match = pattern.search(line)
         if not match:
             continue
+        if expected_cell is not None or expected_stage is not None:
+            observed_cell = match.group(2)
+            observed_stage = match.group(3)
+            if (expected_cell is None or observed_cell != expected_cell
+                    or expected_stage is None or observed_stage != expected_stage):
+                continue
         if int(match.group(1)) == uid:
             matching = True
         elif int(match.group(1)) >= 0:
@@ -156,9 +172,13 @@ def resolver_lines(text: str, host: str, source_port: int, port: int,
 
 
 def resolver_verdict(text: str, host: str, source_port: int, port: int,
-                     uid: int, protocol: int, family: str) -> str:
+                     uid: int, protocol: int, family: str,
+                     expected_cell: Optional[str] = None,
+                     expected_stage: Optional[str] = None) -> str:
     """Classify exact resolver evidence without treating the -1 miss as wrong UID."""
-    matching, wrong = resolver_lines(text, host, source_port, port, uid, protocol, family)
+    matching, wrong = resolver_lines(
+        text, host, source_port, port, uid, protocol, family,
+        expected_cell, expected_stage)
     if wrong:
         return FAIL
     if matching:
@@ -293,9 +313,53 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
     for field in ("vpnPackage", "expectedVpnUid", "expectedVpnApkSha256",
                   "expectedTunPocPluginSha256", "allowedPackages",
                   "expectedAllowedUids", "expectedAppApkSha256", "runtimeFiles",
-                  "mode", "vppMode", "tuples"):
+                  "mode", "vppMode", "uidContractCellId", "fixture", "tuples"):
         if field not in manifest:
             invalid.append("manifest field missing: " + field)
+    uid_contract_cell = manifest.get("uidContractCellId")
+    if uid_contract_cell != "A2-1":
+        invalid.append("uidContractCellId is not A2-1")
+
+    fixture = manifest.get("fixture")
+    fixture_errors: List[str] = []
+    if not isinstance(fixture, dict):
+        fixture_errors.append("fixture is not an object")
+        fixture = {}
+    if fixture.get("schema") != "s152-a2-1-fixture/v1":
+        fixture_errors.append("fixture schema")
+    host4 = fixture.get("host4")
+    host6 = fixture.get("host6")
+    if not isinstance(host4, str) or not host4:
+        fixture_errors.append("fixture host4")
+    if not isinstance(host6, str) or not host6:
+        fixture_errors.append("fixture host6")
+    for value, version, name in ((host4, 4, "host4"), (host6, 6, "host6")):
+        if isinstance(value, str) and value:
+            try:
+                if ipaddress.ip_address(value.split("%", 1)[0]).version != version:
+                    fixture_errors.append("fixture " + name + " family")
+            except ValueError:
+                fixture_errors.append("fixture " + name + " address")
+    if isinstance(host4, str) and host4 in ("1.1.1.1", "2606:4700:4700::1111"):
+        fixture_errors.append("public IPv4 resolver endpoint")
+    if isinstance(host6, str) and host6 in ("1.1.1.1", "2606:4700:4700::1111"):
+        fixture_errors.append("public IPv6 resolver endpoint")
+    for key in ("tcpPort", "udpPort"):
+        value = fixture.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or not 1024 <= value <= 65535:
+            fixture_errors.append("fixture " + key)
+    fixture_hash = fixture.get("scriptSha256")
+    if not isinstance(fixture_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", fixture_hash):
+        fixture_errors.append("fixture scriptSha256")
+    if fixture.get("publicInternetClaim") is not False:
+        fixture_errors.append("fixture publicInternetClaim must be false")
+    if fixture_errors:
+        invalid.append("controlled A2-1 fixture registration is invalid")
+        append_check(checks, "controlled-fixture-registration", INVALID,
+                     "; ".join(fixture_errors))
+    else:
+        append_check(checks, "controlled-fixture-registration", PASS,
+                     "registered WSL2/LAN IPv4+IPv6 TCP/UDP fixture; public Internet is not claimed")
     if manifest.get("installOk") is not True:
         invalid.append("traffic APK installation did not complete")
 
@@ -346,6 +410,8 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
     tuple_fields = ("stageId", "package", "family", "protocol", "protocolName",
                     "sourceAddress", "sourcePort", "destinationAddress",
                     "destinationPort")
+    if require_full_matrix:
+        tuple_fields += ("uidContractStage",)
     tuples = manifest.get("tuples")
     matrix_errors: List[str] = []
     expected_tuple_count = 8 if require_full_matrix else 4
@@ -369,6 +435,8 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
         if (protocol, protocol_name) not in ((6, "tcp"), (17, "udp")):
             matrix_errors.append("tuple protocol number/name mismatch")
         stage_id = item.get("stageId")
+        if require_full_matrix and item.get("uidContractStage") != stage_id:
+            matrix_errors.append("uidContractStage must equal stageId")
         source_port = item.get("sourcePort")
         destination_port = item.get("destinationPort")
         if not isinstance(stage_id, str) or not stage_id or stage_id in stage_ids:
@@ -484,6 +552,8 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
     expected_source_hashes = {
         "vpnApkSha256": vpn_hash,
         "tunPocPluginSha256": plugin_hash,
+        "fixtureScriptSha256": fixture.get("scriptSha256")
+        if isinstance(fixture, dict) else None,
     }
     if len(allowed) == 2:
         expected_source_hashes["appAApkSha256"] = app_hashes.get(allowed[0])
@@ -497,6 +567,40 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
     else:
         append_check(checks, "source-provenance", PASS,
                      "clean Git checkpoint and all three APK/plugin hashes retained")
+
+    readiness = parse_properties(
+        read_text(evidence / "fixture-readiness.properties") or "")
+    readiness_errors: List[str] = []
+    if readiness.get("schema") != "s152-a2-1-fixture-readiness/v1":
+        readiness_errors.append("schema")
+    if readiness.get("publicInternetClaim") != "false":
+        readiness_errors.append("publicInternetClaim")
+    if isinstance(fixture, dict):
+        if readiness.get("fixtureHost4") != str(fixture.get("host4")):
+            readiness_errors.append("fixtureHost4")
+        if readiness.get("fixtureHost6") != str(fixture.get("host6")):
+            readiness_errors.append("fixtureHost6")
+        if readiness.get("tcpPort") != str(fixture.get("tcpPort")):
+            readiness_errors.append("tcpPort")
+        if readiness.get("udpPort") != str(fixture.get("udpPort")):
+            readiness_errors.append("udpPort")
+    if readiness.get("readyEvents") != "4":
+        readiness_errors.append("readyEvents")
+    fixture_log = read_text(evidence / "s152-a2-1-fixture.jsonl")
+    if fixture_log is None:
+        readiness_errors.append("fixture log unreadable")
+    else:
+        if fixture_log.count('"event": "ready"') != 4:
+            readiness_errors.append("fixture ready log count")
+        if '"event": "fixture_ready"' not in fixture_log:
+            readiness_errors.append("fixture_ready marker")
+    if readiness_errors:
+        invalid.append("controlled fixture readiness proof is invalid")
+        append_check(checks, "controlled-fixture-readiness", INVALID,
+                     "; ".join(readiness_errors))
+    else:
+        append_check(checks, "controlled-fixture-readiness", PASS,
+                     "four independent fixture binds (IPv4/IPv6 x TCP/UDP) are retained")
 
     receipt, receipt_error = read_json_object(evidence / "vpn-session-provenance.json")
     receipt_errors: List[str] = []
@@ -623,6 +727,15 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
         append_check(checks, "allowed-uid-scope-contract", PASS,
                      "durable two-App UID scope=" + str(sorted(scope)))
 
+    append_check(
+        checks,
+        "uid-contract-stage-registration",
+        PASS if uid_contract_cell == "A2-1" else INVALID,
+        "registered UID contract cell=A2-1; tuple joins require exact cell/stage"
+        if uid_contract_cell == "A2-1"
+        else "manifest must register uidContractCellId=A2-1",
+    )
+
     runtime_by_package: Dict[str, List[Dict[str, Any]]] = {}
     for name in allowed:
         filename = runtime_files.get(name)
@@ -699,20 +812,41 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
                 and isinstance(source_port, int) and isinstance(host, str) \
                 and isinstance(port, int) and isinstance(family, str):
             resolver_status = resolver_verdict(
-                resolver_text, host, source_port, port, expected_uid, protocol, family)
+                resolver_text, host, source_port, port, expected_uid, protocol, family,
+                str(uid_contract_cell) if isinstance(uid_contract_cell, str) else None,
+                stage_id)
+
+        contract_status = PASS
+        if require_full_matrix:
+            contract_key = canonical_tuple_key(item)
+            contract_stage_records = [
+                record for record in contract_records
+                if record.get("key") == contract_key
+                and record.get("cell_id") == uid_contract_cell
+                and record.get("stage_id") == stage_id
+                and record.get("outcome") in (
+                    "MISS_SUBMITTED", "MISS_COALESCED", "COMPLETION_ACCEPTED",
+                    "CACHE_HIT",
+                )
+            ]
+            contract_status = PASS if contract_stage_records else INCONCLUSIVE
+            if contract_status != PASS:
+                inconclusive.append(stage_id + " lacks an exact UID contract cell/stage join")
 
         tuple_status = PASS
         if runtime_status == FAIL or resolver_status == FAIL:
             tuple_status = FAIL
             failures.append(stage_id + " has a wrong App UID")
-        elif runtime_status != PASS or resolver_status != PASS:
+        elif runtime_status != PASS or resolver_status != PASS or contract_status != PASS:
             tuple_status = INCONCLUSIVE
             inconclusive.append(stage_id + " lacks a decisive runtime/resolver join")
         else:
             tuple_passes += 1
         append_check(checks, "tuple-" + stage_id, tuple_status,
                      "runtime=" + runtime_status + " (" + runtime_detail
-                     + "); resolver=" + resolver_status + "; connect/reply not required")
+                     + "); resolver=" + resolver_status
+                     + "; uid-contract=" + contract_status
+                     + "; connect/reply not required")
 
     if len(runtime_handles) > 1:
         failures.append("runtime records refer to more than one VPN network handle")

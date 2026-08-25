@@ -28,6 +28,17 @@ START_WAIT="${START_WAIT:-6}"
 TUPLE_WAIT="${TUPLE_WAIT:-4}"
 RESOLVER_WAIT="${RESOLVER_WAIT:-5}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-1-two-app-matrix}"
+FIXTURE_SCRIPT="${FIXTURE_SCRIPT:-$SCRIPT_DIR/s152-a2-1-fixture.py}"
+FIXTURE_LOG="${FIXTURE_LOG:-$RESULT_DIR/s152-a2-1-fixture.jsonl}"
+FIXTURE_STDOUT="${FIXTURE_STDOUT:-$RESULT_DIR/s152-a2-1-fixture.stdout.log}"
+FIXTURE_HOST4="${FIXTURE_HOST4:-${FIXTURE_HOST:-}}"
+FIXTURE_HOST6="${FIXTURE_HOST6:-}"
+FIXTURE_BIND_HOST4="${FIXTURE_BIND_HOST4:-}"
+FIXTURE_BIND_HOST6="${FIXTURE_BIND_HOST6:-}"
+FIXTURE_TCP_PORT="${FIXTURE_TCP_PORT:-55443}"
+FIXTURE_UDP_PORT="${FIXTURE_UDP_PORT:-55553}"
+FIXTURE_READY_WAIT="${FIXTURE_READY_WAIT:-20}"
+UID_CONTRACT_CELL="A2-1"
 
 VPP_ROOT="/data/user/0/$VPN_PACKAGE/files/vpp"
 VPP_CLI_PATH="$VPP_ROOT/logs/vpp-cli.log"
@@ -45,6 +56,85 @@ RUNTIME_B_PATH="/data/user/0/$APP_PACKAGE_B/files/debug/a2-1-runtime.jsonl"
 mkdir -p "$RESULT_DIR"
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 exec > >(tee "$RESULT_DIR/cell.log") 2>&1
+
+fixture_pid=""
+
+discover_fixture_host4() {
+  if [[ -n "$FIXTURE_HOST4" ]]; then
+    printf '%s\n' "$FIXTURE_HOST4"
+    return 0
+  fi
+  ip -4 route get 192.0.2.1 2>/dev/null \
+    | sed -n 's/.* src \([0-9.][0-9.]*\).*/\1/p' | head -n 1
+}
+
+discover_fixture_host6() {
+  if [[ -n "$FIXTURE_HOST6" ]]; then
+    printf '%s\n' "$FIXTURE_HOST6"
+    return 0
+  fi
+  ip -6 route get 2001:db8::1 2>/dev/null \
+    | sed -n 's/.* src \([^ ]*\).*/\1/p' | head -n 1
+}
+
+start_fixture() {
+  FIXTURE_HOST4="$(discover_fixture_host4)"
+  FIXTURE_HOST6="$(discover_fixture_host6)"
+  [[ -n "$FIXTURE_HOST4" && -n "$FIXTURE_HOST6" ]] || {
+    echo "controlled A2-1 fixture requires both IPv4 and IPv6 host addresses" >&2
+    return 2
+  }
+  FIXTURE_BIND_HOST4="${FIXTURE_BIND_HOST4:-$FIXTURE_HOST4}"
+  FIXTURE_BIND_HOST6="${FIXTURE_BIND_HOST6:-$FIXTURE_HOST6}"
+  case "$FIXTURE_HOST4,$FIXTURE_HOST6" in
+    *1.1.1.1*|*2606:4700:4700::*)
+      echo "public resolver addresses are forbidden as the A2-1 fixture oracle" >&2
+      return 2
+      ;;
+  esac
+  [[ "$FIXTURE_TCP_PORT" =~ ^[1-9][0-9]{2,4}$ ]] || {
+    echo "FIXTURE_TCP_PORT must be a valid non-privileged port" >&2
+    return 2
+  }
+  [[ "$FIXTURE_UDP_PORT" =~ ^[1-9][0-9]{2,4}$ ]] || {
+    echo "FIXTURE_UDP_PORT must be a valid non-privileged port" >&2
+    return 2
+  }
+  [[ -f "$FIXTURE_SCRIPT" ]] || {
+    echo "missing controlled A2-1 fixture script: $FIXTURE_SCRIPT" >&2
+    return 2
+  }
+  : >"$FIXTURE_LOG"
+  python3 "$FIXTURE_SCRIPT" \
+    --bind4 "$FIXTURE_BIND_HOST4" --bind6 "$FIXTURE_BIND_HOST6" \
+    --tcp-port "$FIXTURE_TCP_PORT" --udp-port "$FIXTURE_UDP_PORT" \
+    --log "$FIXTURE_LOG" >"$FIXTURE_STDOUT" 2>&1 &
+  fixture_pid=$!
+  local ready=0
+  for _ in $(seq 1 "$FIXTURE_READY_WAIT"); do
+    if ! kill -0 "$fixture_pid" 2>/dev/null; then
+      echo "controlled A2-1 fixture exited before readiness" >&2
+      return 1
+    fi
+    ready="$(grep -c '"event": "ready"' "$FIXTURE_LOG" 2>/dev/null || true)"
+    if [[ "$ready" == 4 ]] && grep -q '"event": "fixture_ready"' "$FIXTURE_LOG"; then
+      printf '%s\n' \
+        "schema=s152-a2-1-fixture-readiness/v1" \
+        "publicInternetClaim=false" \
+        "fixtureHost4=$FIXTURE_HOST4" \
+        "fixtureHost6=$FIXTURE_HOST6" \
+        "fixtureBindHost4=$FIXTURE_BIND_HOST4" \
+        "fixtureBindHost6=$FIXTURE_BIND_HOST6" \
+        "tcpPort=$FIXTURE_TCP_PORT" \
+        "udpPort=$FIXTURE_UDP_PORT" \
+        "readyEvents=$ready" >"$RESULT_DIR/fixture-readiness.properties"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "controlled A2-1 fixture did not publish four ready events" >&2
+  return 1
+}
 
 capture_remote() {
   local name="$1"
@@ -90,9 +180,15 @@ cleanup() {
     adb_cmd shell dumpsys connectivity 2>/dev/null | tr -d '\r' \
       | grep -E "Vpn|tun0|$VPN_PACKAGE" || true
   } >"$RESULT_DIR/cleanup.txt"
+  if [[ -n "$fixture_pid" ]]; then
+    kill "$fixture_pid" >/dev/null 2>&1 || true
+    wait "$fixture_pid" >/dev/null 2>&1 || true
+  fi
   set -e
 }
 trap cleanup EXIT
+
+start_fixture
 
 echo "# SAKAMOTO-139 A2-1 two-App dual-stack matrix"
 echo "adb_serial=$(adb_target_desc)"
@@ -100,7 +196,9 @@ echo "vpn_package=$VPN_PACKAGE"
 echo "app_a=$APP_PACKAGE_A app_b=$APP_PACKAGE_B"
 echo "activity=$TRAFFIC_ACTIVITY"
 echo "mode=$MODE block_owner_uid=$BLOCK_OWNER_UID"
-echo "external-connect/reply=NON-CLAIM; logcat=DIAGNOSTIC-ONLY"
+echo "fixture_host4=$FIXTURE_HOST4 fixture_host6=$FIXTURE_HOST6"
+echo "fixture_tcp_port=$FIXTURE_TCP_PORT fixture_udp_port=$FIXTURE_UDP_PORT"
+echo "public-internet=NON-CLAIM; external-connect/reply=NON-CLAIM; logcat=DIAGNOSTIC-ONLY"
 
 for apk in "$LOCAL_VPN_APK" "$LOCAL_APP_A_APK" "$LOCAL_APP_B_APK"; do
   [[ -f "$apk" ]] || {
@@ -112,6 +210,7 @@ done
 local_vpn_apk_sha256="$(sha256sum "$LOCAL_VPN_APK" | awk '{print $1}')"
 local_app_a_apk_sha256="$(sha256sum "$LOCAL_APP_A_APK" | awk '{print $1}')"
 local_app_b_apk_sha256="$(sha256sum "$LOCAL_APP_B_APK" | awk '{print $1}')"
+fixture_script_sha256="$(sha256sum "$FIXTURE_SCRIPT" | awk '{print $1}')"
 expected_tun_plugin_sha256="$(unzip -p "$LOCAL_VPN_APK" \
   assets/vpp-tun-poc-plugin.sha256 2>/dev/null | tr -d '\r\n')"
 [[ "$expected_tun_plugin_sha256" =~ ^[0-9a-f]{64}$ ]] || {
@@ -175,6 +274,11 @@ device_epoch="$(adb_cmd shell date +%s 2>/dev/null | tr -d '\r\n')"
   echo "appAApkSha256=$local_app_a_apk_sha256"
   echo "appBApkSha256=$local_app_b_apk_sha256"
   echo "tunPocPluginSha256=$expected_tun_plugin_sha256"
+  echo "fixtureScriptSha256=$fixture_script_sha256"
+  echo "fixtureHost4=$FIXTURE_HOST4"
+  echo "fixtureHost6=$FIXTURE_HOST6"
+  echo "fixtureTcpPort=$FIXTURE_TCP_PORT"
+  echo "fixtureUdpPort=$FIXTURE_UDP_PORT"
   echo "runner=$SCRIPT_DIR/$(basename "$0")"
 } >"$RESULT_DIR/source-provenance.properties"
 capture_apk_provenance
@@ -192,9 +296,27 @@ adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" \
   --es mode "$MODE" \
   --es allowedPackage "$APP_PACKAGE_A,$APP_PACKAGE_B" \
   --ei blockOwnerUid "$BLOCK_OWNER_UID" \
+  --es uidContractStage "A2-1-session" \
   --ez ownerCache true \
   --ez enableIpv6 true
 sleep "$START_WAIT"
+
+arm_uid_stage() {
+  local stage_id="$1"
+  adb_cmd shell am start -W -n "$VPN_PACKAGE/.MainActivity" \
+    --es uidContractStage "$stage_id" >/dev/null
+  for _ in $(seq 1 20); do
+    if adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" | tr -d '\r' \
+      | grep -q '"outcome":"STAGE_BEGIN"' \
+      && adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" | tr -d '\r' \
+      | grep -q "\"cell_id\":\"$UID_CONTRACT_CELL\".*\"stage_id\":\"$stage_id\""; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "UID contract stage did not arm: cell=$UID_CONTRACT_CELL stage=$stage_id" >&2
+  return 1
+}
 
 emit_tuple() {
   local package_name="$1"
@@ -206,6 +328,7 @@ emit_tuple() {
   local stage_id="$7"
   local activity="$package_name/$TRAFFIC_ACTIVITY"
   echo "## emit package=$package_name stage=$stage_id $family/$protocol $source_port -> $destination_host:$destination_port"
+  arm_uid_stage "$stage_id"
   adb_cmd shell am start -a com.sakamoto.snort.a2traffic.EMIT \
     -n "$activity" \
     --es a2MatrixStageId "$stage_id" \
@@ -221,14 +344,14 @@ emit_tuple() {
 
 # The source ports are unique across both Apps and all four family/protocol
 # combinations.  Tuple order is deterministic and strictly serial.
-emit_tuple "$APP_PACKAGE_A" ip4 tcp 45641 1.1.1.1 443 A2-1-appa-ip4-tcp
-emit_tuple "$APP_PACKAGE_A" ip4 udp 45642 1.1.1.1 53 A2-1-appa-ip4-udp
-emit_tuple "$APP_PACKAGE_A" ip6 tcp 45643 2606:4700:4700::1111 443 A2-1-appa-ip6-tcp
-emit_tuple "$APP_PACKAGE_A" ip6 udp 45644 2606:4700:4700::1111 53 A2-1-appa-ip6-udp
-emit_tuple "$APP_PACKAGE_B" ip4 tcp 45651 1.1.1.1 443 A2-1-appb-ip4-tcp
-emit_tuple "$APP_PACKAGE_B" ip4 udp 45652 1.1.1.1 53 A2-1-appb-ip4-udp
-emit_tuple "$APP_PACKAGE_B" ip6 tcp 45653 2606:4700:4700::1111 443 A2-1-appb-ip6-tcp
-emit_tuple "$APP_PACKAGE_B" ip6 udp 45654 2606:4700:4700::1111 53 A2-1-appb-ip6-udp
+emit_tuple "$APP_PACKAGE_A" ip4 tcp 45641 "$FIXTURE_HOST4" "$FIXTURE_TCP_PORT" A2-1-appa-ip4-tcp
+emit_tuple "$APP_PACKAGE_A" ip4 udp 45642 "$FIXTURE_HOST4" "$FIXTURE_UDP_PORT" A2-1-appa-ip4-udp
+emit_tuple "$APP_PACKAGE_A" ip6 tcp 45643 "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" A2-1-appa-ip6-tcp
+emit_tuple "$APP_PACKAGE_A" ip6 udp 45644 "$FIXTURE_HOST6" "$FIXTURE_UDP_PORT" A2-1-appa-ip6-udp
+emit_tuple "$APP_PACKAGE_B" ip4 tcp 45651 "$FIXTURE_HOST4" "$FIXTURE_TCP_PORT" A2-1-appb-ip4-tcp
+emit_tuple "$APP_PACKAGE_B" ip4 udp 45652 "$FIXTURE_HOST4" "$FIXTURE_UDP_PORT" A2-1-appb-ip4-udp
+emit_tuple "$APP_PACKAGE_B" ip6 tcp 45653 "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" A2-1-appb-ip6-tcp
+emit_tuple "$APP_PACKAGE_B" ip6 udp 45654 "$FIXTURE_HOST6" "$FIXTURE_UDP_PORT" A2-1-appb-ip6-udp
 sleep "$RESOLVER_WAIT"
 
 echo "## capture durable A2-1 evidence before cleanup"
@@ -258,13 +381,17 @@ python3 - "$RESULT_DIR/manifest.json" \
   "$VPN_PACKAGE" "$APP_PACKAGE_A" "$APP_PACKAGE_B" \
   "$vpn_uid" "$app_a_uid" "$app_b_uid" \
   "$local_vpn_apk_sha256" "$local_app_a_apk_sha256" "$local_app_b_apk_sha256" \
-  "$expected_tun_plugin_sha256" "$MODE" "$install_ok" <<'PY'
+  "$expected_tun_plugin_sha256" "$fixture_script_sha256" \
+  "$FIXTURE_HOST4" "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" "$FIXTURE_UDP_PORT" \
+  "$MODE" "$install_ok" <<'PY'
 import json
 import sys
 
 (
     output, vpn_package, app_a, app_b, vpn_uid, uid_a, uid_b,
-    vpn_hash, app_a_hash, app_b_hash, plugin_hash, mode, install_ok,
+    vpn_hash, app_a_hash, app_b_hash, plugin_hash, fixture_hash,
+    fixture_host4, fixture_host6, fixture_tcp_port, fixture_udp_port,
+    mode, install_ok,
 ) = sys.argv[1:]
 
 def integer(value):
@@ -275,30 +402,32 @@ def integer(value):
 
 tuples = [
     {"stageId": "A2-1-appa-ip4-tcp", "package": app_a, "family": "ip4", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45641, "destinationHost": "1.1.1.1",
-     "destinationAddress": "1.1.1.1", "destinationPort": 443, "repeat": 2},
+     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45641, "destinationHost": fixture_host4,
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appa-ip4-udp", "package": app_a, "family": "ip4", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45642, "destinationHost": "1.1.1.1",
-     "destinationAddress": "1.1.1.1", "destinationPort": 53, "repeat": 2},
+     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45642, "destinationHost": fixture_host4,
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": 2},
     {"stageId": "A2-1-appa-ip6-tcp", "package": app_a, "family": "ip6", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45643, "destinationHost": "2606:4700:4700::1111",
-     "destinationAddress": "2606:4700:4700::1111", "destinationPort": 443, "repeat": 2},
+     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45643, "destinationHost": fixture_host6,
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appa-ip6-udp", "package": app_a, "family": "ip6", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45644, "destinationHost": "2606:4700:4700::1111",
-     "destinationAddress": "2606:4700:4700::1111", "destinationPort": 53, "repeat": 2},
+     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45644, "destinationHost": fixture_host6,
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip4-tcp", "package": app_b, "family": "ip4", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45651, "destinationHost": "1.1.1.1",
-     "destinationAddress": "1.1.1.1", "destinationPort": 443, "repeat": 2},
+     "protocolName": "tcp", "sourceAddress": "10.111.0.2", "sourcePort": 45651, "destinationHost": fixture_host4,
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip4-udp", "package": app_b, "family": "ip4", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45652, "destinationHost": "1.1.1.1",
-     "destinationAddress": "1.1.1.1", "destinationPort": 53, "repeat": 2},
+     "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45652, "destinationHost": fixture_host4,
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip6-tcp", "package": app_b, "family": "ip6", "protocol": 6,
-     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45653, "destinationHost": "2606:4700:4700::1111",
-     "destinationAddress": "2606:4700:4700::1111", "destinationPort": 443, "repeat": 2},
+     "protocolName": "tcp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45653, "destinationHost": fixture_host6,
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": 2},
     {"stageId": "A2-1-appb-ip6-udp", "package": app_b, "family": "ip6", "protocol": 17,
-     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45654, "destinationHost": "2606:4700:4700::1111",
-     "destinationAddress": "2606:4700:4700::1111", "destinationPort": 53, "repeat": 2},
+     "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45654, "destinationHost": fixture_host6,
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": 2},
 ]
+for item in tuples:
+    item["uidContractStage"] = item["stageId"]
 
 manifest = {
     "schema": "s139-a2-1-manifest/v1",
@@ -311,6 +440,16 @@ manifest = {
     "expectedVpnApkSha256": vpn_hash,
     "expectedAppApkSha256": {app_a: app_a_hash, app_b: app_b_hash},
     "expectedTunPocPluginSha256": plugin_hash,
+    "fixture": {
+        "schema": "s152-a2-1-fixture/v1",
+        "host4": fixture_host4,
+        "host6": fixture_host6,
+        "tcpPort": int(fixture_tcp_port),
+        "udpPort": int(fixture_udp_port),
+        "scriptSha256": fixture_hash,
+        "publicInternetClaim": False,
+    },
+    "uidContractCellId": "A2-1",
     "mode": mode,
     "vppMode": 5,
     "installOk": install_ok == "true",
@@ -323,6 +462,7 @@ manifest = {
         "a2-1-runtime-appb.jsonl", "vpp-cli.log", "vpp-owner-resolver.log",
         "vpp-shim.log", "vpp-hev.log", "vpp-protect.log", "connectivity.txt",
         "device-build.properties", "source-provenance.properties", "cleanup.txt",
+        "fixture-readiness.properties", "s152-a2-1-fixture.jsonl",
     ],
 }
 with open(output, "w", encoding="utf-8") as stream:

@@ -28,7 +28,10 @@ application IDs; leaving `APPLICATION_ID` unset builds both defaults.
 ## Deterministic command
 
 Start one package with the `EMIT` action (or pass `--ez a2Matrix true`) and
-provide `ip4`/`ip6`, `tcp`/`udp`, and fixed ports:
+provide `ip4`/`ip6`, `tcp`/`udp`, and fixed ports.  A2-1 device evidence must
+use the bounded WSL2/LAN fixture launched by
+`android-run-s139-a2-1-two-app-matrix.sh`; public resolver addresses are not
+valid UID-resolver oracles:
 
 ```sh
 adb shell am start -a com.sakamoto.snort.a2traffic.EMIT \
@@ -36,16 +39,16 @@ adb shell am start -a com.sakamoto.snort.a2traffic.EMIT \
   --es a2MatrixStageId A2-1-ip4-udp \
   --es a2MatrixFamily ip4 --es a2MatrixProtocol udp \
   --ei a2MatrixSourcePort 45624 \
-  --es a2MatrixDestinationHost 1.1.1.1 \
-  --ei a2MatrixDestinationPort 53 \
+  --es a2MatrixDestinationHost "$FIXTURE_HOST4" \
+  --ei a2MatrixDestinationPort "$FIXTURE_UDP_PORT" \
   --ei a2MatrixRepeat 2
 ```
 
-If omitted, the fixed matrix defaults are IPv4/TCP `45621 -> 443`,
-IPv6/TCP `45622 -> 443`, IPv6/UDP `45623 -> 53`, and IPv4/UDP
-`45624 -> 53`. For the historical A2-1/A2-2 matrix each repeat closes and
-recreates the same source-port tuple; no ephemeral source-port substitution is
-used. A2-5 stages (`A2-5-*`) are intentionally different: all repeats share
+If omitted, the adapter retains its historical defaults; those defaults are
+not accepted as controlled A2-1 evidence.  The S152 runner supplies fixture
+hosts and ports explicitly.  For the historical A2-1/A2-2 matrix each repeat
+closes and recreates the same source-port tuple; no ephemeral source-port
+substitution is used. A2-5 stages (`A2-5-*`) are intentionally different: all repeats share
 one bound UDP socket and its descriptor remains alive through the final
 bounded observation delay. This gives the asynchronous Android owner resolver
 a live, stable tuple to attribute before the admission ledger is evaluated.

@@ -2436,8 +2436,7 @@ public final class SnortVpnService extends VpnService {
         }
         if (intent.hasExtra(EXTRA_UID_CONTRACT_STAGE)) {
             String stage = intent.getStringExtra(EXTRA_UID_CONTRACT_STAGE);
-            String cell = stage != null && stage.startsWith("A2-5")
-                    ? "A2-5" : "A2-4";
+            String cell = uidContractCellForStage(stage);
             uidAttribution().beginStage(cell, stage, "intent");
             nativeSetVppStage(cell, stage == null ? "unknown" : stage);
         }
@@ -2464,5 +2463,17 @@ public final class SnortVpnService extends VpnService {
         if (intent.getBooleanExtra(EXTRA_UID_CONTRACT_RESTART_GENERATION, false)) {
             uidAttribution().restartGeneration("intent");
         }
+    }
+
+    /** Keep the durable Java/native UID stage context aligned with the A2 cell. */
+    private static String uidContractCellForStage(String stage) {
+        if (stage != null) {
+            for (int cell = 1; cell <= 6; cell++) {
+                if (stage.startsWith("A2-" + cell)) {
+                    return "A2-" + cell;
+                }
+            }
+        }
+        return "A2-4";
     }
 }

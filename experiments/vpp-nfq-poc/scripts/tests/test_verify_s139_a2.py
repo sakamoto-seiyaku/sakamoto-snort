@@ -25,7 +25,8 @@ class ResolverVerdictTest(unittest.TestCase):
 
     def verdict(self, *uid_lines: int) -> str:
         resolver = "\n".join(
-            "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={}"
+            "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={} "
+            "cell=A2-1 stage=A2-1-appa-ip4-udp"
             .format(self.SOURCE_PORT, self.HOST, self.PORT, uid)
             for uid in uid_lines
         )
@@ -37,6 +38,68 @@ class ResolverVerdictTest(unittest.TestCase):
             self.EXPECTED_UID,
             17,
             "ip4",
+        )
+
+    def test_tuple_only_resolver_row_is_inconclusive(self) -> None:
+        resolver = (
+            "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={}"
+            .format(self.SOURCE_PORT, self.HOST, self.PORT, self.EXPECTED_UID)
+        )
+        self.assertEqual(
+            VERIFIER.INCONCLUSIVE,
+            VERIFIER.resolver_verdict(
+                resolver,
+                self.HOST,
+                self.SOURCE_PORT,
+                self.PORT,
+                self.EXPECTED_UID,
+                17,
+                "ip4",
+                "A2-1",
+                "A2-1-appa-ip4-udp",
+            ),
+        )
+
+    def test_startup_resolver_row_does_not_satisfy_a21_stage(self) -> None:
+        resolver = (
+            "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={} "
+            "cell=A2-4 stage=startup"
+            .format(self.SOURCE_PORT, self.HOST, self.PORT, self.EXPECTED_UID)
+        )
+        self.assertEqual(
+            VERIFIER.INCONCLUSIVE,
+            VERIFIER.resolver_verdict(
+                resolver,
+                self.HOST,
+                self.SOURCE_PORT,
+                self.PORT,
+                self.EXPECTED_UID,
+                17,
+                "ip4",
+                "A2-1",
+                "A2-1-appa-ip4-udp",
+            ),
+        )
+
+    def test_other_cell_resolver_row_does_not_satisfy_a21_stage(self) -> None:
+        resolver = (
+            "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={} "
+            "cell=A2-4 stage=A2-1-appa-ip4-udp"
+            .format(self.SOURCE_PORT, self.HOST, self.PORT, self.EXPECTED_UID)
+        )
+        self.assertEqual(
+            VERIFIER.INCONCLUSIVE,
+            VERIFIER.resolver_verdict(
+                resolver,
+                self.HOST,
+                self.SOURCE_PORT,
+                self.PORT,
+                self.EXPECTED_UID,
+                17,
+                "ip4",
+                "A2-1",
+                "A2-1-appa-ip4-udp",
+            ),
         )
 
     def test_initial_miss_then_expected_uid_is_pass(self) -> None:
@@ -159,6 +222,7 @@ class A21MatrixVerdictTest(unittest.TestCase):
     APP_A_HASH = "2" * 64
     APP_B_HASH = "3" * 64
     PLUGIN_HASH = "4" * 64
+    FIXTURE_HASH = "5" * 64
 
     def tuples(self) -> list:
         result = []
@@ -177,12 +241,14 @@ class A21MatrixVerdictTest(unittest.TestCase):
                         "family": family,
                         "protocol": protocol_number,
                         "protocolName": protocol_name,
-                        "sourceAddress": source,
-                        "sourcePort": port,
-                        "destinationHost": destination,
-                        "destinationAddress": destination,
-                        "destinationPort": destination_port,
-                        "repeat": 2,
+                    "sourceAddress": source,
+                    "sourcePort": port,
+                    "destinationHost": destination,
+                    "destinationAddress": destination,
+                    "destinationPort": destination_port,
+                    "uidContractStage": "A2-1-{}-{}-{}".format(
+                        package.rsplit(".", 1)[-1], family, protocol_name),
+                    "repeat": 2,
                     })
         return result
 
@@ -216,8 +282,18 @@ class A21MatrixVerdictTest(unittest.TestCase):
                 self.APP_B: self.APP_B_HASH,
             },
             "expectedTunPocPluginSha256": self.PLUGIN_HASH,
+            "fixture": {
+                "schema": "s152-a2-1-fixture/v1",
+                "host4": "192.0.2.10",
+                "host6": "2001:db8::10",
+                "tcpPort": 55443,
+                "udpPort": 55553,
+                "scriptSha256": self.FIXTURE_HASH,
+                "publicInternetClaim": False,
+            },
             "mode": "vpp-hev-owner-resolver",
             "vppMode": 5,
+            "uidContractCellId": "A2-1",
             "installOk": True,
             "runtimeFiles": {
                 self.APP_A: "a2-1-runtime-appa.jsonl",
@@ -257,6 +333,12 @@ class A21MatrixVerdictTest(unittest.TestCase):
             "tunPocPluginSha256={}\n".format(
                 "a" * 40, self.VPN_HASH, self.APP_A_HASH,
                 self.APP_B_HASH, self.PLUGIN_HASH),
+            encoding="utf-8",
+        )
+        source_props = (root / "source-provenance.properties").read_text(
+            encoding="utf-8")
+        (root / "source-provenance.properties").write_text(
+            source_props + "fixtureScriptSha256={}\n".format(self.FIXTURE_HASH),
             encoding="utf-8",
         )
         receipt = {
@@ -301,12 +383,50 @@ class A21MatrixVerdictTest(unittest.TestCase):
         }
         (root / "vpp-start-provenance.json").write_text(
             json.dumps(start), encoding="utf-8")
-        (root / "uid-attribution-contract.jsonl").write_text(
-            json.dumps({
+        contract = [{
+                "schema": "uid-attribution-contract/v1",
                 "outcome": "ALLOWED_UID_SCOPE",
+                "cell_id": "A2-1",
+                "stage_id": "A2-1-start",
+                "key": "-",
+                "uid": -1,
+                "pending": 0,
+                "cache": 0,
+                "token": -1,
+                "flow_id": -1,
                 "reason": "uids=[{}, {}] enforced=true".format(
                     self.UID_A, self.UID_B),
-            }) + "\n",
+            }]
+        for item in manifest["tuples"]:
+            key = VERIFIER.canonical_tuple_key(item)
+            contract.extend([
+                {
+                    "schema": "uid-attribution-contract/v1",
+                    "outcome": "MISS_SUBMITTED",
+                    "cell_id": "A2-1",
+                    "stage_id": item["stageId"],
+                    "key": key,
+                    "uid": -1,
+                    "pending": 1,
+                    "cache": 0,
+                    "token": 1,
+                    "flow_id": 1,
+                },
+                {
+                    "schema": "uid-attribution-contract/v1",
+                    "outcome": "COMPLETION_ACCEPTED",
+                    "cell_id": "A2-1",
+                    "stage_id": item["stageId"],
+                    "key": key,
+                    "uid": manifest["expectedAllowedUids"][item["package"]],
+                    "pending": 0,
+                    "cache": 1,
+                    "token": 1,
+                    "flow_id": 1,
+                },
+            ])
+        (root / "uid-attribution-contract.jsonl").write_text(
+            "".join(json.dumps(event) + "\n" for event in contract),
             encoding="utf-8",
         )
 
@@ -332,19 +452,25 @@ class A21MatrixVerdictTest(unittest.TestCase):
                     if item["protocolName"] == "tcp" else "udp_datagram_sent",
             })
             resolver.append(
-                "resolver query=1 proto={} {}:{} -> {}:{} uid=-1".format(
+                "resolver query=1 proto={} {}:{} -> {}:{} uid=-1 "
+                "cell=A2-1 stage={}".format(
                     item["protocol"], item["sourceAddress"], item["sourcePort"],
-                    item["destinationAddress"], item["destinationPort"]))
+                    item["destinationAddress"], item["destinationPort"],
+                    item["stageId"]))
             if item["stageId"] == wrong_stage:
                 resolver.append(
-                    "resolver query=2 proto={} {}:{} -> {}:{} uid=19999".format(
+                    "resolver query=2 proto={} {}:{} -> {}:{} uid=19999 "
+                    "cell=A2-1 stage={}".format(
                         item["protocol"], item["sourceAddress"], item["sourcePort"],
-                        item["destinationAddress"], item["destinationPort"]))
+                        item["destinationAddress"], item["destinationPort"],
+                        item["stageId"]))
             if item["stageId"] != only_miss_stage:
                 resolver.append(
-                    "resolver query=3 proto={} {}:{} -> {}:{} uid={}".format(
+                "resolver query=3 proto={} {}:{} -> {}:{} uid={} "
+                    "cell=A2-1 stage={}".format(
                         item["protocol"], item["sourceAddress"], item["sourcePort"],
-                        item["destinationAddress"], item["destinationPort"], uid))
+                    item["destinationAddress"], item["destinationPort"], uid,
+                    item["stageId"]))
         for package, filename in manifest["runtimeFiles"].items():
             (root / filename).write_text(
                 "".join(json.dumps(record) + "\n" for record in runtime[package]),
@@ -354,6 +480,21 @@ class A21MatrixVerdictTest(unittest.TestCase):
             "\n".join(resolver) + "\n", encoding="utf-8")
         (root / "cleanup.txt").write_text(
             "processes:\ntun0:\nvpn:\n", encoding="utf-8")
+        (root / "fixture-readiness.properties").write_text(
+            "schema=s152-a2-1-fixture-readiness/v1\n"
+            "publicInternetClaim=false\n"
+            "fixtureHost4=192.0.2.10\n"
+            "fixtureHost6=2001:db8::10\n"
+            "tcpPort=55443\n"
+            "udpPort=55553\n"
+            "readyEvents=4\n",
+            encoding="utf-8",
+        )
+        (root / "s152-a2-1-fixture.jsonl").write_text(
+            "{\"event\": \"ready\"}\n" * 4
+            + "{\"event\": \"fixture_ready\"}\n",
+            encoding="utf-8",
+        )
 
     def verdict(self, mutate=None, only_miss_stage: str = "",
                 wrong_stage: str = "") -> dict:
