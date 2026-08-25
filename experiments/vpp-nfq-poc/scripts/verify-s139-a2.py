@@ -302,7 +302,8 @@ def addresses_equal(left: Any, right: Any) -> bool:
 
 
 def verify_a21(manifest: Dict[str, Any], evidence: Path,
-               require_full_matrix: bool = True) -> Dict[str, Any]:
+               require_full_matrix: bool = True,
+               expected_uid_contract_cell: str = "A2-1") -> Dict[str, Any]:
     checks: List[Dict[str, str]] = []
     invalid: List[str] = []
     failures: List[str] = []
@@ -322,8 +323,8 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
         if field not in manifest:
             invalid.append("manifest field missing: " + field)
     uid_contract_cell = manifest.get("uidContractCellId")
-    if uid_contract_cell != "A2-1":
-        invalid.append("uidContractCellId is not A2-1")
+    if uid_contract_cell != expected_uid_contract_cell:
+        invalid.append("uidContractCellId is not " + expected_uid_contract_cell)
     resolver_correlation_schema = manifest.get("resolverCorrelationSchema")
     if resolver_correlation_schema != "a2-1-resolver-cell-stage-request/v1":
         invalid.append("resolverCorrelationSchema is not a2-1-resolver-cell-stage-request/v1")
@@ -738,13 +739,15 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
     append_check(
         checks,
         "uid-contract-stage-registration",
-        PASS if (uid_contract_cell == "A2-1"
+        PASS if (uid_contract_cell == expected_uid_contract_cell
                  and resolver_correlation_schema == "a2-1-resolver-cell-stage-request/v1")
         else INVALID,
-        "registered UID contract cell=A2-1; tuple joins require exact cell/stage/request"
-        if (uid_contract_cell == "A2-1"
+        "registered UID contract cell=" + expected_uid_contract_cell
+        + "; tuple joins require exact cell/stage/request"
+        if (uid_contract_cell == expected_uid_contract_cell
             and resolver_correlation_schema == "a2-1-resolver-cell-stage-request/v1")
-        else "manifest must register uidContractCellId=A2-1 and resolver request correlation",
+        else "manifest must register uidContractCellId="
+        + expected_uid_contract_cell + " and resolver request correlation",
     )
 
     runtime_by_package: Dict[str, List[Dict[str, Any]]] = {}
@@ -1093,7 +1096,9 @@ def verify_a22(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
     })
     # A2-1 owns the eight-tuple matrix.  A2-2 reuses its provenance/runtime
     # joins without asking that common gate to re-run the eight tuple claim.
-    base_result = verify_a21(base_manifest, evidence, require_full_matrix=False)
+    base_result = verify_a21(
+        base_manifest, evidence, require_full_matrix=False,
+        expected_uid_contract_cell="A2-2")
     checks: List[Dict[str, str]] = list(base_result.get("checks", []))
     invalid: List[str] = manifest_errors + required_errors
     failures: List[str] = []

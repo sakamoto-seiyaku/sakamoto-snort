@@ -37,6 +37,7 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
             "profile": VERIFIER.PROFILE_A22,
             "cellId": "A2-2",
             "blockOwnerUid": 99999,
+            "uidContractCellId": "A2-2",
             "runtimeFiles": {
                 self.base.APP_A: "a2-2-runtime-appa.jsonl",
                 self.base.APP_B: "a2-2-runtime-appb.jsonl",
@@ -61,6 +62,8 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                 "launch-window.json",
                 "source-provenance.properties",
                 "cleanup.txt",
+                "fixture-readiness.properties",
+                "s152-a2-1-fixture.jsonl",
             ],
         })
         # A2-1 owns the eight-tuple matrix.  A2-2 is a four-tuple cohort with
@@ -103,6 +106,16 @@ class A22CacheBoundsVerdictTest(unittest.TestCase):
                       concurrent: bool = True,
                       eviction_split_for: str = "") -> None:
         self.base.write_fixture(root, manifest)
+        resolver_path = root / "vpp-owner-resolver.log"
+        resolver_path.write_text(
+            resolver_path.read_text(encoding="utf-8").replace(
+                "cell=A2-1", "cell=A2-2"),
+            encoding="utf-8")
+        contract_path = root / "uid-attribution-contract.jsonl"
+        contract_path.write_text(
+            contract_path.read_text(encoding="utf-8").replace(
+                '"cell_id": "A2-1"', '"cell_id": "A2-2"'),
+            encoding="utf-8")
         (root / "launch-window.json").write_text(json.dumps({
             "schema": "s139-a2-2-launch-window/v1",
             "launchCount": 8,
