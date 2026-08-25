@@ -1,12 +1,12 @@
 # SAKAMOTO-139 A2 revised execution journal
 
 Date: 2026-08-23 (Asia/Taipei)  
-Updated: 2026-08-26 (S156-guarded A2-2 revalidation, S187/S191 A2-3 current refresh, S188 A2-4 overlay/runtime closure, S189 A2-5 admission closure, and remaining-cell guardrail split)
+Updated: 2026-08-26 (S156-guarded A2-2 revalidation, S187/S191 A2-3 current refresh, S188 A2-4 overlay/runtime closure, S189 A2-5 admission closure, S190 A2-6 replay closure, and final S156 aggregate)
 Plane: SAKAMOTO-139  
 Design: [S139_A2_POC_DESIGN_REVISION.md](S139_A2_POC_DESIGN_REVISION.md)  
 Device: Pixel 6a / arm64 / serial `28201JEGR0XPAJ`  
-Aggregate: historical 2026-08-23 `PASS`; current S156-era aggregate
-`A2_INCOMPLETE`; `architecture_interruption=false`
+Aggregate: historical 2026-08-23 `PASS`; current S156-era aggregate `PASS`;
+`architecture_interruption=false`
 
 ## Why the repeated UID verification was a POC problem
 
@@ -523,6 +523,80 @@ known-UID allow/drop admission boundary only; it does not claim external
 connectivity, Internet reachability, B2 transport failure semantics, or
 production policy/catalog coverage.
 
+## A2-6 S156-guarded replay and settlement refresh
+
+Cell: `A2-6 replay and settlement aggregate`
+Current verdict: `PASS`
+
+S190 reran the A2-6 replay/settlement cell on the current S156 guardrail
+baseline.  The run used the controlled WSL2/LAN fixture, recorded
+`uidContractCellId=A2-6`, required resolver `cell/stage/request` correlation,
+and joined local plus installed APK hashes.
+
+Clean-head bundle
+`evidence/s190-a2-6-replay-settlement-20260826-run1/` is the current S156-era
+A2-6 PASS:
+
+- `gitHead=ff69c0669f30bba838cccf853962a8d7e67d7ffc`;
+- `gitDirty=false`;
+- fixture destination `192.168.4.5:55553`;
+- `uidContractCellId=A2-6`;
+- `resolverCorrelationSchema=a2-1-resolver-cell-stage-request/v1`;
+- VpnLite APK SHA-256
+  `5aef6c5e20c02e82f4e2acdf882f8f1686fd19774040ea972507bf66b6b1be39`;
+- AppA APK SHA-256
+  `7b082e62109addc465d91e5df82e0fca47cf206158db2d6a2f929dcbca9b4809`;
+- `libtun_poc_plugin.so` SHA-256
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
+
+All registered A2-6 gates pass: replay stage registration, replay falsifiers
+for wrong owner, wrong UID, wrong generation, wrong scope, accepted, duplicate,
+and stale cases, bounded contract settlement, orderly cleanup, process/TUN
+settlement, real transport settlement, and native ledger bounds.  The live
+transport stage observed a real AppA allow flow crossing policy into
+broker/socket settlement.  The bounds were `max_pending=1`, `max_cache=2`,
+and `max_flow_ids=2`, and all final values settled to zero.  Cleanup was
+observed before force-stop fallback; no VPP/VpnLite process or `tun0` residue
+remained.
+
+This closes A2-6 under the S156 guardrails.  It does not claim production
+capacity, external Internet reachability, B1/B2 whole-device behavior, long
+lifecycle behavior, or underlay handover.
+
+## Final S156-era A2 aggregate audit
+
+Final aggregate bundle:
+`evidence/s190-a2-aggregate-20260826-run1/a2-aggregate.json`
+
+Current aggregate verdict: `PASS`; `architectureInterruption=false`.
+
+The aggregate auditor binds these result files:
+
+| Cell | Bound result |
+| --- | --- |
+| A2-0 | `results/s139-a2-0-session-provenance-20260823-fixed-1/result.json` |
+| A2-1 | `evidence/s156-a2-1-correlation-20260825-run5/result.json` |
+| A2-2 | `evidence/s186-a2-2-cache-concurrency-20260826-run2/result.json` |
+| A2-3 | `evidence/s187-a2-3-controlled-return-20260826-clean-ip6/result.json` |
+| A2-4 | `evidence/s188-a2-4-lifecycle-native-join-20260826-overlay-run1/result.json` |
+| A2-5 | `evidence/s189-a2-5-admission-ledger-20260826-run1/result.json` |
+| A2-6 | `evidence/s190-a2-6-replay-settlement-20260826-run1/result.json` |
+
+The A2-3 current refresh is supported by both IPv4 and IPv6 raw bundles:
+`evidence/s187-a2-3-controlled-return-20260826-clean-ip4/` and
+`evidence/s187-a2-3-controlled-return-20260826-clean-ip6/`.  The aggregate
+script accepts one `A2-3` result binding, so it references the IPv6 result
+while this journal retains both address-family bundles as the A2-3 evidence
+set.
+
+The aggregate result contains no errors.  Every registered A2 cell is `PASS`,
+every input retains cleanup or settlement checks, and A2-4's
+`native-stale-join` remains the sole out-of-scope inconclusive check because
+`staleNativeJoinRequired=false`.  The aggregate claims only the bounded A2
+identity, lifecycle, allow/drop, replay, and cleanup scope.  It does not claim
+B1/B2 external-connect behavior, Internet reachability, production capacity,
+long-lifecycle capacity, or underlay handover.
+
 ## Claim boundary and next cells
 
 A2-0, A2-1, and A2-2 now prove durable session provenance, the complete
@@ -534,14 +608,13 @@ stage-correlated lifecycle invalidation/recovery, Java/native resolver joins,
 network-handle restart, generation refresh, and bounded cleanup on the current
 artifact. A2-5 now proves the known-UID allow/drop admission boundary with
 exact zero-downstream evidence for a fresh dropped key. These cells do not
-prove the A2-6 replay/settlement aggregate.
+prove B1/B2 external-connect behavior.
 
 At the S156-era evidence standard, S187/S191 now closes the A2-3 current
 artifact refresh, S188 closes A2-4 lifecycle native join, and S189 closes A2-5
-allow/drop admission.  The remaining order is S190 A2-6 replay/settlement
-aggregate. The historical final audit below records the 2026-08-23 aggregate
-only; B1 remains a separate gate until the S156-era aggregate is aligned in
-Plane.
+allow/drop admission.  S190 closes A2-6 and the final current aggregate audit.
+The historical final audit below records the 2026-08-23 aggregate only; the
+current S156-era aggregate above is now the A2 closure evidence for Plane.
 
 ## Historical 2026-08-23 A2 closure audit
 
@@ -614,9 +687,9 @@ passing.
 
 ## A2 disposition and next gate
 
-A2 was complete at the registered 2026-08-23 POC scope, but is not yet complete
-at the S156-era guardrail scope.  S188 has closed A2-4 and S189 has closed
-A2-5; the next action is to finish S190, produce a new aggregate audit from
-the guarded bundles, and only then consider unblocking B1 in Plane.  The
-historical aggregate does not claim external Internet reachability, production
-capacity, or a long lifecycle.
+A2 was complete at the registered 2026-08-23 POC scope and is now complete at
+the S156-era guardrail scope.  The current aggregate audit is
+`evidence/s190-a2-aggregate-20260826-run1/a2-aggregate.json` with `PASS` and
+`architectureInterruption=false`.  This unblocks the A2 dependency for B1 in
+Plane.  The aggregate still does not claim external Internet reachability,
+production capacity, long lifecycle, or underlay handover.

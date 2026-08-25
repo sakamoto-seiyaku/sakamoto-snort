@@ -7,7 +7,7 @@ artifact/fixture validity gates, bounded retry rule, and hotspot stop rule.
 Plane remains the source of truth for open execution work.
 
 Date: 2026-08-23
-Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 remaining A2 S156 guardrail split)
+Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 A2-6 and final A2 aggregate closure)
 Plane owner: SAKAMOTO-137
 Output level: concrete POC design; no experiment executed by this document
 
@@ -1135,9 +1135,9 @@ close full E2.
   `libtun_poc_plugin.so` SHA-256
   `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
   Native resolver ledger, all lifecycle stage joins, generation refresh,
-  network-handle restart, and cleanup ledgers passed.  S189 has since closed
-  A2-5; continue with S190 and do not reuse the historical A2-6 bundle as
-  S156-era closure evidence.
+  network-handle restart, and cleanup ledgers passed.  S189 and S190 have
+  since closed A2-5/A2-6; the historical A2-5/A2-6 bundles are retained only
+  as functional baselines.
 - **S189 A2-5 S156-guarded admission status:** `PASS_KNOWN_UID_ALLOW_DROP`.
   Clean rerun
   `evidence/s189-a2-5-admission-ledger-20260826-run1/` passed with
@@ -1152,9 +1152,29 @@ close full E2.
   The allow key for AppA UID `12630` crossed policy into
   transport/broker/socket settlement; the fresh dropped key observed known-UID
   block at `tun_poc` and zero downstream transport, broker, or socket events.
-  Cleanup was native/contract observed before force-stop fallback.  Continue
-  with S190; do not reuse the historical A2-6 bundle as S156-era closure
-  evidence.
+  Cleanup was native/contract observed before force-stop fallback.  S190 has
+  since closed A2-6; the historical A2-6 bundle is retained only as a
+  functional baseline.
+- **S190 A2-6 S156-guarded replay/settlement status:** `PASS_REPLAY_SETTLEMENT`.
+  Clean rerun
+  `evidence/s190-a2-6-replay-settlement-20260826-run1/` passed with
+  `gitDirty=false`, fixture `192.168.4.5:55553`,
+  `uidContractCellId=A2-6`, resolver correlation schema
+  `a2-1-resolver-cell-stage-request/v1`, VpnLite APK SHA-256
+  `5aef6c5e20c02e82f4e2acdf882f8f1686fd19774040ea972507bf66b6b1be39`, AppA
+  APK SHA-256
+  `7b082e62109addc465d91e5df82e0fca47cf206158db2d6a2f929dcbca9b4809`, and
+  `libtun_poc_plugin.so` SHA-256
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
+  Replay falsifiers, live transport settlement, bounded contract settlement,
+  native ledger bounds, orderly cleanup, and process/TUN settlement all passed.
+- **Current A2 aggregate status:** `PASS`.
+  Final audit
+  `evidence/s190-a2-aggregate-20260826-run1/a2-aggregate.json` binds A2-0
+  through A2-6 results, has no errors, and records
+  `architectureInterruption=false`.  This closes the A2 dependency for B1 while
+  retaining non-claims for B1/B2 external-connect behavior, Internet
+  reachability, production capacity, long lifecycle, and underlay handover.
 - **Non-claims:** Release performance/power budgets, battery certification,
   production constants, or a formal zero-copy investment verdict.
 - **Conditional copy branch:** keep VPN-F018 paused if end-to-end gates pass.  If

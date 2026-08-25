@@ -1,8 +1,8 @@
 # SAKAMOTO-139 A2 POC Design Revision
 
 Date: 2026-08-23  
-Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2; S187/S191 closed A2-3 current refresh; S188 closed A2-4 overlay/runtime rerun; S189 closed A2-5 admission rerun; S190 remains)
-Status: evidence-guided working design; A2-1 base matrix passed, dependent A2 cells continue
+Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2; S187/S191 closed A2-3 current refresh; S188 closed A2-4 overlay/runtime rerun; S189 closed A2-5 admission rerun; S190 closed A2-6 and final aggregate)
+Status: S156-era A2 aggregate passed; B1 may proceed from the A2 dependency
 Scope: Pixel multi-App UID attribution, policy, and transport-admission only
 
 ## Outcome
@@ -53,8 +53,8 @@ final closure evidence.  S187 refreshed A2-3 on the current artifact and S191
 fixed the cleanup-control seam for that refresh. S188 then reran A2-4 and
 closed the lifecycle/native-join cell after fixing the Android VPP overlay so
 the product runtime source carries the S156 resolver correlation. S189 then
-closed A2-5 under the same guardrails. S190 still reruns A2-6 with the same
-functional claim but the stricter fixture/artifact/provenance gates.
+closed A2-5 under the same guardrails, and S190 closed A2-6 plus the final
+S156-era aggregate audit.
 
 ## Facts that force the correction
 
@@ -445,8 +445,10 @@ Required fresh execution after the harness correction:
   and resolver correlation, closed by
   `evidence/s189-a2-5-admission-ledger-20260826-run1/`;
 - S190 A2-6 replay/settlement rerun with controlled fixture and resolver
-  correlation;
-- the final S156-era A2 aggregate and cleanup audit.
+  correlation, closed by
+  `evidence/s190-a2-6-replay-settlement-20260826-run1/`;
+- the final S156-era A2 aggregate and cleanup audit, closed by
+  `evidence/s190-a2-aggregate-20260826-run1/a2-aggregate.json`.
 
 The historical Wi-Fi-bypassing UID-12620 fixture, overwritten IPv4 raw,
 Chrome gateway reverse attempt, S124 local echo, SOCKS, and HEV-only paths are
@@ -466,9 +468,9 @@ not decisive substitutes.
    fixed to build the S156-correlated tun plugin with the same runtime ABI as
    `libvlib.so`.
 6. Run S189 A2-5 admission ledger. Closed on clean guarded run1.
-7. Run S190 A2-6 replay/settlement aggregate.
+7. Run S190 A2-6 replay/settlement aggregate. Closed on clean guarded run1.
 8. Perform the final requirement-by-requirement A2 audit, update the evidence
-   artifact/journal/Finding Ledger, and only then unblock B1 in Plane.
+   artifact/journal/Finding Ledger, and unblock the B1 dependency in Plane.
 
 No ordinary POC correction requires a discussion stop. A contradictory
 architecture finding still interrupts immediately under the preserved rules
