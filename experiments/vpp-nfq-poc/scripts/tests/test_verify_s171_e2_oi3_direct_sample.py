@@ -90,6 +90,42 @@ class VerifyS171E2Oi3DirectSampleTest(unittest.TestCase):
         self.assertIn("atomic_store_explicit (&tm->connector_write_pending, 0",
                       self.owner)
 
+    def test_oi3_multi_tun_handoff_uses_owner_thread_fd_not_frame_queue(self):
+        self.assertIn("tun_handoff_pair", self.owner)
+        self.assertIn("SOCK_SEQPACKET", self.owner)
+        self.assertIn("oi3_tun_handoff_ready", self.owner)
+        self.assertIn("file.polling_thread_index = tm->target_thread",
+                      self.owner)
+        self.assertIn("oi3_send_tun_handoff_for", self.owner)
+        self.assertIn("oi3_owner_accept_tun_packet", self.owner)
+        self.assertIn("handoff=owner-fd", self.owner)
+        self.assertIn("oi3 tun-handoff recv", self.owner)
+        self.assertIn("oi3_multi_dispatch_depth_complete", self.owner)
+        self.assertNotIn("oi3_wake_owner_thread", self.owner)
+
+    def test_oi3_multi_broker_completion_is_handed_to_owner_thread(self):
+        self.assertIn("completion_poll_thread", self.owner)
+        self.assertIn("oi3_multi_completion_poll_main", self.owner)
+        self.assertIn("oi3_send_completion_handoff_for", self.owner)
+        self.assertIn("OI3_BROKER_COMPLETION_KIND", self.owner)
+        self.assertIn("oi3_owner_accept_broker_completion", self.owner)
+        self.assertIn("oi4 completion-handoff send", self.owner)
+        self.assertIn("oi3 broker-completion wall-ms", self.owner)
+        self.assertIn("oi3_multi_completion_poll_stop", self.owner)
+
+    def test_oi3_underlay_tcp_disables_nagle_for_latency_probe(self):
+        self.assertIn("#include <netinet/tcp.h>", self.owner)
+        self.assertIn("TCP_NODELAY", self.owner)
+        self.assertIn("oi3 connector-socket-option", self.owner)
+
+    def test_oi3_post_send_readiness_observer_arms_while_task_running(self):
+        self.assertIn("oi3_connector_poll_arm_after_direct_send", self.owner)
+        self.assertIn("direct_send_events == 0", self.owner)
+        self.assertIn("direct_recv_events != 0", self.owner)
+        self.assertIn("connector-poll-arm-after-direct-send", self.owner)
+        self.assertIn("OI3 connector post-send readiness arm failed",
+                      self.owner)
+
 
 if __name__ == "__main__":
     unittest.main()

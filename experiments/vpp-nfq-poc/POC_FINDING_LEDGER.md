@@ -106,7 +106,8 @@ Map rather than encoded as TODOs here.
 | VPN-F068 | S153 epoch lifecycle runner over-bound underlay replacement to TCP exact transition and byte-exact wlan rules | `CLOSED_FOR_S153_EPOCH_FIRE_AND_COUNT_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F069 | E2 matched HTTP/device-state latency exceeds ADR-0007 comparative threshold | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F070 | OI3 connector poll missed protected write interest after TCP payload submit | `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F071 | OI3 multi dispatcher-to-owner handoff has 160--500ms wake tail | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F071 | OI3 multi dispatcher-to-owner handoff and post-send read wake path caused the first residual tail | `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F072 | OI3 first HTTP payload submit can wait for app retransmission before Direct send | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2444,6 +2445,17 @@ Map rather than encoded as TODOs here.
   identify VPN-F071: multi dispatcher ingress reaches native promptly, but
   selected-owner TUN enqueue can lag by roughly 160--500ms; a target-trigger
   wake candidate did not materially improve p95 (`535ms`) and was reverted.
+- **S205--S214 diagnosis update:** The later handoff/post-send work corrected
+  the initial F071 interpretation and split it again.  S205/S206 moved TUN and
+  broker completion delivery onto explicit owner/completion handoff paths but
+  still showed OI3 around 0.5s p95.  S211 then added a targeted
+  post-Direct-send read observer guarded by `direct_recv_events`; the focused
+  OI3 cell improved to p50/p95/p99 `31/95/95ms`.  Matched S212b and reverted
+  S214 still show an open residual: OI3 completes `8/8`, but p95 remains
+  `336--357ms` while Direct/HEV remain `86/22ms` in the matched run.  Native
+  timing localizes the residual to the first HTTP payload submit not promptly
+  driving Direct send until Android retransmits the payload roughly 200ms
+  later.  This is recorded as VPN-F072.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a focused latency/cost diagnosis and a corrected E2
@@ -2485,7 +2497,7 @@ Map rather than encoded as TODOs here.
   materially slower than Direct/HEV.
 - **Status:** `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE`.
 
-### VPN-F071 -- OI3 multi dispatcher-to-owner handoff has 160--500ms wake tail
+### VPN-F071 -- OI3 multi dispatcher-to-owner handoff and post-send read wake path caused the first residual tail
 
 - **First observation:** After VPN-F070, OI3 still completed matched HTTP but
   remained around 0.5s p95, far above Direct/HEV.
@@ -2494,23 +2506,71 @@ Map rather than encoded as TODOs here.
   (`runId=20260826-051405-366520`) added native wall-time probes and passed
   OI3 `4/4`, p50/p95/p99 `250/526/526ms`.  S204
   `evidence/s204-e2-oi3-target-trigger-wake-20260826/`
-  (`runId=20260826-051804-388905`) passed OI3 `4/4`,
-  p50/p95/p99 `314/535/535ms`.
-- **Observed delay:** S203/S204 show selected flows reaching `oi4
+  (`runId=20260826-051804-388905`) passed OI3 `4/4`, p50/p95/p99
+  `314/535/535ms`.  S205
+  `evidence/s205-e2-oi3-owner-fd-handoff-20260826/`
+  (`runId=20260826-053720-990568`) passed OI3 `4/4`,
+  p50/p95/p99 `406/527/527ms`.  S206
+  `evidence/s206-e2-oi3-owner-event-handoff-20260826/`
+  (`runId=20260826-054602-682259`) passed OI3 `4/4`,
+  p50/p95/p99 `291/522/522ms`.
+- **Observed delay:** S203/S204 showed selected flows reaching `oi4
   multi-ingress` promptly, then waiting roughly 160--500ms before `oi3
-  tun-queue enqueue` on the owner.  The downstream connector wake and
-  Direct-send path then progresses quickly, so the residual hotspot is before
-  owner-local flow processing.
+  tun-queue enqueue` on the owner.  S205/S206 changed the seam to explicit
+  per-owner TUN handoff and broker-completion handoff.  That narrowed the
+  handoff itself but did not close p95; the remaining delay then showed up
+  after Direct send, waiting for Direct read readiness.
 - **Rejected POC correction:** The target-thread interrupt/wakeup candidate in
-  S204 did not materially improve the delay and was reverted.
-- **Supported claim:** The remaining E2 latency blocker is the dispatcher ->
-  owner frame-queue/wake handoff seam, not UID attribution, target policy,
-  HTTP fixture behavior, or connector write readiness.
-- **Next correction direction:** Design and test a focused low-latency
-  per-owner TUN handoff/wake path, then rerun matched Direct/HEV/OI3 E2.
-- **Status:** `OPEN_RISK`.  Main-stack import remains blocked until this
-  hotspot is corrected and the comparative E2 gate is rerun, or until an
-  explicit architecture decision changes the route.
+  S204 did not materially improve the delay and was reverted.  S209
+  `evidence/s209-e2-oi3-tcp-nodelay-20260826/`
+  (`runId=20260826-055233-228968`) proved `TCP_NODELAY` alone was not the fix:
+  OI3 `4/4`, p50/p95/p99 `238/524/524ms`.
+- **POC correction:** S211
+  `evidence/s211-e2-oi3-post-send-direct-recv-guard-20260826/`
+  (`runId=20260826-055822-728962`) added a targeted
+  `connector-poll-arm-after-direct-send` observer guarded by
+  `direct_recv_events`.  The focused OI3 cell passed `4/4`,
+  p50/p95/p99 `31/95/95ms`, cleanup `8/0`.
+- **Supported claim:** The original F071 class is no longer correctly described
+  as a generic UID, policy, fixture, dispatcher, or broker-completion failure.
+  The handoff and post-send-read seams have targeted corrections for the
+  bounded focused cell.
+- **Non-claim:** Matched 8-request E2 is not closed; the residual moved to
+  VPN-F072.
+- **Status:** `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE`.
+
+### VPN-F072 -- OI3 first HTTP payload submit can wait for app retransmission before Direct send
+
+- **First observation:** After the F071 post-send observer, the focused
+  four-request OI3 cell improved sharply, but longer matched E2 still retained
+  OI3 outliers.
+- **Evidence:** S212b
+  `evidence/s212b-e2-matched-after-post-send-read-observer-20260826/`
+  (`runId=20260826-060037-266591`) passed Direct `8/8` p95 `86ms`, HEV `8/8`
+  p95 `22ms`, and OI3 `8/8` p95 `336ms`, cleanup `11/0`.  S214
+  `evidence/s214-e2-oi3-post-send-revert-drain-20260826/`
+  (`runId=20260826-060752-407437`) passed OI3 `8/8`,
+  p50/p95/p99 `73/357/357ms`, cleanup `11/0`.
+- **Rejected POC correction:** S213
+  `evidence/s213-e2-oi3-stale-wake-drain-20260826/`
+  (`runId=20260826-060542-527708`) tried to drain stale connector wakes.  It
+  worsened connect-tail behavior, producing OI3 `8/8` but p95 `476ms`, and was
+  reverted before S214.
+- **Observed delay:** In the S212b/S214 outliers, the first HTTP payload reaches
+  native and is submitted, but no Direct send follows until Android repeats the
+  payload roughly 200ms later.  Once Direct send happens, the S211 observer
+  drives Direct read promptly.  The residual is therefore a first-payload
+  write-drive problem, not the earlier post-send read-wake problem.
+- **Supported claim:** OI3 correctness, cleanup, fixture reachability, and
+  Direct/HEV controls are stable for this shape; the remaining E2 blocker is a
+  narrow OI3 scheduling/readiness seam around first payload submission.
+- **Next correction direction:** Instrument and fix the connector/poll/owner
+  re-entry path between first payload submit and first Direct send.  Avoid
+  reintroducing generic payload timer kicks or stale-wake drains; both have
+  negative evidence.
+- **Status:** `OPEN_RISK`.  Main-stack import remains blocked until F072 is
+  corrected and matched Direct/HEV/OI3 E2 is rerun, or until an explicit
+  architecture decision changes the route.
 
 ## Consolidation audit
 
@@ -2714,7 +2774,8 @@ Map rather than encoded as TODOs here.
 | S153 | Epoch lifecycle runner transition/oracle correction | VPN-F068 |
 | S192/S193 | E2 device-state comparison and final audit performance gap | VPN-F069 |
 | S199--S202 | OI3 connector write-interest diagnosis and correction | VPN-F070 |
-| S203/S204 | OI3 dispatcher-to-owner handoff latency diagnosis | VPN-F071 |
+| S203--S211 | OI3 dispatcher/owner handoff and post-send read-wake diagnosis/correction | VPN-F071 |
+| S212--S214 | OI3 first-payload write-drive residual diagnosis | VPN-F072 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
