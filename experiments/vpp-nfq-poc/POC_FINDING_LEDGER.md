@@ -107,7 +107,7 @@ Map rather than encoded as TODOs here.
 | VPN-F069 | E2 matched HTTP/device-state latency exceeds ADR-0007 comparative threshold | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F070 | OI3 connector poll missed protected write interest after TCP payload submit | `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F071 | OI3 multi dispatcher-to-owner handoff and post-send read wake path caused the first residual tail | `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `CLOSED_FOR_S221_FOREGROUND_MATCHED_E2` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2459,10 +2459,19 @@ Map rather than encoded as TODOs here.
   lifecycle/admission area: a completed TCP owner can keep the successor SYN in
   the per-owner deferred queue until stale tail/finish/rearm completes.  This
   combined open risk is recorded as VPN-F072.
+- **S221 foreground update:** S221
+  `evidence/s221-e2-matched-f072-candidate-8req-foreground-20260826/`
+  (`runId=20260826-065247-722050`) reran the matched foreground
+  Direct/HEV/OI3 8-request matrix with the F072 candidate retained.  It passed
+  with `failureCount=0`: Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, OI3
+  `8/8` p95 `24ms`, and OI3 cleanup `12/0`.  This closes the foreground
+  F072 latency shape but does not supersede the older S192 screen-off/forced-
+  Doze evidence, which must be rerun with the S221 artifact before F069 can be
+  closed as a full device-state E2 verdict.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
-  import must wait for a focused latency/cost diagnosis and a corrected E2
-  rerun, or for an explicit architecture decision that changes the route.
+  import must wait for a corrected screen-off/forced-Doze E2 rerun, broader E2
+  gate closure, or for an explicit architecture decision that narrows the route.
 
 ### VPN-F070 -- OI3 connector poll missed protected write interest after TCP payload submit
 
@@ -2599,21 +2608,37 @@ Map rather than encoded as TODOs here.
   previous-flow completion, but the new immediate finish/rearm path cleared the
   active owner before the SYN had to wait in `multi-deferred`.  This is positive
   evidence for the candidate, not a full F072 closure.
+- **Matched E2 correction:** S221
+  `evidence/s221-e2-matched-f072-candidate-8req-foreground-20260826/`
+  (`runId=20260826-065247-722050`) retained the S219/S220 candidate and reran
+  the matched foreground Direct/HEV/OI3 8-request matrix.  The comparison APK
+  and installed device artifacts matched: APK
+  `898906965d915b3540702ef3c5a838a5ba71dedeeb739b82f436debb6a8664e4`, OI3
+  plugin `ab5f1ab11b020f5e49e74ed95c97ec52cf795ed99ee545f2afb950d9f8e1ce15`,
+  HEV `420e67e71029888c3d6423b24a513bf6ed760fd159762903f22ee4235d016466`,
+  and `tun_poc_plugin.so`
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
+  Direct passed `8/8` p50/p95/p99 `6/59/59ms`; HEV passed `8/8`
+  `7/11/11ms`; OI3 passed `8/8` `19/24/24ms`, cleanup `12/0`, `valid=1`,
+  and manifest `failureCount=0`.  The OI3 log included the target lifecycle
+  markers `owner-busy-deferred`, `tcp-positive-fin-complete`, `tun-flow
+  rearmed`, and `multi-deferred admit`; tail packets were tombstoned as
+  `reason=tcp-tail`, with no owner-stopped reject, app timeout, submit reject,
+  queue reject, or cleanup failure.
 - **Supported claim:** OI3 correctness, cleanup, fixture reachability, and
-  Direct/HEV controls are stable for the accepted baseline, but the remaining
-  E2 blocker is not a single socket option or UID/policy defect.  It is the
-  TCP owner lifecycle/admission seam between completed response, stale tail,
-  deferred successor SYN, and first protected write drive.
-- **Next correction direction:** Keep the S219/S220 bounded TCP generation
-  lifecycle candidate and rerun the matched Direct/HEV/OI3 E2 matrix before
-  importing this route into the main stack.  The fix must preserve successor
-  SYN admission and cleanup correctness while preventing a completed generation
-  from holding the owner until Android tail traffic or the next request forces
-  rearm.  Avoid reintroducing generic payload timer kicks, stale-wake drains,
-  or response-complete early rearm; all have negative evidence.
-- **Status:** `OPEN_RISK`.  Main-stack import remains blocked until F072 is
-  corrected and matched Direct/HEV/OI3 E2 is rerun, or until an explicit
-  architecture decision changes the route.
+  Direct/HEV controls are stable for the foreground matched baseline.  The
+  foreground E2 blocker was not a single socket option or UID/policy defect; it
+  was the TCP owner lifecycle/admission seam between completed response, stale
+  tail, deferred successor SYN, and first protected write drive.
+- **Non-claim:** S221 does not close screen-off, forced-Doze, long soak,
+  thermal, CPU, power, IPv6/DNS breadth, or production main-stack import.
+- **Next correction direction:** Keep the S219/S220/S221 bounded TCP generation
+  lifecycle candidate and rerun the S192 device-state matrix before declaring
+  full E2 import readiness.  Avoid reintroducing generic payload timer kicks,
+  stale-wake drains, or response-complete early rearm; all have negative
+  evidence.
+- **Status:** `CLOSED_FOR_S221_FOREGROUND_MATCHED_E2`.  F069 remains open for
+  device-state and broader E2 import gates.
 
 ## Consolidation audit
 

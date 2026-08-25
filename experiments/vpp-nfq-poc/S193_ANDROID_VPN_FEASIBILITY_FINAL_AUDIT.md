@@ -19,10 +19,13 @@ architecture reopening by itself.  The owner-inline invariants still hold; the
 next work is performance/cost diagnosis and correction before formal main-stack
 implementation planning.
 
-Post-audit update: S199--S204 narrowed the E2 latency issue.  The connector
-write-interest defect that caused seconds-level OI3 TCP payload stalls is
-corrected, but OI3 still fails the comparative gate because the multi
-dispatcher -> owner handoff path shows a 160--500ms wake tail.
+Post-audit update: S199--S221 narrowed and corrected the foreground E2 latency
+issue.  The connector write-interest defect, owner handoff/post-send read-wake
+tail, and TCP owner lifecycle/admission seam have focused corrections.  S221
+passed the matched foreground Direct/HEV/OI3 8-request comparison with OI3 p95
+`24ms`.  The audit still remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` until the
+screen-off and forced-Doze S192 device-state matrix is rerun with the S221
+artifact.
 
 ## Claim-family audit
 
@@ -32,7 +35,7 @@ dispatcher -> owner handoff path shows a 160--500ms wake tail.
 | Application identity | S139/S190 current S156-era A2 aggregate binds A2-0 through A2-6, including distinct-App matrix, async cache/concurrency, controlled reverse, lifecycle/native join, known-UID allow/drop, replay and settlement. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Network and lifecycle | S151 closes real underlay epoch for the selected Pixel artifact; S153/S157 close real stop/fault/restart and same-session re-arm evidence; S153 full E1 residual sequence reruns normal stop/start, fault restart and Wi-Fi epoch restart with fresh traffic and zero residue. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Ownership and failure | S158/S168 close final multi-owner topology/teardown corrections; S160/S161 close D3 overload/recovery for tested envelope; S176 closes four-owner UDP route-pinning; S141 B2 closes policy/transport/infrastructure separation. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
-| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  However, S174/S175/S192 preserve OI3 p95 around 1.3--2.6s versus Direct/HEV under 100ms in matched HTTP slices. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
+| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  Screen-off and forced-Doze still require rerun under the S221 artifact because S192 preserved OI3 p95 around `2.6s` on an older build. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
 
 ## E2 performance decision
 
@@ -49,13 +52,16 @@ meet that comparative latency gate:
   `23ms`.
 - S192 forced-Doze matched HTTP: OI3 p95/p99 `2618ms`; Direct `81ms`; HEV
   `20ms`.
+- S221 foreground matched HTTP with the F072 lifecycle candidate retained:
+  Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, OI3 `8/8` p95 `24ms`,
+  cleanup `12/0`, `failureCount=0`.
 
 The accepted S192 cells prove that this is not a device-state correctness
 failure: every arm completed `8/8`, `stateValid=1`, OI3 cleanup was `12/0` or
 `11/0`, and `failureCount=0`.  The issue is the comparative cost/latency
 envelope.
 
-S199--S204 then split the cost envelope:
+S199--S221 then split and corrected the foreground cost envelope:
 
 - S199 rejected a TCP payload timer-kick candidate: OI3 returned `0/4` and four
   app `SocketTimeoutException`s.
@@ -65,10 +71,18 @@ S199--S204 then split the cost envelope:
 - S203/S204 showed the remaining p95 around `526--535ms` comes from native TUN
   dispatcher -> owner handoff delay; target-trigger wake did not solve it and
   was reverted.
+- S205--S211 narrowed owner/completion handoff and added the guarded
+  post-Direct-send read observer.
+- S215--S218 isolated the final foreground tail to the TCP owner
+  lifecycle/admission seam; generic timer kicks, stale-wake drains, and early
+  response-complete rearm all had negative evidence.
+- S219/S220 introduced the owner-local finish/rearm and deferred successor-SYN
+  owner-fd candidate; S221 validated it in the matched foreground 8-request
+  Direct/HEV/OI3 comparison.
 
 Therefore the current result remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.
-The immediate next engineering question is the OI3 owner-handoff seam, not
-main-stack import.
+The immediate next engineering question is whether the S221 correction also
+closes screen-off and forced-Doze E2, not main-stack import.
 
 ## Main-stack implication
 
@@ -77,8 +91,10 @@ implementation work.
 
 Allowed next work:
 
-- design a focused OI3 performance/cost diagnosis using the S172/S192 matched
-  HTTP shape and the S171 L4 runner;
+- rerun the S192 screen-off and forced-Doze matched HTTP shape with the S221
+  comparison APK and retained F072 candidate;
+- extend focused OI3 performance/cost diagnosis using the S172/S192 matched
+  HTTP shape and the S171 L4 runner if device-state outliers remain;
 - identify whether the latency is caused by timer policy, owner scheduling,
   app probe pacing, TUN/HEV re-arm strategy, copy/materialization cost, Android
   state effects, or fixture/measurement overhead;

@@ -1,12 +1,12 @@
-# S204--S220 E2 OI3 write-interest, owner-handoff, and TCP lifecycle hotspot
+# S204--S221 E2 OI3 write-interest, owner-handoff, and TCP lifecycle hotspot
 
 Date: 2026-08-26
-Status: `F072_CANDIDATE_FIX_NEEDS_MATCHED_E2_RERUN`
+Status: `F072_FOREGROUND_MATCHED_E2_CLOSED_NEEDS_DEVICE_STATE_RERUN`
 
 ## Decision
 
 Do not import the current Android VPN/OI3 POC route directly into the
-product/main stack yet.
+product/main stack yet solely from foreground evidence.
 
 The S199--S214 diagnosis split the previous E2 latency gap into three concrete
 parts:
@@ -22,8 +22,9 @@ parts:
    retransmits that payload roughly 200ms later. In another shape, a successor
    SYN is deferred behind a completed TCP generation until stale tail /
    finish / rearm proceeds. S219/S220 introduced a focused candidate fix for
-   this seam and passed narrow TCP correctness/reconnect cells, but the
-   matched Direct/HEV/OI3 E2 comparison has not been rerun yet.
+   this seam and passed narrow TCP correctness/reconnect cells. S221 reran the
+   matched foreground Direct/HEV/OI3 8-request E2 comparison and closed this
+   foreground F072 gate.
 
 This is not a UID-drop failure, not an HTTP fixture failure, and not a
 correctness failure for the bounded matched HTTP cells.
@@ -53,6 +54,7 @@ correctness failure for the bounded matched HTTP cells.
 | S218 | `evidence/s218-e2-oi3-finish-after-buffer-debug-20260826/`, run `20260826-062746-118337` | Finish-after-buffer candidate preserved correctness (`8/8`, cleanup `12/0`) but did not fix latency; p95 `606ms`. Candidate reverted. |
 | S219 | `evidence/s219-e2-oi3-deferred-owner-fd-debug-20260826/`, run `20260826-064414-513752` | Owner-local finish/rearm plus deferred successor-SYN owner-fd candidate passed focused long TCP: Direct `876/876`, OI3 `480/480`, OI3 cleanup `5/0`, `valid=1`. |
 | S220 | `evidence/s220-e2-oi3-deferred-syn-reconnect-debug-20260826/`, run `20260826-064532-371054` | Same candidate passed focused reconnect TCP (`RECONNECT_EVERY=1`): Direct `623/623`, OI3 `337/337`, OI3 cleanup `6/0`, no app timeout/fatal/mismatch, `failures=0`. Logs show immediate owner-local finish/rearm avoided the observed deferred-SYN stall in this run; full matched E2 remains required. |
+| S221 | `evidence/s221-e2-matched-f072-candidate-8req-foreground-20260826/`, run `20260826-065247-722050` | Matched foreground Direct/HEV/OI3 8-request comparison passed with `failureCount=0`: Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, OI3 `8/8` p95 `24ms`, OI3 cleanup `12/0`. OI3 logs include `owner-busy-deferred`, `tcp-positive-fin-complete`, `tun-flow rearmed`, and `multi-deferred admit`; the previously hot lifecycle seam completed without timeout or cleanup failure. |
 
 ## Corrected root cause: connector write interest
 
@@ -126,7 +128,7 @@ The current conclusion is that the broad "dispatcher -> owner handoff" label is
 no longer precise enough for the remaining blocker. That earlier seam has been
 processed into targeted owner/completion handoff and post-send read-wake fixes.
 
-## Current remaining hotspot: TCP owner lifecycle / admission
+## Closed foreground hotspot: TCP owner lifecycle / admission
 
 Matched S212b and reverted S214 still fail the comparative OI3 latency gate.
 S215--S218 refine the shape: the residual is not a single missing socket wake.
@@ -177,13 +179,32 @@ S219/S220 changed the lifecycle seam instead of adding another generic wake:
 - Completed active TCP flow admission can force the active owner toward
   finish/rearm while preserving tail tombstoning.
 
-The focused evidence is positive but still bounded.  S220 intentionally used
-`RECONNECT_EVERY=1` and did overlap a new SYN with previous-flow completion,
-but the new immediate finish/rearm path cleared the active owner before the
-new flow had to enter the `multi-deferred` branch.  That is the desired fast
-path for this trace, not proof that every deferred-SYN timing shape is closed.
-Keep F072 open until the matched Direct/HEV/OI3 E2 matrix passes with the
-candidate retained.
+The focused evidence was positive but still bounded after S220. S221 then kept
+the candidate and reran the matched foreground Direct/HEV/OI3 8-request E2
+matrix with comparison APK provenance:
+
+- APK: `898906965d915b3540702ef3c5a838a5ba71dedeeb739b82f436debb6a8664e4`
+- OI3 plugin: `ab5f1ab11b020f5e49e74ed95c97ec52cf795ed99ee545f2afb950d9f8e1ce15`
+- HEV library: `420e67e71029888c3d6423b24a513bf6ed760fd159762903f22ee4235d016466`
+- `tun_poc_plugin.so`: `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`
+
+S221 result:
+
+- Direct: `8/8`, p50/p95/p99 `6/59/59ms`, `valid=1`.
+- HEV: `8/8`, p50/p95/p99 `7/11/11ms`, `valid=1`.
+- OI3: `8/8`, p50/p95/p99 `19/24/24ms`, cleanup `12/0`,
+  `valid=1`.
+- Manifest `failureCount=0`; installed APK/native artifact hashes matched the
+  local comparison APK.
+- OI3 logs include `owner-busy-deferred`, `tcp-positive-fin-complete`,
+  `tun-flow rearmed`, and `multi-deferred admit`. Tail packets were rejected
+  by tombstone as `reason=tcp-tail`; no `owner-stopped`, app timeout, submit
+  reject, queue reject, or cleanup failure was observed.
+
+This closes the foreground F072 lifecycle/admission gate. It does not close the
+older screen-off/forced-Doze E2 performance risk; those S192 cells used an
+older artifact and must be rerun with the S221 candidate before main-stack
+import can be justified as a full E2 decision.
 
 ## Implementation state
 
@@ -214,10 +235,11 @@ Current build pitfall:
 
 ## Next POC direction
 
-The next focused POC should validate the S219/S220 TCP generation
-lifecycle/admission candidate under the matched Direct/HEV/OI3 E2 matrix, not
-UID drop, app HTTP logic, generic connector polling, or the already rejected
-wake patches.
+The next focused POC should rerun the S192 device-state matrix
+(screen-off and forced-Doze) with the S221 comparison APK and retained F072
+candidate. Do not return to UID drop, app HTTP logic, generic connector
+polling, or the already rejected wake patches unless the new evidence points
+there.
 
 The lifecycle contract for the POC is now explicit: a completed response must
 not hold successor SYN admission hostage, but old tail packets must still be
