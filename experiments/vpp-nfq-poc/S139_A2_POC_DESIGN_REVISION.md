@@ -1,7 +1,8 @@
 # SAKAMOTO-139 A2 POC Design Revision
 
 Date: 2026-08-23  
-Status: evidence-guided working design for the remaining A2 execution  
+Updated: 2026-08-25 (S155 controlled A2-1 rerun exposed VPN-F061)
+Status: evidence-guided working design; A2-1 paused by `VPN-F061`
 Scope: Pixel multi-App UID attribution, policy, and transport-admission only
 
 ## Outcome
@@ -29,6 +30,15 @@ than repeated.
 
 This revision does not change ADR-0007, the Plane dependency DAG, or the rule
 that B1 remains blocked until A2 closes.
+
+S155 later implemented the A2-1 fixture/stage correction and proved that the
+original public-endpoint/startup-stage oracle defect is closed.  The corrected
+rerun is still `INCONCLUSIVE`: only 3/8 registered A2-1 tuples produced
+decisive native resolver + UID contract joins.  The successor gap is
+`VPN-F061`, recorded in
+[`S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`](S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md).
+Do not continue dependent A2 cells until the TCP owner-lookup and per-flow
+stage-correlation seam is repaired or the A2-1 claim is explicitly revised.
 
 ## Facts that force the correction
 
@@ -252,6 +262,25 @@ A2 is complete only when A2-0 through A2-6 all pass at their registered scope.
 Narrow historical cells may support diagnosis but cannot substitute for a
 missing required cell.
 
+#### A2-1 successor gap from S155
+
+S155's controlled A2-1 rerun fixed the old POC oracle and then exposed a
+deeper resolver/correlation boundary:
+
+- IPv4/IPv6 UDP tuples can produce correct UID miss/completion/cache-hit joins;
+- IPv6 TCP tuples repeatedly complete with terminal `uid=-1` from Android owner
+  lookup;
+- IPv4 TCP tuples may have App runtime records without native resolver/contract
+  joins;
+- a delayed resolver query can be logged under the next stage because native
+  code samples a process-global current stage rather than carrying a per-flow
+  stage identity.
+
+A2-1 therefore needs a repaired production-valid TCP owner lookup contract and
+per-flow/per-request stage correlation before another full eight-tuple rerun.
+The verifier must distinguish no query, terminal `uid=-1`, Java completion
+without native hit, wrong UID, and delayed query logged under another stage.
+
 #### A2-2 concurrency cohort rule
 
 A2-1 owns the complete eight-tuple matrix: two Apps × IPv4/IPv6 × TCP/UDP.
@@ -389,7 +418,9 @@ not decisive substitutes.
    verifier; run Host/static validation and commit a clean checkpoint.
 2. Run A2-0. Stop only to correct an invalid fixture or if an architecture
    interruption is observed.
-3. Run A2-1 and A2-2, then record evidence and checkpoint.
+3. Repair `VPN-F061`, rerun A2-1, and checkpoint.  Run A2-2 only after A2-1
+   can decisively join the base two-App matrix or the A2-1 claim is explicitly
+   revised.
 4. Run A2-3 controlled reverse, then A2-4 lifecycle native join.
 5. Run A2-5 admission ledger and A2-6 replay/settlement aggregate.
 6. Perform the final requirement-by-requirement A2 audit, update the evidence

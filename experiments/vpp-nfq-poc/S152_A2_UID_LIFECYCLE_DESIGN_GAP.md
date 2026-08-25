@@ -4,7 +4,7 @@ Execution and retry are governed by
 [`ANDROID_VPN_POC_EXECUTION_GUARDRAILS.md`](ANDROID_VPN_POC_EXECUTION_GUARDRAILS.md).
 
 Date: 2026-08-25
-Status: `INCONCLUSIVE_DESIGN_GAP`
+Status: `INCONCLUSIVE_SUCCESSOR_GAP`
 
 ## Decision
 
@@ -24,6 +24,51 @@ harness defect:
 
 Per the hotspot rule, do not keep retrying S152 until the POC design is
 revised.
+
+## S155 disposition
+
+S155 performed the required POC correction:
+
+- replaced public endpoints with a controlled WSL2/LAN IPv4+IPv6 TCP/UDP
+  fixture;
+- passed `uidContractStage` through the A2-1 runner, VpnLite, Java UID contract,
+  native resolver and manifest;
+- changed the verifier to require exact `cell_id=A2-1` and exact tuple
+  `stage_id`;
+- installed the local VpnLite/AppA/AppB APKs and retained installed-hash
+  provenance.
+
+The original S152 public-endpoint/startup-stage defect is therefore closed as
+`VPN-F060`.  However, the corrected S155 rerun2 is still `INCONCLUSIVE` and is
+now tracked as successor finding `VPN-F061`.
+
+S155 rerun2 evidence:
+
+```text
+experiments/vpp-nfq-poc/evidence/s155-a2-1-fixture-stage-20260825-run2/
+status=INCONCLUSIVE
+registeredTuples=8
+passedTuples=3
+```
+
+Valid gates passed: fixture registration/readiness, dual App UIDs, APK/source
+provenance, native VPP start, allowed UID scope, eight App runtime records,
+eight exact `STAGE_BEGIN` rows for `cell_id=A2-1`, VPN handle and cleanup. The
+run1 stage-arm harness assertion did not recur.
+
+The remaining blockers are different from the original S152 design gap:
+
+- IPv6 TCP tuples repeatedly returned `LOOKUP_UNAVAILABLE` with
+  `android-api-invalid-uid`;
+- IPv4 TCP tuples had runtime records but no decisive native resolver/contract
+  join;
+- one IPv6 UDP tuple had a Java UID completion but no matching decisive native
+  resolver hit;
+- native resolver stage attribution is process-global, so delayed asynchronous
+  queries can be logged under the next tuple's stage.
+
+Detailed diagnosis:
+[`S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`](S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md).
 
 ## Evidence
 
@@ -99,7 +144,8 @@ design gap, so ADB is not the primary blocker.
 
 ## Required redesign before rerun
 
-Do not run S152 again until the following are in place:
+The original redesign items below were implemented by S155. They are retained
+as the historical correction boundary, not as proof that A2-1 now passes:
 
 1. Replace public endpoints with controlled WSL2/LAN fixtures for the
    registered IPv4/IPv6 TCP/UDP tuples, including readiness proof and explicit
@@ -120,3 +166,5 @@ multi-App UID lifecycle matrix, reverse attribution, refresh/unavailable/
 recovery, stale rejection, UID-drop zero-broker/socket behavior, production
 cache sizing, public Internet behavior, or arbitrary OEM behavior.
 
+Do not proceed from S152 to dependent A2 cells until `VPN-F061` is resolved or
+the A2-1 claim is explicitly revised.

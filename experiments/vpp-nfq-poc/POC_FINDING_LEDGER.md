@@ -95,7 +95,8 @@ Map rather than encoded as TODOs here.
 | VPN-F057 | S183 OI3 UID gate treated async owner-lookup sentinel as terminal | `CLOSED_FOR_BOUNDED_UID_GATE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F058 | S184 owner-observed real LAN TCP RST required a narrow downstream reset propagation seam | `CLOSED_FOR_BOUNDED_REAL_RST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F059 | S185 bind/protect/broker infrastructure failures require phase-specific broker accounting | `CLOSED_FOR_BOUNDED_INFRA_FAILURE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `INCONCLUSIVE` | Pixel Android 16 + WSL2 LAN fixture required |
+| VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `CLOSED_AS_POC_DESIGN_FIX` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2054,9 +2055,46 @@ Map rather than encoded as TODOs here.
   manifest, and verifier; and reject tuple-only resolver matches from another
   cell or `startup`.  Rerun only the smallest A2-1 resolver-join slice before
   adding lifecycle or drop variants.
-- **Status:** `INCONCLUSIVE`; do not continue S152 dependent cells until the
-  POC design is revised.  Full details:
-  `S152_A2_UID_LIFECYCLE_DESIGN_GAP.md`.
+- **Correction evidence:** S155 implemented the controlled WSL2/LAN fixture,
+  A2-1 `uidContractStage`, exact stage-aware verifier, and VpnLite/AppA/AppB
+  installed-hash provenance.  The run1 stage-arm harness defect was corrected
+  by commit `cef24fb`, and rerun2 proved all eight exact `STAGE_BEGIN` records
+  with `cell_id=A2-1`.
+- **Status:** `CLOSED_AS_POC_DESIGN_FIX`.  The original public-endpoint/startup
+  oracle defect is closed, but the corrected matrix exposed successor finding
+  `VPN-F061`.  Full details:
+  `S152_A2_UID_LIFECYCLE_DESIGN_GAP.md` and
+  `S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`.
+
+### VPN-F061 -- S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap
+
+- **First observation:** The corrected S155 A2-1 rerun
+  `evidence/s155-a2-1-fixture-stage-20260825-run2/` was valid but
+  `INCONCLUSIVE`: artifact/device/fixture readiness, dual App UIDs, installed
+  APK hashes, native VPP start, allowed UID scope, eight runtime records, eight
+  exact `STAGE_BEGIN` records, VPN handle, and cleanup all passed, but only 3/8
+  registered tuples produced decisive native resolver + UID contract joins.
+- **Observed split:** AppA IPv4/UDP `45642`, AppA IPv6/UDP `45644`, and AppB
+  IPv4/UDP `45652` passed with correct UIDs.  AppA/AppB IPv6 TCP produced
+  repeated `LOOKUP_UNAVAILABLE` / `android-api-invalid-uid` completions.  AppA
+  and AppB IPv4 TCP had runtime records but no decisive resolver/contract join.
+  AppB IPv6 UDP had a Java `COMPLETION_ACCEPTED` for uid `12631`, but no
+  decisive native resolver uid hit.
+- **Root cause candidates:** The current Android owner API seam may not supply
+  stable UID attribution for these TCP shapes, especially IPv6 TCP, without a
+  different tuple direction/timing or replacement contract.  Separately, native
+  resolver logging samples a process-global current stage via `copy_stage()`;
+  delayed asynchronous resolver work can therefore be attributed to the next
+  tuple stage rather than to the request's own flow identity.
+- **Required correction:** Decide and implement the production-valid TCP owner
+  lookup contract, then replace process-global stage sampling with per-flow or
+  per-request stage correlation before rerunning A2-1.  The verifier must keep
+  the new failure modes distinct: no query, terminal `uid=-1`, Java accepted
+  without native hit, wrong UID, and delayed query under another stage.
+- **Status:** `OPEN_RISK`.  Do not continue A2-2/A2-4/A2-5 dependent cells or
+  the residual S152 matrix until this seam is repaired or the A2-1 claim is
+  deliberately revised.  Full details:
+  `S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`.
 
 ## Consolidation audit
 
@@ -2166,9 +2204,11 @@ Map rather than encoded as TODOs here.
   adds and closes F059 for the infrastructure-failure oracle: bind failure,
   protect failure, and broker unavailable must use exact broker result and
   phase-specific bind/protect accounting instead of one shared timeout/broker
-  assertion. S152 adds F060 as an inconclusive A2 design gap: public endpoints
-  and startup-labelled resolver rows cannot close the residual two-App UID
-  lifecycle matrix.
+  assertion. S152 adds F060 as an A2 design gap: public endpoints and
+  startup-labelled resolver rows cannot close the residual two-App UID
+  lifecycle matrix. S155 closes that original oracle defect with controlled
+  fixtures and exact stage logs, then adds F061 for the successor TCP
+  owner-lookup/per-flow stage-correlation gap.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2234,6 +2274,7 @@ Map rather than encoded as TODOs here.
 | S184 | Real LAN TCP RST observation and bounded downstream propagation closure | VPN-F058 |
 | S185 | Bind/protect/broker infrastructure failure separation | VPN-F059 |
 | S152 | Residual two-App UID matrix design gap | VPN-F060 |
+| S155 | Controlled A2-1 rerun2 resolver/correlation gap | VPN-F061 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
