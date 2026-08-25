@@ -29,6 +29,7 @@ FIRST_WAVE_WAIT_SECONDS="${FIRST_WAVE_WAIT_SECONDS:-8}"
 CONTRACT_POLL_INTERVAL="${CONTRACT_POLL_INTERVAL:-0.25}"
 CLEANUP_WAIT_SECONDS="${CLEANUP_WAIT_SECONDS:-10}"
 PAIR_LAUNCH_STAGGER_MILLIS="${PAIR_LAUNCH_STAGGER_MILLIS:-250}"
+UID_COMPLETION_DELAY_MILLIS="${UID_COMPLETION_DELAY_MILLIS:-1000}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-2-cache-concurrency}"
 FIXTURE_SCRIPT="${FIXTURE_SCRIPT:-$SCRIPT_DIR/s152-a2-1-fixture.py}"
 FIXTURE_LOG="${FIXTURE_LOG:-$RESULT_DIR/s152-a2-1-fixture.jsonl}"
@@ -57,6 +58,10 @@ RESOLVER_CORRELATION_SCHEMA="a2-1-resolver-cell-stage-request/v1"
 }
 [[ "$PAIR_LAUNCH_STAGGER_MILLIS" =~ ^[0-9]+$ ]] || {
   echo "PAIR_LAUNCH_STAGGER_MILLIS must be a non-negative integer" >&2
+  exit 2
+}
+[[ "$UID_COMPLETION_DELAY_MILLIS" =~ ^[0-9]+$ && "$UID_COMPLETION_DELAY_MILLIS" -le 3000 ]] || {
+  echo "UID_COMPLETION_DELAY_MILLIS must be 0..3000" >&2
   exit 2
 }
 PAIR_LAUNCH_STAGGER_SECONDS="$(printf '%d.%03d' \
@@ -524,6 +529,7 @@ echo "source-ports=AppA:45741-45742 AppB:45751-45752"
 echo "fixture_host4=$FIXTURE_HOST4 fixture_host6=$FIXTURE_HOST6"
 echo "fixture_udp_port=$FIXTURE_UDP_PORT"
 echo "pair-launch-stagger-ms=$PAIR_LAUNCH_STAGGER_MILLIS"
+echo "uid-completion-delay-ms=$UID_COMPLETION_DELAY_MILLIS"
 echo "public-internet=NON-CLAIM; external-connect/reply=NON-CLAIM; logcat=DIAGNOSTIC-ONLY"
 
 for apk in "$LOCAL_VPN_APK" "$LOCAL_APP_A_APK" "$LOCAL_APP_B_APK"; do
@@ -615,6 +621,7 @@ device_epoch="$(adb_cmd shell date +%s 2>/dev/null | tr -d '\r\n')"
   echo "fixtureHost6=$FIXTURE_HOST6"
   echo "fixtureTcpPort=$FIXTURE_TCP_PORT"
   echo "fixtureUdpPort=$FIXTURE_UDP_PORT"
+  echo "uidCompletionDelayMillis=$UID_COMPLETION_DELAY_MILLIS"
   echo "runner=$SCRIPT_DIR/$(basename "$0")"
 } >"$RESULT_DIR/source-provenance.properties"
 capture_apk_provenance
@@ -654,7 +661,8 @@ arm_uid_stage() {
   local stage_id="$1"
   local contract_text
   adb_cmd shell am start -W -n "$VPN_PACKAGE/.MainActivity" \
-    --es uidContractStage "$stage_id" >/dev/null
+    --es uidContractStage "$stage_id" \
+    --ei uidContractCompletionDelayMillis "$UID_COMPLETION_DELAY_MILLIS" >/dev/null
   for _ in $(seq 1 40); do
     contract_text="$(adb_su "cat '$CONTRACT_PATH' 2>/dev/null || true" | tr -d '\r')"
     if python3 -c '
@@ -680,6 +688,11 @@ raise SystemExit(1)
   done
   echo "UID contract stage did not arm: cell=$UID_CONTRACT_CELL stage=$stage_id" >&2
   return 1
+}
+
+reset_uid_completion_delay() {
+  adb_cmd shell am start -W -n "$VPN_PACKAGE/.MainActivity" \
+    --ei uidContractCompletionDelayMillis 0 >/dev/null
 }
 
 launch_tuple() {
@@ -836,6 +849,7 @@ if [[ "$first_wave_gate_observed" == true ]]; then
   fi
 fi
 launch_window_end_ns="$(monotonic_ns)"
+reset_uid_completion_delay
 launch_count=$((first_wave_launch_count + second_wave_launch_count))
 echo "launch_count=$launch_count launch_failures=$launch_failures"
 
@@ -1068,7 +1082,8 @@ python3 - "$RESULT_DIR/manifest.json" \
   "$local_vpn_apk_sha256" "$local_app_a_apk_sha256" "$local_app_b_apk_sha256" \
   "$expected_tun_plugin_sha256" "$fixture_script_sha256" \
   "$FIXTURE_HOST4" "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" "$FIXTURE_UDP_PORT" \
-  "$MODE" "$install_ok" "$RESOLVER_CORRELATION_SCHEMA" <<'PY'
+  "$MODE" "$install_ok" "$RESOLVER_CORRELATION_SCHEMA" \
+  "$UID_COMPLETION_DELAY_MILLIS" <<'PY'
 import json
 import sys
 
@@ -1076,7 +1091,7 @@ import sys
     output, vpn_package, app_a, app_b, vpn_uid, uid_a, uid_b,
     vpn_hash, app_a_hash, app_b_hash, plugin_hash, fixture_hash,
     fixture_host4, fixture_host6, fixture_tcp_port, fixture_udp_port,
-    mode, install_ok, resolver_correlation_schema,
+    mode, install_ok, resolver_correlation_schema, uid_completion_delay_millis,
 ) = sys.argv[1:]
 
 def integer(value):
@@ -1131,6 +1146,7 @@ manifest = {
     "mode": mode,
     "vppMode": 5,
     "blockOwnerUid": 99999,
+    "uidCompletionDelayMillis": int(uid_completion_delay_millis),
     "installOk": install_ok == "true",
     "runtimeFiles": {app_a: "a2-2-runtime-appa.jsonl", app_b: "a2-2-runtime-appb.jsonl"},
     "contractFile": "uid-attribution-contract.jsonl",
