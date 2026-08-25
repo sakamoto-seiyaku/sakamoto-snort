@@ -7,7 +7,7 @@ artifact/fixture validity gates, bounded retry rule, and hotspot stop rule.
 Plane remains the source of truth for open execution work.
 
 Date: 2026-08-23
-Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188-S190 remaining A2 S156 guardrail split)
+Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189/S190 remaining A2 S156 guardrail split)
 Plane owner: SAKAMOTO-137
 Output level: concrete POC design; no experiment executed by this document
 
@@ -125,6 +125,10 @@ closure evidence for S188/S189/S190.  S187/S191 additionally records the A2-3
 cleanup-control seam: when a cell claims native bounded cleanup, the runner
 must drive the test-only OI3 cleanup control before ordinary product stop;
 force-stop fallback or product-stop-only settlement is not cleanup proof.
+S188 additionally records the Android runtime overlay seam: a tun-poc plugin
+must be built from the same product runtime source/stage and ABI set as the
+packaged `libvlib.so`; a filename/hash join to an older isolated work-tree
+plugin is `INVALID` even if the APK member exists.
 
 A failed preflight is an environment, permission, fixture, or artifact finding.
 Correct it and rerun the same cell; do not classify it as transport timeout,
@@ -1115,6 +1119,24 @@ close full E2.
   `registeredTuples=4`, `passedSequences=4`, `concurrent=true`,
   `maxPendingObserved=2`, `maxCacheObserved=4`, clean source provenance, and
   controlled WSL2/LAN fixture endpoints.
+- **S188 A2-4 S156-guarded lifecycle/native status:** `PASS_LIFECYCLE_NATIVE_JOIN`.
+  The first S188 attempts exposed an artifact seam, not a UID/lifecycle design
+  failure: stale or ABI-mismatched tun-poc plugins caused VPP to start without
+  loading `tun_poc`, leaving `show tun-poc` as `unknown input` and resolver
+  `queries=0`.  Commit `138a2f4` moves the S156 resolver
+  `cell/stage/request` correlation into the product Android VPP overlay.  Clean
+  rerun
+  `evidence/s188-a2-4-lifecycle-native-join-20260826-overlay-run1/` passed
+  with `gitDirty=false`, fixture `192.168.4.5:55553`, resolver correlation
+  schema `a2-1-resolver-cell-stage-request/v1`, VpnLite APK SHA-256
+  `5aef6c5e20c02e82f4e2acdf882f8f1686fd19774040ea972507bf66b6b1be39`, runtime
+  `libvlib.so` SHA-256
+  `e6b6bf8f6864f77801a22bc60a8259744982af57aa9e933dc3c4f01361fde522`, and
+  `libtun_poc_plugin.so` SHA-256
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
+  Native resolver ledger, all lifecycle stage joins, generation refresh,
+  network-handle restart, and cleanup ledgers passed.  Continue with S189/S190;
+  do not reuse the historical A2-5/A2-6 bundles as S156-era closure evidence.
 - **Non-claims:** Release performance/power budgets, battery certification,
   production constants, or a formal zero-copy investment verdict.
 - **Conditional copy branch:** keep VPN-F018 paused if end-to-end gates pass.  If

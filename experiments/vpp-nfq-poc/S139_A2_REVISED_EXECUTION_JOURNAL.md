@@ -1,7 +1,7 @@
 # SAKAMOTO-139 A2 revised execution journal
 
 Date: 2026-08-23 (Asia/Taipei)  
-Updated: 2026-08-26 (S156-guarded A2-2 revalidation, S187/S191 A2-3 current refresh, and remaining-cell guardrail split)
+Updated: 2026-08-26 (S156-guarded A2-2 revalidation, S187/S191 A2-3 current refresh, S188 A2-4 overlay/runtime closure, and remaining-cell guardrail split)
 Plane: SAKAMOTO-139  
 Design: [S139_A2_POC_DESIGN_REVISION.md](S139_A2_POC_DESIGN_REVISION.md)  
 Device: Pixel 6a / arm64 / serial `28201JEGR0XPAJ`  
@@ -421,21 +421,82 @@ cleanup receipts report `cleanupObservedBeforeForceStop=true`,
 `nativeCleanupObserved=true`, `contractCleanupObserved=true`,
 `forceStopFallback=false`, and `pollAttempts=2`.
 
+## A2-4 S156-guarded lifecycle/native join refresh
+
+Cell: `A2-4 lifecycle/native join`
+Current verdict: `PASS`
+Aggregate remains: `A2_INCOMPLETE`; `architecture_interruption=false`
+
+S188 first exposed an artifact/runtime hotspot rather than a lifecycle or UID
+failure.  The initial A2-4 run used a stale VpnLite APK that failed preflight
+because it lacked the tun-poc plugin provenance asset and plugin members.  A
+corrected package then carried a S156-correlated `tun_poc_plugin.so`, but that
+plugin came from an older isolated VPP work tree and was ABI-mismatched with
+the product runtime libraries in the APK.  VPP started but did not load
+`tun_poc`: `show plugins` had no plugin row, `show tun-poc` and
+`tun-poc stage` were `unknown input`, and the resolver aggregate recorded
+`queries=0`.  That bundle was correctly `INVALID`; it did not test the A2-4
+lifecycle claim.
+
+Commit `138a2f4` fixes the Android VPP overlay so product runtime builds carry
+the S156 native resolver correlation in `plugins/tun_poc/tun_poc.c`.  The
+query now records `cell`, `stage`, and `request` at resolver request creation,
+using `SAKAMOTO_A2_STAGE_CELL` for the cell and the current native stage for
+the immutable request stage.  Static A2-4 tests now assert that the overlay
+contains this correlation seam.
+
+Clean-head rerun
+`evidence/s188-a2-4-lifecycle-native-join-20260826-overlay-run1/` is the
+current S156-era A2-4 PASS:
+
+- `gitHead=138a2f4f4db5d5c73b199eb9bd37e101afa286e0`;
+- `gitDirty=false`;
+- fixture destination `192.168.4.5:55553`;
+- `uidContractCellId=A2-4`;
+- `resolverCorrelationSchema=a2-1-resolver-cell-stage-request/v1`;
+- VpnLite APK SHA-256
+  `5aef6c5e20c02e82f4e2acdf882f8f1686fd19774040ea972507bf66b6b1be39`;
+- AppA APK SHA-256
+  `7b082e62109addc465d91e5df82e0fca47cf206158db2d6a2f929dcbca9b4809`;
+- runtime `libvpp_runtime.so` SHA-256
+  `cc2dfaaee109f1c54f884010dfdf856e8c462a288f7594ee43513b7c3287c022`;
+- runtime `libvlib.so` SHA-256
+  `e6b6bf8f6864f77801a22bc60a8259744982af57aa9e933dc3c4f01361fde522`;
+- `libtun_poc_plugin.so` and APK plugin-asset SHA-256
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
+
+All registered gates pass: baseline registration, session provenance,
+native VPP start, local and installed APK hashes, plugin hash join, install
+receipts, Java contract schema, native resolver ledger, stage boundaries,
+VPN network-handle restart, all nine Java/native lifecycle stage joins,
+refresh epochs, runtime generation refresh, cleanup settlement, contract
+cleanup, and native cleanup ledger.  `native-stale-join` remains
+`INCONCLUSIVE` only because `staleNativeJoinRequired=false` and
+`staleNativeJoinGap=false`; it is the retained non-claim from the historical
+A2-4 design, not a failure or invalidation reason.
+
+This closes A2-4 under the S156 guardrails and records a new POC artifact seam:
+future Android runtime/APK POCs must prove the selected tun plugin was built
+from the same product runtime source/stage as `libvlib.so`, not only that an
+APK member exists with the expected filename.
+
 ## Claim boundary and next cells
 
 A2-0, A2-1, and A2-2 now prove durable session provenance, the complete
 deterministic two-App dual-stack tuple/UID matrix, and bounded asynchronous
 cache/concurrency behavior. A2-3 now proves controlled Flow Stack reverse
 delivery with same-socket App receipt, canonical owner/UID reuse, raw TUN
-tuple integrity, no lookup/re-entry, and bounded cleanup. These cells do not
-prove lifecycle invalidation or downstream allow/drop admission.
+tuple integrity, no lookup/re-entry, and bounded cleanup. A2-4 now proves
+stage-correlated lifecycle invalidation/recovery, Java/native resolver joins,
+network-handle restart, generation refresh, and bounded cleanup on the current
+artifact. These cells do not prove downstream allow/drop admission.
 
 At the S156-era evidence standard, S187/S191 now closes the A2-3 current
-artifact refresh.  The remaining order is S188 A2-4 lifecycle native join,
-S189 A2-5 allow/drop admission ledger, and S190 A2-6 replay/settlement
-aggregate. The historical final audit below records the 2026-08-23 aggregate
-only; B1 remains a separate gate until the S156-era aggregate is aligned in
-Plane.
+artifact refresh and S188 closes A2-4 lifecycle native join.  The remaining
+order is S189 A2-5 allow/drop admission ledger and S190 A2-6
+replay/settlement aggregate. The historical final audit below records the
+2026-08-23 aggregate only; B1 remains a separate gate until the S156-era
+aggregate is aligned in Plane.
 
 ## Historical 2026-08-23 A2 closure audit
 
@@ -509,7 +570,8 @@ passing.
 ## A2 disposition and next gate
 
 A2 was complete at the registered 2026-08-23 POC scope, but is not yet complete
-at the S156-era guardrail scope.  The next action is to finish S188/S189/S190,
-produce a new aggregate audit from those guarded bundles, and only then
-consider unblocking B1 in Plane.  The historical aggregate does not claim
-external Internet reachability, production capacity, or a long lifecycle.
+at the S156-era guardrail scope.  S188 has closed A2-4; the next action is to
+finish S189/S190, produce a new aggregate audit from those guarded bundles,
+and only then consider unblocking B1 in Plane.  The historical aggregate does
+not claim external Internet reachability, production capacity, or a long
+lifecycle.

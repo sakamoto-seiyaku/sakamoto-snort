@@ -98,8 +98,9 @@ Map rather than encoded as TODOs here.
 | VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `CLOSED_AS_POC_DESIGN_FIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `CLOSED_FOR_S156_A2_1_BASE_MATRIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F062 | S156-guarded A2-2 rerun needed explicit owner-completion delay to prove pending overlap | `CLOSED_FOR_S186_A2_2_CONCURRENCY` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F063 | Remaining A2 historical PASS bundles lack S156 guardrail provenance | `OPEN_UNTIL_S188_S189_S190_RERUN` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F063 | Remaining A2 historical PASS bundles lack S156 guardrail provenance | `OPEN_UNTIL_S189_S190_RERUN` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F064 | S187 A2-3 current refresh needed explicit OI3 cleanup control before product stop | `CLOSED_FOR_S191_A2_3_CLEANUP_CONTROL` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F065 | S188 A2-4 Android overlay dropped S156 resolver correlation from the product runtime | `CLOSED_FOR_S188_A2_4_OVERLAY_CORRELATION` | Android VPP runtime overlay + Pixel Android 16 |
 
 ## Findings
 
@@ -2155,11 +2156,19 @@ Map rather than encoded as TODOs here.
   gate APK members on the native resolver correlation strings.  The old PASS
   bundles are retained as historical functional baselines but should evaluate
   `INVALID` under the S156-era verifier.
-- **Open closure condition:** S188 reruns A2-4, S189 reruns A2-5, and S190
-  reruns A2-6 on the current artifact with the upgraded guardrails.  A final
-  A2 aggregate is valid only after those S156-era reruns pass or produce a
-  newly classified finding.
-- **Status:** `OPEN_UNTIL_S188_S189_S190_RERUN`.  This is an evidence-standard
+- **Partial closure evidence:** S188 reran A2-4 on clean head
+  `138a2f4f4db5d5c73b199eb9bd37e101afa286e0` with controlled WSL2/LAN fixture
+  metadata, `uidContractCellId=A2-4`, and
+  `resolverCorrelationSchema=a2-1-resolver-cell-stage-request/v1`.  Bundle
+  `evidence/s188-a2-4-lifecycle-native-join-20260826-overlay-run1/` passed
+  with no `failureReasons`, no `invalidReasons`, and no architecture
+  interruption.  The S188 artifact seam correction is recorded separately as
+  `VPN-F065`.
+- **Open closure condition:** S189 reruns A2-5 and S190 reruns A2-6 on the
+  current artifact with the upgraded guardrails.  A final A2 aggregate is
+  valid only after those S156-era reruns pass or produce a newly classified
+  finding.
+- **Status:** `OPEN_UNTIL_S189_S190_RERUN`.  This is an evidence-standard
   correction, not a behavioral contradiction of the earlier UID/drop results.
   It does not require blocking FlowOwner, adding UID to the canonical flow key,
   reviving stale identity, or adding an alternate transport path.
@@ -2207,6 +2216,55 @@ Map rather than encoded as TODOs here.
 - **Status:** `CLOSED_FOR_S191_A2_3_CLEANUP_CONTROL`.  This is a POC cleanup
   control correction.  It does not weaken the A2-3 datapath claim, require UID
   in the FlowOwner key, or add a product stop semantics claim.
+
+### VPN-F065 -- S188 A2-4 Android overlay dropped S156 resolver correlation from the product runtime
+
+- **First observation:** S188 A2-4 repeatedly failed before it could test the
+  lifecycle/native-join claim.  One run used a stale VpnLite APK that lacked
+  the `assets/vpp-tun-poc-plugin.sha256` asset and required plugin members.
+  The corrected-artifact run then still evaluated `INVALID`: the APK contained
+  a plugin member, but VPP did not load `tun_poc`; `show plugins` had no
+  plugin row, `show tun-poc` and `tun-poc stage` were `unknown input`, and
+  `vpp-owner-resolver-aggregate.log` recorded `queries=0`.
+- **Root cause:** The product Android VPP overlay did not carry the S156 native
+  resolver correlation change into the pinned product runtime source.  The
+  usable S156 plugin existed in an older isolated work tree and contained
+  `cell %s stage %s request %llu`, but it was built against a different
+  `libvlib.so` than the current product runtime.  Mixing that plugin into the
+  current APK produced a provenance-looking artifact that the runtime could
+  not actually load.  This is an Android runtime overlay/artifact seam, not a
+  UID attribution, FlowOwner, or lifecycle design contradiction.
+- **Correction:** Commit `138a2f4` makes
+  `experiments/vpp-nfq-poc/scripts/apply-vpp-android-overlay.sh` insert the
+  S156 correlation into `plugins/tun_poc/tun_poc.c` for product Android runtime
+  builds.  The overlay now writes the resolver query as
+  `cell <cell> stage <stage> request <id>` at request creation time and derives
+  the cell from `SAKAMOTO_A2_STAGE_CELL`.  The A2-4 static test now asserts
+  that the overlay carries `tun_poc_ledger_cell`,
+  `SAKAMOTO_A2_STAGE_CELL`, `cell %s stage %s`, and `request %llu`.
+- **Closure evidence:** S188 clean rerun
+  `evidence/s188-a2-4-lifecycle-native-join-20260826-overlay-run1/` passed at
+  `gitHead=138a2f4f4db5d5c73b199eb9bd37e101afa286e0`,
+  `gitDirty=false`.  It records fixture destination `192.168.4.5:55553`,
+  VpnLite APK SHA-256
+  `5aef6c5e20c02e82f4e2acdf882f8f1686fd19774040ea972507bf66b6b1be39`, AppA
+  APK SHA-256
+  `7b082e62109addc465d91e5df82e0fca47cf206158db2d6a2f929dcbca9b4809`, runtime
+  `libvpp_runtime.so` SHA-256
+  `cc2dfaaee109f1c54f884010dfdf856e8c462a288f7594ee43513b7c3287c022`,
+  `libvlib.so` SHA-256
+  `e6b6bf8f6864f77801a22bc60a8259744982af57aa9e933dc3c4f01361fde522`, and
+  `libtun_poc_plugin.so` SHA-256
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.  The
+  native resolver ledger, all nine lifecycle stages, Java contract joins,
+  network-handle restart, generation refresh, contract cleanup, native cleanup
+  ledger, and final settlement passed.  `native-stale-join` remains
+  `INCONCLUSIVE` only because `staleNativeJoinRequired=false`; it is an
+  explicit non-claim, not a failure.
+- **Status:** `CLOSED_FOR_S188_A2_4_OVERLAY_CORRELATION`.  Future Android
+  runtime/APK POCs must prove that the selected tun plugin is built from the
+  same product runtime source/stage that supplies `libvlib.so`, not merely that
+  an APK member with the expected filename exists.
 
 ## Consolidation audit
 
@@ -2327,7 +2385,9 @@ Map rather than encoded as TODOs here.
   rerun with the S156 guardrail provenance instead of being reused as final
   closure. S187/S191 closes F064: A2-3's current-artifact refresh required an
   explicit test-only OI3 cleanup stop before ordinary product stop, and now
-  passes IPv4/IPv6 on clean head.
+  passes IPv4/IPv6 on clean head. S188 closes F065: the product Android VPP
+  overlay must carry the S156 resolver correlation into the same runtime source
+  and ABI set used by the APK.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2397,6 +2457,7 @@ Map rather than encoded as TODOs here.
 | S186 | S156-guarded A2-2 pending-overlap revalidation | VPN-F062 |
 | S188/S189/S190 | Remaining A2 S156 guardrail reruns | VPN-F063 |
 | S187/S191 | A2-3 current-artifact cleanup-control rerun | VPN-F064 |
+| S188 | A2-4 Android overlay/runtime resolver-correlation closure | VPN-F065 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
