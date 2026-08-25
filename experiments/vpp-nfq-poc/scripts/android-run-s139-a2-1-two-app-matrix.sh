@@ -27,6 +27,8 @@ BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-99999}"
 START_WAIT="${START_WAIT:-6}"
 TUPLE_WAIT="${TUPLE_WAIT:-4}"
 RESOLVER_WAIT="${RESOLVER_WAIT:-5}"
+TCP_REPEAT="${TCP_REPEAT:-4}"
+UDP_REPEAT="${UDP_REPEAT:-2}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-1-two-app-matrix}"
 FIXTURE_SCRIPT="${FIXTURE_SCRIPT:-$SCRIPT_DIR/s152-a2-1-fixture.py}"
 FIXTURE_LOG="${FIXTURE_LOG:-$RESULT_DIR/s152-a2-1-fixture.jsonl}"
@@ -241,6 +243,14 @@ expected_tun_plugin_sha256="$(unzip -p "$LOCAL_VPN_APK" \
   echo "local VpnLite APK lacks valid tun plugin provenance" >&2
   exit 2
 }
+[[ "$TCP_REPEAT" =~ ^[1-9][0-9]*$ && "$TCP_REPEAT" -le 16 ]] || {
+  echo "TCP_REPEAT must be 1..16" >&2
+  exit 2
+}
+[[ "$UDP_REPEAT" =~ ^[1-9][0-9]*$ && "$UDP_REPEAT" -le 16 ]] || {
+  echo "UDP_REPEAT must be 1..16" >&2
+  exit 2
+}
 require_apk_member_string "$LOCAL_VPN_APK" \
   "lib/arm64-v8a/libvpnfdprobe.so" \
   "cell=%s stage=%s request=%llu" \
@@ -313,6 +323,8 @@ device_epoch="$(adb_cmd shell date +%s 2>/dev/null | tr -d '\r\n')"
   echo "fixtureHost6=$FIXTURE_HOST6"
   echo "fixtureTcpPort=$FIXTURE_TCP_PORT"
   echo "fixtureUdpPort=$FIXTURE_UDP_PORT"
+  echo "tcpRepeat=$TCP_REPEAT"
+  echo "udpRepeat=$UDP_REPEAT"
   echo "runner=$SCRIPT_DIR/$(basename "$0")"
 } >"$RESULT_DIR/source-provenance.properties"
 capture_apk_provenance
@@ -375,7 +387,11 @@ emit_tuple() {
   local destination_host="$5"
   local destination_port="$6"
   local stage_id="$7"
+  local repeat="$UDP_REPEAT"
   local activity="$package_name/$TRAFFIC_ACTIVITY"
+  if [[ "$protocol" == "tcp" ]]; then
+    repeat="$TCP_REPEAT"
+  fi
   echo "## emit package=$package_name stage=$stage_id $family/$protocol $source_port -> $destination_host:$destination_port"
   arm_uid_stage "$stage_id"
   adb_cmd shell am start -a com.sakamoto.snort.a2traffic.EMIT \
@@ -387,7 +403,7 @@ emit_tuple() {
     --es a2MatrixDestinationHost "$destination_host" \
     --ei a2MatrixDestinationPort "$destination_port" \
     --ei a2MatrixTimeoutMillis 1200 \
-    --ei a2MatrixRepeat 2
+    --ei a2MatrixRepeat "$repeat"
   sleep "$TUPLE_WAIT"
 }
 
@@ -434,7 +450,7 @@ python3 - "$RESULT_DIR/manifest.json" \
   "$local_vpn_apk_sha256" "$local_app_a_apk_sha256" "$local_app_b_apk_sha256" \
   "$expected_tun_plugin_sha256" "$fixture_script_sha256" \
   "$FIXTURE_HOST4" "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" "$FIXTURE_UDP_PORT" \
-  "$MODE" "$install_ok" "$RESOLVER_CORRELATION_SCHEMA" <<'PY'
+  "$MODE" "$install_ok" "$RESOLVER_CORRELATION_SCHEMA" "$TCP_REPEAT" "$UDP_REPEAT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -443,7 +459,7 @@ from pathlib import Path
     output, vpn_package, app_a, app_b, vpn_uid, uid_a, uid_b,
     vpn_hash, app_a_hash, app_b_hash, plugin_hash, fixture_hash,
     fixture_host4, fixture_host6, fixture_tcp_port, fixture_udp_port,
-    mode, install_ok, resolver_correlation_schema,
+    mode, install_ok, resolver_correlation_schema, tcp_repeat, udp_repeat,
 ) = sys.argv[1:]
 
 def integer(value):
@@ -509,31 +525,31 @@ tuples = [
     {"stageId": "A2-1-appa-ip4-tcp", "package": app_a, "family": "ip4", "protocol": 6,
      "protocolName": "tcp", "sourceAddress": "10.111.0.2",
      "sourcePort": tcp_source_port(app_a, "A2-1-appa-ip4-tcp", integer(uid_a)), "requestedSourcePort": 0, "destinationHost": fixture_host4,
-     "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": 2},
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": int(tcp_repeat)},
     {"stageId": "A2-1-appa-ip4-udp", "package": app_a, "family": "ip4", "protocol": 17,
      "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45642, "requestedSourcePort": 45642, "destinationHost": fixture_host4,
-     "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": 2},
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": int(udp_repeat)},
     {"stageId": "A2-1-appa-ip6-tcp", "package": app_a, "family": "ip6", "protocol": 6,
      "protocolName": "tcp", "sourceAddress": "fd00:111:111::2",
      "sourcePort": tcp_source_port(app_a, "A2-1-appa-ip6-tcp", integer(uid_a)), "requestedSourcePort": 0, "destinationHost": fixture_host6,
-     "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": 2},
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": int(tcp_repeat)},
     {"stageId": "A2-1-appa-ip6-udp", "package": app_a, "family": "ip6", "protocol": 17,
      "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45644, "requestedSourcePort": 45644, "destinationHost": fixture_host6,
-     "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": 2},
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": int(udp_repeat)},
     {"stageId": "A2-1-appb-ip4-tcp", "package": app_b, "family": "ip4", "protocol": 6,
      "protocolName": "tcp", "sourceAddress": "10.111.0.2",
      "sourcePort": tcp_source_port(app_b, "A2-1-appb-ip4-tcp", integer(uid_b)), "requestedSourcePort": 0, "destinationHost": fixture_host4,
-     "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": 2},
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_tcp_port), "repeat": int(tcp_repeat)},
     {"stageId": "A2-1-appb-ip4-udp", "package": app_b, "family": "ip4", "protocol": 17,
      "protocolName": "udp", "sourceAddress": "10.111.0.2", "sourcePort": 45652, "requestedSourcePort": 45652, "destinationHost": fixture_host4,
-     "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": 2},
+     "destinationAddress": fixture_host4, "destinationPort": int(fixture_udp_port), "repeat": int(udp_repeat)},
     {"stageId": "A2-1-appb-ip6-tcp", "package": app_b, "family": "ip6", "protocol": 6,
      "protocolName": "tcp", "sourceAddress": "fd00:111:111::2",
      "sourcePort": tcp_source_port(app_b, "A2-1-appb-ip6-tcp", integer(uid_b)), "requestedSourcePort": 0, "destinationHost": fixture_host6,
-     "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": 2},
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_tcp_port), "repeat": int(tcp_repeat)},
     {"stageId": "A2-1-appb-ip6-udp", "package": app_b, "family": "ip6", "protocol": 17,
      "protocolName": "udp", "sourceAddress": "fd00:111:111::2", "sourcePort": 45654, "requestedSourcePort": 45654, "destinationHost": fixture_host6,
-     "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": 2},
+     "destinationAddress": fixture_host6, "destinationPort": int(fixture_udp_port), "repeat": int(udp_repeat)},
 ]
 for item in tuples:
     item["uidContractStage"] = item["stageId"]
