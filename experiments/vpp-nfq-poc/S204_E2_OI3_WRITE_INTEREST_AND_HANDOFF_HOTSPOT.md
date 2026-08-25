@@ -1,7 +1,7 @@
-# S204--S214 E2 OI3 write-interest, owner-handoff, and first-payload hotspot
+# S204--S218 E2 OI3 write-interest, owner-handoff, and TCP lifecycle hotspot
 
 Date: 2026-08-26
-Status: `PARTIAL_FIX_WITH_RESIDUAL_FIRST_PAYLOAD_WRITE_DRIVE_HOTSPOT`
+Status: `PARTIAL_FIX_WITH_RESIDUAL_TCP_OWNER_LIFECYCLE_HOTSPOT`
 
 ## Decision
 
@@ -17,10 +17,12 @@ parts:
    wake delay. This part is corrected/narrowed for the focused OI3 cell by the
    explicit owner/completion handoff path and the targeted post-Direct-send
    poll observer.
-3. A remaining first-payload write-drive delay. In the current outliers, the
+3. A remaining TCP owner lifecycle/admission delay. In one outlier shape, the
    first HTTP payload is submitted but Direct send does not happen until Android
-   retransmits that payload roughly 200ms later. This part is still open and is
-   the current E2 performance blocker.
+   retransmits that payload roughly 200ms later. In another shape, a successor
+   SYN is deferred behind a completed TCP generation until stale tail /
+   finish / rearm proceeds. This part is still open and is the current E2
+   performance blocker.
 
 This is not a UID-drop failure, not an HTTP fixture failure, and not a
 correctness failure for the bounded matched HTTP cells.
@@ -44,6 +46,10 @@ correctness failure for the bounded matched HTTP cells.
 | S212b | `evidence/s212b-e2-matched-after-post-send-read-observer-20260826/`, run `20260826-060037-266591` | Matched run passed Direct `8/8` p95 `86ms`, HEV `8/8` p95 `22ms`, OI3 `8/8` p95 `336ms`; residual remains. |
 | S213 | `evidence/s213-e2-oi3-stale-wake-drain-20260826/`, run `20260826-060542-527708` | Stale-wake drain rejected; OI3 `8/8` but p95 worsened to `476ms`. Candidate reverted. |
 | S214 | `evidence/s214-e2-oi3-post-send-revert-drain-20260826/`, run `20260826-060752-407437` | Reverted-drain baseline passed OI3 `8/8`, p50/p95/p99 `73/357/357ms`; residual stable. |
+| S215 | `evidence/s215-e2-oi3-f072-poll-instrument-20260826/`, run `20260826-061750-962864` | Instrumented OI3 `8/8`, p95 `566ms`; poll saw `write_pending`/`POLLOUT`, and slow requests showed successor SYN deferred behind completed-owner lifecycle. |
+| S216 | `evidence/s216-e2-oi3-f072-finish-instrument-20260826/`, run `20260826-062214-952868` | Instrumented OI3 `8/8`, p95 `81ms`; useful as a green control only, not a fix. |
+| S217 | `evidence/s217-e2-oi3-positive-reply-rearm-debug-20260826/`, run `20260826-062522-577059` | Early response-complete rearm candidate rejected: OI3 `6/8`, two `SocketTimeoutException`s, cleanup `9/2`, `owner-stopped` rejects. Candidate reverted. |
+| S218 | `evidence/s218-e2-oi3-finish-after-buffer-debug-20260826/`, run `20260826-062746-118337` | Finish-after-buffer candidate preserved correctness (`8/8`, cleanup `12/0`) but did not fix latency; p95 `606ms`. Candidate reverted. |
 
 ## Corrected root cause: connector write interest
 
@@ -117,10 +123,13 @@ The current conclusion is that the broad "dispatcher -> owner handoff" label is
 no longer precise enough for the remaining blocker. That earlier seam has been
 processed into targeted owner/completion handoff and post-send read-wake fixes.
 
-## Current remaining hotspot: first-payload write drive
+## Current remaining hotspot: TCP owner lifecycle / admission
 
 Matched S212b and reverted S214 still fail the comparative OI3 latency gate.
-The residual outliers have a different shape:
+S215--S218 refine the shape: the residual is not a single missing socket wake.
+It sits at the TCP owner lifecycle/admission boundary.
+
+First observed shape:
 
 - The app connects and submits the first HTTP payload.
 - Native receives/submits that payload.
@@ -129,10 +138,19 @@ The residual outliers have a different shape:
 - That duplicate payload triggers Direct send.
 - After Direct send, the S211 observer drives Direct read promptly.
 
+Second observed shape:
+
+- The previous request has completed its Direct response.
+- The owner remains active for TCP tail/lifecycle settlement.
+- A successor SYN for a new request reaches OI3 and is placed in
+  `owner-busy-deferred`.
+- The app's `connect()` latency includes the wait for stale tail / finish /
+  rearm before broker request and SYN/ACK can proceed.
+
 Therefore the next hotspot is not UID attribution, policy, HTTP fixture,
 owner-handoff, broker completion, `TCP_NODELAY`, or post-send Direct read. It is
-the connector/poll/owner re-entry path between first payload submit and first
-Direct send.
+the TCP generation lifecycle design around completed response, stale tail,
+successor SYN deferral, and first protected write drive.
 
 Rejected candidates to avoid:
 
@@ -141,6 +159,10 @@ Rejected candidates to avoid:
 - `TCP_NODELAY` as sole fix: S209 still had p95 `524ms`.
 - Stale connector wake drain: S213 worsened connect-tail behavior and was
   reverted before S214.
+- Early response-complete rearm: S217 reduced latency for successful requests
+  but broke correctness (`6/8`, `owner-stopped` rejects, cleanup `9/2`).
+- Finish-after-buffer scheduling shortcut: S218 preserved correctness but left
+  p95 at `606ms`.
 
 ## Implementation state
 
@@ -169,11 +191,12 @@ Current build pitfall:
 
 ## Next POC direction
 
-The next focused POC should target first-payload write drive, not UID drop, app
-HTTP logic, generic connector polling, or the already rejected stale-wake drain.
+The next focused POC should target TCP generation lifecycle/admission, not UID
+drop, app HTTP logic, generic connector polling, or the already rejected wake
+patches.
 
-A plausible next design is a targeted owner re-entry or write-readiness observer
-when first payload is submitted while the connector still has pending write
-work and no Direct send has occurred. The acceptance gate remains matched
-Direct/HEV/OI3 E2 latency under the ADR-0007 comparative threshold, plus
-unchanged cleanup/correctness validity.
+A plausible next design needs an explicit short-flow lifecycle contract for the
+POC: a completed response must not hold successor SYN admission hostage, but
+old tail packets must still be tombstoned without killing the owner. The
+acceptance gate remains matched Direct/HEV/OI3 E2 latency under the ADR-0007
+comparative threshold, plus unchanged cleanup/correctness validity.

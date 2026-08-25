@@ -107,7 +107,7 @@ Map rather than encoded as TODOs here.
 | VPN-F069 | E2 matched HTTP/device-state latency exceeds ADR-0007 comparative threshold | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F070 | OI3 connector poll missed protected write interest after TCP payload submit | `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F071 | OI3 multi dispatcher-to-owner handoff and post-send read wake path caused the first residual tail | `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F072 | OI3 first HTTP payload submit can wait for app retransmission before Direct send | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2453,9 +2453,12 @@ Map rather than encoded as TODOs here.
   OI3 cell improved to p50/p95/p99 `31/95/95ms`.  Matched S212b and reverted
   S214 still show an open residual: OI3 completes `8/8`, but p95 remains
   `336--357ms` while Direct/HEV remain `86/22ms` in the matched run.  Native
-  timing localizes the residual to the first HTTP payload submit not promptly
-  driving Direct send until Android retransmits the payload roughly 200ms
-  later.  This is recorded as VPN-F072.
+  timing initially localized one residual shape to first HTTP payload submit
+  not promptly driving Direct send until Android retransmits the payload
+  roughly 200ms later.  S215--S218 then showed a second shape in the same
+  lifecycle/admission area: a completed TCP owner can keep the successor SYN in
+  the per-owner deferred queue until stale tail/finish/rearm completes.  This
+  combined open risk is recorded as VPN-F072.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a focused latency/cost diagnosis and a corrected E2
@@ -2539,7 +2542,7 @@ Map rather than encoded as TODOs here.
   VPN-F072.
 - **Status:** `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE`.
 
-### VPN-F072 -- OI3 first HTTP payload submit can wait for app retransmission before Direct send
+### VPN-F072 -- OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive
 
 - **First observation:** After the F071 post-send observer, the focused
   four-request OI3 cell improved sharply, but longer matched E2 still retained
@@ -2556,18 +2559,44 @@ Map rather than encoded as TODOs here.
   (`runId=20260826-060542-527708`) tried to drain stale connector wakes.  It
   worsened connect-tail behavior, producing OI3 `8/8` but p95 `476ms`, and was
   reverted before S214.
-- **Observed delay:** In the S212b/S214 outliers, the first HTTP payload reaches
-  native and is submitted, but no Direct send follows until Android repeats the
-  payload roughly 200ms later.  Once Direct send happens, the S211 observer
-  drives Direct read promptly.  The residual is therefore a first-payload
-  write-drive problem, not the earlier post-send read-wake problem.
+- **S215--S218 refinement:** S215
+  `evidence/s215-e2-oi3-f072-poll-instrument-20260826/`
+  (`runId=20260826-061750-962864`) reproduced OI3 `8/8` with p95 `566ms`.
+  The added poll instrumentation showed that `connector_write_pending` was
+  visible to the observer (`POLLOUT` was armed and woke), so the earlier
+  "observer did not upgrade to POLLOUT" hypothesis is insufficient.  The same
+  run exposed a connect-tail variant: successor SYN packets were admitted to
+  `owner-busy-deferred` and waited for the previous completed TCP owner's
+  stale-tail/finish/rearm path.  S216
+  `evidence/s216-e2-oi3-f072-finish-instrument-20260826/` passed OI3 `8/8`
+  p95 `81ms` with instrumentation, proving the environment and controls were
+  not inherently slow but not closing the bug because no code fix had been
+  validated.  S217
+  `evidence/s217-e2-oi3-positive-reply-rearm-debug-20260826/` rejected an
+  early positive-reply rearm candidate: latency improved for successes, but
+  correctness failed (`6/8`, two `SocketTimeoutException`s, cleanup `9/2`) due
+  to `owner-stopped` admission rejects and empty-generation failures.  S218
+  `evidence/s218-e2-oi3-finish-after-buffer-debug-20260826/` kept correctness
+  (`8/8`, cleanup `12/0`) but did not fix latency (p95 `606ms`).
+- **Observed delay:** F072 has at least two manifestations in the same
+  owner-lifecycle/admission region.  In S212b/S214, the first HTTP payload
+  reaches native and is submitted, but no Direct send follows until Android
+  repeats the payload roughly 200ms later.  In S215/S218, the slow requests are
+  dominated by connect time: a successor SYN is deferred behind a completed
+  TCP generation and waits for stale tail / finish / rearm before the broker
+  request and SYN/ACK path begin.
 - **Supported claim:** OI3 correctness, cleanup, fixture reachability, and
-  Direct/HEV controls are stable for this shape; the remaining E2 blocker is a
-  narrow OI3 scheduling/readiness seam around first payload submission.
-- **Next correction direction:** Instrument and fix the connector/poll/owner
-  re-entry path between first payload submit and first Direct send.  Avoid
-  reintroducing generic payload timer kicks or stale-wake drains; both have
-  negative evidence.
+  Direct/HEV controls are stable for the accepted baseline, but the remaining
+  E2 blocker is not a single socket option or UID/policy defect.  It is the
+  TCP owner lifecycle/admission seam between completed response, stale tail,
+  deferred successor SYN, and first protected write drive.
+- **Next correction direction:** Redesign the bounded TCP generation lifecycle
+  for this POC before adding more small wake patches.  The fix must preserve
+  successor SYN admission and cleanup correctness while preventing a completed
+  generation from holding the owner until Android tail traffic or the next
+  request forces rearm.  Avoid reintroducing generic payload timer kicks,
+  stale-wake drains, or response-complete early rearm; all have negative
+  evidence.
 - **Status:** `OPEN_RISK`.  Main-stack import remains blocked until F072 is
   corrected and matched Direct/HEV/OI3 E2 is rerun, or until an explicit
   architecture decision changes the route.
@@ -2775,7 +2804,7 @@ Map rather than encoded as TODOs here.
 | S192/S193 | E2 device-state comparison and final audit performance gap | VPN-F069 |
 | S199--S202 | OI3 connector write-interest diagnosis and correction | VPN-F070 |
 | S203--S211 | OI3 dispatcher/owner handoff and post-send read-wake diagnosis/correction | VPN-F071 |
-| S212--S214 | OI3 first-payload write-drive residual diagnosis | VPN-F072 |
+| S212--S218 | OI3 TCP owner lifecycle / successor SYN / first-payload residual diagnosis | VPN-F072 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
