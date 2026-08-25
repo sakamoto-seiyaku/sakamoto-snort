@@ -213,9 +213,9 @@ capture_state() {
   adb_read 'dumpsys thermalservice 2>/dev/null || true' >"$phase_dir/state-$label/thermal.txt"
   adb_read "dumpsys connectivity | grep -E 'NetworkAgentInfo|TRANSPORT_VPN|NOT_VPN|WIFI|network\\{netId' | head -n 160 || true" >"$phase_dir/state-$label/connectivity.txt"
   adb_cmd logcat -d -s SnortVpnLite:I SnortVpnLiteNative:I '*:S' | tr -d '\r' >"$phase_dir/state-$label/logcat.txt"
-  app_pid="$(find_pid "$snapshot" app "$UID")"
-  vpp_pid="$(find_pid "$snapshot" vpp "$UID")"
-  hev_pid="$(find_pid "$snapshot" hev "$UID" "$app_pid")"
+  app_pid="$(find_pid "$snapshot" app "$PACKAGE_UID")"
+  vpp_pid="$(find_pid "$snapshot" vpp "$PACKAGE_UID")"
+  hev_pid="$(find_pid "$snapshot" hev "$PACKAGE_UID" "$app_pid")"
   {
     echo "label=$label"
     echo "host_time=$(date -Ins)"
@@ -540,8 +540,8 @@ echo "udpExpectEcho=$UDP_EXPECT_ECHO"
 echo "artifact=$APK apk_sha256=$(sha256sum "$APK" | awk '{print $1}')"
 device_preflight
 [[ -f "$APK" ]] || { echo "APK not found: $APK" >&2; exit 1; }
-UID="$(package_uid)"
-[[ -n "$UID" ]] || { echo "package UID unavailable" >&2; exit 1; }
+PACKAGE_UID="$(package_uid)"
+[[ -n "$PACKAGE_UID" ]] || { echo "package UID unavailable" >&2; exit 1; }
 adb_cmd shell am compat disable RESTRICT_LOCAL_NETWORK "$PACKAGE" >/dev/null 2>&1 || true
 adb_cmd shell pm grant "$PACKAGE" android.permission.NEARBY_WIFI_DEVICES >/dev/null 2>&1 || true
 start_fixture

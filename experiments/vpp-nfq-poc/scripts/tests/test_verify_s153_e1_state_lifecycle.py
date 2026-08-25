@@ -74,6 +74,10 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
         self.assertIn('--ez expectEcho "$expect_echo"', self.runner)
         self.assertIn('"udpExpectEcho":$UDP_EXPECT_ECHO', self.runner)
 
+    def test_runner_does_not_assign_shell_readonly_uid(self):
+        self.assertIn('PACKAGE_UID="$(package_uid)"', self.runner)
+        self.assertNotRegex(self.runner, r'(?m)^UID=')
+
 
 if __name__ == "__main__":
     unittest.main()
