@@ -1,6 +1,7 @@
 # SAKAMOTO-139 A2 revised execution journal
 
 Date: 2026-08-23 (Asia/Taipei)  
+Updated: 2026-08-26 (S156-guarded A2-2 revalidation)
 Plane: SAKAMOTO-139  
 Design: [S139_A2_POC_DESIGN_REVISION.md](S139_A2_POC_DESIGN_REVISION.md)  
 Device: Pixel 6a / arm64 / serial `28201JEGR0XPAJ`  
@@ -278,6 +279,48 @@ This closes the A2-2 fixture/contract hotspot. The prior failures were all
 bounded evidence or Android intent/socket timing defects; none showed a wrong
 UID, cross-App cache hit, stale identity, FlowOwner bypass, or architecture
 interruption.
+
+### 2026-08-26 S156-guarded A2-2 revalidation
+
+After S156 closed `VPN-F061`, A2-2 was rerun from the new guardrail baseline
+rather than relying on the 2026-08-23 public-endpoint-era bundle.  The runner
+now rejects stale APK/native artifacts, uses the WSL2/LAN fixture endpoints,
+records `uidContractCellId=A2-2`, requires resolver
+`cell/stage/request` correlation, installs VpnLite as part of the run, and
+keeps the source provenance clean before device execution.
+
+The first guarded bundle,
+`evidence/s186-a2-2-cache-concurrency-20260826-run1/`, was
+`INCONCLUSIVE`, not failed.  It proved all four same-identity
+`MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT` sequences and reached
+`maxCacheObserved=4`, but `maxPendingObserved=1`.  The contract showed each
+Android owner completion finished before the next App lookup was submitted.
+That was a concurrency fixture timing issue caused by fast owner resolution
+plus the per-stage ADB control round trip, not a UID attribution or cache
+identity defect.
+
+Commit `4b5182a` corrected the fixture by applying the existing bounded
+`uidContractCompletionDelayMillis` control to A2-2 stage arms.  The second
+guarded bundle,
+`evidence/s186-a2-2-cache-concurrency-20260826-run2/`, is the decisive
+S156-era A2-2 PASS:
+
+- `status=PASS`;
+- `registeredTuples=4`;
+- `passedSequences=4`;
+- `concurrent=true`;
+- `maxPendingObserved=2` under declared pending capacity `4`;
+- `maxCacheObserved=4` under declared cache capacity `4`;
+- final cleanup settled to `pending=0/cache=0/flow-ids=0`;
+- source provenance is `gitHead=4b5182a4069ba0142f65446f7a15e064fe1807c7`,
+  `gitDirty=false`;
+- fixture endpoints are `192.168.4.5:55553` and
+  `fd76:d462:c4e3:0:542e:6667:7d53:b784:55553`;
+- `uidCompletionDelayMillis=1000`.
+
+This revalidation closes A2-2 under the S156 guardrails.  It does not broaden
+A2-2 into production cache sizing, lifecycle invalidation, external
+connectivity, or B1/B2 whole-device behavior.
 
 ## A2-3 controlled reverse-return execution
 

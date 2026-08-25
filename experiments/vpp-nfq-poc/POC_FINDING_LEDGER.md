@@ -1,6 +1,6 @@
 # Android VPN POC Finding Ledger
 
-Date: 2026-08-25
+Date: 2026-08-26
 Plane owner: SAKAMOTO-135
 
 Finding diagnosis, delegated execution, and hotspot retry must follow
@@ -97,6 +97,7 @@ Map rather than encoded as TODOs here.
 | VPN-F059 | S185 bind/protect/broker infrastructure failures require phase-specific broker accounting | `CLOSED_FOR_BOUNDED_INFRA_FAILURE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `CLOSED_AS_POC_DESIGN_FIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `CLOSED_FOR_S156_A2_1_BASE_MATRIX` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F062 | S156-guarded A2-2 rerun needed explicit owner-completion delay to prove pending overlap | `CLOSED_FOR_S186_A2_2_CONCURRENCY` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2102,6 +2103,37 @@ Map rather than encoded as TODOs here.
   sizing/expiry, or production capacity.  Full details:
   `S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`.
 
+### VPN-F062 -- S156-guarded A2-2 rerun needed explicit owner-completion delay to prove pending overlap
+
+- **First observation:** The S156-guarded A2-2 rerun
+  `evidence/s186-a2-2-cache-concurrency-20260826-run1/` was
+  `INCONCLUSIVE`: all four registered App/family UDP tuples produced correct
+  same-identity `MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT` chains,
+  but the native ledger never exceeded `maxPendingObserved=1`.
+- **Root cause:** Android owner lookup completed faster than the runner could
+  arm and launch the next staged App request.  The 250 ms AppA/AppB delivery
+  stagger and the per-stage ADB control round trip protected intent delivery
+  and resolver `cell/stage/request` correlation, but also serialized the
+  first-wave miss/completion enough to lose the pending-overlap proof.
+- **Correction:** Commit `4b5182a` applies the existing bounded
+  `uidContractCompletionDelayMillis` control while arming A2-2 stages and
+  records `uidCompletionDelayMillis` in source provenance and manifest.  This
+  delays asynchronous owner completion without changing tuple keys, App UIDs,
+  cache identity, or FlowOwner topology.
+- **Closure evidence:** `evidence/s186-a2-2-cache-concurrency-20260826-run2/`
+  passed at clean `gitHead=4b5182a4069ba0142f65446f7a15e064fe1807c7`,
+  `gitDirty=false`, with `registeredTuples=4`, `passedSequences=4`,
+  `concurrent=true`, `maxPendingObserved=2`, `maxCacheObserved=4`, final
+  `pending=0/cache=0/flow-ids=0`, controlled fixture endpoints
+  `192.168.4.5:55553` and
+  `fd76:d462:c4e3:0:542e:6667:7d53:b784:55553`, and resolver
+  `cell/stage/request` correlation.
+- **Status:** `CLOSED_FOR_S186_A2_2_CONCURRENCY`.  This closes A2-2 under the
+  S156 guardrails.  It is a POC timing correction, not evidence that UID must
+  enter the canonical FlowOwner key or block owner execution.  It does not
+  claim production cache sizing, lifecycle invalidation, external connectivity,
+  or B1/B2 whole-device behavior.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2214,7 +2246,9 @@ Map rather than encoded as TODOs here.
   startup-labelled resolver rows cannot close the residual two-App UID
   lifecycle matrix. S155 closes that original oracle defect with controlled
   fixtures and exact stage logs, then adds F061 for the successor TCP
-  owner-lookup/per-flow stage-correlation gap.
+  owner-lookup/per-flow stage-correlation gap. S186 closes F062 for the
+  S156-guarded A2-2 pending-overlap proof by adding a bounded owner-completion
+  delay to the otherwise passing four-key cache/concurrency run.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2281,6 +2315,7 @@ Map rather than encoded as TODOs here.
 | S185 | Bind/protect/broker infrastructure failure separation | VPN-F059 |
 | S152 | Residual two-App UID matrix design gap | VPN-F060 |
 | S155 | Controlled A2-1 rerun2 resolver/correlation gap | VPN-F061 |
+| S186 | S156-guarded A2-2 pending-overlap revalidation | VPN-F062 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 

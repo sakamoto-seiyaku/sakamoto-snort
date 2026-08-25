@@ -1,7 +1,7 @@
 # SAKAMOTO-139 A2 POC Design Revision
 
 Date: 2026-08-23  
-Updated: 2026-08-25 (S156 closed VPN-F061 for A2-1 base matrix)
+Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2)
 Status: evidence-guided working design; A2-1 base matrix passed, dependent A2 cells continue
 Scope: Pixel multi-App UID attribution, policy, and transport-admission only
 
@@ -39,7 +39,10 @@ and UID-contract joins.  The closure is recorded in
 [`S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md`](S155_A2_UID_MATRIX_RERUN2_RESOLVER_CORRELATION_GAP.md).
 Dependent A2 cells must inherit the S156 guardrails: resolver request
 correlation, APK artifact gates, TCP dynamic source ports, and decisive TCP
-repeat selection.
+repeat selection.  S186 revalidated A2-2 under those guardrails; the only new
+fixture correction was an explicit bounded owner-completion delay so the
+native pending ledger can prove overlap instead of observing each fast Android
+lookup settle before the next staged App request.
 
 ## Facts that force the correction
 
@@ -316,6 +319,14 @@ configurable 250 ms fixture stagger before starting AppB. This is an intent
 delivery guard against Android `singleTop`/ADB launch loss, not a native
 serialization barrier: both sockets remain alive for the positive owner-lookup
 retention interval, so native pending overlap is still required and measured.
+
+Because a controlled LAN resolver lookup can complete faster than the runner
+can arm and launch the second staged App request, A2-2 also uses the existing
+bounded `uidContractCompletionDelayMillis` control.  The default guarded
+runner value is `1000` ms, recorded as `uidCompletionDelayMillis` in both
+source provenance and manifest.  This delay is a POC timing control for the
+Java owner-completion callback; it must not change tuple identity, cache
+identity, App UID scope, or FlowOwner topology.
 
 The UDP adapter keeps its socket alive through the asynchronous Android owner
 lookup using the existing positive post-send observation delay (A2-2 uses
