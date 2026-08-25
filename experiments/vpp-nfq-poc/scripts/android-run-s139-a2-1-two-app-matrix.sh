@@ -228,8 +228,9 @@ for app_apk in "$LOCAL_APP_A_APK" "$LOCAL_APP_B_APK"; do
   }
 done
 
-echo "## install deterministic App APKs through repo device helper"
+echo "## install VpnLite and deterministic App APKs through repo device helper"
 install_ok=true
+adb_cmd install -r "$LOCAL_VPN_APK" >/dev/null || install_ok=false
 adb_cmd install -r "$LOCAL_APP_A_APK" >/dev/null || install_ok=false
 adb_cmd install -r "$LOCAL_APP_B_APK" >/dev/null || install_ok=false
 
