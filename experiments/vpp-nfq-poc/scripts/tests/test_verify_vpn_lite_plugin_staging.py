@@ -33,6 +33,16 @@ class VerifyVpnLitePluginStagingTest(unittest.TestCase):
         self.assertNotIn("plugin default { disable }", self.native_probe)
         self.assertNotIn("plugin %s { enable }", self.native_probe)
 
+    def test_runtime_startup_uses_poll_sleep_to_bound_idle_cpu(self):
+        write_start = self.native_probe.index("static int write_vpp_files")
+        write_end = self.native_probe.index("JNIEXPORT jint JNICALL", write_start)
+        write_vpp_files = self.native_probe[write_start:write_end]
+
+        unix_start = write_vpp_files.index('"unix {\\n"')
+        unix_end = write_vpp_files.index('"%s"', unix_start)
+        unix_block = write_vpp_files[unix_start:unix_end]
+        self.assertIn('"  poll-sleep-usec 1000\\n"', unix_block)
+
     def test_vpp_monitor_uses_mode_specific_show_command(self):
         self.assertIn("g_vpp_monitor_show_command", self.native_probe)
 

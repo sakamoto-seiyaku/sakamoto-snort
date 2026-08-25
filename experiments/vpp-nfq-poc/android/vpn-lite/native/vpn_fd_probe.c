@@ -2685,6 +2685,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
              "  nodaemon\n"
              "  nobanner\n"
              "  runtime-dir %s\n"
+             "  poll-sleep-usec 1000\n"
              "  log %s\n"
              "  cli-listen %s\n"
              "  cli-no-pager\n"
