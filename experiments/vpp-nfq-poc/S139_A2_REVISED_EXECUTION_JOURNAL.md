@@ -1,11 +1,12 @@
 # SAKAMOTO-139 A2 revised execution journal
 
 Date: 2026-08-23 (Asia/Taipei)  
-Updated: 2026-08-26 (S156-guarded A2-2 revalidation)
+Updated: 2026-08-26 (S156-guarded A2-2 revalidation and remaining-cell guardrail split)
 Plane: SAKAMOTO-139  
 Design: [S139_A2_POC_DESIGN_REVISION.md](S139_A2_POC_DESIGN_REVISION.md)  
 Device: Pixel 6a / arm64 / serial `28201JEGR0XPAJ`  
-Aggregate: `PASS`; `architecture_interruption=false`
+Aggregate: historical 2026-08-23 `PASS`; current S156-era aggregate
+`A2_INCOMPLETE`; `architecture_interruption=false`
 
 ## Why the repeated UID verification was a POC problem
 
@@ -322,6 +323,15 @@ This revalidation closes A2-2 under the S156 guardrails.  It does not broaden
 A2-2 into production cache sizing, lifecycle invalidation, external
 connectivity, or B1/B2 whole-device behavior.
 
+The same guardrail standard now applies to the remaining A2 cells.  The
+2026-08-23 A2-4, A2-5, and A2-6 PASS bundles remain retained functional
+baselines, but they used the old public `1.1.1.1:53` destination/provenance
+envelope and do not carry `uidContractCellId`, controlled fixture metadata, or
+resolver `cell/stage/request` correlation.  They therefore cannot close the
+current S156-era aggregate without S188/S189/S190 reruns.  This is an evidence
+standard correction, not a behavioral contradiction of the earlier UID/drop
+claims.
+
 ## A2-3 controlled reverse-return execution
 
 Cell: `A2-3 controlled reverse traffic`
@@ -386,23 +396,26 @@ delivery with same-socket App receipt, canonical owner/UID reuse, raw TUN
 tuple integrity, no lookup/re-entry, and bounded cleanup. These cells do not
 prove lifecycle invalidation or downstream allow/drop admission.
 
-At the time of this section, the remaining order was A2-3 controlled return,
-A2-4 lifecycle native join, A2-5 allow/drop admission ledger, and A2-6
-replay/settlement aggregate. The final audit below records their completion;
-B1 remains a separate gate until the aggregate is aligned in Plane.
+At the S156-era evidence standard, the remaining order is S187 A2-3 current
+artifact refresh, S188 A2-4 lifecycle native join, S189 A2-5 allow/drop
+admission ledger, and S190 A2-6 replay/settlement aggregate. The historical
+final audit below records the 2026-08-23 aggregate only; B1 remains a separate
+gate until the S156-era aggregate is aligned in Plane.
 
-## Final A2 closure audit
+## Historical 2026-08-23 A2 closure audit
 
-The seven registered cells are now joined by the machine-readable aggregate
-auditor:
+The seven registered cells were joined by the 2026-08-23 machine-readable
+aggregate auditor:
 
 `results/s139-a2-aggregate-20260823-1338/a2-aggregate.json`
 
-Aggregate verdict: `PASS`; schema `s139-a2-aggregate/v1`; all required cell
-results are `PASS`, every input retains a cleanup/settlement check, and
-`architectureInterruption=false`. The aggregate is an audit of the registered
-bounded claims only; it does not unblock external-connect, production-capacity,
-long-lifecycle, or underlay-handover claims.
+Historical aggregate verdict: `PASS`; schema `s139-a2-aggregate/v1`; all
+required cell results were `PASS`, every input retained a cleanup/settlement
+check, and `architectureInterruption=false`. This remains an audit of the
+registered bounded claims as they stood on 2026-08-23. It does not satisfy the
+later S156 guardrail contract for A2-4/A2-5/A2-6, and it does not unblock
+external-connect, production-capacity, long-lifecycle, or underlay-handover
+claims.
 
 ### A2-4 lifecycle/native join
 
@@ -460,8 +473,8 @@ passing.
 
 ## A2 disposition and next gate
 
-A2 is complete at the registered POC scope. B1 remains a separate Plane gate:
-the aggregate does not claim external Internet reachability, production
-capacity, or a long lifecycle. The next action is to publish this aggregate
-and the corrected hotspot disposition to Plane, then begin B1 only after that
-explicit gate is aligned.
+A2 was complete at the registered 2026-08-23 POC scope, but is not yet complete
+at the S156-era guardrail scope.  The next action is to finish S187/S188/S189/
+S190, produce a new aggregate audit from those guarded bundles, and only then
+consider unblocking B1 in Plane.  The historical aggregate does not claim
+external Internet reachability, production capacity, or a long lifecycle.

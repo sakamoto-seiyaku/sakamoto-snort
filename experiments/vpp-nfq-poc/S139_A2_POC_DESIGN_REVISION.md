@@ -1,7 +1,7 @@
 # SAKAMOTO-139 A2 POC Design Revision
 
 Date: 2026-08-23  
-Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2)
+Updated: 2026-08-26 (S156 closed VPN-F061 for A2-1; S186 revalidated A2-2; S187-S190 split remaining A2 guardrail reruns)
 Status: evidence-guided working design; A2-1 base matrix passed, dependent A2 cells continue
 Scope: Pixel multi-App UID attribution, policy, and transport-admission only
 
@@ -43,6 +43,15 @@ repeat selection.  S186 revalidated A2-2 under those guardrails; the only new
 fixture correction was an explicit bounded owner-completion delay so the
 native pending ledger can prove overlap instead of observing each fast Android
 lookup settle before the next staged App request.
+
+This creates one important evidence-disposition correction.  The 2026-08-23
+A2-4, A2-5, and A2-6 PASS bundles remain useful historical functional evidence,
+but they used the old public `1.1.1.1:53` endpoint/provenance envelope and do
+not carry `uidContractCellId`, controlled fixture metadata, or resolver
+`cell/stage/request` correlation.  Under the S156-era verifier they are not
+final closure evidence.  S188, S189, and S190 rerun those cells with the same
+functional claims but the stricter fixture/artifact/provenance gates; S187
+refreshes A2-3 on the current artifact before the downstream cells rely on it.
 
 ## Facts that force the correction
 
@@ -413,15 +422,25 @@ Reusable as historical/narrow support:
 - the latest lifecycle unavailable/restore/repeat window;
 - the UID-12629 VPP owner-drop window;
 - A1 Host/model and Android live replay artifacts.
+- 2026-08-23 A2-3/A2-4/A2-5/A2-6 PASS bundles as functional baselines for
+  their original claims.
 
 Required fresh execution after the harness correction:
 
-- A2-0 durable VpnService configuration and session provenance;
-- the deterministic two-App eight-cell matrix;
-- stage-correlated concurrent/cache/bounds and lifecycle joins;
-- actual Flow Stack return-seam controlled reverse traffic;
-- per-flow allow/drop ledger at the real broker/socket seam;
-- the final A2 aggregate and cleanup audit.
+- A2-0 durable VpnService configuration and session provenance, already closed
+  by the historical A2 runner;
+- the deterministic two-App eight-cell matrix, closed by S156 under
+  `cell/stage/request` guardrails;
+- stage-correlated concurrent/cache/bounds, closed by S186 under the same
+  guardrails;
+- S187 current-artifact A2-3 controlled Flow Stack return refresh;
+- S188 A2-4 lifecycle/native join rerun with controlled fixture and resolver
+  correlation;
+- S189 A2-5 per-flow allow/drop admission ledger rerun with controlled fixture
+  and resolver correlation;
+- S190 A2-6 replay/settlement rerun with controlled fixture and resolver
+  correlation;
+- the final S156-era A2 aggregate and cleanup audit.
 
 The historical Wi-Fi-bypassing UID-12620 fixture, overwritten IPv4 raw,
 Chrome gateway reverse attempt, S124 local echo, SOCKS, and HEV-only paths are
@@ -435,9 +454,10 @@ not decisive substitutes.
    interruption is observed.
 3. `VPN-F061` is repaired by S156/run5.  Checkpoint the passing A2-1 base
    matrix and run A2-2 from that baseline.
-4. Run A2-3 controlled reverse, then A2-4 lifecycle native join.
-5. Run A2-5 admission ledger and A2-6 replay/settlement aggregate.
-6. Perform the final requirement-by-requirement A2 audit, update the evidence
+4. Run S187 A2-3 controlled reverse on the current artifact.
+5. Run S188 A2-4 lifecycle native join.
+6. Run S189 A2-5 admission ledger and S190 A2-6 replay/settlement aggregate.
+7. Perform the final requirement-by-requirement A2 audit, update the evidence
    artifact/journal/Finding Ledger, and only then unblock B1 in Plane.
 
 No ordinary POC correction requires a discussion stop. A contradictory

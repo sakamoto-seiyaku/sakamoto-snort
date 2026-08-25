@@ -75,6 +75,24 @@ class A24VerifierUnitTest(unittest.TestCase):
         self.assertEqual(VERIFIER.INVALID, result["status"])
         self.assertFalse(result["architecture_interruption"])
 
+    def test_s156_guardrails_reject_public_destination(self) -> None:
+        invalid = []
+        VERIFIER.verify_s156_guardrails({
+            "uidContractCellId": "A2-4",
+            "resolverCorrelationSchema": VERIFIER.RESOLVER_CORRELATION_SCHEMA,
+            "destinationHost": "1.1.1.1",
+            "destinationPort": 53,
+            "fixture": {
+                "schema": "s152-a2-1-fixture/v1",
+                "host4": "192.168.4.5",
+                "host6": "fd76:d462:c4e3::1",
+                "tcpPort": 55443,
+                "udpPort": 55553,
+                "publicInternetClaim": False,
+            },
+        }, invalid)
+        self.assertIn("destinationHost uses public resolver endpoint", invalid)
+
 
 if __name__ == "__main__":
     unittest.main()

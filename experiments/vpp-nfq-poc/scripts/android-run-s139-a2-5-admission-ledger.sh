@@ -18,8 +18,19 @@ TRAFFIC_ACTIVITY="${TRAFFIC_ACTIVITY:-com.sakamoto.snort.a2traffic.TrafficAdapte
 MODE="${MODE:-vpp-hev-owner-resolver}"
 FAMILY="${FAMILY:-ip4}"
 PROTOCOL="${PROTOCOL:-udp}"
-DESTINATION_HOST="${DESTINATION_HOST:-1.1.1.1}"
-DESTINATION_PORT="${DESTINATION_PORT:-53}"
+RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-5-admission-ledger-$(date -u +%Y%m%d-%H%M%S)}"
+FIXTURE_SCRIPT="${FIXTURE_SCRIPT:-$SCRIPT_DIR/s152-a2-1-fixture.py}"
+FIXTURE_LOG="${FIXTURE_LOG:-$RESULT_DIR/s152-a2-1-fixture.jsonl}"
+FIXTURE_STDOUT="${FIXTURE_STDOUT:-$RESULT_DIR/s152-a2-1-fixture.stdout.log}"
+FIXTURE_HOST4="${FIXTURE_HOST4:-${FIXTURE_HOST:-}}"
+FIXTURE_HOST6="${FIXTURE_HOST6:-}"
+FIXTURE_BIND_HOST4="${FIXTURE_BIND_HOST4:-}"
+FIXTURE_BIND_HOST6="${FIXTURE_BIND_HOST6:-}"
+FIXTURE_TCP_PORT="${FIXTURE_TCP_PORT:-55443}"
+FIXTURE_UDP_PORT="${FIXTURE_UDP_PORT:-55553}"
+FIXTURE_READY_WAIT="${FIXTURE_READY_WAIT:-20}"
+DESTINATION_HOST="${DESTINATION_HOST:-}"
+DESTINATION_PORT="${DESTINATION_PORT:-$FIXTURE_UDP_PORT}"
 ALLOW_SOURCE_PORT="${ALLOW_SOURCE_PORT:-46001}"
 DROP_SOURCE_PORT="${DROP_SOURCE_PORT:-46002}"
 # The owner resolver is intentionally asynchronous.  The first one or two
@@ -31,7 +42,8 @@ START_WAIT="${START_WAIT:-12}"
 TRAFFIC_WAIT="${TRAFFIC_WAIT:-12}"
 CLEANUP_WAIT_SECONDS="${CLEANUP_WAIT_SECONDS:-12}"
 POLL_INTERVAL="${POLL_INTERVAL:-0.25}"
-RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-5-admission-ledger-$(date -u +%Y%m%d-%H%M%S)}"
+UID_CONTRACT_CELL="A2-5"
+RESOLVER_CORRELATION_SCHEMA="a2-1-resolver-cell-stage-request/v1"
 
 [[ "$MODE" == "vpp-hev-owner-resolver" ]] || { echo "A2-5 requires vpp-hev-owner-resolver" >&2; exit 2; }
 [[ "$FAMILY" == "ip4" && "$PROTOCOL" == "udp" ]] || { echo "A2-5 runner currently registers only ip4/udp" >&2; exit 2; }
@@ -64,6 +76,88 @@ mkdir -p "$RESULT_DIR"
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 exec > >(tee "$RESULT_DIR/cell.log") 2>&1
 
+fixture_pid=""
+
+discover_fixture_host4() {
+  if [[ -n "$FIXTURE_HOST4" ]]; then
+    printf '%s\n' "$FIXTURE_HOST4"
+    return 0
+  fi
+  ip -4 route get 192.0.2.1 2>/dev/null \
+    | sed -n 's/.* src \([0-9.][0-9.]*\).*/\1/p' | head -n 1
+}
+
+discover_fixture_host6() {
+  if [[ -n "$FIXTURE_HOST6" ]]; then
+    printf '%s\n' "$FIXTURE_HOST6"
+    return 0
+  fi
+  ip -6 route get 2001:db8::1 2>/dev/null \
+    | sed -n 's/.* src \([^ ]*\).*/\1/p' | head -n 1
+}
+
+start_fixture() {
+  FIXTURE_HOST4="$(discover_fixture_host4)"
+  FIXTURE_HOST6="$(discover_fixture_host6)"
+  [[ -n "$FIXTURE_HOST4" && -n "$FIXTURE_HOST6" ]] || {
+    echo "controlled A2-5 fixture requires both IPv4 and IPv6 host addresses" >&2
+    return 2
+  }
+  FIXTURE_BIND_HOST4="${FIXTURE_BIND_HOST4:-$FIXTURE_HOST4}"
+  FIXTURE_BIND_HOST6="${FIXTURE_BIND_HOST6:-$FIXTURE_HOST6}"
+  DESTINATION_HOST="${DESTINATION_HOST:-$FIXTURE_HOST4}"
+  case "$DESTINATION_HOST,$FIXTURE_HOST4,$FIXTURE_HOST6" in
+    *1.1.1.1*|*2606:4700:4700::*)
+      echo "public resolver addresses are forbidden as the A2-5 fixture oracle" >&2
+      return 2
+      ;;
+  esac
+  [[ -f "$FIXTURE_SCRIPT" ]] || {
+    echo "missing controlled A2-5 fixture script: $FIXTURE_SCRIPT" >&2
+    return 2
+  }
+  : >"$FIXTURE_LOG"
+  python3 "$FIXTURE_SCRIPT" \
+    --bind4 "$FIXTURE_BIND_HOST4" --bind6 "$FIXTURE_BIND_HOST6" \
+    --tcp-port "$FIXTURE_TCP_PORT" --udp-port "$FIXTURE_UDP_PORT" \
+    --log "$FIXTURE_LOG" >"$FIXTURE_STDOUT" 2>&1 &
+  fixture_pid=$!
+  local ready=0
+  for _ in $(seq 1 "$FIXTURE_READY_WAIT"); do
+    if ! kill -0 "$fixture_pid" 2>/dev/null; then
+      echo "controlled A2-5 fixture exited before readiness" >&2
+      return 1
+    fi
+    ready="$(grep -c '"event": "ready"' "$FIXTURE_LOG" 2>/dev/null || true)"
+    if [[ "$ready" == 4 ]] && grep -q '"event": "fixture_ready"' "$FIXTURE_LOG"; then
+      printf '%s\n' \
+        "schema=s152-a2-1-fixture-readiness/v1" \
+        "publicInternetClaim=false" \
+        "fixtureHost4=$FIXTURE_HOST4" \
+        "fixtureHost6=$FIXTURE_HOST6" \
+        "fixtureBindHost4=$FIXTURE_BIND_HOST4" \
+        "fixtureBindHost6=$FIXTURE_BIND_HOST6" \
+        "tcpPort=$FIXTURE_TCP_PORT" \
+        "udpPort=$FIXTURE_UDP_PORT" \
+        "destinationHost=$DESTINATION_HOST" \
+        "destinationPort=$DESTINATION_PORT" \
+        "readyEvents=$ready" >"$RESULT_DIR/fixture-readiness.properties"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "controlled A2-5 fixture did not publish four ready events" >&2
+  return 1
+}
+
+stop_fixture() {
+  if [[ -n "$fixture_pid" ]]; then
+    kill "$fixture_pid" >/dev/null 2>&1 || true
+    wait "$fixture_pid" >/dev/null 2>&1 || true
+    fixture_pid=""
+  fi
+}
+
 capture_remote() {
   local out="$1" path="$2"
   adb_su "cat '$path' 2>/dev/null || true" | tr -d '\r' >"$out"
@@ -73,7 +167,32 @@ cleanup_socks_server() {
   adb_su "if [ -f '$REMOTE_SOCKS_PID' ]; then kill -TERM \$(cat '$REMOTE_SOCKS_PID') 2>/dev/null || true; sleep 1; kill -9 \$(cat '$REMOTE_SOCKS_PID') 2>/dev/null || true; fi; rm -f '$REMOTE_SOCKS_PID' '$REMOTE_SOCKS_SERVER' '$REMOTE_SOCKS_LOG'" >/dev/null 2>&1 || true
 }
 
-trap cleanup_socks_server EXIT
+cleanup_all() {
+  cleanup_socks_server
+  stop_fixture
+}
+
+trap cleanup_all EXIT
+
+require_apk_member_string() {
+  local apk="$1"
+  local member="$2"
+  local needle="$3"
+  local label="$4"
+  local tmp_member
+  tmp_member="$(mktemp)"
+  if ! unzip -p "$apk" "$member" >"$tmp_member" 2>/dev/null; then
+    rm -f "$tmp_member"
+    echo "local VpnLite APK lacks $member; rebuild native/plugin artifacts" >&2
+    return 2
+  fi
+  if ! strings "$tmp_member" | grep -F "$needle" >/dev/null; then
+    rm -f "$tmp_member"
+    echo "local VpnLite APK lacks $label in $member; rebuild native/plugin artifacts" >&2
+    return 2
+  fi
+  rm -f "$tmp_member"
+}
 
 capture_apk_provenance() {
   : >"$1/apk-provenance.tsv"
@@ -244,10 +363,12 @@ with open(path, "w", encoding="utf-8") as stream:
 PY
 }
 
+start_fixture
 echo "# SAKAMOTO-139 A2-5 UID allow/drop admission ledger"
 echo "adb_serial=$(adb_target_desc)"
 echo "vpn_package=$VPN_PACKAGE app_package=$APP_PACKAGE_A mode=$MODE"
 echo "family=$FAMILY protocol=$PROTOCOL destination=$DESTINATION_HOST:$DESTINATION_PORT"
+echo "resolverCorrelationSchema=$RESOLVER_CORRELATION_SCHEMA"
 
 [[ -f "$LOCAL_VPN_APK" ]] || { echo "missing VpnLite APK: $LOCAL_VPN_APK" >&2; exit 2; }
 [[ -f "$LOCAL_APP_A_APK" ]] || { echo "missing AppA APK: $LOCAL_APP_A_APK" >&2; exit 2; }
@@ -261,6 +382,14 @@ app_a_apk_sha256="$(sha256sum "$LOCAL_APP_A_APK" | awk '{print $1}')"
 tun_asset="$(unzip -Z1 "$LOCAL_VPN_APK" | awk '/lib\/[^/]+\/libtun_poc_plugin\.so$/ {print; exit}')"
 [[ -n "$tun_asset" ]] || { echo "VpnLite APK lacks tun_poc plugin" >&2; exit 2; }
 tun_plugin_sha256="$(unzip -p "$LOCAL_VPN_APK" "$tun_asset" | sha256sum | awk '{print $1}')"
+require_apk_member_string "$LOCAL_VPN_APK" \
+  "lib/arm64-v8a/libvpnfdprobe.so" \
+  "cell=%s stage=%s request=%llu" \
+  "S156 resolver cell/stage/request schema"
+require_apk_member_string "$LOCAL_VPN_APK" \
+  "lib/arm64-v8a/libtun_poc_plugin.so" \
+  "cell %s stage %s request %llu" \
+  "S156 native resolver cell/stage/request schema"
 
 adb_cmd install -r "$LOCAL_VPN_APK" | tee "$RESULT_DIR/install-vpn.log"
 adb_cmd install -r "$LOCAL_APP_A_APK" | tee "$RESULT_DIR/install-appa.log"
@@ -280,6 +409,15 @@ if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all 2>/dev/
   printf 'captureUtc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'gitHead=%s\n' "$source_git_head"
   printf 'gitDirty=%s\n' "$source_git_dirty"
+  printf 'uidContractCellId=%s\n' "$UID_CONTRACT_CELL"
+  printf 'resolverCorrelationSchema=%s\n' "$RESOLVER_CORRELATION_SCHEMA"
+  printf 'fixtureScriptSha256=%s\n' "$(sha256sum "$FIXTURE_SCRIPT" | awk '{print $1}')"
+  printf 'fixtureHost4=%s\n' "$FIXTURE_HOST4"
+  printf 'fixtureHost6=%s\n' "$FIXTURE_HOST6"
+  printf 'fixtureTcpPort=%s\n' "$FIXTURE_TCP_PORT"
+  printf 'fixtureUdpPort=%s\n' "$FIXTURE_UDP_PORT"
+  printf 'destinationHost=%s\n' "$DESTINATION_HOST"
+  printf 'destinationPort=%s\n' "$DESTINATION_PORT"
   printf 'vpnApkSha256=%s\n' "$vpn_apk_sha256"
   printf 'appAApkSha256=%s\n' "$app_a_apk_sha256"
   printf 'tunPluginAsset=%s\n' "$tun_asset"
@@ -294,13 +432,22 @@ run_stage "A2-5-drop" "drop" "$DROP_SOURCE_PORT" "$allowed_uid"
 python3 - "$RESULT_DIR/manifest.json" "$VPN_PACKAGE" "$APP_PACKAGE_A" \
     "$vpn_uid" "$allowed_uid" "$vpn_apk_sha256" "$app_a_apk_sha256" \
     "$tun_asset" "$tun_plugin_sha256" "$MODE" "$DESTINATION_HOST" "$DESTINATION_PORT" \
-    "$ALLOW_SOURCE_PORT" "$DROP_SOURCE_PORT" <<'PY'
+    "$ALLOW_SOURCE_PORT" "$DROP_SOURCE_PORT" "$FIXTURE_HOST4" "$FIXTURE_HOST6" \
+    "$FIXTURE_TCP_PORT" "$FIXTURE_UDP_PORT" "$RESOLVER_CORRELATION_SCHEMA" <<'PY'
 import json, sys
 (path, vpn, app, vpn_uid, app_uid, vpn_sha, app_sha, asset, plugin_sha,
- mode, host, port, allow_source, drop_source) = sys.argv[1:]
+ mode, host, port, allow_source, drop_source, fixture_host4, fixture_host6,
+ fixture_tcp_port, fixture_udp_port, resolver_correlation_schema) = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as stream:
     json.dump({"schema": "s139-a2-5-manifest/v1", "profile": "a2-5",
                "cellId": "A2-5", "vpnPackage": vpn, "allowedPackage": app,
+               "uidContractCellId": "A2-5",
+               "resolverCorrelationSchema": resolver_correlation_schema,
+               "fixture": {"schema": "s152-a2-1-fixture/v1",
+                           "host4": fixture_host4, "host6": fixture_host6,
+                           "tcpPort": int(fixture_tcp_port),
+                           "udpPort": int(fixture_udp_port),
+                           "publicInternetClaim": False},
                "expectedVpnUid": int(vpn_uid), "expectedAllowedUid": int(app_uid),
                "mode": mode, "vppMode": 5, "family": "ip4", "protocol": "udp",
                "destinationHost": host, "destinationPort": int(port),
@@ -312,7 +459,8 @@ with open(path, "w", encoding="utf-8") as stream:
                           {"stageId": "A2-5-drop", "policy": "drop",
                            "sourcePort": int(drop_source), "evidenceDir": "A2-5-drop"}],
                "claims": {"knownUidAllowDrop": True, "externalConnect": False,
-                          "internetReachability": False},
+                          "internetReachability": False,
+                          "publicInternet": False},
                "buildProvenanceFile": "source-provenance.properties",
                "apkProvenanceFile": "apk-provenance.tsv"}, stream,
               indent=2, sort_keys=True)

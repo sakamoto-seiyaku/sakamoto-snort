@@ -47,6 +47,8 @@ EXPECTED_STAGES = (
     "A2-4-restore-hit",
     "A2-4-runtime-stale",
 )
+RESOLVER_CORRELATION_SCHEMA = "a2-1-resolver-cell-stage-request/v1"
+PUBLIC_RESOLVER_HOSTS = {"1.1.1.1", "2606:4700:4700::1111"}
 
 NATIVE_LINE = re.compile(
     r"resolver query=(?P<query>[0-9]+) proto=(?P<proto>[0-9]+) "
@@ -123,6 +125,44 @@ def normalized_address(value: Any) -> str:
         return str(ipaddress.ip_address(text))
     except ValueError:
         return text
+
+
+def is_public_resolver_host(value: Any) -> bool:
+    return normalized_address(value) in PUBLIC_RESOLVER_HOSTS
+
+
+def verify_s156_guardrails(manifest: Dict[str, Any],
+                           invalid: List[str]) -> None:
+    if manifest.get("uidContractCellId") != "A2-4":
+        invalid.append("uidContractCellId is not A2-4")
+    if manifest.get("resolverCorrelationSchema") != RESOLVER_CORRELATION_SCHEMA:
+        invalid.append("resolverCorrelationSchema is not " + RESOLVER_CORRELATION_SCHEMA)
+    fixture = manifest.get("fixture")
+    if not isinstance(fixture, dict):
+        invalid.append("controlled fixture is missing")
+        return
+    if fixture.get("schema") != "s152-a2-1-fixture/v1":
+        invalid.append("controlled fixture schema is invalid")
+    if fixture.get("publicInternetClaim") is not False:
+        invalid.append("controlled fixture must mark publicInternetClaim=false")
+    for field in ("host4", "host6"):
+        value = fixture.get(field)
+        if not isinstance(value, str) or not value:
+            invalid.append(f"controlled fixture {field} is missing")
+        elif is_public_resolver_host(value):
+            invalid.append(f"controlled fixture {field} uses public resolver endpoint")
+    for field in ("tcpPort", "udpPort"):
+        port = as_int(fixture.get(field))
+        if port is None or port < 1 or port > 65535:
+            invalid.append(f"controlled fixture {field} is invalid")
+    destination_host = manifest.get("destinationHost")
+    destination_port = as_int(manifest.get("destinationPort"))
+    if not isinstance(destination_host, str) or not destination_host:
+        invalid.append("destinationHost is missing")
+    elif is_public_resolver_host(destination_host):
+        invalid.append("destinationHost uses public resolver endpoint")
+    if destination_port is None or destination_port < 1 or destination_port > 65535:
+        invalid.append("destinationPort is invalid")
 
 
 def canonical_key(family: str, source: Any, source_port: Any,
@@ -453,8 +493,9 @@ def verify(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         invalid.append("architecture_interruption must be false")
     if not app_package or expected_uid is None or expected_uid < 0:
         invalid.append("registered AppA package/UID is missing")
-    if family != "ip4" or protocol != "udp" or destination_port != 53:
-        invalid.append("bounded fixture must be IPv4/UDP destination port 53")
+    if family != "ip4" or protocol != "udp":
+        invalid.append("bounded fixture must be IPv4/UDP")
+    verify_s156_guardrails(manifest, invalid)
     if manifest.get("mode") != "vpp-hev-owner-resolver":
         invalid.append("manifest mode is not vpp-hev-owner-resolver")
     if as_int(manifest.get("vppMode")) != 5:

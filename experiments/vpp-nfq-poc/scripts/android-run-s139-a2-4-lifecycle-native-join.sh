@@ -9,20 +9,140 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 POC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$POC_DIR/../.." && pwd)"
 VERIFIER="$SCRIPT_DIR/verify-s139-a2-4.py"
-LOCAL_VPN_APK="$POC_DIR/android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk"
-LOCAL_APP_A_APK="$POC_DIR/android/a2-traffic-adapter/build/outputs/com-sakamoto-snort-poc-appa-debug.apk"
-VPN_PACKAGE="com.sakamoto.snort.vpnlite"
-APP_PACKAGE_A="com.sakamoto.snort.poc.appa"
-TRAFFIC_ACTIVITY="com.sakamoto.snort.a2traffic.TrafficAdapterActivity"
-RESULT_DIR="$POC_DIR/results/s139-a2-4-lifecycle-native-join-$(date +%Y%m%d-%H%M%S)"
-START_WAIT=12
-STAGE_WAIT=12
-CLEANUP_WAIT=12
-POLL_INTERVAL=0.25
+LOCAL_VPN_APK="${LOCAL_VPN_APK:-$POC_DIR/android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk}"
+LOCAL_APP_A_APK="${LOCAL_APP_A_APK:-$POC_DIR/android/a2-traffic-adapter/build/outputs/com-sakamoto-snort-poc-appa-debug.apk}"
+VPN_PACKAGE="${VPN_PACKAGE:-com.sakamoto.snort.vpnlite}"
+APP_PACKAGE_A="${APP_PACKAGE_A:-com.sakamoto.snort.poc.appa}"
+TRAFFIC_ACTIVITY="${TRAFFIC_ACTIVITY:-com.sakamoto.snort.a2traffic.TrafficAdapterActivity}"
+RESULT_DIR="${RESULT_DIR:-$POC_DIR/results/s139-a2-4-lifecycle-native-join-$(date +%Y%m%d-%H%M%S)}"
+START_WAIT="${START_WAIT:-12}"
+STAGE_WAIT="${STAGE_WAIT:-12}"
+CLEANUP_WAIT="${CLEANUP_WAIT:-12}"
+POLL_INTERVAL="${POLL_INTERVAL:-0.25}"
+FIXTURE_SCRIPT="${FIXTURE_SCRIPT:-$SCRIPT_DIR/s152-a2-1-fixture.py}"
+FIXTURE_LOG="${FIXTURE_LOG:-$RESULT_DIR/s152-a2-1-fixture.jsonl}"
+FIXTURE_STDOUT="${FIXTURE_STDOUT:-$RESULT_DIR/s152-a2-1-fixture.stdout.log}"
+FIXTURE_HOST4="${FIXTURE_HOST4:-${FIXTURE_HOST:-}}"
+FIXTURE_HOST6="${FIXTURE_HOST6:-}"
+FIXTURE_BIND_HOST4="${FIXTURE_BIND_HOST4:-}"
+FIXTURE_BIND_HOST6="${FIXTURE_BIND_HOST6:-}"
+FIXTURE_TCP_PORT="${FIXTURE_TCP_PORT:-55443}"
+FIXTURE_UDP_PORT="${FIXTURE_UDP_PORT:-55553}"
+FIXTURE_READY_WAIT="${FIXTURE_READY_WAIT:-20}"
+DESTINATION_HOST="${DESTINATION_HOST:-}"
+DESTINATION_PORT="${DESTINATION_PORT:-$FIXTURE_UDP_PORT}"
+UID_CONTRACT_CELL="A2-4"
+RESOLVER_CORRELATION_SCHEMA="a2-1-resolver-cell-stage-request/v1"
 
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 mkdir -p "$RESULT_DIR/stages"
 exec > >(tee "$RESULT_DIR/cell.log") 2>&1
+
+fixture_pid=""
+
+discover_fixture_host4() {
+  if [[ -n "$FIXTURE_HOST4" ]]; then
+    printf '%s\n' "$FIXTURE_HOST4"
+    return 0
+  fi
+  ip -4 route get 192.0.2.1 2>/dev/null \
+    | sed -n 's/.* src \([0-9.][0-9.]*\).*/\1/p' | head -n 1
+}
+
+discover_fixture_host6() {
+  if [[ -n "$FIXTURE_HOST6" ]]; then
+    printf '%s\n' "$FIXTURE_HOST6"
+    return 0
+  fi
+  ip -6 route get 2001:db8::1 2>/dev/null \
+    | sed -n 's/.* src \([^ ]*\).*/\1/p' | head -n 1
+}
+
+start_fixture() {
+  FIXTURE_HOST4="$(discover_fixture_host4)"
+  FIXTURE_HOST6="$(discover_fixture_host6)"
+  [[ -n "$FIXTURE_HOST4" && -n "$FIXTURE_HOST6" ]] || {
+    echo "controlled A2-4 fixture requires both IPv4 and IPv6 host addresses" >&2
+    return 2
+  }
+  FIXTURE_BIND_HOST4="${FIXTURE_BIND_HOST4:-$FIXTURE_HOST4}"
+  FIXTURE_BIND_HOST6="${FIXTURE_BIND_HOST6:-$FIXTURE_HOST6}"
+  DESTINATION_HOST="${DESTINATION_HOST:-$FIXTURE_HOST4}"
+  case "$DESTINATION_HOST,$FIXTURE_HOST4,$FIXTURE_HOST6" in
+    *1.1.1.1*|*2606:4700:4700::*)
+      echo "public resolver addresses are forbidden as the A2-4 fixture oracle" >&2
+      return 2
+      ;;
+  esac
+  [[ "$DESTINATION_PORT" =~ ^[1-9][0-9]{2,4}$ ]] || {
+    echo "DESTINATION_PORT must be a valid non-privileged port" >&2
+    return 2
+  }
+  [[ -f "$FIXTURE_SCRIPT" ]] || {
+    echo "missing controlled A2-4 fixture script: $FIXTURE_SCRIPT" >&2
+    return 2
+  }
+  : >"$FIXTURE_LOG"
+  python3 "$FIXTURE_SCRIPT" \
+    --bind4 "$FIXTURE_BIND_HOST4" --bind6 "$FIXTURE_BIND_HOST6" \
+    --tcp-port "$FIXTURE_TCP_PORT" --udp-port "$FIXTURE_UDP_PORT" \
+    --log "$FIXTURE_LOG" >"$FIXTURE_STDOUT" 2>&1 &
+  fixture_pid=$!
+  local ready=0
+  for _ in $(seq 1 "$FIXTURE_READY_WAIT"); do
+    if ! kill -0 "$fixture_pid" 2>/dev/null; then
+      echo "controlled A2-4 fixture exited before readiness" >&2
+      return 1
+    fi
+    ready="$(grep -c '"event": "ready"' "$FIXTURE_LOG" 2>/dev/null || true)"
+    if [[ "$ready" == 4 ]] && grep -q '"event": "fixture_ready"' "$FIXTURE_LOG"; then
+      printf '%s\n' \
+        "schema=s152-a2-1-fixture-readiness/v1" \
+        "publicInternetClaim=false" \
+        "fixtureHost4=$FIXTURE_HOST4" \
+        "fixtureHost6=$FIXTURE_HOST6" \
+        "fixtureBindHost4=$FIXTURE_BIND_HOST4" \
+        "fixtureBindHost6=$FIXTURE_BIND_HOST6" \
+        "tcpPort=$FIXTURE_TCP_PORT" \
+        "udpPort=$FIXTURE_UDP_PORT" \
+        "destinationHost=$DESTINATION_HOST" \
+        "destinationPort=$DESTINATION_PORT" \
+        "readyEvents=$ready" >"$RESULT_DIR/fixture-readiness.properties"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "controlled A2-4 fixture did not publish four ready events" >&2
+  return 1
+}
+
+stop_fixture() {
+  if [[ -n "$fixture_pid" ]]; then
+    kill "$fixture_pid" >/dev/null 2>&1 || true
+    wait "$fixture_pid" >/dev/null 2>&1 || true
+    fixture_pid=""
+  fi
+}
+
+require_apk_member_string() {
+  local apk="$1"
+  local member="$2"
+  local needle="$3"
+  local label="$4"
+  local tmp_member
+  tmp_member="$(mktemp)"
+  if ! unzip -p "$apk" "$member" >"$tmp_member" 2>/dev/null; then
+    rm -f "$tmp_member"
+    echo "local VpnLite APK lacks $member; rebuild native/plugin artifacts" >&2
+    return 2
+  fi
+  if ! strings "$tmp_member" | grep -F "$needle" >/dev/null; then
+    rm -f "$tmp_member"
+    echo "local VpnLite APK lacks $label in $member; rebuild native/plugin artifacts" >&2
+    return 2
+  fi
+  rm -f "$tmp_member"
+}
 
 VPP_ROOT="/data/user/0/$VPN_PACKAGE/files/vpp"
 VPP_STDOUT="$VPP_ROOT/logs/vpp-stdout.log"
@@ -170,7 +290,8 @@ emit() {
     -a com.sakamoto.snort.a2traffic.EMIT \
     --es a2MatrixStageId "$stage" --es a2MatrixFamily ip4 \
     --es a2MatrixProtocol udp --ei a2MatrixSourcePort "$port" \
-    --es a2MatrixDestinationHost 1.1.1.1 --ei a2MatrixDestinationPort 53 \
+    --es a2MatrixDestinationHost "$DESTINATION_HOST" \
+    --ei a2MatrixDestinationPort "$DESTINATION_PORT" \
     --ei a2MatrixTimeoutMillis "$timeout" --ei a2MatrixRepeat "$repeat" >/dev/null
 }
 
@@ -226,13 +347,17 @@ PY
     [[ -z "$ps_text" ]] || printf '%s\n' "$ps_text"
     [[ -z "$tun_text" ]] || printf '%s\n' "$tun_text"
   } >"$RESULT_DIR/cleanup.txt"
+  stop_fixture
   set -e
 }
 trap cleanup EXIT
 
+start_fixture
 echo "# SAKAMOTO-139 A2-4 lifecycle/native join"
 echo "adb_serial=$(adb_target_desc)"
 echo "mode=vpp-hev-owner-resolver owner-cache=false"
+echo "destination=$DESTINATION_HOST:$DESTINATION_PORT"
+echo "resolverCorrelationSchema=$RESOLVER_CORRELATION_SCHEMA"
 echo "external-handover=NON-CLAIM external-admission=NON-CLAIM"
 
 [[ -f "$LOCAL_VPN_APK" && -f "$LOCAL_APP_A_APK" ]] || exit 2
@@ -241,6 +366,14 @@ local_app_sha="$(sha256sum "$LOCAL_APP_A_APK" | awk '{print $1}')"
 plugin_sha="$(unzip -p "$LOCAL_VPN_APK" assets/vpp-tun-poc-plugin.sha256 2>/dev/null | tr -d '\r\n')"
 plugin_member="$(unzip -Z1 "$LOCAL_VPN_APK" | awk '/lib\/[^/]+\/libtun_poc_plugin\.so$/ {print; exit}')"
 [[ "$plugin_sha" =~ ^[0-9a-f]{64}$ && -n "$plugin_member" ]] || exit 2
+require_apk_member_string "$LOCAL_VPN_APK" \
+  "lib/arm64-v8a/libvpnfdprobe.so" \
+  "cell=%s stage=%s request=%llu" \
+  "S156 resolver cell/stage/request schema"
+require_apk_member_string "$LOCAL_VPN_APK" \
+  "lib/arm64-v8a/libtun_poc_plugin.so" \
+  "cell %s stage %s request %llu" \
+  "S156 native resolver cell/stage/request schema"
 cp "$LOCAL_VPN_APK" "$RESULT_DIR/local-vpn.apk"
 cp "$LOCAL_APP_A_APK" "$RESULT_DIR/local-appa.apk"
 
@@ -388,6 +521,15 @@ PY
 cat >"$RESULT_DIR/source-provenance.properties" <<EOF
 gitHead=$(git -C "$REPO_ROOT" rev-parse HEAD)
 gitDirty=$( [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] && echo true || echo false )
+uidContractCellId=$UID_CONTRACT_CELL
+resolverCorrelationSchema=$RESOLVER_CORRELATION_SCHEMA
+fixtureScriptSha256=$(sha256sum "$FIXTURE_SCRIPT" | awk '{print $1}')
+fixtureHost4=$FIXTURE_HOST4
+fixtureHost6=$FIXTURE_HOST6
+fixtureTcpPort=$FIXTURE_TCP_PORT
+fixtureUdpPort=$FIXTURE_UDP_PORT
+destinationHost=$DESTINATION_HOST
+destinationPort=$DESTINATION_PORT
 vpnApkSha256=$local_vpn_sha
 appApkSha256=$local_app_sha
 pluginSha256=$plugin_sha
@@ -398,9 +540,13 @@ EOF
 packages="$(adb_cmd shell cmd package list packages -U | tr -d '\r')"
 printf '%s\n' "$packages" >"$RESULT_DIR/package-list-final.txt"
 
-python3 - "$RESULT_DIR/manifest.json" "$vpn_uid" "$app_uid" "$local_vpn_sha" "$local_app_sha" "$plugin_sha" "$plugin_member" <<'PY'
+python3 - "$RESULT_DIR/manifest.json" "$vpn_uid" "$app_uid" "$local_vpn_sha" "$local_app_sha" "$plugin_sha" "$plugin_member" "$DESTINATION_HOST" "$DESTINATION_PORT" "$FIXTURE_HOST4" "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" "$FIXTURE_UDP_PORT" "$RESOLVER_CORRELATION_SCHEMA" <<'PY'
 import json, sys
-out, vpn_uid, app_uid, vpn_sha, app_sha, plugin_sha, plugin_member = sys.argv[1:]
+(
+    out, vpn_uid, app_uid, vpn_sha, app_sha, plugin_sha, plugin_member,
+    destination_host, destination_port, fixture_host4, fixture_host6,
+    fixture_tcp_port, fixture_udp_port, resolver_correlation_schema,
+) = sys.argv[1:]
 stages = [
  ("A2-4-baseline","baseline",45901,["MISS_SUBMITTED","COMPLETION_ACCEPTED","CACHE_HIT"],"sequence"),
  ("A2-4-baseline-hit","baseline-hit",45901,["CACHE_HIT"],"hit"),
@@ -415,11 +561,17 @@ stages = [
 manifest = {
  "schema":"s139-a2-4-manifest/v1","profile":"a2-4","cellId":"A2-4",
  "architecture_interruption":False,"mode":"vpp-hev-owner-resolver","vppMode":5,
+ "uidContractCellId":"A2-4",
+ "resolverCorrelationSchema":resolver_correlation_schema,
+ "fixture":{"schema":"s152-a2-1-fixture/v1","host4":fixture_host4,
+   "host6":fixture_host6,"tcpPort":int(fixture_tcp_port),
+   "udpPort":int(fixture_udp_port),"publicInternetClaim":False},
  "vpnPackage":"com.sakamoto.snort.vpnlite","appPackage":"com.sakamoto.snort.poc.appa",
  "expectedVpnUid":int(vpn_uid),"expectedAllowedUid":int(app_uid),
  "registration":{"status":"registered","appPackage":"com.sakamoto.snort.poc.appa",
    "expectedAllowedUid":int(app_uid),"mode":"vpp-hev-owner-resolver","vppMode":5},
- "family":"ip4","protocol":"udp","destinationHost":"1.1.1.1","destinationPort":53,
+ "family":"ip4","protocol":"udp","destinationHost":destination_host,
+ "destinationPort":int(destination_port),
  "vpnProvenance":"vpn-session-provenance.json","vppStartProvenance":"vpp-start-provenance.json",
  "apkProvenanceFile":"apk-provenance.tsv","installProvenanceFile":"install-provenance.json",
  "apkProvenance":{"vpnApkSha256":vpn_sha,"appApkSha256":app_sha,"pluginSha256":plugin_sha,
@@ -432,7 +584,8 @@ manifest = {
    "contractOutcomes":outs,"nativeObservation":native}
    for sid,kind,port,outs,native in stages],
  "staleNativeJoinRequired":False,
- "claims":{"externalHandover":False,"externalAdmission":False}
+ "claims":{"externalHandover":False,"externalAdmission":False,
+   "publicInternet":False}
 }
 with open(out, "w", encoding="utf-8") as stream:
     json.dump(manifest, stream, indent=2, sort_keys=True)

@@ -26,6 +26,8 @@ MANIFEST_SCHEMA = "s139-a2-6-manifest/v1"
 RESULT_SCHEMA = "s139-a2-6-result/v1"
 CONTRACT_SCHEMA = "uid-attribution-contract/v1"
 APP_SCHEMA = "s139-a2-1-runtime/v1"
+RESOLVER_CORRELATION_SCHEMA = "a2-1-resolver-cell-stage-request/v1"
+PUBLIC_RESOLVER_HOSTS = {"1.1.1.1", "2606:4700:4700::1111"}
 
 EXPECTED_REPLAY = {
     "wrong-owner": ("COMPLETION_WRONG_OWNER", True),
@@ -95,6 +97,49 @@ def parse_properties(path: Path) -> Dict[str, str]:
             key, value = raw.split("=", 1)
             result[key.strip()] = value.strip()
     return result
+
+
+def as_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def verify_s156_guardrails(manifest: Dict[str, Any],
+                           invalid: List[str]) -> None:
+    if manifest.get("uidContractCellId") != "A2-6":
+        invalid.append("uidContractCellId is not A2-6")
+    if manifest.get("resolverCorrelationSchema") != RESOLVER_CORRELATION_SCHEMA:
+        invalid.append("resolverCorrelationSchema is not " + RESOLVER_CORRELATION_SCHEMA)
+    fixture = manifest.get("fixture")
+    if not isinstance(fixture, dict):
+        invalid.append("controlled fixture is missing")
+        return
+    if fixture.get("schema") != "s152-a2-1-fixture/v1":
+        invalid.append("controlled fixture schema is invalid")
+    if fixture.get("publicInternetClaim") is not False:
+        invalid.append("controlled fixture must mark publicInternetClaim=false")
+    for field in ("host4", "host6"):
+        value = fixture.get(field)
+        if not isinstance(value, str) or not value:
+            invalid.append(f"controlled fixture {field} is missing")
+        elif value.strip("[]") in PUBLIC_RESOLVER_HOSTS:
+            invalid.append(f"controlled fixture {field} uses public resolver endpoint")
+    for field in ("tcpPort", "udpPort"):
+        port = as_int(fixture.get(field))
+        if port is None or port < 1 or port > 65535:
+            invalid.append(f"controlled fixture {field} is invalid")
+    destination_host = manifest.get("destinationHost")
+    destination_port = as_int(manifest.get("destinationPort"))
+    if not isinstance(destination_host, str) or not destination_host:
+        invalid.append("destinationHost is missing")
+    elif destination_host.strip("[]") in PUBLIC_RESOLVER_HOSTS:
+        invalid.append("destinationHost uses public resolver endpoint")
+    if destination_port is None or destination_port < 1 or destination_port > 65535:
+        invalid.append("destinationPort is invalid")
 
 
 def check(checks: List[Dict[str, str]], name: str, status: str,
@@ -201,6 +246,7 @@ def verify(manifest: Dict[str, Any], evidence: Path) -> Dict[str, Any]:
         invalid.append(f"manifest schema is not {MANIFEST_SCHEMA}")
     if manifest.get("profile") != "a2-6" or manifest.get("cellId") != "A2-6":
         invalid.append("manifest is not A2-6")
+    verify_s156_guardrails(manifest, invalid)
 
     required = manifest.get("requiredFiles")
     if not isinstance(required, list) or not all(isinstance(item, str) and item for item in required):

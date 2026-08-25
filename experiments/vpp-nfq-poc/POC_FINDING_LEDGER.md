@@ -98,6 +98,7 @@ Map rather than encoded as TODOs here.
 | VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `CLOSED_AS_POC_DESIGN_FIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F061 | S155 controlled A2-1 matrix exposed TCP owner-lookup and per-flow stage-correlation gap | `CLOSED_FOR_S156_A2_1_BASE_MATRIX` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F062 | S156-guarded A2-2 rerun needed explicit owner-completion delay to prove pending overlap | `CLOSED_FOR_S186_A2_2_CONCURRENCY` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F063 | Remaining A2 historical PASS bundles lack S156 guardrail provenance | `OPEN_UNTIL_S188_S189_S190_RERUN` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2134,6 +2135,34 @@ Map rather than encoded as TODOs here.
   claim production cache sizing, lifecycle invalidation, external connectivity,
   or B1/B2 whole-device behavior.
 
+### VPN-F063 -- Remaining A2 historical PASS bundles lack S156 guardrail provenance
+
+- **First observation:** After S156 and S186 tightened the A2 evidence
+  contract, the 2026-08-23 A2-4, A2-5, and A2-6 PASS bundles still carried
+  only the older public-endpoint/provenance envelope.  Their manifests name
+  `destinationHost=1.1.1.1` and `destinationPort=53`, and do not carry
+  `uidContractCellId`, controlled fixture metadata, or
+  `resolverCorrelationSchema=a2-1-resolver-cell-stage-request/v1`.
+- **Root cause:** The earlier A2 aggregate was functionally useful but mixed
+  two evidence generations.  A2-1/A2-2 now prove UID attribution through a
+  controlled WSL2/LAN fixture plus immutable resolver request correlation,
+  while A2-4/A2-5/A2-6 still used the pre-S156 oracle.  Reusing those old PASS
+  bundles as final closure would silently weaken the current UID/drop seam.
+- **Correction:** The A2-4, A2-5, and A2-6 runners/verifiers now reject public
+  resolver endpoints, require the controlled fixture envelope, require
+  `uidContractCellId`, require resolver `cell/stage/request` correlation, and
+  gate APK members on the native resolver correlation strings.  The old PASS
+  bundles are retained as historical functional baselines but should evaluate
+  `INVALID` under the S156-era verifier.
+- **Open closure condition:** S188 reruns A2-4, S189 reruns A2-5, and S190
+  reruns A2-6 on the current artifact with the upgraded guardrails.  A final
+  A2 aggregate is valid only after those S156-era reruns pass or produce a
+  newly classified finding.
+- **Status:** `OPEN_UNTIL_S188_S189_S190_RERUN`.  This is an evidence-standard
+  correction, not a behavioral contradiction of the earlier UID/drop results.
+  It does not require blocking FlowOwner, adding UID to the canonical flow key,
+  reviving stale identity, or adding an alternate transport path.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2248,7 +2277,10 @@ Map rather than encoded as TODOs here.
   fixtures and exact stage logs, then adds F061 for the successor TCP
   owner-lookup/per-flow stage-correlation gap. S186 closes F062 for the
   S156-guarded A2-2 pending-overlap proof by adding a bounded owner-completion
-  delay to the otherwise passing four-key cache/concurrency run.
+  delay to the otherwise passing four-key cache/concurrency run. S188/S189/S190
+  track F063: the remaining historical A2-4/A2-5/A2-6 PASS bundles must be
+  rerun with the S156 guardrail provenance instead of being reused as final
+  closure.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2316,6 +2348,7 @@ Map rather than encoded as TODOs here.
 | S152 | Residual two-App UID matrix design gap | VPN-F060 |
 | S155 | Controlled A2-1 rerun2 resolver/correlation gap | VPN-F061 |
 | S186 | S156-guarded A2-2 pending-overlap revalidation | VPN-F062 |
+| S188/S189/S190 | Remaining A2 S156 guardrail reruns | VPN-F063 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
