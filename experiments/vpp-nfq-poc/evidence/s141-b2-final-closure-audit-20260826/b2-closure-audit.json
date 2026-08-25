@@ -1,0 +1,143 @@
+{
+  "schema": "s141-b2-closure-audit/v1",
+  "date": "2026-08-26",
+  "planeWorkItem": "SAKAMOTO-141",
+  "status": "CLOSABLE_FOR_BOUNDED_B2_POC",
+  "architectureInterruption": false,
+  "claim": "On the selected Pixel 6a AppA -> VpnService/TUN -> OI3 multi-owner path with WSL2/LAN fixtures, policy drop, UID drop, transport no-reply/timeout/reset, and Android bind/protect/broker infrastructure failures remain separately attributable, avoid fallback datapaths, and settle with zero process/TUN residue.",
+  "acceptance": [
+    {
+      "id": "real_app_allow_success_control",
+      "verdict": "PASS_FOR_BOUNDED_B2",
+      "evidence": [
+        "experiments/vpp-nfq-poc/S178_B1_FINAL_DUALSTACK_DNS_EXECUTION.md",
+        "experiments/vpp-nfq-poc/S181_B2_FULL_DEVICE_TRANSPORT_FAILURE_EXECUTION.md",
+        "experiments/vpp-nfq-poc/S182_B2_REAL_POLICY_DROP_EXECUTION.md",
+        "experiments/vpp-nfq-poc/S183_B2_REAL_UID_DROP_EXECUTION.md",
+        "experiments/vpp-nfq-poc/S184_B2_REAL_RST_HOTSPOT.md",
+        "experiments/vpp-nfq-poc/S185_B2_INFRASTRUCTURE_FAILURE_EXECUTION.md"
+      ]
+    },
+    {
+      "id": "real_app_uid_drop",
+      "verdict": "PASS_FOR_BOUNDED_B2",
+      "evidence": [
+        "experiments/vpp-nfq-poc/evidence/s183-b2-real-uid-drop-20260825/run-20260825-192207-202830-manifest.json",
+        "experiments/vpp-nfq-poc/evidence/s183-b2-real-uid-drop-20260825/cells-20260825-192207-202830.csv",
+        "experiments/vpp-nfq-poc/S183_B2_REAL_UID_DROP_EXECUTION.md"
+      ],
+      "keyFacts": [
+        "AppA UID 12630",
+        "MISS_SUBMITTED -> COMPLETION_ACCEPTED -> CACHE_HIT",
+        "gateDrop=2",
+        "gateForward=0",
+        "no fixture packet",
+        "zero post-run residue"
+      ]
+    },
+    {
+      "id": "real_app_uid_allow_context",
+      "verdict": "PASS_AS_SUPPORTING_CONTEXT",
+      "evidence": [
+        "experiments/vpp-nfq-poc/evidence/s190-a2-aggregate-20260826-run1/a2-aggregate.json",
+        "experiments/vpp-nfq-poc/S139_A2_REVISED_EXECUTION_JOURNAL.md"
+      ],
+      "boundary": "B2 uses A2/S190 as UID attribution and known-UID allow/drop context; B2 itself does not claim the complete EG-08 matrix."
+    },
+    {
+      "id": "representative_ip_policy_drop",
+      "verdict": "PASS_FOR_BOUNDED_B2",
+      "evidence": [
+        "experiments/vpp-nfq-poc/evidence/s182-b2-real-policy-drop-20260825/run-20260825-190147-303631-manifest.json",
+        "experiments/vpp-nfq-poc/evidence/s182-b2-real-policy-drop-20260825/cells-20260825-190147-303631.csv",
+        "experiments/vpp-nfq-poc/S182_B2_REAL_POLICY_DROP_EXECUTION.md"
+      ],
+      "keyFacts": [
+        "stage=pre-owner",
+        "broker=0",
+        "socket=0",
+        "no-transport=1",
+        "no fixture packet",
+        "zero post-run residue"
+      ]
+    },
+    {
+      "id": "transport_refusal_no_reply_timeout_reset",
+      "verdict": "PASS_FOR_BOUNDED_B2",
+      "evidence": [
+        "experiments/vpp-nfq-poc/evidence/s179-b2-final-controlled-failure-20260825/run-20260825-172718-237536-manifest.json",
+        "experiments/vpp-nfq-poc/S179_B2_FINAL_CONTROLLED_FAILURE_EXECUTION.md",
+        "experiments/vpp-nfq-poc/evidence/s181-b2-full-device-transport-explore-20260825/run-20260825-183033-563849-manifest.json",
+        "experiments/vpp-nfq-poc/S181_B2_FULL_DEVICE_TRANSPORT_FAILURE_EXECUTION.md",
+        "experiments/vpp-nfq-poc/S184_B2_REAL_RST_HOTSPOT.md"
+      ],
+      "keyFacts": [
+        "S179 controlled refusal/no-reply/policy-drop PASS",
+        "S181 real UDP no-reply PASS",
+        "S181 unbound TCP reclassified as timeout, not refusal",
+        "S184 exact ECONNRESET -> downstream RST|ACK raw oracle PASS"
+      ]
+    },
+    {
+      "id": "bind_protect_broker_infrastructure_failures",
+      "verdict": "PASS_FOR_BOUNDED_B2",
+      "evidence": [
+        "experiments/vpp-nfq-poc/evidence/s185-b2-infrastructure-failures-20260825-run1/run-20260825-213903-524622-manifest.json",
+        "experiments/vpp-nfq-poc/evidence/s185-b2-infrastructure-failures-20260825-run1/cells-20260825-213903-524622.csv",
+        "experiments/vpp-nfq-poc/S185_B2_INFRASTRUCTURE_FAILURE_EXECUTION.md"
+      ],
+      "keyFacts": [
+        "BIND_FAILURE bind/protect 1/0",
+        "PROTECT_FAILURE bind/protect 1/1",
+        "BROKER_UNAVAILABLE bind/protect 0/0",
+        "zero fixture query",
+        "zero TUN output",
+        "zero Direct send",
+        "zero transport failure"
+      ]
+    },
+    {
+      "id": "host_model_support",
+      "verdict": "PASS_FOR_BOUNDED_B2_SUPPORT_ONLY",
+      "evidence": [
+        "experiments/vpp-nfq-poc/S127_OI2_EXECUTION_JOURNAL.md",
+        "experiments/vpp-nfq-poc/S128_OI3_EXECUTION_JOURNAL.md",
+        "experiments/vpp-nfq-poc/S130_OI5_EXECUTION_JOURNAL.md"
+      ],
+      "keyFacts": [
+        "duplicate/stale/wrong-owner/wrong-epoch tripwires",
+        "bind/protect/broker phase matrix",
+        "controlled success/refused/no-reply/policy-drop outcome classes",
+        "generation/epoch late-event rejection"
+      ]
+    },
+    {
+      "id": "finding_ledger_and_corrections_recorded",
+      "verdict": "PASS_FOR_BOUNDED_B2",
+      "evidence": [
+        "experiments/vpp-nfq-poc/POC_FINDING_LEDGER.md#vpn-f055----s181-wsl2-closed-tcp-port-was-not-a-stable-real-refusal-fixture-through-android-vpnoi3",
+        "experiments/vpp-nfq-poc/POC_FINDING_LEDGER.md#vpn-f056----s182-representative-real-policy-drop-needs-an-oi3-dispatcher-seam-not-android-app-exclusion",
+        "experiments/vpp-nfq-poc/POC_FINDING_LEDGER.md#vpn-f057----s183-oi3-uid-gate-treated-async-owner-lookup-sentinel-as-terminal",
+        "experiments/vpp-nfq-poc/POC_FINDING_LEDGER.md#vpn-f058----s184-real-lan-tcp-rst-propagation-seam",
+        "experiments/vpp-nfq-poc/POC_FINDING_LEDGER.md#vpn-f059----s185-bindprotectbroker-infrastructure-failure-oracle"
+      ]
+    }
+  ],
+  "s184DerivedManifestCaveat": {
+    "status": "RAW_AUTHORITATIVE_PASS_WITH_STALE_DERIVED_MANIFEST_FALSE_FAIL",
+    "evidenceDirectory": "experiments/vpp-nfq-poc/evidence/s184-b2-real-rst-downstream-reset-20260825/",
+    "runId": "20260825-210129-290257",
+    "reason": "The preserved CSV/manifest were produced by the old summarizer that counted reset events once from native-combined.log and again from the embedded vpp-stdout.log. Raw device logs and cleanup counters prove one upstream reset, one downstream RST|ACK, one transport failure, zero infrastructure failure, and exact buffers=7/7 settlement."
+  },
+  "nonClaims": [
+    "pre-connect ECONNREFUSED on arbitrary/public endpoints",
+    "public-Internet failure behavior outside registered DNS and WSL2/LAN fixture cells",
+    "arbitrary TCP teardown mapping",
+    "production timeout constants",
+    "production policy authoring",
+    "production UID gate capacity",
+    "throughput CPU thermal power Doze or long soak",
+    "complete EG-08 distinct-App UID matrix",
+    "OEM/device/network combinations beyond the selected Pixel 6a environment"
+  ]
+}

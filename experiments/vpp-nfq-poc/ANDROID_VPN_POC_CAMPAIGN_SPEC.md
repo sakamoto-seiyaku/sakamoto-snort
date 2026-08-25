@@ -7,7 +7,7 @@ artifact/fixture validity gates, bounded retry rule, and hotspot stop rule.
 Plane remains the source of truth for open execution work.
 
 Date: 2026-08-23
-Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 A2-6 and final A2 aggregate closure)
+Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 A2-6 and final A2 aggregate closure)
 Plane owner: SAKAMOTO-137
 Output level: concrete POC design; no experiment executed by this document
 
@@ -339,7 +339,8 @@ the session authority.
   Pixel and B1 becomes the functional baseline for later lifecycle/pressure.
 - **Non-claims:** All Internet failure modes, production timeout constants, or
   final overload behavior.
-- **Current execution gate:** S146 found the deterministic negative-result
+- **Current execution gate:** S141 is now closable for the bounded B2 POC by
+  [`S141_B2_FINAL_CLOSURE_AUDIT.md`](S141_B2_FINAL_CLOSURE_AUDIT.md). S146 found the deterministic negative-result
   contract defect; S147 corrected it and reran refused, no-reply, policy-drop,
   and dual-stack success controls. All now have durable cell-aware outcomes
   and zero residue. S179 reran the refused, no-reply, and policy-drop subset
@@ -353,6 +354,10 @@ the session authority.
   observes `dns_response_reset`, and cleanup settles exactly. The old wrapper
   failure was a corrected double-count of mirrored logs, not a target failure.
   The S184 hotspot stop is lifted; separately registered B2 gaps may proceed.
+  The closure audit retains EG-07 as `PARTIAL` for pre-connect
+  `ECONNREFUSED`, public-Internet behavior, arbitrary teardown mapping,
+  production timeout/capacity constants, and complete distinct-App UID
+  matrices.
 - **Interruption condition:** correctness requires implicit fallback, cannot
   separate policy from transport/infrastructure state, or the negative result
   contract cannot distinguish an expected refusal/timeout/drop from an actual
@@ -1090,6 +1095,18 @@ close full E2.
   transport failure.  Do not treat S185 as post-connect transport failure,
   pre-connect `ECONNREFUSED`, public-Internet behavior, production capacity,
   or production timeout evidence.
+- **S141 B2 final closure audit status:** `CLOSABLE_FOR_BOUNDED_B2_POC`.
+  [`S141_B2_FINAL_CLOSURE_AUDIT.md`](S141_B2_FINAL_CLOSURE_AUDIT.md) maps
+  Plane `SAKAMOTO-141` acceptance to S178/S179/S181/S182/S183/S184/S185 plus
+  OI2/OI3/OI5 host/model support. The audit closes B2 only for the selected
+  Pixel 6a AppA/VpnLite/OI3 multi path and WSL2/LAN fixtures. It explicitly
+  retains EG-07 as `PARTIAL`; pre-connect `ECONNREFUSED`, public Internet
+  failure behavior, arbitrary TCP teardown, production timeout and capacity
+  constants, Doze, soak, OEM variation, and complete EG-08 UID matrix claims
+  remain outside this closure. S184's preserved CSV/manifest still show the old
+  verifier-only double-count `FAIL`; the audit accepts S184 on raw
+  authoritative evidence plus corrected verifier/source tests, not on the
+  stale derived manifest alone.
 - **S152 residual A2 UID lifecycle status:** `INCONCLUSIVE_DESIGN_GAP`.
   S152 cannot proceed on the current A2-1 design.  The accepted diagnostic
   evidence directory

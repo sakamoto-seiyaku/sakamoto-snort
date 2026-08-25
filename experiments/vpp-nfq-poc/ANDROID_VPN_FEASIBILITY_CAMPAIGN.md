@@ -8,7 +8,7 @@ this campaign document records scope and evidence rather than a parallel
 backlog.
 
 Status: research contract, 2026-08-23
-Updated: 2026-08-25 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure)
+Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure)
 Tracker: SAKAMOTO-131
 Scope: non-root Android VPN/TUN Runtime Profile
 
@@ -671,6 +671,19 @@ it does not close post-connect transport failure, pre-connect
 `ECONNREFUSED`, public-Internet behavior, production capacity, or production
 timeout constants.
 
+S141 performs the final B2 closure audit for Plane `SAKAMOTO-141`. The audit
+bundle `evidence/s141-b2-final-closure-audit-20260826/b2-closure-audit.json`
+and [`S141_B2_FINAL_CLOSURE_AUDIT.md`](S141_B2_FINAL_CLOSURE_AUDIT.md) map
+each B2 acceptance item to S178/S179/S181/S182/S183/S184/S185 plus OI2/OI3/OI5
+host/model support. The result is `CLOSABLE_FOR_BOUNDED_B2_POC` for the
+selected Pixel 6a AppA/VpnLite/OI3 multi path and WSL2/LAN fixtures. The audit
+does not upgrade EG-07 to global support: pre-connect `ECONNREFUSED`,
+public-Internet behavior, arbitrary teardown mapping, production timeout and
+capacity constants, complete distinct-App matrices, Doze, soak and OEM
+variation remain explicit non-claims. S184's preserved CSV/manifest still show
+the known verifier-only double-count `FAIL`; the accepted oracle is the raw
+downstream-reset evidence plus corrected verifier/source tests.
+
 S152 attempted the residual A2 two-App UID lifecycle matrix after S185 and
 paused as an explicit POC design gap.  The authorized rerun
 `evidence/s152-a2-1-two-app-20260825-dualplugin-rerun1/` was
@@ -786,6 +799,7 @@ This contract does not claim:
 - [S183 B2 real per-App UID-drop execution](./S183_B2_REAL_UID_DROP_EXECUTION.md)
 - [S184 B2 real LAN TCP RST hotspot](./S184_B2_REAL_RST_HOTSPOT.md)
 - [S185 B2 infrastructure failure execution](./S185_B2_INFRASTRUCTURE_FAILURE_EXECUTION.md)
+- [S141 B2 final closure audit](./S141_B2_FINAL_CLOSURE_AUDIT.md)
 - [S152 A2 UID lifecycle design gap](./S152_A2_UID_LIFECYCLE_DESIGN_GAP.md)
 - [POC Finding Ledger](./POC_FINDING_LEDGER.md)
 - [Android VPN Evidence Gap Map](./ANDROID_VPN_EVIDENCE_GAP_MAP.md)
