@@ -267,6 +267,8 @@ capture_resource() {
       adb_read "cat /proc/$pid/stat 2>/dev/null || true"
       echo "--- $resource_label schedstat pid=$pid ---"
       adb_read "cat /proc/$pid/schedstat 2>/dev/null || true"
+      echo "--- $resource_label task-schedstat-sum pid=$pid ---"
+      adb_read "awk '{sum += \$1} END {print sum + 0}' /proc/$pid/task/*/schedstat 2>/dev/null || true"
       echo "--- $resource_label fd-count pid=$pid ---"
       adb_read "ls -1 /proc/$pid/fd 2>/dev/null | wc -l"
       echo "--- $resource_label task-count pid=$pid ---"
@@ -376,8 +378,8 @@ cpu_ticks_from_resource() {
   awk -v label="$label" '
     $0 ~ "^--- " label " stat pid=" {
       getline
-      if ($13 ~ /^[0-9]+$/ && $14 ~ /^[0-9]+$/) {
-        print $13 + $14
+      if ($14 ~ /^[0-9]+$/ && $15 ~ /^[0-9]+$/) {
+        print $14 + $15
       }
       exit
     }
@@ -387,12 +389,24 @@ cpu_ticks_from_resource() {
 sched_runtime_ns_from_resource() {
   local file="$1" label="$2"
   awk -v label="$label" '
-    $0 ~ "^--- " label " schedstat" {
+    $0 ~ "^--- " label " task-schedstat-sum pid=" {
       getline
       if ($1 ~ /^[0-9]+$/) {
         print $1
+        found = 1
       }
       exit
+    }
+    $0 ~ "^--- " label " schedstat" {
+      getline
+      if ($1 ~ /^[0-9]+$/) {
+        fallback = $1
+      }
+    }
+    END {
+      if (!found && fallback != "") {
+        print fallback
+      }
     }
   ' "$file"
 }
@@ -577,7 +591,7 @@ run_cell() {
     hev)
       set +e
       start_output="$(adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" \
-        --ez start true --es mode vpp-hev 2>&1)"
+        --ez start true --es mode vpp-hev --es allowedPackage "$PACKAGE" 2>&1)"
       start_rc=$?
       set -e
       printf '%s\n' "$start_output" >"$cell/start.txt"

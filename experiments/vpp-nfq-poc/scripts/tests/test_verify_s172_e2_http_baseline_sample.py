@@ -54,8 +54,12 @@ class VerifyS172E2HttpBaselineSampleTest(unittest.TestCase):
         self.assertIn("numeric_delta()", self.runner)
         self.assertIn("--- $resource_label stat pid=$pid ---", self.runner)
         self.assertIn("--- $resource_label schedstat pid=$pid ---", self.runner)
+        self.assertIn("--- $resource_label task-schedstat-sum pid=$pid ---",
+                      self.runner)
         self.assertIn('"^--- " label " stat pid="', self.runner)
-        self.assertIn("print $13 + $14", self.runner)
+        self.assertIn("print $14 + $15", self.runner)
+        self.assertIn('"^--- " label " task-schedstat-sum pid="',
+                      self.runner)
         self.assertIn("appCpuTicksDelta", self.runner)
         self.assertIn("vppCpuTicksDelta", self.runner)
         self.assertIn("hevCpuTicksDelta", self.runner)
@@ -89,6 +93,8 @@ class VerifyS172E2HttpBaselineSampleTest(unittest.TestCase):
         self.assertIn("android-socks5-smoke-server", self.runner)
         self.assertIn("socksConnectCount", self.runner)
         self.assertIn('"$socks_connect_count" -gt 0', self.runner)
+        self.assertIn('--es mode vpp-hev --es allowedPackage "$PACKAGE"',
+                      self.runner)
 
     def test_runner_drives_oi3_explicit_cleanup(self):
         self.assertIn('run_oi3_control "multi-stop"', self.runner)
