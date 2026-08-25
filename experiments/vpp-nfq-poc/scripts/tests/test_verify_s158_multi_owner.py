@@ -23,7 +23,7 @@ class VerifyS158MultiOwnerContractTest(unittest.TestCase):
             "tm->multi_mode = 1",
             "oi3_multi_flow_hash",
             "oi3_multi_owner_for_packet",
-            "oi3_multi_completion_ready",
+            "oi3_multi_completion_poll_main",
             "sakamoto-oi3 multi tun",
             "target-thread-a",
             "target-thread-b",
@@ -88,12 +88,16 @@ class VerifyS158MultiOwnerContractTest(unittest.TestCase):
         for marker in (
             "OI3_TUN_DEFERRED_KIND",
             "multi_deferred",
-            "oi3_enqueue_deferred_tun_packet_for",
+            "oi3_send_tun_handoff_for_kind",
+            "oi3_owner_accept_deferred_tun_packet",
             "oi3_tun_deferred_enqueue",
             "oi3_admit_deferred_tun_flow",
             "owner-busy-deferred",
             "result=DEFER",
-            "successor SYN forces completed active owner toward rearm",
+            "handoff=owner-fd",
+            "oi3_finish_if_ready_on_owner",
+            "successor SYN forces completed active",
+            "owner toward rearm",
             "tcp-rearm-stale-tail",
             "must not be submitted into the next deferred successor context",
             "route_deferred",
@@ -104,6 +108,7 @@ class VerifyS158MultiOwnerContractTest(unittest.TestCase):
             self.oi3.index("owner-busy-deferred"),
             self.oi3.index("tcp-non-syn-busy"),
         )
+        self.assertNotIn("oi3_enqueue_deferred_tun_packet_for", self.oi3)
 
     def test_udp_multi_flow_uses_idle_owner_route_pinning(self):
         for marker in (

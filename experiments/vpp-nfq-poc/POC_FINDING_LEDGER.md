@@ -2585,18 +2585,32 @@ Map rather than encoded as TODOs here.
   dominated by connect time: a successor SYN is deferred behind a completed
   TCP generation and waits for stale tail / finish / rearm before the broker
   request and SYN/ACK path begin.
+- **Candidate POC correction:** S219
+  `evidence/s219-e2-oi3-deferred-owner-fd-debug-20260826/`
+  (`runId=20260826-064414-513752`) changed the lifecycle seam so deferred
+  successor SYN packets use owner-fd handoff and owner-local callbacks can
+  finish/rearm immediately once residue is zero.  The focused long TCP cell
+  passed Direct `876/876` and OI3 `480/480`, OI3 cleanup `5/0`, `valid=1`.
+  S220 `evidence/s220-e2-oi3-deferred-syn-reconnect-debug-20260826/`
+  (`runId=20260826-064532-371054`) reran with `RECONNECT_EVERY=1`; Direct
+  passed `623/623`, OI3 passed `337/337`, OI3 cleanup `6/0`, `failures=0`,
+  app `executorTimeout=false`, `fatal=false`, and no mismatch/unexpected/late/
+  reordered errors.  The S220 trace overlapped a successor SYN with
+  previous-flow completion, but the new immediate finish/rearm path cleared the
+  active owner before the SYN had to wait in `multi-deferred`.  This is positive
+  evidence for the candidate, not a full F072 closure.
 - **Supported claim:** OI3 correctness, cleanup, fixture reachability, and
   Direct/HEV controls are stable for the accepted baseline, but the remaining
   E2 blocker is not a single socket option or UID/policy defect.  It is the
   TCP owner lifecycle/admission seam between completed response, stale tail,
   deferred successor SYN, and first protected write drive.
-- **Next correction direction:** Redesign the bounded TCP generation lifecycle
-  for this POC before adding more small wake patches.  The fix must preserve
-  successor SYN admission and cleanup correctness while preventing a completed
-  generation from holding the owner until Android tail traffic or the next
-  request forces rearm.  Avoid reintroducing generic payload timer kicks,
-  stale-wake drains, or response-complete early rearm; all have negative
-  evidence.
+- **Next correction direction:** Keep the S219/S220 bounded TCP generation
+  lifecycle candidate and rerun the matched Direct/HEV/OI3 E2 matrix before
+  importing this route into the main stack.  The fix must preserve successor
+  SYN admission and cleanup correctness while preventing a completed generation
+  from holding the owner until Android tail traffic or the next request forces
+  rearm.  Avoid reintroducing generic payload timer kicks, stale-wake drains,
+  or response-complete early rearm; all have negative evidence.
 - **Status:** `OPEN_RISK`.  Main-stack import remains blocked until F072 is
   corrected and matched Direct/HEV/OI3 E2 is rerun, or until an explicit
   architecture decision changes the route.

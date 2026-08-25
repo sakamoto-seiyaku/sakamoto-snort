@@ -1,7 +1,7 @@
-# S204--S218 E2 OI3 write-interest, owner-handoff, and TCP lifecycle hotspot
+# S204--S220 E2 OI3 write-interest, owner-handoff, and TCP lifecycle hotspot
 
 Date: 2026-08-26
-Status: `PARTIAL_FIX_WITH_RESIDUAL_TCP_OWNER_LIFECYCLE_HOTSPOT`
+Status: `F072_CANDIDATE_FIX_NEEDS_MATCHED_E2_RERUN`
 
 ## Decision
 
@@ -21,8 +21,9 @@ parts:
    first HTTP payload is submitted but Direct send does not happen until Android
    retransmits that payload roughly 200ms later. In another shape, a successor
    SYN is deferred behind a completed TCP generation until stale tail /
-   finish / rearm proceeds. This part is still open and is the current E2
-   performance blocker.
+   finish / rearm proceeds. S219/S220 introduced a focused candidate fix for
+   this seam and passed narrow TCP correctness/reconnect cells, but the
+   matched Direct/HEV/OI3 E2 comparison has not been rerun yet.
 
 This is not a UID-drop failure, not an HTTP fixture failure, and not a
 correctness failure for the bounded matched HTTP cells.
@@ -50,6 +51,8 @@ correctness failure for the bounded matched HTTP cells.
 | S216 | `evidence/s216-e2-oi3-f072-finish-instrument-20260826/`, run `20260826-062214-952868` | Instrumented OI3 `8/8`, p95 `81ms`; useful as a green control only, not a fix. |
 | S217 | `evidence/s217-e2-oi3-positive-reply-rearm-debug-20260826/`, run `20260826-062522-577059` | Early response-complete rearm candidate rejected: OI3 `6/8`, two `SocketTimeoutException`s, cleanup `9/2`, `owner-stopped` rejects. Candidate reverted. |
 | S218 | `evidence/s218-e2-oi3-finish-after-buffer-debug-20260826/`, run `20260826-062746-118337` | Finish-after-buffer candidate preserved correctness (`8/8`, cleanup `12/0`) but did not fix latency; p95 `606ms`. Candidate reverted. |
+| S219 | `evidence/s219-e2-oi3-deferred-owner-fd-debug-20260826/`, run `20260826-064414-513752` | Owner-local finish/rearm plus deferred successor-SYN owner-fd candidate passed focused long TCP: Direct `876/876`, OI3 `480/480`, OI3 cleanup `5/0`, `valid=1`. |
+| S220 | `evidence/s220-e2-oi3-deferred-syn-reconnect-debug-20260826/`, run `20260826-064532-371054` | Same candidate passed focused reconnect TCP (`RECONNECT_EVERY=1`): Direct `623/623`, OI3 `337/337`, OI3 cleanup `6/0`, no app timeout/fatal/mismatch, `failures=0`. Logs show immediate owner-local finish/rearm avoided the observed deferred-SYN stall in this run; full matched E2 remains required. |
 
 ## Corrected root cause: connector write interest
 
@@ -164,6 +167,24 @@ Rejected candidates to avoid:
 - Finish-after-buffer scheduling shortcut: S218 preserved correctness but left
   p95 at `606ms`.
 
+S219/S220 changed the lifecycle seam instead of adding another generic wake:
+
+- Deferred successor SYN packets now use the same owner-fd handoff mechanism as
+  ordinary TUN packets, not the older VPP frame-queue path.
+- Owner-local connector and TUN callbacks call an immediate finish/rearm helper
+  once `finish_requested` is set and residue is zero, instead of waiting for a
+  later token on the VPP side.
+- Completed active TCP flow admission can force the active owner toward
+  finish/rearm while preserving tail tombstoning.
+
+The focused evidence is positive but still bounded.  S220 intentionally used
+`RECONNECT_EVERY=1` and did overlap a new SYN with previous-flow completion,
+but the new immediate finish/rearm path cleared the active owner before the
+new flow had to enter the `multi-deferred` branch.  That is the desired fast
+path for this trace, not proof that every deferred-SYN timing shape is closed.
+Keep F072 open until the matched Direct/HEV/OI3 E2 matrix passes with the
+candidate retained.
+
 ## Implementation state
 
 Current kept changes:
@@ -172,7 +193,9 @@ Current kept changes:
   keeps `connector_write_pending`, explicit owner TUN/completion handoff,
   connector wake wall-time/revent logs, TCP payload length logging, the
   multi-ingress/tun-queue timing probes, `TCP_NODELAY` socket hygiene, and the
-  guarded post-Direct-send poll observer.
+  guarded post-Direct-send poll observer.  It also keeps the S219/S220 F072
+  candidate: deferred successor-SYN owner-fd handoff plus owner-local
+  finish-if-ready after direct owner callbacks.
 - `experiments/vpp-nfq-poc/android/vpn-lite/src/main/java/com/sakamoto/snort/vpnlite/SnortVpnService.java`
   logs per-request connect/write/first-byte/done timing.
 - `experiments/vpp-nfq-poc/scripts/tests/test_verify_s171_e2_oi3_direct_sample.py`
@@ -191,12 +214,13 @@ Current build pitfall:
 
 ## Next POC direction
 
-The next focused POC should target TCP generation lifecycle/admission, not UID
-drop, app HTTP logic, generic connector polling, or the already rejected wake
-patches.
+The next focused POC should validate the S219/S220 TCP generation
+lifecycle/admission candidate under the matched Direct/HEV/OI3 E2 matrix, not
+UID drop, app HTTP logic, generic connector polling, or the already rejected
+wake patches.
 
-A plausible next design needs an explicit short-flow lifecycle contract for the
-POC: a completed response must not hold successor SYN admission hostage, but
-old tail packets must still be tombstoned without killing the owner. The
-acceptance gate remains matched Direct/HEV/OI3 E2 latency under the ADR-0007
-comparative threshold, plus unchanged cleanup/correctness validity.
+The lifecycle contract for the POC is now explicit: a completed response must
+not hold successor SYN admission hostage, but old tail packets must still be
+tombstoned without killing the owner. The acceptance gate remains matched
+Direct/HEV/OI3 E2 latency under the ADR-0007 comparative threshold, plus
+unchanged cleanup/correctness validity.

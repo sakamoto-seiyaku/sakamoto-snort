@@ -42,7 +42,7 @@ class VerifyS168OwnerTeardownLifecycleTest(unittest.TestCase):
         self.ledger = LEDGER.read_text(encoding="utf-8")
 
     def test_oi3_must_not_destroy_until_owner_stop_is_ready(self):
-        start = self.oi3.index("oi3_finish_for")
+        start = self.oi3.index("static void\noi3_finish_for")
         end = self.oi3.index("static void\noi3_finish (", start)
         finish = self.oi3[start:end]
         self.assertIn("oi3_stop_context_for", finish)
@@ -69,7 +69,7 @@ class VerifyS168OwnerTeardownLifecycleTest(unittest.TestCase):
                       self.hev_poc7_builder)
 
     def test_multi_owner_finish_must_run_on_owner_thread(self):
-        finish_start = self.oi3.index("oi3_finish_for")
+        finish_start = self.oi3.index("static void\noi3_finish_for")
         finish_end = self.oi3.index("static void\noi3_finish (", finish_start)
         finish = self.oi3[finish_start:finish_end]
         helper_start = self.oi3.index("oi3_defer_finish_to_owner_thread")
@@ -119,7 +119,7 @@ class VerifyS168OwnerTeardownLifecycleTest(unittest.TestCase):
                       rewrite)
 
     def test_oi3_rearm_preserves_pending_tun_packets(self):
-        rearm_start = self.oi3.index("oi3_rearm_tun_flow")
+        rearm_start = self.oi3.index("static void\noi3_rearm_tun_flow")
         rearm_end = self.oi3.index("static void\noi3_stop_context_for",
                                    rearm_start)
         rearm = self.oi3[rearm_start:rearm_end]

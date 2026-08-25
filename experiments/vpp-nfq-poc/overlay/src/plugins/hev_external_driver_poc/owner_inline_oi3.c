@@ -557,6 +557,8 @@ static void oi3_worker_run_for (vlib_main_t *vm, vlib_node_runtime_t *node,
                                 u32 kind, oi3_main_t *tm);
 static void oi3_apply_pending_underlay (oi3_main_t *tm);
 static void oi3_rearm_tun_flow (vlib_main_t *vm, oi3_main_t *tm);
+static void oi3_finish_for (vlib_main_t *vm, oi3_main_t *tm);
+static void oi3_finish_if_ready_on_owner (vlib_main_t *vm, oi3_main_t *tm);
 static void oi3_multi_maybe_teardown (void);
 static int oi3_task_init (oi3_main_t *tm);
 static void oi3_task_fini (oi3_main_t *tm);
@@ -570,6 +572,10 @@ static int oi3_multi_flow_route_insert (uint64_t hash, u32 owner,
 static void oi3_multi_flow_route_remove (uint64_t hash);
 static bool oi3_multi_tcp_packet (const u8 *packet, size_t length);
 static bool oi3_multi_tcp_syn_packet (const u8 *packet, size_t length);
+static int oi3_owner_accept_deferred_tun_packet (vlib_main_t *vm,
+                                                 oi3_main_t *tm,
+                                                 const u8 *packet,
+                                                 size_t length);
 
 static const char *
 oi3_cell_name (oi3_cell_t cell)
@@ -1751,6 +1757,7 @@ oi3_connector_wake_ready (clib_file_t *file)
                current_thread, tm->target_thread);
       if (tm->multi_mode && current_thread == tm->target_thread) {
         oi3_worker_run_for (vm, NULL, 0, tm);
+        oi3_finish_if_ready_on_owner (vm, tm);
         continue;
       }
       if (!tm->worker_token_pending &&
@@ -1840,14 +1847,6 @@ oi3_enqueue_tun_packet_for (oi3_main_t *tm, vlib_main_t *vm,
 {
   return oi3_enqueue_tun_packet_for_kind (tm, vm, packet, length,
                                           OI3_TUN_KIND);
-}
-
-static int
-oi3_enqueue_deferred_tun_packet_for (oi3_main_t *tm, vlib_main_t *vm,
-                                     const u8 *packet, size_t length)
-{
-  return oi3_enqueue_tun_packet_for_kind (tm, vm, packet, length,
-                                          OI3_TUN_DEFERRED_KIND);
 }
 
 static int
@@ -2031,6 +2030,7 @@ oi3_tun_handoff_ready (clib_file_t *file)
     if (n >= (ssize_t)(sizeof (msg.kind) + sizeof (msg.length))) {
       size_t expected = sizeof (msg.kind) + sizeof (msg.length) + msg.length;
       if ((msg.kind != OI3_TUN_KIND &&
+           msg.kind != OI3_TUN_DEFERRED_KIND &&
            msg.kind != OI3_BROKER_COMPLETION_KIND) ||
           msg.length > OI3_MAX_TUN_PACKET ||
           (size_t)n != expected) {
@@ -2044,16 +2044,23 @@ oi3_tun_handoff_ready (clib_file_t *file)
                  tm ? tm->owner_id : 0, msg.kind, msg.length, n, expected);
         continue;
       }
-      if (msg.kind == OI3_TUN_KIND) {
+      if (msg.kind == OI3_TUN_KIND ||
+          msg.kind == OI3_TUN_DEFERRED_KIND) {
         fprintf (stderr,
-                 "oi3 tun-handoff recv wall-ms=%llu owner=%u length=%u "
-                 "current-thread=%u target-thread=%u\n",
+                 "oi3 tun-handoff recv wall-ms=%llu owner=%u kind=%u "
+                 "length=%u current-thread=%u target-thread=%u\n",
                  (unsigned long long)oi3_wall_ms (), tm->owner_id,
-                 msg.length, vlib_get_thread_index (), tm->target_thread);
-        (void)oi3_owner_accept_tun_packet (tm, msg.packet, msg.length);
+                 msg.kind, msg.length, vlib_get_thread_index (),
+                 tm->target_thread);
+        if (msg.kind == OI3_TUN_DEFERRED_KIND)
+          (void)oi3_owner_accept_deferred_tun_packet (vm, tm, msg.packet,
+                                                      msg.length);
+        else
+          (void)oi3_owner_accept_tun_packet (tm, msg.packet, msg.length);
         if (tm->active) {
           oi3_apply_pending_underlay (tm);
-          oi3_worker_run_for (vm, NULL, OI3_TUN_KIND, tm);
+          oi3_worker_run_for (vm, NULL, msg.kind, tm);
+          oi3_finish_if_ready_on_owner (vm, tm);
         }
       } else {
         oi2_broker_completion_t completion;
@@ -2069,6 +2076,7 @@ oi3_tun_handoff_ready (clib_file_t *file)
         if (tm->active) {
           oi3_apply_pending_underlay (tm);
           oi3_worker_run_for (vm, NULL, OI3_BROKER_COMPLETION_KIND, tm);
+          oi3_finish_if_ready_on_owner (vm, tm);
         }
       }
       continue;
@@ -2148,16 +2156,19 @@ oi3_ensure_tun_handoff_file (oi3_main_t *tm)
 }
 
 static int
-oi3_send_tun_handoff_for (oi3_main_t *tm, const u8 *packet, size_t length)
+oi3_send_tun_handoff_for_kind (oi3_main_t *tm, const u8 *packet,
+                               size_t length, u32 kind)
 {
   oi3_tun_handoff_msg_t msg;
   size_t record_length = sizeof (msg.kind) + sizeof (msg.length) + length;
 
-  if (!tm || !packet || length > OI3_MAX_TUN_PACKET ||
+  if (!tm || !packet ||
+      (kind != OI3_TUN_KIND && kind != OI3_TUN_DEFERRED_KIND) ||
+      length > OI3_MAX_TUN_PACKET ||
       tm->tun_handoff_pair[1] < 0)
     return -1;
   memset (&msg, 0, sizeof (msg));
-  msg.kind = OI3_TUN_KIND;
+  msg.kind = kind;
   msg.length = (u32)length;
   memcpy (msg.packet, packet, length);
   ssize_t n = send (tm->tun_handoff_pair[1], &msg, record_length,
@@ -2165,11 +2176,17 @@ oi3_send_tun_handoff_for (oi3_main_t *tm, const u8 *packet, size_t length)
   if (n != (ssize_t)record_length)
     return -1;
   fprintf (stderr,
-           "oi4 multi-handoff send wall-ms=%llu owner=%u length=%zu "
-           "target-thread=%u\n",
-           (unsigned long long)oi3_wall_ms (), tm->owner_id, length,
-           tm->target_thread);
+           "oi4 multi-handoff send wall-ms=%llu owner=%u kind=%u "
+           "length=%zu target-thread=%u\n",
+           (unsigned long long)oi3_wall_ms (), tm->owner_id, kind,
+           length, tm->target_thread);
   return 0;
+}
+
+static int
+oi3_send_tun_handoff_for (oi3_main_t *tm, const u8 *packet, size_t length)
+{
+  return oi3_send_tun_handoff_for_kind (tm, packet, length, OI3_TUN_KIND);
 }
 
 static int
@@ -2759,10 +2776,63 @@ oi3_admit_deferred_tun_flow (vlib_main_t *vm, oi3_main_t *tm)
   return 1;
 }
 
+static int
+oi3_owner_accept_deferred_tun_packet (vlib_main_t *vm, oi3_main_t *tm,
+                                      const u8 *packet, size_t length)
+{
+  uint64_t flow_hash = 0;
+  int deferred_result = -1;
+
+  if (tm && tm->multi_mode && length <= OI3_MAX_TUN_PACKET &&
+      oi3_multi_flow_hash (packet, length, &flow_hash) == 0)
+    deferred_result =
+      oi3_tun_deferred_enqueue (tm, packet, length, flow_hash);
+
+  if (deferred_result >= 0) {
+    if (deferred_result == 0)
+      oi3_multi.route_deferred[tm->owner_id]++;
+    if (!atomic_load_explicit (&tm->active_flow_valid,
+                               memory_order_acquire)) {
+      (void)oi3_admit_deferred_tun_flow (vm, tm);
+    } else if (!tm->finish_requested && tm->context &&
+               tm->protocol == 6 && tm->output_packets != 0 &&
+               tm->output_direct != 0 && tm->return_rewritten != 0) {
+      /* A successor SYN cannot be submitted into the current HEV context,
+       * but dropping it creates the F050/F072 staircase cliff.  Keep the
+       * canonical owner unchanged, close admission, and drive the completed
+       * generation to rearm on this owner thread.  oi3_rearm_tun_flow() then
+       * admits exactly one deferred SYN from the owner-local queue. */
+      atomic_store_explicit (&tm->multi_admission_open, 0,
+                             memory_order_release);
+      tm->phase = OI3_STOPPING;
+      tm->finish_requested = 1;
+      fprintf (stderr,
+               "oi4 multi-deferred successor SYN forces completed active "
+               "owner toward rearm owner=%u hash=%llu output=%u direct=%u "
+               "rewritten=%u deferred=%u handoff=owner-fd\n",
+               tm->owner_id, (unsigned long long)flow_hash,
+               tm->output_packets, tm->output_direct,
+               tm->return_rewritten, tm->multi_deferred_count);
+    }
+    return deferred_result;
+  }
+
+  if (tm) {
+    atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                               memory_order_relaxed);
+    oi3_multi.route_rejects[tm->owner_id]++;
+    fprintf (stderr,
+             "oi4 multi-admission result=REJECT owner=%u hash=%llu "
+             "reason=deferred-owner-queue-full depth=%u\n",
+             tm->owner_id, (unsigned long long)flow_hash,
+             tm->multi_deferred_count);
+  }
+  return -1;
+}
+
 static clib_error_t *
 oi3_multi_tun_read_ready (clib_file_t *file)
 {
-  vlib_main_t *vm = vlib_get_main ();
   if (!oi3_multi.active || oi3_multi.tun_fd < 0)
     return 0;
   for (unsigned int count = 0; count < 64; count++) {
@@ -2825,7 +2895,8 @@ oi3_multi_tun_read_ready (clib_file_t *file)
     uint64_t tcp_tombstone_hash = atomic_load_explicit (
       &tm->multi_tcp_tombstone_hash, memory_order_acquire);
     if (tcp_syn && active_valid && active_hash != hash) {
-      if (oi3_enqueue_deferred_tun_packet_for (tm, vm, packet, (size_t)n) < 0) {
+      if (oi3_send_tun_handoff_for_kind (tm, packet, (size_t)n,
+                                         OI3_TUN_DEFERRED_KIND) < 0) {
         atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
                                    memory_order_relaxed);
         oi3_multi.route_rejects[tm->owner_id]++;
@@ -2838,7 +2909,8 @@ oi3_multi_tun_read_ready (clib_file_t *file)
       }
       fprintf (stderr,
                "oi4 multi-admission result=DEFER owner=%u hash=%llu active=%u "
-               "active-hash=%llu depth=%u reason=owner-busy-deferred\n",
+               "active-hash=%llu depth=%u reason=owner-busy-deferred "
+               "handoff=owner-fd\n",
                tm->owner_id, (unsigned long long)hash, admission_open,
                (unsigned long long)active_hash, dispatch_depth);
       continue;
@@ -3790,6 +3862,30 @@ oi3_finish_for (vlib_main_t *vm, oi3_main_t *tm)
 }
 
 static void
+oi3_finish_if_ready_on_owner (vlib_main_t *vm, oi3_main_t *tm)
+{
+  if (!tm || !tm->active || !tm->finish_requested ||
+      tm->vpp_buffer_residue != 0)
+    return;
+
+  u32 current_thread = vlib_get_thread_index ();
+  if (!tm->multi_mode || tm->target_thread == current_thread) {
+    oi3_finish_for (vm, tm);
+    if (tm->multi_mode)
+      oi3_multi_maybe_teardown ();
+    return;
+  }
+
+  if (!tm->worker_token_pending &&
+      oi3_enqueue_owner_for (tm, vm, 0) < 0) {
+    snprintf (tm->error, sizeof (tm->error),
+              "owner-finish-enqueue-failed current-thread=%u target-thread=%u",
+              current_thread, tm->target_thread);
+    tm->phase = OI3_FAULT;
+  }
+}
+
+static void
 oi3_finish (vlib_main_t *vm)
 {
   oi3_finish_for (vm, &oi3_main);
@@ -4477,46 +4573,7 @@ VLIB_NODE_FN (oi3_worker_node)
       }
     }
     if (kind == OI3_TUN_DEFERRED_KIND) {
-      uint64_t flow_hash = 0;
-      int deferred_result = -1;
-      if (tm->multi_mode && length <= OI3_MAX_TUN_PACKET &&
-          oi3_multi_flow_hash (payload, length, &flow_hash) == 0)
-        deferred_result =
-          oi3_tun_deferred_enqueue (tm, payload, length, flow_hash);
-      if (deferred_result >= 0) {
-        if (deferred_result == 0)
-          oi3_multi.route_deferred[tm->owner_id]++;
-        if (!atomic_load_explicit (&tm->active_flow_valid,
-                                   memory_order_acquire)) {
-          (void)oi3_admit_deferred_tun_flow (vm, tm);
-        } else if (!tm->finish_requested && tm->context &&
-                   tm->protocol == 6 && tm->output_packets != 0 &&
-                   tm->output_direct != 0 && tm->return_rewritten != 0) {
-          /* A successor SYN cannot be submitted into the current HEV context,
-           * but dropping it creates the F050 staircase cliff.  The canonical
-           * owner remains unchanged: successor SYN forces completed active
-           * owner toward rearm, then oi3_rearm_tun_flow admits exactly one
-           * deferred SYN from this owner-local queue. */
-          atomic_store_explicit (&tm->multi_admission_open, 0,
-                                 memory_order_release);
-          tm->phase = OI3_STOPPING;
-          tm->finish_requested = 1;
-          fprintf (stderr,
-                   "oi4 multi-deferred successor SYN forces completed active owner toward rearm owner=%u hash=%llu output=%u direct=%u rewritten=%u deferred=%u\n",
-                   tm->owner_id, (unsigned long long)flow_hash,
-                   tm->output_packets, tm->output_direct,
-                   tm->return_rewritten, tm->multi_deferred_count);
-        }
-      } else {
-        atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
-                                   memory_order_relaxed);
-        oi3_multi.route_rejects[tm->owner_id]++;
-        fprintf (stderr,
-                 "oi4 multi-admission result=REJECT owner=%u hash=%llu "
-                 "reason=deferred-owner-queue-full depth=%u\n",
-                 tm->owner_id, (unsigned long long)flow_hash,
-                 tm->multi_deferred_count);
-      }
+      (void)oi3_owner_accept_deferred_tun_packet (vm, tm, payload, length);
     } else if (kind == OI3_TUN_KIND) {
       (void)oi3_owner_accept_tun_packet (tm, payload, length);
     }
