@@ -39,6 +39,7 @@ FIXTURE_TCP_PORT="${FIXTURE_TCP_PORT:-55443}"
 FIXTURE_UDP_PORT="${FIXTURE_UDP_PORT:-55553}"
 FIXTURE_READY_WAIT="${FIXTURE_READY_WAIT:-20}"
 UID_CONTRACT_CELL="A2-1"
+RESOLVER_CORRELATION_SCHEMA="a2-1-resolver-cell-stage-request/v1"
 
 VPP_ROOT="/data/user/0/$VPN_PACKAGE/files/vpp"
 VPP_CLI_PATH="$VPP_ROOT/logs/vpp-cli.log"
@@ -157,6 +158,17 @@ capture_apk_provenance() {
   done
 }
 
+require_apk_member_string() {
+  local apk="$1"
+  local member="$2"
+  local needle="$3"
+  local label="$4"
+  if ! unzip -p "$apk" "$member" 2>/dev/null | strings | grep -Fq "$needle"; then
+    echo "local VpnLite APK lacks $label in $member; rebuild native/plugin artifacts" >&2
+    return 2
+  fi
+}
+
 cleanup_done=0
 cleanup() {
   if (( cleanup_done == 1 )); then
@@ -217,6 +229,14 @@ expected_tun_plugin_sha256="$(unzip -p "$LOCAL_VPN_APK" \
   echo "local VpnLite APK lacks valid tun plugin provenance" >&2
   exit 2
 }
+require_apk_member_string "$LOCAL_VPN_APK" \
+  "lib/arm64-v8a/libvpnfdprobe.so" \
+  "cell=%s stage=%s request=%llu" \
+  "native resolver request correlation"
+require_apk_member_string "$LOCAL_VPN_APK" \
+  "lib/arm64-v8a/libtun_poc_plugin.so" \
+  "cell %s stage %s request %llu" \
+  "tun_poc resolver request correlation"
 
 for app_apk in "$LOCAL_APP_A_APK" "$LOCAL_APP_B_APK"; do
   adapter_properties="$(unzip -p "$app_apk" \
@@ -275,6 +295,7 @@ device_epoch="$(adb_cmd shell date +%s 2>/dev/null | tr -d '\r\n')"
   echo "appAApkSha256=$local_app_a_apk_sha256"
   echo "appBApkSha256=$local_app_b_apk_sha256"
   echo "tunPocPluginSha256=$expected_tun_plugin_sha256"
+  echo "resolverCorrelationSchema=$RESOLVER_CORRELATION_SCHEMA"
   echo "fixtureScriptSha256=$fixture_script_sha256"
   echo "fixtureHost4=$FIXTURE_HOST4"
   echo "fixtureHost6=$FIXTURE_HOST6"
@@ -399,7 +420,7 @@ python3 - "$RESULT_DIR/manifest.json" \
   "$local_vpn_apk_sha256" "$local_app_a_apk_sha256" "$local_app_b_apk_sha256" \
   "$expected_tun_plugin_sha256" "$fixture_script_sha256" \
   "$FIXTURE_HOST4" "$FIXTURE_HOST6" "$FIXTURE_TCP_PORT" "$FIXTURE_UDP_PORT" \
-  "$MODE" "$install_ok" <<'PY'
+  "$MODE" "$install_ok" "$RESOLVER_CORRELATION_SCHEMA" <<'PY'
 import json
 import sys
 
@@ -407,7 +428,7 @@ import sys
     output, vpn_package, app_a, app_b, vpn_uid, uid_a, uid_b,
     vpn_hash, app_a_hash, app_b_hash, plugin_hash, fixture_hash,
     fixture_host4, fixture_host6, fixture_tcp_port, fixture_udp_port,
-    mode, install_ok,
+    mode, install_ok, resolver_correlation_schema,
 ) = sys.argv[1:]
 
 def integer(value):
@@ -466,6 +487,7 @@ manifest = {
         "publicInternetClaim": False,
     },
     "uidContractCellId": "A2-1",
+    "resolverCorrelationSchema": resolver_correlation_schema,
     "mode": mode,
     "vppMode": 5,
     "installOk": install_ok == "true",

@@ -103,6 +103,13 @@ tun_poc_ledger_stage (tun_poc_main_t *tm)
   return stage && stage[0] ? stage : "unknown";
 }
 
+static const char *
+tun_poc_ledger_cell (void)
+{
+  const char *cell = getenv ("SAKAMOTO_A2_STAGE_CELL");
+  return cell && cell[0] ? cell : "unknown";
+}
+
 static u8
 tun_poc_a25_stage (tun_poc_main_t *tm)
 {
@@ -1096,9 +1103,13 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
 {
   char src[INET6_ADDRSTRLEN] = { 0 };
   char dst[INET6_ADDRSTRLEN] = { 0 };
-  char query[256];
+  char stage_id[128];
+  char query[512];
   char response[64];
   struct pollfd pfd = { 0 };
+  const char *stage;
+  const char *cell;
+  u64 request_id;
   int query_len;
   int uid;
   ssize_t rv;
@@ -1134,18 +1145,25 @@ tun_poc_query_owner_resolver (tun_poc_main_t *tm)
   else
     return -1;
 
+  /* Capture correlation at request creation.  The resolver is asynchronous;
+   * sampling the mutable stage in its completion thread can attribute a
+   * delayed lookup to the next stage. */
+  stage = tun_poc_ledger_stage (tm);
+  snprintf (stage_id, sizeof (stage_id), "%s", stage);
+  cell = tun_poc_ledger_cell ();
+  request_id = ++tm->resolver_queries;
   query_len = snprintf (query, sizeof (query),
-			"resolve ip%u proto %u %s %u %s %u\n",
+			"resolve ip%u proto %u %s %u %s %u cell %s stage %s "
+			"request %llu\n",
 			tm->last_tuple_ip_version, tm->last_tuple_protocol, src,
 			tm->last_tuple_src_port, dst,
-			tm->last_tuple_dst_port);
+			tm->last_tuple_dst_port, cell, stage_id,
+			(unsigned long long) request_id);
   if (query_len <= 0 || query_len >= (int) sizeof (query))
     {
 	  tm->resolver_errors++;
 	  return -1;
     }
-
-  tm->resolver_queries++;
   rv = write (tm->resolver_fd, query, query_len);
   if (rv != query_len)
     {

@@ -147,11 +147,15 @@ typedef void (*hev_set_socket_protect_fn)(int (*func)(int fd, void *data), void 
 
 typedef struct {
     bool valid;
+    bool correlation_valid;
     int protocol;
     char local_addr[INET6_ADDRSTRLEN];
     char remote_addr[INET6_ADDRSTRLEN];
     uint16_t local_port;
     uint16_t remote_port;
+    char cell_id[64];
+    char stage_id[128];
+    uint64_t request_id;
 } owner_query_t;
 
 #define OWNER_CACHE_SIZE 64
@@ -189,17 +193,17 @@ static void copy_stage(char *cell, size_t cell_size, char *stage, size_t stage_s
 
 static void admission_set_from_query(const owner_query_t *query, int uid,
                                       bool allow, FILE *file) {
-    char stage_cell[64];
-    char stage_id[128];
     const char *family;
     const char *protocol;
+    const char *stage_id;
     if (!query || !query->valid) {
         return;
     }
     family = strchr(query->local_addr, ':') ? "ip6" : "ip4";
     protocol = query->protocol == IPPROTO_TCP ? "tcp" :
                query->protocol == IPPROTO_UDP ? "udp" : "other";
-    copy_stage(stage_cell, sizeof(stage_cell), stage_id, sizeof(stage_id));
+    stage_id = query->correlation_valid && query->stage_id[0]
+            ? query->stage_id : "unknown";
     pthread_mutex_lock(&g_lock);
     snprintf(g_admission_stage, sizeof(g_admission_stage), "%s", stage_id);
     snprintf(g_admission_flow_id, sizeof(g_admission_flow_id),
@@ -227,7 +231,6 @@ static void admission_set_from_query(const owner_query_t *query, int uid,
                  stage_id, g_admission_flow_id, g_admission_key, uid,
                  allow ? "ALLOW" : "DROP");
     }
-    (void)stage_cell;
 }
 
 static void admission_snapshot(char *stage, size_t stage_size,
@@ -1807,16 +1810,20 @@ static bool parse_resolver_query_line(const char *line, owner_query_t *query) {
     char family[8];
     char local_addr[INET6_ADDRSTRLEN];
     char remote_addr[INET6_ADDRSTRLEN];
+    char cell_id[64];
+    char stage_id[128];
+    unsigned long long request_id = 0;
     int protocol = 0;
     unsigned int local_port = 0;
     unsigned int remote_port = 0;
+    int base_length = 0;
 
     if (!line || !query) {
         return false;
     }
-    if (sscanf(line, "resolve %7s proto %d %45s %u %45s %u",
+    if (sscanf(line, "resolve %7s proto %d %45s %u %45s %u%n",
                family, &protocol, local_addr, &local_port,
-               remote_addr, &remote_port) != 6) {
+               remote_addr, &remote_port, &base_length) != 6) {
         return false;
     }
     if ((strcmp(family, "ip4") != 0 && strcmp(family, "ip6") != 0) ||
@@ -1832,6 +1839,19 @@ static bool parse_resolver_query_line(const char *line, owner_query_t *query) {
     query->remote_port = (uint16_t)remote_port;
     snprintf(query->local_addr, sizeof(query->local_addr), "%s", local_addr);
     snprintf(query->remote_addr, sizeof(query->remote_addr), "%s", remote_addr);
+
+    /* Metadata is optional for compatibility with older VPP plugins, but a
+     * tuple without it is deliberately not authoritative for A2-1.  The
+     * producer captures cell/stage/request before writing; completion must
+     * consume that immutable request metadata instead of copy_stage(). */
+    if (sscanf(line + base_length,
+               " cell %63s stage %127s request %llu",
+               cell_id, stage_id, &request_id) == 3 && request_id > 0) {
+        query->correlation_valid = true;
+        query->request_id = (uint64_t)request_id;
+        snprintf(query->cell_id, sizeof(query->cell_id), "%s", cell_id);
+        snprintf(query->stage_id, sizeof(query->stage_id), "%s", stage_id);
+    }
     return true;
 }
 
@@ -1839,8 +1859,6 @@ static void resolver_process_line(FILE *file, int fd, const char *line, int *que
     owner_query_t query;
     int uid = -1;
     int block_uid = -1;
-    char stage_cell[64];
-    char stage_id[128];
 
     (*queries)++;
     if (parse_resolver_query_line(line, &query)) {
@@ -1848,11 +1866,14 @@ static void resolver_process_line(FILE *file, int fd, const char *line, int *que
         pthread_mutex_lock(&g_lock);
         block_uid = g_vpp_resolver_block_uid;
         pthread_mutex_unlock(&g_lock);
-        copy_stage(stage_cell, sizeof(stage_cell), stage_id, sizeof(stage_id));
-        log_line(file, "resolver query=%d proto=%d %s:%u -> %s:%u uid=%d cell=%s stage=%s",
+        log_line(file, "resolver query=%d proto=%d %s:%u -> %s:%u uid=%d "
+                       "cell=%s stage=%s request=%llu",
                  *queries, query.protocol, query.local_addr,
                  (unsigned int)query.local_port, query.remote_addr,
-                 (unsigned int)query.remote_port, uid, stage_cell, stage_id);
+                 (unsigned int)query.remote_port, uid,
+                 query.correlation_valid ? query.cell_id : "unknown",
+                 query.correlation_valid ? query.stage_id : "unknown",
+                 (unsigned long long)query.request_id);
         admission_set_from_query(&query, uid, !(block_uid >= 0 && uid == block_uid),
                                  file);
     } else {

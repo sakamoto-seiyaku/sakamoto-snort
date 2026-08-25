@@ -137,9 +137,10 @@ def resolver_lines(text: str, host: str, source_port: int, port: int,
     """Return (matching UID line, wrong UID line) for the exact tuple.
 
     A2-1 resolver evidence is only authoritative when the producer carries the
-    registered cell and stage.  Keep the optional arguments for the older
-    A2-0 readers, but callers verifying A2-1 must provide both so a tuple-only
-    row from ``startup`` or another cell cannot satisfy the join.
+    registered cell, stage and immutable request id.  Keep the optional
+    arguments for the older A2-0 readers, but callers verifying A2-1 must
+    provide both so a tuple-only row from ``startup`` or another cell cannot
+    satisfy the join.
     """
     escaped_host = re.escape(host)
     host_pattern = escaped_host
@@ -151,6 +152,7 @@ def resolver_lines(text: str, host: str, source_port: int, port: int,
         + host_pattern + r":" + str(port)
         + r"\s+uid=(-?\d+)"
         + r"(?:\s+cell=(\S+)\s+stage=(\S+))?"
+        + r"(?:\s+request=(\d+))?"
     )
     matching = False
     wrong = False
@@ -161,8 +163,10 @@ def resolver_lines(text: str, host: str, source_port: int, port: int,
         if expected_cell is not None or expected_stage is not None:
             observed_cell = match.group(2)
             observed_stage = match.group(3)
+            observed_request = match.group(4)
             if (expected_cell is None or observed_cell != expected_cell
-                    or expected_stage is None or observed_stage != expected_stage):
+                    or expected_stage is None or observed_stage != expected_stage
+                    or observed_request is None):
                 continue
         if int(match.group(1)) == uid:
             matching = True
@@ -313,12 +317,16 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
     for field in ("vpnPackage", "expectedVpnUid", "expectedVpnApkSha256",
                   "expectedTunPocPluginSha256", "allowedPackages",
                   "expectedAllowedUids", "expectedAppApkSha256", "runtimeFiles",
-                  "mode", "vppMode", "uidContractCellId", "fixture", "tuples"):
+                  "mode", "vppMode", "uidContractCellId",
+                  "resolverCorrelationSchema", "fixture", "tuples"):
         if field not in manifest:
             invalid.append("manifest field missing: " + field)
     uid_contract_cell = manifest.get("uidContractCellId")
     if uid_contract_cell != "A2-1":
         invalid.append("uidContractCellId is not A2-1")
+    resolver_correlation_schema = manifest.get("resolverCorrelationSchema")
+    if resolver_correlation_schema != "a2-1-resolver-cell-stage-request/v1":
+        invalid.append("resolverCorrelationSchema is not a2-1-resolver-cell-stage-request/v1")
 
     fixture = manifest.get("fixture")
     fixture_errors: List[str] = []
@@ -730,10 +738,13 @@ def verify_a21(manifest: Dict[str, Any], evidence: Path,
     append_check(
         checks,
         "uid-contract-stage-registration",
-        PASS if uid_contract_cell == "A2-1" else INVALID,
-        "registered UID contract cell=A2-1; tuple joins require exact cell/stage"
-        if uid_contract_cell == "A2-1"
-        else "manifest must register uidContractCellId=A2-1",
+        PASS if (uid_contract_cell == "A2-1"
+                 and resolver_correlation_schema == "a2-1-resolver-cell-stage-request/v1")
+        else INVALID,
+        "registered UID contract cell=A2-1; tuple joins require exact cell/stage/request"
+        if (uid_contract_cell == "A2-1"
+            and resolver_correlation_schema == "a2-1-resolver-cell-stage-request/v1")
+        else "manifest must register uidContractCellId=A2-1 and resolver request correlation",
     )
 
     runtime_by_package: Dict[str, List[Dict[str, Any]]] = {}

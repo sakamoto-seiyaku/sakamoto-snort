@@ -26,7 +26,7 @@ class ResolverVerdictTest(unittest.TestCase):
     def verdict(self, *uid_lines: int) -> str:
         resolver = "\n".join(
             "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={} "
-            "cell=A2-1 stage=A2-1-appa-ip4-udp"
+            "cell=A2-1 stage=A2-1-appa-ip4-udp request=1"
             .format(self.SOURCE_PORT, self.HOST, self.PORT, uid)
             for uid in uid_lines
         )
@@ -84,7 +84,28 @@ class ResolverVerdictTest(unittest.TestCase):
     def test_other_cell_resolver_row_does_not_satisfy_a21_stage(self) -> None:
         resolver = (
             "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={} "
-            "cell=A2-4 stage=A2-1-appa-ip4-udp"
+            "cell=A2-4 stage=A2-1-appa-ip4-udp request=1"
+            .format(self.SOURCE_PORT, self.HOST, self.PORT, self.EXPECTED_UID)
+        )
+        self.assertEqual(
+            VERIFIER.INCONCLUSIVE,
+            VERIFIER.resolver_verdict(
+                resolver,
+                self.HOST,
+                self.SOURCE_PORT,
+                self.PORT,
+                self.EXPECTED_UID,
+                17,
+                "ip4",
+                "A2-1",
+                "A2-1-appa-ip4-udp",
+            ),
+        )
+
+    def test_cell_stage_without_request_is_inconclusive(self) -> None:
+        resolver = (
+            "resolver query=1 proto=17 src=10.111.0.2:{} -> {}:{} uid={} "
+            "cell=A2-1 stage=A2-1-appa-ip4-udp"
             .format(self.SOURCE_PORT, self.HOST, self.PORT, self.EXPECTED_UID)
         )
         self.assertEqual(
@@ -294,6 +315,7 @@ class A21MatrixVerdictTest(unittest.TestCase):
             "mode": "vpp-hev-owner-resolver",
             "vppMode": 5,
             "uidContractCellId": "A2-1",
+            "resolverCorrelationSchema": "a2-1-resolver-cell-stage-request/v1",
             "installOk": True,
             "runtimeFiles": {
                 self.APP_A: "a2-1-runtime-appa.jsonl",
@@ -453,24 +475,24 @@ class A21MatrixVerdictTest(unittest.TestCase):
             })
             resolver.append(
                 "resolver query=1 proto={} {}:{} -> {}:{} uid=-1 "
-                "cell=A2-1 stage={}".format(
+                "cell=A2-1 stage={} request={}".format(
                     item["protocol"], item["sourceAddress"], item["sourcePort"],
                     item["destinationAddress"], item["destinationPort"],
-                    item["stageId"]))
+                    item["stageId"], item["sourcePort"] * 10 + 1))
             if item["stageId"] == wrong_stage:
                 resolver.append(
                     "resolver query=2 proto={} {}:{} -> {}:{} uid=19999 "
-                    "cell=A2-1 stage={}".format(
+                    "cell=A2-1 stage={} request={}".format(
                         item["protocol"], item["sourceAddress"], item["sourcePort"],
                         item["destinationAddress"], item["destinationPort"],
-                        item["stageId"]))
+                        item["stageId"], item["sourcePort"] * 10 + 2))
             if item["stageId"] != only_miss_stage:
                 resolver.append(
                 "resolver query=3 proto={} {}:{} -> {}:{} uid={} "
-                    "cell=A2-1 stage={}".format(
+                    "cell=A2-1 stage={} request={}".format(
                         item["protocol"], item["sourceAddress"], item["sourcePort"],
                     item["destinationAddress"], item["destinationPort"], uid,
-                    item["stageId"]))
+                    item["stageId"], item["sourcePort"] * 10 + 3))
         for package, filename in manifest["runtimeFiles"].items():
             (root / filename).write_text(
                 "".join(json.dumps(record) + "\n" for record in runtime[package]),
