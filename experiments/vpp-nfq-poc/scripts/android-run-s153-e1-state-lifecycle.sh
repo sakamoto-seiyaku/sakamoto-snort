@@ -360,6 +360,13 @@ write_phase_cleanup_log() {
   } >"$output"
 }
 
+normalize_ip_rules() {
+  sed -E \
+    -e '/lookup wlan0$/ s/fwmark 0x[0-9a-f]+\/0x1ffff/fwmark <wlan>\/0x1ffff/g' \
+    -e '/lookup wlan0$/ s/fwmark 0x[0-9a-f]+\/0xffff/fwmark <wlan>\/0xffff/g' \
+    "$1"
+}
+
 finalize_phase() {
   local phase="$1" phase_dir="$2" expected="$3" status=0 cleanup_pass cleanup_fail residual tun0 rules
   if [[ ! -f "$phase_dir/vpp-stdout.log" || ! -f "$phase_dir/vpp-cli.log" ]]; then
@@ -381,6 +388,11 @@ finalize_phase() {
   if [[ -f "$phase_dir/baseline-ip-rules.txt" ]]; then
     adb_read 'ip rule show' >"$phase_dir/after-ip-rules.txt"
     cmp -s "$phase_dir/baseline-ip-rules.txt" "$phase_dir/after-ip-rules.txt" || rules=0
+    if [[ "$rules" == 0 && "$expected" == epoch ]]; then
+      normalize_ip_rules "$phase_dir/baseline-ip-rules.txt" >"$phase_dir/baseline-ip-rules.normalized.txt"
+      normalize_ip_rules "$phase_dir/after-ip-rules.txt" >"$phase_dir/after-ip-rules.normalized.txt"
+      cmp -s "$phase_dir/baseline-ip-rules.normalized.txt" "$phase_dir/after-ip-rules.normalized.txt" && rules=1
+    fi
   fi
   printf 'cleanup_pass=%s cleanup_fail=%s residual_vpp=%s tun0_after=%s rules_match=%s\n' "$cleanup_pass" "$cleanup_fail" "$residual" "$tun0" "$rules" >"$phase_dir/verdict.txt"
   [[ "$cleanup_fail" == 0 && "$cleanup_pass" -ge 4 && -z "$residual" && "$tun0" == 0 && "$rules" == 1 ]] || status=1

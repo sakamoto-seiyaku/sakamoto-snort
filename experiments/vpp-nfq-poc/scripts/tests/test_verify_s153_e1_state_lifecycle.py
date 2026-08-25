@@ -86,6 +86,13 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
         self.assertNotIn('local phase=epoch-restart phase_dir="$RESULT_DIR/$phase"',
                          self.runner)
 
+    def test_epoch_rule_check_normalizes_wifi_netid_replacement(self):
+        self.assertIn("normalize_ip_rules()", self.runner)
+        self.assertIn('"$expected" == epoch', self.runner)
+        self.assertIn("baseline-ip-rules.normalized.txt", self.runner)
+        self.assertIn("after-ip-rules.normalized.txt", self.runner)
+        self.assertIn("lookup wlan0$", self.runner)
+
 
 if __name__ == "__main__":
     unittest.main()
