@@ -57,6 +57,16 @@ class VerifyS171E2Oi3DirectSampleTest(unittest.TestCase):
         self.assertGreaterEqual(self.owner.count("oi3_refresh_tun_flow_deadline (tm)"),
                                 4)
 
+    def test_oi3_multi_tcp_fin_complete_stops_before_poll_rearm(self):
+        self.assertIn("oi3_tcp_positive_fin_complete", self.owner)
+        self.assertIn("tm->tcp_fin_submitted", self.owner)
+        self.assertIn("tm->output_direct != 0", self.owner)
+        self.assertIn("tm->return_rewritten != 0", self.owner)
+        self.assertIn("!result.running_task_count", self.owner)
+        self.assertIn("oi3 tcp-positive-fin-complete", self.owner)
+        self.assertIn("tm->phase = OI3_STOPPING;", self.owner)
+        self.assertIn("tm->finish_requested = 1;", self.owner)
+
 
 if __name__ == "__main__":
     unittest.main()

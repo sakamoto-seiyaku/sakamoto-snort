@@ -2704,6 +2704,20 @@ oi3_is_expected_negative_cell (const oi3_main_t *tm)
                 tm->cell == OI3_CELL_POLICY_DROP);
 }
 
+static int
+oi3_tcp_positive_fin_complete (const oi3_main_t *tm)
+{
+  return tm && tm->tun_mode && tm->protocol == 6 &&
+         tm->tcp_fin_submitted && tm->output_packets != 0 &&
+         tm->output_direct != 0 && tm->return_rewritten != 0 &&
+         tm->transport_failures == 0 && tm->infrastructure_failures == 0 &&
+         tm->tun_output_errors == 0 && !oi3_is_expected_negative_cell (tm) &&
+         !tm->expected_infrastructure_failure &&
+         !tm->expected_real_no_reply && !tm->expected_real_reset &&
+         !tm->expected_real_policy_drop && !tm->fault_injected &&
+         !tm->underlay_invalidated && !tm->normal_stop_requested;
+}
+
 static const char *
 oi3_expected_outcome (const oi3_main_t *tm)
 {
@@ -3930,6 +3944,19 @@ oi3_worker_run_for (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind,
           return;
         }
       } else if (result.total_task_count) {
+        if (oi3_tcp_positive_fin_complete (tm) &&
+            !result.running_task_count) {
+          fprintf (stderr,
+                   "oi3 tcp-positive-fin-complete owner=%u generation=%llu "
+                   "output=%u direct=%u rewritten=%u tasks=%u running=%u\n",
+                   tm->owner_id, (unsigned long long)tm->generation,
+                   tm->output_packets, tm->output_direct,
+                   tm->return_rewritten, result.total_task_count,
+                   result.running_task_count);
+          tm->phase = OI3_STOPPING;
+          tm->finish_requested = 1;
+          return;
+        }
         if (result.running_task_count || tm->connector_fd < 0) {
           if (oi3_enqueue_owner_for (tm, vm, 0) < 0)
             oi3_error ("OI3 TUN drive requeue failed");
