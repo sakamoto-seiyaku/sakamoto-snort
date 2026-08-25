@@ -20,6 +20,8 @@ PORT="${PORT:-42185}"
 FLOWS="${FLOWS:-4}"
 SOURCE_PORT_BASE="${SOURCE_PORT_BASE:-43000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-64}"
+LOAD="${LOAD:-closed}"
+EXPECT_ECHO="${EXPECT_ECHO:-true}"
 WARMUP_SECONDS="${WARMUP_SECONDS:-1}"
 STEADY_SECONDS="${STEADY_SECONDS:-6}"
 DRAIN_SECONDS="${DRAIN_SECONDS:-2}"
@@ -305,6 +307,7 @@ write_provenance() {
     echo "plugin_expected=${S170_EXPECTED_PLUGIN_SHA256:-$apk_member_plugin}"
     echo "apk_expected=${S170_EXPECTED_APK_SHA256:-$apk_sha}"
     echo "host=$HOST port=$PORT flows=$FLOWS sourcePortBase=$SOURCE_PORT_BASE payloadBytes=$PAYLOAD_BYTES"
+    echo "load=$LOAD expectEcho=$EXPECT_ECHO"
     echo "fixture_bind=$FIXTURE_BIND fixture_log=$FIXTURE_LOG"
     echo "warmupSeconds=$WARMUP_SECONDS steadySeconds=$STEADY_SECONDS drainSeconds=$DRAIN_SECONDS"
     echo "udpClosedTimeoutMs=$UDP_CLOSED_TIMEOUT_MS cycles=$CYCLES"
@@ -345,6 +348,7 @@ echo "# S170 EG-16 final-topology resource/lifecycle trend"
 echo "run_id=$RUN_ID"
 echo "device=$(adb_target_desc)"
 echo "package=$PACKAGE host=$HOST port=$PORT flows=$FLOWS sourcePortBase=$SOURCE_PORT_BASE"
+echo "load=$LOAD expectEcho=$EXPECT_ECHO"
 echo "cycles=$CYCLES warmup=$WARMUP_SECONDS steady=$STEADY_SECONDS drain=$DRAIN_SECONDS"
 echo "fixture=$FIXTURE_BIND:$PORT"
 start_fixture
@@ -400,10 +404,10 @@ for cycle in $(seq 1 "$CYCLES"); do
   adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" --ez appL4StressProbe true \
     --es protocol udp --es host "$HOST" --ei port "$PORT" --ei flows "$FLOWS" \
     --ei sourcePortBase "$SOURCE_PORT_BASE" --ei payloadBytes "$PAYLOAD_BYTES" \
-    --ei burst 1 --es load closed --ei warmupSeconds "$WARMUP_SECONDS" \
+    --ei burst 1 --es load "$LOAD" --ei warmupSeconds "$WARMUP_SECONDS" \
     --ei steadySeconds "$STEADY_SECONDS" --ei drainSeconds "$DRAIN_SECONDS" \
     --ei reconnectEvery 0 --ei udpClosedTimeoutMs "$UDP_CLOSED_TIMEOUT_MS" \
-    --ez expectEcho true >/dev/null
+    --ez expectEcho "$EXPECT_ECHO" >/dev/null
   run_id=""
   for _ in $(seq 1 90); do
     app_log="$(adb_read "cat '$REMOTE_APP_LOG' 2>/dev/null || true")"
@@ -456,8 +460,14 @@ for cycle in $(seq 1 "$CYCLES"); do
   hev_threads="$(threads_from_resource "$cell/resource-before.raw" hev || true)"
   fixture_rx="$(grep -c ' RX ' "$FIXTURE_LOG" || true)"
   fixture_tx="$(grep -c ' TX ' "$FIXTURE_LOG" || true)"
+  app_ok=0
+  if [[ "$EXPECT_ECHO" == true ]]; then
+    [[ "${received:-0}" == "${sent:-0}" && "${errors:-999}" == 0 ]] && app_ok=1
+  else
+    [[ "${sent:-0}" != 0 && "${errors:-999}" == 0 && "$fixture_rx" == "$fixture_tx" ]] && app_ok=1
+  fi
   printf '%s\n' "$cycle,$start_rc,$run_id,${sent:-0},${received:-0},${errors:-999},${app_rss:-0},${vpp_rss:-0},${hev_rss:-0},${app_fd:-0},${vpp_fd:-0},${hev_fd:-0},${app_threads:-0},${vpp_threads:-0},${hev_threads:-0},$cleanup_pass,$cleanup_fail,${residual_vpp:-},$tun0_after,$rules_match,$fixture_rx,$fixture_tx" >>"$CSV"
-  if [[ "$start_rc" != 0 || -z "$run_id" || "${sent:-0}" == 0 || "${received:-0}" != "${sent:-0}" || "${errors:-999}" != 0 || "$cleanup_fail" != 0 || "$cleanup_pass" -lt 4 || -n "$residual_vpp" || "$tun0_after" != 0 || "$rules_match" != 1 ]]; then
+  if [[ "$start_rc" != 0 || -z "$run_id" || "$app_ok" != 1 || "$cleanup_fail" != 0 || "$cleanup_pass" -lt 4 || -n "$residual_vpp" || "$tun0_after" != 0 || "$rules_match" != 1 ]]; then
     echo "cycle=$cycle FAIL start=$start_rc run_id=$run_id sent=$sent received=$received errors=$errors cleanup_pass=$cleanup_pass cleanup_fail=$cleanup_fail residual_vpp=$residual_vpp tun0=$tun0_after rules=$rules_match" >&2
     failures=$((failures + 1))
     break
@@ -477,6 +487,8 @@ cat >"$MANIFEST" <<EOF
   "flows":$FLOWS,
   "sourcePortBase":$SOURCE_PORT_BASE,
   "payloadBytes":$PAYLOAD_BYTES,
+  "load":"$LOAD",
+  "expectEcho":$EXPECT_ECHO,
   "warmupSeconds":$WARMUP_SECONDS,
   "steadySeconds":$STEADY_SECONDS,
   "drainSeconds":$DRAIN_SECONDS,

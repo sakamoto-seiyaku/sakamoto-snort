@@ -102,6 +102,7 @@ Map rather than encoded as TODOs here.
 | VPN-F064 | S187 A2-3 current refresh needed explicit OI3 cleanup control before product stop | `CLOSED_FOR_S191_A2_3_CLEANUP_CONTROL` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F065 | S188 A2-4 Android overlay dropped S156 resolver correlation from the product runtime | `CLOSED_FOR_S188_A2_4_OVERLAY_CORRELATION` | Android VPP runtime overlay + Pixel Android 16 |
 | VPN-F066 | S153/S170 resource runner waited for cleanup markers without driving OI3 cleanup control | `CLOSED_FOR_S153_CLEANUP_SMOKE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F067 | S153 foreground resource trend over-bound E1 resource settlement to UDP exact closed-echo losslessness | `CLOSED_FOR_S153_FIRE_AND_COUNT_RESOURCE_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2313,6 +2314,63 @@ Map rather than encoded as TODOs here.
   bounded cleanup must drive the explicit OI3 cleanup control first and treat
   ordinary product stop as a separate Android lifecycle/residue settlement
   step.
+
+### VPN-F067 -- S153 foreground resource trend over-bound E1 resource settlement to UDP exact closed-echo
+
+- **First observation:** After the S153/S170 cleanup-control fix, the S153
+  foreground resource trend used UDP exact closed-echo as both its traffic
+  driver and its resource-trend correctness gate.  The first current-artifact run
+  `evidence/s153-e1-residual-20260826/resource-foreground/`
+  (`runId=20260826-030526-927489`, endpoint `192.168.4.5:42360`,
+  `SOURCE_PORT_BASE=46600`, `udpClosedTimeoutMs=1000`) passed cycle 1 but
+  failed cycle 2 with `sent=1309`, `received=1305`, `errors=4`, and `late=4`.
+  Fixture RX/TX matched and cleanup/residue still passed.
+- **Timeout falsifier:** Raising only `udpClosedTimeoutMs` to `3000` did not
+  close the gap:
+  `evidence/s153-e1-residual-20260826/resource-foreground-timeout3000-probe/`
+  (`runId=20260826-031012-417454`, endpoint `192.168.4.5:42361`,
+  `SOURCE_PORT_BASE=46620`) failed cycle 1 with `sent=1317`, `received=1315`,
+  `errors=2`, and `late=0`.  Native logs showed
+  `oi3 tun-submit deferred reason=udp-datagram-inflight`, `oi3 tun-flow
+  timeout`, and UDP window rearm at the tail; decoding `tun-output-raw` showed
+  a missing flow-3 sequence in native output.  This rules out a simple 1s app
+  timeout explanation.
+- **Control evidence:** The same current APK/plugin/HEV hashes passed the old
+  registered S170/F046 tuple shape in
+  `evidence/s153-e1-residual-20260826/resource-foreground-s170shape-probe/`
+  (`runId=20260826-031314-315178`, endpoint `192.168.4.5:42185`,
+  `SOURCE_PORT_BASE=43000`, `udpClosedTimeoutMs=1000`): two cycles passed with
+  `sent=3327`, `received=3327`, `errors=0`, `fixtureRx=3836`,
+  `fixtureTx=3836`, and `failureCount=0`.
+- **Full-run falsifier:** Promoting that old tuple shape back to the full
+  five-cycle exact-echo resource trend still failed:
+  `evidence/s153-e1-residual-20260826/resource-foreground-corrected/`
+  (`runId=20260826-031549-830075`, endpoint `192.168.4.5:42185`,
+  `SOURCE_PORT_BASE=43000`) failed cycle 1 with `sent=1382`,
+  `received=1377`, `errors=5`, and `late=4`.  Native evidence showed one UDP
+  datagram inflight when the five-second flow deadline fired; cleanup passed
+  the generation as `EXPECTED_DIRECT_REPLY`, rearmed the remaining pending
+  datagrams, and delivered them late while the inflight sequence was not
+  recovered.
+- **POC correction:** S153 is an E1 resource/lifecycle settlement POC, not the
+  owner of UDP lossless correctness.  The accepted foreground resource trend
+  now uses a paced UDP fire-and-count driver (`EXPECT_ECHO=false`) and requires
+  nonzero app sends, zero app-side probe errors, fixture RX/TX symmetry, native
+  owner/buffer/credit ledgers, exact cleanup, residue checks, and resource
+  snapshots.  UDP exact closed-echo remains a separate correctness envelope
+  owned by S169/F046 and is not re-litigated as the S153 resource trend gate.
+- **Closure evidence:** The corrected foreground resource driver passed in
+  `evidence/s153-e1-residual-20260826/resource-foreground-firecount/`
+  (`runId=20260826-032313-031928`, `EXPECT_ECHO=false`, endpoint
+  `192.168.4.5:42189`, `SOURCE_PORT_BASE=43000`): five cycles recorded
+  nonzero app sends and zero app probe errors, fixture `12639/12639`,
+  cleanup `16/0` or `20/0`, no residual `vpp`, no `tun0`, matching ip rules,
+  and `failureCount=0`.
+- **Status:** `CLOSED_FOR_S153_FIRE_AND_COUNT_RESOURCE_DRIVER`.  This is a POC
+  registration/design correction plus a useful native boundary signal, not a
+  UID/drop-policy contradiction.  It closes only the S153 foreground resource
+  driver; UDP exact closed-echo remains bounded to its dedicated correctness
+  evidence.
 
 ## Consolidation audit
 

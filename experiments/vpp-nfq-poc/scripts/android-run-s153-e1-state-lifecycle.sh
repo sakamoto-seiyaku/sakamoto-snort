@@ -23,6 +23,7 @@ SOURCE_PORT_BASE="${SOURCE_PORT_BASE:-46530}"
 TCP_SOURCE_PORT_BASE="${TCP_SOURCE_PORT_BASE:-47530}"
 FLOWS="${FLOWS:-4}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-64}"
+UDP_EXPECT_ECHO="${UDP_EXPECT_ECHO:-false}"
 WARMUP_SECONDS="${WARMUP_SECONDS:-1}"
 STEADY_SECONDS="${STEADY_SECONDS:-8}"
 DRAIN_SECONDS="${DRAIN_SECONDS:-1}"
@@ -310,13 +311,17 @@ start_vpn() {
 
 start_probe() {
   local protocol="$1" port="$2" source_base="$3" steady="$4"
+  local expect_echo=true
+  if [[ "$protocol" == udp ]]; then
+    expect_echo="$UDP_EXPECT_ECHO"
+  fi
   adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" --ez appL4StressProbe true \
     --es protocol "$protocol" --es host "$HOST" --ei port "$port" --ei flows "$FLOWS" \
     --ei sourcePortBase "$source_base" --ei payloadBytes "$PAYLOAD_BYTES" --ei burst 1 \
     --es load closed --ei warmupSeconds "$WARMUP_SECONDS" --ei steadySeconds "$steady" \
     --ei drainSeconds "$DRAIN_SECONDS" --ei reconnectEvery 0 \
     --ei udpClosedTimeoutMs "$UDP_CLOSED_TIMEOUT_MS" --ei tcpReadTimeoutMs "$TCP_READ_TIMEOUT_MS" \
-    --ez expectEcho true >/dev/null
+    --ez expectEcho "$expect_echo" >/dev/null
 }
 
 wait_probe() {
@@ -531,6 +536,7 @@ trap cleanup EXIT
 
 echo "# S153 E1 state/lifecycle companion"
 echo "run_id=$RUN_ID device=$(adb_target_desc) package=$PACKAGE host=$HOST udp=$UDP_PORT tcp=$TCP_PORT"
+echo "udpExpectEcho=$UDP_EXPECT_ECHO"
 echo "artifact=$APK apk_sha256=$(sha256sum "$APK" | awk '{print $1}')"
 device_preflight
 [[ -f "$APK" ]] || { echo "APK not found: $APK" >&2; exit 1; }
@@ -560,6 +566,7 @@ cat >"$MANIFEST" <<EOF
   "hevSha256":"$(unzip -p "$APK" lib/arm64-v8a/libhev-socks5-tunnel.so | sha256sum | awk '{print $1}')",
   "udpPort":$UDP_PORT,
   "tcpPort":$TCP_PORT,
+  "udpExpectEcho":$UDP_EXPECT_ECHO,
   "fixtureRx":$fixture_rx,
   "fixtureTx":$fixture_tx,
   "phaseFailures":$PHASE_FAILURES

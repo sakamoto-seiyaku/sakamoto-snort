@@ -52,6 +52,14 @@ class VerifyS170E1ResourceTrendTest(unittest.TestCase):
         self.assertIn("done runId=.* errors=", self.runner)
         self.assertNotIn("flows-done .*sent", self.runner)
 
+    def test_runner_can_use_fire_and_count_resource_driver(self):
+        self.assertIn('EXPECT_ECHO="${EXPECT_ECHO:-true}"', self.runner)
+        self.assertIn('--ez expectEcho "$EXPECT_ECHO"', self.runner)
+        self.assertIn('"expectEcho":$EXPECT_ECHO', self.runner)
+        self.assertIn('if [[ "$EXPECT_ECHO" == true ]]; then', self.runner)
+        self.assertIn('"$fixture_rx" == "$fixture_tx"', self.runner)
+        self.assertIn('"${sent:-0}" != 0', self.runner)
+
     def test_runner_drives_explicit_oi3_cleanup_before_product_stop(self):
         self.assertIn('run_oi3_control "multi-stop"', self.runner)
         self.assertIn("wait_oi3_cleanup()", self.runner)

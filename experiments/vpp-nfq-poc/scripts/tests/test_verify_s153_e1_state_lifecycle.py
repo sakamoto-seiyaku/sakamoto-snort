@@ -55,8 +55,8 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
         ]:
             self.assertIn(token, self.runner)
 
-    def test_journal_declares_non_executed_pre_registration(self):
-        self.assertIn("Status: `PRE_REGISTERED_NOT_EXECUTED`", self.doc)
+    def test_journal_declares_tuple_correction(self):
+        self.assertIn("Status: `FOREGROUND_RESOURCE_PASS_CONTINUING`", self.doc)
         self.assertIn("resource-foreground", self.doc)
         self.assertIn("dualstack-dns", self.doc)
         self.assertIn("state-screen-off", self.doc)
@@ -64,6 +64,15 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
         self.assertIn("epoch-restart", self.doc)
         self.assertIn("fault-restart", self.doc)
         self.assertIn("cleanup-fix-smoke", self.doc)
+        self.assertIn("UDP exact closed-echo", self.doc)
+        self.assertIn("fire-and-count", self.doc)
+
+    def test_udp_state_driver_defaults_to_fire_and_count(self):
+        self.assertIn('UDP_EXPECT_ECHO="${UDP_EXPECT_ECHO:-false}"',
+                      self.runner)
+        self.assertIn('expect_echo="$UDP_EXPECT_ECHO"', self.runner)
+        self.assertIn('--ez expectEcho "$expect_echo"', self.runner)
+        self.assertIn('"udpExpectEcho":$UDP_EXPECT_ECHO', self.runner)
 
 
 if __name__ == "__main__":
