@@ -163,10 +163,22 @@ require_apk_member_string() {
   local member="$2"
   local needle="$3"
   local label="$4"
-  if ! unzip -p "$apk" "$member" 2>/dev/null | strings | grep -Fq "$needle"; then
+  local tmp_member
+  tmp_member="$(mktemp)"
+  if ! unzip -p "$apk" "$member" >"$tmp_member" 2>/dev/null; then
+    rm -f "$tmp_member"
+    echo "local VpnLite APK lacks $member; rebuild native/plugin artifacts" >&2
+    return 2
+  fi
+  # Avoid `grep -q` on a pipe while `pipefail` is set: an early grep exit can
+  # SIGPIPE the upstream binary reader and turn a real match into a false
+  # negative.
+  if ! strings "$tmp_member" | grep -F "$needle" >/dev/null; then
+    rm -f "$tmp_member"
     echo "local VpnLite APK lacks $label in $member; rebuild native/plugin artifacts" >&2
     return 2
   fi
+  rm -f "$tmp_member"
 }
 
 cleanup_done=0
