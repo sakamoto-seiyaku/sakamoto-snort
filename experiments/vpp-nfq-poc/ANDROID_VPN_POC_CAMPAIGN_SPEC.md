@@ -7,7 +7,7 @@ artifact/fixture validity gates, bounded retry rule, and hotspot stop rule.
 Plane remains the source of truth for open execution work.
 
 Date: 2026-08-23
-Updated: 2026-08-25 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation)
+Updated: 2026-08-25 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap)
 Plane owner: SAKAMOTO-137
 Output level: concrete POC design; no experiment executed by this document
 
@@ -1077,6 +1077,17 @@ close full E2.
   transport failure.  Do not treat S185 as post-connect transport failure,
   pre-connect `ECONNREFUSED`, public-Internet behavior, production capacity,
   or production timeout evidence.
+- **S152 residual A2 UID lifecycle status:** `INCONCLUSIVE_DESIGN_GAP`.
+  S152 cannot proceed on the current A2-1 design.  The accepted diagnostic
+  evidence directory
+  `evidence/s152-a2-1-two-app-20260825-dualplugin-rerun1/` had valid
+  artifact/device/dual-UID setup and cleanup, but only 5/8 registered tuples
+  joined to native resolver evidence.  The failing TCP tuples used public
+  `1.1.1.1` / Cloudflare IPv6 endpoints and failed in the App socket layer
+  (`Address not available` or `ECONNREFUSED`) before producing resolver rows.
+  Native/Java UID contract rows were also labelled `A2-4/startup` because the
+  runner did not pass an A2-1 stage contract.  Revise S152 around controlled
+  WSL2/LAN fixtures and stage-specific UID contract logging before any rerun.
 - **Non-claims:** Release performance/power budgets, battery certification,
   production constants, or a formal zero-copy investment verdict.
 - **Conditional copy branch:** keep VPN-F018 paused if end-to-end gates pass.  If

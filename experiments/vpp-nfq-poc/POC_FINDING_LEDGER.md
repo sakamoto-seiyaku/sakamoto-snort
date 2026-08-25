@@ -95,6 +95,7 @@ Map rather than encoded as TODOs here.
 | VPN-F057 | S183 OI3 UID gate treated async owner-lookup sentinel as terminal | `CLOSED_FOR_BOUNDED_UID_GATE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F058 | S184 owner-observed real LAN TCP RST required a narrow downstream reset propagation seam | `CLOSED_FOR_BOUNDED_REAL_RST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F059 | S185 bind/protect/broker infrastructure failures require phase-specific broker accounting | `CLOSED_FOR_BOUNDED_INFRA_FAILURE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F060 | S152 residual A2 UID matrix used public endpoints and startup-labelled resolver rows as oracle | `INCONCLUSIVE` | Pixel Android 16 + WSL2 LAN fixture required |
 
 ## Findings
 
@@ -2027,6 +2028,36 @@ Map rather than encoded as TODOs here.
 - **Status:** `CLOSED_FOR_BOUNDED_INFRA_FAILURE_SLICE`.  Full details:
   `S185_B2_INFRASTRUCTURE_FAILURE_EXECUTION.md`.
 
+### VPN-F060 -- S152 residual A2 UID matrix needs controlled tuple and stage oracle
+
+- **First observation:** The S152 A2-1 rerun
+  `evidence/s152-a2-1-two-app-20260825-dualplugin-rerun1/` was
+  `INCONCLUSIVE`: setup, dual App UIDs, native start, eight App runtime
+  records, and cleanup passed, but only 5/8 registered tuples joined to native
+  owner-resolver evidence.
+- **Root cause:** HIGH confidence POC-design gap plus harness defect.  The
+  runner used public `1.1.1.1` and Cloudflare IPv6 endpoints as the tuple
+  source.  Three TCP tuples failed in the App socket layer before native
+  resolver evidence: AppA IPv4/TCP `45641` and AppA IPv6/TCP `45643` returned
+  `Address not available`, while AppB IPv4/TCP `45651` returned
+  `ECONNREFUSED`.  The runner also failed to pass an A2-1 UID contract stage,
+  so native resolver and Java UID contract rows were labelled
+  `cell=A2-4 stage=startup`.
+- **Evidence boundary:** The valid parts prove only that the device, dual App
+  packages, allowed UID scope, and some UDP/AppB IPv6 TCP resolver joins were
+  reachable in that run.  They do not prove the complete two-App IPv4/IPv6
+  TCP/UDP matrix, lifecycle refresh/recovery, reverse attribution, or UID-drop
+  zero-broker/socket behavior.
+- **Required POC correction:** Replace public endpoints with controlled
+  WSL2/LAN fixtures for the registered IPv4/IPv6 TCP/UDP tuples; pass the
+  exact A2-1 cell/stage through App, Java UID contract, native resolver,
+  manifest, and verifier; and reject tuple-only resolver matches from another
+  cell or `startup`.  Rerun only the smallest A2-1 resolver-join slice before
+  adding lifecycle or drop variants.
+- **Status:** `INCONCLUSIVE`; do not continue S152 dependent cells until the
+  POC design is revised.  Full details:
+  `S152_A2_UID_LIFECYCLE_DESIGN_GAP.md`.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2135,7 +2166,9 @@ Map rather than encoded as TODOs here.
   adds and closes F059 for the infrastructure-failure oracle: bind failure,
   protect failure, and broker unavailable must use exact broker result and
   phase-specific bind/protect accounting instead of one shared timeout/broker
-  assertion.
+  assertion. S152 adds F060 as an inconclusive A2 design gap: public endpoints
+  and startup-labelled resolver rows cannot close the residual two-App UID
+  lifecycle matrix.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2200,6 +2233,7 @@ Map rather than encoded as TODOs here.
 | S168 | Multi-owner teardown deferred-drain correction and regression | VPN-F042 |
 | S184 | Real LAN TCP RST observation and bounded downstream propagation closure | VPN-F058 |
 | S185 | Bind/protect/broker infrastructure failure separation | VPN-F059 |
+| S152 | Residual two-App UID matrix design gap | VPN-F060 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 

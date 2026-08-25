@@ -8,7 +8,7 @@ this campaign document records scope and evidence rather than a parallel
 backlog.
 
 Status: research contract, 2026-08-23
-Updated: 2026-08-25 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation)
+Updated: 2026-08-25 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S152 A2 UID matrix design gap)
 Tracker: SAKAMOTO-131
 Scope: non-root Android VPN/TUN Runtime Profile
 
@@ -671,6 +671,19 @@ it does not close post-connect transport failure, pre-connect
 `ECONNREFUSED`, public-Internet behavior, production capacity, or production
 timeout constants.
 
+S152 attempted the residual A2 two-App UID lifecycle matrix after S185 and is
+paused as an explicit POC design gap.  The only authorized rerun
+`evidence/s152-a2-1-two-app-20260825-dualplugin-rerun1/` was
+`INCONCLUSIVE`: setup, dual UID scope, APK/native provenance, eight App
+runtime records, and cleanup were valid, but only 5/8 tuples had resolver
+joins.  AppA IPv4/TCP `45641`, AppA IPv6/TCP `45643`, and AppB IPv4/TCP
+`45651` failed in the App socket layer before native resolver evidence; the
+manifest used public `1.1.1.1` / Cloudflare IPv6 endpoints, which are invalid
+as a controlled UID resolver oracle.  The runner also omitted an A2-1
+`uidContractStage`, so native/Java resolver logs were labelled
+`A2-4/startup`.  Do not rerun S152 until the POC uses controlled WSL2/LAN
+fixtures and stage-specific UID contract logging.
+
 ## 8. Conclusion vocabulary
 
 Cell-level result:
@@ -762,6 +775,7 @@ This contract does not claim:
 - [S183 B2 real per-App UID-drop execution](./S183_B2_REAL_UID_DROP_EXECUTION.md)
 - [S184 B2 real LAN TCP RST hotspot](./S184_B2_REAL_RST_HOTSPOT.md)
 - [S185 B2 infrastructure failure execution](./S185_B2_INFRASTRUCTURE_FAILURE_EXECUTION.md)
+- [S152 A2 UID lifecycle design gap](./S152_A2_UID_LIFECYCLE_DESIGN_GAP.md)
 - [POC Finding Ledger](./POC_FINDING_LEDGER.md)
 - [Android VPN Evidence Gap Map](./ANDROID_VPN_EVIDENCE_GAP_MAP.md)
 - [Evidence-Guided Android VPN POC Campaign Specification](./ANDROID_VPN_POC_CAMPAIGN_SPEC.md)

@@ -23,7 +23,7 @@ substitute for a local oracle.
 
 ## Why this runbook exists
 
-S140--S185 showed that a target failure, a POC-design defect, an invalid run,
+S140--S185 plus S152 showed that a target failure, a POC-design defect, an invalid run,
 and an architecture hotspot can look identical at the App timeout surface.
 Small execution agents repeatedly lost time by acting on the last visible
 symptom instead of joining App, TUN, policy, owner, broker, connector, fixture,
@@ -78,7 +78,8 @@ renaming timeout as refusal, or moving the injection to a shallower substitute.
 | APK/plugin/source mismatch | VPN-F027, VPN-F039, VPN-F048 | Hash the installed APK and every packaged native member. A source edit is irrelevant until the rebuilt member hash changes and is recorded. |
 | Android permission or WSL/ADB transport failure | VPN-F028, VPN-F043, VPN-F052 | Run permission, LAN, fixture, and ADB preflights first. Bounded retry is allowed only for transport setup, never for hiding a valid target failure. |
 | VPN selected as its own underlay | VPN-F029 | Enumerate candidates, reject every VPN transport, record the selected physical handle, then bind and protect. Fail closed when no physical Network exists. |
-| Public or unbound endpoint used as an oracle | S140, VPN-F055, VPN-F058 | Use a controlled LAN listener and prove readiness, reachability, and the exact action. An unbound TCP port commonly yields post-handshake timeout through this stack; it is not a refusal oracle. |
+| Public or unbound endpoint used as an oracle | S140, VPN-F055, VPN-F058, S152 / VPN-F060 | Use a controlled LAN listener and prove readiness, reachability, and the exact action. An unbound TCP port commonly yields post-handshake timeout through this stack; public TCP endpoints can fail before the VPN/TUN resolver seam and cannot prove UID attribution. |
+| Cell/stage provenance inferred from tuple only | S152 / VPN-F060 | Pass the registered cell/stage through App, Java UID contract, native resolver, verifier, and manifest. A resolver row labelled as another cell or `startup` cannot satisfy an A2 matrix cell even when the tuple matches. |
 | Timeout conflated with reset, refusal, policy drop, or infrastructure failure | VPN-F032, VPN-F053, VPN-F055, VPN-F058 | Each outcome needs a distinct observed event. Timeout proves only deadline expiry. Reset/refusal requires owner-observed socket evidence; policy drop requires zero broker/socket; infrastructure failure requires an exact broker result. |
 | Bind/protect/broker failure phases share one oracle | S185 / VPN-F059 | Keep pre-connector infrastructure failures on the broker branch, but assert their phase-specific contract exactly: bind failure is broker result `BIND_FAILURE` with bind/protect `1/0`; protect failure is `PROTECT_FAILURE` with `1/1`; broker unavailable is `BROKER_UNAVAILABLE` with `0/0`. Do not reuse success-path bind/protect counters or treat App timeout as the proof. |
 | Async UID sentinel treated as a terminal result | VPN-F026, VPN-F057 | Treat `uid=-1` as `MISS_SUBMITTED`, not Unknown/terminal. Join completion and scoped cache hit with a bounded barrier or use a production replacement seam. |
