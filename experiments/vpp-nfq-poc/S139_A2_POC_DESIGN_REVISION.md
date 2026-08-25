@@ -263,24 +263,27 @@ A2 is complete only when A2-0 through A2-6 all pass at their registered scope.
 Narrow historical cells may support diagnosis but cannot substitute for a
 missing required cell.
 
-#### A2-1 successor gap from S155
+#### A2-1 successor gap from S155/S156 closure
 
 S155's controlled A2-1 rerun fixed the old POC oracle and then exposed a
 deeper resolver/correlation boundary:
 
 - IPv4/IPv6 UDP tuples can produce correct UID miss/completion/cache-hit joins;
-- IPv6 TCP tuples repeatedly complete with terminal `uid=-1` from Android owner
-  lookup;
-- IPv4 TCP tuples may have App runtime records without native resolver/contract
-  joins;
-- a delayed resolver query can be logged under the next stage because native
-  code samples a process-global current stage rather than carrying a per-flow
-  stage identity.
+- fixed TCP source-port reuse can fail before the packet reaches the VPN/TUN
+  resolver seam;
+- a delayed resolver query cannot be proven by sampling a process-global
+  current stage.
 
-A2-1 therefore needs a repaired production-valid TCP owner lookup contract and
-per-flow/per-request stage correlation before another full eight-tuple rerun.
-The verifier must distinguish no query, terminal `uid=-1`, Java completion
-without native hit, wrong UID, and delayed query logged under another stage.
+S156 closes this successor gap for the registered A2-1 base matrix.  The
+accepted contract is: carry immutable `cell/stage/request` metadata on each
+resolver request, reject stale APKs that do not contain that schema, use
+Android-assigned TCP source ports (`sourcePort=0`) with durable actual-port
+runtime capture, and select a bounded TCP repeat that has a decisive positive
+resolver UID.  Run5 passed all eight A2-1 tuples.
+
+Dependent A2 cells must preserve those guardrails; they must not reintroduce
+tuple-only resolver joins, process-global stage sampling, or fixed TCP
+source-port reuse.
 
 #### A2-2 concurrency cohort rule
 
