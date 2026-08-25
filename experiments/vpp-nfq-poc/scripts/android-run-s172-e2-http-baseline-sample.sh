@@ -374,10 +374,10 @@ threads_from_resource() {
 cpu_ticks_from_resource() {
   local file="$1" label="$2"
   awk -v label="$label" '
-    $0 ~ "^--- " label " stat" {
+    $0 ~ "^--- " label " stat pid=" {
       getline
-      if ($14 ~ /^[0-9]+$/ && $15 ~ /^[0-9]+$/) {
-        print $14 + $15
+      if ($13 ~ /^[0-9]+$/ && $14 ~ /^[0-9]+$/) {
+        print $13 + $14
       }
       exit
     }
@@ -707,7 +707,7 @@ run_cell() {
   fi
   [[ -z "$residual_vpp" && "$tun0_after" == 0 && "$rules_match" == 1 && "$state_valid" == 1 ]] || valid=0
 
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$label" "$arm" "$repeat" "$DEVICE_STATE" "$state_valid" "$startup_valid" "${requests:-0}" "${successes:-0}" \
     "${errors:-999}" "${request_bytes:-0}" "${response_bytes:-0}" "${elapsed_ms:-0}" \
     "${p50:-0}" "${p95:-0}" "${p99:-0}" "${read_timeout_after_bytes:-0}" \

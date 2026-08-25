@@ -54,6 +54,8 @@ class VerifyS172E2HttpBaselineSampleTest(unittest.TestCase):
         self.assertIn("numeric_delta()", self.runner)
         self.assertIn("--- $resource_label stat pid=$pid ---", self.runner)
         self.assertIn("--- $resource_label schedstat pid=$pid ---", self.runner)
+        self.assertIn('"^--- " label " stat pid="', self.runner)
+        self.assertIn("print $13 + $14", self.runner)
         self.assertIn("appCpuTicksDelta", self.runner)
         self.assertIn("vppCpuTicksDelta", self.runner)
         self.assertIn("hevCpuTicksDelta", self.runner)
