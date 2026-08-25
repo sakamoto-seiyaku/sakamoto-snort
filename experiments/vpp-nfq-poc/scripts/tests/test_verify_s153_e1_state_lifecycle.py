@@ -78,6 +78,14 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
         self.assertIn('PACKAGE_UID="$(package_uid)"', self.runner)
         self.assertNotRegex(self.runner, r'(?m)^UID=')
 
+    def test_runner_does_not_reference_local_phase_before_assignment(self):
+        self.assertNotIn('local phase="$1" state="$2" phase_dir="$RESULT_DIR/$phase"',
+                         self.runner)
+        self.assertNotIn('local phase=fault-restart phase_dir="$RESULT_DIR/$phase"',
+                         self.runner)
+        self.assertNotIn('local phase=epoch-restart phase_dir="$RESULT_DIR/$phase"',
+                         self.runner)
+
 
 if __name__ == "__main__":
     unittest.main()

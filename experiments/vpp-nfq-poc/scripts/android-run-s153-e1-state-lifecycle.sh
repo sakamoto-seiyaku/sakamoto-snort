@@ -407,7 +407,8 @@ finalize_phase() {
 }
 
 run_foreground_state() {
-  local phase="$1" state="$2" phase_dir="$RESULT_DIR/$phase"
+  local phase="$1" state="$2" phase_dir
+  phase_dir="$RESULT_DIR/$phase"
   CURRENT_PHASE_DIR="$phase_dir"; mkdir -p "$phase_dir"
   stop_vpn
   adb_read 'ip rule show' >"$phase_dir/baseline-ip-rules.txt"
@@ -462,7 +463,8 @@ run_normal_restart() {
 }
 
 run_fault_restart() {
-  local phase=fault-restart phase_dir="$RESULT_DIR/$phase"
+  local phase=fault-restart phase_dir
+  phase_dir="$RESULT_DIR/$phase"
   CURRENT_PHASE_DIR="$phase_dir"; mkdir -p "$phase_dir"
   stop_vpn
   adb_read 'ip rule show' >"$phase_dir/baseline-ip-rules.txt"
@@ -488,7 +490,8 @@ run_fault_restart() {
 }
 
 run_epoch_restart() {
-  local phase=epoch-restart phase_dir="$RESULT_DIR/$phase"
+  local phase=epoch-restart phase_dir
+  phase_dir="$RESULT_DIR/$phase"
   CURRENT_PHASE_DIR="$phase_dir"; mkdir -p "$phase_dir"
   stop_vpn
   adb_read 'ip rule show' >"$phase_dir/baseline-ip-rules.txt"
