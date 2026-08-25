@@ -7,7 +7,7 @@ artifact/fixture validity gates, bounded retry rule, and hotspot stop rule.
 Plane remains the source of truth for open execution work.
 
 Date: 2026-08-23
-Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 A2-6 and final A2 aggregate closure; S153 full E1 residual/lifecycle closure and F068 epoch runner correction)
+Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 A2-6 and final A2 aggregate closure; S153 full E1 residual/lifecycle closure and F068 epoch runner correction; S192 E2 device-state comparison and S193 final audit)
 Plane owner: SAKAMOTO-137
 Output level: concrete POC design; no experiment executed by this document
 
@@ -985,6 +985,18 @@ close full E2.
   thermal status `0`, and manifest `failureCount=0`. Continue remaining E2/E1
   work; do not treat this short foreground resource slice as Doze, long-soak,
   or matched performance closure.
+- **S192 matched device-state HTTP status:** `PASS_CORRECTNESS_WITH_E2_PERFORMANCE_GAP`.
+  S192 extends S172 to screen-off and forced-Doze cells with matched
+  Direct/HEV/OI3 HTTP requests.  Accepted runs
+  `evidence/s192-e2-http-device-state-screenoff-20260826/` and
+  `evidence/s192-e2-http-device-state-forced-doze-20260826/` both passed all
+  three arms with `8/8` requests, `stateValid=1`, OI3 cleanup `12/0` or
+  `11/0`, no validity failures, and comparison APK
+  `c943d32e3eec0d0281d60dae2acd9af6455eecadbaab81657ce056049c5b8678`.
+  This closes the missing matched device-state correctness slice.  It does not
+  close E2 performance: screen-off OI3 p95/p99 was `2604ms` versus Direct
+  `77ms` and HEV `23ms`; forced-Doze OI3 p95/p99 was `2618ms` versus Direct
+  `81ms` and HEV `20ms`.
 - **S178 final B1 dual-stack DNS status:** `PASS_DATAPLANE_WITH_CLEANUP_MARKER_GAPS`.
   The S178 runner first hit a POC verdict-design hotspot: `tun0` exit-code
   false positives, late cleanup-marker timing, and fixed TCP source-port reuse
@@ -1247,8 +1259,10 @@ cell remain regression inputs, while S157 supplies the real same-session
  WSL2 endpoint (`HTTP/1.0 200 OK`, one cycle), so the HEV arm is reopened.
  S163's registered comparative performance/device-state gates and final audit
  remain open. S153 later closes the registered E1 resource/lifecycle sequence
- for the current artifact, so the remaining campaign gate before formal
- implementation planning is E2 plus the final claim-family audit.
+ for the current artifact, and S192 closes the missing matched device-state
+ correctness slice.  S193's final audit is
+ `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`; formal main-stack implementation
+ planning remains blocked on focused E2 latency/cost diagnosis and rerun.
 
 ## 10. Campaign interruption conditions
 
@@ -1310,6 +1324,11 @@ interruption conditions.
 
 The audit consumes the final Finding Ledger, Evidence Gap Map and all batch
 conclusions.  It is claim-family based, not a count of passing cells.
+
+Current audit: [`S193_ANDROID_VPN_FEASIBILITY_FINAL_AUDIT.md`](S193_ANDROID_VPN_FEASIBILITY_FINAL_AUDIT.md)
+records `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.  A2, B2, C/D and E1 are bounded
+PASS for the selected Pixel scope, but E2 fails the ADR-0007 comparative
+latency gate.
 
 | Required family | Completion evidence |
 | --- | --- |

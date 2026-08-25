@@ -104,6 +104,7 @@ Map rather than encoded as TODOs here.
 | VPN-F066 | S153/S170 resource runner waited for cleanup markers without driving OI3 cleanup control | `CLOSED_FOR_S153_CLEANUP_SMOKE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F067 | S153 foreground resource trend over-bound E1 resource settlement to UDP exact closed-echo losslessness | `CLOSED_FOR_S153_FIRE_AND_COUNT_RESOURCE_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F068 | S153 epoch lifecycle runner over-bound underlay replacement to TCP exact transition and byte-exact wlan rules | `CLOSED_FOR_S153_EPOCH_FIRE_AND_COUNT_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F069 | E2 matched HTTP/device-state latency exceeds ADR-0007 comparative threshold | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2410,6 +2411,32 @@ Map rather than encoded as TODOs here.
   oracle for a deliberately broken/replaced physical underlay unless that exact
   TCP property is itself the registered question.
 
+### VPN-F069 -- E2 matched HTTP/device-state latency exceeds ADR-0007 comparative threshold
+
+- **First observation:** S174/S175 bounded HTTP staircase cells were correct and
+  clean but showed OI3 p95 around 1.3--2.6 seconds while matched Direct/HEV
+  stayed below 100 ms.  The result strengthened correctness construction but
+  left EG-17 open.
+- **Device-state confirmation:** S192 extended the matched S172 HTTP runner to
+  screen-off and forced-Doze.  Both accepted runs used comparison APK
+  `c943d32e3eec0d0281d60dae2acd9af6455eecadbaab81657ce056049c5b8678`, OI3
+  plugin `5012eeecb16828edca58f3dc98ddd52330a3b09b26394a3baa94b7c39604cc72`,
+  HEV `37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d`,
+  and `tun_poc_plugin.so`
+  `d919117842eb41b6924693f7b79a2d20ee6ce22f8ab371b7995039c38b46d9bc`.
+  Direct, HEV and OI3 all completed `8/8` requests under screen-off and
+  forced-Doze, `stateValid=1`, OI3 cleanup was `12/0` or `11/0`, and both
+  manifests recorded `failureCount=0`.
+- **Boundary:** The accepted S192 cells rule out a target correctness,
+  cleanup, UID, policy, or device-state failure for this shape.  They preserve
+  the E2 performance problem: screen-off OI3 p95/p99 was `2604ms` versus Direct
+  `77ms` and HEV `23ms`; forced-Doze OI3 p95/p99 was `2618ms` versus Direct
+  `81ms` and HEV `20ms`.
+- **Status:** `OPEN_RISK`.  The final feasibility audit is
+  `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
+  import must wait for a focused latency/cost diagnosis and a corrected E2
+  rerun, or for an explicit architecture decision that changes the route.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2607,6 +2634,7 @@ Map rather than encoded as TODOs here.
 | S188 | A2-4 Android overlay/runtime resolver-correlation closure | VPN-F065 |
 | S153/S170 | Resource runner cleanup-control smoke correction | VPN-F066 |
 | S153 | Epoch lifecycle runner transition/oracle correction | VPN-F068 |
+| S192/S193 | E2 device-state comparison and final audit performance gap | VPN-F069 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
