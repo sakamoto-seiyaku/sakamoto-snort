@@ -326,6 +326,82 @@ replace_once(
     + idle_wait_block
     + "\n  while (1)\n",
 )
+
+replace_once(
+    "plugins/tun_poc/tun_poc.c",
+    "static u8\n"
+    "tun_poc_a25_stage (tun_poc_main_t *tm)\n"
+    "{\n"
+    "  const char *stage = tun_poc_ledger_stage (tm);\n"
+    "  return (tm && tm->strict_owner_pending) || strncmp (stage, \"A2-5\", 4) == 0;\n"
+    "}\n",
+    "static const char *\n"
+    "tun_poc_ledger_cell (void)\n"
+    "{\n"
+    "  const char *cell = getenv (\"SAKAMOTO_A2_STAGE_CELL\");\n"
+    "  return cell && cell[0] ? cell : \"unknown\";\n"
+    "}\n\n"
+    "static u8\n"
+    "tun_poc_a25_stage (tun_poc_main_t *tm)\n"
+    "{\n"
+    "  const char *stage = tun_poc_ledger_stage (tm);\n"
+    "  return (tm && tm->strict_owner_pending) || strncmp (stage, \"A2-5\", 4) == 0;\n"
+    "}\n",
+)
+
+replace_once(
+    "plugins/tun_poc/tun_poc.c",
+    "  char query[256];\n"
+    "  char response[64];\n"
+    "  struct pollfd pfd = { 0 };\n"
+    "  int query_len;\n"
+    "  int uid;\n"
+    "  ssize_t rv;",
+    "  char stage_id[128];\n"
+    "  char query[512];\n"
+    "  char response[64];\n"
+    "  struct pollfd pfd = { 0 };\n"
+    "  const char *stage;\n"
+    "  const char *cell;\n"
+    "  u64 request_id;\n"
+    "  int query_len;\n"
+    "  int uid;\n"
+    "  ssize_t rv;",
+)
+
+replace_once(
+    "plugins/tun_poc/tun_poc.c",
+    "  query_len = snprintf (query, sizeof (query),\n"
+    "\t\t\t\"resolve ip%u proto %u %s %u %s %u\\n\",\n"
+    "\t\t\ttm->last_tuple_ip_version, tm->last_tuple_protocol, src,\n"
+    "\t\t\ttm->last_tuple_src_port, dst,\n"
+    "\t\t\ttm->last_tuple_dst_port);\n"
+    "  if (query_len <= 0 || query_len >= (int) sizeof (query))\n"
+    "    {\n"
+    "\t  tm->resolver_errors++;\n"
+    "\t  return -1;\n"
+    "    }\n\n"
+    "  tm->resolver_queries++;\n",
+    "  /* Capture correlation at request creation.  The resolver is asynchronous;\n"
+    "   * sampling the mutable stage in its completion thread can attribute a\n"
+    "   * delayed lookup to the next stage. */\n"
+    "  stage = tun_poc_ledger_stage (tm);\n"
+    "  snprintf (stage_id, sizeof (stage_id), \"%s\", stage);\n"
+    "  cell = tun_poc_ledger_cell ();\n"
+    "  request_id = ++tm->resolver_queries;\n"
+    "  query_len = snprintf (query, sizeof (query),\n"
+    "\t\t\t\"resolve ip%u proto %u %s %u %s %u cell %s stage %s \"\n"
+    "\t\t\t\"request %llu\\n\",\n"
+    "\t\t\ttm->last_tuple_ip_version, tm->last_tuple_protocol, src,\n"
+    "\t\t\ttm->last_tuple_src_port, dst,\n"
+    "\t\t\ttm->last_tuple_dst_port, cell, stage_id,\n"
+    "\t\t\t(unsigned long long) request_id);\n"
+    "  if (query_len <= 0 || query_len >= (int) sizeof (query))\n"
+    "    {\n"
+    "\t  tm->resolver_errors++;\n"
+    "\t  return -1;\n"
+    "    }\n",
+)
 PY
 
 echo "Applied Android CMake overlay to $VPP_SRC_DIR"

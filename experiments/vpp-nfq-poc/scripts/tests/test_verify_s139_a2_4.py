@@ -9,6 +9,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 VERIFIER_PATH = SCRIPT_DIR / "verify-s139-a2-4.py"
+OVERLAY_PATH = SCRIPT_DIR / "apply-vpp-android-overlay.sh"
 SPEC = importlib.util.spec_from_file_location("verify_s139_a2_4", VERIFIER_PATH)
 if SPEC is None or SPEC.loader is None:
     raise ImportError("unable to load A2-4 verifier")
@@ -92,6 +93,13 @@ class A24VerifierUnitTest(unittest.TestCase):
             },
         }, invalid)
         self.assertIn("destinationHost uses public resolver endpoint", invalid)
+
+    def test_android_overlay_carries_s156_native_resolver_correlation(self) -> None:
+        overlay = OVERLAY_PATH.read_text(encoding="utf-8")
+        self.assertIn("tun_poc_ledger_cell", overlay)
+        self.assertIn("SAKAMOTO_A2_STAGE_CELL", overlay)
+        self.assertIn("cell %s stage %s ", overlay)
+        self.assertIn("request %llu", overlay)
 
 
 if __name__ == "__main__":
