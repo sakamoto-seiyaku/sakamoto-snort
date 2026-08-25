@@ -103,3 +103,42 @@ The result intentionally remains narrower than the full E batch. It does not
 close matched Direct-vs-HEV E2 performance, IPv4/IPv6 TCP/UDP/DNS coverage,
 screen-off/Doze behavior, thermal envelope, production capacity constants,
 long soak, or the final feasibility audit.
+
+## 2026-08-26 cleanup-control runner recurrence
+
+S153 reused the S170 runner for a one-cycle residual preflight and reproduced a
+runner-level cleanup-control gap. The data path was healthy, but the cycle
+failed with `cleanup_pass=0` because the runner only requested ordinary product
+stop and then waited for `oi3_cleanup` markers that product stop is not
+required to emit.
+
+Rejected pre-fix smoke:
+
+```text
+evidence/s153-e1-residual-20260826-preflight-positive2/
+cycle=1 sent=255 received=255 errors=0 cleanup_pass=0 cleanup_fail=0
+fixtureRx=501 fixtureTx=501 residual_vpp= tun0_after=0 rules_match=1
+```
+
+Correction:
+
+- preserve the WSL2 remote-shell quoting fix for `dumpsys connectivity`;
+- drive the test-only OI3 `multi-stop` control before ordinary product stop;
+- record `cleanup-pre-stop.log` and merge it into the final per-cycle
+  `cleanup.log`;
+- keep the final product stop and residue gates (`pidof vpp`, `tun0_after`,
+  `ip rule`) as separate settlement checks.
+
+Post-fix smoke:
+
+```text
+evidence/s153-e1-residual-20260826-cleanup-fix-smoke/
+runId=20260826-024859-356974
+cycle=1 sent=258 received=258 errors=0 cleanup_pass=8 cleanup_fail=0
+fixtureRx=506 fixtureTx=506 residual_vpp= tun0_after=0 rules_match=1
+failureCount=0
+```
+
+This closes the S170/S153 runner hotspot only. It is not the full S153 E1
+residual verdict; the larger dual-stack, stop/start, epoch, fault/restart, and
+screen-off/Doze sequence still has to run against the corrected runner.

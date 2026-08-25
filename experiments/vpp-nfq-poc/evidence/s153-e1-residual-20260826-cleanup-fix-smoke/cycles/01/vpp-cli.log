@@ -1,0 +1,217 @@
+vpp monitor start pid=11031 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+
+# cli_monotonic_ns=91600459213956
+# sakamoto-oi3 underlay epoch 1 handle 437197393933 available 1
+""sakamoto-oi3 underlay epoch 1 handle 437197393933 available 1
+oi3 underlay epoch published=1 handle=437197393933 available=1
+vpp# quit
+
+
+# cli_monotonic_ns=91603164804859
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91603165752898
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=0/0/0/0 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=5
+oi4 owner=0 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=1 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=2 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=3 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91604171877410
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91604175753346
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=0/0/0/0 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=5
+oi4 owner=0 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=1 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=2 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=3 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91605183899139
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91605184654429
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=0/0/0/0 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=1 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=2 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=3 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91606193125580
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91606195326630
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=0/0/0/0 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=1 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=2 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+oi4 owner=3 active=1 phase=DONE generation=0 ingress=0 output=0 direct=0 rejects=0 deferred=0 buffers=0/0 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91607205590140
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91607207002086
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=1/1/1/1 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=WAIT_BROKER generation=1 ingress=1 output=0 direct=0 rejects=0 deferred=0 buffers=1/1 residue=0 error=
+oi4 owner=1 active=1 phase=WAIT_BROKER generation=1 ingress=1 output=0 direct=0 rejects=0 deferred=0 buffers=1/1 residue=0 error=
+oi4 owner=2 active=1 phase=WAIT_BROKER generation=1 ingress=1 output=0 direct=0 rejects=0 deferred=0 buffers=1/1 residue=0 error=
+oi4 owner=3 active=1 phase=WAIT_BROKER generation=1 ingress=1 output=0 direct=0 rejects=0 deferred=0 buffers=1/1 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91608217907848
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91608221573986
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=60/63/61/65 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=DRIVE generation=1 ingress=60 output=59 direct=59 rejects=0 deferred=0 buffers=233/233 residue=0 error=
+oi4 owner=1 active=1 phase=DRIVE generation=1 ingress=63 output=62 direct=62 rejects=0 deferred=0 buffers=244/244 residue=0 error=
+oi4 owner=2 active=1 phase=DRIVE generation=1 ingress=61 output=60 direct=60 rejects=0 deferred=0 buffers=237/236 residue=1 error=
+oi4 owner=3 active=1 phase=DRIVE generation=1 ingress=65 output=64 direct=64 rejects=0 deferred=0 buffers=256/256 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91609240316256
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91609242683321
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=123/126/127/127 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=DRIVE generation=1 ingress=123 output=123 direct=123 rejects=0 deferred=0 buffers=482/482 residue=0 error=
+oi4 owner=1 active=1 phase=DRIVE generation=1 ingress=126 output=126 direct=126 rejects=0 deferred=0 buffers=495/495 residue=0 error=
+oi4 owner=2 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=497/497 residue=0 error=
+oi4 owner=3 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=504/504 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91610252415662
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91610254696993
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=123/126/127/127 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=DRIVE generation=1 ingress=123 output=123 direct=123 rejects=0 deferred=0 buffers=482/482 residue=0 error=
+oi4 owner=1 active=1 phase=DRIVE generation=1 ingress=126 output=126 direct=126 rejects=0 deferred=0 buffers=495/495 residue=0 error=
+oi4 owner=2 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=497/497 residue=0 error=
+oi4 owner=3 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=504/504 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91611263011406
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91611265020887
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=123/126/127/127 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=DRIVE generation=1 ingress=123 output=123 direct=123 rejects=0 deferred=0 buffers=482/482 residue=0 error=
+oi4 owner=1 active=1 phase=DRIVE generation=1 ingress=126 output=126 direct=126 rejects=0 deferred=0 buffers=495/495 residue=0 error=
+oi4 owner=2 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=497/497 residue=0 error=
+oi4 owner=3 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=504/504 residue=0 error=
+vpp# quit
+
+
+# cli_monotonic_ns=91612272167616
+# show plugins
+""show plugins
+ Plugin path is: /data/app/~~82hhg4YjyjICu_12AhFl6A==/com.sakamoto.snort.vpnlite-J2jxk3DgdzDOr7dwdrROqw==/lib/arm64, plugins shown in load order
+
+     Plugin                                   Version                          Description
+  1. libhev_external_driver_poc_plugin.so     0.0.3-559~gb489dd7-dirty         PROTOTYPE HEV external-driver scheduler API
+vpp# quit
+
+
+# cli_monotonic_ns=91612274241306
+# show sakamoto-oi3 multi
+""show sakamoto-oi3 multi
+oi4 multi active=1 owners=4 route=123/126/127/127 reject=0/0/0/0 deferred=0/0/0/0 reassigned=0/0/0/0 wrong-owner=6
+oi4 owner=0 active=1 phase=DRIVE generation=1 ingress=123 output=123 direct=123 rejects=0 deferred=0 buffers=482/482 residue=0 error=
+oi4 owner=1 active=1 phase=DRIVE generation=1 ingress=126 output=126 direct=126 rejects=0 deferred=0 buffers=495/495 residue=0 error=
+oi4 owner=2 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=497/497 residue=0 error=
+oi4 owner=3 active=1 phase=DRIVE generation=1 ingress=127 output=127 direct=127 rejects=0 deferred=0 buffers=504/504 residue=0 error=
+vpp# quit

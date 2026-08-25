@@ -106,3 +106,44 @@ hotspot that was preventing valid resource evidence from being collected.
 It does not close EG-17/EG-18.  Remaining work still includes broader
 IPv4/IPv6 TCP/UDP/DNS coverage, matched throughput/latency/CPU comparisons,
 screen-off/Doze, longer resource trend/soak, and final audit.
+
+## 2026-08-26 recurrence: cleanup control without explicit OI3 stop
+
+S153 later reused the S170 runner for a one-cycle E1 residual preflight.  That
+run proved the same-package app-to-fixture path but failed the cleanup oracle:
+
+```text
+evidence/s153-e1-residual-20260826-preflight-positive2/
+cycle=1 sent=255 received=255 errors=0 cleanup_pass=0 cleanup_fail=0
+fixtureRx=501 fixtureTx=501 residual_vpp= tun0_after=0 rules_match=1
+```
+
+Root cause: the runner had a `wait_stop_cleanup_marker` helper, but it never
+first drove the OI3 test-only cleanup control.  Ordinary product stop may
+terminate or supervise the native child without emitting the test-only
+`oi3_cleanup result=PASS` ledger.  Waiting for that marker after product stop is
+therefore an invalid oracle.
+
+The corrected runner now follows the same pattern as the later S171/S172 E2
+runners:
+
+1. send `oi3Control=multi-stop`;
+2. capture `cleanup-pre-stop.log`;
+3. then request ordinary product stop;
+4. merge pre-stop and post-stop cleanup logs;
+5. keep process/TUN/ip-rule residue checks separate from the marker count.
+
+Post-fix smoke:
+
+```text
+evidence/s153-e1-residual-20260826-cleanup-fix-smoke/
+runId=20260826-024859-356974
+cycle=1 sent=258 received=258 errors=0 cleanup_pass=8 cleanup_fail=0
+fixtureRx=506 fixtureTx=506 residual_vpp= tun0_after=0 rules_match=1
+failureCount=0
+```
+
+Avoidance rule for future POC agents: if a cell requires native bounded cleanup
+proof, product stop alone is not sufficient evidence.  Drive the explicit OI3
+cleanup control first, record its durable ledger, and only then use product stop
+as the Android lifecycle/residue settlement step.

@@ -1,0 +1,10 @@
+control=multi-stop
+rc=0
+Starting: Intent { cmp=com.sakamoto.snort.vpnlite/.MainActivity (has extras) }
+Warning: Activity not started, intent has been delivered to currently running top-most instance.
+Status: ok
+LaunchState: UNKNOWN (0)
+Activity: com.sakamoto.snort.vpnlite/.MainActivity
+TotalTime: 0
+WaitTime: 6
+Complete

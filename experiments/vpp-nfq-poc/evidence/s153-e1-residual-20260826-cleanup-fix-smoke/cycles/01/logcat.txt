@@ -1,0 +1,211 @@
+--------- beginning of main
+08-26 02:36:18.415  7463  7463 I SnortVpnLite: VPN stopped
+08-26 02:36:18.417  7463  7463 I SnortVpnLite: VPN stopped
+08-26 02:40:28.156  8166  8166 I SnortVpnLite: VPN stopped
+08-26 02:40:28.198  8166  8166 I SnortVpnLite: VPN stopped
+08-26 02:40:32.303  8239  8239 I SnortVpnLite: VPN foreground service ready notificationId=2001
+08-26 02:40:32.371  8239  8273 I SnortVpnLite: app UDP probe ok host=192.168.4.5 port=42253 packets=3 received=3 bytes=192
+08-26 02:40:40.451  8239  8239 I SnortVpnLite: VPN stopped
+08-26 02:40:40.452  8239  8239 I SnortVpnLite: VPN foreground service stopped
+08-26 02:40:40.455  8239  8239 I SnortVpnLite: VPN stopped
+08-26 02:42:15.108  8479  8479 I SnortVpnLite: VPN stopped
+08-26 02:42:15.147  8479  8479 I SnortVpnLite: VPN stopped
+08-26 02:42:19.331  8551  8551 I SnortVpnLite: VPN foreground service ready notificationId=2001
+08-26 02:42:19.395  8551  8588 I SnortVpnLite: app UDP probe ok host=192.168.4.5 port=42254 packets=3 received=3 bytes=192
+08-26 02:42:25.353  8551  8551 I SnortVpnLite: VPN stopped
+08-26 02:42:25.354  8551  8551 I SnortVpnLite: VPN foreground service stopped
+08-26 02:42:25.358  8551  8551 I SnortVpnLite: VPN stopped
+08-26 02:42:29.263  8716  8716 I SnortVpnLite: VPN foreground service ready notificationId=2001
+08-26 02:42:29.272  8716  8716 I SnortVpnLite: VPN allowed packages raw=com.sakamoto.snort.vpnlite
+08-26 02:42:29.272  8716  8716 I SnortVpnLite: VPN allowed package=com.sakamoto.snort.vpnlite
+08-26 02:42:29.296  8716  8716 I SnortVpnLiteNative: started OI3 Android broker request-fd=113 completion-fd=115 log=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-oi3-broker.log
+08-26 02:42:29.296  8716  8716 I SnortVpnLiteNative: started VPP pid=8751 fd=111 mode=27 conf=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.conf
+08-26 02:42:29.296  8716  8754 I SnortVpnLiteNative: vpp monitor start pid=8751 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+08-26 02:42:29.297  8716  8753 I SnortVpnLiteNative: oi2 android broker start request-fd=113 completion-fd=115
+08-26 02:42:29.298  8716  8716 I SnortVpnLite: nativeStartVppProbe fd=111 vppMode=27 blockOwnerUid=-1 redirectThread=-1 ownerCache=false oi3ExpectedFailure= rc=0
+08-26 02:42:29.301  8716  8716 I SnortVpnLite: OI3 underlay NetworkCallback registered
+08-26 02:42:29.302  8716  8716 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:42:29.303  8716  8716 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1296190853133
+08-26 02:42:29.303  8716  8716 I SnortVpnLite: OI3 underlay epoch reason=initial epoch=1 physicalHandle=437197393933 available=true eventHandle=-1
+08-26 02:42:29.312  8716  8755 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:42:29.312  8716  8755 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1296190853133
+08-26 02:42:29.312  8716  8755 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:42:29.313  8716  8755 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1296190853133
+08-26 02:42:29.607  8716  8716 I SnortVpnLiteNative: OI3 underlay epoch epoch=1 physicalHandle=437197393933 available=1 cliRc=0
+08-26 02:42:36.363  8716  8753 I SnortVpnLite: OI2 bindAndProtect entry fd=118
+08-26 02:42:36.370  8716  8753 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:42:36.371  8716  8753 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1296190853133
+08-26 02:42:36.371  8716  8753 I SnortVpnLite: OI2 active network fd=118 networkHandle=437197393933
+08-26 02:42:36.372  8716  8753 I SnortVpnLite: Network.bindSocket fd=118 networkHandle=437197393933 result=true
+08-26 02:42:36.373  8716  8753 I SnortVpnLite: VpnService.protect fd=118 result=true
+08-26 02:42:36.373  8716  8753 I SnortVpnLite: OI2 bindAndProtect exit fd=118 result=1
+08-26 02:42:36.373  8716  8753 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=118
+08-26 02:42:36.373  8716  8753 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=118
+08-26 02:42:36.373  8716  8753 I SnortVpnLite: OI2 bindAndProtect entry fd=118
+08-26 02:42:36.374  8716  8753 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:42:36.374  8716  8753 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1296190853133
+08-26 02:42:36.374  8716  8753 I SnortVpnLite: OI2 active network fd=118 networkHandle=437197393933
+08-26 02:42:36.375  8716  8753 I SnortVpnLite: Network.bindSocket fd=118 networkHandle=437197393933 result=true
+08-26 02:42:36.375  8716  8753 I SnortVpnLite: VpnService.protect fd=118 result=true
+08-26 02:42:36.375  8716  8753 I SnortVpnLite: OI2 bindAndProtect exit fd=118 result=1
+08-26 02:42:36.375  8716  8753 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=118
+08-26 02:42:36.375  8716  8753 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=118
+08-26 02:42:36.375  8716  8753 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:42:36.376  8716  8753 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:42:36.376  8716  8753 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1296190853133
+08-26 02:42:36.376  8716  8753 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:42:36.380  8716  8753 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:42:36.381  8716  8753 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:42:36.381  8716  8753 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:42:36.381  8716  8753 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:42:36.381  8716  8753 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:42:36.381  8716  8753 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:42:36.381  8716  8753 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:42:36.382  8716  8753 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1296190853133
+08-26 02:42:36.382  8716  8753 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:42:36.382  8716  8753 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:42:36.383  8716  8753 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:42:36.383  8716  8753 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:42:36.383  8716  8753 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:42:36.383  8716  8753 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:42:39.062  8716  8891 I SnortVpnLite: app L4 stress done protocol=udp flows=4 sent=255 received=255 errors=0 elapsedMs=3034
+08-26 02:42:42.712  8716  8716 I SnortVpnLite: OI3 underlay NetworkCallback unregistered
+08-26 02:42:42.745  8716  8754 I SnortVpnLiteNative: vpp monitor stop
+08-26 02:42:42.786  8716  8753 I SnortVpnLiteNative: oi2 receive failed errno=2 No such file or directory
+08-26 02:42:42.786  8716  8753 I SnortVpnLiteNative: oi2 android broker stop
+08-26 02:42:42.919  8716  8716 I SnortVpnLite: VPN stopped
+08-26 02:42:42.926  8716  8716 I SnortVpnLite: VPN foreground service stopped
+08-26 02:42:42.937  8716  8716 I SnortVpnLite: VPN stopped
+08-26 02:42:47.305  9521  9521 I SnortVpnLite: VPN stopped
+08-26 02:42:47.347  9521  9521 I SnortVpnLite: VPN stopped
+08-26 02:46:16.695  9596  9596 I SnortVpnLite: VPN stopped
+08-26 02:46:16.736  9596  9596 I SnortVpnLite: VPN stopped
+08-26 02:46:19.304  9681  9681 I SnortVpnLite: VPN foreground service ready notificationId=2001
+08-26 02:46:19.380  9681  9713 I SnortVpnLite: app UDP probe ok host=192.168.4.5 port=42255 packets=3 received=3 bytes=192
+08-26 02:46:25.345  9681  9681 I SnortVpnLite: VPN stopped
+08-26 02:46:25.346  9681  9681 I SnortVpnLite: VPN foreground service stopped
+08-26 02:46:25.349  9681  9681 I SnortVpnLite: VPN stopped
+08-26 02:46:27.654  9842  9842 I SnortVpnLite: VPN foreground service ready notificationId=2001
+08-26 02:46:27.663  9842  9842 I SnortVpnLite: VPN allowed packages raw=com.sakamoto.snort.vpnlite
+08-26 02:46:27.663  9842  9842 I SnortVpnLite: VPN allowed package=com.sakamoto.snort.vpnlite
+08-26 02:46:27.688  9842  9842 I SnortVpnLiteNative: started OI3 Android broker request-fd=112 completion-fd=115 log=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-oi3-broker.log
+08-26 02:46:27.688  9842  9842 I SnortVpnLiteNative: started VPP pid=9882 fd=110 mode=27 conf=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.conf
+08-26 02:46:27.688  9842  9884 I SnortVpnLiteNative: vpp monitor start pid=9882 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+08-26 02:46:27.689  9842  9883 I SnortVpnLiteNative: oi2 android broker start request-fd=112 completion-fd=115
+08-26 02:46:27.692  9842  9842 I SnortVpnLite: nativeStartVppProbe fd=110 vppMode=27 blockOwnerUid=-1 redirectThread=-1 ownerCache=false oi3ExpectedFailure= rc=0
+08-26 02:46:27.695  9842  9842 I SnortVpnLite: OI3 underlay NetworkCallback registered
+08-26 02:46:27.697  9842  9842 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=135
+08-26 02:46:27.697  9842  9842 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=437197393933
+08-26 02:46:27.697  9842  9842 I SnortVpnLite: OI3 underlay epoch reason=initial epoch=1 physicalHandle=437197393933 available=true eventHandle=-1
+08-26 02:46:27.712  9842  9885 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:46:27.712  9842  9885 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1300485820429
+08-26 02:46:27.713  9842  9885 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:46:27.713  9842  9885 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1300485820429
+08-26 02:46:27.934  9842  9842 I SnortVpnLiteNative: OI3 underlay epoch epoch=1 physicalHandle=437197393933 available=1 cliRc=0
+08-26 02:46:34.757  9842  9883 I SnortVpnLite: OI2 bindAndProtect entry fd=118
+08-26 02:46:34.763  9842  9883 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:46:34.766  9842  9883 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1300485820429
+08-26 02:46:34.766  9842  9883 I SnortVpnLite: OI2 active network fd=118 networkHandle=437197393933
+08-26 02:46:34.769  9842  9883 I SnortVpnLite: Network.bindSocket fd=118 networkHandle=437197393933 result=true
+08-26 02:46:34.770  9842  9883 I SnortVpnLite: VpnService.protect fd=118 result=true
+08-26 02:46:34.770  9842  9883 I SnortVpnLite: OI2 bindAndProtect exit fd=118 result=1
+08-26 02:46:34.770  9842  9883 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=118
+08-26 02:46:34.770  9842  9883 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=118
+08-26 02:46:34.770  9842  9883 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:46:34.772  9842  9883 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:46:34.772  9842  9883 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1300485820429
+08-26 02:46:34.772  9842  9883 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:46:34.772  9842  9883 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:46:34.772  9842  9883 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:46:34.772  9842  9883 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:46:34.772  9842  9883 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:46:34.773  9842  9883 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:46:34.773  9842  9883 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:46:34.773  9842  9883 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:46:34.773  9842  9883 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1300485820429
+08-26 02:46:34.773  9842  9883 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:46:34.773  9842  9883 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:46:34.774  9842  9883 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:46:34.774  9842  9883 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:46:34.774  9842  9883 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:46:34.774  9842  9883 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:46:34.774  9842  9883 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:46:34.774  9842  9883 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:46:34.774  9842  9883 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1300485820429
+08-26 02:46:34.774  9842  9883 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:46:34.774  9842  9883 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:46:34.775  9842  9883 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:46:34.775  9842  9883 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:46:34.775  9842  9883 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:46:34.775  9842  9883 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:46:37.379  9842 10013 I SnortVpnLite: app L4 stress done protocol=udp flows=4 sent=281 received=281 errors=0 elapsedMs=3027
+08-26 02:46:41.076  9842  9842 I SnortVpnLite: OI3 underlay NetworkCallback unregistered
+08-26 02:46:41.145  9842  9884 I SnortVpnLiteNative: vpp monitor stop
+08-26 02:46:41.145  9842  9883 I SnortVpnLiteNative: oi2 receive failed errno=2 No such file or directory
+08-26 02:46:41.145  9842  9883 I SnortVpnLiteNative: oi2 android broker stop
+08-26 02:46:41.288  9842  9842 I SnortVpnLite: VPN stopped
+08-26 02:46:41.294  9842  9842 I SnortVpnLite: VPN foreground service stopped
+08-26 02:46:41.304  9842  9842 I SnortVpnLite: VPN stopped
+08-26 02:46:44.064 10655 10655 I SnortVpnLite: VPN stopped
+08-26 02:46:44.103 10655 10655 I SnortVpnLite: VPN stopped
+08-26 02:49:03.071 10738 10738 I SnortVpnLite: VPN stopped
+08-26 02:49:03.109 10738 10738 I SnortVpnLite: VPN stopped
+08-26 02:49:05.642 10828 10828 I SnortVpnLite: VPN foreground service ready notificationId=2001
+08-26 02:49:05.668 10828 10862 I SnortVpnLite: app UDP probe ok host=192.168.4.5 port=42256 packets=3 received=3 bytes=192
+08-26 02:49:11.696 10828 10828 I SnortVpnLite: VPN stopped
+08-26 02:49:11.698 10828 10828 I SnortVpnLite: VPN foreground service stopped
+08-26 02:49:11.700 10828 10828 I SnortVpnLite: VPN stopped
+08-26 02:49:14.022 10997 10997 I SnortVpnLite: VPN foreground service ready notificationId=2001
+08-26 02:49:14.031 10997 10997 I SnortVpnLite: VPN allowed packages raw=com.sakamoto.snort.vpnlite
+08-26 02:49:14.032 10997 10997 I SnortVpnLite: VPN allowed package=com.sakamoto.snort.vpnlite
+08-26 02:49:14.059 10997 10997 I SnortVpnLiteNative: started OI3 Android broker request-fd=112 completion-fd=115 log=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/logs/vpp-oi3-broker.log
+08-26 02:49:14.059 10997 10997 I SnortVpnLiteNative: started VPP pid=11031 fd=110 mode=27 conf=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/startup.conf
+08-26 02:49:14.060 10997 11033 I SnortVpnLiteNative: vpp monitor start pid=11031 cli=/data/user/0/com.sakamoto.snort.vpnlite/files/vpp/runtime/cli.sock
+08-26 02:49:14.060 10997 11032 I SnortVpnLiteNative: oi2 android broker start request-fd=112 completion-fd=115
+08-26 02:49:14.061 10997 10997 I SnortVpnLite: nativeStartVppProbe fd=110 vppMode=27 blockOwnerUid=-1 redirectThread=-1 ownerCache=false oi3ExpectedFailure= rc=0
+08-26 02:49:14.065 10997 10997 I SnortVpnLite: OI3 underlay NetworkCallback registered
+08-26 02:49:14.066 10997 10997 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=135
+08-26 02:49:14.066 10997 10997 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=437197393933
+08-26 02:49:14.066 10997 10997 I SnortVpnLite: OI3 underlay epoch reason=initial epoch=1 physicalHandle=437197393933 available=true eventHandle=-1
+08-26 02:49:14.079 10997 11034 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:49:14.079 10997 11034 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1304780787725
+08-26 02:49:14.080 10997 11034 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:49:14.081 10997 11034 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1304780787725
+08-26 02:49:14.373 10997 10997 I SnortVpnLiteNative: OI3 underlay epoch epoch=1 physicalHandle=437197393933 available=1 cliRc=0
+08-26 02:49:21.118 10997 11032 I SnortVpnLite: OI2 bindAndProtect entry fd=118
+08-26 02:49:21.120 10997 11032 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:49:21.120 10997 11032 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1304780787725
+08-26 02:49:21.120 10997 11032 I SnortVpnLite: OI2 active network fd=118 networkHandle=437197393933
+08-26 02:49:21.121 10997 11032 I SnortVpnLite: Network.bindSocket fd=118 networkHandle=437197393933 result=true
+08-26 02:49:21.122 10997 11032 I SnortVpnLite: VpnService.protect fd=118 result=true
+08-26 02:49:21.122 10997 11032 I SnortVpnLite: OI2 bindAndProtect exit fd=118 result=1
+08-26 02:49:21.122 10997 11032 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=118
+08-26 02:49:21.122 10997 11032 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=118
+08-26 02:49:21.122 10997 11032 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:49:21.123 10997 11032 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:49:21.123 10997 11032 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1304780787725
+08-26 02:49:21.123 10997 11032 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:49:21.135 10997 11032 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:49:21.135 10997 11032 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:49:21.135 10997 11032 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:49:21.135 10997 11032 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:49:21.135 10997 11032 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:49:21.135 10997 11032 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:49:21.136 10997 11032 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:49:21.136 10997 11032 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1304780787725
+08-26 02:49:21.136 10997 11032 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:49:21.136 10997 11032 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:49:21.137 10997 11032 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:49:21.137 10997 11032 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:49:21.137 10997 11032 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:49:21.137 10997 11032 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:49:21.137 10997 11032 I SnortVpnLite: OI2 bindAndProtect entry fd=117
+08-26 02:49:21.137 10997 11032 I SnortVpnLite: OI2 underlay candidate handle=437197393933 vpn=false notVpn=true internet=true validated=true wifi=true score=130
+08-26 02:49:21.137 10997 11032 I SnortVpnLite: OI2 underlay selected handle=437197393933 activeHandle=1304780787725
+08-26 02:49:21.137 10997 11032 I SnortVpnLite: OI2 active network fd=117 networkHandle=437197393933
+08-26 02:49:21.138 10997 11032 I SnortVpnLite: Network.bindSocket fd=117 networkHandle=437197393933 result=true
+08-26 02:49:21.138 10997 11032 I SnortVpnLite: VpnService.protect fd=117 result=true
+08-26 02:49:21.138 10997 11032 I SnortVpnLite: OI2 bindAndProtect exit fd=117 result=1
+08-26 02:49:21.138 10997 11032 I SnortVpnLiteNative: oi2 request token=1 generation=1 family=4 kind=2 flags=0 java-result=1 result=1 duplicate-fd=117
+08-26 02:49:21.138 10997 11032 I SnortVpnLiteNative: oi2 duplicate close token=1 fd=117
+08-26 02:49:23.797 10997 11158 I SnortVpnLite: app L4 stress done protocol=udp flows=4 sent=258 received=258 errors=0 elapsedMs=3028

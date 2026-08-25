@@ -101,6 +101,7 @@ Map rather than encoded as TODOs here.
 | VPN-F063 | Remaining A2 historical PASS bundles lack S156 guardrail provenance | `CLOSED_FOR_S190_A2_AGGREGATE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F064 | S187 A2-3 current refresh needed explicit OI3 cleanup control before product stop | `CLOSED_FOR_S191_A2_3_CLEANUP_CONTROL` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F065 | S188 A2-4 Android overlay dropped S156 resolver correlation from the product runtime | `CLOSED_FOR_S188_A2_4_OVERLAY_CORRELATION` | Android VPP runtime overlay + Pixel Android 16 |
+| VPN-F066 | S153/S170 resource runner waited for cleanup markers without driving OI3 cleanup control | `CLOSED_FOR_S153_CLEANUP_SMOKE` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2280,6 +2281,39 @@ Map rather than encoded as TODOs here.
   same product runtime source/stage that supplies `libvlib.so`, not merely that
   an APK member with the expected filename exists.
 
+### VPN-F066 -- S153/S170 resource runner waited for cleanup markers without driving OI3 cleanup control
+
+- **First observation:** S153 reused the S170 E1 resource runner for a
+  one-cycle residual preflight.  The data path succeeded, but the run failed
+  because `cleanup_pass=0`: `sent=255`, `received=255`, `errors=0`,
+  `fixtureRx=501`, `fixtureTx=501`, `residual_vpp=` empty, `tun0_after=0`, and
+  `rules_match=1` in
+  `evidence/s153-e1-residual-20260826-preflight-positive2/`.
+- **Root cause:** The runner had a bounded `wait_stop_cleanup_marker` helper,
+  but it only requested ordinary product stop before waiting for
+  `oi3_cleanup result=`.  Product stop supervises native child shutdown and is
+  not the test-only OI3 bounded cleanup command.  Therefore the runner was
+  waiting for a marker that it had not caused the native control path to emit.
+  This is the S170/S153 instance of the same cleanup-control seam recorded for
+  A2-3 in `VPN-F064`.
+- **Correction:** The S170 runner now sends `oi3Control=multi-stop` before
+  ordinary product stop, records `cleanup-pre-stop.log`, merges pre-stop and
+  post-stop cleanup logs, and keeps process/TUN/ip-rule residue checks
+  separate from marker counting.  The static S170 regression requires
+  `run_oi3_control "multi-stop"`, `wait_oi3_cleanup`, `cleanup-pre-stop.log`,
+  and the ordering before `stop_vpn`.
+- **Closure evidence:** Post-fix smoke
+  `evidence/s153-e1-residual-20260826-cleanup-fix-smoke/` passed with
+  `runId=20260826-024859-356974`, `sent=258`, `received=258`, `errors=0`,
+  `cleanup_pass=8`, `cleanup_fail=0`, `fixtureRx=506`, `fixtureTx=506`,
+  `residual_vpp=` empty, `tun0_after=0`, `rules_match=1`, and
+  `failureCount=0`.
+- **Status:** `CLOSED_FOR_S153_CLEANUP_SMOKE`.  This closes the runner hotspot,
+  not the full S153 E1 residual matrix.  Future POC runners that claim native
+  bounded cleanup must drive the explicit OI3 cleanup control first and treat
+  ordinary product stop as a separate Android lifecycle/residue settlement
+  step.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2402,7 +2436,9 @@ Map rather than encoded as TODOs here.
   OI3 cleanup stop before ordinary product stop, and now passes IPv4/IPv6 on
   clean head. S188 closes F065: the product Android VPP overlay must carry the
   S156 resolver correlation into the same runtime source and ABI set used by
-  the APK.
+  the APK. S153/S170 closes F066 for the resource-runner recurrence of the
+  same cleanup-control seam: drive OI3 cleanup control first, then use product
+  stop only as lifecycle/residue settlement.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2473,6 +2509,7 @@ Map rather than encoded as TODOs here.
 | S188/S189/S190 | Remaining A2 S156 guardrail reruns | VPN-F063 |
 | S187/S191 | A2-3 current-artifact cleanup-control rerun | VPN-F064 |
 | S188 | A2-4 Android overlay/runtime resolver-correlation closure | VPN-F065 |
+| S153/S170 | Resource runner cleanup-control smoke correction | VPN-F066 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 

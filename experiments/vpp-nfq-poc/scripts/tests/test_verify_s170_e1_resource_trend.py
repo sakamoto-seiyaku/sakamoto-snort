@@ -52,6 +52,17 @@ class VerifyS170E1ResourceTrendTest(unittest.TestCase):
         self.assertIn("done runId=.* errors=", self.runner)
         self.assertNotIn("flows-done .*sent", self.runner)
 
+    def test_runner_drives_explicit_oi3_cleanup_before_product_stop(self):
+        self.assertIn('run_oi3_control "multi-stop"', self.runner)
+        self.assertIn("wait_oi3_cleanup()", self.runner)
+        self.assertIn('cleanup-pre-stop.log', self.runner)
+        self.assertIn('--- cleanup pre-stop ---', self.runner)
+        self.assertIn('WAIT_OI3_CLEANUP_ATTEMPTS', self.runner)
+        self.assertIn("oi3_cleanup result=", self.runner)
+        self.assertLess(
+            self.runner.index('stop_oi3_multi "$cell" || true'),
+            self.runner.index("stop_vpn\n  snapshot_after_stop"))
+
     def test_doc_records_bounded_post_f046_result_and_non_claims(self):
         self.assertIn("PASS_FOR_BOUNDED_POST_F046_E1_WINDOW", self.doc)
         self.assertIn("20260825-112255-922529", self.doc)

@@ -1,0 +1,7 @@
+Starting: Intent { cmp=com.sakamoto.snort.vpnlite/.MainActivity (has extras) }
+Status: ok
+LaunchState: COLD
+Activity: com.sakamoto.snort.vpnlite/.MainActivity
+TotalTime: 707
+WaitTime: 708
+Complete

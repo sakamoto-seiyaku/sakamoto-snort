@@ -124,7 +124,10 @@ public resolver bundles may remain functional baselines, but they are not final
 closure evidence for S188/S189/S190.  S187/S191 additionally records the A2-3
 cleanup-control seam: when a cell claims native bounded cleanup, the runner
 must drive the test-only OI3 cleanup control before ordinary product stop;
-force-stop fallback or product-stop-only settlement is not cleanup proof.
+force-stop fallback or product-stop-only settlement is not cleanup proof.  The
+same rule now applies to S153/S170 resource runners after the
+`cleanup_pass=0` recurrence: a marker wait without a preceding explicit OI3
+cleanup command is an invalid oracle.
 S188 additionally records the Android runtime overlay seam: a tun-poc plugin
 must be built from the same product runtime source/stage and ABI set as the
 packaged `libvlib.so`; a filename/hash join to an older isolated work-tree

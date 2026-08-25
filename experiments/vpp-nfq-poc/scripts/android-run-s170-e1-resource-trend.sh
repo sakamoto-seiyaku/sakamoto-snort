@@ -27,6 +27,8 @@ UDP_CLOSED_TIMEOUT_MS="${UDP_CLOSED_TIMEOUT_MS:-1000}"
 PREFLIGHT_COUNT="${PREFLIGHT_COUNT:-3}"
 PREFLIGHT_PAYLOAD_BYTES="${PREFLIGHT_PAYLOAD_BYTES:-64}"
 CYCLES="${CYCLES:-5}"
+WAIT_STOP_CLEANUP_ATTEMPTS="${WAIT_STOP_CLEANUP_ATTEMPTS:-28}"
+WAIT_OI3_CLEANUP_ATTEMPTS="${WAIT_OI3_CLEANUP_ATTEMPTS:-120}"
 RESULT_DIR="${RESULT_DIR:-$POC_DIR/evidence/s170-e1-resource-trend-20260825}"
 APK="${APK:-$POC_DIR/android/vpn-lite/build/outputs/snort-vpn-lite-debug.apk}"
 
@@ -135,10 +137,62 @@ adb_read() {
   return "$rc"
 }
 
+wait_stop_cleanup_marker() {
+  local marker=""
+  for _ in $(seq 1 "$WAIT_STOP_CLEANUP_ATTEMPTS"); do
+    marker="$(adb_read "for f in '$REMOTE_STDOUT_LOG' '$REMOTE_CLI_LOG'; do if [ -f \"\$f\" ]; then tail -n 120 \"\$f\" 2>/dev/null | grep -E 'oi3_cleanup result=' || true; fi; done | tail -n 1")"
+    if [[ -n "$marker" ]]; then
+      return 0
+    fi
+    if [[ -z "$(adb_read "pidof vpp 2>/dev/null | awk '{print \$1}'")" ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+run_oi3_control() {
+  local control="$1" output="$2" control_output control_rc
+  set +e
+  control_output="$(adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" \
+    --ez start true --es oi3Control "$control" 2>&1)"
+  control_rc=$?
+  set -e
+  {
+    echo "control=$control"
+    echo "rc=$control_rc"
+    printf '%s\n' "$control_output"
+  } >"$output"
+  [[ "$control_rc" == 0 ]]
+}
+
+wait_oi3_cleanup() {
+  local output="$1" cleanup_total
+  for _ in $(seq 1 "$WAIT_OI3_CLEANUP_ATTEMPTS"); do
+    adb_read "cat '$REMOTE_STDOUT_LOG' '$REMOTE_CLI_LOG' 2>/dev/null || true" >"$output"
+    if grep -q 'oi4 multi-session state=STOPPED' "$output" 2>/dev/null; then
+      return 0
+    fi
+    cleanup_total="$(grep -c 'oi3_cleanup result=' "$output" 2>/dev/null || true)"
+    if [[ "$cleanup_total" -ge 4 ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+stop_oi3_multi() {
+  local cell="$1"
+  run_oi3_control "multi-stop" "$cell/oi3-control-multi-stop.txt" || return 1
+  wait_oi3_cleanup "$cell/cleanup-pre-stop.log"
+}
+
 stop_vpn() {
   adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" --ez stop true \
     >/dev/null 2>&1 || true
-  sleep 2
+  wait_stop_cleanup_marker || true
   adb_cmd shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
   sleep 1
 }
@@ -262,7 +316,10 @@ write_provenance() {
     adb_read "am compat list '$PACKAGE' 2>/dev/null | grep -E 'RESTRICT_LOCAL_NETWORK|NEARBY' || true"
     echo "--- networks ---"
     adb_read 'cmd connectivity diagnostics 2>/dev/null || true'
-    adb_read 'dumpsys connectivity | grep -E "NetworkAgentInfo|TRANSPORT_VPN|NOT_VPN|WIFI|network\{netId" | head -n 120 || true'
+    # Keep the remote grep expression single-quoted. The repo-local WSL2
+    # wrapper routes through Windows adb/cmd.exe; a double-quoted expression
+    # lets cmd.exe consume the alternation pipes before Android sees them.
+    adb_read "dumpsys connectivity | grep -E 'NetworkAgentInfo|TRANSPORT_VPN|NOT_VPN|WIFI|network\\{netId' | head -n 120 || true"
     echo "--- direct control command ---"
     echo "same-package UDP preflight is captured in preflight-app-udp.log"
     echo "--- git ---"
@@ -364,10 +421,18 @@ for cycle in $(seq 1 "$CYCLES"); do
   adb_read "cat '$REMOTE_PROTECT_LOG' 2>/dev/null || true" >"$cell/vpp-protect.log"
   adb_cmd logcat -d -s SnortVpnLite:I SnortVpnLiteNative:I '*:S' | tr -d '\r' >"$cell/logcat.txt"
 
+  stop_oi3_multi "$cell" || true
   stop_vpn
   snapshot_after_stop="$(process_snapshot)"
   printf '%s\n' "$snapshot_after_stop" >"$cell/processes-after-stop.txt"
-  adb_read "cat '$REMOTE_STDOUT_LOG' '$REMOTE_CLI_LOG' 2>/dev/null || true" >"$cell/cleanup.log"
+  {
+    if [[ -f "$cell/cleanup-pre-stop.log" ]]; then
+      echo "--- cleanup pre-stop ---"
+      cat "$cell/cleanup-pre-stop.log"
+    fi
+    echo "--- cleanup post-stop ---"
+    adb_read "cat '$REMOTE_STDOUT_LOG' '$REMOTE_CLI_LOG' 2>/dev/null || true"
+  } >"$cell/cleanup.log"
   after_rules="$(adb_read 'ip rule show')"
   printf '%s\n' "$after_rules" >"$cell/after-ip-rules.txt"
   residual_vpp="$(adb_read "pidof vpp 2>/dev/null || true")"

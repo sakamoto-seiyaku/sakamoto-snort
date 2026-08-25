@@ -1,0 +1,22 @@
+{
+  "schema":"s170-e1-resource-trend/v1",
+  "runId":"20260826-024859-356974",
+  "package":"com.sakamoto.snort.vpnlite",
+  "endpoint":"192.168.4.5:42256",
+  "fixtureBind":"0.0.0.0",
+  "flows":4,
+  "sourcePortBase":46410,
+  "payloadBytes":64,
+  "warmupSeconds":1,
+  "steadySeconds":1,
+  "drainSeconds":1,
+  "udpClosedTimeoutMs":1000,
+  "cyclesRequested":1,
+  "cyclesRecorded":1,
+  "fixtureRx":506,
+  "fixtureTx":506,
+  "apkSha256":"3cafe5ee25e634347af790d2cf66bb2c1fa5cd64c595d4e9605a019f4f396964",
+  "pluginSha256":"5012eeecb16828edca58f3dc98ddd52330a3b09b26394a3baa94b7c39604cc72",
+  "hevSha256":"37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d",
+  "failureCount":0
+}

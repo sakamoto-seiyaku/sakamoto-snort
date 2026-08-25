@@ -1,0 +1,15 @@
+# S170 EG-16 final-topology resource/lifecycle trend
+run_id=20260826-024859-356974
+device=28201JEGR0XPAJ
+package=com.sakamoto.snort.vpnlite host=192.168.4.5 port=42256 flows=4 sourcePortBase=46410
+cycles=1 warmup=1 steady=1 drain=1
+fixture=0.0.0.0:42256
+package_uid=12628
+
+## cycle=1
+
+cycle=1 PASS run_id=133753368550512 sent=258 received=258 rss=157592/136036/ fd=120/41/ threads=33/6/ cleanup=8 fixture=506/506
+results=/home/js/Git/sakamoto/sakamoto-snort/experiments/vpp-nfq-poc/evidence/s153-e1-residual-20260826-cleanup-fix-smoke
+csv=/home/js/Git/sakamoto/sakamoto-snort/experiments/vpp-nfq-poc/evidence/s153-e1-residual-20260826-cleanup-fix-smoke/cycles-20260826-024859-356974.csv
+manifest=/home/js/Git/sakamoto/sakamoto-snort/experiments/vpp-nfq-poc/evidence/s153-e1-residual-20260826-cleanup-fix-smoke/run-20260826-024859-356974-manifest.json
+failures=0
