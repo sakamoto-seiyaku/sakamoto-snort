@@ -2479,6 +2479,15 @@ Map rather than encoded as TODOs here.
   device-state cliff.  F069 remains open because the S223 forced-Doze relative
   delta and the broader CPU/thermal/power/soak budgets still require an
   ADR-0007 decision.
+- **S224 resource-trend update:** S224
+  `evidence/s224-e1-resource-trend-current-f072-candidate-20260826/`
+  (`runId=20260826-071025-774914`) reran the five-cycle four-flow UDP resource
+  trend on the current F072-candidate comparison artifact.  Every cycle passed:
+  app/fixture counts matched from `4485/4485` through `4592/4592`, cleanup was
+  `16/0` per cycle, App/VPP fd stayed `120/49`, threads stayed `33--34/7`, and
+  manifest `failureCount=0`.  This supports current-artifact repeated resource
+  stability after the lifecycle correction, but it does not close throughput,
+  CPU, thermal, power, long-soak, or forced-Doze latency-tolerance gates.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a broader E2 budget closure or for an explicit
@@ -2783,10 +2792,13 @@ Map rather than encoded as TODOs here.
   S156 resolver correlation into the same runtime source and ABI set used by
   the APK. S153/S170 closes F066 for the resource-runner recurrence of the
   same cleanup-control seam: drive OI3 cleanup control first, then use product
-  stop only as lifecycle/residue settlement. S199--S204 split the F069 E2
+  stop only as lifecycle/residue settlement. S199--S224 split the F069 E2
   performance risk: F070 closes the connector write-interest defect that caused
-  seconds-level payload stalls, while F071 remains open for dispatcher-to-owner
-  frame-queue/wake tail latency.
+  seconds-level payload stalls; F071/F072 narrowed the handoff and TCP owner
+  lifecycle/admission tail, with S221--S223 removing the seconds-level
+  foreground/device-state cliff; and S224 adds current-artifact resource-trend
+  stability.  F069 remains open for throughput, CPU/thermal/power/soak, and the
+  forced-Doze latency-tolerance decision.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because

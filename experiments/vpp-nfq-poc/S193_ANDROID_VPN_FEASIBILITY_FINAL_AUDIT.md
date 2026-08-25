@@ -21,15 +21,17 @@ an architecture reopening by itself.  The owner-inline invariants still hold;
 the next work is budget evidence and tolerance closure before formal main-stack
 implementation planning.
 
-Post-audit update: S199--S223 narrowed and corrected the main matched HTTP
+Post-audit update: S199--S224 narrowed and corrected the main matched HTTP
 latency issue.  The connector write-interest defect, owner handoff/post-send
 read-wake tail, and TCP owner lifecycle/admission seam have focused
 corrections.  S221 passed the matched foreground Direct/HEV/OI3 8-request
 comparison with OI3 p95 `24ms`; S222 passed screen-off with OI3 p95 `27ms`;
-S223 passed forced-Doze with OI3 p95 `78ms`.  The audit still remains
-`ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because ADR-0007's full budget evidence
-also requires CPU/thermal/power/soak coverage and a pre-registered judgment on
-the S223 forced-Doze absolute/relative latency delta.
+S223 passed forced-Doze with OI3 p95 `78ms`; S224 passed five current-artifact
+resource-trend cycles with stable fd/thread/RSS and `failureCount=0`.  The
+audit still remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because ADR-0007's
+full budget evidence also requires throughput/CPU/thermal/power/soak coverage
+and a pre-registered judgment on the S223 forced-Doze absolute/relative latency
+delta.
 
 ## Claim-family audit
 
@@ -39,7 +41,7 @@ the S223 forced-Doze absolute/relative latency delta.
 | Application identity | S139/S190 current S156-era A2 aggregate binds A2-0 through A2-6, including distinct-App matrix, async cache/concurrency, controlled reverse, lifecycle/native join, known-UID allow/drop, replay and settlement. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Network and lifecycle | S151 closes real underlay epoch for the selected Pixel artifact; S153/S157 close real stop/fault/restart and same-session re-arm evidence; S153 full E1 residual sequence reruns normal stop/start, fault restart and Wi-Fi epoch restart with fresh traffic and zero residue. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Ownership and failure | S158/S168 close final multi-owner topology/teardown corrections; S160/S161 close D3 overload/recovery for tested envelope; S176 closes four-owner UDP route-pinning; S141 B2 closes policy/transport/infrastructure separation. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
-| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  S222/S223 rerun the device-state shape under the corrected artifact: screen-off OI3 p95 `27ms`; forced-Doze OI3 p95 `78ms`; both with `failureCount=0` and cleanup `12/0`.  The remaining gap is full ADR-0007 budget evidence and tolerance decision, not F072 lifecycle correctness. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
+| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  S222/S223 rerun the device-state shape under the corrected artifact: screen-off OI3 p95 `27ms`; forced-Doze OI3 p95 `78ms`; both with `failureCount=0` and cleanup `12/0`.  S224 adds five current-artifact four-flow UDP resource cycles with stable fd/thread/RSS, cleanup `16/0` per cycle, and `failureCount=0`.  The remaining gap is full ADR-0007 budget evidence and tolerance decision, not F072 lifecycle correctness. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
 
 ## E2 performance decision
 
@@ -92,6 +94,8 @@ S199--S223 then split and corrected the main matched HTTP cost envelope:
   Direct/HEV/OI3 comparison.
 - S222/S223 validated the same candidate under screen-off and forced-Doze,
   removing the prior S192 seconds-level device-state cliff.
+- S224 validated the same candidate's repeated resource trend over five
+  four-flow UDP cycles, with stable fd/thread/RSS and `failureCount=0`.
 
 Therefore the current result remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.
 The immediate next engineering question is the remaining ADR-0007 budget

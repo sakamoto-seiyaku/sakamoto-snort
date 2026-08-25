@@ -8,7 +8,7 @@ this campaign document records scope and evidence rather than a parallel
 backlog.
 
 Status: research contract, 2026-08-23
-Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S223 E2 write-interest, owner handoff, TCP owner lifecycle, and device-state correction)
+Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S223 E2 write-interest, owner handoff, TCP owner lifecycle, and device-state correction; S224 current F072-candidate E1 resource trend)
 Tracker: SAKAMOTO-131
 Scope: non-root Android VPN/TUN Runtime Profile
 
@@ -726,6 +726,15 @@ comparison APK.  Screen-off passed Direct `8/8` p95 `15ms`, HEV `8/8` p95
 `10ms`, OI3 `8/8` p95 `27ms`, OI3 cleanup `12/0`.  Forced-Doze passed Direct
 `8/8` p95 `18ms`, HEV `8/8` p95 `16ms`, OI3 `8/8` p95 `78ms`, OI3 cleanup
 `12/0`.  Both manifests recorded `failureCount=0`.
+
+S224 then reran the E1 resource trend on the same F072-candidate comparison
+artifact (`20260826-071025-774914`).  Five four-flow UDP cycles all passed:
+app/fixture counts matched from `4485/4485` through `4592/4592`, cleanup was
+`16/0` per cycle, App/VPP fd stayed `120/49`, threads stayed `33--34/7`, and
+manifest `failureCount=0`.  This supports current-artifact repeated resource
+stability after the lifecycle correction; it is not a substitute for matched
+throughput, CPU, thermal, power, Doze soak, or the S223 latency-tolerance
+decision.
 
 The campaign remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because full
 ADR-0007 closure still needs CPU/thermal/power/soak evidence and a
