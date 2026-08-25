@@ -183,12 +183,29 @@ cleanup() {
   fi
   cleanup_done=1
   set +e
-  adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true \
+  # Product stop supervises the VPP child with TERM/KILL and therefore can
+  # legitimately bypass the OI3 test-only cleanup emitter.  A2-3 needs both
+  # seams: first drive the bounded OI3 stop over the app-owned CLI control
+  # bridge, then request the ordinary VPN stop so the Java UID contract and
+  # Android service lifecycle settle.
+  adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --es oi3Control stop \
     >/dev/null 2>&1
   native_cleanup_observed=false
   contract_cleanup_observed=false
   force_stop_fallback=false
   cleanup_poll_attempts=0
+  local native_deadline=$((SECONDS + CLEANUP_WAIT_SECONDS))
+  while (( SECONDS <= native_deadline )); do
+    cleanup_poll_attempts=$((cleanup_poll_attempts + 1))
+    capture_remote "vpp-stdout.cleanup-poll.log" "$VPP_STDOUT_PATH"
+    if grep -Fq "event=CLEANUP" "$RESULT_DIR/vpp-stdout.cleanup-poll.log"; then
+      native_cleanup_observed=true
+      break
+    fi
+    sleep "$POLL_INTERVAL"
+  done
+  adb_cmd shell am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true \
+    >/dev/null 2>&1
   local deadline=$((SECONDS + CLEANUP_WAIT_SECONDS))
   while (( SECONDS <= deadline )); do
     cleanup_poll_attempts=$((cleanup_poll_attempts + 1))

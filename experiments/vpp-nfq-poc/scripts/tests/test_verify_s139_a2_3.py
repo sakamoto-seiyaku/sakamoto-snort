@@ -9,6 +9,10 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 VERIFIER_PATH = SCRIPT_DIR / "verify-s139-a2-3.py"
+RUNNER_PATH = SCRIPT_DIR / "android-run-s139-a2-3-controlled-return.sh"
+MAIN_ACTIVITY_PATH = (SCRIPT_DIR.parent / "android" / "vpn-lite" / "src" /
+                      "main" / "java" / "com" / "sakamoto" / "snort" /
+                      "vpnlite" / "MainActivity.java")
 SPEC = importlib.util.spec_from_file_location("verify_s139_a2_3", VERIFIER_PATH)
 if SPEC is None or SPEC.loader is None:
     raise ImportError("unable to load A2-3 verifier")
@@ -65,6 +69,25 @@ class RawOutputGateTest(unittest.TestCase):
         status, _ = VERIFIER.verify_raw_output("oi3 tun-output length=74\n",
                                                 self.app())
         self.assertEqual(VERIFIER.INVALID, status)
+
+
+class A23CleanupControlTest(unittest.TestCase):
+    def test_runner_drives_oi3_cleanup_before_product_stop(self) -> None:
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        oi3_stop = 'am start -n "$VPN_PACKAGE/.MainActivity" --es oi3Control stop'
+        product_stop = 'am start -n "$VPN_PACKAGE/.MainActivity" --ez stop true'
+        self.assertIn(oi3_stop, runner)
+        self.assertIn(product_stop, runner)
+        self.assertLess(runner.index(oi3_stop), runner.index(product_stop))
+
+    def test_main_activity_bridges_oi3_control_without_vpn_prepare(self) -> None:
+        source = MAIN_ACTIVITY_PATH.read_text(encoding="utf-8")
+        branch = "startLegacyOi3Control(intent);"
+        self.assertIn(branch, source)
+        self.assertIn("copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_OI3_CONTROL);",
+                      source)
+        self.assertLess(source.index(branch),
+                        source.index("EXTRA_UID_CONTRACT_REFRESH_APP"))
 
 
 if __name__ == "__main__":

@@ -123,6 +123,12 @@ public final class MainActivity extends Activity {
             showAction("Legacy VPN/TUN POC start requested.");
             return true;
         }
+        String oi3Control = intent.getStringExtra(SnortVpnService.EXTRA_OI3_CONTROL);
+        if (oi3Control != null && !oi3Control.trim().isEmpty()) {
+            startLegacyOi3Control(intent);
+            showAction("Legacy OI3 control requested.");
+            return true;
+        }
         if (intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_APP, false)
                 || intent.getBooleanExtra(SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_NETWORK,
                         false)
@@ -182,6 +188,12 @@ public final class MainActivity extends Activity {
             return true;
         }
         return false;
+    }
+
+    private void startLegacyOi3Control(Intent source) {
+        Intent serviceIntent = new Intent(this, SnortVpnService.class);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_OI3_CONTROL);
+        startLegacyServiceIntent(serviceIntent);
     }
 
     private void startLegacyVpnService(String action, Intent source) {
