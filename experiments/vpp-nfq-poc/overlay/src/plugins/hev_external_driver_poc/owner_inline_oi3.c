@@ -482,6 +482,7 @@ struct oi3_main {
   _Atomic int connector_poll_done;
   _Atomic int connector_wake_pending;
   _Atomic int connector_connect_pending;
+  _Atomic uint32_t connector_write_pending;
   /* Dispatcher-owned admission state.  The VPP main thread may inspect and
    * reserve these atomics, while the selected owner thread remains the sole
    * writer of its HEV context, packet queue, and lifecycle fields. */
@@ -531,6 +532,8 @@ static int oi3_connector_poll_arm (oi3_main_t *tm);
 static void oi3_connector_poll_join (oi3_main_t *tm);
 static void oi3_connector_poll_stop (oi3_main_t *tm);
 static int oi3_ensure_connector_wake_file (oi3_main_t *tm);
+static void oi3_worker_run_for (vlib_main_t *vm, vlib_node_runtime_t *node,
+                                u32 kind, oi3_main_t *tm);
 static void oi3_rearm_tun_flow (vlib_main_t *vm, oi3_main_t *tm);
 static void oi3_multi_maybe_teardown (void);
 static int oi3_task_init (oi3_main_t *tm);
@@ -606,6 +609,14 @@ oi3_now_ns (void)
   return (uint64_t) ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
 
+static uint64_t
+oi3_wall_ms (void)
+{
+  struct timespec ts;
+  clock_gettime (CLOCK_REALTIME, &ts);
+  return (uint64_t) ts.tv_sec * 1000ULL + (uint64_t) ts.tv_nsec / 1000000ULL;
+}
+
 static void
 oi3_refresh_tun_flow_deadline (oi3_main_t *tm)
 {
@@ -637,6 +648,8 @@ oi3_connector_poll_main (void *data)
     p.fd = fd;
     p.events = POLLIN | POLLERR | POLLHUP | POLLNVAL;
     if (atomic_load_explicit (&tm->connector_connect_pending,
+                              memory_order_acquire) ||
+        atomic_load_explicit (&tm->connector_write_pending,
                               memory_order_acquire))
       p.events |= POLLOUT;
     if (deadline) {
@@ -676,7 +689,7 @@ oi3_connector_poll_main (void *data)
       oi3_connector_wake_t token = {
         .generation = tm->generation,
         .cause = 1,
-        .reserved = 0,
+        .reserved = (uint32_t)p.revents,
       };
       int expected = 0;
       atomic_store_explicit (&tm->connector_poll_done, 1, memory_order_release);
@@ -1423,9 +1436,13 @@ oi3_connector_input_tcp (void *data, HevOwnerRuntime *owner, tcp_pcb_t *pcb,
                      const void *payload, size_t length)
 {
   oi3_main_t *tm = data; (void)owner; (void)pcb; (void)payload;
-  if (tm)
+  if (tm) {
     tm->direct_send_events++;
-  fprintf (stderr, "oi3 direct-send length=%zu owner-pthread=%lu\n", length,
+    atomic_store_explicit (&tm->connector_write_pending, 0,
+                           memory_order_release);
+  }
+  fprintf (stderr, "oi3 direct-send wall-ms=%llu length=%zu owner-pthread=%lu\n",
+           (unsigned long long)oi3_wall_ms (), length,
            (unsigned long)pthread_self ());
   return 0;
 }
@@ -1450,14 +1467,16 @@ oi3_drive_lwip_timer_after_send (oi3_main_t *tm, u32 direct_send_before)
   oi3_lwip_identity_t before;
   memset (&before, 0, sizeof (before));
   tm->api.identity (tm->context, &before);
-  fprintf (stderr, "oi3 short-send timer-before events=%u ticks=%u active-pcb=%p\n",
+  fprintf (stderr, "oi3 short-send timer-before wall-ms=%llu events=%u ticks=%u active-pcb=%p\n",
+           (unsigned long long)oi3_wall_ms (),
            tm->direct_send_events, before.tcp_ticks_value,
            (void *)before.tcp_active_pcb);
   tm->api.lwip_tcp_tmr (tm->lwip_context);
   oi3_lwip_identity_t after;
   memset (&after, 0, sizeof (after));
   tm->api.identity (tm->context, &after);
-  fprintf (stderr, "oi3 short-send timer-tick events=%u ticks=%u active-pcb=%p\n",
+  fprintf (stderr, "oi3 short-send timer-tick wall-ms=%llu events=%u ticks=%u active-pcb=%p\n",
+           (unsigned long long)oi3_wall_ms (),
            tm->direct_send_events, after.tcp_ticks_value,
            (void *)after.tcp_active_pcb);
   return 0;
@@ -1468,7 +1487,8 @@ oi3_connector_output_tcp (void *data, HevOwnerRuntime *owner, tcp_pcb_t *pcb,
                       const void *payload, size_t length)
 {
   oi3_main_t *tm = data; (void)owner; (void)pcb; (void)payload;
-  fprintf (stderr, "oi3 direct-recv length=%zu owner-pthread=%lu\n", length,
+  fprintf (stderr, "oi3 direct-recv wall-ms=%llu length=%zu owner-pthread=%lu\n",
+           (unsigned long long)oi3_wall_ms (), length,
            (unsigned long)pthread_self ());
   tm->output_direct++;
   return 0;
@@ -1558,8 +1578,9 @@ oi3_output (void *data, const void *packet, size_t length)
     ssize_t written = write (tm->tun_fd, tun_packet, length);
     if (written == (ssize_t)length) tm->tun_output_packets++;
     else tm->tun_output_errors++;
-    fprintf (stderr, "oi3 tun-output length=%zu result=%s owner-pthread=%lu\n",
-             length, written == (ssize_t)length ? "OK" : strerror (errno),
+    fprintf (stderr, "oi3 tun-output wall-ms=%llu length=%zu result=%s owner-pthread=%lu\n",
+             (unsigned long long)oi3_wall_ms (), length,
+             written == (ssize_t)length ? "OK" : strerror (errno),
              (unsigned long)pthread_self ());
     if (written == (ssize_t) length)
       oi3_log_packet_hex ("oi3 tun-output-raw", tun_packet, length);
@@ -1672,8 +1693,18 @@ oi3_connector_wake_ready (clib_file_t *file)
       if (!tm->active || tm->finish_requested ||
           token.generation != tm->generation)
         continue;
-      fprintf (stderr, "oi3 connector-wake cause=%u generation=%llu\n",
-               token.cause, (unsigned long long)token.generation);
+      u32 current_thread = vlib_get_thread_index ();
+      fprintf (stderr,
+               "oi3 connector-wake wall-ms=%llu cause=%u revents=0x%x generation=%llu current-thread=%u "
+               "target-thread=%u\n",
+               (unsigned long long)oi3_wall_ms (),
+               token.cause, token.reserved,
+               (unsigned long long)token.generation,
+               current_thread, tm->target_thread);
+      if (tm->multi_mode && current_thread == tm->target_thread) {
+        oi3_worker_run_for (vm, NULL, 0, tm);
+        continue;
+      }
       if (!tm->worker_token_pending &&
           oi3_enqueue_owner_for (tm, vm, 0) < 0)
         oi3_error ("OI3 connector wake enqueue failed");
@@ -1705,7 +1736,9 @@ oi3_ensure_connector_wake_file (oi3_main_t *tm)
     (void)fcntl (tm->connector_wake_pipe[1], F_SETFL, flags | O_NONBLOCK);
   file.read_function = oi3_connector_wake_ready;
   file.file_descriptor = tm->connector_wake_pipe[0];
-  file.polling_thread_index = 0;
+  file.polling_thread_index =
+    tm->multi_mode && tm->target_thread < vlib_get_n_threads ()
+      ? tm->target_thread : 0;
   file.private_data = (uword)tm;
   file.description = format (0, "OI3 protected connector wake pipe");
   tm->connector_wake_file_index = (int)clib_file_add (&file_main, &file);
@@ -1791,6 +1824,39 @@ oi3_tun_packet_tcp_flags (const u8 *packet, size_t length)
   return 0;
 }
 
+static size_t
+oi3_tun_packet_tcp_payload_length (const u8 *packet, size_t length)
+{
+  if (!packet || length < 20)
+    return 0;
+  if ((packet[0] >> 4) == 4) {
+    size_t ihl = (size_t)(packet[0] & 0x0fU) * 4U;
+    if (packet[9] != 6 || ihl < 20U || length < ihl + 20U)
+      return 0;
+    size_t tcp_header = (size_t)(packet[ihl + 12] >> 4) * 4U;
+    if (tcp_header < 20U || length < ihl + tcp_header)
+      return 0;
+    size_t ip_total = ((size_t)packet[2] << 8) | packet[3];
+    size_t captured_total = length < ip_total || ip_total == 0 ? length : ip_total;
+    if (captured_total < ihl + tcp_header)
+      return 0;
+    return captured_total - ihl - tcp_header;
+  }
+  if ((packet[0] >> 4) == 6 && length >= 60 && packet[6] == 6) {
+    size_t tcp_header = (size_t)(packet[40 + 12] >> 4) * 4U;
+    if (tcp_header < 20U || length < 40U + tcp_header)
+      return 0;
+    size_t payload_total = ((size_t)packet[4] << 8) | packet[5];
+    size_t l4_total = length > 40U ? length - 40U : 0;
+    if (payload_total != 0 && payload_total < l4_total)
+      l4_total = payload_total;
+    if (l4_total < tcp_header)
+      return 0;
+    return l4_total - tcp_header;
+  }
+  return 0;
+}
+
 /* TUN readiness can publish several packets before the broker completion
  * token reaches the owner.  Keep those packets in the owner-local queue
  * instead of overwriting one shared pending slot.  The queue is deliberately
@@ -1809,9 +1875,10 @@ oi3_tun_pending_enqueue (oi3_main_t *tm, const u8 *packet, size_t length)
   memcpy (tm->tun_pending[slot].packet, packet, length);
   tm->tun_pending_count++;
   tm->tun_pending_sequence++;
-  fprintf (stderr, "oi3 tun-queue enqueue sequence=%u length=%zu depth=%u "
-           "tcp-flags=0x%02x\n", tm->tun_pending_sequence, length,
-           tm->tun_pending_count,
+  fprintf (stderr, "oi3 tun-queue enqueue wall-ms=%llu sequence=%u "
+           "length=%zu depth=%u tcp-flags=0x%02x\n",
+           (unsigned long long)oi3_wall_ms (), tm->tun_pending_sequence,
+           length, tm->tun_pending_count,
            oi3_tun_packet_tcp_flags (packet, length));
   return 0;
 }
@@ -1874,13 +1941,16 @@ oi3_submit_pending_tun (oi3_main_t *tm)
   oi3_tun_pending_entry_t *entry = &tm->tun_pending[tm->tun_pending_head];
   u32 length = entry->length;
   u8 tcp_flags = oi3_tun_packet_tcp_flags (entry->packet, length);
+  size_t tcp_payload_length =
+    oi3_tun_packet_tcp_payload_length (entry->packet, length);
   int submit_result = (oi3_normalize_tun_ingress (tm, entry->packet, length),
                        tm->api.submit (tm->context, entry->packet, length));
   fprintf (stderr, "oi3 tun-submit result=%d sequence=%u length=%u "
            "queue-depth-before=%u family=%u protocol=%u destination-port=%u "
-           "tcp-flags=0x%02x\n", submit_result,
+           "tcp-flags=0x%02x tcp-payload=%zu\n", submit_result,
            tm->packet_submitted + 1U, length, tm->tun_pending_count,
-           tm->family, tm->protocol, tm->target_port, tcp_flags);
+           tm->family, tm->protocol, tm->target_port, tcp_flags,
+           tcp_payload_length);
   if (submit_result < 0)
     {
       /* HEV may reject a packet once the bounded session/credit envelope is
@@ -1915,6 +1985,10 @@ oi3_submit_pending_tun (oi3_main_t *tm)
   }
   if (tm->protocol == 6 && (tcp_flags & 0x05U))
     tm->tcp_fin_submitted = 1;
+  if (tm->protocol == 6 && tcp_payload_length > 0 &&
+      tm->direct_send_events == 0)
+    atomic_store_explicit (&tm->connector_write_pending, 1,
+                           memory_order_release);
   tm->tun_pending[tm->tun_pending_head].length = 0;
   tm->tun_pending_head = (tm->tun_pending_head + 1U) %
                          OI3_TUN_PENDING_CAPACITY;
@@ -2548,8 +2622,10 @@ oi3_multi_tun_read_ready (clib_file_t *file)
     }
     atomic_fetch_add_explicit (&tm->multi_dispatch_depth, 1,
                                memory_order_release);
-    fprintf (stderr, "oi4 multi-ingress owner=%u hash=%llu length=%zd\n",
-             tm->owner_id, (unsigned long long)hash, n);
+    fprintf (stderr,
+             "oi4 multi-ingress wall-ms=%llu owner=%u hash=%llu length=%zd\n",
+             (unsigned long long)oi3_wall_ms (), tm->owner_id,
+             (unsigned long long)hash, n);
   }
   (void)file;
   return 0;
@@ -3105,6 +3181,7 @@ oi3_rearm_tun_flow (vlib_main_t *vm, oi3_main_t *tm)
   tm->expected_transport_timeout = 0;
   atomic_store_explicit (&tm->connector_wake_pending, 0, memory_order_release);
   atomic_store_explicit (&tm->connector_connect_pending, 0, memory_order_release);
+  atomic_store_explicit (&tm->connector_write_pending, 0, memory_order_release);
   atomic_store_explicit (&tm->connector_poll_done, 1, memory_order_release);
   atomic_store_explicit (&tm->endpoint_stop, 1, memory_order_release);
   atomic_store_explicit (&tm->endpoint_ready, 0, memory_order_release);
@@ -4259,6 +4336,7 @@ oi3_multi_owner_init (oi3_main_t *tm, u32 owner_id, u32 target_thread,
   atomic_init (&tm->connector_poll_done, 1);
   atomic_init (&tm->connector_wake_pending, 0);
   atomic_init (&tm->connector_connect_pending, 0);
+  atomic_init (&tm->connector_write_pending, 0);
   atomic_init (&tm->multi_admission_open, 1);
   atomic_init (&tm->multi_dispatch_depth, 0);
   atomic_init (&tm->multi_admission_rejects, 0);
@@ -4720,6 +4798,7 @@ oi3_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
   tm->tun_flow_deadline_ns = 0;
   atomic_store_explicit (&tm->connector_wake_pending, 0, memory_order_release);
   atomic_store_explicit (&tm->connector_connect_pending, 0, memory_order_release);
+  atomic_store_explicit (&tm->connector_write_pending, 0, memory_order_release);
   if (oi3_ensure_connector_wake_file (tm) < 0) {
     tm->active = 0;
     return clib_error_return_unix (0, "create OI3 connector wake pipe");
@@ -4959,6 +5038,7 @@ oi3_run_command_fn (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t
   tm->endpoint_accepted = tm->endpoint_received = tm->endpoint_replied = tm->broker_bind_calls = tm->broker_protect_calls = 0;
   tm->broker_duplicate_closes = tm->broker_stale = tm->transport_failures = tm->infrastructure_failures = 0;
   tm->connector_last_error = tm->connector_error_reported = 0;
+  tm->tcp_data_seen = 0;
   tm->packet_submitted = tm->udp_datagram_inflight = tm->tcp_payload_submitted = tm->tcp_fin_submitted = 0; tm->error[0] = 0;
   atomic_store (&tm->endpoint_stop, 0);
   atomic_store (&tm->endpoint_ready, 0);

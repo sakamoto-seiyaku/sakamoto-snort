@@ -1388,8 +1388,15 @@ public final class SnortVpnService extends VpnService {
                 && (maxRequests <= 0 || requests < maxRequests)) {
             requests++;
             long requestStarted = System.currentTimeMillis();
+            long connectDone = -1;
+            long writeDone = -1;
+            long firstByteAt = -1;
+            int total = 0;
+            int contentLength = -1;
+            boolean contentLengthComplete = false;
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress(host, port), 5000);
+                connectDone = System.currentTimeMillis();
                 socket.setSoTimeout(5000);
                 String request = "GET " + path + " HTTP/1.0\r\n"
                         + "Host: " + host + "\r\n"
@@ -1398,16 +1405,18 @@ public final class SnortVpnService extends VpnService {
                 OutputStream out = socket.getOutputStream();
                 out.write(requestData);
                 out.flush();
+                writeDone = System.currentTimeMillis();
                 requestBytes += requestData.length;
                 BufferedInputStream in = new BufferedInputStream(socket.getInputStream());
                 byte[] buf = new byte[512];
                 int n;
-                int total = 0;
                 int headerEnd = -1;
-                int contentLength = -1;
                 ByteArrayOutputStream response = new ByteArrayOutputStream();
                 try {
                     while ((n = in.read(buf)) > 0) {
+                        if (firstByteAt < 0) {
+                            firstByteAt = System.currentTimeMillis();
+                        }
                         response.write(buf, 0, n);
                         total += n;
                         if (headerEnd < 0) {
@@ -1422,6 +1431,7 @@ public final class SnortVpnService extends VpnService {
                         if (headerEnd >= 0 && contentLength >= 0
                                 && total >= headerEnd + contentLength) {
                             contentLengthCompletions++;
+                            contentLengthComplete = true;
                             break;
                         }
                     }
@@ -1437,8 +1447,31 @@ public final class SnortVpnService extends VpnService {
                     successes++;
                     latencies.add(System.currentTimeMillis() - requestStarted);
                 }
+                long requestDone = System.currentTimeMillis();
+                appendHttpProbeLog(logPath, "request index=" + requests
+                        + " result=" + (total > 0 ? "success" : "empty")
+                        + " startMs=" + requestStarted
+                        + " connectMs=" + (connectDone >= 0 ? connectDone - requestStarted : -1)
+                        + " writeMs=" + (writeDone >= 0 ? writeDone - requestStarted : -1)
+                        + " firstByteMs=" + (firstByteAt >= 0 ? firstByteAt - requestStarted : -1)
+                        + " doneMs=" + (requestDone - requestStarted)
+                        + " bytes=" + total
+                        + " contentLength=" + contentLength
+                        + " contentLengthComplete=" + (contentLengthComplete ? 1 : 0));
             } catch (Exception e) {
                 errors++;
+                long requestDone = System.currentTimeMillis();
+                appendHttpProbeLog(logPath, "request index=" + requests
+                        + " result=error"
+                        + " startMs=" + requestStarted
+                        + " connectMs=" + (connectDone >= 0 ? connectDone - requestStarted : -1)
+                        + " writeMs=" + (writeDone >= 0 ? writeDone - requestStarted : -1)
+                        + " firstByteMs=" + (firstByteAt >= 0 ? firstByteAt - requestStarted : -1)
+                        + " doneMs=" + (requestDone - requestStarted)
+                        + " bytes=" + total
+                        + " contentLength=" + contentLength
+                        + " contentLengthComplete=" + (contentLengthComplete ? 1 : 0)
+                        + " error=" + e.getClass().getSimpleName());
             }
             if (requestIntervalMs > 0 && System.currentTimeMillis() < deadline
                     && (maxRequests <= 0 || requests < maxRequests)) {

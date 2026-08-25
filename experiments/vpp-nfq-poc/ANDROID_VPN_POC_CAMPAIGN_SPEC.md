@@ -7,7 +7,7 @@ artifact/fixture validity gates, bounded retry rule, and hotspot stop rule.
 Plane remains the source of truth for open execution work.
 
 Date: 2026-08-23
-Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 A2-6 and final A2 aggregate closure; S153 full E1 residual/lifecycle closure and F068 epoch runner correction; S192 E2 device-state comparison and S193 final audit)
+Updated: 2026-08-26 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S186 S156-guarded A2-2 concurrency closure; S187/S191 A2-3 cleanup-control closure; S188 A2-4 overlay/runtime closure; S189 A2-5 admission closure; S190 A2-6 and final A2 aggregate closure; S153 full E1 residual/lifecycle closure and F068 epoch runner correction; S192 E2 device-state comparison and S193 final audit; S199--S204 E2 write-interest correction and owner-handoff hotspot)
 Plane owner: SAKAMOTO-137
 Output level: concrete POC design; no experiment executed by this document
 
@@ -1263,6 +1263,11 @@ cell remain regression inputs, while S157 supplies the real same-session
  correctness slice.  S193's final audit is
  `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`; formal main-stack implementation
  planning remains blocked on focused E2 latency/cost diagnosis and rerun.
+ S199--S204 performed that diagnosis far enough to split the blocker:
+ `connector_write_pending` closes the seconds-level protected-write stall, but
+ matched OI3 still sits around p95 `526--584ms` because the multi TUN
+ dispatcher -> owner handoff can lag by roughly 160--500ms.  The next POC must
+ target that handoff seam before the final audit can be upgraded.
 
 ## 10. Campaign interruption conditions
 
@@ -1280,6 +1285,10 @@ Stop the remaining chain and discuss the affected route only if evidence shows:
   environment;
 - a valid target-device performance/resource result exposes an architecture-
   level cliff rather than a local implementation/harness issue;
+- after VPN-F070, a matched E2 rerun still shows OI3 latency dominated by
+  dispatcher -> owner handoff wake delay (VPN-F071); do not continue by
+  rerunning generic HTTP/UID cells or importing main-stack code until the
+  handoff seam is corrected or explicitly redesigned;
 - the device safety boundary is violated, the POC premise is invalid, or new
   external authority/irreversible action is required;
 - a valid full-route TCP flow settles after the first short application segment
@@ -1328,7 +1337,10 @@ conclusions.  It is claim-family based, not a count of passing cells.
 Current audit: [`S193_ANDROID_VPN_FEASIBILITY_FINAL_AUDIT.md`](S193_ANDROID_VPN_FEASIBILITY_FINAL_AUDIT.md)
 records `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.  A2, B2, C/D and E1 are bounded
 PASS for the selected Pixel scope, but E2 fails the ADR-0007 comparative
-latency gate.
+latency gate.  The current hotspot record is
+[`S204_E2_OI3_WRITE_INTEREST_AND_HANDOFF_HOTSPOT.md`](S204_E2_OI3_WRITE_INTEREST_AND_HANDOFF_HOTSPOT.md):
+S200--S202 close the connector write-interest sub-defect, while S203/S204 keep
+dispatcher -> owner handoff latency open.
 
 | Required family | Completion evidence |
 | --- | --- |

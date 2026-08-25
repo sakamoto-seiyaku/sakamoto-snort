@@ -19,6 +19,11 @@ architecture reopening by itself.  The owner-inline invariants still hold; the
 next work is performance/cost diagnosis and correction before formal main-stack
 implementation planning.
 
+Post-audit update: S199--S204 narrowed the E2 latency issue.  The connector
+write-interest defect that caused seconds-level OI3 TCP payload stalls is
+corrected, but OI3 still fails the comparative gate because the multi
+dispatcher -> owner handoff path shows a 160--500ms wake tail.
+
 ## Claim-family audit
 
 | Required family | Current evidence | Audit verdict |
@@ -49,6 +54,21 @@ The accepted S192 cells prove that this is not a device-state correctness
 failure: every arm completed `8/8`, `stateValid=1`, OI3 cleanup was `12/0` or
 `11/0`, and `failureCount=0`.  The issue is the comparative cost/latency
 envelope.
+
+S199--S204 then split the cost envelope:
+
+- S199 rejected a TCP payload timer-kick candidate: OI3 returned `0/4` and four
+  app `SocketTimeoutException`s.
+- S200/S201/S202 validated `connector_write_pending`: OI3 completed `4/4` and
+  `8/8`, and the matched S202 run reduced OI3 to p95 `584ms` while Direct and
+  HEV stayed at p95 `80ms` and `25ms`.
+- S203/S204 showed the remaining p95 around `526--535ms` comes from native TUN
+  dispatcher -> owner handoff delay; target-trigger wake did not solve it and
+  was reverted.
+
+Therefore the current result remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.
+The immediate next engineering question is the OI3 owner-handoff seam, not
+main-stack import.
 
 ## Main-stack implication
 

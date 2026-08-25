@@ -67,6 +67,29 @@ class VerifyS171E2Oi3DirectSampleTest(unittest.TestCase):
         self.assertIn("tm->phase = OI3_STOPPING;", self.owner)
         self.assertIn("tm->finish_requested = 1;", self.owner)
 
+    def test_oi3_multi_connector_wake_runs_on_owner_thread(self):
+        self.assertIn("current_thread == tm->target_thread", self.owner)
+        self.assertIn("oi3_worker_run_for (vm, NULL, 0, tm);", self.owner)
+        self.assertIn("tm->target_thread < vlib_get_n_threads ()", self.owner)
+        self.assertIn("? tm->target_thread : 0", self.owner)
+        self.assertIn("current-thread=%u target-thread=%u", self.owner)
+
+    def test_oi3_multi_tcp_payload_submit_is_logged_for_timing_diagnosis(self):
+        self.assertIn("oi3_tun_packet_tcp_payload_length", self.owner)
+        self.assertIn("tcp-payload=%zu", self.owner)
+        self.assertIn("tcp_payload_length", self.owner)
+        self.assertNotIn("oi3 tcp-payload-kick", self.owner)
+
+    def test_oi3_multi_connector_poll_includes_write_interest_after_tcp_payload(self):
+        self.assertIn("connector_write_pending", self.owner)
+        self.assertIn("tcp_payload_length > 0", self.owner)
+        self.assertIn("tm->direct_send_events == 0", self.owner)
+        self.assertIn("p.events |= POLLOUT;", self.owner)
+        self.assertIn("token.reserved", self.owner)
+        self.assertIn("revents=0x%x", self.owner)
+        self.assertIn("atomic_store_explicit (&tm->connector_write_pending, 0",
+                      self.owner)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -105,6 +105,8 @@ Map rather than encoded as TODOs here.
 | VPN-F067 | S153 foreground resource trend over-bound E1 resource settlement to UDP exact closed-echo losslessness | `CLOSED_FOR_S153_FIRE_AND_COUNT_RESOURCE_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F068 | S153 epoch lifecycle runner over-bound underlay replacement to TCP exact transition and byte-exact wlan rules | `CLOSED_FOR_S153_EPOCH_FIRE_AND_COUNT_DRIVER` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F069 | E2 matched HTTP/device-state latency exceeds ADR-0007 comparative threshold | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F070 | OI3 connector poll missed protected write interest after TCP payload submit | `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F071 | OI3 multi dispatcher-to-owner handoff has 160--500ms wake tail | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2432,10 +2434,83 @@ Map rather than encoded as TODOs here.
   the E2 performance problem: screen-off OI3 p95/p99 was `2604ms` versus Direct
   `77ms` and HEV `23ms`; forced-Doze OI3 p95/p99 was `2618ms` versus Direct
   `81ms` and HEV `20ms`.
+- **S199--S204 diagnosis update:** The post-audit latency diagnosis split this
+  umbrella risk into one corrected defect and one remaining hotspot.  S199
+  rejected the TCP payload timer-kick candidate (`0/4` OI3 successes and four
+  `SocketTimeoutException`s).  S200/S201/S202 close the missing connector
+  write-interest defect as VPN-F070: OI3 now completes `4/4` and `8/8` cells
+  without the earlier seconds-level payload stall, and the matched S202 run has
+  OI3 p95 `584ms` instead of the earlier 1.3--2.6s class.  S203/S204 then
+  identify VPN-F071: multi dispatcher ingress reaches native promptly, but
+  selected-owner TUN enqueue can lag by roughly 160--500ms; a target-trigger
+  wake candidate did not materially improve p95 (`535ms`) and was reverted.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a focused latency/cost diagnosis and a corrected E2
   rerun, or for an explicit architecture decision that changes the route.
+
+### VPN-F070 -- OI3 connector poll missed protected write interest after TCP payload submit
+
+- **First observation:** S174/S175/S192 matched HTTP cells showed OI3 p95/p99
+  around 1.3--2.6 seconds while Direct and HEV stayed below 100ms.
+- **Isolated failure mode:** After Android submitted TCP payload through TUN,
+  HEV/lwIP needed protected socket write readiness.  OI3 connector polling
+  subscribed to `POLLOUT` only while `connector_connect_pending` was true.  If
+  connect was already complete and no Direct send had occurred, the owner could
+  wait for retransmission or a connector deadline before writing the request.
+- **Rejected POC correction:** S199
+  `evidence/s199-e2-oi3-tcp-payload-kick-20260826/`
+  (`runId=20260826-045947-713819`) added a timer-kick after TCP payload submit.
+  It produced OI3 `0/4`, four app `SocketTimeoutException`s, and
+  `failureCount=1`; native evidence showed the kick created ACK-only TUN output
+  without solving Direct send readiness.  Do not use generic payload timer
+  kicks as this fix.
+- **POC correction:** Add `connector_write_pending`; set it after TCP payload
+  submit when `direct_send_events == 0`; include `POLLOUT` while connect or
+  write is pending; clear it on Direct send and lifecycle/re-arm boundaries.
+- **Post-correction evidence:** S200
+  `evidence/s200-e2-oi3-connector-write-interest-20260826/`
+  (`runId=20260826-050600-460730`) passed OI3 `4/4`,
+  p50/p95/p99 `351/514/514ms`, cleanup `8/0`.  S201
+  `evidence/s201-e2-oi3-write-interest-8req-20260826/`
+  (`runId=20260826-050729-932835`) passed OI3 `8/8`,
+  p50/p95/p99 `525/539/539ms`, cleanup `12/0`.  S202
+  `evidence/s202-e2-matched-write-interest-8req-20260826/`
+  (`runId=20260826-050854-725207`) passed Direct `8/8`
+  p95 `80ms`, HEV `8/8` p95 `25ms`, and OI3 `8/8` p95 `584ms`.
+- **Supported claim:** The old seconds-level OI3 TCP payload stall had a
+  concrete connector write-interest root cause and is corrected for the
+  bounded matched HTTP shape.
+- **Non-claim:** ADR-0007 E2 comparative latency is not closed; OI3 remains
+  materially slower than Direct/HEV.
+- **Status:** `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE`.
+
+### VPN-F071 -- OI3 multi dispatcher-to-owner handoff has 160--500ms wake tail
+
+- **First observation:** After VPN-F070, OI3 still completed matched HTTP but
+  remained around 0.5s p95, far above Direct/HEV.
+- **Evidence:** S203
+  `evidence/s203-e2-oi3-syn-admission-timing-20260826/`
+  (`runId=20260826-051405-366520`) added native wall-time probes and passed
+  OI3 `4/4`, p50/p95/p99 `250/526/526ms`.  S204
+  `evidence/s204-e2-oi3-target-trigger-wake-20260826/`
+  (`runId=20260826-051804-388905`) passed OI3 `4/4`,
+  p50/p95/p99 `314/535/535ms`.
+- **Observed delay:** S203/S204 show selected flows reaching `oi4
+  multi-ingress` promptly, then waiting roughly 160--500ms before `oi3
+  tun-queue enqueue` on the owner.  The downstream connector wake and
+  Direct-send path then progresses quickly, so the residual hotspot is before
+  owner-local flow processing.
+- **Rejected POC correction:** The target-thread interrupt/wakeup candidate in
+  S204 did not materially improve the delay and was reverted.
+- **Supported claim:** The remaining E2 latency blocker is the dispatcher ->
+  owner frame-queue/wake handoff seam, not UID attribution, target policy,
+  HTTP fixture behavior, or connector write readiness.
+- **Next correction direction:** Design and test a focused low-latency
+  per-owner TUN handoff/wake path, then rerun matched Direct/HEV/OI3 E2.
+- **Status:** `OPEN_RISK`.  Main-stack import remains blocked until this
+  hotspot is corrected and the comparative E2 gate is rerun, or until an
+  explicit architecture decision changes the route.
 
 ## Consolidation audit
 
@@ -2561,7 +2636,10 @@ Map rather than encoded as TODOs here.
   S156 resolver correlation into the same runtime source and ABI set used by
   the APK. S153/S170 closes F066 for the resource-runner recurrence of the
   same cleanup-control seam: drive OI3 cleanup control first, then use product
-  stop only as lifecycle/residue settlement.
+  stop only as lifecycle/residue settlement. S199--S204 split the F069 E2
+  performance risk: F070 closes the connector write-interest defect that caused
+  seconds-level payload stalls, while F071 remains open for dispatcher-to-owner
+  frame-queue/wake tail latency.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2635,6 +2713,8 @@ Map rather than encoded as TODOs here.
 | S153/S170 | Resource runner cleanup-control smoke correction | VPN-F066 |
 | S153 | Epoch lifecycle runner transition/oracle correction | VPN-F068 |
 | S192/S193 | E2 device-state comparison and final audit performance gap | VPN-F069 |
+| S199--S202 | OI3 connector write-interest diagnosis and correction | VPN-F070 |
+| S203/S204 | OI3 dispatcher-to-owner handoff latency diagnosis | VPN-F071 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
