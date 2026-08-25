@@ -48,6 +48,20 @@ class VerifyS172E2HttpBaselineSampleTest(unittest.TestCase):
         self.assertIn("--es mode vpp-hev", self.runner)
         self.assertIn("--es mode vpp-oi3-multi", self.runner)
 
+    def test_runner_exports_cpu_and_sched_deltas_for_budget_evidence(self):
+        self.assertIn("cpu_ticks_from_resource()", self.runner)
+        self.assertIn("sched_runtime_ns_from_resource()", self.runner)
+        self.assertIn("numeric_delta()", self.runner)
+        self.assertIn("--- $resource_label stat pid=$pid ---", self.runner)
+        self.assertIn("--- $resource_label schedstat pid=$pid ---", self.runner)
+        self.assertIn("appCpuTicksDelta", self.runner)
+        self.assertIn("vppCpuTicksDelta", self.runner)
+        self.assertIn("hevCpuTicksDelta", self.runner)
+        self.assertIn("totalCpuTicksDelta", self.runner)
+        self.assertIn("totalSchedRuntimeNsDelta", self.runner)
+        self.assertIn("cpuTicksDelta=${total_cpu_delta:-0}",
+                      self.runner)
+
     def test_runner_supports_device_state_cells(self):
         self.assertIn('DEVICE_STATE="${DEVICE_STATE:-foreground}"', self.runner)
         self.assertIn("capture_device_state()", self.runner)

@@ -263,6 +263,10 @@ capture_resource() {
       [[ -n "$pid" && "$pid" != 0 ]] || continue
       echo "--- $resource_label status pid=$pid ---"
       adb_read "cat /proc/$pid/status 2>/dev/null || true"
+      echo "--- $resource_label stat pid=$pid ---"
+      adb_read "cat /proc/$pid/stat 2>/dev/null || true"
+      echo "--- $resource_label schedstat pid=$pid ---"
+      adb_read "cat /proc/$pid/schedstat 2>/dev/null || true"
       echo "--- $resource_label fd-count pid=$pid ---"
       adb_read "ls -1 /proc/$pid/fd 2>/dev/null | wc -l"
       echo "--- $resource_label task-count pid=$pid ---"
@@ -365,6 +369,37 @@ fd_from_resource() {
 threads_from_resource() {
   local file="$1" label="$2"
   awk -v label="$label" '$0 ~ "^--- " label " task-count" {getline; print $1; exit}' "$file"
+}
+
+cpu_ticks_from_resource() {
+  local file="$1" label="$2"
+  awk -v label="$label" '
+    $0 ~ "^--- " label " stat" {
+      getline
+      if ($14 ~ /^[0-9]+$/ && $15 ~ /^[0-9]+$/) {
+        print $14 + $15
+      }
+      exit
+    }
+  ' "$file"
+}
+
+sched_runtime_ns_from_resource() {
+  local file="$1" label="$2"
+  awk -v label="$label" '
+    $0 ~ "^--- " label " schedstat" {
+      getline
+      if ($1 ~ /^[0-9]+$/) {
+        print $1
+      }
+      exit
+    }
+  ' "$file"
+}
+
+numeric_delta() {
+  local after="${1:-0}" before="${2:-0}"
+  awk -v after="${after:-0}" -v before="${before:-0}" 'BEGIN {print (after + 0) - (before + 0)}'
 }
 
 kv_from_stream_done() {
@@ -631,6 +666,26 @@ run_cell() {
   app_threads="$(threads_from_resource "$cell/resource-steady.raw" app 2>/dev/null || true)"
   vpp_threads="$(threads_from_resource "$cell/resource-steady.raw" vpp 2>/dev/null || true)"
   hev_threads="$(threads_from_resource "$cell/resource-steady.raw" hev 2>/dev/null || true)"
+  app_cpu_before="$(cpu_ticks_from_resource "$cell/resource-before.raw" app 2>/dev/null || true)"
+  app_cpu_after="$(cpu_ticks_from_resource "$cell/resource-after-probe.raw" app 2>/dev/null || true)"
+  vpp_cpu_before="$(cpu_ticks_from_resource "$cell/resource-before.raw" vpp 2>/dev/null || true)"
+  vpp_cpu_after="$(cpu_ticks_from_resource "$cell/resource-after-probe.raw" vpp 2>/dev/null || true)"
+  hev_cpu_before="$(cpu_ticks_from_resource "$cell/resource-before.raw" hev 2>/dev/null || true)"
+  hev_cpu_after="$(cpu_ticks_from_resource "$cell/resource-after-probe.raw" hev 2>/dev/null || true)"
+  app_cpu_delta="$(numeric_delta "${app_cpu_after:-0}" "${app_cpu_before:-0}")"
+  vpp_cpu_delta="$(numeric_delta "${vpp_cpu_after:-0}" "${vpp_cpu_before:-0}")"
+  hev_cpu_delta="$(numeric_delta "${hev_cpu_after:-0}" "${hev_cpu_before:-0}")"
+  total_cpu_delta="$(awk -v app="$app_cpu_delta" -v vpp="$vpp_cpu_delta" -v hev="$hev_cpu_delta" 'BEGIN {print app + vpp + hev}')"
+  app_sched_before="$(sched_runtime_ns_from_resource "$cell/resource-before.raw" app 2>/dev/null || true)"
+  app_sched_after="$(sched_runtime_ns_from_resource "$cell/resource-after-probe.raw" app 2>/dev/null || true)"
+  vpp_sched_before="$(sched_runtime_ns_from_resource "$cell/resource-before.raw" vpp 2>/dev/null || true)"
+  vpp_sched_after="$(sched_runtime_ns_from_resource "$cell/resource-after-probe.raw" vpp 2>/dev/null || true)"
+  hev_sched_before="$(sched_runtime_ns_from_resource "$cell/resource-before.raw" hev 2>/dev/null || true)"
+  hev_sched_after="$(sched_runtime_ns_from_resource "$cell/resource-after-probe.raw" hev 2>/dev/null || true)"
+  app_sched_delta="$(numeric_delta "${app_sched_after:-0}" "${app_sched_before:-0}")"
+  vpp_sched_delta="$(numeric_delta "${vpp_sched_after:-0}" "${vpp_sched_before:-0}")"
+  hev_sched_delta="$(numeric_delta "${hev_sched_after:-0}" "${hev_sched_before:-0}")"
+  total_sched_delta="$(awk -v app="$app_sched_delta" -v vpp="$vpp_sched_delta" -v hev="$hev_sched_delta" 'BEGIN {print app + vpp + hev}')"
   residual_vpp="$(adb_read "pidof vpp 2>/dev/null || true")"
   tun0_after=0
   adb_cmd shell ip link show tun0 >/dev/null 2>&1 && tun0_after=1 || true
@@ -652,17 +707,20 @@ run_cell() {
   fi
   [[ -z "$residual_vpp" && "$tun0_after" == 0 && "$rules_match" == 1 && "$state_valid" == 1 ]] || valid=0
 
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$label" "$arm" "$repeat" "$DEVICE_STATE" "$state_valid" "$startup_valid" "${requests:-0}" "${successes:-0}" \
     "${errors:-999}" "${request_bytes:-0}" "${response_bytes:-0}" "${elapsed_ms:-0}" \
     "${p50:-0}" "${p95:-0}" "${p99:-0}" "${read_timeout_after_bytes:-0}" \
     "${content_length_completions:-0}" "$socks_connect_count" \
     "${app_rss:-0}" "${vpp_rss:-0}" "${hev_rss:-0}" \
     "${app_fd:-0}" "${vpp_fd:-0}" "${hev_fd:-0}" \
-    "${app_threads:-0}" "${vpp_threads:-0}" "${hev_threads:-0}" "$cleanup_pass" \
+    "${app_threads:-0}" "${vpp_threads:-0}" "${hev_threads:-0}" \
+    "${app_cpu_delta:-0}" "${vpp_cpu_delta:-0}" "${hev_cpu_delta:-0}" "${total_cpu_delta:-0}" \
+    "${app_sched_delta:-0}" "${vpp_sched_delta:-0}" "${hev_sched_delta:-0}" "${total_sched_delta:-0}" \
+    "$cleanup_pass" \
     "$cleanup_fail" "$rules_match" "$valid" >>"$CSV"
 
-  echo "cell=$label valid=$valid startup=$startup_valid state=$DEVICE_STATE stateValid=$state_valid requests=${requests:-0} successes=${successes:-0} errors=${errors:-999} p50=${p50:-0} p95=${p95:-0} p99=${p99:-0} readTimeoutAfterBytes=${read_timeout_after_bytes:-0} contentLengthCompletions=${content_length_completions:-0} socksConnect=$socks_connect_count cleanup=$cleanup_pass/$cleanup_fail"
+  echo "cell=$label valid=$valid startup=$startup_valid state=$DEVICE_STATE stateValid=$state_valid requests=${requests:-0} successes=${successes:-0} errors=${errors:-999} p50=${p50:-0} p95=${p95:-0} p99=${p99:-0} cpuTicksDelta=${total_cpu_delta:-0} schedRuntimeNsDelta=${total_sched_delta:-0} readTimeoutAfterBytes=${read_timeout_after_bytes:-0} contentLengthCompletions=${content_length_completions:-0} socksConnect=$socks_connect_count cleanup=$cleanup_pass/$cleanup_fail"
   [[ "$valid" == 1 ]]
 }
 
@@ -697,7 +755,7 @@ if has_arm hev; then
   echo "socks=ready"
 fi
 
-printf 'label,arm,repeat,deviceState,stateValid,startupValid,requests,successes,errors,requestBytes,responseBytes,elapsedMs,latencyMsP50,latencyMsP95,latencyMsP99,readTimeoutAfterBytes,contentLengthCompletions,socksConnectCount,appRssKb,vppRssKb,hevRssKb,appFd,vppFd,hevFd,appThreads,vppThreads,hevThreads,cleanupPass,cleanupFail,rulesMatch,valid\n' >"$CSV"
+printf 'label,arm,repeat,deviceState,stateValid,startupValid,requests,successes,errors,requestBytes,responseBytes,elapsedMs,latencyMsP50,latencyMsP95,latencyMsP99,readTimeoutAfterBytes,contentLengthCompletions,socksConnectCount,appRssKb,vppRssKb,hevRssKb,appFd,vppFd,hevFd,appThreads,vppThreads,hevThreads,appCpuTicksDelta,vppCpuTicksDelta,hevCpuTicksDelta,totalCpuTicksDelta,appSchedRuntimeNsDelta,vppSchedRuntimeNsDelta,hevSchedRuntimeNsDelta,totalSchedRuntimeNsDelta,cleanupPass,cleanupFail,rulesMatch,valid\n' >"$CSV"
 
 failures=0
 for repeat in $(seq 1 "$REPEATS"); do
