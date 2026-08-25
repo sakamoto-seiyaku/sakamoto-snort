@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.VpnService;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -43,19 +44,21 @@ public final class MainActivity extends Activity {
     private TextView actionStatusView;
     private boolean pendingRuntimeStart;
     private Intent pendingLegacyVpnIntent;
+    private Intent pendingProductIntent;
+    private boolean resumed;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildUi());
-        applyProductIntent(getIntent());
+        enqueueProductIntent(getIntent());
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        applyProductIntent(intent);
+        enqueueProductIntent(intent);
     }
 
     private LinearLayout buildUi() {
@@ -196,6 +199,7 @@ public final class MainActivity extends Activity {
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_PAYLOAD_BYTES);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_SIZE);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_DURATION_SECONDS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_REQUEST_INTERVAL_MS);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_BLOCK_OWNER_UID);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_REDIRECT_THREAD);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_ROUNDS);
@@ -209,10 +213,16 @@ public final class MainActivity extends Activity {
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_STEADY_SECONDS);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_DRAIN_SECONDS);
         copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_RECONNECT_EVERY);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_SOURCE_PORT_BASE);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_UDP_CLOSED_TIMEOUT_MS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_UDP_SATURATING_TIMEOUT_MS);
+        copyIntExtra(source, serviceIntent, SnortVpnService.EXTRA_TCP_READ_TIMEOUT_MS);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_EXPECT_ECHO);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_OWNER_CACHE);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_ENABLE_IPV6);
         copyBooleanExtra(source, serviceIntent, SnortVpnService.EXTRA_OI3_APP_INJECT);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_OI3_CONTROL);
+        copyStringExtra(source, serviceIntent, SnortVpnService.EXTRA_OI3_EXPECTED_FAILURE);
         copyBooleanExtra(source, serviceIntent,
                 SnortVpnService.EXTRA_UID_CONTRACT_REFRESH_APP);
         copyBooleanExtra(source, serviceIntent,
@@ -234,7 +244,7 @@ public final class MainActivity extends Activity {
                 return;
             }
         }
-        startService(serviceIntent);
+        startLegacyServiceIntent(serviceIntent);
     }
 
     @Override
@@ -246,10 +256,18 @@ public final class MainActivity extends Activity {
         Intent serviceIntent = pendingLegacyVpnIntent;
         pendingLegacyVpnIntent = null;
         if (resultCode == RESULT_OK && serviceIntent != null) {
-            startService(serviceIntent);
+            startLegacyServiceIntent(serviceIntent);
             showAction("VPN permission granted; legacy POC starting.");
         } else {
             showAction("VPN permission denied; legacy POC not started.");
+        }
+    }
+
+    private void startLegacyServiceIntent(Intent serviceIntent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent);
+        } else {
+            startService(serviceIntent);
         }
     }
 
@@ -298,14 +316,37 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        flushPendingProductIntent();
         refreshRuntimeStatus();
         main.postDelayed(runtimeStatusPoll, STATUS_POLL_MILLIS);
     }
 
     @Override
     protected void onPause() {
+        resumed = false;
         main.removeCallbacks(runtimeStatusPoll);
         super.onPause();
+    }
+
+    private void enqueueProductIntent(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        Intent stableIntent = new Intent(intent);
+        if (resumed) {
+            main.post(() -> applyProductIntent(stableIntent));
+            return;
+        }
+        pendingProductIntent = stableIntent;
+    }
+
+    private void flushPendingProductIntent() {
+        Intent intent = pendingProductIntent;
+        pendingProductIntent = null;
+        if (intent != null) {
+            applyProductIntent(intent);
+        }
     }
 
     @Override

@@ -3,3 +3,4 @@
 /runtime/
 /results/*
 !/results/.gitkeep
+/evidence/

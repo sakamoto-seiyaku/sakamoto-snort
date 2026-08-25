@@ -8,6 +8,12 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 16's opt-in RESTRICT_LOCAL_NETWORK compatibility mode uses
+         this runtime grant.  The B1 LAN oracle is invalid unless the test
+         device grants it to the VPN process that owns protected sockets. -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -41,7 +47,11 @@
         <service
             android:name=".SnortVpnService"
             android:exported="false"
-            android:permission="android.permission.BIND_VPN_SERVICE">
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Android VPN POC data path and lifecycle" />
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

@@ -17,6 +17,10 @@ WARMUP_SECONDS="${WARMUP_SECONDS:-10}"
 STEADY_SECONDS="${STEADY_SECONDS:-30}"
 DRAIN_SECONDS="${DRAIN_SECONDS:-10}"
 RECONNECT_EVERY="${RECONNECT_EVERY:-}"
+UDP_SOURCE_PORT_BASE="${UDP_SOURCE_PORT_BASE:-43000}"
+TCP_SOURCE_PORT_BASE="${TCP_SOURCE_PORT_BASE:-44000}"
+UDP_CLOSED_TIMEOUT_MS="${UDP_CLOSED_TIMEOUT_MS:-1000}"
+UDP_SATURATING_TIMEOUT_MS="${UDP_SATURATING_TIMEOUT_MS:-200}"
 REPEATS="${REPEATS:-3}"
 TIER="${TIER:-0}"
 SIMPLEPERF="${SIMPLEPERF:-0}"
@@ -41,9 +45,23 @@ TCP_GATE_STEADY_SECONDS="${TCP_GATE_STEADY_SECONDS:-3}"
 TCP_GATE_DRAIN_SECONDS="${TCP_GATE_DRAIN_SECONDS:-3}"
 TCP_HANDSHAKE_GATE_RESULT="not-run"
 
+validate_source_port_base() {
+  local value="$1" name="$2"
+  if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$name must be numeric: $value" >&2
+    exit 2
+  fi
+  if (( value < 1024 || value > 65503 )); then
+    echo "$name must be in 1024..65503 for the max 32-flow probe: $value" >&2
+    exit 2
+  fi
+}
+
 export ADB="${ADB:-$REPO_ROOT/dev/adb}"
 source "$REPO_ROOT/dev/dev-android-device-lib.sh"
 mkdir -p "$RESULT_DIR"
+validate_source_port_base "$UDP_SOURCE_PORT_BASE" UDP_SOURCE_PORT_BASE
+validate_source_port_base "$TCP_SOURCE_PORT_BASE" TCP_SOURCE_PORT_BASE
 device_preflight
 [[ -f "$APK" ]] || { echo "APK not found: $APK" >&2; exit 1; }
 
@@ -192,13 +210,16 @@ start_vpn() {
 }
 
 start_probe() {
-  local protocol="$1" flows="$2" payload="$3" burst="$4" load="$5" echo="$6" port=49154
-  [[ "$protocol" == tcp ]] && port=49155
+  local protocol="$1" flows="$2" payload="$3" burst="$4" load="$5" echo="$6" port=49154 source_port_base="$UDP_SOURCE_PORT_BASE"
+  [[ "$protocol" == tcp ]] && port=49155 && source_port_base="$TCP_SOURCE_PORT_BASE"
   adb_cmd shell am start -W -n "$PACKAGE/.MainActivity" --ez appL4StressProbe true \
     --es protocol "$protocol" --es host 10.0.0.1 --ei port "$port" --ei flows "$flows" \
-    --ei payloadBytes "$payload" --ei burst "$burst" --es load "$load" \
+    --ei sourcePortBase "$source_port_base" --ei payloadBytes "$payload" \
+    --ei burst "$burst" --es load "$load" \
     --ei warmupSeconds "$WARMUP_SECONDS" --ei steadySeconds "$STEADY_SECONDS" \
     --ei drainSeconds "$DRAIN_SECONDS" --ei reconnectEvery "${RECONNECT_EVERY:-0}" \
+    --ei udpClosedTimeoutMs "$UDP_CLOSED_TIMEOUT_MS" \
+    --ei udpSaturatingTimeoutMs "$UDP_SATURATING_TIMEOUT_MS" \
     --ez expectEcho "$echo" >/dev/null
 }
 
@@ -263,7 +284,9 @@ pull_simpleperf() {
 run_cell() {
   local arm="$1" workers="$2" protocol="$3" flows="$4" payload="$5" burst="$6" load="$7" repeat="$8" observe="$9"
   local mode="vpp-hev-tun-single" worker_count=1 echo=true
+  local source_port_base="$UDP_SOURCE_PORT_BASE"
   [[ "$workers" == 2 ]] && mode="vpp-hev-tun-multi" && worker_count=2
+  [[ "$protocol" == tcp ]] && source_port_base="$TCP_SOURCE_PORT_BASE"
   [[ "$arm" == ingress-only || "$arm" == memcpy-cal ]] && echo=false
   local label="${arm}-w${workers}-${protocol}-f${flows}-p${payload}-b${burst}-${load}-o${observe}-r${repeat}"
   local cell="$RESULT_DIR/$label"
@@ -308,7 +331,7 @@ run_cell() {
   # framework a deterministic settling window before starting the probe.
   sleep "$VPN_READY_SETTLE_SECONDS"
   collect_resource before "$vpp_pid" "$cell/resource-before.raw"
-  printf '{\n  "schema":"s125-poc7/v2",\n  "runnerVersion":"%s",\n  "label":"%s",\n  "arm":"%s",\n  "workers":%d,\n  "protocol":"%s",\n  "flows":%d,\n  "payloadBytes":%d,\n  "burst":%d,\n  "load":"%s",\n  "expectEcho":%s,\n  "observe":"%s",\n  "warmupSeconds":%d,\n  "steadySeconds":%d,\n  "drainSeconds":%d,\n  "reconnectEvery":%d,\n  "repeat":%d,\n  "device":"%s",\n  "deviceModel":"%s",\n  "deviceFingerprint":"%s",\n  "androidRelease":"%s",\n  "apkSha256":"%s",\n  "vppPluginSha256":"%s",\n  "hevLibrarySha256":"%s",\n  "gitRevision":"%s",\n  "simpleperfExpected":%s,\n  "udpClosedTimeoutMs":1000,\n  "udpSaturatingTimeoutMs":200,\n  "fireAndCountPacingNsPerPacket":10000000,\n  "vppPid":"%s"\n}\n' "$RUNNER_VERSION" "$label" "$arm" "$worker_count" "$protocol" "$flows" "$payload" "$burst" "$load" "$echo" "$observe" "$WARMUP_SECONDS" "$STEADY_SECONDS" "$DRAIN_SECONDS" "$RECONNECT_EVERY" "$repeat" "$DEVICE_SERIAL" "$DEVICE_MODEL" "$DEVICE_FINGERPRINT" "$DEVICE_RELEASE" "$APK_SHA256" "$VPP_PLUGIN_SHA256" "$HEV_LIB_SHA256" "$RUNNER_GIT_REV" "$simpleperf_expected" "$vpp_pid" >"$cell/manifest.json"
+  printf '{\n  "schema":"s125-poc7/v2",\n  "runnerVersion":"%s",\n  "label":"%s",\n  "arm":"%s",\n  "workers":%d,\n  "protocol":"%s",\n  "flows":%d,\n  "sourcePortBase":%d,\n  "payloadBytes":%d,\n  "burst":%d,\n  "load":"%s",\n  "expectEcho":%s,\n  "observe":"%s",\n  "warmupSeconds":%d,\n  "steadySeconds":%d,\n  "drainSeconds":%d,\n  "reconnectEvery":%d,\n  "repeat":%d,\n  "device":"%s",\n  "deviceModel":"%s",\n  "deviceFingerprint":"%s",\n  "androidRelease":"%s",\n  "apkSha256":"%s",\n  "vppPluginSha256":"%s",\n  "hevLibrarySha256":"%s",\n  "gitRevision":"%s",\n  "simpleperfExpected":%s,\n  "udpClosedTimeoutMs":%d,\n  "udpSaturatingTimeoutMs":%d,\n  "fireAndCountPacingNsPerPacket":10000000,\n  "vppPid":"%s"\n}\n' "$RUNNER_VERSION" "$label" "$arm" "$worker_count" "$protocol" "$flows" "$source_port_base" "$payload" "$burst" "$load" "$echo" "$observe" "$WARMUP_SECONDS" "$STEADY_SECONDS" "$DRAIN_SECONDS" "$RECONNECT_EVERY" "$repeat" "$DEVICE_SERIAL" "$DEVICE_MODEL" "$DEVICE_FINGERPRINT" "$DEVICE_RELEASE" "$APK_SHA256" "$VPP_PLUGIN_SHA256" "$HEV_LIB_SHA256" "$RUNNER_GIT_REV" "$simpleperf_expected" "$UDP_CLOSED_TIMEOUT_MS" "$UDP_SATURATING_TIMEOUT_MS" "$vpp_pid" >"$cell/manifest.json"
   printf '%s\n' "$VPN_RESTART_SETTLE_SECONDS" >"$cell/vpn-restart-settle-seconds.raw"
   printf '%s\n' "$VPN_READY_SETTLE_SECONDS" >"$cell/vpn-ready-settle-seconds.raw"
   printf '%s\n' "$THERMAL_MAX_MILLIC" >"$cell/thermal-limit.millic"
@@ -479,7 +502,7 @@ if [[ "$TIER" == 0 && "$TCP_COPY_CALIBRATE" == 1 ]]; then
     done
   done
 fi
-printf '{\n  "schema":"s125-poc7-run/v2",\n  "runnerVersion":"%s",\n  "resultDir":"%s",\n  "device":"%s",\n  "deviceModel":"%s",\n  "deviceFingerprint":"%s",\n  "androidRelease":"%s",\n  "apkSha256":"%s",\n  "vppPluginSha256":"%s",\n  "hevLibrarySha256":"%s",\n  "gitRevision":"%s",\n  "tier":%d,\n  "repeats":%d,\n  "cellCount":%d,\n  "tcpHandshakeGate":"%s",\n  "udpClosedTimeoutMs":1000,\n  "udpSaturatingTimeoutMs":200\n}\n' "$RUNNER_VERSION" "$RESULT_DIR" "$DEVICE_SERIAL" "$DEVICE_MODEL" "$DEVICE_FINGERPRINT" "$DEVICE_RELEASE" "$APK_SHA256" "$VPP_PLUGIN_SHA256" "$HEV_LIB_SHA256" "$RUNNER_GIT_REV" "$TIER" "$REPEATS" "$CELL_COUNT" "$TCP_HANDSHAKE_GATE_RESULT" >"$RESULT_DIR/run-manifest.json"
+printf '{\n  "schema":"s125-poc7-run/v2",\n  "runnerVersion":"%s",\n  "resultDir":"%s",\n  "device":"%s",\n  "deviceModel":"%s",\n  "deviceFingerprint":"%s",\n  "androidRelease":"%s",\n  "apkSha256":"%s",\n  "vppPluginSha256":"%s",\n  "hevLibrarySha256":"%s",\n  "gitRevision":"%s",\n  "tier":%d,\n  "repeats":%d,\n  "cellCount":%d,\n  "tcpHandshakeGate":"%s",\n  "udpSourcePortBase":%d,\n  "tcpSourcePortBase":%d,\n  "udpClosedTimeoutMs":%d,\n  "udpSaturatingTimeoutMs":%d\n}\n' "$RUNNER_VERSION" "$RESULT_DIR" "$DEVICE_SERIAL" "$DEVICE_MODEL" "$DEVICE_FINGERPRINT" "$DEVICE_RELEASE" "$APK_SHA256" "$VPP_PLUGIN_SHA256" "$HEV_LIB_SHA256" "$RUNNER_GIT_REV" "$TIER" "$REPEATS" "$CELL_COUNT" "$TCP_HANDSHAKE_GATE_RESULT" "$UDP_SOURCE_PORT_BASE" "$TCP_SOURCE_PORT_BASE" "$UDP_CLOSED_TIMEOUT_MS" "$UDP_SATURATING_TIMEOUT_MS" >"$RESULT_DIR/run-manifest.json"
 mapfile -t RESULT_CELLS < <(find "$RESULT_DIR" -mindepth 1 -maxdepth 1 -type d -print | sort)
 if (( ${#RESULT_CELLS[@]} > 0 )); then
   python3 "$SCRIPT_DIR/s125-parse-results.py" "${RESULT_CELLS[@]}" \

@@ -21,6 +21,12 @@ if [[ ! -x "$stage_dir/bin/vpp" || ! -x "$stage_dir/bin/vppctl" ]]; then
 fi
 
 die() { echo "error: $*" >&2; exit 1; }
+has_dynamic_symbol() {
+  local so="$1"
+  local symbol="$2"
+  nm -D "$so" 2>/dev/null \
+    | awk -v symbol="$symbol" '$NF == symbol { found=1 } END { exit found ? 0 : 1 }'
+}
 # Test-only owner-resolver plugin injection for A2-0.  Keep this input
 # separate from the shared runtime stage: the APK build owns the extracted
 # copy, while the existing VPP_POC_PLUGIN path below remains compatible.
@@ -38,6 +44,11 @@ if [[ -n "${VPP_POC_PLUGIN:-}" ]]; then
   # artifact's hash in the manifest separately; never let a temporary stage
   # filename silently leave the old canonical plugin in the APK.
   cp "$VPP_POC_PLUGIN" "$stage_dir/plugins/hev_external_driver_poc_plugin.so"
+  # The Android package also carries the linker-prefixed spelling.  Keep it
+  # source-identical here: a stale lib-prefixed stage artifact would otherwise
+  # be visited later by the packaging loop and overwrite the freshly injected
+  # plugin in lib/arm64-v8a.
+  cp "$VPP_POC_PLUGIN" "$stage_dir/plugins/libhev_external_driver_poc_plugin.so"
 fi
 
 for file in "$android_jar" "$aapt2" "$d8_jar" "$apksigner_jar" "$stage_dir/bin/vpp" "$stage_dir/bin/vppctl"; do
@@ -73,9 +84,42 @@ for so in "$stage_dir"/lib/*.so "$stage_dir"/plugins/*.so; do
     chmod 755 "$jni_dir/lib$so_name"
   fi
 done
+if [[ -n "${VPP_POC_PLUGIN:-}" ]]; then
+  expected_poc_plugin_sha256="$(sha256sum "$VPP_POC_PLUGIN" | awk '{print $1}')"
+  for packaged_plugin in \
+    "$jni_dir/hev_external_driver_poc_plugin.so" \
+    "$jni_dir/libhev_external_driver_poc_plugin.so"; do
+    [[ -f "$packaged_plugin" ]] \
+      || die "missing injected OI3 plugin spelling: $packaged_plugin"
+    packaged_plugin_sha256="$(sha256sum "$packaged_plugin" | awk '{print $1}')"
+    [[ "$packaged_plugin_sha256" == "$expected_poc_plugin_sha256" ]] \
+      || die "injected OI3 plugin provenance mismatch: $packaged_plugin"
+  done
+fi
 if [[ -f "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" ]]; then
   cp "$hev_stage_dir/lib/arm64-v8a/libhev-socks5-tunnel.so" "$jni_dir/libhev-socks5-tunnel.so"
   chmod 755 "$jni_dir/libhev-socks5-tunnel.so"
+fi
+if [[ -f "$jni_dir/libhev_external_driver_poc_plugin.so" \
+      || -f "$jni_dir/hev_external_driver_poc_plugin.so" ]]; then
+  [[ -f "$jni_dir/libhev-socks5-tunnel.so" ]] \
+    || die "OI3 plugin requires HEV owner-context library; set HEV_STAGE_DIR to android-hev-poc7-stage"
+  command -v nm >/dev/null || die "missing nm"
+  required_oi3_hev_symbols=(
+    hev_socks5_owner_config_default
+    flow_stack_owner_create_with_config
+    flow_stack_owner_configure_sessions
+    flow_stack_owner_start
+    flow_stack_owner_submit
+    flow_stack_owner_stop
+    flow_stack_owner_destroy
+    flow_stack_owner_identity
+    flow_stack_owner_runtime_identity
+  )
+  for symbol in "${required_oi3_hev_symbols[@]}"; do
+    has_dynamic_symbol "$jni_dir/libhev-socks5-tunnel.so" "$symbol" \
+      || die "OI3 plugin requires HEV owner-context symbol: $symbol"
+  done
 fi
 if [[ -n "$tun_poc_plugin" ]]; then
   # Android's extraction/linker spelling is the required runtime artifact.

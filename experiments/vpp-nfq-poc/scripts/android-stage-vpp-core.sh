@@ -126,11 +126,35 @@ for artifact in "$STAGE_DIR/bin/vpp" "$STAGE_DIR/bin/vppctl"; do
   fi
 done
 
+conditional_wake_pattern='wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE|0003-vlib-frame-queue-wakeup-epoch-state'
+rg_conditional_wake=(rg -n --hidden --glob '!*.o' --glob '!*.so')
 source_status="absent"
-if rg -n --hidden --glob '!*.o' --glob '!*.so' \
-    'wakeup_epoch|vlib_frame_queue_wakeup_mode|VLIB_WAKE_PHASE|0003-vlib-frame-queue-wakeup-epoch-state' \
-    "$VPP_DIR" >/dev/null 2>&1; then
-  source_status="present"
+if [ "${#plugins[@]}" -gt 0 ] && [ -d "$VPP_DIR/src/plugins" ]; then
+  # VPP_PLUGINS defines the staged runtime plugin closure.  Historical
+  # experiments may leave rejected P6 symbols in unrelated plugin source; those
+  # sources are not copied into this stage and must not block an OI3-only APK.
+  if "${rg_conditional_wake[@]}" --glob '!**/plugins/**' \
+      "$conditional_wake_pattern" "$VPP_DIR/src" >/dev/null 2>&1; then
+    source_status="present"
+  else
+    for plugin in "${plugins[@]}"; do
+      plugin_dir_name="${plugin%.so}"
+      plugin_dir_name="${plugin_dir_name#lib}"
+      plugin_dir_name="${plugin_dir_name%_plugin}"
+      plugin_dir="$VPP_DIR/src/plugins/$plugin_dir_name"
+      if [ -d "$plugin_dir" ] &&
+          "${rg_conditional_wake[@]}" "$conditional_wake_pattern" \
+            "$plugin_dir" >/dev/null 2>&1; then
+        source_status="present"
+        break
+      fi
+    done
+  fi
+else
+  if "${rg_conditional_wake[@]}" "$conditional_wake_pattern" \
+      "$VPP_DIR" >/dev/null 2>&1; then
+    source_status="present"
+  fi
 fi
 [ "$source_status" = "absent" ] || {
   echo "Rejected P6 conditional-wake source is present in $VPP_DIR" >&2

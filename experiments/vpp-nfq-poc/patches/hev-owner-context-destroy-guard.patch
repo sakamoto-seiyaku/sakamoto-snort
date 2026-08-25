@@ -1,0 +1,17 @@
+diff --git a/src/hev-flow-stack-owner-context.c b/src/hev-flow-stack-owner-context.c
+--- a/src/hev-flow-stack-owner-context.c
++++ b/src/hev-flow-stack-owner-context.c
+@@ -676,8 +676,12 @@ flow_stack_owner_destroy(FlowStackOwnerContext *context)
+ {
+   if (!context)
+     return;
+-  (void)flow_stack_owner_stop(context);
++  /* A caller must never free the lwIP/HEV backing context while an external
++   * owner task is still live.  OI3 propagates NOT_READY and retries; this
++   * guard protects older callers from turning that status into a UAF. */
++  if (flow_stack_owner_stop(context) != FLOW_STACK_OWNER_OK)
++    return;
+   hev_socks5_tunnel_owner_free(context->hev_runtime);
+   lwip_owner_context_destroy(context->lwip);
+   free(context);
+ }

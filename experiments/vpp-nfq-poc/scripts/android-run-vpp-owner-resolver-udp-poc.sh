@@ -9,7 +9,12 @@ REPO_ROOT="$(cd "$POC_DIR/../.." && pwd)"
 PACKAGE="${PACKAGE:-com.sakamoto.snort.vpnlite}"
 HOST="${HOST:-8.8.8.8}"
 PORT="${PORT:-53}"
-UDP_COUNT="${UDP_COUNT:-1}"
+# Android's owner resolver is asynchronous: the first packet legitimately
+# records uid=-1 while the resolver completion is pending.  Keep the default
+# probe on the same connected DatagramSocket and send a second packet so the
+# registered UID cell observes the completion instead of treating a valid
+# miss as a failure.  Callers may still set UDP_COUNT=1 for the raw miss cell.
+UDP_COUNT="${UDP_COUNT:-2}"
 BLOCK_OWNER_UID="${BLOCK_OWNER_UID:-package}"
 REDIRECT_THREAD="${REDIRECT_THREAD:-}"
 OWNER_CACHE="${OWNER_CACHE:-0}"
@@ -17,7 +22,10 @@ ENABLE_IPV6="${ENABLE_IPV6:-0}"
 EXPECT_DROP="${EXPECT_DROP:-1}"
 EXPECT_MIN_UID_BLOCK_PACKETS="${EXPECT_MIN_UID_BLOCK_PACKETS:-1}"
 START_WAIT="${START_WAIT:-6}"
-PROBE_WAIT="${PROBE_WAIT:-5}"
+# A dropped UDP packet waits up to five seconds for its echo response.  The
+# corrected two-packet UID cell therefore needs a window longer than 10s so
+# the app can finish and persist its probe log before validation.
+PROBE_WAIT="${PROBE_WAIT:-12}"
 STOP_WAIT="${STOP_WAIT:-2}"
 BUILD_APK="${BUILD_APK:-1}"
 INSTALL_APK="${INSTALL_APK:-1}"

@@ -1,0 +1,136 @@
+diff --git a/src/include/lwip/owner_context.h b/src/include/lwip/owner_context.h
+--- a/src/include/lwip/owner_context.h
++++ b/src/include/lwip/owner_context.h
+@@ -182,6 +182,7 @@ struct tcp_pcb *tcp_listen_with_backlog_and_err_ctx(
+     err_t *err);
+ err_t tcp_close_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb);
+ void tcp_abort_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb);
++err_t tcp_send_reset_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb);
+ err_t tcp_write_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb,
+                     const void *arg, uint16_t len, uint8_t apiflags);
+ err_t tcp_output_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb);
+diff --git a/third-part/lwip/src/core/tcp_in.c b/third-part/lwip/src/core/tcp_in.c
+--- a/third-part/lwip/src/core/tcp_in.c
++++ b/third-part/lwip/src/core/tcp_in.c
+@@ -283,6 +283,53 @@ tcp_send_empty_ack_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb)
+   return err;
+ }
+ 
++/* Emit one owner-local wire-visible reset without changing PCB ownership.
++ * The caller remains responsible for the later silent purge.  Keeping send
++ * and destruction separate prevents normal stop/timeout teardown from
++ * acquiring reset semantics. */
++err_t
++tcp_send_reset_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb)
++{
++  struct netif *netif;
++  struct pbuf *p;
++  struct tcp_hdr *tcphdr;
++  err_t err;
++
++  if (!context || !pcb)
++    return ERR_ARG;
++  if (pcb->state == CLOSED || pcb->state == LISTEN)
++    return ERR_CONN;
++  netif = lwip_owner_context_netif(context);
++  if (!netif)
++    return ERR_RTE;
++  p = lwip_owner_context_pbuf_alloc_ram(context, TCP_HLEN);
++  if (!p)
++    return ERR_BUF;
++  tcphdr = (struct tcp_hdr *)p->payload;
++  tcphdr->src = lwip_htons(pcb->local_port);
++  tcphdr->dest = lwip_htons(pcb->remote_port);
++  tcphdr->seqno = lwip_htonl(pcb->snd_nxt);
++  tcphdr->ackno = lwip_htonl(pcb->rcv_nxt);
++  TCPH_HDRLEN_FLAGS_SET(tcphdr, 5, TCP_RST | TCP_ACK);
++  tcphdr->wnd = 0;
++  tcphdr->chksum = 0;
++  tcphdr->urgp = 0;
++#if CHECKSUM_GEN_TCP
++  tcphdr->chksum = ip_chksum_pseudo(
++      p, IP_PROTO_TCP, p->tot_len, &pcb->local_ip, &pcb->remote_ip);
++#endif
++  if (IP_IS_V6_VAL(pcb->local_ip))
++    err = ip6_output_if_src(p, ip_2_ip6(&pcb->local_ip),
++                            ip_2_ip6(&pcb->remote_ip), pcb->ttl,
++                            pcb->tos, IP_PROTO_TCP, netif);
++  else
++    err = ip4_output_if_src(p, ip_2_ip4(&pcb->local_ip),
++                            ip_2_ip4(&pcb->remote_ip), pcb->ttl,
++                            pcb->tos, IP_PROTO_TCP, netif);
++  lwip_owner_context_pbuf_free(context, p);
++  return err;
++}
++
+ err_t
+ tcp_output_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb)
+ {
+diff --git a/src/hev-socks5-session-tcp.h b/src/hev-socks5-session-tcp.h
+--- a/src/hev-socks5-session-tcp.h
++++ b/src/hev-socks5-session-tcp.h
+@@ -31,6 +31,8 @@ struct _HevSocks5SessionTCP
+     struct tcp_pcb *pcb;
+     HevTaskMutex *mutex;
+     HevRingBuffer *buffer;
++    int pcb_reset_attempted;
++    int pcb_reset_sent;
+     int pcb_eof;
+ };
+ 
+diff --git a/src/hev-socks5-session-tcp.c b/src/hev-socks5-session-tcp.c
+--- a/src/hev-socks5-session-tcp.c
++++ b/src/hev-socks5-session-tcp.c
+@@ -57,8 +57,23 @@ tcp_transport_event (HevSocks5SessionTCP *self, unsigned int event,
+     if (connector && connector->transport_event)
+         connector->transport_event (connector->data, self->data.owner,
+                                     self->pcb, event, error);
+ }
+ 
++static void
++tcp_propagate_reset (HevSocks5SessionTCP *self)
++{
++    if (!self->data.lwip || self->pcb_reset_attempted)
++        return;
++    hev_task_mutex_lock (self->mutex);
++    if (!self->pcb_reset_attempted) {
++        self->pcb_reset_attempted = 1;
++        if (self->pcb &&
++            tcp_send_reset_ctx (self->data.lwip, self->pcb) == ERR_OK)
++            self->pcb_reset_sent = 1;
++    }
++    hev_task_mutex_unlock (self->mutex);
++}
++
+ static int
+ tcp_queue_consume (HevSocks5SessionTCP *self, size_t length)
+ {
+@@ -111,5 +126,8 @@ tcp_splice_f (HevSocks5SessionTCP *self)
+-                if (s < 0)
++                if (s < 0) {
++                    if (socket_error == ECONNRESET && self->data.lwip)
++                        tcp_propagate_reset (self);
+                     tcp_transport_event (
+                         self, HEV_SOCKS5_TCP_TRANSPORT_WRITE_ERROR,
+                         socket_error);
++                }
+                 res = -1;
+@@ -164,5 +182,8 @@ tcp_splice_b (HevSocks5SessionTCP *self)
+-                if (s < 0)
++                if (s < 0) {
++                    if (socket_error == ECONNRESET && self->data.lwip)
++                        tcp_propagate_reset (self);
+                     tcp_transport_event (
+                         self, HEV_SOCKS5_TCP_TRANSPORT_READ_ERROR,
+                         socket_error);
++                }
+                 else
+@@ -215,7 +236,7 @@ tcp_splice_b (HevSocks5SessionTCP *self)
+                         }
+                 }
+             }
+-        } else if (res < 0) {
++        } else if (res < 0 && !self->pcb_reset_attempted) {
+             tcp_shutdown (self->pcb, 0, 1);
+         }
+     }

@@ -26,6 +26,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@
 
 #define OI3_MAX_PACKET 2048U
 #define OI3_TUN_KIND 2U
+#define OI3_TUN_DEFERRED_KIND 4U
 #define OI3_MAX_TUN_PACKET 4096U
 #define OI3_PAYLOAD "oi3-direct-echo"
 #define OI3_TCP_LISTEN 49155U
@@ -46,8 +48,18 @@
 #define OI3_SENTINEL 64U
 #define OI3_MAX_DRIVE 4096U
 #define OI3_WALL_BUDGET_NS 5000000ULL
+#define OI3_TUN_FLOW_TIMEOUT_NS 5000000000ULL
+#define OI3_CONNECTOR_POLL_SLICE_MS 50
+#define OI3_TUN_PENDING_CAPACITY 16U
+#define OI3_MULTI_OWNER_CAPACITY 4U
+#define OI3_MULTI_FLOW_ROUTE_CAPACITY 16U
+#define OI3_UNDERLAY_KIND 3U
 #define OI3_HEV_CREDIT_COUNT 4U
 #define OI3_HEV_EVENT_COUNT 9U
+#define OI3_OWNER_STOP_READY 0
+#define OI3_OWNER_STOP_PENDING (-2)
+#define OI3_OWNER_STOP_MAX_QUANTA 1024U
+#define OI3_OWNER_STOP_RETRY_ROUNDS 8U
 
 typedef struct FlowStackOwnerContext FlowStackOwnerContext;
 typedef struct tcp_pcb tcp_pcb_t;
@@ -112,7 +124,15 @@ typedef struct {
   int (*input)(void *, HevOwnerRuntime *, tcp_pcb_t *, const void *, size_t);
   int (*output)(void *, HevOwnerRuntime *, tcp_pcb_t *, const void *, size_t);
   void (*sent)(void *, HevOwnerRuntime *, tcp_pcb_t *, size_t);
+  void (*transport_event)(void *, HevOwnerRuntime *, tcp_pcb_t *,
+                          unsigned int, int);
 } oi3_tcp_connector_t;
+
+enum {
+  OI3_TCP_TRANSPORT_READ_ERROR = 1,
+  OI3_TCP_TRANSPORT_WRITE_ERROR = 2,
+  OI3_TCP_TRANSPORT_PEER_EOF = 3,
+};
 
 typedef struct {
   void *data;
@@ -136,6 +156,25 @@ typedef struct {
 } oi3_task_result_t;
 
 typedef struct {
+  uint64_t generation;
+  uint32_t cause;
+  uint32_t reserved;
+} oi3_connector_wake_t;
+
+typedef struct {
+  u64 flow_hash;
+  u32 length;
+  u8 packet[OI3_MAX_TUN_PACKET];
+} oi3_tun_pending_entry_t;
+
+typedef struct {
+  u64 flow_hash;
+  u32 owner;
+  u32 protocol;
+  u32 active;
+} oi3_multi_flow_route_t;
+
+typedef struct {
   void *handle;
   void (*owner_config_default)(oi3_owner_config_t *);
   FlowStackOwnerContext *(*create)(const oi3_callbacks_t *,
@@ -148,11 +187,65 @@ typedef struct {
   int (*task_init)(void);
   void (*task_fini)(void);
   int (*task_step)(const oi3_task_budget_t *, oi3_task_result_t *);
+  void (*identity)(const FlowStackOwnerContext *, void *identity);
   void (*runtime_identity)(const FlowStackOwnerContext *, void *identity);
+  void (*lwip_tcp_tmr)(void *context);
   HevTask *(*task_self)(void);
   int (*task_add_fd)(HevTask *, int, unsigned int);
   int (*task_mod_fd)(HevTask *, int, unsigned int);
 } oi3_hev_api_t;
+
+/* dlsym-only copy of lwip_owner_identity_t.  flow_stack_owner_identity()
+ * writes the complete structure, so keep the layout in lockstep with the
+ * pinned HEV owner-context header even though OI3 only consumes context. */
+typedef struct {
+  uintptr_t context;
+  uintptr_t ip_data;
+  uintptr_t netif_list;
+  uintptr_t netif_default;
+  uintptr_t tcp_bound_pcbs;
+  uintptr_t tcp_listen_pcbs;
+  uintptr_t tcp_active_pcbs;
+  uintptr_t tcp_tw_pcbs;
+  uintptr_t tcp_pcb_lists;
+  uintptr_t udp_pcbs;
+  uintptr_t udp_port;
+  uintptr_t tcp_ticks;
+  uintptr_t input_scratch;
+  uintptr_t memp_storage;
+  size_t memp_storage_size;
+  uintptr_t tcp_active_pcb;
+  uintptr_t tcp_listen_pcb;
+  uint16_t tcp_active_local_port;
+  uint16_t tcp_listen_local_port;
+  uint32_t tcp_ticks_value;
+  uint16_t input_scratch_length;
+  uintptr_t tcp_pcb_pool_storage;
+  uintptr_t tcp_pcb_listen_pool_storage;
+  uintptr_t tcp_seg_pool_storage;
+  uintptr_t pbuf_pool_storage;
+  uintptr_t pbuf_payload_pool_storage;
+  uintptr_t udp_pcb_pool_storage;
+  size_t tcp_pcb_pool_free;
+  size_t tcp_pcb_pool_used;
+  size_t tcp_pcb_listen_pool_free;
+  size_t tcp_pcb_listen_pool_used;
+  size_t tcp_seg_pool_free;
+  size_t tcp_seg_pool_used;
+  size_t pbuf_pool_free;
+  size_t pbuf_pool_used;
+  size_t pbuf_payload_pool_free;
+  size_t pbuf_payload_pool_used;
+  size_t udp_pcb_pool_free;
+  size_t udp_pcb_pool_used;
+  uint8_t tcp_active_state;
+  uint16_t tcp_active_remote_port;
+  uintptr_t tcp_active_callback_arg;
+  uintptr_t udp_pcb;
+  uint16_t udp_local_port;
+  uint16_t udp_port_value;
+  size_t udp_header_fallbacks;
+} oi3_lwip_identity_t;
 
 /* dlsym-only copy of flow_stack_owner_runtime_identity_t. */
 typedef struct {
@@ -221,10 +314,12 @@ typedef struct {
 } oi3_socket_record_t;
 
 typedef struct oi3_main oi3_main_t;
+typedef struct oi3_multi_main oi3_multi_main_t;
 
 struct oi3_main {
   oi3_hev_api_t api;
   FlowStackOwnerContext *context;
+  void *lwip_context;
   oi3_tcp_connector_t tcp_connector;
   oi3_udp_connector_t udp_connector;
   oi3_session_config_t session_config;
@@ -233,23 +328,35 @@ struct oi3_main {
   oi3_phase_t phase;
   u32 target_thread;
   u32 frame_queue;
+  u32 owner_id;
+  u32 multi_mode;
   u32 pending;
   u32 active;
   u32 finished;
   u32 worker_token_pending;
   u32 finish_requested;
+  /* An explicit normal stop is a lifecycle result, not a missing reply.
+   * Keep this separate from finish_requested because natural completion,
+   * transport failure, fault injection, and underlay invalidation all use
+   * the same drain bit for different terminal contracts. */
+  u32 normal_stop_requested;
   u32 fault_injected;
   u32 worker_steps;
   u32 protocol;
   u32 family;
   u32 policy_dropped;
+  /* packet_submitted is cumulative for the owner context; UDP needs a
+   * separate per-datagram latch so a completed echo can admit the next queued
+   * datagram without tearing down and re-arming the whole owner generation. */
   u32 packet_submitted;
+  u32 udp_datagram_inflight;
   u32 tcp_ack_submitted;
   u32 tcp_payload_submitted;
   u32 tcp_fin_submitted;
   u32 output_packets;
   u32 output_handshake;
   u32 output_direct;
+  u32 direct_send_events;
   u32 provenance_logged;
   u32 tcp_handshake_seen;
   u32 return_rewritten;
@@ -262,11 +369,21 @@ struct oi3_main {
   u32 broker_stale;
   u32 transport_failures;
   u32 infrastructure_failures;
+  u32 underlay_available;
+  u32 underlay_invalidated;
   u32 vpp_buffers_allocated;
   u32 vpp_buffers_freed;
   u32 vpp_buffer_residue;
   u64 generation;
   u64 underlay_epoch;
+  int64_t underlay_handle;
+  _Atomic uint64_t source_underlay_epoch;
+  _Atomic int64_t source_underlay_handle;
+  _Atomic uint32_t source_underlay_available;
+  _Atomic uint64_t pending_underlay_epoch;
+  _Atomic int64_t pending_underlay_handle;
+  _Atomic uint32_t pending_underlay_available;
+  _Atomic uint32_t pending_underlay_update;
   u64 token;
   unsigned long owner_pthread;
   unsigned long connector_pthread;
@@ -291,25 +408,48 @@ struct oi3_main {
   int broker_result;
   int no_reply;
   int tun_mode;
+  /* A TUN command is a VPN-session lifetime.  Each packet gets its own
+   * FlowStackOwner generation, while the TUN fd/watcher remain armed between
+   * successful positive flows. */
+  u32 tun_flow_count;
   int controlled_tun;
   int controlled_refused;
   int controlled_policy_drop;
   int controlled_no_reply;
   int tun_fd;
   int tun_file_index;
-  u32 tun_pending_length;
+  u32 tun_pending_head;
+  u32 tun_pending_count;
+  u32 tun_pending_sequence;
+  oi3_tun_pending_entry_t tun_pending[OI3_TUN_PENDING_CAPACITY];
+  u32 multi_deferred_head;
+  u32 multi_deferred_count;
+  u32 multi_deferred_sequence;
+  oi3_tun_pending_entry_t multi_deferred[OI3_TUN_PENDING_CAPACITY];
   u32 tun_ingress_packets;
   u32 tun_output_packets;
   u32 tun_output_errors;
+  u32 tun_submit_rejects;
+  u32 tun_queue_rejects;
+  u32 overload_expected;
+  u32 expected_transport_timeout;
+  u32 expected_real_no_reply;
+  u32 expected_real_reset;
+  u32 expected_real_policy_drop;
   u8 tun_tcp_flags;
-  u8 tun_pending_packet[OI3_MAX_TUN_PACKET];
   u8 tun_rx[OI3_MAX_TUN_PACKET];
   int connector_last_error;
   int connector_error_reported;
+  u32 connector_reset_observed;
+  u32 connector_downstream_reset_observed;
+  u32 connector_peer_eof_observed;
   int target_port;
   int endpoint_port;
+  int source_port;
   struct sockaddr_storage target_address;
   socklen_t target_address_length;
+  struct sockaddr_storage source_address;
+  socklen_t source_address_length;
   struct sockaddr_storage underlay_address;
   socklen_t underlay_address_length;
   u8 last_output[OI3_MAX_PACKET];
@@ -329,12 +469,78 @@ struct oi3_main {
   char a2_return_canonical_key[256];
   u64 start_ns;
   u64 finish_ns;
+  u64 tun_flow_deadline_ns;
+  int connector_wake_pipe[2];
+  int connector_wake_file_index;
+  pthread_t connector_poll_thread;
+  int connector_poll_started;
+  _Atomic int connector_poll_stop;
+  _Atomic int connector_poll_done;
+  _Atomic int connector_wake_pending;
+  _Atomic int connector_connect_pending;
+  /* Dispatcher-owned admission state.  The VPP main thread may inspect and
+   * reserve these atomics, while the selected owner thread remains the sole
+   * writer of its HEV context, packet queue, and lifecycle fields. */
+  _Atomic uint32_t multi_admission_open;
+  _Atomic uint32_t multi_dispatch_depth;
+  _Atomic uint64_t active_flow_hash;
+  _Atomic uint32_t active_flow_valid;
+  /* A successful TCP generation may leave FIN/ACK tail packets in the TUN
+   * queue after its re-arm.  They are not a new application flow.  Keep the
+   * completed tuple tombstone owner-local until the next outbound SYN. */
+  _Atomic uint32_t multi_tcp_wait_syn;
+  _Atomic uint64_t multi_tcp_tombstone_hash;
+  _Atomic uint32_t multi_tcp_tombstone_valid;
+  _Atomic uint32_t multi_admission_rejects;
   char error[256];
 };
 
 static oi3_main_t oi3_main;
+static pthread_mutex_t oi3_task_init_lock = PTHREAD_MUTEX_INITIALIZER;
+struct oi3_multi_main {
+  u32 active;
+  u32 owner_count;
+  int tun_fd;
+  int tun_file_index;
+  int completion_file_index;
+  int completion_watch_fd;
+  int request_fd;
+  int completion_fd;
+  u32 route_count[OI3_MULTI_OWNER_CAPACITY];
+  u32 route_rejects[OI3_MULTI_OWNER_CAPACITY];
+  u32 route_deferred[OI3_MULTI_OWNER_CAPACITY];
+  u32 route_reassigned[OI3_MULTI_OWNER_CAPACITY];
+  u32 wrong_owner_events;
+  u32 policy_drop_ip4_set;
+  u32 policy_drop_ip4;
+  u32 policy_drop_packets;
+  u64 hash_seed;
+  oi3_multi_flow_route_t flow_routes[OI3_MULTI_FLOW_ROUTE_CAPACITY];
+  oi3_main_t owners[OI3_MULTI_OWNER_CAPACITY];
+};
+static oi3_multi_main_t oi3_multi;
+static __thread oi3_main_t *oi3_current_tm;
 extern vlib_node_registration_t oi3_trigger_node;
 extern vlib_node_registration_t oi3_worker_node;
+
+static int oi3_connector_poll_arm (oi3_main_t *tm);
+static void oi3_connector_poll_join (oi3_main_t *tm);
+static void oi3_connector_poll_stop (oi3_main_t *tm);
+static int oi3_ensure_connector_wake_file (oi3_main_t *tm);
+static void oi3_rearm_tun_flow (vlib_main_t *vm, oi3_main_t *tm);
+static void oi3_multi_maybe_teardown (void);
+static int oi3_task_init (oi3_main_t *tm);
+static void oi3_task_fini (oi3_main_t *tm);
+static int oi3_multi_flow_hash (const u8 *packet, size_t length,
+                                uint64_t *hash_out);
+static int oi3_multi_packet_protocol (const u8 *packet, size_t length,
+                                      u32 *protocol_out);
+static int oi3_multi_flow_route_lookup (uint64_t hash, u32 *owner_out);
+static int oi3_multi_flow_route_insert (uint64_t hash, u32 owner,
+                                        u32 protocol);
+static void oi3_multi_flow_route_remove (uint64_t hash);
+static bool oi3_multi_tcp_packet (const u8 *packet, size_t length);
+static bool oi3_multi_tcp_syn_packet (const u8 *packet, size_t length);
 
 static const char *
 oi3_cell_name (oi3_cell_t cell)
@@ -369,6 +575,137 @@ oi3_now_ns (void)
   struct timespec ts;
   clock_gettime (CLOCK_MONOTONIC, &ts);
   return (uint64_t) ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+static void
+oi3_refresh_tun_flow_deadline (oi3_main_t *tm)
+{
+  if (!tm || !tm->tun_mode || !tm->multi_mode)
+    return;
+  tm->tun_flow_deadline_ns = oi3_now_ns () + OI3_TUN_FLOW_TIMEOUT_NS;
+}
+
+/* The HEV external-driver contract deliberately polls with timeout zero.
+ * Keep that contract intact, but use a tiny observer thread to publish
+ * readiness of the same protected connector fd back to VPP.  The observer
+ * never reads the fd and never enters HEV/lwIP; it only writes an opaque
+ * wake token to the VPP-owned pipe. */
+static void *
+oi3_connector_poll_main (void *data)
+{
+  oi3_main_t *tm = data;
+
+  while (!atomic_load_explicit (&tm->connector_poll_stop,
+                                memory_order_acquire)) {
+    int fd = tm->connector_fd;
+    struct pollfd p;
+    int timeout = OI3_CONNECTOR_POLL_SLICE_MS;
+    uint64_t deadline = tm->tun_flow_deadline_ns;
+
+    if (fd < 0)
+      break;
+    memset (&p, 0, sizeof (p));
+    p.fd = fd;
+    p.events = POLLIN | POLLERR | POLLHUP | POLLNVAL;
+    if (atomic_load_explicit (&tm->connector_connect_pending,
+                              memory_order_acquire))
+      p.events |= POLLOUT;
+    if (deadline) {
+      uint64_t now = oi3_now_ns ();
+      if (now >= deadline) {
+        timeout = 0;
+      } else {
+        uint64_t remaining_ms = (deadline - now + 999999ULL) / 1000000ULL;
+        if (remaining_ms < (uint64_t) timeout)
+          timeout = (int) remaining_ms;
+      }
+    }
+    int result;
+    do {
+      result = poll (&p, 1, timeout);
+    } while (result < 0 && errno == EINTR &&
+             !atomic_load_explicit (&tm->connector_poll_stop,
+                                    memory_order_acquire));
+    if (atomic_load_explicit (&tm->connector_poll_stop, memory_order_acquire))
+      break;
+    if (result < 0)
+      break;
+    if (result == 0 && deadline && oi3_now_ns () >= deadline) {
+      oi3_connector_wake_t token = {
+        .generation = tm->generation,
+        .cause = 2,
+        .reserved = 0,
+      };
+      int expected = 0;
+      atomic_store_explicit (&tm->connector_poll_done, 1, memory_order_release);
+      if (atomic_compare_exchange_strong (&tm->connector_wake_pending,
+                                          &expected, 1))
+        (void) write (tm->connector_wake_pipe[1], &token, sizeof (token));
+      break;
+    }
+    if (result > 0 && p.revents != 0) {
+      oi3_connector_wake_t token = {
+        .generation = tm->generation,
+        .cause = 1,
+        .reserved = 0,
+      };
+      int expected = 0;
+      atomic_store_explicit (&tm->connector_poll_done, 1, memory_order_release);
+      if (atomic_compare_exchange_strong (&tm->connector_wake_pending,
+                                          &expected, 1))
+        (void) write (tm->connector_wake_pipe[1], &token, sizeof (token));
+      break;
+    }
+  }
+  atomic_store_explicit (&tm->connector_poll_done, 1, memory_order_release);
+  return NULL;
+}
+
+static int
+oi3_connector_poll_arm (oi3_main_t *tm)
+{
+  if (!tm || tm->connector_fd < 0 || tm->connector_wake_pipe[1] < 0 ||
+      tm->finish_requested)
+    return 0;
+  if (tm->connector_poll_started) {
+    if (!atomic_load_explicit (&tm->connector_poll_done, memory_order_acquire))
+      return 0;
+    oi3_connector_poll_join (tm);
+  }
+  atomic_store_explicit (&tm->connector_poll_stop, 0, memory_order_release);
+  atomic_store_explicit (&tm->connector_poll_done, 0, memory_order_release);
+  if (pthread_create (&tm->connector_poll_thread, NULL,
+                      oi3_connector_poll_main, tm) != 0)
+    return -1;
+  tm->connector_poll_started = 1;
+  return 0;
+}
+
+static void
+oi3_connector_poll_join (oi3_main_t *tm)
+{
+  if (!tm || !tm->connector_poll_started)
+    return;
+  /* Worker re-entry must never wait for a live observer: an Android TCP
+   * flow can deliver another TUN token while the same observer is waiting
+   * for the protected FD.  Only join an observer that has published its
+   * terminal state; the stop path below is the sole bounded blocking join. */
+  if (!atomic_load_explicit (&tm->connector_poll_done, memory_order_acquire))
+    return;
+  (void) pthread_join (tm->connector_poll_thread, NULL);
+  tm->connector_poll_started = 0;
+}
+
+static void
+oi3_connector_poll_stop (oi3_main_t *tm)
+{
+  if (!tm)
+    return;
+  atomic_store_explicit (&tm->connector_poll_stop, 1, memory_order_release);
+  if (tm->connector_poll_started) {
+    (void) pthread_join (tm->connector_poll_thread, NULL);
+    tm->connector_poll_started = 0;
+  }
 }
 
 static void
@@ -481,8 +818,12 @@ oi3_a2_return_capture_ingress (oi3_main_t *tm, const u8 *packet, size_t length)
 static void
 oi3_error (const char *message)
 {
-  snprintf (oi3_main.error, sizeof (oi3_main.error), "%s", message);
-  oi3_main.phase = OI3_FAULT;
+  oi3_main_t *tm = oi3_current_tm ? oi3_current_tm : &oi3_main;
+  snprintf (tm->error, sizeof (tm->error), "%s", message);
+  tm->phase = OI3_FAULT;
+  tm->finish_requested = 1;
+  fprintf (stderr, "oi3_error owner=%u target-thread=%u message=%s\n",
+           tm->owner_id, tm->target_thread, message);
 }
 
 static int
@@ -500,9 +841,8 @@ oi3_load_symbol (void *handle, const char *name, void *destination)
 }
 
 static int
-oi3_load_hev (const char *path)
+oi3_load_hev_for (oi3_main_t *tm, const char *path)
 {
-  oi3_main_t *tm = &oi3_main;
   void *handle;
   if (tm->api.handle)
     return 0;
@@ -533,7 +873,9 @@ oi3_load_hev (const char *path)
   OI3_LOAD (task_init, "hev_task_system_init");
   OI3_LOAD (task_fini, "hev_task_system_fini");
   OI3_LOAD (task_step, "hev_task_system_driver_step");
+  OI3_LOAD (identity, "flow_stack_owner_identity");
   OI3_LOAD (runtime_identity, "flow_stack_owner_runtime_identity");
+  OI3_LOAD (lwip_tcp_tmr, "lwip_owner_context_tcp_tmr");
   OI3_LOAD (task_self, "hev_task_self");
   OI3_LOAD (task_add_fd, "hev_task_add_fd");
   OI3_LOAD (task_mod_fd, "hev_task_mod_fd");
@@ -545,6 +887,12 @@ failed:
   dlclose (handle);
   memset (&tm->api, 0, sizeof (tm->api));
   return -1;
+}
+
+static int
+oi3_load_hev (const char *path)
+{
+  return oi3_load_hev_for (&oi3_main, path);
 }
 
 static uint16_t
@@ -683,6 +1031,12 @@ oi3_parse_tun_packet (oi3_main_t *tm, const u8 *packet, size_t length)
         (packet[9] != 6 && packet[9] != 17)) return -1;
     size_t l4_header = packet[9] == 6 ? 20U : 8U;
     if (length < ihl + l4_header) return -1;
+    struct sockaddr_in *s = (struct sockaddr_in *)&tm->source_address;
+    s->sin_family = AF_INET;
+    memcpy (&s->sin_addr, packet + 12, sizeof (s->sin_addr));
+    s->sin_port = htons ((uint16_t)(((uint16_t)packet[ihl] << 8) |
+                                     packet[ihl + 1]));
+    tm->source_address_length = sizeof (*s);
     struct sockaddr_in *a = (struct sockaddr_in *)&tm->target_address;
     a->sin_family = AF_INET;
     memcpy (&a->sin_addr, packet + 16, sizeof (a->sin_addr));
@@ -695,6 +1049,12 @@ oi3_parse_tun_packet (oi3_main_t *tm, const u8 *packet, size_t length)
              (packet[6] == 6 || packet[6] == 17)) {
     size_t l4_header = packet[6] == 6 ? 20U : 8U;
     if (length < 40U + l4_header) return -1;
+    struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&tm->source_address;
+    s6->sin6_family = AF_INET6;
+    memcpy (&s6->sin6_addr, packet + 8, sizeof (s6->sin6_addr));
+    s6->sin6_port = htons ((uint16_t)(((uint16_t)packet[40] << 8) |
+                                       packet[41]));
+    tm->source_address_length = sizeof (*s6);
     struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&tm->target_address;
     a6->sin6_family = AF_INET6;
     memcpy (&a6->sin6_addr, packet + 24, sizeof (a6->sin6_addr));
@@ -707,6 +1067,9 @@ oi3_parse_tun_packet (oi3_main_t *tm, const u8 *packet, size_t length)
   tm->target_port = ntohs (tm->family == 4
                            ? ((struct sockaddr_in *)&tm->target_address)->sin_port
                            : ((struct sockaddr_in6 *)&tm->target_address)->sin6_port);
+  tm->source_port = ntohs (tm->family == 4
+                           ? ((struct sockaddr_in *)&tm->source_address)->sin_port
+                           : ((struct sockaddr_in6 *)&tm->source_address)->sin6_port);
   tm->endpoint_port = tm->target_port;
   oi3_prepare_underlay_address (tm);
   tm->cell = tm->protocol == 6
@@ -789,8 +1152,9 @@ oi3_normalize_tun_ingress (oi3_main_t *tm, u8 *packet, size_t length)
   if (tm->protocol == 6) { l4[16] = l4_sum >> 8; l4[17] = l4_sum; }
   else { l4[6] = l4_sum >> 8; l4[7] = l4_sum; }
   fprintf (stderr, "oi3 tun-ingress canonical-destination family=%u address=%s "
-           "original-port=%u epoch=%llu\n", tm->family,
-           tm->family == 4 ? "10.0.0.1" : "fd00::1", tm->target_port,
+           "source-port=%u original-port=%u epoch=%llu\n", tm->family,
+           tm->family == 4 ? "10.0.0.1" : "fd00::1", tm->source_port,
+           tm->target_port,
            (unsigned long long)tm->underlay_epoch);
 }
 
@@ -993,6 +1357,8 @@ oi3_connector_connect (void *data, HevOwnerRuntime *owner, int fd)
     ? tm->underlay_address_length : tm->target_address_length;
   int result = connect (fd, (const struct sockaddr *)address, address_length);
   if (result == 0 || errno == EINPROGRESS || errno == EALREADY) {
+    atomic_store_explicit (&tm->connector_connect_pending, result != 0,
+                           memory_order_release);
     HevTask *task = tm->api.task_self ();
     int add_result = -1, mod_result = -1;
     if (task) {
@@ -1004,6 +1370,11 @@ oi3_connector_connect (void *data, HevOwnerRuntime *owner, int fd)
              "family=%u task=%p add-fd=%d mod-fd=%d\n", result,
              result == 0 ? 0 : errno, tm->endpoint_port, tm->family,
              (void *)task, add_result, mod_result);
+    /* Do not arm the readiness observer from connect().  HEV may still
+     * report a runnable task in this same turn; arming here would make the
+     * next owner re-entry block in pthread_join while the observer waits for
+     * a readiness event.  The observer is armed only after task_step returns
+     * a non-running task set in oi3_worker_run(). */
     return 0;
   }
   tm->transport_failures++;
@@ -1015,9 +1386,44 @@ static int
 oi3_connector_input_tcp (void *data, HevOwnerRuntime *owner, tcp_pcb_t *pcb,
                      const void *payload, size_t length)
 {
-  oi3_main_t *tm = data; (void)tm; (void)owner; (void)pcb; (void)payload;
+  oi3_main_t *tm = data; (void)owner; (void)pcb; (void)payload;
+  if (tm)
+    tm->direct_send_events++;
   fprintf (stderr, "oi3 direct-send length=%zu owner-pthread=%lu\n", length,
            (unsigned long)pthread_self ());
+  return 0;
+}
+
+/* The normal HEV runtime owns a dedicated lwip timer task.  OI3 deliberately
+ * drives HEV one quantum at a time from the VPP owner and does not start that
+ * background task.  A short write therefore leaves the TUN-side PCB with
+ * TF_ACK_DELAY while the connector observer waits only for underlay fd
+ * readiness.  Tick the same owner-local timer synchronously after a splice
+ * write so the peer receives its ACK and can publish the next stream segment.
+ */
+static int
+oi3_drive_lwip_timer_after_send (oi3_main_t *tm, u32 direct_send_before)
+{
+  if (!tm || !tm->tun_mode || tm->protocol != 6 ||
+      tm->direct_send_events == direct_send_before)
+    return 0;
+  if (!tm->lwip_context || !tm->api.lwip_tcp_tmr) {
+    oi3_error ("OI3 short-send timer context unavailable");
+    return -1;
+  }
+  oi3_lwip_identity_t before;
+  memset (&before, 0, sizeof (before));
+  tm->api.identity (tm->context, &before);
+  fprintf (stderr, "oi3 short-send timer-before events=%u ticks=%u active-pcb=%p\n",
+           tm->direct_send_events, before.tcp_ticks_value,
+           (void *)before.tcp_active_pcb);
+  tm->api.lwip_tcp_tmr (tm->lwip_context);
+  oi3_lwip_identity_t after;
+  memset (&after, 0, sizeof (after));
+  tm->api.identity (tm->context, &after);
+  fprintf (stderr, "oi3 short-send timer-tick events=%u ticks=%u active-pcb=%p\n",
+           tm->direct_send_events, after.tcp_ticks_value,
+           (void *)after.tcp_active_pcb);
   return 0;
 }
 
@@ -1060,7 +1466,10 @@ oi3_rewrite_return (oi3_main_t *tm, const void *packet, size_t length)
   memcpy (tm->last_output, packet, length); tm->last_output_length = (u32)length;
   if (tm->family == 4) {
     struct sockaddr_in *a = (struct sockaddr_in *)&tm->target_address;
+    struct sockaddr_in *s = (struct sockaddr_in *)&tm->source_address;
     memcpy (tm->last_output + 12, &a->sin_addr, 4);
+    if (tm->source_address_length == sizeof (*s))
+      memcpy (tm->last_output + 16, &s->sin_addr, 4);
     tm->last_output[10] = tm->last_output[11] = 0;
     u16 c = oi3_checksum (tm->last_output, 20);
     tm->last_output[10] = c >> 8; tm->last_output[11] = c;
@@ -1068,6 +1477,10 @@ oi3_rewrite_return (oi3_main_t *tm, const void *packet, size_t length)
       u8 *l4 = tm->last_output + 20;
       u16 port = ntohs (((struct sockaddr_in *) &tm->target_address)->sin_port);
       l4[0] = port >> 8; l4[1] = port;
+      if (tm->source_address_length == sizeof (*s)) {
+        u16 source_port = ntohs (s->sin_port);
+        l4[2] = source_port >> 8; l4[3] = source_port;
+      }
       if (tm->protocol == 6) l4[16] = l4[17] = 0;
       else l4[6] = l4[7] = 0;
       u16 lc = oi3_l4_checksum (tm->last_output, length, 4, tm->protocol, 20);
@@ -1076,9 +1489,16 @@ oi3_rewrite_return (oi3_main_t *tm, const void *packet, size_t length)
     }
   } else {
     struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&tm->target_address;
+    struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&tm->source_address;
     memcpy (tm->last_output + 8, &a6->sin6_addr, 16);
+    if (tm->source_address_length == sizeof (*s6))
+      memcpy (tm->last_output + 24, &s6->sin6_addr, 16);
     u8 *l4 = tm->last_output + 40;
     u16 port = ntohs (a6->sin6_port); l4[0] = port >> 8; l4[1] = port;
+    if (tm->source_address_length == sizeof (*s6)) {
+      u16 source_port = ntohs (s6->sin6_port);
+      l4[2] = source_port >> 8; l4[3] = source_port;
+    }
     if (tm->protocol == 6) l4[16] = l4[17] = 0; else l4[6] = l4[7] = 0;
     u16 lc = oi3_l4_checksum (tm->last_output, length, 6, tm->protocol, 40);
     if (tm->protocol == 6) { l4[16] = lc >> 8; l4[17] = lc; }
@@ -1124,11 +1544,20 @@ oi3_output (void *data, const void *packet, size_t length)
   size_t ip = tm->family == 4 ? 20 : 40;
   if (length >= ip + 14 && tm->protocol == 6) {
     u8 flags = tm->last_output[ip + 13];
-    if ((flags & 0x12) == 0x12) {
+    if (flags & 0x04U) {
+      tm->connector_downstream_reset_observed++;
+      fprintf (stderr,
+               "oi3 downstream-transport result=RST owner=%u generation=%llu "
+               "owner-pthread=%lu reset-observed=%u\n",
+               tm->owner_id, (unsigned long long)tm->generation,
+               (unsigned long)pthread_self (),
+               tm->connector_downstream_reset_observed);
+    } else if ((flags & 0x12) == 0x12) {
       tm->output_handshake++;
       tm->tcp_handshake_seen = 1;
       tm->tcp_server_seq = oi3_get_u32 (tm->last_output + ip + 4);
       tm->tcp_server_ack = oi3_get_u32 (tm->last_output + ip + 8);
+      oi3_refresh_tun_flow_deadline (tm);
     } else if (flags & 0x18) {
       tm->output_direct++;
       /* Carry the returned data sequence space into the FIN fixture. */
@@ -1136,9 +1565,21 @@ oi3_output (void *data, const void *packet, size_t length)
       size_t payload = length > ip + tcp_header ? length - ip - tcp_header : 0;
       tm->tcp_server_seq = oi3_get_u32 (tm->last_output + ip + 4) + (u32)payload;
       tm->tcp_server_ack = oi3_get_u32 (tm->last_output + ip + 8);
+      oi3_refresh_tun_flow_deadline (tm);
     }
+    if (flags & 0x05U)
+      tm->tcp_fin_submitted = 1;
   } else if (tm->protocol == 17 && length > ip + 8) {
     tm->output_direct++;
+    if (tm->tun_mode && tm->multi_mode) {
+      tm->udp_datagram_inflight = 0;
+      oi3_refresh_tun_flow_deadline (tm);
+      fprintf (stderr,
+               "oi3 tun-udp-window complete generation=%llu submitted=%u "
+               "pending=%u output=%u direct=%u\n",
+               (unsigned long long)tm->generation, tm->packet_submitted,
+               tm->tun_pending_count, tm->output_packets, tm->output_direct);
+    }
   }
 }
 
@@ -1151,41 +1592,320 @@ oi3_recv (void *data, uintptr_t config_identity, uintptr_t session_identity,
 }
 
 static int
-oi3_enqueue_owner (vlib_main_t *vm, u32 kind)
+oi3_enqueue_owner_for (oi3_main_t *tm, vlib_main_t *vm, u32 kind)
 {
-  oi3_main_t *tm = &oi3_main;
   u32 buffer; u16 target = (u16)tm->target_thread;
   if (vlib_buffer_alloc (vm, &buffer, 1) != 1) return -1;
   tm->vpp_buffers_allocated++;
-  *(u32 *)vlib_get_buffer (vm, buffer)->data = kind;
+  u32 *data = (u32 *)vlib_get_buffer (vm, buffer)->data;
+  data[0] = kind;
+  if (tm->multi_mode)
+    data[1] = tm->owner_id;
   if (vlib_buffer_enqueue_to_thread (vm, vlib_node_get_runtime (vm, oi3_trigger_node.index),
                                       tm->frame_queue, &buffer, &target, 1, 1) != 1) {
     vlib_buffer_free_one (vm, buffer); tm->vpp_buffers_freed++; return -1;
   }
+  /* The APK runtime is the stock VPP frame-queue implementation: it marks
+   * check_frame_queues but does not wake a worker that is already asleep.
+   * Keep the re-entry on the same owner queue, and explicitly wake that
+   * owner after publishing the frame.  This is the only scheduler seam used
+   * by the POC; no second datapath or unprotected socket is introduced. */
+  vlib_thread_wakeup (target);
   tm->worker_token_pending = 1;
   return 0;
 }
 
 static int
-oi3_enqueue_tun_packet (vlib_main_t *vm, const u8 *packet, size_t length)
+oi3_enqueue_owner (vlib_main_t *vm, u32 kind)
 {
-  if (length > OI3_MAX_TUN_PACKET - 8U) return -1;
-  u32 buffer;
-  if (vlib_buffer_alloc (vm, &buffer, 1) != 1) return -1;
-  oi3_main.vpp_buffers_allocated++;
-  vlib_buffer_t *b = vlib_get_buffer (vm, buffer);
-  *(u32 *)b->data = OI3_TUN_KIND;
-  *(u32 *)(b->data + 4) = (u32)length;
-  memcpy (b->data + 8, packet, length);
-  u16 target = (u16)oi3_main.target_thread;
-  if (vlib_buffer_enqueue_to_thread (vm,
-                                     vlib_node_get_runtime (vm, oi3_trigger_node.index),
-                                     oi3_main.frame_queue, &buffer, &target, 1, 1) != 1) {
-    vlib_buffer_free_one (vm, buffer); oi3_main.vpp_buffers_freed++;
+  return oi3_enqueue_owner_for (&oi3_main, vm, kind);
+}
+
+static clib_error_t *
+oi3_connector_wake_ready (clib_file_t *file)
+{
+  oi3_main_t *tm = (oi3_main_t *)(uintptr_t)file->private_data;
+  vlib_main_t *vm = vlib_get_main ();
+  oi3_connector_wake_t token;
+
+  for (;;) {
+    ssize_t n = read (file->file_descriptor, &token, sizeof (token));
+    if (n == (ssize_t)sizeof (token)) {
+      atomic_store_explicit (&tm->connector_wake_pending, 0,
+                             memory_order_release);
+      if (!tm->active || tm->finish_requested ||
+          token.generation != tm->generation)
+        continue;
+      fprintf (stderr, "oi3 connector-wake cause=%u generation=%llu\n",
+               token.cause, (unsigned long long)token.generation);
+      if (!tm->worker_token_pending &&
+          oi3_enqueue_owner_for (tm, vm, 0) < 0)
+        oi3_error ("OI3 connector wake enqueue failed");
+      continue;
+    }
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+      return 0;
+    if (n == 0)
+      return clib_error_return (0, "OI3 connector wake pipe closed");
+    return 0;
+  }
+}
+
+static int
+oi3_ensure_connector_wake_file (oi3_main_t *tm)
+{
+  clib_file_t file = { 0 };
+  int flags;
+
+  if (!tm || tm->connector_wake_file_index >= 0)
+    return tm ? 0 : -1;
+  if (pipe (tm->connector_wake_pipe) < 0)
+    return -1;
+  flags = fcntl (tm->connector_wake_pipe[0], F_GETFL, 0);
+  if (flags >= 0)
+    (void)fcntl (tm->connector_wake_pipe[0], F_SETFL, flags | O_NONBLOCK);
+  flags = fcntl (tm->connector_wake_pipe[1], F_GETFL, 0);
+  if (flags >= 0)
+    (void)fcntl (tm->connector_wake_pipe[1], F_SETFL, flags | O_NONBLOCK);
+  file.read_function = oi3_connector_wake_ready;
+  file.file_descriptor = tm->connector_wake_pipe[0];
+  file.polling_thread_index = 0;
+  file.private_data = (uword)tm;
+  file.description = format (0, "OI3 protected connector wake pipe");
+  tm->connector_wake_file_index = (int)clib_file_add (&file_main, &file);
+  if (tm->connector_wake_file_index < 0 ||
+      (u32)tm->connector_wake_file_index == ~0U) {
+    close (tm->connector_wake_pipe[0]);
+    close (tm->connector_wake_pipe[1]);
+    tm->connector_wake_pipe[0] = tm->connector_wake_pipe[1] = -1;
+    tm->connector_wake_file_index = -1;
     return -1;
   }
-  oi3_main.worker_token_pending = 1;
   return 0;
+}
+
+static int
+oi3_enqueue_tun_packet_for_kind (oi3_main_t *tm, vlib_main_t *vm,
+                                 const u8 *packet, size_t length, u32 kind)
+{
+  size_t header = tm && tm->multi_mode ? 12U : 8U;
+  if (!tm || (kind != OI3_TUN_KIND && kind != OI3_TUN_DEFERRED_KIND) ||
+      length > OI3_MAX_TUN_PACKET - header)
+    return -1;
+  u32 buffer;
+  if (vlib_buffer_alloc (vm, &buffer, 1) != 1) return -1;
+  tm->vpp_buffers_allocated++;
+  vlib_buffer_t *b = vlib_get_buffer (vm, buffer);
+  *(u32 *)b->data = kind;
+  if (tm->multi_mode) {
+    *(u32 *)(b->data + 4) = tm->owner_id;
+    *(u32 *)(b->data + 8) = (u32)length;
+    memcpy (b->data + 12, packet, length);
+  } else {
+    *(u32 *)(b->data + 4) = (u32)length;
+    memcpy (b->data + 8, packet, length);
+  }
+  u16 target = (u16)tm->target_thread;
+  if (vlib_buffer_enqueue_to_thread (vm,
+                                     vlib_node_get_runtime (vm, oi3_trigger_node.index),
+                                     tm->frame_queue, &buffer, &target, 1, 1) != 1) {
+    vlib_buffer_free_one (vm, buffer); tm->vpp_buffers_freed++;
+    return -1;
+  }
+  vlib_thread_wakeup (target);
+  tm->worker_token_pending = 1;
+  return 0;
+}
+
+static int
+oi3_enqueue_tun_packet_for (oi3_main_t *tm, vlib_main_t *vm,
+                            const u8 *packet, size_t length)
+{
+  return oi3_enqueue_tun_packet_for_kind (tm, vm, packet, length,
+                                          OI3_TUN_KIND);
+}
+
+static int
+oi3_enqueue_deferred_tun_packet_for (oi3_main_t *tm, vlib_main_t *vm,
+                                     const u8 *packet, size_t length)
+{
+  return oi3_enqueue_tun_packet_for_kind (tm, vm, packet, length,
+                                          OI3_TUN_DEFERRED_KIND);
+}
+
+static int
+oi3_enqueue_tun_packet (vlib_main_t *vm, const u8 *packet, size_t length)
+{
+  return oi3_enqueue_tun_packet_for (&oi3_main, vm, packet, length);
+}
+
+static u8
+oi3_tun_packet_tcp_flags (const u8 *packet, size_t length)
+{
+  if (!packet || length < 20)
+    return 0;
+  if ((packet[0] >> 4) == 4) {
+    size_t ihl = (size_t)(packet[0] & 0x0fU) * 4U;
+    if (packet[9] != 6 || length < ihl + 14U)
+      return 0;
+    return packet[ihl + 13U];
+  }
+  if ((packet[0] >> 4) == 6 && length >= 54 && packet[6] == 6)
+    return packet[53];
+  return 0;
+}
+
+/* TUN readiness can publish several packets before the broker completion
+ * token reaches the owner.  Keep those packets in the owner-local queue
+ * instead of overwriting one shared pending slot.  The queue is deliberately
+ * bounded: exhaustion is an explicit infrastructure fault, never a silent
+ * stream truncation. */
+static int
+oi3_tun_pending_enqueue (oi3_main_t *tm, const u8 *packet, size_t length)
+{
+  if (!tm || !packet || length > OI3_MAX_TUN_PACKET ||
+      tm->tun_pending_count >= OI3_TUN_PENDING_CAPACITY)
+    return -1;
+  u32 slot = (tm->tun_pending_head + tm->tun_pending_count) %
+             OI3_TUN_PENDING_CAPACITY;
+  tm->tun_pending[slot].flow_hash = 0;
+  tm->tun_pending[slot].length = (u32)length;
+  memcpy (tm->tun_pending[slot].packet, packet, length);
+  tm->tun_pending_count++;
+  tm->tun_pending_sequence++;
+  fprintf (stderr, "oi3 tun-queue enqueue sequence=%u length=%zu depth=%u "
+           "tcp-flags=0x%02x\n", tm->tun_pending_sequence, length,
+           tm->tun_pending_count,
+           oi3_tun_packet_tcp_flags (packet, length));
+  return 0;
+}
+
+static int
+oi3_tun_deferred_enqueue (oi3_main_t *tm, const u8 *packet, size_t length,
+                          uint64_t flow_hash)
+{
+  if (!tm || !packet || !flow_hash || length > OI3_MAX_TUN_PACKET)
+    return -1;
+  for (u32 i = 0; i < tm->multi_deferred_count; i++) {
+    u32 slot = (tm->multi_deferred_head + i) % OI3_TUN_PENDING_CAPACITY;
+    if (tm->multi_deferred[slot].flow_hash == flow_hash) {
+      fprintf (stderr,
+               "oi3 tun-deferred duplicate owner=%u hash=%llu depth=%u "
+               "tcp-flags=0x%02x\n",
+               tm->owner_id, (unsigned long long)flow_hash,
+               tm->multi_deferred_count,
+               oi3_tun_packet_tcp_flags (packet, length));
+      return 1;
+    }
+  }
+  if (tm->multi_deferred_count >= OI3_TUN_PENDING_CAPACITY)
+    return -1;
+  u32 slot = (tm->multi_deferred_head + tm->multi_deferred_count) %
+             OI3_TUN_PENDING_CAPACITY;
+  tm->multi_deferred[slot].flow_hash = flow_hash;
+  tm->multi_deferred[slot].length = (u32)length;
+  memcpy (tm->multi_deferred[slot].packet, packet, length);
+  tm->multi_deferred_count++;
+  tm->multi_deferred_sequence++;
+  fprintf (stderr,
+           "oi3 tun-deferred enqueue sequence=%u owner=%u hash=%llu "
+           "length=%zu depth=%u tcp-flags=0x%02x\n",
+           tm->multi_deferred_sequence, tm->owner_id,
+           (unsigned long long)flow_hash, length, tm->multi_deferred_count,
+           oi3_tun_packet_tcp_flags (packet, length));
+  return 0;
+}
+
+static void
+oi3_tun_pending_clear (oi3_main_t *tm, const char *reason)
+{
+  if (!tm || tm->tun_pending_count == 0)
+    return;
+  fprintf (stderr,
+           "oi3 tun-pending clear reason=%s owner=%u depth=%u head=%u\n",
+           reason ? reason : "unknown", tm->owner_id, tm->tun_pending_count,
+           tm->tun_pending_head);
+  memset (tm->tun_pending, 0, sizeof (tm->tun_pending));
+  tm->tun_pending_head = 0;
+  tm->tun_pending_count = 0;
+}
+
+static int
+oi3_submit_pending_tun (oi3_main_t *tm)
+{
+  if (!tm || tm->tun_pending_count == 0)
+    return 0;
+  oi3_tun_pending_entry_t *entry = &tm->tun_pending[tm->tun_pending_head];
+  u32 length = entry->length;
+  u8 tcp_flags = oi3_tun_packet_tcp_flags (entry->packet, length);
+  int submit_result = (oi3_normalize_tun_ingress (tm, entry->packet, length),
+                       tm->api.submit (tm->context, entry->packet, length));
+  fprintf (stderr, "oi3 tun-submit result=%d sequence=%u length=%u "
+           "queue-depth-before=%u family=%u protocol=%u destination-port=%u "
+           "tcp-flags=0x%02x\n", submit_result,
+           tm->packet_submitted + 1U, length, tm->tun_pending_count,
+           tm->family, tm->protocol, tm->target_port, tcp_flags);
+  if (submit_result < 0)
+    {
+      /* HEV may reject a packet once the bounded session/credit envelope is
+       * occupied.  This is packet overload, not a corrupt owner context:
+       * settle the pending copy exactly once and keep the admitted flow
+       * alive so D3 can observe a conservative, owner-local drop. */
+      tm->tun_submit_rejects++;
+      if (tm->multi_mode) {
+        atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                   memory_order_relaxed);
+        oi3_multi.route_rejects[tm->owner_id]++;
+        fprintf (stderr,
+                 "oi4 multi-admission result=REJECT owner=%u "
+                 "reason=owner-submit depth=%u\n", tm->owner_id,
+                 tm->tun_pending_count);
+      }
+      fprintf (stderr,
+               "oi3 tun-submit result=REJECT reason=owner-submit "
+               "length=%u depth=%u\n", length, tm->tun_pending_count);
+      tm->tun_pending[tm->tun_pending_head].length = 0;
+      tm->tun_pending_head = (tm->tun_pending_head + 1U) %
+                             OI3_TUN_PENDING_CAPACITY;
+      tm->tun_pending_count--;
+      return 1;
+    }
+  tm->packet_submitted++;
+  if (tm->tun_mode && tm->multi_mode) {
+    if (tm->protocol == 17)
+      tm->udp_datagram_inflight = 1;
+    if (tm->protocol == 17 || tm->protocol == 6)
+      oi3_refresh_tun_flow_deadline (tm);
+  }
+  if (tm->protocol == 6 && (tcp_flags & 0x05U))
+    tm->tcp_fin_submitted = 1;
+  tm->tun_pending[tm->tun_pending_head].length = 0;
+  tm->tun_pending_head = (tm->tun_pending_head + 1U) %
+                         OI3_TUN_PENDING_CAPACITY;
+  tm->tun_pending_count--;
+  return 1;
+}
+
+static int
+oi3_submit_next_udp_datagram_if_idle (oi3_main_t *tm)
+{
+  if (!tm || !tm->multi_mode || tm->protocol != 17 ||
+      tm->tun_pending_count == 0)
+    return 0;
+  if (tm->udp_datagram_inflight) {
+    fprintf (stderr,
+             "oi3 tun-submit deferred reason=udp-datagram-inflight "
+             "generation=%llu submitted=%u pending=%u\n",
+             (unsigned long long)tm->generation, tm->packet_submitted,
+             tm->tun_pending_count);
+    return 0;
+  }
+  fprintf (stderr,
+           "oi3 tun-udp-window submit-next generation=%llu submitted=%u "
+           "pending=%u\n",
+           (unsigned long long)tm->generation, tm->packet_submitted,
+           tm->tun_pending_count);
+  return oi3_submit_pending_tun (tm);
 }
 
 static clib_error_t *
@@ -1193,14 +1913,59 @@ oi3_tun_read_ready (clib_file_t *file)
 {
   oi3_main_t *tm = (oi3_main_t *)(uintptr_t)file->private_data;
   vlib_main_t *vm = vlib_get_main ();
-  if (!tm->tun_mode || tm->tun_fd < 0) return 0;
-  for (unsigned int count = 0; count < 8; count++) {
+  /* A terminal flow may still have an owner drain token in flight.  Do not
+   * consume the next Android packet into a session that is being torn down;
+   * once the successful flow is re-armed, readiness will deliver it again.
+   * While idle, read only one packet so a burst cannot commit several
+   * different original destinations against one not-yet-started generation.
+   */
+  if (!tm->tun_mode || tm->tun_fd < 0 || !tm->active || tm->finish_requested ||
+      tm->phase == OI3_STOPPING || tm->phase == OI3_FAULT)
+    return 0;
+  unsigned int limit = (tm->context || tm->tun_pending_count) ? 8U : 1U;
+  for (unsigned int count = 0; count < limit; count++) {
     ssize_t n = read (tm->tun_fd, tm->tun_rx, sizeof (tm->tun_rx));
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
     if (n <= 0) return 0;
     if (oi3_parse_tun_packet (tm, tm->tun_rx, (size_t)n) < 0) {
       fprintf (stderr, "oi3 tun-ingress parse-failure length=%zd\n", n);
       continue;
+    }
+    if (!tm->multi_mode && tm->protocol == 6 &&
+        oi3_multi_tcp_packet (tm->tun_rx, (size_t)n)) {
+      uint64_t flow_hash = 0;
+      bool tcp_syn = oi3_multi_tcp_syn_packet (tm->tun_rx, (size_t)n);
+      uint32_t wait_syn = atomic_load_explicit (&tm->multi_tcp_wait_syn,
+                                                memory_order_acquire);
+      uint32_t tombstone_valid = atomic_load_explicit (
+        &tm->multi_tcp_tombstone_valid, memory_order_acquire);
+      uint64_t tombstone_hash = atomic_load_explicit (
+        &tm->multi_tcp_tombstone_hash, memory_order_acquire);
+      if (oi3_multi_flow_hash (tm->tun_rx, (size_t)n, &flow_hash) == 0) {
+        if (wait_syn && !tcp_syn) {
+          fprintf (stderr,
+                   "oi3 single-admission result=REJECT reason=%s hash=%llu "
+                   "tombstone-hash=%llu\n",
+                   tombstone_valid && flow_hash == tombstone_hash
+                     ? "tcp-tail" : "tcp-non-syn-before-syn",
+                   (unsigned long long)flow_hash,
+                   (unsigned long long)tombstone_hash);
+          continue;
+        }
+        if (tcp_syn) {
+          atomic_store_explicit (&tm->multi_tcp_wait_syn, 0,
+                                 memory_order_release);
+          atomic_store_explicit (&tm->multi_tcp_tombstone_valid, 0,
+                                 memory_order_release);
+        }
+        if (!atomic_load_explicit (&tm->active_flow_valid,
+                                   memory_order_acquire)) {
+          atomic_store_explicit (&tm->active_flow_hash, flow_hash,
+                                 memory_order_release);
+          atomic_store_explicit (&tm->active_flow_valid, 1,
+                                 memory_order_release);
+        }
+      }
     }
     oi3_a2_return_capture_ingress (tm, tm->tun_rx, (size_t)n);
     if (oi3_enqueue_tun_packet (vm, tm->tun_rx, (size_t)n) < 0) {
@@ -1227,6 +1992,533 @@ oi3_tun_read_ready (clib_file_t *file)
   return 0;
 }
 
+static uint64_t
+oi3_multi_fnv1a (const u8 *data, size_t length)
+{
+  uint64_t hash = 1469598103934665603ULL;
+  for (size_t i = 0; i < length; i++) {
+    hash ^= data[i];
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+static uint64_t
+oi3_multi_hash_mix (uint64_t hash)
+{
+  /* Android's TCP ephemeral port allocator can produce source-port series
+   * whose raw FNV low bits collapse under small owner counts.  Keep the
+   * canonical five-tuple input unchanged, but avalanche the completed hash
+   * before owner modulo so owner selection is not controlled by allocator
+   * parity or adjacent-port patterns.  This mirrors the S124/F015 correction
+   * and remains a POC hash-quality fix, not a production hash commitment. */
+  hash ^= hash >> 33;
+  hash *= 0xff51afd7ed558ccdULL;
+  hash ^= hash >> 33;
+  hash *= 0xc4ceb9fe1a85ec53ULL;
+  hash ^= hash >> 33;
+  return hash;
+}
+
+/* Hash the canonical five-tuple, not the direction-specific packet bytes.
+ * TCP keeps deterministic canonical-owner selection.  UDP additionally uses a
+ * bounded route table so a new datagram flow can be pinned to an idle owner
+ * instead of corrupting an active owner-local return rewrite. */
+static int
+oi3_multi_flow_hash (const u8 *packet, size_t length, uint64_t *hash_out)
+{
+  if (!packet || !hash_out || length < 20)
+    return -1;
+  unsigned int family = packet[0] >> 4;
+  size_t ip_header;
+  unsigned int protocol;
+  u8 endpoint_a[18] = { 0 }, endpoint_b[18] = { 0 };
+  if (family == 4) {
+    ip_header = (size_t)(packet[0] & 0x0fU) * 4U;
+    if (ip_header < 20 || length < ip_header)
+      return -1;
+    protocol = packet[9];
+    if (protocol != 6 && protocol != 17)
+      return -1;
+    memcpy (endpoint_a + 12, packet + 12, 4);
+    memcpy (endpoint_b + 12, packet + 16, 4);
+  } else if (family == 6) {
+    ip_header = 40;
+    if (length < ip_header)
+      return -1;
+    protocol = packet[6];
+    /* The POC owner parser consumes plain IPv6 TCP/UDP.  Extension/control
+     * frames remain outside this seam and must be rejected at dispatch, just
+     * as the single-owner reader already does, rather than poisoning a shard
+     * after admission. */
+    if (protocol != 6 && protocol != 17)
+      return -1;
+    memcpy (endpoint_a, packet + 8, 16);
+    memcpy (endpoint_b, packet + 24, 16);
+  } else {
+    return -1;
+  }
+  if ((protocol == 6 || protocol == 17) && length >= ip_header + 4) {
+    memcpy (endpoint_a + 16, packet + ip_header, 2);
+    memcpy (endpoint_b + 16, packet + ip_header + 2, 2);
+  }
+  u8 canonical[1 + 1 + 18 + 18];
+  canonical[0] = (u8)family;
+  canonical[1] = (u8)protocol;
+  if (memcmp (endpoint_a, endpoint_b, sizeof (endpoint_a)) <= 0) {
+    memcpy (canonical + 2, endpoint_a, sizeof (endpoint_a));
+    memcpy (canonical + 2 + sizeof (endpoint_a), endpoint_b,
+            sizeof (endpoint_b));
+  } else {
+    memcpy (canonical + 2, endpoint_b, sizeof (endpoint_b));
+    memcpy (canonical + 2 + sizeof (endpoint_b), endpoint_a,
+            sizeof (endpoint_a));
+  }
+  *hash_out = oi3_multi_hash_mix (oi3_multi_fnv1a (canonical, sizeof (canonical)));
+  return 0;
+}
+
+static int
+oi3_multi_packet_protocol (const u8 *packet, size_t length, u32 *protocol_out)
+{
+  if (!packet || !protocol_out || length < 20)
+    return -1;
+  unsigned int family = packet[0] >> 4;
+  if (family == 4) {
+    size_t ip_header = (size_t)(packet[0] & 0x0fU) * 4U;
+    if (ip_header < 20 || length < ip_header)
+      return -1;
+    if (packet[9] != 6 && packet[9] != 17)
+      return -1;
+    *protocol_out = packet[9];
+    return 0;
+  }
+  if (family == 6) {
+    if (length < 40 || (packet[6] != 6 && packet[6] != 17))
+      return -1;
+    *protocol_out = packet[6];
+    return 0;
+  }
+  return -1;
+}
+
+static int
+oi3_multi_flow_route_lookup (uint64_t hash, u32 *owner_out)
+{
+  for (u32 i = 0; i < OI3_MULTI_FLOW_ROUTE_CAPACITY; i++) {
+    oi3_multi_flow_route_t *route = &oi3_multi.flow_routes[i];
+    if (!route->active || route->flow_hash != hash)
+      continue;
+    if (route->owner >= oi3_multi.owner_count)
+      return -1;
+    if (owner_out)
+      *owner_out = route->owner;
+    return 1;
+  }
+  return 0;
+}
+
+static int
+oi3_multi_flow_route_insert (uint64_t hash, u32 owner, u32 protocol)
+{
+  if (owner >= oi3_multi.owner_count)
+    return -1;
+  for (u32 i = 0; i < OI3_MULTI_FLOW_ROUTE_CAPACITY; i++) {
+    oi3_multi_flow_route_t *route = &oi3_multi.flow_routes[i];
+    if (route->active && route->flow_hash == hash) {
+      route->owner = owner;
+      route->protocol = protocol;
+      return 0;
+    }
+  }
+  for (u32 i = 0; i < OI3_MULTI_FLOW_ROUTE_CAPACITY; i++) {
+    oi3_multi_flow_route_t *route = &oi3_multi.flow_routes[i];
+    if (route->active)
+      continue;
+    route->flow_hash = hash;
+    route->owner = owner;
+    route->protocol = protocol;
+    route->active = 1;
+    fprintf (stderr,
+             "oi4 multi-route result=PIN owner=%u hash=%llu protocol=%u "
+             "route-pinned=%u\n",
+             owner, (unsigned long long)hash, protocol, 1U);
+    return 0;
+  }
+  return -1;
+}
+
+static void
+oi3_multi_flow_route_remove (uint64_t hash)
+{
+  for (u32 i = 0; i < OI3_MULTI_FLOW_ROUTE_CAPACITY; i++) {
+    oi3_multi_flow_route_t *route = &oi3_multi.flow_routes[i];
+    if (route->active && route->flow_hash == hash) {
+      route->active = 0;
+      return;
+    }
+  }
+}
+
+static u32
+oi3_multi_udp_idle_owner (u32 primary)
+{
+  if (!oi3_multi.owner_count)
+    return primary;
+  for (u32 offset = 1; offset < oi3_multi.owner_count; offset++) {
+    u32 owner = (primary + offset) % oi3_multi.owner_count;
+    oi3_main_t *candidate = &oi3_multi.owners[owner];
+    if (atomic_load_explicit (&candidate->multi_admission_open,
+                              memory_order_acquire) &&
+        !atomic_load_explicit (&candidate->active_flow_valid,
+                               memory_order_acquire))
+      return owner;
+  }
+  return primary;
+}
+
+static oi3_main_t *
+oi3_multi_owner_for_packet (const u8 *packet, size_t length,
+                            uint64_t *hash_out, u32 *protocol_out,
+                            u32 *route_pinned_out)
+{
+  uint64_t hash;
+  u32 protocol = 0;
+  if (!oi3_multi.owner_count ||
+      oi3_multi_flow_hash (packet, length, &hash) < 0 ||
+      oi3_multi_packet_protocol (packet, length, &protocol) < 0)
+    return NULL;
+  if (hash_out)
+    *hash_out = hash;
+  if (protocol_out)
+    *protocol_out = protocol;
+  if (route_pinned_out)
+    *route_pinned_out = 0;
+
+  u32 owner;
+  if (protocol == 17 &&
+      oi3_multi_flow_route_lookup (hash, &owner) > 0) {
+    if (route_pinned_out)
+      *route_pinned_out = 1;
+    oi3_multi.route_count[owner]++;
+    return &oi3_multi.owners[owner];
+  }
+
+  u32 primary = (u32)(hash % oi3_multi.owner_count);
+  owner = primary;
+  if (protocol == 17) {
+    oi3_main_t *primary_tm = &oi3_multi.owners[primary];
+    uint32_t active_valid = atomic_load_explicit (
+      &primary_tm->active_flow_valid, memory_order_acquire);
+    uint64_t active_hash = atomic_load_explicit (
+      &primary_tm->active_flow_hash, memory_order_acquire);
+    if (active_valid && active_hash != hash) {
+      u32 idle_owner = oi3_multi_udp_idle_owner (primary);
+      if (idle_owner != primary) {
+        owner = idle_owner;
+        oi3_multi.route_reassigned[owner]++;
+        fprintf (stderr,
+                 "oi4 multi-route result=REASSIGN owner=%u primary=%u "
+                 "hash=%llu active-hash=%llu reason=udp-idle-owner "
+                 "route-pinned=%u\n",
+                 owner, primary, (unsigned long long)hash,
+                 (unsigned long long)active_hash, 0U);
+      }
+    }
+  }
+  oi3_multi.route_count[owner]++;
+  return &oi3_multi.owners[owner];
+}
+
+static int
+oi3_packet_ip4_dst (const u8 *packet, size_t length, u32 *dst_out)
+{
+  if (!packet || length < 20 || (packet[0] >> 4) != 4)
+    return -1;
+  size_t ihl = (size_t)(packet[0] & 0x0fU) * 4U;
+  if (ihl < 20 || length < ihl)
+    return -1;
+  if (dst_out)
+    memcpy (dst_out, packet + 16, sizeof (*dst_out));
+  return 0;
+}
+
+static int
+oi3_multi_should_policy_drop (const u8 *packet, size_t length)
+{
+  u32 dst = 0;
+  return oi3_multi.policy_drop_ip4_set &&
+         oi3_packet_ip4_dst (packet, length, &dst) == 0 &&
+         dst == oi3_multi.policy_drop_ip4;
+}
+
+static bool
+oi3_multi_tcp_packet (const u8 *packet, size_t length)
+{
+  if (!packet || length < 20)
+    return false;
+  unsigned int family = packet[0] >> 4;
+  size_t ip_header;
+  if (family == 4) {
+    ip_header = (size_t)(packet[0] & 0x0fU) * 4U;
+    if (ip_header < 20 || length < ip_header + 4 || packet[9] != 6)
+      return false;
+  } else if (family == 6) {
+    ip_header = 40;
+    if (length < ip_header + 4 || packet[6] != 6)
+      return false;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+static bool
+oi3_multi_tcp_syn_packet (const u8 *packet, size_t length)
+{
+  if (!oi3_multi_tcp_packet (packet, length))
+    return false;
+  unsigned int family = packet[0] >> 4;
+  size_t ip_header = family == 4 ? (size_t)(packet[0] & 0x0fU) * 4U : 40;
+  if (length < ip_header + 14)
+    return false;
+  return (packet[ip_header + 13] & 0x02U) != 0;
+}
+
+static int
+oi3_admit_deferred_tun_flow (vlib_main_t *vm, oi3_main_t *tm)
+{
+  if (!tm || !tm->multi_mode || !tm->tun_mode ||
+      tm->multi_deferred_count == 0)
+    return 0;
+  oi3_tun_pending_entry_t *entry =
+    &tm->multi_deferred[tm->multi_deferred_head];
+  uint64_t flow_hash = entry->flow_hash;
+  u32 length = entry->length;
+  if (!flow_hash || !length ||
+      oi3_tun_pending_enqueue (tm, entry->packet, length) < 0) {
+    atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                               memory_order_relaxed);
+    oi3_multi.route_rejects[tm->owner_id]++;
+    fprintf (stderr,
+             "oi4 multi-admission result=REJECT owner=%u hash=%llu "
+             "reason=deferred-queue-drain depth=%u pending=%u\n",
+             tm->owner_id, (unsigned long long)flow_hash,
+             tm->multi_deferred_count, tm->tun_pending_count);
+    return -1;
+  }
+  entry->flow_hash = 0;
+  entry->length = 0;
+  tm->multi_deferred_head = (tm->multi_deferred_head + 1U) %
+                            OI3_TUN_PENDING_CAPACITY;
+  tm->multi_deferred_count--;
+  atomic_store_explicit (&tm->active_flow_hash, flow_hash,
+                         memory_order_release);
+  atomic_store_explicit (&tm->active_flow_valid, 1, memory_order_release);
+  atomic_store_explicit (&tm->multi_tcp_wait_syn, 0, memory_order_release);
+  atomic_store_explicit (&tm->multi_tcp_tombstone_valid, 0,
+                         memory_order_release);
+  fprintf (stderr,
+           "oi4 multi-deferred admit owner=%u hash=%llu length=%u "
+           "pending=%u deferred=%u\n",
+           tm->owner_id, (unsigned long long)flow_hash, length,
+           tm->tun_pending_count, tm->multi_deferred_count);
+  if (!tm->worker_token_pending &&
+      oi3_enqueue_owner_for (tm, vm, 0) < 0) {
+    oi3_error ("OI3 deferred TUN rearm enqueue failed");
+    return -1;
+  }
+  return 1;
+}
+
+static clib_error_t *
+oi3_multi_tun_read_ready (clib_file_t *file)
+{
+  vlib_main_t *vm = vlib_get_main ();
+  if (!oi3_multi.active || oi3_multi.tun_fd < 0)
+    return 0;
+  for (unsigned int count = 0; count < 64; count++) {
+    u8 packet[OI3_MAX_TUN_PACKET];
+    ssize_t n = read (oi3_multi.tun_fd, packet, sizeof (packet));
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+      return 0;
+    if (n <= 0)
+      return 0;
+    /* Policy is a dispatcher seam, not an owner mode.  Match the raw IPv4
+     * destination before tuple hashing, route lookup, owner admission, or
+     * TUN queueing.  A dropped packet therefore cannot create a FlowStackOwner
+     * context or reach the Android bind/protect broker. */
+    if (oi3_multi_should_policy_drop (packet, (size_t)n)) {
+      char dst[INET_ADDRSTRLEN] = "-";
+      u32 dst_ip4 = 0;
+      (void)oi3_packet_ip4_dst (packet, (size_t)n, &dst_ip4);
+      (void)inet_ntop (AF_INET, &dst_ip4, dst, sizeof (dst));
+      oi3_multi.policy_drop_packets++;
+      fprintf (stderr,
+               "oi4 multi-policy-drop result=DROP stage=pre-owner "
+               "dst=%s length=%zd no-transport=1 broker=0 socket=0\n",
+               dst, n);
+      continue;
+    }
+    uint64_t hash = 0;
+    u32 route_protocol = 0;
+    u32 route_pinned = 0;
+    oi3_main_t *tm = oi3_multi_owner_for_packet (
+      packet, (size_t)n, &hash, &route_protocol, &route_pinned);
+    if (!tm) {
+      oi3_multi.wrong_owner_events++;
+      unsigned int family = n > 0 ? packet[0] >> 4 : 0;
+      unsigned int protocol = 0;
+      if (family == 4 && n > 9)
+        protocol = packet[9];
+      else if (family == 6 && n > 6)
+        protocol = packet[6];
+      fprintf (stderr,
+               "oi4 multi-ingress result=REJECT reason=invalid-tuple length=%zd "
+               "family=%u protocol=%u first=%02x:%02x:%02x:%02x:%02x:%02x\n",
+               n, family, protocol, n > 0 ? packet[0] : 0,
+               n > 1 ? packet[1] : 0, n > 2 ? packet[2] : 0,
+               n > 3 ? packet[3] : 0, n > 4 ? packet[4] : 0,
+               n > 5 ? packet[5] : 0);
+      continue;
+    }
+    uint32_t active_valid =
+      atomic_load_explicit (&tm->active_flow_valid, memory_order_acquire);
+    uint64_t active_hash =
+      atomic_load_explicit (&tm->active_flow_hash, memory_order_acquire);
+    uint32_t admission_open =
+      atomic_load_explicit (&tm->multi_admission_open, memory_order_acquire);
+    uint32_t dispatch_depth =
+      atomic_load_explicit (&tm->multi_dispatch_depth, memory_order_acquire);
+    bool tcp_packet = oi3_multi_tcp_packet (packet, (size_t)n);
+    bool tcp_syn = oi3_multi_tcp_syn_packet (packet, (size_t)n);
+    uint32_t tcp_tombstone_valid = atomic_load_explicit (
+      &tm->multi_tcp_tombstone_valid, memory_order_acquire);
+    uint64_t tcp_tombstone_hash = atomic_load_explicit (
+      &tm->multi_tcp_tombstone_hash, memory_order_acquire);
+    if (tcp_syn && active_valid && active_hash != hash) {
+      if (oi3_enqueue_deferred_tun_packet_for (tm, vm, packet, (size_t)n) < 0) {
+        atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                   memory_order_relaxed);
+        oi3_multi.route_rejects[tm->owner_id]++;
+        fprintf (stderr,
+                 "oi4 multi-admission result=REJECT owner=%u hash=%llu "
+                 "active=%u active-hash=%llu depth=%u reason=owner-busy-deferred-full\n",
+                 tm->owner_id, (unsigned long long)hash, admission_open,
+                 (unsigned long long)active_hash, dispatch_depth);
+        continue;
+      }
+      fprintf (stderr,
+               "oi4 multi-admission result=DEFER owner=%u hash=%llu active=%u "
+               "active-hash=%llu depth=%u reason=owner-busy-deferred\n",
+               tm->owner_id, (unsigned long long)hash, admission_open,
+               (unsigned long long)active_hash, dispatch_depth);
+      continue;
+    }
+    if (!admission_open || (active_valid && active_hash != hash)) {
+      const char *reject_reason =
+        !admission_open
+          ? "owner-stopped"
+          : (tcp_packet && !tcp_syn && active_valid && active_hash != hash
+             ? "tcp-non-syn-busy"
+             : "owner-busy");
+      atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                 memory_order_relaxed);
+      oi3_multi.route_rejects[tm->owner_id]++;
+      fprintf (stderr,
+               "oi4 multi-admission result=REJECT owner=%u hash=%llu active=%u "
+               "active-hash=%llu depth=%u reason=%s\n", tm->owner_id,
+               (unsigned long long)hash, admission_open,
+               (unsigned long long)active_hash, dispatch_depth,
+               reject_reason);
+      continue;
+    }
+    if (tcp_packet && tcp_tombstone_valid && !tcp_syn) {
+      atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                 memory_order_relaxed);
+      oi3_multi.route_rejects[tm->owner_id]++;
+      fprintf (stderr,
+               "oi4 multi-admission result=REJECT owner=%u hash=%llu "
+               "tombstone-hash=%llu reason=%s\n", tm->owner_id,
+               (unsigned long long)hash,
+               (unsigned long long)tcp_tombstone_hash,
+               hash == tcp_tombstone_hash ? "tcp-tail" : "tcp-non-syn");
+      continue;
+    }
+    if (dispatch_depth >= OI3_TUN_PENDING_CAPACITY) {
+      atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                 memory_order_relaxed);
+      oi3_multi.route_rejects[tm->owner_id]++;
+      fprintf (stderr, "oi4 multi-admission result=REJECT owner=%u reason=queue-full depth=%u\n",
+               tm->owner_id, dispatch_depth);
+      continue;
+    }
+    bool reserved_active = false;
+    if (!active_valid) {
+      atomic_store_explicit (&tm->active_flow_hash, hash, memory_order_release);
+      atomic_store_explicit (&tm->active_flow_valid, 1, memory_order_release);
+      reserved_active = true;
+    }
+    bool route_inserted = false;
+    if (route_protocol == 17 && !route_pinned) {
+      bool active_same = active_valid && active_hash == hash;
+      if (oi3_multi_flow_route_insert (hash, tm->owner_id,
+                                       route_protocol) < 0) {
+        if (reserved_active) {
+          atomic_store_explicit (&tm->active_flow_valid, 0,
+                                 memory_order_release);
+          atomic_store_explicit (&tm->active_flow_hash, 0,
+                                 memory_order_release);
+        }
+        if (!active_same) {
+          atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                     memory_order_relaxed);
+          oi3_multi.route_rejects[tm->owner_id]++;
+          fprintf (stderr,
+                   "oi4 multi-admission result=REJECT owner=%u hash=%llu "
+                   "reason=route-table-full\n",
+                   tm->owner_id, (unsigned long long)hash);
+          continue;
+        }
+      } else {
+        route_inserted = true;
+      }
+    }
+    if (oi3_enqueue_tun_packet_for (tm, vm, packet, (size_t)n) < 0) {
+      if (route_inserted)
+        oi3_multi_flow_route_remove (hash);
+      if (reserved_active) {
+        atomic_store_explicit (&tm->active_flow_valid, 0,
+                               memory_order_release);
+        atomic_store_explicit (&tm->active_flow_hash, 0,
+                               memory_order_release);
+        fprintf (stderr,
+                 "oi4 multi-admission result=ROLLBACK owner=%u hash=%llu "
+                 "reason=admission-rollback\n",
+                 tm->owner_id, (unsigned long long)hash);
+      }
+      tm->tun_output_errors++;
+      atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                 memory_order_relaxed);
+      oi3_multi.route_rejects[tm->owner_id]++;
+      fprintf (stderr, "oi4 multi-admission result=REJECT owner=%u reason=queue-full\n",
+               tm->owner_id);
+      continue;
+    }
+    if (tcp_syn) {
+      atomic_store_explicit (&tm->multi_tcp_wait_syn, 0, memory_order_release);
+      atomic_store_explicit (&tm->multi_tcp_tombstone_valid, 0,
+                             memory_order_release);
+    }
+    atomic_fetch_add_explicit (&tm->multi_dispatch_depth, 1,
+                               memory_order_release);
+    fprintf (stderr, "oi4 multi-ingress owner=%u hash=%llu length=%zd\n",
+             tm->owner_id, (unsigned long long)hash, n);
+  }
+  (void)file;
+  return 0;
+}
+
 static clib_error_t *
 oi3_completion_ready (clib_file_t *file)
 {
@@ -1243,11 +2535,56 @@ oi3_completion_ready (clib_file_t *file)
           if (completion.result == OI2_RESULT_SUCCESS)
             tm->broker_protect_calls++;
         }
-        if (oi3_enqueue_owner (vm, 1) < 0) oi3_error ("completion owner enqueue failed");
+        if (oi3_enqueue_owner_for (tm, vm, 1) < 0)
+          oi3_error ("completion owner enqueue failed");
       } else tm->broker_stale++;
       continue;
     }
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
+    return 0;
+  }
+}
+
+static clib_error_t *
+oi3_multi_completion_ready (clib_file_t *file)
+{
+  vlib_main_t *vm = vlib_get_main ();
+  oi2_broker_completion_t completion;
+  for (;;) {
+    ssize_t n = recv (file->file_descriptor, &completion, sizeof (completion),
+                      MSG_DONTWAIT);
+    if (n == (ssize_t)sizeof (completion)) {
+      oi3_main_t *tm = NULL;
+      for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+        if (oi3_multi.owners[owner].target_thread == completion.owner) {
+          tm = &oi3_multi.owners[owner];
+          break;
+        }
+      }
+      if (!tm) {
+        oi3_multi.wrong_owner_events++;
+        fprintf (stderr, "oi4 completion result=REJECT owner=%u reason=unknown-owner\n",
+                 completion.owner);
+        continue;
+      }
+      if (tm->active && completion.generation == tm->generation &&
+          completion.token == tm->token) {
+        tm->broker_result = completion.result;
+        tm->broker_bind_calls++;
+        if (completion.result == OI2_RESULT_SUCCESS)
+          tm->broker_protect_calls++;
+        if (!tm->worker_token_pending &&
+            oi3_enqueue_owner_for (tm, vm, 1) < 0)
+          oi3_error ("OI4 completion owner enqueue failed");
+      } else {
+        tm->broker_stale++;
+        fprintf (stderr, "oi4 completion result=REJECT owner=%u reason=stale\n",
+                 tm->owner_id);
+      }
+      continue;
+    }
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+      return 0;
     return 0;
   }
 }
@@ -1317,8 +2654,25 @@ oi3_stop_threads (oi3_main_t *tm)
 }
 
 static const char *
+oi3_expected_outcome (const oi3_main_t *tm);
+
+static int
+oi3_is_expected_negative_cell (const oi3_main_t *tm)
+{
+  return tm && (tm->cell == OI3_CELL_REFUSED ||
+                tm->cell == OI3_CELL_NO_REPLY ||
+                tm->cell == OI3_CELL_POLICY_DROP);
+}
+
+static const char *
 oi3_expected_outcome (const oi3_main_t *tm)
 {
+  if (tm->underlay_invalidated) return "EXPECTED_UNDERLAY_INVALIDATION";
+  if (tm->normal_stop_requested) return "EXPECTED_STOP";
+  if (tm->overload_expected) return "EXPECTED_PACKET_OVERLOAD";
+  if (tm->expected_real_reset) return "EXPECTED_REAL_TRANSPORT_RESET";
+  if (tm->expected_real_no_reply) return "EXPECTED_REAL_NO_REPLY";
+  if (tm->expected_real_policy_drop) return "EXPECTED_REAL_POLICY_DROP";
   switch (tm->cell) {
   case OI3_CELL_REFUSED: return "EXPECTED_TRANSPORT_REFUSAL";
   case OI3_CELL_NO_REPLY: return "EXPECTED_TIMEOUT";
@@ -1332,6 +2686,121 @@ oi3_classify_result (oi3_main_t *tm)
 {
   if (tm->error[0]) return;
   if (tm->fault_injected) return;
+  if (tm->underlay_invalidated) return;
+  if (tm->normal_stop_requested) {
+    /* oi3_finish() is called only after the owner token has been reclaimed,
+     * so residue zero is already an admission/settlement gate.  Preserve
+     * distinct infrastructure and duplicate-close failures instead of
+     * allowing an explicit stop to mask them. */
+    if (tm->vpp_buffer_residue != 0 || tm->broker_duplicate_closes != 0 ||
+        tm->infrastructure_failures != 0 || tm->tun_output_errors != 0)
+      snprintf (tm->error, sizeof (tm->error),
+                "unexpected-normal-stop residue=%u duplicate-close=%u "
+                "infrastructure=%u tun-output-errors=%u",
+                tm->vpp_buffer_residue, tm->broker_duplicate_closes,
+                tm->infrastructure_failures, tm->tun_output_errors);
+    return;
+  }
+  if (tm->overload_expected) {
+    /* HEV's category-1 inflight-pbuf credit is deliberately bounded.  Once
+     that ledger rejects a UDP datagram, the packet is settled as an explicit
+     owner-local drop; it must not be reclassified as a failed positive flow
+     merely because that dropped datagram has no reply.  Keep the admission
+     and broker gates strict so an unrelated fault cannot hide behind this
+     outcome. */
+    int pass = tm->multi_mode && tm->protocol == 17 &&
+               (tm->tun_submit_rejects > 0 || tm->tun_queue_rejects > 0) &&
+               tm->broker_bind_calls == 1 &&
+               tm->broker_protect_calls == 1 && tm->tun_output_errors == 0 &&
+               tm->transport_failures == 0 &&
+               tm->infrastructure_failures == 0;
+    if (!pass)
+      snprintf (tm->error, sizeof (tm->error),
+                "unexpected-packet-overload broker=%u/%u submit-rejects=%u "
+                "queue-rejects=%u "
+                "transport=%u infrastructure=%u tun-output-errors=%u",
+                tm->broker_bind_calls, tm->broker_protect_calls,
+                tm->tun_submit_rejects, tm->tun_queue_rejects,
+                tm->transport_failures,
+                tm->infrastructure_failures, tm->tun_output_errors);
+    return;
+  }
+  if (tm->expected_real_no_reply) {
+    int timed_out = tm->tun_mode
+                      ? (tm->tun_flow_deadline_ns != 0 &&
+                         oi3_now_ns () >= tm->tun_flow_deadline_ns)
+                      : tm->worker_steps > 40;
+    int pass = tm->multi_mode && tm->tun_mode && tm->protocol == 17 &&
+               tm->broker_bind_calls == 1 && tm->broker_protect_calls == 1 &&
+               tm->direct_send_events > 0 && tm->output_packets == 0 &&
+               tm->output_direct == 0 && tm->return_rewritten == 0 &&
+               tm->transport_failures == 0 &&
+               tm->infrastructure_failures == 0 &&
+               tm->tun_output_errors == 0 && timed_out;
+    if (!pass)
+      snprintf (tm->error, sizeof (tm->error),
+                "unexpected-real-no-reply broker=%u/%u direct-send=%u "
+                "output=%u/%u rewritten=%u transport=%u infrastructure=%u "
+                "tun-output-errors=%u steps=%u",
+                tm->broker_bind_calls, tm->broker_protect_calls,
+                tm->direct_send_events, tm->output_packets,
+                tm->output_direct, tm->return_rewritten,
+                tm->transport_failures, tm->infrastructure_failures,
+                tm->tun_output_errors, tm->worker_steps);
+    return;
+  }
+  if (tm->expected_real_reset) {
+    int pass = tm->multi_mode && tm->tun_mode && tm->protocol == 6 &&
+               tm->broker_bind_calls == 1 && tm->broker_protect_calls == 1 &&
+               tm->output_handshake > 0 && tm->output_direct > 0 &&
+               tm->direct_send_events > 0 && tm->output_packets >= 3 &&
+               tm->tun_output_packets >= 3 && tm->return_rewritten >= 3 &&
+               tm->endpoint_received == 0 &&
+               tm->infrastructure_failures == 0 &&
+               tm->transport_failures == 1 &&
+               tm->connector_last_error == ECONNRESET &&
+               tm->connector_error_reported &&
+               tm->connector_reset_observed == 1 &&
+               tm->connector_downstream_reset_observed == 1 &&
+               tm->connector_peer_eof_observed == 0;
+    if (!pass)
+      snprintf (tm->error, sizeof (tm->error),
+                "unexpected-real-reset broker=%u/%u handshake=%u direct=%u "
+                "rewritten=%u endpoint=%u/%u transport=%u connector-error=%d "
+                "reported=%d reset-observed=%u downstream-reset=%u peer-eof=%u "
+                "infrastructure=%u steps=%u",
+                tm->broker_bind_calls, tm->broker_protect_calls,
+                tm->output_handshake, tm->output_direct,
+                tm->return_rewritten, tm->endpoint_received,
+                tm->endpoint_replied, tm->transport_failures,
+                tm->connector_last_error, tm->connector_error_reported,
+                tm->connector_reset_observed,
+                tm->connector_downstream_reset_observed,
+                tm->connector_peer_eof_observed,
+                tm->infrastructure_failures, tm->worker_steps);
+    return;
+  }
+  if (tm->expected_real_policy_drop) {
+    int pass = tm->multi_mode && tm->tun_mode &&
+               tm->cell == OI3_CELL_POLICY_DROP && tm->policy_dropped &&
+               tm->packet_submitted == 0 && tm->output_packets == 0 &&
+               tm->output_direct == 0 && tm->return_rewritten == 0 &&
+               tm->broker_bind_calls == 0 && tm->broker_protect_calls == 0 &&
+               tm->transport_failures == 0 &&
+               tm->infrastructure_failures == 0 &&
+               tm->tun_output_errors == 0;
+    if (!pass)
+      snprintf (tm->error, sizeof (tm->error),
+                "unexpected-real-policy-drop policy=%u submitted=%u "
+                "output=%u/%u rewritten=%u broker=%u/%u transport=%u "
+                "infrastructure=%u tun-output-errors=%u",
+                tm->policy_dropped, tm->packet_submitted,
+                tm->output_packets, tm->output_direct, tm->return_rewritten,
+                tm->broker_bind_calls, tm->broker_protect_calls,
+                tm->transport_failures, tm->infrastructure_failures,
+                tm->tun_output_errors);
+    return;
+  }
   int pass = 0;
   switch (tm->cell) {
   case OI3_CELL_REFUSED:
@@ -1341,9 +2810,21 @@ oi3_classify_result (oi3_main_t *tm)
            (tm->transport_failures > 0 || tm->connector_last_error != 0);
     break;
   case OI3_CELL_NO_REPLY:
-    pass = tm->broker_bind_calls == 1 && tm->broker_protect_calls == 1 &&
-           tm->endpoint_received > 0 && tm->endpoint_replied == 0 &&
-           tm->output_direct == 0 && tm->worker_steps > 40;
+    {
+      int timed_out = tm->tun_mode
+                        ? (tm->tun_flow_deadline_ns != 0 &&
+                           oi3_now_ns () >= tm->tun_flow_deadline_ns)
+                        : tm->worker_steps > 40;
+      int expected_ambient_timeout =
+        tm->multi_mode && tm->expected_transport_timeout &&
+        tm->output_packets > 0 && tm->output_handshake > 0 &&
+        tm->output_direct == 0 && tm->endpoint_received == 0 &&
+        tm->transport_failures == 0 && tm->infrastructure_failures == 0;
+      pass = tm->broker_bind_calls == 1 && tm->broker_protect_calls == 1 &&
+             tm->output_direct == 0 && timed_out &&
+             ((tm->endpoint_received > 0 && tm->endpoint_replied == 0) ||
+              expected_ambient_timeout);
+    }
     break;
   case OI3_CELL_POLICY_DROP:
     pass = tm->packet_submitted == 0 && tm->output_packets == 0 &&
@@ -1369,11 +2850,273 @@ oi3_classify_result (oi3_main_t *tm)
               tm->worker_steps);
 }
 
+/* Refresh the pinned HEV runtime ledger immediately before teardown.  The
+ * submit ABI reserves credit 0 (packet handoff) and credit 1 (inflight pbuf)
+ * in that order; a negative result alone is not enough to identify which
+ * bounded resource rejected the packet.  Keep this observation owner-local
+ * and diagnostic-only so D3 can distinguish a hard adapter failure from an
+ * explicit packet loss at the HEV credit boundary. */
 static void
-oi3_finish (vlib_main_t *vm)
+oi3_log_runtime_credits (oi3_main_t *tm, const char *phase)
 {
-  oi3_main_t *tm = &oi3_main;
-  if (tm->tun_file_index >= 0) {
+  if (!tm || !tm->context || !tm->api.runtime_identity)
+    return;
+  oi3_runtime_identity_t identity;
+  memset (&identity, 0, sizeof (identity));
+  tm->api.runtime_identity (tm->context, &identity);
+  fprintf (stderr,
+           "oi3 credit-ledger phase=%s owner=%u session=%zu/%zu "
+           "c0=limit:%zu used:%zu high:%zu reserves:%zu releases:%zu rejects:%zu "
+           "c1=limit:%zu used:%zu high:%zu reserves:%zu releases:%zu rejects:%zu "
+           "c2=limit:%zu used:%zu rejects:%zu c3=limit:%zu used:%zu rejects:%zu "
+           "last-limit-error=%d underflows=%zu\n",
+           phase ? phase : "?", tm->owner_id, identity.session_count,
+           identity.max_session_count,
+           identity.credit_limit[0], identity.credit_used[0],
+           identity.credit_high_water[0], identity.credit_reserves[0],
+           identity.credit_releases[0], identity.credit_rejects[0],
+           identity.credit_limit[1], identity.credit_used[1],
+           identity.credit_high_water[1], identity.credit_reserves[1],
+           identity.credit_releases[1], identity.credit_rejects[1],
+           identity.credit_limit[2], identity.credit_used[2],
+           identity.credit_rejects[2], identity.credit_limit[3],
+           identity.credit_used[3], identity.credit_rejects[3],
+           identity.last_limit_error, identity.credit_underflows);
+}
+
+/* Close only the per-flow HEV/broker state.  The Android VPN session owns the
+ * TUN descriptor and its readiness watcher, so a successful positive flow
+ * must leave both armed for the next packet.  A new packet will enter
+ * oi3_prepare_tun_flow(), receive a fresh generation/token, and get a fresh
+ * FlowStackOwner context without requiring Android to tear down the VPN. */
+static void
+oi3_rearm_tun_flow (vlib_main_t *vm, oi3_main_t *tm)
+{
+  if (!tm || !tm->tun_mode)
+    return;
+
+  tm->context = NULL;
+  tm->lwip_context = NULL;
+  tm->direct_fd = -1;
+  tm->connector_fd = -1;
+  tm->endpoint_fd = -1;
+  tm->endpoint_client_fd = -1;
+  tm->completion_file_index = -1;
+  tm->tun_flow_deadline_ns = 0;
+  tm->worker_token_pending = 0;
+  tm->finish_requested = 0;
+  tm->normal_stop_requested = 0;
+  tm->fault_injected = 0;
+  tm->underlay_invalidated = 0;
+  tm->finished = 1;
+  tm->active = 1;
+  tm->phase = OI3_DONE;
+  tm->pending = 0;
+
+  /* These counters describe one HEV generation and are reset only after its
+   * cleanup line has been emitted.  Session counters (TUN ingress/output,
+   * generation, sequence, and VPP buffer totals) remain cumulative. */
+  tm->worker_steps = 0;
+  tm->task_quanta = 0;
+  tm->packet_submitted = 0;
+  tm->udp_datagram_inflight = 0;
+  tm->tcp_ack_submitted = 0;
+  tm->tcp_payload_submitted = 0;
+  tm->tcp_fin_submitted = 0;
+  tm->output_packets = 0;
+  tm->output_handshake = 0;
+  tm->output_direct = 0;
+  tm->direct_send_events = 0;
+  tm->provenance_logged = 0;
+  tm->tcp_handshake_seen = 0;
+  tm->return_rewritten = 0;
+  tm->endpoint_received = 0;
+  tm->endpoint_replied = 0;
+  tm->endpoint_accepted = 0;
+  tm->broker_bind_calls = 0;
+  tm->broker_protect_calls = 0;
+  tm->broker_duplicate_closes = 0;
+  tm->broker_stale = 0;
+  tm->transport_failures = 0;
+  tm->infrastructure_failures = 0;
+  tm->broker_result = OI2_RESULT_BROKER_UNAVAILABLE;
+  tm->connector_last_error = 0;
+  tm->connector_error_reported = 0;
+  tm->connector_reset_observed = 0;
+  tm->connector_downstream_reset_observed = 0;
+  tm->connector_peer_eof_observed = 0;
+  tm->source_port = 0;
+  tm->source_address_length = 0;
+  tm->no_reply = tm->controlled_no_reply;
+  tm->policy_dropped = tm->controlled_policy_drop;
+  tm->tun_tcp_flags = 0;
+  tm->last_output_length = 0;
+  tm->tcp_client_seq = 0;
+  tm->tcp_server_seq = 0;
+  tm->tcp_server_ack = 0;
+  tm->tcp_data_seen = 0;
+  tm->error[0] = 0;
+
+  uint64_t completed_hash = atomic_load_explicit (&tm->active_flow_hash,
+                                                  memory_order_acquire);
+  uint32_t completed_valid = atomic_load_explicit (&tm->active_flow_valid,
+                                                   memory_order_acquire);
+  if (tm->protocol == 6 && completed_valid && completed_hash != 0) {
+    atomic_store_explicit (&tm->multi_tcp_tombstone_hash, completed_hash,
+                           memory_order_release);
+    atomic_store_explicit (&tm->multi_tcp_tombstone_valid, 1,
+                           memory_order_release);
+  }
+  atomic_store_explicit (&tm->active_flow_hash, 0, memory_order_release);
+  atomic_store_explicit (&tm->active_flow_valid, 0, memory_order_release);
+  atomic_store_explicit (&tm->multi_tcp_wait_syn,
+                         tm->protocol == 6, memory_order_release);
+  atomic_store_explicit (&tm->multi_dispatch_depth, 0, memory_order_release);
+  if (tm->protocol == 6 && tm->tun_pending_count != 0)
+    oi3_tun_pending_clear (tm, "tcp-rearm-stale-tail");
+  if (tm->multi_deferred_count != 0 &&
+      oi3_admit_deferred_tun_flow (vm, tm) < 0)
+    oi3_error ("OI3 deferred TUN flow admit failed");
+  /* Reopen owner-local admission only after the completed TCP tuple has
+   * published its tombstone/wait-SYN state.  Otherwise a FIN/ACK tail packet
+   * can race with teardown and become a new generation before the dispatcher
+   * knows to reject non-SYN traffic. */
+  atomic_store_explicit (&tm->multi_admission_open, 1, memory_order_release);
+
+  /* Preserve owner-local pending TUN packets across a successful UDP
+   * short-flow rearm.  Android can deliver the next UDP datagram while the
+   * current HEV generation is still being stopped; clearing the queue here
+   * silently drops that already-admitted packet.  TCP is different: pending
+   * packets present at rearm are stale tail from the completed generation and
+   * must not be submitted into the next deferred successor context. */
+  tm->tun_submit_rejects = 0;
+  tm->tun_queue_rejects = 0;
+  tm->overload_expected = 0;
+  tm->expected_transport_timeout = 0;
+  atomic_store_explicit (&tm->connector_wake_pending, 0, memory_order_release);
+  atomic_store_explicit (&tm->connector_connect_pending, 0, memory_order_release);
+  atomic_store_explicit (&tm->connector_poll_done, 1, memory_order_release);
+  atomic_store_explicit (&tm->endpoint_stop, 1, memory_order_release);
+  atomic_store_explicit (&tm->endpoint_ready, 0, memory_order_release);
+  if (tm->tun_pending_count != 0 && !tm->worker_token_pending &&
+      oi3_enqueue_owner_for (tm, vm, 0) < 0)
+    oi3_error ("OI3 TUN pending rearm enqueue failed");
+  fprintf (stderr, "oi3 tun-flow rearmed flow-count=%u next-generation=%llu "
+           "tun-fd=%d watcher=%d pending=%u\n", tm->tun_flow_count,
+           (unsigned long long)(tm->generation + 1U), tm->tun_fd,
+           tm->tun_file_index, tm->tun_pending_count);
+}
+
+static void
+oi3_stop_context_for (vlib_main_t *vm, oi3_main_t *tm, int *stop_result)
+{
+  unsigned int round;
+
+  *stop_result = tm->api.stop (tm->context);
+  for (round = 0; *stop_result == OI3_OWNER_STOP_PENDING &&
+       round < OI3_OWNER_STOP_RETRY_ROUNDS; round++) {
+    oi3_task_budget_t budget = { .max_quanta = OI3_OWNER_STOP_MAX_QUANTA };
+    oi3_task_result_t result = { 0 };
+
+    if (tm->api.task_step (&budget, &result) < 0) {
+      *stop_result = -1;
+      return;
+    }
+    *stop_result = tm->api.stop (tm->context);
+  }
+  if (*stop_result == OI3_OWNER_STOP_PENDING) {
+    fprintf (stderr,
+             "oi3 owner-stop pending owner=%u retries=%u tasks-not-ready=1\n",
+             tm->owner_id, OI3_OWNER_STOP_RETRY_ROUNDS);
+    if (!tm->worker_token_pending &&
+        oi3_enqueue_owner_for (tm, vm, 0) < 0)
+      *stop_result = -1;
+  }
+}
+
+static int
+oi3_defer_finish_to_owner_thread (vlib_main_t *vm, oi3_main_t *tm)
+{
+  u32 current_thread;
+
+  if (!tm || !tm->multi_mode || !tm->active)
+    return 0;
+  current_thread = vlib_get_thread_index ();
+  if (tm->target_thread == current_thread)
+    return 0;
+  fprintf (stderr,
+           "oi3 owner-finish deferred owner=%u current-thread=%u "
+           "target-thread=%u token-pending=%u\n",
+           tm->owner_id, current_thread, tm->target_thread,
+           tm->worker_token_pending);
+  if (!tm->worker_token_pending &&
+      oi3_enqueue_owner_for (tm, vm, 0) < 0) {
+    snprintf (tm->error, sizeof (tm->error),
+              "owner-finish-enqueue-failed current-thread=%u target-thread=%u",
+              current_thread, tm->target_thread);
+    tm->phase = OI3_FAULT;
+    return -1;
+  }
+  return 1;
+}
+
+static void
+oi3_finish_for (vlib_main_t *vm, oi3_main_t *tm)
+{
+  const char *cleanup_result;
+  bool keep_tun;
+  bool overload_keep;
+  bool negative_keep;
+  int deferred;
+
+  /* Close owner-local admission before teardown starts.  Multi-owner TUN
+   * reads run on the control thread while owner cleanup runs on the owner
+   * thread; without this gate, same-flow TCP tail packets can enter the
+   * pending queue between the successful-flow terminal state and the later
+   * tombstone publication in oi3_rearm_tun_flow(). */
+  if (tm && tm->multi_mode && tm->tun_mode)
+    atomic_store_explicit (&tm->multi_admission_open, 0,
+                           memory_order_release);
+
+  deferred = oi3_defer_finish_to_owner_thread (vm, tm);
+  if (deferred != 0)
+    return;
+  /* Negative cells and explicit lifecycle terminals still close the VPN
+   * session.  Only a successful positive TUN flow is eligible for the
+   * per-generation re-arm. */
+  if (!tm->tun_mode || oi3_is_expected_negative_cell (tm) ||
+      tm->expected_real_no_reply || tm->expected_real_reset ||
+      tm->expected_real_policy_drop || tm->normal_stop_requested ||
+      tm->underlay_invalidated || tm->overload_expected)
+    oi3_classify_result (tm);
+  overload_keep = tm->overload_expected && tm->multi_mode &&
+                  tm->protocol == 17 &&
+                  (tm->tun_submit_rejects > 0 || tm->tun_queue_rejects > 0);
+  negative_keep = tm->multi_mode && tm->expected_transport_timeout &&
+                  tm->cell == OI3_CELL_NO_REPLY;
+  keep_tun = tm->tun_mode && !tm->error[0] && !tm->fault_injected &&
+             !tm->normal_stop_requested && !tm->underlay_invalidated &&
+             !tm->expected_real_no_reply && !tm->expected_real_reset &&
+             !tm->expected_real_policy_drop &&
+             tm->tun_output_errors == 0 && tm->vpp_buffer_residue == 0 &&
+             (negative_keep ||
+              (!oi3_is_expected_negative_cell (tm) &&
+               (overload_keep || (tm->output_packets != 0 &&
+                                  tm->output_direct != 0 &&
+                                  tm->return_rewritten != 0))));
+  if (tm->tun_mode && !negative_keep &&
+      !oi3_is_expected_negative_cell (tm) &&
+      !tm->expected_real_no_reply && !tm->expected_real_reset &&
+      !tm->expected_real_policy_drop &&
+      !tm->fault_injected && !tm->underlay_invalidated &&
+      !tm->normal_stop_requested &&
+      !overload_keep &&
+      (tm->tun_output_errors != 0 || tm->output_packets == 0 ||
+       tm->output_direct == 0 || tm->return_rewritten == 0))
+    keep_tun = false;
+
+  oi3_connector_poll_stop (tm);
+  if (!tm->multi_mode && !keep_tun && tm->tun_file_index >= 0) {
     clib_file_del_by_index (&file_main, tm->tun_file_index);
     tm->tun_file_index = -1;
   }
@@ -1381,20 +3124,66 @@ oi3_finish (vlib_main_t *vm)
     clib_file_del_by_index (&file_main, tm->completion_file_index);
     tm->completion_file_index = -1;
   }
+  oi3_log_runtime_credits (tm, "before-stop");
   if (tm->context) {
-    (void)tm->api.stop (tm->context);
-    for (u32 i = 0; i < 512; i++) {
-      oi3_task_budget_t budget = { .max_quanta = 1 }; oi3_task_result_t result;
-      if (tm->api.task_step (&budget, &result) < 0 || !result.total_task_count) break;
+    int stop_result = OI3_OWNER_STOP_PENDING;
+    oi3_stop_context_for (vm, tm, &stop_result);
+    if (stop_result != OI3_OWNER_STOP_READY) {
+      if (stop_result != OI3_OWNER_STOP_PENDING)
+        oi3_error ("OI3 owner context stop failed");
+      return;
     }
     tm->api.destroy (tm->context); tm->context = NULL;
-    tm->api.task_fini ();
+    tm->lwip_context = NULL;
+    oi3_task_fini (tm);
   }
   if (tm->direct_fd >= 0) { close (tm->direct_fd); tm->direct_fd = -1; }
   oi3_stop_threads (tm);
-  if (tm->tun_fd >= 0) { close (tm->tun_fd); tm->tun_fd = -1; }
-  if (!tm->tun_mode) oi3_classify_result (tm);
-  tm->finished = 1; tm->active = 0; tm->phase = OI3_DONE; tm->finish_ns = oi3_now_ns ();
+  if (!keep_tun) {
+    if (tm->connector_wake_file_index >= 0) {
+      clib_file_del_by_index (&file_main, tm->connector_wake_file_index);
+      tm->connector_wake_file_index = -1;
+      tm->connector_wake_pipe[0] = -1;
+    }
+    if (tm->connector_wake_pipe[0] >= 0)
+      close (tm->connector_wake_pipe[0]);
+    if (tm->connector_wake_pipe[1] >= 0)
+      close (tm->connector_wake_pipe[1]);
+    tm->connector_wake_pipe[0] = tm->connector_wake_pipe[1] = -1;
+    if (!tm->multi_mode && tm->tun_fd >= 0) {
+      close (tm->tun_fd); tm->tun_fd = -1;
+    }
+  }
+  tm->finish_ns = oi3_now_ns ();
+  cleanup_result = tm->error[0]
+                   ? "FAIL"
+                   : (tm->fault_injected
+                      ? "PASS_EXPECTED_FAULT"
+                      : (tm->underlay_invalidated
+                         ? "PASS_EXPECTED_UNDERLAY_INVALIDATION"
+                      : (tm->normal_stop_requested
+                            ? "PASS_EXPECTED_STOP"
+                      : (tm->overload_expected
+                         ? "PASS_EXPECTED_OVERLOAD"
+                      : (tm->expected_real_reset
+                         ? "PASS_EXPECTED_REAL_RESET"
+                      : (tm->expected_real_no_reply
+                         ? "PASS_EXPECTED_REAL_NO_REPLY"
+                      : (tm->expected_real_policy_drop
+                         ? "PASS_EXPECTED_REAL_POLICY_DROP"
+                      : (tm->expected_transport_timeout
+                         ? "PASS_EXPECTED_AMBIENT_TIMEOUT"
+                      : (oi3_is_expected_negative_cell (tm)
+                         ? "PASS_EXPECTED_FAILURE" : "PASS")))))))));
+  if (tm->tun_mode && !oi3_is_expected_negative_cell (tm) &&
+      !tm->expected_real_no_reply && !tm->expected_real_reset &&
+      !tm->expected_real_policy_drop &&
+      !tm->fault_injected && !tm->underlay_invalidated &&
+      !tm->normal_stop_requested &&
+      !tm->overload_expected &&
+      (tm->tun_output_errors != 0 || tm->output_packets == 0 ||
+       tm->output_direct == 0 || tm->return_rewritten == 0))
+    cleanup_result = "FAIL";
   if (tm->a2_return_mode) {
     fprintf (stderr,
              "oi3 a2-3 schema=s139-a2-3-oi3/v1 event=CLEANUP "
@@ -1406,33 +3195,87 @@ oi3_finish (vlib_main_t *vm)
              tm->a2_return_lookup_count, tm->vpp_buffers_allocated,
              tm->vpp_buffers_freed, tm->vpp_buffer_residue);
   }
-  fprintf (stderr, "oi3_cleanup result=%s outcome=%s generation=%llu epoch=%llu fault-injected=%u output=%u handshake=%u direct=%u "
+  fprintf (stderr, "oi3_cleanup result=%s outcome=%s generation=%llu epoch=%llu fault-injected=%u normal-stop-requested=%u output=%u handshake=%u direct=%u "
            "rewritten=%u endpoint=%u/%u accepted=%u broker=%u/%u duplicate-close=%u "
-           "transport-failures=%u infrastructure-failures=%u buffers=%u/%u residue=%u\n",
-           tm->error[0] ? "FAIL" : "PASS", oi3_expected_outcome (tm),
+           "underlay-invalidated=%u underlay-handle=%lld underlay-available=%u "
+           "transport-failures=%u infrastructure-failures=%u submit-rejects=%u "
+           "queue-rejects=%u "
+           "overload-expected=%u ambient-timeout-expected=%u "
+           "real-no-reply-expected=%u real-reset-expected=%u "
+           "real-policy-drop-expected=%u downstream-reset-observed=%u "
+           "direct-send=%u "
+           "buffers=%u/%u residue=%u error=%s\n",
+           cleanup_result, oi3_expected_outcome (tm),
            (unsigned long long)tm->generation,
            (unsigned long long)tm->underlay_epoch, tm->fault_injected,
+           tm->normal_stop_requested,
            tm->output_packets, tm->output_handshake, tm->output_direct,
            tm->return_rewritten, tm->endpoint_received, tm->endpoint_replied,
            tm->endpoint_accepted,
            tm->broker_bind_calls, tm->broker_protect_calls, tm->broker_duplicate_closes,
+           tm->underlay_invalidated, (long long)tm->underlay_handle,
+           tm->underlay_available,
            tm->transport_failures, tm->infrastructure_failures,
-           tm->vpp_buffers_allocated, tm->vpp_buffers_freed, tm->vpp_buffer_residue);
+           tm->tun_submit_rejects, tm->tun_queue_rejects,
+           tm->overload_expected, tm->expected_transport_timeout,
+           tm->expected_real_no_reply, tm->expected_real_reset,
+           tm->expected_real_policy_drop,
+           tm->connector_downstream_reset_observed,
+           tm->direct_send_events,
+           tm->vpp_buffers_allocated, tm->vpp_buffers_freed, tm->vpp_buffer_residue,
+           tm->error[0] ? tm->error : "");
+  if (keep_tun)
+    oi3_rearm_tun_flow (vm, tm);
+  else {
+    if (tm->multi_mode)
+      atomic_store_explicit (&tm->multi_admission_open, 0,
+                             memory_order_release);
+    tm->finished = 1;
+    tm->active = 0;
+    tm->phase = OI3_DONE;
+  }
   (void)vm;
+}
+
+static void
+oi3_finish (vlib_main_t *vm)
+{
+  oi3_finish_for (vm, &oi3_main);
+}
+
+/* HEV's task allocator is process-global even though each owner context and
+ * task step is owner-thread local.  Serialize only init/fini, matching the
+ * proven OI4 seam; never hold this lock while driving a context. */
+static int
+oi3_task_init (oi3_main_t *tm)
+{
+  int result;
+  pthread_mutex_lock (&oi3_task_init_lock);
+  result = tm->api.task_init ();
+  pthread_mutex_unlock (&oi3_task_init_lock);
+  return result;
+}
+
+static void
+oi3_task_fini (oi3_main_t *tm)
+{
+  pthread_mutex_lock (&oi3_task_init_lock);
+  tm->api.task_fini ();
+  pthread_mutex_unlock (&oi3_task_init_lock);
 }
 
 static int
 oi3_start_context (oi3_main_t *tm)
 {
   oi3_callbacks_t callbacks = { .output = oi3_output, .data = tm };
-  if (tm->api.task_init () < 0) return -1;
+  if (oi3_task_init (tm) < 0) return -1;
   tm->api.owner_config_default (&tm->owner_config);
   tm->owner_config.identity = 0x13000001U + tm->family + tm->protocol;
   tm->owner_config.packet_credit_limit = 8; tm->owner_config.inflight_pbuf_credit_limit = 8;
   tm->owner_config.max_session_count = 4; tm->owner_config.protected_socket_credit_limit = 4;
   tm->owner_config.tcp_buffer_size = 8192;
   tm->context = tm->api.create (&callbacks, &tm->owner_config);
-  if (!tm->context) { tm->api.task_fini (); return -1; }
+  if (!tm->context) { oi3_task_fini (tm); return -1; }
   memset (&tm->session_config, 0, sizeof (tm->session_config));
   tm->session_config.identity = tm->owner_config.identity;
   tm->session_config.recv = oi3_recv; tm->session_config.recv_data = tm;
@@ -1447,11 +3290,19 @@ oi3_start_context (oi3_main_t *tm)
   }
   if (tm->api.configure (tm->context, &tm->session_config) < 0 ||
       tm->api.start (tm->context) < 0) {
-    tm->api.destroy (tm->context); tm->context = NULL; tm->api.task_fini ();
+    tm->api.destroy (tm->context); tm->context = NULL; oi3_task_fini (tm);
     return -1;
   }
   memset (&tm->runtime_identity, 0, sizeof (tm->runtime_identity));
   tm->api.runtime_identity (tm->context, &tm->runtime_identity);
+  oi3_lwip_identity_t lwip_identity;
+  memset (&lwip_identity, 0, sizeof (lwip_identity));
+  tm->api.identity (tm->context, &lwip_identity);
+  tm->lwip_context = (void *)(uintptr_t)lwip_identity.context;
+  if (!tm->lwip_context) {
+    oi3_error ("OI3 lwip owner identity is empty");
+    return -1;
+  }
   fprintf (stderr, "oi3 owner-identity context=%p hev-runtime=%p session-registry=%p "
            "connector=%p config=%p config-identity=%llu tcp-listener=%p udp-listener=%p "
            "task-io=%p task-timer=%p started=%u owner-pthread=%lu\n",
@@ -1466,6 +3317,9 @@ oi3_start_context (oi3_main_t *tm)
            (void *)tm->runtime_identity.task_lwip_io,
            (void *)tm->runtime_identity.task_lwip_timer,
            tm->runtime_identity.started, (unsigned long)pthread_self ());
+  fprintf (stderr, "oi3 lwip-identity context=%p tcp-ticks=%u active-pcb=%p\n",
+           tm->lwip_context, lwip_identity.tcp_ticks_value,
+           (void *)lwip_identity.tcp_active_pcb);
   fprintf (stderr, "oi3 path ingress=owner-submit shared-graph=flow-stack-owner "
            "return=owner-output reentry=0 original-destination-family=%u "
            "port=%u epoch=%llu\n", tm->family, tm->target_port,
@@ -1544,18 +3398,70 @@ oi3_probe_refusal (oi3_main_t *tm)
   }
 }
 
+/* HEV owns the protected socket read/write operation.  Publish its exact
+ * result synchronously from the HEV session task instead of peeking SO_ERROR
+ * in a competing observer.  Under external driving this callback executes on
+ * the canonical FlowStackOwner thread.  The readiness helper only wakes that
+ * owner and never reads or classifies socket state. */
+static void
+oi3_connector_transport_event (void *data, HevOwnerRuntime *owner,
+                               tcp_pcb_t *pcb, unsigned int event,
+                               int error)
+{
+  oi3_main_t *tm = data;
+  (void)owner;
+  (void)pcb;
+  if (!tm || tm->protocol != 6 || tm->connector_error_reported)
+    return;
+
+  if (event == OI3_TCP_TRANSPORT_PEER_EOF) {
+    tm->connector_peer_eof_observed++;
+    fprintf (stderr,
+             "oi3 transport-event result=PEER_EOF owner=%u generation=%llu "
+             "owner-pthread=%lu\n",
+             tm->owner_id, (unsigned long long)tm->generation,
+             (unsigned long)pthread_self ());
+    return;
+  }
+
+  if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR || error == 0)
+    return;
+  tm->connector_last_error = error;
+  tm->connector_error_reported = 1;
+  tm->transport_failures++;
+  if (error == ECONNRESET)
+    tm->connector_reset_observed++;
+  fprintf (stderr,
+           "oi3 transport-event result=%s errno=%d %s owner=%u "
+           "generation=%llu owner-pthread=%lu reset-observed=%u\n",
+           event == OI3_TCP_TRANSPORT_READ_ERROR ? "READ_ERROR" :
+                                                   "WRITE_ERROR",
+           error, strerror (error), tm->owner_id,
+           (unsigned long long)tm->generation,
+           (unsigned long)pthread_self (), tm->connector_reset_observed);
+}
+
 static int
 oi3_prepare_tun_flow (oi3_main_t *tm)
 {
   /* A real TUN flow owns a fresh request generation.  Keeping this non-zero
    * makes the Java broker completion and every late-token check auditable. */
+  tm->finished = 0;
+  tm->tun_flow_count++;
   tm->generation++;
   if (tm->generation == 0) tm->generation = 1;
-  tm->underlay_epoch = tm->generation;
-  fprintf (stderr, "oi3 tun-flow generation=%llu epoch=%llu\n",
+  tm->udp_datagram_inflight = 0;
+  tm->start_ns = oi3_now_ns ();
+  tm->tun_flow_deadline_ns = oi3_now_ns () + OI3_TUN_FLOW_TIMEOUT_NS;
+  fprintf (stderr, "oi3 tun-flow count=%u deadline-ms=%llu\n",
+           tm->tun_flow_count,
+           (unsigned long long)(OI3_TUN_FLOW_TIMEOUT_NS / 1000000ULL));
+  fprintf (stderr, "oi3 tun-flow generation=%llu epoch=%llu underlay-handle=%lld "
+           "underlay-available=%u\n",
            (unsigned long long)tm->generation,
-           (unsigned long long)tm->underlay_epoch);
-  if (oi3_setup_broker (tm) < 0) return -1;
+           (unsigned long long)tm->underlay_epoch,
+           (long long)tm->underlay_handle, tm->underlay_available);
+  if (!tm->multi_mode && oi3_setup_broker (tm) < 0) return -1;
   if (oi3_target_is_loopback (tm) && tm->cell != OI3_CELL_REFUSED &&
       tm->cell != OI3_CELL_POLICY_DROP) {
     atomic_store (&tm->endpoint_stop, 0);
@@ -1576,9 +3482,93 @@ oi3_prepare_tun_flow (oi3_main_t *tm)
 }
 
 static void
-oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
+oi3_refresh_connector_state (oi3_main_t *tm)
 {
-  oi3_main_t *tm = &oi3_main;
+  int socket_error = 0;
+  socklen_t socket_error_length = sizeof (socket_error);
+
+  if (!tm || tm->connector_fd < 0 ||
+      !atomic_load_explicit (&tm->connector_connect_pending,
+                             memory_order_acquire))
+    return;
+  if (getsockopt (tm->connector_fd, SOL_SOCKET, SO_ERROR,
+                  &socket_error, &socket_error_length) < 0)
+    return;
+  if (socket_error == 0) {
+    atomic_store_explicit (&tm->connector_connect_pending, 0,
+                           memory_order_release);
+    return;
+  }
+  if (socket_error == EINPROGRESS || socket_error == EALREADY)
+    return;
+  tm->connector_last_error = socket_error;
+  if (!tm->connector_error_reported) {
+    tm->transport_failures++;
+    tm->connector_error_reported = 1;
+  }
+}
+
+/* Network callbacks arrive on VPP's main/control thread, but underlay
+ * ownership belongs to the FlowStackOwner worker.  The CLI handler publishes
+ * one atomic snapshot and queues an owner token; this function is the only
+ * place that mutates the flow's epoch or requests an active-flow teardown. */
+static void
+oi3_apply_pending_underlay (oi3_main_t *tm)
+{
+  if (!tm || !atomic_exchange_explicit (&tm->pending_underlay_update, 0,
+                                        memory_order_acq_rel))
+    return;
+  u64 event_epoch = atomic_load_explicit (&tm->pending_underlay_epoch,
+                                           memory_order_acquire);
+  int64_t event_handle = atomic_load_explicit (&tm->pending_underlay_handle,
+                                                memory_order_acquire);
+  u32 event_available = atomic_load_explicit (&tm->pending_underlay_available,
+                                               memory_order_acquire);
+  if (event_epoch == 0 || event_epoch < tm->underlay_epoch) {
+    fprintf (stderr, "oi3 underlay-epoch-stale event-epoch=%llu current-epoch=%llu "
+             "event-handle=%lld current-handle=%lld\n",
+             (unsigned long long)event_epoch,
+             (unsigned long long)tm->underlay_epoch,
+             (long long)event_handle, (long long)tm->underlay_handle);
+    return;
+  }
+  bool epoch_changed = event_epoch > tm->underlay_epoch;
+  bool metadata_changed = tm->underlay_handle != event_handle ||
+                          tm->underlay_available != event_available;
+  if (!epoch_changed && !metadata_changed)
+    return;
+  u64 old_epoch = tm->underlay_epoch;
+  int64_t old_handle = tm->underlay_handle;
+  tm->underlay_epoch = event_epoch;
+  tm->underlay_handle = event_handle;
+  tm->underlay_available = event_available;
+  fprintf (stderr, "oi3 underlay-epoch owner-apply old-epoch=%llu new-epoch=%llu "
+           "old-handle=%lld new-handle=%lld available=%u\n",
+           (unsigned long long)old_epoch,
+           (unsigned long long)tm->underlay_epoch,
+           (long long)old_handle, (long long)tm->underlay_handle,
+           tm->underlay_available);
+  if (epoch_changed && tm->active && tm->context && !tm->finished &&
+      tm->phase != OI3_DONE) {
+    tm->underlay_invalidated = 1;
+    tm->finish_requested = 1;
+    tm->phase = OI3_STOPPING;
+    fprintf (stderr,
+             "oi3 epoch-invalidated reason=underlay-transition generation=%llu "
+             "old-epoch=%llu new-epoch=%llu old-handle=%lld new-handle=%lld "
+             "old-tcp-reconnect=0 old-udp-reuse=0\n",
+             (unsigned long long)tm->generation,
+             (unsigned long long)old_epoch,
+             (unsigned long long)tm->underlay_epoch,
+             (long long)old_handle, (long long)tm->underlay_handle);
+  }
+}
+
+static void
+oi3_worker_run_for (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind,
+                    oi3_main_t *tm)
+{
+  oi3_current_tm = tm;
   /* Once the owner has requested a bounded stop, queued TUN/owner tokens
    * still have to pass through this node so their VPP buffers can be freed.
    * Do not drive HEV again from those drain tokens. */
@@ -1589,7 +3579,32 @@ oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
     tm->finish_requested = 1;
     return;
   }
-  if (tm->tun_mode && kind == OI3_TUN_KIND && !tm->context) {
+  if (tm->phase == OI3_DRIVE)
+    oi3_connector_poll_join (tm);
+  if (tm->tun_mode && !tm->context &&
+      (kind == OI3_TUN_KIND ||
+       (tm->multi_mode && tm->tun_pending_count != 0))) {
+    if (tm->multi_mode && tm->tun_pending_count != 0) {
+      oi3_tun_pending_entry_t *entry =
+        &tm->tun_pending[tm->tun_pending_head];
+      if (oi3_parse_tun_packet (tm, entry->packet, entry->length) < 0) {
+        fprintf (stderr, "oi3 multi-parse-failure owner=%u length=%u "
+                 "first=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x "
+                 "proto4=%u proto6=%u\n", tm->owner_id, entry->length,
+                 entry->length > 0 ? entry->packet[0] : 0,
+                 entry->length > 1 ? entry->packet[1] : 0,
+                 entry->length > 2 ? entry->packet[2] : 0,
+                 entry->length > 3 ? entry->packet[3] : 0,
+                 entry->length > 4 ? entry->packet[4] : 0,
+                 entry->length > 5 ? entry->packet[5] : 0,
+                 entry->length > 6 ? entry->packet[6] : 0,
+                 entry->length > 7 ? entry->packet[7] : 0,
+                 entry->length > 9 ? entry->packet[9] : 0,
+                 entry->length > 6 ? entry->packet[6] : 0);
+        oi3_error ("OI3 multi-owner TUN packet parse failed");
+        return;
+      }
+    }
     if (oi3_prepare_tun_flow (tm) < 0) {
       oi3_error ("OI3 TUN FlowStackOwner/broker start failed");
       return;
@@ -1602,64 +3617,37 @@ oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
     fprintf (stderr, "oi3 broker-completion result=SUCCESS token=%llu generation=%llu "
              "owner=%u\n", (unsigned long long)tm->token, (unsigned long long)tm->generation, tm->target_thread);
     tm->phase = OI3_SUBMIT;
-    if (tm->tun_mode) {
-      int submit_result = tm->tun_pending_length
-        ? (oi3_normalize_tun_ingress (tm, tm->tun_pending_packet,
-                                      tm->tun_pending_length),
-           tm->api.submit (tm->context, tm->tun_pending_packet,
-                           tm->tun_pending_length)) : -1;
-      fprintf (stderr, "oi3 tun-submit result=%d length=%u family=%u protocol=%u "
-               "destination-port=%u tcp-flags=0x%02x ip-checksum=%02x%02x "
-               "l4-checksum=%02x%02x\n", submit_result,
-               tm->tun_pending_length, tm->family, tm->protocol,
-               tm->target_port, tm->tun_tcp_flags,
-               tm->tun_pending_length >= 12 ? tm->tun_pending_packet[10] : 0,
-               tm->tun_pending_length >= 12 ? tm->tun_pending_packet[11] : 0,
-               tm->tun_pending_length >= 28 ? tm->tun_pending_packet[26] : 0,
-               tm->tun_pending_length >= 28 ? tm->tun_pending_packet[27] : 0);
-      if (submit_result < 0) {
-        oi3_error ("OI3 TUN first packet submit failed");
-        return;
-      }
-      tm->packet_submitted++;
-      tm->tun_pending_length = 0;
-      tm->phase = OI3_DRIVE;
-    }
   }
   if (!tm->tun_mode && !tm->context && tm->phase != OI3_FAULT) {
     if (oi3_start_context (tm) < 0) { oi3_error ("FlowStackOwner start failed"); return; }
     tm->phase = OI3_WAIT_BROKER;
     return;
   }
-  if (tm->tun_mode && kind == OI3_TUN_KIND && tm->context &&
-      tm->phase != OI3_WAIT_BROKER && tm->phase != OI3_STOPPING) {
-    int submit_result = tm->tun_pending_length
-      ? (oi3_normalize_tun_ingress (tm, tm->tun_pending_packet,
-                                    tm->tun_pending_length),
-         tm->api.submit (tm->context, tm->tun_pending_packet,
-                         tm->tun_pending_length)) : -1;
-    fprintf (stderr, "oi3 tun-submit result=%d length=%u family=%u protocol=%u "
-             "destination-port=%u tcp-flags=0x%02x ip-checksum=%02x%02x "
-             "l4-checksum=%02x%02x\n", submit_result,
-             tm->tun_pending_length, tm->family, tm->protocol,
-             tm->target_port, tm->tun_tcp_flags,
-             tm->tun_pending_length >= 12 ? tm->tun_pending_packet[10] : 0,
-             tm->tun_pending_length >= 12 ? tm->tun_pending_packet[11] : 0,
-             tm->tun_pending_length >= 28 ? tm->tun_pending_packet[26] : 0,
-             tm->tun_pending_length >= 28 ? tm->tun_pending_packet[27] : 0);
-    if (submit_result < 0) {
-      oi3_error ("OI3 TUN packet submit failed");
+  if (tm->tun_mode && tm->context && tm->phase != OI3_WAIT_BROKER &&
+      tm->phase != OI3_STOPPING) {
+    if (kind == 1 && tm->tun_pending_count == 0) {
+      oi3_error ("OI3 broker completion arrived without TUN packet");
+      tm->finish_requested = 1;
       return;
     }
-    tm->packet_submitted++;
-    /* A real TCP client drives the ACK/data/FIN packets from the TUN side;
-     * do not let the owner classify the flow as complete until the FIN has
-     * actually been submitted.  The initial SYN/SYN-ACK exchange can leave
-     * the HEV task reactor quiescent while Android is still preparing its
-     * next packet. */
-    if (tm->protocol == 6 && (tm->tun_tcp_flags & 0x01U))
-      tm->tcp_fin_submitted = 1;
-    tm->tun_pending_length = 0;
+    if (tm->multi_mode && tm->protocol == 17) {
+      /* UDP remains one datagram at a time at the HEV/lwIP seam, but the
+       * owner generation is no longer one datagram.  packet_submitted is a
+       * cumulative ledger; udp_datagram_inflight is the only submit guard. */
+      if (oi3_submit_next_udp_datagram_if_idle (tm) < 0) {
+        oi3_error ("OI3 TUN UDP packet submit failed");
+        tm->finish_requested = 1;
+        return;
+      }
+    } else {
+      while (tm->tun_pending_count != 0) {
+        if (oi3_submit_pending_tun (tm) < 0) {
+          oi3_error ("OI3 TUN packet submit failed");
+          tm->finish_requested = 1;
+          return;
+        }
+      }
+    }
     tm->phase = OI3_DRIVE;
   }
   if (!tm->tun_mode && tm->phase == OI3_SUBMIT) {
@@ -1677,14 +3665,24 @@ oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
   }
   if (tm->phase == OI3_DRIVE) {
     oi3_probe_refusal (tm);
-    if (tm->connector_error_reported) {
+    if (tm->connector_error_reported && !tm->expected_real_reset) {
       tm->phase = OI3_STOPPING;
       tm->finish_requested = 1;
       return;
     }
     oi3_task_budget_t budget = { .max_quanta = 1 }; oi3_task_result_t result;
+    u32 direct_send_before = tm->direct_send_events;
     if (tm->api.task_step (&budget, &result) < 0) { oi3_error ("owner task drive failed"); return; }
     tm->worker_steps++; tm->task_quanta += result.quanta;
+    if (oi3_drive_lwip_timer_after_send (tm, direct_send_before) < 0)
+      return;
+    if (!tm->expected_real_reset)
+      oi3_refresh_connector_state (tm);
+    if (tm->connector_error_reported) {
+      tm->phase = OI3_STOPPING;
+      tm->finish_requested = 1;
+      return;
+    }
     if (tm->connector_fd >= 0 &&
         (tm->family == 6 || tm->cell == OI3_CELL_REFUSED) &&
         (tm->worker_steps <= 5 || (tm->worker_steps % 25) == 0)) {
@@ -1708,11 +3706,113 @@ oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
              tm->output_packets, tm->output_direct, tm->endpoint_received, tm->endpoint_replied,
              tm->owner_pthread);
     if (tm->tun_mode) {
-      if (tm->worker_steps > 512) {
+      if (tm->tun_flow_deadline_ns && oi3_now_ns () >= tm->tun_flow_deadline_ns) {
+        fprintf (stderr, "oi3 tun-flow timeout steps=%u output=%u direct=%u\n",
+                 tm->worker_steps, tm->output_packets, tm->output_direct);
+        if (tm->expected_real_no_reply && tm->multi_mode &&
+            tm->protocol == 17 && tm->direct_send_events > 0 &&
+            tm->output_packets == 0 && tm->output_direct == 0 &&
+            tm->transport_failures == 0 && tm->infrastructure_failures == 0) {
+          fprintf (stderr,
+                   "oi3 real no-reply outcome=EXPECTED_REAL_NO_REPLY owner=%u "
+                   "port=%u direct-send=%u output=%u direct=%u\n",
+                   tm->owner_id, tm->target_port, tm->direct_send_events,
+                   tm->output_packets, tm->output_direct);
+        } else if (tm->multi_mode && tm->protocol == 6 && tm->output_packets > 0 &&
+            tm->output_handshake > 0 && tm->output_direct == 0 &&
+            tm->endpoint_received == 0 && tm->transport_failures == 0 &&
+            tm->infrastructure_failures == 0) {
+          /* Full-route multi-owner mode can receive an unrelated Android TCP
+           * flow whose protected endpoint never completes.  That is a
+           * transport timeout for this owner-local generation, not grounds to
+           * stop the shared TUN or reject later owners/tuples. */
+          tm->expected_transport_timeout = 1;
+          tm->cell = OI3_CELL_NO_REPLY;
+          fprintf (stderr,
+                   "oi3 ambient transport outcome=EXPECTED_TIMEOUT owner=%u "
+                   "port=%u output=%u handshake=%u direct=%u\n",
+                   tm->owner_id, tm->target_port, tm->output_packets,
+                   tm->output_handshake, tm->output_direct);
+        } else if (tm->cell == OI3_CELL_NO_REPLY) {
+          if (tm->tun_output_errors != 0 || tm->output_packets != 0 ||
+              tm->output_direct != 0 || tm->return_rewritten != 0)
+            snprintf (tm->error, sizeof (tm->error),
+                      "unexpected-no-reply-output");
+        } else if (tm->multi_mode && tm->protocol == 17 &&
+                   (tm->tun_submit_rejects > 0 || tm->tun_queue_rejects > 0) &&
+                   tm->tun_output_errors == 0 &&
+                   tm->transport_failures == 0 &&
+                   tm->infrastructure_failures == 0) {
+          /* A category-1 HEV credit rejection settles only the current UDP
+           * datagram.  UDP loss is an allowed overload result; preserve the
+           * owner/TUN generation and let teardown classify this pressure
+           * envelope explicitly instead of calling it a failed reply flow. */
+          tm->overload_expected = 1;
+          fprintf (stderr,
+                   "oi3 overload outcome=EXPECTED_PACKET_DROP owner=%u "
+                   "submit-rejects=%u queue-rejects=%u output=%u direct=%u "
+                   "rewritten=%u\n",
+                   tm->owner_id, tm->tun_submit_rejects,
+                   tm->tun_queue_rejects,
+                   tm->output_packets, tm->output_direct,
+                   tm->return_rewritten);
+        } else if (tm->output_packets == 0)
+          snprintf (tm->error, sizeof (tm->error),
+                    "tun-flow-timeout-no-reply");
+        else if (tm->output_direct == 0 || tm->return_rewritten == 0)
+          snprintf (tm->error, sizeof (tm->error),
+                    "tun-flow-output-not-a-direct-return");
+        else if (tm->tun_output_errors != 0)
+          snprintf (tm->error, sizeof (tm->error),
+                    "tun-flow-tun-write-failure");
         tm->phase = OI3_STOPPING;
+      } else if (tm->multi_mode && tm->protocol == 17) {
+        int udp_submit = oi3_submit_next_udp_datagram_if_idle (tm);
+        if (udp_submit < 0) {
+          oi3_error ("OI3 TUN UDP packet submit failed");
+          tm->finish_requested = 1;
+          return;
+        }
+        if (udp_submit > 0) {
+          tm->phase = OI3_DRIVE;
+          if (oi3_enqueue_owner_for (tm, vm, 0) < 0)
+            oi3_error ("OI3 TUN UDP submit-next requeue failed");
+          return;
+        }
+        if (result.total_task_count) {
+          if (result.running_task_count || tm->connector_fd < 0) {
+            if (oi3_enqueue_owner_for (tm, vm, 0) < 0)
+              oi3_error ("OI3 TUN drive requeue failed");
+          } else if (oi3_connector_poll_arm (tm) < 0) {
+            oi3_error ("OI3 connector readiness arm failed");
+          }
+          return;
+        }
+        if (tm->udp_datagram_inflight && tm->connector_fd < 0) {
+          snprintf (tm->error, sizeof (tm->error),
+                    "tun-udp-window-connector-missing");
+          tm->phase = OI3_STOPPING;
+        } else {
+          tm->phase = OI3_DRIVE;
+          fprintf (stderr,
+                   "oi3 tun-udp-window idle generation=%llu inflight=%u "
+                   "pending=%u submitted=%u output=%u direct=%u\n",
+                   (unsigned long long)tm->generation,
+                   tm->udp_datagram_inflight, tm->tun_pending_count,
+                   tm->packet_submitted, tm->output_packets,
+                   tm->output_direct);
+          if (tm->connector_fd >= 0 &&
+              oi3_connector_poll_arm (tm) < 0)
+            oi3_error ("OI3 connector readiness arm failed");
+          return;
+        }
       } else if (result.total_task_count) {
-        if (oi3_enqueue_owner (vm, 0) < 0)
-          oi3_error ("OI3 TUN drive requeue failed");
+        if (result.running_task_count || tm->connector_fd < 0) {
+          if (oi3_enqueue_owner_for (tm, vm, 0) < 0)
+            oi3_error ("OI3 TUN drive requeue failed");
+        } else if (oi3_connector_poll_arm (tm) < 0) {
+          oi3_error ("OI3 connector readiness arm failed");
+        }
         return;
       } else if (tm->protocol == 6 && !tm->tcp_fin_submitted) {
         /* TCP is event-driven at this seam.  A quiet reactor is not a
@@ -1733,19 +3833,19 @@ oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
       tm->tcp_server_seq += 1; tm->tcp_client_seq += 1;
       if (oi3_submit_fixture (tm) < 0) { oi3_error ("TCP ACK submit failed"); return; }
       tm->phase = OI3_DRIVE;
-      if (oi3_enqueue_owner (vm, 0) < 0) oi3_error ("OI3 TCP ACK requeue failed");
+      if (oi3_enqueue_owner_for (tm, vm, 0) < 0) oi3_error ("OI3 TCP ACK requeue failed");
       return;
     } else if (tm->protocol == 6 && tm->tcp_ack_submitted &&
                !tm->tcp_payload_submitted) {
       if (oi3_submit_fixture (tm) < 0) { oi3_error ("TCP payload submit failed"); return; }
       tm->phase = OI3_DRIVE;
-      if (oi3_enqueue_owner (vm, 0) < 0) oi3_error ("OI3 TCP payload requeue failed");
+      if (oi3_enqueue_owner_for (tm, vm, 0) < 0) oi3_error ("OI3 TCP payload requeue failed");
       return;
     } else if (tm->protocol == 6 && tm->output_direct &&
                !tm->tcp_fin_submitted) {
       if (oi3_submit_fixture (tm) < 0) { oi3_error ("TCP FIN submit failed"); return; }
       tm->phase = OI3_DRIVE;
-      if (oi3_enqueue_owner (vm, 0) < 0) oi3_error ("OI3 TCP FIN requeue failed");
+      if (oi3_enqueue_owner_for (tm, vm, 0) < 0) oi3_error ("OI3 TCP FIN requeue failed");
       return;
     } else if ((tm->protocol == 17 && tm->output_direct) ||
                (tm->protocol == 6 && tm->output_direct)) {
@@ -1753,7 +3853,7 @@ oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
     } else if (tm->worker_steps > 512) {
       tm->phase = OI3_STOPPING;
     } else {
-      if (oi3_enqueue_owner (vm, 0) < 0) oi3_error ("OI3 drive requeue failed");
+      if (oi3_enqueue_owner_for (tm, vm, 0) < 0) oi3_error ("OI3 drive requeue failed");
       return;
     }
   }
@@ -1765,30 +3865,141 @@ oi3_worker_run (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind)
 VLIB_NODE_FN (oi3_worker_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
-  oi3_main_t *tm = &oi3_main;
   u32 *from = vlib_frame_vector_args (frame);
   for (u32 i = 0; i < frame->n_vectors; i++) {
     vlib_buffer_t *buffer = vlib_get_buffer (vm, from[i]);
-    u32 kind = *(u32 *)buffer->data;
-    if (kind == OI3_TUN_KIND) {
-      u32 length = *(u32 *)(buffer->data + 4);
-      if (length <= OI3_MAX_TUN_PACKET - 8U) {
-        memcpy (tm->tun_pending_packet, buffer->data + 8, length);
-        tm->tun_pending_length = length;
+    u32 *data = (u32 *)buffer->data;
+    u32 kind = data[0];
+    oi3_main_t *tm = &oi3_main;
+    bool tun_like = kind == OI3_TUN_KIND ||
+                    kind == OI3_TUN_DEFERRED_KIND;
+    const u8 *payload = buffer->data + 8;
+    u32 length = tun_like ? data[1] : 0;
+    if (oi3_multi.active) {
+      u32 owner_id = data[1];
+      if (owner_id >= oi3_multi.owner_count) {
+        oi3_multi.wrong_owner_events++;
+        vlib_buffer_free_one (vm, from[i]);
+        continue;
+      }
+      tm = &oi3_multi.owners[owner_id];
+      if (tun_like) {
+        length = data[2];
+        payload = buffer->data + 12;
+      }
+    }
+    if (kind == OI3_TUN_DEFERRED_KIND) {
+      uint64_t flow_hash = 0;
+      int deferred_result = -1;
+      if (tm->multi_mode && length <= OI3_MAX_TUN_PACKET &&
+          oi3_multi_flow_hash (payload, length, &flow_hash) == 0)
+        deferred_result =
+          oi3_tun_deferred_enqueue (tm, payload, length, flow_hash);
+      if (deferred_result >= 0) {
+        if (deferred_result == 0)
+          oi3_multi.route_deferred[tm->owner_id]++;
+        if (!atomic_load_explicit (&tm->active_flow_valid,
+                                   memory_order_acquire)) {
+          (void)oi3_admit_deferred_tun_flow (vm, tm);
+        } else if (!tm->finish_requested && tm->context &&
+                   tm->protocol == 6 && tm->output_packets != 0 &&
+                   tm->output_direct != 0 && tm->return_rewritten != 0) {
+          /* A successor SYN cannot be submitted into the current HEV context,
+           * but dropping it creates the F050 staircase cliff.  The canonical
+           * owner remains unchanged: successor SYN forces completed active
+           * owner toward rearm, then oi3_rearm_tun_flow admits exactly one
+           * deferred SYN from this owner-local queue. */
+          atomic_store_explicit (&tm->multi_admission_open, 0,
+                                 memory_order_release);
+          tm->phase = OI3_STOPPING;
+          tm->finish_requested = 1;
+          fprintf (stderr,
+                   "oi4 multi-deferred successor SYN forces completed active owner toward rearm owner=%u hash=%llu output=%u direct=%u rewritten=%u deferred=%u\n",
+                   tm->owner_id, (unsigned long long)flow_hash,
+                   tm->output_packets, tm->output_direct,
+                   tm->return_rewritten, tm->multi_deferred_count);
+        }
       } else {
-        tm->tun_pending_length = 0;
+        atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                   memory_order_relaxed);
+        oi3_multi.route_rejects[tm->owner_id]++;
+        fprintf (stderr,
+                 "oi4 multi-admission result=REJECT owner=%u hash=%llu "
+                 "reason=deferred-owner-queue-full depth=%u\n",
+                 tm->owner_id, (unsigned long long)flow_hash,
+                 tm->multi_deferred_count);
+      }
+    } else if (kind == OI3_TUN_KIND) {
+      if (tm->multi_mode) {
+        uint32_t depth = atomic_load_explicit (&tm->multi_dispatch_depth,
+                                               memory_order_acquire);
+        while (depth != 0 &&
+               !atomic_compare_exchange_weak_explicit (
+                 &tm->multi_dispatch_depth, &depth, depth - 1,
+                 memory_order_acq_rel, memory_order_acquire))
+          ;
+      }
+      size_t header = tm->multi_mode ? 12U : 8U;
+      if (length <= OI3_MAX_TUN_PACKET &&
+          length <= OI3_MAX_TUN_PACKET - header &&
+          oi3_tun_pending_enqueue (tm, payload, length) == 0) {
+        /* The pending packet is now owned by the selected owner. */
+        tm->tun_ingress_packets++;
+      } else if (tm->multi_mode && tm->protocol == 17) {
+        /* The owner-local pending queue is bounded packet-handoff credit.
+         * Under UDP pressure, settle only this packet and keep the admitted
+         * owner alive; queue exhaustion must not imply flow termination. */
+        tm->tun_queue_rejects++;
+        tm->overload_expected = 1;
+        atomic_fetch_add_explicit (&tm->multi_admission_rejects, 1,
+                                   memory_order_relaxed);
+        oi3_multi.route_rejects[tm->owner_id]++;
+        fprintf (stderr,
+                 "oi3 tun-queue result=REJECT reason=owner-queue-full "
+                 "owner=%u depth=%u queue-rejects=%u\n",
+                 tm->owner_id, tm->tun_pending_count,
+                 tm->tun_queue_rejects);
+      } else {
+        tm->tun_output_errors++;
+        oi3_error ("OI3 TUN pending queue full");
+        tm->finish_requested = 1;
       }
     }
     tm->worker_token_pending = 0;
-    if (tm->active) oi3_worker_run (vm, node, kind);
+    if (tm->active) {
+      oi3_apply_pending_underlay (tm);
+      oi3_worker_run_for (vm, node, kind, tm);
+    }
     vlib_buffer_free_one (vm, from[i]); tm->vpp_buffers_freed++;
     tm->vpp_buffer_residue = tm->vpp_buffers_allocated - tm->vpp_buffers_freed;
   }
   /* Finish only after the current owner token has been reclaimed.  This
    * makes the residue ledger reflect the actual post-node state rather than
    * counting the buffer that is still on this frame. */
-  if (tm->active && tm->finish_requested && tm->vpp_buffer_residue == 0)
-    oi3_finish (vm);
+  if (!oi3_multi.active && oi3_main.active && oi3_main.finish_requested &&
+      oi3_main.vpp_buffer_residue == 0)
+    oi3_finish_for (vm, &oi3_main);
+  if (oi3_multi.active) {
+    u32 current_thread = vlib_get_thread_index ();
+
+    for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+      oi3_main_t *owner_tm = &oi3_multi.owners[owner];
+      if (!owner_tm->active || !owner_tm->finish_requested ||
+          owner_tm->vpp_buffer_residue != 0)
+        continue;
+      if (owner_tm->target_thread == current_thread) {
+        oi3_finish_for (vm, owner_tm);
+      } else if (!owner_tm->worker_token_pending &&
+                 oi3_enqueue_owner_for (owner_tm, vm, 0) < 0) {
+        snprintf (owner_tm->error, sizeof (owner_tm->error),
+                  "owner-finish-enqueue-failed current-thread=%u "
+                  "target-thread=%u",
+                  current_thread, owner_tm->target_thread);
+        owner_tm->phase = OI3_FAULT;
+      }
+    }
+    oi3_multi_maybe_teardown ();
+  }
   return frame->n_vectors;
 }
 
@@ -1842,6 +4053,7 @@ oi3_init_connectors (oi3_main_t *tm)
   tm->tcp_connector.input = oi3_connector_input_tcp;
   tm->tcp_connector.output = oi3_connector_output_tcp;
   tm->tcp_connector.sent = oi3_connector_sent_tcp;
+  tm->tcp_connector.transport_event = oi3_connector_transport_event;
   memset (&tm->udp_connector, 0, sizeof (tm->udp_connector));
   tm->udp_connector.data = tm;
   tm->udp_connector.socket_create = oi3_connector_socket_create;
@@ -1850,6 +4062,417 @@ oi3_init_connectors (oi3_main_t *tm)
   tm->udp_connector.input = oi3_connector_input_udp;
   tm->udp_connector.output = oi3_connector_output_udp;
 }
+
+static void
+oi3_multi_owner_init (oi3_main_t *tm, u32 owner_id, u32 target_thread,
+                      int tun_fd, int request_fd, int completion_fd,
+                      const oi3_hev_api_t *api)
+{
+  memset (tm, 0, sizeof (*tm));
+  tm->api = *api;
+  tm->owner_id = owner_id;
+  tm->multi_mode = 1;
+  tm->target_thread = target_thread;
+  tm->frame_queue = oi3_main.frame_queue;
+  tm->tun_mode = 1;
+  tm->tun_fd = tun_fd;
+  tm->tun_file_index = -1;
+  tm->completion_file_index = -1;
+  tm->connector_wake_file_index = -1;
+  tm->request_pair[0] = tm->request_pair[1] = request_fd;
+  tm->completion_pair[0] = tm->completion_pair[1] = completion_fd;
+  tm->broker_external = 1;
+  tm->broker_available = 1;
+  tm->broker_result = OI2_RESULT_BROKER_UNAVAILABLE;
+  tm->phase = OI3_DONE;
+  tm->active = 1;
+  tm->finished = 1;
+  tm->underlay_epoch = atomic_load_explicit (&oi3_main.source_underlay_epoch,
+                                             memory_order_acquire);
+  tm->underlay_handle = atomic_load_explicit (&oi3_main.source_underlay_handle,
+                                               memory_order_acquire);
+  tm->underlay_available = atomic_load_explicit (
+    &oi3_main.source_underlay_available, memory_order_acquire);
+  if (!tm->underlay_epoch)
+    tm->underlay_epoch = 1;
+  atomic_init (&tm->source_underlay_epoch, tm->underlay_epoch);
+  atomic_init (&tm->source_underlay_handle, tm->underlay_handle);
+  atomic_init (&tm->source_underlay_available, tm->underlay_available);
+  atomic_init (&tm->pending_underlay_epoch, tm->underlay_epoch);
+  atomic_init (&tm->pending_underlay_handle, tm->underlay_handle);
+  atomic_init (&tm->pending_underlay_available, tm->underlay_available);
+  atomic_init (&tm->pending_underlay_update, 0);
+  atomic_init (&tm->broker_stop, 0);
+  atomic_init (&tm->endpoint_stop, 1);
+  atomic_init (&tm->endpoint_ready, 0);
+  atomic_init (&tm->connector_poll_stop, 0);
+  atomic_init (&tm->connector_poll_done, 1);
+  atomic_init (&tm->connector_wake_pending, 0);
+  atomic_init (&tm->connector_connect_pending, 0);
+  atomic_init (&tm->multi_admission_open, 1);
+  atomic_init (&tm->multi_dispatch_depth, 0);
+  atomic_init (&tm->multi_admission_rejects, 0);
+  atomic_init (&tm->active_flow_hash, 0);
+  atomic_init (&tm->active_flow_valid, 0);
+  atomic_init (&tm->multi_tcp_wait_syn, 0);
+  atomic_init (&tm->multi_tcp_tombstone_hash, 0);
+  atomic_init (&tm->multi_tcp_tombstone_valid, 0);
+  tm->request_pair[0] = tm->request_pair[1] = request_fd;
+  tm->completion_pair[0] = tm->completion_pair[1] = completion_fd;
+  tm->direct_fd = tm->connector_fd = tm->endpoint_fd =
+    tm->endpoint_client_fd = -1;
+  tm->connector_wake_pipe[0] = tm->connector_wake_pipe[1] = -1;
+  tm->tun_file_index = -1;
+  tm->completion_file_index = -1;
+  oi3_init_connectors (tm);
+}
+
+static void
+oi3_multi_maybe_teardown (void)
+{
+  if (!oi3_multi.active)
+    return;
+  for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+    oi3_main_t *tm = &oi3_multi.owners[owner];
+    if (tm->active || tm->context || tm->vpp_buffer_residue != 0)
+      return;
+    if (tm->connector_wake_file_index >= 0) {
+      clib_file_del_by_index (&file_main, tm->connector_wake_file_index);
+      tm->connector_wake_file_index = -1;
+    }
+    if (tm->connector_wake_pipe[0] >= 0)
+      close (tm->connector_wake_pipe[0]);
+    if (tm->connector_wake_pipe[1] >= 0)
+      close (tm->connector_wake_pipe[1]);
+    tm->connector_wake_pipe[0] = tm->connector_wake_pipe[1] = -1;
+  }
+  if (oi3_multi.completion_file_index >= 0) {
+    clib_file_del_by_index (&file_main, oi3_multi.completion_file_index);
+    oi3_multi.completion_file_index = -1;
+  }
+  if (oi3_multi.completion_watch_fd >= 0) {
+    close (oi3_multi.completion_watch_fd);
+    oi3_multi.completion_watch_fd = -1;
+  }
+  if (oi3_multi.tun_file_index >= 0) {
+    clib_file_del_by_index (&file_main, oi3_multi.tun_file_index);
+    oi3_multi.tun_file_index = -1;
+  }
+  if (oi3_multi.tun_fd >= 0) {
+    close (oi3_multi.tun_fd);
+    oi3_multi.tun_fd = -1;
+  }
+  oi3_multi.active = 0;
+  fprintf (stderr, "oi4 multi-session state=STOPPED owners=%u route=%u/%u/%u/%u "
+           "reject=%u/%u/%u/%u deferred=%u/%u/%u/%u "
+           "reassigned=%u/%u/%u/%u wrong-owner=%u policy-drop=%u\n",
+           oi3_multi.owner_count,
+           oi3_multi.route_count[0], oi3_multi.route_count[1],
+           oi3_multi.route_count[2], oi3_multi.route_count[3],
+           oi3_multi.route_rejects[0], oi3_multi.route_rejects[1],
+           oi3_multi.route_rejects[2], oi3_multi.route_rejects[3],
+           oi3_multi.route_deferred[0], oi3_multi.route_deferred[1],
+           oi3_multi.route_deferred[2], oi3_multi.route_deferred[3],
+           oi3_multi.route_reassigned[0], oi3_multi.route_reassigned[1],
+           oi3_multi.route_reassigned[2], oi3_multi.route_reassigned[3],
+           oi3_multi.wrong_owner_events, oi3_multi.policy_drop_packets);
+}
+
+static clib_error_t *
+oi3_multi_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                          vlib_cli_command_t *cmd)
+{
+  int fd = -1;
+  u32 target_a = 1, target_b = 2, target_c = 0, target_d = 0;
+  u8 *lib_path = NULL;
+  (void)cmd;
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT) {
+    if (unformat (input, "fd %d", &fd));
+    else if (unformat (input, "target-thread-a %u", &target_a));
+    else if (unformat (input, "target-thread-b %u", &target_b));
+    else if (unformat (input, "target-thread-c %u", &target_c));
+    else if (unformat (input, "target-thread-d %u", &target_d));
+    else if (unformat (input, "lib %s", &lib_path));
+    else {
+      vec_free (lib_path);
+      return clib_error_return (0, "unknown OI4 multi input `%U'",
+                                format_unformat_error, input);
+    }
+  }
+  u32 targets[OI3_MULTI_OWNER_CAPACITY] = {
+    target_a, target_b, target_c, target_d
+  };
+  u32 owner_count = 2;
+  if (target_c)
+    owner_count = 3;
+  if (target_d) {
+    if (!target_c) {
+      vec_free (lib_path);
+      return clib_error_return (0, "OI4 multi target-thread-d requires target-thread-c");
+    }
+    owner_count = 4;
+  }
+  if (fd < 0 || target_a == 0 || target_b == 0) {
+    vec_free (lib_path);
+    return clib_error_return (0, "OI4 multi requires fd and at least two worker targets");
+  }
+  for (u32 i = 0; i < owner_count; i++) {
+    if (targets[i] == 0 || targets[i] >= vlib_get_n_threads ()) {
+      vec_free (lib_path);
+      return clib_error_return (0, "OI4 multi worker target is invalid");
+    }
+    for (u32 j = i + 1; j < owner_count; j++) {
+      if (targets[i] == targets[j]) {
+        vec_free (lib_path);
+        return clib_error_return (0, "OI4 multi worker targets must be distinct");
+      }
+    }
+  }
+  if (owner_count > OI3_MULTI_OWNER_CAPACITY) {
+    vec_free (lib_path);
+    return clib_error_return (0, "OI4 multi owner count exceeds capacity");
+  }
+  if (oi3_multi.active || oi3_main.active) {
+    vec_free (lib_path);
+    return clib_error_return (0, "OI4/OI3 already active");
+  }
+  const char *request_text = getenv ("SAKAMOTO_OI3_REQUEST_FD");
+  const char *completion_text = getenv ("SAKAMOTO_OI3_COMPLETION_FD");
+  const char *env_path = getenv ("OI3_HEV_LIB");
+  const char *policy_drop_ip4_text =
+    getenv ("SAKAMOTO_OI3_POLICY_DROP_IP4");
+  if (!request_text || !completion_text) {
+    vec_free (lib_path);
+    return clib_error_return (0, "OI4 multi requires the Android broker endpoints");
+  }
+  if (!lib_path && env_path)
+    lib_path = format (0, "%s%c", env_path, 0);
+  if (!lib_path || oi3_load_hev ((char *)lib_path) < 0) {
+    vec_free (lib_path);
+    return clib_error_return (0, "OI4 multi HEV load failed: %s", oi3_main.error);
+  }
+  vec_free (lib_path);
+  memset (&oi3_multi, 0, sizeof (oi3_multi));
+  oi3_multi.owner_count = owner_count;
+  oi3_multi.tun_fd = fd;
+  oi3_multi.tun_file_index = -1;
+  oi3_multi.completion_file_index = -1;
+  oi3_multi.completion_watch_fd = -1;
+  oi3_multi.request_fd = atoi (request_text);
+  oi3_multi.completion_fd = atoi (completion_text);
+  if (policy_drop_ip4_text && policy_drop_ip4_text[0]) {
+    struct in_addr drop_ip4;
+    if (inet_pton (AF_INET, policy_drop_ip4_text, &drop_ip4) != 1)
+      return clib_error_return (0, "OI4 multi invalid policy-drop-ip4");
+    oi3_multi.policy_drop_ip4 = drop_ip4.s_addr;
+    oi3_multi.policy_drop_ip4_set = 1;
+  }
+  const char *expected_failure = getenv ("SAKAMOTO_OI3_EXPECTED_FAILURE");
+  u32 expected_real_no_reply =
+    expected_failure && !strcmp (expected_failure, "real-no-reply");
+  u32 expected_real_reset =
+    expected_failure && !strcmp (expected_failure, "real-reset");
+  u32 expected_real_policy_drop =
+    expected_failure && !strcmp (expected_failure, "real-policy-drop");
+  oi3_multi.hash_seed = 1469598103934665603ULL;
+  if (oi3_multi.request_fd < 0 || oi3_multi.completion_fd < 0)
+    return clib_error_return (0, "OI4 multi broker endpoint is invalid");
+  for (u32 owner = 0; owner < oi3_multi.owner_count; owner++)
+    {
+      oi3_multi_owner_init (&oi3_multi.owners[owner], owner, targets[owner],
+                            fd, oi3_multi.request_fd,
+                            oi3_multi.completion_fd, &oi3_main.api);
+      oi3_multi.owners[owner].expected_real_no_reply =
+        expected_real_no_reply;
+      oi3_multi.owners[owner].expected_real_reset = expected_real_reset;
+      oi3_multi.owners[owner].expected_real_policy_drop =
+        expected_real_policy_drop;
+    }
+  oi3_multi.active = 1;
+  int flags = fcntl (fd, F_GETFL, 0);
+  if (flags >= 0)
+    (void)fcntl (fd, F_SETFL, flags | O_NONBLOCK);
+  int completion_watch_fd = dup (oi3_multi.completion_fd);
+  if (completion_watch_fd < 0) {
+    oi3_multi.active = 0;
+    return clib_error_return_unix (0, "duplicate OI4 completion endpoint");
+  }
+  oi3_multi.completion_watch_fd = completion_watch_fd;
+  clib_file_t completion_file = { 0 };
+  completion_file.read_function = oi3_multi_completion_ready;
+  completion_file.file_descriptor = completion_watch_fd;
+  completion_file.polling_thread_index = 0;
+  completion_file.private_data = (uword)&oi3_multi;
+  completion_file.description = format (0, "OI4 multi-owner broker completion");
+  oi3_multi.completion_file_index =
+    (int)clib_file_add (&file_main, &completion_file);
+  if (oi3_multi.completion_file_index < 0) {
+    close (completion_watch_fd);
+    oi3_multi.completion_watch_fd = -1;
+    oi3_multi.active = 0;
+    return clib_error_return (0, "add OI4 completion watcher");
+  }
+  clib_file_t tun_file = { 0 };
+  tun_file.read_function = oi3_multi_tun_read_ready;
+  tun_file.file_descriptor = fd;
+  tun_file.polling_thread_index = 0;
+  tun_file.private_data = (uword)&oi3_multi;
+  tun_file.description = format (0, "OI4 multi-owner real TUN fd %d", fd);
+  oi3_multi.tun_file_index = (int)clib_file_add (&file_main, &tun_file);
+  if (oi3_multi.tun_file_index < 0) {
+    for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+      atomic_store_explicit (&oi3_multi.owners[owner].multi_admission_open, 0,
+                             memory_order_release);
+      oi3_multi.owners[owner].active = 0;
+    }
+    oi3_multi_maybe_teardown ();
+    return clib_error_return (0, "add OI4 TUN watcher");
+  }
+  int startup_failed = 0;
+  for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+    if (oi3_ensure_connector_wake_file (&oi3_multi.owners[owner]) < 0) {
+      startup_failed = 1;
+      oi3_multi.owners[owner].active = 0;
+      oi3_multi.owners[owner].finish_requested = 1;
+      atomic_store_explicit (&oi3_multi.owners[owner].multi_admission_open, 0,
+                             memory_order_release);
+    }
+  }
+  if (startup_failed) {
+    for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+      oi3_multi.owners[owner].active = 0;
+      oi3_multi.owners[owner].finish_requested = 1;
+      atomic_store_explicit (&oi3_multi.owners[owner].multi_admission_open, 0,
+                             memory_order_release);
+    }
+    oi3_multi_maybe_teardown ();
+    return clib_error_return (0, "add OI4 owner wake file");
+  }
+  fprintf (stderr,
+           "oi4 multi enabled owners=%u target-a=%u target-b=%u target-c=%u "
+           "target-d=%u fd=%d shared-graph=flow-stack-owner hash=fnv1a+mix "
+           "expected-failure=%s policy-drop-ip4=%s\n",
+           oi3_multi.owner_count, targets[0], targets[1], targets[2],
+           targets[3], fd,
+           expected_failure && expected_failure[0] ? expected_failure : "none",
+           oi3_multi.policy_drop_ip4_set ? policy_drop_ip4_text : "none");
+  vlib_cli_output (vm,
+                   "oi4 multi enabled owners=%u target-a=%u target-b=%u "
+                   "target-c=%u target-d=%u fd=%d",
+                   oi3_multi.owner_count, targets[0], targets[1], targets[2],
+                   targets[3], fd);
+  return 0;
+}
+
+VLIB_CLI_COMMAND (oi3_multi_tun_command, static) = {
+  .path = "sakamoto-oi3 multi tun",
+  .short_help = "sakamoto-oi3 multi tun fd <n> target-thread-a <worker> target-thread-b <worker> [target-thread-c <worker> target-thread-d <worker>] lib <HEV>",
+  .function = oi3_multi_tun_command_fn,
+};
+
+static clib_error_t *
+oi3_multi_fault_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                            vlib_cli_command_t *cmd)
+{
+  u32 owner = ~0U;
+  (void)cmd;
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT) {
+    if (unformat (input, "owner %u", &owner));
+    else return clib_error_return (0, "expected owner index");
+  }
+  if (!oi3_multi.active || owner >= oi3_multi.owner_count)
+    return clib_error_return (0, "OI4 multi owner is not active");
+  oi3_main_t *tm = &oi3_multi.owners[owner];
+  tm->fault_injected = 1;
+  tm->finish_requested = 1;
+  tm->phase = OI3_STOPPING;
+  atomic_store_explicit (&tm->multi_admission_open, 0, memory_order_release);
+  fprintf (stderr, "oi4 multi fault-injected owner=%u generation=%llu\n", owner,
+           (unsigned long long)tm->generation);
+  if (tm->context) {
+    if (oi3_enqueue_owner_for (tm, vm, 0) < 0)
+      return clib_error_return_unix (0, "enqueue OI4 owner fault");
+  } else {
+    oi3_finish_for (vm, tm);
+    oi3_multi_maybe_teardown ();
+  }
+  return 0;
+}
+
+VLIB_CLI_COMMAND (oi3_multi_fault_command, static) = {
+  .path = "sakamoto-oi3 multi fault",
+  .short_help = "inject a bounded fault into one OI4 owner",
+  .function = oi3_multi_fault_command_fn,
+};
+
+static clib_error_t *
+oi3_multi_stop_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                           vlib_cli_command_t *cmd)
+{
+  (void)input; (void)cmd;
+  if (!oi3_multi.active)
+    return clib_error_return (0, "OI4 multi is not active");
+  for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+    oi3_main_t *tm = &oi3_multi.owners[owner];
+    if (!tm->active)
+      continue;
+    tm->normal_stop_requested = 1;
+    tm->finish_requested = 1;
+    tm->phase = OI3_STOPPING;
+    atomic_store_explicit (&tm->multi_admission_open, 0,
+                           memory_order_release);
+    if (tm->context)
+      (void)oi3_enqueue_owner_for (tm, vm, 0);
+    else
+      oi3_finish_for (vm, tm);
+  }
+  oi3_multi_maybe_teardown ();
+  return 0;
+}
+
+VLIB_CLI_COMMAND (oi3_multi_stop_command, static) = {
+  .path = "sakamoto-oi3 multi stop", .short_help = "stop all OI4 owners",
+  .function = oi3_multi_stop_command_fn,
+};
+
+static clib_error_t *
+oi3_multi_show_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                           vlib_cli_command_t *cmd)
+{
+  (void)input; (void)cmd;
+  vlib_cli_output (vm, "oi4 multi active=%u owners=%u route=%u/%u/%u/%u reject=%u/%u/%u/%u deferred=%u/%u/%u/%u reassigned=%u/%u/%u/%u wrong-owner=%u",
+                   oi3_multi.active, oi3_multi.owner_count,
+                   oi3_multi.route_count[0], oi3_multi.route_count[1],
+                   oi3_multi.route_count[2], oi3_multi.route_count[3],
+                   oi3_multi.route_rejects[0], oi3_multi.route_rejects[1],
+                   oi3_multi.route_rejects[2], oi3_multi.route_rejects[3],
+                   oi3_multi.route_deferred[0], oi3_multi.route_deferred[1],
+                   oi3_multi.route_deferred[2], oi3_multi.route_deferred[3],
+                   oi3_multi.route_reassigned[0],
+                   oi3_multi.route_reassigned[1],
+                   oi3_multi.route_reassigned[2],
+                   oi3_multi.route_reassigned[3],
+                   oi3_multi.wrong_owner_events);
+  for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+    oi3_main_t *tm = &oi3_multi.owners[owner];
+    vlib_cli_output (vm, "oi4 owner=%u active=%u phase=%s generation=%llu ingress=%u output=%u direct=%u rejects=%u deferred=%u buffers=%u/%u residue=%u error=%s",
+                     owner, tm->active, oi3_phase_name (tm->phase),
+                     (unsigned long long)tm->generation,
+                     tm->tun_ingress_packets, tm->tun_output_packets,
+                     tm->output_direct,
+                     atomic_load_explicit (&tm->multi_admission_rejects,
+                                           memory_order_relaxed),
+                     tm->multi_deferred_count,
+                     tm->vpp_buffers_allocated, tm->vpp_buffers_freed,
+                     tm->vpp_buffer_residue, tm->error[0] ? tm->error : "");
+  }
+  return 0;
+}
+
+VLIB_CLI_COMMAND (oi3_multi_show_command, static) = {
+  .path = "show sakamoto-oi3 multi", .short_help = "show OI4 multi-owner evidence",
+  .function = oi3_multi_show_command_fn,
+};
 
 static clib_error_t *
 oi3_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
@@ -1868,7 +4491,10 @@ oi3_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
     vec_free (lib_path);
     return clib_error_return (0, "OI3 TUN requires fd and a worker target");
   }
-  if (tm->active) { vec_free (lib_path); return clib_error_return (0, "OI3 already active"); }
+  if (tm->active || oi3_multi.active) {
+    vec_free (lib_path);
+    return clib_error_return (0, "OI3/OI4 already active");
+  }
   env_path = getenv ("OI3_HEV_LIB");
   if (!lib_path && env_path) lib_path = format (0, "%s%c", env_path, 0);
   if (!lib_path || oi3_load_hev ((char *)lib_path) < 0) {
@@ -1877,6 +4503,9 @@ oi3_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vec_free (lib_path);
   oi3_init_connectors (tm);
   memset (&tm->target_address, 0, sizeof (tm->target_address));
+  memset (&tm->source_address, 0, sizeof (tm->source_address));
+  tm->source_port = 0;
+  tm->source_address_length = 0;
   tm->tun_mode = 1; tm->tun_fd = fd; tm->target_thread = target;
   tm->controlled_tun = getenv ("SAKAMOTO_OI3_CONTROLLED") != NULL;
   tm->a2_return_mode = getenv ("SAKAMOTO_OI3_A2_3_RETURN") != NULL;
@@ -1894,12 +4523,80 @@ oi3_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
   tm->controlled_refused = controlled_cell && !strcmp (controlled_cell, "refused");
   tm->controlled_no_reply = controlled_cell && !strcmp (controlled_cell, "no-reply");
   tm->controlled_policy_drop = controlled_cell && !strcmp (controlled_cell, "policy-drop");
+  const char *expected_failure = getenv ("SAKAMOTO_OI3_EXPECTED_FAILURE");
+  tm->expected_real_no_reply =
+    expected_failure && !strcmp (expected_failure, "real-no-reply");
+  tm->expected_real_reset =
+    expected_failure && !strcmp (expected_failure, "real-reset");
   tm->no_reply = tm->controlled_no_reply;
   tm->policy_dropped = tm->controlled_policy_drop;
-  fprintf (stderr, "oi3 tun safety controlled=%u cell=%s default-route=none-if-controlled\n",
-           tm->controlled_tun, controlled_cell ? controlled_cell : "udp4");
-  tm->tun_file_index = -1; tm->tun_pending_length = 0;
-  tm->generation = 0; tm->underlay_epoch = 1; tm->token = 0;
+  fprintf (stderr, "oi3 tun safety controlled=%u cell=%s "
+           "expected-failure=%s default-route=none-if-controlled\n",
+           tm->controlled_tun, controlled_cell ? controlled_cell : "udp4",
+           expected_failure && expected_failure[0] ? expected_failure : "none");
+  tm->tun_file_index = -1;
+  tm->tun_pending_head = 0;
+  tm->tun_pending_count = 0;
+  tm->tun_pending_sequence = 0;
+  memset (tm->tun_pending, 0, sizeof (tm->tun_pending));
+  tm->multi_deferred_head = 0;
+  tm->multi_deferred_count = 0;
+  tm->multi_deferred_sequence = 0;
+  memset (tm->multi_deferred, 0, sizeof (tm->multi_deferred));
+  tm->tun_flow_count = 0;
+  tm->tun_ingress_packets = 0;
+  tm->tun_output_packets = 0;
+  tm->tun_output_errors = 0;
+  tm->tun_submit_rejects = 0;
+  tm->tun_queue_rejects = 0;
+  tm->overload_expected = 0;
+  tm->expected_transport_timeout = 0;
+  tm->vpp_buffers_allocated = 0;
+  tm->vpp_buffers_freed = 0;
+  tm->vpp_buffer_residue = 0;
+  tm->worker_token_pending = 0;
+  tm->error[0] = 0;
+  tm->udp_datagram_inflight = 0;
+  tm->tun_flow_deadline_ns = 0;
+  atomic_store_explicit (&tm->connector_wake_pending, 0, memory_order_release);
+  atomic_store_explicit (&tm->connector_connect_pending, 0, memory_order_release);
+  if (oi3_ensure_connector_wake_file (tm) < 0) {
+    tm->active = 0;
+    return clib_error_return_unix (0, "create OI3 connector wake pipe");
+  }
+  /* nativeStartVppProbe can publish the initial NetworkCallback snapshot
+   * before VPP has executed the tun command.  Preserve that source snapshot
+   * instead of resetting its physical handle to -1; otherwise the first real
+   * flow would lose the platform provenance that selected its underlay. */
+  u64 source_epoch = atomic_load_explicit (&tm->source_underlay_epoch,
+                                           memory_order_acquire);
+  int64_t source_handle = atomic_load_explicit (&tm->source_underlay_handle,
+                                                 memory_order_acquire);
+  u32 source_available = atomic_load_explicit (&tm->source_underlay_available,
+                                                memory_order_acquire);
+  if (!source_epoch) {
+    source_epoch = 1;
+    source_handle = -1;
+    source_available = 0;
+    atomic_store_explicit (&tm->source_underlay_epoch, source_epoch,
+                           memory_order_release);
+    atomic_store_explicit (&tm->source_underlay_handle, source_handle,
+                           memory_order_release);
+    atomic_store_explicit (&tm->source_underlay_available, source_available,
+                           memory_order_release);
+  }
+  tm->generation = 0; tm->underlay_epoch = source_epoch;
+  tm->underlay_handle = source_handle;
+  tm->underlay_available = source_available;
+  tm->underlay_invalidated = 0; tm->normal_stop_requested = 0; tm->token = 0;
+  atomic_store_explicit (&tm->pending_underlay_epoch, source_epoch,
+                         memory_order_release);
+  atomic_store_explicit (&tm->pending_underlay_handle, source_handle,
+                         memory_order_release);
+  atomic_store_explicit (&tm->pending_underlay_available, source_available,
+                         memory_order_release);
+  atomic_store_explicit (&tm->pending_underlay_update, 0,
+                         memory_order_release);
   tm->context = NULL; tm->active = 1; tm->finished = 0; tm->phase = OI3_DONE;
   tm->request_pair[0] = tm->request_pair[1] = -1;
   tm->completion_pair[0] = tm->completion_pair[1] = -1;
@@ -1926,6 +4623,117 @@ VLIB_CLI_COMMAND (oi3_tun_command, static) = {
   .path = "sakamoto-oi3 tun",
   .short_help = "sakamoto-oi3 tun fd <n> target-thread <worker> lib <HEV>",
   .function = oi3_tun_command_fn,
+};
+
+static clib_error_t *
+oi3_underlay_epoch_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                               vlib_cli_command_t *cmd)
+{
+  oi3_main_t *tm = &oi3_main;
+  u64 epoch = 0;
+  long long physical_handle = -1;
+  u32 available = 0;
+  (void)cmd;
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT) {
+    /* The VPP CLI strips the registered path (`... underlay epoch`) before
+     * invoking the handler, so the first token is the numeric epoch.  Accept
+     * the explicit spelling as well to keep direct unit/CLI probes readable. */
+    if (unformat (input, "%llu", &epoch));
+    else if (unformat (input, "handle %lld", &physical_handle));
+    else if (unformat (input, "available %u", &available));
+    else
+      return clib_error_return (0, "unknown input `%U'", format_unformat_error, input);
+  }
+  if (!epoch)
+    return clib_error_return (0, "underlay epoch must be non-zero");
+  u64 current_epoch = atomic_load_explicit (&tm->source_underlay_epoch,
+                                             memory_order_acquire);
+  int64_t current_handle = atomic_load_explicit (&tm->source_underlay_handle,
+                                                  memory_order_acquire);
+  u32 current_available = atomic_load_explicit (&tm->source_underlay_available,
+                                                 memory_order_acquire);
+  if (epoch < current_epoch) {
+    fprintf (stderr, "oi3 underlay-epoch-stale source-event=%llu current-source=%llu "
+             "event-handle=%lld current-handle=%lld\n",
+             (unsigned long long)epoch, (unsigned long long)current_epoch,
+             physical_handle, (long long)current_handle);
+    vlib_cli_output (vm, "oi3 underlay epoch stale event=%llu current=%llu",
+                     (unsigned long long)epoch,
+                     (unsigned long long)current_epoch);
+    return 0;
+  }
+  if (epoch == current_epoch &&
+      current_handle == (int64_t)physical_handle &&
+      current_available == (available != 0)) {
+    vlib_cli_output (vm, "oi3 underlay epoch unchanged=%llu",
+                     (unsigned long long)epoch);
+    return 0;
+  }
+  atomic_store_explicit (&tm->source_underlay_epoch, epoch,
+                         memory_order_release);
+  atomic_store_explicit (&tm->source_underlay_handle,
+                         (int64_t)physical_handle, memory_order_release);
+  atomic_store_explicit (&tm->source_underlay_available, available != 0,
+                         memory_order_release);
+  atomic_store_explicit (&tm->pending_underlay_epoch, epoch,
+                         memory_order_release);
+  atomic_store_explicit (&tm->pending_underlay_handle,
+                         (int64_t)physical_handle, memory_order_release);
+  atomic_store_explicit (&tm->pending_underlay_available, available != 0,
+                         memory_order_release);
+  atomic_store_explicit (&tm->pending_underlay_update, 1,
+                         memory_order_release);
+  /* The Java callback publishes one source-network event.  In the final
+   * multi-owner mode that snapshot must reach every owner; otherwise a
+   * reconnect can silently leave one shard on the previous underlay epoch. */
+  if (oi3_multi.active) {
+    for (u32 owner = 0; owner < oi3_multi.owner_count; owner++) {
+      oi3_main_t *owner_tm = &oi3_multi.owners[owner];
+      u64 owner_epoch = atomic_load_explicit (&owner_tm->source_underlay_epoch,
+                                              memory_order_acquire);
+      int64_t owner_handle = atomic_load_explicit (
+        &owner_tm->source_underlay_handle, memory_order_acquire);
+      u32 owner_available = atomic_load_explicit (
+        &owner_tm->source_underlay_available, memory_order_acquire);
+      if (epoch < owner_epoch ||
+          (epoch == owner_epoch && owner_handle == (int64_t)physical_handle &&
+           owner_available == (available != 0)))
+        continue;
+      atomic_store_explicit (&owner_tm->source_underlay_epoch, epoch,
+                             memory_order_release);
+      atomic_store_explicit (&owner_tm->source_underlay_handle,
+                             (int64_t)physical_handle, memory_order_release);
+      atomic_store_explicit (&owner_tm->source_underlay_available,
+                             available != 0, memory_order_release);
+      atomic_store_explicit (&owner_tm->pending_underlay_epoch, epoch,
+                             memory_order_release);
+      atomic_store_explicit (&owner_tm->pending_underlay_handle,
+                             (int64_t)physical_handle, memory_order_release);
+      atomic_store_explicit (&owner_tm->pending_underlay_available,
+                             available != 0, memory_order_release);
+      atomic_store_explicit (&owner_tm->pending_underlay_update, 1,
+                             memory_order_release);
+      if (atomic_load_explicit (&owner_tm->multi_admission_open,
+                                memory_order_acquire) &&
+          !owner_tm->worker_token_pending &&
+          oi3_enqueue_owner_for (owner_tm, vm, OI3_UNDERLAY_KIND) < 0)
+        return clib_error_return_unix (0, "OI4 underlay epoch owner enqueue");
+    }
+  }
+  fprintf (stderr, "oi3 underlay epoch published epoch=%llu handle=%lld available=%u\n",
+           (unsigned long long)epoch, physical_handle, available != 0);
+  if (tm->active && !tm->worker_token_pending &&
+      oi3_enqueue_owner (vm, OI3_UNDERLAY_KIND) < 0)
+    return clib_error_return_unix (0, "OI3 underlay epoch owner enqueue");
+  vlib_cli_output (vm, "oi3 underlay epoch published=%llu handle=%lld available=%u",
+                   (unsigned long long)epoch, physical_handle, available != 0);
+  return 0;
+}
+
+VLIB_CLI_COMMAND (oi3_underlay_epoch_command, static) = {
+  .path = "sakamoto-oi3 underlay epoch",
+  .short_help = "sakamoto-oi3 underlay epoch <N> handle <network-handle> available <0|1>",
+  .function = oi3_underlay_epoch_command_fn,
 };
 
 static clib_error_t *
@@ -1956,7 +4764,10 @@ oi3_run_command_fn (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t
   /* Controlled original-destination fixtures; not a SOCKS or packet port. */
   tm->endpoint_port = tm->protocol == 6 ? 42080 : 42081;
   tm->target_port = tm->endpoint_port;
+  tm->source_port = 0;
   memset (&tm->target_address, 0, sizeof (tm->target_address));
+  memset (&tm->source_address, 0, sizeof (tm->source_address));
+  tm->source_address_length = 0;
   if (tm->family == 4) { struct sockaddr_in *a = (struct sockaddr_in *)&tm->target_address; a->sin_family = AF_INET; a->sin_port = htons (tm->target_port); inet_pton (AF_INET, "127.0.0.1", &a->sin_addr); tm->target_address_length = sizeof (*a); }
   else { struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&tm->target_address; a6->sin6_family = AF_INET6; a6->sin6_port = htons (tm->target_port); inet_pton (AF_INET6, "::1", &a6->sin6_addr); tm->target_address_length = sizeof (*a6); }
   tm->request_pair[0] = tm->request_pair[1] = tm->completion_pair[0] = tm->completion_pair[1] = -1;
@@ -1964,7 +4775,8 @@ oi3_run_command_fn (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t
   u64 previous_generation = tm->generation;
   u64 previous_epoch = tm->underlay_epoch;
   tm->generation++; if (!tm->generation) tm->generation = 1;
-  tm->underlay_epoch = tm->generation; tm->token = 0;
+  if (!tm->underlay_epoch) tm->underlay_epoch = 1;
+  tm->token = 0;
   if (previous_generation) {
     fprintf (stderr, "oi3 epoch-invalidated old-generation=%llu old-epoch=%llu "
              "new-generation=%llu new-epoch=%llu old-tcp-reconnect=0 old-udp-reuse=0\n",
@@ -1978,14 +4790,16 @@ oi3_run_command_fn (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t
   tm->provenance_logged = 0;
   tm->tcp_handshake_seen = 0;
   tm->finish_requested = 0;
+  tm->normal_stop_requested = 0;
   tm->fault_injected = 0;
+  tm->underlay_invalidated = 0;
   tm->tcp_server_seq = tm->tcp_server_ack = tm->tcp_client_seq = 0;
   tm->tcp_ack_submitted = 0;
   tm->broker_result = OI2_RESULT_BROKER_UNAVAILABLE;
   tm->endpoint_accepted = tm->endpoint_received = tm->endpoint_replied = tm->broker_bind_calls = tm->broker_protect_calls = 0;
   tm->broker_duplicate_closes = tm->broker_stale = tm->transport_failures = tm->infrastructure_failures = 0;
   tm->connector_last_error = tm->connector_error_reported = 0;
-  tm->packet_submitted = tm->tcp_payload_submitted = tm->tcp_fin_submitted = 0; tm->error[0] = 0;
+  tm->packet_submitted = tm->udp_datagram_inflight = tm->tcp_payload_submitted = tm->tcp_fin_submitted = 0; tm->error[0] = 0;
   atomic_store (&tm->endpoint_stop, 0);
   atomic_store (&tm->endpoint_ready, 0);
   if (!tm->policy_dropped) {
@@ -2021,6 +4835,7 @@ oi3_stop_command_fn (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_
   oi3_main.phase = OI3_STOPPING;
   /* A stop can race the first owner token.  Mark it before enqueueing the
    * stop token so the worker cannot start a context after the stop request. */
+  oi3_main.normal_stop_requested = 1;
   oi3_main.finish_requested = 1;
   if (oi3_main.context) {
     (void)oi3_enqueue_owner (vm, 0);
@@ -2052,6 +4867,8 @@ oi3_fault_command_fn (vlib_main_t *vm, unformat_input_t *input,
            (unsigned long long)oi3_main.underlay_epoch);
   if (oi3_main.context)
     (void)oi3_enqueue_owner (vm, 0);
+  else if (oi3_main.tun_mode)
+    oi3_finish (vm);
   else
     vlib_node_set_interrupt_pending (vm, oi3_trigger_node.index);
   return 0;
@@ -2067,10 +4884,13 @@ static clib_error_t *
 oi3_show_command_fn (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *cmd)
 {
   oi3_main_t *tm = &oi3_main; (void)input; (void)cmd;
-  vlib_cli_output (vm, "oi3 state=%s cell=%s active=%u finished=%u tun=%u tun-ingress=%u tun-output=%u tun-errors=%u owner=%u generation=%llu phase=%s steps=%u packets=%u output=%u handshake=%u direct=%u rewritten=%u",
+  vlib_cli_output (vm, "oi3 state=%s cell=%s active=%u finished=%u tun=%u tun-flows=%u tun-ingress=%u tun-output=%u tun-errors=%u owner=%u generation=%llu epoch=%llu underlay-handle=%lld underlay-available=%u underlay-invalidated=%u normal-stop-requested=%u phase=%s steps=%u packets=%u output=%u handshake=%u direct=%u rewritten=%u",
                    oi3_phase_name (tm->phase), oi3_cell_name (tm->cell), tm->active, tm->finished,
-                   tm->tun_mode, tm->tun_ingress_packets, tm->tun_output_packets,
+                   tm->tun_mode, tm->tun_flow_count, tm->tun_ingress_packets, tm->tun_output_packets,
                    tm->tun_output_errors, tm->target_thread, (unsigned long long)tm->generation,
+                   (unsigned long long)tm->underlay_epoch,
+                   (long long)tm->underlay_handle, tm->underlay_available,
+                   tm->underlay_invalidated, tm->normal_stop_requested,
                    oi3_phase_name (tm->phase), tm->worker_steps, tm->packet_submitted,
                    tm->output_packets, tm->output_handshake, tm->output_direct, tm->return_rewritten);
   vlib_cli_output (vm, "oi3 endpoint=%u/%u accepted=%u broker bind=%u protect=%u duplicate-close=%u stale=%u transport-failures=%u infrastructure-failures=%u buffers=%u/%u residue=%u error=%s",
@@ -2093,7 +4913,31 @@ oi3_init (vlib_main_t *vm)
   oi3_main.completion_pair[0] = oi3_main.completion_pair[1] = -1;
   oi3_main.direct_fd = oi3_main.connector_fd = oi3_main.endpoint_fd = oi3_main.endpoint_client_fd = -1;
   oi3_main.tun_fd = -1; oi3_main.tun_file_index = -1;
+  oi3_main.connector_wake_pipe[0] = oi3_main.connector_wake_pipe[1] = -1;
+  oi3_main.connector_wake_file_index = -1;
+  atomic_init (&oi3_main.source_underlay_epoch, 0);
+  atomic_init (&oi3_main.source_underlay_handle, -1);
+  atomic_init (&oi3_main.source_underlay_available, 0);
+  atomic_init (&oi3_main.pending_underlay_epoch, 0);
+  atomic_init (&oi3_main.pending_underlay_handle, -1);
+  atomic_init (&oi3_main.pending_underlay_available, 0);
+  atomic_init (&oi3_main.pending_underlay_update, 0);
+  atomic_init (&oi3_main.multi_admission_open, 0);
+  atomic_init (&oi3_main.multi_dispatch_depth, 0);
+  atomic_init (&oi3_main.multi_admission_rejects, 0);
+  atomic_init (&oi3_main.active_flow_hash, 0);
+  atomic_init (&oi3_main.active_flow_valid, 0);
+  atomic_init (&oi3_main.multi_tcp_wait_syn, 0);
+  atomic_init (&oi3_main.multi_tcp_tombstone_hash, 0);
+  atomic_init (&oi3_main.multi_tcp_tombstone_valid, 0);
+  oi3_main.owner_id = 0;
+  oi3_main.multi_mode = 0;
   oi3_main.frame_queue = vlib_frame_queue_main_init (oi3_worker_node.index, 0);
+  memset (&oi3_multi, 0, sizeof (oi3_multi));
+  oi3_multi.tun_fd = -1;
+  oi3_multi.tun_file_index = -1;
+  oi3_multi.completion_file_index = -1;
+  oi3_multi.completion_watch_fd = -1;
   oi3_main.phase = OI3_DONE; (void)vm;
   return 0;
 }

@@ -1,0 +1,29 @@
+diff -ruN a/src/hev-socks5-session-udp.c b/src/hev-socks5-session-udp.c
+--- a/src/hev-socks5-session-udp.c	2026-08-25 00:00:00.000000000 +0800
++++ b/src/hev-socks5-session-udp.c	2026-08-25 00:00:00.000000000 +0800
+@@ -86,7 +86,11 @@
+ 
+     res = self->frames;
+-    if (res <= 0)
+-        return self->data.connector ? -1 : 0;
++    if (res <= 0) {
++        /* External-driver UDP direct egress is a flow/window, not a one-shot
++         * request.  With no queued lwIP frame, keep the splice alive so a
++         * later TUN datagram can wake this same owner-local session. */
++        return 0;
++    }
+ 
+     if (self->data.connector) {
+         const HevSocks5UdpConnector *connector = self->data.connector;
+@@ -162,7 +166,10 @@
+             return -1;
+         }
+         lwip_owner_context_pbuf_free (self->data.lwip, p);
+-        return -1;
++        /* One protected UDP response completes one datagram, not the direct
++         * egress flow stack session.  Stay runnable/WAITIO-capable for the
++         * next response instead of terminating the splice task. */
++        return 1;
+     }
+ 
+     for (i = 0; i < num; i++) {

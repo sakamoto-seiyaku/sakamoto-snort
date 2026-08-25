@@ -1,7 +1,12 @@
 # Android VPN POC Finding Ledger
 
-Date: 2026-08-23  
+Date: 2026-08-25
 Plane owner: SAKAMOTO-135
+
+Finding diagnosis, delegated execution, and hotspot retry must follow
+[`ANDROID_VPN_POC_EXECUTION_GUARDRAILS.md`](ANDROID_VPN_POC_EXECUTION_GUARDRAILS.md).
+The runbook was derived from the recurring evidence and harness errors in this
+ledger; it does not replace the finding history or Plane work items.
 
 This is the single problem-centric engineering ledger for the Android VPN
 Direct Egress evolution.  It consolidates duplicate symptoms by root cause
@@ -57,6 +62,38 @@ Map rather than encoded as TODOs here.
 | VPN-F024 | Stop raced the first owner execution token | `CLOSED` | Host + Pixel |
 | VPN-F025 | Screen-off TCP latency remained near four seconds | `OPEN_RISK` | Pixel |
 | VPN-F026 | UID attribution was not stable across a flow | `OPEN_RISK` | Pixel |
+| VPN-F027 | Stale linker-prefixed plugin alias broke APK provenance | `CLOSED` | Host packaging + Pixel |
+| VPN-F028 | Android 16 per-UID Local Network Protection hid LAN replies | `CLOSED_FOR_POC` | Pixel |
+| VPN-F029 | UID-scoped active network selected the VPN as connector underlay | `CLOSED_FOR_POC` | Pixel Android 16 |
+| VPN-F030 | OI3 settled a multi-write TCP stream after the first short segment | `CLOSED_FOR_POC` | Pixel Android 16 |
+| VPN-F031 | OI3 short TCP segment lacked owner ACK/timer progress | `CLOSED_FOR_POC` | Pixel Android 16 |
+| VPN-F032 | OI3 TUN negative cells are forced to a positive-path cleanup failure | `CLOSED_FOR_POC` | Pixel Android 16 |
+| VPN-F033 | Real underlay handle changes are not propagated into the OI3 epoch | `CLOSED_FOR_POC` | Pixel Android 16 |
+| VPN-F034 | Explicit real-flow stop has no distinct terminal classification | `CLOSED_FOR_POC` | Pixel Android 16 |
+| VPN-F035 | Positive OI3 completion closed the detached VPN TUN after one real flow | `CLOSED_FOR_POC` | Pixel Android 16 |
+| VPN-F036 | Final OI3 artifact has no multi-owner/shard admission path | `CLOSED_FOR_D1_D2` | Pixel topology + source audit |
+| VPN-F037 | HEV submit backpressure has no bounded recovery contract | `CLOSED_FOR_TESTED_UDP_ENVELOPE` | Pixel Android 16 |
+| VPN-F038 | Full-route multi-owner ambient TCP can stop the test owner | `CLOSED_AS_CLASSIFIED_RUN_VALIDITY_HOTSPOT` | Pixel Android 16 |
+| VPN-F039 | OI3/HEV APK members can be built from incompatible source stages | `CLOSED_FOR_POC` | Build provenance + Pixel Android 16 |
+| VPN-F040 | HEV external-ingress gateway port-0 listener never matches original destination | `CLOSED_FOR_CORRECTNESS_ARM` | Pixel Android 16 + WSL2 LAN |
+| VPN-F041 | Single-owner TCP re-arm admits same-tuple FIN/ACK tail as a new generation | `CLOSED_FOR_CORRECTNESS_ARM` | Pixel Android 16 + WSL2 LAN |
+| VPN-F042 | Multi-owner stop invalidates lwIP pools before queued HEV tasks drain | `CLOSED_FOR_CORRECTED_FOUR_OWNER_UDP_REGRESSION` | Pixel Android 16 + WSL2 LAN |
+| VPN-F043 | WSL2 LAN endpoint failed same-UID bidirectional echo preflight | `CLOSED_AS_RUN_VALIDITY_HOTSPOT` | Pixel Android 16 + WSL2 LAN |
+| VPN-F044 | L4 stress fixed UDP source-port base collided with ambient Android sockets | `CLOSED_FOR_POC_HARNESS` | Pixel Android 16 |
+| VPN-F045 | OI3 UDP per-datagram owner generation cannot satisfy closed echo | `CLOSED_FOR_TWO_OWNER_UDP_CLOSED_ECHO` | Pixel Android 16 + WSL2 LAN |
+| VPN-F046 | Registered 4-flow closed echo exceeded the two-owner/single-active-flow topology | `CLOSED_FOR_FOUR_OWNER_UDP_CLOSED_ECHO` | Pixel Android 16 + WSL2 LAN |
+| VPN-F047 | OI3 multi TCP flow timeout was absolute rather than idle | `CLOSED_FOR_BOUNDED_E2_SAMPLE` | Pixel Android 16 + WSL2 LAN |
+| VPN-F048 | Matched HEV E2 baseline requires an explicit comparison APK with tun-poc | `CLOSED_AS_PREFLIGHT_AND_RUNNER_FIX` | Build provenance + Pixel Android 16 |
+| VPN-F049 | S172 duration-only HTTP baseline exposed OI3 TCP admission-before-tombstone and owner-busy limits | `CLOSED_FOR_MATCHED_HTTP_BASELINE_SLICE` | Pixel Android 16 + WSL2 LAN |
+| VPN-F050 | S173 foreground HTTP staircase exposed OI3 deterministic-owner single-active TCP successor-SYN capacity cliff | `CLOSED_FOR_BOUNDED_HTTP_STAIRCASE_SLICE` | Pixel Android 16 + WSL2 LAN |
+| VPN-F051 | S176 concurrent UDP flows collided on a busy deterministic primary owner despite idle capacity | `CLOSED_FOR_BOUNDED_UDP_MULTI_FLOW_ROUTE_PINNING_SLICE` | Pixel Android 16 + WSL2 LAN |
+| VPN-F052 | S177 resource runner treated transient WSL/ADB transport and blocking log reads as target evidence | `CLOSED_FOR_HARNESS_RETRY_AND_NONBLOCKING_LOG_READ` | WSL2 + Pixel Android 16 |
+| VPN-F053 | S178 B1 runner conflated dataplane proof with lifecycle cleanup-marker timing | `CLOSED_FOR_DATAPLANE_LIFECYCLE_SPLIT` | Pixel Android 16 + WSL2/ADB harness |
+| VPN-F054 | S180 B1 fallback could not be proven by independent UDP and TCP DNS probes | `CLOSED_FOR_REAL_FALLBACK_HELPER_AND_FIXTURE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F055 | S181 WSL2 closed TCP port was not a stable real-refusal fixture through Android VPN/OI3 | `CLOSED_FOR_REAL_TCP_TIMEOUT_DESIGN_CORRECTION` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F056 | S182 representative real policy drop needs an OI3 dispatcher seam, not Android app exclusion | `CLOSED_FOR_PRE_OWNER_POLICY_DROP_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F057 | S183 OI3 UID gate treated async owner-lookup sentinel as terminal | `CLOSED_FOR_BOUNDED_UID_GATE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F058 | S184 owner-observed real LAN TCP RST required a narrow downstream reset propagation seam | `CLOSED_FOR_BOUNDED_REAL_RST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -560,9 +597,1496 @@ Map rather than encoded as TODOs here.
   owner/shard key.
 - **Status:** `OPEN_RISK`.
 
+### VPN-F027 -- Stale linker-prefixed plugin alias broke APK provenance
+
+- **First observation:** A rebuilt B1 APK still emitted the temporary native
+  debug tag even though the selected overlay source and freshly built canonical
+  plugin no longer contained it.
+- **Evidence:**
+  [`S140_B1_RETURN_HOTSPOT_DIAGNOSIS.md`](S140_B1_RETURN_HOTSPOT_DIAGNOSIS.md),
+  including the source/plugin/HEV/APK hashes and extracted APK-member comparison.
+- **Environment:** Host APK staging/packaging and Pixel 6a runtime.
+- **Root-cause confidence:** HIGH.
+- **POC Correction:** When `VPP_POC_PLUGIN` is supplied, update both
+  `hev_external_driver_poc_plugin.so` and the linker-prefixed
+  `libhev_external_driver_poc_plugin.so`; after staging, fail the build unless
+  both packaged members hash-match the explicit input plugin. Select the HEV
+  owner stage explicitly and reject a runtime missing the required owner API.
+- **Post-correction evidence:** The two extracted plugin members hash-match the
+  registered input, the device-tested and post-assertion APK member trees are
+  byte-identical, tagged instrumentation is absent at runtime, and the same
+  controlled return cell passes with zero residue.
+- **Supported claim:** The observed stale runtime was an artifact-provenance
+  defect, not evidence that the rebuilt OI3 source ignored its return logic.
+- **Non-claim:** Outer APK hash equality alone proves transitive source/runtime
+  identity, or all future runtime dependencies are provenance-gated.
+- **Formal invariant:** Real-network evidence joins overlay source, explicit
+  plugin input, every stage alias, APK members, installed APK and device runtime;
+  any overwrite-capable alias must be hash-identical before the cell is valid.
+- **Status:** `CLOSED` for the current OI3 packaging path.
+
+### VPN-F028 -- Android 16 per-UID Local Network Protection hid LAN replies
+
+- **First observation:** The controlled WSL2 server received and replied to the
+  B1 UDP tuple, and a checksum-valid reply entered Pixel `wlan0`, but both the
+  protected OI3 socket and an ordinary VpnLite-UID socket timed out while a
+  shell-UID LAN control passed.
+- **Evidence:**
+  [`S140_B1_RETURN_HOTSPOT_DIAGNOSIS.md`](S140_B1_RETURN_HOTSPOT_DIAGNOSIS.md):
+  exact socket `Recv-Q=0`, one kernel drop, Local Network Protection netd/BPF
+  maps, before/after same-UID control, controlled full-path return, and public
+  IPv4 UDP DNS regression.
+- **Environment:** Pixel 6a, Android 16, VpnLite test package, Wi-Fi LAN fixture.
+- **Root-cause confidence:** HIGH for this device and test state.
+- **POC Correction:** Declare and grant the POC-only temporary
+  `NEARBY_WIFI_DEVICES` permission, disable the stale
+  `RESTRICT_LOCAL_NETWORK` compatibility override when Local Network Protection
+  is not the test subject, and reboot so netd/BPF state is rebuilt.
+- **Post-correction evidence:** The direct VpnLite-UID UDP control changed from
+  `5009 ms / received=0` to `25 ms / received=1`; the controlled owner-inline
+  return and the original public IPv4 UDP DNS trigger both passed with exact
+  cleanup and zero residue.
+- **Supported claim:** The missing LAN return was Android per-UID platform
+  eligibility, not an HEV/OI3 readiness or protected-socket demultiplexing bug.
+- **Non-claim:** The release product must request this permission, Local Network
+  Protection is irrelevant to product design, or the remaining B1 matrix is
+  complete.
+- **Formal invariant:** Before interpreting a controlled LAN timeout, record the
+  package permission/compat state and pass a direct socket control from the same
+  application UID with VPN stopped; shell UID reachability is insufficient.
+- **Status:** `CLOSED_FOR_POC`; release/OEM permission policy remains outside
+  this finding.
+
+### VPN-F029 -- UID-scoped active network selected the VPN as connector underlay
+
+- **First observation:** The first minimal real IPv4/TCP B1 cell reached OI3
+  `direct-send` but the WSL2 server saw no connection.  A shell-UID TCP control
+  to the same endpoint passed, while a Pixel `wlan0` capture contained no OI3
+  packet.
+- **Evidence:**
+  [`S141_B1_TCP_UNDERLAY_NETWORK_HOTSPOT.md`](S141_B1_TCP_UNDERLAY_NETWORK_HOTSPOT.md),
+  including the exact TUN/OI3 timeout, broker `bindSocket/protect` success,
+  active-network dump showing Wi-Fi network 100 plus VPN network 107 with
+  underlying `[100]`, and the zero-packet wlan0 capture.
+- **Environment:** Pixel 6a, Android 16, VpnLite UID 12628, default-route OI3
+  VPN, WSL2 endpoint `192.168.4.5:38080`.
+- **Root-cause confidence:** HIGH for the observed Android API behavior; the
+  old implementation used `ConnectivityManager.getActiveNetwork()` after the
+  VPN was established, so the UID-scoped result could be the VPN itself.
+- **POC Correction:** Enumerate all networks, reject VPN/`!NOT_VPN` candidates,
+  prefer validated Internet/Wi-Fi, log candidate/selected handles, and fail
+  closed when no non-VPN underlay exists.
+- **Post-correction evidence:** The rebuilt APK (SHA-256
+  `9b52fdc62c2fd335897d7f3e40e03140cc2f22cdfc736827f10c346388df3996`) selected
+  non-VPN Wi-Fi handle `432902426637` while the UID-scoped VPN active handle was
+  `467262165005`; `Network.bindSocket=true` and `VpnService.protect=true` were
+  recorded.  The WSL2 fixed-response server received
+  `RX ('192.168.4.151', 43336) 78`, the app received 88 response bytes in
+  `2604 ms`, and OI3 recorded `direct-recv length=88`, `rewritten=2`,
+  `buffers=149/149`, `residue=0`, cleanup `PASS`.  The bounded wlan0 capture
+  process did not flush packet text, so server receipt plus the selected Wi-Fi
+  route is the physical-egress observation for this run.
+- **Supported claim:** A successful Android bind/protect API return is not
+  sufficient evidence of physical underlay egress; the selected Network must
+  be non-VPN and joined to the connector fd.
+- **Non-claim:** This source correction alone closes B1 or proves every OEM's
+  network enumeration behavior; the remaining B1 matrix and other POCs still
+  require execution.
+- **Formal invariant:** Every protected connector socket binds to a recorded
+  non-VPN underlay Network before protect/connect; a UID-scoped VPN Network is
+  never accepted as an egress candidate.
+- **Status:** `CLOSED_FOR_POC`; repeat on additional OEM/network states remains
+  an evidence-gap item, not an unresolved hotspot in this Pixel cell.
+
+### VPN-F030 -- OI3 settled a multi-write TCP stream after the first short segment
+
+- **First observation:** The independent AppA full-route DNS-over-TCP cell
+  connected to `1.1.1.1:53`, but the resolver received only the first byte of
+  the two-byte DNS length prefix.  The same cell reproduced across fresh VPN
+  sessions; public IPv4 UDP DNS and one-write HTTP controls passed.
+- **Evidence:**
+  [`S142_B1_TCP_STREAM_FRAMING_HOTSPOT.md`](S142_B1_TCP_STREAM_FRAMING_HOTSPOT.md),
+  including the durable App record (`bind_result=bound`, App UID 12630), the
+  Pixel `wlan0` SYN/ACK plus one-byte PSH capture, and OI3
+  `direct-send length=1`, `connector-wake cause=2`, and cleanup `FAIL` with
+  `direct=0`, `rewritten=1`, `residue=0`.
+- **Environment:** Pixel 6a, Android 16, VpnLite UID 12628, AppA UID 12630,
+  full-route `vpp-oi3`, public resolver `1.1.1.1:53`.
+- **Root-cause confidence:** HIGH for the observed stream boundary.  The
+  Traffic Adapter writes the DNS-TCP length prefix and body in separate
+  writes.  The first queue correction preserves the TUN segments, but the
+  separate arm still does not carry the remaining stream bytes through the
+  protected connector; see VPN-F031 for the narrower owner-drive symptom.
+- **Excluded causes:** selected underlay was recorded as non-VPN Wi-Fi;
+  port-53 TCP handshake controls succeeded; UDP DNS on the same artifact
+  returned a valid 61-byte response and exact cleanup.
+- **Required correction:** keep a TCP flow alive across multiple TUN ingress
+  segments, add separate-write and coalesced-write controls, and require full
+  prefix/body capture, DNS response, `direct-recv`, and zero-residue cleanup.
+  Packing the fixture into one write alone is not sufficient.
+- **Closure:** S143's owner-context ACK-only output correction carried the
+  remaining separate-write bytes through the same protected connector.  Fresh
+  source ports `46309`/`46310` both returned the valid 61-byte DNS response and
+  ended with zero buffer residue.
+- **Non-claim:** This does not close the broader whole-device IPv6, failure,
+  lifecycle, overload, or engineering-envelope claims.
+- **Formal invariant:** A TCP connector may not settle after the first short
+  application write while bytes remain in the flow; all subsequent segments
+  must preserve the original destination and protected socket identity.
+- **Status:** `CLOSED_FOR_POC`; the exact separate/coalesced regression passed;
+  continue with the remaining B1/B2 cells.
+
+### VPN-F031 -- OI3 short TCP segment lacked owner ACK/timer progress
+
+- **First observation:** After the VPN-F030 queue correction, the paired Pixel
+  regression passed the coalesced DNS-over-TCP arm but the separate-write arm
+  still emitted only `direct-send length=1` and timed out.
+- **Evidence:** [`S143_B1_SHORT_SEGMENT_ACK_HOTSPOT.md`](S143_B1_SHORT_SEGMENT_ACK_HOTSPOT.md)
+  records the fixed plugin/APK hashes, durable AppA records, ordered
+  `tun-submit` sequences 1--6, the separate `cleanup=FAIL`, and the control
+  `direct-send length=31`/`direct-recv length=63`/`cleanup=PASS` result.
+- **Environment:** Pixel 6a Android 16, VpnLite UID 12628, AppA UID 12630,
+  full-route `vpp-oi3`, protected Wi-Fi underlay, `1.1.1.1:53`.
+- **Root-cause confidence:** HIGH.  `tcp_input_ctx()` set `TF_ACK_DELAY` and
+  `lwip_owner_context_tcp_tmr()` promoted it to `TF_ACK_NOW`, but the owner
+  `tcp_output_ctx()` returned when `pcb->unsent` was empty and could not emit
+  an ACK-only packet.  The timer therefore advanced without a peer ACK.
+- **Excluded causes:** the coalesced control uses the same APK, UID, underlay,
+  broker, destination, and cleanup path and returns a valid 61-byte DNS
+  response; the queue logs show no pending-slot overwrite.
+- **Required correction:** add an owner-local ACK-only output path, keep short
+  TCP writes non-terminal, and drive the lwIP ACK/timer path until the next
+  stream segment can be submitted; preserve protected original-destination
+  identity and exact settlement. **Met:** the corrected separate arm emitted a
+  40-byte ACK-only TUN packet, then the remaining 30-byte send and 63-byte
+  direct response.
+- **Non-claim:** This does not reopen S140/S141 permission or underlay fixes and
+  does not establish a general HEV defect outside this POC seam.
+- **Formal invariant:** Every accepted TCP segment, including a one-byte
+  segment, must eventually produce the peer ACK/next owner progress or a
+  classified transport failure; a quiet connector watcher alone cannot settle
+  the flow while bytes remain expected.
+- **Status:** `CLOSED_FOR_POC`; corrected HEV/plugin/APK rebuilt and the paired
+  separate/coalesced Pixel regression passed with allocated/freed buffers
+  equal and `residue=0` (the exact counts are recorded in S143).
+
+### VPN-F032 -- OI3 TUN negative cells are forced to a positive-path cleanup failure
+
+- **First observation:** The first post-S143 B2 full-TUN refusal cell recorded
+  the expected native transport failure, but durable cleanup emitted
+  `result=FAIL`.
+- **Evidence:** [`S146_B2_FAILURE_SEMANTICS_HOTSPOT.md`](S146_B2_FAILURE_SEMANTICS_HOTSPOT.md),
+  Pixel run `vpp-oi3-controlled-refused`, with
+  `outcome=EXPECTED_TRANSPORT_REFUSAL`, `transport-failures=1`,
+  `broker=1/1`, `direct=0`, and `buffers=5/5 residue=0`.
+- **Root-cause confidence:** HIGH. TUN mode skips the cell-specific
+  `oi3_classify_result()` and unconditionally applies positive-path
+  `output_direct`/`return_rewritten` requirements. The refusal and no-reply
+  cells necessarily have zero direct output; policy drop has zero output by
+  design. The app probe also records `result=OK` for a connected socket with
+  zero response bytes.
+- **Supported claim:** None for B2 negative semantics until the cleanup and
+  app outcome contract is corrected and rerun.
+- **Required correction:** Use a cell-aware negative verdict, emit one durable
+  expected-failure outcome, distinguish refusal/timeout/drop in the app probe,
+  and verify the joined stage/tuple plus zero residue.
+- **Non-claim:** This does not invalidate the corrected B1 positive cells or
+  reopen VPN-F030/VPN-F031.
+- **Post-correction evidence:** S147 reran refused, no-reply, policy-drop and
+  IPv4/IPv6 success controls on the final APK. All negative cells emitted
+  `PASS_EXPECTED_FAILURE`; all rows had exact broker/endpoint semantics and
+  zero residue.
+- **Status:** `CLOSED_FOR_POC`; the local negative-result contract was corrected
+  and B2 is unblocked. Whole-device failure coverage remains an open claim
+  boundary.
+
+### VPN-F033 -- Real underlay handle changes are not propagated into the OI3 epoch
+
+- **First observation:** S150 toggled the Pixel's real Wi-Fi off and on while
+  a full-route AppA TCP flow was active. Android removed the physical Network,
+  left the VPN with `UnderlyingNetworks=[]`, then created a replacement handle;
+  OI3 remained on `generation=1 epoch=1` and emitted no transition/rejection
+  ledger.
+- **Evidence:** [`S150_C1_UNDERLAY_EPOCH_HOTSPOT.md`](S150_C1_UNDERLAY_EPOCH_HOTSPOT.md),
+  AppA `C1-active-transition` source port `46404`, native
+  `connector-wake cause=2 generation=1`, and the before/after Android
+  `NetworkAgentInfo` handles.
+- **Root-cause confidence:** HIGH. `SnortVpnService` only enumerates a
+  non-VPN Network in `bindAndProtectSocketForNative()`; it registers no
+  `ConnectivityManager.NetworkCallback` and has no Java→native epoch control
+  seam. OI3's epoch is therefore flow/run-local rather than tied to the real
+  physical Network identity.
+- **Supported claim:** The Android platform can remove and replace the real
+  Wi-Fi underlay while keeping the VPN object alive; request-time broker
+  selection can find the replacement on a later flow.
+- **Non-claim:** Old-flow invalidation, stale broker/wake/output rejection, or
+  real C1/C2 lifecycle correctness across that transition.
+- **Required correction:** Add callback-driven handle/epoch publication,
+  owner-thread admission close/invalidation, stale-event rejection, and
+  current-snapshot broker provenance; rerun active AppA TCP/UDP transition
+  cells before continuing D/E.
+- **Post-correction evidence:** S151 registers the real
+  `ConnectivityManager.NetworkCallback`, publishes an epoch/physical-handle
+  snapshot through JNI/CLI, and applies it only on the FlowStackOwner. The
+  active AppA TCP transition produced `epoch-invalidated` followed by
+  `PASS_EXPECTED_UNDERLAY_INVALIDATION`, with `buffers=6/6`, `residue=0`, and
+  no old TCP reconnect or UDP reuse. The final APK also proved loss→replacement
+  callback publication and a bounded VPN stop/start carrying fresh IPv4 and
+  IPv6 AppA traffic on the replacement snapshot. Android 16 removes the old
+  VPN Network during physical Wi-Fi loss; seamless in-place migration and
+  automatic session recreation are explicitly not claimed.
+- **Status:** `CLOSED_FOR_POC`; C1 is unblocked under the bounded explicit
+  VPN-session restart rule. C2 remains a separate real-traffic lifecycle gate.
+
+### VPN-F034 -- Explicit real-flow stop has no distinct terminal classification
+
+- **First observation:** S152 ran a real AppA B1 TCP flow to a waiting LAN
+  fixture, then issued the bounded `sakamoto-oi3 stop` control while the flow
+  was active.  The AppA socket was aborted as expected and native resources
+  settled, but the terminal ledger emitted `result=FAIL`
+  `outcome=EXPECTED_DIRECT_REPLY`.
+- **Evidence:** [`S152_C2_REAL_STOP_CLASSIFICATION_HOTSPOT.md`](S152_C2_REAL_STOP_CLASSIFICATION_HOTSPOT.md),
+  AppA stage `C2-real-normal-tcp-active` source port `46421`, and native
+  `buffers=5/5 residue=0 broker=1/1` cleanup output.  The APK, plugin, and
+  native log hashes are recorded in S152.
+- **Root-cause confidence:** HIGH.  `sakamoto-oi3 stop` sets
+  `finish_requested`, but `oi3_finish()` only has explicit fault,
+  underlay-invalidation, negative-cell, and positive direct-reply result
+  classes.  A requested normal stop is therefore evaluated as a missing reply.
+- **Supported claim:** The stop control reaches the owner and the observed
+  real flow tears down without buffer residue in this cell.
+- **Non-claim:** C2 normal-stop/fault/restart settlement is not closed; a
+  resource-clean run with a `FAIL` terminal verdict cannot be promoted as a
+  passing lifecycle result.
+- **Required correction:** Add an immutable normal-stop reason and distinct
+  `EXPECTED_STOP` / `PASS_EXPECTED_STOP` terminal outcome; retain separate
+  fault, underlay, transport, and direct-reply classifiers; add a regression
+  test and rerun the real AppA cell before fault/restart.
+- **Post-correction evidence:** S153 rebuilt the plugin/APK and reran the same
+  real AppA stop cell.  The active socket was aborted, native cleanup emitted
+  `PASS_EXPECTED_STOP outcome=EXPECTED_STOP`, and the ledger closed
+  `broker=1/1 buffers=10/10 residue=0 duplicate-close=0 infrastructure-failures=0`.
+- **Status:** `CLOSED_FOR_POC`; only the normal-stop contract is closed.  The
+  remaining real fault/restart C2 gate is still open.  This was a local POC
+  contract correction, not an architecture reopening.
+
+### VPN-F035 -- Positive OI3 completion closed the detached VPN TUN after one real flow
+
+- **First observation:** S153 ran a real post-restart IPv4 DNS flow and then
+  an IPv6 DNS flow in the same full-route VPN session.  IPv4 returned a valid
+  response; IPv6 waited for a VPN Network and recorded
+  `vpn_unavailable`/`tuple_attempted=false`.  S155 repeated the formal
+  explicit stop/start recovery and reproduced the same IPv4→IPv6 failure.
+- **Evidence:** [`S156_C2_ONE_FLOW_PER_VPN_SESSION_HOTSPOT.md`](S156_C2_ONE_FLOW_PER_VPN_SESSION_HOTSPOT.md),
+  S155 AppA JSONL hash
+  `141f3f29119b36a1d5127fe747e5c0daf352bdb2c0c122ba90af23a8b6bde6e9`,
+  native `oi3_cleanup result=PASS ... buffers=4/4 residue=0`, and
+  Connectivity output with physical Wi-Fi but no `TRANSPORT_VPN` Network.
+  S154's fresh-session IPv6-first cell passed, excluding an IPv6 underlay
+  defect. S157 then rebuilt the final plugin/APK and carried real AppA IPv4
+  UDP DNS followed by IPv6 UDP DNS in one session on VPN handle
+  `767909875725`; both generations returned valid 61-byte DNS responses and
+  emitted `PASS` cleanups with zero residue. The post-fix active TCP fault
+  emitted `PASS_EXPECTED_FAULT` with `buffers=9/9 residue=0`.
+- **Root-cause confidence:** HIGH. `oi3_finish()` closes the detached
+  `tm->tun_fd` at `owner_inline_oi3.c:1845` after the first positive flow;
+  closing that fd removes the Android VPN Network.  The AppA adapter's bounded
+  `TRANSPORT_VPN` lookup is behaving as designed.
+- **Supported claim:** Successful positive real flows now settle their own HEV
+  generation while the VPN TUN remains armed for a fresh next generation;
+  explicit stop/fault/underlay-invalidated/negative paths still close the
+  session. S157 proves same-session IPv4→IPv6 sequencing for the registered
+  cell and bounded active-fault teardown.
+- **Non-claim:** Seamless Android underlay migration, arbitrary concurrent
+  multi-owner capacity, production resource/performance limits, or a second
+  packet/ownership path.
+- **Required follow-up:** Continue C2/D/E under the re-arm contract and retain
+  the S156 reproduction as a regression test; reopen only if a subsequent
+  run loses `TRANSPORT_VPN`, revives stale generation state, or leaves residue.
+- **Status:** `CLOSED_FOR_POC`; this was a lifecycle contract correction, not an
+  architecture replacement.
+
+### VPN-F036 -- Final OI3 artifact has no multi-owner/shard admission path
+
+- **First observation:** S158's pre-D audit found that the final OI3 artifact
+  used for S157 C2 is still a single-owner implementation. The D1 contract
+  requires at least two final-topology Pixel owners, but the selected artifact
+  has no executable second-owner path.
+- **Evidence:** canonical/generated OI3 source contains one global
+  `static oi3_main_t oi3_main` with one FlowStackOwner context, target thread,
+  frame queue, TUN fd and per-context pending queue. The Android launcher emits
+  `sakamoto-oi3 tun ... target-thread 1` and `cpu { workers 1 }`; no owner
+  registry, tuple-to-shard dispatcher, or per-owner resource ledger exists.
+  The detailed record is [`S158_D_FINAL_TOPOLOGY_OWNER_OVERLOAD_HOTSPOT.md`](S158_D_FINAL_TOPOLOGY_OWNER_OVERLOAD_HOTSPOT.md).
+- **Root-cause confidence:** HIGH. This is directly visible in the selected
+  source/startup topology, not inferred from a timeout or fixture result.
+- **Supported claim:** S157 proves a corrected single-owner, re-armed-TUN
+  lifecycle contract with real same-session IPv4→IPv6 traffic and bounded
+  fault cleanup.
+- **Non-claim:** Pixel multi-owner isolation/distribution, per-owner flow
+  admission, packet/credit/buffer overload, capacity, or the dependent E
+  engineering envelope. S129 OI-4 Host/two-pthread evidence cannot substitute
+  for these final-topology Pixel claims.
+- **Required follow-up:** The final owner registry/hash/dispatch and
+  independent owner/resource contracts were added and D1/D2 were rerun. D3
+  remains separately paused by `VPN-F037`; do not use this historical finding
+  to describe the current multi-owner artifact.
+- **Status:** `CLOSED_FOR_D1_D2`; the original design interruption is resolved
+  for the tested owner topology. D3/E remain gated by the runtime submit
+  contract below.
+
+### VPN-F037 -- HEV submit backpressure has no bounded recovery contract
+
+- **First observation:** S159's single corrected D3 rerun offered 64 same-tuple
+  IPv4/UDP datagrams to the final two-owner Pixel artifact. The first 15 HEV
+  `flow_stack_owner_submit()` calls returned success; the next 49 returned
+  `-5`. The new owner-local rejection accounting settled every VPP buffer but
+  the accepted flow produced no reply and timed out.
+- **Evidence:** [`S159_D3_HEV_SUBMIT_BACKPRESSURE_HOTSPOT.md`](S159_D3_HEV_SUBMIT_BACKPRESSURE_HOTSPOT.md),
+  native cleanup `FAIL ... output=0 ... submit-rejects=49 ...
+  buffers=74/74 residue=0 error=tun-flow-timeout-no-reply`, and the captured
+  AppA JSONL showing 64 bound sends on VPN handle `815154515981`.
+- **Root-cause confidence:** HIGH. S160 arm64 disassembly maps `-5` to
+  category-1 inflight-pbuf credit exhaustion; it is not an Android permission,
+  UID, LAN, broker, or buffer-lifetime failure.
+- **Supported claim:** The adapter now settles the rejected packet exactly
+  once, records the credit ledger, and three bounded UDP generations completed
+  with `PASS_EXPECTED_OVERLOAD`, zero residue, and TUN re-arm. Owner-local queue
+  exhaustion is also classified as a current-packet drop for multi-owner UDP.
+- **Non-claim:** Production capacity, infinite soak, four-worker Android
+  scaling, and arbitrary public endpoint availability remain unproven.
+- **Post-correction evidence:** S161's timed rerun offered four concurrent
+  `repeat=16` stages, waited for all 64 packets to finish, then obtained a
+  valid WSL2 DNS recovery reply after four `PASS_EXPECTED_OVERLOAD`
+  generations; every generation re-armed with residue `0`.
+- **Status:** `CLOSED_FOR_TESTED_UDP_ENVELOPE`; the HEV credit accounting and
+  owner-local packet-overload contract are supported for this bounded cell.
+
+### VPN-F038 -- Full-route multi-owner ambient TCP can stop the test owner
+
+- **First observation:** S160 fresh `vpp-oi3-multi` starts received an Android
+  ambient IPv4/TCP flow to port `5228` before the AppA recovery probe. The flow
+  reached `output=1`/`handshake=1` but never reached `direct`, then ended with
+  `tun-flow-output-not-a-direct-return`; subsequent tuples were rejected as
+  `owner-stopped`.
+- **Reproduction:** The same startup/ambient sequence reproduced in more than
+  one fresh multi-owner run, including a no-D3 B1 baseline. HEV credit ledgers
+  were zero after cleanup and VPP buffers settled exactly, so this is not the
+  D3 `-5` credit condition.
+- **Evidence:** [`S160_D3_OVERLOAD_RECOVERY_EXECUTION_JOURNAL.md`](S160_D3_OVERLOAD_RECOVERY_EXECUTION_JOURNAL.md),
+  [`evidence/s160-ambient-full-route-hotspot/vpp-baseline-ambient.log`](evidence/s160-ambient-full-route-hotspot/vpp-baseline-ambient.log).
+- **Root-cause confidence:** HIGH for the lifecycle contamination; exact
+  Android source/endpoint semantics for port 5228 remain to be mapped.
+- **Impact:** The original source behavior could let unrelated ambient traffic
+  consume a generation, but the corrected adapter now classifies the observed
+  TCP/5228 no-reply shape as an expected ambient timeout and keeps the shared
+  TUN/owner armed. S161 recorded the classification and completed D3 recovery.
+- **Status:** `CLOSED_AS_CLASSIFIED_RUN_VALIDITY_HOTSPOT`; this is not a claim
+  that arbitrary ambient Android traffic has an application-level reply.
+
+### VPN-F039 -- OI3/HEV APK members can be built from incompatible source stages
+
+- **First observation:** S163 attempted to load an OI3 plugin built from the
+  dirty conditional-wake worktree into the clean product VPP core. Android
+  rejected it because `vlib_frame_queue_wakeup_mode` was absent. After that
+  pair was corrected, the default HEV stage rejected the owner-resolver symbol
+  `hev_socks5_owner_config_default`.
+- **Evidence:** [`S163_E1_E2_EXECUTION_JOURNAL.md`](S163_E1_E2_EXECUTION_JOURNAL.md),
+  [`evidence/s163-e1-e2/s163-plugin-load.txt`](evidence/s163-e1-e2/s163-plugin-load.txt),
+  and the corrected canonical VPP/plugin/HEV hashes recorded in that journal.
+- **Root-cause confidence:** HIGH. The failures are deterministic dynamic
+  linker/`dlsym` mismatches between source/stage members, not network or UID
+  behavior.
+- **POC Correction:** Rebuild the OI3 plugin from the exact clean product source
+  revision, select the owner-context HEV stage explicitly, seal both hashes in
+  the APK provenance, and omit the temporary `tun_poc` member from the final
+  canonical APK.
+- **2026-08-25 hardening:** During the S168 rerun, rebuilding the debug APK
+  without an explicit `HEV_STAGE_DIR` again selected the legacy
+  `work/android-hev-stage` member.  VPP started but OI3 multi failed at
+  `dlsym(hev_socks5_owner_config_default)` and reported `active=0 owners=0`.
+  `build-debug-apk.sh` now refuses any APK that carries the OI3 plugin unless
+  `libhev-socks5-tunnel.so` exports the full owner-context API used by
+  `owner_inline_oi3.c`.  The corrected APK was rebuilt with
+  `work/android-hev-poc7-stage`; Pixel startup then reported
+  `success=true rc=0 vppMode=27`, `hev-loaded`, `oi4 multi enabled owners=2`,
+  and `oi4 multi active=1 owners=2`.
+- **Post-correction evidence:** The paired artifact loaded, returned valid
+  IPv4 DNS and Direct HTTP, and the restored canonical APK passed the controlled
+  HTTP smoke with `PASS` cleanup and zero residue.
+- **Non-claim:** This closes packaging validity only; it does not close E2's
+  comparative performance gate or certify arbitrary external endpoints.
+- **Status:** `CLOSED_FOR_POC`; treat source→stage→APK identity as a preflight
+  validity gate, not as a runtime hotspot.
+
+### VPN-F040 -- HEV external-ingress gateway port-0 listener never matches original destination
+
+- **First observation:** S164 resumed the owner-context HEV external-fd path
+  against the controlled WSL2 endpoint. The fd was a live `SOCK_SEQPACKET`,
+  epoll woke, 14 packets were read, and the IPv4 TCP SYN checksum passed, but
+  the HTTP probe timed out.
+- **Evidence:** [`S164_HEV_EXTERNAL_INGRESS_GATEWAY_WILDCARD_PORT_HOTSPOT.md`](S164_HEV_EXTERNAL_INGRESS_GATEWAY_WILDCARD_PORT_HOTSPOT.md).
+  Three valid post-fix attempts reached the same boundary: the trace reports
+  `dport=42083`, `checksum=0`, and `tcp-listen-match lpcb=0x0`; no TCP accept,
+  HEV session or connector event followed. The device and endpoint controls
+  were valid and clean.
+- **Environment:** Pixel 6a Android 16, owner-context HEV stage, external fd
+  shim and temporary WSL2 HTTP endpoint.
+- **Root-cause confidence:** HIGH. `gateway_init()` intentionally creates
+  `IPADDR_TYPE_ANY` TCP/UDP listeners and binds port `0`, while the owner TCP
+  demux requires an exact incoming destination port. The equivalent UDP path
+  has the same exact-port boundary. The earlier synthetic-address filter is a
+  separate prerequisite and was isolated by the external-only
+  `accept_nonlocal` diagnostic flag.
+- **POC Correction:** S165 applied the repository
+  `hev-owner-context-external-ingress.patch`. External gateway initialization
+  now enables an opt-in wildcard mode; TCP preserves the incoming destination
+  port on accepted PCBs, while UDP marks the external listener explicitly and
+  carries the synchronous original destination address/port into the SOCKS5
+  frame. Ordinary owner contexts retain strict exact-port/address demux, and
+  reset/teardown clears the marker.
+- **Post-correction evidence:** The first valid Pixel/WSL2 regression returned
+  `HTTP/1.0 200 OK` in 8 ms, recorded `socks_connect_count=1`, emitted
+  `socks5 client tcp -> [192.168.4.5]:42083`, and passed the loop cleanup. VPP
+  reported zero parse/read/write/shim errors. See
+  [`S165_HEV_EXTERNAL_INGRESS_CORRECTION_EXECUTION.md`](S165_HEV_EXTERNAL_INGRESS_CORRECTION_EXECUTION.md)
+  and [`evidence/s165-hev-external-ingress/s165-http-loop-summary.txt`](evidence/s165-hev-external-ingress/s165-http-loop-summary.txt).
+- **Supported claim:** The external IPv4/TCP correctness arm is now supported
+  for this controlled endpoint. This closes the design hotspot but does not
+  establish IPv6/UDP coverage or E2 comparative performance.
+- **Non-claim:** ADB, WSL2 reachability, and SOCKS protect brokerage were not
+  the root cause. E2 remains open until matched traffic/resource measurements
+  and the remaining protocol/topology cells are completed.
+- **Formal invariant:** External original-destination packets may enter an
+  explicit transparent gateway wildcard only in the external-ingress owner
+  context; ordinary owner contexts must retain strict address and exact-port
+  demux, and every accepted flow must preserve its original destination.
+- **Status:** `CLOSED_FOR_CORRECTNESS_ARM`; E2 is reopened for the remaining
+  matched matrix and resource gates.
+
+### VPN-F041 -- Single-owner TCP re-arm admits same-tuple FIN/ACK tail as a new generation
+
+- **First observation:** The first formal isolated canonical OI3 HTTP cell
+  returned HTTP 200 and a clean generation-1 direct reply, then the re-armed
+  single-owner reader admitted the same tuple's FIN/ACK tail as generation 2.
+  Generation 2 emitted `oi3_cleanup result=FAIL outcome=EXPECTED_DIRECT_REPLY`
+  with `direct=0`, but `residue=0`; the primary flow itself was successful.
+- **Evidence:** [`S166_A2_OWNER_RESOLVER_ONE_SHOT_FIX.md`](S166_A2_OWNER_RESOLVER_ONE_SHOT_FIX.md)
+  and [`evidence/s166-oi3-canonical-http-20260824/vpp-stdout.log`](evidence/s166-oi3-canonical-http-20260824/vpp-stdout.log).
+  The clean generation-1 line had `direct=3`, `broker=1/1`, and zero residue;
+  the next ingress was a same-tuple FIN/ACK tail.
+- **Root-cause confidence:** HIGH. The multi-owner dispatcher already kept a
+  canonical TCP tombstone, but single-owner ingress never populated the active
+  hash or applied the wait-for-SYN gate after `oi3_rearm_tun_flow()`.
+- **POC Correction:** Single-owner ingress now records the canonical TCP hash
+  on the first packet, rejects non-SYN packets while waiting for the next SYN,
+  and clears the tombstone only when a new SYN arrives. The HTTP runner checks
+  cleanup after stop and validates required fields independently of log order.
+- **Post-correction evidence:** The ARM64 canonical plugin hash is
+  `8e127fbb28fe9612e08d966cc19ba95eff273db030546bc4cb20e46dcff561a9`; the APK
+  contains no `tun_poc`. The same Pixel/WSL2 cell returned HTTP 200 with 135
+  bytes in 1410 ms, logged
+  `oi3 single-admission result=REJECT reason=tcp-tail`, emitted one generation-1
+  cleanup `PASS` (`direct=3`, `broker=1/1`, `residue=0`), and emitted no cleanup
+  `FAIL`. Raw evidence is under
+  [`evidence/s166-oi3-tail-fix-20260824/`](evidence/s166-oi3-tail-fix-20260824/).
+- **Non-claim:** This closes the bounded single-owner TCP correctness seam;
+  it does not close E2's matched performance, full protocol, or multi-owner
+  resource gates. Ambient-flow isolation remains required.
+- **Status:** `CLOSED_FOR_CORRECTNESS_ARM`; no three-attempt stop-rule escalation
+  was needed after the root cause was isolated and the bounded regression passed.
+
+### VPN-F042 -- Multi-owner stop invalidates lwIP pools before queued HEV tasks drain
+
+- **First observation:** The first final-topology UDP teardown probe reached the
+  same Scudo heap-corruption signature in two valid pre-fix cells: a 4-flow
+  cell and a minimized 2-flow cell.  The 2-flow run admitted both owners and
+  completed broker/direct output, but one owner stopped while the other still
+  had queued HEV work; Scudo reported `invalid chunk state` and
+  `corrupted chunk header`, followed by VPP SIGABRT.
+- **Evidence:** [`pre-fix-summary.txt`](evidence/s168-multi-owner-udp-teardown-20260824/pre-fix-summary.txt)
+  and the fixed regression summary
+  [`post-fix-summary.txt`](evidence/s168-multi-owner-udp-teardown-20260824/post-fix-summary.txt).
+  The failing owner addresses correlate with the HEV/lwIP context identities;
+  single-owner control passed without the failure.
+- **Root-cause confidence:** HIGH. `flow_stack_owner_stop()` signalled
+  `hev_socks5_tunnel_owner_stop()` and immediately invalidated the lwIP pools,
+  while OI3's later `task_step` drain could still execute queued HEV tasks on
+  the VPP worker.  The HEV scheduler context is thread-local, so the seam is
+  local to each non-HEV worker rather than a requirement for a process-global
+  lock or a second ownership model.
+- **POC Correction:** The first correction added a bounded
+  `hev_task_system_driver_step()` drain after HEV owner stop and before
+  `lwip_owner_context_stop()` on the external-worker path.  The follow-up
+  correction expanded the drain to 64 calls of 1024 quanta, made OI3 propagate
+  and retry `NOT_READY`, and guarded HEV destroy until stop was ready.  The
+  build script applies and verifies both source patches before packaging.
+- **Post-correction evidence:** The first fixed ARM64 HEV member hash was
+  `6fcdba38c6cbdc49c08196074586522d0fe43e2199ec07035dc4d9c3f37d8e20`; the
+  follow-up HEV member is
+  `33dd3ae879cea83c0ab440c23cf93df7fdad9e96351aad2616397dd6a55c39b5`, the
+  OI3 plugin is
+  `91fbb0a5bc6c003262cca7d9547cf5ca6d2d76a6e08dc7c0dd42aab21f1f6236`, and
+  the APK is `0aa8c066eaec2166db88b5b3d46f1f8d47195b3d5f389bace3e5d1eeee15afb1`.
+  The fixed 2-flow Pixel/WSL2 regression completed with `fatalFlows=0`; both
+  owners emitted two `oi3_cleanup result=PASS` generations with `broker=1/1`,
+  `direct=1`, `buffers=10/10`, `residue=0`, and zero transport/infrastructure
+  failures.  The follow-up-corrected registered 4-flow cell (run
+  `62691387993824`, VPP pid `10355`) still emitted Scudo `invalid chunk state`
+  at `0x200006d9ad4e340`, matching the owner-1 lwIP context, followed by
+  SIGABRT; post-stop process/tun0 residue was nevertheless absent.
+- **Follow-up root cause / design adjustment (2026-08-24):** The fourth
+  recurrence narrowed the defect to OI3 owner teardown affinity.  The
+  multi-owner `oi3_worker_node` tail could call `oi3_finish_for()` for any
+  `active && finish_requested && residue==0` owner, without first proving that
+  the current VPP thread was that owner's `target_thread`.  `oi3_finish_for()`
+  stops/destroys the owner Flow Stack and drains the HEV scheduler through
+  thread-local state; running that path from a foreign worker can therefore
+  invalidate/free another owner's lwIP/HEV context.  The POC design is now:
+  owner finish is owner-thread-affine; foreign workers only re-enqueue a finish
+  token to the target owner thread, and destroy remains guarded until owner
+  stop is ready.
+- **Follow-up preflight evidence:** Static regressions now cover owner-thread
+  teardown, foreign-owner tail deferral, Android foreground-service relaunch,
+  and APK plugin loading configuration
+  (`test_verify_s168_owner_teardown_lifecycle.py`,
+  `test_verify_vpn_lite_legacy_start.py`,
+  `test_verify_vpn_lite_plugin_staging.py`,
+  `test_verify_android_stage_vpp_core.py`).  The current APK was rebuilt from a
+  single Android VPP runtime/plugin closure, installed on Pixel, and started
+  with `mode=vpp-oi3-multi`, `vppMode=27`, `rc=0`.  The generated
+  `startup.conf` loads plugins from the APK native library directory with
+  `name-filter libhev_external_driver_poc_plugin.so`; `show plugins` lists
+  `libhev_external_driver_poc_plugin.so`, `sakamoto-oi3 underlay` succeeds, and
+  `startup.exec` contains `sakamoto-oi3 multi tun fd 3 target-thread-a 1
+  target-thread-b 2`.
+- **Authorized 4-flow rerun status (2026-08-25):** The explicitly approved
+  fixed-artifact Pixel rerun did not reproduce the Scudo/SIGABRT heap boundary:
+  VPP remained alive after two 4-flow attempts and a minimized 1-flow probe.
+  However the run is `INVALID` as an echo correctness regression.  The app
+  stress logs still reported `received=0`; the VPP owner emitted
+  `direct-send` but no `direct-recv`/`tun-output`; and a VPN-stopped,
+  same-package direct app UDP control to `192.168.4.5:42085` also sent three
+  packets and received zero echo replies while the WSL2 fixture logged all
+  three inbound packets from `192.168.4.151`.  A VPN-stopped TCP control to
+  `192.168.4.5:42086` timed out before connect.  This separates the original
+  heap hotspot from a new fixture-validity hotspot, VPN-F043.
+- **Preflighted follow-up status (2026-08-25):** The fixture hotspot was
+  corrected for the current LAN endpoint by disabling the stale
+  `RESTRICT_LOCAL_NETWORK` compat override for
+  `com.sakamoto.snort.vpnlite` and proving same-package, VPN-stopped direct
+  echo to `192.168.4.5`: UDP `42185` passed with `bytes=192 packets=3
+  received=3`, and TCP `42186` passed with `sent=1 received=1`.  The next
+  4-flow attempt exposed a separate app-harness defect: fixed UDP source ports
+  `40000`--`40003` can collide with ambient Android sockets
+  (`EADDRINUSE`; one observed socket used `192.168.4.151:40003` to remote
+  QUIC/443).  VPN-F044 corrects that by making `sourcePortBase` runner
+  configurable and recorded.
+- **Valid endpoint 4-flow result (2026-08-25):** With
+  `sourcePortBase=43000`, exact same-UID direct preflight passing, and
+  `mode=vpp-oi3-multi` active, the UDP closed 4-flow run
+  `runId=56779517593894` did not reproduce Scudo/SIGABRT.  VPP pid `11048`
+  survived; app summary was `sent=287 received=180 errors=107
+  mismatches=0 unexpected=5 fatalFlows=0 executorTimeout=false`; host fixture
+  counters were symmetric (`udp_rx=283 udp_tx=283`); and `show sakamoto-oi3
+  multi` reported `active=1 owners=2`, owner residues `0`, and no owner error
+  string.  This is not a heap-boundary recurrence, but it is not a passing
+  closed echo regression.  VPN-F045 now owns the remaining echo-loss/timeout
+  disposition.
+- **Monitor correction:** The native VPP monitor was also found to hard-code
+  historical `show tun-poc`/`show s124-vpn-tun` probes after OI3 startup.  The
+  OI3 APK intentionally stages only `libhev_external_driver_poc_plugin.so`, so
+  `show tun-poc` produced persistent false CLI noise.  The monitor now selects
+  a mode-specific show command (`show sakamoto-oi3 multi`, `show
+  sakamoto-oi3`, `show sakamoto-oi2`, `show s124-vpn-tun`, or `show tun-poc`)
+  and static tests cover the branch.
+- **Late S169 status (2026-08-25):** VPN-F045 is closed for the two-owner UDP
+  closed-echo envelope by the persistent HEV UDP connector and OI3
+  per-datagram inflight correction. A fresh 1-flow run
+  (`runId=86632836943396`) passed with `sent=834 received=834 errors=0`, and a
+  fresh 2-flow run (`runId=139608275148756`) passed with
+  `sent=1702 received=1702 errors=0`. The 4-flow rerun did not reproduce
+  Scudo/SIGABRT; its remaining errors are exactly accounted for by VPN-F046
+  owner-busy capacity rejects.
+- **Four-owner closure evidence (2026-08-25):** F046's selected correction
+  expanded OI4 to four owner contexts while preserving one active UDP canonical
+  hash per owner. The rebuilt APK
+  `96726fa8e56d74e731105c71568735af338f74fcb06cc067eff00b7525b07179` and OI3
+  plugin `b97c57a853a31e0bd7451dd4216519553091954ba45412b3b3def0825dda5951`
+  ran the registered 4-flow UDP closed echo as `runId=127931250090287`.
+  Startup logged `owners=4 target-a=1 target-b=2 target-c=3 target-d=4`; the
+  app reported `sent=3698 received=3698 errors=0 mismatches=0 fatalFlows=0`;
+  VPP recorded ingress on owners 0/1/2/3 (`1366`/`1366`/`1372`/`1395`) and four
+  clean `oi3_cleanup result=PASS` records with `submit-rejects=0`,
+  `queue-rejects=0`, and `residue=0`. There were zero `owner-busy` and zero
+  `multi-admission result=REJECT` records.
+- **Post-F046 resource trend evidence (S170, 2026-08-25):** The same corrected
+  artifact ran five repeated four-owner UDP closed-echo cycles in
+  `runId=20260825-112255-922529`. All cycles passed exact app echo and emitted
+  four clean owner teardowns; the owned WSL2 fixture recorded
+  `fixtureRx=12762 fixtureTx=12762`; `pidof vpp` was empty and UDP `42185` had
+  no listener after cleanup. App/VPP FD counts stayed `120/41`, and RSS
+  variation was bounded to `648/480 KiB`.
+- **Non-claim:** The S169/F046 evidence closes the bounded four-owner UDP
+  closed-echo regression. It does not establish arbitrary concurrency,
+  production capacity constants, soak behavior, or E2 performance.
+- **Status:** `CLOSED_FOR_CORRECTED_FOUR_OWNER_UDP_REGRESSION`; the original
+  heap boundary did not recur after the owner lifecycle corrections and the
+  F046 capacity correction under the registered 4-flow UDP closed-echo shape.
+
+### VPN-F043 -- WSL2 LAN endpoint failed same-UID bidirectional echo preflight
+
+- **First observation:** During the authorized S168 4-flow retry, the WSL2 UDP
+  fixture at `192.168.4.5:42085` received packets from the Pixel
+  (`192.168.4.151`), but the Android app received no echo replies.  The same
+  failure reproduced with the VPN stopped and no VPP process running: the
+  ordinary app UDP control sent three packets and received zero replies, while
+  the WSL2 server logged all three inbound datagrams.  A WSL2 TCP echo fixture
+  on `192.168.4.5:42086` also failed the VPN-stopped app control at connect
+  timeout.
+- **Interpretation:** This is a fixture/run-validity failure, not evidence that
+  OI3 failed to read a protected socket reply.  Android-to-WSL UDP ingress is
+  insufficient evidence for `expectEcho=true`; bidirectional same-UID echo must
+  be proven before the VPN datapath is interpreted.
+- **POC Correction:** Echo-bearing cells must run a VPN-stopped same-package
+  direct preflight for the exact protocol, endpoint, and payload shape.  If the
+  preflight fails, mark the full-path cell `INVALID` and either switch to an
+  egress-only `expectEcho=false` design with host receive counts, or choose a
+  different bidirectional LAN endpoint.  Do not classify missing echo as OI3
+  transport timeout, owner output failure, or heap-regression evidence.
+- **Post-correction evidence (2026-08-25):** On the current Pixel/WSL2 LAN, the
+  stale `RESTRICT_LOCAL_NETWORK` compat override was disabled and the POC app's
+  `NEARBY_WIFI_DEVICES` grant was present.  Same-package, VPN-stopped direct
+  controls against `192.168.4.5` then passed for UDP `42185`
+  (`bytes=192 packets=3 received=3`) and TCP `42186` (`sent=1 received=1`).
+  F043 therefore no longer blocks interpretation of later VPN results. The
+  subsequent blockers were in the OI3/HEV POC itself: VPN-F045, now closed for
+  the two-owner UDP envelope, and VPN-F046, the four-flow capacity/design
+  mismatch now closed by the four-owner correction.
+- **Status:** `CLOSED_AS_RUN_VALIDITY_HOTSPOT`; the root cause is outside the
+  selected datapath and the campaign rules now require direct app echo preflight
+  before any WSL2 LAN echo result is accepted.
+
+### VPN-F044 -- L4 stress fixed UDP source-port base collided with ambient Android sockets
+
+- **First observation:** After F043 preflight passed, the first 4-flow UDP
+  stress retry failed before exercising OI3 because the app attempted to bind
+  fixed local UDP ports `40000`--`40003` and Android already had an ambient
+  socket occupying `192.168.4.151:40003` for a remote QUIC/443 flow.  The app
+  reported `BindException`/`EADDRINUSE`.
+- **Interpretation:** This was a POC harness defect, not a VPN datapath or
+  owner-lifecycle result.  Fixed local ports are too brittle on a real Android
+  device because unrelated system or application UDP traffic can reuse the
+  same ephemeral range.
+- **POC Correction:** `SnortVpnService` accepts `sourcePortBase`, clamps it to
+  the safe multi-flow port range, logs it, and binds UDP flows at
+  `sourcePortBase + flow`.  `MainActivity` forwards the extra, the formal S125
+  runner defaults to `UDP_SOURCE_PORT_BASE=43000` and
+  `TCP_SOURCE_PORT_BASE=44000`, each cell manifest records `sourcePortBase`,
+  and `s125-parse-results.py` validates UDP flow ports from the manifest rather
+  than assuming `40000`.  Static and dynamic regressions are in
+  `test_verify_s168_owner_teardown_lifecycle.py`.
+- **Post-correction evidence:** The rebuilt APK accepted
+  `--ei sourcePortBase 43000`; the app start log recorded
+  `sourcePortBase=43000`; flow logs used local ports `43000`--`43003`; and the
+  source-port collision did not recur in the 4-flow rerun.
+- **Status:** `CLOSED_FOR_POC_HARNESS`; formal runners must keep the source
+  port base configurable and manifest-recorded for real-device multi-flow
+  cells.
+
+### VPN-F045 -- OI3 UDP per-datagram owner generation cannot satisfy closed echo
+
+- **First observation:** The corrected endpoint and source-port-base 4-flow
+  UDP closed cell (`runId=56779517593894`) used `sourcePortBase=43000` against
+  `192.168.4.5:42185`.  Same-package direct UDP/TCP preflight had already
+  passed, and VPP OI3 multi was active.  The app sent `287` datagrams but
+  received only `180`, with `errors=107`, `unexpected=5`,
+  `fatalFlows=0`, and `executorTimeout=false`.
+- **Evidence:** The host echo fixture was symmetric (`udp_rx=283 udp_tx=283`),
+  so the endpoint received and echoed the traffic it saw.  VPP pid `11048`
+  survived the run; OI3 multi reported two active owners, owner residues `0`,
+  and no owner error string.  No Scudo/SIGABRT heap boundary was observed in
+  the captured evidence.
+- **Minimized follow-up evidence:** A short 2-flow closed probe used
+  `sourcePortBase=43000` (`43000` hashes to owner 0 and `43001` hashes to
+  owner 1 for `192.168.4.151 -> 192.168.4.5:42185`).  It still failed app
+  closed echo correctness: `runId=58708249433631`, `sent=38 received=20
+  errors=18 unexpected=0 fatalFlows=0 executorTimeout=false`.  VPP pid `11544`
+  remained alive; OI3 multi showed `route=39/29 reject=0/0 wrong-owner=9`,
+  owner residues `0`, and no owner error string.  The local fixture was stopped
+  at `udp_rx=31 udp_tx=31` after the direct preflight plus the 2-flow probe.
+  This rules out the simplest explanation that only 4 flows over two owners
+  cause the loss through route rejection.
+- **1-flow/per-port evidence:** After ADB was temporarily restored through
+  `SAKAMOTO_ADB=/home/js/.local/bin/adb`, the device was cleaned (`pidof vpp`
+  empty; app force-stopped), a per-source-port echo fixture was started, and
+  the same-package direct UDP preflight passed (`bytes=128 packets=2
+  received=2`).  The 1-flow OI3 multi probe then still failed:
+  `runId=47889971598670`, `sent=19 received=10 errors=9
+  unexpected=0 fatalFlows=0 executorTimeout=false`.  VPP pid `12783`
+  survived; owner0 showed `generation=20 ingress=34 output=20 residue=0`;
+  owner1 contained only earlier ambient input.  Host per-port counters proved
+  the decisive shape: the direct preflight used one stable app source port
+  (`192.168.4.151:56055=2/128`), while the OI3 packets arrived as one datagram
+  each from many protected-socket ephemeral source ports (`33247`, `35380`,
+  `39699`, `44095`, `48024`, `52482`, `57487`, ...), not from app local port
+  `43000`.
+- **Root cause:** HIGH confidence.  `oi3_parse_tun_packet()` captured the
+  original destination in `target_address`, but did not preserve the original
+  app source endpoint.  `oi3_rewrite_return()` rewrote only the return packet's
+  source address/port back to the original destination; it left the destination
+  address/port as the protected underlay socket's ephemeral local tuple.  A
+  packet written back to the VPN TUN with that destination cannot reliably
+  reach the app socket bound to `10.111.0.2:43000`.
+- **POC corrections applied and validated locally:** `oi3_main_t` now stores
+  `source_address`, `source_address_length`, and `source_port` from the
+  original TUN packet.  `oi3_rewrite_return()` rewrites both directions of the
+  return tuple: source becomes the original destination, destination becomes
+  the original app source, and TCP/UDP checksums are recomputed.  Static
+  regression `test_oi3_tun_return_rewrite_restores_original_app_source` covers
+  IPv4/IPv6 source capture and destination rewrite.  A later 1-flow device
+  minimization exposed two additional UDP short-flow lifecycle defects: rearm
+  cleared owner-local pending TUN packets, and a later owner token could submit
+  a second pending UDP datagram into the same HEV generation.  The POC now
+  preserves pending packets across rearm and logs/defers
+  `reason=udp-generation-busy` once a multi-owner UDP generation has already
+  submitted one datagram.  Static regression coverage now includes pending
+  preservation and one-pending-per-generation behavior.
+- **Post-correction device evidence (2026-08-25):** The rebuilt APK was
+  installed and run on Pixel Android 16 through repo-local `./dev/adb` using
+  the Linux adb backend.  Plugin hash `58de3b2f...9592484`; final APK hash
+  `25f81f74...85c3806`.  Package-scoped VPN baseline was clean
+  (`route=0/0 reject=0/0`; host `udp_total=0`).  The `udp-generation-busy`
+  guard was active in VPP stdout and prevented same-generation double submit.
+  Nevertheless, the registered 1-flow UDP closed echo still failed:
+  `runId=101015684203310`, `udpClosedTimeoutMs=1000`, `sent=10 received=0
+  errors=10 late=10`; VPP showed `route=18/0`, owner0 `ingress=18 output=17
+  residue=0`; the WSL2 echo fixture saw `udp_total=17`.  A harness revision
+  made UDP timeouts intent-configurable and a follow-up 5000ms run still failed:
+  `runId=93283213967631`, `sent=2 received=0 errors=2 late=2`; VPP showed
+  `route=5/0`, owner0 `ingress=5 output=4 residue=0`; host saw `udp_total=4`.
+- **Late S169 correction and closure (2026-08-25):** The final missing UDP
+  lifecycle piece was in HEV's UDP connector session semantics. The
+  owner-context UDP forward path returned terminal status after a protected
+  response was written back into lwIP, so OI3 could wake on the fd while HEV had
+  no runnable connector task left. The POC now patches HEV so UDP no-frame
+  polls are non-terminal and protected UDP responses return a positive
+  per-datagram completion without destroying the connector session. Together
+  with OI3's `udp_datagram_inflight` latch, this makes one canonical UDP flow
+  persistent across many datagrams.
+- **S169 device evidence:** Rebuilt hashes: APK
+  `c15604413b3cb234a958b42d5c23892228fb4cd2f761af8ce2790e3ce1e48a61`, HEV
+  `37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d`, OI3
+  plugin `60243ba744dee0201e99b1d350cde7cfea807dad7933e76f180bffcbac7423ff`.
+  The 1-flow run `86632836943396` passed (`sent=834 received=834 errors=0`);
+  host `udp_total` increased `3 -> 1253`; VPP repeatedly logged
+  `tun-udp-window complete`. The two-owner run `139608275148756` passed
+  (`sent=1702 received=1702 errors=0`), with both owners cleaning up `PASS`
+  and zero residue.
+- **Residual non-claim:** F045 closure is scoped to the tested one-active-flow
+  per owner envelope. The historical two-owner 4-flow timeout is owned by
+  VPN-F046, not by UDP lifecycle loss; F046 is closed separately by the
+  four-owner correction.
+- **Status:** `CLOSED_FOR_TWO_OWNER_UDP_CLOSED_ECHO`; remaining 4-flow/E2
+  conclusions must use the separate F046 capacity disposition.
+
+### VPN-F046 -- Registered 4-flow closed echo exceeded the two-owner/single-active-flow topology
+
+- **First observation:** After VPN-F045 was corrected, the fresh 4-flow UDP
+  closed run `83202807976373` used `sourcePortBase=43100` against the same
+  preflighted WSL2 echo fixture. Two flows passed and two flows timed out:
+  port `43100` reported `sent=883 received=883 errors=0`; port `43103`
+  reported `sent=880 received=880 errors=0`; ports `43101` and `43102` each
+  reported `sent=10 received=0 errors=10`.
+- **Evidence:** The host fixture was symmetric for admitted traffic
+  (`udp_total` increased `1253 -> 3890`). VPP emitted exactly 20 matching
+  `oi4 multi-admission result=REJECT ... reason=owner-busy` records, one for
+  each failed app send. The rejected hashes were routed to owners that already
+  had different active UDP hashes. The two admitted flows continued to emit
+  `direct-send`, `tun-output result=OK`, `tun-udp-window complete`, and
+  `oi3_cleanup result=PASS`.
+- **Control evidence:** A fresh 2-flow control using the documented
+  `sourcePortBase=43000` mapped one active flow to each owner and passed:
+  `runId=139608275148756`, app `sent=1702 received=1702 errors=0`, host
+  `udp_total` increased `3890 -> 6455`, and both owners cleaned up with zero
+  residue.
+- **Root cause:** HIGH confidence. The previous OI4 Pixel topology hard-coded
+  `owner_count = 2`, starts `target-thread-a 1` and `target-thread-b 2`, and
+  each owner admits exactly one `active_flow_hash` until the owner idles and
+  rearms. A third or fourth simultaneous UDP flow whose hash lands on an
+  already-active owner is intentionally rejected as `owner-busy`.
+- **POC Correction:** The selected design admits the registered 4-flow cell by
+  expanding OI4 to four owner contexts, preserving the existing safety model of
+  one active UDP canonical hash per owner. The Android `vpp-oi3-multi` startup
+  now starts four workers and passes `target-thread-a 1 target-thread-b 2
+  target-thread-c 3 target-thread-d 4`; `show sakamoto-oi3 multi` and VPP
+  stdout report four route/reject ledgers.
+- **Post-correction evidence:** The rebuilt APK
+  `96726fa8e56d74e731105c71568735af338f74fcb06cc067eff00b7525b07179` packaged
+  OI3 plugin `b97c57a853a31e0bd7451dd4216519553091954ba45412b3b3def0825dda5951`
+  with the unchanged HEV owner-context library
+  `37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d`.
+  The Pixel/WSL2 run `127931250090287` used `flows=4`,
+  `sourcePortBase=43000`, and `udpClosedTimeoutMs=1000`; app summary was
+  `sent=3698 received=3698 errors=0 mismatches=0 unexpected=0 late=0
+  reordered=0 fatalFlows=0 executorTimeout=false`. VPP startup logged
+  `owners=4`; owner ingress counts were `1366`/`1366`/`1372`/`1395`; four
+  owners cleaned up `PASS` with `residue=0`; and F046-specific rejects were
+  absent (`owner-busy=0`, `multi-admission result=REJECT=0`).
+- **Residual non-claim:** This is a bounded POC capacity closure for the
+  registered four-flow UDP closed-echo envelope. It is not a production shard
+  count, arbitrary-flow-count proof, soak, or E2 performance result.
+- **Status:** `CLOSED_FOR_FOUR_OWNER_UDP_CLOSED_ECHO`; do not reinterpret the
+  historical two-owner 4-flow timeout as a UDP lifecycle regression.
+
+### VPN-F047 -- OI3 multi TCP flow timeout was absolute rather than idle
+
+- **First observation:** S171's first corrected-artifact bounded E2 sample
+  passed Direct UDP, OI3 UDP and Direct TCP, but failed OI3 TCP 1400B:
+  run `34068893509792` reported `sent=186 received=185 errors=1
+  fatalFlows=1`, `SocketTimeoutException:Read_timed_out`, cleanup `5/0`,
+  `ownerBusy=0`, `multiRejectNonTail=0`, and only same-tuple `tcp-tail`
+  rejects.
+- **Minimized evidence:** `tcp:1:1400 steady=6` reproduced the failure in
+  `evidence/s171-e2-oi3-direct-sample-20260825-tcp-steady6-repeat/`: Direct
+  passed 3/3, while OI3 failed 3/3 with `sent=N received=N-1`. Raising the app
+  read timeout to 15 seconds in
+  `evidence/s171-e2-oi3-direct-sample-20260825-tcp-steady6-timeout15s/` still
+  failed 3/3, ruling out a too-short Java timeout. A shorter `steady=3`
+  differential passed, showing the payload size was not independently broken.
+- **Root cause:** HIGH confidence. `OI3_TUN_FLOW_TIMEOUT_NS` was an absolute
+  five-second multi-owner TCP generation lifetime. Active TCP ingress/output did
+  not refresh `tun_flow_deadline_ns`; a steady TCP stream crossing that
+  boundary could therefore be cleaned up and re-armed while the Java socket was
+  still using the same tuple. The re-arm installed the completed tuple
+  tombstone and later same-tuple non-SYN packets were rejected as `tcp-tail`.
+- **POC Correction:** `owner_inline_oi3.c` now refreshes the TUN flow deadline
+  on multi-owner TCP activity and treats FIN/RST as the terminal signal. Static
+  coverage is in
+  `scripts/tests/test_verify_s171_e2_oi3_direct_sample.py`, including
+  `test_oi3_multi_tcp_deadline_is_refreshed_by_activity`.
+- **Post-correction evidence:** Rebuilt artifact APK
+  `3ba6f24260e2e2dc417e3f150f04ad7a67e6458c26e630e369e623e0dc8f14e4`,
+  plugin `6a0fdd9f915be2127ef5cd5423514db836def0ffebd51239178644c8d6a4f643`,
+  and HEV
+  `37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d` passed
+  `tcp:1:1400 steady=6 repeats=3` in
+  `evidence/s171-e2-oi3-direct-sample-20260825-tcp-steady6-after-fix/`, with
+  OI3 runs `357/357`, `370/370`, and `371/371`, zero `tcpTailReject`, and
+  `failureCount=0`.
+- **S171 full sample evidence:** The same rebuilt closure passed
+  `evidence/s171-e2-oi3-direct-sample-20260825-after-fix-full/` with Direct and
+  OI3 cells for UDP 64B, UDP 4x1400B and TCP 1400B all valid; OI3 TCP run
+  `52350053089758` reported `sent=612 received=612`, cleanup `4/0`,
+  `ownerBusy=0`, `tcpTailReject=0`, and `multiRejectNonTail=0`.
+- **Residual non-claim:** This closes the bounded S171 direct-vs-final-topology
+  sample and the TCP idle-timeout hotspot. It does not close matched HEV
+  baseline performance, screen-off/Doze, thermal/device-state, broad
+  IPv4/IPv6/DNS or final audit evidence.
+- **Status:** `CLOSED_FOR_BOUNDED_E2_SAMPLE`.
+
+### VPN-F048 -- Matched HEV E2 baseline requires an explicit comparison APK with tun-poc
+
+- **First observation:** After S171, the next E2 step required a matched
+  Direct/HEV/OI3 HTTP baseline on the same WSL2 LAN endpoint. The current
+  canonical OI3 APK carried `libhev_external_driver_poc_plugin.so` and
+  `libhev-socks5-tunnel.so`, but no `libtun_poc_plugin.so` or
+  `tun_poc_plugin.so`.
+- **Evidence:** `unzip -Z1` on the canonical APK showed only OI3/HEV members.
+  The new S172 runner's default `direct hev oi3` preflight stops before ADB
+  with
+  `missing_any_apk_member=lib/arm64-v8a/libtun_poc_plugin.so lib/arm64-v8a/tun_poc_plugin.so reason=hev-baseline-tun-poc`;
+  raw log:
+  `evidence/s172-e2-http-baseline-sample-20260825/run-20260825-125021-144734.log`.
+- **Root cause:** HIGH confidence. Android `vpp-hev` is `vppMode=2`, a
+  forward/tun-poc path in `vpn_fd_probe.c`; `write_vpp_files()` therefore
+  selects `tun_poc_plugin.so`/`libtun_poc_plugin.so`. OI3 modes select
+  `libhev_external_driver_poc_plugin.so`. The canonical OI3 APK intentionally
+  omitted `tun_poc`, so it is valid for OI3 evidence but not sufficient for a
+  matched HEV comparison arm. Before this correction, Java start-outcome
+  provenance only marked owner-resolver `vppMode=5` as requiring `tun_poc`,
+  which made `vpp-hev` missing-plugin failures too easy to classify as generic
+  startup failures.
+- **POC Correction:** `SnortVpnService` now marks all tun-poc VPP modes `1..12`,
+  including `vpp-hev`, as requiring
+  `libtun_poc_plugin.so|tun_poc_plugin.so`. Added
+  `scripts/android-run-s172-e2-http-baseline-sample.sh`, which preflights APK
+  members before ADB/device work and requires OI3 plugin + owner-context HEV
+  plus `tun_poc` when the HEV arm is selected. Static coverage is in
+  `scripts/tests/test_verify_s172_e2_http_baseline_sample.py`.
+- **Supported claim:** The repeated E2 baseline blockage is a build/runner
+  provenance boundary. A valid matched Direct/HEV/OI3 slice requires an
+  explicit comparison APK carrying both the selected OI3 plugin and a compatible
+  Android arm64 `tun_poc_plugin.so`; VPP `name-filter` keeps the plugin choice
+  arm-specific.
+- **Non-claim:** This does not close E2 performance/device-state feasibility,
+  and it does not change the canonical OI3 result into a tun-poc-bearing
+  artifact.
+- **Status:** `CLOSED_AS_PREFLIGHT_AND_RUNNER_FIX`. The accepted S172 run later
+  used that comparison APK successfully; see VPN-F049 for the follow-up
+  HTTP-probe/OI3 admission hotspot. The full E2 matrix remains open.
+
+### VPN-F049 -- S172 duration-only HTTP baseline exposed OI3 TCP admission-before-tombstone and owner-busy limits
+
+- **First observation:** After the comparison APK was built, S172's
+  Direct/HEV/OI3 runner still failed in the OI3 arm. The first failed device
+  comparison run had OI3 `requests=2 successes=2 errors=0` but
+  `cleanup=4/1`; the next run after the admission fix had `cleanup=4/0` but
+  `requests=2 successes=1 errors=1`.
+- **Evidence:**
+  - `evidence/s172-e2-http-baseline-sample-20260825/cells-20260825-130051-110628.csv`
+    captured the cleanup failure after successful OI3 HTTP bytes.
+  - `evidence/s172-e2-http-baseline-sample-20260825/cells-20260825-131000-916301.csv`
+    captured the duration-only owner-busy shape after cleanup was fixed.
+  - Accepted run:
+    `evidence/s172-e2-http-baseline-sample-20260825/cells-20260825-131542-644207.csv`
+    with `failureCount=0`.
+- **Root cause:** HIGH confidence. The first failure was an OI3 lifecycle race:
+  while a successful TCP flow was entering teardown, multi-owner admission still
+  accepted same-flow FIN/ACK tail packets before the completed tuple tombstone
+  was published. That created a FIN-only generation with no output and produced
+  `oi3_cleanup result=FAIL`. After that was fixed, the remaining failure was a
+  POC design mismatch: a duration-only stream probe generated a second request
+  while the previous OI3 owner was still active, so a same-owner SYN was
+  correctly rejected as `owner-busy`. That is a capacity/throughput condition,
+  not a matched single-request HTTP baseline.
+- **POC correction:** `owner_inline_oi3.c` now closes owner-local multi
+  admission at the start of `oi3_finish_for()` and reopens it only after
+  `oi3_rearm_tun_flow()` has published the tombstone/wait-SYN state.
+  `SnortVpnService`'s app HTTP stream probe now parses `Content-Length`,
+  exits the read loop as soon as the body is complete, records
+  `contentLengthCompletions`, and supports the existing `count` extra as a
+  request cap. S172 now defaults `MAX_REQUESTS=1`, passes `--ei count`, waits
+  for OI3 `STOPPED`/four cleanup lines, normalizes zero-match counts, and
+  requires `contentLengthCompletions == successes`.
+- **Supported claim:** The bounded S172 Direct/HEV/OI3 matched HTTP baseline
+  construction slice passes on Pixel 6a / Android 16 with comparison APK
+  `67f16c3a045c0a786e49ecb1f99a7a6496080ea0761404447c04434617880a94`, OI3
+  plugin
+  `96e0e9f4cbf61fa2216c2ecff2e0ed568a98f966f0ef3b9f647cc74c92381806`,
+  `tun_poc`
+  `4f5608a631215a622b60bb72026edb6a8743011ed2c7d5ede9e1243a3844b0cd`, and
+  HEV owner-context library
+  `37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d`.
+- **Non-claim:** This is not an OI3 throughput/capacity result and does not
+  close full E2 performance/device-state feasibility. Multi-request,
+  multi-owner HTTP throughput requires a separate capacity-aware design.
+- **Status:** `CLOSED_FOR_MATCHED_HTTP_BASELINE_SLICE`; full E2 remains open.
+
+### VPN-F050 -- S173 foreground HTTP staircase exposed OI3 deterministic-owner single-active TCP successor-SYN capacity cliff
+
+- **First observation:** After S172 accepted the one-GET matched HTTP baseline,
+  a 4-request foreground HTTP staircase passed Direct and HEV but failed OI3 at
+  `3/4`.
+- **Initial evidence:** `cells-20260825-132911-843206.csv` showed Direct `4/4`,
+  HEV `4/4`, and OI3 `requests=4 successes=3 errors=1`. Hash-quality-only
+  correction to `fnv1a+mix` improved distribution but did not close the
+  staircase: unpaced `cells-20260825-135431-402507.csv` and 6s-paced
+  `cells-20260825-135602-091258.csv` both remained OI3 `3/4` with VPP
+  `owner-busy` SYN rejects.
+- **Root cause:** HIGH confidence. OI3 multi-owner selection is deterministic
+  `hash % owner_count`; it is not an idle-owner allocator. Each owner admits
+  one active TCP generation. A new sequential HTTP TCP connection can therefore
+  hash to an owner whose previous generation has not finished teardown/re-arm.
+- **POC correction:** The selected fix preserves canonical owner selection
+  instead of moving the flow to another owner. `owner_inline_oi3.c` now carries
+  busy successor SYN packets as `OI3_TUN_DEFERRED_KIND`, deduplicates them in a
+  bounded owner-local `multi_deferred[]` queue, forces a completed active owner
+  toward bounded stop/re-arm, and promotes one deferred SYN after
+  `oi3_rearm_tun_flow()` publishes the completed generation's tombstone/wait
+  state. Normal admission rolls back active-flow reservation on enqueue failure
+  (`admission-rollback`), late non-SYN tail is classified as
+  `tcp-non-syn-busy`, and TCP pending tail is cleared at re-arm
+  (`tcp-rearm-stale-tail`) so stale packets cannot enter the next deferred
+  successor context.
+- **Intermediate defect found and closed:** OI3 repeat=5 run
+  `cells-20260825-142114-146880.csv` had one failing repeat after the first
+  deferred-SYN fix. Its VPP log showed `pending=2` at deferred promotion and
+  cleanup `FAIL ... output=1 direct=0`, proving stale pending tail could be
+  mixed into the next generation. The `tcp-rearm-stale-tail` correction closes
+  that sub-defect.
+- **Closure evidence:** Final OI3 plugin
+  `9282f8c82c5223e2c7b144f85a2533100df646ec821ff0ef91737b9ef8a85186` in APK
+  `441b0279e2685d0d89b6092ce00f64e49742a1fcfaaf691611c826a20fca97c4`.
+  OI3 repeat=5 run
+  `evidence/s172-e2-http-baseline-sample-20260825/cells-20260825-142858-176008.csv`
+  passed all five cells with `requests=4 successes=4 errors=0`,
+  `contentLengthCompletions=4`, cleanup `8/0`, `valid=1`, and `failures=0`;
+  every repeat hit `owner-busy-deferred` and `multi-deferred admit`.
+  Matched Direct/HEV/OI3 run
+  `cells-20260825-143509-282679.csv` passed Direct `4/4`, HEV `4/4`, and OI3
+  `4/4`, all `valid=1`, with OI3 cleanup `8/0` and two deferred successor-SYN
+  promotions.
+- **Non-claim:** This closes only the bounded S173 4-request foreground HTTP
+  staircase slice. It is not a general TCP pool, throughput, soak, thermal, or
+  power proof.
+- **Status:** `CLOSED_FOR_BOUNDED_HTTP_STAIRCASE_SLICE`. Continue remaining
+  E2 work; record any new architecture cliff as a separate finding instead of
+  reopening F050.
+
+### VPN-F051 -- S176 concurrent UDP flows collided on a busy deterministic primary owner despite idle capacity
+
+- **First observation:** The post-S175 final APK passed Direct UDP/TCP, OI3
+  single-flow UDP, and OI3 TCP, but the OI3 four-flow UDP closed-echo cell
+  failed twice. Evidence
+  `evidence/s176-e2-l4-udp-tcp-final-apk-20260825/cells-20260825-152536-302639.csv`
+  recorded OI3 UDP4 `1888/1878` and `1897/1887`, ten app errors in each
+  repeat, `ownerBusy=11`, `multiRejectNonTail=11`, and manifest
+  `failureCount=2`.
+- **Root cause:** HIGH confidence. OI3 multi-owner selection was deterministic
+  `hash % owner_count`. For concurrent UDP, one flow hashed to a primary owner
+  already active for a different UDP hash while another owner was idle. Unlike
+  TCP successor SYNs, distinct UDP datagram flows can be assigned to an idle
+  owner if the selected owner is recorded in a bounded flow-route table and all
+  later datagrams for that flow follow the pinned route.
+- **POC correction:** `owner_inline_oi3.c` now adds bounded UDP flow-route
+  pinning (`OI3_MULTI_FLOW_ROUTE_CAPACITY=16`). UDP route lookup runs before
+  canonical owner modulo; if the UDP primary owner is busy for a different
+  hash, `oi3_multi_udp_idle_owner()` may select an idle owner and
+  `oi3_multi_flow_route_insert()` pins that route. TCP remains on the S173/F050
+  canonical-owner deferred-admission path. Static verifier coverage includes
+  `test_udp_multi_flow_uses_idle_owner_route_pinning`.
+- **Build-provenance correction:** The accepted Android plugin was built from
+  the clean product Android VPP build/source, not from the mutable
+  `work/vpp-android-configure-probe` tree that still carried the rejected P6
+  conditional-wake ABI. The accepted plugin has no
+  `vlib_frame_queue_wakeup_mode` dependency and was packaged with
+  `work/android-hev-poc7-stage`.
+- **Closure evidence:** Accepted APK
+  `f4e350c6478ce9f495afa9b1b97f174c79915592a461aeb25d7e8cdd803e1541`, OI3
+  plugin
+  `5012eeecb16828edca58f3dc98ddd52330a3b09b26394a3baa94b7c39604cc72`, and
+  HEV owner-context library
+  `37481673d6547c5f2a178de04bf4c4b5f60ba6ce1bed7c7cba1cd22b606ac96d`.
+  Minimal route-pinning regression
+  `evidence/s176-e2-l4-udp4-f4-route-pinning-cleanabi-20260825/cells-20260825-155119-253253.csv`
+  passed both OI3 UDP4 repeats (`2504/2504`, `2483/2483`) with cleanup `8/0`,
+  `ownerBusy=0`, `multiRejectNonTail=0`, and `failureCount=0`; logs contain
+  `reason=udp-idle-owner` and `route-pinned=1`. Full S176
+  `evidence/s176-e2-l4-udp-tcp-route-pinning-cleanabi-20260825/cells-20260825-155427-072214.csv`
+  passed all 12 Direct/OI3 UDP/TCP cells with `failureCount=0`. OI3-only
+  16-request HTTP regression
+  `evidence/s176-s175-http16-oi3-route-pinning-cleanabi-20260825/cells-20260825-160228-023067.csv`
+  passed both repeats at `16/16`, cleanup `20/0`, and `failureCount=0`.
+- **Non-claim:** This closes only the bounded four-owner UDP route-pinning
+  slice plus the OI3 HTTP16 regression. It does not prove arbitrary flow count,
+  UDP throughput, IPv6/DNS, browser/multi-app traffic, CPU/thermal/power,
+  Doze, long-soak, or final EG-17 performance readiness.
+- **Status:** `CLOSED_FOR_BOUNDED_UDP_MULTI_FLOW_ROUTE_PINNING_SLICE`.
+
+### VPN-F052 -- S177 resource runner treated transient WSL/ADB transport and blocking log reads as target evidence
+
+- **First observation:** The post-S176 E1 resource slice repeatedly failed or
+  stayed incomplete before it could produce a valid CSV/manifest. Evidence
+  directories `s177-e1-e2-final-short-resource-20260825`,
+  `s177-e1-final-resource-short-20260825`, and
+  `s177-e1-final-resource-short2-20260825` stopped during APK install,
+  startup/preflight, or interrupted cleanup with WSL
+  `UtilAcceptVsock: accept4 failed 110` / incomplete manifest symptoms.
+- **Root cause:** HIGH confidence. These were harness/environment failures, not
+  OI3 dataplane failures. S170 still hard-coded old S169 artifact expectations
+  in provenance, `wait_vpp_ready` directly grepped VPP log paths that can block
+  on-device, and one transient `adb_su`/WSL transport failure caused immediate
+  `set -e` exit instead of bounded retry.
+- **POC correction:** S170 provenance now defaults `apk_expected`,
+  `plugin_expected`, and `hev_stage_expected` to the currently packaged
+  artifact hashes while retaining `S170_EXPECTED_*` overrides for historical
+  reruns. `wait_vpp_ready` reads only regular log files through bounded
+  `tail -n 80 | grep`, and `adb_read` has a bounded retry loop that preserves
+  the caller's `errexit` state.
+- **Closure evidence:** Static verifier coverage added
+  `test_wait_vpp_ready_does_not_block_on_log_paths` and
+  `test_adb_read_has_bounded_retry_for_wsl_transport_flakes`; S170/S171
+  verifier run passed 10 tests. Accepted run
+  `evidence/s177-e1-final-resource-short3-20260825/` recorded run
+  `20260825-163352-816347`, two cycles, `failureCount=0`, fixture
+  `2008/2008`, cycle 1 `763/763 errors=0`, cycle 2 `784/784 errors=0`,
+  cleanup `4/0` in both cycles, stable fd/thread counts, thermal status `0`,
+  and final artifact hashes matching S176.
+- **Non-claim:** This closes the S170/S177 runner-validity hotspot and supports
+  a short foreground resource slice. It does not prove Doze, long soak,
+  matched CPU/latency/throughput budgets, IPv6/DNS breadth, or the final
+  EG-17/EG-18 verdict.
+- **Status:** `CLOSED_FOR_HARNESS_RETRY_AND_NONBLOCKING_LOG_READ`.
+
+### VPN-F053 -- S178 B1 runner conflated dataplane proof with lifecycle cleanup-marker timing
+
+- **First observation:** S178 B1 dual-stack DNS reruns on the current final
+  artifact produced valid AppA DNS responses and native dataplane markers, but
+  early runner verdicts still failed or stayed ambiguous because they mixed
+  post-response lifecycle marker timing, `tun0` residue probing, and source-port
+  reuse symptoms into the same pass/fail bucket.
+- **Root cause:** HIGH confidence.  The hotspot was runner/POC design, not a
+  demonstrated IPv4/IPv6 DNS dataplane failure.  `su ip link show tun0` can
+  return success with empty output on this device, so exit-code-only residue
+  checks were false positives.  Force-stopping the app/VPN immediately after
+  AppA returned could miss late `oi3_cleanup result=` markers.  Reusing fixed
+  TCP source ports across reruns could produce local `Address not available`
+  failures unrelated to owner-inline routing.
+- **POC correction:** S178 now detects `tun0` by captured output text, adds a
+  bounded native settle window and regular-file cleanup-marker tail, chooses a
+  dynamic default source-port base while retaining overrides, and splits
+  verdicts between full lifecycle `PASS` and
+  `PASS_DATAPLANE_CLEANUP_MARKER_MISSING`.
+- **Closure evidence:** Static verifier
+  `test_verify_s178_b1_final_dualstack_dns.py` guards the runner/verdict split.
+  Accepted run
+  `evidence/s178-b1-final-dualstack-dns-20260825/` recorded run
+  `20260825-170934-541913` against VPN APK
+  `f4e350c6478ce9f495afa9b1b97f174c79915592a461aeb25d7e8cdd803e1541`
+  and AppA APK
+  `c6d0e744c4c506b26dfd635f2798a11382aff2969bce9fc5d2f6a137f9154731`.
+  Six IPv4/IPv6 UDP/TCP DNS cells all had AppA DNS success, valid 61-byte
+  responses, native direct/broker/TUN-output markers, `appValid=1`,
+  `nativeValid=1`, `valid=1`, and zero post-run `vpp`/`tun0` residue.
+  Manifest status was `PASS_DATAPLANE_WITH_CLEANUP_MARKER_GAPS` with
+  `cellsRecorded=6`, `passCount=3`, `cleanupMarkerGapCount=3`,
+  `failureCount=0`, `appValidCount=6`, and `nativeValidCount=6`.
+- **Non-claim:** This closes the S178 B1 dataplane-vs-cleanup-marker POC
+  hotspot and supports current-artifact dual-stack DNS dataplane.  It does not
+  close TCP lifecycle cleanup-marker timing for the three marker-gap rows,
+  forced large-response DNS fallback, arbitrary external traffic, throughput,
+  CPU/thermal/power, Doze, long soak, or final E2/E1 readiness.
+- **Status:** `CLOSED_FOR_DATAPLANE_LIFECYCLE_SPLIT`.
+
+### VPN-F054 -- S180 B1 fallback could not be proven by independent UDP and TCP DNS probes
+
+- **First observation:** After S178, B1 still listed large-response/forced DNS
+  fallback as open.  The current AppA B1 helper could send a supplied DNS
+  payload over UDP or TCP and validate a response, but it had no resolver
+  fallback state machine.  Treating separate UDP and TCP cells as forced
+  fallback would overstate the evidence.
+- **Root cause:** HIGH confidence.  The missing seam was in the POC helper and
+  runner design, not in the owner-inline dataplane.  A valid fallback proof
+  needs one operation where UDP receives a trigger (`TC=1`) and the same query
+  is retried over TCP, with app and endpoint evidence joined by query ID.
+- **POC correction:** AppA now supports explicit
+  `b1FallbackTcpOnTruncated=true` and `b1FallbackTcpSourcePort`.  S180 starts a
+  WSL2/LAN DNS fixture that returns UDP `TC=1` and a TCP full response for the
+  same query ID.  The runner rejects independent UDP/TCP requests as fallback
+  evidence and requires AppA fallback fields plus fixture, native and residue
+  proof.
+- **Closure evidence:** Accepted run
+  `evidence/s180-b1-dns-fallback-20260825/` recorded run
+  `20260825-173925-730529` against VPN APK
+  `f4e350c6478ce9f495afa9b1b97f174c79915592a461aeb25d7e8cdd803e1541`
+  and AppA APK
+  `24eb2af558fdb44a300e86a08643125b048c3d31b14ca9272cebc0674a2d3a88`.
+  Fixture `192.168.4.5:53535` recorded UDP query `1234`, UDP truncated
+  response `1234`, TCP query `1234`, and TCP full response `1234`.  AppA
+  recorded `fallback_attempted=true`, `fallback_reason=udp_tc`,
+  `udp_truncated=true`,
+  `return_outcome=dns_tcp_fallback_response_received`,
+  `fallback_return_outcome=dns_response_received`, and
+  `tcp_response_valid=true`.  Native evidence recorded `brokerSuccess=2`,
+  `tunOutput=4`, `directSend=2`, cleanup `1/0`, `failureCount=0`, and zero
+  post-run `vpp`/`tun0` residue.
+- **Non-claim:** This closes only the bounded IPv4 WSL2/LAN forced-TC fallback
+  cell.  It does not prove public resolver fallback behavior, IPv6 fallback,
+  arbitrary large DNS responses, throughput, CPU/thermal/power, Doze, or long
+  soak.
+- **Status:** `CLOSED_FOR_REAL_FALLBACK_HELPER_AND_FIXTURE`.
+
+### VPN-F055 -- S181 WSL2 closed TCP port was not a stable real-refusal fixture through Android VPN/OI3
+
+- **First observation:** The S181 full-device B2 runner originally treated an
+  unbound WSL2/LAN TCP port as a real transport-refusal cell and passed
+  `oi3ExpectedFailure=real-refused`.  Latest pre-correction evidence
+  `evidence/s181-b2-full-device-transport-explore-20260825/` run
+  `20260825-182316-640498` proved the parameter path and multi-owner
+  environment were working, but the cell still failed: AppA saw
+  `tcp_connect_succeeded/dns_response_timeout`, OI3 recorded broker/protect
+  success, TUN output and return rewrite, but no transport-failure event or
+  endpoint refusal.
+- **Root cause:** HIGH confidence POC-design mismatch.  In this topology the
+  Android VPN/OI3 TCP proxy can complete the app-facing handshake before the
+  protected underlay destination produces a result.  A merely unbound WSL2/LAN
+  TCP port did not produce a deterministic native refusal/RST/`ECONNREFUSED`
+  signal at the OI3 cleanup boundary.  Treating that fixture as
+  `EXPECTED_REAL_TRANSPORT_REFUSAL` overstated the evidence.
+- **POC correction:** S181 now names the third cell
+  `closed-tcp-timeout`, does not pass `real-refused`, and requires the
+  behavior actually observed on the full-device path: AppA TCP connect
+  succeeds locally, DNS read times out, native broker/protect/TUN-output/
+  handshake/rewrite markers are present, direct-send is absent, transport and
+  infrastructure failure counters are zero, and cleanup is
+  `PASS_EXPECTED_AMBIENT_TIMEOUT` / `EXPECTED_TIMEOUT`.  Static regression
+  `test_verify_s181_b2_full_device_transport.py` prevents reverting the cell
+  to a refusal claim without a deterministic reset/refusal fixture.
+- **Closure evidence:** Accepted run
+  `evidence/s181-b2-full-device-transport-explore-20260825/` /
+  `20260825-183033-563849` passed all three cells on VPN APK
+  `70f14dc28ec102175bb6eddd31f83b2aec6efd27942c18a72450b36e8c66ce31`
+  and AppA APK
+  `24eb2af558fdb44a300e86a08643125b048c3d31b14ca9272cebc0674a2d3a88`.
+  Positive UDP DNS passed with `EXPECTED_DIRECT_REPLY`; real UDP no-reply
+  passed with `PASS_EXPECTED_REAL_NO_REPLY` / `EXPECTED_REAL_NO_REPLY`; and
+  `closed-tcp-timeout` passed with `PASS_EXPECTED_AMBIENT_TIMEOUT` /
+  `EXPECTED_TIMEOUT`.  All cells had `appValid=1`, `fixtureValid=1`,
+  `nativeObserved=1`, `nativeExpected=1`, `failureCount=0`, and zero post-run
+  `vpp`/`tun0` residue.
+- **Non-claim:** This does not prove real external RST/`ECONNREFUSED`
+  behavior, policy drop, bind/protect failure, infrastructure failure, public
+  Internet behavior, production timeout constants, performance, Doze, or long
+  soak.  A real-refusal claim requires a deterministic refusal/reset fixture
+  and an observed native refusal signal.
+- **Status:** `CLOSED_FOR_REAL_TCP_TIMEOUT_DESIGN_CORRECTION`.
+
+### VPN-F056 -- S182 representative real policy drop needs an OI3 dispatcher seam, not Android app exclusion
+
+- **First observation:** After S181, B2 still needed a representative real
+  policy-drop slice on the full-device OI3 multi path.  Android
+  `addDisallowedApplication()` would route AppA outside the VPN and therefore
+  could not prove that owner-inline policy stops a packet before broker/socket
+  transport.  The existing `blockOwnerUid` gate was also not available in
+  `vpp-oi3-multi`.
+- **Root cause:** HIGH confidence POC seam gap.  Policy drop must be observed
+  inside the selected OI3 multi dispatcher path, before tuple hashing, owner
+  admission, TUN queueing, FlowStackOwner creation, or Android bind/protect
+  brokerage.  A pre-owner drop has no owner cleanup generation; requiring an
+  `oi3_cleanup` marker would be the wrong proof shape for this seam.
+- **POC correction:** `vpp-oi3-multi` now accepts a POC-only
+  `SAKAMOTO_OI3_POLICY_DROP_IP4` value passed from the existing
+  `blockIp4Dst` intent extra.  Matching IPv4 packets are dropped in
+  `oi3_multi_tun_read_ready()` before owner lookup/admission and log
+  `oi4 multi-policy-drop result=DROP stage=pre-owner ... no-transport=1
+  broker=0 socket=0`.  S182 runs only a positive control plus the
+  policy-drop cell so it does not depend on unrelated S181 timeout cleanup
+  markers.
+- **Closure evidence:** Accepted run
+  `evidence/s182-b2-real-policy-drop-20260825/` /
+  `20260825-190147-303631` passed both cells on VPN APK
+  `804a69734de9ceb2bc6f91c15fb8b09d3df8517b3bc7562c63a8379967b87a96`
+  and AppA APK
+  `24eb2af558fdb44a300e86a08643125b048c3d31b14ca9272cebc0674a2d3a88`.
+  The policy-drop fixture was ready on `192.168.4.5:53544` and recorded no
+  packet.  AppA recorded `udp_datagram_sent/dns_response_timeout`; native
+  recorded `policy-drop-ip4=192.168.4.5` and the pre-owner DROP marker;
+  verifier CSV recorded `brokerSuccess=0`, `tunOutput=0`, `directSend=0`,
+  `transportFailures=0`, `infrastructureFailures=0`, `policyDrop=1`,
+  `failure_count=0`, and zero post-run `vpp`/`tun0` residue.
+- **Non-claim:** This closes only the representative target-IP policy-drop
+  slice on the selected full-device OI3 multi path.  It does not prove
+  per-App UID drop, Android UID lifecycle/cache convergence, deterministic
+  RST/`ECONNREFUSED`, bind/protect failure, infrastructure failure, IPv6,
+  public Internet behavior, production policy authoring, performance, Doze, or
+  long soak.
+- **Status:** `CLOSED_FOR_PRE_OWNER_POLICY_DROP_SLICE`.
+
+### VPN-F057 -- S183 OI3 UID gate treated async owner-lookup sentinel as terminal
+
+- **First observation:** S183 first valid device run
+  `evidence/s183-b2-real-uid-drop-20260825/` /
+  `20260825-191707-411618` proved that the new native TUN gate was wired into
+  `vpp-oi3-multi`, but it forwarded the AppA UDP packet with
+  `ownerUid=-1 cached=0`.  The WSL2 fixture then received the supposedly
+  dropped query on `192.168.4.5:53545`, and OI3 created a broker/socket path.
+- **Root cause:** HIGH confidence POC seam bug.  `UidAttributionContract.lookup()`
+  is sentinel-first by design: the first lookup submits bounded async Android
+  `ConnectivityManager.getConnectionOwnerUid()` work and returns
+  `INVALID_UID`; a later lookup observes `COMPLETION_ACCEPTED` as a cache hit.
+  The legacy native gate treated the first `uid=-1` sentinel as a terminal
+  policy fact and therefore made the policy decision too early.
+- **POC correction:** `vpp-oi3-multi + blockOwnerUid>=0` now reuses the native
+  TUN gate, while legacy HEV/shim startup remains limited to the old
+  `vpp-hev-owner-gate` mode.  The gate calls
+  `query_owner_uid_with_bounded_wait()` before applying UID policy: it submits
+  the first lookup, waits briefly for the async completion to populate the
+  scoped cache, retries the same canonical key, and logs
+  `lookup-attempts=N` with the final decision.  The S183 runner records
+  `uid-attribution-contract.jsonl` alongside the owner-gate, AppA, fixture and
+  native logs.
+- **Closure evidence:** Accepted run
+  `evidence/s183-b2-real-uid-drop-20260825/` /
+  `20260825-192207-202830` passed both cells on VPN APK
+  `a222fd3a82993903aa67f1f377b0787891556ee72036c682719597663c2fd12c`
+  and AppA APK
+  `24eb2af558fdb44a300e86a08643125b048c3d31b14ca9272cebc0674a2d3a88`.
+  The UID-drop cell used AppA UID `12630`; AppA recorded
+  `udp_datagram_sent/dns_response_timeout`; the UID contract recorded
+  `MISS_SUBMITTED -> COMPLETION_ACCEPTED uid=12630 -> CACHE_HIT uid=12630`;
+  the owner gate logged
+  `gate drop ... ownerUid=12630 cached=0 lookup-attempts=2`; the fixture was
+  ready on port `53545` and recorded no `uid_drop_udp_query`; verifier CSV
+  recorded `gateDrop=2`, `gateForward=0`, `policyDrop=0`,
+  `transportFailures=0`, `failure_count=0`, and zero post-run `vpp`/`tun0`
+  residue.
+- **Non-claim:** This closes only a representative full-device AppA UID-drop
+  slice at the native TUN gate before OI3 multi broker/socket creation.  It is
+  not a VPP-internal UID policy proof, not a production nonblocking/capacity
+  design, not complete UID lifecycle/cache convergence, not a distinct-App
+  IPv4/IPv6 matrix, and not evidence for public Internet, performance, Doze,
+  or long soak.
+- **Status:** `CLOSED_FOR_BOUNDED_UID_GATE_SLICE`.
+
+### VPN-F058 -- S184 real LAN TCP RST propagation seam
+
+- **Observation:** S184's bounded full-device run waited for the fixture's
+  `tcp_timeout_port_unbound` event, then bound a TCP listener with
+  `SO_LINGER(1, 0)`.  The fixture recorded one accepted connection and one
+  `tcp_rst_sent` event for AppA peer `192.168.4.151:45954`.  The positive UDP
+  control in the same run passed.
+- **Evidence:**
+  `evidence/s184-b2-real-rst-20260825/` /
+  `20260825-193618-437793`; fixture log hash
+  `d5168de02790a01af588f8008052ce1befa2e8a88c85250bb44895c0e778bf03`;
+  machine summary hash
+  `cd432602b4aadd8200d60805876df2e9e94661f55b7445384ba7daed4d11b3bf`.
+- **Original root cause:** HIGH-confidence observation-seam gap.  The AppA record remained
+  `tcp_connect_succeeded/dns_response_timeout`.  Native recorded
+  `output=1 handshake=1 rewritten=1 direct=0`, but
+  `transport-failures=0 connector-error=0 reported=0`; no reset/error event
+  was joined to the owner generation.  The TUN packet's real-flow cell is
+  ordinary `TCP4`, so the bounded `OI3_CELL_REFUSED` probe is not entered.
+  Cleanup then emitted `result=FAIL outcome=EXPECTED_REAL_TRANSPORT_REFUSAL`
+  with `error=unexpected-real-refused`, while `buffers=12/12 residue=0` and
+  infrastructure failures remained zero.
+- **Owner-event correction:** Rebuilt run
+  `evidence/s184-b2-real-rst-owner-event-20260825/` /
+  `20260825-203915-342533` moved exact socket-result publication into the HEV
+  session that owns `readv`/`writev`, on owner 2 and generation 1.  It recorded
+  exactly one `READ_ERROR errno=104 Connection reset by peer`,
+  `transport-failures=1`, `reported=1`, `reset-observed=1`, `peer-eof=0`, and
+  zero infrastructure failures.  Fixture connection/RST evidence and the UDP
+  control were valid.  This closes the observation half of the finding.
+- **Downstream root cause:** The protected-side payload had already been sent,
+  so `direct=1` is valid and the prior `direct=0` reset oracle was wrong.
+  AppA still timed out because owner-context `tcp_abort_ctx()` is implemented
+  as silent `tcp_close_ctx()` purge/free.  Native emitted SYN-ACK and ACK but
+  no downstream RST/FIN before teardown.  Thus upstream `ECONNRESET` is not
+  represented on the TUN-side TCP session.
+- **Correction and accepted evidence:** Added the narrow owner-local
+  `tcp_send_reset_ctx()` operation and invoked it once only for exact HEV
+  `ECONNRESET`, before ordinary PCB teardown.  The bounded rerun
+  `evidence/s184-b2-real-rst-downstream-reset-20260825/` /
+  `20260825-210129-290257` recorded one owner `READ_ERROR errno=104`, one
+  downstream `RST|ACK`, AppA `tcp_payload_sent/dns_response_reset` with
+  `Connection reset`, `PASS_EXPECTED_REAL_RESET`, `transport-failures=1`,
+  `downstream-reset-observed=1`, `infrastructure-failures=0`, and
+  `buffers=7/7 residue=0`; no VPP/tun0 residue remained.
+- **Verifier pit:** The old summarizer read `native-combined.log`, which already
+  embeds `vpp-stdout.log`, and then read `vpp-stdout.log` again.  Its derived
+  CSV/manifest therefore counted the single reset twice and returned a false
+  `FAIL`.  The parser now uses event presence plus the authoritative once-only
+  cleanup counters.  Raw evidence was not rewritten and no device rerun was
+  spent on this verifier-only defect.
+- **Interpretation:** This is neither policy drop, bind/protect failure, nor
+  infrastructure failure.  It proves a post-SYN reset fixture can be reached,
+  but the current connector/event seam cannot distinguish that reset from a
+  timeout without inventing a refusal verdict.
+- **Boundary:** The correction does not globally turn teardown aborts into
+  wire-visible RST and does not accept timeout, EOF, or silent purge as reset.
+  It supports only the bounded controlled post-SYN LAN reset slice, not
+  pre-connect `ECONNREFUSED`, public-Internet behavior, arbitrary TCP teardown,
+  production timeout constants, Doze, or long soak.
+- **Status:** `CLOSED_FOR_BOUNDED_REAL_RST_SLICE`; the S184 hotspot stop is
+  lifted.  Full details: `S184_B2_REAL_RST_HOTSPOT.md`.
+
 ## Consolidation audit
 
-- All 30 source findings map to one of `VPN-F001`--`VPN-F026`.
+- All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
+  hotspot adds `VPN-F027`/`VPN-F028`, the S141 underlay investigation adds
+  `VPN-F029`, S142 adds the stream-framing finding `VPN-F030`, and S143
+  identifies and closes its short-segment owner-drive seam as `VPN-F031`.
+  S146 adds `VPN-F032`, a negative-outcome cleanup contract defect; S147 closes
+  it for the controlled full-TUN POC and unblocks B2-dependent work. S150 adds
+  `VPN-F033`, a real underlay-handle/epoch propagation design gap; S151 closes
+  it for the selected Pixel artifact by adding the Java→native callback/epoch
+  seam and rerunning the transition with bounded explicit VPN session restart.
+  S150 remains the historical hotspot record; it no longer pauses C1, while
+  C2/D/E retain their own evidence gates. S152 adds `VPN-F034`, a real-flow
+  normal-stop classification gap; S153 closes that sub-gate. S156 adds
+  `VPN-F035`, the one-flow-per-VPN-session lifecycle hotspot; S157 closes it for
+  the registered positive-flow TUN re-arm contract. S158 adds `VPN-F036`: the
+  final OI3 artifact's historical single-owner limitation is now closed for
+  D1/D2 by the implemented two-owner route. S159 adds VPN-F037: S160 closes
+  the HEV credit-accounting portion for the tested UDP overload envelope and
+  S161 closes the timed D3-to-B1 recovery gate. S160 adds VPN-F038 for the
+  reproducible full-route ambient TCP owner-stop contamination; S161 closes it
+  as a classified run-validity outcome. S163 adds VPN-F039 for incompatible
+  OI3/HEV build stages and closes it as a packaging preflight correction. S164
+  adds VPN-F040 for the external-ingress port-0 wildcard design gap; S165
+  implements and regresses the explicit external-only demux correction, closing
+  the correctness arm and reopening the remaining E2 matrix.
+- S166 records the legacy owner-resolver UDP one-shot verdict boundary: an
+  asynchronous first `uid=-1` miss was incorrectly required to complete within
+  the only packet. The runner now defaults to a same-socket two-packet retry;
+  the corrected Pixel cell passed with the bounded `PROBE_WAIT=12` window,
+  three resolver hits and two UID-block packets. This is a fixture correction,
+  not a new product finding or architecture hotspot. S166 also records VPN-F041:
+  a same-tuple FIN/ACK tail after a
+  successful single-owner TCP re-arm was admitted as a new generation and
+  emitted a secondary cleanup `FAIL` despite zero residue. The owner-local
+  canonical TCP tombstone gate now rejects that tail before admission; the
+  corrected ARM64 regression has one clean generation-1 `PASS` and no cleanup
+  `FAIL`. This finding is closed for the bounded correctness arm and was not
+  repeated as a three-attempt hotspot.
+- S167 extends the resolver evidence to IPv6 UDP: both allow and drop cells
+  preserved the exact external destination, resolved the package UID without
+  resolver errors, and recorded the expected zero/two UID-block packets. This
+  closes only the bounded IPv6 UDP UID protocol cell; matched E2 performance,
+  strict-owner external-ingress negatives, and final-topology load remain open.
+- S168 adds VPN-F042 for the multi-owner teardown heap-corruption seam: two
+  valid pre-fix cells shared the Scudo/SIGABRT signature, and the deferred
+  thread-local HEV task drain passed the bounded 2-flow regression with clean
+  per-owner cleanup and zero residue. The follow-up lifecycle correction
+  (bounded retry plus destroy guards) still left the registered fixed-artifact
+  4-flow cell reproducing the same owner-context Scudo/SIGABRT boundary for
+  the fourth valid recurrence. The follow-up diagnosis found the missing
+  owner-thread affinity guard: a foreign VPP worker could finish/destroy another
+  owner's Flow Stack. OI3 now defers foreign-owner finish to the target owner
+  thread, and the Android APK preflight is corrected to use a single VPP
+  runtime/plugin build closure with native-library `name-filter` loading. The
+  Pixel preflight now loads the OI3 plugin and starts `vpp-oi3-multi`; the
+  approved 2026-08-25 4-flow rerun did not reproduce heap corruption. F043
+  records and closes the missing same-package endpoint preflight rule, and F044
+  records and closes the fixed source-port-base harness collision. S169 closes
+  F045 for the tested two-owner UDP closed-echo envelope by making the HEV UDP
+  connector persistent across datagrams. F046 then closed the remaining
+  registered 4-flow mismatch by expanding OI4 to four owner contexts and
+  validating the four-flow UDP closed-echo cell with zero app errors, zero
+  `owner-busy` rejects, and four clean owner teardowns. S170 adds the bounded
+  post-F046 E1 repeat/stop resource trend: five four-owner UDP cycles, stable
+  app/VPP FD counts, bounded RSS variation, owned fixture RX/TX, and no
+  residual VPP/tun0 after cleanup. S171 adds and closes F047 for the
+  multi-owner TCP absolute-timeout hotspot; the corrected bounded
+  direct-vs-OI3 sample passes UDP 64B, UDP 4x1400B and TCP 1400B cells with
+  zero TCP tail rejects. S172 adds and closes F048 as a matched-HEV-baseline
+  build/runner preflight hotspot: `vpp-hev` needs explicit `tun_poc` packaging
+  in a comparison APK, while the canonical OI3 APK remains valid without it.
+  S172 also adds and closes F049: owner-local admission is now closed while TCP
+  tombstones are published, and the matched HTTP baseline is count-bounded
+  (`MAX_REQUESTS=1`) rather than a duration-only throughput probe. The accepted
+  Direct/HEV/OI3 HTTP construction slice has `failureCount=0`. S173 adds and
+  closes F050 for deterministic-owner TCP successor-SYN pressure by deferring
+  busy successor SYNs on their canonical owner and clearing stale TCP pending
+  tail at re-arm; S174/S175 extend that HTTP staircase to 8 and 16 unpaced
+  requests. S176 adds and closes F051 for concurrent UDP primary-owner
+  collision by adding UDP-only idle-owner route pinning while leaving TCP on
+  the F050 canonical-owner deferred path. S177 adds and closes F052 for the
+  S170/S177 resource-runner harness hotspot: current-artifact provenance,
+  nonblocking VPP log reads, and bounded `adb_read` retry now allow the short
+  final resource slice to produce valid evidence. S178 adds and closes F053 for
+  the B1 runner/verdict hotspot by splitting current-artifact DNS dataplane
+  proof from late lifecycle cleanup-marker evidence. S180 adds and closes F054
+  for the B1 fallback POC-design gap: forced fallback now requires one AppA
+  operation with UDP `TC=1` followed by same-query TCP retry, not independent
+  UDP/TCP probes. S181 adds and closes F055 for the real B2 transport-fixture
+  design gap: an unbound WSL2 TCP port is a valid closed-port timeout fixture
+  through Android VPN/OI3, not a stable native real-refusal fixture. S182 adds
+  and closes F056 for the representative real policy-drop seam: target-IP drop
+  is proven as a pre-owner dispatcher result, not via Android app exclusion or
+  an owner cleanup marker. S183 adds and closes F057 for the OI3 UID-drop gate:
+  the native pre-OI3 gate must wait for the existing async UID contract's cache
+  completion rather than treating the first `uid=-1` sentinel as terminal.
+  S184 adds and closes F058: the first run reached a real LAN post-SYN TCP RST
+  without a native connector event; the owner-event correction observed one
+  owner-local `ECONNRESET`; and the final narrow `tcp_send_reset_ctx()`
+  correction emitted one rewritten downstream `RST|ACK` to AppA.  The bounded
+  closure run records AppA `dns_response_reset`,
+  `PASS_EXPECTED_REAL_RESET`, one transport failure, zero infrastructure
+  failure, exact settlement, and zero residue.  A duplicate-log verifier
+  false negative was corrected without rerunning valid device evidence.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -579,6 +2103,11 @@ Map rather than encoded as TODOs here.
 - SAKAMOTO-138 is follow-up evidence for VPN-F026 and EG-08/EG-09; its
   Host/model PASS does not close the Pixel `OPEN_RISK` or the campaign's
   nonblocking Android UID gap.
+- SAKAMOTO-140 closes two run-validity defects without closing B1: artifact
+  alias provenance (VPN-F027) and Android per-UID LAN eligibility (VPN-F028).
+- SAKAMOTO-141 adds a third B1 run-validity/transport boundary: an API-success
+  bind/protect pair is invalid unless its selected handle is a non-VPN
+  physical underlay (VPN-F029).
 
 | Source inventory | Source finding | Consolidated finding |
 | --- | --- | --- |
@@ -612,6 +2141,15 @@ Map rather than encoded as TODOs here.
 | S134 | F134-10 | VPN-F022 |
 | S134 | F134-11 | VPN-F023 |
 | S134 | F134-12 | VPN-F024 |
+| S140 | B1 artifact provenance hotspot | VPN-F027 |
+| S140 | B1 Android 16 LAN eligibility hotspot | VPN-F028 |
+| S164 | HEV external-ingress gateway wildcard-port hotspot | VPN-F040 |
+| S165 | HEV external-ingress correction and controlled TCP regression | VPN-F040 |
+| S166 | owner-resolver UDP one-shot fixture correction | A2 evidence hygiene |
+| S166 | single-owner TCP re-arm FIN/ACK tail admission gap | VPN-F041 |
+| S167 | IPv6 UDP UID allow/drop extension | A2 protocol evidence |
+| S168 | Multi-owner teardown deferred-drain correction and regression | VPN-F042 |
+| S184 | Real LAN TCP RST observation and bounded downstream propagation closure | VPN-F058 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 

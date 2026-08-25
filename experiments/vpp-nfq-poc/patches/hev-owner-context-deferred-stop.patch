@@ -1,0 +1,56 @@
+diff --git a/src/hev-flow-stack-owner-context.c b/src/hev-flow-stack-owner-context.c
+--- a/src/hev-flow-stack-owner-context.c
++++ b/src/hev-flow-stack-owner-context.c
+@@ -8,6 +8,7 @@
+ #include "hev-socks5.h"
+ #include "hev-socks5-session.h"
+ #include "hev-socks5-tunnel-owner.h"
++#include "hev-task-system.h"
+ 
+ #include <stdlib.h>
+ #include <string.h>
+@@ -522,6 +523,35 @@ flow_stack_owner_tcp_echo(FlowStackOwnerContext *context,
+   return err == ERR_OK ? FLOW_STACK_OWNER_OK : FLOW_STACK_OWNER_INVALID;
+ }
+ 
++static int
++flow_stack_owner_drain_external_tasks(FlowStackOwnerContext *context)
++{
++  unsigned int guard;
++
++  /* A VPP owner calls stop from its worker thread, outside a HEV task.  The
++   * owner stop only signals the HEV event task; do not invalidate the owner
++   * lwIP pools until that task and its sessions have actually drained.  HEV's
++   * scheduler context is thread-local, so this is safe for each owner worker;
++   * calls made from an existing HEV task retain the historical cooperative
++   * path and must not recurse into the scheduler. */
++  if (!context || hev_task_self())
++    return FLOW_STACK_OWNER_OK;
++  /* One stop request can have several owner-local sessions and each
++   * session may need more than one scheduler quantum to release its pbufs.
++   * Keep each driver call within HEV's 1024-quantum contract, but give the
++   * bounded teardown enough total quanta to reach a real STOPPED result. */
++  for (guard = 0; guard < 64; guard++) {
++    HevTaskSystemDriverBudget budget = { .max_quanta = 1024 };
++    HevTaskSystemDriverResult result = { 0 };
++    if (hev_task_system_driver_step(&budget, &result) < 0)
++      return FLOW_STACK_OWNER_NOT_READY;
++    if (result.status == HEV_TASK_SYSTEM_DRIVER_STOPPED ||
++        result.total_task_count == 0)
++      return FLOW_STACK_OWNER_OK;
++  }
++  return FLOW_STACK_OWNER_NOT_READY;
++}
++
+ int
+ flow_stack_owner_stop(FlowStackOwnerContext *context)
+ {
+@@ -543,6 +569,8 @@ flow_stack_owner_stop(FlowStackOwnerContext *context)
+   context->tcp_session_count = 0;
+   context->udp_session_count = 0;
+   hev_socks5_tunnel_owner_stop(context->hev_runtime);
++  if (flow_stack_owner_drain_external_tasks(context) != FLOW_STACK_OWNER_OK)
++    return FLOW_STACK_OWNER_NOT_READY;
+   lwip_owner_context_stop(context->lwip);
+   context->tcp_listener = NULL;
+   context->udp_listener = NULL;

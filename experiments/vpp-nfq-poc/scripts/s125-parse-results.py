@@ -467,7 +467,10 @@ def parse_cell(cell):
         if not isinstance(expected_flows, int) or len(flow_records) != expected_flows:
             reasons.append("flow-record-count-mismatch")
         else:
-            expected_port_base = 41000 if manifest.get("protocol") == "tcp" else 40000
+            expected_port_base = manifest.get("sourcePortBase")
+            if not isinstance(expected_port_base, int):
+                expected_port_base = (
+                    41000 if manifest.get("protocol") == "tcp" else 40000)
             observed_tcp_ports = []
             for index, flow in enumerate(flow_records):
                 if manifest.get("protocol") == "tcp":
@@ -874,7 +877,7 @@ def parse_cell(cell):
         "label": manifest.get("label"),
         "config": {key: manifest.get(key) for key in
                     ("arm", "workers", "protocol", "flows", "payloadBytes",
-                     "burst", "load", "observe", "expectEcho",
+                     "sourcePortBase", "burst", "load", "observe", "expectEcho",
                      "reconnectEvery", "repeat",
                      "fireAndCountPacingNsPerPacket")},
         "valid": not reasons,

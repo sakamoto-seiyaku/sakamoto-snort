@@ -46,6 +46,10 @@ static jobject g_owner_lookup;
 static jmethodID g_owner_lookup_method;
 static char g_stage_cell[64] = "A2-4";
 static char g_stage_id[128] = "startup";
+static pthread_mutex_t g_underlay_epoch_cli_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_vpp_underlay_epoch;
+static int64_t g_vpp_underlay_handle = -1;
+static bool g_vpp_underlay_available;
 
 static pthread_t g_vpp_monitor_thread;
 static bool g_vpp_monitor_running;
@@ -66,6 +70,7 @@ static char g_vpp_cli_sock[PATH_BUF_SIZE];
 static char g_vpp_api_sock[PATH_BUF_SIZE];
 static char g_vpp_statseg_sock[PATH_BUF_SIZE];
 static char g_vpp_cli_log[PATH_BUF_SIZE];
+static char g_vpp_monitor_show_command[96];
 static char g_vpp_shim_log[PATH_BUF_SIZE];
 static char g_vpp_gate_log[PATH_BUF_SIZE];
 static char g_vpp_resolver_log[PATH_BUF_SIZE];
@@ -863,6 +868,37 @@ static int query_owner_uid(const owner_query_t *query) {
     return (int)uid;
 }
 
+static int query_owner_uid_with_bounded_wait(const owner_query_t *query,
+                                             bool wait_for_resolution,
+                                             int *attempts_out) {
+    int attempts = 1;
+    int uid = query_owner_uid(query);
+    if (!wait_for_resolution || uid >= 0) {
+        if (attempts_out) {
+            *attempts_out = attempts;
+        }
+        return uid;
+    }
+
+    /* UidAttributionContract.lookup() is intentionally sentinel-first: the
+     * first call submits bounded async Android ConnectivityManager work and
+     * returns INVALID_UID.  A policy gate must not decide from that sentinel.
+     * Poll the same canonical key briefly until the completion is visible as a
+     * cache hit, then enforce against the resolved UID. */
+    for (int attempt = 0; attempt < 20; attempt++) {
+        usleep(25000);
+        attempts++;
+        uid = query_owner_uid(query);
+        if (uid >= 0) {
+            break;
+        }
+    }
+    if (attempts_out) {
+        *attempts_out = attempts;
+    }
+    return uid;
+}
+
 static bool path_exists(const char *path) {
     return access(path, F_OK) == 0;
 }
@@ -977,7 +1013,9 @@ static void append_cli_output(FILE *file, const char *label, const char *buf, ss
     fflush(file);
 }
 
-static int run_cli_command(const char *sock_path, const char *command, FILE *file) {
+static int run_cli_command_capture(const char *sock_path, const char *command,
+                                   FILE *file, char *capture,
+                                   size_t capture_size) {
     if (strlen(sock_path) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
         log_line(file, "cli socket path too long: %s", sock_path);
         return -1;
@@ -1035,6 +1073,16 @@ static int run_cli_command(const char *sock_path, const char *command, FILE *fil
     } else {
         output[total] = '\0';
     }
+    if (capture && capture_size > 0) {
+        size_t copy_len = total > 0 ? (size_t)total : 0;
+        if (copy_len >= capture_size) {
+            copy_len = capture_size - 1;
+        }
+        if (copy_len > 0) {
+            memcpy(capture, output, copy_len);
+        }
+        capture[copy_len] = '\0';
+    }
     append_cli_output(file, command, output, total);
     close(fd);
     if (total <= 0) {
@@ -1049,6 +1097,10 @@ static int run_cli_command(const char *sock_path, const char *command, FILE *fil
         return -3;
     }
     return 0;
+}
+
+static int run_cli_command(const char *sock_path, const char *command, FILE *file) {
+    return run_cli_command_capture(sock_path, command, file, NULL, 0);
 }
 
 static bool oi5_android_runner_alive(void) {
@@ -1077,9 +1129,61 @@ static int oi5_android_cli(FILE *file, const char *sock_path, const char *comman
     return rc;
 }
 
+static int oi5_android_cli_capture(FILE *file, const char *sock_path,
+                                   const char *command, char *capture,
+                                   size_t capture_size) {
+    if (!oi5_android_runner_alive()) {
+        return -1;
+    }
+    log_line(file, "oi5 android cli-begin command=%s", command);
+    int rc = run_cli_command_capture(sock_path, command, file, capture,
+                                      capture_size);
+    log_line(file, "oi5 android cli-end command=%s rc=%d", command, rc);
+    return rc;
+}
+
 static int oi5_android_show(FILE *file, const char *sock_path, const char *label) {
     log_line(file, "oi5 android snapshot label=%s", label);
     return oi5_android_cli(file, sock_path, "show sakamoto-oi3");
+}
+
+static int oi5_android_wait_for_no_reply_admission(FILE *file,
+                                                    const char *sock_path,
+                                                    const char *label) {
+    /* The run command only enqueues the first owner token.  Do not issue a
+     * lifecycle stop until the owner has admitted the broker and endpoint;
+     * otherwise a valid bounded stop is indistinguishable from a runner race
+     * (broker=0/0, endpoint=0/0).  Keep the wait bounded and retain every
+     * snapshot in the Android evidence log. */
+    for (unsigned int attempt = 0;
+         attempt < 80 && oi5_android_runner_alive(); attempt++) {
+        char snapshot[8192];
+        int rc = oi5_android_cli_capture(file, sock_path,
+                                          "show sakamoto-oi3", snapshot,
+                                          sizeof(snapshot));
+        if (rc != 0) {
+            return rc;
+        }
+        if (strstr(snapshot, "active=1") &&
+            strstr(snapshot, "broker bind=1 protect=1") &&
+            strstr(snapshot, "endpoint=1/0")) {
+            log_line(file, "oi5 android admission label=%s attempts=%u",
+                     label, attempt + 1);
+            return 0;
+        }
+        if (strstr(snapshot, "state=DONE") &&
+            strstr(snapshot, "broker bind=1 protect=1") &&
+            strstr(snapshot, "endpoint=1/0") &&
+            !strstr(snapshot, "error=unexpected-")) {
+            log_line(file,
+                     "oi5 android admission label=%s natural-complete attempts=%u",
+                     label, attempt + 1);
+            return 1;
+        }
+        oi5_android_wait_ms(25);
+    }
+    log_line(file, "oi5 android admission result=FAIL label=%s", label);
+    return -1;
 }
 
 static void oi5_android_sequence(const char *sock_path, const char *hev_lib) {
@@ -1120,8 +1224,13 @@ static void oi5_android_sequence(const char *sock_path, const char *hev_lib) {
     if (oi5_android_cli(file, sock_path, run_no_reply) != 0) {
         failures++;
     }
-    oi5_android_wait_ms(5);
-    if (oi5_android_cli(file, sock_path, "sakamoto-oi3 stop") != 0) {
+    int normal_state = oi5_android_wait_for_no_reply_admission(
+        file, sock_path, "normal-stop");
+    if (normal_state < 0) {
+        failures++;
+    }
+    if (normal_state == 0 &&
+        oi5_android_cli(file, sock_path, "sakamoto-oi3 stop") != 0) {
         failures++;
     }
     oi5_android_wait_ms(500);
@@ -1137,7 +1246,11 @@ static void oi5_android_sequence(const char *sock_path, const char *hev_lib) {
     if (oi5_android_cli(file, sock_path, run_no_reply) != 0) {
         failures++;
     }
-    oi5_android_wait_ms(5);
+    /* Fault is deliberately issued immediately after the run command.  The
+     * run command marks the generation active synchronously; waiting for the
+     * short synthetic no-reply loop to settle would make the fault seam race
+     * with its natural DONE transition. */
+    oi5_android_wait_ms(1);
     if (oi5_android_cli(file, sock_path, "sakamoto-oi3 fault") != 0) {
         failures++;
     }
@@ -1526,7 +1639,9 @@ static void drain_gate_tun_to_vpp(FILE *file, int tun_fd, int vpp_fd, int block_
         (*from_tun)++;
         owner_query_t query;
         bool have_owner = parse_owner_query_packet(buf, n, &query);
-        int uid = have_owner ? query_owner_uid(&query) : -1;
+        int uid_attempts = 0;
+        int uid = have_owner ? query_owner_uid_with_bounded_wait(
+                &query, block_uid >= 0, &uid_attempts) : -1;
         bool cached_uid = false;
         if (have_owner) {
             if (uid >= 0) {
@@ -1543,10 +1658,11 @@ static void drain_gate_tun_to_vpp(FILE *file, int tun_fd, int vpp_fd, int block_
             (*dropped)++;
             if (have_owner) {
                 log_line(file,
-                         "gate drop packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d cached=%d",
+                         "gate drop packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d cached=%d lookup-attempts=%d",
                          *from_tun, n, query.protocol, query.local_addr,
                          (unsigned int)query.local_port, query.remote_addr,
-                         (unsigned int)query.remote_port, uid, cached_uid ? 1 : 0);
+                         (unsigned int)query.remote_port, uid, cached_uid ? 1 : 0,
+                         uid_attempts);
             } else {
                 log_line(file, "gate drop packet=%d len=%zd ownerUid=%d",
                          *from_tun, n, uid);
@@ -1563,10 +1679,11 @@ static void drain_gate_tun_to_vpp(FILE *file, int tun_fd, int vpp_fd, int block_
         (*forwarded)++;
         if (have_owner) {
             log_line(file,
-                     "gate forward packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d cached=%d",
+                     "gate forward packet=%d len=%zd proto=%d %s:%u -> %s:%u ownerUid=%d cached=%d lookup-attempts=%d",
                      *from_tun, n, query.protocol, query.local_addr,
                      (unsigned int)query.local_port, query.remote_addr,
-                     (unsigned int)query.remote_port, uid, cached_uid ? 1 : 0);
+                     (unsigned int)query.remote_port, uid, cached_uid ? 1 : 0,
+                     uid_attempts);
         }
     }
 }
@@ -1937,6 +2054,117 @@ static int update_vpp_stage_cli(const char *stage) {
     return -1;
 }
 
+static int update_vpp_underlay_epoch_cli(uint64_t epoch, int64_t physical_handle,
+                                         bool available) {
+    char command[256];
+    char sock_path[PATH_BUF_SIZE];
+    char log_path[PATH_BUF_SIZE];
+    int command_len = snprintf(command, sizeof(command),
+                               "sakamoto-oi3 underlay epoch %llu handle %lld available %u",
+                               (unsigned long long)epoch,
+                               (long long)physical_handle, available ? 1U : 0U);
+    if (command_len <= 0 || (size_t)command_len >= sizeof(command)) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_underlay_epoch_cli_lock);
+    int result = -1;
+    /* nativeStartVppProbe returns before VPP has necessarily created its CLI
+     * socket.  Keep the callback handoff bounded and retry until the child is
+     * ready, while serializing concurrent onAvailable/onLost callbacks. */
+    for (int attempt = 0; attempt < 40; attempt++) {
+        pthread_mutex_lock(&g_lock);
+        bool running = g_vpp_monitor_running;
+        snprintf(sock_path, sizeof(sock_path), "%s", g_vpp_cli_sock);
+        snprintf(log_path, sizeof(log_path), "%s", g_vpp_cli_log);
+        pthread_mutex_unlock(&g_lock);
+        if (!running) {
+            break;
+        }
+        if (access(sock_path, F_OK) != 0) {
+            usleep(75000);
+            continue;
+        }
+        FILE *file = fopen(log_path, "a");
+        result = run_cli_command(sock_path, command, file);
+        if (file) {
+            fclose(file);
+        }
+        if (result == 0) {
+            break;
+        }
+        usleep(75000);
+    }
+    pthread_mutex_unlock(&g_underlay_epoch_cli_lock);
+    return result;
+}
+
+/* Test-only C2 control seam.  The Java service may request only the bounded
+ * lifecycle verbs; it cannot pass an arbitrary VPP CLI command.  The command
+ * is serialized with underlay publication so a callback snapshot and a stop /
+ * fault cannot interleave on the same app-owned CLI socket. */
+JNIEXPORT jint JNICALL
+Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeRunVppOi3Control(
+        JNIEnv *env, jclass clazz, jstring control_arg) {
+    (void)clazz;
+    const char *control = control_arg
+            ? (*env)->GetStringUTFChars(env, control_arg, NULL) : NULL;
+    if (!control) {
+        return -1;
+    }
+    if (strcmp(control, "show") != 0 && strcmp(control, "stop") != 0
+            && strcmp(control, "fault") != 0
+            && strcmp(control, "multi-show") != 0
+            && strcmp(control, "multi-stop") != 0
+            && strcmp(control, "multi-fault-0") != 0
+            && strcmp(control, "multi-fault-1") != 0) {
+        (*env)->ReleaseStringUTFChars(env, control_arg, control);
+        return -2;
+    }
+
+    char sock_path[PATH_BUF_SIZE];
+    char log_path[PATH_BUF_SIZE];
+    pthread_mutex_lock(&g_underlay_epoch_cli_lock);
+    pthread_mutex_lock(&g_lock);
+    bool running = g_vpp_monitor_running && g_vpp_cli_sock[0] != '\0';
+    snprintf(sock_path, sizeof(sock_path), "%s", g_vpp_cli_sock);
+    snprintf(log_path, sizeof(log_path), "%s", g_vpp_cli_log);
+    pthread_mutex_unlock(&g_lock);
+    if (!running || access(sock_path, F_OK) != 0) {
+        pthread_mutex_unlock(&g_underlay_epoch_cli_lock);
+        (*env)->ReleaseStringUTFChars(env, control_arg, control);
+        return -3;
+    }
+
+    char command[96];
+    int command_len;
+    if (strcmp(control, "show") == 0)
+        command_len = snprintf(command, sizeof(command), "show sakamoto-oi3");
+    else if (strcmp(control, "multi-show") == 0)
+        command_len = snprintf(command, sizeof(command), "show sakamoto-oi3 multi");
+    else if (strcmp(control, "multi-stop") == 0)
+        command_len = snprintf(command, sizeof(command), "sakamoto-oi3 multi stop");
+    else if (strcmp(control, "multi-fault-0") == 0)
+        command_len = snprintf(command, sizeof(command), "sakamoto-oi3 multi fault owner 0");
+    else if (strcmp(control, "multi-fault-1") == 0)
+        command_len = snprintf(command, sizeof(command), "sakamoto-oi3 multi fault owner 1");
+    else
+        command_len = snprintf(command, sizeof(command), "sakamoto-oi3 %s", control);
+    int result = -4;
+    if (command_len > 0 && (size_t)command_len < sizeof(command)) {
+        FILE *file = fopen(log_path, "a");
+        result = run_cli_command(sock_path, command, file);
+        if (file) {
+            fclose(file);
+        }
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                            "OI3 control command=%s rc=%d", command, result);
+    }
+    pthread_mutex_unlock(&g_underlay_epoch_cli_lock);
+    (*env)->ReleaseStringUTFChars(env, control_arg, control);
+    return result;
+}
+
 JNIEXPORT void JNICALL
 Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeSetVppStage(
         JNIEnv *env, jclass clazz, jstring cell_arg, jstring stage_arg) {
@@ -1954,6 +2182,30 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeSetVppStage(
     if (stage) {
         (*env)->ReleaseStringUTFChars(env, stage_arg, stage);
     }
+}
+
+JNIEXPORT void JNICALL
+Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeSetVppUnderlayEpoch(
+        JNIEnv *env, jclass clazz, jlong epoch_arg, jlong physical_handle_arg,
+        jboolean available_arg) {
+    (void)env;
+    (void)clazz;
+    if (epoch_arg <= 0) {
+        return;
+    }
+    uint64_t epoch = (uint64_t)epoch_arg;
+    int64_t physical_handle = (int64_t)physical_handle_arg;
+    bool available = available_arg == JNI_TRUE;
+    pthread_mutex_lock(&g_lock);
+    g_vpp_underlay_epoch = epoch;
+    g_vpp_underlay_handle = physical_handle;
+    g_vpp_underlay_available = available;
+    pthread_mutex_unlock(&g_lock);
+    int rc = update_vpp_underlay_epoch_cli(epoch, physical_handle, available);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                        "OI3 underlay epoch epoch=%llu physicalHandle=%lld available=%d cliRc=%d",
+                        (unsigned long long)epoch, (long long)physical_handle,
+                        available ? 1 : 0, rc);
 }
 
 JNIEXPORT jint JNICALL
@@ -2084,7 +2336,9 @@ static void *vpp_monitor_thread(void *arg) {
     pthread_mutex_lock(&g_lock);
     pid_t pid = g_vpp_pid;
     char sock_path[PATH_BUF_SIZE];
+    char show_command[sizeof(g_vpp_monitor_show_command)];
     snprintf(sock_path, sizeof(sock_path), "%s", g_vpp_cli_sock);
+    snprintf(show_command, sizeof(show_command), "%s", g_vpp_monitor_show_command);
     pthread_mutex_unlock(&g_lock);
 
     log_line(file, "vpp monitor start pid=%d cli=%s", pid, sock_path);
@@ -2124,12 +2378,14 @@ static void *vpp_monitor_thread(void *arg) {
             break;
         }
 
-        /* Keep plugin registration evidence beside every stage snapshot.  A
-         * missing command must invalidate the cell before any traffic is
-         * interpreted as a performance result. */
+        /* Keep plugin registration evidence beside every stage snapshot.
+         * The datapath show command is mode-specific: OI3-only APKs do not
+         * stage the historical tun_poc plugin, so probing "show tun-poc"
+         * there creates persistent false-negative CLI noise. */
         run_cli_command(sock_path, "show plugins", file);
-        run_cli_command(sock_path, "show s124-vpn-tun", file);
-        run_cli_command(sock_path, "show tun-poc", file);
+        if (show_command[0]) {
+            run_cli_command(sock_path, show_command, file);
+        }
         for (int tick = 0; tick < 10; tick++) {
             pthread_mutex_lock(&g_lock);
             running = g_vpp_monitor_running;
@@ -2173,7 +2429,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
                            bool direct_return_mode,
                            bool direct_single_writer_mode,
                            bool s124_tun_mode, bool oi2_mode, bool oi3_mode,
-                           bool oi5_mode,
+                           bool oi3_multi_mode, bool oi5_mode,
                            int s124_worker_count,
                            const char *s124_path,
                            const char *s124_observe,
@@ -2270,6 +2526,10 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
         }
     } else if (!path_exists(plugin_path)) {
         snprintf(plugin_name, sizeof(plugin_name), "%s", "libtun_poc_plugin.so");
+        snprintf(plugin_path, sizeof(plugin_path), "%s/%s", native_dir, plugin_name);
+    }
+    if (!path_exists(plugin_path)) {
+        return -1;
     }
 
     if (block_ip4_dst && block_ip4_dst[0]) {
@@ -2293,15 +2553,23 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
     }
 
     if (oi3_mode) {
-        snprintf(exec_text, sizeof(exec_text),
-                 "sakamoto-oi3 tun fd %d target-thread 1 lib %s/libhev-socks5-tunnel.so\n"
-                 "show sakamoto-oi3\n", VPP_TUN_FD, native_dir);
+        if (oi3_multi_mode) {
+            snprintf(exec_text, sizeof(exec_text),
+                     "sakamoto-oi3 multi tun fd %d target-thread-a 1 "
+                     "target-thread-b 2 target-thread-c 3 target-thread-d 4 "
+                     "lib %s/libhev-socks5-tunnel.so\n"
+                     "show sakamoto-oi3 multi\n", VPP_TUN_FD, native_dir);
+        } else {
+            snprintf(exec_text, sizeof(exec_text),
+                     "sakamoto-oi3 tun fd %d target-thread 1 lib %s/libhev-socks5-tunnel.so\n"
+                     "show sakamoto-oi3\n", VPP_TUN_FD, native_dir);
+        }
         snprintf(cpu_text, sizeof(cpu_text),
                  "\n"
                  "cpu {\n"
                  "  main-core 0\n"
-                 "  workers 1\n"
-                 "}\n");
+                 "  workers %d\n"
+                 "}\n", oi3_multi_mode ? 4 : 1);
     } else if (oi5_mode) {
         /* OI-5 uses the same plugin and external broker as OI-3, but the
          * parent monitor drives synthetic run/stop/fault cells through the
@@ -2421,8 +2689,7 @@ static int write_vpp_files(const char *native_dir, const char *files_dir,
              "\n"
              "plugins {\n"
              "  path %s\n"
-             "  plugin default { disable }\n"
-             "  plugin %s { enable }\n"
+             "  name-filter %s\n"
              "}\n",
              runtime_dir, vpp_log, g_vpp_cli_sock, startup_exec, cpu_text,
              runtime_dir, runtime_dir, native_dir, plugin_name);
@@ -2434,7 +2701,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         JNIEnv *env, jclass clazz, jint fd, jstring native_library_dir, jstring files_dir,
         jint vpp_mode, jstring s124_path_arg, jstring s124_observe_arg,
         jstring block_ip4_dst, jstring block_ip6_dst, jint block_owner_uid,
-        jint redirect_thread, jboolean owner_cache_enabled, jobject owner_lookup) {
+        jint redirect_thread, jboolean owner_cache_enabled,
+        jstring oi3_expected_failure_arg, jobject owner_lookup) {
 
     const char *native_dir = (*env)->GetStringUTFChars(env, native_library_dir, NULL);
     if (!native_dir) {
@@ -2461,6 +2729,23 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
         close(fd);
         return -13;
+    }
+    char oi3_expected_failure[64] = "";
+    if (oi3_expected_failure_arg) {
+        const char *expected_failure =
+                (*env)->GetStringUTFChars(env, oi3_expected_failure_arg, NULL);
+        if (!expected_failure) {
+            (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
+            (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
+            (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
+            (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir);
+            close(fd);
+            return -28;
+        }
+        snprintf(oi3_expected_failure, sizeof(oi3_expected_failure), "%s",
+                 expected_failure);
+        (*env)->ReleaseStringUTFChars(env, oi3_expected_failure_arg,
+                                      expected_failure);
     }
 
     char vpp_path[PATH_BUF_SIZE];
@@ -2492,7 +2777,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         close(fd);
         return -15;
     }
-    bool use_owner_gate = vpp_mode == 3;
+    bool use_legacy_owner_gate = vpp_mode == 3;
     bool use_owner_resolver = vpp_mode == 5;
     bool use_handoff_hev = vpp_mode == 4 || use_owner_resolver;
     bool use_fragment_owner = vpp_mode == 11 || vpp_mode == 12;
@@ -2505,8 +2790,11 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     bool use_s124_tun = vpp_mode == 13 || vpp_mode == 14;
     bool use_oi5 = vpp_mode == 24;
     bool use_oi3_a23_return = vpp_mode == 25 || vpp_mode == 26;
+    bool use_oi3_multi = vpp_mode == 27;
+    bool use_oi3_uid_gate = use_oi3_multi && block_owner_uid >= 0;
+    bool use_tun_gate = use_legacy_owner_gate || use_oi3_uid_gate;
     bool use_oi3 = vpp_mode == 16 || (vpp_mode >= 17 && vpp_mode <= 23)
-            || use_oi3_a23_return || use_oi5;
+            || use_oi3_a23_return || use_oi5 || use_oi3_multi;
     bool use_oi3_controlled = (vpp_mode >= 17 && vpp_mode <= 23)
             || use_oi3_a23_return;
     if (use_oi3_controlled) {
@@ -2517,9 +2805,9 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     int s124_worker_count = vpp_mode == 14 ? 2 : 1;
     use_direct_owner = use_direct_owner || use_direct_fault || use_direct_return ||
                        use_direct_single_writer || use_fragment_owner;
-    bool use_forward = vpp_mode == 1 || vpp_mode == 2 || use_owner_gate ||
+    bool use_forward = vpp_mode == 1 || vpp_mode == 2 || use_legacy_owner_gate ||
                        use_handoff_hev || use_direct_owner;
-    bool use_hev = vpp_mode == 2 || use_owner_gate || use_handoff_hev ||
+    bool use_hev = vpp_mode == 2 || use_legacy_owner_gate || use_handoff_hev ||
                    (use_direct_owner && !use_fragment_no_hev);
     if (write_vpp_files(native_dir, app_files, startup_conf, sizeof(startup_conf),
                         stdout_log, sizeof(stdout_log), use_forward, use_handoff_hev,
@@ -2527,7 +2815,8 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
                         use_direct_fault,
                         use_direct_return,
                         use_direct_single_writer,
-                        use_s124_tun, use_oi2, use_oi3 && !use_oi5, use_oi5,
+                        use_s124_tun, use_oi2, use_oi3 && !use_oi5,
+                        use_oi3_multi, use_oi5,
                         s124_worker_count,
                         s124_path,
                         s124_observe,
@@ -2562,7 +2851,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     pthread_mutex_unlock(&g_lock);
 
     int gate_fds[2] = {-1, -1};
-    if (use_owner_gate && socketpair(AF_UNIX, SOCK_SEQPACKET, 0, gate_fds) < 0) {
+    if (use_tun_gate && socketpair(AF_UNIX, SOCK_SEQPACKET, 0, gate_fds) < 0) {
         (*env)->ReleaseStringUTFChars(env, block_ip6_dst, block6_dst);
         (*env)->ReleaseStringUTFChars(env, block_ip4_dst, block_dst);
         (*env)->ReleaseStringUTFChars(env, files_dir, app_files);
@@ -2695,12 +2984,12 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         if (oi3_control_fd >= 0) {
             close(oi3_control_fd);
         }
-        int tun_fd = use_owner_gate ? gate_fds[1] : fd;
+        int tun_fd = use_tun_gate ? gate_fds[1] : fd;
         int shim_child_fd = use_forward ? shim_fds[1] : -1;
         int resolver_child_fd = use_owner_resolver ? resolver_fds[1] : -1;
         int oi2_request_child_fd = use_oi2 ? oi2_request_fds[0] : -1;
         int oi2_completion_child_fd = use_oi2 ? oi2_completion_fds[0] : -1;
-        if (use_owner_gate) {
+        if (use_tun_gate) {
             close(gate_fds[0]);
             if (fd != tun_fd) {
                 close(fd);
@@ -2827,6 +3116,17 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             setenv("SAKAMOTO_OI3_CONTROLLED", "1", 1);
             setenv("SAKAMOTO_OI3_CONTROLLED_CELL", g_oi3_control_cell, 1);
         }
+        if (use_oi3 && oi3_expected_failure[0] != '\0') {
+            setenv("SAKAMOTO_OI3_EXPECTED_FAILURE", oi3_expected_failure, 1);
+        }
+        if (use_oi3_multi && block_dst && block_dst[0] != '\0') {
+            setenv("SAKAMOTO_OI3_POLICY_DROP_IP4", block_dst, 1);
+        } else if (use_oi3_multi) {
+            /* The service process can start more than one VPN generation.
+             * Do not let a prior drop cell leak its destination into a later
+             * allow cell through the forked VPP child's environment. */
+            unsetenv("SAKAMOTO_OI3_POLICY_DROP_IP4");
+        }
         if (use_oi3_a23_return) {
             setenv("SAKAMOTO_OI3_A2_3_RETURN", "1", 1);
             setenv("SAKAMOTO_OI3_A2_3_STAGE_ID",
@@ -2839,7 +3139,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         _exit(127);
     }
 
-    if (use_owner_gate) {
+    if (use_tun_gate) {
         close(gate_fds[1]);
     } else {
         close(fd);
@@ -2858,6 +3158,25 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
     pthread_mutex_lock(&g_lock);
     g_vpp_pid = pid;
     g_vpp_monitor_running = true;
+    g_vpp_underlay_epoch = 0;
+    g_vpp_underlay_handle = -1;
+    g_vpp_underlay_available = false;
+    if (use_oi3_multi) {
+        snprintf(g_vpp_monitor_show_command, sizeof(g_vpp_monitor_show_command),
+                 "show sakamoto-oi3 multi");
+    } else if (use_oi3) {
+        snprintf(g_vpp_monitor_show_command, sizeof(g_vpp_monitor_show_command),
+                 "show sakamoto-oi3");
+    } else if (use_oi2) {
+        snprintf(g_vpp_monitor_show_command, sizeof(g_vpp_monitor_show_command),
+                 "show sakamoto-oi2");
+    } else if (use_s124_tun) {
+        snprintf(g_vpp_monitor_show_command, sizeof(g_vpp_monitor_show_command),
+                 "show s124-vpn-tun");
+    } else {
+        snprintf(g_vpp_monitor_show_command, sizeof(g_vpp_monitor_show_command),
+                 "show tun-poc");
+    }
     g_oi5_mode = use_oi5;
     if (use_oi5) {
         snprintf(g_oi5_log, sizeof(g_oi5_log), "%s/vpp/logs/vpp-oi5-android.log",
@@ -3015,7 +3334,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
             close(protect_fds[1]);
             stop_protect_broker(env);
             close(shim_fds[0]);
-            if (use_owner_gate) {
+            if (use_tun_gate) {
                 close(gate_fds[0]);
                 close(fd);
             }
@@ -3063,7 +3382,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         pid_t exited = waitpid(hev_pid, &status, WNOHANG);
         if (exited == hev_pid) {
             stop_protect_broker(env);
-            if (use_owner_gate) {
+            if (use_tun_gate) {
                 close(gate_fds[0]);
                 close(fd);
             }
@@ -3109,7 +3428,7 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStartVppProbe(
         }
     }
 
-    if (use_owner_gate) {
+    if (use_tun_gate) {
         if (!g_jvm && (*env)->GetJavaVM(env, &g_jvm) != JNI_OK) {
             close(gate_fds[0]);
             close(fd);
@@ -3438,6 +3757,10 @@ Java_com_sakamoto_snort_vpnlite_SnortVpnService_nativeStopVppProbe(JNIEnv *env, 
     int oi3_control_fd = g_oi3_control_fd;
     g_vpp_pid = -1;
     g_vpp_monitor_running = false;
+    g_vpp_monitor_show_command[0] = '\0';
+    g_vpp_underlay_epoch = 0;
+    g_vpp_underlay_handle = -1;
+    g_vpp_underlay_available = false;
     g_oi5_mode = false;
     g_oi5_log[0] = '\0';
     g_oi5_hev_lib[0] = '\0';

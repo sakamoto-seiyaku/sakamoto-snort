@@ -1,0 +1,95 @@
+diff --git a/src/hev-socks5-tunnel-owner.h b/src/hev-socks5-tunnel-owner.h
+--- a/src/hev-socks5-tunnel-owner.h
++++ b/src/hev-socks5-tunnel-owner.h
+@@ -85,6 +85,13 @@ typedef struct _HevSocks5SessionDependencies
+     unsigned int transport;
+ } HevSocks5SessionDependencies;
+ 
++enum
++{
++    HEV_SOCKS5_TCP_TRANSPORT_READ_ERROR = 1,
++    HEV_SOCKS5_TCP_TRANSPORT_WRITE_ERROR = 2,
++    HEV_SOCKS5_TCP_TRANSPORT_PEER_EOF = 3
++};
++
+ typedef struct _HevSocks5TcpConnector
+ {
+     void *data;
+@@ -99,6 +106,9 @@ typedef struct _HevSocks5TcpConnector
+                    struct tcp_pcb *pcb, const void *payload, size_t length);
+     void (*sent) (void *data, HevSocks5TunnelOwnerRuntime *owner,
+                   struct tcp_pcb *pcb, size_t length);
++    void (*transport_event) (void *data, HevSocks5TunnelOwnerRuntime *owner,
++                             struct tcp_pcb *pcb, unsigned int event,
++                             int error);
+ } HevSocks5TcpConnector;
+ 
+ typedef struct _HevSocks5UdpConnector
+diff --git a/src/hev-socks5-session-tcp.c b/src/hev-socks5-session-tcp.c
+--- a/src/hev-socks5-session-tcp.c
++++ b/src/hev-socks5-session-tcp.c
+@@ -42,6 +42,21 @@ task_io_yielder (HevTaskYieldType type, void *data)
+     return res;
+ }
+ 
++static void
++tcp_transport_event (HevSocks5SessionTCP *self, unsigned int event,
++                     int error)
++{
++    const HevSocks5TcpConnector *connector = self->data.connector;
++
++    /* This callback runs synchronously in the HEV session task.  Under the
++     * external-driver contract that task is driven only by the canonical
++     * FlowStackOwner, so socket outcome state never moves to the readiness
++     * observer thread. */
++    if (connector && connector->transport_event)
++        connector->transport_event (connector->data, self->data.owner,
++                                    self->pcb, event, error);
++}
++
+ static int
+ tcp_queue_consume (HevSocks5SessionTCP *self, size_t length)
+ {
+@@ -88,11 +103,17 @@ tcp_splice_f (HevSocks5SessionTCP *self)
+ 
+     if (iovc) {
+         ssize_t s = writev (HEV_SOCKS5 (self)->fd, iov, iovc);
++        int socket_error = s < 0 ? errno : 0;
+         if (0 >= s) {
+-            if ((0 > s) && (EAGAIN == errno))
++            if ((0 > s) && (EAGAIN == socket_error))
+                 res = 0;
+-            else
++            else {
++                if (s < 0)
++                    tcp_transport_event (
++                        self, HEV_SOCKS5_TCP_TRANSPORT_WRITE_ERROR,
++                        socket_error);
+                 res = -1;
++            }
+         } else {
+             int delivered = 0;
+             if (self->data.connector) {
+@@ -134,12 +155,21 @@ tcp_splice_b (HevSocks5SessionTCP *self)
+     iovc = hev_ring_buffer_writing (self->buffer, iov);
+     if (iovc) {
+         ssize_t s = readv (HEV_SOCKS5 (self)->fd, iov, iovc);
++        int socket_error = s < 0 ? errno : 0;
+         if (0 >= s) {
+-            if ((0 > s) && (EAGAIN == errno))
++            if ((0 > s) && (EAGAIN == socket_error))
+                 res = 0;
+-            else
++            else {
++                if (s < 0)
++                    tcp_transport_event (
++                        self, HEV_SOCKS5_TCP_TRANSPORT_READ_ERROR,
++                        socket_error);
++                else
++                    tcp_transport_event (
++                        self, HEV_SOCKS5_TCP_TRANSPORT_PEER_EOF, 0);
+                 res = -1;
++            }
+         } else {
+             hev_ring_buffer_write_finish (self->buffer, s);
+         }

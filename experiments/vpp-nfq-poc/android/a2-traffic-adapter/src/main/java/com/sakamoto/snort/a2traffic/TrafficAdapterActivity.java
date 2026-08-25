@@ -20,6 +20,8 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
@@ -44,6 +46,8 @@ public final class TrafficAdapterActivity extends Activity {
     private static final String TAG = "S139A2Traffic";
     private static final String ACTION_EMIT =
             "com.sakamoto.snort.a2traffic.EMIT";
+    private static final String ACTION_B1_PROBE =
+            "com.sakamoto.snort.a2traffic.B1_PROBE";
     private static final String ACTION_RETURN =
             "com.sakamoto.snort.a2traffic.A2_3_RETURN";
     private static final String EXTRA_MATRIX = "a2Matrix";
@@ -60,6 +64,8 @@ public final class TrafficAdapterActivity extends Activity {
     private static final String EXTRA_REPEAT = "a2MatrixRepeat";
     private static final String EVIDENCE_PATH = "debug/a2-1-runtime.jsonl";
     private static final String SCHEMA = "s139-a2-1-runtime/v1";
+    private static final String B1_EVIDENCE_PATH = "debug/b1-runtime.jsonl";
+    private static final String B1_SCHEMA = "s139-b1-runtime/v1";
     private static final String RETURN_EVIDENCE_PATH =
             "debug/a2-3-return-runtime.jsonl";
     private static final String RETURN_SCHEMA = "s139-a2-3-return/v1";
@@ -92,6 +98,13 @@ public final class TrafficAdapterActivity extends Activity {
         if (intent == null) {
             return;
         }
+        if (isB1Command(intent)) {
+            final B1Command command = B1Command.from(intent);
+            Thread worker = new Thread(() -> runB1Operation(command),
+                    "s139-b1-traffic");
+            worker.start();
+            return;
+        }
         if (isReturnCommand(intent)) {
             final ReturnCommand command = ReturnCommand.from(intent);
             Thread worker = new Thread(() -> runReturnOperation(command),
@@ -122,6 +135,11 @@ public final class TrafficAdapterActivity extends Activity {
     private boolean isEmitCommand(Intent intent) {
         return ACTION_EMIT.equals(intent.getAction())
                 || intent.getBooleanExtra(EXTRA_MATRIX, false);
+    }
+
+    private boolean isB1Command(Intent intent) {
+        return ACTION_B1_PROBE.equals(intent.getAction())
+                || intent.getBooleanExtra("b1Probe", false);
     }
 
     private boolean isReturnCommand(Intent intent) {
@@ -324,6 +342,393 @@ public final class TrafficAdapterActivity extends Activity {
         String first = source.compareTo(destination) <= 0 ? source : destination;
         String second = source.compareTo(destination) <= 0 ? destination : source;
         return family + "/UDP/" + first + "-" + second;
+    }
+
+    private void runB1Operation(B1Command command) {
+        long sequence = SEQUENCE.incrementAndGet();
+        int uid = Process.myUid();
+        String packageName = getPackageName();
+        B1Result result;
+        if (!command.validationError.isEmpty()) {
+            result = B1Result.invalid(command.validationError,
+                    command.destinationHost);
+        } else {
+            result = performB1Probe(command);
+        }
+        SafeJson record = new SafeJson();
+        record.putSafe("schema", B1_SCHEMA);
+        record.putSafe("cell_id", "B1");
+        record.putSafe("stage_id", command.stageId);
+        record.putSafe("sequence", sequence);
+        record.putSafe("monotonic_ns", SystemClock.elapsedRealtimeNanos());
+        record.putSafe("generation", 1);
+        record.putSafe("network_epoch", 1);
+        record.putSafe("app_epoch", 1);
+        record.putSafe("event", "B1_TRAFFIC_RESULT");
+        record.putSafe("app_package", packageName);
+        record.putSafe("package", packageName);
+        record.putSafe("uid", uid);
+        record.putSafe("process_uid", uid);
+        record.putSafe("family", command.family);
+        record.putSafe("protocol", command.protocol);
+        record.putSafe("dns", command.dns);
+        record.putSafe("tcp_write_mode", command.tcpWriteMode);
+        record.putSafe("fallback_tcp_on_truncated",
+                command.fallbackTcpOnTruncated);
+        record.putSafe("fallback_source_port", result.fallbackSourcePort);
+        record.putSafe("fallback_attempted", result.fallbackAttempted);
+        record.putSafe("fallback_reason", result.fallbackReason);
+        record.putSafe("fallback_return_outcome", result.fallbackReturnOutcome);
+        record.putSafe("udp_truncated", result.udpTruncated);
+        record.putSafe("udp_received_length", result.udpReceivedLength);
+        record.putSafe("tcp_received_length", result.tcpReceivedLength);
+        record.putSafe("tcp_response_valid", result.tcpResponseValid);
+        record.putSafe("source_address", result.localAddress);
+        record.putSafe("source_port", command.sourcePort);
+        record.putSafe("destination_address", result.destinationAddress);
+        record.putSafe("destination_host", command.destinationHost);
+        record.putSafe("destination_port", command.destinationPort);
+        record.putSafe("bind_result", result.bindResult);
+        record.putSafe("vpn_network_handle", result.networkHandle);
+        record.putSafe("tuple_attempted", result.tupleAttempted);
+        record.putSafe("send_connect_outcome", result.sendConnectOutcome);
+        record.putSafe("return_outcome", result.returnOutcome);
+        record.putSafe("return_received", result.returnReceived());
+        record.putSafe("response_valid", result.responseValid);
+        record.putSafe("payload_hex", result.payloadHex());
+        record.putSafe("received_payload_hex", result.receivedPayloadHex());
+        record.putSafe("payload_length", result.payloadLength());
+        record.putSafe("received_length", result.receivedLength());
+        record.putSafe("error", result.error);
+        record.putSafe("flow_id", command.stageId + "|" + command.family
+                + "|" + command.protocol + "|" + command.sourcePort);
+        record.putSafe("canonical_key", command.family + "|"
+                + command.protocol + "|" + command.sourcePort + "|"
+                + formatEndpoint(result.destinationAddress, command.family)
+                + ":" + command.destinationPort);
+        appendB1Record(record);
+        setB1Status(command.stageId, result.sendConnectOutcome + "/"
+                + result.returnOutcome);
+    }
+
+    private B1Result performB1Probe(B1Command command) {
+        Network network = findVpnNetwork();
+        if (network == null) {
+            return B1Result.unavailable(command.destinationHost,
+                    "no_active_transport_vpn");
+        }
+        long networkHandle = network.getNetworkHandle();
+        InetAddress destination;
+        try {
+            destination = resolveDestination(command.destinationHost,
+                    command.family);
+        } catch (IOException error) {
+            return B1Result.notAttempted(networkHandle,
+                    command.destinationHost, "destination_resolution_failed",
+                    boundedError(error));
+        }
+        byte[] payload;
+        try {
+            payload = decodeHex(command.payloadHex);
+        } catch (IllegalArgumentException error) {
+            return B1Result.notAttempted(networkHandle,
+                    destination.getHostAddress(), "invalid_payload",
+                    boundedError(error));
+        }
+        if ("udp".equals(command.protocol)) {
+            return performB1Udp(network, networkHandle, command, destination,
+                    payload);
+        }
+        return performB1Tcp(network, networkHandle, command, destination,
+                payload);
+    }
+
+    private B1Result performB1Udp(Network network, long networkHandle,
+                                   B1Command command, InetAddress destination,
+                                   byte[] payload) {
+        DatagramSocket socket = null;
+        String bindResult = "not_attempted";
+        boolean tupleAttempted = false;
+        try {
+            socket = new DatagramSocket(null);
+            socket.setReuseAddress(true);
+            socket.bind(new InetSocketAddress(wildcard(command.family),
+                    command.sourcePort));
+            try {
+                network.bindSocket(socket);
+                bindResult = "bound";
+            } catch (IOException | RuntimeException error) {
+                bindResult = "failed";
+                return B1Result.failure(networkHandle, bindResult,
+                        localAddress(socket, network, command.family),
+                        destination.getHostAddress(), "vpn_bind_failed",
+                        "not_attempted", false, boundedError(error),
+                        payload, new byte[0], false);
+            }
+            tupleAttempted = true;
+            socket.connect(destination, command.destinationPort);
+            socket.setSoTimeout(command.timeoutMillis);
+            socket.send(new DatagramPacket(payload, payload.length));
+            if (!command.dns) {
+                return B1Result.success(networkHandle, bindResult,
+                        localAddress(socket, network, command.family),
+                        destination.getHostAddress(), "udp_datagram_sent",
+                        "not_required", tupleAttempted, "", payload,
+                        new byte[0], false);
+            }
+            byte[] received = new byte[4096];
+            DatagramPacket response = new DatagramPacket(received,
+                    received.length);
+            try {
+                socket.receive(response);
+                byte[] actual = copyPacket(response);
+                boolean valid = validDnsResponse(payload, actual);
+                boolean truncated = dnsResponseTruncated(actual);
+                if (valid && truncated && command.fallbackTcpOnTruncated) {
+                    B1Command fallback = command.tcpFallbackCommand();
+                    B1Result tcpResult = performB1Tcp(network, networkHandle,
+                            fallback, destination, payload);
+                    return B1Result.fallback(networkHandle, bindResult,
+                            localAddress(socket, network, command.family),
+                            destination.getHostAddress(),
+                            "udp_datagram_sent",
+                            tcpResult.responseValid
+                                    ? "dns_tcp_fallback_response_received"
+                                    : "dns_tcp_fallback_failed",
+                            tupleAttempted, tcpResult.error, payload,
+                            tcpResult.received, tcpResult.responseValid,
+                            true, command.fallbackTcpSourcePort,
+                            "udp_tc", tcpResult.returnOutcome,
+                            actual.length, tcpResult.receivedLength(),
+                            tcpResult.responseValid);
+                }
+                return B1Result.success(networkHandle, bindResult,
+                        localAddress(socket, network, command.family),
+                        destination.getHostAddress(), "udp_datagram_sent",
+                        valid ? "dns_response_received"
+                                : "dns_response_invalid", tupleAttempted,
+                        valid ? "" : "dns_response_shape_invalid", payload,
+                        actual, valid);
+            } catch (SocketTimeoutException timeout) {
+                return B1Result.success(networkHandle, bindResult,
+                        localAddress(socket, network, command.family),
+                        destination.getHostAddress(), "udp_datagram_sent",
+                        "dns_response_timeout", tupleAttempted,
+                        boundedError(timeout), payload, new byte[0], false);
+            }
+        } catch (IOException | RuntimeException error) {
+            String local = socket == null ? ""
+                    : localAddress(socket, network, command.family);
+            return B1Result.failure(networkHandle, bindResult, local,
+                    destination.getHostAddress(), "udp_datagram_failed",
+                    "not_attempted", tupleAttempted, boundedError(error),
+                    payload, new byte[0], false);
+        } finally {
+            if (socket != null) {
+                socket.close();
+            }
+        }
+    }
+
+    private B1Result performB1Tcp(Network network, long networkHandle,
+                                  B1Command command, InetAddress destination,
+                                  byte[] payload) {
+        Socket socket = null;
+        String bindResult = "not_attempted";
+        boolean tupleAttempted = false;
+        boolean connected = false;
+        boolean payloadSent = false;
+        try {
+            socket = new Socket();
+            socket.setReuseAddress(true);
+            socket.bind(new InetSocketAddress(wildcard(command.family),
+                    command.sourcePort));
+            try {
+                network.bindSocket(socket);
+                bindResult = "bound";
+            } catch (IOException | RuntimeException error) {
+                bindResult = "failed";
+                return B1Result.failure(networkHandle, bindResult,
+                        localAddress(socket, network, command.family),
+                        destination.getHostAddress(), "vpn_bind_failed",
+                        "not_attempted", false, boundedError(error),
+                        payload, new byte[0], false);
+            }
+            tupleAttempted = true;
+            socket.connect(new InetSocketAddress(destination,
+                    command.destinationPort), command.timeoutMillis);
+            connected = true;
+            String local = localAddress(socket, network, command.family);
+            if (!command.dns) {
+                return B1Result.success(networkHandle, bindResult, local,
+                        destination.getHostAddress(), "tcp_connect_succeeded",
+                        "not_required", tupleAttempted, "", payload,
+                        new byte[0], false);
+            }
+            socket.setSoTimeout(command.timeoutMillis);
+            OutputStream output = socket.getOutputStream();
+            if ("coalesced".equals(command.tcpWriteMode)) {
+                byte[] framed = new byte[payload.length + 2];
+                framed[0] = (byte) ((payload.length >>> 8) & 0xff);
+                framed[1] = (byte) (payload.length & 0xff);
+                System.arraycopy(payload, 0, framed, 2, payload.length);
+                output.write(framed);
+            } else {
+                // Deliberately preserve three separate writes: this is the
+                // regression arm for a stream that arrives as multiple TUN
+                // packets, not a fixture that hides segmentation by packing
+                // the DNS frame in one syscall.
+                output.write((payload.length >>> 8) & 0xff);
+                output.write(payload.length & 0xff);
+                output.write(payload);
+            }
+            output.flush();
+            payloadSent = true;
+            InputStream input = socket.getInputStream();
+            int high = input.read();
+            int low = high < 0 ? -1 : input.read();
+            if (high < 0 || low < 0) {
+                return B1Result.success(networkHandle, bindResult, local,
+                        destination.getHostAddress(), "tcp_payload_sent",
+                        "dns_response_eof", tupleAttempted, "", payload,
+                        new byte[0], false);
+            }
+            int length = (high << 8) | low;
+            byte[] actual = readFully(input, length);
+            boolean valid = validDnsResponse(payload, actual);
+            return B1Result.success(networkHandle, bindResult, local,
+                    destination.getHostAddress(), "tcp_payload_sent",
+                    valid ? "dns_response_received" : "dns_response_invalid",
+                    tupleAttempted, valid ? "" : "dns_response_shape_invalid",
+                    payload, actual, valid);
+        } catch (SocketTimeoutException timeout) {
+            String local = socket == null ? ""
+                    : localAddress(socket, network, command.family);
+            return B1Result.success(networkHandle, bindResult, local,
+                    destination.getHostAddress(), "tcp_connect_succeeded",
+                    "dns_response_timeout", tupleAttempted,
+                    boundedError(timeout), payload, new byte[0], false);
+        } catch (IOException | RuntimeException error) {
+            String local = socket == null ? ""
+                    : localAddress(socket, network, command.family);
+            String errorText = boundedError(error);
+            String lowerError = errorText.toLowerCase(java.util.Locale.ROOT);
+            if (connected) {
+                boolean reset = error instanceof java.net.SocketException
+                        && (lowerError.contains("reset")
+                        || lowerError.contains("econnreset"));
+                return B1Result.success(networkHandle, bindResult, local,
+                        destination.getHostAddress(),
+                        payloadSent ? "tcp_payload_sent"
+                                : "tcp_connect_succeeded",
+                        reset ? "dns_response_reset"
+                                : "dns_response_io_error",
+                        tupleAttempted, errorText, payload,
+                        new byte[0], false);
+            }
+            return B1Result.failure(networkHandle, bindResult, local,
+                    destination.getHostAddress(), "tcp_connect_failed",
+                    "not_attempted", tupleAttempted, errorText,
+                    payload, new byte[0], false);
+        } finally {
+            if (socket != null) {
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                    // Preserve the transport result over close noise.
+                }
+            }
+        }
+    }
+
+    private void appendB1Record(JSONObject record) {
+        File file = new File(getFilesDir(), B1_EVIDENCE_PATH);
+        File parent = file.getParentFile();
+        synchronized (EVIDENCE_LOCK) {
+            try {
+                if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                    throw new IOException("unable to create " + parent);
+                }
+                try (FileOutputStream output = new FileOutputStream(file, true)) {
+                    output.write(record.toString().getBytes(StandardCharsets.UTF_8));
+                    output.write('\n');
+                    output.getFD().sync();
+                }
+            } catch (IOException error) {
+                Log.e(TAG, "unable to durably append B1 JSONL", error);
+            }
+        }
+    }
+
+    private void setB1Status(final String stageId, final String outcome) {
+        runOnUiThread(() -> {
+            TextView view = new TextView(this);
+            view.setText("B1 " + stageId + " " + outcome);
+            setContentView(view);
+        });
+    }
+
+    private static byte[] copyPacket(DatagramPacket packet) {
+        byte[] actual = new byte[packet.getLength()];
+        System.arraycopy(packet.getData(), packet.getOffset(), actual, 0,
+                packet.getLength());
+        return actual;
+    }
+
+    private static byte[] readFully(InputStream input, int length)
+            throws IOException {
+        if (length < 0 || length > 65535) {
+            throw new IOException("invalid DNS/TCP response length " + length);
+        }
+        byte[] result = new byte[length];
+        int offset = 0;
+        while (offset < length) {
+            int count = input.read(result, offset, length - offset);
+            if (count < 0) {
+                throw new IOException("short DNS/TCP response");
+            }
+            offset += count;
+        }
+        return result;
+    }
+
+    private static boolean validDnsResponse(byte[] query, byte[] response) {
+        if (query == null || query.length < 12 || response == null
+                || response.length < 12) {
+            return false;
+        }
+        int queryId = ((query[0] & 0xff) << 8) | (query[1] & 0xff);
+        int responseId = ((response[0] & 0xff) << 8) | (response[1] & 0xff);
+        int flags = ((response[2] & 0xff) << 8) | (response[3] & 0xff);
+        int rcode = flags & 0x0f;
+        return queryId == responseId && (flags & 0x8000) != 0 && rcode == 0;
+    }
+
+    private static boolean dnsResponseTruncated(byte[] response) {
+        if (response == null || response.length < 4) {
+            return false;
+        }
+        int flags = ((response[2] & 0xff) << 8) | (response[3] & 0xff);
+        return (flags & 0x0200) != 0;
+    }
+
+    private static byte[] decodeHex(String value) {
+        if (value == null || value.isEmpty()) {
+            return new byte[0];
+        }
+        if ((value.length() & 1) != 0) {
+            throw new IllegalArgumentException("payloadHex must have even length");
+        }
+        byte[] bytes = new byte[value.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            int high = Character.digit(value.charAt(i * 2), 16);
+            int low = Character.digit(value.charAt(i * 2 + 1), 16);
+            if (high < 0 || low < 0) {
+                throw new IllegalArgumentException("payloadHex is not hexadecimal");
+            }
+            bytes[i] = (byte) ((high << 4) | low);
+        }
+        return bytes;
     }
 
     private void runOperation(Command command, int repeatIndex, int repeatCount) {
@@ -1053,6 +1458,268 @@ public final class TrafficAdapterActivity extends Activity {
                     destinationAddress, outcome, attempted, error, payloadHex,
                     receivedPayloadHex, payloadLength, receivedLength,
                     receivedFromAddress, receivedFromPort);
+        }
+    }
+
+    private static final class B1Command {
+        final String stageId;
+        final String family;
+        final String protocol;
+        final int sourcePort;
+        final String destinationHost;
+        final int destinationPort;
+        final int timeoutMillis;
+        final boolean dns;
+        final String payloadHex;
+        final String tcpWriteMode;
+        final boolean fallbackTcpOnTruncated;
+        final int fallbackTcpSourcePort;
+        final String validationError;
+
+        private B1Command(String stageId, String family, String protocol,
+                          int sourcePort, String destinationHost,
+                          int destinationPort, int timeoutMillis,
+                          boolean dns, String payloadHex,
+                          String tcpWriteMode, boolean fallbackTcpOnTruncated,
+                          int fallbackTcpSourcePort,
+                          String validationError) {
+            this.stageId = stageId;
+            this.family = family;
+            this.protocol = protocol;
+            this.sourcePort = sourcePort;
+            this.destinationHost = destinationHost;
+            this.destinationPort = destinationPort;
+            this.timeoutMillis = timeoutMillis;
+            this.dns = dns;
+            this.payloadHex = payloadHex;
+            this.tcpWriteMode = tcpWriteMode;
+            this.fallbackTcpOnTruncated = fallbackTcpOnTruncated;
+            this.fallbackTcpSourcePort = fallbackTcpSourcePort;
+            this.validationError = validationError;
+        }
+
+        static B1Command from(Intent intent) {
+            String stage = stringExtra(intent, "b1StageId", "stageId", "B1");
+            String rawFamily = stringExtra(intent, "b1Family", "family", "ip4");
+            String rawProtocol = stringExtra(intent, "b1Protocol", "protocol", "udp");
+            String family = normalizeFamily(rawFamily);
+            String protocol = normalizeProtocol(rawProtocol);
+            int sourcePort = intExtra(intent, "b1SourcePort", "sourcePort", 46100);
+            int destinationPort = intExtra(intent, "b1DestinationPort",
+                    "destinationPort", "udp".equals(protocol) ? 53 : 443);
+            String host = stringExtra(intent, "b1DestinationHost",
+                    "destinationHost", defaultDestinationHost(family));
+            int timeout = intExtra(intent, "b1TimeoutMillis",
+                    "timeoutMillis", 3000);
+            boolean dns = intent.getBooleanExtra("b1Dns", false);
+            String tcpWriteMode = stringExtra(intent, "b1TcpWriteMode",
+                    "tcpWriteMode", "separate").toLowerCase();
+            boolean fallbackTcpOnTruncated =
+                    intent.getBooleanExtra("b1FallbackTcpOnTruncated", false);
+            int fallbackDefaultPort = sourcePort < 65535
+                    ? sourcePort + 1 : sourcePort - 1;
+            int fallbackTcpSourcePort = intExtra(intent,
+                    "b1FallbackTcpSourcePort", "fallbackTcpSourcePort",
+                    fallbackDefaultPort);
+            String payload = stringExtra(intent, "b1PayloadHex",
+                    "payloadHex", "").replace(" ", "").replace(":", "");
+            String error = "";
+            if (family == null) {
+                error = "family must be ip4 or ip6";
+            } else if (protocol == null) {
+                error = "protocol must be tcp or udp";
+            } else if (!validPort(sourcePort) || !validPort(destinationPort)) {
+                error = "source and destination ports must be 1..65535";
+            } else if (timeout < 100 || timeout > 10000) {
+                error = "timeoutMillis must be 100..10000";
+                timeout = Math.max(100, Math.min(timeout, 10000));
+            } else if (fallbackTcpOnTruncated && !"udp".equals(protocol)) {
+                error = "fallbackTcpOnTruncated requires udp protocol";
+            } else if (fallbackTcpOnTruncated && !dns) {
+                error = "fallbackTcpOnTruncated requires DNS probe";
+            } else if (fallbackTcpOnTruncated
+                    && !validPort(fallbackTcpSourcePort)) {
+                error = "fallback TCP source port must be 1..65535";
+            } else if (payload.length() > 131070 || (payload.length() & 1) != 0) {
+                error = "payloadHex must be even and at most 65535 bytes";
+            } else if (dns && payload.isEmpty()) {
+                error = "DNS probe requires payloadHex";
+            } else if (!"separate".equals(tcpWriteMode)
+                    && !"coalesced".equals(tcpWriteMode)) {
+                error = "tcpWriteMode must be separate or coalesced";
+            }
+            return new B1Command(stage, family == null ? "" : family,
+                    protocol == null ? "" : protocol, sourcePort,
+                    stripIpv6Brackets(host), destinationPort, timeout, dns,
+                    payload, tcpWriteMode, fallbackTcpOnTruncated,
+                    fallbackTcpSourcePort, error);
+        }
+
+        B1Command tcpFallbackCommand() {
+            return new B1Command(stageId, family, "tcp",
+                    fallbackTcpSourcePort, destinationHost, destinationPort,
+                    timeoutMillis, dns, payloadHex, tcpWriteMode, false,
+                    fallbackTcpSourcePort, "");
+        }
+
+        private static boolean validPort(int port) {
+            return port >= 1 && port <= 65535;
+        }
+
+        private static String normalizeFamily(String value) {
+            if ("ip4".equalsIgnoreCase(value)
+                    || "ipv4".equalsIgnoreCase(value)
+                    || "4".equals(value)) {
+                return "ip4";
+            }
+            if ("ip6".equalsIgnoreCase(value)
+                    || "ipv6".equalsIgnoreCase(value)
+                    || "6".equals(value)) {
+                return "ip6";
+            }
+            return null;
+        }
+
+        private static String normalizeProtocol(String value) {
+            if ("tcp".equalsIgnoreCase(value)) {
+                return "tcp";
+            }
+            if ("udp".equalsIgnoreCase(value)) {
+                return "udp";
+            }
+            return null;
+        }
+
+        private static String defaultDestinationHost(String family) {
+            return "ip6".equals(family)
+                    ? "2606:4700:4700::1111" : "1.1.1.1";
+        }
+    }
+
+    private static final class B1Result {
+        final String bindResult;
+        final long networkHandle;
+        final String localAddress;
+        final String destinationAddress;
+        final String sendConnectOutcome;
+        final String returnOutcome;
+        final boolean tupleAttempted;
+        final String error;
+        final byte[] payload;
+        final byte[] received;
+        final boolean responseValid;
+        final boolean udpTruncated;
+        final boolean fallbackAttempted;
+        final int fallbackSourcePort;
+        final String fallbackReason;
+        final String fallbackReturnOutcome;
+        final int udpReceivedLength;
+        final int tcpReceivedLength;
+        final boolean tcpResponseValid;
+
+        private B1Result(String bindResult, long networkHandle,
+                         String localAddress, String destinationAddress,
+                         String sendConnectOutcome, String returnOutcome,
+                         boolean tupleAttempted, String error,
+                         byte[] payload, byte[] received,
+                         boolean responseValid, boolean udpTruncated,
+                         boolean fallbackAttempted, int fallbackSourcePort,
+                         String fallbackReason, String fallbackReturnOutcome,
+                         int udpReceivedLength, int tcpReceivedLength,
+                         boolean tcpResponseValid) {
+            this.bindResult = bindResult;
+            this.networkHandle = networkHandle;
+            this.localAddress = localAddress == null ? "" : localAddress;
+            this.destinationAddress = destinationAddress == null
+                    ? "" : destinationAddress;
+            this.sendConnectOutcome = sendConnectOutcome;
+            this.returnOutcome = returnOutcome;
+            this.tupleAttempted = tupleAttempted;
+            this.error = error == null ? "" : error;
+            this.payload = payload == null ? new byte[0] : payload;
+            this.received = received == null ? new byte[0] : received;
+            this.responseValid = responseValid;
+            this.udpTruncated = udpTruncated;
+            this.fallbackAttempted = fallbackAttempted;
+            this.fallbackSourcePort = fallbackSourcePort;
+            this.fallbackReason = fallbackReason == null ? "" : fallbackReason;
+            this.fallbackReturnOutcome = fallbackReturnOutcome == null
+                    ? "" : fallbackReturnOutcome;
+            this.udpReceivedLength = udpReceivedLength;
+            this.tcpReceivedLength = tcpReceivedLength;
+            this.tcpResponseValid = tcpResponseValid;
+        }
+
+        int payloadLength() {
+            return payload.length;
+        }
+
+        int receivedLength() {
+            return received.length;
+        }
+
+        String payloadHex() {
+            return toHex(payload);
+        }
+
+        String receivedPayloadHex() {
+            return toHex(received);
+        }
+
+        boolean returnReceived() {
+            return responseValid || "not_required".equals(returnOutcome);
+        }
+
+        static B1Result success(long handle, String bindResult, String local,
+                                String destination, String sendOutcome,
+                                String returnOutcome, boolean attempted,
+                                String error, byte[] payload, byte[] received,
+                                boolean valid) {
+            return new B1Result(bindResult, handle, local, destination,
+                    sendOutcome, returnOutcome, attempted, error, payload,
+                    received, valid, false, false, 0, "", "", 0, 0, false);
+        }
+
+        static B1Result fallback(long handle, String bindResult, String local,
+                                 String destination, String sendOutcome,
+                                 String returnOutcome, boolean attempted,
+                                 String error, byte[] payload, byte[] received,
+                                 boolean valid, boolean udpTruncated,
+                                 int fallbackSourcePort, String fallbackReason,
+                                 String fallbackReturnOutcome,
+                                 int udpReceivedLength, int tcpReceivedLength,
+                                 boolean tcpResponseValid) {
+            return new B1Result(bindResult, handle, local, destination,
+                    sendOutcome, returnOutcome, attempted, error, payload,
+                    received, valid, udpTruncated, true, fallbackSourcePort,
+                    fallbackReason, fallbackReturnOutcome, udpReceivedLength,
+                    tcpReceivedLength, tcpResponseValid);
+        }
+
+        static B1Result failure(long handle, String bindResult, String local,
+                                String destination, String sendOutcome,
+                                String returnOutcome, boolean attempted,
+                                String error, byte[] payload, byte[] received,
+                                boolean valid) {
+            return success(handle, bindResult, local, destination, sendOutcome,
+                    returnOutcome, attempted, error, payload, received, valid);
+        }
+
+        static B1Result unavailable(String destination, String error) {
+            return failure(-1L, "unavailable", "", destination,
+                    "vpn_unavailable", "not_attempted", false, error,
+                    new byte[0], new byte[0], false);
+        }
+
+        static B1Result notAttempted(long handle, String destination,
+                                     String outcome, String error) {
+            return failure(handle, "not_attempted", "", destination, outcome,
+                    "not_attempted", false, error, new byte[0], new byte[0],
+                    false);
+        }
+
+        static B1Result invalid(String error, String destination) {
+            return notAttempted(-1L, destination, "invalid_command", error);
         }
     }
 

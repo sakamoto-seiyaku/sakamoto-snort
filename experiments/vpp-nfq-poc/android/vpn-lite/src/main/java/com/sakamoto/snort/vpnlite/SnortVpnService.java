@@ -1,9 +1,16 @@
 package com.sakamoto.snort.vpnlite;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.VpnService;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.util.Log;
@@ -19,6 +26,7 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -58,6 +66,7 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_PAYLOAD_BYTES = "payloadBytes";
     public static final String EXTRA_SIZE = "size";
     public static final String EXTRA_DURATION_SECONDS = "durationSeconds";
+    public static final String EXTRA_REQUEST_INTERVAL_MS = "requestIntervalMs";
     public static final String EXTRA_ALLOWED_PACKAGE = "allowedPackage";
     public static final String EXTRA_DISALLOWED_PACKAGE = "disallowedPackage";
     public static final String EXTRA_BLOCK_IP4_DST = "blockIp4Dst";
@@ -75,6 +84,9 @@ public final class SnortVpnService extends VpnService {
             "uidContractRestartGeneration";
     public static final String EXTRA_UID_CONTRACT_COMPLETION_DELAY_MILLIS =
             "uidContractCompletionDelayMillis";
+    /** Bounded C2 test-only CLI control: show, stop, or fault. */
+    public static final String EXTRA_OI3_CONTROL = "oi3Control";
+    public static final String EXTRA_OI3_EXPECTED_FAILURE = "oi3ExpectedFailure";
     /** A2-5 test-only switch: use the runner's real AppA socket as the sole
      * OI3 ingress instead of the historical VPN-process self-injector. */
     public static final String EXTRA_OI3_APP_INJECT = "oi3AppInject";
@@ -88,6 +100,11 @@ public final class SnortVpnService extends VpnService {
     public static final String EXTRA_DRAIN_SECONDS = "drainSeconds";
     public static final String EXTRA_RECONNECT_EVERY = "reconnectEvery";
     public static final String EXTRA_EXPECT_ECHO = "expectEcho";
+    public static final String EXTRA_SOURCE_PORT_BASE = "sourcePortBase";
+    public static final String EXTRA_UDP_CLOSED_TIMEOUT_MS = "udpClosedTimeoutMs";
+    public static final String EXTRA_UDP_SATURATING_TIMEOUT_MS =
+            "udpSaturatingTimeoutMs";
+    public static final String EXTRA_TCP_READ_TIMEOUT_MS = "tcpReadTimeoutMs";
     public static final String EXTRA_S124_PATH = "s124Path";
     public static final String EXTRA_S124_OBSERVE = "s124Observe";
     public static final String MODE_NATIVE = "native";
@@ -112,6 +129,8 @@ public final class SnortVpnService extends VpnService {
     public static final String MODE_VPP_HEV_TUN_MULTI = "vpp-hev-tun-multi";
     public static final String MODE_VPP_OI2 = "vpp-oi2";
     public static final String MODE_VPP_OI3 = "vpp-oi3";
+    /** OI-4 test-only final-topology two-owner TUN dispatcher. */
+    public static final String MODE_VPP_OI3_MULTI = "vpp-oi3-multi";
     /**
      * OI-3 test-only mode.  It establishes a VPN with a narrow, non-default
      * route and lets the native probe inject one loopback packet into the
@@ -141,6 +160,8 @@ public final class SnortVpnService extends VpnService {
     public static final String MODE_HEV = "hev";
 
     private static final String TAG = "SnortVpnLite";
+    private static final String VPN_CHANNEL_ID = "snort-vpn-poc";
+    private static final int VPN_NOTIFICATION_ID = 2001;
     private static final String VPN_ADDRESS = "10.111.0.2";
     private static final String VPN_ADDRESS_V6 = "fd00:111:111::2";
     private static final int MAX_LOGGED_PACKETS = 32;
@@ -149,6 +170,7 @@ public final class SnortVpnService extends VpnService {
      * shorter window so the offered-load loop does not stall on one packet. */
     private static final int UDP_CLOSED_TIMEOUT_MS = 1000;
     private static final int UDP_SATURATING_TIMEOUT_MS = 200;
+    private static final int TCP_READ_TIMEOUT_MS = 1000;
     private static final int MAX_TRACKED_UDP_TIMEOUTS = 4096;
     /* Fire-and-count controls must remain a bounded offered-load source. */
     private static final long FIRE_AND_COUNT_PACING_NS_PER_PACKET = 10_000_000L;
@@ -158,11 +180,81 @@ public final class SnortVpnService extends VpnService {
     }
 
     private ParcelFileDescriptor vpnFd;
+    /* C1 owns the physical-underlay transition boundary.  Network callbacks
+     * only publish immutable snapshots; the VPP owner consumes the resulting
+     * epoch event on its own worker thread. */
+    private final Object underlayEpochLock = new Object();
+    private ConnectivityManager underlayConnectivityManager;
+    private ConnectivityManager.NetworkCallback underlayNetworkCallback;
+    private boolean underlayNetworkCallbackRegistered;
+    private boolean underlayEpochNativeReady;
+    private long underlayEpoch;
+    private long underlayPhysicalHandle = -1L;
+    private boolean underlayAvailable;
+    private boolean foregroundStarted;
     private final Object l4StressLock = new Object();
     private volatile boolean l4StressStopRequested;
     private volatile ArrayList<L4StressFlow> activeL4Flows;
     private volatile ExecutorService activeL4Executor;
     private UidAttributionContract uidAttributionContract;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        createVpnNotificationChannel();
+    }
+
+    private void createVpnNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+        NotificationChannel channel = new NotificationChannel(
+                VPN_CHANNEL_ID, "Sakamoto VPN POC", NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription("Ongoing lifecycle protection for the Android VPN POC");
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.createNotificationChannel(channel);
+        }
+    }
+
+    private synchronized boolean ensureVpnForeground() {
+        if (foregroundStarted) {
+            return true;
+        }
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? new Notification.Builder(this, VPN_CHANNEL_ID)
+                : new Notification.Builder(this);
+        builder.setContentTitle("Sakamoto VPN POC")
+                .setContentText("VPN data path is active")
+                .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setOngoing(true)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .setShowWhen(false);
+        try {
+            startForeground(VPN_NOTIFICATION_ID, builder.build(),
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                            ? ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE : 0);
+            foregroundStarted = true;
+            Log.i(TAG, "VPN foreground service ready notificationId=" + VPN_NOTIFICATION_ID);
+            return true;
+        } catch (RuntimeException error) {
+            Log.e(TAG, "VPN foreground service start failed", error);
+            return false;
+        }
+    }
+
+    private synchronized void stopVpnForeground() {
+        if (!foregroundStarted) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } else {
+            stopForeground(true);
+        }
+        foregroundStarted = false;
+        Log.i(TAG, "VPN foreground service stopped");
+    }
 
     public boolean protectSocketForNative(int fd) {
         File forceFailure = new File(getFilesDir(), "force-protect-failure");
@@ -173,6 +265,190 @@ public final class SnortVpnService extends VpnService {
         boolean protectedSocket = protect(fd);
         Log.i(TAG, "VpnService.protect fd=" + fd + " result=" + protectedSocket);
         return protectedSocket;
+    }
+
+    /**
+     * Select the physical underlay for a socket created after this VPN has
+     * become the app's active network.  ConnectivityManager.getActiveNetwork()
+     * is UID-scoped; once tun0 is established it can return the VPN itself.
+     * Binding a connector to that network sends it back into our own TUN and
+     * leaves the kernel with no wlan0 egress.  Prefer a validated Internet
+     * network, then Wi-Fi (needed by the LAN oracle), while rejecting every
+     * VPN candidate explicitly.
+     */
+    private Network findNonVpnUnderlayNetwork(ConnectivityManager connectivityManager) {
+        return findNonVpnUnderlayNetwork(connectivityManager, null);
+    }
+
+    private Network findNonVpnUnderlayNetwork(ConnectivityManager connectivityManager,
+                                              Network excludedNetwork) {
+        if (connectivityManager == null) {
+            return null;
+        }
+        Network active = connectivityManager.getActiveNetwork();
+        Network best = null;
+        int bestScore = Integer.MIN_VALUE;
+        Network[] networks = connectivityManager.getAllNetworks();
+        for (Network candidate : networks) {
+            if (excludedNetwork != null && excludedNetwork.equals(candidate)) {
+                continue;
+            }
+            NetworkCapabilities capabilities =
+                    connectivityManager.getNetworkCapabilities(candidate);
+            if (capabilities == null
+                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) {
+                continue;
+            }
+            int score = 0;
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                score += 100;
+            }
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                score += 20;
+            }
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                score += 10;
+            }
+            if (candidate.equals(active)) {
+                score += 5;
+            }
+            Log.i(TAG, "OI2 underlay candidate handle=" + candidate.getNetworkHandle()
+                    + " vpn=" + capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    + " notVpn=" + capabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    + " internet=" + capabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    + " validated=" + capabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    + " wifi=" + capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    + " score=" + score);
+            if (score > bestScore) {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+        if (best != null) {
+            Log.i(TAG, "OI2 underlay selected handle=" + best.getNetworkHandle()
+                    + " activeHandle=" + (active == null ? -1 : active.getNetworkHandle()));
+        }
+        return best;
+    }
+
+    private void startUnderlayEpochTracking() {
+        final ConnectivityManager connectivityManager =
+                (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) {
+            Log.e(TAG, "OI3 underlay epoch unavailable: ConnectivityManager is null");
+            return;
+        }
+        final ConnectivityManager.NetworkCallback callback =
+                new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        publishUnderlayEpoch("available", null);
+                    }
+
+                    @Override
+                    public void onCapabilitiesChanged(Network network,
+                                                       NetworkCapabilities capabilities) {
+                        publishUnderlayEpoch("capabilities", null);
+                    }
+
+                    @Override
+                    public void onLost(Network network) {
+                        publishUnderlayEpoch("lost", network);
+                    }
+                };
+        synchronized (underlayEpochLock) {
+            underlayConnectivityManager = connectivityManager;
+            underlayNetworkCallback = callback;
+            underlayNetworkCallbackRegistered = false;
+            underlayEpochNativeReady = true;
+            underlayEpoch = 0L;
+            underlayPhysicalHandle = -1L;
+            underlayAvailable = false;
+        }
+        NetworkRequest request = new NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build();
+        try {
+            connectivityManager.registerNetworkCallback(request, callback);
+            synchronized (underlayEpochLock) {
+                underlayNetworkCallbackRegistered = true;
+            }
+            Log.i(TAG, "OI3 underlay NetworkCallback registered");
+        } catch (Exception error) {
+            synchronized (underlayEpochLock) {
+                underlayEpochNativeReady = false;
+                underlayConnectivityManager = null;
+                underlayNetworkCallback = null;
+            }
+            Log.e(TAG, "OI3 underlay NetworkCallback registration failed", error);
+            return;
+        }
+        publishUnderlayEpoch("initial", null);
+    }
+
+    private void publishUnderlayEpoch(String reason, Network excludedNetwork) {
+        ConnectivityManager connectivityManager;
+        synchronized (underlayEpochLock) {
+            if (!underlayEpochNativeReady || underlayConnectivityManager == null) {
+                return;
+            }
+            connectivityManager = underlayConnectivityManager;
+        }
+        Network selected = findNonVpnUnderlayNetwork(connectivityManager, excludedNetwork);
+        boolean available = selected != null;
+        long physicalHandle = available ? selected.getNetworkHandle() : -1L;
+        long epoch;
+        boolean changed;
+        synchronized (underlayEpochLock) {
+            changed = underlayEpoch == 0L
+                    || underlayPhysicalHandle != physicalHandle
+                    || underlayAvailable != available;
+            if (!changed) {
+                return;
+            }
+            underlayEpoch++;
+            if (underlayEpoch == 0L) {
+                underlayEpoch = 1L;
+            }
+            epoch = underlayEpoch;
+            underlayPhysicalHandle = physicalHandle;
+            underlayAvailable = available;
+        }
+        long eventHandle = excludedNetwork == null ? -1L : excludedNetwork.getNetworkHandle();
+        Log.i(TAG, "OI3 underlay epoch reason=" + reason
+                + " epoch=" + epoch
+                + " physicalHandle=" + physicalHandle
+                + " available=" + available
+                + " eventHandle=" + eventHandle);
+        nativeSetVppUnderlayEpoch(epoch, physicalHandle, available);
+    }
+
+    private void stopUnderlayEpochTracking() {
+        ConnectivityManager connectivityManager;
+        ConnectivityManager.NetworkCallback callback;
+        boolean registered;
+        synchronized (underlayEpochLock) {
+            underlayEpochNativeReady = false;
+            connectivityManager = underlayConnectivityManager;
+            callback = underlayNetworkCallback;
+            registered = underlayNetworkCallbackRegistered;
+            underlayConnectivityManager = null;
+            underlayNetworkCallback = null;
+            underlayNetworkCallbackRegistered = false;
+        }
+        if (registered && connectivityManager != null && callback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(callback);
+                Log.i(TAG, "OI3 underlay NetworkCallback unregistered");
+            } catch (Exception error) {
+                Log.w(TAG, "OI3 underlay NetworkCallback unregister failed", error);
+            }
+        }
     }
 
     /**
@@ -192,10 +468,9 @@ public final class SnortVpnService extends VpnService {
         }
         ConnectivityManager connectivityManager =
                 (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
-        Network network = connectivityManager == null
-                ? null : connectivityManager.getActiveNetwork();
+        Network network = findNonVpnUnderlayNetwork(connectivityManager);
         if (network == null) {
-            Log.w(TAG, "Network.bindSocket unavailable: no active network fd=" + fd);
+            Log.w(TAG, "Network.bindSocket unavailable: no non-VPN underlay fd=" + fd);
             return 2;
         }
         Log.i(TAG, "OI2 active network fd=" + fd
@@ -242,9 +517,15 @@ public final class SnortVpnService extends VpnService {
                                                   String blockIp6Dst, int blockOwnerUid,
                                                   int redirectThread,
                                                   boolean ownerCache,
+                                                  String oi3ExpectedFailure,
                                                   SnortVpnService ownerLookup);
 
     private static native void nativeSetVppStage(String cellId, String stageId);
+
+    private static native void nativeSetVppUnderlayEpoch(long epoch, long physicalHandle,
+                                                         boolean available);
+
+    private static native int nativeRunVppOi3Control(String control);
 
     private static native void nativeStopVppProbe();
 
@@ -266,7 +547,12 @@ public final class SnortVpnService extends VpnService {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
             stopVpn();
+            stopVpnForeground();
             stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (!ensureVpnForeground()) {
+            stopSelf(startId);
             return START_NOT_STICKY;
         }
         if (ACTION_HTTP_PROBE.equals(action)) {
@@ -305,6 +591,12 @@ public final class SnortVpnService extends VpnService {
             applyUidContractControls(intent);
             return START_NOT_STICKY;
         }
+        String oi3Control = intent == null ? null : intent.getStringExtra(EXTRA_OI3_CONTROL);
+        if (oi3Control != null && !oi3Control.trim().isEmpty()) {
+            int rc = nativeRunVppOi3Control(oi3Control.trim());
+            Log.i(TAG, "nativeRunVppOi3Control control=" + oi3Control + " rc=" + rc);
+            return START_NOT_STICKY;
+        }
 
         String mode = intent == null ? MODE_NATIVE : intent.getStringExtra(EXTRA_MODE);
         String allowedPackage = intent == null ? null : intent.getStringExtra(EXTRA_ALLOWED_PACKAGE);
@@ -318,12 +610,14 @@ public final class SnortVpnService extends VpnService {
         boolean enableIpv6 = intent != null && intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
         boolean oi3AppInject = intent == null
                 || intent.getBooleanExtra(EXTRA_OI3_APP_INJECT, true);
+        String oi3ExpectedFailure = intent == null ? null
+                : intent.getStringExtra(EXTRA_OI3_EXPECTED_FAILURE);
         String s124Path = intent == null ? null : intent.getStringExtra(EXTRA_S124_PATH);
         String s124Observe = intent == null ? null : intent.getStringExtra(EXTRA_S124_OBSERVE);
         applyUidContractControls(intent);
         startVpn(mode == null ? MODE_NATIVE : mode, allowedPackage, disallowedPackage,
                 blockIp4Dst, blockIp6Dst, blockOwnerUid, redirectThread, ownerCache,
-                enableIpv6, s124Path, s124Observe, oi3AppInject);
+                enableIpv6, s124Path, s124Observe, oi3AppInject, oi3ExpectedFailure);
         return START_STICKY;
     }
 
@@ -368,6 +662,7 @@ public final class SnortVpnService extends VpnService {
     @Override
     public void onDestroy() {
         stopVpn();
+        stopVpnForeground();
         if (uidAttributionContract != null) {
             uidAttributionContract.close();
             uidAttributionContract = null;
@@ -458,7 +753,8 @@ public final class SnortVpnService extends VpnService {
                                        String blockIp6Dst, int blockOwnerUid,
                                        int redirectThread, boolean ownerCache,
                                        boolean enableIpv6, String s124Path,
-                                       String s124Observe, boolean oi3AppInject) {
+                                       String s124Observe, boolean oi3AppInject,
+                                       String oi3ExpectedFailure) {
         if (MODE_HEV.equals(mode)) {
             int rc = nativeStartHevProbe(getApplicationInfo().nativeLibraryDir,
                     getFilesDir().getAbsolutePath());
@@ -613,6 +909,7 @@ public final class SnortVpnService extends VpnService {
                     || MODE_VPP_HEV_TUN_MULTI.equals(mode)
                     || MODE_VPP_OI2.equals(mode)
                     || MODE_VPP_OI3.equals(mode)
+                    || MODE_VPP_OI3_MULTI.equals(mode)
                     || controlledOi3
                     || controlledOi5) {
                 int vppMode = 0;
@@ -648,6 +945,8 @@ public final class SnortVpnService extends VpnService {
                     vppMode = 15;
                 } else if (MODE_VPP_OI3.equals(mode)) {
                     vppMode = 16;
+                } else if (MODE_VPP_OI3_MULTI.equals(mode)) {
+                    vppMode = 27;
                 } else if (MODE_VPP_OI3_CONTROLLED.equals(mode)) {
                     vppMode = 17;
                 } else if (MODE_VPP_OI3_CONTROLLED_TCP4.equals(mode)) {
@@ -675,11 +974,14 @@ public final class SnortVpnService extends VpnService {
                         s124Observe == null ? "off" : s124Observe,
                         blockIp4Dst == null ? "" : blockIp4Dst,
                         blockIp6Dst == null ? "" : blockIp6Dst,
-                        blockOwnerUid, redirectThread, ownerCache, this);
+                        blockOwnerUid, redirectThread, ownerCache,
+                        oi3ExpectedFailure == null ? "" : oi3ExpectedFailure.trim(),
+                        this);
                 File nativeDirectory = new File(getApplicationInfo().nativeLibraryDir);
-                String requiredArtifact = vppMode == 5
+                boolean requiresTunPocPlugin = vppMode >= 1 && vppMode <= 12;
+                String requiredArtifact = requiresTunPocPlugin
                         ? "libtun_poc_plugin.so|tun_poc_plugin.so" : "";
-                File selectedArtifact = vppMode == 5
+                File selectedArtifact = requiresTunPocPlugin
                         ? firstExistingFile(nativeDirectory, "libtun_poc_plugin.so",
                                 "tun_poc_plugin.so") : null;
                 boolean artifactPresent = selectedArtifact != null;
@@ -691,14 +993,21 @@ public final class SnortVpnService extends VpnService {
                 Log.i(TAG, "nativeStartVppProbe fd=" + rawFd + " vppMode=" + vppMode
                         + " blockOwnerUid=" + blockOwnerUid
                         + " redirectThread=" + redirectThread
-                        + " ownerCache=" + ownerCache + " rc=" + rc);
+                        + " ownerCache=" + ownerCache
+                        + " oi3ExpectedFailure="
+                        + (oi3ExpectedFailure == null ? "" : oi3ExpectedFailure.trim())
+                        + " rc=" + rc);
                 if (!startOutcomeWritten || rc != 0
-                        || (vppMode == 5 && (!artifactPresent || artifactSha256.isEmpty()))) {
+                        || (requiresTunPocPlugin
+                                && (!artifactPresent || artifactSha256.isEmpty()))) {
                     Log.e(TAG, "native VPP start provenance invalid rc=" + rc
                             + " outcomeWritten=" + startOutcomeWritten
                             + " artifactPresent=" + artifactPresent);
                     stopVpn();
                     return;
+                }
+                if ((vppMode == 16 || vppMode == 27) && rc == 0) {
+                    startUnderlayEpochTracking();
                 }
                 if (controlledOi3 && !controlledOi3A23 && oi3AppInject && rc == 0) {
                     startControlledOi3AppPacket(controlledOi3Cell(mode));
@@ -753,7 +1062,18 @@ public final class SnortVpnService extends VpnService {
                         } catch (java.net.SocketTimeoutException timeout) {
                             // Expected for the controlled no-reply cell.
                         }
-                        result = policyDrop ? "UNEXPECTED_CONNECTED" : "OK";
+                        if (policyDrop) {
+                            result = received > 0 ? "UNEXPECTED_REPLY"
+                                    : "EXPECTED_POLICY_DROP_NO_TRANSPORT";
+                        } else if ("refused".equals(cell)) {
+                            result = received > 0 ? "UNEXPECTED_REPLY"
+                                    : "EXPECTED_TRANSPORT_FAILURE";
+                        } else if ("no-reply".equals(cell)) {
+                            result = received > 0 ? "UNEXPECTED_REPLY"
+                                    : "EXPECTED_NO_REPLY_TIMEOUT";
+                        } else {
+                            result = received > 0 ? "OK" : "TIMEOUT";
+                        }
                     }
                 } else {
                     try (DatagramSocket socket = new DatagramSocket()) {
@@ -772,8 +1092,11 @@ public final class SnortVpnService extends VpnService {
                                 // Expected for no-reply; preserve a raw timeout result.
                             }
                         }
-                        result = policyDrop ? "OK_NO_TRANSPORT_EXPECTED"
-                                : (received > 0 ? "OK" : "TIMEOUT");
+                        result = policyDrop ? "EXPECTED_POLICY_DROP_NO_TRANSPORT"
+                                : ("no-reply".equals(cell)
+                                        ? (received > 0 ? "UNEXPECTED_REPLY"
+                                                : "EXPECTED_NO_REPLY_TIMEOUT")
+                                        : (received > 0 ? "OK" : "TIMEOUT"));
                     }
                 }
                 appendProbeLog(new File(getFilesDir(),
@@ -788,7 +1111,12 @@ public final class SnortVpnService extends VpnService {
             } catch (java.net.ConnectException refused) {
                 appendProbeLog(new File(getFilesDir(),
                                 "logs/vpp-oi3-controlled-app.log"),
-                        "cell=" + cell + " result=REFUSED error=" + refused);
+                        "cell=" + cell + " result="
+                                + ("policy-drop".equals(cell)
+                                        ? "EXPECTED_POLICY_DROP_NO_TRANSPORT"
+                                        : ("refused".equals(cell)
+                                                ? "CONNECT_REFUSED" : "REFUSED"))
+                                + " error=" + refused);
                 Log.i(TAG, "OI3 controlled app-inject cell=" + cell + " result=REFUSED");
             } catch (Exception e) {
                 appendProbeLog(new File(getFilesDir(),
@@ -819,9 +1147,15 @@ public final class SnortVpnService extends VpnService {
         final String probePath = path;
         final int durationSeconds = intent == null ? 0
                 : Math.max(0, Math.min(3600, intent.getIntExtra(EXTRA_DURATION_SECONDS, 0)));
+        final int maxRequests = intent == null ? 0
+                : Math.max(0, Math.min(100000, intent.getIntExtra(EXTRA_COUNT, 0)));
+        final int requestIntervalMs = intent == null ? 0
+                : Math.max(0, Math.min(60000,
+                        intent.getIntExtra(EXTRA_REQUEST_INTERVAL_MS, 0)));
         Thread thread = new Thread(() -> {
             if (durationSeconds > 0) {
-                runHttpStreamProbe(probeHost, probePort, probePath, durationSeconds);
+                runHttpStreamProbe(probeHost, probePort, probePath, durationSeconds,
+                        maxRequests, requestIntervalMs);
             } else {
                 runHttpProbe(probeHost, probePort, probePath);
             }
@@ -914,14 +1248,33 @@ public final class SnortVpnService extends VpnService {
                 : intent.getIntExtra(EXTRA_RECONNECT_EVERY, 0);
         boolean expectEcho = intent == null || intent.getBooleanExtra(EXTRA_EXPECT_ECHO, true);
         long runId = System.nanoTime() ^ (((long) Process.myPid()) << 32);
+        int normalizedFlows = Math.max(1, Math.min(32, flows));
+        int defaultSourcePortBase = "tcp".equals(protocol) ? 41000 : 40000;
+        int requestedSourcePortBase = intent == null ? defaultSourcePortBase
+                : intent.getIntExtra(EXTRA_SOURCE_PORT_BASE, defaultSourcePortBase);
+        int sourcePortBase = Math.max(1024,
+                Math.min(65535 - normalizedFlows, requestedSourcePortBase));
+        int udpClosedTimeoutMs = intent == null ? UDP_CLOSED_TIMEOUT_MS
+                : intent.getIntExtra(EXTRA_UDP_CLOSED_TIMEOUT_MS,
+                        UDP_CLOSED_TIMEOUT_MS);
+        int udpSaturatingTimeoutMs = intent == null ? UDP_SATURATING_TIMEOUT_MS
+                : intent.getIntExtra(EXTRA_UDP_SATURATING_TIMEOUT_MS,
+                        UDP_SATURATING_TIMEOUT_MS);
+        int tcpReadTimeoutMs = intent == null ? TCP_READ_TIMEOUT_MS
+                : intent.getIntExtra(EXTRA_TCP_READ_TIMEOUT_MS, TCP_READ_TIMEOUT_MS);
         final L4StressConfig config = new L4StressConfig(protocol, host, port,
-                Math.max(1, Math.min(32, flows)), Math.max(21, Math.min(1400, payloadBytes)),
+                normalizedFlows, Math.max(21, Math.min(1400, payloadBytes)),
                 burst == 32 ? 32 : 1,
                 "saturating".equalsIgnoreCase(load) ? "saturating" : "closed",
                 Math.max(1, Math.min(120, warmupSeconds)),
                 Math.max(1, Math.min(600, steadySeconds)),
                 Math.max(1, Math.min(120, drainSeconds)),
-                Math.max(0, Math.min(600, reconnectEvery)), expectEcho, runId);
+                Math.max(0, Math.min(600, reconnectEvery)), expectEcho,
+                sourcePortBase,
+                Math.max(20, Math.min(30_000, udpClosedTimeoutMs)),
+                Math.max(20, Math.min(30_000, udpSaturatingTimeoutMs)),
+                Math.max(20, Math.min(30_000, tcpReadTimeoutMs)),
+                runId);
         Thread thread = new Thread(() -> runL4StressProbe(config),
                 "snort-app-l4-stress-probe");
         thread.start();
@@ -1011,7 +1364,8 @@ public final class SnortVpnService extends VpnService {
         }
     }
 
-    private void runHttpStreamProbe(String host, int port, String path, int durationSeconds) {
+    private void runHttpStreamProbe(String host, int port, String path, int durationSeconds,
+                                    int maxRequests, int requestIntervalMs) {
         long started = System.currentTimeMillis();
         long deadline = started + durationSeconds * 1000L;
         File logsDir = new File(getFilesDir(), "logs");
@@ -1024,10 +1378,14 @@ public final class SnortVpnService extends VpnService {
         long requestBytes = 0;
         long responseBytes = 0;
         int errors = 0;
+        int readTimeoutAfterBytes = 0;
+        int contentLengthCompletions = 0;
         ArrayList<Long> latencies = new ArrayList<>();
         appendHttpProbeLog(logPath, "stream-start host=" + host + " port=" + port
-                + " durationSeconds=" + durationSeconds);
-        while (System.currentTimeMillis() < deadline) {
+                + " durationSeconds=" + durationSeconds + " maxRequests=" + maxRequests
+                + " requestIntervalMs=" + requestIntervalMs);
+        while (System.currentTimeMillis() < deadline
+                && (maxRequests <= 0 || requests < maxRequests)) {
             requests++;
             long requestStarted = System.currentTimeMillis();
             try (Socket socket = new Socket()) {
@@ -1045,8 +1403,34 @@ public final class SnortVpnService extends VpnService {
                 byte[] buf = new byte[512];
                 int n;
                 int total = 0;
-                while ((n = in.read(buf)) > 0) {
-                    total += n;
+                int headerEnd = -1;
+                int contentLength = -1;
+                ByteArrayOutputStream response = new ByteArrayOutputStream();
+                try {
+                    while ((n = in.read(buf)) > 0) {
+                        response.write(buf, 0, n);
+                        total += n;
+                        if (headerEnd < 0) {
+                            byte[] responseBytesSnapshot = response.toByteArray();
+                            headerEnd = findHttpHeaderEnd(responseBytesSnapshot,
+                                    responseBytesSnapshot.length);
+                            if (headerEnd >= 0) {
+                                contentLength = parseHttpContentLength(responseBytesSnapshot,
+                                        headerEnd);
+                            }
+                        }
+                        if (headerEnd >= 0 && contentLength >= 0
+                                && total >= headerEnd + contentLength) {
+                            contentLengthCompletions++;
+                            break;
+                        }
+                    }
+                } catch (SocketTimeoutException e) {
+                    if (total > 0) {
+                        readTimeoutAfterBytes++;
+                    } else {
+                        throw e;
+                    }
                 }
                 responseBytes += total;
                 if (total > 0) {
@@ -1056,17 +1440,65 @@ public final class SnortVpnService extends VpnService {
             } catch (Exception e) {
                 errors++;
             }
+            if (requestIntervalMs > 0 && System.currentTimeMillis() < deadline
+                    && (maxRequests <= 0 || requests < maxRequests)) {
+                long remainingMs = deadline - System.currentTimeMillis();
+                long sleepMs = Math.min((long) requestIntervalMs, Math.max(0L, remainingMs));
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
         }
         long elapsed = System.currentTimeMillis() - started;
         appendHttpProbeLog(logPath, "stream-done requests=" + requests
                 + " successes=" + successes + " errors=" + errors
                 + " requestBytes=" + requestBytes + " responseBytes=" + responseBytes
+                + " requestIntervalMs=" + requestIntervalMs
+                + " readTimeoutAfterBytes=" + readTimeoutAfterBytes
+                + " contentLengthCompletions=" + contentLengthCompletions
                 + " elapsedMs=" + elapsed + " latencyMsP50=" + percentileMillis(latencies, 0.50)
                 + " latencyMsP95=" + percentileMillis(latencies, 0.95)
                 + " latencyMsP99=" + percentileMillis(latencies, 0.99));
         Log.i(TAG, "app HTTP stream done host=" + host + " requests=" + requests
                 + " successes=" + successes + " errors=" + errors
-                + " elapsedMs=" + elapsed);
+                + " requestIntervalMs=" + requestIntervalMs + " elapsedMs=" + elapsed);
+    }
+
+    private int findHttpHeaderEnd(byte[] data, int length) {
+        for (int i = 3; i < length; i++) {
+            if (data[i - 3] == '\r' && data[i - 2] == '\n'
+                    && data[i - 1] == '\r' && data[i] == '\n') {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    private int parseHttpContentLength(byte[] data, int headerEnd) {
+        if (headerEnd <= 0 || headerEnd > data.length) {
+            return -1;
+        }
+        String headers = new String(data, 0, headerEnd, StandardCharsets.ISO_8859_1);
+        String[] lines = headers.split("\r\n");
+        for (String line : lines) {
+            int colon = line.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            String name = line.substring(0, colon).trim();
+            if (!"Content-Length".equalsIgnoreCase(name)) {
+                continue;
+            }
+            try {
+                return Math.max(0, Integer.parseInt(line.substring(colon + 1).trim()));
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+        return -1;
     }
 
     private long percentileMillis(ArrayList<Long> values, double percentile) {
@@ -1333,10 +1765,16 @@ public final class SnortVpnService extends VpnService {
         final int drainSeconds;
         final int reconnectEvery;
         final boolean expectEcho;
+        final int sourcePortBase;
+        final int udpClosedTimeoutMs;
+        final int udpSaturatingTimeoutMs;
+        final int tcpReadTimeoutMs;
 
         L4StressConfig(String protocol, String host, int port, int flows, int payloadBytes,
                        int burst, String load, int warmupSeconds, int steadySeconds,
-                       int drainSeconds, int reconnectEvery, boolean expectEcho, long runId) {
+                       int drainSeconds, int reconnectEvery, boolean expectEcho,
+                       int sourcePortBase, int udpClosedTimeoutMs,
+                       int udpSaturatingTimeoutMs, int tcpReadTimeoutMs, long runId) {
             this.runId = runId;
             this.protocol = protocol;
             this.host = host;
@@ -1350,6 +1788,10 @@ public final class SnortVpnService extends VpnService {
             this.drainSeconds = drainSeconds;
             this.reconnectEvery = reconnectEvery;
             this.expectEcho = expectEcho;
+            this.sourcePortBase = sourcePortBase;
+            this.udpClosedTimeoutMs = udpClosedTimeoutMs;
+            this.udpSaturatingTimeoutMs = udpSaturatingTimeoutMs;
+            this.tcpReadTimeoutMs = tcpReadTimeoutMs;
         }
     }
 
@@ -1429,8 +1871,7 @@ public final class SnortVpnService extends VpnService {
             this.remote = remote;
             this.barrier = barrier;
             this.phase = phase;
-            int base = "tcp".equals(config.protocol) ? 41000 : 40000;
-            this.stats = new L4FlowStats(flow, base + flow);
+            this.stats = new L4FlowStats(flow, config.sourcePortBase + flow);
             this.sendBuffer = new byte[config.payloadBytes];
             this.receiveBuffer = new byte[Math.max(2048, config.payloadBytes)];
             this.tcpResponseBuffer = new byte[config.payloadBytes];
@@ -1451,7 +1892,7 @@ public final class SnortVpnService extends VpnService {
                 udp.bind(new InetSocketAddress(stats.localPort));
                 udp.connect(remote, config.port);
                 udp.setSoTimeout("closed".equals(config.load)
-                        ? UDP_CLOSED_TIMEOUT_MS : UDP_SATURATING_TIMEOUT_MS);
+                        ? config.udpClosedTimeoutMs : config.udpSaturatingTimeoutMs);
             } else {
                 tcp = new Socket();
                 long connectStarted = System.nanoTime();
@@ -1463,7 +1904,7 @@ public final class SnortVpnService extends VpnService {
                 stats.localPort = tcp.getLocalPort();
                 stats.tcpConnected = true;
                 stats.tcpConnectNanos = System.nanoTime() - connectStarted;
-                tcp.setSoTimeout(1000);
+                tcp.setSoTimeout(config.tcpReadTimeoutMs);
                 tcpOutput = tcp.getOutputStream();
                 tcpInput = new BufferedInputStream(tcp.getInputStream());
             }
@@ -1766,9 +2207,11 @@ public final class SnortVpnService extends VpnService {
                 + " load=" + config.load + " warmupSeconds=" + config.warmupSeconds
                 + " steadySeconds=" + config.steadySeconds + " drainSeconds="
                 + config.drainSeconds + " reconnectEvery=" + config.reconnectEvery
+                + " sourcePortBase=" + config.sourcePortBase
                 + " expectEcho=" + config.expectEcho
-                + " udpClosedTimeoutMs=" + UDP_CLOSED_TIMEOUT_MS
-                + " udpSaturatingTimeoutMs=" + UDP_SATURATING_TIMEOUT_MS
+                + " udpClosedTimeoutMs=" + config.udpClosedTimeoutMs
+                + " udpSaturatingTimeoutMs=" + config.udpSaturatingTimeoutMs
+                + " tcpReadTimeoutMs=" + config.tcpReadTimeoutMs
                 + " fireAndCountPacingNsPerPacket="
                 + FIRE_AND_COUNT_PACING_NS_PER_PACKET);
         ArrayList<L4StressFlow> flows = new ArrayList<>();
@@ -1886,8 +2329,9 @@ public final class SnortVpnService extends VpnService {
                     + " sentPpsMilli=" + sentPpsMilli
                     + " receivedPpsMilli=" + receivedPpsMilli
                     + " goodputBytesPerSec=" + goodputBytesPerSec
-                    + " udpClosedTimeoutMs=" + UDP_CLOSED_TIMEOUT_MS
-                    + " udpSaturatingTimeoutMs=" + UDP_SATURATING_TIMEOUT_MS
+                    + " udpClosedTimeoutMs=" + config.udpClosedTimeoutMs
+                    + " udpSaturatingTimeoutMs=" + config.udpSaturatingTimeoutMs
+                    + " tcpReadTimeoutMs=" + config.tcpReadTimeoutMs
                     + " setupStartNanos=" + phase.setupStartNanos
                     + " setupEndNanos=" + phase.setupEndNanos
                     + " teardownStartNanos=" + phase.teardownStartNanos
@@ -1961,6 +2405,7 @@ public final class SnortVpnService extends VpnService {
 
     private synchronized void stopVpn() {
         cancelL4StressProbe();
+        stopUnderlayEpochTracking();
         nativeStopVppProbe();
         nativeStopProbe();
         nativeStopHevProbe();

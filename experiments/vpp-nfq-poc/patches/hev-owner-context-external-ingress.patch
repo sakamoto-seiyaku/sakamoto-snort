@@ -1,0 +1,317 @@
+diff -ruN a/src/core/owner_context.c b/src/core/owner_context.c
+--- a/src/core/owner_context.c	2026-08-24 18:22:21.166573123 +0800
++++ b/src/core/owner_context.c	2026-08-24 18:20:45.157996557 +0800
+@@ -71,6 +71,10 @@
+   void *output_data;
+   struct netif *netif_list;
+   struct netif *netif_default;
++  int accept_nonlocal;
++  int external_ingress;
++  struct udp_pcb *external_udp_listener;
++  u16_t current_udp_dest_port;
+   struct tcp_pcb *tcp_bound_pcbs;
+   union tcp_listen_pcbs_t tcp_listen_pcbs;
+   struct tcp_pcb *tcp_active_pcbs;
+@@ -386,6 +389,70 @@
+   return context ? context->output_data : NULL;
+ }
+ 
++void
++lwip_owner_context_set_accept_nonlocal(lwip_owner_context_t *context,
++                                       int enabled)
++{
++  if (context)
++    context->accept_nonlocal = enabled ? 1 : 0;
++}
++
++int
++lwip_owner_context_accept_nonlocal(const lwip_owner_context_t *context)
++{
++  return context ? context->accept_nonlocal : 0;
++}
++
++void
++lwip_owner_context_set_external_ingress(lwip_owner_context_t *context,
++                                        int enabled)
++{
++  if (context)
++    context->external_ingress = enabled ? 1 : 0;
++}
++
++int
++lwip_owner_context_external_ingress(const lwip_owner_context_t *context)
++{
++  return context ? context->external_ingress : 0;
++}
++
++void
++lwip_owner_context_set_external_udp_listener(
++    lwip_owner_context_t *context, struct udp_pcb *listener)
++{
++  if (context)
++    context->external_udp_listener = listener;
++}
++
++struct udp_pcb *
++lwip_owner_context_external_udp_listener(
++    const lwip_owner_context_t *context)
++{
++  return context ? context->external_udp_listener : NULL;
++}
++
++void
++lwip_owner_context_set_current_udp_dest_port(lwip_owner_context_t *context,
++                                             uint16_t port)
++{
++  if (context)
++    context->current_udp_dest_port = port;
++}
++
++uint16_t
++lwip_owner_context_current_udp_dest_port(
++    const lwip_owner_context_t *context)
++{
++  return context ? context->current_udp_dest_port : 0;
++}
++
++const ip_addr_t *
++lwip_owner_context_current_ip_dest(const lwip_owner_context_t *context)
++{
++  return context ? &context->ip_data.current_iphdr_dest : NULL;
++}
++
+ uint16_t *
+ lwip_owner_context_ip4_id(lwip_owner_context_t *context)
+ {
+@@ -764,6 +816,10 @@
+   context->next_iss = 6510;
+   context->ip4_id = 0;
+   context->udp_port = 0xc000;
++  context->accept_nonlocal = 0;
++  context->external_ingress = 0;
++  context->external_udp_listener = NULL;
++  context->current_udp_dest_port = 0;
+ }
+ 
+ struct tcp_pcb *
+diff -ruN a/src/hev-socks5-session-udp.c b/src/hev-socks5-session-udp.c
+--- a/src/hev-socks5-session-udp.c	2026-08-24 18:21:40.974323859 +0800
++++ b/src/hev-socks5-session-udp.c	2026-08-24 18:20:45.301997106 +0800
+@@ -224,6 +224,20 @@
+ {
+     HevSocks5SessionUDP *self = arg;
+     HevSocks5UDPFrame *frame;
++    const ip_addr_t *dest_addr = &pcb->local_ip;
++    u16_t dest_port = pcb->local_port;
++
++    if (lwip_owner_context_external_ingress (self->data.lwip) &&
++        pcb == lwip_owner_context_external_udp_listener (self->data.lwip)) {
++        const ip_addr_t *current_dest =
++            lwip_owner_context_current_ip_dest (self->data.lwip);
++        u16_t current_port =
++            lwip_owner_context_current_udp_dest_port (self->data.lwip);
++        if (current_dest && current_port) {
++            dest_addr = current_dest;
++            dest_port = current_port;
++        }
++    }
+ 
+     if (!p) {
+         hev_socks5_session_terminate (HEV_SOCKS5_SESSION (self));
+@@ -247,12 +261,12 @@
+     ip_addr_copy (self->remote_ip, *addr);
+     self->remote_port = port;
+     memset (&frame->node, 0, sizeof (frame->node));
+-    hev_socks5_addr_from_lwip (&frame->addr, &pcb->local_ip, pcb->local_port,
++    hev_socks5_addr_from_lwip (&frame->addr, dest_addr, dest_port,
+                                self->data.mapped_dns);
+ 
+     if (frame->addr.atype == HEV_SOCKS5_ADDR_TYPE_NAME) {
+-        self->addr = ip_2_ip4 (&pcb->local_ip)->addr;
+-        self->port = pcb->local_port;
++        self->addr = ip_2_ip4 (dest_addr)->addr;
++        self->port = dest_port;
+     }
+ 
+     self->frames++;
+diff -ruN a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
+--- a/src/hev-socks5-tunnel.c	2026-08-24 18:22:21.594575620 +0800
++++ b/src/hev-socks5-tunnel.c	2026-08-24 18:20:28.989876627 +0800
+@@ -1846,6 +1846,14 @@
+     if (res < 0)
+         goto exit;
+ 
++    /* An external VPN fd carries original-destination packets.  The owner
++     * context otherwise treats its synthetic 10.0.0.1/fd00::1 address as the
++     * only local destination and silently drops every remote flow. */
++    if (extern_tun_fd >= 0)
++        lwip_owner_context_set_accept_nonlocal (owner->lwip, 1);
++    if (extern_tun_fd >= 0)
++        lwip_owner_context_set_external_ingress (owner->lwip, 1);
++
+     res = event_task_init (owner);
+     if (res < 0)
+         goto exit;
+diff -ruN a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
+--- a/src/hev-socks5-tunnel.c	2026-08-24 18:23:08.094866862 +0800
++++ b/src/hev-socks5-tunnel.c	2026-08-24 18:27:10.244368888 +0800
+@@ -966,7 +966,7 @@
+ }
+ 
+ static int
+-gateway_init (HevSocks5TunnelOwnerRuntime *owner)
++gateway_init (HevSocks5TunnelOwnerRuntime *owner, int external_ingress)
+ {
+     ip_addr_t any = IPADDR_ANY_TYPE_INIT;
+     struct tcp_pcb *tcp_listener;
+@@ -979,6 +979,10 @@
+             return -1;
+         owner->owner_lwip_owned = 1;
+     }
++    if (external_ingress) {
++        lwip_owner_context_set_accept_nonlocal (owner->lwip, 1);
++        lwip_owner_context_set_external_ingress (owner->lwip, 1);
++    }
+     owner->owner_netif = lwip_owner_context_netif (owner->lwip);
+     lwip_owner_context_set_output_data (owner->lwip, owner);
+     netif_init_handler (owner->owner_netif);
+@@ -1008,6 +1012,9 @@
+         return -1;
+     }
+     owner->owner_udp_listener = udp_listener;
++    if (external_ingress)
++        lwip_owner_context_set_external_udp_listener (owner->lwip,
++                                                      udp_listener);
+     udp_recv_ctx (owner->lwip, owner->owner_udp_listener,
+                   udp_recv_handler, owner);
+ 
+     return 0;
+@@ -1017,6 +1024,8 @@
+ static void
+ gateway_fini (HevSocks5TunnelOwnerRuntime *owner)
+ {
++    if (owner->lwip)
++        lwip_owner_context_set_external_udp_listener (owner->lwip, NULL);
+     if (owner->owner_udp_listener)
+        udp_remove_ctx (owner->lwip, owner->owner_udp_listener);
+     if (owner->owner_tcp_listener)
+@@ -1842,18 +1851,10 @@
+     if (res < 0)
+         goto exit;
+ 
+-    res = gateway_init (owner);
++    res = gateway_init (owner, extern_tun_fd >= 0);
+     if (res < 0)
+         goto exit;
+-
+-    /* An external VPN fd carries original-destination packets.  The owner
+-     * context otherwise treats its synthetic 10.0.0.1/fd00::1 address as the
+-     * only local destination and silently drops every remote flow. */
+-    if (extern_tun_fd >= 0)
+-        lwip_owner_context_set_accept_nonlocal (owner->lwip, 1);
+-    if (extern_tun_fd >= 0)
+-        lwip_owner_context_set_external_ingress (owner->lwip, 1);
+ 
+     res = event_task_init (owner);
+     if (res < 0)
+         goto exit;
+diff -ruN a/src/include/lwip/owner_context.h b/src/include/lwip/owner_context.h
+--- a/src/include/lwip/owner_context.h	2026-08-24 18:22:21.026572307 +0800
++++ b/src/include/lwip/owner_context.h	2026-08-24 18:20:45.009995119 +0800
+@@ -107,6 +107,29 @@
+ void lwip_owner_context_set_output_data(lwip_owner_context_t *context,
+                                         void *data);
+ void *lwip_owner_context_output_data(lwip_owner_context_t *context);
++/* External TUN ingress is a transparent gateway: its destination is the
++ * original remote address, not the synthetic owner netif address.  Keep this
++ * opt-in so controlled/local owner contexts retain strict destination checks. */
++void lwip_owner_context_set_accept_nonlocal(lwip_owner_context_t *context,
++                                            int enabled);
++int lwip_owner_context_accept_nonlocal(const lwip_owner_context_t *context);
++/* External transparent-ingress mode additionally permits the gateway's
++ * wildcard TCP listener and explicitly marked UDP listener to match arbitrary
++ * original destination ports. */
++void lwip_owner_context_set_external_ingress(lwip_owner_context_t *context,
++                                             int enabled);
++int lwip_owner_context_external_ingress(
++    const lwip_owner_context_t *context);
++void lwip_owner_context_set_external_udp_listener(
++    lwip_owner_context_t *context, struct udp_pcb *listener);
++struct udp_pcb *lwip_owner_context_external_udp_listener(
++    const lwip_owner_context_t *context);
++void lwip_owner_context_set_current_udp_dest_port(
++    lwip_owner_context_t *context, uint16_t port);
++uint16_t lwip_owner_context_current_udp_dest_port(
++    const lwip_owner_context_t *context);
++const ip_addr_t *lwip_owner_context_current_ip_dest(
++    const lwip_owner_context_t *context);
+ struct tcp_pcb **lwip_owner_context_active_pcbs(lwip_owner_context_t *context);
+ struct tcp_pcb **lwip_owner_context_timewait_pcbs(lwip_owner_context_t *context);
+ struct tcp_pcb_listen **lwip_owner_context_listen_pcbs(
+diff -ruN a/third-part/lwip/src/core/ipv4/ip4.c b/third-part/lwip/src/core/ipv4/ip4.c
+--- a/third-part/lwip/src/core/ipv4/ip4.c	2026-08-24 18:22:21.310573963 +0800
++++ b/third-part/lwip/src/core/ipv4/ip4.c	2026-08-24 18:02:42.303346714 +0800
+@@ -827,7 +827,8 @@
+   ip_addr_copy_from_ip4(owner_ip->current_iphdr_dest, iphdr->dest);
+   ip_addr_copy_from_ip4(owner_ip->current_iphdr_src, iphdr->src);
+   if (!netif_is_up(inp) || ip4_addr_isany_val(*netif_ip4_addr(inp)) ||
+-      (!ip4_addr_eq(ip_2_ip4(&owner_ip->current_iphdr_dest),
++      (!lwip_owner_context_accept_nonlocal(context) &&
++       !ip4_addr_eq(ip_2_ip4(&owner_ip->current_iphdr_dest),
+                     netif_ip4_addr(inp)) &&
+        !ip4_addr_isbroadcast(ip_2_ip4(&owner_ip->current_iphdr_dest), inp)))
+     goto dropped;
+diff -ruN a/third-part/lwip/src/core/ipv6/ip6.c b/third-part/lwip/src/core/ipv6/ip6.c
+--- a/third-part/lwip/src/core/ipv6/ip6.c	2026-08-24 18:22:21.454574803 +0800
++++ b/third-part/lwip/src/core/ipv6/ip6.c	2026-08-24 18:02:42.443347538 +0800
+@@ -547,7 +547,7 @@
+       }
+     }
+   }
+-  if ((!accepted) ||
++  if ((!accepted && !lwip_owner_context_accept_nonlocal(context)) ||
+       ip6_addr_isloopback(
+           ip_2_ip6(&owner_ip->current_iphdr_src)) ||
+       ip6_addr_isloopback(ip_2_ip6(&owner_ip->current_iphdr_dest)))
+diff -ruN a/third-part/lwip/src/core/tcp_in.c b/third-part/lwip/src/core/tcp_in.c
+--- a/third-part/lwip/src/core/tcp_in.c	2026-08-24 18:21:40.542322109 +0800
++++ b/third-part/lwip/src/core/tcp_in.c	2026-08-24 18:20:17.905811321 +0800
+@@ -673,9 +673,11 @@
+   }
+   for (lpcb = *lwip_owner_context_listen_pcbs(context); lpcb;
+        lpcb = lpcb->next) {
+-    if (lpcb->local_port == input->tcphdr->dest &&
+-        IP_ADDR_PCB_VERSION_MATCH_EXACT(lpcb,
+-                                        &owner_ip->current_iphdr_dest) &&
++    if ((lpcb->local_port == input->tcphdr->dest ||
++         (lwip_owner_context_external_ingress(context) &&
++          lpcb->local_port == 0)) &&
++        IP_ADDR_PCB_VERSION_MATCH(lpcb,
++                                  &owner_ip->current_iphdr_dest) &&
+         (ip_addr_isany(&lpcb->local_ip) ||
+          ip_addr_eq(&lpcb->local_ip, &owner_ip->current_iphdr_dest)))
+       break;
+diff -ruN a/third-part/lwip/src/core/udp.c b/third-part/lwip/src/core/udp.c
+--- a/third-part/lwip/src/core/udp.c	2026-08-24 18:21:40.686322693 +0800
++++ b/third-part/lwip/src/core/udp.c	2026-08-24 18:20:25.961853794 +0800
+@@ -550,7 +550,9 @@
+       prev = pcb;
+       continue;
+     }
+-    if (pcb->local_port == dest &&
++    if ((pcb->local_port == dest ||
++         (lwip_owner_context_external_ingress(context) &&
++          pcb == lwip_owner_context_external_udp_listener(context))) &&
+         udp_input_local_match_ctx(pcb, inp,
+                                   &owner_ip->current_iphdr_dest,
+                                   broadcast)) {
+@@ -583,7 +585,9 @@
+     goto dropped;
+   if (!pcb->recv)
+     goto dropped;
++  lwip_owner_context_set_current_udp_dest_port(context, dest);
+   pcb->recv(pcb->recv_arg, pcb, p, &owner_ip->current_iphdr_src, src);
++  lwip_owner_context_set_current_udp_dest_port(context, 0);
+   return;
+ 
+ dropped:

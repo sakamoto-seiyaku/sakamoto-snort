@@ -1,0 +1,80 @@
+diff --git a/third-part/lwip/src/core/tcp_in.c b/third-part/lwip/src/core/tcp_in.c
+--- a/third-part/lwip/src/core/tcp_in.c
++++ b/third-part/lwip/src/core/tcp_in.c
+@@ -230,9 +230,64 @@
+   return ERR_OK;
+ }
+ 
++/* Owner-context counterpart of tcp_send_empty_ack().  The legacy helper
++ * allocates from the process-global lwIP pools and routes through the legacy
++ * netif globals, which is not valid for the explicit owner context.  A
++ * delayed ACK has no unsent tcp_seg, so tcp_output_ctx() must be able to emit
++ * this control packet directly from the owner-local pbuf pool. */
++static err_t
++tcp_send_empty_ack_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb)
++{
++  struct netif *netif;
++  struct pbuf *p;
++  struct tcp_hdr *tcphdr;
++  err_t err;
++
++  if (!context || !pcb)
++    return ERR_ARG;
++  netif = lwip_owner_context_netif(context);
++  if (!netif)
++    return ERR_RTE;
++  p = lwip_owner_context_pbuf_alloc_ram(context, TCP_HLEN);
++  if (!p) {
++    tcp_set_flags(pcb, TF_ACK_DELAY | TF_ACK_NOW);
++    return ERR_BUF;
++  }
++  tcphdr = (struct tcp_hdr *)p->payload;
++  tcphdr->src = lwip_htons(pcb->local_port);
++  tcphdr->dest = lwip_htons(pcb->remote_port);
++  tcphdr->seqno = lwip_htonl(pcb->snd_nxt);
++  tcphdr->ackno = lwip_htonl(pcb->rcv_nxt);
++  TCPH_HDRLEN_FLAGS_SET(tcphdr, 5, TCP_ACK);
++  tcphdr->wnd = lwip_htons(TCPWND_MIN16(pcb->rcv_ann_wnd));
++  tcphdr->chksum = 0;
++  tcphdr->urgp = 0;
++  pcb->rcv_ann_right_edge = pcb->rcv_nxt + pcb->rcv_ann_wnd;
++#if CHECKSUM_GEN_TCP
++  tcphdr->chksum = ip_chksum_pseudo(
++      p, IP_PROTO_TCP, p->tot_len, &pcb->local_ip, &pcb->remote_ip);
++#endif
++  if (IP_IS_V6_VAL(pcb->local_ip))
++    err = ip6_output_if_src(p, ip_2_ip6(&pcb->local_ip),
++                            ip_2_ip6(&pcb->remote_ip), pcb->ttl,
++                            pcb->tos, IP_PROTO_TCP, netif);
++  else
++    err = ip4_output_if_src(p, ip_2_ip4(&pcb->local_ip),
++                            ip_2_ip4(&pcb->remote_ip), pcb->ttl,
++                            pcb->tos, IP_PROTO_TCP, netif);
++  lwip_owner_context_pbuf_free(context, p);
++  if (err == ERR_OK)
++    tcp_clear_flags(pcb, TF_ACK_DELAY | TF_ACK_NOW);
++  else
++    tcp_set_flags(pcb, TF_ACK_DELAY | TF_ACK_NOW);
++  return err;
++}
++
+ err_t
+ tcp_output_ctx(lwip_owner_context_t *context, struct tcp_pcb *pcb)
+ {
++  if (!context || !pcb)
++    return ERR_ARG;
+   struct tcp_seg *seg = pcb->unsent;
+   struct netif *netif = lwip_owner_context_netif(context);
+@@ -241,8 +296,11 @@
+   u16_t mss;
+   u16_t ip_hlen;
+ 
+-  if (!seg || !netif)
+-    return seg ? ERR_RTE : ERR_OK;
++  if (!seg)
++    return (pcb->flags & TF_ACK_NOW) ?
++        tcp_send_empty_ack_ctx(context, pcb) : ERR_OK;
++  if (!netif)
++    return ERR_RTE;
+   if (pcb->state != SYN_SENT)
+     TCPH_SET_FLAG(seg->tcphdr, TCP_ACK);
