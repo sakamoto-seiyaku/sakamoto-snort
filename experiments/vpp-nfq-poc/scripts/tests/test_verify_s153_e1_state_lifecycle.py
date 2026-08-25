@@ -91,7 +91,17 @@ class VerifyS153E1StateLifecycleTest(unittest.TestCase):
         self.assertIn('"$expected" == epoch', self.runner)
         self.assertIn("baseline-ip-rules.normalized.txt", self.runner)
         self.assertIn("after-ip-rules.normalized.txt", self.runner)
-        self.assertIn("lookup wlan0$", self.runner)
+        self.assertIn("lookup wlan0[[:space:]]*$", self.runner)
+
+    def test_epoch_transition_uses_udp_fire_and_count_driver(self):
+        epoch_start = self.runner.index("run_epoch_restart()")
+        epoch_runner = self.runner[epoch_start:]
+        self.assertIn(
+            'start_probe udp "$UDP_PORT" "$((SOURCE_PORT_BASE + 20))" 12',
+            epoch_runner)
+        self.assertNotIn(
+            'start_probe tcp "$TCP_PORT" "$((TCP_SOURCE_PORT_BASE + 20))" 12',
+            epoch_runner)
 
 
 if __name__ == "__main__":

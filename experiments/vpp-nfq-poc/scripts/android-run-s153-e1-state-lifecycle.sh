@@ -362,8 +362,8 @@ write_phase_cleanup_log() {
 
 normalize_ip_rules() {
   sed -E \
-    -e '/lookup wlan0$/ s/fwmark 0x[0-9a-f]+\/0x1ffff/fwmark <wlan>\/0x1ffff/g' \
-    -e '/lookup wlan0$/ s/fwmark 0x[0-9a-f]+\/0xffff/fwmark <wlan>\/0xffff/g' \
+    -e '/lookup wlan0[[:space:]]*$/ s/fwmark 0x[0-9a-f]+\/0x1ffff/fwmark <wlan>\/0x1ffff/g' \
+    -e '/lookup wlan0[[:space:]]*$/ s/fwmark 0x[0-9a-f]+\/0xffff/fwmark <wlan>\/0xffff/g' \
     "$1"
 }
 
@@ -509,7 +509,7 @@ run_epoch_restart() {
   adb_read 'ip rule show' >"$phase_dir/baseline-ip-rules.txt"
   start_vpn || { PHASE_FAILURES=$((PHASE_FAILURES + 1)); return; }
   capture_state before
-  start_probe tcp "$TCP_PORT" "$((TCP_SOURCE_PORT_BASE + 20))" 12
+  start_probe udp "$UDP_PORT" "$((SOURCE_PORT_BASE + 20))" 12
   sleep 2
   capture_state epoch-before
   adb_cmd shell svc wifi disable
