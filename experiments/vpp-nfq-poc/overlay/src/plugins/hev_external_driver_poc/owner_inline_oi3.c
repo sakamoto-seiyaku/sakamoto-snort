@@ -436,6 +436,10 @@ struct oi3_main {
   u32 expected_real_no_reply;
   u32 expected_real_reset;
   u32 expected_real_policy_drop;
+  /* S185 keeps pre-connect broker failures on the infrastructure branch.
+   * The value is the exact OI2 completion enum expected for this bounded
+   * cell; zero means ordinary transport/positive classification. */
+  u32 expected_infrastructure_failure;
   u8 tun_tcp_flags;
   u8 tun_rx[OI3_MAX_TUN_PACKET];
   int connector_last_error;
@@ -567,6 +571,31 @@ oi3_phase_name (oi3_phase_t phase)
   case OI3_DONE: return "DONE";
   default: return "FAULT";
   }
+}
+
+static const char *
+oi3_broker_result_name (uint32_t result)
+{
+  switch (result)
+    {
+    case OI2_RESULT_SUCCESS: return "SUCCESS";
+    case OI2_RESULT_BIND_FAILURE: return "BIND_FAILURE";
+    case OI2_RESULT_PROTECT_FAILURE: return "PROTECT_FAILURE";
+    case OI2_RESULT_BROKER_UNAVAILABLE: return "BROKER_UNAVAILABLE";
+    default: return "UNKNOWN";
+    }
+}
+
+static uint32_t
+oi3_request_flags_for_expected_failure (uint32_t result)
+{
+  switch (result)
+    {
+    case OI2_RESULT_BIND_FAILURE: return OI2_FLAG_BIND_FAILURE;
+    case OI2_RESULT_PROTECT_FAILURE: return OI2_FLAG_PROTECT_FAILURE;
+    case OI2_RESULT_BROKER_UNAVAILABLE: return OI2_FLAG_BROKER_UNAVAILABLE;
+    default: return OI2_FLAG_NONE;
+    }
 }
 
 static uint64_t
@@ -1278,15 +1307,20 @@ oi3_broker_main (void *data)
       .token = request.token, .generation = request.generation,
       .underlay_epoch = request.underlay_epoch,
     };
-    tm->broker_bind_calls++;
-    if (tm->broker_available && duplicate >= 0 &&
-        oi3_bind_duplicate (duplicate, request.family) == 0) {
-      tm->broker_protect_calls++;
-      completion.result = OI2_RESULT_SUCCESS;
-      completion.fault_reason = OI2_RESULT_SUCCESS;
-    } else if (duplicate >= 0) {
-      completion.result = OI2_RESULT_BIND_FAILURE;
-      completion.fault_reason = OI2_RESULT_BIND_FAILURE;
+    if (!(request.flags & OI2_FLAG_BROKER_UNAVAILABLE) &&
+        tm->broker_available && duplicate >= 0) {
+      tm->broker_bind_calls++;
+      if ((request.flags & OI2_FLAG_BIND_FAILURE) ||
+          oi3_bind_duplicate (duplicate, request.family) != 0) {
+        completion.result = OI2_RESULT_BIND_FAILURE;
+        completion.fault_reason = OI2_RESULT_BIND_FAILURE;
+      } else {
+        tm->broker_protect_calls++;
+        completion.result = (request.flags & OI2_FLAG_PROTECT_FAILURE)
+                              ? OI2_RESULT_PROTECT_FAILURE
+                              : OI2_RESULT_SUCCESS;
+        completion.fault_reason = completion.result;
+      }
     }
     if (duplicate >= 0) { close (duplicate); tm->broker_duplicate_closes++; }
     (void)send (tm->completion_pair[0], &completion, sizeof (completion), MSG_NOSIGNAL);
@@ -1298,13 +1332,15 @@ static int
 oi3_send_request (oi3_main_t *tm)
 {
   char control[CMSG_SPACE (sizeof (int))];
+  uint32_t broker_flags =
+    oi3_request_flags_for_expected_failure (tm->expected_infrastructure_failure);
   oi2_broker_request_t request = {
     .abi_version = OI2_BROKER_ABI_VERSION, .family = tm->family,
     .kind = tm->protocol == 6 ? OI2_KIND_TCP : OI2_KIND_UDP,
     .owner = tm->target_thread, .shard = 1, .reserved = 0,
     .token = ++tm->token, .generation = tm->generation,
     .underlay_epoch = tm->underlay_epoch, .target_port = tm->endpoint_port,
-    .flags = 0,
+    .flags = broker_flags,
   };
   struct iovec iov = { .iov_base = &request, .iov_len = sizeof (request) };
   struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1,
@@ -2531,8 +2567,10 @@ oi3_completion_ready (clib_file_t *file)
           completion.token == tm->token && completion.owner == tm->target_thread) {
         tm->broker_result = completion.result;
         if (tm->broker_external) {
-          tm->broker_bind_calls++;
-          if (completion.result == OI2_RESULT_SUCCESS)
+          if (completion.result != OI2_RESULT_BROKER_UNAVAILABLE)
+            tm->broker_bind_calls++;
+          if (completion.result == OI2_RESULT_SUCCESS ||
+              completion.result == OI2_RESULT_PROTECT_FAILURE)
             tm->broker_protect_calls++;
         }
         if (oi3_enqueue_owner_for (tm, vm, 1) < 0)
@@ -2570,8 +2608,10 @@ oi3_multi_completion_ready (clib_file_t *file)
       if (tm->active && completion.generation == tm->generation &&
           completion.token == tm->token) {
         tm->broker_result = completion.result;
-        tm->broker_bind_calls++;
-        if (completion.result == OI2_RESULT_SUCCESS)
+        if (completion.result != OI2_RESULT_BROKER_UNAVAILABLE)
+          tm->broker_bind_calls++;
+        if (completion.result == OI2_RESULT_SUCCESS ||
+            completion.result == OI2_RESULT_PROTECT_FAILURE)
           tm->broker_protect_calls++;
         if (!tm->worker_token_pending &&
             oi3_enqueue_owner_for (tm, vm, 1) < 0)
@@ -2670,6 +2710,14 @@ oi3_expected_outcome (const oi3_main_t *tm)
   if (tm->underlay_invalidated) return "EXPECTED_UNDERLAY_INVALIDATION";
   if (tm->normal_stop_requested) return "EXPECTED_STOP";
   if (tm->overload_expected) return "EXPECTED_PACKET_OVERLOAD";
+  if (tm->expected_infrastructure_failure)
+    switch (tm->expected_infrastructure_failure)
+      {
+      case OI2_RESULT_BIND_FAILURE: return "EXPECTED_BIND_FAILURE";
+      case OI2_RESULT_PROTECT_FAILURE: return "EXPECTED_PROTECT_FAILURE";
+      case OI2_RESULT_BROKER_UNAVAILABLE: return "EXPECTED_BROKER_UNAVAILABLE";
+      default: return "EXPECTED_INFRASTRUCTURE_FAILURE";
+      }
   if (tm->expected_real_reset) return "EXPECTED_REAL_TRANSPORT_RESET";
   if (tm->expected_real_no_reply) return "EXPECTED_REAL_NO_REPLY";
   if (tm->expected_real_policy_drop) return "EXPECTED_REAL_POLICY_DROP";
@@ -2687,6 +2735,54 @@ oi3_classify_result (oi3_main_t *tm)
   if (tm->error[0]) return;
   if (tm->fault_injected) return;
   if (tm->underlay_invalidated) return;
+  if (tm->expected_infrastructure_failure)
+    {
+      u32 expected_broker_bind_calls = 0;
+      u32 expected_broker_protect_calls = 0;
+      switch (tm->expected_infrastructure_failure)
+        {
+        case OI2_RESULT_BIND_FAILURE:
+          expected_broker_bind_calls = 1;
+          expected_broker_protect_calls = 0;
+          break;
+        case OI2_RESULT_PROTECT_FAILURE:
+          expected_broker_bind_calls = 1;
+          expected_broker_protect_calls = 1;
+          break;
+        case OI2_RESULT_BROKER_UNAVAILABLE:
+          expected_broker_bind_calls = 0;
+          expected_broker_protect_calls = 0;
+          break;
+        }
+      int pass = tm->multi_mode && tm->tun_mode &&
+                 tm->broker_result == tm->expected_infrastructure_failure &&
+                 tm->broker_bind_calls == expected_broker_bind_calls &&
+                 tm->broker_protect_calls == expected_broker_protect_calls &&
+                 tm->output_packets == 0 && tm->output_direct == 0 &&
+                 tm->direct_send_events == 0 && tm->return_rewritten == 0 &&
+                 tm->endpoint_received == 0 && tm->endpoint_replied == 0 &&
+                 tm->transport_failures == 0 &&
+                 tm->infrastructure_failures == 1 &&
+                 tm->tun_output_errors == 0 &&
+                 tm->broker_duplicate_closes == 0;
+      if (!pass)
+        snprintf (tm->error, sizeof (tm->error),
+                  "unexpected-infrastructure-result expected=%s(%u) "
+                  "actual=%s(%u) broker=%u/%u output=%u/%u direct-send=%u "
+                  "rewritten=%u endpoint=%u/%u transport=%u infrastructure=%u "
+                  "tun-output-errors=%u duplicate-close=%u",
+                  oi3_broker_result_name (tm->expected_infrastructure_failure),
+                  tm->expected_infrastructure_failure,
+                  oi3_broker_result_name (tm->broker_result),
+                  tm->broker_result, tm->broker_bind_calls,
+                  tm->broker_protect_calls, tm->output_packets,
+                  tm->output_direct, tm->direct_send_events,
+                  tm->return_rewritten, tm->endpoint_received,
+                  tm->endpoint_replied, tm->transport_failures,
+                  tm->infrastructure_failures, tm->tun_output_errors,
+                  tm->broker_duplicate_closes);
+      return;
+    }
   if (tm->normal_stop_requested) {
     /* oi3_finish() is called only after the owner token has been reclaimed,
      * so residue zero is already an admission/settlement gate.  Preserve
@@ -3085,6 +3181,7 @@ oi3_finish_for (vlib_main_t *vm, oi3_main_t *tm)
    * session.  Only a successful positive TUN flow is eligible for the
    * per-generation re-arm. */
   if (!tm->tun_mode || oi3_is_expected_negative_cell (tm) ||
+      tm->expected_infrastructure_failure ||
       tm->expected_real_no_reply || tm->expected_real_reset ||
       tm->expected_real_policy_drop || tm->normal_stop_requested ||
       tm->underlay_invalidated || tm->overload_expected)
@@ -3096,6 +3193,7 @@ oi3_finish_for (vlib_main_t *vm, oi3_main_t *tm)
                   tm->cell == OI3_CELL_NO_REPLY;
   keep_tun = tm->tun_mode && !tm->error[0] && !tm->fault_injected &&
              !tm->normal_stop_requested && !tm->underlay_invalidated &&
+             !tm->expected_infrastructure_failure &&
              !tm->expected_real_no_reply && !tm->expected_real_reset &&
              !tm->expected_real_policy_drop &&
              tm->tun_output_errors == 0 && tm->vpp_buffer_residue == 0 &&
@@ -3106,6 +3204,7 @@ oi3_finish_for (vlib_main_t *vm, oi3_main_t *tm)
                                   tm->return_rewritten != 0))));
   if (tm->tun_mode && !negative_keep &&
       !oi3_is_expected_negative_cell (tm) &&
+      !tm->expected_infrastructure_failure &&
       !tm->expected_real_no_reply && !tm->expected_real_reset &&
       !tm->expected_real_policy_drop &&
       !tm->fault_injected && !tm->underlay_invalidated &&
@@ -3155,27 +3254,32 @@ oi3_finish_for (vlib_main_t *vm, oi3_main_t *tm)
     }
   }
   tm->finish_ns = oi3_now_ns ();
-  cleanup_result = tm->error[0]
-                   ? "FAIL"
-                   : (tm->fault_injected
-                      ? "PASS_EXPECTED_FAULT"
-                      : (tm->underlay_invalidated
-                         ? "PASS_EXPECTED_UNDERLAY_INVALIDATION"
-                      : (tm->normal_stop_requested
-                            ? "PASS_EXPECTED_STOP"
-                      : (tm->overload_expected
-                         ? "PASS_EXPECTED_OVERLOAD"
-                      : (tm->expected_real_reset
-                         ? "PASS_EXPECTED_REAL_RESET"
-                      : (tm->expected_real_no_reply
-                         ? "PASS_EXPECTED_REAL_NO_REPLY"
-                      : (tm->expected_real_policy_drop
-                         ? "PASS_EXPECTED_REAL_POLICY_DROP"
-                      : (tm->expected_transport_timeout
-                         ? "PASS_EXPECTED_AMBIENT_TIMEOUT"
-                      : (oi3_is_expected_negative_cell (tm)
-                         ? "PASS_EXPECTED_FAILURE" : "PASS")))))))));
+  if (tm->error[0])
+    cleanup_result = "FAIL";
+  else if (tm->fault_injected)
+    cleanup_result = "PASS_EXPECTED_FAULT";
+  else if (tm->underlay_invalidated)
+    cleanup_result = "PASS_EXPECTED_UNDERLAY_INVALIDATION";
+  else if (tm->normal_stop_requested)
+    cleanup_result = "PASS_EXPECTED_STOP";
+  else if (tm->overload_expected)
+    cleanup_result = "PASS_EXPECTED_OVERLOAD";
+  else if (tm->expected_infrastructure_failure)
+    cleanup_result = "PASS_EXPECTED_INFRA_FAILURE";
+  else if (tm->expected_real_reset)
+    cleanup_result = "PASS_EXPECTED_REAL_RESET";
+  else if (tm->expected_real_no_reply)
+    cleanup_result = "PASS_EXPECTED_REAL_NO_REPLY";
+  else if (tm->expected_real_policy_drop)
+    cleanup_result = "PASS_EXPECTED_REAL_POLICY_DROP";
+  else if (tm->expected_transport_timeout)
+    cleanup_result = "PASS_EXPECTED_AMBIENT_TIMEOUT";
+  else if (oi3_is_expected_negative_cell (tm))
+    cleanup_result = "PASS_EXPECTED_FAILURE";
+  else
+    cleanup_result = "PASS";
   if (tm->tun_mode && !oi3_is_expected_negative_cell (tm) &&
+      !tm->expected_infrastructure_failure &&
       !tm->expected_real_no_reply && !tm->expected_real_reset &&
       !tm->expected_real_policy_drop &&
       !tm->fault_injected && !tm->underlay_invalidated &&
@@ -3613,7 +3717,26 @@ oi3_worker_run_for (vlib_main_t *vm, vlib_node_runtime_t *node, u32 kind,
   }
   if (kind == 1) {
     if (tm->phase != OI3_WAIT_BROKER) return;
-    if (tm->broker_result != OI2_RESULT_SUCCESS) { tm->infrastructure_failures++; oi3_error ("broker completion failure"); return; }
+    if (tm->broker_result != OI2_RESULT_SUCCESS) {
+      tm->infrastructure_failures++;
+      fprintf (stderr,
+               "oi3 broker-completion result=%s(%u) expected=%s(%u) "
+               "infrastructure-fault=1 owner=%u generation=%llu\n",
+               oi3_broker_result_name (tm->broker_result),
+               tm->broker_result,
+               oi3_broker_result_name (tm->expected_infrastructure_failure),
+               tm->expected_infrastructure_failure,
+               tm->owner_id, (unsigned long long)tm->generation);
+      if (tm->expected_infrastructure_failure != tm->broker_result)
+        oi3_error ("broker completion failure");
+      else {
+        tm->phase = OI3_STOPPING;
+        tm->finish_requested = 1;
+        atomic_store_explicit (&tm->multi_admission_open, 0,
+                               memory_order_release);
+      }
+      return;
+    }
     fprintf (stderr, "oi3 broker-completion result=SUCCESS token=%llu generation=%llu "
              "owner=%u\n", (unsigned long long)tm->token, (unsigned long long)tm->generation, tm->target_thread);
     tm->phase = OI3_SUBMIT;
@@ -4274,6 +4397,13 @@ oi3_multi_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
     expected_failure && !strcmp (expected_failure, "real-reset");
   u32 expected_real_policy_drop =
     expected_failure && !strcmp (expected_failure, "real-policy-drop");
+  u32 expected_infrastructure_failure = OI2_RESULT_SUCCESS;
+  if (expected_failure && !strcmp (expected_failure, "bind-failure"))
+    expected_infrastructure_failure = OI2_RESULT_BIND_FAILURE;
+  else if (expected_failure && !strcmp (expected_failure, "protect-failure"))
+    expected_infrastructure_failure = OI2_RESULT_PROTECT_FAILURE;
+  else if (expected_failure && !strcmp (expected_failure, "broker-unavailable"))
+    expected_infrastructure_failure = OI2_RESULT_BROKER_UNAVAILABLE;
   oi3_multi.hash_seed = 1469598103934665603ULL;
   if (oi3_multi.request_fd < 0 || oi3_multi.completion_fd < 0)
     return clib_error_return (0, "OI4 multi broker endpoint is invalid");
@@ -4287,6 +4417,9 @@ oi3_multi_tun_command_fn (vlib_main_t *vm, unformat_input_t *input,
       oi3_multi.owners[owner].expected_real_reset = expected_real_reset;
       oi3_multi.owners[owner].expected_real_policy_drop =
         expected_real_policy_drop;
+      oi3_multi.owners[owner].expected_infrastructure_failure =
+        expected_infrastructure_failure == OI2_RESULT_SUCCESS
+          ? 0 : expected_infrastructure_failure;
     }
   oi3_multi.active = 1;
   int flags = fcntl (fd, F_GETFL, 0);

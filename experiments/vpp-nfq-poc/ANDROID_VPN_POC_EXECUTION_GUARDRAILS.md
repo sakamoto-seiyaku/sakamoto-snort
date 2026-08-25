@@ -23,7 +23,7 @@ substitute for a local oracle.
 
 ## Why this runbook exists
 
-S140--S184 showed that a target failure, a POC-design defect, an invalid run,
+S140--S185 showed that a target failure, a POC-design defect, an invalid run,
 and an architecture hotspot can look identical at the App timeout surface.
 Small execution agents repeatedly lost time by acting on the last visible
 symptom instead of joining App, TUN, policy, owner, broker, connector, fixture,
@@ -80,6 +80,7 @@ renaming timeout as refusal, or moving the injection to a shallower substitute.
 | VPN selected as its own underlay | VPN-F029 | Enumerate candidates, reject every VPN transport, record the selected physical handle, then bind and protect. Fail closed when no physical Network exists. |
 | Public or unbound endpoint used as an oracle | S140, VPN-F055, VPN-F058 | Use a controlled LAN listener and prove readiness, reachability, and the exact action. An unbound TCP port commonly yields post-handshake timeout through this stack; it is not a refusal oracle. |
 | Timeout conflated with reset, refusal, policy drop, or infrastructure failure | VPN-F032, VPN-F053, VPN-F055, VPN-F058 | Each outcome needs a distinct observed event. Timeout proves only deadline expiry. Reset/refusal requires owner-observed socket evidence; policy drop requires zero broker/socket; infrastructure failure requires an exact broker result. |
+| Bind/protect/broker failure phases share one oracle | S185 / VPN-F059 | Keep pre-connector infrastructure failures on the broker branch, but assert their phase-specific contract exactly: bind failure is broker result `BIND_FAILURE` with bind/protect `1/0`; protect failure is `PROTECT_FAILURE` with `1/1`; broker unavailable is `BROKER_UNAVAILABLE` with `0/0`. Do not reuse success-path bind/protect counters or treat App timeout as the proof. |
 | Async UID sentinel treated as a terminal result | VPN-F026, VPN-F057 | Treat `uid=-1` as `MISS_SUBMITTED`, not Unknown/terminal. Join completion and scoped cache hit with a bounded barrier or use a production replacement seam. |
 | App exclusion used as policy-drop evidence | VPN-F056 | Inject/observe policy at the registered TUN/VPP pre-owner seam. Prove the dropped tuple entered TUN and created no owner, broker, or connector work. |
 | Positive cleanup rules reused for negative or stop cells | VPN-F032, VPN-F034, VPN-F053 | Define cell-aware terminal outcomes. Keep Policy Verdict, Transport Outcome, Infrastructure Fault, explicit stop, and cleanup-marker timing separate. |

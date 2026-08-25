@@ -8,7 +8,7 @@ this campaign document records scope and evidence rather than a parallel
 backlog.
 
 Status: research contract, 2026-08-23
-Updated: 2026-08-25 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure)
+Updated: 2026-08-25 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation)
 Tracker: SAKAMOTO-131
 Scope: non-root Android VPN/TUN Runtime Profile
 
@@ -655,6 +655,22 @@ freezes the campaign.  Pre-connect refusal, public-Internet behavior,
 arbitrary teardown mapping, and production timeout constants remain non-claims
 unless separately registered.
 
+S185 closes the bounded B2 infrastructure-failure branch for the same
+full-device AppA -> VpnService -> OI3 multi path.  The correction keeps
+bind/protect/broker failure at the broker boundary instead of relabelling App
+timeouts as transport or policy evidence.  Accepted run
+`20260825-213903-524622` in
+`evidence/s185-b2-infrastructure-failures-20260825-run1/` passed positive UDP
+DNS plus forced bind failure, forced protect failure, and broker unavailable
+cells.  Each failure recorded the exact expected broker result and phase
+accounting (`BIND_FAILURE` `1/0`, `PROTECT_FAILURE` `1/1`,
+`BROKER_UNAVAILABLE` `0/0`), one infrastructure failure, zero transport
+failure, no fixture query, no TUN output, no Direct send, and zero post-run
+VPP/tun0 residue.  This supports bounded infrastructure-failure separation;
+it does not close post-connect transport failure, pre-connect
+`ECONNREFUSED`, public-Internet behavior, production capacity, or production
+timeout constants.
+
 ## 8. Conclusion vocabulary
 
 Cell-level result:
@@ -745,6 +761,7 @@ This contract does not claim:
 - [S182 B2 real policy-drop execution](./S182_B2_REAL_POLICY_DROP_EXECUTION.md)
 - [S183 B2 real per-App UID-drop execution](./S183_B2_REAL_UID_DROP_EXECUTION.md)
 - [S184 B2 real LAN TCP RST hotspot](./S184_B2_REAL_RST_HOTSPOT.md)
+- [S185 B2 infrastructure failure execution](./S185_B2_INFRASTRUCTURE_FAILURE_EXECUTION.md)
 - [POC Finding Ledger](./POC_FINDING_LEDGER.md)
 - [Android VPN Evidence Gap Map](./ANDROID_VPN_EVIDENCE_GAP_MAP.md)
 - [Evidence-Guided Android VPN POC Campaign Specification](./ANDROID_VPN_POC_CAMPAIGN_SPEC.md)

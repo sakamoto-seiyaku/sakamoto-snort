@@ -94,6 +94,7 @@ Map rather than encoded as TODOs here.
 | VPN-F056 | S182 representative real policy drop needs an OI3 dispatcher seam, not Android app exclusion | `CLOSED_FOR_PRE_OWNER_POLICY_DROP_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F057 | S183 OI3 UID gate treated async owner-lookup sentinel as terminal | `CLOSED_FOR_BOUNDED_UID_GATE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F058 | S184 owner-observed real LAN TCP RST required a narrow downstream reset propagation seam | `CLOSED_FOR_BOUNDED_REAL_RST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F059 | S185 bind/protect/broker infrastructure failures require phase-specific broker accounting | `CLOSED_FOR_BOUNDED_INFRA_FAILURE_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -1982,6 +1983,50 @@ Map rather than encoded as TODOs here.
 - **Status:** `CLOSED_FOR_BOUNDED_REAL_RST_SLICE`; the S184 hotspot stop is
   lifted.  Full details: `S184_B2_REAL_RST_HOTSPOT.md`.
 
+### VPN-F059 -- S185 bind/protect/broker infrastructure failure oracle
+
+- **First observation:** S185 initially had the same visible App surface for
+  all target cells: `udp_datagram_sent/dns_response_timeout`.  Without a
+  phase-specific native oracle, bind failure, protect failure, broker
+  unavailable, policy drop, no-reply, and transport timeout can all collapse
+  into the same app-level timeout.
+- **Root cause:** HIGH confidence POC-oracle gap.  The infrastructure branch is
+  pre-connector but not monolithic.  A bind failure should attempt bind and
+  stop before protect; a protect failure should bind, attempt protect, and stop
+  before transport; broker unavailable should not attempt bind or protect at
+  all.  Reusing one “broker failed” assertion either over-accepts the wrong
+  phase or rejects a valid phase-specific result.
+- **POC correction:** OI3 now maps `oi3ExpectedFailure=bind-failure`,
+  `protect-failure`, and `broker-unavailable` to exact OI2 broker request
+  flags and completion enums.  The classifier requires exact broker result,
+  exact bind/protect phase counts, zero TUN output, zero Direct send, zero
+  fixture query, zero transport failure, one infrastructure failure, and exact
+  settlement.  The S185 wrapper enables only the positive UDP DNS control and
+  the three infrastructure cells.
+- **Closure evidence:** Accepted run
+  `evidence/s185-b2-infrastructure-failures-20260825-run1/` /
+  `20260825-213903-524622` passed all four cells on VPN APK
+  `5ab5ef07e178ee4e0f613c7d7b231b355088953a1e517fc075ffb1a72baaaf8a`,
+  AppA APK
+  `05a6081804235ba8618cd1d27f329c9e7080161661f8144fd6034388acc9b24c`,
+  OI3 plugin
+  `2ad3068daa32aa788933bb947f0f09cfed52b283e9bae72fd222772022d6fe89`,
+  and HEV
+  `420e67e71029888c3d6423b24a513bf6ed760fd159762903f22ee4235d016466`.
+  The run recorded `pass_count=4`, `failure_count=0`, no design gaps, and
+  zero post-run `vpp`/`tun0` residue.  Native CSV rows recorded
+  `EXPECTED_BIND_FAILURE` with `brokerInfra=1/0/0`,
+  `EXPECTED_PROTECT_FAILURE` with `brokerInfra=0/1/0`, and
+  `EXPECTED_BROKER_UNAVAILABLE` with `brokerInfra=0/0/1`; all failure cells
+  had `transportFailures=0` and `infrastructureFailures=1`.
+- **Non-claim:** This closes only bounded infrastructure-failure separation on
+  the selected full-device AppA/OI3 multi path.  It is not policy-drop,
+  post-connect transport failure, pre-connect `ECONNREFUSED`, public-Internet,
+  production capacity, production timeout, Doze, soak, or complete distinct-App
+  evidence.
+- **Status:** `CLOSED_FOR_BOUNDED_INFRA_FAILURE_SLICE`.  Full details:
+  `S185_B2_INFRASTRUCTURE_FAILURE_EXECUTION.md`.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2086,7 +2131,11 @@ Map rather than encoded as TODOs here.
   closure run records AppA `dns_response_reset`,
   `PASS_EXPECTED_REAL_RESET`, one transport failure, zero infrastructure
   failure, exact settlement, and zero residue.  A duplicate-log verifier
-  false negative was corrected without rerunning valid device evidence.
+  false negative was corrected without rerunning valid device evidence. S185
+  adds and closes F059 for the infrastructure-failure oracle: bind failure,
+  protect failure, and broker unavailable must use exact broker result and
+  phase-specific bind/protect accounting instead of one shared timeout/broker
+  assertion.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
@@ -2150,6 +2199,7 @@ Map rather than encoded as TODOs here.
 | S167 | IPv6 UDP UID allow/drop extension | A2 protocol evidence |
 | S168 | Multi-owner teardown deferred-drain correction and regression | VPN-F042 |
 | S184 | Real LAN TCP RST observation and bounded downstream propagation closure | VPN-F058 |
+| S185 | Bind/protect/broker infrastructure failure separation | VPN-F059 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 

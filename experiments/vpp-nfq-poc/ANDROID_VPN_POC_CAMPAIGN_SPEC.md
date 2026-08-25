@@ -7,7 +7,7 @@ artifact/fixture validity gates, bounded retry rule, and hotspot stop rule.
 Plane remains the source of truth for open execution work.
 
 Date: 2026-08-23
-Updated: 2026-08-25 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure)
+Updated: 2026-08-25 (S140 run-validity preflight; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S165 HEV external-ingress correction; S166 owner-resolver runner correction; S167 IPv6 UDP UID extension; S168 multi-owner teardown correction, fourth recurrence, WSL2 echo fixture preflight, source-port-base harness correction, preflighted UDP echo-loss finding; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation)
 Plane owner: SAKAMOTO-137
 Output level: concrete POC design; no experiment executed by this document
 
@@ -1060,6 +1060,23 @@ close full E2.
   bind/protect failure, or infrastructure failure. Pre-connect refusal,
   public-Internet behavior, arbitrary teardown mapping, and production timeout
   constants remain non-claims unless registered later.
+- **S185 B2 infrastructure-failure status:** `PASS`.
+  S185 closes the bounded bind/protect/broker failure-separation slice on the
+  same full-device AppA -> VpnService -> OI3 multi path.  The hotspot was the
+  oracle: bind failure, protect failure, and broker unavailable cannot share a
+  single “broker failed” counter.  The corrected contract requires exact
+  broker result and phase accounting: bind failure is `BIND_FAILURE` with
+  bind/protect `1/0`, protect failure is `PROTECT_FAILURE` with `1/1`, and
+  broker unavailable is `BROKER_UNAVAILABLE` with `0/0`. Accepted run
+  `evidence/s185-b2-infrastructure-failures-20260825-run1/` /
+  `20260825-213903-524622` passed positive UDP DNS plus
+  `bind-failure-udp-dns`, `protect-failure-udp-dns`, and
+  `broker-unavailable-udp-dns` with `pass_count=4`, `failure_count=0`, no
+  design gaps, and zero post-run `vpp`/`tun0` residue.  All failure cells
+  stopped before fixture query, TUN output, Direct send, policy drop, and
+  transport failure.  Do not treat S185 as post-connect transport failure,
+  pre-connect `ECONNREFUSED`, public-Internet behavior, production capacity,
+  or production timeout evidence.
 - **Non-claims:** Release performance/power budgets, battery certification,
   production constants, or a formal zero-copy investment verdict.
 - **Conditional copy branch:** keep VPN-F018 paused if end-to-end gates pass.  If

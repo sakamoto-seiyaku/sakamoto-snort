@@ -29,6 +29,9 @@ NO_REPLY_SOURCE_PORT="${NO_REPLY_SOURCE_PORT:-$((SOURCE_PORT_BASE + 2))}"
 TCP_TIMEOUT_SOURCE_PORT="${TCP_TIMEOUT_SOURCE_PORT:-${REFUSED_SOURCE_PORT:-$((SOURCE_PORT_BASE + 3))}}"
 POLICY_DROP_SOURCE_PORT="${POLICY_DROP_SOURCE_PORT:-$((SOURCE_PORT_BASE + 4))}"
 UID_DROP_SOURCE_PORT="${UID_DROP_SOURCE_PORT:-$((SOURCE_PORT_BASE + 5))}"
+INFRA_BIND_SOURCE_PORT="${INFRA_BIND_SOURCE_PORT:-$((SOURCE_PORT_BASE + 6))}"
+INFRA_PROTECT_SOURCE_PORT="${INFRA_PROTECT_SOURCE_PORT:-$((SOURCE_PORT_BASE + 7))}"
+INFRA_BROKER_SOURCE_PORT="${INFRA_BROKER_SOURCE_PORT:-$((SOURCE_PORT_BASE + 8))}"
 B1_TIMEOUT_MS="${B1_TIMEOUT_MS:-2500}"
 B1_PAYLOAD_HEX="${B1_PAYLOAD_HEX:-123401000001000000000000076578616d706c6503636f6d0000010001}"
 FIXTURE_HOST="${FIXTURE_HOST:-}"
@@ -39,8 +42,12 @@ TCP_TIMEOUT_PORT="${TCP_TIMEOUT_PORT:-${REFUSED_PORT:-53543}}"
 TCP_EXPECTED_FAILURE="${TCP_EXPECTED_FAILURE:-}"
 POLICY_DROP_PORT="${POLICY_DROP_PORT:-53544}"
 UID_DROP_PORT="${UID_DROP_PORT:-53545}"
+INFRA_BIND_PORT="${INFRA_BIND_PORT:-53547}"
+INFRA_PROTECT_PORT="${INFRA_PROTECT_PORT:-53548}"
+INFRA_BROKER_PORT="${INFRA_BROKER_PORT:-53549}"
 INCLUDE_POLICY_DROP="${INCLUDE_POLICY_DROP:-false}"
 INCLUDE_UID_DROP="${INCLUDE_UID_DROP:-false}"
+INCLUDE_INFRA_FAILURES="${INCLUDE_INFRA_FAILURES:-false}"
 INCLUDE_NO_REPLY="${INCLUDE_NO_REPLY:-true}"
 INCLUDE_TCP_TIMEOUT="${INCLUDE_TCP_TIMEOUT:-true}"
 STAGE_PREFIX="${STAGE_PREFIX:-S181}"
@@ -90,6 +97,8 @@ REMOTE_HEV_LOG="$VPN_LOGS/vpp-hev.log"
 REMOTE_PROTECT_LOG="$VPN_LOGS/vpp-protect.log"
 REMOTE_OI3_BROKER_LOG="$VPN_LOGS/vpp-oi3-broker.log"
 REMOTE_OWNER_GATE_LOG="$VPN_LOGS/vpp-owner-gate.log"
+REMOTE_FORCE_BIND="$VPN_FILES/force-bind-failure"
+REMOTE_FORCE_PROTECT="$VPN_FILES/force-protect-failure"
 
 FIXTURE_PID=""
 exec > >(tee "$RUN_LOG") 2>&1
@@ -146,6 +155,7 @@ stop_vpn() {
 
 cleanup() {
   stop_vpn
+  adb_read "rm -f '$REMOTE_FORCE_BIND' '$REMOTE_FORCE_PROTECT'" || true
   if [[ -n "$FIXTURE_PID" ]]; then
     kill "$FIXTURE_PID" >/dev/null 2>&1 || true
     wait "$FIXTURE_PID" >/dev/null 2>&1 || true
@@ -203,7 +213,11 @@ policy_drop_port = int(sys.argv[5])
 uid_drop_port = int(sys.argv[6])
 include_policy_drop = sys.argv[7].lower() == "true"
 include_uid_drop = sys.argv[8].lower() == "true"
-log_path = sys.argv[9]
+infra_bind_port = int(sys.argv[9])
+infra_protect_port = int(sys.argv[10])
+infra_broker_port = int(sys.argv[11])
+include_infra_failures = sys.argv[12].lower() == "true"
+log_path = sys.argv[13]
 
 def log(event, **fields):
     fields["event"] = event
@@ -274,6 +288,16 @@ def udp_uid_drop_observer_loop():
         log("uid_drop_udp_query", peer=f"{addr[0]}:{addr[1]}",
             port=uid_drop_port, length=len(query), query_id=query[:2].hex())
 
+def infra_observer_loop(port, ready_event, query_event):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((bind_host, port))
+    log(ready_event, bind_host=bind_host, port=port)
+    while True:
+        query, addr = sock.recvfrom(4096)
+        log(query_event, peer=f"{addr[0]}:{addr[1]}",
+            port=port, length=len(query), query_id=query[:2].hex())
+
 def assert_tcp_timeout_port_is_unbound():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -290,6 +314,16 @@ if include_policy_drop:
     threading.Thread(target=udp_policy_drop_observer_loop, daemon=True).start()
 if include_uid_drop:
     threading.Thread(target=udp_uid_drop_observer_loop, daemon=True).start()
+if include_infra_failures:
+    threading.Thread(target=infra_observer_loop,
+                     args=(infra_bind_port, "infra_bind_ready", "infra_bind_query"),
+                     daemon=True).start()
+    threading.Thread(target=infra_observer_loop,
+                     args=(infra_protect_port, "infra_protect_ready", "infra_protect_query"),
+                     daemon=True).start()
+    threading.Thread(target=infra_observer_loop,
+                     args=(infra_broker_port, "infra_broker_ready", "infra_broker_query"),
+                     daemon=True).start()
 while True:
     time.sleep(3600)
 PY
@@ -303,9 +337,14 @@ wait_fixture_ready() {
         && grep -q '"event": "tcp_timeout_port_unbound"' "$FIXTURE_LOG" 2>/dev/null; then
       if [[ "$INCLUDE_POLICY_DROP" != "true" ]] \
           || grep -q '"event": "policy_drop_udp_ready"' "$FIXTURE_LOG" 2>/dev/null; then
-        if [[ "$INCLUDE_UID_DROP" != "true" ]] \
-            || grep -q '"event": "uid_drop_udp_ready"' "$FIXTURE_LOG" 2>/dev/null; then
-          return 0
+      if [[ "$INCLUDE_UID_DROP" != "true" ]] \
+          || grep -q '"event": "uid_drop_udp_ready"' "$FIXTURE_LOG" 2>/dev/null; then
+          if [[ "$INCLUDE_INFRA_FAILURES" != "true" ]] \
+              || (grep -q '"event": "infra_bind_ready"' "$FIXTURE_LOG" 2>/dev/null \
+                  && grep -q '"event": "infra_protect_ready"' "$FIXTURE_LOG" 2>/dev/null \
+                  && grep -q '"event": "infra_broker_ready"' "$FIXTURE_LOG" 2>/dev/null); then
+            return 0
+          fi
         fi
       fi
     fi
@@ -432,8 +471,12 @@ write_run_provenance() {
     echo "tcp_expected_failure=$TCP_EXPECTED_FAILURE"
     echo "policy_drop_port=$POLICY_DROP_PORT"
     echo "uid_drop_port=$UID_DROP_PORT"
+    echo "infra_bind_port=$INFRA_BIND_PORT"
+    echo "infra_protect_port=$INFRA_PROTECT_PORT"
+    echo "infra_broker_port=$INFRA_BROKER_PORT"
     echo "include_policy_drop=$INCLUDE_POLICY_DROP"
     echo "include_uid_drop=$INCLUDE_UID_DROP"
+    echo "include_infra_failures=$INCLUDE_INFRA_FAILURES"
     echo "include_no_reply=$INCLUDE_NO_REPLY"
     echo "include_tcp_timeout=$INCLUDE_TCP_TIMEOUT"
     echo "claim_boundary=$(effective_claim_boundary)"
@@ -502,14 +545,17 @@ run_b1_intent() {
 }
 
 run_cell() {
-  local cell="$1" protocol="$2" dns="$3" source_port="$4" destination_port="$5" expected_failure="${6:-}" block_ip4_dst="${7:-}" block_owner_uid="${8:-}"
+  local cell="$1" protocol="$2" dns="$3" source_port="$4" destination_port="$5" expected_failure="${6:-}" block_ip4_dst="${7:-}" block_owner_uid="${8:-}" force_file="${9:-}"
   local stage="$STAGE_PREFIX-$cell"
   local cell_dir="$CELL_ROOT/$cell"
   mkdir -p "$cell_dir"
-  echo "cell=$cell stage=$stage protocol=$protocol dns=$dns source=$source_port destination=$FIXTURE_HOST:$destination_port expected_failure=$expected_failure block_ip4_dst=$block_ip4_dst block_owner_uid=$block_owner_uid"
+  echo "cell=$cell stage=$stage protocol=$protocol dns=$dns source=$source_port destination=$FIXTURE_HOST:$destination_port expected_failure=$expected_failure block_ip4_dst=$block_ip4_dst block_owner_uid=$block_owner_uid force_file=$force_file"
   stop_vpn
   adb_cmd shell am force-stop "$APP_PACKAGE" >/dev/null 2>&1 || true
-  adb_read "rm -f '$APP_B1_LOG' '$REMOTE_UID_CONTRACT_LOG' '$REMOTE_VPN_SESSION' '$REMOTE_VPP_START' '$REMOTE_CLI_LOG' '$REMOTE_STDOUT_LOG' '$REMOTE_HEV_LOG' '$REMOTE_PROTECT_LOG' '$REMOTE_OI3_BROKER_LOG' '$REMOTE_OWNER_GATE_LOG'"
+  adb_read "rm -f '$APP_B1_LOG' '$REMOTE_UID_CONTRACT_LOG' '$REMOTE_VPN_SESSION' '$REMOTE_VPP_START' '$REMOTE_CLI_LOG' '$REMOTE_STDOUT_LOG' '$REMOTE_HEV_LOG' '$REMOTE_PROTECT_LOG' '$REMOTE_OI3_BROKER_LOG' '$REMOTE_OWNER_GATE_LOG' '$REMOTE_FORCE_BIND' '$REMOTE_FORCE_PROTECT'"
+  if [[ -n "$force_file" ]]; then
+    adb_read "touch '$force_file'"
+  fi
   adb_read "ps -A -o USER,PID,PPID,RSS,NAME,ARGS 2>/dev/null || ps -A" >"$cell_dir/processes-before.txt"
   adb_cmd logcat -c >/dev/null 2>&1 || true
   local start_rc intent_rc vpp_pid residual_vpp tun0_text tun0_after
@@ -524,6 +570,7 @@ run_cell() {
   sleep "$POST_B1_NATIVE_SETTLE_SECONDS"
   capture_cell_common "$cell_dir"
   stop_vpn
+  adb_read "rm -f '$REMOTE_FORCE_BIND' '$REMOTE_FORCE_PROTECT'"
   residual_vpp="$(adb_read "pidof vpp 2>/dev/null | awk '{print \$1}'" | tr -d '\n')"
   tun0_text="$(adb_read "ip link show tun0 2>/dev/null || true")"
   printf '%s\n' "$tun0_text" >"$cell_dir/tun0-after.txt"
@@ -542,6 +589,7 @@ run_cell() {
     echo "expected_failure=$expected_failure"
     echo "block_ip4_dst=$block_ip4_dst"
     echo "block_owner_uid=$block_owner_uid"
+    echo "force_file=$force_file"
     echo "start_rc=$start_rc"
     echo "intent_rc=$intent_rc"
     echo "residual_vpp=$residual_vpp"
@@ -555,6 +603,7 @@ summarize_all() {
     "$POSITIVE_PORT" "$NO_REPLY_PORT" "$TCP_TIMEOUT_PORT" \
     "$INCLUDE_POLICY_DROP" "$POLICY_DROP_PORT" \
     "$INCLUDE_UID_DROP" "$UID_DROP_PORT" \
+    "$INCLUDE_INFRA_FAILURES" "$INFRA_BIND_PORT" "$INFRA_PROTECT_PORT" "$INFRA_BROKER_PORT" \
     "$INCLUDE_NO_REPLY" "$INCLUDE_TCP_TIMEOUT" "$TCP_EXPECTED_FAILURE" \
     "$STAGE_PREFIX" "$RUNNER_SCHEMA" "$RUNNER_SCOPE" \
     "$(effective_claim_boundary)" "$(effective_non_claim)" <<'PY'
@@ -583,14 +632,18 @@ include_policy_drop = sys.argv[15].lower() == "true"
 policy_drop_port = int(sys.argv[16])
 include_uid_drop = sys.argv[17].lower() == "true"
 uid_drop_port = int(sys.argv[18])
-include_no_reply = sys.argv[19].lower() == "true"
-include_tcp_timeout = sys.argv[20].lower() == "true"
-tcp_expected_failure = sys.argv[21]
-stage_prefix = sys.argv[22]
-runner_schema = sys.argv[23]
-runner_scope = sys.argv[24]
-claim_boundary = sys.argv[25]
-non_claim = sys.argv[26]
+include_infra_failures = sys.argv[19].lower() == "true"
+infra_bind_port = int(sys.argv[20])
+infra_protect_port = int(sys.argv[21])
+infra_broker_port = int(sys.argv[22])
+include_no_reply = sys.argv[23].lower() == "true"
+include_tcp_timeout = sys.argv[24].lower() == "true"
+tcp_expected_failure = sys.argv[25]
+stage_prefix = sys.argv[26]
+runner_schema = sys.argv[27]
+runner_scope = sys.argv[28]
+claim_boundary = sys.argv[29]
+non_claim = sys.argv[30]
 
 fixture_events = []
 if fixture_log.exists():
@@ -625,7 +678,7 @@ def last_app_record(cell_dir, stage):
 def native_stats(cell_dir):
     text = ""
     for name in ("native-combined.log", "vpp-stdout.log", "vpp-cli.log",
-                 "vpp-oi3-broker.log", "vpp-owner-gate.log"):
+                 "vpp-oi3-broker.log", "vpp-owner-gate.log", "logcat.txt"):
         path = cell_dir / name
         if path.exists():
             text += "\n" + path.read_text(encoding="utf-8", errors="replace")
@@ -665,6 +718,24 @@ def native_stats(cell_dir):
                     rewritten_cleanup = max(rewritten_cleanup, value)
     return {
         "broker_success": len(re.findall(r"\boi3 broker-completion result=SUCCESS", text)),
+        "broker_bind_failure": int(re.search(
+            r"\boi3 broker-completion result=BIND_FAILURE\(2\) "
+            r"expected=BIND_FAILURE\(2\) .*infrastructure-fault=1", text)
+            is not None),
+        "broker_protect_failure": int(re.search(
+            r"\boi3 broker-completion result=PROTECT_FAILURE\(3\) "
+            r"expected=PROTECT_FAILURE\(3\) .*infrastructure-fault=1", text)
+            is not None),
+        "broker_unavailable": int(re.search(
+            r"\boi3 broker-completion result=BROKER_UNAVAILABLE\(4\) "
+            r"expected=BROKER_UNAVAILABLE\(4\) .*infrastructure-fault=1", text)
+            is not None),
+        "forced_bind_failure": int("forced Network.bindSocket failure" in text),
+        "forced_protect_failure": int("forced VpnService.protect failure" in text),
+        "bind_socket_success": len(re.findall(
+            r"Network\.bindSocket fd=.* result=true", text)),
+        "protect_socket_success": len(re.findall(
+            r"VpnService\.protect fd=.* result=true", text)),
         "tun_output": len(re.findall(r"\boi3 tun-output length=[1-9][0-9]* result=OK", text)),
         "direct_send": len(re.findall(r"\boi3 direct-send length=[1-9][0-9]*", text)),
         "cleanup_results": cleanup_results,
@@ -713,6 +784,12 @@ if include_policy_drop:
     cell_names.append("policy-drop-udp-dns")
 if include_uid_drop:
     cell_names.append("uid-drop-udp-dns")
+if include_infra_failures:
+    cell_names.extend([
+        "bind-failure-udp-dns",
+        "protect-failure-udp-dns",
+        "broker-unavailable-udp-dns",
+    ])
 for cell in cell_names:
     cell_dir = cell_root / cell
     props = read_props(cell_dir / "cell.properties")
@@ -861,6 +938,87 @@ for cell in cell_names:
         native_expected = int(native_observed and stats["cleanup_fail"] == 0)
         if app_valid and fixture_valid and not native_observed:
             design_gap = "native-tun-gate-did-not-enforce-app-uid-before-oi3-multi"
+    elif cell == "bind-failure-udp-dns":
+        fixture_valid = int(
+            any(e.get("event") == "infra_bind_ready" and e.get("port") == infra_bind_port
+                for e in fixture_events)
+            and not any(e.get("event") == "infra_bind_query"
+                        and e.get("port") == infra_bind_port
+                        for e in fixture_events)
+        )
+        app_valid = int(record.get("send_connect_outcome") == "udp_datagram_sent"
+                        and record.get("return_outcome") == "dns_response_timeout"
+                        and record.get("tuple_attempted") is True)
+        native_observed = int(stats["broker_bind_failure"] == 1
+                              and stats["forced_bind_failure"] == 1
+                              and stats["bind_socket_success"] == 0
+                              and stats["forced_protect_failure"] == 0
+                              and stats["protect_socket_success"] == 0
+                              and stats["direct_send"] == 0
+                              and stats["tun_output"] == 0
+                              and stats["transport_failures"] == 0
+                              and stats["infrastructure_failures"] == 1)
+        native_expected = int(native_observed and stats["cleanup_fail"] == 0
+                              and "EXPECTED_BIND_FAILURE"
+                              in stats["cleanup_outcomes"]
+                              and "PASS_EXPECTED_INFRA_FAILURE"
+                              in stats["cleanup_results"])
+        if app_valid and fixture_valid and not native_observed:
+            design_gap = "bind-failure-did-not-stop-before-transport"
+    elif cell == "protect-failure-udp-dns":
+        fixture_valid = int(
+            any(e.get("event") == "infra_protect_ready" and e.get("port") == infra_protect_port
+                for e in fixture_events)
+            and not any(e.get("event") == "infra_protect_query"
+                        and e.get("port") == infra_protect_port
+                        for e in fixture_events)
+        )
+        app_valid = int(record.get("send_connect_outcome") == "udp_datagram_sent"
+                        and record.get("return_outcome") == "dns_response_timeout"
+                        and record.get("tuple_attempted") is True)
+        native_observed = int(stats["broker_protect_failure"] == 1
+                              and stats["forced_bind_failure"] == 0
+                              and stats["bind_socket_success"] >= 1
+                              and stats["forced_protect_failure"] == 1
+                              and stats["protect_socket_success"] == 0
+                              and stats["direct_send"] == 0
+                              and stats["tun_output"] == 0
+                              and stats["transport_failures"] == 0
+                              and stats["infrastructure_failures"] == 1)
+        native_expected = int(native_observed and stats["cleanup_fail"] == 0
+                              and "EXPECTED_PROTECT_FAILURE"
+                              in stats["cleanup_outcomes"]
+                              and "PASS_EXPECTED_INFRA_FAILURE"
+                              in stats["cleanup_results"])
+        if app_valid and fixture_valid and not native_observed:
+            design_gap = "protect-failure-did-not-stop-before-transport"
+    elif cell == "broker-unavailable-udp-dns":
+        fixture_valid = int(
+            any(e.get("event") == "infra_broker_ready" and e.get("port") == infra_broker_port
+                for e in fixture_events)
+            and not any(e.get("event") == "infra_broker_query"
+                        and e.get("port") == infra_broker_port
+                        for e in fixture_events)
+        )
+        app_valid = int(record.get("send_connect_outcome") == "udp_datagram_sent"
+                        and record.get("return_outcome") == "dns_response_timeout"
+                        and record.get("tuple_attempted") is True)
+        native_observed = int(stats["broker_unavailable"] == 1
+                              and stats["forced_bind_failure"] == 0
+                              and stats["bind_socket_success"] == 0
+                              and stats["forced_protect_failure"] == 0
+                              and stats["protect_socket_success"] == 0
+                              and stats["direct_send"] == 0
+                              and stats["tun_output"] == 0
+                              and stats["transport_failures"] == 0
+                              and stats["infrastructure_failures"] == 1)
+        native_expected = int(native_observed and stats["cleanup_fail"] == 0
+                              and "EXPECTED_BROKER_UNAVAILABLE"
+                              in stats["cleanup_outcomes"]
+                              and "PASS_EXPECTED_INFRA_FAILURE"
+                              in stats["cleanup_results"])
+        if app_valid and fixture_valid and not native_observed:
+            design_gap = "broker-unavailable-did-not-stop-before-transport"
     if startup_valid and residue_valid and app_valid and fixture_valid and native_expected:
         verdict = "PASS"
     elif startup_valid and residue_valid and app_valid and fixture_valid and native_observed and design_gap:
@@ -883,6 +1041,13 @@ for cell in cell_names:
         "cleanupLastResult": stats["cleanup_last_result"],
         "cleanupLastOutcome": stats["cleanup_last_outcome"],
         "brokerSuccess": stats["broker_success"],
+        "brokerBindFailure": stats["broker_bind_failure"],
+        "brokerProtectFailure": stats["broker_protect_failure"],
+        "brokerUnavailable": stats["broker_unavailable"],
+        "forcedBindFailure": stats["forced_bind_failure"],
+        "forcedProtectFailure": stats["forced_protect_failure"],
+        "bindSocketSuccess": stats["bind_socket_success"],
+        "protectSocketSuccess": stats["protect_socket_success"],
         "tunOutput": stats["tun_output"],
         "directSend": stats["direct_send"],
         "transportFailures": stats["transport_failures"],
@@ -964,7 +1129,9 @@ for row in rows:
         "cell={cell} verdict={verdict} appValid={appValid} fixtureValid={fixtureValid} "
         "nativeObserved={nativeObserved} nativeExpected={nativeExpected} "
         "cleanup={cleanupResults}/{cleanupOutcomes} app={sendConnectOutcome}/{returnOutcome} "
-        "transportFailures={transportFailures} policyDrop={policyDrop} "
+        "transportFailures={transportFailures} infrastructureFailures={infrastructureFailures} "
+        "brokerInfra={brokerBindFailure}/{brokerProtectFailure}/{brokerUnavailable} "
+        "bindProtect={bindSocketSuccess}/{protectSocketSuccess} policyDrop={policyDrop} "
         "gateDrop={gateUidDrop} gateForward={gateForward} designGap={designGap} "
         "residualVpp={residualVpp} tun0={tun0After}".format(**row)
     )
@@ -986,10 +1153,10 @@ unzip -l "$APK" "lib/arm64-v8a/libhev-socks5-tunnel.so" >/dev/null
 
 FIXTURE_HOST="$(discover_fixture_host)"
 [[ -n "$FIXTURE_HOST" ]] || { echo "FIXTURE_HOST unavailable; set it explicitly" >&2; exit 2; }
-echo "fixture_host=$FIXTURE_HOST bind=$FIXTURE_BIND_HOST positive=$POSITIVE_PORT no_reply=$NO_REPLY_PORT tcp_timeout=$TCP_TIMEOUT_PORT policy_drop=$POLICY_DROP_PORT uid_drop=$UID_DROP_PORT include_policy_drop=$INCLUDE_POLICY_DROP include_uid_drop=$INCLUDE_UID_DROP"
+echo "fixture_host=$FIXTURE_HOST bind=$FIXTURE_BIND_HOST positive=$POSITIVE_PORT no_reply=$NO_REPLY_PORT tcp_timeout=$TCP_TIMEOUT_PORT policy_drop=$POLICY_DROP_PORT uid_drop=$UID_DROP_PORT infra_bind=$INFRA_BIND_PORT infra_protect=$INFRA_PROTECT_PORT infra_broker=$INFRA_BROKER_PORT include_policy_drop=$INCLUDE_POLICY_DROP include_uid_drop=$INCLUDE_UID_DROP include_infra_failures=$INCLUDE_INFRA_FAILURES"
 write_fixture_script
 : >"$FIXTURE_LOG"
-python3 "$FIXTURE_SCRIPT" "$FIXTURE_BIND_HOST" "$POSITIVE_PORT" "$NO_REPLY_PORT" "$TCP_TIMEOUT_PORT" "$POLICY_DROP_PORT" "$UID_DROP_PORT" "$INCLUDE_POLICY_DROP" "$INCLUDE_UID_DROP" "$FIXTURE_LOG" &
+python3 "$FIXTURE_SCRIPT" "$FIXTURE_BIND_HOST" "$POSITIVE_PORT" "$NO_REPLY_PORT" "$TCP_TIMEOUT_PORT" "$POLICY_DROP_PORT" "$UID_DROP_PORT" "$INCLUDE_POLICY_DROP" "$INCLUDE_UID_DROP" "$INFRA_BIND_PORT" "$INFRA_PROTECT_PORT" "$INFRA_BROKER_PORT" "$INCLUDE_INFRA_FAILURES" "$FIXTURE_LOG" &
 FIXTURE_PID=$!
 wait_fixture_ready || { echo "fixture did not become ready" >&2; exit 2; }
 
@@ -1025,6 +1192,17 @@ if [[ "$INCLUDE_UID_DROP" == "true" ]]; then
   # then verifies that a real AppA UID block stops before the OI3 multi
   # broker/socket path.
   run_cell "uid-drop-udp-dns" "udp" "true" "$UID_DROP_SOURCE_PORT" "$UID_DROP_PORT" "" "" "$app_uid"
+fi
+if [[ "$INCLUDE_INFRA_FAILURES" == "true" ]]; then
+  run_cell "bind-failure-udp-dns" "udp" "true" \
+    "$INFRA_BIND_SOURCE_PORT" "$INFRA_BIND_PORT" \
+    "bind-failure" "" "" "$REMOTE_FORCE_BIND"
+  run_cell "protect-failure-udp-dns" "udp" "true" \
+    "$INFRA_PROTECT_SOURCE_PORT" "$INFRA_PROTECT_PORT" \
+    "protect-failure" "" "" "$REMOTE_FORCE_PROTECT"
+  run_cell "broker-unavailable-udp-dns" "udp" "true" \
+    "$INFRA_BROKER_SOURCE_PORT" "$INFRA_BROKER_PORT" \
+    "broker-unavailable"
 fi
 
 summarize_all
