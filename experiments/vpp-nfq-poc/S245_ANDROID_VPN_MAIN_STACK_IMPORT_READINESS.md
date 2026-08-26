@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `EIGHTEENTH_S71_KERNELSU_APP_AUTHORIZATION_BLOCKED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `NINETEENTH_FLOW_STACK_BACKEND_SELECTION_LANDED_KERNELSU_AUTH_PENDING_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -763,6 +763,60 @@ Remaining product work after this slice:
 2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
    selected by product runtime construction.
+
+## 2026-08-26 nineteenth import slice
+
+The next main-stack import slice landed the product runtime selection control
+point for the VPN Flow Stack backend.  This does not supply the real
+HEV/lwIP driver yet; it makes the startup path explicit so that a future driver
+can be selected by configuration instead of being unreachable behind the
+existing fd-compat default.
+
+Changes:
+
+- `RuntimeFactoryPlan` now parses stable VPN Flow Stack backend tokens:
+  - `fd-compat` / `vpn-tun-fd-compat`;
+  - `hev-lwip` / `vpn-tun-hev-lwip`.
+- Missing backend env defaults to `fd-compat` for existing launchers.
+- Unknown explicit backend env is rejected with
+  `vpn_flow_stack_backend_unknown`.
+- `daemon_main` reads `SAKAMOTO_VPN_FLOW_STACK_BACKEND` and forwards the
+  selected backend into `createStartedRuntime(...)`.
+- Android `RuntimeService` now exports
+  `SAKAMOTO_VPN_FLOW_STACK_BACKEND=vpn-tun-fd-compat` explicitly when launching
+  the current VPN product runtime.
+- The existing HEV/lwIP facade selection remains gated on both:
+  1. preferred backend is HEV/lwIP; and
+  2. a `VpnHevLwipDriver` is actually supplied.
+
+Interpretation:
+
+- This closes a startup-path seam gap: before this slice, the product daemon
+  always used the default fd compatibility backend even though the C++
+  `VpnHevLwipFlowStackBoundary` and factory plan existed.
+- The Android product path intentionally remains on `vpn-tun-fd-compat` until
+  the RuntimeService lifecycle is updated to skip the old separate
+  HEV/SOCKS transport fd handoff and a real `VpnHevLwipDriver` is supplied.
+- S70/S71 root-profile closure is still waiting on the external KernelSU app
+  authorization precondition recorded in the eighteenth slice.
+
+Validated locally:
+
+- `cmake --build --preset dev-debug --target runtime_profile_tests`: passed.
+- `build-output/cmake/dev-debug/tests/host/runtime_profile_tests`: 16 passed.
+- `tests/android/android-runtime-contract-test.sh`: passed.
+- `tests/android/runtime-contract-test.sh`: passed, including NDK daemon build,
+  debug APK build and active device-matrix static contracts.
+- `git diff --check`: passed.
+
+Remaining product work after this slice:
+
+1. Clear the KernelSU app authorization precondition and rerun S70/S71.
+2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+3. Update Android RuntimeService VPN lifecycle for the HEV/lwIP backend so it
+   does not require the historical separate HEV/SOCKS transport fd handoff.
+4. Rerun Android Direct Egress/device evidence after the real HEV/lwIP driver
+   is selected by product runtime construction.
 
 ## 2026-08-26 eighteenth import slice
 

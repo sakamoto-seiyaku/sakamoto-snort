@@ -7,6 +7,52 @@
 
 namespace SnortRuntime {
 
+VpnFlowStackRuntimeBackendSelection parseVpnFlowStackRuntimeBackend(
+    const std::string_view value) noexcept {
+    if (value == "fd-compat" || value == "vpn-tun-fd-compat") {
+        return VpnFlowStackRuntimeBackendSelection{
+            .backend = VpnFlowStackRuntimeBackend::FdCompatibility,
+            .ok = true,
+        };
+    }
+    if (value == "hev-lwip" || value == "vpn-tun-hev-lwip") {
+        return VpnFlowStackRuntimeBackendSelection{
+            .backend = VpnFlowStackRuntimeBackend::HevLwipFacade,
+            .ok = true,
+        };
+    }
+    return VpnFlowStackRuntimeBackendSelection{
+        .backend = VpnFlowStackRuntimeBackend::FdCompatibility,
+        .ok = false,
+        .errorCode = value.empty() ? "vpn_flow_stack_backend_missing"
+                                   : "vpn_flow_stack_backend_unknown",
+    };
+}
+
+VpnFlowStackRuntimeBackendSelection vpnFlowStackRuntimeBackendFromEnv(
+    const char *const value) noexcept {
+    if (value == nullptr || std::string_view{value}.empty()) {
+        return VpnFlowStackRuntimeBackendSelection{
+            .backend = VpnFlowStackRuntimeBackend::FdCompatibility,
+            .ok = true,
+        };
+    }
+    return parseVpnFlowStackRuntimeBackend(std::string_view{value});
+}
+
+std::string_view vpnFlowStackRuntimeBackendName(
+    const VpnFlowStackRuntimeBackend backend) noexcept {
+    switch (backend) {
+    case VpnFlowStackRuntimeBackend::None:
+        return "none";
+    case VpnFlowStackRuntimeBackend::FdCompatibility:
+        return "fd-compat";
+    case VpnFlowStackRuntimeBackend::HevLwipFacade:
+        return "hev-lwip";
+    }
+    return "unknown";
+}
+
 RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection) noexcept {
     return planRuntimeFactory(selection, RuntimeFactoryOptions{});
 }

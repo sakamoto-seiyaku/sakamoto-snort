@@ -10,6 +10,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <string_view>
 
 int main() {
     SnortRuntime::installSignalHandlers();
@@ -19,8 +20,25 @@ int main() {
 
     const auto selectedProfile =
         SnortRuntime::runtimeProfileFromEnv(std::getenv("SAKAMOTO_RUNTIME_PROFILE"));
+    const auto selectedVpnFlowStackBackend =
+        SnortRuntime::vpnFlowStackRuntimeBackendFromEnv(
+            std::getenv("SAKAMOTO_VPN_FLOW_STACK_BACKEND"));
+    if (!selectedVpnFlowStackBackend.ok) {
+        std::cerr << "runtime profile rejected: "
+                  << selectedVpnFlowStackBackend.errorCode << '\n';
+        return 2;
+    }
+    const char *const vpnTunFdSourceEnv =
+        std::getenv("SAKAMOTO_VPN_TUN_FD_SOURCE");
     auto runtime = SnortRuntime::createStartedRuntime(
-        selectedProfile, std::getenv("SAKAMOTO_VPN_TUN_FD_SOURCE"));
+        selectedProfile,
+        SnortRuntime::RuntimeFactoryStartOptions{
+            .vpnTunFdSource = vpnTunFdSourceEnv == nullptr
+                ? std::string_view{}
+                : std::string_view{vpnTunFdSourceEnv},
+            .preferredVpnFlowStackBackend =
+                selectedVpnFlowStackBackend.backend,
+        });
     if (!runtime.plan.launchable) {
         std::cerr << "runtime profile rejected: " << runtime.plan.errorCode << '\n';
         return runtime.plan.exitCode;

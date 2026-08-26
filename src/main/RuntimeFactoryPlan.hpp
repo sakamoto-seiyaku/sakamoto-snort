@@ -24,6 +24,13 @@ enum class VpnFlowStackRuntimeBackend {
     HevLwipFacade,
 };
 
+struct VpnFlowStackRuntimeBackendSelection {
+    VpnFlowStackRuntimeBackend backend =
+        VpnFlowStackRuntimeBackend::FdCompatibility;
+    bool ok = false;
+    std::string_view errorCode;
+};
+
 struct RuntimeFactoryOptions {
     std::string_view vpnTunFdSource;
     VpnFlowStackRuntimeBackend preferredVpnFlowStackBackend =
@@ -50,5 +57,11 @@ struct RuntimeFactoryPlan {
 [[nodiscard]] RuntimeFactoryPlan planRuntimeFactory(
     RuntimeProfileSelection selection,
     RuntimeFactoryOptions options) noexcept;
+[[nodiscard]] VpnFlowStackRuntimeBackendSelection
+parseVpnFlowStackRuntimeBackend(std::string_view value) noexcept;
+[[nodiscard]] VpnFlowStackRuntimeBackendSelection
+vpnFlowStackRuntimeBackendFromEnv(const char *value) noexcept;
+[[nodiscard]] std::string_view vpnFlowStackRuntimeBackendName(
+    VpnFlowStackRuntimeBackend backend) noexcept;
 
 } // namespace SnortRuntime

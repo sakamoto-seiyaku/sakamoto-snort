@@ -1064,6 +1064,8 @@ public final class RuntimeService extends VpnService {
                 + " SAKAMOTO_VPP_RUNTIME_DIR=" + shellQuote(runtime.getPath())
                 + " SAKAMOTO_VPP_OWNER_TOKEN=" + shellQuote(token)
                 + " SAKAMOTO_RUNTIME_PROFILE=" + shellQuote(profile.wireName)
+                + " SAKAMOTO_VPN_FLOW_STACK_BACKEND="
+                + shellQuote(RuntimeSnapshot.ADAPTER_VPN_TUN_FD_COMPAT)
                 + "; exec " + shellQuote(vpp.getPath()) + " plugin_path "
                 + shellQuote(nativeDir.getPath()) + " -c "
                 + shellQuote(new File(currentProfile, "startup.conf").getPath())

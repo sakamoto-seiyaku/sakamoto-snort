@@ -83,6 +83,41 @@ TEST(RuntimeProfileSelection, RejectsUnknownProfile) {
     EXPECT_EQ(unknown.errorCode, "runtime_profile_unknown");
 }
 
+TEST(VpnFlowStackRuntimeBackendSelection, DefaultsMissingEnvToFdCompatibility) {
+    const auto missing = SnortRuntime::vpnFlowStackRuntimeBackendFromEnv(nullptr);
+
+    EXPECT_TRUE(missing.ok);
+    EXPECT_EQ(missing.backend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::FdCompatibility);
+}
+
+TEST(VpnFlowStackRuntimeBackendSelection, AcceptsStableBackendTokens) {
+    const auto fdCompat = SnortRuntime::parseVpnFlowStackRuntimeBackend(
+        "vpn-tun-fd-compat");
+    ASSERT_TRUE(fdCompat.ok);
+    EXPECT_EQ(fdCompat.backend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::FdCompatibility);
+    EXPECT_EQ(SnortRuntime::vpnFlowStackRuntimeBackendName(fdCompat.backend),
+              "fd-compat");
+
+    const auto hevLwip = SnortRuntime::parseVpnFlowStackRuntimeBackend(
+        "vpn-tun-hev-lwip");
+    ASSERT_TRUE(hevLwip.ok);
+    EXPECT_EQ(hevLwip.backend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::HevLwipFacade);
+    EXPECT_EQ(SnortRuntime::vpnFlowStackRuntimeBackendName(hevLwip.backend),
+              "hev-lwip");
+}
+
+TEST(VpnFlowStackRuntimeBackendSelection, RejectsUnknownExplicitBackend) {
+    const auto unknown = SnortRuntime::parseVpnFlowStackRuntimeBackend("socks");
+
+    EXPECT_FALSE(unknown.ok);
+    EXPECT_EQ(unknown.backend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::FdCompatibility);
+    EXPECT_EQ(unknown.errorCode, "vpn_flow_stack_backend_unknown");
+}
+
 TEST(RuntimeFactoryPlan, SelectsRootNfqueueRuntimeForRootProfile) {
     const auto plan =
         SnortRuntime::planRuntimeFactory(SnortRuntime::parseRuntimeProfile("root"));
