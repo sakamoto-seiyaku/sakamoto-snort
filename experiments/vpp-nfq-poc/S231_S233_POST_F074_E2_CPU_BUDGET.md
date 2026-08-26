@@ -55,9 +55,9 @@ but S233's three count128 repeats did not reproduce that level of tail
 (`33ms`, `71ms`, `68ms`).  The remaining tail question is therefore a
 latency/tolerance and repeatability decision, not the resolved idle-worker CPU
 burn.  S234--S235 cover the matching post-F074 Direct/OI3 count128
-screen-off/forced-Doze cells.  HEV baseline validity, broad
-throughput/capacity CPU budgets, formal p99/tail tolerance, thermal, power,
-and soak remain open.
+screen-off/forced-Doze cells, and S236 extends the foreground shape to
+count512.  HEV baseline validity, broader throughput/capacity CPU budgets,
+formal p99/tail tolerance, thermal, power, and soak remain open.
 
 ## Next step
 
@@ -65,7 +65,7 @@ Use S231--S233 as post-F074 regression evidence for the foreground
 count-bounded CPU budget.  Continue E2 with one of these explicitly narrower
 questions:
 
-1. register and apply the S231--S235 absolute p99/tail tolerance decision;
+1. register and apply the S231--S236 absolute p99/tail tolerance decision;
 2. decide whether HEV remains a broad matched baseline or is narrowed to small
    control cells until F073 is fixed;
 3. gather broader throughput/capacity CPU plus thermal/power/soak evidence.

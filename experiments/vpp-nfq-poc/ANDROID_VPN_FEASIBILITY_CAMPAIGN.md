@@ -8,7 +8,7 @@ this campaign document records scope and evidence rather than a parallel
 backlog.
 
 Status: research contract, 2026-08-23
-Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S223 E2 write-interest, owner handoff, TCP owner lifecycle, and device-state correction; S224 current F072-candidate E1 resource trend; S225--S229 E2 CPU-budget and HEV-baseline hotspot isolation; F074 Android VPP barrier-held idle CPU closure; S231--S233 post-F074 Direct/OI3 foreground CPU-budget reruns; S234--S235 post-F074 Direct/OI3 device-state count128 reruns)
+Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S223 E2 write-interest, owner handoff, TCP owner lifecycle, and device-state correction; S224 current F072-candidate E1 resource trend; S225--S229 E2 CPU-budget and HEV-baseline hotspot isolation; F074 Android VPP barrier-held idle CPU closure; S231--S233 post-F074 Direct/OI3 foreground CPU-budget reruns; S234--S235 post-F074 Direct/OI3 device-state count128 reruns; S236 post-F074 Direct/OI3 foreground count512 rerun)
 Tracker: SAKAMOTO-131
 Scope: non-root Android VPN/TUN Runtime Profile
 
@@ -761,13 +761,17 @@ S234--S235 then reran the count128 Direct/OI3 shape under screen-off and
 forced-Doze.  Screen-off passed Direct/OI3 `128/128`, with OI3 p95/p99
 `28/71ms` and `cpuTicksDelta=336`; forced-Doze passed Direct/OI3 `128/128`,
 with OI3 p95/p99 `26/30ms` and `cpuTicksDelta=343`.
+S236 then expanded the foreground Direct/OI3 shape to count512 repeat=3.  All
+six cells passed `512/512`; OI3 p95 stayed `27--28ms`, p99 was `72/106/71ms`,
+cleanup was `516/0`, and total CPU ticks were `1015/1060/1028`.
 
 The campaign remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, but the F074
 VPP/OI3 worker CPU hotspot is closed for the selected Android idle scope and
-the tested foreground/device-state count128 Direct/OI3 scope. Full ADR-0007
-closure still needs thermal/power/soak evidence, broader OI3
-throughput/capacity CPU budget evidence, a HEV-baseline decision, and a
-pre-registered p99/tail tolerance decision over S231--S235.
+the tested foreground/device-state count128 plus foreground count512 Direct/OI3
+scope. Full ADR-0007 closure still needs thermal/power/soak evidence, broader
+OI3 throughput/capacity CPU budget evidence beyond this bounded count512
+shape, a HEV-baseline decision, and a pre-registered p99/tail tolerance
+decision over S231--S236.
 
 ## 8. Conclusion vocabulary
 

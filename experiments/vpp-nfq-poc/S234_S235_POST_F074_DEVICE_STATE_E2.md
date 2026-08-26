@@ -59,8 +59,9 @@ broader OI3 throughput/capacity CPU, thermal, power, and long soak remain open.
 ## Next step
 
 Use S234--S235 as post-F074 device-state regression evidence for the Direct/OI3
-count128 shape.  Continue E2 with:
+count128 shape.  S236 extends the foreground shape to count512.  Continue E2
+with:
 
-1. a pre-registered p99/tail tolerance decision over S231--S235;
+1. a pre-registered p99/tail tolerance decision over S231--S236;
 2. a HEV-baseline disposition or narrowing decision for F073;
 3. broader throughput/capacity CPU plus thermal/power/soak evidence.

@@ -2534,6 +2534,18 @@ Map rather than encoded as TODOs here.
   screen-off/forced-Doze Direct/OI3 count128 as an active post-F074 gap for
   the tested shape, but still do not close HEV baseline, thermal/power/soak,
   broader capacity budgets, or formal p99/tail tolerance.
+- **S236 post-F074 count512 CPU/capacity update:** S236
+  `evidence/s236-e2-count512-post-f074-foreground-direct-oi3-20260826/`
+  (`runId=20260826-091906-854703`) reran foreground Direct/OI3 count512 with
+  three repeats against the local WSL2/LAN fixture.  All six cells passed
+  `512/512` with `failureCount=0`.  Direct p99 was `16/14/14ms`, with total
+  CPU ticks `275/276/291`.  OI3 p95 was `28/28/27ms`, p99 was `72/106/71ms`,
+  total CPU ticks were `1015/1060/1028`, VPP CPU ticks were `648/677/660`,
+  total sched runtime was `8315614058/8662396779/8290621322`, VPP sched
+  runtime was `5996366238/6236450702/6001958110`, and cleanup was `516/0` in
+  every repeat.  This extends the repaired Direct/OI3 CPU/capacity envelope to
+  a bounded count512 foreground shape; p99/tail tolerance remains a formal
+  decision.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a broader E2 budget closure or for an explicit
@@ -2825,15 +2837,18 @@ Map rather than encoded as TODOs here.
   OI3 passed `128/128` with p95/p99 `28/71ms` and `cpuTicksDelta=336`, and
   forced-Doze OI3 passed `128/128` with p95/p99 `26/30ms` and
   `cpuTicksDelta=343`.
+  S236 reran foreground Direct/OI3 count512 repeat=3; OI3 passed all three
+  `512/512` cells with p95 `28/28/27ms`, p99 `72/106/71ms`, cleanup `516/0`,
+  and total CPU ticks `1015/1060/1028`.
 - **Supported claim:** The F074 idle-scope blocker is closed for the selected
   Android VPP idle profile, bounded OI3 UDP wake smoke, Direct/OI3 foreground
-  count64/count128 CPU-budget reruns, and Direct/OI3 count128 screen-off /
-  forced-Doze reruns.  The corrected CPU behavior is no longer explained by
-  UID/policy, WSL2 fixture behavior, HEV baseline instability, app probe
-  pacing, or the F072 TCP lifecycle seam.
+  count64/count128/count512 CPU-budget reruns, and Direct/OI3 count128
+  screen-off / forced-Doze reruns.  The corrected CPU behavior is no longer
+  explained by UID/policy, WSL2 fixture behavior, HEV baseline instability,
+  app probe pacing, or the F072 TCP lifecycle seam.
 - **Non-claim:** This does not close the full ADR-0007 E2 performance verdict,
   broad throughput/capacity CPU budgets, power/thermal/long-soak behavior, the
-  S231--S235 p99/tail-tolerance question, the HEV baseline finding `VPN-F073`,
+  S231--S236 p99/tail-tolerance question, the HEV baseline finding `VPN-F073`,
   or production removal/retention of the diagnostic CLI counters.
 - **Next correction direction:** Keep S229 as an Android idle regression cell
   and proceed with the remaining E2 budget/tolerance work without treating
