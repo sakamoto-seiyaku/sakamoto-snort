@@ -55,6 +55,20 @@ class VerifyS229Oi3IdleCpuTest(unittest.TestCase):
         self.assertIn("vpp-stdout.log", self.runner)
         self.assertIn("logcat -d -s SnortVpnLite:I SnortVpnLiteNative:I", self.runner)
 
+    def test_runner_captures_vpp_cli_idle_snapshots(self):
+        self.assertIn('require_apk_member "lib/arm64-v8a/libvppctl.so"', self.runner)
+        self.assertIn("REMOTE_CLI_SOCK=", self.runner)
+        self.assertIn("native_library_dir()", self.runner)
+        self.assertIn("capture_vpp_cli_snapshot()", self.runner)
+        self.assertIn("show version", self.runner)
+        self.assertIn("show threads", self.runner)
+        self.assertIn("show runtime", self.runner)
+        self.assertIn("show runtime verbose", self.runner)
+        self.assertIn("show node", self.runner)
+        self.assertIn("show errors", self.runner)
+        self.assertIn('capture_vpp_cli_snapshot "before"', self.runner)
+        self.assertIn('capture_vpp_cli_snapshot "after"', self.runner)
+
     def test_runner_drives_explicit_oi3_cleanup_and_residue_checks(self):
         self.assertIn('run_oi3_control "multi-stop"', self.runner)
         self.assertIn("wait_oi3_cleanup", self.runner)

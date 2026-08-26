@@ -37,6 +37,7 @@ VALIDITY="$RESULT_DIR/run-validity-$RUN_ID.txt"
 REMOTE_FILES="/data/user/0/$PACKAGE/files"
 REMOTE_LOGS="$REMOTE_FILES/vpp/logs"
 REMOTE_RUNTIME="$REMOTE_FILES/vpp/runtime"
+REMOTE_CLI_SOCK="$REMOTE_RUNTIME/cli.sock"
 REMOTE_CLI_LOG="$REMOTE_LOGS/vpp-cli.log"
 REMOTE_STDOUT_LOG="$REMOTE_LOGS/vpp-stdout.log"
 REMOTE_HEV_LOG="$REMOTE_LOGS/vpp-hev.log"
@@ -77,6 +78,8 @@ preflight_apk() {
     "oi3-final-topology"
   require_apk_member "lib/arm64-v8a/libhev-socks5-tunnel.so" \
     "oi3-owner-context"
+  require_apk_member "lib/arm64-v8a/libvppctl.so" \
+    "idle-worker-cli-diagnostics"
 }
 
 stop_vpn() {
@@ -100,6 +103,10 @@ trap cleanup EXIT
 package_uid() {
   adb_su "cmd package list packages -U 2>/dev/null | sed -n 's#^package:$PACKAGE uid:\\([0-9][0-9]*\\).*#\\1#p' | head -n 1" \
     | tr -d '\r\n'
+}
+
+native_library_dir() {
+  adb_read "pm path '$PACKAGE' | sed -n 's#^package:\\(.*\\)/base.apk\$#\\1/lib/arm64#p' | head -n 1"
 }
 
 process_snapshot() {
@@ -176,6 +183,38 @@ capture_startup_files() {
   adb_read "cat '$REMOTE_RUNTIME/startup.exec' 2>/dev/null || true" >"$RUN_ROOT/startup.exec"
   adb_read "cat '$REMOTE_CLI_LOG' 2>/dev/null || true" >"$RUN_ROOT/vpp-cli-start.log"
   adb_read "cat '$REMOTE_STDOUT_LOG' 2>/dev/null || true" >"$RUN_ROOT/vpp-stdout-start.log"
+}
+
+capture_vpp_cli_snapshot() {
+  local phase="$1"
+  local snapshot_dir="$RUN_ROOT/cli-$phase"
+  local native_dir
+  native_dir="$(native_library_dir)"
+  mkdir -p "$snapshot_dir"
+  {
+    echo "phase=$phase"
+    echo "native_dir=$native_dir"
+    echo "cli_sock=$REMOTE_CLI_SOCK"
+    echo "device_time=$(adb_read 'date -Ins')"
+  } >"$snapshot_dir/paths.txt"
+
+  if [[ -z "$native_dir" ]]; then
+    echo "native library dir unavailable" >"$snapshot_dir/error.txt"
+    return 0
+  fi
+
+  adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show version" \
+    | tr -d '\r' >"$snapshot_dir/show-version.txt" 2>&1 || true
+  adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show threads" \
+    | tr -d '\r' >"$snapshot_dir/show-threads.txt" 2>&1 || true
+  adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show runtime" \
+    | tr -d '\r' >"$snapshot_dir/show-runtime.txt" 2>&1 || true
+  adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show runtime verbose" \
+    | tr -d '\r' >"$snapshot_dir/show-runtime-verbose.txt" 2>&1 || true
+  adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show node" \
+    | tr -d '\r' >"$snapshot_dir/show-node.txt" 2>&1 || true
+  adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show errors" \
+    | tr -d '\r' >"$snapshot_dir/show-errors.txt" 2>&1 || true
 }
 
 capture_logs() {
@@ -384,6 +423,7 @@ app_pid="$(find_pid "$snapshot_before" app "$uid")"
 vpp_pid="$(find_pid "$snapshot_before" vpp "$uid")"
 [[ -n "$vpp_pid" && "$vpp_pid" != 0 ]] || { echo "vpp pid unavailable after start" >&2; exit 1; }
 echo "sample=before appPid=${app_pid:-0} vppPid=$vpp_pid"
+capture_vpp_cli_snapshot "before"
 capture_vpp_tasks before "$vpp_pid" "$RUN_ROOT/vpp-tasks-before.raw"
 task_table_from_raw "$RUN_ROOT/vpp-tasks-before.raw" "$RUN_ROOT/vpp-tasks-before.csv"
 
@@ -395,6 +435,7 @@ printf '%s\n' "$snapshot_after" >"$RUN_ROOT/processes-after-idle.txt"
 vpp_pid_after="$(find_pid "$snapshot_after" vpp "$uid")"
 [[ -n "$vpp_pid_after" && "$vpp_pid_after" != 0 ]] || { echo "vpp pid unavailable after idle" >&2; exit 1; }
 echo "sample=after vppPid=$vpp_pid_after"
+capture_vpp_cli_snapshot "after"
 capture_vpp_tasks after "$vpp_pid_after" "$RUN_ROOT/vpp-tasks-after.raw"
 task_table_from_raw "$RUN_ROOT/vpp-tasks-after.raw" "$RUN_ROOT/vpp-tasks-after.csv"
 write_thread_delta_csv "$RUN_ROOT/vpp-tasks-before.csv" "$RUN_ROOT/vpp-tasks-after.csv" "$THREAD_DELTA_CSV"
