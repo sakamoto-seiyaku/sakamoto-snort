@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `SIXTEENTH_S58_POLICY_DROP_TUPLE_EVIDENCE_SEAM_CORRECTED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `SEVENTEENTH_S58_UDP_L4_WORKFLOW_EVIDENCE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -763,6 +763,74 @@ Remaining product work after this slice:
 2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
    selected by product runtime construction.
+
+## 2026-08-26 seventeenth import slice
+
+The corrected S58 UDP/product Activity workflow passed on device after native
+policy-drop tuple evidence was added.
+
+- Result directory:
+  `build-output/s58-vpn-l4-product-workflow-matrix/20260826-1320-s58-tuple-current-apk`.
+- APK build and install passed:
+  - `apk.sha256=964377be9620659d5468a6aafd18a3921c51174891ec1639fcf264949626a8c4`.
+- VPN start/control passed:
+  - `start.result=PASS`;
+  - `control.HELLO=PASS`.
+- Product-authored UDP L4 block passed:
+  - `policy_evaluate_block.evaluateWinner=DROP/L4/rule=5963268475143753088`;
+  - `block.revision=2`.
+- First unknown UDP packet was forwarded rather than held/dropped:
+  - `first.forwardedPacketsDelta=1`;
+  - `first.uidUnknownFallbackPacketsDelta=2`;
+  - `first.droppedPacketsDelta=0`;
+  - `first.probe.result=udp_datagram_sent`;
+  - `first.noRecognitionHold=claimed`.
+- Late attribution and next same-tuple drop passed:
+  - `attribution.apply=PASS`;
+  - `second.droppedPacketsDelta=1`;
+  - `second.attributionResolutionsDelta=1`;
+  - `second.policyDropActivity.uid=12629`;
+  - `second.policyDropActivity.stage=L4`;
+  - `second.policyDropActivity.remote=198.51.100.58:443`;
+  - `second.policyDropActivity.sourcePort=45658`;
+  - `second.policyDropActivity.protocol=17`;
+  - `second.policyDropActivity.deviceDirection=output`.
+- Activity-derived L4 prefill passed:
+  - `drop.l4Prefill.result=available`;
+  - summary includes `subject=android.uid:12629`,
+    `destinationCidr=198.51.100.58/32`, `destinationPort=443` and
+    `ipProtocol=17`;
+  - `drop.activityPrefill=PASS`.
+- Product-authored restore and allowed FlowEntry evidence passed:
+  - `policy_evaluate_open.evaluateWinner=PASS_NEXT/None/rule=0`;
+  - `open.forwardedPacketsDelta=1`;
+  - `open.droppedPacketsDelta=0`;
+  - `open.allowedFlowActivity.uid=12629`;
+  - `open.allowedFlowActivity.remote=198.51.100.58:443`;
+  - `open.allowedFlowActivity.protocol=17`;
+  - `open.allowedFlowActivity.deviceDirection=output`;
+  - `open.restoreAllowedFlowEntry=PASS`.
+- Cleanup passed and `matrix.result=PASS`.
+
+Interpretation:
+
+- S58 now proves the intended VPN-side product workflow without relying on
+  invalid fixed TCP source-port reuse:
+  product-authored L4 block, first-unknown no-hold behavior, late attribution,
+  next-packet L4 drop, Activity-derived L4 prefill and product-authored restore
+  are all evidenced through the current APK.
+- The hotspot was a POC/product evidence seam issue, not a new dataplane drop
+  failure.
+- This is still evidence for the current `vpn-tun-fd-compat` backend. It does
+  not close the real HEV/lwIP Direct Egress driver import.
+
+Remaining product work after this slice:
+
+1. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+2. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
+   selected by product runtime construction.
+3. Run the dual-profile closure gate if the remaining import plan still wants a
+   full current-head closure bundle before the real driver lands.
 
 ## 2026-08-26 sixteenth import slice
 
