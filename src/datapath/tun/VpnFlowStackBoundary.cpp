@@ -30,6 +30,73 @@ namespace {
     return written == static_cast<ssize_t>(packet.size());
 }
 
+[[nodiscard]] VpnFlowStackReturnResult readPacket(
+    const int fd, const std::span<std::byte> packetBuffer) noexcept {
+    if (fd < 0) {
+        return {
+            .status = VpnFlowStackReturnStatus::TransportUnavailable,
+            .bytes = 0,
+        };
+    }
+    if (packetBuffer.empty()) {
+        return {
+            .status = VpnFlowStackReturnStatus::PacketTooLarge,
+            .bytes = 0,
+        };
+    }
+
+    pollfd target{
+        .fd = fd,
+        .events = POLLIN | POLLERR | POLLHUP,
+        .revents = 0,
+    };
+    const int pollResult = ::poll(&target, 1, 0);
+    if (pollResult < 0) {
+        return {
+            .status = VpnFlowStackReturnStatus::TransportFailed,
+            .bytes = 0,
+        };
+    }
+    if (pollResult == 0) {
+        return {
+            .status = VpnFlowStackReturnStatus::NoPacket,
+            .bytes = 0,
+        };
+    }
+    if ((target.revents & POLLERR) != 0) {
+        return {
+            .status = VpnFlowStackReturnStatus::TransportFailed,
+            .bytes = 0,
+        };
+    }
+    if ((target.revents & POLLIN) == 0) {
+        return {
+            .status = (target.revents & POLLHUP) != 0
+                ? VpnFlowStackReturnStatus::Eof
+                : VpnFlowStackReturnStatus::NoPacket,
+            .bytes = 0,
+        };
+    }
+
+    const ssize_t bytes = ::read(fd, packetBuffer.data(), packetBuffer.size());
+    if (bytes < 0) {
+        return {
+            .status = VpnFlowStackReturnStatus::TransportFailed,
+            .bytes = 0,
+        };
+    }
+    if (bytes == 0) {
+        return {
+            .status = VpnFlowStackReturnStatus::Eof,
+            .bytes = 0,
+        };
+    }
+    return {
+        .status = VpnFlowStackReturnStatus::Packet,
+        .bytes = static_cast<std::size_t>(bytes),
+    };
+}
+
 } // namespace
 
 VpnFdFlowStackBoundary::VpnFdFlowStackBoundary(int &transportFd) noexcept
@@ -60,6 +127,17 @@ VpnFlowStackAdmissionResult VpnFdFlowStackBoundary::admitPacket(
         .status = VpnFlowStackAdmissionStatus::Accepted,
         .canonicalOwner = request.canonicalOwner,
     };
+}
+
+VpnFlowStackReturnResult VpnFdFlowStackBoundary::receiveReturnPacket(
+    const std::span<std::byte> packetBuffer) noexcept {
+    if (transportFd_ == nullptr) {
+        return {
+            .status = VpnFlowStackReturnStatus::TransportUnavailable,
+            .bytes = 0,
+        };
+    }
+    return readPacket(*transportFd_, packetBuffer);
 }
 
 VpnFlowStackDriveStatus VpnFdFlowStackBoundary::driveOwner(

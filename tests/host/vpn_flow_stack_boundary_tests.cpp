@@ -35,8 +35,13 @@ public:
         VpnFlowStackDriveStatus::Completed;
     VpnFlowStackWakeStatus nextWakeStatus =
         VpnFlowStackWakeStatus::Enqueued;
+    VpnFlowStackReturnResult nextReturn{
+        .status = VpnFlowStackReturnStatus::NoPacket,
+        .bytes = 0,
+    };
 
     std::uint32_t admitCalls = 0;
+    std::uint32_t returnCalls = 0;
     std::uint32_t driveCalls = 0;
     std::uint32_t finishCalls = 0;
     std::uint32_t enqueueCalls = 0;
@@ -56,6 +61,12 @@ public:
         auto result = nextAdmission;
         result.canonicalOwner = request.canonicalOwner;
         return result;
+    }
+
+    [[nodiscard]] VpnFlowStackReturnResult receiveReturnPacket(
+        const std::span<std::byte>) noexcept override {
+        ++returnCalls;
+        return nextReturn;
     }
 
     [[nodiscard]] VpnFlowStackDriveStatus driveOwner(
@@ -317,6 +328,63 @@ TEST(VpnFlowStackBoundaryTest,
 
     closeIfOpen(transportFds[0]);
     closeIfOpen(transportFds[1]);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     FdBackedReceiveReadsFlowStackReturnPacket) {
+    int transportFds[2]{-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                           transportFds),
+              0);
+    VpnFdFlowStackBoundary boundary{transportFds[0]};
+    const std::array<std::byte, 4> packet{
+        std::byte{0x45}, std::byte{0x00}, std::byte{0x00}, std::byte{0x28}};
+    ASSERT_EQ(::write(transportFds[1], packet.data(), packet.size()),
+              static_cast<ssize_t>(packet.size()));
+
+    std::array<std::byte, 64> buffer{};
+    const auto result = boundary.receiveReturnPacket(buffer);
+
+    ASSERT_TRUE(result.hasPacket());
+    EXPECT_EQ(result.bytes, packet.size());
+    EXPECT_TRUE(std::equal(
+        packet.begin(), packet.end(), buffer.begin()));
+
+    closeIfOpen(transportFds[0]);
+    closeIfOpen(transportFds[1]);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     FdBackedReceiveReportsNoPacketWithoutBlocking) {
+    int transportFds[2]{-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                           transportFds),
+              0);
+    VpnFdFlowStackBoundary boundary{transportFds[0]};
+
+    std::array<std::byte, 64> buffer{};
+    const auto result = boundary.receiveReturnPacket(buffer);
+
+    EXPECT_EQ(result.status, VpnFlowStackReturnStatus::NoPacket);
+    EXPECT_FALSE(result.hasPacket());
+    EXPECT_EQ(result.bytes, 0U);
+
+    closeIfOpen(transportFds[0]);
+    closeIfOpen(transportFds[1]);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     FdBackedReceiveReportsUnavailableWithoutTransportFd) {
+    int transportFd = -1;
+    VpnFdFlowStackBoundary boundary{transportFd};
+
+    std::array<std::byte, 64> buffer{};
+    const auto result = boundary.receiveReturnPacket(buffer);
+
+    EXPECT_EQ(result.status,
+              VpnFlowStackReturnStatus::TransportUnavailable);
+    EXPECT_FALSE(result.hasPacket());
+    EXPECT_EQ(result.bytes, 0U);
 }
 
 } // namespace

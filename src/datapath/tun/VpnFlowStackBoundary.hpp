@@ -53,6 +53,15 @@ enum class VpnFlowStackWakeStatus : std::uint8_t {
     Fault,
 };
 
+enum class VpnFlowStackReturnStatus : std::uint8_t {
+    Packet,
+    NoPacket,
+    TransportUnavailable,
+    TransportFailed,
+    PacketTooLarge,
+    Eof,
+};
+
 enum class VpnFlowStackServiceAction : std::uint8_t {
     LocalDrive,
     CrossOwnerWake,
@@ -110,6 +119,15 @@ struct VpnFlowStackServiceResult final {
     }
 };
 
+struct VpnFlowStackReturnResult final {
+    VpnFlowStackReturnStatus status = VpnFlowStackReturnStatus::NoPacket;
+    std::size_t bytes = 0;
+
+    [[nodiscard]] bool hasPacket() const noexcept {
+        return status == VpnFlowStackReturnStatus::Packet && bytes > 0;
+    }
+};
+
 /**
  * Deep seam for Android VPN post-policy Direct Egress.
  *
@@ -126,6 +144,9 @@ public:
     [[nodiscard]] virtual VpnFlowStackAdmissionResult admitPacket(
         const VpnFlowStackAdmissionRequest &request,
         std::span<const std::byte> l3Packet) noexcept = 0;
+
+    [[nodiscard]] virtual VpnFlowStackReturnResult receiveReturnPacket(
+        std::span<std::byte> packetBuffer) noexcept = 0;
 
     [[nodiscard]] virtual VpnFlowStackDriveStatus driveOwner(
         std::uint32_t owner, VpnFlowStackDriveBudget budget) noexcept = 0;
@@ -150,6 +171,9 @@ public:
     [[nodiscard]] VpnFlowStackAdmissionResult admitPacket(
         const VpnFlowStackAdmissionRequest &request,
         std::span<const std::byte> l3Packet) noexcept override;
+
+    [[nodiscard]] VpnFlowStackReturnResult receiveReturnPacket(
+        std::span<std::byte> packetBuffer) noexcept override;
 
     [[nodiscard]] VpnFlowStackDriveStatus driveOwner(
         std::uint32_t owner, VpnFlowStackDriveBudget budget) noexcept override;

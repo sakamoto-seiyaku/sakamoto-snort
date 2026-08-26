@@ -36,7 +36,11 @@ regression 固定为本地有界 drive，不通过 cross-owner wake 自投递。
 产生的 canonical owner、facts、policy revision 和 TUN/FlowStack provenance，不需要在 VPN transport
 adapter 里重新 parse/hash。第三个切片把现有 transport-fd outbound 占位实现收进
 `VpnFdFlowStackBoundary`，`VpnTunFdRuntime` 改为通过 `VpnFlowStackAdmissionRequest` 入栈；
-fd 缺失和 fd backpressure 仍分别记录为 transport unsupported/failed，不伪装成 policy drop。
+fd 缺失和 fd backpressure 仍分别记录为 transport unsupported/failed，不伪装成 policy drop。第四个
+切片继续把 transport-return poll/read 路径收进 `VpnFlowStackBoundary::receiveReturnPacket()`；
+`VpnTunFdRuntime` 不再直接读取 `transportFd_`，而是从 Flow Stack seam 获取回包，再通过共享
+`VpnTunFlowAdapter` 图路径检查后写回 TUN。当前仍未导入 HEV/lwIP/OI3 产品实现；下一步应在该
+Interface 后替换 fd-backed 占位 Adapter。
 
 后续产品与架构决策（2026-07-19）：
 

@@ -401,57 +401,36 @@ private:
         std::size_t maxPackets,
         VpnTunPacketMetadata metadata) noexcept {
         VpnTunDrainResult result;
-        if (transportFd_ < 0 || tunFd_ < 0) {
+        if (tunFd_ < 0) {
             result.readErrors = 1;
-            result.lastErrno = transportFd_ < 0 ? ENOTCONN : EBADF;
+            result.lastErrno = EBADF;
             return result;
         }
 
         std::array<std::uint8_t, kMaxTunPacketBytes> packet{};
         for (std::size_t packetIndex = 0; packetIndex < maxPackets; ++packetIndex) {
-            pollfd fd{
-                .fd = transportFd_,
-                .events = POLLIN | POLLERR | POLLHUP,
-                .revents = 0,
-            };
-            const int pollResult = ::poll(&fd, 1, 0);
-            if (pollResult < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
+            const auto returnPacket = flowStack_.receiveReturnPacket(
+                std::as_writable_bytes(std::span<std::uint8_t>{
+                    packet.data(), packet.size()}));
+            switch (returnPacket.status) {
+            case VpnFlowStackReturnStatus::NoPacket:
+                break;
+            case VpnFlowStackReturnStatus::Eof:
+                result.eof = true;
+                break;
+            case VpnFlowStackReturnStatus::TransportUnavailable:
                 ++result.readErrors;
-                result.lastErrno = errno;
+                result.lastErrno = ENOTCONN;
                 break;
-            }
-            if (pollResult == 0) {
-                break;
-            }
-            if ((fd.revents & POLLERR) != 0) {
+            case VpnFlowStackReturnStatus::TransportFailed:
+            case VpnFlowStackReturnStatus::PacketTooLarge:
                 ++result.readErrors;
                 result.lastErrno = EIO;
                 break;
-            }
-            if ((fd.revents & POLLIN) == 0) {
-                if ((fd.revents & POLLHUP) != 0) {
-                    result.eof = true;
-                }
+            case VpnFlowStackReturnStatus::Packet:
                 break;
             }
-
-            const ssize_t bytes = ::read(transportFd_, packet.data(), packet.size());
-            if (bytes < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                }
-                ++result.readErrors;
-                result.lastErrno = errno;
-                break;
-            }
-            if (bytes == 0) {
-                result.eof = true;
+            if (!returnPacket.hasPacket()) {
                 break;
             }
 
@@ -459,8 +438,8 @@ private:
             const auto adapterResult = flowAdapter_.process(
                 VpnTunPacketDirection::TransportReturn,
                 std::span<const std::uint8_t>{
-                    packet.data(), static_cast<std::size_t>(bytes)},
-                static_cast<std::uint32_t>(bytes),
+                    packet.data(), returnPacket.bytes},
+                static_cast<std::uint32_t>(returnPacket.bytes),
                 metadata);
             if (adapterResult == VpnTunFlowAdapterResult::FlowDropped) {
                 ++result.policyDropped;
@@ -474,7 +453,7 @@ private:
                 ++result.policyBypassedWithoutTransport;
             }
             if (writePacketToTun(std::span<const std::uint8_t>{
-                    packet.data(), static_cast<std::size_t>(bytes)})) {
+                    packet.data(), returnPacket.bytes})) {
                 ++result.returnedToTun;
                 flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Succeeded);
             } else {

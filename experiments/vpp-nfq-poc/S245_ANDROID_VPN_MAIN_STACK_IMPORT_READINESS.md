@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `THIRD_FD_PLACEHOLDER_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `FOURTH_RETURN_PATH_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
 
 ## Question
 
@@ -218,6 +218,36 @@ Validated locally:
 
 - `vpn_flow_stack_boundary_tests`: 7 passed.
 - `vpn_tun_flow_adapter_tests`: 22 passed.
+
+## 2026-08-26 fourth import slice
+
+The fourth main-stack design-import slice moved the existing transport-return
+poll/read path behind the Flow Stack Boundary Interface:
+
+- `VpnFlowStackBoundary::receiveReturnPacket()` now models return-packet
+  delivery as an Interface result instead of exposing the transport fd to the
+  runtime.
+- `VpnFdFlowStackBoundary` implements the current fd-backed host/runtime
+  placeholder for return packets.
+- `VpnTunFdRuntime` no longer polls or reads `transportFd_` directly on the
+  return path.  It asks the Flow Stack seam for a return packet, then runs that
+  packet through the shared `VpnTunFlowAdapter` graph path before writing
+  accepted packets back to TUN.
+- Return status remains explicit: no packet, missing transport, transport
+  failure, oversized buffer and EOF are separated at the seam.
+
+This keeps the Adapter completion point narrow: the runtime still owns the
+final TUN write for the fd-backed placeholder, but fd readiness and packet
+receipt are no longer part of the runtime's direct transport knowledge.
+
+Validated locally:
+
+- `vpn_flow_stack_boundary_tests`: 10 passed.
+- `vpn_tun_flow_adapter_tests`: 22 passed.
+
+The next slice is to replace the fd-backed placeholder implementation behind
+`VpnFlowStackBoundary` with a product-shaped HEV/lwIP fake/adapter while
+preserving the current seam tests and fd compatibility tests.
 - `runtime_profile_tests`: 9 passed.
 
 The next slice is to define the explicit return-packet delivery path behind
