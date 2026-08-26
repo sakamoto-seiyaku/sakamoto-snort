@@ -108,6 +108,8 @@ Map rather than encoded as TODOs here.
 | VPN-F070 | OI3 connector poll missed protected write interest after TCP payload submit | `CLOSED_FOR_S200_S202_WRITE_INTEREST_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F071 | OI3 multi dispatcher-to-owner handoff and post-send read wake path caused the first residual tail | `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `CLOSED_FOR_S221_S223_MATCHED_DEVICE_STATE_E2` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F073 | HEV matched HTTP baseline is not valid above the small request-count envelope | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F074 | OI3 multi VPP workers burn CPU while idle | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2488,6 +2490,15 @@ Map rather than encoded as TODOs here.
   manifest `failureCount=0`.  This supports current-artifact repeated resource
   stability after the lifecycle correction, but it does not close throughput,
   CPU, thermal, power, long-soak, or forced-Doze latency-tolerance gates.
+- **S225--S229 CPU-budget update:** The next budget attempt split the remaining
+  F069 risk into HEV baseline validity (`VPN-F073`) and OI3 worker CPU
+  (`VPN-F074`).  HEV fails as a broad comparator around 64 requests even after
+  `allowedPackage` scoping: S227 produced `66/64`, and S228 produced `64/63`.
+  OI3 stayed correct in S227/S228 (`128/128` and `64/64`, cleanups `132/0` and
+  `68/0`) but recorded aggregate VPP sched runtime around `32s`.  S229 removed
+  traffic from the equation and still measured `vppCpuTicksDelta=2235` and
+  `vppSchedRuntimeNsDelta=22353121412` over a valid 10-second OI3 idle window,
+  dominated by `vpp_wk_0..3`.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a broader E2 budget closure or for an explicit
@@ -2667,6 +2678,91 @@ Map rather than encoded as TODOs here.
   response-complete early rearm; all have negative evidence.
 - **Status:** `CLOSED_FOR_S221_S223_MATCHED_DEVICE_STATE_E2`.  F069 remains
   open for broader E2 import gates.
+
+### VPN-F073 -- HEV matched HTTP baseline is not valid above the small request-count envelope
+
+- **First observation:** After F072 latency correctness was corrected, the
+  S172 runner was extended to measure CPU/sched budget over longer HTTP
+  windows.  The legacy HEV/tun-poc arm stopped being a clean matched baseline
+  once the request count approached the 64-request range.
+- **Evidence:** S225
+  `evidence/s225-e2-foreground-cpu-budget-current-f072-20260826/`
+  (`runId=20260826-072124-874971`) was diagnostic only for CPU because the CSV
+  parser was still wrong, but it already showed HEV `135/134` with one app
+  timeout while Direct and OI3 stayed valid.  S226
+  `evidence/s226-e2-count128-cpu-budget-current-f072-20260826/`
+  (`runId=20260826-072635-160372`) fixed the CPU CSV/parser and showed HEV
+  `128/126` with two `SocketTimeoutException`s.  S227
+  `evidence/s227-e2-count128-cpu-budget-hev-scope-fix-20260826/`
+  (`runId=20260826-073317-785774`) corrected the HEV arm to pass
+  `--es allowedPackage "$PACKAGE"`, but HEV still stopped at `66/64` with two
+  app timeouts.  S228
+  `evidence/s228-e2-count64-cpu-budget-poll-sleep-20260826/`
+  (`runId=20260826-073923-909506`) reduced the cell to 64 requests and still
+  produced HEV `64/63` with one app timeout.
+- **Root-cause confidence:** MEDIUM for "HEV baseline/harness capacity is a
+  separate problem from OI3 F072"; LOW for the exact HEV/tun-poc failure
+  mechanism.  The observed failures survive the allowed-package scoping fix and
+  cluster around the same request-count boundary.
+- **POC correction so far:** The S172 runner now scopes HEV with
+  `allowedPackage` and records CPU/sched counters, so it no longer confuses
+  ambient Android traffic with the HEV baseline.  That correction did not close
+  HEV capacity.
+- **Supported claim:** HEV remains usable as a small construction/control arm
+  in the S221--S223 style 8-request cells, but it is not a valid broad E2
+  budget comparator at 64+ sequential HTTP requests until the baseline is
+  fixed or explicitly narrowed.
+- **Non-claim:** These HEV failures do not falsify OI3 correctness, F072
+  lifecycle closure, Direct fixture reachability, or S224 resource stability.
+- **Next correction direction:** Split remaining E2 budget work so Direct/OI3
+  CPU evidence can progress without depending on the invalid HEV arm; open a
+  dedicated HEV/tun-poc baseline investigation only if a HEV comparator remains
+  required for ADR-0007.
+- **Status:** `OPEN_RISK`.
+
+### VPN-F074 -- OI3 multi VPP workers burn CPU while idle
+
+- **First observation:** S227/S228 showed valid OI3 HTTP cells with good
+  cleanup but very high VPP CPU/sched deltas.  S227 OI3 passed `128/128`,
+  p95 `26ms`, cleanup `132/0`, but recorded `totalCpuTicksDelta=3326` and
+  aggregate task sched runtime `32.507s`.  S228 OI3 passed `64/64`, p95
+  `45ms`, cleanup `68/0`, but still recorded `totalCpuTicksDelta=3295` and
+  aggregate task sched runtime `32.800s`.
+- **Idle isolation evidence:** S229
+  `evidence/s229-oi3-idle-cpu-20260826/`
+  (`runId=20260826-075047-298663`) started the current OI3 multi APK, did not
+  run any app HTTP/UDP/TCP probe, sampled VPP per-thread `/proc` counters for
+  10 seconds, and exited valid with cleanup `4/0`, no residual `vpp`, no
+  `tun0`, and matching IP rules.  The idle-only window still recorded
+  `vppCpuTicksDelta=2235` and `vppSchedRuntimeNsDelta=22353121412`.
+  Per-thread deltas identify the four VPP workers as the hotspot:
+  `vpp_wk_0..3` each consumed about `551--556` ticks and about `5.51--5.57s`
+  sched runtime in the 10-second window; `vpp_main` consumed only `23` ticks
+  and `0.218s`.
+- **Rejected POC correction:** An exploratory dirty S230 rerun changed the
+  generated startup config from `poll-sleep-usec 1000` to `10000` and rebuilt
+  the APK, but produced essentially the same idle result:
+  `vppCpuTicksDelta=2197` and `vppSchedRuntimeNsDelta=22010880110`.  The
+  source change was reverted and must not be treated as closure evidence.  The
+  useful conclusion is narrower: the current `unix poll-sleep-usec` knob is
+  not controlling the selected worker idle burn.
+- **Root-cause confidence:** HIGH that the current E2 CPU blocker is VPP/OI3
+  worker idle/run-loop behavior, not the WSL2 HTTP fixture, app HTTP probe,
+  HEV baseline, UID/policy, or the F072 TCP lifecycle seam.  The exact VPP
+  scheduling mechanism remains open.
+- **Supported claim:** Main-stack import is still blocked by E2 budget evidence
+  even though F072 latency correctness and S224 resource trend passed.  The
+  failure mode is now a CPU budget hotspot, not a dataplane correctness cliff.
+- **Non-claim:** S229 does not prove long-soak power, thermal behavior, or a
+  production wake/sleep mechanism.  It also does not authorize importing the
+  historical conditional-wake patch; the accepted per-worker decision still
+  keeps that direction on HOLD until a new registered mechanism and campaign
+  pass.
+- **Next correction direction:** Keep the S229 idle feedback loop and evaluate
+  a worker-quiescence design that is specific to the OI3/VPP worker loop.  Do
+  not keep increasing `poll-sleep-usec` as the primary fix; S230 already
+  falsified that direction for the current artifact.
+- **Status:** `OPEN_RISK`.
 
 ## Consolidation audit
 
@@ -2875,6 +2971,8 @@ Map rather than encoded as TODOs here.
 | S199--S202 | OI3 connector write-interest diagnosis and correction | VPN-F070 |
 | S203--S211 | OI3 dispatcher/owner handoff and post-send read-wake diagnosis/correction | VPN-F071 |
 | S212--S218 | OI3 TCP owner lifecycle / successor SYN / first-payload residual diagnosis | VPN-F072 |
+| S225--S228 | HEV count-bounded matched baseline timeout around 64 requests | VPN-F073 |
+| S227--S229 | OI3/VPP worker CPU budget and idle-burn isolation | VPN-F074 |
 
 ## SAKAMOTO-139 A2 addendum (2026-08-23)
 
