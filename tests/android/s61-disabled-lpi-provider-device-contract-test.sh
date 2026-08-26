@@ -31,7 +31,7 @@ grep -q 'profiles=' "$matrix"
 
 grep -q 'runtimeStart true --es runtimeProfile' "$matrix"
 grep -q 'root-nfqueue' "$matrix"
-grep -q 'vpn-tun-hev' "$matrix"
+grep -q 'vpn-tun-fd-compat' "$matrix"
 grep -q 'NFQUEUE.STATUS' "$matrix"
 grep -q 'VPN_TUN.STATUS' "$matrix"
 grep -q 'localabstract:sucre-snort-control-vnext' "$repo_root/dev/dev-android-device-lib.sh"

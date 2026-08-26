@@ -258,7 +258,7 @@ for _ in $(seq 1 45); do
       && grep -Fxq "profile=vpn" <<<"$state" \
       && grep -Fxq "health=ok" <<<"$state" \
       && grep -Fxq "coreHealth=ok" <<<"$state" \
-      && grep -Fxq "adapterReadiness=vpn-tun-hev" <<<"$state"; then
+      && grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$state"; then
     break
   fi
   sleep 1
@@ -267,7 +267,7 @@ if ! grep -Fxq "state=running" <<<"$state" \
     || ! grep -Fxq "profile=vpn" <<<"$state" \
     || ! grep -Fxq "health=ok" <<<"$state" \
     || ! grep -Fxq "coreHealth=ok" <<<"$state" \
-    || ! grep -Fxq "adapterReadiness=vpn-tun-hev" <<<"$state"; then
+    || ! grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$state"; then
   kv "start.result" "FAIL"
   cat "${RESULT_DIR}/snapshot.running" >&2
   exit 1
@@ -278,7 +278,7 @@ kv "snapshot.pid" "$(printf '%s\n' "$state" | snapshot_value pid)"
 section "runtime_log"
 adb_cmd shell run-as "$PACKAGE" cat "$LOG_PATH" >"${RESULT_DIR}/runtime-service.log" 2>/dev/null
 grep -q "vpn_tun_control_ready=ok" "${RESULT_DIR}/runtime-service.log"
-grep -q "vpn_tun_control_attach=ok adapter=vpn-tun-hev" "${RESULT_DIR}/runtime-service.log"
+grep -q "vpn_tun_control_attach=ok adapter=vpn-tun-fd-compat" "${RESULT_DIR}/runtime-service.log"
 grep -q "vpn_hev_transport=ok" "${RESULT_DIR}/runtime-service.log"
 kv "runtimeLog.attachLater" "PASS"
 
@@ -313,7 +313,7 @@ import sys
 hello = json.load(open(sys.argv[1]))
 caps = set(hello["result"]["capabilities"])
 required = {
-    "packet-adapter-vpn-tun-hev",
+    "packet-adapter-vpn-tun-fd-compat",
     "vpn-tun-fd-handoff",
     "vpn-tun-transport-fd-handoff",
     "vpn-tun-runtime-counters",

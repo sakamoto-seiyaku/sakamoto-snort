@@ -58,8 +58,8 @@ runtime construction 重跑 Direct Egress 证据。
 随后 Android production runtime contract 已同步到这两个新 token：
 `RuntimeSnapshot` 暴露 `ADAPTER_VPN_TUN_FD_COMPAT` 和 `ADAPTER_VPN_TUN_HEV_LWIP`，
 当前 VPN running snapshot 与 `ProductPacketAdapterContract.VPN_ADAPTER` 使用
-`vpn-tun-fd-compat`；旧 `vpn-tun-hev` 只应保留在历史 device evidence runner 中，不能再作为
-产品 runtime contract。
+`vpn-tun-fd-compat`；active device evidence runners 也改为该 token。旧 `vpn-tun-hev` 只应保留在
+历史 evidence 记录中，不能再作为产品 runtime contract。
 
 后续产品与架构决策（2026-07-19）：
 

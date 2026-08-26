@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `EIGHTH_ANDROID_RUNTIME_CONTRACT_SYNC_SLICE_LANDED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `NINTH_DEVICE_RUNNER_TOKEN_SYNC_SLICE_LANDED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -393,10 +393,10 @@ runtime contract with the seventh slice's adapter names:
 - Android static contract tests were updated to assert the new production
   tokens and the reserved HEV/lwIP facade token.
 
-Historical device matrix scripts still contain `vpn-tun-hev` expectations
-because they describe the pre-S245 child/SOCKS/HEV evidence frontier.  They
-must be rewritten around the product runtime construction before being used as
-new Direct Egress evidence.
+Historical evidence records still contain `vpn-tun-hev` because they describe
+the pre-S245 child/SOCKS/HEV evidence frontier.  The active device matrix
+scripts must use `vpn-tun-fd-compat` until a real HEV/lwIP facade driver is
+selected by product runtime construction.
 
 Validated locally:
 
@@ -411,3 +411,39 @@ Remaining product work after this slice:
 2. Rewrite and rerun Android Direct Egress/device evidence against product
    runtime construction and the new adapter tokens, not the historical
    OI3/vpn-lite harness.
+
+## 2026-08-26 ninth import slice
+
+The ninth main-stack design-import slice synced active Android device matrix
+runner expectations with the current product runtime adapter token:
+
+- S55 VPN transport matrix now expects `adapterReadiness=vpn-tun-fd-compat`,
+  `vpn_tun_control_attach=ok adapter=vpn-tun-fd-compat` and
+  `packet-adapter-vpn-tun-fd-compat`.
+- S56 VPN attribution matrix now expects the fd compatibility packet adapter
+  capability.
+- S58 VPN L4 workflow matrix now expects fd compatibility adapter readiness
+  and capability.
+- S61 disabled-LPI provider matrix now runs VPN status checks against
+  `vpn-tun-fd-compat`.
+- S69 product VPN runtime matrix now expects fd compatibility adapter
+  readiness, attach logs and capabilities across repeat-start cycles.
+- Corresponding Android static contract tests now assert the same token.
+
+This does not claim new device evidence.  It only prevents the next device
+run from failing before datapath validation because the product runtime now
+reports the fd compatibility Flow Stack backend explicitly.
+
+Validated locally:
+
+- `tests/android/runtime-contract-test.sh`: passed, including NDK daemon build,
+  debug APK build and active static device-matrix contracts.
+- Active device/android script search has no remaining
+  `adapterReadiness=vpn-tun-hev`, `packet-adapter-vpn-tun-hev` or
+  `vpn_tun_control_attach=ok adapter=vpn-tun-hev` expectation.
+
+Remaining product work after this slice:
+
+1. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+2. Rerun Android Direct Egress/device evidence against product runtime
+   construction and the new adapter tokens.

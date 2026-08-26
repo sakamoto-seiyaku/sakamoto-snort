@@ -180,11 +180,11 @@ state="$(wait_for_snapshot_field state running "${RESULT_DIR}/snapshot.running" 
 printf '%s\n' "$state" | grep -Fxq "profile=vpn"
 printf '%s\n' "$state" | grep -Fxq "health=ok"
 printf '%s\n' "$state" | grep -Fxq "coreHealth=ok"
-printf '%s\n' "$state" | grep -Fxq "adapterReadiness=vpn-tun-hev"
+printf '%s\n' "$state" | grep -Fxq "adapterReadiness=vpn-tun-fd-compat"
 kv "start.result" "PASS"
 kv "snapshot.state" "running"
 kv "snapshot.profile" "vpn"
-kv "snapshot.adapterReadiness" "vpn-tun-hev"
+kv "snapshot.adapterReadiness" "vpn-tun-fd-compat"
 kv "snapshot.pid" "$(printf '%s\n' "$state" | snapshot_value pid)"
 
 section "android_vpn_network"
@@ -198,7 +198,7 @@ kv "connectivity.vpnNetwork" "PASS"
 section "runtime_log"
 app_file_cat "$LOG_PATH" >"${RESULT_DIR}/runtime-service.log"
 grep -q "vpn_tun_control_ready=ok" "${RESULT_DIR}/runtime-service.log"
-grep -q "vpn_tun_control_attach=ok adapter=vpn-tun-hev" "${RESULT_DIR}/runtime-service.log"
+grep -q "vpn_tun_control_attach=ok adapter=vpn-tun-fd-compat" "${RESULT_DIR}/runtime-service.log"
 grep -q "vpn_hev_transport=ok" "${RESULT_DIR}/runtime-service.log"
 grep -q "runtime_state=running profile=vpn health=ok" "${RESULT_DIR}/runtime-service.log"
 kv "runtimeLog.vpnStartup" "PASS"
@@ -257,7 +257,7 @@ assert hello["ok"] is True
 capabilities = set(hello["result"]["capabilities"])
 for capability in [
     "snort10-base",
-    "packet-adapter-vpn-tun-hev",
+    "packet-adapter-vpn-tun-fd-compat",
     "vpn-tun-fd-handoff",
     "vpn-tun-transport-fd-handoff",
     "vpn-tun-runtime-counters",
@@ -328,7 +328,7 @@ for cycle in $(seq 1 "$S69_PRODUCT_RESTART_CYCLES"); do
   }
   printf '%s\n' "$cycle_running" | grep -Fxq "profile=vpn"
   printf '%s\n' "$cycle_running" | grep -Fxq "health=ok"
-  printf '%s\n' "$cycle_running" | grep -Fxq "adapterReadiness=vpn-tun-hev"
+  printf '%s\n' "$cycle_running" | grep -Fxq "adapterReadiness=vpn-tun-fd-compat"
   assert_tun0_present "${cycle_dir}/tun0.running"
   adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStop true \
     >"${cycle_dir}/stop.intent.log" 2>&1

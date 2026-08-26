@@ -779,7 +779,7 @@ for profile in "${profiles[@]}"; do
       }
       ;;
     vpn)
-      run_profile vpn VPN_TUN.STATUS vpn-tun-hev || {
+      run_profile vpn VPN_TUN.STATUS vpn-tun-fd-compat || {
         rc=$?
         if [[ "$rc" -eq 77 ]]; then
           write_boundary_properties "$RESULT_DIR/s61-disabled-lpi-provider.properties" "BLOCKED"

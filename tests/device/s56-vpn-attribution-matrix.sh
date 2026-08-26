@@ -328,7 +328,7 @@ state="$(wait_for_snapshot_field state running "${RESULT_DIR}/snapshot.running" 
   exit 1
 }
 printf '%s\n' "$state" | grep -Fxq "profile=vpn"
-printf '%s\n' "$state" | grep -Fxq "adapterReadiness=vpn-tun-hev"
+printf '%s\n' "$state" | grep -Fxq "adapterReadiness=vpn-tun-fd-compat"
 kv "start.result" "PASS"
 kv "snapshot.pid" "$(printf '%s\n' "$state" | snapshot_value pid)"
 
@@ -342,7 +342,7 @@ import sys
 
 hello = json.load(open(sys.argv[1]))
 capabilities = set(hello["result"]["capabilities"])
-for required in ["packet-adapter-vpn-tun-hev", "packet-policy-control",
+for required in ["packet-adapter-vpn-tun-fd-compat", "packet-policy-control",
                  "vpn-tun-runtime-counters", "vpn-tun-attribution-control"]:
     if required not in capabilities:
         raise SystemExit(f"missing capability {required}")

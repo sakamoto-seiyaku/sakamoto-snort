@@ -474,7 +474,7 @@ for _ in $(seq 1 45); do
       && grep -Fxq "profile=vpn" <<<"$state" \
       && grep -Fxq "health=ok" <<<"$state" \
       && grep -Fxq "coreHealth=ok" <<<"$state" \
-      && grep -Fxq "adapterReadiness=vpn-tun-hev" <<<"$state"; then
+      && grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$state"; then
     break
   fi
   sleep 1
@@ -483,7 +483,7 @@ if ! grep -Fxq "state=running" <<<"$state" \
     || ! grep -Fxq "profile=vpn" <<<"$state" \
     || ! grep -Fxq "health=ok" <<<"$state" \
     || ! grep -Fxq "coreHealth=ok" <<<"$state" \
-    || ! grep -Fxq "adapterReadiness=vpn-tun-hev" <<<"$state"; then
+    || ! grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$state"; then
   kv "start.result" "FAIL"
   cat "${RESULT_DIR}/snapshot.running" >&2
   exit 1
@@ -501,7 +501,7 @@ import sys
 
 caps = set(json.load(open(sys.argv[1]))["result"]["capabilities"])
 required = {
-    "packet-adapter-vpn-tun-hev",
+    "packet-adapter-vpn-tun-fd-compat",
     "packet-policy-control",
     "vpn-tun-runtime-counters",
     "vpn-tun-attribution-control",
