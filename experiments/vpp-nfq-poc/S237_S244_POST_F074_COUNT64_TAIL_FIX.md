@@ -143,6 +143,42 @@ All ten cells passed with `failureCount=0`.  OI3 results:
 S244 logs also contain `oi3 deferred-owner-drive ... reason=same-owner-rearm`,
 showing that the new same-owner path was exercised in the valid run.
 
+### F076 clean repeat-start follow-up
+
+F076 clean-single follow-up
+`evidence/f076-oi3-repeat-start-20260826-clean-single/`
+(`runId=20260826-142410-470543`) reran the OI3-only repeat-start shape with 8
+repeats and 4 requests per repeat after clearing all host runners, fixture
+ports, the Android VPN service, and device-side VPP residue.  All eight cells
+passed with `failures=0`:
+
+| Cell | Requests | p50 / p95 / p99 ms | total CPU ticks | Cleanup | Valid |
+| --- | ---: | ---: | ---: | --- | --- |
+| OI3 r1 | `4/4` | `14 / 74 / 74` | `93` | `8/0` | `1` |
+| OI3 r2 | `4/4` | `17 / 60 / 60` | `91` | `8/0` | `1` |
+| OI3 r3 | `4/4` | `15 / 21 / 21` | `88` | `8/0` | `1` |
+| OI3 r4 | `4/4` | `11 / 27 / 27` | `90` | `8/0` | `1` |
+| OI3 r5 | `4/4` | `12 / 26 / 26` | `89` | `8/0` | `1` |
+| OI3 r6 | `4/4` | `21 / 69 / 69` | `89` | `8/0` | `1` |
+| OI3 r7 | `4/4` | `15 / 71 / 71` | `89` | `8/0` | `1` |
+| OI3 r8 | `4/4` | `17 / 69 / 69` | `89` | `8/0` | `1` |
+
+Two earlier same-hour attempts are invalid and must not be promoted to F076
+evidence:
+
+- `evidence/s172-f076-repeat-20260826-rerun/`
+  (`runId=20260826-141352-810266`) was launched by a delegated agent and was
+  still running after the agent was interrupted.
+- `evidence/f076-oi3-repeat-start-20260826-mainline/`
+  (`runId=20260826-141519-908345`) was launched while the first runner still
+  owned the same Android package/VPN/log state.
+
+The two concurrent runners shared `com.sakamoto.snort.vpnlite`, the same remote
+`app-http-probe.log`, VPN service, and fixture space.  Their alternating
+`startupValid=0` / missing `app-http-probe.log` rows are classified as
+`HARNESS_DEFECT` caused by concurrent runner contamination, not as VPP
+initial-barrier evidence and not as OI3 dataplane failure.
+
 ## Interpretation
 
 The S237 count64 p99 tail is closed for the tested post-F074 foreground
@@ -151,9 +187,10 @@ the observed `879ms` OI3 p99 tail while preserving cleanup, correctness, and
 post-F074 CPU behavior.
 
 The S241 VPP initial-barrier abort remains a recorded low-frequency lifecycle
-risk, but S242/S243/S244 did not reproduce it.  It is not currently the active
-blocker for this tail-fix candidate; it should remain a repeat-start regression
-condition for future runtime/lifecycle work.
+risk, but S242/S243/S244 and the F076 clean-single follow-up did not reproduce
+it.  It is not currently the active blocker for this tail-fix candidate; it
+should remain a repeat-start regression condition for future runtime/lifecycle
+work.
 
 This still does not close EG-17 or ADR-0007.  Main-stack import remains blocked
 on the broader E2 budget decision: HEV-baseline disposition, formal p99/tail

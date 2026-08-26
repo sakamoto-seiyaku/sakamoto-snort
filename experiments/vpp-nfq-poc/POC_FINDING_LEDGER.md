@@ -2929,7 +2929,21 @@ Map rather than encoded as TODOs here.
   repeats of 4 requests; all passed with p99 `22/23/78/74/75/75/79/69ms`,
   CPU `123--130` ticks, cleanup `8/0`, and `failureCount=0`.  S244 then reran
   the full S241 Direct/OI3 count64 shape and passed all ten cells with
-  `failureCount=0`.
+  `failureCount=0`.  A later clean-single F076 follow-up
+  `evidence/f076-oi3-repeat-start-20260826-clean-single/`
+  (`runId=20260826-142410-470543`) cleared all host runners, fixture ports,
+  the Android VPN service, and device-side VPP residue before running OI3-only
+  repeat-start again.  All eight 4-request cells passed with p99
+  `74/60/21/27/26/69/71/69ms`, total CPU ticks `88--93`, cleanup `8/0`, and
+  `failures=0`.
+- **Invalid same-hour attempts:** `evidence/s172-f076-repeat-20260826-rerun/`
+  (`runId=20260826-141352-810266`) and
+  `evidence/f076-oi3-repeat-start-20260826-mainline/`
+  (`runId=20260826-141519-908345`) overlapped on the same Android package,
+  VPN service, remote app log, and fixture space.  Their alternating
+  `startupValid=0` / missing `app-http-probe.log` rows are classified as
+  `HARNESS_DEFECT` from concurrent runner contamination, not as VPP
+  initial-barrier evidence.
 - **Supported claim:** The S241 r5 abort is a recorded lifecycle risk, not the
   active blocker for F075 tail-fix closure.
 - **Non-claim:** This does not prove the repeat-start risk is impossible or
