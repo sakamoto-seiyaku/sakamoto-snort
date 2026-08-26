@@ -2478,9 +2478,10 @@ Map rather than encoded as TODOs here.
   Direct `8/8` p95 `15ms`, HEV `8/8` p95 `10ms`, and OI3 `8/8` p95 `27ms`.
   Forced-Doze passed Direct `8/8` p95 `18ms`, HEV `8/8` p95 `16ms`, and OI3
   `8/8` p95 `78ms`.  This removes the prior S192 seconds-level
-  device-state cliff.  F069 remains open because the S223 forced-Doze relative
-  delta and the broader CPU/thermal/power/soak budgets still require an
-  ADR-0007 decision.
+  device-state cliff.  At this point F069 remained open because the S223
+  forced-Doze relative delta and the broader CPU/thermal/power/soak budgets
+  still required an ADR-0007 decision; S234--S235 later narrowed the
+  post-F074 Direct/OI3 count128 device-state gap.
 - **S224 resource-trend update:** S224
   `evidence/s224-e1-resource-trend-current-f072-candidate-20260826/`
   (`runId=20260826-071025-774914`) reran the five-cycle four-flow UDP resource
@@ -2514,9 +2515,25 @@ Map rather than encoded as TODOs here.
   `evidence/s233-e2-count128-post-f074-p99-repeat-20260826/`
   (`runId=20260826-085408-873886`) repeated the count128 Direct/OI3 shape three
   times; all OI3 repeats passed `128/128`, p99 was `33/71/68ms`, and total CPU
-  ticks were `286/292/302`.  S231--S233 still leave HEV baseline,
-  thermal/power/soak, broader capacity budgets, and a formal p99 tolerance
-  decision open.
+  ticks were `286/292/302`.  S231--S233 still left HEV baseline,
+  thermal/power/soak, broader capacity budgets, post-F074 device-state
+  coverage, and a formal p99 tolerance decision open; S234--S235 later covered
+  the Direct/OI3 count128 device-state shape.
+- **S234--S235 post-F074 device-state count128 update:** S234
+  `evidence/s234-e2-count128-post-f074-screen-off-direct-oi3-20260826/`
+  (`runId=20260826-090709-371689`) reran Direct/OI3 count128 under screen-off.
+  Both arms passed `128/128`; OI3 p95/p99 was `28/71ms`, with
+  `cpuTicksDelta=336`, `schedRuntimeNsDelta=2870746951`, cleanup `132/0`, and
+  `failureCount=0`.  S235
+  `evidence/s235-e2-count128-post-f074-forced-doze-direct-oi3-20260826/`
+  (`runId=20260826-090906-200063`) reran Direct/OI3 count128 under
+  forced-Doze.  Both arms passed `128/128`; OI3 p95/p99 was `26/30ms`, with
+  `cpuTicksDelta=343`, `schedRuntimeNsDelta=2940605200`, cleanup `132/0`, and
+  `failureCount=0`.  Both cells had valid device-state evidence
+  (`mScreenOn=false` for S234 and `mState=IDLE` for S235).  S234--S235 remove
+  screen-off/forced-Doze Direct/OI3 count128 as an active post-F074 gap for
+  the tested shape, but still do not close HEV baseline, thermal/power/soak,
+  broader capacity budgets, or formal p99/tail tolerance.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a broader E2 budget closure or for an explicit
@@ -2804,14 +2821,19 @@ Map rather than encoded as TODOs here.
   went from S227's `cpuTicksDelta=3326` and
   `schedRuntimeNsDelta=32507058071` to `302` and `2644077026`, then repeated at
   `286/292/302` total CPU ticks with p99 `33/71/68ms`.
+  S234--S235 then reran the Direct/OI3 count128 device-state shape: screen-off
+  OI3 passed `128/128` with p95/p99 `28/71ms` and `cpuTicksDelta=336`, and
+  forced-Doze OI3 passed `128/128` with p95/p99 `26/30ms` and
+  `cpuTicksDelta=343`.
 - **Supported claim:** The F074 idle-scope blocker is closed for the selected
-  Android VPP idle profile, bounded OI3 UDP wake smoke, and Direct/OI3
-  foreground count64/count128 CPU-budget reruns.  The corrected CPU behavior
-  is no longer explained by UID/policy, WSL2 fixture behavior, HEV baseline
-  instability, app probe pacing, or the F072 TCP lifecycle seam.
+  Android VPP idle profile, bounded OI3 UDP wake smoke, Direct/OI3 foreground
+  count64/count128 CPU-budget reruns, and Direct/OI3 count128 screen-off /
+  forced-Doze reruns.  The corrected CPU behavior is no longer explained by
+  UID/policy, WSL2 fixture behavior, HEV baseline instability, app probe
+  pacing, or the F072 TCP lifecycle seam.
 - **Non-claim:** This does not close the full ADR-0007 E2 performance verdict,
   broad throughput/capacity CPU budgets, power/thermal/long-soak behavior, the
-  S231--S233 p99 tail-tolerance question, the HEV baseline finding `VPN-F073`,
+  S231--S235 p99/tail-tolerance question, the HEV baseline finding `VPN-F073`,
   or production removal/retention of the diagnostic CLI counters.
 - **Next correction direction:** Keep S229 as an Android idle regression cell
   and proceed with the remaining E2 budget/tolerance work without treating
