@@ -14,7 +14,7 @@ public final class ProductPacketAdapterContract {
     public static final String TRANSPORT_OUTCOME_SEPARATE =
             "transport-outcome-separate";
     public static final String ROOT_ADAPTER = "root-nfqueue";
-    public static final String VPN_ADAPTER = "vpn-tun-hev";
+    public static final String VPN_ADAPTER = RuntimeSnapshot.ADAPTER_VPN_TUN_FD_COMPAT;
 
     public final RuntimeProfile profile;
     public final String adapterName;
@@ -52,7 +52,7 @@ public final class ProductPacketAdapterContract {
         RuntimeProfile selected = profile == null ? RuntimeProfile.ROOT : profile;
         if (selected == RuntimeProfile.VPN) {
             return new ProductPacketAdapterContract(selected, VPN_ADAPTER,
-                    "VpnService TUN fd with HEV transport",
+                    "VpnService TUN fd with fd-compatible Flow Stack handoff",
                     "single-writer TUN completion",
                     TRANSPORT_OUTCOME_SEPARATE,
                     UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,

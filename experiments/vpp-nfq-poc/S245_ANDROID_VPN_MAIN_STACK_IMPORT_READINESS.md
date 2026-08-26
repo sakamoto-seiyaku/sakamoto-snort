@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `SEVENTH_RUNTIME_BACKEND_SELECTION_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `EIGHTH_ANDROID_RUNTIME_CONTRACT_SYNC_SLICE_LANDED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -372,8 +372,42 @@ contract as failed.
 Remaining product work after this slice:
 
 1. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
-2. Sync Android runtime/control-plane contract names so product-side evidence
-   expects `vpn-tun-fd-compat` for compatibility fallback and
-   `vpn-tun-hev-lwip` for the real facade.
-3. Re-run Android Direct Egress evidence against product runtime construction,
+2. Re-run Android Direct Egress evidence against product runtime construction,
    not the historical OI3/vpn-lite harness.
+
+## 2026-08-26 eighth import slice
+
+The eighth main-stack design-import slice synced the Android production
+runtime contract with the seventh slice's adapter names:
+
+- `RuntimeSnapshot` now exposes `ADAPTER_VPN_TUN_FD_COMPAT =
+  "vpn-tun-fd-compat"` and `ADAPTER_VPN_TUN_HEV_LWIP =
+  "vpn-tun-hev-lwip"`.
+- `RuntimeSnapshot.adapterForRunningProfile()` now reports
+  `vpn-tun-fd-compat` for the current VPN product runtime because the daemon
+  default still uses the fd compatibility Flow Stack backend.
+- `ProductPacketAdapterContract.VPN_ADAPTER` now points at
+  `RuntimeSnapshot.ADAPTER_VPN_TUN_FD_COMPAT`.
+- `RuntimeService` running-state logs now use the fd compatibility adapter
+  token instead of the historical `vpn-tun-hev` token.
+- Android static contract tests were updated to assert the new production
+  tokens and the reserved HEV/lwIP facade token.
+
+Historical device matrix scripts still contain `vpn-tun-hev` expectations
+because they describe the pre-S245 child/SOCKS/HEV evidence frontier.  They
+must be rewritten around the product runtime construction before being used as
+new Direct Egress evidence.
+
+Validated locally:
+
+- `tests/android/android-runtime-contract-test.sh`: passed.
+- `tests/android/runtime-contract-test.sh`: passed, including Android runtime
+  contract, NDK daemon build, debug APK build and static device-matrix
+  contracts.
+
+Remaining product work after this slice:
+
+1. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+2. Rewrite and rerun Android Direct Egress/device evidence against product
+   runtime construction and the new adapter tokens, not the historical
+   OI3/vpn-lite harness.

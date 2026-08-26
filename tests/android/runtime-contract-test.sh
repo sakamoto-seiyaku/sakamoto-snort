@@ -218,7 +218,8 @@ grep -q 'vpn-tun-fd-handoff' "$production_control_fd_client_source"
 grep -q 'vpn-tun-transport-fd-handoff' "$production_control_fd_client_source"
 grep -q 'RuntimeControlFdClient.waitForVpnTunHandoffReady()' "$production_service_source"
 grep -q 'vpn_tun_control_ready=ok' "$production_service_source"
-grep -q 'ADAPTER_VPN_TUN_HEV = "vpn-tun-hev"' "$production_snapshot_source"
+grep -q 'ADAPTER_VPN_TUN_FD_COMPAT = "vpn-tun-fd-compat"' "$production_snapshot_source"
+grep -q 'ADAPTER_VPN_TUN_HEV_LWIP = "vpn-tun-hev-lwip"' "$production_snapshot_source"
 grep -q 'adapterForRunningProfile' "$production_snapshot_source"
 grep -Fq 'setFileDescriptorsForSend(new FileDescriptor[]{fd})' "$production_control_fd_client_source"
 grep -Fq 'byte[] frame = frameNetstring(requestPayload(id, command, args))' "$production_control_fd_client_source"
@@ -288,7 +289,7 @@ if grep -q 'vppctl.*quit' "$production_service_source"; then
   exit 1
 fi
 grep -q 'ADAPTER_ROOT_NFQUEUE' "$production_service_source"
-grep -q 'ADAPTER_VPN_TUN_HEV' "$production_service_source"
+grep -q 'ADAPTER_VPN_TUN_FD_COMPAT' "$production_service_source"
 grep -q 'PidIdentity' "$production_service_source"
 grep -q 'health_query=vapi_start' "$production_service_source"
 grep -q 'health_query=vapi_result' "$production_service_source"

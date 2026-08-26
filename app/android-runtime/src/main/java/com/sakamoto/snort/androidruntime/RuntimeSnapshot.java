@@ -19,7 +19,8 @@ public final class RuntimeSnapshot {
 
     public static final String ADAPTER_UNAVAILABLE = "unavailable";
     public static final String ADAPTER_ROOT_NFQUEUE = "root-nfqueue";
-    public static final String ADAPTER_VPN_TUN_HEV = "vpn-tun-hev";
+    public static final String ADAPTER_VPN_TUN_FD_COMPAT = "vpn-tun-fd-compat";
+    public static final String ADAPTER_VPN_TUN_HEV_LWIP = "vpn-tun-hev-lwip";
 
     public final String state;
     public final RuntimeProfile profile;
@@ -245,7 +246,8 @@ public final class RuntimeSnapshot {
             return ADAPTER_UNAVAILABLE;
         }
         RuntimeProfile selected = profile == null ? RuntimeProfile.ROOT : profile;
-        return selected == RuntimeProfile.VPN ? ADAPTER_VPN_TUN_HEV : ADAPTER_ROOT_NFQUEUE;
+        return selected == RuntimeProfile.VPN ? ADAPTER_VPN_TUN_FD_COMPAT
+                : ADAPTER_ROOT_NFQUEUE;
     }
 
     private RuntimeSnapshot withAbi(String value) {

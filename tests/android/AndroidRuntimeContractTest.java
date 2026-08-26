@@ -1261,8 +1261,8 @@ public final class AndroidRuntimeContractTest {
         RuntimeSnapshot vpn = RuntimeSnapshot.running(RuntimeProfile.VPN,
                 "vpp-runtime-health/v1", "v26.02-release", "sha256:core", "arm64-v8a",
                 "ok", 43L);
-        check(RuntimeSnapshot.ADAPTER_VPN_TUN_HEV.equals(vpn.adapterReadiness),
-                "running VPN snapshot exposes VPN/TUN Adapter readiness");
+        check(RuntimeSnapshot.ADAPTER_VPN_TUN_FD_COMPAT.equals(vpn.adapterReadiness),
+                "running VPN snapshot exposes VPN/TUN fd compatibility Adapter readiness");
         check(!VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
                 "v26.02-release", "arm64-v8a", "sha256:core", "wrong-api", status).isReady(),
                 "generated API identity mismatch fails closed");

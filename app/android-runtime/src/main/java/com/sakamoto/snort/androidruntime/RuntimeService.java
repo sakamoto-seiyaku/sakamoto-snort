@@ -725,7 +725,7 @@ public final class RuntimeService extends VpnService {
             appendLog("runtime_state=running profile=" + activeProfile.wireName
                     + " version=" + version + " core_health=" + health.health
                     + " adapter=" + (activeProfile == RuntimeProfile.VPN
-                    ? RuntimeSnapshot.ADAPTER_VPN_TUN_HEV
+                    ? RuntimeSnapshot.ADAPTER_VPN_TUN_FD_COMPAT
                     : RuntimeSnapshot.ADAPTER_ROOT_NFQUEUE));
             monitorExit(process);
         } catch (Exception error) {

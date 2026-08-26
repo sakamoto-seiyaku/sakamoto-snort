@@ -55,6 +55,11 @@ transport fd 的 Flow Stack 已就绪时启动自动 drain loop；控制面 atta
 实际 adapter name。当前仍未导入 HEV/lwIP/OI3 产品实现；下一步应补真实
 `VpnHevLwipDriver`，同步 Android runtime/control-plane contract 的 adapter token，并基于产品
 runtime construction 重跑 Direct Egress 证据。
+随后 Android production runtime contract 已同步到这两个新 token：
+`RuntimeSnapshot` 暴露 `ADAPTER_VPN_TUN_FD_COMPAT` 和 `ADAPTER_VPN_TUN_HEV_LWIP`，
+当前 VPN running snapshot 与 `ProductPacketAdapterContract.VPN_ADAPTER` 使用
+`vpn-tun-fd-compat`；旧 `vpn-tun-hev` 只应保留在历史 device evidence runner 中，不能再作为
+产品 runtime contract。
 
 后续产品与架构决策（2026-07-19）：
 
