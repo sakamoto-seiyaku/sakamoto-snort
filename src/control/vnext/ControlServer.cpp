@@ -1218,19 +1218,32 @@ rapidjson::Document makeDecisionResult(
     return result;
 }
 
-rapidjson::Document makeVpnTunAttachResult(const bool enableIpv6) {
+rapidjson::Document makeVpnTunAttachResult(
+    const bool enableIpv6,
+    const std::string_view adapterName) {
     rapidjson::Document result(rapidjson::kObjectType);
     auto &alloc = result.GetAllocator();
-    result.AddMember("adapter", "vpn-tun-hev", alloc);
+    result.AddMember(
+        "adapter",
+        rapidjson::Value(adapterName.data(),
+                         static_cast<rapidjson::SizeType>(adapterName.size()),
+                         alloc),
+        alloc);
     result.AddMember("fdAttached", true, alloc);
     result.AddMember("ipv6Enabled", enableIpv6, alloc);
     return result;
 }
 
-rapidjson::Document makeVpnTransportAttachResult() {
+rapidjson::Document makeVpnTransportAttachResult(
+    const std::string_view adapterName) {
     rapidjson::Document result(rapidjson::kObjectType);
     auto &alloc = result.GetAllocator();
-    result.AddMember("adapter", "vpn-tun-hev", alloc);
+    result.AddMember(
+        "adapter",
+        rapidjson::Value(adapterName.data(),
+                         static_cast<rapidjson::SizeType>(adapterName.size()),
+                         alloc),
+        alloc);
     result.AddMember("transportFdAttached", true, alloc);
     return result;
 }
@@ -1361,7 +1374,8 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
                 attach.errorMessage.empty() ? "VPN TUN fd attach failed"
                                             : attach.errorMessage);
         }
-        rapidjson::Document result = makeVpnTunAttachResult(enableIpv6);
+        rapidjson::Document result =
+            makeVpnTunAttachResult(enableIpv6, runtime.packetAdapterName());
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 
@@ -1390,7 +1404,8 @@ rapidjson::Document dispatchRequest(const ControlVNext::RequestView &request,
                 attach.errorMessage.empty() ? "VPN transport fd attach failed"
                                             : attach.errorMessage);
         }
-        rapidjson::Document result = makeVpnTransportAttachResult();
+        rapidjson::Document result =
+            makeVpnTransportAttachResult(runtime.packetAdapterName());
         return ControlVNext::makeOkResponse(request.id, &result);
     }
 

@@ -5,9 +5,59 @@
 
 #include <RuntimeProfile.hpp>
 #include <RuntimeFactoryPlan.hpp>
+#include <VpnHevLwipFlowStack.hpp>
 #include <VpnTunFdRuntime.hpp>
 
 #include <gtest/gtest.h>
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <thread>
+
+namespace {
+
+class IdleHevLwipDriver final : public SnortDatapath::Tun::VpnHevLwipDriver {
+public:
+    [[nodiscard]] SnortDatapath::Tun::VpnHevLwipAdmissionResult enqueueTunPacket(
+        const SnortDatapath::Tun::VpnHevLwipPacketContext &,
+        std::span<const std::byte>) noexcept override {
+        return SnortDatapath::Tun::VpnHevLwipAdmissionResult{
+            .status =
+                SnortDatapath::Tun::VpnHevLwipAdmissionStatus::TransportFailed,
+        };
+    }
+
+    [[nodiscard]] SnortDatapath::Tun::VpnFlowStackReturnResult receiveReturnPacket(
+        std::span<std::byte>) noexcept override {
+        return SnortDatapath::Tun::VpnFlowStackReturnResult{
+            .status = SnortDatapath::Tun::VpnFlowStackReturnStatus::NoPacket,
+            .bytes = 0,
+        };
+    }
+
+    [[nodiscard]] SnortDatapath::Tun::VpnFlowStackDriveStatus driveOwner(
+        std::uint32_t,
+        SnortDatapath::Tun::VpnFlowStackDriveBudget) noexcept override {
+        return SnortDatapath::Tun::VpnFlowStackDriveStatus::Idle;
+    }
+
+    [[nodiscard]] SnortDatapath::Tun::VpnFlowStackDriveStatus
+    finishOwnerIfReady(std::uint32_t) noexcept override {
+        return SnortDatapath::Tun::VpnFlowStackDriveStatus::Completed;
+    }
+
+    [[nodiscard]] SnortDatapath::Tun::VpnFlowStackWakeStatus enqueueWake(
+        const SnortDatapath::Tun::VpnFlowStackDeferredWork &) noexcept override {
+        return SnortDatapath::Tun::VpnFlowStackWakeStatus::Enqueued;
+    }
+
+    void resetGeneration(std::uint64_t) noexcept override {}
+};
+
+} // namespace
 
 TEST(RuntimeProfileSelection, AcceptsRootAndVpnWireNames) {
     const auto root = SnortRuntime::parseRuntimeProfile("root");
@@ -51,7 +101,10 @@ TEST(RuntimeFactoryPlan, LaunchesVpnWithoutTunFdSourceForControlAttach) {
     EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::CreateVpnTunFdHandoff);
     EXPECT_EQ(plan.exitCode, 0);
     EXPECT_TRUE(plan.errorCode.empty());
-    EXPECT_EQ(plan.adapterName, "vpn-tun-hev");
+    EXPECT_EQ(plan.adapterName, "vpn-tun-fd-compat");
+    EXPECT_EQ(plan.vpnFlowStackBackend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::FdCompatibility);
+    EXPECT_FALSE(plan.usingCompatibilityFallback);
 }
 
 TEST(RuntimeFactoryPlan, SelectsVpnTunFdHandoffWhenTunSourceExists) {
@@ -62,7 +115,45 @@ TEST(RuntimeFactoryPlan, SelectsVpnTunFdHandoffWhenTunSourceExists) {
     EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::CreateVpnTunFdHandoff);
     EXPECT_EQ(plan.exitCode, 0);
     EXPECT_TRUE(plan.errorCode.empty());
-    EXPECT_EQ(plan.adapterName, "vpn-tun-hev");
+    EXPECT_EQ(plan.adapterName, "vpn-tun-fd-compat");
+    EXPECT_EQ(plan.vpnFlowStackBackend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::FdCompatibility);
+}
+
+TEST(RuntimeFactoryPlan, SelectsVpnHevLwipFacadeWhenDriverIsAvailable) {
+    const auto plan = SnortRuntime::planRuntimeFactory(
+        SnortRuntime::parseRuntimeProfile("vpn"),
+        SnortRuntime::RuntimeFactoryOptions{
+            .preferredVpnFlowStackBackend =
+                SnortRuntime::VpnFlowStackRuntimeBackend::HevLwipFacade,
+            .vpnHevLwipDriverAvailable = true,
+        });
+
+    EXPECT_TRUE(plan.launchable);
+    EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::CreateVpnTunHevLwip);
+    EXPECT_EQ(plan.exitCode, 0);
+    EXPECT_TRUE(plan.errorCode.empty());
+    EXPECT_EQ(plan.adapterName, "vpn-tun-hev-lwip");
+    EXPECT_EQ(plan.vpnFlowStackBackend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::HevLwipFacade);
+    EXPECT_FALSE(plan.usingCompatibilityFallback);
+}
+
+TEST(RuntimeFactoryPlan, FallsBackToVpnFdCompatWhenHevDriverIsUnavailable) {
+    const auto plan = SnortRuntime::planRuntimeFactory(
+        SnortRuntime::parseRuntimeProfile("vpn"),
+        SnortRuntime::RuntimeFactoryOptions{
+            .preferredVpnFlowStackBackend =
+                SnortRuntime::VpnFlowStackRuntimeBackend::HevLwipFacade,
+            .vpnHevLwipDriverAvailable = false,
+        });
+
+    EXPECT_TRUE(plan.launchable);
+    EXPECT_EQ(plan.action, SnortRuntime::RuntimeFactoryAction::CreateVpnTunFdHandoff);
+    EXPECT_EQ(plan.adapterName, "vpn-tun-fd-compat");
+    EXPECT_EQ(plan.vpnFlowStackBackend,
+              SnortRuntime::VpnFlowStackRuntimeBackend::FdCompatibility);
+    EXPECT_TRUE(plan.usingCompatibilityFallback);
 }
 
 TEST(VpnTunFdRuntime, HoldsDuplicatedTunFdWithoutClaimingAdapterReady) {
@@ -74,7 +165,7 @@ TEST(VpnTunFdRuntime, HoldsDuplicatedTunFdWithoutClaimingAdapterReady) {
     EXPECT_FALSE(runtime.nfqueuePassThroughReady());
     EXPECT_FALSE(runtime.packetAdapterReady());
     EXPECT_TRUE(runtime.vpnTunFdHandoffReady());
-    EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-hev");
+    EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-fd-compat");
 }
 
 TEST(VpnTunFdRuntime, SupportsAttachLaterBeforeTunFdIsPresent) {
@@ -85,7 +176,72 @@ TEST(VpnTunFdRuntime, SupportsAttachLaterBeforeTunFdIsPresent) {
     EXPECT_FALSE(runtime.packetAdapterReady());
     EXPECT_TRUE(runtime.vpnTunFdHandoffReady());
     EXPECT_TRUE(runtime.vpnTunTransportFdHandoffReady());
-    EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-hev");
+    EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-fd-compat");
+}
+
+TEST(VpnTunFdRuntime, SupportsInjectedHevLwipFlowStackWithoutTransportFdHandoff) {
+    IdleHevLwipDriver driver;
+    auto flowStack =
+        std::make_unique<SnortDatapath::Tun::VpnHevLwipFlowStackBoundary>(
+            SnortDatapath::Tun::VpnHevLwipFlowStackConfig{
+                .ownerCount = 2,
+                .generation = 1,
+                .maxPacketBytes = 1500,
+            },
+            driver);
+    SnortDatapath::Tun::VpnTunFdRuntime runtime{
+        -1,
+        false,
+        SnortDatapath::Tun::VpnTunFlowStackRuntimeConfig{
+            .flowStack = std::move(flowStack),
+            .adapterName = "vpn-tun-hev-lwip",
+            .transportFdHandoffReady = false,
+            .requiresTransportFdForDrain = false,
+            .flowStackReadyWithoutTransport = true,
+        }};
+
+    EXPECT_TRUE(runtime.start());
+    EXPECT_FALSE(runtime.packetAdapterReady());
+    EXPECT_EQ(runtime.packetAdapterName(), "vpn-tun-hev-lwip");
+    EXPECT_TRUE(runtime.vpnTunFdHandoffReady());
+    EXPECT_FALSE(runtime.vpnTunTransportFdHandoffReady());
+    const auto attach = runtime.attachVpnTransportFd(-1);
+    EXPECT_FALSE(attach.ok);
+    EXPECT_EQ(attach.errorCode, "VPN_TRANSPORT_ATTACH_UNSUPPORTED");
+}
+
+TEST(VpnTunFdRuntime,
+     StartsAutomaticDrainForInjectedHevLwipFlowStackWithoutTransportFd) {
+    const int tunFd = SnortDatapath::Tun::openVpnTunFdSource("/dev/null");
+    ASSERT_GE(tunFd, 0);
+
+    IdleHevLwipDriver driver;
+    auto flowStack =
+        std::make_unique<SnortDatapath::Tun::VpnHevLwipFlowStackBoundary>(
+            SnortDatapath::Tun::VpnHevLwipFlowStackConfig{
+                .ownerCount = 2,
+                .generation = 1,
+                .maxPacketBytes = 1500,
+            },
+            driver);
+    SnortDatapath::Tun::VpnTunFdRuntime runtime{
+        tunFd,
+        true,
+        SnortDatapath::Tun::VpnTunFlowStackRuntimeConfig{
+            .flowStack = std::move(flowStack),
+            .adapterName = "vpn-tun-hev-lwip",
+            .transportFdHandoffReady = false,
+            .requiresTransportFdForDrain = false,
+            .flowStackReadyWithoutTransport = true,
+        }};
+
+    ASSERT_TRUE(runtime.start());
+    for (int attempt = 0;
+         attempt < 50 && !runtime.packetAdapterReady();
+         ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    EXPECT_TRUE(runtime.packetAdapterReady());
 }
 
 TEST(RuntimeFactoryPlan, PropagatesInvalidProfileWithoutSelectingAnAdapter) {

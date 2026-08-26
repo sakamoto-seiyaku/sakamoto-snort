@@ -533,7 +533,7 @@ TEST(ControlServerContract, RealVpnTunRuntimeAdvertisesAttachLaterBeforeFdAndAcc
     EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "packet-policy-control"),
               capabilities.end());
     EXPECT_EQ(std::find(capabilities.begin(), capabilities.end(),
-                        "packet-adapter-vpn-tun-hev"),
+                        "packet-adapter-vpn-tun-fd-compat"),
               capabilities.end());
 
     int pipeFds[2]{-1, -1};
@@ -549,7 +549,7 @@ TEST(ControlServerContract, RealVpnTunRuntimeAdvertisesAttachLaterBeforeFdAndAcc
     ASSERT_TRUE(attach.HasMember("result"));
     EXPECT_TRUE(attach["result"]["fdAttached"].GetBool());
     EXPECT_TRUE(attach["result"]["ipv6Enabled"].GetBool());
-    EXPECT_STREQ(attach["result"]["adapter"].GetString(), "vpn-tun-hev");
+    EXPECT_STREQ(attach["result"]["adapter"].GetString(), "vpn-tun-fd-compat");
     EXPECT_FALSE(runtime.packetAdapterReady());
 
     const rapidjson::Document status = harness.call(52, "VPN_TUN.STATUS");
@@ -599,7 +599,7 @@ TEST(ControlServerContract, RealVpnTunRuntimeAdvertisesPacketAdapterAfterBothFdH
     ASSERT_TRUE(hello["ok"].GetBool());
     const auto capabilities = capabilityStrings(hello["result"]["capabilities"]);
     EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
-                        "packet-adapter-vpn-tun-hev"),
+                        "packet-adapter-vpn-tun-fd-compat"),
               capabilities.end());
 }
 

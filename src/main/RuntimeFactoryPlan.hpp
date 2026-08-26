@@ -14,7 +14,21 @@ namespace SnortRuntime {
 enum class RuntimeFactoryAction {
     CreateRootNfqueue,
     CreateVpnTunFdHandoff,
+    CreateVpnTunHevLwip,
     RejectProfile,
+};
+
+enum class VpnFlowStackRuntimeBackend {
+    None,
+    FdCompatibility,
+    HevLwipFacade,
+};
+
+struct RuntimeFactoryOptions {
+    std::string_view vpnTunFdSource;
+    VpnFlowStackRuntimeBackend preferredVpnFlowStackBackend =
+        VpnFlowStackRuntimeBackend::FdCompatibility;
+    bool vpnHevLwipDriverAvailable = false;
 };
 
 struct RuntimeFactoryPlan {
@@ -23,6 +37,9 @@ struct RuntimeFactoryPlan {
     int exitCode = 2;
     std::string_view errorCode;
     std::string_view adapterName;
+    VpnFlowStackRuntimeBackend vpnFlowStackBackend =
+        VpnFlowStackRuntimeBackend::None;
+    bool usingCompatibilityFallback = false;
 };
 
 [[nodiscard]] RuntimeFactoryPlan planRuntimeFactory(
@@ -30,5 +47,8 @@ struct RuntimeFactoryPlan {
 [[nodiscard]] RuntimeFactoryPlan planRuntimeFactory(
     RuntimeProfileSelection selection,
     std::string_view vpnTunFdSource) noexcept;
+[[nodiscard]] RuntimeFactoryPlan planRuntimeFactory(
+    RuntimeProfileSelection selection,
+    RuntimeFactoryOptions options) noexcept;
 
 } // namespace SnortRuntime

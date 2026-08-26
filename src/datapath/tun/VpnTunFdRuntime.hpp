@@ -20,7 +20,9 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -43,6 +45,14 @@ struct VpnTunDrainResult final {
     bool eof = false;
 };
 
+struct VpnTunFlowStackRuntimeConfig final {
+    std::unique_ptr<VpnFlowStackBoundary> flowStack;
+    std::string adapterName;
+    bool transportFdHandoffReady = false;
+    bool requiresTransportFdForDrain = false;
+    bool flowStackReadyWithoutTransport = false;
+};
+
 [[nodiscard]] inline std::string_view vpnTunPacketDirectionName(
     const VpnTunPacketDirection direction) noexcept {
     return direction == VpnTunPacketDirection::TransportReturn
@@ -62,9 +72,35 @@ class VpnTunFdRuntime final : public SnortRuntime::BaseRuntimeControl {
 public:
     explicit VpnTunFdRuntime(const int tunFd, const bool automaticDrain = false)
         : tunFd_(tunFd),
-          flowStack_(transportFd_),
+          flowStack_(std::make_unique<VpnFdFlowStackBoundary>(transportFd_)),
+          adapterName_("vpn-tun-fd-compat"),
+          transportFdHandoffReady_(true),
+          requiresTransportFdForDrain_(true),
+          flowStackReadyWithoutTransport_(false),
           automaticDrain_(automaticDrain),
           flowAdapter_(VpnTunFlowAdapterConfig{.packetPolicy = &packetPolicy_}) {}
+
+    VpnTunFdRuntime(
+        const int tunFd,
+        const bool automaticDrain,
+        VpnTunFlowStackRuntimeConfig flowStackConfig)
+        : tunFd_(tunFd),
+          flowStack_(std::move(flowStackConfig.flowStack)),
+          adapterName_(std::move(flowStackConfig.adapterName)),
+          transportFdHandoffReady_(flowStackConfig.transportFdHandoffReady),
+          requiresTransportFdForDrain_(
+              flowStackConfig.requiresTransportFdForDrain),
+          flowStackReadyWithoutTransport_(
+              flowStackConfig.flowStackReadyWithoutTransport),
+          automaticDrain_(automaticDrain),
+          flowAdapter_(VpnTunFlowAdapterConfig{.packetPolicy = &packetPolicy_}) {
+        if (flowStack_ == nullptr) {
+            throw std::invalid_argument("VPN/TUN runtime requires Flow Stack");
+        }
+        if (adapterName_.empty()) {
+            adapterName_ = "vpn-tun-flow-stack";
+        }
+    }
 
     ~VpnTunFdRuntime() override {
         stopDrainLoop();
@@ -82,8 +118,13 @@ public:
     VpnTunFdRuntime(VpnTunFdRuntime &&) = delete;
     VpnTunFdRuntime &operator=(VpnTunFdRuntime &&) = delete;
 
-    [[nodiscard]] bool start() const noexcept {
-        return true;
+    [[nodiscard]] bool start() noexcept {
+        bool shouldStartDrain = false;
+        {
+            std::lock_guard<std::mutex> lock(ioMutex_);
+            shouldStartDrain = drainLoopShouldRunLocked();
+        }
+        return !shouldStartDrain || startDrainLoop();
     }
 
     [[nodiscard]] bool nfqueuePassThroughReady() const noexcept override {
@@ -93,11 +134,11 @@ public:
     [[nodiscard]] bool packetAdapterReady() const noexcept override {
         std::lock_guard<std::mutex> lock(ioMutex_);
         return automaticDrain_ && drainRunning_.load(std::memory_order_acquire)
-            && tunFd_ >= 0 && transportFd_ >= 0;
+            && tunFd_ >= 0 && flowStackReadyLocked();
     }
 
     [[nodiscard]] std::string_view packetAdapterName() const noexcept override {
-        return "vpn-tun-hev";
+        return adapterName_;
     }
 
     [[nodiscard]] bool vpnTunFdHandoffReady() const noexcept override {
@@ -105,7 +146,7 @@ public:
     }
 
     [[nodiscard]] bool vpnTunTransportFdHandoffReady() const noexcept override {
-        return true;
+        return transportFdHandoffReady_;
     }
 
     [[nodiscard]] bool packetPolicyControlReady() const noexcept override {
@@ -205,6 +246,14 @@ public:
 
     [[nodiscard]] SnortRuntime::VpnTunFdAttachResult attachVpnTransportFd(
         const int transportFd) noexcept override {
+        if (!transportFdHandoffReady_) {
+            if (transportFd >= 0) {
+                ::close(transportFd);
+            }
+            return SnortRuntime::VpnTunFdAttachResult::error(
+                "VPN_TRANSPORT_ATTACH_UNSUPPORTED",
+                "VPN transport fd handoff is unavailable for this Flow Stack");
+        }
         if (transportFd < 0) {
             return SnortRuntime::VpnTunFdAttachResult::error(
                 "VPN_TRANSPORT_ATTACH_INVALID_FD", "VPN transport fd is invalid");
@@ -409,7 +458,7 @@ private:
 
         std::array<std::uint8_t, kMaxTunPacketBytes> packet{};
         for (std::size_t packetIndex = 0; packetIndex < maxPackets; ++packetIndex) {
-            const auto returnPacket = flowStack_.receiveReturnPacket(
+            const auto returnPacket = flowStack_->receiveReturnPacket(
                 std::as_writable_bytes(std::span<std::uint8_t>{
                     packet.data(), packet.size()}));
             switch (returnPacket.status) {
@@ -472,7 +521,7 @@ private:
             lastFlowStackAdmissionStatus_ = VpnFlowStackAdmissionStatus::OwnerFault;
             return false;
         }
-        const auto admission = flowStack_.admitPacket(
+        const auto admission = flowStack_->admitPacket(
             VpnFlowStackAdmissionRequest{
                 .facts = handoff->facts,
                 .canonicalOwner = handoff->canonicalOwner,
@@ -510,7 +559,12 @@ private:
     }
 
     [[nodiscard]] bool drainLoopShouldRunLocked() const noexcept {
-        return automaticDrain_ && tunFd_ >= 0 && transportFd_ >= 0;
+        return automaticDrain_ && tunFd_ >= 0 && flowStackReadyLocked();
+    }
+
+    [[nodiscard]] bool flowStackReadyLocked() const noexcept {
+        return requiresTransportFdForDrain_ ? transportFd_ >= 0
+                                            : flowStackReadyWithoutTransport_;
     }
 
     [[nodiscard]] bool startDrainLoop() noexcept {
@@ -569,7 +623,11 @@ private:
 
     int tunFd_ = -1;
     int transportFd_ = -1;
-    VpnFdFlowStackBoundary flowStack_;
+    std::unique_ptr<VpnFlowStackBoundary> flowStack_;
+    std::string adapterName_;
+    bool transportFdHandoffReady_ = true;
+    bool requiresTransportFdForDrain_ = true;
+    bool flowStackReadyWithoutTransport_ = false;
     VpnFlowStackAdmissionStatus lastFlowStackAdmissionStatus_ =
         VpnFlowStackAdmissionStatus::TransportUnavailable;
     bool ipv6Enabled_ = false;

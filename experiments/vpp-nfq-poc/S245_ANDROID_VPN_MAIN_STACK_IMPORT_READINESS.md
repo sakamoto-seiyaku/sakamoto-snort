@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `SIXTH_HEV_LWIP_FACADE_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `SEVENTH_RUNTIME_BACKEND_SELECTION_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
 
 ## Question
 
@@ -37,7 +37,8 @@ Active source seams:
 | `src/datapath/tun/VpnTunFlowAdapter.*` | Normalizes VPN/TUN packets into the shared FlowGraph and records policy-vs-transport outcome counters. | Correct seam for VPN profile ingress, but it does not yet own a Flow Stack shard interface. |
 | `src/datapath/tun/VpnFlowStackBoundary.*` | Defines the VPN Flow Stack seam, the fd-backed compatibility Adapter and the owner-local host Adapter. | Product Direct Egress continues behind this Interface; HEV/lwIP details must not leak into `VpnTunFdRuntime`. |
 | `src/datapath/tun/VpnHevLwipFlowStack.*` | Defines the product facade for a HEV/lwIP-backed Flow Stack Adapter using an injected internal driver. | The pinned HEV/lwIP implementation should satisfy the driver slot without changing the public Flow Stack Interface. |
-| `src/datapath/tun/VpnTunFdRuntime.hpp` | Admits outbound packets and receives return packets through `VpnFlowStackBoundary`, while the current runtime still instantiates the fd-backed placeholder Adapter. | The remaining product work is replacing the placeholder Adapter implementation, not widening runtime fd knowledge. |
+| `src/datapath/tun/VpnTunFdRuntime.hpp` | Admits outbound packets and receives return packets through an injected `VpnFlowStackBoundary`; the default constructor remains the fd compatibility Adapter. | The runtime no longer needs to know whether the selected backend is fd-backed or HEV/lwIP-backed. |
+| `src/main/RuntimeFactory*` | Plans VPN runtime construction as either `vpn-tun-fd-compat` or `vpn-tun-hev-lwip` based on backend preference and driver availability. | Startup selection can now prefer the product facade when a real driver exists, while making fallback explicit. |
 
 ## What can be imported now
 
@@ -323,3 +324,56 @@ The next slice is to make VPN runtime construction select the HEV/lwIP facade
 behind `VpnFlowStackBoundary` when a real driver is available, while keeping
 the fd-backed Adapter as explicit compatibility/test fallback rather than the
 product Direct Egress boundary.
+
+## 2026-08-26 seventh import slice
+
+The seventh main-stack design-import slice moved VPN backend selection into
+runtime construction:
+
+- `RuntimeFactoryPlan` now distinguishes
+  `VpnFlowStackRuntimeBackend::FdCompatibility` from
+  `VpnFlowStackRuntimeBackend::HevLwipFacade`.
+- `RuntimeFactoryAction::CreateVpnTunHevLwip` is selected only when the
+  caller prefers the HEV/lwIP facade and a driver is actually available.
+- If the caller asks for HEV/lwIP without a driver, the plan falls back to the
+  fd compatibility Adapter and records `usingCompatibilityFallback=true`.
+- `VpnTunFdRuntime` now accepts a `VpnTunFlowStackRuntimeConfig` containing an
+  injected `VpnFlowStackBoundary`, adapter name and readiness semantics.
+- The default fd path is renamed to `vpn-tun-fd-compat`; the product facade
+  path is named `vpn-tun-hev-lwip`.
+- `VpnTunFdRuntime::start()` starts the automatic drain loop when the selected
+  Flow Stack is ready without a transport fd, fixing the construction-time
+  readiness gap for injected HEV/lwIP backends.
+- Control attach responses now report the runtime's actual adapter name
+  instead of hard-coding the historical `vpn-tun-hev` label.
+- The Android NDK daemon source set now includes
+  `src/datapath/tun/VpnHevLwipFlowStack.cpp`, so the facade is compiled into
+  the arm64 main-stack daemon artifact.
+
+This slice still does not import a real HEV/lwIP driver implementation.  It
+only closes the runtime seam so the real driver can be supplied without
+expanding `VpnTunFdRuntime` or the control protocol around fd-specific
+transport details.
+
+Validation notes:
+
+- `runtime_profile_tests`: 13 passed.
+- `vpn_tun_flow_adapter_tests`: 22 passed.
+- `control_server_contract_tests`: 44 passed when run outside the sandbox.
+- `snort-host-tests`: 26/26 passed when run outside the sandbox.
+- `snort-build-ndk`: passed and linked `build-output/sucre-snort-ndk`.
+
+Operational pitfall recorded: `control_server_contract_tests` uses Unix
+socket/SCM_RIGHTS behavior.  In the managed sandbox it can fail every case
+with `connection closed`; that failure mode is not useful datapath evidence.
+Run it outside the sandbox with explicit approval before treating the control
+contract as failed.
+
+Remaining product work after this slice:
+
+1. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+2. Sync Android runtime/control-plane contract names so product-side evidence
+   expects `vpn-tun-fd-compat` for compatibility fallback and
+   `vpn-tun-hev-lwip` for the real facade.
+3. Re-run Android Direct Egress evidence against product runtime construction,
+   not the historical OI3/vpn-lite harness.

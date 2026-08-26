@@ -46,9 +46,15 @@ admission、budgeted local drive、generation-tagged cross-owner wake 与 return
 teardown 后继续驱动 stale work。第六个切片新增 `VpnHevLwipFlowStackBoundary`，作为
 HEV/lwIP-backed Flow Stack 的主栈 production facade；它只依赖注入式 `VpnHevLwipDriver`，由
 facade 固定 TUN-origin、owner/generation、TCP/UDP、ports 与 packet-size validation，真实
-HEV/lwIP PCB/session/protected-socket/pbuf 细节留在 driver 后。当前仍未导入 HEV/lwIP/OI3 产品实现；
-下一步应让 VPN runtime construction 在真实 driver 可用时选择该 facade，同时保留 fd-backed Adapter
-作为显式兼容/测试 fallback，而不是继续扩大 `VpnTunFdRuntime` 的 fd 语义。
+HEV/lwIP PCB/session/protected-socket/pbuf 细节留在 driver 后。第七个切片把 VPN runtime
+construction 接到该 seam：`RuntimeFactoryPlan` 现在区分 `vpn-tun-fd-compat` 和
+`vpn-tun-hev-lwip`，真实 driver 可用且被偏好时选择 HEV/lwIP facade；driver 不可用时显式
+fallback 到 fd compatibility Adapter，并记录 `usingCompatibilityFallback=true`。`VpnTunFdRuntime`
+现在接收注入式 `VpnFlowStackBoundary` 与 adapter readiness 语义，`start()` 会在不需要
+transport fd 的 Flow Stack 已就绪时启动自动 drain loop；控制面 attach 结果也使用 runtime
+实际 adapter name。当前仍未导入 HEV/lwIP/OI3 产品实现；下一步应补真实
+`VpnHevLwipDriver`，同步 Android runtime/control-plane contract 的 adapter token，并基于产品
+runtime construction 重跑 Direct Egress 证据。
 
 后续产品与架构决策（2026-07-19）：
 

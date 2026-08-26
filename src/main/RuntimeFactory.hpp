@@ -9,8 +9,20 @@
 #include <RuntimeFactoryPlan.hpp>
 
 #include <memory>
+#include <string_view>
+
+namespace SnortDatapath::Tun {
+class VpnHevLwipDriver;
+} // namespace SnortDatapath::Tun
 
 namespace SnortRuntime {
+
+struct RuntimeFactoryStartOptions {
+    std::string_view vpnTunFdSource;
+    VpnFlowStackRuntimeBackend preferredVpnFlowStackBackend =
+        VpnFlowStackRuntimeBackend::FdCompatibility;
+    SnortDatapath::Tun::VpnHevLwipDriver *vpnHevLwipDriver = nullptr;
+};
 
 struct RuntimeFactoryResult {
     RuntimeFactoryPlan plan;
@@ -22,5 +34,8 @@ struct RuntimeFactoryResult {
 [[nodiscard]] RuntimeFactoryResult createStartedRuntime(
     RuntimeProfileSelection selection,
     const char *vpnTunFdSource);
+[[nodiscard]] RuntimeFactoryResult createStartedRuntime(
+    RuntimeProfileSelection selection,
+    RuntimeFactoryStartOptions options);
 
 } // namespace SnortRuntime

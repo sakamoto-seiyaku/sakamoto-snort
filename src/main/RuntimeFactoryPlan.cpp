@@ -8,11 +8,18 @@
 namespace SnortRuntime {
 
 RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection) noexcept {
-    return planRuntimeFactory(selection, {});
+    return planRuntimeFactory(selection, RuntimeFactoryOptions{});
 }
 
 RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection,
                                       const std::string_view vpnTunFdSource) noexcept {
+    return planRuntimeFactory(
+        selection,
+        RuntimeFactoryOptions{.vpnTunFdSource = vpnTunFdSource});
+}
+
+RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection,
+                                      const RuntimeFactoryOptions options) noexcept {
     if (!selection.ok) {
         return RuntimeFactoryPlan{
             .action = RuntimeFactoryAction::RejectProfile,
@@ -20,17 +27,38 @@ RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection,
             .exitCode = 2,
             .errorCode = selection.errorCode,
             .adapterName = {},
+            .vpnFlowStackBackend = VpnFlowStackRuntimeBackend::None,
+            .usingCompatibilityFallback = false,
         };
     }
 
     if (selection.profile == RuntimeProfile::Vpn) {
-        (void)vpnTunFdSource;
+        if (options.preferredVpnFlowStackBackend
+                == VpnFlowStackRuntimeBackend::HevLwipFacade
+            && options.vpnHevLwipDriverAvailable) {
+            return RuntimeFactoryPlan{
+                .action = RuntimeFactoryAction::CreateVpnTunHevLwip,
+                .launchable = true,
+                .exitCode = 0,
+                .errorCode = {},
+                .adapterName = "vpn-tun-hev-lwip",
+                .vpnFlowStackBackend =
+                    VpnFlowStackRuntimeBackend::HevLwipFacade,
+                .usingCompatibilityFallback = false,
+            };
+        }
+
+        (void)options.vpnTunFdSource;
         return RuntimeFactoryPlan{
             .action = RuntimeFactoryAction::CreateVpnTunFdHandoff,
             .launchable = true,
             .exitCode = 0,
             .errorCode = {},
-            .adapterName = "vpn-tun-hev",
+            .adapterName = "vpn-tun-fd-compat",
+            .vpnFlowStackBackend = VpnFlowStackRuntimeBackend::FdCompatibility,
+            .usingCompatibilityFallback =
+                options.preferredVpnFlowStackBackend
+                == VpnFlowStackRuntimeBackend::HevLwipFacade,
         };
     }
 
@@ -40,6 +68,8 @@ RuntimeFactoryPlan planRuntimeFactory(const RuntimeProfileSelection selection,
         .exitCode = 0,
         .errorCode = {},
         .adapterName = "root-nfqueue",
+        .vpnFlowStackBackend = VpnFlowStackRuntimeBackend::None,
+        .usingCompatibilityFallback = false,
     };
 }
 

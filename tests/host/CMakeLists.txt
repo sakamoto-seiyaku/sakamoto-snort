@@ -237,6 +237,7 @@ add_sucre_snort_host_test(
 add_sucre_snort_host_test(
   runtime_profile_tests
   runtime_profile_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnHevLwipFlowStack.cpp"
   "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnFlowStackBoundary.cpp"
   "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnTunFlowAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/RuntimeFactoryPlan.cpp"
