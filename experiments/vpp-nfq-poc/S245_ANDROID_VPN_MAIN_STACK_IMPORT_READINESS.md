@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `THIRTEENTH_S56_TCP_SOURCE_PORT_HOTSPOT_DESIGN_CORRECTED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `FOURTEENTH_S56_UDP_ATTRIBUTION_EVIDENCE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -666,4 +666,53 @@ Remaining product work after this slice:
 2. Run the VPN L4 workflow matrix against the current product runtime tokens.
 3. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 4. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
+   selected by product runtime construction.
+
+## 2026-08-26 fourteenth import slice
+
+The corrected S56 UDP same-tuple attribution matrix passed on the real device.
+
+Evidence:
+
+- Result directory:
+  `build-output/s56-vpn-attribution-matrix/20260826-1246-s56-udp-current-apk`.
+- APK build and install passed before the run.
+- VPN start and control setup passed:
+  - `start.result=PASS`;
+  - `control.HELLO=PASS`;
+  - `policy.apply=PASS`.
+- First unknown UDP packet:
+  - `first.forwardedPacketsDelta=1`;
+  - `first.uidUnknownFallbackPacketsDelta=2`;
+  - `first.droppedPacketsDelta=0`;
+  - `first.probe.result=udp_datagram_sent`;
+  - `first.noRecognitionHold=claimed`.
+- Late attribution:
+  - `attribution.apply=PASS`;
+  - `attribution.resolvedUid=12629`;
+  - `attribution.attributionUpdatesDelta=1`;
+  - `attribution.retroactiveDroppedPacketsDelta=0`;
+  - `attribution.completedVerdictNotRetroactive=claimed`.
+- Second same-tuple UDP packet after attribution:
+  - `second.droppedPacketsDelta=1`;
+  - `second.attributionResolutionsDelta=1`;
+  - `matrix.s56LateAttributionEvidence=claimed`.
+- Cleanup passed.
+
+Interpretation:
+
+- S56 now proves the intended product attribution semantics without relying on
+  invalid fixed TCP source-port reuse:
+  first unknown packet is not held for recognition, completed verdicts are not
+  retroactively modified, a later attribution update is applied to the existing
+  FlowEntry, and the next same-tuple packet is re-evaluated under the resolved
+  UID policy.
+- This is VPN attribution evidence for the current fd compatibility backend.
+  It still does not supply the real HEV/lwIP Direct Egress driver.
+
+Remaining product work after this slice:
+
+1. Run the VPN L4 workflow matrix against the current product runtime tokens.
+2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
    selected by product runtime construction.
