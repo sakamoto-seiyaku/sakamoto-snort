@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `NINTH_DEVICE_RUNNER_TOKEN_SYNC_SLICE_LANDED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `TENTH_DEVICE_START_AUTH_PITFALL_RECORDED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -446,4 +446,52 @@ Remaining product work after this slice:
 
 1. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 2. Rerun Android Direct Egress/device evidence against product runtime
+   construction and the new adapter tokens.
+
+## 2026-08-26 tenth import slice
+
+The next S55 real-device run reached a device/start precondition before any
+native datapath evidence:
+
+- Result directory:
+  `build-output/s55-product-vpn-transport-matrix/20260826-121334`.
+- APK build/install and the Android SOCKS5 smoke server setup passed.
+- `start_vpn` returned `FAIL`, but no runtime snapshot was created under
+  `files/runtime-state/snapshot.properties`.
+- `runtime-service.log` showed profile/query activity only; it did not show
+  VPN running state, native daemon startup, control attach, transport attach or
+  HEV/lwIP/fd Flow Stack activity.
+- `dumpsys activity` showed `com.android.vpndialogs/.ConfirmDialog` on top,
+  launched from `DebugControlActivity`.
+
+Interpretation: the runner stopped at Android VPN consent after APK install or
+profile start.  This is not UID/drop seam evidence, not a Flow Stack backend
+selection failure, and not a native runtime crash; the POC had not yet reached
+the product datapath.
+
+Runner pitfall fix:
+
+- S55 now captures `activity.after-start-failure.log`,
+  `window.after-start-failure.log`, `power.after-start-failure.log`,
+  `files.after-start-failure.log` and
+  `runtime-service.after-start-failure.log` when startup does not reach the
+  expected runtime snapshot.
+- If the Android VPN consent dialog is present, S55 reports
+  `start.failureReason=vpn_authorization_required` and
+  `start.vpnConsentDialog=present` instead of leaving the failure as an opaque
+  empty snapshot.
+- If lock/sleep state is visible in the captured dumps, S55 also reports
+  `start.deviceBlockedByLockOrSleep=possible`.
+
+Operational rule: authorize the VPN dialog on the test device, then rerun S55
+without reinstalling the APK when possible; reinstalling can re-trigger the
+platform consent precondition and prevent the run from reaching native runtime
+evidence.
+
+Remaining product work after this slice is unchanged:
+
+1. Clear the device VPN authorization precondition and rerun S55 against the
+   current product runtime token `vpn-tun-fd-compat`.
+2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+3. Rerun Android Direct Egress/device evidence against product runtime
    construction and the new adapter tokens.

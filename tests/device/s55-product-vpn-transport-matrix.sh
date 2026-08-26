@@ -109,6 +109,34 @@ wait_for_snapshot_field() {
   return 1
 }
 
+capture_start_failure_diagnostics() {
+  local activity_log="${RESULT_DIR}/activity.after-start-failure.log"
+  local window_log="${RESULT_DIR}/window.after-start-failure.log"
+  local power_log="${RESULT_DIR}/power.after-start-failure.log"
+  local files_log="${RESULT_DIR}/files.after-start-failure.log"
+  local runtime_log="${RESULT_DIR}/runtime-service.after-start-failure.log"
+
+  adb_cmd shell dumpsys activity activities >"$activity_log" 2>&1 || true
+  adb_cmd shell dumpsys window >"$window_log" 2>&1 || true
+  adb_cmd shell dumpsys power >"$power_log" 2>&1 || true
+  adb_cmd shell run-as "$PACKAGE" ls -R files >"$files_log" 2>&1 || true
+  adb_cmd shell run-as "$PACKAGE" cat "$LOG_PATH" >"$runtime_log" 2>/dev/null || true
+
+  kv "start.failure.activityLog" "${activity_log#${repo_root}/}"
+  kv "start.failure.windowLog" "${window_log#${repo_root}/}"
+  kv "start.failure.powerLog" "${power_log#${repo_root}/}"
+  kv "start.failure.filesLog" "${files_log#${repo_root}/}"
+  kv "start.failure.runtimeLog" "${runtime_log#${repo_root}/}"
+
+  if grep -q 'com.android.vpndialogs/.ConfirmDialog' "$activity_log" "$window_log"; then
+    kv "start.failureReason" "vpn_authorization_required"
+    kv "start.vpnConsentDialog" "present"
+  fi
+  if grep -Eq 'mKeyguardShowing=true|isSleeping=true' "$activity_log" "$window_log" "$power_log"; then
+    kv "start.deviceBlockedByLockOrSleep" "possible"
+  fi
+}
+
 run_device_shell() {
   local name="$1"
   local command="$2"
@@ -269,6 +297,7 @@ if ! grep -Fxq "state=running" <<<"$state" \
     || ! grep -Fxq "coreHealth=ok" <<<"$state" \
     || ! grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$state"; then
   kv "start.result" "FAIL"
+  capture_start_failure_diagnostics
   cat "${RESULT_DIR}/snapshot.running" >&2
   exit 1
 fi
