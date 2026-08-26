@@ -109,7 +109,7 @@ Map rather than encoded as TODOs here.
 | VPN-F071 | OI3 multi dispatcher-to-owner handoff and post-send read wake path caused the first residual tail | `CLOSED_FOR_S205_S211_HANDOFF_POST_SEND_SLICE` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `CLOSED_FOR_S221_S223_MATCHED_DEVICE_STATE_E2` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F073 | HEV matched HTTP baseline is not valid above the small request-count envelope | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
-| VPN-F074 | OI3 multi VPP workers burn CPU while idle | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F074 | OI3 multi VPP workers burn CPU while idle | `CLOSED_FOR_ANDROID_IDLE_SCOPE` | Pixel Android 16 + WSL2 LAN fixture |
 
 ## Findings
 
@@ -2728,7 +2728,7 @@ Map rather than encoded as TODOs here.
   aggregate task sched runtime `32.507s`.  S228 OI3 passed `64/64`, p95
   `45ms`, cleanup `68/0`, but still recorded `totalCpuTicksDelta=3295` and
   aggregate task sched runtime `32.800s`.
-- **Idle isolation evidence:** S229
+- **Idle isolation evidence:** The original S229
   `evidence/s229-oi3-idle-cpu-20260826/`
   (`runId=20260826-075047-298663`) started the current OI3 multi APK, did not
   run any app HTTP/UDP/TCP probe, sampled VPP per-thread `/proc` counters for
@@ -2746,23 +2746,52 @@ Map rather than encoded as TODOs here.
   source change was reverted and must not be treated as closure evidence.  The
   useful conclusion is narrower: the current `unix poll-sleep-usec` knob is
   not controlling the selected worker idle burn.
-- **Root-cause confidence:** HIGH that the current E2 CPU blocker is VPP/OI3
-  worker idle/run-loop behavior, not the WSL2 HTTP fixture, app HTTP probe,
-  HEV baseline, UID/policy, or the F072 TCP lifecycle seam.  The exact VPP
-  scheduling mechanism remains open.
-- **Supported claim:** Main-stack import is still blocked by E2 budget evidence
-  even though F072 latency correctness and S224 resource trend passed.  The
-  failure mode is now a CPU budget hotspot, not a dataplane correctness cliff.
-- **Non-claim:** S229 does not prove long-soak power, thermal behavior, or a
-  production wake/sleep mechanism.  It also does not authorize importing the
-  historical conditional-wake patch; the accepted per-worker decision still
-  keeps that direction on HOLD until a new registered mechanism and campaign
-  pass.
-- **Next correction direction:** Keep the S229 idle feedback loop and evaluate
-  a worker-quiescence design that is specific to the OI3/VPP worker loop.  Do
-  not keep increasing `poll-sleep-usec` as the primary fix; S230 already
-  falsified that direction for the current artifact.
-- **Status:** `OPEN_RISK`.
+- **Failed first correction:** `ee57b9d` changed the Android idle profile so
+  worker threads no longer treated clone-time polling input-node counts as a
+  reason to skip sleep.  That was directionally valid but incomplete: the clean
+  fixed rerun
+  `evidence/s229-oi3-idle-cpu-fixed-20260826/`
+  (`runId=20260826-081941-752449`) still recorded
+  `cpuTicksDelta=2787` and `schedRuntimeNsDelta=27875476983`, with each worker
+  still around `6.8s` sched runtime in a 10-second idle window.
+- **Root cause:** `b797629` added Android-only `show sakamoto android-idle`
+  counters and S229 captured
+  `evidence/s229-oi3-idle-cpu-diag-20260826/`
+  (`runId=20260826-082931-072057`).  Worker skip counters were dominated by
+  `skip_barrier_recent` while `skip_vectors`, `skip_polling_inputs`, and
+  interrupt-pending wake reasons stayed zero.  The direct mechanism was VPP's
+  stock recent-barrier holdoff:
+  `time_last_barrier_release + 0.5 >= vlib_time_now(vm)`.  Repeated main-thread
+  control/stats barrier releases therefore kept Android workers hot even when
+  the data plane had no vectors.
+- **Accepted correction:** `0324f92` changed only the Android idle profile so
+  worker threads can enter `epoll_wait()` despite the recent-barrier holdoff.
+  The correction relies on the existing eventfd/barrier wake path to release
+  sleeping workers when real work or barrier synchronization requires it; the
+  non-Android VPP branch keeps the stock holdoff.
+- **Closure evidence:** S229 barrier-fixed
+  `evidence/s229-oi3-idle-cpu-barrier-fixed-20260826/`
+  (`runId=20260826-083314-815885`) exited valid with cleanup `4/0` and reduced
+  the 10-second idle window to `cpuTicksDelta=89` and
+  `schedRuntimeNsDelta=887122393`.  Worker deltas fell to `6--8` ticks and
+  about `73--78ms` sched runtime each.  `show sakamoto android-idle` showed
+  `skip_total=0`, `skip_barrier_recent=0`, and worker `sleep_enter=129`.
+  A bounded OI3 UDP wake/forward smoke immediately after the fix,
+  `evidence/s171-oi3-wakeup-smoke-after-barrier-fix-20260826/`
+  (`runId=20260826-083453-884508`), passed Direct `554/554` and OI3 `414/414`
+  with OI3 cleanup `5/0` and `ownerBusy=0`.
+- **Supported claim:** The F074 idle-scope blocker is closed for the selected
+  Android VPP idle profile and the bounded OI3 UDP wake smoke.  The corrected
+  idle behavior is no longer explained by UID/policy, WSL2 fixture behavior,
+  HEV baseline instability, app probe pacing, or the F072 TCP lifecycle seam.
+- **Non-claim:** This does not close the full ADR-0007 E2 performance verdict,
+  broad throughput/capacity CPU budgets, power/thermal/long-soak behavior, the
+  HEV baseline finding `VPN-F073`, or production removal/retention of the
+  diagnostic CLI counters.
+- **Next correction direction:** Keep S229 as an Android idle regression cell
+  and proceed with the remaining E2 budget/tolerance work without treating
+  F074 as an active blocker.
+- **Status:** `CLOSED_FOR_ANDROID_IDLE_SCOPE`.
 
 ## Consolidation audit
 

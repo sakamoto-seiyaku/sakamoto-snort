@@ -12,12 +12,14 @@ The campaign evidence supports the owner-inline route for identity, bounded
 full-device correctness, lifecycle/resource settlement, and matched device-state
 operation on the selected Pixel 6a.  S221--S223 corrected the prior
 seconds-level matched HTTP latency cliff, including screen-off and forced-Doze.
-S225--S229 then exposed a new E2 budget blocker: OI3/VPP workers burn CPU while
-idle, and the HEV/tun-poc matched baseline is not valid above the small
-request-count envelope.  The campaign still does not prove the registered
-ADR-0007 E2 performance gate because CPU budget is actively failing and
-thermal/power/soak evidence plus the S223 forced-Doze tolerance decision remain
-open.
+S225--S229 then exposed two E2 budget hotspots: OI3/VPP workers burned CPU
+while idle, and the HEV/tun-poc matched baseline was not valid above the small
+request-count envelope.  The F074 follow-up has since closed the OI3/VPP idle
+scope by diagnosing repeated VPP recent-barrier holdoff and validating the
+Android idle-profile fix.  The campaign still does not prove the registered
+ADR-0007 E2 performance gate because the broad HEV baseline decision,
+throughput/capacity CPU budgets, thermal/power/soak evidence, and the S223
+forced-Doze tolerance decision remain open.
 
 This remains an `ADJUSTMENT_REQUIRED` result, not `SUPPORTS_BASELINE` and not
 an architecture reopening by itself.  The owner-inline invariants still hold;
@@ -34,9 +36,15 @@ resource-trend cycles with stable fd/thread/RSS and `failureCount=0`.  The
 next S225--S229 budget run did not close E2: S227/S228 OI3 remained correct
 but high-CPU, S229 reproduced the worker CPU burn with no app traffic, and
 HEV failed as a broad matched baseline around the 64-request boundary.  The
-audit still remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because ADR-0007's
-budget gate now has an active VPP/OI3 idle CPU blocker, plus unresolved
-thermal/power/soak coverage and a pre-registered judgment on the S223
+F074 follow-up then split the idle issue from the broader budget gate: the
+first worker-idle correction was insufficient, Android-only counters identified
+`skip_barrier_recent` as the real loop reason, and `0324f92` reduced S229
+barrier-fixed idle to `cpuTicksDelta=89` and
+`schedRuntimeNsDelta=887122393` with a subsequent OI3 UDP wake smoke passing
+`414/414`.  The audit still remains
+`ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because ADR-0007's full budget gate needs
+the HEV-baseline decision, broader OI3 throughput/capacity CPU evidence,
+thermal/power/soak coverage, and a pre-registered judgment on the S223
 forced-Doze absolute/relative latency delta.
 
 ## Claim-family audit
@@ -47,7 +55,7 @@ forced-Doze absolute/relative latency delta.
 | Application identity | S139/S190 current S156-era A2 aggregate binds A2-0 through A2-6, including distinct-App matrix, async cache/concurrency, controlled reverse, lifecycle/native join, known-UID allow/drop, replay and settlement. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Network and lifecycle | S151 closes real underlay epoch for the selected Pixel artifact; S153/S157 close real stop/fault/restart and same-session re-arm evidence; S153 full E1 residual sequence reruns normal stop/start, fault restart and Wi-Fi epoch restart with fresh traffic and zero residue. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Ownership and failure | S158/S168 close final multi-owner topology/teardown corrections; S160/S161 close D3 overload/recovery for tested envelope; S176 closes four-owner UDP route-pinning; S141 B2 closes policy/transport/infrastructure separation. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
-| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  S222/S223 rerun the device-state shape under the corrected artifact: screen-off OI3 p95 `27ms`; forced-Doze OI3 p95 `78ms`; both with `failureCount=0` and cleanup `12/0`.  S224 adds five current-artifact four-flow UDP resource cycles with stable fd/thread/RSS, cleanup `16/0` per cycle, and `failureCount=0`.  S225--S229 show the remaining gap is not merely missing evidence: HEV fails as a broad baseline at 64+ requests, and OI3/VPP workers burn CPU while idle. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
+| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  S222/S223 rerun the device-state shape under the corrected artifact: screen-off OI3 p95 `27ms`; forced-Doze OI3 p95 `78ms`; both with `failureCount=0` and cleanup `12/0`.  S224 adds five current-artifact four-flow UDP resource cycles with stable fd/thread/RSS, cleanup `16/0` per cycle, and `failureCount=0`.  S225--S229 show the remaining gap is not merely missing evidence: HEV fails as a broad baseline at 64+ requests, and OI3/VPP workers burned CPU while idle.  The F074 follow-up closes the selected Android idle scope (`cpuTicksDelta=89`, worker `skip_barrier_recent=0`, OI3 UDP wake smoke `414/414`) but does not close the full ADR-0007 budget gate. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
 
 ## E2 performance decision
 
@@ -111,11 +119,26 @@ S199--S223 then split and corrected the main matched HTTP cost envelope:
   `vppSchedRuntimeNsDelta=22353121412`, dominated by the four `vpp_wk_*`
   worker threads.  A dirty exploratory 10ms `poll-sleep-usec` rerun was
   negative and was reverted.
+- `ee57b9d` removed cloned polling input-node counts as a worker sleep blocker
+  in the Android idle profile, but the clean rerun still recorded
+  `cpuTicksDelta=2787` and `schedRuntimeNsDelta=27875476983`; this proved the
+  original worker-polling hypothesis was incomplete.
+- `b797629` added Android-only idle skip counters and showed the real loop
+  reason was `skip_barrier_recent`, not vectors, polling input counts, or
+  interrupt-pending wakeups.
+- `0324f92` changed the Android idle profile so workers can sleep across VPP's
+  recent-barrier holdoff.  S229 barrier-fixed
+  (`runId=20260826-083314-815885`) then recorded `cpuTicksDelta=89`,
+  `schedRuntimeNsDelta=887122393`, worker `skip_barrier_recent=0`, and worker
+  deltas of only `6--8` ticks each.  A bounded OI3 UDP wake smoke
+  (`runId=20260826-083453-884508`) passed Direct `554/554` and OI3 `414/414`
+  with cleanup `5/0`.
 
 Therefore the current result remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.
-The immediate next engineering question is VPP/OI3 worker idle CPU reduction
-and the HEV-baseline/narrowing decision, not F072 debugging or main-stack
-import.
+The F074 idle-scope hotspot is closed; the immediate next engineering
+questions are the HEV-baseline/narrowing decision, broader OI3
+throughput/capacity CPU budget, thermal/power/soak coverage, and S223
+forced-Doze tolerance, not F072 debugging or main-stack import.
 
 ## Main-stack implication
 
@@ -126,7 +149,9 @@ Allowed next work:
 
 - quantify the S223 forced-Doze p95 delta against a pre-registered absolute
   tolerance rather than changing the threshold after seeing the data;
-- fix or explicitly narrow the VPP/OI3 worker idle CPU hotspot found by S229;
+- retain S229 barrier-fixed idle as a regression cell for the Android idle
+  profile and decide whether the diagnostic CLI counters should remain in POC
+  artifacts or be stripped before product integration;
 - decide whether HEV/tun-poc remains required as a broad matched baseline, or
   narrow it to small control cells until its 64-request timeout is fixed;
 - gather the remaining thermal/power/soak evidence for the corrected artifact;
