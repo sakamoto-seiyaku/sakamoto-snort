@@ -15,7 +15,14 @@ if grep -Eq '(^|[^./[:alnum:]_-])adb([[:space:]]|$)' "$matrix"; then
 fi
 
 grep -q 'export ADB="${repo_root}/dev/adb"' "$matrix"
-grep -q 'debugTrafficSourcePort' "$matrix"
+grep -q 'debugUdpSourcePort' "$matrix"
+grep -q 'udp-traffic-probe.properties' "$matrix"
+grep -q 'udp_datagram_sent' "$matrix"
+grep -q '"ipProtocol": 17' "$matrix"
+if grep -q 'debugTrafficSourcePort' "$matrix"; then
+  echo "S56 must not use fixed TCP source-port reuse as the attribution oracle" >&2
+  exit 1
+fi
 grep -q 'VPN_TUN.ATTRIBUTION.APPLY' "$matrix"
 grep -q 'vpn-tun-attribution-control' "$matrix"
 grep -q 'uidUnknownFallbackPackets' "$matrix"

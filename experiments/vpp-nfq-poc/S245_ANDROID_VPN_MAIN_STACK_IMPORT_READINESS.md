@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `TWELFTH_S69_RUNTIME_LIFECYCLE_EVIDENCE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `THIRTEENTH_S56_TCP_SOURCE_PORT_HOTSPOT_DESIGN_CORRECTED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -617,4 +617,53 @@ Remaining product work after this slice:
    runtime tokens.
 2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
+   selected by product runtime construction.
+
+## 2026-08-26 thirteenth import slice
+
+The first S56 run against the current product VPN runtime did not expose a
+datapath failure.  It exposed a known POC harness design hotspot:
+
+- Result directory:
+  `build-output/s56-vpn-attribution-matrix/20260826-1238-s56-current-apk`.
+- VPN start, control `HELLO` and `POLICY.APPLY` passed.
+- The first attribution probe failed before the target evidence condition:
+  `first.probe.result=tcp_connect_failed`.
+- The probe result message was:
+  `Debug traffic probe failed: bind failed: EADDRINUSE (Address already in use)`.
+- Device socket state showed the fixed source port `45656` in TCP
+  `FIN-WAIT-1`.
+
+Interpretation: this is not policy drop, attribution, transport, or Flow Stack
+backend evidence.  S56 was still using fixed TCP source-port reuse as its
+same-tuple UID oracle, which directly conflicts with the existing execution
+guardrail: Android VPN TCP probes must not reuse fixed TCP source ports to
+force determinism.
+
+Design correction:
+
+- S56 now uses the existing Debug UDP probe seam for the same-tuple late
+  attribution matrix.
+- The attribution tuple and L4 policy use `ipProtocol=17`.
+- The debug probe uses `debugUdpTraffic`, `debugUdpHost`, `debugUdpPort`,
+  `debugUdpSourcePort` and `debugUdpTimeoutMillis`.
+- The first unknown packet expects `udp_datagram_sent` rather than
+  `tcp_connect_succeeded`.
+- S56 static contracts now reject `debugTrafficSourcePort` in this matrix, so
+  the TCP fixed-port oracle does not silently return.
+
+The product runtime is unchanged by this correction.  The corrected S56 matrix
+must still be rerun on the device before claiming attribution evidence.
+
+Validated locally:
+
+- `tests/android/runtime-contract-test.sh`: passed, including the updated S56
+  static/runtime contracts and NDK/APK build.
+
+Remaining product work after this slice:
+
+1. Rerun corrected S56 against the rebuilt current APK.
+2. Run the VPN L4 workflow matrix against the current product runtime tokens.
+3. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+4. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
    selected by product runtime construction.

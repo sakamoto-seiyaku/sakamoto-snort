@@ -4,10 +4,12 @@ set -euo pipefail
 # SAKAMOTO-56 product VPN attribution evidence matrix.
 #
 # This matrix uses the product RuntimeService VPN profile. It creates a
-# deterministic unknown-UID VPN FlowEntry with a debug TCP probe using a fixed
-# local source port, applies resolved UID attribution over vNext control, then
-# proves the next packet with the same 5-tuple is re-evaluated by the resolved
-# subject and L4-dropped without replaying the first verdict.
+# deterministic unknown-UID VPN FlowEntry with a debug UDP probe using a
+# runner-selected local source port, applies resolved UID attribution over
+# vNext control, then proves the next packet with the same 5-tuple is
+# re-evaluated by the resolved subject and L4-dropped without replaying the
+# first verdict. UDP is deliberate: fixed TCP source-port reuse is a known
+# Android harness hotspot and is not a valid UID oracle for this matrix.
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -30,7 +32,7 @@ S56_TRAFFIC_PORT="${S56_TRAFFIC_PORT:-443}"
 S56_SOURCE_PORT="${S56_SOURCE_PORT:-45656}"
 S56_TRAFFIC_TIMEOUT_MILLIS="${S56_TRAFFIC_TIMEOUT_MILLIS:-700}"
 STATE_PATH="files/runtime-state/snapshot.properties"
-PROBE_RESULT_PATH="files/debug/traffic-probe.properties"
+PROBE_RESULT_PATH="files/debug/udp-traffic-probe.properties"
 CONTROL_SOCKET="sucre-snort-control-vnext"
 
 mkdir -p "$RESULT_DIR"
@@ -203,7 +205,7 @@ payload = {
             "match": {
                 "family": "ipv4",
                 "direction": "output",
-                "ipProtocol": 6,
+                "ipProtocol": 17,
                 "destinationPorts": {"first": port, "last": port},
             },
         }],
@@ -228,7 +230,7 @@ payload = {
     "networkContext": 0,
     "family": "ipv4",
     "direction": "output",
-    "ipProtocol": 6,
+    "ipProtocol": 17,
     "sourceIp": "10.111.0.2",
     "destinationIp": host,
     "sourcePort": source_port,
@@ -243,11 +245,12 @@ PY
 run_debug_probe() {
   local label="$1"
   adb_cmd shell am start -n "$ACTIVITY" \
-    --ez debugTraffic true \
-    --es debugTrafficHost "$S56_TRAFFIC_HOST" \
-    --ei debugTrafficPort "$S56_TRAFFIC_PORT" \
-    --ei debugTrafficSourcePort "$S56_SOURCE_PORT" \
-    --ei debugTrafficTimeoutMillis "$S56_TRAFFIC_TIMEOUT_MILLIS" \
+    --ez debugUdpTraffic true \
+    --es debugUdpHost "$S56_TRAFFIC_HOST" \
+    --ei debugUdpPort "$S56_TRAFFIC_PORT" \
+    --ei debugUdpSourcePort "$S56_SOURCE_PORT" \
+    --ei debugUdpTimeoutMillis "$S56_TRAFFIC_TIMEOUT_MILLIS" \
+    --ez debugTrafficBindToVpn true \
     >"${RESULT_DIR}/${label}.intent.log" 2>&1
   for _ in $(seq 1 30); do
     adb_cmd shell run-as "$PACKAGE" cat "$PROBE_RESULT_PATH" \
@@ -370,7 +373,7 @@ kv "first.probe.result" "$first_probe_result"
 [[ "$first_forward_delta" -ge 1 ]]
 [[ "$first_unknown_delta" -ge 1 ]]
 [[ "$first_drop_delta" -eq 0 ]]
-[[ "$first_probe_result" == "tcp_connect_succeeded" ]]
+[[ "$first_probe_result" == "udp_datagram_sent" ]]
 kv "first.noRecognitionHold" "claimed"
 
 section "late_attribution"
