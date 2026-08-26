@@ -525,6 +525,16 @@ public final class RuntimeService extends VpnService {
         if (destroying) {
             return;
         }
+        // ADR-0008 removed the legacy C++ daemon and its APK artifact.  Do
+        // not let this retained Android lifecycle shell misreport a missing
+        // binary as a recoverable runtime fault.
+        if (legacyCppRuntimeRetired()) {
+            publishError("c_vpp_mainline_required",
+                    "The legacy Snort C++ runtime was removed; a VPP-native C product runtime is required",
+                    false, -1L);
+            return;
+        }
+
         // A missing/corrupt projection is not evidence that ROOT is stopped.
         // The serial onCreate reconciliation must audit both profiles before
         // any new process can be launched. Keep this guard as a second seam
@@ -734,6 +744,10 @@ public final class RuntimeService extends VpnService {
             closeVpnTunSessionAfterNativeHandoff();
             failWithCleanup("runtime_start_failed", messageOf(error));
         }
+    }
+
+    private static boolean legacyCppRuntimeRetired() {
+        return true;
     }
 
     private void reconcileDurableRuntime() {

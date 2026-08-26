@@ -50,6 +50,7 @@ sleep-confirmed latency gates.
 
 ## Consequences
 
+- ADR-0008 removes the former Snort C++ daemon, host model, test suite, NDK artifact, and archive. None may be restored, translated, or used as a compatibility fallback for this Adapter. The active product implementation target remains VPP-native C only.
 - Packet bytes and live VPP buffer ownership do not cross the Rust compatibility boundary.
 - NFQUEUE queue balance supplies receive parallelism and flow stickiness only; it never establishes
   canonical FlowOwner correctness.

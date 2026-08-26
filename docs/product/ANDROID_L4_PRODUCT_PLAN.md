@@ -1,6 +1,9 @@
 # Android L4 产品计划与 UI 基线
 
-状态：当前产品工作基线，2026-07-20；VPN Direct Egress frontier 更新于 2026-08-14。
+状态：产品目标基线；2026-08-26 ADR-0008 撤除旧 C++ mainline 后，尚无可运行产品实现。
+
+> 当前 Android 产品 runtime、C++ daemon、host model 和 APK daemon artifact 已移除。
+> 本文保留产品目标与架构约束，不得把其中历史实现/验收描述当作 current-head 能力；恢复实现只能从新的 VPP-native C Module 开始。
 
 范围：第一个 Android L4 产品版、第二阶段 libprotoident 阶段性发版，以及两阶段共同使用的
 产品 UI、内容、帮助、发布和社区反馈体系。

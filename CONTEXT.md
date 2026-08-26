@@ -30,6 +30,10 @@ _Avoid_: UI directly managing the native dataplane, generic runtime owner
 The sole RuntimeService-supervised native dataplane instance for the active Runtime Profile. It owns the shared VPP graph, Worker Layout, live VPP buffers, and active VPP-native Packet I/O Adapter.
 _Avoid_: bare Runtime, surrounding C++ daemon, HEV runtime, parallel Root/VPN dataplanes
 
+**Retired C++ Mainline**:
+The removed Snort C++ daemon, host model, tests, NDK artifact, and archived source. It is not a product implementation option, compatibility fallback, or design input; only its explicitly recorded evidence may be cited.
+_Avoid_: C++ compatibility path, C++ Flow Stack facade, translating the old daemon
+
 **Debug Control Activity**:
 The minimal Android UI used during Functional Closure to select a Runtime Profile, start or stop the supervised runtime, operate the smallest test policy, and inspect bounded current or recent status and verdict evidence. It is not the release Product UI, the durable Activity Store, or an authority for policy, lifecycle, or packet state.
 _Avoid_: Product Activity, Activity Store, release UI, runtime owner, policy database

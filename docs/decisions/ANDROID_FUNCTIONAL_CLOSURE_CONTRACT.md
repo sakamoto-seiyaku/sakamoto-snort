@@ -1,6 +1,8 @@
 # Android Functional Closure Contract 与 Evidence Matrix
 
-状态：accepted working contract，2026-08-08。来源：SAKAMOTO-65。本文是可由新 POC、正式代码和受控真机证据显式修订的工作合同，不是首次发版的最终冻结规格。
+状态：架构不变量仍 accepted；C++ Functional Closure execution contract 于 2026-08-26 被 ADR-0008 撤除。来源：SAKAMOTO-65。本文是可由新 POC、正式代码和受控真机证据显式修订的工作合同，不是首次发版的最终冻结规格。
+
+> `libsucre_snortd.so`、C++ host model、S55--S71 runners 和对应 current-head gate 已不存在。本文只能保留 VPP-native C 目标不变量与历史 evidence 归因；不得据此恢复 C++ 实现或把旧 PASS 作为 current-head closure。
 
 ## 1. 目的与权威边界
 

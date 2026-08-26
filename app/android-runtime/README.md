@@ -1,5 +1,11 @@
 # Android Runtime incubator
 
+> **Current state:** ADR-0008 removed the C++ daemon and its APK artifact.
+> `build-debug-apk.sh` intentionally exits with `c_vpp_mainline_required`
+> semantics until a VPP-native C product runtime and lifecycle contract exist.
+> The Java lifecycle/UI code is retained as future platform integration context,
+> not proof of a runnable product runtime.
+
 `app/android-runtime/` is the forward implementation slice for SAKAMOTO-67.
 It is separate from `experiments/vpp-nfq-poc/android/vpn-lite/`, which remains
 migration evidence and a disposable harness.

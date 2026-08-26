@@ -1,5 +1,9 @@
 # Conntrack `ct.*` Tier‑1 Verification (device‑module)
 
+> **Retired test record (2026-08-26, ADR-0008):** this verification used the
+> removed Snort C++ daemon and its control/deploy path. Its commands and
+> measurements are historical evidence only, not a runnable C/VPP baseline.
+
 This document records how to verify `IPRULES` `ct.state/ct.direction` on a real device using the Tier‑1 controlled topology (`netns+veth`) and how to capture comparable perf baselines.
 
 ## Preconditions

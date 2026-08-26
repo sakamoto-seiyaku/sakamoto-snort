@@ -138,6 +138,7 @@ They are not fixed here, and this ADR does not decompose the required prototypes
 
 ## Consequences
 
+- ADR-0008 removes the later C++ `VpnFlowStackBoundary` / `VpnHevLwipDriver` facade detour. Its types, runtime selection, fd fallback, and in-memory fake are not a product seam and must not be translated into C. The OI1--OI5 owner-inline C POC results are design evidence only; production receives a newly designed VPP-native C Module.
 - Android's unavoidable packet-to-flow reconstruction cost is explicit rather than hidden behind a
   "packet sender" abstraction.
 - The HEV fork must prove an isolation shape compatible with canonical FlowOwner locality; if the pinned

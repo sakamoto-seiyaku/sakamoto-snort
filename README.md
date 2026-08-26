@@ -1,23 +1,13 @@
-# sucre-snort
+# Sakamoto Snort
 
-This project contains the system part of the **scuré blocker**, a fork of iodé blocker, une on any LineageOS based ROM if included in build sources, or with Magisk with the sucre-magisk-module.
-The user interface can be found [here](https://gitlab.com/Doremus/sucre).
+This repository is being reconstructed as a VPP-native C Android privacy
+firewall. ADR-0008 removed the former Snort C++ daemon, tests, NDK artifact,
+and archive because they formed a competing packet architecture.
 
-## Design principles
+The active engineering inputs are the accepted VPP-native C decisions
+(ADR-0006 and ADR-0007) and scoped C/VPP POC evidence. POC source is not
+product source. A product runtime is intentionally unavailable until the new
+C mainline is specified and implemented.
 
-This sofware has been designed with several principles in mind:
-
-* *Speed*. It is written in C++, multi-threaded, with appropriate data structures to lower as much as possible the algorithmic complexity. These data structures have also been thought to entirely contain all the blocker data into memory while remaining of reasonable size. Some nowadays unusual design choices have also been made, like the use of some global variables to avoid indirection levels and lighten function calls.
-* *Reliability*. It follows as much as possible the [RAII principles](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization) and heavily relies on the C++ Standard Template Library.
-* *Independence*. It is as much as possible independent of the Android system itself, and the use of non C/C++ standard libraries has been limited to the strict minimum. It is also independent of any user interface, providing a simple communcation API through a unix socket.
-* *Conciseness*. This code is designed to do one thing, and do it as best as possible. No complex design patterns or unnecessary abstractions, leading to a relatively small code base.
-
-## Contributing
-
-Contributions are welcome, provided that they follow our design principles. We plan to extend this page in the future to give more technical details, and *maybe* comment a bit the code...
-
-The code must be formatted with the [clang-format](https://clang.llvm.org/docs/ClangFormat.html) tool and the given style file.
- 
-## License
-
-This software is released under the terms of the [GNU AGPLv3]
+Read `CONTEXT.md`, `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`, and
+`docs/adr/0008-remove-snort-cpp-mainline.md` before implementation work.

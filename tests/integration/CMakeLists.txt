@@ -63,13 +63,3 @@ add_custom_target(
   USES_TERMINAL
   VERBATIM
 )
-
-if(TARGET sucre-snort-ctl)
-  add_dependencies(snort-dx-snort10-base sucre-snort-ctl)
-  add_dependencies(snort-dx-smoke sucre-snort-ctl)
-endif()
-
-if(TARGET snort-build-ndk)
-  add_dependencies(snort-dx-snort10-base snort-build-ndk)
-  add_dependencies(snort-dx-smoke snort-build-ndk)
-endif()

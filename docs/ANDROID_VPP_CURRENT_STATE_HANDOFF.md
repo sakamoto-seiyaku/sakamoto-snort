@@ -4,6 +4,14 @@
 2026-08-10，protocol-identification pre-decision 证据更新于 2026-08-12，VPN Direct Egress
 fixed-spec 与 evidence frontier 更新于 2026-08-14。
 
+> **2026-08-26 current-head reset (authoritative):** ADR-0008 removed the
+> entire Snort C++ mainline: active daemon/host sources, host tests, NDK/APK
+> daemon artifact, the C++ Flow Stack facade, and the archived source. The
+> historical S55--S71 results are evidence only and are not current-head
+> runnable. Do not import, translate, or use that code as a reference. Android
+> RuntimeService now rejects launch with `c_vpp_mainline_required` until a real
+> VPP-native C product runtime is specified and supplied.
+
 范围：Android 优先的产品基础、VPP 引入、root/NFQUEUE 与
 VpnService/TUN 两种运行路径。Linux 的实现和功能验证暂缓，除非后续设计决策明确恢复。
 
@@ -30,7 +38,8 @@ p99/tail 只作为 POC architecture guardrail 而非 release SLO，broader throu
 thermal/power/soak 后置到真实产品 Direct Egress seam 存在之后。S245
 `experiments/vpp-nfq-poc/S245_ANDROID_VPN_MAIN_STACK_IMPORT_READINESS.md`
 进一步把导入边界固定为：先导入 Flow Stack Boundary Interface、host fake 和 same-owner
-re-arm invariant，不导入 OI3/vpn-lite/runner 代码。随后首个主栈切片已落到
+re-arm invariant，不导入 OI3/vpn-lite/runner 代码。**该 C++ “主栈导入”方案随后已由
+ADR-0008 完整撤除，不再是可执行计划。**随后首个主栈切片曾落到
 `src/datapath/tun/VpnFlowStackBoundary.*` 和
 `tests/host/vpn_flow_stack_boundary_tests.cpp`：same-owner deferred re-arm 现在有 host
 regression 固定为本地有界 drive，不通过 cross-owner wake 自投递。第二个切片继续把

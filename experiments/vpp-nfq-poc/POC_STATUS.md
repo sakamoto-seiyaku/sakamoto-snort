@@ -1,5 +1,12 @@
 # VPP/NFQUEUE POC Status
 
+> **2026-08-26 status reset (ADR-0008):** all rows involving the packaged
+> `libsucre_snortd.so`, Root/NFQUEUE daemon, RuntimeService launch, or former
+> C++ VPN flow stack are historical observations, not runnable POC or product
+> acceptance. The remaining owner-inline OI1--OI5 VPP/C observations are
+> evidence inputs for a newly designed VPP-native C module; do not import the
+> old implementation or revive its scripts as a compatibility path.
+
 This is a throwaway checkpoint for the current fast POC lane. Detailed raw notes
 remain in `EXPERIMENT_LOG.md`.
 

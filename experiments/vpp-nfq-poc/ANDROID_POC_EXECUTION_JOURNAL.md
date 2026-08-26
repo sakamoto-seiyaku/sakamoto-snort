@@ -1,5 +1,11 @@
 # Android VPP POC Execution Journal
 
+> **Historical journal notice (2026-08-26, ADR-0008):** entries that name the
+> retired Snort C++ daemon, its APK artifact, RuntimeService execution, or its
+> old device matrices record past observations only. They are not instructions
+> for the pending VPP-native C product. OI1--OI5 findings may be cited as
+> evidence, but no source or old runner may be carried into the new mainline.
+
 本文件是 Android POC 的本地执行流水账。Plane 工单是工作状态的 source of truth；
 Plane 项目页面 `Android VPP POC 技术备忘录` 只保留可复用的坑、失败方法和结论；
 原始命令输出保存在 `results/`。

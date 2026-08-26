@@ -3,6 +3,14 @@
 更新时间：2026-08-12
 状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `Sakamoto` / `SAKAMOTO` 为准；OpenSpec 仅作历史归档）
 
+> **2026-08-26 reset:** ADR-0008 removed every Snort C++ implementation,
+> host test, NDK/APK daemon artifact, and archive. Any `[DONE]` item below
+> whose executable evidence depends on `libsucre_snortd.so`, `snort-host-tests`,
+> or the former C++ daemon is historical evidence, not a current-head gate.
+> Do not revive it as a C++ compatibility path. The first new implementation
+> work is a VPP-native C Module specification derived from ADR-0006/0007 and
+> OI1--OI5.
+
 ## 0. 阅读指南
 
 本文结构：

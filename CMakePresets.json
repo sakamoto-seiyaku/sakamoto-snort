@@ -7,162 +7,17 @@
   },
   "configurePresets": [
     {
-      "name": "base",
-      "hidden": true,
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-output/cmake/${presetName}",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++",
-        "SNORT_ENABLE_DELEGATED_BUILD_TARGETS": "ON",
-        "SNORT_ENABLE_HOST_TESTS": "ON",
-        "SNORT_ENABLE_DEVICE_TESTS": "OFF"
-      }
-    },
-    {
       "name": "dev-debug",
-      "inherits": "base",
-      "description": "Repo-root developer workflow preset (Debug, Clang)",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
-    },
-    {
-      "name": "dev-relwithdebinfo",
-      "inherits": "base",
-      "description": "Repo-root developer workflow preset (RelWithDebInfo, Clang)",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
-      }
-    },
-    {
-      "name": "host-asan-clang",
-      "inherits": "base",
-      "description": "Host-side test preset with Clang AddressSanitizer",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_FLAGS": "-fsanitize=address -fno-omit-frame-pointer -O1 -g",
-        "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer -O1 -g",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address"
-      }
-    },
-    {
-      "name": "host-ubsan-clang",
-      "inherits": "base",
-      "description": "Host-side test preset with Clang UndefinedBehaviorSanitizer",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_FLAGS": "-fsanitize=undefined -fno-sanitize=pointer-overflow -fno-omit-frame-pointer -O1 -g",
-        "CMAKE_CXX_FLAGS": "-fsanitize=undefined -fno-sanitize=pointer-overflow -fno-omit-frame-pointer -O1 -g",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=undefined"
-      }
-    },
-    {
-      "name": "host-tsan-clang",
-      "inherits": "base",
-      "description": "Host-side Conntrack stress preset with Clang ThreadSanitizer",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -O1 -g",
-        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -O1 -g",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
-      }
-    },
-    {
-      "name": "host-coverage-clang",
-      "inherits": "base",
-      "description": "Host-side test preset with Clang/LLVM source-based coverage instrumentation",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_FLAGS": "-fprofile-instr-generate -fcoverage-mapping -O0 -g",
-        "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping -O0 -g",
-        "CMAKE_EXE_LINKER_FLAGS": "-fprofile-instr-generate"
-      }
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-output/cmake/dev-debug",
+      "description": "Repository workspace; the former Snort C++ build is retired."
     }
   ],
   "buildPresets": [
     {
       "name": "dev-debug",
       "configurePreset": "dev-debug",
-      "description": "Build repo-root developer workflow targets with the dev-debug configure preset"
-    },
-    {
-      "name": "dev-relwithdebinfo",
-      "configurePreset": "dev-relwithdebinfo",
-      "description": "Build repo-root developer workflow targets with the dev-relwithdebinfo configure preset"
-    },
-    {
-      "name": "host-asan-clang",
-      "configurePreset": "host-asan-clang",
-      "description": "Build repo-root host-side targets with Clang AddressSanitizer"
-    },
-    {
-      "name": "host-ubsan-clang",
-      "configurePreset": "host-ubsan-clang",
-      "description": "Build repo-root host-side targets with Clang UndefinedBehaviorSanitizer"
-    },
-    {
-      "name": "host-tsan-clang",
-      "configurePreset": "host-tsan-clang",
-      "description": "Build repo-root Conntrack stress targets with Clang ThreadSanitizer"
-    },
-    {
-      "name": "host-coverage-clang",
-      "configurePreset": "host-coverage-clang",
-      "description": "Build repo-root host-side targets with Clang/LLVM coverage instrumentation"
-    }
-  ],
-  "testPresets": [
-    {
-      "name": "dev-debug",
-      "configurePreset": "dev-debug",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "dev-relwithdebinfo",
-      "configurePreset": "dev-relwithdebinfo",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "host-asan-clang",
-      "configurePreset": "host-asan-clang",
-      "environment": {
-        "ASAN_OPTIONS": "detect_leaks=0"
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "host-ubsan-clang",
-      "configurePreset": "host-ubsan-clang",
-      "environment": {
-        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "host-tsan-clang",
-      "configurePreset": "host-tsan-clang",
-      "environment": {
-        "TSAN_OPTIONS": "halt_on_error=1"
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "host-coverage-clang",
-      "configurePreset": "host-coverage-clang",
-      "output": {
-        "outputOnFailure": true
-      }
+      "description": "Build repository workspace targets."
     }
   ]
 }
