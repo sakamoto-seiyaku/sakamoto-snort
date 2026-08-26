@@ -105,9 +105,13 @@ class A24VerifierUnitTest(unittest.TestCase):
         overlay = OVERLAY_PATH.read_text(encoding="utf-8")
         self.assertIn("SAKAMOTO_ANDROID_WORKER_IDLE_IGNORES_CLONED_POLLING_INPUTS",
                       overlay)
+        self.assertIn("SAKAMOTO_ANDROID_WORKER_IDLE_IGNORES_RECENT_BARRIER_HOLDOFF",
+                      overlay)
         self.assertIn("if (is_main && nm->input_node_counts_by_state"
                       "[VLIB_NODE_STATE_POLLING])", overlay)
         self.assertIn("Android VPN workers receive owner work through frame queues",
+                      overlay)
+        self.assertIn("Barrier sync/release already wakes eventfd-backed sleeping workers",
                       overlay)
         self.assertNotIn("wakeup_epoch", overlay)
         self.assertNotIn("vlib_frame_queue_wakeup_mode", overlay)

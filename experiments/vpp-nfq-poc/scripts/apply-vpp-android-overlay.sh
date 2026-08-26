@@ -456,18 +456,18 @@ replace_once(
     "\t  goto epoll;\n"
     "\t}\n"
     "\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "      /* SAKAMOTO_ANDROID_WORKER_IDLE_IGNORES_RECENT_BARRIER_HOLDOFF\n"
+    "       * Barrier sync/release already wakes eventfd-backed sleeping workers.\n"
+    "       * Keeping workers hot for 0.5s after every main-thread barrier release\n"
+    "       * dominates Android VPN idle CPU because stock VPP control-plane and\n"
+    "       * stats activity can refresh the release timestamp repeatedly even with\n"
+    "       * zero data-plane vectors. */\n"
+    "#else\n"
     "      if (vlib_get_first_main ()->time_last_barrier_release + 0.5 >=\n"
     "\t  vlib_time_now (vm))\n"
-    "\t{\n"
-    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
-    "\t  if (sakamoto_diag)\n"
-    "\t    {\n"
-    "\t      sakamoto_diag->skip_barrier_recent++;\n"
-    "\t      sakamoto_diag->last_reason = 4;\n"
-    "\t    }\n"
-    "#endif\n"
-    "\t  goto skip_loops;\n"
-    "\t}\n",
+    "\tgoto skip_loops;\n"
+    "#endif\n",
 )
 
 replace_once(
