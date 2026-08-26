@@ -21,7 +21,9 @@ OI3/VPP worker idle CPU hotspot；S231--S236 把 Direct/OI3 foreground/device-st
 count-bounded CPU evidence 推进到 count512。随后 S237 发现一个有效低 CPU 的 count64
 same-owner deferred SYN p99 tail，S237--S244 通过 owner-local re-arm drive 修正该 POC seam；
 S244 完整 Direct/OI3 count64 repeat 通过，OI3 p99 为 `65/76/70/77/82ms`。S241 的一次
-VPP initial worker barrier abort 被记录为低频 repeat-start lifecycle risk，S243/S244 未复现。
+VPP initial worker barrier abort 被记录为低频 repeat-start lifecycle risk，S243/S244 以及
+F076 clean-single rerun（8 个 OI3-only 4-request repeat）未复现；同小时两个 invalid rerun
+被归类为并发 runner 污染，而不是 VPP startup evidence。
 当前主栈含义仍是：可以把 same-owner re-arm 本地驱动作为导入设计输入，但不能把 throwaway
 POC runner/APK 直接导入产品；正式导入仍受 EG-17 的 HEV-baseline disposition、formal p99/tail
 tolerance、broader throughput/capacity、thermal/power/soak gates 约束。S245

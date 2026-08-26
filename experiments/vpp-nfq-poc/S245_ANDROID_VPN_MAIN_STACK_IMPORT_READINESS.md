@@ -130,7 +130,8 @@ ADR-0007 product acceptance surface.  Remaining blockers:
 - broader throughput/capacity CPU beyond count64/count512 bounded samples;
 - thermal, power, and soak evidence;
 - repeat-start lifecycle regression for the S241 VPP initial worker barrier
-  abort, even though S243/S244 did not reproduce it.
+  abort, even though S243/S244 and the later F076 clean-single rerun did not
+  reproduce it.
 
 ## Recommendation
 
