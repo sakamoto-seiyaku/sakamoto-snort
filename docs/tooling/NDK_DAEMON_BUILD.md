@@ -111,6 +111,16 @@ cleanup because killing the Java `Process` wrapper alone is not reliable after
 `su` executes the daemon. This is a debug POC result, not a release permission,
 foreground-service, upgrade, or rollback contract.
 
+Operational pitfall: `adb shell su` success only proves the shell package is
+authorized. It does not prove `com.sakamoto.snort.androidruntime` can launch the
+root runtime. Before accepting S70/S71 root-profile failures as dataplane
+evidence, verify the KernelSU allowlist or Manager UI includes the Android
+runtime package. If it does not, the expected product state is
+`root_authorization_required`; grant KernelSU Superuser authorization to the APK
+and rerun the lifecycle gate. The APK manifest declares KernelSU package
+visibility so the app can surface the grant path, but that declaration is not a
+grant.
+
 ## APK POC Build Identity
 
 The APK build scripts package the already-staged

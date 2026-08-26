@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `SEVENTEENTH_S58_UDP_L4_WORKFLOW_EVIDENCE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `EIGHTEENTH_S71_KERNELSU_APP_AUTHORIZATION_BLOCKED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -760,6 +760,67 @@ Validated locally:
 Remaining product work after this slice:
 
 1. Rerun corrected S58 against the rebuilt current APK.
+2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
+   selected by product runtime construction.
+
+## 2026-08-26 eighteenth import slice
+
+The current-head S71 dual-profile closure gate progressed past the earlier UID
+drop, fixed TCP source-port, and S58 Activity-prefill hotspots, then stopped at
+a device authorization precondition before the S70 product root profile
+lifecycle evidence could start.
+
+Evidence:
+
+- Result directory:
+  `build-output/s71-dual-profile-closure-gate/20260826-1330-s71-current-head`.
+- Host/runtime contract passed.
+- Host VPP graph and conformance gate passed.
+- Root daemon build and deploy passed.
+- Direct root NFQUEUE matrix passed:
+  - Root OUTPUT app UID verdict evidence passed;
+  - Root INPUT app-UID seam was correctly recorded as
+    `UID_UNAVAILABLE`;
+  - Root INPUT Unknown Application policy evidence passed;
+  - restart, SIGKILL fault/recovery and final no-residue checks passed.
+- Product VPN matrix passed against the current `vpn-tun-fd-compat` backend.
+- S71 stopped when it invoked the S70 profile lifecycle matrix:
+  - `profile_lifecycle_matrix.result=FAIL`;
+  - `errorCode=root_authorization_required`;
+  - `errorMessage=KernelSU/root execution is unavailable to this app process`;
+  - the runtime projection remained `state=stopped` and
+    `adapter=unavailable`.
+
+Device authorization diagnosis:
+
+- ADB shell root still works on the same device:
+  `su 0 sh -c id` reports `uid=0(root)` with KernelSU context.
+- The KernelSU allowlist contains only `com.android.shell` and Shizuku entries;
+  it does not contain `com.sakamoto.snort.androidruntime`.
+- Therefore shell root availability is not sufficient evidence that the
+  product app process is authorized to launch the root runtime.
+- The Android runtime manifest now declares KernelSU package visibility through
+  `<queries><package android:name="me.weishu.kernelsu" /></queries>`, and S54
+  static contract checks this.  This removes an app-visibility pitfall but does
+  not itself grant root authorization on the device.
+
+Interpretation:
+
+- This is not a dataplane failure and not a regression of the UID seam
+  decision.  It is an operational KernelSU app-authorization precondition for
+  product root profile lifecycle testing.
+- The correct next action is to grant KernelSU Superuser authorization to the
+  installed `com.sakamoto.snort.androidruntime` app, then rerun S70/S71.
+- Do not treat a passing `adb shell su` check as sufficient for S70/S71.  The
+  app package must be authorized separately.
+- Do not hand-edit KernelSU's binary `.allowlist` as part of normal POC
+  automation.  If manual grant is unavailable, S70/S71 should fail fast with
+  `root_authorization_required` and record the missing app authorization.
+
+Remaining product work after this slice:
+
+1. Clear the KernelSU app authorization precondition and rerun S70/S71.
 2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
    selected by product runtime construction.
