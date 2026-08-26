@@ -9,7 +9,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <span>
+#include <vector>
 
 namespace SnortDatapath::Tun {
 
@@ -186,6 +188,75 @@ public:
 
 private:
     int *transportFd_ = nullptr;
+};
+
+struct VpnOwnerLocalFlowStackConfig final {
+    std::uint32_t ownerCount = 1;
+    std::uint64_t generation = 1;
+    std::size_t maxPacketsPerOwner = 16;
+    std::size_t maxPacketBytes = 1500;
+    std::size_t maxReturnPackets = 64;
+    std::size_t maxWakeDepthPerOwner = 16;
+};
+
+/**
+ * Product-shaped host Adapter for the Android VPN Userspace Flow Stack seam.
+ *
+ * This Adapter intentionally does not implement HEV/lwIP.  It models the
+ * ownership, generation and bounded queue rules expected of the real
+ * implementation so host tests can exercise Direct Egress semantics without a
+ * transport-fd contract.
+ */
+class VpnOwnerLocalFlowStackBoundary final : public VpnFlowStackBoundary {
+public:
+    explicit VpnOwnerLocalFlowStackBoundary(
+        VpnOwnerLocalFlowStackConfig config);
+
+    [[nodiscard]] VpnFlowStackAdmissionResult admitPacket(
+        const VpnFlowStackAdmissionRequest &request,
+        std::span<const std::byte> l3Packet) noexcept override;
+
+    [[nodiscard]] VpnFlowStackReturnResult receiveReturnPacket(
+        std::span<std::byte> packetBuffer) noexcept override;
+
+    [[nodiscard]] VpnFlowStackDriveStatus driveOwner(
+        std::uint32_t owner, VpnFlowStackDriveBudget budget) noexcept override;
+
+    [[nodiscard]] VpnFlowStackDriveStatus finishOwnerIfReady(
+        std::uint32_t owner) noexcept override;
+
+    [[nodiscard]] VpnFlowStackWakeStatus enqueueOwnerWake(
+        const VpnFlowStackDeferredWork &work) noexcept override;
+
+    void setGeneration(std::uint64_t generation) noexcept;
+
+    [[nodiscard]] std::uint64_t generation() const noexcept;
+
+    [[nodiscard]] std::size_t pendingPackets(
+        std::uint32_t owner) const noexcept;
+
+    [[nodiscard]] std::size_t pendingReturnPackets() const noexcept;
+
+    [[nodiscard]] std::size_t queuedWakes(
+        std::uint32_t owner) const noexcept;
+
+private:
+    struct OwnerShard final {
+        std::deque<std::vector<std::byte>> admittedPackets;
+        std::deque<VpnFlowStackDeferredWork> wakes;
+    };
+
+    [[nodiscard]] bool ownerExists(std::uint32_t owner) const noexcept;
+
+    void clearQueuedWork() noexcept;
+
+    std::uint64_t generation_ = 1;
+    std::size_t maxPacketsPerOwner_ = 16;
+    std::size_t maxPacketBytes_ = 1500;
+    std::size_t maxReturnPackets_ = 64;
+    std::size_t maxWakeDepthPerOwner_ = 16;
+    std::vector<OwnerShard> owners_;
+    std::deque<std::vector<std::byte>> returnPackets_;
 };
 
 /**

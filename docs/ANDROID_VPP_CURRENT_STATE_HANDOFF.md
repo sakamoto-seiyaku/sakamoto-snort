@@ -39,8 +39,12 @@ adapter 里重新 parse/hash。第三个切片把现有 transport-fd outbound �
 fd 缺失和 fd backpressure 仍分别记录为 transport unsupported/failed，不伪装成 policy drop。第四个
 切片继续把 transport-return poll/read 路径收进 `VpnFlowStackBoundary::receiveReturnPacket()`；
 `VpnTunFdRuntime` 不再直接读取 `transportFd_`，而是从 Flow Stack seam 获取回包，再通过共享
-`VpnTunFlowAdapter` 图路径检查后写回 TUN。当前仍未导入 HEV/lwIP/OI3 产品实现；下一步应在该
-Interface 后替换 fd-backed 占位 Adapter。
+`VpnTunFlowAdapter` 图路径检查后写回 TUN。第五个切片新增 `VpnOwnerLocalFlowStackBoundary`
+作为主栈内 product-shaped host Adapter：它按 canonical owner/generation、有界 per-owner
+admission、budgeted local drive、generation-tagged cross-owner wake 与 return-packet 队列来固定
+真实 VPN Userspace Flow Stack 必须满足的语义；generation 切换会清掉旧 packet/return/wake 队列，避免
+teardown 后继续驱动 stale work。当前仍未导入 HEV/lwIP/OI3 产品实现；下一步应在该
+Interface 后替换或包裹 fd-backed 占位 Adapter，而不是继续扩大 `VpnTunFdRuntime` 的 fd 语义。
 
 后续产品与架构决策（2026-07-19）：
 

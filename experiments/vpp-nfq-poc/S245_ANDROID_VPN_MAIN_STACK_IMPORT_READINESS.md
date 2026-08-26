@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `FOURTH_RETURN_PATH_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `FIFTH_OWNER_LOCAL_FAKE_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
 
 ## Question
 
@@ -35,7 +35,8 @@ Active source seams:
 | `src/core/flow/FlowGraphIngress.*` | Parses complete L3 bytes into shared `PacketFacts`. | Keep parser ownership in the shared graph; do not reintroduce a VPN-only parser. |
 | `src/core/flow/FlowGraphInjection.*` | Performs owner enqueue, Owner Guard, policy evaluation, and completion in a bounded packet transaction. | Needs to expose enough accepted-packet/owner provenance for VPN egress handoff. |
 | `src/datapath/tun/VpnTunFlowAdapter.*` | Normalizes VPN/TUN packets into the shared FlowGraph and records policy-vs-transport outcome counters. | Correct seam for VPN profile ingress, but it does not yet own a Flow Stack shard interface. |
-| `src/datapath/tun/VpnTunFdRuntime.hpp` | Writes allowed outbound packets to a transport fd and writes transport-return packets back to TUN. | This is a test/adapter placeholder. Product Direct Egress must replace it behind a deep Flow Stack interface. |
+| `src/datapath/tun/VpnFlowStackBoundary.*` | Defines the VPN Flow Stack seam, the fd-backed compatibility Adapter and the owner-local host Adapter. | Product Direct Egress continues behind this Interface; HEV/lwIP details must not leak into `VpnTunFdRuntime`. |
+| `src/datapath/tun/VpnTunFdRuntime.hpp` | Admits outbound packets and receives return packets through `VpnFlowStackBoundary`, while the current runtime still instantiates the fd-backed placeholder Adapter. | The remaining product work is replacing the placeholder Adapter implementation, not widening runtime fd knowledge. |
 
 ## What can be imported now
 
@@ -248,8 +249,40 @@ Validated locally:
 The next slice is to replace the fd-backed placeholder implementation behind
 `VpnFlowStackBoundary` with a product-shaped HEV/lwIP fake/adapter while
 preserving the current seam tests and fd compatibility tests.
-- `runtime_profile_tests`: 9 passed.
 
-The next slice is to define the explicit return-packet delivery path behind
-the same Interface, then retire the remaining direct transport-fd return relay
-from `VpnTunFdRuntime`.
+## 2026-08-26 fifth import slice
+
+The fifth main-stack design-import slice introduced a product-shaped,
+owner-local host Adapter behind the same Flow Stack Interface:
+
+- `VpnOwnerLocalFlowStackBoundary` models the VPN Userspace Flow Stack as
+  owner-local egress shards, not as a transport fd.
+- Admission is keyed by canonical owner and generation.  Stale generations,
+  invalid owners, unsupported protocols, FlowStack-origin loop attempts and
+  per-owner capacity exhaustion are explicit seam outcomes.
+- Same-owner drive remains local and budgeted.  It materializes bounded return
+  packets that are later received through `receiveReturnPacket()`.
+- Cross-owner work is represented only as generation-tagged wakes.  The host
+  Adapter queues valid cross-owner wakes, rejects stale wakes and applies a
+  bounded wake depth.
+- Generation changes clear pending owner packets, return packets and queued
+  wakes so stale work cannot be driven after teardown/epoch replacement.
+- The existing `VpnFdFlowStackBoundary` remains as compatibility evidence for
+  the current fd handoff tests, but it is no longer the only implementation
+  behind the seam.
+
+This is not the HEV/lwIP product implementation.  It is the main-stack test
+shape that the real Adapter must satisfy before Android Direct/OI3-style
+evidence is rerun against product code.
+
+Validated locally:
+
+- `vpn_flow_stack_boundary_tests`: 16 passed.
+- `vpn_tun_flow_adapter_tests`: 22 passed.
+- `runtime_profile_tests`: 9 passed.
+- `control_server_contract_tests`: 44 passed.
+- `snort-host-tests`: 25/25 passed.
+
+The next slice is to wire a real HEV/lwIP-backed implementation, or the
+smallest compilable production facade for it, behind `VpnFlowStackBoundary`
+while preserving the owner-local host Adapter tests and fd compatibility tests.

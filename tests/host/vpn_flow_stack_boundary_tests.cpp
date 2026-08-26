@@ -256,6 +256,336 @@ TEST(VpnFlowStackBoundaryTest,
 }
 
 TEST(VpnFlowStackBoundaryTest,
+     OwnerLocalAdapterAdmitsTunOriginToCanonicalOwnerShard) {
+    VpnOwnerLocalFlowStackBoundary boundary{
+        VpnOwnerLocalFlowStackConfig{
+            .ownerCount = 4,
+            .generation = 7,
+            .maxPacketsPerOwner = 2,
+            .maxPacketBytes = 64,
+            .maxReturnPackets = 4,
+        }};
+    const std::array<std::byte, 4> packet{
+        std::byte{0x45}, std::byte{0x00}, std::byte{0x00}, std::byte{0x28}};
+
+    const auto result = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 2,
+            .generation = 7,
+            .policyRevision = 3,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+
+    ASSERT_TRUE(result.accepted());
+    EXPECT_EQ(result.canonicalOwner, 2U);
+    EXPECT_EQ(boundary.pendingPackets(0), 0U);
+    EXPECT_EQ(boundary.pendingPackets(1), 0U);
+    EXPECT_EQ(boundary.pendingPackets(2), 1U);
+    EXPECT_EQ(boundary.pendingPackets(3), 0U);
+    EXPECT_EQ(boundary.pendingReturnPackets(), 0U);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     OwnerLocalAdapterRejectsStaleLoopAndUnsupportedIngress) {
+    VpnOwnerLocalFlowStackBoundary boundary{
+        VpnOwnerLocalFlowStackConfig{
+            .ownerCount = 2,
+            .generation = 9,
+            .maxPacketsPerOwner = 2,
+        }};
+    const std::array<std::byte, 4> packet{
+        std::byte{0x45}, std::byte{0x00}, std::byte{0x00}, std::byte{0x28}};
+
+    const auto stale = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 1,
+            .generation = 8,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+    EXPECT_EQ(stale.status, VpnFlowStackAdmissionStatus::StaleGeneration);
+
+    const auto loop = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 1,
+            .generation = 9,
+            .provenance = VpnFlowStackPacketProvenance::FlowStackOrigin,
+        },
+        packet);
+    EXPECT_EQ(loop.status, VpnFlowStackAdmissionStatus::LoopRejected);
+
+    auto unsupportedFacts = packetFacts();
+    unsupportedFacts.ipProtocol = 1;
+    const auto unsupported = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = unsupportedFacts,
+            .canonicalOwner = 1,
+            .generation = 9,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+    EXPECT_EQ(unsupported.status,
+              VpnFlowStackAdmissionStatus::UnsupportedProtocol);
+
+    auto missingPortFacts = packetFacts();
+    missingPortFacts.portsAvailable = false;
+    const auto missingPorts = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = missingPortFacts,
+            .canonicalOwner = 1,
+            .generation = 9,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+    EXPECT_EQ(missingPorts.status,
+              VpnFlowStackAdmissionStatus::UnsupportedProtocol);
+    EXPECT_EQ(boundary.pendingPackets(1), 0U);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     OwnerLocalAdapterDropsOwnerCapacityWithoutCrossOwnerSpill) {
+    VpnOwnerLocalFlowStackBoundary boundary{
+        VpnOwnerLocalFlowStackConfig{
+            .ownerCount = 3,
+            .generation = 11,
+            .maxPacketsPerOwner = 1,
+        }};
+    const std::array<std::byte, 4> packet{
+        std::byte{0x45}, std::byte{0x00}, std::byte{0x00}, std::byte{0x28}};
+
+    const auto first = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 1,
+            .generation = 11,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+    const auto overflow = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 1,
+            .generation = 11,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+    const auto otherOwner = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 2,
+            .generation = 11,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+
+    EXPECT_TRUE(first.accepted());
+    EXPECT_EQ(overflow.status, VpnFlowStackAdmissionStatus::DroppedCapacity);
+    EXPECT_TRUE(otherOwner.accepted());
+    EXPECT_EQ(boundary.pendingPackets(0), 0U);
+    EXPECT_EQ(boundary.pendingPackets(1), 1U);
+    EXPECT_EQ(boundary.pendingPackets(2), 1U);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     OwnerLocalDriveProducesReturnPacketsWithinBudget) {
+    VpnOwnerLocalFlowStackBoundary boundary{
+        VpnOwnerLocalFlowStackConfig{
+            .ownerCount = 2,
+            .generation = 13,
+            .maxPacketsPerOwner = 4,
+            .maxReturnPackets = 4,
+        }};
+    const std::array<std::byte, 4> firstPacket{
+        std::byte{0x45}, std::byte{0x00}, std::byte{0x00}, std::byte{0x28}};
+    const std::array<std::byte, 4> secondPacket{
+        std::byte{0x45}, std::byte{0x01}, std::byte{0x00}, std::byte{0x28}};
+
+    ASSERT_TRUE(boundary
+                    .admitPacket(
+                        VpnFlowStackAdmissionRequest{
+                            .facts = packetFacts(),
+                            .canonicalOwner = 1,
+                            .generation = 13,
+                            .provenance =
+                                VpnFlowStackPacketProvenance::TunOrigin,
+                        },
+                        firstPacket)
+                    .accepted());
+    ASSERT_TRUE(boundary
+                    .admitPacket(
+                        VpnFlowStackAdmissionRequest{
+                            .facts = packetFacts(),
+                            .canonicalOwner = 1,
+                            .generation = 13,
+                            .provenance =
+                                VpnFlowStackPacketProvenance::TunOrigin,
+                        },
+                        secondPacket)
+                    .accepted());
+
+    const auto firstDrive = boundary.driveOwner(
+        1, VpnFlowStackDriveBudget{.maxPackets = 1, .maxReturnPackets = 1});
+
+    EXPECT_EQ(firstDrive, VpnFlowStackDriveStatus::MadeProgress);
+    EXPECT_EQ(boundary.pendingPackets(1), 1U);
+    EXPECT_EQ(boundary.pendingReturnPackets(), 1U);
+    EXPECT_EQ(boundary.finishOwnerIfReady(1),
+              VpnFlowStackDriveStatus::MadeProgress);
+
+    std::array<std::byte, 64> buffer{};
+    auto received = boundary.receiveReturnPacket(buffer);
+    ASSERT_TRUE(received.hasPacket());
+    EXPECT_EQ(received.bytes, firstPacket.size());
+    EXPECT_TRUE(std::equal(
+        firstPacket.begin(), firstPacket.end(), buffer.begin()));
+
+    const auto secondDrive = boundary.driveOwner(
+        1, VpnFlowStackDriveBudget{.maxPackets = 4, .maxReturnPackets = 4});
+    EXPECT_EQ(secondDrive, VpnFlowStackDriveStatus::MadeProgress);
+    EXPECT_EQ(boundary.finishOwnerIfReady(1),
+              VpnFlowStackDriveStatus::Completed);
+
+    buffer.fill(std::byte{0x00});
+    received = boundary.receiveReturnPacket(buffer);
+    ASSERT_TRUE(received.hasPacket());
+    EXPECT_EQ(received.bytes, secondPacket.size());
+    EXPECT_TRUE(std::equal(
+        secondPacket.begin(), secondPacket.end(), buffer.begin()));
+    EXPECT_EQ(boundary.receiveReturnPacket(buffer).status,
+              VpnFlowStackReturnStatus::NoPacket);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     OwnerLocalAdapterQueuesOnlyGenerationTaggedCrossOwnerWakes) {
+    VpnOwnerLocalFlowStackBoundary boundary{
+        VpnOwnerLocalFlowStackConfig{
+            .ownerCount = 4,
+            .generation = 42,
+            .maxWakeDepthPerOwner = 1,
+        }};
+
+    const auto sameOwner = serviceDeferredFlowStackWork(
+        boundary,
+        VpnFlowStackDeferredWork{
+            .currentWorker = 2,
+            .targetOwner = 2,
+            .generation = 42,
+            .reason = VpnFlowStackDeferredReason::SameOwnerRearm,
+        },
+        VpnFlowStackDriveBudget{.maxPackets = 1});
+    EXPECT_EQ(sameOwner.action, VpnFlowStackServiceAction::LocalDrive);
+    EXPECT_EQ(boundary.queuedWakes(2), 0U);
+
+    const auto crossOwner = serviceDeferredFlowStackWork(
+        boundary,
+        VpnFlowStackDeferredWork{
+            .currentWorker = 1,
+            .targetOwner = 2,
+            .generation = 42,
+            .reason = VpnFlowStackDeferredReason::FdWake,
+        },
+        VpnFlowStackDriveBudget{.maxPackets = 1});
+    EXPECT_EQ(crossOwner.action, VpnFlowStackServiceAction::CrossOwnerWake);
+    EXPECT_EQ(crossOwner.wakeStatus, VpnFlowStackWakeStatus::Enqueued);
+    EXPECT_EQ(boundary.queuedWakes(2), 1U);
+
+    const auto capacity = serviceDeferredFlowStackWork(
+        boundary,
+        VpnFlowStackDeferredWork{
+            .currentWorker = 1,
+            .targetOwner = 2,
+            .generation = 42,
+            .reason = VpnFlowStackDeferredReason::TimerWake,
+        },
+        VpnFlowStackDriveBudget{.maxPackets = 1});
+    EXPECT_EQ(capacity.wakeStatus, VpnFlowStackWakeStatus::CapacityDrop);
+    EXPECT_EQ(boundary.queuedWakes(2), 1U);
+
+    const auto stale = serviceDeferredFlowStackWork(
+        boundary,
+        VpnFlowStackDeferredWork{
+            .currentWorker = 1,
+            .targetOwner = 3,
+            .generation = 41,
+            .reason = VpnFlowStackDeferredReason::FdWake,
+        },
+        VpnFlowStackDriveBudget{.maxPackets = 1});
+    EXPECT_EQ(stale.wakeStatus, VpnFlowStackWakeStatus::StaleGeneration);
+    EXPECT_EQ(boundary.queuedWakes(3), 0U);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     OwnerLocalGenerationChangeClearsQueuedPacketsReturnsAndWakes) {
+    VpnOwnerLocalFlowStackBoundary boundary{
+        VpnOwnerLocalFlowStackConfig{
+            .ownerCount = 3,
+            .generation = 50,
+            .maxPacketsPerOwner = 4,
+            .maxReturnPackets = 4,
+            .maxWakeDepthPerOwner = 4,
+        }};
+    const std::array<std::byte, 4> packet{
+        std::byte{0x45}, std::byte{0x00}, std::byte{0x00}, std::byte{0x28}};
+
+    ASSERT_TRUE(boundary
+                    .admitPacket(
+                        VpnFlowStackAdmissionRequest{
+                            .facts = packetFacts(),
+                            .canonicalOwner = 1,
+                            .generation = 50,
+                            .provenance =
+                                VpnFlowStackPacketProvenance::TunOrigin,
+                        },
+                        packet)
+                    .accepted());
+    EXPECT_EQ(boundary.driveOwner(
+                  1, VpnFlowStackDriveBudget{.maxPackets = 1,
+                                             .maxReturnPackets = 1}),
+              VpnFlowStackDriveStatus::MadeProgress);
+    EXPECT_EQ(boundary.enqueueOwnerWake(
+                  VpnFlowStackDeferredWork{
+                      .currentWorker = 0,
+                      .targetOwner = 2,
+                      .generation = 50,
+                      .reason = VpnFlowStackDeferredReason::FdWake,
+                  }),
+              VpnFlowStackWakeStatus::Enqueued);
+    EXPECT_EQ(boundary.pendingReturnPackets(), 1U);
+    EXPECT_EQ(boundary.queuedWakes(2), 1U);
+
+    boundary.setGeneration(51);
+
+    EXPECT_EQ(boundary.generation(), 51U);
+    EXPECT_EQ(boundary.pendingPackets(1), 0U);
+    EXPECT_EQ(boundary.pendingReturnPackets(), 0U);
+    EXPECT_EQ(boundary.queuedWakes(2), 0U);
+
+    const auto stale = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 1,
+            .generation = 50,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+    EXPECT_EQ(stale.status, VpnFlowStackAdmissionStatus::StaleGeneration);
+
+    const auto fresh = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 1,
+            .generation = 51,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+    EXPECT_TRUE(fresh.accepted());
+}
+
+TEST(VpnFlowStackBoundaryTest,
      FdBackedAdmissionWritesTunOriginPacketToTransportFd) {
     int transportFds[2]{-1, -1};
     ASSERT_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
