@@ -91,6 +91,11 @@ snapshot_value() {
   awk -F= -v key="$key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }'
 }
 
+snapshot_value_or_empty() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { print $2; found=1; exit } END { if (!found) exit 0 }'
+}
+
 wait_for_snapshot_field() {
   local key="$1"
   local expected="$2"
@@ -107,6 +112,20 @@ wait_for_snapshot_field() {
     sleep 1
   done
   return 1
+}
+
+snapshot_is_fresh_running() {
+  local current_state="$1"
+  local not_before_millis="$2"
+  local updated_at
+  updated_at="$(printf '%s\n' "$current_state" | snapshot_value_or_empty updatedAtMillis)"
+  [[ "$updated_at" =~ ^[0-9]+$ ]] || return 1
+  (( updated_at >= not_before_millis )) || return 1
+  grep -Fxq "state=running" <<<"$current_state" \
+    && grep -Fxq "profile=vpn" <<<"$current_state" \
+    && grep -Fxq "health=ok" <<<"$current_state" \
+    && grep -Fxq "coreHealth=ok" <<<"$current_state" \
+    && grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$current_state"
 }
 
 capture_start_failure_diagnostics() {
@@ -276,32 +295,27 @@ grep -q 'android socks5 smoke server ready' "${RESULT_DIR}/socks5.start.log"
 
 section "start_vpn"
 adb_cmd shell am force-stop "$PACKAGE" >/dev/null
+start_not_before_millis="$(adb_cmd shell date +%s%3N | tr -d '\r[:space:]')"
+kv "start.notBeforeMillis" "$start_not_before_millis"
 adb_cmd shell am start -n "$ACTIVITY" --ez runtimeStart true --es runtimeProfile vpn \
   >"${RESULT_DIR}/start.intent.log" 2>&1
 state=""
 for _ in $(seq 1 45); do
   state="$(read_snapshot)"
   printf '%s\n' "$state" >"${RESULT_DIR}/snapshot.running"
-  if grep -Fxq "state=running" <<<"$state" \
-      && grep -Fxq "profile=vpn" <<<"$state" \
-      && grep -Fxq "health=ok" <<<"$state" \
-      && grep -Fxq "coreHealth=ok" <<<"$state" \
-      && grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$state"; then
+  if snapshot_is_fresh_running "$state" "$start_not_before_millis"; then
     break
   fi
   sleep 1
 done
-if ! grep -Fxq "state=running" <<<"$state" \
-    || ! grep -Fxq "profile=vpn" <<<"$state" \
-    || ! grep -Fxq "health=ok" <<<"$state" \
-    || ! grep -Fxq "coreHealth=ok" <<<"$state" \
-    || ! grep -Fxq "adapterReadiness=vpn-tun-fd-compat" <<<"$state"; then
+if ! snapshot_is_fresh_running "$state" "$start_not_before_millis"; then
   kv "start.result" "FAIL"
   capture_start_failure_diagnostics
   cat "${RESULT_DIR}/snapshot.running" >&2
   exit 1
 fi
 kv "start.result" "PASS"
+kv "snapshot.updatedAtMillis" "$(printf '%s\n' "$state" | snapshot_value updatedAtMillis)"
 kv "snapshot.pid" "$(printf '%s\n' "$state" | snapshot_value pid)"
 
 section "runtime_log"

@@ -482,6 +482,11 @@ Runner pitfall fix:
   empty snapshot.
 - If lock/sleep state is visible in the captured dumps, S55 also reports
   `start.deviceBlockedByLockOrSleep=possible`.
+- S55 now records `start.notBeforeMillis` and only accepts a running snapshot
+  whose `updatedAtMillis` is at or after that device timestamp.  This prevents
+  a stale pre-existing `snapshot.properties` from making a rerun pass
+  `start_vpn` before the current start attempt has actually reached native
+  runtime startup.
 
 Operational rule: authorize the VPN dialog on the test device, then rerun S55
 without reinstalling the APK when possible; reinstalling can re-trigger the
