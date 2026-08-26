@@ -101,6 +101,18 @@ class A24VerifierUnitTest(unittest.TestCase):
         self.assertIn("cell %s stage %s ", overlay)
         self.assertIn("request %llu", overlay)
 
+    def test_android_overlay_allows_worker_idle_despite_cloned_polling_inputs(self) -> None:
+        overlay = OVERLAY_PATH.read_text(encoding="utf-8")
+        self.assertIn("SAKAMOTO_ANDROID_WORKER_IDLE_IGNORES_CLONED_POLLING_INPUTS",
+                      overlay)
+        self.assertIn("if (is_main && nm->input_node_counts_by_state"
+                      "[VLIB_NODE_STATE_POLLING])", overlay)
+        self.assertIn("Android VPN workers receive owner work through frame queues",
+                      overlay)
+        self.assertNotIn("wakeup_epoch", overlay)
+        self.assertNotIn("vlib_frame_queue_wakeup_mode", overlay)
+        self.assertNotIn("VLIB_WAKE_PHASE", overlay)
+
 
 if __name__ == "__main__":
     unittest.main()

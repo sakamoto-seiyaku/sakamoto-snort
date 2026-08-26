@@ -280,6 +280,26 @@ replace_once(
     "  u32 ticks;",
 )
 
+replace_once(
+    "vlib/file.c",
+    "  /* at least one node is polling */\n"
+    "  if (nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING])\n"
+    "    goto skip_loops;\n",
+    "  /* at least one node is polling */\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  /* SAKAMOTO_ANDROID_WORKER_IDLE_IGNORES_CLONED_POLLING_INPUTS\n"
+    "   * Android VPN workers receive owner work through frame queues and\n"
+    "   * eventfd-backed file wakeups.  A VPP worker clone still inherits many\n"
+    "   * default POLLING input nodes even when none of them has work; treating\n"
+    "   * that clone-time count as busy keeps idle workers in a tight loop. */\n"
+    "  if (is_main && nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING])\n"
+    "    goto skip_loops;\n"
+    "#else\n"
+    "  if (nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING])\n"
+    "    goto skip_loops;\n"
+    "#endif\n",
+)
+
 idle_wait_block = """
 #ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
   uword *sakamoto_idle_event_data = 0;
