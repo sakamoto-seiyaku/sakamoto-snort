@@ -3,6 +3,7 @@ package com.sakamoto.snort.androidruntime;
 /** Product-facing L4 rule draft derived from bounded Activity evidence. */
 public final class ActivityL4RuleDraft {
     public static final int TCP_PROTOCOL = 6;
+    public static final int UDP_PROTOCOL = 17;
     public static final int DEFAULT_PRIORITY = 10;
     public static final int DEFAULT_ORDER = 0;
 
@@ -36,8 +37,16 @@ public final class ActivityL4RuleDraft {
     public static ActivityL4RuleDraft fromTcpPolicyDropActivity(
             String host, int port, int linuxUid, boolean uidKnown, int networkContext,
             String stage) {
+        return fromPolicyDropActivity(host, port, TCP_PROTOCOL, linuxUid, uidKnown,
+                networkContext, stage);
+    }
+
+    public static ActivityL4RuleDraft fromPolicyDropActivity(
+            String host, int port, int ipProtocol, int linuxUid, boolean uidKnown,
+            int networkContext, String stage) {
         if (!uidKnown || linuxUid < 0 || port <= 0 || port > 65535
-                || host == null || host.trim().isEmpty() || !"L4".equals(stage)) {
+                || host == null || host.trim().isEmpty() || !"L4".equals(stage)
+                || !isSupportedProtocol(ipProtocol)) {
             return null;
         }
         String trimmedHost = host.trim();
@@ -46,7 +55,7 @@ public final class ActivityL4RuleDraft {
         String cidr = trimmedHost + (family == AuthoringPolicyBundle.IpFamily.IPV6
                 ? "/128" : "/32");
         return new ActivityL4RuleDraft(ApplicationSubjectId.fromUid(linuxUid), family,
-                cidr, AuthoringPolicyBundle.PortRange.exact(port), TCP_PROTOCOL,
+                cidr, AuthoringPolicyBundle.PortRange.exact(port), ipProtocol,
                 AuthoringPolicyBundle.PacketDirection.OUTPUT,
                 networkContextFromWireId(networkContext),
                 AuthoringPolicyBundle.L4Action.DROP);
@@ -80,5 +89,9 @@ public final class ActivityL4RuleDraft {
             }
         }
         return null;
+    }
+
+    private static boolean isSupportedProtocol(int ipProtocol) {
+        return ipProtocol == TCP_PROTOCOL || ipProtocol == UDP_PROTOCOL;
     }
 }

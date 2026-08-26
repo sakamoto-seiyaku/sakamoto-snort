@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `FOURTEENTH_S56_UDP_ATTRIBUTION_EVIDENCE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `FIFTEENTH_S58_UDP_L4_WORKFLOW_DESIGN_CORRECTED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -713,6 +713,53 @@ Interpretation:
 Remaining product work after this slice:
 
 1. Run the VPN L4 workflow matrix against the current product runtime tokens.
+2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
+   selected by product runtime construction.
+
+## 2026-08-26 fifteenth import slice
+
+S58 exposed the same fixed TCP source-port reuse design hotspot as S56, but
+with an additional product UI constraint:
+
+- S58's existing runner used a repeated fixed TCP source port to create the
+  same tuple for first-unknown, late-attributed drop and restored allow probes.
+- The product prefill seam was named and shaped as
+  `ActivityL4RuleDraft.fromTcpPolicyDropActivity`, so a direct UDP runner
+  migration would have bypassed the product L4 prefill behavior S58 is meant
+  to prove.
+
+Design correction:
+
+- `ActivityL4RuleDraft` now exposes a generic
+  `fromPolicyDropActivity(host, port, ipProtocol, ...)` factory.
+- TCP remains supported through the existing compatibility method.
+- UDP policy-drop Activity evidence is now supported with `ipProtocol=17`.
+- `DebugControlActivity.formatActivityL4Prefill()` reads
+  `policyDropActivity.lastIpProtocol` instead of hard-coding TCP.
+- S58 now uses UDP same-tuple probes for the product L4 workflow:
+  - product-authored L4 drop uses `debugSetL4RuleIpProtocol 17`;
+  - attribution applies `ipProtocol=17`;
+  - debug probes use `debugUdpTraffic` and `debugUdpSourcePort`;
+  - prefill must render `ipProtocol=17`;
+  - restored allowed FlowEntry must report `lastIpProtocol=17`.
+- S58 static contracts reject `debugTrafficSourcePort` in this matrix so fixed
+  TCP source-port reuse cannot silently return.
+
+This is a small product-facing seam improvement, not just a test workaround:
+Basic L4 product prefill should be protocol-aware for both TCP and UDP, and
+the Interface should not force a TCP-only proof for a protocol-neutral L4
+workflow.
+
+Validated locally:
+
+- `tests/android/runtime-contract-test.sh`: passed, including Android runtime
+  contract, S58 app-first Activity UI contract, S58 VPN L4 product workflow
+  static contract, NDK daemon build and debug APK build.
+
+Remaining product work after this slice:
+
+1. Rerun corrected S58 against the rebuilt current APK.
 2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
    selected by product runtime construction.

@@ -3,9 +3,11 @@ set -euo pipefail
 
 # SAKAMOTO-58 VPN L4 product workflow evidence matrix.
 #
-# This matrix closes the S58 VPN-side user workflow: product-authored L4 drop,
-# VPN late attribution, Activity-derived L4 prefill, product-authored restore,
-# and allowed FlowEntry evidence after restore.
+# This matrix closes the S58 VPN-side user workflow: product-authored UDP L4
+# drop, VPN late attribution, Activity-derived L4 prefill, product-authored
+# restore, and allowed FlowEntry evidence after restore.  UDP is deliberate:
+# fixed TCP source-port reuse is a known Android VPN harness hotspot, while
+# this matrix's product claim is L4 workflow/prefill rather than TCP lifecycle.
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -46,7 +48,7 @@ S58_TRAFFIC_PORT="${S58_TRAFFIC_PORT:-443}"
 S58_SOURCE_PORT="${S58_SOURCE_PORT:-45658}"
 S58_TRAFFIC_TIMEOUT_MILLIS="${S58_TRAFFIC_TIMEOUT_MILLIS:-700}"
 STATE_PATH="files/runtime-state/snapshot.properties"
-PROBE_RESULT_PATH="files/debug/traffic-probe.properties"
+PROBE_RESULT_PATH="files/debug/udp-traffic-probe.properties"
 L4_PREFILL_RESULT_PATH="files/debug/l4-prefill.properties"
 CONTROL_SOCKET="sucre-snort-control-vnext"
 
@@ -265,7 +267,7 @@ print(json.dumps({
     "networkContext": 0,
     "family": "ipv4",
     "direction": "output",
-    "ipProtocol": 6,
+    "ipProtocol": 17,
     "sourceIp": "10.111.0.2",
     "destinationIp": destination_ip,
     "sourcePort": 40000,
@@ -311,7 +313,7 @@ request_product_l4_rule() {
     --es debugSetL4RuleSubject "android.uid:${uid}" \
     --es debugSetL4RuleFamily ipv4 \
     --es debugSetL4RuleDestinationCidr "$destination_cidr" \
-    --ei debugSetL4RuleIpProtocol 6 \
+    --ei debugSetL4RuleIpProtocol 17 \
     --es debugSetL4RuleDirection output \
     --es debugSetL4RuleAction "$action" \
     --ei debugSetL4RulePriority 10 \
@@ -336,7 +338,7 @@ print(json.dumps({
     "networkContext": 0,
     "family": "ipv4",
     "direction": "output",
-    "ipProtocol": 6,
+    "ipProtocol": 17,
     "sourceIp": "10.111.0.2",
     "destinationIp": host,
     "sourcePort": source_port,
@@ -351,11 +353,12 @@ run_debug_probe() {
   local label="$1"
   app_file_rm "$PROBE_RESULT_PATH"
   adb_cmd shell am start -n "$ACTIVITY" \
-    --ez debugTraffic true \
-    --es debugTrafficHost "$S58_TRAFFIC_HOST" \
-    --ei debugTrafficPort "$S58_TRAFFIC_PORT" \
-    --ei debugTrafficSourcePort "$S58_SOURCE_PORT" \
-    --ei debugTrafficTimeoutMillis "$S58_TRAFFIC_TIMEOUT_MILLIS" \
+    --ez debugUdpTraffic true \
+    --es debugUdpHost "$S58_TRAFFIC_HOST" \
+    --ei debugUdpPort "$S58_TRAFFIC_PORT" \
+    --ei debugUdpSourcePort "$S58_SOURCE_PORT" \
+    --ei debugUdpTimeoutMillis "$S58_TRAFFIC_TIMEOUT_MILLIS" \
+    --ez debugTrafficBindToVpn true \
     >"${RESULT_DIR}/${label}.intent.log" 2>&1
   for _ in $(seq 1 30); do
     app_file_cat "$PROBE_RESULT_PATH" \
@@ -456,7 +459,7 @@ uid="$(package_uid || true)"
   exit 1
 }
 kv "packageUid" "$uid"
-rule_id="$(stable_l4_rule_id "$uid" ipv4 6 10 0)"
+rule_id="$(stable_l4_rule_id "$uid" ipv4 17 10 0)"
 destination_cidr="$(cidr_for_host "$S58_TRAFFIC_HOST")"
 kv "traffic" "$S58_TRAFFIC_HOST:$S58_TRAFFIC_PORT"
 kv "sourcePort" "$S58_SOURCE_PORT"
@@ -513,7 +516,7 @@ PY
 kv "control.HELLO" "PASS"
 
 section "product_block"
-kv "block.product.command" "./dev/adb shell am start -n $ACTIVITY --es debugSetL4RuleSubject android.uid:$uid --es debugSetL4RuleFamily ipv4 --es debugSetL4RuleDestinationCidr $destination_cidr --ei debugSetL4RuleDestinationPortFirst $S58_TRAFFIC_PORT --ei debugSetL4RuleDestinationPortLast $S58_TRAFFIC_PORT --ei debugSetL4RuleIpProtocol 6 --es debugSetL4RuleDirection output --es debugSetL4RuleAction drop"
+kv "block.product.command" "./dev/adb shell am start -n $ACTIVITY --es debugSetL4RuleSubject android.uid:$uid --es debugSetL4RuleFamily ipv4 --es debugSetL4RuleDestinationCidr $destination_cidr --ei debugSetL4RuleDestinationPortFirst $S58_TRAFFIC_PORT --ei debugSetL4RuleDestinationPortLast $S58_TRAFFIC_PORT --ei debugSetL4RuleIpProtocol 17 --es debugSetL4RuleDirection output --es debugSetL4RuleAction drop"
 request_product_l4_rule "$uid" drop
 wait_eval "$uid" DROP L4 "$rule_id" "policy_evaluate_block"
 block_revision="$(json_field "${RESULT_DIR}/policy_evaluate_block.json" result.revision)"
@@ -534,7 +537,7 @@ kv "first.probe.result" "$first_probe_result"
 [[ "$first_forward_delta" -ge 1 ]]
 [[ "$first_unknown_delta" -ge 1 ]]
 [[ "$first_drop_delta" -eq 0 ]]
-[[ "$first_probe_result" == "tcp_connect_succeeded" ]]
+[[ "$first_probe_result" == "udp_datagram_sent" ]]
 kv "first.noRecognitionHold" "claimed"
 
 section "late_attribution_then_drop"
@@ -563,7 +566,7 @@ kv "second.policyDropActivity.rule" "$activity_rule"
 kv "second.policyDropActivity.revision" "$activity_revision"
 [[ "$second_drop_delta" -ge 1 ]]
 [[ "$resolution_delta" -ge 1 ]]
-[[ "$second_probe_result" == "tcp_connect_failed" ]]
+[[ "$second_probe_result" == "udp_datagram_sent" ]]
 [[ "$activity_uid" == "$uid" ]]
 [[ "$activity_stage" == "L4" ]]
 [[ "$activity_rule" == "$rule_id" ]]
@@ -577,10 +580,11 @@ kv "drop.l4Prefill.summary" "$prefill_summary"
 [[ "$prefill_summary" == *"subject=android.uid:$uid"* ]]
 [[ "$prefill_summary" == *"destinationCidr=$destination_cidr"* ]]
 [[ "$prefill_summary" == *"destinationPort=$S58_TRAFFIC_PORT"* ]]
+[[ "$prefill_summary" == *"ipProtocol=17"* ]]
 kv "drop.activityPrefill" "PASS"
 
 section "product_restore"
-kv "open.product.command" "./dev/adb shell am start -n $ACTIVITY --es debugSetL4RuleSubject android.uid:$uid --es debugSetL4RuleFamily ipv4 --es debugSetL4RuleDestinationCidr $destination_cidr --ei debugSetL4RuleDestinationPortFirst $S58_TRAFFIC_PORT --ei debugSetL4RuleDestinationPortLast $S58_TRAFFIC_PORT --ei debugSetL4RuleIpProtocol 6 --es debugSetL4RuleDirection output --es debugSetL4RuleAction allow"
+kv "open.product.command" "./dev/adb shell am start -n $ACTIVITY --es debugSetL4RuleSubject android.uid:$uid --es debugSetL4RuleFamily ipv4 --es debugSetL4RuleDestinationCidr $destination_cidr --ei debugSetL4RuleDestinationPortFirst $S58_TRAFFIC_PORT --ei debugSetL4RuleDestinationPortLast $S58_TRAFFIC_PORT --ei debugSetL4RuleIpProtocol 17 --es debugSetL4RuleDirection output --es debugSetL4RuleAction allow"
 request_product_l4_rule "$uid" allow
 wait_eval "$uid" PASS_NEXT None 0 "policy_evaluate_open"
 open_revision="$(json_field "${RESULT_DIR}/policy_evaluate_open.json" result.revision)"
@@ -622,10 +626,10 @@ kv "open.allowedFlowActivity.bytes" "$allowed_bytes"
 kv "open.allowedFlowActivity.revision" "$allowed_revision"
 [[ "$open_forward_delta" -ge 1 ]]
 [[ "$open_drop_delta" -eq 0 ]]
-[[ "$open_probe_result" == "tcp_connect_succeeded" ]]
+[[ "$open_probe_result" == "udp_datagram_sent" ]]
 [[ "$allowed_uid" == "$uid" ]]
 [[ "$allowed_remote" == "$S58_TRAFFIC_HOST" ]]
-[[ "$allowed_protocol" == "6" ]]
+[[ "$allowed_protocol" == "17" ]]
 [[ "$allowed_port" == "$S58_TRAFFIC_PORT" ]]
 [[ "$allowed_device_dir" == "input" || "$allowed_device_dir" == "output" ]]
 [[ "$allowed_flow_dir" == "orig" || "$allowed_flow_dir" == "reply" ]]

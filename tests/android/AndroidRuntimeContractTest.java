@@ -2170,8 +2170,8 @@ public final class AndroidRuntimeContractTest {
     }
 
     private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {
-        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
-                "1.1.1.1", 443, 1010001, true,
+        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromPolicyDropActivity(
+                "1.1.1.1", 443, ActivityL4RuleDraft.TCP_PROTOCOL, 1010001, true,
                 AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
         check(draft != null, "L4 policy drop Activity can create an L4 prefill draft");
         check(draft.subjectId.equals(ApplicationSubjectId.fromUid(1010001)),
@@ -2196,6 +2196,14 @@ public final class AndroidRuntimeContractTest {
                         && draft.summary().contains("destinationPort=443"),
                 "L4 prefill draft renders an actionable UI summary");
 
+        ActivityL4RuleDraft udp = ActivityL4RuleDraft.fromPolicyDropActivity(
+                "1.1.1.1", 53, ActivityL4RuleDraft.UDP_PROTOCOL, 1010001, true,
+                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
+        check(udp != null && udp.ipProtocol == ActivityL4RuleDraft.UDP_PROTOCOL
+                        && udp.destinationPorts.first == 53
+                        && udp.summary().contains("ipProtocol=17"),
+                "L4 prefill draft supports UDP policy drop Activity evidence");
+
         ActivityL4RuleDraft v6 = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
                 "2606:4700:4700::1111", 80, 1010001, true,
                 AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
@@ -2210,6 +2218,10 @@ public final class AndroidRuntimeContractTest {
                 "1.1.1.1", 443, 1010001, false,
                 AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4") == null,
                 "unknown UID Activity cannot create an application-scoped L4 prefill");
+        check(ActivityL4RuleDraft.fromPolicyDropActivity(
+                "1.1.1.1", 443, 1, 1010001, true,
+                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4") == null,
+                "unsupported protocol Activity cannot create an L4 prefill");
     }
 
     private static void productCatalogFormatterKeepsUidIdentitySeparateFromMetadata() {
@@ -3051,8 +3063,8 @@ public final class AndroidRuntimeContractTest {
                         && allowed.packets == 7L && allowed.bytes == 4096L,
                 "ActivityItem separates bounded DROP detail from allowed FlowEntry evidence");
 
-        ActivityL4RuleDraft activityDraft = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
-                "1.1.1.1", 443, subject.uid, true,
+        ActivityL4RuleDraft activityDraft = ActivityL4RuleDraft.fromPolicyDropActivity(
+                "1.1.1.1", 443, ActivityL4RuleDraft.TCP_PROTOCOL, subject.uid, true,
                 AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
         RuleDraft draft = RuleDraft.fromActivityL4RuleDraft(activityDraft);
         check(draft != null && draft.subjectId.equals(subject)

@@ -1654,8 +1654,9 @@ public class DebugControlActivity extends Activity {
         if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
             return "L4 prefill: unavailable";
         }
-        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
-                host, port, (int) activity.optLong("lastLinuxUid", -1L),
+        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromPolicyDropActivity(
+                host, port, (int) activity.optLong("lastIpProtocol", 0L),
+                (int) activity.optLong("lastLinuxUid", -1L),
                 activity.optBoolean("lastUidKnown", false),
                 (int) activity.optLong("lastNetworkContext", -1L),
                 activity.optString("lastStage", ""));
