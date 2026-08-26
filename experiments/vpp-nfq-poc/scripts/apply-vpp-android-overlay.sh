@@ -258,6 +258,83 @@ replace_once(
     "  LINK_LIBRARIES vppinfra vlibmemoryclient svm ${SAKAMOTO_ANDROID_VAPI_PLATFORM_LIBS}",
 )
 
+replace_once(
+    "vlib/file.c",
+    "clib_file_main_t file_main;\n",
+    "clib_file_main_t file_main;\n\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "#define SAKAMOTO_ANDROID_IDLE_DIAG_MAX_THREADS 256\n"
+    "typedef struct\n"
+    "{\n"
+    "  u64 poll_calls;\n"
+    "  u64 skip_total;\n"
+    "  u64 skip_vectors;\n"
+    "  u64 skip_polling_inputs;\n"
+    "  u64 skip_api_queue;\n"
+    "  u64 skip_barrier_recent;\n"
+    "  u64 barrier_wait_epoll;\n"
+    "  u64 interrupt_pending_epoll;\n"
+    "  u64 sleep_enter;\n"
+    "  u64 epoll_waits;\n"
+    "  u64 epoll_ready;\n"
+    "  u64 epoll_zero;\n"
+    "  u64 epoll_error;\n"
+    "  u64 epoll_ready_events;\n"
+    "  u32 last_reason;\n"
+    "  u32 last_timeout_ms;\n"
+    "  u32 last_ticks;\n"
+    "  u32 last_polling_inputs;\n"
+    "  u32 last_vectors;\n"
+    "} sakamoto_android_idle_diag_t;\n\n"
+    "static sakamoto_android_idle_diag_t\n"
+    "  sakamoto_android_idle_diags[SAKAMOTO_ANDROID_IDLE_DIAG_MAX_THREADS];\n\n"
+    "static_always_inline sakamoto_android_idle_diag_t *\n"
+    "sakamoto_android_idle_diag_get (vlib_main_t *vm)\n"
+    "{\n"
+    "  if (vm->thread_index >= SAKAMOTO_ANDROID_IDLE_DIAG_MAX_THREADS)\n"
+    "    return 0;\n"
+    "  return &sakamoto_android_idle_diags[vm->thread_index];\n"
+    "}\n\n"
+    "static clib_error_t *\n"
+    "show_sakamoto_android_idle_diag_fn (vlib_main_t *vm,\n"
+    "\t\t\t\t       unformat_input_t *input,\n"
+    "\t\t\t\t       vlib_cli_command_t *cmd)\n"
+    "{\n"
+    "  u32 n_threads = vlib_get_n_threads ();\n"
+    "  vlib_cli_output (vm,\n"
+    "\t\t   \"thread name poll_calls skip_total skip_vectors skip_polling_inputs \"\n"
+    "\t\t   \"skip_api_queue skip_barrier_recent barrier_wait_epoll \"\n"
+    "\t\t   \"interrupt_pending_epoll sleep_enter epoll_waits epoll_ready \"\n"
+    "\t\t   \"epoll_zero epoll_error epoll_ready_events last_reason \"\n"
+    "\t\t   \"last_timeout_ms last_ticks last_polling_inputs last_vectors\");\n"
+    "  for (u32 i = 0; i < n_threads &&\n"
+    "\t\t  i < SAKAMOTO_ANDROID_IDLE_DIAG_MAX_THREADS;\n"
+    "\t       i++)\n"
+    "    {\n"
+    "      sakamoto_android_idle_diag_t *d = &sakamoto_android_idle_diags[i];\n"
+    "      vlib_cli_output (vm,\n"
+    "\t\t       \"%u %s %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu \"\n"
+    "\t\t       \"%llu %llu %llu %llu %u %u %u %u %u\",\n"
+    "\t\t       i, i == 0 ? \"main\" : \"worker\",\n"
+    "\t\t       d->poll_calls, d->skip_total, d->skip_vectors,\n"
+    "\t\t       d->skip_polling_inputs, d->skip_api_queue,\n"
+    "\t\t       d->skip_barrier_recent, d->barrier_wait_epoll,\n"
+    "\t\t       d->interrupt_pending_epoll, d->sleep_enter, d->epoll_waits,\n"
+    "\t\t       d->epoll_ready, d->epoll_zero, d->epoll_error,\n"
+    "\t\t       d->epoll_ready_events, d->last_reason,\n"
+    "\t\t       d->last_timeout_ms, d->last_ticks,\n"
+    "\t\t       d->last_polling_inputs, d->last_vectors);\n"
+    "    }\n"
+    "  return 0;\n"
+    "}\n\n"
+    "VLIB_CLI_COMMAND (show_sakamoto_android_idle_diag_command, static) = {\n"
+    "  .path = \"show sakamoto android-idle\",\n"
+    "  .short_help = \"show sakamoto android-idle\",\n"
+    "  .function = show_sakamoto_android_idle_diag_fn,\n"
+    "};\n"
+    "#endif\n",
+)
+
 
 replace_once(
     "vlib/tw_funcs.h",
@@ -277,7 +354,19 @@ replace_once(
     "#else\n"
     "  int timeout_ms = 0, max_timeout_ms = 10;\n"
     "#endif\n"
-    "  u32 ticks;",
+    "  u32 ticks;\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  sakamoto_android_idle_diag_t *sakamoto_diag =\n"
+    "    sakamoto_android_idle_diag_get (vm);\n"
+    "  u32 sakamoto_last_vectors = vlib_last_vectors_per_main_loop (vm);\n"
+    "  if (sakamoto_diag)\n"
+    "    {\n"
+    "      sakamoto_diag->poll_calls++;\n"
+    "      sakamoto_diag->last_vectors = sakamoto_last_vectors;\n"
+    "      sakamoto_diag->last_polling_inputs =\n"
+    "\tnm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING];\n"
+    "    }\n"
+    "#endif",
 )
 
 replace_once(
@@ -293,11 +382,186 @@ replace_once(
     "   * default POLLING input nodes even when none of them has work; treating\n"
     "   * that clone-time count as busy keeps idle workers in a tight loop. */\n"
     "  if (is_main && nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING])\n"
-    "    goto skip_loops;\n"
+    "    {\n"
+    "      if (sakamoto_diag)\n"
+    "\t{\n"
+    "\t  sakamoto_diag->skip_polling_inputs++;\n"
+    "\t  sakamoto_diag->last_reason = 2;\n"
+    "\t}\n"
+    "      goto skip_loops;\n"
+    "    }\n"
     "#else\n"
     "  if (nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING])\n"
     "    goto skip_loops;\n"
     "#endif\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "  if (vlib_last_vectors_per_main_loop (vm) >= 2)\n"
+    "    goto skip_loops;\n",
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  if (sakamoto_last_vectors >= 2)\n"
+    "    {\n"
+    "      if (sakamoto_diag)\n"
+    "\t{\n"
+    "\t  sakamoto_diag->skip_vectors++;\n"
+    "\t  sakamoto_diag->last_reason = 1;\n"
+    "\t}\n"
+    "      goto skip_loops;\n"
+    "    }\n"
+    "#else\n"
+    "  if (vlib_last_vectors_per_main_loop (vm) >= 2)\n"
+    "    goto skip_loops;\n"
+    "#endif\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "  if (is_main && vm->api_queue_nonempty)\n"
+    "    goto skip_loops;\n",
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  if (is_main && vm->api_queue_nonempty)\n"
+    "    {\n"
+    "      if (sakamoto_diag)\n"
+    "\t{\n"
+    "\t  sakamoto_diag->skip_api_queue++;\n"
+    "\t  sakamoto_diag->last_reason = 3;\n"
+    "\t}\n"
+    "      goto skip_loops;\n"
+    "    }\n"
+    "#else\n"
+    "  if (is_main && vm->api_queue_nonempty)\n"
+    "    goto skip_loops;\n"
+    "#endif\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "      if (*vlib_worker_threads->wait_at_barrier)\n"
+    "\tgoto epoll;\n"
+    "\n"
+    "      if (vlib_get_first_main ()->time_last_barrier_release + 0.5 >=\n"
+    "\t  vlib_time_now (vm))\n"
+    "\tgoto skip_loops;\n",
+    "      if (*vlib_worker_threads->wait_at_barrier)\n"
+    "\t{\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "\t  if (sakamoto_diag)\n"
+    "\t    {\n"
+    "\t      sakamoto_diag->barrier_wait_epoll++;\n"
+    "\t      sakamoto_diag->last_reason = 5;\n"
+    "\t    }\n"
+    "#endif\n"
+    "\t  goto epoll;\n"
+    "\t}\n"
+    "\n"
+    "      if (vlib_get_first_main ()->time_last_barrier_release + 0.5 >=\n"
+    "\t  vlib_time_now (vm))\n"
+    "\t{\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "\t  if (sakamoto_diag)\n"
+    "\t    {\n"
+    "\t      sakamoto_diag->skip_barrier_recent++;\n"
+    "\t      sakamoto_diag->last_reason = 4;\n"
+    "\t    }\n"
+    "#endif\n"
+    "\t  goto skip_loops;\n"
+    "\t}\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "  for (int nt = 0; nt < VLIB_N_NODE_TYPE; nt++)\n"
+    "    if (nm->node_interrupts[nt] &&\n"
+    "\tclib_interrupt_is_any_pending (nm->node_interrupts[nt]))\n"
+    "      goto epoll;\n",
+    "  for (int nt = 0; nt < VLIB_N_NODE_TYPE; nt++)\n"
+    "    if (nm->node_interrupts[nt] &&\n"
+    "\tclib_interrupt_is_any_pending (nm->node_interrupts[nt]))\n"
+    "      {\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "\tif (sakamoto_diag)\n"
+    "\t  {\n"
+    "\t    sakamoto_diag->interrupt_pending_epoll++;\n"
+    "\t    sakamoto_diag->last_reason = 6;\n"
+    "\t  }\n"
+    "#endif\n"
+    "\tgoto epoll;\n"
+    "      }\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "  __atomic_store_n (&vm->thread_sleeps, 1, __ATOMIC_RELAXED);\n",
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  if (sakamoto_diag)\n"
+    "    {\n"
+    "      sakamoto_diag->sleep_enter++;\n"
+    "      sakamoto_diag->last_reason = 7;\n"
+    "    }\n"
+    "#endif\n"
+    "  __atomic_store_n (&vm->thread_sleeps, 1, __ATOMIC_RELAXED);\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "  else\n"
+    "    timeout_ms = max_timeout_ms;\n"
+    "\n"
+    "  goto epoll;\n",
+    "  else\n"
+    "    timeout_ms = max_timeout_ms;\n"
+    "\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  if (sakamoto_diag)\n"
+    "    {\n"
+    "      sakamoto_diag->last_ticks = ticks;\n"
+    "      sakamoto_diag->last_timeout_ms = (u32) timeout_ms;\n"
+    "    }\n"
+    "#endif\n"
+    "\n"
+    "  goto epoll;\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "skip_loops:\n"
+    "  /* Don't come back for a respectable number of dispatch cycles */\n",
+    "skip_loops:\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  if (sakamoto_diag)\n"
+    "    sakamoto_diag->skip_total++;\n"
+    "#endif\n"
+    "  /* Don't come back for a respectable number of dispatch cycles */\n",
+)
+
+replace_once(
+    "vlib/file.c",
+    "  n_fds_ready = epoll_wait (vm->epoll_fd, epoll_events,\n"
+    "\t\t\t    ARRAY_LEN (epoll_events), timeout_ms);\n"
+    "\n"
+    "  __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELAXED);\n",
+    "  n_fds_ready = epoll_wait (vm->epoll_fd, epoll_events,\n"
+    "\t\t\t    ARRAY_LEN (epoll_events), timeout_ms);\n"
+    "\n"
+    "#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE\n"
+    "  if (sakamoto_diag)\n"
+    "    {\n"
+    "      sakamoto_diag->epoll_waits++;\n"
+    "      if (n_fds_ready < 0)\n"
+    "\tsakamoto_diag->epoll_error++;\n"
+    "      else if (n_fds_ready == 0)\n"
+    "\tsakamoto_diag->epoll_zero++;\n"
+    "      else\n"
+    "\t{\n"
+    "\t  sakamoto_diag->epoll_ready++;\n"
+    "\t  sakamoto_diag->epoll_ready_events += n_fds_ready;\n"
+    "\t}\n"
+    "    }\n"
+    "#endif\n"
+    "\n"
+    "  __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELAXED);\n",
 )
 
 idle_wait_block = """

@@ -64,6 +64,7 @@ class VerifyS229Oi3IdleCpuTest(unittest.TestCase):
         self.assertIn("show threads", self.runner)
         self.assertIn("show runtime", self.runner)
         self.assertIn("show runtime verbose", self.runner)
+        self.assertIn("show sakamoto android-idle", self.runner)
         self.assertIn("show node", self.runner)
         self.assertIn("show errors", self.runner)
         self.assertIn('capture_vpp_cli_snapshot "before"', self.runner)

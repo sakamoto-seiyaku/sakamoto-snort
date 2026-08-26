@@ -113,6 +113,15 @@ class A24VerifierUnitTest(unittest.TestCase):
         self.assertNotIn("vlib_frame_queue_wakeup_mode", overlay)
         self.assertNotIn("VLIB_WAKE_PHASE", overlay)
 
+    def test_android_overlay_exposes_idle_skip_reason_diagnostics(self) -> None:
+        overlay = OVERLAY_PATH.read_text(encoding="utf-8")
+        self.assertIn("show sakamoto android-idle", overlay)
+        self.assertIn("skip_vectors", overlay)
+        self.assertIn("skip_polling_inputs", overlay)
+        self.assertIn("skip_barrier_recent", overlay)
+        self.assertIn("interrupt_pending_epoll", overlay)
+        self.assertIn("last_timeout_ms", overlay)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -211,6 +211,8 @@ capture_vpp_cli_snapshot() {
     | tr -d '\r' >"$snapshot_dir/show-runtime.txt" 2>&1 || true
   adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show runtime verbose" \
     | tr -d '\r' >"$snapshot_dir/show-runtime-verbose.txt" 2>&1 || true
+  adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show sakamoto android-idle" \
+    | tr -d '\r' >"$snapshot_dir/show-sakamoto-android-idle.txt" 2>&1 || true
   adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show node" \
     | tr -d '\r' >"$snapshot_dir/show-node.txt" 2>&1 || true
   adb_su "LD_LIBRARY_PATH='$native_dir' '$native_dir/libvppctl.so' -s '$REMOTE_CLI_SOCK' show errors" \
