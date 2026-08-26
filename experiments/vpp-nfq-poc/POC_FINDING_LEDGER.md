@@ -2499,7 +2499,7 @@ Map rather than encoded as TODOs here.
   traffic from the equation and still measured `vppCpuTicksDelta=2235` and
   `vppSchedRuntimeNsDelta=22353121412` over a valid 10-second OI3 idle window,
   dominated by `vpp_wk_0..3`.
-- **S231/S232 post-F074 CPU-budget update:** After the F074 barrier-holdoff
+- **S231--S233 post-F074 CPU-budget update:** After the F074 barrier-holdoff
   fix, Direct/OI3-only foreground count64/count128 reruns no longer show the
   OI3 CPU runaway.  S231
   `evidence/s231-e2-count64-post-f074-direct-oi3-20260826/`
@@ -2510,9 +2510,13 @@ Map rather than encoded as TODOs here.
   (`runId=20260826-084721-668441`) passed Direct `128/128` p95 `9ms` and OI3
   `128/128` p95 `28ms`, with OI3 `cpuTicksDelta=302` and
   `schedRuntimeNsDelta=2644077026`.  This is a material improvement from
-  S228/S227's OI3 `3295/3326` ticks and about `32s` sched runtime, but S231/S232
-  still leave p99 tail tolerance, HEV baseline, thermal/power/soak, and broad
-  capacity budgets open.
+  S228/S227's OI3 `3295/3326` ticks and about `32s` sched runtime.  S233
+  `evidence/s233-e2-count128-post-f074-p99-repeat-20260826/`
+  (`runId=20260826-085408-873886`) repeated the count128 Direct/OI3 shape three
+  times; all OI3 repeats passed `128/128`, p99 was `33/71/68ms`, and total CPU
+  ticks were `286/292/302`.  S231--S233 still leave HEV baseline,
+  thermal/power/soak, broader capacity budgets, and a formal p99 tolerance
+  decision open.
 - **Status:** `OPEN_RISK`.  The final feasibility audit is
   `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, not `SUPPORTS_BASELINE`.  Main-stack
   import must wait for a broader E2 budget closure or for an explicit
@@ -2794,11 +2798,12 @@ Map rather than encoded as TODOs here.
   `evidence/s171-oi3-wakeup-smoke-after-barrier-fix-20260826/`
   (`runId=20260826-083453-884508`), passed Direct `554/554` and OI3 `414/414`
   with OI3 cleanup `5/0` and `ownerBusy=0`.
-  S231/S232 then reran the count-bounded foreground HTTP budget shape without
+  S231--S233 then reran the count-bounded foreground HTTP budget shape without
   the HEV arm: OI3 count64 went from S228's `cpuTicksDelta=3295` and
   `schedRuntimeNsDelta=32799922706` to `198` and `1773100641`; OI3 count128
   went from S227's `cpuTicksDelta=3326` and
-  `schedRuntimeNsDelta=32507058071` to `302` and `2644077026`.
+  `schedRuntimeNsDelta=32507058071` to `302` and `2644077026`, then repeated at
+  `286/292/302` total CPU ticks with p99 `33/71/68ms`.
 - **Supported claim:** The F074 idle-scope blocker is closed for the selected
   Android VPP idle profile, bounded OI3 UDP wake smoke, and Direct/OI3
   foreground count64/count128 CPU-budget reruns.  The corrected CPU behavior
@@ -2806,7 +2811,7 @@ Map rather than encoded as TODOs here.
   instability, app probe pacing, or the F072 TCP lifecycle seam.
 - **Non-claim:** This does not close the full ADR-0007 E2 performance verdict,
   broad throughput/capacity CPU budgets, power/thermal/long-soak behavior, the
-  S231/S232 p99 tail-tolerance question, the HEV baseline finding `VPN-F073`,
+  S231--S233 p99 tail-tolerance question, the HEV baseline finding `VPN-F073`,
   or production removal/retention of the diagnostic CLI counters.
 - **Next correction direction:** Keep S229 as an Android idle regression cell
   and proceed with the remaining E2 budget/tolerance work without treating

@@ -8,7 +8,7 @@ this campaign document records scope and evidence rather than a parallel
 backlog.
 
 Status: research contract, 2026-08-23
-Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S223 E2 write-interest, owner handoff, TCP owner lifecycle, and device-state correction; S224 current F072-candidate E1 resource trend; S225--S229 E2 CPU-budget and HEV-baseline hotspot isolation; F074 Android VPP barrier-held idle CPU closure; S231/S232 post-F074 Direct/OI3 foreground CPU-budget reruns)
+Updated: 2026-08-26 (S140 Pixel real-network validity gates; S156 hotspot; S157 TUN re-arm correction; S158 topology implementation; S159 D3 submit hotspot; S160 overload/recovery execution and ambient-flow hotspot; S161 timed D3 recovery closure; S163 E1/E2 execution; S169 F045/F046 closure; S170 post-F046 E1 resource trend; S171 bounded E2 sample and F047 TCP idle-timeout closure; S172 matched HTTP baseline comparison-APK, admission, and request-shape closure; S173 foreground HTTP staircase owner-capacity closure; S174 bounded 8-request HTTP staircase execution; S175 bounded 16-request HTTP staircase execution; S176 UDP multi-flow route-pinning closure; S177 final resource short slice and ADB harness closure; S178 final B1 dual-stack DNS dataplane/lifecycle split; S179 current-artifact controlled B2 failure-semantics regression; S180 B1 forced DNS fallback fixture; S181 real no-reply and closed TCP timeout fixture; S182 representative target-IP policy drop; S183 representative AppA UID drop; S184 bounded real LAN TCP RST propagation closure; S185 bind/protect/broker infrastructure failure separation; S141 B2 final closure audit; S152 A2 UID matrix design gap; S156 A2 resolver/correlation closure; S199--S223 E2 write-interest, owner handoff, TCP owner lifecycle, and device-state correction; S224 current F072-candidate E1 resource trend; S225--S229 E2 CPU-budget and HEV-baseline hotspot isolation; F074 Android VPP barrier-held idle CPU closure; S231--S233 post-F074 Direct/OI3 foreground CPU-budget reruns)
 Tracker: SAKAMOTO-131
 Scope: non-root Android VPN/TUN Runtime Profile
 
@@ -751,17 +751,19 @@ idle-profile correction (`0324f92`) lets workers sleep across that holdoff.
 S229 barrier-fixed reduced the 10-second idle window to `cpuTicksDelta=89` and
 `schedRuntimeNsDelta=887122393`, with worker `skip_barrier_recent=0`; a
 bounded OI3 UDP wake smoke then passed Direct `554/554` and OI3 `414/414`.
-S231/S232 then reran the foreground count-bounded HTTP budget without HEV:
+S231--S233 then reran the foreground count-bounded HTTP budget without HEV:
 Direct/OI3 count64 passed `64/64` and OI3 dropped to `cpuTicksDelta=198` /
 `schedRuntimeNsDelta=1773100641`; Direct/OI3 count128 passed `128/128` and
-OI3 dropped to `cpuTicksDelta=302` / `schedRuntimeNsDelta=2644077026`.
+OI3 dropped to `cpuTicksDelta=302` / `schedRuntimeNsDelta=2644077026`.  The
+S233 count128 repeat passed all three OI3 cells at `128/128`, with p99
+`33/71/68ms` and total CPU ticks `286/292/302`.
 
 The campaign remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`, but the F074
 VPP/OI3 worker CPU hotspot is closed for the selected Android idle scope and
 the tested foreground count64/count128 Direct/OI3 scope. Full ADR-0007 closure
 still needs thermal/power/soak evidence, broader OI3 throughput/capacity CPU
 budget evidence, a HEV-baseline decision, and pre-registered decisions on the
-S223 forced-Doze and S231/S232 p99 absolute/relative latency deltas.
+S223 forced-Doze and S231--S233 p99 absolute/relative latency deltas.
 
 ## 8. Conclusion vocabulary
 
