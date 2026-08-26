@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `ELEVENTH_S55_FD_COMPAT_DEVICE_EVIDENCE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `TWELFTH_S69_RUNTIME_LIFECYCLE_EVIDENCE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -560,5 +560,61 @@ Remaining product work after this slice:
 2. Run the remaining VPN/product matrices that cover attribution, L4 workflow,
    repeat lifecycle and dual-profile closure against the current product
    runtime tokens.
+3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
+   selected by product runtime construction.
+
+## 2026-08-26 twelfth import slice
+
+S69 passed on the real device against the current fd compatibility product VPN
+runtime path.
+
+Evidence:
+
+- Result directory:
+  `build-output/s69-product-vpn-runtime-matrix/20260826-1235-s69-current-apk`.
+- Installed APK:
+  `app/android-runtime/build/outputs/sakamoto-runtime-debug.apk`,
+  SHA-256 `3caf5fcf1b92274143034eaaad7b39a873a3969fe33a766680f4ab4b403545ed`.
+- Initial VPN start reached:
+  - `snapshot.state=running`;
+  - `snapshot.profile=vpn`;
+  - `snapshot.adapterReadiness=vpn-tun-fd-compat`;
+  - `snapshot.pid=20381`.
+- Android VPN network evidence passed:
+  - `tun0.running=PASS`;
+  - `connectivity.vpnNetwork=PASS`.
+- Runtime startup log evidence passed:
+  - `vpn_tun_control_ready=ok`;
+  - `vpn_tun_control_attach=ok adapter=vpn-tun-fd-compat`;
+  - `vpn_hev_transport=ok`;
+  - `runtime_state=running profile=vpn health=ok`.
+- Control socket evidence passed:
+  - `control.HELLO=PASS`;
+  - `control.VPN_TUN.STATUS=PASS`;
+  - `control.POLICY.STATUS=PASS`.
+- VpnService protect anti-loop evidence passed:
+  - `protect.callback=PASS`;
+  - `protect.fdResult=PASS`.
+- Cleanup passed, and two restart/cleanup cycles passed:
+  - `cleanup.result=PASS`;
+  - `restart.1.result=PASS`;
+  - `restart.2.result=PASS`;
+  - `restart.result=PASS`.
+
+Interpretation:
+
+- S69 adds product RuntimeService lifecycle and Android VPN/tun0 residue
+  evidence that S55 does not cover.
+- Together, S55 and S69 now prove the current fd compatibility backend can
+  start, expose control status, move nominal traffic, protect upstream sockets,
+  stop cleanly and repeat VPN lifecycle on the test device.
+- This still does not close the final Direct Egress product path because the
+  real pinned HEV/lwIP driver is not yet supplied behind `VpnHevLwipDriver`.
+
+Remaining product work after this slice:
+
+1. Run the VPN attribution and L4 workflow matrices against the current product
+   runtime tokens.
+2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
 3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
    selected by product runtime construction.
