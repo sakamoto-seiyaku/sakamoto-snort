@@ -27,7 +27,10 @@ POC runner/APK 直接导入产品；正式导入仍受 EG-17 的 HEV-baseline di
 tolerance、broader throughput/capacity、thermal/power/soak gates 约束。S245
 `experiments/vpp-nfq-poc/S245_ANDROID_VPN_MAIN_STACK_IMPORT_READINESS.md`
 进一步把导入边界固定为：先导入 Flow Stack Boundary Interface、host fake 和 same-owner
-re-arm invariant，不导入 OI3/vpn-lite/runner 代码。
+re-arm invariant，不导入 OI3/vpn-lite/runner 代码。随后首个主栈切片已落到
+`src/datapath/tun/VpnFlowStackBoundary.*` 和
+`tests/host/vpn_flow_stack_boundary_tests.cpp`：same-owner deferred re-arm 现在有 host
+regression 固定为本地有界 drive，不通过 cross-owner wake 自投递。
 
 后续产品与架构决策（2026-07-19）：
 

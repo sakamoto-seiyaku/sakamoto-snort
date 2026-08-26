@@ -149,6 +149,12 @@ add_sucre_snort_host_test(
   "${SUCRE_SNORT_ROOT}/src/core/policy/PacketPolicy.cpp"
 )
 add_sucre_snort_host_test(
+  vpn_flow_stack_boundary_tests
+  vpn_flow_stack_boundary_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnFlowStackBoundary.cpp"
+  "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
+)
+add_sucre_snort_host_test(
   lpi_provider_seam_parity_tests
   lpi_provider_seam_parity_tests.cpp
   "${SUCRE_SNORT_ROOT}/src/datapath/nfqueue/NfqueueFlowAdapter.cpp"

@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `DESIGN_IMPORT_READY_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `FIRST_INTERFACE_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
 
 ## Question
 
@@ -133,3 +133,35 @@ ADR-0007 product acceptance surface.  Remaining blockers:
 
 Proceed with main-stack design import, starting from the Flow Stack Boundary
 Interface and fake host tests.  Do not import POC runtime code directly.
+
+## 2026-08-26 first import slice
+
+The first main-stack design-import slice landed the Flow Stack seam without
+importing POC runtime code:
+
+- `src/datapath/tun/VpnFlowStackBoundary.hpp`
+- `src/datapath/tun/VpnFlowStackBoundary.cpp`
+- `tests/host/vpn_flow_stack_boundary_tests.cpp`
+
+The new Interface accepts canonical owner, immutable packet provenance,
+accepted packet facts, generation and policy revision.  It intentionally hides
+HEV/lwIP PCB/session state, protected sockets, pbuf/copy handling and wake
+implementation details.
+
+The host fake regression encodes the S244 invariant:
+
+- same-owner deferred re-arm calls bounded local owner drive and finish;
+- same-owner drive fault still does not self-enqueue through the cross-owner
+  wake path;
+- cross-owner deferred work uses only a generation-tagged wake.
+
+Validated locally:
+
+- `vpn_flow_stack_boundary_tests`: 4 passed.
+- `vpn_tun_flow_adapter_tests`: 21 passed.
+- `vpp_graph_injection_tests`: 10 passed.
+- `flow_steering_tests`: 18 passed.
+
+This moves implementation slice 1 from planned to landed.  The next slice is
+to extend the accepted VPN packet result path so VPN egress receives canonical
+owner/provenance from the shared graph without reparsing or re-hashing.
