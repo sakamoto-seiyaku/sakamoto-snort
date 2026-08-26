@@ -30,7 +30,11 @@ tolerance、broader throughput/capacity、thermal/power/soak gates 约束。S245
 re-arm invariant，不导入 OI3/vpn-lite/runner 代码。随后首个主栈切片已落到
 `src/datapath/tun/VpnFlowStackBoundary.*` 和
 `tests/host/vpn_flow_stack_boundary_tests.cpp`：same-owner deferred re-arm 现在有 host
-regression 固定为本地有界 drive，不通过 cross-owner wake 自投递。
+regression 固定为本地有界 drive，不通过 cross-owner wake 自投递。第二个切片继续把
+`FlowGraphIngressResult.acceptedOwner` 与
+`VpnTunFlowAdapter::lastAcceptedPacketHandoff()` 接上，使 VPN egress 后续可直接消费 shared graph
+产生的 canonical owner、facts、policy revision 和 TUN/FlowStack provenance，不需要在 VPN transport
+adapter 里重新 parse/hash。
 
 后续产品与架构决策（2026-07-19）：
 

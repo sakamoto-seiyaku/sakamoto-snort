@@ -574,9 +574,11 @@ TEST(VpnTunFlowAdapterTest, KnownUidZeroDoesNotMatchUnknownFallbackSubject) {
 }
 
 TEST(VpnTunFlowAdapterTest, OutboundAndTransportReturnShareCanonicalOwner) {
+    const Flow::WorkerLayout layout{4, 0x1234};
+    const Flow::OwnerSelector selector{layout};
     VpnTunFlowAdapter adapter(VpnTunFlowAdapterConfig{
-        .workerCount = 4,
-        .hashSeed = 0x1234,
+        .workerCount = layout.workerCount(),
+        .hashSeed = layout.hashSeed(),
         .queueCapacity = 8,
     });
     const auto outbound = ipv4TcpPacket();
@@ -587,12 +589,32 @@ TEST(VpnTunFlowAdapterTest, OutboundAndTransportReturnShareCanonicalOwner) {
                   std::span<const std::uint8_t>{outbound}, outbound.size(),
                   VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true}),
               VpnTunFlowAdapterResult::FlowForwarded);
+    const auto outboundHandoff = adapter.lastAcceptedPacketHandoff();
+    ASSERT_TRUE(outboundHandoff.has_value());
+    const auto outboundKey = Flow::CanonicalFlowKey::from(outboundHandoff->facts);
+    ASSERT_TRUE(outboundKey.has_value());
+    const auto expectedOwner = selector.ownerFor(*outboundKey);
+    EXPECT_EQ(outboundHandoff->canonicalOwner, expectedOwner);
+    EXPECT_EQ(outboundHandoff->policyRevision, 0U);
+    EXPECT_EQ(outboundHandoff->provenance,
+              VpnFlowStackPacketProvenance::TunOrigin);
+    EXPECT_EQ(outboundHandoff->facts.deviceDirection,
+              Flow::DevicePacketDirection::Output);
+
     EXPECT_EQ(adapter.process(
                   VpnTunPacketDirection::TransportReturn,
                   std::span<const std::uint8_t>{transportReturn},
                   transportReturn.size(),
                   VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true}),
               VpnTunFlowAdapterResult::FlowForwarded);
+    const auto returnHandoff = adapter.lastAcceptedPacketHandoff();
+    ASSERT_TRUE(returnHandoff.has_value());
+    EXPECT_EQ(returnHandoff->canonicalOwner, expectedOwner);
+    EXPECT_EQ(returnHandoff->policyRevision, 0U);
+    EXPECT_EQ(returnHandoff->provenance,
+              VpnFlowStackPacketProvenance::FlowStackOrigin);
+    EXPECT_EQ(returnHandoff->facts.deviceDirection,
+              Flow::DevicePacketDirection::Input);
 
     const auto counters = adapter.counters();
     EXPECT_EQ(counters.forwardedPackets, 2U);
@@ -615,6 +637,27 @@ TEST(VpnTunFlowAdapterTest, OutboundAndTransportReturnShareCanonicalOwner) {
     EXPECT_EQ(counters.allowedFlowActivity.lastDestinationPort, 40000U);
     EXPECT_EQ(counters.allowedFlowActivity.lastPackets, 2U);
     EXPECT_EQ(counters.allowedFlowActivity.lastBytes, 80U);
+}
+
+TEST(VpnTunFlowAdapterTest, PolicyDropClearsAcceptedPacketHandoff) {
+    Policy::RuntimePacketPolicySnapshot policy;
+    policy.apply({tcpDestinationDropSubject(12546, 443)}, 72);
+    VpnTunFlowAdapter adapter(VpnTunFlowAdapterConfig{.packetPolicy = &policy});
+    const auto packet = ipv4TcpPacket();
+
+    EXPECT_EQ(adapter.process(
+                  VpnTunPacketDirection::Outbound,
+                  std::span<const std::uint8_t>{packet}, packet.size(),
+                  VpnTunPacketMetadata{.linuxUid = 12345, .uidKnown = true}),
+              VpnTunFlowAdapterResult::FlowForwarded);
+    EXPECT_TRUE(adapter.lastAcceptedPacketHandoff().has_value());
+
+    EXPECT_EQ(adapter.process(
+                  VpnTunPacketDirection::Outbound,
+                  std::span<const std::uint8_t>{packet}, packet.size(),
+                  VpnTunPacketMetadata{.linuxUid = 12546, .uidKnown = true}),
+              VpnTunFlowAdapterResult::FlowDropped);
+    EXPECT_FALSE(adapter.lastAcceptedPacketHandoff().has_value());
 }
 
 TEST(VpnTunFlowAdapterTest, LpiProviderFactUpdatesActivityBeforeAdapterCompletion) {

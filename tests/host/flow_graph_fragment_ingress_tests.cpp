@@ -209,6 +209,12 @@ TEST(FlowGraphFragmentIngressTest,
     EXPECT_FALSE(policy.lastFacts().fragmented);
     EXPECT_EQ(policy.lastFacts().sourcePort, 40000U);
     EXPECT_EQ(policy.lastFacts().destinationPort, 443U);
+    ASSERT_TRUE(result.acceptedOwner.has_value());
+    ASSERT_TRUE(result.acceptedFacts.has_value());
+    const auto acceptedKey = CanonicalFlowKey::from(*result.acceptedFacts);
+    ASSERT_TRUE(acceptedKey.has_value());
+    EXPECT_EQ(*result.acceptedOwner,
+              runtime.distribution().selector().ownerFor(*acceptedKey));
     EXPECT_EQ(runtime.distribution().counters().directPackets, 1U);
     EXPECT_EQ(runtime.ownerGuard().counters().localPass, 1U);
     EXPECT_EQ(runtime.ownerGuard().counters().correctiveHandoffs, 0U);

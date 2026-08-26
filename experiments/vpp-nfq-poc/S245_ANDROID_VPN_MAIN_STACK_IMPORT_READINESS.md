@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `FIRST_INTERFACE_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `SECOND_HANDOFF_FACTS_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
 
 ## Question
 
@@ -165,3 +165,34 @@ Validated locally:
 This moves implementation slice 1 from planned to landed.  The next slice is
 to extend the accepted VPN packet result path so VPN egress receives canonical
 owner/provenance from the shared graph without reparsing or re-hashing.
+
+## 2026-08-26 second import slice
+
+The second main-stack design-import slice landed the accepted-packet handoff
+facts needed by a future VPN Flow Stack egress adapter:
+
+- `FlowGraphIngressResult.acceptedOwner` now carries the canonical owner
+  selected by the shared graph for accepted packets.
+- `VpnTunFlowAdapter::lastAcceptedPacketHandoff()` exposes the last accepted
+  VPN packet's normalized facts, canonical owner, policy revision and immutable
+  packet provenance.
+- `VpnTunPacketDirection::Outbound` maps to
+  `VpnFlowStackPacketProvenance::TunOrigin`.
+- `VpnTunPacketDirection::TransportReturn` maps to
+  `VpnFlowStackPacketProvenance::FlowStackOrigin`.
+- Policy drop, parse failure, capacity failure and fragment buffering clear the
+  last accepted handoff instead of leaving stale egress facts.
+
+This keeps owner selection inside the shared graph.  A later VPN egress slice
+can consume `VpnTunAcceptedPacketHandoff` directly instead of reparsing packet
+bytes or re-running `OwnerSelector` in the VPN transport adapter.
+
+Validated locally:
+
+- `vpn_tun_flow_adapter_tests`: 22 passed.
+- `flow_graph_fragment_ingress_tests`: 7 passed.
+- `vpn_flow_stack_boundary_tests`: 4 passed.
+
+The next slice is to replace the current transport-fd placeholder behind the
+Flow Stack Boundary Interface while preserving the existing adapter-level fd
+tests as compatibility evidence.

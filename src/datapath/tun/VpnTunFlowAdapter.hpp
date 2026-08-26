@@ -7,6 +7,7 @@
 
 #include <FlowGraphFragmentIngress.hpp>
 #include <PacketPolicy.hpp>
+#include <VpnFlowStackBoundary.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -109,6 +110,14 @@ struct VpnTunFlowAdapterCounters final {
     std::string lastObservedResult = "none";
 };
 
+struct VpnTunAcceptedPacketHandoff final {
+    Flow::PacketFacts facts;
+    std::uint32_t canonicalOwner = 0;
+    std::uint64_t policyRevision = 0;
+    VpnFlowStackPacketProvenance provenance =
+        VpnFlowStackPacketProvenance::TunOrigin;
+};
+
 /**
  * VPN/TUN's shared graph ingress seam.
  *
@@ -138,6 +147,8 @@ public:
     applyResolvedAttribution(const Flow::PacketFacts &facts,
                              std::uint32_t linuxUid,
                              bool uidKnown = true) noexcept;
+    [[nodiscard]] std::optional<VpnTunAcceptedPacketHandoff>
+    lastAcceptedPacketHandoff() const noexcept;
 
     [[nodiscard]] VpnTunFlowAdapterCounters counters() const noexcept;
     [[nodiscard]] std::uint32_t maxL3Bytes() const noexcept {
@@ -156,6 +167,7 @@ private:
     std::uint64_t fragmentTick_ = 0;
     mutable std::mutex mutex_;
     VpnTunFlowAdapterCounters counters_;
+    std::optional<VpnTunAcceptedPacketHandoff> lastAcceptedPacketHandoff_;
 
     [[nodiscard]] std::uint64_t monotonicFragmentNow() noexcept;
 };

@@ -38,6 +38,7 @@ struct FlowGraphIngressResult final {
     std::optional<Policy::PacketPolicyDecision> policyDecision;
     std::optional<PacketFacts> policyDropFacts;
     std::optional<PacketFacts> acceptedFacts;
+    std::optional<std::uint32_t> acceptedOwner;
     std::optional<FlowEntryObservation> flowEntryObservation;
     std::optional<Protocol::LpiPipelineOutcome> lpiRecognition;
 };

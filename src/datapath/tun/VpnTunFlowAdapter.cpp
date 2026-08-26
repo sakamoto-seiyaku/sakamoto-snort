@@ -60,6 +60,14 @@ SnortDatapath::Tun::VpnTunFlowAdapterConfig validateConfig(
         : SnortDatapath::Flow::DevicePacketDirection::Output;
 }
 
+[[nodiscard]] SnortDatapath::Tun::VpnFlowStackPacketProvenance
+flowStackProvenanceFor(
+    const SnortDatapath::Tun::VpnTunPacketDirection direction) noexcept {
+    return direction == SnortDatapath::Tun::VpnTunPacketDirection::TransportReturn
+        ? SnortDatapath::Tun::VpnFlowStackPacketProvenance::FlowStackOrigin
+        : SnortDatapath::Tun::VpnFlowStackPacketProvenance::TunOrigin;
+}
+
 } // namespace
 
 namespace SnortDatapath::Tun {
@@ -110,6 +118,7 @@ VpnTunFlowAdapterResult VpnTunFlowAdapter::process(
     const std::uint32_t originalLengthHint,
     const VpnTunPacketMetadata metadata) noexcept {
     std::lock_guard lock(mutex_);
+    lastAcceptedPacketHandoff_.reset();
     ++counters_.packetsSeen;
     if (direction == VpnTunPacketDirection::TransportReturn) {
         ++counters_.transportReturnPackets;
@@ -160,6 +169,17 @@ VpnTunFlowAdapterResult VpnTunFlowAdapter::process(
             counters_.allowedFlowActivity.record(
                 *graphResult.acceptedFacts,
                 *graphResult.flowEntryObservation);
+        }
+        if (graphResult.acceptedFacts.has_value()
+            && graphResult.acceptedOwner.has_value()) {
+            lastAcceptedPacketHandoff_ = VpnTunAcceptedPacketHandoff{
+                .facts = *graphResult.acceptedFacts,
+                .canonicalOwner = *graphResult.acceptedOwner,
+                .policyRevision = graphResult.flowEntryObservation.has_value()
+                    ? graphResult.flowEntryObservation->policyRevision
+                    : 0,
+                .provenance = flowStackProvenanceFor(direction),
+            };
         }
         break;
     case Flow::FlowGraphIngressStatus::PolicyDrop:
@@ -226,6 +246,12 @@ VpnTunFlowAdapterResult VpnTunFlowAdapter::process(
     }
     counters_.lastObservedResult = vpnTunFlowAdapterResultName(adapterResult);
     return adapterResult;
+}
+
+std::optional<VpnTunAcceptedPacketHandoff>
+VpnTunFlowAdapter::lastAcceptedPacketHandoff() const noexcept {
+    std::lock_guard lock(mutex_);
+    return lastAcceptedPacketHandoff_;
 }
 
 void VpnTunFlowAdapter::recordTransportOutcome(

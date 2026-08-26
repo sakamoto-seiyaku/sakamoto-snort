@@ -62,6 +62,9 @@ FlowGraphIngressResult FlowGraphFragmentIngress::injectFacts(
         .acceptedFacts = result == GraphInjectionResult::Accepted
             ? injectionGate_.lastAcceptedFacts()
             : std::optional<PacketFacts>{},
+        .acceptedOwner = result == GraphInjectionResult::Accepted
+            ? std::optional<std::uint32_t>{owner}
+            : std::optional<std::uint32_t>{},
         .flowEntryObservation = result == GraphInjectionResult::Accepted
             ? injectionGate_.lastFlowEntryObservation()
             : std::optional<FlowEntryObservation>{},
@@ -123,6 +126,9 @@ FlowGraphIngressResult FlowGraphFragmentIngress::processReassembled(
         .acceptedFacts = result == GraphInjectionResult::Accepted
             ? injectionGate_.lastAcceptedFacts()
             : std::optional<PacketFacts>{},
+        .acceptedOwner = result == GraphInjectionResult::Accepted
+            ? std::optional<std::uint32_t>{owner}
+            : std::optional<std::uint32_t>{},
         .flowEntryObservation = result == GraphInjectionResult::Accepted
             ? injectionGate_.lastFlowEntryObservation()
             : std::optional<FlowEntryObservation>{},
