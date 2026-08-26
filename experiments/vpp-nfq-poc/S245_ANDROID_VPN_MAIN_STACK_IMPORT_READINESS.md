@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `NINETEENTH_FLOW_STACK_BACKEND_SELECTION_LANDED_KERNELSU_AUTH_PENDING_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `TWENTIETH_S70_S71_KERNELSU_AUTH_CLEARED_DUAL_PROFILE_CLOSURE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -816,6 +816,97 @@ Remaining product work after this slice:
 3. Update Android RuntimeService VPN lifecycle for the HEV/lwIP backend so it
    does not require the historical separate HEV/SOCKS transport fd handoff.
 4. Rerun Android Direct Egress/device evidence after the real HEV/lwIP driver
+   is selected by product runtime construction.
+
+## 2026-08-26 twentieth import slice
+
+KernelSU app authorization was granted on the Pixel 6a and the current-head
+profile lifecycle / dual-profile closure evidence was rerun.
+
+Authorization evidence:
+
+- `adb shell su 0 sh -c id` succeeded with `uid=0(root)`.
+- KernelSU allowlist now includes:
+  - `com.sakamoto.snort.androidruntime`;
+  - `com.sakamoto.snort.vpnlite`;
+  - `com.sakamoto.snort.poc.appa`;
+  - `com.sakamoto.snort.poc.appb`.
+
+S70 evidence:
+
+- First authorization-cleared run:
+  `build-output/s70-profile-lifecycle-matrix/20260826-ksu-auth-s70`.
+- It passed the former root authorization hotspot:
+  - `root.start=PASS`;
+  - root/vpn profile switching passed;
+  - Activity recreation and app-process death survival passed;
+  - pause cleanup and cleanup-fault reason passed;
+  - runtime crash auto-recovery passed.
+- That first run returned `rc=1` during the post-crash fresh-restart stop
+  wait.  The last captured snapshot for
+  `restart-after-crash-stop/snapshot.stopped` was still a running root runtime,
+  while the device had no native residue after the exit cleanup trap.  This was
+  treated as a transient stop-wait observation, not as a root authorization or
+  dataplane failure.
+- Rerun without rebuilding/reinstalling:
+  `build-output/s70-profile-lifecycle-matrix/20260826-ksu-auth-s70-rerun`.
+- The rerun passed:
+  - `root.start=PASS`;
+  - `switch.rootToVpn=PASS`;
+  - `activity.recreateKeepsRuntime=PASS`;
+  - `appProcessDeath.result=PASS`;
+  - `switch.vpnToRoot=PASS`;
+  - `pause.result=PASS`;
+  - `cleanupFault.result=PASS`;
+  - `crash.mode=automatic-new-owner`;
+  - `crash.result=PASS`;
+  - `restartAfterCrash.result=PASS`;
+  - `doze.result=PASS`;
+  - `reboot.result=BASELINE_RECORDED`;
+  - `finalCleanup.result=PASS`;
+  - `matrix.result=PASS`.
+
+S71 evidence:
+
+- Result directory:
+  `build-output/s71-dual-profile-closure-gate/20260826-ksu-auth-s71`.
+- Host/runtime contract passed.
+- Host VPP graph and conformance gate passed.
+- Root daemon build and deploy passed.
+- Product app force-stop precondition passed.
+- Root NFQUEUE matrix passed:
+  - `root_nfqueue_matrix.result=PASS`;
+  - `root.gate=PASS`;
+  - `root.inputUidSeam=UID_UNAVAILABLE_WITH_UNKNOWN_APPLICATION_PASS`.
+- Product VPN matrix passed:
+  - `product_vpn_matrix.result=PASS`;
+  - `vpn.gate=PASS`.
+- Profile lifecycle child matrix passed:
+  - `profile_lifecycle_matrix.result=PASS`;
+  - `lifecycle.gate=PASS`.
+- S71 matrix passed:
+  - `matrix.result=PASS`;
+  - `matrix.s71Done=not_claimed`.
+
+Interpretation:
+
+- The KernelSU app-authorization hotspot recorded in the eighteenth slice is
+  cleared for the current device.
+- The Root INPUT UID seam remains the expected Android/kernel observation:
+  app-bound INPUT without NFQA_UID is represented as Unknown Application and
+  covered by the positive Unknown Application policy evidence.
+- S70/S71 now provide current-head dual-profile closure evidence for the
+  current `vpn-tun-fd-compat` product path.
+- This still does not close ADR-0007 Direct Egress: the real pinned HEV/lwIP
+  driver is not supplied behind `VpnHevLwipDriver`, and Android still launches
+  the fd compatibility VPN backend.
+
+Remaining product work after this slice:
+
+1. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+2. Update Android RuntimeService VPN lifecycle for the HEV/lwIP backend so it
+   does not require the historical separate HEV/SOCKS transport fd handoff.
+3. Rerun Android Direct Egress/device evidence after the real HEV/lwIP driver
    is selected by product runtime construction.
 
 ## 2026-08-26 eighteenth import slice
