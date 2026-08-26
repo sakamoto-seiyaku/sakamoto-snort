@@ -50,6 +50,10 @@ _Avoid_: built-in relay, mandatory SOCKS5 dependency, proxy bypass fallback, tre
 The Direct Egress treatment of DNS as its original TCP or UDP traffic sent to the packet's original destination. It does not introduce a separate resolver, redirect DNS to a product-selected server, or bypass normal policy and transport accounting.
 _Avoid_: built-in DNS proxy, silent resolver replacement, treating DNS as outside Direct Egress
 
+**POC Performance Guardrail**:
+A feasibility-stage stop rule used to detect architecture-level cliffs before importing a POC finding into main-stack design. It is not a release SLO, product performance promise, or optimization target. Historical POC arms may satisfy the guardrail by proving correctness, cleanup, bounded CPU, and absence of repeated severe tail regressions for their registered scope, while broader throughput, power, thermal, and soak budgets remain deferred until the real product Direct Egress seam exists.
+_Avoid_: final release SLA, user-facing performance guarantee, continuing historical POC performance work after the architecture question is answered
+
 **VPN Userspace Flow Stack**:
 The VPN-only packet-in/packet-out Module that reconstructs allowed L3 packets into TCP/UDP transport flows, operates Protected Egress Sockets, and synthesizes return L3 packets for reinjection into the same canonical FlowOwner and shared VPP graph. The selected implementation family is the Sakamoto HEV Fork/lwIP; it owns transport state and resources, not FlowEntry, Policy Verdict, shared packet policy, or direct TUN-write authority.
 _Avoid_: lightweight packet sender, Direct Connector alone, shared VPP policy engine, direct lwIP-to-TUN return, inbound policy bypass, Root Profile dependency, assuming Android can transmit post-policy L3 packets without flow reconstruction

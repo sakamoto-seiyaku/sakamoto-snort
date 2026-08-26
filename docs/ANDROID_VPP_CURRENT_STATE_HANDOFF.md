@@ -25,8 +25,9 @@ VPP initial worker barrier abort 被记录为低频 repeat-start lifecycle risk�
 F076 clean-single rerun（8 个 OI3-only 4-request repeat）未复现；同小时两个 invalid rerun
 被归类为并发 runner 污染，而不是 VPP startup evidence。
 当前主栈含义仍是：可以把 same-owner re-arm 本地驱动作为导入设计输入，但不能把 throwaway
-POC runner/APK 直接导入产品；正式导入仍受 EG-17 的 HEV-baseline disposition、formal p99/tail
-tolerance、broader throughput/capacity、thermal/power/soak gates 约束。S245
+POC runner/APK 直接导入产品。2026-08-26 处置：HEV/tun-poc 降级为 small-control / 历史参照，
+p99/tail 只作为 POC architecture guardrail 而非 release SLO，broader throughput/capacity、
+thermal/power/soak 后置到真实产品 Direct Egress seam 存在之后。S245
 `experiments/vpp-nfq-poc/S245_ANDROID_VPN_MAIN_STACK_IMPORT_READINESS.md`
 进一步把导入边界固定为：先导入 Flow Stack Boundary Interface、host fake 和 same-owner
 re-arm invariant，不导入 OI3/vpn-lite/runner 代码。随后首个主栈切片已落到

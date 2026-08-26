@@ -53,15 +53,19 @@ the S231--S233 foreground reruns.
 
 This narrows the remaining E2 gap.  Screen-off/forced-Doze Direct/OI3 count128
 coverage is no longer an active blocker for the tested shape.  This still does
-not close ADR-0007 or EG-17: HEV baseline validity, formal p99/tail tolerance,
-broader OI3 throughput/capacity CPU, thermal, power, and long soak remain open.
+not close ADR-0007 release performance or EG-17 release evidence, but under the
+2026-08-26 disposition it satisfies the POC Performance Guardrail for continuing
+main-stack seam work.
 
 ## Next step
 
 Use S234--S235 as post-F074 device-state regression evidence for the Direct/OI3
-count128 shape.  S236 extends the foreground shape to count512.  Continue E2
-with:
+count128 shape.  S236 extends the foreground shape to count512.  The
+2026-08-26 disposition narrows the remaining work:
 
-1. a pre-registered p99/tail tolerance decision over S231--S236;
-2. a HEV-baseline disposition or narrowing decision for F073;
-3. broader throughput/capacity CPU plus thermal/power/soak evidence.
+1. HEV/tun-poc is small-control and historical reference evidence only, not a
+   broad matched baseline blocker.
+2. p99/tail is a POC Performance Guardrail, not a release SLO; repeat severe
+   tails, CPU runaway, startup invalidity, or cleanup failure reopen diagnosis.
+3. broader throughput/capacity CPU plus thermal/power/soak evidence is deferred
+   until the real product Direct Egress seam and driver exist.

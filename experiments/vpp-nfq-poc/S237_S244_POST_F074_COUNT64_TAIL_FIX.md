@@ -192,10 +192,13 @@ it.  It is not currently the active blocker for this tail-fix candidate; it
 should remain a repeat-start regression condition for future runtime/lifecycle
 work.
 
-This still does not close EG-17 or ADR-0007.  Main-stack import remains blocked
-on the broader E2 budget decision: HEV-baseline disposition, formal p99/tail
-tolerance, broader OI3 throughput/capacity CPU beyond the bounded count512 and
-count64 tail-fix shapes, thermal, power, and soak.
+This still does not close EG-17 release evidence or ADR-0007 release
+performance.  Main-stack seam work is no longer blocked on broader historical
+POC performance tuning: the 2026-08-26 disposition narrows HEV/tun-poc to
+small-control and historical reference evidence, treats p99/tail as a POC
+Performance Guardrail rather than a release SLO, and defers broader
+throughput/capacity, thermal, power, and soak until the real product Direct
+Egress seam and driver exist.
 
 ## Next step
 

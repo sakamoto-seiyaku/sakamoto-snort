@@ -63,16 +63,20 @@ The p99 tail remains a formal tolerance question.  OI3 p99 was
 `72/106/71ms`, materially higher than Direct p99 `16/14/14ms`, but not a
 correctness failure, timeout, cleanup failure, or CPU-runaway recurrence.
 
-This still does not close ADR-0007 or EG-17.  HEV baseline validity, formal
-p99/tail tolerance, broader throughput/capacity beyond this bounded count512
-shape, thermal, power, and long soak remain open.
+This still does not close ADR-0007 release performance or EG-17 release
+evidence.  Under the 2026-08-26 disposition, however, the count512 Direct/OI3
+result satisfies the POC Performance Guardrail for continuing main-stack seam
+work; broader throughput/capacity, thermal, power, and long soak are deferred
+until the real product Direct Egress seam and driver exist.
 
 ## Next step
 
 Use S236 as post-F074 foreground count512 regression evidence for Direct/OI3.
-Continue E2 with:
+The 2026-08-26 disposition narrows the remaining work:
 
-1. a pre-registered p99/tail tolerance decision over S231--S236;
-2. a HEV-baseline disposition or narrowing decision for F073;
-3. broader throughput/capacity plus thermal/power/soak evidence if the
-   tolerance decision still permits main-stack import.
+1. HEV/tun-poc is small-control and historical reference evidence only, not a
+   broad matched baseline blocker.
+2. p99/tail is a POC Performance Guardrail, not a release SLO; repeat severe
+   tails, CPU runaway, startup invalidity, or cleanup failure reopen diagnosis.
+3. broader throughput/capacity plus thermal/power/soak evidence is deferred
+   until the real product Direct Egress seam and driver exist.

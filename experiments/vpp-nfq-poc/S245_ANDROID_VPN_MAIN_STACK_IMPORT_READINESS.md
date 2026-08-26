@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `TWENTIETH_S70_S71_KERNELSU_AUTH_CLEARED_DUAL_PROFILE_CLOSURE_PASSED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `TWENTY_FIRST_EG17_GUARDRAIL_DISPOSITION_RECORDED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -123,15 +123,24 @@ while Flow Stack complexity remains local to the VPN transport implementation.
 ## Remaining blockers before product closure
 
 S244 closes the tested count64 tail candidate, but it does not close the whole
-ADR-0007 product acceptance surface.  Remaining blockers:
+ADR-0007 product acceptance surface.  The 2026-08-26 disposition is:
 
-- HEV-baseline disposition for EG-17;
-- formal p99/tail tolerance over the corrected S231--S244 evidence range;
-- broader throughput/capacity CPU beyond count64/count512 bounded samples;
-- thermal, power, and soak evidence;
+- HEV/tun-poc is narrowed to small-control and historical reference evidence;
+  it is not a broad matched baseline blocker for main-stack seam work.
+- p99/tail is a POC Performance Guardrail, not a release SLO.  Repeated severe
+  tails, CPU runaway, startup invalidity, or cleanup failure still stop the
+  line for diagnosis, but S231--S244/F076 do not show an active architecture
+  cliff for the tested Direct/OI3 scope.
+- broader throughput/capacity CPU, thermal, power, and soak evidence are
+  deferred until the real product Direct Egress seam and driver exist.
 - repeat-start lifecycle regression for the S241 VPP initial worker barrier
   abort, even though S243/S244 and the later F076 clean-single rerun did not
   reproduce it.
+
+Remaining product-closure blockers are therefore the real pinned HEV/lwIP
+driver behind `VpnHevLwipDriver`, the Android RuntimeService HEV/lwIP lifecycle
+seam, product Direct Egress evidence on that real path, and later release-grade
+budget/power/soak evidence.
 
 ## Recommendation
 

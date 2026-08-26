@@ -1,12 +1,14 @@
 # S193 Android VPN Engineering Feasibility final audit
 
 Date: 2026-08-26
-Status: `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`
+Status: `POC_ARCHITECTURE_GUARDRAIL_READY_RELEASE_PERFORMANCE_DEFERRED`
 
 ## Decision
 
-The current Android VPN POC campaign does not yet support importing the route
-directly into the product/main stack as the selected implementation baseline.
+The current Android VPN POC campaign does not support importing the throwaway
+route directly into the product/main stack as the selected implementation
+baseline.  It does support continuing main-stack design/seam work with the
+owner-inline invariants and same-owner re-arm behavior as architecture inputs.
 
 The campaign evidence supports the owner-inline route for identity, bounded
 full-device correctness, lifecycle/resource settlement, and matched device-state
@@ -22,15 +24,25 @@ S236 extends the foreground Direct/OI3 shape to count512.  S237 then found a
 narrower valid count64 OI3 p99 tail (`879ms`) after F074; S237--S244 corrected
 that same-owner deferred re-arm seam and S244 reran the full Direct/OI3
 count64 repeat with all ten cells valid and OI3 p99 `65/76/70/77/82ms`.  The
-campaign still does not prove the registered ADR-0007 E2 performance gate
-because the broad HEV baseline decision, throughput/capacity CPU budgets beyond
-these bounded count512/count64-tail shapes, thermal/power/soak evidence, and
-formal p99/tail tolerance remain open.
+campaign still does not prove the release ADR-0007 E2 performance gate.  The
+2026-08-26 disposition is narrower:
 
-This remains an `ADJUSTMENT_REQUIRED` result, not `SUPPORTS_BASELINE` and not
-an architecture reopening by itself.  The owner-inline invariants still hold;
-the next work is budget evidence and tolerance closure before formal main-stack
-implementation planning.
+- HEV/tun-poc is no longer a broad matched baseline blocker.  It is retained
+  only as small-control and historical reference evidence until the real
+  product HEV/lwIP driver exists.
+- p99/tail is treated as a POC Performance Guardrail, not a release SLO:
+  repeated seconds-level tails, repeated `>500ms` tails, CPU runaway, startup
+  invalidity, or cleanup failure still stop the line for diagnosis, but the
+  corrected S231--S244/F076 evidence does not show an active architecture
+  cliff for the tested Direct/OI3 scope.
+- broader throughput/capacity, thermal, power, and soak are deferred until the
+  real product Direct Egress seam exists; running them now on historical
+  vpn-lite/OI3 evidence would not close product release performance.
+
+This remains not a release-performance closure and not an architecture
+reopening.  The owner-inline invariants still hold; the next product work is
+the real Direct Egress seam, not more historical POC performance tuning unless
+a guardrail failure recurs.
 
 Post-audit update: S199--S224 narrowed and corrected the main matched HTTP
 latency issue.  The connector write-interest defect, owner handoff/post-send
@@ -58,11 +70,9 @@ extended Direct/OI3 count128 to screen-off and forced-Doze; both passed
 `128/128`, with OI3 p95/p99 `28/71ms` and `26/30ms`.  S236 expanded the
 foreground Direct/OI3 shape to count512 repeat=3; all OI3 repeats passed
 `512/512`, p95 was `27--28ms`, p99 was `72/106/71ms`, cleanup was `516/0`, and
-total CPU ticks were `1015/1060/1028`.  The audit still remains
-`ADJUSTMENT_REQUIRED_E2_PERFORMANCE` because ADR-0007's full budget gate needs
-the HEV-baseline decision, formal p99/tail tolerance, broader OI3
-throughput/capacity CPU evidence beyond this bounded count512 shape, and
-thermal/power/soak coverage.  S237--S244 add a focused count64 tail-fix update:
+total CPU ticks were `1015/1060/1028`.  This evidence now satisfies the POC
+Performance Guardrail for continuing main-stack seam work, while final release
+budget evidence remains deferred.  S237--S244 add a focused count64 tail-fix update:
 S237 found an OI3 `879ms` p99 tail in a valid low-CPU count64 cell, S241/S244
 validated the same-owner local re-arm correction, and S244 passed all ten
 Direct/OI3 count64 cells with OI3 p99 `65/76/70/77/82ms`.  S241's one VPP
@@ -77,7 +87,7 @@ risk; S243 OI3-only repeat-start and S244 full repeat did not reproduce it.
 | Application identity | S139/S190 current S156-era A2 aggregate binds A2-0 through A2-6, including distinct-App matrix, async cache/concurrency, controlled reverse, lifecycle/native join, known-UID allow/drop, replay and settlement. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Network and lifecycle | S151 closes real underlay epoch for the selected Pixel artifact; S153/S157 close real stop/fault/restart and same-session re-arm evidence; S153 full E1 residual sequence reruns normal stop/start, fault restart and Wi-Fi epoch restart with fresh traffic and zero residue. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
 | Ownership and failure | S158/S168 close final multi-owner topology/teardown corrections; S160/S161 close D3 overload/recovery for tested envelope; S176 closes four-owner UDP route-pinning; S141 B2 closes policy/transport/infrastructure separation. | `PASS_FOR_BOUNDED_PIXEL_SCOPE` |
-| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  S222/S223 rerun the device-state shape under the corrected artifact: screen-off OI3 p95 `27ms`; forced-Doze OI3 p95 `78ms`; both with `failureCount=0` and cleanup `12/0`.  S224 adds five current-artifact four-flow UDP resource cycles with stable fd/thread/RSS, cleanup `16/0` per cycle, and `failureCount=0`.  S225--S229 show the remaining gap is not merely missing evidence: HEV fails as a broad baseline at 64+ requests, and OI3/VPP workers burned CPU while idle.  The F074 follow-up closes the selected Android idle scope (`cpuTicksDelta=89`, worker `skip_barrier_recent=0`, OI3 UDP wake smoke `414/414`).  S231--S233 extend that to foreground Direct/OI3 count64/count128 CPU budget (`198`, `302`, then repeat `286/292/302` total CPU ticks).  S234--S235 extend the count128 Direct/OI3 shape to screen-off and forced-Doze: OI3 p95/p99 `28/71ms` and `26/30ms`, total CPU ticks `336` and `343`, both with `failureCount=0`.  S236 extends foreground Direct/OI3 to count512 repeat=3: OI3 p95 `27--28ms`, p99 `72/106/71ms`, cleanup `516/0`, total CPU ticks `1015/1060/1028`, and `failureCount=0`.  S237--S244 close a narrower count64 same-owner p99 tail: S244 passed all Direct/OI3 cells with OI3 p99 `65/76/70/77/82ms` and cleanup `68/0`.  Formal p99/tail tolerance and the full ADR-0007 budget gate remain open. | `ADJUSTMENT_REQUIRED_E2_PERFORMANCE` |
+| Engineering envelope | S153 closes the registered E1 resource/lifecycle sequence; S171/S172/S173/S174/S175/S176/S192 close bounded correctness/construction/device-state slices.  S221 closes the foreground matched HTTP latency regression with Direct `8/8` p95 `59ms`, HEV `8/8` p95 `11ms`, and OI3 `8/8` p95 `24ms`.  S222/S223 rerun the device-state shape under the corrected artifact: screen-off OI3 p95 `27ms`; forced-Doze OI3 p95 `78ms`; both with `failureCount=0` and cleanup `12/0`.  S224 adds five current-artifact four-flow UDP resource cycles with stable fd/thread/RSS, cleanup `16/0` per cycle, and `failureCount=0`.  S225--S229 show the remaining gap is not merely missing evidence: HEV fails as a broad baseline at 64+ requests, and OI3/VPP workers burned CPU while idle.  The F074 follow-up closes the selected Android idle scope (`cpuTicksDelta=89`, worker `skip_barrier_recent=0`, OI3 UDP wake smoke `414/414`).  S231--S233 extend that to foreground Direct/OI3 count64/count128 CPU budget (`198`, `302`, then repeat `286/292/302` total CPU ticks).  S234--S235 extend the count128 Direct/OI3 shape to screen-off and forced-Doze: OI3 p95/p99 `28/71ms` and `26/30ms`, total CPU ticks `336` and `343`, both with `failureCount=0`.  S236 extends foreground Direct/OI3 to count512 repeat=3: OI3 p95 `27--28ms`, p99 `72/106/71ms`, cleanup `516/0`, total CPU ticks `1015/1060/1028`, and `failureCount=0`.  S237--S244 close a narrower count64 same-owner p99 tail: S244 passed all Direct/OI3 cells with OI3 p99 `65/76/70/77/82ms` and cleanup `68/0`.  F076 clean-single rerun did not reproduce the S241 repeat-start abort.  Release p99/SLO, broader throughput/capacity, thermal, power, and soak remain deferred until real product Direct Egress. | `POC_GUARDRAIL_PASS_RELEASE_PERF_DEFERRED` |
 
 ## E2 performance decision
 
@@ -184,13 +194,14 @@ S199--S223 then split and corrected the main matched HTTP cost envelope:
   happened before OI3 startup and is recorded as a repeat-start lifecycle risk;
   S243/S244 did not reproduce it.
 
-Therefore the current result remains `ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.
-The F074 idle/foreground/device-state count-bounded CPU hotspot is closed for
-the tested Direct/OI3 scope through count512; the immediate next engineering
-questions are the HEV-baseline/narrowing decision, formal p99/tail tolerance
-over the corrected S231--S244 evidence, broader OI3 throughput/capacity CPU
-budget beyond the bounded count512/count64-tail shapes, and thermal/power/soak
-coverage, not F072/F075 debugging or main-stack import.
+Therefore the current result is
+`POC_ARCHITECTURE_GUARDRAIL_READY_RELEASE_PERFORMANCE_DEFERRED`.  The F074
+idle/foreground/device-state count-bounded CPU hotspot is closed for the tested
+Direct/OI3 scope through count512, and the S237 count64 tail is closed for the
+tested shape.  HEV/tun-poc is narrowed to small-control evidence.  Broader
+throughput/capacity, thermal, power, and soak coverage are release/product
+evidence work after the real Direct Egress seam exists, not a reason to keep
+blocking main-stack seam work on the historical POC route.
 
 ## Main-stack implication
 
@@ -205,11 +216,14 @@ Allowed next work:
   count128 regressions for Direct/OI3; retain S236 as the foreground count512
   regression for Direct/OI3; retain S244 as the count64 same-owner tail-fix
   regression for Direct/OI3;
-- decide whether HEV/tun-poc remains required as a broad matched baseline, or
-  narrow it to small control cells until its 64-request timeout is fixed;
-- classify the remaining OI3 p99 tails from S231--S244 against a pre-registered
-  absolute/relative tolerance before calling the performance gate closed;
-- gather the remaining thermal/power/soak evidence for the corrected artifact;
+- keep HEV/tun-poc as small-control and historical reference evidence only; do
+  not block main-stack seam work on fixing it as a broad matched baseline;
+- treat p99/tail as a POC Performance Guardrail: repeat severe tails, CPU
+  runaway, startup invalidity, or cleanup failure reopen diagnosis, but the
+  corrected S231--S244/F076 evidence does not currently block architecture
+  feasibility;
+- defer broader throughput/capacity, thermal/power, and soak evidence until
+  the real product Direct Egress seam and driver exist;
 - extend focused OI3 performance/cost diagnosis using the S172/S192 matched
   HTTP shape and the S171 L4 runner if budget outliers remain;
 - identify whether the latency is caused by timer policy, owner scheduling,
@@ -230,7 +244,10 @@ Not allowed as a closure shortcut:
 
 ## Final audit result
 
-`ADJUSTMENT_REQUIRED_E2_PERFORMANCE`.
+`POC_ARCHITECTURE_GUARDRAIL_READY_RELEASE_PERFORMANCE_DEFERRED`.
 
-The Pixel route remains viable enough to continue focused engineering, but the
-campaign has not yet reached `SUPPORTS_BASELINE`.
+The Pixel route remains viable enough to continue main-stack seam engineering,
+but the campaign has not reached release performance closure or product Direct
+Egress completion.  Do not import throwaway POC code; import only the
+evidence-backed invariants and continue with the real product Direct Egress
+driver/lifecycle seam.

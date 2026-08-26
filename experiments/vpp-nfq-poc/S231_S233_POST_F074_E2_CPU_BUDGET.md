@@ -49,23 +49,24 @@ VPP worker scheduling pathology; after `0324f92`, the same OI3 count64/count128
 request envelopes stay in the low hundreds of total CPU ticks and around
 `1.8--2.6s` aggregate sched runtime instead of about `32s`.
 
-This does not close ADR-0007 or EG-17.  The OI3 p95 values are still higher
-than Direct.  S231 and S232 saw one or more p99 tail spikes (`486ms` and `253ms`),
-but S233's three count128 repeats did not reproduce that level of tail
-(`33ms`, `71ms`, `68ms`).  The remaining tail question is therefore a
-latency/tolerance and repeatability decision, not the resolved idle-worker CPU
-burn.  S234--S235 cover the matching post-F074 Direct/OI3 count128
-screen-off/forced-Doze cells, and S236 extends the foreground shape to
-count512.  HEV baseline validity, broader throughput/capacity CPU budgets,
-formal p99/tail tolerance, thermal, power, and soak remain open.
+This does not close ADR-0007 release performance or EG-17 release evidence.
+The OI3 p95 values are still higher than Direct.  S231 and S232 saw one or
+more p99 tail spikes (`486ms` and `253ms`), but S233's three count128 repeats
+did not reproduce that level of tail (`33ms`, `71ms`, `68ms`).  Under the
+2026-08-26 disposition this is a POC Performance Guardrail question, not a
+release SLO blocker for main-stack seam work.  S234--S235 cover the matching
+post-F074 Direct/OI3 count128 screen-off/forced-Doze cells, and S236 extends
+the foreground shape to count512.
 
 ## Next step
 
 Use S231--S233 as post-F074 regression evidence for the foreground
-count-bounded CPU budget.  Continue E2 with one of these explicitly narrower
-questions:
+count-bounded CPU budget.  The 2026-08-26 disposition narrows the remaining
+work:
 
-1. register and apply the S231--S236 absolute p99/tail tolerance decision;
-2. decide whether HEV remains a broad matched baseline or is narrowed to small
-   control cells until F073 is fixed;
-3. gather broader throughput/capacity CPU plus thermal/power/soak evidence.
+1. HEV/tun-poc is small-control and historical reference evidence only, not a
+   broad matched baseline blocker.
+2. p99/tail is a POC Performance Guardrail, not a release SLO; repeat severe
+   tails, CPU runaway, startup invalidity, or cleanup failure reopen diagnosis.
+3. broader throughput/capacity CPU plus thermal/power/soak evidence is deferred
+   until the real product Direct Egress seam and driver exist.

@@ -81,11 +81,13 @@ with OI3 p95 `27--28ms`, p99 `72/106/71ms`, cleanup `516/0`, and total CPU
 ticks `1015/1060/1028`. Therefore the F074 CPU hotspot is closed for the
 selected Android idle scope and tested foreground/device-state count-bounded
 Direct/OI3 HTTP scope through count512. EG-17 nevertheless remains
-`INCONCLUSIVE`:
+`INCONCLUSIVE` for release performance:
 HEV/tun-poc still cannot serve as a broad matched baseline above the small
-request-count envelope (`66/64` in S227, `64/63` in S228), and formal p99 tail
-tolerance, broader OI3 throughput/capacity beyond this bounded count512 shape,
-CPU/thermal/power, and long-soak evidence remain open before main-stack import.
+request-count envelope (`66/64` in S227, `64/63` in S228), but the
+2026-08-26 disposition narrows it to small-control evidence instead of a
+main-stack blocker.  Formal release p99/SLO, broader OI3 throughput/capacity,
+CPU/thermal/power, and long-soak evidence remain deferred until the real
+product Direct Egress seam and driver exist.
 
 **EG-17 post-S237/S244 tail-fix update:** S237 added a valid count64 tail
 counterexample after the F074 CPU fix: OI3 r4 passed `64/64` with cleanup
@@ -98,9 +100,20 @@ abort before OI3 startup, now recorded separately as VPN-F076.  S243 OI3-only
 repeat-start passed `8/8`, and S244 reran the full Direct/OI3 count64 shape
 with `failureCount=0`; OI3 p99 was `65/76/70/77/82ms` and cleanup was `68/0`
 in every repeat.  This closes the S237 count64 tail for the tested shape but
-does not change EG-17's `INCONCLUSIVE` status: formal p99/tail tolerance,
-HEV-baseline disposition, broader throughput/capacity CPU, thermal, power, and
-soak remain open before main-stack import.
+does not close EG-17 release performance.  Under the 2026-08-26 disposition,
+however, it does satisfy the POC Performance Guardrail for continuing
+main-stack seam work on the tested Direct/OI3 scope.
+
+**EG-17 2026-08-26 disposition:** HEV/tun-poc is narrowed to small-control and
+historical reference evidence rather than a broad matched baseline blocker.
+p99/tail is treated as a POC Performance Guardrail instead of a release SLO:
+repeat severe tails, CPU runaway, startup invalidity, or cleanup failure still
+stop the line, but the corrected S231--S244 plus F076 clean-single evidence
+does not show an active architecture-level cliff for the tested Direct/OI3
+scope.  Broader throughput/capacity, thermal, power, and soak stay deferred
+until the real product Direct Egress seam and driver exist.  EG-17 therefore
+remains inconclusive for release performance, but no longer blocks main-stack
+seam work on historical POC performance alone.
 
 ## Rejected evidence substitutions
 
