@@ -16,6 +16,16 @@ ADR-0006、ADR-0007、SAKAMOTO-103..113 与 SAKAMOTO-114..117 frontier 约束：
 RuntimeService-supervised VPP Runtime、C-only VPP Packet I/O Adapter、独立 VPN Flow Stack Packet
 Boundary，以及由真实 POC 选择的 instance isolation、state partition、buffer/copy 和执行拓扑。
 
+2026-08-26 POC 更新：Android VPN E2 仍未升级为可直接导入主栈的完成态。F074 已关闭
+OI3/VPP worker idle CPU hotspot；S231--S236 把 Direct/OI3 foreground/device-state
+count-bounded CPU evidence 推进到 count512。随后 S237 发现一个有效低 CPU 的 count64
+same-owner deferred SYN p99 tail，S237--S244 通过 owner-local re-arm drive 修正该 POC seam；
+S244 完整 Direct/OI3 count64 repeat 通过，OI3 p99 为 `65/76/70/77/82ms`。S241 的一次
+VPP initial worker barrier abort 被记录为低频 repeat-start lifecycle risk，S243/S244 未复现。
+当前主栈含义仍是：可以把 same-owner re-arm 本地驱动作为导入设计输入，但不能把 throwaway
+POC runner/APK 直接导入产品；正式导入仍受 EG-17 的 HEV-baseline disposition、formal p99/tail
+tolerance、broader throughput/capacity、thermal/power/soak gates 约束。
+
 后续产品与架构决策（2026-07-19）：
 
 - 第一目标已收敛为 `docs/product/ANDROID_L4_PRODUCT_PLAN.md` 中的 Android L4 Product

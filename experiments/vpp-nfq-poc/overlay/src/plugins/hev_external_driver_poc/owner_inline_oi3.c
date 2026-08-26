@@ -1421,8 +1421,10 @@ oi3_send_request (oi3_main_t *tm)
   memcpy (CMSG_DATA (c), &tm->direct_fd, sizeof (tm->direct_fd));
   if (sendmsg (tm->request_pair[0], &msg, MSG_DONTWAIT | MSG_NOSIGNAL) !=
       (ssize_t)sizeof (request)) { close (tm->direct_fd); tm->direct_fd = -1; return -1; }
-  fprintf (stderr, "oi3 broker-request owner=%u shard=1 token=%llu generation=%llu "
-           "family=%u kind=%u endpoint-port=%u fd=%d\n", tm->target_thread,
+  fprintf (stderr, "oi3 broker-request wall-ms=%llu owner=%u shard=1 "
+           "token=%llu generation=%llu family=%u kind=%u "
+           "endpoint-port=%u fd=%d\n",
+           (unsigned long long)oi3_wall_ms (), tm->target_thread,
            (unsigned long long)request.token, (unsigned long long)request.generation,
            request.family, request.kind, request.target_port, tm->direct_fd);
   return 0;
@@ -2768,6 +2770,17 @@ oi3_admit_deferred_tun_flow (vlib_main_t *vm, oi3_main_t *tm)
            "pending=%u deferred=%u\n",
            tm->owner_id, (unsigned long long)flow_hash, length,
            tm->tun_pending_count, tm->multi_deferred_count);
+  if (vlib_get_thread_index () == tm->target_thread) {
+    fprintf (stderr,
+             "oi3 deferred-owner-drive wall-ms=%llu owner=%u "
+             "pending=%u reason=same-owner-rearm\n",
+             (unsigned long long)oi3_wall_ms (), tm->owner_id,
+             tm->tun_pending_count);
+    oi3_apply_pending_underlay (tm);
+    oi3_worker_run_for (vm, NULL, 0, tm);
+    oi3_finish_if_ready_on_owner (vm, tm);
+    return 1;
+  }
   if (!tm->worker_token_pending &&
       oi3_enqueue_owner_for (tm, vm, 0) < 0) {
     oi3_error ("OI3 deferred TUN rearm enqueue failed");

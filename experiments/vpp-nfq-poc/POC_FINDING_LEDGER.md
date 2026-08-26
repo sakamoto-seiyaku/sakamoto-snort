@@ -110,6 +110,8 @@ Map rather than encoded as TODOs here.
 | VPN-F072 | OI3 completed TCP owner lifecycle can defer successor SYN or first payload drive | `CLOSED_FOR_S221_S223_MATCHED_DEVICE_STATE_E2` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F073 | HEV matched HTTP baseline is not valid above the small request-count envelope | `OPEN_RISK` | Pixel Android 16 + WSL2 LAN fixture |
 | VPN-F074 | OI3 multi VPP workers burn CPU while idle | `CLOSED_FOR_ANDROID_IDLE_SCOPE` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F075 | Same-owner deferred SYN re-arm self-scheduled through the frame queue and produced p99 tail | `CLOSED_FOR_POST_F074_COUNT64_TAIL_FIX` | Pixel Android 16 + WSL2 LAN fixture |
+| VPN-F076 | VPP initial worker barrier can abort during repeat-start validation | `OPEN_RISK` | Pixel Android 16 lifecycle |
 
 ## Findings
 
@@ -1027,6 +1029,20 @@ Map rather than encoded as TODOs here.
   `work/android-hev-poc7-stage`; Pixel startup then reported
   `success=true rc=0 vppMode=27`, `hev-loaded`, `oi4 multi enabled owners=2`,
   and `oi4 multi active=1 owners=2`.
+- **2026-08-26 post-F074 recurrence:** During S237--S244 tail-fix validation,
+  an OI3 plugin built from the generated `work/vpp` tree was packaged with the
+  product/F074 VPP runtime and produced invalid S238 evidence: VPP started, but
+  OI3 CLI/plugin evidence was missing.  Switching to the historical OI3 runtime
+  stage made the plugin load, but that VPP core lacked the F074 idle-profile
+  correction and reproduced high CPU (`cpuTicksDelta` around `3300`) in S239.
+  Valid post-F074 evidence required rebuilding the OI3 plugin from the same
+  product/F074 VPP source as `build-output/android-vpp-runtime/stage`, yielding
+  plugin SHA-256
+  `1c629adc13301d3a2dd98f86f8a39acc2533e24ec62f90433b10770a15f16338` with
+  product VPP core
+  `87cba5b2133f3ec1db0df2440a09ced921f78665b93e33bf1a2fbcc6837aa6e2`.
+  This recurrence is recorded in
+  [`S237_S244_POST_F074_COUNT64_TAIL_FIX.md`](S237_S244_POST_F074_COUNT64_TAIL_FIX.md).
 - **Post-correction evidence:** The paired artifact loaded, returned valid
   IPv4 DNS and Direct HTTP, and the restored canonical APK passed the controlled
   HTTP smoke with `PASS` cleanup and zero residue.
@@ -2855,6 +2871,77 @@ Map rather than encoded as TODOs here.
   F074 as an active blocker.
 - **Status:** `CLOSED_FOR_ANDROID_IDLE_SCOPE`.
 
+### VPN-F075 -- Same-owner deferred SYN re-arm self-scheduled through the frame queue and produced p99 tail
+
+- **First observation:** S237
+  `evidence/s237-e2-count64-post-f074-p99-repeat-20260826/`
+  (`runId=20260826-093500-130681`) ran the post-F074 foreground Direct/OI3
+  count64 shape.  Valid OI3 repeats r1--r3 stayed bounded with p99
+  `76/62/29ms`, but valid OI3 r4 passed `64/64` with cleanup `68/0` while p99
+  jumped to `879ms`.  CPU remained low (`totalCpuTicksDelta=214`), so this was
+  not an F074 worker-idle recurrence.
+- **Root cause:** HIGH confidence POC seam bug.  A same-owner deferred
+  successor SYN could be re-armed while execution was already on the target
+  owner, but the code still self-enqueued through the frame queue and waited
+  for another scheduling turn before applying pending underlay work and
+  finishing the owner.  The result was a valid but delayed same-owner flow
+  rather than a correctness or cleanup failure.
+- **POC correction:** `oi3_admit_deferred_tun_flow()` now detects
+  `current_thread == target_thread`, logs
+  `oi3 deferred-owner-drive ... reason=same-owner-rearm`, applies pending
+  underlay state, runs the owner boundedly, and calls
+  `oi3_finish_if_ready_on_owner()` directly.  `oi3_send_request()` also logs
+  `broker-request wall-ms=...` for timing joins.
+- **Closure evidence:** After correcting the product/F074 packaging described
+  in VPN-F039, S241
+  `evidence/s241-e2-count64-tail-fix-f074-product-20260826/`
+  (`runId=20260826-102409-220536`) passed OI3 r1--r4 with p99
+  `67/74/68/65ms`, cleanup `68/0`, and low CPU before an unrelated VPP
+  startup abort in r5.  S244
+  `evidence/s244-e2-count64-tail-fix-f074-product-repeat-20260826/`
+  (`runId=20260826-104636-405379`) reran the full Direct/OI3 count64 repeat
+  and passed all ten cells with `failureCount=0`; OI3 p99 was
+  `65/76/70/77/82ms`, cleanup was `68/0` in every repeat, and the new
+  `deferred-owner-drive` marker was present in the valid logs.
+- **Supported claim:** The S237 count64 OI3 p99 tail is closed for the tested
+  post-F074 foreground Direct/OI3 count64 shape.  The correction preserves
+  canonical owner selection and only changes the same-owner re-arm drive seam.
+- **Non-claim:** This does not close formal EG-17 / ADR-0007 performance
+  readiness, HEV baseline disposition, thermal/power/soak, broader capacity, or
+  the VPP repeat-start risk recorded as VPN-F076.
+- **Status:** `CLOSED_FOR_POST_F074_COUNT64_TAIL_FIX`.
+
+### VPN-F076 -- VPP initial worker barrier can abort during repeat-start validation
+
+- **First observation:** S241 OI3 r5 failed before OI3 startup.  `vpp-stdout`
+  recorded
+  `vlib_worker_thread_initial_barrier_sync_and_release: worker thread deadlock`
+  followed by `SIGABRT`; app startup validity was `0`, requests were `0`, and
+  the row was invalid.  The previous S241 OI3 r1--r4 cells had already passed
+  with clean OI3 evidence.
+- **Root-cause confidence:** MEDIUM.  The failure occurs in VPP's initial
+  worker barrier before the OI3 plugin path, so it is not direct evidence
+  against the same-owner tail fix.  It is likely a low-frequency Android
+  runtime/lifecycle scheduling edge or repeat-start cleanup/settle sensitivity,
+  but the exact trigger is not yet isolated.
+- **Reproduction controls:** S242 one-cell post-abort smoke passed OI3 `4/4`,
+  proving the device/runtime recovered.  S243 OI3-only repeat-start ran 8
+  repeats of 4 requests; all passed with p99 `22/23/78/74/75/75/79/69ms`,
+  CPU `123--130` ticks, cleanup `8/0`, and `failureCount=0`.  S244 then reran
+  the full S241 Direct/OI3 count64 shape and passed all ten cells with
+  `failureCount=0`.
+- **Supported claim:** The S241 r5 abort is a recorded lifecycle risk, not the
+  active blocker for F075 tail-fix closure.
+- **Non-claim:** This does not prove the repeat-start risk is impossible or
+  production-safe.  Future runtime/lifecycle validation should keep a
+  repeat-start regression condition and capture VPP worker startup diagnostics
+  if it recurs.
+- **Next correction direction:** If the same initial-barrier abort recurs in a
+  bounded repeat-start loop, split it from E2 latency and diagnose the VPP
+  startup/lifecycle seam directly: settle/force-stop timing, worker layout,
+  Android idle-profile startup barrier policy, and process teardown residue.
+- **Status:** `OPEN_RISK`.
+
 ## Consolidation audit
 
 - All prior 30 source findings map to one of `VPN-F001`--`VPN-F026`; the S140
@@ -2877,7 +2964,9 @@ Map rather than encoded as TODOs here.
   S161 closes the timed D3-to-B1 recovery gate. S160 adds VPN-F038 for the
   reproducible full-route ambient TCP owner-stop contamination; S161 closes it
   as a classified run-validity outcome. S163 adds VPN-F039 for incompatible
-  OI3/HEV build stages and closes it as a packaging preflight correction. S164
+  OI3/HEV build stages and closes it as a packaging preflight correction; the
+  S237--S244 post-F074 package mismatch recurrence remains covered by the same
+  source→stage→APK validity gate. S164
   adds VPN-F040 for the external-ingress port-0 wildcard design gap; S165
   implements and regresses the explicit external-only demux correction, closing
   the correctness arm and reopening the remaining E2 matrix.
@@ -2985,7 +3074,12 @@ Map rather than encoded as TODOs here.
   lifecycle/admission tail, with S221--S223 removing the seconds-level
   foreground/device-state cliff; and S224 adds current-artifact resource-trend
   stability.  F069 remains open for throughput, CPU/thermal/power/soak, and the
-  forced-Doze latency-tolerance decision.
+  forced-Doze latency-tolerance decision.  S225--S229 split the next budget
+  hotspot into F073 HEV baseline invalidity and F074 OI3/VPP worker idle CPU;
+  S229 plus S231--S236 close F074 for the selected Android idle and Direct/OI3
+  count-bounded CPU scopes.  S237--S244 then add and close F075 for the
+  post-F074 count64 same-owner deferred re-arm tail, while S241 records F076 as
+  an open low-frequency VPP repeat-start lifecycle risk.
 - Duplicate scheduler symptoms map to VPN-F003; synchronous broker blocking and
   channel direction confusion remain separate VPN-F004/VPN-F005 causes.
 - Harness accept limits and temporary HEV pools merge into VPN-F012 because
