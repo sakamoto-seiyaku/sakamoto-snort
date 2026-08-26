@@ -138,6 +138,7 @@ target_compile_definitions(
 add_sucre_snort_host_test(
   vpn_tun_flow_adapter_tests
   vpn_tun_flow_adapter_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnFlowStackBoundary.cpp"
   "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnTunFlowAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowSteering.cpp"
   "${SUCRE_SNORT_ROOT}/src/core/flow/FlowGraphIngress.cpp"
@@ -229,6 +230,7 @@ add_sucre_snort_host_test(
 add_sucre_snort_host_test(
   runtime_profile_tests
   runtime_profile_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnFlowStackBoundary.cpp"
   "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnTunFlowAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/RuntimeFactoryPlan.cpp"
   "${SUCRE_SNORT_ROOT}/src/main/RuntimeProfile.cpp"
@@ -244,6 +246,7 @@ add_sucre_snort_host_test(
 add_sucre_snort_host_test(
   control_server_contract_tests
   control_server_contract_tests.cpp
+  "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnFlowStackBoundary.cpp"
   "${SUCRE_SNORT_ROOT}/src/datapath/tun/VpnTunFlowAdapter.cpp"
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlServer.cpp"
   "${SUCRE_SNORT_ROOT}/src/control/vnext/ControlVNextCodec.cpp"

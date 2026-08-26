@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `SECOND_HANDOFF_FACTS_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `THIRD_FD_PLACEHOLDER_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
 
 ## Question
 
@@ -196,3 +196,30 @@ Validated locally:
 The next slice is to replace the current transport-fd placeholder behind the
 Flow Stack Boundary Interface while preserving the existing adapter-level fd
 tests as compatibility evidence.
+
+## 2026-08-26 third import slice
+
+The third main-stack design-import slice moved the existing transport-fd
+placeholder behind the Flow Stack Boundary Interface:
+
+- `VpnFdFlowStackBoundary` now implements `VpnFlowStackBoundary` for the
+  current fd-backed host/runtime placeholder.
+- `VpnTunFdRuntime` no longer writes allowed outbound packets directly to the
+  transport fd.  It asks `VpnTunFlowAdapter` for the accepted handoff facts,
+  builds a `VpnFlowStackAdmissionRequest`, and admits the packet through the
+  Flow Stack seam.
+- The fd-backed placeholder only accepts `TunOrigin` packets; `FlowStackOrigin`
+  admission is rejected as a loop guard.
+- Existing transport-fd counters remain stable:
+  no transport fd still records `transportUnsupported`, and fd backpressure
+  still records `transportFailed` rather than policy drop.
+
+Validated locally:
+
+- `vpn_flow_stack_boundary_tests`: 7 passed.
+- `vpn_tun_flow_adapter_tests`: 22 passed.
+- `runtime_profile_tests`: 9 passed.
+
+The next slice is to define the explicit return-packet delivery path behind
+the same Interface, then retire the remaining direct transport-fd return relay
+from `VpnTunFdRuntime`.

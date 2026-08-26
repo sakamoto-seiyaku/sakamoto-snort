@@ -24,6 +24,9 @@ enum class VpnFlowStackAdmissionStatus : std::uint8_t {
     UnsupportedProtocol,
     OwnerFault,
     StaleGeneration,
+    TransportUnavailable,
+    TransportFailed,
+    LoopRejected,
 };
 
 enum class VpnFlowStackDeferredReason : std::uint8_t {
@@ -132,6 +135,33 @@ public:
 
     [[nodiscard]] virtual VpnFlowStackWakeStatus enqueueOwnerWake(
         const VpnFlowStackDeferredWork &work) noexcept = 0;
+};
+
+/**
+ * Temporary Adapter for the existing host/runtime transport-fd placeholder.
+ *
+ * This is not the product HEV/lwIP implementation.  It exists to keep the
+ * current fd handoff tests alive while callers move to the Flow Stack seam.
+ */
+class VpnFdFlowStackBoundary final : public VpnFlowStackBoundary {
+public:
+    explicit VpnFdFlowStackBoundary(int &transportFd) noexcept;
+
+    [[nodiscard]] VpnFlowStackAdmissionResult admitPacket(
+        const VpnFlowStackAdmissionRequest &request,
+        std::span<const std::byte> l3Packet) noexcept override;
+
+    [[nodiscard]] VpnFlowStackDriveStatus driveOwner(
+        std::uint32_t owner, VpnFlowStackDriveBudget budget) noexcept override;
+
+    [[nodiscard]] VpnFlowStackDriveStatus finishOwnerIfReady(
+        std::uint32_t owner) noexcept override;
+
+    [[nodiscard]] VpnFlowStackWakeStatus enqueueOwnerWake(
+        const VpnFlowStackDeferredWork &work) noexcept override;
+
+private:
+    int *transportFd_ = nullptr;
 };
 
 /**

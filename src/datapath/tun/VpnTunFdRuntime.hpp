@@ -62,6 +62,7 @@ class VpnTunFdRuntime final : public SnortRuntime::BaseRuntimeControl {
 public:
     explicit VpnTunFdRuntime(const int tunFd, const bool automaticDrain = false)
         : tunFd_(tunFd),
+          flowStack_(transportFd_),
           automaticDrain_(automaticDrain),
           flowAdapter_(VpnTunFlowAdapterConfig{.packetPolicy = &packetPolicy_}) {}
 
@@ -352,18 +353,24 @@ private:
                 metadata);
             switch (adapterResult) {
             case VpnTunFlowAdapterResult::FlowForwarded:
-                if (writePacketToTransport(
+                if (admitPacketToFlowStack(std::as_bytes(
                         std::span<const std::uint8_t>{
-                            packet.data(), static_cast<std::size_t>(bytes)})) {
+                            packet.data(), static_cast<std::size_t>(bytes)}))) {
                     ++result.forwardedToTransport;
                     flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Succeeded);
                 } else {
-                    if (transportFd_ < 0) {
+                    const auto admissionStatus = lastFlowStackAdmissionStatus_;
+                    if (admissionStatus
+                        == VpnFlowStackAdmissionStatus::TransportUnavailable) {
                         ++result.forwardedWithoutTransport;
                         flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Unsupported);
-                    } else {
+                    } else if (admissionStatus
+                               == VpnFlowStackAdmissionStatus::TransportFailed) {
                         ++result.writeFailures;
                         result.lastErrno = result.lastErrno == 0 ? EIO : result.lastErrno;
+                        flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Failed);
+                    } else {
+                        ++result.runtimeDropped;
                         flowAdapter_.recordTransportOutcome(VpnTunTransportOutcome::Failed);
                     }
                 }
@@ -479,9 +486,24 @@ private:
         return result;
     }
 
-    [[nodiscard]] bool writePacketToTransport(
-        const std::span<const std::uint8_t> packet) noexcept {
-        return transportFd_ >= 0 && writePacket(transportFd_, packet);
+    [[nodiscard]] bool admitPacketToFlowStack(
+        const std::span<const std::byte> packet) noexcept {
+        const auto handoff = flowAdapter_.lastAcceptedPacketHandoff();
+        if (!handoff.has_value()) {
+            lastFlowStackAdmissionStatus_ = VpnFlowStackAdmissionStatus::OwnerFault;
+            return false;
+        }
+        const auto admission = flowStack_.admitPacket(
+            VpnFlowStackAdmissionRequest{
+                .facts = handoff->facts,
+                .canonicalOwner = handoff->canonicalOwner,
+                .generation = 0,
+                .policyRevision = handoff->policyRevision,
+                .provenance = handoff->provenance,
+            },
+            packet);
+        lastFlowStackAdmissionStatus_ = admission.status;
+        return admission.accepted();
     }
 
     [[nodiscard]] bool writePacketToTun(
@@ -568,6 +590,9 @@ private:
 
     int tunFd_ = -1;
     int transportFd_ = -1;
+    VpnFdFlowStackBoundary flowStack_;
+    VpnFlowStackAdmissionStatus lastFlowStackAdmissionStatus_ =
+        VpnFlowStackAdmissionStatus::TransportUnavailable;
     bool ipv6Enabled_ = false;
     bool automaticDrain_ = false;
     mutable std::mutex ioMutex_;

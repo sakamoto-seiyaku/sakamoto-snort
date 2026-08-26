@@ -34,7 +34,9 @@ regression 固定为本地有界 drive，不通过 cross-owner wake 自投递。
 `FlowGraphIngressResult.acceptedOwner` 与
 `VpnTunFlowAdapter::lastAcceptedPacketHandoff()` 接上，使 VPN egress 后续可直接消费 shared graph
 产生的 canonical owner、facts、policy revision 和 TUN/FlowStack provenance，不需要在 VPN transport
-adapter 里重新 parse/hash。
+adapter 里重新 parse/hash。第三个切片把现有 transport-fd outbound 占位实现收进
+`VpnFdFlowStackBoundary`，`VpnTunFdRuntime` 改为通过 `VpnFlowStackAdmissionRequest` 入栈；
+fd 缺失和 fd backpressure 仍分别记录为 transport unsupported/failed，不伪装成 policy drop。
 
 后续产品与架构决策（2026-07-19）：
 

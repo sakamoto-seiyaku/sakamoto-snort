@@ -7,11 +7,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <poll.h>
 #include <span>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -96,6 +101,32 @@ Flow::PacketFacts packetFacts() {
         .runtimeProfile = 1,
     };
     return facts;
+}
+
+void closeIfOpen(int &fd) noexcept {
+    if (fd >= 0) {
+        ::close(fd);
+        fd = -1;
+    }
+}
+
+std::vector<std::byte> readPacketFromFd(const int fd) {
+    std::array<std::byte, 2048> buffer{};
+    const ssize_t bytes = ::read(fd, buffer.data(), buffer.size());
+    if (bytes <= 0) {
+        return {};
+    }
+    return std::vector<std::byte>(
+        buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(bytes));
+}
+
+bool packetReadable(const int fd) noexcept {
+    pollfd target{
+        .fd = fd,
+        .events = POLLIN | POLLERR | POLLHUP,
+        .revents = 0,
+    };
+    return ::poll(&target, 1, 0) > 0 && (target.revents & POLLIN) != 0;
 }
 
 TEST(VpnFlowStackBoundaryTest,
@@ -211,6 +242,81 @@ TEST(VpnFlowStackBoundaryTest,
     EXPECT_EQ(boundary.lastWake->targetOwner, 4U);
     EXPECT_EQ(boundary.lastWake->generation, 200U);
     EXPECT_EQ(boundary.lastWake->reason, VpnFlowStackDeferredReason::FdWake);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     FdBackedAdmissionWritesTunOriginPacketToTransportFd) {
+    int transportFds[2]{-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                           transportFds),
+              0);
+    VpnFdFlowStackBoundary boundary{transportFds[0]};
+    const std::array<std::byte, 4> packet{
+        std::byte{0x45}, std::byte{0x00}, std::byte{0x00}, std::byte{0x28}};
+
+    const auto result = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 3,
+            .generation = 42,
+            .policyRevision = 7,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+
+    EXPECT_TRUE(result.accepted());
+    EXPECT_EQ(result.canonicalOwner, 3U);
+    const auto transported = readPacketFromFd(transportFds[1]);
+    ASSERT_EQ(transported.size(), packet.size());
+    EXPECT_TRUE(std::equal(packet.begin(), packet.end(), transported.begin()));
+
+    closeIfOpen(transportFds[0]);
+    closeIfOpen(transportFds[1]);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     FdBackedAdmissionReportsUnavailableWithoutTransportFd) {
+    int transportFd = -1;
+    VpnFdFlowStackBoundary boundary{transportFd};
+    const std::array<std::byte, 4> packet{};
+
+    const auto result = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 3,
+            .provenance = VpnFlowStackPacketProvenance::TunOrigin,
+        },
+        packet);
+
+    EXPECT_EQ(result.status,
+              VpnFlowStackAdmissionStatus::TransportUnavailable);
+    EXPECT_FALSE(result.accepted());
+    EXPECT_EQ(result.canonicalOwner, 3U);
+}
+
+TEST(VpnFlowStackBoundaryTest,
+     FdBackedAdmissionRejectsFlowStackOriginToAvoidLoop) {
+    int transportFds[2]{-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                           transportFds),
+              0);
+    VpnFdFlowStackBoundary boundary{transportFds[0]};
+    const std::array<std::byte, 4> packet{};
+
+    const auto result = boundary.admitPacket(
+        VpnFlowStackAdmissionRequest{
+            .facts = packetFacts(),
+            .canonicalOwner = 3,
+            .provenance = VpnFlowStackPacketProvenance::FlowStackOrigin,
+        },
+        packet);
+
+    EXPECT_EQ(result.status, VpnFlowStackAdmissionStatus::LoopRejected);
+    EXPECT_FALSE(result.accepted());
+    EXPECT_FALSE(packetReadable(transportFds[1]));
+
+    closeIfOpen(transportFds[0]);
+    closeIfOpen(transportFds[1]);
 }
 
 } // namespace
