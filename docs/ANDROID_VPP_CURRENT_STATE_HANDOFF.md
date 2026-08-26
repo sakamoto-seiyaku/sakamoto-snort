@@ -43,8 +43,12 @@ fd 缺失和 fd backpressure 仍分别记录为 transport unsupported/failed，�
 作为主栈内 product-shaped host Adapter：它按 canonical owner/generation、有界 per-owner
 admission、budgeted local drive、generation-tagged cross-owner wake 与 return-packet 队列来固定
 真实 VPN Userspace Flow Stack 必须满足的语义；generation 切换会清掉旧 packet/return/wake 队列，避免
-teardown 后继续驱动 stale work。当前仍未导入 HEV/lwIP/OI3 产品实现；下一步应在该
-Interface 后替换或包裹 fd-backed 占位 Adapter，而不是继续扩大 `VpnTunFdRuntime` 的 fd 语义。
+teardown 后继续驱动 stale work。第六个切片新增 `VpnHevLwipFlowStackBoundary`，作为
+HEV/lwIP-backed Flow Stack 的主栈 production facade；它只依赖注入式 `VpnHevLwipDriver`，由
+facade 固定 TUN-origin、owner/generation、TCP/UDP、ports 与 packet-size validation，真实
+HEV/lwIP PCB/session/protected-socket/pbuf 细节留在 driver 后。当前仍未导入 HEV/lwIP/OI3 产品实现；
+下一步应让 VPN runtime construction 在真实 driver 可用时选择该 facade，同时保留 fd-backed Adapter
+作为显式兼容/测试 fallback，而不是继续扩大 `VpnTunFdRuntime` 的 fd 语义。
 
 后续产品与架构决策（2026-07-19）：
 

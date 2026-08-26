@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `FIFTH_OWNER_LOCAL_FAKE_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
+Status: `SIXTH_HEV_LWIP_FACADE_SLICE_LANDED_PRODUCT_CODE_IMPORT_BLOCKED`
 
 ## Question
 
@@ -36,6 +36,7 @@ Active source seams:
 | `src/core/flow/FlowGraphInjection.*` | Performs owner enqueue, Owner Guard, policy evaluation, and completion in a bounded packet transaction. | Needs to expose enough accepted-packet/owner provenance for VPN egress handoff. |
 | `src/datapath/tun/VpnTunFlowAdapter.*` | Normalizes VPN/TUN packets into the shared FlowGraph and records policy-vs-transport outcome counters. | Correct seam for VPN profile ingress, but it does not yet own a Flow Stack shard interface. |
 | `src/datapath/tun/VpnFlowStackBoundary.*` | Defines the VPN Flow Stack seam, the fd-backed compatibility Adapter and the owner-local host Adapter. | Product Direct Egress continues behind this Interface; HEV/lwIP details must not leak into `VpnTunFdRuntime`. |
+| `src/datapath/tun/VpnHevLwipFlowStack.*` | Defines the product facade for a HEV/lwIP-backed Flow Stack Adapter using an injected internal driver. | The pinned HEV/lwIP implementation should satisfy the driver slot without changing the public Flow Stack Interface. |
 | `src/datapath/tun/VpnTunFdRuntime.hpp` | Admits outbound packets and receives return packets through `VpnFlowStackBoundary`, while the current runtime still instantiates the fd-backed placeholder Adapter. | The remaining product work is replacing the placeholder Adapter implementation, not widening runtime fd knowledge. |
 
 ## What can be imported now
@@ -286,3 +287,39 @@ Validated locally:
 The next slice is to wire a real HEV/lwIP-backed implementation, or the
 smallest compilable production facade for it, behind `VpnFlowStackBoundary`
 while preserving the owner-local host Adapter tests and fd compatibility tests.
+
+## 2026-08-26 sixth import slice
+
+The sixth main-stack design-import slice landed the smallest compilable
+HEV/lwIP production facade behind the existing Flow Stack Interface:
+
+- `VpnHevLwipFlowStackBoundary` now implements `VpnFlowStackBoundary` while
+  depending only on an injected `VpnHevLwipDriver`.
+- The facade owns product-facing validation: TUN-origin only, canonical owner
+  range, current generation, TCP/UDP direct-egress eligibility, available
+  ports and bounded packet size.
+- The driver slot is where the pinned Sakamoto HEV Fork/lwIP implementation
+  will later own PCB/session/protected-socket/pbuf details.
+- Driver admission outcomes map back to the existing Flow Stack Interface
+  vocabulary, preserving runtime counters and policy-vs-transport separation.
+- Return packets, owner drive, owner finish, cross-owner wake and generation
+  reset are delegated through the facade without exposing HEV/lwIP internals
+  to `VpnTunFdRuntime`.
+
+This still does not import POC OI3/vpn-lite code or link a real HEV/lwIP
+library into the product.  It creates the production-shaped slot into which
+the real implementation can be wired.
+
+Validated locally:
+
+- `vpn_hev_lwip_flow_stack_tests`: 5 passed.
+- `vpn_flow_stack_boundary_tests`: 16 passed.
+- `vpn_tun_flow_adapter_tests`: 22 passed.
+- `runtime_profile_tests`: 9 passed.
+- `control_server_contract_tests`: 44 passed.
+- `snort-host-tests`: 26/26 passed.
+
+The next slice is to make VPN runtime construction select the HEV/lwIP facade
+behind `VpnFlowStackBoundary` when a real driver is available, while keeping
+the fd-backed Adapter as explicit compatibility/test fallback rather than the
+product Direct Egress boundary.
