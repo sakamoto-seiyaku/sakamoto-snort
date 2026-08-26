@@ -24,7 +24,10 @@ S244 完整 Direct/OI3 count64 repeat 通过，OI3 p99 为 `65/76/70/77/82ms`。
 VPP initial worker barrier abort 被记录为低频 repeat-start lifecycle risk，S243/S244 未复现。
 当前主栈含义仍是：可以把 same-owner re-arm 本地驱动作为导入设计输入，但不能把 throwaway
 POC runner/APK 直接导入产品；正式导入仍受 EG-17 的 HEV-baseline disposition、formal p99/tail
-tolerance、broader throughput/capacity、thermal/power/soak gates 约束。
+tolerance、broader throughput/capacity、thermal/power/soak gates 约束。S245
+`experiments/vpp-nfq-poc/S245_ANDROID_VPN_MAIN_STACK_IMPORT_READINESS.md`
+进一步把导入边界固定为：先导入 Flow Stack Boundary Interface、host fake 和 same-owner
+re-arm invariant，不导入 OI3/vpn-lite/runner 代码。
 
 后续产品与架构决策（2026-07-19）：
 
