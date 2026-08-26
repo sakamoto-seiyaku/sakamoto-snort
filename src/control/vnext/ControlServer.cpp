@@ -219,6 +219,11 @@ rapidjson::Document makeStatusResult(
 
 const char *stageName(SnortDatapath::Policy::PacketPolicyStage stage) noexcept;
 
+std::string ipAddressToString(const SnortDatapath::Flow::IpAddress &address);
+
+const char *devicePacketDirectionName(
+    SnortDatapath::Flow::DevicePacketDirection direction) noexcept;
+
 rapidjson::Value makePolicyDropActivityResult(
     const SnortDatapath::Policy::PacketPolicyDropActivityCounters &activity,
     rapidjson::Document::AllocatorType &alloc) {
@@ -228,6 +233,27 @@ rapidjson::Value makePolicyDropActivityResult(
     result.AddMember("totalRecords", activity.totalRecords, alloc);
     result.AddMember("evictedRecords", activity.evictedRecords, alloc);
     result.AddMember("hasLastRecord", activity.hasLastRecord, alloc);
+    const auto source = ipAddressToString(activity.lastSource);
+    rapidjson::Value lastSourceAddress;
+    lastSourceAddress.SetString(source.c_str(),
+                                static_cast<rapidjson::SizeType>(source.size()),
+                                alloc);
+    result.AddMember("lastSourceAddress", lastSourceAddress, alloc);
+    const auto destination = ipAddressToString(activity.lastDestination);
+    rapidjson::Value lastDestinationAddress;
+    lastDestinationAddress.SetString(
+        destination.c_str(),
+        static_cast<rapidjson::SizeType>(destination.size()),
+        alloc);
+    result.AddMember("lastDestinationAddress", lastDestinationAddress, alloc);
+    result.AddMember("lastIpProtocol", activity.lastIpProtocol, alloc);
+    result.AddMember("lastSourcePort", activity.lastSourcePort, alloc);
+    result.AddMember("lastDestinationPort", activity.lastDestinationPort, alloc);
+    result.AddMember("lastPortsAvailable", activity.lastPortsAvailable, alloc);
+    rapidjson::Value lastDeviceDirection;
+    lastDeviceDirection.SetString(
+        devicePacketDirectionName(activity.lastDeviceDirection), alloc);
+    result.AddMember("lastDeviceDirection", lastDeviceDirection, alloc);
     result.AddMember("lastLinuxUid", activity.lastLinuxUid, alloc);
     result.AddMember("lastUidKnown", activity.lastUidKnown, alloc);
     result.AddMember("lastNetworkContext", activity.lastNetworkContext, alloc);

@@ -1065,8 +1065,7 @@ public class DebugControlActivity extends Activity {
                         ? current.profile : profileFromSpinner();
                 JSONObject status = client.call(1, debugPacketStatusCommand(profile),
                         new JSONObject());
-                result = formatActivityL4Prefill(
-                        host, port, status.optJSONObject("policyDropActivity"));
+                result = formatActivityL4Prefill(status.optJSONObject("policyDropActivity"));
             } catch (IOException | JSONException | RuntimeException error) {
                 result = "L4 prefill: failed " + boundedError(error);
             }
@@ -1599,7 +1598,7 @@ public class DebugControlActivity extends Activity {
                 + formatPolicyDropActivity(countersAfter.optJSONObject("policyDropActivity"))
                 + "\nAllowed flow activity: "
                 + formatAllowedFlowActivity(countersAfter.optJSONObject("allowedFlowActivity"))
-                + "\n" + formatActivityL4Prefill(host, port,
+                + "\n" + formatActivityL4Prefill(
                 countersAfter.optJSONObject("policyDropActivity"))
                 + "\nProbe: " + probeResult;
     }
@@ -1615,6 +1614,9 @@ public class DebugControlActivity extends Activity {
                 + " uid=" + activity.optLong("lastLinuxUid", -1L)
                 + " uidKnown=" + activity.optBoolean("lastUidKnown", false)
                 + " context=" + activity.optLong("lastNetworkContext", -1L)
+                + " remote=" + remoteEndpoint(activity)
+                + " protocol=" + activity.optLong("lastIpProtocol", -1L)
+                + " deviceDir=" + activity.optString("lastDeviceDirection", "unknown")
                 + " stage=" + activity.optString("lastStage", "unknown")
                 + " reason=" + activity.optLong("lastReasonId", -1L)
                 + " rule=" + activity.optLong("lastRuleId", -1L)
@@ -1642,20 +1644,28 @@ public class DebugControlActivity extends Activity {
     }
 
     private String remoteEndpoint(JSONObject activity) {
-        boolean input = "input".equals(activity.optString("lastDeviceDirection", ""));
-        String address = input ? activity.optString("lastSourceAddress", "")
-                : activity.optString("lastDestinationAddress", "");
-        long port = input ? activity.optLong("lastSourcePort", 0L)
-                : activity.optLong("lastDestinationPort", 0L);
-        return address + ":" + port;
+        return remoteHost(activity) + ":" + remotePort(activity);
     }
 
-    private String formatActivityL4Prefill(String host, int port, JSONObject activity) {
+    private String remoteHost(JSONObject activity) {
+        boolean input = "input".equals(activity.optString("lastDeviceDirection", ""));
+        return input ? activity.optString("lastSourceAddress", "")
+                : activity.optString("lastDestinationAddress", "");
+    }
+
+    private int remotePort(JSONObject activity) {
+        boolean input = "input".equals(activity.optString("lastDeviceDirection", ""));
+        return (int) (input ? activity.optLong("lastSourcePort", 0L)
+                : activity.optLong("lastDestinationPort", 0L));
+    }
+
+    private String formatActivityL4Prefill(JSONObject activity) {
         if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
             return "L4 prefill: unavailable";
         }
         ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromPolicyDropActivity(
-                host, port, (int) activity.optLong("lastIpProtocol", 0L),
+                remoteHost(activity), remotePort(activity),
+                (int) activity.optLong("lastIpProtocol", 0L),
                 (int) activity.optLong("lastLinuxUid", -1L),
                 activity.optBoolean("lastUidKnown", false),
                 (int) activity.optLong("lastNetworkContext", -1L),

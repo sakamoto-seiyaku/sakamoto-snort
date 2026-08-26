@@ -1,7 +1,7 @@
 # S245 Android VPN main-stack import readiness
 
 Date: 2026-08-26
-Status: `FIFTEENTH_S58_UDP_L4_WORKFLOW_DESIGN_CORRECTED_PRODUCT_DRIVER_IMPORT_BLOCKED`
+Status: `SIXTEENTH_S58_POLICY_DROP_TUPLE_EVIDENCE_SEAM_CORRECTED_PRODUCT_DRIVER_IMPORT_BLOCKED`
 
 ## Question
 
@@ -756,6 +756,79 @@ Validated locally:
 - `tests/android/runtime-contract-test.sh`: passed, including Android runtime
   contract, S58 app-first Activity UI contract, S58 VPN L4 product workflow
   static contract, NDK daemon build and debug APK build.
+
+Remaining product work after this slice:
+
+1. Rerun corrected S58 against the rebuilt current APK.
+2. Supply the real pinned HEV/lwIP driver behind `VpnHevLwipDriver`.
+3. Rerun Android Direct Egress/device evidence after a real HEV/lwIP driver is
+   selected by product runtime construction.
+
+## 2026-08-26 sixteenth import slice
+
+The first corrected UDP S58 device run progressed past the original TCP
+source-port hotspot and then exposed a second, narrower product evidence seam
+gap:
+
+- Result directory:
+  `build-output/s58-vpn-l4-product-workflow-matrix/20260826-1300-s58-udp-current-apk`.
+- APK build/install, VPN start, control HELLO and product-authored UDP L4 drop
+  passed.
+- First unknown UDP packet evidence passed:
+  - `first.forwardedPacketsDelta=1`;
+  - `first.uidUnknownFallbackPacketsDelta=3`;
+  - `first.droppedPacketsDelta=0`;
+  - `first.probe.result=udp_datagram_sent`.
+- Late attribution and next same-tuple drop evidence passed:
+  - `attribution.apply=PASS`;
+  - `second.droppedPacketsDelta=1`;
+  - `second.attributionResolutionsDelta=1`;
+  - `second.policyDropActivity.uid=12629`;
+  - `second.policyDropActivity.stage=L4`;
+  - `second.policyDropActivity.rule=5963268475143753088`;
+  - `second.policyDropActivity.revision=1`.
+- The run failed at Activity-derived L4 prefill:
+  - `drop.l4Prefill.result=unavailable`;
+  - `drop.l4Prefill.summary=L4 prefill: unavailable`.
+
+Root cause:
+
+- Native `policyDropActivity` recorded the UID/rule/revision drop metadata, but
+  did not expose the dropped packet tuple:
+  `lastSourceAddress`, `lastDestinationAddress`, `lastIpProtocol`,
+  `lastSourcePort`, `lastDestinationPort`, `lastPortsAvailable`,
+  `lastDeviceDirection`.
+- The prior TCP-only prefill design hid this gap because protocol was
+  hard-coded as TCP and host/port were supplied by the debug request rather than
+  by the Activity evidence itself.
+- After S58 became UDP/protocol-aware, the missing `lastIpProtocol` defaulted
+  to `0`, so `ActivityL4RuleDraft.fromPolicyDropActivity(...)` correctly
+  rejected the draft as unsupported.
+
+Design correction:
+
+- `PacketPolicyDropActivityCounters` now records the relevant `PacketFacts`
+  tuple alongside UID/rule/revision metadata.
+- NFQUEUE and VPN/TUN adapters pass the actual policy-drop `PacketFacts` into
+  that counter.
+- Control vnext status now exposes the drop Activity tuple fields.
+- Android `ProductNativeActivityIngestor.NativePolicyDropRecord` carries the
+  tuple into product Activity rows, so drop rows can include remote/protocol/port
+  evidence instead of only rule metadata.
+- `DebugControlActivity.formatActivityL4Prefill()` now derives host, port and
+  protocol from `policyDropActivity` itself.
+- S58 runner now asserts the second drop Activity contains
+  `lastIpProtocol=17`, the expected remote host/port, source port and
+  `lastDeviceDirection=output` before accepting the prefill evidence.
+
+Validated locally:
+
+- `tests/android/android-runtime-contract-test.sh`: passed.
+- `cmake --build --preset dev-debug --target snort-host-tests`: passed outside
+  the sandbox; the sandboxed run failed only on control-server socket/bind
+  restrictions, and the same control-server lane passed outside the sandbox.
+- `tests/android/runtime-contract-test.sh`: passed, including NDK daemon build,
+  debug APK build, S58 static contract and runtime service lifecycle contract.
 
 Remaining product work after this slice:
 

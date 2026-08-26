@@ -163,6 +163,7 @@ NfqueueFlowAdapterResult NfqueueFlowAdapter::process(
                 : metadata.networkContext;
             counters_.policyDropActivity.record(
                 *graphResult.policyDecision,
+                dropFacts,
                 linuxUid,
                 uidKnown,
                 networkContext);

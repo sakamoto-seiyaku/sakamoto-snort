@@ -10,19 +10,40 @@ public final class ProductNativeActivityIngestor {
         public final int linuxUid;
         public final boolean uidKnown;
         public final int networkContext;
+        public final String sourceAddress;
+        public final String destinationAddress;
+        public final int ipProtocol;
+        public final int sourcePort;
+        public final int destinationPort;
+        public final boolean portsAvailable;
+        public final String deviceDirection;
         public final String stage;
         public final int reasonId;
         public final long ruleId;
         public final long revision;
 
         public NativePolicyDropRecord(long totalRecords, boolean hasLastRecord, int linuxUid,
-                                      boolean uidKnown, int networkContext, String stage,
-                                      int reasonId, long ruleId, long revision) {
+                                      boolean uidKnown, int networkContext,
+                                      String sourceAddress, String destinationAddress,
+                                      int ipProtocol, int sourcePort, int destinationPort,
+                                      boolean portsAvailable, String deviceDirection,
+                                      String stage, int reasonId, long ruleId, long revision) {
             this.totalRecords = Math.max(0L, totalRecords);
             this.hasLastRecord = hasLastRecord;
             this.linuxUid = Math.max(0, linuxUid);
             this.uidKnown = uidKnown;
             this.networkContext = Math.max(0, networkContext);
+            this.sourceAddress = BoundedText.value(sourceAddress == null ? "" : sourceAddress,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.destinationAddress = BoundedText.value(
+                    destinationAddress == null ? "" : destinationAddress,
+                    RuntimeSnapshot.MAX_TEXT_LENGTH);
+            this.ipProtocol = Math.max(0, ipProtocol);
+            this.sourcePort = clampPort(sourcePort);
+            this.destinationPort = clampPort(destinationPort);
+            this.portsAvailable = portsAvailable;
+            this.deviceDirection = BoundedText.value(deviceDirection == null ? ""
+                    : deviceDirection, RuntimeSnapshot.MAX_TEXT_LENGTH);
             this.stage = BoundedText.value(stage == null ? "" : stage,
                     RuntimeSnapshot.MAX_TEXT_LENGTH);
             this.reasonId = Math.max(0, reasonId);
@@ -143,7 +164,8 @@ public final class ProductNativeActivityIngestor {
         String label = record.uidKnown ? subject.encode() : "Unknown Application";
         String packageName = record.uidKnown ? "(native attributed app)" : "(unknown package)";
         return new ActivityItem(subject, label, packageName, timestampMillis,
-                "", "", 0, devicePacketDirection(profile), "none", 1L, 0L,
+                remoteAddress(record), protocolName(record.ipProtocol), remotePort(record),
+                devicePacketDirection(profile, record.deviceDirection), "none", 1L, 0L,
                 "drop", record.stage, record.revision, record.ruleId, record.reasonId,
                 "native_policy_drop_activity", true);
     }
@@ -189,7 +211,22 @@ public final class ProductNativeActivityIngestor {
         return record.destinationAddress;
     }
 
+    private static String remoteAddress(NativePolicyDropRecord record) {
+        if ("input".equals(record.deviceDirection)) {
+            return record.sourceAddress;
+        }
+        return record.destinationAddress;
+    }
+
     private static int remotePort(NativeAllowedFlowRecord record) {
+        if (!record.portsAvailable) {
+            return 0;
+        }
+        return "input".equals(record.deviceDirection)
+                ? record.sourcePort : record.destinationPort;
+    }
+
+    private static int remotePort(NativePolicyDropRecord record) {
         if (!record.portsAvailable) {
             return 0;
         }

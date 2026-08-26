@@ -2085,8 +2085,9 @@ public final class AndroidRuntimeContractTest {
     private static void productNativeActivityIngestorMapsRuntimeDropEvidence() {
         ProductNativeActivityIngestor.NativePolicyDropRecord rootDrop =
                 new ProductNativeActivityIngestor.NativePolicyDropRecord(
-                        3L, true, 1010001, true, 7, "NetworkGate",
-                        91, 7001L, 69L);
+                        3L, true, 1010001, true, 7,
+                        "10.0.0.1", "192.0.2.1", 6, 40000, 443,
+                        true, "output", "NetworkGate", 91, 7001L, 69L);
         check(ProductNativeActivityIngestor.shouldIngest(rootDrop, RuntimeProfile.ROOT,
                         null, -1L, 4L, 0L),
                 "first native policy drop activity is ingested");
@@ -2101,6 +2102,9 @@ public final class AndroidRuntimeContractTest {
         check(item.subjectId.equals(ApplicationSubjectId.fromUid(1010001))
                         && "drop".equals(item.verdict)
                         && "NetworkGate".equals(item.winner)
+                        && "192.0.2.1".equals(item.remoteIp)
+                        && "tcp".equals(item.protocol)
+                        && item.remotePort == 443
                         && item.policyRevision == 69L
                         && item.ruleId == 7001L
                         && "native_policy_drop_activity".equals(item.evidenceSource)
@@ -2109,12 +2113,16 @@ public final class AndroidRuntimeContractTest {
 
         ProductNativeActivityIngestor.NativePolicyDropRecord unknown =
                 new ProductNativeActivityIngestor.NativePolicyDropRecord(
-                        1L, true, 0, false, 0, "L4", 17, 42L, 7L);
+                        1L, true, 0, false, 0, "198.51.100.58", "10.111.0.2",
+                        17, 53, 45658, true, "input", "L4", 17, 42L, 7L);
         ActivityItem unknownItem = ProductNativeActivityIngestor.toActivityItem(unknown,
                 RuntimeProfile.VPN, 1235L);
         check("Unknown Application".equals(unknownItem.appLabel)
-                        && "vpn_outbound_or_return".equals(
-                        unknownItem.devicePacketDirection),
+                        && "vpn_input".equals(
+                        unknownItem.devicePacketDirection)
+                        && "udp".equals(unknownItem.protocol)
+                        && "198.51.100.58".equals(unknownItem.remoteIp)
+                        && unknownItem.remotePort == 53,
                 "unknown native attribution remains explicit in ActivityItem");
 
         ProductNativeActivityIngestor.NativeAllowedFlowRecord allowed =

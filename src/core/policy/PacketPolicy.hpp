@@ -54,12 +54,20 @@ struct PacketPolicyDropActivityCounters {
     std::uint64_t totalRecords = 0;
     std::uint64_t evictedRecords = 0;
     bool hasLastRecord = false;
+    Flow::IpAddress lastSource;
+    Flow::IpAddress lastDestination;
+    std::uint8_t lastIpProtocol = 0;
+    std::uint16_t lastSourcePort = 0;
+    std::uint16_t lastDestinationPort = 0;
+    bool lastPortsAvailable = false;
+    Flow::DevicePacketDirection lastDeviceDirection = Flow::DevicePacketDirection::Input;
     std::uint32_t lastLinuxUid = 0;
     bool lastUidKnown = false;
     std::uint32_t lastNetworkContext = 0;
     PacketPolicyDecision lastDecision{};
 
     void record(PacketPolicyDecision decision,
+                const Flow::PacketFacts &facts,
                 std::uint32_t linuxUid,
                 bool uidKnown,
                 std::uint32_t networkContext) noexcept {
@@ -70,6 +78,13 @@ struct PacketPolicyDropActivityCounters {
             ++evictedRecords;
         }
         hasLastRecord = true;
+        lastSource = facts.source;
+        lastDestination = facts.destination;
+        lastIpProtocol = facts.ipProtocol;
+        lastSourcePort = facts.sourcePort;
+        lastDestinationPort = facts.destinationPort;
+        lastPortsAvailable = facts.portsAvailable;
+        lastDeviceDirection = facts.deviceDirection;
         lastLinuxUid = linuxUid;
         lastUidKnown = uidKnown;
         lastNetworkContext = networkContext;

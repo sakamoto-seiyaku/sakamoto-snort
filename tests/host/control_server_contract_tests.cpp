@@ -1257,6 +1257,21 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     runtime.nfqueueCounters.policyDropActivity.record(
         Policy::PacketPolicyDecision::drop(
             17, 42, 7, Policy::PacketPolicyStage::NetworkGate),
+        Flow::PacketFacts{
+            .source = Flow::IpAddress::v4({10, 0, 0, 1}),
+            .destination = Flow::IpAddress::v4({192, 0, 2, 1}),
+            .ipProtocol = 6,
+            .sourcePort = 40000,
+            .destinationPort = 443,
+            .portsAvailable = true,
+            .parseStatus = Flow::ParseStatus::Ready,
+            .deviceDirection = Flow::DevicePacketDirection::Output,
+            .domain = Flow::FlowDomain{
+                .linuxUid = 12546,
+                .uidKnown = true,
+                .networkContext = 7,
+            },
+        },
         12546, true, 7);
     runtime.nfqueueCounters.allowedFlowActivity.record(
         Flow::PacketFacts{
@@ -1368,6 +1383,13 @@ TEST(ControlServerContract, NfqueueStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(activity["totalRecords"].GetUint64(), 1U);
     EXPECT_EQ(activity["evictedRecords"].GetUint64(), 0U);
     EXPECT_TRUE(activity["hasLastRecord"].GetBool());
+    EXPECT_STREQ(activity["lastSourceAddress"].GetString(), "10.0.0.1");
+    EXPECT_STREQ(activity["lastDestinationAddress"].GetString(), "192.0.2.1");
+    EXPECT_EQ(activity["lastIpProtocol"].GetUint(), 6U);
+    EXPECT_EQ(activity["lastSourcePort"].GetUint(), 40000U);
+    EXPECT_EQ(activity["lastDestinationPort"].GetUint(), 443U);
+    EXPECT_TRUE(activity["lastPortsAvailable"].GetBool());
+    EXPECT_STREQ(activity["lastDeviceDirection"].GetString(), "output");
     EXPECT_EQ(activity["lastLinuxUid"].GetUint(), 12546U);
     EXPECT_TRUE(activity["lastUidKnown"].GetBool());
     EXPECT_EQ(activity["lastNetworkContext"].GetUint(), 7U);
@@ -1571,6 +1593,24 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     runtime.vpnTunCounters.policyDropActivity.record(
         Policy::PacketPolicyDecision::drop(
             91, 7001, 69, Policy::PacketPolicyStage::NetworkGate),
+        Flow::PacketFacts{
+            .source = Flow::IpAddress::v4({10, 111, 0, 2}),
+            .destination = Flow::IpAddress::v4({198, 51, 100, 58}),
+            .ipProtocol = 17,
+            .sourcePort = 45658,
+            .destinationPort = 443,
+            .portsAvailable = true,
+            .parseStatus = Flow::ParseStatus::Ready,
+            .deviceDirection = Flow::DevicePacketDirection::Output,
+            .domain = Flow::FlowDomain{
+                .adapter = Flow::AdapterKind::VpnTun,
+                .linuxUid = 12546,
+                .uidKnown = true,
+                .networkContext = 7,
+                .runtimeProfile = 1,
+                .interfaceIndex = 9,
+            },
+        },
         12546, true, 7);
     runtime.vpnTunCounters.allowedFlowActivity.record(
         Flow::PacketFacts{
@@ -1691,6 +1731,13 @@ TEST(ControlServerContract, VpnTunStatusReturnsExactRuntimeCounters) {
     EXPECT_EQ(activity["totalRecords"].GetUint64(), 1U);
     EXPECT_EQ(activity["evictedRecords"].GetUint64(), 0U);
     EXPECT_TRUE(activity["hasLastRecord"].GetBool());
+    EXPECT_STREQ(activity["lastSourceAddress"].GetString(), "10.111.0.2");
+    EXPECT_STREQ(activity["lastDestinationAddress"].GetString(), "198.51.100.58");
+    EXPECT_EQ(activity["lastIpProtocol"].GetUint(), 17U);
+    EXPECT_EQ(activity["lastSourcePort"].GetUint(), 45658U);
+    EXPECT_EQ(activity["lastDestinationPort"].GetUint(), 443U);
+    EXPECT_TRUE(activity["lastPortsAvailable"].GetBool());
+    EXPECT_STREQ(activity["lastDeviceDirection"].GetString(), "output");
     EXPECT_EQ(activity["lastLinuxUid"].GetUint(), 12546U);
     EXPECT_TRUE(activity["lastUidKnown"].GetBool());
     EXPECT_EQ(activity["lastNetworkContext"].GetUint(), 7U);

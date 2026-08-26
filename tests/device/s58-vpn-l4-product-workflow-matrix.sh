@@ -557,6 +557,11 @@ activity_uid="$(activity_value "${RESULT_DIR}/status.after_second.json" lastLinu
 activity_stage="$(activity_value "${RESULT_DIR}/status.after_second.json" lastStage)"
 activity_rule="$(activity_value "${RESULT_DIR}/status.after_second.json" lastRuleId)"
 activity_revision="$(activity_value "${RESULT_DIR}/status.after_second.json" lastRevision)"
+activity_destination="$(activity_value "${RESULT_DIR}/status.after_second.json" lastDestinationAddress)"
+activity_destination_port="$(activity_value "${RESULT_DIR}/status.after_second.json" lastDestinationPort)"
+activity_source_port="$(activity_value "${RESULT_DIR}/status.after_second.json" lastSourcePort)"
+activity_protocol="$(activity_value "${RESULT_DIR}/status.after_second.json" lastIpProtocol)"
+activity_device_dir="$(activity_value "${RESULT_DIR}/status.after_second.json" lastDeviceDirection)"
 kv "second.droppedPacketsDelta" "$second_drop_delta"
 kv "second.attributionResolutionsDelta" "$resolution_delta"
 kv "second.probe.result" "$second_probe_result"
@@ -564,6 +569,10 @@ kv "second.policyDropActivity.uid" "$activity_uid"
 kv "second.policyDropActivity.stage" "$activity_stage"
 kv "second.policyDropActivity.rule" "$activity_rule"
 kv "second.policyDropActivity.revision" "$activity_revision"
+kv "second.policyDropActivity.remote" "$activity_destination:$activity_destination_port"
+kv "second.policyDropActivity.sourcePort" "$activity_source_port"
+kv "second.policyDropActivity.protocol" "$activity_protocol"
+kv "second.policyDropActivity.deviceDirection" "$activity_device_dir"
 [[ "$second_drop_delta" -ge 1 ]]
 [[ "$resolution_delta" -ge 1 ]]
 [[ "$second_probe_result" == "udp_datagram_sent" ]]
@@ -571,6 +580,11 @@ kv "second.policyDropActivity.revision" "$activity_revision"
 [[ "$activity_stage" == "L4" ]]
 [[ "$activity_rule" == "$rule_id" ]]
 [[ "$activity_revision" == "$block_revision" ]]
+[[ "$activity_destination" == "$S58_TRAFFIC_HOST" ]]
+[[ "$activity_destination_port" == "$S58_TRAFFIC_PORT" ]]
+[[ "$activity_source_port" == "$S58_SOURCE_PORT" ]]
+[[ "$activity_protocol" == "17" ]]
+[[ "$activity_device_dir" == "output" ]]
 run_debug_l4_prefill "drop"
 prefill_result="$(prefill_value "${RESULT_DIR}/drop.l4_prefill.properties" result)"
 prefill_summary="$(prefill_value "${RESULT_DIR}/drop.l4_prefill.properties" summary)"
