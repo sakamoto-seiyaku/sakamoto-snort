@@ -1,0 +1,14 @@
+diff --git a/src/vlib/CMakeLists.txt b/src/vlib/CMakeLists.txt
+index 9a6c5c2d..00000000 100644
+--- a/src/vlib/CMakeLists.txt
++++ b/src/vlib/CMakeLists.txt
+@@ -55,7 +55,7 @@
+ # vlib shared library
+ ##############################################################################
+ 
+-if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
++if("${CMAKE_SYSTEM_NAME}" MATCHES "^(Linux|Android)$")
+ set(PLATFORM_SOURCES
+   linux/pci.c
+   linux/vfio.c
+   linux/vmbus.c

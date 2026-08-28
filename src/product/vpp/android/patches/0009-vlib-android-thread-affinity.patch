@@ -1,0 +1,45 @@
+diff --git a/src/vlib/threads.c b/src/vlib/threads.c
+index 7cc0c0d4..00000000 100644
+--- a/src/vlib/threads.c
++++ b/src/vlib/threads.c
+@@ -22,6 +22,22 @@
+ 
+ #include <vlib/stats/stats.h>
+ 
++#ifdef __ANDROID__
++static inline int
++vlib_set_thread_affinity (pthread_t thread, size_t size,
++			  const cpu_set_t * cpuset)
++{
++  return sched_setaffinity (pthread_gettid_np (thread), size, cpuset);
++}
++#else
++static inline int
++vlib_set_thread_affinity (pthread_t thread, size_t size,
++			  const cpu_set_t * cpuset)
++{
++  return pthread_setaffinity_np (thread, size, cpuset);
++}
++#endif
++
+ u32
+ vl (void *p)
+ {
+@@ -244,7 +244,7 @@ vlib_thread_init (vlib_main_t * vm)
+       cpu_set_t cpuset;
+       CPU_ZERO (&cpuset);
+       CPU_SET (tm->main_lcore, &cpuset);
+-      if (pthread_setaffinity_np (pthread_self (), sizeof (cpu_set_t),
++      if (vlib_set_thread_affinity (pthread_self (), sizeof (cpu_set_t),
+ 				  &cpuset))
+ 	{
+ 	  return clib_error_return (0, "could not pin main thread to cpu %u",
+@@ -531,7 +531,7 @@ vlib_launch_thread_int (void *fp, vlib_worker_thread_t * w, unsigned cpu_id)
+       if (pthread_create (&worker, &attr, fp_arg, (void *) w))
+ 	return clib_error_return_unix (0, "pthread_create");
+ 
+-      if (pthread_setaffinity_np (worker, sizeof (cpu_set_t), &cpuset))
++      if (vlib_set_thread_affinity (worker, sizeof (cpu_set_t), &cpuset))
+ 	return clib_error_return_unix (0, "pthread_setaffinity_np");
+ 
+       if (pthread_attr_destroy (&attr))
