@@ -1,0 +1,15 @@
+diff --git a/src/vpp/vnet/main.c b/src/vpp/vnet/main.c
+index 9e1f4d3a..00000000 100644
+--- a/src/vpp/vnet/main.c
++++ b/src/vpp/vnet/main.c
+@@ -7,7 +7,10 @@
+ #include <pthread.h>
+ #ifdef __FreeBSD__
+ #include <pthread_np.h>
+ #endif /* __FreeBSD__ */
+ #include <sched.h>
++#ifdef __ANDROID__
++#define pthread_setaffinity_np(thread, size, cpuset) sched_setaffinity (0, (size), (cpuset))
++#endif
+ #include <fcntl.h>
+ #include <getopt.h>
