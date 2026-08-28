@@ -1,0 +1,17 @@
+diff --git a/src/vppinfra/CMakeLists.txt b/src/vppinfra/CMakeLists.txt
+--- a/src/vppinfra/CMakeLists.txt
++++ b/src/vppinfra/CMakeLists.txt
+@@ -255,6 +255,12 @@ if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
+     perfmon/perfmon.c
+    )
++elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++  list(APPEND VPPINFRA_SRCS
++    elf_clib.c
++    linux/mem.c
++    linux/sysfs.c
++   )
+ elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")
+   list(APPEND VPPINFRA_SRCS
+     elf_clib.c
+     freebsd/mem.c
+   )

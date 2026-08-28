@@ -1,2 +1,5 @@
 0001-dlmalloc-private-mallinfo-guard.patch
 0002-android-cmake-platform-profile.patch
+0003-vppinfra-android-open-mode.patch
+0004-vppinfra-android-os-sources.patch
+0005-vppinfra-android-malloc-abi.patch

@@ -1,0 +1,16 @@
+diff --git a/src/vppinfra/maplog.c b/src/vppinfra/maplog.c
+--- a/src/vppinfra/maplog.c
++++ b/src/vppinfra/maplog.c
+@@ -244,3 +244,3 @@ clib_maplog_update_header (clib_maplog_main_t * mm)
+   /* Open the log header */
+-  fd = open ((char *) mm->header_filename, O_RDWR, 0600);
++  fd = open ((char *) mm->header_filename, O_RDWR);
+   if (fd < 0)
+@@ -390,2 +390,2 @@ clib_maplog_process (char *file_basename, void *fp_arg)
+-  fd = open ((char *) header_filename, O_RDONLY, 0600);
++  fd = open ((char *) header_filename, O_RDONLY);
+   if (fd < 0)
+@@ -417,2 +417,2 @@ clib_maplog_process (char *file_basename, void *fp_arg)
+-      fd = open ((char *) this_filename, O_RDONLY, 0600);
++      fd = open ((char *) this_filename, O_RDONLY);
+       if (fd < 0)

@@ -97,7 +97,7 @@ done < "$series"
   die "source checkout changed while applying profile"
 [[ "$(git -C "$work_dir" rev-parse HEAD)" == "$pinned_revision" ]] || \
   die "profile changed the pinned revision"
-expected_changed_files=$'src/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h'
+expected_changed_files=$'src/CMakeLists.txt\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
 [[ "$(git -C "$work_dir" diff --name-only)" == "$expected_changed_files" ]] || \
   die "profile changed files outside the ordered Android patch series"
 

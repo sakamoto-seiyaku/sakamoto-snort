@@ -1,0 +1,40 @@
+diff --git a/src/vppinfra/mem_intercept.c b/src/vppinfra/mem_intercept.c
+--- a/src/vppinfra/mem_intercept.c
++++ b/src/vppinfra/mem_intercept.c
+@@ -239,3 +239,7 @@ pvalloc (size_t size)
+ __clib_export size_t
+-malloc_usable_size (void *p)
++#if defined(__ANDROID__)
++malloc_usable_size (const void *p)
++#else
++malloc_usable_size (void *p)
++#endif
+ {
+@@ -244,8 +248,19 @@
+   if (clib_mem_main.alloc_free_intercept == 0)
+     {
+-      static size_t (*__malloc_usable_size) (void *) = 0;
+-      return __malloc_usable_size (p);
++#if defined(__ANDROID__)
++      typedef size_t (*clib_malloc_usable_size_fn_t) (const void *);
++#else
++      typedef size_t (*clib_malloc_usable_size_fn_t) (void *);
++#endif
++      static clib_malloc_usable_size_fn_t __malloc_usable_size = 0;
+       if (!__malloc_usable_size)
+-	__malloc_usable_size = (typeof (__malloc_usable_size)) dlsym (
++	__malloc_usable_size = (clib_malloc_usable_size_fn_t) dlsym (
+-	  RTLD_NEXT, "malloc_usable_size");
++	  RTLD_NEXT, "malloc_usable_size");
++      /* A missing libc symbol must not be called through a null pointer. */
++      if (!__malloc_usable_size)
++	{
++	  errno = ENOSYS;
++	  return 0;
++	}
++      return __malloc_usable_size (p);
+     }
+@@ -252,2 +267,2 @@
+-  return clib_mem_size (p);
++  return clib_mem_size ((void *) p);
+ }

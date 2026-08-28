@@ -132,7 +132,7 @@ bash "$profile_module" \
 [[ "$(git -C "$patched_tree" rev-parse HEAD)" == "$pinned_revision" ]] || \
   fail "profile changed the pinned revision"
 changed_files="$(git -C "$patched_tree" diff --name-only)"
-expected_changed_files=$'src/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h'
+expected_changed_files=$'src/CMakeLists.txt\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
 [[ "$changed_files" == "$expected_changed_files" ]] || \
   fail "profile changed files outside the ordered Android patch series: $changed_files"
 [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$source_head" ]] || \
