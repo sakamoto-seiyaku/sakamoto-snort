@@ -136,7 +136,7 @@ changed_files="$(
   git -C "$patched_tree" ls-files --others --exclude-standard
   )"
 changed_files="$(printf '%s\n' "$changed_files" | LC_ALL=C sort)"
-expected_changed_files=$'src/CMakeLists.txt\nsrc/svm/CMakeLists.txt\nsrc/svm/message_queue.c\nsrc/svm/message_queue.h\nsrc/svm/queue.c\nsrc/svm/ssvm.c\nsrc/svm/svm.c\nsrc/svm/svm_android_file.c\nsrc/svm/svm_android_file.h\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
+expected_changed_files=$'src/CMakeLists.txt\nsrc/svm/CMakeLists.txt\nsrc/svm/message_queue.c\nsrc/svm/message_queue.h\nsrc/svm/queue.c\nsrc/svm/ssvm.c\nsrc/svm/svm.c\nsrc/svm/svm_android_file.c\nsrc/svm/svm_android_file.h\nsrc/vpp-api/vapi/CMakeLists.txt\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
 [[ "$changed_files" == "$expected_changed_files" ]] || \
   fail "profile changed files outside the ordered Android patch series: $changed_files"
 [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$source_head" ]] || \

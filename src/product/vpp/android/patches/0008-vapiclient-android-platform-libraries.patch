@@ -1,0 +1,19 @@
+diff --git a/src/vpp-api/vapi/CMakeLists.txt b/src/vpp-api/vapi/CMakeLists.txt
+index e53d3e8b..49a6c493 100644
+--- a/src/vpp-api/vapi/CMakeLists.txt
++++ b/src/vpp-api/vapi/CMakeLists.txt
+@@ -19,2 +19,9 @@ include_directories (
+ 
++set(VAPI_PLATFORM_LIBRARIES pthread m rt)
++if("${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++  # Bionic supplies pthread and the old librt entry points from libc; the
++  # standalone NDK toolchain has no libpthread.so or librt.so to link.
++  set(VAPI_PLATFORM_LIBRARIES m)
++endif()
++
+ add_vpp_library(vapiclient
+@@ -24,3 +31,3 @@ add_vpp_library(vapiclient
+ 
+-  LINK_LIBRARIES vppinfra vlibmemoryclient svm pthread m rt
++  LINK_LIBRARIES vppinfra vlibmemoryclient svm ${VAPI_PLATFORM_LIBRARIES}
+   DEPENDS api_headers
