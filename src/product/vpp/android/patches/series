@@ -8,3 +8,4 @@
 0008-vapiclient-android-platform-libraries.patch
 0009-vlib-android-thread-affinity.patch
 0010-vlib-android-linux-platform-sources.patch
+0011-vlibmemory-android-string-api.patch

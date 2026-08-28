@@ -1,0 +1,30 @@
+diff --git a/src/vlibmemory/memclnt_api.c b/src/vlibmemory/memclnt_api.c
+index 4f637c29..00000000 100644
+--- a/src/vlibmemory/memclnt_api.c
++++ b/src/vlibmemory/memclnt_api.c
+@@ -9,5 +9,9 @@
+ #include <fcntl.h>
+ #include <pthread.h>
++#ifdef __ANDROID__
++#include <string.h>
++#define index strchr
++#endif
+ #include <vppinfra/vec.h>
+ #include <vppinfra/hash.h>
+ #include <vppinfra/pool.h>
+diff --git a/src/vlibmemory/vlib_api_cli.c b/src/vlibmemory/vlib_api_cli.c
+index 16dcadf4..00000000 100644
+--- a/src/vlibmemory/vlib_api_cli.c
++++ b/src/vlibmemory/vlib_api_cli.c
+@@ -5,7 +5,11 @@
+ #include <fcntl.h>
+ #include <unistd.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
++#ifdef __ANDROID__
++#include <string.h>
++#define index strchr
++#endif
+ 
+ #include <vlibapi/api.h>
+ #include <vlibmemory/api.h>
