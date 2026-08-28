@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+option version = "1.0.0";
+
+/**
+ * Return the coarse control-plane identity for the current VPP generation.
+ *
+ * This request is intentionally read-only.  Loading the product plugin only
+ * registers this message; it does not allocate packet adapters or workers.
+ */
+define product_core_status {
+    u32 client_index;
+    u32 context;
+};
+
+/**
+ * Product/core identity and readiness.  The fixed-size byte arrays are
+ * bounded display values, not packet buffers or ownership handles.
+ */
+define product_core_status_reply {
+    u32 context;
+    i32 retval;
+    u32 abi_version;
+    u32 api_version;
+    u64 generation;
+    bool core_ready;
+    bool adapter_available;
+    bool protection_running;
+    string artifact_id[96];
+    string api_identity[96];
+    string vpp_revision[48];
+};

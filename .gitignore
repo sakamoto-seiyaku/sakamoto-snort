@@ -10,5 +10,7 @@ Testing/
 build/*
 /app/android-runtime/build/
 /build-output/*
+/target/
+/product_core.api.c
 __pycache__/
 *.pyc

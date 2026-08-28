@@ -1,0 +1,15 @@
+[package]
+name = "sakamoto-product-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[lib]
+name = "sakamoto_product_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sakamoto-product-core-host"
+path = "src/main.rs"
