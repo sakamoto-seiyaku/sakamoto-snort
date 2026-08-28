@@ -1,0 +1,29 @@
+diff --git a/src/vppinfra/dlmalloc.h b/src/vppinfra/dlmalloc.h
+--- a/src/vppinfra/dlmalloc.h
++++ b/src/vppinfra/dlmalloc.h
+@@ -792,22 +792,22 @@
+ #if 0 // def HAVE_USR_INCLUDE_MALLOC_H
+ #include "/usr/include/malloc.h"
+ #else /* HAVE_USR_INCLUDE_MALLOC_H */
+-#ifndef STRUCT_MALLINFO_DECLARED
++#ifndef DLMALLOC_STRUCT_MALLINFO_DECLARED
+ /* HP-UX (and others?) redefines mallinfo unless _STRUCT_MALLINFO is defined */
+ #define _STRUCT_MALLINFO
+-#define STRUCT_MALLINFO_DECLARED 1
++#define DLMALLOC_STRUCT_MALLINFO_DECLARED 1
+ struct dlmallinfo {
+   MALLINFO_FIELD_TYPE arena;    /* non-mmapped space allocated from system */
+   MALLINFO_FIELD_TYPE ordblks;  /* number of free chunks */
+   MALLINFO_FIELD_TYPE smblks;   /* always 0 */
+   MALLINFO_FIELD_TYPE hblks;    /* always 0 */
+   MALLINFO_FIELD_TYPE hblkhd;   /* space in mmapped regions */
+   MALLINFO_FIELD_TYPE usmblks;  /* maximum total allocated space */
+   MALLINFO_FIELD_TYPE fsmblks;  /* always 0 */
+   MALLINFO_FIELD_TYPE uordblks; /* total allocated space */
+   MALLINFO_FIELD_TYPE fordblks; /* total free space */
+   MALLINFO_FIELD_TYPE keepcost; /* releasable (via malloc_trim) space */
+ };
+-#endif /* STRUCT_MALLINFO_DECLARED */
++#endif /* DLMALLOC_STRUCT_MALLINFO_DECLARED */
+ #endif /* HAVE_USR_INCLUDE_MALLOC_H */
+ #endif /* NO_MALLINFO */
