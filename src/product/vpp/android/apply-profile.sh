@@ -10,7 +10,7 @@ work_dir=""
 
 usage() {
   cat >&2 <<'EOF'
-usage: apply-profile.sh --profile android-dlmallinfo --source-dir DIR --work-dir DIR
+usage: apply-profile.sh --profile android-api31-arm64 --source-dir DIR --work-dir DIR
 
 The source directory must be a clean checkout at the product's pinned VPP
 revision. The work directory is a newly materialized temporary checkout; the
@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$profile" == "android-dlmallinfo" ]] || \
+[[ "$profile" == "android-api31-arm64" ]] || \
   die "unsupported profile: ${profile:-missing}"
 [[ -n "$source_dir" ]] || die "--source-dir is required"
 [[ -n "$work_dir" ]] || die "--work-dir is required"
@@ -97,10 +97,11 @@ done < "$series"
   die "source checkout changed while applying profile"
 [[ "$(git -C "$work_dir" rev-parse HEAD)" == "$pinned_revision" ]] || \
   die "profile changed the pinned revision"
-[[ "$(git -C "$work_dir" diff --name-only)" == "src/vppinfra/dlmalloc.h" ]] || \
-  die "profile changed files outside src/vppinfra/dlmalloc.h"
+expected_changed_files=$'src/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h'
+[[ "$(git -C "$work_dir" diff --name-only)" == "$expected_changed_files" ]] || \
+  die "profile changed files outside the ordered Android patch series"
 
-echo "profile=android-dlmallinfo"
+echo "profile=android-api31-arm64"
 echo "sourceHead=$source_head"
 echo "workDir=$work_dir"
-echo "patchedPath=src/vppinfra/dlmalloc.h"
+echo "patchedPaths=$expected_changed_files"

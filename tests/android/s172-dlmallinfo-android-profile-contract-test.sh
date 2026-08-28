@@ -125,15 +125,16 @@ echo "RED: clean pin + Android API ${android_api} fails only at dlmallinfo guard
 [[ -x "$profile_module" ]] || fail "Android VPP profile module is missing"
 patched_tree="$work_dir/patched-source"
 bash "$profile_module" \
-  --profile android-dlmallinfo \
+  --profile android-api31-arm64 \
   --source-dir "$source_dir" \
   --work-dir "$patched_tree"
 
 [[ "$(git -C "$patched_tree" rev-parse HEAD)" == "$pinned_revision" ]] || \
   fail "profile changed the pinned revision"
 changed_files="$(git -C "$patched_tree" diff --name-only)"
-[[ "$changed_files" == "src/vppinfra/dlmalloc.h" ]] || \
-  fail "profile changed files outside src/vppinfra/dlmalloc.h: $changed_files"
+expected_changed_files=$'src/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h'
+[[ "$changed_files" == "$expected_changed_files" ]] || \
+  fail "profile changed files outside the ordered Android patch series: $changed_files"
 [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$source_head" ]] || \
   fail "profile modified the input checkout revision"
 [[ -z "$(git -C "$source_dir" status --porcelain)" ]] || \

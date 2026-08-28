@@ -1,0 +1,25 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -105,9 +105,11 @@ if(CMAKE_CROSSCOMPILING)
+     set(COMPILER_SUFFIX "freebsd")
+   endif()
+ 
+-  set(CMAKE_IGNORE_PATH
++  if("${CMAKE_SYSTEM_NAME}" MATCHES "Linux|FreeBSD")
++    set(CMAKE_IGNORE_PATH
+     /usr/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-${COMPILER_SUFFIX}/
+     /usr/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-${COMPILER_SUFFIX}/lib/
+-  )
+-  set(CMAKE_C_COMPILER_TARGET ${CMAKE_SYSTEM_PROCESSOR}-${COMPILER_SUFFIX})
++    )
++    set(CMAKE_C_COMPILER_TARGET ${CMAKE_SYSTEM_PROCESSOR}-${COMPILER_SUFFIX})
++  endif()
+ endif()
+@@ -264,1 +264,6 @@ if(VPP_HOST_TOOLS_ONLY)
++elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++  set(SUBDIRS
++    vppinfra svm vlib vlibmemory vlibapi vnet vpp vpp-api
++    tools/vppapigen cmake
++  )
+ elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux|FreeBSD")
