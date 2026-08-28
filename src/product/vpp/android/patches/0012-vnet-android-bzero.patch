@@ -1,0 +1,9 @@
+diff --git a/src/vnet/session/session.c b/src/vnet/session/session.c
+index 4e19fb7e..00000000 100644
+--- a/src/vnet/session/session.c
++++ b/src/vnet/session/session.c
+@@ -20,1 +20,4 @@
++#ifdef __ANDROID__
++#define bzero(s, n) clib_memset ((s), 0, (n))
++#endif
+ session_main_t session_main;

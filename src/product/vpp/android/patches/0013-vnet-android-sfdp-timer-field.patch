@@ -1,0 +1,14 @@
+diff --git a/src/vnet/sfdp/timer/timer.h b/src/vnet/sfdp/timer/timer.h
+index 5abef5d2..00000000 100644
+--- a/src/vnet/sfdp/timer/timer.h
++++ b/src/vnet/sfdp/timer/timer.h
+@@ -30,5 +30,9 @@ typedef struct
+ {
+   f64 next_expiration;
+   u32 handle;
++#ifdef __ANDROID__
++  u32 sfdp_timer_unused;
++#else
+   u32 __unused;
++#endif
+ } __attribute__ ((may_alias)) sfdp_session_timer_t;
