@@ -1,0 +1,514 @@
+diff --git a/src/svm/CMakeLists.txt b/src/svm/CMakeLists.txt
+index 2cb76948..ab9d2a77 100644
+--- a/src/svm/CMakeLists.txt
++++ b/src/svm/CMakeLists.txt
+@@ -16,2 +16,11 @@
+ ##############################################################################
++set(SVM_PLATFORM_SOURCES)
++set(SVM_PLATFORM_LIBRARIES rt pthread)
++if("${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++  list(APPEND SVM_PLATFORM_SOURCES svm_android_file.c)
++  # Android's bionic libc provides pthread and the old librt entry points;
++  # standalone NDK linkers do not ship libpthread.so or librt.so.
++  set(SVM_PLATFORM_LIBRARIES)
++endif()
++
+ add_vpp_library(svm
+@@ -24,2 +33,3 @@ add_vpp_library(svm
+   svm_fifo.c
++  ${SVM_PLATFORM_SOURCES}
+ 
+@@ -38,4 +48,3 @@ add_vpp_library(svm
+   svmdb.h
+-
+-  LINK_LIBRARIES vppinfra rt pthread
++  LINK_LIBRARIES vppinfra ${SVM_PLATFORM_LIBRARIES}
+ )
+@@ -47,3 +56,3 @@ add_vpp_library(svmdb
+   SOURCES svmdb.c
+-  LINK_LIBRARIES svm vppinfra rt pthread
++  LINK_LIBRARIES svm vppinfra ${SVM_PLATFORM_LIBRARIES}
+   )
+diff --git a/src/svm/ssvm.c b/src/svm/ssvm.c
+index 41a7744e..06ddc752 100644
+--- a/src/svm/ssvm.c
++++ b/src/svm/ssvm.c
+@@ -18,2 +18,3 @@ static delete_fn delete_fns[SSVM_N_SEGMENT_TYPES] =
+ 
++#if !defined(__ANDROID__)
+ int
+@@ -203,2 +204,24 @@ ssvm_delete_shm (ssvm_private_t * ssvm)
+ }
++#else
++/* Android Product Core never selects the legacy named-SHM segment type. */
++int
++ssvm_server_init_shm (ssvm_private_t * ssvm)
++{
++  (void) ssvm;
++  return SSVM_API_ERROR_CREATE_FAILURE;
++}
++
++int
++ssvm_client_init_shm (ssvm_private_t * ssvm)
++{
++  (void) ssvm;
++  return SSVM_API_ERROR_CREATE_FAILURE;
++}
++
++void
++ssvm_delete_shm (ssvm_private_t * ssvm)
++{
++  (void) ssvm;
++}
++#endif
+ 
+diff --git a/src/svm/svm.c b/src/svm/svm.c
+index fb5ec5f2..a8b02419 100644
+--- a/src/svm/svm.c
++++ b/src/svm/svm.c
+@@ -20,3 +20,7 @@
+ #include <fcntl.h>
++#include <errno.h>
+ #include <string.h>
++#if defined(__ANDROID__)
++#include "svm_android_file.h"
++#endif
+ #include <vppinfra/clib.h>
+@@ -33,2 +37,14 @@
+ 
++#if defined(__ANDROID__)
++#define SVM_ANDROID_PTHREAD_FATAL(rv, operation)                              \
++  do                                                                          \
++    {                                                                         \
++      int svm_android_pthread_rv = (rv);                                      \
++      if (PREDICT_FALSE (svm_android_pthread_rv != 0))                        \
++        clib_panic ("Android pthread %s failed: %d", operation,              \
++                    svm_android_pthread_rv);                                 \
++    }                                                                         \
++  while (0)
++#endif
++
+ static svm_region_t *root_rp;
+@@ -91,3 +107,7 @@ region_lock (svm_region_t * rp, int tag)
+ {
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_lock (&rp->mutex), "mutex_lock");
++#else
+   pthread_mutex_lock (&rp->mutex);
++#endif
+ #ifdef MUTEX_DEBUG
+@@ -128,4 +148,36 @@ found:
+   CLIB_MEMORY_BARRIER ();
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&rp->mutex),
++                             "mutex_unlock");
++#else
+   pthread_mutex_unlock (&rp->mutex);
++#endif
++}
++
++#if defined(__ANDROID__)
++static void
++svm_android_file_unlink_or_panic (const char *namespace_name,
++				  const char *region_name)
++{
++  if (svm_android_file_unlink (namespace_name, region_name) < 0 &&
++      errno != ENOENT)
++    clib_panic ("Android SVM unlink failed for '%s'", region_name);
++}
++
++static void
++svm_android_file_cleanup_created (const char *namespace_name,
++				  const char *region_name, int fd)
++{
++  int saved_errno = errno;
++  int close_rv = close (fd);
++  int close_errno = errno;
++
++  /* Always remove only the file created by this invocation. */
++  svm_android_file_unlink_or_panic (namespace_name, region_name);
++  if (close_rv < 0)
++    clib_panic ("Android SVM close failed for '%s': %d", region_name,
++		close_errno);
++  errno = saved_errno;
+ }
++#endif
+ 
+@@ -333,3 +385,3 @@ svm_data_region_create (svm_map_region_args_t * a, svm_region_t * rp)
+ 
+-static int
++static __clib_unused int
+ svm_data_region_map (svm_map_region_args_t * a, svm_region_t * rp)
+@@ -348,3 +400,7 @@ svm_data_region_map (svm_map_region_args_t * a, svm_region_t * rp)
+ 
++#if defined(__ANDROID__)
++      fd = open (a->backing_file, O_RDWR);
++#else
+       fd = open (a->backing_file, O_RDWR, 0777);
++#endif
+ 
+@@ -446,2 +502,20 @@ svm_region_init_mapped_region (svm_map_region_args_t * a, svm_region_t * rp)
+ 
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutexattr_init (&attr), "mutexattr_init");
++  SVM_ANDROID_PTHREAD_FATAL (
++    pthread_mutexattr_setpshared (&attr, PTHREAD_PROCESS_SHARED),
++    "mutexattr_setpshared");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_init (&rp->mutex, &attr),
++                             "mutex_init");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutexattr_destroy (&attr),
++                             "mutexattr_destroy");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_condattr_init (&cattr), "condattr_init");
++  SVM_ANDROID_PTHREAD_FATAL (
++    pthread_condattr_setpshared (&cattr, PTHREAD_PROCESS_SHARED),
++    "condattr_setpshared");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_cond_init (&rp->condvar, &cattr),
++                             "cond_init");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_condattr_destroy (&cattr),
++                             "condattr_destroy");
++#else
+   if (pthread_mutexattr_init (&attr))
+@@ -469,2 +543,3 @@ svm_region_init_mapped_region (svm_map_region_args_t * a, svm_region_t * rp)
+     clib_unix_warning ("condattr_destroy");
++#endif
+ 
+@@ -541,2 +616,3 @@ svm_map_region (svm_map_region_args_t * a)
+   svm_region_t *rp;
++#if !defined(__ANDROID__)
+   int deadman = 0;
+@@ -546,2 +622,4 @@ svm_map_region (svm_map_region_args_t * a)
+   u8 *shm_name;
++#endif
++#if !defined(__ANDROID__)
+   int dead_region_recovery = 0;
+@@ -550,2 +628,3 @@ svm_map_region (svm_map_region_args_t * a)
+   struct timespec ts, tsrem;
++#endif
+ 
+@@ -554,4 +633,12 @@ svm_map_region (svm_map_region_args_t * a)
+ 
+-  shm_name = shm_name_from_svm_map_region_args (a);
++#if defined(__ANDROID__)
++  if (CLIB_DEBUG > 1)
++    clib_warning ("[%d] map region %s: generation file backend",
++		  getpid (), a->name);
+ 
++  svm_fd = svm_android_file_open (a->root_path, a->name,
++				 O_RDWR | O_CREAT | O_EXCL,
++				 S_IRUSR | S_IWUSR);
++#else
++  shm_name = shm_name_from_svm_map_region_args (a);
+   if (CLIB_DEBUG > 1)
+@@ -561,2 +648,3 @@ svm_map_region (svm_map_region_args_t * a)
+   svm_fd = shm_open ((char *) shm_name, O_RDWR | O_CREAT | O_EXCL, 0777);
++#endif
+ 
+@@ -564,4 +652,6 @@ svm_map_region (svm_map_region_args_t * a)
+     {
++#if !defined(__ANDROID__)
+       if (fchmod (svm_fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP) < 0)
+ 	clib_unix_warning ("segment chmod");
++#endif
+       /* This turns out to fail harmlessly if the client starts first */
+@@ -570,3 +660,5 @@ svm_map_region (svm_map_region_args_t * a)
+ 
++#if !defined(__ANDROID__)
+       vec_free (shm_name);
++#endif
+ 
+@@ -584,3 +676,7 @@ svm_map_region (svm_map_region_args_t * a)
+ 	  clib_warning ("seek region size");
++#if defined(__ANDROID__)
++	  svm_android_file_cleanup_created (a->root_path, a->name, svm_fd);
++#else
+ 	  close (svm_fd);
++#endif
+ 	  return (0);
+@@ -590,3 +686,7 @@ svm_map_region (svm_map_region_args_t * a)
+ 	  clib_warning ("set region size");
++#if defined(__ANDROID__)
++	  svm_android_file_cleanup_created (a->root_path, a->name, svm_fd);
++#else
+ 	  close (svm_fd);
++#endif
+ 	  return (0);
+@@ -601,3 +701,7 @@ svm_map_region (svm_map_region_args_t * a)
+ 	  clib_unix_warning ("mmap create");
++#if defined(__ANDROID__)
++	  svm_android_file_cleanup_created (a->root_path, a->name, svm_fd);
++#else
+ 	  close (svm_fd);
++#endif
+ 	  return (0);
+@@ -613,2 +717,6 @@ svm_map_region (svm_map_region_args_t * a)
+     {
++#if defined(__ANDROID__)
++      clib_warning ("Android SVM region already exists; refusing reuse");
++      return 0;
++#else
+       svm_fd = shm_open ((char *) shm_name, O_RDWR, 0777);
+@@ -753,2 +861,3 @@ svm_map_region (svm_map_region_args_t * a)
+       return ((void *) rp);
++#endif
+ 
+@@ -764,3 +873,8 @@ svm_mutex_cleanup (void)
+     {
++#if defined(__ANDROID__)
++      SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (mutexes_held[i]),
++                                 "mutex_unlock");
++#else
+       pthread_mutex_unlock (mutexes_held[i]);	//NOSONAR
++#endif
+     }
+@@ -982,3 +1096,5 @@ svm_region_unlink (svm_region_t * rp)
+   svm_main_region_t *mp;
++#if !defined(__ANDROID__)
+   u8 *shm_name;
++#endif
+ 
+@@ -993,2 +1109,5 @@ svm_region_unlink (svm_region_t * rp)
+   a->name = rp->region_name;
++#if defined(__ANDROID__)
++  svm_android_file_unlink_or_panic (a->root_path, a->name);
++#else
+   shm_name = shm_name_from_svm_map_region_args (a);
+@@ -998,2 +1117,3 @@ svm_region_unlink (svm_region_t * rp)
+   vec_free (shm_name);
++#endif
+ }
+@@ -1255,3 +1375,8 @@ svm_client_scan (const char *root_path)
+ 
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_lock (&root_rp->mutex),
++                             "mutex_lock");
++#else
+   pthread_mutex_lock (&root_rp->mutex);
++#endif
+ 
+@@ -1284,3 +1409,8 @@ svm_client_scan (const char *root_path)
+ 
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&root_rp->mutex),
++                             "mutex_unlock");
++#else
+   pthread_mutex_unlock (&root_rp->mutex);
++#endif
+ 
+@@ -1294,3 +1424,8 @@ svm_client_scan (const char *root_path)
+ 	{
++#if defined(__ANDROID__)
++	  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_lock (&rp->mutex),
++	                             "mutex_lock");
++#else
+ 	  pthread_mutex_lock (&rp->mutex);
++#endif
+ 
+@@ -1298,3 +1433,8 @@ svm_client_scan (const char *root_path)
+ 
++#if defined(__ANDROID__)
++	  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&rp->mutex),
++	                             "mutex_unlock");
++#else
+ 	  pthread_mutex_unlock (&rp->mutex);
++#endif
+ 	  svm_region_unmap (rp);
+diff --git a/src/svm/svm_android_file.c b/src/svm/svm_android_file.c
+new file mode 100644
+index 00000000..215945af
+--- /dev/null
++++ b/src/svm/svm_android_file.c
+@@ -0,0 +1,160 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++
++#include "svm_android_file.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <limits.h>
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#ifndef PATH_MAX
++#define PATH_MAX 4096
++#endif
++
++static int
++svm_android_file_component (const char *value, char *dst, size_t dst_size)
++{
++  size_t len;
++
++  if (!value)
++    return 0;
++
++  while (*value == '/')
++    value++;
++  if (*value == '\0' || strcmp (value, ".") == 0 ||
++      strcmp (value, "..") == 0 || strchr (value, '/') ||
++      strchr (value, '\\'))
++    {
++      errno = EINVAL;
++      return -1;
++    }
++
++  len = strlen (value);
++  if (len >= dst_size)
++    {
++      errno = ENAMETOOLONG;
++      return -1;
++    }
++  memcpy (dst, value, len + 1);
++  return 1;
++}
++
++int
++svm_android_file_path (char *dst, size_t dst_size,
++		       const char *namespace_name,
++		       const char *region_name)
++{
++  const char *base;
++  char namespace_component[NAME_MAX + 1];
++  char region_component[NAME_MAX + 1];
++  char resolved_base[PATH_MAX];
++  struct stat st;
++  int has_namespace;
++  int n;
++
++  if (!dst || dst_size == 0 || !region_name)
++    {
++      errno = EINVAL;
++      return -1;
++    }
++
++  base = getenv (SVM_ANDROID_FILE_DIR_ENV);
++  if (!base || base[0] != '/')
++    {
++      errno = ENOENT;
++      return -1;
++    }
++  if (stat (base, &st) < 0)
++    return -1;
++  if (!S_ISDIR (st.st_mode))
++    {
++      errno = ENOTDIR;
++      return -1;
++    }
++  if (!realpath (base, resolved_base))
++    return -1;
++
++  has_namespace = svm_android_file_component (
++    namespace_name, namespace_component, sizeof (namespace_component));
++  if (has_namespace < 0)
++    return -1;
++  if (svm_android_file_component (region_name, region_component,
++				  sizeof (region_component)) <= 0)
++    return -1;
++
++  if (has_namespace)
++    n = snprintf (dst, dst_size, "%s/%s-%s", resolved_base,
++		  namespace_component, region_component);
++  else
++    n = snprintf (dst, dst_size, "%s/%s", resolved_base,
++		  region_component);
++  if (n < 0 || (size_t) n >= dst_size)
++    {
++      errno = ENAMETOOLONG;
++      return -1;
++    }
++  return 0;
++}
++
++int
++svm_android_file_open (const char *namespace_name,
++		       const char *region_name, int flags, mode_t mode)
++{
++  char path[PATH_MAX];
++  struct stat st;
++  int fd;
++
++  if (svm_android_file_path (path, sizeof (path), namespace_name,
++			     region_name) < 0)
++    return -1;
++
++  if (flags & O_CREAT)
++    fd = open (path, flags | O_CLOEXEC | O_NOFOLLOW, mode);
++  else
++    fd = open (path, flags | O_CLOEXEC | O_NOFOLLOW);
++  if (fd < 0)
++    return -1;
++
++  if (fstat (fd, &st) < 0)
++    {
++      int saved_errno = errno;
++      close (fd);
++      errno = saved_errno;
++      return -1;
++    }
++  if (!S_ISREG (st.st_mode))
++    {
++      close (fd);
++      errno = EINVAL;
++      return -1;
++    }
++
++  if (flags & O_CREAT)
++    {
++      if (fchmod (fd, S_IRUSR | S_IWUSR) < 0)
++	{
++	  int saved_errno = errno;
++	  close (fd);
++	  unlink (path);
++	  errno = saved_errno;
++	  return -1;
++	}
++    }
++  return fd;
++}
++
++int
++svm_android_file_unlink (const char *namespace_name,
++			 const char *region_name)
++{
++  char path[PATH_MAX];
++
++  if (svm_android_file_path (path, sizeof (path), namespace_name,
++			     region_name) < 0)
++    return -1;
++  return unlink (path);
++}
+diff --git a/src/svm/svm_android_file.h b/src/svm/svm_android_file.h
+new file mode 100644
+index 00000000..53145acc
+--- /dev/null
++++ b/src/svm/svm_android_file.h
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++
++#ifndef included_svm_android_file_h
++#define included_svm_android_file_h
++
++#include <stddef.h>
++#include <sys/types.h>
++
++#define SVM_ANDROID_FILE_DIR_ENV "SAKAMOTO_VPP_SVM_DIR"
++
++/*
++ * Resolve one generation-private SVM region path.  The environment variable
++ * names a directory created for the active generation; both optional
++ * namespace and region names are single, traversal-free path components.
++ */
++int svm_android_file_path (char *dst, size_t dst_size,
++			   const char *namespace_name,
++			   const char *region_name);
++
++/* Open a generation-private regular file with shm_open-equivalent flags. */
++int svm_android_file_open (const char *namespace_name,
++			   const char *region_name, int flags, mode_t mode);
++
++/* Remove one generation-private regular file. */
++int svm_android_file_unlink (const char *namespace_name,
++			     const char *region_name);
++
++#endif /* included_svm_android_file_h */

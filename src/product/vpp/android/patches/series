@@ -3,3 +3,5 @@
 0003-vppinfra-android-open-mode.patch
 0004-vppinfra-android-os-sources.patch
 0005-vppinfra-android-malloc-abi.patch
+0006-svm-android-shared-queue-no-robust.patch
+0007-svm-android-file-backend.patch

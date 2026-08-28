@@ -1,0 +1,336 @@
+diff --git a/src/svm/message_queue.c b/src/svm/message_queue.c
+index 50b192fd..e963b6e3 100644
+--- a/src/svm/message_queue.c
++++ b/src/svm/message_queue.c
+@@ -6,2 +6,3 @@
+ #include <svm/message_queue.h>
++#include <errno.h>
+ #include <vppinfra/mem.h>
+@@ -12,2 +13,14 @@
+ 
++#if defined(__ANDROID__)
++#define SVM_ANDROID_PTHREAD_FATAL(rv, operation)                              \
++  do                                                                          \
++    {                                                                         \
++      int svm_android_pthread_rv = (rv);                                      \
++      if (PREDICT_FALSE (svm_android_pthread_rv != 0))                        \
++        clib_panic ("Android pthread %s failed: %d", operation,              \
++                    svm_android_pthread_rv);                                 \
++    }                                                                         \
++  while (0)
++#endif
++
+ static inline svm_msg_q_ring_t *
+@@ -40,2 +53,8 @@ svm_msg_q_init_mutex (svm_msg_q_shared_queue_t *sq)
+ 
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutexattr_init (&attr), "mutexattr_init");
++  SVM_ANDROID_PTHREAD_FATAL (
++    pthread_mutexattr_setpshared (&attr, PTHREAD_PROCESS_SHARED),
++    "pthread_mutexattr_setpshared");
++#else
+   if (pthread_mutexattr_init (&attr))
+@@ -44,4 +63,20 @@ svm_msg_q_init_mutex (svm_msg_q_shared_queue_t *sq)
+     clib_unix_warning ("pthread_mutexattr_setpshared");
++#endif
++#if !defined(__ANDROID__)
+   if (pthread_mutexattr_setrobust (&attr, PTHREAD_MUTEX_ROBUST))
+     clib_unix_warning ("setrobust");
++#endif
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_init (&sq->mutex, &attr),
++                             "mutex_init");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutexattr_destroy (&attr),
++                             "mutexattr_destroy");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_condattr_init (&cattr), "condattr_init");
++  SVM_ANDROID_PTHREAD_FATAL (
++    pthread_condattr_setpshared (&cattr, PTHREAD_PROCESS_SHARED),
++    "condattr_setpshared");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_cond_init (&sq->condvar, &cattr),
++                             "cond_init1");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_condattr_destroy (&cattr), "cond_init2");
++#else
+   if (pthread_mutex_init (&sq->mutex, &attr))
+@@ -58,2 +93,3 @@ svm_msg_q_init_mutex (svm_msg_q_shared_queue_t *sq)
+     clib_unix_warning ("cond_init2");
++#endif
+ }
+@@ -183,2 +219,3 @@ svm_msg_q_send_signal (svm_msg_q_t *mq, u8 is_consumer)
+ 	  int rv = pthread_mutex_lock (&mq->q.shr->mutex);
++#if !defined(__ANDROID__)
+ 	  if (PREDICT_FALSE (rv == EOWNERDEAD))
+@@ -188,8 +225,23 @@ svm_msg_q_send_signal (svm_msg_q_t *mq, u8 is_consumer)
+ 	    }
++#else
++      SVM_ANDROID_PTHREAD_FATAL (rv, "mutex_lock");
++#endif
+ 	}
+ 
++#if defined(__ANDROID__)
++      SVM_ANDROID_PTHREAD_FATAL (pthread_cond_broadcast (&mq->q.shr->condvar),
++                                 "cond_broadcast");
++#else
+       (void) pthread_cond_broadcast (&mq->q.shr->condvar);
++#endif
+ 
+       if (is_consumer)
+-	pthread_mutex_unlock (&mq->q.shr->mutex);
++	{
++#if defined(__ANDROID__)
++	  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&mq->q.shr->mutex),
++	                             "mutex_unlock");
++#else
++	  pthread_mutex_unlock (&mq->q.shr->mutex);
++#endif
++	}
+     }
+@@ -498,2 +550,3 @@ svm_msg_q_wait (svm_msg_q_t *mq, svm_msg_q_wait_type_t type)
+       rv = pthread_mutex_lock (&mq->q.shr->mutex);
++#if !defined(__ANDROID__)
+       if (PREDICT_FALSE (rv == EOWNERDEAD))
+@@ -503,7 +556,21 @@ svm_msg_q_wait (svm_msg_q_t *mq, svm_msg_q_wait_type_t type)
+ 	}
++#else
++      SVM_ANDROID_PTHREAD_FATAL (rv, "mutex_lock");
++#endif
+ 
+       while (fn (mq))
++#if defined(__ANDROID__)
++	SVM_ANDROID_PTHREAD_FATAL (
++	  pthread_cond_wait (&mq->q.shr->condvar, &mq->q.shr->mutex),
++	  "cond_wait");
++#else
+ 	pthread_cond_wait (&mq->q.shr->condvar, &mq->q.shr->mutex);
++#endif
+ 
++#if defined(__ANDROID__)
++      SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&mq->q.shr->mutex),
++                                 "mutex_unlock");
++#else
+       pthread_mutex_unlock (&mq->q.shr->mutex);
++#endif
+     }
+@@ -535,3 +602,9 @@ svm_msg_q_wait_prod (svm_msg_q_t *mq)
+       while (svm_msg_q_is_full (mq))
++#if defined(__ANDROID__)
++	SVM_ANDROID_PTHREAD_FATAL (
++	  pthread_cond_wait (&mq->q.shr->condvar, &mq->q.shr->mutex),
++	  "cond_wait");
++#else
+ 	pthread_cond_wait (&mq->q.shr->condvar, &mq->q.shr->mutex);
++#endif
+     }
+@@ -564,3 +637,9 @@ svm_msg_q_or_ring_wait_prod (svm_msg_q_t *mq, u32 ring_index)
+       while (svm_msg_q_or_ring_is_full (mq, ring_index))
++#if defined(__ANDROID__)
++	SVM_ANDROID_PTHREAD_FATAL (
++	  pthread_cond_wait (&mq->q.shr->condvar, &mq->q.shr->mutex),
++	  "cond_wait");
++#else
+ 	pthread_cond_wait (&mq->q.shr->condvar, &mq->q.shr->mutex);
++#endif
+     }
+@@ -598,2 +677,3 @@ svm_msg_q_timedwait (svm_msg_q_t *mq, double timeout)
+       rv = pthread_mutex_lock (&sq->mutex);
++#if !defined(__ANDROID__)
+       if (PREDICT_FALSE (rv == EOWNERDEAD))
+@@ -603,2 +683,5 @@ svm_msg_q_timedwait (svm_msg_q_t *mq, double timeout)
+ 	}
++#else
++      SVM_ANDROID_PTHREAD_FATAL (rv, "mutex_lock");
++#endif
+ 
+@@ -608,3 +691,8 @@ svm_msg_q_timedwait (svm_msg_q_t *mq, double timeout)
+ 	{
++#if defined(__ANDROID__)
++	  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&sq->mutex),
++	                             "mutex_unlock");
++#else
+ 	  pthread_mutex_unlock (&sq->mutex);
++#endif
+ 	  return 0;
+@@ -615,4 +703,13 @@ svm_msg_q_timedwait (svm_msg_q_t *mq, double timeout)
+       rv = pthread_cond_timedwait (&sq->condvar, &sq->mutex, &ts);
+-
++#if defined(__ANDROID__)
++      if (PREDICT_FALSE (rv != 0 && rv != ETIMEDOUT))
++	clib_panic ("Android pthread cond_timedwait failed: %d", rv);
++#endif
++
++#if defined(__ANDROID__)
++      SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&sq->mutex),
++	                             "mutex_unlock");
++#else
+       pthread_mutex_unlock (&sq->mutex);
++#endif
+       return rv;
+diff --git a/src/svm/message_queue.h b/src/svm/message_queue.h
+index f22ee6ae..c2032214 100644
+--- a/src/svm/message_queue.h
++++ b/src/svm/message_queue.h
+@@ -365,4 +365,9 @@ svm_msg_q_try_lock (svm_msg_q_t * mq)
+       int rv = pthread_mutex_trylock (&mq->q.shr->mutex);
++#if defined(__ANDROID__)
++      if (PREDICT_FALSE (rv != 0 && rv != EBUSY))
++	clib_panic ("Android pthread mutex_trylock failed: %d", rv);
++#else
+       if (PREDICT_FALSE (rv == EOWNERDEAD))
+ 	rv = pthread_mutex_consistent (&mq->q.shr->mutex);
++#endif
+       return rv;
+@@ -384,4 +389,9 @@ svm_msg_q_lock (svm_msg_q_t * mq)
+       int rv = pthread_mutex_lock (&mq->q.shr->mutex);
++#if defined(__ANDROID__)
++      if (PREDICT_FALSE (rv != 0))
++	clib_panic ("Android pthread mutex_lock failed: %d", rv);
++#else
+       if (PREDICT_FALSE (rv == EOWNERDEAD))
+ 	rv = pthread_mutex_consistent (&mq->q.shr->mutex);
++#endif
+       return rv;
+@@ -403,3 +413,9 @@ svm_msg_q_unlock (svm_msg_q_t * mq)
+     {
++#if defined(__ANDROID__)
++      int rv = pthread_mutex_unlock (&mq->q.shr->mutex);
++      if (PREDICT_FALSE (rv != 0))
++	clib_panic ("Android pthread mutex_unlock failed: %d", rv);
++#else
+       pthread_mutex_unlock (&mq->q.shr->mutex);
++#endif
+     }
+diff --git a/src/svm/queue.c b/src/svm/queue.c
+index 0093390f..67154520 100644
+--- a/src/svm/queue.c
++++ b/src/svm/queue.c
+@@ -11,2 +11,3 @@
+ #include <string.h>
++#include <errno.h>
+ #include <pthread.h>
+@@ -19,2 +20,14 @@
+ 
++#if defined(__ANDROID__)
++#define SVM_ANDROID_PTHREAD_FATAL(rv, operation)                              \
++  do                                                                          \
++    {                                                                         \
++      int svm_android_pthread_rv = (rv);                                      \
++      if (PREDICT_FALSE (svm_android_pthread_rv != 0))                        \
++        clib_panic ("Android pthread %s failed: %d", operation,              \
++                    svm_android_pthread_rv);                                 \
++    }                                                                         \
++  while (0)
++#endif
++
+ svm_queue_t *
+@@ -37,8 +50,27 @@ svm_queue_init (void *base, int nels, int elsize)
+ 
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutexattr_init (&attr), "mutexattr_init");
++#else
+   if (pthread_mutexattr_init (&attr))
+     clib_unix_warning ("mutexattr_init");
++#endif
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (
++    pthread_mutexattr_setpshared (&attr, PTHREAD_PROCESS_SHARED),
++    "pthread_mutexattr_setpshared");
++#else
+   if (pthread_mutexattr_setpshared (&attr, PTHREAD_PROCESS_SHARED))
+     clib_unix_warning ("pthread_mutexattr_setpshared");
++#endif
++#if !defined(__ANDROID__)
+   if (pthread_mutexattr_setrobust (&attr, PTHREAD_MUTEX_ROBUST))
+     clib_unix_warning ("setrobust");
++#endif
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_init (&q->mutex, &attr),
++                             "mutex_init");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutexattr_destroy (&attr),
++                             "mutexattr_destroy");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_condattr_init (&cattr), "condattr_init");
++#else
+   if (pthread_mutex_init (&q->mutex, &attr))
+@@ -49,3 +81,12 @@ svm_queue_init (void *base, int nels, int elsize)
+     clib_unix_warning ("condattr_init");
++#endif
+   /* prints funny-looking messages in the Linux target */
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (
++    pthread_condattr_setpshared (&cattr, PTHREAD_PROCESS_SHARED),
++    "condattr_setpshared");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_cond_init (&q->condvar, &cattr),
++                             "cond_init1");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_condattr_destroy (&cattr), "cond_init2");
++#else
+   if (pthread_condattr_setpshared (&cattr, PTHREAD_PROCESS_SHARED))
+@@ -56,2 +97,3 @@ svm_queue_init (void *base, int nels, int elsize)
+     clib_unix_warning ("cond_init2");
++#endif
+ 
+@@ -80,4 +122,11 @@ svm_queue_free (svm_queue_t * q)
+ {
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_destroy (&q->mutex),
++                             "mutex_destroy");
++  SVM_ANDROID_PTHREAD_FATAL (pthread_cond_destroy (&q->condvar),
++                             "cond_destroy");
++#else
+   (void) pthread_mutex_destroy (&q->mutex);
+   (void) pthread_cond_destroy (&q->condvar);
++#endif
+   clib_mem_free (q);
+@@ -89,4 +138,8 @@ svm_queue_lock (svm_queue_t * q)
+   int rv = pthread_mutex_lock (&q->mutex);
++#if !defined(__ANDROID__)
+   if (PREDICT_FALSE (rv == EOWNERDEAD))
+     pthread_mutex_consistent (&q->mutex);
++#else
++  SVM_ANDROID_PTHREAD_FATAL (rv, "mutex_lock");
++#endif
+ }
+@@ -97,4 +150,9 @@ svm_queue_trylock (svm_queue_t * q)
+   int rv = pthread_mutex_trylock (&q->mutex);
++#if !defined(__ANDROID__)
+   if (PREDICT_FALSE (rv == EOWNERDEAD))
+     rv = pthread_mutex_consistent (&q->mutex);
++#else
++  if (PREDICT_FALSE (rv != 0 && rv != EBUSY))
++    clib_panic ("Android pthread mutex_trylock failed: %d", rv);
++#endif
+   return rv;
+@@ -105,3 +163,7 @@ svm_queue_unlock (svm_queue_t * q)
+ {
++#if defined(__ANDROID__)
++  SVM_ANDROID_PTHREAD_FATAL (pthread_mutex_unlock (&q->mutex), "mutex_unlock");
++#else
+   pthread_mutex_unlock (&q->mutex);
++#endif
+ }
+@@ -119,3 +181,8 @@ svm_queue_send_signal_inline (svm_queue_t * q, u8 is_prod)
+     {
++#if defined(__ANDROID__)
++      SVM_ANDROID_PTHREAD_FATAL (pthread_cond_broadcast (&q->condvar),
++                                 "cond_broadcast");
++#else
+       (void) pthread_cond_broadcast (&q->condvar);
++#endif
+     }
+@@ -144,3 +211,8 @@ svm_queue_wait_inline (svm_queue_t * q)
+     {
++#if defined(__ANDROID__)
++      SVM_ANDROID_PTHREAD_FATAL (pthread_cond_wait (&q->condvar, &q->mutex),
++                                 "cond_wait");
++#else
+       pthread_cond_wait (&q->condvar, &q->mutex);
++#endif
+     }
+@@ -175,3 +247,10 @@ svm_queue_timedwait_inline (svm_queue_t * q, double timeout)
+     {
++#if defined(__ANDROID__)
++      int rv = pthread_cond_timedwait (&q->condvar, &q->mutex, &ts);
++      if (PREDICT_FALSE (rv != 0 && rv != ETIMEDOUT))
++        clib_panic ("Android pthread cond_timedwait failed: %d", rv);
++      return rv;
++#else
+       return pthread_cond_timedwait (&q->condvar, &q->mutex, &ts);
++#endif
+     }
