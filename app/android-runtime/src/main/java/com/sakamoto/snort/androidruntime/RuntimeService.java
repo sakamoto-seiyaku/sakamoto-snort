@@ -69,6 +69,8 @@ public final class RuntimeService extends VpnService {
     private static final String MANIFEST_ASSET = "vpp-runtime.properties";
     private static final String HASH_ASSET = "vpp-runtime.sha256";
     private static final String DAEMON_HASH_ASSET = "sucre-snortd.sha256";
+    private static final String PRODUCT_MANIFEST_ASSET = "product-stage.properties";
+    private static final String PRODUCT_PLUGIN_ASSET = "product_core_plugin.so";
     private static final String CHANNEL_ID = "sakamoto-runtime";
     private static final int NOTIFICATION_ID = 6701;
     private static final int HEALTH_ATTEMPTS = 24;
@@ -131,6 +133,8 @@ public final class RuntimeService extends VpnService {
     private RuntimeSnapshot snapshot;
     private LocalProductBackend productBackend;
     private Process vppProcess;
+    private RuntimeControlNative.Session productCoreSession;
+    private String productVppRevision = "";
     private VpnTunPlatformSession vpnTunSession;
     private VpnHevTransportSession vpnHevSession;
     private RuntimeProfile activeProfile;
@@ -433,6 +437,19 @@ public final class RuntimeService extends VpnService {
             appendLog("health_query=coalesced revision=" + revision);
             return;
         }
+        if (productCoreSession != null || processAlive(vppProcess)) {
+            if (!enqueueLifecycle(() -> {
+                try {
+                    queryProductCoreRuntime();
+                    appendLog("health_query=result revision=" + revision);
+                } finally {
+                    healthQueryScheduled.set(false);
+                }
+            })) {
+                healthQueryScheduled.set(false);
+            }
+            return;
+        }
         if (!enqueueLifecycle(() -> {
             try {
                 reconcileDurableRuntime(true, revision);
@@ -523,6 +540,10 @@ public final class RuntimeService extends VpnService {
 
     private void startRuntime(RuntimeProfile requestedProfile) {
         if (destroying) {
+            return;
+        }
+        if (productCoreMainline()) {
+            startProductCoreRuntime(requestedProfile);
             return;
         }
         // ADR-0008 removed the legacy C++ daemon and its APK artifact.  Do
@@ -746,7 +767,267 @@ public final class RuntimeService extends VpnService {
         }
     }
 
+    /** SAKAMOTO-172 app-UID VPP sidecar; packet adapters are deliberately absent. */
+    private void startProductCoreRuntime(RuntimeProfile requestedProfile) {
+        RuntimeProfile selected = requestedProfile == null
+                ? (activeProfile == null ? RuntimeProfile.ROOT : activeProfile)
+                : requestedProfile;
+        if (processAlive(vppProcess) && productCoreSession != null) {
+            queryProductCoreRuntime();
+            return;
+        }
+        closeProductCoreSession();
+        activeProfile = selected;
+        initializeProfilePaths(selected);
+        if (profileRoot.exists() && !deleteTree(profileRoot)) {
+            failWithoutRuntime("product_profile_cleanup_failed",
+                    "previous generation-owned profile tree could not be removed");
+            return;
+        }
+        generation++;
+
+        Properties productManifest;
+        try {
+            productManifest = readProductManifest();
+            productVppRevision = requiredProductProperty(productManifest, "vppRevision");
+            if (!"sakamoto-android-product-stage/v1".equals(
+                    requiredProductProperty(productManifest, "schema"))) {
+                throw new IOException("unsupported product stage schema");
+            }
+            String packagedAbi = requiredProductProperty(productManifest, "abi");
+            if (!packagedAbi.equals(deviceAbi())) {
+                throw new IOException("product ABI does not match device ABI");
+            }
+            if (!publish(RuntimeSnapshot.starting(selected, VppHealthHandshake.PROTOCOL,
+                    productVppRevision, "", generation))) {
+                return;
+            }
+
+            File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
+            File vpp = new File(nativeDir, VPP_BINARY);
+            if (!vpp.isFile()) {
+                throw new IOException("runtime artifact is not packaged: " + VPP_BINARY);
+            }
+            prepareProductCoreProfile(profileRoot);
+            File pluginDir = new File(profileRoot, "plugins");
+            copyAsset(PRODUCT_PLUGIN_ASSET, new File(pluginDir, PRODUCT_PLUGIN_ASSET));
+
+            ProcessBuilder builder = new ProcessBuilder(vpp.getPath(), "plugin_path",
+                    pluginDir.getPath(), "-c",
+                    new File(profileRoot, "startup.conf").getPath());
+            File runtime = new File(profileRoot, "runtime");
+            File svm = new File(profileRoot, "shm");
+            builder.environment().put("LD_LIBRARY_PATH", nativeDir.getPath());
+            builder.environment().put("SAKAMOTO_PRODUCT_GENERATION",
+                    Long.toString(generation));
+            builder.environment().put("SAKAMOTO_VPP_SVM_DIR", svm.getPath());
+            builder.environment().put("SAKAMOTO_VPP_RUNTIME_DIR", runtime.getPath());
+            builder.environment().put("SAKAMOTO_RUNTIME_PROFILE", selected.wireName);
+            builder.redirectErrorStream(true);
+            builder.redirectOutput(new File(new File(profileRoot, "logs"), "vpp-stdout.log"));
+            Process process = builder.start();
+            vppProcess = process;
+            writePid(pidFile, process.pid());
+
+            RuntimeControlNative.Session session = connectProductCoreSession(
+                    new File(runtime, "api.sock"), process);
+            if (session == null) {
+                failProductCoreGeneration("product_core_not_ready",
+                        "Product Core did not become ready on its generation");
+                return;
+            }
+            productCoreSession = session;
+            RuntimeControlNative.Status status = session.lastStatus();
+            if (!publishProductCoreRunning(status, process.pid())) {
+                failProductCoreGeneration("runtime_state_persistence_unavailable",
+                        "Product Core identity could not be published");
+                return;
+            }
+            appendLog("product_core=running generation=" + generation
+                    + " api=" + status.apiIdentity + " adapter=unavailable protection=false");
+            monitorProductCoreExit(process);
+        } catch (Exception error) {
+            Log.e(TAG, "Product Core startup failed", error);
+            failProductCoreGeneration("runtime_start_failed", messageOf(error));
+        }
+    }
+
+    private RuntimeControlNative.Session connectProductCoreSession(File socket, Process process)
+            throws InterruptedException {
+        for (int attempt = 0; attempt < HEALTH_ATTEMPTS; attempt++) {
+            if (!ProductCoreLifecycle.canRetryConnection(
+                    stopRequested, process.isAlive(), attempt, HEALTH_ATTEMPTS)) {
+                return null;
+            }
+            if (socket.exists()) {
+                RuntimeControlNative.Session session = RuntimeControlNative.connect(
+                        socket.getPath(), generation);
+                if (session.isConnected()
+                        && ProductCoreLifecycle.isReady(generation, productVppRevision,
+                        session.lastStatus())) {
+                    return session;
+                }
+                session.close();
+            }
+            Thread.sleep(HEALTH_RETRY_MILLIS);
+        }
+        return null;
+    }
+
+    private void queryProductCoreRuntime() {
+        Process process = vppProcess;
+        RuntimeControlNative.Session session = productCoreSession;
+        if (process == null || !process.isAlive()) {
+            failProductCoreGeneration("unexpected_exit", "VPP sidecar is not alive");
+            return;
+        }
+        if (session == null || session.generation() != generation || !session.isConnected()) {
+            failProductCoreGeneration("product_core_session_missing",
+                    "Product Core session is not live for the active generation");
+            return;
+        }
+        RuntimeControlNative.Status status = session.query();
+        if (!ProductCoreLifecycle.isReady(generation, productVppRevision, status)) {
+            failProductCoreGeneration("product_core_query_failed",
+                    status == null ? "Product Core query failed" : status.errorDetail);
+            return;
+        }
+        publishProductCoreRunning(status, process.pid());
+        appendLog("product_core=query generation=" + generation + " api=" + status.apiIdentity);
+    }
+
+    private boolean publishProductCoreRunning(RuntimeControlNative.Status status, long pid) {
+        return publish(RuntimeSnapshot.runningCoreOnly(activeProfile,
+                VppHealthHandshake.PROTOCOL, status.vppRevision, status.artifactId,
+                deviceAbi(), pid, generation));
+    }
+
+    private void monitorProductCoreExit(Process process) {
+        Thread monitor = new Thread(() -> {
+            int exitCode;
+            try {
+                exitCode = process.waitFor();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            enqueueLifecycle(() -> {
+                if (process != vppProcess || stopRequested) {
+                    return;
+                }
+                failProductCoreGeneration("unexpected_exit",
+                        "VPP sidecar exited with status " + exitCode);
+            });
+        }, "sakamoto-product-core-exit-monitor");
+        monitor.start();
+    }
+
+    private void failProductCoreGeneration(String code, String message) {
+        closeProductCoreSession();
+        boolean clean = terminateProductCoreProcess();
+        if (clean && profileRoot != null && profileRoot.exists()) {
+            clean = deleteTree(profileRoot);
+        }
+        vppProcess = null;
+        publishError(clean ? code : "cleanup_failed",
+                clean ? message : code + ": " + message + "; generation cleanup failed",
+                !clean, -1L);
+        stopIfInactive();
+    }
+
+    private void closeProductCoreSession() {
+        RuntimeControlNative.Session session = productCoreSession;
+        productCoreSession = null;
+        if (session != null) {
+            session.close();
+        }
+    }
+
+    private boolean terminateProductCoreProcess() {
+        Process process = vppProcess;
+        if (process == null || !process.isAlive()) {
+            return true;
+        }
+        process.destroy();
+        try {
+            if (!process.waitFor(STOP_TERM_MILLIS, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                if (!process.waitFor(STOP_KILL_MILLIS, TimeUnit.MILLISECONDS)) {
+                    return false;
+                }
+            }
+            return !process.isAlive();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private Properties readProductManifest() throws IOException {
+        Properties properties = new Properties();
+        try (InputStream input = getAssets().open(PRODUCT_MANIFEST_ASSET)) {
+            properties.load(input);
+        }
+        return properties;
+    }
+
+    private static String requiredProductProperty(Properties properties, String name)
+            throws IOException {
+        String value = properties.getProperty(name, "").trim();
+        if (value.isEmpty()) {
+            throw new IOException("product stage property is missing: " + name);
+        }
+        return value;
+    }
+
+    private void prepareProductCoreProfile(File profile) throws IOException {
+        File runtime = new File(profile, "runtime");
+        File logs = new File(profile, "logs");
+        File svm = new File(profile, "shm");
+        File plugins = new File(profile, "plugins");
+        if (!runtime.mkdirs() || !logs.mkdirs() || !svm.mkdirs() || !plugins.mkdirs()) {
+            throw new IOException("unable to create generation-owned profile directories");
+        }
+        String config = "unix {\n  nodaemon\n  nobanner\n  runtime-dir "
+                + runtime.getPath() + "\n  log " + new File(logs, "vpp.log").getPath()
+                + "\n  cli-listen " + new File(runtime, "cli.sock").getPath()
+                + "\n  cli-no-pager\n}\n\n"
+                + "socksvr {\n  socket-name " + new File(runtime, "api.sock").getPath()
+                + "\n}\n\napi-segment {\n  prefix sakamoto-product-" + generation
+                + "\n}\n\nstatseg {\n  socket-name "
+                + new File(runtime, "statseg.sock").getPath() + "\n}\n";
+        try (FileOutputStream output = new FileOutputStream(new File(profile, "startup.conf"))) {
+            output.write(config.getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
+        }
+    }
+
+    private void copyAsset(String asset, File destination) throws IOException {
+        try (InputStream input = getAssets().open(asset);
+             FileOutputStream output = new FileOutputStream(destination)) {
+            byte[] buffer = new byte[16 * 1024];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count > 0) {
+                    output.write(buffer, 0, count);
+                }
+            }
+            output.getFD().sync();
+        }
+    }
+
+    private static void writePid(File file, long pid) throws IOException {
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            output.write((Long.toString(pid) + "\n").getBytes(StandardCharsets.US_ASCII));
+            output.getFD().sync();
+        }
+    }
+
     private static boolean legacyCppRuntimeRetired() {
+        return true;
+    }
+
+    private static boolean productCoreMainline() {
         return true;
     }
 
@@ -1254,6 +1535,33 @@ public final class RuntimeService extends VpnService {
     }
 
     private boolean stopRuntime(boolean stopService) {
+        if (productCoreSession != null || processAlive(vppProcess)) {
+            RuntimeSnapshot current = snapshot == null
+                    ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot;
+            publish(RuntimeSnapshot.stopping(current));
+            closeProductCoreSession();
+            boolean clean = terminateProductCoreProcess();
+            if (clean && profileRoot != null && profileRoot.exists()) {
+                clean = deleteTree(profileRoot);
+            }
+            vppProcess = null;
+            stopRequested = false;
+            if (!clean) {
+                publishError("cleanup_failed", "generation-owned profile cleanup failed",
+                        true, -1L);
+                return false;
+            }
+            boolean published = publish(RuntimeSnapshot.stopped(
+                    current.profile, current.generation));
+            if (stopService && foregroundStarted) {
+                stopForeground(true);
+                foregroundStarted = false;
+            }
+            if (stopService && !destroying) {
+                stopSelf();
+            }
+            return published;
+        }
         initializeProfilePaths(activeProfile);
         long pid = currentPid();
         boolean residue = profileRoot.exists() || pid > 0L || processAlive(vppProcess);

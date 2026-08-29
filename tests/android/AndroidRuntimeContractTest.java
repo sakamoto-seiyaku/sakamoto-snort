@@ -20,6 +20,7 @@ import com.sakamoto.snort.androidruntime.ProductStateSnapshot;
 import com.sakamoto.snort.androidruntime.ProductStateStore;
 import com.sakamoto.snort.androidruntime.ProductStore;
 import com.sakamoto.snort.androidruntime.ProductPacketAdapterContract;
+import com.sakamoto.snort.androidruntime.ProductCoreLifecycle;
 import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
@@ -85,6 +86,7 @@ public final class AndroidRuntimeContractTest {
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
         productCoreNativeStatusFieldOrderIsStable();
+        productCoreLifecycleRequiresTheExactLiveGeneration();
         applicationSubjectIdentityIsCompleteUidOnly();
         applicationProtocolCatalogOwnsStablePolicyIdentity();
         productStorePersistsProfileBindingsAndEmptyBundle();
@@ -1297,6 +1299,52 @@ public final class AndroidRuntimeContractTest {
                 "native VPP revision stays in the revision field");
         check("query failed".equals(status.errorDetail),
                 "native error detail stays in the error field");
+    }
+
+    private static void productCoreLifecycleRequiresTheExactLiveGeneration() throws Exception {
+        Method parser = RuntimeControlNative.class.getDeclaredMethod(
+                "parseStatus", String[].class, int.class);
+        parser.setAccessible(true);
+        String[] readyValues = {
+                "0", "42", "1", "0", "0", "1", "1", "1",
+                "product-core", "product_core.api/1.0.0@abcd1234",
+                "9258530f3804a152578ce11cc7c8a1e9eab88ed0", "", "1", "1"
+        };
+        RuntimeControlNative.Status ready = (RuntimeControlNative.Status) parser.invoke(
+                null, (Object) readyValues, 0);
+        check(ProductCoreLifecycle.isReady(42L,
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", ready),
+                "the exact live core-only Product Core generation is ready");
+
+        readyValues[1] = "41";
+        RuntimeControlNative.Status stale = (RuntimeControlNative.Status) parser.invoke(
+                null, (Object) readyValues, 0);
+        check(!ProductCoreLifecycle.isReady(42L,
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", stale),
+                "a status from another generation is not ready");
+
+        readyValues[1] = "42";
+        readyValues[3] = "1";
+        RuntimeControlNative.Status adapter = (RuntimeControlNative.Status) parser.invoke(
+                null, (Object) readyValues, 0);
+        check(!ProductCoreLifecycle.isReady(42L,
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", adapter),
+                "SAKAMOTO-172 does not promote an Adapter generation to core-only ready");
+        check(ProductCoreLifecycle.canRetryConnection(false, true, 0, 24),
+                "a live sidecar gets a bounded retry after its first not-ready reply");
+        check(!ProductCoreLifecycle.canRetryConnection(true, true, 0, 24),
+                "STOP cancels Product Core connection retries");
+        check(!ProductCoreLifecycle.canRetryConnection(false, false, 0, 24),
+                "an exited sidecar is never retried as a live generation");
+        check(!ProductCoreLifecycle.canRetryConnection(false, true, 24, 24),
+                "Product Core connection retries remain bounded");
+        RuntimeSnapshot running = RuntimeSnapshot.runningCoreOnly(RuntimeProfile.ROOT,
+                "vpp-runtime-health/v1", ready.vppRevision, ready.artifactId,
+                "arm64-v8a", 4242L, 42L);
+        check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(running.adapterReadiness),
+                "core-only running state keeps the Adapter unavailable");
+        check(running.displayText().contains("Protection: not running"),
+                "visible runtime status says protection is not running");
     }
 
     private static void applicationSubjectIdentityIsCompleteUidOnly() {

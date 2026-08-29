@@ -143,6 +143,14 @@ public final class RuntimeSnapshot {
                 health, "", "", true, pid, generation, System.currentTimeMillis());
     }
 
+    public static RuntimeSnapshot runningCoreOnly(RuntimeProfile profile, String protocol,
+                                                  String version, String artifact, String abi,
+                                                  long pid, long generation) {
+        return new RuntimeSnapshot(STATE_RUNNING, profile, protocol, version, artifact, abi,
+                "ok", ADAPTER_UNAVAILABLE, "", "", true, pid, generation,
+                System.currentTimeMillis());
+    }
+
     public static RuntimeSnapshot stopping(RuntimeSnapshot current) {
         return new RuntimeSnapshot(STATE_STOPPING, current.profile, current.protocol,
                 current.version, current.artifact, current.abi, "stopping", "", "", true,
@@ -209,6 +217,7 @@ public final class RuntimeSnapshot {
                 .append("\nProfile: ").append(profile.displayName)
                 .append("\nCore health: ").append(coreHealth.isEmpty() ? "unknown" : coreHealth)
                 .append("\nAdapter: ").append(adapterReadiness)
+                .append("\nProtection: not running")
                 .append("\nVersion: ").append(version.isEmpty() ? "unknown" : version)
                 .append("\nABI: ").append(abi.isEmpty() ? "unknown" : abi)
                 .append("\nArtifact: ").append(artifact.isEmpty() ? "unknown" : artifact);
