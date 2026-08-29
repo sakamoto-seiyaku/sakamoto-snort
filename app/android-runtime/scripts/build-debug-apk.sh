@@ -13,6 +13,8 @@ pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 plugin_name="product_core_plugin.so"
+expected_vpp_patch_series_count=15
+expected_vpp_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
 default_stage_dir="$repo_root/build-output/android-vpp-runtime/stage"
 default_version_state="$repo_root/build-output/android-vpp-runtime/version-code"
 product_stage_cleanup_dir=""
@@ -225,6 +227,8 @@ build_native_stage() {
   local -a runtime_matches
   local source_head
   local source_status
+  local vpp_patch_series_count
+  local vpp_patch_series_sha256
   local artifact_description
   local rust_dynamic
   local jni_dynamic
@@ -261,6 +265,16 @@ build_native_stage() {
   require_stage_manifest_line "libraries=lib"
   require_stage_manifest_line "headers=include"
   require_stage_manifest_line "hostTools=host-tools"
+  vpp_patch_series_count="$(sed -n 's/^patchSeriesCount=//p' "$stage_manifest")"
+  vpp_patch_series_sha256="$(sed -n 's/^patchSeriesSha256=//p' "$stage_manifest")"
+  [[ "$vpp_patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
+    die "VPP stage manifest has an invalid patch series count"
+  [[ "$vpp_patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+    die "VPP stage manifest has an invalid patch series hash"
+  [[ "$vpp_patch_series_count" == "$expected_vpp_patch_series_count" ]] || \
+    die "VPP stage manifest has an unexpected patch series count"
+  [[ "$vpp_patch_series_sha256" == "$expected_vpp_patch_series_sha256" ]] || \
+    die "VPP stage manifest has an unexpected patch series hash"
   while IFS= read -r -d '' stage_path; do
     case "${stage_path,,}" in
       *poc*|*experiment*|*fixture*|*nfqueue*|*hev*|*sucre*)
@@ -561,6 +575,8 @@ schema=sakamoto-android-product-stage/v1
 abi=arm64-v8a
 androidApi=$android_api
 vppRevision=$expected_revision
+vppPatchSeriesCount=$vpp_patch_series_count
+vppPatchSeriesSha256=$vpp_patch_series_sha256
 vppBinary=lib/arm64-v8a/libvpp_runtime.so
 productCore=lib/arm64-v8a/libsakamoto_product_core.so
 runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so
@@ -651,6 +667,8 @@ build_apk_only() {
   local product_stage
   local product_marker
   local product_manifest
+  local vpp_patch_series_count
+  local vpp_patch_series_sha256
   local native_dir
   local plugin_source
   local stage_path
@@ -730,6 +748,16 @@ build_apk_only() {
   require_product_manifest_line "abi=arm64-v8a"
   require_product_manifest_line "androidApi=$android_api"
   require_product_manifest_line "vppRevision=$expected_revision"
+  vpp_patch_series_count="$(sed -n 's/^vppPatchSeriesCount=//p' "$product_manifest")"
+  vpp_patch_series_sha256="$(sed -n 's/^vppPatchSeriesSha256=//p' "$product_manifest")"
+  [[ "$vpp_patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
+    die "product stage manifest has an invalid VPP patch series count"
+  [[ "$vpp_patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+    die "product stage manifest has an invalid VPP patch series hash"
+  [[ "$vpp_patch_series_count" == "$expected_vpp_patch_series_count" ]] || \
+    die "product stage manifest has an unexpected VPP patch series count"
+  [[ "$vpp_patch_series_sha256" == "$expected_vpp_patch_series_sha256" ]] || \
+    die "product stage manifest has an unexpected VPP patch series hash"
   require_product_manifest_line "vppBinary=lib/arm64-v8a/libvpp_runtime.so"
   require_product_manifest_line "productCore=lib/arm64-v8a/libsakamoto_product_core.so"
   require_product_manifest_line "runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so"

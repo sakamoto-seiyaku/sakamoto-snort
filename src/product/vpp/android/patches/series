@@ -12,3 +12,4 @@
 0012-vnet-android-bzero.patch
 0013-vnet-android-sfdp-timer-field.patch
 0014-vpp-android-thread-affinity.patch
+0015-vppinfra-android-mempolicy-guard.patch

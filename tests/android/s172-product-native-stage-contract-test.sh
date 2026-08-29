@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_script="$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
 pinned_revision="$(tr -d '[:space:]' < "$repo_root/src/product/vpp/pinned-vpp-revision.txt")"
+expected_patch_series_count=15
+expected_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
 
 # The test accepts only caller-supplied clean product inputs. The VPP stage is
 # the sole source for generated headers, host tools, and runtime libraries; no
@@ -114,6 +116,8 @@ test -f "$stage_manifest"
 [[ ! -L "$stage_manifest" ]]
 grep -Fxq 'schema=sakamoto-android-vpp-stage/v1' "$stage_manifest"
 grep -Fxq "revision=$pinned_revision" "$stage_manifest"
+grep -Fxq "patchSeriesCount=$expected_patch_series_count" "$stage_manifest"
+grep -Fxq "patchSeriesSha256=$expected_patch_series_sha256" "$stage_manifest"
 grep -Fxq 'api=31' "$stage_manifest"
 grep -Fxq 'abi=arm64-v8a' "$stage_manifest"
 grep -Fxq 'binary=bin/vpp' "$stage_manifest"

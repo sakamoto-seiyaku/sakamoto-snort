@@ -5,6 +5,8 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 stage_script="$repo_root/src/product/vpp/android/build-stage.sh"
 pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 pinned_revision="$(tr -d '[:space:]' < "$pin_file")"
+expected_patch_series_count=15
+expected_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
 source_dir="${SAKAMOTO_S172_VPP_SOURCE_DIR:-/tmp/sakamoto-172-vpp-official.6CoCcd/source-git}"
 ndk_root="${SAKAMOTO_S172_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 python_path="${SAKAMOTO_S172_VPP_PYTHONPATH:-/home/js/android/lineage/external/ply/ply}"
@@ -145,6 +147,8 @@ grep -Fxq 'sakamoto-android-vpp-stage/v1' "$marker" || \
 [[ -f "$manifest" ]] || fail "stage manifest is missing"
 grep -Fxq 'schema=sakamoto-android-vpp-stage/v1' "$manifest"
 grep -Fxq "revision=$pinned_revision" "$manifest"
+grep -Fxq "patchSeriesCount=$expected_patch_series_count" "$manifest"
+grep -Fxq "patchSeriesSha256=$expected_patch_series_sha256" "$manifest"
 grep -Fxq 'api=31' "$manifest"
 grep -Fxq 'abi=arm64-v8a' "$manifest"
 grep -Fxq 'binary=bin/vpp' "$manifest"

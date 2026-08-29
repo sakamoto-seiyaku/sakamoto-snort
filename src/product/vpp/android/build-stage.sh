@@ -13,6 +13,8 @@ python_path="${SAKAMOTO_S172_VPP_PYTHONPATH:-/home/js/android/lineage/external/p
 cmake_bin="${SAKAMOTO_S172_CMAKE:-cmake}"
 build_jobs="${SAKAMOTO_S172_BUILD_JOBS:-2}"
 stage_marker_value="sakamoto-android-vpp-stage/v1"
+expected_patch_series_count=15
+expected_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
 python_bin="$(command -v python3 2>/dev/null || true)"
 flock_bin="$(command -v flock 2>/dev/null || true)"
 
@@ -146,6 +148,16 @@ SAKAMOTO_S172_ANDROID_ABI="$android_abi" \
     --profile android-api31-arm64 \
     --source-dir "$source_dir" \
     --work-dir "$patched_source" >"$work_dir/profile.log"
+patch_series_count="$(sed -n 's/^patchSeriesCount=//p' "$work_dir/profile.log")"
+patch_series_sha256="$(sed -n 's/^patchSeriesSha256=//p' "$work_dir/profile.log")"
+[[ "$patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
+  die "profile did not report a valid patch series count"
+[[ "$patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+  die "profile did not report a valid patch series hash"
+[[ "$patch_series_count" == "$expected_patch_series_count" ]] || \
+  die "profile patch series count does not match the product allowlist"
+[[ "$patch_series_sha256" == "$expected_patch_series_sha256" ]] || \
+  die "profile patch series hash does not match the product allowlist"
 
 export PYTHONPATH="$python_path${PYTHONPATH:+:$PYTHONPATH}"
 build_dir="$work_dir/build"
@@ -255,7 +267,8 @@ for header in \
 done
 
 elf_is_aarch64() {
-  "$llvm_readelf" -h "$1" 2>/dev/null | grep -Eq '^[[:space:]]*Machine:[[:space:]]+AArch64$'
+  "$llvm_readelf" -h "$1" 2>/dev/null |
+    grep -Eq '^[[:space:]]*Machine:[[:space:]]+AArch64([[:space:]]|$)'
 }
 
 elf_needed_is_allowed() {
@@ -307,6 +320,8 @@ printf '%s\n' "$stage_marker_value" >"$candidate_dir/.sakamoto-android-vpp-stage
 cat >"$candidate_dir/android-vpp-stage.properties" <<EOF
 schema=$stage_marker_value
 revision=$source_head
+patchSeriesCount=$patch_series_count
+patchSeriesSha256=$patch_series_sha256
 api=$android_api
 abi=$android_abi
 binary=bin/vpp
@@ -388,6 +403,8 @@ fi
 
 echo "stage=$stage_dir"
 echo "revision=$source_head"
+echo "patchSeriesCount=$patch_series_count"
+echo "patchSeriesSha256=$patch_series_sha256"
 echo "api=$android_api"
 echo "abi=$android_abi"
 echo "GREEN: direct NDK API 31/arm64-v8a built and staged vpp/vapiclient closure"

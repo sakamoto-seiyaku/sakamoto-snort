@@ -81,15 +81,32 @@ git -C "$work_dir" checkout --detach "$pinned_revision" >/dev/null
 
 series="$patch_dir/series"
 [[ -f "$series" ]] || die "profile patch series is missing"
+patch_series_count=0
+patch_manifest_lines=""
 while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
   [[ -n "$patch_name" ]] || continue
   [[ "$patch_name" != \#* ]] || continue
   patch_file="$patch_dir/$patch_name"
   [[ -f "$patch_file" ]] || die "profile patch is missing: $patch_name"
+  patch_digest="$(sha256sum "$patch_file" | awk '{print $1}')"
+  [[ "$patch_digest" =~ ^[[:xdigit:]]{64}$ ]] || \
+    die "profile patch hash is invalid: $patch_name"
+  patch_series_count=$((patch_series_count + 1))
+  patch_manifest_lines+="$patch_name $patch_digest"$'\n'
   git -C "$work_dir" apply --check --whitespace=error "$patch_file" || \
     die "profile patch does not apply: $patch_name"
   git -C "$work_dir" apply --whitespace=error "$patch_file"
 done < "$series"
+[[ "$patch_series_count" -gt 0 ]] || die "profile patch series is empty"
+series_digest="$(sha256sum "$series" | awk '{print $1}')"
+patch_series_sha256="$(
+  {
+    printf 'series %s\n' "$series_digest"
+    printf '%s' "$patch_manifest_lines"
+  } | sha256sum | awk '{print $1}'
+)"
+[[ "$patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+  die "profile patch series hash is invalid"
 
 [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$source_head" ]] || \
   die "source checkout changed while applying profile"
@@ -97,7 +114,7 @@ done < "$series"
   die "source checkout changed while applying profile"
 [[ "$(git -C "$work_dir" rev-parse HEAD)" == "$pinned_revision" ]] || \
   die "profile changed the pinned revision"
-expected_changed_files=$'src/CMakeLists.txt\nsrc/svm/CMakeLists.txt\nsrc/svm/message_queue.c\nsrc/svm/message_queue.h\nsrc/svm/queue.c\nsrc/svm/ssvm.c\nsrc/svm/svm.c\nsrc/svm/svm_android_file.c\nsrc/svm/svm_android_file.h\nsrc/vlib/CMakeLists.txt\nsrc/vlib/threads.c\nsrc/vlibmemory/memclnt_api.c\nsrc/vlibmemory/vlib_api_cli.c\nsrc/vnet/session/session.c\nsrc/vnet/sfdp/timer/timer.h\nsrc/vpp-api/vapi/CMakeLists.txt\nsrc/vpp/vnet/main.c\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
+expected_changed_files=$'src/CMakeLists.txt\nsrc/svm/CMakeLists.txt\nsrc/svm/message_queue.c\nsrc/svm/message_queue.h\nsrc/svm/queue.c\nsrc/svm/ssvm.c\nsrc/svm/svm.c\nsrc/svm/svm_android_file.c\nsrc/svm/svm_android_file.h\nsrc/vlib/CMakeLists.txt\nsrc/vlib/threads.c\nsrc/vlibmemory/memclnt_api.c\nsrc/vlibmemory/vlib_api_cli.c\nsrc/vnet/session/session.c\nsrc/vnet/sfdp/timer/timer.h\nsrc/vpp-api/vapi/CMakeLists.txt\nsrc/vpp/vnet/main.c\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/linux/mem.c\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
 changed_files="$(
   git -C "$work_dir" diff --name-only
   git -C "$work_dir" ls-files --others --exclude-standard
@@ -108,5 +125,7 @@ changed_files="$(printf '%s\n' "$changed_files" | LC_ALL=C sort)"
 
 echo "profile=android-api31-arm64"
 echo "sourceHead=$source_head"
+echo "patchSeriesCount=$patch_series_count"
+echo "patchSeriesSha256=$patch_series_sha256"
 echo "workDir=$work_dir"
 echo "patchedPaths=$expected_changed_files"

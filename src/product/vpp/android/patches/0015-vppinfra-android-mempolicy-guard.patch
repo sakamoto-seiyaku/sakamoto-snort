@@ -1,0 +1,91 @@
+diff --git a/src/vppinfra/linux/mem.c b/src/vppinfra/linux/mem.c
+--- a/src/vppinfra/linux/mem.c
++++ b/src/vppinfra/linux/mem.c
+@@ -93,9 +93,12 @@ clib_mem_main_init (void)
+ {
+-  unsigned long nodemask = 0, maxnode = CLIB_MAX_NUMAS;
+-  unsigned long flags = MPOL_F_MEMS_ALLOWED;
+   clib_mem_main_t *mm = &clib_mem_main;
+   long sysconf_page_size;
+   uword page_size;
+-  void *va = 0;
+-  int fd, mode;
++  int fd;
++#if !defined(__ANDROID__)
++  unsigned long nodemask = 0, maxnode = CLIB_MAX_NUMAS;
++  unsigned long flags = MPOL_F_MEMS_ALLOWED;
++  void *va = 0;
++  int mode;
++#endif
+ 
+@@ -123,7 +126,12 @@ clib_mem_main_init (void)
+   mm->log2_sys_default_hugepage_sz = mm->log2_default_hugepage_sz;
+ 
+   /* numa nodes */
++#if defined(__ANDROID__)
++  /* Android app sandboxes expose one logical memory node. */
++  mm->numa_node_bitmap = 1;
++#else
+   if (syscall (__NR_get_mempolicy, &mode, &nodemask, maxnode, va, flags) == 0)
+     mm->numa_node_bitmap = nodemask;
++#endif
+ }
+ 
+@@ -456,6 +464,16 @@ clib_mem_get_page_stats (void *start, clib_mem_page_sz_t log2_page_size,
+ 			 uword n_pages, clib_mem_page_stats_t * stats)
+ {
++#if defined(__ANDROID__)
++  /* Android does not expose NUMA page placement to app processes. */
++  (void) start;
++  log2_page_size = clib_mem_log2_page_size_validate (log2_page_size);
++  clib_memset (stats, 0, sizeof (clib_mem_page_stats_t));
++  stats->total = n_pages;
++  stats->log2_page_sz = log2_page_size;
++  stats->unknown = n_pages;
++  return;
++#else
+   int *status = 0;
+   uword i;
+   void **ptr = 0;
+   unsigned char incore;
+@@ -508,4 +526,5 @@
+ done:
+   vec_free (status);
+   vec_free (ptr);
++#endif
+ }
+@@ -558,4 +577,10 @@ clib_mem_set_numa_affinity (u8 numa_node, int force)
+ {
++#if defined(__ANDROID__)
++  /* Android has no app-visible NUMA policy syscall; ordinary mmap is enough. */
++  (void) numa_node;
++  (void) force;
++  return 0;
++#else
+   clib_mem_main_t *mm = &clib_mem_main;
+   clib_bitmap_t *bmp = 0;
+   int rv;
+@@ -590,3 +615,4 @@ clib_mem_set_numa_affinity (u8 numa_node, int force)
+ 
+   return 0;
++#endif
+ }
+@@ -594,13 +620,18 @@ clib_mem_set_default_numa_affinity ()
+ __clib_export int
+ clib_mem_set_default_numa_affinity ()
+ {
++#if defined(__ANDROID__)
++  /* Keep the public API a successful no-op on Android. */
++  return 0;
++#else
+   clib_mem_main_t *mm = &clib_mem_main;
+ 
+   if (syscall (__NR_set_mempolicy, MPOL_DEFAULT, 0, 0))
+     {
+       vec_reset_length (mm->error);
+       mm->error = clib_error_return_unix (mm->error, (char *) __func__);
+       return CLIB_MEM_ERROR;
+     }
+   return 0;
++#endif
+ }
