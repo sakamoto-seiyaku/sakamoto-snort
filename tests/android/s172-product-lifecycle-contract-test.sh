@@ -130,6 +130,23 @@ if "Character.isISOControl(character)" not in safe_path:
     raise AssertionError("nativeLibraryDir config path must reject control characters")
 if "nativeLibraryDir is not absolute" not in safe_path:
     raise AssertionError("nativeLibraryDir config path must remain absolute")
+if "Character.isISOControl(character) || character == '#' || character == ':'" not in safe_path:
+    raise AssertionError("nativeLibraryDir config path must reject VPP path-list separators")
+if safe_path.count("character == ':'") != 1:
+    raise AssertionError("nativeLibraryDir config path must reject exactly the colon separator")
+if "if (character == '\\\\' || character == '{' || character == '}')" not in safe_path:
+    raise AssertionError("nativeLibraryDir config path must retain backslash/brace escaping")
+if "return escaped.append('}').toString();" not in safe_path:
+    raise AssertionError("nativeLibraryDir config path must render one brace-delimited token")
+# A normal Android native-library path contains only safe token characters and
+# must remain the exact value inside the braces written to the VPP config.
+android_native_dir = "/data/app/~~abc/com.sakamoto.snort-xyz/lib/arm64-v8a"
+if any(character in android_native_dir for character in "\x00\n\r#:"):
+    raise AssertionError("normal Android nativeLibraryDir fixture is unexpectedly unsafe")
+if 'plugins {\\n  path " + nativeLibraryPath' not in prepare:
+    raise AssertionError("VPP config must use the guarded native-library path value")
+if 'escaped.append(character);' not in safe_path:
+    raise AssertionError("normal Android nativeLibraryDir must remain unchanged in the token")
 if "setExecutable" in start or "chmod" in start or "filesDir" in start:
     raise AssertionError("Product Core must not chmod/copy plugin into a writable profile")
 stdin_index = start.index("process.getOutputStream().close()")

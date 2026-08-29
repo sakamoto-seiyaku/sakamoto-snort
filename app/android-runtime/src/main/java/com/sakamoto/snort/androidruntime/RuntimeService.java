@@ -1035,8 +1035,9 @@ public final class RuntimeService extends VpnService {
      * VPP's {@code %s} parser accepts a brace-delimited token and removes
      * backslash escapes, so paths remain a single value even if a platform
      * ever supplies whitespace or a config delimiter. Control characters
-     * are rejected because they cannot safely occur in a line-oriented
-     * startup configuration.
+     * and colons are rejected because they cannot safely occur in a
+     * line-oriented startup configuration or VPP's colon-separated plugin
+     * path list.
      */
     private static String safeVppConfigPath(File path) throws IOException {
         if (path == null) {
@@ -1050,7 +1051,7 @@ public final class RuntimeService extends VpnService {
         escaped.append('{');
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);
-            if (Character.isISOControl(character) || character == '#') {
+            if (Character.isISOControl(character) || character == '#' || character == ':') {
                 throw new IOException(
                         "nativeLibraryDir contains an unsafe startup-config character");
             }
