@@ -671,11 +671,13 @@ build_apk_only() {
   local ndk_root="${SAKAMOTO_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
   local llvm_readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
   local java_bin
+  local java_launcher
   local javac_bin
   local javap_bin
   local java_home
   local jimage_bin
   local jar_bin
+  local tool_path
   local python_bin
   local zip_bin
   local apk_output_input="${SAKAMOTO_ANDROID_APK_OUTPUT_DIR:-$repo_root/app/android-runtime/build/outputs}"
@@ -703,6 +705,7 @@ build_apk_only() {
   local unzip_bin
   local -a java_sources
   local -a class_files
+  local -a d8_outputs
   local -a d8_command
 
   [[ -n "$product_stage_input" ]] || \
@@ -789,19 +792,32 @@ build_apk_only() {
   [[ -f "$debug_key" && -f "$debug_cert" ]] || \
     die "Android debug signing key or certificate is missing"
   [[ -x "$llvm_readelf" ]] || die "Android LLVM readelf is missing: $llvm_readelf"
-  java_bin="$(command -v java 2>/dev/null || true)"
-  javac_bin="$(command -v javac 2>/dev/null || true)"
-  javap_bin="$(command -v javap 2>/dev/null || true)"
-  jimage_bin="$(command -v jimage 2>/dev/null || true)"
-  jar_bin="$(command -v jar 2>/dev/null || true)"
+  # Resolve every JDK tool from the java.home reported by one selected Java.
+  # Mixing PATH entries can silently pair different JDK releases and make the
+  # compiler/API-surface check non-reproducible.
+  java_launcher="$(command -v java 2>/dev/null || true)"
   python_bin="$(command -v python3 2>/dev/null || true)"
   zip_bin="$(command -v zip 2>/dev/null || true)"
   unzip_bin="$(command -v unzip 2>/dev/null || true)"
-  [[ -n "$java_bin" && -x "$java_bin" ]] || die "Java runtime is missing"
-  [[ -n "$javac_bin" && -x "$javac_bin" ]] || die "Java compiler is missing"
-  [[ -n "$javap_bin" && -x "$javap_bin" ]] || die "Java class-file inspector is missing"
-  [[ -n "$jimage_bin" && -x "$jimage_bin" ]] || die "JDK jimage tool is missing"
-  [[ -n "$jar_bin" && -x "$jar_bin" ]] || die "JDK jar tool is missing"
+  [[ -n "$java_launcher" && -x "$java_launcher" ]] || die "Java runtime is missing from PATH"
+  java_launcher="$(realpath -e -- "$java_launcher" 2>/dev/null)" || \
+    die "Java runtime path cannot be resolved: $java_launcher"
+  java_home="$($java_launcher -XshowSettings:properties -version 2>&1 \
+    | sed -n 's/^[[:space:]]*java.home = //p' | head -n 1)"
+  [[ -n "$java_home" ]] || die "selected Java did not report java.home"
+  java_home="$(realpath -e -- "$java_home" 2>/dev/null)" || \
+    die "reported java.home cannot be resolved: $java_home"
+  java_bin="$java_home/bin/java"
+  javac_bin="$java_home/bin/javac"
+  javap_bin="$java_home/bin/javap"
+  jimage_bin="$java_home/bin/jimage"
+  jar_bin="$java_home/bin/jar"
+  [[ "$(realpath -e -- "$java_bin" 2>/dev/null)" == "$java_launcher" ]] || \
+    die "selected Java is not from reported java.home: $java_home"
+  for tool_path in "$java_bin" "$javac_bin" "$javap_bin" "$jimage_bin" "$jar_bin"; do
+    [[ -x "$tool_path" ]] || \
+      die "JDK tool is missing from java.home (PATH lookup disabled): $tool_path"
+  done
   [[ -n "$python_bin" && -x "$python_bin" ]] || die "Python3 is required for the Android Process API gate"
   [[ -n "$zip_bin" && -x "$zip_bin" ]] || die "zip is required to package native libraries"
   [[ -n "$unzip_bin" && -x "$unzip_bin" ]] || die "unzip is required for the final Android Process API gate"
@@ -847,10 +863,8 @@ build_apk_only() {
 
   mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
   ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"
-  java_home="$($java_bin -XshowSettings:properties -version 2>&1 \
-    | sed -n 's/^[[:space:]]*java.home = //p' | head -n 1)"
-  [[ -n "$java_home" && -f "$java_home/lib/modules" ]] || \
-    die "JDK module image is missing: $java_home/lib/modules"
+  [[ -f "$java_home/lib/modules" ]] || \
+    die "JDK module image is missing from java.home: $java_home/lib/modules"
   javac_support_dir="$apk_build_dir/javac-support"
   javac_support_jar="$apk_build_dir/javac-support.jar"
   mkdir -p "$javac_support_dir"
@@ -905,7 +919,12 @@ build_apk_only() {
   fi
   "${d8_command[@]}" --lib "$android_jar" --min-api "$android_api" \
     --output "$dex_dir" "${class_files[@]}"
-  [[ -f "$dex_dir/classes.dex" ]] || die "D8 did not produce classes.dex"
+  mapfile -t d8_outputs < <(find "$dex_dir" -mindepth 1 -maxdepth 1 -print | sort)
+  if ((${#d8_outputs[@]} != 1)) || [[ "${d8_outputs[0]:-}" != "$dex_dir/classes.dex" ]]; then
+    printf 'D8 output must contain only classes.dex; found:\n' >&2
+    printf '  %s\n' "${d8_outputs[@]:-<none>}" >&2
+    die "D8 produced unexpected classes*.dex output"
+  fi
   "$python_bin" "$dex_guard" "$dex_dir/classes.dex"
 
   "$aapt2" link -o "$apk_build_dir/unsigned.apk" \
