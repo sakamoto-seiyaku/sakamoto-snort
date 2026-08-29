@@ -30,6 +30,37 @@ if(NOT EXISTS "${VPP_APIGEN}" OR NOT EXISTS "${VPP_VAPI_C_GEN}"
    OR NOT EXISTS "${VPP_VAPI_CPP_GEN}")
   message(FATAL_ERROR "VPP API generators are required; do not use a hand-written API header")
 endif()
+
+if(ANDROID)
+  # Android's dynamic linker does not make the VPP runtime's TLS state
+  # available to an unlisted plugin dependency. Require the exact staged
+  # runtime library directory so the plugin records its VPP closure directly.
+  set(VPP_LIBRARY_DIR "${VPP_LIBRARY_DIR}" CACHE PATH
+    "Exact staged VPP shared-library directory")
+  if(NOT VPP_LIBRARY_DIR OR NOT IS_ABSOLUTE "${VPP_LIBRARY_DIR}")
+    message(FATAL_ERROR
+      "Android product builds require an absolute VPP_LIBRARY_DIR")
+  endif()
+  if(NOT IS_DIRECTORY "${VPP_LIBRARY_DIR}")
+    message(FATAL_ERROR
+      "Android product VPP_LIBRARY_DIR does not exist: ${VPP_LIBRARY_DIR}")
+  endif()
+  set(SAKAMOTO_PRODUCT_VPP_LINK_LIBRARIES)
+  foreach(vpp_library IN ITEMS
+      libvlibapi.so
+      libvlibmemory.so
+      libvlib.so
+      libvppinfra.so)
+    set(vpp_library_path "${VPP_LIBRARY_DIR}/${vpp_library}")
+    if(NOT EXISTS "${vpp_library_path}" OR
+       IS_DIRECTORY "${vpp_library_path}")
+      message(FATAL_ERROR
+        "Android product VPP library is missing: ${vpp_library_path}")
+    endif()
+    list(APPEND SAKAMOTO_PRODUCT_VPP_LINK_LIBRARIES
+      "${vpp_library_path}")
+  endforeach()
+endif()
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pinned-vpp-revision.txt"
   SAKAMOTO_PRODUCT_VPP_REVISION LIMIT_COUNT 1)
 string(STRIP "${SAKAMOTO_PRODUCT_VPP_REVISION}"
@@ -134,6 +165,11 @@ target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
 )
 if(ANDROID)
+  # Keep these as direct NEEDED entries. bionic must load the VPP libraries
+  # before resolving the plugin's vlibapi TLS symbol (my_api_main).
+  target_link_libraries(product_core_plugin
+    "-Wl,--no-as-needed"
+    ${SAKAMOTO_PRODUCT_VPP_LINK_LIBRARIES})
   # VPP resolves plugin entry points from the host process at load time. The
   # Android NDK toolchain adds --no-undefined by default, which is correct for
   # app libraries but rejects this loadable VPP plugin's host-owned symbols.

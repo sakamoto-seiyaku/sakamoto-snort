@@ -443,14 +443,19 @@ build_native_stage() {
     "-DVPP_APIGEN=$vpp_apigen"
     "-DVPP_VAPI_C_GEN=$vapi_c_gen"
     "-DVPP_VAPI_CPP_GEN=$vapi_cpp_gen"
+    "-DVPP_LIBRARY_DIR=$stage_dir/lib"
     -DCMAKE_INSTALL_LIBDIR=lib
     "-DCMAKE_INSTALL_PREFIX=$plugin_install"
   )
   cmake "${cmake_args[@]}"
-  cmake --build "$plugin_build" --target install --parallel "${SAKAMOTO_ANDROID_BUILD_JOBS:-2}"
-  plugin_source="$plugin_install/lib/vpp_plugins/$plugin_build_name"
+  # VPP_LIBRARY_DIR is the exact runtime library input directory, not the
+  # temporary CMake install destination. Build the plugin in place so the
+  # clean input stage is never mutated by an install rule.
+  cmake --build "$plugin_build" --target product_core_plugin \
+    --parallel "${SAKAMOTO_ANDROID_BUILD_JOBS:-2}"
+  plugin_source="$plugin_build/lib/vpp_plugins/$plugin_build_name"
   [[ -f "$plugin_source" ]] || \
-    die "production VPP plugin was not installed: $plugin_source"
+    die "production VPP plugin was not built: $plugin_source"
   generated_vapi_header="$plugin_build/CMakeFiles/vpp-api/vapi/product_core.api.vapi.h"
   [[ -f "$generated_vapi_header" ]] || \
     die "production generated VAPI header was not produced"

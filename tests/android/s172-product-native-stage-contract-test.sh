@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_script="$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
+plugin_cmake="$repo_root/src/product/vpp/CMakeLists.txt"
 pinned_revision="$(tr -d '[:space:]' < "$repo_root/src/product/vpp/pinned-vpp-revision.txt")"
 expected_patch_series_count=15
 expected_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
@@ -20,6 +21,10 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/sakamoto-172-native-stage.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
 
 test -x "$build_script"
+test -f "$plugin_cmake"
+grep -Fq -- 'VPP_LIBRARY_DIR' "$plugin_cmake"
+grep -Fq -- '--no-as-needed' "$plugin_cmake"
+grep -Fq -- 'target_link_libraries(product_core_plugin' "$plugin_cmake"
 grep -Fq 'flock' "$build_script"
 grep -Fq 'RENAME_NOREPLACE = 1' "$build_script"
 grep -Fq 'RENAME_EXCHANGE = 2' "$build_script"
@@ -155,6 +160,8 @@ done
 test -f "$ndk_root/build/cmake/android.toolchain.cmake"
 test -x "$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
 test -x "$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+llvm_readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+test -x "$llvm_readelf"
 source_dir="$(realpath -e "$source_input" 2>/dev/null)"
 case "${source_dir,,}" in
   *experiments*|*poc*)
@@ -164,6 +171,35 @@ case "${source_dir,,}" in
 esac
 test "$(git -C "$source_dir" rev-parse HEAD)" = "$pinned_revision"
 test -z "$(git -C "$source_dir" status --porcelain)"
+
+# Android product plugin configuration must fail closed when the exact VPP
+# library directory is absent. This reaches the real CMake boundary with all
+# other production inputs valid; it is not a string-only assertion.
+missing_library_dir="$work_dir/missing-vpp-library"
+missing_cmake_build="$work_dir/missing-vpp-library-build"
+missing_library_log="$work_dir/missing-vpp-library.log"
+if cmake \
+    -S "$repo_root/src/product/vpp" \
+    -B "$missing_cmake_build" \
+    -G Ninja \
+    "-DCMAKE_TOOLCHAIN_FILE=$ndk_root/build/cmake/android.toolchain.cmake" \
+    -DANDROID_ABI=arm64-v8a \
+    -DANDROID_PLATFORM=android-31 \
+    "-DVPP_SOURCE_DIR=$source_dir" \
+    "-DVPP_INCLUDE_DIR=$vpp_include" \
+    "-DVPP_APIGEN=$host_tools/vppapigen" \
+    "-DVPP_VAPI_C_GEN=$host_tools/vapi_c_gen.py" \
+    "-DVPP_VAPI_CPP_GEN=$host_tools/vapi_cpp_gen.py" \
+    "-DVPP_LIBRARY_DIR=$missing_library_dir" \
+    >"$missing_library_log" 2>&1; then
+  echo "plugin CMake accepted a missing VPP_LIBRARY_DIR" >&2
+  exit 1
+fi
+grep -Fq 'VPP_LIBRARY_DIR' "$missing_library_log" || {
+  echo "missing VPP_LIBRARY_DIR rejection was not explicit" >&2
+  sed -n '1,120p' "$missing_library_log" >&2
+  exit 1
+}
 
 while IFS= read -r -d '' link; do
   target="$(readlink -- "$link")"
@@ -330,6 +366,24 @@ readelf -d "$rust_library" | grep -F 'libvapiclient.so' >/dev/null
 readelf -Ws "$rust_library" | grep -F 'vapi_ctx_alloc' >/dev/null
 readelf -d "$jni_library" | grep -F 'libsakamoto_product_core.so' >/dev/null
 readelf -Ws "$plugin" | grep -F 'product_core_init' >/dev/null
+
+plugin_dynamic="$work_dir/product-plugin.dynamic"
+"$llvm_readelf" -d "$plugin" >"$plugin_dynamic"
+for library in \
+  libvlibapi.so \
+  libvlibmemory.so \
+  libvlib.so \
+  libvppinfra.so; do
+  grep -Fq "Shared library: [$library]" "$plugin_dynamic" || {
+    echo "product plugin is missing direct DT_NEEDED: $library" >&2
+    sed -n '/NEEDED/p' "$plugin_dynamic" >&2
+    exit 1
+  }
+done
+if grep -Fq 'DF_1_GLOBAL' "$plugin_dynamic"; then
+  echo "product plugin must not request DF_1_GLOBAL" >&2
+  exit 1
+fi
 
 test "$(find "$native_dir" -maxdepth 1 -type f -name '*.so' | wc -l)" -eq 12
 poc_paths="$(cd "$product_stage" && find . -mindepth 1 -print)"
