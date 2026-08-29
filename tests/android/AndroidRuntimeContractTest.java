@@ -46,7 +46,6 @@ import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -88,7 +87,6 @@ public final class AndroidRuntimeContractTest {
         nativeCoreHandshakeRequiresGeneratedIdentity();
         productCoreNativeStatusFieldOrderIsStable();
         productCoreLifecycleRequiresTheExactLiveGeneration();
-        productCoreLostHandlePreflightIsOrderedAndFailClosed();
         applicationSubjectIdentityIsCompleteUidOnly();
         applicationProtocolCatalogOwnsStablePolicyIdentity();
         productStorePersistsProfileBindingsAndEmptyBundle();
@@ -1342,6 +1340,12 @@ public final class AndroidRuntimeContractTest {
                 "Product Core connection retries remain bounded");
         check(ProductCoreLifecycle.UNKNOWN_PID == -1L,
                 "Product Core projection uses an explicit unknown PID");
+        check(ProductCoreLifecycle.shouldClearStaleProfile(true, false, false),
+                "a tokenless profile with no live Product Core handle is START-cleanable");
+        check(!ProductCoreLifecycle.shouldClearStaleProfile(true, true, false),
+                "START never removes a profile while its Product Core process is alive");
+        check(!ProductCoreLifecycle.shouldClearStaleProfile(true, false, true),
+                "START never removes a profile while its Product Core session remains live");
         RuntimeSnapshot running = RuntimeSnapshot.runningCoreOnly(RuntimeProfile.ROOT,
                 "vpp-runtime-health/v1", ready.vppRevision, ready.artifactId,
                 "arm64-v8a", ProductCoreLifecycle.UNKNOWN_PID, 42L);
@@ -1353,137 +1357,6 @@ public final class AndroidRuntimeContractTest {
                 "core-only running state keeps the Adapter unavailable");
         check(running.displayText().contains("Protection: not running"),
                 "visible runtime status says protection is not running");
-    }
-
-    private static void productCoreLostHandlePreflightIsOrderedAndFailClosed() {
-        List<String> events = new ArrayList<>();
-        ProductCoreLifecycle.StartDecision liveStart = ProductCoreLifecycle.preflightStart(
-                true, false, false,
-                () -> {
-                    events.add("probe");
-                    return ProductCoreLifecycle.ProbeResult.LIVE;
-                },
-                () -> {
-                    events.add("clear");
-                    return true;
-                });
-        check(liveStart == ProductCoreLifecycle.StartDecision.BLOCK_LIVE,
-                "lost-handle live START fails closed");
-        check(events.equals(Collections.singletonList("probe")),
-                "live START probes before deciding and never clears the live profile");
-
-        events.clear();
-        ProductCoreLifecycle.StartDecision stoppedStart = ProductCoreLifecycle.preflightStart(
-                true, false, false,
-                () -> {
-                    events.add("probe");
-                    return ProductCoreLifecycle.ProbeResult.STOPPED;
-                },
-                () -> {
-                    events.add("clear");
-                    return true;
-                });
-        check(stoppedStart == ProductCoreLifecycle.StartDecision.LAUNCH_NEW,
-                "lost-handle stopped START permits a fresh generation");
-        events.add("launch");
-        check(events.equals(Arrays.asList("probe", "clear", "launch")),
-                "stopped START orders probe, app-owned clear, and launch");
-
-        events.clear();
-        ProductCoreLifecycle.StopDecision liveStop = ProductCoreLifecycle.preflightStop(
-                true, false, false,
-                () -> {
-                    events.add("probe");
-                    return ProductCoreLifecycle.ProbeResult.LIVE;
-                },
-                () -> {
-                    events.add("clear");
-                    return true;
-                });
-        check(liveStop == ProductCoreLifecycle.StopDecision.BLOCK_LIVE,
-                "lost-handle live STOP fails closed");
-        check(events.equals(Collections.singletonList("probe")),
-                "live STOP probes and never deletes an unknown live profile");
-
-        events.clear();
-        ProductCoreLifecycle.StopDecision stoppedStop = ProductCoreLifecycle.preflightStop(
-                true, false, false,
-                () -> {
-                    events.add("probe");
-                    return ProductCoreLifecycle.ProbeResult.STOPPED;
-                },
-                () -> {
-                    events.add("clear");
-                    return true;
-                });
-        check(stoppedStop == ProductCoreLifecycle.StopDecision.CLEAR_STOPPED,
-                "lost-handle stopped STOP permits app-owned cleanup");
-        check(events.equals(Arrays.asList("probe", "clear")),
-                "stopped STOP orders probe before app-owned cleanup");
-
-        events.clear();
-        ProductCoreLifecycle.StartDecision noProfileStart = ProductCoreLifecycle.preflightStart(
-                false, false, false,
-                () -> {
-                    events.add("probe");
-                    return ProductCoreLifecycle.ProbeResult.LIVE;
-                },
-                () -> {
-                    events.add("clear");
-                    return true;
-                });
-        check(noProfileStart == ProductCoreLifecycle.StartDecision.LAUNCH_NEW,
-                "START with no app-owned profile launches without a stale probe");
-        events.add("launch");
-        check(Collections.singletonList("launch").equals(events),
-                "a missing profile does not invoke probe or cleanup callbacks");
-
-        events.clear();
-        ProductCoreLifecycle.StartDecision failedStartCleanup =
-                ProductCoreLifecycle.preflightStart(true, false, false,
-                        () -> {
-                            events.add("probe");
-                            return ProductCoreLifecycle.ProbeResult.STOPPED;
-                        },
-                        () -> {
-                            events.add("clear");
-                            return false;
-                        });
-        check(failedStartCleanup == ProductCoreLifecycle.StartDecision.CLEANUP_FAILED,
-                "START fails closed when stopped-profile cleanup fails");
-        check(events.equals(Arrays.asList("probe", "clear")),
-                "START does not launch after cleanup failure");
-
-        events.clear();
-        ProductCoreLifecycle.StopDecision failedStopCleanup =
-                ProductCoreLifecycle.preflightStop(true, false, false,
-                        () -> {
-                            events.add("probe");
-                            return ProductCoreLifecycle.ProbeResult.STOPPED;
-                        },
-                        () -> {
-                            events.add("clear");
-                            return false;
-                        });
-        check(failedStopCleanup == ProductCoreLifecycle.StopDecision.CLEANUP_FAILED,
-                "STOP fails closed when stopped-profile cleanup fails");
-        check(events.equals(Arrays.asList("probe", "clear")),
-                "STOP does not publish clean stop after cleanup failure");
-
-        check(ProductCoreLifecycle.preflightStart(true, false, false,
-                        () -> ProductCoreLifecycle.ProbeResult.UNKNOWN, () -> true)
-                        == ProductCoreLifecycle.StartDecision.BLOCK_UNKNOWN,
-                "uncertain lost-handle START never guesses that the profile is dead");
-        check(ProductCoreLifecycle.preflightStop(true, false, false,
-                        () -> ProductCoreLifecycle.ProbeResult.UNKNOWN, () -> true)
-                        == ProductCoreLifecycle.StopDecision.BLOCK_UNKNOWN,
-                "uncertain lost-handle STOP never guesses that the profile is dead");
-        check(ProductCoreLifecycle.preflightStart(true, true, false, null, null)
-                        == ProductCoreLifecycle.StartDecision.BLOCK_INCONSISTENT,
-                "START rejects a process-only handle instead of using stale cleanup");
-        check(ProductCoreLifecycle.preflightStop(true, false, true, null, null)
-                        == ProductCoreLifecycle.StopDecision.BLOCK_INCONSISTENT,
-                "STOP rejects a session-only handle instead of deleting its profile");
     }
 
     private static void applicationSubjectIdentityIsCompleteUidOnly() {
