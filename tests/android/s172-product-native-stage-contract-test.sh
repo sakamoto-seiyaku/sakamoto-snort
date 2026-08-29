@@ -246,6 +246,7 @@ bash "$build_script" --stage-only > "$output"
 grep -Fxq 'mode=stage-only' "$output"
 grep -Fxq "productStage=$product_stage" "$output"
 grep -Fxq "productCore=$product_stage/lib/arm64-v8a/libsakamoto_product_core.so" "$output"
+grep -Fxq "runtimeControl=$product_stage/lib/arm64-v8a/libsakamoto_runtime_control.so" "$output"
 grep -Fxq "productPlugin=$product_stage/plugins/arm64-v8a/product_core_plugin.so" "$output"
 
 # A second publication exercises the owned-stage exchange path. The old
@@ -264,6 +265,7 @@ native_dir="$product_stage/lib/arm64-v8a"
 plugin_dir="$product_stage/plugins/arm64-v8a"
 generated_dir="$product_stage/generated-vapi/vapi"
 rust_library="$native_dir/libsakamoto_product_core.so"
+jni_library="$native_dir/libsakamoto_runtime_control.so"
 plugin="$plugin_dir/product_core_plugin.so"
 
 test -f "$manifest"
@@ -275,6 +277,7 @@ grep -Fxq 'sakamoto-android-product-stage/v1' "$product_marker"
 test -f "$native_dir/libvpp_runtime.so"
 test -f "$native_dir/libvapiclient.so"
 test -f "$rust_library"
+test -f "$jni_library"
 test -f "$plugin"
 test -f "$generated_dir/product_core.api.vapi.h"
 cmp "$stage_dir/bin/vpp" "$native_dir/libvpp_runtime.so"
@@ -295,6 +298,7 @@ grep -Fxq 'schema=sakamoto-android-product-stage/v1' "$manifest"
 grep -Fxq 'abi=arm64-v8a' "$manifest"
 grep -Fxq 'vppBinary=lib/arm64-v8a/libvpp_runtime.so' "$manifest"
 grep -Fxq 'productCore=lib/arm64-v8a/libsakamoto_product_core.so' "$manifest"
+grep -Fxq 'runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so' "$manifest"
 grep -Fxq 'productPlugin=plugins/arm64-v8a/product_core_plugin.so' "$manifest"
 grep -Fxq 'generatedVapi=generated-vapi/vapi/product_core.api.vapi.h' "$manifest"
 grep -Fxq 'bridgeSource=src/product/native/sakamoto_product_vapi.c' "$manifest"
@@ -321,6 +325,7 @@ done < <(find "$product_stage" -type l -print0)
 
 readelf -d "$rust_library" | grep -F 'libvapiclient.so' >/dev/null
 readelf -Ws "$rust_library" | grep -F 'vapi_ctx_alloc' >/dev/null
+readelf -d "$jni_library" | grep -F 'libsakamoto_product_core.so' >/dev/null
 readelf -Ws "$plugin" | grep -F 'product_core_init' >/dev/null
 
 test "$(find "$plugin_dir" -maxdepth 1 -type f -name '*.so' | wc -l)" -eq 1

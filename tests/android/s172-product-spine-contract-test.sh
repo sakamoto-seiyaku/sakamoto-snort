@@ -53,12 +53,14 @@ pinned_revision="$(tr -d '[:space:]' < "$repo_root/src/product/vpp/pinned-vpp-re
 grep -Fxq "vppRevision=$pinned_revision" "$product_manifest"
 grep -Fxq 'vppBinary=lib/arm64-v8a/libvpp_runtime.so' "$product_manifest"
 grep -Fxq 'productCore=lib/arm64-v8a/libsakamoto_product_core.so' "$product_manifest"
+grep -Fxq 'runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so' "$product_manifest"
 grep -Fxq 'productPlugin=plugins/arm64-v8a/product_core_plugin.so' "$product_manifest"
 
 native_dir="$product_stage/lib/arm64-v8a"
 for library in \
   libvpp_runtime.so \
   libsakamoto_product_core.so \
+  libsakamoto_runtime_control.so \
   libsvm.so \
   libvapiclient.so \
   libvlib.so \
@@ -116,6 +118,7 @@ grep -Fq 'product_core_init' < <("$llvm_readelf" -Ws "$work_dir/plugin.so")
 for library in \
   libvpp_runtime.so \
   libsakamoto_product_core.so \
+  libsakamoto_runtime_control.so \
   libsvm.so \
   libvapiclient.so \
   libvlib.so \
@@ -126,13 +129,19 @@ for library in \
   libvppinfra.so; do
   grep -Fxq "lib/arm64-v8a/$library" <<<"$apk_entries"
 done
+unzip -p "$apk" lib/arm64-v8a/libsakamoto_runtime_control.so \
+  >"$work_dir/libsakamoto_runtime_control.so"
+"$llvm_readelf" -d "$work_dir/libsakamoto_runtime_control.so" \
+  | grep -F 'libsakamoto_product_core.so' >/dev/null
+"$llvm_readelf" -d "$native_dir/libsakamoto_runtime_control.so" \
+  | grep -F 'libsakamoto_product_core.so' >/dev/null
 native_entry_count=0
 while IFS= read -r entry; do
   case "$entry" in
     lib/arm64-v8a/*.so) native_entry_count=$((native_entry_count + 1)) ;;
   esac
 done <<<"$apk_entries"
-test "$native_entry_count" -eq 10
+test "$native_entry_count" -eq 11
 
 forbidden_entry=""
 while IFS= read -r entry; do

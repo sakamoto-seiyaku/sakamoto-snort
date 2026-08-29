@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::os::raw::c_uint;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::{Mutex, OnceLock};
@@ -195,6 +196,19 @@ pub enum ProductError {
     GenerationRetired { generation: u64 },
 }
 
+impl ProductError {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::AbiVersion { .. } | Self::ApiVersion { .. } => ErrorCode::ProtocolMismatch,
+            Self::Native { code, .. } => *code,
+            Self::PathContainsNul => ErrorCode::InvalidArgument,
+            Self::GenerationActive { .. } | Self::GenerationRetired { .. } => {
+                ErrorCode::StaleHandle
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct GenerationLedger {
     active: Option<u64>,
@@ -243,6 +257,15 @@ pub struct ProductCore {
     session: Option<NonNull<ProductSession>>,
     generation: u64,
     _not_send_or_sync: PhantomData<*mut ()>,
+}
+
+/// Opaque owner exposed by the small C facade below.
+///
+/// The pointer is deliberately the only thing crossing the native boundary;
+/// ProductCore and its generated-VAPI session remain Rust-owned.
+#[repr(C)]
+pub struct ProductCoreHandle {
+    core: ProductCore,
 }
 
 impl ProductCore {
@@ -367,6 +390,238 @@ impl Drop for ProductCore {
             let _ = unsafe { sakamoto_product_session_destroy(session.as_ptr()) };
             self.retire_generation();
         }
+    }
+}
+
+fn copy_status_text(destination: &mut [u8], value: &str) {
+    let bytes = value.as_bytes();
+    let count = bytes.len().min(destination.len().saturating_sub(1));
+    if count != 0 {
+        destination[..count].copy_from_slice(&bytes[..count]);
+    }
+    if !destination.is_empty() {
+        destination[count] = 0;
+    }
+}
+
+fn status_to_ffi(status: &Status) -> ProductStatus {
+    let mut value = ProductStatus::zeroed();
+    value.abi_version = status.abi_version;
+    value.api_version = status.api_version;
+    value.status_code = status.code.raw();
+    value.generation = status.generation;
+    value.core_ready = u32::from(status.core_ready);
+    value.adapter_available = u32::from(status.adapter_available);
+    value.protection_running = u32::from(status.protection_running);
+    value.plugin_loaded = u32::from(status.plugin_loaded);
+    value.vapi_handle_live = u32::from(status.vapi_handle_live);
+    value.generation_live = u32::from(status.generation_live);
+    copy_status_text(&mut value.artifact_id, &status.artifact_id);
+    copy_status_text(&mut value.api_identity, &status.api_identity);
+    copy_status_text(&mut value.vpp_revision, &status.vpp_revision);
+    copy_status_text(&mut value.error_detail, &status.error_detail);
+    value
+}
+
+fn error_status(error: &ProductError, generation: u64) -> ProductStatus {
+    match error {
+        ProductError::Native { status, .. } => status_to_ffi(status),
+        ProductError::AbiVersion { actual, .. } => {
+            let mut status = Status::empty(generation);
+            status.abi_version = *actual;
+            status.code = ErrorCode::ProtocolMismatch;
+            status.error_detail = "Product Core ABI version mismatch".to_owned();
+            status_to_ffi(&status)
+        }
+        ProductError::ApiVersion { actual, .. } => {
+            let mut status = Status::empty(generation);
+            status.api_version = *actual;
+            status.code = ErrorCode::ProtocolMismatch;
+            status.error_detail = "Product Core API version mismatch".to_owned();
+            status_to_ffi(&status)
+        }
+        ProductError::PathContainsNul => {
+            let mut status = Status::empty(generation);
+            status.code = ErrorCode::InvalidArgument;
+            status.error_detail = "API socket path is invalid".to_owned();
+            status_to_ffi(&status)
+        }
+        ProductError::GenerationActive { generation: active } => {
+            let mut status = Status::empty(generation);
+            status.code = ErrorCode::StaleHandle;
+            status.generation = *active;
+            status.error_detail = "another Product Core generation is active".to_owned();
+            status_to_ffi(&status)
+        }
+        ProductError::GenerationRetired {
+            generation: retired,
+        } => {
+            let mut status = Status::empty(generation);
+            status.code = ErrorCode::StaleHandle;
+            status.generation = *retired;
+            status.error_detail = "Product Core generation has been retired".to_owned();
+            status_to_ffi(&status)
+        }
+    }
+}
+
+fn invalid_status(generation: u64, detail: &str) -> ProductStatus {
+    let mut status = Status::empty(generation);
+    status.code = ErrorCode::InvalidArgument;
+    status.error_detail = detail.to_owned();
+    status_to_ffi(&status)
+}
+
+fn panic_status(generation: u64) -> ProductStatus {
+    let mut status = Status::empty(generation);
+    status.code = ErrorCode::InternalError;
+    status.error_detail = "Product Core facade panicked".to_owned();
+    status_to_ffi(&status)
+}
+
+fn socket_path(bytes: ProductBytes) -> Result<String, ProductError> {
+    if bytes.data.is_null() || bytes.length == 0 {
+        return Err(ProductError::PathContainsNul);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(bytes.data, bytes.length as usize) };
+    if bytes.contains(&0) {
+        return Err(ProductError::PathContainsNul);
+    }
+    let value = std::str::from_utf8(bytes).map_err(|_| ProductError::PathContainsNul)?;
+    Ok(value.to_owned())
+}
+
+/// Connect a Rust-owned ProductCore and return its first status.
+///
+/// The function catches Rust panics so no unwinding crosses JNI/C. The caller
+/// must pass valid writable output pointers and must later destroy a returned
+/// handle exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_connect(
+    api_socket: ProductBytes,
+    generation: u64,
+    out_handle: *mut *mut ProductCoreHandle,
+    out_status: *mut ProductStatus,
+) -> c_uint {
+    if out_handle.is_null() || out_status.is_null() {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    unsafe {
+        *out_handle = std::ptr::null_mut();
+        *out_status = invalid_status(generation, "invalid Product Core connect arguments");
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let path = match socket_path(api_socket) {
+            Ok(path) => path,
+            Err(error) => {
+                let status = error_status(&error, generation);
+                unsafe { *out_status = status };
+                return Err(error);
+            }
+        };
+        match ProductCore::connect(Path::new(&path), generation) {
+            Ok((core, status)) => {
+                unsafe {
+                    *out_status = status_to_ffi(&status);
+                    *out_handle = Box::into_raw(Box::new(ProductCoreHandle { core }));
+                }
+                Ok(())
+            }
+            Err(error) => {
+                unsafe { *out_status = error_status(&error, generation) };
+                Err(error)
+            }
+        }
+    }));
+    match result {
+        Ok(Ok(())) => ErrorCode::Ok.raw(),
+        Ok(Err(error)) => error_status(&error, generation).status_code,
+        Err(_) => {
+            unsafe { *out_status = panic_status(generation) };
+            ErrorCode::InternalError.raw()
+        }
+    }
+}
+
+/// Query the same Rust-owned ProductCore session for a generation.
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_query(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    out_status: *mut ProductStatus,
+) -> c_uint {
+    if out_status.is_null() {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    unsafe { *out_status = invalid_status(generation, "invalid Product Core query arguments") };
+    if handle.is_null() {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let handle = unsafe { &mut *handle };
+        if handle.core.generation() != generation {
+            let mut status = Status::empty(generation);
+            status.code = ErrorCode::StaleHandle;
+            status.error_detail = "Product Core generation does not match the handle".to_owned();
+            unsafe { *out_status = status_to_ffi(&status) };
+            return Err(ErrorCode::StaleHandle);
+        }
+        match handle.core.query() {
+            Ok(status) => {
+                unsafe { *out_status = status_to_ffi(&status) };
+                Ok(())
+            }
+            Err(error) => {
+                unsafe { *out_status = error_status(&error, generation) };
+                Err(error.code())
+            }
+        }
+    }));
+    match result {
+        Ok(Ok(())) => ErrorCode::Ok.raw(),
+        Ok(Err(code)) => code.raw(),
+        Err(_) => {
+            unsafe { *out_status = panic_status(generation) };
+            ErrorCode::InternalError.raw()
+        }
+    }
+}
+
+/// Disconnect a ProductCore session while retaining its tombstone handle.
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_disconnect(
+    handle: *mut ProductCoreHandle,
+) -> c_uint {
+    if handle.is_null() {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let handle = unsafe { &mut *handle };
+        handle.core.disconnect().map_err(|error| error.code())
+    }));
+    match result {
+        Ok(Ok(())) => ErrorCode::Ok.raw(),
+        Ok(Err(code)) => code.raw(),
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
+
+/// Destroy a handle after disconnecting it. Drop remains the final safety net.
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_destroy(handle: *mut ProductCoreHandle) -> c_uint {
+    if handle.is_null() {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let mut handle = unsafe { Box::from_raw(handle) };
+        let code = handle.core.disconnect().map_err(|error| error.code());
+        drop(handle);
+        code
+    }));
+    match result {
+        Ok(Ok(())) => ErrorCode::Ok.raw(),
+        Ok(Err(code)) => code.raw(),
+        Err(_) => ErrorCode::InternalError.raw(),
     }
 }
 

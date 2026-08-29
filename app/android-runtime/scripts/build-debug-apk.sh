@@ -11,6 +11,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
+jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 plugin_name="product_core_plugin.so"
 default_stage_dir="$repo_root/build-output/android-vpp-runtime/stage"
 default_version_state="$repo_root/build-output/android-vpp-runtime/version-code"
@@ -82,6 +83,7 @@ expected_revision="$(tr -d '[:space:]' < "$pin_file")"
   die "pinned VPP revision is not a 40-character commit"
 
 [[ -f "$bridge_source" ]] || die "production generated-VAPI bridge source is missing"
+[[ -f "$jni_source" ]] || die "Product Core JNI bridge source is missing"
 
 # Both directories are required as a pair for the APK-build boundary. In
 # particular, an absent generated directory must not cause a fallback to a
@@ -211,6 +213,8 @@ build_native_stage() {
   local generated_vapi_header
   local cargo_target_dir
   local rust_library
+  local jni_library
+  local android_sysroot
   local native_dir
   local plugin_dir
   local generated_dir
@@ -223,6 +227,7 @@ build_native_stage() {
   local source_status
   local artifact_description
   local rust_dynamic
+  local jni_dynamic
   local plugin_symbols
   local -a cmake_args
 
@@ -481,6 +486,17 @@ build_native_stage() {
       die "product stage omitted VPP runtime library: $runtime_library"
   done
   install -m 0755 "$rust_library" "$native_dir/libsakamoto_product_core.so"
+  android_sysroot="$ndk_root/toolchains/llvm/prebuilt/$ndk_host/sysroot/usr/include"
+  jni_library="$native_dir/libsakamoto_runtime_control.so"
+  "$android_clang" \
+    -std=c11 -Wall -Wextra -Werror -fPIC -shared \
+    -I "$android_sysroot" \
+    -I "$repo_root/src/product/include" \
+    "$jni_source" \
+    -L "$native_dir" -Wl,--no-as-needed \
+    -Wl,-soname,libsakamoto_runtime_control.so \
+    -lsakamoto_product_core -o "$jni_library"
+  [[ -f "$jni_library" ]] || die "Product Core JNI library was not produced"
   install -m 0755 "$plugin_source" "$plugin_dir/$plugin_name"
   install -m 0644 "$generated_vapi_header" "$generated_dir/product_core.api.vapi.h"
 
@@ -503,6 +519,10 @@ build_native_stage() {
     die "cannot inspect Product Core dynamic dependencies"
   [[ "$rust_dynamic" == *'libvapiclient.so'* ]] || \
     die "Product Core does not link the staged libvapiclient.so"
+  jni_dynamic="$($llvm_readelf -d "$jni_library" 2>/dev/null)" || \
+    die "cannot inspect Product Core JNI dynamic dependencies"
+  [[ "$jni_dynamic" == *'libsakamoto_product_core.so'* ]] || \
+    die "Product Core JNI bridge does not link libsakamoto_product_core.so"
   plugin_symbols="$($llvm_readelf -Ws "$plugin_dir/$plugin_name" 2>/dev/null)" || \
     die "cannot inspect product plugin symbols"
   [[ "$plugin_symbols" == *product_core_init* ]] || \
@@ -543,6 +563,7 @@ androidApi=$android_api
 vppRevision=$expected_revision
 vppBinary=lib/arm64-v8a/libvpp_runtime.so
 productCore=lib/arm64-v8a/libsakamoto_product_core.so
+runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so
 productPlugin=plugins/arm64-v8a/$plugin_name
 generatedVapi=generated-vapi/vapi/product_core.api.vapi.h
 bridgeSource=src/product/native/sakamoto_product_vapi.c
@@ -621,6 +642,7 @@ PY
   echo "versionCode=$version_code"
   echo "vppRevision=$expected_revision"
   echo "productCore=$product_stage/lib/arm64-v8a/libsakamoto_product_core.so"
+  echo "runtimeControl=$product_stage/lib/arm64-v8a/libsakamoto_runtime_control.so"
   echo "productPlugin=$product_stage/plugins/arm64-v8a/$plugin_name"
 }
 
@@ -665,6 +687,7 @@ build_apk_only() {
   local signed_apk
   local artifact
   local elf_header
+  local jni_dynamic
   local native_library
   local -a java_sources
   local -a class_files
@@ -699,6 +722,7 @@ build_apk_only() {
   require_product_manifest_line "vppRevision=$expected_revision"
   require_product_manifest_line "vppBinary=lib/arm64-v8a/libvpp_runtime.so"
   require_product_manifest_line "productCore=lib/arm64-v8a/libsakamoto_product_core.so"
+  require_product_manifest_line "runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so"
   require_product_manifest_line "productPlugin=plugins/arm64-v8a/$plugin_name"
   require_product_manifest_line "generatedVapi=generated-vapi/vapi/product_core.api.vapi.h"
   require_product_manifest_line "bridgeSource=src/product/native/sakamoto_product_vapi.c"
@@ -728,6 +752,7 @@ build_apk_only() {
   for native_library in \
     libvpp_runtime.so \
     libsakamoto_product_core.so \
+    libsakamoto_runtime_control.so \
     libsvm.so \
     libvapiclient.so \
     libvlib.so \
@@ -766,6 +791,10 @@ build_apk_only() {
     die "product stage plugin is not AArch64"
   [[ "$($llvm_readelf -Ws "$plugin_source" 2>/dev/null)" == *product_core_init* ]] || \
     die "product stage plugin init symbol is missing"
+  jni_dynamic="$($llvm_readelf -d "$native_dir/libsakamoto_runtime_control.so" 2>/dev/null)" || \
+    die "cannot inspect Product Core JNI dynamic dependencies"
+  [[ "$jni_dynamic" == *'libsakamoto_product_core.so'* ]] || \
+    die "Product Core JNI bridge does not link libsakamoto_product_core.so"
 
   apk_output_dir="$(realpath -m -- "$apk_output_input" 2>/dev/null)" || \
     die "APK output directory cannot be canonicalized: $apk_output_input"
@@ -826,6 +855,7 @@ build_apk_only() {
   for native_library in \
     libvpp_runtime.so \
     libsakamoto_product_core.so \
+    libsakamoto_runtime_control.so \
     libsvm.so \
     libvapiclient.so \
     libvlib.so \

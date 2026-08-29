@@ -43,6 +43,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -83,6 +84,7 @@ public final class AndroidRuntimeContractTest {
         stoppedSnapshotRetainsRecentFailure();
         coreHealthDoesNotClaimAdapterReadiness();
         nativeCoreHandshakeRequiresGeneratedIdentity();
+        productCoreNativeStatusFieldOrderIsStable();
         applicationSubjectIdentityIsCompleteUidOnly();
         applicationProtocolCatalogOwnsStablePolicyIdentity();
         productStorePersistsProfileBindingsAndEmptyBundle();
@@ -1266,6 +1268,35 @@ public final class AndroidRuntimeContractTest {
         check(!VppHealthHandshake.evaluate(RuntimeProfile.ROOT, "vpp-runtime-health/v1",
                 "v26.02-release", "arm64-v8a", "sha256:core", "wrong-api", status).isReady(),
                 "generated API identity mismatch fails closed");
+    }
+
+    private static void productCoreNativeStatusFieldOrderIsStable() throws Exception {
+        String[] nativeValues = {
+                "7", "41", "1", "0", "1", "1", "1", "0",
+                "artifact-41", "product_core.api/1.0.0@abcd1234", "v26.02-release",
+                "query failed", "2", "3"
+        };
+        Method parser = RuntimeControlNative.class.getDeclaredMethod(
+                "parseStatus", String[].class, int.class);
+        parser.setAccessible(true);
+        RuntimeControlNative.Status status = (RuntimeControlNative.Status) parser.invoke(
+                null, (Object) nativeValues, 0);
+        check(status.code == 7, "native status code stays in the code field");
+        check(status.abiVersion == 2, "native ABI version stays in the ABI field");
+        check(status.apiVersion == 3, "native API version stays in the API field");
+        check(status.generation == 41L, "native generation stays in the generation field");
+        check(status.coreReady && !status.adapterAvailable,
+                "native readiness flags preserve their order");
+        check(status.pluginLoaded && status.vapiHandleLive && !status.generationLive,
+                "native session flags preserve their order");
+        check("artifact-41".equals(status.artifactId),
+                "native artifact identity stays in the artifact field");
+        check("product_core.api/1.0.0@abcd1234".equals(status.apiIdentity),
+                "native API identity stays in the API identity field");
+        check("v26.02-release".equals(status.vppRevision),
+                "native VPP revision stays in the revision field");
+        check("query failed".equals(status.errorDetail),
+                "native error detail stays in the error field");
     }
 
     private static void applicationSubjectIdentityIsCompleteUidOnly() {
