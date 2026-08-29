@@ -665,7 +665,7 @@ build_apk_only() {
   local zipalign="${SAKAMOTO_ANDROID_ZIPALIGN:-/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/zipalign}"
   local apksigner_jar="${SAKAMOTO_ANDROID_APKSIGNER_JAR:-/home/js/android/lineage/prebuilts/sdk/tools/linux/lib/apksigner.jar}"
   local d8_jar="${SAKAMOTO_ANDROID_D8_JAR:-}"
-  local dex_guard="$repo_root/app/android-runtime/scripts/check-android-process-api.py"
+  local dex_guard="$repo_root/app/android-runtime/scripts/check-android-process-api.sh"
   local debug_key="${SAKAMOTO_ANDROID_DEBUG_KEY:-/home/js/android/lineage/build/make/target/product/security/testkey.pk8}"
   local debug_cert="${SAKAMOTO_ANDROID_DEBUG_CERT:-/home/js/android/lineage/build/make/target/product/security/testkey.x509.pem}"
   local ndk_root="${SAKAMOTO_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
@@ -678,7 +678,6 @@ build_apk_only() {
   local jimage_bin
   local jar_bin
   local tool_path
-  local python_bin
   local zip_bin
   local apk_output_input="${SAKAMOTO_ANDROID_APK_OUTPUT_DIR:-$repo_root/app/android-runtime/build/outputs}"
   local apk_output_dir
@@ -702,7 +701,6 @@ build_apk_only() {
   local javac_support_jar
   local javac_bootclasspath
   local class_dump
-  local unzip_bin
   local -a java_sources
   local -a class_files
   local -a d8_outputs
@@ -784,7 +782,7 @@ build_apk_only() {
     die "product stage plugin is missing or not a regular file"
 
   [[ -f "$android_jar" ]] || die "Android SDK android.jar is missing: $android_jar"
-  [[ -f "$dex_guard" ]] || die "Android Process API gate is missing: $dex_guard"
+  [[ -x "$dex_guard" ]] || die "Android Process API gate is missing or not executable: $dex_guard"
   [[ -x "$aapt2" ]] || die "Android aapt2 is missing: $aapt2"
   [[ -x "$d8" ]] || die "Android d8 is missing: $d8"
   [[ -x "$zipalign" ]] || die "Android zipalign is missing: $zipalign"
@@ -796,9 +794,7 @@ build_apk_only() {
   # Mixing PATH entries can silently pair different JDK releases and make the
   # compiler/API-surface check non-reproducible.
   java_launcher="$(command -v java 2>/dev/null || true)"
-  python_bin="$(command -v python3 2>/dev/null || true)"
   zip_bin="$(command -v zip 2>/dev/null || true)"
-  unzip_bin="$(command -v unzip 2>/dev/null || true)"
   [[ -n "$java_launcher" && -x "$java_launcher" ]] || die "Java runtime is missing from PATH"
   java_launcher="$(realpath -e -- "$java_launcher" 2>/dev/null)" || \
     die "Java runtime path cannot be resolved: $java_launcher"
@@ -818,9 +814,7 @@ build_apk_only() {
     [[ -x "$tool_path" ]] || \
       die "JDK tool is missing from java.home (PATH lookup disabled): $tool_path"
   done
-  [[ -n "$python_bin" && -x "$python_bin" ]] || die "Python3 is required for the Android Process API gate"
   [[ -n "$zip_bin" && -x "$zip_bin" ]] || die "zip is required to package native libraries"
-  [[ -n "$unzip_bin" && -x "$unzip_bin" ]] || die "unzip is required for the final Android Process API gate"
   if [[ -z "$d8_jar" ]]; then
     d8_jar="${d8%/bin/d8}/lib/d8.jar"
   fi
@@ -925,7 +919,7 @@ build_apk_only() {
     printf '  %s\n' "${d8_outputs[@]:-<none>}" >&2
     die "D8 produced unexpected classes*.dex output"
   fi
-  "$python_bin" "$dex_guard" "$dex_dir/classes.dex"
+  "$dex_guard" "$dex_dir/classes.dex"
 
   "$aapt2" link -o "$apk_build_dir/unsigned.apk" \
     --manifest "$repo_root/app/android-runtime/src/main/AndroidManifest.xml" \
@@ -973,12 +967,10 @@ build_apk_only() {
     --key "$debug_key" --cert "$debug_cert" --out "$signed_apk" "$aligned_apk"
   "$java_bin" -jar "$apksigner_jar" verify --verbose --print-certs "$signed_apk" \
     >/dev/null
-  # Re-read the DEX from the signed APK: the release artifact, rather than
-  # only the pre-packaging classes.dex, is the final API-surface gate.
-  "$unzip_bin" -p "$signed_apk" classes.dex >"$apk_build_dir/final-classes.dex" || \
-    die "signed APK does not contain classes.dex"
-  "$python_bin" "$dex_guard" "$apk_build_dir/final-classes.dex"
-  "$python_bin" "$dex_guard" "$signed_apk"
+  # Re-read every classes*.dex entry from the signed APK through the official
+  # artifact gate.  The gate enforces this product's single-dex policy and
+  # rejects duplicate ZIP entries before invoking AOSP dexdump.
+  "$dex_guard" "$signed_apk"
   mv -fT -- "$signed_apk" "$apk_output_path"
   [[ -f "$apk_output_path" ]] || die "APK atomic publication did not produce an output"
   rm -rf -- "$apk_build_dir"
