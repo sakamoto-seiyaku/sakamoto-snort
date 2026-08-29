@@ -824,10 +824,9 @@ public final class RuntimeService extends VpnService {
                     || !nativeDir.equals(plugin.getParentFile())) {
                 throw new IOException("Product Core native payload is missing or outside nativeLibraryDir");
             }
-            prepareProductCoreProfile(profileRoot);
+            prepareProductCoreProfile(profileRoot, nativeDir);
 
-            ProcessBuilder builder = new ProcessBuilder(vpp.getPath(), "plugin_path",
-                    nativeDir.getPath(), "-c",
+            ProcessBuilder builder = new ProcessBuilder(vpp.getPath(), "-c",
                     new File(profileRoot, "startup.conf").getPath());
             File runtime = new File(profileRoot, "runtime");
             File svm = new File(profileRoot, "shm");
@@ -1006,10 +1005,11 @@ public final class RuntimeService extends VpnService {
         return value;
     }
 
-    private void prepareProductCoreProfile(File profile) throws IOException {
+    private void prepareProductCoreProfile(File profile, File nativeDir) throws IOException {
         File runtime = new File(profile, "runtime");
         File logs = new File(profile, "logs");
         File svm = new File(profile, "shm");
+        String nativeLibraryPath = safeVppConfigPath(nativeDir);
         if (!runtime.mkdirs() || !logs.mkdirs() || !svm.mkdirs()) {
             throw new IOException("unable to create generation-owned profile directories");
         }
@@ -1021,12 +1021,45 @@ public final class RuntimeService extends VpnService {
                 + "\n}\n\napi-segment {\n  prefix sakamoto-product-" + generation
                 + "\n}\n\nstatseg {\n  socket-name "
                 + new File(runtime, "statseg.sock").getPath() + "\n}\n\n"
-                + "plugins {\n  plugin default { disable }\n  plugin "
+                + "plugins {\n  path " + nativeLibraryPath
+                + "\n  plugin default { disable }\n  plugin "
                 + PRODUCT_PLUGIN_BINARY + " { enable }\n}\n";
         try (FileOutputStream output = new FileOutputStream(new File(profile, "startup.conf"))) {
             output.write(config.getBytes(StandardCharsets.UTF_8));
             output.getFD().sync();
         }
+    }
+
+    /**
+     * Render one trusted native-library directory as a VPP config token.
+     * VPP's {@code %s} parser accepts a brace-delimited token and removes
+     * backslash escapes, so paths remain a single value even if a platform
+     * ever supplies whitespace or a config delimiter. Control characters
+     * are rejected because they cannot safely occur in a line-oriented
+     * startup configuration.
+     */
+    private static String safeVppConfigPath(File path) throws IOException {
+        if (path == null) {
+            throw new IOException("nativeLibraryDir is absent");
+        }
+        String value = path.getPath();
+        if (value.isEmpty() || value.charAt(0) != '/') {
+            throw new IOException("nativeLibraryDir is not absolute");
+        }
+        StringBuilder escaped = new StringBuilder(value.length() + 2);
+        escaped.append('{');
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (Character.isISOControl(character) || character == '#') {
+                throw new IOException(
+                        "nativeLibraryDir contains an unsafe startup-config character");
+            }
+            if (character == '\\' || character == '{' || character == '}') {
+                escaped.append('\\');
+            }
+            escaped.append(character);
+        }
+        return escaped.append('}').toString();
     }
 
     private static boolean legacyCppRuntimeRetired() {
