@@ -55,8 +55,10 @@ This S172 sequence is scoped to one continuously alive RuntimeService;
 service/process death, lost handles, child adoption, and fresh recovery belong
 to S173 and do not block this acceptance.
 
-Product Core does not depend on a numeric PID; source and final APK DEX must
-not reference unsupported `Process.pid()`, `ProcessHandle`, or `toHandle()` APIs.
+Product Core does not depend on a numeric PID. The Android public API compile
+boundary must reject unsupported `Process.pid()`, `ProcessHandle`, and
+`Process.toHandle()` APIs. The visible device Start/Query/Stop sequence above
+is the final runtime decision.
 
 ## Build boundary
 

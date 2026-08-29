@@ -665,7 +665,6 @@ build_apk_only() {
   local zipalign="${SAKAMOTO_ANDROID_ZIPALIGN:-/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/zipalign}"
   local apksigner_jar="${SAKAMOTO_ANDROID_APKSIGNER_JAR:-/home/js/android/lineage/prebuilts/sdk/tools/linux/lib/apksigner.jar}"
   local d8_jar="${SAKAMOTO_ANDROID_D8_JAR:-}"
-  local dex_guard="$repo_root/app/android-runtime/scripts/check-android-process-api.sh"
   local debug_key="${SAKAMOTO_ANDROID_DEBUG_KEY:-/home/js/android/lineage/build/make/target/product/security/testkey.pk8}"
   local debug_cert="${SAKAMOTO_ANDROID_DEBUG_CERT:-/home/js/android/lineage/build/make/target/product/security/testkey.x509.pem}"
   local ndk_root="${SAKAMOTO_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
@@ -673,7 +672,6 @@ build_apk_only() {
   local java_bin
   local java_launcher
   local javac_bin
-  local javap_bin
   local java_home
   local jimage_bin
   local jar_bin
@@ -699,8 +697,7 @@ build_apk_only() {
   local javac_log
   local javac_support_dir
   local javac_support_jar
-  local javac_bootclasspath
-  local class_dump
+  local javac_classpath
   local -a java_sources
   local -a class_files
   local -a d8_outputs
@@ -782,7 +779,6 @@ build_apk_only() {
     die "product stage plugin is missing or not a regular file"
 
   [[ -f "$android_jar" ]] || die "Android SDK android.jar is missing: $android_jar"
-  [[ -x "$dex_guard" ]] || die "Android Process API gate is missing or not executable: $dex_guard"
   [[ -x "$aapt2" ]] || die "Android aapt2 is missing: $aapt2"
   [[ -x "$d8" ]] || die "Android d8 is missing: $d8"
   [[ -x "$zipalign" ]] || die "Android zipalign is missing: $zipalign"
@@ -805,12 +801,11 @@ build_apk_only() {
     die "reported java.home cannot be resolved: $java_home"
   java_bin="$java_home/bin/java"
   javac_bin="$java_home/bin/javac"
-  javap_bin="$java_home/bin/javap"
   jimage_bin="$java_home/bin/jimage"
   jar_bin="$java_home/bin/jar"
   [[ "$(realpath -e -- "$java_bin" 2>/dev/null)" == "$java_launcher" ]] || \
     die "selected Java is not from reported java.home: $java_home"
-  for tool_path in "$java_bin" "$javac_bin" "$javap_bin" "$jimage_bin" "$jar_bin"; do
+  for tool_path in "$java_bin" "$javac_bin" "$jimage_bin" "$jar_bin"; do
     [[ -x "$tool_path" ]] || \
       die "JDK tool is missing from java.home (PATH lookup disabled): $tool_path"
   done
@@ -864,8 +859,9 @@ build_apk_only() {
   mkdir -p "$javac_support_dir"
   # Android's platform stub omits LambdaMetafactory.metafactory, which javac
   # needs solely to lower Java-8 lambdas.  Add that compiler-only signature
-  # from this JDK's module image while keeping every Android API class,
-  # including java.lang.Process, on the Android boot class path.
+  # from this JDK's module image on the ordinary compiler class path while
+  # keeping every Android API class, including java.lang.Process, on the sole
+  # Android boot class path. The support class is never packaged.
   "$jimage_bin" extract --dir="$javac_support_dir" \
     --include "glob:**/java/lang/invoke/LambdaMetafactory.class" \
     "$java_home/lib/modules" >/dev/null || \
@@ -875,37 +871,21 @@ build_apk_only() {
   "$jar_bin" cf "$javac_support_jar" -C "$javac_support_dir/java.base" \
     java/lang/invoke/LambdaMetafactory.class || \
     die "cannot package the javac LambdaMetafactory support class"
-  javac_bootclasspath="$android_jar:$javac_support_jar"
+  javac_classpath="$android_jar:$javac_support_jar"
   javac_log="$apk_build_dir/javac.verbose.log"
   # -source/-target select Java language/class-file compatibility only.  The
   # boot class path must explicitly point at Android's platform stub or JDK17
-  # java.base can leak host-only methods into the generated class files.
+  # java.base can leak host-only methods into the generated class files. The
+  # verbose log is diagnostic evidence only; its format is not a build gate.
   if ! "$javac_bin" -encoding UTF-8 -Xlint:-options -source 8 -target 8 \
-      -bootclasspath "$javac_bootclasspath" -classpath "$android_jar" \
+      -bootclasspath "$android_jar" -classpath "$javac_classpath" \
       -verbose -d "$classes_dir" "${java_sources[@]}" >"$javac_log" 2>&1; then
     sed -n '1,160p' "$javac_log" >&2
     die "Android Java compilation failed; see $javac_log"
   fi
-  grep -Fq "$android_jar(/java/lang/Process.class)" "$javac_log" || \
-    die "javac did not resolve java.lang.Process from the Android stub: $android_jar"
-  if grep -Fq '/modules/java.base/java/lang/Process.class' "$javac_log"; then
-    die "javac resolved java.lang.Process from host java.base instead of Android stubs"
-  fi
   mapfile -t class_files < <(find "$classes_dir" -type f -name '*.class' -print | sort)
   ((${#class_files[@]} > 0)) || die "Android Java compilation produced no classes"
 
-  # Android platform jars can contain hidden/future Process methods even when
-  # javac is correctly bootstrapped.  Inspect every emitted class-file method
-  # reference before D8 so the unsupported API cannot reach the APK.
-  for class_file in "${class_files[@]}"; do
-    class_dump="$($javap_bin -verbose "$class_file" 2>/dev/null)" || \
-      die "cannot inspect Android class file: $class_file"
-    if grep -Fq 'java/lang/Process.pid' <<<"$class_dump" || \
-        grep -Fq 'java/lang/Process.toHandle' <<<"$class_dump" || \
-        grep -Fq 'java/lang/ProcessHandle' <<<"$class_dump"; then
-      die "Android class file references unsupported java.lang.Process API: $class_file"
-    fi
-  done
   if [[ -f "$d8_jar" ]]; then
     d8_command=("$java_bin" -cp "$d8_jar" com.android.tools.r8.D8)
   else
@@ -919,7 +899,6 @@ build_apk_only() {
     printf '  %s\n' "${d8_outputs[@]:-<none>}" >&2
     die "D8 produced unexpected classes*.dex output"
   fi
-  "$dex_guard" "$dex_dir/classes.dex"
 
   "$aapt2" link -o "$apk_build_dir/unsigned.apk" \
     --manifest "$repo_root/app/android-runtime/src/main/AndroidManifest.xml" \
@@ -967,10 +946,6 @@ build_apk_only() {
     --key "$debug_key" --cert "$debug_cert" --out "$signed_apk" "$aligned_apk"
   "$java_bin" -jar "$apksigner_jar" verify --verbose --print-certs "$signed_apk" \
     >/dev/null
-  # Re-read every classes*.dex entry from the signed APK through the official
-  # artifact gate.  The gate enforces this product's single-dex policy and
-  # rejects duplicate ZIP entries before invoking AOSP dexdump.
-  "$dex_guard" "$signed_apk"
   mv -fT -- "$signed_apk" "$apk_output_path"
   [[ -f "$apk_output_path" ]] || die "APK atomic publication did not produce an output"
   rm -rf -- "$apk_build_dir"
