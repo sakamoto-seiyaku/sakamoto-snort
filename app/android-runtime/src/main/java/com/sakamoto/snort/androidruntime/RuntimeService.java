@@ -838,6 +838,11 @@ public final class RuntimeService extends VpnService {
             builder.redirectOutput(new File(new File(profileRoot, "logs"), "vpp-stdout.log"));
             Process process = builder.start();
             vppProcess = process;
+            // Product Core never consumes stdin.  Close the inherited pipe
+            // immediately so the child cannot wait on input that no
+            // lifecycle thread drains.  This uses the API-1 Process handle,
+            // not an Android-hidden Redirect/PID API.
+            process.getOutputStream().close();
 
             RuntimeControlNative.Session session = connectProductCoreSession(
                     new File(runtime, "api.sock"), process);
@@ -955,18 +960,26 @@ public final class RuntimeService extends VpnService {
 
     private boolean terminateProductCoreProcess() {
         Process process = vppProcess;
-        if (process == null || !process.isAlive()) {
+        if (process == null) {
+            return true;
+        }
+        if (!process.isAlive()) {
             return true;
         }
         process.destroy();
         try {
-            if (!process.waitFor(STOP_TERM_MILLIS, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-                if (!process.waitFor(STOP_KILL_MILLIS, TimeUnit.MILLISECONDS)) {
-                    return false;
-                }
+            if (process.waitFor(STOP_TERM_MILLIS, TimeUnit.MILLISECONDS)
+                    && !process.isAlive()) {
+                return true;
             }
-            return !process.isAlive();
+            // A graceful destroy is bounded.  Escalate only while the same
+            // Process handle still reports a live child, then wait again
+            // before any generation-owned profile is removed.
+            if (process.isAlive()) {
+                process.destroyForcibly();
+            }
+            return process.waitFor(STOP_KILL_MILLIS, TimeUnit.MILLISECONDS)
+                    && !process.isAlive();
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             return false;

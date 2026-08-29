@@ -18,6 +18,13 @@ grep -Fq 'socket.exists()' "$service"
 grep -Fq 'ProductCoreLifecycle.canRetryConnection' "$service"
 grep -Fq 'ProductCoreLifecycle.UNKNOWN_PID' "$service"
 grep -Fq 'ProductCoreLifecycle.shouldClearStaleProfile' "$service"
+grep -Fq 'builder.redirectErrorStream(true)' "$service"
+grep -Fq 'builder.redirectOutput(' "$service"
+grep -Fq 'process.getOutputStream().close();' "$service"
+grep -Fq 'process.destroy();' "$service"
+grep -Fq 'process.waitFor(STOP_TERM_MILLIS, TimeUnit.MILLISECONDS)' "$service"
+grep -Fq 'process.destroyForcibly();' "$service"
+grep -Fq 'process.waitFor(STOP_KILL_MILLIS, TimeUnit.MILLISECONDS)' "$service"
 grep -Fq 'ADAPTER_UNAVAILABLE' "$snapshot"
 grep -Fq 'Protection: not running' "$snapshot"
 
@@ -46,5 +53,60 @@ if grep -n 'startProductCoreRuntime' "$service" | grep -Fq 'libsucre_snortd.so';
   echo "Product Core lifecycle references the retired daemon" >&2
   exit 1
 fi
+
+python3 - "$service" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+
+
+def method_body(signature):
+    start = source.index(signature)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    raise AssertionError("unclosed method: " + signature)
+
+
+start = method_body("private void startProductCoreRuntime(")
+stop = method_body("private boolean stopRuntime(boolean stopService)")
+terminate = method_body("private boolean terminateProductCoreProcess(")
+for forbidden in (
+        "/system/bin/sh", "SU_PATH", "new ProcessBuilder(\"/system/bin/su\"",
+        "echo $$", "vpp.pid",
+        "process.pid()", "ProcessHandle", "toHandle()"):
+    if forbidden in start:
+        raise AssertionError("Product Core start uses forbidden process API: " + forbidden)
+
+start_index = start.index("new ProcessBuilder(vpp.getPath()")
+stdin_index = start.index("process.getOutputStream().close()")
+stdout_index = start.index("builder.redirectOutput(")
+launch_index = start.index("Process process = builder.start()")
+if not start_index < launch_index < stdin_index:
+    raise AssertionError("Product Core must close stdin immediately after direct launch")
+if not stdout_index < launch_index:
+    raise AssertionError("Product Core must configure output redirection before launch")
+
+close_index = stop.index("closeProductCoreSession()")
+terminate_index = stop.index("terminateProductCoreProcess()")
+cleanup_index = stop.index("deleteTree(profileRoot)")
+if not close_index < terminate_index < cleanup_index:
+    raise AssertionError("STOP must close session and terminate before profile cleanup")
+destroy_index = terminate.index("process.destroy();")
+term_wait_index = terminate.index("process.waitFor(STOP_TERM_MILLIS")
+force_index = terminate.index("process.destroyForcibly();")
+kill_wait_index = terminate.index("process.waitFor(STOP_KILL_MILLIS")
+if not destroy_index < term_wait_index < force_index < kill_wait_index:
+    raise AssertionError("Product Core stop must remain bounded TERM/destroy/wait then KILL/wait")
+if "&& !process.isAlive()" not in terminate:
+    raise AssertionError("Product Core stop must confirm the process ended before cleanup")
+PY
 
 echo "sakamoto-172 Product Core lifecycle contract: PASS"

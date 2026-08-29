@@ -665,12 +665,18 @@ build_apk_only() {
   local zipalign="${SAKAMOTO_ANDROID_ZIPALIGN:-/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/zipalign}"
   local apksigner_jar="${SAKAMOTO_ANDROID_APKSIGNER_JAR:-/home/js/android/lineage/prebuilts/sdk/tools/linux/lib/apksigner.jar}"
   local d8_jar="${SAKAMOTO_ANDROID_D8_JAR:-}"
+  local dex_guard="$repo_root/app/android-runtime/scripts/check-android-process-api.py"
   local debug_key="${SAKAMOTO_ANDROID_DEBUG_KEY:-/home/js/android/lineage/build/make/target/product/security/testkey.pk8}"
   local debug_cert="${SAKAMOTO_ANDROID_DEBUG_CERT:-/home/js/android/lineage/build/make/target/product/security/testkey.x509.pem}"
   local ndk_root="${SAKAMOTO_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
   local llvm_readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
   local java_bin
   local javac_bin
+  local javap_bin
+  local java_home
+  local jimage_bin
+  local jar_bin
+  local python_bin
   local zip_bin
   local apk_output_input="${SAKAMOTO_ANDROID_APK_OUTPUT_DIR:-$repo_root/app/android-runtime/build/outputs}"
   local apk_output_dir
@@ -689,6 +695,12 @@ build_apk_only() {
   local elf_header
   local jni_dynamic
   local native_library
+  local javac_log
+  local javac_support_dir
+  local javac_support_jar
+  local javac_bootclasspath
+  local class_dump
+  local unzip_bin
   local -a java_sources
   local -a class_files
   local -a d8_command
@@ -769,6 +781,7 @@ build_apk_only() {
     die "product stage plugin is missing or not a regular file"
 
   [[ -f "$android_jar" ]] || die "Android SDK android.jar is missing: $android_jar"
+  [[ -f "$dex_guard" ]] || die "Android Process API gate is missing: $dex_guard"
   [[ -x "$aapt2" ]] || die "Android aapt2 is missing: $aapt2"
   [[ -x "$d8" ]] || die "Android d8 is missing: $d8"
   [[ -x "$zipalign" ]] || die "Android zipalign is missing: $zipalign"
@@ -778,10 +791,20 @@ build_apk_only() {
   [[ -x "$llvm_readelf" ]] || die "Android LLVM readelf is missing: $llvm_readelf"
   java_bin="$(command -v java 2>/dev/null || true)"
   javac_bin="$(command -v javac 2>/dev/null || true)"
+  javap_bin="$(command -v javap 2>/dev/null || true)"
+  jimage_bin="$(command -v jimage 2>/dev/null || true)"
+  jar_bin="$(command -v jar 2>/dev/null || true)"
+  python_bin="$(command -v python3 2>/dev/null || true)"
   zip_bin="$(command -v zip 2>/dev/null || true)"
+  unzip_bin="$(command -v unzip 2>/dev/null || true)"
   [[ -n "$java_bin" && -x "$java_bin" ]] || die "Java runtime is missing"
   [[ -n "$javac_bin" && -x "$javac_bin" ]] || die "Java compiler is missing"
+  [[ -n "$javap_bin" && -x "$javap_bin" ]] || die "Java class-file inspector is missing"
+  [[ -n "$jimage_bin" && -x "$jimage_bin" ]] || die "JDK jimage tool is missing"
+  [[ -n "$jar_bin" && -x "$jar_bin" ]] || die "JDK jar tool is missing"
+  [[ -n "$python_bin" && -x "$python_bin" ]] || die "Python3 is required for the Android Process API gate"
   [[ -n "$zip_bin" && -x "$zip_bin" ]] || die "zip is required to package native libraries"
+  [[ -n "$unzip_bin" && -x "$unzip_bin" ]] || die "unzip is required for the final Android Process API gate"
   if [[ -z "$d8_jar" ]]; then
     d8_jar="${d8%/bin/d8}/lib/d8.jar"
   fi
@@ -824,10 +847,57 @@ build_apk_only() {
 
   mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
   ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"
-  "$javac_bin" -encoding UTF-8 -source 8 -target 8 \
-    -classpath "$android_jar" -d "$classes_dir" "${java_sources[@]}"
+  java_home="$($java_bin -XshowSettings:properties -version 2>&1 \
+    | sed -n 's/^[[:space:]]*java.home = //p' | head -n 1)"
+  [[ -n "$java_home" && -f "$java_home/lib/modules" ]] || \
+    die "JDK module image is missing: $java_home/lib/modules"
+  javac_support_dir="$apk_build_dir/javac-support"
+  javac_support_jar="$apk_build_dir/javac-support.jar"
+  mkdir -p "$javac_support_dir"
+  # Android's platform stub omits LambdaMetafactory.metafactory, which javac
+  # needs solely to lower Java-8 lambdas.  Add that compiler-only signature
+  # from this JDK's module image while keeping every Android API class,
+  # including java.lang.Process, on the Android boot class path.
+  "$jimage_bin" extract --dir="$javac_support_dir" \
+    --include "glob:**/java/lang/invoke/LambdaMetafactory.class" \
+    "$java_home/lib/modules" >/dev/null || \
+    die "cannot extract the javac LambdaMetafactory support class"
+  [[ -f "$javac_support_dir/java.base/java/lang/invoke/LambdaMetafactory.class" ]] || \
+    die "javac LambdaMetafactory support class was not extracted"
+  "$jar_bin" cf "$javac_support_jar" -C "$javac_support_dir/java.base" \
+    java/lang/invoke/LambdaMetafactory.class || \
+    die "cannot package the javac LambdaMetafactory support class"
+  javac_bootclasspath="$android_jar:$javac_support_jar"
+  javac_log="$apk_build_dir/javac.verbose.log"
+  # -source/-target select Java language/class-file compatibility only.  The
+  # boot class path must explicitly point at Android's platform stub or JDK17
+  # java.base can leak host-only methods into the generated class files.
+  if ! "$javac_bin" -encoding UTF-8 -Xlint:-options -source 8 -target 8 \
+      -bootclasspath "$javac_bootclasspath" -classpath "$android_jar" \
+      -verbose -d "$classes_dir" "${java_sources[@]}" >"$javac_log" 2>&1; then
+    sed -n '1,160p' "$javac_log" >&2
+    die "Android Java compilation failed; see $javac_log"
+  fi
+  grep -Fq "$android_jar(/java/lang/Process.class)" "$javac_log" || \
+    die "javac did not resolve java.lang.Process from the Android stub: $android_jar"
+  if grep -Fq '/modules/java.base/java/lang/Process.class' "$javac_log"; then
+    die "javac resolved java.lang.Process from host java.base instead of Android stubs"
+  fi
   mapfile -t class_files < <(find "$classes_dir" -type f -name '*.class' -print | sort)
   ((${#class_files[@]} > 0)) || die "Android Java compilation produced no classes"
+
+  # Android platform jars can contain hidden/future Process methods even when
+  # javac is correctly bootstrapped.  Inspect every emitted class-file method
+  # reference before D8 so the unsupported API cannot reach the APK.
+  for class_file in "${class_files[@]}"; do
+    class_dump="$($javap_bin -verbose "$class_file" 2>/dev/null)" || \
+      die "cannot inspect Android class file: $class_file"
+    if grep -Fq 'java/lang/Process.pid' <<<"$class_dump" || \
+        grep -Fq 'java/lang/Process.toHandle' <<<"$class_dump" || \
+        grep -Fq 'java/lang/ProcessHandle' <<<"$class_dump"; then
+      die "Android class file references unsupported java.lang.Process API: $class_file"
+    fi
+  done
   if [[ -f "$d8_jar" ]]; then
     d8_command=("$java_bin" -cp "$d8_jar" com.android.tools.r8.D8)
   else
@@ -836,6 +906,7 @@ build_apk_only() {
   "${d8_command[@]}" --lib "$android_jar" --min-api "$android_api" \
     --output "$dex_dir" "${class_files[@]}"
   [[ -f "$dex_dir/classes.dex" ]] || die "D8 did not produce classes.dex"
+  "$python_bin" "$dex_guard" "$dex_dir/classes.dex"
 
   "$aapt2" link -o "$apk_build_dir/unsigned.apk" \
     --manifest "$repo_root/app/android-runtime/src/main/AndroidManifest.xml" \
@@ -883,6 +954,12 @@ build_apk_only() {
     --key "$debug_key" --cert "$debug_cert" --out "$signed_apk" "$aligned_apk"
   "$java_bin" -jar "$apksigner_jar" verify --verbose --print-certs "$signed_apk" \
     >/dev/null
+  # Re-read the DEX from the signed APK: the release artifact, rather than
+  # only the pre-packaging classes.dex, is the final API-surface gate.
+  "$unzip_bin" -p "$signed_apk" classes.dex >"$apk_build_dir/final-classes.dex" || \
+    die "signed APK does not contain classes.dex"
+  "$python_bin" "$dex_guard" "$apk_build_dir/final-classes.dex"
+  "$python_bin" "$dex_guard" "$signed_apk"
   mv -fT -- "$signed_apk" "$apk_output_path"
   [[ -f "$apk_output_path" ]] || die "APK atomic publication did not produce an output"
   rm -rf -- "$apk_build_dir"
