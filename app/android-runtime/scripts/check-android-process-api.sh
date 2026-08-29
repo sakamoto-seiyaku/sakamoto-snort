@@ -1,185 +1,166 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# SAKAMOTO-172 artifact API boundary.
-#
-# This gate deliberately delegates all DEX parsing and validation to the
-# Android Open Source Project dexdump binary.  It does not read DEX headers,
-# ID tables, offsets, checksums, or instructions itself.  The 2026-08-29
-# inventory found the installed Lineage/AOSP tool at:
-#   /home/js/android/lineage/prebuilts/sdk/tools/linux/bin/dexdump
-# Its banner identifies it as Android Open Source Project dexdump; its ELF
-# .comment reports Android build 11368308 (based on r510928), clang 18.0.0,
-# and LLD 18.0.0.  The binary has no --version option.  Discovery accepts an
-# explicit override, Android SDK/Lineage prebuilts, and PATH, but never falls
-# back to a homemade parser or a third-party disassembler.
+# S172 uses the pinned AOSP/Lineage host parser and only interprets its
+# structured output.  No DEX bytes are parsed here.
+default_dexdump="/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/dexdump"
+default_dexdump_sha256="cccd6b7473b8715672879672838a8e4cf1dfa8a0f008f432c7deb5c79cdce19d"
 
-repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-
-die() {
-  echo "Android Process API gate: ERROR: $*" >&2
-  exit 2
-}
-
-official_dexdump_banner() {
-  local output="$1"
-  [[ "$output" == *"Copyright (C) 2007 The Android Open Source Project"* &&
-     "$output" == *"dexdump:"* ]]
-}
+die() { echo "Android Process API gate: ERROR: $*" >&2; exit 2; }
 
 resolve_dexdump() {
-  local explicit="${SAKAMOTO_ANDROID_DEXDUMP:-}"
-  local candidate
-  local resolved
-  local banner
-  local sdk_root
-  local path_candidate
-  local -a candidates=()
-
-  if [[ -n "$explicit" ]]; then
-    [[ -f "$explicit" && -x "$explicit" ]] || \
-      die "SAKAMOTO_ANDROID_DEXDUMP is not an executable file: $explicit"
-    resolved="$(realpath -e -- "$explicit" 2>/dev/null)" || \
-      die "SAKAMOTO_ANDROID_DEXDUMP cannot be resolved: $explicit"
-    banner="$("$resolved" 2>&1 || true)"
-    official_dexdump_banner "$banner" || \
-      die "SAKAMOTO_ANDROID_DEXDUMP is not the Android Open Source Project dexdump: $resolved"
-    printf '%s\n' "$resolved"
-    return 0
+  local candidate="${SAKAMOTO_ANDROID_DEXDUMP:-}"
+  local expected actual banner comment sha_bin readelf_bin
+  sha_bin="$(command -v sha256sum 2>/dev/null || true)"
+  readelf_bin="$(command -v readelf 2>/dev/null || true)"
+  [[ -n "$sha_bin" && -x "$sha_bin" ]] || die "sha256sum is required"
+  [[ -n "$readelf_bin" && -x "$readelf_bin" ]] || die "readelf is required"
+  if [[ -n "$candidate" ]]; then
+    expected="${SAKAMOTO_ANDROID_DEXDUMP_SHA256:-}"
+    [[ -n "$expected" ]] || die \
+      "SAKAMOTO_ANDROID_DEXDUMP_SHA256 is required with SAKAMOTO_ANDROID_DEXDUMP"
+  else
+    [[ -z "${SAKAMOTO_ANDROID_DEXDUMP_SHA256:-}" ]] || die \
+      "SAKAMOTO_ANDROID_DEXDUMP_SHA256 requires an explicit SAKAMOTO_ANDROID_DEXDUMP"
+    candidate="$default_dexdump"
+    expected="$default_dexdump_sha256"
   fi
+  expected="${expected,,}"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "expected dexdump SHA-256 is invalid"
+  [[ -f "$candidate" && -x "$candidate" ]] || die "dexdump is not executable: $candidate"
+  candidate="$(realpath -e -- "$candidate" 2>/dev/null)" || die "dexdump path cannot be resolved"
+  actual="$("$sha_bin" -- "$candidate" 2>/dev/null)" || die "cannot hash dexdump: $candidate"
+  actual="${actual%% *}"
+  [[ "$actual" == "$expected" ]] || die \
+    "dexdump SHA-256 mismatch: expected $expected, got $actual ($candidate)"
+  # Banner is a sanity check only; hash and ELF provenance establish identity.
+  banner="$("$candidate" 2>&1 || true)"
+  [[ "$banner" == *"Copyright (C) 2007 The Android Open Source Project"* &&
+     "$banner" == *"dexdump:"* ]] || die "dexdump AOSP banner check failed: $candidate"
+  comment="$("$readelf_bin" -p .comment -- "$candidate" 2>/dev/null)" || \
+    die "cannot read dexdump ELF .comment: $candidate"
+  [[ "$comment" == *"Android ("*"based on r"*"clang version "* ]] || \
+    die "dexdump ELF .comment has no Android/AOSP provenance: $candidate"
+  [[ "$comment" == *"Linker: LLD "* ]] || \
+    die "dexdump ELF .comment has no Android LLD provenance: $candidate"
+  dexdump_path="$candidate"
+  dexdump_sha256="$actual"
+}
 
-  # Repository-local and known Lineage/AOSP host-tool locations are checked
-  # before PATH so an unrelated dexdump cannot silently change the gate.
-  candidates+=(
-    "$repo_root/prebuilts/sdk/tools/linux/bin/dexdump"
-    "$repo_root/android-sdk/build-tools/dexdump"
-    "/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/dexdump"
-    "/home/js/android/lineage/out/host/linux-x86/bin/dexdump"
-  )
-  for sdk_root in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}" \
-      "/home/js/.local/share/android-sdk"; do
-    [[ -n "$sdk_root" ]] || continue
-    candidates+=(
-      "$sdk_root/build-tools"/*/dexdump
-      "$sdk_root/cmdline-tools"/*/bin/dexdump
-      "$sdk_root/tools/bin/dexdump"
-    )
-  done
-  path_candidate="$(command -v dexdump 2>/dev/null || true)"
-  [[ -n "$path_candidate" ]] && candidates+=("$path_candidate")
-
-  for candidate in "${candidates[@]}"; do
-    [[ -f "$candidate" && -x "$candidate" ]] || continue
-    resolved="$(realpath -e -- "$candidate" 2>/dev/null)" || continue
-    banner="$("$resolved" 2>&1 || true)"
-    if official_dexdump_banner "$banner"; then
-      printf '%s\n' "$resolved"
-      return 0
-    fi
-  done
-
-  die "official Android Open Source Project dexdump is unavailable; checked repository/SDK/Lineage locations and PATH. Set SAKAMOTO_ANDROID_DEXDUMP to a verified AOSP dexdump. No homemade DEX parser fallback is permitted"
+parse_dexdump() {
+  awk '
+    function add(v) { if (!(v in found)) { found[v] = 1; why[++n] = v } }
+    function types(s) {
+      if (s ~ /Ljava\/lang\/ProcessHandle(\$[^;]*)?;/)
+        add("java/lang/ProcessHandle type reference")
+    }
+    {
+      l = $0
+      if (l ~ /^Processing /) { processing = 1; next }
+      if (l ~ /^Opened .*DEX version/) { opened = 1; next }
+      if (l ~ /^Class #[0-9]+ annotations:/) {
+        structured = 1; annotation = 1; method_handle = call_site = 0; next
+      }
+      if (l ~ /^Class #[0-9]+[[:space:]]+-/) {
+        structured = 1; annotation = method_handle = call_site = 0; next
+      }
+      if (l ~ /^Method handle #[0-9]+:/) {
+        structured = 1; annotation = call_site = 0; method_handle = 1
+        target_pid = target_to_handle = 0; next
+      }
+      if (l ~ /^Call site #[0-9]+:/) {
+        structured = 1; annotation = method_handle = 0; call_site = 1; next
+      }
+      if (l ~ /\|.*const-string([[:space:]]|$)/) next
+      clean = l
+      while (clean ~ /"[^"]*"/) sub(/"[^"]*"/, "", clean)
+      if (annotation) { types(clean); next }
+      if (method_handle) {
+        if (l ~ /^[[:space:]]*target[[:space:]]*:/) {
+          types(clean)
+          target_pid = clean ~ /^[[:space:]]*target[[:space:]]*:[[:space:]]*Ljava\/lang\/Process;[[:space:]]+pid[[:space:]]*$/
+          target_to_handle = clean ~ /^[[:space:]]*target[[:space:]]*:[[:space:]]*Ljava\/lang\/Process;[[:space:]]+toHandle[[:space:]]*$/
+        }
+        if (l ~ /^[[:space:]]*target_type[[:space:]]*:/) {
+          types(clean)
+          if (target_pid && clean ~ /^[[:space:]]*target_type[[:space:]]*:[[:space:]]*\(\)J[[:space:]]*$/)
+            add("java/lang/Process.pid:()J method-handle reference")
+          if (target_to_handle && clean ~ /^[[:space:]]*target_type[[:space:]]*:[[:space:]]*\(\)Ljava\/lang\/ProcessHandle;[[:space:]]*$/)
+            add("java/lang/Process.toHandle:()Ljava/lang/ProcessHandle; method-handle reference")
+        }
+        next
+      }
+      if (call_site) {
+        if (l ~ /\(MethodType\)[[:space:]]*$/ || l ~ /\(Class\)[[:space:]]*$/)
+          types(clean)
+        next
+      }
+      if (l ~ /^[[:space:]]*Class descriptor[[:space:]]*:/ ||
+          l ~ /^[[:space:]]*Superclass[[:space:]]*:/ ||
+          l ~ /^[[:space:]]*type[[:space:]]*:/ ||
+          l ~ /^[[:space:]]*#[0-9]+[[:space:]]*:/ ||
+          l ~ /^[[:space:]]*0x[0-9a-f]+[[:space:]]+-.*reg=/)
+        types(clean)
+      if (l ~ /\|[[:space:]]*[0-9a-f]+:[[:space:]]+/) {
+        types(clean)
+        if (clean ~ /\|[[:space:]]*[0-9a-f]+:[[:space:]]+invoke-[^[:space:]]+[[:space:]].*Ljava\/lang\/Process;\.pid:\(\)J([[:space:]]|$)/)
+          add("java/lang/Process.pid:()J method reference")
+        if (clean ~ /\|[[:space:]]*[0-9a-f]+:[[:space:]]+invoke-[^[:space:]]+[[:space:]].*Ljava\/lang\/Process;\.toHandle:\(\)Ljava\/lang\/ProcessHandle;([[:space:]]|$)/)
+          add("java/lang/Process.toHandle:()Ljava/lang/ProcessHandle; method reference")
+      }
+    }
+    END {
+      if (!processing || !opened || !structured) {
+        print "ERROR: official dexdump output format is not recognized"; exit 2
+      }
+      if (n) {
+        print "FAIL: structured unsupported references detected:"
+        for (i = 1; i <= n; i++) print "  " why[i]
+        exit 1
+      }
+      print "PASS: official dexdump output recognized; no unsupported references"
+    }
+  ' "$1"
 }
 
 run_dexdump() {
-  local label="$1"
-  local dex_path="$2"
-  local dump_path="$3"
-  local scan_path="$4"
-  local -a findings=()
-
-  # -d asks dexdump to parse and disassemble the complete DEX.  A non-zero
-  # result is an official parser/checksum/structural failure and therefore a
-  # fail-closed artifact error.  Do not pass -i or -j.
-  if ! "$dexdump" -d -- "$dex_path" >"$dump_path" 2>&1; then
-    sed -n '1,80p' "$dump_path" >&2 || true
-    die "$label cannot be parsed by official Android Open Source Project dexdump ($dexdump)"
+  local label="$1" dex="$2" dump="$3" scan="$4" status=0
+  if ! "$dexdump_path" -a -d -- "$dex" >"$dump" 2>&1; then
+    sed -n '1,80p' "$dump" >&2 || true
+    die "$label cannot be parsed by official Android AOSP dexdump ($dexdump_path)"
   fi
-
-  # dexdump includes the input path in its Processing line.  Exclude only that
-  # provenance line before matching, so a valid path containing "ProcessHandle"
-  # or "Process.pid" cannot create an artifact false positive.
-  sed '/^Processing /d' "$dump_path" >"$scan_path"
-  if grep -Fq 'Ljava/lang/Process;.pid:()J' "$scan_path"; then
-    findings+=("java/lang/Process.pid:()J")
-  fi
-  if grep -Fq 'Ljava/lang/Process;.toHandle:' "$scan_path"; then
-    findings+=("java/lang/Process.toHandle")
-  fi
-  # Match only a DEX type descriptor (including arrays and nested classes),
-  # not an unrelated string constant that happens to contain the class name.
-  if grep -Eq '(\[*)Ljava/lang/ProcessHandle([;$])' "$scan_path"; then
-    findings+=("java/lang/ProcessHandle")
-  fi
-  if ((${#findings[@]} > 0)); then
-    echo "Android Process API gate: FAIL: $label contains unsupported references:" >&2
-    printf '  %s\n' "${findings[@]}" >&2
-    return 1
-  fi
+  [[ -s "$dump" ]] || die "$label produced empty official dexdump output"
+  parse_dexdump "$dump" >"$scan" || status=$?
+  cat "$scan" >&2
+  case "$status" in 0) ;; 1) return 1 ;; *) die "$label produced unrecognized official dexdump output" ;; esac
 }
 
 check_zip() {
-  local input="$1"
-  local entries_file="$2"
-  local dex_file="$3"
-  local dump_file="$4"
-  local scan_file="$5"
-  local name
-  local index=0
-  local current_dex_file
-  local current_dump_file
-  local current_scan_file
-  local -a entries=()
-  local -a dex_entries=()
+  local input="$1" entries_file="$2" dex_file="$3" dump_file="$4" scan_file="$5"
+  local name suffix index=0
+  local -a entries=() dex_entries=()
   declare -A seen_entries=()
-
-  # Info-ZIP is used only for ZIP entry enumeration/extraction.  It does not
-  # inspect DEX contents; dexdump remains the sole artifact parser.
-  if ! "$unzip_bin" -Z1 -- "$input" >"$entries_file" 2>"$entries_file.error"; then
+  "$unzip_bin" -Z1 -- "$input" >"$entries_file" 2>"$entries_file.error" || {
     sed -n '1,40p' "$entries_file.error" >&2 || true
     die "APK/ZIP cannot be enumerated by unzip: $input"
-  fi
+  }
   mapfile -t entries <"$entries_file"
   ((${#entries[@]} > 0)) || die "APK/ZIP has no entries: $input"
-
   for name in "${entries[@]}"; do
-    if [[ -n "${seen_entries["$name"]+present}" ]]; then
-      die "APK/ZIP contains duplicate entry: $name"
-    fi
+    [[ -z "${seen_entries["$name"]+present}" ]] || die "APK/ZIP contains duplicate entry: $name"
     seen_entries["$name"]=1
-    case "$name" in
-      classes*.dex) dex_entries+=("$name") ;;
-    esac
+    case "$name" in classes*.dex) dex_entries+=("$name");; esac
   done
-
-  ((${#dex_entries[@]} > 0)) || \
-    die "APK/ZIP has no classes*.dex entry: $input"
-
-  # Enumerate and send each unique classes*.dex entry through the official
-  # parser before applying the product's single-dex policy.  This keeps the
-  # artifact seam honest for every DEX while avoiding a second DEX parser in
-  # this repository.  Duplicate names are rejected above because ZIP lookup
-  # by name cannot safely distinguish duplicate records.
+  ((${#dex_entries[@]} > 0)) || die "APK/ZIP has no classes*.dex entry: $input"
   for name in "${dex_entries[@]}"; do
-    current_dex_file="$dex_file"
-    current_dump_file="$dump_file"
-    current_scan_file="$scan_file"
-    if ((index > 0)); then
-      current_dex_file="${dex_file}.${index}"
-      current_dump_file="${dump_file}.${index}"
-      current_scan_file="${scan_file}.${index}"
-    fi
-    if ! "$unzip_bin" -p -- "$input" "$name" >"$current_dex_file"; then
+    suffix=""; ((index > 0)) && suffix=".$index"
+    "$unzip_bin" -p -- "$input" "$name" >"${dex_file}${suffix}" || \
       die "cannot extract $name from APK/ZIP: $input"
-    fi
-    if ! run_dexdump "${input}:$name" "$current_dex_file" \
-        "$current_dump_file" "$current_scan_file"; then
-      return 1
-    fi
+    run_dexdump "${input}:$name" "${dex_file}${suffix}" \
+      "${dump_file}${suffix}" "${scan_file}${suffix}" || return 1
     index=$((index + 1))
   done
-
-  if ((${#dex_entries[@]} != 1)) || [[ "${dex_entries[0]}" != "classes.dex" ]]; then
+  if ((${#dex_entries[@]} != 1)) || [[ "${dex_entries[0]}" != classes.dex ]]; then
     printf 'Android Process API gate: ERROR: APK/ZIP must contain exactly one classes.dex; found:\n' >&2
     printf '  %s\n' "${dex_entries[@]}" >&2
     die "multidex or non-standard classes*.dex layout is unsupported"
@@ -189,21 +170,16 @@ check_zip() {
 [[ $# -eq 1 ]] || die "usage: check-android-process-api.sh <classes.dex|apk>"
 input="$1"
 [[ -f "$input" ]] || die "artifact is not a regular file: $input"
-
-dexdump="$(resolve_dexdump)"
+resolve_dexdump
 unzip_bin="$(command -v unzip 2>/dev/null || true)"
-[[ -n "$unzip_bin" && -x "$unzip_bin" ]] || \
-  die "unzip is required to inspect final APK classes*.dex entries"
-
+[[ -n "$unzip_bin" && -x "$unzip_bin" ]] || die "unzip is required for APK/ZIP inspection"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/sakamoto-android-process-api.XXXXXX")" || \
   die "cannot create temporary directory for official artifact inspection"
 trap 'rm -rf -- "$work_dir"' EXIT
-
 if [[ "$input" == *.apk || "$input" == *.zip ]]; then
   check_zip "$input" "$work_dir/zip.entries" "$work_dir/classes.dex" \
     "$work_dir/dexdump.txt" "$work_dir/dexdump.scan"
 else
   run_dexdump "$input" "$input" "$work_dir/dexdump.txt" "$work_dir/dexdump.scan"
 fi
-
-echo "Android Process API gate: PASS: $input (official AOSP dexdump: $dexdump)"
+echo "Android Process API gate: PASS: $input (official AOSP dexdump: $dexdump_path; sha256=$dexdump_sha256)"
