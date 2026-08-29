@@ -772,25 +772,50 @@ public final class RuntimeService extends VpnService {
         RuntimeProfile selected = requestedProfile == null
                 ? (activeProfile == null ? RuntimeProfile.ROOT : activeProfile)
                 : requestedProfile;
-        if (processAlive(vppProcess) && productCoreSession != null) {
-            queryProductCoreRuntime();
-            return;
-        }
         boolean productProcessAlive = processAlive(vppProcess);
-        boolean productSessionLive = productCoreSession != null;
-        if (productProcessAlive || productSessionLive) {
-            failProductCoreGeneration("product_core_session_missing",
-                    "Product Core handles are inconsistent for the active generation");
+        boolean productSessionLive = productCoreSession != null
+                && productCoreSession.isConnected();
+        if (productProcessAlive && productSessionLive) {
+            queryProductCoreRuntime();
             return;
         }
         closeProductCoreSession();
         activeProfile = selected;
         initializeProfilePaths(selected);
-        // Product Core path defers stale-profile cleanup to visible START;
-        // there is no numeric PID or privileged Root ownership audit here.
-        if (ProductCoreLifecycle.shouldClearStaleProfile(
-                profileRoot.exists(), productProcessAlive, productSessionLive)
-                && !deleteTree(profileRoot)) {
+        boolean anyProductProfileExists = profileDirectory(RuntimeProfile.ROOT).exists()
+                || profileDirectory(RuntimeProfile.VPN).exists();
+        ProductCoreLifecycle.StartDecision preflight = ProductCoreLifecycle.preflightStart(
+                anyProductProfileExists, productProcessAlive, productSessionLive,
+                this::probeProductCoreProfiles,
+                this::clearProductCoreProfiles);
+        if (preflight == ProductCoreLifecycle.StartDecision.QUERY_EXISTING) {
+            queryProductCoreRuntime();
+            return;
+        }
+        if (preflight == ProductCoreLifecycle.StartDecision.BLOCK_INCONSISTENT) {
+            if (productProcessAlive) {
+                failProductCoreGeneration("product_core_session_missing",
+                        "Product Core handles are inconsistent for the active generation");
+            } else {
+                publishError("product_core_session_missing",
+                        "Product Core session is live but its process handle is missing",
+                        true, ProductCoreLifecycle.UNKNOWN_PID);
+            }
+            return;
+        }
+        if (preflight == ProductCoreLifecycle.StartDecision.BLOCK_LIVE) {
+            publishError("product_core_owner_live",
+                    "a live Product Core generation already owns an app profile",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            return;
+        }
+        if (preflight == ProductCoreLifecycle.StartDecision.BLOCK_UNKNOWN) {
+            publishError("product_core_ownership_unverified",
+                    "Product Core profile liveness could not be proven",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            return;
+        }
+        if (preflight == ProductCoreLifecycle.StartDecision.CLEANUP_FAILED) {
             failWithoutRuntime("product_profile_cleanup_failed",
                     "previous generation-owned profile tree could not be removed");
             return;
@@ -973,6 +998,77 @@ public final class RuntimeService extends VpnService {
         }
     }
 
+    /**
+     * Probe a generation only through its app-owned Product Core socket. This
+     * is a liveness witness for a recreated service, not cross-service
+     * adoption: a successful probe is closed before the caller proceeds.
+     */
+    private ProductCoreLifecycle.ProbeResult probeProductCoreProfile(File profile) {
+        if (profile == null || !profile.exists()) {
+            return ProductCoreLifecycle.ProbeResult.STOPPED;
+        }
+        File socket = new File(new File(profile, "runtime"), "api.sock");
+        if (!socket.exists()) {
+            return ProductCoreLifecycle.ProbeResult.STOPPED;
+        }
+        long expectedGeneration = generation > 0L
+                ? generation : snapshot == null ? 0L : snapshot.generation;
+        String expectedRevision = productVppRevision;
+        if (expectedRevision.isEmpty()) {
+            try {
+                expectedRevision = requiredProductProperty(
+                        readProductManifest(), "vppRevision");
+            } catch (IOException error) {
+                return ProductCoreLifecycle.ProbeResult.UNKNOWN;
+            }
+        }
+        if (expectedGeneration <= 0L || expectedRevision.isEmpty()) {
+            return ProductCoreLifecycle.ProbeResult.UNKNOWN;
+        }
+        RuntimeControlNative.Session probe = RuntimeControlNative.connect(
+                socket.getPath(), expectedGeneration);
+        try {
+            if (!probe.isConnected()) {
+                return ProductCoreLifecycle.ProbeResult.UNKNOWN;
+            }
+            return ProductCoreLifecycle.isReady(expectedGeneration, expectedRevision,
+                    probe.lastStatus())
+                    ? ProductCoreLifecycle.ProbeResult.LIVE
+                    : ProductCoreLifecycle.ProbeResult.UNKNOWN;
+        } finally {
+            probe.close();
+        }
+    }
+
+    /** Probe both mutually exclusive app-owned profiles before a new launch. */
+    private ProductCoreLifecycle.ProbeResult probeProductCoreProfiles() {
+        ProductCoreLifecycle.ProbeResult aggregate =
+                ProductCoreLifecycle.ProbeResult.STOPPED;
+        for (RuntimeProfile profile : RuntimeProfile.values()) {
+            ProductCoreLifecycle.ProbeResult observed =
+                    probeProductCoreProfile(profileDirectory(profile));
+            if (observed == ProductCoreLifecycle.ProbeResult.LIVE) {
+                return observed;
+            }
+            if (observed == ProductCoreLifecycle.ProbeResult.UNKNOWN) {
+                aggregate = observed;
+            }
+        }
+        return aggregate;
+    }
+
+    /** Remove only profiles whose global probe proved stopped. */
+    private boolean clearProductCoreProfiles() {
+        boolean clean = true;
+        for (RuntimeProfile profile : RuntimeProfile.values()) {
+            File root = profileDirectory(profile);
+            if (root.exists() && !deleteTree(root)) {
+                clean = false;
+            }
+        }
+        return clean;
+    }
+
     private Properties readProductManifest() throws IOException {
         Properties properties = new Properties();
         try (InputStream input = getAssets().open(PRODUCT_MANIFEST_ASSET)) {
@@ -1098,10 +1194,38 @@ public final class RuntimeService extends VpnService {
      */
     private void reconcileProductCoreRuntime(boolean forceHealthQuery, long queryRevision) {
         Process process = vppProcess;
-        if (processAlive(process) && productCoreSession != null) {
+        boolean processHandleAlive = processAlive(process);
+        boolean sessionLive = productCoreSession != null
+                && productCoreSession.isConnected();
+        if (processHandleAlive && sessionLive) {
             if (forceHealthQuery) {
                 queryProductCoreRuntime();
             }
+            return;
+        }
+        initializeProfilePaths(activeProfile);
+        if (processHandleAlive || sessionLive) {
+            if (processHandleAlive) {
+                failProductCoreGeneration("product_core_session_missing",
+                        "Product Core handles are inconsistent for the active generation");
+            } else {
+                publishError("product_core_session_missing",
+                        "Product Core session is live but its process handle is missing",
+                        true, ProductCoreLifecycle.UNKNOWN_PID);
+            }
+            return;
+        }
+        ProductCoreLifecycle.ProbeResult observed = probeProductCoreProfiles();
+        if (observed == ProductCoreLifecycle.ProbeResult.LIVE) {
+            publishError("product_core_owner_live",
+                    "a live Product Core generation already owns an app profile",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            return;
+        }
+        if (observed == ProductCoreLifecycle.ProbeResult.UNKNOWN) {
+            publishError("product_core_ownership_unverified",
+                    "Product Core profile liveness could not be proven",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
             return;
         }
         if (snapshot != null && snapshot.isActive()) {
@@ -1558,11 +1682,96 @@ public final class RuntimeService extends VpnService {
         recoverAfterRuntimeFailure("unexpected_exit", "VPP exited with status " + exitCode);
     }
 
+    /** Product Core stop path; it never enters the retired PID/Root cleanup path. */
+    private boolean stopProductCoreRuntime(boolean stopService) {
+        RuntimeProfile selected = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
+        initializeProfilePaths(selected);
+        RuntimeSnapshot current = snapshot == null
+                ? RuntimeSnapshot.stopped(selected, generation) : snapshot;
+        boolean processHandleAlive = processAlive(vppProcess);
+        boolean sessionLive = productCoreSession != null
+                && productCoreSession.isConnected();
+        publish(RuntimeSnapshot.stopping(current));
+
+        if (processHandleAlive) {
+            closeProductCoreSession();
+            boolean clean = terminateProductCoreProcess();
+            if (clean && profileRoot != null && profileRoot.exists()) {
+                clean = deleteTree(profileRoot);
+            }
+            vppProcess = null;
+            stopRequested = false;
+            if (!clean) {
+                publishError("cleanup_failed", "generation-owned profile cleanup failed",
+                        true, ProductCoreLifecycle.UNKNOWN_PID);
+                return false;
+            }
+            clearProfileHandles();
+            boolean published = publish(RuntimeSnapshot.stopped(
+                    current.profile, current.generation));
+            stopProductCoreServiceIfNeeded(stopService);
+            return published;
+        }
+
+        boolean anyProductProfileExists = profileDirectory(RuntimeProfile.ROOT).exists()
+                || profileDirectory(RuntimeProfile.VPN).exists();
+        ProductCoreLifecycle.StopDecision preflight = ProductCoreLifecycle.preflightStop(
+                anyProductProfileExists, false, sessionLive,
+                this::probeProductCoreProfiles,
+                this::clearProductCoreProfiles);
+        if (preflight == ProductCoreLifecycle.StopDecision.BLOCK_INCONSISTENT) {
+            publishError("product_core_session_missing",
+                    "Product Core session is live but its process handle is missing",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            stopRequested = false;
+            return false;
+        }
+        if (preflight == ProductCoreLifecycle.StopDecision.BLOCK_LIVE) {
+            publishError("product_core_owner_live",
+                    "a live Product Core generation cannot be stopped without its process handle",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            stopRequested = false;
+            return false;
+        }
+        if (preflight == ProductCoreLifecycle.StopDecision.BLOCK_UNKNOWN) {
+            publishError("product_core_ownership_unverified",
+                    "Product Core profile liveness could not be proven for stop",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            stopRequested = false;
+            return false;
+        }
+        if (preflight == ProductCoreLifecycle.StopDecision.CLEANUP_FAILED) {
+            publishError("cleanup_failed", "generation-owned profile cleanup failed",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            stopRequested = false;
+            return false;
+        }
+        clearProfileHandles();
+        stopRequested = false;
+        boolean published = publish(RuntimeSnapshot.stopped(
+                current.profile, current.generation));
+        stopProductCoreServiceIfNeeded(stopService);
+        return published;
+    }
+
+    private void stopProductCoreServiceIfNeeded(boolean stopService) {
+        if (stopService && foregroundStarted) {
+            stopForeground(true);
+            foregroundStarted = false;
+        }
+        if (stopService && !destroying) {
+            stopSelf();
+        }
+    }
+
     private boolean stopRuntime() {
         return stopRuntime(true);
     }
 
     private boolean stopRuntime(boolean stopService) {
+        if (productCoreMainline()) {
+            return stopProductCoreRuntime(stopService);
+        }
         if (productCoreSession != null || processAlive(vppProcess)) {
             RuntimeSnapshot current = snapshot == null
                     ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot;
@@ -1652,7 +1861,8 @@ public final class RuntimeService extends VpnService {
     private void pauseProtection() {
         RuntimeProfile pausedProfile = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
         boolean stopped = stopRuntime(false);
-        if (!stopped && persistenceGate.isPersistenceUnavailable()) {
+        if (!stopped && (productCoreMainline()
+                || persistenceGate.isPersistenceUnavailable())) {
             return;
         }
         stopRequested = true;
