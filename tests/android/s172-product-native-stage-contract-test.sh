@@ -158,10 +158,30 @@ for library in \
   test -f "$stage_dir/lib/$library"
 done
 test -f "$ndk_root/build/cmake/android.toolchain.cmake"
-test -x "$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+android_clang="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+test -x "$android_clang"
 test -x "$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
 llvm_readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 test -x "$llvm_readelf"
+
+has_df_1_global() {
+  local dynamic_file="$1"
+  awk '
+    /\(FLAGS_1\)/ {
+      for (field = 1; field <= NF; field++) {
+        if ($field == "GLOBAL") {
+          found = 1
+          exit
+        }
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$dynamic_file"
+}
+
+assert_no_df_1_global() {
+  ! has_df_1_global "$1"
+}
 source_dir="$(realpath -e "$source_input" 2>/dev/null)"
 case "${source_dir,,}" in
   *experiments*|*poc*)
@@ -200,6 +220,30 @@ grep -Fq 'VPP_LIBRARY_DIR' "$missing_library_log" || {
   sed -n '1,120p' "$missing_library_log" >&2
   exit 1
 }
+
+# Exercise the exact ELF flag parser with a real Android AArch64 shared
+# object. The linker emits GLOBAL as a token on the FLAGS_1 line; this must be
+# rejected, while GLOBAL text outside that line must not affect the helper.
+global_fixture="$work_dir/global-flags.so"
+global_fixture_log="$work_dir/global-flags-build.log"
+if ! printf '%s\n' 'int sakamoto_global_fixture(void) { return 1; }' | \
+    "$android_clang" -x c - -shared -fPIC -Wl,-z,global \
+    -o "$global_fixture" >"$global_fixture_log" 2>&1; then
+  echo "Android clang could not build the DF_1_GLOBAL fixture" >&2
+  sed -n '1,120p' "$global_fixture_log" >&2
+  exit 1
+fi
+global_fixture_dynamic="$work_dir/global-flags.dynamic"
+"$llvm_readelf" -d "$global_fixture" >"$global_fixture_dynamic"
+if ! has_df_1_global "$global_fixture_dynamic"; then
+  echo "DF_1_GLOBAL fixture did not expose GLOBAL on FLAGS_1" >&2
+  sed -n '/FLAGS_1/p' "$global_fixture_dynamic" >&2
+  exit 1
+fi
+if assert_no_df_1_global "$global_fixture_dynamic"; then
+  echo "DF_1_GLOBAL fixture was accepted by the no-global gate" >&2
+  exit 1
+fi
 
 while IFS= read -r -d '' link; do
   target="$(readlink -- "$link")"
@@ -380,7 +424,7 @@ for library in \
     exit 1
   }
 done
-if grep -Fq 'DF_1_GLOBAL' "$plugin_dynamic"; then
+if ! assert_no_df_1_global "$plugin_dynamic"; then
   echo "product plugin must not request DF_1_GLOBAL" >&2
   exit 1
 fi
