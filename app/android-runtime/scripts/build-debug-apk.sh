@@ -12,7 +12,8 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
-plugin_name="product_core_plugin.so"
+plugin_build_name="product_core_plugin.so"
+plugin_name="libproduct_core_plugin.so"
 expected_vpp_patch_series_count=15
 expected_vpp_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
 default_stage_dir="$repo_root/build-output/android-vpp-runtime/stage"
@@ -218,7 +219,6 @@ build_native_stage() {
   local jni_library
   local android_sysroot
   local native_dir
-  local plugin_dir
   local generated_dir
   local marker
   local runtime_library
@@ -448,7 +448,7 @@ build_native_stage() {
   )
   cmake "${cmake_args[@]}"
   cmake --build "$plugin_build" --target install --parallel "${SAKAMOTO_ANDROID_BUILD_JOBS:-2}"
-  plugin_source="$plugin_install/lib/vpp_plugins/$plugin_name"
+  plugin_source="$plugin_install/lib/vpp_plugins/$plugin_build_name"
   [[ -f "$plugin_source" ]] || \
     die "production VPP plugin was not installed: $plugin_source"
   generated_vapi_header="$plugin_build/CMakeFiles/vpp-api/vapi/product_core.api.vapi.h"
@@ -469,9 +469,8 @@ build_native_stage() {
   [[ -f "$rust_library" ]] || die "Android Product Core artifact was not produced"
 
   native_dir="$product_stage_candidate/lib/arm64-v8a"
-  plugin_dir="$product_stage_candidate/plugins/arm64-v8a"
   generated_dir="$product_stage_candidate/generated-vapi/vapi"
-  mkdir -p -- "$native_dir" "$plugin_dir" "$generated_dir"
+  mkdir -p -- "$native_dir" "$generated_dir"
   install -m 0755 "$vpp_binary" "$native_dir/libvpp_runtime.so"
   for runtime_library in \
     libsvm.so \
@@ -511,18 +510,21 @@ build_native_stage() {
     -Wl,-soname,libsakamoto_runtime_control.so \
     -lsakamoto_product_core -o "$jni_library"
   [[ -f "$jni_library" ]] || die "Product Core JNI library was not produced"
-  install -m 0755 "$plugin_source" "$plugin_dir/$plugin_name"
+  # Android PackageManager recognizes only lib/<abi>/lib*.so as native
+  # payload. Keep the production plugin bytes unchanged while using the
+  # linker-prefixed installed name required by that packaging boundary.
+  install -m 0755 "$plugin_source" "$native_dir/$plugin_name"
   install -m 0644 "$generated_vapi_header" "$generated_dir/product_core.api.vapi.h"
 
   for artifact in \
     "$native_dir/libvpp_runtime.so" \
     "$native_dir/libsakamoto_product_core.so" \
-    "$plugin_dir/$plugin_name"; do
+    "$native_dir/$plugin_name"; do
     artifact_description="$(file -Lb "$artifact")"
     [[ "$artifact_description" == *'ARM aarch64'* ]] || \
       die "staged artifact is not an arm64-v8a ELF: $artifact"
   done
-  for artifact in "$native_dir"/*.so* "$plugin_dir"/*.so*; do
+  for artifact in "$native_dir"/*.so*; do
     [[ -e "$artifact" || -L "$artifact" ]] || continue
     artifact_description="$($llvm_readelf -h "$artifact" 2>/dev/null)" || \
       die "cannot inspect staged ELF: $artifact"
@@ -537,7 +539,7 @@ build_native_stage() {
     die "cannot inspect Product Core JNI dynamic dependencies"
   [[ "$jni_dynamic" == *'libsakamoto_product_core.so'* ]] || \
     die "Product Core JNI bridge does not link libsakamoto_product_core.so"
-  plugin_symbols="$($llvm_readelf -Ws "$plugin_dir/$plugin_name" 2>/dev/null)" || \
+  plugin_symbols="$($llvm_readelf -Ws "$native_dir/$plugin_name" 2>/dev/null)" || \
     die "cannot inspect product plugin symbols"
   [[ "$plugin_symbols" == *product_core_init* ]] || \
     die "product plugin init symbol is missing"
@@ -580,7 +582,7 @@ vppPatchSeriesSha256=$vpp_patch_series_sha256
 vppBinary=lib/arm64-v8a/libvpp_runtime.so
 productCore=lib/arm64-v8a/libsakamoto_product_core.so
 runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so
-productPlugin=plugins/arm64-v8a/$plugin_name
+productPlugin=lib/arm64-v8a/$plugin_name
 generatedVapi=generated-vapi/vapi/product_core.api.vapi.h
 bridgeSource=src/product/native/sakamoto_product_vapi.c
 EOF
@@ -659,7 +661,7 @@ PY
   echo "vppRevision=$expected_revision"
   echo "productCore=$product_stage/lib/arm64-v8a/libsakamoto_product_core.so"
   echo "runtimeControl=$product_stage/lib/arm64-v8a/libsakamoto_runtime_control.so"
-  echo "productPlugin=$product_stage/plugins/arm64-v8a/$plugin_name"
+  echo "productPlugin=$product_stage/lib/arm64-v8a/$plugin_name"
 }
 
 build_apk_only() {
@@ -761,7 +763,7 @@ build_apk_only() {
   require_product_manifest_line "vppBinary=lib/arm64-v8a/libvpp_runtime.so"
   require_product_manifest_line "productCore=lib/arm64-v8a/libsakamoto_product_core.so"
   require_product_manifest_line "runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so"
-  require_product_manifest_line "productPlugin=plugins/arm64-v8a/$plugin_name"
+  require_product_manifest_line "productPlugin=lib/arm64-v8a/$plugin_name"
   require_product_manifest_line "generatedVapi=generated-vapi/vapi/product_core.api.vapi.h"
   require_product_manifest_line "bridgeSource=src/product/native/sakamoto_product_vapi.c"
 
@@ -798,11 +800,12 @@ build_apk_only() {
     libvlibmemory.so \
     libvlibmemoryclient.so \
     libvnet.so \
-    libvppinfra.so; do
+    libvppinfra.so \
+    "$plugin_name"; do
     [[ -f "$native_dir/$native_library" && ! -L "$native_dir/$native_library" ]] || \
       die "product stage native library is missing or not a regular file: $native_library"
   done
-  plugin_source="$product_stage/plugins/arm64-v8a/$plugin_name"
+  plugin_source="$native_dir/$plugin_name"
   [[ -f "$plugin_source" && ! -L "$plugin_source" ]] || \
     die "product stage plugin is missing or not a regular file"
 
@@ -875,7 +878,6 @@ build_apk_only() {
   classes_dir="$apk_build_dir/classes"
   dex_dir="$apk_build_dir/dex"
   mkdir -p -- "$payload_assets" "$payload_lib" "$classes_dir" "$dex_dir"
-  install -m 0644 "$plugin_source" "$payload_assets/$plugin_name"
   install -m 0644 "$product_manifest" "$payload_assets/product-stage.properties"
 
   mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
@@ -954,7 +956,8 @@ build_apk_only() {
     libvlibmemory.so \
     libvlibmemoryclient.so \
     libvnet.so \
-    libvppinfra.so; do
+    libvppinfra.so \
+    "$plugin_name"; do
     install -m 0644 "$native_dir/$native_library" "$payload_lib/$native_library"
     artifact="$native_dir/$native_library"
     elf_header="$($llvm_readelf -h "$artifact" 2>/dev/null)" || \
@@ -1008,11 +1011,11 @@ if [[ "$mode" == dry-run ]]; then
   exit 0
 fi
 
-product_plugin="${SAKAMOTO_PRODUCT_PLUGIN:-$repo_root/build-output/product-vpp-android/lib/vpp_plugins/$plugin_name}"
+product_plugin="${SAKAMOTO_PRODUCT_PLUGIN:-$repo_root/build-output/product-vpp-android/lib/vpp_plugins/$plugin_build_name}"
 [[ -f "$product_plugin" ]] || \
   die "production VPP plugin is missing: $product_plugin"
-[[ "$(basename -- "$product_plugin")" == "$plugin_name" ]] || \
-  die "production VPP plugin must be named $plugin_name"
+[[ "$(basename -- "$product_plugin")" == "$plugin_build_name" ]] || \
+  die "production VPP plugin must be named $plugin_build_name before Android native packaging"
 
 echo "Android product APK assembly is not enabled until the generated-VAPI JNI bridge and product plugin staging slice is present." >&2
 echo "validated versionCode=$version_code vppRevision=$expected_revision plugin=$plugin_name" >&2

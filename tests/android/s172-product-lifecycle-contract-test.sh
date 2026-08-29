@@ -7,7 +7,8 @@ snapshot="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androi
 
 test -f "$service"
 grep -Fq 'product-stage.properties' "$service"
-grep -Fq 'product_core_plugin.so' "$service"
+grep -Fq 'libproduct_core_plugin.so' "$service"
+grep -Fq 'nativeLibraryDir' "$service"
 grep -Fq 'SAKAMOTO_PRODUCT_GENERATION' "$service"
 grep -Fq 'SAKAMOTO_VPP_SVM_DIR' "$service"
 grep -Fq 'RuntimeControlNative.Session' "$service"
@@ -37,6 +38,11 @@ if grep -Fq 'process.pid()' "$service"; then
 fi
 if grep -Fq 'writePid(pidFile' "$service"; then
   echo "Product Core lifecycle writes a vpp.pid without a supported PID" >&2
+  exit 1
+fi
+if grep -Fq 'PRODUCT_PLUGIN_ASSET' "$service" || \
+    grep -Fq 'copyAsset(' "$service"; then
+  echo "Product Core lifecycle still copies the plugin from APK assets" >&2
   exit 1
 fi
 
@@ -76,6 +82,7 @@ def method_body(signature):
 
 
 start = method_body("private void startProductCoreRuntime(")
+prepare = method_body("private void prepareProductCoreProfile(")
 stop = method_body("private boolean stopRuntime(boolean stopService)")
 terminate = method_body("private boolean terminateProductCoreProcess(")
 for forbidden in (
@@ -86,6 +93,20 @@ for forbidden in (
         raise AssertionError("Product Core start uses forbidden process API: " + forbidden)
 
 start_index = start.index("new ProcessBuilder(vpp.getPath()")
+if "nativeLibraryDir" not in start or "PRODUCT_PLUGIN_BINARY" not in start \
+        or "libproduct_core_plugin.so" not in source:
+    raise AssertionError("Product Core must resolve the plugin from nativeLibraryDir")
+for required in (
+        "plugin.isFile()", "plugin.canRead()", "nativeDir.equals(plugin.getParentFile())"):
+    if required not in start:
+        raise AssertionError("Product Core must validate the native plugin boundary: " + required)
+if "plugin_path" not in start:
+    raise AssertionError("Product Core must pass an explicit native plugin path")
+if "plugins {" not in prepare or "plugin default { disable }" not in prepare \
+        or "PRODUCT_PLUGIN_BINARY" not in prepare:
+    raise AssertionError("Product Core startup config must allowlist the native plugin")
+if "setExecutable" in start or "chmod" in start or "filesDir" in start:
+    raise AssertionError("Product Core must not chmod/copy plugin into a writable profile")
 stdin_index = start.index("process.getOutputStream().close()")
 stdout_index = start.index("builder.redirectOutput(")
 launch_index = start.index("Process process = builder.start()")

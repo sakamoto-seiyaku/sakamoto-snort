@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <arpa/inet.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -94,8 +95,14 @@ product_core_init (vlib_main_t *vm)
   product_core_main_t *pcm = &product_core_main;
   pcm->vlib_main = vm;
   pcm->generation = product_core_generation ();
-  pcm->core_ready = 1;
   pcm->msg_id_base = setup_message_id_table ();
+  if (pcm->msg_id_base == UINT16_MAX)
+    {
+      pcm->core_ready = 0;
+      return clib_error_return (0,
+                                "product core API message ID table unavailable");
+    }
+  pcm->core_ready = 1;
   return 0;
 }
 

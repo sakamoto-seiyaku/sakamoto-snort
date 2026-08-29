@@ -35,6 +35,13 @@ if grep -Fq 'mv -f -- "$signed_apk" "$apk_output_path"' "$build_script"; then
 fi
 grep -Fq 'zipalign' "$build_script"
 grep -Fq 'apksigner_jar' "$build_script"
+grep -Fq 'libproduct_core_plugin.so' "$build_script"
+grep -Fq 'payload_lib' "$build_script"
+grep -Fq '"$plugin_name"; do' "$build_script"
+if grep -Fq 'payload_assets/$plugin_name' "$build_script"; then
+  echo "APK builder still packages the product plugin as an asset" >&2
+  exit 1
+fi
 if grep -Fq 'rm -rf -- "$apk_output_dir"' "$build_script"; then
   echo "apk-only removes the caller's APK output directory" >&2
   exit 1
@@ -54,7 +61,7 @@ grep -Fxq "vppRevision=$pinned_revision" "$product_manifest"
 grep -Fxq 'vppBinary=lib/arm64-v8a/libvpp_runtime.so' "$product_manifest"
 grep -Fxq 'productCore=lib/arm64-v8a/libsakamoto_product_core.so' "$product_manifest"
 grep -Fxq 'runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so' "$product_manifest"
-grep -Fxq 'productPlugin=plugins/arm64-v8a/product_core_plugin.so' "$product_manifest"
+grep -Fxq 'productPlugin=lib/arm64-v8a/libproduct_core_plugin.so' "$product_manifest"
 
 native_dir="$product_stage/lib/arm64-v8a"
 for library in \
@@ -71,7 +78,7 @@ for library in \
   libvppinfra.so; do
   test -f "$native_dir/$library"
 done
-test -f "$product_stage/plugins/arm64-v8a/product_core_plugin.so"
+test -f "$product_stage/lib/arm64-v8a/libproduct_core_plugin.so"
 
 run_apk() {
   local stage="$1"
@@ -104,13 +111,17 @@ apk_entries="$(unzip -Z1 "$apk")"
 for entry in \
   AndroidManifest.xml \
   classes.dex \
-  assets/product_core_plugin.so \
   assets/product-stage.properties; do
   grep -Fxq "$entry" <<<"$apk_entries"
 done
-unzip -p "$apk" assets/product_core_plugin.so >"$work_dir/plugin.so"
+if grep -Fxq 'assets/product_core_plugin.so' <<<"$apk_entries"; then
+  echo "product plugin must not be copied into APK assets" >&2
+  exit 1
+fi
+grep -Fxq 'lib/arm64-v8a/libproduct_core_plugin.so' <<<"$apk_entries"
+unzip -p "$apk" lib/arm64-v8a/libproduct_core_plugin.so >"$work_dir/plugin.so"
 unzip -p "$apk" assets/product-stage.properties >"$work_dir/product-stage.properties"
-cmp "$product_stage/plugins/arm64-v8a/product_core_plugin.so" "$work_dir/plugin.so"
+cmp "$product_stage/lib/arm64-v8a/libproduct_core_plugin.so" "$work_dir/plugin.so"
 cmp "$product_stage/product-stage.properties" "$work_dir/product-stage.properties"
 plugin_header="$($llvm_readelf -h "$work_dir/plugin.so")"
 grep -Fq 'AArch64' <<<"$plugin_header"
@@ -141,7 +152,7 @@ while IFS= read -r entry; do
     lib/arm64-v8a/*.so) native_entry_count=$((native_entry_count + 1)) ;;
   esac
 done <<<"$apk_entries"
-test "$native_entry_count" -eq 11
+test "$native_entry_count" -eq 12
 
 forbidden_entry=""
 while IFS= read -r entry; do

@@ -41,6 +41,14 @@ typedef struct {
   sakamoto_product_status_t *status;
 } status_call_t;
 
+static bool
+product_core_api_available (vapi_ctx_t context)
+{
+  return vapi_is_msg_available (context, vapi_msg_id_product_core_status)
+         && vapi_is_msg_available (context,
+                                   vapi_msg_id_product_core_status_reply);
+}
+
 static vapi_error_e
 status_reply (vapi_ctx_t context, void *callback_context, vapi_error_e rv,
               bool is_last, vapi_payload_product_core_status_reply *reply)
@@ -90,6 +98,13 @@ static uint32_t
 query_status (sakamoto_product_session_t *session,
               sakamoto_product_status_t *status)
 {
+  if (!product_core_api_available (session->context))
+    {
+      sakamoto_product_status_error (
+        status, SAKAMOTO_PRODUCT_API_UNAVAILABLE,
+        "required Product Core VAPI messages are unavailable");
+      return SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+    }
   vapi_msg_product_core_status *message =
     vapi_alloc_product_core_status (session->context);
   if (message == NULL)
@@ -186,6 +201,15 @@ sakamoto_product_session_connect (sakamoto_product_bytes_t api_socket,
                                      SAKAMOTO_PRODUCT_CONNECT_FAILED,
                                      "cannot connect to VPP VAPI");
       return SAKAMOTO_PRODUCT_CONNECT_FAILED;
+    }
+  if (!product_core_api_available (context))
+    {
+      vapi_disconnect (context);
+      vapi_ctx_free (context);
+      sakamoto_product_status_error (
+        out_status, SAKAMOTO_PRODUCT_API_UNAVAILABLE,
+        "required Product Core VAPI messages are unavailable");
+      return SAKAMOTO_PRODUCT_API_UNAVAILABLE;
     }
   sakamoto_product_session_t *session = calloc (1U, sizeof (*session));
   if (session == NULL || pthread_mutex_init (&session->mutex, NULL) != 0)

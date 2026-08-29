@@ -70,7 +70,7 @@ public final class RuntimeService extends VpnService {
     private static final String HASH_ASSET = "vpp-runtime.sha256";
     private static final String DAEMON_HASH_ASSET = "sucre-snortd.sha256";
     private static final String PRODUCT_MANIFEST_ASSET = "product-stage.properties";
-    private static final String PRODUCT_PLUGIN_ASSET = "product_core_plugin.so";
+    private static final String PRODUCT_PLUGIN_BINARY = "libproduct_core_plugin.so";
     private static final String CHANNEL_ID = "sakamoto-runtime";
     private static final int NOTIFICATION_ID = 6701;
     private static final int HEALTH_ATTEMPTS = 24;
@@ -814,17 +814,20 @@ public final class RuntimeService extends VpnService {
                 return;
             }
 
-            File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
-            File vpp = new File(nativeDir, VPP_BINARY);
-            if (!vpp.isFile()) {
-                throw new IOException("runtime artifact is not packaged: " + VPP_BINARY);
+            File nativeDir = new File(getApplicationInfo().nativeLibraryDir).getCanonicalFile();
+            File vpp = new File(nativeDir, VPP_BINARY).getCanonicalFile();
+            File plugin = new File(nativeDir, PRODUCT_PLUGIN_BINARY).getCanonicalFile();
+            if (!nativeDir.isDirectory()
+                    || !vpp.isFile() || !vpp.canRead()
+                    || !plugin.isFile() || !plugin.canRead()
+                    || !nativeDir.equals(vpp.getParentFile())
+                    || !nativeDir.equals(plugin.getParentFile())) {
+                throw new IOException("Product Core native payload is missing or outside nativeLibraryDir");
             }
             prepareProductCoreProfile(profileRoot);
-            File pluginDir = new File(profileRoot, "plugins");
-            copyAsset(PRODUCT_PLUGIN_ASSET, new File(pluginDir, PRODUCT_PLUGIN_ASSET));
 
             ProcessBuilder builder = new ProcessBuilder(vpp.getPath(), "plugin_path",
-                    pluginDir.getPath(), "-c",
+                    nativeDir.getPath(), "-c",
                     new File(profileRoot, "startup.conf").getPath());
             File runtime = new File(profileRoot, "runtime");
             File svm = new File(profileRoot, "shm");
@@ -1007,8 +1010,7 @@ public final class RuntimeService extends VpnService {
         File runtime = new File(profile, "runtime");
         File logs = new File(profile, "logs");
         File svm = new File(profile, "shm");
-        File plugins = new File(profile, "plugins");
-        if (!runtime.mkdirs() || !logs.mkdirs() || !svm.mkdirs() || !plugins.mkdirs()) {
+        if (!runtime.mkdirs() || !logs.mkdirs() || !svm.mkdirs()) {
             throw new IOException("unable to create generation-owned profile directories");
         }
         String config = "unix {\n  nodaemon\n  nobanner\n  runtime-dir "
@@ -1018,23 +1020,11 @@ public final class RuntimeService extends VpnService {
                 + "socksvr {\n  socket-name " + new File(runtime, "api.sock").getPath()
                 + "\n}\n\napi-segment {\n  prefix sakamoto-product-" + generation
                 + "\n}\n\nstatseg {\n  socket-name "
-                + new File(runtime, "statseg.sock").getPath() + "\n}\n";
+                + new File(runtime, "statseg.sock").getPath() + "\n}\n\n"
+                + "plugins {\n  plugin default { disable }\n  plugin "
+                + PRODUCT_PLUGIN_BINARY + " { enable }\n}\n";
         try (FileOutputStream output = new FileOutputStream(new File(profile, "startup.conf"))) {
             output.write(config.getBytes(StandardCharsets.UTF_8));
-            output.getFD().sync();
-        }
-    }
-
-    private void copyAsset(String asset, File destination) throws IOException {
-        try (InputStream input = getAssets().open(asset);
-             FileOutputStream output = new FileOutputStream(destination)) {
-            byte[] buffer = new byte[16 * 1024];
-            int count;
-            while ((count = input.read(buffer)) >= 0) {
-                if (count > 0) {
-                    output.write(buffer, 0, count);
-                }
-            }
             output.getFD().sync();
         }
     }

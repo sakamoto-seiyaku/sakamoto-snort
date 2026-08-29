@@ -73,10 +73,13 @@ grep -q '!call.callback_called' "$repo_root/src/product/native/sakamoto_product_
 grep -q 'sakamoto-product-host-query-identity-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-host-residue-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-vapi-callback-contract' "$repo_root/CMakeLists.txt"
+grep -q 'sakamoto-product-plugin-init-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-path-contract' "$repo_root/CMakeLists.txt"
 grep -q 'mismatched API identity' "$repo_root/tests/host/product_query_identity_contract.sh"
 grep -q 'generation_marker=present' "$repo_root/tests/host/product_residue_contract.sh"
 grep -q 'callback was not invoked' "$repo_root/tests/host/product_vapi_callback_contract.sh"
+grep -q 'message-id setup failure was not fail-closed' \
+  "$repo_root/tests/host/product_plugin_init_contract.sh"
 grep -q 'one_connection_is_reused_for_two_serialized_queries' \
   "$repo_root/crates/product-core/tests/session_lifecycle.rs"
 if [[ "$(grep -c 'assert_eq!(request(&mut stream), (OP_QUERY' \
@@ -94,8 +97,11 @@ if grep -q 'product_core.api/1.0.0@1b103f1d' "$plugin_source"; then
   exit 1
 fi
 test -f "$identity_template"
-grep -q 'Host-only pre-adapter' "$testing_docs"
-grep -q 'ADR-0007 Flow Stack' "$testing_docs"
+# The testing overview may describe either the Host-only supporting seam or
+# the combined installed-product acceptance path. The detailed evidence file
+# below remains the stable assertion for the pre-adapter/Flow Stack boundary.
+grep -Eq 'Host-only pre-adapter|Product Spine acceptance' "$testing_docs"
+grep -Eq 'ADR-0007 Flow Stack|installed through' "$testing_docs"
 grep -q 'pre-adapter' "$evidence"
 grep -q 'does not prove.*Flow Stack' "$evidence"
 grep -q 'path-helpers.sh' "$launcher"
@@ -117,6 +123,7 @@ for test_script in \
   "$repo_root/tests/host/product_query_identity_contract.sh" \
   "$repo_root/tests/host/product_residue_contract.sh" \
   "$repo_root/tests/host/product_vapi_callback_contract.sh" \
+  "$repo_root/tests/host/product_plugin_init_contract.sh" \
   "$repo_root/tests/host/product_path_contract.sh"; do
   bash -n "$test_script"
 done
