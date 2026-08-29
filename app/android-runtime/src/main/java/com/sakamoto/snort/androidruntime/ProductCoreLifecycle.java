@@ -2,6 +2,9 @@ package com.sakamoto.snort.androidruntime;
 
 /** Exact SAKAMOTO-172 core-only readiness predicate. */
 public final class ProductCoreLifecycle {
+    /** Android java.lang.Process does not expose a portable numeric PID. */
+    public static final long UNKNOWN_PID = -1L;
+
     private ProductCoreLifecycle() {}
 
     public static boolean isReady(long generation, String expectedVppRevision,
@@ -28,5 +31,16 @@ public final class ProductCoreLifecycle {
     public static boolean canRetryConnection(boolean stopRequested, boolean processAlive,
                                              int attempt, int maxAttempts) {
         return !stopRequested && processAlive && attempt >= 0 && attempt < maxAttempts;
+    }
+
+    /**
+     * Visible START may remove a stale Product Core profile only when this
+     * service has no live process or session handle for that generation.
+     * Ownership/audit helpers for the retired Root path are not involved.
+     */
+    public static boolean shouldClearStaleProfile(boolean profileExists,
+                                                  boolean processAlive,
+                                                  boolean sessionLive) {
+        return profileExists && !processAlive && !sessionLive;
     }
 }

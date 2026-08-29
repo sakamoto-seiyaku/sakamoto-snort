@@ -776,10 +776,21 @@ public final class RuntimeService extends VpnService {
             queryProductCoreRuntime();
             return;
         }
+        boolean productProcessAlive = processAlive(vppProcess);
+        boolean productSessionLive = productCoreSession != null;
+        if (productProcessAlive || productSessionLive) {
+            failProductCoreGeneration("product_core_session_missing",
+                    "Product Core handles are inconsistent for the active generation");
+            return;
+        }
         closeProductCoreSession();
         activeProfile = selected;
         initializeProfilePaths(selected);
-        if (profileRoot.exists() && !deleteTree(profileRoot)) {
+        // Product Core path defers stale-profile cleanup to visible START;
+        // there is no numeric PID or privileged Root ownership audit here.
+        if (ProductCoreLifecycle.shouldClearStaleProfile(
+                profileRoot.exists(), productProcessAlive, productSessionLive)
+                && !deleteTree(profileRoot)) {
             failWithoutRuntime("product_profile_cleanup_failed",
                     "previous generation-owned profile tree could not be removed");
             return;
@@ -827,7 +838,6 @@ public final class RuntimeService extends VpnService {
             builder.redirectOutput(new File(new File(profileRoot, "logs"), "vpp-stdout.log"));
             Process process = builder.start();
             vppProcess = process;
-            writePid(pidFile, process.pid());
 
             RuntimeControlNative.Session session = connectProductCoreSession(
                     new File(runtime, "api.sock"), process);
@@ -838,7 +848,7 @@ public final class RuntimeService extends VpnService {
             }
             productCoreSession = session;
             RuntimeControlNative.Status status = session.lastStatus();
-            if (!publishProductCoreRunning(status, process.pid())) {
+            if (!publishProductCoreRunning(status, ProductCoreLifecycle.UNKNOWN_PID)) {
                 failProductCoreGeneration("runtime_state_persistence_unavailable",
                         "Product Core identity could not be published");
                 return;
@@ -892,7 +902,7 @@ public final class RuntimeService extends VpnService {
                     status == null ? "Product Core query failed" : status.errorDetail);
             return;
         }
-        publishProductCoreRunning(status, process.pid());
+        publishProductCoreRunning(status, ProductCoreLifecycle.UNKNOWN_PID);
         appendLog("product_core=query generation=" + generation + " api=" + status.apiIdentity);
     }
 
@@ -1016,13 +1026,6 @@ public final class RuntimeService extends VpnService {
         }
     }
 
-    private static void writePid(File file, long pid) throws IOException {
-        try (FileOutputStream output = new FileOutputStream(file)) {
-            output.write((Long.toString(pid) + "\n").getBytes(StandardCharsets.US_ASCII));
-            output.getFD().sync();
-        }
-    }
-
     private static boolean legacyCppRuntimeRetired() {
         return true;
     }
@@ -1040,6 +1043,10 @@ public final class RuntimeService extends VpnService {
     }
 
     private void reconcileDurableRuntime(boolean forceHealthQuery, long queryRevision) {
+        if (productCoreMainline()) {
+            reconcileProductCoreRuntime(forceHealthQuery, queryRevision);
+            return;
+        }
         RuntimeOwnershipReconciliation.GlobalDecision ownership =
                 auditGlobalOwnership(!durableProjectionRequiresAudit);
         if (ownership.isBlocked()) {
@@ -1080,6 +1087,27 @@ public final class RuntimeService extends VpnService {
             publish(RuntimeSnapshot.stoppedAfter(snapshot));
         } else if (snapshot == null) {
             publish(RuntimeSnapshot.stopped(activeProfile, generation));
+        }
+    }
+
+    /**
+     * Product Core has no cross-service adoption in SAKAMOTO-172. A service
+     * recreation leaves any stale profile for the next visible START, whose
+     * app-owned preflight creates the fresh generation. In-process handles
+     * remain authoritative for ordinary queries.
+     */
+    private void reconcileProductCoreRuntime(boolean forceHealthQuery, long queryRevision) {
+        Process process = vppProcess;
+        if (processAlive(process) && productCoreSession != null) {
+            if (forceHealthQuery) {
+                queryProductCoreRuntime();
+            }
+            return;
+        }
+        if (snapshot != null && snapshot.isActive()) {
+            publishError("runtime_recovered", "previous Product Core owner is not active",
+                    false, ProductCoreLifecycle.UNKNOWN_PID);
+            publish(RuntimeSnapshot.stoppedAfter(snapshot));
         }
     }
 

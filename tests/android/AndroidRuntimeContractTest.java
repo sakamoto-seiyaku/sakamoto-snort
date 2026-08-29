@@ -1338,9 +1338,21 @@ public final class AndroidRuntimeContractTest {
                 "an exited sidecar is never retried as a live generation");
         check(!ProductCoreLifecycle.canRetryConnection(false, true, 24, 24),
                 "Product Core connection retries remain bounded");
+        check(ProductCoreLifecycle.UNKNOWN_PID == -1L,
+                "Product Core projection uses an explicit unknown PID");
+        check(ProductCoreLifecycle.shouldClearStaleProfile(true, false, false),
+                "a tokenless profile with no live Product Core handle is START-cleanable");
+        check(!ProductCoreLifecycle.shouldClearStaleProfile(true, true, false),
+                "START never removes a profile while its Product Core process is alive");
+        check(!ProductCoreLifecycle.shouldClearStaleProfile(true, false, true),
+                "START never removes a profile while its Product Core session remains live");
         RuntimeSnapshot running = RuntimeSnapshot.runningCoreOnly(RuntimeProfile.ROOT,
                 "vpp-runtime-health/v1", ready.vppRevision, ready.artifactId,
-                "arm64-v8a", 4242L, 42L);
+                "arm64-v8a", ProductCoreLifecycle.UNKNOWN_PID, 42L);
+        check(running.pid == ProductCoreLifecycle.UNKNOWN_PID,
+                "core-only running projection retains unknown PID");
+        check(running.isActive(),
+                "unknown PID does not make a ready core-only projection inactive");
         check(RuntimeSnapshot.ADAPTER_UNAVAILABLE.equals(running.adapterReadiness),
                 "core-only running state keeps the Adapter unavailable");
         check(running.displayText().contains("Protection: not running"),
