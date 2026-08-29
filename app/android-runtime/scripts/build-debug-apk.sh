@@ -15,10 +15,11 @@ plugin_name="product_core_plugin.so"
 default_stage_dir="$repo_root/build-output/android-vpp-runtime/stage"
 default_version_state="$repo_root/build-output/android-vpp-runtime/version-code"
 product_stage_cleanup_dir=""
+apk_cleanup_dir=""
 
 usage() {
   cat >&2 <<'EOF'
-usage: build-debug-apk.sh [--dry-run|--stage-only]
+usage: build-debug-apk.sh [--dry-run|--stage-only|--apk-only]
 
 Required production VAPI inputs:
   SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR
@@ -37,6 +38,10 @@ Optional inputs:
 --stage-only requires SAKAMOTO_VPP_STAGE_DIR and SAKAMOTO_VPP_SOURCE_DIR.
 The clean stage supplies the generated headers, host tools, and runtime
 libraries; the default experiment stage is never selected by that mode.
+
+--apk-only requires an explicit, previously built product stage in
+SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR. It consumes that stage without rebuilding
+VPP, Product Core, or the product plugin.
 EOF
 }
 
@@ -54,6 +59,10 @@ case "${1:-}" in
     ;;
   --stage-only)
     mode=stage-only
+    shift
+    ;;
+  --apk-only)
+    mode=apk-only
     shift
     ;;
   --help|-h)
@@ -80,7 +89,7 @@ expected_revision="$(tr -d '[:space:]' < "$pin_file")"
 # API and validates them after the plugin build instead.
 vapi_include_dir="${SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR:-}"
 vapi_generated_dir="${SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR:-}"
-if [[ "$mode" != stage-only ]]; then
+if [[ "$mode" != stage-only && "$mode" != apk-only ]]; then
   if [[ -z "$vapi_include_dir" || -z "$vapi_generated_dir" ]]; then
     die "generated VAPI inputs are required: set SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR and SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR"
   fi
@@ -113,13 +122,18 @@ stage_dir="${SAKAMOTO_VPP_STAGE_DIR:-$default_stage_dir}"
 if [[ "$mode" == stage-only && -z "${SAKAMOTO_VPP_STAGE_DIR:-}" ]]; then
   die "stage-only requires an explicit clean arm64 VPP stage in SAKAMOTO_VPP_STAGE_DIR"
 fi
-[[ -d "$stage_dir" ]] || die "VPP stage directory is missing: $stage_dir"
-vpp_binary="$stage_dir/bin/vpp"
-[[ -f "$vpp_binary" && -x "$vpp_binary" ]] || \
-  die "VPP stage does not contain an executable bin/vpp: $vpp_binary"
+if [[ "$mode" != apk-only ]]; then
+  [[ -d "$stage_dir" ]] || die "VPP stage directory is missing: $stage_dir"
+  vpp_binary="$stage_dir/bin/vpp"
+  [[ -f "$vpp_binary" && -x "$vpp_binary" ]] || \
+    die "VPP stage does not contain an executable bin/vpp: $vpp_binary"
+fi
 
 stage_only_product_stage_input=""
-if [[ "$mode" == stage-only ]]; then
+if [[ "$mode" == stage-only || "$mode" == apk-only ]]; then
+  if [[ "$mode" == apk-only && -z "${SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR:-}" ]]; then
+    die "apk-only requires an explicit product stage in SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR"
+  fi
   raw_product_stage_input="${SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR:-$repo_root/build-output/android-product-stage}"
   raw_product_stage_leaf="$raw_product_stage_input"
   while [[ "$raw_product_stage_leaf" != "/" &&
@@ -610,8 +624,253 @@ PY
   echo "productPlugin=$product_stage/plugins/arm64-v8a/$plugin_name"
 }
 
+build_apk_only() {
+  local product_stage_input="$stage_only_product_stage_input"
+  local product_stage
+  local product_marker
+  local product_manifest
+  local native_dir
+  local plugin_source
+  local stage_path
+  local symlink_target
+  local symlink_resolved
+  local forbidden_path
+  local android_api=31
+  local target_api=36
+  local android_jar="${SAKAMOTO_ANDROID_ANDROID_JAR:-/home/js/android/lineage/prebuilts/sdk/36/public/android.jar}"
+  local aapt2="${SAKAMOTO_ANDROID_AAPT2:-/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/aapt2}"
+  local d8="${SAKAMOTO_ANDROID_D8:-/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/d8}"
+  local zipalign="${SAKAMOTO_ANDROID_ZIPALIGN:-/home/js/android/lineage/prebuilts/sdk/tools/linux/bin/zipalign}"
+  local apksigner_jar="${SAKAMOTO_ANDROID_APKSIGNER_JAR:-/home/js/android/lineage/prebuilts/sdk/tools/linux/lib/apksigner.jar}"
+  local d8_jar="${SAKAMOTO_ANDROID_D8_JAR:-}"
+  local debug_key="${SAKAMOTO_ANDROID_DEBUG_KEY:-/home/js/android/lineage/build/make/target/product/security/testkey.pk8}"
+  local debug_cert="${SAKAMOTO_ANDROID_DEBUG_CERT:-/home/js/android/lineage/build/make/target/product/security/testkey.x509.pem}"
+  local ndk_root="${SAKAMOTO_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
+  local llvm_readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+  local java_bin
+  local javac_bin
+  local zip_bin
+  local apk_output_input="${SAKAMOTO_ANDROID_APK_OUTPUT_DIR:-$repo_root/app/android-runtime/build/outputs}"
+  local apk_output_dir
+  local apk_output_path
+  local apk_build_dir
+  local java_source_dir="$repo_root/app/android-runtime/src/main/java"
+  local classes_dir
+  local dex_dir
+  local payload_root
+  local payload_assets
+  local payload_lib
+  local unsigned_apk
+  local aligned_apk
+  local signed_apk
+  local artifact
+  local elf_header
+  local native_library
+  local -a java_sources
+  local -a class_files
+  local -a d8_command
+
+  [[ -n "$product_stage_input" ]] || \
+    die "apk-only requires an explicit product stage"
+  product_stage="$(realpath -e -- "$product_stage_input" 2>/dev/null)" || \
+    die "product stage directory cannot be canonicalized: $product_stage_input"
+  [[ -d "$product_stage" && ! -L "$product_stage" ]] || \
+    die "product stage directory is not a real directory: $product_stage"
+  case "${product_stage,,}" in
+    *experiments*|*poc*) die "apk-only refuses experiment/POC product stage" ;;
+  esac
+
+  product_marker="$product_stage/.sakamoto-android-product-stage"
+  product_manifest="$product_stage/product-stage.properties"
+  [[ -f "$product_marker" && ! -L "$product_marker" ]] || \
+    die "product stage is missing its owned marker"
+  [[ "$(<"$product_marker")" == "sakamoto-android-product-stage/v1" ]] || \
+    die "product stage has an invalid owned marker"
+  [[ -f "$product_manifest" && ! -L "$product_manifest" ]] || \
+    die "product stage manifest is missing"
+  require_product_manifest_line() {
+    local expected_line="$1"
+    grep -Fxq "$expected_line" "$product_manifest" || \
+      die "product stage manifest is missing: $expected_line"
+  }
+  require_product_manifest_line "schema=sakamoto-android-product-stage/v1"
+  require_product_manifest_line "abi=arm64-v8a"
+  require_product_manifest_line "androidApi=$android_api"
+  require_product_manifest_line "vppRevision=$expected_revision"
+  require_product_manifest_line "vppBinary=lib/arm64-v8a/libvpp_runtime.so"
+  require_product_manifest_line "productCore=lib/arm64-v8a/libsakamoto_product_core.so"
+  require_product_manifest_line "productPlugin=plugins/arm64-v8a/$plugin_name"
+  require_product_manifest_line "generatedVapi=generated-vapi/vapi/product_core.api.vapi.h"
+  require_product_manifest_line "bridgeSource=src/product/native/sakamoto_product_vapi.c"
+
+  while IFS= read -r -d '' stage_path; do
+    case "${stage_path,,}" in
+      *poc*|*experiment*|*fixture*|*nfqueue*|*hev*|*sucre*|*snortd*|*removed-cxx*)
+        forbidden_path="$stage_path"
+        die "apk-only refuses retired/POC product artifact: $forbidden_path"
+        ;;
+    esac
+  done < <(cd "$product_stage" && find . -mindepth 1 -print0)
+  while IFS= read -r -d '' stage_path; do
+    symlink_target="$(readlink -- "$stage_path")" || \
+      die "cannot read product stage symlink: $stage_path"
+    [[ "$symlink_target" != /* ]] || \
+      die "product stage has an absolute symlink: $stage_path"
+    symlink_resolved="$(realpath -e -- "$stage_path" 2>/dev/null)" || \
+      die "product stage has a dangling symlink: $stage_path"
+    case "$symlink_resolved" in
+      "$product_stage"/*) ;;
+      *) die "product stage symlink escapes its stage: $stage_path" ;;
+    esac
+  done < <(find "$product_stage" -type l -print0)
+
+  native_dir="$product_stage/lib/arm64-v8a"
+  for native_library in \
+    libvpp_runtime.so \
+    libsakamoto_product_core.so \
+    libsvm.so \
+    libvapiclient.so \
+    libvlib.so \
+    libvlibapi.so \
+    libvlibmemory.so \
+    libvlibmemoryclient.so \
+    libvnet.so \
+    libvppinfra.so; do
+    [[ -f "$native_dir/$native_library" && ! -L "$native_dir/$native_library" ]] || \
+      die "product stage native library is missing or not a regular file: $native_library"
+  done
+  plugin_source="$product_stage/plugins/arm64-v8a/$plugin_name"
+  [[ -f "$plugin_source" && ! -L "$plugin_source" ]] || \
+    die "product stage plugin is missing or not a regular file"
+
+  [[ -f "$android_jar" ]] || die "Android SDK android.jar is missing: $android_jar"
+  [[ -x "$aapt2" ]] || die "Android aapt2 is missing: $aapt2"
+  [[ -x "$d8" ]] || die "Android d8 is missing: $d8"
+  [[ -x "$zipalign" ]] || die "Android zipalign is missing: $zipalign"
+  [[ -f "$apksigner_jar" ]] || die "Android apksigner is missing: $apksigner_jar"
+  [[ -f "$debug_key" && -f "$debug_cert" ]] || \
+    die "Android debug signing key or certificate is missing"
+  [[ -x "$llvm_readelf" ]] || die "Android LLVM readelf is missing: $llvm_readelf"
+  java_bin="$(command -v java 2>/dev/null || true)"
+  javac_bin="$(command -v javac 2>/dev/null || true)"
+  zip_bin="$(command -v zip 2>/dev/null || true)"
+  [[ -n "$java_bin" && -x "$java_bin" ]] || die "Java runtime is missing"
+  [[ -n "$javac_bin" && -x "$javac_bin" ]] || die "Java compiler is missing"
+  [[ -n "$zip_bin" && -x "$zip_bin" ]] || die "zip is required to package native libraries"
+  if [[ -z "$d8_jar" ]]; then
+    d8_jar="${d8%/bin/d8}/lib/d8.jar"
+  fi
+  elf_header="$($llvm_readelf -h "$plugin_source" 2>/dev/null)" || \
+    die "cannot inspect product stage plugin ELF"
+  [[ "$elf_header" == *AArch64* ]] || \
+    die "product stage plugin is not AArch64"
+  [[ "$($llvm_readelf -Ws "$plugin_source" 2>/dev/null)" == *product_core_init* ]] || \
+    die "product stage plugin init symbol is missing"
+
+  apk_output_dir="$(realpath -m -- "$apk_output_input" 2>/dev/null)" || \
+    die "APK output directory cannot be canonicalized: $apk_output_input"
+  [[ "$apk_output_dir" != "/" ]] || \
+    die "APK output directory cannot be the filesystem root"
+  mkdir -p -- "$apk_output_dir"
+  apk_output_dir="$(realpath -e -- "$apk_output_dir" 2>/dev/null)" || \
+    die "APK output directory cannot be resolved: $apk_output_input"
+  apk_output_path="$apk_output_dir/sakamoto-runtime-debug.apk"
+  apk_build_dir="$(mktemp -d "$apk_output_dir/.sakamoto-runtime-debug.build.XXXXXX")"
+  apk_cleanup_dir="$apk_build_dir"
+  cleanup_apk_build() {
+    if [[ -n "$apk_cleanup_dir" && -e "$apk_cleanup_dir" ]]; then
+      rm -rf -- "$apk_cleanup_dir"
+    fi
+  }
+  trap cleanup_apk_build EXIT
+
+  payload_root="$apk_build_dir/payload"
+  payload_assets="$payload_root/assets"
+  payload_lib="$payload_root/lib/arm64-v8a"
+  classes_dir="$apk_build_dir/classes"
+  dex_dir="$apk_build_dir/dex"
+  mkdir -p -- "$payload_assets" "$payload_lib" "$classes_dir" "$dex_dir"
+  install -m 0644 "$plugin_source" "$payload_assets/$plugin_name"
+  install -m 0644 "$product_manifest" "$payload_assets/product-stage.properties"
+
+  mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
+  ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"
+  "$javac_bin" -encoding UTF-8 -source 8 -target 8 \
+    -classpath "$android_jar" -d "$classes_dir" "${java_sources[@]}"
+  mapfile -t class_files < <(find "$classes_dir" -type f -name '*.class' -print | sort)
+  ((${#class_files[@]} > 0)) || die "Android Java compilation produced no classes"
+  if [[ -f "$d8_jar" ]]; then
+    d8_command=("$java_bin" -cp "$d8_jar" com.android.tools.r8.D8)
+  else
+    d8_command=("$d8")
+  fi
+  "${d8_command[@]}" --lib "$android_jar" --min-api "$android_api" \
+    --output "$dex_dir" "${class_files[@]}"
+  [[ -f "$dex_dir/classes.dex" ]] || die "D8 did not produce classes.dex"
+
+  "$aapt2" link -o "$apk_build_dir/unsigned.apk" \
+    --manifest "$repo_root/app/android-runtime/src/main/AndroidManifest.xml" \
+    -I "$android_jar" \
+    --min-sdk-version "$android_api" \
+    --target-sdk-version "$target_api" \
+    --version-code "$version_code" \
+    --version-name debug \
+    -A "$payload_assets"
+  unsigned_apk="$apk_build_dir/unsigned-with-libs.apk"
+  cp -a -- "$apk_build_dir/unsigned.apk" "$unsigned_apk"
+  cp -a -- "$dex_dir/classes.dex" "$apk_build_dir/classes.dex"
+  (
+    cd "$apk_build_dir"
+    "$zip_bin" -q -0 "$unsigned_apk" classes.dex
+  )
+  for native_library in \
+    libvpp_runtime.so \
+    libsakamoto_product_core.so \
+    libsvm.so \
+    libvapiclient.so \
+    libvlib.so \
+    libvlibapi.so \
+    libvlibmemory.so \
+    libvlibmemoryclient.so \
+    libvnet.so \
+    libvppinfra.so; do
+    install -m 0644 "$native_dir/$native_library" "$payload_lib/$native_library"
+    artifact="$native_dir/$native_library"
+    elf_header="$($llvm_readelf -h "$artifact" 2>/dev/null)" || \
+      die "cannot inspect product stage native ELF: $native_library"
+    [[ "$elf_header" == *AArch64* ]] || \
+      die "product stage native library is not AArch64: $native_library"
+  done
+  (
+    cd "$payload_root"
+    "$zip_bin" -q -0 -r "$unsigned_apk" lib
+  )
+
+  aligned_apk="$apk_build_dir/aligned.apk"
+  "$zipalign" -f -p 4 "$unsigned_apk" "$aligned_apk"
+  signed_apk="$apk_build_dir/signed.apk"
+  "$java_bin" -jar "$apksigner_jar" sign \
+    --key "$debug_key" --cert "$debug_cert" --out "$signed_apk" "$aligned_apk"
+  "$java_bin" -jar "$apksigner_jar" verify --verbose --print-certs "$signed_apk" \
+    >/dev/null
+  mv -fT -- "$signed_apk" "$apk_output_path"
+  [[ -f "$apk_output_path" ]] || die "APK atomic publication did not produce an output"
+  rm -rf -- "$apk_build_dir"
+  apk_cleanup_dir=""
+
+  echo "mode=apk-only"
+  echo "apk=$apk_output_path"
+  echo "versionCode=$version_code"
+  echo "productStage=$product_stage"
+}
+
 if [[ "$mode" == stage-only ]]; then
   build_native_stage
+  exit 0
+fi
+
+if [[ "$mode" == apk-only ]]; then
+  build_apk_only
   exit 0
 fi
 
