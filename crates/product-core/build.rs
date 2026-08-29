@@ -2,6 +2,13 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn target_tool(prefix: &str, target: &str, fallback: &str) -> String {
+    let variable = format!("{}_{}", prefix, target.replace('-', "_"));
+    env::var(variable)
+        .or_else(|_| env::var(prefix))
+        .unwrap_or_else(|_| fallback.to_owned())
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -19,7 +26,7 @@ fn main() {
     );
 
     let vapi_include = env::var_os("SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR");
-    let generated_include = env::var_os("SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR");
+    let generated_include = env::var_os("SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR").map(PathBuf::from);
     let require_vapi = env::var_os("SAKAMOTO_PRODUCT_VAPI_REQUIRED")
         .map(|value| value == "1")
         .unwrap_or(false);
@@ -60,7 +67,9 @@ fn main() {
     };
     let object = out_dir.join(format!("{library_name}.o"));
     let library = out_dir.join(format!("lib{library_name}.a"));
-    let mut compiler = Command::new("cc");
+    let target = env::var("TARGET").unwrap_or_default();
+    let compiler_name = target_tool("CC", &target, "cc");
+    let mut compiler = Command::new(compiler_name);
     compiler
         .args([
             "-std=c11",
@@ -68,12 +77,33 @@ fn main() {
             "-Wextra",
             "-Werror",
             "-fno-strict-aliasing",
+            "-fPIC",
         ])
         .arg("-I")
         .arg(&include_dir);
     if use_vapi {
         compiler.arg("-I").arg(vapi_include.as_ref().unwrap());
         compiler.arg("-I").arg(generated_include.as_ref().unwrap());
+        if generated_include
+            .as_ref()
+            .unwrap()
+            .file_name()
+            .map(|name| name == "vapi")
+            .unwrap_or(false)
+        {
+            if let Some(parent) = generated_include.as_ref().unwrap().parent() {
+                compiler.arg("-I").arg(parent);
+            }
+        }
+        if target.ends_with("-android") {
+            // Generated VAPI uses the BSD endian spellings and has a few
+            // intentionally empty payload helpers. Android's sysroot keeps
+            // those in sys/endian.h and reports the generated helper warnings
+            // under -Wextra; suppress only those generated-header diagnostics.
+            compiler
+                .args(["-include", "sys/endian.h"])
+                .args(["-Wno-unused-parameter", "-Wno-sign-compare"]);
+        }
     } else {
         compiler.arg("-DSAKAMOTO_PRODUCT_HOST_FIXTURE=1");
     }
@@ -86,7 +116,8 @@ fn main() {
         .expect("failed to invoke the C compiler for the product ABI");
     assert!(status.success(), "product ABI C compilation failed");
 
-    let status = Command::new("ar")
+    let archiver_name = target_tool("AR", &target, "ar");
+    let status = Command::new(archiver_name)
         .args(["crus"])
         .arg(&library)
         .arg(&object)
@@ -104,9 +135,17 @@ fn main() {
             );
         }
         println!("cargo:rustc-link-lib=dylib=vapiclient");
-        println!("cargo:rustc-link-lib=pthread");
-        println!("cargo:rustc-link-lib=dl");
-        println!("cargo:rustc-link-lib=rt");
-        println!("cargo:rustc-link-lib=m");
+        if target.ends_with("-android") {
+            // Android exposes pthread and realtime primitives from libc; the
+            // standalone libpthread/lib rt names used by glibc do not exist
+            // in the NDK sysroot.
+            println!("cargo:rustc-link-lib=dl");
+            println!("cargo:rustc-link-lib=m");
+        } else {
+            println!("cargo:rustc-link-lib=pthread");
+            println!("cargo:rustc-link-lib=dl");
+            println!("cargo:rustc-link-lib=rt");
+            println!("cargo:rustc-link-lib=m");
+        }
     }
 }

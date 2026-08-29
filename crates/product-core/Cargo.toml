@@ -9,6 +9,7 @@ build = "build.rs"
 [lib]
 name = "sakamoto_product_core"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "sakamoto-product-core-host"

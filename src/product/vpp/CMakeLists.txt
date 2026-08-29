@@ -3,6 +3,12 @@
 cmake_minimum_required(VERSION 3.18)
 project(sakamoto_product_core_plugin LANGUAGES C)
 
+include(GNUInstallDirs)
+
+if(NOT CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib")
+endif()
+
 if(NOT DEFINED VPP_SOURCE_DIR)
   message(FATAL_ERROR "VPP_SOURCE_DIR must point at the pinned official VPP source")
 endif()
@@ -16,10 +22,12 @@ endif()
 set(VPP_INCLUDE_DIR "${VPP_INCLUDE_DIR}" CACHE PATH "Pinned VPP generated/include root")
 set(VPP_APIGEN "${VPP_APIGEN}" CACHE FILEPATH "Pinned VPP API generator")
 set(VPP_VAPI_C_GEN "${VPP_VAPI_C_GEN}" CACHE FILEPATH "Pinned VPP VAPI C generator")
+set(VPP_VAPI_CPP_GEN "${VPP_VAPI_CPP_GEN}" CACHE FILEPATH "Pinned VPP VAPI C++ generator")
 if(NOT VPP_INCLUDE_DIR)
   message(FATAL_ERROR "VPP_INCLUDE_DIR must point at the built pinned VPP headers")
 endif()
-if(NOT EXISTS "${VPP_APIGEN}" OR NOT EXISTS "${VPP_VAPI_C_GEN}")
+if(NOT EXISTS "${VPP_APIGEN}" OR NOT EXISTS "${VPP_VAPI_C_GEN}"
+   OR NOT EXISTS "${VPP_VAPI_CPP_GEN}")
   message(FATAL_ERROR "VPP API generators are required; do not use a hand-written API header")
 endif()
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pinned-vpp-revision.txt"
@@ -117,12 +125,22 @@ add_vpp_plugin(product_core
     product_core_plugin.c
   API_FILES
     product_core.api
+  VAT_AUTO_TEST
+    OFF
   COMPONENT
     vpp-plugin-core
 )
 target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
 )
+if(ANDROID)
+  # VPP resolves plugin entry points from the host process at load time. The
+  # Android NDK toolchain adds --no-undefined by default, which is correct for
+  # app libraries but rejects this loadable VPP plugin's host-owned symbols.
+  target_link_options(product_core_plugin PRIVATE
+    "-Wl,--allow-shlib-undefined"
+    "-Wl,--unresolved-symbols=ignore-all")
+endif()
 
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/product_core.api"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/vpp/api/plugins"

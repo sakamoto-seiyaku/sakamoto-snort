@@ -1,6 +1,639 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Android product APK build is disabled: the legacy Snort C++ daemon was removed."
-echo "Resume packaging only after the VPP-native C product mainline and its RuntimeService contract exist."
+# SAKAMOTO-172 Android product build boundary.
+#
+# This script owns the Android product input boundary and the native staging
+# seam. The stage-only path is the first real product build slice: it compiles
+# the pinned VPP plugin and Product Core against production generated VAPI, then
+# emits only the arm64-v8a inputs consumed by the APK assembler.
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
+bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
+plugin_name="product_core_plugin.so"
+default_stage_dir="$repo_root/build-output/android-vpp-runtime/stage"
+default_version_state="$repo_root/build-output/android-vpp-runtime/version-code"
+product_stage_cleanup_dir=""
+
+usage() {
+  cat >&2 <<'EOF'
+usage: build-debug-apk.sh [--dry-run|--stage-only]
+
+Required production VAPI inputs:
+  SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR
+  SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR
+
+Optional inputs:
+  SAKAMOTO_VPP_STAGE_DIR
+  SAKAMOTO_VPP_SOURCE_DIR
+  SAKAMOTO_ANDROID_NDK_ROOT
+  SAKAMOTO_ANDROID_API
+  SAKAMOTO_VPP_PYTHONPATH
+  SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR
+  SAKAMOTO_ANDROID_VERSION_STATE_FILE
+  SAKAMOTO_PRODUCT_PLUGIN
+
+--stage-only requires SAKAMOTO_VPP_STAGE_DIR and SAKAMOTO_VPP_SOURCE_DIR.
+The clean stage supplies the generated headers, host tools, and runtime
+libraries; the default experiment stage is never selected by that mode.
+EOF
+}
+
+die() {
+  echo "Android product build: $*" >&2
+  exit 2
+}
+
+mode=build
+case "${1:-}" in
+  "") ;;
+  --dry-run)
+    mode=dry-run
+    shift
+    ;;
+  --stage-only)
+    mode=stage-only
+    shift
+    ;;
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    die "unknown option: $1"
+    ;;
+esac
+[[ "$#" -eq 0 ]] || die "unexpected arguments: $*"
+
+[[ -f "$pin_file" ]] || die "pinned VPP revision file is missing"
+expected_revision="$(tr -d '[:space:]' < "$pin_file")"
+[[ "$expected_revision" =~ ^[[:xdigit:]]{40}$ ]] || \
+  die "pinned VPP revision is not a 40-character commit"
+
+[[ -f "$bridge_source" ]] || die "production generated-VAPI bridge source is missing"
+
+# Both directories are required as a pair for the APK-build boundary. In
+# particular, an absent generated directory must not cause a fallback to a
+# non-production ABI. Stage-only generates these headers from the pinned VPP
+# API and validates them after the plugin build instead.
+vapi_include_dir="${SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR:-}"
+vapi_generated_dir="${SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR:-}"
+if [[ "$mode" != stage-only ]]; then
+  if [[ -z "$vapi_include_dir" || -z "$vapi_generated_dir" ]]; then
+    die "generated VAPI inputs are required: set SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR and SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR"
+  fi
+  [[ -d "$vapi_include_dir" ]] || \
+    die "generated VAPI include directory is missing: $vapi_include_dir"
+  [[ -d "$vapi_generated_dir" ]] || \
+    die "generated VAPI directory is missing: $vapi_generated_dir"
+
+  generated_vapi_header="$vapi_generated_dir/product_core.api.vapi.h"
+  if [[ ! -f "$generated_vapi_header" ]]; then
+    generated_vapi_header="$vapi_generated_dir/vapi/product_core.api.vapi.h"
+  fi
+  [[ -f "$generated_vapi_header" ]] || \
+    die "generated VAPI product_core.api.vapi.h is missing"
+
+  require_vapi_header() {
+    local name="$1"
+    if [[ ! -f "$vapi_include_dir/$name" &&
+          ! -f "$vapi_include_dir/vapi/$name" &&
+          ! -f "$vapi_generated_dir/$name" &&
+          ! -f "$vapi_generated_dir/vapi/$name" ]]; then
+      die "generated VAPI header is missing: $name"
+    fi
+  }
+  require_vapi_header memclnt.api.vapi.h
+  require_vapi_header vlib.api.vapi.h
+fi
+
+stage_dir="${SAKAMOTO_VPP_STAGE_DIR:-$default_stage_dir}"
+if [[ "$mode" == stage-only && -z "${SAKAMOTO_VPP_STAGE_DIR:-}" ]]; then
+  die "stage-only requires an explicit clean arm64 VPP stage in SAKAMOTO_VPP_STAGE_DIR"
+fi
+[[ -d "$stage_dir" ]] || die "VPP stage directory is missing: $stage_dir"
+vpp_binary="$stage_dir/bin/vpp"
+[[ -f "$vpp_binary" && -x "$vpp_binary" ]] || \
+  die "VPP stage does not contain an executable bin/vpp: $vpp_binary"
+
+stage_only_product_stage_input=""
+if [[ "$mode" == stage-only ]]; then
+  raw_product_stage_input="${SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR:-$repo_root/build-output/android-product-stage}"
+  raw_product_stage_leaf="$raw_product_stage_input"
+  while [[ "$raw_product_stage_leaf" != "/" &&
+            "$raw_product_stage_leaf" == */ ]]; do
+    raw_product_stage_leaf="${raw_product_stage_leaf%/}"
+  done
+  [[ ! -L "$raw_product_stage_leaf" ]] || \
+    die "refusing to use a symlink as the product stage output"
+  stage_only_product_stage_input="$(realpath -m -- "$raw_product_stage_input" 2>/dev/null)" || \
+    die "product stage directory cannot be canonicalized: $raw_product_stage_input"
+  [[ "$stage_only_product_stage_input" != "/" ]] || \
+    die "product stage directory cannot be the filesystem root"
+fi
+
+version_state_file="${SAKAMOTO_ANDROID_VERSION_STATE_FILE:-$default_version_state}"
+version_state_dir="$(dirname -- "$version_state_file")"
+mkdir -p -- "$version_state_dir"
+
+if [[ -n "${SAKAMOTO_ANDROID_VERSION_CODE:-}" ]]; then
+  version_code="$SAKAMOTO_ANDROID_VERSION_CODE"
+  [[ "$version_code" =~ ^[1-9][0-9]*$ ]] || \
+    die "SAKAMOTO_ANDROID_VERSION_CODE must be a positive integer"
+else
+  previous_version=0
+  if [[ -f "$version_state_file" ]]; then
+    previous_version="$(tr -d '[:space:]' < "$version_state_file")"
+    [[ "$previous_version" =~ ^[0-9]+$ ]] || \
+      die "version state file is invalid: $version_state_file"
+  fi
+  # Seconds since epoch gives a new debug version even when a prior build was
+  # produced on the same day; the state file handles same-second rebuilds.
+  epoch_version="$(date +%s)"
+  version_code=$((epoch_version > previous_version ? epoch_version : previous_version + 1))
+fi
+printf '%s\n' "$version_code" > "$version_state_file"
+
+export SAKAMOTO_PRODUCT_VAPI_REQUIRED=1
+
+build_native_stage() {
+  local vpp_source_dir="${SAKAMOTO_VPP_SOURCE_DIR:-}"
+  local ndk_root="${SAKAMOTO_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
+  local android_api="${SAKAMOTO_ANDROID_API:-31}"
+  local python_path="${SAKAMOTO_VPP_PYTHONPATH:-}"
+  local product_stage_input="$stage_only_product_stage_input"
+  local product_stage
+  local android_target="aarch64-linux-android"
+  local ndk_host="linux-x86_64"
+  local ndk_bin="$ndk_root/toolchains/llvm/prebuilt/$ndk_host/bin"
+  local android_clang="$ndk_bin/${android_target}${android_api}-clang"
+  local llvm_ar="$ndk_bin/llvm-ar"
+  local llvm_readelf="$ndk_bin/llvm-readelf"
+  local toolchain_file="$ndk_root/build/cmake/android.toolchain.cmake"
+  local vpp_apigen
+  local vapi_c_gen
+  local vapi_cpp_gen
+  local stage_include_dir
+  local stage_host_tools
+  local stage_manifest
+  local stage_marker
+  local stage_path
+  local stage_symlink_target
+  local stage_symlink_resolved
+  local forbidden_stage_path
+  local product_stage_parent
+  local product_stage_name
+  local product_stage_candidate
+  local product_stage_lock
+  local product_stage_lock_fd
+  local python_bin
+  local flock_bin
+  local build_root
+  local plugin_build
+  local plugin_install
+  local plugin_source
+  local generated_vapi_header
+  local cargo_target_dir
+  local rust_library
+  local native_dir
+  local plugin_dir
+  local generated_dir
+  local marker
+  local runtime_library
+  local runtime_artifact
+  local runtime_name
+  local -a runtime_matches
+  local source_head
+  local source_status
+  local artifact_description
+  local rust_dynamic
+  local plugin_symbols
+  local -a cmake_args
+
+  [[ -n "$vpp_source_dir" ]] || \
+    die "stage-only requires SAKAMOTO_VPP_SOURCE_DIR at the pinned revision"
+  [[ -d "$vpp_source_dir" ]] || \
+    die "VPP source directory is missing: $vpp_source_dir"
+  stage_dir="$(realpath -e "$stage_dir" 2>/dev/null)" || \
+    die "VPP stage directory cannot be canonicalized: $stage_dir"
+  case "${stage_dir,,}" in
+    *experiments*|*poc*) die "stage-only refuses experiment/POC VPP inputs" ;;
+  esac
+  stage_marker="$stage_dir/.sakamoto-android-vpp-stage"
+  stage_manifest="$stage_dir/android-vpp-stage.properties"
+  [[ -f "$stage_marker" && ! -L "$stage_marker" ]] || \
+    die "VPP stage is missing its owned marker"
+  [[ "$(<"$stage_marker")" == "sakamoto-android-vpp-stage/v1" ]] || \
+    die "VPP stage has an invalid owned marker"
+  [[ -f "$stage_manifest" && ! -L "$stage_manifest" ]] || \
+    die "VPP stage manifest is missing"
+  require_stage_manifest_line() {
+    local expected_line="$1"
+    grep -Fxq "$expected_line" "$stage_manifest" || \
+      die "VPP stage manifest is missing: $expected_line"
+  }
+  require_stage_manifest_line "schema=sakamoto-android-vpp-stage/v1"
+  require_stage_manifest_line "revision=$expected_revision"
+  require_stage_manifest_line "api=31"
+  require_stage_manifest_line "abi=arm64-v8a"
+  require_stage_manifest_line "binary=bin/vpp"
+  require_stage_manifest_line "libraries=lib"
+  require_stage_manifest_line "headers=include"
+  require_stage_manifest_line "hostTools=host-tools"
+  while IFS= read -r -d '' stage_path; do
+    case "${stage_path,,}" in
+      *poc*|*experiment*|*fixture*|*nfqueue*|*hev*|*sucre*)
+        forbidden_stage_path="$stage_path"
+        die "stage-only refuses POC/experiment artifact: $forbidden_stage_path"
+        ;;
+    esac
+  done < <(cd "$stage_dir" && find . -mindepth 1 -print0)
+  while IFS= read -r -d '' stage_path; do
+    stage_symlink_target="$(readlink -- "$stage_path")" || \
+      die "cannot read VPP stage symlink: $stage_path"
+    [[ "$stage_symlink_target" != /* ]] || \
+      die "VPP stage has an absolute symlink: $stage_path"
+    stage_symlink_resolved="$(realpath -e "$stage_path" 2>/dev/null)" || \
+      die "VPP stage has a dangling symlink: $stage_path"
+    case "$stage_symlink_resolved" in
+      "$stage_dir"/*) ;;
+      *) die "VPP stage symlink escapes its stage: $stage_path" ;;
+    esac
+  done < <(find "$stage_dir" -type l -print0)
+  stage_include_dir="$stage_dir/include"
+  stage_host_tools="$stage_dir/host-tools"
+  [[ -d "$stage_include_dir" ]] || die "VPP stage include directory is missing"
+  [[ -x "$stage_host_tools/vppapigen" ]] || \
+    die "VPP stage host tool vppapigen is missing"
+  [[ -f "$stage_host_tools/vapi_c_gen.py" &&
+     -f "$stage_host_tools/vapi_cpp_gen.py" ]] || \
+    die "VPP stage VAPI generators are missing"
+  for header in \
+    vppinfra/clib.h \
+    vlib/vlib.h \
+    vlibapi/api.h \
+    vlibmemory/api.h \
+    vnet/plugin/plugin.h \
+    vnet/vnet.h \
+    vpp/app/version.h; do
+    [[ -f "$stage_include_dir/$header" ]] || \
+      die "VPP stage include is missing: $header"
+  done
+  for runtime_library in \
+    libsvm.so \
+    libvapiclient.so \
+    libvlib.so \
+    libvlibapi.so \
+    libvlibmemory.so \
+    libvlibmemoryclient.so \
+    libvnet.so \
+    libvppinfra.so; do
+    [[ -f "$stage_dir/lib/$runtime_library" ||
+       -L "$stage_dir/lib/$runtime_library" ]] || \
+      die "VPP stage runtime library is missing: $runtime_library"
+  done
+  vpp_source_dir="$(realpath -e "$vpp_source_dir" 2>/dev/null)" || \
+    die "VPP source directory cannot be canonicalized"
+  case "${vpp_source_dir,,}" in
+    *experiments*|*poc*) die "stage-only refuses experiment/POC VPP inputs" ;;
+  esac
+  [[ -d "$ndk_root" ]] || die "Android NDK directory is missing: $ndk_root"
+  [[ "$android_api" == "31" ]] || \
+    die "only Android API 31 is supported by the product stage"
+
+  if ! command -v git >/dev/null 2>&1; then
+    die "git is required to audit the pinned VPP checkout"
+  fi
+  if ! source_head="$(git -C "$vpp_source_dir" rev-parse HEAD 2>/dev/null)"; then
+    die "VPP source directory is not a Git checkout: $vpp_source_dir"
+  fi
+  [[ "$source_head" == "$expected_revision" ]] || \
+    die "VPP source checkout is not at pinned revision $expected_revision"
+  source_status="$(git -C "$vpp_source_dir" status --porcelain 2>/dev/null)" || \
+    die "cannot inspect VPP source checkout status: $vpp_source_dir"
+  [[ -z "$source_status" ]] || \
+    die "VPP source checkout must be clean: $vpp_source_dir"
+
+  [[ -f "$vpp_source_dir/src/cmake/VPPConfig.cmake" ]] || \
+    die "pinned VPP CMake integration is missing"
+  vpp_apigen="$stage_host_tools/vppapigen"
+  vapi_c_gen="$stage_host_tools/vapi_c_gen.py"
+  vapi_cpp_gen="$stage_host_tools/vapi_cpp_gen.py"
+
+  [[ -f "$toolchain_file" ]] || \
+    die "Android NDK CMake toolchain is missing: $toolchain_file"
+  [[ -x "$android_clang" ]] || \
+    die "Android arm64 clang is missing: $android_clang"
+  [[ -x "$llvm_ar" ]] || die "Android LLVM archiver is missing: $llvm_ar"
+  [[ -x "$llvm_readelf" ]] || die "Android LLVM readelf is missing: $llvm_readelf"
+  for tool in cmake ninja cargo file readelf; do
+    command -v "$tool" >/dev/null 2>&1 || die "required build tool is missing: $tool"
+  done
+
+  [[ -f "$stage_dir/lib/libvapiclient.so" ]] || \
+    die "VPP stage is missing the VAPI client library"
+  if ! compgen -G "$stage_dir/lib/*.so" >/dev/null; then
+    die "VPP stage has no core shared libraries"
+  fi
+
+  [[ "$product_stage_input" != "/" ]] || \
+    die "product stage directory cannot be the filesystem root"
+  product_stage_name="$(basename -- "$product_stage_input")"
+  [[ -n "$product_stage_name" && "$product_stage_name" != "." &&
+     "$product_stage_name" != ".." ]] || \
+    die "product stage directory name is invalid"
+  product_stage_parent_input="$(dirname -- "$product_stage_input")"
+  mkdir -p -- "$product_stage_parent_input"
+  product_stage_parent="$(realpath -e "$product_stage_parent_input" 2>/dev/null)" || \
+    die "product stage parent cannot be canonicalized"
+  if [[ -L "$product_stage_input" ]]; then
+    die "refusing to use a symlink as the product stage output"
+  fi
+  product_stage="$product_stage_parent/$product_stage_name"
+  case "${product_stage,,}" in
+    *experiments*|*poc*) die "stage-only refuses experiment/POC product output" ;;
+  esac
+  product_stage_lock="$product_stage_parent/.${product_stage_name}.lock"
+  [[ ! -L "$product_stage_lock" ]] || \
+    die "product stage lock path is a symlink"
+  python_bin="$(command -v python3 2>/dev/null || true)"
+  flock_bin="$(command -v flock 2>/dev/null || true)"
+  [[ -n "$python_bin" && -x "$python_bin" ]] || \
+    die "host Python3 is required for atomic product stage publication"
+  [[ -n "$flock_bin" && -x "$flock_bin" ]] || \
+    die "host flock is required for atomic product stage publication"
+  exec {product_stage_lock_fd}>"$product_stage_lock" || \
+    die "cannot open product stage lock"
+  "$flock_bin" -x "$product_stage_lock_fd" || \
+    die "cannot acquire product stage lock"
+
+  assert_owned_product_stage() {
+    local existing_marker="$product_stage/.sakamoto-android-product-stage"
+    [[ -d "$product_stage" && ! -L "$product_stage" ]] || \
+      die "refusing to overwrite an unowned product stage: $product_stage"
+    [[ -f "$existing_marker" && ! -L "$existing_marker" ]] || \
+      die "refusing to overwrite an unowned product stage: $product_stage"
+    [[ "$(<"$existing_marker")" == "sakamoto-android-product-stage/v1" ]] || \
+      die "refusing to overwrite an unowned product stage: $product_stage"
+  }
+  if [[ -e "$product_stage" || -L "$product_stage" ]]; then
+    assert_owned_product_stage
+  fi
+  product_stage_candidate="$(mktemp -d "$product_stage_parent/.${product_stage_name}.build.XXXXXX")"
+  product_stage_cleanup_dir="$product_stage_candidate"
+  cleanup_product_stage() {
+    if [[ -n "$product_stage_cleanup_dir" &&
+          -e "$product_stage_cleanup_dir" ]]; then
+      rm -rf -- "$product_stage_cleanup_dir"
+    fi
+  }
+  trap cleanup_product_stage EXIT
+  build_root="$product_stage_candidate/.build"
+  plugin_build="$build_root/product-plugin-build"
+  plugin_install="$build_root/product-plugin-install"
+
+  if [[ -n "$python_path" ]]; then
+    export PYTHONPATH="$python_path${PYTHONPATH:+:$PYTHONPATH}"
+  fi
+  cmake_args=(
+    -S "$repo_root/src/product/vpp"
+    -B "$plugin_build"
+    -G Ninja
+    -DCMAKE_BUILD_TYPE=Release
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchain_file"
+    -DANDROID_ABI=arm64-v8a
+    "-DANDROID_PLATFORM=android-$android_api"
+    "-DVPP_SOURCE_DIR=$vpp_source_dir"
+    "-DVPP_INCLUDE_DIR=$stage_include_dir"
+    "-DVPP_APIGEN=$vpp_apigen"
+    "-DVPP_VAPI_C_GEN=$vapi_c_gen"
+    "-DVPP_VAPI_CPP_GEN=$vapi_cpp_gen"
+    -DCMAKE_INSTALL_LIBDIR=lib
+    "-DCMAKE_INSTALL_PREFIX=$plugin_install"
+  )
+  cmake "${cmake_args[@]}"
+  cmake --build "$plugin_build" --target install --parallel "${SAKAMOTO_ANDROID_BUILD_JOBS:-2}"
+  plugin_source="$plugin_install/lib/vpp_plugins/$plugin_name"
+  [[ -f "$plugin_source" ]] || \
+    die "production VPP plugin was not installed: $plugin_source"
+  generated_vapi_header="$plugin_build/CMakeFiles/vpp-api/vapi/product_core.api.vapi.h"
+  [[ -f "$generated_vapi_header" ]] || \
+    die "production generated VAPI header was not produced"
+
+  export CC_aarch64_linux_android="$android_clang"
+  export AR_aarch64_linux_android="$llvm_ar"
+  export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$android_clang"
+  export SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR="$stage_include_dir"
+  export SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR="$plugin_build/CMakeFiles/vpp-api"
+  export SAKAMOTO_PRODUCT_VAPI_LIBRARY_DIR="$stage_dir/lib"
+  export SAKAMOTO_PRODUCT_VAPI_REQUIRED=1
+  export CARGO_TARGET_DIR="$build_root/cargo-target"
+  cargo build --release -p sakamoto-product-core --lib --target "$android_target"
+  cargo_target_dir="$build_root/cargo-target"
+  rust_library="$cargo_target_dir/$android_target/release/libsakamoto_product_core.so"
+  [[ -f "$rust_library" ]] || die "Android Product Core artifact was not produced"
+
+  native_dir="$product_stage_candidate/lib/arm64-v8a"
+  plugin_dir="$product_stage_candidate/plugins/arm64-v8a"
+  generated_dir="$product_stage_candidate/generated-vapi/vapi"
+  mkdir -p -- "$native_dir" "$plugin_dir" "$generated_dir"
+  install -m 0755 "$vpp_binary" "$native_dir/libvpp_runtime.so"
+  for runtime_library in \
+    libsvm.so \
+    libvapiclient.so \
+    libvlib.so \
+    libvlibapi.so \
+    libvlibmemory.so \
+    libvlibmemoryclient.so \
+    libvnet.so \
+    libvppinfra.so; do
+    runtime_matches=("$stage_dir/lib/${runtime_library}"*)
+    [[ -e "${runtime_matches[0]}" || -L "${runtime_matches[0]}" ]] || \
+      die "VPP stage runtime library family is missing: $runtime_library"
+    for runtime_artifact in "${runtime_matches[@]}"; do
+      [[ -e "$runtime_artifact" || -L "$runtime_artifact" ]] || continue
+      runtime_name="$(basename -- "$runtime_artifact")"
+      if [[ -L "$runtime_artifact" ]]; then
+        # Keep the SONAME symlink and its versioned target together. Android's
+        # dynamic linker resolves the NEEDED name recorded by the VPP objects.
+        cp -a -- "$runtime_artifact" "$native_dir/$runtime_name"
+      else
+        install -m 0755 "$runtime_artifact" "$native_dir/$runtime_name"
+      fi
+    done
+    [[ -e "$native_dir/$runtime_library" || -L "$native_dir/$runtime_library" ]] || \
+      die "product stage omitted VPP runtime library: $runtime_library"
+  done
+  install -m 0755 "$rust_library" "$native_dir/libsakamoto_product_core.so"
+  install -m 0755 "$plugin_source" "$plugin_dir/$plugin_name"
+  install -m 0644 "$generated_vapi_header" "$generated_dir/product_core.api.vapi.h"
+
+  for artifact in \
+    "$native_dir/libvpp_runtime.so" \
+    "$native_dir/libsakamoto_product_core.so" \
+    "$plugin_dir/$plugin_name"; do
+    artifact_description="$(file -Lb "$artifact")"
+    [[ "$artifact_description" == *'ARM aarch64'* ]] || \
+      die "staged artifact is not an arm64-v8a ELF: $artifact"
+  done
+  for artifact in "$native_dir"/*.so* "$plugin_dir"/*.so*; do
+    [[ -e "$artifact" || -L "$artifact" ]] || continue
+    artifact_description="$($llvm_readelf -h "$artifact" 2>/dev/null)" || \
+      die "cannot inspect staged ELF: $artifact"
+    [[ "$artifact_description" == *AArch64* ]] || \
+      die "staged artifact is not an AArch64 ELF: $artifact"
+  done
+  rust_dynamic="$($llvm_readelf -d "$rust_library" 2>/dev/null)" || \
+    die "cannot inspect Product Core dynamic dependencies"
+  [[ "$rust_dynamic" == *'libvapiclient.so'* ]] || \
+    die "Product Core does not link the staged libvapiclient.so"
+  plugin_symbols="$($llvm_readelf -Ws "$plugin_dir/$plugin_name" 2>/dev/null)" || \
+    die "cannot inspect product plugin symbols"
+  [[ "$plugin_symbols" == *product_core_init* ]] || \
+    die "product plugin init symbol is missing"
+  validate_product_stage_symlinks() {
+    local root="$1"
+    local link target resolved
+    while IFS= read -r -d '' link; do
+      target="$(readlink -- "$link")" || \
+        die "cannot read product stage symlink: $link"
+      [[ "$target" != /* ]] || \
+        die "product stage has an absolute symlink: $link"
+      resolved="$(realpath -e "$link" 2>/dev/null)" || \
+        die "product stage has a dangling symlink: $link"
+      case "$resolved" in
+        "$root"/*) ;;
+        *) die "product stage symlink escapes its stage: $link" ;;
+      esac
+    done < <(find "$root" -type l -print0)
+  }
+  validate_product_stage_symlinks "$product_stage_candidate"
+  forbidden_stage_path=""
+  while IFS= read -r -d '' stage_path; do
+    case "${stage_path,,}" in
+      *poc*|*experiment*|*fixture*|*nfqueue*|*hev*|*sucre*)
+        forbidden_stage_path="$stage_path"
+        die "retired or POC artifact entered product stage: $forbidden_stage_path"
+        ;;
+    esac
+  done < <(cd "$product_stage_candidate" && find . -mindepth 1 -print0)
+  rm -rf -- "$build_root"
+  marker="$product_stage_candidate/.sakamoto-android-product-stage"
+  printf '%s\n' 'sakamoto-android-product-stage/v1' >"$marker"
+  cat >"$product_stage_candidate/product-stage.properties" <<EOF
+schema=sakamoto-android-product-stage/v1
+abi=arm64-v8a
+androidApi=$android_api
+vppRevision=$expected_revision
+vppBinary=lib/arm64-v8a/libvpp_runtime.so
+productCore=lib/arm64-v8a/libsakamoto_product_core.so
+productPlugin=plugins/arm64-v8a/$plugin_name
+generatedVapi=generated-vapi/vapi/product_core.api.vapi.h
+bridgeSource=src/product/native/sakamoto_product_vapi.c
+EOF
+
+  publish_product_stage_atomic() {
+    local operation="$1"
+    local target="$2"
+    local candidate="$3"
+    "$python_bin" - "$operation" "$target" "$candidate" <<'PY'
+import ctypes
+import os
+import sys
+
+AT_FDCWD = -100
+RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
+operation = sys.argv[1]
+target_path = os.fsencode(sys.argv[2])
+candidate_path = os.fsencode(sys.argv[3])
+flags_by_operation = {
+    "fresh": RENAME_NOREPLACE,
+    "exchange": RENAME_EXCHANGE,
+}
+try:
+    flags = flags_by_operation[operation]
+except KeyError:
+    print(f"unknown product stage operation: {operation}", file=sys.stderr)
+    raise SystemExit(2)
+
+try:
+    renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+except AttributeError:
+    print("host libc does not provide renameat2", file=sys.stderr)
+    raise SystemExit(1)
+
+renameat2.argtypes = [
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.c_uint,
+]
+renameat2.restype = ctypes.c_int
+if renameat2(
+    AT_FDCWD,
+    candidate_path,
+    AT_FDCWD,
+    target_path,
+    flags,
+) != 0:
+    error_number = ctypes.get_errno()
+    raise OSError(error_number, os.strerror(error_number))
+PY
+  }
+
+  # Revalidate the exact ownership marker while holding the publisher lock,
+  # then publish without removing an existing public stage first.
+  if [[ -e "$product_stage" || -L "$product_stage" ]]; then
+    assert_owned_product_stage
+    if ! publish_product_stage_atomic exchange "$product_stage" "$product_stage_candidate"; then
+      die "atomic product stage exchange is unavailable"
+    fi
+    old_product_stage="$product_stage_candidate"
+    product_stage_cleanup_dir=""
+    rm -rf -- "$old_product_stage"
+  else
+    if ! publish_product_stage_atomic fresh "$product_stage" "$product_stage_candidate"; then
+      die "atomic product stage publication failed; output appeared during build or atomic no-replace is unavailable"
+    fi
+    product_stage_cleanup_dir=""
+  fi
+
+  echo "mode=stage-only"
+  echo "productStage=$product_stage"
+  echo "versionCode=$version_code"
+  echo "vppRevision=$expected_revision"
+  echo "productCore=$product_stage/lib/arm64-v8a/libsakamoto_product_core.so"
+  echo "productPlugin=$product_stage/plugins/arm64-v8a/$plugin_name"
+}
+
+if [[ "$mode" == stage-only ]]; then
+  build_native_stage
+  exit 0
+fi
+
+if [[ "$mode" == dry-run ]]; then
+  echo "mode=dry-run"
+  echo "vppRevision=$expected_revision"
+  echo "stageDir=$stage_dir"
+  echo "generatedVapiIncludeDir=$vapi_include_dir"
+  echo "generatedVapiSource=$generated_vapi_header"
+  echo "generatedVapiRequired=$SAKAMOTO_PRODUCT_VAPI_REQUIRED"
+  echo "bridgeSource=$bridge_source"
+  echo "pluginName=$plugin_name"
+  echo "versionCode=$version_code"
+  exit 0
+fi
+
+product_plugin="${SAKAMOTO_PRODUCT_PLUGIN:-$repo_root/build-output/product-vpp-android/lib/vpp_plugins/$plugin_name}"
+[[ -f "$product_plugin" ]] || \
+  die "production VPP plugin is missing: $product_plugin"
+[[ "$(basename -- "$product_plugin")" == "$plugin_name" ]] || \
+  die "production VPP plugin must be named $plugin_name"
+
+echo "Android product APK assembly is not enabled until the generated-VAPI JNI bridge and product plugin staging slice is present." >&2
+echo "validated versionCode=$version_code vppRevision=$expected_revision plugin=$plugin_name" >&2
 exit 2
