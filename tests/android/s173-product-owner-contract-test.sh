@@ -9,6 +9,13 @@ runtime_contract="$repo_root/tests/android/android-runtime-contract-test.sh"
 test -f "$owner"
 test -f "$service"
 grep -Fq 'public final class ProductCoreOwner' "$owner"
+if grep -Fq 'public static final class Decision' "$owner" \
+    || grep -Fq 'enum CleanupAction' "$owner" \
+    || grep -Fq 'decideForStart' "$owner" \
+    || grep -Fq 'decideCleanup' "$owner"; then
+  echo "Product Core owner seam retains retired single-profile decision APIs" >&2
+  exit 1
+fi
 grep -Fq 'public static final String RECORD_FILE = "owner.properties"' "$owner"
 grep -Fq 'public static OwnerRecord read(File file)' "$owner"
 grep -Fq 'public static OwnerRecord readPending(File file)' "$owner"
@@ -22,6 +29,9 @@ grep -Fq 'ProductCoreOwner.isInterruptedPublicationOnly' "$service"
 grep -Fq 'SAKAMOTO_VPP_OWNER_TOKEN", owner.token' "$service"
 grep -Fq 'auditProductCoreOwners' "$service"
 grep -Fq 'auditProductCoreProfile' "$service"
+grep -Fq 'buildGlobalProcessAuditCommand' "$service"
+grep -Fq 'ProductCoreOwner.buildGlobalProcessAuditCommand' "$service"
+grep -Fq 'auditGlobalProductCoreProcess' "$service"
 grep -Fq 'ProductCoreOwner.buildProcessAuditCommand' "$service"
 grep -Fq 'ProductCoreOwner.ProcessState.UNKNOWN' "$service"
 grep -Fq 'Integer.toString(android.os.Process.myUid())' "$service"
@@ -30,6 +40,10 @@ grep -Fq 'ProductCoreOwner.Action.BLOCK_UNKNOWN' "$service"
 grep -Fq 'ProductCoreOwner.Action.CLEAN_THEN_START' "$service"
 grep -Fq 'ProductCoreOwner.decideGlobalForStart' "$service"
 grep -Fq 'ownerDecision.highestGeneration()' "$service"
+grep -Fq 'cleanProductCoreProfile' "$service"
+grep -Fq 'ownerAuthority' "$service"
+grep -Fq 'Restore the' "$service"
+grep -Fq 'ProductCoreOwner.GlobalDecision postKill' "$service"
 grep -Fq 'cleanup_failed' "$service"
 grep -Fq 'productCoreSession = null;' "$service"
 grep -Fq 'vppProcess = null;' "$service"
@@ -77,6 +91,8 @@ if "return stopProductCoreResidue(stopService)" not in stop:
     raise AssertionError("Product Core STOP can fall through to the legacy cleanup path")
 if start.index("auditProductCoreOwners") > start.index("cleanProductCoreResidue(ownerDecision)"):
     raise AssertionError("Product Core START deletes residue before owner audit")
+if start.index("if (cleanupFaultInjected)") > start.index("cleanProductCoreResidue(ownerDecision)"):
+    raise AssertionError("Product Core START cleanup fault can be bypassed")
 if prepare.index("owner.write") > prepare.index("ProductCoreOwner.writeAtomic"):
     raise AssertionError("Product Core START publishes startup before durable owner record")
 if "owner.write" not in prepare or "ProductCoreOwner.writeAtomic" not in prepare:
@@ -96,6 +112,20 @@ if "auditProductCoreOwnerForStop" not in residue or "cleanProductCoreResidue(own
     raise AssertionError("Product Core STOP residue path lacks its own owner audit/cleanup")
 if residue.index("if (cleanupFaultInjected)") > residue.index("cleanProductCoreResidue(ownerDecision)"):
     raise AssertionError("Product Core STOP residue deletes before cleanup fault barrier")
+audit = method_body("private ProductCoreOwner.GlobalDecision auditProductCoreOwners(")
+if audit.index("auditGlobalProductCoreProcess") > audit.index("auditProductCoreProfile"):
+    raise AssertionError("global executable audit must precede profile decisions")
+profile_cleanup = method_body("private boolean cleanProductCoreProfile(")
+if profile_cleanup.index("deleteTree(child)") > profile_cleanup.index("owner.delete()"):
+    raise AssertionError("owner authority must be deleted after profile contents")
+if profile_cleanup.index("owner.delete()") > profile_cleanup.index("profile.delete()"):
+    raise AssertionError("owner authority must be deleted immediately before directory")
+profile_audit = method_body("private ProductCoreOwner.ProfileFact auditProductCoreProfile(")
+if profile_audit.index("isInterruptedPublicationOnly") > profile_audit.index("owner.sameInstallation"):
+    raise AssertionError("pending interrupted repair must precede artifact/revision mismatch")
+if stop.index("boolean clean = terminateProductCoreProcess()") \
+        > stop.index("ProductCoreOwner.GlobalDecision postKill"):
+    raise AssertionError("live STOP publishes cleanup without a post-kill global audit")
 PY
 
 echo "sakamoto-173 Product Core owner contract: PASS"

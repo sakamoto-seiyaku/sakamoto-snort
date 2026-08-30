@@ -91,7 +91,7 @@ def method_body(signature):
 
 
 start = method_body("private void startProductCoreRuntime(")
-prepare = method_body("private void prepareProductCoreProfile(File profile, File nativeDir,")
+prepare = method_body("private void prepareProductCoreProfile(")
 stop = method_body("private boolean stopRuntime(boolean stopService)")
 terminate = method_body("private boolean terminateProductCoreProcess(")
 for forbidden in (
@@ -160,9 +160,12 @@ if not stdout_index < launch_index:
 
 close_index = stop.index("closeProductCoreSession()")
 terminate_index = stop.index("terminateProductCoreProcess()")
-cleanup_index = stop.index("deleteTree(profileRoot)")
+cleanup_index = stop.index("cleanProductCoreResidue(postKill)")
 if not close_index < terminate_index < cleanup_index:
     raise AssertionError("STOP must close session and terminate before profile cleanup")
+post_kill_index = stop.index("ProductCoreOwner.GlobalDecision postKill")
+if not terminate_index < post_kill_index < cleanup_index:
+    raise AssertionError("STOP must globally audit after killing the in-memory owner")
 destroy_index = terminate.index("process.destroy();")
 term_wait_index = terminate.index("process.waitFor(STOP_TERM_MILLIS")
 force_index = terminate.index("process.destroyForcibly();")

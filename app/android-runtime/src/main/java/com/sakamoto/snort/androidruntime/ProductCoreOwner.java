@@ -50,42 +50,6 @@ public final class ProductCoreOwner {
         BLOCK_UNKNOWN
     }
 
-    public enum CleanupAction {
-        CLEAR_OWNER,
-        RETAIN_OWNER
-    }
-
-    /** One result type keeps the start and cleanup decisions easy to inspect. */
-    public static final class Decision {
-        public final Action action;
-        public final CleanupAction cleanupAction;
-        public final String errorCode;
-        public final String detail;
-
-        private Decision(Action action, CleanupAction cleanupAction,
-                         String errorCode, String detail) {
-            this.action = action;
-            this.cleanupAction = cleanupAction;
-            this.errorCode = value(errorCode);
-            this.detail = value(detail);
-        }
-
-        private static Decision start(Action action, String detail) {
-            return new Decision(action, null, action == Action.BLOCK_LIVE
-                    ? "product_core_owner_live"
-                    : action == Action.BLOCK_UNKNOWN ? "product_core_owner_unverified" : "",
-                    detail);
-        }
-
-        private static Decision cleanup(CleanupAction action, String errorCode, String detail) {
-            return new Decision(null, action, errorCode, detail);
-        }
-
-        public static Decision unknown(String detail) {
-            return start(Action.BLOCK_UNKNOWN, detail);
-        }
-    }
-
     /** Durable facts for the two fixed Product Core profiles. */
     public static final class ProfileFact {
         public final RuntimeProfile profile;
@@ -506,19 +470,22 @@ public final class ProductCoreOwner {
     public static GlobalDecision decideGlobalForStart(RuntimeProfile selected,
                                                        ProfileFact root,
                                                        ProfileFact vpn,
-                                                       boolean processHandleLive) {
+                                                       boolean processHandleLive,
+                                                       ProcessState globalProcessState) {
         RuntimeProfile chosen = selected == null ? RuntimeProfile.ROOT : selected;
         ProfileFact safeRoot = root == null
                 ? ProfileFact.unknown(RuntimeProfile.ROOT, "ROOT audit is missing") : root;
         ProfileFact safeVpn = vpn == null
                 ? ProfileFact.unknown(RuntimeProfile.VPN, "VPN audit is missing") : vpn;
-        if (processHandleLive || safeRoot.isLive() || safeVpn.isLive()) {
+        if (processHandleLive || globalProcessState == ProcessState.LIVE
+                || safeRoot.isLive() || safeVpn.isLive()) {
             return new GlobalDecision(Action.BLOCK_LIVE, chosen, safeRoot, safeVpn,
-                    false, false, "a Product Core owner is live in ROOT or VPN");
+                    false, false, "a Product Core owner is live in ROOT, VPN, or unregistered VPP");
         }
-        if (safeRoot.isUnknown() || safeVpn.isUnknown()) {
+        if (globalProcessState == null || globalProcessState == ProcessState.UNKNOWN
+                || safeRoot.isUnknown() || safeVpn.isUnknown()) {
             return new GlobalDecision(Action.BLOCK_UNKNOWN, chosen, safeRoot, safeVpn,
-                    false, false, "ROOT and VPN Product Core ownership could not be verified");
+                    false, false, "Product Core global executable or profile ownership could not be verified");
         }
         ProfileFact selectedFact = chosen == RuntimeProfile.VPN ? safeVpn : safeRoot;
         boolean cleanRoot = safeRoot.isGone();
@@ -534,43 +501,6 @@ public final class ProductCoreOwner {
         }
         return new GlobalDecision(Action.BLOCK_UNKNOWN, chosen, safeRoot, safeVpn,
                 false, false, "selected Product Core profile has no clean decision");
-    }
-
-    /** Decide the only allowed START transition after an ownership audit. */
-    public static Decision decideForStart(boolean profilePresent, OwnerRecord record,
-                                          boolean identityMatches, ProcessState processState,
-                                          boolean processHandleLive) {
-        if (processHandleLive || processState == ProcessState.LIVE) {
-            return Decision.start(Action.BLOCK_LIVE,
-                    "a Product Core owner is still live; replacement is blocked");
-        }
-        if (processState == null || processState == ProcessState.UNKNOWN) {
-            return Decision.start(Action.BLOCK_UNKNOWN,
-                    "Product Core owner state could not be verified");
-        }
-        if (!profilePresent) {
-            return Decision.start(Action.FRESH_START, "no Product Core owner profile exists");
-        }
-        if (record == null || !identityMatches) {
-            return Decision.start(Action.BLOCK_UNKNOWN,
-                    "Product Core owner record is missing or does not match this installation");
-        }
-        return Decision.start(Action.CLEAN_THEN_START,
-                "the exact Product Core owner is proven gone");
-    }
-
-    /**
-     * Clear durable owner references/tree only after the process is gone and
-     * cleanup succeeded; retaining authority does not claim a native Session
-     * remains usable after close failure.
-     */
-    public static Decision decideCleanup(boolean processHandleLive, boolean profileRemoved) {
-        if (processHandleLive || !profileRemoved) {
-            return Decision.cleanup(CleanupAction.RETAIN_OWNER, "cleanup_failed",
-                    "Product Core owner remains authoritative until cleanup succeeds");
-        }
-        return Decision.cleanup(CleanupAction.CLEAR_OWNER, "",
-                "Product Core owner cleanup completed");
     }
 
     /** Convert the bounded shell audit output into a conservative process state. */
@@ -600,9 +530,26 @@ public final class ProductCoreOwner {
         }
     }
 
-    /** Build a bounded app-UID shell probe for the exact executable/profile/token identity. */
-    public static String buildProcessAuditCommand(OwnerRecord record, String executablePath) {
-        return buildProcessAuditCommand(record, executablePath, "*");
+    /** Build a bounded app-UID scan for an unregistered exact VPP executable. */
+    public static String buildGlobalProcessAuditCommand(String executablePath,
+                                                        String expectedUid) {
+        String executable = absolutePath(executablePath, "Product Core executable path");
+        String uid = safeScalar(expectedUid, "Product Core owner UID");
+        return "set +e; "
+                + "ps_output=$(ps -A -o PID,UID,args 2>/dev/null); ps_status=$?; "
+                + "if [ \"$ps_status\" -ne 0 ]; then "
+                + "echo PRODUCT_OWNER_AUDIT_ERROR=ps; exit 125; fi; "
+                + "count=0; "
+                + "for pid in $(printf '%s\\n' \"$ps_output\" | awk -v expected_uid="
+                + shellQuote(uid)
+                + " '$1 ~ /^[0-9]+$/ && (expected_uid == \"*\" || $2 == expected_uid) {print $1}'); do "
+                + "proc=/proc/$pid; "
+                + "exe=$(readlink \"$proc/exe\" 2>/dev/null); exe_status=$?; "
+                + "if [ \"$exe_status\" -ne 0 ]; then "
+                + "echo PRODUCT_OWNER_AUDIT_ERROR=exe; exit 125; fi; "
+                + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
+                + "count=$((count + 1)); done; "
+                + "echo PRODUCT_OWNER_COUNT=$count; exit 0";
     }
 
     /**

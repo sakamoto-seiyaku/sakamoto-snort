@@ -1539,61 +1539,30 @@ public final class AndroidRuntimeContractTest {
         expectIllegalArgument("owner record rejects missing fields",
                 () -> ProductCoreOwner.OwnerRecord.parse(encoded.replace("revision=vpp-r1\n", "")));
 
-        ProductCoreOwner.Decision fresh = ProductCoreOwner.decideForStart(
-                false, null, false, ProductCoreOwner.ProcessState.GONE, false);
-        check(fresh.action == ProductCoreOwner.Action.FRESH_START,
-                "an absent Product Core profile permits a fresh explicit start");
-
-        ProductCoreOwner.Decision live = ProductCoreOwner.decideForStart(
-                true, expected, true, ProductCoreOwner.ProcessState.LIVE, false);
-        check(live.action == ProductCoreOwner.Action.BLOCK_LIVE,
-                "a live audited owner blocks replacement after service recreation");
-        ProductCoreOwner.Decision handleLive = ProductCoreOwner.decideForStart(
-                true, expected, true, ProductCoreOwner.ProcessState.GONE, true);
-        check(handleLive.action == ProductCoreOwner.Action.BLOCK_LIVE,
-                "a live in-process handle blocks replacement even if the audit is gone");
-
-        ProductCoreOwner.Decision unknown = ProductCoreOwner.decideForStart(
-                true, expected, true, ProductCoreOwner.ProcessState.UNKNOWN, false);
-        check(unknown.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
-                "an unverifiable owner blocks replacement fail-closed");
-        ProductCoreOwner.Decision malformed = ProductCoreOwner.decideForStart(
-                true, null, false, ProductCoreOwner.ProcessState.GONE, false);
-        check(malformed.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
-                "a missing owner record blocks profile deletion and replacement");
-        ProductCoreOwner.Decision identityMismatch = ProductCoreOwner.decideForStart(
-                true, expected, false, ProductCoreOwner.ProcessState.GONE, false);
-        check(identityMismatch.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
-                "a mismatched profile identity blocks replacement");
-
-        ProductCoreOwner.Decision gone = ProductCoreOwner.decideForStart(
-                true, expected, true, ProductCoreOwner.ProcessState.GONE, false);
-        check(gone.action == ProductCoreOwner.Action.CLEAN_THEN_START,
-                "only a proven-gone exact owner permits cleanup before fresh start");
-
-        ProductCoreOwner.Decision cleanupFailed = ProductCoreOwner.decideCleanup(
-                true, false);
-        check(cleanupFailed.cleanupAction == ProductCoreOwner.CleanupAction.RETAIN_OWNER,
-                "cleanup failure retains authoritative owner state and any live process handle");
-        check("cleanup_failed".equals(cleanupFailed.errorCode),
-                "cleanup failure is visible as cleanup_failed");
-        ProductCoreOwner.Decision cleanupSucceeded = ProductCoreOwner.decideCleanup(
-                false, true);
-        check(cleanupSucceeded.cleanupAction == ProductCoreOwner.CleanupAction.CLEAR_OWNER,
-                "only successful cleanup after process death clears owner state");
-
         ProductCoreOwner.ProfileFact rootAbsent = ProductCoreOwner.ProfileFact.absent(
                 RuntimeProfile.ROOT);
         ProductCoreOwner.ProfileFact vpnAbsent = ProductCoreOwner.ProfileFact.absent(
                 RuntimeProfile.VPN);
         ProductCoreOwner.GlobalDecision globalFresh = ProductCoreOwner.decideGlobalForStart(
-                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false);
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false,
+                ProductCoreOwner.ProcessState.GONE);
         check(globalFresh.action == ProductCoreOwner.Action.FRESH_START,
                 "both absent Product Core profiles permit a fresh start");
         ProductCoreOwner.GlobalDecision globalHandleLive = ProductCoreOwner.decideGlobalForStart(
-                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, true);
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, true,
+                ProductCoreOwner.ProcessState.GONE);
         check(globalHandleLive.action == ProductCoreOwner.Action.BLOCK_LIVE,
                 "a live in-process Product Core handle blocks global replacement");
+        ProductCoreOwner.GlobalDecision unregisteredLive = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false,
+                ProductCoreOwner.ProcessState.LIVE);
+        check(unregisteredLive.action == ProductCoreOwner.Action.BLOCK_LIVE,
+                "an unregistered app-UID VPP blocks even with both profiles absent");
+        ProductCoreOwner.GlobalDecision unregisteredUnknown = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false,
+                ProductCoreOwner.ProcessState.UNKNOWN);
+        check(unregisteredUnknown.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
+                "an unregistered global scan failure blocks even with both profiles absent");
         ProductCoreOwner.ProfileFact rootGone = ProductCoreOwner.ProfileFact.exactGone(
                 RuntimeProfile.ROOT, expected);
         ProductCoreOwner.ProfileFact vpnGone = ProductCoreOwner.ProfileFact.exactGone(
@@ -1603,7 +1572,8 @@ public final class AndroidRuntimeContractTest {
                         "/data/user/0/example/files/profiles/vpn/vpp/runtime/api.sock",
                         "product-core", "vpp-r1"));
         ProductCoreOwner.GlobalDecision globalGone = ProductCoreOwner.decideGlobalForStart(
-                RuntimeProfile.ROOT, rootGone, vpnGone, false);
+                RuntimeProfile.ROOT, rootGone, vpnGone, false,
+                ProductCoreOwner.ProcessState.GONE);
         check(globalGone.action == ProductCoreOwner.Action.CLEAN_THEN_START,
                 "global Product Core audit permits cleanup only after both profiles are gone");
         check(globalGone.shouldClean(RuntimeProfile.ROOT)
@@ -1613,20 +1583,22 @@ public final class AndroidRuntimeContractTest {
                 "generation allocation observes the highest ROOT or VPN durable generation");
         ProductCoreOwner.GlobalDecision vpnLive = ProductCoreOwner.decideGlobalForStart(
                 RuntimeProfile.ROOT, rootGone,
-                ProductCoreOwner.ProfileFact.live(RuntimeProfile.VPN, vpnGone.owner), false);
+                ProductCoreOwner.ProfileFact.live(RuntimeProfile.VPN, vpnGone.owner), false,
+                ProductCoreOwner.ProcessState.GONE);
         check(vpnLive.action == ProductCoreOwner.Action.BLOCK_LIVE,
                 "a live opposite-profile owner blocks selected-profile replacement");
         ProductCoreOwner.GlobalDecision vpnUnknown = ProductCoreOwner.decideGlobalForStart(
                 RuntimeProfile.ROOT, rootAbsent,
                 ProductCoreOwner.ProfileFact.unknown(RuntimeProfile.VPN, "unreadable owner"),
-                false);
+                false, ProductCoreOwner.ProcessState.GONE);
         check(vpnUnknown.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
                 "an unknown opposite-profile owner blocks selected-profile replacement");
         check(!vpnUnknown.shouldClean(RuntimeProfile.ROOT)
                         && !vpnUnknown.shouldClean(RuntimeProfile.VPN),
                 "blocked global ownership audit selects no unproven profile for deletion");
         ProductCoreOwner.GlobalDecision repairedFresh = ProductCoreOwner.decideGlobalForStart(
-                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false);
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false,
+                ProductCoreOwner.ProcessState.GONE);
         check(repairedFresh.action == ProductCoreOwner.Action.FRESH_START,
                 "after exact residue repair the next explicit start is fresh");
 
@@ -1691,6 +1663,39 @@ public final class AndroidRuntimeContractTest {
         } catch (Exception error) {
             throw new AssertionError("atomic owner publication could not be checked", error);
         }
+
+        String globalCommand = ProductCoreOwner.buildGlobalProcessAuditCommand(
+                "/data/app/example/lib/arm64-v8a/libvpp_runtime.so", "10123");
+        check(globalCommand.contains("expected_uid='10123'"),
+                "global owner audit filters unregistered candidates to the app UID first");
+        check(!globalCommand.contains("SAKAMOTO_VPP_OWNER_TOKEN="),
+                "global owner audit does not require a registered owner token");
+        check(globalCommand.contains("readlink")
+                        && globalCommand.contains("libvpp_runtime.so"),
+                "global owner audit checks the exact executable identity");
+        try {
+            Path globalScript = Files.createTempFile("sakamoto-product-global-owner-audit", ".sh");
+            try {
+                Files.write(globalScript, globalCommand.getBytes(StandardCharsets.UTF_8));
+                Process syntax = new ProcessBuilder("sh", "-n", globalScript.toString())
+                        .redirectErrorStream(true).start();
+                check(syntax.waitFor() == 0,
+                        "global Product Core executable audit command is valid POSIX shell");
+            } finally {
+                Files.deleteIfExists(globalScript);
+            }
+        } catch (Exception error) {
+            throw new AssertionError("global Product Core audit syntax could not be checked", error);
+        }
+        check(ProductCoreOwner.ProcessState.LIVE
+                        == ProductCoreOwner.processState(0, "PRODUCT_OWNER_COUNT=1\n"),
+                "one unregistered exact executable is live");
+        check(ProductCoreOwner.ProcessState.GONE
+                        == ProductCoreOwner.processState(0, "PRODUCT_OWNER_COUNT=0\n"),
+                "zero global executable matches permits fresh evaluation");
+        check(ProductCoreOwner.ProcessState.UNKNOWN
+                        == ProductCoreOwner.processState(125, "PRODUCT_OWNER_AUDIT_ERROR=ps\n"),
+                "global executable scan failure is unknown rather than fresh");
 
         String command = ProductCoreOwner.buildProcessAuditCommand(expected,
                 "/data/app/example/lib/arm64-v8a/libvpp_runtime.so", "10123");
