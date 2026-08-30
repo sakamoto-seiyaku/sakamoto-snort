@@ -235,6 +235,9 @@ build_native_stage() {
   local product_abi_version
   local product_api_version
   local vpp_binary_sha256
+  local generated_api_json
+  local generated_api_crc
+  local product_api_crc
   local artifact_description
   local rust_dynamic
   local jni_dynamic
@@ -483,6 +486,20 @@ build_native_stage() {
   generated_vapi_header="$plugin_build/CMakeFiles/vpp-api/vapi/product_core.api.vapi.h"
   [[ -f "$generated_vapi_header" ]] || \
     die "production generated VAPI header was not produced"
+  generated_api_json="$plugin_build/product_core.api.json"
+  [[ -f "$generated_api_json" && ! -L "$generated_api_json" ]] || \
+    die "production generated product_core.api.json was not produced"
+  product_api_crc="$(product_manifest_value product.api.crc)"
+  [[ "$product_api_crc" =~ ^[[:xdigit:]]{8}$ ]] || \
+    die "source product API CRC has an invalid format"
+  generated_api_crc="$(grep -Eio '"vl_api_version"[[:space:]]*:[[:space:]]*"0x?[0-9a-f]{8}"' \
+    "$generated_api_json" | sed -E 's/.*0x?([0-9a-f]{8}).*/\1/I' | head -n 1)"
+  [[ "$generated_api_crc" =~ ^[[:xdigit:]]{8}$ ]] || \
+    die "generated product API CRC is missing"
+  [[ "${generated_api_crc,,}" == "${product_api_crc,,}" ]] || \
+    die "generated API CRC does not match product identity"
+  [[ "${product_api_identity##*@}" == "${generated_api_crc,,}" ]] || \
+    die "generated API CRC does not match product identity"
 
   export CC_aarch64_linux_android="$android_clang"
   export AR_aarch64_linux_android="$llvm_ar"

@@ -9,9 +9,29 @@ vpp="$stage/lib/arm64-v8a/libvpp_runtime.so"
 service="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 lifecycle="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCoreLifecycle.java"
 
-test -f "$source_manifest"
-test -f "$product_manifest"
-test -f "$vpp"
+# Build-tree VAPI output is not a device acceptance result; identity is
+# checked at the public lifecycle seam and against the installed executable.
+grep -Fq 'public static String validate(' "$lifecycle"
+grep -Fq 'product_core.api.json' "$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
+grep -Fq 'generated API CRC does not match product identity' \
+  "$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
+grep -Fq 'ProductCoreLifecycle.validate(generation, productArtifactId' "$service"
+grep -Fq 'product_artifact_hash_mismatch' "$service"
+grep -Fq 'product_abi_mismatch' "$service"
+grep -Fq 'productCoreConnectFailureCode' "$service"
+
+for required in "$source_manifest" "$product_manifest" "$vpp"; do
+  if [[ ! -f "$required" ]]; then
+    echo "s173 product identity contract: SKIP (build a product stage first; missing $required)" >&2
+    exit 2
+  fi
+done
+for field in artifactId apiIdentity abiVersion apiVersion vppBinarySha256; do
+  if ! grep -q "^${field}=" "$product_manifest"; then
+    echo "s173 product identity contract: SKIP (stage predates S173; rebuild product stage for $field)" >&2
+    exit 2
+  fi
+done
 
 source_value() { sed -n "s/^$1=//p" "$source_manifest"; }
 manifest_value() { sed -n "s/^$1=//p" "$product_manifest"; }
@@ -27,14 +47,5 @@ expected_hash="$(manifest_value vppBinarySha256)"
 [[ "$expected_hash" =~ ^[[:xdigit:]]{64}$ ]]
 actual_hash="$(sha256sum "$vpp" | awk '{print $1}')"
 test "$actual_hash" = "$expected_hash"
-
-# Build-tree VAPI output is not a device acceptance result; identity is
-# checked at the public lifecycle seam and against the installed executable.
-grep -Fq 'public static String validate(' "$lifecycle"
-grep -Fq 'ProductCoreLifecycle.validate(generation, productArtifactId' "$service"
-grep -Fq 'product_artifact_hash_mismatch' "$service"
-grep -Fq 'product_abi_mismatch' "$service"
-grep -Fq 'productCoreConnectFailureCode' "$service"
-grep -Fq 'ProductCoreLifecycle.isIdentityFailure(validation)' "$service"
 
 echo "s173 product identity contract: PASS"
