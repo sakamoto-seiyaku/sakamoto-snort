@@ -125,6 +125,8 @@ grep -q 'product_prepare_build_output' "$launcher"
 grep -q 'product_prepare_build_output' "$path_helpers"
 grep -q 'product_resolve_vpp_library_dir' "$builder"
 grep -q '^product_resolve_vpp_library_dir()' "$path_helpers"
+grep -q 'product_validate_host_vpp_install_prefix' "$builder"
+grep -q '^product_validate_host_vpp_install_prefix()' "$path_helpers"
 
 for script in \
   "$repo_root/tools/product/build-host-artifact.sh" \

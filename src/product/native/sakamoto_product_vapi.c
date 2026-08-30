@@ -20,10 +20,18 @@
 #include <string.h>
 #include <sys/un.h>
 
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#endif
 #include <vapi/memclnt.api.vapi.h>
 #include <vapi/vapi.h>
 #include <vapi/vlib.api.vapi.h>
 #include <vapi/product_core.api.vapi.h>
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 DEFINE_VAPI_MSG_IDS_MEMCLNT_API_JSON;
 DEFINE_VAPI_MSG_IDS_VLIB_API_JSON;

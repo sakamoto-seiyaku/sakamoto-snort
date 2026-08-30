@@ -8,11 +8,15 @@ product_prepare_build_output
 suffix="$$"
 runtime_root="$repo_root/build-output/product-vpp-runtime-path-contract-$suffix"
 runtime_link="$repo_root/build-output/product-vpp-runtime-path-link-$suffix"
-multiarch_prefix="$(mktemp -d /tmp/sakamoto-product-vpp-prefix.XXXXXX)"
+vpp_source_fixture="$(mktemp -d /tmp/sakamoto-product-vpp-source.XXXXXX)"
+multiarch_prefix="$vpp_source_fixture/build-root/install-vpp-native/vpp"
 outside_library_dir="$(mktemp -d /tmp/sakamoto-product-vpp-external-lib.XXXXXX)"
+foreign_source="$(mktemp -d /tmp/sakamoto-product-vpp-foreign-source.XXXXXX)"
+escape_source="$(mktemp -d /tmp/sakamoto-product-vpp-escape-source.XXXXXX)"
 cleanup() {
   rm -rf -- "$runtime_root" "$runtime_link"
-  rm -rf -- "$multiarch_prefix" "$outside_library_dir"
+  rm -rf -- "$vpp_source_fixture" "$outside_library_dir" \
+    "$foreign_source" "$escape_source"
 }
 trap cleanup EXIT
 mkdir -p "$runtime_root"
@@ -50,6 +54,34 @@ mkdir -p "$multiarch_prefix/lib" "$multiarch_prefix/bin" \
 touch "$multiarch_lib/cmake/vpp/VPPConfig.cmake" \
   "$multiarch_lib/libvapiclient.so.26.02"
 ln -s libvapiclient.so.26.02 "$multiarch_lib/libvapiclient.so"
+
+validated_prefix="$(product_validate_host_vpp_install_prefix \
+  "$vpp_source_fixture" "$multiarch_prefix")"
+if [[ "$validated_prefix" != "$multiarch_prefix" ]]; then
+  echo "source-owned official Host VPP prefix was not validated" >&2
+  exit 1
+fi
+
+mkdir -p "$foreign_source/build-root/install-vpp-native/vpp"
+set +e
+product_validate_host_vpp_install_prefix \
+  "$foreign_source" "$multiarch_prefix" >/dev/null 2>&1
+foreign_source_status=$?
+product_validate_host_vpp_install_prefix \
+  "$vpp_source_fixture" "$outside_library_dir" >/dev/null 2>&1
+external_prefix_status=$?
+mkdir -p "$escape_source/build-root/install-vpp-native"
+ln -s "$outside_library_dir" \
+  "$escape_source/build-root/install-vpp-native/vpp"
+product_validate_host_vpp_install_prefix \
+  "$escape_source" "$outside_library_dir" >/dev/null 2>&1
+escape_prefix_status=$?
+set -e
+if [[ "$foreign_source_status" -ne 2 || "$external_prefix_status" -ne 2 ||
+      "$escape_prefix_status" -ne 2 ]]; then
+  echo "unproven or escaping Host VPP install prefix was accepted" >&2
+  exit 1
+fi
 
 resolved_lib="$(product_resolve_vpp_library_dir "$multiarch_prefix" "")"
 if [[ "$resolved_lib" != "$multiarch_lib" ]]; then

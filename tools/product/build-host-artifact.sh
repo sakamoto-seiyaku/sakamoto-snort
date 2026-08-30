@@ -54,11 +54,8 @@ if [[ -z "$vpp_prefix_raw" ]]; then
   echo "VPP_INSTALL_PREFIX is required (or set BUILD_VPP_RUNTIME=1)" >&2
   exit 2
 fi
-vpp_prefix="$(product_canonical_existing "$vpp_prefix_raw")" || exit 2
-if [[ ! -d "$vpp_prefix" ]]; then
-  echo "VPP_INSTALL_PREFIX must be a directory from the pinned VPP install" >&2
-  exit 2
-fi
+vpp_prefix="$(product_validate_host_vpp_install_prefix \
+  "$vpp_source" "$vpp_prefix_raw")" || exit 2
 
 vpp_bin="$(product_canonical_existing \
   "${VPP_BIN:-$vpp_prefix/bin/vpp}")" || exit 2

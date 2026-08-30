@@ -40,6 +40,31 @@ product_canonical_for_write() {
   fi
 }
 
+product_validate_host_vpp_install_prefix() {
+  local source_raw="$1"
+  local prefix_raw="$2"
+  local source prefix expected expected_canonical
+
+  source="$(product_canonical_existing "$source_raw")" || return
+  prefix="$(product_canonical_existing "$prefix_raw")" || return
+  if [[ ! -d "$source" || ! -d "$prefix" ]]; then
+    product_path_error "Host VPP source and install prefix must be directories"
+    return 2
+  fi
+
+  # The Host artifact may only consume the official install tree produced by
+  # this exact audited source checkout. Reject independently staged, POC, and
+  # symlink-escaped trees even when their file layout looks like VPP.
+  expected="$source/build-root/install-vpp-native/vpp"
+  expected_canonical="$(product_canonical_existing "$expected")" || return
+  if [[ "$expected_canonical" != "$expected" || "$prefix" != "$expected" ]]; then
+    product_path_error \
+      "VPP_INSTALL_PREFIX must be the official build of VPP_SOURCE_DIR"
+    return 2
+  fi
+  printf '%s\n' "$prefix"
+}
+
 product_resolve_vpp_library_dir() {
   local prefix_raw="$1"
   local explicit_raw="${2:-}"

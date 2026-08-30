@@ -11,17 +11,22 @@ trap cleanup EXIT
 mkdir -p "$fixture_root/include" "$fixture_root/generated/vapi"
 
 # Exercise the Cargo build-script seam without needing an external VPP tree.
-# The compiler wrapper accepts only the narrow compatibility flags required by
-# pinned generated VAPI headers, then materializes the requested object.
+# The compiler wrapper requires Host endian compatibility but rejects warning
+# suppressions applied to the whole project-owned translation unit.
 cc_wrapper="$fixture_root/cc"
 cat >"$cc_wrapper" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 args=" $* "
-for required in -Werror -D_DEFAULT_SOURCE=1 \
-  -Wno-unused-parameter -Wno-sign-compare; do
+for required in -Werror -D_DEFAULT_SOURCE=1; do
   if [[ "$args" != *" $required "* ]]; then
     echo "missing Host generated-VAPI compiler flag: $required" >&2
+    exit 1
+  fi
+done
+for forbidden in -Wno-unused-parameter -Wno-sign-compare; do
+  if [[ "$args" == *" $forbidden "* ]]; then
+    echo "translation-unit-wide generated-VAPI suppression: $forbidden" >&2
     exit 1
   fi
 done
@@ -57,17 +62,24 @@ SAKAMOTO_PRODUCT_VAPI_REQUIRED=1 \
   cargo check --quiet --manifest-path "$repo_root/Cargo.toml" \
     -p sakamoto-product-core --lib
 
-# Suppressing the two confirmed generated-header diagnostics must not weaken
-# -Werror for project-owned C. An unrelated implicit declaration stays fatal.
-cat >"$fixture_root/owned-warning.c" <<'EOF'
-int sakamoto_owned_warning(void) { return undeclared_function(); }
+# Project-owned C must retain -Werror for the same two warning classes emitted
+# by generated headers, as well as unrelated compiler diagnostics.
+cat >"$fixture_root/owned-unused.c" <<'EOF'
+int sakamoto_owned_unused(int value) { return 0; }
 EOF
-if cc -std=c11 -Wall -Wextra -Werror -D_DEFAULT_SOURCE=1 \
-    -Wno-unused-parameter -Wno-sign-compare \
-    -c "$fixture_root/owned-warning.c" -o "$fixture_root/owned-warning.o" \
-    >/dev/null 2>&1; then
-  echo "Host generated-VAPI flags weakened -Werror for project-owned C" >&2
-  exit 1
-fi
+cat >"$fixture_root/owned-sign.c" <<'EOF'
+int sakamoto_owned_sign(unsigned left, int right) { return left < right; }
+EOF
+cat >"$fixture_root/owned-implicit.c" <<'EOF'
+int sakamoto_owned_implicit(void) { return undeclared_function(); }
+EOF
+for warning_source in owned-unused owned-sign owned-implicit; do
+  if cc -std=c11 -Wall -Wextra -Werror -D_DEFAULT_SOURCE=1 \
+      -c "$fixture_root/$warning_source.c" \
+      -o "$fixture_root/$warning_source.o" >/dev/null 2>&1; then
+    echo "Host VAPI build weakened -Werror for $warning_source" >&2
+    exit 1
+  fi
+done
 
 echo "sakamoto Product Host generated-VAPI build contract: PASS"
