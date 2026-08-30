@@ -21,6 +21,7 @@ else
   echo "s173 product identity contract: SKIP (set SAKAMOTO_S173_VPP_STAGE_DIR for stage integration)"
 fi
 bash "$repo_root/tests/android/s173-product-failure-contract-test.sh"
+bash "$repo_root/tests/android/s173-product-owner-contract-test.sh"
 # Build/artifact seam: the core runtime is packaged without experiment packet
 # adapter artifacts and carries a generated-VAPI identity.
 bash "$repo_root/tests/android/android-runtime-artifact-contract-test.sh"

@@ -54,11 +54,12 @@ if grep -Fq 'PRODUCT_PLUGIN_ASSET' "$service" || \
   exit 1
 fi
 
-# Reconciliation for the app-UID mainline must not route a tokenless stale
-# profile through the retired Root ownership/su audit. Visible START owns the
-# bounded app-owned deleteTree preflight.
+# Reconciliation for the app-UID mainline must not route a stale profile
+# through the retired Root ownership/su audit. Visible START owns the
+# bounded durable Product Core owner audit and exact cleanup preflight.
 grep -Fq 'reconcileProductCoreRuntime' "$service"
-grep -Fq 'Product Core path defers stale-profile cleanup to visible START' "$service"
+grep -Fq 'auditProductCoreOwner' "$service"
+grep -Fq 'owner audit below' "$service"
 
 # The Product Core path is app-UID and executable/session owned. It must not
 # enter the retired packet adapters or legacy daemon.
@@ -90,7 +91,7 @@ def method_body(signature):
 
 
 start = method_body("private void startProductCoreRuntime(")
-prepare = method_body("private void prepareProductCoreProfile(File profile, File nativeDir)")
+prepare = method_body("private void prepareProductCoreProfile(File profile, File nativeDir,")
 stop = method_body("private boolean stopRuntime(boolean stopService)")
 terminate = method_body("private boolean terminateProductCoreProcess(")
 for forbidden in (

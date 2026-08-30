@@ -444,7 +444,8 @@ public final class RuntimeService extends VpnService {
             appendLog("health_query=coalesced revision=" + revision);
             return;
         }
-        if (productCoreSession != null || processAlive(vppProcess)) {
+        if ((productCoreSession != null && productCoreSession.isConnected())
+                || processAlive(vppProcess)) {
             if (!enqueueLifecycle(() -> {
                 try {
                     queryProductCoreRuntime();
@@ -779,31 +780,26 @@ public final class RuntimeService extends VpnService {
         RuntimeProfile selected = requestedProfile == null
                 ? (activeProfile == null ? RuntimeProfile.ROOT : activeProfile)
                 : requestedProfile;
-        if (processAlive(vppProcess) && productCoreSession != null) {
+        if (processAlive(vppProcess) && productCoreSession != null
+                && productCoreSession.isConnected()) {
             queryProductCoreRuntime();
             return;
         }
         boolean productProcessAlive = processAlive(vppProcess);
-        boolean productSessionLive = productCoreSession != null;
+        boolean productSessionLive = productCoreSession != null
+                && productCoreSession.isConnected();
         if (productProcessAlive || productSessionLive) {
             failProductCoreGeneration("product_core_session_missing",
                     "Product Core handles are inconsistent for the active generation");
             return;
         }
-        closeProductCoreSession();
         activeProfile = selected;
         initializeProfilePaths(selected);
-        // Product Core path defers stale-profile cleanup to visible START;
-        // there is no numeric PID or privileged Root ownership audit here.
-        if (ProductCoreLifecycle.shouldClearStaleProfile(
-                profileRoot.exists(), productProcessAlive, productSessionLive)
-                && !deleteTree(profileRoot)) {
-            failWithoutRuntime("product_profile_cleanup_failed",
-                    "previous generation-owned profile tree could not be removed");
-            return;
-        }
-        generation++;
+        // ProductCoreLifecycle.shouldClearStaleProfile is retained for the
+        // legacy contract vocabulary; Product Core now requires the durable
+        // owner audit below before any stale profile can be removed.
 
+        boolean productCoreOwnerWritten = false;
         Properties productManifest;
         try {
             productManifest = readProductManifest();
@@ -833,10 +829,6 @@ public final class RuntimeService extends VpnService {
                         "product manifest ABI/API versions are unsupported");
                 return;
             }
-            if (!publish(RuntimeSnapshot.starting(selected, VppHealthHandshake.PROTOCOL,
-                    productVppRevision, "", generation))) {
-                return;
-            }
 
             File nativeDir = new File(getApplicationInfo().nativeLibraryDir).getCanonicalFile();
             File vpp = new File(nativeDir, VPP_BINARY).getCanonicalFile();
@@ -853,7 +845,38 @@ public final class RuntimeService extends VpnService {
                         "installed Product Core VPP executable does not match the stage");
                 return;
             }
-            prepareProductCoreProfile(profileRoot, nativeDir);
+            ProductCoreOwner.OwnerRecord previousOwner = readProductCoreOwner(profileRoot);
+            ProductCoreOwner.Decision ownerDecision = auditProductCoreOwner(
+                    selected, productArtifactId, productVppRevision, vpp);
+            if (ownerDecision.action == ProductCoreOwner.Action.BLOCK_LIVE
+                    || ownerDecision.action == ProductCoreOwner.Action.BLOCK_UNKNOWN) {
+                publishError(ownerDecision.errorCode, ownerDecision.detail, true,
+                        ProductCoreLifecycle.UNKNOWN_PID);
+                return;
+            }
+            if (ownerDecision.action == ProductCoreOwner.Action.CLEAN_THEN_START) {
+                // The exact owner was proven gone. Remove only this profile;
+                // no generic or opposite-profile cleanup is implied.
+                if (!deleteTree(profileRoot) || profileRoot.exists()) {
+                    publishError("cleanup_failed",
+                            "exact Product Core owner profile cleanup failed", true,
+                            ProductCoreLifecycle.UNKNOWN_PID);
+                    return;
+                }
+            }
+            generation = Math.max(generation,
+                    previousOwner == null ? 0L : previousOwner.generation) + 1L;
+            ProductCoreOwner.OwnerRecord owner = ProductCoreOwner.OwnerRecord.create(
+                    generation, UUID.randomUUID().toString(), selected,
+                    new File(profileRoot, "runtime").getCanonicalPath(),
+                    new File(profileRoot, "runtime/api.sock").getCanonicalPath(),
+                    productArtifactId, productVppRevision);
+            if (!publish(RuntimeSnapshot.starting(selected, VppHealthHandshake.PROTOCOL,
+                    productVppRevision, "", generation))) {
+                return;
+            }
+            prepareProductCoreProfile(profileRoot, nativeDir, owner);
+            productCoreOwnerWritten = true;
 
             ProcessBuilder builder = new ProcessBuilder(vpp.getPath(), "-c",
                     new File(profileRoot, "startup.conf").getPath());
@@ -862,6 +885,7 @@ public final class RuntimeService extends VpnService {
             builder.environment().put("LD_LIBRARY_PATH", nativeDir.getPath());
             builder.environment().put("SAKAMOTO_PRODUCT_GENERATION",
                     Long.toString(generation));
+            builder.environment().put("SAKAMOTO_VPP_OWNER_TOKEN", owner.token);
             builder.environment().put("SAKAMOTO_VPP_SVM_DIR", svm.getPath());
             builder.environment().put("SAKAMOTO_VPP_RUNTIME_DIR", runtime.getPath());
             builder.environment().put("SAKAMOTO_RUNTIME_PROFILE", selected.wireName);
@@ -899,6 +923,18 @@ public final class RuntimeService extends VpnService {
             monitorProductCoreExit(process);
         } catch (Exception error) {
             Log.e(TAG, "Product Core startup failed", error);
+            if (!productCoreOwnerWritten && !processAlive(vppProcess)
+                    && !(productCoreSession != null && productCoreSession.isConnected())) {
+                // No process was launched and this service did not publish a
+                // fresh owner record. Preserve any existing/partial profile;
+                // the next explicit START must audit it instead of deleting
+                // residue after a manifest or preparation error.
+                publishError("runtime_start_failed", messageOf(error),
+                        profileRoot != null && profileRoot.exists(),
+                        ProductCoreLifecycle.UNKNOWN_PID);
+                stopIfInactive();
+                return;
+            }
             failProductCoreGeneration("runtime_start_failed", messageOf(error));
         }
     }
@@ -1000,27 +1036,39 @@ public final class RuntimeService extends VpnService {
     }
 
     private void failProductCoreGeneration(String code, String message) {
+        if (cleanupFaultInjected && (processAlive(vppProcess)
+                || (productCoreSession != null && productCoreSession.isConnected()))) {
+            publishError("cleanup_failed", code + ": " + message
+                    + "; generation cleanup fault injected", true,
+                    ProductCoreLifecycle.UNKNOWN_PID);
+            return;
+        }
         RuntimeControlNative.Status closeStatus = closeProductCoreSession();
-        if (closeStatus != null && closeStatus.code != 0) {
+        boolean closeFailed = closeStatus != null && closeStatus.code != 0;
+        if (closeFailed) {
             String closeCode = ProductCoreLifecycle.failureCode(closeStatus);
             String closeDetail = closeStatus.errorDetail.isEmpty()
                     ? closeCode : closeStatus.errorDetail;
             message = message + "; " + closeCode + ": " + closeDetail;
         }
-        boolean clean = terminateProductCoreProcess();
+        boolean processStopped = terminateProductCoreProcess();
+        boolean clean = processStopped && !closeFailed;
         if (clean && profileRoot != null && profileRoot.exists()) {
-            clean = deleteTree(profileRoot);
+            clean = deleteTree(profileRoot) && !profileRoot.exists();
         }
-        vppProcess = null;
+        if (clean) {
+            productCoreSession = null;
+            vppProcess = null;
+            clearProfileHandles();
+        }
         publishError(clean ? code : "cleanup_failed",
                 clean ? message : code + ": " + message + "; generation cleanup failed",
-                !clean, -1L);
+                !clean, ProductCoreLifecycle.UNKNOWN_PID);
         stopIfInactive();
     }
 
     private RuntimeControlNative.Status closeProductCoreSession() {
         RuntimeControlNative.Session session = productCoreSession;
-        productCoreSession = null;
         if (session != null) {
             return session.closeAndGetStatus();
         }
@@ -1028,6 +1076,9 @@ public final class RuntimeService extends VpnService {
     }
 
     private boolean terminateProductCoreProcess() {
+        if (cleanupFaultInjected) {
+            return false;
+        }
         Process process = vppProcess;
         if (process == null) {
             return true;
@@ -1063,6 +1114,100 @@ public final class RuntimeService extends VpnService {
         return properties;
     }
 
+    /**
+     * Audit one app-owned Product Core profile before visible START can
+     * remove it. A missing record or an unreadable process scan is unknown;
+     * only the exact record plus a zero-owner scan permits cleanup.
+     */
+    private ProductCoreOwner.Decision auditProductCoreOwner(
+            RuntimeProfile selected, String artifactId, String revision, File vpp)
+            throws IOException {
+        boolean profilePresent = profileRoot != null && profileRoot.exists();
+        if (!profilePresent) {
+            return ProductCoreOwner.decideForStart(false, null, true,
+                    ProductCoreOwner.ProcessState.GONE, false);
+        }
+        ProductCoreOwner.OwnerRecord owner = readProductCoreOwner(profileRoot);
+        if (owner == null) {
+            return ProductCoreOwner.decideForStart(true, null, false,
+                    ProductCoreOwner.ProcessState.GONE, false);
+        }
+        ProductCoreOwner.OwnerRecord expected;
+        try {
+            File runtime = new File(profileRoot, "runtime").getCanonicalFile();
+            File socket = new File(runtime, "api.sock").getCanonicalFile();
+            expected = ProductCoreOwner.OwnerRecord.create(owner.generation, owner.token,
+                    selected, runtime.getPath(), socket.getPath(), artifactId, revision);
+        } catch (RuntimeException error) {
+            return ProductCoreOwner.decideForStart(true, owner, false,
+                    ProductCoreOwner.ProcessState.GONE, false);
+        }
+        boolean identityMatches = owner.sameInstallation(expected);
+        ProductCoreOwner.ProcessState processState = identityMatches
+                ? auditProductCoreProcess(owner, vpp)
+                : ProductCoreOwner.ProcessState.GONE;
+        return ProductCoreOwner.decideForStart(true, owner, identityMatches,
+                processState, false);
+    }
+
+    private ProductCoreOwner.OwnerRecord readProductCoreOwner(File profile) {
+        if (profile == null) {
+            return null;
+        }
+        try {
+            return ProductCoreOwner.OwnerRecord.read(
+                    new File(profile, ProductCoreOwner.RECORD_FILE));
+        } catch (IOException error) {
+            return null;
+        }
+    }
+
+    private ProductCoreOwner.ProcessState auditProductCoreProcess(
+            ProductCoreOwner.OwnerRecord owner, File vpp) {
+        try {
+            RuntimeOwnershipReconciliation.CommandResult result = runProductCoreCommandResult(
+                    ProductCoreOwner.buildProcessAuditCommand(owner, vpp.getPath(),
+                            Integer.toString(android.os.Process.myUid())));
+            return ProductCoreOwner.processState(result.status, result.output);
+        } catch (RuntimeException error) {
+            appendLog("product_core_owner_audit=unknown " + messageOf(error));
+            return ProductCoreOwner.ProcessState.UNKNOWN;
+        }
+    }
+
+    /** Product Core is app-UID even when the selected packet profile is ROOT. */
+    private RuntimeOwnershipReconciliation.CommandResult runProductCoreCommandResult(
+            String command) {
+        Process process = null;
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try {
+            process = new ProcessBuilder("/system/bin/sh", "-c", command)
+                    .redirectErrorStream(true).start();
+            if (!process.waitFor(3L, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return new RuntimeOwnershipReconciliation.CommandResult(124,
+                        "PRODUCT_OWNER_AUDIT_ERROR=timeout");
+            }
+            try (InputStream input = process.getInputStream()) {
+                byte[] buffer = new byte[256];
+                int count;
+                while ((count = input.read(buffer)) >= 0) {
+                    if (count > 0 && output.size() < 4096) {
+                        output.write(buffer, 0, Math.min(count, 4096 - output.size()));
+                    }
+                }
+            }
+            return new RuntimeOwnershipReconciliation.CommandResult(process.exitValue(),
+                    output.toString(StandardCharsets.UTF_8.name()));
+        } catch (Exception error) {
+            if (process != null) {
+                process.destroyForcibly();
+            }
+            return new RuntimeOwnershipReconciliation.CommandResult(125,
+                    "PRODUCT_OWNER_AUDIT_ERROR=runner");
+        }
+    }
+
     private static String requiredProductProperty(Properties properties, String name)
             throws IOException {
         String value = properties.getProperty(name, "").trim();
@@ -1083,7 +1228,9 @@ public final class RuntimeService extends VpnService {
         }
     }
 
-    private void prepareProductCoreProfile(File profile, File nativeDir) throws IOException {
+    private void prepareProductCoreProfile(File profile, File nativeDir,
+                                           ProductCoreOwner.OwnerRecord owner)
+            throws IOException {
         File runtime = new File(profile, "runtime");
         File logs = new File(profile, "logs");
         File svm = new File(profile, "shm");
@@ -1106,6 +1253,7 @@ public final class RuntimeService extends VpnService {
             output.write(config.getBytes(StandardCharsets.UTF_8));
             output.getFD().sync();
         }
+        owner.write(new File(profile, ProductCoreOwner.RECORD_FILE));
     }
 
     /**
@@ -1206,17 +1354,48 @@ public final class RuntimeService extends VpnService {
     }
 
     /**
-     * Product Core has no cross-service adoption in SAKAMOTO-172. A service
-     * recreation leaves any stale profile for the next visible START, whose
-     * app-owned preflight creates the fresh generation. In-process handles
-     * remain authoritative for ordinary queries.
+     * Product Core has no cross-service adoption. A service recreation first
+     * audits the durable owner record and app-UID process identity; it leaves
+     * an exact gone profile for visible START to clean, while live/unknown
+     * ownership remains an explicit blocking error.
      */
     private void reconcileProductCoreRuntime(boolean forceHealthQuery, long queryRevision) {
         Process process = vppProcess;
-        if (processAlive(process) && productCoreSession != null) {
+        if (processAlive(process) && productCoreSession != null
+                && productCoreSession.isConnected()) {
             if (forceHealthQuery) {
                 queryProductCoreRuntime();
             }
+            return;
+        }
+        if (processAlive(process) || (productCoreSession != null
+                && productCoreSession.isConnected())) {
+            publishError("product_core_owner_live",
+                    "Product Core handles are inconsistent; replacement is blocked", true,
+                    ProductCoreLifecycle.UNKNOWN_PID);
+            return;
+        }
+        RuntimeProfile selected = snapshot == null || snapshot.profile == null
+                ? (activeProfile == null ? RuntimeProfile.ROOT : activeProfile)
+                : snapshot.profile;
+        activeProfile = selected;
+        initializeProfilePaths(selected);
+        ProductCoreOwner.Decision ownerDecision;
+        try {
+            Properties manifest = readProductManifest();
+            String artifactId = requiredProductProperty(manifest, "artifactId");
+            String revision = requiredProductProperty(manifest, "vppRevision");
+            File nativeDir = new File(getApplicationInfo().nativeLibraryDir).getCanonicalFile();
+            File vpp = new File(nativeDir, VPP_BINARY).getCanonicalFile();
+            ownerDecision = auditProductCoreOwner(selected, artifactId, revision, vpp);
+        } catch (Exception error) {
+            ownerDecision = ProductCoreOwner.Decision.unknown(
+                    "Product Core owner identity could not be audited: " + messageOf(error));
+        }
+        if (ownerDecision.action == ProductCoreOwner.Action.BLOCK_LIVE
+                || ownerDecision.action == ProductCoreOwner.Action.BLOCK_UNKNOWN) {
+            publishError(ownerDecision.errorCode, ownerDecision.detail, true,
+                    ProductCoreLifecycle.UNKNOWN_PID);
             return;
         }
         if (snapshot != null && snapshot.isActive()) {
@@ -1678,29 +1857,40 @@ public final class RuntimeService extends VpnService {
     }
 
     private boolean stopRuntime(boolean stopService) {
-        if (productCoreSession != null || processAlive(vppProcess)) {
+        if (productCoreMainline()
+                && !(productCoreSession != null && productCoreSession.isConnected())
+                && !processAlive(vppProcess)) {
+            return stopProductCoreResidue(stopService);
+        }
+        if ((productCoreSession != null && productCoreSession.isConnected())
+                || processAlive(vppProcess)) {
             RuntimeSnapshot current = snapshot == null
                     ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot;
             publish(RuntimeSnapshot.stopping(current));
-            RuntimeControlNative.Status closeStatus = closeProductCoreSession();
-            boolean clean = terminateProductCoreProcess();
-            if (clean && profileRoot != null && profileRoot.exists()) {
-                clean = deleteTree(profileRoot);
+            if (cleanupFaultInjected) {
+                stopRequested = false;
+                publishError("cleanup_failed", "generation-owned Product Core cleanup failed",
+                        true, ProductCoreLifecycle.UNKNOWN_PID);
+                return false;
             }
-            vppProcess = null;
+            RuntimeControlNative.Status closeStatus = closeProductCoreSession();
+            boolean closeFailed = closeStatus != null && closeStatus.code != 0;
+            boolean clean = terminateProductCoreProcess() && !closeFailed;
+            if (clean && profileRoot != null && profileRoot.exists()) {
+                clean = deleteTree(profileRoot) && !profileRoot.exists();
+            }
             stopRequested = false;
             if (!clean) {
-                publishError("cleanup_failed", "generation-owned profile cleanup failed",
-                        true, -1L);
+                String detail = closeFailed
+                        ? "Product Core control disconnect or generation cleanup failed"
+                        : "generation-owned profile cleanup failed";
+                publishError("cleanup_failed", detail, true,
+                        ProductCoreLifecycle.UNKNOWN_PID);
                 return false;
             }
-            if (closeStatus != null && closeStatus.code != 0) {
-                String closeCode = ProductCoreLifecycle.failureCode(closeStatus);
-                String closeDetail = closeStatus.errorDetail.isEmpty()
-                        ? closeCode : closeStatus.errorDetail;
-                publishError(closeCode, closeDetail, true, -1L);
-                return false;
-            }
+            productCoreSession = null;
+            vppProcess = null;
+            clearProfileHandles();
             boolean published = publish(RuntimeSnapshot.stopped(
                     current.profile, current.generation));
             if (stopService && foregroundStarted) {
@@ -1769,6 +1959,58 @@ public final class RuntimeService extends VpnService {
         // latch and run the explicit recovery probe first.
         return stoppingPublished && stoppedPublished
                 && !persistenceGate.isPersistenceUnavailable();
+    }
+
+    /** Product Core STOP never falls through the retired Root/VPN cleanup path. */
+    private boolean stopProductCoreResidue(boolean stopService) {
+        initializeProfilePaths(activeProfile);
+        ProductCoreOwner.Decision ownerDecision = auditProductCoreOwnerForStop();
+        if (ownerDecision.action == ProductCoreOwner.Action.BLOCK_LIVE
+                || ownerDecision.action == ProductCoreOwner.Action.BLOCK_UNKNOWN) {
+            publishError(ownerDecision.errorCode, ownerDecision.detail, true,
+                    ProductCoreLifecycle.UNKNOWN_PID);
+            stopRequested = false;
+            return false;
+        }
+        if (ownerDecision.action == ProductCoreOwner.Action.CLEAN_THEN_START
+                && (!deleteTree(profileRoot) || profileRoot.exists())) {
+            publishError("cleanup_failed", "exact Product Core owner profile cleanup failed",
+                    true, ProductCoreLifecycle.UNKNOWN_PID);
+            stopRequested = false;
+            return false;
+        }
+        productCoreSession = null;
+        vppProcess = null;
+        clearProfileHandles();
+        RuntimeProfile selected = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
+        boolean published = publish(RuntimeSnapshot.stopped(selected, generation));
+        stopRequested = false;
+        if (stopService && foregroundStarted && !persistenceGate.isPersistenceUnavailable()) {
+            stopForeground(true);
+            foregroundStarted = false;
+        }
+        if (stopService && !destroying && !persistenceGate.isPersistenceUnavailable()) {
+            stopSelf();
+        }
+        return published && !persistenceGate.isPersistenceUnavailable();
+    }
+
+    private ProductCoreOwner.Decision auditProductCoreOwnerForStop() {
+        if (profileRoot == null || !profileRoot.exists()) {
+            return ProductCoreOwner.decideForStart(false, null, true,
+                    ProductCoreOwner.ProcessState.GONE, false);
+        }
+        try {
+            Properties manifest = readProductManifest();
+            String artifactId = requiredProductProperty(manifest, "artifactId");
+            String revision = requiredProductProperty(manifest, "vppRevision");
+            File nativeDir = new File(getApplicationInfo().nativeLibraryDir).getCanonicalFile();
+            File vpp = new File(nativeDir, VPP_BINARY).getCanonicalFile();
+            return auditProductCoreOwner(activeProfile, artifactId, revision, vpp);
+        } catch (Exception error) {
+            return ProductCoreOwner.Decision.unknown(
+                    "Product Core owner identity could not be audited: " + messageOf(error));
+        }
     }
 
     private void pauseProtection() {

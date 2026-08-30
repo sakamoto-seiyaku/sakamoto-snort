@@ -21,6 +21,7 @@ import com.sakamoto.snort.androidruntime.ProductStateStore;
 import com.sakamoto.snort.androidruntime.ProductStore;
 import com.sakamoto.snort.androidruntime.ProductPacketAdapterContract;
 import com.sakamoto.snort.androidruntime.ProductCoreLifecycle;
+import com.sakamoto.snort.androidruntime.ProductCoreOwner;
 import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
@@ -90,6 +91,7 @@ public final class AndroidRuntimeContractTest {
         productCoreIdentityValidatorFailsClosed();
         productCoreNativeFailureCodesRemainVisible();
         productCoreFailureRetryPolicyIsNarrow();
+        productCoreOwnerDecisionIsFailClosed();
         applicationSubjectIdentityIsCompleteUidOnly();
         applicationProtocolCatalogOwnsStablePolicyIdentity();
         productStorePersistsProfileBindingsAndEmptyBundle();
@@ -1511,6 +1513,117 @@ public final class AndroidRuntimeContractTest {
         check(!ProductCoreLifecycle.isRetryableConnectionFailure(
                         "product_core_unknown_failure"),
                 "an unknown native failure is surfaced immediately");
+    }
+
+    private static void productCoreOwnerDecisionIsFailClosed() {
+        ProductCoreOwner.OwnerRecord expected = ProductCoreOwner.OwnerRecord.create(
+                42L, "01234567-0123-0123-0123-0123456789ab", RuntimeProfile.ROOT,
+                "/data/user/0/example/files/profiles/root/vpp/runtime",
+                "/data/user/0/example/files/profiles/root/vpp/runtime/api.sock",
+                "product-core", "vpp-r1");
+        check(expected.generation == 42L, "owner record retains generation");
+        check(expected.diagnosticPid == ProductCoreOwner.UNKNOWN_PID,
+                "owner record keeps PID diagnostic-only and unknown on Android");
+        String encoded = expected.encode();
+        check(encoded.contains("generation=42"), "owner record writes generation");
+        check(encoded.contains("token=01234567-0123-0123-0123-0123456789ab"),
+                "owner record writes the generation token");
+        check(encoded.contains("apiSocket=/data/user/0/example/files/profiles/root/vpp/runtime/api.sock"),
+                "owner record writes the exact API socket path");
+        ProductCoreOwner.OwnerRecord restored = ProductCoreOwner.OwnerRecord.parse(encoded);
+        check(expected.sameInstallation(restored),
+                "owner record round-trips the exact installation identity");
+        check(expected.token.equals(restored.token), "owner record round-trips its token");
+        expectIllegalArgument("owner record rejects duplicate fields",
+                () -> ProductCoreOwner.OwnerRecord.parse(encoded + "generation=43\n"));
+        expectIllegalArgument("owner record rejects missing fields",
+                () -> ProductCoreOwner.OwnerRecord.parse(encoded.replace("revision=vpp-r1\n", "")));
+
+        ProductCoreOwner.Decision fresh = ProductCoreOwner.decideForStart(
+                false, null, false, ProductCoreOwner.ProcessState.GONE, false);
+        check(fresh.action == ProductCoreOwner.Action.FRESH_START,
+                "an absent Product Core profile permits a fresh explicit start");
+
+        ProductCoreOwner.Decision live = ProductCoreOwner.decideForStart(
+                true, expected, true, ProductCoreOwner.ProcessState.LIVE, false);
+        check(live.action == ProductCoreOwner.Action.BLOCK_LIVE,
+                "a live audited owner blocks replacement after service recreation");
+        ProductCoreOwner.Decision handleLive = ProductCoreOwner.decideForStart(
+                true, expected, true, ProductCoreOwner.ProcessState.GONE, true);
+        check(handleLive.action == ProductCoreOwner.Action.BLOCK_LIVE,
+                "a live in-process handle blocks replacement even if the audit is gone");
+
+        ProductCoreOwner.Decision unknown = ProductCoreOwner.decideForStart(
+                true, expected, true, ProductCoreOwner.ProcessState.UNKNOWN, false);
+        check(unknown.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
+                "an unverifiable owner blocks replacement fail-closed");
+        ProductCoreOwner.Decision malformed = ProductCoreOwner.decideForStart(
+                true, null, false, ProductCoreOwner.ProcessState.GONE, false);
+        check(malformed.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
+                "a missing owner record blocks profile deletion and replacement");
+        ProductCoreOwner.Decision identityMismatch = ProductCoreOwner.decideForStart(
+                true, expected, false, ProductCoreOwner.ProcessState.GONE, false);
+        check(identityMismatch.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
+                "a mismatched profile identity blocks replacement");
+
+        ProductCoreOwner.Decision gone = ProductCoreOwner.decideForStart(
+                true, expected, true, ProductCoreOwner.ProcessState.GONE, false);
+        check(gone.action == ProductCoreOwner.Action.CLEAN_THEN_START,
+                "only a proven-gone exact owner permits cleanup before fresh start");
+
+        ProductCoreOwner.Decision cleanupFailed = ProductCoreOwner.decideCleanup(
+                true, false);
+        check(cleanupFailed.cleanupAction == ProductCoreOwner.CleanupAction.RETAIN_OWNER,
+                "cleanup failure retains the usable owner handle/state");
+        check("cleanup_failed".equals(cleanupFailed.errorCode),
+                "cleanup failure is visible as cleanup_failed");
+        ProductCoreOwner.Decision cleanupSucceeded = ProductCoreOwner.decideCleanup(
+                false, true);
+        check(cleanupSucceeded.cleanupAction == ProductCoreOwner.CleanupAction.CLEAR_OWNER,
+                "only successful cleanup after process death clears owner state");
+
+        String command = ProductCoreOwner.buildProcessAuditCommand(expected,
+                "/data/app/example/lib/arm64-v8a/libvpp_runtime.so", "10123");
+        check(command.contains("SAKAMOTO_VPP_OWNER_TOKEN=" + expected.token),
+                "owner audit checks the exact generation token");
+        check(command.contains("SAKAMOTO_PRODUCT_GENERATION=42"),
+                "owner audit checks the exact generation");
+        check(command.contains("SAKAMOTO_VPP_RUNTIME_DIR=" + expected.runtimePath),
+                "owner audit checks the exact runtime directory");
+        check(command.contains("SAKAMOTO_RUNTIME_PROFILE=root"),
+                "owner audit checks the exact runtime profile");
+        check(command.contains("ps -A -o PID,UID,args"),
+                "owner audit obtains the current-UID filter before proc reads");
+        check(command.contains("expected_uid='10123'"),
+                "owner audit filters candidates to the app UID first");
+        check(command.contains("api.sock"),
+                "owner audit carries the exact API socket identity");
+        try {
+            Path script = Files.createTempFile("sakamoto-product-owner-audit", ".sh");
+            try {
+                Files.write(script, command.getBytes(StandardCharsets.UTF_8));
+                Process syntax = new ProcessBuilder("sh", "-n", script.toString())
+                        .redirectErrorStream(true).start();
+                check(syntax.waitFor() == 0,
+                        "Product Core owner audit command is valid POSIX shell");
+            } finally {
+                Files.deleteIfExists(script);
+            }
+        } catch (Exception error) {
+            throw new AssertionError("Product Core owner audit syntax could not be checked", error);
+        }
+        check(ProductCoreOwner.ProcessState.LIVE
+                        == ProductCoreOwner.processState(0, "PRODUCT_OWNER_COUNT=1\n"),
+                "one exact process audit match is live");
+        check(ProductCoreOwner.ProcessState.GONE
+                        == ProductCoreOwner.processState(0, "PRODUCT_OWNER_COUNT=0\n"),
+                "zero process audit matches proves gone");
+        check(ProductCoreOwner.ProcessState.UNKNOWN
+                        == ProductCoreOwner.processState(125, ""),
+                "audit command failure is unknown rather than gone");
+        check(ProductCoreOwner.ProcessState.UNKNOWN
+                        == ProductCoreOwner.processState(0, "PRODUCT_OWNER_COUNT=2\n"),
+                "multiple process matches are unknown rather than adoptable");
     }
 
     private static void applicationSubjectIdentityIsCompleteUidOnly() {
