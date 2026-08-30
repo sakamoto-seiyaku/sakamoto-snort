@@ -20,6 +20,20 @@ grep -Fq 'product_artifact_hash_mismatch' "$service"
 grep -Fq 'product_abi_mismatch' "$service"
 grep -Fq 'productCoreConnectFailureCode' "$service"
 
+# Duplicate source keys must be rejected by the same build helper used by
+# stage-only/APK-only; a first-match reader would allow false identity.
+duplicate_manifest="$(mktemp)"
+trap 'rm -f "$duplicate_manifest"' EXIT
+cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" "$duplicate_manifest"
+printf '%s\n' 'artifact.id=duplicate-artifact' >> "$duplicate_manifest"
+if bash -c "$(sed -n '/^strict_manifest_value()/,/^}/p' \
+    "$repo_root/app/android-runtime/scripts/build-debug-apk.sh")
+    die() { return 2; }
+    strict_manifest_value '$duplicate_manifest' artifact.id" >/dev/null 2>&1; then
+  echo "s173 product identity contract: duplicate manifest key was accepted" >&2
+  exit 1
+fi
+
 for required in "$source_manifest" "$product_manifest" "$vpp"; do
   if [[ ! -f "$required" ]]; then
     echo "s173 product identity contract: SKIP (build a product stage first; missing $required)" >&2
@@ -33,8 +47,14 @@ for field in artifactId apiIdentity abiVersion apiVersion vppBinarySha256; do
   fi
 done
 
-source_value() { sed -n "s/^$1=//p" "$source_manifest"; }
-manifest_value() { sed -n "s/^$1=//p" "$product_manifest"; }
+source_value() {
+  awk -F= -v key="$1" '$1 == key { value = substr($0, index($0, "=") + 1); count++ }
+    END { if (count != 1) exit 1; print value }' "$source_manifest"
+}
+manifest_value() {
+  awk -F= -v key="$1" '$1 == key { value = substr($0, index($0, "=") + 1); count++ }
+    END { if (count != 1) exit 1; print value }' "$product_manifest"
+}
 artifact_id="$(source_value artifact.id)"
 api_identity="$(source_value product.api.identity)"
 abi_version="$(source_value product.abi.version)"

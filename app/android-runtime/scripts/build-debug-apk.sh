@@ -55,6 +55,15 @@ die() {
   exit 2
 }
 
+strict_manifest_value() {
+  local manifest="$1"
+  local key="$2"
+  awk -F= -v key="$key" '
+    $1 == key { value = substr($0, index($0, "=") + 1); count++ }
+    END { if (count != 1) exit 1; print value }
+  ' "$manifest" || die "manifest key must occur exactly once: $key"
+}
+
 mode=build
 case "${1:-}" in
   "") ;;
@@ -246,15 +255,10 @@ build_native_stage() {
 
   [[ -f "$product_source_manifest" ]] || \
     die "product artifact source manifest is missing"
-  product_manifest_value() {
-    local key="$1"
-    awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' \
-      "$product_source_manifest"
-  }
-  product_artifact_id="$(product_manifest_value artifact.id)"
-  product_api_identity="$(product_manifest_value product.api.identity)"
-  product_abi_version="$(product_manifest_value product.abi.version)"
-  product_api_version="$(product_manifest_value product.api.version)"
+  product_artifact_id="$(strict_manifest_value "$product_source_manifest" artifact.id)"
+  product_api_identity="$(strict_manifest_value "$product_source_manifest" product.api.identity)"
+  product_abi_version="$(strict_manifest_value "$product_source_manifest" product.abi.version)"
+  product_api_version="$(strict_manifest_value "$product_source_manifest" product.api.version)"
   [[ "$product_artifact_id" =~ ^[^[:space:]=]+$ ]] || \
     die "source product artifact identity has an invalid format"
   [[ "$product_api_identity" =~ ^[^[:space:]=]+$ ]] || \
@@ -489,7 +493,7 @@ build_native_stage() {
   generated_api_json="$plugin_build/product_core.api.json"
   [[ -f "$generated_api_json" && ! -L "$generated_api_json" ]] || \
     die "production generated product_core.api.json was not produced"
-  product_api_crc="$(product_manifest_value product.api.crc)"
+  product_api_crc="$(strict_manifest_value "$product_source_manifest" product.api.crc)"
   [[ "$product_api_crc" =~ ^[[:xdigit:]]{8}$ ]] || \
     die "source product API CRC has an invalid format"
   generated_api_crc="$(grep -Eio '"vl_api_version"[[:space:]]*:[[:space:]]*"0x?[0-9a-f]{8}"' \
@@ -800,6 +804,9 @@ build_apk_only() {
     die "product stage has an invalid owned marker"
   [[ -f "$product_manifest" && ! -L "$product_manifest" ]] || \
     die "product stage manifest is missing"
+  for manifest_key in artifactId apiIdentity abiVersion apiVersion vppBinarySha256; do
+    strict_manifest_value "$product_manifest" "$manifest_key" >/dev/null
+  done
   require_product_manifest_line() {
     local expected_line="$1"
     grep -Fxq "$expected_line" "$product_manifest" || \
@@ -809,15 +816,10 @@ build_apk_only() {
   require_product_manifest_line "abi=arm64-v8a"
   require_product_manifest_line "androidApi=$android_api"
   require_product_manifest_line "vppRevision=$expected_revision"
-  product_manifest_value() {
-    local key="$1"
-    awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' \
-      "$product_source_manifest"
-  }
-  product_artifact_id="$(product_manifest_value artifact.id)"
-  product_api_identity="$(product_manifest_value product.api.identity)"
-  product_abi_version="$(product_manifest_value product.abi.version)"
-  product_api_version="$(product_manifest_value product.api.version)"
+  product_artifact_id="$(strict_manifest_value "$product_source_manifest" artifact.id)"
+  product_api_identity="$(strict_manifest_value "$product_source_manifest" product.api.identity)"
+  product_abi_version="$(strict_manifest_value "$product_source_manifest" product.abi.version)"
+  product_api_version="$(strict_manifest_value "$product_source_manifest" product.api.version)"
   [[ "$product_artifact_id" =~ ^[^[:space:]=]+$ ]] || \
     die "source product artifact identity has an invalid format"
   [[ "$product_api_identity" =~ ^[^[:space:]=]+$ ]] || \
@@ -828,7 +830,7 @@ build_apk_only() {
   require_product_manifest_line "apiIdentity=$product_api_identity"
   require_product_manifest_line "abiVersion=$product_abi_version"
   require_product_manifest_line "apiVersion=$product_api_version"
-  vpp_binary_sha256="$(sed -n 's/^vppBinarySha256=//p' "$product_manifest")"
+  vpp_binary_sha256="$(strict_manifest_value "$product_manifest" vppBinarySha256)"
   [[ "$vpp_binary_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
     die "product stage manifest has an invalid VPP executable hash"
   vpp_patch_series_count="$(sed -n 's/^vppPatchSeriesCount=//p' "$product_manifest")"

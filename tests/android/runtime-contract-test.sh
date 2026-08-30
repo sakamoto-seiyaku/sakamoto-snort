@@ -15,6 +15,12 @@ java -cp "$out_dir" RuntimeContractTest
 # SAKAMOTO-67 production-incubator seam. The experiment remains covered below
 # as migration evidence, while this gate proves the forward app contract.
 bash "$repo_root/tests/android/android-runtime-contract-test.sh"
+if [[ -n "${SAKAMOTO_S173_VPP_STAGE_DIR:-}" ]]; then
+  bash "$repo_root/tests/android/s173-product-identity-contract-test.sh"
+else
+  echo "s173 product identity contract: SKIP (set SAKAMOTO_S173_VPP_STAGE_DIR for stage integration)"
+fi
+bash "$repo_root/tests/android/s173-product-failure-contract-test.sh"
 # Build/artifact seam: the core runtime is packaged without experiment packet
 # adapter artifacts and carries a generated-VAPI identity.
 bash "$repo_root/tests/android/android-runtime-artifact-contract-test.sh"
