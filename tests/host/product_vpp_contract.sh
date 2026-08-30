@@ -6,6 +6,8 @@ plugin_cmake="$repo_root/src/product/vpp/CMakeLists.txt"
 plugin_source="$repo_root/src/product/vpp/product_core_plugin.c"
 packet_source="$repo_root/src/product/vpp/product_packet.c"
 packet_header="$repo_root/src/product/vpp/product_packet.h"
+graph_source="$repo_root/src/product/vpp/product_packet_graph.c"
+host_graph_source="$repo_root/src/product/vpp/product_packet_graph_host_evidence.c"
 manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
 launcher="$repo_root/tools/product/run-host-vpp.sh"
 builder="$repo_root/tools/product/build-host-artifact.sh"
@@ -18,6 +20,10 @@ testing_docs="$repo_root/docs/testing/README.md"
 
 grep -q '^add_vpp_plugin(product_core$' "$plugin_cmake"
 grep -Eq '^[[:space:]]+product_packet\.c$' "$plugin_cmake"
+grep -q 'SAKAMOTO_PRODUCT_HOST_EVIDENCE' "$plugin_cmake"
+grep -q 'product_packet_graph_host_evidence.c' "$plugin_cmake"
+grep -q 'Android/default Product source closure contains Host evidence' "$plugin_cmake"
+grep -q -- '-DSAKAMOTO_PRODUCT_HOST_EVIDENCE=ON' "$builder"
 grep -Eq '^[[:space:]]+product_core\.api$' "$plugin_cmake"
 grep -q '^product.plugin.allowlist=product_core_plugin.so$' "$manifest"
 grep -q '^control.transport=generated-vapi-c-blocking$' "$manifest"
@@ -29,6 +35,7 @@ grep -Fq 'exec "$vpp_bin" -c "$config"' "$launcher"
 grep -q 'PRODUCT_WORKER_COUNT' "$launcher"
 grep -q 'cpu { workers $worker_count }' "$launcher"
 grep -q 'cli-no-pager' "$launcher"
+grep -q 'poll-sleep-usec 0' "$launcher"
 if grep -Fq 'exec "$vpp_bin" plugin_path' "$launcher"; then
   echo "launcher passes ignored positional plugin config alongside -c" >&2
   exit 1
@@ -73,6 +80,15 @@ grep -q 'VLIB_PLUGIN_REGISTER' "$plugin_source"
 grep -q 'VLIB_INIT_FUNCTION' "$plugin_source"
 test -f "$packet_source"
 test -f "$packet_header"
+test -f "$graph_source"
+test -f "$host_graph_source"
+if grep -Eq 's174-valid-dual-stack-v1|product packet-graph run-fixture' \
+    "$graph_source"; then
+  echo "Android-default Product graph source contains the Host evidence seam" >&2
+  exit 1
+fi
+grep -q 's174-valid-dual-stack-v1' "$host_graph_source"
+grep -q 'run-fixture' "$host_graph_source"
 grep -q 'product_packet_admit' "$packet_source"
 grep -q 'product_packet_admit' "$packet_header"
 grep -q 'sakamoto_product_host_fixture_abi' "$repo_root/CMakeLists.txt"

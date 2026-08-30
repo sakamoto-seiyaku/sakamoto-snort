@@ -187,6 +187,7 @@ $cpu_config
 unix {
   nodaemon
   cli-no-pager
+  poll-sleep-usec 0
   runtime-dir $runtime_dir
   cli-listen $cli_socket
 }

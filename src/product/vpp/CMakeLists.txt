@@ -151,11 +151,36 @@ configure_file(
 include("${VPP_SOURCE_DIR}/src/cmake/VPPConfig.cmake")
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
+option(SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  "Build the Host-only installed Product graph evidence seam" OFF)
+set(SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE product_packet_graph.c)
+if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
+  if(ANDROID)
+    message(FATAL_ERROR
+      "SAKAMOTO_PRODUCT_HOST_EVIDENCE is forbidden for Android Product builds")
+  endif()
+  set(SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE
+    product_packet_graph_host_evidence.c)
+else()
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/product_packet_graph.c"
+    SAKAMOTO_PRODUCT_PACKET_GRAPH_TEXT)
+  foreach(host_evidence_token IN ITEMS
+      "s174-valid-dual-stack-v1"
+      "product packet-graph run-fixture")
+    string(FIND "${SAKAMOTO_PRODUCT_PACKET_GRAPH_TEXT}"
+      "${host_evidence_token}" host_evidence_offset)
+    if(NOT host_evidence_offset EQUAL -1)
+      message(FATAL_ERROR
+        "Android/default Product source closure contains Host evidence: ${host_evidence_token}")
+    endif()
+  endforeach()
+endif()
+
 add_vpp_plugin(product_core
   SOURCES
     product_core_plugin.c
     product_packet.c
-    product_packet_graph.c
+    ${SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE}
   API_FILES
     product_core.api
   VAT_AUTO_TEST

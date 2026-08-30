@@ -18,6 +18,7 @@ fixture_id=s174-valid-dual-stack-v1
 generation=174
 vpp_pid=
 graph_source="$repo_root/src/product/vpp/product_packet_graph.c"
+host_graph_source="$repo_root/src/product/vpp/product_packet_graph_host_evidence.c"
 
 mkdir -p -- "$evidence_dir"
 
@@ -55,18 +56,83 @@ trap cleanup EXIT
    -f "$artifact_root/product-vpp-artifact.properties" ]] ||
   fail "missing formal Host artifact; run tools/product/build-host-artifact.sh first"
 
+if grep -q 'vlib_thread_wakeup' "$graph_source" "$host_graph_source"; then
+  fail "Product graph must rely on stock VPP scheduling, not an explicit wake path"
+fi
+
+if grep -Eq 'graph\.(pre_guard_private_mutations|local_enqueues|packet_copies|packet_clones|packet_reserializations|double_returns)=' \
+    "$graph_source" "$host_graph_source"; then
+  fail "zero-only graph counters are not admissible evidence"
+fi
+
 # The dynamic evidence below proves one unchanged live buffer identity. Keep a
 # separate source-level guard against adding a hidden second packet allocation,
 # clone, payload append, per-packet heap, or serializer inside the ordinary
 # admit -> owner guard -> terminal node region.
-if awk '
+ordinary_nodes="$(awk '
     /^VLIB_NODE_FN \(product_packet_admit_node\)/ { in_nodes = 1 }
-    /^product_ipv4_fixture \(/ { in_nodes = 0 }
-    in_nodes { print }
-  ' "$graph_source" | grep -Eq \
+    /^VLIB_REGISTER_NODE \(product_packet_terminal_node\)/ { after_terminal = 1 }
+    after_terminal && /^};/ { in_nodes = 0 }
+    in_nodes && /^#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE/ {
+      in_host_evidence = 1
+      next
+    }
+    in_nodes && in_host_evidence && /^#endif/ {
+      in_host_evidence = 0
+      next
+    }
+    in_nodes && !in_host_evidence { print }
+  ' "$graph_source")"
+
+# Close the helper-function bypass as well: after Host evidence is removed,
+# the whole Android graph may expose live packet bytes exactly once (the
+# parser ingress). Its ten memcpy operations are the fixed-width opaque2
+# metadata codec; raw packet memcpy/memmove and byte-index side stores have no
+# place in this translation unit.
+android_graph="$(awk '
+    /^#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE/ {
+      host_depth = 1
+      next
+    }
+    host_depth && /^#if/ {
+      host_depth++
+      next
+    }
+    host_depth && /^#endif/ {
+      host_depth--
+      next
+    }
+    !host_depth { print }
+  ' "$graph_source")"
+if [[ "$(printf '%s\n' "$android_graph" | grep -c 'vlib_buffer_get_current')" -ne 1 ]] ||
+   [[ "$(printf '%s\n' "$android_graph" | grep -c 'clib_memcpy_fast')" -ne 10 ]] ||
+   printf '%s\n' "$android_graph" | grep -Eq \
+     '(^|[^[:alnum:]_])(memcpy|memmove)[[:space:]]*\(|[[:alnum:]_>.-]+\[[^]]+\][[:space:]]*='; then
+  fail "Android Product graph source closure contains a packet side-copy seam"
+fi
+if printf '%s\n' "$ordinary_nodes" | grep -Eq \
     'vlib_buffer_(copy|clone|add_data)|clib_mem_(alloc|realloc)|(^|[^[:alnum:]_])(malloc|calloc|realloc|pool_get|pool_get_zero|hash_create|mhash_init|serialize_)[[:space:]]*\('; then
   fail "ordinary Product packet nodes allocate, clone, copy, or reserialize packet state"
 fi
+if [[ "$(printf '%s\n' "$ordinary_nodes" | grep -c 'vlib_buffer_get_current')" -ne 1 ]] ||
+   printf '%s\n' "$ordinary_nodes" | grep -Eq \
+     '(memcpy|memmove|clib_memcpy|copy|clone|serialize|side[_-]?copy)'; then
+  fail "ordinary Product nodes expose packet bytes outside the one parser ingress"
+fi
+
+# Mutation-sensitivity check: the structural rule must reject both a normal
+# memcpy side copy and a custom byte loop, not merely a short API denylist.
+for mutation in \
+  'memcpy(side_copy, vlib_buffer_get_current(buffer), buffer->current_length);' \
+  'for (i = 0; i < packet_length; i++) shadow[i] = ingress.data[i];'; do
+  mutated_graph="$(printf '%s\n%s\n' "$android_graph" "$mutation")"
+  if [[ "$(printf '%s\n' "$mutated_graph" | grep -c 'vlib_buffer_get_current')" -eq 1 ]] &&
+     [[ "$(printf '%s\n' "$mutated_graph" | grep -c 'clib_memcpy_fast')" -eq 10 ]] &&
+     ! printf '%s\n' "$mutated_graph" | grep -Eq \
+       '(^|[^[:alnum:]_])(memcpy|memmove)[[:space:]]*\(|[[:alnum:]_>.-]+\[[^]]+\][[:space:]]*='; then
+    fail "ordinary-node structural guard is insensitive to a packet side copy"
+  fi
+done
 
 PRODUCT_ARTIFACT_DIR="$artifact_root" \
   PRODUCT_RUNTIME_DIR="$runtime_dir" \
@@ -224,7 +290,6 @@ require_vector() {
   require_line "$output" "$prefix.protocol=$protocol"
   require_line "$output" "$prefix.l3_status=complete"
   require_line "$output" "$prefix.l4_status=complete"
-  require_line "$output" "$prefix.pre_guard_private_mutations=0"
   require_line "$output" "$prefix.terminal_intents=1"
   require_line "$output" "$prefix.terminal_intent=pass-adapter"
   require_line "$output" "$prefix.ledger_settlements=1"
@@ -417,21 +482,15 @@ run_cycle() {
     graph.workers=2 \
     graph.admitted=8 \
     graph.local_packets=4 \
-    graph.local_enqueues=0 \
     graph.remote_packets=4 \
     graph.primary_enqueues=4 \
     graph.primary_enqueue_max_per_packet=1 \
-    graph.pre_guard_private_mutations=0 \
     graph.terminal_intents=8 \
     graph.ledger_settlements=8 \
     graph.buffer_returns=8 \
     graph.duplicate_terminals=0 \
     graph.duplicate_settlements=0 \
-    graph.double_returns=0 \
     graph.lost_buffers=0 \
-    graph.packet_copies=0 \
-    graph.packet_clones=0 \
-    graph.packet_reserializations=0 \
     graph.ingress_fq_node=product-packet-test-ingress \
     graph.ingress_fq_enqueued_frames=2 \
     graph.ingress_fq_dequeued_frames=2 \

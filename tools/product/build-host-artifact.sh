@@ -131,6 +131,7 @@ cmake -S "$repo_root/src/product/vpp" -B "$plugin_build" -G Ninja \
   -DVPP_APIGEN="$vpp_apigen" \
   -DVPP_VAPI_C_GEN="$vpp_vapi_gen" \
   -DVPP_VAPI_CPP_GEN="$vpp_vapi_cpp_gen" \
+  -DSAKAMOTO_PRODUCT_HOST_EVIDENCE=ON \
   -DCMAKE_INSTALL_PREFIX="$artifact_root" \
   -DCMAKE_INSTALL_LIBDIR=lib
 cmake --build "$plugin_build" --target install

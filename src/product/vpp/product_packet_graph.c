@@ -12,12 +12,15 @@
 #include <vlib/threads.h>
 #include <vnet/vnet.h>
 #include <vppinfra/atomics.h>
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #include <vppinfra/crypto/sha2.h>
+#endif
 
 #include <string.h>
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #include <unistd.h>
+#endif
 
-#define PRODUCT_GRAPH_FIXTURE "s174-valid-dual-stack-v1"
 #define PRODUCT_GRAPH_VECTOR_COUNT 8
 #define PRODUCT_GRAPH_WORKERS 2
 #define PRODUCT_GRAPH_FLOW_DOMAIN 7
@@ -28,17 +31,10 @@ enum
   PRODUCT_META_ADMITTED = 1 << 0,
   PRODUCT_META_GUARDED = 1 << 1,
   PRODUCT_META_SETTLED = 1 << 2,
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   PRODUCT_META_ADMIT_THREAD_2 = 1 << 3,
+#endif
 };
-
-typedef struct
-{
-  u32 buffer_index;
-  u32 current_data;
-  u32 length;
-  u8 digest[32];
-  u8 arrival_worker;
-} product_ingress_evidence_t;
 
 typedef struct
 {
@@ -62,6 +58,16 @@ _Static_assert (sizeof (product_buffer_metadata_t) ==
                   sizeof (((vlib_buffer_t *) 0)->opaque2),
                 "Product PacketLease metadata must exactly fit opaque2");
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+typedef struct
+{
+  u32 buffer_index;
+  u32 current_data;
+  u32 length;
+  u8 digest[32];
+  u8 arrival_worker;
+} product_ingress_evidence_t;
+
 typedef struct
 {
   product_canonical_flow_key_t canonical_key;
@@ -83,7 +89,6 @@ typedef struct
   u8 terminal_intents;
   u8 ledger_settlements;
   u8 buffer_returns;
-  u8 pre_guard_private_mutations;
   u8 terminal_intent;
   u8 admit_thread;
   u8 guard_thread;
@@ -98,12 +103,14 @@ typedef struct __attribute__ ((aligned (CLIB_CACHE_LINE_BYTES)))
 
 _Static_assert (sizeof (product_result_ready_t) == CLIB_CACHE_LINE_BYTES,
                 "each terminal publication flag must own one cache line");
+#endif
 
 typedef struct
 {
   vlib_main_t *vlib_main;
-  u32 ingress_frame_queue;
   u32 owner_guard_frame_queue;
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  u32 ingress_frame_queue;
   u32 configured;
   u32 enabled;
   u32 completed;
@@ -113,21 +120,15 @@ typedef struct
   u32 terminal_vectors;
   u32 admitted;
   u32 local_packets;
-  u32 local_enqueues;
   u32 remote_packets;
   u32 primary_enqueues;
   u32 primary_enqueue_max_per_packet;
-  u32 pre_guard_private_mutations;
   u32 terminal_intents;
   u32 ledger_settlements;
   u32 buffer_returns;
   u32 duplicate_terminals;
   u32 duplicate_settlements;
-  u32 double_returns;
   u32 lost_buffers;
-  u32 packet_copies;
-  u32 packet_clones;
-  u32 packet_reserializations;
   u32 buffer_debt;
   u32 handoff_credit_debt;
   u32 obligation_debt;
@@ -138,22 +139,37 @@ typedef struct
   u64 ingress_fq_tail_start[PRODUCT_GRAPH_WORKERS];
   u64 owner_fq_head_start[PRODUCT_GRAPH_WORKERS];
   u64 owner_fq_tail_start[PRODUCT_GRAPH_WORKERS];
+#endif
 } product_packet_graph_main_t;
 
 static product_packet_graph_main_t product_packet_graph_main;
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+#define PRODUCT_EVIDENCE_ADD(field, value)                                    \
+  clib_atomic_fetch_add_relax (&graph->field, (value))
+#define PRODUCT_EVIDENCE_SUB(field, value)                                    \
+  clib_atomic_fetch_sub_relax (&graph->field, (value))
+#else
+#define PRODUCT_EVIDENCE_ADD(field, value) ((void) 0)
+#define PRODUCT_EVIDENCE_SUB(field, value) ((void) 0)
+#endif
+
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static const char *product_vector_names[PRODUCT_GRAPH_VECTOR_COUNT] = {
   "ipv4-tcp-forward", "ipv4-tcp-reverse", "ipv4-udp-forward",
   "ipv4-udp-reverse", "ipv6-tcp-forward", "ipv6-tcp-reverse",
   "ipv6-udp-forward", "ipv6-udp-reverse",
 };
+#endif
 
 typedef enum
 {
-  PRODUCT_TRACE_FIXTURE,
   PRODUCT_TRACE_ADMIT,
   PRODUCT_TRACE_OWNER_GUARD,
   PRODUCT_TRACE_TERMINAL,
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  PRODUCT_TRACE_FIXTURE,
+#endif
 } product_trace_stage_t;
 
 typedef struct
@@ -171,7 +187,10 @@ format_product_packet_trace (u8 *s, va_list *args)
   CLIB_UNUSED (vlib_node_t *node) = va_arg (*args, vlib_node_t *);
   product_packet_trace_t *trace = va_arg (*args, product_packet_trace_t *);
   static const char *stages[] = {
-    "fixture-ingress", "admit", "owner-guard", "terminal"
+    "admit", "owner-guard", "terminal",
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+    "fixture-ingress",
+#endif
   };
 
   return format (s, "product-packet-trace node=%s buffer_index=%u "
@@ -197,12 +216,7 @@ product_add_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
     }
 }
 
-static void
-product_wake_worker (u16 absolute_thread_index)
-{
-  vlib_thread_wakeup (absolute_thread_index);
-}
-
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static int
 product_fixture_index_from_obligation (u64 obligation, u8 *fixture_index)
 {
@@ -212,7 +226,9 @@ product_fixture_index_from_obligation (u64 obligation, u8 *fixture_index)
   *fixture_index = (u8) (obligation - UINT64_C (174001));
   return 1;
 }
+#endif
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static int
 product_all_results_ready (const product_packet_graph_main_t *graph)
 {
@@ -222,6 +238,7 @@ product_all_results_ready (const product_packet_graph_main_t *graph)
       return 0;
   return 1;
 }
+#endif
 
 static void
 product_metadata_load (const vlib_buffer_t *buffer,
@@ -319,6 +336,7 @@ product_lease_from_metadata (const product_buffer_metadata_t *metadata,
   lease->settled = (metadata->state_bits & PRODUCT_META_SETTLED) != 0;
 }
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 enum
 {
   PRODUCT_TEST_INGRESS_NEXT_ADMIT,
@@ -348,6 +366,7 @@ VLIB_REGISTER_NODE (product_packet_test_ingress_node) = {
     [PRODUCT_TEST_INGRESS_NEXT_ADMIT] = "product-packet-admit",
   },
 };
+#endif
 
 enum
 {
@@ -362,7 +381,7 @@ VLIB_NODE_FN (product_packet_admit_node)
   u32 *from = vlib_frame_vector_args (frame);
   u32 index;
 
-  clib_atomic_fetch_add_relax (&graph->admit_vectors, frame->n_vectors);
+  PRODUCT_EVIDENCE_ADD (admit_vectors, frame->n_vectors);
 
   for (index = 0; index < frame->n_vectors; index++)
     {
@@ -389,24 +408,26 @@ VLIB_NODE_FN (product_packet_admit_node)
       if (product_packet_admit (&layout, &ingress, &lease)
           != PRODUCT_PACKET_OK)
         {
-          clib_atomic_fetch_add_relax (&graph->lost_buffers, 1);
-          clib_atomic_fetch_add_relax (&graph->buffer_returns, 1);
+          PRODUCT_EVIDENCE_ADD (lost_buffers, 1);
+          PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
           vlib_buffer_free (vm, &buffer_index, 1);
-          clib_atomic_fetch_sub_relax (&graph->buffer_debt, 1);
-          clib_atomic_fetch_sub_relax (&graph->obligation_debt, 1);
+          PRODUCT_EVIDENCE_SUB (buffer_debt, 1);
+          PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
       product_metadata_from_lease (&metadata, &lease);
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (vm->thread_index == vlib_get_worker_thread_index (1))
         metadata.state_bits |= PRODUCT_META_ADMIT_THREAD_2;
+#endif
       product_metadata_store (buffer, &metadata);
-      clib_atomic_fetch_add_relax (&graph->admitted, 1);
+      PRODUCT_EVIDENCE_ADD (admitted, 1);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_ADMIT,
                          metadata.origin_obligation_id);
 
       if (lease.distribution == PRODUCT_PACKET_DISTRIBUTION_LOCAL)
         {
-          clib_atomic_fetch_add_relax (&graph->local_packets, 1);
+          PRODUCT_EVIDENCE_ADD (local_packets, 1);
           vlib_buffer_enqueue_to_single_next (
             vm, node, &buffer_index, PRODUCT_ADMIT_NEXT_OWNER_GUARD, 1);
         }
@@ -414,31 +435,32 @@ VLIB_NODE_FN (product_packet_admit_node)
         {
           u16 target_thread =
             (u16) vlib_get_worker_thread_index (lease.expected_owner);
-          clib_atomic_fetch_add_relax (&graph->remote_packets, 1);
-          clib_atomic_fetch_add_relax (&graph->handoff_credit_debt, 1);
+          PRODUCT_EVIDENCE_ADD (remote_packets, 1);
+          PRODUCT_EVIDENCE_ADD (handoff_credit_debt, 1);
           if (vlib_buffer_enqueue_to_thread (
                 vm, node, graph->owner_guard_frame_queue, &buffer_index,
                 &target_thread, 1, 0)
               != 1)
             {
-              clib_atomic_fetch_sub_relax (&graph->handoff_credit_debt, 1);
-              clib_atomic_fetch_add_relax (&graph->lost_buffers, 1);
-              clib_atomic_fetch_add_relax (&graph->buffer_returns, 1);
+              PRODUCT_EVIDENCE_SUB (handoff_credit_debt, 1);
+              PRODUCT_EVIDENCE_ADD (lost_buffers, 1);
+              PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
               vlib_buffer_free (vm, &buffer_index, 1);
-              clib_atomic_fetch_sub_relax (&graph->buffer_debt, 1);
-              clib_atomic_fetch_sub_relax (&graph->obligation_debt, 1);
+              PRODUCT_EVIDENCE_SUB (buffer_debt, 1);
+              PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
             }
           else
             {
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
               u32 maximum;
-              clib_atomic_fetch_add_relax (&graph->primary_enqueues, 1);
+              PRODUCT_EVIDENCE_ADD (primary_enqueues, 1);
               maximum = clib_atomic_load_acq_n (
                 &graph->primary_enqueue_max_per_packet);
               if (maximum < lease.primary_handoff_count)
                 clib_atomic_store_rel_n (
                   &graph->primary_enqueue_max_per_packet,
                   lease.primary_handoff_count);
-              product_wake_worker (target_thread);
+#endif
             }
         }
     }
@@ -466,11 +488,13 @@ enum
 VLIB_NODE_FN (product_packet_owner_guard_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   product_packet_graph_main_t *graph = &product_packet_graph_main;
+#endif
   u32 *from = vlib_frame_vector_args (frame);
   u32 index;
 
-  clib_atomic_fetch_add_relax (&graph->guard_vectors, frame->n_vectors);
+  PRODUCT_EVIDENCE_ADD (guard_vectors, frame->n_vectors);
 
   for (index = 0; index < frame->n_vectors; index++)
     {
@@ -485,17 +509,17 @@ VLIB_NODE_FN (product_packet_owner_guard_node)
       if (product_packet_owner_guard (&lease, logical_worker)
           != PRODUCT_PACKET_OK)
         {
-          clib_atomic_fetch_add_relax (&graph->lost_buffers, 1);
-          clib_atomic_fetch_add_relax (&graph->buffer_returns, 1);
+          PRODUCT_EVIDENCE_ADD (lost_buffers, 1);
+          PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
           vlib_buffer_free (vm, &buffer_index, 1);
-          clib_atomic_fetch_sub_relax (&graph->buffer_debt, 1);
-          clib_atomic_fetch_sub_relax (&graph->obligation_debt, 1);
+          PRODUCT_EVIDENCE_SUB (buffer_debt, 1);
+          PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
       metadata.state_bits |= PRODUCT_META_GUARDED;
       product_metadata_store (buffer, &metadata);
       if (metadata.primary_handoff_count == 1)
-        clib_atomic_fetch_sub_relax (&graph->handoff_credit_debt, 1);
+        PRODUCT_EVIDENCE_SUB (handoff_credit_debt, 1);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_OWNER_GUARD,
                          metadata.origin_obligation_id);
       vlib_buffer_enqueue_to_single_next (
@@ -519,11 +543,13 @@ VLIB_REGISTER_NODE (product_packet_owner_guard_node) = {
 VLIB_NODE_FN (product_packet_terminal_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   product_packet_graph_main_t *graph = &product_packet_graph_main;
+#endif
   u32 *from = vlib_frame_vector_args (frame);
   u32 index;
 
-  clib_atomic_fetch_add_relax (&graph->terminal_vectors, frame->n_vectors);
+  PRODUCT_EVIDENCE_ADD (terminal_vectors, frame->n_vectors);
 
   for (index = 0; index < frame->n_vectors; index++)
     {
@@ -531,53 +557,56 @@ VLIB_NODE_FN (product_packet_terminal_node)
       vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
       product_buffer_metadata_t metadata;
       product_packet_lease_t lease;
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       product_fixture_result_t completed_result;
       product_fixture_result_t *result;
       const product_ingress_evidence_t *ingress_evidence;
       u8 fixture_index;
+#endif
 
       product_metadata_load (buffer, &metadata);
       product_lease_from_metadata (&metadata, buffer->current_length, &lease);
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!product_fixture_index_from_obligation (
             metadata.origin_obligation_id, &fixture_index))
         {
-          clib_atomic_fetch_add_relax (&graph->lost_buffers, 1);
-          clib_atomic_fetch_add_relax (&graph->buffer_returns, 1);
+          PRODUCT_EVIDENCE_ADD (lost_buffers, 1);
+          PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
           vlib_buffer_free (vm, &buffer_index, 1);
-          clib_atomic_fetch_sub_relax (&graph->buffer_debt, 1);
-          clib_atomic_fetch_sub_relax (&graph->obligation_debt, 1);
+          PRODUCT_EVIDENCE_SUB (buffer_debt, 1);
+          PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
+#endif
       if (product_packet_set_terminal (&lease,
                                        PRODUCT_PACKET_INTENT_PASS_ADAPTER)
           != PRODUCT_PACKET_OK)
         {
-          clib_atomic_fetch_add_relax (&graph->duplicate_terminals, 1);
-          clib_atomic_fetch_add_relax (&graph->lost_buffers, 1);
-          clib_atomic_fetch_add_relax (&graph->buffer_returns, 1);
+          PRODUCT_EVIDENCE_ADD (duplicate_terminals, 1);
+          PRODUCT_EVIDENCE_ADD (lost_buffers, 1);
+          PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
           vlib_buffer_free (vm, &buffer_index, 1);
-          clib_atomic_fetch_sub_relax (&graph->buffer_debt, 1);
-          clib_atomic_fetch_sub_relax (&graph->obligation_debt, 1);
+          PRODUCT_EVIDENCE_SUB (buffer_debt, 1);
+          PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
-      clib_atomic_fetch_add_relax (&graph->terminal_intents, 1);
       if (product_packet_settle (&lease) != PRODUCT_PACKET_OK)
         {
-          clib_atomic_fetch_add_relax (&graph->duplicate_settlements, 1);
-          clib_atomic_fetch_add_relax (&graph->lost_buffers, 1);
-          clib_atomic_fetch_add_relax (&graph->buffer_returns, 1);
+          PRODUCT_EVIDENCE_ADD (duplicate_settlements, 1);
+          PRODUCT_EVIDENCE_ADD (lost_buffers, 1);
+          PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
           vlib_buffer_free (vm, &buffer_index, 1);
-          clib_atomic_fetch_sub_relax (&graph->buffer_debt, 1);
-          clib_atomic_fetch_sub_relax (&graph->obligation_debt, 1);
+          PRODUCT_EVIDENCE_SUB (buffer_debt, 1);
+          PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
-      clib_atomic_fetch_add_relax (&graph->ledger_settlements, 1);
       metadata.terminal_intent = lease.terminal_intent;
       metadata.state_bits |= PRODUCT_META_SETTLED;
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_TERMINAL,
                          metadata.origin_obligation_id);
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       result = &graph->results[fixture_index];
       ingress_evidence = &graph->ingress[fixture_index];
       clib_memset (&completed_result, 0, sizeof (completed_result));
@@ -609,15 +638,20 @@ VLIB_NODE_FN (product_packet_terminal_node)
       completed_result.guard_thread = (u8) vm->thread_index;
       completed_result.origin_obligation_id = lease.origin_obligation_id;
       completed_result.facts = lease.facts;
+#endif
 
       vlib_buffer_free (vm, &buffer_index, 1);
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       completed_result.buffer_returns = 1;
-      clib_atomic_fetch_add_relax (&graph->buffer_returns, 1);
+      PRODUCT_EVIDENCE_ADD (terminal_intents, 1);
+      PRODUCT_EVIDENCE_ADD (ledger_settlements, 1);
+      PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
       *result = completed_result;
-      clib_atomic_fetch_sub_relax (&graph->buffer_debt, 1);
-      clib_atomic_fetch_sub_relax (&graph->obligation_debt, 1);
+      PRODUCT_EVIDENCE_SUB (buffer_debt, 1);
+      PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
       clib_atomic_store_rel_n (&graph->result_ready[fixture_index].value, 1);
       clib_atomic_fetch_add_relax (&graph->completed, 1);
+#endif
     }
   return frame->n_vectors;
 }
@@ -630,6 +664,7 @@ VLIB_REGISTER_NODE (product_packet_terminal_node) = {
   .flags = VLIB_NODE_FLAG_TRACE_SUPPORTED,
 };
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static u32
 product_ipv4_fixture (u8 *packet, u8 protocol, u32 source, u16 source_port,
                       u32 destination, u16 destination_port)
@@ -781,21 +816,15 @@ product_packet_graph_enable_cli (vlib_main_t *vm, unformat_input_t *input,
   clib_atomic_store_rel_n (&graph->terminal_vectors, 0);
   clib_atomic_store_rel_n (&graph->admitted, 0);
   clib_atomic_store_rel_n (&graph->local_packets, 0);
-  clib_atomic_store_rel_n (&graph->local_enqueues, 0);
   clib_atomic_store_rel_n (&graph->remote_packets, 0);
   clib_atomic_store_rel_n (&graph->primary_enqueues, 0);
   clib_atomic_store_rel_n (&graph->primary_enqueue_max_per_packet, 0);
-  clib_atomic_store_rel_n (&graph->pre_guard_private_mutations, 0);
   clib_atomic_store_rel_n (&graph->terminal_intents, 0);
   clib_atomic_store_rel_n (&graph->ledger_settlements, 0);
   clib_atomic_store_rel_n (&graph->buffer_returns, 0);
   clib_atomic_store_rel_n (&graph->duplicate_terminals, 0);
   clib_atomic_store_rel_n (&graph->duplicate_settlements, 0);
-  clib_atomic_store_rel_n (&graph->double_returns, 0);
   clib_atomic_store_rel_n (&graph->lost_buffers, 0);
-  clib_atomic_store_rel_n (&graph->packet_copies, 0);
-  clib_atomic_store_rel_n (&graph->packet_clones, 0);
-  clib_atomic_store_rel_n (&graph->packet_reserializations, 0);
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     {
       u32 thread = vlib_get_worker_thread_index (worker);
@@ -888,8 +917,6 @@ product_packet_graph_run_fixture_cli (vlib_main_t *vm,
         thread_indices, PRODUCT_GRAPH_VECTOR_COUNT, 0)
       != PRODUCT_GRAPH_VECTOR_COUNT)
     return clib_error_return (0, "fixture ingress frame queue is full");
-  product_wake_worker (vlib_get_worker_thread_index (0));
-  product_wake_worker (vlib_get_worker_thread_index (1));
 
   {
     f64 deadline = vlib_time_now (vm) + 5.0;
@@ -953,8 +980,6 @@ product_packet_graph_run_fixture_cli (vlib_main_t *vm,
                        result->primary_enqueues == 0 ? "local" : "remote");
       vlib_cli_output (vm, "vector.%s.primary_enqueues=%u", name,
                        result->primary_enqueues);
-      vlib_cli_output (vm, "vector.%s.pre_guard_private_mutations=%u", name,
-                       result->pre_guard_private_mutations);
       vlib_cli_output (vm, "vector.%s.terminal_intents=%u", name,
                        result->terminal_intents);
       vlib_cli_output (vm, "vector.%s.terminal_intent=%s", name,
@@ -1003,8 +1028,8 @@ product_packet_graph_run_fixture_cli (vlib_main_t *vm,
 }
 
 VLIB_CLI_COMMAND (product_packet_graph_run_fixture_command, static) = {
-  .path = "product packet-graph run-fixture",
-  .short_help = "product packet-graph run-fixture " PRODUCT_GRAPH_FIXTURE,
+  .path = PRODUCT_GRAPH_RUN_FIXTURE_COMMAND,
+  .short_help = PRODUCT_GRAPH_RUN_FIXTURE_HELP PRODUCT_GRAPH_FIXTURE,
   .function = product_packet_graph_run_fixture_cli,
   .is_mp_safe = 1,
 };
@@ -1043,8 +1068,6 @@ product_packet_graph_show_cli (vlib_main_t *vm, unformat_input_t *input,
                    clib_atomic_load_acq_n (&graph->admitted));
   vlib_cli_output (vm, "graph.local_packets=%u",
                    clib_atomic_load_acq_n (&graph->local_packets));
-  vlib_cli_output (vm, "graph.local_enqueues=%u",
-                   clib_atomic_load_acq_n (&graph->local_enqueues));
   vlib_cli_output (vm, "graph.remote_packets=%u",
                    clib_atomic_load_acq_n (&graph->remote_packets));
   vlib_cli_output (vm, "graph.primary_enqueues=%u",
@@ -1052,9 +1075,6 @@ product_packet_graph_show_cli (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "graph.primary_enqueue_max_per_packet=%u",
                    clib_atomic_load_acq_n (
                      &graph->primary_enqueue_max_per_packet));
-  vlib_cli_output (vm, "graph.pre_guard_private_mutations=%u",
-                   clib_atomic_load_acq_n (
-                     &graph->pre_guard_private_mutations));
   vlib_cli_output (vm, "graph.terminal_intents=%u",
                    clib_atomic_load_acq_n (&graph->terminal_intents));
   vlib_cli_output (vm, "graph.ledger_settlements=%u",
@@ -1065,16 +1085,8 @@ product_packet_graph_show_cli (vlib_main_t *vm, unformat_input_t *input,
                    clib_atomic_load_acq_n (&graph->duplicate_terminals));
   vlib_cli_output (vm, "graph.duplicate_settlements=%u",
                    clib_atomic_load_acq_n (&graph->duplicate_settlements));
-  vlib_cli_output (vm, "graph.double_returns=%u",
-                   clib_atomic_load_acq_n (&graph->double_returns));
   vlib_cli_output (vm, "graph.lost_buffers=%u",
                    clib_atomic_load_acq_n (&graph->lost_buffers));
-  vlib_cli_output (vm, "graph.packet_copies=%u",
-                   clib_atomic_load_acq_n (&graph->packet_copies));
-  vlib_cli_output (vm, "graph.packet_clones=%u",
-                   clib_atomic_load_acq_n (&graph->packet_clones));
-  vlib_cli_output (vm, "graph.packet_reserializations=%u",
-                   clib_atomic_load_acq_n (&graph->packet_reserializations));
   vlib_cli_output (vm, "graph.ingress_frame_queue=%u",
                    graph->ingress_frame_queue);
   vlib_cli_output (vm, "graph.ingress_fq_node=%v",
@@ -1124,14 +1136,17 @@ VLIB_CLI_COMMAND (product_packet_graph_disable_command, static) = {
   .path = "product packet-graph disable",
   .function = product_packet_graph_disable_cli,
 };
+#endif
 
 static clib_error_t *
 product_packet_graph_init (vlib_main_t *vm)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   graph->vlib_main = vm;
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   graph->ingress_frame_queue =
     vlib_frame_queue_main_init (product_packet_test_ingress_node.index, 0);
+#endif
   graph->owner_guard_frame_queue =
     vlib_frame_queue_main_init (product_packet_owner_guard_node.index, 0);
   return 0;
