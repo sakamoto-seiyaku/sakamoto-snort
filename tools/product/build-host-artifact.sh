@@ -87,8 +87,11 @@ vpp_apigen="$(product_canonical_existing \
   "${VPP_APIGEN:-$vpp_source/src/tools/vppapigen/vppapigen}")" || exit 2
 vpp_vapi_gen="$(product_canonical_existing \
   "${VPP_VAPI_C_GEN:-$vpp_source/src/vpp-api/vapi/vapi_c_gen.py}")" || exit 2
+vpp_vapi_cpp_gen="$(product_canonical_existing \
+  "${VPP_VAPI_CPP_GEN:-$vpp_source/src/vpp-api/vapi/vapi_cpp_gen.py}")" || exit 2
 product_require_within "$vpp_source" "$vpp_apigen" || exit 2
 product_require_within "$vpp_source" "$vpp_vapi_gen" || exit 2
+product_require_within "$vpp_source" "$vpp_vapi_cpp_gen" || exit 2
 if [[ ! -f "$vpp_lib/libvapiclient.so" && ! -f "$vpp_lib/libvapiclient.so.0" ]]; then
   echo "missing pinned VPP libvapiclient; build the official VPP runtime first" >&2
   exit 2
@@ -135,6 +138,7 @@ cmake -S "$repo_root/src/product/vpp" -B "$plugin_build" -G Ninja \
   -DVPP_INCLUDE_DIR="$vpp_include" \
   -DVPP_APIGEN="$vpp_apigen" \
   -DVPP_VAPI_C_GEN="$vpp_vapi_gen" \
+  -DVPP_VAPI_CPP_GEN="$vpp_vapi_cpp_gen" \
   -DCMAKE_INSTALL_PREFIX="$artifact_root" \
   -DCMAKE_INSTALL_LIBDIR=lib
 cmake --build "$plugin_build" --target install

@@ -1,0 +1,275 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "product_packet.h"
+
+#include <limits.h>
+#include <string.h>
+
+enum
+{
+  PRODUCT_IP_PROTOCOL_TCP = 6,
+  PRODUCT_IP_PROTOCOL_UDP = 17,
+};
+
+static uint16_t
+read_be16 (const uint8_t *value)
+{
+  return (uint16_t) (((uint16_t) value[0] << 8) | value[1]);
+}
+
+static int
+endpoint_compare (const product_packet_endpoint_t *left,
+                  const product_packet_endpoint_t *right)
+{
+  int address_order = memcmp (left->address, right->address,
+                              sizeof (left->address));
+  if (address_order != 0)
+    return address_order;
+  if (left->port < right->port)
+    return -1;
+  return left->port > right->port;
+}
+
+static void
+make_canonical_key (const product_packet_facts_t *facts,
+                    product_canonical_flow_key_t *key)
+{
+  product_packet_endpoint_t source;
+  product_packet_endpoint_t destination;
+
+  memset (key, 0, sizeof (*key));
+  memset (&source, 0, sizeof (source));
+  memset (&destination, 0, sizeof (destination));
+  memcpy (source.address, facts->source_address, sizeof (source.address));
+  memcpy (destination.address, facts->destination_address,
+          sizeof (destination.address));
+  source.port = facts->source_port;
+  destination.port = facts->destination_port;
+
+  key->ip_family = facts->ip_family;
+  key->protocol = facts->protocol;
+  if (endpoint_compare (&source, &destination) <= 0)
+    {
+      key->endpoint_a = source;
+      key->endpoint_b = destination;
+    }
+  else
+    {
+      key->endpoint_a = destination;
+      key->endpoint_b = source;
+    }
+}
+
+static uint64_t
+hash_byte (uint64_t hash, uint8_t value)
+{
+  return (hash ^ value) * UINT64_C (1099511628211);
+}
+
+static uint64_t
+hash_bytes (uint64_t hash, const uint8_t *value, size_t length)
+{
+  size_t index;
+  for (index = 0; index < length; index++)
+    hash = hash_byte (hash, value[index]);
+  return hash;
+}
+
+static uint16_t
+select_owner (const product_worker_layout_t *layout, uint32_t flow_domain,
+              const product_canonical_flow_key_t *key)
+{
+  uint64_t hash = UINT64_C (14695981039346656037) ^ layout->hash_seed;
+  uint8_t domain[4] = {
+    (uint8_t) (flow_domain >> 24),
+    (uint8_t) (flow_domain >> 16),
+    (uint8_t) (flow_domain >> 8),
+    (uint8_t) flow_domain,
+  };
+  uint8_t port[2];
+
+  hash = hash_bytes (hash, domain, sizeof (domain));
+  hash = hash_byte (hash, key->ip_family);
+  hash = hash_byte (hash, key->protocol);
+  hash = hash_bytes (hash, key->endpoint_a.address,
+                     sizeof (key->endpoint_a.address));
+  port[0] = (uint8_t) (key->endpoint_a.port >> 8);
+  port[1] = (uint8_t) key->endpoint_a.port;
+  hash = hash_bytes (hash, port, sizeof (port));
+  hash = hash_bytes (hash, key->endpoint_b.address,
+                     sizeof (key->endpoint_b.address));
+  port[0] = (uint8_t) (key->endpoint_b.port >> 8);
+  port[1] = (uint8_t) key->endpoint_b.port;
+  hash = hash_bytes (hash, port, sizeof (port));
+  return (uint16_t) (hash % layout->worker_count);
+}
+
+static product_packet_result_t
+parse_transport (const uint8_t *packet, size_t packet_length,
+                 size_t transport_offset, product_packet_facts_t *facts)
+{
+  size_t transport_length;
+  uint16_t declared_length;
+
+  if (transport_offset > packet_length)
+    return PRODUCT_PACKET_INVALID_L4;
+  transport_length = packet_length - transport_offset;
+  if (facts->protocol == PRODUCT_IP_PROTOCOL_TCP)
+    {
+      uint8_t header_length;
+      if (transport_length < 20)
+        return PRODUCT_PACKET_INVALID_L4;
+      header_length = (uint8_t) ((packet[transport_offset + 12] >> 4) * 4U);
+      if (header_length < 20 || header_length > transport_length)
+        return PRODUCT_PACKET_INVALID_L4;
+      facts->l4_header_length = header_length;
+    }
+  else if (facts->protocol == PRODUCT_IP_PROTOCOL_UDP)
+    {
+      if (transport_length < 8)
+        return PRODUCT_PACKET_INVALID_L4;
+      declared_length = read_be16 (packet + transport_offset + 4);
+      if (declared_length < 8 || declared_length > transport_length)
+        return PRODUCT_PACKET_INVALID_L4;
+      facts->l4_header_length = 8;
+    }
+  else
+    return PRODUCT_PACKET_UNSUPPORTED_PROTOCOL;
+
+  facts->source_port = read_be16 (packet + transport_offset);
+  facts->destination_port = read_be16 (packet + transport_offset + 2);
+  facts->l4_status = PRODUCT_PACKET_L4_COMPLETE;
+  return PRODUCT_PACKET_OK;
+}
+
+static product_packet_result_t
+parse_ipv4 (const uint8_t *packet, size_t length,
+            product_packet_facts_t *facts)
+{
+  size_t header_length;
+  uint16_t packet_length;
+  uint16_t fragment;
+
+  if (length < 20)
+    return PRODUCT_PACKET_INVALID_L3;
+  header_length = (size_t) (packet[0] & 0x0fU) * 4U;
+  packet_length = read_be16 (packet + 2);
+  if (header_length < 20 || header_length > length
+      || packet_length < header_length || packet_length > length)
+    return PRODUCT_PACKET_INVALID_L3;
+  fragment = read_be16 (packet + 6);
+  if ((fragment & UINT16_C (0x3fff)) != 0)
+    return PRODUCT_PACKET_INVALID_L3;
+
+  facts->ip_family = 4;
+  facts->protocol = packet[9];
+  memcpy (facts->source_address + 12, packet + 12, 4);
+  memcpy (facts->destination_address + 12, packet + 16, 4);
+  facts->l3_header_length = (uint16_t) header_length;
+  facts->packet_length = packet_length;
+  facts->l3_status = PRODUCT_PACKET_L3_COMPLETE;
+  return parse_transport (packet, packet_length, header_length, facts);
+}
+
+static product_packet_result_t
+parse_ipv6 (const uint8_t *packet, size_t length,
+            product_packet_facts_t *facts)
+{
+  size_t packet_length;
+
+  if (length < 40)
+    return PRODUCT_PACKET_INVALID_L3;
+  packet_length = 40U + read_be16 (packet + 4);
+  if (packet_length > length || packet_length > UINT32_MAX)
+    return PRODUCT_PACKET_INVALID_L3;
+
+  facts->ip_family = 6;
+  facts->protocol = packet[6];
+  memcpy (facts->source_address, packet + 8, 16);
+  memcpy (facts->destination_address, packet + 24, 16);
+  facts->l3_header_length = 40;
+  facts->packet_length = (uint32_t) packet_length;
+  facts->l3_status = PRODUCT_PACKET_L3_COMPLETE;
+  return parse_transport (packet, packet_length, 40, facts);
+}
+
+product_packet_result_t
+product_packet_admit (const product_worker_layout_t *layout,
+                      const product_packet_ingress_t *ingress,
+                      product_packet_lease_t *lease)
+{
+  product_packet_result_t result;
+  uint8_t version;
+
+  if (layout == NULL || ingress == NULL || lease == NULL
+      || ingress->data == NULL || layout->worker_count == 0
+      || ingress->current_worker >= layout->worker_count
+      || ingress->origin_obligation_id == 0)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+
+  memset (lease, 0, sizeof (*lease));
+  if (ingress->length == 0)
+    return PRODUCT_PACKET_INVALID_L3;
+  version = ingress->data[0] >> 4;
+  if (version == 4)
+    result = parse_ipv4 (ingress->data, ingress->length, &lease->facts);
+  else if (version == 6)
+    result = parse_ipv6 (ingress->data, ingress->length, &lease->facts);
+  else
+    result = PRODUCT_PACKET_INVALID_L3;
+  if (result != PRODUCT_PACKET_OK)
+    return result;
+
+  make_canonical_key (&lease->facts, &lease->canonical_key);
+  lease->hints = ingress->hints;
+  lease->origin_obligation_id = ingress->origin_obligation_id;
+  lease->expected_owner = select_owner (layout, ingress->flow_domain,
+                                        &lease->canonical_key);
+  if (lease->expected_owner == ingress->current_worker)
+    lease->distribution = PRODUCT_PACKET_DISTRIBUTION_LOCAL;
+  else
+    {
+      lease->distribution = PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE;
+      lease->primary_handoff_count = 1;
+    }
+  return PRODUCT_PACKET_OK;
+}
+
+product_packet_result_t
+product_packet_owner_guard (product_packet_lease_t *lease,
+                            uint16_t current_worker)
+{
+  if (lease == NULL)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  if (current_worker != lease->expected_owner)
+    return PRODUCT_PACKET_OWNER_MISMATCH;
+  lease->owner_guarded = 1;
+  return PRODUCT_PACKET_OK;
+}
+
+product_packet_result_t
+product_packet_set_terminal (product_packet_lease_t *lease,
+                             product_packet_terminal_intent_t intent)
+{
+  if (lease == NULL || intent == PRODUCT_PACKET_INTENT_NONE)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  if (!lease->owner_guarded || lease->terminal_count != 0 || lease->settled)
+    return PRODUCT_PACKET_ORDER_VIOLATION;
+  lease->terminal_intent = (uint8_t) intent;
+  lease->terminal_count = 1;
+  return PRODUCT_PACKET_OK;
+}
+
+product_packet_result_t
+product_packet_settle (product_packet_lease_t *lease)
+{
+  if (lease == NULL)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  if (lease->settled)
+    return PRODUCT_PACKET_ALREADY_SETTLED;
+  if (!lease->owner_guarded || lease->terminal_count != 1
+      || lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+    return PRODUCT_PACKET_ORDER_VIOLATION;
+  lease->settled = 1;
+  return PRODUCT_PACKET_OK;
+}

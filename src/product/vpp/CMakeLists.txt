@@ -154,6 +154,7 @@ include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 add_vpp_plugin(product_core
   SOURCES
     product_core_plugin.c
+    product_packet.c
   API_FILES
     product_core.api
   VAT_AUTO_TEST

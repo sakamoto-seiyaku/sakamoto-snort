@@ -34,6 +34,9 @@ add_test(NAME sakamoto-product-host-fixture-abi-test
   COMMAND sakamoto-product-host-fixture-abi-test)
 add_test(NAME sakamoto-product-vpp-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vpp_contract.sh")
+add_test(NAME sakamoto-s174-product-packet-kernel-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s174-product-packet-kernel-contract.sh")
 add_test(NAME sakamoto-product-host-query-identity-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_query_identity_contract.sh")
 add_test(NAME sakamoto-product-host-residue-contract
