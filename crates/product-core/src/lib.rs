@@ -212,6 +212,7 @@ impl ProductError {
 #[derive(Default)]
 struct GenerationLedger {
     active: Option<u64>,
+    pending: Option<u64>,
     retired: BTreeSet<u64>,
 }
 
@@ -220,16 +221,33 @@ impl GenerationLedger {
         if let Some(active) = self.active {
             return Err(ProductError::GenerationActive { generation: active });
         }
+        if let Some(pending) = self.pending {
+            return Err(ProductError::GenerationActive {
+                generation: pending,
+            });
+        }
         if self.retired.contains(&generation) {
             return Err(ProductError::GenerationRetired { generation });
         }
         Ok(())
     }
 
-    fn claim(&mut self, generation: u64) -> Result<(), ProductError> {
+    fn reserve(&mut self, generation: u64) -> Result<(), ProductError> {
         self.ensure_available(generation)?;
-        self.active = Some(generation);
+        self.pending = Some(generation);
         Ok(())
+    }
+
+    fn commit(&mut self, generation: u64) {
+        debug_assert_eq!(self.pending, Some(generation));
+        self.pending = None;
+        self.active = Some(generation);
+    }
+
+    fn release(&mut self, generation: u64) {
+        if self.pending == Some(generation) {
+            self.pending = None;
+        }
     }
 
     fn retire(&mut self, generation: u64) {
@@ -285,11 +303,23 @@ impl ProductCore {
             });
         }
         {
-            let ledger = lock_generation_ledger();
-            ledger.ensure_available(generation)?;
+            let mut ledger = lock_generation_ledger();
+            ledger.reserve(generation)?;
         }
-        let path = path.to_str().ok_or(ProductError::PathContainsNul)?;
-        let path = CString::new(path).map_err(|_| ProductError::PathContainsNul)?;
+        let path = match path.to_str() {
+            Some(path) => path,
+            None => {
+                lock_generation_ledger().release(generation);
+                return Err(ProductError::PathContainsNul);
+            }
+        };
+        let path = match CString::new(path) {
+            Ok(path) => path,
+            Err(_) => {
+                lock_generation_ledger().release(generation);
+                return Err(ProductError::PathContainsNul);
+            }
+        };
         let bytes = ProductBytes {
             data: path.as_ptr().cast(),
             length: path.as_bytes().len().try_into().unwrap_or(u32::MAX),
@@ -301,30 +331,39 @@ impl ProductCore {
         };
         let status = Status::from_ffi(status);
         if code != 0 {
+            lock_generation_ledger().release(generation);
             return Err(ProductError::Native {
                 code: ErrorCode::from_raw(code),
                 status,
             });
         }
-        let session = NonNull::new(session).ok_or(ProductError::Native {
-            code: ErrorCode::AllocationFailed,
-            status: status.clone(),
-        })?;
+        let session = match NonNull::new(session) {
+            Some(session) => session,
+            None => {
+                lock_generation_ledger().release(generation);
+                return Err(ProductError::Native {
+                    code: ErrorCode::AllocationFailed,
+                    status: status.clone(),
+                });
+            }
+        };
         if let Err(error) = validate_status_identity(&status) {
             unsafe {
                 let _ = sakamoto_product_session_disconnect(session.as_ptr());
                 let _ = sakamoto_product_session_destroy(session.as_ptr());
             }
+            lock_generation_ledger().release(generation);
             return Err(error);
         }
         let mut ledger = lock_generation_ledger();
-        if let Err(error) = ledger.claim(generation) {
+        if ledger.pending != Some(generation) {
             unsafe {
                 let _ = sakamoto_product_session_disconnect(session.as_ptr());
                 let _ = sakamoto_product_session_destroy(session.as_ptr());
             }
-            return Err(error);
+            return Err(ProductError::GenerationActive { generation });
         }
+        ledger.commit(generation);
         drop(ledger);
         Ok((
             Self {
@@ -689,17 +728,18 @@ mod tests {
     #[test]
     fn generation_ledger_allows_only_one_active_generation() {
         let mut ledger = GenerationLedger::default();
-        assert!(ledger.claim(7).is_ok());
+        assert!(ledger.reserve(7).is_ok());
+        ledger.commit(7);
         assert!(matches!(
-            ledger.claim(8),
+            ledger.reserve(8),
             Err(ProductError::GenerationActive { generation: 7 })
         ));
         ledger.retire(7);
         assert!(matches!(
-            ledger.claim(7),
+            ledger.reserve(7),
             Err(ProductError::GenerationRetired { generation: 7 })
         ));
-        assert!(ledger.claim(8).is_ok());
+        assert!(ledger.reserve(8).is_ok());
     }
 
     #[test]
