@@ -342,7 +342,7 @@ public final class ProductCoreOwner {
                     throw new IllegalArgumentException("owner record comments are not allowed");
                 }
                 int separator = line.indexOf('=');
-                if (separator <= 0 || separator != line.lastIndexOf('=')) {
+                if (separator <= 0) {
                     throw new IllegalArgumentException("owner record line is not key=value");
                 }
                 String key = line.substring(0, separator);

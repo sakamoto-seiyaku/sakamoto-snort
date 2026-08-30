@@ -1545,6 +1545,11 @@ public final class AndroidRuntimeContractTest {
                 "/data/app/~~6RmWNDoq9QO8jzbNE3R7Hw==/"
                         + "com.sakamoto.snort.androidruntime-foN8T5ZUigkrNeO2lBtk8g==/runtime/api.sock",
                 "product-core", "vpp-r1");
+        ProductCoreOwner.OwnerRecord canonicalPathRestored =
+                ProductCoreOwner.OwnerRecord.parse(canonicalPathOwner.encode());
+        check(canonicalPathOwner.sameInstallation(canonicalPathRestored)
+                        && canonicalPathOwner.token.equals(canonicalPathRestored.token),
+                "canonical owner paths round-trip through the durable record");
         String canonicalGlobalCommand = ProductCoreOwner.buildGlobalProcessAuditCommand(
                 realPixelNativeLibraryPath, "10123");
         check(canonicalGlobalCommand.contains("[ \"$exe\" = '"
