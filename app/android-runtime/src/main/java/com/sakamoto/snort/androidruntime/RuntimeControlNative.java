@@ -191,7 +191,7 @@ public final class RuntimeControlNative {
         public final String buildDate;
         public final String buildDirectory;
 
-        private Status(int abiVersion, int apiVersion, int code, int legacyVppRetval,
+        public Status(int abiVersion, int apiVersion, int code, int legacyVppRetval,
                        long generation, boolean coreReady, boolean adapterAvailable,
                        boolean protectionRunning, boolean pluginLoaded,
                        boolean vapiHandleLive, boolean generationLive,

@@ -135,6 +135,13 @@ public final class RuntimeService extends VpnService {
     private Process vppProcess;
     private RuntimeControlNative.Session productCoreSession;
     private String productVppRevision = "";
+    private String productArtifactId = "";
+    private String productApiIdentity = "";
+    private int productAbiVersion = -1;
+    private int productApiVersion = -1;
+    private String productVppBinarySha256 = "";
+    private String productCoreConnectFailureCode = "";
+    private String productCoreConnectFailureMessage = "";
     private VpnTunPlatformSession vpnTunSession;
     private VpnHevTransportSession vpnHevSession;
     private RuntimeProfile activeProfile;
@@ -801,13 +808,30 @@ public final class RuntimeService extends VpnService {
         try {
             productManifest = readProductManifest();
             productVppRevision = requiredProductProperty(productManifest, "vppRevision");
+            productArtifactId = requiredProductProperty(productManifest, "artifactId");
+            productApiIdentity = requiredProductProperty(productManifest, "apiIdentity");
+            productAbiVersion = requiredProductIntProperty(productManifest, "abiVersion");
+            productApiVersion = requiredProductIntProperty(productManifest, "apiVersion");
+            productVppBinarySha256 = requiredProductProperty(productManifest, "vppBinarySha256");
+            if (!productVppBinarySha256.matches("[0-9a-fA-F]{64}")) {
+                failWithoutRuntime("product_artifact_hash_mismatch",
+                        "product VPP executable hash has an invalid format");
+                return;
+            }
             if (!"sakamoto-android-product-stage/v1".equals(
                     requiredProductProperty(productManifest, "schema"))) {
                 throw new IOException("unsupported product stage schema");
             }
             String packagedAbi = requiredProductProperty(productManifest, "abi");
             if (!packagedAbi.equals(deviceAbi())) {
-                throw new IOException("product ABI does not match device ABI");
+                failWithoutRuntime("product_abi_mismatch",
+                        "product ABI does not match device ABI");
+                return;
+            }
+            if (productAbiVersion != 1 || productApiVersion != 1) {
+                failWithoutRuntime("product_protocol_mismatch",
+                        "product manifest ABI/API versions are unsupported");
+                return;
             }
             if (!publish(RuntimeSnapshot.starting(selected, VppHealthHandshake.PROTOCOL,
                     productVppRevision, "", generation))) {
@@ -823,6 +847,11 @@ public final class RuntimeService extends VpnService {
                     || !nativeDir.equals(vpp.getParentFile())
                     || !nativeDir.equals(plugin.getParentFile())) {
                 throw new IOException("Product Core native payload is missing or outside nativeLibraryDir");
+            }
+            if (!productVppBinarySha256.equalsIgnoreCase(sha256(vpp))) {
+                failWithoutRuntime("product_artifact_hash_mismatch",
+                        "installed Product Core VPP executable does not match the stage");
+                return;
             }
             prepareProductCoreProfile(profileRoot, nativeDir);
 
@@ -846,11 +875,16 @@ public final class RuntimeService extends VpnService {
             // not an Android-hidden Redirect/PID API.
             process.getOutputStream().close();
 
+            productCoreConnectFailureCode = "";
+            productCoreConnectFailureMessage = "";
             RuntimeControlNative.Session session = connectProductCoreSession(
                     new File(runtime, "api.sock"), process);
             if (session == null) {
-                failProductCoreGeneration("product_core_not_ready",
-                        "Product Core did not become ready on its generation");
+                failProductCoreGeneration(productCoreConnectFailureCode.isEmpty()
+                                ? "product_core_not_ready" : productCoreConnectFailureCode,
+                        productCoreConnectFailureMessage.isEmpty()
+                                ? "Product Core did not become ready on its generation"
+                                : productCoreConnectFailureMessage);
                 return;
             }
             productCoreSession = session;
@@ -879,10 +913,21 @@ public final class RuntimeService extends VpnService {
             if (socket.exists()) {
                 RuntimeControlNative.Session session = RuntimeControlNative.connect(
                         socket.getPath(), generation);
-                if (session.isConnected()
-                        && ProductCoreLifecycle.isReady(generation, productVppRevision,
-                        session.lastStatus())) {
+                RuntimeControlNative.Status status = session.lastStatus();
+                String validation = session.isConnected()
+                        ? ProductCoreLifecycle.validate(generation, productArtifactId,
+                        productApiIdentity, productVppRevision, productAbiVersion,
+                        productApiVersion, status)
+                        : "product_core_not_ready";
+                if (session.isConnected() && validation.isEmpty()) {
                     return session;
+                }
+                if (ProductCoreLifecycle.isIdentityFailure(validation)) {
+                    productCoreConnectFailureCode = validation;
+                    productCoreConnectFailureMessage = status == null
+                            ? validation : status.errorDetail;
+                    session.close();
+                    return null;
                 }
                 session.close();
             }
@@ -904,9 +949,15 @@ public final class RuntimeService extends VpnService {
             return;
         }
         RuntimeControlNative.Status status = session.query();
-        if (!ProductCoreLifecycle.isReady(generation, productVppRevision, status)) {
-            failProductCoreGeneration("product_core_query_failed",
-                    status == null ? "Product Core query failed" : status.errorDetail);
+        String validation = ProductCoreLifecycle.validate(generation, productArtifactId,
+                productApiIdentity, productVppRevision, productAbiVersion,
+                productApiVersion, status);
+        if (!validation.isEmpty()) {
+            String code = ProductCoreLifecycle.isIdentityFailure(validation)
+                    ? validation : "product_core_query_failed";
+            String detail = status == null || status.errorDetail.isEmpty()
+                    ? validation : status.errorDetail;
+            failProductCoreGeneration(code, detail);
             return;
         }
         publishProductCoreRunning(status, ProductCoreLifecycle.UNKNOWN_PID);
@@ -1003,6 +1054,17 @@ public final class RuntimeService extends VpnService {
             throw new IOException("product stage property is missing: " + name);
         }
         return value;
+    }
+
+    private static int requiredProductIntProperty(Properties properties, String name)
+            throws IOException {
+        String value = requiredProductProperty(properties, name);
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException error) {
+            throw new IOException("product manifest property is not an integer: " + name,
+                    error);
+        }
     }
 
     private void prepareProductCoreProfile(File profile, File nativeDir) throws IOException {

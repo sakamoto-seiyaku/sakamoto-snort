@@ -87,6 +87,7 @@ public final class AndroidRuntimeContractTest {
         nativeCoreHandshakeRequiresGeneratedIdentity();
         productCoreNativeStatusFieldOrderIsStable();
         productCoreLifecycleRequiresTheExactLiveGeneration();
+        productCoreIdentityValidatorFailsClosed();
         applicationSubjectIdentityIsCompleteUidOnly();
         applicationProtocolCatalogOwnsStablePolicyIdentity();
         productStorePersistsProfileBindingsAndEmptyBundle();
@@ -1357,6 +1358,98 @@ public final class AndroidRuntimeContractTest {
                 "core-only running state keeps the Adapter unavailable");
         check(running.displayText().contains("Protection: not running"),
                 "visible runtime status says protection is not running");
+    }
+
+    private static void productCoreIdentityValidatorFailsClosed() throws Exception {
+        RuntimeControlNative.Status ready = productStatus(1, 1, 0, 42L,
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
+        check(ProductCoreLifecycle.isReady(42L,
+                        "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, ready),
+                "matching Product Core identity is ready");
+
+        RuntimeControlNative.Status wrongArtifact = productStatus(1, 1, 0, 42L,
+                "wrong-artifact", "product_core.api/1.0.0@1b103f1d",
+                "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
+        check("product_artifact_identity_mismatch".equals(ProductCoreLifecycle.validate(
+                        42L, "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongArtifact)),
+                "wrong artifact identity has a stable failure code");
+        check(!ProductCoreLifecycle.isReady(42L,
+                        "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongArtifact),
+                "wrong artifact identity cannot become ready");
+
+        RuntimeControlNative.Status wrongApi = productStatus(1, 1, 0, 42L,
+                "sakamoto-product-vpp-host-v1", "wrong-api",
+                "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
+        check("product_api_identity_mismatch".equals(ProductCoreLifecycle.validate(
+                        42L, "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongApi)),
+                "wrong generated API identity has a stable failure code");
+
+        RuntimeControlNative.Status wrongRevision = productStatus(1, 1, 0, 42L,
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "wrong-revision");
+        check("product_vpp_revision_mismatch".equals(ProductCoreLifecycle.validate(
+                        42L, "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongRevision)),
+                "wrong VPP revision has a stable failure code");
+
+        RuntimeControlNative.Status wrongAbi = productStatus(2, 1, 0, 42L,
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
+        check("product_protocol_mismatch".equals(ProductCoreLifecycle.validate(
+                        42L, "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongAbi)),
+                "wrong numeric ABI has a stable protocol failure code");
+        check(!ProductCoreLifecycle.isReady(42L,
+                        "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongAbi),
+                "wrong numeric ABI cannot become ready");
+
+        RuntimeControlNative.Status wrongApiVersion = productStatus(1, 2, 0, 42L,
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
+        check("product_protocol_mismatch".equals(ProductCoreLifecycle.validate(
+                        42L, "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1,
+                        wrongApiVersion)),
+                "wrong numeric API has a stable protocol failure code");
+        check(!ProductCoreLifecycle.isReady(42L,
+                        "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1,
+                        wrongApiVersion),
+                "wrong numeric API cannot become ready");
+
+        RuntimeControlNative.Status failedReply = productStatus(9, 9, 7, 42L,
+                "", "", "");
+        check("product_core_not_ready".equals(ProductCoreLifecycle.validate(
+                        42L, "sakamoto-product-vpp-host-v1",
+                        "product_core.api/1.0.0@1b103f1d",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1,
+                        failedReply)),
+                "failed reply remains a core failure rather than identity mismatch");
+    }
+
+    private static RuntimeControlNative.Status productStatus(int abiVersion, int apiVersion,
+                                                              int code, long generation,
+                                                              String artifactId,
+                                                              String apiIdentity,
+                                                              String vppRevision) {
+        return new RuntimeControlNative.Status(abiVersion, apiVersion, code, code, generation,
+                true, false, false, true, true, true, artifactId, apiIdentity, vppRevision,
+                "", "", "");
     }
 
     private static void applicationSubjectIdentityIsCompleteUidOnly() {

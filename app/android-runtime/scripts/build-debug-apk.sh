@@ -10,6 +10,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
+product_source_manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
 bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 plugin_build_name="product_core_plugin.so"
@@ -229,11 +230,34 @@ build_native_stage() {
   local source_status
   local vpp_patch_series_count
   local vpp_patch_series_sha256
+  local product_artifact_id
+  local product_api_identity
+  local product_abi_version
+  local product_api_version
+  local vpp_binary_sha256
   local artifact_description
   local rust_dynamic
   local jni_dynamic
   local plugin_symbols
   local -a cmake_args
+
+  [[ -f "$product_source_manifest" ]] || \
+    die "product artifact source manifest is missing"
+  product_manifest_value() {
+    local key="$1"
+    awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' \
+      "$product_source_manifest"
+  }
+  product_artifact_id="$(product_manifest_value artifact.id)"
+  product_api_identity="$(product_manifest_value product.api.identity)"
+  product_abi_version="$(product_manifest_value product.abi.version)"
+  product_api_version="$(product_manifest_value product.api.version)"
+  [[ "$product_artifact_id" =~ ^[^[:space:]=]+$ ]] || \
+    die "source product artifact identity has an invalid format"
+  [[ "$product_api_identity" =~ ^[^[:space:]=]+$ ]] || \
+    die "source product API identity has an invalid format"
+  [[ "$product_abi_version" == 1 && "$product_api_version" == 1 ]] || \
+    die "source product ABI/API versions must be 1"
 
   [[ -n "$vpp_source_dir" ]] || \
     die "stage-only requires SAKAMOTO_VPP_SOURCE_DIR at the pinned revision"
@@ -477,6 +501,9 @@ build_native_stage() {
   generated_dir="$product_stage_candidate/generated-vapi/vapi"
   mkdir -p -- "$native_dir" "$generated_dir"
   install -m 0755 "$vpp_binary" "$native_dir/libvpp_runtime.so"
+  vpp_binary_sha256="$(sha256sum "$native_dir/libvpp_runtime.so" | awk '{print $1}')"
+  [[ "$vpp_binary_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+    die "installed Product Core VPP executable hash is invalid"
   for runtime_library in \
     libsvm.so \
     libvapiclient.so \
@@ -582,6 +609,11 @@ schema=sakamoto-android-product-stage/v1
 abi=arm64-v8a
 androidApi=$android_api
 vppRevision=$expected_revision
+artifactId=$product_artifact_id
+apiIdentity=$product_api_identity
+abiVersion=$product_abi_version
+apiVersion=$product_api_version
+vppBinarySha256=$vpp_binary_sha256
 vppPatchSeriesCount=$vpp_patch_series_count
 vppPatchSeriesSha256=$vpp_patch_series_sha256
 vppBinary=lib/arm64-v8a/libvpp_runtime.so
@@ -727,6 +759,11 @@ build_apk_only() {
   local -a class_files
   local -a d8_outputs
   local -a d8_command
+  local product_artifact_id
+  local product_api_identity
+  local product_abi_version
+  local product_api_version
+  local vpp_binary_sha256
 
   [[ -n "$product_stage_input" ]] || \
     die "apk-only requires an explicit product stage"
@@ -755,6 +792,28 @@ build_apk_only() {
   require_product_manifest_line "abi=arm64-v8a"
   require_product_manifest_line "androidApi=$android_api"
   require_product_manifest_line "vppRevision=$expected_revision"
+  product_manifest_value() {
+    local key="$1"
+    awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' \
+      "$product_source_manifest"
+  }
+  product_artifact_id="$(product_manifest_value artifact.id)"
+  product_api_identity="$(product_manifest_value product.api.identity)"
+  product_abi_version="$(product_manifest_value product.abi.version)"
+  product_api_version="$(product_manifest_value product.api.version)"
+  [[ "$product_artifact_id" =~ ^[^[:space:]=]+$ ]] || \
+    die "source product artifact identity has an invalid format"
+  [[ "$product_api_identity" =~ ^[^[:space:]=]+$ ]] || \
+    die "source product API identity has an invalid format"
+  [[ "$product_abi_version" == 1 && "$product_api_version" == 1 ]] || \
+    die "source product ABI/API versions must be 1"
+  require_product_manifest_line "artifactId=$product_artifact_id"
+  require_product_manifest_line "apiIdentity=$product_api_identity"
+  require_product_manifest_line "abiVersion=$product_abi_version"
+  require_product_manifest_line "apiVersion=$product_api_version"
+  vpp_binary_sha256="$(sed -n 's/^vppBinarySha256=//p' "$product_manifest")"
+  [[ "$vpp_binary_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+    die "product stage manifest has an invalid VPP executable hash"
   vpp_patch_series_count="$(sed -n 's/^vppPatchSeriesCount=//p' "$product_manifest")"
   vpp_patch_series_sha256="$(sed -n 's/^vppPatchSeriesSha256=//p' "$product_manifest")"
   [[ "$vpp_patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
@@ -813,6 +872,10 @@ build_apk_only() {
   plugin_source="$native_dir/$plugin_name"
   [[ -f "$plugin_source" && ! -L "$plugin_source" ]] || \
     die "product stage plugin is missing or not a regular file"
+  if [[ "$(sha256sum "$native_dir/libvpp_runtime.so" | awk '{print $1}')" \
+      != "$vpp_binary_sha256" ]]; then
+    die "product_artifact_hash_mismatch: VPP executable does not match product stage"
+  fi
 
   [[ -f "$android_jar" ]] || die "Android SDK android.jar is missing: $android_jar"
   [[ -x "$aapt2" ]] || die "Android aapt2 is missing: $aapt2"
