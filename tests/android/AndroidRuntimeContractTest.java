@@ -1702,6 +1702,12 @@ public final class AndroidRuntimeContractTest {
         check(globalCommand.contains("readlink")
                         && globalCommand.contains("libvpp_runtime.so"),
                 "global owner audit checks the exact executable identity");
+        check(globalCommand.contains("-v audit_pid=\"$$\"")
+                        && globalCommand.contains("$1 != audit_pid")
+                        && globalCommand.contains("$3 != \"ps\""),
+                "global owner audit excludes its shell and known ps helper row");
+        check(globalCommand.contains("if [ ! -e \"$proc\" ]; then continue; fi;"),
+                "global owner audit ignores a process that vanished before readlink");
         try {
             Path globalScript = Files.createTempFile("sakamoto-product-global-owner-audit", ".sh");
             try {
@@ -1742,6 +1748,12 @@ public final class AndroidRuntimeContractTest {
                 "owner audit filters candidates to the app UID first");
         check(command.contains("api.sock"),
                 "owner audit carries the exact API socket identity");
+        check(command.contains("-v audit_pid=\"$$\"")
+                        && command.contains("$1 != audit_pid")
+                        && command.contains("$3 != \"ps\""),
+                "owner audit excludes its shell and known ps helper row");
+        check(command.contains("if [ ! -e \"$proc\" ]; then continue; fi;"),
+                "owner audit ignores a process that vanished before readlink");
         try {
             Path script = Files.createTempFile("sakamoto-product-owner-audit", ".sh");
             try {
