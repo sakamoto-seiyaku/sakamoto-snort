@@ -155,6 +155,7 @@ add_vpp_plugin(product_core
   SOURCES
     product_core_plugin.c
     product_packet.c
+    product_packet_graph.c
   API_FILES
     product_core.api
   VAT_AUTO_TEST

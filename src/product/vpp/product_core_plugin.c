@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
- * The first product VPP plugin intentionally has no packet nodes, adapters,
- * queues, pools, workers, or Flow Stack.  Its only runtime responsibility is
- * to publish the coarse identity/readiness needed by the Host Product Core.
+ * Product identity and coarse readiness share this plugin with the VPP-native
+ * packet kernel graph. Platform Adapters and the VPN Flow Stack remain later
+ * capabilities and are deliberately absent here.
  */
 
 #include <errno.h>
@@ -110,5 +110,5 @@ VLIB_INIT_FUNCTION (product_core_init);
 
 VLIB_PLUGIN_REGISTER () = {
   .version = VPP_BUILD_VER,
-  .description = "Sakamoto product control identity (Host spine only)",
+  .description = "Sakamoto Product VPP packet kernel and control identity",
 };

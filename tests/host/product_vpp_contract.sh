@@ -24,7 +24,15 @@ grep -q '^control.transport=generated-vapi-c-blocking$' "$manifest"
 grep -q '^vpp.revision=' "$manifest"
 grep -q '^product.api.identity=' "$manifest"
 grep -q 'source.revision' "$launcher"
-grep -q 'plugin_path' "$launcher"
+grep -Fq '  path $plugin_dir' "$launcher"
+grep -Fq 'exec "$vpp_bin" -c "$config"' "$launcher"
+grep -q 'PRODUCT_WORKER_COUNT' "$launcher"
+grep -q 'cpu { workers $worker_count }' "$launcher"
+grep -q 'cli-no-pager' "$launcher"
+if grep -Fq 'exec "$vpp_bin" plugin_path' "$launcher"; then
+  echo "launcher passes ignored positional plugin config alongside -c" >&2
+  exit 1
+fi
 grep -q 'plugin default { disable }' "$launcher"
 grep -q 'plugin product_core_plugin.so { enable }' "$launcher"
 grep -q 'product-vpp-artifact.properties' "$launcher"

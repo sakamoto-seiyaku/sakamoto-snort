@@ -16,6 +16,7 @@ vpp_bin="$artifact_root/bin/vpp"
 plugin_dir="$artifact_root/lib/vpp_plugins"
 core_bin="$artifact_root/bin/sakamoto-product-core-host"
 generation="${PRODUCT_GENERATION:-1}"
+worker_count="${PRODUCT_WORKER_COUNT:-}"
 manifest="$artifact_root/product-vpp-artifact.properties"
 artifact_marker="$artifact_root/.sakamoto-product-artifact"
 source_manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
@@ -160,6 +161,10 @@ if [[ ! "$generation" =~ ^[1-9][0-9]*$ ]]; then
   echo "PRODUCT_GENERATION must be a positive decimal integer" >&2
   exit 2
 fi
+if [[ -n "$worker_count" && ! "$worker_count" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PRODUCT_WORKER_COUNT must be a positive decimal integer" >&2
+  exit 2
+fi
 
 mkdir -p "$runtime_dir"
 if find "$runtime_dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
@@ -173,9 +178,15 @@ owner_pid="$(product_validate_owned_child "$runtime_dir" owner.pid)" || exit 2
 generation_marker="$(product_validate_owned_child "$runtime_dir" generation)" || exit 2
 printf '%s\n' "$$" > "$owner_pid"
 printf '%s\n' "$generation" > "$generation_marker"
+cpu_config=""
+if [[ -n "$worker_count" ]]; then
+  cpu_config="cpu { workers $worker_count }"
+fi
 cat > "$config" <<EOF
+$cpu_config
 unix {
   nodaemon
+  cli-no-pager
   runtime-dir $runtime_dir
   cli-listen $cli_socket
 }
@@ -183,6 +194,7 @@ socksvr {
   socket-name $api_socket
 }
 plugins {
+  path $plugin_dir
   plugin default { disable }
   plugin product_core_plugin.so { enable }
 }
@@ -190,4 +202,4 @@ EOF
 
 export SAKAMOTO_PRODUCT_GENERATION="$generation"
 export LD_LIBRARY_PATH="$artifact_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$vpp_bin" plugin_path "$plugin_dir" -c "$config"
+exec "$vpp_bin" -c "$config"
