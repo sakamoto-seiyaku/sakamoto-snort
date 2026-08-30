@@ -1796,7 +1796,7 @@ public final class RuntimeService extends VpnService {
         }
         String command = "umask 022; echo $$ > " + shellQuote(pidFile.getPath())
                 + "; export LD_LIBRARY_PATH=" + shellQuote(nativeDir.getPath())
-                + " SAKAMOTO_ANDROID_SHM_DIR=" + shellQuote(shm.getPath())
+                + " SAKAMOTO_VPP_SVM_DIR=" + shellQuote(shm.getPath())
                 + " SAKAMOTO_VPP_RUNTIME_DIR=" + shellQuote(runtime.getPath())
                 + " SAKAMOTO_VPP_OWNER_TOKEN=" + shellQuote(token)
                 + " SAKAMOTO_RUNTIME_PROFILE=" + shellQuote(profile.wireName)

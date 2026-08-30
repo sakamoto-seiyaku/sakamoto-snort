@@ -1,0 +1,243 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 926713e1..6b013b4d 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -223,6 +223,15 @@ if(SAKAMOTO_VPP_NO_IPSEC)
+   add_compile_definitions(SAKAMOTO_VPP_NO_IPSEC=1)
+ endif()
+ 
++option(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++  "Use the accepted event-driven Android VPP idle profile" OFF)
++if(SAKAMOTO_VPP_ANDROID_IDLE_PROFILE)
++  add_compile_definitions(
++    SAKAMOTO_VPP_ANDROID_IDLE_PROFILE=1
++    SAKAMOTO_ANDROID_WORKER_IDLE_IGNORES_RECENT_BARRIER_HOLDOFF=1
++  )
++endif()
++
+ include_directories (
+ 	${CMAKE_SOURCE_DIR}
+ 	${VPP_BINARY_DIR}
+diff --git a/src/vlib/file.c b/src/vlib/file.c
+index 286b0d1f..d1b3544a 100644
+--- a/src/vlib/file.c
++++ b/src/vlib/file.c
+@@ -110,7 +110,11 @@ vlib_file_poll (vlib_main_t *vm)
+   struct epoll_event *e, epoll_events[16];
+   int n_fds_ready;
+   int is_main = (vm->thread_index == 0);
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++  int timeout_ms = 0, max_timeout_ms = 1000;
++#else
+   int timeout_ms = 0, max_timeout_ms = 10;
++#endif
+   u32 ticks;
+ 
+   /*
+@@ -133,8 +137,12 @@ vlib_file_poll (vlib_main_t *vm)
+   if (vlib_last_vectors_per_main_loop (vm) >= 2)
+     goto skip_loops;
+ 
+-  /* at least one node is polling */
+-  if (nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING])
++  /* A cloned worker may sleep when only main-thread input needs polling. */
++  if (nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING]
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      && is_main
++#endif
++  )
+     goto skip_loops;
+ 
+   /* pending APIs in the queue */
+@@ -146,9 +154,11 @@ vlib_file_poll (vlib_main_t *vm)
+       if (*vlib_worker_threads->wait_at_barrier)
+ 	goto epoll;
+ 
++#ifndef SAKAMOTO_ANDROID_WORKER_IDLE_IGNORES_RECENT_BARRIER_HOLDOFF
+       if (vlib_get_first_main ()->time_last_barrier_release + 0.5 >=
+ 	  vlib_time_now (vm))
+ 	goto skip_loops;
++#endif
+     }
+ 
+   /* check for pending interrupts */
+diff --git a/src/vlib/stats/collector.c b/src/vlib/stats/collector.c
+index b23f3df5..f480c46d 100644
+--- a/src/vlib/stats/collector.c
++++ b/src/vlib/stats/collector.c
+@@ -174,7 +174,12 @@ stat_segment_collector_process (vlib_main_t *vm, vlib_node_runtime_t *rt,
+   while (1)
+     {
+       do_stat_segment_updates (vm, sm);
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      vlib_process_wait_for_event (vm);
++      (void) vlib_process_get_events (vm, 0);
++#else
+       vlib_process_suspend (vm, sm->update_interval);
++#endif
+     }
+   return 0; /* or not */
+ }
+diff --git a/src/vlib/tw_funcs.h b/src/vlib/tw_funcs.h
+index c64aaa3d..2224312c 100644
+--- a/src/vlib/tw_funcs.h
++++ b/src/vlib/tw_funcs.h
+@@ -6,7 +6,11 @@
+ #define __vlib_tw_funcs_h__
+ 
+ #include <vppinfra/tw_timer_1t_3w_1024sl_ov.h>
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++#define VLIB_TW_TICKS_PER_SECOND 1e3 /* 1 ms */
++#else
+ #define VLIB_TW_TICKS_PER_SECOND 1e5 /* 10 us */
++#endif
+ 
+ typedef enum
+ {
+diff --git a/src/vnet/fib/fib_walk.c b/src/vnet/fib/fib_walk.c
+index a5a53d12..b1805534 100644
+--- a/src/vnet/fib/fib_walk.c
++++ b/src/vnet/fib/fib_walk.c
+@@ -552,11 +552,15 @@ fib_walk_process (vlib_main_t * vm,
+ 		  vlib_frame_t * f)
+ {
+     uword event_type, *event_data = 0;
++#ifndef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+     f64 sleep_time;
++#endif
+     int enabled;
+ 
+     enabled = 1;
++#ifndef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+     sleep_time = fib_walk_sleep_duration[FIB_WALK_SHORT_SLEEP];
++#endif
+ 
+     while (1)
+     {
+@@ -566,7 +570,11 @@ fib_walk_process (vlib_main_t * vm,
+          */
+         if (enabled)
+         {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++            vlib_process_wait_for_event(vm);
++#else
+             vlib_process_wait_for_event_or_clock(vm, sleep_time);
++#endif
+         }
+         else
+         {
+@@ -590,7 +598,11 @@ fib_walk_process (vlib_main_t * vm,
+ 
+         if (enabled)
+         {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++            (void) fib_walk_process_queues(vm, quota);
++#else
+             sleep_time = fib_walk_process_queues(vm, quota);
++#endif
+         }
+     }
+ 
+diff --git a/src/vnet/ip/reass/ip4_full_reass.c b/src/vnet/ip/reass/ip4_full_reass.c
+index 3bffb66e..8ef7e1fd 100644
+--- a/src/vnet/ip/reass/ip4_full_reass.c
++++ b/src/vnet/ip/reass/ip4_full_reass.c
+@@ -1618,10 +1618,14 @@ ip4_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 
+   while (true)
+     {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      vlib_process_wait_for_event (vm);
++#else
+       vlib_process_wait_for_event_or_clock (vm,
+ 					    (f64)
+ 					    rm->expire_walk_interval_ms /
+ 					    (f64) MSEC_PER_SEC);
++#endif
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+diff --git a/src/vnet/ip/reass/ip4_sv_reass.c b/src/vnet/ip/reass/ip4_sv_reass.c
+index 80e57706..6236dc05 100644
+--- a/src/vnet/ip/reass/ip4_sv_reass.c
++++ b/src/vnet/ip/reass/ip4_sv_reass.c
+@@ -1481,8 +1481,12 @@ ip4_sv_reass_walk_expired (vlib_main_t *vm,
+ 
+   while (true)
+     {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      vlib_process_wait_for_event (vm);
++#else
+       vlib_process_wait_for_event_or_clock (
+ 	vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++#endif
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+diff --git a/src/vnet/ip/reass/ip6_full_reass.c b/src/vnet/ip/reass/ip6_full_reass.c
+index 028d2659..521e159e 100644
+--- a/src/vnet/ip/reass/ip6_full_reass.c
++++ b/src/vnet/ip/reass/ip6_full_reass.c
+@@ -1724,9 +1724,13 @@ ip6_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 
+   while (true)
+     {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      vlib_process_wait_for_event (vm);
++#else
+       vlib_process_wait_for_event_or_clock (vm,
+ 					    (f64) rm->expire_walk_interval_ms
+ 					    / (f64) MSEC_PER_SEC);
++#endif
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+diff --git a/src/vnet/ip/reass/ip6_sv_reass.c b/src/vnet/ip/reass/ip6_sv_reass.c
+index 18428424..db9dc2aa 100644
+--- a/src/vnet/ip/reass/ip6_sv_reass.c
++++ b/src/vnet/ip/reass/ip6_sv_reass.c
+@@ -1195,8 +1195,12 @@ ip6_sv_reass_walk_expired (vlib_main_t *vm,
+ 
+   while (true)
+     {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      vlib_process_wait_for_event (vm);
++#else
+       vlib_process_wait_for_event_or_clock (
+ 	vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++#endif
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+diff --git a/src/vnet/ip6-nd/ip6_mld.c b/src/vnet/ip6-nd/ip6_mld.c
+index 209aa4dd..dd5cbd2c 100644
+--- a/src/vnet/ip6-nd/ip6_mld.c
++++ b/src/vnet/ip6-nd/ip6_mld.c
+@@ -401,7 +401,11 @@ ip6_mld_event_process (vlib_main_t * vm,
+ 
+   while (1)
+     {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      vlib_process_wait_for_event (vm);
++#else
+       vlib_process_wait_for_event_or_clock (vm, 1. /* seconds */ );
++#endif
+ 
+       if (!vlib_process_get_event_data (vm, &event_type))
+ 	{
+diff --git a/src/vnet/ip6-nd/ip6_ra.c b/src/vnet/ip6-nd/ip6_ra.c
+index 7c2a3d34..b106bf9b 100644
+--- a/src/vnet/ip6-nd/ip6_ra.c
++++ b/src/vnet/ip6-nd/ip6_ra.c
+@@ -1526,7 +1526,11 @@ ip6_ra_event_process (vlib_main_t * vm,
+ 
+   while (1)
+     {
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++      vlib_process_wait_for_event (vm);
++#else
+       vlib_process_wait_for_event_or_clock (vm, 1. /* seconds */ );
++#endif
+ 
+       event_type = vlib_process_get_events (vm, &event_data);
+ 

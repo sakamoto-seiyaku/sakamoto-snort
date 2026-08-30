@@ -1,0 +1,230 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 856edfa4..926713e1 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -217,6 +217,12 @@ if(VPP_SET_RPATH)
+ endif()
+ set(CMAKE_INSTALL_MESSAGE NEVER)
+ 
++option(SAKAMOTO_VPP_NO_IPSEC
++  "Exclude the VNET IPsec source, API, header, and test closure" OFF)
++if(SAKAMOTO_VPP_NO_IPSEC)
++  add_compile_definitions(SAKAMOTO_VPP_NO_IPSEC=1)
++endif()
++
+ include_directories (
+ 	${CMAKE_SOURCE_DIR}
+ 	${VPP_BINARY_DIR}
+diff --git a/src/vnet/CMakeLists.txt b/src/vnet/CMakeLists.txt
+index a37eed01..8d1ce045 100644
+--- a/src/vnet/CMakeLists.txt
++++ b/src/vnet/CMakeLists.txt
+@@ -545,6 +545,7 @@ list(APPEND VNET_API_FILES crypto/crypto.api)
+ ##############################################################################
+ # Layer 3 protocol: IPSec
+ ##############################################################################
++if(NOT SAKAMOTO_VPP_NO_IPSEC)
+ list(APPEND VNET_SOURCES
+   ipsec/ipsec.c
+   ipsec/ipsec_cli.c
+@@ -598,6 +599,7 @@ list(APPEND VNET_HEADERS
+   ipsec/esp.h
+   ipsec/ah.h
+ )
++endif()
+ 
+ ##############################################################################
+ # Layer 4 protocol: tcp
+@@ -1458,15 +1460,18 @@ add_vpp_library (vatclient
+   DEPENDS api_headers
+ )
+ 
+-add_vat_test_library(vnet
++set(VNET_VAT_TEST_SOURCES
+   interface_test.c
+   ip/ip_test.c
+   arp/arp_test.c
+   ip6-nd/ip6_nd_test.c
+   session/session_test.c
+   l2/l2_test.c
+-  ipsec/ipsec_test.c
+ )
++if(NOT SAKAMOTO_VPP_NO_IPSEC)
++  list(APPEND VNET_VAT_TEST_SOURCES ipsec/ipsec_test.c)
++endif()
++add_vat_test_library(vnet ${VNET_VAT_TEST_SOURCES})
+ 
+ ##############################################################################
+ # VAT2 plugins
+diff --git a/src/vnet/gso/node.c b/src/vnet/gso/node.c
+index 3c0854f3..650ea3e8 100644
+--- a/src/vnet/gso/node.c
++++ b/src/vnet/gso/node.c
+@@ -876,11 +876,19 @@ VNET_FEATURE_INIT (gso_l2_ip6_node, static) = {
+ VNET_FEATURE_INIT (gso_ip4_node, static) = {
+   .arc_name = "ip4-output",
+   .node_name = "gso-ip4",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++  .runs_before = VNET_FEATURES ("interface-output"),
++#else
+   .runs_before = VNET_FEATURES ("ipsec4-output-feature"),
++#endif
+ };
+ 
+ VNET_FEATURE_INIT (gso_ip6_node, static) = {
+   .arc_name = "ip6-output",
+   .node_name = "gso-ip6",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++  .runs_before = VNET_FEATURES ("interface-output"),
++#else
+   .runs_before = VNET_FEATURES ("ipsec6-output-feature"),
++#endif
+ };
+diff --git a/src/vnet/interface_output.c b/src/vnet/interface_output.c
+index a4fc47db..58913749 100644
+--- a/src/vnet/interface_output.c
++++ b/src/vnet/interface_output.c
+@@ -1379,11 +1379,13 @@ VNET_FEATURE_INIT (span_tx, static) = {
+   .runs_before = VNET_FEATURES ("interface-output-arc-end"),
+ };
+ 
++#ifndef SAKAMOTO_VPP_NO_IPSEC
+ VNET_FEATURE_INIT (ipsec_if_tx, static) = {
+   .arc_name = "interface-output",
+   .node_name = "ipsec-if-output",
+   .runs_before = VNET_FEATURES ("interface-output-arc-end"),
+ };
++#endif
+ 
+ VNET_FEATURE_INIT (interface_output_arc_end, static) = {
+   .arc_name = "interface-output",
+diff --git a/src/vnet/ip/ip4_forward.c b/src/vnet/ip/ip4_forward.c
+index d072c45f..2a899834 100644
+--- a/src/vnet/ip/ip4_forward.c
++++ b/src/vnet/ip/ip4_forward.c
+@@ -909,15 +909,21 @@ VNET_FEATURE_INIT (ip4_policer_classify, static) =
+ {
+   .arc_name = "ip4-unicast",
+   .node_name = "ip4-policer-classify",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++  .runs_before = VNET_FEATURES ("vpath-input-ip4"),
++#else
+   .runs_before = VNET_FEATURES ("ipsec4-input-feature"),
++#endif
+ };
+ 
++#ifndef SAKAMOTO_VPP_NO_IPSEC
+ VNET_FEATURE_INIT (ip4_ipsec, static) =
+ {
+   .arc_name = "ip4-unicast",
+   .node_name = "ipsec4-input-feature",
+   .runs_before = VNET_FEATURES ("vpath-input-ip4"),
+ };
++#endif
+ 
+ VNET_FEATURE_INIT (ip4_vpath, static) =
+ {
+@@ -997,15 +1003,21 @@ VNET_FEATURE_INIT (ip4_outacl, static) =
+ {
+   .arc_name = "ip4-output",
+   .node_name = "ip4-outacl",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++  .runs_before = VNET_FEATURES ("interface-output"),
++#else
+   .runs_before = VNET_FEATURES ("ipsec4-output-feature"),
++#endif
+ };
+ 
++#ifndef SAKAMOTO_VPP_NO_IPSEC
+ VNET_FEATURE_INIT (ip4_ipsec_output, static) =
+ {
+   .arc_name = "ip4-output",
+   .node_name = "ipsec4-output-feature",
+   .runs_before = VNET_FEATURES ("interface-output"),
+ };
++#endif
+ 
+ /* Built-in ip4 tx feature path definition */
+ VNET_FEATURE_INIT (ip4_interface_output, static) =
+diff --git a/src/vnet/ip/ip6_forward.c b/src/vnet/ip/ip6_forward.c
+index 31aa0390..80f677e0 100644
+--- a/src/vnet/ip/ip6_forward.c
++++ b/src/vnet/ip/ip6_forward.c
+@@ -544,15 +544,21 @@ VNET_FEATURE_INIT (ip6_policer_classify, static) =
+ {
+   .arc_name = "ip6-unicast",
+   .node_name = "ip6-policer-classify",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++  .runs_before = VNET_FEATURES ("l2tp-decap"),
++#else
+   .runs_before = VNET_FEATURES ("ipsec6-input-feature"),
++#endif
+ };
+ 
++#ifndef SAKAMOTO_VPP_NO_IPSEC
+ VNET_FEATURE_INIT (ip6_ipsec, static) =
+ {
+   .arc_name = "ip6-unicast",
+   .node_name = "ipsec6-input-feature",
+   .runs_before = VNET_FEATURES ("l2tp-decap"),
+ };
++#endif
+ 
+ VNET_FEATURE_INIT (ip6_l2tp, static) =
+ {
+@@ -628,14 +634,20 @@ VNET_FEATURE_ARC_INIT (ip6_output, static) =
+ VNET_FEATURE_INIT (ip6_outacl, static) = {
+   .arc_name = "ip6-output",
+   .node_name = "ip6-outacl",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++  .runs_before = VNET_FEATURES ("interface-output"),
++#else
+   .runs_before = VNET_FEATURES ("ipsec6-output-feature"),
++#endif
+ };
+ 
++#ifndef SAKAMOTO_VPP_NO_IPSEC
+ VNET_FEATURE_INIT (ip6_ipsec_output, static) = {
+   .arc_name = "ip6-output",
+   .node_name = "ipsec6-output-feature",
+   .runs_before = VNET_FEATURES ("interface-output"),
+ };
++#endif
+ 
+ VNET_FEATURE_INIT (ip6_interface_output, static) = {
+   .arc_name = "ip6-output",
+diff --git a/src/vnet/ip/reass/ip4_full_reass.c b/src/vnet/ip/reass/ip4_full_reass.c
+index c169d641..3bffb66e 100644
+--- a/src/vnet/ip/reass/ip4_full_reass.c
++++ b/src/vnet/ip/reass/ip4_full_reass.c
+@@ -1417,8 +1417,13 @@ VLIB_REGISTER_NODE (ip4_full_reass_node_feature) = {
+ VNET_FEATURE_INIT (ip4_full_reass_feature, static) = {
+   .arc_name = "ip4-unicast",
+   .node_name = "ip4-full-reassembly-feature",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++  .runs_before = VNET_FEATURES ("ip4-lookup",
++				"ip4-sv-reassembly-feature"),
++#else
+   .runs_before = VNET_FEATURES ("ip4-lookup", "ipsec4-input-feature",
+ 				"ip4-sv-reassembly-feature"),
++#endif
+   .runs_after = 0,
+ };
+ 
+diff --git a/src/vnet/ip/reass/ip6_full_reass.c b/src/vnet/ip/reass/ip6_full_reass.c
+index c6f4f6e0..028d2659 100644
+--- a/src/vnet/ip/reass/ip6_full_reass.c
++++ b/src/vnet/ip/reass/ip6_full_reass.c
+@@ -1513,8 +1513,12 @@ VLIB_REGISTER_NODE (ip6_full_reass_node_feature) = {
+ VNET_FEATURE_INIT (ip6_full_reassembly_feature, static) = {
+     .arc_name = "ip6-unicast",
+     .node_name = "ip6-full-reassembly-feature",
++#ifdef SAKAMOTO_VPP_NO_IPSEC
++    .runs_before = VNET_FEATURES ("ip6-lookup"),
++#else
+     .runs_before = VNET_FEATURES ("ip6-lookup",
+                                   "ipsec6-input-feature"),
++#endif
+     .runs_after = 0,
+ };
+ 

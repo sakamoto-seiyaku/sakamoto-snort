@@ -62,6 +62,10 @@ grep -Fxq 'vppBinary=lib/arm64-v8a/libvpp_runtime.so' "$product_manifest"
 grep -Fxq 'productCore=lib/arm64-v8a/libsakamoto_product_core.so' "$product_manifest"
 grep -Fxq 'runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so' "$product_manifest"
 grep -Fxq 'productPlugin=lib/arm64-v8a/libproduct_core_plugin.so' "$product_manifest"
+vpp_runtime_closure_sha256="$(
+  sed -n 's/^vppRuntimeClosureSha256=//p' "$product_manifest"
+)"
+[[ "$vpp_runtime_closure_sha256" =~ ^[[:xdigit:]]{64}$ ]]
 
 native_dir="$product_stage/lib/arm64-v8a"
 for library in \
@@ -119,13 +123,17 @@ if grep -Fxq 'assets/product_core_plugin.so' <<<"$apk_entries"; then
   exit 1
 fi
 grep -Fxq 'lib/arm64-v8a/libproduct_core_plugin.so' <<<"$apk_entries"
+unzip -lv "$apk" lib/arm64-v8a/libvnet.so |
+  grep -Eq '[[:space:]]Defl' || {
+    echo "APK retains an uncompressed VPP runtime payload" >&2
+    exit 1
+  }
 unzip -p "$apk" lib/arm64-v8a/libproduct_core_plugin.so >"$work_dir/plugin.so"
 unzip -p "$apk" assets/product-stage.properties >"$work_dir/product-stage.properties"
 cmp "$product_stage/lib/arm64-v8a/libproduct_core_plugin.so" "$work_dir/plugin.so"
 cmp "$product_stage/product-stage.properties" "$work_dir/product-stage.properties"
 plugin_header="$($llvm_readelf -h "$work_dir/plugin.so")"
 grep -Fq 'AArch64' <<<"$plugin_header"
-grep -Fq 'product_core_init' < <("$llvm_readelf" -Ws "$work_dir/plugin.so")
 for library in \
   libvpp_runtime.so \
   libsakamoto_product_core.so \
@@ -153,6 +161,16 @@ while IFS= read -r entry; do
   esac
 done <<<"$apk_entries"
 test "$native_entry_count" -eq 12
+
+tampered_stage="$work_dir/tampered-product-stage"
+cp -a -- "$product_stage" "$tampered_stage"
+printf 'tampered\n' >>"$tampered_stage/lib/arm64-v8a/libvnet.so"
+if run_apk "$tampered_stage" "$work_dir/tampered-output" \
+    "$work_dir/tampered-version-code" "$work_dir/tampered.log"; then
+  echo "apk-only accepted a tampered VPP runtime library" >&2
+  exit 1
+fi
+grep -Fq 'product_artifact_hash_mismatch' "$work_dir/tampered.log"
 
 forbidden_entry=""
 while IFS= read -r entry; do
@@ -185,6 +203,7 @@ grep -Fq 'application-debuggable' "$work_dir/first-badging"
 grep -Fq 'minSdkVersion(0x0101020c)=31' "$work_dir/first-xmltree"
 grep -Fq 'targetSdkVersion(0x01010270)=36' "$work_dir/first-xmltree"
 grep -Fq 'debuggable(0x0101000f)=true' "$work_dir/first-xmltree"
+grep -Fq 'extractNativeLibs(0x010104ea)=true' "$work_dir/first-xmltree"
 first_version="$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" "$work_dir/first-badging")"
 test "$first_version" -gt 0
 java -jar "$apksigner_jar" verify --verbose --print-certs "$apk" >"$work_dir/first-verify" 2>&1

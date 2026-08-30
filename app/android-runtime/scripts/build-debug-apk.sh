@@ -15,8 +15,8 @@ bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 plugin_build_name="product_core_plugin.so"
 plugin_name="libproduct_core_plugin.so"
-expected_vpp_patch_series_count=15
-expected_vpp_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
+expected_vpp_patch_series_count=17
+expected_vpp_patch_series_sha256=0fedcc6f52070d45f934afa76e23a2aae54beb75cc9d8037d879c80275d6878e
 default_stage_dir="$repo_root/build-output/android-vpp-runtime/stage"
 default_version_state="$repo_root/build-output/android-vpp-runtime/version-code"
 product_stage_cleanup_dir=""
@@ -200,6 +200,7 @@ build_native_stage() {
   local android_clang="$ndk_bin/${android_target}${android_api}-clang"
   local llvm_ar="$ndk_bin/llvm-ar"
   local llvm_readelf="$ndk_bin/llvm-readelf"
+  local llvm_strip="$ndk_bin/llvm-strip"
   local toolchain_file="$ndk_root/build/cmake/android.toolchain.cmake"
   local vpp_apigen
   local vapi_c_gen
@@ -239,6 +240,12 @@ build_native_stage() {
   local source_status
   local vpp_patch_series_count
   local vpp_patch_series_sha256
+  local vpp_profile
+  local vpp_runtime_payload_bytes
+  local measured_vpp_runtime_payload_bytes
+  local vpp_runtime_closure_sha256
+  local measured_vpp_runtime_closure_sha256
+  local product_vpp_runtime_closure_sha256
   local product_artifact_id
   local product_api_identity
   local product_abi_version
@@ -250,7 +257,6 @@ build_native_stage() {
   local artifact_description
   local rust_dynamic
   local jni_dynamic
-  local plugin_symbols
   local -a cmake_args
 
   [[ -f "$product_source_manifest" ]] || \
@@ -290,6 +296,7 @@ build_native_stage() {
   }
   require_stage_manifest_line "schema=sakamoto-android-vpp-stage/v1"
   require_stage_manifest_line "revision=$expected_revision"
+  require_stage_manifest_line "profile=android-api31-arm64"
   require_stage_manifest_line "api=31"
   require_stage_manifest_line "abi=arm64-v8a"
   require_stage_manifest_line "binary=bin/vpp"
@@ -298,6 +305,9 @@ build_native_stage() {
   require_stage_manifest_line "hostTools=host-tools"
   vpp_patch_series_count="$(sed -n 's/^patchSeriesCount=//p' "$stage_manifest")"
   vpp_patch_series_sha256="$(sed -n 's/^patchSeriesSha256=//p' "$stage_manifest")"
+  vpp_profile="$(strict_manifest_value "$stage_manifest" profile)"
+  vpp_runtime_payload_bytes="$(strict_manifest_value "$stage_manifest" runtimePayloadBytes)"
+  vpp_runtime_closure_sha256="$(strict_manifest_value "$stage_manifest" runtimeClosureSha256)"
   [[ "$vpp_patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
     die "VPP stage manifest has an invalid patch series count"
   [[ "$vpp_patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
@@ -306,6 +316,34 @@ build_native_stage() {
     die "VPP stage manifest has an unexpected patch series count"
   [[ "$vpp_patch_series_sha256" == "$expected_vpp_patch_series_sha256" ]] || \
     die "VPP stage manifest has an unexpected patch series hash"
+  [[ "$vpp_profile" == android-api31-arm64 ]] || \
+    die "VPP stage manifest has an unexpected profile"
+  [[ "$vpp_runtime_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+    die "VPP stage manifest has an invalid runtime payload size"
+  [[ "$vpp_runtime_closure_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+    die "VPP stage manifest has an invalid runtime closure hash"
+  measured_vpp_runtime_payload_bytes="$(
+    du -sb -- "$stage_dir/bin" "$stage_dir/lib" |
+      awk '{ total += $1 } END { print total }'
+  )"
+  [[ "$vpp_runtime_payload_bytes" == "$measured_vpp_runtime_payload_bytes" ]] || \
+    die "VPP stage runtime payload size does not match its artifact closure"
+  measured_vpp_runtime_closure_sha256="$(
+    for runtime_artifact in \
+      "$stage_dir/bin/vpp" \
+      "$stage_dir/lib/libsvm.so" \
+      "$stage_dir/lib/libvapiclient.so" \
+      "$stage_dir/lib/libvlib.so" \
+      "$stage_dir/lib/libvlibapi.so" \
+      "$stage_dir/lib/libvlibmemory.so" \
+      "$stage_dir/lib/libvlibmemoryclient.so" \
+      "$stage_dir/lib/libvnet.so" \
+      "$stage_dir/lib/libvppinfra.so"; do
+      sha256sum "$runtime_artifact" | awk '{ print $1 }'
+    done | sha256sum | awk '{ print $1 }'
+  )"
+  [[ "$vpp_runtime_closure_sha256" == "$measured_vpp_runtime_closure_sha256" ]] || \
+    die "VPP stage runtime closure hash does not match its artifacts"
   while IFS= read -r -d '' stage_path; do
     case "${stage_path,,}" in
       *poc*|*experiment*|*fixture*|*nfqueue*|*hev*|*sucre*)
@@ -392,6 +430,7 @@ build_native_stage() {
     die "Android arm64 clang is missing: $android_clang"
   [[ -x "$llvm_ar" ]] || die "Android LLVM archiver is missing: $llvm_ar"
   [[ -x "$llvm_readelf" ]] || die "Android LLVM readelf is missing: $llvm_readelf"
+  [[ -x "$llvm_strip" ]] || die "Android LLVM strip is missing: $llvm_strip"
   for tool in cmake ninja cargo file readelf; do
     command -v "$tool" >/dev/null 2>&1 || die "required build tool is missing: $tool"
   done
@@ -564,10 +603,34 @@ build_native_stage() {
     -lsakamoto_product_core -o "$jni_library"
   [[ -f "$jni_library" ]] || die "Product Core JNI library was not produced"
   # Android PackageManager recognizes only lib/<abi>/lib*.so as native
-  # payload. Keep the production plugin bytes unchanged while using the
-  # linker-prefixed installed name required by that packaging boundary.
+  # payload. Use the linker-prefixed installed name required by that boundary.
   install -m 0755 "$plugin_source" "$native_dir/$plugin_name"
   install -m 0644 "$generated_vapi_header" "$generated_dir/product_core.api.vapi.h"
+
+  for artifact in \
+    "$native_dir/libsakamoto_product_core.so" \
+    "$native_dir/libsakamoto_runtime_control.so" \
+    "$native_dir/$plugin_name"; do
+    "$llvm_strip" --strip-unneeded "$artifact" || \
+      die "failed to strip Android product ELF: $artifact"
+  done
+
+  product_vpp_runtime_closure_sha256="$(
+    for runtime_artifact in \
+      "$native_dir/libvpp_runtime.so" \
+      "$native_dir/libsvm.so" \
+      "$native_dir/libvapiclient.so" \
+      "$native_dir/libvlib.so" \
+      "$native_dir/libvlibapi.so" \
+      "$native_dir/libvlibmemory.so" \
+      "$native_dir/libvlibmemoryclient.so" \
+      "$native_dir/libvnet.so" \
+      "$native_dir/libvppinfra.so"; do
+      sha256sum "$runtime_artifact" | awk '{ print $1 }'
+    done | sha256sum | awk '{ print $1 }'
+  )"
+  [[ "$product_vpp_runtime_closure_sha256" == "$vpp_runtime_closure_sha256" ]] || \
+    die "product stage VPP runtime closure differs from its clean input stage"
 
   for artifact in \
     "$native_dir/libvpp_runtime.so" \
@@ -592,10 +655,6 @@ build_native_stage() {
     die "cannot inspect Product Core JNI dynamic dependencies"
   [[ "$jni_dynamic" == *'libsakamoto_product_core.so'* ]] || \
     die "Product Core JNI bridge does not link libsakamoto_product_core.so"
-  plugin_symbols="$($llvm_readelf -Ws "$native_dir/$plugin_name" 2>/dev/null)" || \
-    die "cannot inspect product plugin symbols"
-  [[ "$plugin_symbols" == *product_core_init* ]] || \
-    die "product plugin init symbol is missing"
   validate_product_stage_symlinks() {
     local root="$1"
     local link target resolved
@@ -637,6 +696,9 @@ apiVersion=$product_api_version
 vppBinarySha256=$vpp_binary_sha256
 vppPatchSeriesCount=$vpp_patch_series_count
 vppPatchSeriesSha256=$vpp_patch_series_sha256
+vppProfile=$vpp_profile
+vppRuntimePayloadBytes=$vpp_runtime_payload_bytes
+vppRuntimeClosureSha256=$vpp_runtime_closure_sha256
 vppBinary=lib/arm64-v8a/libvpp_runtime.so
 productCore=lib/arm64-v8a/libsakamoto_product_core.so
 runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so
@@ -785,6 +847,10 @@ build_apk_only() {
   local product_abi_version
   local product_api_version
   local vpp_binary_sha256
+  local vpp_profile
+  local vpp_runtime_payload_bytes
+  local vpp_runtime_closure_sha256
+  local measured_vpp_runtime_closure_sha256
 
   [[ -n "$product_stage_input" ]] || \
     die "apk-only requires an explicit product stage"
@@ -835,6 +901,9 @@ build_apk_only() {
     die "product stage manifest has an invalid VPP executable hash"
   vpp_patch_series_count="$(sed -n 's/^vppPatchSeriesCount=//p' "$product_manifest")"
   vpp_patch_series_sha256="$(sed -n 's/^vppPatchSeriesSha256=//p' "$product_manifest")"
+  vpp_profile="$(strict_manifest_value "$product_manifest" vppProfile)"
+  vpp_runtime_payload_bytes="$(strict_manifest_value "$product_manifest" vppRuntimePayloadBytes)"
+  vpp_runtime_closure_sha256="$(strict_manifest_value "$product_manifest" vppRuntimeClosureSha256)"
   [[ "$vpp_patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
     die "product stage manifest has an invalid VPP patch series count"
   [[ "$vpp_patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
@@ -843,6 +912,12 @@ build_apk_only() {
     die "product stage manifest has an unexpected VPP patch series count"
   [[ "$vpp_patch_series_sha256" == "$expected_vpp_patch_series_sha256" ]] || \
     die "product stage manifest has an unexpected VPP patch series hash"
+  [[ "$vpp_profile" == android-api31-arm64 ]] || \
+    die "product stage manifest has an unexpected VPP profile"
+  [[ "$vpp_runtime_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+    die "product stage manifest has an invalid VPP runtime payload size"
+  [[ "$vpp_runtime_closure_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+    die "product stage manifest has an invalid VPP runtime closure hash"
   require_product_manifest_line "vppBinary=lib/arm64-v8a/libvpp_runtime.so"
   require_product_manifest_line "productCore=lib/arm64-v8a/libsakamoto_product_core.so"
   require_product_manifest_line "runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so"
@@ -895,6 +970,22 @@ build_apk_only() {
       != "$vpp_binary_sha256" ]]; then
     die "product_artifact_hash_mismatch: VPP executable does not match product stage"
   fi
+  measured_vpp_runtime_closure_sha256="$(
+    for runtime_artifact in \
+      "$native_dir/libvpp_runtime.so" \
+      "$native_dir/libsvm.so" \
+      "$native_dir/libvapiclient.so" \
+      "$native_dir/libvlib.so" \
+      "$native_dir/libvlibapi.so" \
+      "$native_dir/libvlibmemory.so" \
+      "$native_dir/libvlibmemoryclient.so" \
+      "$native_dir/libvnet.so" \
+      "$native_dir/libvppinfra.so"; do
+      sha256sum "$runtime_artifact" | awk '{ print $1 }'
+    done | sha256sum | awk '{ print $1 }'
+  )"
+  [[ "$measured_vpp_runtime_closure_sha256" == "$vpp_runtime_closure_sha256" ]] || \
+    die "product_artifact_hash_mismatch: VPP runtime closure does not match product stage"
 
   [[ -f "$android_jar" ]] || die "Android SDK android.jar is missing: $android_jar"
   [[ -x "$aapt2" ]] || die "Android aapt2 is missing: $aapt2"
@@ -935,8 +1026,6 @@ build_apk_only() {
     die "cannot inspect product stage plugin ELF"
   [[ "$elf_header" == *AArch64* ]] || \
     die "product stage plugin is not AArch64"
-  [[ "$($llvm_readelf -Ws "$plugin_source" 2>/dev/null)" == *product_core_init* ]] || \
-    die "product stage plugin init symbol is missing"
   jni_dynamic="$($llvm_readelf -d "$native_dir/libsakamoto_runtime_control.so" 2>/dev/null)" || \
     die "cannot inspect Product Core JNI dynamic dependencies"
   [[ "$jni_dynamic" == *'libsakamoto_product_core.so'* ]] || \
@@ -1054,7 +1143,7 @@ build_apk_only() {
   done
   (
     cd "$payload_root"
-    "$zip_bin" -q -0 -r "$unsigned_apk" lib
+    "$zip_bin" -q -r "$unsigned_apk" lib
   )
 
   aligned_apk="$apk_build_dir/aligned.apk"

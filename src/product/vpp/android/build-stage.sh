@@ -8,13 +8,14 @@ source_dir=""
 stage_dir=""
 android_api="${SAKAMOTO_S172_ANDROID_API:-31}"
 android_abi="${SAKAMOTO_S172_ANDROID_ABI:-arm64-v8a}"
+profile_name=android-api31-arm64
 ndk_root="${SAKAMOTO_S172_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 python_path="${SAKAMOTO_S172_VPP_PYTHONPATH:-/home/js/android/lineage/external/ply/ply}"
 cmake_bin="${SAKAMOTO_S172_CMAKE:-cmake}"
 build_jobs="${SAKAMOTO_S172_BUILD_JOBS:-2}"
 stage_marker_value="sakamoto-android-vpp-stage/v1"
-expected_patch_series_count=15
-expected_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
+expected_patch_series_count=17
+expected_patch_series_sha256=0fedcc6f52070d45f934afa76e23a2aae54beb75cc9d8037d879c80275d6878e
 python_bin="$(command -v python3 2>/dev/null || true)"
 flock_bin="$(command -v flock 2>/dev/null || true)"
 
@@ -79,8 +80,10 @@ done
 [[ -n "$flock_bin" && -x "$flock_bin" ]] || die "host flock is missing"
 toolchain_file="$ndk_root/build/cmake/android.toolchain.cmake"
 llvm_readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+llvm_strip="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 [[ -f "$toolchain_file" ]] || die "NDK Android CMake toolchain is missing"
 [[ -x "$llvm_readelf" ]] || die "NDK llvm-readelf is missing"
+[[ -x "$llvm_strip" ]] || die "NDK llvm-strip is missing"
 [[ -d "$python_path" ]] || die "official VPP host-tool Python dependencies are missing"
 
 pinned_revision="$(tr -d '[:space:]' < "$pin_file")"
@@ -130,8 +133,9 @@ if [[ -e "$stage_dir" || -L "$stage_dir" ]]; then
 fi
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/sakamoto-172-vpp-stage.XXXXXX")"
-mkdir -p "$work_dir/ccache"
-export CCACHE_DIR="$work_dir/ccache"
+ccache_dir="${SAKAMOTO_S172_CCACHE_DIR:-$work_dir/ccache}"
+mkdir -p -- "$ccache_dir"
+export CCACHE_DIR="$ccache_dir"
 candidate_dir=""
 cleanup() {
   if [[ -n "$candidate_dir" && -e "$candidate_dir" ]]; then
@@ -145,7 +149,7 @@ patched_source="$work_dir/patched-source"
 SAKAMOTO_S172_ANDROID_API="$android_api" \
 SAKAMOTO_S172_ANDROID_ABI="$android_abi" \
   bash "$profile_module" \
-    --profile android-api31-arm64 \
+    --profile "$profile_name" \
     --source-dir "$source_dir" \
     --work-dir "$patched_source" >"$work_dir/profile.log"
 patch_series_count="$(sed -n 's/^patchSeriesCount=//p' "$work_dir/profile.log")"
@@ -180,6 +184,13 @@ configure_args=(
   -DVPP_BUILD_TESTS=OFF
   -DVPP_BUILD_VPPINFRA_TESTS=OFF
   -DVPP_BUILD_PYTHON_API=OFF
+  -DVPP_MARCH_VARIANT_OCTEONTX2=OFF
+  -DVPP_MARCH_VARIANT_THUNDERX2T99=OFF
+  -DVPP_MARCH_VARIANT_CORTEXA72=OFF
+  -DVPP_MARCH_VARIANT_NEOVERSEN1=OFF
+  -DVPP_MARCH_VARIANT_NEOVERSEV2=OFF
+  -DSAKAMOTO_VPP_NO_IPSEC=ON
+  -DSAKAMOTO_VPP_ANDROID_IDLE_PROFILE=ON
 )
 if ! "$cmake_bin" "${configure_args[@]}" >"$work_dir/configure.log" 2>&1; then
   sed -n '1,220p' "$work_dir/configure.log" >&2
@@ -287,6 +298,12 @@ elf_needed_is_allowed() {
 }
 
 for artifact in "$candidate_dir/bin/vpp" "$candidate_dir"/lib/*.so*; do
+  [[ -f "$artifact" && ! -L "$artifact" ]] || continue
+  "$llvm_strip" --strip-unneeded "$artifact" || \
+    die "failed to strip Android release ELF: $artifact"
+done
+
+for artifact in "$candidate_dir/bin/vpp" "$candidate_dir"/lib/*.so*; do
   [[ -e "$artifact" || -L "$artifact" ]] || continue
   elf_is_aarch64 "$artifact" || die "staged artifact is not a real AArch64 ELF: $artifact"
   elf_needed_is_allowed "$artifact" || die "staged artifact has an invalid Android dependency closure: $artifact"
@@ -309,6 +326,23 @@ validate_staged_symlinks() {
 
 validate_staged_symlinks "$candidate_dir"
 
+runtime_closure_sha256="$(
+  for runtime_artifact in \
+    "$candidate_dir/bin/vpp" \
+    "$candidate_dir/lib/libsvm.so" \
+    "$candidate_dir/lib/libvapiclient.so" \
+    "$candidate_dir/lib/libvlib.so" \
+    "$candidate_dir/lib/libvlibapi.so" \
+    "$candidate_dir/lib/libvlibmemory.so" \
+    "$candidate_dir/lib/libvlibmemoryclient.so" \
+    "$candidate_dir/lib/libvnet.so" \
+    "$candidate_dir/lib/libvppinfra.so"; do
+    sha256sum "$runtime_artifact" | awk '{ print $1 }'
+  done | sha256sum | awk '{ print $1 }'
+)"
+[[ "$runtime_closure_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+  die "runtime closure hash is invalid"
+
 poc_paths="$(cd "$candidate_dir" && find . \( -type f -o -type l \) \
   \( -ipath '*poc*' -o -ipath '*experiment*' -o -ipath '*fixture*' \
   -o -ipath '*nfqueue*' -o -ipath '*hev*' -o -ipath '*sucre*' \) -print)"
@@ -316,10 +350,31 @@ if [[ -n "$poc_paths" ]]; then
   die "retired or POC artifact entered clean VPP stage"
 fi
 
+runtime_payload_bytes="$(
+  du -sb -- "$candidate_dir/bin" "$candidate_dir/lib" |
+    awk '{ total += $1 } END { print total }'
+)"
+build_support_payload_bytes="$(
+  du -sb -- "$candidate_dir/include" "$candidate_dir/host-tools" |
+    awk '{ total += $1 } END { print total }'
+)"
+stage_payload_bytes=$((runtime_payload_bytes + build_support_payload_bytes))
+[[ "$runtime_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+  die "runtime payload size measurement is invalid"
+[[ "$build_support_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+  die "build-support payload size measurement is invalid"
+[[ "$stage_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+  die "stage payload size measurement is invalid"
+
 printf '%s\n' "$stage_marker_value" >"$candidate_dir/.sakamoto-android-vpp-stage"
 cat >"$candidate_dir/android-vpp-stage.properties" <<EOF
 schema=$stage_marker_value
 revision=$source_head
+profile=$profile_name
+runtimeClosureSha256=$runtime_closure_sha256
+runtimePayloadBytes=$runtime_payload_bytes
+buildSupportPayloadBytes=$build_support_payload_bytes
+stagePayloadBytes=$stage_payload_bytes
 patchSeriesCount=$patch_series_count
 patchSeriesSha256=$patch_series_sha256
 api=$android_api

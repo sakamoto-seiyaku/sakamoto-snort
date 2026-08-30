@@ -91,6 +91,7 @@ def method_body(signature):
 
 
 start = method_body("private void startProductCoreRuntime(")
+launch = method_body("private Process launchVpp(")
 prepare = method_body("private void prepareProductCoreProfile(")
 stop = method_body("private boolean stopRuntime(boolean stopService)")
 terminate = method_body("private boolean terminateProductCoreProcess(")
@@ -100,6 +101,11 @@ for forbidden in (
         "process.pid()", "ProcessHandle", "toHandle()"):
     if forbidden in start:
         raise AssertionError("Product Core start uses forbidden process API: " + forbidden)
+
+if "SAKAMOTO_VPP_SVM_DIR=" not in launch:
+    raise AssertionError("profile launch does not pass the VPP Android SVM directory")
+if "SAKAMOTO_ANDROID_SHM_DIR=" in launch:
+    raise AssertionError("profile launch still uses the retired Android SHM environment name")
 
 start_index = start.index("new ProcessBuilder(vpp.getPath()")
 if "nativeLibraryDir" not in start or "PRODUCT_PLUGIN_BINARY" not in start \

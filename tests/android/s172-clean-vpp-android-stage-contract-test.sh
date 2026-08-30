@@ -5,8 +5,8 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 stage_script="$repo_root/src/product/vpp/android/build-stage.sh"
 pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 pinned_revision="$(tr -d '[:space:]' < "$pin_file")"
-expected_patch_series_count=15
-expected_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
+expected_patch_series_count=17
+expected_patch_series_sha256=0fedcc6f52070d45f934afa76e23a2aae54beb75cc9d8037d879c80275d6878e
 source_dir="${SAKAMOTO_S172_VPP_SOURCE_DIR:-/tmp/sakamoto-172-vpp-official.6CoCcd/source-git}"
 ndk_root="${SAKAMOTO_S172_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
 python_path="${SAKAMOTO_S172_VPP_PYTHONPATH:-/home/js/android/lineage/external/ply/ply}"
@@ -147,6 +147,7 @@ grep -Fxq 'sakamoto-android-vpp-stage/v1' "$marker" || \
 [[ -f "$manifest" ]] || fail "stage manifest is missing"
 grep -Fxq 'schema=sakamoto-android-vpp-stage/v1' "$manifest"
 grep -Fxq "revision=$pinned_revision" "$manifest"
+grep -Fxq 'profile=android-api31-arm64' "$manifest"
 grep -Fxq "patchSeriesCount=$expected_patch_series_count" "$manifest"
 grep -Fxq "patchSeriesSha256=$expected_patch_series_sha256" "$manifest"
 grep -Fxq 'api=31' "$manifest"
@@ -155,6 +156,48 @@ grep -Fxq 'binary=bin/vpp' "$manifest"
 grep -Fxq 'libraries=lib' "$manifest"
 grep -Fxq 'headers=include' "$manifest"
 grep -Fxq 'hostTools=host-tools' "$manifest"
+runtime_closure_sha256="$(sed -n 's/^runtimeClosureSha256=//p' "$manifest")"
+runtime_payload_bytes="$(sed -n 's/^runtimePayloadBytes=//p' "$manifest")"
+build_support_payload_bytes="$(sed -n 's/^buildSupportPayloadBytes=//p' "$manifest")"
+stage_payload_bytes="$(sed -n 's/^stagePayloadBytes=//p' "$manifest")"
+[[ "$runtime_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+  fail "stage manifest runtime payload size is invalid"
+[[ "$runtime_closure_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+  fail "stage manifest runtime closure hash is invalid"
+[[ "$build_support_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+  fail "stage manifest build-support payload size is invalid"
+[[ "$stage_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
+  fail "stage manifest payload size is invalid"
+measured_runtime_payload_bytes="$(
+  du -sb -- "$stage_dir/bin" "$stage_dir/lib" |
+    awk '{ total += $1 } END { print total }'
+)"
+measured_build_support_payload_bytes="$(
+  du -sb -- "$stage_dir/include" "$stage_dir/host-tools" |
+    awk '{ total += $1 } END { print total }'
+)"
+[[ "$runtime_payload_bytes" == "$measured_runtime_payload_bytes" ]] || \
+  fail "runtime payload size was not measured from the published stage"
+measured_runtime_closure_sha256="$(
+  for runtime_artifact in \
+    "$stage_dir/bin/vpp" \
+    "$stage_dir/lib/libsvm.so" \
+    "$stage_dir/lib/libvapiclient.so" \
+    "$stage_dir/lib/libvlib.so" \
+    "$stage_dir/lib/libvlibapi.so" \
+    "$stage_dir/lib/libvlibmemory.so" \
+    "$stage_dir/lib/libvlibmemoryclient.so" \
+    "$stage_dir/lib/libvnet.so" \
+    "$stage_dir/lib/libvppinfra.so"; do
+    sha256sum "$runtime_artifact" | awk '{ print $1 }'
+  done | sha256sum | awk '{ print $1 }'
+)"
+[[ "$runtime_closure_sha256" == "$measured_runtime_closure_sha256" ]] || \
+  fail "runtime closure hash does not match the published stage"
+[[ "$build_support_payload_bytes" == "$measured_build_support_payload_bytes" ]] || \
+  fail "build-support payload size was not measured from the published stage"
+[[ "$stage_payload_bytes" -eq $((runtime_payload_bytes + build_support_payload_bytes)) ]] || \
+  fail "stage manifest payload size was not measured from the published stage"
 
 [[ -x "$stage_dir/bin/vpp" ]] || fail "stage is missing bin/vpp"
 [[ -x "$stage_dir/host-tools/vppapigen" ]] || \
@@ -195,6 +238,12 @@ for library in \
 done
 file -Lb "$stage_dir/bin/vpp" | grep -Fq 'ARM aarch64' || \
   fail "stage bin/vpp is not a real AArch64 ELF"
+file -Lb "$stage_dir/bin/vpp" | grep -Fq 'stripped' || \
+  fail "stage bin/vpp retains non-release debug/symbol payload"
+while IFS= read -r artifact; do
+  file -Lb "$artifact" | grep -Fq 'stripped' || \
+    fail "stage shared library retains non-release debug/symbol payload: $artifact"
+done < <(find "$stage_dir/lib" -maxdepth 1 -type f -name '*.so*' -print)
 
 while IFS= read -r -d '' link; do
   target="$(readlink -- "$link")"

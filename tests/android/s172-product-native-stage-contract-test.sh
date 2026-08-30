@@ -5,8 +5,8 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_script="$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
 plugin_cmake="$repo_root/src/product/vpp/CMakeLists.txt"
 pinned_revision="$(tr -d '[:space:]' < "$repo_root/src/product/vpp/pinned-vpp-revision.txt")"
-expected_patch_series_count=15
-expected_patch_series_sha256=96417ad8655f0c8d39a256aaaaf40d3661c9f8599ae1418450f80b25fd9b91bf
+expected_patch_series_count=17
+expected_patch_series_sha256=0fedcc6f52070d45f934afa76e23a2aae54beb75cc9d8037d879c80275d6878e
 
 # The test accepts only caller-supplied clean product inputs. The VPP stage is
 # the sole source for generated headers, host tools, and runtime libraries; no
@@ -121,6 +121,7 @@ test -f "$stage_manifest"
 [[ ! -L "$stage_manifest" ]]
 grep -Fxq 'schema=sakamoto-android-vpp-stage/v1' "$stage_manifest"
 grep -Fxq "revision=$pinned_revision" "$stage_manifest"
+grep -Fxq 'profile=android-api31-arm64' "$stage_manifest"
 grep -Fxq "patchSeriesCount=$expected_patch_series_count" "$stage_manifest"
 grep -Fxq "patchSeriesSha256=$expected_patch_series_sha256" "$stage_manifest"
 grep -Fxq 'api=31' "$stage_manifest"
@@ -129,6 +130,15 @@ grep -Fxq 'binary=bin/vpp' "$stage_manifest"
 grep -Fxq 'libraries=lib' "$stage_manifest"
 grep -Fxq 'headers=include' "$stage_manifest"
 grep -Fxq 'hostTools=host-tools' "$stage_manifest"
+stage_runtime_payload_bytes="$(sed -n 's/^runtimePayloadBytes=//p' "$stage_manifest")"
+stage_runtime_closure_sha256="$(sed -n 's/^runtimeClosureSha256=//p' "$stage_manifest")"
+[[ "$stage_runtime_payload_bytes" =~ ^[1-9][0-9]*$ ]]
+[[ "$stage_runtime_closure_sha256" =~ ^[[:xdigit:]]{64}$ ]]
+measured_stage_runtime_payload_bytes="$(
+  du -sb -- "$stage_dir/bin" "$stage_dir/lib" |
+    awk '{ total += $1 } END { print total }'
+)"
+[[ "$stage_runtime_payload_bytes" == "$measured_stage_runtime_payload_bytes" ]]
 
 vpp_include="$stage_dir/include"
 host_tools="$stage_dir/host-tools"
@@ -379,6 +389,9 @@ done
 
 grep -Fxq 'schema=sakamoto-android-product-stage/v1' "$manifest"
 grep -Fxq 'abi=arm64-v8a' "$manifest"
+grep -Fxq 'vppProfile=android-api31-arm64' "$manifest"
+grep -Fxq "vppRuntimePayloadBytes=$stage_runtime_payload_bytes" "$manifest"
+grep -Fxq "vppRuntimeClosureSha256=$stage_runtime_closure_sha256" "$manifest"
 grep -Fxq 'vppBinary=lib/arm64-v8a/libvpp_runtime.so' "$manifest"
 grep -Fxq 'productCore=lib/arm64-v8a/libsakamoto_product_core.so' "$manifest"
 grep -Fxq 'runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so' "$manifest"
@@ -391,6 +404,7 @@ grep -Fxq 'bridgeSource=src/product/native/sakamoto_product_vapi.c' "$manifest"
 while IFS= read -r artifact; do
   artifact_description="$(file -Lb "$artifact")"
   [[ "$artifact_description" == *'ARM aarch64'* ]]
+  [[ "$artifact_description" == *stripped* ]]
 done < <(find "$product_stage" \( -type f -o -type l \) -name '*.so*' -print | sort)
 
 while IFS= read -r -d '' link; do
@@ -409,7 +423,6 @@ done < <(find "$product_stage" -type l -print0)
 readelf -d "$rust_library" | grep -F 'libvapiclient.so' >/dev/null
 readelf -Ws "$rust_library" | grep -F 'vapi_ctx_alloc' >/dev/null
 readelf -d "$jni_library" | grep -F 'libsakamoto_product_core.so' >/dev/null
-readelf -Ws "$plugin" | grep -F 'product_core_init' >/dev/null
 
 plugin_dynamic="$work_dir/product-plugin.dynamic"
 "$llvm_readelf" -d "$plugin" >"$plugin_dynamic"
