@@ -1574,13 +1574,123 @@ public final class AndroidRuntimeContractTest {
         ProductCoreOwner.Decision cleanupFailed = ProductCoreOwner.decideCleanup(
                 true, false);
         check(cleanupFailed.cleanupAction == ProductCoreOwner.CleanupAction.RETAIN_OWNER,
-                "cleanup failure retains the usable owner handle/state");
+                "cleanup failure retains authoritative owner state and any live process handle");
         check("cleanup_failed".equals(cleanupFailed.errorCode),
                 "cleanup failure is visible as cleanup_failed");
         ProductCoreOwner.Decision cleanupSucceeded = ProductCoreOwner.decideCleanup(
                 false, true);
         check(cleanupSucceeded.cleanupAction == ProductCoreOwner.CleanupAction.CLEAR_OWNER,
                 "only successful cleanup after process death clears owner state");
+
+        ProductCoreOwner.ProfileFact rootAbsent = ProductCoreOwner.ProfileFact.absent(
+                RuntimeProfile.ROOT);
+        ProductCoreOwner.ProfileFact vpnAbsent = ProductCoreOwner.ProfileFact.absent(
+                RuntimeProfile.VPN);
+        ProductCoreOwner.GlobalDecision globalFresh = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false);
+        check(globalFresh.action == ProductCoreOwner.Action.FRESH_START,
+                "both absent Product Core profiles permit a fresh start");
+        ProductCoreOwner.GlobalDecision globalHandleLive = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, true);
+        check(globalHandleLive.action == ProductCoreOwner.Action.BLOCK_LIVE,
+                "a live in-process Product Core handle blocks global replacement");
+        ProductCoreOwner.ProfileFact rootGone = ProductCoreOwner.ProfileFact.exactGone(
+                RuntimeProfile.ROOT, expected);
+        ProductCoreOwner.ProfileFact vpnGone = ProductCoreOwner.ProfileFact.exactGone(
+                RuntimeProfile.VPN, ProductCoreOwner.OwnerRecord.create(
+                        50L, "01234567-0123-0123-0123-0123456789ac", RuntimeProfile.VPN,
+                        "/data/user/0/example/files/profiles/vpn/vpp/runtime",
+                        "/data/user/0/example/files/profiles/vpn/vpp/runtime/api.sock",
+                        "product-core", "vpp-r1"));
+        ProductCoreOwner.GlobalDecision globalGone = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootGone, vpnGone, false);
+        check(globalGone.action == ProductCoreOwner.Action.CLEAN_THEN_START,
+                "global Product Core audit permits cleanup only after both profiles are gone");
+        check(globalGone.shouldClean(RuntimeProfile.ROOT)
+                        && globalGone.shouldClean(RuntimeProfile.VPN),
+                "global cleanup selects only exact gone ROOT and VPN owners");
+        check(globalGone.highestGeneration() == 50L,
+                "generation allocation observes the highest ROOT or VPN durable generation");
+        ProductCoreOwner.GlobalDecision vpnLive = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootGone,
+                ProductCoreOwner.ProfileFact.live(RuntimeProfile.VPN, vpnGone.owner), false);
+        check(vpnLive.action == ProductCoreOwner.Action.BLOCK_LIVE,
+                "a live opposite-profile owner blocks selected-profile replacement");
+        ProductCoreOwner.GlobalDecision vpnUnknown = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootAbsent,
+                ProductCoreOwner.ProfileFact.unknown(RuntimeProfile.VPN, "unreadable owner"),
+                false);
+        check(vpnUnknown.action == ProductCoreOwner.Action.BLOCK_UNKNOWN,
+                "an unknown opposite-profile owner blocks selected-profile replacement");
+        check(!vpnUnknown.shouldClean(RuntimeProfile.ROOT)
+                        && !vpnUnknown.shouldClean(RuntimeProfile.VPN),
+                "blocked global ownership audit selects no unproven profile for deletion");
+        ProductCoreOwner.GlobalDecision repairedFresh = ProductCoreOwner.decideGlobalForStart(
+                RuntimeProfile.ROOT, rootAbsent, vpnAbsent, false);
+        check(repairedFresh.action == ProductCoreOwner.Action.FRESH_START,
+                "after exact residue repair the next explicit start is fresh");
+
+        try {
+            Path ownerDirectory = Files.createTempDirectory("sakamoto-owner-atomic");
+            java.io.File ownerFile = ownerDirectory.resolve(ProductCoreOwner.RECORD_FILE).toFile();
+            expected.write(ownerFile);
+            java.io.File candidate = ownerDirectory.resolve(
+                    ".owner.properties.interrupted.tmp").toFile();
+            Files.write(candidate.toPath(), "incomplete\n".getBytes(StandardCharsets.US_ASCII));
+            check(expected.sameInstallation(ProductCoreOwner.OwnerRecord.read(ownerFile)),
+                    "an interrupted owner candidate leaves the previous complete record readable");
+            ProductCoreOwner.OwnerRecord replacement = ProductCoreOwner.OwnerRecord.create(
+                    43L, "01234567-0123-0123-0123-0123456789ad", RuntimeProfile.ROOT,
+                    expected.runtimePath, expected.apiSocket, expected.artifactId, "vpp-r2");
+            Files.deleteIfExists(candidate.toPath());
+            Files.deleteIfExists(ownerFile.toPath());
+            java.io.File pending = ownerDirectory.resolve(
+                    ".owner.properties.pending.tmp").toFile();
+            Files.write(pending.toPath(), replacement.encode().getBytes(StandardCharsets.US_ASCII));
+            check(ProductCoreOwner.isInterruptedPublicationOnly(ownerDirectory.toFile()),
+                    "a candidate-only profile is explicitly repairable");
+            check(replacement.sameInstallation(
+                            ProductCoreOwner.OwnerRecord.readPending(ownerFile)),
+                    "a complete owner candidate can be audited after a pre-rename interruption");
+            java.io.File duplicatePending = ownerDirectory.resolve(
+                    ".owner.properties.duplicate.tmp").toFile();
+            Files.write(duplicatePending.toPath(), replacement.encode()
+                    .getBytes(StandardCharsets.US_ASCII));
+            boolean duplicateRejected = false;
+            try {
+                ProductCoreOwner.OwnerRecord.readPending(ownerFile);
+            } catch (IOException expectedDuplicate) {
+                duplicateRejected = true;
+            }
+            check(duplicateRejected, "duplicate owner candidates are rejected fail-closed");
+            Files.deleteIfExists(duplicatePending.toPath());
+            replacement.write(ownerFile);
+            check(replacement.sameInstallation(ProductCoreOwner.OwnerRecord.read(ownerFile))
+                            && replacement.revision.equals(
+                            ProductCoreOwner.OwnerRecord.read(ownerFile).revision),
+                    "atomic owner replacement publishes one complete new record");
+            java.io.File startup = ownerDirectory.resolve("startup.conf").toFile();
+            Files.write(startup.toPath(), "old-startup\n".getBytes(StandardCharsets.UTF_8));
+            java.io.File startupCandidate = ownerDirectory.resolve(
+                    ".startup.conf.interrupted.tmp").toFile();
+            Files.write(startupCandidate.toPath(), "incomplete\n".getBytes(StandardCharsets.UTF_8));
+            check("old-startup\n".equals(new String(Files.readAllBytes(startup.toPath()),
+                    StandardCharsets.UTF_8)),
+                    "an interrupted startup candidate leaves the previous complete file readable");
+            ProductCoreOwner.writeAtomic(startup, "new-startup\n".getBytes(StandardCharsets.UTF_8));
+            check("new-startup\n".equals(new String(Files.readAllBytes(startup.toPath()),
+                    StandardCharsets.UTF_8)),
+                    "startup configuration uses the same atomic file publication seam");
+            Files.deleteIfExists(candidate.toPath());
+            Files.deleteIfExists(pending.toPath());
+            Files.deleteIfExists(duplicatePending.toPath());
+            Files.deleteIfExists(startupCandidate.toPath());
+            Files.deleteIfExists(ownerFile.toPath());
+            Files.deleteIfExists(startup.toPath());
+            Files.deleteIfExists(ownerDirectory);
+        } catch (Exception error) {
+            throw new AssertionError("atomic owner publication could not be checked", error);
+        }
 
         String command = ProductCoreOwner.buildProcessAuditCommand(expected,
                 "/data/app/example/lib/arm64-v8a/libvpp_runtime.so", "10123");

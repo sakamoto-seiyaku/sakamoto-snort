@@ -11,22 +11,34 @@ test -f "$service"
 grep -Fq 'public final class ProductCoreOwner' "$owner"
 grep -Fq 'public static final String RECORD_FILE = "owner.properties"' "$owner"
 grep -Fq 'public static OwnerRecord read(File file)' "$owner"
+grep -Fq 'public static OwnerRecord readPending(File file)' "$owner"
+grep -Fq 'isInterruptedPublicationOnly' "$owner"
 grep -Fq 'owner record key is duplicate or unknown' "$owner"
 grep -Fq 'ProductCoreOwner.OwnerRecord.create' "$service"
 grep -Fq 'owner.write(new File(profile, ProductCoreOwner.RECORD_FILE))' "$service"
+grep -Fq 'ProductCoreOwner.writeAtomic' "$service"
+grep -Fq 'ProductCoreOwner.OwnerRecord.readPending' "$service"
+grep -Fq 'ProductCoreOwner.isInterruptedPublicationOnly' "$service"
 grep -Fq 'SAKAMOTO_VPP_OWNER_TOKEN", owner.token' "$service"
-grep -Fq 'auditProductCoreOwner' "$service"
+grep -Fq 'auditProductCoreOwners' "$service"
+grep -Fq 'auditProductCoreProfile' "$service"
 grep -Fq 'ProductCoreOwner.buildProcessAuditCommand' "$service"
 grep -Fq 'ProductCoreOwner.ProcessState.UNKNOWN' "$service"
 grep -Fq 'Integer.toString(android.os.Process.myUid())' "$service"
 grep -Fq 'ProductCoreOwner.Action.BLOCK_LIVE' "$service"
 grep -Fq 'ProductCoreOwner.Action.BLOCK_UNKNOWN' "$service"
 grep -Fq 'ProductCoreOwner.Action.CLEAN_THEN_START' "$service"
-grep -Fq 'ProductCoreOwner.Decision.unknown' "$service"
+grep -Fq 'ProductCoreOwner.decideGlobalForStart' "$service"
+grep -Fq 'ownerDecision.highestGeneration()' "$service"
 grep -Fq 'cleanup_failed' "$service"
 grep -Fq 'productCoreSession = null;' "$service"
 grep -Fq 'vppProcess = null;' "$service"
 grep -Fq 'if (cleanupFaultInjected)' "$service"
+grep -Fq 'File.createTempFile' "$owner"
+grep -Fq 'candidate.renameTo(target)' "$owner"
+grep -Fq 'output.getFD().sync()' "$owner"
+grep -Fq 'candidate.delete()' "$owner"
+grep -Fq 'owner.properties first' "$service"
 if grep -Fq 'process.pid()' "$service" || grep -Fq 'ProcessHandle' "$service"; then
   echo "Product Core owner seam uses an unsupported numeric PID API" >&2
   exit 1
@@ -63,9 +75,11 @@ residue = method_body("private boolean stopProductCoreResidue(boolean stopServic
 
 if "return stopProductCoreResidue(stopService)" not in stop:
     raise AssertionError("Product Core STOP can fall through to the legacy cleanup path")
-if start.index("auditProductCoreOwner") > start.index("deleteTree(profileRoot)"):
+if start.index("auditProductCoreOwners") > start.index("cleanProductCoreResidue(ownerDecision)"):
     raise AssertionError("Product Core START deletes residue before owner audit")
-if "owner.write" not in prepare:
+if prepare.index("owner.write") > prepare.index("ProductCoreOwner.writeAtomic"):
+    raise AssertionError("Product Core START publishes startup before durable owner record")
+if "owner.write" not in prepare or "ProductCoreOwner.writeAtomic" not in prepare:
     raise AssertionError("Product Core START launches before durable owner record")
 if start.index("prepareProductCoreProfile(profileRoot, nativeDir, owner)") \
         > start.index("Process process = builder.start()"):
@@ -77,9 +91,11 @@ if fail.index("if (clean)") > fail.index("productCoreSession = null"):
 if stop.index("if (!clean)") > stop.index("productCoreSession = null"):
     raise AssertionError("Product Core STOP clears handles before checking cleanup")
 if "return false;" not in stop[stop.index("if (!clean)"):stop.index("productCoreSession = null")]:
-    raise AssertionError("Product Core STOP does not retain owner state on cleanup failure")
-if "auditProductCoreOwnerForStop" not in residue or "deleteTree(profileRoot)" not in residue:
+    raise AssertionError("Product Core STOP does not retain durable owner authority on cleanup failure")
+if "auditProductCoreOwnerForStop" not in residue or "cleanProductCoreResidue(ownerDecision)" not in residue:
     raise AssertionError("Product Core STOP residue path lacks its own owner audit/cleanup")
+if residue.index("if (cleanupFaultInjected)") > residue.index("cleanProductCoreResidue(ownerDecision)"):
+    raise AssertionError("Product Core STOP residue deletes before cleanup fault barrier")
 PY
 
 echo "sakamoto-173 Product Core owner contract: PASS"

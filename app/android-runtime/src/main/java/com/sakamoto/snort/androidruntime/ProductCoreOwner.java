@@ -1,13 +1,11 @@
 package com.sakamoto.snort.androidruntime;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
@@ -85,6 +83,117 @@ public final class ProductCoreOwner {
 
         public static Decision unknown(String detail) {
             return start(Action.BLOCK_UNKNOWN, detail);
+        }
+    }
+
+    /** Durable facts for the two fixed Product Core profiles. */
+    public static final class ProfileFact {
+        public final RuntimeProfile profile;
+        public final boolean present;
+        public final OwnerRecord owner;
+        public final boolean identityMatches;
+        public final ProcessState processState;
+        public final String detail;
+
+        private ProfileFact(RuntimeProfile profile, boolean present, OwnerRecord owner,
+                            boolean identityMatches, ProcessState processState, String detail) {
+            if (profile == null) {
+                throw new IllegalArgumentException("Product Core profile is required");
+            }
+            this.profile = profile;
+            this.present = present;
+            this.owner = owner;
+            this.identityMatches = identityMatches;
+            this.processState = processState;
+            this.detail = value(detail);
+        }
+
+        public static ProfileFact absent(RuntimeProfile profile) {
+            return new ProfileFact(profile, false, null, false, ProcessState.GONE,
+                    "profile is absent");
+        }
+
+        public static ProfileFact exactGone(RuntimeProfile profile, OwnerRecord owner) {
+            if (owner == null) {
+                throw new IllegalArgumentException("exact gone owner is required");
+            }
+            return new ProfileFact(profile, true, owner, true, ProcessState.GONE,
+                    "exact owner is proven gone");
+        }
+
+        public static ProfileFact live(RuntimeProfile profile, OwnerRecord owner) {
+            if (owner == null) {
+                throw new IllegalArgumentException("live owner is required");
+            }
+            return new ProfileFact(profile, true, owner, true, ProcessState.LIVE,
+                    "exact owner is live");
+        }
+
+        public static ProfileFact repairable(RuntimeProfile profile, String detail) {
+            return new ProfileFact(profile, true, null, true, ProcessState.GONE, detail);
+        }
+
+        public static ProfileFact unknown(RuntimeProfile profile, String detail) {
+            return new ProfileFact(profile, true, null, false, ProcessState.UNKNOWN, detail);
+        }
+
+        public static ProfileFact unknown(RuntimeProfile profile, OwnerRecord owner,
+                                          String detail) {
+            return new ProfileFact(profile, true, owner, false, ProcessState.UNKNOWN, detail);
+        }
+
+        public boolean isLive() {
+            return present && identityMatches && processState == ProcessState.LIVE;
+        }
+
+        public boolean isGone() {
+            return present && identityMatches
+                    && processState == ProcessState.GONE;
+        }
+
+        public boolean isUnknown() {
+            return present && !isGone() && !isLive();
+        }
+    }
+
+    /** Fixed ROOT+VPN global decision; deliberately not a generic profile framework. */
+    public static final class GlobalDecision {
+        public final Action action;
+        public final RuntimeProfile selectedProfile;
+        public final ProfileFact root;
+        public final ProfileFact vpn;
+        public final String errorCode;
+        public final String detail;
+        private final boolean cleanRoot;
+        private final boolean cleanVpn;
+
+        private GlobalDecision(Action action, RuntimeProfile selectedProfile,
+                               ProfileFact root, ProfileFact vpn,
+                               boolean cleanRoot, boolean cleanVpn, String detail) {
+            this.action = action;
+            this.selectedProfile = selectedProfile;
+            this.root = root;
+            this.vpn = vpn;
+            this.cleanRoot = cleanRoot;
+            this.cleanVpn = cleanVpn;
+            this.errorCode = action == Action.BLOCK_LIVE
+                    ? "product_core_owner_live"
+                    : action == Action.BLOCK_UNKNOWN ? "product_core_owner_unverified" : "";
+            this.detail = value(detail);
+        }
+
+        public boolean shouldClean(RuntimeProfile profile) {
+            return profile == RuntimeProfile.ROOT ? cleanRoot
+                    : profile == RuntimeProfile.VPN && cleanVpn;
+        }
+
+        /** Highest durable generation observed across the fixed profiles. */
+        public long highestGeneration() {
+            long highest = root.owner == null ? 0L : root.owner.generation;
+            if (vpn.owner != null && vpn.owner.generation > highest) {
+                highest = vpn.owner.generation;
+            }
+            return highest;
         }
     }
 
@@ -203,23 +312,48 @@ public final class ProductCoreOwner {
             }
         }
 
+        /**
+         * Read the complete target, or one complete owner candidate left by a
+         * crash before rename. A malformed/duplicate candidate remains an
+         * audit error; callers may only repair the candidate-only profile.
+         */
+        public static OwnerRecord readPending(File file) throws IOException {
+            if (file == null) {
+                throw new IOException("owner record is missing");
+            }
+            File target = file.getAbsoluteFile();
+            if (target.isFile()) {
+                return read(target);
+            }
+            File parent = target.getParentFile();
+            File[] children = parent == null ? null : parent.listFiles();
+            OwnerRecord pending = null;
+            if (children != null) {
+                String prefix = "." + target.getName() + ".";
+                for (File child : children) {
+                    String name = child.getName();
+                    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) {
+                        continue;
+                    }
+                    OwnerRecord candidate = read(child);
+                    if (pending != null) {
+                        throw new IOException("owner record has duplicate candidates");
+                    }
+                    pending = candidate;
+                }
+            }
+            if (pending == null) {
+                throw new IOException("owner record is missing");
+            }
+            return pending;
+        }
+
         /** Publish the durable fact before starting the process. */
         public void write(File file) throws IOException {
             if (file == null) {
                 throw new IOException("owner record path is missing");
             }
-            File parent = file.getParentFile();
-            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
-                throw new IOException("owner record directory could not be created");
-            }
-            try (FileOutputStream output = new FileOutputStream(file);
-                 OutputStreamWriter writer = new OutputStreamWriter(output,
-                         StandardCharsets.US_ASCII);
-                 BufferedWriter buffered = new BufferedWriter(writer)) {
-                buffered.write(encode());
-                buffered.flush();
-                output.getFD().sync();
-            }
+            writeAtomic(file, encode().getBytes(StandardCharsets.US_ASCII));
         }
 
         /** Compare installation identity; generation/token remain generation-specific. */
@@ -301,6 +435,107 @@ public final class ProductCoreOwner {
         }
     }
 
+    /**
+     * Publish one small durable file through a same-directory synced candidate
+     * and rename. A failed publication leaves the previous complete target in
+     * place and removes the candidate; callers publish owner.properties first,
+     * startup.conf second, and launch only after both files are complete.
+     */
+    public static void writeAtomic(File file, byte[] content) throws IOException {
+        if (file == null || content == null) {
+            throw new IOException("atomic publication path/content is missing");
+        }
+        File target = file.getAbsoluteFile();
+        File parent = target.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            throw new IOException("atomic publication directory could not be created");
+        }
+        File candidate = File.createTempFile("." + target.getName() + ".", ".tmp", parent);
+        boolean published = false;
+        try {
+            try (FileOutputStream output = new FileOutputStream(candidate)) {
+                output.write(content);
+                output.flush();
+                output.getFD().sync();
+            }
+            if (!candidate.renameTo(target)) {
+                throw new IOException("atomic publication rename failed: " + target);
+            }
+            published = true;
+        } finally {
+            if (!published) {
+                candidate.delete();
+            }
+        }
+    }
+
+    /**
+     * A profile containing only our same-directory publication candidates and
+     * no launchable runtime/startup tree is safe to repair on the next START.
+     * Empty or otherwise populated profiles stay unknown and fail closed.
+     */
+    public static boolean isInterruptedPublicationOnly(File profile) {
+        if (profile == null || !profile.isDirectory()
+                || new File(profile, RECORD_FILE).exists()
+                || new File(profile, "startup.conf").exists()
+                || new File(profile, "runtime").exists()
+                || new File(profile, "logs").exists()
+                || new File(profile, "shm").exists()) {
+            return false;
+        }
+        File[] children = profile.listFiles();
+        if (children == null || children.length == 0) {
+            return false;
+        }
+        boolean candidateFound = false;
+        String ownerPrefix = "." + RECORD_FILE + ".";
+        String startupPrefix = ".startup.conf.";
+        for (File child : children) {
+            String name = child.getName();
+            boolean ownerCandidate = name.startsWith(ownerPrefix) && name.endsWith(".tmp");
+            boolean startupCandidate = name.startsWith(startupPrefix) && name.endsWith(".tmp");
+            if (!ownerCandidate && !startupCandidate) {
+                return false;
+            }
+            candidateFound = true;
+        }
+        return candidateFound;
+    }
+
+    /** Audit both existing profiles before any replacement or exact cleanup. */
+    public static GlobalDecision decideGlobalForStart(RuntimeProfile selected,
+                                                       ProfileFact root,
+                                                       ProfileFact vpn,
+                                                       boolean processHandleLive) {
+        RuntimeProfile chosen = selected == null ? RuntimeProfile.ROOT : selected;
+        ProfileFact safeRoot = root == null
+                ? ProfileFact.unknown(RuntimeProfile.ROOT, "ROOT audit is missing") : root;
+        ProfileFact safeVpn = vpn == null
+                ? ProfileFact.unknown(RuntimeProfile.VPN, "VPN audit is missing") : vpn;
+        if (processHandleLive || safeRoot.isLive() || safeVpn.isLive()) {
+            return new GlobalDecision(Action.BLOCK_LIVE, chosen, safeRoot, safeVpn,
+                    false, false, "a Product Core owner is live in ROOT or VPN");
+        }
+        if (safeRoot.isUnknown() || safeVpn.isUnknown()) {
+            return new GlobalDecision(Action.BLOCK_UNKNOWN, chosen, safeRoot, safeVpn,
+                    false, false, "ROOT and VPN Product Core ownership could not be verified");
+        }
+        ProfileFact selectedFact = chosen == RuntimeProfile.VPN ? safeVpn : safeRoot;
+        boolean cleanRoot = safeRoot.isGone();
+        boolean cleanVpn = safeVpn.isGone();
+        if (cleanRoot || cleanVpn) {
+            return new GlobalDecision(Action.CLEAN_THEN_START, chosen, safeRoot, safeVpn,
+                    cleanRoot, cleanVpn,
+                    "all existing Product Core owners are proven gone; exact profiles may be cleaned");
+        }
+        if (!selectedFact.present) {
+            return new GlobalDecision(Action.FRESH_START, chosen, safeRoot, safeVpn,
+                    false, false, "selected Product Core profile is absent");
+        }
+        return new GlobalDecision(Action.BLOCK_UNKNOWN, chosen, safeRoot, safeVpn,
+                false, false, "selected Product Core profile has no clean decision");
+    }
+
     /** Decide the only allowed START transition after an ownership audit. */
     public static Decision decideForStart(boolean profilePresent, OwnerRecord record,
                                           boolean identityMatches, ProcessState processState,
@@ -324,7 +559,11 @@ public final class ProductCoreOwner {
                 "the exact Product Core owner is proven gone");
     }
 
-    /** Clear handles/tree only after the process is gone and cleanup succeeded. */
+    /**
+     * Clear durable owner references/tree only after the process is gone and
+     * cleanup succeeded; retaining authority does not claim a native Session
+     * remains usable after close failure.
+     */
     public static Decision decideCleanup(boolean processHandleLive, boolean profileRemoved) {
         if (processHandleLive || !profileRemoved) {
             return Decision.cleanup(CleanupAction.RETAIN_OWNER, "cleanup_failed",
