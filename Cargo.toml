@@ -8,7 +8,9 @@ license = "Apache-2.0"
 version = "0.1.0"
 
 [profile.dev]
-panic = "abort"
+# Cargo's stable test harness requires unwind; the C ABI still catches Rust
+# panics, while release and Android artifacts remain non-unwinding below.
+panic = "unwind"
 
 [profile.release]
 panic = "abort"

@@ -44,6 +44,8 @@ add_test(NAME sakamoto-product-plugin-init-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_plugin_init_contract.sh")
 add_test(NAME sakamoto-product-path-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_path_contract.sh")
+add_test(NAME sakamoto-product-core-profile-contract
+  COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_core_profile_contract.sh")
 
 add_custom_target(sakamoto-vpp-mainline-pending
   COMMAND "${CMAKE_COMMAND}" -E echo
