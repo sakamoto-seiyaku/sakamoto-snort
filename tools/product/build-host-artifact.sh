@@ -76,13 +76,8 @@ if [[ "$vpp_include" != "$expected_vpp_include" || ! -d "$vpp_include" ]]; then
   exit 2
 fi
 product_require_within "$vpp_prefix" "$vpp_include" || exit 2
-vpp_lib="$(product_canonical_existing \
-  "${VPP_LIBRARY_DIR:-$vpp_prefix/lib}")" || exit 2
-expected_vpp_lib="$(product_canonical_existing "$vpp_prefix/lib")" || exit 2
-if [[ "$vpp_lib" != "$expected_vpp_lib" || ! -d "$vpp_lib" ]]; then
-  echo "VPP_LIBRARY_DIR must be the library tree from VPP_INSTALL_PREFIX" >&2
-  exit 2
-fi
+vpp_lib="$(product_resolve_vpp_library_dir \
+  "$vpp_prefix" "${VPP_LIBRARY_DIR:-}")" || exit 2
 vpp_apigen="$(product_canonical_existing \
   "${VPP_APIGEN:-$vpp_source/src/tools/vppapigen/vppapigen}")" || exit 2
 vpp_vapi_gen="$(product_canonical_existing \

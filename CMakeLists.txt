@@ -43,6 +43,9 @@ add_test(NAME sakamoto-product-host-residue-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_residue_contract.sh")
 add_test(NAME sakamoto-product-vapi-callback-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vapi_callback_contract.sh")
+add_test(NAME sakamoto-product-host-vapi-build-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_host_vapi_build_contract.sh")
 add_test(NAME sakamoto-product-plugin-init-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_plugin_init_contract.sh")
 add_test(NAME sakamoto-product-path-contract

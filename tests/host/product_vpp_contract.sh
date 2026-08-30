@@ -86,6 +86,7 @@ grep -q '!call.callback_called' "$repo_root/src/product/native/sakamoto_product_
 grep -q 'sakamoto-product-host-query-identity-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-host-residue-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-vapi-callback-contract' "$repo_root/CMakeLists.txt"
+grep -q 'sakamoto-product-host-vapi-build-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-plugin-init-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-path-contract' "$repo_root/CMakeLists.txt"
 grep -q 'mismatched API identity' "$repo_root/tests/host/product_query_identity_contract.sh"
@@ -122,6 +123,8 @@ grep -q 'canonical' "$path_helpers"
 grep -q 'realpath -m' "$path_helpers"
 grep -q 'product_prepare_build_output' "$launcher"
 grep -q 'product_prepare_build_output' "$path_helpers"
+grep -q 'product_resolve_vpp_library_dir' "$builder"
+grep -q '^product_resolve_vpp_library_dir()' "$path_helpers"
 
 for script in \
   "$repo_root/tools/product/build-host-artifact.sh" \
@@ -136,6 +139,7 @@ for test_script in \
   "$repo_root/tests/host/product_query_identity_contract.sh" \
   "$repo_root/tests/host/product_residue_contract.sh" \
   "$repo_root/tests/host/product_vapi_callback_contract.sh" \
+  "$repo_root/tests/host/product_host_vapi_build_contract.sh" \
   "$repo_root/tests/host/product_plugin_init_contract.sh" \
   "$repo_root/tests/host/product_path_contract.sh"; do
   bash -n "$test_script"

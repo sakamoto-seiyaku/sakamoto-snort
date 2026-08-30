@@ -95,14 +95,18 @@ fn main() {
                 compiler.arg("-I").arg(parent);
             }
         }
+        // These diagnostics originate in pinned generated VAPI helpers, not
+        // in project-owned C; keep every other -Werror diagnostic enabled.
+        compiler.args(["-Wno-unused-parameter", "-Wno-sign-compare"]);
         if target.ends_with("-android") {
             // Generated VAPI uses the BSD endian spellings and has a few
             // intentionally empty payload helpers. Android's sysroot keeps
-            // those in sys/endian.h and reports the generated helper warnings
-            // under -Wextra; suppress only those generated-header diagnostics.
-            compiler
-                .args(["-include", "sys/endian.h"])
-                .args(["-Wno-unused-parameter", "-Wno-sign-compare"]);
+            // the endian spellings in sys/endian.h.
+            compiler.args(["-include", "sys/endian.h"]);
+        } else {
+            // glibc hides htobe*/be*toh under strict C11 unless its default
+            // feature set is requested explicitly.
+            compiler.arg("-D_DEFAULT_SOURCE=1");
         }
     } else {
         compiler.arg("-DSAKAMOTO_PRODUCT_HOST_FIXTURE=1");

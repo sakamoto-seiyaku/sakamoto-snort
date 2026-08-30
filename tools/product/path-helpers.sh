@@ -40,6 +40,64 @@ product_canonical_for_write() {
   fi
 }
 
+product_resolve_vpp_library_dir() {
+  local prefix_raw="$1"
+  local explicit_raw="${2:-}"
+  local prefix direct_lib cmake_config resolved_config candidate
+  local vapiclient resolved_vapiclient explicit
+  local -a candidates=()
+
+  prefix="$(product_canonical_existing "$prefix_raw")" || return
+  if [[ ! -d "$prefix" ]]; then
+    product_path_error "VPP install prefix must be a directory: $prefix"
+    return 2
+  fi
+
+  # A flat GNUInstallDirs layout is identified by its installed VAPI client.
+  # A multiarch layout additionally requires the installed VPP CMake package
+  # at the exact conventional location; do not recursively search the prefix.
+  direct_lib="$prefix/lib"
+  if [[ -f "$direct_lib/libvapiclient.so" ||
+        -f "$direct_lib/libvapiclient.so.0" ]]; then
+    candidates+=("$direct_lib")
+  fi
+  for cmake_config in "$prefix"/lib/*/cmake/vpp/VPPConfig.cmake; do
+    [[ -f "$cmake_config" ]] || continue
+    resolved_config="$(product_canonical_existing "$cmake_config")" || return
+    product_require_within "$prefix" "$resolved_config" || return
+    candidate="${cmake_config%/cmake/vpp/VPPConfig.cmake}"
+    if [[ -f "$candidate/libvapiclient.so" ||
+          -f "$candidate/libvapiclient.so.0" ]]; then
+      candidates+=("$candidate")
+    fi
+  done
+
+  if [[ "${#candidates[@]}" -ne 1 ]]; then
+    product_path_error \
+      "VPP install prefix must contain exactly one trusted runtime library directory"
+    return 2
+  fi
+  candidate="$(product_canonical_existing "${candidates[0]}")" || return
+  product_require_within "$prefix" "$candidate" || return
+  if [[ -f "$candidate/libvapiclient.so" ]]; then
+    vapiclient="$candidate/libvapiclient.so"
+  else
+    vapiclient="$candidate/libvapiclient.so.0"
+  fi
+  resolved_vapiclient="$(product_canonical_existing "$vapiclient")" || return
+  product_require_within "$prefix" "$resolved_vapiclient" || return
+
+  if [[ -n "$explicit_raw" ]]; then
+    explicit="$(product_canonical_existing "$explicit_raw")" || return
+    if [[ ! -d "$explicit" || "$explicit" != "$candidate" ]]; then
+      product_path_error \
+        "VPP_LIBRARY_DIR must resolve to the library tree in VPP_INSTALL_PREFIX"
+      return 2
+    fi
+  fi
+  printf '%s\n' "$candidate"
+}
+
 product_require_config_safe_path() {
   local path="$1"
   # VPP config values are tokenized paths.  Keep generated paths to the
