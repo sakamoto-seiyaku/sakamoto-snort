@@ -607,7 +607,11 @@ public final class ProductCoreOwner {
     }
 
     private static String absolutePath(String value, String label) {
-        String safe = safeScalar(value, label);
+        if (value == null || value.isEmpty() || !value.equals(value.trim())
+                || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+            throw new IllegalArgumentException(label + " is invalid");
+        }
+        String safe = value;
         if (!safe.startsWith("/")) {
             throw new IllegalArgumentException(label + " must be absolute");
         }

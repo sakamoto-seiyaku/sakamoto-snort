@@ -1516,6 +1516,10 @@ public final class AndroidRuntimeContractTest {
     }
 
     private static void productCoreOwnerDecisionIsFailClosed() {
+        String realPixelNativeLibraryPath =
+                "/data/app/~~6RmWNDoq9QO8jzbNE3R7Hw==/"
+                        + "com.sakamoto.snort.androidruntime-foN8T5ZUigkrNeO2lBtk8g==/"
+                        + "lib/arm64/libvpp_runtime.so";
         ProductCoreOwner.OwnerRecord expected = ProductCoreOwner.OwnerRecord.create(
                 42L, "01234567-0123-0123-0123-0123456789ab", RuntimeProfile.ROOT,
                 "/data/user/0/example/files/profiles/root/vpp/runtime",
@@ -1534,6 +1538,26 @@ public final class AndroidRuntimeContractTest {
         check(expected.sameInstallation(restored),
                 "owner record round-trips the exact installation identity");
         check(expected.token.equals(restored.token), "owner record round-trips its token");
+        ProductCoreOwner.OwnerRecord canonicalPathOwner = ProductCoreOwner.OwnerRecord.create(
+                43L, "01234567-0123-0123-0123-0123456789ac", RuntimeProfile.ROOT,
+                "/data/app/~~6RmWNDoq9QO8jzbNE3R7Hw==/"
+                        + "com.sakamoto.snort.androidruntime-foN8T5ZUigkrNeO2lBtk8g==/runtime",
+                "/data/app/~~6RmWNDoq9QO8jzbNE3R7Hw==/"
+                        + "com.sakamoto.snort.androidruntime-foN8T5ZUigkrNeO2lBtk8g==/runtime/api.sock",
+                "product-core", "vpp-r1");
+        String canonicalGlobalCommand = ProductCoreOwner.buildGlobalProcessAuditCommand(
+                realPixelNativeLibraryPath, "10123");
+        check(canonicalGlobalCommand.contains("[ \"$exe\" = '"
+                        + realPixelNativeLibraryPath + "' ]"),
+                "global owner audit preserves the exact canonical native-library path");
+        String canonicalOwnerCommand = ProductCoreOwner.buildProcessAuditCommand(
+                canonicalPathOwner, realPixelNativeLibraryPath, "10123");
+        check(canonicalOwnerCommand.contains("[ \"$exe\" = '"
+                        + realPixelNativeLibraryPath + "' ]"),
+                "owner audit preserves the exact canonical native-library path");
+        check(canonicalOwnerCommand.contains("grep -F -x -- 'SAKAMOTO_VPP_RUNTIME_DIR="
+                        + canonicalPathOwner.runtimePath + "'"),
+                "owner audit preserves the canonical owner runtime path");
         expectIllegalArgument("owner record rejects duplicate fields",
                 () -> ProductCoreOwner.OwnerRecord.parse(encoded + "generation=43\n"));
         expectIllegalArgument("owner record rejects missing fields",
