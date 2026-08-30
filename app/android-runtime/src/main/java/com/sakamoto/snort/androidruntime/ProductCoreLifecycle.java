@@ -21,7 +21,7 @@ public final class ProductCoreLifecycle {
         // A failed connect/query has no trustworthy identity payload. Keep
         // its transport/core outcome instead of inventing an identity fault.
         if (status.code != 0) {
-            return "product_core_not_ready";
+            return failureCode(status);
         }
         if (status.abiVersion != expectedAbiVersion
                 || status.apiVersion != expectedApiVersion) {
@@ -59,11 +59,45 @@ public final class ProductCoreLifecycle {
                 || "product_vpp_revision_mismatch".equals(code);
     }
 
-    public static boolean isReady(long generation, String expectedVppRevision,
-                                  RuntimeControlNative.Status status) {
-        return validate(generation, status == null ? "" : status.artifactId,
-                status == null ? "" : status.apiIdentity, expectedVppRevision,
-                1, 1, status).isEmpty();
+    /** Preserve the fixed native Product Core status tag at the visible runtime seam. */
+    public static String failureCode(RuntimeControlNative.Status status) {
+        if (status == null) {
+            return "product_core_unavailable";
+        }
+        switch (status.code) {
+            case 0:
+                return "product_core_not_ready";
+            case 1:
+                return "product_core_invalid_argument";
+            case 2:
+                return "product_core_allocation_failed";
+            case 3:
+                return "product_core_connect_failed";
+            case 4:
+                return "product_core_disconnected";
+            case 5:
+                return "product_core_stale_handle";
+            case 6:
+                return "product_core_api_unavailable";
+            case 7:
+                return "product_core_query_failed";
+            case 8:
+                return "product_core_protocol_mismatch";
+            case 9:
+                return "product_core_internal_error";
+            case 10:
+                return "product_core_unknown_tag";
+            case 11:
+                return "product_core_disconnect_failed";
+            default:
+                return "product_core_unknown_failure";
+        }
+    }
+
+    /** Only the startup absence/connect race is retried; typed faults stop now. */
+    public static boolean isRetryableConnectionFailure(String code) {
+        return "product_core_not_ready".equals(code)
+                || "product_core_connect_failed".equals(code);
     }
 
     public static boolean isReady(long generation, String expectedArtifactId,

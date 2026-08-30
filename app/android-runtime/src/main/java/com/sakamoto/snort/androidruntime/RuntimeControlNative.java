@@ -149,16 +149,35 @@ public final class RuntimeControlNative {
 
         @Override
         public synchronized void close() {
+            closeAndGetStatus();
+        }
+
+        /** Close the native session and retain a typed disconnect result. */
+        public synchronized Status closeAndGetStatus() {
             if (nativeHandle == 0L) {
-                return;
+                return lastStatus;
             }
             long handle = nativeHandle;
             nativeHandle = 0L;
+            int disconnectCode = 0;
+            int destroyCode = 0;
             try {
-                nativeDisconnect(handle);
+                disconnectCode = nativeDisconnect(handle);
             } finally {
-                nativeDestroy(handle);
+                destroyCode = nativeDestroy(handle);
             }
+            if (disconnectCode != 0) {
+                lastStatus = Status.nativeFailure(lastStatus, disconnectCode,
+                        "Product Core VAPI disconnect failed");
+            } else if (destroyCode != 0) {
+                lastStatus = Status.nativeFailure(lastStatus, destroyCode,
+                        "Product Core native session destroy failed");
+            } else {
+                // A previous query failure must not be mistaken for a
+                // disconnect failure after the native handle closes cleanly.
+                lastStatus = Status.nativeFailure(lastStatus, 0, "");
+            }
+            return lastStatus;
         }
     }
 
@@ -239,6 +258,15 @@ public final class RuntimeControlNative {
         private static Status unavailable(long generation) {
             return new Status(-1, -1, -1, -1, generation, false, false, false,
                     false, false, false, "", "", "", "", "", "");
+        }
+
+        private static Status nativeFailure(Status previous, int code, String detail) {
+            Status base = previous == null ? unavailable() : previous;
+            return new Status(base.abiVersion, base.apiVersion, code, code, base.generation,
+                    base.coreReady, base.adapterAvailable, base.protectionRunning,
+                    base.pluginLoaded, base.vapiHandleLive, base.generationLive,
+                    base.artifactId, base.apiIdentity, base.vppRevision, detail,
+                    base.program, base.version);
         }
 
         private static String bounded(String value) {

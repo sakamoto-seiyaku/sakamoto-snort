@@ -34,6 +34,8 @@ typedef struct {
 #define SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH UINT32_C(8)
 #define SAKAMOTO_PRODUCT_INTERNAL_ERROR UINT32_C(9)
 #define SAKAMOTO_PRODUCT_UNKNOWN_TAG UINT32_C(10)
+/* Appended after the original tag set to preserve existing numeric values. */
+#define SAKAMOTO_PRODUCT_DISCONNECT_FAILED UINT32_C(11)
 
 typedef struct {
   uint32_t abi_version;

@@ -84,6 +84,7 @@ pub enum ErrorCode {
     ProtocolMismatch,
     InternalError,
     UnknownTag,
+    DisconnectFailed,
     Unknown(u32),
 }
 
@@ -101,6 +102,7 @@ impl ErrorCode {
             8 => Self::ProtocolMismatch,
             9 => Self::InternalError,
             10 => Self::UnknownTag,
+            11 => Self::DisconnectFailed,
             value => Self::Unknown(value),
         }
     }
@@ -118,6 +120,7 @@ impl ErrorCode {
             Self::ProtocolMismatch => 8,
             Self::InternalError => 9,
             Self::UnknownTag => 10,
+            Self::DisconnectFailed => 11,
             Self::Unknown(value) => value,
         }
     }

@@ -914,18 +914,24 @@ public final class RuntimeService extends VpnService {
                 RuntimeControlNative.Session session = RuntimeControlNative.connect(
                         socket.getPath(), generation);
                 RuntimeControlNative.Status status = session.lastStatus();
-                String validation = session.isConnected()
-                        ? ProductCoreLifecycle.validate(generation, productArtifactId,
-                        productApiIdentity, productVppRevision, productAbiVersion,
-                        productApiVersion, status)
-                        : "product_core_not_ready";
+                String validation;
+                if (!session.isConnected() || (status != null && status.code != 0)) {
+                    validation = ProductCoreLifecycle.failureCode(status);
+                } else {
+                    validation = ProductCoreLifecycle.validate(generation, productArtifactId,
+                            productApiIdentity, productVppRevision, productAbiVersion,
+                            productApiVersion, status);
+                }
                 if (session.isConnected() && validation.isEmpty()) {
                     return session;
                 }
-                if (ProductCoreLifecycle.isIdentityFailure(validation)) {
+                if (!validation.isEmpty()
+                        && !"product_core_not_ready".equals(validation)) {
                     productCoreConnectFailureCode = validation;
                     productCoreConnectFailureMessage = status == null
                             ? validation : status.errorDetail;
+                }
+                if (!ProductCoreLifecycle.isRetryableConnectionFailure(validation)) {
                     session.close();
                     return null;
                 }
@@ -949,15 +955,18 @@ public final class RuntimeService extends VpnService {
             return;
         }
         RuntimeControlNative.Status status = session.query();
-        String validation = ProductCoreLifecycle.validate(generation, productArtifactId,
-                productApiIdentity, productVppRevision, productAbiVersion,
-                productApiVersion, status);
+        String validation;
+        if (status != null && status.code != 0) {
+            validation = ProductCoreLifecycle.failureCode(status);
+        } else {
+            validation = ProductCoreLifecycle.validate(generation, productArtifactId,
+                    productApiIdentity, productVppRevision, productAbiVersion,
+                    productApiVersion, status);
+        }
         if (!validation.isEmpty()) {
-            String code = ProductCoreLifecycle.isIdentityFailure(validation)
-                    ? validation : "product_core_query_failed";
             String detail = status == null || status.errorDetail.isEmpty()
                     ? validation : status.errorDetail;
-            failProductCoreGeneration(code, detail);
+            failProductCoreGeneration(validation, detail);
             return;
         }
         publishProductCoreRunning(status, ProductCoreLifecycle.UNKNOWN_PID);
@@ -991,7 +1000,13 @@ public final class RuntimeService extends VpnService {
     }
 
     private void failProductCoreGeneration(String code, String message) {
-        closeProductCoreSession();
+        RuntimeControlNative.Status closeStatus = closeProductCoreSession();
+        if (closeStatus != null && closeStatus.code != 0) {
+            String closeCode = ProductCoreLifecycle.failureCode(closeStatus);
+            String closeDetail = closeStatus.errorDetail.isEmpty()
+                    ? closeCode : closeStatus.errorDetail;
+            message = message + "; " + closeCode + ": " + closeDetail;
+        }
         boolean clean = terminateProductCoreProcess();
         if (clean && profileRoot != null && profileRoot.exists()) {
             clean = deleteTree(profileRoot);
@@ -1003,12 +1018,13 @@ public final class RuntimeService extends VpnService {
         stopIfInactive();
     }
 
-    private void closeProductCoreSession() {
+    private RuntimeControlNative.Status closeProductCoreSession() {
         RuntimeControlNative.Session session = productCoreSession;
         productCoreSession = null;
         if (session != null) {
-            session.close();
+            return session.closeAndGetStatus();
         }
+        return null;
     }
 
     private boolean terminateProductCoreProcess() {
@@ -1666,7 +1682,7 @@ public final class RuntimeService extends VpnService {
             RuntimeSnapshot current = snapshot == null
                     ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot;
             publish(RuntimeSnapshot.stopping(current));
-            closeProductCoreSession();
+            RuntimeControlNative.Status closeStatus = closeProductCoreSession();
             boolean clean = terminateProductCoreProcess();
             if (clean && profileRoot != null && profileRoot.exists()) {
                 clean = deleteTree(profileRoot);
@@ -1676,6 +1692,13 @@ public final class RuntimeService extends VpnService {
             if (!clean) {
                 publishError("cleanup_failed", "generation-owned profile cleanup failed",
                         true, -1L);
+                return false;
+            }
+            if (closeStatus != null && closeStatus.code != 0) {
+                String closeCode = ProductCoreLifecycle.failureCode(closeStatus);
+                String closeDetail = closeStatus.errorDetail.isEmpty()
+                        ? closeCode : closeStatus.errorDetail;
+                publishError(closeCode, closeDetail, true, -1L);
                 return false;
             }
             boolean published = publish(RuntimeSnapshot.stopped(

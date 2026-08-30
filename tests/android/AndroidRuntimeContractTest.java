@@ -88,6 +88,8 @@ public final class AndroidRuntimeContractTest {
         productCoreNativeStatusFieldOrderIsStable();
         productCoreLifecycleRequiresTheExactLiveGeneration();
         productCoreIdentityValidatorFailsClosed();
+        productCoreNativeFailureCodesRemainVisible();
+        productCoreFailureRetryPolicyIsNarrow();
         applicationSubjectIdentityIsCompleteUidOnly();
         applicationProtocolCatalogOwnsStablePolicyIdentity();
         productStorePersistsProfileBindingsAndEmptyBundle();
@@ -1313,23 +1315,26 @@ public final class AndroidRuntimeContractTest {
         };
         RuntimeControlNative.Status ready = (RuntimeControlNative.Status) parser.invoke(
                 null, (Object) readyValues, 0);
-        check(ProductCoreLifecycle.isReady(42L,
-                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", ready),
+        check(ProductCoreLifecycle.isReady(42L, "product-core",
+                        "product_core.api/1.0.0@abcd1234",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, ready),
                 "the exact live core-only Product Core generation is ready");
 
         readyValues[1] = "41";
         RuntimeControlNative.Status stale = (RuntimeControlNative.Status) parser.invoke(
                 null, (Object) readyValues, 0);
-        check(!ProductCoreLifecycle.isReady(42L,
-                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", stale),
+        check(!ProductCoreLifecycle.isReady(42L, "product-core",
+                        "product_core.api/1.0.0@abcd1234",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, stale),
                 "a status from another generation is not ready");
 
         readyValues[1] = "42";
         readyValues[3] = "1";
         RuntimeControlNative.Status adapter = (RuntimeControlNative.Status) parser.invoke(
                 null, (Object) readyValues, 0);
-        check(!ProductCoreLifecycle.isReady(42L,
-                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", adapter),
+        check(!ProductCoreLifecycle.isReady(42L, "product-core",
+                        "product_core.api/1.0.0@abcd1234",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, adapter),
                 "SAKAMOTO-172 does not promote an Adapter generation to core-only ready");
         check(ProductCoreLifecycle.canRetryConnection(false, true, 0, 24),
                 "a live sidecar gets a bounded retry after its first not-ready reply");
@@ -1434,12 +1439,12 @@ public final class AndroidRuntimeContractTest {
 
         RuntimeControlNative.Status failedReply = productStatus(9, 9, 7, 42L,
                 "", "", "");
-        check("product_core_not_ready".equals(ProductCoreLifecycle.validate(
+        check("product_core_query_failed".equals(ProductCoreLifecycle.validate(
                         42L, "sakamoto-product-vpp-host-v1",
                         "product_core.api/1.0.0@1b103f1d",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1,
                         failedReply)),
-                "failed reply remains a core failure rather than identity mismatch");
+                "failed reply keeps its typed native failure rather than identity mismatch");
     }
 
     private static RuntimeControlNative.Status productStatus(int abiVersion, int apiVersion,
@@ -1450,6 +1455,62 @@ public final class AndroidRuntimeContractTest {
         return new RuntimeControlNative.Status(abiVersion, apiVersion, code, code, generation,
                 true, false, false, true, true, true, artifactId, apiIdentity, vppRevision,
                 "", "", "");
+    }
+
+    private static void productCoreNativeFailureCodesRemainVisible() {
+        int[] nativeCodes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+        String[] productCodes = {
+                "product_core_invalid_argument",
+                "product_core_allocation_failed",
+                "product_core_connect_failed",
+                "product_core_disconnected",
+                "product_core_stale_handle",
+                "product_core_api_unavailable",
+                "product_core_query_failed",
+                "product_core_protocol_mismatch",
+                "product_core_internal_error",
+                "product_core_unknown_tag",
+                "product_core_disconnect_failed"
+        };
+        for (int index = 0; index < nativeCodes.length; index++) {
+            RuntimeControlNative.Status status = productStatus(1, 1, nativeCodes[index], 42L,
+                    "", "", "");
+            check(productCodes[index].equals(ProductCoreLifecycle.failureCode(status)),
+                    "native Product Core code remains visible: " + nativeCodes[index]);
+        }
+        check("product_core_not_ready".equals(ProductCoreLifecycle.failureCode(
+                        productStatus(1, 1, 0, 42L, "", "", ""))),
+                "a zero native code without readiness remains not ready");
+        check("product_core_unavailable".equals(ProductCoreLifecycle.failureCode(null)),
+                "a missing native status remains explicitly unavailable");
+        check("product_core_unknown_failure".equals(ProductCoreLifecycle.failureCode(
+                        productStatus(1, 1, 0xfeed, 42L, "", "", ""))),
+                "an unknown native code remains explicitly unknown");
+    }
+
+    private static void productCoreFailureRetryPolicyIsNarrow() {
+        check(ProductCoreLifecycle.isRetryableConnectionFailure("product_core_not_ready"),
+                "an absent readiness reply may be retried while the sidecar starts");
+        check(ProductCoreLifecycle.isRetryableConnectionFailure("product_core_connect_failed"),
+                "a VAPI connect race may be retried while the sidecar starts");
+        check(!ProductCoreLifecycle.isRetryableConnectionFailure(
+                        "product_core_allocation_failed"),
+                "allocation failure is surfaced immediately");
+        check(!ProductCoreLifecycle.isRetryableConnectionFailure(
+                        "product_core_api_unavailable"),
+                "missing VAPI API is surfaced immediately");
+        check(!ProductCoreLifecycle.isRetryableConnectionFailure(
+                        "product_core_query_failed"),
+                "a failed VAPI request is surfaced immediately");
+        check(!ProductCoreLifecycle.isRetryableConnectionFailure(
+                        "product_core_stale_handle"),
+                "a stale generation is surfaced immediately");
+        check(!ProductCoreLifecycle.isRetryableConnectionFailure(
+                        "product_core_protocol_mismatch"),
+                "a protocol failure is surfaced immediately");
+        check(!ProductCoreLifecycle.isRetryableConnectionFailure(
+                        "product_core_unknown_failure"),
+                "an unknown native failure is surfaced immediately");
     }
 
     private static void applicationSubjectIdentityIsCompleteUidOnly() {

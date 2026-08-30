@@ -68,7 +68,7 @@ void vapi_ctx_free(vapi_ctx_t);
 bool vapi_is_msg_available(vapi_ctx_t, vapi_msg_id_t);
 vapi_error_e vapi_connect_ex(vapi_ctx_t, const char *, const char *, int, int,
                              int, bool, bool);
-void vapi_disconnect(vapi_ctx_t);
+vapi_error_e vapi_disconnect(vapi_ctx_t);
 vapi_msg_product_core_status *vapi_alloc_product_core_status(vapi_ctx_t);
 vapi_error_e vapi_product_core_status(
   vapi_ctx_t, vapi_msg_product_core_status *,
@@ -79,6 +79,14 @@ extern int sakamoto_test_reply_available;
 extern int sakamoto_test_send_calls;
 extern int sakamoto_test_send_invalid_id_calls;
 extern int sakamoto_test_omit_callback;
+extern int sakamoto_test_ctx_alloc_error;
+extern int sakamoto_test_connect_error;
+extern int sakamoto_test_alloc_message;
+extern int sakamoto_test_send_error;
+extern int sakamoto_test_callback_error;
+extern int sakamoto_test_null_reply;
+extern int sakamoto_test_reply_retval;
+extern int sakamoto_test_disconnect_error;
 
 #endif
 EOF
@@ -95,10 +103,20 @@ int sakamoto_test_reply_available = 1;
 int sakamoto_test_send_calls = 0;
 int sakamoto_test_send_invalid_id_calls = 0;
 int sakamoto_test_omit_callback = 0;
+int sakamoto_test_ctx_alloc_error = 0;
+int sakamoto_test_connect_error = 0;
+int sakamoto_test_alloc_message = 0;
+int sakamoto_test_send_error = 0;
+int sakamoto_test_callback_error = 0;
+int sakamoto_test_null_reply = 0;
+int sakamoto_test_reply_retval = 0;
+int sakamoto_test_disconnect_error = 0;
 
 vapi_error_e
 vapi_ctx_alloc (vapi_ctx_t *context)
 {
+  if (sakamoto_test_ctx_alloc_error != 0)
+    return sakamoto_test_ctx_alloc_error;
   *context = (vapi_ctx_t) (uintptr_t) 1U;
   vapi_msg_id_product_core_status = 100U;
   vapi_msg_id_product_core_status_reply = 101U;
@@ -135,19 +153,24 @@ vapi_connect_ex (vapi_ctx_t context, const char *name, const char *socket,
   (void) mode;
   (void) do_pthread;
   (void) do_auto_handle;
+  if (sakamoto_test_connect_error != 0)
+    return sakamoto_test_connect_error;
   return VAPI_OK;
 }
 
-void
+vapi_error_e
 vapi_disconnect (vapi_ctx_t context)
 {
   (void) context;
+  return sakamoto_test_disconnect_error;
 }
 
 vapi_msg_product_core_status *
 vapi_alloc_product_core_status (vapi_ctx_t context)
 {
   (void) context;
+  if (sakamoto_test_alloc_message != 0)
+    return NULL;
   vapi_msg_product_core_status *message =
     calloc (1U, sizeof (vapi_msg_product_core_status));
   if (message != NULL)
@@ -166,15 +189,26 @@ vapi_product_core_status (vapi_ctx_t context,
   ++sakamoto_test_send_calls;
   if (message->header._vl_msg_id == UINT16_MAX)
     ++sakamoto_test_send_invalid_id_calls;
+  if (sakamoto_test_send_error != 0)
+    return sakamoto_test_send_error;
   if (sakamoto_test_omit_callback)
     return VAPI_OK;
+  if (sakamoto_test_null_reply)
+    {
+      callback (context, callback_context, VAPI_OK, true, NULL);
+      return VAPI_OK;
+    }
   vapi_payload_product_core_status_reply reply = {0};
   reply.generation = 77U;
   reply.core_ready = 1U;
   reply.artifact_id[0] = 'a';
   reply.api_identity[0] = 'b';
   reply.vpp_revision[0] = 'c';
-  callback (context, callback_context, VAPI_OK, true, &reply);
+  reply.retval = (uint32_t) sakamoto_test_reply_retval;
+  callback (context, callback_context,
+            sakamoto_test_callback_error == 0 ? VAPI_OK
+                                                : sakamoto_test_callback_error,
+            true, &reply);
   return VAPI_OK;
 }
 EOF
@@ -190,6 +224,86 @@ extern int sakamoto_test_reply_available;
 extern int sakamoto_test_send_calls;
 extern int sakamoto_test_send_invalid_id_calls;
 extern int sakamoto_test_omit_callback;
+extern int sakamoto_test_ctx_alloc_error;
+extern int sakamoto_test_connect_error;
+extern int sakamoto_test_alloc_message;
+extern int sakamoto_test_send_error;
+extern int sakamoto_test_callback_error;
+extern int sakamoto_test_null_reply;
+extern int sakamoto_test_reply_retval;
+extern int sakamoto_test_disconnect_error;
+
+static void
+reset_faults (void)
+{
+  sakamoto_test_ctx_alloc_error = 0;
+  sakamoto_test_connect_error = 0;
+  sakamoto_test_alloc_message = 0;
+  sakamoto_test_send_error = 0;
+  sakamoto_test_callback_error = 0;
+  sakamoto_test_null_reply = 0;
+  sakamoto_test_reply_retval = 0;
+  sakamoto_test_disconnect_error = 0;
+  sakamoto_test_omit_callback = 0;
+}
+
+static int
+expect_connect_code (sakamoto_product_bytes_t path, uint32_t expected,
+                     const char *case_name)
+{
+  sakamoto_product_session_t *session = NULL;
+  sakamoto_product_status_t status;
+  uint32_t code = sakamoto_product_session_connect (path, 77U, &session,
+                                                     &status);
+  if (code != expected || status.status_code != expected || session != NULL)
+    {
+      fprintf (stderr, "%s: got code=%u status=%u session=%p expected=%u\n",
+               case_name, code, status.status_code, (void *) session, expected);
+      if (session != NULL)
+        sakamoto_product_session_destroy (session);
+      return 1;
+    }
+  return 0;
+}
+
+static int
+expect_connect_code_detail (sakamoto_product_bytes_t path, uint32_t expected,
+                            const char *detail, const char *case_name)
+{
+  sakamoto_product_session_t *session = NULL;
+  sakamoto_product_status_t status;
+  uint32_t code = sakamoto_product_session_connect (path, 77U, &session,
+                                                     &status);
+  if (code != expected || status.status_code != expected || session != NULL
+      || strstr (status.error_detail, detail) == NULL)
+    {
+      fprintf (stderr, "%s: got code=%u status=%u detail=%s expected=%u/%s\n",
+               case_name, code, status.status_code, status.error_detail,
+               expected, detail);
+      if (session != NULL)
+        sakamoto_product_session_destroy (session);
+      return 1;
+    }
+  return 0;
+}
+
+static int
+expect_query_code_detail (sakamoto_product_session_t *session,
+                          uint32_t expected, const char *detail,
+                          const char *case_name)
+{
+  sakamoto_product_status_t status;
+  uint32_t code = sakamoto_product_session_query (session, 77U, &status);
+  if (code != expected || status.status_code != expected
+      || strstr (status.error_detail, detail) == NULL)
+    {
+      fprintf (stderr, "%s: got code=%u status=%u detail=%s expected=%u/%s\n",
+               case_name, code, status.status_code, status.error_detail,
+               expected, detail);
+      return 1;
+    }
+  return 0;
+}
 
 int
 main (void)
@@ -201,6 +315,54 @@ main (void)
   };
   sakamoto_product_session_t *session = NULL;
   sakamoto_product_status_t status;
+
+  sakamoto_test_ctx_alloc_error = 99;
+  if (expect_connect_code (path, SAKAMOTO_PRODUCT_ALLOCATION_FAILED,
+                           "VAPI context allocation") != 0)
+    return 1;
+  reset_faults ();
+
+  sakamoto_test_connect_error = 99;
+  if (expect_connect_code (path, SAKAMOTO_PRODUCT_CONNECT_FAILED,
+                           "VAPI connect") != 0)
+    return 1;
+  reset_faults ();
+
+  sakamoto_test_alloc_message = 1;
+  if (expect_connect_code (path, SAKAMOTO_PRODUCT_ALLOCATION_FAILED,
+                           "VAPI request allocation") != 0)
+    return 1;
+  reset_faults ();
+
+  sakamoto_test_send_error = 99;
+  if (expect_connect_code_detail (path, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                  "VAPI status request send failed",
+                                  "VAPI request send") != 0)
+    return 1;
+  reset_faults ();
+
+  sakamoto_test_callback_error = 99;
+  if (expect_connect_code_detail (path, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                  "VAPI status callback failed",
+                                  "VAPI callback error") != 0)
+    return 1;
+  reset_faults ();
+
+  sakamoto_test_null_reply = 1;
+  if (expect_connect_code_detail (path, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                  "VAPI status callback returned a null reply",
+                                  "VAPI null reply") != 0)
+    return 1;
+  reset_faults ();
+
+  sakamoto_test_reply_retval = 17;
+  if (expect_connect_code_detail (path, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                  "VPP status request returned retval=17",
+                                  "VPP retval") != 0)
+    return 1;
+  reset_faults ();
+  sakamoto_test_send_calls = 0;
+  sakamoto_test_send_invalid_id_calls = 0;
 
   sakamoto_test_request_available = 0;
   sakamoto_test_reply_available = 1;
@@ -237,6 +399,42 @@ main (void)
       fprintf (stderr, "available VAPI messages did not use the normal path\n");
       return 1;
     }
+
+  sakamoto_test_send_error = 99;
+  if (expect_query_code_detail (session, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                "VAPI status request send failed",
+                                "VAPI query send") != 0)
+    return 1;
+  reset_faults ();
+  sakamoto_test_callback_error = 99;
+  if (expect_query_code_detail (session, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                "VAPI status callback failed",
+                                "VAPI query callback") != 0)
+    return 1;
+  reset_faults ();
+  sakamoto_test_null_reply = 1;
+  if (expect_query_code_detail (session, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                "VAPI status callback returned a null reply",
+                                "VAPI query null reply") != 0)
+    return 1;
+  reset_faults ();
+  sakamoto_test_reply_retval = 17;
+  if (expect_query_code_detail (session, SAKAMOTO_PRODUCT_QUERY_FAILED,
+                                "VPP status request returned retval=17",
+                                "VAPI query VPP retval") != 0)
+    return 1;
+  reset_faults ();
+
+  sakamoto_test_disconnect_error = 99;
+  code = sakamoto_product_session_disconnect (session);
+  if (code != SAKAMOTO_PRODUCT_DISCONNECT_FAILED)
+    {
+      fprintf (stderr, "VAPI disconnect failure was not preserved: got %u\n",
+               code);
+      sakamoto_product_session_destroy (session);
+      return 1;
+    }
+  sakamoto_test_disconnect_error = 0;
   sakamoto_product_session_destroy (session);
   session = NULL;
 

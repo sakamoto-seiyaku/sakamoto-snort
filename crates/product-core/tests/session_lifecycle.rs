@@ -140,6 +140,43 @@ fn a_reply_for_another_generation_is_rejected_at_connect() {
 }
 
 #[test]
+fn native_query_failure_tag_and_detail_reach_the_rust_boundary() {
+    let _test_lock = lifecycle_test_lock();
+    let path = unique_socket("typed-query-failure");
+    let listener = match UnixListener::bind(&path) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("socket seam unavailable in this sandbox; rerun outside it");
+            return;
+        }
+        Err(error) => panic!("cannot bind typed failure test socket: {error}"),
+    };
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(request(&mut stream), (OP_CONNECT, 17));
+        stream
+            .write_all(&response(
+                17,
+                ErrorCode::QueryFailed.raw(),
+                b"VAPI status request send failed",
+            ))
+            .unwrap();
+    });
+
+    let result = ProductCore::connect(&path, 17);
+    match result {
+        Err(sakamoto_product_core::ProductError::Native { code, status }) => {
+            assert_eq!(code, ErrorCode::QueryFailed);
+            assert_eq!(status.code, ErrorCode::QueryFailed);
+            assert_eq!(status.error_detail, "VAPI status request send failed");
+        }
+        other => panic!("typed query failure was lost at Rust boundary: {other:?}"),
+    }
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn stopping_a_generation_retires_it_but_next_generation_can_connect() {
     let _test_lock = lifecycle_test_lock();
     let path = unique_socket("retire");

@@ -127,7 +127,9 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeConnect (
                                             &handle, &status);
       (*env)->ReleaseStringUTFChars (env, api_socket, socket);
     }
-  (void) code;
+  /* Keep the function return and status tag consistent at the JNI seam. */
+  if (status.status_code != code)
+    status.status_code = code;
   jobjectArray values = status_values (
       env, &status, (jlong) (intptr_t) handle, 1);
   if (values == NULL && handle != NULL)
@@ -146,7 +148,8 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeQuery (
       (sakamoto_product_core_handle_t *) (intptr_t) handle;
   uint32_t code = sakamoto_product_core_query (
       native_handle, generation > 0 ? (uint64_t) generation : 0U, &status);
-  (void) code;
+  if (status.status_code != code)
+    status.status_code = code;
   return status_values (env, &status, 0, 0);
 }
 

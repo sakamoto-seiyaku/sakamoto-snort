@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/un.h>
@@ -61,9 +62,12 @@ status_reply (vapi_ctx_t context, void *callback_context, vapi_error_e rv,
   call->callback_called = true;
   if (rv != VAPI_OK || reply == NULL)
     {
+      const char *detail = rv != VAPI_OK
+        ? "VAPI status callback failed"
+        : "VAPI status callback returned a null reply";
       call->transport_code = SAKAMOTO_PRODUCT_QUERY_FAILED;
       sakamoto_product_status_error (call->status, call->transport_code,
-                                     "VAPI status request failed");
+                                     detail);
       return VAPI_OK;
     }
   call->status->status_code = SAKAMOTO_PRODUCT_OK;
@@ -87,9 +91,13 @@ status_reply (vapi_ctx_t context, void *callback_context, vapi_error_e rv,
     reply->vpp_revision, sizeof (reply->vpp_revision));
   if (reply->retval != 0)
     {
+      char detail[SAKAMOTO_PRODUCT_ERROR_DETAIL_MAX];
       call->transport_code = SAKAMOTO_PRODUCT_QUERY_FAILED;
+      (void) snprintf (detail, sizeof (detail),
+                       "VPP status request returned retval=%d",
+                       (int) reply->retval);
       sakamoto_product_status_error (call->status, call->transport_code,
-                                     "VPP status request returned an error");
+                                     detail);
     }
   return VAPI_OK;
 }
@@ -127,7 +135,7 @@ query_status (sakamoto_product_session_t *session,
   if (rv != VAPI_OK && call.transport_code == SAKAMOTO_PRODUCT_OK)
     {
       sakamoto_product_status_error (status, SAKAMOTO_PRODUCT_QUERY_FAILED,
-                                     "VAPI status request failed");
+                                     "VAPI status request send failed");
       return SAKAMOTO_PRODUCT_QUERY_FAILED;
     }
   return call.transport_code != SAKAMOTO_PRODUCT_OK ? call.transport_code
@@ -297,15 +305,17 @@ sakamoto_product_session_disconnect (sakamoto_product_session_t *session)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
   if (pthread_mutex_lock (&session->mutex) != 0)
     return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  vapi_error_e rv = VAPI_OK;
   if (session->connected)
     {
       session->connected = 0;
-      vapi_disconnect (session->context);
+      rv = vapi_disconnect (session->context);
       vapi_ctx_free (session->context);
       session->context = NULL;
     }
   pthread_mutex_unlock (&session->mutex);
-  return SAKAMOTO_PRODUCT_OK;
+  return rv == VAPI_OK ? SAKAMOTO_PRODUCT_OK
+                       : SAKAMOTO_PRODUCT_DISCONNECT_FAILED;
 }
 
 uint32_t
