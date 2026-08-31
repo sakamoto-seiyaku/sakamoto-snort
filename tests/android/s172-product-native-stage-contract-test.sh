@@ -6,7 +6,7 @@ build_script="$repo_root/app/android-runtime/scripts/build-debug-apk.sh"
 plugin_cmake="$repo_root/src/product/vpp/CMakeLists.txt"
 pinned_revision="$(tr -d '[:space:]' < "$repo_root/src/product/vpp/pinned-vpp-revision.txt")"
 expected_patch_series_count=17
-expected_patch_series_sha256=0fedcc6f52070d45f934afa76e23a2aae54beb75cc9d8037d879c80275d6878e
+expected_patch_series_sha256=4ab50bbeccb5563e405a174c8f00be8c33a84be255e6fe008d4e734363686ac4
 
 # The test accepts only caller-supplied clean product inputs. The VPP stage is
 # the sole source for generated headers, host tools, and runtime libraries; no

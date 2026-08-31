@@ -142,6 +142,12 @@ fn main() {
             println!("cargo:rustc-link-lib=dl");
             println!("cargo:rustc-link-lib=m");
         } else {
+            // Host linkers do not recursively search a shared library's
+            // NEEDED closure. Keep the official vapiclient dependencies
+            // explicit so a relocated verified VPP stage links reliably.
+            for library in ["vlibmemoryclient", "vlibapi", "svm", "vppinfra"] {
+                println!("cargo:rustc-link-lib=dylib={library}");
+            }
             println!("cargo:rustc-link-lib=pthread");
             println!("cargo:rustc-link-lib=dl");
             println!("cargo:rustc-link-lib=rt");

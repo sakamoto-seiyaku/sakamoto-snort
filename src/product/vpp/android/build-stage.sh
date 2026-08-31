@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 profile_module="$repo_root/src/product/vpp/android/apply-profile.sh"
+identity_file="$repo_root/src/product/vpp/product-vpp-artifact.properties"
 source_dir=""
 stage_dir=""
 android_api="${SAKAMOTO_S172_ANDROID_API:-31}"
@@ -15,7 +16,13 @@ cmake_bin="${SAKAMOTO_S172_CMAKE:-cmake}"
 build_jobs="${SAKAMOTO_S172_BUILD_JOBS:-2}"
 stage_marker_value="sakamoto-android-vpp-stage/v1"
 expected_patch_series_count=17
-expected_patch_series_sha256=0fedcc6f52070d45f934afa76e23a2aae54beb75cc9d8037d879c80275d6878e
+expected_patch_series_sha256=4ab50bbeccb5563e405a174c8f00be8c33a84be255e6fe008d4e734363686ac4
+expected_core_patch_series_count="$(
+  sed -n 's/^vpp.core.patch.count=//p' "$identity_file"
+)"
+expected_core_patch_series_sha256="$(
+  sed -n 's/^vpp.core.patch.sha256=//p' "$identity_file"
+)"
 python_bin="$(command -v python3 2>/dev/null || true)"
 flock_bin="$(command -v flock 2>/dev/null || true)"
 
@@ -154,6 +161,16 @@ SAKAMOTO_S172_ANDROID_ABI="$android_abi" \
     --work-dir "$patched_source" >"$work_dir/profile.log"
 patch_series_count="$(sed -n 's/^patchSeriesCount=//p' "$work_dir/profile.log")"
 patch_series_sha256="$(sed -n 's/^patchSeriesSha256=//p' "$work_dir/profile.log")"
+core_patch_series_count="$(
+  sed -n 's/^corePatchSeriesCount=//p' "$work_dir/profile.log"
+)"
+core_patch_series_sha256="$(
+  sed -n 's/^corePatchSeriesSha256=//p' "$work_dir/profile.log"
+)"
+[[ "$core_patch_series_count" == "$expected_core_patch_series_count" ]] || \
+  die "common-core patch series count does not match the product allowlist"
+[[ "$core_patch_series_sha256" == "$expected_core_patch_series_sha256" ]] || \
+  die "common-core patch series hash does not match the product allowlist"
 [[ "$patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
   die "profile did not report a valid patch series count"
 [[ "$patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
@@ -377,6 +394,8 @@ buildSupportPayloadBytes=$build_support_payload_bytes
 stagePayloadBytes=$stage_payload_bytes
 patchSeriesCount=$patch_series_count
 patchSeriesSha256=$patch_series_sha256
+corePatchSeriesCount=$core_patch_series_count
+corePatchSeriesSha256=$core_patch_series_sha256
 api=$android_api
 abi=$android_abi
 binary=bin/vpp
@@ -460,6 +479,8 @@ echo "stage=$stage_dir"
 echo "revision=$source_head"
 echo "patchSeriesCount=$patch_series_count"
 echo "patchSeriesSha256=$patch_series_sha256"
+echo "corePatchSeriesCount=$core_patch_series_count"
+echo "corePatchSeriesSha256=$core_patch_series_sha256"
 echo "api=$android_api"
 echo "abi=$android_abi"
 echo "GREEN: direct NDK API 31/arm64-v8a built and staged vpp/vapiclient closure"

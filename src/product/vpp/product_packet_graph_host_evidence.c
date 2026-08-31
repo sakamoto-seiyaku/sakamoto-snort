@@ -8,5 +8,15 @@
 #define PRODUCT_GRAPH_FIXTURE "s174-valid-dual-stack-v1"
 #define PRODUCT_GRAPH_RUN_FIXTURE_COMMAND "product packet-graph run-fixture"
 #define PRODUCT_GRAPH_RUN_FIXTURE_HELP PRODUCT_GRAPH_RUN_FIXTURE_COMMAND " "
+#define PRODUCT_GRAPH_CONGESTION_FIXTURE "s175-handoff-congestion-v1"
+#define PRODUCT_GRAPH_FRAGMENT_FIXTURE                                    \
+  "s175-official-full-reassembly-v1"
+#define PRODUCT_GRAPH_RUN_FRAGMENT_FIXTURE_COMMAND                        \
+  "product packet-graph run-fragment-fixture"
+#define PRODUCT_GRAPH_LIFECYCLE_FIXTURE "s175-bounded-drain-generation-v1"
+#define PRODUCT_GRAPH_RUN_LIFECYCLE_FIXTURE_COMMAND                       \
+  "product packet-graph run-lifecycle-fixture"
+#define PRODUCT_GRAPH_RUN_CONGESTION_FIXTURE_COMMAND                         \
+  "product packet-graph run-congestion-fixture"
 
 #include "product_packet_graph.c"

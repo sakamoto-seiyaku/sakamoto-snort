@@ -173,32 +173,68 @@ if grep -Eq '/ipsec/[^: ]+\.(c|cc)\.o([: ]|$)' "$work_dir/targets.txt"; then
   fail "configured no-IPsec build graph still contains IPsec objects"
 fi
 
-# Accepted idle behavior: exactly these eight default periodic processes wait
-# for an event under the Android profile. Other VPP timers are not globally
-# delayed or disabled by this contract.
-idle_process_files=(
+# Common-core reassembly expiry is clock-driven only while a context exists.
+# With no retained context it becomes event-only, so Android keeps the idle
+# win without making fragment timeout depend on a later packet/config event.
+reassembly_expiry_files=(
   src/vnet/ip/reass/ip4_full_reass.c
   src/vnet/ip/reass/ip6_full_reass.c
   src/vnet/ip/reass/ip4_sv_reass.c
   src/vnet/ip/reass/ip6_sv_reass.c
+)
+reassembly_expiry_functions=(
+  ip4_full_reass_walk_expired
+  ip6_full_reass_walk_expired
+  ip4_sv_reass_walk_expired
+  ip6_sv_reass_walk_expired
+)
+[[ "${#reassembly_expiry_files[@]}" -eq 4 &&
+   "${#reassembly_expiry_functions[@]}" -eq 4 ]] || \
+  fail "reassembly expiry allowlist must contain exactly four entries"
+for index in "${!reassembly_expiry_files[@]}"; do
+  relative_path="${reassembly_expiry_files[$index]}"
+  function_name="${reassembly_expiry_functions[$index]}"
+  path="$patched_source/$relative_path"
+  [[ -f "$path" ]] || fail "reassembly expiry source is missing: $relative_path"
+  python3 - "$path" "$function_name" <<'PY' || \
+    fail "$function_name is not active-context clock / idle event driven"
+import re
+import sys
+
+path, function_name = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+match = re.search(r"\b" + re.escape(function_name) + r"\s*\(", text)
+if match is None:
+    raise SystemExit(1)
+window = text[match.start():match.start() + 3400]
+pattern = re.compile(
+    r"if\s*\(\s*__atomic_load_n\s*\([^;{}]*active_reass_n[^;{}]*\)\s*\)"
+    r"\s*vlib_process_wait_for_event_or_clock\s*\(.*?\)\s*;"
+    r"\s*else\s*vlib_process_wait_for_event\s*\(",
+    re.DOTALL,
+)
+raise SystemExit(0 if pattern.search(window) else 1)
+PY
+done
+
+# The Android-only idle profile keeps exactly these four other default
+# periodic processes event-only. Other VPP timers are not globally delayed or
+# disabled by this contract.
+idle_process_files=(
   src/vnet/ip6-nd/ip6_mld.c
   src/vnet/ip6-nd/ip6_ra.c
   src/vnet/fib/fib_walk.c
   src/vlib/stats/collector.c
 )
 idle_process_functions=(
-  ip4_full_reass_walk_expired
-  ip6_full_reass_walk_expired
-  ip4_sv_reass_walk_expired
-  ip6_sv_reass_walk_expired
   ip6_mld_event_process
   ip6_ra_event_process
   fib_walk_process
   stat_segment_collector_process
 )
-[[ "${#idle_process_files[@]}" -eq 8 &&
-   "${#idle_process_functions[@]}" -eq 8 ]] || \
-  fail "accepted idle process allowlist must contain exactly eight entries"
+[[ "${#idle_process_files[@]}" -eq 4 &&
+   "${#idle_process_functions[@]}" -eq 4 ]] || \
+  fail "Android-only idle process allowlist must contain exactly four entries"
 idle_process_pairs=()
 for index in "${!idle_process_files[@]}"; do
   relative_path="${idle_process_files[$index]}"

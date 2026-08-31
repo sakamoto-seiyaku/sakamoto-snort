@@ -1,0 +1,153 @@
+diff --git a/src/vlib/buffer_funcs.c b/src/vlib/buffer_funcs.c
+index ce09a51c600b30e3251bb2c657d67f636a21d58c..4a963a9518762e93d8c22a6c2e9258829422733b 100644
+--- a/src/vlib/buffer_funcs.c
++++ b/src/vlib/buffer_funcs.c
+@@ -292,7 +292,8 @@ vlib_buffer_enqueue_to_thread_inline (vlib_main_t *vm,
+ 				      vlib_frame_queue_main_t *fqm,
+ 				      u32 *buffer_indices, u16 *thread_indices,
+ 				      u32 n_packets, int drop_on_congestion,
+-				      int with_aux, u32 *aux_data)
++				      int with_aux, u32 *aux_data,
++				      u32 *failed_buffer_indices)
+ {
+   u32 drop_list[VLIB_FRAME_SIZE], n_drop = 0;
+   vlib_frame_bitmap_t mask, used_elts = {};
+@@ -306,7 +307,10 @@ more:
+   clib_mask_compare_u16 (thread_index, thread_indices, mask, n_packets);
+   hf = vlib_get_frame_queue_elt (fqm, thread_index, drop_on_congestion);
+ 
+-  n_comp = clib_compress_u32 (hf ? hf->buffer_index : drop_list + n_drop,
++  n_comp = clib_compress_u32 (
++    hf ? hf->buffer_index :
++         (failed_buffer_indices ? failed_buffer_indices + n_drop :
++				    drop_list + n_drop),
+ 			      buffer_indices, mask, n_packets);
+   if (with_aux)
+     clib_compress_u32 (hf ? hf->aux_data : drop_list + n_drop, aux_data, mask,
+@@ -340,7 +344,7 @@ more:
+       goto more;
+     }
+ 
+-  if (drop_on_congestion && n_drop)
++  if (drop_on_congestion && n_drop && !failed_buffer_indices)
+     vlib_buffer_free (vm, drop_list, n_drop);
+ 
+   return n_packets - n_drop;
+@@ -362,7 +366,7 @@ CLIB_MULTIARCH_FN (vlib_buffer_enqueue_to_thread_fn)
+     {
+       n_enq += vlib_buffer_enqueue_to_thread_inline (
+ 	vm, node, fqm, buffer_indices, thread_indices, VLIB_FRAME_SIZE,
+-	drop_on_congestion, 0 /* with_aux */, NULL);
++	drop_on_congestion, 0 /* with_aux */, NULL, NULL);
+       buffer_indices += VLIB_FRAME_SIZE;
+       thread_indices += VLIB_FRAME_SIZE;
+       n_packets -= VLIB_FRAME_SIZE;
+@@ -373,7 +377,7 @@ CLIB_MULTIARCH_FN (vlib_buffer_enqueue_to_thread_fn)
+ 
+   n_enq += vlib_buffer_enqueue_to_thread_inline (
+     vm, node, fqm, buffer_indices, thread_indices, n_packets,
+-    drop_on_congestion, 0 /* with_aux */, NULL);
++    drop_on_congestion, 0 /* with_aux */, NULL, NULL);
+ 
+   return n_enq;
+ }
+@@ -394,7 +398,7 @@ CLIB_MULTIARCH_FN (vlib_buffer_enqueue_to_thread_with_aux_fn)
+     {
+       n_enq += vlib_buffer_enqueue_to_thread_inline (
+ 	vm, node, fqm, buffer_indices, thread_indices, VLIB_FRAME_SIZE,
+-	drop_on_congestion, 1 /* with_aux */, aux);
++	drop_on_congestion, 1 /* with_aux */, aux, NULL);
+       buffer_indices += VLIB_FRAME_SIZE;
+       thread_indices += VLIB_FRAME_SIZE;
+       n_packets -= VLIB_FRAME_SIZE;
+@@ -405,7 +409,7 @@ CLIB_MULTIARCH_FN (vlib_buffer_enqueue_to_thread_with_aux_fn)
+ 
+   n_enq += vlib_buffer_enqueue_to_thread_inline (
+     vm, node, fqm, buffer_indices, thread_indices, n_packets,
+-    drop_on_congestion, 1 /* with_aux */, aux);
++    drop_on_congestion, 1 /* with_aux */, aux, NULL);
+ 
+   return n_enq;
+ }
+@@ -413,6 +417,36 @@ CLIB_MULTIARCH_FN (vlib_buffer_enqueue_to_thread_with_aux_fn)
+ CLIB_MARCH_FN_REGISTRATION (vlib_buffer_enqueue_to_thread_fn);
+ CLIB_MARCH_FN_REGISTRATION (vlib_buffer_enqueue_to_thread_with_aux_fn);
+ 
++#ifndef CLIB_MARCH_VARIANT
++u32
++vlib_buffer_enqueue_to_thread_retained_fn (
++  vlib_main_t *vm, vlib_node_runtime_t *node, u32 frame_queue_index,
++  u32 *buffer_indices, u16 *thread_indices, u32 n_packets,
++  u32 *failed_buffer_indices)
++{
++  vlib_thread_main_t *tm = vlib_get_thread_main ();
++  vlib_frame_queue_main_t *fqm =
++    vec_elt_at_index (tm->frame_queue_mains, frame_queue_index);
++  u32 n_enq = 0;
++
++  while (n_packets)
++    {
++      u32 n_this = clib_min (n_packets, VLIB_FRAME_SIZE);
++      u32 n_this_enq = vlib_buffer_enqueue_to_thread_inline (
++	vm, node, fqm, buffer_indices, thread_indices, n_this,
++	1 /* dont_wait */, 0 /* with_aux */, NULL, failed_buffer_indices);
++
++      n_enq += n_this_enq;
++      failed_buffer_indices += n_this - n_this_enq;
++      buffer_indices += n_this;
++      thread_indices += n_this;
++      n_packets -= n_this;
++    }
++
++  return n_enq;
++}
++#endif
++
+ static_always_inline u32
+ vlib_frame_queue_dequeue_inline (vlib_main_t *vm, vlib_frame_queue_main_t *fqm,
+ 				 u8 with_aux)
+diff --git a/src/vlib/buffer_funcs.h b/src/vlib/buffer_funcs.h
+index e8b90e38058b1afe9fced5bc708a140f6ea842c1..1b6f11ba72778f2e02a854878f397151b8860327 100644
+--- a/src/vlib/buffer_funcs.h
++++ b/src/vlib/buffer_funcs.h
+@@ -45,6 +45,17 @@ typedef u32 (vlib_buffer_enqueue_to_thread_with_aux_fn_t) (
+   u32 *buffer_indices, u32 *aux, u16 *thread_indices, u32 n_packets,
+   int drop_on_congestion);
+ 
++/*
++ * Try to enqueue without waiting for frame-queue space.  Rejected buffers are
++ * not freed; their indices are compacted into failed_buffer_indices.  The
++ * caller must provide room for n_packets failed indices and owns
++ * every rejected buffer.  The return value is the number enqueued.
++ */
++u32 vlib_buffer_enqueue_to_thread_retained_fn (
++  vlib_main_t *vm, vlib_node_runtime_t *node, u32 frame_queue_index,
++  u32 *buffer_indices, u16 *thread_indices, u32 n_packets,
++  u32 *failed_buffer_indices);
++
+ typedef struct
+ {
+   vlib_buffer_enqueue_to_next_fn_t *buffer_enqueue_to_next_fn;
+diff --git a/src/vlib/buffer_node.h b/src/vlib/buffer_node.h
+index e7f0a4aa0acd65f5951365b12834cfb736803d59..cc6dcce854468ab0ffe3cd5321e3e372906d8627 100644
+--- a/src/vlib/buffer_node.h
++++ b/src/vlib/buffer_node.h
+@@ -427,6 +427,18 @@ vlib_buffer_enqueue_to_thread (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 	       n_packets, drop_on_congestion);
+ }
+ 
++/* Nonblocking enqueue which retains ownership of every rejected buffer. */
++static_always_inline u32
++vlib_buffer_enqueue_to_thread_retained (
++  vlib_main_t *vm, vlib_node_runtime_t *node, u32 frame_queue_index,
++  u32 *buffer_indices, u16 *thread_indices, u32 n_packets,
++  u32 *failed_buffer_indices)
++{
++  return vlib_buffer_enqueue_to_thread_retained_fn (
++    vm, node, frame_queue_index, buffer_indices, thread_indices, n_packets,
++    failed_buffer_indices);
++}
++
+ static_always_inline u32
+ vlib_buffer_enqueue_to_thread_with_aux (vlib_main_t *vm,
+ 					vlib_node_runtime_t *node,

@@ -1,0 +1,287 @@
+diff --git a/src/vnet/ip/reass/ip4_full_reass.c b/src/vnet/ip/reass/ip4_full_reass.c
+index f4e7e184378e9c0f247e3143183c0729b28628da..622ccb53d928e7b8ec15c395d1e3242d8a6f8a2e 100644
+--- a/src/vnet/ip/reass/ip4_full_reass.c
++++ b/src/vnet/ip/reass/ip4_full_reass.c
+@@ -29,6 +29,7 @@
+ #define IP4_REASS_MAX_REASSEMBLIES_DEFAULT 1024
+ #define IP4_REASS_MAX_REASSEMBLY_LENGTH_DEFAULT	  3
+ #define IP4_REASS_HT_LOAD_FACTOR (0.75)
++#define IP4_EVENT_REASSEMBLY_ACTIVE 2
+ 
+ #define IP4_REASS_DEBUG_BUFFERS 0
+ #if IP4_REASS_DEBUG_BUFFERS
+@@ -174,6 +175,7 @@ typedef struct
+   vlib_main_t *vlib_main;
+ 
+   u32 ip4_full_reass_expire_node_idx;
++  u32 active_reass_n;
+ 
+   /** Worker handoff */
+   u32 fq_index;
+@@ -448,6 +450,9 @@ ip4_full_reass_free_ctx (ip4_full_reass_per_thread_t * rt,
+ {
+   pool_put (rt->pool, reass);
+   --rt->reass_n;
++  u32 old = __atomic_fetch_sub (&ip4_full_reass_main.active_reass_n, 1,
++				__ATOMIC_RELAXED);
++  ASSERT (old > 0);
+ }
+ 
+ always_inline void
+@@ -640,6 +645,12 @@ again:
+       ++rt->id_counter;
+       ip4_full_reass_init (reass);
+       ++rt->reass_n;
++      u32 old = __atomic_fetch_add (&rm->active_reass_n, 1,
++				    __ATOMIC_RELAXED);
++      if (0 == old)
++	vlib_process_signal_event (rm->vlib_main,
++				   rm->ip4_full_reass_expire_node_idx,
++				   IP4_EVENT_REASSEMBLY_ACTIVE, 0);
+     }
+ 
+   clib_memcpy_fast (&reass->key, &kv->kv.key, sizeof (reass->key));
+@@ -1707,10 +1718,11 @@ ip4_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 
+   while (true)
+     {
+-      vlib_process_wait_for_event_or_clock (vm,
+-					    (f64)
+-					    rm->expire_walk_interval_ms /
+-					    (f64) MSEC_PER_SEC);
++      if (__atomic_load_n (&rm->active_reass_n, __ATOMIC_RELAXED))
++	vlib_process_wait_for_event_or_clock (
++	  vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++      else
++	vlib_process_wait_for_event (vm);
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+@@ -1719,6 +1731,7 @@ ip4_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 	  /* no events => timeout */
+ 	  /* fallthrough */
+ 	case IP4_EVENT_CONFIG_CHANGED:
++	case IP4_EVENT_REASSEMBLY_ACTIVE:
+ 	  /* nothing to do here */
+ 	  break;
+ 	default:
+@@ -1747,10 +1760,8 @@ ip4_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 
+ 	  u32 beg = rt->last_id;
+ 	  /* to ensure we walk at least once per sec per context */
+-	  u32 end =
+-	    beg + (IP4_REASS_MAX_REASSEMBLIES_DEFAULT *
+-		     IP4_REASS_EXPIRE_WALK_INTERVAL_DEFAULT_MS / MSEC_PER_SEC +
+-		   1);
++	  u32 end = beg +
++	    (rm->max_reass_n * rm->expire_walk_interval_ms / MSEC_PER_SEC + 1);
+ 	  if (end > vec_len (rt->pool))
+ 	    {
+ 	      end = vec_len (rt->pool);
+diff --git a/src/vnet/ip/reass/ip4_sv_reass.c b/src/vnet/ip/reass/ip4_sv_reass.c
+index 80e5770629ff6737c15101978b53cf993c845795..b2aadf851c690912ef1e2569bbfa9d8e8e970414 100644
+--- a/src/vnet/ip/reass/ip4_sv_reass.c
++++ b/src/vnet/ip/reass/ip4_sv_reass.c
+@@ -25,6 +25,7 @@
+ #define IP4_SV_REASS_MAX_REASSEMBLIES_DEFAULT	   1024
+ #define IP4_SV_REASS_MAX_REASSEMBLY_LENGTH_DEFAULT 3
+ #define IP4_SV_REASS_HT_LOAD_FACTOR		   (0.75)
++#define IP4_EVENT_REASSEMBLY_ACTIVE 2
+ 
+ typedef enum
+ {
+@@ -139,6 +140,7 @@ typedef struct
+   vnet_main_t *vnet_main;
+ 
+   u32 ip4_sv_reass_expire_node_idx;
++  u32 active_reass_n;
+ 
+   /** Worker handoff */
+   u32 fq_index;
+@@ -355,6 +357,8 @@ ip4_sv_reass_free (vlib_main_t *vm, ip4_sv_reass_main_t *rm,
+       rt->lru_last = reass->lru_prev;
+     }
+   pool_put (rt->pool, reass);
++  u32 old = __atomic_fetch_sub (&rm->active_reass_n, 1, __ATOMIC_RELAXED);
++  ASSERT (old > 0);
+ }
+ 
+ always_inline ip4_sv_reass_t *
+@@ -399,6 +403,12 @@ again:
+     }
+ 
+   pool_get_zero (rt->pool, reass);
++  u32 old =
++    __atomic_fetch_add (&rm->active_reass_n, 1, __ATOMIC_RELAXED);
++  if (0 == old)
++    vlib_process_signal_event (rm->vlib_main,
++			       rm->ip4_sv_reass_expire_node_idx,
++			       IP4_EVENT_REASSEMBLY_ACTIVE, 0);
+   reass->first_fragment_clone_bi = ~0;
+   reass->id = ((u64) vm->thread_index * 1000000000) + rt->id_counter;
+   ++rt->id_counter;
+@@ -1481,8 +1491,11 @@ ip4_sv_reass_walk_expired (vlib_main_t *vm,
+ 
+   while (true)
+     {
+-      vlib_process_wait_for_event_or_clock (
+-	vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++      if (__atomic_load_n (&rm->active_reass_n, __ATOMIC_RELAXED))
++	vlib_process_wait_for_event_or_clock (
++	  vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++      else
++	vlib_process_wait_for_event (vm);
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+@@ -1491,6 +1504,7 @@ ip4_sv_reass_walk_expired (vlib_main_t *vm,
+ 	  /* no events => timeout */
+ 	  /* fallthrough */
+ 	case IP4_EVENT_CONFIG_CHANGED:
++	case IP4_EVENT_REASSEMBLY_ACTIVE:
+ 	  /* nothing to do here */
+ 	  break;
+ 	default:
+diff --git a/src/vnet/ip/reass/ip6_full_reass.c b/src/vnet/ip/reass/ip6_full_reass.c
+index 71fa44427f661e826eba0fec54291e1d60a8b0af..79325922c39f94eb1c44d6e3e592659adb041b98 100644
+--- a/src/vnet/ip/reass/ip6_full_reass.c
++++ b/src/vnet/ip/reass/ip6_full_reass.c
+@@ -26,6 +26,7 @@
+ #define IP6_FULL_REASS_MAX_REASSEMBLIES_DEFAULT 1024
+ #define IP6_FULL_REASS_MAX_REASSEMBLY_LENGTH_DEFAULT 3
+ #define IP6_FULL_REASS_HT_LOAD_FACTOR (0.75)
++#define IP6_EVENT_REASSEMBLY_ACTIVE 2
+ 
+ typedef enum
+ {
+@@ -155,6 +156,7 @@ typedef struct
+ 
+   u32 ip6_icmp_error_idx;
+   u32 ip6_full_reass_expire_node_idx;
++  u32 active_reass_n;
+ 
+   /** Worker handoff */
+   u32 fq_index;
+@@ -448,6 +450,9 @@ ip6_full_reass_free_ctx (ip6_full_reass_per_thread_t * rt,
+ {
+   pool_put (rt->pool, reass);
+   --rt->reass_n;
++  u32 old = __atomic_fetch_sub (&ip6_full_reass_main.active_reass_n, 1,
++				__ATOMIC_RELAXED);
++  ASSERT (old > 0);
+ }
+ 
+ always_inline void
+@@ -701,6 +706,12 @@ again:
+       reass->error_next_index = ~0;
+       reass->memory_owner_thread_index = vm->thread_index;
+       ++rt->reass_n;
++      u32 old = __atomic_fetch_add (&rm->active_reass_n, 1,
++				    __ATOMIC_RELAXED);
++      if (0 == old)
++	vlib_process_signal_event (rm->vlib_main,
++				   rm->ip6_full_reass_expire_node_idx,
++				   IP6_EVENT_REASSEMBLY_ACTIVE, 0);
+     }
+ 
+   kv->v.reass_index = (reass - rt->pool);
+@@ -1806,9 +1817,11 @@ ip6_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 
+   while (true)
+     {
+-      vlib_process_wait_for_event_or_clock (vm,
+-					    (f64) rm->expire_walk_interval_ms
+-					    / (f64) MSEC_PER_SEC);
++      if (__atomic_load_n (&rm->active_reass_n, __ATOMIC_RELAXED))
++	vlib_process_wait_for_event_or_clock (
++	  vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++      else
++	vlib_process_wait_for_event (vm);
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+@@ -1817,6 +1830,7 @@ ip6_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 	  /* no events => timeout */
+ 	  /* fallthrough */
+ 	case IP6_EVENT_CONFIG_CHANGED:
++	case IP6_EVENT_REASSEMBLY_ACTIVE:
+ 	  /* nothing to do here */
+ 	  break;
+ 	default:
+@@ -1847,10 +1861,8 @@ ip6_full_reass_walk_expired (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 
+ 	  u32 beg = rt->last_id;
+ 	  /* to ensure we walk at least once per sec per context */
+-	  u32 end = beg + (IP6_FULL_REASS_MAX_REASSEMBLIES_DEFAULT *
+-			     IP6_FULL_REASS_EXPIRE_WALK_INTERVAL_DEFAULT_MS /
+-			     MSEC_PER_SEC +
+-			   1);
++	  u32 end = beg +
++	    (rm->max_reass_n * rm->expire_walk_interval_ms / MSEC_PER_SEC + 1);
+ 	  if (end > vec_len (rt->pool))
+ 	    {
+ 	      end = vec_len (rt->pool);
+diff --git a/src/vnet/ip/reass/ip6_sv_reass.c b/src/vnet/ip/reass/ip6_sv_reass.c
+index 18428424daffe11d17eede39a00f1f59313fd1f8..676618225bef4fcd24b76cec62bf52a812057c0c 100644
+--- a/src/vnet/ip/reass/ip6_sv_reass.c
++++ b/src/vnet/ip/reass/ip6_sv_reass.c
+@@ -25,6 +25,7 @@
+ #define IP6_SV_REASS_MAX_REASSEMBLIES_DEFAULT	   1024
+ #define IP6_SV_REASS_MAX_REASSEMBLY_LENGTH_DEFAULT 3
+ #define IP6_SV_REASS_HT_LOAD_FACTOR		   (0.75)
++#define IP6_EVENT_REASSEMBLY_ACTIVE 2
+ 
+ typedef enum
+ {
+@@ -140,6 +141,7 @@ typedef struct
+   vnet_main_t *vnet_main;
+ 
+   u32 ip6_sv_reass_expire_node_idx;
++  u32 active_reass_n;
+ 
+   /** Worker handoff */
+   u32 fq_index;
+@@ -302,6 +304,8 @@ ip6_sv_reass_free (vlib_main_t *vm, ip6_sv_reass_main_t *rm,
+     }
+   pool_put (rt->pool, reass);
+   --rt->reass_n;
++  u32 old = __atomic_fetch_sub (&rm->active_reass_n, 1, __ATOMIC_RELAXED);
++  ASSERT (old > 0);
+ }
+ 
+ always_inline ip6_sv_reass_t *
+@@ -347,6 +351,12 @@ again:
+   reass->id = ((u64) vm->thread_index * 1000000000) + rt->id_counter;
+   ++rt->id_counter;
+   ++rt->reass_n;
++  u32 old =
++    __atomic_fetch_add (&rm->active_reass_n, 1, __ATOMIC_RELAXED);
++  if (0 == old)
++    vlib_process_signal_event (rm->vlib_main,
++			       rm->ip6_sv_reass_expire_node_idx,
++			       IP6_EVENT_REASSEMBLY_ACTIVE, 0);
+   reass->lru_prev = reass->lru_next = ~0;
+ 
+   if (~0 != rt->lru_last)
+@@ -1195,8 +1205,11 @@ ip6_sv_reass_walk_expired (vlib_main_t *vm,
+ 
+   while (true)
+     {
+-      vlib_process_wait_for_event_or_clock (
+-	vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++      if (__atomic_load_n (&rm->active_reass_n, __ATOMIC_RELAXED))
++	vlib_process_wait_for_event_or_clock (
++	  vm, (f64) rm->expire_walk_interval_ms / (f64) MSEC_PER_SEC);
++      else
++	vlib_process_wait_for_event (vm);
+       event_type = vlib_process_get_events (vm, &event_data);
+ 
+       switch (event_type)
+@@ -1205,6 +1218,7 @@ ip6_sv_reass_walk_expired (vlib_main_t *vm,
+ 	  /* no events => timeout */
+ 	  /* fallthrough */
+ 	case IP6_EVENT_CONFIG_CHANGED:
++	case IP6_EVENT_REASSEMBLY_ACTIVE:
+ 	  /* nothing to do here */
+ 	  break;
+ 	default:

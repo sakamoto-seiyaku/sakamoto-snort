@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
+core_module="$repo_root/src/product/vpp/apply-core.sh"
 patch_dir="$repo_root/src/product/vpp/android/patches"
 profile=""
 source_dir=""
@@ -56,6 +57,7 @@ done
 [[ -n "$source_dir" ]] || die "--source-dir is required"
 [[ -n "$work_dir" ]] || die "--work-dir is required"
 [[ -f "$pin_file" ]] || die "pinned VPP revision file is missing"
+[[ -x "$core_module" ]] || die "Product VPP core profile module is missing"
 canonical_source_dir="$(realpath -e "$source_dir" 2>/dev/null)" || \
   die "source directory cannot be canonicalized"
 source_dir="$canonical_source_dir"
@@ -76,8 +78,23 @@ source_head="$(git -C "$source_dir" rev-parse HEAD)"
   die "source checkout must be clean"
 
 mkdir -p "$(dirname -- "$work_dir")"
-git clone --no-local --no-checkout "$source_dir" "$work_dir" >/dev/null
-git -C "$work_dir" checkout --detach "$pinned_revision" >/dev/null
+core_log="$(mktemp "${TMPDIR:-/tmp}/sakamoto-vpp-core-profile.XXXXXX")"
+cleanup_core_log() {
+  rm -f -- "$core_log"
+}
+trap cleanup_core_log EXIT
+"$core_module" --source-dir "$source_dir" --work-dir "$work_dir" \
+  >"$core_log"
+core_patch_series_count="$(
+  sed -n 's/^corePatchSeriesCount=//p' "$core_log"
+)"
+core_patch_series_sha256="$(
+  sed -n 's/^corePatchSeriesSha256=//p' "$core_log"
+)"
+[[ "$core_patch_series_count" =~ ^[1-9][0-9]*$ ]] || \
+  die "Product VPP core profile did not report a valid patch count"
+[[ "$core_patch_series_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
+  die "Product VPP core profile did not report a valid patch hash"
 
 series="$patch_dir/series"
 [[ -f "$series" ]] || die "profile patch series is missing"
@@ -114,7 +131,7 @@ patch_series_sha256="$(
   die "source checkout changed while applying profile"
 [[ "$(git -C "$work_dir" rev-parse HEAD)" == "$pinned_revision" ]] || \
   die "profile changed the pinned revision"
-expected_changed_files=$'src/CMakeLists.txt\nsrc/svm/CMakeLists.txt\nsrc/svm/message_queue.c\nsrc/svm/message_queue.h\nsrc/svm/queue.c\nsrc/svm/ssvm.c\nsrc/svm/svm.c\nsrc/svm/svm_android_file.c\nsrc/svm/svm_android_file.h\nsrc/vlib/CMakeLists.txt\nsrc/vlib/file.c\nsrc/vlib/stats/collector.c\nsrc/vlib/threads.c\nsrc/vlib/tw_funcs.h\nsrc/vlibmemory/memclnt_api.c\nsrc/vlibmemory/vlib_api_cli.c\nsrc/vnet/CMakeLists.txt\nsrc/vnet/fib/fib_walk.c\nsrc/vnet/gso/node.c\nsrc/vnet/interface_output.c\nsrc/vnet/ip/ip4_forward.c\nsrc/vnet/ip/ip6_forward.c\nsrc/vnet/ip/reass/ip4_full_reass.c\nsrc/vnet/ip/reass/ip4_sv_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.c\nsrc/vnet/ip/reass/ip6_sv_reass.c\nsrc/vnet/ip6-nd/ip6_mld.c\nsrc/vnet/ip6-nd/ip6_ra.c\nsrc/vnet/session/session.c\nsrc/vnet/sfdp/timer/timer.h\nsrc/vpp-api/vapi/CMakeLists.txt\nsrc/vpp/vnet/main.c\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/linux/mem.c\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
+expected_changed_files=$'src/CMakeLists.txt\nsrc/svm/CMakeLists.txt\nsrc/svm/message_queue.c\nsrc/svm/message_queue.h\nsrc/svm/queue.c\nsrc/svm/ssvm.c\nsrc/svm/svm.c\nsrc/svm/svm_android_file.c\nsrc/svm/svm_android_file.h\nsrc/vlib/CMakeLists.txt\nsrc/vlib/buffer_funcs.c\nsrc/vlib/buffer_funcs.h\nsrc/vlib/buffer_node.h\nsrc/vlib/file.c\nsrc/vlib/stats/collector.c\nsrc/vlib/threads.c\nsrc/vlib/tw_funcs.h\nsrc/vlibmemory/memclnt_api.c\nsrc/vlibmemory/vlib_api_cli.c\nsrc/vnet/CMakeLists.txt\nsrc/vnet/fib/fib_walk.c\nsrc/vnet/gso/node.c\nsrc/vnet/interface_output.c\nsrc/vnet/ip/ip4_forward.c\nsrc/vnet/ip/ip6_forward.c\nsrc/vnet/ip/reass/ip4_full_reass.c\nsrc/vnet/ip/reass/ip4_full_reass.h\nsrc/vnet/ip/reass/ip4_sv_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.h\nsrc/vnet/ip/reass/ip6_sv_reass.c\nsrc/vnet/ip6-nd/ip6_mld.c\nsrc/vnet/ip6-nd/ip6_ra.c\nsrc/vnet/session/session.c\nsrc/vnet/sfdp/timer/timer.h\nsrc/vpp-api/vapi/CMakeLists.txt\nsrc/vpp/vnet/main.c\nsrc/vppinfra/CMakeLists.txt\nsrc/vppinfra/dlmalloc.h\nsrc/vppinfra/linux/mem.c\nsrc/vppinfra/maplog.c\nsrc/vppinfra/mem_intercept.c'
 changed_files="$(
   git -C "$work_dir" diff --name-only
   git -C "$work_dir" ls-files --others --exclude-standard
@@ -124,8 +141,13 @@ changed_files="$(printf '%s\n' "$changed_files" | LC_ALL=C sort)"
   die "profile changed files outside the ordered Android patch series"
 
 echo "profile=android-api31-arm64"
+echo "compositionOrder=product-core,android-api31-arm64"
 echo "sourceHead=$source_head"
+echo "corePatchSeriesCount=$core_patch_series_count"
+echo "corePatchSeriesSha256=$core_patch_series_sha256"
 echo "patchSeriesCount=$patch_series_count"
 echo "patchSeriesSha256=$patch_series_sha256"
 echo "workDir=$work_dir"
 echo "patchedPaths=$expected_changed_files"
+trap - EXIT
+cleanup_core_log

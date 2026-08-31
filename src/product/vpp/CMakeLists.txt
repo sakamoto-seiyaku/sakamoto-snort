@@ -89,8 +89,35 @@ execute_process(
   OUTPUT_VARIABLE VPP_SOURCE_STATUS
   OUTPUT_STRIP_TRAILING_WHITESPACE
   RESULT_VARIABLE VPP_SOURCE_STATUS_RESULT)
-if(NOT VPP_SOURCE_STATUS_RESULT EQUAL 0 OR NOT "${VPP_SOURCE_STATUS}" STREQUAL "")
-  message(FATAL_ERROR "VPP_SOURCE_DIR must be a clean checkout")
+if(NOT VPP_SOURCE_STATUS_RESULT EQUAL 0)
+  message(FATAL_ERROR "VPP_SOURCE_DIR status cannot be inspected")
+endif()
+if(NOT "${VPP_SOURCE_STATUS}" STREQUAL "")
+  set(SAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256
+    "${SAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256}" CACHE STRING
+    "Verified Product VPP patch-tree SHA-256")
+  string(LENGTH "${SAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256}"
+    source_tree_sha256_length)
+  if(NOT source_tree_sha256_length EQUAL 64 OR
+     NOT SAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256 MATCHES "^[0-9a-fA-F]+$")
+    message(FATAL_ERROR
+      "patched VPP_SOURCE_DIR requires its verified source-tree SHA-256")
+  endif()
+  set(VPP_SOURCE_DIFF_FILE
+    "${CMAKE_CURRENT_BINARY_DIR}/product-vpp-source-tree.diff")
+  execute_process(
+    COMMAND git -C "${VPP_SOURCE_DIR}" diff --binary HEAD
+    OUTPUT_FILE "${VPP_SOURCE_DIFF_FILE}"
+    RESULT_VARIABLE VPP_SOURCE_DIFF_RESULT)
+  if(NOT VPP_SOURCE_DIFF_RESULT EQUAL 0)
+    message(FATAL_ERROR "patched VPP_SOURCE_DIR diff cannot be inspected")
+  endif()
+  file(SHA256 "${VPP_SOURCE_DIFF_FILE}" VPP_SOURCE_TREE_SHA256)
+  file(REMOVE "${VPP_SOURCE_DIFF_FILE}")
+  if(NOT "${VPP_SOURCE_TREE_SHA256}" STREQUAL
+      "${SAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256}")
+    message(FATAL_ERROR "patched VPP_SOURCE_DIR tree identity mismatch")
+  endif()
 endif()
 
 set(SAKAMOTO_PRODUCT_MANIFEST

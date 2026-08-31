@@ -37,6 +37,18 @@ add_test(NAME sakamoto-product-vpp-contract
 add_test(NAME sakamoto-s174-product-packet-kernel-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s174-product-packet-kernel-contract.sh")
+add_test(NAME sakamoto-s175-product-packet-kernel-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s175-product-packet-kernel-contract.sh")
+add_test(NAME sakamoto-s175-vpp-core-patch-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s175-vpp-core-patch-contract.sh")
+add_test(NAME sakamoto-s175-host-vpp-core-stage-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s175-host-vpp-core-stage-contract.sh")
+add_test(NAME sakamoto-s175-android-vpp-core-profile-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s175-android-vpp-core-profile-contract-test.sh")
 add_test(NAME sakamoto-product-host-query-identity-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_query_identity_contract.sh")
 add_test(NAME sakamoto-product-host-residue-contract

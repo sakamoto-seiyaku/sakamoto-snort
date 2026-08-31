@@ -16,7 +16,13 @@ jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core
 plugin_build_name="product_core_plugin.so"
 plugin_name="libproduct_core_plugin.so"
 expected_vpp_patch_series_count=17
-expected_vpp_patch_series_sha256=0fedcc6f52070d45f934afa76e23a2aae54beb75cc9d8037d879c80275d6878e
+expected_vpp_patch_series_sha256=4ab50bbeccb5563e405a174c8f00be8c33a84be255e6fe008d4e734363686ac4
+expected_vpp_core_patch_series_count="$(
+  sed -n 's/^vpp.core.patch.count=//p' "$product_source_manifest"
+)"
+expected_vpp_core_patch_series_sha256="$(
+  sed -n 's/^vpp.core.patch.sha256=//p' "$product_source_manifest"
+)"
 default_stage_dir="$repo_root/build-output/android-vpp-runtime/stage"
 default_version_state="$repo_root/build-output/android-vpp-runtime/version-code"
 product_stage_cleanup_dir=""
@@ -305,6 +311,8 @@ build_native_stage() {
   require_stage_manifest_line "hostTools=host-tools"
   vpp_patch_series_count="$(sed -n 's/^patchSeriesCount=//p' "$stage_manifest")"
   vpp_patch_series_sha256="$(sed -n 's/^patchSeriesSha256=//p' "$stage_manifest")"
+  vpp_core_patch_series_count="$(sed -n 's/^corePatchSeriesCount=//p' "$stage_manifest")"
+  vpp_core_patch_series_sha256="$(sed -n 's/^corePatchSeriesSha256=//p' "$stage_manifest")"
   vpp_profile="$(strict_manifest_value "$stage_manifest" profile)"
   vpp_runtime_payload_bytes="$(strict_manifest_value "$stage_manifest" runtimePayloadBytes)"
   vpp_runtime_closure_sha256="$(strict_manifest_value "$stage_manifest" runtimeClosureSha256)"
@@ -316,6 +324,12 @@ build_native_stage() {
     die "VPP stage manifest has an unexpected patch series count"
   [[ "$vpp_patch_series_sha256" == "$expected_vpp_patch_series_sha256" ]] || \
     die "VPP stage manifest has an unexpected patch series hash"
+  [[ "$vpp_core_patch_series_count" == \
+       "$expected_vpp_core_patch_series_count" ]] || \
+    die "VPP stage manifest has an unexpected common-core patch count"
+  [[ "$vpp_core_patch_series_sha256" == \
+       "$expected_vpp_core_patch_series_sha256" ]] || \
+    die "VPP stage manifest has an unexpected common-core patch hash"
   [[ "$vpp_profile" == android-api31-arm64 ]] || \
     die "VPP stage manifest has an unexpected profile"
   [[ "$vpp_runtime_payload_bytes" =~ ^[1-9][0-9]*$ ]] || \
@@ -696,6 +710,8 @@ apiVersion=$product_api_version
 vppBinarySha256=$vpp_binary_sha256
 vppPatchSeriesCount=$vpp_patch_series_count
 vppPatchSeriesSha256=$vpp_patch_series_sha256
+vppCorePatchSeriesCount=$vpp_core_patch_series_count
+vppCorePatchSeriesSha256=$vpp_core_patch_series_sha256
 vppProfile=$vpp_profile
 vppRuntimePayloadBytes=$vpp_runtime_payload_bytes
 vppRuntimeClosureSha256=$vpp_runtime_closure_sha256

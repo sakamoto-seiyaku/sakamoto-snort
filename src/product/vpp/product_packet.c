@@ -104,6 +104,23 @@ select_owner (const product_worker_layout_t *layout, uint32_t flow_domain,
   return (uint16_t) (hash % layout->worker_count);
 }
 
+product_packet_result_t
+product_packet_owner_from_facts (const product_worker_layout_t *layout,
+                                 uint32_t flow_domain,
+                                 const product_packet_facts_t *facts,
+                                 product_canonical_flow_key_t *key,
+                                 uint16_t *owner)
+{
+  if (layout == NULL || facts == NULL || key == NULL || owner == NULL
+      || layout->worker_count == 0
+      || facts->l3_status != PRODUCT_PACKET_L3_COMPLETE
+      || facts->l4_status != PRODUCT_PACKET_L4_COMPLETE)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  make_canonical_key (facts, key);
+  *owner = select_owner (layout, flow_domain, key);
+  return PRODUCT_PACKET_OK;
+}
+
 static product_packet_result_t
 parse_transport (const uint8_t *packet, size_t packet_length,
                  size_t transport_offset, product_packet_facts_t *facts)
@@ -112,29 +129,47 @@ parse_transport (const uint8_t *packet, size_t packet_length,
   uint16_t declared_length;
 
   if (transport_offset > packet_length)
-    return PRODUCT_PACKET_INVALID_L4;
+    {
+      facts->l4_status = PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE;
+      return PRODUCT_PACKET_OK;
+    }
   transport_length = packet_length - transport_offset;
   if (facts->protocol == PRODUCT_IP_PROTOCOL_TCP)
     {
       uint8_t header_length;
       if (transport_length < 20)
-        return PRODUCT_PACKET_INVALID_L4;
+        {
+          facts->l4_status = PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE;
+          return PRODUCT_PACKET_OK;
+        }
       header_length = (uint8_t) ((packet[transport_offset + 12] >> 4) * 4U);
       if (header_length < 20 || header_length > transport_length)
-        return PRODUCT_PACKET_INVALID_L4;
+        {
+          facts->l4_status = PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE;
+          return PRODUCT_PACKET_OK;
+        }
       facts->l4_header_length = header_length;
     }
   else if (facts->protocol == PRODUCT_IP_PROTOCOL_UDP)
     {
       if (transport_length < 8)
-        return PRODUCT_PACKET_INVALID_L4;
+        {
+          facts->l4_status = PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE;
+          return PRODUCT_PACKET_OK;
+        }
       declared_length = read_be16 (packet + transport_offset + 4);
       if (declared_length < 8 || declared_length > transport_length)
-        return PRODUCT_PACKET_INVALID_L4;
+        {
+          facts->l4_status = PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE;
+          return PRODUCT_PACKET_OK;
+        }
       facts->l4_header_length = 8;
     }
   else
-    return PRODUCT_PACKET_UNSUPPORTED_PROTOCOL;
+    {
+      facts->l4_status = PRODUCT_PACKET_L4_OTHER_TERMINAL;
+      return PRODUCT_PACKET_OK;
+    }
 
   facts->source_port = read_be16 (packet + transport_offset);
   facts->destination_port = read_be16 (packet + transport_offset + 2);
@@ -151,12 +186,13 @@ parse_ipv4 (const uint8_t *packet, size_t length,
   uint16_t fragment;
 
   if (length < 20)
-    return PRODUCT_PACKET_INVALID_L3;
+    return PRODUCT_PACKET_TRUNCATED_ENVELOPE;
   header_length = (size_t) (packet[0] & 0x0fU) * 4U;
   packet_length = read_be16 (packet + 2);
-  if (header_length < 20 || header_length > length
-      || packet_length < header_length || packet_length > length)
+  if (header_length < 20 || packet_length < header_length)
     return PRODUCT_PACKET_INVALID_L3;
+  if (header_length > length || packet_length > length)
+    return PRODUCT_PACKET_TRUNCATED_ENVELOPE;
   fragment = read_be16 (packet + 6);
   if ((fragment & UINT16_C (0x3fff)) != 0)
     return PRODUCT_PACKET_INVALID_L3;
@@ -178,9 +214,11 @@ parse_ipv6 (const uint8_t *packet, size_t length,
   size_t packet_length;
 
   if (length < 40)
-    return PRODUCT_PACKET_INVALID_L3;
+    return PRODUCT_PACKET_TRUNCATED_ENVELOPE;
   packet_length = 40U + read_be16 (packet + 4);
-  if (packet_length > length || packet_length > UINT32_MAX)
+  if (packet_length > length)
+    return PRODUCT_PACKET_TRUNCATED_ENVELOPE;
+  if (packet_length > UINT32_MAX)
     return PRODUCT_PACKET_INVALID_L3;
 
   facts->ip_family = 6;
@@ -208,21 +246,44 @@ product_packet_admit (const product_worker_layout_t *layout,
     return PRODUCT_PACKET_INVALID_ARGUMENT;
 
   memset (lease, 0, sizeof (*lease));
+  lease->origin_obligation_id = ingress->origin_obligation_id;
   if (ingress->length == 0)
-    return PRODUCT_PACKET_INVALID_L3;
-  version = ingress->data[0] >> 4;
-  if (version == 4)
-    result = parse_ipv4 (ingress->data, ingress->length, &lease->facts);
-  else if (version == 6)
-    result = parse_ipv6 (ingress->data, ingress->length, &lease->facts);
+    result = PRODUCT_PACKET_TRUNCATED_ENVELOPE;
   else
-    result = PRODUCT_PACKET_INVALID_L3;
+    {
+      version = ingress->data[0] >> 4;
+      if (version == 4)
+        result = parse_ipv4 (ingress->data, ingress->length, &lease->facts);
+      else if (version == 6)
+        result = parse_ipv6 (ingress->data, ingress->length, &lease->facts);
+      else
+        result = PRODUCT_PACKET_UNSUPPORTED_ENVELOPE;
+    }
   if (result != PRODUCT_PACKET_OK)
-    return result;
+    {
+      if (result == PRODUCT_PACKET_INVALID_L3
+          || result == PRODUCT_PACKET_TRUNCATED_ENVELOPE
+          || result == PRODUCT_PACKET_UNSUPPORTED_ENVELOPE)
+        {
+          memset (&lease->facts, 0, sizeof (lease->facts));
+          lease->expected_owner = ingress->current_worker;
+          lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+          lease->terminal_count = 1;
+          if (result == PRODUCT_PACKET_INVALID_L3)
+            lease->runtime_drop_reason =
+              PRODUCT_PACKET_DROP_INVALID_ENVELOPE;
+          else if (result == PRODUCT_PACKET_TRUNCATED_ENVELOPE)
+            lease->runtime_drop_reason =
+              PRODUCT_PACKET_DROP_TRUNCATED_ENVELOPE;
+          else
+            lease->runtime_drop_reason =
+              PRODUCT_PACKET_DROP_UNSUPPORTED_ENVELOPE;
+        }
+      return result;
+    }
 
   make_canonical_key (&lease->facts, &lease->canonical_key);
   lease->hints = ingress->hints;
-  lease->origin_obligation_id = ingress->origin_obligation_id;
   lease->expected_owner = select_owner (layout, ingress->flow_domain,
                                         &lease->canonical_key);
   if (lease->expected_owner == ingress->current_worker)
@@ -242,7 +303,21 @@ product_packet_owner_guard (product_packet_lease_t *lease,
   if (lease == NULL)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
   if (current_worker != lease->expected_owner)
-    return PRODUCT_PACKET_OWNER_MISMATCH;
+    {
+      if (lease->corrective_handoff_count == 0)
+        {
+          lease->corrective_handoff_count = 1;
+          return PRODUCT_PACKET_CORRECTIVE_HANDOFF;
+        }
+      if (lease->terminal_count == 0 && !lease->settled)
+        {
+          lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+          lease->terminal_count = 1;
+          lease->runtime_drop_reason =
+            PRODUCT_PACKET_DROP_REPEATED_OWNER_MISMATCH;
+        }
+      return PRODUCT_PACKET_REPEATED_OWNER_MISMATCH;
+    }
   lease->owner_guarded = 1;
   return PRODUCT_PACKET_OK;
 }
@@ -267,8 +342,12 @@ product_packet_settle (product_packet_lease_t *lease)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
   if (lease->settled)
     return PRODUCT_PACKET_ALREADY_SETTLED;
-  if (!lease->owner_guarded || lease->terminal_count != 1
+  if (lease->terminal_count != 1
       || lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+    return PRODUCT_PACKET_ORDER_VIOLATION;
+  if (!lease->owner_guarded
+      && !(lease->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME
+           && lease->runtime_drop_reason != PRODUCT_PACKET_DROP_NONE))
     return PRODUCT_PACKET_ORDER_VIOLATION;
   lease->settled = 1;
   return PRODUCT_PACKET_OK;

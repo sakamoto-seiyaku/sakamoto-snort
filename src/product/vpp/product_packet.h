@@ -11,9 +11,10 @@ typedef enum
   PRODUCT_PACKET_OK = 0,
   PRODUCT_PACKET_INVALID_ARGUMENT,
   PRODUCT_PACKET_INVALID_L3,
-  PRODUCT_PACKET_INVALID_L4,
-  PRODUCT_PACKET_UNSUPPORTED_PROTOCOL,
-  PRODUCT_PACKET_OWNER_MISMATCH,
+  PRODUCT_PACKET_TRUNCATED_ENVELOPE,
+  PRODUCT_PACKET_UNSUPPORTED_ENVELOPE,
+  PRODUCT_PACKET_CORRECTIVE_HANDOFF,
+  PRODUCT_PACKET_REPEATED_OWNER_MISMATCH,
   PRODUCT_PACKET_ORDER_VIOLATION,
   PRODUCT_PACKET_ALREADY_SETTLED,
 } product_packet_result_t;
@@ -27,7 +28,10 @@ typedef enum
 typedef enum
 {
   PRODUCT_PACKET_L4_UNAVAILABLE = 0,
+  PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE = PRODUCT_PACKET_L4_UNAVAILABLE,
   PRODUCT_PACKET_L4_COMPLETE,
+  PRODUCT_PACKET_L4_OTHER_TERMINAL,
+  PRODUCT_PACKET_L4_FRAGMENT,
 } product_packet_l4_status_t;
 
 typedef enum
@@ -42,6 +46,17 @@ typedef enum
   PRODUCT_PACKET_INTENT_PASS_ADAPTER,
   PRODUCT_PACKET_INTENT_DROP_RUNTIME,
 } product_packet_terminal_intent_t;
+
+typedef enum
+{
+  PRODUCT_PACKET_DROP_NONE = 0,
+  PRODUCT_PACKET_DROP_INVALID_ENVELOPE,
+  PRODUCT_PACKET_DROP_TRUNCATED_ENVELOPE,
+  PRODUCT_PACKET_DROP_UNSUPPORTED_ENVELOPE,
+  PRODUCT_PACKET_DROP_REPEATED_OWNER_MISMATCH,
+  PRODUCT_PACKET_DROP_PRIMARY_HANDOFF_CONGESTION,
+  PRODUCT_PACKET_DROP_CORRECTIVE_HANDOFF_CONGESTION,
+} product_packet_runtime_drop_reason_t;
 
 typedef struct
 {
@@ -107,9 +122,11 @@ typedef struct
   uint16_t expected_owner;
   uint8_t distribution;
   uint8_t primary_handoff_count;
+  uint8_t corrective_handoff_count;
   uint8_t owner_guarded;
   uint8_t terminal_intent;
   uint8_t terminal_count;
+  uint8_t runtime_drop_reason;
   uint8_t settled;
 } product_packet_lease_t;
 
@@ -121,6 +138,13 @@ product_packet_admit (const product_worker_layout_t *layout,
 product_packet_result_t
 product_packet_owner_guard (product_packet_lease_t *lease,
                             uint16_t current_worker);
+
+product_packet_result_t
+product_packet_owner_from_facts (const product_worker_layout_t *layout,
+                                 uint32_t flow_domain,
+                                 const product_packet_facts_t *facts,
+                                 product_canonical_flow_key_t *key,
+                                 uint16_t *owner);
 
 product_packet_result_t
 product_packet_set_terminal (product_packet_lease_t *lease,
