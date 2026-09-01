@@ -1535,13 +1535,28 @@ product_packet_graph_record_l4_view_match (
 
 static void
 product_packet_graph_record_l4_view_no_match (
-  product_packet_graph_main_t *graph, u64 revision,
+  product_packet_graph_main_t *graph, u64 revision, u32 view_rule_count,
   const product_l4_policy_match_result_t *match,
   const product_packet_lease_t *lease)
 {
+  int unrelated_no_match;
+
   if (graph == 0 || match == 0 || lease == 0)
     return;
   clib_atomic_fetch_add_relax (&graph->l4_policy_view_no_match_records, 1);
+  clib_atomic_fetch_add_relax (&graph->l4_no_match_records, 1);
+  unrelated_no_match = view_rule_count != 0
+                       && (lease->hints.uid == UINT32_MAX
+                           || match->candidate_count == 0);
+  if (unrelated_no_match)
+    {
+      /* Unknown/provenance-only returns must not erase known-subject evidence.
+       * A non-empty view with no candidates is likewise not evidence for the
+       * active subject.  Keep the counters above for complete observability.
+       */
+      return;
+    }
+
   /* No-match is a new evaluation, not a replacement for last-match identity.
    * Keep the winner/rule fields from the most recent successful match while
    * exposing the current no-match probe and reason evidence below. */
@@ -1552,7 +1567,6 @@ product_packet_graph_record_l4_view_no_match (
   clib_atomic_store_rel_n (&graph->l4_policy_view_last_no_match_reason,
                            match->no_match_reason);
 
-  clib_atomic_fetch_add_relax (&graph->l4_no_match_records, 1);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_revision, revision);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_result,
                            PRODUCT_PACKET_GRAPH_L4_EVALUATION_NO_MATCH);
@@ -2500,7 +2514,7 @@ product_packet_graph_policy_stage (
         }
       evaluation->reason_id = matched_view.no_match_reason;
       product_packet_graph_record_l4_view_no_match (
-        graph, view_revision, &matched_view, lease);
+        graph, view_revision, view_rule_count, &matched_view, lease);
       clib_atomic_fetch_add_relax (&graph->policy_stage_pass_next, 1);
       product_packet_graph_record_policy_stage (graph, evaluation);
       return PRODUCT_PACKET_OK;
