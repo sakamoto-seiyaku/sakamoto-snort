@@ -8,6 +8,10 @@ set -euo pipefail
 # host TCP/UDP endpoints are the transport oracle.  A Product status writer
 # publishes the small s192 status schema consumed below; transport/helper
 # counters are supporting diagnostics only.
+# Device Packet Direction is an independent matcher fact: app-origin traffic
+# is OUTPUT (3) in both profile phases.  VPN TUN adapter profile_id=1 is
+# provenance, not this direction; the status gate deliberately rejects a
+# profile-id-to-direction substitution so a graph mapping defect is visible.
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 export ADB="${repo_root}/dev/adb"
