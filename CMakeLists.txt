@@ -18,6 +18,30 @@ target_compile_definitions(sakamoto_product_host_fixture_abi PRIVATE SAKAMOTO_PR
 set_target_properties(sakamoto_product_host_fixture_abi PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(sakamoto_product_host_fixture_abi PUBLIC pthread)
 
+# The stateless L4 policy view is a VPP-native C module with a standalone Host
+# semantic seam.  It deliberately does not depend on VPP, Android, or the
+# public Product ABI so the shared rule semantics can be tested independently.
+add_library(sakamoto_product_l4_policy STATIC
+  src/product/vpp/product_l4_policy.c
+)
+target_include_directories(sakamoto_product_l4_policy PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
+)
+target_compile_features(sakamoto_product_l4_policy PRIVATE c_std_11)
+target_compile_options(sakamoto_product_l4_policy PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sakamoto-product-l4-policy-test
+  tests/host/product_l4_policy_test.c
+)
+target_include_directories(sakamoto-product-l4-policy-test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
+)
+target_compile_features(sakamoto-product-l4-policy-test PRIVATE c_std_11)
+target_compile_options(sakamoto-product-l4-policy-test PRIVATE
+  -Wall -Wextra -Werror -pedantic)
+target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
+  sakamoto_product_l4_policy)
+
 add_executable(sakamoto-product-host-fixture-abi-test
   tests/host/product_host_fixture_abi_test.c
 )
@@ -32,6 +56,11 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
 enable_testing()
 add_test(NAME sakamoto-product-host-fixture-abi-test
   COMMAND sakamoto-product-host-fixture-abi-test)
+add_test(NAME sakamoto-product-l4-policy-test
+  COMMAND sakamoto-product-l4-policy-test)
+add_test(NAME sakamoto-product-l4-policy-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_l4_policy_contract.sh")
 add_test(NAME sakamoto-product-vpp-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vpp_contract.sh")
 add_test(NAME sakamoto-s174-product-packet-kernel-contract
