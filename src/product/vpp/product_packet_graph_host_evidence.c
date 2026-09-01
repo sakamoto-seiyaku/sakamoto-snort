@@ -18,5 +18,10 @@
   "product packet-graph run-lifecycle-fixture"
 #define PRODUCT_GRAPH_RUN_CONGESTION_FIXTURE_COMMAND                         \
   "product packet-graph run-congestion-fixture"
+#define PRODUCT_GRAPH_POLICY_FIXTURE_UID UINT32_C (10001)
+#define PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT UINT32_C (1)
+#define PRODUCT_GRAPH_POLICY_FIXTURE "s192-typed-l4-bundle-v1"
+#define PRODUCT_GRAPH_RUN_POLICY_FIXTURE_COMMAND \
+  "product packet-graph run-policy-fixture"
 
 #include "product_packet_graph.c"

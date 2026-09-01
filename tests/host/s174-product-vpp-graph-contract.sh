@@ -68,7 +68,7 @@ fi
 # The dynamic evidence below proves one unchanged live buffer identity. Keep a
 # separate source-level guard against adding a hidden second packet allocation,
 # clone, payload append, per-packet heap, or serializer inside the ordinary
-# admit -> owner guard -> terminal node region.
+# admit -> owner guard -> policy -> terminal node region.
 ordinary_nodes="$(awk '
     /^VLIB_NODE_FN \(product_packet_admit_node\)/ { in_nodes = 1 }
     /^VLIB_REGISTER_NODE \(product_packet_terminal_node\)/ { after_terminal = 1 }
@@ -85,8 +85,9 @@ ordinary_nodes="$(awk '
   ' "$graph_source")"
 
 # Close the helper-function bypass as well: after Host evidence is removed,
-# the whole Android graph may expose live packet bytes exactly once (the
-# parser ingress). Its ten memcpy operations are the fixed-width opaque2
+# the Android graph may expose live packet bytes only at the two Product
+# ingress seams: the original VLIB admit parser and the S176 external Root
+# NFQUEUE submitter. Its ten memcpy operations are the fixed-width opaque2
 # metadata codec; raw packet memcpy/memmove and byte-index side stores have no
 # place in this translation unit.
 android_graph="$(awk '
@@ -104,7 +105,7 @@ android_graph="$(awk '
     }
     !host_depth { print }
   ' "$graph_source")"
-if [[ "$(printf '%s\n' "$android_graph" | grep -c 'vlib_buffer_get_current')" -ne 1 ]] ||
+if [[ "$(printf '%s\n' "$android_graph" | grep -c 'vlib_buffer_get_current')" -ne 2 ]] ||
    [[ "$(printf '%s\n' "$android_graph" | grep -c 'clib_memcpy_fast')" -ne 10 ]] ||
    printf '%s\n' "$android_graph" | grep -Eq \
      '(^|[^[:alnum:]_])(memcpy|memmove)[[:space:]]*\(|[[:alnum:]_>.-]+\[[^]]+\][[:space:]]*='; then
@@ -332,7 +333,7 @@ import sys
 
 trace_path, fixture_path = sys.argv[1:]
 pattern = re.compile(
-    r"product-packet-trace node=(admit|owner-guard|terminal) "
+    r"product-packet-trace node=(admit|owner-guard|policy|terminal) "
     r"buffer_index=([0-9]+) obligation=([0-9]+) thread=([0-9]+)(?: |$)"
 )
 by_obligation = {}
@@ -366,7 +367,7 @@ buffer_indices = set()
 for obligation, observations in by_obligation.items():
     nodes = [node for node, _, _ in observations]
     indices = {index for _, index, _ in observations}
-    if len(nodes) != 3 or set(nodes) != {"admit", "owner-guard", "terminal"}:
+    if len(nodes) != 4 or set(nodes) != {"admit", "owner-guard", "policy", "terminal"}:
         raise SystemExit(
             f"obligation {obligation} graph stages were {nodes!r}"
         )
@@ -387,7 +388,9 @@ for obligation, observations in by_obligation.items():
         raise SystemExit(
             f"obligation {obligation} admit thread mismatch: {observed!r}"
         )
-    if observed["owner-guard"] != expected_guard or observed["terminal"] != expected_guard:
+    if (observed["owner-guard"] != expected_guard or
+            observed["policy"] != expected_guard or
+            observed["terminal"] != expected_guard):
         raise SystemExit(
             f"obligation {obligation} owner/terminal thread mismatch: {observed!r}"
         )
@@ -474,6 +477,8 @@ run_cycle() {
   require_runtime_activity "$evidence_dir/cycle-$cycle-vlib-runtime.trace" \
     product-packet-owner-guard
   require_runtime_activity "$evidence_dir/cycle-$cycle-vlib-runtime.trace" \
+    product-packet-policy
+  require_runtime_activity "$evidence_dir/cycle-$cycle-vlib-runtime.trace" \
     product-packet-terminal
 
   status_output="$(cli 'show product packet-graph')"
@@ -485,6 +490,9 @@ run_cycle() {
     graph.remote_packets=4 \
     graph.primary_enqueues=4 \
     graph.primary_enqueue_max_per_packet=1 \
+    graph.policy_stage_evaluations=8 \
+    graph.policy_stage_pass_next=8 \
+    graph.policy_stage_drops=0 \
     graph.terminal_intents=8 \
     graph.ledger_settlements=8 \
     graph.buffer_returns=8 \
