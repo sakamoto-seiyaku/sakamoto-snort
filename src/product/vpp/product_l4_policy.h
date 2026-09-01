@@ -113,6 +113,8 @@ typedef struct
   uint8_t direction_known;
   uint8_t network_context_known;
   uint8_t ifindex_known;
+  /* False makes only port-dependent rules no-match; other predicates remain
+   * evaluable. */
   uint8_t ports_available;
   uint8_t source_address[PRODUCT_L4_POLICY_ADDRESS_BYTES];
   uint8_t destination_address[PRODUCT_L4_POLICY_ADDRESS_BYTES];

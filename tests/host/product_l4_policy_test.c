@@ -424,25 +424,55 @@ test_context_direction_and_uid (void)
 static void
 test_unsupported_and_unavailable (void)
 {
-  product_l4_policy_rule_t rule =
-    rule_template (701, 17, PRODUCT_L4_POLICY_FAMILY_IPV4,
-                   PRODUCT_L4_POLICY_PROTOCOL_TCP, 1, 1,
-                   PRODUCT_L4_POLICY_ACTION_DROP);
+  product_l4_policy_rule_t rules[2];
+  product_l4_policy_rule_t port_only;
   product_l4_policy_view_t view;
   product_l4_policy_packet_t packet =
     packet_template (17, PRODUCT_L4_POLICY_FAMILY_IPV4,
                      PRODUCT_L4_POLICY_PROTOCOL_TCP, 1, 2);
   product_l4_policy_match_result_t result;
 
+  rules[0] = rule_template (701, 17, PRODUCT_L4_POLICY_FAMILY_IPV4,
+                            PRODUCT_L4_POLICY_PROTOCOL_TCP, 1, 1,
+                            PRODUCT_L4_POLICY_ACTION_DROP);
+  rules[0].destination_port_first = 443;
+  rules[0].destination_port_last = 443;
+  rules[1] = rule_template (702, 17, PRODUCT_L4_POLICY_FAMILY_IPV4,
+                            PRODUCT_L4_POLICY_PROTOCOL_TCP, 2, 1,
+                            PRODUCT_L4_POLICY_ACTION_DROP);
   product_l4_policy_init (&view);
-  CHECK_STATUS (product_l4_policy_compile (&view, &rule, 1),
+  CHECK_STATUS (product_l4_policy_compile (&view, rules, 2),
                 PRODUCT_L4_POLICY_STATUS_OK,
                 "unsupported-input test rule must compile");
   packet.ports_available = 0;
   result = match (&view, &packet);
+  check_result_match (&result, 702, 2, PRODUCT_L4_POLICY_ACTION_DROP,
+                      PRODUCT_L4_POLICY_VERDICT_DROP,
+                      "unavailable ports must skip only port-dependent rules");
+  CHECK (result.probes == 2 && result.probe_limit == 2,
+         "unavailable ports must retain a bounded candidate scan");
+
+  port_only = rules[0];
+  CHECK_STATUS (product_l4_policy_compile (&view, &port_only, 1),
+                PRODUCT_L4_POLICY_STATUS_OK,
+                "port-only rule must compile for unavailable-L4 fallback");
+  result = match (&view, &packet);
   check_no_match (&result, PRODUCT_L4_POLICY_NO_MATCH_L4_UNAVAILABLE,
-                  "unavailable ports must be PASS_NEXT with no winner");
-  CHECK (result.probes == 0, "unavailable L4 must avoid candidate probes");
+                  "port-only rule must no-match when ports are unavailable");
+  CHECK (result.probes == 1 && result.probe_limit == 1,
+         "port-only unavailable lookup must remain bounded and observable");
+
+  rules[1] = rule_template (703, 17, PRODUCT_L4_POLICY_FAMILY_IPV4,
+                            PRODUCT_L4_POLICY_PROTOCOL_TCP, 2, 1,
+                            PRODUCT_L4_POLICY_ACTION_ALLOW);
+  CHECK_STATUS (product_l4_policy_compile (&view, rules, 2),
+                PRODUCT_L4_POLICY_STATUS_OK,
+                "allow fallback rule must compile");
+  result = match (&view, &packet);
+  check_result_match (&result, 703, 2, PRODUCT_L4_POLICY_ACTION_ALLOW,
+                      PRODUCT_L4_POLICY_VERDICT_PASS_NEXT,
+                      "unavailable ports must preserve allow semantics for"
+                      " non-port rules");
 
   packet.ports_available = 1;
   packet.family = 5;

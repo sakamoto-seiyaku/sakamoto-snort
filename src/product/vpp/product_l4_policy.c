@@ -201,6 +201,15 @@ port_matches (uint16_t value, uint16_t first, uint16_t last)
 }
 
 static int
+rule_requires_ports (const product_l4_policy_rule_t *rule)
+{
+  return rule->source_port_first != PRODUCT_L4_POLICY_PORT_FIRST_ANY
+         || rule->source_port_last != PRODUCT_L4_POLICY_PORT_LAST_ANY
+         || rule->destination_port_first != PRODUCT_L4_POLICY_PORT_FIRST_ANY
+         || rule->destination_port_last != PRODUCT_L4_POLICY_PORT_LAST_ANY;
+}
+
+static int
 rule_matches (const product_l4_policy_rule_t *rule,
               const product_l4_policy_packet_t *packet)
 {
@@ -216,17 +225,20 @@ rule_matches (const product_l4_policy_rule_t *rule,
   if (rule->ifindex != PRODUCT_L4_POLICY_IFINDEX_ANY
       && (!packet->ifindex_known || rule->ifindex != packet->ifindex))
     return 0;
+  if (!packet->ports_available && rule_requires_ports (rule))
+    return 0;
   return address_matches (rule->family, rule->source_address,
                           packet->source_address,
                           rule->source_prefix_length)
          && address_matches (rule->family, rule->destination_address,
                              packet->destination_address,
                              rule->destination_prefix_length)
-         && port_matches (packet->source_port, rule->source_port_first,
-                          rule->source_port_last)
-         && port_matches (packet->destination_port,
-                          rule->destination_port_first,
-                          rule->destination_port_last);
+         && (!packet->ports_available
+             || (port_matches (packet->source_port, rule->source_port_first,
+                               rule->source_port_last)
+                 && port_matches (packet->destination_port,
+                                  rule->destination_port_first,
+                                  rule->destination_port_last)));
 }
 
 static const product_l4_policy_uid_bucket_t *
@@ -289,11 +301,6 @@ product_l4_policy_match (const product_l4_policy_view_t *view,
       result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_PROTOCOL;
       return PRODUCT_L4_POLICY_STATUS_OK;
     }
-  if (!packet->ports_available)
-    {
-      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_L4_UNAVAILABLE;
-      return PRODUCT_L4_POLICY_STATUS_OK;
-    }
   if (packet->direction_known && !supported_direction (packet->direction))
     {
       result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_DIRECTION;
@@ -331,7 +338,9 @@ product_l4_policy_match (const product_l4_policy_view_t *view,
           return PRODUCT_L4_POLICY_STATUS_OK;
         }
     }
-  result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_NO_RULE;
+  result->no_match_reason = packet->ports_available
+                              ? PRODUCT_L4_POLICY_NO_MATCH_NO_RULE
+                              : PRODUCT_L4_POLICY_NO_MATCH_L4_UNAVAILABLE;
   return PRODUCT_L4_POLICY_STATUS_OK;
 }
 
